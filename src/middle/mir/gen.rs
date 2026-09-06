@@ -1697,6 +1697,49 @@ impl MirGen {
                     return id;
                 }
 
+                // SPECIAL HANDLING: spawn(fn(arg,...)) — async task spawn.
+                // Parses as Call{method:"spawn", args:[Call{method:"worker",...}]}.
+                // Must NOT evaluate the inner call synchronously; instead emit a
+                // dedicated SpawnStmt that codegen lowers into a thunk + pthread.
+                if method == "spawn" && receiver.is_none() && args.len() == 1 {
+                    if let AstNode::Call {
+                        method: inner_fn,
+                        args: inner_args,
+                        ..
+                    } = &args[0]
+                    {
+                        let mut inner_arg_ids = vec![];
+                        for a in inner_args {
+                            inner_arg_ids.push(self.lower_expr(a));
+                        }
+                        let spawn_dest = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: format!("__spawn_thunk_{}", inner_fn),
+                            args: inner_arg_ids,
+                            dest: spawn_dest,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(spawn_dest, MirExpr::Var(spawn_dest));
+                        self.type_map.insert(spawn_dest, Type::I64);
+                        return spawn_dest;
+                    }
+                }
+
+                // SPECIAL HANDLING: join(handle) — wait for spawn'd task.
+                if method == "join" && receiver.is_none() && args.len() == 1 {
+                    let handle_id = self.lower_expr(&args[0]);
+                    let join_dest = self.next_id();
+                    self.stmts.push(MirStmt::Call {
+                        func: "join".to_string(),
+                        args: vec![handle_id],
+                        dest: join_dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(join_dest, MirExpr::Var(join_dest));
+                    self.type_map.insert(join_dest, Type::I64);
+                    return join_dest;
+                }
+
                 // SPECIAL HANDLING: sink(it, val) — write to an iterator position
                 if method == "sink" && receiver.is_none() && args.len() == 2 {
                     let it_id = self.lower_expr(&args[0]);
