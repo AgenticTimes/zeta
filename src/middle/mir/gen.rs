@@ -1386,7 +1386,17 @@ impl MirGen {
                         });
                         self.exprs.insert(dest, MirExpr::Var(dest));
                     }
-                    self.type_map.insert(dest, Type::I64);
+                    // Preserve float type for arithmetic ops — `c / d` on f64
+                    // operands must stay f64, otherwise later casts misbehave.
+                    let op_type = match (
+                        self.type_map.get(&left_id),
+                        self.type_map.get(&right_id),
+                    ) {
+                        (Some(Type::F32) | Some(Type::F64), _)
+                        | (_, Some(Type::F32) | Some(Type::F64)) => Type::F64,
+                        _ => Type::I64,
+                    };
+                    self.type_map.insert(dest, op_type);
                 }
                 return dest;
             }
@@ -2908,7 +2918,10 @@ impl MirGen {
                 }
 
                 self.exprs.insert(dest, MirExpr::Var(dest));
-                self.type_map.insert(dest, Type::I64);
+                // Preserve the operand's type — unary_minus on f64 should still be f64.
+                // The old code hardcoded Type::I64, which broke float casts like `b as i64`.
+                let op_ty = self.type_map.get(&expr_id).cloned().unwrap_or(Type::I64);
+                self.type_map.insert(dest, op_ty);
                 return dest;
             }
             AstNode::Unsafe { body } => {

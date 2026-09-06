@@ -198,6 +198,16 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some(Linkage::External),
         );
         module.add_function(
+            "println_f64",
+            void_type.fn_type(&[f64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "print_f64",
+            void_type.fn_type(&[f64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
             "test_return_i64",
             i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
@@ -2679,10 +2689,15 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 if args.len() == 1 && (func == "-" || func == "unary_minus") {
                     let operand = self.gen_expr_safe(&args[0], exprs);
                     let zero = self.i64_type.const_zero();
-                    let result = self
-                        .builder
-                        .build_int_sub(zero, operand.into_int_value(), "neg")
-                        .unwrap();
+                    let result: inkwell::values::BasicValueEnum<'ctx> = if operand.is_float_value() {
+                        let f = operand.into_float_value();
+                        self.builder.build_float_neg(f, "neg").unwrap().into()
+                    } else {
+                        self.builder
+                            .build_int_sub(zero, operand.into_int_value(), "neg")
+                            .unwrap()
+                            .into()
+                    };
                     let alloca = *self.locals.get(dest).unwrap();
                     self.builder.build_store(alloca, result).unwrap();
                     return;
@@ -4932,6 +4947,47 @@ impl<'ctx> LLVMCodegen<'ctx> {
             MirExpr::As { expr, target_type } => {
                 // Generate the expression value
                 let expr_val = self.gen_expr(&exprs[expr], exprs, None);
+
+                // Float → int: fptosi (traps on overflow, but correct for typical use)
+                if matches!(
+                    target_type,
+                    Type::I8
+                        | Type::I16
+                        | Type::I32
+                        | Type::I64
+                        | Type::U8
+                        | Type::U16
+                        | Type::U32
+                        | Type::U64
+                        | Type::Usize
+                ) && matches!(expr_val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_))
+                {
+                    let f = expr_val.into_float_value();
+                    let target_int = match target_type {
+                        Type::I8 => self.context.i8_type(),
+                        Type::I16 => self.context.i16_type(),
+                        Type::I32 => self.context.i32_type(),
+                        Type::U8 => self.context.i8_type(),
+                        Type::U16 => self.context.i16_type(),
+                        Type::U32 => self.context.i32_type(),
+                        _ => self.i64_type,
+                    };
+                    return match self.builder.build_float_to_signed_int(f, target_int, "fptosi") {
+                        Ok(v) => v.into(),
+                        Err(_) => expr_val,
+                    };
+                }
+
+                // Int → float: sitofp
+                if matches!(target_type, Type::F32 | Type::F64)
+                    && matches!(expr_val.get_type(), inkwell::types::BasicTypeEnum::IntType(_))
+                {
+                    let i = expr_val.into_int_value();
+                    match self.builder.build_signed_int_to_float(i, self.f64_type, "sitofp") {
+                        Ok(v) => return v.into(),
+                        Err(_) => {}
+                    }
+                }
 
                 // For now, handle basic numeric conversions
                 // TODO: Implement proper type conversion logic
