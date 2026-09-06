@@ -4810,10 +4810,28 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         )
                         .unwrap()
                     };
-                    let field_val = self
-                        .gen_expr(&exprs[field_id], exprs, None)
-                        .into_int_value();
-                    self.builder.build_store(field_ptr, field_val).unwrap();
+                    let field_val = self.gen_expr(&exprs[field_id], exprs, None);
+                    // Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
+                    let stored: inkwell::values::BasicValueEnum<'ctx> =
+                        match field_val.get_type() {
+                            inkwell::types::BasicTypeEnum::FloatType(_) => {
+                                let fv = field_val.into_float_value();
+                                let fb = self.builder.build_bit_cast(
+                                    fv,
+                                    self.i64_type,
+                                    "f64_as_i64",
+                                );
+                                match fb {
+                                    Ok(v) => v.into(),
+                                    Err(_) => {
+                                        // fallback: store as i64 via ptr cast
+                                        self.i64_type.const_zero().into()
+                                    }
+                                }
+                            }
+                            _ => field_val,
+                        };
+                    self.builder.build_store(field_ptr, stored).unwrap();
                 }
 
                 // Return heap pointer as i64 (caller reads from valid heap memory)
