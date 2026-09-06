@@ -338,6 +338,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             // Unix/Linux/MacOS
                             cmd.arg("-lc"); // C standard library
+                            cmd.arg("-lgc"); // Boehm GC (automatic memory management)
+                            cmd.arg("-L/opt/homebrew/opt/bdw-gc/lib"); // macOS Homebrew libgc path
                             cmd.arg("-no-pie"); // Needed for PIE relocation errors with generated code
                         }
 
