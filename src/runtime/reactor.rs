@@ -1,6 +1,6 @@
 // src/runtime/reactor.rs
 // Bootstrap implementation of the Zeta Tokio reactor runtime.
-// Provides epoll, pipe, timerfd, and O_NONBLOCK via libc syscalls.
+// Provides epoll on Linux and kqueue on macOS via libc syscalls.
 // Zeta source in zeta_src/runtime/reactor.z declares these via extern fn.
 // When Zeta self-hosts, the Rust implementation is replaced by native Zeta code.
 
@@ -9,132 +9,401 @@ use std::sync::Mutex;
 
 const MAX_EVENTS: i32 = 1024;
 
+#[cfg(target_os = "linux")]
+mod platform {
+    pub use super::linux::*;
+}
+
+#[cfg(target_os = "macos")]
+mod platform {
+    pub use super::macos::*;
+}
+
 lazy_static::lazy_static! {
     static ref REACTORS: Mutex<HashMap<i32, i32>> = Mutex::new(HashMap::new());
     static ref WAKER_MAP: Mutex<HashMap<i32, i32>> = Mutex::new(HashMap::new());
 }
 
+#[cfg(target_os = "linux")]
 thread_local! {
     static EVENT_BUF: std::cell::RefCell<[libc::epoll_event; 1024]> =
         const { std::cell::RefCell::new([libc::epoll_event { events: 0, u64: 0 }; 1024]) };
 }
 
-// ── Reactor ──
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::*;
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn reactor_create() -> i64 {
-    let epfd = libc::epoll_create1(libc::EPOLL_CLOEXEC);
-    if epfd < 0 {
-        return -1;
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_create() -> i64 {
+        let epfd = libc::epoll_create1(libc::EPOLL_CLOEXEC);
+        if epfd < 0 {
+            return -1;
+        }
+        REACTORS.lock().unwrap().insert(epfd, epfd);
+        epfd as i64
     }
-    REACTORS.lock().unwrap().insert(epfd, epfd);
-    epfd as i64
-}
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn reactor_add(epfd: i64, fd: i64, events: i64) -> i64 {
-    let mut ev: libc::epoll_event = std::mem::zeroed();
-    ev.u64 = fd as u64;
-    if events & 1 != 0 {
-        ev.events |= libc::EPOLLIN as u32;
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_add(epfd: i64, fd: i64, events: i64) -> i64 {
+        let mut ev: libc::epoll_event = std::mem::zeroed();
+        ev.u64 = fd as u64;
+        if events & 1 != 0 {
+            ev.events |= libc::EPOLLIN as u32;
+        }
+        if events & 2 != 0 {
+            ev.events |= libc::EPOLLOUT as u32;
+        }
+        ev.events |= (libc::EPOLLERR | libc::EPOLLHUP) as u32;
+        libc::epoll_ctl(epfd as i32, libc::EPOLL_CTL_ADD, fd as i32, &mut ev) as i64
     }
-    if events & 2 != 0 {
-        ev.events |= libc::EPOLLOUT as u32;
-    }
-    ev.events |= (libc::EPOLLERR | libc::EPOLLHUP) as u32;
-    libc::epoll_ctl(epfd as i32, libc::EPOLL_CTL_ADD, fd as i32, &mut ev) as i64
-}
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn reactor_modify(epfd: i64, fd: i64, events: i64) -> i64 {
-    let mut ev: libc::epoll_event = std::mem::zeroed();
-    ev.u64 = fd as u64;
-    if events & 1 != 0 {
-        ev.events |= libc::EPOLLIN as u32;
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_modify(epfd: i64, fd: i64, events: i64) -> i64 {
+        let mut ev: libc::epoll_event = std::mem::zeroed();
+        ev.u64 = fd as u64;
+        if events & 1 != 0 {
+            ev.events |= libc::EPOLLIN as u32;
+        }
+        if events & 2 != 0 {
+            ev.events |= libc::EPOLLOUT as u32;
+        }
+        ev.events |= (libc::EPOLLERR | libc::EPOLLHUP) as u32;
+        libc::epoll_ctl(epfd as i32, libc::EPOLL_CTL_MOD, fd as i32, &mut ev) as i64
     }
-    if events & 2 != 0 {
-        ev.events |= libc::EPOLLOUT as u32;
-    }
-    ev.events |= (libc::EPOLLERR | libc::EPOLLHUP) as u32;
-    libc::epoll_ctl(epfd as i32, libc::EPOLL_CTL_MOD, fd as i32, &mut ev) as i64
-}
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn reactor_remove(epfd: i64, fd: i64) -> i64 {
-    libc::epoll_ctl(
-        epfd as i32,
-        libc::EPOLL_CTL_DEL,
-        fd as i32,
-        std::ptr::null_mut(),
-    ) as i64
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn reactor_poll(
-    epfd: i64,
-    _events_buf: i64,
-    max_events: i64,
-    timeout_ms: i64,
-) -> i64 {
-    EVENT_BUF.with(|cell| {
-        let mut buf = cell.borrow_mut();
-        libc::epoll_wait(
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_remove(epfd: i64, fd: i64) -> i64 {
+        libc::epoll_ctl(
             epfd as i32,
-            buf.as_mut_ptr(),
-            max_events as i32,
-            timeout_ms as i32,
+            libc::EPOLL_CTL_DEL,
+            fd as i32,
+            std::ptr::null_mut(),
         ) as i64
-    })
-}
+    }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn reactor_event_fd(events_buf: i64, idx: i64) -> i64 {
-    if events_buf == 0 {
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_poll(
+        epfd: i64,
+        _events_buf: i64,
+        max_events: i64,
+        timeout_ms: i64,
+    ) -> i64 {
         EVENT_BUF.with(|cell| {
-            let buf = cell.borrow();
-            if idx >= 0 && (idx as usize) < MAX_EVENTS as usize {
-                (buf[idx as usize].u64) as i64
-            } else {
-                -1
-            }
+            let mut buf = cell.borrow_mut();
+            libc::epoll_wait(
+                epfd as i32,
+                buf.as_mut_ptr(),
+                max_events as i32,
+                timeout_ms as i32,
+            ) as i64
         })
-    } else {
-        let ptr = events_buf as *const libc::epoll_event;
-        let ev = unsafe { *ptr.offset(idx as isize) };
-        ev.u64 as i64
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_event_fd(events_buf: i64, idx: i64) -> i64 {
+        if events_buf == 0 {
+            EVENT_BUF.with(|cell| {
+                let buf = cell.borrow();
+                if idx >= 0 && (idx as usize) < MAX_EVENTS as usize {
+                    (buf[idx as usize].u64) as i64
+                } else {
+                    -1
+                }
+            })
+        } else {
+            let ptr = events_buf as *const libc::epoll_event;
+            let ev = unsafe { *ptr.offset(idx as isize) };
+            ev.u64 as i64
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_event_flags(events_buf: i64, idx: i64) -> i64 {
+        if events_buf == 0 {
+            EVENT_BUF.with(|cell| {
+                let buf = cell.borrow();
+                if idx < 0 || (idx as usize) >= MAX_EVENTS as usize {
+                    return -1;
+                }
+                let ev = buf[idx as usize].events;
+                let mut flags: i64 = 0;
+                if ev & libc::EPOLLIN as u32 != 0 {
+                    flags |= 1;
+                }
+                if ev & libc::EPOLLOUT as u32 != 0 {
+                    flags |= 2;
+                }
+                if ev & (libc::EPOLLERR | libc::EPOLLHUP) as u32 != 0 {
+                    flags |= 4;
+                }
+                flags
+            })
+        } else {
+            -1
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_destroy(epfd: i64) {
+        REACTORS.lock().unwrap().remove(&(epfd as i32));
+        libc::close(epfd as i32);
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn scheduler_register_waker(epfd: i64, waker_fd: i64) -> i64 {
+        let mut ev: libc::epoll_event = std::mem::zeroed();
+        ev.events = (libc::EPOLLIN | libc::EPOLLERR | libc::EPOLLHUP) as u32;
+        ev.u64 = waker_fd as u64;
+        libc::epoll_ctl(epfd as i32, libc::EPOLL_CTL_ADD, waker_fd as i32, &mut ev) as i64
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn scheduler_run_reactor(epfd: i64, timeout_ms: i64) -> i64 {
+        let mut events: [libc::epoll_event; 64] = std::mem::zeroed();
+        let n = libc::epoll_wait(epfd as i32, events.as_mut_ptr(), 64, timeout_ms as i32);
+        if n <= 0 {
+            return n as i64;
+        }
+
+        let mut count: i64 = 0;
+        for i in 0..n {
+            let ev = &events[i as usize];
+            let fd = ev.u64 as i64;
+
+            if ev.events & libc::EPOLLIN as u32 != 0 {
+                let mut buf: [u8; 8] = [0; 8];
+                libc::read(fd as i32, buf.as_mut_ptr() as *mut std::ffi::c_void, 8);
+                count += 1;
+            }
+        }
+        count
     }
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn reactor_event_flags(events_buf: i64, idx: i64) -> i64 {
-    if events_buf == 0 {
-        EVENT_BUF.with(|cell| {
-            let buf = cell.borrow();
-            if idx < 0 || (idx as usize) >= MAX_EVENTS as usize {
-                return -1;
-            }
-            let ev = buf[idx as usize].events;
-            let mut flags: i64 = 0;
-            if ev & libc::EPOLLIN as u32 != 0 {
-                flags |= 1;
-            }
-            if ev & libc::EPOLLOUT as u32 != 0 {
-                flags |= 2;
-            }
-            if ev & (libc::EPOLLERR | libc::EPOLLHUP) as u32 != 0 {
-                flags |= 4;
-            }
-            flags
-        })
-    } else {
-        -1
-    }
-}
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::*;
+    use std::os::unix::io::RawFd;
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn reactor_destroy(epfd: i64) {
-    REACTORS.lock().unwrap().remove(&(epfd as i32));
-    libc::close(epfd as i32);
+    #[derive(Clone, Copy)]
+    struct KqueueEvent {
+        fd: i64,
+        flags: i64,
+        udata: i64,
+    }
+
+    thread_local! {
+        static EVENT_BUF: std::cell::RefCell<Vec<KqueueEvent>> =
+            std::cell::RefCell::new(Vec::with_capacity(MAX_EVENTS as usize));
+    }
+
+    fn map_events(events: i64) -> i16 {
+        let mut kq_flags: i16 = 0;
+        if events & 1 != 0 {
+            kq_flags |= libc::EVFILT_READ;
+        }
+        if events & 2 != 0 {
+            kq_flags |= libc::EVFILT_WRITE;
+        }
+        kq_flags
+    }
+
+    fn map_flags(flags: i16) -> i64 {
+        let mut out: i64 = 0;
+        if flags & (libc::EVFILT_READ as i16) != 0 {
+            out |= 1;
+        }
+        if flags & (libc::EVFILT_WRITE as i16) != 0 {
+            out |= 2;
+        }
+        out |= 4;
+        out
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_create() -> i64 {
+        let kqfd = libc::kqueue();
+        if kqfd < 0 {
+            return -1;
+        }
+        REACTORS.lock().unwrap().insert(kqfd, kqfd);
+        kqfd as i64
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_add(epfd: i64, fd: i64, events: i64) -> i64 {
+        let mut kev: libc::kevent = std::mem::zeroed();
+        kev.ident = fd as usize;
+        kev.filter = map_events(events) as i16;
+        kev.flags = libc::EV_ADD | libc::EV_CLEAR;
+        kev.udata = fd as *mut libc::c_void;
+        let n = libc::kevent(
+            epfd as i32,
+            &mut kev,
+            1,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+        );
+        if n < 0 { -1 } else { 0 }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_modify(epfd: i64, fd: i64, events: i64) -> i64 {
+        let mut kev: libc::kevent = std::mem::zeroed();
+        kev.ident = fd as usize;
+        kev.filter = map_events(events) as i16;
+        kev.flags = libc::EV_ADD | libc::EV_CLEAR;
+        kev.udata = fd as *mut libc::c_void;
+        let n = libc::kevent(
+            epfd as i32,
+            &mut kev,
+            1,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+        );
+        if n < 0 { -1 } else { 0 }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_remove(epfd: i64, fd: i64) -> i64 {
+        let mut kev: libc::kevent = std::mem::zeroed();
+        kev.ident = fd as usize;
+        kev.flags = libc::EV_DELETE;
+        kev.udata = fd as *mut libc::c_void;
+        let n = libc::kevent(
+            epfd as i32,
+            &mut kev,
+            1,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+        );
+        if n < 0 { -1 } else { 0 }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_poll(
+        epfd: i64,
+        _events_buf: i64,
+        max_events: i64,
+        timeout_ms: i64,
+    ) -> i64 {
+        let mut kevs: Vec<libc::kevent> = Vec::with_capacity(MAX_EVENTS as usize);
+        let limit = if max_events <= 0 { MAX_EVENTS } else { max_events as i32 };
+        let timeout = if timeout_ms < 0 { std::ptr::null() } else { timeout_ms as *const libc::timespec };
+        let n = libc::kevent(
+            epfd as i32,
+            std::ptr::null_mut(),
+            0,
+            kevs.as_mut_ptr(),
+            limit,
+            timeout as *const libc::timespec,
+        );
+        if n <= 0 {
+            return n as i64;
+        }
+
+        EVENT_BUF.with(|cell| {
+            let mut buf = cell.borrow_mut();
+            buf.clear();
+            for i in 0..n {
+                let ev = &kevs[i as usize];
+                let flags = map_flags(ev.filter);
+                buf.push(KqueueEvent {
+                    fd: ev.udata as i64,
+                    flags,
+                    udata: ev.ident as i64,
+                });
+            }
+        });
+
+        n as i64
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_event_fd(events_buf: i64, idx: i64) -> i64 {
+        if events_buf == 0 {
+            EVENT_BUF.with(|cell| {
+                let buf = cell.borrow();
+                let i = idx as usize;
+                if idx < 0 || i >= buf.len() {
+                    return -1;
+                }
+                buf[i].udata
+            })
+        } else {
+            -1
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_event_flags(events_buf: i64, idx: i64) -> i64 {
+        if events_buf == 0 {
+            EVENT_BUF.with(|cell| {
+                let buf = cell.borrow();
+                let i = idx as usize;
+                if idx < 0 || i >= buf.len() {
+                    return -1;
+                }
+                buf[i].flags
+            })
+        } else {
+            -1
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn reactor_destroy(epfd: i64) {
+        REACTORS.lock().unwrap().remove(&(epfd as i32));
+        libc::close(epfd as i32);
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn scheduler_register_waker(epfd: i64, waker_fd: i64) -> i64 {
+        let mut kev: libc::kevent = std::mem::zeroed();
+        kev.ident = waker_fd as usize;
+        kev.filter = libc::EVFILT_READ as i16;
+        kev.flags = libc::EV_ADD | libc::EV_CLEAR;
+        kev.udata = waker_fd as *mut libc::c_void;
+        let n = libc::kevent(
+            epfd as i32,
+            &mut kev,
+            1,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+        );
+        if n < 0 { -1 } else { 0 }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn scheduler_run_reactor(epfd: i64, timeout_ms: i64) -> i64 {
+        let mut kevs: Vec<libc::kevent> = Vec::with_capacity(64);
+        let timeout = if timeout_ms < 0 { std::ptr::null() } else { timeout_ms as *const libc::timespec };
+        let n = libc::kevent(
+            epfd as i32,
+            std::ptr::null_mut(),
+            0,
+            kevs.as_mut_ptr(),
+            64,
+            timeout as *const libc::timespec,
+        );
+        if n <= 0 {
+            return n as i64;
+        }
+
+        let mut count: i64 = 0;
+        for i in 0..n {
+            let ev = &kevs[i as usize];
+            if ev.filter == libc::EVFILT_READ as i16 {
+                count += 1;
+            }
+        }
+        count
+    }
 }
 
 // ── Waker ──
@@ -142,8 +411,18 @@ pub unsafe extern "C" fn reactor_destroy(epfd: i64) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn waker_create() -> i64 {
     let mut fds: [i32; 2] = [0, 0];
-    if libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) < 0 {
+    if libc::pipe(fds.as_mut_ptr()) < 0 {
         return -1;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        for fd in &mut fds {
+            if libc::fcntl(*fd, libc::F_SETFL, libc::O_NONBLOCK) < 0 {
+                libc::close(fds[0]);
+                libc::close(fds[1]);
+                return -1;
+            }
+        }
     }
     WAKER_MAP.lock().unwrap().insert(fds[0], fds[1]);
     fds[0] as i64
@@ -176,7 +455,9 @@ pub unsafe extern "C" fn waker_destroy(read_fd: i64) {
 }
 
 // ── Timerfd ──
+// timerfd is Linux-only. On macOS we stub out with -1.
 
+#[cfg(target_os = "linux")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn timerfd_create() -> i64 {
     libc::timerfd_create(
@@ -185,6 +466,14 @@ pub unsafe extern "C" fn timerfd_create() -> i64 {
     ) as i64
 }
 
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn timerfd_create() -> i64 {
+    // timerfd not available on macOS
+    -1
+}
+
+#[cfg(target_os = "linux")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn timerfd_set(fd: i64, ns: i64) -> i64 {
     let spec = libc::itimerspec {
@@ -200,6 +489,13 @@ pub unsafe extern "C" fn timerfd_set(fd: i64, ns: i64) -> i64 {
     libc::timerfd_settime(fd as i32, 0, &spec, std::ptr::null_mut()) as i64
 }
 
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn timerfd_set(_fd: i64, _ns: i64) -> i64 {
+    -1
+}
+
+#[cfg(target_os = "linux")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn timerfd_set_absolute(fd: i64, abs_ns: i64) -> i64 {
     let spec = libc::itimerspec {
@@ -220,11 +516,24 @@ pub unsafe extern "C" fn timerfd_set_absolute(fd: i64, abs_ns: i64) -> i64 {
     ) as i64
 }
 
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn timerfd_set_absolute(_fd: i64, _abs_ns: i64) -> i64 {
+    -1
+}
+
+#[cfg(target_os = "linux")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn timerfd_read(fd: i64) -> i64 {
     let mut val: u64 = 0;
     let rc = libc::read(fd as i32, &mut val as *mut u64 as *mut std::ffi::c_void, 8);
     if rc > 0 { val as i64 } else { -1 }
+}
+
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn timerfd_read(_fd: i64) -> i64 {
+    -1
 }
 
 // ── Blocking Thread Pool ──
@@ -293,45 +602,6 @@ pub unsafe extern "C" fn blocking_spawn(func_ptr: i64) -> i64 {
     // Return a handle — store the receiver in a global map
 
     std::sync::atomic::AtomicI64::new(0).fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-}
-
-// ── Waker / Scheduler Integration ──
-
-/// Register a waker fd with the default reactor for the calling thread.
-/// The caller passes (reactor_epfd, waker_read_fd) and events to listen for.
-/// Returns 0 on success.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn scheduler_register_waker(epfd: i64, waker_fd: i64) -> i64 {
-    let mut ev: libc::epoll_event = std::mem::zeroed();
-    ev.events = (libc::EPOLLIN | libc::EPOLLERR | libc::EPOLLHUP) as u32;
-    ev.u64 = waker_fd as u64;
-    libc::epoll_ctl(epfd as i32, libc::EPOLL_CTL_ADD, waker_fd as i32, &mut ev) as i64
-}
-
-/// Run one iteration of the reactor loop: poll for readiness, then wake tasks.
-/// `epfd` is the reactor fd, `timeout_ms` is poll timeout.
-/// Returns the number of events processed.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn scheduler_run_reactor(epfd: i64, timeout_ms: i64) -> i64 {
-    let mut events: [libc::epoll_event; 64] = std::mem::zeroed();
-    let n = libc::epoll_wait(epfd as i32, events.as_mut_ptr(), 64, timeout_ms as i32);
-    if n <= 0 {
-        return n as i64;
-    }
-
-    let mut count: i64 = 0;
-    for i in 0..n {
-        let ev = &events[i as usize];
-        let fd = ev.u64 as i64;
-
-        // If this is a waker fd, consume the wake event
-        if ev.events & libc::EPOLLIN as u32 != 0 {
-            let mut buf: [u8; 8] = [0; 8];
-            libc::read(fd as i32, buf.as_mut_ptr() as *mut std::ffi::c_void, 8);
-            count += 1;
-        }
-    }
-    count
 }
 
 // ── Helpers ──

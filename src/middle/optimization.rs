@@ -206,7 +206,7 @@ pub fn constant_folding(mir: &mut Mir) {
     // First pass: collect constant values
     for (id, expr) in &mir.exprs {
         match expr {
-            MirExpr::Lit(value) => {
+            MirExpr::IntLit(value) => {
                 const_values.insert(*id, *value);
             }
             MirExpr::ConstEval(value) => {
@@ -240,7 +240,7 @@ pub fn constant_folding(mir: &mut Mir) {
 
             if all_const {
                 // Replace with constant expression
-                mir.exprs.insert(*result, MirExpr::Lit(folded_value));
+                mir.exprs.insert(*result, MirExpr::IntLit(folded_value));
                 // Mark the statement for removal (will be handled by DCE)
                 *stmt = MirStmt::Assign {
                     lhs: *result,
@@ -260,7 +260,7 @@ pub fn common_subexpression_elimination(mir: &mut Mir) {
     for (id, expr) in &mir.exprs {
         // Create a hashable representation of the expression
         let expr_hash = match expr {
-            MirExpr::Lit(value) => format!("Lit({})", value),
+            MirExpr::IntLit(value) => format!("Lit({})", value),
             MirExpr::Var(var_id) => format!("Var({})", var_id),
             MirExpr::ConstEval(value) => format!("ConstEval({})", value),
             MirExpr::FString(parts) => {
@@ -311,6 +311,10 @@ pub fn common_subexpression_elimination(mir: &mut Mir) {
                     .collect::<Vec<_>>()
                     .join(",");
                 format!("SemiringFold({:?}, [{}])", op, values_str)
+            }
+            MirExpr::FloatLit(_) => {
+                // Float literals are not CSE'd yet; handled when lowering is complete.
+                format!("FloatLit")
             }
         };
 
@@ -434,7 +438,7 @@ pub fn strength_reduction(mir: &mut Mir) {
     for (id, expr) in mir.exprs.iter_mut() {
         // This would be more comprehensive in a real implementation
         // For now, we'll just mark where strength reduction could be applied
-        if let MirExpr::Lit(value) = expr {
+        if let MirExpr::IntLit(value) = expr {
             // Check if this is used in multiplication/division
             // In a full implementation, we'd track uses and replace
             // x * 2 with x << 1, x / 4 with x >> 2, etc.
@@ -509,10 +513,10 @@ mod tests {
                 MirStmt::Return { val: 1 },
             ],
             exprs: vec![
-                (1, MirExpr::Lit(42)),
-                (2, MirExpr::Lit(10)),
-                (3, MirExpr::Lit(99)),
-                (4, MirExpr::Lit(20)),
+                (1, MirExpr::IntLit(42)),
+                (2, MirExpr::IntLit(10)),
+                (3, MirExpr::IntLit(99)),
+                (4, MirExpr::IntLit(20)),
             ]
             .into_iter()
             .collect(),
@@ -539,10 +543,10 @@ mod tests {
                 result: 4,
             }],
             exprs: vec![
-                (1, MirExpr::Lit(10)),
-                (2, MirExpr::Lit(20)),
-                (3, MirExpr::Lit(30)),
-                (4, MirExpr::Lit(0)), // Will be replaced
+                (1, MirExpr::IntLit(10)),
+                (2, MirExpr::IntLit(20)),
+                (3, MirExpr::IntLit(30)),
+                (4, MirExpr::IntLit(0)), // Will be replaced
             ]
             .into_iter()
             .collect(),
@@ -552,7 +556,7 @@ mod tests {
         constant_folding(&mut mir);
 
         // Result should be constant folded to 60
-        if let MirExpr::Lit(value) = mir.exprs[&4] {
+        if let MirExpr::IntLit(value) = mir.exprs[&4] {
             assert_eq!(value, 60);
         } else {
             panic!("Expected Lit(60)");

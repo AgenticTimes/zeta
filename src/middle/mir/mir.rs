@@ -129,7 +129,8 @@ pub enum MirStmt {
 #[derive(Debug, Clone)]
 pub enum MirExpr {
     Var(u32),
-    Lit(i64),
+    IntLit(i64),
+    FloatLit(f64),
     StringLit(String),
     FString(Vec<u32>),
     ConstEval(i64),

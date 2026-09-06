@@ -9,8 +9,8 @@ fn test_mir_smoke_creation() {
     let mut mir = Mir::default();
 
     // Add some expressions
-    mir.exprs.insert(1, MirExpr::Lit(42));
-    mir.exprs.insert(2, MirExpr::Lit(10));
+    mir.exprs.insert(1, MirExpr::IntLit(42));
+    mir.exprs.insert(2, MirExpr::IntLit(10));
 
     // Add a statement
     mir.stmts.push(MirStmt::Assign { lhs: 1, rhs: 2 });
@@ -29,8 +29,8 @@ fn test_mir_smoke_expression_types() {
     let mut mir = Mir::default();
 
     // Test literal expression
-    mir.exprs.insert(1, MirExpr::Lit(100));
-    assert!(matches!(mir.exprs.get(&1), Some(MirExpr::Lit(100))));
+    mir.exprs.insert(1, MirExpr::IntLit(100));
+    assert!(matches!(mir.exprs.get(&1), Some(MirExpr::IntLit(100))));
 
     // Test variable expression
     mir.exprs.insert(2, MirExpr::Var(42));
@@ -51,9 +51,9 @@ fn test_mir_smoke_statement_types() {
     let mut mir = Mir::default();
 
     // Create some expressions first
-    mir.exprs.insert(1, MirExpr::Lit(1));
-    mir.exprs.insert(2, MirExpr::Lit(2));
-    mir.exprs.insert(3, MirExpr::Lit(3));
+    mir.exprs.insert(1, MirExpr::IntLit(1));
+    mir.exprs.insert(2, MirExpr::IntLit(2));
+    mir.exprs.insert(3, MirExpr::IntLit(3));
 
     // Test assignment statement
     mir.stmts.push(MirStmt::Assign { lhs: 1, rhs: 2 });

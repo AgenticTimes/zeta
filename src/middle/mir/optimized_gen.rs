@@ -100,7 +100,7 @@ impl OptimizedMirGen {
 
     fn next_id_with_lit(&mut self, value: i64) -> u32 {
         let id = self.next_id();
-        self.exprs[id as usize] = Some(MirExpr::Lit(value));
+        self.exprs[id as usize] = Some(MirExpr::IntLit(value));
         self.ctfe_consts[id as usize] = Some(value);
         self.type_map[id as usize] = Some(Type::I64);
         id

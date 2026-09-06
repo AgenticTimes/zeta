@@ -508,8 +508,15 @@ impl Resolver {
     }
 
     pub fn lower_to_mir(&self, ast: &AstNode) -> Mir {
+        let ret_types: HashMap<String, Type> = self
+            .get_all_func_signatures()
+            .iter()
+            .map(|(name, (_, ret, _))| (name.clone(), ret.clone()))
+            .collect();
         let mut mir_gen =
-            crate::middle::mir::r#gen::MirGen::new().with_global_consts(self.ctfe_consts.clone());
+            crate::middle::mir::r#gen::MirGen::new()
+                .with_global_consts(self.ctfe_consts.clone())
+                .with_func_ret_types(ret_types);
         mir_gen.lower_to_mir(ast)
     }
 

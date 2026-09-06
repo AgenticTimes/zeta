@@ -13,6 +13,7 @@
 use crate::middle::mir::mir::{Mir, MirExpr, MirStmt, SemiringOp};
 use crate::middle::types::{Substitution, Type, TypeVar};
 use inkwell::AddressSpace;
+use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -1003,6 +1004,21 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
         mangled
     }
+    fn infer_fn_return_type(&self, mir: &Mir) -> inkwell::types::BasicTypeEnum<'ctx> {
+        for stmt in &mir.stmts {
+            if let MirStmt::Return { val } = stmt {
+                if let Some(ty) = mir.type_map.get(val) {
+                    return match ty {
+                        Type::F32 => self.context.f32_type().into(),
+                        Type::F64 => self.f64_type.into(),
+                        _ => self.i64_type.into(),
+                    };
+                }
+            }
+        }
+        self.i64_type.into()
+    }
+
     pub fn gen_mirs(&mut self, mirs: &[Mir]) {
         // Preprocess: collect struct field definitions from all MIR expressions.
         // Store field name -> index mappings for later use in FieldAccess resolution.
@@ -1055,7 +1071,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     let param_types: Vec<_> = (0..mir.param_indices.len())
                         .map(|_| self.i64_type.into())
                         .collect();
-                    let fn_type = self.i64_type.fn_type(&param_types, false);
+                    let ret_type = self.infer_fn_return_type(mir);
+                    let fn_type = match ret_type {
+                        inkwell::types::BasicTypeEnum::IntType(it) => it.fn_type(&param_types, false),
+                        inkwell::types::BasicTypeEnum::FloatType(ft) => ft.fn_type(&param_types, false),
+                        _ => self.i64_type.fn_type(&param_types, false),
+                    };
                     let fn_val = self.module.add_function(&actual_name, fn_type, None);
                     self.fns.insert(actual_name.clone(), fn_val);
                 }
@@ -1080,19 +1101,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     fn_name.clone()
                 };
 
-                // Skip if this function was pre-declared with a non-i64 return type.
-                let should_skip = self
-                    .module
-                    .get_function(&actual_name)
-                    .and_then(|f| match f.get_type().get_return_type() {
-                        Some(rt) if rt == self.i64_type.into() => None,
-                        _ => Some(()),
-                    })
-                    .is_some();
-
-                if !should_skip {
-                    self.gen_fn(mir);
-                }
+                // Always generate function body; get_function inside gen_fn
+                // will reuse an existing declaration if present.
+                self.gen_fn(mir);
             }
             // Generic functions are generated on-demand via monomorphization
         }
@@ -1143,7 +1154,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
         self.current_type_map = Some(mir.type_map.clone());
         let all_ids = self.collect_all_local_ids(mir);
         for &id in &all_ids {
-            let alloca = self.builder.build_alloca(self.i64_type, "").unwrap();
+            let alloca = match self.current_type_map.as_ref().and_then(|tm| tm.get(&id)) {
+                Some(Type::F32) => self.builder.build_alloca(self.context.f32_type(), "").unwrap(),
+                Some(Type::F64) => self.builder.build_alloca(self.f64_type, "").unwrap(),
+                _ => self.builder.build_alloca(self.i64_type, "").unwrap(),
+            };
             self.locals.insert(id, alloca);
         }
         for (i, _) in mir.param_indices.iter().enumerate() {
@@ -1163,8 +1178,13 @@ impl<'ctx> LLVMCodegen<'ctx> {
             .get_terminator()
             .is_none()
         {
+            let ret_type = self.infer_fn_return_type(mir);
+            let zero: inkwell::values::BasicValueEnum<'ctx> = match ret_type {
+                inkwell::types::BasicTypeEnum::FloatType(ft) => ft.const_zero().into(),
+                _ => self.i64_type.const_zero().into(),
+            };
             self.builder
-                .build_return(Some(&self.i64_type.const_zero()))
+                .build_return(Some(&zero))
                 .unwrap();
         }
     }
@@ -1393,6 +1413,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     self.collect_ids_from_expr_safe(e, ids, exprs);
                 }
             }
+            MirExpr::FloatLit(_) => {}
             MirExpr::As {
                 expr,
                 target_type: _,
@@ -1416,7 +1437,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     self.collect_ids_from_expr_safe(e, ids, exprs);
                 }
             }
-            MirExpr::ConstEval(_) | MirExpr::StringLit(_) | MirExpr::Lit(_) | MirExpr::Syscall(_, _) => {
+            MirExpr::ConstEval(_) | MirExpr::StringLit(_) | MirExpr::IntLit(_) | MirExpr::Syscall(_, _) => {
                 // No IDs to collect
             }
         }
@@ -2534,16 +2555,30 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         )
                         .unwrap();
 
+                    // Determine element type from dest variable's type_map entry
+                    let elem_llvm_type: inkwell::types::BasicTypeEnum<'ctx> = match
+                        self.current_type_map.as_ref().and_then(|tm| tm.get(dest))
+                    {
+                        Some(Type::F32) => self.context.f32_type().into(),
+                        Some(Type::F64) => self.f64_type.into(),
+                        _ => self.i64_type.into(),
+                    };
+
                     let elem_ptr = unsafe {
                         self.builder
-                            .build_gep(self.i64_type, array_ptr, &[index_val], "elem_ptr")
+                            .build_gep(elem_llvm_type, array_ptr, &[index_val], "elem_ptr")
                             .unwrap()
                     };
 
-                    let value = self
-                        .builder
-                        .build_load(self.i64_type, elem_ptr, "array_elem")
-                        .unwrap();
+                    let value: inkwell::values::BasicValueEnum<'ctx> = match elem_llvm_type {
+                        inkwell::types::BasicTypeEnum::IntType(it) => {
+                            self.builder.build_load(it, elem_ptr, "array_elem").unwrap().into()
+                        }
+                        inkwell::types::BasicTypeEnum::FloatType(ft) => {
+                            self.builder.build_load(ft, elem_ptr, "array_elem").unwrap().into()
+                        }
+                        _ => self.i64_type.const_zero().into(),
+                    };
 
                     let dest_alloca = *self.locals.get(dest).unwrap();
                     self.builder.build_store(dest_alloca, value).unwrap();
@@ -2588,224 +2623,144 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     if args.len() == 2 {
                         let left = self.gen_expr_safe(&args[0], exprs);
                         let right = self.gen_expr_safe(&args[1], exprs);
+                        let is_float = matches!(left.get_type(), inkwell::types::BasicTypeEnum::FloatType(_))
+                            || matches!(right.get_type(), inkwell::types::BasicTypeEnum::FloatType(_));
 
-                        let result = match func.as_str() {
-                            // Arithmetic operators
-                            "+" | "add" | "add_i64" => self
-                                .builder
-                                .build_int_add(left.into_int_value(), right.into_int_value(), "add")
-                                .unwrap(),
-                            "-" | "sub" | "sub_i64" => self
-                                .builder
-                                .build_int_sub(left.into_int_value(), right.into_int_value(), "sub")
-                                .unwrap(),
-                            "*" | "mul" | "mul_i64" => self
-                                .builder
-                                .build_int_mul(left.into_int_value(), right.into_int_value(), "mul")
-                                .unwrap(),
-                            "/" | "div" | "div_i64" => self
-                                .builder
-                                .build_int_signed_div(
-                                    left.into_int_value(),
-                                    right.into_int_value(),
-                                    "div",
-                                )
-                                .unwrap(),
-                            "%" | "mod" | "mod_i64" => self
-                                .builder
-                                .build_int_signed_rem(
-                                    left.into_int_value(),
-                                    right.into_int_value(),
-                                    "mod",
-                                )
-                                .unwrap(),
-
-                            // Bitwise operators
-                            "<<" | "shl" | "shl_i64" => self
-                                .builder
-                                .build_left_shift(
-                                    left.into_int_value(),
-                                    right.into_int_value(),
-                                    "shl",
-                                )
-                                .unwrap(),
-                            ">>" | "shr" | "shr_i64" => self
-                                .builder
-                                .build_right_shift(
-                                    left.into_int_value(),
-                                    right.into_int_value(),
-                                    false,
-                                    "shr",
-                                )
-                                .unwrap(),
-                            "&" | "bitand" | "and_i64" => self
-                                .builder
-                                .build_and(left.into_int_value(), right.into_int_value(), "and")
-                                .unwrap(),
-                            "|" | "bitor" | "or_i64" => self
-                                .builder
-                                .build_or(left.into_int_value(), right.into_int_value(), "or")
-                                .unwrap(),
-                            "^" | "bitxor" | "xor_i64" => self
-                                .builder
-                                .build_xor(left.into_int_value(), right.into_int_value(), "xor")
-                                .unwrap(),
-
-                            // Comparison operators (return i64: 1 for true, 0 for false)
-                            "==" | "eq" | "eq_i64" => {
-                                let cmp = self
-                                    .builder
-                                    .build_int_compare(
-                                        inkwell::IntPredicate::EQ,
-                                        left.into_int_value(),
-                                        right.into_int_value(),
-                                        "eq",
-                                    )
-                                    .unwrap();
-                                self.builder
-                                    .build_int_z_extend(cmp, self.i64_type, "eq_ext")
-                                    .unwrap()
+                        let result = if is_float {
+                            let l = if matches!(left.get_type(), inkwell::types::BasicTypeEnum::FloatType(_)) {
+                                left.into_float_value()
+                            } else {
+                                self.builder.build_signed_int_to_float(left.into_int_value(), self.f64_type, "op_l_sitofp").unwrap()
+                            };
+                            let r = if matches!(right.get_type(), inkwell::types::BasicTypeEnum::FloatType(_)) {
+                                right.into_float_value()
+                            } else {
+                                self.builder.build_signed_int_to_float(right.into_int_value(), self.f64_type, "op_r_sitofp").unwrap()
+                            };
+                            match func.as_str() {
+                                "+" | "add" => self.builder.build_float_add(l, r, "add").unwrap().into(),
+                                "-" | "sub" => self.builder.build_float_sub(l, r, "sub").unwrap().into(),
+                                "*" | "mul" => self.builder.build_float_mul(l, r, "mul").unwrap().into(),
+                                "/" | "div" => self.builder.build_float_div(l, r, "div").unwrap().into(),
+                                "%" | "mod" => self.builder.build_float_rem(l, r, "mod").unwrap().into(),
+                                "==" | "eq" => {
+                                    let cmp = self
+                                        .builder
+                                        .build_float_compare(FloatPredicate::OEQ, l, r, "cmp_eq")
+                                        .unwrap();
+                                    self.builder
+                                        .build_int_z_extend(cmp, self.i64_type, "cmp_eq_ext")
+                                        .unwrap()
+                                        .into()
+                                }
+                                "!=" | "ne" => {
+                                    let cmp = self
+                                        .builder
+                                        .build_float_compare(FloatPredicate::ONE, l, r, "cmp_ne")
+                                        .unwrap();
+                                    self.builder
+                                        .build_int_z_extend(cmp, self.i64_type, "cmp_ne_ext")
+                                        .unwrap()
+                                        .into()
+                                }
+                                "<" | "lt" => {
+                                    let cmp = self
+                                        .builder
+                                        .build_float_compare(FloatPredicate::OLT, l, r, "cmp_lt")
+                                        .unwrap();
+                                    self.builder
+                                        .build_int_z_extend(cmp, self.i64_type, "cmp_lt_ext")
+                                        .unwrap()
+                                        .into()
+                                }
+                                ">" | "gt" => {
+                                    let cmp = self
+                                        .builder
+                                        .build_float_compare(FloatPredicate::OGT, l, r, "cmp_gt")
+                                        .unwrap();
+                                    self.builder
+                                        .build_int_z_extend(cmp, self.i64_type, "cmp_gt_ext")
+                                        .unwrap()
+                                        .into()
+                                }
+                                "<=" | "le" => {
+                                    let cmp = self
+                                        .builder
+                                        .build_float_compare(FloatPredicate::OLE, l, r, "cmp_le")
+                                        .unwrap();
+                                    self.builder
+                                        .build_int_z_extend(cmp, self.i64_type, "cmp_le_ext")
+                                        .unwrap()
+                                        .into()
+                                }
+                                ">=" | "ge" => {
+                                    let cmp = self
+                                        .builder
+                                        .build_float_compare(FloatPredicate::OGE, l, r, "cmp_ge")
+                                        .unwrap();
+                                    self.builder
+                                        .build_int_z_extend(cmp, self.i64_type, "cmp_ge_ext")
+                                        .unwrap()
+                                        .into()
+                                }
+                                _ => self.i64_type.const_zero().into(),
                             }
-                            "!=" | "ne" | "ne_i64" => {
-                                let cmp = self
-                                    .builder
-                                    .build_int_compare(
-                                        inkwell::IntPredicate::NE,
-                                        left.into_int_value(),
-                                        right.into_int_value(),
-                                        "ne",
-                                    )
-                                    .unwrap();
-                                self.builder
-                                    .build_int_z_extend(cmp, self.i64_type, "ne_ext")
-                                    .unwrap()
-                            }
-                            "<" | "lt" | "lt_i64" => {
-                                let cmp = self
-                                    .builder
-                                    .build_int_compare(
-                                        inkwell::IntPredicate::SLT,
-                                        left.into_int_value(),
-                                        right.into_int_value(),
-                                        "lt",
-                                    )
-                                    .unwrap();
-                                self.builder
-                                    .build_int_z_extend(cmp, self.i64_type, "lt_ext")
-                                    .unwrap()
-                            }
-                            ">" | "gt" | "gt_i64" => {
-                                let cmp = self
-                                    .builder
-                                    .build_int_compare(
-                                        inkwell::IntPredicate::SGT,
-                                        left.into_int_value(),
-                                        right.into_int_value(),
-                                        "gt",
-                                    )
-                                    .unwrap();
-                                self.builder
-                                    .build_int_z_extend(cmp, self.i64_type, "gt_ext")
-                                    .unwrap()
-                            }
-                            "<=" | "le" | "le_i64" => {
-                                let cmp = self
-                                    .builder
-                                    .build_int_compare(
-                                        inkwell::IntPredicate::SLE,
-                                        left.into_int_value(),
-                                        right.into_int_value(),
-                                        "le",
-                                    )
-                                    .unwrap();
-                                self.builder
-                                    .build_int_z_extend(cmp, self.i64_type, "le_ext")
-                                    .unwrap()
-                            }
-                            ">=" | "ge" | "ge_i64" => {
-                                let cmp = self
-                                    .builder
-                                    .build_int_compare(
-                                        inkwell::IntPredicate::SGE,
-                                        left.into_int_value(),
-                                        right.into_int_value(),
-                                        "ge",
-                                    )
-                                    .unwrap();
-                                self.builder
-                                    .build_int_z_extend(cmp, self.i64_type, "ge_ext")
-                                    .unwrap()
-                            }
-
-                            // Logical operators (treat i64 as boolean: 0=false, non-zero=true)
-                            "&&" | "and" => {
-                                // Convert to boolean (0 or 1) then logical AND
-                                let left_bool = self
-                                    .builder
-                                    .build_int_compare(
-                                        inkwell::IntPredicate::NE,
-                                        left.into_int_value(),
-                                        self.i64_type.const_int(0, false),
-                                        "left_bool",
-                                    )
-                                    .unwrap();
-                                let right_bool = self
-                                    .builder
-                                    .build_int_compare(
-                                        inkwell::IntPredicate::NE,
-                                        right.into_int_value(),
-                                        self.i64_type.const_int(0, false),
-                                        "right_bool",
-                                    )
-                                    .unwrap();
-                                let bool_and = self
-                                    .builder
-                                    .build_and(left_bool, right_bool, "and")
-                                    .unwrap();
-                                self.builder
-                                    .build_int_z_extend(bool_and, self.i64_type, "and_ext")
-                                    .unwrap()
-                            }
-                            "||" | "or" => {
-                                // Convert to boolean (0 or 1) then logical OR
-                                let left_bool = self
-                                    .builder
-                                    .build_int_compare(
-                                        inkwell::IntPredicate::NE,
-                                        left.into_int_value(),
-                                        self.i64_type.const_int(0, false),
-                                        "left_bool",
-                                    )
-                                    .unwrap();
-                                let right_bool = self
-                                    .builder
-                                    .build_int_compare(
-                                        inkwell::IntPredicate::NE,
-                                        right.into_int_value(),
-                                        self.i64_type.const_int(0, false),
-                                        "right_bool",
-                                    )
-                                    .unwrap();
-                                let bool_or =
-                                    self.builder.build_or(left_bool, right_bool, "or").unwrap();
-                                self.builder
-                                    .build_int_z_extend(bool_or, self.i64_type, "or_ext")
-                                    .unwrap()
-                            }
-                            // Note: "!" (not) is unary, handled separately above
-
-                            // Not an operator we handle inline
-                            _ => {
-                                let callee =
-                                    self.get_or_declare_function(func, type_args, args.len());
-                                let arg_vals: Vec<BasicMetadataValueEnum> = args
-                                    .iter()
-                                    .map(|&id| self.gen_expr_safe(&id, exprs).into())
-                                    .collect();
-                                let call = self.builder.build_call(callee, &arg_vals, "").unwrap();
-                                // Convert BasicValueEnum to IntValue
-                                let basic_val = Self::call_site_to_basic_value(call).unwrap();
-                                basic_val.into_int_value()
+                        } else {
+                            let l = left.into_int_value();
+                            let r = right.into_int_value();
+                            match func.as_str() {
+                                "+" | "add" | "add_i64" => self.builder.build_int_add(l, r, "add").unwrap().into(),
+                                "-" | "sub" | "sub_i64" => self.builder.build_int_sub(l, r, "sub").unwrap().into(),
+                                "*" | "mul" | "mul_i64" => self.builder.build_int_mul(l, r, "mul").unwrap().into(),
+                                "/" | "div" | "div_i64" => self.builder.build_int_signed_div(l, r, "div").unwrap().into(),
+                                "%" | "mod" | "mod_i64" => self.builder.build_int_signed_rem(l, r, "mod").unwrap().into(),
+                                "<<" | "shl" | "shl_i64" => self.builder.build_left_shift(l, r, "shl").unwrap().into(),
+                                ">>" | "shr" | "shr_i64" => self.builder.build_right_shift(l, r, false, "shr").unwrap().into(),
+                                "&" | "bitand" | "and_i64" => self.builder.build_and(l, r, "bitand").unwrap().into(),
+                                "|" | "bitor" | "or_i64" => self.builder.build_or(l, r, "bitor").unwrap().into(),
+                                "^" | "bitxor" | "xor_i64" => self.builder.build_xor(l, r, "bitxor").unwrap().into(),
+                                "==" | "eq" | "eq_i64" => {
+                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, l, r, "eq").unwrap();
+                                    self.builder.build_int_z_extend(cmp, self.i64_type, "eq_ext").unwrap().into()
+                                }
+                                "!=" | "ne" | "ne_i64" => {
+                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::NE, l, r, "ne").unwrap();
+                                    self.builder.build_int_z_extend(cmp, self.i64_type, "ne_ext").unwrap().into()
+                                }
+                                "<" | "lt" | "lt_i64" => {
+                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, l, r, "lt").unwrap();
+                                    self.builder.build_int_z_extend(cmp, self.i64_type, "lt_ext").unwrap().into()
+                                }
+                                ">" | "gt" | "gt_i64" => {
+                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SGT, l, r, "gt").unwrap();
+                                    self.builder.build_int_z_extend(cmp, self.i64_type, "gt_ext").unwrap().into()
+                                }
+                                "<=" | "le" | "le_i64" => {
+                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLE, l, r, "le").unwrap();
+                                    self.builder.build_int_z_extend(cmp, self.i64_type, "le_ext").unwrap().into()
+                                }
+                                ">=" | "ge" | "ge_i64" => {
+                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SGE, l, r, "ge").unwrap();
+                                    self.builder.build_int_z_extend(cmp, self.i64_type, "ge_ext").unwrap().into()
+                                }
+                                "&&" | "and" => {
+                                    let left_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, l, self.i64_type.const_int(0, false), "left_bool").unwrap();
+                                    let right_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, r, self.i64_type.const_int(0, false), "right_bool").unwrap();
+                                    let bool_and = self.builder.build_and(left_bool, right_bool, "and").unwrap();
+                                    self.builder.build_int_z_extend(bool_and, self.i64_type, "and_ext").unwrap().into()
+                                }
+                                "||" | "or" => {
+                                    let left_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, l, self.i64_type.const_int(0, false), "left_bool").unwrap();
+                                    let right_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, r, self.i64_type.const_int(0, false), "right_bool").unwrap();
+                                    let bool_or = self.builder.build_or(left_bool, right_bool, "or").unwrap();
+                                    self.builder.build_int_z_extend(bool_or, self.i64_type, "or_ext").unwrap().into()
+                                }
+                                _ => {
+                                    let callee = self.get_or_declare_function(func, type_args, args.len());
+                                    let arg_vals: Vec<BasicMetadataValueEnum> = args.iter().map(|&id| self.gen_expr_safe(&id, exprs).into()).collect();
+                                    let call = self.builder.build_call(callee, &arg_vals, "").unwrap();
+                                    Self::call_site_to_basic_value(call).unwrap_or(self.i64_type.const_zero().into())
+                                }
                             }
                         };
 
@@ -3481,20 +3436,52 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     return;
                 }
                 let mut acc = self.gen_expr_safe(&values[0], exprs);
+                let is_float = matches!(acc.get_type(), inkwell::types::BasicTypeEnum::FloatType(_))
+                    || values.iter().skip(1).any(|&vid| {
+                        self.current_type_map
+                            .as_ref()
+                            .map_or(false, |tm| matches!(tm.get(&vid), Some(Type::F32 | Type::F64)))
+                    });
                 for &val_id in &values[1..] {
                     let val = self.gen_expr_safe(&val_id, exprs);
-                    acc = match op {
-                        SemiringOp::Add => self
-                            .builder
-                            .build_int_add(acc.into_int_value(), val.into_int_value(), "fold_add")
-                            .unwrap()
-                            .into(),
-                        SemiringOp::Mul => self
-                            .builder
-                            .build_int_mul(acc.into_int_value(), val.into_int_value(), "fold_mul")
-                            .unwrap()
-                            .into(),
-                    };
+                    if is_float {
+                        // Defensive: if type_map disagrees with actual LLVM type, coerce
+                        let acc_f = if matches!(acc.get_type(), inkwell::types::BasicTypeEnum::FloatType(_)) {
+                            acc.into_float_value()
+                        } else {
+                            self.builder.build_signed_int_to_float(acc.into_int_value(), self.f64_type, "acc_sitofp").unwrap()
+                        };
+                        let val_f = if matches!(val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_)) {
+                            val.into_float_value()
+                        } else {
+                            self.builder.build_signed_int_to_float(val.into_int_value(), self.f64_type, "val_sitofp").unwrap()
+                        };
+                        acc = match op {
+                            SemiringOp::Add => self
+                                .builder
+                                .build_float_add(acc_f, val_f, "fold_add")
+                                .unwrap()
+                                .into(),
+                            SemiringOp::Mul => self
+                                .builder
+                                .build_float_mul(acc_f, val_f, "fold_mul")
+                                .unwrap()
+                                .into(),
+                        };
+                    } else {
+                        acc = match op {
+                            SemiringOp::Add => self
+                                .builder
+                                .build_int_add(acc.into_int_value(), val.into_int_value(), "fold_add")
+                                .unwrap()
+                                .into(),
+                            SemiringOp::Mul => self
+                                .builder
+                                .build_int_mul(acc.into_int_value(), val.into_int_value(), "fold_mul")
+                                .unwrap()
+                                .into(),
+                        };
+                    }
                 }
                 let alloca = *self.locals.get(result).unwrap();
                 self.builder.build_store(alloca, acc).unwrap();
@@ -4279,7 +4266,8 @@ impl<'ctx> LLVMCodegen<'ctx> {
     ) -> BasicValueEnum<'ctx> {
         match expr {
             MirExpr::Var(id) => self.load_local(*id),
-            MirExpr::Lit(n) => self.i64_type.const_int(*n as u64, true).into(),
+            MirExpr::IntLit(n) => self.i64_type.const_int(*n as u64, true).into(),
+            MirExpr::FloatLit(n) => self.f64_type.const_float(*n).into(),
             MirExpr::StringLit(s) => {
                 let global = self.module.add_global(
                     self.context.i8_type().array_type(s.len() as u32 + 1),
@@ -4326,31 +4314,59 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // having already stored to an alloca. This is essential for
                 // while-loop conditions where the SemiringFold statement is
                 // in the loop body but the condition check happens before it.
-                let left = self
-                    .gen_expr(&exprs[&values[0]], exprs, None)
-                    .into_int_value();
-                if values.len() == 1 {
-                    // Unary (e.g. unary minus)
-                    match op {
-                        crate::middle::mir::mir::SemiringOp::Mul
-                        | crate::middle::mir::mir::SemiringOp::Add => {
-                            // Identity: return value unchanged
-                            left.into()
+                let left = self.gen_expr(&exprs[&values[0]], exprs, None);
+                let is_float = self.current_type_map.as_ref().map_or(false, |tm| {
+                    values.iter().any(|&vid| matches!(tm.get(&vid), Some(Type::F32 | Type::F64)))
+                });
+                if is_float {
+                    let left = if matches!(left.get_type(), inkwell::types::BasicTypeEnum::FloatType(_)) {
+                        left.into_float_value()
+                    } else {
+                        self.builder.build_signed_int_to_float(left.into_int_value(), self.f64_type, "sef_acc_sitofp").unwrap()
+                    };
+                    if values.len() == 1 {
+                        match op {
+                            crate::middle::mir::mir::SemiringOp::Mul
+                            | crate::middle::mir::mir::SemiringOp::Add => left.into(),
+                        }
+                    } else {
+                        let right = self.gen_expr(&exprs[&values[1]], exprs, None);
+                        let right = if matches!(right.get_type(), inkwell::types::BasicTypeEnum::FloatType(_)) {
+                            right.into_float_value()
+                        } else {
+                            self.builder.build_signed_int_to_float(right.into_int_value(), self.f64_type, "sef_val_sitofp").unwrap()
+                        };
+                        match op {
+                            crate::middle::mir::mir::SemiringOp::Add => {
+                                self.builder.build_float_add(left, right, "sef_add").unwrap().into()
+                            }
+                            crate::middle::mir::mir::SemiringOp::Mul => {
+                                self.builder.build_float_mul(left, right, "sef_mul").unwrap().into()
+                            }
                         }
                     }
                 } else {
-                    let right = self
-                        .gen_expr(&exprs[&values[1]], exprs, None)
-                        .into_int_value();
-                    let result = match op {
-                        crate::middle::mir::mir::SemiringOp::Add => {
-                            self.builder.build_int_add(left, right, "sef_add")
+                    let left = left.into_int_value();
+                    if values.len() == 1 {
+                        match op {
+                            crate::middle::mir::mir::SemiringOp::Mul
+                            | crate::middle::mir::mir::SemiringOp::Add => {
+                                // Identity: return value unchanged
+                                left.into()
+                            }
                         }
-                        crate::middle::mir::mir::SemiringOp::Mul => {
-                            self.builder.build_int_mul(left, right, "sef_mul")
-                        }
-                    };
-                    result.unwrap().into()
+                    } else {
+                        let right = self.gen_expr(&exprs[&values[1]], exprs, None).into_int_value();
+                        let result = match op {
+                            crate::middle::mir::mir::SemiringOp::Add => {
+                                self.builder.build_int_add(left, right, "sef_add")
+                            }
+                            crate::middle::mir::mir::SemiringOp::Mul => {
+                                self.builder.build_int_mul(left, right, "sef_mul")
+                            }
+                        };
+                        result.unwrap().into()
+                    }
                 }
             }
             MirExpr::TimingOwned(inner_id) => {
@@ -4390,10 +4406,49 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 }
             }
             MirExpr::BinaryOp { op, left, right } => {
-                let left_val = self.gen_expr(&exprs[left], exprs, None).into_int_value();
-                let right_val = self.gen_expr(&exprs[right], exprs, None).into_int_value();
+                let left_val = self.gen_expr(&exprs[left], exprs, None);
+                let right_val = self.gen_expr(&exprs[right], exprs, None);
+                let is_float = matches!(left_val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_))
+                    || matches!(right_val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_));
 
-                match op.as_str() {
+                if is_float {
+                    let l = left_val.into_float_value();
+                    let r = right_val.into_float_value();
+                    match op.as_str() {
+                        "<" => {
+                            let cmp = self.builder.build_float_compare(FloatPredicate::OLT, l, r, "cmp_lt").unwrap();
+                            self.builder.build_int_z_extend(cmp, self.i64_type, "cmp_lt_ext").unwrap().into()
+                        }
+                        ">" => {
+                            let cmp = self.builder.build_float_compare(FloatPredicate::OGT, l, r, "cmp_gt").unwrap();
+                            self.builder.build_int_z_extend(cmp, self.i64_type, "cmp_gt_ext").unwrap().into()
+                        }
+                        "<=" => {
+                            let cmp = self.builder.build_float_compare(FloatPredicate::OLE, l, r, "cmp_le").unwrap();
+                            self.builder.build_int_z_extend(cmp, self.i64_type, "cmp_le_ext").unwrap().into()
+                        }
+                        ">=" => {
+                            let cmp = self.builder.build_float_compare(FloatPredicate::OGE, l, r, "cmp_ge").unwrap();
+                            self.builder.build_int_z_extend(cmp, self.i64_type, "cmp_ge_ext").unwrap().into()
+                        }
+                        "==" => {
+                            let cmp = self.builder.build_float_compare(FloatPredicate::OEQ, l, r, "cmp_eq").unwrap();
+                            self.builder.build_int_z_extend(cmp, self.i64_type, "cmp_eq_ext").unwrap().into()
+                        }
+                        "!=" => {
+                            let cmp = self.builder.build_float_compare(FloatPredicate::ONE, l, r, "cmp_ne").unwrap();
+                            self.builder.build_int_z_extend(cmp, self.i64_type, "cmp_ne_ext").unwrap().into()
+                        }
+                        "+" => self.builder.build_float_add(l, r, "add").unwrap().into(),
+                        "-" => self.builder.build_float_sub(l, r, "sub").unwrap().into(),
+                        "*" => self.builder.build_float_mul(l, r, "mul").unwrap().into(),
+                        "/" => self.builder.build_float_div(l, r, "div").unwrap().into(),
+                        _ => self.i64_type.const_zero().into(),
+                    }
+                } else {
+                    let left_val = left_val.into_int_value();
+                    let right_val = right_val.into_int_value();
+                    match op.as_str() {
                     "<" => {
                         let cmp = self
                             .builder
@@ -4562,6 +4617,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     }
                     _ => {
                         panic!("Unsupported binary operator in BinaryOp: {}", op);
+                    }
                     }
                 }
             }
@@ -4812,16 +4868,34 @@ impl<'ctx> LLVMCodegen<'ctx> {
             MirExpr::StackArray { elements, size } => {
                 // Allocate stack array and initialize with elements
 
-                // Always use i64 for array elements to match runtime expectations
-                // This wastes memory for bool arrays but ensures compatibility
-                let elem_type = self.i64_type;
+                // Determine element type from the first element expression (or default to i64)
+                let elem_type = elements
+                    .first()
+                    .and_then(|&eid| self.current_type_map.as_ref().and_then(|tm| tm.get(&eid)))
+                    .map(|ty| match ty {
+                        Type::F32 => self.context.f32_type().into(),
+                        Type::F64 => self.f64_type.into(),
+                        _ => self.i64_type.into(),
+                    })
+                    .unwrap_or(self.i64_type.into());
+                let is_float = matches!(elem_type, inkwell::types::BasicTypeEnum::FloatType(_));
+                let elem_llvm_type: inkwell::types::BasicTypeEnum<'ctx> = match elem_type {
+                    inkwell::types::BasicTypeEnum::IntType(it) => it.into(),
+                    inkwell::types::BasicTypeEnum::FloatType(ft) => ft.into(),
+                    _ => self.i64_type.into(),
+                };
 
-                // Create array type
-                let array_type = elem_type.array_type(*size as u32);
+                // Create array type (match to call .array_type() on concrete type)
+                let array_type = match elem_llvm_type {
+                    inkwell::types::BasicTypeEnum::IntType(it) => it.array_type(*size as u32),
+                    inkwell::types::BasicTypeEnum::FloatType(ft) => ft.array_type(*size as u32),
+                    _ => self.i64_type.array_type(*size as u32),
+                };
 
                 // Allocate on HEAP (was stack) — tuples are returned across function
                 // boundaries and stack allocation causes use-after-free.
-                let total_bytes = self.i64_type.const_int(*size as u64 * 8, false);
+                let elem_size = if is_float { 8u64 } else { 8u64 };
+                let total_bytes = self.i64_type.const_int(*size as u64 * elem_size, false);
                 let malloc_fn = self
                     .module
                     .get_function("runtime_malloc")
@@ -4840,9 +4914,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
                 // Initialize each element
                 for (i, element_id) in elements.iter().enumerate() {
-                    let element_val = self
-                        .gen_expr(&exprs[element_id], exprs, None)
-                        .into_int_value();
+                    let element_val = self.gen_expr(&exprs[element_id], exprs, None);
                     let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
                     let heap_ptr_val = self
                         .builder
@@ -4901,7 +4973,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
     fn load_local(&self, id: u32) -> BasicValueEnum<'ctx> {
         let ptr = *self.locals.get(&id).unwrap();
-        self.builder.build_load(self.i64_type, ptr, "").unwrap()
+        let ty = self.current_type_map.as_ref().and_then(|tm| tm.get(&id));
+        match ty {
+            Some(Type::F32) => self.builder.build_load(self.context.f32_type(), ptr, "").unwrap(),
+            Some(Type::F64) => self.builder.build_load(self.f64_type, ptr, "").unwrap(),
+            _ => self.builder.build_load(self.i64_type, ptr, "").unwrap(),
+        }
     }
 
     fn call_site_to_basic_value(call: CallSiteValue<'ctx>) -> Option<BasicValueEnum<'ctx>> {

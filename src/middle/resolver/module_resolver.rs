@@ -275,7 +275,7 @@ impl ModuleResolver {
 
             // Check the zorb package cache (~/.cache/zorb/packages/@scope/name/...)
             let home = std::env::var("HOME").unwrap_or_else(|_| "/home/zeta".to_string());
-            let mut cache_path = PathBuf::from(&home)
+            let cache_path = PathBuf::from(&home)
                 .join(".cache/zorb/packages")
                 .join(scoped_name)
                 .join("src");
