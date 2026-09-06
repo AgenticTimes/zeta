@@ -151,6 +151,42 @@ impl<'ctx> LLVMCodegen<'ctx> {
             void_type.fn_type(&[ptr_type.into()], false),
             Some(Linkage::External),
         );
+        // Vec<T> runtime functions (data pointer style, GC-managed)
+        module.add_function(
+            "vec_new",
+            i64_type.fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "vec_push",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "vec_get",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "vec_set",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "vec_len",
+            i64_type.fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "vec_pop",
+            i64_type.fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "vec_free",
+            void_type.fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
         // SIMD vector operations are handled inline in codegen via LLVM vector IR.
         // No extern declarations needed — vectors are LLVM native types, not heap-allocated.
         module.add_function(
