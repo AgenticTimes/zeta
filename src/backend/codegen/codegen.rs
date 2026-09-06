@@ -1117,8 +1117,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 if !self.fns.contains_key(&actual_name)
                     && self.module.get_function(&actual_name).is_none()
                 {
-                    let param_types: Vec<_> = (0..mir.param_indices.len())
-                        .map(|_| self.i64_type.into())
+                    let param_types: Vec<_> = mir
+                        .param_indices
+                        .iter()
+                        .map(|(_, pid)| match mir.type_map.get(pid) {
+                            Some(Type::F32) => self.context.f32_type().into(),
+                            Some(Type::F64) => self.f64_type.into(),
+                            _ => self.i64_type.into(),
+                        })
                         .collect();
                     let ret_type = self.infer_fn_return_type(mir);
                     let fn_type = match ret_type {

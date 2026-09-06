@@ -117,7 +117,22 @@ impl MirGen {
                     let id = self.next_id();
                     self.name_to_id.insert(name.clone(), id);
                     self.exprs.insert(id, MirExpr::Var(id));
+                    // Keep params as I64 — arrays pass as pointers (i64).
+                    // Only true f64/i64 params should be non-I64, and those
+                    // are handled by the codegen's param_types inference below.
                     self.type_map.insert(id, Type::I64);
+                    // Also set the "declared" type for codegen param inference.
+                    // Arrays pass as i64 pointers; true f64/i32 params get their
+                    // natural type so codegen can emit the correct LLVM signature.
+                    let pt_str = param_type.trim();
+                    if pt_str == "f64" || pt_str == "f32" {
+                        self.type_map.insert(id, Type::F64);
+                    } else if pt_str == "bool" {
+                        self.type_map.insert(id, Type::Bool);
+                    } else if pt_str.starts_with('[') {
+                        // Array param stays I64 — pointer semantics.
+                        // Element type is inferred from source_types in Subscript.
+                    }
                     self.source_types.insert(id, param_type.clone());
                     self.stmts.push(MirStmt::ParamInit {
                         param_id: id,
@@ -175,8 +190,7 @@ impl MirGen {
                 AstNode::FuncDef { params, .. } | AstNode::ExternFunc { params, .. } => {
                     params
                         .iter()
-                        .enumerate()
-                        .map(|(i, (n, _))| (n.clone(), i as u32))
+                        .map(|(n, _)| (n.clone(), self.name_to_id[n.as_str()].clone()))
                         .collect()
                 }
                 _ => vec![],
