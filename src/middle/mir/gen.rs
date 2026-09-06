@@ -2831,7 +2831,29 @@ impl MirGen {
                     });
                 }
                 self.exprs.insert(id, MirExpr::Var(id));
-                self.type_map.insert(id, Type::I64);
+                // Element type: from the base array's element type if known,
+                // otherwise default to i64. Without this, `f64arr[i]` is typed
+                // i64 and later casts read raw double bits.
+                // Use source_ty to avoid borrowing base_ty after partial move.
+                let elem_type = {
+                    let src = self.source_types.get(&bid).cloned().unwrap_or_default();
+                    if src.starts_with('[') {
+                        let inner = src
+                            .trim_start_matches('[')
+                            .split(']')
+                            .next()
+                            .unwrap_or("");
+                        let elem_str = inner
+                            .split(';')
+                            .next()
+                            .unwrap_or("")
+                            .trim();
+                        Type::from_string(elem_str)
+                    } else {
+                        Type::I64
+                    }
+                };
+                self.type_map.insert(id, elem_type);
             }
             AstNode::DynamicArrayLit {
                 elem_type,
