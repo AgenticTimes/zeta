@@ -10,10 +10,28 @@ use std::collections::HashMap;
 use std::env;
 use std::sync::Mutex;
 
-lazy_static::lazy_static! {
-    /// Global allocation tracker: maps pointer -> allocation size
-    /// Enables proper deallocation via std_free
-    static ref ALLOC_TRACKER: Mutex<HashMap<usize, usize>> = Mutex::new(HashMap::new());
+// Boehm GC — conservative garbage collector. Used as the backing allocator for
+// std_malloc/std_free so that .z code gets GC-managed heap without any allocator
+// plumbing in the compiler or the user-facing language.
+//
+// macOS (Homebrew): brew install libgc → /opt/homebrew/opt/bdw-gc
+// The #[link] attribute below works when the compiler can find libgc via
+// standard paths or when RPATH/LIBRARY_PATH is set.  We also set
+// linker flags from build.rs.
+#[cfg(target_os = "macos")]
+#[link(name = "gc", kind = "static")]
+unsafe extern "C" {
+    fn GC_malloc(size: usize) -> *mut u8;
+    fn GC_free(ptr: *mut u8);
+    fn GC_realloc(ptr: *mut u8, new_size: usize) -> *mut u8;
+}
+
+#[cfg(not(target_os = "macos"))]
+#[link(name = "gc")]
+unsafe extern "C" {
+    fn GC_malloc(size: usize) -> *mut u8;
+    fn GC_free(ptr: *mut u8);
+    fn GC_realloc(ptr: *mut u8, new_size: usize) -> *mut u8;
 }
 
 // SIMD vector types for runtime
@@ -26,50 +44,28 @@ struct I64x2([i64; 2]);
 #[repr(C, align(16))]
 struct F32x4([f32; 4]);
 
-/// Allocates memory with allocation tracking.
+/// Allocates memory via the Boehm garbage collector.
+/// The returned pointer is GC-managed: it is collected automatically once
+/// unreachable, and std_free is a no-op (GC owns the lifetime).
 ///
 /// # Safety
-/// Caller must ensure valid size, free returned pointer with std_free, and avoid use after free.
+/// Caller must ensure valid size. Returned pointer must not be freed with
+/// libc free; use std_free (no-op) or GC_free.
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe extern "C" fn std_malloc(size: usize) -> i64 {
     if size == 0 {
         return 0;
     }
-
-    // Create vector with capacity, leak it to get pointer
-    let mut vec = vec![0; size];
-    let ptr = vec.as_mut_ptr();
-    std::mem::forget(vec); // Leak memory - caller must free with std_free
-
-    // Track allocation size for proper deallocation
-    if let Ok(mut tracker) = ALLOC_TRACKER.lock() {
-        tracker.insert(ptr as usize, size);
-    }
-
-    ptr as i64
+    unsafe { GC_malloc(size) as i64 }
 }
 
-/// Frees memory allocated by std_malloc.
+/// No-op: memory is owned by the Boehm GC and collected automatically.
 ///
 /// # Safety
-/// Caller must ensure pointer from std_malloc or null, no use after free, and no double free.
+/// No-op, always safe.
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe extern "C" fn std_free(ptr: usize) {
-    if ptr != 0 {
-        // Look up allocation size from tracker
-        let size = ALLOC_TRACKER
-            .lock()
-            .ok()
-            .and_then(|mut tracker| tracker.remove(&ptr));
-
-        if let Some(alloc_size) = size {
-            // Reconstruct the layout and deallocate properly
-            let layout = std::alloc::Layout::from_size_align(alloc_size, 1)
-                .expect("Failed to create layout for deallocation");
-            std::alloc::dealloc(ptr as *mut u8, layout);
-        }
-        // If size not tracked, memory was leaked (should not happen in correct usage)
-    }
+    let _ = ptr; // GC handles collection; explicit free unnecessary
 }
 
 /// Prints an integer to stdout.
@@ -122,21 +118,30 @@ pub unsafe extern "C" fn std_args() -> *mut *mut u8 {
     ptr
 }
 
-/// Allocates memory with calloc semantics (zero-initialized).
+/// Allocates zero-initialized memory via the Boehm GC.
+/// GC does not have a calloc API, so we malloc + memset_zero.
 ///
 /// # Safety
-/// Caller must ensure valid size, free returned pointer with std_free.
+/// Caller must ensure valid count/size.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn std_calloc(count: i64, size: i64) -> i64 {
-    // For now, return a dummy pointer
-    // In a real implementation, this would allocate zero-initialized memory
-    0x2000_i64
+    if count <= 0 || size <= 0 {
+        return 0;
+    }
+    let total = (count as usize).saturating_mul(size as usize);
+    let ptr = unsafe { GC_malloc(total) };
+    if ptr.is_null() {
+        return 0;
+    }
+    // Zero-initialize (GC_malloc may not zero-initialize)
+    std::ptr::write_bytes(ptr, 0, total);
+    ptr as i64
 }
 
-/// Reallocates memory.
+/// Reallocates GC-managed memory.
 ///
 /// # Safety
-/// ptr must be from std_malloc/std_calloc or null.
+/// ptr must be from std_malloc/std_calloc/GC_malloc or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn std_realloc(ptr: i64, new_size: i64) -> i64 {
     unsafe {
@@ -146,29 +151,7 @@ pub unsafe extern "C" fn std_realloc(ptr: i64, new_size: i64) -> i64 {
             }
             return 0;
         }
-        unsafe {
-            // Look up old size from tracker
-            let old_size = ALLOC_TRACKER
-                .lock()
-                .ok()
-                .and_then(|mut tracker| tracker.remove(&(ptr as usize)))
-                .unwrap_or(new_size as usize);
-
-            // Allocate new block
-            let new_ptr = std_malloc(new_size as usize);
-            if new_ptr == 0 {
-                return 0;
-            }
-
-            // Copy old data
-            let copy_size = std::cmp::min(old_size, new_size as usize);
-            std::ptr::copy_nonoverlapping(ptr as *const u8, new_ptr as *mut u8, copy_size);
-
-            // Free old block
-            std_free(ptr as usize);
-
-            new_ptr
-        }
+        unsafe { GC_realloc(ptr as *mut u8, new_size as usize) as i64 }
     }
 }
 
