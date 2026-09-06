@@ -2780,6 +2780,7 @@ impl MirGen {
 
                 // Check if base is an array type (dynamic or static)
                 let base_ty = self.type_map.get(&bid).cloned().unwrap_or(Type::I64);
+                let base_ty_clone = base_ty.clone(); // clone for later elem-type lookup
                 // Also check source_types for function params with array types
                 let source_ty = self.source_types.get(&bid).cloned().unwrap_or_default();
                 let is_array_param = source_ty.starts_with("[") || source_ty.starts_with("*mut [");
@@ -2834,23 +2835,33 @@ impl MirGen {
                 // Element type: from the base array's element type if known,
                 // otherwise default to i64. Without this, `f64arr[i]` is typed
                 // i64 and later casts read raw double bits.
-                // Use source_ty to avoid borrowing base_ty after partial move.
+                // Check type_map first (covers annotated locals like `let x: [f64; 4]`),
+                // fall back to source_types (function params).
                 let elem_type = {
-                    let src = self.source_types.get(&bid).cloned().unwrap_or_default();
-                    if src.starts_with('[') {
-                        let inner = src
-                            .trim_start_matches('[')
-                            .split(']')
-                            .next()
-                            .unwrap_or("");
-                        let elem_str = inner
-                            .split(';')
-                            .next()
-                            .unwrap_or("")
-                            .trim();
-                        Type::from_string(elem_str)
+                    let from_ty = match &base_ty_clone {
+                        Type::DynamicArray(elem) => Some((**elem).clone()),
+                        Type::Array(elem, _) => Some((**elem).clone()),
+                        _ => None,
+                    };
+                    if let Some(et) = from_ty {
+                        et
                     } else {
-                        Type::I64
+                        let src = self.source_types.get(&bid).cloned().unwrap_or_default();
+                        if src.starts_with('[') {
+                            let inner = src
+                                .trim_start_matches('[')
+                                .split(']')
+                                .next()
+                                .unwrap_or("");
+                            let elem_str = inner
+                                .split(';')
+                                .next()
+                                .unwrap_or("")
+                                .trim();
+                            Type::from_string(elem_str)
+                        } else {
+                            Type::I64
+                        }
                     }
                 };
                 self.type_map.insert(id, elem_type);

@@ -3590,7 +3590,16 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 if (func == "array_set" || func == "stack_array_set") && args.len() == 3 {
                     let array_ptr_val = self.gen_expr_safe(&args[0], exprs).into_int_value();
                     let index_val = self.gen_expr_safe(&args[1], exprs).into_int_value();
-                    let value_val = self.gen_expr_safe(&args[2], exprs).into_int_value();
+                    let value_val = self.gen_expr_safe(&args[2], exprs);
+
+                    // Determine element type from the value being stored (args[2])
+                    let elem_llvm_type: inkwell::types::BasicTypeEnum<'ctx> = match
+                        self.current_type_map.as_ref().and_then(|tm| tm.get(&args[2]))
+                    {
+                        Some(Type::F32) => self.context.f32_type().into(),
+                        Some(Type::F64) => self.f64_type.into(),
+                        _ => self.i64_type.into(),
+                    };
 
                     let array_ptr = self
                         .builder
@@ -3603,11 +3612,22 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
                     let elem_ptr = unsafe {
                         self.builder
-                            .build_gep(self.i64_type, array_ptr, &[index_val], "elem_ptr")
+                            .build_gep(elem_llvm_type, array_ptr, &[index_val], "elem_ptr")
                             .unwrap()
                     };
 
-                    self.builder.build_store(elem_ptr, value_val).unwrap();
+                    match elem_llvm_type {
+                        inkwell::types::BasicTypeEnum::IntType(it) => {
+                            // No-op: build_store uses the pointer's element type
+                            self.builder.build_store(elem_ptr, value_val.into_int_value()).unwrap();
+                        }
+                        inkwell::types::BasicTypeEnum::FloatType(ft) => {
+                            self.builder.build_store(elem_ptr, value_val.into_float_value()).unwrap();
+                        }
+                        _ => {
+                            self.builder.build_store(elem_ptr, value_val.into_int_value()).unwrap();
+                        }
+                    }
                     return;
                 }
 
