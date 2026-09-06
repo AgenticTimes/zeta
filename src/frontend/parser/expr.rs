@@ -83,6 +83,17 @@ fn parse_float_lit(input: &str) -> IResult<&str, AstNode> {
         .filter(|c| c.is_ascii_digit() || *c == '.')
         .collect();
 
+    // Consume optional type suffix (e.g. `3.14f64`) so `f(3.14f64)` parses
+    // like `f(3.14)`. Mirrors the integer-suffix handling in parse_lit.
+    let after_lit = remaining;
+    let suffix = ["f32", "f64"]
+        .iter()
+        .find(|s| after_lit.starts_with(**s));
+    let remaining = match suffix {
+        Some(s) => &after_lit[s.len()..],
+        None => after_lit,
+    };
+
     Ok((remaining, AstNode::FloatLit(clean_float)))
 }
 
@@ -164,6 +175,22 @@ pub fn parse_lit(input: &str) -> IResult<&str, AstNode> {
     // Remove underscores and parse as i64
     let clean_num: String = num_str.chars().filter(|c| c.is_ascii_digit()).collect();
     let value = clean_num.parse::<i64>().unwrap_or(0);
+
+    // Consume optional type suffix (e.g. `42i64`, `42u32`, `42f64`). The
+    // suffix is type annotation only — value stays the same. Without this,
+    // `f(42i64)` would leave `i64` unconsumed and the call argument parse
+    // would fail, silently dropping `main` from the MIR.
+    let after_lit = remaining;
+    let suffix = [
+        "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64",
+        "f32", "f64", "usize", "isize",
+    ]
+    .iter()
+    .find(|s| after_lit.starts_with(**s));
+    let remaining = match suffix {
+        Some(s) => &after_lit[s.len()..],
+        None => after_lit,
+    };
 
     Ok((remaining, AstNode::Lit(value)))
 }
