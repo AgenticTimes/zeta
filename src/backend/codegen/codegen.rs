@@ -2988,7 +2988,8 @@ impl<'ctx> LLVMCodegen<'ctx> {
                                 _ => {
                                     let callee = self.get_or_declare_function(func, type_args, args.len());
                                     let arg_vals: Vec<BasicMetadataValueEnum> = args.iter().map(|&id| self.gen_expr_safe(&id, exprs).into()).collect();
-                                    let call = self.builder.build_call(callee, &arg_vals, "").unwrap();
+                                    let coerced = self.coerce_call_args(callee, arg_vals);
+                                    let call = self.builder.build_call(callee, &coerced, "").unwrap();
                                     Self::call_site_to_basic_value(call).unwrap_or(self.i64_type.const_zero().into())
                                 }
                             }
@@ -3003,7 +3004,8 @@ impl<'ctx> LLVMCodegen<'ctx> {
                             .iter()
                             .map(|&id| self.gen_expr_safe(&id, exprs).into())
                             .collect();
-                        let call = self.builder.build_call(callee, &arg_vals, "").unwrap();
+                        let coerced = self.coerce_call_args(callee, arg_vals);
+                        let call = self.builder.build_call(callee, &coerced, "").unwrap();
                         if let Some(val) = Self::call_site_to_basic_value(call) {
                             let alloca = *self.locals.get(dest).unwrap();
                             self.builder.build_store(alloca, val).unwrap();
@@ -3512,7 +3514,8 @@ impl<'ctx> LLVMCodegen<'ctx> {
                             }
                         })
                         .collect();
-                    let call = self.builder.build_call(callee, &arg_vals, "").unwrap();
+                    let coerced = self.coerce_call_args(callee, arg_vals);
+                    let call = self.builder.build_call(callee, &coerced, "").unwrap();
                     if let Some(val) = Self::call_site_to_basic_value(call) {
                         // If function returns a pointer, convert it to i64
                         let final_val = if returns_ptr {
@@ -3668,9 +3671,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     .iter()
                     .map(|&id| self.gen_expr_safe(&id, exprs).into())
                     .collect();
+                let coerced = self.coerce_call_args(callee, arg_vals);
                 let _ = self
                     .builder
-                    .build_call(callee, &arg_vals, "void_call")
+                    .build_call(callee, &coerced, "void_call")
                     .unwrap();
             }
             MirStmt::Return { val } => {
@@ -3818,11 +3822,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     .unwrap();
                 let key_val = self.gen_expr_safe(key_id, exprs);
                 let val_val = self.gen_expr_safe(val_id, exprs);
-                let _ = self.builder.build_call(
-                    self.get_function("map_insert"),
-                    &[map_ptr.into(), key_val.into(), val_val.into()],
-                    "dict_insert",
-                );
+                let map_insert_fn = self.get_function("map_insert");
+                let coerced = self.coerce_call_args(map_insert_fn, vec![map_ptr.into(), key_val.into(), val_val.into()]);
+                let _ = self.builder.build_call(map_insert_fn, &coerced, "dict_insert");
             }
             MirStmt::DictGet {
                 map_id,
@@ -5319,6 +5321,72 @@ impl<'ctx> LLVMCodegen<'ctx> {
             inkwell::values::ValueKind::Basic(basic) => Some(basic),
             _ => None,
         }
+    }
+
+    /// Coerce call arguments to the callee's declared parameter types.
+    /// Fixes "Call parameter type does not match" errors when an i64 value
+    /// (e.g. a u8 produced by a trunc) is passed to a function expecting i64.
+    fn coerce_call_args<'a>(
+        &self,
+        callee: inkwell::values::FunctionValue<'ctx>,
+        args: Vec<BasicMetadataValueEnum<'ctx>>,
+    ) -> Vec<BasicMetadataValueEnum<'ctx>> {
+        let fn_type = callee.get_type();
+        let n_params = fn_type.count_param_types() as usize;
+        let mut result = Vec::with_capacity(args.len());
+        for (i, arg) in args.into_iter().enumerate() {
+            if i >= n_params {
+                result.push(arg);
+                continue;
+            }
+            let param_ty = fn_type.get_param_types()[i];
+            // Convert BasicMetadataTypeEnum → BasicTypeEnum (panics on MetadataType)
+            let param_basic: inkwell::types::BasicTypeEnum<'ctx> = match param_ty {
+                inkwell::types::BasicMetadataTypeEnum::IntType(t) => t.into(),
+                inkwell::types::BasicMetadataTypeEnum::FloatType(t) => t.into(),
+                inkwell::types::BasicMetadataTypeEnum::PointerType(t) => t.into(),
+                inkwell::types::BasicMetadataTypeEnum::ArrayType(t) => t.into(),
+                inkwell::types::BasicMetadataTypeEnum::StructType(t) => t.into(),
+                inkwell::types::BasicMetadataTypeEnum::VectorType(t) => t.into(),
+                inkwell::types::BasicMetadataTypeEnum::ScalableVectorType(t) => t.into(),
+                _ => {
+                    result.push(arg);
+                    continue;
+                }
+            };
+            match (arg, param_basic) {
+                (BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::IntType(pt)) => {
+                    let arg_ty = iv.get_type();
+                    if arg_ty.get_bit_width() < pt.get_bit_width() {
+                        match self.builder.build_int_z_extend(iv, pt, "arg_zext") {
+                            Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
+                            Err(_) => result.push(BasicMetadataValueEnum::IntValue(iv)),
+                        }
+                    } else if arg_ty.get_bit_width() > pt.get_bit_width() {
+                        match self.builder.build_int_truncate(iv, pt, "arg_trunc") {
+                            Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
+                            Err(_) => result.push(BasicMetadataValueEnum::IntValue(iv)),
+                        }
+                    } else {
+                        result.push(BasicMetadataValueEnum::IntValue(iv));
+                    }
+                }
+                (BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::FloatType(ft)) => {
+                    match self.builder.build_signed_int_to_float(iv, ft, "arg_sitofp") {
+                        Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
+                        Err(_) => result.push(BasicMetadataValueEnum::IntValue(iv)),
+                    }
+                }
+                (BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => {
+                    match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") {
+                        Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
+                        Err(_) => result.push(BasicMetadataValueEnum::FloatValue(fv)),
+                    }
+                }
+                _ => result.push(arg),
+            }
+        }
+        result
     }
 
     /// Convert a Zeta type to an LLVM type
