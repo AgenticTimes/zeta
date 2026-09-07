@@ -1383,6 +1383,16 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     self.collect_ids_from_expr_safe(e, ids, exprs);
                 }
             }
+            MirStmt::StructFieldStore {
+                base_id,
+                field: _,
+                val_id,
+            } => {
+                ids.insert(*base_id);
+                if let Some(e) = exprs.get(val_id) {
+                    self.collect_ids_from_expr_safe(e, ids, exprs);
+                }
+            }
             MirStmt::Consume { id } => {
                 ids.insert(*id);
             }
@@ -2511,6 +2521,15 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 addr_id: *addr_id,
                 val_id: *val_id,
                 pointee_width: *pointee_width,
+            },
+            MirStmt::StructFieldStore {
+                base_id,
+                field,
+                val_id,
+            } => MirStmt::StructFieldStore {
+                base_id: *base_id,
+                field: field.clone(),
+                val_id: *val_id,
             },
             MirStmt::Swap { a_ptr, b_ptr, size } => MirStmt::Swap {
                 a_ptr: *a_ptr,
@@ -4372,6 +4391,30 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     .build_int_truncate(val.into_int_value(), pointee_llvm_type, "store_trunc")
                     .unwrap();
                 self.builder.build_store(ptr, narrowed).unwrap();
+            }
+            MirStmt::StructFieldStore {
+                base_id,
+                field,
+                val_id,
+            } => {
+                // base.field = val — store through the heap struct pointer.
+                // Fields are 8-byte slots at offset index*8 (matches StructNew).
+                let base_i64 = self.gen_expr_safe(base_id, exprs).into_int_value();
+                let field_index = self.struct_defs.values().find_map(|fields| {
+                    fields.iter().position(|n| n == field).map(|i| i as u64)
+                });
+                let idx = field_index.unwrap_or(0);
+                let offset = self.i64_type.const_int(idx * 8, false);
+                let slot = self.builder.build_int_add(base_i64, offset, "field_slot").unwrap();
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                let ptr = self.builder.build_int_to_ptr(slot, ptr_type, "field_ptr").unwrap();
+                let val = self.gen_expr_safe(val_id, exprs);
+                let stored: inkwell::values::BasicValueEnum<'ctx> = match val {
+                    BasicValueEnum::FloatValue(f) => self.builder.build_bit_cast(f, self.i64_type, "field_fbits").unwrap().into(),
+                    BasicValueEnum::IntValue(i) => i.into(),
+                    _ => self.i64_type.const_zero().into(),
+                };
+                self.builder.build_store(ptr, stored).unwrap();
             }
             MirStmt::ParamInit { .. } => {} // handled at entry
             MirStmt::Consume { id } => {

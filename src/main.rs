@@ -563,10 +563,15 @@ fn bootstrap_zeta(output: &Option<String>, target: &str) -> Result<(), Box<dyn s
         let obj = format!("{}.o", out);
         finalize_and_aot(&cg, Path::new(&obj), target)?;
         let mut cmd = std::process::Command::new("gcc");
-        cmd.arg(&obj).arg("-o").arg(out).arg("-lc").arg("-no-pie");
+        cmd.arg(&obj).arg("-o").arg(out).arg("-lc").arg("-lgc")
+            .arg("-L/opt/homebrew/opt/bdw-gc/lib").arg("-no-pie");
         let rc = Path::new("zeta_runtime_c.o");
         if rc.exists() {
             cmd.arg(rc);
+        }
+        let tr = Path::new("tokio_runtime.o");
+        if tr.exists() {
+            cmd.arg(tr);
         }
         if !cmd.status()?.success() {
             return Err("Linking failed".into());

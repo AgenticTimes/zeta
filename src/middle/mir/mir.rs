@@ -124,6 +124,12 @@ pub enum MirStmt {
         val_id: u32,
         pointee_width: u8,
     },
+    // Write a value into a struct field through the heap pointer: base.field = val
+    StructFieldStore {
+        base_id: u32,
+        field: String,
+        val_id: u32,
+    },
 }
 
 #[derive(Debug, Clone)]

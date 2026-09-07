@@ -206,6 +206,15 @@ pub fn substitute_stmt(stmt: &MirStmt, substitution: &Substitution) -> MirStmt {
             val_id: *val_id,
             pointee_width: *pointee_width,
         },
+        MirStmt::StructFieldStore {
+            base_id,
+            field,
+            val_id,
+        } => MirStmt::StructFieldStore {
+            base_id: *base_id,
+            field: field.clone(),
+            val_id: *val_id,
+        },
     }
 }
 

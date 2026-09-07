@@ -361,6 +361,14 @@ impl MirGen {
                             val_id: rhs_id,
                         });
                     }
+                } else if let AstNode::FieldAccess { base, field } = &**lhs {
+                    // self.field = val → store through the heap struct pointer
+                    let base_id = self.lower_expr(base);
+                    self.stmts.push(MirStmt::StructFieldStore {
+                        base_id,
+                        field: field.clone(),
+                        val_id: rhs_id,
+                    });
                 } else if let AstNode::UnaryOp { op, expr } = &**lhs {
                     if op == "*" {
                         // Store through pointer: *ptr = val
