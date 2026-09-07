@@ -2166,6 +2166,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 return f;
             }
         }
+        // Also handle LLVM's internal .N suffix for overloaded functions
+        // (LLVM renames e.g. array_new_1 to array_new.1 when name collision detected)
+        let dot_suffixed = format!("{}.{}", name, args_count);
+        if let Some(f) = self.module.get_function(&dot_suffixed) {
+            return f;
+        }
         // Try param-count-suffixed name before creating extern.
         let param_suffixed = format!("{}_{}", name, args_count);
         if let Some(f) = self.module.get_function(&param_suffixed) {
