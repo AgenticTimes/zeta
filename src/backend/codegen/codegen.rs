@@ -3988,8 +3988,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     self.gen_stmt(s, exprs);
                 }
                 self.loop_stack.pop();
-                // Branch back to condition (unless body ends with return)
-                if !body.iter().any(|s| matches!(s, MirStmt::Return { .. })) {
+                // Branch back to condition (unless body ends with return/break/continue,
+                // which already emitted a terminator that unwinds the loop)
+                let body_ends_terminated = body.iter().any(|s| {
+                    matches!(s, MirStmt::Return { .. } | MirStmt::Break | MirStmt::Continue)
+                });
+                if !body_ends_terminated {
                     self.builder
                         .build_unconditional_branch(loop_cond_bb)
                         .unwrap();
@@ -4684,6 +4688,24 @@ impl<'ctx> LLVMCodegen<'ctx> {
             MirExpr::BinaryOp { op, left, right } => {
                 let left_val = self.gen_expr(&exprs[left], exprs, None);
                 let right_val = self.gen_expr(&exprs[right], exprs, None);
+                // Coerce mixed int/float: struct fields store f64 as i64 bit
+                // patterns (extractvalue yields i64), so promote the int side
+                // to float when the other side is a float.
+                let lv = left_val.get_type();
+                let rv = right_val.get_type();
+                let l_is_f = matches!(lv, inkwell::types::BasicTypeEnum::FloatType(_));
+                let r_is_f = matches!(rv, inkwell::types::BasicTypeEnum::FloatType(_));
+                let (left_val, right_val) = if l_is_f && !r_is_f {
+                    let promoted = self.builder.build_signed_int_to_float(
+                        right_val.into_int_value(), self.f64_type, "binop_promote_r").unwrap();
+                    (left_val, promoted.into())
+                } else if !l_is_f && r_is_f {
+                    let promoted = self.builder.build_signed_int_to_float(
+                        left_val.into_int_value(), self.f64_type, "binop_promote_l").unwrap();
+                    (promoted.into(), right_val)
+                } else {
+                    (left_val, right_val)
+                };
                 let is_float = matches!(left_val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_))
                     || matches!(right_val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_));
 

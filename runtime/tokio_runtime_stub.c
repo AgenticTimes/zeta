@@ -195,6 +195,19 @@ int64_t array_new_1(int64_t size) { return runtime_malloc(size); }
 __asm__(".globl _array_new.10\n\t.set _array_new.10, _array_new_10\n");
 int64_t array_new_10(int64_t size) { return runtime_malloc(size); }
 
+// Multi-arg print overloads: LLVM renames print -> print.N per module, and arity
+// varies (1-6). Provide implementations; the .set aliases below map each print.N
+// to the right arity.
+static void _print_one(int64_t v) {
+    const char* s = (const char*)v;
+    if (v != 0) { fputs(s, stdout); } else { fputs("0", stdout); }
+}
+int64_t print2(int64_t a, int64_t b) { _print_one(a); _print_one(b); return 0; }
+int64_t print3(int64_t a, int64_t b, int64_t c) { _print_one(a); _print_one(b); _print_one(c); return 0; }
+int64_t print4(int64_t a, int64_t b, int64_t c, int64_t d) { _print_one(a); _print_one(b); _print_one(c); _print_one(d); return 0; }
+int64_t print5(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e) { _print_one(a); _print_one(b); _print_one(c); _print_one(d); _print_one(e); return 0; }
+int64_t print6(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f) { _print_one(a); _print_one(b); _print_one(c); _print_one(d); _print_one(e); _print_one(f); return 0; }
+
 // LLVM auto-renames same-named externs with .N suffixes per module (array_new.11,
 // print.31, ...). Export aliases for every suffix observed in unit-tests so the
 // linker resolves them to the canonical implementations.
@@ -205,16 +218,16 @@ __asm__(
     ".globl _array_new.35\n\t.set _array_new.35, _array_new\n"
     ".globl _array_new.36\n\t.set _array_new.36, _array_new\n"
     ".globl _print.11\n\t.set _print.11, _println_i64\n"
-    ".globl _print.13\n\t.set _print.13, _print_i64\n"
+    ".globl _print.13\n\t.set _print.13, _print2\n"
     ".globl _print.15\n\t.set _print.15, _println_i64\n"
     ".globl _print.17\n\t.set _print.17, _println_i64\n"
     ".globl _print.19\n\t.set _print.19, _println_i64\n"
     ".globl _print.21\n\t.set _print.21, _println_i64\n"
     ".globl _print.23\n\t.set _print.23, _println_i64\n"
     ".globl _print.25\n\t.set _print.25, _println_i64\n"
-    ".globl _print.27\n\t.set _print.27, _print_i64\n"
+    ".globl _print.27\n\t.set _print.27, _print6\n"
     ".globl _print.29\n\t.set _print.29, _println_i64\n"
-    ".globl _print.31\n\t.set _print.31, _println_i64\n"
+    ".globl _print.31\n\t.set _print.31, _print\n"
     ".globl _print.32\n\t.set _print.32, _println_i64\n"
     ".globl _print.33\n\t.set _print.33, _println_i64\n"
     ".globl _print.35\n\t.set _print.35, _println_i64\n"
@@ -223,6 +236,7 @@ __asm__(
     ".globl _print.38\n\t.set _print.38, _println_i64\n"
     ".globl _print.39\n\t.set _print.39, _println_i64\n"
     ".globl _print.40\n\t.set _print.40, _println_i64\n"
+    ".globl _print.42\n\t.set _print.42, _print2\n"
     ".globl _print.43\n\t.set _print.43, _println_i64\n"
     ".globl _print.44\n\t.set _print.44, _println_i64\n"
     ".globl _print.46\n\t.set _print.46, _println_i64\n"
@@ -238,9 +252,9 @@ __asm__(
     ".globl _print.71\n\t.set _print.71, _println_i64\n"
     ".globl _print.73\n\t.set _print.73, _println_i64\n"
     ".globl _print.75\n\t.set _print.75, _println_i64\n"
-    ".globl _print.77\n\t.set _print.77, _print_i64\n"
-    ".globl _print.79\n\t.set _print.79, _print_i64\n"
-    ".globl _print.81\n\t.set _print.81, _print_i64\n"
+    ".globl _print.77\n\t.set _print.77, _print2\n"
+    ".globl _print.79\n\t.set _print.79, _print2\n"
+    ".globl _print.81\n\t.set _print.81, _print2\n"
     ".globl _print.83\n\t.set _print.83, _println_i64\n"
     ".globl _print.85\n\t.set _print.85, _println_i64\n"
     ".globl _print.87\n\t.set _print.87, _println_i64\n"
