@@ -2092,6 +2092,11 @@ impl MirGen {
                             self.exprs.insert(cond_id, MirExpr::IntLit(1));
                             self.type_map.insert(cond_id, Type::Bool);
                         }
+                        AstNode::Ignore => {
+                            // `_` wildcard pattern — always true
+                            self.exprs.insert(cond_id, MirExpr::IntLit(1));
+                            self.type_map.insert(cond_id, Type::Bool);
+                        }
                         AstNode::Var(var_name) => {
                             // Check if this is an enum variant name like Option::None
                             if var_name == "Option::None" || var_name == "Result::Err" {
@@ -2461,13 +2466,18 @@ impl MirGen {
                     };
 
                     // Now lower the arm body (after establishing pattern bindings)
-                    let arm_body_id = self.lower_expr(&arm.body);
-
-                    // Create the if statement for this arm
-                    let then_branch = vec![MirStmt::Assign {
-                        lhs: result_id,
-                        rhs: arm_body_id,
-                    }];
+                    // If the arm body is a `return` statement, emit a Return
+                    // (lower_expr has no Return arm and would fabricate 0).
+                    let then_branch = if let AstNode::Return(inner) = &*arm.body {
+                        let ret_val = self.lower_expr(inner);
+                        vec![MirStmt::Return { val: ret_val }]
+                    } else {
+                        let arm_body_id = self.lower_expr(&arm.body);
+                        vec![MirStmt::Assign {
+                            lhs: result_id,
+                            rhs: arm_body_id,
+                        }]
+                    };
 
                     let if_stmt = MirStmt::If {
                         cond: final_cond_id,

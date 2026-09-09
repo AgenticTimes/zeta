@@ -4,7 +4,7 @@ use super::parser::{
 };
 
 use super::pattern::parse_pattern;
-use super::stmt::parse_block_body;
+use super::stmt::{parse_block_body, parse_return};
 use crate::frontend::ast::{AstNode, MatchArm};
 use nom::IResult;
 use nom::Parser;
@@ -1641,8 +1641,8 @@ fn parse_match_arm(input: &str) -> IResult<&str, MatchArm> {
     // Parse arrow
     let (input, _) = ws(tag::<_, _, nom::error::Error<&str>>("=>")).parse(input)?;
 
-    // Parse body expression
-    let (input, body) = parse_expr(input)?;
+    // Parse body: allow `return` statements as well as plain expressions
+    let (input, body) = alt((parse_return, parse_expr)).parse(input)?;
 
     Ok((
         input,

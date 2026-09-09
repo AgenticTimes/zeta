@@ -34,6 +34,13 @@ pub fn parse_block_body(input: &str) -> IResult<&str, Vec<AstNode>> {
             break;
         }
 
+        // Skip extra semicolons (treat as no-op)
+        if let Ok((next_skip, _)) = opt(ws(tag::<_, _, NomError<&str>>(";"))).parse(next) {
+            if next_skip.len() < next.len() {
+                current = next_skip;
+                continue;
+            }
+        }
         if let Ok((next_stmt, stmt)) = parse_stmt(next) {
             let name = match &stmt {
                 AstNode::FuncDef { name, .. } => Some(name.as_str()),
@@ -228,7 +235,7 @@ fn parse_assign(input: &str) -> IResult<&str, AstNode> {
     }
 }
 
-fn parse_return(input: &str) -> IResult<&str, AstNode> {
+pub fn parse_return(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag("return")).parse(input)?;
     let (input, inner) = opt(ws(parse_full_expr)).parse(input)?;
     let (input, _) = opt(ws(tag(";"))).parse(input)?;
