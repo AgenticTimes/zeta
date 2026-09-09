@@ -105,7 +105,7 @@ fn parse_for(input: &str) -> IResult<&str, AstNode> {
     ))
 }
 
-fn parse_loop(input: &str) -> IResult<&str, AstNode> {
+pub(crate) fn parse_loop(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag("loop")).parse(input)?;
     let (input, body) = delimited(ws(tag("{")), parse_block_body, ws(tag("}"))).parse(input)?;
     Ok((input, AstNode::Loop { body }))

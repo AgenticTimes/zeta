@@ -43,6 +43,10 @@ pub struct MirGen {
     pointee_widths: HashMap<u32, u8>,
     /// Type declarations seen during lowering (structs, enums, aliases).
     type_decls: HashMap<String, TypeDecl>,
+    /// Stack of loop result slots for `loop { break EXPR; }` value semantics.
+    loop_value_stack: Vec<u32>,
+    /// Result slot of the most recently lowered loop (for implicit ret_val).
+    last_loop_result: Option<u32>,
     /// Additional MIRs generated during lowering (e.g., async poll functions).
     generated_mirs: Vec<Mir>,
     /// Async state machine: state pointer expression ID.
@@ -70,6 +74,8 @@ impl MirGen {
             source_types: HashMap::new(),
             pointee_widths: HashMap::new(),
             type_decls: HashMap::new(),
+            loop_value_stack: Vec::new(),
+            last_loop_result: None,
             generated_mirs: vec![],
             async_state_ptr: None,
             async_segment_count: 0,
@@ -168,6 +174,10 @@ impl MirGen {
                     } => {
                         // If expression produces a value
                         *dest_id
+                    }
+                    MirStmt::While { .. } if self.last_loop_result.is_some() => {
+                        // loop { break EXPR; } — value lives in the result slot
+                        self.last_loop_result.take().unwrap()
                     }
                     MirStmt::Return { val } => *val,
                     _ => self.next_id_with_lit(0),
@@ -838,22 +848,15 @@ impl MirGen {
                 }
             }
             AstNode::Loop { body } => {
-                // lower_ast for loop body
-                let stmts_before = self.stmts.len();
-                for stmt in body {
-                    self.lower_ast(stmt);
-                }
-                let loop_stmts = self.stmts.split_off(stmts_before);
-
-                // Create While statement with true condition (infinite loop)
-                let cond_id = self.next_id();
-                self.exprs.insert(cond_id, MirExpr::IntLit(1));
-                self.type_map.insert(cond_id, Type::I64);
-
-                self.stmts.push(MirStmt::While {
-                    cond: cond_id,
-                    body: loop_stmts,
-                });
+                // Loop as statement: value is captured via last_loop_result.
+                self.last_loop_result = self.loop_value_stack.last().cloned();
+                let _ = self.lower_expr(&AstNode::Loop { body: body.clone() });
+                // After the call, loop_value_stack is empty; last_loop_result
+                // holds the slot that the while-exit will fall through to.
+                // We clear it so it only applies to the immediately preceding loop.
+                // The gen_fn ret_val computation reads it below.
+                // (last_loop_result is intentionally NOT cleared here —
+                // gen_fn checks it after the match so the last-stmt logic works.)
             }
             AstNode::While { cond, body } => {
                 // Must capture stmts BEFORE lowering the condition,
@@ -888,7 +891,17 @@ impl MirGen {
                     self.lower_ast(stmt);
                 }
             }
-            AstNode::Break(_val) => {
+            AstNode::Break(val) => {
+                // break EXPR — write the value to the enclosing loop's result slot
+                if let Some(v) = val {
+                    if let Some(&result_id) = self.loop_value_stack.last() {
+                        let val_id = self.lower_expr(v);
+                        self.stmts.push(MirStmt::Assign {
+                            lhs: result_id,
+                            rhs: val_id,
+                        });
+                    }
+                }
                 self.stmts.push(MirStmt::Break);
             }
             AstNode::Continue(_) => {
@@ -1423,6 +1436,34 @@ impl MirGen {
                 return dest;
             }
 
+            AstNode::Loop { body } => {
+                // Loop expression: result slot (default 0); break EXPR writes it.
+                let result_id = self.next_id();
+                self.exprs.insert(result_id, MirExpr::IntLit(0));
+                self.type_map.insert(result_id, Type::I64);
+                self.loop_value_stack.push(result_id);
+
+                let stmts_before = self.stmts.len();
+                for stmt in body {
+                    self.lower_ast(stmt);
+                }
+                let loop_stmts = self.stmts.split_off(stmts_before);
+                self.loop_value_stack.pop();
+
+                let cond_id = self.next_id();
+                self.exprs.insert(cond_id, MirExpr::IntLit(1));
+                self.type_map.insert(cond_id, Type::I64);
+                self.stmts.push(MirStmt::While {
+                    cond: cond_id,
+                    body: loop_stmts,
+                });
+
+                self.exprs.insert(result_id, MirExpr::Var(result_id));
+                self.type_map.insert(result_id, Type::I64);
+                self.exprs.insert(id, MirExpr::Var(result_id));
+                self.type_map.insert(id, Type::I64);
+                return result_id;
+            }
             AstNode::If { cond, then, else_ } => {
                 // If expression - generate control flow with destination
                 let cond_id = self.lower_expr(cond);

@@ -208,7 +208,8 @@ pub(crate) fn parse_func(input: &str) -> IResult<&str, AstNode> {
                             | AstNode::Call { .. }
                             | AstNode::PathCall { .. }
                             | AstNode::Match { .. }
-                            | AstNode::Block { .. } => b.pop().map(Box::new),
+                            | AstNode::Block { .. }
+                            | AstNode::Loop { .. } => b.pop().map(Box::new),
                             _ => None,
                         }
                     } else {

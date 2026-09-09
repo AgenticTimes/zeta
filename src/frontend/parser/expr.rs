@@ -4,7 +4,7 @@ use super::parser::{
 };
 
 use super::pattern::parse_pattern;
-use super::stmt::{parse_block_body, parse_return};
+use super::stmt::{parse_block_body, parse_loop, parse_return};
 use crate::frontend::ast::{AstNode, MatchArm};
 use nom::IResult;
 use nom::Parser;
@@ -847,6 +847,7 @@ pub fn parse_primary(input: &str) -> IResult<&str, AstNode> {
         parse_triple_quoted_string,
         parse_string_lit,
         parse_match_expr,
+        parse_loop,
         parse_path_expr,
         parse_simple_ident,
         parse_array_lit,
