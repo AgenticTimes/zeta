@@ -669,8 +669,10 @@ pub(crate) fn parse_const(input: &str) -> IResult<&str, AstNode> {
     .parse(input)?;
 
     let (input, name) = ws(parse_ident).parse(input)?;
-    let (input, _) = ws(tag(":")).parse(input)?;
-    let (input, ty) = ws(parse_type).parse(input)?;
+    // Type annotation is optional: `const F = 55;` is valid
+    let (input, ty) = opt(preceded(ws(tag(":")), ws(parse_type)))
+        .parse(input)
+        .map(|(i, t)| (i, t.unwrap_or_else(|| "i64".to_string())))?;
     let (input, _) = ws(tag("=")).parse(input)?;
     let (input, value) = ws(parse_full_expr).parse(input)?;
     let (input, _) = opt(ws(tag(";"))).parse(input)?;
