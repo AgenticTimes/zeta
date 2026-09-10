@@ -1,0 +1,18 @@
+// PY-1 + PY-2: 多行数组/struct 字面量与缩进块共存（`{`/`[` 在行内的行不是块头）
+// expect: 6
+// expect: 30
+struct Point { x: i64, y: i64 }
+
+fn main() -> i64:
+    let arr = [
+        1,
+        2,
+        3,
+    ]
+    let p = Point {
+        x: 10,
+        y: 20,
+    }
+    println_i64(arr[0] + arr[1] + arr[2])
+    println_i64(p.x + p.y)
+    return 0

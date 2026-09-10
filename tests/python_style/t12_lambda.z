@@ -1,0 +1,7 @@
+// PY-4: lambda 表达式 → Closure 节点（单行限制）
+// known-fail: closure codegen 未补齐（roadmap「closures / async codegen」项）
+// expect: 42
+fn main() -> i64:
+    let f = lambda x: x + 1
+    print(f(41))
+    return 0

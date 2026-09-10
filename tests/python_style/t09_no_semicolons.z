@@ -1,0 +1,9 @@
+// PY-1: 全程无分号；行中冒号（类型注解）不得误开块（下一行同缩进）
+// expect: 5
+// expect: 2.500000
+fn main() -> i64:
+    let x: i64 = 5
+    let y: f64 = 2.5
+    println_i64(x)
+    println_f64(y)
+    return 0

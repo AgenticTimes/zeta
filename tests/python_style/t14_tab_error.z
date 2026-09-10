@@ -1,0 +1,5 @@
+// PY-1 负面用例: 行首 tab 必须报编译错误（只认空格缩进）
+// expect-error
+fn main() -> i64:
+	let x = 1
+    return 0

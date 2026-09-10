@@ -1,0 +1,12 @@
+// PY-4: def 关键字别名 + print()/len() Python 风格内置（按参数类型分发）
+// expect: 6
+// expect: 5
+def double(x: i64) -> i64:
+    return x * 2
+
+fn main() -> i64:
+    let arr = [3, 1, 2]
+    let s = "hello"
+    print(double(len(arr)))
+    print(len(s))
+    return 0

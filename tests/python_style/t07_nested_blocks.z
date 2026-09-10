@@ -1,0 +1,18 @@
+// PY-1: 深嵌套 + 空行/列 0 注释不得关闭块（回归：注释行 dedent bug）
+// expect: 3
+// expect: 30
+// header comment at column 0
+fn main() -> i64:
+    let mut total = 0
+    let mut i = 0
+    // comment at column 4
+    while i < 3:
+        total = total + i
+// column-0 comment INSIDE the while block — must not close it
+        i = i + 1
+
+    // blank line above; comment below
+    println_i64(total)
+    total = total * 10
+    println_i64(total)
+    return 0

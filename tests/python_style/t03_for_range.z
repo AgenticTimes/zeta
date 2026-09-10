@@ -1,0 +1,8 @@
+// PY-4: for + range(n) —— range 调用重写为 0..n Range 节点
+// expect: 10
+fn main() -> i64:
+    let mut total = 0
+    for i in range(5):
+        total = total + i
+    println_i64(total)
+    return 0

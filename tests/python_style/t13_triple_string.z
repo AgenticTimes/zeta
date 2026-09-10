@@ -1,0 +1,14 @@
+// PY-5: 三引号字符串与缩进预处理联动 —— 字符串内的冒号行/缩进行不触发任何块规则
+// expect:
+// expect: SELECT *
+// expect: FROM orders
+// expect: WHERE: amount > 100
+// expect:
+fn main() -> i64:
+    let sql = """
+SELECT *
+FROM orders
+WHERE: amount > 100
+"""
+    println(sql)
+    return 0

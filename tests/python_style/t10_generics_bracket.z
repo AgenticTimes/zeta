@@ -1,0 +1,14 @@
+// PY-3: Name[T] 泛型类型 + fn f[T](...) 泛型函数声明（与 <> 语法等价）
+// expect: 7
+// expect: 2.5
+fn pick[T](a: T, b: T) -> T:
+    if a > b:
+        return a
+    return b
+
+fn main() -> i64:
+    let a = pick(3, 7)
+    let b = pick(2.5, 1.5)
+    println_i64(a)
+    println_f64(b)
+    return 0

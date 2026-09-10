@@ -1,0 +1,12 @@
+// PY-1: while + loop + break 带值，全缩进风格
+// expect: 16
+fn main() -> i64:
+    let mut i = 0
+    while i < 10:
+        i = i + 2
+    let r = loop:
+        if i > 15:
+            break i
+        i = i + 1
+    println_i64(r)
+    return 0

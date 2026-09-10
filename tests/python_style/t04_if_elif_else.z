@@ -1,0 +1,21 @@
+// PY-2: elif 链 + else（dedent 后形如 "} elif x {" / "} else {"）
+// expect: 4
+// expect: 3
+// expect: 2
+// expect: 1
+fn grade(score: i64) -> i64:
+    if score >= 90:
+        return 4
+    elif score >= 80:
+        return 3
+    elif score >= 60:
+        return 2
+    else:
+        return 1
+
+fn main() -> i64:
+    println_i64(grade(95))
+    println_i64(grade(85))
+    println_i64(grade(70))
+    println_i64(grade(30))
+    return 0

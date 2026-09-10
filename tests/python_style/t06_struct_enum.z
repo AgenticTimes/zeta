@@ -1,0 +1,18 @@
+// PY-2: struct/enum 缩进定义（成员换行分隔，逗号可选）+ 缩进 match 枚举臂
+// expect: 9
+struct Point:
+    x: i64
+    y: i64
+
+enum Color:
+    Red
+    Green
+
+fn main() -> i64:
+    let p = Point { x: 3, y: 4 }
+    let c = Color::Green
+    let m = match c:
+        Color::Red => 1
+        Color::Green => 2
+    println_i64(p.x + p.y + m)
+    return 0

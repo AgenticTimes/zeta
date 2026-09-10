@@ -1,0 +1,16 @@
+// PY-1 + PY-2: 缩进 match（预处理只补外层 {}，臂间逗号可选）
+// match 作为尾表达式 → ret_expr 提升为返回值
+// expect: 100
+// expect: 200
+// expect: 300
+fn classify(x: i64) -> i64:
+    match x:
+        0 => 100
+        5 => 200
+        _ => 300
+
+fn main() -> i64:
+    println_i64(classify(0))
+    println_i64(classify(5))
+    println_i64(classify(9))
+    return 0

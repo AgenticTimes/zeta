@@ -1,0 +1,9 @@
+// PY-1: 缩进 fn/if 基本块，无分号，无花括号
+// expect: 5
+// expect: 0
+fn main() -> i64:
+    let x = 5
+    if x > 3:
+        println_i64(x)
+    println_i64(x - 5)
+    return 0
