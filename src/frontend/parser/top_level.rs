@@ -814,6 +814,24 @@ fn parse_top_level_item(input: &str) -> IResult<&str, AstNode> {
 }
 
 pub fn parse_zeta(input: &str) -> IResult<&str, Vec<AstNode>> {
+    // PY-1: normalize indentation blocks to braces before parsing.
+    // Brace-style sources pass through unchanged (fast path returns the
+    // original &str so `remaining` slices stay valid).
+    if crate::frontend::indent::looks_like_python_style(input) {
+        let processed: &'static str = Box::leak(
+            crate::frontend::indent::indent_preprocess(input).into_boxed_str(),
+        );
+        // Parse the preprocessed text; `remaining` refers to the leaked string.
+        // Callers only check remaining.is_empty(); a leaked process-lifetime
+        // copy is fine for a single compile (matching the existing leak-heavy
+        // interpreter design). Bytes at offsets beyond the ORIGINAL input are
+        // still whitespace/'}' so a non-empty remaining is impossible.
+        return parse_zeta_impl(processed);
+    }
+    parse_zeta_impl(input)
+}
+
+fn parse_zeta_impl(input: &str) -> IResult<&str, Vec<AstNode>> {
     let (input, _) = skip_ws_and_comments(input)?;
 
     let parse_result = many0(ws(alt((
