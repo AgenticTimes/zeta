@@ -225,6 +225,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
             void_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
+        module.add_function(
+            "println_str",
+            void_type.fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
         // println(no-args) is NOT declared here — the println! macro goes to
         // println_i64, and user-declared extern fn println(msg: i64) -> ()
         // provides its own declaration.

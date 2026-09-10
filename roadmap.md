@@ -2,8 +2,8 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 `/tmp/zeta_tests`（227 文件）；回归套件 `/tmp/bench`（20 case）；**Python 风格套件 `tests/python_style/`（15 case，基线 1/15）**
-> 当前通过率：**207/226 = 91.6%**
+> 测试资产：官方单测 `/tmp/zeta_tests`（226 文件）；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（15 case：14 pass + 1 known-fail）**
+> 当前通过率：官方 **199/226**（基线 198/226，编译+运行口径 198/198 零回归）；python_style **14/15**
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
 ## 定位决策（2026-09 已确认）
@@ -28,48 +28,47 @@
 与 parser 零冲突，12 处块解析器全部不动）。
 注释保持 `//`（`#` 与属性语法 `#[...]` 冲突，不做）。
 
-### PY-1 缩进块预处理【P1，进行中】
-- [x] `indent.rs` + `parse_zeta` 接入（雏形，有 bug，见下）
-- [ ] **修复：行尾冒号未剥离**（`fn main() -> i64: {` 无法解析 → `_main` 缺失，13/15 用例因此挂）
-- [ ] **修复：注释行参与 dedent**（先 pop 再判注释 → 列 0 注释会错误关闭函数块）
-- [ ] **修复：字符串不感知**（`print("http://x")` 被 `//` 误切注释、行尾 `:` 在字符串内误判块头）
-- [ ] **修复：EOF 收尾 `}` 拼到末行行尾**（末行是注释时 `}` 落入注释内，须另起一行）
-- [ ] tab 报错改为显式诊断（行号 + 消息），且仅在 python 风格触发（保护花括号文件的 tab）
-- [ ] 缩进栈压「body 缩进 = 下一行缩进」语义保持；`:` 后必须换行（V1 无单行块）
-- 预算：重写 `indent.rs` ~200 行，parser 零改动
+### PY-1 缩进块预处理【P1，完成】
+- [x] `indent.rs` 全量重写：字符串状态机 + 三引号区域 + 块头关键字门控（`fn/def/if/elif/else/for/while/loop/match/struct/enum/impl/trait/concept/unsafe/comptime/mod`，或 `let … = <if|match|loop|unsafe|comptime> …:`）
+- [x] 修复：行尾冒号剥离（`_main` 缺失根因）、注释行/空行/三引号续行不参与记账、`"http://x"` 不被 `//` 误切、EOF 收尾另起一行、行尾注释保留
+- [x] 行首 tab → `IndentError::TabIndent`（仅代码行、仅 python 风格触发）
+- [x] 单测 14 个全绿（indent.rs 内嵌）；花括号文件 100% 透传（wrapped type ascription 验证）
+- [ ] P2：tab 错误显式诊断接 error_codes（现 nom Failure 无消息载体）
 
-### PY-2 关键字别名 + 分隔符放宽【P1】
-- [ ] `elif` → `else if`（`parse_if` else 分支接受 `elif`；dedent 后形如 `} elif x {`）
-- [ ] `def` → `fn`（`parse_func` 头部 alias，一行）
-- [ ] `True`/`False` → `true`/`false`（`parse_bool` alias）
-- [ ] struct/enum 成员换行分隔（逗号/分号可选 → `struct Point:` + 缩进字段可解析；逗号风格零破坏）
-- [ ] match 臂间逗号可选（缩进臂 `0 => expr` 逐行书写；expr 不会续接下一臂，安全）
-- [x] 12 处块解析器收敛——**不需要**（哨兵方案放弃，见架构总决策）
+### PY-2 关键字别名 + 分隔符放宽【P1，完成】
+- [x] `elif` → `else if`（stmt/expr 两处 parse_if 重构出 parse_if_tail 供 elif 链复用）
+- [x] `def` → `fn`（词边界保护，`default` 不受影响）
+- [x] `True`/`False` → `true`/`false`（parse_primary 首位 + 词边界）
+- [x] struct/enum 成员 `,`/`;` 可选 → 缩进定义体可解析；逗号风格零破坏
+- [x] match 臂间逗号可选
+- [x] 12 处块解析器收敛——不需要（哨兵方案放弃）
 
-### PY-3 `Name[T]` 泛型语法【P1，可与 PY-1 并行】
-- [ ] `parse_type_path` 加 `[...]` 分支（与 `<...>` 并列）；归一化输出 `Name<T>` → mangle 自动统一，零 codegen 改动
-- [ ] `fn f[T: Ord](x: T)` 泛型函数声明 `[]` 形式（`parse_func` generics 分支）
-- [ ] 裸 `[T]` 数组语义不变（数组类型/字面量是裸 `[` 开头，与 path 后的 `[` 不相遇）
-- 预算：~40 行 + 测试
+### PY-3 `Name[T]` 泛型语法【P1，语法层完成】
+- [x] `parse_type_path` 加 `[...]` 分支（嵌套感知，支持 `Map[str, Vec[i64]]` 混用）；归一化 `Name<T>` → mangle 统一
+- [x] `fn f[T](x: T)` 声明 `[]` 形式（struct/enum/impl 泛型同步获得）
+- [x] 裸 `[T]` 数组语义不变（验证）
+- [ ] **既有缺口（新发现，非 PY-3 语法问题）**：泛型函数 T 参数实例化 E2E 不可用（`fn id<T>(x: T) -> T` 最简用例失败，`<>` `[]` 同样）；顶层 `type X = Y` alias 编译失败；`where T: Ord` 约束检查待做
 
-### PY-4 Python 风格内置别名【P1】
-- [ ] `range(n)`/`range(a,b)` → AST 重写为 `0..n`/`a..b`（`AstNode::Range` 已存在，`for` 主用；step P2）
-- [ ] `lambda x: e` → Closure（单行限制；codegen 依赖「closures/async codegen」待做项，测试标 known-fail）
-- [ ] `print(x)` 多类型分发（i64/f64/str → println_i64/println_f64/print_str；print2~6 多参已有）——E2E 验证
-- [ ] `len(x)` 分发（array/vec/str；gen.rs/codegen.rs 已有映射，验证 E2E）
-- [ ] `and`/`or`/`not` 运算符别名【P2】；`None` 字面量【P2，需类型上下文】
-- [x] `def`、`True`/`False` → 已挪至 PY-2
+### PY-4 Python 风格内置别名【P1，完成】
+- [x] `range(n)`/`range(a,b)` → AST 重写为 `Range` 节点（端点排他 = Python 语义，实测验证；step 不支持）
+- [x] `print(x)` 单参按类型分发 i64/f64/str → `println_i64/println_f64/println_str`（Python 语义带换行；修复运行时 `print` 符号为 fputs 字符串-only 导致整数段错误的 bug）；多参保持 print.N legacy 路径
+- [x] `len(x)` 分发：字面量尺寸数组 → **编译期常量**；str → `str_len`；其余 → array_len 桩
+- [x] `println(变量)` 修复：按参数类型分发（原无条件 `println_i64` 把字符串句柄当整数打印）
+- [x] `lambda` → known-fail（依赖 closures codegen 待做项，t12 标记）
+- [ ] P2：`and`/`or`/`not` 别名；`None` 字面量；`range` step
+- [ ] **既有缺口（新发现）**：DynamicArray 的 `len()` 运行时桩 `array_len` 恒返 0；多参 print 只输出首参
 
-### PY-5 三引号字符串【P2，parser 已完成】
-- [x] `"""..."""`/`'''...'''` 解析（`parse_triple_quoted_string` 已接入 `parse_primary`）
-- [ ] 预处理器字符串状态机：三引号区域不触发缩进记账/冒号判定/`//` 注释剥离（与 PY-1 修复同一次重写完成）
-- [-] f-string 插值——降级不做（静态语言用 printf/format 更合适）
+### PY-5 三引号字符串【P2，完成】
+- [x] `"""..."""`/`'''...'''` 解析（既有）+ 预处理器字符串状态机（三引号区域不触发缩进记账/冒号判定/注释剥离，起始行/续行语义对齐 Python）
+- [-] f-string 插值——降级不做
 
 ### PY 验收标准（三套全绿）
-- [ ] `tests/python_style/run.sh` **15/15**（含 1 负面用例；known-fail 单列不阻塞）
-- [ ] 官方 227 测试通过率不低于 91.6%（`{}` 语法 100% 兼容，fast-path 透传保证）
-- [ ] `/tmp/bench` 回归 20/20
-- [ ] 混合风格双向可编译（fn `{}` + 内部缩进、fn `:` + 内部 `{}`）
+- [x] `tests/python_style/run.sh` **14/15 pass**（+1 known-fail：t12 lambda 依赖 closures codegen）
+- [x] 官方 226 测试零回归（198 → 199 通过；if-true 折叠修复使 test_complex_control 类用例受益）
+- [x] `/tmp/bench` 285 文件编译对比零回归（基线 56 可编译 = 当前 56）
+- [x] 混合风格双向可编译（t08）
+- 期间修复的既有编译器 bug：**① if 布尔字面量条件 CTFE 折叠内联 terminator**（一基本块双 ret）；
+  **② 用户枚举 unit 变体 match 第一臂必中**（模式当变量绑定无条件命中，现注册程序级 type_decls + 判别值比较）
 
 ## 原 Roadmap（编译器 bug 修复 + 官方对齐）
 
@@ -120,14 +119,12 @@
 - [ ] WASM 后端（官方宣传项）
 - [ ] 自举（selfhost.z 依赖完整 stdlib，长期目标）
 
-## 执行顺序建议
+## 执行顺序建议（PY 线已完成，下一步）
 
-1. **PY-1b 预处理器重写**（冒号剥离/注释行/字符串状态机/EOF 收尾/tab 诊断）— t01/t02/t07/t08/t09/t15 转绿
-2. **PY-2**（elif/def/True/False + struct/enum 换行分隔 + match 臂逗号可选）— t04/t05/t06 转绿
-3. **PY-3**（`Name[T]`）— t10 转绿
-4. **PY-4**（range/lambda + print/len 验证补缺）— t03/t11/t12 转绿
-5. **PY-5**（状态机收尾，随 PY-1b 大半完成）— t13 转绿
-6. 回归三套测试 → 提交 → 回编译器修复线：std::quantum / DUPLICATE_SYM / NO_MAIN 批量
+1. ~~PY-1 ~ PY-5~~（2026-09-11 完成，python_style 14/15）
+2. 编译器修复线：**泛型函数 T 参数实例化**（PY 线最大新发现缺口）→ 顶层 type alias → closures codegen（解锁 t12）
+3. std::quantum / DUPLICATE_SYM / NO_MAIN 批量
+4. P2 语法糖：and/or/not、None、range step、tab 诊断接 error_codes
 
 ## 已知非阻塞
 

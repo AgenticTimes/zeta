@@ -94,6 +94,30 @@ fn parse_for(input: &str) -> IResult<&str, AstNode> {
     let (input, pattern) = ws(parse_pattern).parse(input)?;
     let (input, _) = ws(tag("in")).parse(input)?;
     let (input, expr) = ws(parse_full_expr).parse(input)?;
+    // PY-4: Python `range(n)` / `range(a, b)` → Range node (end-exclusive,
+    // matching both Python semantics and Zeta's `..` operator). A step
+    // argument is not supported in V1 and stays an unknown-function error.
+    let expr = match expr {
+        AstNode::Call {
+            receiver: None,
+            ref method,
+            ref args,
+            ..
+        } if method == "range" && (args.len() == 1 || args.len() == 2) => {
+            let start = if args.len() == 2 {
+                args[0].clone()
+            } else {
+                AstNode::Lit(0)
+            };
+            let end = args[args.len() - 1].clone();
+            AstNode::Range {
+                start: Box::new(start),
+                end: Box::new(end),
+                inclusive: false,
+            }
+        }
+        other => other,
+    };
     let (input, body) = delimited(ws(tag("{")), parse_block_body, ws(tag("}"))).parse(input)?;
     Ok((
         input,

@@ -1938,15 +1938,82 @@ impl MirGen {
                     return id;
                 }
 
-                // SPECIAL HANDLING: println generates VoidCall not Call
+                // PY-4: Python-style free-function `len(x)` — dispatch by
+                // argument type: literal-size arrays resolve at compile time,
+                // strings → str_len, others → array_len runtime stub.
+                if method == "len" && receiver.is_none() && args.len() == 1 {
+                    let arg_id = self.lower_expr(&args[0]);
+                    match self.type_map.get(&arg_id).cloned() {
+                        Some(Type::Array(_, ArraySize::Literal(n))) => {
+                            self.exprs.insert(id, MirExpr::IntLit(n as i64));
+                            self.type_map.insert(id, Type::I64);
+                            return id;
+                        }
+                        Some(Type::Str) => {
+                            self.stmts.push(MirStmt::Call {
+                                func: "str_len".to_string(),
+                                args: vec![arg_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                        }
+                        _ => {
+                            self.stmts.push(MirStmt::Call {
+                                func: "array_len".to_string(),
+                                args: vec![arg_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                        }
+                    }
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+
+                // PY-4: Python-style `print(x)` — the runtime's legacy
+                // `print` symbol is string-only (fputs) and crashes on ints.
+                // Python semantics: print adds a trailing newline, so a
+                // single argument dispatches to the println_* family;
+                // multi-arg keeps the print.N alias path.
+                if method == "print" && receiver.is_none() && args.len() == 1 {
+                    let arg_id = self.lower_expr(&args[0]);
+                    let func = match self.type_map.get(&arg_id) {
+                        Some(Type::Str) => "println_str",
+                        Some(Type::F64) | Some(Type::F32) => "println_f64",
+                        _ => "println_i64",
+                    };
+                    self.stmts.push(MirStmt::VoidCall {
+                        func: func.to_string(),
+                        args: vec![arg_id],
+                    });
+                    let unit_id = self.next_id();
+                    self.exprs.insert(unit_id, MirExpr::IntLit(0));
+                    self.type_map.insert(unit_id, Type::Tuple(vec![]));
+                    return unit_id;
+                }
+
+                // SPECIAL HANDLING: println generates VoidCall not Call.
+                // PY-4: dispatch a single argument by type — strings go to
+                // println_str, floats to println_f64.
                 if method.as_str() == "println" && receiver.is_none() {
                     let mut arg_ids = vec![];
                     for a in args {
                         arg_ids.push(self.lower_expr(a));
                     }
 
+                    let func = if arg_ids.len() == 1 {
+                        match self.type_map.get(&arg_ids[0]) {
+                            Some(Type::Str) => "println_str",
+                            Some(Type::F64) | Some(Type::F32) => "println_f64",
+                            _ => "println",
+                        }
+                    } else {
+                        "println"
+                    };
+
                     self.stmts.push(MirStmt::VoidCall {
-                        func: "println".to_string(),
+                        func: func.to_string(),
                         args: arg_ids,
                     });
 
