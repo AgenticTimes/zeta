@@ -118,7 +118,9 @@ pub fn parse_path(input: &str) -> IResult<&str, Vec<String>> {
 
 pub fn parse_type_path(input: &str) -> IResult<&str, String> {
     let (input, path) = parse_path(input)?;
-    let (input, type_args_opt) = opt(parse_type_args).parse(input)?;
+    // PY-3: `Name[T, U]` is equivalent to `Name<T, U>` (same normalized
+    // string => same mangled name).
+    let (input, type_args_opt) = opt(alt((parse_type_args, parse_bracketed_type_args))).parse(input)?;
     let type_args: Vec<String> = type_args_opt.unwrap_or_default();
     let mut s = path.join("::");
     if !type_args.is_empty() {
@@ -707,10 +709,11 @@ pub fn parse_generic_params(input: &str) -> IResult<&str, (Vec<String>, Vec<Stri
 
 /// Parse generic parameters as GenericParam enum values
 pub fn parse_generic_params_as_enum(input: &str) -> IResult<&str, Vec<GenericParam>> {
+    // PY-3: `fn f[T: Ord](...)` bracket form alongside `<T: Ord>`
     let (input, inner) = delimited(
-        ws(tag("<")),
-        parse_angle_bracketed_content_inner_slice,
-        ws(tag(">")),
+        ws(alt((tag("<"), tag("[")))),
+        parse_square_bracketed_content_inner_slice,
+        ws(alt((tag(">"), tag("]")))),
     )
     .parse(input)?;
     let (_, params) = terminated(
@@ -796,6 +799,45 @@ fn parse_angle_bracketed_content_inner_slice(input: &str) -> IResult<&str, &str>
         }
     }
 
+    Err(nom::Err::Error(nom::error::Error::new(
+        input,
+        nom::error::ErrorKind::TakeUntil,
+    )))
+}
+
+/// PY-3: square-bracketed generic arguments `Name[T, U]` — nested-bracket
+/// aware, supports mixed `[]`/`<>` nesting (`Map[str, Vec[i64]]`).
+pub fn parse_bracketed_type_args(input: &str) -> IResult<&str, Vec<String>> {
+    let (input, inner) = delimited(
+        ws(tag("[")),
+        parse_square_bracketed_content_inner_slice,
+        ws(tag("]")),
+    )
+    .parse(input)?;
+    let (_, args) = terminated(
+        separated_list0(ws(tag(",")), ws(parse_generic_arg_text)),
+        opt(ws(tag(","))),
+    )
+    .parse(inner)?;
+    Ok((input, args))
+}
+
+/// Bracket-aware inner content for `[...]` type arguments. Counts both
+/// bracket families so mixed nesting works; the outer `[` is already consumed.
+fn parse_square_bracketed_content_inner_slice(input: &str) -> IResult<&str, &str> {
+    let mut depth = 1;
+    for (i, c) in input.char_indices() {
+        match c {
+            '[' | '<' => depth += 1,
+            ']' | '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok((&input[i..], &input[0..i]));
+                }
+            }
+            _ => {}
+        }
+    }
     Err(nom::Err::Error(nom::error::Error::new(
         input,
         nom::error::ErrorKind::TakeUntil,
