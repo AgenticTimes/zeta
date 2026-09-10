@@ -184,8 +184,8 @@ fn parse_if_tail(input: &str) -> IResult<&str, AstNode> {
                     delimited(ws(tag("{")), parse_block_body, ws(tag("}"))),
                     |body| body,
                 ),
-                // else if ... (parse as another if statement)
-                preceded(ws(tag("if")), map(parse_if, |if_node| vec![if_node])),
+                // else if ... (parse_if consumes its own `if` keyword)
+                map(parse_if, |if_node| vec![if_node]),
             )),
         ),
         // elif ... (PY-2 alias for else-if)
