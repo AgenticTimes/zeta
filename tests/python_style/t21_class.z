@@ -1,0 +1,24 @@
+// PY-A: class → struct+impl 脱糖 —— 参数化构造/多方法/字段读写/方法调用
+// expect: 5
+// expect: 7
+// expect: total=7 calls=1
+// expect: 2
+class Accumulator:
+    def __init__(self, start):
+        self.total = start
+        self.calls = 0
+
+    def add(self, n):
+        self.total = self.total + n
+        self.calls = self.calls + 1
+        return self.total
+
+    def report(self):
+        return f"total={self.total} calls={self.calls}"
+
+a = Accumulator(5)
+print(a.total)
+print(a.add(2))
+print(a.report())
+a.add(8)
+print(a.calls)

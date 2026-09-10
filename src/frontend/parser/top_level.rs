@@ -619,6 +619,213 @@ fn parse_struct_field(input: &str) -> IResult<&str, (String, String)> {
     Ok((input, (name, ty)))
 }
 
+/// PY-A: does this method body return a string value? (f-string or string
+/// literal as the tail expression or inside a return statement)
+fn body_is_string_return(body: &[AstNode]) -> bool {
+    fn is_str_expr(e: &AstNode) -> bool {
+        matches!(e, AstNode::FString(_) | AstNode::StringLit(_))
+    }
+    if let Some(last) = body.last() {
+        if let AstNode::ExprStmt { expr } = last {
+            if is_str_expr(expr) {
+                return true;
+            }
+        }
+    }
+    body.iter().any(|st| {
+        matches!(st, AstNode::Return(inner) if is_str_expr(inner.as_ref()))
+    })
+}
+
+/// PY-A: Python `class` → `struct` + `impl` + constructor desugar.
+///
+/// ```python
+/// class Counter:
+///     def __init__(self):
+///         self.count = 0
+///     def inc(self):
+///         self.count = self.count + 1
+///         return self.count
+/// ```
+/// becomes
+/// ```zeta
+/// struct Counter { count: i64 }
+/// impl Counter { fn inc(&mut self) -> i64 { ... } }
+/// fn Counter() -> Counter { return Counter { count: 0 } }
+/// ```
+/// Field types are inferred from `__init__` literal defaults (i64/f64/str/
+/// bool/lists); fields assigned an `__init__` parameter default to i64.
+/// Inheritance (`class A(B):`) is not supported in V1 and errors.
+fn parse_class(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(terminated(tag("class"), peek(none_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")))).parse(input)?;
+    let (input, name) = ws(parse_ident).parse(input)?;
+    // Inheritance bases are not supported — reject explicitly (never fail-open)
+    if let Ok((after, _)) = ws(tag("(")).parse(input) {
+        let _ = after;
+        return Err(nom::Err::Failure(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    let (input, _) = ws(tag("{")).parse(input)?;
+
+    // Collect methods and __init__
+    let mut methods: Vec<AstNode> = Vec::new();
+    let mut init_params: Vec<(String, String)> = Vec::new();
+    let mut init_stmts: Vec<AstNode> = Vec::new();
+    let mut has_init = false;
+    let mut cur = input;
+    loop {
+        let (next, _) = skip_ws_and_comments(cur)?;
+        if next.starts_with('}') {
+            cur = next;
+            break;
+        }
+        // def method(...) { ... } — reuse parse_func (def alias supported)
+        match parse_func(next) {
+            Ok((rest, AstNode::FuncDef { name: mname, params, body, .. })) => {
+                if mname == "__init__" {
+                    has_init = true;
+                    init_params = params
+                        .iter()
+                        .filter(|(n, _)| n != "self" && n != "&self" && n != "&mut self")
+                        .cloned()
+                        .collect();
+                    init_stmts = body;
+                } else {
+                    // Python `def m(self, a, b)` → `fn m(&mut self, a, b)`
+                    let mut new_params: Vec<(String, String)> =
+                        vec![("&mut self".to_string(), "Self".to_string())];
+                    for (pn, pt) in &params {
+                        if pn != "self" && pn != "&self" && pn != "&mut self" {
+                            new_params.push((pn.clone(), pt.clone()));
+                        }
+                    }
+                    // Return type inference: string-returning bodies (f-string
+                    // or string literal results) get "str", else i64.
+                    let ret = if body_is_string_return(&body) {
+                        "str".to_string()
+                    } else {
+                        "i64".to_string()
+                    };
+                    methods.push(AstNode::FuncDef {
+                        name: mname,
+                        generics: Vec::new(),
+                        lifetimes: Vec::new(),
+                        params: new_params,
+                        ret,
+                        body,
+                        attrs: Vec::new(),
+                        ret_expr: None,
+                        single_line: false,
+                        doc: String::new(),
+                        pub_: false,
+                        async_: false,
+                        const_: false,
+                        comptime_: false,
+                        where_clauses: Vec::new(),
+                    });
+                }
+                cur = rest;
+            }
+            Ok((rest, _other)) => {
+                cur = rest;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    let (input, _) = ws(tag("}")).parse(cur)?;
+
+    // Field extraction from `__init__` `self.<field> = <rhs>`
+    let mut fields: Vec<(String, String)> = Vec::new();
+    let mut field_inits: Vec<(String, AstNode)> = Vec::new();
+    let param_names: Vec<&str> = init_params.iter().map(|(n, _)| n.as_str()).collect();
+    for st in &init_stmts {
+        if let AstNode::Assign(lhs, rhs) = st {
+            if let AstNode::FieldAccess { base, field } = &**lhs {
+                if let AstNode::Var(v) = &**base {
+                    if v == "self" {
+                        let ty = match &**rhs {
+                            AstNode::Lit(_) => "i64".to_string(),
+                            AstNode::Bool(_) => "bool".to_string(),
+                            AstNode::FloatLit(_) => "f64".to_string(),
+                            AstNode::StringLit(_) => "str".to_string(),
+                            AstNode::ArrayLit(_) | AstNode::DynamicArrayLit { .. } => {
+                                "DynamicArray".to_string()
+                            }
+                            AstNode::Var(name) if param_names.contains(&name.as_str()) => {
+                                // `self.x = x` — type unknown, call-site coercion adapts
+                                "i64".to_string()
+                            }
+                            _ => "i64".to_string(),
+                        };
+                        if !fields.iter().any(|(f, _)| f == field) {
+                            fields.push((field.clone(), ty));
+                            field_inits.push((field.clone(), (**rhs).clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Constructor fn `Name(params) -> Name { return Name { field: init, ... } }`
+    let ctor_body: Vec<AstNode> = vec![AstNode::Return(Box::new(AstNode::StructLit {
+        variant: name.clone(),
+        fields: field_inits
+            .iter()
+            .map(|(f, expr)| (f.clone(), expr.clone()))
+            .collect(),
+    }))];
+    let ctor = AstNode::FuncDef {
+        name: name.clone(),
+        generics: Vec::new(),
+        lifetimes: Vec::new(),
+        params: init_params.clone(),
+        ret: name.clone(),
+        body: ctor_body,
+        attrs: Vec::new(),
+        ret_expr: None,
+        single_line: false,
+        doc: String::new(),
+        pub_: false,
+        async_: false,
+        const_: false,
+        comptime_: false,
+        where_clauses: Vec::new(),
+    };
+
+    // Wrap struct + impl + ctor into a Block; parse_zeta flattens
+    // top-level Blocks into separate items.
+    let struct_node = AstNode::StructDef {
+        name: name.clone(),
+        generics: Vec::new(),
+        lifetimes: Vec::new(),
+        fields,
+        attrs: Vec::new(),
+        doc: String::new(),
+        pub_: false,
+        where_clauses: Vec::new(),
+    };
+    let impl_node = AstNode::ImplBlock {
+        concept: String::new(),
+        generics: Vec::new(),
+        lifetimes: Vec::new(),
+        ty: name.clone(),
+        body: methods,
+        attrs: Vec::new(),
+        doc: String::new(),
+        where_clauses: Vec::new(),
+    };
+    let _ = has_init;
+    Ok((
+        input,
+        AstNode::Block {
+            body: vec![struct_node, impl_node, ctor],
+        },
+    ))
+}
+
 fn parse_struct(input: &str) -> IResult<&str, AstNode> {
     // Parse attributes
     let (input, attrs) = parse_attributes(input)?;
@@ -827,6 +1034,7 @@ fn parse_top_level_item(input: &str) -> IResult<&str, AstNode> {
         parse_concept,
         parse_impl,
         parse_enum,
+        parse_class,
         parse_struct,
         parse_const,
         parse_macro_def,
@@ -884,7 +1092,19 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
     let mut main_body: Vec<AstNode> = Vec::new();
     for a in asts {
         match a {
-            AstNode::Block { body } => main_body.extend(body),
+            // PY-A: a class desugars to [struct, impl, ctor] wrapped in a
+            // Block — lift definitions back out to top level.
+            AstNode::Block { body } => {
+                for node in body {
+                    match node {
+                        def @ AstNode::StructDef { .. }
+                        | def @ AstNode::ImplBlock { .. }
+                        | def @ AstNode::FuncDef { .. }
+                        | def @ AstNode::EnumDef { .. } => out.push(def),
+                        stmt => main_body.push(stmt),
+                    }
+                }
+            }
             // PY-A: module-level statements (calls, prints, assignments)
             // become the implicit main's body — Python runs them at import.
             stmt @ AstNode::ExprStmt { .. } => main_body.push(stmt),
