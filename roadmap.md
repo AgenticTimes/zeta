@@ -134,10 +134,18 @@
   （旧启发式把「type_map 含 Type::Variable」的函数——包括泛型函数的调用者——误判为泛型而
   从不发射）；gen_mirs 第一遍后急切实例化（默认替换，参数落 i64）；
   `fn id<T>(x: T) -> T` + `id(3)` E2E 可用（t10 转绿）
-- 官方回归：198=198 持平；integration_test_program 由坏转好
+- [x] **无类型注解参数**（`def f(x):` Python 常态）——原 parse_param 强制要求 `: type`，
+  整个函数解析失败且函数体泄漏为顶层语句；现类型可选默认 i64（调用点强转适配 f64）
+- [x] 顶层赋值/let 不再静默丢弃（收集进隐式 main）
+- 官方回归：199=199 持平；integration_test_program 由坏转好
+- 实测（真实 Python 脚本）：过程式脚本（while 内 early-return、递归、`#` 注释、主守卫）✓；
+  `len(数组参数)` 仍 0（动态数组无长度头，见缺口清单）
 
 ### Python 对齐缺口清单（按对「编译真实 Python 文件」的影响排序）
 - [ ] **class**：`class Foo:` → struct + `def method(self, ...)` → impl 方法（self 隐式参数）；构造 `__init__`
+  ⚠️ 现 `class` 行被**静默解析为无害 no-op**（fail-open）——应改为显式报错直至实现
+- [ ] **f-string**：`f"a {x} b"` → 解析期脱糖为字符串拼接（host_str_concat + to_string）
+  ⚠️ 现 f-string 同样被静默吞掉（fail-open）
 - [ ] **f-string**：`f"a {x} b"` → 解析期脱糖为字符串拼接（host_str_concat + to_string）
 - [ ] **字符串比较**：`==`/`!=`/`<` 目前按指针比较，需接 host_str_compare 系 runtime（已有 str_len 等）
 - [ ] **多参 print**：`print("a", x, "b")` 应空格分隔全输出（现 print.N 只出首参）+ print.N 别名机制脆弱化

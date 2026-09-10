@@ -53,10 +53,15 @@ fn parse_param(input: &str) -> IResult<&str, (String, String)> {
         }),
     ));
 
-    // Try regular parameter: name: type
+    // Try regular parameter: `name: type` — PY-A: the type annotation is
+    // optional (Python style `def f(x):`), defaulting to i64. Call-site
+    // coercion (coerce_call_args) adapts f64 args at monomorphic call sites.
     let parse_regular = map(
-        (ws(parse_ident), ws(tag(":")), ws(parse_type)),
-        |(name, _, ty)| (name, ty),
+        (
+            ws(parse_ident),
+            opt(preceded(ws(tag(":")), ws(parse_type))),
+        ),
+        |(name, ty)| (name, ty.unwrap_or_else(|| "i64".to_string())),
     );
 
     alt((parse_self, parse_regular)).parse(input)
@@ -880,7 +885,11 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
     for a in asts {
         match a {
             AstNode::Block { body } => main_body.extend(body),
+            // PY-A: module-level statements (calls, prints, assignments)
+            // become the implicit main's body — Python runs them at import.
             stmt @ AstNode::ExprStmt { .. } => main_body.push(stmt),
+            stmt @ AstNode::Assign(_, _) => main_body.push(stmt),
+            stmt @ AstNode::Let { .. } => main_body.push(stmt),
             other => out.push(other),
         }
     }
