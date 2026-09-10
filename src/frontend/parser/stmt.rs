@@ -9,7 +9,7 @@ use crate::frontend::ast::AstNode;
 use nom::IResult;
 use nom::Parser;
 use nom::branch::alt;
-use nom::bytes::complete::tag;
+use nom::bytes::complete::{tag, take_while};
 use nom::combinator::{map, opt, peek};
 use nom::error::Error as NomError;
 use nom::sequence::{delimited, preceded};
@@ -218,6 +218,21 @@ fn parse_if_tail(input: &str) -> IResult<&str, AstNode> {
     .parse(input)?;
 
     let else_: Vec<AstNode> = else_opt.unwrap_or(vec![]);
+
+    // PY-A: `if __name__ == "__main__":` — unwrap the guard so the body
+    // always runs (module main detection has no runtime meaning here).
+    {
+        let is_name = |n: &AstNode| matches!(n, AstNode::Var(v) if v == "__name__");
+        let is_main = |n: &AstNode| matches!(n, AstNode::StringLit(s) if s == "__main__");
+        if let AstNode::BinaryOp { op, left, right } = &cond {
+            if (op == "==" || op == "is")
+                && ((is_name(left) && is_main(right)) || (is_main(left) && is_name(right)))
+            {
+                return Ok((input, AstNode::Block { body: then }));
+            }
+        }
+    }
+
     Ok((
         input,
         AstNode::If {
@@ -306,6 +321,70 @@ fn parse_expr_stmt(input: &str) -> IResult<&str, AstNode> {
     ))
 }
 
+/// PY-A: `pass` — no-op statement.
+fn parse_pass(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(tag("pass")).parse(input)?;
+    // Word-boundary: `passed` stays an identifier
+    if input
+        .chars()
+        .next()
+        .map_or(false, |c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(nom::Err::Error(NomError::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    Ok((
+        input,
+        AstNode::ExprStmt {
+            expr: Box::new(AstNode::Lit(0)),
+        },
+    ))
+}
+
+/// PY-A: Python `import x[.y as z]` / `from x import y` — consumed and
+/// ignored in V1 so real Python files parse; module mapping is a later item.
+fn parse_python_import(input: &str) -> IResult<&str, AstNode> {
+    let start = input;
+    let (input, _) = ws(tag("import")).parse(input)?;
+    if input
+        .chars()
+        .next()
+        .map_or(false, |c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(nom::Err::Error(NomError::new(
+            start,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    let (input, _) = take_while(|c| c != '\n' && c != '\r')(input)?;
+    Ok((
+        input,
+        AstNode::ExprStmt {
+            expr: Box::new(AstNode::Lit(0)),
+        },
+    ))
+}
+
+/// PY-A: `from x import y[, z]` — consumed and ignored (V1).
+fn parse_python_from_import(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(tag("from")).parse(input)?;
+    // `from` must be followed by a dotted module name then `import`
+    let (input, _) = ws(take_while(|c: char| {
+        c.is_ascii_alphanumeric() || c == '_' || c == '.'
+    }))
+    .parse(input)?;
+    let (input, _) = ws(tag("import")).parse(input)?;
+    let (input, _) = take_while(|c| c != '\n' && c != '\r')(input)?;
+    Ok((
+        input,
+        AstNode::ExprStmt {
+            expr: Box::new(AstNode::Lit(0)),
+        },
+    ))
+}
+
 pub fn parse_stmt(input: &str) -> IResult<&str, AstNode> {
     alt((
         parse_return,
@@ -323,6 +402,9 @@ pub fn parse_stmt(input: &str) -> IResult<&str, AstNode> {
         parse_type_alias,
         parse_const,
         parse_func,
+        parse_python_from_import,
+        parse_python_import,
+        parse_pass,
         parse_expr_stmt,
     ))
     .parse(input)

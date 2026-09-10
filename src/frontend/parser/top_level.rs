@@ -847,8 +847,10 @@ pub fn parse_zeta(input: &str) -> IResult<&str, Vec<AstNode>> {
             // process-lifetime copy is fine for a single compile (matching the
             // existing leak-heavy interpreter design).
             parse_zeta_impl(processed)
+                .map(|(rem, asts)| (rem, synthesize_implicit_main(asts)))
         }
-        Ok(None) => parse_zeta_impl(input),
+        Ok(None) => parse_zeta_impl(input)
+            .map(|(rem, asts)| (rem, synthesize_implicit_main(asts))),
         Err(tab_err) => {
             // Hard indentation error (tab indent). nom errors carry no
             // message payload, so callers see a parse failure at the file
@@ -860,6 +862,48 @@ pub fn parse_zeta(input: &str) -> IResult<&str, Vec<AstNode>> {
             )))
         }
     }
+}
+
+/// PY-A: Python modules run their top-level statements. Statement-level items
+/// (an `if __name__ == "__main__":` guard body unwraps to a Block, bare calls,
+/// import no-ops) are collected into a synthesized `fn main` when the module
+/// has none — otherwise the compiled binary has no entry point.
+fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
+    let has_main = asts
+        .iter()
+        .any(|a| matches!(a, AstNode::FuncDef { name, .. } if name == "main"));
+    if has_main {
+        return asts;
+    }
+    let mut out = Vec::with_capacity(asts.len() + 1);
+    let mut main_body: Vec<AstNode> = Vec::new();
+    for a in asts {
+        match a {
+            AstNode::Block { body } => main_body.extend(body),
+            stmt @ AstNode::ExprStmt { .. } => main_body.push(stmt),
+            other => out.push(other),
+        }
+    }
+    if !main_body.is_empty() {
+        out.push(AstNode::FuncDef {
+            name: "main".to_string(),
+            generics: Vec::new(),
+            lifetimes: Vec::new(),
+            params: Vec::new(),
+            ret: "i64".to_string(),
+            body: main_body,
+            attrs: Vec::new(),
+            ret_expr: None,
+            single_line: false,
+            doc: String::new(),
+            pub_: false,
+            async_: false,
+            const_: false,
+            comptime_: false,
+            where_clauses: Vec::new(),
+        });
+    }
+    out
 }
 
 fn parse_zeta_impl(input: &str) -> IResult<&str, Vec<AstNode>> {

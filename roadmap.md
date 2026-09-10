@@ -2,8 +2,9 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 `/tmp/zeta_tests`（226 文件）；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（15 case：14 pass + 1 known-fail）**
-> 当前通过率：官方 **199/226**（基线 198/226，编译+运行口径 198/198 零回归）；python_style **14/15**
+> 测试资产：官方单测 `/tmp/zeta_tests`（226 文件）；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（19 case：18 pass + 1 known-fail）**
+> 当前通过率：官方 198/226（与基线持平，零回归）；python_style **18/19**
+> 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
 ## 定位决策（2026-09 已确认）
@@ -119,12 +120,46 @@
 - [ ] WASM 后端（官方宣传项）
 - [ ] 自举（selfhost.z 依赖完整 stdlib，长期目标）
 
-## 执行顺序建议（PY 线已完成，下一步）
+## PY-A Python 兼容层（2026-09-11，目标：基本能编译 Python）
 
-1. ~~PY-1 ~ PY-5~~（2026-09-11 完成，python_style 14/15）
-2. 编译器修复线：**泛型函数 T 参数实例化**（PY 线最大新发现缺口）→ 顶层 type alias → closures codegen（解锁 t12）
-3. std::quantum / DUPLICATE_SYM / NO_MAIN 批量
-4. P2 语法糖：and/or/not、None、range step、tab 诊断接 error_codes
+### 已完成（本批）
+- [x] `#` 注释（parser `line_comment` + 预处理器字符串状态机；`#[` 保留给属性）
+- [x] `pass`（no-op 语句）
+- [x] `and`/`or`/`not`（词边界守卫的运算符别名）+ `is`/`is not`（→ `==`/`!=`）
+- [x] `None` 字面量（V1 降为 0；`is None`/`== None` 均可用）
+- [x] `import x` / `from x import y` 容错解析（V1 消费不处理，模块映射后补）
+- [x] `if __name__ == "__main__":` 主守卫（语句级解包 + **模块顶层语句合成隐式 `fn main`**）
+- [x] **裸赋值隐式声明**（`x = 5` 无 let —— Python 核心语义；原静默错值）
+- [x] **泛型函数 T 参数实例化修复**：`is_generic_function` 改用声明的 `Mir.generic_params`
+  （旧启发式把「type_map 含 Type::Variable」的函数——包括泛型函数的调用者——误判为泛型而
+  从不发射）；gen_mirs 第一遍后急切实例化（默认替换，参数落 i64）；
+  `fn id<T>(x: T) -> T` + `id(3)` E2E 可用（t10 转绿）
+- 官方回归：198=198 持平；integration_test_program 由坏转好
+
+### Python 对齐缺口清单（按对「编译真实 Python 文件」的影响排序）
+- [ ] **class**：`class Foo:` → struct + `def method(self, ...)` → impl 方法（self 隐式参数）；构造 `__init__`
+- [ ] **f-string**：`f"a {x} b"` → 解析期脱糖为字符串拼接（host_str_concat + to_string）
+- [ ] **字符串比较**：`==`/`!=`/`<` 目前按指针比较，需接 host_str_compare 系 runtime（已有 str_len 等）
+- [ ] **多参 print**：`print("a", x, "b")` 应空格分隔全输出（现 print.N 只出首参）+ print.N 别名机制脆弱化
+- [ ] **泛型多类型实例化**：同一泛型函数按调用点参数类型推断实例化（现默认 i64 实例 + 强转）
+- [ ] `in` 成员运算（数组/字符串/字典 contains runtime）；`not in`
+- [ ] 负索引 `arr[-1]`、切片 `arr[1:3]`
+- [ ] 链式比较 `a < b < c`（解析期脱糖）
+- [ ] 元组解包 `a, b = f()`；多返回值
+- [ ] 字符串方法全覆盖（`.upper()` 等 host_str_* 映射到方法调用语法）
+- [ ] dict 方法（`.keys()`/`.values()`/`.get()` 默认值）
+- [ ] try/except 映射（Zeta 有 Result/try-prop，语义对齐需设计）
+- [ ] 装饰器 `@dec`（V2，可先解析忽略）
+- [ ] 顶层 type alias（既有坏点）+ 顶层变量（模块级 `x = 5` → 全局）
+- [-] `global`/`nonlocal`、生成器/yield、async for —— 降级不做
+
+## 执行顺序建议（下一步）
+
+1. **class + 方法语义**（Python 兼容最大件）
+2. **f-string + 字符串比较语义**（真实 Python 程序高频）
+3. 多参 print 修复 + 泛型多类型实例化
+4. closures codegen（解锁 t12 lambda）
+5. std::quantum / DUPLICATE_SYM / NO_MAIN 批量
 
 ## 已知非阻塞
 

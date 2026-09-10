@@ -1,0 +1,27 @@
+// PY-A: and/or/not 逻辑别名 + None 字面量 + is / is not
+// expect: 1
+// expect: 1
+// expect: 1
+// expect: 0
+fn main() -> i64:
+    let a = True
+    let b = False
+
+    if a and not b:
+        print(1)
+    if a or b:
+        pass
+    else:
+        print(0)
+
+    if not (a and b):
+        print(1)
+
+    let x = None
+    if x is None:
+        print(1)
+    if x is not None:
+        print(999)
+    else:
+        print(0)
+    return 0

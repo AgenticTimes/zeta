@@ -1,0 +1,14 @@
+// PY-A: import 容错（V1 消费不处理）+ `if __name__ == "__main__":` 主守卫
+// expect: hello
+// expect: main ran
+# import os
+# import sys.path
+import math
+from collections import OrderedDict
+
+def greet():
+    print("hello")
+
+if __name__ == "__main__":
+    greet()
+    print("main ran")

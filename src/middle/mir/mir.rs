@@ -14,6 +14,12 @@ pub struct Mir {
     /// Mathematical properties for this function
     /// "commutative", "associative", "identity(value)"
     pub properties: Vec<String>,
+    /// Declared generic type-parameter names (e.g. ["T"] for `fn id<T>`).
+    /// Generic functions are stored and instantiated on demand; everything
+    /// else is emitted directly (py: precise genericity — the old heuristic
+    /// misclassified any function whose type_map contained a type variable,
+    /// silently dropping callers of generic functions).
+    pub generic_params: Vec<String>,
     /// True if this is an extern/FFI declaration (empty body + no ret expr).
     /// Distinguishes extern fns from user-defined empty functions.
     pub is_extern: bool,

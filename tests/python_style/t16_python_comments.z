@@ -1,0 +1,20 @@
+// PY-A: Python `#` 注释 —— 行首/行尾/带冒号（不得触发缩进规则），#[ 仍是属性
+// expect: 1
+// expect: 2
+# file header comment: with a colon that must NOT open a block
+# [note] looks bracket-ish but is a comment (no attribute)
+
+def f(x: i64) -> i64:
+    # comment inside function
+    if x > 0:
+        return 1  # trailing comment: with colon
+    # TODO: handle negatives: later
+    else:
+        pass
+
+    return 2
+
+fn main() -> i64:
+    println_i64(f(5))
+    println_i64(f(-5))
+    return 0

@@ -1,8 +1,8 @@
-// PY-3: fn f[T](...) 方括号泛型声明 + Name[T] 类型语法（与 <> 完全等价）
-// 已知缺口（非 PY-3 语法范围，见 roadmap）: T 类型参数的函数实例化、
-// 顶层 type alias 均为既有缺口；本用例验证方括号声明 + 具体类型实例化 E2E。
+// PY-3: fn f[T](...) 方括号泛型声明 + T 参数实例化 E2E（2026-09-11 修复：
+// is_generic_function 误判 + 泛型函数从未按调用实例化）
+// 已知缺口（roadmap）: 同一泛型函数的多类型实例化（需调用点类型推断）
 // expect: 7
-fn pick[T](a: i64, b: i64) -> i64:
+fn pick[T](a: T, b: T) -> T:
     if a > b:
         return a
     return b

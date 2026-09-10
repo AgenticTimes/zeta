@@ -290,6 +290,11 @@ fn scan_line(line: &str, in_triple: &mut Option<char>) -> Result<LineInfo, ()> {
                 code_end = i;
                 break;
             }
+            // PY-A: Python-style `#` comment (but `#[` is attribute syntax)
+            b'#' if !line[i..].starts_with("#[") => {
+                code_end = i;
+                break;
+            }
             b'\'' | b'"' => {
                 let q = c as char;
                 if line[i..].starts_with(&q.to_string().repeat(3)) {

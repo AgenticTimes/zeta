@@ -4,8 +4,8 @@ use nom::IResult;
 use nom::Parser;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until, take_while};
-use nom::character::complete::{alpha1, multispace1, satisfy};
-use nom::combinator::{map, opt, recognize, value, verify};
+use nom::character::complete::{alpha1, multispace1, none_of, satisfy};
+use nom::combinator::{eof, map, opt, peek, recognize, value, verify};
 
 use nom::multi::{many0, many1, separated_list0, separated_list1};
 use nom::sequence::{delimited, pair, preceded, terminated};
@@ -14,7 +14,22 @@ use crate::frontend::ast::GenericParam;
 use crate::frontend::parser::identity_type::parse_string_with_identity;
 
 pub fn line_comment(input: &str) -> IResult<&str, ()> {
-    value((), pair(tag("//"), take_while(|c| c != '\n' && c != '\r'))).parse(input)
+    // PY-A: `//` and Python-style `#` comments. `#[` is attribute syntax,
+    // not a comment.
+    value(
+        (),
+        pair(
+            alt((
+                tag("//"),
+                terminated(
+                    tag("#"),
+                    peek(alt((none_of("["), map(eof, |_| ' ')))),
+                ),
+            )),
+            take_while(|c| c != '\n' && c != '\r'),
+        ),
+    )
+    .parse(input)
 }
 
 pub fn block_comment(input: &str) -> IResult<&str, ()> {

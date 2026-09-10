@@ -69,7 +69,7 @@ for f in "$ROOT"/tests/python_style/t*.z; do
     else
         echo "FAIL       $name"
         echo "  expected: $(printf '%s | ' "${expects[@]:-}")"
-        echo "  actual:   $(printf '%s | ' $actual)"
+        echo "  actual:   $(printf '%s | ' "$actual")"
         fail=$((fail+1)); failed_files="$failed_files $name"
     fi
 done

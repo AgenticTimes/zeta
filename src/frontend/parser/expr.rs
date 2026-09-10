@@ -786,6 +786,10 @@ pub(crate) fn parse_unary(input: &str) -> IResult<&str, AstNode> {
         // It's a unary !, not !=
         let (input, _) = tag("!")(input)?;
         (input, Some("!"))
+    } else if starts_with_kw(input, "not") {
+        // PY-A: Python `not` == `!`
+        let (input, _) = tag("not")(input)?;
+        (input, Some("!"))
     } else {
         // Try other unary operators
         opt(alt((tag("&mut"), tag("&"), tag("-"), tag("*")))).parse(input)?
@@ -848,7 +852,8 @@ fn parse_trait_query(input: &str) -> IResult<&str, AstNode> {
     ))
 }
 
-/// Python-style bool literals: `True` / `False` (word-boundary guarded).
+/// Python-style literals: `True` / `False` / `None` (word-boundary guarded).
+/// `None` lowers to 0 — pragmatic V1 (`is None` / `== None` both work).
 fn parse_python_bool(input: &str) -> IResult<&str, AstNode> {
     fn boundary(input: &str) -> IResult<&str, char> {
         peek(alt((
@@ -860,8 +865,18 @@ fn parse_python_bool(input: &str) -> IResult<&str, AstNode> {
     alt((
         map(terminated(tag("True"), boundary), |_| AstNode::Bool(true)),
         map(terminated(tag("False"), boundary), |_| AstNode::Bool(false)),
+        map(terminated(tag("None"), boundary), |_| AstNode::Lit(0)),
     ))
     .parse(input)
+}
+
+/// PY-A: does `s` start with keyword `kw` followed by a non-identifier char?
+pub(crate) fn starts_with_kw(s: &str, kw: &str) -> bool {
+    s.starts_with(kw)
+        && s[kw.len()..]
+            .chars()
+            .next()
+            .map_or(true, |c| !(c.is_ascii_alphanumeric() || c == '_'))
 }
 
 pub fn parse_primary(input: &str) -> IResult<&str, AstNode> {
@@ -1037,8 +1052,13 @@ fn parse_logical_or(input: &str) -> IResult<&str, AstNode> {
         let (remaining_input, _) = skip_ws_and_comments0(input)?;
 
         // Check for || operator
-        if let Some(after_op) = remaining_input.strip_prefix("||") {
-            // Consume ||
+        let or_kw = starts_with_kw(remaining_input, "or");
+        if let Some(after_op) = if or_kw {
+            Some(&remaining_input[2..] as &str)
+        } else {
+            remaining_input.strip_prefix("||")
+        } {
+            // Consume || (or Python `or`)
             // Skip whitespace after ||
             let (after_ws, _) = skip_ws_and_comments0(after_op)?;
 
@@ -1096,6 +1116,10 @@ fn parse_logical_and(input: &str) -> IResult<&str, AstNode> {
             if i.starts_with("&&") {
                 found_op = true;
                 remaining_input = &i[2..];
+            } else if starts_with_kw(i, "and") {
+                // PY-A: Python `and` == `&&`
+                found_op = true;
+                remaining_input = &i[3..];
             }
         }
 
@@ -1130,12 +1154,28 @@ fn parse_comparison(input: &str) -> IResult<&str, AstNode> {
 
         let comparison_ops = ["!=", "==", "<=", ">=", "<", ">"];
 
+        // PY-A: Python `is not` / `is` (identity ops mapped to != / ==)
+        if found_op.is_none() {
+            let after_ws = skip_ws_and_comments0(remaining_input)
+                .map(|(i, _)| i)
+                .unwrap_or(remaining_input);
+            if starts_with_kw(after_ws, "is not") {
+                found_op = Some("!=");
+                remaining_input = &after_ws[6..];
+            } else if starts_with_kw(after_ws, "is") {
+                found_op = Some("==");
+                remaining_input = &after_ws[2..];
+            }
+        }
+
         // Try without whitespace first
-        for &op in &comparison_ops {
-            if remaining_input.starts_with(op) {
-                found_op = Some(op);
-                remaining_input = &remaining_input[op.len()..];
-                break;
+        if found_op.is_none() {
+            for &op in &comparison_ops {
+                if remaining_input.starts_with(op) {
+                    found_op = Some(op);
+                    remaining_input = &remaining_input[op.len()..];
+                    break;
+                }
             }
         }
 

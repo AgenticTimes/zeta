@@ -1,0 +1,50 @@
+// PY-A: 真实 Python 程序验收 —— FizzBuzz + 斐波那契（纯 Python 书写，无分号无花括号）
+// expect: 1
+// expect: 2
+// expect: Fizz
+// expect: 4
+// expect: Buzz
+// expect: Fizz
+// expect: 7
+// expect: 8
+// expect: Fizz
+// expect: Buzz
+// expect: 11
+// expect: Fizz
+// expect: 13
+// expect: 14
+// expect: FizzBuzz
+// expect: 0
+// expect: 1
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: 5
+// expect: 8
+// expect: 13
+// expect: 21
+// expect: 34
+def fizzbuzz(n: i64) -> i64:
+    i = 1
+    while i <= n:
+        if i % 15 == 0:
+            print("FizzBuzz")
+        elif i % 3 == 0:
+            print("Fizz")
+        elif i % 5 == 0:
+            print("Buzz")
+        else:
+            print(i)
+        i = i + 1
+    return 0
+
+def fib(n: i64) -> i64:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+if __name__ == "__main__":
+    fizzbuzz(15)
+    for i in range(10):
+        print(fib(i))
+    return 0

@@ -111,6 +111,7 @@ impl OptimizedMir {
             type_map,
             global_consts: HashMap::new(),
             properties: vec![],
+            generic_params: Vec::new(),
             is_extern: false,
         }
     }

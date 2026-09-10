@@ -1143,6 +1143,22 @@ impl<'ctx> LLVMCodegen<'ctx> {
             }
         }
 
+        // PY: eagerly instantiate every declared-generic function with the
+        // default substitution (params fall back to i64) so call sites without
+        // explicit type arguments resolve to a real definition instead of a
+        // dangling extern. Call sites with explicit type arguments keep using
+        // the on-demand path in get_or_declare_function.
+        let eager_generics: Vec<(String, crate::middle::mir::mir::Mir)> = self
+            .generic_defs
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for (gname, gmir) in &eager_generics {
+            if self.module.get_function(gname).is_none() {
+                self.monomorphize_function(gmir, gname, &[]);
+            }
+        }
+
         // Second pass: generate non-generic function bodies
         for mir in mirs {
             if !self.is_generic_function(mir) {
@@ -2106,6 +2122,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
             if let Some(&f) = self.fns.get(&param_suffixed) {
                 return f;
             }
+            // PY/泛型: call site with no explicit type arguments to a declared
+            // generic function — instantiate with the default substitution
+            // (params fall back to i64, matching monomorphize_function).
+            if let Some(generic_mir) = self.generic_defs.get(name).cloned() {
+                let f = self.monomorphize_function(&generic_mir, name, &[]);
+                self.fns.insert(name.to_string(), f);
+                return f;
+            }
         } else {
             let mangled = self.mangle_function_name(name, type_args);
             if let Some(f) = self.module.get_function(&mangled) {
@@ -2342,19 +2366,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 return false;
             }
         }
-        // Check if function has type parameters
-        // We need a better heuristic. For now, check if the function name
-        // contains generic type parameters in its type map.
-        // This is a temporary hack - we should store type parameters in MIR.
-
-        // Look for type variables in the type map
-        mir.type_map.values().any(|ty| match ty {
-            crate::middle::types::Type::Variable(_) => true,
-            crate::middle::types::Type::Named(_, args) => args
-                .iter()
-                .any(|arg| matches!(arg, crate::middle::types::Type::Variable(_))),
-            _ => false,
-        })
+        // Precise: a function is generic iff it DECLARES type parameters.
+        // (The old heuristic — any Type::Variable in the type map — also
+        // poisoned callers of generic functions, whose call-result types stay
+        // unresolved; those functions were silently never emitted.)
+        !mir.generic_params.is_empty()
     }
 
     /// Basic monomorphization implementation

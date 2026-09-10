@@ -208,6 +208,18 @@ impl MirGen {
                 }
                 _ => None,
             },
+            generic_params: match ast {
+                AstNode::FuncDef { generics, .. } => generics
+                    .iter()
+                    .filter_map(|g| match g {
+                        crate::frontend::ast::GenericParam::Type { name, .. } => {
+                            Some(name.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                _ => vec![],
+            },
             // Count params for potential name mangling (used by get_or_declare_function)
             param_indices: match ast {
                 AstNode::FuncDef { params, .. } | AstNode::ExternFunc { params, .. } => {
@@ -407,6 +419,26 @@ impl MirGen {
                         let lhs_id = self.lower_expr(lhs);
                         self.stmts.push(MirStmt::Assign {
                             lhs: lhs_id,
+                            rhs: rhs_id,
+                        });
+                    }
+                } else if let AstNode::Var(name) = &**lhs {
+                    // PY-A: Python-style bare assignment — implicitly declare
+                    // the variable when it is not already bound (function
+                    // locals; module-level variables are a later item).
+                    if let Some(&existing) = self.name_to_id.get(name) {
+                        self.stmts.push(MirStmt::Assign {
+                            lhs: existing,
+                            rhs: rhs_id,
+                        });
+                    } else {
+                        let new_id = self.next_id();
+                        self.name_to_id.insert(name.clone(), new_id);
+                        self.exprs.insert(new_id, MirExpr::Var(new_id));
+                        let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
+                        self.type_map.insert(new_id, ty);
+                        self.stmts.push(MirStmt::Assign {
+                            lhs: new_id,
                             rhs: rhs_id,
                         });
                     }
