@@ -144,12 +144,11 @@
 ### Python 对齐缺口清单（按对「编译真实 Python 文件」的影响排序）
 - [ ] **class**：`class Foo:` → struct + `def method(self, ...)` → impl 方法（self 隐式参数）；构造 `__init__`
   ⚠️ 现 `class` 行被**静默解析为无害 no-op**（fail-open）——应改为显式报错直至实现
-- [ ] **f-string**：`f"a {x} b"` → 解析期脱糖为字符串拼接（host_str_concat + to_string）
-  ⚠️ 现 f-string 同样被静默吞掉（fail-open）
-- [ ] **f-string**：`f"a {x} b"` → 解析期脱糖为字符串拼接（host_str_concat + to_string）
-- [ ] **字符串比较**：`==`/`!=`/`<` 目前按指针比较，需接 host_str_compare 系 runtime（已有 str_len 等）
+- [x] **f-string**（2026-09-11）：发现既有 `AstNode::FString`/`MirExpr::FString` 基础设施但 parser 从未产出——补 `parse_fstring`（字面量/`{expr}` 切分、`{{}}` 转义）+ 非 Str 部件 `to_string_*` 分发 + `str()` 内置
+- [x] **字符串值语义**（2026-09-11，架构修复）：`==`/`!=` 按内容比较（新 runtime `str_eq`）、`+` 拼接。根因有二：① 运算符三轨降级不统一（`+`→SemiringFold/比较→BinaryOp/其余→Call），字符串 `+` 改道 BinaryOp 统一走 codegen 分发；② get_or_declare 数字后缀剥离丢「后缀须全数字」守卫，`to_string_f64` 被当 `to_string`+_f64 消歧后缀静默改名（符号谜团根源）
 - [ ] **多参 print**：`print("a", x, "b")` 应空格分隔全输出（现 print.N 只出首参）+ print.N 别名机制脆弱化
 - [ ] **泛型多类型实例化**：同一泛型函数按调用点参数类型推断实例化（现默认 i64 实例 + 强转）
+- [x] **kqueue 移植**（2026-09-11）：tokio_runtime.c 原只有 epoll、macOS 无法重建 AOT runtime（链的是陈旧预编译对象）；现 `#ifdef __APPLE__` kqueue（reactor/waker/EVFILT_TIMER，事件位值沿用 epoll 编码）；`runtime/py_additions.c` 增量符号合并（ld -r）构建流程入册
 - [ ] `in` 成员运算（数组/字符串/字典 contains runtime）；`not in`
 - [ ] 负索引 `arr[-1]`、切片 `arr[1:3]`
 - [ ] 链式比较 `a < b < c`（解析期脱糖）
@@ -163,8 +162,8 @@
 
 ## 执行顺序建议（下一步）
 
-1. **class + 方法语义**（Python 兼容最大件）
-2. **f-string + 字符串比较语义**（真实 Python 程序高频）
+1. ~~f-string + 字符串值语义 + kqueue~~（2026-09-11 完成）
+2. **class + 方法语义**（Python 兼容最大件；落地前先把 class 从 fail-open 改为显式报错）
 3. 多参 print 修复 + 泛型多类型实例化
 4. closures codegen（解锁 t12 lambda）
 5. std::quantum / DUPLICATE_SYM / NO_MAIN 批量
