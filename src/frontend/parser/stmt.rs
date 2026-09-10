@@ -165,22 +165,32 @@ fn parse_if(input: &str) -> IResult<&str, AstNode> {
             nom::error::ErrorKind::Tag,
         )));
     }
+    parse_if_tail(input)
+}
+
+/// Condition + then-block + else chain; the leading `if` keyword must already
+/// be consumed. Also the entry point for Python-style `elif` chains.
+fn parse_if_tail(input: &str) -> IResult<&str, AstNode> {
     let (input, cond) = ws(parse_full_expr).parse(input)?;
     let (input, then) = delimited(ws(tag("{")), parse_block_body, ws(tag("}"))).parse(input)?;
 
-    // Parse else clause: either `else { ... }` or `else if ...`
-    let (input, else_opt) = opt(preceded(
-        ws(tag("else")),
-        alt((
-            // else { ... } block
-            map(
-                delimited(ws(tag("{")), parse_block_body, ws(tag("}"))),
-                |body| body,
-            ),
-            // else if ... (parse as another if statement)
-            map(parse_if, |if_node| vec![if_node]),
-        )),
-    ))
+    // Parse else clause: `else { ... }`, `else if ...`, or `elif ...`
+    let (input, else_opt) = opt(alt((
+        preceded(
+            ws(tag("else")),
+            alt((
+                // else { ... } block
+                map(
+                    delimited(ws(tag("{")), parse_block_body, ws(tag("}"))),
+                    |body| body,
+                ),
+                // else if ... (parse as another if statement)
+                preceded(ws(tag("if")), map(parse_if, |if_node| vec![if_node])),
+            )),
+        ),
+        // elif ... (PY-2 alias for else-if)
+        preceded(ws(tag("elif")), map(parse_if_tail, |if_node| vec![if_node])),
+    )))
     .parse(input)?;
 
     let else_: Vec<AstNode> = else_opt.unwrap_or(vec![]);

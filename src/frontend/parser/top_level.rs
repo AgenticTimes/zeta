@@ -14,6 +14,7 @@ use nom::IResult;
 use nom::Parser;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
+use nom::character::complete::none_of;
 use nom::combinator::{map, not, opt, peek, value};
 
 use nom::multi::{many0, separated_list0};
@@ -123,7 +124,16 @@ pub(crate) fn parse_func(input: &str) -> IResult<&str, AstNode> {
     let (input, const_opt) = opt(ws(tag("const"))).parse(input)?;
     let (input, async_opt) = opt(ws(tag("async"))).parse(input)?;
     let (input, extern_opt) = opt(ws(tag("extern"))).parse(input)?;
-    let (input, _) = match ws(tag("fn")).parse(input) {
+    let (input, _) = match ws(alt((
+        tag("fn"),
+        // PY-2: `def` alias for `fn`, word-boundary guarded (`default` stays an ident)
+        terminated(
+            tag("def"),
+            peek(none_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")),
+        ),
+    )))
+    .parse(input)
+    {
         Ok(r) => r,
         Err(e) => {
             return Err(e);
@@ -566,11 +576,16 @@ fn parse_enum(input: &str) -> IResult<&str, AstNode> {
     // Parse where clause if present
     let (input, where_clauses_opt) = opt(ws(parse_where_clause)).parse(input)?;
     let where_clauses = where_clauses_opt.unwrap_or_default();
+    // PY-2: variant separator (`,`/`;`) is optional — newline-separated
+    // variants work, which is what indented enum bodies normalize to.
     let (input, variants) = delimited(
         ws(tag("{")),
         terminated(
-            separated_list0(ws(tag(",")), ws(parse_variant)),
-            opt(ws(tag(","))),
+            many0(preceded(
+                opt(alt((ws(tag(",")), ws(tag(";"))))),
+                ws(parse_variant),
+            )),
+            opt(alt((ws(tag(",")), ws(tag(";"))))),
         ),
         ws(tag("}")),
     )
@@ -630,11 +645,16 @@ fn parse_struct(input: &str) -> IResult<&str, AstNode> {
     let (input, where_clauses_opt) = opt(ws(parse_where_clause)).parse(input)?;
     let where_clauses = where_clauses_opt.unwrap_or_default();
 
+    // PY-2: field separator (`,`/`;`) is optional — newline-separated fields
+    // work, which is what indented struct bodies normalize to.
     let (input, fields) = delimited(
         ws(tag("{")),
         terminated(
-            separated_list0(ws(tag(",")), parse_struct_field),
-            opt(ws(tag(","))),
+            many0(preceded(
+                opt(alt((ws(tag(",")), ws(tag(";"))))),
+                ws(parse_struct_field),
+            )),
+            opt(alt((ws(tag(",")), ws(tag(";"))))),
         ),
         ws(tag("}")),
     )

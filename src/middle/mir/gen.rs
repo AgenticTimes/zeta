@@ -43,6 +43,10 @@ pub struct MirGen {
     pointee_widths: HashMap<u32, u8>,
     /// Type declarations seen during lowering (structs, enums, aliases).
     type_decls: HashMap<String, TypeDecl>,
+    /// Type declarations collected by the Resolver across the whole program
+    /// (enums/aliases live in their own AST items, but each function gets a
+    /// fresh MirGen — these are re-seeded into `type_decls` per lowering).
+    shared_type_decls: HashMap<String, TypeDecl>,
     /// Stack of loop result slots for `loop { break EXPR; }` value semantics.
     loop_value_stack: Vec<u32>,
     /// Result slot of the most recently lowered loop (for implicit ret_val).
@@ -74,6 +78,7 @@ impl MirGen {
             source_types: HashMap::new(),
             pointee_widths: HashMap::new(),
             type_decls: HashMap::new(),
+            shared_type_decls: HashMap::new(),
             loop_value_stack: Vec::new(),
             last_loop_result: None,
             generated_mirs: vec![],
@@ -101,6 +106,12 @@ impl MirGen {
         self
     }
 
+    /// Pre-seed type declarations collected program-wide by the Resolver.
+    pub fn with_type_decls(mut self, decls: HashMap<String, TypeDecl>) -> Self {
+        self.shared_type_decls = decls;
+        self
+    }
+
     pub fn lower_to_mir(&mut self, ast: &AstNode) -> Mir {
         self.name_to_id.clear();
         self.stmts.clear();
@@ -108,6 +119,8 @@ impl MirGen {
         self.source_types.clear();
         self.pointee_widths.clear();
         self.type_decls.clear();
+        self.type_decls
+            .extend(self.shared_type_decls.iter().map(|(k, v)| (k.clone(), v.clone())));
         self.next_id = 1;
 
         // Check if this is an extern/FFI function declaration.
@@ -1168,6 +1181,21 @@ impl MirGen {
         }
     }
 
+    /// If `name` is a unit-variant path of a registered enum (e.g.
+    /// `Color::Green`), return its variant index. Data-carrying variants are
+    /// not covered (they need tagged allocation; runtime-backed enums like
+    /// Option/Result are handled separately).
+    fn enum_unit_variant_index(&self, name: &str) -> Option<i64> {
+        let (enum_name, variant) = name.rsplit_once("::")?;
+        match self.type_decls.get(enum_name)? {
+            TypeDecl::Enum { variants, .. } => variants
+                .iter()
+                .position(|(v, params)| v == variant && params.is_empty())
+                .map(|i| i as i64),
+            _ => None,
+        }
+    }
+
     fn lower_expr(&mut self, expr: &AstNode) -> u32 {
         let id = self.next_id();
         match expr {
@@ -1227,6 +1255,16 @@ impl MirGen {
             AstNode::Var(name) => {
                 if let Some(&existing) = self.name_to_id.get(name) {
                     return existing;
+                }
+
+                // Unit-variant path of a registered enum (e.g. `Color::Green`)
+                // lowers to its variant tag (integer discriminant).
+                if name.contains("::") {
+                    if let Some(tag) = self.enum_unit_variant_index(name) {
+                        self.exprs.insert(id, MirExpr::IntLit(tag));
+                        self.type_map.insert(id, Type::I64);
+                        return id;
+                    }
                 }
 
                 // Check if this is a global constant
@@ -2177,6 +2215,20 @@ impl MirGen {
                                 self.type_map.insert(inverted_id, Type::Bool);
 
                                 self.exprs.insert(cond_id, MirExpr::Var(inverted_id));
+                                self.type_map.insert(cond_id, Type::Bool);
+                            } else if let Some(tag) = self.enum_unit_variant_index(var_name) {
+                                // User-defined enum unit-variant path pattern
+                                // (e.g. `Color::Red`): equality against the tag.
+                                let pattern_id = self.next_id();
+                                self.exprs.insert(pattern_id, MirExpr::IntLit(tag));
+                                self.type_map.insert(pattern_id, Type::I64);
+                                self.stmts.push(MirStmt::Call {
+                                    func: "==".to_string(),
+                                    args: vec![scrutinee_id, pattern_id],
+                                    dest: cond_id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(cond_id, MirExpr::Var(cond_id));
                                 self.type_map.insert(cond_id, Type::Bool);
                             } else if var_name == "_" {
                                 // Wildcard pattern - always true

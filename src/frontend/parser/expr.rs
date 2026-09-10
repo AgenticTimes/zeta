@@ -10,7 +10,8 @@ use nom::IResult;
 use nom::Parser;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
-use nom::combinator::{map, opt};
+use nom::character::complete::none_of;
+use nom::combinator::{map, opt, peek};
 use nom::error::Error as NomError;
 use nom::multi::{separated_list0, separated_list1};
 use nom::sequence::{delimited, pair, preceded, terminated};
@@ -628,7 +629,12 @@ pub fn parse_condition(input: &str) -> IResult<&str, AstNode> {
 
 fn parse_if(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag("if")).parse(input)?;
+    parse_if_tail(input)
+}
 
+/// Condition + then-block + else chain; the leading `if` keyword must already
+/// be consumed. Also the entry point for Python-style `elif` chains.
+fn parse_if_tail(input: &str) -> IResult<&str, AstNode> {
     // Parse condition with special handling
     let (input, cond) = if let Ok((i, expr)) = parse_condition(input) {
         (i, expr)
@@ -638,19 +644,23 @@ fn parse_if(input: &str) -> IResult<&str, AstNode> {
     };
     let (input, then) = delimited(ws(tag("{")), parse_block_body, ws(tag("}"))).parse(input)?;
 
-    // Parse else clause: either `else { ... }` or `else if ...`
-    let (input, else_opt) = opt(preceded(
-        ws(tag("else")),
-        alt((
-            // else { ... } block
-            map(
-                delimited(ws(tag("{")), parse_block_body, ws(tag("}"))),
-                |body| body,
-            ),
-            // else if ... (parse as another if statement)
-            map(parse_if, |if_node| vec![if_node]),
-        )),
-    ))
+    // Parse else clause: `else { ... }`, `else if ...`, or `elif ...`
+    let (input, else_opt) = opt(alt((
+        preceded(
+            ws(tag("else")),
+            alt((
+                // else { ... } block
+                map(
+                    delimited(ws(tag("{")), parse_block_body, ws(tag("}"))),
+                    |body| body,
+                ),
+                // else if ... (parse as another if statement)
+                preceded(ws(tag("if")), map(parse_if_tail, |if_node| vec![if_node])),
+            )),
+        ),
+        // elif ... (PY-2 alias for else-if)
+        preceded(ws(tag("elif")), map(parse_if_tail, |if_node| vec![if_node])),
+    )))
     .parse(input)?;
 
     let else_: Vec<AstNode> = else_opt.unwrap_or(vec![]);
@@ -838,8 +848,25 @@ fn parse_trait_query(input: &str) -> IResult<&str, AstNode> {
     ))
 }
 
+/// Python-style bool literals: `True` / `False` (word-boundary guarded).
+fn parse_python_bool(input: &str) -> IResult<&str, AstNode> {
+    fn boundary(input: &str) -> IResult<&str, char> {
+        peek(alt((
+            none_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"),
+            map(nom::combinator::eof, |_| ' '),
+        )))
+        .parse(input)
+    }
+    alt((
+        map(terminated(tag("True"), boundary), |_| AstNode::Bool(true)),
+        map(terminated(tag("False"), boundary), |_| AstNode::Bool(false)),
+    ))
+    .parse(input)
+}
+
 pub fn parse_primary(input: &str) -> IResult<&str, AstNode> {
     alt((
+        parse_python_bool,
         parse_trait_query,
         parse_tuple_or_paren,
         parse_lit,
@@ -1575,37 +1602,34 @@ pub fn parse_match_expr(input: &str) -> IResult<&str, AstNode> {
     // Parse "{"
     let (input, _) = ws(tag::<_, _, nom::error::Error<&str>>("{")).parse(input)?;
 
-    // Parse arms
+    // Parse arms (PY-2: inter-arm comma is optional — newline-separated arms
+    // work, which is what indented match blocks normalize to)
     let mut arms = Vec::new();
     let mut current_input = input;
 
-    while let Ok((next_input, arm)) = parse_match_arm(current_input) {
-        arms.push(arm);
-        current_input = next_input;
-
-        // Check for comma or closing brace
-        let (next_input, _) = skip_ws_and_comments0(current_input)?;
-        if let Ok((next_input, _)) = tag::<_, _, nom::error::Error<&str>>(",").parse(next_input) {
-            current_input = next_input;
-            let (next_input, _) = skip_ws_and_comments0(current_input)?;
-            current_input = next_input;
-            continue;
+    loop {
+        let (ws_input, _) = skip_ws_and_comments0(current_input)?;
+        if ws_input.starts_with('}') {
+            current_input = ws_input;
+            break;
         }
-
-        // Check for closing brace
-        let (next_input, _) = skip_ws_and_comments0(current_input)?;
-        if let Ok((next_input, _)) = tag::<_, _, nom::error::Error<&str>>("}").parse(next_input) {
-            return Ok((
-                next_input,
-                AstNode::Match {
-                    scrutinee: Box::new(scrutinee),
-                    arms,
-                },
-            ));
+        match parse_match_arm(ws_input) {
+            Ok((next_input, arm)) => {
+                arms.push(arm);
+                let (ws_next, _) = skip_ws_and_comments0(next_input)?;
+                current_input = ws_next;
+                // Optional separator
+                if let Ok((next_input, _)) =
+                    tag::<_, _, nom::error::Error<&str>>(",").parse(current_input)
+                {
+                    current_input = next_input;
+                }
+            }
+            Err(_) => {
+                current_input = ws_input;
+                break;
+            }
         }
-
-        // No comma or closing brace - error
-        break;
     }
 
     // Parse closing brace

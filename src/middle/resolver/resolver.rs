@@ -46,6 +46,9 @@ pub struct Resolver {
     module_resolver: ModuleResolver,
     /// Macro expander for macro processing
     macro_expander: MacroExpander,
+    /// Program-wide type declarations (enums/type aliases), seeded into every
+    /// per-function MirGen so pattern matching and enum paths can resolve them.
+    type_decls: HashMap<String, crate::middle::mir::r#gen::TypeDecl>,
     /// Identity inference context for capability-based type inference
     identity_inference: crate::middle::types::identity::inference::IdentityInferenceContext,
     /// Capability inferencer for identity-aware type inference
@@ -70,6 +73,7 @@ impl Resolver {
             macro_expander: MacroExpander::new(),
             identity_inference:
                 crate::middle::types::identity::inference::IdentityInferenceContext::new(),
+            type_decls: HashMap::new(),
             capability_inferencer:
                 crate::middle::types::identity::inference::CapabilityInferencer::new(),
         };
@@ -105,6 +109,30 @@ impl Resolver {
     }
 
     pub fn register(&mut self, ast: AstNode) {
+        // Collect program-wide type declarations for MIR lowering.
+        match &ast {
+            AstNode::EnumDef {
+                name,
+                variants,
+                generics,
+                ..
+            } => {
+                self.type_decls.insert(
+                    name.clone(),
+                    crate::middle::mir::r#gen::TypeDecl::Enum {
+                        variants: variants.clone(),
+                        generics: generics.clone(),
+                    },
+                );
+            }
+            AstNode::TypeAlias { name, ty, .. } => {
+                self.type_decls.insert(
+                    name.clone(),
+                    crate::middle::mir::r#gen::TypeDecl::Alias { target: ty.clone() },
+                );
+            }
+            _ => {}
+        }
         match ast {
             AstNode::Use { path } => {
                 // Process use statement to load module
@@ -513,10 +541,10 @@ impl Resolver {
             .iter()
             .map(|(name, (_, ret, _))| (name.clone(), ret.clone()))
             .collect();
-        let mut mir_gen =
-            crate::middle::mir::r#gen::MirGen::new()
-                .with_global_consts(self.ctfe_consts.clone())
-                .with_func_ret_types(ret_types);
+        let mut mir_gen = crate::middle::mir::r#gen::MirGen::new()
+            .with_global_consts(self.ctfe_consts.clone())
+            .with_func_ret_types(ret_types)
+            .with_type_decls(self.type_decls.clone());
         mir_gen.lower_to_mir(ast)
     }
 
