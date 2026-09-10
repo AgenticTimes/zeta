@@ -1,0 +1,32 @@
+// PY-A: 无类型注解参数（Python 常态 def f(x):）+ while 内 early-return
+// —— 两者均为真实 Python 脚本编译失败的历史根因，锁定回归
+// expect: 1
+// expect: 0
+// expect: 5
+def is_prime(n):
+    if n < 2:
+        return False
+    i = 2
+    while i * i <= n:
+        if n % i == 0:
+            return False
+        i = i + 1
+    return True
+
+def accumulate(n):
+    total = 0
+    i = 1
+    while i <= n:
+        total = total + i
+        i = i + 1
+    return total
+
+def main() -> i64:
+    if is_prime(97):
+        print(1)
+    if is_prime(98):
+        print(999)
+    else:
+        print(0)
+    print(accumulate(5) - 10)
+    return 0
