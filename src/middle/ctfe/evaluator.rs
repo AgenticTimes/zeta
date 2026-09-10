@@ -369,7 +369,24 @@ impl ConstEvaluator {
 
                 // Try to evaluate condition if it's a literal boolean
                 if let AstNode::Bool(cond_val) = &transformed_cond {
-                    if *cond_val {
+                    // Never fold when the taken branch contains a terminator:
+                    // inlining Return/Break/Continue into the middle of a
+                    // block yields two terminators in one LLVM basic block.
+                    let branch = if *cond_val {
+                        &transformed_then
+                    } else {
+                        &transformed_else
+                    };
+                    let branch_has_terminator = branch.iter().any(|s| {
+                        matches!(
+                            s,
+                            AstNode::Return(_)
+                                | AstNode::Break(_)
+                                | AstNode::Continue(_)
+                        )
+                    });
+                    let branch_is_empty = branch.is_empty();
+                    if *cond_val && !branch_has_terminator {
                         // Condition is true, keep only then branch
                         if transformed_then.len() == 1 {
                             return Ok(transformed_then[0].clone());
@@ -379,7 +396,7 @@ impl ConstEvaluator {
                                 body: transformed_then,
                             });
                         }
-                    } else if !transformed_else.is_empty() {
+                    } else if !*cond_val && !branch_is_empty && !branch_has_terminator {
                         // Condition is false, keep only else branch
                         if transformed_else.len() == 1 {
                             return Ok(transformed_else[0].clone());
@@ -388,7 +405,7 @@ impl ConstEvaluator {
                                 body: transformed_else,
                             });
                         }
-                    } else {
+                    } else if !*cond_val && branch_is_empty {
                         // False condition with no else branch
                         return Ok(AstNode::Block { body: vec![] });
                     }
