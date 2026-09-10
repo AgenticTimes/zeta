@@ -571,6 +571,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some(Linkage::External),
         );
         module.add_function(
+            "host_str_eq",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
             "host_str_to_lowercase",
             i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
@@ -803,6 +808,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
         module.add_function(
             "to_string_bool",
             i64_type.fn_type(&[i64_type.into()], false), // Returns i64 pointer to string
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "to_string_f64",
+            i64_type.fn_type(&[context.f64_type().into()], false), // f64 arg keeps precision ("3.5")
             Some(Linkage::External),
         );
 
@@ -1918,6 +1928,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
             return f;
         }
 
+        if name.contains("to_string") {
+            eprintln!("PROBE get_function(name={}) — backtrace:", name);
+        }
         // Handle generic unresolved functions — declare as external rather than panicking
         // This allows path-qualified calls (Resolver::new, HashMap::new, etc.) and
         // other user-defined functions to be resolved by the linker at AOT time, or
@@ -2229,7 +2242,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
         if let Some(pos) = name.rfind('_') {
             let suffix = &name[pos + 1..];
             let digits: String = suffix.chars().filter(|c| c.is_ascii_digit()).collect();
-            if !digits.is_empty() {
+            // Guard: the suffix must be ALL digits (a real _N disambiguator).
+            // Without this, "to_string_f64" was treated as "to_string" + suffix
+            // ("f64" contains digits) and silently renamed.
+            if !digits.is_empty() && suffix.len() == digits.len() {
                 let base = &name[..pos];
                 if let Some(f) = self.module.get_function(base) {
                     let expected = digits.parse::<u32>().unwrap_or(0);
@@ -4710,6 +4726,31 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 }
             }
             MirExpr::BinaryOp { op, left, right } => {
+                // PY-A: string value semantics — `==`/`!=` compare by content,
+                // `+` concatenates (previously pointer arithmetic).
+                {
+                    let l_str = self.current_type_map.as_ref()
+                        .and_then(|tm| tm.get(left)).map_or(false, |t| matches!(t, Type::Str));
+                    let r_str = self.current_type_map.as_ref()
+                        .and_then(|tm| tm.get(right)).map_or(false, |t| matches!(t, Type::Str));
+                    if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
+                        let lv = self.gen_expr(&exprs[left], exprs, None);
+                        let rv = self.gen_expr(&exprs[right], exprs, None);
+                        let fname = if op == "+" { "host_str_concat" } else { "host_str_eq" };
+                        if let Some(f) = self.module.get_function(fname) {
+                            let call = self.builder
+                                .build_call(f, &[lv.into(), rv.into()], "strop").unwrap();
+                            let res = Self::call_site_to_basic_value(call).unwrap();
+                            if op == "!=" {
+                                let one = self.i64_type.const_int(1, false);
+                                let inv = self.builder
+                                    .build_xor(res.into_int_value(), one, "str_ne").unwrap();
+                                return inv.into();
+                            }
+                            return res;
+                        }
+                    }
+                }
                 let left_val = self.gen_expr(&exprs[left], exprs, None);
                 let right_val = self.gen_expr(&exprs[right], exprs, None);
                 // Coerce mixed int/float: struct fields store f64 as i64 bit

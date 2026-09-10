@@ -152,6 +152,7 @@ void map_free(int64_t map){(void)map;} /* GC-managed */
 
 void flush(void) { fflush(stdout); }
 
+#ifndef ZT_REAL_ASYNC // fake async stubs — excluded when tokio_runtime.c (real kqueue/epoll) is linked
 int64_t reactor_create(void) { return (int64_t)malloc(1); }
 int64_t reactor_add(int64_t e, int64_t f, int64_t ev) { (void)e;(void)f;(void)ev; return 0; }
 int64_t reactor_modify(int64_t e, int64_t f, int64_t ev) { (void)e;(void)f;(void)ev; return 0; }
@@ -175,6 +176,7 @@ int64_t set_nonblocking(int64_t f) { int fl=fcntl((int)f,F_GETFL,0); return fl<0
 int64_t monotonic_ns(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts); return (int64_t)ts.tv_sec*1000000000+ts.tv_nsec; }
 int64_t scheduler_register_waker(int64_t e, int64_t w) { (void)e;(void)w; return 0; }
 int64_t scheduler_run_reactor(int64_t e, int64_t t) { (void)e;(void)t; return 0; }
+#endif // ZT_REAL_ASYNC
 
 int64_t runtime_malloc(int64_t size) { return (int64_t)GC_malloc((size_t)size); }
 void runtime_free(int64_t ptr) { (void)ptr; /* GC-managed, no-op */ }

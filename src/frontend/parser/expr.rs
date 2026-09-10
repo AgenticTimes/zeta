@@ -879,8 +879,114 @@ pub(crate) fn starts_with_kw(s: &str, kw: &str) -> bool {
             .map_or(true, |c| !(c.is_ascii_alphanumeric() || c == '_'))
 }
 
+/// PY-A: f-string `f"hello {name}!"` → FString(parts). Literal text stays
+/// StringLit; `{expr}` parts parse as full expressions (converted to strings
+/// at MIR lowering). `{{`/`}}` escape braces. V1: no format specs (`{x:.2f}`),
+/// no multiline f-strings.
+fn parse_fstring(input: &str) -> IResult<&str, AstNode> {
+    fn err<T>(input: &str) -> IResult<&str, T> {
+        Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
+    }
+    if !(input.starts_with("f\"") || input.starts_with("f'")) {
+        return err(input);
+    }
+    let quote = input.as_bytes()[1];
+    let b = input.as_bytes();
+    let mut parts: Vec<AstNode> = Vec::new();
+    let mut lit = String::new();
+    let mut i = 2usize;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\\' && i + 1 < b.len() {
+            let e = b[i + 1];
+            match e {
+                b'n' => lit.push('\n'),
+                b't' => lit.push('\t'),
+                b'r' => lit.push('\r'),
+                other => {
+                    lit.push('\\');
+                    lit.push(other as char);
+                }
+            }
+            i += 2;
+            continue;
+        }
+        if c == quote {
+            let rest = &input[i + 1..];
+            if !lit.is_empty() {
+                parts.push(AstNode::StringLit(std::mem::take(&mut lit)));
+            }
+            if parts.is_empty() {
+                parts.push(AstNode::StringLit(String::new()));
+            }
+            return Ok((rest, AstNode::FString(parts)));
+        }
+        if c == b'{' {
+            if i + 1 < b.len() && b[i + 1] == b'{' {
+                lit.push('{');
+                i += 2;
+                continue;
+            }
+            let mut j = i + 1;
+            let mut depth = 1usize;
+            while j < b.len() {
+                match b[j] {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            if j >= b.len() {
+                return err(input); // unterminated brace
+            }
+            let inner = &input[i + 1..j];
+            if !lit.is_empty() {
+                parts.push(AstNode::StringLit(std::mem::take(&mut lit)));
+            }
+            let expr = match parse_full_expr(inner) {
+                Ok((rem, e)) if rem.trim().is_empty() => e,
+                _ => AstNode::StringLit(inner.to_string()), // V1: format specs fall back to literal
+            };
+            parts.push(expr);
+            i = j + 1;
+            continue;
+        }
+        if c == b'}' {
+            if i + 1 < b.len() && b[i + 1] == b'}' {
+                lit.push('}');
+                i += 2;
+                continue;
+            }
+            lit.push('}');
+            i += 1;
+            continue;
+        }
+        // Copy the full UTF-8 char
+        let ch_len = utf8_seq_len(c);
+        lit.push_str(&input[i..i + ch_len]);
+        i += ch_len;
+    }
+    err(input) // unterminated f-string
+}
+
+fn utf8_seq_len(first_byte: u8) -> usize {
+    match first_byte {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        _ => 4,
+    }
+}
+
 pub fn parse_primary(input: &str) -> IResult<&str, AstNode> {
     alt((
+        parse_fstring,
         parse_python_bool,
         parse_trait_query,
         parse_tuple_or_paren,

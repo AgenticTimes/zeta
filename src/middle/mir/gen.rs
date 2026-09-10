@@ -1213,6 +1213,29 @@ impl MirGen {
         }
     }
 
+    /// PY-A: ensure an expression id is a string handle — non-string values
+    /// go through the to_string_* runtime dispatch (Python `str()`).
+    fn lower_to_string(&mut self, id: u32) -> u32 {
+        if matches!(self.type_map.get(&id), Some(Type::Str)) {
+            return id;
+        }
+        let func = match self.type_map.get(&id).cloned() {
+            Some(Type::F64) | Some(Type::F32) => "to_string_f64",
+            Some(Type::Bool) => "to_string_bool",
+            _ => "to_string_i64",
+        };
+        let nid = self.next_id();
+        self.stmts.push(MirStmt::Call {
+            func: func.to_string(),
+            args: vec![id],
+            dest: nid,
+            type_args: vec![],
+        });
+        self.exprs.insert(nid, MirExpr::Var(nid));
+        self.type_map.insert(nid, Type::Str);
+        nid
+    }
+
     /// If `name` is a unit-variant path of a registered enum (e.g.
     /// `Color::Green`), return its variant index. Data-carrying variants are
     /// not covered (they need tagged allocation; runtime-backed enums like
@@ -1399,7 +1422,14 @@ impl MirGen {
                 self.type_map.insert(id, Type::Str);
             }
             AstNode::FString(parts) => {
-                let part_ids: Vec<_> = parts.iter().map(|p| self.lower_expr(p)).collect();
+                // PY-A: every part must be a string handle — non-string
+                // expressions go through a to_string_* dispatch.
+                let mut part_ids: Vec<u32> = Vec::new();
+                for p in parts {
+                    let pid = self.lower_expr(p);
+                    let pid = self.lower_to_string(pid);
+                    part_ids.push(pid);
+                }
                 self.exprs.insert(id, MirExpr::FString(part_ids));
                 self.type_map.insert(id, Type::Str);
             }
@@ -1418,6 +1448,22 @@ impl MirGen {
                         },
                     );
                     self.type_map.insert(dest, Type::Range);
+                } else if op == "+"
+                    && (matches!(self.type_map.get(&left_id), Some(Type::Str))
+                        || matches!(self.type_map.get(&right_id), Some(Type::Str)))
+                {
+                    // PY-A: string concatenation — route through BinaryOp so
+                    // the codegen string dispatch (host_str_concat) handles it,
+                    // instead of the numeric SemiringFold adder.
+                    self.exprs.insert(
+                        dest,
+                        MirExpr::BinaryOp {
+                            op: op.clone(),
+                            left: left_id,
+                            right: right_id,
+                        },
+                    );
+                    self.type_map.insert(dest, Type::Str);
                 } else if op == "+" {
                     self.stmts.push(MirStmt::SemiringFold {
                         op: SemiringOp::Add,
@@ -1482,6 +1528,17 @@ impl MirGen {
                                 right: right_id,
                             },
                         );
+                        // PY-A: string operands — result of `+` is a string
+                        // (concat), comparisons yield Bool. print/println
+                        // dispatch relies on this type.
+                        if matches!(op.as_str(), "+" | "==" | "!=") {
+                            let l_str = matches!(self.type_map.get(&left_id), Some(Type::Str));
+                            let r_str = matches!(self.type_map.get(&right_id), Some(Type::Str));
+                            if l_str || r_str {
+                                let ty = if op == "+" { Type::Str } else { Type::Bool };
+                                self.type_map.insert(dest, ty);
+                            }
+                        }
                     } else {
                         self.stmts.push(MirStmt::Call {
                             func: op.clone(),
@@ -2000,6 +2057,16 @@ impl MirGen {
                     }
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+
+                // PY-A: Python `str(x)` — convert any value to its string form
+                if method == "str" && receiver.is_none() && args.len() == 1 {
+                    let arg_id = self.lower_expr(&args[0]);
+                    let nid = self.lower_to_string(arg_id);
+                    self.exprs.insert(id, MirExpr::Var(nid));
+                    let ty = self.type_map.get(&nid).cloned().unwrap_or(Type::Str);
+                    self.type_map.insert(id, ty);
                     return id;
                 }
 

@@ -33,6 +33,17 @@ fn main() {
         if let AstNode::FuncDef { name, .. } = f {
             let mir = resolver.lower_to_mir(f);
             println!("lowered {} -> stmts {}", name, mir.stmts.len());
+            if std::env::args().any(|a| a == "-v") {
+                for st in &mir.stmts {
+                    println!("    {:?}", st);
+                }
+                for (id, e) in &mir.exprs {
+                    println!("    e{} = {:?}", id, e);
+                }
+                for (id, t) in &mir.type_map {
+                    println!("    t{} = {:?}", id, t);
+                }
+            }
         }
     }
     let used = resolver.collect_used_specializations(&asts);
