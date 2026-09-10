@@ -168,6 +168,8 @@ pub enum MirExpr {
         addr_id: u32,
         pointee_width: u8,
     },
+    // Address-of: pass the alloca ptrtoint as i64 (for &mut expr)
+    AddrOf { alloca_id: u32 },
     // Binary operation
     BinaryOp {
         op: String,

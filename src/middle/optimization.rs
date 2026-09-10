@@ -271,6 +271,7 @@ pub fn common_subexpression_elimination(mir: &mut Mir) {
             MirExpr::IntLit(value) => format!("Lit({})", value),
             MirExpr::Var(var_id) => format!("Var({})", var_id),
             MirExpr::ConstEval(value) => format!("ConstEval({})", value),
+            MirExpr::AddrOf { alloca_id } => format!("AddrOf({})", alloca_id),
             MirExpr::FString(parts) => {
                 let parts_str = parts
                     .iter()

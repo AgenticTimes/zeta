@@ -2980,6 +2980,22 @@ impl MirGen {
                 let expr_id = self.lower_expr(expr);
                 let dest = self.next_id();
 
+                if op == "&mut" || op == "&" {
+                    // Address-of: pass the variable's location, not its value.
+                    // For a simple variable, use its alloca address (ptrtoint in codegen).
+                    if let AstNode::Var(name) = &**expr {
+                        if let Some(&addr_alloca) = self.name_to_id.get(name.as_str()) {
+                            self.exprs.insert(dest, MirExpr::AddrOf { alloca_id: addr_alloca });
+                            self.type_map.insert(dest, Type::I64);
+                            return dest;
+                        }
+                    }
+                    // Non-variable operand: fall through to passing its value
+                    // (rvalues have no address; the callee mutation is discarded).
+                    self.exprs.insert(dest, MirExpr::Var(expr_id));
+                    self.type_map.insert(dest, Type::I64);
+                    return dest;
+                }
                 if op == "!" {
                     // Logical NOT operator
                     let stmt = MirStmt::Call {

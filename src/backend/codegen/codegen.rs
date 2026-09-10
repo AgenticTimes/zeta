@@ -1459,6 +1459,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     self.collect_ids_from_expr_safe(e, ids, exprs);
                 }
             }
+            MirExpr::AddrOf { alloca_id } => {
+                ids.insert(*alloca_id);
+            }
             MirExpr::SemiringFold { values, .. } => {
                 for &v in values {
                     if let Some(e) = exprs.get(&v) {
@@ -5300,6 +5303,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // For now, just return the start value
                 // TODO: Implement proper range type
                 self.gen_expr(&exprs[start], exprs, None)
+            }
+            MirExpr::AddrOf { alloca_id } => {
+                // &var — ptrtoint of the alloca
+                let ptr = *self.locals.get(alloca_id).unwrap();
+                self.builder
+                    .build_ptr_to_int(ptr, self.i64_type, "addrof")
+                    .unwrap()
+                    .into()
             }
             MirExpr::Deref {
                 addr_id,
