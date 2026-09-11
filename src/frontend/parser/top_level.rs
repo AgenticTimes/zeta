@@ -111,6 +111,7 @@ fn parse_visibility(input: &str) -> IResult<&str, bool> {
 }
 
 pub(crate) fn parse_func(input: &str) -> IResult<&str, AstNode> {
+    let input = skip_decorator_lines(input);
     let (input, attrs) = match parse_attributes(input) {
         Ok(r) => r,
         Err(e) => {
@@ -656,7 +657,26 @@ fn body_is_string_return(body: &[AstNode]) -> bool {
 /// Field types are inferred from `__init__` literal defaults (i64/f64/str/
 /// bool/lists); fields assigned an `__init__` parameter default to i64.
 /// Inheritance (`class A(B):`) is not supported in V1 and errors.
+/// PY-A: decorator lines `@name` / `@name(args)` — consumed and ignored in
+/// V1 (decorator semantics need call-rewriting; parse-ignore keeps real
+/// Python files parseable). Only valid at item start.
+fn skip_decorator_lines(input: &str) -> &str {
+    let mut cur = input;
+    loop {
+        let t = cur.trim_start();
+        if t.starts_with('@') && !t.starts_with("#[") {
+            match t.find('\n') {
+                Some(pos) => cur = &t[pos..],
+                None => return "",
+            }
+        } else {
+            return cur;
+        }
+    }
+}
+
 fn parse_class(input: &str) -> IResult<&str, AstNode> {
+    let input = skip_decorator_lines(input);
     let (input, _) = ws(terminated(tag("class"), peek(none_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")))).parse(input)?;
     let (input, name) = ws(parse_ident).parse(input)?;
     // Inheritance bases are not supported — reject explicitly (never fail-open)
@@ -1090,27 +1110,39 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
     }
     let mut out = Vec::with_capacity(asts.len() + 1);
     let mut main_body: Vec<AstNode> = Vec::new();
+    // Definition allowlist: these stay at top level; EVERYTHING else is a
+    // module-level statement and becomes the implicit main's body (Python
+    // runs top-level statements at import — if/while/for/calls/assignments).
+    fn is_definition(a: &AstNode) -> bool {
+        matches!(
+            a,
+            AstNode::FuncDef { .. }
+                | AstNode::StructDef { .. }
+                | AstNode::EnumDef { .. }
+                | AstNode::ImplBlock { .. }
+                | AstNode::TypeAlias { .. }
+                | AstNode::ConstDef { .. }
+                | AstNode::Use { .. }
+                | AstNode::ConceptDef { .. }
+                | AstNode::ExternFunc { .. }
+                | AstNode::ModDef { .. }
+        )
+    }
     for a in asts {
         match a {
             // PY-A: a class desugars to [struct, impl, ctor] wrapped in a
             // Block — lift definitions back out to top level.
             AstNode::Block { body } => {
                 for node in body {
-                    match node {
-                        def @ AstNode::StructDef { .. }
-                        | def @ AstNode::ImplBlock { .. }
-                        | def @ AstNode::FuncDef { .. }
-                        | def @ AstNode::EnumDef { .. } => out.push(def),
-                        stmt => main_body.push(stmt),
+                    if is_definition(&node) {
+                        out.push(node);
+                    } else {
+                        main_body.push(node);
                     }
                 }
             }
-            // PY-A: module-level statements (calls, prints, assignments)
-            // become the implicit main's body — Python runs them at import.
-            stmt @ AstNode::ExprStmt { .. } => main_body.push(stmt),
-            stmt @ AstNode::Assign(_, _) => main_body.push(stmt),
-            stmt @ AstNode::Let { .. } => main_body.push(stmt),
-            other => out.push(other),
+            other if is_definition(&other) => out.push(other),
+            stmt => main_body.push(stmt),
         }
     }
     if !main_body.is_empty() {

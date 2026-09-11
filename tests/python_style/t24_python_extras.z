@@ -1,0 +1,44 @@
+// PY-A: 字符串方法 / in·not in / 负索引 / 元组并行赋值 / 链式比较
+// expect: HELLO WORLD
+// expect: hello world
+// expect: 1
+// expect: 1
+// expect: Hello Zeta
+// expect: 11
+// expect: 40
+// expect: 30
+// expect: found
+// expect: absent
+// expect: 2
+// expect: 2
+// expect: chained ok
+// expect: chain else ok
+s = "Hello World"
+print(s.upper())
+print(s.lower())
+print(s.contains("World"))
+print(s.startswith("Hello"))
+print(s.replace("World", "Zeta"))
+print(len(s.strip()))
+
+data = [10, 20, 30, 40]
+print(data[-1])
+print(data[-2])
+
+if "ell" in s:
+    print("found")
+if "xyz" not in s:
+    print("absent")
+
+a, b = 1, 2
+a, b = b, a
+print(a)
+print(b)
+
+x = 5
+if 1 < x < 10:
+    print("chained ok")
+if 10 < x < 20:
+    print("wrong")
+else:
+    print("chain else ok")

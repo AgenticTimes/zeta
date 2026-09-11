@@ -2,7 +2,7 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**（/tmp 拷贝跨日被清后已从中恢复）；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（21 case：20 pass + 1 known-fail）**
+> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（24 case：23 pass + 1 known-fail）**
 > 当前通过率：官方 **199/226**（超基线 198，零回归）；python_style **22/23**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
@@ -150,14 +150,14 @@
 - [x] **多参 print**（2026-09-11）：`print("a", x, "b")` 空格分隔全输出。gen.rs 对**任意参数量**逐参类型分发（print_str/print_i64/print_f64）+ 参数间空格 + 末参走 println_* 带换行——完全绕开 print.N C alias 表（该表只出首参、且是 LLVM 重命名后缀的脆碰运表）；t22_multi_print 回归（commit `24f17a57`）+ MIR 发射顺序确定性排序（`6f68cc72`）
 - [x] **泛型多类型实例化**（2026-09-11）：同一泛型函数按调用点参数类型推断实例化。① gen.rs：泛型参数携带 `Type::Variable(TypeVar(gidx))`（原为 I64 硬编码，替换无从谈起）；调用点无显式 type args 时按实参类型推断并替换声明返回类型（dest 槽位与实例一致）；② resolver：`string_to_generic_type` 按声明泛型列表解析参数/返回（原每次 fresh var，参数与返回互不相同，substitution 永不命中）；③ codegen：`monomorphize_function` 先替换后签名（f64 参数不再强转 i64 stub）、嵌套实例化时保存/恢复 gen_fn 状态（原 clobber 调用方 locals）、`get_or_declare_function` 推断路径查 `generic_defs`。`id(3)`→i64 实例、`id(3.5)`→f64 实例、`pair(2.5,1)`→f64 2.5；t23 回归（commit `ca06735e`）
 - [x] **kqueue 移植**（2026-09-11）：tokio_runtime.c 原只有 epoll、macOS 无法重建 AOT runtime（链的是陈旧预编译对象）；现 `#ifdef __APPLE__` kqueue（reactor/waker/EVFILT_TIMER，事件位值沿用 epoll 编码）；`runtime/py_additions.c` 增量符号合并（ld -r）构建流程入册
-- [ ] `in` 成员运算（数组/字符串/字典 contains runtime）；`not in`
-- [ ] 负索引 `arr[-1]`、切片 `arr[1:3]`
-- [ ] 链式比较 `a < b < c`（解析期脱糖）
-- [ ] 元组解包 `a, b = f()`；多返回值
-- [ ] 字符串方法全覆盖（`.upper()` 等 host_str_* 映射到方法调用语法）
+- [x] **`in` / `not in`**（2026-09-12）：解析期生成 `__contains__` 成员调用，字符串分发 host_str_contains；链式语境可组合（`a in b and c in d`）。数组/字典容器 V1 告警限界
+- [x] **负索引 `arr[-k]`**（2026-09-12）：静态尺寸数组编译期改写 `n-k`；切片 `arr[1:3]` 仍待做（需 runtime slice 支持）
+- [x] **链式比较**（2026-09-12）：parse_comparison 重写为收集-折叠（`a < b < c` → `(a<b) && (b<c)`，边界操作数复用），is/is not/in/not in 均可入链
+- [x] **元组并行赋值 V1**（2026-09-12）：`a, b = x, y`（含交换）；`f()` 返回元组解包需临时变量，待做
+- [x] **字符串方法**（2026-09-12）：按 receiver 类型分发——upper/lower/trim/strip/lstrip/rstrip/contains/startswith/ends_with/replace/find/count/len；split 待 runtime 实现
 - [ ] dict 方法（`.keys()`/`.values()`/`.get()` 默认值）
 - [ ] try/except 映射（Zeta 有 Result/try-prop，语义对齐需设计）
-- [ ] 装饰器 `@dec`（V2，可先解析忽略）
+- [x] **装饰器 `@dec`**（2026-09-12）：解析消费忽略（def/class 前合法；语义改写待做）
 - [ ] 顶层 type alias（既有坏点）+ 顶层变量（模块级 `x = 5` → 全局）
 - [-] `global`/`nonlocal`、生成器/yield、async for —— 降级不做
 

@@ -246,6 +246,92 @@ fn parse_if_tail(input: &str) -> IResult<&str, AstNode> {
 fn parse_assign(input: &str) -> IResult<&str, AstNode> {
     use super::expr::parse_unary;
 
+    // PY-A: parallel assignment / tuple unpacking `a, b = x, y` — all LHS
+    // elements must be simple targets; falls through to the single-target
+    // path when no comma follows the first element.
+    {
+        let saved = input;
+        if let Ok((after_first, first)) = ws(parse_unary).parse(input) {
+            let after_first = skip_ws_and_comments(after_first)
+                .map(|(i, _)| i)
+                .unwrap_or(after_first);
+            if after_first.starts_with(',') {
+                let mut items = vec![first];
+                let mut cur = after_first;
+                let mut ok = true;
+                loop {
+                    // after each element: either `=` ends the LHS, or `,` +
+                    // another element continues it
+                    let cur_ws = skip_ws_and_comments(cur)
+                        .map(|(i, _)| i)
+                        .unwrap_or(cur);
+                    if cur_ws.starts_with('=') {
+                        cur = cur_ws;
+                        break;
+                    }
+                    match ws(tag(",")).parse(cur_ws)
+                        .ok()
+                        .map(|(rest, _)| rest)
+                    {
+                        Some(rest) => {
+                            let rest = skip_ws_and_comments(rest)
+                                .map(|(i, _)| i)
+                                .unwrap_or(rest);
+                            match ws(parse_unary).parse(rest) {
+                                Ok((rest2, item)) => {
+                                    items.push(item);
+                                    cur = rest2;
+                                }
+                                Err(_) => {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                        }
+                        None => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if ok && items.len() > 1 {
+                    let (after_eq, _) = ws(tag("=")).parse(cur)?;
+                    let mut rhs_items = Vec::new();
+                    let mut rcur = after_eq;
+                    loop {
+                        let (rest, item) = ws(parse_full_expr).parse(rcur)?;
+                        rhs_items.push(item);
+                        let rest = skip_ws_and_comments(rest)
+                            .map(|(i, _)| i)
+                            .unwrap_or(rest);
+                        if rest.starts_with(',') {
+                            rcur = skip_ws_and_comments(&rest[1..])
+                                .map(|(i, _)| i)
+                                .unwrap_or(&rest[1..]);
+                            if rcur.starts_with('\n') || rcur.is_empty() {
+                                break;
+                            }
+                        } else {
+                            rcur = rest;
+                            break;
+                        }
+                    }
+                    if rhs_items.len() == items.len() {
+                        let (after_stmt, _) = opt(ws(tag(";"))).parse(rcur)?;
+                        return Ok((
+                            after_stmt,
+                            AstNode::Assign(
+                                Box::new(AstNode::Tuple(items)),
+                                Box::new(AstNode::Tuple(rhs_items)),
+                            ),
+                        ));
+                    }
+                }
+            }
+            let _ = saved;
+        }
+    }
+
     // First try to parse the left-hand side (which includes unary prefix and postfix)
     let (input, lhs) = ws(parse_unary).parse(input)?;
 

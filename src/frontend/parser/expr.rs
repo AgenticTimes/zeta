@@ -1250,78 +1250,119 @@ fn parse_logical_and(input: &str) -> IResult<&str, AstNode> {
     Ok((input, term))
 }
 
-// Parse comparison (==, !=, <, >, <=, >=)
+// Parse comparison (==, !=, <, >, <=, >=, is, in) with Python-style chaining:
+// `a < b < c` folds into `(a < b) && (b < c)`, reusing each boundary operand.
 fn parse_comparison(input: &str) -> IResult<&str, AstNode> {
-    let (mut input, mut term) = parse_additive(input)?;
+    let (mut input, first) = parse_additive(input)?;
+    let mut operands: Vec<AstNode> = vec![first];
+    let mut ops: Vec<String> = Vec::new();
+
     loop {
-        // Try to parse comparison operator
-        let mut found_op = None;
+        let mut found_op: Option<String> = None;
         let mut remaining_input = input;
 
-        let comparison_ops = ["!=", "==", "<=", ">=", "<", ">"];
+        let after_ws = skip_ws_and_comments0(remaining_input)
+            .map(|(i, _)| i)
+            .unwrap_or(remaining_input);
 
-        // PY-A: Python `is not` / `is` (identity ops mapped to != / ==)
-        if found_op.is_none() {
-            let after_ws = skip_ws_and_comments0(remaining_input)
-                .map(|(i, _)| i)
-                .unwrap_or(remaining_input);
-            if starts_with_kw(after_ws, "is not") {
-                found_op = Some("!=");
-                remaining_input = &after_ws[6..];
-            } else if starts_with_kw(after_ws, "is") {
-                found_op = Some("==");
-                remaining_input = &after_ws[2..];
-            }
+        // PY-A: keyword comparison forms (is not / is / not in / in)
+        if starts_with_kw(after_ws, "is not") {
+            found_op = Some("!=".to_string());
+            remaining_input = &after_ws[6..];
+        } else if starts_with_kw(after_ws, "is") {
+            found_op = Some("==".to_string());
+            remaining_input = &after_ws[2..];
+        } else if starts_with_kw(after_ws, "not in") {
+            found_op = Some("not in".to_string());
+            remaining_input = &after_ws[6..];
+        } else if starts_with_kw(after_ws, "in") {
+            found_op = Some("in".to_string());
+            remaining_input = &after_ws[2..];
         }
 
-        // Try without whitespace first
+        // symbolic forms — without whitespace first, then with
         if found_op.is_none() {
-            for &op in &comparison_ops {
+            for &op in &["!=", "==", "<=", ">=", "<", ">"] {
                 if remaining_input.starts_with(op) {
-                    found_op = Some(op);
+                    found_op = Some(op.to_string());
                     remaining_input = &remaining_input[op.len()..];
                     break;
                 }
             }
         }
-
-        // Try with whitespace
         if found_op.is_none() {
-            match skip_ws_and_comments0(remaining_input) {
-                Ok((i, _)) => {
-                    for &op in &comparison_ops {
-                        if i.starts_with(op) {
-                            found_op = Some(op);
-                            remaining_input = &i[op.len()..];
-                            break;
-                        }
+            if let Ok((i, _)) = skip_ws_and_comments0(remaining_input) {
+                for &op in &["!=", "==", "<=", ">=", "<", ">"] {
+                    if i.starts_with(op) {
+                        found_op = Some(op.to_string());
+                        remaining_input = &i[op.len()..];
+                        break;
                     }
-                }
-                Err(e) => {
-                    // No whitespace or comments, continue
                 }
             }
         }
 
-        if let Some(op) = found_op {
-            // Skip whitespace after operator
-            let j = match skip_ws_and_comments0(remaining_input) {
-                Ok((j, _)) => j,
-                Err(_) => remaining_input,
-            };
-            let (j, right) = parse_additive(j)?;
-
-            term = AstNode::BinaryOp {
-                op: op.to_string(),
-                left: Box::new(term),
-                right: Box::new(right),
-            };
-            input = j;
-        } else {
-            break;
+        match found_op {
+            Some(op) => {
+                let j = skip_ws_and_comments0(remaining_input)
+                    .map(|(j, _)| j)
+                    .unwrap_or(remaining_input);
+                let (j, right) = parse_additive(j)?;
+                ops.push(op);
+                operands.push(right);
+                input = j;
+            }
+            None => break,
         }
     }
-    Ok((input, term))
+
+    if ops.is_empty() {
+        return Ok((input, operands.pop().unwrap()));
+    }
+
+    // Build one comparison node per (op, operand) pair
+    let mut cmp_nodes: Vec<AstNode> = Vec::with_capacity(ops.len());
+    for (i, op) in ops.iter().enumerate() {
+        let left = &operands[i];
+        let right = &operands[i + 1];
+        let node = match op.as_str() {
+            "in" => AstNode::Call {
+                receiver: Some(Box::new(right.clone())),
+                method: "__contains__".to_string(),
+                args: vec![left.clone()],
+                type_args: vec![],
+                structural: false,
+            },
+            "not in" => AstNode::UnaryOp {
+                op: "not".to_string(),
+                expr: Box::new(AstNode::Call {
+                    receiver: Some(Box::new(right.clone())),
+                    method: "__contains__".to_string(),
+                    args: vec![left.clone()],
+                    type_args: vec![],
+                    structural: false,
+                }),
+            },
+            other => AstNode::BinaryOp {
+                op: other.to_string(),
+                left: Box::new(left.clone()),
+                right: Box::new(right.clone()),
+            },
+        };
+        cmp_nodes.push(node);
+    }
+
+    // Fold into an && chain when more than one comparison is present
+    let mut result = cmp_nodes.remove(0);
+    while !cmp_nodes.is_empty() {
+        let next = cmp_nodes.remove(0);
+        result = AstNode::BinaryOp {
+            op: "&&".to_string(),
+            left: Box::new(result),
+            right: Box::new(next),
+        };
+    }
+    Ok((input, result))
 }
 
 // Parse bitwise AND (&)

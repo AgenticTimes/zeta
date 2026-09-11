@@ -63,6 +63,15 @@ pub struct MirGen {
     async_saved_vars: Vec<(String, u32)>,
     /// Known function return types (base name -> Type), injected by Resolver.
     func_ret_types: HashMap<String, Type>,
+    /// PY-A: monotonic counter for synthetic closure function names.
+    closure_counter: u32,
+    /// PY-A: variables bound to a lambda/closure value, mapped to the
+    /// synthetic closure function name. Lets call sites (`f(41)` where `f =
+    /// lambda x: x+1`) lower to a direct named call to the closure function.
+    closure_vars: HashMap<String, String>,
+    /// The var name being bound when a `let f = lambda...` RHS is lowered;
+    /// the Closure lowering reads it to record the closure_vars entry.
+    pending_closure_binding: Option<String>,
 }
 
 impl MirGen {
@@ -87,6 +96,9 @@ impl MirGen {
             is_async_fn: false,
             async_saved_vars: vec![],
             func_ret_types: HashMap::new(),
+            closure_counter: 0,
+            closure_vars: HashMap::new(),
+            pending_closure_binding: None,
         }
     }
 
@@ -285,7 +297,9 @@ impl MirGen {
                 // Handle different pattern types
                 match &**pattern {
                     AstNode::Var(name) => {
+                        self.pending_closure_binding = Some(name.clone());
                         let rhs_id = self.lower_expr(expr);
+                        self.pending_closure_binding = None;
                         let lhs_id = self.next_id();
                         self.stmts.push(MirStmt::Assign {
                             lhs: lhs_id,
@@ -369,6 +383,17 @@ impl MirGen {
                 }
             }
             AstNode::Assign(lhs, rhs) => {
+                // PY-A: parallel assignment `a, b = x, y` (tuple unpacking with
+                // tuple rhs; call-return unpacking needs temps — later item)
+                if let (AstNode::Tuple(litems), AstNode::Tuple(ritems)) = (&**lhs, &**rhs) {
+                    if litems.len() == ritems.len() && !litems.is_empty() {
+                        for (l, r) in litems.iter().zip(ritems.iter()) {
+                            let pair = AstNode::Assign(Box::new(l.clone()), Box::new(r.clone()));
+                            self.lower_ast(&pair);
+                        }
+                        return;
+                    }
+                }
                 let rhs_id = self.lower_expr(rhs);
                 if let AstNode::Subscript { base, index } = &**lhs {
                     let base_id = self.lower_expr(base);
@@ -1562,7 +1587,7 @@ impl MirGen {
                         }
                     } else {
                         self.stmts.push(MirStmt::Call {
-                            func: op.clone(),
+                            func: op.to_string(),
                             args: vec![left_id, right_id],
                             dest,
                             type_args: vec![],
@@ -2214,6 +2239,75 @@ impl MirGen {
                     arg_ids.push(self.lower_expr(a));
                 }
 
+                // PY-A: `x in container` membership — strings via
+                // host_str_contains; other container kinds are a V1 limit
+                // (emit 0 with a compile-time note).
+                if method == "__contains__" {
+                    let is_str = receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::Str));
+                    if is_str && arg_ids.len() == 2 {
+                        self.stmts.push(MirStmt::Call {
+                            func: "host_str_contains".to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Bool);
+                        return id;
+                    }
+                    eprintln!(
+                        "warning: `in` membership is only supported for strings in V1 (container type: {:?})",
+                        receiver_ty
+                    );
+                    self.exprs.insert(id, MirExpr::IntLit(0));
+                    self.type_map.insert(id, Type::Bool);
+                    return id;
+                }
+
+                // PY-A: string methods — dispatch to host_str_* runtime by
+                // receiver type (Python s.upper()/s.contains(x)/... )
+                if receiver_ty.as_ref().map_or(false, |t| matches!(t, Type::Str)) {
+                    let m = match method.as_str() {
+                        "upper" => Some(("host_str_to_uppercase", 1usize, "str")),
+                        "lower" => Some(("host_str_to_lowercase", 1, "str")),
+                        "trim" | "strip" => Some(("host_str_trim", 1, "str")),
+                        "lstrip" => Some(("host_str_lstrip", 1, "str")),
+                        "rstrip" => Some(("host_str_rstrip", 1, "str")),
+                        "contains" => Some(("host_str_contains", 2, "bool")),
+                        "startswith" | "starts_with" => {
+                            Some(("host_str_starts_with", 2, "bool"))
+                        }
+                        "endswith" | "ends_with" => Some(("host_str_ends_with", 2, "bool")),
+                        "replace" => Some(("host_str_replace", 3, "str")),
+                        "find" | "index" => Some(("host_str_find", 2, "i64")),
+                        "count" => Some(("host_str_count", 2, "i64")),
+                        "len" => Some(("host_str_len", 1, "i64")),
+                        _ => None,
+                    };
+                    if let Some((func, argc, ret)) = m {
+                        if arg_ids.len() == argc {
+                            self.stmts.push(MirStmt::Call {
+                                func: func.to_string(),
+                                args: arg_ids.clone(),
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(
+                                id,
+                                match ret {
+                                    "str" => Type::Str,
+                                    "bool" => Type::Bool,
+                                    _ => Type::I64,
+                                },
+                            );
+                            return id;
+                        }
+                    }
+                }
+
                 // Check if this is a method call on a dynamic array
                 let (func, is_array_len, is_array_push) = if let Some(ref rty) = receiver_ty {
                     // Check if receiver is a dynamic array type
@@ -2336,6 +2430,23 @@ impl MirGen {
                                 .unwrap_or(Type::I64)
                         })
                         .collect();
+                }
+
+                // PY-A: closure call — if the callee is a var bound to a
+                // lambda/closure value, lower to a direct named call to the
+                // synthetic closure function (f(41) → __closure_0(41)).
+                let base_func = func.as_str();
+                if let Some(closure_fn) = self.closure_vars.get(base_func) {
+                    let closure_fn = closure_fn.clone();
+                    self.stmts.push(MirStmt::Call {
+                        func: closure_fn,
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
                 }
 
                 // Append arg count to disambiguate overloaded functions.
@@ -3154,7 +3265,22 @@ impl MirGen {
             }
             AstNode::Subscript { base, index } => {
                 let bid = self.lower_expr(base);
-                let iid = self.lower_expr(index);
+                let base_ty_pre = self.type_map.get(&bid).cloned().unwrap_or(Type::I64);
+                // PY-A: negative index `arr[-k]` → `arr[n-k]` for arrays with a
+                // compile-time-known size (Python semantics).
+                let index: Box<AstNode> = match (&**index, &base_ty_pre) {
+                    (
+                        AstNode::UnaryOp { op, expr },
+                        Type::Array(_, ArraySize::Literal(n)),
+                    ) if op == "-" => match &**expr {
+                        AstNode::Lit(k) if (*k as i64) <= *n as i64 && *k > 0 => {
+                            Box::new(AstNode::Lit((*n as i64 - k) as i64))
+                        }
+                        _ => index.clone(),
+                    },
+                    _ => index.clone(),
+                };
+                let iid = self.lower_expr(&index);
 
                 // Check if base is an array type (dynamic or static)
                 let base_ty = self.type_map.get(&bid).cloned().unwrap_or(Type::I64);
@@ -3282,6 +3408,8 @@ impl MirGen {
             }
             AstNode::UnaryOp { op, expr } => {
                 // Handle unary operators like ! (not)
+                // PY-A: Python `not` lowers identically to `!`
+                let op: &str = if op == "not" { "!" } else { op };
                 let expr_id = self.lower_expr(expr);
                 let dest = self.next_id();
 
@@ -3336,7 +3464,7 @@ impl MirGen {
                 } else {
                     // Other unary operators (unary plus?, etc.)
                     let stmt = MirStmt::Call {
-                        func: op.clone(),
+                        func: op.to_string(),
                         args: vec![expr_id],
                         dest,
                         type_args: vec![],
@@ -3444,11 +3572,21 @@ impl MirGen {
                     .insert(id, Type::Named(variant.clone(), vec![]));
             }
             // ── Priority D & E: Remaining Expression Nodes ──
-            AstNode::Closure { body, .. } => {
-                // Closure expression: evaluate the body as an expression.
-                // Full closure lowering would capture the environment; for now,
-                // just lower the body.
-                return self.lower_expr(body);
+            AstNode::Closure { params, body, .. } => {
+                // PY-A: lambda/closure → emitted as a standalone synthetic
+                // function `__closure_<N>`; the expression value is the
+                // function address (V1: non-capturing only — the body may
+                // reference its own params; free-variable captures fall back
+                // to the existing no-op stub behaviour, noted in the
+                // lower_closure docs).
+                let closure_name = self.lower_closure(params, body);
+                if let Some(v) = self.pending_closure_binding.take() {
+                    self.closure_vars.insert(v.clone(), closure_name.clone());
+                }
+                let addr_id = self.next_id();
+                self.exprs.insert(addr_id, MirExpr::FuncAddr(closure_name));
+                self.type_map.insert(addr_id, Type::I64);
+                return addr_id;
             }
             AstNode::Defer(body) => {
                 // Defer expression: evaluate and return the inner expression.
@@ -3593,6 +3731,77 @@ impl MirGen {
         self.exprs.insert(id, MirExpr::IntLit(n));
         self.type_map.insert(id, Type::I64);
         id
+    }
+
+    /// PY-A: lower a closure body into a standalone synthetic function and
+    /// return its name. The closure value is then the function address
+    /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call
+    /// to the named closure — no environment struct / capture machinery
+    /// (V1: non-capturing lambdas only; capturing bodies keep the prior
+    /// no-op-stub behaviour and stay known-fail).
+    fn lower_closure(&mut self, params: &[String], body: &AstNode) -> String {
+        let n = self.closure_counter;
+        self.closure_counter += 1;
+        let closure_name = format!("__closure_{}", n);
+
+        // Fresh sub-MIR with its own id space (params start at id 1).
+        let mut child = MirGen::new();
+        for p in params {
+            let id = child.next_id();
+            child.name_to_id.insert(p.clone(), id);
+            child.exprs.insert(id, MirExpr::Var(id));
+            child.type_map.insert(id, Type::I64);
+        }
+        child.stmts = params
+            .iter()
+            .enumerate()
+            .map(|(i, _)| MirStmt::ParamInit {
+                param_id: i as u32 + 1,
+                arg_index: i as u32,
+            })
+            .collect();
+        let body_val = child.lower_expr(body);
+        // Ensure the closure returns its body value.
+        if !child
+            .stmts
+            .iter()
+            .any(|s| matches!(s, MirStmt::Return { .. }))
+        {
+            child.stmts.push(MirStmt::Return { val: body_val });
+        }
+
+        let mut mir = child.build_mir(params);
+        mir.name = Some(closure_name.clone());
+        mir.is_extern = false;
+        mir.param_indices = params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.clone(), i as u32 + 1))
+            .collect();
+        self.generated_mirs.push(mir);
+        closure_name
+    }
+
+    /// Assemble a Mir from the current lowering state. Shared by
+    /// `lower_to_mir` (top-level items) and `lower_closure` (synthetic
+    /// closure functions).
+    fn build_mir(&mut self, params: &[String]) -> Mir {
+        Mir {
+            name: None,
+            generic_params: vec![],
+            param_indices: params
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (p.clone(), i as u32 + 1))
+                .collect(),
+            properties: vec![],
+            stmts: std::mem::take(&mut self.stmts),
+            exprs: std::mem::take(&mut self.exprs),
+            is_extern: false,
+            ctfe_consts: std::mem::take(&mut self.ctfe_consts),
+            type_map: std::mem::take(&mut self.type_map),
+            global_consts: std::mem::take(&mut self.global_consts),
+        }
     }
 
     pub fn take_generated_mirs(&mut self) -> Vec<Mir> {
