@@ -215,7 +215,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 let func_asts = resolver.get_registered_funcs();
-                let mir_map: HashMap<String, Mir> = func_asts
+                let mut mir_map: HashMap<String, Mir> = func_asts
                     .iter()
                     .filter_map(|ast| {
                         if let AstNode::FuncDef { name, .. } = ast {
@@ -225,6 +225,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     })
                     .collect();
+
+                // PY-A: merge synthetic lambda/closure functions into the
+                // codegen set (previously dropped — closures never compiled).
+                for extra in resolver.take_generated_closures() {
+                    mir_map.insert(extra.name.clone().unwrap_or_default(), extra);
+                }
 
                 let mut used_specs = resolver.collect_used_specializations(&asts);
 

@@ -581,6 +581,46 @@ fn parse_field_expr(input: &str) -> IResult<&str, (String, AstNode)> {
     Ok((input, (name, expr)))
 }
 
+/// PY-A/4: `lambda x, y: expr` — single-expression closure, identical to
+/// `|x, y| expr`. The colon body is comma-free (tuple return needs parens).
+fn parse_lambda(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(tag("lambda")).parse(input)?;
+    // params: comma-separated idents up to ':'
+    let mut params: Vec<String> = Vec::new();
+    let mut cur = input;
+    loop {
+        let rest = skip_ws_and_comments0(cur).map(|(i, _)| i).unwrap_or(cur);
+        if rest.starts_with(':') {
+            cur = &rest[1..];
+            break;
+        }
+        let (rest, name) = ws(parse_ident).parse(cur)?;
+        params.push(name);
+        let rest2 = skip_ws_and_comments0(rest).map(|(i, _)| i).unwrap_or(rest);
+        if rest2.starts_with(',') {
+            cur = &rest2[1..];
+        } else {
+            let rest3 = skip_ws_and_comments0(rest2).map(|(i, _)| i).unwrap_or(rest2);
+            if rest3.starts_with(':') {
+                cur = &rest3[1..];
+                break;
+            }
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+    }
+    let (input, body) = ws(parse_expr).parse(cur)?;
+    Ok((
+        input,
+        AstNode::Closure {
+            params,
+            body: Box::new(body),
+        },
+    ))
+}
+
 fn parse_closure(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag("|")).parse(input)?;
     let (input, params) = separated_list0(ws(tag(",")), ws(parse_ident)).parse(input)?;
@@ -1032,6 +1072,7 @@ fn utf8_seq_len(first_byte: u8) -> usize {
 
 pub fn parse_primary(input: &str) -> IResult<&str, AstNode> {
     alt((
+        parse_lambda,
         parse_fstring,
         parse_python_bool,
         parse_trait_query,

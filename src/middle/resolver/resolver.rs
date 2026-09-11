@@ -49,6 +49,10 @@ pub struct Resolver {
     /// Program-wide type declarations (enums/type aliases), seeded into every
     /// per-function MirGen so pattern matching and enum paths can resolve them.
     type_decls: HashMap<String, crate::middle::mir::r#gen::TypeDecl>,
+    /// Synthetic lambda/closure MIRs accumulated during per-function lowering
+    /// (they would otherwise be dropped — generated_mirs lives on the
+    /// per-call MirGen).
+    generated_closures: RefCell<HashMap<String, Mir>>,
     /// Identity inference context for capability-based type inference
     identity_inference: crate::middle::types::identity::inference::IdentityInferenceContext,
     /// Capability inferencer for identity-aware type inference
@@ -74,6 +78,7 @@ impl Resolver {
             identity_inference:
                 crate::middle::types::identity::inference::IdentityInferenceContext::new(),
             type_decls: HashMap::new(),
+            generated_closures: RefCell::new(HashMap::new()),
             capability_inferencer:
                 crate::middle::types::identity::inference::CapabilityInferencer::new(),
         };
@@ -558,7 +563,26 @@ impl Resolver {
             .with_global_consts(self.ctfe_consts.clone())
             .with_func_ret_types(ret_types)
             .with_type_decls(self.type_decls.clone());
-        mir_gen.lower_to_mir(ast)
+        let mir = mir_gen.lower_to_mir(ast);
+        // PY-A: synthetic lambda/closure functions synthesized while lowering
+        // are parked on the resolver so they reach codegen exactly once.
+        let generated = mir_gen.take_generated_mirs();
+        if !generated.is_empty() {
+            self.generated_closures
+                .borrow_mut()
+                .extend(generated.into_iter().filter_map(|m| {
+                    m.name.clone().map(|n| (n, m))
+                }));
+        }
+        mir
+    }
+
+    /// Take all synthetic closures accumulated by lower_to_mir so far.
+    pub fn take_generated_closures(&self) -> Vec<Mir> {
+        let mut v: Vec<Mir> = self.generated_closures.borrow().values().cloned().collect();
+        v.sort_by(|a, b| a.name.cmp(&b.name));
+        self.generated_closures.borrow_mut().clear();
+        v
     }
 
     /// Convert AST node to ConstValue if it's a simple constant expression
