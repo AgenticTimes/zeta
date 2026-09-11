@@ -278,7 +278,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap_or_else(|| "anon".to_string());
                     final_mirs.insert(name, mir.clone());
                 }
-                let all_mirs: Vec<Mir> = final_mirs.values().cloned().collect();
+                let mut all_mirs: Vec<Mir> = final_mirs.values().cloned().collect();
+                // Deterministic emission order: HashMap iteration order is
+                // random per process, which made LLVM's print.N collision
+                // renames (and the runtime .set alias table) flip between
+                // working and broken from run to run.
+                all_mirs.sort_by(|a, b| {
+                    a.name
+                        .as_deref()
+                        .unwrap_or("~anon")
+                        .cmp(b.name.as_deref().unwrap_or("~anon"))
+                });
 
                 let context = Context::create();
                 let mut codegen = LLVMCodegen::new(&context, "module");
