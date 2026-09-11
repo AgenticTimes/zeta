@@ -571,10 +571,13 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
         let brace_rel = after_kw.find('{').unwrap_or(after_kw.len());
         let header = after_kw[..brace_rel].trim();
         if as_var.is_none() {
+            // `except as e` / `except ValueError as e` / bare `except`
             if let Some((_, name)) = header.rsplit_once(" as ") {
                 as_var = Some(name.trim().to_string());
-            } else if header.is_empty() {
-                // bare `except` — no binding
+            } else if let Some(rest) = header.strip_prefix("as ") {
+                as_var = Some(rest.trim().to_string());
+            } else if let Some((_, name)) = header.rsplit_once(" as") {
+                as_var = Some(name.trim().to_string());
             }
         }
         let off_in_cur = cur.len() - t.len() + 6 + brace_rel;
@@ -652,17 +655,20 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
         right: Box::new(AstNode::Lit(0)),
     };
 
-    let mut out = vec![mk_call("zeta_clear_error")];
-    for st in body {
-        out.push(AstNode::If {
-            cond: Box::new(err_eq_zero.clone()),
-            then: vec![st],
-            else_: vec![],
-        });
-    }
-    let mut handler_stmts: Vec<AstNode> = Vec::new();
+    // setjmp form: `raise` longjmps IMMEDIATELY (real exception semantics)
+    let mut out = vec![mk_call("zeta_try_enter")];
+    let setjmp_call = AstNode::Call {
+        receiver: None,
+        method: "zeta_try_setjmp".to_string(),
+        args: vec![],
+        type_args: vec![],
+        structural: false,
+    };
+    let mut then_branch = body;
+    then_branch.push(mk_call("zeta_try_end"));
+    let mut else_branch: Vec<AstNode> = Vec::new();
     if let Some(v) = as_var {
-        handler_stmts.push(AstNode::Assign(
+        else_branch.push(AstNode::Assign(
             Box::new(AstNode::Var(v)),
             Box::new(AstNode::Call {
                 receiver: None,
@@ -673,18 +679,22 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
             }),
         ));
     }
-    handler_stmts.push(mk_call("zeta_clear_error"));
-    handler_stmts.extend(handler);
+    else_branch.extend(handler);
+    else_branch.push(mk_call("zeta_try_end"));
     out.push(AstNode::If {
-        cond: Box::new(err_ne_zero),
-        then: handler_stmts,
-        else_: vec![],
+        cond: Box::new(AstNode::BinaryOp {
+            op: "==".to_string(),
+            left: Box::new(setjmp_call),
+            right: Box::new(AstNode::Lit(0)),
+        }),
+        then: then_branch,
+        else_: else_branch,
     });
     out.extend(finally_body);
     Ok((cur, AstNode::Block { body: out }))
 }
 
-/// PY-A: `raise(expr)` → zeta_set_error(expr)
+/// PY-A: `raise(expr)` → zeta_raise(expr) — longjmps to the innermost try
 fn parse_raise(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(terminated(
         tag("raise"),
@@ -700,7 +710,7 @@ fn parse_raise(input: &str) -> IResult<&str, AstNode> {
         AstNode::ExprStmt {
             expr: Box::new(AstNode::Call {
                 receiver: None,
-                method: "zeta_set_error".to_string(),
+                method: "zeta_raise".to_string(),
                 args: vec![arg.unwrap_or(AstNode::Lit(0))],
                 type_args: vec![],
                 structural: false,

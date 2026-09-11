@@ -1,0 +1,25 @@
+// PY-A: try/except/finally/raise 完整语义（setjmp/longjmp，跨函数中断）
+// expect: 6
+// expect: 1007
+// expect: 555
+// expect: 2
+// expect: done
+def risky(n: i64) -> i64:
+    if n > 10:
+        raise(7)
+    return n * 2
+
+try:
+    print(risky(3))
+    print(risky(99))
+    print("never")
+except as e:
+    print(1000 + e)
+finally:
+    print(555)
+
+try:
+    print(risky(1))
+except:
+    print("not hit")
+print("done")
