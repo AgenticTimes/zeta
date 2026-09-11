@@ -116,7 +116,9 @@
 - [ ] DUPLICATE_SYM：prime_counter_fixed.z / simplest_prime_counter.z（自编译符号冲突）
 - [ ] NO_MAIN 库文件 main 包装器批量验证（test_loops/test_stability/test_suite/test_actual_issues 等，多为旧语法或测试套件文件）
 - [ ] generic `where T: Ord` 约束检查（与 PY-3 泛型语法配套）
-- [ ] closures / async codegen 补齐（PY-4 lambda 依赖此项）
+- [~] closures / async codegen 补齐（PY-4 lambda 依赖此项）
+  - [x] `lambda x: e` 单行 Python 语法解析（`parse_python_lambda` → `AstNode::Closure`，置于 `parse_simple_ident` 前防被当变量名吞掉；`|x| e` 原语法不变；未提交）
+  - [ ] 闭包值/调用 codegen（现有 `call_i64` 仅为恒等 stub；`generated_mirs` 是闭包函数发射通道；捕获环境待设计）
 - [ ] WASM 后端（官方宣传项）
 - [ ] 自举（selfhost.z 依赖完整 stdlib，长期目标）
 
@@ -164,7 +166,7 @@
 1. ~~f-string + 字符串值语义 + kqueue~~（2026-09-11 完成）
 2. ~~class + 方法语义~~（2026-09-11 完成，commit `ad8532ab`）
 3. ~~多参 print 修复 + 泛型多类型实例化~~（2026-09-11 完成，commit `24f17a57`/`ca06735e`）
-4. closures codegen（解锁 t12 lambda）
+4. closure codegen（解锁 t12 lambda；lambda 语法解析已完成，codegen 进行中）
 5. std::quantum / DUPLICATE_SYM / NO_MAIN 批量
 
 ## 已知非阻塞
