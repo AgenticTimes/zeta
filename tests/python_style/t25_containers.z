@@ -1,0 +1,23 @@
+// PY-A: 容器操作 —— dict 下标/get/in、Vec::new+push+len、字符串 split
+// expect: 2
+// expect: 1
+// expect: 0
+// expect: has a
+// expect: 2
+// expect: 3
+// expect: b
+d = {"a": 1, "b": 2}
+print(d["b"])
+print(d.get("a"))
+print(d.get("zzz"))
+if "a" in d:
+    print("has a")
+
+v = Vec::new()
+v = v.push(5)
+v = v.push(9)
+print(len(v))
+
+parts = "a,b,c".split(",")
+print(len(parts))
+print(parts[1])

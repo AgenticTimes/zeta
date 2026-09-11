@@ -527,21 +527,12 @@ impl MirGen {
                     err_dest: err,
                 });
             }
-            AstNode::DictLit { entries } => {
-                let map_id = self.next_id();
-                self.stmts.push(MirStmt::MapNew { dest: map_id });
-                for (k, v) in entries {
-                    let kid = self.lower_expr(k);
-                    let vid = self.lower_expr(v);
-                    self.stmts.push(MirStmt::DictInsert {
-                        map_id,
-                        key_id: kid,
-                        val_id: vid,
-                    });
-                }
-                self.exprs.insert(map_id, MirExpr::Var(map_id));
-                self.type_map
-                    .insert(map_id, Type::Named("map".to_string(), vec![]));
+            AstNode::DictLit { .. } => {
+                // PY-A fix: dict literals are expressions (assignment rhs,
+                // call args). Delegated to lower_expr, which owns the real
+                // lowering — lower_expr had NO DictLit branch, so a dict rhs
+                // silently became IntLit(0).
+                self.lower_expr(ast);
             }
             AstNode::Subscript { base, index } => {
                 // This is handled in lower_expr
@@ -1259,6 +1250,25 @@ impl MirGen {
         }
     }
 
+    /// PY-A: normalize a dict key — string keys hash by CONTENT (map_str_key,
+    /// FNV-1a) because identical literals allocate distinct handles and the
+    /// runtime map compares keys numerically. Non-string keys pass through.
+    fn lower_map_key(&mut self, id: u32) -> u32 {
+        if matches!(self.type_map.get(&id), Some(Type::Str)) {
+            let nid = self.next_id();
+            self.stmts.push(MirStmt::Call {
+                func: "map_str_key".to_string(),
+                args: vec![id],
+                dest: nid,
+                type_args: vec![],
+            });
+            self.exprs.insert(nid, MirExpr::Var(nid));
+            self.type_map.insert(nid, Type::I64);
+            return nid;
+        }
+        id
+    }
+
     /// PY-A: ensure an expression id is a string handle — non-string values
     /// go through the to_string_* runtime dispatch (Python `str()`).
     fn lower_to_string(&mut self, id: u32) -> u32 {
@@ -1755,6 +1765,24 @@ impl MirGen {
                 return dest_id;
             }
 
+            AstNode::DictLit { entries } => {
+                let map_id = id;
+                self.stmts.push(MirStmt::MapNew { dest: map_id });
+                for (k, v) in entries {
+                    let kid0 = self.lower_expr(k);
+                    let kid = self.lower_map_key(kid0);
+                    let vid = self.lower_expr(v);
+                    self.stmts.push(MirStmt::DictInsert {
+                        map_id,
+                        key_id: kid,
+                        val_id: vid,
+                    });
+                }
+                self.exprs.insert(map_id, MirExpr::Var(map_id));
+                self.type_map
+                    .insert(map_id, Type::Named("map".to_string(), vec![]));
+                return map_id;
+            }
             AstNode::Range {
                 start,
                 end,
@@ -2092,6 +2120,14 @@ impl MirGen {
                                 type_args: vec![],
                             });
                         }
+                        Some(Type::DynamicArray(_)) => {
+                            self.stmts.push(MirStmt::Call {
+                                func: "vec_len".to_string(),
+                                args: vec![arg_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                        }
                         _ => {
                             self.stmts.push(MirStmt::Call {
                                 func: "array_len".to_string(),
@@ -2246,6 +2282,9 @@ impl MirGen {
                     let is_str = receiver_ty
                         .as_ref()
                         .map_or(false, |t| matches!(t, Type::Str));
+                    let is_map = receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"));
                     if is_str && arg_ids.len() == 2 {
                         self.stmts.push(MirStmt::Call {
                             func: "host_str_contains".to_string(),
@@ -2257,12 +2296,98 @@ impl MirGen {
                         self.type_map.insert(id, Type::Bool);
                         return id;
                     }
+                    if is_map && arg_ids.len() == 2 {
+                        // `key in dict` — DictGet(key) != 0 (V1: value 0 is
+                        // indistinguishable from a missing key); DictGet keeps
+                        // the same codegen path as d[key] subscripting.
+                        let get_id = self.next_id();
+                        let key_id = self.lower_map_key(arg_ids[1]);
+                        self.stmts.push(MirStmt::DictGet {
+                            map_id: arg_ids[0],
+                            key_id,
+                            dest: get_id,
+                        });
+                        self.exprs.insert(get_id, MirExpr::Var(get_id));
+                        self.type_map.insert(get_id, Type::I64);
+                        let zero_id = self.next_id();
+                        self.exprs.insert(zero_id, MirExpr::IntLit(0));
+                        self.type_map.insert(zero_id, Type::I64);
+                        // i64 != via BinaryOp (the verified comparison path)
+                        self.exprs.insert(
+                            id,
+                            MirExpr::BinaryOp {
+                                op: "!=".to_string(),
+                                left: get_id,
+                                right: zero_id,
+                            },
+                        );
+                        self.type_map.insert(id, Type::Bool);
+                        return id;
+                    }
                     eprintln!(
-                        "warning: `in` membership is only supported for strings in V1 (container type: {:?})",
+                        "warning: `in` membership is only supported for strings/dicts in V1 (container type: {:?})",
                         receiver_ty
                     );
                     self.exprs.insert(id, MirExpr::IntLit(0));
                     self.type_map.insert(id, Type::Bool);
+                    return id;
+                }
+
+                // PY-A: Vec push — vec_push may reallocate and RETURNS the
+                // (new) data handle; the caller must rebind (`v = v.push(x)`).
+                if method == "push"
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::DynamicArray(_)))
+                    && arg_ids.len() == 2
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: "vec_push".to_string(),
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, receiver_ty.clone().unwrap());
+                    return id;
+                }
+
+                // PY-A: dict methods — Python d.get(k) (missing key → 0)
+                if method == "get"
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
+                    && arg_ids.len() == 2
+                {
+                    // Same codegen path as d[k] subscripting (DictGet)
+                    let key_id = self.lower_map_key(arg_ids[1]);
+                    self.stmts.push(MirStmt::DictGet {
+                        map_id: arg_ids[0],
+                        key_id,
+                        dest: id,
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+
+                // PY-A: Vec::new() → runtime vec_new with initial capacity
+                // (vec_push growth doubles from cap, so cap must be > 0)
+                if (method == "Vec::new" || (method == "new" && matches!(
+                    receiver.as_deref(),
+                    Some(AstNode::Var(v)) if v == "Vec"
+                ))) && args.is_empty() {
+                    let cap_id = self.next_id();
+                    self.exprs.insert(cap_id, MirExpr::IntLit(8));
+                    self.type_map.insert(cap_id, Type::I64);
+                    self.stmts.push(MirStmt::Call {
+                        func: "vec_new".to_string(),
+                        args: vec![cap_id],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::DynamicArray(Box::new(Type::I64)));
                     return id;
                 }
 
@@ -2284,9 +2409,23 @@ impl MirGen {
                         "find" | "index" => Some(("host_str_find", 2, "i64")),
                         "count" => Some(("host_str_count", 2, "i64")),
                         "len" => Some(("host_str_len", 1, "i64")),
+                        "split" => Some(("host_str_split", 2, "split")),
                         _ => None,
                     };
                     if let Some((func, argc, ret)) = m {
+                        if ret == "split" {
+                            // returns a Vec handle of string elements
+                            self.stmts.push(MirStmt::Call {
+                                func: func.to_string(),
+                                args: arg_ids.clone(),
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map
+                                .insert(id, Type::DynamicArray(Box::new(Type::Str)));
+                            return id;
+                        }
                         if arg_ids.len() == argc {
                             self.stmts.push(MirStmt::Call {
                                 func: func.to_string(),
@@ -3017,6 +3156,23 @@ impl MirGen {
                         .next()
                         .map(|c| c.is_uppercase())
                         .unwrap_or(false);
+                // PY-A: `Vec::new()` → runtime vec_new with initial capacity
+                // (vec_push growth doubles from cap, so cap must be > 0).
+                if path.len() == 1 && path[0] == "Vec" && method == "new" && args.is_empty() {
+                    let cap_id = self.next_id();
+                    self.exprs.insert(cap_id, MirExpr::IntLit(8));
+                    self.type_map.insert(cap_id, Type::I64);
+                    self.stmts.push(MirStmt::Call {
+                        func: "vec_new".to_string(),
+                        args: vec![cap_id],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                    return id;
+                }
                 if !path.is_empty() && type_args.is_empty() && is_upper {
                     // Lower as enum/struct constructor
                     let mut field_ids = Vec::new();
@@ -3328,10 +3484,12 @@ impl MirGen {
                         type_args: vec![],
                     });
                 } else {
-                    // Use DictGet for other types (maps/dicts)
+                    // Use DictGet for other types (maps/dicts) — string keys
+                    // are content-hashed (see lower_map_key)
+                    let key_id = self.lower_map_key(iid);
                     self.stmts.push(MirStmt::DictGet {
                         map_id: bid,
-                        key_id: iid,
+                        key_id,
                         dest: id,
                     });
                 }

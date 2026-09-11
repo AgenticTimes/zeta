@@ -154,8 +154,9 @@
 - [x] **负索引 `arr[-k]`**（2026-09-12）：静态尺寸数组编译期改写 `n-k`；切片 `arr[1:3]` 仍待做（需 runtime slice 支持）
 - [x] **链式比较**（2026-09-12）：parse_comparison 重写为收集-折叠（`a < b < c` → `(a<b) && (b<c)`，边界操作数复用），is/is not/in/not in 均可入链
 - [x] **元组并行赋值 V1**（2026-09-12）：`a, b = x, y`（含交换）；`f()` 返回元组解包需临时变量，待做
-- [x] **字符串方法**（2026-09-12）：按 receiver 类型分发——upper/lower/trim/strip/lstrip/rstrip/contains/startswith/ends_with/replace/find/count/len；split 待 runtime 实现
-- [ ] dict 方法（`.keys()`/`.values()`/`.get()` 默认值）
+- [x] **字符串方法**（2026-09-12）：按 receiver 类型分发——upper/lower/trim/strip/lstrip/rstrip/contains/startswith/ends_with/replace/find/count/len/split（runtime `str_split` 返回 Vec 布局 handle）
+- [x] **dict 下标/get/in**（2026-09-12，架构修复）：发现 **`lower_expr` 缺 DictLit 分支**（dict 字面量作为表达式时静默变 IntLit(0)，分支只在 lower_ast 语句级 match 里）——补齐并委托；字符串 key 内容哈希（`map_str_key` FNV-1a，同字面量不同 handle 的 key 归一）；`d.get(k)`/`k in d` 走 DictGet 同路径
+- [ ] dict `.keys()`/`.values()`/`.get(k, default)` 仍待 runtime 扩展
 - [ ] try/except 映射（Zeta 有 Result/try-prop，语义对齐需设计）
 - [x] **装饰器 `@dec`**（2026-09-12）：解析消费忽略（def/class 前合法；语义改写待做）
 - [ ] 顶层 type alias（既有坏点）+ 顶层变量（模块级 `x = 5` → 全局）
