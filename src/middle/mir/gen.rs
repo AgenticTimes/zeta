@@ -2171,6 +2171,119 @@ impl MirGen {
                     return id;
                 }
 
+                // PY-A: Python builtins abs/min/max/sum — dispatch by type
+                if receiver.is_none() && method == "abs" && args.len() == 1 {
+                    let arg_id = self.lower_expr(&args[0]);
+                    let f64_arg = matches!(
+                        self.type_map.get(&arg_id),
+                        Some(Type::F64) | Some(Type::F32)
+                    );
+                    // PY-A fix: f64 abs via the llvm.fabs.f64 intrinsic — a
+                    // runtime extern with an i64 signature coerced the float
+                    // bit pattern and returned garbage.
+                    let func = if f64_arg { "llvm.fabs.f64" } else { "zeta_abs_i64" };
+                    self.stmts.push(MirStmt::Call {
+                        func: func.to_string(),
+                        args: vec![arg_id],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(
+                        id,
+                        if f64_arg { Type::F64 } else { Type::I64 },
+                    );
+                    return id;
+                }
+                if receiver.is_none()
+                    && (method == "min" || method == "max")
+                    && args.len() == 2
+                {
+                    let a_id = self.lower_expr(&args[0]);
+                    let b_id = self.lower_expr(&args[1]);
+                    let any_f = matches!(self.type_map.get(&a_id), Some(Type::F64) | Some(Type::F32))
+                        || matches!(self.type_map.get(&b_id), Some(Type::F64) | Some(Type::F32));
+                    if any_f {
+                        // f64 via llvm.minnum/maxnum intrinsics (double args)
+                        let intr = format!(
+                            "llvm.{}.f64",
+                            if method == "min" { "minnum" } else { "maxnum" }
+                        );
+                        self.stmts.push(MirStmt::Call {
+                            func: intr,
+                            args: vec![a_id, b_id],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::F64);
+                        return id;
+                    }
+                    let stem = if method == "min" { "zeta_min" } else { "zeta_max" };
+                    self.stmts.push(MirStmt::Call {
+                        func: format!("{}_{}", stem, "i64"),
+                        args: vec![a_id, b_id],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+                if receiver.is_none() && method == "sum" && args.len() == 1 {
+                    let arg_id = self.lower_expr(&args[0]);
+                    let (func, extra) = match self.type_map.get(&arg_id).cloned() {
+                        Some(Type::DynamicArray(_)) => ("zeta_sum_vec".to_string(), Vec::new()),
+                        Some(Type::Array(_, ArraySize::Literal(n))) => (
+                            "zeta_sum_n".to_string(),
+                            vec![{
+                                let nid = self.next_id();
+                                self.exprs.insert(nid, MirExpr::IntLit(n as i64));
+                                self.type_map.insert(nid, Type::I64);
+                                nid
+                            }],
+                        ),
+                        _ => ("zeta_sum_n".to_string(), Vec::new()),
+                    };
+                    let mut call_args = vec![arg_id];
+                    call_args.extend(extra);
+                    self.stmts.push(MirStmt::Call {
+                        func,
+                        args: call_args,
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+                // PY-A: f-string format spec — `__fmtspec__(value, spec)` →
+                // runtime snprintf with the user spec (V1: f64 uses it, i64/str
+                // fall back to plain conversion)
+                if method == "__fmtspec__" && receiver.is_none() && args.len() == 2 {
+                    let val_id = self.lower_expr(&args[0]);
+                    let spec_id = self.lower_expr(&args[1]);
+                    let func = match self.type_map.get(&val_id).cloned() {
+                        Some(Type::F64) | Some(Type::F32) => "zeta_fmt_f64_spec",
+                        Some(Type::Str) => "to_string_str",
+                        _ => "to_string_i64",
+                    };
+                    let call_args: Vec<u32> = if func == "zeta_fmt_f64_spec" {
+                        vec![val_id, spec_id]
+                    } else {
+                        vec![val_id]
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: func.to_string(),
+                        args: call_args,
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::Str);
+                    return id;
+                }
+
                 // PY-A: Python `str(x)` — convert any value to its string form
                 if method == "str" && receiver.is_none() && args.len() == 1 {
                     let arg_id = self.lower_expr(&args[0]);
@@ -2457,6 +2570,24 @@ impl MirGen {
                         map_id: arg_ids[0],
                         key_id,
                         dest: id,
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+                // PY-A: d.get(k, default) — 3-arg form via runtime
+                if method == "get"
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
+                    && arg_ids.len() == 3
+                {
+                    let key_id = self.lower_map_key(arg_ids[1]);
+                    self.stmts.push(MirStmt::Call {
+                        func: "map_get_default".to_string(),
+                        args: vec![arg_ids[0], key_id, arg_ids[2]],
+                        dest: id,
+                        type_args: vec![],
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, Type::I64);
@@ -3663,6 +3794,15 @@ impl MirGen {
                 let expr_id = self.lower_expr(expr);
                 let dest = self.next_id();
 
+                // PY-A fix: negative float literals fold at MIR — the
+                // i64 unary_minus path corrupts their bit pattern (→ NaN).
+                if op == "-" {
+                    if let AstNode::FloatLit(v) = &**expr {
+                        self.exprs.insert(dest, MirExpr::FloatLit(-v.parse::<f64>().unwrap_or(0.0)));
+                        self.type_map.insert(dest, Type::F64);
+                        return dest;
+                    }
+                }
                 if op == "&mut" || op == "&" {
                     // Address-of: pass the variable's location, not its value.
                     // For a simple variable, use its alloca address (ptrtoint in codegen).
@@ -3703,14 +3843,35 @@ impl MirGen {
                     // by gen_expr_safe, so we don't need an alloca to load from.
                     return dest;
                 } else if op == "-" {
-                    // Unary minus - use special function name to avoid conflict with binary minus
-                    let stmt = MirStmt::Call {
-                        func: "unary_minus".to_string(),
-                        args: vec![expr_id],
-                        dest,
-                        type_args: vec![],
-                    };
-                    self.stmts.push(stmt);
+                    // PY-A fix: floating-point operands must NOT go through
+                    // the i64 unary_minus runtime (bit-pattern negation →
+                    // NaN for negatives like -2.5). 0 - x via BinaryOp keeps
+                    // the float type; ints keep the dedicated symbol.
+                    let is_float = matches!(
+                        self.type_map.get(&expr_id),
+                        Some(Type::F64) | Some(Type::F32)
+                    );
+                    if is_float {
+                        let zero_id = self.next_id();
+                        self.exprs.insert(zero_id, MirExpr::FloatLit(0.0));
+                        self.type_map.insert(zero_id, Type::F64);
+                        self.exprs.insert(
+                            dest,
+                            MirExpr::BinaryOp {
+                                op: "-".to_string(),
+                                left: zero_id,
+                                right: expr_id,
+                            },
+                        );
+                    } else {
+                        // Unary minus - use special function name to avoid conflict with binary minus
+                        self.stmts.push(MirStmt::Call {
+                            func: "unary_minus".to_string(),
+                            args: vec![expr_id],
+                            dest,
+                            type_args: vec![],
+                        });
+                    }
                 } else {
                     // Other unary operators (unary plus?, etc.)
                     let stmt = MirStmt::Call {

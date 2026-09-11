@@ -949,9 +949,26 @@ fn parse_fstring(input: &str) -> IResult<&str, AstNode> {
             if !lit.is_empty() {
                 parts.push(AstNode::StringLit(std::mem::take(&mut lit)));
             }
-            let expr = match parse_full_expr(inner) {
+            // PY-A: format spec `{expr:spec}` — split on the first top-level
+            // colon (outside quotes/brackets). V1: f64 uses the spec via
+            // zeta_fmt_f64_spec; other types ignore it.
+            let (expr_text, spec) = match split_format_spec(inner) {
+                Some((e, sp)) if !sp.is_empty() => (e, Some(sp)),
+                _ => (inner, None),
+            };
+            let base_expr = match parse_full_expr(expr_text) {
                 Ok((rem, e)) if rem.trim().is_empty() => e,
-                _ => AstNode::StringLit(inner.to_string()), // V1: format specs fall back to literal
+                _ => AstNode::StringLit(expr_text.to_string()), // V1: unparsable → literal
+            };
+            let expr = match spec {
+                Some(sp) => AstNode::Call {
+                    receiver: None,
+                    method: "__fmtspec__".to_string(),
+                    args: vec![base_expr, AstNode::StringLit(sp.to_string())],
+                    type_args: vec![],
+                    structural: false,
+                },
+                None => base_expr,
             };
             parts.push(expr);
             i = j + 1;
@@ -973,6 +990,35 @@ fn parse_fstring(input: &str) -> IResult<&str, AstNode> {
         i += ch_len;
     }
     err(input) // unterminated f-string
+}
+
+/// PY-A: split `{expr:spec}` at the first top-level colon (outside quotes
+/// and brackets). Returns (expr_text, spec) or None when there is no spec.
+fn split_format_spec(inner: &str) -> Option<(&str, &str)> {
+    let b = inner.as_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    for (i, &c) in b.iter().enumerate() {
+        if let Some(q) = quote {
+            if c == b'\\' {
+                continue; // skip escaped char (index i+1 skipped by loop too)
+            }
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            b'\'' | b'"' => quote = Some(c),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b':' if depth == 0 => {
+                return Some((&inner[..i], inner[i + 1..].trim()));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn utf8_seq_len(first_byte: u8) -> usize {

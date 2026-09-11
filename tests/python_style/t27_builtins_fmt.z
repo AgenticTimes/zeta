@@ -1,0 +1,22 @@
+// PY-A: dict.get(k, default) / 内置 abs·min·max·sum / f-string 格式规格
+// expect: pi=3.14
+// expect: n=7
+// expect: 5
+// expect: 42
+// expect: 7
+// expect: 2.500000
+// expect: 3
+// expect: 9
+// expect: 6
+pi = 3.14159
+print(f"pi={pi:.2f}")
+print(f"n={7}")
+d = {"k": 5}
+print(d.get("k", 99))
+print(d.get("nope", 42))
+print(abs(-7))
+print(abs(-2.5))
+print(min(3, 9))
+print(max(3, 9))
+arr = [1, 2, 3]
+print(sum(arr))
