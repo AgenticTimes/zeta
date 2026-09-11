@@ -10,9 +10,10 @@ use nom::IResult;
 use nom::Parser;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while};
+use nom::character::complete::none_of;
 use nom::combinator::{map, opt, peek};
 use nom::error::Error as NomError;
-use nom::sequence::{delimited, preceded};
+use nom::sequence::{delimited, preceded, terminated};
 
 pub fn parse_block_body(input: &str) -> IResult<&str, Vec<AstNode>> {
     let mut body = vec![];
@@ -532,6 +533,182 @@ fn parse_python_from_import(input: &str) -> IResult<&str, AstNode> {
     ))
 }
 
+/// PY-A: `try/except/finally` — desugars (parser-only, no AST change) into:
+///   zeta_try_enter()
+///   if zeta_try_setjmp() == 0 { body; zeta_try_end() }
+///   else { [e = zeta_last_error();] handler; zeta_try_end() }
+///   [finally body]
+/// The runtime longjmps from `raise` back into zeta_try_setjmp's frame.
+/// V1: the first except handler catches everything (error type ignored);
+/// multiple except clauses beyond the first are consumed and ignored.
+fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(tag("try")).parse(input)?;
+    let (input, _) = ws(tag("{")).parse(input)?;
+    let (input, body) = parse_block_body(input)?;
+    let (input, _) = ws(tag("}")).parse(input)?;
+
+    let mut handler: Vec<AstNode> = Vec::new();
+    let mut as_var: Option<String> = None;
+    let mut saw_except = false;
+    let mut cur = input;
+    loop {
+        // After preprocessing, each except header reads `except ... {`.
+        let t = cur.trim_start();
+        if !t.starts_with("except") {
+            break;
+        }
+        let after_kw = &t[6..];
+        if after_kw
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            break;
+        }
+        saw_except = true;
+        // Everything between `except` and the body `{` is the header
+        // (optional error type + optional `as var`)
+        let brace_rel = after_kw.find('{').unwrap_or(after_kw.len());
+        let header = after_kw[..brace_rel].trim();
+        if as_var.is_none() {
+            if let Some((_, name)) = header.rsplit_once(" as ") {
+                as_var = Some(name.trim().to_string());
+            } else if header.is_empty() {
+                // bare `except` — no binding
+            }
+        }
+        let off_in_cur = cur.len() - t.len() + 6 + brace_rel;
+        cur = &cur[off_in_cur..];
+        let (next, _) = ws(tag("{")).parse(cur)?;
+        let (next, hbody) = parse_block_body(next)?;
+        let (next, _) = ws(tag("}")).parse(next)?;
+        if handler.is_empty() {
+            handler = hbody;
+        }
+        cur = next;
+    }
+    if !saw_except {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+
+    // optional finally
+    let mut finally_body: Vec<AstNode> = Vec::new();
+    let t = cur.trim_start();
+    if t.starts_with("finally") {
+        let after = &t[7..];
+        if !after
+            .chars()
+            .next()
+            .map_or(true, |c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            let brace_off = after.find('{').unwrap_or(0);
+            let off_in_cur = cur.len() - cur.trim_start().len() + 7 + brace_off;
+            cur = &cur[off_in_cur..];
+            let (next, _) = ws(tag("{")).parse(cur)?;
+            let (next, fbody) = parse_block_body(next)?;
+            let (next, _) = ws(tag("}")).parse(next)?;
+            finally_body = fbody;
+            cur = next;
+        }
+    }
+
+    // ── desugar (error-state polling — no setjmp) ──
+    // raise sets a global error; every body statement is guarded by
+    // `if zeta_last_error() == 0` so the rest of the body is skipped;
+    // the trailing `if err != 0` runs the handler (first statement clears
+    // the error so outer scopes continue normally). finally runs after.
+    let mk_call = |name: &str| AstNode::ExprStmt {
+        expr: Box::new(AstNode::Call {
+            receiver: None,
+            method: name.to_string(),
+            args: vec![],
+            type_args: vec![],
+            structural: false,
+        }),
+    };
+    let err_eq_zero = AstNode::BinaryOp {
+        op: "==".to_string(),
+        left: Box::new(AstNode::Call {
+            receiver: None,
+            method: "zeta_last_error".to_string(),
+            args: vec![],
+            type_args: vec![],
+            structural: false,
+        }),
+        right: Box::new(AstNode::Lit(0)),
+    };
+    let err_ne_zero = AstNode::BinaryOp {
+        op: "!=".to_string(),
+        left: Box::new(AstNode::Call {
+            receiver: None,
+            method: "zeta_last_error".to_string(),
+            args: vec![],
+            type_args: vec![],
+            structural: false,
+        }),
+        right: Box::new(AstNode::Lit(0)),
+    };
+
+    let mut out = vec![mk_call("zeta_clear_error")];
+    for st in body {
+        out.push(AstNode::If {
+            cond: Box::new(err_eq_zero.clone()),
+            then: vec![st],
+            else_: vec![],
+        });
+    }
+    let mut handler_stmts: Vec<AstNode> = Vec::new();
+    if let Some(v) = as_var {
+        handler_stmts.push(AstNode::Assign(
+            Box::new(AstNode::Var(v)),
+            Box::new(AstNode::Call {
+                receiver: None,
+                method: "zeta_last_error".to_string(),
+                args: vec![],
+                type_args: vec![],
+                structural: false,
+            }),
+        ));
+    }
+    handler_stmts.push(mk_call("zeta_clear_error"));
+    handler_stmts.extend(handler);
+    out.push(AstNode::If {
+        cond: Box::new(err_ne_zero),
+        then: handler_stmts,
+        else_: vec![],
+    });
+    out.extend(finally_body);
+    Ok((cur, AstNode::Block { body: out }))
+}
+
+/// PY-A: `raise(expr)` → zeta_set_error(expr)
+fn parse_raise(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(terminated(
+        tag("raise"),
+        peek(none_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")),
+    ))
+    .parse(input)?;
+    let (input, _) = ws(tag("(")).parse(input)?;
+    let (input, arg) = opt(ws(parse_full_expr)).parse(input)?;
+    let (input, _) = ws(tag(")")).parse(input)?;
+    let (input, _) = opt(ws(tag(";"))).parse(input)?;
+    Ok((
+        input,
+        AstNode::ExprStmt {
+            expr: Box::new(AstNode::Call {
+                receiver: None,
+                method: "zeta_set_error".to_string(),
+                args: vec![arg.unwrap_or(AstNode::Lit(0))],
+                type_args: vec![],
+                structural: false,
+            }),
+        },
+    ))
+}
+
 pub fn parse_stmt(input: &str) -> IResult<&str, AstNode> {
     alt((
         parse_return,
@@ -551,6 +728,8 @@ pub fn parse_stmt(input: &str) -> IResult<&str, AstNode> {
         parse_func,
         parse_python_from_import,
         parse_python_import,
+        parse_try_stmt,
+        parse_raise,
         parse_pass,
         parse_expr_stmt,
     ))

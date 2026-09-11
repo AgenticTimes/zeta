@@ -648,6 +648,11 @@ impl Resolver {
                 }
             }
             match node {
+                AstNode::Call { method, receiver, .. } if method.starts_with("zeta_") || method == "__contains__" || method == "__fmtspec__" || method == "__slice__" => {
+                    // PY-A: runtime-dispatched calls (zeta_* helpers and
+                    // __dunder__ builtins) are handled by the codegen method
+                    // dispatch — never monomorphize them as user functions.
+                }
                 AstNode::FuncDef { body, .. } => body.iter().for_each(|s| walk(s, used, resolver)),
                 AstNode::Return(inner) => walk(inner, used, resolver),
                 AstNode::ExprStmt { expr } => walk(expr, used, resolver),
