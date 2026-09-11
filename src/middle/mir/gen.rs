@@ -2070,22 +2070,47 @@ impl MirGen {
                     return id;
                 }
 
-                // PY-4: Python-style `print(x)` — the runtime's legacy
-                // `print` symbol is string-only (fputs) and crashes on ints.
-                // Python semantics: print adds a trailing newline, so a
-                // single argument dispatches to the println_* family;
-                // multi-arg keeps the print.N alias path.
-                if method == "print" && receiver.is_none() && args.len() == 1 {
-                    let arg_id = self.lower_expr(&args[0]);
-                    let func = match self.type_map.get(&arg_id) {
-                        Some(Type::Str) => "println_str",
-                        Some(Type::F64) | Some(Type::F32) => "println_f64",
-                        _ => "println_i64",
-                    };
-                    self.stmts.push(MirStmt::VoidCall {
-                        func: func.to_string(),
-                        args: vec![arg_id],
-                    });
+                // PY-4/PY-A: Python-style `print(x...)` — the runtime's
+                // legacy `print` symbol is string-only (fputs) and crashes on
+                // ints. Python semantics: dispatch each arg by type, separate
+                // args with a space, and end with a newline (the last arg goes
+                // through the println_* family which bakes in the newline).
+                // Multi-arg no longer routes through the fragile print.N C
+                // alias table (which only emitted the first arg).
+                if method == "print" && receiver.is_none() && !args.is_empty() {
+                    let mut arg_ids = vec![];
+                    for a in args {
+                        arg_ids.push(self.lower_expr(a));
+                    }
+                    let n = arg_ids.len();
+                    // One shared space literal for separators.
+                    let space_id = self.next_id();
+                    self.exprs.insert(space_id, MirExpr::StringLit(" ".to_string()));
+                    self.type_map.insert(space_id, Type::Str);
+                    for (i, arg_id) in arg_ids.iter().enumerate() {
+                        if i > 0 {
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: "print_str".to_string(),
+                                args: vec![space_id],
+                            });
+                        }
+                        let is_last = i + 1 == n;
+                        let func = match self.type_map.get(arg_id) {
+                            Some(Type::Str) => {
+                                if is_last { "println_str" } else { "print_str" }
+                            }
+                            Some(Type::F64) | Some(Type::F32) => {
+                                if is_last { "println_f64" } else { "print_f64" }
+                            }
+                            _ => {
+                                if is_last { "println_i64" } else { "print_i64" }
+                            }
+                        };
+                        self.stmts.push(MirStmt::VoidCall {
+                            func: func.to_string(),
+                            args: vec![*arg_id],
+                        });
+                    }
                     let unit_id = self.next_id();
                     self.exprs.insert(unit_id, MirExpr::IntLit(0));
                     self.type_map.insert(unit_id, Type::Tuple(vec![]));

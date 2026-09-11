@@ -1,0 +1,9 @@
+// PY-A: 多参 print 空格分隔全输出（修复 print.N alias 路径只出首参）
+// expect: Running:  3 ...
+// expect: a b
+// expect: x= 1  y= 2.500000
+// expect: 42 str
+print("Running: ", 3, "...")
+print("a", "b")
+print("x=", 1, " y=", 2.5)
+print(42, "str")
