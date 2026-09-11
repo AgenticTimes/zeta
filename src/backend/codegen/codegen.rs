@@ -1536,7 +1536,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     self.collect_ids_from_expr_safe(e, ids, exprs);
                 }
             }
-            MirExpr::ConstEval(_) | MirExpr::StringLit(_) | MirExpr::IntLit(_) | MirExpr::Syscall(_, _) => {
+            MirExpr::ConstEval(_) | MirExpr::StringLit(_) | MirExpr::IntLit(_) | MirExpr::Syscall(_, _) | MirExpr::FuncAddr(_) => {
                 // No IDs to collect
             }
         }
@@ -2333,6 +2333,23 @@ impl<'ctx> LLVMCodegen<'ctx> {
         } else {
             self.mangle_function_name(base_name, type_args)
         };
+        // Dedupe guard: adding a function whose name already exists makes LLVM
+        // auto-rename the duplicate (name.N), producing call sites that point
+        // at symbols with no runtime definition. Reuse or arity-suffix instead.
+        if let Some(existing) = self.module.get_function(&actual_name) {
+            if existing.count_params() == args_count as u32 {
+                return existing;
+            }
+            let arity_name = format!("{}_{}", actual_name, args_count);
+            if let Some(f) = self.module.get_function(&arity_name) {
+                return f;
+            }
+            let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect();
+            let f = self
+                .module
+                .add_function(&arity_name, self.i64_type.fn_type(&param_types, false), Some(Linkage::External));
+            return f;
+        }
         let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect();
         let fn_type = self.i64_type.fn_type(&param_types, false);
         self.module
@@ -4668,6 +4685,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 let gptr = global.as_pointer_value();
                 self.builder
                     .build_ptr_to_int(gptr, self.i64_type, "str_ptr_i64")
+                    .unwrap()
+                    .into()
+            }
+            // PY-A: address of a synthetic closure function (codegen lowers to
+            // the LLVM function's pointer value, i.e. the i64 of its address).
+            MirExpr::FuncAddr(name) => {
+                // Look up or declare the closure function, then take its address
+                let f = self.get_or_declare_function(name, &[], 0);
+                let fptr = f.as_global_value().as_pointer_value();
+                self.builder
+                    .build_ptr_to_int(fptr, self.i64_type, "closure_addr")
                     .unwrap()
                     .into()
             }

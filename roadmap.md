@@ -2,7 +2,7 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 `/tmp/zeta_tests`（226 文件）；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（23 case：22 pass + 1 known-fail）**
+> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**（/tmp 拷贝跨日被清后已从中恢复）；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（21 case：20 pass + 1 known-fail）**
 > 当前通过率：官方 **199/226**（超基线 198，零回归）；python_style **22/23**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
