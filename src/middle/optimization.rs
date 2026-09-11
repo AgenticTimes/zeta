@@ -302,6 +302,7 @@ pub fn common_subexpression_elimination(mir: &mut Mir) {
             MirExpr::Range { start, end } => {
                 format!("Range({}-{})", start, end)
             }
+            MirExpr::FuncAddr(name) => format!("FuncAddr({})", name),
             MirExpr::BinaryOp { op, left, right } => {
                 format!("BinaryOp({} {} {})", left, op, right)
             }

@@ -394,6 +394,35 @@ impl MirGen {
                         return;
                     }
                 }
+                // PY-A: call-return tuple unpacking `a, b = f()` — the rhs is
+                // lowered ONCE into a temp, elements read via stack_array_get
+                // (tuples materialize as fixed-size arrays).
+                if let AstNode::Tuple(litems) = &**lhs {
+                    if !litems.is_empty()
+                        && !matches!(&**rhs, AstNode::Tuple(_))
+                    {
+                        let rhs_id = self.lower_expr(rhs);
+                        for (i, l) in litems.iter().enumerate() {
+                            if let AstNode::Var(name) = l {
+                                let elem_id = self.next_id();
+                                let idx_id = self.next_id();
+                                self.exprs
+                                    .insert(idx_id, MirExpr::IntLit(i as i64));
+                                self.type_map.insert(idx_id, Type::I64);
+                                self.stmts.push(MirStmt::Call {
+                                    func: "stack_array_get".to_string(),
+                                    args: vec![rhs_id, idx_id],
+                                    dest: elem_id,
+                                    type_args: vec![],
+                                });
+                                self.name_to_id.insert(name.clone(), elem_id);
+                                self.exprs.insert(elem_id, MirExpr::Var(elem_id));
+                                self.type_map.insert(elem_id, Type::I64);
+                            }
+                        }
+                        return;
+                    }
+                }
                 let rhs_id = self.lower_expr(rhs);
                 if let AstNode::Subscript { base, index } = &**lhs {
                     let base_id = self.lower_expr(base);
@@ -2349,6 +2378,69 @@ impl MirGen {
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, receiver_ty.clone().unwrap());
+                    return id;
+                }
+
+                // PY-A: d.keys() / d.values() — iterate the table into a Vec
+                if receiver_ty
+                    .as_ref()
+                    .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
+                    && args.is_empty()
+                {
+                    let func = match method.as_str() {
+                        "keys" => Some("map_keys"),
+                        "values" => Some("map_values"),
+                        _ => None,
+                    };
+                    if let Some(fname) = func {
+                        self.stmts.push(MirStmt::Call {
+                            func: fname.to_string(),
+                            args: vec![arg_ids[0]],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map
+                            .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                        return id;
+                    }
+                }
+
+                // PY-A: `base[start:end]` slicing → runtime zeta_slice_vec,
+                // returning a Vec-layout handle (len()/indexing work on it).
+                if method == "__slice__" && arg_ids.len() == 3 {
+                    let elem = match receiver_ty.as_ref() {
+                        Some(Type::Array(e, _)) => (**e).clone(),
+                        Some(Type::DynamicArray(e)) => (**e).clone(),
+                        _ => Type::I64,
+                    };
+                    // Static-size arrays: replace the "to the end" sentinel
+                    // (-1) with the known length (zeta_slice_vec reads the
+                    // Vec header only for dynamic handles).
+                    let mut args2 = arg_ids.clone();
+                    if let Some(Type::Array(_, ArraySize::Literal(n))) =
+                        receiver_ty.as_ref()
+                    {
+                        if matches!(
+                            self.exprs.get(&args2[2]),
+                            Some(MirExpr::IntLit(-1))
+                        ) {
+                            let n_id = self.next_id();
+                            self.exprs
+                                .insert(n_id, MirExpr::IntLit(*n as i64));
+                            self.type_map.insert(n_id, Type::I64);
+                            args2[2] = n_id;
+                        }
+                    }
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_slice_vec".to_string(),
+                        args: args2,
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(elem)));
                     return id;
                 }
 

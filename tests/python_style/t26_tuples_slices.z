@@ -1,0 +1,36 @@
+// PY-A: 调用返回元组解包 / 切片（end 排他、省略形式）/ dict keys/values / type alias
+// expect: 7
+// expect: 1
+// expect: 3
+// expect: 20
+// expect: 40
+// expect: 2
+// expect: 20
+// expect: 2
+// expect: 40
+// expect: 3
+// expect: 3
+type IntList = Vec<i64>
+
+def divmod7(n: i64) -> i64:
+    return n / 7, n % 7
+
+q, r = divmod7(50)
+print(q)
+print(r)
+
+data = [10, 20, 30, 40, 50]
+mid = data[1:4]
+print(len(mid))
+print(mid[0])
+print(mid[2])
+head = data[:2]
+print(len(head))
+print(head[1])
+tail = data[3:]
+print(len(tail))
+print(tail[0])
+
+d = {"x": 1, "y": 2, "z": 3}
+print(len(d.keys()))
+print(len(d.values()))

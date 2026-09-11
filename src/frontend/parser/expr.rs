@@ -4,7 +4,7 @@ use super::parser::{
 };
 
 use super::pattern::parse_pattern;
-use super::stmt::{parse_block_body, parse_loop, parse_return};
+use super::stmt::{parse_block_body, parse_loop, parse_return, parse_return_single};
 use crate::frontend::ast::{AstNode, MatchArm};
 use nom::IResult;
 use nom::Parser;
@@ -1108,6 +1108,18 @@ pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
                 index: Box::new(index),
             };
             input = i;
+        } else if let Ok((i, slice_args)) = parse_subscript_slice(input) {
+            // PY-A: slicing `base[start:end]` (end optional) — desugars to
+            // a __slice__ method call resolved in MIR lowering.
+            let end = slice_args.1.unwrap_or(AstNode::Lit(-1));
+            expr = AstNode::Call {
+                receiver: Some(Box::new(expr)),
+                method: "__slice__".to_string(),
+                args: vec![slice_args.0, end],
+                type_args: vec![],
+                structural: false,
+            };
+            input = i;
         } else if let Ok((i, args)) = delimited(
             ws(tag("(")),
             terminated(
@@ -1248,6 +1260,30 @@ fn parse_logical_and(input: &str) -> IResult<&str, AstNode> {
         }
     }
     Ok((input, term))
+}
+
+/// PY-A: `[start:end]` slice subscript — returns (start, Some(end)); end
+/// may be omitted (`[start:]` → None) and start may be omitted (`[:end]` → 0).
+fn parse_subscript_slice(input: &str) -> IResult<&str, (AstNode, Option<AstNode>)> {
+    let (input, _) = ws(tag("[")).parse(input)?;
+    // optional start
+    let (input, start) = if let Ok((rest, _)) = ws(tag(":")).parse(input) {
+        let rest = rest;
+        (rest, AstNode::Lit(0))
+    } else {
+        let (rest, e) = ws(parse_expr).parse(input)?;
+        let (rest, _colon) = ws(tag(":")).parse(rest)?;
+        (rest, e)
+    };
+    // optional end (default → Lit(-1) handled by caller as "to the end")
+    let (input, end) = if let Ok((rest, _)) = ws(tag("]")).parse(input) {
+        (rest, None)
+    } else {
+        let (rest, e) = ws(parse_expr).parse(input)?;
+        let (rest, _) = ws(tag("]")).parse(rest)?;
+        (rest, Some(e))
+    };
+    Ok((input, (start, end)))
 }
 
 // Parse comparison (==, !=, <, >, <=, >=, is, in) with Python-style chaining:
@@ -1854,7 +1890,9 @@ fn parse_match_arm(input: &str) -> IResult<&str, MatchArm> {
     let (input, _) = ws(tag::<_, _, nom::error::Error<&str>>("=>")).parse(input)?;
 
     // Parse body: allow `return` statements as well as plain expressions
-    let (input, body) = alt((parse_return, parse_expr)).parse(input)?;
+    // PY-A: single-value return form — the comma here separates arms, so a
+    // tuple return inside an arm needs parentheses.
+    let (input, body) = alt((parse_return_single, parse_expr)).parse(input)?;
 
     Ok((
         input,

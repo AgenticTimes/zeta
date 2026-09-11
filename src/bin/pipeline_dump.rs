@@ -10,8 +10,13 @@ fn main() {
     let (remaining, asts) = parse_zeta(&code).expect("parse failed");
     println!("parsed {} items; remaining = {:?} (len {})", asts.len(), remaining, remaining.len());
     for a in &asts {
-        if let AstNode::FuncDef { name, generics, params, .. } = a {
+        if let AstNode::FuncDef { name, generics, params, body, .. } = a {
             println!("  fn {} generics={} params={}", name, generics.len(), params.len());
+            if std::env::args().any(|a| a == "-ast") {
+                for st in body {
+                    println!("    body: {:#?}", st);
+                }
+            }
         } else {
             println!("  {:?}", std::mem::discriminant(a));
         }

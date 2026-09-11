@@ -326,6 +326,17 @@ fn parse_assign(input: &str) -> IResult<&str, AstNode> {
                             ),
                         ));
                     }
+                    if rhs_items.len() == 1 {
+                        // `a, b = f()` — call-return tuple unpacking
+                        let (after_stmt, _) = opt(ws(tag(";"))).parse(rcur)?;
+                        return Ok((
+                            after_stmt,
+                            AstNode::Assign(
+                                Box::new(AstNode::Tuple(items)),
+                                Box::new(rhs_items.pop().unwrap()),
+                            ),
+                        ));
+                    }
                 }
             }
             let _ = saved;
@@ -370,16 +381,66 @@ fn parse_assign(input: &str) -> IResult<&str, AstNode> {
     }
 }
 
-pub fn parse_return(input: &str) -> IResult<&str, AstNode> {
+/// PY-A: match-arm form — single value only. Inside a match arm the comma
+/// separates arms, so a bare `return 0,` must NOT consume the next arm.
+pub fn parse_return_single(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag("return")).parse(input)?;
     let (input, inner) = opt(ws(parse_full_expr)).parse(input)?;
     let (input, _) = opt(ws(tag(";"))).parse(input)?;
-    if let Some(expr) = inner {
-        Ok((input, AstNode::Return(Box::new(expr))))
-    } else {
-        // return; without expression - use Lit(0) as default
-        Ok((input, AstNode::Return(Box::new(AstNode::Lit(0)))))
+    Ok((
+        input,
+        AstNode::Return(Box::new(inner.unwrap_or(AstNode::Lit(0)))),
+    ))
+}
+
+pub fn parse_return(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(tag("return")).parse(input)?;
+    let (mut cur, first) = match opt(ws(parse_full_expr)).parse(input)? {
+        (rest, Some(e)) => (rest, Some(e)),
+        (rest, None) => (rest, None),
+    };
+    // PY-A: `return a, b` — comma-separated values return a tuple
+    let mut items: Vec<AstNode> = match first {
+        Some(e) => vec![e],
+        None => vec![],
+    };
+    loop {
+        let cur_ws = skip_ws_and_comments(cur)
+            .map(|(i, _)| i)
+            .unwrap_or(cur);
+        match ws(tag(",")).parse(cur_ws)
+            .ok()
+            .map(|(rest, _)| rest)
+        {
+            Some(rest) => {
+                let rest = skip_ws_and_comments(rest)
+                    .map(|(i, _)| i)
+                    .unwrap_or(rest);
+                if rest.is_empty() || rest.starts_with('\n') || rest.starts_with(';') {
+                    cur = rest;
+                    break;
+                }
+                match ws(parse_full_expr).parse(rest) {
+                    Ok((rest2, item)) => {
+                        items.push(item);
+                        cur = rest2;
+                    }
+                    Err(_) => {
+                        cur = rest;
+                        break;
+                    }
+                }
+            }
+            None => break,
+        }
     }
+    let value = if items.len() > 1 {
+        AstNode::Tuple(items)
+    } else {
+        items.pop().unwrap_or(AstNode::Lit(0))
+    };
+    let (input, _) = opt(ws(tag(";"))).parse(cur)?;
+    Ok((input, AstNode::Return(Box::new(value))))
 }
 
 fn parse_break(input: &str) -> IResult<&str, AstNode> {

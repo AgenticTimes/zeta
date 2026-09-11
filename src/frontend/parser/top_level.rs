@@ -295,7 +295,8 @@ pub fn parse_type_alias(input: &str) -> IResult<&str, AstNode> {
     let (input, name) = ws(parse_ident).parse(input)?;
     let (input, _) = ws(tag("=")).parse(input)?;
     let (input, ty) = ws(parse_type).parse(input)?;
-    let (input, _) = ws(tag(";")).parse(input)?;
+    // PY-A: trailing semicolon optional (Python style has none)
+    let (input, _) = opt(ws(tag(";"))).parse(input)?;
     Ok((input, AstNode::TypeAlias { name, ty, pub_ }))
 }
 

@@ -187,6 +187,11 @@ pub enum MirExpr {
         elements: Vec<u32>,
         size: usize,
     },
+    // PY-A: address of a synthetic closure function (codegen lowers to the
+    // LLVM function's pointer, i.e. the i64 of its address). Used as the
+    // value of a `lambda`/closure expression so it can be bound to a var and
+    // called through a direct call to the generated function.
+    FuncAddr(String),
     // Semiring fold (arithmetic) — evaluated inline so while-loop
     // conditions can compute them directly instead of loading from
     // a slot written by a side-effect statement inside the body.
