@@ -292,14 +292,27 @@ impl Resolver {
                 ref params,
                 ref ret,
                 ref async_,
+                ref generics,
                 ..
             } => {
+                // Declared generic type-parameter names (fn f[T](...)).
+                let generic_names: Vec<String> = generics
+                    .iter()
+                    .filter_map(|g| match g {
+                        crate::frontend::ast::GenericParam::Type { name, .. } => {
+                            Some(name.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
                 // Convert string types to Type enum
                 let typed_params: Vec<(String, Type)> = params
                     .iter()
-                    .map(|(name, ty_str)| (name.clone(), self.string_to_type(ty_str)))
+                    .map(|(name, ty_str)| {
+                        (name.clone(), self.string_to_generic_type(ty_str, &generic_names))
+                    })
                     .collect();
-                let typed_ret = self.string_to_type(ret);
+                let typed_ret = self.string_to_generic_type(ret, &generic_names);
                 // ;
                 let name_clone = name.clone();
                 self.funcs

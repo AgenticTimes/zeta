@@ -2148,10 +2148,20 @@ impl<'ctx> LLVMCodegen<'ctx> {
             if let Some(f) = self.module.get_function(&mangled) {
                 return f;
             }
-            eprintln!(
-                "CODEGEN_CALL: name={} mangled={} type_args={:?}",
-                name, mangled, type_args
-            );
+            // PY: declared generic called with (inferred or explicit) type args
+            // — monomorphize. The call name may carry a trailing _argc suffix
+            // (id_1 → id); the generic def is keyed by the bare name.
+            let base = name
+                .rsplit_once('_')
+                .filter(|(_, s)| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+                .map(|(b, _)| b)
+                .unwrap_or(name);
+            if let Some(generic_mir) = self.generic_defs.get(base).cloned() {
+                let f = self.monomorphize_function(&generic_mir, base, type_args);
+                self.specialized_fns.insert(mangled.clone(), f);
+                self.fns.insert(mangled.clone(), f);
+                return f;
+            }
             // Also try stripping trailing _N from the full name before mangling.
             // MIR gen appends _0 for overload disambiguation (oneshot::channel_0),
             // but the monomorphized function is stored as oneshot::channel_inst_i64.
@@ -2398,11 +2408,36 @@ impl<'ctx> LLVMCodegen<'ctx> {
     ) -> FunctionValue<'ctx> {
         let mangled_name = self.mangle_function_name(name, type_args);
 
-        // Create function with mangled name
-        let param_types: Vec<_> = (0..generic_mir.param_indices.len())
-            .map(|_| self.i64_type.into())
+        // Apply the type substitution first so param/return types below are
+        // the concrete instantiated types (PY: `id(3.5)` must produce an
+        // f64-typed instance, not an i64 stub that truncates the argument).
+        let mut substitution = Substitution::new();
+        for (i, type_arg) in type_args.iter().enumerate() {
+            substitution
+                .mapping
+                .insert(TypeVar(i as u32), type_arg.clone());
+        }
+        let monomorphized_mir = self.substitute_mir(generic_mir, &substitution);
+        // gen_fn resolves the function by mir.name — point it at the newly
+        // added mangled function, not the base generic definition.
+        let mut monomorphized_mir = monomorphized_mir;
+        monomorphized_mir.name = Some(mangled_name.clone());
+
+        // Create function with mangled name and instantiated param types.
+        let param_types: Vec<_> = monomorphized_mir
+            .param_indices
+            .iter()
+            .map(|(_, pid)| match monomorphized_mir.type_map.get(pid) {
+                Some(Type::F32) => self.context.f32_type().into(),
+                Some(Type::F64) => self.f64_type.into(),
+                _ => self.i64_type.into(),
+            })
             .collect();
-        let fn_type = self.i64_type.fn_type(&param_types, false);
+        let ret_ty = self.infer_fn_return_type(&monomorphized_mir);
+        let fn_type = match ret_ty {
+            inkwell::types::BasicTypeEnum::FloatType(ft) => ft.fn_type(&param_types, false),
+            _ => self.i64_type.fn_type(&param_types, false),
+        };
         let fn_val = self.module.add_function(&mangled_name, fn_type, None);
 
         // Store the function in our maps before generating body
@@ -2410,20 +2445,22 @@ impl<'ctx> LLVMCodegen<'ctx> {
         self.fns.insert(mangled_name.clone(), fn_val);
         self.specialized_fns.insert(mangled_name.clone(), fn_val);
 
-        // Create a substitution for type variables
-        // For now, assume the generic function has type parameters TypeVar(0), TypeVar(1), etc.
-        let mut substitution = Substitution::new();
-        for (i, type_arg) in type_args.iter().enumerate() {
-            substitution
-                .mapping
-                .insert(TypeVar(i as u32), type_arg.clone());
-        }
-
-        // Apply substitution to create a monomorphized MIR
-        let monomorphized_mir = self.substitute_mir(generic_mir, &substitution);
+        // The caller is mid-body when monomorphizing on demand (a generic
+        // call inside another function), so gen_fn for the instance must not
+        // clobber the caller's locals / insert position. Snapshot and restore.
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_type_map = self.current_type_map.take();
+        let saved_insert = self.builder.get_insert_block();
 
         // Generate the function body
         self.gen_fn(&monomorphized_mir);
+
+        // Restore caller codegen state.
+        self.locals = saved_locals;
+        self.current_type_map = saved_type_map;
+        if let Some(block) = saved_insert {
+            self.builder.position_at_end(block);
+        }
 
         fn_val
     }
@@ -3503,10 +3540,35 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     } else {
                         func
                     };
+                    // PY: call to a declared generic function with no explicit
+                    // type args — infer them from the call-site argument types
+                    // (monomorphize per concrete instance instead of the eager
+                    // default i64 substitution). MirCall names carry a trailing
+                    // _argc suffix, so strip it before the generic_defs lookup.
+                    let mut effective_type_args: Vec<Type> = type_args.to_vec();
+                    if effective_type_args.is_empty() {
+                        let base = func
+                            .rsplit_once('_')
+                            .filter(|(_, s)| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+                            .map(|(b, _)| b)
+                            .unwrap_or(func);
+                        if let Some(generic_mir) = self.generic_defs.get(base) {
+                            if let Some(tm) = &self.current_type_map {
+                                effective_type_args = args
+                                    .iter()
+                                    .map(|&id| {
+                                        tm.get(&id).cloned().unwrap_or(Type::I64)
+                                    })
+                                    .collect();
+                                let _ = generic_mir; // lifetime: defs borrowed only for the key check
+                            }
+                        }
+                    }
                     // The MIR gen already appends _N (arg count) to function names.
                     // Use the name as-is; the codegen's get_function has trailing _N
                     // stripping to find the base function declaration.
-                    let callee = self.get_or_declare_function(actual_func, type_args, args.len());
+                    let callee =
+                        self.get_or_declare_function(actual_func, &effective_type_args, args.len());
 
                     // Strip trailing _N suffix from function name for special-case checks
                     let base_func = if let Some(pos) = func.rfind('_') {

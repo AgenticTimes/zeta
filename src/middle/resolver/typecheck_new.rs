@@ -15,6 +15,28 @@ pub trait NewTypeCheck {
     /// Convert old string type to new Type
     fn string_to_type(&self, s: &str) -> Type;
 
+    /// Convert an old string type to a Type, resolving single-uppercase names
+    /// against the declared generic parameter list (indexed by position, so the
+    /// codegen's positional TypeVar(i) -> type_args[i] substitution lines up).
+    /// E.g. for `fn f<T>(x: T) -> T`, both the param and the return parse to
+    /// the same Type::Variable(TypeVar(0)) instead of two unrelated fresh vars.
+    fn string_to_generic_type(&self, s: &str, generic_names: &[String]) -> Type {
+        if generic_names.is_empty() {
+            return self.string_to_type(s);
+        }
+        let s = s.trim();
+        // Only rewrite a bare identifier that names a declared generic;
+        // everything else falls through to the plain parser. Names match by
+        // the declared list (covers lowercase `fn f[a](x: a)` too).
+        let is_ident = s.len() == 1 && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
+        if is_ident {
+            if let Some(idx) = generic_names.iter().position(|g| g == s) {
+                return Type::Variable(crate::middle::types::TypeVar(idx as u32));
+            }
+        }
+        self.string_to_type(s)
+    }
+
     /// Convert new Type to old string
     fn type_to_string(&self, ty: &Type) -> String;
 }

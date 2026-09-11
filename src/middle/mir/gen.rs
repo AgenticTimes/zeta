@@ -131,7 +131,18 @@ impl MirGen {
         let is_extern = matches!(ast, AstNode::ExternFunc { .. });
 
         if !is_extern {
-            if let AstNode::FuncDef { params, .. } = ast {
+            if let AstNode::FuncDef { params, generics, .. } = ast {
+                // Declared type-parameter names in order (PY: fn f[T](x: T) is
+                // monomorphized with TypeVar(i) → type_args[i]; the param's
+                // type_map entry must be that Variable for substitution to
+                // produce concrete param types instead of the I64 default).
+                let generic_names: Vec<&String> = generics
+                    .iter()
+                    .filter_map(|g| match g {
+                        crate::frontend::ast::GenericParam::Type { name, .. } => Some(name),
+                        _ => None,
+                    })
+                    .collect();
                 for (i, (name, param_type)) in params.iter().enumerate() {
                     let id = self.next_id();
                     self.name_to_id.insert(name.clone(), id);
@@ -148,6 +159,16 @@ impl MirGen {
                         self.type_map.insert(id, Type::F64);
                     } else if pt_str == "bool" {
                         self.type_map.insert(id, Type::Bool);
+                    } else if let Some(gidx) =
+                        generic_names.iter().position(|g| g.as_str() == pt_str)
+                    {
+                        // Generic param `x: T` carries the type variable so
+                        // monomorphization can substitute the concrete call-site
+                        // type into both the signature and the body.
+                        self.type_map.insert(
+                            id,
+                            Type::Variable(crate::middle::types::TypeVar(gidx as u32)),
+                        );
                     } else if pt_str.starts_with('[') {
                         // Array param stays I64 — pointer semantics.
                         // Element type is inferred from source_types in Subscript.
@@ -2290,8 +2311,32 @@ impl MirGen {
                 }
 
                 // Convert type arguments from strings to Type objects
-                let mir_type_args: Vec<Type> =
+                let mut mir_type_args: Vec<Type> =
                     type_args.iter().map(|t| Type::from_string(t)).collect();
+
+                // PY: call to a declared generic function with no explicit
+                // type args — infer them from the lowered argument types so
+                // codegen monomorphizes per concrete instance (id(3.5) → F64
+                // instance, not the eager i64 default). The callee's declared
+                // return type (Type::Variable) is substituted below so the
+                // caller's dest slot matches the instance's concrete return.
+                let base_callee = func.as_str();
+                let generic_ret_has_var = self
+                    .func_ret_types
+                    .get(base_callee)
+                    .map(|r| matches!(r, Type::Variable(_)))
+                    .unwrap_or(false);
+                if mir_type_args.is_empty() && generic_ret_has_var {
+                    mir_type_args = arg_ids
+                        .iter()
+                        .map(|&aid| {
+                            self.type_map
+                                .get(&aid)
+                                .cloned()
+                                .unwrap_or(Type::I64)
+                        })
+                        .collect();
+                }
 
                 // Append arg count to disambiguate overloaded functions.
                 // gen_mirs creates name_N for overloaded declarations;
@@ -2303,7 +2348,7 @@ impl MirGen {
                     func: func_name,
                     args: arg_ids,
                     dest: id,
-                    type_args: mir_type_args,
+                    type_args: mir_type_args.clone(),
                 });
                 self.exprs.insert(id, MirExpr::Var(id));
                 // For array methods, set appropriate return type
@@ -2321,6 +2366,23 @@ impl MirGen {
                         .get(base)
                         .cloned()
                         .unwrap_or(Type::I64);
+                    // PY: generic callee — substitute concrete type args into
+                    // the declared return type so the dest slot matches the
+                    // monomorphized instance (fn f[T](..) -> T with T=f64 must
+                    // produce an f64-typed dest, not the i64 default).
+                    let ret_ty = if mir_type_args.is_empty() {
+                        ret_ty
+                    } else {
+                        let mut sub =
+                            crate::middle::types::Substitution::new();
+                        for (i, ta) in mir_type_args.iter().enumerate() {
+                            sub.mapping.insert(
+                                crate::middle::types::TypeVar(i as u32),
+                                ta.clone(),
+                            );
+                        }
+                        sub.apply(&ret_ty)
+                    };
                     self.type_map.insert(id, ret_ty);
                 }
             }
