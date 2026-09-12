@@ -2524,6 +2524,163 @@ impl MirGen {
                     return id;
                 }
 
+                // PY-A: Python builtins list/int/float/sorted + numpy subset
+                // (arange/linspace/diff as free calls) — dispatch by type.
+                if receiver.is_none() && args.len() <= 3 {
+                    let argc = args.len();
+                    let lowered_args: Option<Vec<u32>> = match method.as_str() {
+                        "list" if argc == 1 => Some(vec![self.lower_expr(&args[0])]),
+                        "int" if argc == 1 => {
+                            let a = self.lower_expr(&args[0]);
+                            let f = match self.type_map.get(&a).cloned() {
+                                Some(Type::Str) => "zeta_int_str",
+                                Some(Type::F64) | Some(Type::F32) => "zeta_int_f64",
+                                _ => "zeta_int_i64",
+                            };
+                            Some(vec![])
+                                .map(|_: Vec<u32>| a) // keep arg
+                                .map(|a| vec![a])
+                        }
+                        "float" if argc == 1 => {
+                            let a = self.lower_expr(&args[0]);
+                            let f = match self.type_map.get(&a).cloned() {
+                                Some(Type::F64) | Some(Type::F32) => "zeta_float_f64",
+                                _ => "zeta_float_i64",
+                            };
+                            let nid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: f.to_string(),
+                                args: vec![a],
+                                dest: nid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(nid, MirExpr::Var(nid));
+                            self.type_map.insert(nid, Type::F64);
+                            self.exprs.insert(id, MirExpr::Var(nid));
+                            self.type_map.insert(id, Type::F64);
+                            return id;
+                        }
+                        "sorted" if argc == 1 => {
+                            let a = self.lower_expr(&args[0]);
+                            // len: from type if known, else pass -1 (Vec header)
+                            let len_id = match self.type_map.get(&a).cloned() {
+                                Some(Type::Array(_, ArraySize::Literal(n))) => {
+                                    let nid = self.next_id();
+                                    self.exprs.insert(nid, MirExpr::IntLit(n as i64));
+                                    self.type_map.insert(nid, Type::I64);
+                                    nid
+                                }
+                                _ => {
+                                    let nid = self.next_id();
+                                    self.exprs.insert(nid, MirExpr::IntLit(-1));
+                                    self.type_map.insert(nid, Type::I64);
+                                    nid
+                                }
+                            };
+                            Some(vec![a, len_id])
+                        }
+                        "arange" if argc == 1 => {
+                            let a = self.lower_expr(&args[0]);
+                            let nid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_arange".to_string(),
+                                args: vec![a],
+                                dest: nid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(nid, MirExpr::Var(nid));
+                            self.type_map
+                                .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
+                            self.exprs.insert(id, MirExpr::Var(nid));
+                            self.type_map.insert(id, Type::I64);
+                            return nid;
+                        }
+                        "linspace" if argc == 3 => {
+                            let a = self.lower_expr(&args[0]);
+                            let b = self.lower_expr(&args[1]);
+                            let c = self.lower_expr(&args[2]);
+                            let nid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_linspace_i64".to_string(),
+                                args: vec![a, b, c],
+                                dest: nid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(nid, MirExpr::Var(nid));
+                            self.type_map
+                                .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
+                            self.exprs.insert(id, MirExpr::Var(nid));
+                            self.type_map.insert(id, Type::I64);
+                            return nid;
+                        }
+                        "diff" if argc == 1 => {
+                            let a = self.lower_expr(&args[0]);
+                            let len_id = match self.type_map.get(&a).cloned() {
+                                Some(Type::Array(_, ArraySize::Literal(n))) => {
+                                    let nid = self.next_id();
+                                    self.exprs.insert(nid, MirExpr::IntLit(n as i64));
+                                    self.type_map.insert(nid, Type::I64);
+                                    nid
+                                }
+                                _ => {
+                                    let nid = self.next_id();
+                                    self.exprs.insert(nid, MirExpr::IntLit(-1));
+                                    self.type_map.insert(nid, Type::I64);
+                                    nid
+                                }
+                            };
+                            let nid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_diff_n".to_string(),
+                                args: vec![a, len_id],
+                                dest: nid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(nid, MirExpr::Var(nid));
+                            self.type_map
+                                .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
+                            self.exprs.insert(id, MirExpr::Var(nid));
+                            self.type_map.insert(id, Type::I64);
+                            return nid;
+                        }
+                        _ => None,
+                    };
+                    if let Some(call_args) = lowered_args {
+                        // PY-A: list(x) is a passthrough — handles are already
+                        // array-like; forcing zeta_list breaks StackArray
+                        // handles (no Vec header).
+                        if method == "list" {
+                            let src = call_args[0];
+                            self.exprs.insert(id, MirExpr::Var(src));
+                            if let Some(t) = self.type_map.get(&src).cloned() {
+                                self.type_map.insert(id, t);
+                            } else {
+                                self.type_map.insert(id, Type::I64);
+                            }
+                            return id;
+                        }
+                        let func = match method.as_str() {
+                            "sorted" => "zeta_sorted_vec_len",
+                            _ => "zeta_int_i64",
+                        };
+                        self.stmts.push(MirStmt::Call {
+                            func: func.to_string(),
+                            args: call_args,
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(
+                            id,
+                            match method.as_str() {
+                                "sorted" => Type::DynamicArray(Box::new(Type::I64)),
+                                _ => Type::I64,
+                            },
+                        );
+                        return id;
+                    }
+                }
+
                 // PY-A: Python `str(x)` — convert any value to its string form
                 if method == "str" && receiver.is_none() && args.len() == 1 {
                     let arg_id = self.lower_expr(&args[0]);

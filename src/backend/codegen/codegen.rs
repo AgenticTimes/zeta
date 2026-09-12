@@ -846,6 +846,22 @@ impl<'ctx> LLVMCodegen<'ctx> {
             i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false),
             Some(Linkage::External),
         );
+        // PY-A: Python builtins / numpy subset — proper f64 signatures
+        module.add_function("zeta_list", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_int_i64", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_int_f64", i64_type.fn_type(&[f64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_int_str", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_float_i64", f64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_float_f64", f64_type.fn_type(&[f64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_float_str", f64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_round_f64", i64_type.fn_type(&[f64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_floor_f64", f64_type.fn_type(&[f64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_sorted_vec_len", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_arange", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_linspace_i64", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_diff_n", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_log_noop2", void_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_log_noop1", void_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
         // PY-A: f64 intrinsics — native double signatures (abs/min/max of
         // floats must never pass through i64 externs)
         module.add_function(

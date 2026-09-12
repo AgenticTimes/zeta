@@ -1,0 +1,14 @@
+// PY-A: Python builtins — int/float/sorted/diff/list/arange
+// expect: 9.000000
+// expect: 7
+// expect: 2
+// expect: 3
+// expect: 2
+let s = sorted([3, 1, 2])
+print(s[0] + int(3.7) + float(5))
+let d = diff([10, 15, 22])
+print(d[1])
+let r = arange(4)
+print(r[2])
+print(min(7, 3))
+print(len(list([8, 9])))

@@ -414,3 +414,75 @@ int64_t zeta_platform_obj(int64_t name, int64_t a, int64_t b, int64_t c) {
     h[3] = c;
     return (int64_t)h;
 }
+
+// ── PY-A: Python builtins migration ─────────────────────────────────
+// list(x) — Vec handle passthrough (arrays and Vecs are already handles)
+int64_t zeta_list(int64_t x) { return x; }
+// int(x) / float(x) — conversions across i64/f64/str
+int64_t zeta_int_i64(int64_t v) { return v; }
+int64_t zeta_int_f64(double v) { return (int64_t)v; }
+int64_t zeta_int_str(int64_t s) {
+    if (!s) return 0;
+    return (int64_t)strtoll((const char*)s, NULL, 10);
+}
+double zeta_float_i64(int64_t v) { return (double)v; }
+double zeta_float_f64(double v) { return v; }
+double zeta_float_str(int64_t s) {
+    if (!s) return 0;
+    return strtod((const char*)s, NULL);
+}
+// round(x[, ndigits]) — Python banker's rounding approximation (half-away)
+int64_t zeta_round_f64(double v, int64_t nd) {
+    double m = 1;
+    for (int64_t i = 0; i < nd; i++) m *= 10;
+    return (int64_t)(v * m + (v >= 0 ? 0.5 : -0.5)) / (int64_t)m;
+}
+double zeta_floor_f64(double v) { return v >= 0 ? (double)(int64_t)v : (double)(int64_t)(v - 0.9999999999); }
+// str.cast → StringLit handle (already Str)
+// sorted(x) — Vec handle sort ascending (i64)
+int64_t zeta_sorted_vec_len(int64_t data, int64_t len) {
+    if (!data) return 0;
+    if (len < 0) len = ((int64_t*)(data - 16))[1];
+    if (len < 0) len = 0;
+    // insertion sort in place on the copy — allocate new vec first
+    int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)(len ? len : 8) * 8);
+    nb[0] = len ? len : 8; nb[1] = len;
+    for (int64_t i = 0; i < len; i++) nb[2 + i] = ((int64_t*)data)[i];
+    for (int64_t i = 1; i < len; i++) {
+        int64_t k = nb[2 + i];
+        int64_t j = i - 1;
+        while (j >= 0 && nb[2 + j] > k) { nb[2 + j + 1] = nb[2 + j]; j--; }
+        nb[2 + j + 1] = k;
+    }
+    return (int64_t)(nb + 2);
+}
+// numpy subset: arange(n) / linspace(a, b, n)
+int64_t zeta_arange(int64_t n) {
+    int64_t cap = n < 8 ? 8 : n;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap; base[1] = n;
+    for (int64_t i = 0; i < n; i++) base[2 + i] = i;
+    return (int64_t)(base + 2);
+}
+int64_t zeta_linspace_i64(int64_t a, int64_t b, int64_t n) {
+    int64_t cap = n < 8 ? 8 : n;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap; base[1] = n;
+    for (int64_t i = 0; i < n; i++) base[2 + i] = a + (b - a) * i / (n > 1 ? n - 1 : 1);
+    return (int64_t)(base + 2);
+}
+// diff(vec) → len-1 vec
+int64_t zeta_diff_n(int64_t data, int64_t len) {
+    if (!data) return 0;
+    if (len < 0) len = ((int64_t*)(data - 16))[1];
+    if (len < 2) { int64_t* e = (int64_t*)GC_malloc(16 + 8); e[0]=8; e[1]=0; return (int64_t)(e+2); }
+    int64_t cap = len - 1 < 8 ? 8 : len - 1;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap; base[1] = len - 1;
+    for (int64_t i = 0; i < len - 1; i++)
+        base[2 + i] = ((int64_t*)data)[i + 1] - ((int64_t*)data)[i];
+    return (int64_t)(base + 2);
+}
+// log.set_level(level, name) / logger.debug/info — no-op logging shims
+int64_t zeta_log_noop2(int64_t a, int64_t b) { return 0; }
+int64_t zeta_log_noop1(int64_t a) { return 0; }
