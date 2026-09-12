@@ -841,6 +841,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
             void_type.fn_type(&[i64_type.into(), i64_type.into()], false),
             Some(Linkage::External),
         );
+        module.add_function(
+            "zeta_platform_obj",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
         // PY-A: f64 intrinsics — native double signatures (abs/min/max of
         // floats must never pass through i64 externs)
         module.add_function(
@@ -4812,7 +4817,26 @@ impl<'ctx> LLVMCodegen<'ctx> {
             // PY-A: address of a synthetic closure function (codegen lowers to
             // the LLVM function's pointer value, i.e. the i64 of its address).
             MirExpr::FuncAddr(name) => {
-                // Look up or declare the closure function, then take its address
+                // Look up or declare the closure function, then take its address.
+                // PY-A: bypass get_or_declare — its stripped-name logic would
+                // treat the closure counter suffix (__closure_0) as an arity
+                // disambiguator and rename the reference.
+                if let Some(f) = self.module.get_function(name) {
+                    let fptr = f.as_global_value().as_pointer_value();
+                    return self
+                        .builder
+                        .build_ptr_to_int(fptr, self.i64_type, "closure_addr")
+                        .unwrap()
+                        .into();
+                }
+                if let Some(&f) = self.fns.get(name) {
+                    let fptr = f.as_global_value().as_pointer_value();
+                    return self
+                        .builder
+                        .build_ptr_to_int(fptr, self.i64_type, "closure_addr")
+                        .unwrap()
+                        .into();
+                }
                 let f = self.get_or_declare_function(name, &[], 0);
                 let fptr = f.as_global_value().as_pointer_value();
                 self.builder

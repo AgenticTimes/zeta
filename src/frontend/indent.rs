@@ -73,6 +73,46 @@ struct LineInfo {
 /// guarantee), `Ok(Some(transformed))` when block normalization happened, or
 /// `Err` on a hard indentation error.
 pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
+    // PY-A: normalize leading tabs to 4 spaces per line first — real Python
+    // codebases mix tab/space indentation (JoinQuant strategies are tab-
+    // indented). After this pass, all indentation is pure spaces.
+    let normalized: String = {
+        let mut out = String::with_capacity(input.len());
+        for line in input.split('\n') {
+            let mut expanded = String::with_capacity(line.len() + 16);
+            let mut chars = line.chars().peekable();
+            let mut col = 0usize;
+            let mut in_indent = true;
+            while let Some(c) = chars.peek().copied() {
+                if in_indent && c == '\t' {
+                    let next_stop = (col / 4 + 1) * 4;
+                    for _ in col..next_stop {
+                        expanded.push(' ');
+                    }
+                    col = next_stop;
+                    chars.next();
+                } else {
+                    if !c.is_whitespace() {
+                        in_indent = false;
+                    }
+                    expanded.push(c);
+                    col += 1;
+                    chars.next();
+                }
+            }
+            out.push_str(&expanded);
+            out.push('\n');
+        }
+        // trailing newline added above — strip the final one to match input
+        out.pop();
+        out
+    };
+    let input: &str = if normalized == input {
+        input
+    } else {
+        // leak is fine: parse_zeta already leaks preprocessed output
+        &Box::leak(normalized.into_boxed_str())
+    };
     let lines: Vec<&str> = input.split('\n').collect();
 
     let mut infos: Vec<LineInfo> = Vec::with_capacity(lines.len());

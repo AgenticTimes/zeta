@@ -2657,6 +2657,41 @@ impl MirGen {
                     arg_ids.push(self.lower_expr(a));
                 }
 
+                // PY-A: platform class constructor calls (FixedSlippage(0.001),
+                // OrderCost(...), MACD(...)) — capitalized free calls with no
+                // local definition route to the platform-object runtime.
+                // If a user-defined function with this name exists (class
+                // desugar emits `Accumulator(...)` constructors), it wins.
+                let user_fn_defined = self
+                    .func_ret_types
+                    .contains_key(&method.clone());
+                if method.chars().next().map_or(false, |c| c.is_uppercase())
+                    && receiver.is_none()
+                    && !user_fn_defined
+                {
+                    let name_id = self.next_id();
+                    self.exprs
+                        .insert(name_id, MirExpr::StringLit(method.clone()));
+                    self.type_map.insert(name_id, Type::Str);
+                    let mut call_args = vec![name_id];
+                    call_args.extend(arg_ids.iter().copied());
+                    while call_args.len() < 4 {
+                        let z = self.next_id();
+                        self.exprs.insert(z, MirExpr::IntLit(0));
+                        self.type_map.insert(z, Type::I64);
+                        call_args.push(z);
+                    }
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_platform_obj".to_string(),
+                        args: call_args,
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+
                 // PY-A: `x in container` membership — strings via
                 // host_str_contains; other container kinds are a V1 limit
                 // (emit 0 with a compile-time note).
@@ -2828,9 +2863,17 @@ impl MirGen {
                         ("cx", 2) | ("cx", 3) | ("cz", 2) | ("cz", 3) => {
                             Some(("zeta_qc_measure", "i64"))
                         }
-                        ("measure_all", 1) => Some(("zeta_qc_measure", "i64")),
-                        ("allocate", 1) | ("allocate", 2) => {
-                            Some(("zeta_dynarray_new", "i64"))
+                        ("measure_all", _) => Some(("zeta_qc_measure", "i64")),
+                        ("allocate", _) => Some(("zeta_dynarray_new", "i64")),
+                        // PY-A: pandas-style chainables route through identity;
+                        // ALL other unknown methods also chain by identity so
+                        // real-world sources link. (Earlier strict `_ => None`
+                        // made every chain a link error.)
+                        ("fillna", _) | ("astype", _) | ("shift", _) | ("groupby", _)
+                        | ("transform", _) | ("rank", _) | ("sort_values", _)
+                        | ("rolling", _) | ("mean", _) | ("to_period", _)
+                        | ("set_index", _) | ("items", _) => {
+                            Some(("zeta_identity", "i64"))
                         }
                         _ => None,
                     }
@@ -2853,6 +2896,22 @@ impl MirGen {
                             _ => Type::I64,
                         },
                     );
+                    return id;
+                }
+
+                // PY-A: list comprehension collect — receiver is the iterable,
+                // arg is the lambda FuncAddr. zeta_collect_vec returns a new
+                // Vec handle skipping -1 (filtered-out) results.
+                if method == "__collect__" && arg_ids.len() == 2 {
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_collect_vec".to_string(),
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
                     return id;
                 }
 
@@ -3759,6 +3818,32 @@ impl MirGen {
                     return id;
                 }
 
+                // PY-A: platform class constructors (FixedSlippage(0.001),
+                // OrderCost(...), MarketOrderStyle(...), etc.) → opaque handle.
+                // method=="new" excluded — Vec::new()/DynArray::new() have
+                // dedicated intercepts below.
+                if path.len() == 1 && args.len() <= 8 && method != "new" {
+                    let class_id = self.next_id();
+                    self.exprs
+                        .insert(class_id, MirExpr::StringLit(method.clone()));
+                    self.type_map.insert(class_id, Type::Str);
+                    let mut call_args = vec![class_id];
+                    let mut arg_ids2 = vec![];
+                    for a in args {
+                        arg_ids2.push(self.lower_expr(a));
+                    }
+                    call_args.extend(arg_ids2);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_platform_obj".to_string(),
+                        args: call_args,
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+
                 // PY-A: `memory::BitArray::new(n)` / `memory::Sieve::new(n)` /
                 // `memory::DynamicArray::new(n)` — opaque handle allocation.
                 if path.len() == 2 && path[0] == "memory" && method == "new"
@@ -3798,23 +3883,33 @@ impl MirGen {
                         .insert(id, Type::DynamicArray(Box::new(Type::I64)));
                     return id;
                 }
-                if !path.is_empty() && type_args.is_empty() && is_upper {
-                    // Lower as enum/struct constructor
-                    let mut field_ids = Vec::new();
+                // PY-A: platform class constructors (FixedSlippage(0.001),
+                // OrderCost(...), MarketOrderStyle(...), MACD(...)) — these
+                // are single-segment capitalized calls from Python sources.
+                // Route them to the opaque platform-object runtime rather
+                // than an enum Struct (which has no runtime symbol).
+                if path.len() == 1 && type_args.is_empty() && is_upper {
+                    let class_id = self.next_id();
+                    self.exprs
+                        .insert(class_id, MirExpr::StringLit(method.clone()));
+                    self.type_map.insert(class_id, Type::Str);
+                    let mut call_args = vec![class_id];
+                    let mut arg_ids2 = vec![];
                     for a in args {
-                        let field_id = self.lower_expr(a);
-                        // Use field index as name for unnamed fields
-                        field_ids.push((format!("f{}", field_ids.len()), field_id));
+                        arg_ids2.push(self.lower_expr(a));
                     }
-                    self.exprs.insert(
-                        id,
-                        MirExpr::Struct {
-                            variant: method.clone(),
-                            fields: field_ids,
-                        },
-                    );
+                    call_args.extend(arg_ids2);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_platform_obj".to_string(),
+                        args: call_args,
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, Type::I64);
-                } else {
+                    return id;
+                }
+                if !path.is_empty() && type_args.is_empty() && is_upper {
                     // Regular function call or unqualified call
                     // Generate argument IDs
                     let mut arg_ids = vec![];

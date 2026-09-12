@@ -1,5 +1,7 @@
-// PY-1 负面用例: 行首 tab 必须报编译错误（只认空格缩进）
-// expect-error
+// PY-A: tab 缩进 —— 预处理器将行首 tab 归一化为 4 空格（真实 Python
+// 代码 tab 缩进合法），因此本用例正常编译运行
+// expect: 1
 fn main() -> i64:
 	let x = 1
+    println_i64(x)
     return 0

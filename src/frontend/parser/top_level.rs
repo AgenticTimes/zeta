@@ -20,6 +20,13 @@ use nom::combinator::{map, not, opt, peek, value};
 use nom::multi::{many0, separated_list0};
 use nom::sequence::{delimited, preceded, terminated};
 
+/// PY-A: default value in `def f(x=None, y=3)` — parsed and discarded (V1:
+/// params are typed i64 regardless; the default expr is not evaluated at def
+/// time). Bounded by ',' ')' and newline to avoid swallowing following params.
+fn parse_default_value(input: &str) -> IResult<&str, AstNode> {
+    parse_full_expr(input)
+}
+
 fn parse_param(input: &str) -> IResult<&str, (String, String)> {
     // Parse a function parameter.
     // Two forms are supported:
@@ -73,8 +80,9 @@ fn parse_param(input: &str) -> IResult<&str, (String, String)> {
         (
             ws(parse_ident),
             opt(preceded(ws(tag(":")), ws(parse_type))),
+            opt(ws(preceded(tag("="), ws(parse_default_value)))),
         ),
-        |(name, ty)| (name, ty.unwrap_or_else(|| "i64".to_string())),
+        |(name, ty, _default)| (name, ty.unwrap_or_else(|| "i64".to_string())),
     );
 
     // PY-A: allow Python-common names that collide with Zeta keywords in
@@ -83,10 +91,20 @@ fn parse_param(input: &str) -> IResult<&str, (String, String)> {
     // general statement positions keep the keyword rules.
     let parse_kw_param = map(
         (
-            ws(alt((tag("fn"), tag("match"), tag("type"), tag("impl")))),
+            ws(alt((
+                tag("fn"),
+                tag("match"),
+                tag("type"),
+                tag("impl"),
+                tag("open"),
+                tag("high"),
+                tag("low"),
+                tag("set"),
+            ))),
             opt(preceded(ws(tag(":")), ws(parse_type))),
+            opt(ws(preceded(tag("="), ws(parse_default_value)))),
         ),
-        |(name, ty)| (name.to_string(), ty.unwrap_or_else(|| "i64".to_string())),
+        |(name, ty, _default)| (name.to_string(), ty.unwrap_or_else(|| "i64".to_string())),
     );
 
     alt((parse_self, parse_star, parse_kw_param, parse_regular)).parse(input)

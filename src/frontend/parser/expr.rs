@@ -748,6 +748,105 @@ fn parse_dict_lit(input: &str) -> IResult<&str, AstNode> {
     Ok((input, AstNode::DictLit { entries }))
 }
 
+/// PY-A: Python list comprehension `[expr for name in iterable (if cond)?]`
+/// desugars into `__collect__(iterable, lambda(name) expr_or_filter)` — a
+/// runtime helper that builds a Vec of results. The lambda uses the Closure
+/// node (env capture works for the enclosing scope's variables).
+fn parse_list_comp(input: &str) -> IResult<&str, AstNode> {
+    if !input.trim_start().starts_with('[') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    // Heuristic pre-scan: contains " for " before the matching "]"?
+    let mut depth = 1i32;
+    let mut quote: Option<u8> = None;
+    let b = input.as_bytes();
+    let mut has_for = false;
+    let mut i = 1;
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == b'\\' { i += 2; continue; }
+            if c == q { quote = None; }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'\'' | b'"' => quote = Some(c),
+            b'[' | b'(' | b'{' => depth += 1,
+            b']' => { depth -= 1; if depth == 0 { break; } }
+            b')' | b'}' => depth -= 1,
+            b' ' if depth == 1
+                && i + 5 <= b.len()
+                && input.is_char_boundary(i)
+                && input.is_char_boundary(i + 5) =>
+            {
+                if &input[i..i + 5] == " for " {
+                    has_for = true;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if !has_for {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    // Parse as array-ish: [ ELEM for NAME in ITER (if COND)? ]
+    let (input, _) = ws(tag("[")).parse(input)?;
+    let (input, elem) = ws(parse_full_expr).parse(input)?;
+    let (input, _) = ws(tag("for")).parse(input)?;
+    let (input, name) = ws(parse_ident).parse(input)?;
+    let (input, _) = ws(tag("in")).parse(input)?;
+    let (input, iter) = ws(parse_full_expr).parse(input)?;
+    // optional filter — everything up to ']' is the condition
+    let (input, cond) = if let Ok((rest, _)) = ws(tag("if")).parse(input) {
+        let (rest, c) = ws(parse_full_expr).parse(rest)?;
+        (rest, Some(c))
+    } else {
+        (input, None)
+    };
+    let (input, _) = ws(tag("]")).parse(input)?;
+
+    // Build lambda: |NAME| if COND { collect(EXPR) } — via a single expression:
+    // __comp_item__(EXPR, COND) semantics handled in runtime collect.
+    // Simplest desugar: __collect__(ITER, COND_HANDLE?, lambda)
+    // We construct: __collect__(ITER, |NAME| EXPR, |NAME| COND?) — two lambdas
+    // is awkward; instead the runtime receives ITER and one lambda returning
+    // Option-like: -1 sentinel means skip. Use lambda body:
+    //   if COND_missing { EXPR } else { if COND { EXPR } else { -1 } }
+    let body = match cond {
+        None => elem,
+        Some(c) => AstNode::If {
+            cond: Box::new(c),
+            then: vec![AstNode::ExprStmt { expr: Box::new(elem) }],
+            else_: vec![AstNode::ExprStmt {
+                expr: Box::new(AstNode::Lit(-1)),
+            }],
+        },
+    };
+    let lam = AstNode::Closure {
+        params: vec![name],
+        body: Box::new(body),
+    };
+
+    // Build the call: __collect__(ITER, LAMBDA) — receiver-style so parse
+    // produces Call{receiver: Some(iter), method: "__collect__", args:[lam]}
+    let call = AstNode::Call {
+        receiver: Some(Box::new(iter)),
+        method: "__collect__".to_string(),
+        args: vec![lam],
+        type_args: vec![],
+        structural: false,
+    };
+    Ok((input, call))
+}
+
 fn parse_array_lit(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag("[")).parse(input)?;
 
@@ -830,6 +929,10 @@ pub(crate) fn parse_unary(input: &str) -> IResult<&str, AstNode> {
     } else if starts_with_kw(input, "not") {
         // PY-A: Python `not` == `!`
         let (input, _) = tag("not")(input)?;
+        (input, Some("!"))
+    } else if input.starts_with("~") {
+        // PY-A: Python `~` == bitwise not — same as `!` for i64 masks
+        let (input, _) = tag("~")(input)?;
         (input, Some("!"))
     } else {
         // Try other unary operators
@@ -1086,6 +1189,7 @@ pub fn parse_primary(input: &str) -> IResult<&str, AstNode> {
         parse_loop,
         parse_path_expr,
         parse_simple_ident,
+        parse_list_comp,
         parse_array_lit,
         parse_bool,
         parse_closure,

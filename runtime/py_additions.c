@@ -349,3 +349,68 @@ void zeta_env_set(int64_t name_handle, int64_t v) {
 // nonlocal declaration marker — no runtime effect (the env routing happens
 // at the variable's read/write sites), but keeps the call linkable.
 int64_t zeta_nonlocal_decl(int64_t name) { return name; }
+
+// PY-A: list comprehension collector — iter is a Vec-layout handle
+// ([cap|len|data...]); fn_ptr is the address of a generated closure taking
+// one i64 and returning i64 (-1 = skip). Returns a new Vec-layout handle.
+int64_t zeta_collect_vec(int64_t iter, int64_t fn_ptr) {
+    if (!iter) return 0;
+    int64_t len = ((int64_t*)(iter - 16))[1];
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(len ? len : 8) * 8);
+    base[0] = len ? len : 8;
+    base[1] = 0;
+    int64_t (*fp)(int64_t) = (int64_t(*)(int64_t))fn_ptr;
+    for (int64_t i = 0; i < len; i++) {
+        int64_t v = fp(((int64_t*)iter)[i]);
+        if (v != -1) {
+            base[2 + base[1]] = v;
+            base[1] += 1;
+        }
+    }
+    return (int64_t)(base + 2);
+}
+
+// identity for chainable method fallbacks (returns the receiver handle)
+int64_t zeta_identity1(int64_t h) { return h; }
+int64_t zeta_identity2(int64_t h, int64_t a) { return h; }
+
+// chainable identity — receiver handle passes through for unknown opaque
+// method calls (pandas-style chaining fallback)
+int64_t zeta_identity(int64_t h) { return h; }
+
+// ── PY-A: JoinQuant platform API shims (REasyQuant strategies) ──────
+// These platform functions have no local AOT meaning; they exist so strategy
+// sources link and run as standalone binaries. Behavior: log-and-return-0,
+// with option setters recording into a global dict-like handle.
+int64_t set_option(int64_t a, int64_t b) { return 0; }
+int64_t set_benchmark(int64_t a) { return 0; }
+int64_t set_slippage(int64_t a) { return 0; }
+int64_t set_order_cost(int64_t a, int64_t b) { return 0; }
+int64_t set_universe(int64_t a) { return 0; }
+int64_t set_limit_mode(int64_t a) { return 0; }
+int64_t set_yesterday_position(int64_t a) { return 0; }
+int64_t log_set_level(int64_t a, int64_t b) { return 0; }
+int64_t run_daily(int64_t a, int64_t b) { return 0; }
+int64_t run_monthly(int64_t a, int64_t b) { return 0; }
+int64_t run_weekly(int64_t a, int64_t b) { return 0; }
+int64_t run_interval(int64_t a, int64_t b) { return 0; }
+int64_t get_current_data(int64_t a) { return 0; }
+int64_t get_all_securities(int64_t a) { return 0; }
+int64_t get_trade_days(int64_t a, int64_t b) { return 0; }
+int64_t get_stock_list(int64_t a) { return 0; }
+int64_t attribute_history(int64_t a, int64_t b, int64_t c, int64_t d) { return 0; }
+int64_t get_price(int64_t a, int64_t b, int64_t c, int64_t d) { return 0; }
+int64_t order_target_value(int64_t a, int64_t b) { return 0; }
+int64_t order_target(int64_t a, int64_t b) { return 0; }
+int64_t order_value(int64_t a, int64_t b) { return 0; }
+int64_t order_shares(int64_t a, int64_t b) { return 0; }
+
+// platform class constructor — opaque handle [class_name | args...]
+int64_t zeta_platform_obj(int64_t name, int64_t a, int64_t b, int64_t c) {
+    int64_t* h = (int64_t*)GC_malloc(32);
+    h[0] = name;
+    h[1] = a;
+    h[2] = b;
+    h[3] = c;
+    return (int64_t)h;
+}
