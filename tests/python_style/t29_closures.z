@@ -1,0 +1,21 @@
+// PY-A V2: lambda 闭包 —— 自由变量按值捕获（创建时快照），多参/嵌套调用
+// expect: 105
+// expect: 6
+// expect: 50
+// expect: 1
+fn make_adder(base: i64) -> i64:
+    let add = lambda x: x + base
+    return add(5)
+
+def make_counter():
+    let count = 0
+    let inc = lambda: count + 1
+    inc()
+    return inc()
+
+print(make_adder(100))
+let add2 = lambda a, b: a + b
+print(add2(2, 4))
+let pipeline = lambda x: x * 2
+print(pipeline(make_adder(20)))
+print(make_counter())

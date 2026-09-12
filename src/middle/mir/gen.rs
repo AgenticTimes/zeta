@@ -53,6 +53,9 @@ pub struct MirGen {
     last_loop_result: Option<u32>,
     /// Additional MIRs generated during lowering (e.g., async poll functions).
     generated_mirs: Vec<Mir>,
+    /// Names captured from enclosing scopes in the closure currently being
+    /// lowered (name → env key id) — used to route assignments to env stores.
+    captured_vars: std::collections::HashMap<String, u32>,
     /// Async state machine: state pointer expression ID.
     async_state_ptr: Option<u32>,
     /// Async state machine: current segment index for dispatch.
@@ -91,6 +94,7 @@ impl MirGen {
             loop_value_stack: Vec::new(),
             last_loop_result: None,
             generated_mirs: vec![],
+            captured_vars: std::collections::HashMap::new(),
             async_state_ptr: None,
             async_segment_count: 0,
             is_async_fn: false,
@@ -4227,6 +4231,27 @@ impl MirGen {
                 // to the existing no-op stub behaviour, noted in the
                 // lower_closure docs).
                 let closure_name = self.lower_closure(params, body);
+                // PY-A V2a: value-capture — snapshot each free variable into
+                // the closure env at creation time (reads see the snapshot).
+                {
+                    let bound: std::collections::HashSet<String> =
+                        params.iter().cloned().collect();
+                    let mut free: std::collections::BTreeSet<String> =
+                        std::collections::BTreeSet::new();
+                    Self::collect_free_vars(body, &bound, &mut free);
+                    for name in free.iter() {
+                        if let Some(&cur_id) = self.name_to_id.get(name) {
+                            let key_id = self.next_id();
+                            self.exprs
+                                .insert(key_id, MirExpr::StringLit(name.clone()));
+                            self.type_map.insert(key_id, Type::Str);
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: "zeta_env_set".to_string(),
+                                args: vec![key_id, cur_id],
+                            });
+                        }
+                    }
+                }
                 if let Some(v) = self.pending_closure_binding.take() {
                     self.closure_vars.insert(v.clone(), closure_name.clone());
                 }
@@ -4386,10 +4411,73 @@ impl MirGen {
     /// to the named closure — no environment struct / capture machinery
     /// (V1: non-capturing lambdas only; capturing bodies keep the prior
     /// no-op-stub behaviour and stay known-fail).
+    /// Collect free variables of an expression against a set of bound names
+    /// (params + locals already known when the closure is created).
+    fn collect_free_vars(expr: &AstNode, bound: &std::collections::HashSet<String>, free: &mut std::collections::BTreeSet<String>) {
+        match expr {
+            AstNode::Var(name) => {
+                if !bound.contains(name) {
+                    free.insert(name.clone());
+                }
+            }
+            AstNode::BinaryOp { left, right, .. } => {
+                Self::collect_free_vars(left, bound, free);
+                Self::collect_free_vars(right, bound, free);
+            }
+            AstNode::UnaryOp { expr, .. } => Self::collect_free_vars(expr, bound, free),
+            AstNode::Call { receiver, method, args, .. } => {
+                if let Some(r) = receiver {
+                    Self::collect_free_vars(r, bound, free);
+                }
+                // method 名不是自由变量；args 递归
+                for a in args {
+                    Self::collect_free_vars(a, bound, free);
+                }
+                let _ = method;
+            }
+            AstNode::FieldAccess { base, .. } => Self::collect_free_vars(base, bound, free),
+            AstNode::Subscript { base, index } => {
+                Self::collect_free_vars(base, bound, free);
+                Self::collect_free_vars(index, bound, free);
+            }
+            AstNode::Assign(lhs, rhs) => {
+                // 赋值目标也是自由变量（写捕获）
+                Self::collect_free_vars(lhs, bound, free);
+                Self::collect_free_vars(rhs, bound, free);
+            }
+            AstNode::If { cond, then, else_ } => {
+                Self::collect_free_vars(cond, bound, free);
+                for s in then { Self::collect_free_vars(s, bound, free); }
+                for s in else_ { Self::collect_free_vars(s, bound, free); }
+            }
+            AstNode::Let { pattern, expr, .. } => {
+                Self::collect_free_vars(expr, bound, free);
+                // let 绑定的名字成为局部，不改变外层 free 集（近似）
+                let _ = pattern;
+            }
+            AstNode::Return(e) => Self::collect_free_vars(e, bound, free),
+            _ => {}
+        }
+    }
+
     fn lower_closure(&mut self, params: &[String], body: &AstNode) -> String {
-        let n = self.closure_counter;
-        self.closure_counter += 1;
+        // Globally unique across functions — per-MirGen counters made two
+        // different closures share "__closure_0" (first definition won, other
+        // call sites silently called the wrong body).
+        static CLOSURE_SEQ: std::sync::atomic::AtomicU32 =
+            std::sync::atomic::AtomicU32::new(0);
+        let n = CLOSURE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as usize;
         let closure_name = format!("__closure_{}", n);
+
+        // PY-A V2: free variables of the body (against params + currently
+        // bound names) are captured THROUGH the env runtime — each read is
+        // zeta_env_get("name"), each assignment zeta_env_set("name", v).
+        // NOTE: only params count as bound — enclosing locals are NOT visible
+        // inside the synthetic function, so any other referenced name is a
+        // free variable that must go through the env runtime.
+        let bound: std::collections::HashSet<String> = params.iter().cloned().collect();
+        let mut free: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        Self::collect_free_vars(body, &bound, &mut free);
 
         // Fresh sub-MIR with its own id space (params start at id 1).
         let mut child = MirGen::new();
@@ -4399,6 +4487,7 @@ impl MirGen {
             child.exprs.insert(id, MirExpr::Var(id));
             child.type_map.insert(id, Type::I64);
         }
+
         child.stmts = params
             .iter()
             .enumerate()
@@ -4407,6 +4496,26 @@ impl MirGen {
                 arg_index: i as u32,
             })
             .collect();
+        // Free vars: pre-bind each name to an env-load id (must come AFTER
+        // the ParamInit seed above — that assignment replaces child.stmts).
+        for name in &free {
+            let name_id = child.next_id();
+            child
+                .exprs
+                .insert(name_id, MirExpr::StringLit(name.clone()));
+            child.type_map.insert(name_id, Type::Str);
+            let slot_id = child.next_id();
+            child.stmts.push(MirStmt::Call {
+                func: "zeta_env_get".to_string(),
+                args: vec![name_id],
+                dest: slot_id,
+                type_args: vec![],
+            });
+            child.exprs.insert(slot_id, MirExpr::Var(slot_id));
+            child.type_map.insert(slot_id, Type::I64);
+            child.name_to_id.insert(name.clone(), slot_id);
+            child.captured_vars.insert(name.clone(), name_id);
+        }
         let body_val = child.lower_expr(body);
         // Ensure the closure returns its body value.
         if !child

@@ -323,3 +323,25 @@ int64_t zeta_qc_noop3(int64_t h, int64_t a, int64_t b) { return 0; }
 int64_t zeta_qc_measure(int64_t h, int64_t q) { return 0; }
 int64_t zeta_qc_execute(int64_t h) { return h; }
 int64_t zeta_qc_is_normalized(int64_t h) { return 1; }
+
+// ── PY-A: closure free-variable environment ──────────────────────────
+// A dedicated map whose keys are CONTENT-hashed string names. Slots are
+// process-lifetime (GC-backed) — closures capture by reference to the slot,
+// so reads see the latest writes from any scope.
+int64_t map_new(void);
+int64_t map_insert(int64_t, int64_t, int64_t);
+int64_t map_get(int64_t, int64_t);
+int64_t map_str_key(int64_t);
+
+static int64_t g_env = 0;
+
+static int64_t env_map(void) {
+    if (!g_env) g_env = map_new();
+    return g_env;
+}
+int64_t zeta_env_get(int64_t name_handle) {
+    return map_get(env_map(), map_str_key(name_handle));
+}
+void zeta_env_set(int64_t name_handle, int64_t v) {
+    map_insert(env_map(), map_str_key(name_handle), v);
+}
