@@ -115,9 +115,11 @@
   （zeta_qc_new/measure/noop），quantum_basic 编译运行；真量子模拟仍待做
 - [x] assert 内置（2026-09-12）：assert(cond, msg) → 失败时 zeta_assert_fail
 - [x] `&mut` 引用参数（`6ba3ea8f`）
-- [~] DUPLICATE_SYM：prime_counter_fixed / simplest_prime_counter（runtime stub
-  `count_primes` 与用户函数同名撞车——最后 2 个官方失败，修法：删 stub 或运行时
-  符号加 zeta_ 前缀隔离）
+- [x] DUPLICATE_SYM（2026-09-12 完结）：① 删除 stub `count_primes`（恒返 0、
+  与用户函数同名）；② **不透明方法兜底误抢 free 调用**——兜底分发原对
+  receiver=None 的调用也生效，`count_primes(10)` 被抢成 `zeta_sieve_count(10)`
+  （把 limit 当 handle 解引用 → 段错误）。修复：兜底仅限 method 形态
+  （receiver.is_some()）
 - [ ] NO_MAIN 库文件 main 包装器批量验证（test_loops/test_stability/test_suite/test_actual_issues 等，多为旧语法或测试套件文件）
 - [ ] generic `where T: Ord` 约束检查（与 PY-3 泛型语法配套）
 - [~] closures / async codegen 补齐（PY-4 lambda 依赖此项）
@@ -173,7 +175,8 @@
 2. ~~class + 方法语义~~（2026-09-11 完成，commit `ad8532ab`）
 3. ~~多参 print 修复 + 泛型多类型实例化~~（2026-09-11 完成，commit `24f17a57`/`ca06735e`）
 4. closure codegen（解锁 t12 lambda；lambda 语法解析已完成，codegen 进行中）
-5. DUPLICATE_SYM 最后 2 例（删 count_primes stub 或运行时符号前缀隔离）
+5. ~~DUPLICATE_SYM~~ 完结（194/194）
+6. 剩余深水区：closures 自由变量捕获（V2）、try/except 类型过滤、`where` 约束检查、WASM 后端、自举
 
 ## 已知非阻塞
 

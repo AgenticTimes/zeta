@@ -287,8 +287,8 @@ __attribute__((used)) static int64_t print_impl_dummy = 0;
 
 // append alias for array_push
 void append(int64_t arr, int64_t val) { array_push(arr, val); }
-// count_primes
-int64_t count_primes(int64_t limit) { return 0; }
+// (count_primes stub removed — collided with user-defined functions of the
+// same name, causing DUPLICATE_SYM link failures)
 
 int64_t array_len(int64_t arr) { (void)arr; return 0; }
 int64_t array_get(int64_t arr, int64_t idx) { return ((int64_t*)arr)[idx]; }

@@ -2627,9 +2627,8 @@ impl MirGen {
                 // (user structs from undefined modules, BitArray, Sieve,
                 // QuantumCircuit) map to runtime equivalents by NAME so
                 // object-style tests link and run. V1 heuristic.
-                let opaque_fallback: Option<(&str, &str)> = if receiver_ty
-                    .as_ref()
-                    .map_or(true, |t| {
+                let opaque_fallback: Option<(&str, &str)> = if receiver.is_some()
+                    && receiver_ty.as_ref().map_or(true, |t| {
                         let is_str = matches!(t, Type::Str);
                         let is_map = matches!(t, Type::Named(n, _) if n == "map");
                         !(is_str || is_map)
