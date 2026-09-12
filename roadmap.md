@@ -179,6 +179,25 @@
 6. 剩余深水区：closures 按引用捕获（V3 已实现 nonlocal 显式声明版；隐式
    读改写捕获待设计）、`where` 约束检查、WASM 后端、自举
 
+## REasyQuant 真实项目实测（2026-09-13，未修改项目代码）
+
+strategies/ 38 个策略编译：**7 个通过**，31 个失败——全部为外部库依赖边界，
+非语法缺陷。失败文件的真·外部符号（扣除 runtime 已解析 prelude 与文件内
+定义）去重后 **76 个**，分层决策：
+
+| 层 | 符号举例 | 决策 |
+|---|---|---|
+| 聚宽平台 API（~35 个） | set_option / run_daily / order_target_value / get_current_data / get_fundamentals / query().filter().order_by().limit() | **接入不迁移**——宿主环境语义，由 REasyQuant 引擎以 shim .o 注入或经 IPC 调 Python 引擎 |
+| Python 内建（~10 个） | list / int / float / min / sorted / sum / str.format / range | **迁移**——映射到既有 runtime（vec/map/to_string） |
+| numpy 数学子集（~8 个） | arange / linspace / exp / pow / polyfit / diff / dropna / var | **迁移**——Zeta 数值 runtime（Vec + f64），polyfit = 最小二乘闭式解 |
+| 用户函数前向引用（~15 个） | get_rank / iTrader / filter_*（定义在调用点之后或 arity 不匹配） | **编译器修复**——两遍 lower 或符号延迟绑定 |
+| 日志（~6 个） | log.set_level / debug / info / basicConfig | **接入**——runtime logger（printf 归一） |
+
+实测驱动的编译器修复（已落地）：keyword args、*args、参数位关键字名
+（fn/open/high/low/set）、默认参数值、`~` 运算符、tab 归一化（行首 tab →
+4 空格）、列表推导 `__collect__`、平台类构造 `zeta_platform_obj`、链式方法
+identity 兜底、UTF-8 边界探针修复。
+
 ## 已知非阻塞
 
 - stddev 不能走 `as i64` 中间步（截断为 0）
