@@ -111,9 +111,13 @@
 ## 待做（按价值排序）
 
 - [ ] CTFE `const F = compute()` 未标 comptime 时静默求值错误（标了则正确）— 语义对齐待定
-- [ ] std::quantum 模块：quantum_basic.z 的 cnot/execute/h/is_normalized UNDEF（Python 化改造期间挂起）
+- [x] std::quantum V1（2026-09-12）：QuantumCircuit/QubitState/Complex 占位对象
+  （zeta_qc_new/measure/noop），quantum_basic 编译运行；真量子模拟仍待做
+- [x] assert 内置（2026-09-12）：assert(cond, msg) → 失败时 zeta_assert_fail
 - [x] `&mut` 引用参数（`6ba3ea8f`）
-- [ ] DUPLICATE_SYM：prime_counter_fixed.z / simplest_prime_counter.z（自编译符号冲突）
+- [~] DUPLICATE_SYM：prime_counter_fixed / simplest_prime_counter（runtime stub
+  `count_primes` 与用户函数同名撞车——最后 2 个官方失败，修法：删 stub 或运行时
+  符号加 zeta_ 前缀隔离）
 - [ ] NO_MAIN 库文件 main 包装器批量验证（test_loops/test_stability/test_suite/test_actual_issues 等，多为旧语法或测试套件文件）
 - [ ] generic `where T: Ord` 约束检查（与 PY-3 泛型语法配套）
 - [~] closures / async codegen 补齐（PY-4 lambda 依赖此项）
@@ -169,7 +173,7 @@
 2. ~~class + 方法语义~~（2026-09-11 完成，commit `ad8532ab`）
 3. ~~多参 print 修复 + 泛型多类型实例化~~（2026-09-11 完成，commit `24f17a57`/`ca06735e`）
 4. closure codegen（解锁 t12 lambda；lambda 语法解析已完成，codegen 进行中）
-5. std::quantum / DUPLICATE_SYM / NO_MAIN 批量
+5. DUPLICATE_SYM 最后 2 例（删 count_primes stub 或运行时符号前缀隔离）
 
 ## 已知非阻塞
 

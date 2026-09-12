@@ -1153,11 +1153,15 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // a DIFFERENT param count, use a mangled name: name_N where N
                 // is the param count. This avoids LLVM name collisions for
                 // overloaded functions (e.g., fn new() vs fn new(input)).
-                let is_overloaded = self
-                    .module
-                    .get_function(&fn_name)
-                    .map(|f| f.count_params() != mir.param_indices.len() as u32)
-                    .unwrap_or(false);
+                // PY-A: runtime-dispatched names (zeta_*) never get renamed —
+                // call sites reference the bare symbol and the arity mismatch
+                // is handled by coerce_call_args padding/truncation.
+                let is_overloaded = !fn_name.starts_with("zeta_")
+                    && self
+                        .module
+                        .get_function(&fn_name)
+                        .map(|f| f.count_params() != mir.param_indices.len() as u32)
+                        .unwrap_or(false);
                 let actual_name = if is_overloaded {
                     format!("{}_{}", fn_name, mir.param_indices.len())
                 } else {
@@ -1210,7 +1214,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 let param_count = mir.param_indices.len() as u32;
 
                 // Determine actual function name, matching first-pass logic.
-                let actual_name = if self
+                let actual_name = if fn_name.starts_with("zeta_") {
+                    fn_name.clone()
+                } else if self
                     .module
                     .get_function(&fn_name)
                     .map(|f| f.count_params() != param_count)
@@ -1233,7 +1239,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
         // Use param-count-suffixed name if this function is overloaded
         let fn_name = mir.name.as_ref().cloned().unwrap_or("anon".to_string());
         let param_count = mir.param_indices.len() as u32;
-        let actual_name = if self
+        let actual_name = if fn_name.starts_with("zeta_") {
+            // PY-A: runtime dispatch names never renamed
+            fn_name.clone()
+        } else if self
             .module
             .get_function(&fn_name)
             .map(|f| f.count_params() != param_count)
@@ -2371,6 +2380,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
         // at symbols with no runtime definition. Reuse or arity-suffix instead.
         if let Some(existing) = self.module.get_function(&actual_name) {
             if existing.count_params() == args_count as u32 {
+                return existing;
+            }
+            // PY-A: zeta_* runtime dispatch names never renamed — arity
+            // mismatch resolves via coerce_call_args.
+            if actual_name.starts_with("zeta_") {
                 return existing;
             }
             let arity_name = format!("{}_{}", actual_name, args_count);
