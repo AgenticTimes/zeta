@@ -53,6 +53,14 @@ pub struct MirGen {
     last_loop_result: Option<u32>,
     /// Additional MIRs generated during lowering (e.g., async poll functions).
     generated_mirs: Vec<Mir>,
+    /// Lowering depth: 0 at top level, >0 inside a function body — used to
+    /// skip nested defs (their inline Return would corrupt the enclosing stream).
+    fn_depth: u32,
+    /// Nested defs hoisted to standalone functions (user name → closure fn).
+    hoisted_names: std::collections::HashMap<String, String>,
+    /// PY-A V3: program-wide `nonlocal` names — reads/writes route through
+    /// the closure env in any scope (defining and inner).
+    nonlocal_names: std::collections::HashSet<String>,
     /// Names captured from enclosing scopes in the closure currently being
     /// lowered (name → env key id) — used to route assignments to env stores.
     captured_vars: std::collections::HashMap<String, u32>,
@@ -94,6 +102,9 @@ impl MirGen {
             loop_value_stack: Vec::new(),
             last_loop_result: None,
             generated_mirs: vec![],
+            fn_depth: 0,
+            hoisted_names: std::collections::HashMap::new(),
+            nonlocal_names: std::collections::HashSet::new(),
             captured_vars: std::collections::HashMap::new(),
             async_state_ptr: None,
             async_segment_count: 0,
@@ -119,6 +130,22 @@ impl MirGen {
         ret_types: HashMap<String, Type>,
     ) -> Self {
         self.func_ret_types = ret_types;
+        self
+    }
+
+    fn i64_zero_id(&mut self) -> u32 {
+        let z = self.next_id();
+        self.exprs.insert(z, MirExpr::IntLit(0));
+        self.type_map.insert(z, Type::I64);
+        z
+    }
+
+    /// PY-A V3: names declared `nonlocal` (reads/writes route through env).
+    pub fn with_nonlocal_names(mut self, names: std::collections::HashSet<String>) -> Self {
+        if std::env::var("ZETA_PROBE").is_ok() {
+            eprintln!("PROBE with_nonlocal_names: {:?}", names);
+        }
+        self.nonlocal_names = names;
         self
     }
 
@@ -296,10 +323,44 @@ impl MirGen {
     }
 
     fn lower_ast(&mut self, ast: &AstNode) {
+        let is_def = matches!(ast, AstNode::FuncDef { .. });
+        if is_def {
+            self.fn_depth += 1;
+        }
+        self.lower_ast_inner(ast);
+        if is_def {
+            self.fn_depth -= 1;
+        }
+    }
+
+    fn lower_ast_inner(&mut self, ast: &AstNode) {
         match ast {
             AstNode::Let { pattern, expr, .. } => {
                 // Handle different pattern types
                 match &**pattern {
+                    AstNode::Var(name) if self.nonlocal_names.contains(name) => {
+                        // PY-A V3: nonlocal name — defining assignment stores
+                        // through env; bind local slot to an env load.
+                        let rhs_id = self.lower_expr(expr);
+                        let key_id = self.next_id();
+                        self.exprs
+                            .insert(key_id, MirExpr::StringLit(name.clone()));
+                        self.type_map.insert(key_id, Type::Str);
+                        self.stmts.push(MirStmt::VoidCall {
+                            func: "zeta_env_set".to_string(),
+                            args: vec![key_id, rhs_id],
+                        });
+                        let slot_id = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_env_get".to_string(),
+                            args: vec![key_id],
+                            dest: slot_id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(slot_id, MirExpr::Var(slot_id));
+                        self.type_map.insert(slot_id, Type::I64);
+                        self.name_to_id.insert(name.clone(), slot_id);
+                    }
                     AstNode::Var(name) => {
                         self.pending_closure_binding = Some(name.clone());
                         let rhs_id = self.lower_expr(expr);
@@ -506,10 +567,51 @@ impl MirGen {
                     // the variable when it is not already bound (function
                     // locals; module-level variables are a later item).
                     if let Some(&existing) = self.name_to_id.get(name) {
+                        if self.nonlocal_names.contains(name) {
+                            // PY-A V3: nonlocal write → env store
+                            let key_id = self.next_id();
+                            self.exprs
+                                .insert(key_id, MirExpr::StringLit(name.clone()));
+                            self.type_map.insert(key_id, Type::Str);
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: "zeta_env_set".to_string(),
+                                args: vec![key_id, rhs_id],
+                            });
+                            let unit_id = self.next_id();
+                            self.exprs.insert(unit_id, MirExpr::IntLit(0));
+                            self.type_map.insert(unit_id, Type::Tuple(vec![]));
+                            return;
+                        }
                         self.stmts.push(MirStmt::Assign {
                             lhs: existing,
                             rhs: rhs_id,
                         });
+                    } else if self.nonlocal_names.contains(name) {
+                        // PY-A V3: inner-scope write before any local bind
+                        let key_id = self.next_id();
+                        self.exprs
+                            .insert(key_id, MirExpr::StringLit(name.clone()));
+                        self.type_map.insert(key_id, Type::Str);
+                        self.stmts.push(MirStmt::VoidCall {
+                            func: "zeta_env_set".to_string(),
+                            args: vec![key_id, rhs_id],
+                        });
+                        // rebind the local alias to an env load so later reads
+                        // see the fresh value
+                        let slot_id = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_env_get".to_string(),
+                            args: vec![key_id],
+                            dest: slot_id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(slot_id, MirExpr::Var(slot_id));
+                        self.type_map.insert(slot_id, Type::I64);
+                        self.name_to_id.insert(name.clone(), slot_id);
+                        let unit_id = self.next_id();
+                        self.exprs.insert(unit_id, MirExpr::IntLit(0));
+                        self.type_map.insert(unit_id, Type::Tuple(vec![]));
+                        return;
                     } else {
                         let new_id = self.next_id();
                         self.name_to_id.insert(name.clone(), new_id);
@@ -574,7 +676,32 @@ impl MirGen {
                     index: index.clone(),
                 });
             }
-            AstNode::FuncDef { body, ret_expr, .. } => {
+            AstNode::FuncDef {
+                name: fn_name,
+                params,
+                body,
+                ret_expr,
+                ..
+            } => {
+                // PY-A: NESTED def inside a function body — lowering inline
+                // mixes its Returns into the enclosing stream (double
+                // terminator). Instead, lower it as a STANDALONE synthetic
+                // function via the same child-MirGen path as closures, and
+                // publish it through generated_mirs (merged into codegen by
+                // the Resolver pipeline). Free variables resolve through the
+                // env runtime; `outer.inner(...)` and bare `inner(...)`
+                // call sites both bind by name via nonlocal/fallback.
+                if self.fn_depth > 1 {
+                    let param_names: Vec<String> =
+                        params.iter().map(|(n, _)| n.clone()).collect();
+                    let body_node = AstNode::Block { body: body.clone() };
+                    let hoisted = self.lower_closure(&param_names, &body_node);
+                    // bind user name → synthetic fn so `inc()` calls dispatch
+                    self.closure_vars.insert(fn_name.clone(), hoisted.clone());
+                    // Publish under the user-visible name too (alias map)
+                    self.hoisted_names.insert(fn_name.clone(), hoisted);
+                    return;
+                }
                 for stmt in body {
                     self.lower_ast(stmt);
                 }
@@ -1361,6 +1488,14 @@ impl MirGen {
                 // If last is an ExprStmt, unwrap it
                 let val_id = match last {
                     AstNode::ExprStmt { expr } => self.lower_expr(expr),
+                    // PY-A: statement-form last (Assign/Let/Return…) — lower
+                    // as a statement; the block value falls back to the last
+                    // produced value or 0.
+                    AstNode::Return(_) => self.i64_zero_id(), // Return handled by closure fn tail
+                    AstNode::Assign(_, _) | AstNode::Let { .. } => {
+                        self.lower_ast(last);
+                        self.i64_zero_id()
+                    }
                     other => self.lower_expr(other),
                 };
                 let block_stmts = std::mem::take(&mut self.stmts);
@@ -1397,8 +1532,43 @@ impl MirGen {
             }
             // Match is handled below with full if-else chain lowering.
             AstNode::Var(name) => {
+                // PY-A V3: nonlocal names ALWAYS read through env (fresh
+                // value), even when a local alias exists.
+                if self.nonlocal_names.contains(name) {
+                    let key_id = self.next_id();
+                    self.exprs
+                        .insert(key_id, MirExpr::StringLit(name.clone()));
+                    self.type_map.insert(key_id, Type::Str);
+                    let slot_id = self.next_id();
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_env_get".to_string(),
+                        args: vec![key_id],
+                        dest: slot_id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(slot_id, MirExpr::Var(slot_id));
+                    self.type_map.insert(slot_id, Type::I64);
+                    return slot_id;
+                }
                 if let Some(&existing) = self.name_to_id.get(name) {
                     return existing;
+                }
+                // PY-A V3: nonlocal name not bound locally — env read.
+                if self.nonlocal_names.contains(name) {
+                    let key_id = self.next_id();
+                    self.exprs
+                        .insert(key_id, MirExpr::StringLit(name.clone()));
+                    self.type_map.insert(key_id, Type::Str);
+                    let slot_id = self.next_id();
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_env_get".to_string(),
+                        args: vec![key_id],
+                        dest: slot_id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(slot_id, MirExpr::Var(slot_id));
+                    self.type_map.insert(slot_id, Type::I64);
+                    return slot_id;
                 }
 
                 // Unit-variant path of a registered enum (e.g. `Color::Green`)
@@ -4234,11 +4404,11 @@ impl MirGen {
                 // PY-A V2a: value-capture — snapshot each free variable into
                 // the closure env at creation time (reads see the snapshot).
                 {
-                    let bound: std::collections::HashSet<String> =
+                    let mut bound: std::collections::HashSet<String> =
                         params.iter().cloned().collect();
                     let mut free: std::collections::BTreeSet<String> =
                         std::collections::BTreeSet::new();
-                    Self::collect_free_vars(body, &bound, &mut free);
+                    Self::collect_free_vars(body, &mut bound, &mut free);
                     for name in free.iter() {
                         if let Some(&cur_id) = self.name_to_id.get(name) {
                             let key_id = self.next_id();
@@ -4413,7 +4583,7 @@ impl MirGen {
     /// no-op-stub behaviour and stay known-fail).
     /// Collect free variables of an expression against a set of bound names
     /// (params + locals already known when the closure is created).
-    fn collect_free_vars(expr: &AstNode, bound: &std::collections::HashSet<String>, free: &mut std::collections::BTreeSet<String>) {
+    fn collect_free_vars(expr: &AstNode, bound: &mut std::collections::HashSet<String>, free: &mut std::collections::BTreeSet<String>) {
         match expr {
             AstNode::Var(name) => {
                 if !bound.contains(name) {
@@ -4456,6 +4626,19 @@ impl MirGen {
                 let _ = pattern;
             }
             AstNode::Return(e) => Self::collect_free_vars(e, bound, free),
+            AstNode::Block { body } => {
+                for st in body {
+                    Self::collect_free_vars(st, bound, free);
+                }
+            }
+            AstNode::ExprStmt { expr } => Self::collect_free_vars(expr, bound, free),
+            AstNode::Let { pattern, expr, .. } => {
+                Self::collect_free_vars(expr, bound, free);
+                if let AstNode::Var(n) = &**pattern {
+                    // bound inside this scope after the let
+                    bound.insert(n.clone());
+                }
+            }
             _ => {}
         }
     }
@@ -4475,12 +4658,17 @@ impl MirGen {
         // NOTE: only params count as bound — enclosing locals are NOT visible
         // inside the synthetic function, so any other referenced name is a
         // free variable that must go through the env runtime.
-        let bound: std::collections::HashSet<String> = params.iter().cloned().collect();
+        let mut bound: std::collections::HashSet<String> = params.iter().cloned().collect();
         let mut free: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        Self::collect_free_vars(body, &bound, &mut free);
+        Self::collect_free_vars(body, &mut bound, &mut free);
+        if std::env::var("ZETA_PROBE").is_ok() {
+            eprintln!("PROBE child nonlocal={:?} free={:?}", self.nonlocal_names, free);
+        }
 
         // Fresh sub-MIR with its own id space (params start at id 1).
-        let mut child = MirGen::new();
+        // Inherits nonlocal_names so inner assignments route through env.
+        let mut child = MirGen::new()
+            .with_nonlocal_names(self.nonlocal_names.clone());
         for p in params {
             let id = child.next_id();
             child.name_to_id.insert(p.clone(), id);
@@ -4516,8 +4704,15 @@ impl MirGen {
             child.name_to_id.insert(name.clone(), slot_id);
             child.captured_vars.insert(name.clone(), name_id);
         }
+        if std::env::var("ZETA_PROBE").is_ok() {
+            eprintln!("PROBE closure {} body stmts={}", closure_name,
+                match body { AstNode::Block { body } => body.len(), _ => 1 });
+        }
         let body_val = child.lower_expr(body);
         // Ensure the closure returns its body value.
+        if std::env::var("ZETA_PROBE").is_ok() {
+            eprintln!("PROBE closure {} final stmts={}", closure_name, child.stmts.len());
+        }
         if !child
             .stmts
             .iter()

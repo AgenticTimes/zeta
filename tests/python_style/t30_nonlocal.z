@@ -1,0 +1,26 @@
+// PY-A V3: nonlocal 引用捕获 —— 内层 def 修改外层变量（Python 计数器惯用法）
+// expect: 2
+// expect: 35
+def make_counter():
+    count = 0
+    def inc():
+        nonlocal count
+        count = count + 1
+        return count
+    inc()
+    inc()
+    return count
+
+print(make_counter())
+
+def accumulate(n: i64) -> i64:
+    total = 0
+    def add(x: i64):
+        nonlocal total
+        total = total + x
+    add(5)
+    add(10)
+    add(20)
+    return total
+
+print(accumulate(0))

@@ -2,7 +2,7 @@
 //! Module for parsing statements in the Zeta language.
 
 use super::expr::{parse_condition, parse_full_expr, parse_match_expr};
-use super::parser::{parse_type, skip_ws_and_comments, ws};
+use super::parser::{parse_ident, parse_type, skip_ws_and_comments, ws};
 use super::pattern::parse_pattern;
 use super::top_level::{parse_const, parse_func, parse_type_alias};
 use crate::frontend::ast::AstNode;
@@ -694,8 +694,46 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
     Ok((cur, AstNode::Block { body: out }))
 }
 
+
+/// PY-A: `nonlocal a, b` — declares capture-by-reference of outer-scope
+/// names. Lowered to a `zeta_nonlocal_decl("a")` call per name; MIR lowering
+/// uses these to route the name's reads/writes through the closure env.
+fn parse_nonlocal(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(tag("nonlocal")).parse(input)?;
+    let mut out: Vec<AstNode> = Vec::new();
+    let mut cur = input;
+    loop {
+        let (rest, name) = ws(parse_ident).parse(cur)?;
+        out.push(AstNode::ExprStmt {
+            expr: Box::new(AstNode::Call {
+                receiver: None,
+                method: "zeta_nonlocal_decl".to_string(),
+                args: vec![AstNode::StringLit(name)],
+                type_args: vec![],
+                structural: false,
+            }),
+        });
+        let rest2 = skip_ws_and_comments(rest).map(|(i, _)| i).unwrap_or(rest);
+        if rest2.starts_with(',') {
+            cur = &rest2[1..];
+        } else {
+            cur = rest2;
+            break;
+        }
+    }
+    let (input, _) = opt(ws(tag(";"))).parse(cur)?;
+    Ok((
+        input,
+        AstNode::Block { body: out },
+    ))
+}
+
 /// PY-A: `raise(expr)` → zeta_raise(expr) — longjmps to the innermost try
 fn parse_raise(input: &str) -> IResult<&str, AstNode> {
+    // PY-A: nonlocal dispatches here to stay under nom's alt tuple arity cap
+    if let Ok(r) = parse_nonlocal(input) {
+        return Ok(r);
+    }
     let (input, _) = ws(terminated(
         tag("raise"),
         peek(none_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")),

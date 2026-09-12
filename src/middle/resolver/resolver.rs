@@ -53,6 +53,10 @@ pub struct Resolver {
     /// (they would otherwise be dropped — generated_mirs lives on the
     /// per-call MirGen).
     generated_closures: RefCell<HashMap<String, Mir>>,
+    /// PY-A V3: names declared `nonlocal` anywhere in the program. The
+    /// DEFINING scope must also store these through the closure env so the
+    /// inner function sees the initialized slot (capture-by-reference).
+    nonlocal_names: RefCell<std::collections::HashSet<String>>,
     /// Identity inference context for capability-based type inference
     identity_inference: crate::middle::types::identity::inference::IdentityInferenceContext,
     /// Capability inferencer for identity-aware type inference
@@ -79,6 +83,7 @@ impl Resolver {
                 crate::middle::types::identity::inference::IdentityInferenceContext::new(),
             type_decls: HashMap::new(),
             generated_closures: RefCell::new(HashMap::new()),
+            nonlocal_names: RefCell::new(std::collections::HashSet::new()),
             capability_inferencer:
                 crate::middle::types::identity::inference::CapabilityInferencer::new(),
         };
@@ -114,6 +119,61 @@ impl Resolver {
     }
 
     pub fn register(&mut self, ast: AstNode) {
+        // PY-A V3: pre-collect all `nonlocal` names (program-wide set) so the
+        // defining scope's assignments route through the closure env.
+        {
+            fn walk_nonlocal(n: &AstNode, set: &mut std::collections::HashSet<String>) {
+                match n {
+                    AstNode::Call { receiver: None, method, args, .. }
+                        if method == "zeta_nonlocal_decl" =>
+                    {
+                        for a in args {
+                            if let AstNode::StringLit(name) = a {
+                                set.insert(name.clone());
+                            }
+                        }
+                    }
+                    AstNode::FuncDef { body, .. } => {
+                        for s in body {
+                            walk_nonlocal(s, set);
+                        }
+                    }
+                    AstNode::Block { body } => {
+                        for s in body {
+                            walk_nonlocal(s, set);
+                        }
+                    }
+                    AstNode::ExprStmt { expr } => walk_nonlocal(expr, set),
+                    AstNode::Assign(lhs, rhs) => {
+                        walk_nonlocal(lhs, set);
+                        walk_nonlocal(rhs, set);
+                    }
+                    AstNode::Let { expr, .. } => walk_nonlocal(expr, set),
+                    AstNode::Return(e) => walk_nonlocal(e, set),
+                    AstNode::BinaryOp { left, right, .. } => {
+                        walk_nonlocal(left, set);
+                        walk_nonlocal(right, set);
+                    }
+                    AstNode::If { cond, then, else_ } => {
+                        walk_nonlocal(cond, set);
+                        for s in then { walk_nonlocal(s, set); }
+                        for s in else_ { walk_nonlocal(s, set); }
+                    }
+                    AstNode::While { cond, body } => {
+                        walk_nonlocal(cond, set);
+                        for s in body { walk_nonlocal(s, set); }
+                    }
+                    AstNode::For { body, .. } => {
+                        for s in body { walk_nonlocal(s, set); }
+                    }
+                    _ => {}
+                }
+            }
+            walk_nonlocal(&ast, &mut self.nonlocal_names.borrow_mut());
+            if std::env::var("ZETA_PROBE").is_ok() {
+                eprintln!("PROBE nonlocal set: {:?}", self.nonlocal_names.borrow());
+            }
+        }
         // Collect program-wide type declarations for MIR lowering.
         match &ast {
             AstNode::EnumDef {
@@ -562,7 +622,8 @@ impl Resolver {
         let mut mir_gen = crate::middle::mir::r#gen::MirGen::new()
             .with_global_consts(self.ctfe_consts.clone())
             .with_func_ret_types(ret_types)
-            .with_type_decls(self.type_decls.clone());
+            .with_type_decls(self.type_decls.clone())
+            .with_nonlocal_names(self.nonlocal_names.borrow().clone());
         let mir = mir_gen.lower_to_mir(ast);
         // PY-A: synthetic lambda/closure functions synthesized while lowering
         // are parked on the resolver so they reach codegen exactly once.
@@ -575,6 +636,14 @@ impl Resolver {
                 }));
         }
         mir
+    }
+
+    /// PY-A V3: is this name declared `nonlocal` anywhere?
+    pub fn is_nonlocal_name(&self, name: &str) -> bool {
+        if std::env::var("ZETA_PROBE").is_ok() {
+            eprintln!("PROBE is_nonlocal({}) = {}", name, self.nonlocal_names.borrow().contains(name));
+        }
+        self.nonlocal_names.borrow().contains(name)
     }
 
     /// Take all synthetic closures accumulated by lower_to_mir so far.

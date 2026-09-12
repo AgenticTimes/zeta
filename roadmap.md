@@ -176,7 +176,8 @@
 3. ~~多参 print 修复 + 泛型多类型实例化~~（2026-09-11 完成，commit `24f17a57`/`ca06735e`）
 4. closure codegen（解锁 t12 lambda；lambda 语法解析已完成，codegen 进行中）
 5. ~~DUPLICATE_SYM~~ 完结（194/194）
-6. 剩余深水区：closures 自由变量捕获（V2）、try/except 类型过滤、`where` 约束检查、WASM 后端、自举
+6. 剩余深水区：closures 按引用捕获（V3 已实现 nonlocal 显式声明版；隐式
+   读改写捕获待设计）、`where` 约束检查、WASM 后端、自举
 
 ## 已知非阻塞
 

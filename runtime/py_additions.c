@@ -345,3 +345,7 @@ int64_t zeta_env_get(int64_t name_handle) {
 void zeta_env_set(int64_t name_handle, int64_t v) {
     map_insert(env_map(), map_str_key(name_handle), v);
 }
+
+// nonlocal declaration marker — no runtime effect (the env routing happens
+// at the variable's read/write sites), but keeps the call linkable.
+int64_t zeta_nonlocal_decl(int64_t name) { return name; }

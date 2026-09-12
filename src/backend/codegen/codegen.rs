@@ -825,6 +825,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
             void_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
+        module.add_function(
+            "zeta_nonlocal_decl",
+            i64_type.fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
         // PY-A closure env: get(name) / set(name, value)
         module.add_function(
             "zeta_env_get",
