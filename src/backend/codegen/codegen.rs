@@ -820,6 +820,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
             i64_type.fn_type(&[context.f64_type().into(), i64_type.into()], false), // (double, spec*) — f64 arg must NOT be coerced to i64
             Some(Linkage::External),
         );
+        module.add_function(
+            "zeta_assert_fail",
+            void_type.fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
         // PY-A: f64 intrinsics — native double signatures (abs/min/max of
         // floats must never pass through i64 externs)
         module.add_function(
