@@ -443,10 +443,11 @@ fn parse_path_expr(input: &str) -> IResult<&str, AstNode> {
             }
         };
 
+        // PY-A: kwarg-aware arg list (`OrderCost(a=0)`, `f(x, w=1)`)
         let (input, args_opt) = opt(delimited(
             ws(tag("(")),
             terminated(
-                separated_list0(ws(tag(",")), ws(parse_expr)),
+                separated_list0(ws(tag(",")), ws(parse_call_arg)),
                 opt(ws(tag(","))),
             ),
             ws(tag(")")),
@@ -1151,9 +1152,10 @@ pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
                 if let Ok((after_paren2, _)) = close_paren_result {
                     (Some(vec![]), after_paren2)
                 } else {
-                    // Parse non-empty argument list
+                    // Parse non-empty argument list (PY-A: kwargs accepted,
+                    // names dropped — positional binding)
                     let (after_args, args) = terminated(
-                        separated_list1(ws(tag(",")), ws(parse_expr)),
+                        separated_list1(ws(tag(",")), ws(parse_call_arg)),
                         opt(ws(tag(","))),
                     )
                     .parse(after_paren)?;
@@ -1347,6 +1349,41 @@ fn parse_logical_and(input: &str) -> IResult<&str, AstNode> {
         }
     }
     Ok((input, term))
+}
+
+/// PY-A: one call argument — either a plain expression or a keyword argument
+/// `name=value`. Keyword NAMES are dropped in V1 (values bind positionally);
+/// this keeps JoinQuant-style calls (`f(x=1, type='fund')`) parseable.
+fn parse_call_arg(input: &str) -> IResult<&str, AstNode> {
+    // look ahead: IDENT '=' (not '==') means keyword argument
+    let kw = || -> Option<(&str, &str)> {
+        let t = input.trim_start();
+        let (ident, rest) = take_ident(t)?;
+        let rest = rest.trim_start();
+        let rest = rest.strip_prefix('=')?;
+        if rest.starts_with('=') {
+            return None; // '=='
+        }
+        Some((ident, rest))
+    };
+    if let Some((_, rest)) = kw() {
+        return parse_full_expr(rest);
+    }
+    parse_full_expr(input)
+}
+
+/// Minimal ident scanner for the kwarg lookahead (keyword names excluded —
+/// those can't be kwarg names anyway).
+fn take_ident(input: &str) -> Option<(&str, &str)> {
+    let b = input.as_bytes();
+    if b.is_empty() || !(b[0].is_ascii_alphabetic() || b[0] == b'_') {
+        return None;
+    }
+    let mut i = 1;
+    while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+        i += 1;
+    }
+    Some((&input[..i], &input[i..]))
 }
 
 /// PY-A: `[start:end]` slice subscript — returns (start, Some(end)); end

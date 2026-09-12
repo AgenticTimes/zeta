@@ -53,6 +53,19 @@ fn parse_param(input: &str) -> IResult<&str, (String, String)> {
         }),
     ));
 
+    // PY-A: `*args` / `**kwargs` star-params — consumed as a single opaque
+    // i64 param (V1: call sites with extra args coerce; real variadics need
+    // arg-tuple support). The FIRST star is mandatory so this branch can
+    // never shadow regular params.
+    let parse_star = map(
+        (
+            ws(tag("*")),
+            opt(ws(tag("*"))),
+            ws(parse_ident),
+        ),
+        |(_, _, name)| (name, "i64".to_string()),
+    );
+
     // Try regular parameter: `name: type` — PY-A: the type annotation is
     // optional (Python style `def f(x):`), defaulting to i64. Call-site
     // coercion (coerce_call_args) adapts f64 args at monomorphic call sites.
@@ -64,7 +77,19 @@ fn parse_param(input: &str) -> IResult<&str, (String, String)> {
         |(name, ty)| (name, ty.unwrap_or_else(|| "i64".to_string())),
     );
 
-    alt((parse_self, parse_regular)).parse(input)
+    // PY-A: allow Python-common names that collide with Zeta keywords in
+    // PARAMETER POSITION only (e.g. JoinQuant strategies use `fn` as a param
+    // name: `def run_daily(fn, time)`). A dedicated relaxed-ident parser —
+    // general statement positions keep the keyword rules.
+    let parse_kw_param = map(
+        (
+            ws(alt((tag("fn"), tag("match"), tag("type"), tag("impl")))),
+            opt(preceded(ws(tag(":")), ws(parse_type))),
+        ),
+        |(name, ty)| (name.to_string(), ty.unwrap_or_else(|| "i64".to_string())),
+    );
+
+    alt((parse_self, parse_star, parse_kw_param, parse_regular)).parse(input)
 }
 
 fn parse_use_statement(input: &str) -> IResult<&str, Vec<AstNode>> {
@@ -1146,25 +1171,26 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
             stmt => main_body.push(stmt),
         }
     }
-    if !main_body.is_empty() {
-        out.push(AstNode::FuncDef {
-            name: "main".to_string(),
-            generics: Vec::new(),
-            lifetimes: Vec::new(),
-            params: Vec::new(),
-            ret: "i64".to_string(),
-            body: main_body,
-            attrs: Vec::new(),
-            ret_expr: None,
-            single_line: false,
-            doc: String::new(),
-            pub_: false,
-            async_: false,
-            const_: false,
-            comptime_: false,
-            where_clauses: Vec::new(),
-        });
-    }
+    // PY-A: a module whose only content is definitions (a "library" module
+    // run as a script) still needs an entry point to link as an executable —
+    // emit an empty main when nothing else exists.
+    out.push(AstNode::FuncDef {
+        name: "main".to_string(),
+        generics: Vec::new(),
+        lifetimes: Vec::new(),
+        params: Vec::new(),
+        ret: "i64".to_string(),
+        body: main_body,
+        attrs: Vec::new(),
+        ret_expr: None,
+        single_line: false,
+        doc: String::new(),
+        pub_: false,
+        async_: false,
+        const_: false,
+        comptime_: false,
+        where_clauses: Vec::new(),
+    });
     out
 }
 

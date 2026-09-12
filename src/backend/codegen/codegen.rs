@@ -1138,6 +1138,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
             if is_generic {
                 // Store generic definition for later instantiation
+                if std::env::var("ZETA_PROBE").is_ok() {
+                    eprintln!("PROBE generic_defs: {}", fn_name);
+                }
                 self.generic_defs.insert(fn_name.clone(), mir.clone());
             } else {
                 // Non-generic function: declare as before.
@@ -2284,16 +2287,15 @@ impl<'ctx> LLVMCodegen<'ctx> {
             if !digits.is_empty() && suffix.len() == digits.len() {
                 let base = &name[..pos];
                 if let Some(f) = self.module.get_function(base) {
-                    let expected = digits.parse::<u32>().unwrap_or(0);
-                    if f.count_params() == expected {
-                        return f;
-                    }
+                    // PY-A: accept the base regardless of param count when the
+                    // caller passes the arity hint — coerce_call_args adapts
+                    // the arguments. The strict count check above rejected
+                    // user functions whose MIR was lowered with a different
+                    // arity than this call site (e.g. *args stubs).
+                    return f;
                 }
                 if let Some(&f) = self.fns.get(base) {
-                    let expected = digits.parse::<u32>().unwrap_or(0);
-                    if f.count_params() == expected {
-                        return f;
-                    }
+                    return f;
                 }
                 // Base not declared yet — use the stripped name so extern declaration
                 // (created below) matches runtime symbols (e.g., tcp_bind vs tcp_bind_2).
@@ -5654,6 +5656,37 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 }
                 _ => result.push(arg),
             }
+        }
+        // PY-A: arity adaptation — when the call site passes more/fewer args
+        // than the callee declares (Python *args stubs, optional params),
+        // pad with zeros / truncate instead of emitting an invalid call that
+        // fails module verification.
+        if result.len() < n_params {
+            for i in result.len()..n_params {
+                // Convert via BasicTypeEnum (From<BasicValueEnum> covers the
+                // metadata variants we need — same as push pattern above).
+                let pt_meta = fn_type.get_param_types()[i];
+                let zero: BasicMetadataValueEnum<'ctx> = match pt_meta {
+                    inkwell::types::BasicMetadataTypeEnum::FloatType(t) => {
+                        BasicMetadataValueEnum::FloatValue(t.const_float(0.0))
+                    }
+                    inkwell::types::BasicMetadataTypeEnum::PointerType(t) => {
+                        BasicMetadataValueEnum::PointerValue(t.const_null())
+                    }
+                    inkwell::types::BasicMetadataTypeEnum::IntType(t) => {
+                        BasicMetadataValueEnum::IntValue(t.const_zero())
+                    }
+                    other => match other {
+                        inkwell::types::BasicMetadataTypeEnum::ArrayType(t) => {
+                            BasicMetadataValueEnum::ArrayValue(t.const_zero())
+                        }
+                        _ => BasicMetadataValueEnum::IntValue(self.i64_type.const_zero()),
+                    },
+                };
+                result.push(zero);
+            }
+        } else if result.len() > n_params {
+            result.truncate(n_params);
         }
         result
     }
