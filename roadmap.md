@@ -241,6 +241,44 @@ identity 兜底、UTF-8 边界探针修复。
 3. **Python-only 语义降级**：groupby 多级索引、merge、时区等复杂语义在
    L2 不做——需要它们的策略留在 Python 引擎跑，Zeta 编译的是热路径。
 
+## 通用 Python 编译：四层架构（2026-09-13 设计定稿）
+
+目标重新定义——「所有 Python 都能被 Zeta 处理」的可达契约是：
+**任何 .py 文件要么编译为原生，要么给出精确的不可编译原因，要么经桥接
+回落 CPython**。全量动态语义原生编译不存在（需重写 CPython 对象模型），
+业界（Nuitka/Mojo/mypyc）同此边界。
+
+语料驱动排序（CPython 3.14 stdlib 155 文件 / 6702 函数的构造频率画像）：
+
+| 构造 | 语料频次 | Zeta 现状 | 归属层 |
+|---|---|---|---|
+| try/except | 1412 | V1 error-state ✓ | L2 类型过滤 |
+| class | 747 | ✓（struct 脱糖） | L1 |
+| listcomp | 278 | ✓（__collect__） | L1 |
+| with | 272 | ✗ 解析失败 | L1 解析（desugar → call+try） |
+| starred `*args` 展开 | 268 | ✗ 调用点 | L1 |
+| genexp `(x for x in y)` | 222 | ✗ | L2（迭代器协议） |
+| yield/async def/await | 197/25/15 | ✗ | L4（协程状态机，深水区） |
+| lambda | 130 | ✓（V2 捕获） | L1 |
+| global | 65 | 部分（模块级 Assign→main） | L1（module 全局槽） |
+| walrus `:=` | 59 | ✗ | L1（desugar） |
+| dictcomp/setcomp | 39/11 | ✗ | L2 |
+| nonlocal | 17 | ✓（V3 env） | L1 |
+
+四层架构：
+1. **L1 语法与静态语义**（100% Python 语法入库 + 静态子集原生编译）——
+   parser 补 with/starred/walrus/genexp 解析；语义分类器（新 pass）对每个
+   函数判定「静态可编译 / 依赖动态语义」，后者精确报错而非静默错译
+2. **L2 运行时库**：stdlib 子集原生化（itertools 函数/collections/数据类）+
+   迭代器协议（__iter__/__next__ 统一到 Vec/closure）
+3. **L3 库边界**：C ABI FFI（extern 已有）+ zorb 包管理器实装（fetch 源码
+   → 分类 → 编译或桩）
+4. **L4 CPython 桥**（长期可选）：嵌入解释器处理动态残差，明确标注为
+   「兼容边界」而非性能路径
+
+验收方式改为语料驱动：以 CPython stdlib + REasyQuant 为基准语料，
+逐层推进「解析通过率 100% → 分类覆盖率 → 静态函数原生编译率」三个指标。
+
 ### 下一步（按序）
 
 1. L1 收尾：exp/log/polyfit runtime + f64 数组 layout 统一（StackArray/DynamicArray 双布局是当前最大技术债）
