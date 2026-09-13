@@ -1,0 +1,34 @@
+// PY-A: for 循环里的 break/continue（此前 continue 生成无 terminator 的基本块，
+//   且 break 会穿透）+ 常用字符串方法（capitalize/title/join/zfill/isdigit...）
+// expect: 3
+// expect: 3
+// expect: Abc
+// expect: Q
+// expect: a-b
+// expect: 00042
+// expect: 1
+// expect: 0
+def count_odd():
+    let n = 0
+    for i in range(6):
+        if i % 2 == 0:
+            continue
+        n = n + 1
+    return n
+
+def break_out():
+    let n = 0
+    for i in range(10):
+        if i == 3:
+            break
+        n = n + 1
+    return n
+
+print(count_odd())
+print(break_out())
+print("abc".capitalize())
+print("q".upper())
+print("-".join(["a", "b"]))
+print("42".zfill(5))
+print("12345".isdigit())
+print("12a45".isdigit())

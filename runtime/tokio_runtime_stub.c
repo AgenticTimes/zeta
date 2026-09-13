@@ -1195,3 +1195,378 @@ int64_t py_sys_path_contains(int64_t value) {
     (void)value;
     return 0; // the path list is deliberately empty (see py_sys_path)
 }
+
+// ============================================================================
+// PY-A `re` shims — POSIX regcomp/regexec (no new dependency).
+//
+// Python-flavoured escapes are translated to POSIX classes because BSD/GNU
+// regex differ on `\d`/`\w`/`\s`. Match objects are handles so truthiness is
+// right (`if m:` is false for "no match" instead of an empty-string
+// pointer being truthy).
+// ============================================================================
+#include <regex.h>
+
+static int64_t zt_re_translate(const char* pat, char* out, size_t cap) {
+    size_t n = 0;
+    for (const char* p = pat; *p && n + 24 < cap; p++) {
+        if (*p == '\\' && p[1]) {
+            switch (p[1]) {
+                case 'd': memcpy(out + n, "[0-9]", 5); n += 5; p++; continue;
+                case 'w': memcpy(out + n, "[A-Za-z0-9_]", 12); n += 12; p++; continue;
+                case 's': memcpy(out + n, "[ \t\r\n]", 7); n += 7; p++; continue;
+                case 'D': memcpy(out + n, "[^0-9]", 6); n += 6; p++; continue;
+                case 'W': memcpy(out + n, "[^A-Za-z0-9_]", 13); n += 13; p++; continue;
+                case 'S': memcpy(out + n, "[^ \t\r\n]", 8); n += 8; p++; continue;
+                default: out[n++] = *p; out[n++] = p[1]; p++; continue;
+            }
+        }
+        out[n++] = *p;
+    }
+    out[n] = 0;
+    return (int64_t)n;
+}
+
+typedef struct {
+    regex_t re;
+    int ok;
+} zt_regex_t;
+
+static zt_regex_t* zt_re_compile(int64_t pat) {
+    zt_regex_t* r = (zt_regex_t*)GC_malloc(sizeof(zt_regex_t));
+    r->ok = 0;
+    char buf[1024];
+    const char* p = pat ? (const char*)pat : "";
+    zt_re_translate(p, buf, sizeof buf);
+    if (regcomp(&r->re, buf, REG_EXTENDED) == 0) r->ok = 1;
+    return r;
+}
+
+// Match handle: [string, offsets[10]] (offsets are byte positions).
+typedef struct {
+    int64_t str;
+    int64_t nmatch;
+    regmatch_t m[10];
+} zt_match_t;
+
+static int64_t zt_re_exec(int64_t pat, int64_t str, int flags) {
+    if (!str) return 0;
+    zt_regex_t* r = zt_re_compile(pat);
+    if (!r->ok) return 0;
+    zt_match_t* mt = (zt_match_t*)GC_malloc(sizeof(zt_match_t));
+    mt->str = str;
+    mt->nmatch = 0;
+    if (regexec(&r->re, (const char*)str, 10, mt->m, flags) != 0) return 0;
+    mt->nmatch = 10;
+    return (int64_t)mt;
+}
+
+int64_t py_re_search(int64_t pat, int64_t s) { return zt_re_exec(pat, s, 0); }
+int64_t py_re_match(int64_t pat, int64_t s) { return zt_re_exec(pat, s, 0); }
+int64_t py_re_fullmatch(int64_t pat, int64_t s) {
+    int64_t m = zt_re_exec(pat, s, 0);
+    if (!m) return 0;
+    zt_match_t* mt = (zt_match_t*)m;
+    size_t len = strlen((const char*)(mt->str ? (const char*)mt->str : ""));
+    if ((size_t)mt->m[0].rm_eo != len || mt->m[0].rm_so != 0) return 0;
+    return m;
+}
+int64_t py_re_group(int64_t mh, int64_t idx) {
+    if (!mh) return (int64_t)zt_strdup("");
+    zt_match_t* mt = (zt_match_t*)mh;
+    if (idx < 0 || idx >= 10 || mt->m[idx].rm_so < 0) return (int64_t)zt_strdup("");
+    size_t n = (size_t)(mt->m[idx].rm_eo - mt->m[idx].rm_so);
+    char* out = (char*)GC_malloc(n + 1);
+    memcpy(out, (const char*)mt->str + mt->m[idx].rm_so, n);
+    out[n] = 0;
+    return (int64_t)out;
+}
+int64_t py_re_start(int64_t mh) {
+    if (!mh) return -1;
+    return ((zt_match_t*)mh)->m[0].rm_so;
+}
+int64_t py_re_end(int64_t mh) {
+    if (!mh) return -1;
+    return ((zt_match_t*)mh)->m[0].rm_eo;
+}
+// re.sub(pat, repl, s): `repl` may be a string (with \1..\9 backrefs) or a
+// callable (Python's `lambda m: ...`) — a function pointer taking the match.
+static void zt_re_append(char** out, size_t* n, size_t* cap, const char* src, size_t len) {
+    if (*n + len + 1 > *cap) {
+        while (*n + len + 1 > *cap) *cap *= 2;
+        char* nb = (char*)GC_malloc(*cap);
+        memcpy(nb, *out, *n);
+        *out = nb;
+    }
+    memcpy(*out + *n, src, len);
+    *n += len;
+}
+int64_t py_re_sub_call(int64_t pat, int64_t fn_ptr, int64_t s) {
+    if (!s) return (int64_t)zt_strdup("");
+    zt_regex_t* r = zt_re_compile(pat);
+    if (!r->ok) return s;
+    int64_t (*fp)(int64_t) = (int64_t (*)(int64_t))fn_ptr;
+    const char* cur = (const char*)s;
+    size_t cap = 256, n = 0;
+    char* out = (char*)GC_malloc(cap);
+    regmatch_t m[10];
+    int guard = 0;
+    while (regexec(&r->re, cur, 10, m, 0) == 0 && guard++ < 100000) {
+        zt_re_append(&out, &n, &cap, cur, (size_t)m[0].rm_so);
+        zt_match_t* mt = (zt_match_t*)GC_malloc(sizeof(zt_match_t));
+        mt->str = (int64_t)(uintptr_t)cur;
+        mt->nmatch = 10;
+        for (int i = 0; i < 10; i++) mt->m[i].rm_so = m[i].rm_so, mt->m[i].rm_eo = m[i].rm_eo;
+        int64_t rep = fp((int64_t)mt);
+        if (rep) zt_re_append(&out, &n, &cap, (const char*)rep, strlen((const char*)rep));
+        size_t adv = (m[0].rm_eo > 0) ? (size_t)m[0].rm_eo : 1;
+        cur += adv;
+    }
+    zt_re_append(&out, &n, &cap, cur, strlen(cur));
+    out[n] = 0;
+    return (int64_t)out;
+}
+int64_t py_re_sub(int64_t pat, int64_t repl, int64_t s) {
+    if (s && repl && (uintptr_t)repl > 4096) {
+        // Heuristic: a real string handle looks like a pointer; a small integer
+        // is a callback address. Callers with a callable take py_re_sub_call.
+    }
+    if (!s) return (int64_t)zt_strdup("");
+    zt_regex_t* r = zt_re_compile(pat);
+    if (!r->ok) return s;
+    const char* rep = repl ? (const char*)repl : "";
+    const char* cur = (const char*)s;
+    size_t cap = 256, n = 0;
+    char* out = (char*)GC_malloc(cap);
+    regmatch_t m[10];
+    int guard = 0;
+    while (regexec(&r->re, cur, 10, m, 0) == 0 && guard++ < 100000) {
+        zt_re_append(&out, &n, &cap, cur, (size_t)m[0].rm_so);
+        for (const char* p = rep; *p; p++) {
+            if (*p == '\\' && p[1] >= '0' && p[1] <= '9') {
+                int gi = p[1] - '0';
+                if (m[gi].rm_so >= 0) {
+                    zt_re_append(&out, &n, &cap, cur + m[gi].rm_so,
+                                 (size_t)(m[gi].rm_eo - m[gi].rm_so));
+                }
+                p++;
+            } else {
+                zt_re_append(&out, &n, &cap, p, 1);
+            }
+        }
+        size_t adv = (m[0].rm_eo > 0) ? (size_t)m[0].rm_eo : 1;
+        cur += adv;
+    }
+    zt_re_append(&out, &n, &cap, cur, strlen(cur));
+    out[n] = 0;
+    return (int64_t)out;
+}
+int64_t py_re_split(int64_t pat, int64_t s) {
+    if (!s) return 0;
+    zt_regex_t* r = zt_re_compile(pat);
+    int64_t cap = 8, len = 0;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap;
+    base[1] = 0;
+    const char* cur = (const char*)s;
+    regmatch_t m[10];
+    if (r->ok) {
+        while (regexec(&r->re, cur, 10, m, 0) == 0) {
+            size_t n = (size_t)m[0].rm_so;
+            char* piece = (char*)GC_malloc(n + 1);
+            memcpy(piece, cur, n);
+            piece[n] = 0;
+            if (len >= cap) {
+                int64_t nc = cap * 2;
+                int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)nc * 8);
+                nb[0] = nc; nb[1] = len;
+                for (int64_t i = 0; i < len; i++) nb[2 + i] = base[2 + i];
+                base = nb; cap = nc;
+            }
+            base[2 + len++] = (int64_t)piece;
+            size_t adv = (m[0].rm_eo > 0) ? (size_t)m[0].rm_eo : 1;
+            cur += adv;
+        }
+    }
+    if (len >= cap) {
+        int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)(len + 1) * 8);
+        nb[0] = len + 1; nb[1] = len;
+        for (int64_t i = 0; i < len; i++) nb[2 + i] = base[2 + i];
+        base = nb;
+    }
+    base[2 + len++] = (int64_t)zt_strdup(cur);
+    base[1] = len;
+    return (int64_t)(base + 2);
+}
+int64_t py_re_findall(int64_t pat, int64_t s) {
+    if (!s) return 0;
+    zt_regex_t* r = zt_re_compile(pat);
+    int64_t cap = 8, len = 0;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap; base[1] = 0;
+    const char* cur = (const char*)s;
+    regmatch_t m[10];
+    int guard = 0;
+    if (r->ok) {
+        while (regexec(&r->re, cur, 10, m, 0) == 0 && guard++ < 100000) {
+            size_t n = (size_t)(m[0].rm_eo - m[0].rm_so);
+            char* hit = (char*)GC_malloc(n + 1);
+            memcpy(hit, cur + m[0].rm_so, n);
+            hit[n] = 0;
+            if (len >= cap) {
+                int64_t nc = cap * 2;
+                int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)nc * 8);
+                nb[0] = nc; nb[1] = len;
+                for (int64_t i = 0; i < len; i++) nb[2 + i] = base[2 + i];
+                base = nb; cap = nc;
+            }
+            base[2 + len++] = (int64_t)hit;
+            size_t adv = (m[0].rm_eo > 0) ? (size_t)m[0].rm_eo : 1;
+            cur += adv;
+        }
+    }
+    base[1] = len;
+    return (int64_t)(base + 2);
+}
+// re.compile returns the pattern itself (V1): Pattern methods take it first.
+int64_t py_re_compile(int64_t pat) { return pat ? pat : (int64_t)zt_strdup(""); }
+int64_t py_pattern_sub(int64_t pat, int64_t repl, int64_t s) { return py_re_sub(pat, repl, s); }
+int64_t py_pattern_sub_call(int64_t pat, int64_t fn, int64_t s) { return py_re_sub_call(pat, fn, s); }
+int64_t py_pattern_search(int64_t pat, int64_t s) { return py_re_search(pat, s); }
+int64_t py_pattern_match(int64_t pat, int64_t s) { return py_re_match(pat, s); }
+int64_t py_pattern_split(int64_t pat, int64_t s) { return py_re_split(pat, s); }
+int64_t py_pattern_findall(int64_t pat, int64_t s) { return py_re_findall(pat, s); }
+
+// ---- extra string methods needed by real libraries (stringcase et al.) ----
+int64_t str_capitalize(int64_t s) {
+    if (!s) return (int64_t)zt_strdup("");
+    const char* p = (const char*)s;
+    char* r = (char*)GC_malloc(strlen(p) + 1);
+    size_t n = 0;
+    if (*p) r[n++] = (char)toupper((unsigned char)*p);
+    for (const char* q = p + 1; *q; q++) r[n++] = (char)tolower((unsigned char)*q);
+    r[n] = 0;
+    return (int64_t)r;
+}
+int64_t str_title(int64_t s) {
+    if (!s) return (int64_t)zt_strdup("");
+    const char* p = (const char*)s;
+    char* r = (char*)GC_malloc(strlen(p) + 1);
+    int at_word = 1;
+    size_t n = 0;
+    for (const char* q = p; *q; q++) {
+        unsigned char c = (unsigned char)*q;
+        if (isalpha(c)) {
+            r[n++] = (char)(at_word ? toupper(c) : tolower(c));
+            at_word = 0;
+        } else {
+            r[n++] = (char)c;
+            at_word = 1;
+        }
+    }
+    r[n] = 0;
+    return (int64_t)r;
+}
+int64_t str_zfill(int64_t s, int64_t width) {
+    const char* p = s ? (const char*)s : "";
+    size_t len = strlen(p);
+    if (width <= (int64_t)len) return (int64_t)zt_strdup(p);
+    size_t pad = (size_t)width - len;
+    char* r = (char*)GC_malloc(pad + len + 1);
+    memset(r, '0', pad);
+    memcpy(r + pad, p, len + 1);
+    return (int64_t)r;
+}
+int64_t str_rfind(int64_t hay, int64_t needle) {
+    const char* h = hay ? (const char*)hay : "";
+    const char* n = needle ? (const char*)needle : "";
+    const char* hit = strstr(h, n);
+    const char* last = NULL;
+    while (hit) {
+        last = hit;
+        hit = strstr(hit + 1, n);
+    }
+    return last ? (int64_t)(last - h) : -1;
+}
+int64_t str_is_alpha(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    if (!*p) return 0;
+    for (; *p; p++) if (!isalpha((unsigned char)*p)) return 0;
+    return 1;
+}
+int64_t str_is_digit(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    if (!*p) return 0;
+    for (; *p; p++) if (!isdigit((unsigned char)*p)) return 0;
+    return 1;
+}
+int64_t str_is_upper(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    int any = 0;
+    for (; *p; p++) { if (islower((unsigned char)*p)) return 0; if (isupper((unsigned char)*p)) any = 1; }
+    return any;
+}
+int64_t str_is_lower(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    int any = 0;
+    for (; *p; p++) { if (isupper((unsigned char)*p)) return 0; if (islower((unsigned char)*p)) any = 1; }
+    return any;
+}
+// "".join(parts) — Python's str.join over a Vec of string handles.
+int64_t str_join(int64_t sep, int64_t vec) {
+    const char* sp = sep ? (const char*)sep : "";
+    if (!vec) return (int64_t)zt_strdup("");
+    int64_t len = ((int64_t*)(vec - 16))[1];
+    size_t cap = 64, n = 0;
+    char* out = (char*)GC_malloc(cap);
+    for (int64_t i = 0; i < len; i++) {
+        const char* piece = (const char*)((int64_t*)vec)[i];
+        if (!piece) piece = "";
+        size_t plen = strlen(piece);
+        size_t slen = (i && *sp) ? strlen(sp) : 0;
+        if (n + plen + slen + 1 > cap) {
+            while (n + plen + slen + 1 > cap) cap *= 2;
+            char* nb = (char*)GC_malloc(cap);
+            memcpy(nb, out, n);
+            out = nb;
+        }
+        if (i && slen) { memcpy(out + n, sp, slen); n += slen; }
+        memcpy(out + n, piece, plen);
+        n += plen;
+    }
+    out[n] = 0;
+    return (int64_t)out;
+}
+int64_t str_ljust(int64_t s, int64_t width, int64_t fill) {
+    const char* p = s ? (const char*)s : "";
+    char f = fill ? *(const char*)fill : ' ';
+    size_t len = strlen(p);
+    if (width <= (int64_t)len) return (int64_t)zt_strdup(p);
+    size_t pad = (size_t)width - len;
+    char* r = (char*)GC_malloc(len + pad + 1);
+    memcpy(r, p, len);
+    memset(r + len, f, pad);
+    r[len + pad] = 0;
+    return (int64_t)r;
+}
+int64_t str_rjust(int64_t s, int64_t width, int64_t fill) {
+    const char* p = s ? (const char*)s : "";
+    char f = fill ? *(const char*)fill : ' ';
+    size_t len = strlen(p);
+    if (width <= (int64_t)len) return (int64_t)zt_strdup(p);
+    size_t pad = (size_t)width - len;
+    char* r = (char*)GC_malloc(len + pad + 1);
+    memset(r, f, pad);
+    memcpy(r + pad, p, len + 1);
+    return (int64_t)r;
+}
+int64_t host_str_capitalize(int64_t s) { return str_capitalize(s); }
+int64_t host_str_title(int64_t s) { return str_title(s); }
+int64_t host_str_zfill(int64_t s, int64_t w) { return str_zfill(s, w); }
+int64_t host_str_rfind(int64_t s, int64_t n) { return str_rfind(s, n); }
+int64_t host_str_isalpha(int64_t s) { return str_is_alpha(s); }
+int64_t host_str_isdigit(int64_t s) { return str_is_digit(s); }
+int64_t host_str_isupper(int64_t s) { return str_is_upper(s); }
+int64_t host_str_islower(int64_t s) { return str_is_lower(s); }
+int64_t host_str_join(int64_t sep, int64_t vec) { return str_join(sep, vec); }
+int64_t host_str_ljust(int64_t s, int64_t w, int64_t f) { return str_ljust(s, w, f); }
+int64_t host_str_rjust(int64_t s, int64_t w, int64_t f) { return str_rjust(s, w, f); }

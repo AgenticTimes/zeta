@@ -180,3 +180,17 @@ X py_json_dumps_str args=i64 ret=str
 X py_json_dumps_bool args=i64 ret=str
 X py_json_dumps_vec args=i64 ret=str
 X py_json_dumps_map args=i64 ret=str
+
+# ---- re (POSIX regcomp/regexec backend; Match handles so `if m:` is right) --
+M re
+F re sub py_re_sub args=i64,i64,i64 ret=str
+F re search py_re_search args=i64,i64 ret=i64 handle=PyMatch
+F re match py_re_match args=i64,i64 ret=i64 handle=PyMatch
+F re fullmatch py_re_fullmatch args=i64,i64 ret=i64 handle=PyMatch
+F re split py_re_split args=i64,i64 ret=vec
+F re findall py_re_findall args=i64,i64 ret=vec
+F re compile py_re_compile args=i64 ret=str
+W PyMatch group py_re_group args=2 ret=str
+W PyMatch start py_re_start args=1
+W PyMatch end py_re_end args=1
+X py_re_sub_call args=i64,i64,i64 ret=str

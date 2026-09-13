@@ -4607,9 +4607,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .get_parent()
                         .unwrap();
 
-                    // Create basic blocks for loop
+                    // Create basic blocks for loop. `for.inc` exists so
+                    // `continue` lands on the increment — jumping straight to
+                    // the condition would skip `i = i + 1` and spin forever.
                     let loop_cond_bb = self.context.append_basic_block(parent_fn, "for.cond");
                     let loop_body_bb = self.context.append_basic_block(parent_fn, "for.body");
+                    let loop_inc_bb = self.context.append_basic_block(parent_fn, "for.inc");
                     let loop_exit_bb = self.context.append_basic_block(parent_fn, "for.exit");
 
                     // Get start and end values
@@ -4659,11 +4662,31 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     // We need to find the variable ID for this pattern
                     // For now, we'll just use the pointer directly
 
+                    // `break`/`continue` inside a for body need a target too —
+                    // without pushing here, `if cond: continue` produced a
+                    // basic block with no terminator (LLVM: "Basic Block does
+                    // not have terminator") and `break` fell through.
+                    self.loop_stack.push((loop_inc_bb, loop_exit_bb));
                     for s in body {
                         self.gen_stmt(s, exprs);
                     }
+                    self.loop_stack.pop();
 
-                    // Increment loop variable: i = i + 1
+                    // The body may already have terminated (continue/break/
+                    // return); only fall through to the increment otherwise.
+                    let needs_fallthrough = self
+                        .builder
+                        .get_insert_block()
+                        .map(|b| b.get_terminator().is_none())
+                        .unwrap_or(false);
+                    if needs_fallthrough {
+                        self.builder
+                            .build_unconditional_branch(loop_inc_bb)
+                            .unwrap();
+                    }
+
+                    // Increment block: i = i + 1, then back to the condition.
+                    self.builder.position_at_end(loop_inc_bb);
                     let current_val_after = self
                         .builder
                         .build_load(self.i64_type, loop_var_ptr, "")
@@ -4677,7 +4700,6 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
                     self.builder.build_store(loop_var_ptr, next_val).unwrap();
 
-                    // Branch back to condition
                     self.builder
                         .build_unconditional_branch(loop_cond_bb)
                         .unwrap();

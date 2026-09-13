@@ -73,6 +73,9 @@ pub struct MirGen {
     /// PY-A: bare module-internal name → mangled symbol, for the function
     /// currently being lowered.
     symbol_renames: HashMap<String, String>,
+    /// PY-A: set while lowering the replacement closure of `re.sub`, so its
+    /// parameter is typed as a Match (`m.group(0)` must dispatch).
+    re_repl_param: bool,
     /// Names captured from enclosing scopes in the closure currently being
     /// lowered (name → env key id) — used to route assignments to env stores.
     captured_vars: std::collections::HashMap<String, u32>,
@@ -122,6 +125,7 @@ impl MirGen {
             py_member_aliases: HashMap::new(),
             py_user_modules: std::collections::HashSet::new(),
             symbol_renames: HashMap::new(),
+            re_repl_param: false,
             captured_vars: std::collections::HashMap::new(),
             async_state_ptr: None,
             async_segment_count: 0,
@@ -2324,6 +2328,43 @@ impl MirGen {
                 type_args,
                 ..
             } => {
+                // PY-A: `re.sub(pat, repl, s)` — repl may be a STRING or a
+                // callable (`lambda m: ...`). The closure's parameter must be
+                // typed as a Match so `m.group(0)` inside it dispatches.
+                if let Some((m, mem)) = self.py_member_target(receiver, method) {
+                    if m == "re" && mem == "sub" && args.len() == 3 {
+                        let pat_id = self.lower_expr(&args[0]);
+                        let callable_repl = matches!(
+                            &args[1],
+                            AstNode::Closure { .. }
+                        ) || matches!(
+                            &args[1],
+                            AstNode::Var(n) if self.func_ret_types.contains_key(n.as_str())
+                        );
+                        let repl_id = {
+                            if callable_repl {
+                                self.re_repl_param = true;
+                            }
+                            let id_ = self.lower_expr(&args[1]);
+                            self.re_repl_param = false;
+                            id_
+                        };
+                        let s_id = self.lower_expr(&args[2]);
+                        self.stmts.push(MirStmt::Call {
+                            func: if callable_repl {
+                                "py_re_sub_call".to_string()
+                            } else {
+                                "py_re_sub".to_string()
+                            },
+                            args: vec![pat_id, repl_id, s_id],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
+                }
                 // PY-A: `json.dumps(x)` needs the COMPILER's type — an i64
                 // handle carries no runtime tag, so dispatch to the typed
                 // entry point here instead of guessing in C.
@@ -3505,6 +3546,11 @@ impl MirGen {
                         !(is_str || is_map)
                     })
                 {
+                    // Untyped receiver (a Python function parameter almost
+                    // always is): the default arm below falls back to the
+                    // string runtime so `def f(s): return s.capitalize()` works.
+                    let str_fallback =
+                        str_method_symbol(method.as_str()).map(|(f, _, r)| (f, r));
                     match (method.as_str(), arg_ids.len()) {
                         ("get", 2) => Some(("array_get", "i64")),
                         ("set", 3) => Some(("array_set", "i64")),
@@ -3537,7 +3583,10 @@ impl MirGen {
                         | ("set_index", _) | ("items", _) => {
                             Some(("zeta_identity", "i64"))
                         }
-                        _ => None,
+                        // Unknown method on an untyped receiver: string runtime
+                        // (carrying the method's result kind, so `.capitalize()`
+                        // stays a string and `.split()` stays a list).
+                        _ => str_fallback,
                     }
                 } else {
                     None
@@ -3555,6 +3604,7 @@ impl MirGen {
                         match ret {
                             "str" => Type::Str,
                             "bool" => Type::Bool,
+                            "split" => Type::DynamicArray(Box::new(Type::Str)),
                             _ => Type::I64,
                         },
                     );
@@ -3717,24 +3767,7 @@ impl MirGen {
                 // PY-A: string methods — dispatch to host_str_* runtime by
                 // receiver type (Python s.upper()/s.contains(x)/... )
                 if receiver_ty.as_ref().map_or(false, |t| matches!(t, Type::Str)) {
-                    let m = match method.as_str() {
-                        "upper" => Some(("host_str_to_uppercase", 1usize, "str")),
-                        "lower" => Some(("host_str_to_lowercase", 1, "str")),
-                        "trim" | "strip" => Some(("host_str_trim", 1, "str")),
-                        "lstrip" => Some(("host_str_lstrip", 1, "str")),
-                        "rstrip" => Some(("host_str_rstrip", 1, "str")),
-                        "contains" => Some(("host_str_contains", 2, "bool")),
-                        "startswith" | "starts_with" => {
-                            Some(("host_str_starts_with", 2, "bool"))
-                        }
-                        "endswith" | "ends_with" => Some(("host_str_ends_with", 2, "bool")),
-                        "replace" => Some(("host_str_replace", 3, "str")),
-                        "find" | "index" => Some(("host_str_find", 2, "i64")),
-                        "count" => Some(("host_str_count", 2, "i64")),
-                        "len" => Some(("host_str_len", 1, "i64")),
-                        "split" => Some(("host_str_split", 2, "split")),
-                        _ => None,
-                    };
+                    let m = str_method_symbol(method.as_str());
                     if let Some((func, argc, ret)) = m {
                         if ret == "split" {
                             // returns a Vec handle of string elements
@@ -5663,7 +5696,15 @@ impl MirGen {
             let id = child.next_id();
             child.name_to_id.insert(p.clone(), id);
             child.exprs.insert(id, MirExpr::Var(id));
-            child.type_map.insert(id, Type::I64);
+            // A `re.sub` replacement closure receives a Match handle.
+            child.type_map.insert(
+                id,
+                if self.re_repl_param {
+                    Type::Named("PyMatch".to_string(), vec![])
+                } else {
+                    Type::I64
+                },
+            );
         }
 
         child.stmts = params
@@ -5753,5 +5794,39 @@ impl MirGen {
 impl Default for MirGen {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// PY-A: Python string method -> (runtime symbol, arity, result kind).
+/// Shared by the typed (Str receiver) path and the untyped-receiver fallback,
+/// so the two cannot disagree.
+fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)> {
+    match method {
+        "upper" => Some(("host_str_to_uppercase", 1, "str")),
+        "lower" => Some(("host_str_to_lowercase", 1, "str")),
+        "capitalize" => Some(("host_str_capitalize", 1, "str")),
+        "title" => Some(("host_str_title", 1, "str")),
+        "swapcase" => Some(("host_str_to_uppercase", 1, "str")),
+        "trim" | "strip" => Some(("host_str_trim", 1, "str")),
+        "lstrip" => Some(("host_str_lstrip", 1, "str")),
+        "rstrip" => Some(("host_str_rstrip", 1, "str")),
+        "contains" => Some(("host_str_contains", 2, "bool")),
+        "startswith" | "starts_with" => Some(("host_str_starts_with", 2, "bool")),
+        "endswith" | "ends_with" => Some(("host_str_ends_with", 2, "bool")),
+        "replace" => Some(("host_str_replace", 3, "str")),
+        "find" | "index" => Some(("host_str_find", 2, "i64")),
+        "rfind" => Some(("host_str_rfind", 2, "i64")),
+        "count" => Some(("host_str_count", 2, "i64")),
+        "len" => Some(("host_str_len", 1, "i64")),
+        "split" => Some(("host_str_split", 2, "split")),
+        "join" => Some(("host_str_join", 2, "str")),
+        "zfill" => Some(("host_str_zfill", 2, "str")),
+        "ljust" => Some(("host_str_ljust", 3, "str")),
+        "rjust" => Some(("host_str_rjust", 3, "str")),
+        "isalpha" => Some(("host_str_isalpha", 1, "bool")),
+        "isdigit" => Some(("host_str_isdigit", 1, "bool")),
+        "isupper" => Some(("host_str_isupper", 1, "bool")),
+        "islower" => Some(("host_str_islower", 1, "bool")),
+        _ => None,
     }
 }
