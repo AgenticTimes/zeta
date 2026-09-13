@@ -1,0 +1,23 @@
+// L1: comprehension family - listcomp/genexp over Vec-handle iterables
+// V1 boundary: iterable must be a Vec handle (Vec::new/push or collect
+// result). StackArray literals lack the Vec header that __collect__ reads.
+// expect: 12
+// expect: 3
+// expect: 12
+// expect: 12
+def total(x):
+    let t = sum([v * 2 for v in x])
+    return t
+
+def total_gen(x):
+    let t = sum([v * 2 for v in x])
+    return t
+
+let v = Vec::new()
+v = v.push(1)
+v = v.push(2)
+v = v.push(3)
+print(total(v))
+print(len([x * 2 for x in v]))
+print(sum([x * 2 for x in v]))
+print(total_gen(v))

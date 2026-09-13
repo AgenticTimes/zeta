@@ -8,6 +8,7 @@
 #include <string.h>
 #include <gc.h>
 #include <stdlib.h>
+#include <stdarg.h>
 
 // Python-style string equality (by content, not pointer)
 int64_t str_eq(int64_t a, int64_t b) {
@@ -353,9 +354,10 @@ int64_t zeta_nonlocal_decl(int64_t name) { return name; }
 // PY-A: list comprehension collector — iter is a Vec-layout handle
 // ([cap|len|data...]); fn_ptr is the address of a generated closure taking
 // one i64 and returning i64 (-1 = skip). Returns a new Vec-layout handle.
-int64_t zeta_collect_vec(int64_t iter, int64_t fn_ptr) {
+int64_t zeta_collect_vec_n(int64_t iter, int64_t fn_ptr, int64_t len_override) {
     if (!iter) return 0;
-    int64_t len = ((int64_t*)(iter - 16))[1];
+    int64_t len = len_override;
+    if (len < 0) len = ((int64_t*)(iter - 16))[1];
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(len ? len : 8) * 8);
     base[0] = len ? len : 8;
     base[1] = 0;
@@ -486,3 +488,32 @@ int64_t zeta_diff_n(int64_t data, int64_t len) {
 // log.set_level(level, name) / logger.debug/info — no-op logging shims
 int64_t zeta_log_noop2(int64_t a, int64_t b) { return 0; }
 int64_t zeta_log_noop1(int64_t a) { return 0; }
+
+// __collect_literals__(e1..en, COUNT, lambda) — variadic map over literal
+// elements. Returns Vec handle of mapped results. NOTE: varargs after two
+// fixed params; the generated call must pass (e1..en, count, fn_ptr) —
+// actually simpler ABI: (count, fn_ptr, e1..en).
+int64_t zeta_collect_literals(int64_t count, int64_t fn_ptr, ...) {
+    int64_t (*fp)(int64_t) = (int64_t(*)(int64_t))fn_ptr;
+    int64_t cap = count < 8 ? 8 : count;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap; base[1] = 0;
+    va_list ap;
+    va_start(ap, fn_ptr);
+    for (int64_t i = 0; i < count; i++) {
+        int64_t v = va_arg(ap, int64_t);
+        int64_t mapped = fp(v);
+        if (mapped != -1) {
+            base[2 + base[1]] = mapped;
+            base[1] += 1;
+        }
+    }
+    va_end(ap);
+    if (getenv("ZETA_PROBE")) {
+        fprintf(stderr, "PROBE collect_literals count=%lld elems:", (long long)count);
+        for (int64_t i = 0; i < base[1]; i++)
+            fprintf(stderr, " %lld", (long long)base[2 + i]);
+        fprintf(stderr, "\n");
+    }
+    return (int64_t)(base + 2);
+}

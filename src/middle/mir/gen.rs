@@ -2496,6 +2496,9 @@ impl MirGen {
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
+                if method == "sum" && std::env::var("ZETA_PROBE").is_ok() {
+                    eprintln!("PROBE sum seen, receiver_none={} args={}", receiver.is_none(), args.len());
+                }
                 if receiver.is_none() && method == "sum" && args.len() == 1 {
                     let arg_id = self.lower_expr(&args[0]);
                     let (func, extra) = match self.type_map.get(&arg_id).cloned() {
@@ -3109,13 +3112,55 @@ impl MirGen {
                     return id;
                 }
 
+                // PY-A: comprehension over literal elements — variadic map.
+                // args = [e1..en, lam]; emit zeta_collect_literals(count, lam, e1..en).
+                if method == "__collect_literals__" && args.len() >= 1 {
+                    let lam = args[args.len() - 1].clone();
+                    let elems = &args[..args.len() - 1];
+                    let mut lowered_elems = Vec::new();
+                    for a in elems {
+                        lowered_elems.push(self.lower_expr(a));
+                    }
+                    let lam_id = self.lower_expr(&lam);
+                    let count_id = self.next_id();
+                    self.exprs
+                        .insert(count_id, MirExpr::IntLit(lowered_elems.len() as i64));
+                    self.type_map.insert(count_id, Type::I64);
+                    let mut call_args = vec![count_id, lam_id];
+                    call_args.extend(lowered_elems);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_collect_literals".to_string(),
+                        args: call_args,
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                    return id;
+                }
+
                 // PY-A: list comprehension collect — receiver is the iterable,
                 // arg is the lambda FuncAddr. zeta_collect_vec returns a new
                 // Vec handle skipping -1 (filtered-out) results.
                 if method == "__collect__" && arg_ids.len() == 2 {
+                    let len_id = match self.type_map.get(&arg_ids[0]).cloned() {
+                        Some(Type::Array(_, ArraySize::Literal(n))) => {
+                            let nid = self.next_id();
+                            self.exprs.insert(nid, MirExpr::IntLit(n as i64));
+                            self.type_map.insert(nid, Type::I64);
+                            nid
+                        }
+                        _ => {
+                            let nid = self.next_id();
+                            self.exprs.insert(nid, MirExpr::IntLit(-1));
+                            self.type_map.insert(nid, Type::I64);
+                            nid
+                        }
+                    };
                     self.stmts.push(MirStmt::Call {
-                        func: "zeta_collect_vec".to_string(),
-                        args: arg_ids.clone(),
+                        func: "zeta_collect_vec_n".to_string(),
+                        args: vec![arg_ids[0], arg_ids[1], len_id],
                         dest: id,
                         type_args: vec![],
                     });

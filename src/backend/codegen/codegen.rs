@@ -860,6 +860,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
         module.add_function("zeta_arange", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_linspace_i64", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_diff_n", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_collect_vec_n", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        // variadic: (count, fn_ptr, e1..en) — declared with 6 fixed params
+        // (max unroll width); coerce_call_args pads/truncates the rest
+        module.add_function("zeta_collect_literals", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], true), Some(Linkage::External));
         module.add_function("zeta_log_noop2", void_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_log_noop1", void_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
         // PY-A: f64 intrinsics — native double signatures (abs/min/max of

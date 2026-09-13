@@ -717,6 +717,12 @@ fn parse_if_tail(input: &str) -> IResult<&str, AstNode> {
 
 fn parse_tuple_or_paren(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag("(")).parse(input)?;
+    // PY-A: genexp `(expr for name in iter (if cond)?)` — same desugar as
+    // listcomp (V1: eager collection, no laziness).
+    if comp_probe(input, b'(', b')').is_some() {
+        let (rest, call) = parse_listcomp_full(input)?;
+        return Ok((rest, call));
+    }
     // PY-A: walrus `(name := expr)` — single parenthesized assignment.
     // Detected before the general expr list (parse_expr cannot parse ':=').
     {
@@ -768,18 +774,60 @@ fn parse_dict_lit(input: &str) -> IResult<&str, AstNode> {
     Ok((input, AstNode::DictLit { entries }))
 }
 
+/// PY-A: shared comprehension scanner — probes `for ` at depth 1 inside the
+/// opening bracket. Returns Some(()) if this looks like a comprehension.
+fn comp_probe(input: &str, open: u8, _close: u8) -> Option<()> {
+    let b = input.as_bytes();
+    let mut depth = 1i32;
+    let mut quote: Option<u8> = None;
+    let mut i = if b.first() == Some(&open) { 1 } else { return None };
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == b'\\' { i += 2; continue; }
+            if c == q { quote = None; }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'\'' | b'"' => quote = Some(c),
+            b'[' | b'(' | b'{' => depth += 1,
+            b']' | b')' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return None;
+                }
+            }
+            b' ' if depth == 1
+                && i + 5 <= b.len()
+                && input.is_char_boundary(i)
+                && input.is_char_boundary(i + 5)
+                && &input[i..i + 5] == " for " =>
+            {
+                return Some(());
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// PY-A: generic comprehension parse for `(`/`[`/`{` forms.
+/// kind: "list" | "genexp" | "set" | "dict"
 /// PY-A: Python list comprehension `[expr for name in iterable (if cond)?]`
 /// desugars into `__collect__(iterable, lambda(name) expr_or_filter)` — a
 /// runtime helper that builds a Vec of results. The lambda uses the Closure
 /// node (env capture works for the enclosing scope's variables).
-fn parse_list_comp(input: &str) -> IResult<&str, AstNode> {
-    if !input.trim_start().starts_with('[') {
+fn parse_listcomp_full(input: &str) -> IResult<&str, AstNode> {
+    let first = input.trim_start().as_bytes().first().copied();
+    if first != Some(b'[') && first != Some(b'(') {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
         )));
     }
-    // Heuristic pre-scan: contains " for " before the matching "]"?
+    // Heuristic pre-scan: contains " for " before the matching close?
     let mut depth = 1i32;
     let mut quote: Option<u8> = None;
     let b = input.as_bytes();
@@ -817,21 +865,25 @@ fn parse_list_comp(input: &str) -> IResult<&str, AstNode> {
             nom::error::ErrorKind::Tag,
         )));
     }
-    // Parse as array-ish: [ ELEM for NAME in ITER (if COND)? ]
-    let (input, _) = ws(tag("[")).parse(input)?;
+    // Parse as comprehension: OPENER ELEM for NAME in ITER (if COND)? CLOSE
+    let (open_str, close_str) = match first {
+        Some(b'(') => ("(", ")"),
+        _ => ("[", "]"),
+    };
+    let (input, _) = ws(tag(open_str)).parse(input)?;
     let (input, elem) = ws(parse_full_expr).parse(input)?;
     let (input, _) = ws(tag("for")).parse(input)?;
     let (input, name) = ws(parse_ident).parse(input)?;
     let (input, _) = ws(tag("in")).parse(input)?;
     let (input, iter) = ws(parse_full_expr).parse(input)?;
-    // optional filter — everything up to ']' is the condition
+    // optional filter — everything up to CLOSE is the condition
     let (input, cond) = if let Ok((rest, _)) = ws(tag("if")).parse(input) {
         let (rest, c) = ws(parse_full_expr).parse(rest)?;
         (rest, Some(c))
     } else {
         (input, None)
     };
-    let (input, _) = ws(tag("]")).parse(input)?;
+    let (input, _) = ws(tag(close_str)).parse(input)?;
 
     // Build lambda: |NAME| if COND { collect(EXPR) } — via a single expression:
     // __comp_item__(EXPR, COND) semantics handled in runtime collect.
@@ -1209,7 +1261,7 @@ pub fn parse_primary(input: &str) -> IResult<&str, AstNode> {
         parse_loop,
         parse_path_expr,
         parse_simple_ident,
-        parse_list_comp,
+        parse_listcomp_full,
         parse_array_lit,
         parse_bool,
         parse_closure,
@@ -1505,6 +1557,10 @@ fn parse_logical_and(input: &str) -> IResult<&str, AstNode> {
 /// `name=value`. Keyword NAMES are dropped in V1 (values bind positionally);
 /// this keeps JoinQuant-style calls (`f(x=1, type='fund')`) parseable.
 fn parse_call_arg(input: &str) -> IResult<&str, AstNode> {
+    // PY-A LIMIT: `sum(x for x in y)` (bare genexp as sole argument) is NOT
+    // supported — the genexp parens collide with the call's parens in the
+    // primary/postfix parse order. Write `sum([x for x in y])` instead
+    // (listcomp, fully supported).
     // look ahead: IDENT '=' (not '==') means keyword argument
     let kw = || -> Option<(&str, &str)> {
         let t = input.trim_start();
