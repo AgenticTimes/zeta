@@ -171,6 +171,34 @@
 Python 侧 `time.sleep(0.02)`、`Thread.join()` 返回值等已验证；f64 返回类型经注册表 `ret` 标注，
 避免 i64 位模式误解（`time.monotonic()` 差值直接可用于测时）。
 
+**缺口清单（2026-09-13 盘点）** —— 按优先级，未做项一律保持 fail-loud（链接期失败或 warning），
+不得静默产生错值：
+
+- [ ] **P1 模块系统**：包（`__init__.py` / 目录包）、相对导入（`from . import x`）、
+  `from X import *`（现仅记录模块、不绑名字）、`importlib` / `sys.path` 动态导入
+- [ ] **P1 模块语义**：用户模块的**模块级语句不执行**（只注册定义，import 副作用语义缺失）、
+  顶层常量/变量不导出（跨模块读模块级常量会落空）
+- [ ] **P1 `with` 协议收尾**：用户自定义 `__enter__`/`__exit__` 目前走 identity 兜底
+  （有 warning，但非真协议）；文件对象 `open()` 未实现，故 `with open(...)` 仍不可用
+- [ ] **P1 `Thread(target, args=...)`**：带参数目标函数未支持（`FuncAddr` 目前零参），
+  真实代码里 `Thread(worker, args=(1,))` 很常见
+- [ ] **P2 `queue` 模块**：`Queue`/`LifoQueue`/`PriorityQueue` + `Empty`/`Full` 整块缺失，
+  是并发代码最常用的原语之一
+- [ ] **P2 threading 补齐**：`Event`/`Semaphore`/`BoundedSemaphore`/`Barrier`/`Condition`/
+  `Timer`/`local`/`enumerate`/`main_thread`；`Thread(daemon=)`、`Thread.name` 属性
+- [ ] **P2 futures 补齐**：`as_completed`/`wait`/`Future.exception`/`cancel`/
+  `add_done_callback`；`Executor.map` 多 iterable 形式；`ProcessPoolExecutor` 目前与线程池等价
+- [ ] **P2 multiprocessing 补齐**：`Queue`/`Pipe`/`Value`/`Array`/`Manager`/共享锁/`Event`；
+  `Pool` 现为**进程内并行**（非真多进程，接线 IPC/管道即升级）、缺 `apply_async`/`imap`/`starmap`
+- [ ] **P2 库覆盖**：注册表只有 6 个模块（threading / concurrent.futures / multiprocessing /
+  asyncio / time / math）；`os`/`sys`/`json`/`re`/`collections`/`itertools`/`random`/`datetime`/
+  `pathlib`/`functools`/`logging` 等均未接入（`import os` 目前发 warning + 用到就链接失败）
+- [ ] **P2 注册表形态**：`pylib/registry.txt` 是**声明式数据**，新原语仍需写 C；
+  下一步可让库以 Zeta 源模块（`pylib/X.z`，extern + 包装函数）实现，复用已有文件加载器，
+  使「纯 Zeta 库」完全零 C 零 Rust 接入
+- [ ] **L4 asyncio 真并发**：事件循环 / 真 `Task` / `gather` / `wait_for` / `Queue` / `Lock` /
+  `to_thread`（现为**顺序语义**，值正确但并发不真）；yield 生成器同样属 L4
+
 ### 已完成（本批）
 - [x] `#` 注释（parser `line_comment` + 预处理器字符串状态机；`#[` 保留给属性）
 - [x] `pass`（no-op 语句）
@@ -323,7 +351,21 @@ identity 兜底、UTF-8 边界探针修复。
 
 ### 下一步（按序）
 
-1. L1 收尾：exp/log/polyfit runtime + ~~f64 数组 layout 统一~~（**2026-09-13 完成**）+ ~~Python 库导入机制与并发库~~（**2026-09-13 完成**，commit 见下）
-2. L2 mini-DataFrame：`dataframe.z` 桩 + native runtime（列存 Map+Vec）
-3. 嵌套 def 方法分发修正（stub 方法解析为裸名 extern 的 bug——HashMap::new().insert() 应路由到 map_insert）
-4. L3 shim 边界：REasyQuant 引擎侧提供 jq_shim.o（或确认现有 no-op 桩足够）
+已完成：~~f64 数组 layout 统一~~、~~Python 库导入机制（含通用文件加载 + 数据驱动注册表）~~
+、~~四个并发库 + math~~、~~`with` 语义修复~~（均 2026-09-13，python_style 43/43 / 官方 194/194 /
+语料 38/38，退出码零差异）。
+
+下一批按「缺口清单」优先级（见上）：
+
+1. **P1 模块系统与语义**：包/相对导入、模块级语句执行、顶层常量导出、`Thread(args=...)`、
+   `with open(...)`（文件对象）
+2. **P2 并发 API 补齐**：`queue` 模块 → threading（Event/Semaphore/Barrier/Condition/Timer）→
+   futures（as_completed/wait）→ multiprocessing（真多进程 + Queue/Pipe/Value）
+3. **P2 库覆盖**：os/sys/json/re/collections/itertools/... 逐个按需接入（现在是数据文件 + C，
+   或纯 Zeta 模块）
+4. **P2 注册表形态升级**：库实现为 `pylib/X.z`（extern + 包装），让纯 Zeta 库零 C 零 Rust 接入
+5. L1 收尾：exp/log/polyfit runtime
+6. L2 mini-DataFrame：`dataframe.z` 桩 + native runtime（列存 Map+Vec）
+7. 嵌套 def 方法分发修正（stub 方法解析为裸名 extern 的 bug——HashMap::new().insert() 应路由到 map_insert）
+8. L3 shim 边界：REasyQuant 引擎侧提供 jq_shim.o（或确认现有 no-op 桩足够）
+9. **L4**：asyncio 事件循环与真协程、yield 生成器
