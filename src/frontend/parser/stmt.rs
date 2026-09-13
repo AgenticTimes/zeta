@@ -728,10 +728,58 @@ fn parse_nonlocal(input: &str) -> IResult<&str, AstNode> {
     ))
 }
 
+/// PY-A: `with EXPR as NAME:` — context-manager sugar. V1 desugar: evaluate
+/// EXPR, bind NAME (optional), run body. No __enter__/__exit__ protocol yet
+/// (documented limit; real resource management needs the runtime protocol).
+fn parse_with(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(tag("with")).parse(input)?;
+    // Header text runs to the body `{` (preprocessed). Split `as NAME` off
+    // manually — parse_full_expr would consume `as a` as a Cast.
+    let brace = input.find('{').ok_or_else(|| {
+        nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag))
+    })?;
+    let header = input[..brace].trim().to_string();
+    let (mgr_text, as_name) = match header.rsplit_once(" as ") {
+        Some((m, n)) => (m.trim().to_string(), Some(n.trim().to_string())),
+        None => (header.clone(), None),
+    };
+    // Parse the manager expression properly from mgr_text.
+    // parse_full_expr's rest borrows mgr_text, so we only keep the node.
+    let parsed = parse_full_expr(mgr_text.as_str());
+    match parsed {
+        Ok((mgr_rest, mgr)) if mgr_rest.trim().is_empty() => {
+            let input = &input[brace..];
+            let (input, _) = ws(tag("{")).parse(input)?;
+            let (input, body) = parse_block_body(input)?;
+            let (input, _) = ws(tag("}")).parse(input)?;
+
+            let mut stmts: Vec<AstNode> = Vec::new();
+            let bind_name = as_name.unwrap_or_else(|| "_with_ctx".to_string());
+            stmts.push(AstNode::Assign(
+                Box::new(AstNode::Var(bind_name)),
+                Box::new(mgr),
+            ));
+            stmts.extend(body);
+            return Ok((input, AstNode::Block { body: stmts }));
+        }
+        _ => {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )))
+        }
+    }
+}
+fn parse_full_expr_as_target(input: &str) -> IResult<&str, AstNode> {
+    parse_full_expr(input)
+}
 /// PY-A: `raise(expr)` → zeta_raise(expr) — longjmps to the innermost try
 fn parse_raise(input: &str) -> IResult<&str, AstNode> {
-    // PY-A: nonlocal dispatches here to stay under nom's alt tuple arity cap
+    // PY-A: nonlocal/with dispatch here to stay under nom's alt tuple arity cap
     if let Ok(r) = parse_nonlocal(input) {
+        return Ok(r);
+    }
+    if let Ok(r) = parse_with(input) {
         return Ok(r);
     }
     let (input, _) = ws(terminated(

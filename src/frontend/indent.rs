@@ -49,7 +49,7 @@ impl fmt::Display for IndentError {
 const HEADER_KEYWORDS: &[&str] = &[
     "fn", "def", "if", "elif", "else", "for", "while", "loop", "match",
     "struct", "enum", "impl", "trait", "concept", "unsafe", "comptime", "mod",
-    "class", "try", "except", "finally",
+    "class", "try", "except", "finally", "with",
 ];
 
 /// Modifiers that may precede a header keyword (`pub const fn f():` ...).

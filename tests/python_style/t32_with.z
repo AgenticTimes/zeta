@@ -1,0 +1,11 @@
+// PY-A L1: with 语句（context-manager sugar — V1 无 __exit__ 协议）
+// expect: 42
+// expect: 99
+def open_file():
+    return 7
+
+def main() -> i64:
+    with open_file() as f:
+        print(42)
+    print(99)
+    return 0
