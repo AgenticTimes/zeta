@@ -695,6 +695,39 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
 }
 
 
+/// PY-A: `global a, b` — same env routing as nonlocal (the name's storage
+/// lives in the shared env, visible across functions). Shares the
+/// zeta_nonlocal_decl marker so Resolver/gen routes reuse the V3 path.
+fn parse_global(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(tag("global")).parse(input)?;
+    let mut out: Vec<AstNode> = Vec::new();
+    let mut cur = input;
+    loop {
+        let (rest, name) = ws(parse_ident).parse(cur)?;
+        out.push(AstNode::ExprStmt {
+            expr: Box::new(AstNode::Call {
+                receiver: None,
+                method: "zeta_nonlocal_decl".to_string(),
+                args: vec![AstNode::StringLit(name)],
+                type_args: vec![],
+                structural: false,
+            }),
+        });
+        let rest2 = skip_ws_and_comments(rest).map(|(i, _)| i).unwrap_or(rest);
+        if rest2.starts_with(',') {
+            cur = &rest2[1..];
+        } else {
+            cur = rest2;
+            break;
+        }
+    }
+    let (input, _) = opt(ws(tag(";"))).parse(cur)?;
+    Ok((
+        input,
+        AstNode::Block { body: out },
+    ))
+}
+
 /// PY-A: `nonlocal a, b` — declares capture-by-reference of outer-scope
 /// names. Lowered to a `zeta_nonlocal_decl("a")` call per name; MIR lowering
 /// uses these to route the name's reads/writes through the closure env.
@@ -775,8 +808,15 @@ fn parse_full_expr_as_target(input: &str) -> IResult<&str, AstNode> {
 }
 /// PY-A: `raise(expr)` → zeta_raise(expr) — longjmps to the innermost try
 fn parse_raise(input: &str) -> IResult<&str, AstNode> {
-    // PY-A: nonlocal/with dispatch here to stay under nom's alt tuple arity cap
+    // PY-A: nonlocal/global/with dispatch here to stay under nom's alt tuple
+    // arity cap
+    if let Ok(r) = parse_global(input) {
+        return Ok(r);
+    }
     if let Ok(r) = parse_nonlocal(input) {
+        return Ok(r);
+    }
+    if let Ok(r) = parse_with(input) {
         return Ok(r);
     }
     if let Ok(r) = parse_with(input) {

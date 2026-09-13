@@ -1,0 +1,26 @@
+// L1: global 语句 —— 跨函数可变共享状态（复用 nonlocal env 路由）
+// expect: LOG: enabled
+// expect: 3
+// expect: 3
+DEBUG = 1
+
+def log(msg):
+    global DEBUG
+    if DEBUG == 1:
+        print("LOG: enabled")
+
+CALLS = 0
+
+def tick():
+    global CALLS
+    CALLS = CALLS + 1
+
+def tick_twice():
+    tick()
+    tick()
+    return CALLS
+
+log("hello")
+tick()
+print(tick_twice())
+print(CALLS)
