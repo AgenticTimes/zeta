@@ -401,7 +401,16 @@ int64_t vec_get(int64_t data_ptr, int64_t idx) {
     return ((int64_t*)data_ptr)[idx];
 }
 int64_t vec_len(int64_t data_ptr) {
-    return ((int64_t*)(data_ptr - 16))[1];
+    if (!data_ptr) return 0;
+    // Same validation as the slice helper: a non-Vec handle must not produce
+    // a garbage length (and downstream absurd allocations).
+    int64_t* h = (int64_t*)(data_ptr - 16);
+    int64_t cap = h[0], len = h[1];
+    // Only obviously-insane values are rejected: some array kinds legitimately
+    // report len > cap (they are grown by a stub push), and rejecting those
+    // made len() return 0.
+    if (cap < 0 || len < 0 || len > (1 << 28) || cap > (1 << 28)) return 0;
+    return len;
 }
 void vec_free(int64_t data_ptr) { (void)data_ptr; /* GC-managed */ }
 
@@ -1570,3 +1579,41 @@ int64_t host_str_islower(int64_t s) { return str_is_lower(s); }
 int64_t host_str_join(int64_t sep, int64_t vec) { return str_join(sep, vec); }
 int64_t host_str_ljust(int64_t s, int64_t w, int64_t f) { return str_ljust(s, w, f); }
 int64_t host_str_rjust(int64_t s, int64_t w, int64_t f) { return str_rjust(s, w, f); }
+
+// ---- Python string indexing / slicing (s[0], s[-1], s[1:], s[:-1]) ----
+int64_t str_get(int64_t s, int64_t i) {
+    if (!s) return (int64_t)zt_strdup("");
+    const char* p = (const char*)s;
+    int64_t n = (int64_t)strlen(p);
+    if (i < 0) i += n;
+    // V1: out-of-range yields "" (Python raises IndexError; the compiler has
+    // no exception path for a single subscript yet).
+    if (i < 0 || i >= n) return (int64_t)zt_strdup("");
+    char* r = (char*)GC_malloc(2);
+    r[0] = p[i];
+    r[1] = 0;
+    return (int64_t)r;
+}
+// `to_end` distinguishes the omitted-end sentinel (s[1:]) from an explicit
+// negative index (s[:-1]) — the desugar alone cannot tell them apart.
+int64_t str_slice(int64_t s, int64_t start, int64_t end, int64_t to_end) {
+    if (!s) return (int64_t)zt_strdup("");
+    const char* p = (const char*)s;
+    int64_t n = (int64_t)strlen(p);
+    if (start < 0) start += n;
+    if (start < 0) start = 0;
+    if (start > n) start = n;
+    if (to_end) {
+        end = n;
+    } else {
+        if (end < 0) end += n;
+        if (end < 0) end = 0;
+        if (end > n) end = n;
+    }
+    if (end < start) end = start;
+    int64_t len = end - start;
+    char* r = (char*)GC_malloc((size_t)len + 1);
+    memcpy(r, p + start, (size_t)len);
+    r[len] = 0;
+    return (int64_t)r;
+}

@@ -760,6 +760,9 @@ impl Resolver {
         // Includes functions from imported modules: they were registered
         // through the same path, so their bodies are here too.
         let asts: Vec<AstNode> = self.registered_func_defs.borrow().clone();
+        if std::env::var("ZETA_PROBE").is_ok() {
+
+        }
         fn collect_returns(body: &[AstNode], out: &mut Vec<AstNode>) {
             for s in body {
                 match s {
@@ -782,6 +785,7 @@ impl Resolver {
             funcs: &HashMap<String, (Vec<(String, Type)>, Type, bool)>,
             prefix: Option<&str>,
             module_aliases: &HashMap<String, String>,
+            current_params: &[(String, Type)],
         ) -> u8 {
             match e {
                 AstNode::StringLit(_) | AstNode::FString { .. } => 1,
@@ -810,6 +814,16 @@ impl Resolver {
                     method,
                     ..
                 } => {
+                    if method == "__slice__" {
+                        if let AstNode::Var(v) = &**recv {
+                            if current_params
+                                .iter()
+                                .any(|(n, t)| n == v && *t == Type::Str)
+                            {
+                                return 1;
+                            }
+                        }
+                    }
                     // `re.sub(...)` / `os.path.join(...)`: a registry member
                     // that is declared to return a string.
                     if let AstNode::Var(alias) = &**recv {
@@ -831,9 +845,22 @@ impl Resolver {
                         _ => 0,
                     }
                 }
+                // `s[0]` / `s[1:]` where `s` is a parameter already inferred to
+                // be a string yields a string.
+                AstNode::Subscript { base, .. } => {
+                    if let AstNode::Var(v) = &**base {
+                        if current_params
+                            .iter()
+                            .any(|(n, t)| n == v && *t == Type::Str)
+                        {
+                            return 1;
+                        }
+                    }
+                    0
+                }
                 AstNode::BinaryOp { op, left, right } if op == "+" => {
-                    let l = classify(left, funcs, prefix, module_aliases);
-                    let r = classify(right, funcs, prefix, module_aliases);
+                    let l = classify(left, funcs, prefix, module_aliases, current_params);
+                    let r = classify(right, funcs, prefix, module_aliases, current_params);
                     if l == 3 || r == 3 {
                         3
                     } else if l == 1 || r == 1 {
@@ -847,7 +874,9 @@ impl Resolver {
                 _ => 0,
             }
         }
-        for _ in 0..3 {
+        // Each pass propagates evidence one call level deeper (main ->
+        // snakecase -> lowercase -> ...), so give the chain room.
+        for _ in 0..6 {
             for ast in &asts {
                 let AstNode::FuncDef { name, body, ret, .. } = ast else {
                     continue;
@@ -858,25 +887,28 @@ impl Resolver {
                     .get(name)
                     .map(|m| format!("{}__", m.replace('.', "_")));
                 // `def f():` has no annotation, so the parser defaults the
-                // return type to `()` (unit) — that is what marks a function
-                // as inferable. An explicit annotation is respected.
-                if !(ret.is_empty() || ret == "()") {
-                    continue;
-                }
-                if !self.funcs.contains_key(name) {
-                    continue;
-                }
+                // return type to `()` (unit) — that marks a function as
+                // inferable for its RETURN. Call-site evidence for PARAMETERS
+                // must be collected from every function, including ones with
+                // an explicit return type (e.g. the synthesized `main`, which
+                // is where top-level call sites live).
+                let infer_return = (ret.is_empty() || ret == "()")
+                    && self.funcs.contains_key(name);
                 let mut rets: Vec<AstNode> = Vec::new();
-                collect_returns(body, &mut rets);
-                if rets.is_empty() {
-                    continue;
+                if infer_return {
+                    collect_returns(body, &mut rets);
                 }
                 let mut saw_str = false;
                 let mut saw_f64 = false;
                 let mut saw_i64 = false;
                 let aliases = self.py_module_aliases.borrow().clone();
                 for r in &rets {
-                    match classify(r, &self.funcs, prefix.as_deref(), &aliases) {
+                    let cur_params: Vec<(String, Type)> = self
+                        .funcs
+                        .get(name)
+                        .map(|(p, _, _)| p.clone())
+                        .unwrap_or_default();
+                    match classify(r, &self.funcs, prefix.as_deref(), &aliases, &cur_params) {
                         1 => saw_str = true,
                         2 => saw_f64 = true,
                         3 => saw_i64 = true,
@@ -890,9 +922,156 @@ impl Resolver {
                 } else {
                     None
                 };
-                if let Some(t) = new_ret {
-                    if let Some(entry) = self.funcs.get_mut(name) {
-                        entry.1 = t;
+                if infer_return {
+                    if let Some(t) = new_ret {
+                        if let Some(entry) = self.funcs.get_mut(name) {
+                            entry.1 = t;
+                        }
+                    }
+                }
+
+                // Pass B: parameter types from call-site evidence. Python
+                // parameters are unannotated, so the parser defaults them to
+                // i64 — which made `s[0]` / `s[1:]` / string methods on a
+                // parameter fall into the ARRAY path (garbage, and an absurd
+                // allocation). Strong evidence only: a parameter that is
+                // passed a string literal (or a value known to be str/f64) at
+                // some call site is that type.
+                let aliases2 = self.py_module_aliases.borrow().clone();
+                let mut calls: Vec<(String, Vec<AstNode>)> = Vec::new();
+                fn collect_calls(body: &[AstNode], out: &mut Vec<(String, Vec<AstNode>)>) {
+                    for s in body {
+                        match s {
+                            AstNode::Call {
+                                receiver: None,
+                                method,
+                                args,
+                                ..
+                            } => {
+                                out.push((method.clone(), args.clone()));
+                                // Recurse into the arguments: the call-site
+                                // evidence for a parameter usually sits inside
+                                // another call, e.g. print(f("literal")).
+                                collect_calls(args, out);
+                            }
+                            AstNode::If { cond, then, else_ } => {
+                                collect_calls(std::slice::from_ref(cond.as_ref()), out);
+                                collect_calls(then, out);
+                                collect_calls(else_, out);
+                            }
+                            AstNode::While { cond, body } => {
+                                collect_calls(std::slice::from_ref(cond.as_ref()), out);
+                                collect_calls(body, out);
+                            }
+                            AstNode::For { body, .. } => collect_calls(body, out),
+                            AstNode::Block { body } => collect_calls(body, out),
+                            AstNode::ExprStmt { expr } => {
+                                collect_calls(std::slice::from_ref(expr.as_ref()), out)
+                            }
+                            // The call site is very often inside a `return`
+                            // (`return lowercase(s[0]) + ...`) — without these
+                            // arms the evidence chain never left `main`.
+                            AstNode::Return(e) => {
+                                collect_calls(std::slice::from_ref(e.as_ref()), out)
+                            }
+                            AstNode::Let { expr, .. } => {
+                                collect_calls(std::slice::from_ref(expr.as_ref()), out)
+                            }
+                            AstNode::Assign(lhs, rhs) => {
+                                collect_calls(std::slice::from_ref(lhs.as_ref()), out);
+                                collect_calls(std::slice::from_ref(rhs.as_ref()), out);
+                            }
+                            AstNode::BinaryOp { left, right, .. } => {
+                                collect_calls(std::slice::from_ref(left.as_ref()), out);
+                                collect_calls(std::slice::from_ref(right.as_ref()), out);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                collect_calls(body, &mut calls);
+                for (callee, pargs) in calls {
+                    // Resolve the callee name the same three ways the MIR
+                    // does: a plain registered function, a `from X import f`
+                    // alias (X__f), or a module-local bare call inside an
+                    // imported module (prefix + name).
+                    let callee = {
+                        if self.funcs.contains_key(&callee) {
+                            callee
+                        } else if let Some((module, member)) =
+                            self.py_member_aliases.borrow().get(&callee)
+                        {
+                            format!("{}__{}", module.replace('.', "_"), member)
+                        } else if let Some(p) = prefix.as_deref() {
+                            let cand = format!("{}{}", p, callee);
+                            if self.funcs.contains_key(&cand) {
+                                cand
+                            } else {
+                                callee
+                            }
+                        } else {
+                            callee
+                        }
+                    };
+                    let mut param_types: Vec<Type> = match self.funcs.get(&callee) {
+                        Some((params, _, _)) => params
+                            .iter()
+                            .map(|(_, t)| t.clone())
+                            .collect(),
+                        None => continue,
+                    };
+                    let mut changed: Vec<(usize, Type)> = Vec::new();
+                    for (i, a) in pargs.iter().enumerate() {
+                        if i >= param_types.len() || param_types[i] != Type::I64 {
+                            continue;
+                        }
+                        let cur_params2: Vec<(String, Type)> = self
+                            .funcs
+                            .get(name)
+                            .map(|(p, _, _)| p.clone())
+                            .unwrap_or_default();
+                        match classify(a, &self.funcs, prefix.as_deref(), &aliases2, &cur_params2) {
+                            1 => changed.push((i, Type::Str)),
+                            2 => changed.push((i, Type::F64)),
+                            _ => {}
+                        }
+                    }
+                    for (i, t) in &changed {
+                        param_types[*i] = t.clone();
+                    }
+                    let changed_pairs = changed.clone();
+                    let changed = !changed.is_empty();
+                    if changed {
+                        if std::env::var("ZETA_PROBE").is_ok() {
+                            eprintln!("PROBE param infer: {} -> {:?}", callee, param_types);
+                        }
+                        let types_snapshot = param_types.clone();
+                        let changed_types: Vec<(usize, Type)> = changed_pairs.clone();
+                        if let Some(entry) = self.funcs.get_mut(&callee) {
+                            for (i, t) in param_types.into_iter().enumerate() {
+                                if i < entry.0.len() {
+                                    entry.0[i].1 = t;
+                                }
+                            }
+                        }
+                        // MIR lowering reads the parameter type from the AST
+                        // string, so rewrite it there too — updating only the
+                        // signature table had no effect on the generated code.
+                        // ONLY the upgraded indices: rewriting untouched ones
+                        // turned e.g. an array parameter into "array(...)".
+                        if let Some(AstNode::FuncDef { params, .. }) =
+                            self.registered_funcs.get_mut(&callee)
+                        {
+                            for (i, t) in changed_types.iter() {
+                                if *i < params.len() {
+                                    params[*i].1 = match t {
+                                        Type::Str => "str".to_string(),
+                                        Type::F64 => "f64".to_string(),
+                                        _ => continue,
+                                    };
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -1,0 +1,13 @@
+// PY-A: 字符串下标与切片（Python 语义）—— 此前 s[0] 走数组路径返回 0、
+//   s[1:] 走 zeta_slice_vec 读非 Vec 的 header（甚至触发巨额分配）
+// expect: h
+// expect: o
+// expect: ello
+// expect: hell
+// expect: lo
+s = "hello"
+print(s[0])
+print(s[-1])
+print(s[1:])
+print(s[:-1])
+print(s[-2:])

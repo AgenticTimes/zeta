@@ -382,6 +382,10 @@ impl MirGen {
                         self.type_map.insert(id, Type::F64);
                     } else if pt_str == "bool" {
                         self.type_map.insert(id, Type::Bool);
+                    } else if pt_str == "str" {
+                        // Inferred string parameter (Python functions carry no
+                        // annotations): string ops on it must dispatch as str.
+                        self.type_map.insert(id, Type::Str);
                     } else if let Some(gidx) =
                         generic_names.iter().position(|g| g.as_str() == pt_str)
                     {
@@ -3548,6 +3552,18 @@ impl MirGen {
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, receiver_ty.clone().unwrap());
+                    // `arr.push(x)` as a STATEMENT discards the returned
+                    // handle. vec_push returns a NEW handle when it reallocates,
+                    // so without rebinding the variable the array stays empty
+                    // (its growth was silently lost). Python semantics: append
+                    // mutates in place — so write the result back.
+                    if method == "push"
+                        && let Some(recv_ast) = receiver
+                        && let AstNode::Var(name) = &**recv_ast
+                        && let Some(&slot) = self.name_to_id.get(name)
+                    {
+                        self.stmts.push(MirStmt::Assign { lhs: slot, rhs: id });
+                    }
                     return id;
                 }
 
@@ -3579,6 +3595,30 @@ impl MirGen {
                 // PY-A: `base[start:end]` slicing → runtime zeta_slice_vec,
                 // returning a Vec-layout handle (len()/indexing work on it).
                 if method == "__slice__" && arg_ids.len() == 3 {
+                    // Python string slicing: `s[1:]` / `s[:3]` / `s[:-1]`.
+                    // The omitted-end sentinel is `Lit(-1)`; an explicit
+                    // negative end parses as a unary minus, so the two are
+                    // told apart here and passed as an explicit flag.
+                    if matches!(receiver_ty.as_ref(), Some(Type::Str)) {
+                        // `args` are the slice bounds only (the receiver is
+                        // not part of them): args[0] = start, args[1] = end.
+                        let to_end = matches!(
+                            args.get(1),
+                            Some(AstNode::Lit(v)) if *v == i64::MIN
+                        );
+                        let flag = self.next_id();
+                        self.exprs.insert(flag, MirExpr::IntLit(to_end as i64));
+                        self.type_map.insert(flag, Type::I64);
+                        self.stmts.push(MirStmt::Call {
+                            func: "str_slice".to_string(),
+                            args: vec![arg_ids[0], arg_ids[1], arg_ids[2], flag],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
                     let elem = match receiver_ty.as_ref() {
                         Some(Type::Array(e, _)) => (**e).clone(),
                         Some(Type::DynamicArray(e)) => (**e).clone(),
@@ -3588,6 +3628,14 @@ impl MirGen {
                     // (-1) with the known length (zeta_slice_vec reads the
                     // Vec header only for dynamic handles).
                     let mut args2 = arg_ids.clone();
+                    // Normalize the omitted-end sentinel to -1, which is what
+                    // zeta_slice_vec understands as "to the end".
+                    if matches!(args.get(1), Some(AstNode::Lit(v)) if *v == i64::MIN) {
+                        let neg = self.next_id();
+                        self.exprs.insert(neg, MirExpr::IntLit(-1));
+                        self.type_map.insert(neg, Type::I64);
+                        args2[2] = neg;
+                    }
                     if let Some(Type::Array(_, ArraySize::Literal(n))) =
                         receiver_ty.as_ref()
                     {
@@ -5178,6 +5226,18 @@ impl MirGen {
                 // Also check source_types for function params with array types
                 let source_ty = self.source_types.get(&bid).cloned().unwrap_or_default();
                 let is_array_param = source_ty.starts_with("[") || source_ty.starts_with("*mut [");
+                if let Type::Str = base_ty {
+                    // Python `s[i]` on a string yields a 1-character string.
+                    self.stmts.push(MirStmt::Call {
+                        func: "str_get".to_string(),
+                        args: vec![bid, iid],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::Str);
+                    return id;
+                }
                 if let Type::DynamicArray(_) = base_ty {
                     // Generate array_get call for dynamic arrays
                     self.stmts.push(MirStmt::Call {
@@ -5266,13 +5326,17 @@ impl MirGen {
                 elem_type,
                 elements,
             } => {
-                // Call array_new with capacity = number of elements
+                // `[dynamic]T{}` must use the [cap|len|data] layout, because
+                // every vec_* runtime call (push/len/get) reads that header.
+                // `array_new` allocates a HEADERLESS buffer (its 1-arg form
+                // takes a byte count), so pushes used to write beside it and
+                // len() read 0 — `arr.push(x)` in a loop left the array empty.
                 let array_ptr = self.next_id();
                 let capacity_id = self.next_id();
                 self.exprs
                     .insert(capacity_id, MirExpr::IntLit(elements.len() as i64));
                 self.stmts.push(MirStmt::Call {
-                    func: "array_new".to_string(),
+                    func: "zeta_dynarray_new".to_string(),
                     args: vec![capacity_id],
                     dest: array_ptr,
                     type_args: vec![],

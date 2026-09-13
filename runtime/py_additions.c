@@ -105,8 +105,29 @@ int64_t zeta_key_string(int64_t hash) {
 // raw element pointer for stack arrays (count >= 0 given) or a Vec-layout
 // handle for dynamic arrays (count < 0 → read len from the header). Returns
 // a Vec-layout handle so len()/indexing work uniformly.
+// Validate a Vec-layout header before trusting it. A handle that is NOT a Vec
+// (e.g. a string, or a value whose static type was unknown to the compiler)
+// used to yield a garbage capacity and an absurd allocation -> OOM instead of
+// a diagnosable failure.
+static int zt_vec_header_ok(int64_t data, int64_t* len_out) {
+    if (!data) return 0;
+    int64_t* h = (int64_t*)(data - 16);
+    int64_t cap = h[0], len = h[1];
+    // len > cap happens for array kinds grown by a stub push; only reject
+    // obviously-insane values (this guard exists to stop absurd allocations
+    // from a non-Vec handle, not to police the invariant).
+    if (cap < 0 || len < 0 || len > (1 << 28) || cap > (1 << 28)) return 0;
+    *len_out = len;
+    return 1;
+}
+
 int64_t zeta_slice_vec(int64_t data, int64_t start, int64_t end) {
     if (!data) return 0;
+    // Guard the header read below.
+    {
+        int64_t probe = 0;
+        if (!zt_vec_header_ok(data, &probe)) return 0;
+    }
     // Python semantics: end is EXCLUSIVE. end < 0 → slice to the end (reads
     // the Vec header; only valid for dynamic-array handles).
     int64_t n;

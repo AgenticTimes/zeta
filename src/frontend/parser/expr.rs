@@ -1462,7 +1462,10 @@ pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
         } else if let Ok((i, slice_args)) = parse_subscript_slice(input) {
             // PY-A: slicing `base[start:end]` (end optional) — desugars to
             // a __slice__ method call resolved in MIR lowering.
-            let end = slice_args.1.unwrap_or(AstNode::Lit(-1));
+            // Omitted end uses a sentinel that cannot collide with a real
+            // index: `s[:-1]` folds to Lit(-1), so -1 could not distinguish
+            // "to the end" from "exclude the last character".
+            let end = slice_args.1.unwrap_or(AstNode::Lit(i64::MIN));
             expr = AstNode::Call {
                 receiver: Some(Box::new(expr)),
                 method: "__slice__".to_string(),

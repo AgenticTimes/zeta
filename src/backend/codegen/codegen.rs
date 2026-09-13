@@ -837,6 +837,24 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some(Linkage::External),
         );
         module.add_function(
+            "zeta_dynarray_new",
+            i64_type.fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "str_get",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "str_slice",
+            i64_type.fn_type(
+                &[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+        module.add_function(
             "zeta_identity1",
             i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),

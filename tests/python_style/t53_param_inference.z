@@ -1,0 +1,10 @@
+// PY-A: 未标注参数的类型由调用点证据推断（main → snake_like → lower 链），
+//   否则参数是 i64，字符串下标/切片/str() 全部走错路径。
+// expect: h
+// expect: ello
+// expect: h_ello
+from pyfixturestr import first, tail, snake_like
+
+print(first("hello"))
+print(tail("hello"))
+print(snake_like("hello"))
