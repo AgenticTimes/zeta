@@ -1,0 +1,50 @@
+// L1: 数组布局统一 —— 字面量数组/元组带 [cap|len] header，
+//      for-in / len / 切片 / 推导式在字面量数组上工作。
+// expect: 3
+// expect: 6
+// expect: 17
+// expect: 3
+// expect: 6
+// expect: 50
+// expect: 12
+def sum_lit():
+    let a = [1, 2, 3]
+    let t = 0
+    for x in a:
+        t = t + x
+    return t
+
+def len_lit():
+    let a = [4, 5, 6, 7]
+    return len(a)
+
+def first_via_slice():
+    let a = [7, 8, 9]
+    let s = a[1:3]
+    return s[0] + s[1]
+
+def lit_direct():
+    let t = 0
+    for x in [1, 2, 3]:
+        t = t + x
+    return t
+
+def slice_iter():
+    let a = [10, 20, 30]
+    let s = a[1:3]
+    let t = 0
+    for x in s:
+        t = t + x
+    return t
+
+def comp_over_lit():
+    let a = [1, 2, 3]
+    return sum([v * 2 for v in a])
+
+print(len_lit() - 1)
+print(sum_lit())
+print(first_via_slice())
+print(len([1, 2, 3]))
+print(lit_direct())
+print(slice_iter())
+print(comp_over_lit())

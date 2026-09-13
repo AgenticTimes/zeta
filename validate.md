@@ -132,8 +132,9 @@ runner (`run.sh`) 自动：编译→运行→逐行比对。**期望行必须与
 - f64 参数的 extern 声明若写 i64 → fptosi 截断（abs(-2.5)→nan 的根因）
 - 同名不同 arity 的运行时函数会被消歧逻辑加 `_N` 后缀 → zeta_ 前缀豁免
   （5 处改名点统一豁免）
-- StackArray 无 `[cap|len]` header——数组函数优先走带 len 参数的变体
-  （`xxx_n(data, len)`），len=-1 哨兵留给 Vec handle
+- ~~StackArray 无 `[cap|len]` header~~ —— **2026-09-13 已统一**：数组句柄一律指向
+  数据区，header `[cap|len]` 在 `handle-16`（与 vec_len/vec_get 同布局）。
+  `array_len` 读 header（null 安全）；静态尺寸仍走编译期常量折叠。
 
 ---
 
@@ -171,5 +172,6 @@ runner (`run.sh`) 自动：编译→运行→逐行比对。**期望行必须与
 - **回归红线**：官方 194/194 不得下降；python_style 不得新增失败。
 - **fail-open 禁止**：不支持的语法必须报错或记录，不得静默吞掉产生错值
   （class/f-string 曾犯过，已修）。
-- **布局债**：StackArray/DynamicArray 双布局不一致是当前最大技术债，
-  新数组函数一律带 len 参数变体。
+- ~~**布局债**：StackArray/DynamicArray 双布局不一致~~ —— **2026-09-13 已关闭**
+  （stack/dynamic/切片/字面量统一 `[cap|len]` 布局）；新数组函数仍建议提供
+  len 参数变体，以便静态尺寸走编译期常量折叠。

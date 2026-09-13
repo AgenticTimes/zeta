@@ -290,7 +290,9 @@ void append(int64_t arr, int64_t val) { array_push(arr, val); }
 // (count_primes stub removed — collided with user-defined functions of the
 // same name, causing DUPLICATE_SYM link failures)
 
-int64_t array_len(int64_t arr) { (void)arr; return 0; }
+// Arrays are uniformly [cap | len | elems...] with the handle pointing at
+// elems (same layout as vec_len/vec_get). null-safe.
+int64_t array_len(int64_t arr) { return arr ? ((int64_t*)(arr - 16))[1] : 0; }
 int64_t array_get(int64_t arr, int64_t idx) { return ((int64_t*)arr)[idx]; }
 void array_set(int64_t arr, int64_t idx, int64_t val) { ((int64_t*)arr)[idx] = val; }
 void array_push(int64_t arr, int64_t val) { (void)arr;(void)val; }
@@ -370,7 +372,10 @@ int64_t vec_push(int64_t data_ptr, int64_t val) {
     int64_t cap = base[0];
     int64_t len = base[1];
     if (len >= cap) {
-        int64_t new_cap = cap * 2;
+        // floor the growth so a zero-capacity array (e.g. `[]`) can grow:
+        // cap * 2 would otherwise stay 0 forever and every push would
+        // allocate a 16-byte buffer with no room for the element.
+        int64_t new_cap = cap < 8 ? 8 : cap * 2;
         int64_t* nb = (int64_t*)GC_malloc(16 + new_cap * 8);
         nb[0] = new_cap;
         nb[1] = len;

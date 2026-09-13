@@ -158,6 +158,7 @@
 - [x] **kqueue 移植**（2026-09-11）：tokio_runtime.c 原只有 epoll、macOS 无法重建 AOT runtime（链的是陈旧预编译对象）；现 `#ifdef __APPLE__` kqueue（reactor/waker/EVFILT_TIMER，事件位值沿用 epoll 编码）；`runtime/py_additions.c` 增量符号合并（ld -r）构建流程入册
 - [x] **`in` / `not in`**（2026-09-12）：解析期生成 `__contains__` 成员调用，字符串分发 host_str_contains；链式语境可组合（`a in b and c in d`）。数组/字典容器 V1 告警限界
 - [x] **负索引 `arr[-k]`**（2026-09-12）：静态尺寸数组编译期改写 `n-k`；切片 `arr[1:3]` 仍待做（需 runtime slice 支持）
+- [x] **数组布局统一**（2026-09-13）：StackArray（字面量数组/元组）改为与 Vec/DynArray 同布局——handle 指向数据区，header `[cap|len]` 在 handle-16；`array_len` 读 header（null 安全）。同时修三处暴露的 bug：① for-in 的 `len_id` 用 `IntLit(0)` 占位被 codegen 常量折叠 → 循环上界恒为 0；② for-in 只接受 `Var` 集合（字面量 `for x in [1,2,3]` 静默 0 次），改为任意集合表达式并先物化到槽位（避免字面量重复分配）；③ `vec_push` 的 `new_cap = cap*2` 在 cap=0 时永远长不大（`[]` 后 append 丢元素），加下限 8；④ `lst.append(x)` 返回值被丢 → 接收者为变量时自动回写句柄。旧行为靠读堆元数据侥幸，现确定性。
 - [x] **切片 `arr[start:end]`**（2026-09-12）：end 排他（Python 语义）、省略形式 `[:e]`/`[s:]`；runtime `zeta_slice_vec` 返回 Vec 布局 handle（len/下标通用）；静态数组 end 哨兵编译期替换
 - [x] **链式比较**（2026-09-12）：parse_comparison 重写为收集-折叠（`a < b < c` → `(a<b) && (b<c)`，边界操作数复用），is/is not/in/not in 均可入链
 - [x] **元组解包全量**（2026-09-12）：`a, b = x, y` 并行赋值 + **`a, b = f()` 调用返回解包**（rhs 降级一次，stack_array_get 取元素）+ **`return a, b`** 逗号元组（match 臂内用单值形式——臂逗号是分隔符，元组需括号）
@@ -281,7 +282,7 @@ identity 兜底、UTF-8 边界探针修复。
 
 ### 下一步（按序）
 
-1. L1 收尾：exp/log/polyfit runtime + f64 数组 layout 统一（StackArray/DynamicArray 双布局是当前最大技术债）
+1. L1 收尾：exp/log/polyfit runtime + ~~f64 数组 layout 统一~~（**数组布局统一 2026-09-13 完成**，commit 见下；剩余 exp/log/polyfit runtime）
 2. L2 mini-DataFrame：`dataframe.z` 桩 + native runtime（列存 Map+Vec）
 3. 嵌套 def 方法分发修正（stub 方法解析为裸名 extern 的 bug——HashMap::new().insert() 应路由到 map_insert）
 4. L3 shim 边界：REasyQuant 引擎侧提供 jq_shim.o（或确认现有 no-op 桩足够）

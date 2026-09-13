@@ -984,10 +984,29 @@ impl MirGen {
                         let pattern_clone = pattern.clone();
                         let expr_clone = expr.clone();
 
-                        if let AstNode::Var(_) = &*expr_clone {
-                            let collection_id = self.lower_expr(&expr_clone);
+                        // Any collection expression is supported: materialize it
+                        // into a slot first so the array expression is evaluated
+                        // exactly once (a StackArray literal would otherwise be
+                        // re-allocated on every reference).
+                        {
+                            let raw_id = self.lower_expr(&expr_clone);
+                            let coll_slot = self.next_id();
+                            self.exprs.insert(coll_slot, MirExpr::Var(coll_slot));
+                            self.type_map.insert(
+                                coll_slot,
+                                self.type_map.get(&raw_id).cloned().unwrap_or(Type::I64),
+                            );
+                            self.stmts.push(MirStmt::Assign {
+                                lhs: coll_slot,
+                                rhs: raw_id,
+                            });
+                            let collection_id = coll_slot;
                             let len_id = self.next_id();
-                            self.exprs.insert(len_id, MirExpr::IntLit(0));
+                            // NOTE: the id must be a Var (mutable slot), not an
+                            // IntLit placeholder — codegen constant-folds a
+                            // literal id and would drop the array_len result,
+                            // making the loop bound a constant 0.
+                            self.exprs.insert(len_id, MirExpr::Var(len_id));
                             self.stmts.push(MirStmt::Call {
                                 func: "array_len".to_string(),
                                 args: vec![collection_id],
@@ -3164,6 +3183,17 @@ impl MirGen {
                             _ => Type::I64,
                         },
                     );
+                    // vec_push may reallocate and returns the (possibly new)
+                    // handle. Python's `lst.append(x)` discards the return, so
+                    // rebind the receiver variable — otherwise growth is lost
+                    // once the array's capacity is exceeded.
+                    if func == "vec_push"
+                        && let Some(recv_ast) = receiver
+                        && let AstNode::Var(name) = &**recv_ast
+                        && let Some(&slot) = self.name_to_id.get(name)
+                    {
+                        self.stmts.push(MirStmt::Assign { lhs: slot, rhs: id });
+                    }
                     return id;
                 }
 

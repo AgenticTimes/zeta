@@ -5564,23 +5564,13 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     })
                     .unwrap_or(self.i64_type.into());
                 let is_float = matches!(elem_type, inkwell::types::BasicTypeEnum::FloatType(_));
-                let elem_llvm_type: inkwell::types::BasicTypeEnum<'ctx> = match elem_type {
-                    inkwell::types::BasicTypeEnum::IntType(it) => it.into(),
-                    inkwell::types::BasicTypeEnum::FloatType(ft) => ft.into(),
-                    _ => self.i64_type.into(),
-                };
 
-                // Create array type (match to call .array_type() on concrete type)
-                let array_type = match elem_llvm_type {
-                    inkwell::types::BasicTypeEnum::IntType(it) => it.array_type(*size as u32),
-                    inkwell::types::BasicTypeEnum::FloatType(ft) => ft.array_type(*size as u32),
-                    _ => self.i64_type.array_type(*size as u32),
-                };
-
-                // Allocate on HEAP (was stack) — tuples are returned across function
-                // boundaries and stack allocation causes use-after-free.
-                let elem_size = if is_float { 8u64 } else { 8u64 };
-                let total_bytes = self.i64_type.const_int(*size as u64 * elem_size, false);
+                // PY-A layout unification: allocate [cap | len | elem0 .. elemN-1]
+                // and hand out a pointer to elem0 (buf + 16), matching the Vec /
+                // DynamicArray runtime layout (vec_len(h) = ((i64*)(h-16))[1]).
+                // Without the header, for-in / len() / slicing on literal arrays
+                // read garbage (array_len was a 0-returning stub).
+                let total_bytes = self.i64_type.const_int((*size as u64 + 2) * 8, false);
                 let malloc_fn = self
                     .module
                     .get_function("runtime_malloc")
@@ -5596,24 +5586,48 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 let heap_ptr = Self::call_site_to_basic_value(call)
                     .unwrap()
                     .into_int_value();
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                let buf_ptr = self
+                    .builder
+                    .build_int_to_ptr(heap_ptr, ptr_type, "heap_p")
+                    .unwrap();
 
-                // Initialize each element
-                for (i, element_id) in elements.iter().enumerate() {
-                    let element_val = self.gen_expr(&exprs[element_id], exprs, None);
-                    let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
-                    let heap_ptr_val = self
-                        .builder
-                        .build_int_to_ptr(heap_ptr, ptr_type, "heap_p")
+                // header: [0] = cap, [1] = len
+                for (slot, val) in [(0u64, *size as u64), (1u64, *size as u64)] {
+                    let slot_ptr = unsafe {
+                        self.builder
+                            .build_gep(
+                                self.i64_type,
+                                buf_ptr,
+                                &[self.i64_type.const_int(slot, false)],
+                                "",
+                            )
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_store(slot_ptr, self.i64_type.const_int(val, false))
                         .unwrap();
+                }
+
+                // Initialize each element (stored as raw 64-bit slots so that
+                // runtime vec_get/array_get read the right bits either way)
+                for (i, element_id) in elements.iter().enumerate() {
+                    let mut element_val = self.gen_expr(&exprs[element_id], exprs, None);
+                    if is_float {
+                        if let inkwell::values::BasicValueEnum::FloatValue(fv) = element_val {
+                            element_val = self
+                                .builder
+                                .build_bit_cast(fv, self.i64_type, "elem_bits")
+                                .unwrap()
+                                .into();
+                        }
+                    }
                     let element_ptr = unsafe {
                         self.builder
                             .build_gep(
-                                array_type,
-                                heap_ptr_val,
-                                &[
-                                    self.i64_type.const_int(0, false),
-                                    self.i64_type.const_int(i as u64, false),
-                                ],
+                                self.i64_type,
+                                buf_ptr,
+                                &[self.i64_type.const_int(i as u64 + 2, false)],
                                 "",
                             )
                             .unwrap()
@@ -5621,8 +5635,21 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     self.builder.build_store(element_ptr, element_val).unwrap();
                 }
 
-                // Return heap pointer (as i64)
-                heap_ptr.into()
+                // Return pointer to elem0 (buf + 16) as i64
+                let data_ptr = unsafe {
+                    self.builder
+                        .build_gep(
+                            self.i64_type,
+                            buf_ptr,
+                            &[self.i64_type.const_int(2, false)],
+                            "",
+                        )
+                        .unwrap()
+                };
+                self.builder
+                    .build_ptr_to_int(data_ptr, self.i64_type, "arr_handle")
+                    .unwrap()
+                    .into()
             }
             MirExpr::Range { start, end } => {
                 // For now, just return the start value
