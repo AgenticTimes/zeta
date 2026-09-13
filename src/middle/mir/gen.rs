@@ -271,10 +271,18 @@ impl MirGen {
         if self.py_user_modules.contains(&module) {
             let prefix = format!("{}__", module.replace('.', "_"));
             let sym = format!("{}{}", prefix, member);
+            // Carry the inferred return type: a library function returning a
+            // string must be typed str at the call site, or its result gets
+            // printed/compared as an integer.
+            let ret_kind: &'static str = match self.func_ret_types.get(&sym) {
+                Some(Type::Str) => "str",
+                Some(Type::F64) => "f64",
+                _ => "i64",
+            };
             // Leaked so the &'static str signature holds; one small alloc per
             // distinct module member per compile.
             let leaked: &'static str = Box::leak(sym.into_boxed_str());
-            return Some((leaked, None, "i64"));
+            return Some((leaked, None, ret_kind));
         }
         // Registry module with an unknown member reached through attribute
         // access (`threading.nope()`): from-imports already warn, so warn here
@@ -5691,7 +5699,10 @@ impl MirGen {
         // Inherits nonlocal_names so inner assignments route through env.
         let mut child = MirGen::new()
             .with_nonlocal_names(self.nonlocal_names.clone())
-            .with_module_globals(self.module_globals.clone());
+            .with_module_globals(self.module_globals.clone())
+            // A closure inside an imported module must resolve that module's
+            // own functions too (`lambda m: lowercase(m.group(0))`).
+            .with_symbol_renames(self.symbol_renames.clone());
         for p in params {
             let id = child.next_id();
             child.name_to_id.insert(p.clone(), id);

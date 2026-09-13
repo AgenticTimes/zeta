@@ -76,6 +76,9 @@ pub struct Resolver {
     py_loaded_modules: RefCell<std::collections::HashSet<String>>,
     /// PY-A: directory of the file being compiled (module search root).
     py_source_dir: RefCell<Option<std::path::PathBuf>>,
+    /// PY-A: every registered function definition (including ones loaded from
+    /// imported modules) — return-type inference must cover all of them.
+    registered_func_defs: RefCell<Vec<AstNode>>,
     /// Identity inference context for capability-based type inference
     identity_inference: crate::middle::types::identity::inference::IdentityInferenceContext,
     /// Capability inferencer for identity-aware type inference
@@ -111,6 +114,7 @@ impl Resolver {
             py_mangled_to_module: RefCell::new(std::collections::HashMap::new()),
             py_loaded_modules: RefCell::new(std::collections::HashSet::new()),
             py_source_dir: RefCell::new(None),
+            registered_func_defs: RefCell::new(Vec::new()),
             capability_inferencer:
                 crate::middle::types::identity::inference::CapabilityInferencer::new(),
         };
@@ -146,6 +150,11 @@ impl Resolver {
     }
 
     pub fn register(&mut self, ast: AstNode) {
+        // PY-A: keep the definition for return-type inference (imported
+        // modules register through this same path).
+        if matches!(ast, AstNode::FuncDef { .. }) {
+            self.registered_func_defs.borrow_mut().push(ast.clone());
+        }
         // PY-A V3: pre-collect all `nonlocal` names (program-wide set) so the
         // defining scope's assignments route through the closure env.
         {
@@ -734,6 +743,160 @@ impl Resolver {
     /// Get all function signatures (for type inference)
     pub fn get_all_func_signatures(&self) -> &HashMap<String, (Vec<(String, Type)>, Type, bool)> {
         &self.funcs
+    }
+
+    /// PY-A: infer the return type of untyped Python-style functions.
+    ///
+    /// `def f(s): return s.capitalize()` is declared i64 by the parser, so a
+    /// library function returning a string was mis-typed at EVERY call site:
+    /// the value was right but printing/comparison treated it as an integer.
+    /// Conservative evidence-only inference:
+    ///   - a definite string source (string literal, f-string, a call to a
+    ///     function already known to return str, or a str method) => str;
+    ///   - a definite float source => f64;
+    ///   - any int/bool evidence, or no evidence at all, keeps the i64 default.
+    /// Iterated a few times so callees propagate into their callers.
+    pub fn infer_untyped_returns(&mut self, _asts: &[AstNode]) {
+        // Includes functions from imported modules: they were registered
+        // through the same path, so their bodies are here too.
+        let asts: Vec<AstNode> = self.registered_func_defs.borrow().clone();
+        fn collect_returns(body: &[AstNode], out: &mut Vec<AstNode>) {
+            for s in body {
+                match s {
+                    AstNode::Return(e) => out.push((**e).clone()),
+                    AstNode::If { then, else_, .. } => {
+                        collect_returns(then, out);
+                        collect_returns(else_, out);
+                    }
+                    AstNode::While { body, .. } | AstNode::For { body, .. } => {
+                        collect_returns(body, out);
+                    }
+                    AstNode::Block { body } => collect_returns(body, out),
+                    _ => {}
+                }
+            }
+        }
+        // Evidence enum: 1 = str, 2 = f64, 3 = i64, 0 = unknown.
+        fn classify(
+            e: &AstNode,
+            funcs: &HashMap<String, (Vec<(String, Type)>, Type, bool)>,
+            prefix: Option<&str>,
+            module_aliases: &HashMap<String, String>,
+        ) -> u8 {
+            match e {
+                AstNode::StringLit(_) | AstNode::FString { .. } => 1,
+                AstNode::FloatLit(_) => 2,
+                AstNode::Lit(_) | AstNode::Bool(_) => 3,
+                AstNode::Call {
+                    receiver: None,
+                    method,
+                    ..
+                } => {
+                    // Inside an imported module the callee is registered as
+                    // `mod__name`, but the source says `name`.
+                    let direct = funcs.get(method).map(|(_, ret, _)| ret);
+                    let prefixed = prefix
+                        .and_then(|p| funcs.get(&format!("{}{}", p, method)))
+                        .map(|(_, ret, _)| ret);
+                    match direct.or(prefixed) {
+                        Some(Type::Str) => 1,
+                        Some(Type::F64) => 2,
+                        Some(Type::I64) => 3,
+                        _ => 0,
+                    }
+                }
+                AstNode::Call {
+                    receiver: Some(recv),
+                    method,
+                    ..
+                } => {
+                    // `re.sub(...)` / `os.path.join(...)`: a registry member
+                    // that is declared to return a string.
+                    if let AstNode::Var(alias) = &**recv {
+                        if let Some(module) = module_aliases.get(alias) {
+                            if let Some(entry) =
+                                crate::middle::pylib::find_member(module, method)
+                            {
+                                return match entry.ret.as_str() {
+                                    "str" => 1,
+                                    "f64" => 2,
+                                    _ => 0,
+                                };
+                            }
+                        }
+                    }
+                    match str_method_symbol_kind(method) {
+                        Some("str") => 1,
+                        Some("bool") => 3,
+                        _ => 0,
+                    }
+                }
+                AstNode::BinaryOp { op, left, right } if op == "+" => {
+                    let l = classify(left, funcs, prefix, module_aliases);
+                    let r = classify(right, funcs, prefix, module_aliases);
+                    if l == 3 || r == 3 {
+                        3
+                    } else if l == 1 || r == 1 {
+                        1
+                    } else if l == 2 || r == 2 {
+                        2
+                    } else {
+                        0
+                    }
+                }
+                _ => 0,
+            }
+        }
+        for _ in 0..3 {
+            for ast in &asts {
+                let AstNode::FuncDef { name, body, ret, .. } = ast else {
+                    continue;
+                };
+                let prefix = self
+                    .py_mangled_to_module
+                    .borrow()
+                    .get(name)
+                    .map(|m| format!("{}__", m.replace('.', "_")));
+                // `def f():` has no annotation, so the parser defaults the
+                // return type to `()` (unit) — that is what marks a function
+                // as inferable. An explicit annotation is respected.
+                if !(ret.is_empty() || ret == "()") {
+                    continue;
+                }
+                if !self.funcs.contains_key(name) {
+                    continue;
+                }
+                let mut rets: Vec<AstNode> = Vec::new();
+                collect_returns(body, &mut rets);
+                if rets.is_empty() {
+                    continue;
+                }
+                let mut saw_str = false;
+                let mut saw_f64 = false;
+                let mut saw_i64 = false;
+                let aliases = self.py_module_aliases.borrow().clone();
+                for r in &rets {
+                    match classify(r, &self.funcs, prefix.as_deref(), &aliases) {
+                        1 => saw_str = true,
+                        2 => saw_f64 = true,
+                        3 => saw_i64 = true,
+                        _ => {}
+                    }
+                }
+                let new_ret = if saw_str && !saw_i64 && !saw_f64 {
+                    Some(Type::Str)
+                } else if saw_f64 && !saw_i64 && !saw_str {
+                    Some(Type::F64)
+                } else {
+                    None
+                };
+                if let Some(t) = new_ret {
+                    if let Some(entry) = self.funcs.get_mut(name) {
+                        entry.1 = t;
+                    }
+                }
+            }
+        }
     }
 
     pub fn is_abi_stable(&self, key: &MonoKey) -> bool {
@@ -2453,5 +2616,17 @@ fn prefix_module_decl_markers(n: AstNode, prefix: &str) -> AstNode {
             }
         }
         other => other,
+    }
+}
+
+/// PY-A: result kind of a string method, for return-type inference. Mirrors
+/// the compiler's own str-method table.
+fn str_method_symbol_kind(method: &str) -> Option<&'static str> {
+    match method {
+        "upper" | "lower" | "capitalize" | "title" | "strip" | "trim" | "lstrip" | "rstrip"
+        | "replace" | "join" | "zfill" | "ljust" | "rjust" => Some("str"),
+        "isdigit" | "isalpha" | "isupper" | "islower" | "startswith" | "endswith"
+        | "contains" | "starts_with" | "ends_with" => Some("bool"),
+        _ => None,
     }
 }

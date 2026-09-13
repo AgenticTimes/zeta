@@ -199,6 +199,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for ast in &expanded_asts {
                     resolver.register(ast.clone());
                 }
+                // PY-A: untyped functions default to i64; infer string/float
+                // returns so call sites are typed correctly.
+                resolver.infer_untyped_returns(&expanded_asts);
 
                 // Use expanded ASTs for typechecking
                 let _typecheck_asts = &expanded_asts;

@@ -1,0 +1,17 @@
+// PY-A: 未标注返回类型的函数做保守推断 —— 此前一律当 i64，
+//   导致返回字符串的库函数在调用点被当整数（值对、打印/比较错）。
+// expect: 5
+// expect: HELLO
+// expect: 2.500000
+def make():
+    return "hello"
+
+def shout():
+    return make().upper()
+
+def half():
+    return 2.5
+
+print(len(make()))
+print(shout())
+print(half())

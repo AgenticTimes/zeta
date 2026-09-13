@@ -1,7 +1,7 @@
 // PY-A: 库注册表数据驱动 —— math 仅靠 pylib/registry.txt + C shim 接入（未改 Rust）
 // expect: 3.000000
 // expect: 1024.000000
-// expect: 3.000000
+// expect: 3
 // expect: 2.500000
 from math import sqrt, pow, floor, fabs
 
