@@ -148,14 +148,33 @@ fn install_from(path: &Path, origin: &str) {
 
     if path.is_dir() {
         // A directory package needs an entry module, otherwise `import` would
-        // find the directory and fail confusingly later.
+        // find the directory and fail confusingly later. A plain source tree
+        // (a git repo with a single X.py at its root) is handled by installing
+        // that one module instead.
         let entry_py = path.join("__init__.py");
         let entry_z = path.join("__init__.z");
         if !entry_py.is_file() && !entry_z.is_file() {
-            die(format!(
-                "{} is not a package: expected __init__.py or __init__.z",
-                path.display()
-            ));
+            match single_module_in(path) {
+                Ok(Some(module)) => {
+                    install_from(&module, origin);
+                    return;
+                }
+                Ok(None) => die(format!(
+                    "{} contains no .py/.z module and no __init__.py — nothing to install",
+                    path.display()
+                )),
+                Err(mut found) => {
+                    found.sort();
+                    die(format!(
+                        "{} has no __init__.py and {} candidate modules ({}); \
+                         add an __init__.py to make it a package, or install one file \
+                         directly",
+                        path.display(),
+                        found.len(),
+                        found.join(", ")
+                    ));
+                }
+            }
         }
         let name = path
             .file_name()
@@ -191,6 +210,41 @@ fn install_from(path: &Path, origin: &str) {
     }
     println!("installed {} -> {}  (from {})", name, dest.display(), origin);
     println!("import it with:  import {}", base);
+}
+
+/// Top-level `.py`/`.z` sources of a tree, minus the usual non-module files.
+/// `Ok(Some(f))` = exactly one module (install it), `Ok(None)` = none found,
+/// `Err(names)` = ambiguous.
+fn single_module_in(dir: &Path) -> Result<Option<PathBuf>, Vec<String>> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if !p.is_file() {
+                continue;
+            }
+            let name = p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            if !(name.ends_with(".py") || name.ends_with(".z")) {
+                continue;
+            }
+            // Packaging/test boilerplate is not the module being installed.
+            if matches!(name.as_str(), "setup.py" | "conftest.py")
+                || name.starts_with("test_")
+                || name.ends_with("_test.py")
+            {
+                continue;
+            }
+            found.push(p);
+        }
+    }
+    match found.len() {
+        0 => Ok(None),
+        1 => Ok(Some(found.remove(0))),
+        _ => Err(found
+            .into_iter()
+            .map(|p| p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default())
+            .collect()),
+    }
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {

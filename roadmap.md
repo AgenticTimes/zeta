@@ -201,8 +201,17 @@ Python 侧 `time.sleep(0.02)`、`Thread.join()` 返回值等已验证；f64 返�
 与单文件模块（`X.py`/`X.z`）都接受，非包目录会明确报错。
 
 编译器侧同步支持：搜索路径加入安装目录；并新增**目录包**（`X/__init__.py`）解析。
-E2E 已验证：`zorb install ./mypkg` → `import mypkg` + `from mypkg import twice` 值正确
-（含包内函数互调）。仍未做：版本/依赖解析、包源索引、校验和、`site-packages` 直连。
+E2E 已验证（2026-09-13 实测，含**真实第三方库**）：
+- `zorb install ./mypkg` → `import mypkg` / `from mypkg import twice` 值正确（含包内互调）
+- `zorb install <GitHub raw URL>` → 真实库 `stringcase.py`（34KB）装入并 `import` 成功
+- `zorb install <git URL>`（`https://github.com/okunishinishi/python-stringcase.git`）→ clone 后
+  自动识别「仓库根无 `__init__.py` 但有单个模块」并安装；多候选时明确报错（排除 `setup.py`/`test_*`）
+
+**注意边界**：安装 ≠ 可用。`stringcase` 能解析、能 import，但编译卡在 `import re` + `re.sub`
+（`re` 未实现）→ 现在是**明确诊断**（unknown module/member），不是静默错值。也就是说第三方库
+能用与否取决于**库的依赖面是否落在已实现范围内**（当前注册表只有 6 个模块：
+threading / concurrent.futures / multiprocessing / asyncio / time / math），这正是下面
+「P2 库覆盖」的动机。仍未做：版本/依赖解析、包源索引、校验和、`site-packages` 直连。
 
 **在此之前的状态（2026-09-13 实测，记录备查）**
 
