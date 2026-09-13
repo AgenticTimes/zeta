@@ -3,7 +3,7 @@
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
 > 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
-> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **44/44**；REasyQuant 语料解析 **38/38**
+> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **50/50**；REasyQuant 语料解析 **38/38**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -227,13 +227,48 @@ threading / concurrent.futures / multiprocessing / asyncio / time / math），�
 当前第三方 Python 库只有两条可用路径：① 注册表加条目 + C shim（如 `math`）；
 ② 把 `.py`/`.z` 放进搜索路径（用户模块，`ZETA_PYLIB` 可指向自定义目录，但需平铺单文件）。
 
+**系统库第三批（2026-09-13 夜，自主推进）**
+
+| 库/能力 | 内容 | 证据 |
+|---|---|---|
+| `datetime` | date/datetime/timedelta/strptime/now/today、`.year/.month/.day/.days/.date()/.strftime()`、`-`/`+` 与全部比较 | 语料最重缺口（timedelta 14、strptime 6） |
+| `os` / `os.path` / `os.environ` | join/basename/dirname/splitext/exists/isfile/isdir/abspath/expanduser、getcwd/getenv/system/listdir/makedirs、environ.get/setdefault | 语料 os 5 |
+| `sys` | exit/version/version_info/maxsize/path/path.insert/stdout.write/stderr.write | — |
+| `json` | **dumps**（编译器按实参类型分发 i64/f64/str/bool/vec/map；字典键靠 hash→字符串侧表还原） | 语料 json 6 |
+| `re` | POSIX regcomp/regexec；sub（含 `\1` 反引用与**可调用替换**）、match/search/fullmatch（Match 句柄，`if m:` 语义正确）、split/findall、compile、`group/start/end` | 真实库 stringcase |
+| `math` 补全 | exp/log/log10/sin/cos/tan/atan2/trunc/isfinite/isnan | 语料 15 调用点 |
+| `logging` | 真打到 stderr；DEBUG/INFO/WARNING/ERROR/CRITICAL 常量、getLogger 句柄 + info/debug/warning/error | 语料 logging 5 |
+| `__future__` | `N` 指令：接受的空操作模块 | 语料 5 |
+
+**支撑性机制（都不是一次性 hack，后续库直接复用）**
+- 库句柄**运算符分发**：BinaryOp 两侧为 Named 句柄 → 查 `handle_op` 走 shim（date/timedelta 的算术与比较）——此前是对指针做整数运算
+- 库句柄**属性读取**：FieldAccess 的**降级后基址**类型为句柄 → 走同一张方法表（`d.year`、`delta.days`、链式 `p.date().year`）
+- **模块级语句执行**：`import X` 时执行 `X__init()`（env 幂等守卫），模块级常量对其函数与外部可见；同名常量跨模块隔离
+- **返回类型推断**：未标注函数按证据推 str/f64（详见下），返回字符串的库函数不再在调用点被当 i64
+- 导入搜索支持**目录包**（`X/__init__.py`）+ `zorb install` 安装目录
+- registry 新增 `X`（仅声明 extern，不暴露成员）与 `ret=vec/str` 等类型标注
+
+**顺带修掉的编译器 bug（都是 fail-open 类，有官方用例佐证）**
+1. **`!` 被实现成按位取反**（`x ^ -1`）：`not 0` → -1，`if !ok` **恒真** → 3 个官方 string 测试因此报假失败（exit 2/6 → 0）
+2. **for 循环里 `break`/`continue` 无目标**：`MirStmt::For` 从不 push `loop_stack` → `if cond: continue` 产生无 terminator 的基本块（LLVM 报错），`break` 直接穿透；现补 `for.inc` 块（`continue` 落在自增，避免经典死循环）
+3. **闭包不继承模块 rename map**：模块内 `lambda m: lowercase(m.group(0))` 里的 `lowercase` 未加前缀 → 链接失败
+4. **`from X import f` 返回值硬编码 i64**
+
+**仍未做（本轮新发现，按优先级）**
+- [ ] **P1 关键字实参按名绑定**：`f(b=2, a=1)` 现在按**源码顺序**当位置参数传 → 实测 `f(a,b)=a*100+b` 得 201（应为 102）。静默错值，属红线问题；需按形参名重排（或至少报错）
+- [ ] **P1 字符串下标与切片**：`s[0]` / `s[1:]` 未实现（真实库 stringcase 的 `snakecase`/`pascalcase` 因此返回 0；`camelcase` 已正确）
+- [ ] **P1 `json.loads`**：结果类型无法静态建模（应为 dict/list/标量），故**故意不入表**（链接期失败，不返回错值）
+- [ ] P2 `re` 补齐：`finditer`/`subn`/`IGNORECASE` 等 flags、`\g<name>`、Pattern 对象的方法面
+- [ ] P2 库覆盖继续：`collections`/`itertools`/`random`/`pathlib`/`typing`/`functools`/`hashlib`
+- [ ] P2 `types` 推断继续：容器元素类型、参数类型推断（现在未标注参数= i64，`def f(s): s.upper()` 靠名字回退兜住）
+
 **缺口清单（2026-09-13 盘点）** —— 按优先级，未做项一律保持 fail-loud（链接期失败或 warning），
 不得静默产生错值：
 
 - [ ] **P1 模块系统**：包（`__init__.py` / 目录包）、相对导入（`from . import x`）、
   `from X import *`（现仅记录模块、不绑名字）、`importlib` / `sys.path` 动态导入
-- [ ] **P1 模块语义**：用户模块的**模块级语句不执行**（只注册定义，import 副作用语义缺失）、
-  顶层常量/变量不导出（跨模块读模块级常量会落空）
+- [x] **P1 模块语义**：模块体在 import 时执行一次（幂等），模块级常量对其函数与外部均可见，
+  同名常量跨模块隔离（2026-09-13 完成，t46）
 - [ ] **P1 `with` 协议收尾**：用户自定义 `__enter__`/`__exit__` 目前走 identity 兜底
   （有 warning，但非真协议）；文件对象 `open()` 未实现，故 `with open(...)` 仍不可用
 - [ ] **P1 `Thread(target, args=...)`**：带参数目标函数未支持（`FuncAddr` 目前零参），
