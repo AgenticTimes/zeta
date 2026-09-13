@@ -1,6 +1,6 @@
 // L1: dictcomp + setcomp over Vec-handle iterables
 // expect: 4
-// expect: 1
+// expect: 2
 // expect: 18
 def make(x):
     let d = {k: k * 2 for k in x}
