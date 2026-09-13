@@ -1531,6 +1531,32 @@ impl MirGen {
                 self.type_map.insert(id, Type::I64);
             }
             // Match is handled below with full if-else chain lowering.
+            AstNode::Assign(lhs, rhs) => {
+                // PY-A: walrus `name := expr` in expression position — lower
+                // rhs, bind the name (implicit decl or rebinding), and the
+                // expression value is the assigned value.
+                if let AstNode::Var(name) = &**lhs {
+                    let rhs_id = self.lower_expr(rhs);
+                    if !self.name_to_id.contains_key(name) {
+                        let new_id = self.next_id();
+                        self.exprs.insert(new_id, MirExpr::Var(new_id));
+                        let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
+                        self.type_map.insert(new_id, ty);
+                        self.name_to_id.insert(name.clone(), new_id);
+                        self.stmts.push(MirStmt::Assign {
+                            lhs: new_id,
+                            rhs: rhs_id,
+                        });
+                    }
+                    return rhs_id;
+                }
+                // Non-var lhs: statement assign with a 0-value expression
+                self.lower_ast(&AstNode::Assign(lhs.clone(), rhs.clone()));
+                let z = self.next_id();
+                self.exprs.insert(z, MirExpr::IntLit(0));
+                self.type_map.insert(z, Type::I64);
+                return z;
+            }
             AstNode::Var(name) => {
                 // PY-A V3: nonlocal names ALWAYS read through env (fresh
                 // value), even when a local alias exists.
@@ -2810,7 +2836,34 @@ impl MirGen {
                 } else {
                     None
                 };
+                // PY-A: starred args `f(*arr)` expand to per-element args
+                // (V1: static-size arrays compile-time unrolled).
                 for a in args {
+                    if let AstNode::UnaryOp { op, expr } = a {
+                        if op == "*" {
+                            let arr_id = self.lower_expr(expr);
+                            let n = match self.type_map.get(&arr_id).cloned() {
+                                Some(Type::Array(_, ArraySize::Literal(n))) => n,
+                                _ => 0,
+                            };
+                            for i in 0..n {
+                                let idx_id = self.next_id();
+                                self.exprs.insert(idx_id, MirExpr::IntLit(i as i64));
+                                self.type_map.insert(idx_id, Type::I64);
+                                let elem = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "array_get".to_string(),
+                                    args: vec![arr_id, idx_id],
+                                    dest: elem,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(elem, MirExpr::Var(elem));
+                                self.type_map.insert(elem, Type::I64);
+                                arg_ids.push(elem);
+                            }
+                            continue;
+                        }
+                    }
                     arg_ids.push(self.lower_expr(a));
                 }
 
@@ -4069,8 +4122,35 @@ impl MirGen {
                 if !path.is_empty() && type_args.is_empty() && is_upper {
                     // Regular function call or unqualified call
                     // Generate argument IDs
-                    let mut arg_ids = vec![];
+                    // PY-A: starred args `f(*arr)` expand to per-element args
+                    // (V1: static-size arrays only — compile-time unrolling).
+                    let mut arg_ids: Vec<u32> = Vec::new();
                     for a in args {
+                        if let AstNode::UnaryOp { op, expr } = a {
+                            if op == "*" {
+                                let arr_id = self.lower_expr(expr);
+                                let n = match self.type_map.get(&arr_id).cloned() {
+                                    Some(Type::Array(_, ArraySize::Literal(n))) => n,
+                                    _ => 0,
+                                };
+                                for i in 0..n {
+                                    let idx_id = self.next_id();
+                                    self.exprs.insert(idx_id, MirExpr::IntLit(i as i64));
+                                    self.type_map.insert(idx_id, Type::I64);
+                                    let elem = self.next_id();
+                                    self.stmts.push(MirStmt::Call {
+                                        func: "array_get".to_string(),
+                                        args: vec![arr_id, idx_id],
+                                        dest: elem,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs.insert(elem, MirExpr::Var(elem));
+                                    self.type_map.insert(elem, Type::I64);
+                                    arg_ids.push(elem);
+                                }
+                                continue;
+                            }
+                        }
                         arg_ids.push(self.lower_expr(a));
                     }
 

@@ -1,0 +1,17 @@
+// L1: starred 展开 + walrus 赋值表达式
+// expect: 6
+// expect: 3
+// expect: 7
+def f(a, b, c):
+    return a + b + c
+
+args = [1, 2, 3]
+print(f(*args))
+
+data = [1, 5, 12]
+if (n := len(data)) > 2:
+    print(n)
+
+let m = 4
+let doubled = (m := m + 3)
+print(doubled)

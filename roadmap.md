@@ -256,12 +256,12 @@ identity 兜底、UTF-8 边界探针修复。
 | class | 747 | ✓（struct 脱糖） | L1 |
 | listcomp | 278 | ✓（__collect__） | L1 |
 | with | 272 | ✗ 解析失败 | L1 解析（desugar → call+try） |
-| starred `*args` 展开 | 268 | ✗ 调用点 | L1 |
+| starred `*args` 展开 | 268 | ✓（V1 静态数组展开，调用点编译期 unroll） | L1 ✓ |
+| walrus `:=` | 59 | ✓（desugar → Assign；括号/裸两种形式） | L1 ✓ |
 | genexp `(x for x in y)` | 222 | ✗ | L2（迭代器协议） |
 | yield/async def/await | 197/25/15 | ✗ | L4（协程状态机，深水区） |
 | lambda | 130 | ✓（V2 捕获） | L1 |
 | global | 65 | 部分（模块级 Assign→main） | L1（module 全局槽） |
-| walrus `:=` | 59 | ✗ | L1（desugar） |
 | dictcomp/setcomp | 39/11 | ✗ | L2 |
 | nonlocal | 17 | ✓（V3 env） | L1 |
 

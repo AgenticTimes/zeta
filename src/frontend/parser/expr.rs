@@ -717,6 +717,26 @@ fn parse_if_tail(input: &str) -> IResult<&str, AstNode> {
 
 fn parse_tuple_or_paren(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag("(")).parse(input)?;
+    // PY-A: walrus `(name := expr)` — single parenthesized assignment.
+    // Detected before the general expr list (parse_expr cannot parse ':=').
+    {
+        let t = input.trim_start();
+        if let Some((ident, rest)) = take_ident(t) {
+            let rest_trim = rest.trim_start();
+            if rest_trim.starts_with(":=") {
+                let after = &rest_trim[2..];
+                let (after, expr) = parse_full_expr(after)?;
+                let (after, _) = ws(tag(")")).parse(after)?;
+                return Ok((
+                    after,
+                    AstNode::Assign(
+                        Box::new(AstNode::Var(ident.to_string())),
+                        Box::new(expr),
+                    ),
+                ));
+            }
+        }
+    }
     let (input, mut items) = terminated(
         separated_list0(ws(tag(",")), ws(parse_expr)),
         opt(ws(tag(","))),
@@ -1353,6 +1373,32 @@ pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
         input = i;
     }
     Ok((input, expr))
+}
+
+/// PY-A: walrus `name := expr` — assignment expression. Parsed at the
+/// full-expr entry; lowers to Assign node (gen.rs Assign arm handles implicit
+/// declaration and returns the value id).
+fn parse_walrus_prefix(input: &str) -> IResult<&str, AstNode> {
+    // lookahead: IDENT ws ':=' — walrus only when followed by non-'='
+    let t = input.trim_start();
+    let (ident, rest) = match take_ident(t) {
+        Some(pair) => pair,
+        None => return parse_full_expr(input),
+    };
+    let rest_trim = rest.trim_start();
+    if !rest_trim.starts_with(":=") {
+        return parse_full_expr(input);
+    }
+    // confirmed walrus: consume IDENT ':=' EXPR
+    let after_op = &rest_trim[2..];
+    let (rest2, expr) = parse_full_expr(after_op)?;
+    Ok((
+        rest2,
+        AstNode::Assign(
+            Box::new(AstNode::Var(ident.to_string())),
+            Box::new(expr),
+        ),
+    ))
 }
 
 // Parse logical OR (lowest precedence)
@@ -2146,5 +2192,22 @@ pub fn parse_expr(input: &str) -> IResult<&str, AstNode> {
 }
 
 pub fn parse_full_expr(input: &str) -> IResult<&str, AstNode> {
+    // PY-A: walrus `name := expr` — parse at full-expr entry, lowering to
+    // Assign (an expression whose evaluation binds the name).
+    let t = input.trim_start();
+    if let Some((ident, rest)) = take_ident(t) {
+        let rest_trim = rest.trim_start();
+        if rest_trim.starts_with(":=") && !rest_trim[2..].starts_with('=') {
+            let after = &rest_trim[2..];
+            let (rest, expr) = parse_full_expr(after)?;
+            return Ok((
+                rest,
+                AstNode::Assign(
+                    Box::new(AstNode::Var(ident.to_string())),
+                    Box::new(expr),
+                ),
+            ));
+        }
+    }
     parse_expr(input)
 }
