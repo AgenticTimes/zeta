@@ -1,0 +1,16 @@
+// PY-A: 关键字实参按形参名绑定 —— 此前实参名在 parser 被丢弃、按源码顺序当位置参数，
+//   `f(b=2, a=1)` 静默算出 201（应为 102）。
+// expect: 102
+// expect: 321
+// expect: 102
+// expect: 321
+def f(a, b):
+    return a * 100 + b
+
+def g(x, y, z):
+    return x + y * 10 + z * 100
+
+print(f(b=2, a=1))
+print(g(z=3, x=1, y=2))
+print(f(1, b=2))
+print(g(1, 2, z=3))

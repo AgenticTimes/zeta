@@ -1658,8 +1658,22 @@ fn parse_call_arg(input: &str) -> IResult<&str, AstNode> {
         }
         Some((ident, rest))
     };
-    if let Some((_, rest)) = kw() {
-        return parse_full_expr(rest);
+    if let Some((ident, rest)) = kw() {
+        // PY-A: keep the keyword NAME (it used to be dropped, so callers
+        // bound arguments positionally and `f(b=2, a=1)` silently computed
+        // f(2, 1)). The call site rebinds by parameter name; an unknown
+        // callee just unwraps the marker.
+        let (rest, value) = parse_full_expr(rest)?;
+        return Ok((
+            rest,
+            AstNode::Call {
+                receiver: None,
+                method: "__kwarg__".to_string(),
+                args: vec![AstNode::StringLit(ident.to_string()), value],
+                type_args: vec![],
+                structural: false,
+            },
+        ));
     }
     parse_full_expr(input)
 }

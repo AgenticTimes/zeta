@@ -89,6 +89,8 @@ pub struct MirGen {
     async_saved_vars: Vec<(String, u32)>,
     /// Known function return types (base name -> Type), injected by Resolver.
     func_ret_types: HashMap<String, Type>,
+    /// Parameter names per function, for keyword-argument binding.
+    func_param_names: HashMap<String, Vec<String>>,
     /// PY-A: monotonic counter for synthetic closure function names.
     closure_counter: u32,
     /// PY-A: variables bound to a lambda/closure value, mapped to the
@@ -132,6 +134,7 @@ impl MirGen {
             is_async_fn: false,
             async_saved_vars: vec![],
             func_ret_types: HashMap::new(),
+            func_param_names: HashMap::new(),
             closure_counter: 0,
             closure_vars: HashMap::new(),
             pending_closure_binding: None,
@@ -143,6 +146,12 @@ impl MirGen {
         consts: HashMap<String, crate::middle::ctfe::value::ConstValue>,
     ) -> Self {
         self.global_consts = consts;
+        self
+    }
+
+    /// PY-A: parameter names, so `f(a=1)` binds by name.
+    pub fn with_func_param_names(mut self, names: HashMap<String, Vec<String>>) -> Self {
+        self.func_param_names = names;
         self
     }
 
@@ -2373,6 +2382,11 @@ impl MirGen {
                         return id;
                     }
                 }
+                // PY-A: a keyword-argument marker that reached expression
+                // position (unknown callee) is just its value.
+                if method == "__kwarg__" && receiver.is_none() && args.len() == 2 {
+                    return self.lower_expr(&args[1]);
+                }
                 // PY-A: `json.dumps(x)` needs the COMPILER's type — an i64
                 // handle carries no runtime tag, so dispatch to the typed
                 // entry point here instead of guessing in C.
@@ -3337,9 +3351,66 @@ impl MirGen {
                 } else {
                     None
                 };
+                // PY-A: keyword arguments — bind by parameter name when the
+                // callee's signature is known (Python semantics). The parser
+                // wraps `name=value` as a __kwarg__ marker.
+                let ordered_args: Vec<AstNode> = {
+                    let mut pos: Vec<AstNode> = Vec::new();
+                    let mut kw: Vec<(String, AstNode)> = Vec::new();
+                    for a in args {
+                        match a {
+                            AstNode::Call {
+                                receiver: None,
+                                method,
+                                args: ka,
+                                ..
+                            } if method == "__kwarg__" && ka.len() == 2 => {
+                                if let AstNode::StringLit(n) = &ka[0] {
+                                    kw.push((n.clone(), ka[1].clone()));
+                                    continue;
+                                }
+                                pos.push(a.clone());
+                            }
+                            _ => pos.push(a.clone()),
+                        }
+                    }
+                    if kw.is_empty() {
+                        args.clone()
+                    } else if receiver.is_none() {
+                        match self.func_param_names.get(method.as_str()).cloned() {
+                            Some(params) => {
+                                let mut slots: Vec<Option<AstNode>> =
+                                    params.iter().map(|_| None).collect();
+                                for (i, a) in pos.into_iter().enumerate() {
+                                    if i < slots.len() {
+                                        slots[i] = Some(a);
+                                    }
+                                }
+                                for (n, v) in kw {
+                                    match params.iter().position(|p| *p == n) {
+                                        Some(i) => slots[i] = Some(v),
+                                        None => {
+                                            eprintln!(
+                                                "warning: PY-A: `{}` has no parameter named \
+                                                 `{}` — that keyword argument is passed positionally",
+                                                method, n
+                                            );
+                                            slots.push(Some(v));
+                                        }
+                                    }
+                                }
+                                slots.into_iter().flatten().collect()
+                            }
+                            None => kw.into_iter().map(|(_, v)| v).chain(pos).collect(),
+                        }
+                    } else {
+                        // Method/library call: names are the registry's business.
+                        kw.into_iter().map(|(_, v)| v).chain(pos).collect()
+                    }
+                };
                 // PY-A: starred args `f(*arr)` expand to per-element args
                 // (V1: static-size arrays compile-time unrolled).
-                for a in args {
+                for a in &ordered_args {
                     if let AstNode::UnaryOp { op, expr } = a {
                         if op == "*" {
                             let arr_id = self.lower_expr(expr);

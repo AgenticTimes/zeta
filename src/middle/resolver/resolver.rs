@@ -899,6 +899,19 @@ impl Resolver {
         }
     }
 
+    /// PY-A: parameter names per function, for keyword-argument binding.
+    pub fn func_param_names(&self) -> HashMap<String, Vec<String>> {
+        self.funcs
+            .iter()
+            .map(|(name, (params, _, _))| {
+                (
+                    name.clone(),
+                    params.iter().map(|(n, _)| n.clone()).collect(),
+                )
+            })
+            .collect()
+    }
+
     pub fn is_abi_stable(&self, key: &MonoKey) -> bool {
         key.type_args.iter().all(|t| is_cache_safe(t))
     }
@@ -1161,6 +1174,7 @@ impl Resolver {
         let mut mir_gen = crate::middle::mir::r#gen::MirGen::new()
             .with_global_consts(self.ctfe_consts.clone())
             .with_func_ret_types(ret_types)
+            .with_func_param_names(self.func_param_names())
             .with_type_decls(self.type_decls.clone())
             .with_nonlocal_names(self.nonlocal_names.borrow().clone())
             .with_module_globals(self.module_globals.borrow().clone())
