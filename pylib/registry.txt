@@ -76,6 +76,84 @@ F time perf_counter py_time_monotonic args= ret=f64
 M math
 F math sqrt py_math_sqrt args=f64 ret=f64
 F math fabs py_math_fabs args=f64 ret=f64
-F math floor py_math_floor args=f64 ret=f64
-F math ceil py_math_ceil args=f64 ret=f64
+F math floor py_math_floor args=f64 ret=i64
+F math ceil py_math_ceil args=f64 ret=i64
 F math pow py_math_pow args=f64,f64 ret=f64
+
+# ---- os / os.path / os.environ (evidence: corpus uses os.path.dirname 6,
+#      os.environ.get 3, abspath 2, setdefault 1) -------------------------
+M os
+F os getcwd py_os_getcwd args= ret=str
+F os getpid py_os_getpid args= ret=i64
+F os system py_os_system args=i64 ret=i64
+F os getenv py_os_getenv args=i64 ret=str
+F os listdir py_os_listdir args=i64 ret=i64
+F os makedirs py_os_makedirs args=i64 ret=i64
+F os remove py_os_remove args=i64 ret=i64
+F os path.join py_os_path_join args=i64,i64 ret=str
+F os path.basename py_os_path_basename args=i64 ret=str
+F os path.dirname py_os_path_dirname args=i64 ret=str
+F os path.splitext py_os_path_splitext args=i64 ret=str
+F os path.exists py_os_path_exists args=i64 ret=i64
+F os path.isfile py_os_path_isfile args=i64 ret=i64
+F os path.isdir py_os_path_isdir args=i64 ret=i64
+F os path.abspath py_os_path_abspath args=i64 ret=str
+F os path.expanduser py_os_path_expanduser args=i64 ret=str
+F os environ.get py_os_environ_get args=i64,i64 ret=str
+F os environ.setdefault py_os_environ_setdefault args=i64,i64 ret=str
+
+# ---- math, completed from the corpus call sites (exp 7, floor 8, pow 5,
+#      isfinite 2) --------------------------------------------------------
+F math exp py_math_exp args=f64 ret=f64
+F math log py_math_log args=f64 ret=f64
+F math log10 py_math_log10 args=f64 ret=f64
+F math sin py_math_sin args=f64 ret=f64
+F math cos py_math_cos args=f64 ret=f64
+F math tan py_math_tan args=f64 ret=f64
+F math atan2 py_math_atan2 args=f64,f64 ret=f64
+F math trunc py_math_trunc args=f64 ret=i64
+F math isfinite py_math_isfinite args=f64 ret=i64
+F math isnan py_math_isnan args=f64 ret=i64
+
+# ---- logging (evidence: getLogger 6, basicConfig 4, INFO 4) ------------
+M logging
+F logging DEBUG py_logging_DEBUG args= ret=i64
+F logging INFO py_logging_INFO args= ret=i64
+F logging WARNING py_logging_WARNING args= ret=i64
+F logging ERROR py_logging_ERROR args= ret=i64
+F logging CRITICAL py_logging_CRITICAL args= ret=i64
+F logging basicConfig py_logging_basicConfig args=i64 ret=i64
+F logging getLogger py_logging_getLogger args=i64 ret=i64 handle=PyLogger
+F logging debug py_logging_debug args=i64 ret=i64
+F logging info py_logging_info args=i64 ret=i64
+F logging warning py_logging_warning args=i64 ret=i64
+F logging error py_logging_error args=i64 ret=i64
+F logging critical py_logging_critical args=i64 ret=i64
+F logging FileHandler py_logging_FileHandler args=i64 ret=i64
+F logging Formatter py_logging_Formatter args=i64 ret=i64
+W PyLogger debug py_logger_debug args=2
+W PyLogger info py_logger_info args=2
+W PyLogger warning py_logger_warning args=2
+W PyLogger error py_logger_error args=2
+W PyLogger setLevel py_logging_setLevel args=2
+
+# ---- __future__ : accepted, binds nothing ------------------------------
+M __future__
+N __future__
+
+# ---- datetime (evidence: the corpus's heaviest stdlib need — timedelta 14,
+#      strptime 6, date/datetime construction, arithmetic, comparisons) ----
+M datetime
+F datetime date py_dt_date args=i64,i64,i64 ret=i64 handle=PyDate
+F datetime datetime py_dt_datetime args=i64,i64,i64 ret=i64 handle=PyDate
+F datetime timedelta py_dt_timedelta args=i64 ret=i64 handle=PyDelta
+F datetime strptime py_dt_strptime args=i64,i64 ret=i64 handle=PyDate
+F datetime datetime.strptime py_dt_strptime args=i64,i64 ret=i64 handle=PyDate
+F datetime datetime.now py_dt_now args= ret=i64 handle=PyDate
+F datetime date.today py_dt_now args= ret=i64 handle=PyDate
+W PyDate strftime py_dt_strftime args=2 ret=str
+W PyDate date py_dt_identity args=1 ret_handle=PyDate
+W PyDate year py_dt_year args=1
+W PyDate month py_dt_month args=1
+W PyDate day py_dt_day args=1
+W PyDelta days py_dt_delta_days args=1

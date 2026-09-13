@@ -11,6 +11,9 @@
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <math.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 static pthread_mutex_t zt_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -721,6 +724,340 @@ double py_time_monotonic(void) {
 // ---- math shims (registry-driven: declared by codegen from registry.txt) ----
 double py_math_sqrt(double x) { return sqrt(x); }
 double py_math_fabs(double x) { return fabs(x); }
-double py_math_floor(double x) { return floor(x); }
-double py_math_ceil(double x) { return ceil(x); }
+int64_t py_math_floor(double x) { return (int64_t)floor(x); }
+int64_t py_math_ceil(double x) { return (int64_t)ceil(x); }
 double py_math_pow(double a, double b) { return pow(a, b); }
+
+// ============================================================================
+// PY-A stdlib shims, batch 2: os / os.path / os.environ / math / logging.
+// Selected by evidence from the REasyQuant corpus (datetime 12, json 6, os 5,
+// logging 5, math 15 call sites) rather than by completeness.
+// ============================================================================
+
+static char* zt_strdup(const char* s) {
+    size_t n = strlen(s);
+    char* r = (char*)GC_malloc(n + 1);
+    memcpy(r, s, n + 1);
+    return r;
+}
+
+int64_t py_os_getcwd(void) {
+    char buf[4096];
+    return (int64_t)zt_strdup(getcwd(buf, sizeof buf) ? buf : "");
+}
+int64_t py_os_getpid(void) { return (int64_t)getpid(); }
+int64_t py_os_system(int64_t cmd) { return cmd ? (int64_t)system((const char*)cmd) : 0; }
+int64_t py_os_getenv(int64_t name) {
+    const char* v = name ? getenv((const char*)name) : NULL;
+    return (int64_t)zt_strdup(v ? v : "");
+}
+int64_t py_os_listdir(int64_t path) {
+    // Vec-layout handle of names in `path` (or "." when empty).
+    const char* d = path ? (const char*)path : ".";
+    DIR* dir = opendir(d);
+    int64_t cap = 8, len = 0;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap;
+    base[1] = 0;
+    if (dir) {
+        struct dirent* e;
+        while ((e = readdir(dir)) != NULL) {
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+            if (len >= cap) {
+                int64_t ncap = cap * 2;
+                int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)ncap * 8);
+                nb[0] = ncap;
+                nb[1] = len;
+                for (int64_t i = 0; i < len; i++) nb[2 + i] = base[2 + i];
+                base = nb;
+                cap = ncap;
+            }
+            base[2 + len++] = (int64_t)zt_strdup(e->d_name);
+        }
+        closedir(dir);
+    }
+    base[1] = len;
+    return (int64_t)(base + 2);
+}
+int64_t py_os_makedirs(int64_t path) {
+    if (!path) return -1;
+    char tmp[4096];
+    snprintf(tmp, sizeof tmp, "%s", (const char*)path);
+    for (char* p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, 0777);
+            *p = '/';
+        }
+    }
+    return (int64_t)mkdir(tmp, 0777);
+}
+int64_t py_os_remove(int64_t path) { return path ? (int64_t)remove((const char*)path) : -1; }
+
+// ---- os.path ----
+int64_t py_os_path_join(int64_t a, int64_t b) {
+    const char* x = a ? (const char*)a : "";
+    const char* y = b ? (const char*)b : "";
+    if (!*x) return (int64_t)zt_strdup(y);
+    if (!*y) return (int64_t)zt_strdup(x);
+    int need = (x[strlen(x) - 1] == '/') ? 0 : 1;
+    char* r = (char*)GC_malloc(strlen(x) + strlen(y) + 2);
+    strcpy(r, x);
+    if (need) strcat(r, "/");
+    strcat(r, y);
+    return (int64_t)r;
+}
+int64_t py_os_path_basename(int64_t p) {
+    const char* s = p ? (const char*)p : "";
+    const char* slash = strrchr(s, '/');
+    return (int64_t)zt_strdup(slash ? slash + 1 : s);
+}
+int64_t py_os_path_dirname(int64_t p) {
+    const char* s = p ? (const char*)p : "";
+    const char* slash = strrchr(s, '/');
+    if (!slash) return (int64_t)zt_strdup("");
+    if (slash == s) return (int64_t)zt_strdup("/");
+    size_t n = (size_t)(slash - s);
+    char* r = (char*)GC_malloc(n + 1);
+    memcpy(r, s, n);
+    r[n] = '\0';
+    return (int64_t)r;
+}
+int64_t py_os_path_splitext(int64_t p) {
+    // Returns the extension only (V1: the common `os.path.splitext(f)[1]` use).
+    const char* s = p ? (const char*)p : "";
+    const char* slash = strrchr(s, '/');
+    const char* dot = strrchr(s, '.');
+    if (!dot || (slash && dot < slash)) return (int64_t)zt_strdup("");
+    return (int64_t)zt_strdup(dot);
+}
+int64_t py_os_path_exists(int64_t p) {
+    struct stat st;
+    return (p && stat((const char*)p, &st) == 0) ? 1 : 0;
+}
+int64_t py_os_path_isfile(int64_t p) {
+    struct stat st;
+    return (p && stat((const char*)p, &st) == 0 && S_ISREG(st.st_mode)) ? 1 : 0;
+}
+int64_t py_os_path_isdir(int64_t p) {
+    struct stat st;
+    return (p && stat((const char*)p, &st) == 0 && S_ISDIR(st.st_mode)) ? 1 : 0;
+}
+int64_t py_os_path_abspath(int64_t p) {
+    char buf[4096];
+    const char* s = p ? (const char*)p : ".";
+    if (!realpath(s, buf)) {
+        char cwd[4096];
+        if (!getcwd(cwd, sizeof cwd)) return (int64_t)zt_strdup(s);
+        snprintf(buf, sizeof buf, "%s/%s", cwd, s);
+    }
+    return (int64_t)zt_strdup(buf);
+}
+int64_t py_os_path_expanduser(int64_t p) {
+    const char* s = p ? (const char*)p : "";
+    if (s[0] == '~') {
+        const char* home = getenv("HOME");
+        if (home) {
+            char* r = (char*)GC_malloc(strlen(home) + strlen(s) + 1);
+            strcpy(r, home);
+            strcat(r, s + 1);
+            return (int64_t)r;
+        }
+    }
+    return (int64_t)zt_strdup(s);
+}
+
+// ---- os.environ (process environment) ----
+int64_t py_os_environ_get(int64_t k, int64_t dflt) {
+    const char* v = k ? getenv((const char*)k) : NULL;
+    if (v) return (int64_t)zt_strdup(v);
+    return dflt ? dflt : (int64_t)zt_strdup("");
+}
+int64_t py_os_environ_setdefault(int64_t k, int64_t v) {
+    if (!k) return v;
+    const char* cur = getenv((const char*)k);
+    if (cur) return (int64_t)zt_strdup(cur);
+    setenv((const char*)k, v ? (const char*)v : "", 1);
+    return v;
+}
+
+// ---- math (completes the libm set the corpus actually calls) ----
+double py_math_exp(double x) { return exp(x); }
+double py_math_log(double x) { return log(x); }
+double py_math_log10(double x) { return log10(x); }
+double py_math_sin(double x) { return sin(x); }
+double py_math_cos(double x) { return cos(x); }
+double py_math_tan(double x) { return tan(x); }
+double py_math_atan2(double y, double x) { return atan2(y, x); }
+int64_t py_math_trunc(double x) { return (int64_t)trunc(x); }
+int64_t py_math_isfinite(double x) { return isfinite(x) ? 1 : 0; }
+int64_t py_math_isnan(double x) { return isnan(x) ? 1 : 0; }
+
+// ---- logging (real, to stderr; levels are i64 constants) ----
+#define PY_LOG_DEBUG 10
+#define PY_LOG_INFO 20
+#define PY_LOG_WARNING 30
+#define PY_LOG_ERROR 40
+#define PY_LOG_CRITICAL 50
+
+static int64_t py_log_level = PY_LOG_WARNING;
+
+int64_t py_logging_DEBUG(void) { return PY_LOG_DEBUG; }
+int64_t py_logging_INFO(void) { return PY_LOG_INFO; }
+int64_t py_logging_WARNING(void) { return PY_LOG_WARNING; }
+int64_t py_logging_ERROR(void) { return PY_LOG_ERROR; }
+int64_t py_logging_CRITICAL(void) { return PY_LOG_CRITICAL; }
+
+int64_t py_logging_basicConfig(int64_t level) {
+    if (level >= PY_LOG_DEBUG && level <= PY_LOG_CRITICAL) py_log_level = level;
+    return 0;
+}
+int64_t py_logging_setLevel(int64_t level) {
+    if (level >= PY_LOG_DEBUG && level <= PY_LOG_CRITICAL) py_log_level = level;
+    return 0;
+}
+int64_t py_logging_getLogger(int64_t name) { return name; } // logger identity = its name
+static int64_t py_log_emit(int64_t level, const char* tag, int64_t logger, int64_t msg) {
+    if (level < py_log_level) return 0;
+    fprintf(stderr, "[%s] %s%s%s\n", tag,
+            logger ? (const char*)logger : "", logger ? ": " : "",
+            msg ? (const char*)msg : "");
+    return 0;
+}
+int64_t py_logging_debug(int64_t m) { return py_log_emit(PY_LOG_DEBUG, "DEBUG", 0, m); }
+int64_t py_logging_info(int64_t m) { return py_log_emit(PY_LOG_INFO, "INFO", 0, m); }
+int64_t py_logging_warning(int64_t m) { return py_log_emit(PY_LOG_WARNING, "WARNING", 0, m); }
+int64_t py_logging_error(int64_t m) { return py_log_emit(PY_LOG_ERROR, "ERROR", 0, m); }
+int64_t py_logging_critical(int64_t m) { return py_log_emit(PY_LOG_CRITICAL, "CRITICAL", 0, m); }
+int64_t py_logger_debug(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_DEBUG, "DEBUG", lg, m); }
+int64_t py_logger_info(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_INFO, "INFO", lg, m); }
+int64_t py_logger_warning(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_WARNING, "WARNING", lg, m); }
+int64_t py_logger_error(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_ERROR, "ERROR", lg, m); }
+int64_t py_logging_FileHandler(int64_t p) { return p; }
+int64_t py_logging_Formatter(int64_t f) { return f; }
+
+// ============================================================================
+// PY-A datetime shims. Handles are 2-slot blocks: [days_since_epoch, seconds
+// _of_day]; a timedelta handle is [days, secs] as well. Selected because the
+// corpus leans on datetime hardest (timedelta 14, strptime 6, date/datetime
+// construction + arithmetic).
+// ============================================================================
+
+static int64_t zt_days_from_civil(int64_t y, int64_t m, int64_t d) {
+    y -= (m <= 2);
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    int64_t yoe = y - era * 400;
+    int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+static void zt_civil_from_days(int64_t z, int64_t* y, int64_t* m, int64_t* d) {
+    z += 719468;
+    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    int64_t doe = z - era * 146097;
+    int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int64_t yy = yoe + era * 400;
+    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    int64_t mp = (5 * doy + 2) / 153;
+    int64_t dd = doy - (153 * mp + 2) / 5 + 1;
+    int64_t mm = mp + (mp < 10 ? 3 : -9);
+    *y = yy + (mm <= 2);
+    *m = mm;
+    *d = dd;
+}
+static int64_t* zt_dt_alloc(int64_t days, int64_t secs) {
+    int64_t* h = (int64_t*)GC_malloc(16);
+    h[0] = days;
+    h[1] = secs;
+    return h;
+}
+int64_t py_dt_date(int64_t y, int64_t m, int64_t d) {
+    return (int64_t)zt_dt_alloc(zt_days_from_civil(y, m, d), 0);
+}
+int64_t py_dt_datetime(int64_t y, int64_t m, int64_t d) {
+    return (int64_t)zt_dt_alloc(zt_days_from_civil(y, m, d), 0);
+}
+int64_t py_dt_timedelta(int64_t days) { return (int64_t)zt_dt_alloc(days, 0); }
+int64_t py_dt_now(void) {
+    time_t t = time(NULL);
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+    return (int64_t)zt_dt_alloc(
+        zt_days_from_civil(tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday),
+        tmv.tm_hour * 3600 + tmv.tm_min * 60 + tmv.tm_sec);
+}
+int64_t py_dt_year(int64_t h) {
+    int64_t y, m, d;
+    zt_civil_from_days(((int64_t*)h)[0], &y, &m, &d);
+    return y;
+}
+int64_t py_dt_month(int64_t h) {
+    int64_t y, m, d;
+    zt_civil_from_days(((int64_t*)h)[0], &y, &m, &d);
+    return m;
+}
+int64_t py_dt_day(int64_t h) {
+    int64_t y, m, d;
+    zt_civil_from_days(((int64_t*)h)[0], &y, &m, &d);
+    return d;
+}
+int64_t py_dt_identity(int64_t h) { return h; }
+int64_t py_dt_strftime(int64_t h, int64_t fmt) {
+    int64_t y, m, d;
+    zt_civil_from_days(((int64_t*)h)[0], &y, &m, &d);
+    const char* f = fmt ? (const char*)fmt : "%Y-%m-%d";
+    char buf[256];
+    // Minimal strftime subset: %Y %m %d %H %M %S %%
+    int64_t secs = ((int64_t*)h)[1];
+    char* o = buf;
+    for (const char* p = f; *p && (o - buf) < 200; p++) {
+        if (*p != '%') { *o++ = *p; continue; }
+        p++;
+        switch (*p) {
+            case 'Y': o += sprintf(o, "%04lld", (long long)y); break;
+            case 'm': o += sprintf(o, "%02lld", (long long)m); break;
+            case 'd': o += sprintf(o, "%02lld", (long long)d); break;
+            case 'H': o += sprintf(o, "%02lld", (long long)(secs / 3600)); break;
+            case 'M': o += sprintf(o, "%02lld", (long long)((secs / 60) % 60)); break;
+            case 'S': o += sprintf(o, "%02lld", (long long)(secs % 60)); break;
+            case '%': *o++ = '%'; break;
+            default: if (*p) *o++ = *p; break;
+        }
+    }
+    *o = 0;
+    return (int64_t)zt_strdup(buf);
+}
+// strptime with the corpus's formats: %Y-%m-%d and %Y-%m-%d %H:%M:%S.
+int64_t py_dt_strptime(int64_t s, int64_t fmt) {
+    (void)fmt;
+    const char* p = s ? (const char*)s : "";
+    long long y = 0, mo = 1, d = 1, hh = 0, mi = 0, ss = 0;
+    int n = sscanf(p, "%lld-%lld-%lld %lld:%lld:%lld", &y, &mo, &d, &hh, &mi, &ss);
+    if (n < 3) {
+        n = sscanf(p, "%lld-%lld-%lld", &y, &mo, &d);
+        if (n < 3) return (int64_t)zt_dt_alloc(0, 0);
+    }
+    return (int64_t)zt_dt_alloc(zt_days_from_civil(y, mo, d), hh * 3600 + mi * 60 + ss);
+}
+static int64_t zt_dt_total_secs(int64_t h) {
+    return ((int64_t*)h)[0] * 86400 + ((int64_t*)h)[1];
+}
+int64_t py_dt_sub_dates(int64_t a, int64_t b) {
+    return (int64_t)zt_dt_alloc(((int64_t*)a)[0] - ((int64_t*)b)[0],
+                                ((int64_t*)a)[1] - ((int64_t*)b)[1]);
+}
+int64_t py_dt_add_delta(int64_t a, int64_t dl) {
+    return (int64_t)zt_dt_alloc(((int64_t*)a)[0] + ((int64_t*)dl)[0],
+                                ((int64_t*)a)[1] + ((int64_t*)dl)[1]);
+}
+int64_t py_dt_sub_delta(int64_t a, int64_t dl) {
+    return (int64_t)zt_dt_alloc(((int64_t*)a)[0] - ((int64_t*)dl)[0],
+                                ((int64_t*)a)[1] - ((int64_t*)dl)[1]);
+}
+int64_t py_dt_lt(int64_t a, int64_t b) { return zt_dt_total_secs(a) < zt_dt_total_secs(b); }
+int64_t py_dt_le(int64_t a, int64_t b) { return zt_dt_total_secs(a) <= zt_dt_total_secs(b); }
+int64_t py_dt_gt(int64_t a, int64_t b) { return zt_dt_total_secs(a) > zt_dt_total_secs(b); }
+int64_t py_dt_ge(int64_t a, int64_t b) { return zt_dt_total_secs(a) >= zt_dt_total_secs(b); }
+int64_t py_dt_eq(int64_t a, int64_t b) { return zt_dt_total_secs(a) == zt_dt_total_secs(b); }
+int64_t py_dt_ne(int64_t a, int64_t b) { return zt_dt_total_secs(a) != zt_dt_total_secs(b); }
+int64_t py_dt_delta_days(int64_t h) { return ((int64_t*)h)[0]; }

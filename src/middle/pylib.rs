@@ -53,6 +53,8 @@ pub struct PyMethod {
     /// Argument count including the receiver handle.
     pub arity: usize,
     pub ret_handle: Option<String>,
+    /// "i64" (default), "f64" or "str".
+    pub ret: String,
 }
 
 struct Registry {
@@ -153,11 +155,14 @@ fn parse_registry() -> Registry {
                 };
                 let mut ret_handle = None;
                 let mut arity = 1usize;
+                let mut ret = "i64".to_string();
                 for kv in it {
                     if let Some(v) = kv.strip_prefix("ret_handle=") {
                         ret_handle = Some(v.to_string());
                     } else if let Some(v) = kv.strip_prefix("args=") {
                         arity = v.parse().unwrap_or(1);
+                    } else if let Some(v) = kv.strip_prefix("ret=") {
+                        ret = v.to_string();
                     }
                 }
                 methods.push(PyMethod {
@@ -166,6 +171,7 @@ fn parse_registry() -> Registry {
                     symbol: symbol.to_string(),
                     arity,
                     ret_handle,
+                    ret,
                 });
             }
             _ => {}
@@ -254,4 +260,46 @@ pub fn packages_dir() -> std::path::PathBuf {
 /// and never bound; the import is simply accepted.
 pub fn is_noop_module(module: &str) -> bool {
     find_module(module).map(|m| m.noop).unwrap_or(false)
+}
+
+/// Result type of a handle method ("i64" | "f64" | "str"), for MIR typing.
+pub fn method_ret(handle: &str, method: &str) -> Option<&'static str> {
+    registry()
+        .methods
+        .iter()
+        .find(|m| m.handle == handle && m.method == method)
+        .map(|m| m.ret.as_str())
+}
+
+/// Operator dispatch for library handles (datetime date/timedelta arithmetic
+/// and comparisons). Returns (symbol, result kind) where kind is
+/// "date" | "delta" | "bool" | "i64".
+pub fn handle_op(op: &str, left: &str, right: &str) -> Option<(&'static str, &'static str)> {
+    let is_dt = |t: &str| t == "PyDate" || t == "PyDelta";
+    if !is_dt(left) || !is_dt(right) {
+        return None;
+    }
+    match op {
+        "-" if left == "PyDate" && right == "PyDate" => Some(("py_dt_sub_dates", "delta")),
+        "-" if left == "PyDate" && right == "PyDelta" => Some(("py_dt_sub_delta", "date")),
+        "+" if left == "PyDate" && right == "PyDelta" => Some(("py_dt_add_delta", "date")),
+        "+" if left == "PyDelta" && right == "PyDate" => Some(("py_dt_add_delta", "date")),
+        "-" if left == "PyDelta" && right == "PyDelta" => Some(("py_dt_sub_dates", "delta")),
+        "<" => Some(("py_dt_lt", "bool")),
+        "<=" => Some(("py_dt_le", "bool")),
+        ">" => Some(("py_dt_gt", "bool")),
+        ">=" => Some(("py_dt_ge", "bool")),
+        "==" => Some(("py_dt_eq", "bool")),
+        "!=" => Some(("py_dt_ne", "bool")),
+        _ => None,
+    }
+}
+
+/// The handle tag of a MIR type, when it is a library handle.
+pub fn handle_tag(t: &str) -> Option<&'static str> {
+    match t {
+        "PyDate" => Some("PyDate"),
+        "PyDelta" => Some("PyDelta"),
+        _ => None,
+    }
 }

@@ -1,0 +1,28 @@
+// PY-A: datetime 模块 —— 语料最重的 stdlib 缺口（timedelta 14 / strptime 6 /
+//   date·datetime 构造 + 算术 + 比较）。句柄带类型标签，运算符在 gen 层分发。
+// expect: 2024
+// expect: 3
+// expect: 15
+// expect: 2024/03/15
+// expect: 365
+// expect: 1
+// expect: 2023-03-16
+// expect: 2023
+// expect: 4
+import datetime
+
+d = datetime.date(2024, 3, 15)
+print(d.year)
+print(d.month)
+print(d.day)
+print(d.strftime("%Y/%m/%d"))
+
+delta = datetime.timedelta(days=365)
+past = d - delta
+print((d - past).days)
+print(past < d)
+print(past.strftime("%Y-%m-%d"))
+print(past.date().year)
+
+x = datetime.datetime.strptime("2024-04-05", "%Y-%m-%d")
+print(x.month)

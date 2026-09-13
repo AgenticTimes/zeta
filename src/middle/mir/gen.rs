@@ -1956,6 +1956,34 @@ impl MirGen {
                 let right_id = self.lower_expr(right);
                 let dest = self.next_id();
 
+                // PY-A: operator dispatch on library handles (datetime
+                // date/timedelta arithmetic and comparisons). Without it the
+                // operands were treated as plain integers, silently producing
+                // garbage for `d1 - d2` / `d < today`.
+                if let (Some(Type::Named(lt, _)), Some(Type::Named(rt, _))) = (
+                    self.type_map.get(&left_id).cloned(),
+                    self.type_map.get(&right_id).cloned(),
+                ) {
+                    if let Some((sym, kind)) = crate::middle::pylib::handle_op(op, &lt, &rt) {
+                        self.stmts.push(MirStmt::Call {
+                            func: sym.to_string(),
+                            args: vec![left_id, right_id],
+                            dest,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(dest, MirExpr::Var(dest));
+                        self.type_map.insert(
+                            dest,
+                            match kind {
+                                "date" => Type::Named("PyDate".to_string(), vec![]),
+                                "delta" => Type::Named("PyDelta".to_string(), vec![]),
+                                _ => Type::I64,
+                            },
+                        );
+                        return dest;
+                    }
+                }
+
                 if op == ".." {
                     // Range expression for for loops
                     self.exprs.insert(
@@ -2392,7 +2420,11 @@ impl MirGen {
                                 id,
                                 match ret_handle {
                                     Some(h) => Type::Named(h.to_string(), vec![]),
-                                    None => Type::I64,
+                                    None => match crate::middle::pylib::method_ret(&tag, method) {
+                                        Some("str") => Type::Str,
+                                        Some("f64") => Type::F64,
+                                        _ => Type::I64,
+                                    },
                                 },
                             );
                             return id;
@@ -4337,6 +4369,38 @@ impl MirGen {
                 self.type_map.insert(id, Type::I64);
             }
             AstNode::FieldAccess { base, field } => {
+                // PY-A: library-handle attribute read (`d.year`, `delta.days`).
+                // Field names are declared as one-argument "methods" in the
+                // registry, so reads and calls share one dispatch table.
+                if let AstNode::Var(vname) = &**base {
+                    if let Some(&slot) = self.name_to_id.get(vname.as_str()) {
+                        if let Some(Type::Named(tag, _)) = self.type_map.get(&slot).cloned() {
+                            if let Some((sym, _)) =
+                                crate::middle::pylib::method_symbol(&tag, field)
+                            {
+                                let base_id = self.lower_expr(base);
+                                self.stmts.push(MirStmt::Call {
+                                    func: sym.to_string(),
+                                    args: vec![base_id],
+                                    dest: id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(id, MirExpr::Var(id));
+                                let rt = crate::middle::pylib::method_ret(&tag, field)
+                                    .unwrap_or("i64");
+                                self.type_map.insert(
+                                    id,
+                                    match rt {
+                                        "str" => Type::Str,
+                                        "f64" => Type::F64,
+                                        _ => Type::I64,
+                                    },
+                                );
+                                return id;
+                            }
+                        }
+                    }
+                }
                 // PY-A: a module attribute used as a *value*
                 // (`level=logging.INFO`) resolves through the registry to its
                 // zero-argument shim.
@@ -4406,6 +4470,32 @@ impl MirGen {
                 // Implement proper field access
                 // 1. Evaluate the base expression
                 let base_id = self.lower_expr(base);
+                // PY-A: library-handle attribute read (`d.year`,
+                // `p.date().year`, `delta.days`). Field names are declared as
+                // one-argument "methods" in the registry, so reads and calls
+                // share one dispatch table. Checked on the *lowered* base type
+                // so chained calls work, not only plain variables.
+                if let Some(Type::Named(tag, _)) = self.type_map.get(&base_id).cloned() {
+                    if let Some((sym, _)) = crate::middle::pylib::method_symbol(&tag, field) {
+                        self.stmts.push(MirStmt::Call {
+                            func: sym.to_string(),
+                            args: vec![base_id],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        let rt = crate::middle::pylib::method_ret(&tag, field).unwrap_or("i64");
+                        self.type_map.insert(
+                            id,
+                            match rt {
+                                "str" => Type::Str,
+                                "f64" => Type::F64,
+                                _ => Type::I64,
+                            },
+                        );
+                        return id;
+                    }
+                }
                 // 2. Create FieldAccess expression
                 self.exprs.insert(
                     id,
