@@ -192,6 +192,20 @@ Python 侧 `time.sleep(0.02)`、`Thread.join()` 返回值等已验证；f64 返�
 仍属概念债（未做）：`pylib/` 与 `build/stubs` 在两套机制间共用意念不清；
 没有「只用系统库 / 只用本地实现」的显式开关（如 `ZETA_NO_SHIM=1`）。
 
+**第三方库安装（pip / zorb）：不存在可用路径（2026-09-13 实测）**
+
+| 件 | 状态 |
+|---|---|
+| `zorb` / `zpip` 可执行文件 | **不存在**——Cargo 无 bin target，`target/release` 里只有 `zetac` 与调试工具 |
+| `src/package/`（`Manifest`/`DependencyResolver`/`Workspace`/`ZorbClient`/漏洞扫描/签名） | 约 55KB Rust 代码，**编译器零调用点**（只有模块内部互引）→ 死代码 |
+| 包源 / 索引 / 下载 / 校验 | 不存在：`ZorbClient` 读的 `cache_dir/index.json` 无生产者，无网络拉取路径 |
+| `use @scope/name::X` | 只查本地 `packages/@scope/name/src/mod.z` 与 `~/.cache/zorb/packages/...`（两目录本机均不存在）；失败路径的 `diag_warning!(W2002, "Try running \`zorb install\`")` **实测未输出**（警告被过滤）→ 静默忽略 |
+| `use zorb::reqwest` / `serde` / `serde_json` | 硬编码映射到 `build/stubs/external/` 三个桩 |
+| Python 第三方库（pip 装的） | **完全不可见**：导入搜索路径只有 源文件目录 / `pylib` / `$ZETA_PYLIB` / `build/stubs`，**无 site-packages / venv / PYTHONPATH**；且不支持目录包（`__init__.py`） |
+
+当前第三方 Python 库只有两条可用路径：① 注册表加条目 + C shim（如 `math`）；
+② 把 `.py`/`.z` 放进搜索路径（用户模块，`ZETA_PYLIB` 可指向自定义目录，但需平铺单文件）。
+
 **缺口清单（2026-09-13 盘点）** —— 按优先级，未做项一律保持 fail-loud（链接期失败或 warning），
 不得静默产生错值：
 
@@ -214,6 +228,14 @@ Python 侧 `time.sleep(0.02)`、`Thread.join()` 返回值等已验证；f64 返�
 - [ ] **P2 库覆盖**：注册表只有 6 个模块（threading / concurrent.futures / multiprocessing /
   asyncio / time / math）；`os`/`sys`/`json`/`re`/`collections`/`itertools`/`random`/`datetime`/
   `pathlib`/`functools`/`logging` 等均未接入（`import os` 目前发 warning + 用到就链接失败）
+- [ ] **P2 第三方库安装**：`zorb`/`zpip` 二进制（`install`/`remove`/`list`）、包源与索引、
+  下载与校验；或先做最小闭环（本地路径/URL 安装到 `~/.zeta/packages` + 生成 manifest）
+- [ ] **P2 Python 站点包接入**：`site-packages` / `venv` / `PYTHONPATH` 搜索 +
+  目录包（`__init__.py`）支持，使 `pip install` 的纯 Python 包至少能被解析（真 import
+  仍需 L3 shim 或 L4 CPython 桥）
+- [ ] **P2 `src/package/` 死代码处置**：接上 CLI 或删除，避免「看着有、实际不可达」
+- [ ] **P2 静默路径清理**：`use` 失败（W2002）等 diagnostic 实测不输出，需确认是过滤策略
+  还是路径未达——`fail-open 禁止`同样适用于 warning 被吞
 - [ ] **P2 库来源显式化**：`ZETA_NO_SHIM=1`（或按模块前缀）强制走磁盘实现；
   `pylib/`（注册表数据）与 `build/stubs`（Zeta `use` 桩）目录职责分离
 - [ ] **P2 注册表形态**：`pylib/registry.txt` 是**声明式数据**，新原语仍需写 C；
