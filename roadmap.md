@@ -3,7 +3,7 @@
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
 > 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
-> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **40/40**；REasyQuant 语料解析 **38/38**
+> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **43/43**；REasyQuant 语料解析 **38/38**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -132,12 +132,24 @@
 
 ### Python 库导入机制 + 并发库（2026-09-13）
 
-**导入机制**（`src/middle/pylib.rs` 注册表 + parser 标记 + resolver 收集 + MirGen 映射）：
+**导入机制**（parser 标记 + resolver 收集 + MirGen 映射；注册表本身是数据文件
+`pylib/registry.txt`，`include_str!` 嵌入）：
 - `import X` / `from X import y [as z]` 不再静默吞掉：parser 发 `zeta_py_import` / `zeta_py_from`
   标记（no-op runtime），Resolver 收集成模块/成员别名表，MirGen 把调用映射到 runtime shim，
   并按成员声明给返回值打**精确句柄标签**（`PyThread`/`PyLock`/`PyExecutor`/`PyFuture`/`PyProcess`/`PyPool`）
 - 未知模块/成员 → 明确 warning（`treated as an external shim`），不再是假通过；
   未入表的成员保持链接期失败（fail-loud）而非静默错值
+- **通用文件加载**（2026-09-13 补）：注册表未命中时按
+  `<源文件目录>/X.{py,z}` → `pylib/X.{py,z}` → `$ZETA_PYLIB/X.{py,z}` → `build/stubs/X.{py,z}`
+  搜索并递归编译；模块顶层定义统一加 `X__` 前缀命名空间（per-function rename map 重写
+  模块内部裸调用），因此**用户自己的模块可导入**，且模块与主程序（或两个模块）同名函数不冲突
+- **注册表数据驱动**：模块/成员/方法、参数类型、返回类型、句柄标签全部写在
+  `pylib/registry.txt`；codegen 的 extern 声明由该文件派生（不再手写第二份清单）。
+  **加一个库 = 改数据文件 +（如需新原语）加 C shim，不改 Rust** —— 已用 `math`
+  （sqrt/fabs/floor/ceil/pow）实测：仅改 registry.txt + C，零 Rust 改动即通过
+- **`with` 语义修复**：`with X [as n]:` 此前只做绑定 + 执行 body，**`with lock:` 根本没加锁**
+  （fail-open）。现降级为 `zeta_with_enter`/`zeta_with_exit` 路由：库句柄按标签映射
+  （PyLock → acquire/release），其他类型回退 identity 并**发 warning 记录**（不静默）
 - 顺带修两个**词边界**parse bug（都属同类）：
   ① `ws(tag("import"))` 先吃空格 → 边界守卫永远看到模块名 → **Python `import` 从来没匹配过**
      （一直退化成 `Var("import")` 被丢弃）；
@@ -154,6 +166,7 @@
 | `multiprocessing` | `Process`/`start`/`join`/`exitcode`/`is_alive`、`Pool`、`cpu_count` | Process 走 **fork(2) 真进程**；`Pool.map` 与 futures 同策略（**进程内并行，非真多进程** — 接线 IPC 即可升级） |
 | `asyncio` | `run`/`sleep`/`create_task`/`ensure_future` | **顺序语义**：无事件循环，run 内联、sleep 阻塞；**值正确、并发不真**（`gather` 故意未入表，避免静默错值） |
 | `time` | `sleep`/`time`/`monotonic`/`perf_counter` | 真（clock_gettime/nanosleep） |
+| `math` | `sqrt`/`fabs`/`floor`/`ceil`/`pow` | 真（libm）——**纯数据文件接入，零 Rust 改动** |
 
 Python 侧 `time.sleep(0.02)`、`Thread.join()` 返回值等已验证；f64 返回类型经注册表 `ret` 标注，
 避免 i64 位模式误解（`time.monotonic()` 差值直接可用于测时）。
@@ -242,7 +255,7 @@ identity 兜底、UTF-8 边界探针修复。
 | `use std::X` 模块解析 | Resolver 递归查找 build/stubs/std/X.z ✓ 文件存在 | 解析 ✓ |
 | stdlib 桩（collections.z 等 12 个） | 桩内容是空壳 struct + no-op 方法（HashMap.insert 返回 None），无 runtime 支撑 | **有名无实**——`HashMap::new().insert(1,100)` 编译通过但链接失败（方法解析为裸名 extern `insert` 而非 `map_insert`） |
 | zorb 包管理器（@scope/name） | 目录约定 + ~/.cache 缓存查找已写，但无 zorb 二进制、无包源 | **空架子** |
-| `import X` / `from X import y`（Python 语法） | **已实现注册表绑定**（见「Python 库导入机制」）；已知模块解析到 runtime shim，未知模块发明确 warning（不再是静默吞掉） | ✓ L1 |
+| `import X` / `from X import y`（Python 语法） | 注册表 shim + **磁盘文件加载用户模块**（同目录/pylib/$ZETA_PYLIB，.py/.z）；未知模块发明确 warning | ✓ L1 |
 | Python 库接入 | L1 注册表 + C shim 已落地（threading/futures/multiprocessing/asyncio/time）；无 CPython 嵌入 | **部分**（L3 shim 路线） |
 
 ### 决策：Python 库"迁移还是接入"——按库分三类，不做全量兼容

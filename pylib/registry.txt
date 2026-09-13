@@ -1,0 +1,81 @@
+# Python stdlib shim registry (data-driven) — read at compile time via
+# include_str!, so adding a library means editing THIS file, not Rust.
+#
+# Format (one entry per line, '#' starts a comment):
+#   M <module>                         declare a module
+#   A <module> <alias>                 extra accepted import alias
+#   F <module> <member> <symbol> args=<n|f64[,f64...]> ret=<i64|f64|void> [handle=<Tag>]
+#                                      module-level member -> runtime shim
+#   W <handle> <method> <symbol> args=<n> [ret_handle=<Tag>]   (n includes the receiver)
+#                                      method dispatch for a handle tag
+#
+# `handle=<Tag>` / `ret_handle=<Tag>` is what makes t.start() / f.result()
+# dispatch exactly instead of by guessing method names.
+
+# ---- threading ----------------------------------------------------------
+M threading
+F threading Thread py_threading_thread_new args=i64 ret=i64 handle=PyThread
+F threading Lock py_threading_lock_new args= ret=i64 handle=PyLock
+F threading RLock py_threading_lock_new args= ret=i64 handle=PyLock
+F threading current_thread py_threading_current_thread args= ret=i64
+F threading get_ident py_threading_get_ident args= ret=i64
+F threading active_count py_threading_active_count args= ret=i64
+W PyThread start py_threading_thread_start args=1
+W PyThread join py_threading_thread_join args=1
+W PyThread is_alive py_threading_thread_is_alive args=1
+W PyLock acquire py_threading_lock_acquire args=1
+W PyLock release py_threading_lock_release args=1
+W PyLock locked py_threading_lock_locked args=1
+W PyLock __enter__ py_threading_lock_acquire args=1
+W PyLock __exit__ py_threading_lock_release args=1
+
+# ---- concurrent.futures -------------------------------------------------
+M concurrent.futures
+A concurrent.futures futures
+F concurrent.futures ThreadPoolExecutor py_futures_executor_new args=i64 ret=i64 handle=PyExecutor
+F concurrent.futures ProcessPoolExecutor py_futures_executor_new args=i64 ret=i64 handle=PyExecutor
+W PyExecutor submit py_futures_submit args=2 py_futures_submit ret_handle=PyFuture
+W PyExecutor map py_futures_map args=3
+W PyExecutor shutdown py_futures_shutdown args=1
+W PyFuture result py_futures_result args=1
+W PyFuture done py_futures_done args=1
+
+# ---- multiprocessing ----------------------------------------------------
+M multiprocessing
+F multiprocessing Process py_mp_process_new args=i64 ret=i64 handle=PyProcess
+F multiprocessing Pool py_mp_pool_new args=i64 ret=i64 handle=PyPool
+F multiprocessing current_process py_mp_current_process args= ret=i64
+F multiprocessing cpu_count py_mp_cpu_count args= ret=i64
+W PyProcess start py_mp_process_start args=1
+W PyProcess join py_mp_process_join args=1
+W PyProcess is_alive py_mp_process_is_alive args=1
+W PyProcess exitcode py_mp_process_exitcode args=1
+W PyPool map py_mp_pool_map args=3
+W PyPool apply py_mp_pool_apply args=3
+W PyPool close py_mp_pool_close args=1
+W PyPool join py_mp_pool_join args=1
+
+# ---- asyncio ------------------------------------------------------------
+# V1: no event loop (run/create_task evaluate inline, sleep blocks). `gather`
+# is deliberately absent so it fails loudly instead of silently returning a
+# wrong value.
+M asyncio
+F asyncio run py_asyncio_run args=i64 ret=i64
+F asyncio sleep py_asyncio_sleep args=f64 ret=i64
+F asyncio create_task py_asyncio_run args=i64 ret=i64
+F asyncio ensure_future py_asyncio_run args=i64 ret=i64
+
+# ---- time ---------------------------------------------------------------
+M time
+F time sleep py_time_sleep args=f64 ret=void
+F time time py_time_time args= ret=f64
+F time monotonic py_time_monotonic args= ret=f64
+F time perf_counter py_time_monotonic args= ret=f64
+
+# ---- math (added purely as a data edit to prove the registry is data-driven)
+M math
+F math sqrt py_math_sqrt args=f64 ret=f64
+F math fabs py_math_fabs args=f64 ret=f64
+F math floor py_math_floor args=f64 ret=f64
+F math ceil py_math_ceil args=f64 ret=f64
+F math pow py_math_pow args=f64,f64 ret=f64

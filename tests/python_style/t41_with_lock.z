@@ -1,0 +1,11 @@
+// PY-A: `with lock:` 真互斥（__enter__/__exit__ 路由到 acquire/release）
+// expect: 0
+// expect: 1
+// expect: 0
+from threading import Lock
+
+lock = Lock()
+print(lock.locked())
+with lock:
+    print(lock.locked())
+print(lock.locked())

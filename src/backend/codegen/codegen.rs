@@ -837,6 +837,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some(Linkage::External),
         );
         module.add_function(
+            "zeta_identity1",
+            i64_type.fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
             "zeta_py_import",
             i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
             Some(Linkage::External),
@@ -846,65 +851,25 @@ impl<'ctx> LLVMCodegen<'ctx> {
             i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
             Some(Linkage::External),
         );
-        // PY-A Python stdlib shims (threading / futures / multiprocessing /
-        // asyncio / time). Declared with their exact arity.
-        for (name, arity) in [
-            ("py_threading_thread_new", 1usize),
-            ("py_threading_thread_start", 1),
-            ("py_threading_thread_join", 1),
-            ("py_threading_thread_is_alive", 1),
-            ("py_threading_get_ident", 0),
-            ("py_threading_current_thread", 0),
-            ("py_threading_active_count", 0),
-            ("py_threading_lock_new", 0),
-            ("py_threading_lock_acquire", 1),
-            ("py_threading_lock_release", 1),
-            ("py_threading_lock_locked", 1),
-            ("py_futures_executor_new", 1),
-            ("py_futures_submit", 2),
-            ("py_futures_result", 1),
-            ("py_futures_done", 1),
-            ("py_futures_shutdown", 1),
-            ("py_futures_map", 3),
-            ("py_mp_process_new", 1),
-            ("py_mp_process_start", 1),
-            ("py_mp_process_join", 1),
-            ("py_mp_process_is_alive", 1),
-            ("py_mp_process_exitcode", 1),
-            ("py_mp_current_process", 0),
-            ("py_mp_cpu_count", 0),
-            ("py_mp_pool_new", 1),
-            ("py_mp_pool_map", 3),
-            ("py_mp_pool_apply", 3),
-            ("py_mp_pool_close", 1),
-            ("py_mp_pool_join", 1),
-            ("py_asyncio_run", 1),
-        ] {
-            let params: Vec<_> = (0..arity).map(|_| i64_type.into()).collect();
-            module.add_function(name, i64_type.fn_type(&params, false), Some(Linkage::External));
+        // PY-A Python stdlib shims: declared from the data-driven registry
+        // (pylib/registry.txt) so the extern list cannot drift from the
+        // mapped symbols, and f64 parameters are declared `double` rather
+        // than i64 (an i64 declaration truncates through fptosi).
+        for (sym, params, ret) in crate::middle::pylib::all_externs() {
+            let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = params
+                .iter()
+                .map(|t| match *t {
+                    "f64" => context.f64_type().into(),
+                    _ => i64_type.into(),
+                })
+                .collect();
+            let fn_type = match ret {
+                "void" => void_type.fn_type(&param_types, false),
+                "f64" => context.f64_type().fn_type(&param_types, false),
+                _ => i64_type.fn_type(&param_types, false),
+            };
+            module.add_function(sym, fn_type, Some(Linkage::External));
         }
-        // f64 params MUST be declared `double` — an i64 declaration truncates
-        // through fptosi (see validate.md §4).
-        module.add_function(
-            "py_asyncio_sleep",
-            i64_type.fn_type(&[context.f64_type().into()], false),
-            Some(Linkage::External),
-        );
-        module.add_function(
-            "py_time_sleep",
-            void_type.fn_type(&[context.f64_type().into()], false),
-            Some(Linkage::External),
-        );
-        module.add_function(
-            "py_time_time",
-            context.f64_type().fn_type(&[], false),
-            Some(Linkage::External),
-        );
-        module.add_function(
-            "py_time_monotonic",
-            context.f64_type().fn_type(&[], false),
-            Some(Linkage::External),
-        );
         // PY-A closure env: get(name) / set(name, value)
         module.add_function(
             "zeta_env_get",

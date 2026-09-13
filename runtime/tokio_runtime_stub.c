@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <sys/wait.h>
 #include <sys/time.h>
+#include <math.h>
 
 static pthread_mutex_t zt_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -716,3 +717,10 @@ double py_time_monotonic(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
+
+// ---- math shims (registry-driven: declared by codegen from registry.txt) ----
+double py_math_sqrt(double x) { return sqrt(x); }
+double py_math_fabs(double x) { return fabs(x); }
+double py_math_floor(double x) { return floor(x); }
+double py_math_ceil(double x) { return ceil(x); }
+double py_math_pow(double a, double b) { return pow(a, b); }

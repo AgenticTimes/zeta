@@ -1,0 +1,12 @@
+// PY-A: 通用库加载 —— 从磁盘导入用户自己的 Python 模块
+//   `import X` / `from X import y` 走搜索路径（同目录/pylib/$ZETA_PYLIB），
+//   模块内定义按 `mod__name` 前缀命名空间隔离。
+// expect: 42
+// expect: 10
+// expect: 9
+import pyfixture
+from pyfixture import double
+
+print(pyfixture.double(21))
+print(double(5))
+print(pyfixture.helper())

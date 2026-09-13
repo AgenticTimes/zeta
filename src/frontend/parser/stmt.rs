@@ -897,13 +897,48 @@ fn parse_with(input: &str) -> IResult<&str, AstNode> {
             let (input, body) = parse_block_body(input)?;
             let (input, _) = ws(tag("}")).parse(input)?;
 
+            // PY-A: `with X [as n]:` now runs the context protocol instead of
+            // silently ignoring it (a `with lock:` that never locked was a
+            // fail-open bug). Desugars to:
+            //   let __with_ctx<N> = X
+            //   [n =] zeta_with_enter(__with_ctx<N>)   // __enter__  (acquire)
+            //   body
+            //   zeta_with_exit(__with_ctx<N>)          // __exit__   (release)
+            // The sequence number keeps nested `with`s from clobbering each
+            // other's context slot.
+            static WITH_SEQ: std::sync::atomic::AtomicUsize =
+                std::sync::atomic::AtomicUsize::new(0);
+            let seq = WITH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let ctx = format!("__with_ctx_{}", seq);
             let mut stmts: Vec<AstNode> = Vec::new();
-            let bind_name = as_name.unwrap_or_else(|| "_with_ctx".to_string());
             stmts.push(AstNode::Assign(
-                Box::new(AstNode::Var(bind_name)),
+                Box::new(AstNode::Var(ctx.clone())),
                 Box::new(mgr),
             ));
+            let enter = AstNode::Call {
+                receiver: None,
+                method: "zeta_with_enter".to_string(),
+                args: vec![AstNode::Var(ctx.clone())],
+                type_args: vec![],
+                structural: false,
+            };
+            match as_name {
+                Some(name) => stmts.push(AstNode::Assign(
+                    Box::new(AstNode::Var(name)),
+                    Box::new(enter),
+                )),
+                None => stmts.push(AstNode::ExprStmt { expr: Box::new(enter) }),
+            }
             stmts.extend(body);
+            stmts.push(AstNode::ExprStmt {
+                expr: Box::new(AstNode::Call {
+                    receiver: None,
+                    method: "zeta_with_exit".to_string(),
+                    args: vec![AstNode::Var(ctx)],
+                    type_args: vec![],
+                    structural: false,
+                }),
+            });
             return Ok((input, AstNode::Block { body: stmts }));
         }
         _ => {

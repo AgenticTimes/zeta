@@ -68,6 +68,11 @@ pub struct MirGen {
     py_module_aliases: HashMap<String, String>,
     /// PY-A: `from X import y as b` — b → (module, member).
     py_member_aliases: HashMap<String, (String, String)>,
+    /// PY-A: Python modules loaded from disk (mangled `mod__name` symbols).
+    py_user_modules: std::collections::HashSet<String>,
+    /// PY-A: bare module-internal name → mangled symbol, for the function
+    /// currently being lowered.
+    symbol_renames: HashMap<String, String>,
     /// Names captured from enclosing scopes in the closure currently being
     /// lowered (name → env key id) — used to route assignments to env stores.
     captured_vars: std::collections::HashMap<String, u32>,
@@ -115,6 +120,8 @@ impl MirGen {
             module_globals: std::collections::HashSet::new(),
             py_module_aliases: HashMap::new(),
             py_member_aliases: HashMap::new(),
+            py_user_modules: std::collections::HashSet::new(),
+            symbol_renames: HashMap::new(),
             captured_vars: std::collections::HashMap::new(),
             async_state_ptr: None,
             async_segment_count: 0,
@@ -176,6 +183,18 @@ impl MirGen {
         self
     }
 
+    /// PY-A: modules loaded from disk register under a `mod__name` prefix.
+    pub fn with_py_user_modules(mut self, mods: std::collections::HashSet<String>) -> Self {
+        self.py_user_modules = mods;
+        self
+    }
+
+    /// PY-A: bare module-internal name → mangled symbol for this function.
+    pub fn with_symbol_renames(mut self, renames: HashMap<String, String>) -> Self {
+        self.symbol_renames = renames;
+        self
+    }
+
     /// PY-A: resolve a Python-library call to (runtime symbol, handle tag).
     /// Handles both `Thread(...)` (bound member) and `threading.Thread(...)`
     /// (module-qualified).
@@ -197,8 +216,20 @@ impl MirGen {
                 (module, method.to_string())
             }
         };
-        let entry = crate::middle::pylib::find_member(&module, &member)?;
-        Some((entry.symbol, entry.handle, entry.ret))
+        if let Some(entry) = crate::middle::pylib::find_member(&module, &member) {
+            return Some((entry.symbol.as_str(), entry.handle.as_deref(), entry.ret.as_str()));
+        }
+        // Not a registry shim: a module loaded from disk resolves to its
+        // `mod__name` mangled symbol (no handle tag, i64 result).
+        if self.py_user_modules.contains(&module) {
+            let prefix = format!("{}__", module.replace('.', "_"));
+            let sym = format!("{}{}", prefix, member);
+            // Leaked so the &'static str signature holds; one small alloc per
+            // distinct module member per compile.
+            let leaked: &'static str = Box::leak(sym.into_boxed_str());
+            return Some((leaked, None, "i64"));
+        }
+        None
     }
 
     /// PY-A: the library handle tag of a receiver expression, if any
@@ -2181,6 +2212,62 @@ impl MirGen {
                 type_args,
                 ..
             } => {
+                // PY-A: module-internal bare call → mangled symbol (imported
+                // modules are registered under `mod__name`).
+                if receiver.is_none() {
+                    if let Some(mangled) = self.symbol_renames.get(method).cloned() {
+                        if mangled != *method {
+                            let rewritten = AstNode::Call {
+                                receiver: None,
+                                method: mangled,
+                                args: args.clone(),
+                                type_args: type_args.clone(),
+                                structural: false,
+                            };
+                            return self.lower_expr(&rewritten);
+                        }
+                    }
+                }
+                // PY-A: `with X [as n]:` desugar — route the context protocol.
+                // Library handles use their tagged method (PyLock → mutex
+                // acquire/release); anything else falls back to identity AND
+                // warns, so a `with` that does not actually enter is recorded
+                // rather than silently pretending (the old desugar ignored the
+                // protocol entirely — `with lock:` never locked).
+                if (method == "zeta_with_enter" || method == "zeta_with_exit")
+                    && receiver.is_none()
+                    && args.len() == 1
+                {
+                    let proto = if method == "zeta_with_exit" {
+                        "__exit__"
+                    } else {
+                        "__enter__"
+                    };
+                    let routed = self
+                        .py_handle_of(&args[0])
+                        .and_then(|tag| crate::middle::pylib::method_symbol(&tag, proto))
+                        .map(|(sym, _)| sym);
+                    let symbol = match routed {
+                        Some(sym) => sym,
+                        None => {
+                            eprintln!(
+                                "warning: PY-A: `with` on a value with no known context \
+                                 protocol — enter/exit are no-ops"
+                            );
+                            "zeta_identity1"
+                        }
+                    };
+                    let arg_id = self.lower_expr(&args[0]);
+                    self.stmts.push(MirStmt::Call {
+                        func: symbol.to_string(),
+                        args: vec![arg_id],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
                 // PY-A: Python stdlib shims — `threading.Thread(f)` /
                 // `from threading import Thread; Thread(f)` dispatch to runtime
                 // shims, and calls on a returned handle (`t.start()`,

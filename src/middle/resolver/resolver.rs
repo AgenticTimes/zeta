@@ -63,7 +63,19 @@ pub struct Resolver {
     /// PY-A: `import X as a` → a → canonical module name.
     py_module_aliases: RefCell<std::collections::HashMap<String, String>>,
     /// PY-A: `from X import y as b` → b → (module, member).
+    /// PY-A: `from X import y as b` — b → (module, member).
     py_member_aliases: RefCell<std::collections::HashMap<String, (String, String)>>,
+    /// PY-A: Python modules loaded from disk (not registry shims).
+    py_user_modules: RefCell<std::collections::HashSet<String>>,
+    /// PY-A: per-module top-level definition names (rename map source).
+    py_module_own_names:
+        RefCell<std::collections::HashMap<String, std::collections::HashSet<String>>>,
+    /// PY-A: mangled module definition name → owning module.
+    py_mangled_to_module: RefCell<std::collections::HashMap<String, String>>,
+    /// PY-A: modules already loaded from disk (recursion / duplicate guard).
+    py_loaded_modules: RefCell<std::collections::HashSet<String>>,
+    /// PY-A: directory of the file being compiled (module search root).
+    py_source_dir: RefCell<Option<std::path::PathBuf>>,
     /// Identity inference context for capability-based type inference
     identity_inference: crate::middle::types::identity::inference::IdentityInferenceContext,
     /// Capability inferencer for identity-aware type inference
@@ -94,6 +106,11 @@ impl Resolver {
             module_globals: RefCell::new(std::collections::HashSet::new()),
             py_module_aliases: RefCell::new(std::collections::HashMap::new()),
             py_member_aliases: RefCell::new(std::collections::HashMap::new()),
+            py_user_modules: RefCell::new(std::collections::HashSet::new()),
+            py_module_own_names: RefCell::new(std::collections::HashMap::new()),
+            py_mangled_to_module: RefCell::new(std::collections::HashMap::new()),
+            py_loaded_modules: RefCell::new(std::collections::HashSet::new()),
+            py_source_dir: RefCell::new(None),
             capability_inferencer:
                 crate::middle::types::identity::inference::CapabilityInferencer::new(),
         };
@@ -256,9 +273,17 @@ impl Resolver {
                     // (module, member, alias)
                     (kind, Some(a), b)
                 };
+                // Built-in registry first; otherwise try to load a user file
+                // from disk (that is what makes `import` generic); only when
+                // neither exists do we fall back to an external shim.
+                let in_registry = crate::middle::pylib::find_module(&module).is_some();
+                if !in_registry {
+                    let _ = self.load_user_python_module(&module);
+                }
+                let is_user = self.py_user_modules.borrow().contains(&module);
                 match &member {
                     None => {
-                        if crate::middle::pylib::find_module(&module).is_none() {
+                        if !in_registry && !is_user {
                             eprintln!(
                                 "warning: PY-A: unknown Python module `{}` — treated as an \
                                  external shim (members resolve by name, no type checking)",
@@ -268,23 +293,18 @@ impl Resolver {
                         self.py_module_aliases.borrow_mut().insert(alias, module);
                     }
                     Some(m) => {
-                        match crate::middle::pylib::find_member(&module, m) {
-                            Some(_) => {
-                                self.py_member_aliases
-                                    .borrow_mut()
-                                    .insert(alias, (module.clone(), m.clone()));
-                            }
-                            None => {
-                                eprintln!(
-                                    "warning: PY-A: unknown member `{}` in Python module \
-                                     `{}` — treated as an external shim",
-                                    m, module
-                                );
-                                self.py_member_aliases
-                                    .borrow_mut()
-                                    .insert(alias, (module.clone(), m.clone()));
-                            }
+                        let known = crate::middle::pylib::find_member(&module, m).is_some()
+                            || is_user;
+                        if !known {
+                            eprintln!(
+                                "warning: PY-A: unknown member `{}` in Python module \
+                                 `{}` — treated as an external shim",
+                                m, module
+                            );
                         }
+                        self.py_member_aliases
+                            .borrow_mut()
+                            .insert(alias, (module.clone(), m.clone()));
                     }
                 }
             }
@@ -725,7 +745,124 @@ impl Resolver {
     pub fn set_source_dir(&mut self, path: &std::path::Path) {
         if let Some(parent) = path.parent() {
             self.module_resolver.set_root_dir(parent);
+            *self.py_source_dir.borrow_mut() = Some(parent.to_path_buf());
         }
+    }
+
+    /// PY-A: load a Python module from disk so `import X` works for the user's
+    /// own files, not just the built-in registry. Search order:
+    ///   <dir of the file being compiled>/X.{py,z}, pylib/X.{py,z},
+    ///   $ZETA_PYLIB/X.{py,z}, build/stubs/X.{py,z}
+    /// Every top-level definition is prefixed `X__` so two modules (or a module
+    /// and the main program) may both define `helper`. Returns false when no
+    /// file is found.
+    fn load_user_python_module(&mut self, module: &str) -> bool {
+        if !self.py_loaded_modules.borrow_mut().insert(module.to_string()) {
+            return true; // already loaded (or currently loading)
+        }
+        let rel: std::path::PathBuf = module.split('.').collect();
+        let mut bases: Vec<std::path::PathBuf> = Vec::new();
+        if let Some(d) = self.py_source_dir.borrow().clone() {
+            bases.push(d);
+        }
+        bases.push(std::path::PathBuf::from("pylib"));
+        if let Ok(p) = std::env::var("ZETA_PYLIB") {
+            bases.push(std::path::PathBuf::from(p));
+        }
+        bases.push(std::path::PathBuf::from("build/stubs"));
+        let mut found: Option<(std::path::PathBuf, bool)> = None;
+        'search: for base in &bases {
+            for (ext, is_py) in [("py", true), ("z", false)] {
+                let mut p = base.join(&rel);
+                p.set_extension(ext);
+                if p.is_file() {
+                    found = Some((p, is_py));
+                    break 'search;
+                }
+            }
+        }
+        let (path, is_py) = match found {
+            Some(v) => v,
+            None => {
+                self.py_loaded_modules.borrow_mut().remove(module);
+                return false;
+            }
+        };
+        let src = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "warning: PY-A: cannot read module `{}` ({}): {}",
+                    module,
+                    path.display(),
+                    e
+                );
+                return false;
+            }
+        };
+        let src = src.trim_start_matches('\u{FEFF}').to_string();
+        let pre = if is_py {
+            match crate::frontend::indent::indent_preprocess(&src) {
+                Ok(Some(t)) => t,
+                Ok(None) => src.clone(),
+                Err(_) => src.clone(),
+            }
+        } else {
+            src.clone()
+        };
+        let asts = match crate::frontend::parser::top_level::parse_zeta(&pre) {
+            Ok((_rem, a)) => a,
+            Err(_) => {
+                eprintln!("warning: PY-A: cannot parse module file {}", path.display());
+                return false;
+            }
+        };
+        let prefix = format!("{}__", module.replace('.', "_"));
+        let mut own: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for a in &asts {
+            if let Some(n) = definition_name(a) {
+                own.insert(n.to_string());
+            }
+        }
+        for a in asts {
+            let mangled = match a {
+                AstNode::FuncDef { .. }
+                | AstNode::ConstDef { .. }
+                | AstNode::StructDef { .. }
+                | AstNode::EnumDef { .. } => rename_definition(a, &prefix),
+                other => other,
+            };
+            if let Some(n) = definition_name(&mangled) {
+                self.py_mangled_to_module
+                    .borrow_mut()
+                    .insert(n.to_string(), module.to_string());
+            }
+            self.register(mangled);
+        }
+        self.py_module_own_names
+            .borrow_mut()
+            .insert(module.to_string(), own);
+        self.py_user_modules.borrow_mut().insert(module.to_string());
+        eprintln!("PY-A: imported module `{}` from {}", module, path.display());
+        true
+    }
+
+    /// PY-A: rename map for the function being lowered — bare references to a
+    /// module's own top-level names are redirected to their `mod__` mangled
+    /// form, so a module's internals resolve without rewriting its whole AST.
+    fn module_renames_for(&self, func_name: &str) -> std::collections::HashMap<String, String> {
+        let mut out = std::collections::HashMap::new();
+        let module = match self.py_mangled_to_module.borrow().get(func_name) {
+            Some(m) => m.clone(),
+            None => return out,
+        };
+        if let Some(own) = self.py_module_own_names.borrow().get(&module) {
+            let prefix = format!("{}__", module.replace('.', "_"));
+            for n in own {
+                out.insert(n.clone(), format!("{}{}", prefix, n));
+            }
+        }
+        out
     }
 
     pub fn lower_to_mir(&self, ast: &AstNode) -> Mir {
@@ -743,7 +880,14 @@ impl Resolver {
             .with_py_imports(
                 self.py_module_aliases.borrow().clone(),
                 self.py_member_aliases.borrow().clone(),
-            );
+            )
+            .with_py_user_modules(self.py_user_modules.borrow().clone())
+            .with_symbol_renames(self.module_renames_for(
+                match ast {
+                    AstNode::FuncDef { name, .. } => name.as_str(),
+                    _ => "",
+                },
+            ));
         let mir = mir_gen.lower_to_mir(ast);
         // PY-A: synthetic lambda/closure functions synthesized while lowering
         // are parked on the resolver so they reach codegen exactly once.
@@ -2019,5 +2163,112 @@ impl Default for Resolver {
 impl Drop for Resolver {
     fn drop(&mut self) {
         self.persist_specialization_cache();
+    }
+}
+
+/// PY-A: top-level definition name of an AST node, if it defines one.
+fn definition_name(a: &AstNode) -> Option<&str> {
+    match a {
+        AstNode::FuncDef { name, .. }
+        | AstNode::StructDef { name, .. }
+        | AstNode::EnumDef { name, .. }
+        | AstNode::ConstDef { name, .. }
+        | AstNode::TypeAlias { name, .. } => Some(name),
+        _ => None,
+    }
+}
+
+/// PY-A: shallow-rename a definition so imported modules cannot collide with
+/// the importing program (or with each other).
+fn rename_definition(a: AstNode, prefix: &str) -> AstNode {
+    match a {
+        AstNode::FuncDef {
+            name,
+            generics,
+            lifetimes,
+            params,
+            ret,
+            body,
+            attrs,
+            ret_expr,
+            single_line,
+            doc,
+            pub_,
+            async_,
+            const_,
+            comptime_,
+            where_clauses,
+        } => AstNode::FuncDef {
+            name: format!("{}{}", prefix, name),
+            generics,
+            lifetimes,
+            params,
+            ret,
+            body,
+            attrs,
+            ret_expr,
+            single_line,
+            doc,
+            pub_,
+            async_,
+            const_,
+            comptime_,
+            where_clauses,
+        },
+        AstNode::StructDef {
+            name,
+            fields,
+            generics,
+            lifetimes,
+            attrs,
+            doc,
+            pub_,
+            where_clauses,
+            ..
+        } => AstNode::StructDef {
+            name: format!("{}{}", prefix, name),
+            fields,
+            generics,
+            lifetimes,
+            attrs,
+            doc,
+            pub_,
+            where_clauses,
+        },
+        AstNode::EnumDef {
+            name,
+            variants,
+            generics,
+            lifetimes,
+            attrs,
+            doc,
+            pub_,
+            where_clauses,
+        } => AstNode::EnumDef {
+            name: format!("{}{}", prefix, name),
+            variants,
+            generics,
+            lifetimes,
+            attrs,
+            doc,
+            pub_,
+            where_clauses,
+        },
+        AstNode::ConstDef {
+            name,
+            ty,
+            value,
+            attrs,
+            pub_,
+            comptime_,
+        } => AstNode::ConstDef {
+            name: format!("{}{}", prefix, name),
+            ty,
+            value,
+            attrs,
+            pub_,
+            comptime_,
+        },
+        other => other,
     }
 }
