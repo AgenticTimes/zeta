@@ -4,6 +4,7 @@ pub mod ctfe;
 pub mod mir;
 pub mod optimization;
 pub mod passes;
+pub mod pylib;
 pub mod resolver;
 pub mod specialization;
 pub mod types;

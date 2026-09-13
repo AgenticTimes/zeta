@@ -353,6 +353,12 @@ int64_t zeta_nonlocal_decl(int64_t name) { return name; }
 // PY-A: module-global marker — no-op; the resolver/gen route reads/writes
 // through the env instead. Present so the synthesized marker call links.
 int64_t zeta_module_decl(int64_t name) { return name; }
+// PY-A: Python-library import markers — no-ops. The Resolver collects them
+// into the module/member alias tables; MirGen does the actual symbol mapping.
+int64_t zeta_py_import(int64_t module, int64_t alias) { (void)module; (void)alias; return 0; }
+int64_t zeta_py_from(int64_t module, int64_t member, int64_t alias) {
+    (void)module; (void)member; (void)alias; return 0;
+}
 
 // PY-A: list comprehension collector — iter is a Vec-layout handle
 // ([cap|len|data...]); fn_ptr is the address of a generated closure taking

@@ -16,6 +16,28 @@ use nom::error::Error as NomError;
 use nom::multi::{separated_list0, separated_list1};
 use nom::sequence::{delimited, pair, preceded, terminated};
 
+/// `as` cast keyword with a word-boundary guard. Without it, the `as` inside
+/// `async def ...` matches and the cast's type name swallows `ync`, silently
+/// corrupting the preceding statement (and breaking every `async def`).
+fn cast_as_keyword(input: &str) -> IResult<&str, &str> {
+    // Only leading whitespace may be skipped here: `ws` also eats trailing
+    // whitespace, which would make the boundary test below see the type name
+    // and reject every real `x as i64`.
+    let (i, _) = skip_ws_and_comments0(input)?;
+    let (i, kw) = tag("as").parse(i)?;
+    if i.chars()
+        .next()
+        .map_or(false, |c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(nom::Err::Error(NomError::new(
+            i,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    Ok((i, kw))
+}
+
+
 fn parse_float_lit(input: &str) -> IResult<&str, AstNode> {
     // OPTIMIZED: Use byte slices instead of character iteration
     // Simple float parser: digits.digits
@@ -1467,7 +1489,7 @@ pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
                 structural: false,
             };
             input = i;
-        } else if let Ok((i, _)) = ws(tag("as")).parse(input) {
+        } else if let Ok((i, _)) = cast_as_keyword(input) {
             let (j, ty) = ws(parse_type).parse(i)?;
             expr = AstNode::Cast {
                 expr: Box::new(expr),

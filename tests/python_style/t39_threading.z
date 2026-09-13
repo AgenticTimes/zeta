@@ -1,0 +1,26 @@
+// PY-A: Python 库导入机制 + threading（真实 pthread 线程）
+//   `from X import y` 绑定到 runtime shim；`import X` 的模块限定调用同样生效。
+// expect: 6
+// expect: 30
+// expect: 1
+// expect: 0
+from threading import Thread, Lock, active_count
+
+def work_a():
+    return 6
+
+def work_b():
+    return 30
+
+lock = Lock()
+lock.acquire()
+lock.release()
+
+t1 = Thread(work_a)
+t2 = Thread(work_b)
+t1.start()
+t2.start()
+print(t1.join())
+print(t2.join())
+print(active_count())
+print(lock.locked())

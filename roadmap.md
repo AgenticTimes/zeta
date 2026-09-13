@@ -3,7 +3,7 @@
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
 > 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
-> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**；python_style **37/37**；REasyQuant 语料解析 **38/38**
+> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **40/40**；REasyQuant 语料解析 **38/38**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -130,6 +130,34 @@
 
 ## PY-A Python 兼容层（2026-09-11，目标：基本能编译 Python）
 
+### Python 库导入机制 + 并发库（2026-09-13）
+
+**导入机制**（`src/middle/pylib.rs` 注册表 + parser 标记 + resolver 收集 + MirGen 映射）：
+- `import X` / `from X import y [as z]` 不再静默吞掉：parser 发 `zeta_py_import` / `zeta_py_from`
+  标记（no-op runtime），Resolver 收集成模块/成员别名表，MirGen 把调用映射到 runtime shim，
+  并按成员声明给返回值打**精确句柄标签**（`PyThread`/`PyLock`/`PyExecutor`/`PyFuture`/`PyProcess`/`PyPool`）
+- 未知模块/成员 → 明确 warning（`treated as an external shim`），不再是假通过；
+  未入表的成员保持链接期失败（fail-loud）而非静默错值
+- 顺带修两个**词边界**parse bug（都属同类）：
+  ① `ws(tag("import"))` 先吃空格 → 边界守卫永远看到模块名 → **Python `import` 从来没匹配过**
+     （一直退化成 `Var("import")` 被丢弃）；
+  ② `as` 类型转换无词边界 → `async def` 的 `as` 被当 cast、类型名吃掉 `ync`，
+     **静默改写前一条语句**（`async def` 由此损坏，现已可解析）
+- 附带：裸函数名作值 → `FuncAddr`（`threading.Thread(work)` 需要），常量名排除在外
+
+**并发库**（C shim 薄封装既有原生原语，`runtime/tokio_runtime_stub.c`）：
+
+| 库 | 实现 | 真实性 |
+|---|---|---|
+| `threading` | `Thread(target)`/`start`/`join`/`is_alive`、`Lock`/`acquire`/`release`/`locked`、`current_thread`/`get_ident`/`active_count` | **真 pthread**，4×300M 加速 **3.9×** |
+| `concurrent.futures` | `ThreadPoolExecutor`/`ProcessPoolExecutor`、`submit`/`result`/`done`/`map`/`shutdown` | **真并行**（V1 每任务一线程，不复用 worker）；4×300M **4.0×** |
+| `multiprocessing` | `Process`/`start`/`join`/`exitcode`/`is_alive`、`Pool`、`cpu_count` | Process 走 **fork(2) 真进程**；`Pool.map` 与 futures 同策略（**进程内并行，非真多进程** — 接线 IPC 即可升级） |
+| `asyncio` | `run`/`sleep`/`create_task`/`ensure_future` | **顺序语义**：无事件循环，run 内联、sleep 阻塞；**值正确、并发不真**（`gather` 故意未入表，避免静默错值） |
+| `time` | `sleep`/`time`/`monotonic`/`perf_counter` | 真（clock_gettime/nanosleep） |
+
+Python 侧 `time.sleep(0.02)`、`Thread.join()` 返回值等已验证；f64 返回类型经注册表 `ret` 标注，
+避免 i64 位模式误解（`time.monotonic()` 差值直接可用于测时）。
+
 ### 已完成（本批）
 - [x] `#` 注释（parser `line_comment` + 预处理器字符串状态机；`#[` 保留给属性）
 - [x] `pass`（no-op 语句）
@@ -214,8 +242,8 @@ identity 兜底、UTF-8 边界探针修复。
 | `use std::X` 模块解析 | Resolver 递归查找 build/stubs/std/X.z ✓ 文件存在 | 解析 ✓ |
 | stdlib 桩（collections.z 等 12 个） | 桩内容是空壳 struct + no-op 方法（HashMap.insert 返回 None），无 runtime 支撑 | **有名无实**——`HashMap::new().insert(1,100)` 编译通过但链接失败（方法解析为裸名 extern `insert` 而非 `map_insert`） |
 | zorb 包管理器（@scope/name） | 目录约定 + ~/.cache 缓存查找已写，但无 zorb 二进制、无包源 | **空架子** |
-| `import numpy` / `import pandas`（Python 语法） | parse 后静默吞掉（PY-A import 容错），库符号全部落空 | **解析层假通过** |
-| Python 库接入 | 无 FFI、无 CPython 嵌入、无 C ABI 映射 | **不存在** |
+| `import X` / `from X import y`（Python 语法） | **已实现注册表绑定**（见「Python 库导入机制」）；已知模块解析到 runtime shim，未知模块发明确 warning（不再是静默吞掉） | ✓ L1 |
+| Python 库接入 | L1 注册表 + C shim 已落地（threading/futures/multiprocessing/asyncio/time）；无 CPython 嵌入 | **部分**（L3 shim 路线） |
 
 ### 决策：Python 库"迁移还是接入"——按库分三类，不做全量兼容
 
@@ -256,14 +284,14 @@ identity 兜底、UTF-8 边界探针修复。
 | try/except | 1412 | V1 error-state ✓ | L2 类型过滤 |
 | class | 747 | ✓（struct 脱糖） | L1 |
 | listcomp | 278 | ✓（__collect__） | L1 |
-| with | 272 | ✗ 解析失败 | L1 解析（desugar → call+try） |
+| with | 272 | ✓ 解析 + desugar | L1 ✓ |
 | starred `*args` 展开 | 268 | ✓（V1 静态数组展开，调用点编译期 unroll） | L1 ✓ |
 | walrus `:=` | 59 | ✓（desugar → Assign；括号/裸两种形式） | L1 ✓ |
-| genexp `(x for x in y)` | 222 | ✗ | L2（迭代器协议） |
-| yield/async def/await | 197/25/15 | ✗ | L4（协程状态机，深水区） |
+| genexp `(x for x in y)` | 222 | ✓（同 listcomp desugar，V1 牺牲惰性；裸 genexp 受 parse 架构限制） | L1 ✓ |
+| yield/async def/await | 197/25/15 | `async def`/`await` 可解析（`as` 词边界 bug 已修），asyncio shim 顺序语义；yield 生成器仍 ✗ | L4（协程状态机，深水区） |
 | lambda | 130 | ✓（V2 捕获） | L1 |
 | global | 65 | ✓（module 全局槽隐式读，无需显式声明） | L1 ✓ |
-| dictcomp/setcomp | 39/11 | ✗ | L2 |
+| dictcomp/setcomp | 39/11 | ✓（setcomp 输出 Vec，去重待做） | L1 ✓ |
 | nonlocal | 17 | ✓（V3 env） | L1 |
 
 四层架构：
@@ -282,7 +310,7 @@ identity 兜底、UTF-8 边界探针修复。
 
 ### 下一步（按序）
 
-1. L1 收尾：exp/log/polyfit runtime + ~~f64 数组 layout 统一~~（**数组布局统一 2026-09-13 完成**，commit 见下；剩余 exp/log/polyfit runtime）
+1. L1 收尾：exp/log/polyfit runtime + ~~f64 数组 layout 统一~~（**2026-09-13 完成**）+ ~~Python 库导入机制与并发库~~（**2026-09-13 完成**，commit 见下）
 2. L2 mini-DataFrame：`dataframe.z` 桩 + native runtime（列存 Map+Vec）
 3. 嵌套 def 方法分发修正（stub 方法解析为裸名 extern 的 bug——HashMap::new().insert() 应路由到 map_insert）
 4. L3 shim 边界：REasyQuant 引擎侧提供 jq_shim.o（或确认现有 no-op 桩足够）

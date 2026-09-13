@@ -491,11 +491,16 @@ fn parse_pass(input: &str) -> IResult<&str, AstNode> {
     ))
 }
 
-/// PY-A: Python `import x[.y as z]` / `from x import y` — consumed and
-/// ignored in V1 so real Python files parse; module mapping is a later item.
+/// PY-A: Python `import x[.y][ as z]` — no longer swallowed: emits a
+/// `zeta_py_import("module", "alias")` marker that the Resolver collects into
+/// a module-alias table. Unknown modules are diagnosed there (fail-loud),
+/// so an unsupported import can never silently produce a wrong program.
 fn parse_python_import(input: &str) -> IResult<&str, AstNode> {
     let start = input;
-    let (input, _) = ws(tag("import")).parse(input)?;
+    // The word boundary must be checked BEFORE whitespace is consumed —
+    // `ws(tag("import"))` swallows the trailing space, so the alphanumeric
+    // test would always see the module name and reject every real import.
+    let (input, _) = tag("import").parse(input)?;
     if input
         .chars()
         .next()
@@ -506,31 +511,137 @@ fn parse_python_import(input: &str) -> IResult<&str, AstNode> {
             nom::error::ErrorKind::Tag,
         )));
     }
-    let (input, _) = take_while(|c| c != '\n' && c != '\r')(input)?;
-    Ok((
-        input,
-        AstNode::ExprStmt {
-            expr: Box::new(AstNode::Lit(0)),
-        },
-    ))
+    let (input, _) = take_while(|c: char| c == ' ' || c == '\t' || c == '\r')(input)?;
+    let mut out: Vec<AstNode> = Vec::new();
+    // `a.b.c [as d] [, e.f ...]`
+    let mut cur = input;
+    loop {
+        let (after_name, module) = match ws(parse_dotted_name).parse(cur) {
+            Ok(v) => v,
+            Err(_) => break,
+        };
+        if module.is_empty() {
+            break;
+        }
+        // optional `as alias`
+        let trimmed = after_name.trim_start();
+        let (after_alias, alias) = if let Some(t) = trimmed.strip_prefix("as") {
+            if t.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+                let (r, a) = ws(parse_ident).parse(t).map_err(|_| {
+                    nom::Err::Error(NomError::new(start, nom::error::ErrorKind::Tag))
+                })?;
+                (r, a)
+            } else {
+                (trimmed, default_module_alias(&module))
+            }
+        } else {
+            (trimmed, default_module_alias(&module))
+        };
+        out.push(py_import_marker("zeta_py_import", vec![&module, &alias]));
+        let r = after_alias.trim_start();
+        if let Some(t) = r.strip_prefix(',') {
+            cur = t;
+        } else {
+            cur = r;
+            break;
+        }
+    }
+    Ok((cur, AstNode::Block { body: out }))
 }
 
-/// PY-A: `from x import y[, z]` — consumed and ignored (V1).
+/// Last dotted component: `import concurrent.futures` binds `futures`.
+fn default_module_alias(module: &str) -> String {
+    module.rsplit('.').next().unwrap_or(module).to_string()
+}
+
+fn py_import_marker(method: &str, args: Vec<&str>) -> AstNode {
+    AstNode::ExprStmt {
+        expr: Box::new(AstNode::Call {
+            receiver: None,
+            method: method.to_string(),
+            args: args.into_iter().map(|a| AstNode::StringLit(a.to_string())).collect(),
+            type_args: vec![],
+            structural: false,
+        }),
+    }
+}
+
+/// `a.b.c` — dotted module path.
+fn parse_dotted_name(input: &str) -> IResult<&str, String> {
+    let (input, first) = parse_ident(input)?;
+    let mut name = first;
+    let mut cur = input;
+    while let Some(t) = cur.strip_prefix('.') {
+        if t.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+            let (r, seg) = parse_ident(t)?;
+            name.push('.');
+            name.push_str(&seg);
+            cur = r;
+        } else {
+            break;
+        }
+    }
+    Ok((cur, name))
+}
+
+/// PY-A: `from x import y[, z [as w]]` — emits `zeta_py_from("module",
+/// "member", "alias")` markers binding the member into scope. Modules and
+/// members are validated against the Python-library registry.
 fn parse_python_from_import(input: &str) -> IResult<&str, AstNode> {
-    let (input, _) = ws(tag("from")).parse(input)?;
+    let (input, _) = tag("from").parse(input)?;
+    if input
+        .chars()
+        .next()
+        .map_or(false, |c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(nom::Err::Error(NomError::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    let (input, _) = take_while(|c: char| c == ' ' || c == '\t' || c == '\r')(input)?;
     // `from` must be followed by a dotted module name then `import`
-    let (input, _) = ws(take_while(|c: char| {
-        c.is_ascii_alphanumeric() || c == '_' || c == '.'
-    }))
-    .parse(input)?;
+    let (input, module) = ws(parse_dotted_name).parse(input)?;
     let (input, _) = ws(tag("import")).parse(input)?;
-    let (input, _) = take_while(|c| c != '\n' && c != '\r')(input)?;
-    Ok((
-        input,
-        AstNode::ExprStmt {
-            expr: Box::new(AstNode::Lit(0)),
-        },
-    ))
+    let (input, rest) = take_while(|c| c != '\n' && c != '\r')(input)?;
+    let mut out: Vec<AstNode> = Vec::new();
+    // Star-import: bind nothing, but record the module so unknown-module
+    // diagnostics still fire.
+    if rest.trim_start().starts_with('*') {
+        out.push(py_import_marker("zeta_py_import", vec![&module, &default_module_alias(&module)]));
+        return Ok((input, AstNode::Block { body: out }));
+    }
+    let mut cur = rest;
+    loop {
+        let (after_member, member) = match ws(parse_ident).parse(cur) {
+            Ok(v) => v,
+            Err(_) => break,
+        };
+        let trimmed = after_member.trim_start();
+        let (after_alias, alias) = if let Some(t) = trimmed.strip_prefix("as") {
+            if t.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+                let (r, a) = ws(parse_ident).parse(t).map_err(|_| {
+                    nom::Err::Error(NomError::new(input, nom::error::ErrorKind::Tag))
+                })?;
+                (r, a)
+            } else {
+                (trimmed, member.clone())
+            }
+        } else {
+            (trimmed, member.clone())
+        };
+        out.push(py_import_marker(
+            "zeta_py_from",
+            vec![&module, &member, &alias],
+        ));
+        let r = after_alias.trim_start();
+        if let Some(t) = r.strip_prefix(',') {
+            cur = t;
+        } else {
+            break;
+        }
+    }
+    Ok((input, AstNode::Block { body: out }))
 }
 
 /// PY-A: `try/except/finally` — desugars (parser-only, no AST change) into:

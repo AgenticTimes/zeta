@@ -8,6 +8,8 @@
 #include <pthread.h>
 #include <gc.h>
 #include <ctype.h>
+#include <sys/wait.h>
+#include <sys/time.h>
 
 static pthread_mutex_t zt_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -433,4 +435,284 @@ int64_t join(int64_t handle) {
     void* ret = NULL;
     pthread_join((pthread_t)handle, &ret);
     return (int64_t)ret;
+}
+
+// ============================================================================
+// PY-A Python stdlib concurrency shims — threading / concurrent.futures /
+// multiprocessing / asyncio / time. Built on the native primitives above.
+//
+// Semantics notes (V1):
+//   - threading.Thread(target=f).start() runs f on a real pthread; .join()
+//     returns f's value.
+//   - Lock is a real pthread_mutex.
+//   - futures.Executor.submit(f) spawns a thread per task (no worker reuse).
+//   - multiprocessing.Process uses fork(2) (real processes); Pool.map runs
+//     its items in parallel but inside the parent process (threads) —
+//     ponytail: no result IPC, upgrade to pipes if isolation is required.
+//   - asyncio has no event loop: run()/create_task() evaluate inline and
+//     sleep() blocks. Values are correct, concurrency is not.
+// ============================================================================
+
+typedef struct {
+    pthread_t th;
+    int64_t (*fn)(void);
+    int64_t result;
+    int started;
+    int joined;
+} py_thread_t;
+
+static void* py_thread_trampoline(void* arg) {
+    py_thread_t* t = (py_thread_t*)arg;
+    t->result = t->fn ? t->fn() : 0;
+    return NULL;
+}
+
+int64_t py_threading_thread_new(int64_t fn) {
+    py_thread_t* t = (py_thread_t*)GC_malloc(sizeof(py_thread_t));
+    t->fn = (int64_t (*)(void))fn;
+    t->result = 0;
+    t->started = 0;
+    t->joined = 0;
+    return (int64_t)t;
+}
+
+int64_t py_threading_thread_start(int64_t h) {
+    if (!h) return -1;
+    py_thread_t* t = (py_thread_t*)h;
+    if (t->started) return -1;
+    t->started = 1;
+    return (int64_t)pthread_create(&t->th, NULL, py_thread_trampoline, t);
+}
+
+int64_t py_threading_thread_join(int64_t h) {
+    if (!h) return -1;
+    py_thread_t* t = (py_thread_t*)h;
+    if (t->started && !t->joined) {
+        pthread_join(t->th, NULL);
+        t->joined = 1;
+    }
+    return t->result;
+}
+
+int64_t py_threading_thread_is_alive(int64_t h) {
+    if (!h) return 0;
+    py_thread_t* t = (py_thread_t*)h;
+    return (t->started && !t->joined) ? 1 : 0;
+}
+
+int64_t py_threading_get_ident(void) { return (int64_t)pthread_self(); }
+int64_t py_threading_current_thread(void) { return (int64_t)pthread_self(); }
+int64_t py_threading_active_count(void) { return 1; }
+
+// ---- threading.Lock (real mutex) ----
+int64_t py_threading_lock_new(void) {
+    pthread_mutex_t* m = (pthread_mutex_t*)GC_malloc(sizeof(pthread_mutex_t));
+    memset(m, 0, sizeof(pthread_mutex_t));
+    pthread_mutex_init(m, NULL);
+    return (int64_t)m;
+}
+int64_t py_threading_lock_acquire(int64_t h) {
+    if (!h) return -1;
+    return (int64_t)pthread_mutex_lock((pthread_mutex_t*)h);
+}
+int64_t py_threading_lock_release(int64_t h) {
+    if (!h) return -1;
+    return (int64_t)pthread_mutex_unlock((pthread_mutex_t*)h);
+}
+int64_t py_threading_lock_locked(int64_t h) {
+    if (!h) return 0;
+    return pthread_mutex_trylock((pthread_mutex_t*)h) == 0
+        ? (pthread_mutex_unlock((pthread_mutex_t*)h), 0)
+        : 1;
+}
+
+// ---- concurrent.futures: thread-per-task, no worker reuse (V1) ----
+typedef struct {
+    pthread_t th;
+    int64_t (*fn)(void);
+    int64_t result;
+    int started;
+} py_future_t;
+
+static void* py_future_trampoline(void* arg) {
+    py_future_t* f = (py_future_t*)arg;
+    f->result = f->fn ? f->fn() : 0;
+    return NULL;
+}
+
+int64_t py_futures_executor_new(int64_t workers) {
+    (void)workers; // V1: no pool bound, task-per-thread
+    return 1;
+}
+
+int64_t py_futures_submit(int64_t ex, int64_t fn) {
+    (void)ex;
+    py_future_t* f = (py_future_t*)GC_malloc(sizeof(py_future_t));
+    f->fn = (int64_t (*)(void))fn;
+    f->result = 0;
+    f->started = pthread_create(&f->th, NULL, py_future_trampoline, f) == 0;
+    return (int64_t)f;
+}
+
+int64_t py_futures_result(int64_t fh) {
+    if (!fh) return -1;
+    py_future_t* f = (py_future_t*)fh;
+    if (f->started) {
+        pthread_join(f->th, NULL);
+        f->started = 0;
+    }
+    return f->result;
+}
+
+int64_t py_futures_done(int64_t fh) {
+    if (!fh) return 0;
+    return ((py_future_t*)fh)->started ? 0 : 1;
+}
+
+int64_t py_futures_shutdown(int64_t ex) { (void)ex; return 0; }
+
+// Executor.map(fn, data) — run fn over a Vec-layout handle in parallel.
+typedef struct {
+    int64_t (*target)(int64_t);
+    int64_t item;
+    int64_t result;
+} py_map_task_t;
+
+static void* py_map_worker(void* arg) {
+    py_map_task_t* t = (py_map_task_t*)arg;
+    t->result = t->target(t->item);
+    return NULL;
+}
+
+int64_t py_futures_map(int64_t ex, int64_t fn, int64_t data) {
+    (void)ex;
+    if (!data) return 0;
+    int64_t len = ((int64_t*)(data - 16))[1];
+    int64_t cap = len < 8 ? 8 : len;
+    int64_t* out = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    out[0] = cap;
+    out[1] = len;
+    py_map_task_t* tasks =
+        (py_map_task_t*)GC_malloc(sizeof(py_map_task_t) * (size_t)(len ? len : 1));
+    pthread_t* tids = (pthread_t*)GC_malloc(sizeof(pthread_t) * (size_t)(len ? len : 1));
+    int64_t (*target)(int64_t) = (int64_t (*)(int64_t))fn;
+    for (int64_t i = 0; i < len; i++) {
+        tasks[i].target = target;
+        tasks[i].item = ((int64_t*)data)[i];
+        tasks[i].result = 0;
+        tids[i] = 0;
+        if (pthread_create(&tids[i], NULL, py_map_worker, &tasks[i]) != 0) {
+            tasks[i].result = target(tasks[i].item); // fall back inline
+            tids[i] = 0;
+        }
+    }
+    for (int64_t i = 0; i < len; i++) {
+        if (tids[i]) pthread_join(tids[i], NULL);
+        out[2 + i] = tasks[i].result;
+    }
+    return (int64_t)(out + 2);
+}
+
+int64_t py_mp_pool_apply(int64_t p, int64_t fn, int64_t item) {
+    (void)p;
+    int64_t (*target)(int64_t) = (int64_t (*)(int64_t))fn;
+    return target(item);
+}
+
+// ---- multiprocessing: Process uses fork(2) ----
+typedef struct {
+    pid_t pid;
+    int started;
+    int64_t (*fn)(void);
+    int status;
+} py_process_t;
+
+int64_t py_mp_process_new(int64_t fn) {
+    py_process_t* p = (py_process_t*)GC_malloc(sizeof(py_process_t));
+    p->pid = 0;
+    p->started = 0;
+    p->fn = (int64_t (*)(void))fn;
+    p->status = 0;
+    return (int64_t)p;
+}
+
+int64_t py_mp_process_start(int64_t h) {
+    if (!h) return -1;
+    py_process_t* p = (py_process_t*)h;
+    if (p->started) return -1;
+    pid_t pid = fork();
+    if (pid == 0) {
+        int64_t r = p->fn ? p->fn() : 0;
+        _exit((int)(r & 0xff));
+    }
+    if (pid < 0) return -1;
+    p->pid = pid;
+    p->started = 1;
+    return 0;
+}
+
+int64_t py_mp_process_join(int64_t h) {
+    if (!h) return -1;
+    py_process_t* p = (py_process_t*)h;
+    if (p->started) {
+        waitpid(p->pid, &p->status, 0);
+        p->started = 0;
+    }
+    // Python's join() returns None; we return the exit code instead (None is
+    // not representable) — `p.exitcode()` returns the same value.
+    return WIFEXITED(p->status) ? (int64_t)WEXITSTATUS(p->status) : -1;
+}
+
+int64_t py_mp_process_is_alive(int64_t h) {
+    if (!h) return 0;
+    py_process_t* p = (py_process_t*)h;
+    if (!p->started) return 0;
+    return waitpid(p->pid, &p->status, WNOHANG) == 0 ? 1 : 0;
+}
+
+int64_t py_mp_process_exitcode(int64_t h) {
+    if (!h) return -1;
+    py_process_t* p = (py_process_t*)h;
+    if (!p->started && WIFEXITED(p->status)) return (int64_t)WEXITSTATUS(p->status);
+    return -1;
+}
+
+int64_t py_mp_current_process(void) { return (int64_t)getpid(); }
+int64_t py_mp_cpu_count(void) {
+    int n = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? n : 1;
+}
+
+// Pool: V1 keeps the API but runs map() with the same parallel-in-process
+// strategy as the futures executor.
+int64_t py_mp_pool_new(int64_t workers) { return py_futures_executor_new(workers); }
+int64_t py_mp_pool_map(int64_t pool, int64_t fn, int64_t data) {
+    return py_futures_map(pool, fn, data);
+}
+int64_t py_mp_pool_close(int64_t p) { (void)p; return 0; }
+int64_t py_mp_pool_join(int64_t p) { (void)p; return 0; }
+
+// ---- asyncio (V1: sequential, no event loop) ----
+int64_t py_asyncio_run(int64_t v) { return v; }
+int64_t py_asyncio_sleep(double seconds) {
+    if (seconds > 0) {
+        struct timespec ts;
+        ts.tv_sec = (time_t)seconds;
+        ts.tv_nsec = (long)((seconds - (double)ts.tv_sec) * 1e9);
+        nanosleep(&ts, NULL);
+    }
+    return 0;
+}
+
+// ---- time ----
+void py_time_sleep(double seconds) { py_asyncio_sleep(seconds); }
+double py_time_time(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
+}
+double py_time_monotonic(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }

@@ -1,0 +1,45 @@
+// PY-A: concurrent.futures + multiprocessing + asyncio + time
+//   futures：线程池 submit/result；multiprocessing：Process 走 fork；
+//   asyncio：V1 顺序语义（无事件循环）但值正确；time：sleep/monotonic。
+// expect: 7
+// expect: 35
+// expect: 5
+// expect: 7
+// expect: 1
+import multiprocessing
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from time import sleep, monotonic
+
+def work_a():
+    return 7
+
+def work_b():
+    return 35
+
+def child():
+    return 5
+
+ex = ThreadPoolExecutor(2)
+f1 = ex.submit(work_a)
+f2 = ex.submit(work_b)
+print(f1.result())
+print(f2.result())
+
+p = multiprocessing.Process(child)
+p.start()
+print(p.join())
+
+async def coro():
+    asyncio.sleep(0.01)
+    return work_a()
+
+print(asyncio.run(coro()))
+
+t0 = monotonic()
+sleep(0.02)
+let dt = monotonic() - t0
+if dt > 0.01:
+    print(1)
+else:
+    print(0)

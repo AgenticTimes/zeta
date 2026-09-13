@@ -64,6 +64,10 @@ pub struct MirGen {
     /// PY-A: module-top-level bare-assigned names — reads fall back to env
     /// when not bound locally; defining assignments store through env.
     module_globals: std::collections::HashSet<String>,
+    /// PY-A: Python-library imports — alias → canonical module name.
+    py_module_aliases: HashMap<String, String>,
+    /// PY-A: `from X import y as b` — b → (module, member).
+    py_member_aliases: HashMap<String, (String, String)>,
     /// Names captured from enclosing scopes in the closure currently being
     /// lowered (name → env key id) — used to route assignments to env stores.
     captured_vars: std::collections::HashMap<String, u32>,
@@ -109,6 +113,8 @@ impl MirGen {
             hoisted_names: std::collections::HashMap::new(),
             nonlocal_names: std::collections::HashSet::new(),
             module_globals: std::collections::HashSet::new(),
+            py_module_aliases: HashMap::new(),
+            py_member_aliases: HashMap::new(),
             captured_vars: std::collections::HashMap::new(),
             async_state_ptr: None,
             async_segment_count: 0,
@@ -157,6 +163,56 @@ impl MirGen {
     pub fn with_module_globals(mut self, names: std::collections::HashSet<String>) -> Self {
         self.module_globals = names;
         self
+    }
+
+    /// PY-A: Python-library import tables collected by the Resolver.
+    pub fn with_py_imports(
+        mut self,
+        modules: HashMap<String, String>,
+        members: HashMap<String, (String, String)>,
+    ) -> Self {
+        self.py_module_aliases = modules;
+        self.py_member_aliases = members;
+        self
+    }
+
+    /// PY-A: resolve a Python-library call to (runtime symbol, handle tag).
+    /// Handles both `Thread(...)` (bound member) and `threading.Thread(...)`
+    /// (module-qualified).
+    fn py_member_call(
+        &self,
+        receiver: &Option<Box<AstNode>>,
+        method: &str,
+    ) -> Option<(&'static str, Option<&'static str>, &'static str)> {
+        let (module, member) = match receiver {
+            None => {
+                let (m, mem) = self.py_member_aliases.get(method)?;
+                (m.clone(), mem.clone())
+            }
+            Some(recv) => {
+                let AstNode::Var(alias) = &**recv else {
+                    return None;
+                };
+                let module = self.py_module_aliases.get(alias)?.clone();
+                (module, method.to_string())
+            }
+        };
+        let entry = crate::middle::pylib::find_member(&module, &member)?;
+        Some((entry.symbol, entry.handle, entry.ret))
+    }
+
+    /// PY-A: the library handle tag of a receiver expression, if any
+    /// (lets `t.start()` / `lock.acquire()` dispatch exactly instead of by
+    /// name-guessing).
+    fn py_handle_of(&self, recv: &AstNode) -> Option<String> {
+        let AstNode::Var(name) = recv else {
+            return None;
+        };
+        let id = self.name_to_id.get(name)?;
+        match self.type_map.get(id) {
+            Some(Type::Named(n, _)) if n.starts_with("Py") => Some(n.clone()),
+            _ => None,
+        }
     }
 
     /// Pre-seed type declarations collected program-wide by the Resolver.
@@ -1671,6 +1727,18 @@ impl MirGen {
                     return slot_id;
                 }
 
+                // PY-A: a bare known function name used as a value (e.g.
+                // `threading.Thread(work)`) becomes its address. Constants
+                // share the signature table, so exclude them — they lower to
+                // their value below, not to a symbol.
+                if self.func_ret_types.contains_key(name)
+                    && !self.global_consts.contains_key(name)
+                {
+                    self.exprs.insert(id, MirExpr::FuncAddr(name.clone()));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+
                 // Unit-variant path of a registered enum (e.g. `Color::Green`)
                 // lowers to its variant tag (integer discriminant).
                 if name.contains("::") {
@@ -2113,6 +2181,59 @@ impl MirGen {
                 type_args,
                 ..
             } => {
+                // PY-A: Python stdlib shims — `threading.Thread(f)` /
+                // `from threading import Thread; Thread(f)` dispatch to runtime
+                // shims, and calls on a returned handle (`t.start()`,
+                // `lock.acquire()`) dispatch by the handle's type tag.
+                if let Some((symbol, handle, ret)) = self.py_member_call(receiver, method) {
+                    let mut lowered = Vec::with_capacity(args.len());
+                    for a in args {
+                        lowered.push(self.lower_expr(a));
+                    }
+                    self.stmts.push(MirStmt::Call {
+                        func: symbol.to_string(),
+                        args: lowered,
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(
+                        id,
+                        match (handle, ret) {
+                            (Some(h), _) => Type::Named(h.to_string(), vec![]),
+                            (None, "f64") => Type::F64,
+                            _ => Type::I64,
+                        },
+                    );
+                    return id;
+                }
+                if let Some(recv) = receiver {
+                    if let Some(tag) = self.py_handle_of(recv) {
+                        if let Some((symbol, ret_handle)) =
+                            crate::middle::pylib::method_symbol(&tag, method)
+                        {
+                            let mut lowered = vec![self.lower_expr(recv)];
+                            for a in args {
+                                lowered.push(self.lower_expr(a));
+                            }
+                            self.stmts.push(MirStmt::Call {
+                                func: symbol.to_string(),
+                                args: lowered,
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(
+                                id,
+                                match ret_handle {
+                                    Some(h) => Type::Named(h.to_string(), vec![]),
+                                    None => Type::I64,
+                                },
+                            );
+                            return id;
+                        }
+                    }
+                }
                 // SPECIAL HANDLING: __builtin_swap generates Swap MIR statement
                 if method == "__builtin_swap" && receiver.is_none() && args.len() >= 3 {
                     // __builtin_swap(a_ptr, b_ptr, size) -> swap *a_ptr with *b_ptr (size bytes)

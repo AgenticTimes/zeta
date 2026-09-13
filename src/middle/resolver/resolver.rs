@@ -60,6 +60,10 @@ pub struct Resolver {
     /// PY-A: module-top-level bare-assigned names (implicit-module global
     /// reads fall back to env without explicit `global` declaration).
     module_globals: RefCell<std::collections::HashSet<String>>,
+    /// PY-A: `import X as a` → a → canonical module name.
+    py_module_aliases: RefCell<std::collections::HashMap<String, String>>,
+    /// PY-A: `from X import y as b` → b → (module, member).
+    py_member_aliases: RefCell<std::collections::HashMap<String, (String, String)>>,
     /// Identity inference context for capability-based type inference
     identity_inference: crate::middle::types::identity::inference::IdentityInferenceContext,
     /// Capability inferencer for identity-aware type inference
@@ -88,6 +92,8 @@ impl Resolver {
             generated_closures: RefCell::new(HashMap::new()),
             nonlocal_names: RefCell::new(std::collections::HashSet::new()),
             module_globals: RefCell::new(std::collections::HashSet::new()),
+            py_module_aliases: RefCell::new(std::collections::HashMap::new()),
+            py_member_aliases: RefCell::new(std::collections::HashMap::new()),
             capability_inferencer:
                 crate::middle::types::identity::inference::CapabilityInferencer::new(),
         };
@@ -203,6 +209,85 @@ impl Resolver {
                 }
             }
             walk_module(&ast, &mut self.module_globals.borrow_mut());
+        }
+        // PY-A: collect Python-library imports. Known modules bind for real;
+        // unknown ones are reported (never silently swallowed, which could
+        // compile into a program that reads garbage) and left as external
+        // shims whose members resolve by name.
+        {
+            fn walk_py_import(n: &AstNode, out: &mut Vec<(String, String, String)>) {
+                match n {
+                    AstNode::Call { receiver: None, method, args, .. }
+                        if method == "zeta_py_import" || method == "zeta_py_from" =>
+                    {
+                        let mut strs: Vec<String> = Vec::new();
+                        for a in args {
+                            if let AstNode::StringLit(s) = a {
+                                strs.push(s.clone());
+                            }
+                        }
+                        if method == "zeta_py_import" && strs.len() >= 2 {
+                            out.push(("import".to_string(), strs[0].clone(), strs[1].clone()));
+                        } else if method == "zeta_py_from" && strs.len() >= 3 {
+                            out.push((strs[0].clone(), strs[1].clone(), strs[2].clone()));
+                        }
+                    }
+                    AstNode::ExprStmt { expr } => walk_py_import(expr, out),
+                    AstNode::Block { body } => {
+                        for s in body {
+                            walk_py_import(s, out);
+                        }
+                    }
+                    AstNode::FuncDef { body, .. } => {
+                        for s in body {
+                            walk_py_import(s, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut found: Vec<(String, String, String)> = Vec::new();
+            walk_py_import(&ast, &mut found);
+            for (kind, a, b) in found {
+                let (module, member, alias) = if kind == "import" {
+                    // ("import", module, alias)
+                    (a, None, b)
+                } else {
+                    // (module, member, alias)
+                    (kind, Some(a), b)
+                };
+                match &member {
+                    None => {
+                        if crate::middle::pylib::find_module(&module).is_none() {
+                            eprintln!(
+                                "warning: PY-A: unknown Python module `{}` — treated as an \
+                                 external shim (members resolve by name, no type checking)",
+                                module
+                            );
+                        }
+                        self.py_module_aliases.borrow_mut().insert(alias, module);
+                    }
+                    Some(m) => {
+                        match crate::middle::pylib::find_member(&module, m) {
+                            Some(_) => {
+                                self.py_member_aliases
+                                    .borrow_mut()
+                                    .insert(alias, (module.clone(), m.clone()));
+                            }
+                            None => {
+                                eprintln!(
+                                    "warning: PY-A: unknown member `{}` in Python module \
+                                     `{}` — treated as an external shim",
+                                    m, module
+                                );
+                                self.py_member_aliases
+                                    .borrow_mut()
+                                    .insert(alias, (module.clone(), m.clone()));
+                            }
+                        }
+                    }
+                }
+            }
         }
         // Collect program-wide type declarations for MIR lowering.
         match &ast {
@@ -654,7 +739,11 @@ impl Resolver {
             .with_func_ret_types(ret_types)
             .with_type_decls(self.type_decls.clone())
             .with_nonlocal_names(self.nonlocal_names.borrow().clone())
-            .with_module_globals(self.module_globals.borrow().clone());
+            .with_module_globals(self.module_globals.borrow().clone())
+            .with_py_imports(
+                self.py_module_aliases.borrow().clone(),
+                self.py_member_aliases.borrow().clone(),
+            );
         let mir = mir_gen.lower_to_mir(ast);
         // PY-A: synthetic lambda/closure functions synthesized while lowering
         // are parked on the resolver so they reach codegen exactly once.
