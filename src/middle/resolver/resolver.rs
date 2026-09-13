@@ -304,7 +304,8 @@ impl Resolver {
                     }
                     Some(m) => {
                         let known = crate::middle::pylib::find_member(&module, m).is_some()
-                            || is_user;
+                            || is_user
+                            || crate::middle::pylib::is_noop_module(&module);
                         if !known {
                             eprintln!(
                                 "warning: PY-A: unknown member `{}` in Python module \
@@ -844,13 +845,43 @@ impl Resolver {
             }
         };
         let prefix = format!("{}__", module.replace('.', "_"));
+        // `parse_zeta` folds a module's top-level statements into a synthesized
+        // `fn main`. Split it back out: definitions are registered (mangled),
+        // the statements become `<prefix>init()` which runs once at import time
+        // — Python executes a module body on import, and skipping it left
+        // module-level constants silently unbound (`cfg.get()` returned 0).
+        let mut defs: Vec<AstNode> = Vec::new();
+        let mut body_stmts: Vec<AstNode> = Vec::new();
+        for a in asts {
+            match a {
+                AstNode::FuncDef { ref name, ref body, .. } if name == "main" => {
+                    body_stmts.extend(body.iter().cloned());
+                }
+                other => defs.push(other),
+            }
+        }
         let mut own: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for a in &asts {
+        for a in &defs {
             if let Some(n) = definition_name(a) {
                 own.insert(n.to_string());
             }
         }
-        for a in asts {
+        // Module-level bindings are part of the module namespace too, so the
+        // module's own functions can read them (and they must be prefixed, or
+        // two modules would share one slot).
+        for stmt in &body_stmts {
+            for n in module_level_bindings(stmt) {
+                own.insert(n);
+            }
+        }
+        // `synthesize_implicit_main` injected `zeta_module_decl("NAME")` markers
+        // for the module's bare assignments. They must carry the module prefix
+        // too, or every module's `LIMIT` would share one global slot.
+        let body_stmts: Vec<AstNode> = body_stmts
+            .into_iter()
+            .map(|s| prefix_module_decl_markers(s, &prefix))
+            .collect();
+        for a in defs {
             let mangled = match a {
                 AstNode::FuncDef { .. }
                 | AstNode::ConstDef { .. }
@@ -865,12 +896,79 @@ impl Resolver {
             }
             self.register(mangled);
         }
+        // Module-level names become env-routed globals under their prefixed
+        // name, so reads from the module's functions see what `init` wrote.
+        {
+            let mut globals = self.module_globals.borrow_mut();
+            for n in &own {
+                globals.insert(format!("{}{}", prefix, n));
+            }
+        }
+        // `<prefix>init()` — idempotent module body.
+        let init_name = format!("{}init", prefix);
+        let inited_key = format!("__inited__{}", module);
+        let mut init_body: Vec<AstNode> = vec![
+            // if zeta_env_get("<key>") != 0 { return 0 }
+            AstNode::If {
+                cond: Box::new(AstNode::BinaryOp {
+                    op: "!=".to_string(),
+                    left: Box::new(AstNode::Call {
+                        receiver: None,
+                        method: "zeta_env_get".to_string(),
+                        args: vec![AstNode::StringLit(inited_key.clone())],
+                        type_args: vec![],
+                        structural: false,
+                    }),
+                    right: Box::new(AstNode::Lit(0)),
+                }),
+                then: vec![AstNode::Return(Box::new(AstNode::Lit(0)))],
+                else_: vec![],
+            },
+            AstNode::ExprStmt {
+                expr: Box::new(AstNode::Call {
+                    receiver: None,
+                    method: "zeta_env_set".to_string(),
+                    args: vec![AstNode::StringLit(inited_key), AstNode::Lit(1)],
+                    type_args: vec![],
+                    structural: false,
+                }),
+            },
+        ];
+        init_body.extend(body_stmts);
+        self.py_mangled_to_module
+            .borrow_mut()
+            .insert(init_name.clone(), module.to_string());
+        self.register(AstNode::FuncDef {
+            name: init_name,
+            generics: Vec::new(),
+            lifetimes: Vec::new(),
+            params: Vec::new(),
+            ret: "i64".to_string(),
+            body: init_body,
+            attrs: Vec::new(),
+            ret_expr: None,
+            single_line: false,
+            doc: String::new(),
+            pub_: false,
+            async_: false,
+            const_: false,
+            comptime_: false,
+            where_clauses: Vec::new(),
+        });
         self.py_module_own_names
             .borrow_mut()
             .insert(module.to_string(), own);
         self.py_user_modules.borrow_mut().insert(module.to_string());
         eprintln!("PY-A: imported module `{}` from {}", module, path.display());
         true
+    }
+
+    /// PY-A: does this user module have an import-time initializer?
+    pub fn py_module_init_symbol(&self, module: &str) -> Option<String> {
+        if !self.py_user_modules.borrow().contains(module) {
+            return None;
+        }
+        Some(format!("{}__init", module.replace('.', "_")))
     }
 
     /// PY-A: rename map for the function being lowered — bare references to a
@@ -2295,6 +2393,65 @@ fn rename_definition(a: AstNode, prefix: &str) -> AstNode {
             pub_,
             comptime_,
         },
+        other => other,
+    }
+}
+
+/// PY-A: bare names a module-level statement binds (`LIMIT = 5`, `let x = …`).
+fn module_level_bindings(stmt: &AstNode) -> Vec<String> {
+    let mut out = Vec::new();
+    match stmt {
+        AstNode::Assign(lhs, _) => {
+            if let AstNode::Var(n) = &**lhs {
+                out.push(n.clone());
+            }
+        }
+        AstNode::Let { pattern, .. } => {
+            if let AstNode::Var(n) = &**pattern {
+                out.push(n.clone());
+            }
+        }
+        AstNode::Block { body } => {
+            for s in body {
+                out.extend(module_level_bindings(s));
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// PY-A: rewrite `zeta_module_decl("X")` → `zeta_module_decl("<prefix>X")`
+/// throughout a module body so its globals land in the module's own slots.
+fn prefix_module_decl_markers(n: AstNode, prefix: &str) -> AstNode {
+    match n {
+        AstNode::ExprStmt { expr } => AstNode::ExprStmt {
+            expr: Box::new(prefix_module_decl_markers(*expr, prefix)),
+        },
+        AstNode::Block { body } => AstNode::Block {
+            body: body
+                .into_iter()
+                .map(|s| prefix_module_decl_markers(s, prefix))
+                .collect(),
+        },
+        AstNode::Call {
+            receiver: None,
+            method,
+            mut args,
+            type_args,
+            structural,
+        } if method == "zeta_module_decl" => {
+            if let Some(AstNode::StringLit(name)) = args.first_mut() {
+                *name = format!("{}{}", prefix, name);
+            }
+            AstNode::Call {
+                receiver: None,
+                method,
+                args,
+                type_args,
+                structural,
+            }
+        }
         other => other,
     }
 }

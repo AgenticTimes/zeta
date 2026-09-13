@@ -198,6 +198,19 @@ impl MirGen {
     /// PY-A: resolve a Python-library call to (runtime symbol, handle tag).
     /// Handles both `Thread(...)` (bound member) and `threading.Thread(...)`
     /// (module-qualified).
+    /// Flatten `os` / `os.path` / `a.b.c` into (root, [parts…]).
+    fn flatten_module_receiver(n: &AstNode) -> Option<(String, Vec<String>)> {
+        match n {
+            AstNode::Var(v) => Some((v.clone(), Vec::new())),
+            AstNode::FieldAccess { base, field } => {
+                let (root, mut parts) = Self::flatten_module_receiver(base)?;
+                parts.push(field.clone());
+                Some((root, parts))
+            }
+            _ => None,
+        }
+    }
+
     fn py_member_call(
         &self,
         receiver: &Option<Box<AstNode>>,
@@ -209,11 +222,17 @@ impl MirGen {
                 (m.clone(), mem.clone())
             }
             Some(recv) => {
-                let AstNode::Var(alias) = &**recv else {
-                    return None;
+                // `os.path.join(...)` parses as Call{receiver: FieldAccess{os,path}}
+                // — flatten the chain into a dotted member path so submodule
+                // members (os.path.*, os.environ.*) can be registered.
+                let (root, parts) = Self::flatten_module_receiver(recv)?;
+                let module = self.py_module_aliases.get(&root)?.clone();
+                let member = if parts.is_empty() {
+                    method.to_string()
+                } else {
+                    format!("{}.{}", parts.join("."), method)
                 };
-                let module = self.py_module_aliases.get(alias)?.clone();
-                (module, method.to_string())
+                (module, member)
             }
         };
         if let Some(entry) = crate::middle::pylib::find_member(&module, &member) {
@@ -741,6 +760,18 @@ impl MirGen {
                         self.exprs.insert(unit_id, MirExpr::IntLit(0));
                         self.type_map.insert(unit_id, Type::Tuple(vec![]));
                         return;
+                    } else if let Some(mangled) = self
+                        .symbol_renames
+                        .get(name.as_str())
+                        .cloned()
+                        .filter(|m| *m != **name && self.module_globals.contains(m))
+                    {
+                        // Module-level binding of an imported module: store
+                        // through its own global slot.
+                        return self.lower_ast(&AstNode::Assign(
+                            Box::new(AstNode::Var(mangled)),
+                            rhs.clone(),
+                        ));
                     } else {
                         // module-global / plain local: bind normally so the
                         // local slot keeps the rhs's real type (dict/Vec/etc
@@ -1720,6 +1751,16 @@ impl MirGen {
                 return z;
             }
             AstNode::Var(name) => {
+                // PY-A: a module's own top-level name reads its module-global
+                // slot (`mod__NAME` in the env). Locals win, so only rewrite
+                // when nothing local shadows it.
+                if !self.name_to_id.contains_key(name.as_str()) {
+                    if let Some(mangled) = self.symbol_renames.get(name.as_str()).cloned() {
+                        if mangled != *name && self.module_globals.contains(&mangled) {
+                            return self.lower_expr(&AstNode::Var(mangled));
+                        }
+                    }
+                }
                 // PY-A V3: nonlocal names ALWAYS read through env (fresh
                 // value), even when a local alias exists.
                 if self.nonlocal_names.contains(name) {
@@ -2231,6 +2272,23 @@ impl MirGen {
                 type_args,
                 ..
             } => {
+                // PY-A: `import X` for a user module also runs its module body
+                // once (Python executes a module on import). The init function
+                // guards itself, so repeated imports are harmless.
+                if method == "zeta_py_import" && receiver.is_none() {
+                    if let Some(AstNode::StringLit(module)) = args.first() {
+                        if self.py_user_modules.contains(module) {
+                            let init_sym = format!("{}__init", module.replace('.', "_"));
+                            let init_dest = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: init_sym,
+                                args: vec![],
+                                dest: init_dest,
+                                type_args: vec![],
+                            });
+                        }
+                    }
+                }
                 // PY-A: module-internal bare call → mangled symbol (imported
                 // modules are registered under `mod__name`).
                 if receiver.is_none() {
@@ -2308,6 +2366,7 @@ impl MirGen {
                         match (handle, ret) {
                             (Some(h), _) => Type::Named(h.to_string(), vec![]),
                             (None, "f64") => Type::F64,
+                            (None, "str") => Type::Str,
                             _ => Type::I64,
                         },
                     );
@@ -4278,6 +4337,72 @@ impl MirGen {
                 self.type_map.insert(id, Type::I64);
             }
             AstNode::FieldAccess { base, field } => {
+                // PY-A: a module attribute used as a *value*
+                // (`level=logging.INFO`) resolves through the registry to its
+                // zero-argument shim.
+                // `flatten_module_receiver` already includes `field` as the
+                // last part — do not append it twice (a doubled path misses
+                // the registry and falls through to a real field access on a
+                // module handle, which dereferences garbage).
+                if let Some((root, parts)) = Self::flatten_module_receiver(expr) {
+                    if let Some(module) = self.py_module_aliases.get(&root).cloned() {
+                        // User module namespace read: `mod.CONST` is the module
+                        // global `mod__CONST` in the env (written by the
+                        // module's init), so read it back through the env.
+                        if self.py_user_modules.contains(&module) && parts.len() == 1 {
+                            let key = format!("{}{}", module.replace('.', "_") + "__", parts[0]);
+                            let key_id = self.next_id();
+                            self.exprs
+                                .insert(key_id, MirExpr::StringLit(key));
+                            self.type_map.insert(key_id, Type::Str);
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_env_get".to_string(),
+                                args: vec![key_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(id, Type::I64);
+                            return id;
+                        }
+                        let member = parts.join(".");
+                        match crate::middle::pylib::find_member(&module, &member) {
+                            Some(entry) if entry.args.is_empty() => {
+                                let sym = entry.symbol.as_str();
+                                self.stmts.push(MirStmt::Call {
+                                    func: sym.to_string(),
+                                    args: vec![],
+                                    dest: id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(id, MirExpr::Var(id));
+                                self.type_map.insert(
+                                    id,
+                                    match entry.ret.as_str() {
+                                        "f64" => Type::F64,
+                                        "str" => Type::Str,
+                                        _ => Type::I64,
+                                    },
+                                );
+                                return id;
+                            }
+                            Some(_) => {
+                                // Needs arguments; a bare attribute read can
+                                // only be the attribute itself.
+                            }
+                            None => {
+                                eprintln!(
+                                    "warning: PY-A: `{}.{}` has no registry entry and is not \
+                                     a value — lowering it as 0",
+                                    root, member
+                                );
+                                self.exprs.insert(id, MirExpr::IntLit(0));
+                                self.type_map.insert(id, Type::I64);
+                                return id;
+                            }
+                        }
+                    }
+                }
                 // Implement proper field access
                 // 1. Evaluate the base expression
                 let base_id = self.lower_expr(base);

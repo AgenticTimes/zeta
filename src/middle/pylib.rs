@@ -40,6 +40,9 @@ pub struct PyModule {
     pub name: String,
     pub aliases: Vec<String>,
     pub members: Vec<PyMember>,
+    /// `N <module>`: a module whose imports are accepted and bind nothing
+    /// (`__future__`) — no member validation, no warning.
+    pub noop: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -78,7 +81,22 @@ fn parse_registry() -> Registry {
                         name: name.to_string(),
                         aliases: Vec::new(),
                         members: Vec::new(),
+                        noop: false,
                     });
+                }
+            }
+            Some("N") => {
+                if let Some(name) = it.next() {
+                    if let Some(m) = modules.iter_mut().find(|m| m.name == name) {
+                        m.noop = true;
+                    } else {
+                        modules.push(PyModule {
+                            name: name.to_string(),
+                            aliases: Vec::new(),
+                            members: Vec::new(),
+                            noop: true,
+                        });
+                    }
                 }
             }
             Some("A") => {
@@ -165,8 +183,19 @@ pub fn find_module(name: &str) -> Option<&'static PyModule> {
 }
 
 /// Resolve a module-level member.
+///
+/// Also handles submodule members: `from os.path import join` asks for
+/// member `join` of module `os.path`, while the registry declares `os` with
+/// member `path.join` — so `a.b` + `c` retries as `a` + `b.c` (recursively).
 pub fn find_member(module: &str, member: &str) -> Option<&'static PyMember> {
-    find_module(module).and_then(|m| m.members.iter().find(|x| x.name == member))
+    if let Some(m) = find_module(module).and_then(|m| m.members.iter().find(|x| x.name == member)) {
+        return Some(m);
+    }
+    if let Some((prefix, rest)) = module.rsplit_once('.') {
+        let combined = format!("{}.{}", rest, member);
+        return find_member(prefix, &combined);
+    }
+    None
 }
 
 /// Method dispatch for library handles: (runtime symbol, result handle tag).
@@ -219,4 +248,10 @@ pub fn packages_dir() -> std::path::PathBuf {
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     std::path::PathBuf::from(home).join(".zeta/packages")
+}
+
+/// Is this a no-op module (`N` directive)? Its members are never validated
+/// and never bound; the import is simply accepted.
+pub fn is_noop_module(module: &str) -> bool {
+    find_module(module).map(|m| m.noop).unwrap_or(false)
 }

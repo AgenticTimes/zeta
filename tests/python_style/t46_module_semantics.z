@@ -1,0 +1,11 @@
+// PY-A: 模块导入语义 —— 模块体在 import 时执行一次（幂等），
+//   模块级常量对其函数可见（此前静默不绑定，函数读回 0）。
+// expect: mod-init
+// expect: 5
+// expect: 5
+// expect: 6
+import pyfixturemod
+
+print(pyfixturemod.LIMIT)
+print(pyfixturemod.get())
+print(pyfixturemod.total())
