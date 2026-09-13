@@ -279,6 +279,16 @@ impl Resolver {
                 let in_registry = crate::middle::pylib::find_module(&module).is_some();
                 if !in_registry {
                     let _ = self.load_user_python_module(&module);
+                } else if let Some((path, _)) = self.find_py_module_file(&module) {
+                    // The built-in shim wins over a same-named file. Say so —
+                    // silently ignoring the user's file is exactly the kind of
+                    // surprise this compiler must not spring.
+                    eprintln!(
+                        "warning: PY-A: `{}` resolves to the built-in shim; the local file {} \
+                         is ignored (rename it, or import it under a different name)",
+                        module,
+                        path.display()
+                    );
                 }
                 let is_user = self.py_user_modules.borrow().contains(&module);
                 match &member {
@@ -756,10 +766,10 @@ impl Resolver {
     /// Every top-level definition is prefixed `X__` so two modules (or a module
     /// and the main program) may both define `helper`. Returns false when no
     /// file is found.
-    fn load_user_python_module(&mut self, module: &str) -> bool {
-        if !self.py_loaded_modules.borrow_mut().insert(module.to_string()) {
-            return true; // already loaded (or currently loading)
-        }
+    /// PY-A: locate a Python module file on disk: (path, is_python_source).
+    /// Order: the directory of the file being compiled, `pylib`, `$ZETA_PYLIB`,
+    /// then `build/stubs`.
+    fn find_py_module_file(&self, module: &str) -> Option<(std::path::PathBuf, bool)> {
         let rel: std::path::PathBuf = module.split('.').collect();
         let mut bases: Vec<std::path::PathBuf> = Vec::new();
         if let Some(d) = self.py_source_dir.borrow().clone() {
@@ -770,18 +780,23 @@ impl Resolver {
             bases.push(std::path::PathBuf::from(p));
         }
         bases.push(std::path::PathBuf::from("build/stubs"));
-        let mut found: Option<(std::path::PathBuf, bool)> = None;
-        'search: for base in &bases {
+        for base in &bases {
             for (ext, is_py) in [("py", true), ("z", false)] {
                 let mut p = base.join(&rel);
                 p.set_extension(ext);
                 if p.is_file() {
-                    found = Some((p, is_py));
-                    break 'search;
+                    return Some((p, is_py));
                 }
             }
         }
-        let (path, is_py) = match found {
+        None
+    }
+
+    fn load_user_python_module(&mut self, module: &str) -> bool {
+        if !self.py_loaded_modules.borrow_mut().insert(module.to_string()) {
+            return true; // already loaded (or currently loading)
+        }
+        let (path, is_py) = match self.find_py_module_file(module) {
             Some(v) => v,
             None => {
                 self.py_loaded_modules.borrow_mut().remove(module);

@@ -229,6 +229,25 @@ impl MirGen {
             let leaked: &'static str = Box::leak(sym.into_boxed_str());
             return Some((leaked, None, "i64"));
         }
+        // Registry module with an unknown member reached through attribute
+        // access (`threading.nope()`): from-imports already warn, so warn here
+        // too instead of leaving a bare linker error as the only feedback.
+        {
+            use std::collections::HashSet;
+            use std::sync::{Mutex, OnceLock};
+            static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+            let w = WARNED.get_or_init(|| Mutex::new(HashSet::new()));
+            let key = format!("{}.{}", module, member);
+            if let Ok(mut set) = w.lock() {
+                if set.insert(key) {
+                    eprintln!(
+                        "warning: PY-A: unknown member `{}` in Python module `{}` — the \
+                         symbol will be resolved by name at link time",
+                        member, module
+                    );
+                }
+            }
+        }
         None
     }
 

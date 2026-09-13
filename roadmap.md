@@ -171,6 +171,27 @@
 Python 侧 `time.sleep(0.02)`、`Thread.join()` 返回值等已验证；f64 返回类型经注册表 `ret` 标注，
 避免 i64 位模式误解（`time.monotonic()` 差值直接可用于测时）。
 
+**系统库 vs 用户库：当前分层（2026-09-13 澄清）**
+
+| | 系统库（shim 注册表） | 用户/磁盘模块 |
+|---|---|---|
+| 判定 | `pylib::find_module` 命中 `pylib/registry.txt` | 注册表未命中 → 磁盘搜索 |
+| 符号 | `py_*` runtime shim，带句柄标签 | `mod__name` 前缀 mangled Zeta 函数，无标签 |
+| 成员 | 必须入表 | 任意名放行（不存在则链接期失败） |
+| 记录 | `py_module_aliases` | `py_user_modules` + stderr 提示 |
+| 搜索路径 | 不查磁盘 | 源文件目录 → `pylib` → `$ZETA_PYLIB` → `build/stubs` |
+
+**优先级规则：注册表优先，磁盘次之**（即 `import threading` 即使旁边有 `threading.py`
+也用内置 shim；Zeta 侧 `use std::X` 走的是另一套 `module_resolver`，共享 `build/stubs` 目录）。
+
+刚补的两处诊断（此前是静默）：
+- 注册表命中且磁盘存在同名文件 → warning 说明「本地文件被内置 shim 遮蔽」
+- 注册表模块的未知成员经**属性访问**（`threading.nope()`）→ 与 `from` 形式一致地 warning
+  （此前只有裸链接错误 `_nope` 可看）
+
+仍属概念债（未做）：`pylib/` 与 `build/stubs` 在两套机制间共用意念不清；
+没有「只用系统库 / 只用本地实现」的显式开关（如 `ZETA_NO_SHIM=1`）。
+
 **缺口清单（2026-09-13 盘点）** —— 按优先级，未做项一律保持 fail-loud（链接期失败或 warning），
 不得静默产生错值：
 
@@ -193,6 +214,8 @@ Python 侧 `time.sleep(0.02)`、`Thread.join()` 返回值等已验证；f64 返�
 - [ ] **P2 库覆盖**：注册表只有 6 个模块（threading / concurrent.futures / multiprocessing /
   asyncio / time / math）；`os`/`sys`/`json`/`re`/`collections`/`itertools`/`random`/`datetime`/
   `pathlib`/`functools`/`logging` 等均未接入（`import os` 目前发 warning + 用到就链接失败）
+- [ ] **P2 库来源显式化**：`ZETA_NO_SHIM=1`（或按模块前缀）强制走磁盘实现；
+  `pylib/`（注册表数据）与 `build/stubs`（Zeta `use` 桩）目录职责分离
 - [ ] **P2 注册表形态**：`pylib/registry.txt` 是**声明式数据**，新原语仍需写 C；
   下一步可让库以 Zeta 源模块（`pylib/X.z`，extern + 包装函数）实现，复用已有文件加载器，
   使「纯 Zeta 库」完全零 C 零 Rust 接入
