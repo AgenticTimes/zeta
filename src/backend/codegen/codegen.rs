@@ -3100,15 +3100,22 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 if self.is_operator(func) {
                     // Handle unary operators
                     if args.len() == 1 && func == "!" {
-                        let operand = self.gen_expr_safe(&args[0], exprs);
-                        // Bitwise NOT: operand ^ -1 (all 1s)
+                        // Logical NOT — must yield 0/1, not a bitwise complement.
+                        // (`x ^ -1` gave -1 for `not 0`, so `(not x) == 1` was
+                        // false and `print(not x)` printed -1.)
+                        let operand = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                        let is_zero = self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                operand,
+                                self.i64_type.const_zero(),
+                                "lognot",
+                            )
+                            .unwrap();
                         let result = self
                             .builder
-                            .build_xor(
-                                operand.into_int_value(),
-                                self.i64_type.const_int(-1i64 as u64, true),
-                                "bitnot",
-                            )
+                            .build_int_z_extend(is_zero, self.i64_type, "lognot_ext")
                             .unwrap();
 
                         let alloca = *self.locals.get(dest).unwrap();

@@ -60,6 +60,10 @@ pub struct PyMethod {
 struct Registry {
     modules: Vec<PyModule>,
     methods: Vec<PyMethod>,
+    /// `X <symbol> args=… ret=…`: shims the compiler may emit but that are
+    /// not importable members (e.g. the typed json.dumps variants). Declared
+    /// so codegen emits their externs with the right ABI.
+    helpers: Vec<(String, Vec<String>, String)>,
 }
 
 fn registry() -> &'static Registry {
@@ -70,6 +74,7 @@ fn registry() -> &'static Registry {
 fn parse_registry() -> Registry {
     let mut modules: Vec<PyModule> = Vec::new();
     let mut methods: Vec<PyMethod> = Vec::new();
+    let mut helpers: Vec<(String, Vec<String>, String)> = Vec::new();
     for (lineno, raw) in REGISTRY_SRC.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -148,6 +153,24 @@ fn parse_registry() -> Registry {
                     );
                 }
             }
+            Some("X") => {
+                let Some(symbol) = it.next() else { continue };
+                let mut args: Vec<String> = Vec::new();
+                let mut ret = "i64".to_string();
+                for kv in it {
+                    let Some((k, v)) = kv.split_once('=') else { continue };
+                    match k {
+                        "args" => {
+                            if !v.is_empty() {
+                                args = v.split(',').map(|s| s.to_string()).collect();
+                            }
+                        }
+                        "ret" => ret = v.to_string(),
+                        _ => {}
+                    }
+                }
+                helpers.push((symbol.to_string(), args, ret));
+            }
             Some("W") => {
                 let (Some(handle), Some(method), Some(symbol)) = (it.next(), it.next(), it.next())
                 else {
@@ -177,7 +200,7 @@ fn parse_registry() -> Registry {
             _ => {}
         }
     }
-    Registry { modules, methods }
+    Registry { modules, methods, helpers }
 }
 
 /// Resolve a module name (or accepted alias) to the canonical entry.
@@ -233,6 +256,10 @@ pub fn all_externs() -> Vec<(&'static str, Vec<&'static str>, &'static str)> {
         let params: Vec<&'static str> = std::iter::repeat_n("i64", m.arity).collect();
         let ret = if m.symbol.starts_with("py_time_") { "f64" } else { "i64" };
         out.entry(m.symbol.as_str()).or_insert((params, ret));
+    }
+    for (sym, params, ret) in &registry().helpers {
+        let p: Vec<&'static str> = params.iter().map(|s| s.as_str()).collect();
+        out.insert(sym.as_str(), (p, ret.as_str()));
     }
     let mut v: Vec<_> = out
         .into_iter()

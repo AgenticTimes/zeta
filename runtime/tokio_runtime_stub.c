@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -1061,3 +1062,136 @@ int64_t py_dt_ge(int64_t a, int64_t b) { return zt_dt_total_secs(a) >= zt_dt_tot
 int64_t py_dt_eq(int64_t a, int64_t b) { return zt_dt_total_secs(a) == zt_dt_total_secs(b); }
 int64_t py_dt_ne(int64_t a, int64_t b) { return zt_dt_total_secs(a) != zt_dt_total_secs(b); }
 int64_t py_dt_delta_days(int64_t h) { return ((int64_t*)h)[0]; }
+
+// ============================================================================
+// PY-A stdlib shims, batch 3: sys + json.
+// json.dumps is dispatched by the *compiler* to a typed entry point, because
+// an i64 handle carries no runtime type tag.
+// ============================================================================
+extern int64_t zeta_key_string(int64_t hash);
+
+int64_t py_sys_maxsize(void) { return INT64_MAX; }
+int64_t py_sys_version_info(void) {
+    // Vec [3, 14, 0] so `sys.version_info[0] >= 3` works.
+    int64_t* base = (int64_t*)GC_malloc(16 + 3 * 8);
+    base[0] = 3; base[1] = 3;
+    base[2] = 3; base[3] = 14; base[4] = 0;
+    return (int64_t)(base + 2);
+}
+int64_t py_sys_version(void) { return (int64_t)zt_strdup("3.14.0 (zeta py-a)"); }
+int64_t py_sys_path(void) {
+    // Empty Vec: `x not in sys.path` then `sys.path.insert(...)` is how real
+    // code bootstraps paths — our search path is ZETA_PYLIB, so the list is
+    // deliberately empty rather than pretending to be Python's.
+    int64_t* base = (int64_t*)GC_malloc(16 + 8 * 8);
+    base[0] = 8; base[1] = 0;
+    return (int64_t)(base + 2);
+}
+int64_t py_sys_path_insert(int64_t idx, int64_t value) {
+    (void)idx; (void)value;
+    return 0; // recorded no-op: the compiler's search path is ZETA_PYLIB
+}
+void py_sys_exit(int64_t code) { exit((int)(code & 0xff)); }
+int64_t py_sys_stdout_write(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    fputs(p, stdout);
+    return (int64_t)strlen(p);
+}
+int64_t py_sys_stderr_write(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    fputs(p, stderr);
+    return (int64_t)strlen(p);
+}
+
+// ---- json ----
+static int64_t zt_json_quote(const char* s, char* out) {
+    char* o = out;
+    *o++ = '"';
+    for (const char* p = s; *p; p++) {
+        switch (*p) {
+            case '"': *o++ = '\\'; *o++ = '"'; break;
+            case '\\': *o++ = '\\'; *o++ = '\\'; break;
+            case '\n': *o++ = '\\'; *o++ = 'n'; break;
+            case '\r': *o++ = '\\'; *o++ = 'r'; break;
+            case '\t': *o++ = '\\'; *o++ = 't'; break;
+            default: *o++ = *p; break;
+        }
+    }
+    *o++ = '"';
+    *o = 0;
+    return (int64_t)(o - out);
+}
+int64_t py_json_dumps_i64(int64_t v) {
+    char* s = (char*)GC_malloc(32);
+    snprintf(s, 32, "%lld", (long long)v);
+    return (int64_t)s;
+}
+int64_t py_json_dumps_f64(double v) {
+    // NOTE: the parameter must be `double` — the registry declares args=f64
+    // and the ABI passes it in a float register, so reading it as int64 gave
+    // a denormal bit pattern instead of the number.
+    char* s = (char*)GC_malloc(40);
+    snprintf(s, 40, "%g", v);
+    return (int64_t)s;
+}
+int64_t py_json_dumps_str(int64_t str) {
+    const char* p = str ? (const char*)str : "";
+    char* s = (char*)GC_malloc(strlen(p) * 2 + 3);
+    zt_json_quote(p, s);
+    return (int64_t)s;
+}
+int64_t py_json_dumps_bool(int64_t v) {
+    return (int64_t)zt_strdup(v ? "true" : "false");
+}
+int64_t py_json_dumps_vec(int64_t vec) {
+    if (!vec) return (int64_t)zt_strdup("[]");
+    int64_t len = ((int64_t*)(vec - 16))[1];
+    size_t cap = 64;
+    char* out = (char*)GC_malloc(cap);
+    size_t n = 0;
+    out[n++] = '[';
+    for (int64_t i = 0; i < len; i++) {
+        if (n + 32 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+        if (i) { out[n++] = ','; out[n++] = ' '; }
+        n += (size_t)sprintf(out + n, "%lld", (long long)((int64_t*)vec)[i]);
+    }
+    out[n++] = ']';
+    out[n] = 0;
+    return (int64_t)out;
+}
+// V1: object keys come back from the hash side table; values are serialized
+// as integers (the map stores raw 64-bit slots with no type tag).
+int64_t py_json_dumps_map(int64_t map) {
+    if (!map) return (int64_t)zt_strdup("{}");
+    int64_t cap = ((int64_t*)map)[0];
+    size_t outcap = 256;
+    char* out = (char*)GC_malloc(outcap);
+    size_t n = 0;
+    out[n++] = '{';
+    int first = 1;
+    for (int64_t i = 0; i < cap; i++) {
+        char* e = (char*)map + 16 + i * 24;
+        if (!*(uint8_t*)(e + 16)) continue;
+        int64_t key_hash = *(int64_t*)e;
+        int64_t val = *(int64_t*)(e + 8);
+        if (n + 256 > outcap) { outcap *= 2; char* nb = (char*)GC_malloc(outcap); memcpy(nb, out, n); out = nb; }
+        if (!first) { out[n++] = ','; out[n++] = ' '; }
+        first = 0;
+        int64_t ks = zeta_key_string(key_hash);
+        if (ks) {
+            n += (size_t)zt_json_quote((const char*)ks, out + n);
+        } else {
+            n += (size_t)sprintf(out + n, "\"%lld\"", (long long)key_hash);
+        }
+        out[n++] = ':';
+        out[n++] = ' ';
+        n += (size_t)sprintf(out + n, "%lld", (long long)val);
+    }
+    out[n++] = '}';
+    out[n] = 0;
+    return (int64_t)out;
+}
+int64_t py_sys_path_contains(int64_t value) {
+    (void)value;
+    return 0; // the path list is deliberately empty (see py_sys_path)
+}

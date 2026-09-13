@@ -1,0 +1,23 @@
+// PY-A: sys + json —— json.dumps 由编译器按实参类型分发到类型化入口
+//   （i64 句柄没有运行时类型标签）；sys.exit/path/version_info/maxsize/stdout。
+// expect: 42
+// expect: [1, 2, 3]
+// expect: "hi"
+// expect: 2.5
+// expect: {"only": 1}
+// expect: 1
+// expect: 3
+// expect: 1
+// expect: done
+import sys
+import json
+
+print(json.dumps(42))
+print(json.dumps([1, 2, 3]))
+print(json.dumps("hi"))
+print(json.dumps(2.5))
+print(json.dumps({"only": 1}))
+print(sys.maxsize > 0)
+print(sys.version_info[0])
+print("x" not in sys.path)
+sys.stdout.write("done\n")

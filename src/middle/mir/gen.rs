@@ -211,6 +211,30 @@ impl MirGen {
         }
     }
 
+    /// PY-A: canonical (module, member) for a library call, before symbol
+    /// mapping — lets special cases (json.dumps' typed dispatch) recognise
+    /// the call site.
+    fn py_member_target(
+        &self,
+        receiver: &Option<Box<AstNode>>,
+        method: &str,
+    ) -> Option<(String, String)> {
+        let (module, member) = match receiver {
+            None => self.py_member_aliases.get(method)?.clone(),
+            Some(recv) => {
+                let (root, parts) = Self::flatten_module_receiver(recv)?;
+                let module = self.py_module_aliases.get(&root)?.clone();
+                let member = if parts.is_empty() {
+                    method.to_string()
+                } else {
+                    format!("{}.{}", parts.join("."), method)
+                };
+                (module, member)
+            }
+        };
+        Some((module, member))
+    }
+
     fn py_member_call(
         &self,
         receiver: &Option<Box<AstNode>>,
@@ -2300,6 +2324,38 @@ impl MirGen {
                 type_args,
                 ..
             } => {
+                // PY-A: `json.dumps(x)` needs the COMPILER's type — an i64
+                // handle carries no runtime tag, so dispatch to the typed
+                // entry point here instead of guessing in C.
+                if let Some((m, mem)) = self.py_member_target(receiver, method) {
+                    if m == "json" && mem == "dumps" && args.len() == 1 {
+                        let arg_id = self.lower_expr(&args[0]);
+                        let ty = self.type_map.get(&arg_id).cloned().unwrap_or(Type::I64);
+                        let sym = match &ty {
+                            Type::Str => "py_json_dumps_str",
+                            Type::F64 => "py_json_dumps_f64",
+                            Type::Bool => "py_json_dumps_bool",
+                            Type::Named(n, _) if n == "map" => "py_json_dumps_map",
+                            Type::DynamicArray(_) | Type::Array(_, _) => "py_json_dumps_vec",
+                            _ => "py_json_dumps_i64",
+                        };
+                        if sym == "py_json_dumps_map" {
+                            eprintln!(
+                                "warning: PY-A: json.dumps(dict) serializes keys as strings and \
+                                 values as integers (V1: map slots are untyped)"
+                            );
+                        }
+                        self.stmts.push(MirStmt::Call {
+                            func: sym.to_string(),
+                            args: vec![arg_id],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
+                }
                 // PY-A: `import X` for a user module also runs its module body
                 // once (Python executes a module on import). The init function
                 // guards itself, so repeated imports are harmless.
@@ -2395,6 +2451,7 @@ impl MirGen {
                             (Some(h), _) => Type::Named(h.to_string(), vec![]),
                             (None, "f64") => Type::F64,
                             (None, "str") => Type::Str,
+                            (None, "vec") => Type::DynamicArray(Box::new(Type::I64)),
                             _ => Type::I64,
                         },
                     );
@@ -4445,6 +4502,7 @@ impl MirGen {
                                     match entry.ret.as_str() {
                                         "f64" => Type::F64,
                                         "str" => Type::Str,
+                                        "vec" => Type::DynamicArray(Box::new(Type::I64)),
                                         _ => Type::I64,
                                     },
                                 );

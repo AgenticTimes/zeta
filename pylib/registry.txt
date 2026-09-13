@@ -157,3 +157,26 @@ W PyDate year py_dt_year args=1
 W PyDate month py_dt_month args=1
 W PyDate day py_dt_day args=1
 W PyDelta days py_dt_delta_days args=1
+
+# ---- sys ---------------------------------------------------------------
+M sys
+F sys exit py_sys_exit args=i64 ret=void
+F sys version py_sys_version args= ret=str
+F sys version_info py_sys_version_info args= ret=vec
+F sys maxsize py_sys_maxsize args= ret=i64
+F sys path py_sys_path args= ret=vec
+F sys path.insert py_sys_path_insert args=i64,i64 ret=i64
+F sys path.__contains__ py_sys_path_contains args=i64 ret=i64
+F sys stdout.write py_sys_stdout_write args=i64 ret=i64
+F sys stderr.write py_sys_stderr_write args=i64 ret=i64
+
+# ---- json (dumps only: loads would need a dynamic result type, so it stays
+#      unlisted and fails loudly rather than returning a wrong value) ------
+M json
+F json dumps py_json_dumps_i64 args=i64 ret=str
+# typed variants the compiler dispatches to (extern-only, not importable)
+X py_json_dumps_f64 args=f64 ret=str
+X py_json_dumps_str args=i64 ret=str
+X py_json_dumps_bool args=i64 ret=str
+X py_json_dumps_vec args=i64 ret=str
+X py_json_dumps_map args=i64 ret=str

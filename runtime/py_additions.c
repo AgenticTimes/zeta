@@ -61,12 +61,44 @@ int64_t host_str_split(int64_t s, int64_t sep) { return str_split(s, sep); }
 // map_str_key — deterministic 64-bit FNV-1a content hash for string dict
 // keys. The open-addressing map hashes/compares keys numerically; string
 // handles differ per literal site, so content-keyed dicts must normalize.
+// Side table hash -> string pointer. Dict keys are stored as content hashes,
+// which is great for lookup and terrible for serialization: json.dumps(dict)
+// needs the key text back. Recording the first string seen for a hash makes
+// keys recoverable (a hash collision would pick the earlier string — a
+// documented 64-bit-FNV ceiling, not a silent corruption).
+#define ZT_KEYSTR_CAP 8192
+static int64_t g_keystr_hash[ZT_KEYSTR_CAP];
+static int64_t g_keystr_ptr[ZT_KEYSTR_CAP];
+
 int64_t map_str_key(int64_t handle) {
     if (!handle) return 0;
     const unsigned char* p = (const unsigned char*)handle;
     uint64_t h = 1469598103934665603ULL;
     while (*p) { h ^= (uint64_t)*p++; h *= 1099511628211ULL; }
-    return (int64_t)(h ? h : 1);
+    h = h ? h : 1;
+    uint64_t idx = h & (ZT_KEYSTR_CAP - 1);
+    for (int i = 0; i < ZT_KEYSTR_CAP; i++) {
+        uint64_t j = (idx + (uint64_t)i) & (ZT_KEYSTR_CAP - 1);
+        if (g_keystr_hash[j] == 0) {
+            g_keystr_hash[j] = (int64_t)h;
+            g_keystr_ptr[j] = handle;
+            break;
+        }
+        if ((uint64_t)g_keystr_hash[j] == h) break;
+    }
+    return (int64_t)h;
+}
+
+// String recorded for a dict key hash (0 when unknown, e.g. non-string keys).
+int64_t zeta_key_string(int64_t hash) {
+    if (!hash) return 0;
+    uint64_t idx = (uint64_t)hash & (ZT_KEYSTR_CAP - 1);
+    for (int i = 0; i < ZT_KEYSTR_CAP; i++) {
+        uint64_t j = (idx + (uint64_t)i) & (ZT_KEYSTR_CAP - 1);
+        if (g_keystr_hash[j] == 0) return 0;
+        if (g_keystr_hash[j] == hash) return g_keystr_ptr[j];
+    }
+    return 0;
 }
 
 // zeta_slice_vec(data, start, count) — Python arr[start:end]. `data` is a
