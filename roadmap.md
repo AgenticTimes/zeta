@@ -3,7 +3,7 @@
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
 > 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
-> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **50/50**；REasyQuant 语料解析 **38/38**
+> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **53/53**；REasyQuant 语料解析 **38/38**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -227,6 +227,29 @@ threading / concurrent.futures / multiprocessing / asyncio / time / math），�
 当前第三方 Python 库只有两条可用路径：① 注册表加条目 + C shim（如 `math`）；
 ② 把 `.py`/`.z` 放进搜索路径（用户模块，`ZETA_PYLIB` 可指向自定义目录，但需平铺单文件）。
 
+**真实第三方库首次端到端跑通（2026-09-14）**
+
+`zorb install https://github.com/okunishinishi/python-stringcase.git` 装好的库，
+三个入口函数全部给出正确结果：`snakecase("HelloWorld") == "hello_world"`、
+`camelcase("hello_world") == "helloWorld"`、`pascalcase("hello world") == "Hello world"`。
+此前它连编译都过不去（for 循环无 terminator → `lowercase` 未定义 → 运行期返回 0）。
+
+为此补的三项（都是通用能力，不是为该库打的补丁）：
+- **字符串下标/切片**：`s[i]`（负数支持）→ 单字符串；`s[a:b]`/`s[a:]`/`s[:b]` → 子串。
+  省略 end 的哨兵从 `-1` 改为 `i64::MIN` —— `s[:-1]` 会被折叠成 `Lit(-1)`，
+  两者原本无法区分（`s[:-1]` 于是返回整串）
+- **参数类型推断（调用点证据）**：未标注参数默认 i64，导致参数上的字符串操作走数组路径。
+  现按证据推断 str/f64：实参是字符串/浮点字面量（或已知 str/f64 的值）即定为该类型；
+  被调名按三种方式解析（普通 / `from X import f` → `X__f` / 模块内裸调用 → `前缀+名`）；
+  证据收集覆盖 return/let/assign/binaryop；最多 6 轮传播（调用链逐层传递）；
+  **只回写被升级的下标**（回写全部会把数组参数写成 `"array(...)"`，造成早期回归）
+- **关键字实参按名绑定**（`f(b=2, a=1)` 曾按源码顺序传参，静默给出 201）
+
+顺带修掉：`[dynamic]T{}` 走的是无 header 的 `array_new` 缓冲 → `arr.push(x)` 写到块外、
+`arr.len()` 恒 0（`test_while_loop` 一直依赖旧的「意外行为」才通过）；现改用
+`zeta_dynarray_new`（[cap|len|data]），且 typed `push` 在 vec_push 重新分配后回写接收者。
+slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨额分配（曾直接 OOM 崩溃）。
+
 **系统库第三批（2026-09-13 夜，自主推进）**
 
 | 库/能力 | 内容 | 证据 |
@@ -255,8 +278,10 @@ threading / concurrent.futures / multiprocessing / asyncio / time / math），�
 4. **`from X import f` 返回值硬编码 i64**
 
 **仍未做（本轮新发现，按优先级）**
-- [ ] **P1 关键字实参按名绑定**：`f(b=2, a=1)` 现在按**源码顺序**当位置参数传 → 实测 `f(a,b)=a*100+b` 得 201（应为 102）。静默错值，属红线问题；需按形参名重排（或至少报错）
-- [ ] **P1 字符串下标与切片**：`s[0]` / `s[1:]` 未实现（真实库 stringcase 的 `snakecase`/`pascalcase` 因此返回 0；`camelcase` 已正确）
+- [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
+  未匹配名发 warning 并按位置传（2026-09-14 完成，t51）
+- [x] **P1 字符串下标与切片**：`s[i]`/`s[a:b]`/`s[:b]`/`s[a:]` 全部实现（2026-09-14 完成，t52）；
+  参数类型推断（调用点证据）让未标注参数上的字符串操作正确分发（t53）
 - [ ] **P1 `json.loads`**：结果类型无法静态建模（应为 dict/list/标量），故**故意不入表**（链接期失败，不返回错值）
 - [ ] P2 `re` 补齐：`finditer`/`subn`/`IGNORECASE` 等 flags、`\g<name>`、Pattern 对象的方法面
 - [ ] P2 库覆盖继续：`collections`/`itertools`/`random`/`pathlib`/`typing`/`functools`/`hashlib`
