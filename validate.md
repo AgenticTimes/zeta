@@ -45,6 +45,7 @@ git push agentic bootstrap                  # origin 是 https 无凭据，用 a
 | `nm` | 符号表（undefined 排查） | `nm binary \| grep xxx` |
 | `lldb` | 运行期崩溃定位 | `lldb -b -o run -o "bt 3" ./x` |
 | `ZETA_PROBE=1` | 源码内探针开关 | 部分函数有 env 探针 |
+| `zorb` | 第三方库安装（最小闭环） | `zorb install <路径\|URL\|git>` / `list` / `remove` / `path`；安装到 `$ZETA_PACKAGES_DIR` 或 `~/.zeta/packages`，即 `import X` 的搜索目录 |
 
 ### 常用诊断模式
 
@@ -71,6 +72,10 @@ clang -c -O2 -I/opt/homebrew/include runtime/py_additions.c -o /tmp/add.o
 ## 3. 验证套件（三套全绿才可提交）
 
 ```bash
+# 0) 第三方库安装（最小闭环，可选）
+./target/release/zorb install ./mypkg     # 目录包需 __init__.py；也接受 X.py / URL / git
+ZETA_PACKAGES_DIR=/tmp/pkgs ./target/release/zorb list   # 安装目录可覆盖（便于测试）
+
 # 1) python_style（本仓库语法/语义回归，expect 注释自包含）
 ./tests/python_style/run.sh
 #    输出: N passed, M failed, K known-fail

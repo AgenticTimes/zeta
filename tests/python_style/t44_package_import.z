@@ -1,0 +1,10 @@
+// PY-A: 目录包导入 —— `X/__init__.py` 作为包入口（zorb install 的落点）
+// expect: 7
+// expect: 12
+// expect: 22
+import pyfixturepkg
+from pyfixturepkg import triple
+
+print(pyfixturepkg.marker())
+print(triple(4))
+print(pyfixturepkg.internal())

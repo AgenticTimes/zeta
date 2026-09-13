@@ -207,3 +207,16 @@ pub fn all_externs() -> Vec<(&'static str, Vec<&'static str>, &'static str)> {
     v.sort_by(|a, b| a.0.cmp(b.0));
     v
 }
+
+/// Where installed third-party packages live: `$ZETA_PACKAGES_DIR`, else
+/// `~/.zeta/packages`. `zorb install` writes here and the import loader
+/// searches here, so the two cannot drift.
+pub fn packages_dir() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("ZETA_PACKAGES_DIR") {
+        if !p.is_empty() {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".zeta/packages")
+}

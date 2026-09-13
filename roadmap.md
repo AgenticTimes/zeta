@@ -3,7 +3,7 @@
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
 > 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
-> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **43/43**；REasyQuant 语料解析 **38/38**
+> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **44/44**；REasyQuant 语料解析 **38/38**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -192,7 +192,19 @@ Python 侧 `time.sleep(0.02)`、`Thread.join()` 返回值等已验证；f64 返�
 仍属概念债（未做）：`pylib/` 与 `build/stubs` 在两套机制间共用意念不清；
 没有「只用系统库 / 只用本地实现」的显式开关（如 `ZETA_NO_SHIM=1`）。
 
-**第三方库安装（pip / zorb）：不存在可用路径（2026-09-13 实测）**
+**第三方库安装（zorb）：最小闭环已通（2026-09-13）**
+
+`target/release/zorb`（`src/bin/zorb.rs`，无新依赖）：
+`install <路径|http(s) URL|git URL>`（URL 走系统 `curl`，git 走 `git clone --depth 1`）、
+`list`、`remove`、`path`。安装落点 = `$ZETA_PACKAGES_DIR` 或 `~/.zeta/packages` —— 与编译器
+**同一个函数**（`pylib::packages_dir()`）取路径，避免两边漂移。目录包（需 `__init__.py`/`__init__.z`）
+与单文件模块（`X.py`/`X.z`）都接受，非包目录会明确报错。
+
+编译器侧同步支持：搜索路径加入安装目录；并新增**目录包**（`X/__init__.py`）解析。
+E2E 已验证：`zorb install ./mypkg` → `import mypkg` + `from mypkg import twice` 值正确
+（含包内函数互调）。仍未做：版本/依赖解析、包源索引、校验和、`site-packages` 直连。
+
+**在此之前的状态（2026-09-13 实测，记录备查）**
 
 | 件 | 状态 |
 |---|---|
@@ -228,11 +240,11 @@ Python 侧 `time.sleep(0.02)`、`Thread.join()` 返回值等已验证；f64 返�
 - [ ] **P2 库覆盖**：注册表只有 6 个模块（threading / concurrent.futures / multiprocessing /
   asyncio / time / math）；`os`/`sys`/`json`/`re`/`collections`/`itertools`/`random`/`datetime`/
   `pathlib`/`functools`/`logging` 等均未接入（`import os` 目前发 warning + 用到就链接失败）
-- [ ] **P2 第三方库安装**：`zorb`/`zpip` 二进制（`install`/`remove`/`list`）、包源与索引、
-  下载与校验；或先做最小闭环（本地路径/URL 安装到 `~/.zeta/packages` + 生成 manifest）
-- [ ] **P2 Python 站点包接入**：`site-packages` / `venv` / `PYTHONPATH` 搜索 +
-  目录包（`__init__.py`）支持，使 `pip install` 的纯 Python 包至少能被解析（真 import
-  仍需 L3 shim 或 L4 CPython 桥）
+- [~] **P2 第三方库安装**：**最小闭环已通**（`zorb install/list/remove/path` + 安装目录搜索
+  + 目录包）；剩余：版本与依赖解析（`src/package/` 里已有 `Manifest`/`DependencyResolver` 可复用）、
+  包源索引、下载校验和
+- [~] **P2 Python 站点包接入**：目录包（`__init__.py`）**已支持**；剩余 `site-packages` / `venv` /
+  `PYTHONPATH` 搜索，使 `pip install` 的纯 Python 包能被解析（真 import 仍需 L3 shim 或 L4 CPython 桥）
 - [ ] **P2 `src/package/` 死代码处置**：接上 CLI 或删除，避免「看着有、实际不可达」
 - [ ] **P2 静默路径清理**：`use` 失败（W2002）等 diagnostic 实测不输出，需确认是过滤策略
   还是路径未达——`fail-open 禁止`同样适用于 warning 被吞
@@ -402,8 +414,8 @@ identity 兜底、UTF-8 边界探针修复。
 
 下一批按「缺口清单」优先级（见上）：
 
-1. **P1 模块系统与语义**：包/相对导入、模块级语句执行、顶层常量导出、`Thread(args=...)`、
-   `with open(...)`（文件对象）
+1. **P1 模块系统与语义**：相对导入、模块级语句执行、顶层常量导出、`Thread(args=...)`、
+   `with open(...)`（文件对象）—— 目录包（`__init__.py`）已完成
 2. **P2 并发 API 补齐**：`queue` 模块 → threading（Event/Semaphore/Barrier/Condition/Timer）→
    futures（as_completed/wait）→ multiprocessing（真多进程 + Queue/Pipe/Value）
 3. **P2 库覆盖**：os/sys/json/re/collections/itertools/... 逐个按需接入（现在是数据文件 + C，

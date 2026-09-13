@@ -772,18 +772,29 @@ impl Resolver {
     fn find_py_module_file(&self, module: &str) -> Option<(std::path::PathBuf, bool)> {
         let rel: std::path::PathBuf = module.split('.').collect();
         let mut bases: Vec<std::path::PathBuf> = Vec::new();
+        // The file being compiled wins, then explicitly configured paths, then
+        // installed packages, then the bundled shim sources.
         if let Some(d) = self.py_source_dir.borrow().clone() {
             bases.push(d);
         }
-        bases.push(std::path::PathBuf::from("pylib"));
         if let Ok(p) = std::env::var("ZETA_PYLIB") {
             bases.push(std::path::PathBuf::from(p));
         }
+        bases.push(crate::middle::pylib::packages_dir());
+        bases.push(std::path::PathBuf::from("pylib"));
         bases.push(std::path::PathBuf::from("build/stubs"));
         for base in &bases {
+            // Single-file module: X.py / X.z
             for (ext, is_py) in [("py", true), ("z", false)] {
                 let mut p = base.join(&rel);
                 p.set_extension(ext);
+                if p.is_file() {
+                    return Some((p, is_py));
+                }
+            }
+            // Directory package: X/__init__.py / X/__init__.z
+            for (name, is_py) in [("__init__.py", true), ("__init__.z", false)] {
+                let p = base.join(&rel).join(name);
                 if p.is_file() {
                     return Some((p, is_py));
                 }
