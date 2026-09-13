@@ -2,8 +2,8 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（24 case：23 pass + 1 known-fail）**
-> 当前通过率：官方 **199/226**（超基线 198，零回归）；python_style **22/23**
+> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
+> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**；python_style **37/37**；REasyQuant 语料解析 **38/38**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -55,7 +55,7 @@
 - [x] `print(x)` 单参按类型分发 i64/f64/str → `println_i64/println_f64/println_str`（Python 语义带换行；修复运行时 `print` 符号为 fputs 字符串-only 导致整数段错误的 bug）；多参保持 print.N legacy 路径
 - [x] `len(x)` 分发：字面量尺寸数组 → **编译期常量**；str → `str_len`；其余 → array_len 桩
 - [x] `println(变量)` 修复：按参数类型分发（原无条件 `println_i64` 把字符串句柄当整数打印）
-- [x] `lambda` → known-fail（依赖 closures codegen 待做项，t12 标记）
+- [x] `lambda` → ✓（closure codegen 完成，t12 绿；捕获 V2 + nonlocal V3）
 - [ ] P2：`and`/`or`/`not` 别名；`None` 字面量；`range` step
 - [ ] **既有缺口（新发现）**：DynamicArray 的 `len()` 运行时桩 `array_len` 恒返 0；多参 print 只输出首参
 
@@ -64,7 +64,7 @@
 - [-] f-string 插值——降级不做
 
 ### PY 验收标准（三套全绿）
-- [x] `tests/python_style/run.sh` **14/15 pass**（+1 known-fail：t12 lambda 依赖 closures codegen）
+- [x] `tests/python_style/run.sh` **14/15 pass**（+1 known-fail：t12 lambda 依赖 closures codegen）  【历史记录；现状见下方：全套 37/37 绿】
 - [x] 官方 226 测试零回归（198 → 199 通过；if-true 折叠修复使 test_complex_control 类用例受益）
 - [x] `/tmp/bench` 285 文件编译对比零回归（基线 56 可编译 = 当前 56）
 - [x] 混合风格双向可编译（t08）
@@ -167,17 +167,17 @@
 - [x] **try/except/finally/raise 完整语义**（2026-09-12）：setjmp/longjmp 方案打通——生成代码直调 `_setjmp(zt_slot)`（LLVM `returns_twice` 属性）+ runtime `zeta_raise` longjmp 到最近 try 帧（**跨函数立即中断**，真异常语义）。曾以为 longjmp 失效，实为 `except as e` 头解析漏前导空格 → e 绑定缺失 → else 块被判 undef 死代码整体删除。V1 限界：首个 except 捕获一切（类型过滤待做）、无 handler 时 abort
 - [x] **装饰器 `@dec`**（2026-09-12）：解析消费忽略（def/class 前合法；语义改写待做）
 - [x] **顶层 type alias**（2026-09-12）：`parse_type_alias` 强制分号是坏点——改可选；`type IntList = Vec<i64>` ✓
-- [-] `global`/`nonlocal`、生成器/yield、async for —— 降级不做
+- [x] `global`/`nonlocal` —— 完成（V3 env 路由 + 模块全局槽隐式读，无需声明）；生成器/yield、async for —— 降级不做
 
 ## 执行顺序建议（下一步）
 
 1. ~~f-string + 字符串值语义 + kqueue~~（2026-09-11 完成）
 2. ~~class + 方法语义~~（2026-09-11 完成，commit `ad8532ab`）
 3. ~~多参 print 修复 + 泛型多类型实例化~~（2026-09-11 完成，commit `24f17a57`/`ca06735e`）
-4. closure codegen（解锁 t12 lambda；lambda 语法解析已完成，codegen 进行中）
+4. ~~closure codegen（解锁 t12 lambda）~~ 完结（t12 绿；捕获 V2/V3 已落地）
 5. ~~DUPLICATE_SYM~~ 完结（194/194）
-6. 剩余深水区：closures 按引用捕获（V3 已实现 nonlocal 显式声明版；隐式
-   读改写捕获待设计）、`where` 约束检查、WASM 后端、自举
+6. 剩余深水区：closures 按引用捕获（V3 nonlocal 显式声明版 + 模块全局槽隐式读已完成；
+   闭包内隐式捕获待设计）、`where` 约束检查、WASM 后端、自举
 
 ## REasyQuant 真实项目实测（2026-09-13，未修改项目代码）
 
@@ -261,7 +261,7 @@ identity 兜底、UTF-8 边界探针修复。
 | genexp `(x for x in y)` | 222 | ✗ | L2（迭代器协议） |
 | yield/async def/await | 197/25/15 | ✗ | L4（协程状态机，深水区） |
 | lambda | 130 | ✓（V2 捕获） | L1 |
-| global | 65 | 部分（模块级 Assign→main） | L1（module 全局槽） |
+| global | 65 | ✓（module 全局槽隐式读，无需显式声明） | L1 ✓ |
 | dictcomp/setcomp | 39/11 | ✗ | L2 |
 | nonlocal | 17 | ✓（V3 env） | L1 |
 

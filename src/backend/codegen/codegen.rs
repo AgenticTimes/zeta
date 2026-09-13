@@ -830,6 +830,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
             i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
+        // PY-A module global marker: no-op; routing happens at read/write sites
+        module.add_function(
+            "zeta_module_decl",
+            i64_type.fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
         // PY-A closure env: get(name) / set(name, value)
         module.add_function(
             "zeta_env_get",

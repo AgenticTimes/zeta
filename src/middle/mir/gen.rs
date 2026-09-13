@@ -61,6 +61,9 @@ pub struct MirGen {
     /// PY-A V3: program-wide `nonlocal` names — reads/writes route through
     /// the closure env in any scope (defining and inner).
     nonlocal_names: std::collections::HashSet<String>,
+    /// PY-A: module-top-level bare-assigned names — reads fall back to env
+    /// when not bound locally; defining assignments store through env.
+    module_globals: std::collections::HashSet<String>,
     /// Names captured from enclosing scopes in the closure currently being
     /// lowered (name → env key id) — used to route assignments to env stores.
     captured_vars: std::collections::HashMap<String, u32>,
@@ -105,6 +108,7 @@ impl MirGen {
             fn_depth: 0,
             hoisted_names: std::collections::HashMap::new(),
             nonlocal_names: std::collections::HashSet::new(),
+            module_globals: std::collections::HashSet::new(),
             captured_vars: std::collections::HashMap::new(),
             async_state_ptr: None,
             async_segment_count: 0,
@@ -146,6 +150,12 @@ impl MirGen {
             eprintln!("PROBE with_nonlocal_names: {:?}", names);
         }
         self.nonlocal_names = names;
+        self
+    }
+
+    /// PY-A: module-top-level bare-assigned names (implicit module globals).
+    pub fn with_module_globals(mut self, names: std::collections::HashSet<String>) -> Self {
+        self.module_globals = names;
         self
     }
 
@@ -586,6 +596,19 @@ impl MirGen {
                             lhs: existing,
                             rhs: rhs_id,
                         });
+                        if self.module_globals.contains(name) {
+                            // module-global update: keep the local slot (with
+                            // its real type) AND mirror the value into the env
+                            // so other functions read the fresh value.
+                            let key_id = self.next_id();
+                            self.exprs
+                                .insert(key_id, MirExpr::StringLit(name.clone()));
+                            self.type_map.insert(key_id, Type::Str);
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: "zeta_env_set".to_string(),
+                                args: vec![key_id, rhs_id],
+                            });
+                        }
                     } else if self.nonlocal_names.contains(name) {
                         // PY-A V3: inner-scope write before any local bind
                         let key_id = self.next_id();
@@ -613,6 +636,9 @@ impl MirGen {
                         self.type_map.insert(unit_id, Type::Tuple(vec![]));
                         return;
                     } else {
+                        // module-global / plain local: bind normally so the
+                        // local slot keeps the rhs's real type (dict/Vec/etc
+                        // would be mangled by an env-load I64 alias).
                         let new_id = self.next_id();
                         self.name_to_id.insert(name.clone(), new_id);
                         self.exprs.insert(new_id, MirExpr::Var(new_id));
@@ -622,6 +648,17 @@ impl MirGen {
                             lhs: new_id,
                             rhs: rhs_id,
                         });
+                        if self.module_globals.contains(name) {
+                            // mirror into env so cross-function reads work
+                            let key_id = self.next_id();
+                            self.exprs
+                                .insert(key_id, MirExpr::StringLit(name.clone()));
+                            self.type_map.insert(key_id, Type::Str);
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: "zeta_env_set".to_string(),
+                                args: vec![key_id, rhs_id],
+                            });
+                        }
                     }
                 } else {
                     let lhs_id = self.lower_expr(lhs);
@@ -1578,6 +1615,24 @@ impl MirGen {
                 }
                 if let Some(&existing) = self.name_to_id.get(name) {
                     return existing;
+                }
+                // PY-A: module-global name not bound locally — env read
+                // (implicit module global: no global declaration needed).
+                if self.module_globals.contains(name) {
+                    let key_id = self.next_id();
+                    self.exprs
+                        .insert(key_id, MirExpr::StringLit(name.clone()));
+                    self.type_map.insert(key_id, Type::Str);
+                    let slot_id = self.next_id();
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_env_get".to_string(),
+                        args: vec![key_id],
+                        dest: slot_id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(slot_id, MirExpr::Var(slot_id));
+                    self.type_map.insert(slot_id, Type::I64);
+                    return slot_id;
                 }
                 // PY-A V3: nonlocal name not bound locally — env read.
                 if self.nonlocal_names.contains(name) {
@@ -5072,7 +5127,8 @@ impl MirGen {
         // Fresh sub-MIR with its own id space (params start at id 1).
         // Inherits nonlocal_names so inner assignments route through env.
         let mut child = MirGen::new()
-            .with_nonlocal_names(self.nonlocal_names.clone());
+            .with_nonlocal_names(self.nonlocal_names.clone())
+            .with_module_globals(self.module_globals.clone());
         for p in params {
             let id = child.next_id();
             child.name_to_id.insert(p.clone(), id);

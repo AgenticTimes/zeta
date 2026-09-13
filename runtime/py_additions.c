@@ -350,6 +350,9 @@ void zeta_env_set(int64_t name_handle, int64_t v) {
 // nonlocal declaration marker — no runtime effect (the env routing happens
 // at the variable's read/write sites), but keeps the call linkable.
 int64_t zeta_nonlocal_decl(int64_t name) { return name; }
+// PY-A: module-global marker — no-op; the resolver/gen route reads/writes
+// through the env instead. Present so the synthesized marker call links.
+int64_t zeta_module_decl(int64_t name) { return name; }
 
 // PY-A: list comprehension collector — iter is a Vec-layout handle
 // ([cap|len|data...]); fn_ptr is the address of a generated closure taking

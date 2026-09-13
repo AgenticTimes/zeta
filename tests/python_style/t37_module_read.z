@@ -1,0 +1,26 @@
+// L1: module 全局槽隐式读 —— 函数内读模块变量无需显式 global 声明
+//     顶层裸赋值 `X = e` 自动登记为 module global，读从 env 回退。
+// expect: 1
+// expect: 4
+// expect: 4
+// expect: 2
+DEBUG = 1
+COUNT = 3
+d = {"a": 1, "b": 2}
+
+def get_debug():
+    return DEBUG
+
+def add_one():
+    return COUNT + 1
+
+def read_all():
+    return DEBUG + COUNT
+
+def get_b():
+    return d["b"]
+
+print(get_debug())
+print(add_one())
+print(read_all())
+print(get_b())

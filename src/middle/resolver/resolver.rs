@@ -57,6 +57,9 @@ pub struct Resolver {
     /// DEFINING scope must also store these through the closure env so the
     /// inner function sees the initialized slot (capture-by-reference).
     nonlocal_names: RefCell<std::collections::HashSet<String>>,
+    /// PY-A: module-top-level bare-assigned names (implicit-module global
+    /// reads fall back to env without explicit `global` declaration).
+    module_globals: RefCell<std::collections::HashSet<String>>,
     /// Identity inference context for capability-based type inference
     identity_inference: crate::middle::types::identity::inference::IdentityInferenceContext,
     /// Capability inferencer for identity-aware type inference
@@ -84,6 +87,7 @@ impl Resolver {
             type_decls: HashMap::new(),
             generated_closures: RefCell::new(HashMap::new()),
             nonlocal_names: RefCell::new(std::collections::HashSet::new()),
+            module_globals: RefCell::new(std::collections::HashSet::new()),
             capability_inferencer:
                 crate::middle::types::identity::inference::CapabilityInferencer::new(),
         };
@@ -173,6 +177,32 @@ impl Resolver {
             if std::env::var("ZETA_PROBE").is_ok() {
                 eprintln!("PROBE nonlocal set: {:?}", self.nonlocal_names.borrow());
             }
+        }
+        // PY-A: collect module-top-level bare assignment names (implicit
+        // module globals) so reads from other functions fall back to env.
+        {
+            fn walk_module(n: &AstNode, set: &mut std::collections::HashSet<String>) {
+                match n {
+                    AstNode::Call { receiver: None, method, args, .. }
+                        if method == "zeta_module_decl" =>
+                    {
+                        for a in args {
+                            if let AstNode::StringLit(name) = a {
+                                set.insert(name.clone());
+                            }
+                        }
+                    }
+                    AstNode::ExprStmt { expr } => walk_module(expr, set),
+                    AstNode::Block { body } => {
+                        for s in body { walk_module(s, set); }
+                    }
+                    AstNode::FuncDef { body, .. } => {
+                        for s in body { walk_module(s, set); }
+                    }
+                    _ => {}
+                }
+            }
+            walk_module(&ast, &mut self.module_globals.borrow_mut());
         }
         // Collect program-wide type declarations for MIR lowering.
         match &ast {
@@ -623,7 +653,8 @@ impl Resolver {
             .with_global_consts(self.ctfe_consts.clone())
             .with_func_ret_types(ret_types)
             .with_type_decls(self.type_decls.clone())
-            .with_nonlocal_names(self.nonlocal_names.borrow().clone());
+            .with_nonlocal_names(self.nonlocal_names.borrow().clone())
+            .with_module_globals(self.module_globals.borrow().clone());
         let mir = mir_gen.lower_to_mir(ast);
         // PY-A: synthetic lambda/closure functions synthesized while lowering
         // are parked on the resolver so they reach codegen exactly once.

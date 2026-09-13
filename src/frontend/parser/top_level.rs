@@ -1142,6 +1142,43 @@ pub fn parse_zeta(input: &str) -> IResult<&str, Vec<AstNode>> {
 }
 
 /// PY-A: Python modules run their top-level statements. Statement-level items
+/// PY-A: a module top-level bare assignment `X = e` (rhs is not a lambda/
+/// closure) marks `X` as a module global. Reads from other functions fall
+/// back to the shared env without an explicit `global` declaration.
+fn collect_module_global(stmt: &AstNode, out: &mut Vec<String>) {
+    // Assign, AssignOp, and Let all bind a bare Var name at module level.
+    let bind_name = match stmt {
+        AstNode::Assign(lhs, rhs) => {
+            if matches!(&**rhs, AstNode::Closure { .. }) {
+                return;
+            }
+            match &**lhs {
+                AstNode::Var(n) => Some(n.clone()),
+                _ => return,
+            }
+        }
+        AstNode::AssignOp { target, .. } => match &**target {
+            AstNode::Var(n) => Some(n.clone()),
+            _ => return,
+        },
+        AstNode::Let { pattern, expr, .. } => {
+            if matches!(&**expr, AstNode::Closure { .. }) {
+                return;
+            }
+            match &**pattern {
+                AstNode::Var(n) => Some(n.clone()),
+                _ => return,
+            }
+        }
+        _ => return,
+    };
+    if let Some(n) = bind_name {
+        if !out.contains(&n) {
+            out.push(n);
+        }
+    }
+}
+
 /// (an `if __name__ == "__main__":` guard body unwraps to a Block, bare calls,
 /// import no-ops) are collected into a synthesized `fn main` when the module
 /// has none — otherwise the compiled binary has no entry point.
@@ -1172,6 +1209,12 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
                 | AstNode::ModDef { .. }
         )
     }
+    // PY-A: names assigned directly at module top level (bare `X = e`)
+    // become module globals — reads from other functions fall back to the
+    // shared env without an explicit `global` declaration (Python semantics).
+    // Only collected here (the implicit-main path): explicit `fn main`
+    // bodies never touch this, so lambda/closure bindings are unaffected.
+    let mut module_globals: Vec<String> = Vec::new();
     for a in asts {
         match a {
             // PY-A: a class desugars to [struct, impl, ctor] wrapped in a
@@ -1181,13 +1224,31 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
                     if is_definition(&node) {
                         out.push(node);
                     } else {
+                        collect_module_global(&node, &mut module_globals);
                         main_body.push(node);
                     }
                 }
             }
             other if is_definition(&other) => out.push(other),
-            stmt => main_body.push(stmt),
+            stmt => {
+                collect_module_global(&stmt, &mut module_globals);
+                main_body.push(stmt);
+            }
         }
+    }
+    // Emit zeta_module_decl markers (mirroring parse_global's
+    // zeta_nonlocal_decl) so the resolver registers these names as module
+    // globals and gen.rs routes reads/writes through the env.
+    for name in &module_globals {
+        main_body.insert(0, AstNode::ExprStmt {
+            expr: Box::new(AstNode::Call {
+                receiver: None,
+                method: "zeta_module_decl".to_string(),
+                args: vec![AstNode::StringLit(name.clone())],
+                type_args: vec![],
+                structural: false,
+            }),
+        });
     }
     // PY-A: a module whose only content is definitions (a "library" module
     // run as a script) still needs an entry point to link as an executable —
