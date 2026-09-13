@@ -203,3 +203,47 @@ identity 兜底、UTF-8 边界探针修复。
 - stddev 不能走 `as i64` 中间步（截断为 0）
 - 无 `-o` 模式 JIT 对简单 f64 程序 segfault（AOT 路径正常，低优）
 - benchmark_simd_vs_scalar.z 源文件本身损坏（大量孤立 `}`），非编译器问题
+
+## 库管理现状与 Python 库接入方案（2026-09-13 评估）
+
+### 现状盘点：库管理"有名无实"
+
+| 机制 | 现状 | 判定 |
+|---|---|---|
+| `use std::X` 模块解析 | Resolver 递归查找 build/stubs/std/X.z ✓ 文件存在 | 解析 ✓ |
+| stdlib 桩（collections.z 等 12 个） | 桩内容是空壳 struct + no-op 方法（HashMap.insert 返回 None），无 runtime 支撑 | **有名无实**——`HashMap::new().insert(1,100)` 编译通过但链接失败（方法解析为裸名 extern `insert` 而非 `map_insert`） |
+| zorb 包管理器（@scope/name） | 目录约定 + ~/.cache 缓存查找已写，但无 zorb 二进制、无包源 | **空架子** |
+| `import numpy` / `import pandas`（Python 语法） | parse 后静默吞掉（PY-A import 容错），库符号全部落空 | **解析层假通过** |
+| Python 库接入 | 无 FFI、无 CPython 嵌入、无 C ABI 映射 | **不存在** |
+
+### 决策：Python 库"迁移还是接入"——按库分三类，不做全量兼容
+
+全量兼容 pandas/numpy = 重写 CPython 生态（不可行）；嵌入 CPython = 拖入
+解释器 + GIL，摧毁 AOT 定位。**正确路径是"用面驱动"**——REasyQuant 实测
+31 个失败文件的外部符号去重后仅 76 个，其中 pandas/numpy 真实用面 ~30 个
+（shift/groupby/rolling/polyfit/fillna...）。
+
+| 层 | 内容 | 方案 | 工作量 |
+|---|---|---|---|
+| **L1 native**（本编译器最强项） | 数值计算：Vec/f64 数组上的 arange/linspace/diff/exp/log/polyfit/rolling/mean/std | 已实现一半（arange/diff/sorted/sum ✓）；补 exp/log/polyfit + f64 数组 layout 统一 | ~1 周 |
+| **L2 mini-DataFrame** | 列名→Vec map（复用 map_str_key runtime）+ 策略实际用的 ~15 个方法（shift/rank/fillna/dropna/sort_values/rolling.mean） | 新 `dataframe.z` stdlib 桩 + native runtime（Map+Vec 组合） | ~2 周 |
+| **L3 平台 API 边界** | jqdata 聚宽运行时（set_option/order_target_value/context.portfolio/get_price） | **接入不迁移**——runtime shim .o 由宿主（REasyQuant 回测引擎）提供实现，Zeta 二进制 extern 声明；本地 standalone 模式跑 no-op 桩（已部分落地） | shim ~1 周 |
+| **L4 CPython FFI**（长期可选） | 真 pandas/numpy/scipy | Py_Initialize + PyObject 桥（类似 cffi 逆向）——仅在 L1/L2 覆盖不足时启用；优先级最低 | ≥1 月 |
+
+### 关键架构原则
+
+1. **平台 API 是环境不是库**：`set_option/run_daily/order` 的实现属于宿主
+   （聚宽/REasyQuant 回测引擎），编译器只管 extern 声明 + 符号链接。策略
+   AOT 二进制 = 纯计算核心，平台交互经 shim 边界回落宿主——与 C 程序
+   链接 libc 的分工完全一致。
+2. **用面驱动，不做全量兼容**：76 个符号里真正高频的是 ~20 个；先覆盖 80%
+   调用点，剩余在真实策略报错时按需补。
+3. **Python-only 语义降级**：groupby 多级索引、merge、时区等复杂语义在
+   L2 不做——需要它们的策略留在 Python 引擎跑，Zeta 编译的是热路径。
+
+### 下一步（按序）
+
+1. L1 收尾：exp/log/polyfit runtime + f64 数组 layout 统一（StackArray/DynamicArray 双布局是当前最大技术债）
+2. L2 mini-DataFrame：`dataframe.z` 桩 + native runtime（列存 Map+Vec）
+3. 嵌套 def 方法分发修正（stub 方法解析为裸名 extern 的 bug——HashMap::new().insert() 应路由到 map_insert）
+4. L3 shim 边界：REasyQuant 引擎侧提供 jq_shim.o（或确认现有 no-op 桩足够）
