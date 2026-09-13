@@ -3140,6 +3140,33 @@ impl MirGen {
                     return id;
                 }
 
+                // PY-A: dict comprehension collect — lambda returns packed
+                // (k<<32)|v pairs via __pack_pair__; runtime fills a map.
+                if method == "__collect_dict__" && arg_ids.len() == 2 {
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_collect_dict".to_string(),
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::Named("map".to_string(), vec![]));
+                    return id;
+                }
+                // __pack_pair__(k, v) — passthrough to runtime packing
+                if method == "__pack_pair__" && arg_ids.len() == 2 {
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_pack_pair".to_string(),
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+
                 // PY-A: list comprehension collect — receiver is the iterable,
                 // arg is the lambda FuncAddr. zeta_collect_vec returns a new
                 // Vec handle skipping -1 (filtered-out) results.

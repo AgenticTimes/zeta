@@ -517,3 +517,21 @@ int64_t zeta_collect_literals(int64_t count, int64_t fn_ptr, ...) {
     }
     return (int64_t)(base + 2);
 }
+
+// __collect_dict__(iter, fn_ptr) — fn returns packed (k<<32)|v pairs; the
+// dict is a fresh platform map handle. V1: k/v both i64.
+int64_t zeta_collect_dict(int64_t iter, int64_t fn_ptr) {
+    if (!iter) return 0;
+    int64_t len = ((int64_t*)(iter - 16))[1];
+    int64_t m = map_new();
+    int64_t (*fp)(int64_t) = (int64_t(*)(int64_t))fn_ptr;
+    for (int64_t i = 0; i < len; i++) {
+        int64_t pair = fp(((int64_t*)iter)[i]);
+        map_insert(m, pair >> 32, pair & 0xFFFFFFFF);
+    }
+    return m;
+}
+// __pack_pair__(k, v) — pack two i64 into one i64 (V1: k high, v low)
+int64_t zeta_pack_pair(int64_t k, int64_t v) {
+    return (k << 32) | (v & 0xFFFFFFFF);
+}

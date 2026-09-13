@@ -1,0 +1,19 @@
+// L1: dictcomp + setcomp over Vec-handle iterables
+// expect: 4
+// expect: 1
+// expect: 18
+def make(x):
+    let d = {k: k * 2 for k in x}
+    return d
+
+def uniques(x):
+    let s = {y % 2 for y in x}
+    return len(s)
+
+let v = Vec::new()
+v = v.push(2)
+v = v.push(3)
+let d = make(v)
+print(d[2])
+print(uniques(v))
+print(sum([x * 3 for x in [2, 4]]))
