@@ -738,6 +738,9 @@ fn parse_class(input: &str) -> IResult<&str, AstNode> {
     let mut init_params: Vec<(String, String)> = Vec::new();
     let mut init_stmts: Vec<AstNode> = Vec::new();
     let mut has_init = false;
+    // PY-A: bare annotated fields (`@dataclass class P: x: int`) — no
+    // `__init__`; the constructor is synthesized from these declarations.
+    let mut annotated_fields: Vec<(String, String)> = Vec::new();
     let mut cur = input;
     loop {
         let (next, _) = skip_ws_and_comments(cur)?;
@@ -795,7 +798,24 @@ fn parse_class(input: &str) -> IResult<&str, AstNode> {
             Ok((rest, _other)) => {
                 cur = rest;
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                // PY-A: a bare annotated field `x: int` (dataclass body).
+                // Previously this aborted the whole class parse — and since
+                // the class was the current top-level item, every statement
+                // after it was silently dropped too (fail-open).
+                match parse_param(next) {
+                    Ok((rest, (fname, fty)))
+                        if !fname.starts_with('*')
+                            && fname != "self"
+                            && fname != "&self"
+                            && fname != "&mut self" =>
+                    {
+                        annotated_fields.push((fname, fty));
+                        cur = rest;
+                    }
+                    _ => return Err(e),
+                }
+            }
         }
     }
     let (input, _) = ws(tag("}")).parse(cur)?;
@@ -803,6 +823,16 @@ fn parse_class(input: &str) -> IResult<&str, AstNode> {
     // Field extraction from `__init__` `self.<field> = <rhs>`
     let mut fields: Vec<(String, String)> = Vec::new();
     let mut field_inits: Vec<(String, AstNode)> = Vec::new();
+    // PY-A: dataclass-style body — no `__init__`, fields declared as bare
+    // annotations. Synthesize the constructor and field table from them, in
+    // declaration order (`P(1, 2)` → `P { x: 1, y: 2 }`).
+    if !has_init && !annotated_fields.is_empty() {
+        for (n, t) in &annotated_fields {
+            fields.push((n.clone(), t.clone()));
+            field_inits.push((n.clone(), AstNode::Var(n.clone())));
+            init_params.push((n.clone(), t.clone()));
+        }
+    }
     let param_names: Vec<&str> = init_params.iter().map(|(n, _)| n.as_str()).collect();
     for st in &init_stmts {
         if let AstNode::Assign(lhs, rhs) = st {

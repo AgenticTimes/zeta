@@ -154,6 +154,19 @@ F warnings warning py_warnings_warn args=i64 ret=i64
 F warnings simplefilter py_warnings_noop args=i64 ret=i64
 F warnings filterwarnings py_warnings_noop args=i64 ret=i64
 
+# ---- dataclasses : the @dataclass decorator is consumed at parse time
+#      (skip_decorator_lines) and the class body synthesizes its __init__;
+#      here we only need the import to bind without a warning. asdict is a
+#      compiler-side rewrite (struct type known statically). -------------
+M dataclasses
+F dataclasses dataclass py_noop1 args=i64 ret=i64
+F dataclasses field py_noop1 args=i64 ret=i64
+# asdict is rewritten at compile time (struct fields are known statically).
+# This symbol deliberately does not exist in the runtime: if the rewrite does
+# not fire (unknown receiver type), the link fails loudly instead of
+# returning a silently-empty dict.
+F dataclasses asdict py_asdict_unexpanded args=i64 ret=i64
+
 # ---- datetime (evidence: the corpus's heaviest stdlib need — timedelta 14,
 #      strptime 6, date/datetime construction, arithmetic, comparisons) ----
 M datetime

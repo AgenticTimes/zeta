@@ -400,6 +400,23 @@ impl Resolver {
         }
         // Collect program-wide type declarations for MIR lowering.
         match &ast {
+            AstNode::StructDef {
+                name,
+                fields,
+                generics,
+                ..
+            } => {
+                // Struct fields must be visible to MIR lowering: dataclasses
+                // `asdict(x)` expands to a dict of the receiver's fields, which
+                // needs the field list at compile time.
+                self.type_decls.insert(
+                    name.clone(),
+                    crate::middle::mir::r#gen::TypeDecl::Struct {
+                        fields: fields.clone(),
+                        generics: generics.clone(),
+                    },
+                );
+            }
             AstNode::EnumDef {
                 name,
                 variants,

@@ -1,0 +1,20 @@
+// PY-A: dataclasses —— `@dataclass` 类按字段注解合成 __init__，asdict 展开为字段字典
+//   （此前 @dataclass 处解析即中止，类与其后所有语句被静默丢弃 = fail-open）
+// expect: 3
+// expect: 30
+from dataclasses import dataclass, asdict
+
+@dataclass
+class Point:
+    x: int
+    y: int
+
+def total() -> i64:
+    q = Point(1, 2)
+    d = asdict(q)
+    return d["x"] + d["y"]
+
+print(total())
+
+val = Point(10, 20)
+print(val.x + val.y)

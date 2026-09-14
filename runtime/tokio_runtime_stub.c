@@ -1146,6 +1146,13 @@ int64_t py_warnings_noop(int64_t a) {
     return 0;
 }
 
+// Generic accepted-and-ignored shim (1 i64 arg): decorators, filter config,
+// and other Python surface that has no runtime effect here.
+int64_t py_noop1(int64_t a) {
+    (void)a;
+    return 0;
+}
+
 // ---- json ----
 static int64_t zt_json_quote(const char* s, char* out) {
     char* o = out;

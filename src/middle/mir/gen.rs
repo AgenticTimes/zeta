@@ -2492,6 +2492,57 @@ impl MirGen {
                 if method == "__kwarg__" && receiver.is_none() && args.len() == 2 {
                     return self.lower_expr(&args[1]);
                 }
+                // PY-A: `dataclasses.asdict(x)` — the receiver's struct type is
+                // known statically, so expand to a dict literal of its fields.
+                // There is no runtime reflection to build such a dict, and a
+                // link-time `asdict` extern would be a worse outcome than the
+                // compile-time expansion. Restricted to a plain variable
+                // receiver so the expression is not evaluated twice.
+                if method == "asdict" && args.len() == 1 {
+                    let is_asdict = match receiver {
+                        None => self
+                            .py_member_aliases
+                            .get("asdict")
+                            .map(|(m, mem)| m == "dataclasses" && mem == "asdict")
+                            .unwrap_or(false),
+                        Some(_) => self
+                            .py_member_target(receiver, method)
+                            .map(|(m, mem)| m == "dataclasses" && mem == "asdict")
+                            .unwrap_or(false),
+                    };
+                    if is_asdict {
+                        if let AstNode::Var(_) = &args[0] {
+                            let base_id = self.lower_expr(&args[0]);
+                            let tyname = match self.type_map.get(&base_id) {
+                                Some(Type::Named(n, _)) => Some(n.clone()),
+                                _ => None,
+                            };
+                            let fields = tyname.and_then(|tn| {
+                                match self.shared_type_decls.get(&tn) {
+                                    Some(TypeDecl::Struct { fields, .. }) => {
+                                        Some(fields.clone())
+                                    }
+                                    _ => None,
+                                }
+                            });
+                            if let Some(fields) = fields {
+                                let entries: Vec<(AstNode, AstNode)> = fields
+                                    .iter()
+                                    .map(|(f, _)| {
+                                        (
+                                            AstNode::StringLit(f.clone()),
+                                            AstNode::FieldAccess {
+                                                base: Box::new(args[0].clone()),
+                                                field: f.clone(),
+                                            },
+                                        )
+                                    })
+                                    .collect();
+                                return self.lower_expr(&AstNode::DictLit { entries });
+                            }
+                        }
+                    }
+                }
                 // PY-A: `json.dumps(x)` needs the COMPILER's type — an i64
                 // handle carries no runtime tag, so dispatch to the typed
                 // entry point here instead of guessing in C.
