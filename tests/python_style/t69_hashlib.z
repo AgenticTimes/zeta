@@ -1,0 +1,16 @@
+// PY-A: hashlib —— md5/sha1/sha256 + 链式 hexdigest + 流式 update
+//   向量为标准值（abc: md5/sha1/sha256；流式 sha256 与一次性结果一致）
+// expect: 900150983cd24fb0d6963f7d28e17f72
+// expect: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+// expect: a9993e364706816aba3e25717850c26c9cd0d89d
+// expect: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+import hashlib
+
+print(hashlib.md5("abc").hexdigest())
+print(hashlib.sha256("abc").hexdigest())
+print(hashlib.sha1("abc").hexdigest())
+
+h = hashlib.sha256()
+h.update("a")
+h.update("bc")
+print(h.hexdigest())

@@ -167,6 +167,20 @@ F dataclasses field py_noop1 args=i64 ret=i64
 # returning a silently-empty dict.
 F dataclasses asdict py_asdict_unexpanded args=i64 ret=i64
 
+# ---- hashlib : md5/sha1/sha256 (macOS CommonCrypto backend) ------------
+M hashlib
+F hashlib md5 py_hashlib_md5 args=i64 ret=i64 handle=PyHash
+F hashlib sha1 py_hashlib_sha1 args=i64 ret=i64 handle=PyHash
+F hashlib sha256 py_hashlib_sha256 args=i64 ret=i64 handle=PyHash
+W PyHash update py_hashlib_update args=2
+W PyHash hexdigest py_hashlib_hexdigest args=1 ret=str
+W PyHash digest py_hashlib_digest args=1 ret=str
+# zero-argument constructors (hashlib.sha256() then .update(...)): the
+# arity-suffix mechanism routes a 0-arg call here.
+X py_hashlib_md5_0 args= ret=i64
+X py_hashlib_sha1_0 args= ret=i64
+X py_hashlib_sha256_0 args= ret=i64
+
 # ---- datetime (evidence: the corpus's heaviest stdlib need — timedelta 14,
 #      strptime 6, date/datetime construction, arithmetic, comparisons) ----
 M datetime

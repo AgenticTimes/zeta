@@ -1153,6 +1153,108 @@ int64_t py_noop1(int64_t a) {
     return 0;
 }
 
+// ---- hashlib (md5/sha1/sha256) ----
+// Accumulates the input in a growable GC buffer and hashes it on demand, so
+// both `sha256(data).hexdigest()` and the streaming `h = sha256();
+// h.update(x); h.hexdigest()` forms work. Backend is macOS CommonCrypto;
+// other platforms get an empty digest rather than a wrong one.
+#ifdef __APPLE__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#include <CommonCrypto/CommonDigest.h>
+#endif
+
+typedef struct {
+    int algo; /* 1 = md5, 2 = sha1, 3 = sha256 */
+    unsigned char* buf;
+    size_t len;
+    size_t cap;
+} py_hash_t;
+
+static void py_hash_append(py_hash_t* h, const void* data, size_t n) {
+    if (!data || n == 0) return;
+    if (h->len + n > h->cap) {
+        size_t cap = h->cap ? h->cap : 64;
+        while (cap < h->len + n) cap *= 2;
+        h->buf = (unsigned char*)GC_realloc(h->buf, cap);
+        h->cap = cap;
+    }
+    memcpy(h->buf + h->len, data, n);
+    h->len += n;
+}
+
+static int64_t py_hashlib_new(int algo, int64_t data) {
+    py_hash_t* h = (py_hash_t*)GC_malloc(sizeof(py_hash_t));
+    h->algo = algo;
+    h->buf = NULL;
+    h->len = 0;
+    h->cap = 0;
+    if (data) py_hash_append(h, (const void*)data, strlen((const char*)data));
+    return (int64_t)h;
+}
+
+int64_t py_hashlib_md5(int64_t data) { return py_hashlib_new(1, data); }
+int64_t py_hashlib_sha1(int64_t data) { return py_hashlib_new(2, data); }
+int64_t py_hashlib_sha256(int64_t data) { return py_hashlib_new(3, data); }
+int64_t py_hashlib_md5_0(void) { return py_hashlib_new(1, 0); }
+int64_t py_hashlib_sha1_0(void) { return py_hashlib_new(2, 0); }
+int64_t py_hashlib_sha256_0(void) { return py_hashlib_new(3, 0); }
+
+int64_t py_hashlib_update(int64_t handle, int64_t data) {
+    if (!handle) return 0;
+    py_hash_t* h = (py_hash_t*)handle;
+    if (data) py_hash_append(h, (const void*)data, strlen((const char*)data));
+    return 0;
+}
+
+static void py_hash_raw(py_hash_t* h, unsigned char* out, unsigned int* outlen) {
+    *outlen = 0;
+#ifdef __APPLE__
+    if (h->algo == 1) {
+        CC_MD5(h->buf, (CC_LONG)h->len, out);
+        *outlen = CC_MD5_DIGEST_LENGTH;
+    } else if (h->algo == 2) {
+        CC_SHA1(h->buf, (CC_LONG)h->len, out);
+        *outlen = CC_SHA1_DIGEST_LENGTH;
+    } else {
+        CC_SHA256(h->buf, (CC_LONG)h->len, out);
+        *outlen = CC_SHA256_DIGEST_LENGTH;
+    }
+#else
+    (void)h;
+#endif
+}
+
+int64_t py_hashlib_hexdigest(int64_t handle) {
+    if (!handle) return 0;
+    unsigned char raw[64];
+    unsigned int n = 0;
+    static const char hex[] = "0123456789abcdef";
+    py_hash_raw((py_hash_t*)handle, raw, &n);
+    char* out = (char*)GC_malloc(n * 2 + 1);
+    for (unsigned int i = 0; i < n; i++) {
+        out[i * 2] = hex[raw[i] >> 4];
+        out[i * 2 + 1] = hex[raw[i] & 0xF];
+    }
+    out[n * 2] = 0;
+    return (int64_t)out;
+}
+
+int64_t py_hashlib_digest(int64_t handle) {
+    if (!handle) return 0;
+    unsigned char raw[64];
+    unsigned int n = 0;
+    py_hash_raw((py_hash_t*)handle, raw, &n);
+    char* out = (char*)GC_malloc(n + 1);
+    memcpy(out, raw, n);
+    out[n] = 0;
+    return (int64_t)out;
+}
+
+#ifdef __APPLE__
+#pragma clang diagnostic pop
+#endif
+
 // ---- json ----
 static int64_t zt_json_quote(const char* s, char* out) {
     char* o = out;

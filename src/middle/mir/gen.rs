@@ -329,6 +329,23 @@ impl MirGen {
     /// (lets `t.start()` / `lock.acquire()` dispatch exactly instead of by
     /// name-guessing).
     fn py_handle_of(&self, recv: &AstNode) -> Option<String> {
+        // A chained call whose callee is a registry member that declares a
+        // handle (e.g. `hashlib.md5("x").hexdigest()`): the result's tag is
+        // known statically from the registry, so no lowering is needed here.
+        if let AstNode::Call {
+            receiver: inner,
+            method,
+            ..
+        } = recv
+        {
+            if let Some((module, member)) = self.py_member_target(inner, method) {
+                if let Some(h) = crate::middle::pylib::find_member(&module, &member)
+                    .and_then(|m| m.handle.clone())
+                {
+                    return Some(h);
+                }
+            }
+        }
         let AstNode::Var(name) = recv else {
             return None;
         };
