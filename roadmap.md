@@ -372,7 +372,8 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 - [~] `collections` 剩余：`most_common`（需 pair/tuple）、`defaultdict(list/set)`
 - [x] `typing`（注解专用 no-op 模块，`1914474c`，t66）、`warnings`（warn 真打 stderr，过滤器 no-op，`80867154`，t67）
 - [ ] `pathlib` / `functools` / `hashlib`
-- [ ] `dataclasses`（`@dataclass` → 按字段注解合成 `__init__`；当前 `P(1,2)` **静默无输出**，属 fail-open，优先修）
+- [x] `dataclasses`（`@dataclass` → 按字段注解合成 `__init__`；`asdict` 编译期展开为字段字典，`6befdec0`，t68）。
+  同批修 fail-open：`@dataclass` 处解析中止导致类与其后全部语句被静默丢弃；单大写类名（`class P`）仍被注解解析当作泛型类型变量（已知小坑）
 - [ ] `re` 补齐：`finditer`/`subn`/`IGNORECASE` 等 flags、`\g<name>`、`Pattern` 方法面
 - [ ] threading 补齐：`BoundedSemaphore`/`Barrier`/`Condition`/`local`/`enumerate`/`main_thread`、
   `Thread(daemon=)`、`Thread.name`
