@@ -1,0 +1,19 @@
+name: feat-py-module-system
+title: Python 模块系统与语义 P1 收尾（相对导入 / Thread(args=) / 自定义上下文协议）
+description: >-
+  收尾 roadmap「P1 模块系统与语义」：实现相对导入（from . import x / from .mod import y /
+  from ..pkg import z / from X import *）、threading.Thread 带参目标（args= 元组）、
+  以及非 shim 类型的自定义 __enter__/__exit__（当前走 identity 兜底 + warning）。
+status: done
+dependencies: []
+artifacts:
+  - id: proposal
+    status: done
+  - id: design
+    status: done
+  - id: tasks
+    status: done
+commits:
+  - 0c3a2ed6
+  - c49e4ff8
+  - 25acdb0d

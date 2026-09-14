@@ -3,7 +3,7 @@
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
 > 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（61 case 全绿）**
-> 当前通过率（2026-09-14 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **61/61**；REasyQuant 语料解析 **38/38**
+> 当前通过率（2026-09-15 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **66/66**；REasyQuant 语料解析 **38/38**
 > Python 库注册表：**16 个模块**（见「库导入机制」小节）；第三方库 `zorb install` 可用，已验真实库 `python-stringcase` 全函数正确
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
@@ -355,9 +355,10 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 - [x] 字符串下标与切片 `s[i]`/`s[a:b]`/`s[:-1]`（t52）
 - [x] 目录包（`X/__init__.py`，t44）；`with open(...)` 走真 `__enter__`/`__exit__`（t58）
 - [x] JSON 静态和类型 `PyJson` + 容器值类型（dict 侧表 / list 静态元素类型，t54/t55/t56/t57）
-- [ ] **相对导入**（`from . import x`）、`from X import *` 绑名、`importlib` / 动态 `sys.path`
-- [ ] **`Thread(target, args=(...))`**：带参目标仍不支持（`FuncAddr` 零参）
-- [ ] **自定义 `__enter__`/`__exit__`**：非 shim 类型仍走 identity 兜底（有 warning）
+- [x] **相对导入**（`from . import x` / `from .mod import y` / `from ..pkg import z`）、`from X import *` 绑名（t64/t65）：`parse_relative_module` 保留前导点；resolver 用 `__package__` 锚点解析（包 `__init__` 锚自身、子模块锚父包），越界/无包上下文 fail-loud；star import 绑定目标模块公开顶层名（下划线排除）。同批修 `from X import y` 不跑模块 init 的静默错值（`total()` 由 1 → 6）
+- [ ] `importlib` / 动态 `sys.path`
+- [x] **`Thread(target, args=(...))`**（t62/t63）：单元素经现有 `py_threading_thread_new_2`；2+ 元素在 MIR 合成解包适配器 `fn __tp: target(__tp[0], ...)`（`lower_closure` + `array_get`），入口点单 i64 ABI 不再把 tuple 句柄当首参（原为静默垃圾值）。覆盖位置 target、`target=`、3 参、`threading.Thread` 限定形式
+- [x] **自定义 `__enter__`/`__exit__`**（t62_with_user_ctx）：非 shim 类型按静态类型分发到该类型的 `__enter__`/`__exit__` 方法；仅当两者都不存在才回退 identity + warning
 - [ ] **异构容器逐元素类型**：`[1, "a"]`、嵌套容器元素（需 tagged union 元素或真正的容器值标签）
 
 **P2 — 库与 API 补齐（按剩余量）**
@@ -555,8 +556,9 @@ identity 兜底、UTF-8 边界探针修复。
 
 下一批按「缺口清单」优先级（见上）：
 
-1. **P1 模块系统与语义**：相对导入、模块级语句执行、顶层常量导出、`Thread(args=...)`、
-   `with open(...)`（文件对象）—— 目录包（`__init__.py`）已完成
+1. ~~**P1 模块系统与语义**~~（2026-09-15 完成）：相对导入 + star import + `from X import y`
+   跑模块 init（commit `25acdb0d`）、`Thread(target, args=(...))` 多参（`c49e4ff8`）、
+   自定义 `__enter__`/`__exit__`（`0c3a2ed6`）
 2. **P2 并发 API 补齐**：`queue` 模块 → threading（Event/Semaphore/Barrier/Condition/Timer）→
    futures（as_completed/wait）→ multiprocessing（真多进程 + Queue/Pipe/Value）
 3. **P2 库覆盖**：os/sys/json/re/collections/itertools/... 逐个按需接入（现在是数据文件 + C，
