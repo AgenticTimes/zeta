@@ -2,8 +2,9 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
-> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **61/61**；REasyQuant 语料解析 **38/38**
+> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（61 case 全绿）**
+> 当前通过率（2026-09-14 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **61/61**；REasyQuant 语料解析 **38/38**
+> Python 库注册表：**16 个模块**（见「库导入机制」小节）；第三方库 `zorb install` 可用，已验真实库 `python-stringcase` 全函数正确
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -207,11 +208,11 @@ E2E 已验证（2026-09-13 实测，含**真实第三方库**）：
 - `zorb install <git URL>`（`https://github.com/okunishinishi/python-stringcase.git`）→ clone 后
   自动识别「仓库根无 `__init__.py` 但有单个模块」并安装；多候选时明确报错（排除 `setup.py`/`test_*`）
 
-**注意边界**：安装 ≠ 可用。`stringcase` 能解析、能 import，但编译卡在 `import re` + `re.sub`
-（`re` 未实现）→ 现在是**明确诊断**（unknown module/member），不是静默错值。也就是说第三方库
-能用与否取决于**库的依赖面是否落在已实现范围内**（当前注册表只有 6 个模块：
-threading / concurrent.futures / multiprocessing / asyncio / time / math），这正是下面
-「P2 库覆盖」的动机。仍未做：版本/依赖解析、包源索引、校验和、`site-packages` 直连。
+**注意边界（2026-09-14 更新）**：这段是当时的观察，现已被后续批次解决 ——
+`re` 已实现（POSIX 后端 + Match 句柄 + 可调用替换），`stringcase` 三个入口全部输出正确
+（见下方「真实第三方库首次端到端跑通」）。当时的结论仍然成立：**安装 ≠ 可用**，
+第三方库能用与否取决于其依赖面是否落在已实现范围内（注册表现 **16 个模块**）。
+仍未做：版本/依赖解析、包源索引、校验和、`site-packages` 直连。
 
 **在此之前的状态（2026-09-13 实测，记录备查）**
 
@@ -343,46 +344,58 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
   `collections` 缺 `most_common`（需 pair/tuple）与 `defaultdict(list/set)`；仍缺 `pathlib`/`typing`/`functools`/`hashlib`
 - [ ] P2 `types` 推断继续：容器元素类型、参数类型推断（现在未标注参数= i64，`def f(s): s.upper()` 靠名字回退兜住）
 
-**缺口清单（2026-09-13 盘点）** —— 按优先级，未做项一律保持 fail-loud（链接期失败或 warning），
-不得静默产生错值：
+**缺口清单（2026-09-14 复核）** —— 未做项一律保持 fail-loud（链接期失败或 warning），
+不得静默产生错值。已完成项在下方「批次记录」里有对应 commit 与用例。
 
-- [ ] **P1 模块系统**：包（`__init__.py` / 目录包）、相对导入（`from . import x`）、
-  `from X import *`（现仅记录模块、不绑名字）、`importlib` / `sys.path` 动态导入
-- [x] **P1 模块语义**：模块体在 import 时执行一次（幂等），模块级常量对其函数与外部均可见，
-  同名常量跨模块隔离（2026-09-13 完成，t46）
-- [ ] **P1 `with` 协议收尾**：用户自定义 `__enter__`/`__exit__` 目前走 identity 兜底
-  （有 warning，但非真协议）；文件对象 `open()` 未实现，故 `with open(...)` 仍不可用
-- [ ] **P1 `Thread(target, args=...)`**：带参数目标函数未支持（`FuncAddr` 目前零参），
-  真实代码里 `Thread(worker, args=(1,))` 很常见
-- [~] **P2 `queue` 模块**：`Queue` 的 `put/get/qsize/empty` **已完成**（pthread mutex+condvar，真阻塞）；
-  剩余 `LifoQueue`/`PriorityQueue`/`full`/`Empty`/`Full` 与 `get/put` 的 timeout 形式（W 表只支持一种 arity）
-- [ ] **P2 threading 补齐**：`Event`/`Semaphore`/`BoundedSemaphore`/`Barrier`/`Condition`/
-  `Timer`/`local`/`enumerate`/`main_thread`；`Thread(daemon=)`、`Thread.name` 属性
-- [ ] **P2 futures 补齐**：`as_completed`/`wait`/`Future.exception`/`cancel`/
-  `add_done_callback`；`Executor.map` 多 iterable 形式；`ProcessPoolExecutor` 目前与线程池等价
-- [ ] **P2 multiprocessing 补齐**：`Queue`/`Pipe`/`Value`/`Array`/`Manager`/共享锁/`Event`；
-  `Pool` 现为**进程内并行**（非真多进程，接线 IPC/管道即升级）、缺 `apply_async`/`imap`/`starmap`
-- [ ] **P2 库覆盖**：注册表现有 **13 个模块**（`__future__` `asyncio` `concurrent.futures`
-  `datetime` `json` `logging` `math` `multiprocessing` `os` `re` `sys` `threading` `time`）。
-  仍缺且**实测不可用**：`collections`（`Counter()` → unknown module/member + 链接失败）、
-  `itertools`、`random`、`pathlib`、`queue`、`typing`、`functools`、`hashlib`、`logging.handlers` 等。
-  注意：`import X` 对未知模块只发 warning（外部 shim 策略），
-  **只有真正用到成员时才会链接失败** —— 所以「import 能过」不等于「库可用」。
-- [~] **P2 第三方库安装**：**最小闭环已通**（`zorb install/list/remove/path` + 安装目录搜索
-  + 目录包）；剩余：版本与依赖解析（`src/package/` 里已有 `Manifest`/`DependencyResolver` 可复用）、
-  包源索引、下载校验和
-- [~] **P2 Python 站点包接入**：目录包（`__init__.py`）**已支持**；剩余 `site-packages` / `venv` /
-  `PYTHONPATH` 搜索，使 `pip install` 的纯 Python 包能被解析（真 import 仍需 L3 shim 或 L4 CPython 桥）
-- [ ] **P2 `src/package/` 死代码处置**：接上 CLI 或删除，避免「看着有、实际不可达」
-- [ ] **P2 静默路径清理**：`use` 失败（W2002）等 diagnostic 实测不输出，需确认是过滤策略
-  还是路径未达——`fail-open 禁止`同样适用于 warning 被吞
-- [ ] **P2 库来源显式化**：`ZETA_NO_SHIM=1`（或按模块前缀）强制走磁盘实现；
-  `pylib/`（注册表数据）与 `build/stubs`（Zeta `use` 桩）目录职责分离
-- [ ] **P2 注册表形态**：`pylib/registry.txt` 是**声明式数据**，新原语仍需写 C；
-  下一步可让库以 Zeta 源模块（`pylib/X.z`，extern + 包装函数）实现，复用已有文件加载器，
-  使「纯 Zeta 库」完全零 C 零 Rust 接入
-- [ ] **L4 asyncio 真并发**：事件循环 / 真 `Task` / `gather` / `wait_for` / `Queue` / `Lock` /
-  `to_thread`（现为**顺序语义**，值正确但并发不真）；yield 生成器同样属 L4
+**P1 — 影响真实代码可用性**
+
+- [x] 模块级语义：模块体 import 时执行一次（幂等）、模块级常量对内对外可见、同名常量跨模块隔离（t46）
+- [x] **模块级全局保留静态类型**：句柄经 env 读取不再丢标签（`q = queue.Queue()` 后 `q.put(x)` 可用）
+- [x] **关键字实参按名绑定**（t51）；**参数/返回类型推断**（t50/t53）
+- [x] 字符串下标与切片 `s[i]`/`s[a:b]`/`s[:-1]`（t52）
+- [x] 目录包（`X/__init__.py`，t44）；`with open(...)` 走真 `__enter__`/`__exit__`（t58）
+- [x] JSON 静态和类型 `PyJson` + 容器值类型（dict 侧表 / list 静态元素类型，t54/t55/t56/t57）
+- [ ] **相对导入**（`from . import x`）、`from X import *` 绑名、`importlib` / 动态 `sys.path`
+- [ ] **`Thread(target, args=(...))`**：带参目标仍不支持（`FuncAddr` 零参）
+- [ ] **自定义 `__enter__`/`__exit__`**：非 shim 类型仍走 identity 兜底（有 warning）
+- [ ] **异构容器逐元素类型**：`[1, "a"]`、嵌套容器元素（需 tagged union 元素或真正的容器值标签）
+
+**P2 — 库与 API 补齐（按剩余量）**
+
+- [x] `collections.Counter`/`defaultdict`（t61，返回 map）；顺带修 `d[k]=v` 静默无操作
+- [x] `random`（t60）、`itertools` 子集 chain/repeat/islice/count（t60，eager）
+- [x] `queue.Queue`、`threading.Event`/`Semaphore`/`Timer`（t59，pthread condvar 真阻塞）
+- [x] `os`/`os.path`/`os.environ`、`sys`、`datetime`、`re`（POSIX）、`math`、`logging`、`__future__`
+- [x] `json` 全套（loads/dumps/load/dump/get/keys/values、嵌套、类型正确）
+- [x] 文件对象 `open/read/readline(s)/write/close/closed`（t58）
+- [~] `collections` 剩余：`most_common`（需 pair/tuple）、`defaultdict(list/set)`
+- [ ] `pathlib` / `typing` / `functools` / `hashlib`
+- [ ] `re` 补齐：`finditer`/`subn`/`IGNORECASE` 等 flags、`\g<name>`、`Pattern` 方法面
+- [ ] threading 补齐：`BoundedSemaphore`/`Barrier`/`Condition`/`local`/`enumerate`/`main_thread`、
+  `Thread(daemon=)`、`Thread.name`
+- [ ] futures 补齐：`as_completed`/`wait`/`Future.exception`/`cancel`/`add_done_callback`；
+  `ProcessPoolExecutor` 目前与线程池等价
+- [ ] multiprocessing 补齐：`Queue`/`Pipe`/`Value`/`Array`/`Manager`/共享锁；`Pool` 现为**进程内并行**
+  （非真多进程，接线 IPC 即升级）、缺 `apply_async`/`imap`/`starmap`
+- [ ] queue 补齐：`LifoQueue`/`PriorityQueue`/`full`/`Empty`/`Full` 与 `get/put` 的 timeout 形式
+- [ ] Json 剩余：`items()`、直接 `for x in cfg:`（需按 tag 决定迭代键还是元素）
+- [ ] 文件剩余：`seek`/`flush`/二进制模式
+
+**工程与形态**
+
+- [ ] `pylib/registry.txt` 是**声明式数据**，新原语仍需写 C → 下一步可让库以 Zeta 源模块实现
+  （`pylib/X.z` + extern 包装），复用已有文件加载器，做到「纯 Zeta 库零 C 零 Rust 接入」
+- [ ] `src/package/` 死代码处置（`Manifest`/`DependencyResolver` 未接 CLI）
+- [ ] 静默路径清理：`use` 失败（W2002）等 diagnostic 实测不输出，需确认是过滤策略还是路径未达
+- [ ] 库来源显式化（`ZETA_NO_SHIM=1` 之类）；`pylib/` 与 `build/stubs` 职责分离
+- [ ] `zorb` 剩余：版本与依赖解析、包源索引、下载校验和
+- [ ] Python 站点包：`site-packages`/`venv`/`PYTHONPATH` 搜索
+
+**L4 — 深水区**
+
+- [ ] asyncio 真并发（事件循环 / 真 `Task` / `gather` / `wait_for` / `Queue` / `Lock` / `to_thread`）
+- [ ] `yield` 生成器
+- [ ] C 扩展型库（numpy/pandas 真实现）—— 需 CPython 桥，属产品取舍
 
 ### 已完成（本批）
 - [x] `#` 注释（parser `line_comment` + 预处理器字符串状态机；`#[` 保留给属性）
