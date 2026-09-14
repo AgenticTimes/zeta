@@ -141,6 +141,11 @@ W PyLogger setLevel py_logging_setLevel args=2
 M __future__
 N __future__
 
+# ---- typing : annotation-only module. Its members are TYPES used in
+#      annotations, so they bind nothing at runtime; declaring it no-op
+#      silences the "unknown member" warnings without inventing shims.
+N typing
+
 # ---- datetime (evidence: the corpus's heaviest stdlib need — timedelta 14,
 #      strptime 6, date/datetime construction, arithmetic, comparisons) ----
 M datetime

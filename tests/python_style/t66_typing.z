@@ -1,0 +1,13 @@
+// PY-A: typing 模块 —— 成员仅用于注解，绑定空操作（不再有 unknown member 警告）
+// expect: 42
+// expect: ok
+from typing import List, Dict, Optional, Any
+
+def add1(x: Any) -> Any:
+    return x + 1
+
+def name(s: Optional[str]) -> str:
+    return s
+
+print(add1(41))
+print(name("ok"))
