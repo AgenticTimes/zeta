@@ -75,7 +75,7 @@ fn eval_predicate(pred: &str, features: &[String]) -> bool {
 
     // `all(p1, p2, ...)`
     if pred.starts_with("all(") && pred.ends_with(')') {
-        let inner = &pred[3..pred.len() - 1];
+        let inner = &pred[4..pred.len() - 1];
         return split_predicates(inner)
             .iter()
             .all(|p| eval_predicate(p, features));

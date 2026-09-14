@@ -391,6 +391,7 @@ mod tests {
             type_map: HashMap::new(),
             global_consts: HashMap::new(),
             properties: vec![],
+            generic_params: vec![],
             is_extern: false,
         };
 
@@ -433,6 +434,7 @@ mod tests {
             type_map: HashMap::new(),
             global_consts: HashMap::new(),
             properties: vec![],
+            generic_params: vec![],
             is_extern: false,
         };
 
