@@ -352,6 +352,54 @@ impl MirGen {
         None
     }
 
+    /// PY-A: for `Thread(target, args=(a, b, ...))`, return the target name
+    /// and the literal args-tuple elements, so a multi-argument thread can be
+    /// adapted. Only a literal tuple target/args is recognized; anything else
+    /// returns None and falls through to the direct shim call.
+    fn thread_args_tuple(args: &[AstNode]) -> Option<(String, Vec<AstNode>)> {
+        let mut target: Option<String> = None;
+        let mut tuple: Option<Vec<AstNode>> = None;
+        let mut positional: Vec<AstNode> = Vec::new();
+        for a in args {
+            if let AstNode::Call {
+                receiver: None,
+                method,
+                args: ka,
+                ..
+            } = a
+            {
+                if method == "__kwarg__" && ka.len() == 2 {
+                    if let AstNode::StringLit(n) = &ka[0] {
+                        match n.as_str() {
+                            "target" => {
+                                if let AstNode::Var(v) = &ka[1] {
+                                    target = Some(v.clone());
+                                }
+                            }
+                            "args" => {
+                                if let AstNode::Tuple(els) = &ka[1] {
+                                    tuple = Some(els.clone());
+                                }
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+                }
+            }
+            positional.push(a.clone());
+        }
+        if target.is_none() {
+            if let Some(AstNode::Var(v)) = positional.first() {
+                target = Some(v.clone());
+            }
+        }
+        match (target, tuple) {
+            (Some(t), Some(els)) => Some((t, els)),
+            _ => None,
+        }
+    }
+
     /// Pre-seed type declarations collected program-wide by the Resolver.
     pub fn with_type_decls(mut self, decls: HashMap<String, TypeDecl>) -> Self {
         self.shared_type_decls = decls;
@@ -2655,6 +2703,58 @@ impl MirGen {
                         },
                     );
                     return id;
+                }
+                // PY-A: `Thread(target, args=(a, b, ...))` with TWO OR MORE
+                // positional args. The spawned entry point receives exactly one
+                // i64 (the packed tuple handle), so calling the target directly
+                // reads the handle as its first argument (silent garbage). We
+                // synthesize an adapter that unpacks the tuple and calls the
+                // real target: `fn __tp: target(__tp[0], __tp[1], ...)`.
+                // 0/1-arg threads keep the direct path below (a 1-tuple
+                // collapses to its element, so the value is already right).
+                if method == "Thread"
+                    && (receiver.is_none()
+                        || matches!(receiver.as_deref(), Some(AstNode::Var(v)) if v == "threading"))
+                {
+                    if let Some((target_name, elems)) = Self::thread_args_tuple(args) {
+                        if elems.len() >= 2 {
+                            let mut call_args: Vec<AstNode> = Vec::with_capacity(elems.len());
+                            for i in 0..elems.len() {
+                                call_args.push(AstNode::Call {
+                                    receiver: None,
+                                    method: "array_get".to_string(),
+                                    args: vec![
+                                        AstNode::Var("__tp".to_string()),
+                                        AstNode::Lit(i as i64),
+                                    ],
+                                    type_args: vec![],
+                                    structural: false,
+                                });
+                            }
+                            let body = AstNode::Call {
+                                receiver: None,
+                                method: target_name,
+                                args: call_args,
+                                type_args: vec![],
+                                structural: false,
+                            };
+                            let adapter = self.lower_closure(&["__tp".to_string()], &body);
+                            let adapter_addr = self.next_id();
+                            self.exprs.insert(adapter_addr, MirExpr::FuncAddr(adapter));
+                            self.type_map.insert(adapter_addr, Type::I64);
+                            let packed = self.lower_expr(&AstNode::Tuple(elems));
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_threading_thread_new".to_string(),
+                                args: vec![adapter_addr, packed],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map
+                                .insert(id, Type::Named("PyThread".to_string(), vec![]));
+                            return id;
+                        }
+                    }
                 }
                 // PY-A: Python stdlib shims — `threading.Thread(f)` /
                 // `from threading import Thread; Thread(f)` dispatch to runtime

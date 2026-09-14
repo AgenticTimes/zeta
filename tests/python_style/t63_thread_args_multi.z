@@ -1,0 +1,27 @@
+// PY-A: Thread(target, args=(a, b, ...)) —— 多参目标经适配器解包
+//   （入口点只收到一个 i64 = 打包的 tuple 句柄，2+ 参数需合成适配器）
+//   覆盖：位置 target、target= 关键字、3 参、threading.Thread 限定形式
+// expect: 42
+// expect: 6
+// expect: 42
+from threading import Thread
+
+def add(a, b):
+    return a + b
+
+def three(a, b, c):
+    return a + b + c
+
+t1 = Thread(add, args=(40, 2))
+t1.start()
+print(t1.join())
+
+t2 = Thread(target=three, args=(1, 2, 3))
+t2.start()
+print(t2.join())
+
+import threading
+
+t3 = threading.Thread(add, args=(20, 22))
+t3.start()
+print(t3.join())
