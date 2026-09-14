@@ -2409,12 +2409,8 @@ impl MirGen {
                             Type::DynamicArray(_) | Type::Array(_, _) => "py_json_dumps_vec",
                             _ => "py_json_dumps_i64",
                         };
-                        if sym == "py_json_dumps_map" {
-                            eprintln!(
-                                "warning: PY-A: json.dumps(dict) serializes keys as strings and \
-                                 values as integers (V1: map slots are untyped)"
-                            );
-                        }
+                        // dict values now carry a type tag recorded at insert
+                        // time, so no warning is needed for maps.
                         // Same limitation for vectors: elements are raw 64-bit
                         // slots, so a float prints as its bit pattern and a
                         // string as its pointer. Say so instead of emitting a
@@ -3326,6 +3322,28 @@ impl MirGen {
                         // A Json value prints by its tag (scalars bare,
                         // containers as JSON text) — converting to a string
                         // first keeps it on the existing print path.
+                        // A dict prints by its recorded value tags (Python's
+                        // repr differs only in quote style).
+                        if matches!(
+                            self.type_map.get(arg_id),
+                            Some(Type::Named(name, _)) if name == "map"
+                        ) {
+                            let sid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_json_dumps_map".to_string(),
+                                args: vec![*arg_id],
+                                dest: sid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(sid, MirExpr::Var(sid));
+                            self.type_map.insert(sid, Type::Str);
+                            let f = if is_last { "println_str" } else { "print_str" };
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: f.to_string(),
+                                args: vec![sid],
+                            });
+                            continue;
+                        }
                         let printed_id = if matches!(
                             self.type_map.get(arg_id),
                             Some(Type::Named(name, _)) if name == "PyJson"

@@ -1,0 +1,10 @@
+// PY-A: 容器值类型侧表 —— 编译器在每次 DictInsert 记录值的静态类型
+//   （0=int 1=f64 2=str 3=bool），map 布局不变，dumps/print 按标签序列化。
+//   顺带修：dict 里的 f64 曾走 fptosi 被截断（2.5 → 2），现按位模式存。
+// expect: {"b": 2.5, "a": 1, "ok": true, "c": "x"}
+// expect: {"b": 2.5, "a": 1, "ok": true, "c": "x"}
+import json
+
+d = {"a": 1, "b": 2.5, "c": "x", "ok": True}
+print(json.dumps(d))
+print(d)

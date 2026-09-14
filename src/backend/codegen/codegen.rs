@@ -837,6 +837,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some(Linkage::External),
         );
         module.add_function(
+            "zeta_map_set_tag",
+            void_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
             "zeta_dynarray_new",
             i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
@@ -4153,10 +4158,52 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     .build_int_to_ptr(map_i64.into_int_value(), self.ptr_type, "map_ptr")
                     .unwrap();
                 let key_val = self.gen_expr_safe(key_id, exprs);
-                let val_val = self.gen_expr_safe(val_id, exprs);
+                let mut val_val = self.gen_expr_safe(val_id, exprs);
+                let is_f64_val = matches!(
+                    self.current_type_map.as_ref().and_then(|tm| tm.get(val_id)),
+                    Some(Type::F64) | Some(Type::F32)
+                );
+                // Map slots are 64-bit raw. An f64 must be stored as its BITS
+                // (the coercion below would fptosi it, turning 2.5 into 2);
+                // the side table then tells the dumper it is a double.
+                if is_f64_val {
+                    if let inkwell::values::BasicValueEnum::FloatValue(fv) = val_val {
+                        val_val = self
+                            .builder
+                            .build_bit_cast(fv, self.i64_type, "dict_f64_bits")
+                            .unwrap()
+                            .into();
+                    }
+                }
                 let map_insert_fn = self.get_function("map_insert");
                 let coerced = self.coerce_call_args(map_insert_fn, vec![map_ptr.into(), key_val.into(), val_val.into()]);
                 let _ = self.builder.build_call(map_insert_fn, &coerced, "dict_insert");
+
+                // Record this value's static type for the dict value side
+                // table: map slots are raw 64-bit, so json.dumps needs it.
+                // 0 = int/unknown, 1 = f64, 2 = str, 3 = bool.
+                let tag: u64 = match self
+                    .current_type_map
+                    .as_ref()
+                    .and_then(|tm| tm.get(val_id))
+                {
+                    Some(Type::F64) | Some(Type::F32) => 1,
+                    Some(Type::Str) => 2,
+                    Some(Type::Bool) => 3,
+                    _ => 0,
+                };
+                if let Some(f) = self.module.get_function("zeta_map_set_tag") {
+                    let tag_val = self.i64_type.const_int(tag, false);
+                    let _ = self.builder.build_call(
+                        f,
+                        &[
+                            map_i64.into(),
+                            key_val.into(),
+                            tag_val.into(),
+                        ],
+                        "map_set_tag",
+                    );
+                }
             }
             MirStmt::DictGet {
                 map_id,

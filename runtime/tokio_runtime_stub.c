@@ -1078,6 +1078,8 @@ int64_t py_dt_delta_days(int64_t h) { return ((int64_t*)h)[0]; }
 // an i64 handle carries no runtime type tag.
 // ============================================================================
 extern int64_t zeta_key_string(int64_t hash);
+// Recorded at DictInsert by the compiler (dict value-type side table).
+int64_t zeta_map_value_tag(int64_t map, int64_t key);
 
 int64_t py_sys_maxsize(void) { return INT64_MAX; }
 int64_t py_sys_version_info(void) {
@@ -1194,7 +1196,28 @@ int64_t py_json_dumps_map(int64_t map) {
         }
         out[n++] = ':';
         out[n++] = ' ';
-        n += (size_t)sprintf(out + n, "%lld", (long long)val);
+        // Serialize by the value type the compiler recorded at insert time.
+        switch (zeta_map_value_tag(map, key_hash)) {
+            case 1: {
+                double d;
+                memcpy(&d, &val, sizeof d);
+                n += (size_t)sprintf(out + n, "%g", d);
+                break;
+            }
+            case 2:
+                if (val) {
+                    n += (size_t)zt_json_quote((const char*)val, out + n);
+                } else {
+                    n += (size_t)sprintf(out + n, "\"\"");
+                }
+                break;
+            case 3:
+                n += (size_t)sprintf(out + n, "%s", val ? "true" : "false");
+                break;
+            default:
+                n += (size_t)sprintf(out + n, "%lld", (long long)val);
+                break;
+        }
     }
     out[n++] = '}';
     out[n] = 0;
@@ -2035,4 +2058,48 @@ int64_t py_json_repr(int64_t j) {
         case ZJ_F64: return py_json_as_str(j);
         default: return py_json_dump(j);
     }
+}
+
+// ============================================================================
+// Dict value-type side table.
+//
+// A map slot is a raw 64-bit value with no type tag, so json.dumps(dict) could
+// not tell 2.5 from 2 or a string pointer from an integer. The compiler DOES
+// know each inserted value's static type, so at every DictInsert it records it
+// here; the dumper (and later the printer) look it up by (map, key). This
+// avoids changing the map layout, which the whole existing runtime depends on.
+// ============================================================================
+#define ZT_TAG_CAP 8192
+static int64_t g_tag_map[ZT_TAG_CAP];
+static int64_t g_tag_key[ZT_TAG_CAP];
+static int64_t g_tag_val[ZT_TAG_CAP];
+static uint64_t zt_tag_slot(int64_t map, int64_t key) {
+    uint64_t h = (uint64_t)map * 1099511628211ULL ^ (uint64_t)key;
+    return (h ^ (h >> 29)) & (ZT_TAG_CAP - 1);
+}
+void zeta_map_set_tag(int64_t map, int64_t key, int64_t tag) {
+    uint64_t i = zt_tag_slot(map, key);
+    for (int n = 0; n < ZT_TAG_CAP; n++) {
+        uint64_t j = (i + (uint64_t)n) & (ZT_TAG_CAP - 1);
+        if (g_tag_map[j] == 0) {
+            g_tag_map[j] = map ? map : 1;
+            g_tag_key[j] = key;
+            g_tag_val[j] = tag;
+            return;
+        }
+        if (g_tag_map[j] == (map ? map : 1) && g_tag_key[j] == key) {
+            g_tag_val[j] = tag;
+            return;
+        }
+    }
+}
+// 0 = unknown/int, 1 = f64, 2 = str, 3 = bool
+int64_t zeta_map_value_tag(int64_t map, int64_t key) {
+    uint64_t i = zt_tag_slot(map, key);
+    for (int n = 0; n < ZT_TAG_CAP; n++) {
+        uint64_t j = (i + (uint64_t)n) & (ZT_TAG_CAP - 1);
+        if (g_tag_map[j] == 0) return 0;
+        if (g_tag_map[j] == (map ? map : 1) && g_tag_key[j] == key) return g_tag_val[j];
+    }
+    return 0;
 }
