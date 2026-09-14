@@ -469,7 +469,8 @@ int64_t join(int64_t handle) {
 
 typedef struct {
     pthread_t th;
-    int64_t (*fn)(void);
+    int64_t (*fn)(int64_t);
+    int64_t arg;
     int64_t result;
     int started;
     int joined;
@@ -477,13 +478,29 @@ typedef struct {
 
 static void* py_thread_trampoline(void* arg) {
     py_thread_t* t = (py_thread_t*)arg;
-    t->result = t->fn ? t->fn() : 0;
+    if (t->fn) {
+        typedef int64_t (*fn_i64_t)(int64_t);
+        t->result = ((fn_i64_t)(uintptr_t)t->fn)(t->arg);
+    } else {
+        t->result = 0;
+    }
     return NULL;
 }
 
 int64_t py_threading_thread_new(int64_t fn) {
     py_thread_t* t = (py_thread_t*)GC_malloc(sizeof(py_thread_t));
-    t->fn = (int64_t (*)(void))fn;
+    t->fn = (int64_t (*)(int64_t))fn;
+    t->arg = 0;
+    t->result = 0;
+    t->started = 0;
+    t->joined = 0;
+    return (int64_t)t;
+}
+
+int64_t py_threading_thread_new_2(int64_t fn, int64_t arg) {
+    py_thread_t* t = (py_thread_t*)GC_malloc(sizeof(py_thread_t));
+    t->fn = (int64_t (*)(int64_t))fn;
+    t->arg = arg;
     t->result = 0;
     t->started = 0;
     t->joined = 0;

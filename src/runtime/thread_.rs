@@ -8,6 +8,16 @@ lazy_static::lazy_static! {
 
 static NEXT_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
 
+/// Call a Zeta function pointer (stored as i64) with one i64 arg.
+/// This exists so the C shim can avoid an architecture-sensitive cast.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zeta_call_fn_arg(fn_ptr: i64, arg: i64) -> i64 {
+    unsafe {
+        let func: extern "C" fn(i64) -> i64 = std::mem::transmute(fn_ptr);
+        func(arg)
+    }
+}
+
 /// Spawns a thread that calls func(arg) and returns the result.
 /// Note: this spawns a real OS thread via std::thread::spawn.
 #[unsafe(no_mangle)]
