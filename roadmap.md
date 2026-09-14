@@ -3,7 +3,7 @@
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
 > 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
-> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **53/53**；REasyQuant 语料解析 **38/38**
+> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **54/54**；REasyQuant 语料解析 **38/38**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -227,6 +227,26 @@ threading / concurrent.futures / multiprocessing / asyncio / time / math），�
 当前第三方 Python 库只有两条可用路径：① 注册表加条目 + C shim（如 `math`）；
 ② 把 `.py`/`.z` 放进搜索路径（用户模块，`ZETA_PYLIB` 可指向自定义目录，但需平铺单文件）。
 
+**JSON 静态和类型（路径 A，2026-09-14）**
+
+按约定选择「静态和类型」而非「动态类型」：`PyJson` 是带标签的句柄
+`[tag, payload]`，tag ∈ {null, int, f64, str, array, object}（`null` 就是 0，所以
+`is None` / `if not j` 天然成立）——与 serde_json::Value / Swift `enum JSON` 同形。
+
+- `json.loads` 现在是**真正的递归下降解析器**（数字按语法区分 int/f64、字符串转义含
+  `\uXXXX` → UTF-8、嵌套容器），返回 `PyJson`
+- `json.dumps(Json)` **递归且带类型**：嵌套 float/string 不再退化成位模式/指针
+  （实测 `{"name":"zeta","ratio":0.75,"ver":2,"nested":{"a":10},"tags":[1,2,3]}`）
+- **静态分发**：下标（`cfg["k"]`、`arr[0]`、嵌套 `cfg["nested"]["a"]`）、`len()`、
+  `int()/float()/str()`、`print()`（标量裸打、容器打 JSON）、`in`（对象键/数组元素/子串）
+  全部按 `PyJson` 类型静态分发，运行期按 tag 取值 —— **不是程序级的动态派发**
+- 顺带修 bug：`int(x)` 原先是个 stub（算出了正确的转换函数却没用，直接返回原值），
+  只在值本来就是 i64 时"碰巧"正确
+
+未做（明确记录）：通用容器（map/Vec 槽）仍无值类型标签，所以 `json.dumps(<字面量 dict>)`
+的值仍是整数化（有 warning）；`json.load`/`dump` 文件 API、迭代/`keys()`、注解驱动的
+`loads` 形态留待后续。
+
 **真实第三方库首次端到端跑通（2026-09-14）**
 
 `zorb install https://github.com/okunishinishi/python-stringcase.git` 装好的库，
@@ -282,7 +302,8 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
   未匹配名发 warning 并按位置传（2026-09-14 完成，t51）
 - [x] **P1 字符串下标与切片**：`s[i]`/`s[a:b]`/`s[:b]`/`s[a:]` 全部实现（2026-09-14 完成，t52）；
   参数类型推断（调用点证据）让未标注参数上的字符串操作正确分发（t53）
-- [ ] **P1 `json.loads`**：结果类型无法静态建模（应为 dict/list/标量），故**故意不入表**（链接期失败，不返回错值）
+- [x] **P1 `json.loads`**：以静态和类型 `PyJson`（tagged union）实现，真解析器 + 递归 dumps +
+  下标/len/int/float/str/print/in 静态分发（2026-09-14 完成，t54）；剩余：文件 API、迭代、容器值标签
 - [ ] P2 `re` 补齐：`finditer`/`subn`/`IGNORECASE` 等 flags、`\g<name>`、Pattern 对象的方法面
 - [ ] P2 库覆盖继续：`collections`/`itertools`/`random`/`pathlib`/`typing`/`functools`/`hashlib`
 - [ ] P2 `types` 推断继续：容器元素类型、参数类型推断（现在未标注参数= i64，`def f(s): s.upper()` 靠名字回退兜住）
