@@ -1078,6 +1078,102 @@ impl Resolver {
         }
     }
 
+    /// PY-A: static type of each module-level global. The module's statements
+    /// live in the synthesized `main`, so this scans every registered function
+    /// body for assignments to names that became module globals.
+    pub fn module_global_types(&self) -> HashMap<String, Type> {
+        let globals = self.module_globals.borrow().clone();
+        let aliases = self.py_module_aliases.borrow().clone();
+        let mut out: HashMap<String, Type> = HashMap::new();
+        fn walk(stmts: &[AstNode], globals: &std::collections::HashSet<String>,
+                aliases: &HashMap<String, String>, out: &mut HashMap<String, Type>) {
+            for s in stmts {
+                let (name, rhs) = match s {
+                    AstNode::Assign(lhs, rhs) => match &**lhs {
+                        AstNode::Var(n) => (n.clone(), Some(&**rhs)),
+                        _ => continue,
+                    },
+                    AstNode::Let { pattern, expr, .. } => match &**pattern {
+                        AstNode::Var(n) => (n.clone(), Some(&**expr)),
+                        _ => continue,
+                    },
+                    AstNode::Block { body } => {
+                        walk(body, globals, aliases, out);
+                        continue;
+                    }
+                    _ => continue,
+                };
+                if !globals.contains(&name) {
+                    continue;
+                }
+                let ty = match rhs {
+                    Some(AstNode::StringLit(_)) | Some(AstNode::FString { .. }) => Some(Type::Str),
+                    Some(AstNode::FloatLit(_)) => Some(Type::F64),
+                    Some(AstNode::Call { receiver, method, .. }) => {
+                        // Resolve `X.Y(...)` / `Y(...)` through the registry to
+                        // its declared result (handle tag or str).
+                        let member = match receiver {
+                            Some(recv) => {
+                                let mut parts: Vec<String> = Vec::new();
+                                let mut cur: &AstNode = recv;
+                                loop {
+                                    match cur {
+                                        AstNode::FieldAccess { base, field } => {
+                                            parts.push(field.clone());
+                                            cur = base;
+                                        }
+                                        AstNode::Var(root) => {
+                                            parts.push(root.clone());
+                                            break;
+                                        }
+                                        _ => break,
+                                    }
+                                }
+                                parts.reverse();
+                                // A receiver that is not a `name(.name)*` chain
+                                // (e.g. a call result) yields nothing — never
+                                // index an empty vector.
+                                if parts.is_empty() {
+                                    None
+                                } else {
+                                    let root = parts.remove(0);
+                                    let rest = if parts.is_empty() {
+                                        method.to_string()
+                                    } else {
+                                        format!("{}.{}", parts.join("."), method)
+                                    };
+                                    aliases.get(&root).map(|module| (module.clone(), rest))
+                                }
+                            }
+                            None => None,
+                        };
+                        member.and_then(|(module, mem)| {
+                            crate::middle::pylib::find_member(&module, &mem).map(|e| {
+                                match (e.handle.as_deref(), e.ret.as_str()) {
+                                    (Some(h), _) => Type::Named(h.to_string(), vec![]),
+                                    (None, "str") => Type::Str,
+                                    (None, "f64") => Type::F64,
+                                    _ => Type::I64,
+                                }
+                            })
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(t) = ty {
+                    out.insert(name, t);
+                }
+            }
+        }
+        let defs = self.registered_func_defs.borrow().clone();
+        for d in &defs {
+            if let AstNode::FuncDef { body, .. } = d {
+                walk(body, &globals, &aliases, &mut out);
+            }
+        }
+        out
+    }
+
     /// PY-A: parameter names per function, for keyword-argument binding.
     pub fn func_param_names(&self) -> HashMap<String, Vec<String>> {
         self.funcs
@@ -1362,6 +1458,7 @@ impl Resolver {
                 self.py_member_aliases.borrow().clone(),
             )
             .with_py_user_modules(self.py_user_modules.borrow().clone())
+            .with_module_global_types(self.module_global_types())
             .with_symbol_renames(self.module_renames_for(
                 match ast {
                     AstNode::FuncDef { name, .. } => name.as_str(),

@@ -232,3 +232,22 @@ W PyFile __exit__ py_file_exit args=1
 F json load py_json_load_file args=i64 ret=i64 handle=PyJson
 F json dump py_json_dump_file args=i64,i64 ret=i64
 X py_file_open args=i64,i64 ret=i64
+
+# ---- queue.Queue / threading Event, Semaphore, Timer (real blocking) ------
+M queue
+F queue Queue py_queue_new args= ret=i64 handle=PyQueue
+W PyQueue put py_queue_put args=2
+W PyQueue get py_queue_get args=1
+W PyQueue qsize py_queue_qsize args=1
+W PyQueue empty py_queue_empty args=1
+F threading Event py_threading_event_new args= ret=i64 handle=PyEvent
+W PyEvent set py_event_set args=1
+W PyEvent clear py_event_clear args=1
+W PyEvent is_set py_event_is_set args=1
+W PyEvent wait py_event_wait args=1
+F threading Semaphore py_threading_sem_new args=i64 ret=i64 handle=PySem
+W PySem acquire py_sem_acquire args=1
+W PySem release py_sem_release args=1
+F threading Timer py_threading_timer_new args=f64,i64 ret=i64 handle=PyTimer
+W PyTimer start py_timer_start args=1
+W PyTimer cancel py_timer_cancel args=1

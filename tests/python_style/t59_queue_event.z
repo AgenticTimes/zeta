@@ -1,0 +1,41 @@
+// PY-A: queue.Queue / threading.Event / Semaphore —— pthread mutex+condvar，
+//   阻塞是真的（消费者线程会在 cond_wait 里睡）。
+//   注：模块级句柄经 env 读取时必须保留类型标签，否则 `q.put(x)` 会退化成裸调用。
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: 1
+// expect: 1
+// expect: 1
+import queue
+import threading
+
+q = queue.Queue()
+
+def producer():
+    q.put(1)
+    q.put(2)
+    q.put(3)
+
+t = threading.Thread(producer)
+t.start()
+print(q.get())
+print(q.get())
+print(q.get())
+t.join()
+print(q.empty())
+
+e = threading.Event()
+
+def setter():
+    e.set()
+
+t2 = threading.Thread(setter)
+t2.start()
+e.wait()
+print(e.is_set())
+
+sem = threading.Semaphore(1)
+sem.acquire()
+sem.release()
+print(1)

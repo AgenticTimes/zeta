@@ -2349,3 +2349,192 @@ int64_t py_json_dump_file(int64_t j, int64_t h) {
     int64_t text = py_json_dump(j);
     return py_file_write(h, text);
 }
+
+// ============================================================================
+// PY-A concurrency primitives, batch 2: queue.Queue / threading.Event /
+// threading.Semaphore / threading.Timer. Built on pthread mutex + condvar, so
+// the blocking is real (a consumer thread genuinely sleeps in cond_wait).
+// ============================================================================
+typedef struct {
+    pthread_mutex_t m;
+    pthread_cond_t c;
+    int64_t* buf;
+    int64_t cap;
+    int64_t len;
+    int64_t head;
+} zt_queue_t;
+
+int64_t py_queue_new(void) {
+    zt_queue_t* q = (zt_queue_t*)GC_malloc(sizeof(zt_queue_t));
+    pthread_mutex_init(&q->m, NULL);
+    pthread_cond_init(&q->c, NULL);
+    q->cap = 16;
+    q->len = 0;
+    q->head = 0;
+    q->buf = (int64_t*)GC_malloc(sizeof(int64_t) * (size_t)q->cap);
+    return (int64_t)q;
+}
+// Python's put/get take an optional timeout/block flag; the compiler only
+// wires the blocking, no-argument form, so blocking is what callers get.
+void py_queue_put(int64_t h, int64_t v) {
+    if (!h) return;
+    zt_queue_t* q = (zt_queue_t*)h;
+    pthread_mutex_lock(&q->m);
+    if (q->len == q->cap) {
+        // ponytail: grow instead of blocking on a bound — Python's
+        // Queue(maxsize=0) is unbounded, which is the common case.
+        int64_t ncap = q->cap * 2;
+        int64_t* nb = (int64_t*)GC_malloc(sizeof(int64_t) * (size_t)ncap);
+        for (int64_t i = 0; i < q->len; i++) nb[i] = q->buf[(q->head + i) % q->cap];
+        q->buf = nb;
+        q->cap = ncap;
+        q->head = 0;
+    }
+    q->buf[(q->head + q->len) % q->cap] = v;
+    q->len += 1;
+    pthread_cond_broadcast(&q->c);
+    pthread_mutex_unlock(&q->m);
+}
+int64_t py_queue_get(int64_t h) {
+    if (!h) return 0;
+    zt_queue_t* q = (zt_queue_t*)h;
+    pthread_mutex_lock(&q->m);
+    while (q->len == 0) pthread_cond_wait(&q->c, &q->m);
+    int64_t v = q->buf[q->head];
+    q->head = (q->head + 1) % q->cap;
+    q->len -= 1;
+    pthread_cond_broadcast(&q->c);
+    pthread_mutex_unlock(&q->m);
+    return v;
+}
+int64_t py_queue_qsize(int64_t h) {
+    if (!h) return 0;
+    zt_queue_t* q = (zt_queue_t*)h;
+    pthread_mutex_lock(&q->m);
+    int64_t n = q->len;
+    pthread_mutex_unlock(&q->m);
+    return n;
+}
+int64_t py_queue_empty(int64_t h) { return py_queue_qsize(h) == 0; }
+
+// ---- threading.Event ----
+typedef struct {
+    pthread_mutex_t m;
+    pthread_cond_t c;
+    int64_t set;
+} zt_event_t;
+
+int64_t py_threading_event_new(void) {
+    zt_event_t* e = (zt_event_t*)GC_malloc(sizeof(zt_event_t));
+    pthread_mutex_init(&e->m, NULL);
+    pthread_cond_init(&e->c, NULL);
+    e->set = 0;
+    return (int64_t)e;
+}
+int64_t py_event_set(int64_t h) {
+    if (!h) return 0;
+    zt_event_t* e = (zt_event_t*)h;
+    pthread_mutex_lock(&e->m);
+    e->set = 1;
+    pthread_cond_broadcast(&e->c);
+    pthread_mutex_unlock(&e->m);
+    return 0;
+}
+int64_t py_event_clear(int64_t h) {
+    if (!h) return 0;
+    zt_event_t* e = (zt_event_t*)h;
+    pthread_mutex_lock(&e->m);
+    e->set = 0;
+    pthread_mutex_unlock(&e->m);
+    return 0;
+}
+int64_t py_event_is_set(int64_t h) {
+    if (!h) return 0;
+    zt_event_t* e = (zt_event_t*)h;
+    pthread_mutex_lock(&e->m);
+    int64_t s = e->set;
+    pthread_mutex_unlock(&e->m);
+    return s;
+}
+int64_t py_event_wait(int64_t h) {
+    if (!h) return 0;
+    zt_event_t* e = (zt_event_t*)h;
+    pthread_mutex_lock(&e->m);
+    while (!e->set) pthread_cond_wait(&e->c, &e->m);
+    pthread_mutex_unlock(&e->m);
+    return 1;
+}
+
+// ---- threading.Semaphore ----
+typedef struct {
+    pthread_mutex_t m;
+    pthread_cond_t c;
+    int64_t count;
+} zt_sem_t;
+
+int64_t py_threading_sem_new(int64_t count) {
+    zt_sem_t* s = (zt_sem_t*)GC_malloc(sizeof(zt_sem_t));
+    pthread_mutex_init(&s->m, NULL);
+    pthread_cond_init(&s->c, NULL);
+    s->count = count < 0 ? 0 : count;
+    return (int64_t)s;
+}
+int64_t py_sem_acquire(int64_t h) {
+    if (!h) return 0;
+    zt_sem_t* s = (zt_sem_t*)h;
+    pthread_mutex_lock(&s->m);
+    while (s->count <= 0) pthread_cond_wait(&s->c, &s->m);
+    s->count -= 1;
+    pthread_mutex_unlock(&s->m);
+    return 1;
+}
+int64_t py_sem_release(int64_t h) {
+    if (!h) return 0;
+    zt_sem_t* s = (zt_sem_t*)h;
+    pthread_mutex_lock(&s->m);
+    s->count += 1;
+    pthread_cond_broadcast(&s->c);
+    pthread_mutex_unlock(&s->m);
+    return 0;
+}
+
+// ---- threading.Timer(interval_seconds, fn) ----
+typedef struct {
+    pthread_t th;
+    int64_t fn;
+    int64_t active;
+    double secs;
+} zt_timer_t;
+
+static void* zt_timer_worker(void* arg) {
+    zt_timer_t* t = (zt_timer_t*)arg;
+    struct timespec ts;
+    ts.tv_sec = (time_t)t->secs;
+    ts.tv_nsec = (long)((t->secs - (double)ts.tv_sec) * 1e9);
+    nanosleep(&ts, NULL);
+    if (t->active) {
+        int64_t (*fp)(void) = (int64_t (*)(void))t->fn;
+        fp();
+    }
+    t->active = 0;
+    return NULL;
+}
+int64_t py_threading_timer_new(double secs, int64_t fn) {
+    zt_timer_t* t = (zt_timer_t*)GC_malloc(sizeof(zt_timer_t));
+    t->fn = fn;
+    t->active = 0;
+    t->secs = secs < 0 ? 0 : secs;
+    return (int64_t)t;
+}
+int64_t py_timer_start(int64_t h) {
+    if (!h) return -1;
+    zt_timer_t* t = (zt_timer_t*)h;
+    if (t->active) return -1;
+    t->active = 1;
+    return (int64_t)pthread_create(&t->th, NULL, zt_timer_worker, t);
+}
+int64_t py_timer_cancel(int64_t h) {
+    if (!h) return 0;
+    ((zt_timer_t*)h)->active = 0;
+    return 0;
+}

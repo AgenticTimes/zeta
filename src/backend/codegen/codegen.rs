@@ -836,6 +836,35 @@ impl<'ctx> LLVMCodegen<'ctx> {
             i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
+        for (name, arity) in [
+            ("py_queue_new", 0usize),
+            ("py_queue_get", 1),
+            ("py_queue_qsize", 1),
+            ("py_queue_empty", 1),
+            ("py_threading_event_new", 0),
+            ("py_event_set", 1),
+            ("py_event_clear", 1),
+            ("py_event_is_set", 1),
+            ("py_event_wait", 1),
+            ("py_threading_sem_new", 1),
+            ("py_sem_acquire", 1),
+            ("py_sem_release", 1),
+            ("py_timer_start", 1),
+            ("py_timer_cancel", 1),
+        ] {
+            let params: Vec<_> = (0..arity).map(|_| i64_type.into()).collect();
+            module.add_function(name, i64_type.fn_type(&params, false), Some(Linkage::External));
+        }
+        module.add_function(
+            "py_queue_put",
+            void_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "py_threading_timer_new",
+            i64_type.fn_type(&[context.f64_type().into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
         module.add_function(
             "py_file_open",
             i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),

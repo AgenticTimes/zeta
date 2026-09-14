@@ -73,6 +73,9 @@ pub struct MirGen {
     /// PY-A: bare module-internal name → mangled symbol, for the function
     /// currently being lowered.
     symbol_renames: HashMap<String, String>,
+    /// PY-A: static type of each module-level global, so env reads keep the
+    /// handle tag (`q = queue.Queue()` then `q.put(x)` inside a function).
+    module_global_types: HashMap<String, Type>,
     /// PY-A: set while lowering the replacement closure of `re.sub`, so its
     /// parameter is typed as a Match (`m.group(0)` must dispatch).
     re_repl_param: bool,
@@ -127,6 +130,7 @@ impl MirGen {
             py_member_aliases: HashMap::new(),
             py_user_modules: std::collections::HashSet::new(),
             symbol_renames: HashMap::new(),
+            module_global_types: HashMap::new(),
             re_repl_param: false,
             captured_vars: std::collections::HashMap::new(),
             async_state_ptr: None,
@@ -146,6 +150,12 @@ impl MirGen {
         consts: HashMap<String, crate::middle::ctfe::value::ConstValue>,
     ) -> Self {
         self.global_consts = consts;
+        self
+    }
+
+    /// PY-A: module-global name → static type (see the field docs).
+    pub fn with_module_global_types(mut self, types: HashMap<String, Type>) -> Self {
+        self.module_global_types = types;
         self
     }
 
@@ -322,11 +332,24 @@ impl MirGen {
         let AstNode::Var(name) = recv else {
             return None;
         };
-        let id = self.name_to_id.get(name)?;
-        match self.type_map.get(id) {
-            Some(Type::Named(n, _)) if n.starts_with("Py") => Some(n.clone()),
-            _ => None,
+        if let Some(id) = self.name_to_id.get(name) {
+            if let Some(Type::Named(n, _)) = self.type_map.get(id) {
+                if n.starts_with("Py") {
+                    return Some(n.clone());
+                }
+            }
+            return None;
         }
+        // A module-level global is read through the env, so it has no local
+        // slot — its type comes from the resolver's module-global table.
+        // Without this, `q = queue.Queue()` then `q.put(x)` in another function
+        // emitted a bare `put` call.
+        if let Some(Type::Named(n, _)) = self.module_global_types.get(name) {
+            if n.starts_with("Py") {
+                return Some(n.clone());
+            }
+        }
+        None
     }
 
     /// Pre-seed type declarations collected program-wide by the Resolver.
@@ -1859,7 +1882,14 @@ impl MirGen {
                         type_args: vec![],
                     });
                     self.exprs.insert(slot_id, MirExpr::Var(slot_id));
-                    self.type_map.insert(slot_id, Type::I64);
+                    // Keep the global's static type: an untyped env read made
+                    // `q.put(x)` a bare call, because the handle tag was lost.
+                    let ty = self
+                        .module_global_types
+                        .get(name)
+                        .cloned()
+                        .unwrap_or(Type::I64);
+                    self.type_map.insert(slot_id, ty);
                     return slot_id;
                 }
                 // PY-A V3: nonlocal name not bound locally — env read.
