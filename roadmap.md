@@ -3,7 +3,7 @@
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
 > 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
-> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **58/58**；REasyQuant 语料解析 **38/38**
+> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **59/59**；REasyQuant 语料解析 **38/38**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -261,6 +261,14 @@ threading / concurrent.futures / multiprocessing / asyncio / time / math），�
 （仅 Str/Named——F64 元素在槽里是裸位模式），因此 `for k in d.keys(): print(k)` 打印字符串而非指针。
 另修：JSON 布尔此前解析成 1/0，`loads("true")` dump 回来是 `1`；现新增 bool tag，回写为 `true`。
 
+**并发原语第二批（2026-09-14 续）**：`queue.Queue`（put/get/qsize/empty）、`threading.Event`
+（set/clear/is_set/wait）、`Semaphore`（acquire/release）、`Timer(seconds, fn)`（start/cancel）——
+全部基于 pthread mutex+condvar，**阻塞是真的**。支撑性修复：**模块级全局保留静态类型**
+（模块级句柄在函数内经 env 读取时值是裸 i64，`q = queue.Queue()` 后 `q.put(x)` 会退化成裸调用；
+现由 resolver 记录模块全局类型并在 env 读取与 `py_handle_of` 两处使用）——这同时修好了
+`cfg = json.loads(text)` 在函数内使用的情形。顺带：新增的模块全局扫描曾对空接收者链
+（`foo().bar()`）做下标访问导致编译器 panic（t25_containers），已加守卫。
+
 **文件对象 + json 文件 API（2026-09-14 续）**：`open(path[, mode])`（内建，mode 默认 "r"）返回 PyFile
 句柄；`read/readline/readlines/write/close/closed` + `__enter__`/`__exit__`（**`with open(...)` 现在走真
 上下文协议**，不再是无操作兜底）；`json.load(f)` / `json.dump(obj, f)` 复用同一套类型驱动序列化
@@ -345,8 +353,8 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
   （有 warning，但非真协议）；文件对象 `open()` 未实现，故 `with open(...)` 仍不可用
 - [ ] **P1 `Thread(target, args=...)`**：带参数目标函数未支持（`FuncAddr` 目前零参），
   真实代码里 `Thread(worker, args=(1,))` 很常见
-- [ ] **P2 `queue` 模块**：`Queue`/`LifoQueue`/`PriorityQueue` + `Empty`/`Full` 整块缺失，
-  是并发代码最常用的原语之一
+- [~] **P2 `queue` 模块**：`Queue` 的 `put/get/qsize/empty` **已完成**（pthread mutex+condvar，真阻塞）；
+  剩余 `LifoQueue`/`PriorityQueue`/`full`/`Empty`/`Full` 与 `get/put` 的 timeout 形式（W 表只支持一种 arity）
 - [ ] **P2 threading 补齐**：`Event`/`Semaphore`/`BoundedSemaphore`/`Barrier`/`Condition`/
   `Timer`/`local`/`enumerate`/`main_thread`；`Thread(daemon=)`、`Thread.name` 属性
 - [ ] **P2 futures 补齐**：`as_completed`/`wait`/`Future.exception`/`cancel`/
