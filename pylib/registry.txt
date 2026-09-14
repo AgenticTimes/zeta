@@ -210,4 +210,5 @@ X py_json_as_f64 args=i64 ret=f64
 X py_json_as_str args=i64 ret=str
 X py_json_print args=i64 ret=void
 X py_json_repr args=i64 ret=str
+X py_json_dumps_vec_typed args=i64,i64 ret=str
 X py_json_kind args=i64 ret=i64

@@ -1,0 +1,14 @@
+// PY-A: 列表元素类型（静态同质）驱动序列化 —— 元素类型由列表自身的静态类型决定，
+//   不需要逐元素侧表（下标会随 push/扩容移动，静态类型不会）。
+// expect: [1, 2, 3]
+// expect: [1.5, 2.5]
+// expect: ["a", "b"]
+// expect: [true, false]
+// expect: [1.5, 2.5]
+import json
+
+print(json.dumps([1, 2, 3]))
+print(json.dumps([1.5, 2.5]))
+print(json.dumps(["a", "b"]))
+print(json.dumps([True, False]))
+print([1.5, 2.5])

@@ -2103,3 +2103,44 @@ int64_t zeta_map_value_tag(int64_t map, int64_t key) {
     }
     return 0;
 }
+
+// Typed vector dumper: the element type is known STATICALLY (a list literal is
+// homogeneous), so the compiler passes its tag instead of a per-element side
+// table — indices move on realloc, the static type does not.
+// tag: 0 = int, 1 = f64, 2 = str, 3 = bool
+int64_t py_json_dumps_vec_typed(int64_t vec, int64_t tag) {
+    if (!vec) return (int64_t)zt_strdup("[]");
+    int64_t len = ((int64_t*)(vec - 16))[1];
+    size_t cap = 64, n = 0;
+    char* out = (char*)GC_malloc(cap);
+    out[n++] = '[';
+    for (int64_t i = 0; i < len; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        if (n + 64 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+        if (i) { out[n++] = ','; out[n++] = ' '; }
+        switch (tag) {
+            case 1: {
+                double d;
+                memcpy(&d, &v, sizeof d);
+                n += (size_t)sprintf(out + n, "%g", d);
+                break;
+            }
+            case 2:
+                if (v) {
+                    n += (size_t)zt_json_quote((const char*)v, out + n);
+                } else {
+                    n += (size_t)sprintf(out + n, "\"\"");
+                }
+                break;
+            case 3:
+                n += (size_t)sprintf(out + n, "%s", v ? "true" : "false");
+                break;
+            default:
+                n += (size_t)sprintf(out + n, "%lld", (long long)v);
+                break;
+        }
+    }
+    out[n++] = ']';
+    out[n] = 0;
+    return (int64_t)out;
+}

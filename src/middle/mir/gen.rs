@@ -2409,27 +2409,34 @@ impl MirGen {
                             Type::DynamicArray(_) | Type::Array(_, _) => "py_json_dumps_vec",
                             _ => "py_json_dumps_i64",
                         };
+                        // A list is homogeneous, so its element type decides
+                        // the serializer — no side table needed.
+                        let vec_elem_tag: Option<i64> = match &ty {
+                            Type::DynamicArray(e) | Type::Array(e, _) => Some(match **e {
+                                Type::F64 | Type::F32 => 1,
+                                Type::Str => 2,
+                                Type::Bool => 3,
+                                _ => 0,
+                            }),
+                            _ => None,
+                        };
+                        if let Some(tag) = vec_elem_tag {
+                            let tag_id = self.next_id();
+                            self.exprs.insert(tag_id, MirExpr::IntLit(tag));
+                            self.type_map.insert(tag_id, Type::I64);
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_json_dumps_vec_typed".to_string(),
+                                args: vec![arg_id, tag_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(id, Type::Str);
+                            return id;
+                        }
                         // dict values now carry a type tag recorded at insert
                         // time, so no warning is needed for maps.
-                        // Same limitation for vectors: elements are raw 64-bit
-                        // slots, so a float prints as its bit pattern and a
-                        // string as its pointer. Say so instead of emitting a
-                        // silently wrong document.
-                        if sym == "py_json_dumps_vec" {
-                            let elem_is_int = match &ty {
-                                Type::DynamicArray(e) | Type::Array(e, _) => {
-                                    matches!(**e, Type::I64 | Type::Bool)
-                                }
-                                _ => true,
-                            };
-                            if !elem_is_int {
-                                eprintln!(
-                                    "warning: PY-A: json.dumps(list) serializes elements as \
-                                     integers (V1: element type {:?} is not representable in a \
-                                     raw slot)", ty
-                                );
-                            }
-                        }
+
                         self.stmts.push(MirStmt::Call {
                             func: sym.to_string(),
                             args: vec![arg_id],
@@ -3322,6 +3329,38 @@ impl MirGen {
                         // A Json value prints by its tag (scalars bare,
                         // containers as JSON text) — converting to a string
                         // first keeps it on the existing print path.
+                        // A list prints by its (static) element type, Python
+                        // repr differs only in spacing/quoting.
+                        if let Some(tag) = match self.type_map.get(arg_id) {
+                            Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
+                                Some(match **e {
+                                    Type::F64 | Type::F32 => 1,
+                                    Type::Str => 2,
+                                    Type::Bool => 3,
+                                    _ => 0,
+                                })
+                            }
+                            _ => None,
+                        } {
+                            let sid = self.next_id();
+                            let tid = self.next_id();
+                            self.exprs.insert(tid, MirExpr::IntLit(tag));
+                            self.type_map.insert(tid, Type::I64);
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_json_dumps_vec_typed".to_string(),
+                                args: vec![*arg_id, tid],
+                                dest: sid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(sid, MirExpr::Var(sid));
+                            self.type_map.insert(sid, Type::Str);
+                            let f = if is_last { "println_str" } else { "print_str" };
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: f.to_string(),
+                                args: vec![sid],
+                            });
+                            continue;
+                        }
                         // A dict prints by its recorded value tags (Python's
                         // repr differs only in quote style).
                         if matches!(
