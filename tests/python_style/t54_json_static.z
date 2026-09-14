@@ -1,0 +1,29 @@
+// PY-A: JSON 静态和类型（tagged union）—— loads 返回 PyJson 句柄，
+//   下标/len/int/float/str/print/dumps 全部静态分发，运行期按 tag 取值。
+//   dumps 递归序列化：float 与字符串不再退化成位模式/指针。
+// expect: zeta
+// expect: 2
+// expect: 0.75
+// expect: 5
+// expect: 3
+// expect: 2
+// expect: 10
+// expect: 3
+// expect: {"name":"zeta","ratio":0.75,"ver":2,"nested":{"a":10},"tags":[1,2,3]}
+// expect: 1
+// expect: 1
+import json
+
+text = "{\"name\": \"zeta\", \"ver\": 2, \"ratio\": 0.75, \"tags\": [1, 2, 3], \"nested\": {\"a\": 10}}"
+cfg = json.loads(text)
+print(cfg["name"])
+print(cfg["ver"])
+print(cfg["ratio"])
+print(len(cfg))
+print(len(cfg["tags"]))
+print(cfg["tags"][1])
+print(cfg["nested"]["a"])
+print(int(cfg["ver"]) + 1)
+print(json.dumps(cfg))
+print(json.loads("null") == None)
+print("name" in cfg)

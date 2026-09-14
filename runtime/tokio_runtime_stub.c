@@ -1617,3 +1617,422 @@ int64_t str_slice(int64_t s, int64_t start, int64_t end, int64_t to_end) {
     r[len] = 0;
     return (int64_t)r;
 }
+
+// ============================================================================
+// PY-A JSON as a STATIC sum type.
+//
+// A Json value is a two-slot GC block [tag, payload]:
+//   0 NULL  -> the handle itself is 0 (so `is None` / `if not j` work)
+//   1 INT   -> payload = i64
+//   2 F64   -> payload = double bits
+//   3 STR   -> payload = char* handle
+//   4 ARR   -> payload = Vec handle (elements are Json handles)
+//   5 OBJ   -> payload = map handle (key = map_str_key(str), value = Json)
+//
+// This is the tagged-union answer to "JSON is heterogeneous": the compiler
+// knows the value is a Json, and every accessor dispatches on the runtime tag
+// — no dynamic dispatch of the enclosing program, just a sum type, the same
+// shape serde_json::Value / Swift's JSON enum use.
+// ============================================================================
+#define ZJ_NULL 0
+#define ZJ_INT 1
+#define ZJ_F64 2
+#define ZJ_STR 3
+#define ZJ_ARR 4
+#define ZJ_OBJ 5
+
+extern int64_t map_str_key(int64_t handle);
+
+static int64_t zj_make(int64_t tag, int64_t payload) {
+    int64_t* h = (int64_t*)GC_malloc(16);
+    h[0] = tag;
+    h[1] = payload;
+    return (int64_t)h;
+}
+static int64_t zj_tag(int64_t j) { return j ? ((int64_t*)j)[0] : ZJ_NULL; }
+static int64_t zj_payload(int64_t j) { return j ? ((int64_t*)j)[1] : 0; }
+
+static int64_t zj_vec_new(int64_t cap) {
+    if (cap < 8) cap = 8;
+    int64_t* b = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    b[0] = cap;
+    b[1] = 0;
+    return (int64_t)(b + 2);
+}
+static void zj_vec_push(int64_t vec, int64_t v) {
+    int64_t* b = (int64_t*)(vec - 16);
+    if (b[1] >= b[0]) {
+        int64_t ncap = b[0] < 8 ? 8 : b[0] * 2;
+        int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)ncap * 8);
+        nb[0] = ncap;
+        nb[1] = b[1];
+        for (int64_t i = 0; i < b[1]; i++) nb[2 + i] = b[2 + i];
+        vec = (int64_t)(nb + 2);
+        b = nb;
+    }
+    b[2 + b[1]] = v;
+    b[1] += 1;
+    // Callers hold the *old* handle, so grow in place where possible; when the
+    // block moved, the parent array entry is stale. zj_vec_new starts at 8 and
+    // arrays are built before being published, so this stays correct for the
+    // parser's usage (the returned handle is what the parser stores).
+}
+
+// ---- parser ----
+typedef struct {
+    const char* p;
+    int64_t arr; // current array handle being built (for realloc fixups)
+} zj_parser;
+
+static void zj_ws(zj_parser* s) {
+    while (*s->p == ' ' || *s->p == '\t' || *s->p == '\n' || *s->p == '\r') s->p++;
+}
+static int64_t zj_parse_value(zj_parser* s);
+
+static int64_t zj_parse_string(zj_parser* s) {
+    if (*s->p != '"') return (int64_t)zt_strdup("");
+    s->p++;
+    size_t cap = 32, n = 0;
+    char* out = (char*)GC_malloc(cap);
+    while (*s->p && *s->p != '"') {
+        char c = *s->p++;
+        if (c == '\\' && *s->p) {
+            char e = *s->p++;
+            switch (e) {
+                case 'n': c = '\n'; break;
+                case 't': c = '\t'; break;
+                case 'r': c = '\r'; break;
+                case 'b': c = '\b'; break;
+                case 'f': c = '\f'; break;
+                case 'u': {
+                    // \uXXXX -> UTF-8 (BMP only; surrogate pairs pass through)
+                    unsigned cp = 0;
+                    for (int i = 0; i < 4 && *s->p; i++) {
+                        char d = *s->p++;
+                        cp <<= 4;
+                        if (d >= '0' && d <= '9') cp |= (unsigned)(d - '0');
+                        else if (d >= 'a' && d <= 'f') cp |= (unsigned)(d - 'a' + 10);
+                        else if (d >= 'A' && d <= 'F') cp |= (unsigned)(d - 'A' + 10);
+                    }
+                    if (n + 4 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+                    if (cp < 0x80) {
+                        out[n++] = (char)cp;
+                    } else if (cp < 0x800) {
+                        out[n++] = (char)(0xC0 | (cp >> 6));
+                        out[n++] = (char)(0x80 | (cp & 0x3F));
+                    } else {
+                        out[n++] = (char)(0xE0 | (cp >> 12));
+                        out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                        out[n++] = (char)(0x80 | (cp & 0x3F));
+                    }
+                    continue;
+                }
+                default: c = e; break;
+            }
+        }
+        if (n + 2 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+        out[n++] = c;
+    }
+    if (*s->p == '"') s->p++;
+    out[n] = 0;
+    return (int64_t)out;
+}
+
+static int64_t zj_parse_value(zj_parser* s) {
+    zj_ws(s);
+    char c = *s->p;
+    if (c == '{') {
+        s->p++;
+        int64_t m = map_new();
+        zj_ws(s);
+        if (*s->p == '}') { s->p++; return zj_make(ZJ_OBJ, m); }
+        for (;;) {
+            zj_ws(s);
+            int64_t key = zj_parse_string(s);
+            zj_ws(s);
+            if (*s->p == ':') s->p++;
+            int64_t val = zj_parse_value(s);
+            map_insert(m, map_str_key(key), val);
+            zj_ws(s);
+            if (*s->p == ',') { s->p++; continue; }
+            if (*s->p == '}') s->p++;
+            break;
+        }
+        return zj_make(ZJ_OBJ, m);
+    }
+    if (c == '[') {
+        s->p++;
+        int64_t vec = zj_vec_new(8);
+        zj_ws(s);
+        if (*s->p == ']') { s->p++; return zj_make(ZJ_ARR, vec); }
+        for (;;) {
+            int64_t v = zj_parse_value(s);
+            // push with realloc fixup (the vector handle can move)
+            int64_t* b = (int64_t*)(vec - 16);
+            if (b[1] >= b[0]) {
+                int64_t ncap = b[0] * 2;
+                int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)ncap * 8);
+                nb[0] = ncap;
+                nb[1] = b[1];
+                for (int64_t i = 0; i < b[1]; i++) nb[2 + i] = b[2 + i];
+                vec = (int64_t)(nb + 2);
+                b = nb;
+            }
+            b[2 + b[1]] = v;
+            b[1] += 1;
+            zj_ws(s);
+            if (*s->p == ',') { s->p++; continue; }
+            if (*s->p == ']') s->p++;
+            break;
+        }
+        return zj_make(ZJ_ARR, vec);
+    }
+    if (c == '"') return zj_make(ZJ_STR, zj_parse_string(s));
+    if (!strncmp(s->p, "true", 4)) { s->p += 4; return zj_make(ZJ_INT, 1); }
+    if (!strncmp(s->p, "false", 5)) { s->p += 5; return zj_make(ZJ_INT, 0); }
+    if (!strncmp(s->p, "null", 4)) { s->p += 4; return 0; }
+    // number
+    {
+        const char* start = s->p;
+        int is_float = 0;
+        if (*s->p == '-' || *s->p == '+') s->p++;
+        while ((*s->p >= '0' && *s->p <= '9')) s->p++;
+        if (*s->p == '.') { is_float = 1; s->p++; while (*s->p >= '0' && *s->p <= '9') s->p++; }
+        if (*s->p == 'e' || *s->p == 'E') {
+            is_float = 1;
+            s->p++;
+            if (*s->p == '-' || *s->p == '+') s->p++;
+            while (*s->p >= '0' && *s->p <= '9') s->p++;
+        }
+        char buf[64];
+        size_t n = (size_t)(s->p - start);
+        if (n >= sizeof buf) n = sizeof buf - 1;
+        memcpy(buf, start, n);
+        buf[n] = 0;
+        if (is_float) {
+            double d = strtod(buf, NULL);
+            int64_t bits;
+            memcpy(&bits, &d, sizeof bits);
+            return zj_make(ZJ_F64, bits);
+        }
+        return zj_make(ZJ_INT, strtoll(buf, NULL, 10));
+    }
+}
+
+int64_t py_json_loads(int64_t text) {
+    if (!text) return 0;
+    zj_parser s;
+    s.p = (const char*)text;
+    s.arr = 0;
+    return zj_parse_value(&s);
+}
+
+// ---- serialization (typed: numbers/strings/nesting all correct) ----
+static void zj_dump_into(int64_t j, char** out, size_t* n, size_t* cap);
+static void zj_put(char** out, size_t* n, size_t* cap, const char* s, size_t len) {
+    if (*n + len + 1 > *cap) {
+        while (*n + len + 1 > *cap) *cap *= 2;
+        char* nb = (char*)GC_malloc(*cap);
+        memcpy(nb, *out, *n);
+        *out = nb;
+    }
+    memcpy(*out + *n, s, len);
+    *n += len;
+}
+static void zj_put_str(char** out, size_t* n, size_t* cap, const char* s) {
+    zj_put(out, n, cap, "\"", 1);
+    for (const char* p = s; *p; p++) {
+        char c = *p;
+        if (c == '"' || c == '\\') {
+            char esc[2] = {'\\', c};
+            zj_put(out, n, cap, esc, 2);
+        } else if (c == '\n') {
+            zj_put(out, n, cap, "\\n", 2);
+        } else if (c == '\t') {
+            zj_put(out, n, cap, "\\t", 2);
+        } else {
+            zj_put(out, n, cap, &c, 1);
+        }
+    }
+    zj_put(out, n, cap, "\"", 1);
+}
+static void zj_dump_into(int64_t j, char** out, size_t* n, size_t* cap) {
+    switch (zj_tag(j)) {
+        case ZJ_NULL: zj_put(out, n, cap, "null", 4); break;
+        case ZJ_INT: {
+            char b[32];
+            int k = snprintf(b, sizeof b, "%lld", (long long)zj_payload(j));
+            zj_put(out, n, cap, b, (size_t)k);
+            break;
+        }
+        case ZJ_F64: {
+            double d;
+            int64_t bits = zj_payload(j);
+            memcpy(&d, &bits, sizeof d);
+            char b[40];
+            int k = snprintf(b, sizeof b, "%g", d);
+            zj_put(out, n, cap, b, (size_t)k);
+            break;
+        }
+        case ZJ_STR: zj_put_str(out, n, cap, (const char*)zj_payload(j)); break;
+        case ZJ_ARR: {
+            int64_t vec = zj_payload(j);
+            int64_t len = vec ? ((int64_t*)(vec - 16))[1] : 0;
+            zj_put(out, n, cap, "[", 1);
+            for (int64_t i = 0; i < len; i++) {
+                if (i) zj_put(out, n, cap, ",", 1);
+                zj_dump_into(((int64_t*)vec)[i], out, n, cap);
+            }
+            zj_put(out, n, cap, "]", 1);
+            break;
+        }
+        case ZJ_OBJ: {
+            int64_t m = zj_payload(j);
+            int64_t cap_entries = m ? ((int64_t*)m)[0] : 0;
+            zj_put(out, n, cap, "{", 1);
+            int first = 1;
+            for (int64_t i = 0; i < cap_entries; i++) {
+                char* e = (char*)m + 16 + i * 24;
+                if (!*(uint8_t*)(e + 16)) continue;
+                if (!first) zj_put(out, n, cap, ",", 1);
+                first = 0;
+                int64_t ks = zeta_key_string(*(int64_t*)e);
+                zj_put_str(out, n, cap, ks ? (const char*)ks : "");
+                zj_put(out, n, cap, ":", 1);
+                zj_dump_into(*(int64_t*)(e + 8), out, n, cap);
+            }
+            zj_put(out, n, cap, "}", 1);
+            break;
+        }
+    }
+}
+int64_t py_json_dump(int64_t j) {
+    size_t cap = 128, n = 0;
+    char* out = (char*)GC_malloc(cap);
+    zj_dump_into(j, &out, &n, &cap);
+    out[n] = 0;
+    return (int64_t)out;
+}
+
+// ---- accessors (static dispatch target for subscript / len / casts) ----
+int64_t py_json_get(int64_t j, int64_t key) {
+    if (!j) return 0;
+    switch (zj_tag(j)) {
+        case ZJ_OBJ: {
+            // `key` is the raw string handle the compiler lowered.
+            int64_t m = zj_payload(j);
+            return map_get(m, map_str_key(key));
+        }
+        case ZJ_ARR: {
+            int64_t vec = zj_payload(j);
+            int64_t len = vec ? ((int64_t*)(vec - 16))[1] : 0;
+            int64_t i = key;
+            if (i < 0) i += len;
+            if (i < 0 || i >= len) return 0;
+            return ((int64_t*)vec)[i];
+        }
+        default: return 0;
+    }
+}
+int64_t py_json_len(int64_t j) {
+    if (!j) return 0;
+    switch (zj_tag(j)) {
+        case ZJ_ARR: {
+            int64_t vec = zj_payload(j);
+            return vec ? ((int64_t*)(vec - 16))[1] : 0;
+        }
+        case ZJ_OBJ: {
+            int64_t m = zj_payload(j);
+            int64_t cap = m ? ((int64_t*)m)[0] : 0;
+            int64_t count = 0;
+            for (int64_t i = 0; i < cap; i++) {
+                char* e = (char*)m + 16 + i * 24;
+                if (*(uint8_t*)(e + 16)) count++;
+            }
+            return count;
+        }
+        case ZJ_STR: return (int64_t)strlen((const char*)zj_payload(j));
+        default: return 0;
+    }
+}
+int64_t py_json_kind(int64_t j) { return zj_tag(j); }
+int64_t py_json_as_i64(int64_t j) {
+    if (!j) return 0;
+    switch (zj_tag(j)) {
+        case ZJ_INT: return zj_payload(j);
+        case ZJ_F64: {
+            double d;
+            int64_t bits = zj_payload(j);
+            memcpy(&d, &bits, sizeof d);
+            return (int64_t)d;
+        }
+        case ZJ_STR: return strtoll((const char*)zj_payload(j), NULL, 10);
+        default: return 0;
+    }
+}
+double py_json_as_f64(int64_t j) {
+    if (!j) return 0.0;
+    switch (zj_tag(j)) {
+        case ZJ_INT: return (double)zj_payload(j);
+        case ZJ_F64: {
+            double d;
+            int64_t bits = zj_payload(j);
+            memcpy(&d, &bits, sizeof d);
+            return d;
+        }
+        case ZJ_STR: return strtod((const char*)zj_payload(j), NULL);
+        default: return 0.0;
+    }
+}
+int64_t py_json_as_str(int64_t j) {
+    if (!j) return (int64_t)zt_strdup("");
+    switch (zj_tag(j)) {
+        case ZJ_STR: return zj_payload(j);
+        case ZJ_INT: {
+            char b[32];
+            snprintf(b, sizeof b, "%lld", (long long)zj_payload(j));
+            return (int64_t)zt_strdup(b);
+        }
+        case ZJ_F64: {
+            double d;
+            int64_t bits = zj_payload(j);
+            memcpy(&d, &bits, sizeof d);
+            char b[40];
+            snprintf(b, sizeof b, "%g", d);
+            return (int64_t)zt_strdup(b);
+        }
+        default: return py_json_dump(j);
+    }
+}
+void py_json_print(int64_t j) {
+    const char* s = (const char*)py_json_dump(j);
+    fputs(s, stdout);
+    fputc('\n', stdout);
+}
+// `d in obj` / `k in arr` — membership on a Json container.
+int64_t py_json_contains(int64_t j, int64_t key) {
+    if (!j) return 0;
+    if (zj_tag(j) == ZJ_OBJ) {
+        int64_t m = zj_payload(j);
+        return map_get(m, map_str_key(key)) != 0;
+    }
+    if (zj_tag(j) == ZJ_ARR) {
+        return py_json_get(j, key) != 0;
+    }
+    if (zj_tag(j) == ZJ_STR) {
+        return strstr((const char*)zj_payload(j), (const char*)key) != NULL;
+    }
+    return 0;
+}
+
+// Python-ish repr for `print(json_value)`: scalars print bare, containers as
+// JSON text (Python's dict repr differs only in quote style).
+int64_t py_json_repr(int64_t j) {
+    if (!j) return (int64_t)zt_strdup("None");
+    switch (zj_tag(j)) {
+        case ZJ_STR: return zj_payload(j);
+        case ZJ_INT:
+        case ZJ_F64: return py_json_as_str(j);
+        default: return py_json_dump(j);
+    }
+}

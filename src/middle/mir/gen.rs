@@ -2403,6 +2403,9 @@ impl MirGen {
                             Type::F64 => "py_json_dumps_f64",
                             Type::Bool => "py_json_dumps_bool",
                             Type::Named(n, _) if n == "map" => "py_json_dumps_map",
+                            // A Json value carries its own types: dump it
+                            // recursively, no guessing and no warning.
+                            Type::Named(n, _) if n == "PyJson" => "py_json_dump",
                             Type::DynamicArray(_) | Type::Array(_, _) => "py_json_dumps_vec",
                             _ => "py_json_dumps_i64",
                         };
@@ -2884,6 +2887,15 @@ impl MirGen {
                                 type_args: vec![],
                             });
                         }
+                        Some(Type::Named(n, _)) if n == "PyJson" => {
+                            // Json length by tag: array/object/string.
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_json_len".to_string(),
+                                args: vec![arg_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                        }
                         Some(Type::DynamicArray(_)) => {
                             self.stmts.push(MirStmt::Call {
                                 func: "vec_len".to_string(),
@@ -3095,20 +3107,33 @@ impl MirGen {
                     let lowered_args: Option<Vec<u32>> = match method.as_str() {
                         "list" if argc == 1 => Some(vec![self.lower_expr(&args[0])]),
                         "int" if argc == 1 => {
+                            // This used to compute the right conversion
+                            // function and then return the ARGUMENT unchanged
+                            // (f was never emitted), so int(x) only worked
+                            // where the value already was an i64.
                             let a = self.lower_expr(&args[0]);
                             let f = match self.type_map.get(&a).cloned() {
                                 Some(Type::Str) => "zeta_int_str",
                                 Some(Type::F64) | Some(Type::F32) => "zeta_int_f64",
+                                Some(Type::Named(n, _)) if n == "PyJson" => "py_json_as_i64",
                                 _ => "zeta_int_i64",
                             };
-                            Some(vec![])
-                                .map(|_: Vec<u32>| a) // keep arg
-                                .map(|a| vec![a])
+                            let nid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: f.to_string(),
+                                args: vec![a],
+                                dest: nid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(nid, MirExpr::Var(nid));
+                            self.type_map.insert(nid, Type::I64);
+                            Some(vec![nid])
                         }
                         "float" if argc == 1 => {
                             let a = self.lower_expr(&args[0]);
                             let f = match self.type_map.get(&a).cloned() {
                                 Some(Type::F64) | Some(Type::F32) => "zeta_float_f64",
+                                Some(Type::Named(n, _)) if n == "PyJson" => "py_json_as_f64",
                                 _ => "zeta_float_i64",
                             };
                             let nid = self.next_id();
@@ -3248,6 +3273,24 @@ impl MirGen {
                 // PY-A: Python `str(x)` — convert any value to its string form
                 if method == "str" && receiver.is_none() && args.len() == 1 {
                     let arg_id = self.lower_expr(&args[0]);
+                    // A Json value knows its own type: stringify by tag.
+                    if matches!(
+                        self.type_map.get(&arg_id),
+                        Some(Type::Named(n, _)) if n == "PyJson"
+                    ) {
+                        let nid = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_json_as_str".to_string(),
+                            args: vec![arg_id],
+                            dest: nid,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(nid, MirExpr::Var(nid));
+                        self.type_map.insert(nid, Type::Str);
+                        self.exprs.insert(id, MirExpr::Var(nid));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
                     let nid = self.lower_to_string(arg_id);
                     self.exprs.insert(id, MirExpr::Var(nid));
                     let ty = self.type_map.get(&nid).cloned().unwrap_or(Type::Str);
@@ -3280,7 +3323,27 @@ impl MirGen {
                             });
                         }
                         let is_last = i + 1 == n;
-                        let func = match self.type_map.get(arg_id) {
+                        // A Json value prints by its tag (scalars bare,
+                        // containers as JSON text) — converting to a string
+                        // first keeps it on the existing print path.
+                        let printed_id = if matches!(
+                            self.type_map.get(arg_id),
+                            Some(Type::Named(name, _)) if name == "PyJson"
+                        ) {
+                            let sid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_json_repr".to_string(),
+                                args: vec![*arg_id],
+                                dest: sid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(sid, MirExpr::Var(sid));
+                            self.type_map.insert(sid, Type::Str);
+                            sid
+                        } else {
+                            *arg_id
+                        };
+                        let func = match self.type_map.get(&printed_id) {
                             Some(Type::Str) => {
                                 if is_last { "println_str" } else { "print_str" }
                             }
@@ -3293,7 +3356,7 @@ impl MirGen {
                         };
                         self.stmts.push(MirStmt::VoidCall {
                             func: func.to_string(),
-                            args: vec![*arg_id],
+                            args: vec![printed_id],
                         });
                     }
                     let unit_id = self.next_id();
@@ -5245,6 +5308,22 @@ impl MirGen {
                 // Also check source_types for function params with array types
                 let source_ty = self.source_types.get(&bid).cloned().unwrap_or_default();
                 let is_array_param = source_ty.starts_with("[") || source_ty.starts_with("*mut [");
+                if let Type::Named(n, _) = &base_ty {
+                    if n == "PyJson" {
+                        // `cfg["k"]` / `arr[0]`: the runtime dispatches on the
+                        // value's tag (object vs array).
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_json_get".to_string(),
+                            args: vec![bid, iid],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map
+                            .insert(id, Type::Named("PyJson".to_string(), vec![]));
+                        return id;
+                    }
+                }
                 if let Type::Str = base_ty {
                     // Python `s[i]` on a string yields a 1-character string.
                     self.stmts.push(MirStmt::Call {

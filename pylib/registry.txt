@@ -194,3 +194,20 @@ W PyMatch group py_re_group args=2 ret=str
 W PyMatch start py_re_start args=1
 W PyMatch end py_re_end args=1
 X py_re_sub_call args=i64,i64,i64 ret=str
+
+# ---- json as a STATIC sum type (tagged union: null/int/f64/str/arr/obj) -----
+# `loads` returns a PyJson handle whatever the document contains; indexing,
+# len(), int()/float()/str() and print dispatch statically on that type and
+# the runtime dispatches on the tag. This is the serde_json::Value shape, not
+# dynamic typing.
+F json loads py_json_loads args=i64 ret=i64 handle=PyJson
+W PyJson __contains__ py_json_contains args=2
+X py_json_dump args=i64 ret=str
+X py_json_len args=i64 ret=i64
+X py_json_get args=i64,i64 ret=i64
+X py_json_as_i64 args=i64 ret=i64
+X py_json_as_f64 args=i64 ret=f64
+X py_json_as_str args=i64 ret=str
+X py_json_print args=i64 ret=void
+X py_json_repr args=i64 ret=str
+X py_json_kind args=i64 ret=i64
