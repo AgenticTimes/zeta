@@ -332,6 +332,15 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 3. **闭包不继承模块 rename map**：模块内 `lambda m: lowercase(m.group(0))` 里的 `lowercase` 未加前缀 → 链接失败
 4. **`from X import f` 返回值硬编码 i64**
 
+**2026-09-15 批次顺带修掉的 fail-open（静默丢代码 / 错值）**
+1. **`from X import y` 不跑模块 init**（`25acdb0d`）：成员读模块级状态读到未初始化全局（`total()` 得 1 而非 6）
+2. **`@dataclass` 处解析中止**（`6befdec0`）：类与其后**所有**语句被丢弃 → 合成 `__init__` 后修复
+3. **注解赋值 `x: int = 5` 解析中止**（`6d11cd24`）：语句只吃掉 `x`，余下 `: int = 5` 无法解析 → 本语句及后续全部丢失
+4. **Zeta `var x: T = v` 声明从未被解析**（`6d11cd24`）：`var` 当裸表达式，随后 `x: T = v` 中止所在块
+5. **CTFE 后处理无条件删除所有 `comptime fn`**（`6d11cd24`）：假定调用点已全部内联，但数组返回值的 comptime 函数无法物化常量 → 运行期调用悬空（`generate_residues` 未定义）。现已保留数组返回的 comptime 函数；`test_actual_issues` 此前"通过"实为整个函数体被丢弃
+6. **多参 `Thread` 把 tuple 句柄当首参**（`c49e4ff8`）：静默垃圾值 → 合成解包适配器
+7. **f64 线程参数位模式**（`5968d6cc`）：无 MIR bitcast 原语，改为 fail-loud 警告
+
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
   未匹配名发 warning 并按位置传（2026-09-14 完成，t51）
