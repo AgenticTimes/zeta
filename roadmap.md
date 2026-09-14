@@ -341,7 +341,7 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
   下标/len/int/float/str/print/in 静态分发（2026-09-14 完成，t54）；剩余：文件 API、迭代、容器值标签
 - [ ] P2 `re` 补齐：`finditer`/`subn`/`IGNORECASE` 等 flags、`\g<name>`、Pattern 对象的方法面
 - [~] P2 库覆盖：`random`/`itertools`/`collections` **已完成**（2026-09-14，t60/t61）；
-  `collections` 缺 `most_common`（需 pair/tuple）与 `defaultdict(list/set)`；仍缺 `pathlib`/`typing`/`functools`/`hashlib`
+  `collections` 缺 `most_common`（需 pair/tuple）与 `defaultdict(list/set)`；`typing`/`warnings` 已接入；仍缺 `pathlib`/`functools`/`hashlib`/`dataclasses`
 - [ ] P2 `types` 推断继续：容器元素类型、参数类型推断（现在未标注参数= i64，`def f(s): s.upper()` 靠名字回退兜住）
 
 **缺口清单（2026-09-14 复核）** —— 未做项一律保持 fail-loud（链接期失败或 warning），
@@ -370,7 +370,9 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 - [x] `json` 全套（loads/dumps/load/dump/get/keys/values、嵌套、类型正确）
 - [x] 文件对象 `open/read/readline(s)/write/close/closed`（t58）
 - [~] `collections` 剩余：`most_common`（需 pair/tuple）、`defaultdict(list/set)`
-- [ ] `pathlib` / `typing` / `functools` / `hashlib`
+- [x] `typing`（注解专用 no-op 模块，`1914474c`，t66）、`warnings`（warn 真打 stderr，过滤器 no-op，`80867154`，t67）
+- [ ] `pathlib` / `functools` / `hashlib`
+- [ ] `dataclasses`（`@dataclass` → 按字段注解合成 `__init__`；当前 `P(1,2)` **静默无输出**，属 fail-open，优先修）
 - [ ] `re` 补齐：`finditer`/`subn`/`IGNORECASE` 等 flags、`\g<name>`、`Pattern` 方法面
 - [ ] threading 补齐：`BoundedSemaphore`/`Barrier`/`Condition`/`local`/`enumerate`/`main_thread`、
   `Thread(daemon=)`、`Thread.name`
