@@ -1,0 +1,20 @@
+// PY-A: 自定义上下文协议 —— 用户 class 的 __enter__/__exit__ 被真正调用
+//   （此前非 shim 类型落到 identity 兜底：enter/exit 都是 no-op，静默不生效）
+// expect: 1
+// expect: 6
+class Counter:
+    def __init__(self):
+        self.n = 0
+
+    def __enter__(self):
+        self.n = self.n + 1
+        return 0
+
+    def __exit__(self):
+        self.n = self.n + 5
+        return 0
+
+c = Counter()
+with c:
+    print(c.n)
+print(c.n)

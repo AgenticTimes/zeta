@@ -2600,10 +2600,30 @@ impl MirGen {
                     } else {
                         "__enter__"
                     };
-                    let routed = self
-                        .py_handle_of(&args[0])
-                        .and_then(|tag| crate::middle::pylib::method_symbol(&tag, proto))
-                        .map(|(sym, _)| sym);
+                    let recv_tag = self.py_handle_of(&args[0]);
+                    let arg_id = self.lower_expr(&args[0]);
+                    // Known Py* handle → registry shim (e.g. PyLock → acquire/
+                    // release). Otherwise dispatch to a USER-defined
+                    // `__enter__`/`__exit__` on the receiver's type (Python
+                    // context protocol) — `class C: def __enter__(self): ...`.
+                    // Only a type with neither falls back to identity + warning.
+                    let routed: Option<String> = match &recv_tag {
+                        Some(tag) => crate::middle::pylib::method_symbol(tag, proto)
+                            .map(|(sym, _)| sym.to_string()),
+                        None => match self.type_map.get(&arg_id) {
+                            Some(Type::Named(tn, _)) => {
+                                let qual = format!("{}::{}", tn, proto);
+                                if self.func_ret_types.contains_key(&qual) {
+                                    Some(qual)
+                                } else if self.func_ret_types.contains_key(proto) {
+                                    Some(proto.to_string())
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        },
+                    };
                     let symbol = match routed {
                         Some(sym) => sym,
                         None => {
@@ -2611,13 +2631,11 @@ impl MirGen {
                                 "warning: PY-A: `with` on a value with no known context \
                                  protocol — enter/exit are no-ops"
                             );
-                            "zeta_identity1"
+                            "zeta_identity1".to_string()
                         }
                     };
-                    let recv_tag = self.py_handle_of(&args[0]);
-                    let arg_id = self.lower_expr(&args[0]);
                     self.stmts.push(MirStmt::Call {
-                        func: symbol.to_string(),
+                        func: symbol,
                         args: vec![arg_id],
                         dest: id,
                         type_args: vec![],
