@@ -875,6 +875,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
             i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
             Some(Linkage::External),
         );
+        for (name, arity) in [("zeta_map_len", 1usize), ("py_map_contains", 2)] {
+            let params: Vec<_> = (0..arity).map(|_| i64_type.into()).collect();
+            module.add_function(name, i64_type.fn_type(&params, false), Some(Linkage::External));
+        }
         module.add_function(
             "zeta_map_set_tag",
             void_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),

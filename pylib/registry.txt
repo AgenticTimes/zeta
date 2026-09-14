@@ -270,3 +270,10 @@ X py_itertools_repeat args=i64,i64 ret=i64
 X py_itertools_islice args=i64,i64,i64 ret=i64
 X py_itertools_count args=i64,i64 ret=i64
 X py_random_shuffle args=i64 ret=i64
+
+# ---- collections ----------------------------------------------------------
+M collections
+F collections Counter py_collections_counter_new args=i64 ret=i64 handle=map
+F collections defaultdict py_collections_defaultdict args=i64 ret=i64 handle=map
+X zeta_map_len args=i64 ret=i64
+X py_map_contains args=i64,i64 ret=i64

@@ -1,0 +1,30 @@
+// PY-A: collections.Counter / defaultdict —— Counter 返回普通 map（元素→计数），
+//   于是下标、in、len、json.dumps 都走既有 map 路径。
+//   顺带修：`d[k] = v` 此前**静默无操作**（dict 项写入没接线，读回 0）。
+// expect: 3
+// expect: 2
+// expect: 1
+// expect: 3
+// expect: 1
+// expect: 0
+// expect: 5
+// expect: 1
+// expect: 7
+import collections
+
+c = collections.Counter([1, 2, 2, 3, 3, 3])
+print(c[3])
+print(c[2])
+print(c[1])
+print(len(c))
+print(2 in c)
+print(99 in c)
+
+d = collections.defaultdict(0)
+d["x"] = d["x"] + 5
+print(d["x"])
+print(len(d))
+
+plain = {"a": 1}
+plain["b"] = 7
+print(plain["b"])

@@ -2631,3 +2631,42 @@ int64_t py_itertools_count(int64_t src, int64_t value) {
     }
     return n;
 }
+
+// ============================================================================
+// PY-A collections: Counter / defaultdict.
+// Counter(iterable) builds a plain map element->count, so indexing, `in`,
+// len and json.dumps all work through the existing map paths. most_common is
+// deliberately absent: ordering by count needs pairs/tuples that the type
+// model does not have yet, and inventing a return shape would be a silent
+// wrong value (it fails loudly at link time instead).
+// ============================================================================
+int64_t py_collections_counter_new(int64_t vec) {
+    int64_t m = map_new();
+    if (!vec) return m;
+    int64_t len = ((int64_t*)(vec - 16))[1];
+    for (int64_t i = 0; i < len; i++) {
+        int64_t k = ((int64_t*)vec)[i];
+        int64_t c = map_get(m, k);
+        map_insert(m, k, c + 1);
+    }
+    return m;
+}
+// defaultdict(int) — our maps already return 0 for a missing key, which IS
+// the int() default; a non-int factory (list/set) is not modelled.
+int64_t py_collections_defaultdict(int64_t factory) { (void)factory; return map_new(); }
+// len(dict) — count the used entries (map slots are [key|value|used]).
+int64_t zeta_map_len(int64_t m) {
+    if (!m) return 0;
+    int64_t cap = ((int64_t*)m)[0];
+    int64_t n = 0;
+    for (int64_t i = 0; i < cap; i++) {
+        char* e = (char*)m + 16 + i * 24;
+        if (*(uint8_t*)(e + 16)) n++;
+    }
+    return n;
+}
+// `k in dict`
+int64_t py_map_contains(int64_t m, int64_t k) {
+    if (!m) return 0;
+    return map_get(m, k) != 0;
+}

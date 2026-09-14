@@ -705,7 +705,17 @@ impl MirGen {
                     let source_ty = self.source_types.get(&base_id).cloned().unwrap_or_default();
                     let is_array_param =
                         source_ty.starts_with("[") || source_ty.starts_with("*mut [");
-                    if let Type::DynamicArray(_) = base_ty {
+                    // `d[k] = v` on a dict/Counter: a map insert, keyed by the
+                    // content hash (the index was already lowered through
+                    // lower_map_key for map literals; do the same here).
+                    if matches!(&base_ty, Type::Named(n, _) if n == "map") {
+                        let key_id = self.lower_map_key(index_id);
+                        self.stmts.push(MirStmt::DictInsert {
+                            map_id: base_id,
+                            key_id,
+                            val_id: rhs_id,
+                        });
+                    } else if let Type::DynamicArray(_) = base_ty {
                         // Generate array_set call for dynamic arrays
                         self.stmts.push(MirStmt::VoidCall {
                             func: "array_set".to_string(),
@@ -3023,6 +3033,15 @@ impl MirGen {
                         Some(Type::Str) => {
                             self.stmts.push(MirStmt::Call {
                                 func: "str_len".to_string(),
+                                args: vec![arg_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                        }
+                        Some(Type::Named(n, _)) if n == "map" => {
+                            // len(dict/Counter): count the used slots.
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_map_len".to_string(),
                                 args: vec![arg_id],
                                 dest: id,
                                 type_args: vec![],
