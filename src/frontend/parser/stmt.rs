@@ -69,7 +69,11 @@ pub fn parse_block_body(input: &str) -> IResult<&str, Vec<AstNode>> {
 }
 
 fn parse_let(input: &str) -> IResult<&str, AstNode> {
-    let (input, _) = ws(tag("let")).parse(input)?;
+    // `var` is the Zeta spelling of a mutable local declaration. It was never
+    // recognised here, so `var arr: [N]u64 = ...` parsed as a stray `var`
+    // expression followed by an unparseable `arr: … = …` — which aborted the
+    // enclosing block and silently dropped the remainder of the body.
+    let (input, _) = alt((ws(tag("let")), ws(tag("var")))).parse(input)?;
     let (input, mut_) = opt(ws(tag("mut"))).parse(input)?;
     let (input, pattern) = ws(parse_pattern).parse(input)?;
     let (input, ty) = opt(preceded(ws(tag(":")), ws(parse_type))).parse(input)?;
@@ -246,6 +250,42 @@ fn parse_if_tail(input: &str) -> IResult<&str, AstNode> {
 
 fn parse_assign(input: &str) -> IResult<&str, AstNode> {
     use super::expr::parse_unary;
+
+    // PY-A: annotated assignment / annotation-only statement —
+    // `x: int = 5` and `x: int`. Previously the statement parser consumed
+    // only `x` (a bare expression), leaving `: int = 5` unparsed, so the rest
+    // of the item stream was dropped: this statement AND every following one
+    // silently vanished (fail-open).
+    {
+        if let Ok((after_name, name)) = ws(parse_ident).parse(input) {
+            let after_name = after_name.trim_start();
+            if after_name.starts_with(':') && !after_name.starts_with("::") {
+                if let Ok((after_ty, _ty)) = ws(parse_type).parse(&after_name[1..]) {
+                    let after_ty_ws = after_ty.trim_start();
+                    if let Some(rhs) = after_ty_ws.strip_prefix('=') {
+                        if !rhs.starts_with('=') {
+                            let (after_val, val) = parse_full_expr(rhs)?;
+                            return Ok((
+                                after_val,
+                                AstNode::Assign(
+                                    Box::new(AstNode::Var(name)),
+                                    Box::new(val),
+                                ),
+                            ));
+                        }
+                    }
+                    // Annotation with no value: a declared-but-unbound name.
+                    // Consume it as a no-op rather than aborting the parse.
+                    return Ok((
+                        after_ty,
+                        AstNode::ExprStmt {
+                            expr: Box::new(AstNode::Lit(0)),
+                        },
+                    ));
+                }
+            }
+        }
+    }
 
     // PY-A: parallel assignment / tuple unpacking `a, b = x, y` — all LHS
     // elements must be simple targets; falls through to the single-target

@@ -1,0 +1,19 @@
+// PY-A: 注解赋值 `x: int = 5` 与纯注解 `z: int`
+//   （此前注解赋值会让解析在该处中止 → 本语句及其后所有语句被静默丢弃 = fail-open）
+// expect: 5
+// expect: hi
+// expect: 7
+// expect: 99
+x: int = 5
+name: str = "hi"
+z: int
+
+print(x)
+print(name)
+
+def f() -> i64:
+    y: int = 7
+    return y
+
+print(f())
+print(99)

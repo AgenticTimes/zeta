@@ -163,6 +163,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // (they've been evaluated and are no longer needed for codegen)
                         // const fns are kept — they may still be needed at runtime if
                         // CTFE couldn't fully inline all call sites.
+                        // A comptime fn returning an ARRAY is also kept: CTFE cannot
+                        // materialise an array constant, so call sites are not folded
+                        // and the definition is still needed at runtime (dropping it
+                        // left an undefined `generate_residues` at link time).
                         let runtime_asts: Vec<_> = ctfe_asts
                             .into_iter()
                             .filter(|ast| {
@@ -170,8 +174,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     ast,
                                     AstNode::FuncDef {
                                         comptime_: true,
+                                        ret,
                                         ..
-                                    }
+                                    } if !ret.trim_start().starts_with('[')
                                 )
                             })
                             .collect();
