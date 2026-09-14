@@ -1,0 +1,10 @@
+// PY-A: warnings 模块 —— warn() 真打到 stderr；过滤器配置为记录的 no-op
+//   （run.sh 只比对 stdout，此处断言 warn 不影响正常输出；stderr 见实测）
+// expect: 42
+import warnings
+from warnings import simplefilter, filterwarnings
+
+warnings.simplefilter("ignore")
+warnings.warn("deprecated thing")
+filterwarnings("always")
+print(42)

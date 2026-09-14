@@ -146,6 +146,14 @@ N __future__
 #      silences the "unknown member" warnings without inventing shims.
 N typing
 
+# ---- warnings : warn() prints to stderr; the float-filter config is a
+#      recorded no-op (there is no filter state in this runtime) ----------
+M warnings
+F warnings warn py_warnings_warn args=i64 ret=i64
+F warnings warning py_warnings_warn args=i64 ret=i64
+F warnings simplefilter py_warnings_noop args=i64 ret=i64
+F warnings filterwarnings py_warnings_noop args=i64 ret=i64
+
 # ---- datetime (evidence: the corpus's heaviest stdlib need — timedelta 14,
 #      strptime 6, date/datetime construction, arithmetic, comparisons) ----
 M datetime

@@ -1131,6 +1131,21 @@ int64_t py_sys_stderr_write(int64_t s) {
     return (int64_t)strlen(p);
 }
 
+// ---- warnings ----
+// Python's warnings.warn() prints a diagnostic to stderr. The filter
+// configuration (simplefilter/filterwarnings) is accepted as a no-op: this
+// runtime has no warning-filter state, and silently dropping the message
+// would be worse than printing it.
+int64_t py_warnings_warn(int64_t m) {
+    const char* p = m ? (const char*)m : "";
+    fprintf(stderr, "Warning: %s\n", p);
+    return 0;
+}
+int64_t py_warnings_noop(int64_t a) {
+    (void)a;
+    return 0;
+}
+
 // ---- json ----
 static int64_t zt_json_quote(const char* s, char* out) {
     char* o = out;
