@@ -2760,7 +2760,42 @@ impl MirGen {
                             let adapter_addr = self.next_id();
                             self.exprs.insert(adapter_addr, MirExpr::FuncAddr(adapter));
                             self.type_map.insert(adapter_addr, Type::I64);
-                            let packed = self.lower_expr(&AstNode::Tuple(elems));
+                            // Pack the tuple ourselves (not via lower_expr(Tuple))
+                            // so we can see each element's static type: the
+                            // adapter reads i64 slots, so an f64 element would
+                            // lose its float encoding unless bit-cast — which
+                            // the MIR has no primitive for. Record it loudly
+                            // rather than launching a thread that reads garbage.
+                            let mut elem_ids = Vec::with_capacity(elems.len());
+                            let mut has_float = false;
+                            for e in &elems {
+                                let eid = self.lower_expr(e);
+                                if matches!(
+                                    self.type_map.get(&eid),
+                                    Some(Type::F64) | Some(Type::F32)
+                                ) {
+                                    has_float = true;
+                                }
+                                elem_ids.push(eid);
+                            }
+                            if has_float {
+                                eprintln!(
+                                    "warning: PY-A: Thread args contain an f64 value; the \
+                                     thread entry point receives i64 slots, so a float argument \
+                                     is not bit-exact (use an int argument, or cast inside the \
+                                     target)"
+                                );
+                            }
+                            let packed = self.next_id();
+                            let n = elem_ids.len();
+                            self.exprs.insert(
+                                packed,
+                                MirExpr::StackArray {
+                                    elements: elem_ids,
+                                    size: n,
+                                },
+                            );
+                            self.type_map.insert(packed, Type::Tuple(vec![Type::I64; n]));
                             self.stmts.push(MirStmt::Call {
                                 func: "py_threading_thread_new".to_string(),
                                 args: vec![adapter_addr, packed],
