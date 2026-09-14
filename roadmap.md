@@ -3,7 +3,7 @@
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
 > 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
-> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **60/60**；REasyQuant 语料解析 **38/38**
+> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **61/61**；REasyQuant 语料解析 **38/38**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -339,8 +339,8 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 - [x] **P1 `json.loads`**：以静态和类型 `PyJson`（tagged union）实现，真解析器 + 递归 dumps +
   下标/len/int/float/str/print/in 静态分发（2026-09-14 完成，t54）；剩余：文件 API、迭代、容器值标签
 - [ ] P2 `re` 补齐：`finditer`/`subn`/`IGNORECASE` 等 flags、`\g<name>`、Pattern 对象的方法面
-- [~] P2 库覆盖：`random`/`itertools` **已完成**（2026-09-14，t60；xorshift64* PRNG + eager chain/repeat/islice/count）；
-  仍缺 `collections`（`Counter`/`defaultdict`）/`pathlib`/`typing`/`functools`/`hashlib`
+- [~] P2 库覆盖：`random`/`itertools`/`collections` **已完成**（2026-09-14，t60/t61）；
+  `collections` 缺 `most_common`（需 pair/tuple）与 `defaultdict(list/set)`；仍缺 `pathlib`/`typing`/`functools`/`hashlib`
 - [ ] P2 `types` 推断继续：容器元素类型、参数类型推断（现在未标注参数= i64，`def f(s): s.upper()` 靠名字回退兜住）
 
 **缺口清单（2026-09-13 盘点）** —— 按优先级，未做项一律保持 fail-loud（链接期失败或 warning），
