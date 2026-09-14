@@ -2237,3 +2237,115 @@ int64_t py_json_values(int64_t j) {
     }
     return vec;
 }
+
+// ============================================================================
+// PY-A file objects + json.load/dump.
+// Handle = [FILE*, closed]. Errors are reported on stderr and the handle is 0
+// (fail-loud at use time rather than a silent no-op).
+// ============================================================================
+typedef struct {
+    FILE* fp;
+    int64_t closed;
+} zt_file_t;
+
+int64_t py_file_open(int64_t path, int64_t mode) {
+    const char* p = path ? (const char*)path : "";
+    const char* m = mode ? (const char*)mode : "r";
+    FILE* fp = fopen(p, m);
+    if (!fp) {
+        fprintf(stderr, "PY-A: open(\"%s\", \"%s\") failed: %s\n", p, m, strerror(errno));
+        return 0;
+    }
+    zt_file_t* h = (zt_file_t*)GC_malloc(sizeof(zt_file_t));
+    h->fp = fp;
+    h->closed = 0;
+    return (int64_t)h;
+}
+static zt_file_t* zt_file(int64_t h) {
+    if (!h) return NULL;
+    zt_file_t* f = (zt_file_t*)h;
+    return f->fp ? f : NULL;
+}
+int64_t py_file_read(int64_t h) {
+    zt_file_t* f = zt_file(h);
+    if (!f) return (int64_t)zt_strdup("");
+    size_t cap = 4096, n = 0;
+    char* buf = (char*)GC_malloc(cap);
+    for (;;) {
+        if (n + 1024 > cap) {
+            cap *= 2;
+            char* nb = (char*)GC_malloc(cap);
+            memcpy(nb, buf, n);
+            buf = nb;
+        }
+        size_t r = fread(buf + n, 1, 1024, f->fp);
+        n += r;
+        if (r == 0) break;
+    }
+    buf[n] = 0;
+    return (int64_t)buf;
+}
+int64_t py_file_readline(int64_t h) {
+    zt_file_t* f = zt_file(h);
+    if (!f) return (int64_t)zt_strdup("");
+    char* line = NULL;
+    size_t cap = 0;
+    ssize_t r = getline(&line, &cap, f->fp);
+    if (r < 0) return (int64_t)zt_strdup("");
+    char* out = (char*)GC_malloc((size_t)r + 1);
+    memcpy(out, line, (size_t)r);
+    out[r] = 0;
+    free(line);
+    return (int64_t)out;
+}
+int64_t py_file_readlines(int64_t h) {
+    int64_t vec = zj_vec_new_cap(8);
+    zt_file_t* f = zt_file(h);
+    if (!f) return vec;
+    char* line = NULL;
+    size_t cap = 0;
+    ssize_t r;
+    while ((r = getline(&line, &cap, f->fp)) >= 0) {
+        char* out = (char*)GC_malloc((size_t)r + 1);
+        memcpy(out, line, (size_t)r);
+        out[r] = 0;
+        vec = zj_vec_push_h(vec, (int64_t)out);
+    }
+    if (line) free(line);
+    return vec;
+}
+int64_t py_file_write(int64_t h, int64_t s) {
+    zt_file_t* f = zt_file(h);
+    const char* p = s ? (const char*)s : "";
+    if (!f) return 0;
+    fputs(p, f->fp);
+    return (int64_t)strlen(p);
+}
+int64_t py_file_close(int64_t h) {
+    zt_file_t* f = zt_file(h);
+    if (!f) return 0;
+    if (f->closed) return 0;
+    fclose(f->fp);
+    f->closed = 1;
+    f->fp = NULL;
+    return 0;
+}
+// `with open(...) as f:` — enter is identity, exit closes.
+int64_t py_file_enter(int64_t h) { return h; }
+int64_t py_file_exit(int64_t h) { return py_file_close(h); }
+int64_t py_file_closed(int64_t h) {
+    zt_file_t* f = (zt_file_t*)h;
+    return (!h || !f->fp) ? 1 : 0;
+}
+
+// ---- json.load(f) / json.dump(obj, f) ----
+int64_t py_json_load_file(int64_t h) {
+    zt_file_t* f = zt_file(h);
+    if (!f) return 0;
+    int64_t text = py_file_read(h);
+    return py_json_loads(text);
+}
+int64_t py_json_dump_file(int64_t j, int64_t h) {
+    int64_t text = py_json_dump(j);
+    return py_file_write(h, text);
+}

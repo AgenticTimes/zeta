@@ -1,0 +1,24 @@
+// PY-A: 文件对象 + json.load/dump —— open/read/write/close/readline(s)、
+//   `with open(...) as f:` 走 __enter__/__exit__（enter 保留句柄类型，否则块内
+//   f.write 会静默无操作）；json.dump 与 dumps 用同一套类型驱动序列化。
+// expect: 2.5
+// expect: x
+// expect: 3
+// expect: 1
+// expect: 1
+import json
+
+with open("/tmp/py_t58.json", "w") as f:
+    json.dump({"a": 1, "b": 2.5, "c": "x"}, f)
+
+with open("/tmp/py_t58.json") as f:
+    cfg = json.load(f)
+print(cfg["b"])
+print(cfg["c"])
+print(len(cfg))
+
+f = open("/tmp/py_t58.json")
+text = f.read()
+print(len(text) > 10)
+f.close()
+print(f.closed)

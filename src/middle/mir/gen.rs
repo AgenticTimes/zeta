@@ -2461,6 +2461,57 @@ impl MirGen {
                         return id;
                     }
                 }
+                // PY-A: `json.dump(obj, f)` — serialize the object with the
+                // same type-driven serializer as json.dumps, then write it.
+                if let Some((m, mem)) = self.py_member_target(receiver, method) {
+                    if m == "json" && mem == "dump" && args.len() == 2 {
+                        let obj_id = self.lower_expr(&args[0]);
+                        let oty = self.type_map.get(&obj_id).cloned().unwrap_or(Type::I64);
+                        let (sym, vec_tag): (&str, Option<i64>) = match &oty {
+                            Type::Str => ("py_json_dumps_str", None),
+                            Type::F64 => ("py_json_dumps_f64", None),
+                            Type::Bool => ("py_json_dumps_bool", None),
+                            Type::Named(n, _) if n == "map" => ("py_json_dumps_map", None),
+                            Type::Named(n, _) if n == "PyJson" => ("py_json_dump", None),
+                            Type::DynamicArray(e) | Type::Array(e, _) => (
+                                "py_json_dumps_vec_typed",
+                                Some(match **e {
+                                    Type::F64 | Type::F32 => 1,
+                                    Type::Str => 2,
+                                    Type::Bool => 3,
+                                    _ => 0,
+                                }),
+                            ),
+                            _ => ("py_json_dumps_i64", None),
+                        };
+                        let text_id = self.next_id();
+                        let mut cargs = vec![obj_id];
+                        if let Some(tag) = vec_tag {
+                            let tid = self.next_id();
+                            self.exprs.insert(tid, MirExpr::IntLit(tag));
+                            self.type_map.insert(tid, Type::I64);
+                            cargs.push(tid);
+                        }
+                        self.stmts.push(MirStmt::Call {
+                            func: sym.to_string(),
+                            args: cargs,
+                            dest: text_id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(text_id, MirExpr::Var(text_id));
+                        self.type_map.insert(text_id, Type::Str);
+                        let file_id = self.lower_expr(&args[1]);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_file_write".to_string(),
+                            args: vec![file_id, text_id],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::I64);
+                        return id;
+                    }
+                }
                 // PY-A: `import X` for a user module also runs its module body
                 // once (Python executes a module on import). The init function
                 // guards itself, so repeated imports are harmless.
@@ -2523,6 +2574,7 @@ impl MirGen {
                             "zeta_identity1"
                         }
                     };
+                    let recv_tag = self.py_handle_of(&args[0]);
                     let arg_id = self.lower_expr(&args[0]);
                     self.stmts.push(MirStmt::Call {
                         func: symbol.to_string(),
@@ -2531,7 +2583,19 @@ impl MirGen {
                         type_args: vec![],
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    // `with X as n:` binds the ENTER result, which is X itself
+                    // for every context manager we shim (file handles, locks).
+                    // Typing it i64 lost the handle tag, so `f.write(...)`
+                    // inside the block silently did nothing.
+                    self.type_map.insert(
+                        id,
+                        match (method.as_str(), recv_tag) {
+                            ("zeta_with_enter", Some(tag)) => {
+                                Type::Named(tag.to_string(), vec![])
+                            }
+                            _ => Type::I64,
+                        },
+                    );
                     return id;
                 }
                 // PY-A: Python stdlib shims — `threading.Thread(f)` /
@@ -3194,6 +3258,35 @@ impl MirGen {
                             self.type_map.insert(nid, Type::F64);
                             self.exprs.insert(id, MirExpr::Var(nid));
                             self.type_map.insert(id, Type::F64);
+                            return id;
+                        }
+                        // open(path[, mode]) -> file handle. Python's mode
+                        // defaults to "r"; the two-argument form passes the
+                        // mode string through.
+                        "open" if argc == 1 || argc == 2 => {
+                            let p = self.lower_expr(&args[0]);
+                            let m = if argc == 2 {
+                                self.lower_expr(&args[1])
+                            } else {
+                                let mid = self.next_id();
+                                self.exprs
+                                    .insert(mid, MirExpr::StringLit("r".to_string()));
+                                self.type_map.insert(mid, Type::Str);
+                                mid
+                            };
+                            let nid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_file_open".to_string(),
+                                args: vec![p, m],
+                                dest: nid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(nid, MirExpr::Var(nid));
+                            self.type_map
+                                .insert(nid, Type::Named("PyFile".to_string(), vec![]));
+                            self.exprs.insert(id, MirExpr::Var(nid));
+                            self.type_map
+                                .insert(id, Type::Named("PyFile".to_string(), vec![]));
                             return id;
                         }
                         "sorted" if argc == 1 => {

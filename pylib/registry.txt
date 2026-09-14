@@ -218,3 +218,17 @@ X py_json_print args=i64 ret=void
 X py_json_repr args=i64 ret=str
 X py_json_dumps_vec_typed args=i64,i64 ret=str
 X py_json_kind args=i64 ret=i64
+
+# ---- file objects + json.load/dump -----------------------------------------
+# `open()` is a builtin (handled by name in gen); its result carries PyFile.
+W PyFile read py_file_read args=1 ret=str
+W PyFile readline py_file_readline args=1 ret=str
+W PyFile readlines py_file_readlines args=1 ret=vecstr
+W PyFile write py_file_write args=2
+W PyFile close py_file_close args=1
+W PyFile closed py_file_closed args=1
+W PyFile __enter__ py_file_enter args=1 ret_handle=PyFile
+W PyFile __exit__ py_file_exit args=1
+F json load py_json_load_file args=i64 ret=i64 handle=PyJson
+F json dump py_json_dump_file args=i64,i64 ret=i64
+X py_file_open args=i64,i64 ret=i64
