@@ -3,7 +3,7 @@
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
 > 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
-> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **56/56**；REasyQuant 语料解析 **38/38**
+> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **57/57**；REasyQuant 语料解析 **38/38**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -255,7 +255,14 @@ threading / concurrent.futures / multiprocessing / asyncio / time / math），�
 `json.dumps([1.5, 2.5])` → `[1.5, 2.5]`、`json.dumps(["a","b"])` → `["a","b"]`、
 `print([1.5, 2.5])` → `[1.5, 2.5]`（此前是位模式/指针），相应 warning 已移除。
 
-未做（明确记录）：异构列表/嵌套容器的逐元素类型（需要真正的容器值标签或 tagged union 元素）；
+**Json 导航 API（2026-09-14 续）**：`d.get(k)` / `d.get(k, default)`（编译器补默认值参数，并传默认值的
+静态类型标签 → 非 Json 默认值被包装成 Json；否则 `print(d.get(k,"x"))` 会把 char* 当 Json 读 tag）、
+`d.keys()`（Vec<str>）、`d.values()`（Vec<Json>）。for-in 的循环项类型现在从集合元素类型继承
+（仅 Str/Named——F64 元素在槽里是裸位模式），因此 `for k in d.keys(): print(k)` 打印字符串而非指针。
+另修：JSON 布尔此前解析成 1/0，`loads("true")` dump 回来是 `1`；现新增 bool tag，回写为 `true`。
+
+未做（明确记录）：`items()`、直接 `for x in cfg:`（需按 tag 决定迭代键还是元素）、
+异构列表/嵌套容器的逐元素类型（需要真正的容器值标签或 tagged union 元素）；
 `json.load`/`dump` 文件 API；Json 迭代与 `keys()/values()/items()`、`get(k, default)`；
 注解驱动的 `loads` 形态。这些是「更多 API」，不是「做不到」。
 
