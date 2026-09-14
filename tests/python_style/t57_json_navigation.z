@@ -1,0 +1,25 @@
+// PY-A: Json 导航 API —— keys()/values() 与 get(k[, default])
+//   循环项类型从集合元素类型继承（keys 是 Vec<Str>、values 是 Vec<PyJson>），
+//   否则循环变量是 i64，print/dumps 会把它当整数。
+//   注：keys()/values() 的顺序是哈希桶顺序（确定性，但非插入序）。
+// expect: none
+// expect: None
+// expect: x
+// expect: 3
+// expect: b
+// expect: ok
+// expect: c
+// expect: x
+// expect: true
+// expect: 2.5
+import json
+
+cfg = json.loads("{\"b\": \"x\", \"c\": 2.5, \"ok\": true}")
+print(cfg.get("zzz", "none"))
+print(cfg.get("zzz"))
+print(cfg.get("b", "none"))
+print(len(cfg.keys()))
+for k in cfg.keys():
+    print(k)
+for v in cfg.values():
+    print(v)

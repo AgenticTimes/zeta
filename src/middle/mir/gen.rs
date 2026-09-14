@@ -1244,9 +1244,22 @@ impl MirGen {
                                     dest: get_id,
                                     type_args: vec![],
                                 });
+                                // Carry the collection's element type to the
+                                // loop item so `for k in d.keys(): print(k)`
+                                // dispatches as a string (only pointer-shaped
+                                // element types; F64 elements live as raw bits).
+                                let elem_ty = match self.type_map.get(&collection_id).cloned() {
+                                    Some(Type::DynamicArray(e))
+                                    | Some(Type::Array(e, _)) => match *e {
+                                        Type::Str => Some(Type::Str),
+                                        Type::Named(n, args) => Some(Type::Named(n, args)),
+                                        _ => None,
+                                    },
+                                    _ => None,
+                                };
                                 self.name_to_id.insert(item_name.clone(), get_id);
                                 self.exprs.insert(get_id, MirExpr::Var(get_id));
-                                self.type_map.insert(get_id, Type::I64);
+                                self.type_map.insert(get_id, elem_ty.unwrap_or(Type::I64));
                             }
 
                             for stmt in &body_clone {
@@ -2558,6 +2571,31 @@ impl MirGen {
                             for a in args {
                                 lowered.push(self.lower_expr(a));
                             }
+                            // `d.get(k)` — Python's optional default; the
+                            // registry declares the 3-argument form.
+                            if tag == "PyJson" && method == "get" {
+                                if lowered.len() == 2 {
+                                    let z = self.next_id();
+                                    self.exprs.insert(z, MirExpr::IntLit(0));
+                                    self.type_map.insert(z, Type::I64);
+                                    lowered.push(z);
+                                }
+                                // Pass the default's static type so a non-Json
+                                // default can be wrapped into a Json value.
+                                let dtag: i64 = if lowered.len() >= 3 {
+                                    match self.type_map.get(&lowered[2]) {
+                                        Some(Type::Str) => 2,
+                                        Some(Type::F64) | Some(Type::F32) => 1,
+                                        _ => 0,
+                                    }
+                                } else {
+                                    0
+                                };
+                                let t = self.next_id();
+                                self.exprs.insert(t, MirExpr::IntLit(dtag));
+                                self.type_map.insert(t, Type::I64);
+                                lowered.push(t);
+                            }
                             self.stmts.push(MirStmt::Call {
                                 func: symbol.to_string(),
                                 args: lowered,
@@ -2572,6 +2610,12 @@ impl MirGen {
                                     None => match crate::middle::pylib::method_ret(&tag, method) {
                                         Some("str") => Type::Str,
                                         Some("f64") => Type::F64,
+                                        Some("vecstr") => {
+                                            Type::DynamicArray(Box::new(Type::Str))
+                                        }
+                                        Some("vecjson") => Type::DynamicArray(Box::new(
+                                            Type::Named("PyJson".to_string(), vec![]),
+                                        )),
                                         _ => Type::I64,
                                     },
                                 },

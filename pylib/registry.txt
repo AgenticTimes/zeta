@@ -202,6 +202,12 @@ X py_re_sub_call args=i64,i64,i64 ret=str
 # dynamic typing.
 F json loads py_json_loads args=i64 ret=i64 handle=PyJson
 W PyJson __contains__ py_json_contains args=2
+W PyJson get py_json_get_default args=4 ret_handle=PyJson
+W PyJson keys py_json_keys args=1 ret=vecstr
+W PyJson values py_json_values args=1 ret=vecjson
+X py_json_keys args=i64 ret=i64
+X py_json_values args=i64 ret=i64
+X py_json_get_default args=i64,i64,i64,i64 ret=i64
 X py_json_dump args=i64 ret=str
 X py_json_len args=i64 ret=i64
 X py_json_get args=i64,i64 ret=i64

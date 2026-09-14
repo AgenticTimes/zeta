@@ -1663,6 +1663,7 @@ int64_t str_slice(int64_t s, int64_t start, int64_t end, int64_t to_end) {
 #define ZJ_STR 3
 #define ZJ_ARR 4
 #define ZJ_OBJ 5
+#define ZJ_BOOL 6
 
 extern int64_t map_str_key(int64_t handle);
 
@@ -1811,8 +1812,8 @@ static int64_t zj_parse_value(zj_parser* s) {
         return zj_make(ZJ_ARR, vec);
     }
     if (c == '"') return zj_make(ZJ_STR, zj_parse_string(s));
-    if (!strncmp(s->p, "true", 4)) { s->p += 4; return zj_make(ZJ_INT, 1); }
-    if (!strncmp(s->p, "false", 5)) { s->p += 5; return zj_make(ZJ_INT, 0); }
+    if (!strncmp(s->p, "true", 4)) { s->p += 4; return zj_make(ZJ_BOOL, 1); }
+    if (!strncmp(s->p, "false", 5)) { s->p += 5; return zj_make(ZJ_BOOL, 0); }
     if (!strncmp(s->p, "null", 4)) { s->p += 4; return 0; }
     // number
     {
@@ -1898,6 +1899,11 @@ static void zj_dump_into(int64_t j, char** out, size_t* n, size_t* cap) {
             break;
         }
         case ZJ_STR: zj_put_str(out, n, cap, (const char*)zj_payload(j)); break;
+        case ZJ_BOOL: {
+            const char* t = zj_payload(j) ? "true" : "false";
+            zj_put(out, n, cap, t, strlen(t));
+            break;
+        }
         case ZJ_ARR: {
             int64_t vec = zj_payload(j);
             int64_t len = vec ? ((int64_t*)(vec - 16))[1] : 0;
@@ -1982,6 +1988,7 @@ int64_t py_json_kind(int64_t j) { return zj_tag(j); }
 int64_t py_json_as_i64(int64_t j) {
     if (!j) return 0;
     switch (zj_tag(j)) {
+        case ZJ_BOOL:
         case ZJ_INT: return zj_payload(j);
         case ZJ_F64: {
             double d;
@@ -2054,6 +2061,7 @@ int64_t py_json_repr(int64_t j) {
     if (!j) return (int64_t)zt_strdup("None");
     switch (zj_tag(j)) {
         case ZJ_STR: return zj_payload(j);
+        case ZJ_BOOL: return (int64_t)zt_strdup(zj_payload(j) ? "true" : "false");
         case ZJ_INT:
         case ZJ_F64: return py_json_as_str(j);
         default: return py_json_dump(j);
@@ -2143,4 +2151,89 @@ int64_t py_json_dumps_vec_typed(int64_t vec, int64_t tag) {
     out[n++] = ']';
     out[n] = 0;
     return (int64_t)out;
+}
+
+// ---- Json object/array navigation (keys/values/get) ----
+static int64_t zj_vec_new_cap(int64_t cap) {
+    if (cap < 8) cap = 8;
+    int64_t* b = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    b[0] = cap;
+    b[1] = 0;
+    return (int64_t)(b + 2);
+}
+static int64_t zj_vec_push_h(int64_t vec, int64_t v) {
+    int64_t* b = (int64_t*)(vec - 16);
+    if (b[1] >= b[0]) {
+        int64_t ncap = b[0] * 2;
+        int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)ncap * 8);
+        nb[0] = ncap;
+        nb[1] = b[1];
+        for (int64_t i = 0; i < b[1]; i++) nb[2 + i] = b[2 + i];
+        vec = (int64_t)(nb + 2);
+        b = nb;
+    }
+    b[2 + b[1]] = v;
+    b[1] += 1;
+    return vec;
+}
+
+// dict.get(k[, default]) — missing key yields the default. The compiler
+// passes the default's own type tag (0 int, 1 f64, 2 str) so a non-Json
+// default is wrapped into a Json value: `get` is statically typed PyJson, and
+// returning a bare string handle would make `print(d.get(k, "x"))` read a
+// Json tag out of a char*.
+int64_t py_json_get_default(int64_t j, int64_t key, int64_t dflt, int64_t dflt_tag) {
+    int64_t v = py_json_get(j, key);
+    if (v) return v;
+    if (!dflt) return 0;
+    switch (dflt_tag) {
+        case 2: return zj_make(ZJ_STR, dflt);
+        case 1: return zj_make(ZJ_F64, dflt);
+        default: return zj_make(ZJ_INT, dflt);
+    }
+}
+// Object keys as a Vec of strings (Python's dict.keys()); arrays yield the
+// indices as strings, matching Python's list-of-keys absence with a usable
+// fallback.
+int64_t py_json_keys(int64_t j) {
+    int64_t vec = zj_vec_new_cap(8);
+    if (!j) return vec;
+    if (zj_tag(j) == ZJ_OBJ) {
+        int64_t m = zj_payload(j);
+        int64_t cap = m ? ((int64_t*)m)[0] : 0;
+        for (int64_t i = 0; i < cap; i++) {
+            char* e = (char*)m + 16 + i * 24;
+            if (!*(uint8_t*)(e + 16)) continue;
+            int64_t ks = zeta_key_string(*(int64_t*)e);
+            if (ks) vec = zj_vec_push_h(vec, ks);
+        }
+    } else if (zj_tag(j) == ZJ_ARR) {
+        int64_t src = zj_payload(j);
+        int64_t len = src ? ((int64_t*)(src - 16))[1] : 0;
+        for (int64_t i = 0; i < len; i++) {
+            char* b = (char*)GC_malloc(24);
+            snprintf(b, 24, "%lld", (long long)i);
+            vec = zj_vec_push_h(vec, (int64_t)b);
+        }
+    }
+    return vec;
+}
+// Object values (or array elements) as a Vec of Json handles.
+int64_t py_json_values(int64_t j) {
+    int64_t vec = zj_vec_new_cap(8);
+    if (!j) return vec;
+    if (zj_tag(j) == ZJ_OBJ) {
+        int64_t m = zj_payload(j);
+        int64_t cap = m ? ((int64_t*)m)[0] : 0;
+        for (int64_t i = 0; i < cap; i++) {
+            char* e = (char*)m + 16 + i * 24;
+            if (!*(uint8_t*)(e + 16)) continue;
+            vec = zj_vec_push_h(vec, *(int64_t*)(e + 8));
+        }
+    } else if (zj_tag(j) == ZJ_ARR) {
+        int64_t src = zj_payload(j);
+        int64_t len = src ? ((int64_t*)(src - 16))[1] : 0;
+        for (int64_t i = 0; i < len; i++) vec = zj_vec_push_h(vec, ((int64_t*)src)[i]);
+    }
+    return vec;
 }
