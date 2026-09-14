@@ -2412,6 +2412,25 @@ impl MirGen {
                                  values as integers (V1: map slots are untyped)"
                             );
                         }
+                        // Same limitation for vectors: elements are raw 64-bit
+                        // slots, so a float prints as its bit pattern and a
+                        // string as its pointer. Say so instead of emitting a
+                        // silently wrong document.
+                        if sym == "py_json_dumps_vec" {
+                            let elem_is_int = match &ty {
+                                Type::DynamicArray(e) | Type::Array(e, _) => {
+                                    matches!(**e, Type::I64 | Type::Bool)
+                                }
+                                _ => true,
+                            };
+                            if !elem_is_int {
+                                eprintln!(
+                                    "warning: PY-A: json.dumps(list) serializes elements as \
+                                     integers (V1: element type {:?} is not representable in a \
+                                     raw slot)", ty
+                                );
+                            }
+                        }
                         self.stmts.push(MirStmt::Call {
                             func: sym.to_string(),
                             args: vec![arg_id],
