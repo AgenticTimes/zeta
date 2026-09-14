@@ -2538,3 +2538,96 @@ int64_t py_timer_cancel(int64_t h) {
     ((zt_timer_t*)h)->active = 0;
     return 0;
 }
+
+// ============================================================================
+// PY-A random + itertools subset.
+// PRNG is an xorshift64* seeded from the clock (no libc rand state, which
+// would be shared with the platform shims).
+// ============================================================================
+static uint64_t zt_rng_state = 0;
+static uint64_t zt_rng(void) {
+    if (!zt_rng_state) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        zt_rng_state = (uint64_t)ts.tv_nsec ^ ((uint64_t)ts.tv_sec << 32) ^ 0x9E3779B97F4A7C15ULL;
+        if (!zt_rng_state) zt_rng_state = 1;
+    }
+    uint64_t x = zt_rng_state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    zt_rng_state = x;
+    return x * 2685821657736338717ULL;
+}
+int64_t py_random_seed(int64_t s) {
+    zt_rng_state = (uint64_t)(s ? s : 1);
+    return 0;
+}
+double py_random_random(void) { return (double)(zt_rng() >> 11) / 9007199254740992.0; }
+int64_t py_random_randint(int64_t a, int64_t b) {
+    if (b < a) { int64_t t = a; a = b; b = t; }
+    uint64_t span = (uint64_t)(b - a) + 1;
+    return a + (int64_t)(zt_rng() % span);
+}
+double py_random_uniform(double a, double b) {
+    return a + (b - a) * ((double)(zt_rng() >> 11) / 9007199254740992.0);
+}
+int64_t py_random_choice(int64_t vec) {
+    if (!vec) return 0;
+    int64_t len = ((int64_t*)(vec - 16))[1];
+    if (len <= 0) return 0;
+    return ((int64_t*)vec)[zt_rng() % (uint64_t)len];
+}
+// Fisher-Yates over a Vec of raw 64-bit slots (in place; Python's shuffle is
+// also in place and returns None).
+int64_t py_random_shuffle(int64_t vec) {
+    if (!vec) return 0;
+    int64_t len = ((int64_t*)(vec - 16))[1];
+    for (int64_t i = len - 1; i > 0; i--) {
+        int64_t j = (int64_t)(zt_rng() % (uint64_t)(i + 1));
+        int64_t t = ((int64_t*)vec)[i];
+        ((int64_t*)vec)[i] = ((int64_t*)vec)[j];
+        ((int64_t*)vec)[j] = t;
+    }
+    return 0;
+}
+
+// ---- itertools (eager, over Vec handles) ----
+// chain(a, b) concatenates; Python's is lazy, but every eager use we can
+// support (`list(chain(...))`, `for x in chain(...)`) behaves the same.
+int64_t py_itertools_chain(int64_t a, int64_t b) {
+    int64_t la = a ? ((int64_t*)(a - 16))[1] : 0;
+    int64_t lb = b ? ((int64_t*)(b - 16))[1] : 0;
+    int64_t vec = zj_vec_new_cap(la + lb + 8);
+    for (int64_t i = 0; i < la; i++) vec = zj_vec_push_h(vec, ((int64_t*)a)[i]);
+    for (int64_t i = 0; i < lb; i++) vec = zj_vec_push_h(vec, ((int64_t*)b)[i]);
+    return vec;
+}
+// repeat(x, n) -> Vec of n copies.
+int64_t py_itertools_repeat(int64_t x, int64_t n) {
+    if (n < 0) n = 0;
+    int64_t vec = zj_vec_new_cap(n + 8);
+    for (int64_t i = 0; i < n; i++) vec = zj_vec_push_h(vec, x);
+    return vec;
+}
+// islice(vec, start, end) — end < 0 means "to the end" (the slice sentinel).
+int64_t py_itertools_islice(int64_t src, int64_t start, int64_t end) {
+    int64_t len = src ? ((int64_t*)(src - 16))[1] : 0;
+    if (start < 0) start = 0;
+    if (start > len) start = len;
+    if (end < 0 || end > len) end = len;
+    if (end < start) end = start;
+    int64_t vec = zj_vec_new_cap(end - start + 8);
+    for (int64_t i = start; i < end; i++) vec = zj_vec_push_h(vec, ((int64_t*)src)[i]);
+    return vec;
+}
+// enumerate over a Vec needs pairs; not modelled yet — count how many match a
+// predicate value instead (used by real code as `sum(1 for ...)`).
+int64_t py_itertools_count(int64_t src, int64_t value) {
+    int64_t len = src ? ((int64_t*)(src - 16))[1] : 0;
+    int64_t n = 0;
+    for (int64_t i = 0; i < len; i++) {
+        if (((int64_t*)src)[i] == value) n++;
+    }
+    return n;
+}

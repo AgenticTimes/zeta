@@ -251,3 +251,22 @@ W PySem release py_sem_release args=1
 F threading Timer py_threading_timer_new args=f64,i64 ret=i64 handle=PyTimer
 W PyTimer start py_timer_start args=1
 W PyTimer cancel py_timer_cancel args=1
+
+# ---- random / itertools ----------------------------------------------------
+M random
+F random seed py_random_seed args=i64 ret=i64
+F random random py_random_random args= ret=f64
+F random randint py_random_randint args=i64,i64 ret=i64
+F random uniform py_random_uniform args=f64,f64 ret=f64
+F random choice py_random_choice args=i64 ret=i64
+F random shuffle py_random_shuffle args=i64 ret=i64
+M itertools
+F itertools chain py_itertools_chain args=i64,i64 ret=i64
+F itertools repeat py_itertools_repeat args=i64,i64 ret=i64
+F itertools islice py_itertools_islice args=i64,i64,i64 ret=i64
+F itertools count py_itertools_count args=i64,i64 ret=i64
+X py_itertools_chain args=i64,i64 ret=i64
+X py_itertools_repeat args=i64,i64 ret=i64
+X py_itertools_islice args=i64,i64,i64 ret=i64
+X py_itertools_count args=i64,i64 ret=i64
+X py_random_shuffle args=i64 ret=i64
