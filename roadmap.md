@@ -3,7 +3,7 @@
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
 > 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（37 case 全绿）**
-> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **54/54**；REasyQuant 语料解析 **38/38**
+> 当前通过率（2026-09-13 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **55/55**；REasyQuant 语料解析 **38/38**
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
 
@@ -243,9 +243,16 @@ threading / concurrent.futures / multiprocessing / asyncio / time / math），�
 - 顺带修 bug：`int(x)` 原先是个 stub（算出了正确的转换函数却没用，直接返回原值），
   只在值本来就是 i64 时"碰巧"正确
 
-未做（明确记录）：通用容器（map/Vec 槽）仍无值类型标签，所以 `json.dumps(<字面量 dict>)`
-的值仍是整数化（有 warning）；`json.load`/`dump` 文件 API、迭代/`keys()`、注解驱动的
-`loads` 形态留待后续。
+**容器值类型侧表（2026-09-14 续）**：map 槽是裸 64 位、无法分辨 2.5 与 2、字符串指针
+与整数。编译器在**每次 DictInsert** 记录该值的静态类型（0=int 1=f64 2=str 3=bool）到
+按 (map, key) 索引的侧表，dumps/print 查表按类型序列化 —— **不动 map 布局**（整个 runtime 都
+依赖它）。实测：`d = {"a":1,"b":2.5,"c":"x","ok":True}` → `json.dumps(d)` =
+`{"b": 2.5, "a": 1, "ok": true, "c": "x"}`，`print(d)` 同样正确（不再是指针）。
+顺带修：dict 里的 f64 原先被 `fptosi` 截断（2.5→2），现按位模式存。
+
+未做（明确记录）：Vec 元素类型标签（同思路，但下标会随 push/扩容移动，需换键）；
+`json.load`/`dump` 文件 API；Json 迭代与 `keys()/values()/items()`、`get(k, default)`；
+注解驱动的 `loads` 形态。这些是「更多 API」，不是「做不到」。
 
 **真实第三方库首次端到端跑通（2026-09-14）**
 
