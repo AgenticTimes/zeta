@@ -306,9 +306,12 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
   `add_done_callback`；`Executor.map` 多 iterable 形式；`ProcessPoolExecutor` 目前与线程池等价
 - [ ] **P2 multiprocessing 补齐**：`Queue`/`Pipe`/`Value`/`Array`/`Manager`/共享锁/`Event`；
   `Pool` 现为**进程内并行**（非真多进程，接线 IPC/管道即升级）、缺 `apply_async`/`imap`/`starmap`
-- [ ] **P2 库覆盖**：注册表只有 6 个模块（threading / concurrent.futures / multiprocessing /
-  asyncio / time / math）；`os`/`sys`/`json`/`re`/`collections`/`itertools`/`random`/`datetime`/
-  `pathlib`/`functools`/`logging` 等均未接入（`import os` 目前发 warning + 用到就链接失败）
+- [ ] **P2 库覆盖**：注册表现有 **13 个模块**（`__future__` `asyncio` `concurrent.futures`
+  `datetime` `json` `logging` `math` `multiprocessing` `os` `re` `sys` `threading` `time`）。
+  仍缺且**实测不可用**：`collections`（`Counter()` → unknown module/member + 链接失败）、
+  `itertools`、`random`、`pathlib`、`queue`、`typing`、`functools`、`hashlib`、`logging.handlers` 等。
+  注意：`import X` 对未知模块只发 warning（外部 shim 策略），
+  **只有真正用到成员时才会链接失败** —— 所以「import 能过」不等于「库可用」。
 - [~] **P2 第三方库安装**：**最小闭环已通**（`zorb install/list/remove/path` + 安装目录搜索
   + 目录包）；剩余：版本与依赖解析（`src/package/` 里已有 `Manifest`/`DependencyResolver` 可复用）、
   包源索引、下载校验和
