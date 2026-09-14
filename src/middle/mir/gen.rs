@@ -2602,9 +2602,19 @@ impl MirGen {
                 }
                 // PY-A: `import X` for a user module also runs its module body
                 // once (Python executes a module on import). The init function
-                // guards itself, so repeated imports are harmless.
-                if method == "zeta_py_import" && receiver.is_none() {
+                // guards itself, so repeated imports are harmless. `from X
+                // import y` must run it too — otherwise bound members that read
+                // module-level state see uninitialized globals (silent wrong
+                // values, e.g. `LIMIT` read as 0).
+                if (method == "zeta_py_import"
+                    || method == "zeta_py_from"
+                    || method == "zeta_py_star")
+                    && receiver.is_none()
+                {
                     if let Some(AstNode::StringLit(module)) = args.first() {
+                        // `zeta_py_import` args = (module, alias);
+                        // `zeta_py_from` args = (module, member, alias) — the
+                        // module is first in both. `zeta_py_star` = (module,).
                         if self.py_user_modules.contains(module) {
                             let init_sym = format!("{}__init", module.replace('.', "_"));
                             let init_dest = self.next_id();
@@ -2616,6 +2626,14 @@ impl MirGen {
                             });
                         }
                     }
+                }
+                // PY-A: `from X import *` is a compile-time-only marker — the
+                // resolver has already bound the public names. Emit no runtime
+                // call (there is no `zeta_py_star` shim); the value is unused.
+                if method == "zeta_py_star" && receiver.is_none() {
+                    self.exprs.insert(id, MirExpr::IntLit(0));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
                 }
                 // PY-A: module-internal bare call → mangled symbol (imported
                 // modules are registered under `mod__name`).

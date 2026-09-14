@@ -1,0 +1,9 @@
+// PY-A: 相对导入 —— 包内 `from .sub import f`、`from . import mod`，
+//   以及包外按绝对名导入同一子模块。
+// expect: 41
+// expect: 42
+import pyrelpkg
+from pyrelpkg.sub import double
+
+print(pyrelpkg.compute(20))
+print(double(21))

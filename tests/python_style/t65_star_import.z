@@ -1,0 +1,7 @@
+// PY-A: `from X import *` 绑定目标模块的全部公开顶层名（下划线名不绑定）
+// expect: 11
+// expect: 31
+from pystar import *
+
+print(alpha())
+print(beta())

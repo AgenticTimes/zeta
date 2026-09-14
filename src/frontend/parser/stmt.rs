@@ -566,9 +566,41 @@ fn py_import_marker(method: &str, args: Vec<&str>) -> AstNode {
     }
 }
 
+/// PY-A: `from .mod import y` — a relative module specifier. One or more
+/// leading dots give the package level; an optional dotted name follows.
+/// The dots are kept in the returned string (`.mod`, `..pkg.mod`, `.`) so the
+/// resolver can resolve the name against the importing module's package.
+fn parse_relative_module(input: &str) -> IResult<&str, String> {
+    let mut cur = input;
+    let mut dots = 0usize;
+    while let Some(t) = cur.strip_prefix('.') {
+        dots += 1;
+        cur = t;
+    }
+    if dots == 0 {
+        return parse_dotted_name(input);
+    }
+    let mut name = ".".repeat(dots);
+    if cur.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+        let (r, first) = parse_ident(cur)?;
+        name.push_str(&first);
+        cur = r;
+        while let Some(t) = cur.strip_prefix('.') {
+            if t.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+                let (r2, seg) = parse_ident(t)?;
+                name.push('.');
+                name.push_str(&seg);
+                cur = r2;
+            } else {
+                break;
+            }
+        }
+    }
+    Ok((cur, name))
+}
+
 /// `a.b.c` — dotted module path.
-fn parse_dotted_name(input: &str) -> IResult<&str, String> {
-    let (input, first) = parse_ident(input)?;
+fn parse_dotted_name(input: &str) -> IResult<&str, String> {    let (input, first) = parse_ident(input)?;
     let mut name = first;
     let mut cur = input;
     while let Some(t) = cur.strip_prefix('.') {
@@ -600,15 +632,17 @@ fn parse_python_from_import(input: &str) -> IResult<&str, AstNode> {
         )));
     }
     let (input, _) = take_while(|c: char| c == ' ' || c == '\t' || c == '\r')(input)?;
-    // `from` must be followed by a dotted module name then `import`
-    let (input, module) = ws(parse_dotted_name).parse(input)?;
+    // `from` must be followed by a (possibly relative) dotted module name
+    // then `import`
+    let (input, module) = ws(parse_relative_module).parse(input)?;
     let (input, _) = ws(tag("import")).parse(input)?;
     let (input, rest) = take_while(|c| c != '\n' && c != '\r')(input)?;
     let mut out: Vec<AstNode> = Vec::new();
-    // Star-import: bind nothing, but record the module so unknown-module
-    // diagnostics still fire.
+    // Star-import: `from X import *` binds the module's public top-level
+    // names into scope. A distinct marker tells the resolver to enumerate
+    // them (the plain import marker binds nothing).
     if rest.trim_start().starts_with('*') {
-        out.push(py_import_marker("zeta_py_import", vec![&module, &default_module_alias(&module)]));
+        out.push(py_import_marker("zeta_py_star", vec![&module]));
         return Ok((input, AstNode::Block { body: out }));
     }
     let mut cur = rest;

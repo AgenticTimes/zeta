@@ -76,6 +76,13 @@ pub struct Resolver {
     py_loaded_modules: RefCell<std::collections::HashSet<String>>,
     /// PY-A: directory of the file being compiled (module search root).
     py_source_dir: RefCell<Option<std::path::PathBuf>>,
+    /// PY-A: module name → its `__package__` (relative-import anchor). A
+    /// package's `__init__` anchors to itself; a submodule anchors to its
+    /// parent package.
+    py_module_pkg: RefCell<std::collections::HashMap<String, String>>,
+    /// PY-A: the module currently being registered/loaded, so relative
+    /// imports inside it resolve against the right package.
+    py_current_module: RefCell<Option<String>>,
     /// PY-A: every registered function definition (including ones loaded from
     /// imported modules) — return-type inference must cover all of them.
     registered_func_defs: RefCell<Vec<AstNode>>,
@@ -114,6 +121,8 @@ impl Resolver {
             py_mangled_to_module: RefCell::new(std::collections::HashMap::new()),
             py_loaded_modules: RefCell::new(std::collections::HashSet::new()),
             py_source_dir: RefCell::new(None),
+            py_module_pkg: RefCell::new(std::collections::HashMap::new()),
+            py_current_module: RefCell::new(None),
             registered_func_defs: RefCell::new(Vec::new()),
             capability_inferencer:
                 crate::middle::types::identity::inference::CapabilityInferencer::new(),
@@ -244,7 +253,9 @@ impl Resolver {
             fn walk_py_import(n: &AstNode, out: &mut Vec<(String, String, String)>) {
                 match n {
                     AstNode::Call { receiver: None, method, args, .. }
-                        if method == "zeta_py_import" || method == "zeta_py_from" =>
+                        if method == "zeta_py_import"
+                            || method == "zeta_py_from"
+                            || method == "zeta_py_star" =>
                     {
                         let mut strs: Vec<String> = Vec::new();
                         for a in args {
@@ -254,6 +265,8 @@ impl Resolver {
                         }
                         if method == "zeta_py_import" && strs.len() >= 2 {
                             out.push(("import".to_string(), strs[0].clone(), strs[1].clone()));
+                        } else if method == "zeta_py_star" && !strs.is_empty() {
+                            out.push(("star".to_string(), strs[0].clone(), String::new()));
                         } else if method == "zeta_py_from" && strs.len() >= 3 {
                             out.push((strs[0].clone(), strs[1].clone(), strs[2].clone()));
                         }
@@ -274,14 +287,70 @@ impl Resolver {
             }
             let mut found: Vec<(String, String, String)> = Vec::new();
             walk_py_import(&ast, &mut found);
+            // The module currently being registered (if any) anchors relative
+            // imports: `register` recurses through loaded modules, so a
+            // `from . import x` inside `pkg/sub.py` must resolve against `pkg`.
+            let ctx = self.py_current_module.borrow().clone();
             for (kind, a, b) in found {
-                let (module, member, alias) = if kind == "import" {
+                // `from X import *` — bind the module's public top-level names.
+                if kind == "star" {
+                    if let Some(module) = self.resolve_py_module_spec(&a, ctx.as_deref()) {
+                        if crate::middle::pylib::find_module(&module).is_none() {
+                            let _ = self.load_user_python_module(&module);
+                        }
+                        let names: Vec<String> = self
+                            .py_module_own_names
+                            .borrow()
+                            .get(&module)
+                            .map(|s| {
+                                s.iter()
+                                    .filter(|n| !n.starts_with('_'))
+                                    .cloned()
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if names.is_empty() {
+                            eprintln!(
+                                "warning: PY-A: `from {} import *` bound no public names",
+                                module
+                            );
+                        }
+                        for n in names {
+                            self.py_member_aliases
+                                .borrow_mut()
+                                .insert(n.clone(), (module.clone(), n));
+                        }
+                    }
+                    continue;
+                }
+                let (spec, member, alias) = if kind == "import" {
                     // ("import", module, alias)
                     (a, None, b)
                 } else {
                     // (module, member, alias)
                     (kind, Some(a), b)
                 };
+                // A relative specifier (`.`, `..pkg.mod`) resolves against the
+                // importing module's package; absolute names pass through.
+                let module = match self.resolve_py_module_spec(&spec, ctx.as_deref()) {
+                    Some(m) => m,
+                    None => continue, // already reported (fail-loud)
+                };
+                // `from . import submod` — a bare-dots spec whose member is a
+                // SUBMODULE imports that module (binds `submod` to `pkg.submod`),
+                // not a member of `pkg`.
+                if let Some(m) = member.clone() {
+                    if !spec.is_empty() && spec.chars().all(|c| c == '.') {
+                        let sub = format!("{}.{}", module, m);
+                        if self.find_py_module_file(&sub).is_some()
+                            || crate::middle::pylib::find_module(&sub).is_some()
+                        {
+                            let _ = self.load_user_python_module(&sub);
+                            self.py_module_aliases.borrow_mut().insert(alias, sub);
+                            continue;
+                        }
+                    }
+                }
                 // Built-in registry first; otherwise try to load a user file
                 // from disk (that is what makes `import` generic); only when
                 // neither exists do we fall back to an external shim.
@@ -1221,6 +1290,69 @@ impl Resolver {
     /// PY-A: locate a Python module file on disk: (path, is_python_source).
     /// Order: the directory of the file being compiled, `pylib`, `$ZETA_PYLIB`,
     /// then `build/stubs`.
+    /// PY-A: resolve a possibly-relative module specifier against the module
+    /// currently being loaded. `.` is the current package, `..` its parent,
+    /// etc. Absolute names pass through unchanged. A relative import with no
+    /// package context (a top-level script) or one that escapes the top-level
+    /// package is reported and dropped rather than silently mis-resolved.
+    fn resolve_py_module_spec(&self, spec: &str, ctx: Option<&str>) -> Option<String> {
+        let dots = spec.chars().take_while(|c| *c == '.').count();
+        if dots == 0 {
+            return Some(spec.to_string());
+        }
+        let rest = &spec[dots..];
+        let ctx = match ctx {
+            Some(c) => c,
+            None => {
+                eprintln!(
+                    "warning: PY-A: relative import `{}` has no package context \
+                     (top-level script) — ignored",
+                    spec
+                );
+                return None;
+            }
+        };
+        let pkg = self
+            .py_module_pkg
+            .borrow()
+            .get(ctx)
+            .cloned()
+            .unwrap_or_default();
+        let parts: Vec<&str> = if pkg.is_empty() {
+            Vec::new()
+        } else {
+            pkg.split('.').collect()
+        };
+        // Level 1 (`.`) anchors at `__package__`; each extra dot drops one
+        // trailing component.
+        let drop = dots - 1;
+        if drop > parts.len() {
+            eprintln!(
+                "warning: PY-A: relative import `{}` goes beyond the top-level \
+                 package — ignored",
+                spec
+            );
+            return None;
+        }
+        let base = parts[..parts.len() - drop].join(".");
+        let full = if rest.is_empty() {
+            base
+        } else if base.is_empty() {
+            rest.to_string()
+        } else {
+            format!("{}.{}", base, rest)
+        };
+        if full.is_empty() {
+            eprintln!(
+                "warning: PY-A: relative import `{}` resolved to an empty module — ignored",
+                spec
+            );
+            None
+        } else {
+            Some(full)
+        }
+    }
+
     fn find_py_module_file(&self, module: &str) -> Option<(std::path::PathBuf, bool)> {
         let rel: std::path::PathBuf = module.split('.').collect();
         let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -1266,6 +1398,23 @@ impl Resolver {
                 return false;
             }
         };
+        // `__package__` anchor for relative imports: a package's `__init__`
+        // anchors to itself; a submodule anchors to its parent package.
+        {
+            let is_pkg = path
+                .file_stem()
+                .map(|s| s == "__init__")
+                .unwrap_or(false);
+            let pkg = if is_pkg {
+                module.to_string()
+            } else {
+                module
+                    .rsplit_once('.')
+                    .map(|(p, _)| p.to_string())
+                    .unwrap_or_default()
+            };
+            self.py_module_pkg.borrow_mut().insert(module.to_string(), pkg);
+        }
         let src = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
@@ -1296,6 +1445,9 @@ impl Resolver {
             }
         };
         let prefix = format!("{}__", module.replace('.', "_"));
+        // Registrations below recurse into `register`, whose import handling
+        // resolves relative specifiers — it must see THIS module as context.
+        let saved_ctx = self.py_current_module.replace(Some(module.to_string()));
         // `parse_zeta` folds a module's top-level statements into a synthesized
         // `fn main`. Split it back out: definitions are registered (mangled),
         // the statements become `<prefix>init()` which runs once at import time
@@ -1410,6 +1562,7 @@ impl Resolver {
             .borrow_mut()
             .insert(module.to_string(), own);
         self.py_user_modules.borrow_mut().insert(module.to_string());
+        self.py_current_module.replace(saved_ctx);
         eprintln!("PY-A: imported module `{}` from {}", module, path.display());
         true
     }
