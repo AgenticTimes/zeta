@@ -1,0 +1,19 @@
+// PY-A: int(s, base) / str.replace(old,new,count) / os.path.join(3 参) / dict.fromkeys
+//   （此前四者均为裸 extern 或 arity 落空 → 链接失败）
+// expect: 255
+// expect: 2
+// expect: a_b-c
+// expect: a_b_c
+// expect: a/b/c
+// expect: 2
+print(int("ff", 16))
+print(int("10", 2))
+print("a-b-c".replace("-", "_", 1))
+print("a-b-c".replace("-", "_"))
+
+import os
+
+print(os.path.join("a", "b", "c"))
+
+d = dict.fromkeys(["a", "b"], 0)
+print(len(d))

@@ -3824,6 +3824,52 @@ impl MirGen {
                         return id;
                     }
                 }
+                // PY-A: int(text, base) / dict.fromkeys(keys, val) — both
+                // previously fell to bare externs (link failure).
+                if receiver.is_none() && method == "int" && args.len() == 2 {
+                    let a = self.lower_expr(&args[0]);
+                    let b = self.lower_expr(&args[1]);
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_int_base".to_string(),
+                        args: vec![a, b],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+                if method == "fromkeys" && args.len() == 2 {
+                    let is_dict = receiver.is_none()
+                        || matches!(receiver.as_deref(), Some(AstNode::Var(v)) if v == "dict");
+                    if is_dict {
+                        let keys = self.lower_expr(&args[0]);
+                        let keys_are_str = matches!(
+                            self.type_map.get(&keys),
+                            Some(Type::DynamicArray(e)) | Some(Type::Array(e, _))
+                                if matches!(**e, Type::Str)
+                        );
+                        let val = self.lower_expr(&args[1]);
+                        let flag = self.next_id();
+                        self.exprs.insert(flag, MirExpr::IntLit(keys_are_str as i64));
+                        self.type_map.insert(flag, Type::I64);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_map_fromkeys".to_string(),
+                            args: vec![keys, val, flag],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(
+                            id,
+                            Type::Named(
+                                "map".to_string(),
+                                vec![if keys_are_str { Type::Str } else { Type::I64 }],
+                            ),
+                        );
+                        return id;
+                    }
+                }
                 // PY-A: round(x[, n]). Without this the 2-argument form fell to
                 // a bare libm `round` extern whose first argument had been
                 // coerced to i64 (2.345 became 2), and round(2.5) gave 3.
@@ -5217,6 +5263,18 @@ impl MirGen {
                 // PY-A: string methods — dispatch to host_str_* runtime by
                 // receiver type (Python s.upper()/s.contains(x)/... )
                 if receiver_ty.as_ref().map_or(false, |t| matches!(t, Type::Str)) {
+                    // `s.replace(old, new, count)` — bounded replacement.
+                    if method == "replace" && arg_ids.len() == 4 {
+                        self.stmts.push(MirStmt::Call {
+                            func: "host_str_replace_n".to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
                     // `s.split(sep, maxsplit)` — bounded split.
                     if method == "split" && arg_ids.len() == 3 {
                         self.stmts.push(MirStmt::Call {

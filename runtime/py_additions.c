@@ -13,6 +13,12 @@
 #include <math.h>
 
 static int64_t zt_vec_len(int64_t v);
+// Map primitives live in tokio_runtime_stub.c (merged into tokio_runtime.o);
+// declared here before any use so no implicit-declaration conflict arises.
+int64_t map_new(void);
+int64_t map_insert(int64_t, int64_t, int64_t);
+int64_t map_get(int64_t, int64_t);
+int64_t map_str_key(int64_t);
 
 // Python-style string equality (by content, not pointer)
 int64_t str_eq(int64_t a, int64_t b) {
@@ -488,6 +494,64 @@ int64_t py_map_items(int64_t map) {
 
 // round(x) — Python returns an int with banker's rounding (round(2.5) == 2).
 int64_t py_round_i64(double x) { return (int64_t)nearbyint(x); }
+
+// ── PY-A: os.path.join with 3-4 parts / int(s, base) / dict.fromkeys ──
+extern int64_t py_os_path_join(int64_t a, int64_t b);
+int64_t py_os_path_join_3(int64_t a, int64_t b, int64_t c) {
+    return py_os_path_join(py_os_path_join(a, b), c);
+}
+int64_t py_os_path_join_4(int64_t a, int64_t b, int64_t c, int64_t d) {
+    return py_os_path_join(py_os_path_join_3(a, b, c), d);
+}
+
+// int(text, base) — Python's base-prefixed conversion (0x/0b/0o handled by
+// strtoll when base is 0 or 16/2/8).
+int64_t py_int_base(int64_t s, int64_t base) {
+    const char* p = s ? (const char*)s : "";
+    while (*p == ' ' || *p == '\t') p++;
+    return (int64_t)strtoll(p, NULL, (int)base);
+}
+
+// dict.fromkeys(keys, value) — a map from the key list; string keys are
+// content-hashed like any other dict.
+int64_t py_map_fromkeys(int64_t keys, int64_t val, int64_t keys_are_str) {
+    int64_t m = map_new();
+    int64_t n = zt_vec_len(keys);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t k = keys_are_str ? map_str_key(((int64_t*)keys)[i]) : ((int64_t*)keys)[i];
+        map_insert(m, k, val);
+    }
+    return m;
+}
+
+// s.replace(old, new, count) — bounded replacement.
+int64_t host_str_replace_n(int64_t s, int64_t o, int64_t n, int64_t count) {
+    const char* p = s ? (const char*)s : "";
+    const char* old = o ? (const char*)o : "";
+    const char* rep = n ? (const char*)n : "";
+    size_t olen = strlen(old);
+    if (olen == 0 || count == 0) return (int64_t)GC_strdup(p);
+    size_t rlen = strlen(rep);
+    size_t cap = strlen(p) + 1;
+    char* out = (char*)GC_malloc(cap);
+    size_t k = 0;
+    const char* cur = p;
+    int64_t done = 0;
+    while (*cur) {
+        if ((count < 0 || done < count) && strncmp(cur, old, olen) == 0) {
+            if (k + rlen + 1 > cap) { size_t nc = (k + rlen + 1) * 2; char* nb = (char*)GC_malloc(nc); memcpy(nb, out, k); out = nb; cap = nc; }
+            memcpy(out + k, rep, rlen);
+            k += rlen;
+            cur += olen;
+            done++;
+        } else {
+            if (k + 2 > cap) { size_t nc = cap * 2; char* nb = (char*)GC_malloc(nc); memcpy(nb, out, k); out = nb; cap = nc; }
+            out[k++] = *cur++;
+        }
+    }
+    out[k] = 0;
+    return (int64_t)out;
+}
 
 // ── PY-A: round(x, n) — Python rounds the actual double value at the n-th
 // decimal (banker's rounding, via the default to-nearest-even mode). The
