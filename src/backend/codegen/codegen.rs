@@ -838,6 +838,16 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some(Linkage::External),
         );
         module.add_function(
+            "py_round_n",
+            context.f64_type().fn_type(&[context.f64_type().into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "py_round_i64",
+            i64_type.fn_type(&[context.f64_type().into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
             "zeta_assert_fail",
             void_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <math.h>
 
 static int64_t zt_vec_len(int64_t v);
 
@@ -483,6 +484,23 @@ int64_t py_map_items(int64_t map) {
         }
     }
     return (int64_t)(base + 2);
+}
+
+// round(x) — Python returns an int with banker's rounding (round(2.5) == 2).
+int64_t py_round_i64(double x) { return (int64_t)nearbyint(x); }
+
+// ── PY-A: round(x, n) — Python rounds the actual double value at the n-th
+// decimal (banker's rounding, via the default to-nearest-even mode). The
+// 2-argument form previously returned a truncated integer. ────────────
+double py_round_n(double x, int64_t n) {
+    if (n == 0) return nearbyint(x);
+    double scale = 1.0;
+    if (n > 0) {
+        for (int64_t i = 0; i < n; i++) scale *= 10.0;
+        return nearbyint(x * scale) / scale;
+    }
+    for (int64_t i = 0; i < -n; i++) scale *= 10.0;
+    return nearbyint(x / scale) * scale;
 }
 
 // ── PY-A: split(sep, maxsplit) / repr / set() ───────────────────────

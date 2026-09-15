@@ -155,9 +155,34 @@ fn parse_for(input: &str) -> IResult<&str, AstNode> {
         },
     ) = (&pattern, &expr)
     {
-        if method == "enumerate" && names.len() == 2 && call_args.len() == 1 {
+        if method == "enumerate" && names.len() == 2 && (1..=2).contains(&call_args.len()) {
             if let (AstNode::Var(idx), AstNode::Var(val)) = (&names[0], &names[1]) {
                 let coll = call_args[0].clone();
+                // `enumerate(xs, start)`: the ARRAY index always runs
+                // 0..len(xs); only the yielded counter is offset by `start`.
+                // Using `start` as the array index made every element read out
+                // of bounds (the loop body never ran).
+                let (loop_var, idx_expr, subscript_index) = if call_args.len() == 2 {
+                    static ENUM_SEQ: std::sync::atomic::AtomicUsize =
+                        std::sync::atomic::AtomicUsize::new(0);
+                    let k = format!(
+                        "__enum_k_{}",
+                        ENUM_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    );
+                    let kvar = AstNode::Var(k.clone());
+                    (
+                        kvar.clone(),
+                        AstNode::BinaryOp {
+                            op: "+".to_string(),
+                            left: Box::new(call_args[1].clone()),
+                            right: Box::new(kvar.clone()),
+                        },
+                        kvar,
+                    )
+                } else {
+                    let iv = AstNode::Var(idx.clone());
+                    (iv.clone(), iv.clone(), iv)
+                };
                 let len_call = AstNode::Call {
                     receiver: None,
                     method: "len".to_string(),
@@ -172,17 +197,24 @@ fn parse_for(input: &str) -> IResult<&str, AstNode> {
                 };
                 let elem = AstNode::Subscript {
                     base: Box::new(coll),
-                    index: Box::new(AstNode::Var(idx.clone())),
+                    index: Box::new(subscript_index),
                 };
-                let mut new_body = vec![AstNode::Assign(
+                let mut new_body = Vec::with_capacity(body.len() + 2);
+                if call_args.len() == 2 {
+                    new_body.push(AstNode::Assign(
+                        Box::new(AstNode::Var(idx.clone())),
+                        Box::new(idx_expr),
+                    ));
+                }
+                new_body.push(AstNode::Assign(
                     Box::new(AstNode::Var(val.clone())),
                     Box::new(elem),
-                )];
+                ));
                 new_body.extend(body);
                 return Ok((
                     input,
                     AstNode::For {
-                        pattern: Box::new(AstNode::Var(idx.clone())),
+                        pattern: Box::new(loop_var),
                         expr: Box::new(range_expr),
                         body: new_body,
                     },

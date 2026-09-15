@@ -1,0 +1,22 @@
+// PY-A: round(x[, n]) / enumerate(xs, start) / `for k in dict`（迭代键）
+//   此前：round(x,n) 落到裸 libm round 且浮点实参被强转 i64（2.345→2）；
+//   enumerate 的 start 被当成数组下标 → 循环体从不执行；`for k in d` 静默 0 次
+// expect: 2
+// expect: 2.350000
+// expect: 5
+// expect: 15
+// expect: 26
+// expect: 2
+print(round(2.5))
+print(round(2.345, 2))
+print(round(5))
+
+for i, v in enumerate([10, 20], 5):
+    print(i + v)
+
+d = {"a": 1, "b": 2}
+n = 0
+for k in d:
+    if k == "a" or k == "b":
+        n = n + 1
+print(n)

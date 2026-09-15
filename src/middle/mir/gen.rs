@@ -1306,6 +1306,40 @@ impl MirGen {
                         // re-allocated on every reference).
                         {
                             let raw_id = self.lower_expr(&expr_clone);
+                            // PY-A: `for k in d:` over a dict iterates its KEYS.
+                            // The map layout has no array length, so the loop
+                            // silently ran zero times before.
+                            let raw_id = if matches!(
+                                self.type_map.get(&raw_id),
+                                Some(Type::Named(n, _)) if n == "map"
+                            ) {
+                                let kid = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "map_keys".to_string(),
+                                    args: vec![raw_id],
+                                    dest: kid,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(kid, MirExpr::Var(kid));
+                                self.type_map.insert(
+                                    kid,
+                                    Type::DynamicArray(Box::new(match self
+                                        .type_map
+                                        .get(&raw_id)
+                                        .cloned()
+                                    {
+                                        Some(Type::Named(_, args))
+                                            if matches!(args.first(), Some(Type::Str)) =>
+                                        {
+                                            Type::Str
+                                        }
+                                        _ => Type::I64,
+                                    })),
+                                );
+                                kid
+                            } else {
+                                raw_id
+                            };
                             let coll_slot = self.next_id();
                             self.exprs.insert(coll_slot, MirExpr::Var(coll_slot));
                             self.type_map.insert(
@@ -3789,6 +3823,44 @@ impl MirGen {
                         self.type_map.insert(id, Type::Bool);
                         return id;
                     }
+                }
+                // PY-A: round(x[, n]). Without this the 2-argument form fell to
+                // a bare libm `round` extern whose first argument had been
+                // coerced to i64 (2.345 became 2), and round(2.5) gave 3.
+                if receiver.is_none()
+                    && method == "round"
+                    && (args.len() == 1 || args.len() == 2)
+                {
+                    let x = self.lower_expr(&args[0]);
+                    let is_float = matches!(
+                        self.type_map.get(&x),
+                        Some(Type::F64) | Some(Type::F32)
+                    );
+                    if !is_float {
+                        // round(int) is the integer itself.
+                        return x;
+                    }
+                    if args.len() == 1 {
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_round_i64".to_string(),
+                            args: vec![x],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::I64);
+                    } else {
+                        let n = self.lower_expr(&args[1]);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_round_n".to_string(),
+                            args: vec![x, n],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::F64);
+                    }
+                    return id;
                 }
                 // PY-A: repr(x) / set(xs) — repr quotes strings; set returns a
                 // deduplicated Vec (V1: no add/remove).
