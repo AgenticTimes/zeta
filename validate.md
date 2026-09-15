@@ -123,20 +123,25 @@ runner (`run.sh`) 自动：编译→运行→逐行比对。**期望行必须与
 ## 4. Runtime 修改流程（C 层）
 
 ```
-1. 改 runtime/py_additions.c（新函数）或 runtime/tokio_runtime_stub.c
-2. 重编三个对象并合并：
+1. 改 runtime/tokio_runtime_stub.c（新函数）或 tokio_runtime.c（异步）
+2. 重编并合并（**只含这两个文件**）：
    clang -c -O2 -I/opt/homebrew/include -DZT_REAL_ASYNC runtime/tokio_runtime_stub.c -o /tmp/stub.o
-   clang -c -O2 -I/opt/homebrew/include runtime/py_additions.c -o /tmp/add.o
    clang -c -O2 -I/opt/homebrew/include tokio_runtime.c -o /tmp/async.o
-   ld -r /tmp/async.o /tmp/stub.o /tmp/add.o -o tokio_runtime.o
+   ld -r /tmp/async.o /tmp/stub.o -o tokio_runtime.o
 3. codegen.rs init 处加 LLVM 声明（签名必须与 C 一致，f64 参数尤其注意）
 4. gen.rs 加分发（method 分发或 free-call 分发）
+
+**不要**把 runtime/py_additions.c 并进 tokio_runtime.o —— 它归 `zeta_runtime_c.o`
+（编译时两个 .o 一起链接）。混入会造成 ~166 个 duplicate symbol 链接失败。
 ```
 
 **已知坑**：
 - f64 参数的 extern 声明若写 i64 → fptosi 截断（abs(-2.5)→nan 的根因）
 - 同名不同 arity 的运行时函数会被消歧逻辑加 `_N` 后缀 → zeta_ 前缀豁免
   （5 处改名点统一豁免）
+- **方法名撞 libc**：`isalnum`/`isspace`/`strftime` 等若未入分发表，会静默链接到
+  **同名 libc 函数**（签名不符 → 静默错值/崩溃），而非链接失败。新增 str 方法务必
+  在 `gen.rs::str_method_symbol`（或 arity 特判）登记
 - ~~StackArray 无 `[cap|len]` header~~ —— **2026-09-13 已统一**：数组句柄一律指向
   数据区，header `[cap|len]` 在 `handle-16`（与 vec_len/vec_get 同布局）。
   `array_len` 读 header（null 安全）；静态尺寸仍走编译期常量折叠。

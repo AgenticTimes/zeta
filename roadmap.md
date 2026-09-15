@@ -374,6 +374,17 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 33. **`strip`/`lstrip`/`rstrip` 的字符集形式**（`b161def8`）：2 参无匹配 → 裸 extern 链接失败。现按**字符集**去掉两端任意字符（`strip("x")` 去任意 x，非子串）。
    同批**系统审计**了注册表：148 条 `F` + 80 条 `W` 的 `ret=` 与 C 实现返回类型**逐条一致**（0 不匹配、0 条"声明 i64 却返回新分配字符串"），确认 `os.listdir` 那类元素类型丢失**不再存在于别处**。
    ⚠️ ~~**待查**：`time.strftime`~~ → **已定位并修复**（`12dbcfce`）：模块级 `time.strftime` 未入注册表 → 落到 **libc 的 `strftime`**（签名完全不同：`char*, size_t, char*, struct tm*`）→ 格式串被当指针解引用 → **SIGSEGV**（先前以为是挂起）。现补 `py_time_strftime`（复用 `py_dt_now`/`py_dt_strftime`）与 `time.localtime` 别名。
+34. **`str.swapcase` 错值 + `str.is*` 谓词族静默 0**（本批）：① `swapcase` 被路由到
+   `host_str_to_uppercase` → `"aBc".swapcase()` 静默返回 `"ABC"`（应为 `"AbC"`）；
+   ② `isalnum`/`isspace`/`isnumeric`/`isdecimal`/`isascii`/`isprintable`/`istitle`
+   未入方法表 → 落到**同名 libc ctype 函数**（`isalnum(int)`，签名与字符串完全不符）→
+   静默返回 0，而非链接失败 —— 与 `time.strftime` 同一类危险模式（roadmap §29）。
+   现补真 `str_swapcase` 与 7 个谓词 + `removeprefix`/`removesuffix`（3.9+，此前裸 extern 链接失败）。
+   谓词为 **ASCII 语义**（`é.isalpha()` 为 0，Python 为 True）—— `isprintable` 对 ≥0x80
+   字节按可打印处理以贴近 CPython；精确 Unicode 分类属已知限界。
+   ⚠️ **构建配方纠正**：`tokio_runtime.o` = `ld -r tokio_runtime.c + tokio_runtime_stub.c`
+   （**不含** `py_additions.c`）；`py_additions.c` 归 `zeta_runtime_c.o`。把 py_additions
+   并进 tokio_runtime.o 会与 zeta_runtime_c.o 冲突 **166 个 duplicate symbol**（validate.md §4 已更正）。
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
