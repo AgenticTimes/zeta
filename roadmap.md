@@ -541,6 +541,39 @@ parse **38/38**；**link 34/38**（旧的「7 个通过」口径已过时，见�
 解析只吃掉 `import pandas `，把 `as pd` 连同其后整份文件留作未解析余量。修法：先 `trim_start`
 再判，并要求 `as` 后有分隔空白（避免 `import a asb` 被误读）。回归：`t115_import_alias`。
 
+### 找到「def 被静默拆碎」的机制：定义关键字退化成了语句（2026-09-16 追加，已修）
+
+用探针把 `parse_top_level_item` 的 alt 逐个试一遍，输出谁吃掉了输入、吃了多少字节：
+
+```
+PROBE item head="def my_trade(context) {...}" alt=func consumed=1146 rest="def before_market_open(c"
+PROBE item head="def my_trade(context) {...}" alt=stmt consumed=4    rest="my_trade(context) {"
+PROBE item head="my_trade(context) {...}"    alt=stmt consumed=18   rest="{"
+```
+
+真相：`parse_func` 对 `def my_trade(...)` **解析失败**（体内有它啃不动的构造），`alt` 于是退到
+`parse_stmt`；而 `parse_stmt` 把 **`def` 当成一个裸标识符**接受（只吃了 4 字节 `def `），
+接着又把 `my_trade(context) ` 当成另一条语句 —— 定义被**静默拆成两段碎片**，
+`many0` 继续往后啃，直到某个位置彻底卡住，整份文件从那里起被丢弃。
+
+修法（fail-loud）：`parse_top_level_item` 里把定义类解析器单独抽出来，**失败后若输入以
+「只能是定义」的关键字开头（`def/class/fn/struct/enum/impl/trait/concept/macro/mod/const/pub`），
+就直接返回错误**，不再退给 `parse_stmt`。`if/for/while/match/try/with` 不在此列——模块级语句
+仍然要能落到 `parse_stmt`。效果：诊断起点从半截行号变回真正的 `def my_trade(context) {`。
+
+顺带：
+- `tests/python_style/run.sh` 支持 `// env: K=V`（严格模式这类用例需要它），并修掉自己引入的
+  `env "${envs[@]:-}"` 空数组展开 bug（`env "" prog` 会什么都不跑）。
+- 新增 `t116_strict_truncated_def`（`// expect-error` + `ZETA_STRICT_PARSE=1`）锁住该行为。
+- **口径变化**：官方退出码 194/194 不变；python_style 117/117；语料**老实口径 7/38 → 9/38**。
+
+### 另一个已定位的小 bug（未修）
+
+`def X(...):` 后**函数体没有任何语句**（只有注释/空行）时，缩进预处理不会把头部改写成
+`{` —— `opens` 要求 `next_code_indent(&infos, i+1) > indent`，而此处下一个「代码行」是缩进更浅的
+下一个 def，于是条件为假、行原样透传（`def X(...):` 带冒号），解析必然失败。
+Python 里空函数体本身是语法错误，语料未必命中，故先记着。
+
 ### 后续两个靶子（按语料命中面排序）
 
 1. **`def X(...)` 头被吃掉、函数体 `{` 留在余量里**（`蛇皮走位小市值.py`、`五年15倍年化79.py`、

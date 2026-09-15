@@ -1123,7 +1123,7 @@ fn parse_top_level_item(input: &str) -> IResult<&str, AstNode> {
     // Order matters: type/struct/enum/concept checked before func because
     // they share attribute syntax (#[derive], etc.) and alt cannot backtrack
     // once an alternative consumes input on failure.
-    alt((
+    let mut definitions = alt((
         parse_type_alias,
         parse_concept,
         parse_impl,
@@ -1134,10 +1134,39 @@ fn parse_top_level_item(input: &str) -> IResult<&str, AstNode> {
         parse_macro_def,
         parse_mod,
         parse_func,
-        // Also allow statements at top level
-        crate::frontend::parser::stmt::parse_stmt,
-    ))
-    .parse(input)
+    ));
+    match definitions.parse(input) {
+        Ok(r) => Ok(r),
+        Err(def_err) => {
+            // PY-A fail-loud: keywords that can only begin a DEFINITION
+            // (`def`/`class`/`fn`/…) must never fall through to the statement
+            // parser. Otherwise a definition whose body has one unsupported
+            // construct degrades silently: `parse_stmt` accepts `def ` as a
+            // bare identifier (4 bytes!) and then `name(args) ` as another
+            // statement, SPLITTING the definition into stray fragments and
+            // letting `many0` chew through the rest of the file. Failing here
+            // instead stops the caller's `many0`, so the CLI reports the
+            // dropped tail at the real starting point (`def …`).
+            //
+            // `if`/`for`/`while`/`match`/`try`/`with` are NOT in this list:
+            // module-level statements are legitimate and must still reach
+            // `parse_stmt`.
+            const DEFINITION_KEYWORDS: &[&str] = &[
+                "def", "class", "fn", "struct", "enum", "impl", "trait", "concept", "macro",
+                "mod", "const", "pub",
+            ];
+            let is_def_kw = DEFINITION_KEYWORDS.iter().any(|kw| {
+                input.starts_with(kw)
+                    && !input[kw.len()..]
+                        .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+            });
+            if is_def_kw {
+                return Err(def_err);
+            }
+            // Also allow statements at top level
+            crate::frontend::parser::stmt::parse_stmt(input)
+        }
+    }
 }
 
 pub fn parse_zeta(input: &str) -> IResult<&str, Vec<AstNode>> {
