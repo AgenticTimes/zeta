@@ -347,6 +347,7 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 12. **`"{}".format(...)`**（`31fd29ad`）：字面量模板重写为 f-string 按各参类型格式化；含 `:` 格式说明/`!` 转换/具名/缺参时返回 None → 落空报错，不静默错格式化
 13. **f-string 格式说明静默错**（`a9387dd4`）：`zeta_fmt_f64_spec` 只是给 spec 前置 `%`，只有裸 `.2f` 能用 —— `{x:>8.2f}` 生成非法 C 转换、直接把说明文字 `>8.2f` 打出来；i64/str 的 spec 被整个丢弃（`{n:05d}` → `42`）。现按 Python 语法解析 spec（fill/align/sign/0/width/,/.prec/type）并手工补齐，三种值类型各一个入口（f64 必须显式声明，否则自动 extern 会按 i64 声明并 fptosi）
 14. **`any`/`all` 链接失败**、**`for i, v in enumerate(xs)` 丢循环**（`13d3c3d8`）；**`zip` 裸 extern 链接失败**（`f27b33cd`，现产出 `(a[i],b[i])` 对，配合元组解构）
+15. **`max/min`、`s.split()`（无分隔符）、`sorted(reverse=)`、`d.items()` 全是裸 extern 链接失败**（`a3f1e103`/`13a2077b`）：现分别实现；`d.items()` 复用「键类型 + pair 位置类型」→ `for k, v in d.items()` 键还原为原串。`sorted(key=)` **故意不接管**（仍链接期失败），避免静默按错的东西排序
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
