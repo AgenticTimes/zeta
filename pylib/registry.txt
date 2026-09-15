@@ -181,6 +181,15 @@ X py_hashlib_md5_0 args= ret=i64
 X py_hashlib_sha1_0 args= ret=i64
 X py_hashlib_sha256_0 args= ret=i64
 
+# ---- functools : reduce(fn, iterable[, init]); the decorators (wraps,
+#      lru_cache, cache) are parse-time no-ops --------------------------
+M functools
+F functools reduce py_functools_reduce args=i64,i64 ret=i64
+F functools wraps py_noop1 args=i64 ret=i64
+F functools lru_cache py_noop1 args=i64 ret=i64
+F functools cache py_noop1 args=i64 ret=i64
+X py_functools_reduce_3 args=i64,i64,i64 ret=i64
+
 # ---- datetime (evidence: the corpus's heaviest stdlib need — timedelta 14,
 #      strptime 6, date/datetime construction, arithmetic, comparisons) ----
 M datetime

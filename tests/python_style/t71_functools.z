@@ -1,0 +1,10 @@
+// PY-A: functools.reduce —— 左折叠（无 init / 带 init）
+// expect: 10
+// expect: 20
+import functools
+
+def add(a, b):
+    return a + b
+
+print(functools.reduce(add, [1, 2, 3, 4]))
+print(functools.reduce(add, [1, 2, 3, 4], 10))

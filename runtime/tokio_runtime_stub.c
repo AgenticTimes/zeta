@@ -1255,6 +1255,28 @@ int64_t py_hashlib_digest(int64_t handle) {
 #pragma clang diagnostic pop
 #endif
 
+// ---- functools ----
+// reduce(fn, iterable[, init]) — left fold. `fn` is a Zeta function pointer
+// with the two-argument ABI. The iterable is a [cap|len] array handle.
+int64_t py_functools_reduce(int64_t fn, int64_t arr) {
+    int64_t n = array_len(arr);
+    if (n <= 0) return 0;
+    int64_t acc = ((int64_t*)arr)[0];
+    for (int64_t i = 1; i < n; i++) {
+        acc = ((int64_t(*)(int64_t, int64_t))fn)(acc, ((int64_t*)arr)[i]);
+    }
+    return acc;
+}
+
+int64_t py_functools_reduce_3(int64_t fn, int64_t arr, int64_t init) {
+    int64_t acc = init;
+    int64_t n = array_len(arr);
+    for (int64_t i = 0; i < n; i++) {
+        acc = ((int64_t(*)(int64_t, int64_t))fn)(acc, ((int64_t*)arr)[i]);
+    }
+    return acc;
+}
+
 // ---- json ----
 static int64_t zt_json_quote(const char* s, char* out) {
     char* o = out;
