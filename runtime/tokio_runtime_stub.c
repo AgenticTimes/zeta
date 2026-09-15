@@ -3003,9 +3003,24 @@ int64_t py_collections_counter_new(int64_t vec) {
     }
     return m;
 }
+// Counter(<list of str>) — keys must be CONTENT hashes (map_str_key), exactly
+// like a dict literal, or identical strings at different literal sites count
+// as separate keys.
+int64_t py_collections_counter_new_str(int64_t vec) {
+    int64_t m = map_new();
+    if (!vec) return m;
+    int64_t len = ((int64_t*)(vec - 16))[1];
+    for (int64_t i = 0; i < len; i++) {
+        int64_t k = map_str_key(((int64_t*)vec)[i]);
+        int64_t c = map_get(m, k);
+        map_insert(m, k, c + 1);
+    }
+    return m;
+}
 // defaultdict(int) — our maps already return 0 for a missing key, which IS
 // the int() default; a non-int factory (list/set) is not modelled.
 int64_t py_collections_defaultdict(int64_t factory) { (void)factory; return map_new(); }
+
 // len(dict) — count the used entries (map slots are [key|value|used]).
 int64_t zeta_map_len(int64_t m) {
     if (!m) return 0;

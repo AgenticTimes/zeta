@@ -146,6 +146,13 @@ int64_t zeta_slice_vec(int64_t data, int64_t start, int64_t end) {
 
 // map_keys / map_values — iterate the open-addressing table (entries at
 // map+16, MAP_ENTRY_SIZE=24 bytes: [key | value | used]) into Vec handles.
+// String keys are stored as content hashes; recover the original text for
+// display (falls back to the raw key for non-string keys).
+static int64_t zt_key_display(int64_t key) {
+    int64_t s = zeta_key_string(key);
+    return s ? s : key;
+}
+
 int64_t map_keys(int64_t map) {
     if (!map) return 0;
     int64_t cap = ((int64_t*)map)[0];
@@ -154,7 +161,7 @@ int64_t map_keys(int64_t map) {
     for (int64_t i = 0; i < cap; i++) {
         char* e = (char*)map + 16 + i * 24;
         if (*(uint8_t*)(e + 16)) {
-            base[2 + base[1]] = *(int64_t*)e;
+            base[2 + base[1]] = zt_key_display(*(int64_t*)e);
             base[1] += 1;
         }
     }
@@ -173,6 +180,53 @@ int64_t map_values(int64_t map) {
         }
     }
     return (int64_t)(base + 2);
+}
+
+// collections.Counter(...).most_common([n]) — a Vec of (key, count) pairs in
+// descending count order. Each pair is a 2-slot handle, so
+// `for k, c in counter.most_common():` destructures it. Keys go through
+// zt_key_display, so string keys come back as the original text.
+static int64_t zt_map_most_common(int64_t map, int64_t limit) {
+    if (!map) return 0;
+    int64_t cap = ((int64_t*)map)[0];
+    if (cap < 0) cap = 0;
+    int64_t* keys = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
+    int64_t* vals = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
+    int64_t n = 0;
+    for (int64_t i = 0; i < cap; i++) {
+        char* e = (char*)map + 16 + i * 24;
+        if (*(uint8_t*)(e + 16)) {
+            keys[n] = zt_key_display(*(int64_t*)e);
+            vals[n] = *((int64_t*)e + 1);
+            n++;
+        }
+    }
+    for (int64_t i = 1; i < n; i++) {
+        int64_t kk = keys[i], vv = vals[i];
+        int64_t j = i - 1;
+        while (j >= 0 && vals[j] < vv) {
+            keys[j + 1] = keys[j];
+            vals[j + 1] = vals[j];
+            j--;
+        }
+        keys[j + 1] = kk;
+        vals[j + 1] = vv;
+    }
+    if (limit > 0 && limit < n) n = limit;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
+    base[0] = n ? n : 1;
+    base[1] = n;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t* pair = (int64_t*)GC_malloc(16);
+        pair[0] = keys[i];
+        pair[1] = vals[i];
+        base[2 + i] = (int64_t)pair;
+    }
+    return (int64_t)(base + 2);
+}
+int64_t py_map_most_common(int64_t map) { return zt_map_most_common(map, 0); }
+int64_t py_map_most_common_2(int64_t map, int64_t limit) {
+    return zt_map_most_common(map, limit);
 }
 
 // dict .get(k, default) — missing key returns the default (map_get returns 0)

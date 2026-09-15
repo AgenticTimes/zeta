@@ -2588,6 +2588,43 @@ impl MirGen {
                 if method == "__kwarg__" && receiver.is_none() && args.len() == 2 {
                     return self.lower_expr(&args[1]);
                 }
+                // PY-A: `Counter(<list of str>)` must content-hash its keys,
+                // exactly like a dict literal — the plain shim keys by pointer
+                // and would count each literal site separately.
+                if method == "Counter" && args.len() == 1 {
+                    let is_counter = match receiver {
+                        None => self
+                            .py_member_aliases
+                            .get("Counter")
+                            .map(|(m, mem)| m == "collections" && mem == "Counter")
+                            .unwrap_or(false),
+                        Some(_) => self
+                            .py_member_target(receiver, method)
+                            .map(|(m, mem)| m == "collections" && mem == "Counter")
+                            .unwrap_or(false),
+                    };
+                    if is_counter {
+                        let arg_id = self.lower_expr(&args[0]);
+                        let elem_is_str = match self.type_map.get(&arg_id) {
+                            Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
+                                matches!(**e, Type::Str)
+                            }
+                            _ => false,
+                        };
+                        if elem_is_str {
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_collections_counter_new_str".to_string(),
+                                args: vec![arg_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map
+                                .insert(id, Type::Named("map".to_string(), vec![]));
+                            return id;
+                        }
+                    }
+                }
                 // PY-A: `dataclasses.asdict(x)` — the receiver's struct type is
                 // known statically, so expand to a dict literal of its fields.
                 // There is no runtime reflection to build such a dict, and a
@@ -4262,15 +4299,18 @@ impl MirGen {
                     return id;
                 }
 
-                // PY-A: d.keys() / d.values() — iterate the table into a Vec
+                // PY-A: d.keys() / d.values() / Counter.most_common([n]) —
+                // `map` is not a Py* tag, so these go through this dedicated
+                // branch rather than the handle-method dispatch.
                 if receiver_ty
                     .as_ref()
                     .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
-                    && args.is_empty()
                 {
-                    let func = match method.as_str() {
-                        "keys" => Some("map_keys"),
-                        "values" => Some("map_values"),
+                    let func = match (method.as_str(), args.len()) {
+                        ("keys", 0) => Some("map_keys"),
+                        ("values", 0) => Some("map_values"),
+                        ("most_common", 0) => Some("py_map_most_common"),
+                        ("most_common", 1) => Some("py_map_most_common_2"),
                         _ => None,
                     };
                     if let Some(fname) = func {
