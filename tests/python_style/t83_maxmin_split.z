@@ -1,0 +1,16 @@
+// PY-A: max/min（单参）与 s.split()（无分隔符 —— 按空白切分且丢弃空串）
+//   （此前两者都是裸 extern → 链接失败）
+// expect: 3
+// expect: 1
+// expect: 3
+// expect: a
+// expect: b
+// expect: c
+xs = [3, 1, 2]
+print(max(xs))
+print(min(xs))
+
+s = "a b  c "
+print(len(s.split()))
+for w in s.split():
+    print(w)

@@ -9,6 +9,7 @@
 #include <gc.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <ctype.h>
 
 // Python-style string equality (by content, not pointer)
 int64_t str_eq(int64_t a, int64_t b) {
@@ -442,6 +443,60 @@ int64_t py_zip(int64_t a, int64_t b) {
         pair[1] = ((int64_t*)b)[i];
         base[2 + i] = (int64_t)pair;
     }
+    return (int64_t)(base + 2);
+}
+
+// ── PY-A: max(xs) / min(xs) — the 1-argument form over an i64 array ──
+int64_t py_builtin_max(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t best = ((int64_t*)vec)[0];
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        if (v > best) best = v;
+    }
+    return best;
+}
+int64_t py_builtin_min(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t best = ((int64_t*)vec)[0];
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        if (v < best) best = v;
+    }
+    return best;
+}
+
+// ── PY-A: s.split() with no separator — split on whitespace runs, dropping
+// empty fields (Python semantics). The 2-arg form uses host_str_split. ──
+int64_t host_str_split_ws(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    int64_t cap = 8, len = 0;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap;
+    base[1] = 0;
+    while (*p) {
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (!*p) break;
+        const char* start = p;
+        while (*p && !isspace((unsigned char)*p)) p++;
+        size_t n = (size_t)(p - start);
+        char* tok = (char*)GC_malloc(n + 1);
+        memcpy(tok, start, n);
+        tok[n] = 0;
+        if (len >= cap) {
+            int64_t nc = cap * 2;
+            int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)nc * 8);
+            nb[0] = nc;
+            nb[1] = len;
+            for (int64_t i = 0; i < len; i++) nb[2 + i] = base[2 + i];
+            base = nb;
+            cap = nc;
+        }
+        base[2 + len++] = (int64_t)tok;
+    }
+    base[1] = len;
     return (int64_t)(base + 2);
 }
 

@@ -3626,6 +3626,43 @@ impl MirGen {
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
+                // PY-A: max(xs) / min(xs) — the 1-argument form (previously a
+                // bare `max`/`min` extern → link failure). f64 elements live as
+                // raw bit patterns, so those are warned about instead of
+                // silently compared as integers.
+                if receiver.is_none()
+                    && (method == "max" || method == "min")
+                    && args.len() == 1
+                {
+                    let a = self.lower_expr(&args[0]);
+                    let elem_is_float = match self.type_map.get(&a) {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
+                            matches!(**e, Type::F64 | Type::F32)
+                        }
+                        _ => false,
+                    };
+                    if elem_is_float {
+                        eprintln!(
+                            "warning: PY-A: `{}` over a float array compares raw bit \
+                             patterns — pass integers, or compare explicitly",
+                            method
+                        );
+                    }
+                    let func = if method == "max" {
+                        "py_builtin_max"
+                    } else {
+                        "py_builtin_min"
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: func.to_string(),
+                        args: vec![a],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
                 // PY-A: `zip(a, b)` — a Vec of (a[i], b[i]) pairs, so
                 // `for x, y in zip(a, b):` destructures. (Previously a bare
                 // `zip` extern → link failure.)
@@ -4699,6 +4736,19 @@ impl MirGen {
                 // PY-A: string methods — dispatch to host_str_* runtime by
                 // receiver type (Python s.upper()/s.contains(x)/... )
                 if receiver_ty.as_ref().map_or(false, |t| matches!(t, Type::Str)) {
+                    // `s.split()` (no separator) splits on whitespace runs.
+                    if method == "split" && arg_ids.len() == 1 {
+                        self.stmts.push(MirStmt::Call {
+                            func: "host_str_split_ws".to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map
+                            .insert(id, Type::DynamicArray(Box::new(Type::Str)));
+                        return id;
+                    }
                     // ljust/rjust/center take width[, fillchar] — Python's
                     // common form has ONE argument after the receiver, so the
                     // 3-arity table entry alone never matched.
