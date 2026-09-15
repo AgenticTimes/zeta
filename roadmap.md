@@ -343,6 +343,8 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 8. **`for i, v in enumerate(xs):` 整条语句静默丢弃**（`13d3c3d8`）：`parse_pattern` 只接受**带括号**元组 → `for i, v in ...` 解析失败整条丢掉；且 `enumerate` 无 lowering。现支持无括号元组目标，双名 enumerate 解糖为 `for i in range(len(xs)): v = xs[i]`
 9. **`any`/`all` 链接失败**（`13d3c3d8`）：无内建实现 → 改为数组真值 shim，结果类型 bool
 10. **`print(Path)`/`str(Path)`/f-string 把字符串型句柄打成指针**（`cf903286`）；**`.parent` 被标 i64** 致 `len(...)` 段错误（`02a3c0e5`）
+11. **`s.ljust(n)`/`rjust(n)` 落空**（`31fd29ad`）：方法表只在 3 元数注册，2 参调用无匹配 → 裸 extern 链接失败；补 2 参 shim + `center`。注意 fill 是**字符串句柄**（实现里解引用），默认值必须是单字符字符串——传字节 `' '`（32）会解引用地址 32 直接段错误
+12. **`"{}".format(...)`**（`31fd29ad`）：字面量模板重写为 f-string 按各参类型格式化；含 `:` 格式说明/`!` 转换/具名/缺参时返回 None → 落空报错，不静默错格式化
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
