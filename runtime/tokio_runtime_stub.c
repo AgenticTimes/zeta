@@ -1117,11 +1117,26 @@ static const char* zt_platform_name = "linux";
 int64_t py_sys_platform(void) { return (int64_t)zt_platform_name; }
 int64_t py_os_sep(void) { return (int64_t)"/"; }
 int64_t py_os_linesep(void) { return (int64_t)"\n"; }
-// NOTE: sys.argv is deliberately NOT exposed yet. The list is easy to build,
-// but indexing/iterating a Vec<str> from a module member does not carry the
-// element type through to the loop variable or the subscript, so it would
-// hand back handles/0 instead of strings. Left unregistered so the use warns
-// and resolves loudly rather than being silently wrong.
+// sys.argv — captured at process start (the generated main takes no arguments
+// of its own). Registered as `ret=vecstr`, so subscripts/for-in now carry the
+// element type through (the attribute-read mapping used to drop it, handing
+// back handles and 0).
+static int zt_argc = 0;
+static char** zt_argv = 0;
+__attribute__((constructor)) static void zt_capture_args(int argc, char** argv) {
+    zt_argc = argc;
+    zt_argv = argv;
+}
+int64_t py_sys_argv(void) {
+    int64_t n = zt_argc > 0 ? zt_argc : 1;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)n * 8);
+    base[0] = n;
+    base[1] = zt_argc;
+    for (int i = 0; i < zt_argc; i++) {
+        base[2 + i] = (int64_t)zt_strdup(zt_argv[i] ? zt_argv[i] : "");
+    }
+    return (int64_t)(base + 2);
+}
 int64_t py_sys_version_info(void) {
     // Vec [3, 14, 0] so `sys.version_info[0] >= 3` works.
     int64_t* base = (int64_t*)GC_malloc(16 + 3 * 8);

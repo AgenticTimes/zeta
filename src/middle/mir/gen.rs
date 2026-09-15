@@ -6361,6 +6361,19 @@ impl MirGen {
                                         "f64" => Type::F64,
                                         "str" => Type::Str,
                                         "vec" => Type::DynamicArray(Box::new(Type::I64)),
+                                        // Without these a module attribute read
+                                        // was typed i64, so a later subscript or
+                                        // for-in lost the element type and handed
+                                        // back handles/0 instead of strings.
+                                        "vecstr" => {
+                                            Type::DynamicArray(Box::new(Type::Str))
+                                        }
+                                        "vecjson" => Type::DynamicArray(Box::new(
+                                            Type::Named("PyJson".to_string(), vec![]),
+                                        )),
+                                        "vecmatch" => Type::DynamicArray(Box::new(
+                                            Type::Named("PyMatch".to_string(), vec![]),
+                                        )),
                                         _ => Type::I64,
                                     },
                                 );

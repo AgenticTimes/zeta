@@ -246,6 +246,7 @@ F sys version py_sys_version args= ret=str
 F sys version_info py_sys_version_info args= ret=vec
 F sys maxsize py_sys_maxsize args= ret=i64
 F sys platform py_sys_platform args= ret=str
+F sys argv py_sys_argv args= ret=vecstr
 F sys path py_sys_path args= ret=vec
 F sys path.insert py_sys_path_insert args=i64,i64 ret=i64
 F sys path.__contains__ py_sys_path_contains args=i64 ret=i64
