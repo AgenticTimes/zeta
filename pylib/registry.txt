@@ -190,6 +190,22 @@ F functools lru_cache py_noop1 args=i64 ret=i64
 F functools cache py_noop1 args=i64 ret=i64
 X py_functools_reduce_3 args=i64,i64,i64 ret=i64
 
+# ---- pathlib : a PyPath is the path string itself, so os.path.* accept it
+#      directly; parent/resolve keep the handle tag so `.parent.parent`
+#      chains, and `/` joins (handle_op). ---------------------------------
+M pathlib
+F pathlib Path py_path_new args=i64 ret=i64 handle=PyPath
+W PyPath name py_os_path_basename args=1 ret=str
+W PyPath parent py_os_path_dirname args=1 ret=str ret_handle=PyPath
+W PyPath resolve py_os_path_abspath args=1 ret=str ret_handle=PyPath
+W PyPath exists py_os_path_exists args=1
+W PyPath is_file py_os_path_isfile args=1
+W PyPath is_dir py_os_path_isdir args=1
+W PyPath stem py_path_stem args=1 ret=str
+W PyPath suffix py_path_suffix args=1 ret=str
+W PyPath read_text py_path_read_text args=1 ret=str
+W PyPath write_text py_path_write_text args=2
+
 # ---- datetime (evidence: the corpus's heaviest stdlib need — timedelta 14,
 #      strptime 6, date/datetime construction, arithmetic, comparisons) ----
 M datetime

@@ -1,0 +1,24 @@
+// PY-A: pathlib.Path —— 构造 / `/` 拼接 / 链式 .resolve().parent / 名字部件 / 文件 IO
+// expect: zeta_pathlib_probe.txt
+// expect: zeta_pathlib_probe
+// expect: .txt
+// expect: 1
+// expect: hello
+// expect: x.txt
+// expect: 1
+from pathlib import Path
+
+p = Path("/tmp/zeta_pathlib_probe.txt")
+p.write_text("hello")
+
+print(p.name)
+print(p.stem)
+print(p.suffix)
+print(p.exists())
+print(p.read_text())
+
+base = Path("/tmp")
+print((base / "sub" / "x.txt").name)
+
+q = Path(__file__).resolve()
+print(len(q.parent.name) > 0)

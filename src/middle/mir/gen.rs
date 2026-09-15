@@ -349,6 +349,17 @@ impl MirGen {
                 }
             }
         }
+        // A handle-returning attribute (`Path(...).resolve().parent`) — the
+        // tag comes from the registry's ret_handle for that method.
+        if let AstNode::FieldAccess { base, field } = recv {
+            if let Some(tag) = self.py_handle_of(base) {
+                if let Some((_, Some(ret))) =
+                    crate::middle::pylib::method_symbol(&tag, field)
+                {
+                    return Some(ret.to_string());
+                }
+            }
+        }
         let AstNode::Var(name) = recv else {
             return None;
         };
@@ -2144,9 +2155,14 @@ impl MirGen {
                 // date/timedelta arithmetic and comparisons). Without it the
                 // operands were treated as plain integers, silently producing
                 // garbage for `d1 - d2` / `d < today`.
-                if let (Some(Type::Named(lt, _)), Some(Type::Named(rt, _))) = (
-                    self.type_map.get(&left_id).cloned(),
-                    self.type_map.get(&right_id).cloned(),
+                let tag_name = |t: Option<Type>| match t {
+                    Some(Type::Named(n, _)) => Some(n),
+                    Some(Type::Str) => Some("str".to_string()),
+                    _ => None,
+                };
+                if let (Some(lt), Some(rt)) = (
+                    tag_name(self.type_map.get(&left_id).cloned()),
+                    tag_name(self.type_map.get(&right_id).cloned()),
                 ) {
                     if let Some((sym, kind)) = crate::middle::pylib::handle_op(op, &lt, &rt) {
                         self.stmts.push(MirStmt::Call {
@@ -2161,6 +2177,7 @@ impl MirGen {
                             match kind {
                                 "date" => Type::Named("PyDate".to_string(), vec![]),
                                 "delta" => Type::Named("PyDelta".to_string(), vec![]),
+                                "path" => Type::Named("PyPath".to_string(), vec![]),
                                 _ => Type::I64,
                             },
                         );
@@ -5173,7 +5190,7 @@ impl MirGen {
                 if let AstNode::Var(vname) = &**base {
                     if let Some(&slot) = self.name_to_id.get(vname.as_str()) {
                         if let Some(Type::Named(tag, _)) = self.type_map.get(&slot).cloned() {
-                            if let Some((sym, _)) =
+                            if let Some((sym, ret_handle)) =
                                 crate::middle::pylib::method_symbol(&tag, field)
                             {
                                 let base_id = self.lower_expr(base);
@@ -5184,16 +5201,17 @@ impl MirGen {
                                     type_args: vec![],
                                 });
                                 self.exprs.insert(id, MirExpr::Var(id));
-                                let rt = crate::middle::pylib::method_ret(&tag, field)
-                                    .unwrap_or("i64");
-                                self.type_map.insert(
-                                    id,
-                                    match rt {
+                                let ty = match ret_handle {
+                                    Some(h) => Type::Named(h.to_string(), vec![]),
+                                    None => match crate::middle::pylib::method_ret(&tag, field)
+                                        .unwrap_or("i64")
+                                    {
                                         "str" => Type::Str,
                                         "f64" => Type::F64,
                                         _ => Type::I64,
                                     },
-                                );
+                                };
+                                self.type_map.insert(id, ty);
                                 return id;
                             }
                         }
@@ -5275,7 +5293,9 @@ impl MirGen {
                 // share one dispatch table. Checked on the *lowered* base type
                 // so chained calls work, not only plain variables.
                 if let Some(Type::Named(tag, _)) = self.type_map.get(&base_id).cloned() {
-                    if let Some((sym, _)) = crate::middle::pylib::method_symbol(&tag, field) {
+                    if let Some((sym, ret_handle)) =
+                        crate::middle::pylib::method_symbol(&tag, field)
+                    {
                         self.stmts.push(MirStmt::Call {
                             func: sym.to_string(),
                             args: vec![base_id],
@@ -5283,15 +5303,19 @@ impl MirGen {
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
-                        let rt = crate::middle::pylib::method_ret(&tag, field).unwrap_or("i64");
-                        self.type_map.insert(
-                            id,
-                            match rt {
+                        // A handle-returning attribute (Path.parent) keeps its
+                        // tag so the next `.name`/`.parent` still dispatches.
+                        let ty = match ret_handle {
+                            Some(h) => Type::Named(h.to_string(), vec![]),
+                            None => match crate::middle::pylib::method_ret(&tag, field)
+                                .unwrap_or("i64")
+                            {
                                 "str" => Type::Str,
                                 "f64" => Type::F64,
                                 _ => Type::I64,
                             },
-                        );
+                        };
+                        self.type_map.insert(id, ty);
                         return id;
                     }
                 }

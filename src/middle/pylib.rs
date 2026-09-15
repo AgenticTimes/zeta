@@ -302,6 +302,10 @@ pub fn method_ret(handle: &str, method: &str) -> Option<&'static str> {
 /// and comparisons). Returns (symbol, result kind) where kind is
 /// "date" | "delta" | "bool" | "i64".
 pub fn handle_op(op: &str, left: &str, right: &str) -> Option<(&'static str, &'static str)> {
+    // pathlib: `Path / "sub"` and `Path / Path` both join.
+    if op == "/" && left == "PyPath" && (right == "PyPath" || right == "str") {
+        return Some(("py_os_path_join", "path"));
+    }
     let is_dt = |t: &str| t == "PyDate" || t == "PyDelta";
     if !is_dt(left) || !is_dt(right) {
         return None;

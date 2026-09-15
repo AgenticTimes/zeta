@@ -1277,6 +1277,60 @@ int64_t py_functools_reduce_3(int64_t fn, int64_t arr, int64_t init) {
     return acc;
 }
 
+// ---- pathlib ----
+// A PyPath is the path string itself (a char* handle), so every os.path.*
+// shim accepts it unchanged; only the Path-only operations need new code.
+int64_t py_path_new(int64_t s) {
+    return s ? s : (int64_t)zt_strdup("");
+}
+
+int64_t py_path_stem(int64_t p) {
+    const char* s = p ? (const char*)p : "";
+    const char* slash = strrchr(s, '/');
+    const char* base = slash ? slash + 1 : s;
+    const char* dot = strrchr(base, '.');
+    size_t n = (dot && dot != base) ? (size_t)(dot - base) : strlen(base);
+    char* out = (char*)GC_malloc(n + 1);
+    memcpy(out, base, n);
+    out[n] = 0;
+    return (int64_t)out;
+}
+
+int64_t py_path_suffix(int64_t p) {
+    const char* s = p ? (const char*)p : "";
+    const char* slash = strrchr(s, '/');
+    const char* base = slash ? slash + 1 : s;
+    const char* dot = strrchr(base, '.');
+    if (!dot || dot == base) return (int64_t)zt_strdup("");
+    return (int64_t)zt_strdup(dot);
+}
+
+int64_t py_path_read_text(int64_t p) {
+    const char* path = p ? (const char*)p : "";
+    FILE* f = fopen(path, "rb");
+    if (!f) return (int64_t)zt_strdup("");
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0) sz = 0;
+    char* buf = (char*)GC_malloc((size_t)sz + 1);
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[rd] = 0;
+    return (int64_t)buf;
+}
+
+int64_t py_path_write_text(int64_t p, int64_t text) {
+    const char* path = p ? (const char*)p : "";
+    const char* s = text ? (const char*)text : "";
+    FILE* f = fopen(path, "wb");
+    if (!f) return 0;
+    size_t n = strlen(s);
+    fwrite(s, 1, n, f);
+    fclose(f);
+    return (int64_t)n;
+}
+
 // ---- json ----
 static int64_t zt_json_quote(const char* s, char* out) {
     char* o = out;
