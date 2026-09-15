@@ -2125,7 +2125,10 @@ fn parse_multiplicative(input: &str) -> IResult<&str, AstNode> {
         let mut found_op = None;
         let mut remaining_input = input;
 
-        let multiplicative_ops = ["*", "/", "%"];
+        // `**` must come before `*`, or the prefix match eats it as a bare
+        // multiply and the leftover `* x` parses as a pointer dereference
+        // (`2 ** 10` became `2 * (*10)` and crashed on the load).
+        let multiplicative_ops = ["**", "*", "/", "%"];
 
         // Try without whitespace first
         for &op in &multiplicative_ops {
@@ -2159,7 +2162,12 @@ fn parse_multiplicative(input: &str) -> IResult<&str, AstNode> {
                 Ok((j, _)) => j,
                 Err(_) => remaining_input,
             };
-            let (j, right) = parse_shift(j)?;
+            // `**` is right-associative (2 ** 3 ** 2 == 2 ** 9).
+            let (j, right) = if op == "**" {
+                parse_multiplicative(j)?
+            } else {
+                parse_shift(j)?
+            };
 
             term = AstNode::BinaryOp {
                 op: op.to_string(),

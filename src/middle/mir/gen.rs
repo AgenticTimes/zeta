@@ -2318,6 +2318,32 @@ impl MirGen {
                         _ => Type::I64,
                     };
                     self.type_map.insert(dest, op_type);
+                } else if op == "**" {
+                    // PY-A: Python's power operator. Previously `2 ** 10` was
+                    // parsed as `2 * (*10)` and dereferenced the literal as a
+                    // pointer (crash). Integer bases use an exponentiation
+                    // loop; a float operand uses libm pow.
+                    let is_float = matches!(
+                        self.type_map.get(&left_id),
+                        Some(Type::F64) | Some(Type::F32)
+                    ) || matches!(
+                        self.type_map.get(&right_id),
+                        Some(Type::F64) | Some(Type::F32)
+                    );
+                    let func = if is_float {
+                        "py_math_pow"
+                    } else {
+                        "zeta_pow_i64"
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: func.to_string(),
+                        args: vec![left_id, right_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map
+                        .insert(dest, if is_float { Type::F64 } else { Type::I64 });
                 } else if op == "*"
                     && matches!(self.type_map.get(&left_id), Some(Type::Str))
                     && !matches!(self.type_map.get(&right_id), Some(Type::Str))

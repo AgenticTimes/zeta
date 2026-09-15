@@ -485,6 +485,20 @@ int64_t py_map_items(int64_t map) {
     return (int64_t)(base + 2);
 }
 
+// ── PY-A: integer power `2 ** 10` ────────────────────────────────────
+// A negative exponent would be a float in Python; this returns 0 for that
+// case rather than pretending (float power goes through libm).
+int64_t zeta_pow_i64(int64_t base, int64_t exp) {
+    if (exp < 0) return 0;
+    int64_t r = 1;
+    while (exp > 0) {
+        if (exp & 1) r *= base;
+        base *= base;
+        exp >>= 1;
+    }
+    return r;
+}
+
 // ── PY-A: re.escape + list.index/count ───────────────────────────────
 int64_t py_re_escape(int64_t s) {
     const char* p = s ? (const char*)s : "";
