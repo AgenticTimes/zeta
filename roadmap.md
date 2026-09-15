@@ -360,6 +360,7 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 22. **列表方法 `index`/`count`/`insert`/`remove`/`pop`/`sort`/`reverse` 与字典 `update`/`pop`/`clear` 全部链接失败**（`7c1f7bb7`，由 loop 子代理落地、我方独立复核）：根因是**数组接收者落进 opaque-fallback**——`index`/`count` 被 `str_method_symbol` 当字符串方法路由到 `host_str_find`/`host_str_count`，其余落到裸 extern。现为编译器已知的 `Array`/`DynamicArray` 接收者加专用分发（元素类型感知：str 按内容 `str_eq`、f64 解位模式按值、i64 直接比较），`map` 接收者补 `update`/`pop`/`pop(k,default)`/`clear`。列表方法原地改写句柄，`insert` 扩容返回新句柄 → 语句形态自动回写接收者变量。语义缺口（故意未做）：`d.pop(k)` 缺键时 Python 抛 KeyError，此处返回 0；`index` 未命中返回 -1（均为 V1 限界，非静默错值）。python_style **94/94**（新增 t91/t92/t93）、官方 194/194、语料 38/38。
 23. **`repr`/`set()`/`split(sep,maxsplit)`**（`4cba298c`）、**`round(x,n)` 浮点实参被强转 i64 / `enumerate(xs,start)` 把 start 当数组下标致循环体从不执行 / `for k in d:` 静默 0 次**（`78c9b302`）：均已修。`round(x)` 用 `nearbyint`（银行家舍入，与 Python 一致），`round(x,n)` 按真实 double 在第 n 位小数取整；`for k in d` 改为迭代 `map_keys(d)`（键还原为原串）。
 24. **`int(s,base)` / `replace(old,new,count)` / `os.path.join` 3-4 参 / `dict.fromkeys`**（`4dddfb27`）：四者此前均为裸 extern 或 arity 落空 → 链接失败，现均已实现（`dict.fromkeys` 对字符串键走内容哈希）。顺带把 `py_additions.c` 里的 `map_*` 声明提到文件顶部（原本在使用点之后 → 隐式声明 `int map_new()` 与显式声明冲突）。
+25. **`list.sort(key=)` / `sorted(key=, reverse=)`**（`23e54249`）：运行时用 decorate-sort-undecorate（键只算一次、原下标作稳定 tie-break，与 Python 稳定排序一致）。两个坑：① `xs.sort(key=f)` 没有 reverse 实参，而运行时签名恒有第三个参数 → 缺参取到垃圾值，导致原地排序**表现得像被 reverse**；② `sorted` 的关键字按**名字**匹配（key/reverse），不依赖源码顺序。
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
