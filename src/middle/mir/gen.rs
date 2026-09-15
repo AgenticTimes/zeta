@@ -3824,6 +3824,44 @@ impl MirGen {
                         return id;
                     }
                 }
+                // PY-A: bool(x) — truthiness for containers (length) and
+                // numbers (non-zero). Previously a bare `bool` extern.
+                if receiver.is_none() && method == "bool" && args.len() == 1 {
+                    let a = self.lower_expr(&args[0]);
+                    let len_func = match self.type_map.get(&a).cloned() {
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)) => Some("array_len"),
+                        Some(Type::Str) => Some("str_len"),
+                        Some(Type::Named(n, _)) if n == "map" => Some("zeta_map_len"),
+                        _ => None,
+                    };
+                    let lhs = if let Some(f) = len_func {
+                        let lid = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: f.to_string(),
+                            args: vec![a],
+                            dest: lid,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(lid, MirExpr::Var(lid));
+                        self.type_map.insert(lid, Type::I64);
+                        lid
+                    } else {
+                        a
+                    };
+                    let zero = self.next_id();
+                    self.exprs.insert(zero, MirExpr::IntLit(0));
+                    self.type_map.insert(zero, Type::I64);
+                    self.exprs.insert(
+                        id,
+                        MirExpr::BinaryOp {
+                            op: "!=".to_string(),
+                            left: lhs,
+                            right: zero,
+                        },
+                    );
+                    self.type_map.insert(id, Type::Bool);
+                    return id;
+                }
                 // PY-A: int(text, base) / dict.fromkeys(keys, val) — both
                 // previously fell to bare externs (link failure).
                 if receiver.is_none() && method == "int" && args.len() == 2 {
@@ -4755,6 +4793,33 @@ impl MirGen {
                         self.stmts.push(MirStmt::Call {
                             func: "host_str_contains".to_string(),
                             args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Bool);
+                        return id;
+                    }
+                    // PY-A: `x in list` — linear scan. Previously an array
+                    // receiver fell through and the expression silently
+                    // produced 0 (false) whatever the elements were.
+                    if matches!(
+                        receiver_ty.as_ref(),
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                    ) && arg_ids.len() == 2
+                    {
+                        let elem_is_str = match receiver_ty.as_ref() {
+                            Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
+                                matches!(**e, Type::Str)
+                            }
+                            _ => false,
+                        };
+                        let flag = self.next_id();
+                        self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
+                        self.type_map.insert(flag, Type::I64);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_list_contains".to_string(),
+                            args: vec![arg_ids[0], arg_ids[1], flag],
                             dest: id,
                             type_args: vec![],
                         });

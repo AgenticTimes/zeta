@@ -495,6 +495,22 @@ int64_t py_map_items(int64_t map) {
 // round(x) — Python returns an int with banker's rounding (round(2.5) == 2).
 int64_t py_round_i64(double x) { return (int64_t)nearbyint(x); }
 
+// `x in list` — linear scan; string elements compare by CONTENT (the
+// compiler passes that in, since element types are static). Previously this
+// silently produced 0.
+int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        if (elem_is_str) {
+            if (v && x && strcmp((const char*)v, (const char*)x) == 0) return 1;
+        } else if (v == x) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // ── PY-A: sort/sorted with a key callable (decorate-sort-undecorate) ──
 // Keys are computed once per element; the original index is the tie-breaker,
 // so the sort stays stable like Python's.
