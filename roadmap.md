@@ -380,7 +380,14 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 - [x] 文件对象 `open/read/readline(s)/write/close/closed`（t58）
 - [~] `collections` 剩余：`most_common`（需 pair/tuple）、`defaultdict(list/set)`
 - [x] `typing`（注解专用 no-op 模块，`1914474c`，t66）、`warnings`（warn 真打 stderr，过滤器 no-op，`80867154`，t67）
-- [ ] `pathlib` / `functools` / `hashlib`
+- [x] `hashlib`（md5/sha1/sha256 + 链式 `hexdigest` + 流式 `update`，CommonCrypto 后端，`99358400`，t69）；
+  同批修链式调用接收者（`py_handle_of` 现可从注册表 `handle=` 解析 Call 结果的标签）
+- [x] `functools.reduce`（含无 init / 带 init 两种元数，`385dc730`，t71）
+- [x] `__file__` 内建（编译期源文件路径，`525bafd5`，t72）—— 解锁 `os.path.dirname(__file__)` 等
+- [ ] `pathlib`（`Path(str)` / `/` 拼接 / `.resolve().parent` 链 / `.name`/`.stem`/`.suffix`/`.exists()`/`.read_text()`）。
+  **注意**：`.resolve().parent.parent` 需要**链式 handle 属性**（FieldAccess 接收者也要能从 `ret_handle=` 取标签），
+  且 `print(Path)`/`str(Path)` 需按字符串处理（否则静默打成指针）
+- [ ] `argparse`（语料 4 处；`parse_args()` 命名空间属性访问是难点）、`pickle`（语料 2 处）
 - [x] `dataclasses`（`@dataclass` → 按字段注解合成 `__init__`；`asdict` 编译期展开为字段字典，`6befdec0`，t68）。
   同批修 fail-open：`@dataclass` 处解析中止导致类与其后全部语句被静默丢弃；单大写类名（`class P`）仍被注解解析当作泛型类型变量（已知小坑）
 - [ ] `re` 补齐：`finditer`/`subn`/`IGNORECASE` 等 flags、`\g<name>`、`Pattern` 方法面
