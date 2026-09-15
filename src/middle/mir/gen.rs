@@ -4181,22 +4181,66 @@ impl MirGen {
                             };
                             Some(vec![a, len_id])
                         }
-                        // PY-A: sorted(xs, reverse=B) — sort then reverse. Only
-                        // the reverse= keyword (or a bare bool) is handled; a
-                        // key= callable falls through to a loud link error.
-                        "sorted" if argc == 2 => {
-                            let is_reverse = matches!(
-                                &args[1],
-                                AstNode::Call { receiver: None, method, args: ka, .. }
-                                    if method == "__kwarg__"
-                                        && ka.len() == 2
-                                        && matches!(&ka[0], AstNode::StringLit(n) if n == "reverse")
-                            ) || matches!(&args[1], AstNode::Bool(_));
-                            if !is_reverse {
+                        // PY-A: sorted(xs[, key=f][, reverse=B]) — keyword
+                        // arguments are matched BY NAME (their source order is
+                        // not guaranteed). Without a key this is the plain
+                        // sort-then-reverse path; with one it goes through the
+                        // decorate-sort-undecorate runtime.
+                        "sorted" if argc == 2 || argc == 3 => {
+                            let mut keyf: Option<AstNode> = None;
+                            let mut rev: Option<AstNode> = None;
+                            let mut understood = true;
+                            for a in args.iter().skip(1) {
+                                match a {
+                                    AstNode::Call {
+                                        receiver: None,
+                                        method,
+                                        args: ka,
+                                        ..
+                                    } if method == "__kwarg__" && ka.len() == 2 => {
+                                        if let AstNode::StringLit(n) = &ka[0] {
+                                            match n.as_str() {
+                                                "key" => keyf = Some(ka[1].clone()),
+                                                "reverse" => rev = Some(ka[1].clone()),
+                                                _ => understood = false,
+                                            }
+                                        }
+                                    }
+                                    AstNode::Bool(_) => rev = Some(a.clone()),
+                                    _ => understood = false,
+                                }
+                            }
+                            if !understood {
                                 None
-                            } else {
+                            } else if let Some(k) = keyf {
+                                let xs = self.lower_expr(&args[0]);
+                                let f = self.lower_expr(&k);
+                                let r = match &rev {
+                                    Some(e) => self.lower_expr(e),
+                                    None => {
+                                        let z = self.next_id();
+                                        self.exprs.insert(z, MirExpr::IntLit(0));
+                                        self.type_map.insert(z, Type::I64);
+                                        z
+                                    }
+                                };
+                                let nid = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "py_sorted_key".to_string(),
+                                    args: vec![xs, f, r],
+                                    dest: nid,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(nid, MirExpr::Var(nid));
+                                self.type_map
+                                    .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
+                                self.exprs.insert(id, MirExpr::Var(nid));
+                                self.type_map
+                                    .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                                return id;
+                            } else if rev.is_some() {
                                 let a = self.lower_expr(&args[0]);
-                                let rev = self.lower_expr(&args[1]);
+                                let rev_id = self.lower_expr(rev.as_ref().unwrap());
                                 let len_id = match self.type_map.get(&a).cloned() {
                                     Some(Type::Array(_, ArraySize::Literal(n))) => {
                                         let nid = self.next_id();
@@ -4214,7 +4258,7 @@ impl MirGen {
                                 let nid = self.next_id();
                                 self.stmts.push(MirStmt::Call {
                                     func: "py_sorted_vec_rev".to_string(),
-                                    args: vec![a, len_id, rev],
+                                    args: vec![a, len_id, rev_id],
                                     dest: nid,
                                     type_args: vec![],
                                 });
@@ -4225,6 +4269,8 @@ impl MirGen {
                                 self.type_map
                                     .insert(id, Type::DynamicArray(Box::new(Type::I64)));
                                 return id;
+                            } else {
+                                None
                             }
                         }
                         "arange" if argc == 1 => {
@@ -4954,6 +5000,10 @@ impl MirGen {
                             (Some(e), "remove", 2) => {
                                 Some(format!("zeta_list_remove{}", list_elem_suffix(e)))
                             }
+                            // `xs.sort(key=f[, reverse=B])` — key callable
+                            // (decorate-sort-undecorate in the runtime).
+                            (Some(_), "sort", 2) => Some("py_list_sort_key".to_string()),
+                            (Some(_), "sort", 3) => Some("py_list_sort_key".to_string()),
                             (Some(e), "sort", 1) => {
                                 Some(format!("zeta_list_sort{}", list_elem_suffix(e)))
                             }
@@ -4964,9 +5014,20 @@ impl MirGen {
                             _ => None,
                         };
                     if let Some(func) = list_func {
+                        let mut call_args = arg_ids.clone();
+                        // `xs.sort(key=f)` has no reverse argument; the runtime
+                        // signature always takes one, and a missing trailing
+                        // argument is garbage (it made sort(key=) behave as if
+                        // reversed).
+                        if func == "py_list_sort_key" && call_args.len() == 2 {
+                            let z = self.next_id();
+                            self.exprs.insert(z, MirExpr::IntLit(0));
+                            self.type_map.insert(z, Type::I64);
+                            call_args.push(z);
+                        }
                         self.stmts.push(MirStmt::Call {
                             func,
-                            args: arg_ids.clone(),
+                            args: call_args,
                             dest: id,
                             type_args: vec![],
                         });

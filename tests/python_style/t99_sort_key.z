@@ -1,0 +1,17 @@
+// PY-A: list.sort(key=) / sorted(key=) —— 此前 sort(key=) 无匹配、sorted(key=) 链接失败
+//   运行时用 decorate-sort-undecorate（键只算一次，原下标作稳定 tie-break）
+// expect: [3, 2, 1]
+// expect: [3, 2, 1]
+// expect: [1, 2, 3]
+def neg(v) -> i64:
+    return 0 - v
+
+xs = [3, 1, 2]
+xs.sort(key=neg)
+print(xs)
+
+print(sorted([3, 1, 2], key=neg))
+
+ys = [3, 1, 2]
+ys.sort(key=neg, reverse=True)
+print(ys)

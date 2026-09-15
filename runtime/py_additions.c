@@ -495,6 +495,54 @@ int64_t py_map_items(int64_t map) {
 // round(x) — Python returns an int with banker's rounding (round(2.5) == 2).
 int64_t py_round_i64(double x) { return (int64_t)nearbyint(x); }
 
+// ── PY-A: sort/sorted with a key callable (decorate-sort-undecorate) ──
+// Keys are computed once per element; the original index is the tie-breaker,
+// so the sort stays stable like Python's.
+typedef struct {
+    int64_t key;
+    int64_t idx;
+} zt_kv_t;
+static int zt_cmp_kv_asc(const void* a, const void* b) {
+    const zt_kv_t* x = (const zt_kv_t*)a;
+    const zt_kv_t* y = (const zt_kv_t*)b;
+    if (x->key != y->key) return x->key < y->key ? -1 : 1;
+    return x->idx < y->idx ? -1 : (x->idx > y->idx ? 1 : 0);
+}
+static int zt_cmp_kv_desc(const void* a, const void* b) {
+    const zt_kv_t* x = (const zt_kv_t*)a;
+    const zt_kv_t* y = (const zt_kv_t*)b;
+    if (x->key != y->key) return x->key > y->key ? -1 : 1;
+    return x->idx < y->idx ? -1 : (x->idx > y->idx ? 1 : 0);
+}
+static void zt_sort_by_key(int64_t* vals, int64_t n, int64_t keyfn, int reverse) {
+    if (n <= 1) return;
+    zt_kv_t* kv = (zt_kv_t*)GC_malloc(sizeof(zt_kv_t) * (size_t)n);
+    for (int64_t i = 0; i < n; i++) {
+        kv[i].key = ((int64_t(*)(int64_t))keyfn)(vals[i]);
+        kv[i].idx = i;
+    }
+    qsort(kv, (size_t)n, sizeof(zt_kv_t), reverse ? zt_cmp_kv_desc : zt_cmp_kv_asc);
+    int64_t* out = (int64_t*)GC_malloc((size_t)n * 8);
+    for (int64_t i = 0; i < n; i++) out[i] = vals[kv[i].idx];
+    for (int64_t i = 0; i < n; i++) vals[i] = out[i];
+}
+// In-place: xs.sort(key=f[, reverse=...]) — returns the handle.
+int64_t py_list_sort_key(int64_t vec, int64_t keyfn, int64_t reverse) {
+    int64_t n = zt_vec_len(vec);
+    zt_sort_by_key((int64_t*)vec, n, keyfn, (int)reverse);
+    return vec;
+}
+// Copy: sorted(xs, key=f[, reverse=...]) — returns a new Vec.
+int64_t py_sorted_key(int64_t vec, int64_t keyfn, int64_t reverse) {
+    int64_t n = zt_vec_len(vec);
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
+    base[0] = n ? n : 1;
+    base[1] = n;
+    for (int64_t i = 0; i < n; i++) base[2 + i] = ((int64_t*)vec)[i];
+    zt_sort_by_key(base + 2, n, keyfn, (int)reverse);
+    return (int64_t)(base + 2);
+}
+
 // ── PY-A: os.path.join with 3-4 parts / int(s, base) / dict.fromkeys ──
 extern int64_t py_os_path_join(int64_t a, int64_t b);
 int64_t py_os_path_join_3(int64_t a, int64_t b, int64_t c) {
