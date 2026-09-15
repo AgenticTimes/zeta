@@ -1,0 +1,12 @@
+// PY-A: hex/oct/bin/reversed —— 四者此前均为裸 extern
+//   （bin/hex/oct 在 libc 也无同名符号；负数按 Python 输出 -0x.. 形式）
+// expect: 0xff
+// expect: 0o10
+// expect: 0b101
+// expect: -0xff
+// expect: [3, 2, 1]
+print(hex(255))
+print(oct(8))
+print(bin(5))
+print(hex(-255))
+print(reversed([1, 2, 3]))

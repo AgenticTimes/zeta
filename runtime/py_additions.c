@@ -605,6 +605,38 @@ int64_t host_str_strip_chars(int64_t s, int64_t c) { return zt_strip_set(s, c, 1
 int64_t host_str_lstrip_chars(int64_t s, int64_t c) { return zt_strip_set(s, c, 1, 0); }
 int64_t host_str_rstrip_chars(int64_t s, int64_t c) { return zt_strip_set(s, c, 0, 1); }
 
+// ── PY-A: hex/oct/bin/reversed ───────────────────────────────────────
+// Sign-aware base rendering with Python's 0x/0o/0b prefix.
+static int64_t zt_int_to_base(int64_t n, int base, const char* prefix) {
+    char tmp[72];
+    int k = 0;
+    unsigned long long u = n < 0 ? (unsigned long long)(-n) : (unsigned long long)n;
+    if (!u) tmp[k++] = '0';
+    while (u) {
+        int d = (int)(u % (unsigned)base);
+        tmp[k++] = (char)(d < 10 ? '0' + d : 'a' + d - 10);
+        u /= (unsigned)base;
+    }
+    char* o = (char*)GC_malloc(80);
+    size_t p = 0;
+    if (n < 0) o[p++] = '-';
+    p += (size_t)sprintf(o + p, "%s", prefix);
+    while (k) o[p++] = tmp[--k];
+    o[p] = 0;
+    return (int64_t)o;
+}
+int64_t py_builtin_hex(int64_t n) { return zt_int_to_base(n, 16, "0x"); }
+int64_t py_builtin_oct(int64_t n) { return zt_int_to_base(n, 8, "0o"); }
+int64_t py_builtin_bin(int64_t n) { return zt_int_to_base(n, 2, "0b"); }
+int64_t py_builtin_reversed(int64_t vec) {
+    int64_t n = zt_vec_len(vec);
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
+    base[0] = n ? n : 1;
+    base[1] = n;
+    for (int64_t i = 0; i < n; i++) base[2 + i] = ((int64_t*)vec)[n - 1 - i];
+    return (int64_t)(base + 2);
+}
+
 // ── PY-A: math constants + the missing common functions ──────────────
 // Constants previously warned and lowered to 0 (a silently wrong value);
 // gcd/factorial/isqrt had no libc counterpart to fall back on either.

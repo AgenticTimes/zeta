@@ -3895,6 +3895,45 @@ impl MirGen {
                         return id;
                     }
                 }
+                // PY-A: hex/oct/bin(n) and reversed(xs) — all four were bare
+                // externs (link failure; `bin`/`hex`/`oct` have no libc symbol).
+                if receiver.is_none()
+                    && matches!(method.as_str(), "hex" | "oct" | "bin")
+                    && args.len() == 1
+                {
+                    let a = self.lower_expr(&args[0]);
+                    let func = match method.as_str() {
+                        "hex" => "py_builtin_hex",
+                        "oct" => "py_builtin_oct",
+                        _ => "py_builtin_bin",
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: func.to_string(),
+                        args: vec![a],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::Str);
+                    return id;
+                }
+                if receiver.is_none() && method == "reversed" && args.len() == 1 {
+                    let a = self.lower_expr(&args[0]);
+                    let elem = match self.type_map.get(&a).cloned() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
+                        _ => Type::I64,
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_builtin_reversed".to_string(),
+                        args: vec![a],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(elem)));
+                    return id;
+                }
                 // PY-A: bool(x) — truthiness for containers (length) and
                 // numbers (non-zero). Previously a bare `bool` extern.
                 if receiver.is_none() && method == "bool" && args.len() == 1 {
