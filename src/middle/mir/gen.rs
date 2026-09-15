@@ -4449,15 +4449,57 @@ impl MirGen {
                 // Multi-arg no longer routes through the fragile print.N C
                 // alias table (which only emitted the first arg).
                 if method == "print" && receiver.is_none() && !args.is_empty() {
-                    let mut arg_ids = vec![];
+                    // PY-A: `sep=` / `end=` keywords. They used to be lowered
+                    // like ordinary arguments, so `print(1, 2, sep="-")` printed
+                    // "1 2 -" and `end=""` appended a stray value.
+                    let mut sep_expr: Option<AstNode> = None;
+                    let mut end_expr: Option<AstNode> = None;
+                    let mut positional: Vec<&AstNode> = Vec::new();
                     for a in args {
+                        if let AstNode::Call {
+                            receiver: None,
+                            method: m,
+                            args: ka,
+                            ..
+                        } = a
+                        {
+                            if m == "__kwarg__" && ka.len() == 2 {
+                                if let AstNode::StringLit(n) = &ka[0] {
+                                    match n.as_str() {
+                                        "sep" => {
+                                            sep_expr = Some(ka[1].clone());
+                                            continue;
+                                        }
+                                        "end" => {
+                                            end_expr = Some(ka[1].clone());
+                                            continue;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        positional.push(a);
+                    }
+                    let mut arg_ids = vec![];
+                    for a in &positional {
                         arg_ids.push(self.lower_expr(a));
                     }
                     let n = arg_ids.len();
-                    // One shared space literal for separators.
-                    let space_id = self.next_id();
-                    self.exprs.insert(space_id, MirExpr::StringLit(" ".to_string()));
-                    self.type_map.insert(space_id, Type::Str);
+                    // Separator (default one space).
+                    let space_id = match &sep_expr {
+                        Some(e) => self.lower_expr(e),
+                        None => {
+                            let s = self.next_id();
+                            self.exprs.insert(s, MirExpr::StringLit(" ".to_string()));
+                            self.type_map.insert(s, Type::Str);
+                            s
+                        }
+                    };
+                    // With an explicit `end`, no argument may bake in the
+                    // newline (the println_* family appends one).
+                    let has_end = end_expr.is_some();
+                    let end_id = end_expr.as_ref().map(|e| self.lower_expr(e));
                     for (i, arg_id) in arg_ids.iter().enumerate() {
                         if i > 0 {
                             self.stmts.push(MirStmt::VoidCall {
@@ -4465,7 +4507,7 @@ impl MirGen {
                                 args: vec![space_id],
                             });
                         }
-                        let is_last = i + 1 == n;
+                        let is_last = !has_end && i + 1 == n;
                         // A Json value prints by its tag (scalars bare,
                         // containers as JSON text) — converting to a string
                         // first keeps it on the existing print path.
@@ -4575,6 +4617,13 @@ impl MirGen {
                         self.stmts.push(MirStmt::VoidCall {
                             func: func.to_string(),
                             args: vec![printed_id],
+                        });
+                    }
+                    // `print(..., end=X)` — emit the terminator ourselves.
+                    if let Some(e) = end_id {
+                        self.stmts.push(MirStmt::VoidCall {
+                            func: "print_str".to_string(),
+                            args: vec![e],
                         });
                     }
                     let unit_id = self.next_id();

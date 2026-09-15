@@ -1,0 +1,8 @@
+// PY-A: print(sep=, end=) —— 此前二者被当普通实参打印（print(1,2,sep="-") → "1 2 -"）
+// expect: 1-2
+// expect: ab
+// expect: 1-2!
+print(1, 2, sep="-")
+print("a", end="")
+print("b")
+print(1, 2, sep="-", end="!\n")
