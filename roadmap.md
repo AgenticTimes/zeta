@@ -371,6 +371,8 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
    同批**主动放弃** `sys.argv`：列表能造，但**来自模块成员的 `Vec<str>` 在取下标/迭代时元素类型传不到**（拿到的是句柄与 0），故**不注册**，让使用处 warn 并显式失败，而不是半对半错。其根因（模块成员的容器元素类型未贯穿到下标/for-in）记为待办。
 31. **上述根因已修复 → `sys.argv` 已启用**（`c1e9dc94`）：根因是**模块属性读取**的 `ret=` 映射只认 `f64/str/vec`，`ret=vecstr` 的成员被标成 i64 → 其后所有下标/for-in 丢元素类型（句柄与 0）。现补 `vecstr`/`vecjson`/`vecmatch`。`sys.argv` 由启动构造器捕获，`len()`、下标、迭代**全部返回字符串**。
 32. **`os.listdir` 声明为 `ret=vecstr`**（`25aae397`）：此前 `ret=i64` → 结果不带元素类型，`"name" in os.listdir(...)` 与逐元素字符串比较只能"碰巧"成立（值恰好是 vec 句柄）。现类型正确。用例自造/自删临时文件，不依赖目录内容。
+33. **`strip`/`lstrip`/`rstrip` 的字符集形式**（`b161def8`）：2 参无匹配 → 裸 extern 链接失败。现按**字符集**去掉两端任意字符（`strip("x")` 去任意 x，非子串）。
+   同批**系统审计**了注册表：148 条 `F` + 80 条 `W` 的 `ret=` 与 C 实现返回类型**逐条一致**（0 不匹配、0 条"声明 i64 却返回新分配字符串"），确认 `os.listdir` 那类元素类型丢失**不再存在于别处**。
    ⚠️ ~~**待查**：`time.strftime`~~ → **已定位并修复**（`12dbcfce`）：模块级 `time.strftime` 未入注册表 → 落到 **libc 的 `strftime`**（签名完全不同：`char*, size_t, char*, struct tm*`）→ 格式串被当指针解引用 → **SIGSEGV**（先前以为是挂起）。现补 `py_time_strftime`（复用 `py_dt_now`/`py_dt_strftime`）与 `time.localtime` 别名。
 
 **仍未做（本轮新发现，按优先级）**
