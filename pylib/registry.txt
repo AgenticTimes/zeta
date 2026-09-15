@@ -116,6 +116,18 @@ F math atan2 py_math_atan2 args=f64,f64 ret=f64
 F math trunc py_math_trunc args=f64 ret=i64
 F math isfinite py_math_isfinite args=f64 ret=i64
 F math isnan py_math_isnan args=f64 ret=i64
+# constants (0-arg) + commonly used functions that libc cannot cover by name
+F math pi py_math_pi args= ret=f64
+F math e py_math_e args= ret=f64
+F math tau py_math_tau args= ret=f64
+F math inf py_math_inf args= ret=f64
+F math nan py_math_nan args= ret=f64
+F math hypot py_math_hypot2 args=f64,f64 ret=f64
+F math gcd py_math_gcd args=i64,i64 ret=i64
+F math factorial py_math_factorial args=i64 ret=i64
+F math degrees py_math_degrees args=f64 ret=f64
+F math radians py_math_radians args=f64 ret=f64
+F math isqrt py_math_isqrt args=i64 ret=i64
 
 # ---- logging (evidence: getLogger 6, basicConfig 4, INFO 4) ------------
 M logging

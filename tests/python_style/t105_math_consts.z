@@ -1,0 +1,18 @@
+// PY-A: math 常量与常用函数
+//   常量此前静默降级为 0（warn + 0）；gcd/factorial/isqrt 在 libc 无同名函数会链接失败
+// expect: 3.141593
+// expect: 2.718282
+// expect: 5.000000
+// expect: 6
+// expect: 120
+// expect: 4
+// expect: 180.000000
+import math
+
+print(math.pi)
+print(math.e)
+print(math.hypot(3, 4))
+print(math.gcd(12, 18))
+print(math.factorial(5))
+print(math.isqrt(17))
+print(math.degrees(3.141592653589793))

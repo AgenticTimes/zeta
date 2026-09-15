@@ -588,6 +588,41 @@ int64_t py_sorted_key(int64_t vec, int64_t keyfn, int64_t reverse) {
     return (int64_t)(base + 2);
 }
 
+// ── PY-A: math constants + the missing common functions ──────────────
+// Constants previously warned and lowered to 0 (a silently wrong value);
+// gcd/factorial/isqrt had no libc counterpart to fall back on either.
+double py_math_pi(void) { return 3.14159265358979323846; }
+double py_math_e(void) { return 2.71828182845904523536; }
+double py_math_tau(void) { return 6.28318530717958647692; }
+double py_math_inf(void) { return (double)INFINITY; }
+double py_math_nan(void) { return (double)NAN; }
+double py_math_hypot2(double a, double b) { return hypot(a, b); }
+int64_t py_math_gcd(int64_t a, int64_t b) {
+    if (a < 0) a = -a;
+    if (b < 0) b = -b;
+    while (b) {
+        int64_t t = a % b;
+        a = b;
+        b = t;
+    }
+    return a;
+}
+int64_t py_math_factorial(int64_t n) {
+    if (n < 0) return 0;
+    int64_t r = 1;
+    for (int64_t i = 2; i <= n; i++) r *= i;
+    return r;
+}
+double py_math_degrees(double r) { return r * 180.0 / 3.14159265358979323846; }
+double py_math_radians(double d) { return d * 3.14159265358979323846 / 180.0; }
+int64_t py_math_isqrt(int64_t n) {
+    if (n < 0) return 0;
+    int64_t r = (int64_t)sqrt((double)n);
+    while (r > 0 && r * r > n) r--;
+    while ((r + 1) * (r + 1) <= n) r++;
+    return r;
+}
+
 // ── PY-A: dict.setdefault / list.extend ─────────────────────────────
 int64_t py_map_setdefault(int64_t m, int64_t key, int64_t def) {
     if (py_map_contains(m, key)) return map_get(m, key);
