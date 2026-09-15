@@ -350,7 +350,7 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 15. **`max/min`、`s.split()`（无分隔符）、`sorted(reverse=)`、`d.items()` 全是裸 extern 链接失败**（`a3f1e103`/`13a2077b`）：现分别实现；`d.items()` 复用「键类型 + pair 位置类型」→ `for k, v in d.items()` 键还原为原串。`sorted(key=)` **故意不接管**（仍链接期失败），避免静默按错的东西排序
 16. **`raise ValueError("boom")` 是空操作**（`2fee5c9f`）：`parse_raise` 只认 `raise(expr)`，Python 风格裸 `raise Expr` 退化成裸 `raise` 变量 → **异常从不抛出**、其后语句被丢弃。现两种形式都接（裸表达式仅在**同一行**才接管，避免单 `raise` 重抛吞掉下一条语句）
 17. **`s * n` / `list + list` / `[0] * n` 全是静默垃圾值**（`813987f4`）：数值运算符直接作用在句柄上（`"-" * 5` 得 21520423860）。现按 Python 语义分发：`Str*int`→重复、`list+list`→拼接、`list*int`→重复
-18. **负步长切片 `s[::-1]` 静默返回空串**（未修，已记）—— 属切片 runtime 的缺口
+18. **3 段切片 `s[::2]` 解析失败**（`2b0c74d2`）：`parse_subscript_slice` 只认 start/end → `s[::2]` 解析失败并**静默丢弃其后所有语句**；且 `s[::-1]` 曾返回空串。现解析可选 step（省略的 start 在有 step 时用 INT64_MIN 哨兵），新增 `str_slice_step`/`zeta_slice_vec_step` 实现 Python 双符号步长的边界规则
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
