@@ -446,6 +446,43 @@ int64_t py_zip(int64_t a, int64_t b) {
     return (int64_t)(base + 2);
 }
 
+// ── PY-A: sorted(xs, reverse=True) — sort then reverse in place ──────
+extern int64_t zeta_sorted_vec_len(int64_t vec, int64_t len);
+int64_t py_sorted_vec_rev(int64_t vec, int64_t len, int64_t rev) {
+    int64_t out = zeta_sorted_vec_len(vec, len);
+    if (rev && out) {
+        int64_t n = ((int64_t*)(out - 16))[1];
+        for (int64_t i = 0, j = n - 1; i < j; i++, j--) {
+            int64_t t = ((int64_t*)out)[i];
+            ((int64_t*)out)[i] = ((int64_t*)out)[j];
+            ((int64_t*)out)[j] = t;
+        }
+    }
+    return out;
+}
+
+// ── PY-A: d.items() — Vec of (key, value) pairs, keys via the hash side
+// table so string keys come back as text. ────────────────────────────
+int64_t py_map_items(int64_t map) {
+    if (!map) return 0;
+    int64_t cap = ((int64_t*)map)[0];
+    if (cap < 0) cap = 0;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(cap ? cap : 1) * 8);
+    base[0] = cap ? cap : 1;
+    base[1] = 0;
+    for (int64_t i = 0; i < cap; i++) {
+        char* e = (char*)map + 16 + i * 24;
+        if (*(uint8_t*)(e + 16)) {
+            int64_t* pair = (int64_t*)GC_malloc(16);
+            pair[0] = zt_key_display(*(int64_t*)e);
+            pair[1] = *((int64_t*)e + 1);
+            base[2 + base[1]] = (int64_t)pair;
+            base[1] += 1;
+        }
+    }
+    return (int64_t)(base + 2);
+}
+
 // ── PY-A: max(xs) / min(xs) — the 1-argument form over an i64 array ──
 int64_t py_builtin_max(int64_t vec) {
     int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;

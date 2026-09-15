@@ -3829,6 +3829,52 @@ impl MirGen {
                             };
                             Some(vec![a, len_id])
                         }
+                        // PY-A: sorted(xs, reverse=B) — sort then reverse. Only
+                        // the reverse= keyword (or a bare bool) is handled; a
+                        // key= callable falls through to a loud link error.
+                        "sorted" if argc == 2 => {
+                            let is_reverse = matches!(
+                                &args[1],
+                                AstNode::Call { receiver: None, method, args: ka, .. }
+                                    if method == "__kwarg__"
+                                        && ka.len() == 2
+                                        && matches!(&ka[0], AstNode::StringLit(n) if n == "reverse")
+                            ) || matches!(&args[1], AstNode::Bool(_));
+                            if !is_reverse {
+                                None
+                            } else {
+                                let a = self.lower_expr(&args[0]);
+                                let rev = self.lower_expr(&args[1]);
+                                let len_id = match self.type_map.get(&a).cloned() {
+                                    Some(Type::Array(_, ArraySize::Literal(n))) => {
+                                        let nid = self.next_id();
+                                        self.exprs.insert(nid, MirExpr::IntLit(n as i64));
+                                        self.type_map.insert(nid, Type::I64);
+                                        nid
+                                    }
+                                    _ => {
+                                        let nid = self.next_id();
+                                        self.exprs.insert(nid, MirExpr::IntLit(-1));
+                                        self.type_map.insert(nid, Type::I64);
+                                        nid
+                                    }
+                                };
+                                let nid = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "py_sorted_vec_rev".to_string(),
+                                    args: vec![a, len_id, rev],
+                                    dest: nid,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(nid, MirExpr::Var(nid));
+                                self.type_map
+                                    .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
+                                self.exprs.insert(id, MirExpr::Var(nid));
+                                self.type_map
+                                    .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                                return id;
+                            }
+                        }
                         "arange" if argc == 1 => {
                             let a = self.lower_expr(&args[0]);
                             let nid = self.next_id();
@@ -4396,6 +4442,7 @@ impl MirGen {
                     let func = match (method.as_str(), args.len()) {
                         ("keys", 0) => Some("map_keys"),
                         ("values", 0) => Some("map_values"),
+                        ("items", 0) => Some("py_map_items"),
                         ("most_common", 0) => Some("py_map_most_common"),
                         ("most_common", 1) => Some("py_map_most_common_2"),
                         _ => None,
@@ -4421,7 +4468,7 @@ impl MirGen {
                             }
                             _ => Type::I64,
                         };
-                        let out_ty = if method == "most_common" {
+                        let out_ty = if method == "most_common" || method == "items" {
                             Type::DynamicArray(Box::new(Type::Tuple(vec![
                                 key_ty,
                                 Type::I64,

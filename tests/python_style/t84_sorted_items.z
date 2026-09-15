@@ -1,0 +1,17 @@
+// PY-A: sorted(xs[, reverse=]) 与 d.items()（键经侧表还原为原串）
+//   断言与迭代顺序无关；sorted 的 key= 仍不接受 → 链接期报错（fail-loud），不会静默错排
+// expect: [1, 2, 3]
+// expect: [3, 2, 1]
+// expect: 21
+xs = [3, 1, 2]
+print(sorted(xs))
+print(sorted(xs, reverse=True))
+
+d = {"a": 1, "b": 2}
+total = 0
+for k, v in d.items():
+    if k == "a":
+        total = total + v
+    if k == "b":
+        total = total + v * 10
+print(total)
