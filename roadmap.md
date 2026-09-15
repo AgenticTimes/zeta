@@ -504,6 +504,46 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 
 ## REasyQuant 真实项目实测（2026-09-13，未修改项目代码）
 
+### 实测更新（2026-09-16，argparse 落地后重测）
+
+parse **38/38**；**link 34/38**（旧的「7 个通过」口径已过时，见下）。
+剩 4 个链接失败，按「是编译器缺陷还是外部符号」拆开：
+
+| 文件 | 文件内已定义却报未定义（=编译器缺陷） | 文件内无定义（=平台/外部） |
+|---|---|---|
+| `code/指数ETF动量轮动.py` | `initialize` | **无** |
+| `code/大市值价值优化.py` | `my_trade` | `set_level` |
+| `code/蛇皮走位小市值.py` | `consistent` | `set_level` |
+| `code/白马股攻防转换.py` | 无 | `debug`/`info`/`set_level`/`get_security_info` |
+
+→ 4 个里有 **3 个**被同一个编译器缺陷卡住，其中 `指数ETF动量轮动.py` **零外部符号**，
+修掉该缺陷即应直接可链接。
+
+**缺陷：函数体降级失败导致 def 被静默丢弃（fail-open）**
+`大市值价值优化.py` 共 7 个顶层 `def`，目标文件里只有 **4 个 T 符号**
+（`initialize`/`before_market_open`/`__closure_0`/`main`）：`my_trade` 变成 `U`（被
+`initialize` 引用但无定义），其后的 `check_limit_up`/`check_stocks`/`filter_*` **连引用都
+没有**——说明降级在某处中断后，该函数其余语句与其后的顶层项一起被丢掉，且**不报错**。
+逐段二分（把 `my_trade` 体 62–93 行换成不同片段后数 T 符号）：
+
+| my_trade 体替换成 | `my_trade` 是否被发射 |
+|---|---|
+| `pass` | ✅ 发射 |
+| `log.info("…[%s]" % (stock))` | ✅ |
+| `b = "x[%s]" % (a)` | ✅ |
+| `for stock in context.portfolio.positions: if stock in stocks: continue` | ✅ |
+| `if current_data[stock].last_price < current_data[stock].high_limit: pass` | ❌ 被丢弃 |
+| `if order_target_value(stock, value): if len(...) == g.n: break` | ❌ 被丢弃 |
+
+即触发形状是「**字典下标取到的句柄再取字段、参与比较**」这类（`current_data[stock].last_price`）
+——`current_data` 是平台返回的句柄、`[stock]` 又是一个下标，二者叠加后类型无法定型。
+我试着把它缩成独立小文件复现（`get_data()[stock].last_price < get_data()[stock].high_limit`）
+**没能复现**，所以真触发点尚未定位到最小形态；下批应先做「降级失败必须 fail-loud +
+不丢弃后续顶层项」，再定位具体形状。
+
+**缺陷：`log.*` 平台日志面**（`set_level`/`debug`/`info`，3 个文件命中）——按下面的
+「接入不迁移」层处理（runtime logger shim），与本条编译器缺陷相互独立。
+
 strategies/ 38 个策略编译：**7 个通过**，31 个失败——全部为外部库依赖边界，
 非语法缺陷。失败文件的真·外部符号（扣除 runtime 已解析 prelude 与文件内
 定义）去重后 **76 个**，分层决策：

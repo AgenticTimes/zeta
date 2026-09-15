@@ -102,7 +102,8 @@ EOF
 
 # 3) 真实项目语料（REasyQuant）
 python3 tools/corpus_baseline.py
-#    口径：解析通过率（parse 层）38/38；编译通过 7/38（其余为外部库符号）
+#    口径：解析通过率（parse 层）38/38；链接通过 34/38（2026-09-16 实测；剩 4 个里
+#    3 个是「函数体降级失败→def 被静默丢弃」的编译器缺陷，见 roadmap「实测更新」）
 ```
 
 ### 用例编写规范（tests/python_style/）
