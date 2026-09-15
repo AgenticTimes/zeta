@@ -91,7 +91,7 @@ F os linesep py_os_linesep args= ret=str
 F os getpid py_os_getpid args= ret=i64
 F os system py_os_system args=i64 ret=i64
 F os getenv py_os_getenv args=i64 ret=str
-F os listdir py_os_listdir args=i64 ret=i64
+F os listdir py_os_listdir args=i64 ret=vecstr
 F os makedirs py_os_makedirs args=i64 ret=i64
 F os remove py_os_remove args=i64 ret=i64
 F os path.join py_os_path_join args=i64,i64 ret=str
