@@ -392,7 +392,8 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 - [ ] `argparse`（语料 4 处；`parse_args()` 命名空间属性访问是难点）、`pickle`（语料 2 处）
 - [x] `dataclasses`（`@dataclass` → 按字段注解合成 `__init__`；`asdict` 编译期展开为字段字典，`6befdec0`，t68）。
   同批修 fail-open：`@dataclass` 处解析中止导致类与其后全部语句被静默丢弃；单大写类名（`class P`）仍被注解解析当作泛型类型变量（已知小坑）
-- [ ] `re` 补齐：`finditer`/`subn`/`IGNORECASE` 等 flags、`\g<name>`、`Pattern` 方法面
+- [~] `re` 补齐（`03116dd6`）：**已完成** `IGNORECASE`/`I`、`MULTILINE`/`M` 常量 + 带 flags 的 `search/match/fullmatch`(3 参)/`findall`(3)/`sub`(4)；`findall` 返回字符串表；`print(match)` 打匹配文本。
+  仍缺：`finditer`、`subn`、`DOTALL`/`VERBOSE`（POSIX 后端无法实现，故意不注册 → 使用即报警而非静默忽略）、`\g<name>`、`Pattern` 方法面、无匹配时 `print(m)` 打空串而非 `None`
 - [ ] threading 补齐：`BoundedSemaphore`/`Barrier`/`Condition`/`local`/`enumerate`/`main_thread`、
   `Thread(daemon=)`、`Thread.name`
 - [ ] futures 补齐：`as_completed`/`wait`/`Future.exception`/`cancel`/`add_done_callback`；
