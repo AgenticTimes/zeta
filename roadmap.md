@@ -383,7 +383,8 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 - [x] `os`/`os.path`/`os.environ`、`sys`、`datetime`、`re`（POSIX）、`math`、`logging`、`__future__`
 - [x] `json` 全套（loads/dumps/load/dump/get/keys/values、嵌套、类型正确）
 - [x] 文件对象 `open/read/readline(s)/write/close/closed`（t58）
-- [~] `collections` 剩余：`most_common`（**已查清阻塞点**：map 的字符串 key 以**内容哈希**（`map_str_key`）存储，原串丢失 —— `for k in d.keys(): print(k)` 打的是哈希值；`Counter(["a","b","a"])` 因此按指针各算 1 次。要修必须先加 **hash→原串侧表**，否则 `keys()`/`Counter`/`most_common` 对字符串 key 都会静默错值。元组解构 `for k, v in pairs:` 已修（`df1bdddc`，t78））、`defaultdict(list/set)`
+- [x] `collections` `most_common([n])`（`993e288d`，t79）：**根因是 Counter 未按内容哈希 key**——字符串字面量在不同位置是不同指针，`Counter(['a','b','a'])` 曾产生 3 个条目（5 元素 len=5）。现新增 `py_collections_counter_new_str`（元素类型为 str 时按 `map_str_key` 哈希），`map_keys`/`most_common` 经既有 hash→原串侧表还原文本。`len(c)`、降序计数均已正确。
+  ⬜ 仍缺：`defaultdict(list/set)`；**`d.keys()`/`most_common` 的 key 元素类型仍是 i64** → 打印 key 显示句柄。要修需给「字符串键 map」一个独立标签（一刀切标 Str 会让 int 键字典崩溃）
 - [x] `typing`（注解专用 no-op 模块，`1914474c`，t66）、`warnings`（warn 真打 stderr，过滤器 no-op，`80867154`，t67）
 - [x] `hashlib`（md5/sha1/sha256 + 链式 `hexdigest` + 流式 `update`，CommonCrypto 后端，`99358400`，t69）；
   同批修链式调用接收者（`py_handle_of` 现可从注册表 `handle=` 解析 Call 结果的标签）
