@@ -290,6 +290,141 @@ int64_t zeta_fmt_f64_spec(double v, int64_t spec) {
     return (int64_t)s;
 }
 
+// ── PY-A: Python format specs (f"{x:>8.2f}", f"{n:05d}", f"[{s:^7}]") ──
+// The naive "prepend '%'" trick only works for a bare `.2f`; anything with
+// fill/align/zero-padding produced an invalid C conversion and printed the
+// spec text itself. Parse the Python spec and pad manually instead.
+typedef struct {
+    char fill;
+    char align; /* 0 = default */
+    char type;  /* 0 = none */
+    int width;
+    int zero;
+    int has_precision;
+    int precision;
+    int numeric;
+} zt_fmt_t;
+
+static void zt_parse_spec(const char* s, zt_fmt_t* f) {
+    f->fill = ' '; f->align = 0; f->type = 0; f->width = 0;
+    f->zero = 0; f->has_precision = 0; f->precision = 0; f->numeric = 0;
+    const char* p = s ? s : "";
+    if (p[0] && p[1] && (p[1] == '<' || p[1] == '>' || p[1] == '^')) {
+        f->fill = p[0]; f->align = p[1]; p += 2;
+    } else if (*p == '<' || *p == '>' || *p == '^') {
+        f->align = *p; p++;
+    }
+    if (*p == '+' || *p == '-' || *p == ' ') p++;
+    if (*p == '#') p++;
+    if (*p == '0') { f->zero = 1; p++; }
+    while (*p >= '0' && *p <= '9') { f->width = f->width * 10 + (*p - '0'); p++; }
+    if (*p == ',') p++;
+    if (*p == '.') {
+        p++;
+        f->has_precision = 1;
+        while (*p >= '0' && *p <= '9') { f->precision = f->precision * 10 + (*p - '0'); p++; }
+    }
+    if (*p) f->type = *p;
+}
+
+static int64_t zt_fmt_pad(const char* body, zt_fmt_t* f) {
+    size_t n = strlen(body);
+    if (f->width <= (int64_t)n) return (int64_t)GC_strdup(body);
+    size_t pad = (size_t)f->width - n;
+    char al = f->align;
+    if (!al) al = f->numeric ? '>' : '<';
+    char fill = f->fill;
+    size_t left = 0, right = 0;
+    if (f->zero && !f->align && f->numeric) {
+        fill = '0';
+        left = pad;
+    } else if (al == '>') {
+        left = pad;
+    } else if (al == '<') {
+        right = pad;
+    } else {
+        left = pad / 2;
+        right = pad - left;
+    }
+    char* out = (char*)GC_malloc((size_t)f->width + 1);
+    // Zero padding goes after a leading sign, not before it.
+    if (fill == '0' && n > 0 && (body[0] == '-' || body[0] == '+')) {
+        out[0] = body[0];
+        memset(out + 1, fill, left);
+        memcpy(out + 1 + left, body + 1, n - 1);
+        out[1 + left + n - 1] = 0;
+        return (int64_t)out;
+    }
+    memset(out, fill, left);
+    memcpy(out + left, body, n);
+    memset(out + left + n, fill, right);
+    out[left + n + right] = 0;
+    return (int64_t)out;
+}
+
+int64_t py_fmt_i64(int64_t v, int64_t spec) {
+    zt_fmt_t f;
+    zt_parse_spec(spec ? (const char*)spec : "", &f);
+    f.numeric = 1;
+    char body[160];
+    char t = f.type ? f.type : 'd';
+    if (t == 'b') {
+        unsigned long long u = (unsigned long long)v;
+        char tmp[160];
+        int k = 0;
+        if (!u) tmp[k++] = '0';
+        while (u && k < 159) { tmp[k++] = (char)('0' + (u & 1)); u >>= 1; }
+        for (int a = 0, b = k - 1; a < b; a++, b--) { char c = tmp[a]; tmp[a] = tmp[b]; tmp[b] = c; }
+        tmp[k] = 0;
+        return zt_fmt_pad(tmp, &f);
+    } else if (t == 'x' || t == 'X' || t == 'o') {
+        snprintf(body, sizeof body, t == 'x' ? "%llx" : (t == 'X' ? "%llX" : "%llo"),
+                 (unsigned long long)v);
+    } else if (t == 'f' || t == 'F' || t == 'e' || t == 'E' || t == 'g' || t == 'G') {
+        char cfmt[24];
+        snprintf(cfmt, sizeof cfmt, f.has_precision ? "%%.%d%c" : "%%%c", f.precision, t);
+        snprintf(body, sizeof body, cfmt, (double)v);
+    } else {
+        snprintf(body, sizeof body, "%lld", (long long)v);
+    }
+    return zt_fmt_pad(body, &f);
+}
+
+int64_t py_fmt_f64(double v, int64_t spec) {
+    zt_fmt_t f;
+    zt_parse_spec(spec ? (const char*)spec : "", &f);
+    f.numeric = 1;
+    char body[160];
+    char t = f.type ? f.type : 'f';
+    if (t != 'f' && t != 'F' && t != 'e' && t != 'E' && t != 'g' && t != 'G') t = 'f';
+    char cfmt[24];
+    if (f.has_precision) {
+        snprintf(cfmt, sizeof cfmt, "%%.%d%c", f.precision, t);
+    } else if (t == 'f' || t == 'F') {
+        snprintf(cfmt, sizeof cfmt, "%%.6%c", t); /* Python's default float repr */
+    } else {
+        snprintf(cfmt, sizeof cfmt, "%%%c", t);
+    }
+    snprintf(body, sizeof body, cfmt, v);
+    return zt_fmt_pad(body, &f);
+}
+
+int64_t py_fmt_str(int64_t s, int64_t spec) {
+    zt_fmt_t f;
+    zt_parse_spec(spec ? (const char*)spec : "", &f);
+    const char* p = s ? (const char*)s : "";
+    char* body = (char*)p;
+    if (f.has_precision) {
+        size_t n = strlen(p);
+        if ((int64_t)n > f.precision) {
+            body = (char*)GC_malloc((size_t)f.precision + 1);
+            memcpy(body, p, (size_t)f.precision);
+            body[f.precision] = 0;
+        }
+    }
+    return zt_fmt_pad(body, &f);
+}
+
 // ── PY-A: try/except via error-state polling ────────────────────────
 // `raise` records a global error code; the desugared try body wraps each
 // statement in `if (zeta_last_error() == 0)` so raising skips the rest;

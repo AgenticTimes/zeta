@@ -3640,19 +3640,16 @@ impl MirGen {
                 if method == "__fmtspec__" && receiver.is_none() && args.len() == 2 {
                     let val_id = self.lower_expr(&args[0]);
                     let spec_id = self.lower_expr(&args[1]);
+                    // One formatter per value kind, so the value keeps its ABI
+                    // (a shared i64 entry point would fptosi the f64).
                     let func = match self.type_map.get(&val_id).cloned() {
-                        Some(Type::F64) | Some(Type::F32) => "zeta_fmt_f64_spec",
-                        Some(Type::Str) => "to_string_str",
-                        _ => "to_string_i64",
-                    };
-                    let call_args: Vec<u32> = if func == "zeta_fmt_f64_spec" {
-                        vec![val_id, spec_id]
-                    } else {
-                        vec![val_id]
+                        Some(Type::F64) | Some(Type::F32) => "py_fmt_f64",
+                        Some(Type::Str) => "py_fmt_str",
+                        _ => "py_fmt_i64",
                     };
                     self.stmts.push(MirStmt::Call {
                         func: func.to_string(),
-                        args: call_args,
+                        args: vec![val_id, spec_id],
                         dest: id,
                         type_args: vec![],
                     });

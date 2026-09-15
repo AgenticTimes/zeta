@@ -1,0 +1,25 @@
+// PY-A: f-string 格式说明 —— 填充/对齐/宽度/补零/进制/精度
+//   （此前只有裸 `.2f` 能用；`{x:>8.2f}` 会把说明文字当结果直接打印出来）
+// expect: 3.14
+// expect: [    3.14]
+// expect: [3.14    ]
+// expect: [   42]
+// expect: [00042]
+// expect: [ 42  ]
+// expect: [   hi]
+// expect: [  hi   ]
+// expect: [2a]
+// expect: [101010]
+x = 3.14159
+n = 42
+s = "hi"
+print(f"{x:.2f}")
+print(f"[{x:>8.2f}]")
+print(f"[{x:<8.2f}]")
+print(f"[{n:5d}]")
+print(f"[{n:05d}]")
+print(f"[{n:^5}]")
+print(f"[{s:>5}]")
+print(f"[{s:^7}]")
+print(f"[{n:x}]")
+print(f"[{n:b}]")

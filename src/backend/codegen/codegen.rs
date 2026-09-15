@@ -820,6 +820,23 @@ impl<'ctx> LLVMCodegen<'ctx> {
             i64_type.fn_type(&[context.f64_type().into(), i64_type.into()], false), // (double, spec*) — f64 arg must NOT be coerced to i64
             Some(Linkage::External),
         );
+        // Python format-spec formatters (one per value kind, so the value
+        // keeps its ABI: the f64 one must not be declared i64).
+        module.add_function(
+            "py_fmt_i64",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "py_fmt_f64",
+            i64_type.fn_type(&[context.f64_type().into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "py_fmt_str",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
         module.add_function(
             "zeta_assert_fail",
             void_type.fn_type(&[i64_type.into()], false),
