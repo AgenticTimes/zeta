@@ -3692,6 +3692,38 @@ impl MirGen {
                     && (method == "min" || method == "max")
                     && args.len() == 2
                 {
+                    // A `key=` keyword selects the ITERABLE form; handle it
+                    // here, before the min-of-two path treats the callable as a
+                    // value (which returned the function pointer as the result).
+                    if let AstNode::Call {
+                        receiver: None,
+                        method: m,
+                        args: ka,
+                        ..
+                    } = &args[1]
+                    {
+                        if m == "__kwarg__"
+                            && ka.len() == 2
+                            && matches!(&ka[0], AstNode::StringLit(n) if n == "key")
+                        {
+                            let xs = self.lower_expr(&args[0]);
+                            let f = self.lower_expr(&ka[1]);
+                            let func = if method == "min" {
+                                "py_min_key"
+                            } else {
+                                "py_max_key"
+                            };
+                            self.stmts.push(MirStmt::Call {
+                                func: func.to_string(),
+                                args: vec![xs, f],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(id, Type::I64);
+                            return id;
+                        }
+                    }
                     let a_id = self.lower_expr(&args[0]);
                     let b_id = self.lower_expr(&args[1]);
                     let any_f = matches!(self.type_map.get(&a_id), Some(Type::F64) | Some(Type::F32))
@@ -3752,6 +3784,45 @@ impl MirGen {
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, Type::I64);
                     return id;
+                }
+                // PY-A: min(xs, key=f) / max(xs, key=f) — linear scan calling
+                // the key once per element (ties keep the first, like Python).
+                if receiver.is_none()
+                    && (method == "min" || method == "max")
+                    && args.len() == 2
+                {
+                    let keyf = match &args[1] {
+                        AstNode::Call {
+                            receiver: None,
+                            method: m,
+                            args: ka,
+                            ..
+                        } if m == "__kwarg__"
+                            && ka.len() == 2
+                            && matches!(&ka[0], AstNode::StringLit(n) if n == "key") =>
+                        {
+                            Some(ka[1].clone())
+                        }
+                        _ => None,
+                    };
+                    if let Some(k) = keyf {
+                        let xs = self.lower_expr(&args[0]);
+                        let f = self.lower_expr(&k);
+                        let func = if method == "min" {
+                            "py_min_key"
+                        } else {
+                            "py_max_key"
+                        };
+                        self.stmts.push(MirStmt::Call {
+                            func: func.to_string(),
+                            args: vec![xs, f],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::I64);
+                        return id;
+                    }
                 }
                 // PY-A: max(xs) / min(xs) — the 1-argument form (previously a
                 // bare `max`/`min` extern → link failure). f64 elements live as

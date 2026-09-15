@@ -495,6 +495,33 @@ int64_t py_map_items(int64_t map) {
 // round(x) — Python returns an int with banker's rounding (round(2.5) == 2).
 int64_t py_round_i64(double x) { return (int64_t)nearbyint(x); }
 
+// ── PY-A: min/max with a key callable (linear scan; ties keep the first,
+// like Python) ──────────────────────────────────────────────────────
+int64_t py_min_key(int64_t vec, int64_t keyfn) {
+    int64_t n = zt_vec_len(vec);
+    if (n <= 0) return 0;
+    int64_t best = ((int64_t*)vec)[0];
+    int64_t best_k = ((int64_t(*)(int64_t))keyfn)(best);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        int64_t k = ((int64_t(*)(int64_t))keyfn)(v);
+        if (k < best_k) { best = v; best_k = k; }
+    }
+    return best;
+}
+int64_t py_max_key(int64_t vec, int64_t keyfn) {
+    int64_t n = zt_vec_len(vec);
+    if (n <= 0) return 0;
+    int64_t best = ((int64_t*)vec)[0];
+    int64_t best_k = ((int64_t(*)(int64_t))keyfn)(best);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        int64_t k = ((int64_t(*)(int64_t))keyfn)(v);
+        if (k > best_k) { best = v; best_k = k; }
+    }
+    return best;
+}
+
 // `x in list` — linear scan; string elements compare by CONTENT (the
 // compiler passes that in, since element types are static). Previously this
 // silently produced 0.

@@ -1,0 +1,18 @@
+// PY-A: min/max 的 key= 形式（线性扫描，键每元素只算一次；并列取第一个，与 Python 一致）
+//   此前 `min(xs, key=f)` 被"min of TWO values"那条分支吞掉 → 把函数指针当值比较，
+//   返回的是指针
+// expect: 3
+// expect: 1
+// expect: 1
+// expect: 3
+// expect: 3
+// expect: 9
+def neg(v) -> i64:
+    return 0 - v
+
+print(min([3, 1, 2], key=neg))
+print(max([1, 5, 3], key=neg))
+print(min([3, 1, 2]))
+print(max([3, 1, 2]))
+print(min(3, 5))
+print(max(2, 9))
