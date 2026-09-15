@@ -363,6 +363,9 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 25. **`list.sort(key=)` / `sorted(key=, reverse=)`**（`23e54249`）：运行时用 decorate-sort-undecorate（键只算一次、原下标作稳定 tie-break，与 Python 稳定排序一致）。两个坑：① `xs.sort(key=f)` 没有 reverse 实参，而运行时签名恒有第三个参数 → 缺参取到垃圾值，导致原地排序**表现得像被 reverse**；② `sorted` 的关键字按**名字**匹配（key/reverse），不依赖源码顺序。
 26. **`x in list` 静默返回 0 / `bool(x)` 链接失败**（`4d4c18f4`）、**`print(sep=,end=)` 被当普通实参打印**（`121834e3`）：均已修。`in` 对数组做线性扫描（字符串元素按内容比较，元素类型由编译器传入）；`bool` 容器看长度、数值/字符串看非零非空；`print` 的 `sep` 替换默认空格、显式 `end` 抑制 println 系列自带换行（终止符单独发射）。
 27. **`min(xs, key=f)` 返回函数指针**（`cb9ba317`）：被既有的「min of TWO values」2 参分支吞掉 → 把 key 可调用当**值**比较。现 `key=` 关键字改走可迭代形式（线性扫描、键每元素只算一次、并列取第一个）。同批修复一处**被先前编辑弄乱的代码**：map/filter 的守卫被 min/max 的守卫覆盖，导致单参 `min(xs)` 在 `args[1]` 上 panic、且 map/filter 裸奔。
+28. **`dict.setdefault` / `list.extend` 链接失败**（`90f0fb53`）：已实现（setdefault 用存在性判断而非"值为 0"；extend 返回可能移动的句柄，语句形态回写接收者）。
+   附带记录的**既有折叠坑**：`len(字面量尺寸数组)` 是编译期常量 → `xs.extend(...)` 之后 `len(xs)` 不会跟着变（元素数据正确）。
+   ⚠️ **待查**：`time.strftime("%Y-%m-%d")` 的用例在编译/运行时**疑似挂起**（一次 120s 超时），需单独定位是否为该函数还是环境问题。
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
