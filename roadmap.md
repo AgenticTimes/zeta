@@ -384,7 +384,8 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 - [x] `json` 全套（loads/dumps/load/dump/get/keys/values、嵌套、类型正确）
 - [x] 文件对象 `open/read/readline(s)/write/close/closed`（t58）
 - [x] `collections` `most_common([n])`（`993e288d`，t79）：**根因是 Counter 未按内容哈希 key**——字符串字面量在不同位置是不同指针，`Counter(['a','b','a'])` 曾产生 3 个条目（5 元素 len=5）。现新增 `py_collections_counter_new_str`（元素类型为 str 时按 `map_str_key` 哈希），`map_keys`/`most_common` 经既有 hash→原串侧表还原文本。`len(c)`、降序计数均已正确。
-  ⬜ 仍缺：`defaultdict(list/set)`；**`d.keys()`/`most_common` 的 key 元素类型仍是 i64** → 打印 key 显示句柄。要修需给「字符串键 map」一个独立标签（一刀切标 Str 会让 int 键字典崩溃）
+  ✅ `d.keys()` 的**键类型**已随 map 类型参数走（`3b8d57ae`，t80）：dict 字面量的键类型记进 `Named("map", [Str|I64])`，所以字符串键字典 `keys()` 是 `Vec<str>`（`map_keys` 从侧表还原原串），int 键字典仍是 `Vec<i64>`——两者都不再打哈希/句柄。
+  ⬜ 仍缺：`defaultdict(list/set)`；`most_common` 的 pair 元素（key,count）仍按 i64 解构 → 打印 pair 的 key 显示句柄
 - [x] `typing`（注解专用 no-op 模块，`1914474c`，t66）、`warnings`（warn 真打 stderr，过滤器 no-op，`80867154`，t67）
 - [x] `hashlib`（md5/sha1/sha256 + 链式 `hexdigest` + 流式 `update`，CommonCrypto 后端，`99358400`，t69）；
   同批修链式调用接收者（`py_handle_of` 现可从注册表 `handle=` 解析 Call 结果的标签）
