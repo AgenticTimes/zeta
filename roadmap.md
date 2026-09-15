@@ -620,3 +620,27 @@ identity 兜底、UTF-8 边界探针修复。
 7. 嵌套 def 方法分发修正（stub 方法解析为裸名 extern 的 bug——HashMap::new().insert() 应路由到 map_insert）
 8. L3 shim 边界：REasyQuant 引擎侧提供 jq_shim.o（或确认现有 no-op 桩足够）
 9. **L4**：asyncio 事件循环与真协程、yield 生成器
+
+## argparse 设计与风险界定（2026-09-16，实现前定稿）
+
+**语料证据**（REasyQuant strategies，38 文件）：`ArgumentParser(` 4、`parse_args()` 4、`add_argument(` **34**、`args.<field>` **57**；
+`add_argument` 的关键字分布：`default` 25、`type` 15、`help` 12、`action` 7、`required` 2、`choices` 1。
+
+**核心难点**：`args.<field>` 是**动态字段名**，注册表的静态方法表无法枚举；且字段类型（str/f64/i64/bool）必须**编译期确定**，否则 `args.cash` 这类浮点字段会被当整数（静默错值）。
+
+**方案：编译期建「flag → 种类」表 + 运行期命名空间存字符串**
+
+1. **编译期（gen）**：`X.add_argument("--flag", ...)` 在**降级点**按**名字**读关键字（`default`/`type`/`action`），记录 `flag → kind`：
+   - `type=float` → f64；`type=int` → i64；`type=str`/缺省 → str（再由 `default` 的静态类型兜底：字符串字面量→str、浮点→f64、整数→i64）
+   - `action="store_true"` → bool
+   - 发射 `py_argparse_add(parser, "--flag", <default 的字符串形式>)`（数值默认值在运行期用 `to_string_*` 转成字符串）
+   - `help`/`required`/`choices` **接受但不实现**（V1）：`required` 缺失时**发 warning**（fail-loud 不静默），`choices`/`help` 忽略并在文档记录
+2. **运行期（C）**：
+   - parser = `Vec<[flag_name, default_str]>`（用 Vec 而非 map，因为需要**按名字遍历**去 argv 里找）
+   - `parse_args()` → 扫 `argv`（由启动构造器捕获，见 §29）匹配 `--flag value` / `--flag=value` / 裸 `--flag`（后者取值 `"1"`，服务 `store_true`），命中即覆盖默认值；结果是 `map: name_hash → 字符串`
+   - **取值按种类分入口**：`py_argparse_get_str/i64/f64/bool`（f64 入口必须在 codegen 显式声明，否则自动 extern 会按 i64 声明并 fptosi——老坑）
+3. **`args.<field>`**：gen 在 FieldAccess 处识别「基址类型为 `PyArgNS`」，查编译期表拿 kind，发射对应的取值入口并按 kind 定型。
+
+**V1 明确不支持（保持 fail-loud / warning）**：短选项 `-x`、位置参数、`nargs`、子命令（`add_subparsers`）、`type=` 传可调用对象、互斥组。**不静默**。
+
+**风险与验证**：① 编译期表是**按解析器实例**还是全局？V1 用**全局 flag→kind**（同名字段跨解析器取后者，并在冲突时 warning）；② 未知 flag 的 `args.<x>` 必须**编译期报错/warning**，不得降级成 0；③ 用例需覆盖 `--flag value`、`--flag=value`、`store_true` 缺省/存在、数值/字符串默认值、`required` 缺失 warning。
