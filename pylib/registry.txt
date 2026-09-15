@@ -399,6 +399,19 @@ F collections Counter py_collections_counter_new args=i64 ret=i64 handle=map
 F collections defaultdict py_collections_defaultdict args=i64 ret=i64 handle=map
 X zeta_map_len args=i64 ret=i64
 X py_map_contains args=i64,i64 ret=i64
+
+# ---- argparse (V1: long options only; type=int/float/str; action=store_true).
+#      `add_argument` and `args.<field>` are compiler-side rewrites (the flag
+#      kinds are only known at the call site), so these entries mostly exist so
+#      the imports resolve and the externs get declared. ------------------
+M argparse
+F argparse ArgumentParser py_argparse_new args= ret=i64 handle=PyArgParser
+W PyArgParser add_argument py_argparse_add args=4
+W PyArgParser parse_args py_argparse_parse args=1 ret_handle=PyArgNS
+X py_argparse_get_str args=i64,i64 ret=str
+X py_argparse_get_i64 args=i64,i64 ret=i64
+X py_argparse_get_f64 args=i64,i64 ret=f64
+X py_argparse_get_bool args=i64,i64 ret=i64
 # Counter.most_common([n]) → Vec of (key, count) pairs, count descending
 # (keys recovered via the map_str_key side table).
 W map most_common py_map_most_common args=1 ret=vec

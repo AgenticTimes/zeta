@@ -1165,6 +1165,12 @@ int64_t py_sys_argv(void) {
     }
     return (int64_t)(base + 2);
 }
+// Raw argv access for the argparse runtime (avoids building a Zeta Vec just to
+// scan for options).
+int64_t zeta_argc(void) { return zt_argc; }
+int64_t zeta_argv_at(int64_t i) {
+    return (i >= 0 && i < zt_argc && zt_argv) ? (int64_t)zt_argv[i] : 0;
+}
 int64_t py_sys_version_info(void) {
     // Vec [3, 14, 0] so `sys.version_info[0] >= 3` works.
     int64_t* base = (int64_t*)GC_malloc(16 + 3 * 8);

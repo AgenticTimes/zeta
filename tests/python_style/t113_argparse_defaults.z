@@ -1,0 +1,21 @@
+// PY-A: argparse V1 — 无命令行参数时取 add_argument 的 default。
+// parser / args.<field> 是编译期重写：字段类型由 add_argument 处的
+// type=/action= 决定（静态方法表枚举不了动态字段名）。
+import argparse
+
+parser = argparse.ArgumentParser(description="demo")
+parser.add_argument("--start", default="2023-01-01")
+parser.add_argument("--cash", type=float, default=1000000.0)
+parser.add_argument("--count", type=int, default=3)
+parser.add_argument("--optimistic", action="store_true")
+args = parser.parse_args()
+
+print(args.start)
+print(args.cash)
+print(args.count)
+print(args.optimistic)
+
+// expect: 2023-01-01
+// expect: 1000000.000000
+// expect: 3
+// expect: 0

@@ -49,6 +49,8 @@ pub struct MirGen {
     shared_type_decls: HashMap<String, TypeDecl>,
     /// PY-A: the source file being compiled — the value of `__file__`.
     source_file: Option<String>,
+    /// PY-A: argparse flag → value kind (program-wide, from the Resolver).
+    argparse_kinds: HashMap<String, String>,
     /// Stack of loop result slots for `loop { break EXPR; }` value semantics.
     loop_value_stack: Vec<u32>,
     /// Result slot of the most recently lowered loop (for implicit ret_val).
@@ -122,6 +124,7 @@ impl MirGen {
             type_decls: HashMap::new(),
             shared_type_decls: HashMap::new(),
             source_file: None,
+            argparse_kinds: HashMap::new(),
             loop_value_stack: Vec::new(),
             last_loop_result: None,
             generated_mirs: vec![],
@@ -452,6 +455,12 @@ impl MirGen {
     /// PY-A: the file being compiled, so `__file__` can resolve to it.
     pub fn with_source_file(mut self, path: Option<String>) -> Self {
         self.source_file = path;
+        self
+    }
+
+    /// PY-A: argparse flag kinds collected program-wide by the Resolver.
+    pub fn with_argparse_kinds(mut self, kinds: HashMap<String, String>) -> Self {
+        self.argparse_kinds = kinds;
         self
     }
 
@@ -3155,6 +3164,110 @@ impl MirGen {
                 // `from threading import Thread; Thread(f)` dispatch to runtime
                 // shims, and calls on a returned handle (`t.start()`,
                 // `lock.acquire()`) dispatch by the handle's type tag.
+                // PY-A: argparse — ArgumentParser(...) / add_argument(...) /
+                // parse_args() and `args.<flag>` are compiler-side rewrites: the
+                // flag kinds only exist at the call site, so a static registry
+                // method table cannot type `args.<field>`.
+                if method == "ArgumentParser"
+                    && (receiver.is_none()
+                        || matches!(receiver.as_deref(), Some(AstNode::Var(v)) if v == "argparse"))
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_argparse_new".to_string(),
+                        args: vec![],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::Named("PyArgParser".to_string(), vec![]));
+                    return id;
+                }
+                if method == "add_argument" && receiver.is_some() {
+                    let mut flag: Option<String> = None;
+                    let mut default_expr: Option<AstNode> = None;
+                    for a in args {
+                        if let AstNode::Call {
+                            receiver: None,
+                            method: m,
+                            args: ka,
+                            ..
+                        } = a
+                        {
+                            if m == "__kwarg__" && ka.len() == 2 {
+                                if let AstNode::StringLit(nm) = &ka[0] {
+                                    match nm.as_str() {
+                                        "default" => default_expr = Some(ka[1].clone()),
+                                        "required" => eprintln!(
+                                            "note: PY-A: argparse `required=True` is accepted but \
+                                             not enforced (V1)"
+                                        ),
+                                        _ => {}
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                        if let AstNode::StringLit(s) = a {
+                            if flag.is_none() {
+                                flag = Some(s.clone());
+                            }
+                        }
+                    }
+                    if let Some(fname) = flag {
+                        let recv = self.lower_expr(receiver.as_ref().unwrap());
+                        let dstr = match &default_expr {
+                            Some(AstNode::StringLit(s)) => {
+                                let sid = self.next_id();
+                                self.exprs.insert(sid, MirExpr::StringLit(s.clone()));
+                                self.type_map.insert(sid, Type::Str);
+                                sid
+                            }
+                            Some(e) => {
+                                let v = self.lower_expr(e);
+                                self.lower_to_string(v)
+                            }
+                            None => {
+                                let sid = self.next_id();
+                                self.exprs.insert(sid, MirExpr::StringLit(String::new()));
+                                self.type_map.insert(sid, Type::Str);
+                                sid
+                            }
+                        };
+                        let name_id = self.next_id();
+                        // Keyed by Python's `dest` (dashes stripped, `-`→`_`)
+                        // so it matches what `args.<field>` looks up; the raw
+                        // dashed flag is what argv is scanned for.
+                        let norm = fname.trim_start_matches('-').replace('-', "_");
+                        self.exprs.insert(name_id, MirExpr::StringLit(norm));
+                        self.type_map.insert(name_id, Type::Str);
+                        let flag_id = self.next_id();
+                        self.exprs.insert(flag_id, MirExpr::StringLit(fname.clone()));
+                        self.type_map.insert(flag_id, Type::Str);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_argparse_add".to_string(),
+                            args: vec![recv, name_id, flag_id, dstr],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::I64);
+                        return id;
+                    }
+                }
+                if method == "parse_args" && receiver.is_some() {
+                    let recv = self.lower_expr(receiver.as_ref().unwrap());
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_argparse_parse".to_string(),
+                        args: vec![recv],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::Named("PyArgNS".to_string(), vec![]));
+                    return id;
+                }
                 if let Some((symbol, handle, ret)) = self.py_member_call(receiver, method) {
                     let mut lowered = Vec::with_capacity(args.len());
                     for a in args {
@@ -6343,6 +6456,48 @@ impl MirGen {
                 self.type_map.insert(id, Type::I64);
             }
             AstNode::FieldAccess { base, field } => {
+                // PY-A: argparse results namespace — `args.<flag>` is typed from
+                // the kind recorded at `add_argument` (a static method table
+                // cannot enumerate dynamic field names). An undeclared flag is
+                // reported and lowered to 0 rather than silently defaulting.
+                {
+                    let probe_id = self.lower_expr(base);
+                    if matches!(
+                        self.type_map.get(&probe_id),
+                        Some(Type::Named(n, _)) if n == "PyArgNS"
+                    ) {
+                        let kind = self.argparse_kinds.get(field).cloned();
+                        let (func, ty) = match kind.as_deref() {
+                            Some("i64") => ("py_argparse_get_i64", Type::I64),
+                            Some("f64") => ("py_argparse_get_f64", Type::F64),
+                            Some("bool") => ("py_argparse_get_bool", Type::Bool),
+                            Some("str") => ("py_argparse_get_str", Type::Str),
+                            _ => {
+                                eprintln!(
+                                    "warning: PY-A: `args.{}` is not a declared argument \
+                                     (no matching add_argument) — lowering as 0",
+                                    field
+                                );
+                                self.exprs.insert(id, MirExpr::IntLit(0));
+                                self.type_map.insert(id, Type::I64);
+                                return id;
+                            }
+                        };
+                        let name_id = self.next_id();
+                        self.exprs
+                            .insert(name_id, MirExpr::StringLit(field.clone()));
+                        self.type_map.insert(name_id, Type::Str);
+                        self.stmts.push(MirStmt::Call {
+                            func: func.to_string(),
+                            args: vec![probe_id, name_id],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, ty);
+                        return id;
+                    }
+                }
                 // PY-A: library-handle attribute read (`d.year`, `delta.days`).
                 // Field names are declared as one-argument "methods" in the
                 // registry, so reads and calls share one dispatch table.

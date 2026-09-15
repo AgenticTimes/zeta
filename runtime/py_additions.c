@@ -605,6 +605,86 @@ int64_t host_str_strip_chars(int64_t s, int64_t c) { return zt_strip_set(s, c, 1
 int64_t host_str_lstrip_chars(int64_t s, int64_t c) { return zt_strip_set(s, c, 1, 0); }
 int64_t host_str_rstrip_chars(int64_t s, int64_t c) { return zt_strip_set(s, c, 0, 1); }
 
+// ── PY-A: argparse (V1) ──────────────────────────────────────────────
+// The parser is a Vec of [flag_name, default_string] pairs (a Vec, not a map,
+// because scanning argv needs the NAMES). parse_args resolves each flag from
+// argv, falling back to its default, into a map name-hash -> string; the
+// compiler picks the typed getter from the flag kind it recorded at
+// add_argument (so `args.cash` is a float, not an integer).
+extern int64_t zeta_argc(void);
+extern int64_t zeta_argv_at(int64_t i);
+
+int64_t py_argparse_new(void) {
+    int64_t* base = (int64_t*)GC_malloc(16 + 8 * 8);
+    base[0] = 8;
+    base[1] = 0;
+    return (int64_t)(base + 2);
+}
+int64_t py_argparse_add(int64_t parser, int64_t dest, int64_t flag, int64_t default_str) {
+    // [dest_name, argv_flag, default_string] — the dest is what `args.<x>`
+    // looks up, the flag is what argv is scanned for (they differ: `start`
+    // vs `--start`).
+    int64_t* pair = (int64_t*)GC_malloc(24);
+    pair[0] = dest;
+    pair[1] = flag;
+    pair[2] = default_str ? default_str : (int64_t)GC_strdup("");
+    return vec_push(parser, (int64_t)pair);
+}
+// `--name value` | `--name=value` | bare `--name` (-> "1", for store_true).
+static const char* zt_argv_value(const char* name) {
+    size_t nlen = strlen(name);
+    int64_t argc = zeta_argc();
+    for (int64_t i = 1; i < argc; i++) {
+        const char* a = (const char*)zeta_argv_at(i);
+        if (!a || strncmp(a, name, nlen) != 0) continue;
+        const char* rest = a + nlen;
+        if (*rest == '=') return rest + 1;
+        if (*rest == 0) {
+            if (i + 1 < argc) {
+                const char* nxt = (const char*)zeta_argv_at(i + 1);
+                if (nxt && nxt[0] != '-') return nxt;
+            }
+            return "1";
+        }
+    }
+    return 0;
+}
+int64_t py_argparse_parse(int64_t parser) {
+    int64_t ns = map_new();
+    int64_t n = zt_vec_len(parser);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t* pair = (int64_t*)((int64_t*)parser)[i];
+        const char* dest = (const char*)pair[0];
+        const char* flag = (const char*)pair[1];
+        const char* val = (const char*)pair[2];
+        if (flag && flag[0]) {
+            const char* got = zt_argv_value(flag);
+            if (got) val = got;
+        }
+        map_insert(ns, map_str_key((int64_t)dest), (int64_t)GC_strdup(val ? val : ""));
+    }
+    return ns;
+}
+int64_t py_argparse_get_str(int64_t ns, int64_t name) {
+    return map_get(ns, map_str_key(name));
+}
+int64_t py_argparse_get_i64(int64_t ns, int64_t name) {
+    int64_t s = map_get(ns, map_str_key(name));
+    return s ? (int64_t)strtoll((const char*)s, NULL, 10) : 0;
+}
+double py_argparse_get_f64(int64_t ns, int64_t name) {
+    int64_t s = map_get(ns, map_str_key(name));
+    return s ? strtod((const char*)s, NULL) : 0.0;
+}
+int64_t py_argparse_get_bool(int64_t ns, int64_t name) {
+    int64_t s = map_get(ns, map_str_key(name));
+    if (!s) return 0;
+    const char* p = (const char*)s;
+    if (!*p) return 0;
+    if (strcmp(p, "0") == 0 || strcmp(p, "false") == 0 || strcmp(p, "False") == 0) return 0;
+    return 1;
+}
+
 // ── PY-A: hex/oct/bin/reversed ───────────────────────────────────────
 // Sign-aware base rendering with Python's 0x/0o/0b prefix.
 static int64_t zt_int_to_base(int64_t n, int base, const char* prefix) {

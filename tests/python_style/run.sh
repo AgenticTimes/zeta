@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # tests/python_style/run.sh — Python 风格测试套件
 # 用例格式：`// expect: <一行输出>`（按序）；`// expect-error`（编译必须失败）；
+#           `// args: <argv...>`（可选，运行程序时传入的命令行参数）
 #           `// known-fail: <原因>`（已知缺口，单列不计入通过率）
 set -u
 
@@ -19,10 +20,15 @@ pass=0; fail=0; knownfail=0; xpass=0; failed_files=""
 for f in "$ROOT"/tests/python_style/t*.z; do
     name="$(basename "$f" .z)"
     expects=()
+    args=()
     while IFS= read -r line; do
         case "$line" in
             "// expect: "*) expects+=("${line#// expect: }") ;;
             "// expect:")    expects+=("") ;;
+            "// args: "*)
+                # shellcheck disable=SC2206
+                args+=(${line#// args: })
+                ;;
         esac
     done < "$f"
 
@@ -59,7 +65,11 @@ for f in "$ROOT"/tests/python_style/t*.z; do
         fail=$((fail+1)); failed_files="$failed_files $name"
         continue
     fi
-    actual=$("$OUTDIR/$name" 2>/dev/null)
+    if [ ${#args[@]} -gt 0 ]; then
+        actual=$("$OUTDIR/$name" "${args[@]}" 2>/dev/null)
+    else
+        actual=$("$OUTDIR/$name" 2>/dev/null)
+    fi
     # 逐行比对（尾随空行归一化）
     expected="$(printf '%s\n' "${expects[@]:-}" | sed -e ':a' -e '/^[[:space:]]*$/{$d;N;ba' -e '}')"
     actual_n="$(printf '%s\n' "$actual" | sed -e ':a' -e '/^[[:space:]]*$/{$d;N;ba' -e '}')"

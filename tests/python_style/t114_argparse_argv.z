@@ -1,0 +1,21 @@
+// PY-A: argparse V1 — 命令行参数覆盖 default；同时覆盖 `--flag value`
+// 与 `--flag=value` 两种写法，以及 store_true 的存在/缺省。
+// args: --start 2024-05-05 --count=9 --cash 250.5 --optimistic
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--start", default="2023-01-01")
+parser.add_argument("--cash", type=float, default=1000000.0)
+parser.add_argument("--count", type=int, default=3)
+parser.add_argument("--optimistic", action="store_true")
+args = parser.parse_args()
+
+print(args.start)
+print(args.cash)
+print(args.count)
+print(args.optimistic)
+
+// expect: 2024-05-05
+// expect: 250.500000
+// expect: 9
+// expect: 1

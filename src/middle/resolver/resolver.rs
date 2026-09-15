@@ -78,6 +78,10 @@ pub struct Resolver {
     py_source_dir: RefCell<Option<std::path::PathBuf>>,
     /// PY-A: the file being compiled — the value of `__file__`.
     source_file: RefCell<Option<String>>,
+    /// PY-A: argparse flag → value kind, collected program-wide (the
+    /// `add_argument` call and the `args.<flag>` read usually live in
+    /// different functions, so per-MirGen state would not see it).
+    argparse_kinds: RefCell<std::collections::HashMap<String, String>>,
     /// PY-A: module name → its `__package__` (relative-import anchor). A
     /// package's `__init__` anchors to itself; a submodule anchors to its
     /// parent package.
@@ -124,6 +128,7 @@ impl Resolver {
             py_loaded_modules: RefCell::new(std::collections::HashSet::new()),
             py_source_dir: RefCell::new(None),
             source_file: RefCell::new(None),
+            argparse_kinds: RefCell::new(std::collections::HashMap::new()),
             py_module_pkg: RefCell::new(std::collections::HashMap::new()),
             py_current_module: RefCell::new(None),
             registered_func_defs: RefCell::new(Vec::new()),
@@ -399,6 +404,97 @@ impl Resolver {
                             .insert(alias, (module.clone(), m.clone()));
                     }
                 }
+            }
+        }
+        // PY-A: collect argparse flag kinds program-wide. `add_argument` is
+        // usually at module level while `args.<flag>` is read inside a
+        // function, so the kind table cannot live in a single MirGen.
+        {
+            fn walk_argparse(n: &AstNode, out: &mut std::collections::HashMap<String, String>) {
+                match n {
+                    AstNode::Call { method, args, .. } if method == "add_argument" => {
+                        let mut flag: Option<String> = None;
+                        let mut kind: Option<String> = None;
+                        let mut dflt: Option<AstNode> = None;
+                        for a in args {
+                            if let AstNode::Call {
+                                receiver: None,
+                                method: m,
+                                args: ka,
+                                ..
+                            } = a
+                            {
+                                if m == "__kwarg__" && ka.len() == 2 {
+                                    if let AstNode::StringLit(nm) = &ka[0] {
+                                        match nm.as_str() {
+                                            "type" => {
+                                                if let AstNode::Var(t) = &ka[1] {
+                                                    kind = Some(
+                                                        match t.as_str() {
+                                                            "float" => "f64",
+                                                            "int" => "i64",
+                                                            _ => "str",
+                                                        }
+                                                        .to_string(),
+                                                    );
+                                                }
+                                            }
+                                            "action" => {
+                                                if let AstNode::StringLit(s) = &ka[1] {
+                                                    if s == "store_true" {
+                                                        kind = Some("bool".to_string());
+                                                    }
+                                                }
+                                            }
+                                            "default" => dflt = Some(ka[1].clone()),
+                                            _ => {}
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+                            if let AstNode::StringLit(s) = a {
+                                if flag.is_none() {
+                                    flag = Some(s.clone());
+                                }
+                            }
+                        }
+                        if let Some(f) = flag {
+                            let k = kind.unwrap_or_else(|| {
+                                match dflt {
+                                    Some(AstNode::StringLit(_)) => "str".to_string(),
+                                    Some(AstNode::FloatLit(_)) => "f64".to_string(),
+                                    _ => "str".to_string(),
+                                }
+                            });
+                            // Python's `dest`: strip leading dashes and turn
+                            // `-` into `_` (args.fusion_weight for --fusion-weight).
+                            out.insert(
+                                f.trim_start_matches('-').replace('-', "_"),
+                                k,
+                            );
+                        }
+                    }
+                    AstNode::ExprStmt { expr } => walk_argparse(expr, out),
+                    AstNode::Block { body } => {
+                        for s in body {
+                            walk_argparse(s, out);
+                        }
+                    }
+                    AstNode::FuncDef { body, .. } => {
+                        for s in body {
+                            walk_argparse(s, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut found: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            walk_argparse(&ast, &mut found);
+            let mut table = self.argparse_kinds.borrow_mut();
+            for (k, v) in found {
+                table.insert(k, v);
             }
         }
         // Collect program-wide type declarations for MIR lowering.
@@ -1636,6 +1732,7 @@ impl Resolver {
             .with_py_user_modules(self.py_user_modules.borrow().clone())
             .with_module_global_types(self.module_global_types())
             .with_source_file(self.source_file.borrow().clone())
+            .with_argparse_kinds(self.argparse_kinds.borrow().clone())
             .with_symbol_renames(self.module_renames_for(
                 match ast {
                     AstNode::FuncDef { name, .. } => name.as_str(),
