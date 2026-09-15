@@ -5531,6 +5531,27 @@ impl MirGen {
                         self.type_map.insert(id, Type::Str);
                         return id;
                     }
+                    // `s.strip(chars)` / lstrip / rstrip — a CHARACTER SET, not
+                    // a substring (the 2-argument form had no arity match and
+                    // fell to a bare extern).
+                    if matches!(method.as_str(), "strip" | "lstrip" | "rstrip")
+                        && arg_ids.len() == 2
+                    {
+                        let func = match method.as_str() {
+                            "lstrip" => "host_str_lstrip_chars",
+                            "rstrip" => "host_str_rstrip_chars",
+                            _ => "host_str_strip_chars",
+                        };
+                        self.stmts.push(MirStmt::Call {
+                            func: func.to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
                     // `s.split(sep, maxsplit)` — bounded split.
                     if method == "split" && arg_ids.len() == 3 {
                         self.stmts.push(MirStmt::Call {

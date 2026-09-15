@@ -1,0 +1,10 @@
+// PY-A: strip/lstrip/rstrip 的**字符集**形式 —— 此前 2 参无匹配 → 裸 extern 链接失败
+//   （注意是字符集而非子串：strip("x") 去掉两端任意 x）
+// expect: a
+// expect: a
+// expect: a
+// expect: a
+print("xxaxx".strip("x"))
+print("--a--".strip("-"))
+print("xxa".lstrip("x"))
+print("axx".rstrip("x"))

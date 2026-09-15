@@ -588,6 +588,23 @@ int64_t py_sorted_key(int64_t vec, int64_t keyfn, int64_t reverse) {
     return (int64_t)(base + 2);
 }
 
+// ── PY-A: strip/lstrip/rstrip with a CHARACTER SET ───────────────────
+static int64_t zt_strip_set(int64_t s, int64_t chars, int left, int right) {
+    const char* p = s ? (const char*)s : "";
+    const char* set = chars ? (const char*)chars : " \t\n\r\f\v";
+    size_t b = 0, e = strlen(p);
+    if (left) while (b < e && strchr(set, p[b])) b++;
+    if (right) while (e > b && strchr(set, p[e - 1])) e--;
+    size_t n = e - b;
+    char* out = (char*)GC_malloc(n + 1);
+    memcpy(out, p + b, n);
+    out[n] = 0;
+    return (int64_t)out;
+}
+int64_t host_str_strip_chars(int64_t s, int64_t c) { return zt_strip_set(s, c, 1, 1); }
+int64_t host_str_lstrip_chars(int64_t s, int64_t c) { return zt_strip_set(s, c, 1, 0); }
+int64_t host_str_rstrip_chars(int64_t s, int64_t c) { return zt_strip_set(s, c, 0, 1); }
+
 // ── PY-A: math constants + the missing common functions ──────────────
 // Constants previously warned and lowered to 0 (a silently wrong value);
 // gcd/factorial/isqrt had no libc counterpart to fall back on either.
