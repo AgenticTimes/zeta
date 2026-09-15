@@ -1054,6 +1054,13 @@ int64_t py_dt_strftime(int64_t h, int64_t fmt) {
     *o = 0;
     return (int64_t)zt_strdup(buf);
 }
+// time.strftime(fmt) — format the CURRENT time. Without this the module call
+// reached libc's strftime (a different signature entirely) and crashed on the
+// first argument.
+int64_t py_time_strftime(int64_t fmt) {
+    return py_dt_strftime(py_dt_now(), fmt);
+}
+
 // strptime with the corpus's formats: %Y-%m-%d and %Y-%m-%d %H:%M:%S.
 int64_t py_dt_strptime(int64_t s, int64_t fmt) {
     (void)fmt;

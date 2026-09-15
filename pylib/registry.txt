@@ -71,6 +71,8 @@ F time sleep py_time_sleep args=f64 ret=void
 F time time py_time_time args= ret=f64
 F time monotonic py_time_monotonic args= ret=f64
 F time perf_counter py_time_monotonic args= ret=f64
+F time strftime py_time_strftime args=i64 ret=str
+F time localtime py_dt_now args= ret=i64 handle=PyDate
 
 # ---- math (added purely as a data edit to prove the registry is data-driven)
 M math

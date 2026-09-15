@@ -1,0 +1,9 @@
+// PY-A: time.strftime(fmt) —— 此前模块级调用落到 libc 的 strftime
+//   （签名完全不同：char*, size_t, char*, struct tm*）→ 首参被当指针 → **段错误**
+//   这里只断言格式化后的长度，避免依赖当天日期
+// expect: 1
+// expect: 1
+import time
+
+print(len(time.strftime("%Y-%m-%d")) == 10)
+print(len(time.strftime("%H:%M:%S")) == 8)
