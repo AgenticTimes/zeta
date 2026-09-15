@@ -5193,6 +5193,7 @@ impl MirGen {
                                 Some(format!("zeta_list_sort{}", list_elem_suffix(e)))
                             }
                             (Some(_), "insert", 3) => Some("zeta_list_insert".to_string()),
+                            (Some(_), "extend", 2) => Some("py_list_extend".to_string()),
                             (Some(_), "pop", 1) => Some("zeta_list_pop".to_string()),
                             (Some(_), "pop", 2) => Some("zeta_list_pop_at".to_string()),
                             (Some(_), "reverse", 1) => Some("zeta_list_reverse".to_string()),
@@ -5227,7 +5228,10 @@ impl MirGen {
                         // insert/remove/sort/reverse are called for their side
                         // effect; insert may move the handle (growth), so rebind
                         // the receiver variable — same reason `push` rebinds.
-                        if matches!(method.as_str(), "insert" | "remove" | "sort" | "reverse")
+                        if matches!(
+                            method.as_str(),
+                            "insert" | "remove" | "sort" | "reverse" | "extend"
+                        )
                             && let Some(recv_ast) = receiver
                             && let AstNode::Var(name) = &**recv_ast
                             && let Some(&slot) = self.name_to_id.get(name)
@@ -5459,6 +5463,7 @@ impl MirGen {
                         ("pop", 2) => Some("zeta_map_pop"),
                         ("pop", 3) => Some("zeta_map_pop_default"),
                         ("clear", 1) => Some("zeta_map_clear"),
+                        ("setdefault", 3) => Some("py_map_setdefault"),
                         _ => None,
                     };
                     if let Some(fname) = dfunc {
@@ -5468,6 +5473,11 @@ impl MirGen {
                             ("update", 2) => vec![arg_ids[0], arg_ids[1]],
                             ("pop", 2) => vec![arg_ids[0], self.lower_map_key(arg_ids[1])],
                             ("pop", 3) => vec![
+                                arg_ids[0],
+                                self.lower_map_key(arg_ids[1]),
+                                arg_ids[2],
+                            ],
+                            ("setdefault", 3) => vec![
                                 arg_ids[0],
                                 self.lower_map_key(arg_ids[1]),
                                 arg_ids[2],

@@ -19,6 +19,8 @@ int64_t map_new(void);
 int64_t map_insert(int64_t, int64_t, int64_t);
 int64_t map_get(int64_t, int64_t);
 int64_t map_str_key(int64_t);
+int64_t py_map_contains(int64_t, int64_t);
+int64_t vec_push(int64_t, int64_t);
 
 // Python-style string equality (by content, not pointer)
 int64_t str_eq(int64_t a, int64_t b) {
@@ -584,6 +586,21 @@ int64_t py_sorted_key(int64_t vec, int64_t keyfn, int64_t reverse) {
     for (int64_t i = 0; i < n; i++) base[2 + i] = ((int64_t*)vec)[i];
     zt_sort_by_key(base + 2, n, keyfn, (int)reverse);
     return (int64_t)(base + 2);
+}
+
+// ── PY-A: dict.setdefault / list.extend ─────────────────────────────
+int64_t py_map_setdefault(int64_t m, int64_t key, int64_t def) {
+    if (py_map_contains(m, key)) return map_get(m, key);
+    map_insert(m, key, def);
+    return def;
+}
+// Appends in place; the handle can move when the vector grows, so the caller
+// rebinds the receiver variable.
+int64_t py_list_extend(int64_t vec, int64_t other) {
+    int64_t n = zt_vec_len(other);
+    int64_t h = vec;
+    for (int64_t i = 0; i < n; i++) h = vec_push(h, ((int64_t*)other)[i]);
+    return h;
 }
 
 // ── PY-A: os.path.join with 3-4 parts / int(s, base) / dict.fromkeys ──

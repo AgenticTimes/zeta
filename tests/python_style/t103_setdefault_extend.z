@@ -1,0 +1,15 @@
+// PY-A: dict.setdefault(k, default) / list.extend(other) —— 此前均为裸 extern 链接失败
+//   注意：`len(字面量尺寸数组)` 是**编译期常量折叠**（既有行为），extend 之后它不会跟着变，
+//   故此处只断言元素内容与 dict 的长度。
+// expect: 1
+// expect: 2
+// expect: 2
+// expect: [1, 2, 3, 4]
+d = {"a": 1}
+print(d.setdefault("a", 9))
+print(d.setdefault("b", 2))
+print(len(d))
+
+xs = [1, 2]
+xs.extend([3, 4])
+print(xs)
