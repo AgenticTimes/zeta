@@ -3790,6 +3790,31 @@ impl MirGen {
                         return id;
                     }
                 }
+                // PY-A: map(f, xs) / filter(f, xs) — now that a bare function
+                // name is a FuncAddr this can call back into it. Eager (V1):
+                // the result is a Vec, not an iterator.
+                if receiver.is_none()
+                    && (method == "map" || method == "filter")
+                    && args.len() == 2
+                {
+                    let f = self.lower_expr(&args[0]);
+                    let xs = self.lower_expr(&args[1]);
+                    let func = if method == "map" {
+                        "py_builtin_map"
+                    } else {
+                        "py_builtin_filter"
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: func.to_string(),
+                        args: vec![f, xs],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                    return id;
+                }
                 // PY-A: chr(n) / ord(s) / divmod(a, b) / dict() — previously
                 // bare externs (link failure) or missing entirely.
                 if receiver.is_none() && method == "chr" && args.len() == 1 {

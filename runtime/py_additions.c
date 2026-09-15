@@ -485,6 +485,31 @@ int64_t py_map_items(int64_t map) {
     return (int64_t)(base + 2);
 }
 
+// ── PY-A: map(f, xs) / filter(f, xs) — eager, returning a Vec ─────────
+// `fn` is a Zeta function pointer; filter(None, xs) keeps truthy elements.
+int64_t py_builtin_map(int64_t fn, int64_t vec) {
+    int64_t n = zt_vec_len(vec);
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
+    base[0] = n ? n : 1;
+    base[1] = n;
+    for (int64_t i = 0; i < n; i++) {
+        base[2 + i] = ((int64_t(*)(int64_t))fn)(((int64_t*)vec)[i]);
+    }
+    return (int64_t)(base + 2);
+}
+int64_t py_builtin_filter(int64_t fn, int64_t vec) {
+    int64_t n = zt_vec_len(vec);
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
+    base[0] = n ? n : 1;
+    base[1] = 0;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        int64_t keep = fn ? ((int64_t(*)(int64_t))fn)(v) : v;
+        if (keep) base[2 + base[1]++] = v;
+    }
+    return (int64_t)(base + 2);
+}
+
 // ── PY-A: integer power `2 ** 10` ────────────────────────────────────
 // A negative exponent would be a float in Python; this returns 0 for that
 // case rather than pretending (float power goes through libm).
