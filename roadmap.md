@@ -365,7 +365,7 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 27. **`min(xs, key=f)` 返回函数指针**（`cb9ba317`）：被既有的「min of TWO values」2 参分支吞掉 → 把 key 可调用当**值**比较。现 `key=` 关键字改走可迭代形式（线性扫描、键每元素只算一次、并列取第一个）。同批修复一处**被先前编辑弄乱的代码**：map/filter 的守卫被 min/max 的守卫覆盖，导致单参 `min(xs)` 在 `args[1]` 上 panic、且 map/filter 裸奔。
 28. **`dict.setdefault` / `list.extend` 链接失败**（`90f0fb53`）：已实现（setdefault 用存在性判断而非"值为 0"；extend 返回可能移动的句柄，语句形态回写接收者）。
    附带记录的**既有折叠坑**：`len(字面量尺寸数组)` 是编译期常量 → `xs.extend(...)` 之后 `len(xs)` 不会跟着变（元素数据正确）。
-   ⚠️ **待查**：`time.strftime("%Y-%m-%d")` 的用例在编译/运行时**疑似挂起**（一次 120s 超时），需单独定位是否为该函数还是环境问题。
+   ⚠️ ~~**待查**：`time.strftime`~~ → **已定位并修复**（`12dbcfce`）：模块级 `time.strftime` 未入注册表 → 落到 **libc 的 `strftime`**（签名完全不同：`char*, size_t, char*, struct tm*`）→ 格式串被当指针解引用 → **SIGSEGV**（先前以为是挂起）。现补 `py_time_strftime`（复用 `py_dt_now`/`py_dt_strftime`）与 `time.localtime` 别名。
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
