@@ -2940,6 +2940,7 @@ impl MirGen {
                             (None, "f64") => Type::F64,
                             (None, "str") => Type::Str,
                             (None, "vec") => Type::DynamicArray(Box::new(Type::I64)),
+                            (None, "vecstr") => Type::DynamicArray(Box::new(Type::Str)),
                             _ => Type::I64,
                         },
                     );
@@ -3879,6 +3880,24 @@ impl MirGen {
                             self.stmts.push(MirStmt::Call {
                                 func: "py_json_repr".to_string(),
                                 args: vec![*arg_id],
+                                dest: sid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(sid, MirExpr::Var(sid));
+                            self.type_map.insert(sid, Type::Str);
+                            sid
+                        } else if matches!(
+                            self.type_map.get(arg_id),
+                            Some(Type::Named(name, _)) if name == "PyMatch"
+                        ) {
+                            // Print the matched text rather than the raw handle.
+                            let gid = self.next_id();
+                            self.exprs.insert(gid, MirExpr::IntLit(0));
+                            self.type_map.insert(gid, Type::I64);
+                            let sid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_re_group".to_string(),
+                                args: vec![*arg_id, gid],
                                 dest: sid,
                                 type_args: vec![],
                             });

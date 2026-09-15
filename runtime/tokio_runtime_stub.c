@@ -1497,15 +1497,33 @@ typedef struct {
     int ok;
 } zt_regex_t;
 
-static zt_regex_t* zt_re_compile(int64_t pat) {
+static zt_regex_t* zt_re_compile_fl(int64_t pat, int cflags) {
     zt_regex_t* r = (zt_regex_t*)GC_malloc(sizeof(zt_regex_t));
     r->ok = 0;
     char buf[1024];
     const char* p = pat ? (const char*)pat : "";
     zt_re_translate(p, buf, sizeof buf);
-    if (regcomp(&r->re, buf, REG_EXTENDED) == 0) r->ok = 1;
+    if (regcomp(&r->re, buf, REG_EXTENDED | cflags) == 0) r->ok = 1;
     return r;
 }
+
+static zt_regex_t* zt_re_compile(int64_t pat) {
+    return zt_re_compile_fl(pat, 0);
+}
+
+// Python re flag bits → POSIX compile flags. Only the flags this backend can
+// honour are mapped (IGNORECASE, MULTILINE); DOTALL/VERBOSE are deliberately
+// NOT registered, so using them is reported rather than silently ignored.
+#define ZT_RE_IGNORECASE 1
+#define ZT_RE_MULTILINE 2
+static int zt_re_cflags(int64_t pyflags) {
+    int c = 0;
+    if (pyflags & ZT_RE_IGNORECASE) c |= REG_ICASE;
+    if (pyflags & ZT_RE_MULTILINE) c |= REG_NEWLINE;
+    return c;
+}
+int64_t py_re_ignorecase(void) { return ZT_RE_IGNORECASE; }
+int64_t py_re_multiline(void) { return ZT_RE_MULTILINE; }
 
 // Match handle: [string, offsets[10]] (offsets are byte positions).
 typedef struct {
@@ -1528,6 +1546,33 @@ static int64_t zt_re_exec(int64_t pat, int64_t str, int flags) {
 
 int64_t py_re_search(int64_t pat, int64_t s) { return zt_re_exec(pat, s, 0); }
 int64_t py_re_match(int64_t pat, int64_t s) { return zt_re_exec(pat, s, 0); }
+// Flag-taking variants (3 args) — the arity-suffix mechanism routes a
+// 3-argument re.search/match/fullmatch call here.
+static int64_t zt_re_exec_fl(int64_t pat, int64_t s, int cflags) {
+    if (!s) return 0;
+    zt_regex_t* r = zt_re_compile_fl(pat, cflags);
+    if (!r->ok) return 0;
+    zt_match_t* mt = (zt_match_t*)GC_malloc(sizeof(zt_match_t));
+    mt->str = s;
+    mt->nmatch = 0;
+    if (regexec(&r->re, (const char*)s, 10, mt->m, 0) != 0) return 0;
+    mt->nmatch = 10;
+    return (int64_t)mt;
+}
+int64_t py_re_search_3(int64_t pat, int64_t s, int64_t flags) {
+    return zt_re_exec_fl(pat, s, zt_re_cflags(flags));
+}
+int64_t py_re_match_3(int64_t pat, int64_t s, int64_t flags) {
+    return zt_re_exec_fl(pat, s, zt_re_cflags(flags));
+}
+int64_t py_re_fullmatch_3(int64_t pat, int64_t s, int64_t flags) {
+    int64_t m = zt_re_exec_fl(pat, s, zt_re_cflags(flags));
+    if (!m) return 0;
+    zt_match_t* mt = (zt_match_t*)m;
+    size_t len = strlen((const char*)(mt->str ? (const char*)mt->str : ""));
+    if ((size_t)mt->m[0].rm_eo != len || mt->m[0].rm_so != 0) return 0;
+    return m;
+}
 int64_t py_re_fullmatch(int64_t pat, int64_t s) {
     int64_t m = zt_re_exec(pat, s, 0);
     if (!m) return 0;
@@ -1591,13 +1636,20 @@ int64_t py_re_sub_call(int64_t pat, int64_t fn_ptr, int64_t s) {
     out[n] = 0;
     return (int64_t)out;
 }
+static int64_t zt_re_sub_fl(int64_t pat, int64_t repl, int64_t s, int cflags);
 int64_t py_re_sub(int64_t pat, int64_t repl, int64_t s) {
+    return zt_re_sub_fl(pat, repl, s, 0);
+}
+int64_t py_re_sub_4(int64_t pat, int64_t repl, int64_t s, int64_t flags) {
+    return zt_re_sub_fl(pat, repl, s, zt_re_cflags(flags));
+}
+static int64_t zt_re_sub_fl(int64_t pat, int64_t repl, int64_t s, int cflags) {
     if (s && repl && (uintptr_t)repl > 4096) {
         // Heuristic: a real string handle looks like a pointer; a small integer
         // is a callback address. Callers with a callable take py_re_sub_call.
     }
     if (!s) return (int64_t)zt_strdup("");
-    zt_regex_t* r = zt_re_compile(pat);
+    zt_regex_t* r = zt_re_compile_fl(pat, cflags);
     if (!r->ok) return s;
     const char* rep = repl ? (const char*)repl : "";
     const char* cur = (const char*)s;
@@ -1663,9 +1715,9 @@ int64_t py_re_split(int64_t pat, int64_t s) {
     base[1] = len;
     return (int64_t)(base + 2);
 }
-int64_t py_re_findall(int64_t pat, int64_t s) {
+static int64_t zt_re_findall_fl(int64_t pat, int64_t s, int cflags) {
     if (!s) return 0;
-    zt_regex_t* r = zt_re_compile(pat);
+    zt_regex_t* r = zt_re_compile_fl(pat, cflags);
     int64_t cap = 8, len = 0;
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
     base[0] = cap; base[1] = 0;
@@ -1694,6 +1746,12 @@ int64_t py_re_findall(int64_t pat, int64_t s) {
     return (int64_t)(base + 2);
 }
 // re.compile returns the pattern itself (V1): Pattern methods take it first.
+int64_t py_re_findall(int64_t pat, int64_t s) {
+    return zt_re_findall_fl(pat, s, 0);
+}
+int64_t py_re_findall_3(int64_t pat, int64_t s, int64_t flags) {
+    return zt_re_findall_fl(pat, s, zt_re_cflags(flags));
+}
 int64_t py_re_compile(int64_t pat) { return pat ? pat : (int64_t)zt_strdup(""); }
 int64_t py_pattern_sub(int64_t pat, int64_t repl, int64_t s) { return py_re_sub(pat, repl, s); }
 int64_t py_pattern_sub_call(int64_t pat, int64_t fn, int64_t s) { return py_re_sub_call(pat, fn, s); }

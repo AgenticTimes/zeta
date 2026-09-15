@@ -1,0 +1,16 @@
+// PY-A: re flags（IGNORECASE/MULTILINE）+ 匹配句柄打印匹配文本 + findall 返回字符串表
+// expect: ABC
+// expect: 12
+// expect: 3
+// expect: ["1", "22", "333"]
+// expect: bonono
+import re
+
+print(re.search("abc", "xABC", re.IGNORECASE))
+
+m = re.search("(\\d+)-(\\d+)", "ab 12-34 cd")
+print(m.group(1))
+print(m.start())
+
+print(re.findall("\\d+", "a1 b22 c333"))
+print(re.sub("a", "o", "banana"))
