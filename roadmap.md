@@ -367,6 +367,8 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
    附带记录的**既有折叠坑**：`len(字面量尺寸数组)` 是编译期常量 → `xs.extend(...)` 之后 `len(xs)` 不会跟着变（元素数据正确）。
 29. **`math` 常量静默为 0 且缺函数**（`f0152f78`）：`math.pi`/`e` 此前只发 warn 然后**当 0 用**（静默错值）；`gcd`/`factorial`/`isqrt` 在 libc 无同名函数 → 链接失败。现补 0 参常量 shim（pi/e/tau/inf/nan）与 `hypot`/`gcd`/`factorial`/`degrees`/`radians`/`isqrt`。
    经验：**"注册表未命中的模块成员 → 落到同名 libc 函数"是一类危险模式**（签名不匹配 → 崩溃/UB，比链接失败更糟），`time.strftime` 即因此段错误（见 28）。
+30. **`sys.platform` / `os.sep` / `os.linesep` 静默为 0**（`99f389d7`）：三者此前只发 warn 然后当 0 用。现补 0 参 shim（platform 为 `darwin`/`linux`，sep=`"/"`，linesep=`"\n"`）。
+   同批**主动放弃** `sys.argv`：列表能造，但**来自模块成员的 `Vec<str>` 在取下标/迭代时元素类型传不到**（拿到的是句柄与 0），故**不注册**，让使用处 warn 并显式失败，而不是半对半错。其根因（模块成员的容器元素类型未贯穿到下标/for-in）记为待办。
    ⚠️ ~~**待查**：`time.strftime`~~ → **已定位并修复**（`12dbcfce`）：模块级 `time.strftime` 未入注册表 → 落到 **libc 的 `strftime`**（签名完全不同：`char*, size_t, char*, struct tm*`）→ 格式串被当指针解引用 → **SIGSEGV**（先前以为是挂起）。现补 `py_time_strftime`（复用 `py_dt_now`/`py_dt_strftime`）与 `time.localtime` 别名。
 
 **仍未做（本轮新发现，按优先级）**
