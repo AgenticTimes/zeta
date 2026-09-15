@@ -1808,6 +1808,12 @@ impl MirGen {
         if matches!(self.type_map.get(&id), Some(Type::Str)) {
             return id;
         }
+        // A handle whose value already IS a string (pathlib.Path) needs no
+        // conversion — otherwise it went through to_string_i64 and the
+        // pointer was printed as a number.
+        if matches!(self.type_map.get(&id), Some(Type::Named(n, _)) if n == "PyPath") {
+            return id;
+        }
         let func = match self.type_map.get(&id).cloned() {
             Some(Type::F64) | Some(Type::F32) => "to_string_f64",
             Some(Type::Bool) => "to_string_bool",
@@ -3863,6 +3869,9 @@ impl MirGen {
                             Some(Type::Str) => {
                                 if is_last { "println_str" } else { "print_str" }
                             }
+                            Some(Type::Named(n, _)) if n == "PyPath" => {
+                                if is_last { "println_str" } else { "print_str" }
+                            }
                             Some(Type::F64) | Some(Type::F32) => {
                                 if is_last { "println_f64" } else { "print_f64" }
                             }
@@ -3893,6 +3902,7 @@ impl MirGen {
                     let func = if arg_ids.len() == 1 {
                         match self.type_map.get(&arg_ids[0]) {
                             Some(Type::Str) => "println_str",
+                            Some(Type::Named(n, _)) if n == "PyPath" => "println_str",
                             Some(Type::F64) | Some(Type::F32) => "println_f64",
                             _ => "println",
                         }

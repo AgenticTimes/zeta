@@ -6,6 +6,9 @@
 // expect: hello
 // expect: x.txt
 // expect: 1
+// expect: /tmp/zeta_pathlib_probe.txt
+// expect: /tmp/zeta_pathlib_probe.txt
+// expect: path=/tmp/zeta_pathlib_probe.txt
 from pathlib import Path
 
 p = Path("/tmp/zeta_pathlib_probe.txt")
@@ -22,3 +25,7 @@ print((base / "sub" / "x.txt").name)
 
 q = Path(__file__).resolve()
 print(len(q.parent.name) > 0)
+
+print(p)
+print(str(p))
+print(f"path={p}")
