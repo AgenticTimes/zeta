@@ -3663,6 +3663,40 @@ impl MirGen {
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
+                // PY-A: isinstance(x, T) — the value's STATIC type decides.
+                // Only the builtin names and the exact class name are claimed;
+                // anything else falls through (loud) rather than guessing.
+                if receiver.is_none() && method == "isinstance" && args.len() == 2 {
+                    if let AstNode::Var(tn) = &args[1] {
+                        let val_id = self.lower_expr(&args[0]);
+                        let vt = self.type_map.get(&val_id).cloned();
+                        let hit = match tn.as_str() {
+                            "int" => matches!(
+                                vt,
+                                Some(Type::I64)
+                                    | Some(Type::I32)
+                                    | Some(Type::I8)
+                                    | Some(Type::I16)
+                                    | Some(Type::U8)
+                                    | Some(Type::U16)
+                                    | Some(Type::U32)
+                                    | Some(Type::U64)
+                                    | Some(Type::Usize)
+                            ),
+                            "float" => matches!(vt, Some(Type::F64) | Some(Type::F32)),
+                            "str" => matches!(vt, Some(Type::Str)),
+                            "bool" => matches!(vt, Some(Type::Bool)),
+                            "list" => {
+                                matches!(vt, Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)))
+                            }
+                            "dict" => matches!(&vt, Some(Type::Named(n, _)) if n == "map"),
+                            other => matches!(&vt, Some(Type::Named(n, _)) if n == other),
+                        };
+                        self.exprs.insert(id, MirExpr::IntLit(hit as i64));
+                        self.type_map.insert(id, Type::Bool);
+                        return id;
+                    }
+                }
                 // PY-A: chr(n) / ord(s) / divmod(a, b) / dict() — previously
                 // bare externs (link failure) or missing entirely.
                 if receiver.is_none() && method == "chr" && args.len() == 1 {
