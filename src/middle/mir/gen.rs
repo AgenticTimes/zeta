@@ -3790,6 +3790,43 @@ impl MirGen {
                         return id;
                     }
                 }
+                // PY-A: repr(x) / set(xs) — repr quotes strings; set returns a
+                // deduplicated Vec (V1: no add/remove).
+                if receiver.is_none() && method == "repr" && args.len() == 1 {
+                    let a = self.lower_expr(&args[0]);
+                    let (func, ty) = match self.type_map.get(&a).cloned() {
+                        Some(Type::Str) => ("py_repr_str", Type::Str),
+                        Some(Type::F64) | Some(Type::F32) => ("to_string_f64", Type::Str),
+                        Some(Type::Bool) => ("to_string_bool", Type::Str),
+                        _ => ("to_string_i64", Type::Str),
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: func.to_string(),
+                        args: vec![a],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, ty);
+                    return id;
+                }
+                if receiver.is_none() && method == "set" && args.len() == 1 {
+                    let a = self.lower_expr(&args[0]);
+                    let elem = match self.type_map.get(&a).cloned() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
+                        _ => Type::I64,
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_builtin_set".to_string(),
+                        args: vec![a],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(elem)));
+                    return id;
+                }
                 // PY-A: map(f, xs) / filter(f, xs) — now that a bare function
                 // name is a FuncAddr this can call back into it. Eager (V1):
                 // the result is a Vec, not an iterator.
@@ -5108,6 +5145,19 @@ impl MirGen {
                 // PY-A: string methods — dispatch to host_str_* runtime by
                 // receiver type (Python s.upper()/s.contains(x)/... )
                 if receiver_ty.as_ref().map_or(false, |t| matches!(t, Type::Str)) {
+                    // `s.split(sep, maxsplit)` — bounded split.
+                    if method == "split" && arg_ids.len() == 3 {
+                        self.stmts.push(MirStmt::Call {
+                            func: "host_str_split_max".to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map
+                            .insert(id, Type::DynamicArray(Box::new(Type::Str)));
+                        return id;
+                    }
                     // `s.split()` (no separator) splits on whitespace runs.
                     if method == "split" && arg_ids.len() == 1 {
                         self.stmts.push(MirStmt::Call {

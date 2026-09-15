@@ -485,6 +485,81 @@ int64_t py_map_items(int64_t map) {
     return (int64_t)(base + 2);
 }
 
+// ── PY-A: split(sep, maxsplit) / repr / set() ───────────────────────
+static void zt_push_raw(int64_t** base, int64_t* cap, int64_t* len, int64_t v) {
+    if (*len >= *cap) {
+        int64_t nc = *cap * 2;
+        int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)nc * 8);
+        nb[0] = nc;
+        nb[1] = *len;
+        for (int64_t i = 0; i < *len; i++) nb[2 + i] = (*base)[2 + i];
+        *base = nb;
+        *cap = nc;
+    }
+    (*base)[2 + (*len)++] = v;
+}
+
+// At most `maxsplit` splits; the remainder stays in the final piece.
+int64_t host_str_split_max(int64_t s, int64_t sep, int64_t maxsplit) {
+    const char* p = s ? (const char*)s : "";
+    const char* sp = sep ? (const char*)sep : "";
+    size_t slen = strlen(sp);
+    int64_t cap = 8, len = 0;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap;
+    base[1] = 0;
+    const char* cur = p;
+    if (slen == 0) {
+        zt_push_raw(&base, &cap, &len, (int64_t)GC_strdup(p));
+        base[1] = len;
+        return (int64_t)(base + 2);
+    }
+    while (maxsplit < 0 || len < maxsplit) {
+        const char* hit = strstr(cur, sp);
+        if (!hit) break;
+        size_t n = (size_t)(hit - cur);
+        char* tok = (char*)GC_malloc(n + 1);
+        memcpy(tok, cur, n);
+        tok[n] = 0;
+        zt_push_raw(&base, &cap, &len, (int64_t)tok);
+        cur = hit + slen;
+    }
+    zt_push_raw(&base, &cap, &len, (int64_t)GC_strdup(cur));
+    base[1] = len;
+    return (int64_t)(base + 2);
+}
+
+// repr(str) — Python quotes strings.
+int64_t py_repr_str(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    size_t n = strlen(p);
+    char* out = (char*)GC_malloc(n + 3);
+    out[0] = '\'';
+    memcpy(out + 1, p, n);
+    out[n + 1] = '\'';
+    out[n + 2] = 0;
+    return (int64_t)out;
+}
+
+// set(xs) — V1: a deduplicated Vec (no add/remove, membership via the list
+// path). Order follows first appearance.
+int64_t py_builtin_set(int64_t vec) {
+    int64_t n = zt_vec_len(vec);
+    int64_t cap = n ? n : 1;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap;
+    base[1] = 0;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        int dup = 0;
+        for (int64_t j = 0; j < base[1]; j++) {
+            if (base[2 + j] == v) { dup = 1; break; }
+        }
+        if (!dup) base[2 + base[1]++] = v;
+    }
+    return (int64_t)(base + 2);
+}
+
 // ── PY-A: map(f, xs) / filter(f, xs) — eager, returning a Vec ─────────
 // `fn` is a Zeta function pointer; filter(None, xs) keeps truthy elements.
 int64_t py_builtin_map(int64_t fn, int64_t vec) {

@@ -1,0 +1,12 @@
+// PY-A: repr(x) / set(xs) / s.split(sep, maxsplit) —— 此前均为裸 extern 链接失败
+// expect: 'x'
+// expect: 5
+// expect: 3
+// expect: ["a", "b,c"]
+// expect: ["a", "b", "c"]
+print(repr("x"))
+print(repr(5))
+
+print(len(set([1, 2, 2, 3, 1])))
+print("a,b,c".split(",", 1))
+print("a,b,c".split(","))
