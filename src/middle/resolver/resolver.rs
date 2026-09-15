@@ -76,6 +76,8 @@ pub struct Resolver {
     py_loaded_modules: RefCell<std::collections::HashSet<String>>,
     /// PY-A: directory of the file being compiled (module search root).
     py_source_dir: RefCell<Option<std::path::PathBuf>>,
+    /// PY-A: the file being compiled — the value of `__file__`.
+    source_file: RefCell<Option<String>>,
     /// PY-A: module name → its `__package__` (relative-import anchor). A
     /// package's `__init__` anchors to itself; a submodule anchors to its
     /// parent package.
@@ -121,6 +123,7 @@ impl Resolver {
             py_mangled_to_module: RefCell::new(std::collections::HashMap::new()),
             py_loaded_modules: RefCell::new(std::collections::HashSet::new()),
             py_source_dir: RefCell::new(None),
+            source_file: RefCell::new(None),
             py_module_pkg: RefCell::new(std::collections::HashMap::new()),
             py_current_module: RefCell::new(None),
             registered_func_defs: RefCell::new(Vec::new()),
@@ -1295,6 +1298,9 @@ impl Resolver {
             self.module_resolver.set_root_dir(parent);
             *self.py_source_dir.borrow_mut() = Some(parent.to_path_buf());
         }
+        // `__file__` is the path as given on the command line, matching what a
+        // Python script would see for its own source.
+        *self.source_file.borrow_mut() = Some(path.to_string_lossy().to_string());
     }
 
     /// PY-A: load a Python module from disk so `import X` works for the user's
@@ -1629,6 +1635,7 @@ impl Resolver {
             )
             .with_py_user_modules(self.py_user_modules.borrow().clone())
             .with_module_global_types(self.module_global_types())
+            .with_source_file(self.source_file.borrow().clone())
             .with_symbol_renames(self.module_renames_for(
                 match ast {
                     AstNode::FuncDef { name, .. } => name.as_str(),

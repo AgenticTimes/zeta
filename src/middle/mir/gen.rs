@@ -47,6 +47,8 @@ pub struct MirGen {
     /// (enums/aliases live in their own AST items, but each function gets a
     /// fresh MirGen — these are re-seeded into `type_decls` per lowering).
     shared_type_decls: HashMap<String, TypeDecl>,
+    /// PY-A: the source file being compiled — the value of `__file__`.
+    source_file: Option<String>,
     /// Stack of loop result slots for `loop { break EXPR; }` value semantics.
     loop_value_stack: Vec<u32>,
     /// Result slot of the most recently lowered loop (for implicit ret_val).
@@ -119,6 +121,7 @@ impl MirGen {
             pointee_widths: HashMap::new(),
             type_decls: HashMap::new(),
             shared_type_decls: HashMap::new(),
+            source_file: None,
             loop_value_stack: Vec::new(),
             last_loop_result: None,
             generated_mirs: vec![],
@@ -420,6 +423,12 @@ impl MirGen {
     /// Pre-seed type declarations collected program-wide by the Resolver.
     pub fn with_type_decls(mut self, decls: HashMap<String, TypeDecl>) -> Self {
         self.shared_type_decls = decls;
+        self
+    }
+
+    /// PY-A: the file being compiled, so `__file__` can resolve to it.
+    pub fn with_source_file(mut self, path: Option<String>) -> Self {
+        self.source_file = path;
         self
     }
 
@@ -1911,6 +1920,14 @@ impl MirGen {
                 return z;
             }
             AstNode::Var(name) => {
+                // PY-A: `__file__` — the source path, known at compile time.
+                if name == "__file__" && !self.name_to_id.contains_key(name.as_str()) {
+                    if let Some(f) = self.source_file.clone() {
+                        self.exprs.insert(id, MirExpr::StringLit(f));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
+                }
                 // PY-A: a module's own top-level name reads its module-global
                 // slot (`mod__NAME` in the env). Locals win, so only rewrite
                 // when nothing local shadows it.
