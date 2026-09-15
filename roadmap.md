@@ -2,8 +2,8 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（61 case 全绿）**
-> 当前通过率（2026-09-15 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **66/66**；REasyQuant 语料解析 **38/38**
+> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（94 case 全绿）**
+> 当前通过率（2026-09-16 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **94/94**；REasyQuant 语料解析 **38/38**
 > Python 库注册表：**16 个模块**（见「库导入机制」小节）；第三方库 `zorb install` 可用，已验真实库 `python-stringcase` 全函数正确
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
@@ -353,7 +353,7 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 18. **3 段切片 `s[::2]` 解析失败**（`2b0c74d2`）：`parse_subscript_slice` 只认 start/end → `s[::2]` 解析失败并**静默丢弃其后所有语句**；且 `s[::-1]` 曾返回空串。现解析可选 step（省略的 start 在有 step 时用 INT64_MIN 哨兵），新增 `str_slice_step`/`zeta_slice_vec_step` 实现 Python 双符号步长的边界规则
 19. **`re.escape` 链接失败**（`40e61a3a`）：已实现。
 
-**已知缺口（本轮探明，未修）**：列表方法 `index`/`count`/`insert`/`remove`/`pop`/`sort`/`reverse` 与字典 `update`/`pop`/`clear` 缺失（均链接失败）。其中 **`xs.index(v)` 对列表会被 stdlib 特化路径路由到字符串表**（`host_str_find`）而非数组路径 —— 仅在 Call 层加守卫无效，需要修那条特化路由本身。
+20. **列表方法 `index`/`count`/`insert`/`remove`/`pop`/`sort`/`reverse` 与字典 `update`/`pop`/`clear` 全部链接失败**（本批）：根因是**数组接收者落进 opaque-fallback**——`index`/`count` 被 `str_method_symbol` 当字符串方法路由到 `host_str_find`/`host_str_count`，其余落到裸 extern。现为编译器已知的 `Array`/`DynamicArray` 接收者加专用分发（元素类型感知：str 按内容 `str_eq`、f64 解位模式按值、i64 直接比较），`map` 接收者补 `update`/`pop`/`pop(k,default)`/`clear`。列表方法原地改写句柄，`insert` 扩容返回新句柄 → 语句形态自动回写接收者变量；`remove` 返回值即句柄（若返 0 会把列表清空）。语义缺口（故意未做）：`d.pop(k)` 缺键时 Python 抛 KeyError，此处返回 0；`index` 未命中返回 -1（均为 V1 限界，非静默错值）。python_style **94/94**（新增 t91/t92/t93）、官方 194/194、语料 38/38。
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；

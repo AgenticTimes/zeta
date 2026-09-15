@@ -1043,3 +1043,198 @@ int64_t zeta_collect_dict(int64_t iter, int64_t fn_ptr) {
 int64_t zeta_pack_pair(int64_t k, int64_t v) {
     return (k << 32) | (v & 0xFFFFFFFF);
 }
+
+// ── PY-A: Python list methods ────────────────────────────────────────
+// index/count/insert/remove/pop/sort/reverse. Vec layout: the handle points
+// at the data, header [cap|len] at handle-16 (vec_push/vec_len layout).
+// In-place ops mutate the handle's data; `insert` grows and returns a
+// possibly-new handle, which the caller rebinds to the receiver variable.
+int64_t vec_push(int64_t data_ptr, int64_t val);
+
+static double zt_bits_f64(int64_t b) {
+    double d;
+    memcpy(&d, &b, 8);
+    return d;
+}
+
+int64_t zeta_list_index(int64_t vec, int64_t v) {
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 0; i < n; i++)
+        if (((int64_t*)vec)[i] == v) return i;
+    return -1;
+}
+int64_t zeta_list_count(int64_t vec, int64_t v) {
+    int64_t n = zt_vec_len(vec), c = 0;
+    for (int64_t i = 0; i < n; i++)
+        if (((int64_t*)vec)[i] == v) c++;
+    return c;
+}
+int64_t zeta_list_index_str(int64_t vec, int64_t v) {
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 0; i < n; i++)
+        if (str_eq(((int64_t*)vec)[i], v)) return i;
+    return -1;
+}
+int64_t zeta_list_count_str(int64_t vec, int64_t v) {
+    int64_t n = zt_vec_len(vec), c = 0;
+    for (int64_t i = 0; i < n; i++)
+        if (str_eq(((int64_t*)vec)[i], v)) c++;
+    return c;
+}
+int64_t zeta_list_index_f64(int64_t vec, int64_t v) {
+    int64_t n = zt_vec_len(vec);
+    double needle = zt_bits_f64(v);
+    for (int64_t i = 0; i < n; i++)
+        if (zt_bits_f64(((int64_t*)vec)[i]) == needle) return i;
+    return -1;
+}
+int64_t zeta_list_count_f64(int64_t vec, int64_t v) {
+    int64_t n = zt_vec_len(vec), c = 0;
+    double needle = zt_bits_f64(v);
+    for (int64_t i = 0; i < n; i++)
+        if (zt_bits_f64(((int64_t*)vec)[i]) == needle) c++;
+    return c;
+}
+
+// `xs.insert(i, v)` — grow then shift right. Returns the (possibly new) handle.
+int64_t zeta_list_insert(int64_t vec, int64_t idx, int64_t v) {
+    int64_t n = zt_vec_len(vec);
+    if (idx < 0) idx += n;
+    if (idx < 0) idx = 0;
+    if (idx > n) idx = n;
+    int64_t nh = vec_push(vec, 0);
+    for (int64_t i = n; i > idx; i--) ((int64_t*)nh)[i] = ((int64_t*)nh)[i - 1];
+    ((int64_t*)nh)[idx] = v;
+    return nh;
+}
+static void zt_list_shift_out(int64_t vec, int64_t idx, int64_t n) {
+    for (int64_t j = idx; j < n - 1; j++) ((int64_t*)vec)[j] = ((int64_t*)vec)[j + 1];
+    ((int64_t*)(vec - 16))[1] = n - 1;
+}
+// Returns the (unchanged) handle: the statement form rebinds the receiver to
+// the call result, so returning 0 here would clobber the list.
+int64_t zeta_list_remove(int64_t vec, int64_t v) {
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 0; i < n; i++)
+        if (((int64_t*)vec)[i] == v) { zt_list_shift_out(vec, i, n); return vec; }
+    return vec;
+}
+int64_t zeta_list_remove_str(int64_t vec, int64_t v) {
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 0; i < n; i++)
+        if (str_eq(((int64_t*)vec)[i], v)) { zt_list_shift_out(vec, i, n); return vec; }
+    return vec;
+}
+int64_t zeta_list_remove_f64(int64_t vec, int64_t v) {
+    int64_t n = zt_vec_len(vec);
+    double needle = zt_bits_f64(v);
+    for (int64_t i = 0; i < n; i++)
+        if (zt_bits_f64(((int64_t*)vec)[i]) == needle) { zt_list_shift_out(vec, i, n); return vec; }
+    return vec;
+}
+int64_t zeta_list_pop(int64_t vec) {
+    int64_t n = zt_vec_len(vec);
+    if (n <= 0) return 0;
+    int64_t v = ((int64_t*)vec)[n - 1];
+    ((int64_t*)(vec - 16))[1] = n - 1;
+    return v;
+}
+int64_t zeta_list_pop_at(int64_t vec, int64_t idx) {
+    int64_t n = zt_vec_len(vec);
+    if (idx < 0) idx += n;
+    if (idx < 0 || idx >= n) return 0;
+    int64_t v = ((int64_t*)vec)[idx];
+    zt_list_shift_out(vec, idx, n);
+    return v;
+}
+int64_t zeta_list_sort(int64_t vec) {
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t k = ((int64_t*)vec)[i], j = i - 1;
+        while (j >= 0 && ((int64_t*)vec)[j] > k) { ((int64_t*)vec)[j + 1] = ((int64_t*)vec)[j]; j--; }
+        ((int64_t*)vec)[j + 1] = k;
+    }
+    return vec;
+}
+int64_t zeta_list_sort_str(int64_t vec) {
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t k = ((int64_t*)vec)[i], j = i - 1;
+        while (j >= 0 && strcmp((char*)((int64_t*)vec)[j], (char*)k) > 0) {
+            ((int64_t*)vec)[j + 1] = ((int64_t*)vec)[j];
+            j--;
+        }
+        ((int64_t*)vec)[j + 1] = k;
+    }
+    return vec;
+}
+int64_t zeta_list_sort_f64(int64_t vec) {
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t kb = ((int64_t*)vec)[i];
+        double k = zt_bits_f64(kb);
+        int64_t j = i - 1;
+        while (j >= 0 && zt_bits_f64(((int64_t*)vec)[j]) > k) {
+            ((int64_t*)vec)[j + 1] = ((int64_t*)vec)[j];
+            j--;
+        }
+        ((int64_t*)vec)[j + 1] = kb;
+    }
+    return vec;
+}
+int64_t zeta_list_reverse(int64_t vec) {
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 0, j = n - 1; i < j; i++, j--) {
+        int64_t t = ((int64_t*)vec)[i];
+        ((int64_t*)vec)[i] = ((int64_t*)vec)[j];
+        ((int64_t*)vec)[j] = t;
+    }
+    return vec;
+}
+
+// ── PY-A: dict update / pop / clear ──────────────────────────────────
+// d.update(other) — copy every entry of `other`, overwriting on collision.
+// Keys are already content-hashed in the stored maps, so copy them verbatim.
+int64_t zeta_map_update(int64_t m, int64_t other) {
+    if (!m || !other) return m;
+    int64_t cap = ((int64_t*)other)[0];
+    for (int64_t i = 0; i < cap; i++) {
+        char* e = (char*)other + 16 + i * MAP_ENTRY_SIZE;
+        if (*(uint8_t*)(e + 16)) map_insert(m, *(int64_t*)e, *((int64_t*)e + 1));
+    }
+    return m;
+}
+// d.pop(k[, default]) — the open-addressing table has no tombstones, so
+// removal rebuilds in place (collect survivors, clear, re-insert). O(n),
+// fine for the dict sizes Python code uses here.
+int64_t zeta_map_pop_default(int64_t m, int64_t key, int64_t def) {
+    if (!m) return def;
+    int64_t cap = ((int64_t*)m)[0];
+    if (cap < 0) cap = 0;
+    int64_t* ks = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
+    int64_t* vs = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
+    int64_t n = 0, found = 0, out = def;
+    for (int64_t i = 0; i < cap; i++) {
+        char* e = (char*)m + 16 + i * MAP_ENTRY_SIZE;
+        if (!*(uint8_t*)(e + 16)) continue;
+        int64_t k = *(int64_t*)e, v = *((int64_t*)e + 1);
+        if (k == key) { out = v; found = 1; continue; }
+        ks[n] = k; vs[n] = v; n++;
+    }
+    if (!found) return def;
+    for (int64_t i = 0; i < cap; i++)
+        *(uint8_t*)((char*)m + 16 + i * MAP_ENTRY_SIZE + 16) = 0;
+    ((int64_t*)m)[1] = 0;
+    for (int64_t i = 0; i < n; i++) map_insert(m, ks[i], vs[i]);
+    return out;
+}
+int64_t zeta_map_pop(int64_t m, int64_t key) { return zeta_map_pop_default(m, key, 0); }
+int64_t zeta_map_clear(int64_t m) {
+    if (!m) return m;
+    int64_t cap = ((int64_t*)m)[0];
+    if (cap < 0) cap = 0;
+    for (int64_t i = 0; i < cap; i++)
+        *(uint8_t*)((char*)m + 16 + i * MAP_ENTRY_SIZE + 16) = 0;
+    ((int64_t*)m)[1] = 0;
+    return m;
+}

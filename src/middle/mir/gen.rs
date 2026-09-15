@@ -4726,6 +4726,66 @@ impl MirGen {
                     return id;
                 }
 
+                // PY-A: Python list methods. The opaque-receiver fallback
+                // just below routes `index`/`count` to the *string* runtime
+                // (host_str_find/count) and leaves insert/remove/pop/sort/
+                // reverse as bare externs (link failure). For a receiver the
+                // compiler KNOWS is an array, dispatch to the list runtime,
+                // choosing the element-type-aware variant for value compare.
+                if let Some(rt) = receiver_ty.as_ref() {
+                    let elem = match rt {
+                        Type::Array(e, _) | Type::DynamicArray(e) => Some((**e).clone()),
+                        _ => None,
+                    };
+                    let list_func: Option<String> =
+                        match (elem.as_ref(), method.as_str(), arg_ids.len()) {
+                            (Some(e), "index", 2) => {
+                                Some(format!("zeta_list_index{}", list_elem_suffix(e)))
+                            }
+                            (Some(e), "count", 2) => {
+                                Some(format!("zeta_list_count{}", list_elem_suffix(e)))
+                            }
+                            (Some(e), "remove", 2) => {
+                                Some(format!("zeta_list_remove{}", list_elem_suffix(e)))
+                            }
+                            (Some(e), "sort", 1) => {
+                                Some(format!("zeta_list_sort{}", list_elem_suffix(e)))
+                            }
+                            (Some(_), "insert", 3) => Some("zeta_list_insert".to_string()),
+                            (Some(_), "pop", 1) => Some("zeta_list_pop".to_string()),
+                            (Some(_), "pop", 2) => Some("zeta_list_pop_at".to_string()),
+                            (Some(_), "reverse", 1) => Some("zeta_list_reverse".to_string()),
+                            _ => None,
+                        };
+                    if let Some(func) = list_func {
+                        self.stmts.push(MirStmt::Call {
+                            func,
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        let ret_ty = match method.as_str() {
+                            "index" | "count" => Type::I64,
+                            "pop" => elem.clone().unwrap_or(Type::I64),
+                            "sort" | "reverse" => rt.clone(),
+                            _ => Type::I64,
+                        };
+                        self.type_map.insert(id, ret_ty);
+                        // insert/remove/sort/reverse are called for their side
+                        // effect; insert may move the handle (growth), so rebind
+                        // the receiver variable — same reason `push` rebinds.
+                        if matches!(method.as_str(), "insert" | "remove" | "sort" | "reverse")
+                            && let Some(recv_ast) = receiver
+                            && let AstNode::Var(name) = &**recv_ast
+                            && let Some(&slot) = self.name_to_id.get(name)
+                        {
+                            self.stmts.push(MirStmt::Assign { lhs: slot, rhs: id });
+                        }
+                        return id;
+                    }
+                }
+
                 // PY-A fallback: method calls on unknown/opaque receivers
                 // (user structs from undefined modules, BitArray, Sieve,
                 // QuantumCircuit) map to runtime equivalents by NAME so
@@ -4933,6 +4993,45 @@ impl MirGen {
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, Type::I64);
                     return id;
+                }
+
+                // PY-A: dict update / pop / clear. `map` receivers are excluded
+                // from the opaque fallback, so these previously fell through to
+                // bare externs (`_update`/`_pop`/`_clear`) and failed to link.
+                if receiver_ty
+                    .as_ref()
+                    .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
+                {
+                    let dfunc = match (method.as_str(), arg_ids.len()) {
+                        ("update", 2) => Some("zeta_map_update"),
+                        ("pop", 2) => Some("zeta_map_pop"),
+                        ("pop", 3) => Some("zeta_map_pop_default"),
+                        ("clear", 1) => Some("zeta_map_clear"),
+                        _ => None,
+                    };
+                    if let Some(fname) = dfunc {
+                        // pop keys are content-hashed exactly like subscripting
+                        // (update's second operand is another map, not a key).
+                        let call_args = match (method.as_str(), arg_ids.len()) {
+                            ("update", 2) => vec![arg_ids[0], arg_ids[1]],
+                            ("pop", 2) => vec![arg_ids[0], self.lower_map_key(arg_ids[1])],
+                            ("pop", 3) => vec![
+                                arg_ids[0],
+                                self.lower_map_key(arg_ids[1]),
+                                arg_ids[2],
+                            ],
+                            _ => vec![arg_ids[0]],
+                        };
+                        self.stmts.push(MirStmt::Call {
+                            func: fname.to_string(),
+                            args: call_args,
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::I64);
+                        return id;
+                    }
                 }
 
                 // PY-A: Vec::new() → runtime vec_new with initial capacity
@@ -7132,6 +7231,17 @@ fn format_template_parts(tmpl: &str, args: &[AstNode]) -> Option<Vec<AstNode>> {
         parts.push(AstNode::StringLit(lit));
     }
     Some(parts)
+}
+
+/// Runtime suffix selecting the element-type-aware list-method variant:
+/// string elements compare by content, f64 elements by value (their slots
+/// hold the IEEE bit pattern); i64 is the default.
+fn list_elem_suffix(elem: &Type) -> &'static str {
+    match elem {
+        Type::Str => "_str",
+        Type::F64 => "_f64",
+        _ => "",
+    }
 }
 
 fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)> {    match method {

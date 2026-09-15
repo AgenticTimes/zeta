@@ -1,0 +1,16 @@
+// PY-A: 字典 update/pop/clear（此前均为裸 extern → 链接失败）
+// expect: 3
+// expect: 9
+// expect: 1
+// expect: 2
+// expect: 42
+// expect: 0
+d = {"a": 1, "b": 2}
+d.update({"b": 9, "c": 3})
+print(len(d))
+print(d["b"])
+print(d.pop("a"))
+print(len(d))
+print(d.pop("zz", 42))
+d.clear()
+print(len(d))

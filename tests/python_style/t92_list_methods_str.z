@@ -1,0 +1,17 @@
+// PY-A: 字符串列表的方法按内容比较（index/count/remove/sort）
+// expect: 1
+// expect: 1
+// expect: ["c", "a", "b"]
+// expect: ["a", "b", "c"]
+// expect: b
+// expect: ["c"]
+ys = ["b", "a", "c"]
+print(ys.index("a"))
+print(ys.count("c"))
+ys.reverse()
+print(ys)
+ys.sort()
+print(ys)
+print(ys.pop(1))
+ys.remove("a")
+print(ys)
