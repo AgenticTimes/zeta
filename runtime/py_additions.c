@@ -425,6 +425,26 @@ int64_t py_fmt_str(int64_t s, int64_t spec) {
     return zt_fmt_pad(body, &f);
 }
 
+// ── PY-A: zip(a, b) ─────────────────────────────────────────────────
+// A Vec of 2-slot pair handles, length = min(len(a), len(b)); combined with
+// the `for x, y in ...` destructure this covers the common zipped loop.
+int64_t py_zip(int64_t a, int64_t b) {
+    int64_t na = a ? ((int64_t*)(a - 16))[1] : 0;
+    int64_t nb = b ? ((int64_t*)(b - 16))[1] : 0;
+    int64_t n = na < nb ? na : nb;
+    if (n < 0) n = 0;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
+    base[0] = n ? n : 1;
+    base[1] = n;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t* pair = (int64_t*)GC_malloc(16);
+        pair[0] = ((int64_t*)a)[i];
+        pair[1] = ((int64_t*)b)[i];
+        base[2 + i] = (int64_t)pair;
+    }
+    return (int64_t)(base + 2);
+}
+
 // ── PY-A: try/except via error-state polling ────────────────────────
 // `raise` records a global error code; the desugared try body wraps each
 // statement in `if (zeta_last_error() == 0)` so raising skips the rest;

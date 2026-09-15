@@ -1,0 +1,17 @@
+// PY-A: zip(a, b) —— 产出 (a[i], b[i]) 对，配合 `for x, y in ...` 解构；长度取较短者
+//   （此前 zip 是裸 extern → 链接失败）
+// expect: 11
+// expect: 22
+// expect: 33
+// expect: 44
+// expect: 11
+// expect: 22
+a = [1, 2, 3, 4]
+b = [10, 20, 30, 40]
+for x, y in zip(a, b):
+    print(x + y)
+
+c = [1, 2, 3]
+d = [10, 20]
+for x, y in zip(c, d):
+    print(x + y)

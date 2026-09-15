@@ -3626,6 +3626,28 @@ impl MirGen {
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
+                // PY-A: `zip(a, b)` — a Vec of (a[i], b[i]) pairs, so
+                // `for x, y in zip(a, b):` destructures. (Previously a bare
+                // `zip` extern → link failure.)
+                if receiver.is_none() && method == "zip" && args.len() == 2 {
+                    let a = self.lower_expr(&args[0]);
+                    let b = self.lower_expr(&args[1]);
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_zip".to_string(),
+                        args: vec![a, b],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(
+                        id,
+                        Type::DynamicArray(Box::new(Type::Tuple(vec![
+                            Type::I64,
+                            Type::I64,
+                        ]))),
+                    );
+                    return id;
+                }
                 // PY-A: `any(xs)` / `all(xs)` over an array — Python truthiness
                 // is non-zero. Previously these emitted bare `any`/`all`
                 // externs and failed to link.
