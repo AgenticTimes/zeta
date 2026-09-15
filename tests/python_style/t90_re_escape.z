@@ -1,0 +1,7 @@
+// PY-A: re.escape —— 转义正则元字符（此前裸 extern 链接失败）
+// expect: a\.b\*c\(d\)
+// expect: ["a", "a", "a"]
+import re
+
+print(re.escape("a.b*c(d)"))
+print(re.findall("a", "banana"))

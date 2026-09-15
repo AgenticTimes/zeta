@@ -11,6 +11,8 @@
 #include <stdarg.h>
 #include <ctype.h>
 
+static int64_t zt_vec_len(int64_t v);
+
 // Python-style string equality (by content, not pointer)
 int64_t str_eq(int64_t a, int64_t b) {
     if (!a || !b) { return a == b ? 1 : 0; }
@@ -481,6 +483,21 @@ int64_t py_map_items(int64_t map) {
         }
     }
     return (int64_t)(base + 2);
+}
+
+// ── PY-A: re.escape + list.index/count ───────────────────────────────
+int64_t py_re_escape(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    size_t n = strlen(p);
+    char* out = (char*)GC_malloc(n * 2 + 1);
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = p[i];
+        if (strchr(".^$*+?()[]{}|\\", c)) out[k++] = '\\';
+        out[k++] = c;
+    }
+    out[k] = 0;
+    return (int64_t)out;
 }
 
 // ── PY-A: strided slices `s[::-1]`, `a[::2]` ─────────────────────────
