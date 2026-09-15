@@ -351,9 +351,13 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 16. **`raise ValueError("boom")` 是空操作**（`2fee5c9f`）：`parse_raise` 只认 `raise(expr)`，Python 风格裸 `raise Expr` 退化成裸 `raise` 变量 → **异常从不抛出**、其后语句被丢弃。现两种形式都接（裸表达式仅在**同一行**才接管，避免单 `raise` 重抛吞掉下一条语句）
 17. **`s * n` / `list + list` / `[0] * n` 全是静默垃圾值**（`813987f4`）：数值运算符直接作用在句柄上（`"-" * 5` 得 21520423860）。现按 Python 语义分发：`Str*int`→重复、`list+list`→拼接、`list*int`→重复
 18. **3 段切片 `s[::2]` 解析失败**（`2b0c74d2`）：`parse_subscript_slice` 只认 start/end → `s[::2]` 解析失败并**静默丢弃其后所有语句**；且 `s[::-1]` 曾返回空串。现解析可选 step（省略的 start 在有 step 时用 INT64_MIN 哨兵），新增 `str_slice_step`/`zeta_slice_vec_step` 实现 Python 双符号步长的边界规则
-19. **`re.escape` 链接失败**（`40e61a3a`）：已实现。
+19. **`re.escape` 链接失败**（`40e61a3a`）：已实现（转义正则元字符）
+20. **幂运算 `**` 崩溃**（`c5c747e2`）：乘法运算符表里没有 `**`，前缀匹配先吃单个 `*`，剩下的 `* 10` 变成对字面量 10 的**指针解引用**（`2 * (*10)`）→ 从地址 10 加载 → SIGSEGV 且无输出。现 `**` 排在 `*` 之前并右结合；整数底走指数循环，含浮点走 libm pow（负整数指数返回 0，Python 会给浮点，已记）
+21. **`map`/`filter` 裸 extern 链接失败**（`4f4dd325`）：现 eager 返回列表（`filter(None, xs)` 按真值过滤）
 
-20. **列表方法 `index`/`count`/`insert`/`remove`/`pop`/`sort`/`reverse` 与字典 `update`/`pop`/`clear` 全部链接失败**（本批）：根因是**数组接收者落进 opaque-fallback**——`index`/`count` 被 `str_method_symbol` 当字符串方法路由到 `host_str_find`/`host_str_count`，其余落到裸 extern。现为编译器已知的 `Array`/`DynamicArray` 接收者加专用分发（元素类型感知：str 按内容 `str_eq`、f64 解位模式按值、i64 直接比较），`map` 接收者补 `update`/`pop`/`pop(k,default)`/`clear`。列表方法原地改写句柄，`insert` 扩容返回新句柄 → 语句形态自动回写接收者变量；`remove` 返回值即句柄（若返 0 会把列表清空）。语义缺口（故意未做）：`d.pop(k)` 缺键时 Python 抛 KeyError，此处返回 0；`index` 未命中返回 -1（均为 V1 限界，非静默错值）。python_style **94/94**（新增 t91/t92/t93）、官方 194/194、语料 38/38。
+**已知冲突（设计取舍，未修）**：Python 的整除 `//` 在本方言里是**行注释**，故 `a // b` 会静默丢掉除数。要支持需在预处理器/解析器区分「表达式中的 `//`」与「行尾注释」，两者字面完全同形，属设计取舍。
+
+22. **列表方法 `index`/`count`/`insert`/`remove`/`pop`/`sort`/`reverse` 与字典 `update`/`pop`/`clear` 全部链接失败**（`7c1f7bb7`，由 loop 子代理落地、我方独立复核）：根因是**数组接收者落进 opaque-fallback**——`index`/`count` 被 `str_method_symbol` 当字符串方法路由到 `host_str_find`/`host_str_count`，其余落到裸 extern。现为编译器已知的 `Array`/`DynamicArray` 接收者加专用分发（元素类型感知：str 按内容 `str_eq`、f64 解位模式按值、i64 直接比较），`map` 接收者补 `update`/`pop`/`pop(k,default)`/`clear`。列表方法原地改写句柄，`insert` 扩容返回新句柄 → 语句形态自动回写接收者变量。语义缺口（故意未做）：`d.pop(k)` 缺键时 Python 抛 KeyError，此处返回 0；`index` 未命中返回 -1（均为 V1 限界，非静默错值）。python_style **94/94**（新增 t91/t92/t93）、官方 194/194、语料 38/38。
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
