@@ -369,6 +369,7 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
    经验：**"注册表未命中的模块成员 → 落到同名 libc 函数"是一类危险模式**（签名不匹配 → 崩溃/UB，比链接失败更糟），`time.strftime` 即因此段错误（见 28）。
 30. **`sys.platform` / `os.sep` / `os.linesep` 静默为 0**（`99f389d7`）：三者此前只发 warn 然后当 0 用。现补 0 参 shim（platform 为 `darwin`/`linux`，sep=`"/"`，linesep=`"\n"`）。
    同批**主动放弃** `sys.argv`：列表能造，但**来自模块成员的 `Vec<str>` 在取下标/迭代时元素类型传不到**（拿到的是句柄与 0），故**不注册**，让使用处 warn 并显式失败，而不是半对半错。其根因（模块成员的容器元素类型未贯穿到下标/for-in）记为待办。
+31. **上述根因已修复 → `sys.argv` 已启用**（`c1e9dc94`）：根因是**模块属性读取**的 `ret=` 映射只认 `f64/str/vec`，`ret=vecstr` 的成员被标成 i64 → 其后所有下标/for-in 丢元素类型（句柄与 0）。现补 `vecstr`/`vecjson`/`vecmatch`。`sys.argv` 由启动构造器捕获，`len()`、下标、迭代**全部返回字符串**。
    ⚠️ ~~**待查**：`time.strftime`~~ → **已定位并修复**（`12dbcfce`）：模块级 `time.strftime` 未入注册表 → 落到 **libc 的 `strftime`**（签名完全不同：`char*, size_t, char*, struct tm*`）→ 格式串被当指针解引用 → **SIGSEGV**（先前以为是挂起）。现补 `py_time_strftime`（复用 `py_dt_now`/`py_dt_strftime`）与 `time.localtime` 别名。
 
 **仍未做（本轮新发现，按优先级）**
