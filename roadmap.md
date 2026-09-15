@@ -418,7 +418,10 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 - [x] `__file__` 内建（编译期源文件路径，`525bafd5`，t72）—— 解锁 `os.path.dirname(__file__)` 等
 - [x] `pathlib`（`Path(str)` / `/` 拼接 / `.resolve().parent` 链 / `.name`/`.stem`/`.suffix`/`.exists()`/`.is_file`/`.is_dir`/`.read_text`/`.write_text`，`02a3c0e5`+`cf903286`，t73）。
   同批：`handle_op` 支持 `PyPath/str`、BinaryOp 句柄分发接受 Str 操作数、两处 FieldAccess 分发改看 `ret_handle`（原来只看标量 ret，导致 `.parent` 被标成 i64）、`py_handle_of` 支持 FieldAccess 接收者、`print`/`str()`/f-string 把字符串型句柄（Path）按 str 渲染（此前静默打成指针）
-- [ ] `argparse`（语料 4 处；`parse_args()` 命名空间属性访问是难点）、`pickle`（语料 2 处）
+- [x] `argparse` V1（`089f46b9`，t113/t114）：`ArgumentParser(...)`/`add_argument(...)`/`parse_args()` 与 `args.<field>` 走**编译期重写**——静态方法表枚举不了动态字段名，故 `add_argument` 处按 `type=`/`action=`（缺省看 `default` 字面量）把 flag→kind 记进程序级表（`resolver.rs` walk），`args.<field>` 依 kind 分发到 `py_argparse_get_str|i64|f64|bool`；map key 用 Python 的 dest 规则（去前导 `-`、`-`→`_`），argv 匹配用原始 `--flag`。未声明的 flag → warning 降 0（fail-loud）。`--flag value` 与 `--flag=value` 都支持。
+  测试侧：`tests/python_style/run.sh` 新增 `// args:` 指令（argv 传入被测程序）。
+  仍缺：位置参数、`nargs`、`subparsers`、互斥组；`required=True` 当前只提示不强制
+- [ ] `pickle`（语料 2 处）
 - [x] `dataclasses`（`@dataclass` → 按字段注解合成 `__init__`；`asdict` 编译期展开为字段字典，`6befdec0`，t68）。
   同批修 fail-open：`@dataclass` 处解析中止导致类与其后全部语句被静默丢弃；单大写类名（`class P`）仍被注解解析当作泛型类型变量（已知小坑）
 - [x] `re` 补齐（`03116dd6`+`8e8d17da`）：`IGNORECASE`/`I`、`MULTILINE`/`M` 常量；带 flags 的 `search/match/fullmatch`(3)/`findall`(3)/`sub`(4)；`finditer`（产出 Match 句柄）；`re.compile` 返回 `PyPattern` 且 Pattern 方法面（search/match/fullmatch/findall/finditer/split/sub）全部可分发；`findall` 返回字符串表；`print(match)` 打匹配文本。同批修**链式方法**标签解析（`pat.search(s).group(2)` 原会落到裸 `group` extern）
@@ -520,6 +523,8 @@ identity 兜底、UTF-8 边界探针修复。
 
 ## 已知非阻塞
 
+- `print(bool)` 打 `0`/`1`，Python 打 `True`/`False`（t113/t114 即按现状 0/1 断言）。
+  改动会波及既有若干用例的期望值，需单独批次评估，暂不混入其他修改
 - stddev 不能走 `as i64` 中间步（截断为 0）
 - 无 `-o` 模式 JIT 对简单 f64 程序 segfault（AOT 路径正常，低优）
 - benchmark_simd_vs_scalar.z 源文件本身损坏（大量孤立 `}`），非编译器问题
