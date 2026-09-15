@@ -1910,6 +1910,96 @@ int64_t str_is_lower(int64_t s) {
     for (; *p; p++) { if (isupper((unsigned char)*p)) return 0; if (islower((unsigned char)*p)) any = 1; }
     return any;
 }
+// Python str.swapcase: toggle each character's case. NOTE this is NOT an
+// alias for upper/lower — the method table previously routed it to
+// host_str_to_uppercase, so "aBc".swapcase() silently returned "ABC".
+int64_t str_swapcase(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    char* r = (char*)GC_malloc(strlen(p) + 1);
+    size_t n = 0;
+    for (; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (isupper(c)) r[n++] = (char)tolower(c);
+        else if (islower(c)) r[n++] = (char)toupper(c);
+        else r[n++] = (char)c;
+    }
+    r[n] = 0;
+    return (int64_t)r;
+}
+// Python 3.9 str.removeprefix / str.removesuffix.
+int64_t str_remove_prefix(int64_t s, int64_t prefix) {
+    const char* p = s ? (const char*)s : "";
+    const char* pre = prefix ? (const char*)prefix : "";
+    size_t pl = strlen(pre);
+    if (pl && strncmp(p, pre, pl) == 0) return (int64_t)zt_strdup(p + pl);
+    return (int64_t)zt_strdup(p);
+}
+int64_t str_remove_suffix(int64_t s, int64_t suffix) {
+    const char* p = s ? (const char*)s : "";
+    const char* suf = suffix ? (const char*)suffix : "";
+    size_t sl = strlen(suf), pl = strlen(p);
+    if (sl && sl <= pl && strcmp(p + pl - sl, suf) == 0) {
+        char* r = (char*)GC_malloc(pl - sl + 1);
+        memcpy(r, p, pl - sl);
+        r[pl - sl] = 0;
+        return (int64_t)r;
+    }
+    return (int64_t)zt_strdup(p);
+}
+// The remaining str.is* predicates. Each name COLLIDES with a libc ctype
+// symbol of a completely different signature (`isalnum(int)`, not a string),
+// so before they were registered the method fell through to the bare extern
+// and silently returned 0 instead of failing loudly. Empty string is False for
+// all of these (matching CPython).
+int64_t str_is_alnum(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    if (!*p) return 0;
+    for (; *p; p++) if (!isalnum((unsigned char)*p)) return 0;
+    return 1;
+}
+int64_t str_is_space(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    if (!*p) return 0;
+    for (; *p; p++) if (!isspace((unsigned char)*p)) return 0;
+    return 1;
+}
+int64_t str_is_numeric(int64_t s) { return str_is_digit(s); }
+int64_t str_is_decimal(int64_t s) { return str_is_digit(s); }
+int64_t str_is_ascii(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    for (; *p; p++) if ((unsigned char)*p > 127) return 0;
+    return 1;
+}
+int64_t str_is_printable(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    for (; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        // ASCII: only control characters are non-printable. Bytes >= 0x80 are
+        // UTF-8 lead/continuation bytes; treating them as printable matches
+        // CPython for accented letters / CJK (its exact Unicode-category test
+        // is out of scope here).
+        if (c < 0x80 && iscntrl(c)) return 0;
+    }
+    return 1;
+}
+// Python istitle: cased characters must be upper at a word start and lower
+// within a word, and at least one cased character must exist.
+int64_t str_is_title(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    int prev_cased = 0, any = 0;
+    for (; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (isalpha(c)) {
+            any = 1;
+            if (prev_cased) { if (isupper(c)) return 0; }
+            else if (islower(c)) return 0;
+            prev_cased = 1;
+        } else {
+            prev_cased = 0;
+        }
+    }
+    return any;
+}
 // "".join(parts) — Python's str.join over a Vec of string handles.
 int64_t str_join(int64_t sep, int64_t vec) {
     const char* sp = sep ? (const char*)sep : "";
@@ -1966,6 +2056,16 @@ int64_t host_str_isalpha(int64_t s) { return str_is_alpha(s); }
 int64_t host_str_isdigit(int64_t s) { return str_is_digit(s); }
 int64_t host_str_isupper(int64_t s) { return str_is_upper(s); }
 int64_t host_str_islower(int64_t s) { return str_is_lower(s); }
+int64_t host_str_swapcase(int64_t s) { return str_swapcase(s); }
+int64_t host_str_removeprefix(int64_t s, int64_t p) { return str_remove_prefix(s, p); }
+int64_t host_str_removesuffix(int64_t s, int64_t p) { return str_remove_suffix(s, p); }
+int64_t host_str_isalnum(int64_t s) { return str_is_alnum(s); }
+int64_t host_str_isspace(int64_t s) { return str_is_space(s); }
+int64_t host_str_isnumeric(int64_t s) { return str_is_numeric(s); }
+int64_t host_str_isdecimal(int64_t s) { return str_is_decimal(s); }
+int64_t host_str_isascii(int64_t s) { return str_is_ascii(s); }
+int64_t host_str_isprintable(int64_t s) { return str_is_printable(s); }
+int64_t host_str_istitle(int64_t s) { return str_is_title(s); }
 int64_t host_str_join(int64_t sep, int64_t vec) { return str_join(sep, vec); }
 int64_t host_str_ljust(int64_t s, int64_t w, int64_t f) { return str_ljust(s, w, f); }
 int64_t host_str_rjust(int64_t s, int64_t w, int64_t f) { return str_rjust(s, w, f); }

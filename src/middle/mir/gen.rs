@@ -7770,7 +7770,7 @@ fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)
         "lower" => Some(("host_str_to_lowercase", 1, "str")),
         "capitalize" => Some(("host_str_capitalize", 1, "str")),
         "title" => Some(("host_str_title", 1, "str")),
-        "swapcase" => Some(("host_str_to_uppercase", 1, "str")),
+        "swapcase" => Some(("host_str_swapcase", 1, "str")),
         "trim" | "strip" => Some(("host_str_trim", 1, "str")),
         "lstrip" => Some(("host_str_lstrip", 1, "str")),
         "rstrip" => Some(("host_str_rstrip", 1, "str")),
@@ -7791,6 +7791,18 @@ fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)
         "isdigit" => Some(("host_str_isdigit", 1, "bool")),
         "isupper" => Some(("host_str_isupper", 1, "bool")),
         "islower" => Some(("host_str_islower", 1, "bool")),
+        // The rest of the str.is* family. Without a table entry each name
+        // linked against the same-named libc ctype function (a different
+        // signature entirely) and silently returned 0.
+        "isalnum" => Some(("host_str_isalnum", 1, "bool")),
+        "isspace" => Some(("host_str_isspace", 1, "bool")),
+        "isnumeric" => Some(("host_str_isnumeric", 1, "bool")),
+        "isdecimal" => Some(("host_str_isdecimal", 1, "bool")),
+        "isascii" => Some(("host_str_isascii", 1, "bool")),
+        "isprintable" => Some(("host_str_isprintable", 1, "bool")),
+        "istitle" => Some(("host_str_istitle", 1, "bool")),
+        "removeprefix" => Some(("host_str_removeprefix", 2, "str")),
+        "removesuffix" => Some(("host_str_removesuffix", 2, "str")),
         _ => None,
     }
 }

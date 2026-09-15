@@ -1,0 +1,53 @@
+// PY-A: str.swapcase / removeprefix / removesuffix 与 str.is* 谓词族。
+//   两个根因：① swapcase 被路由到 host_str_to_uppercase（"aBc".swapcase()
+//   静默返回 "ABC"）；② isalnum/isspace/isnumeric/isdecimal/isascii/
+//   isprintable/istitle 未入方法表 → 落到**同名 libc ctype 函数**（签名是
+//   int 而非字符串）→ 静默返回 0，而非链接失败。
+// expect: AbCd
+// expect: hELLO wORLD
+// expect: 123ABC
+// expect: 1
+// expect: 0
+// expect: 0
+// expect: 1
+// expect: 0
+// expect: 0
+// expect: 1
+// expect: 0
+// expect: 1
+// expect: 1
+// expect: 0
+// expect: 0
+// expect: 1
+// expect: 0
+// expect: 1
+// expect: 0
+// expect: 1
+// expect: world
+// expect: abc
+// expect: hello
+// expect: abc
+print("aBcD".swapcase())
+print("Hello World".swapcase())
+print("123abc".swapcase())
+print("abc123".isalnum())
+print("abc 123".isalnum())
+print("".isalnum())
+print("  \t".isspace())
+print("a b".isspace())
+print("".isspace())
+print("123".isnumeric())
+print("12.3".isnumeric())
+print("123".isdecimal())
+print("Hello World".istitle())
+print("Hello world".istitle())
+print("".istitle())
+print("abc".isascii())
+print("abé".isascii())
+print("abc".isprintable())
+print("a\tb".isprintable())
+print("abé".isprintable())
+print("hello world".removeprefix("hello "))
+print("abc".removeprefix("zzz"))
+print("hello.txt".removesuffix(".txt"))
+print("abc".removesuffix("zzz"))
