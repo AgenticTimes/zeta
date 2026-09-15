@@ -373,6 +373,9 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 32. **`os.listdir` 声明为 `ret=vecstr`**（`25aae397`）：此前 `ret=i64` → 结果不带元素类型，`"name" in os.listdir(...)` 与逐元素字符串比较只能"碰巧"成立（值恰好是 vec 句柄）。现类型正确。用例自造/自删临时文件，不依赖目录内容。
 33. **`strip`/`lstrip`/`rstrip` 的字符集形式**（`b161def8`）：2 参无匹配 → 裸 extern 链接失败。现按**字符集**去掉两端任意字符（`strip("x")` 去任意 x，非子串）。
    同批**系统审计**了注册表：148 条 `F` + 80 条 `W` 的 `ret=` 与 C 实现返回类型**逐条一致**（0 不匹配、0 条"声明 i64 却返回新分配字符串"），确认 `os.listdir` 那类元素类型丢失**不再存在于别处**。
+34. **`str.swapcase` 与 7 个 `is*` 判定被静默打错/落到 libc**（`d8a76934`，loop 子代理落地、我方复核）：`swapcase` 被方法表路由到**大写**函数（`"aBc"`→`ABC`）；`isalnum`/`isspace`/`isnumeric`/… 未注册 → 落到**同名 libc ctype 函数**（签名 `is*(int)` 不匹配）→ **静默返回 0**（同一危险模式，见 28）。补 `str_swapcase` + 7 个判定 + `removeprefix`/`removesuffix`。
+35. **`math` libm 常用函数补齐**（`78c96a2e`，同批）：`log2/exp2/expm1/log1p/cbrt/atan/asin/acos/sinh/cosh/tanh/asinh/acosh/atanh/gamma/erf/erfc/fmod/remainder/copysign/nextafter/ldexp/isinf`（`isinf` 是 libc 宏、无符号；`ldexp` 第二参为 i64）。
+36. **`strip`/`lstrip`/`rstrip` 字符集形式**（`b161def8`）与 **`hex`/`oct`/`bin`/`reversed`**（`59ab7a3b`）：前者 2 参无匹配 → 裸 extern；后者四者在 libc 也无同名符号（`bin`/`hex`/`oct`）。`hex(-255)` 按 Python 输出 `-0xff`。
    ⚠️ ~~**待查**：`time.strftime`~~ → **已定位并修复**（`12dbcfce`）：模块级 `time.strftime` 未入注册表 → 落到 **libc 的 `strftime`**（签名完全不同：`char*, size_t, char*, struct tm*`）→ 格式串被当指针解引用 → **SIGSEGV**（先前以为是挂起）。现补 `py_time_strftime`（复用 `py_dt_now`/`py_dt_strftime`）与 `time.localtime` 别名。
 34. **`str.swapcase` 错值 + `str.is*` 谓词族静默 0**（本批）：① `swapcase` 被路由到
    `host_str_to_uppercase` → `"aBc".swapcase()` 静默返回 `"ABC"`（应为 `"AbC"`）；
