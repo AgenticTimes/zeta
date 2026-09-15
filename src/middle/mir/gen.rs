@@ -348,6 +348,18 @@ impl MirGen {
                     return Some(h);
                 }
             }
+            // Chained method on a handle: `pat.search(s).group(2)` — the inner
+            // call's own result tag comes from the registry ret_handle. Without
+            // this the outer method fell through to a bare `group` extern.
+            if let Some(inner_ast) = inner {
+                if let Some(tag) = self.py_handle_of(inner_ast) {
+                    if let Some((_, Some(ret))) =
+                        crate::middle::pylib::method_symbol(&tag, method)
+                    {
+                        return Some(ret.to_string());
+                    }
+                }
+            }
         }
         // A handle-returning attribute (`Path(...).resolve().parent`) — the
         // tag comes from the registry's ret_handle for that method.
@@ -2941,6 +2953,9 @@ impl MirGen {
                             (None, "str") => Type::Str,
                             (None, "vec") => Type::DynamicArray(Box::new(Type::I64)),
                             (None, "vecstr") => Type::DynamicArray(Box::new(Type::Str)),
+                            (None, "vecmatch") => Type::DynamicArray(Box::new(
+                                Type::Named("PyMatch".to_string(), vec![]),
+                            )),
                             _ => Type::I64,
                         },
                     );
@@ -2999,6 +3014,9 @@ impl MirGen {
                                         }
                                         Some("vecjson") => Type::DynamicArray(Box::new(
                                             Type::Named("PyJson".to_string(), vec![]),
+                                        )),
+                                        Some("vecmatch") => Type::DynamicArray(Box::new(
+                                            Type::Named("PyMatch".to_string(), vec![]),
                                         )),
                                         _ => Type::I64,
                                     },

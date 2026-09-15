@@ -1,0 +1,16 @@
+// PY-A: re.finditer（产出 Match 句柄）+ re.compile 的 Pattern 对象方法面
+// expect: 1
+// expect: 22
+// expect: 333
+// expect: 34
+// expect: ["1-2", "3-4"]
+// expect: a Z b
+import re
+
+for m in re.finditer("\\d+", "a1 b22 c333"):
+    print(m.group(0))
+
+pat = re.compile("(\\d+)-(\\d+)")
+print(pat.search("ab 12-34").group(2))
+print(pat.findall("x 1-2 y 3-4"))
+print(pat.sub("Z", "a 1-2 b"))

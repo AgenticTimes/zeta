@@ -258,7 +258,17 @@ F re match py_re_match args=i64,i64 ret=i64 handle=PyMatch
 F re fullmatch py_re_fullmatch args=i64,i64 ret=i64 handle=PyMatch
 F re split py_re_split args=i64,i64 ret=vecstr
 F re findall py_re_findall args=i64,i64 ret=vecstr
-F re compile py_re_compile args=i64 ret=str
+F re finditer py_re_finditer args=i64,i64 ret=vecmatch
+# `re.compile` yields a Pattern handle so `pat.search(s)` dispatches; the
+# value is still the pattern string, so passing it to re.sub also works.
+F re compile py_re_compile args=i64 ret=i64 handle=PyPattern
+W PyPattern search py_pattern_search args=2 ret_handle=PyMatch
+W PyPattern match py_pattern_match args=2 ret_handle=PyMatch
+W PyPattern fullmatch py_pattern_fullmatch args=2 ret_handle=PyMatch
+W PyPattern findall py_pattern_findall args=2 ret=vecstr
+W PyPattern finditer py_re_finditer args=2 ret=vecmatch
+W PyPattern split py_pattern_split args=2 ret=vecstr
+W PyPattern sub py_pattern_sub args=3 ret=str
 W PyMatch group py_re_group args=2 ret=str
 W PyMatch start py_re_start args=1
 W PyMatch end py_re_end args=1

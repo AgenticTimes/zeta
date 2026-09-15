@@ -1752,6 +1752,43 @@ int64_t py_re_findall(int64_t pat, int64_t s) {
 int64_t py_re_findall_3(int64_t pat, int64_t s, int64_t flags) {
     return zt_re_findall_fl(pat, s, zt_re_cflags(flags));
 }
+// finditer: like findall but yields Match handles (so `for m in
+// finditer(...): m.group(1)` works). Each handle's str is the scan cursor it
+// was found at, so group offsets stay correct.
+int64_t py_re_finditer(int64_t pat, int64_t s) {
+    if (!s) return 0;
+    zt_regex_t* r = zt_re_compile(pat);
+    int64_t cap = 8, len = 0;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap;
+    base[1] = 0;
+    const char* cur = (const char*)s;
+    regmatch_t m[10];
+    int guard = 0;
+    if (r->ok) {
+        while (regexec(&r->re, cur, 10, m, 0) == 0 && guard++ < 100000) {
+            zt_match_t* mt = (zt_match_t*)GC_malloc(sizeof(zt_match_t));
+            mt->str = (int64_t)cur;
+            mt->nmatch = 10;
+            memcpy(mt->m, m, sizeof(regmatch_t) * 10);
+            if (len >= cap) {
+                int64_t nc = cap * 2;
+                int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)nc * 8);
+                nb[0] = nc;
+                nb[1] = len;
+                for (int64_t i = 0; i < len; i++) nb[2 + i] = base[2 + i];
+                base = nb;
+                cap = nc;
+            }
+            base[2 + len++] = (int64_t)mt;
+            size_t adv = (m[0].rm_eo > 0) ? (size_t)m[0].rm_eo : 1;
+            cur += adv;
+        }
+    }
+    base[1] = len;
+    return (int64_t)(base + 2);
+}
+int64_t py_pattern_fullmatch(int64_t pat, int64_t s) { return py_re_fullmatch(pat, s); }
 int64_t py_re_compile(int64_t pat) { return pat ? pat : (int64_t)zt_strdup(""); }
 int64_t py_pattern_sub(int64_t pat, int64_t repl, int64_t s) { return py_re_sub(pat, repl, s); }
 int64_t py_pattern_sub_call(int64_t pat, int64_t fn, int64_t s) { return py_re_sub_call(pat, fn, s); }
