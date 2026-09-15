@@ -519,6 +519,48 @@ parse **38/38**；**link 34/38**（旧的「7 个通过」口径已过时，见�
 → 4 个里有 **3 个**被同一个编译器缺陷卡住，其中 `指数ETF动量轮动.py` **零外部符号**，
 修掉该缺陷即应直接可链接。
 
+### 静默截断的根因找到了：`many0` + CLI 丢弃 `remaining`（2026-09-16 追加）
+
+`parse_zeta` 用 `many0(alt(...))` 解析顶层项——**`many0` 在第一个解析不过去的项处「成功」停下**，
+把后半截留在 `remaining` 里。`src/lib.rs:100` 一直有「remaining 必须为空」的检查，但
+**CLI 路径（`src/main.rs`）把 remaining 丢掉了**（`Ok((_remaining, asts))` /
+`// discard remaining slice`）。结果：CLI 只编译文件前缀，被丢掉的定义在链接期变成
+「undefined symbol」，而编译器**一句诊断都不报**。
+
+已修（本批）：CLI 两处都加 `ensure_fully_parsed()`——
+- 默认：**W1002 警告**（保留 194/194 退出码口径，但不再沉默）
+- `ZETA_STRICT_PARSE=1`：**E1002 报错**（老实口径，用来量「到底编译了多少」）
+
+⚠️ **这个修法暴露了一个更严重的事实：两套基线数字都掺水。**
+
+| 口径 | 旧数字 | 实测（`ZETA_STRICT_PARSE=1` / 警告计数） |
+|---|---|---|
+| 官方套件 | 194/194 | 194/194 退出码，但 **11 个文件有未解析尾巴** |
+| REasyQuant 语料 | 链接 34/38 | 退出码 34/38，但 **37/38 个文件有未解析尾巴** |
+
+官方套件的尾巴规模（最狠的几个）：
+
+| 文件 | 丢掉的尾部 |
+|---|---|
+| `minimal_compiler` | **757 行**（整个 `impl Parser`） |
+| `benchmark_simd_vs_scalar` | 357 行 |
+| `selfhost` | 158 行（`impl Parser for ZetaParser`） |
+| `test_suite` | 127 行 |
+| `advanced_patterns_test` | 98 行 |
+
+语料侧更极端：**大多数文件在第 1 行就断**，即整份文件（几百行）全被丢掉，
+"链接成功"的 34 个二进制里很多只是个空 `main`。
+
+两个最大的失败类（下一步的靶子）：
+1. **`import pandas as pd` —— Python 的 `as` 别名 import 不支持**。解析器吃掉 `import pandas `
+   后在 `as pd` 上停住，于是**整个文件从第 1 行起全丢**。语料里绝大多数文件第 1~2 行
+   就是 `import pandas as pd` / `from jqdata import *`，所以这**大概率是语料侧性价比最高的单点修复**。
+2. **已定位但未缩到最小**：某些 `def X(...)` 头被解析成功后，紧随的 `{` 连同函数体被留在
+   remaining（`蛇皮走位小市值.py`、`大市值价值优化.py` 都命中），下面那节记录的 A 缺陷即此类。
+
+**口径更新**：以后报数一律同时给两个口径——「退出码」用于守红线，「完全解析」
+（`ZETA_STRICT_PARSE=1`）用于判断真的编译进去了多少。
+
 **缺陷 A：某个 def 之后的所有顶层定义被静默丢弃（触发条件已压缩，根因未定）**
 `大市值价值优化.py` 共 7 个顶层 `def`，目标文件里只有 **4 个 T 符号**：`my_trade` 变成 `U`
 （被 `initialize` 引用但无定义），其后的 `check_limit_up`/`check_stocks`/`filter_*` **连引用都没有**
