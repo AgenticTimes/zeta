@@ -1106,6 +1106,22 @@ extern int64_t zeta_key_string(int64_t hash);
 int64_t zeta_map_value_tag(int64_t map, int64_t key);
 
 int64_t py_sys_maxsize(void) { return INT64_MAX; }
+// sys.platform / os.sep / os.linesep / sys.argv — these were absent, so a bare
+// attribute read warned and used 0 (a silently wrong value). argv is captured
+// at process start (the generated main takes no arguments of its own).
+#ifdef __APPLE__
+static const char* zt_platform_name = "darwin";
+#else
+static const char* zt_platform_name = "linux";
+#endif
+int64_t py_sys_platform(void) { return (int64_t)zt_platform_name; }
+int64_t py_os_sep(void) { return (int64_t)"/"; }
+int64_t py_os_linesep(void) { return (int64_t)"\n"; }
+// NOTE: sys.argv is deliberately NOT exposed yet. The list is easy to build,
+// but indexing/iterating a Vec<str> from a module member does not carry the
+// element type through to the loop variable or the subscript, so it would
+// hand back handles/0 instead of strings. Left unregistered so the use warns
+// and resolves loudly rather than being silently wrong.
 int64_t py_sys_version_info(void) {
     // Vec [3, 14, 0] so `sys.version_info[0] >= 3` works.
     int64_t* base = (int64_t*)GC_malloc(16 + 3 * 8);

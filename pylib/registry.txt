@@ -86,6 +86,8 @@ F math pow py_math_pow args=f64,f64 ret=f64
 #      os.environ.get 3, abspath 2, setdefault 1) -------------------------
 M os
 F os getcwd py_os_getcwd args= ret=str
+F os sep py_os_sep args= ret=str
+F os linesep py_os_linesep args= ret=str
 F os getpid py_os_getpid args= ret=i64
 F os system py_os_system args=i64 ret=i64
 F os getenv py_os_getenv args=i64 ret=str
@@ -243,6 +245,7 @@ F sys exit py_sys_exit args=i64 ret=void
 F sys version py_sys_version args= ret=str
 F sys version_info py_sys_version_info args= ret=vec
 F sys maxsize py_sys_maxsize args= ret=i64
+F sys platform py_sys_platform args= ret=str
 F sys path py_sys_path args= ret=vec
 F sys path.insert py_sys_path_insert args=i64,i64 ret=i64
 F sys path.__contains__ py_sys_path_contains args=i64 ret=i64
