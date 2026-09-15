@@ -1365,31 +1365,58 @@ impl MirGen {
 
                             let stmts_before = self.stmts.len();
 
-                            // Map pattern variable to collection[index] in body
-                            if is_simple_var && let AstNode::Var(item_name) = &*pattern_clone {
-                                let get_id = self.next_id();
-                                self.stmts.push(MirStmt::Call {
-                                    func: "array_get".to_string(),
-                                    args: vec![collection_id, index_var_id],
-                                    dest: get_id,
-                                    type_args: vec![],
-                                });
-                                // Carry the collection's element type to the
-                                // loop item so `for k in d.keys(): print(k)`
-                                // dispatches as a string (only pointer-shaped
-                                // element types; F64 elements live as raw bits).
-                                let elem_ty = match self.type_map.get(&collection_id).cloned() {
-                                    Some(Type::DynamicArray(e))
-                                    | Some(Type::Array(e, _)) => match *e {
-                                        Type::Str => Some(Type::Str),
-                                        Type::Named(n, args) => Some(Type::Named(n, args)),
-                                        _ => None,
-                                    },
+                            // Bind the pattern to collection[index].
+                            let get_id = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "array_get".to_string(),
+                                args: vec![collection_id, index_var_id],
+                                dest: get_id,
+                                type_args: vec![],
+                            });
+                            // Carry the collection's element type to the
+                            // loop item so `for k in d.keys(): print(k)`
+                            // dispatches as a string (only pointer-shaped
+                            // element types; F64 elements live as raw bits).
+                            let elem_ty = match self.type_map.get(&collection_id).cloned() {
+                                Some(Type::DynamicArray(e))
+                                | Some(Type::Array(e, _)) => match *e {
+                                    Type::Str => Some(Type::Str),
+                                    Type::Named(n, args) => Some(Type::Named(n, args)),
                                     _ => None,
-                                };
-                                self.name_to_id.insert(item_name.clone(), get_id);
-                                self.exprs.insert(get_id, MirExpr::Var(get_id));
-                                self.type_map.insert(get_id, elem_ty.unwrap_or(Type::I64));
+                                },
+                                _ => None,
+                            };
+                            match &*pattern_clone {
+                                AstNode::Var(item_name) => {
+                                    self.name_to_id.insert(item_name.clone(), get_id);
+                                    self.exprs.insert(get_id, MirExpr::Var(get_id));
+                                    self.type_map
+                                        .insert(get_id, elem_ty.unwrap_or(Type::I64));
+                                }
+                                // `for k, v in pairs:` — destructure the element.
+                                // Previously a Tuple pattern bound NO names at
+                                // all, so k/v resolved to whatever was in scope
+                                // (silently wrong values).
+                                AstNode::Tuple(names) => {
+                                    self.exprs.insert(get_id, MirExpr::Var(get_id));
+                                    self.type_map.insert(get_id, Type::I64);
+                                    for (i, n) in names.iter().enumerate() {
+                                        if let AstNode::Var(nm) = n {
+                                            let idx_id = self.next_id_with_lit(i as i64);
+                                            let part = self.next_id();
+                                            self.stmts.push(MirStmt::Call {
+                                                func: "stack_array_get".to_string(),
+                                                args: vec![get_id, idx_id],
+                                                dest: part,
+                                                type_args: vec![],
+                                            });
+                                            self.name_to_id.insert(nm.clone(), part);
+                                            self.exprs.insert(part, MirExpr::Var(part));
+                                            self.type_map.insert(part, Type::I64);
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
 
                             for stmt in &body_clone {
@@ -4247,9 +4274,11 @@ impl MirGen {
                         _ => None,
                     };
                     if let Some(fname) = func {
+                        let mut call_args = vec![arg_ids[0]];
+                        call_args.extend(arg_ids.iter().skip(1).copied());
                         self.stmts.push(MirStmt::Call {
                             func: fname.to_string(),
-                            args: vec![arg_ids[0]],
+                            args: call_args,
                             dest: id,
                             type_args: vec![],
                         });

@@ -1,0 +1,13 @@
+// PY-A: `for k, v in pairs:` 元组解构
+//   （此前 Tuple 模式**一个名字都不绑定**，k/v 解析到作用域里别的变量 = 静默错值）
+// expect: 11
+// expect: 22
+// expect: 3
+// expect: 7
+pairs = [[1, 10], [2, 20]]
+for k, v in pairs:
+    print(k + v)
+
+tuples = [(1, 2), (3, 4)]
+for a, b in tuples:
+    print(a + b)
