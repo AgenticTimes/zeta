@@ -483,6 +483,50 @@ int64_t py_map_items(int64_t map) {
     return (int64_t)(base + 2);
 }
 
+// ── PY-A: string/list operators Python adds on top of arithmetic ─────
+// `"-" * 40`, `[0] * 3`, `[1] + [2]` — without these the numeric operators
+// ran on the handles and produced garbage values.
+int64_t host_str_repeat(int64_t s, int64_t n) {
+    const char* p = s ? (const char*)s : "";
+    if (n < 0) n = 0;
+    size_t len = strlen(p);
+    size_t total = len * (size_t)n;
+    char* out = (char*)GC_malloc(total + 1);
+    for (int64_t i = 0; i < n; i++) memcpy(out + (size_t)i * len, p, len);
+    out[total] = 0;
+    return (int64_t)out;
+}
+
+static int64_t zt_vec_len(int64_t v) {
+    return v ? ((int64_t*)(v - 16))[1] : 0;
+}
+
+int64_t py_array_concat(int64_t a, int64_t b) {
+    int64_t na = zt_vec_len(a), nb = zt_vec_len(b);
+    int64_t n = na + nb;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
+    base[0] = n ? n : 1;
+    base[1] = n;
+    for (int64_t i = 0; i < na; i++) base[2 + i] = ((int64_t*)a)[i];
+    for (int64_t i = 0; i < nb; i++) base[2 + na + i] = ((int64_t*)b)[i];
+    return (int64_t)(base + 2);
+}
+
+int64_t py_array_repeat(int64_t a, int64_t n) {
+    int64_t len = zt_vec_len(a);
+    if (n < 0) n = 0;
+    int64_t total = len * n;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(total ? total : 1) * 8);
+    base[0] = total ? total : 1;
+    base[1] = total;
+    for (int64_t k = 0; k < n; k++) {
+        for (int64_t i = 0; i < len; i++) {
+            base[2 + k * len + i] = ((int64_t*)a)[i];
+        }
+    }
+    return (int64_t)(base + 2);
+}
+
 // ── PY-A: chr(n) / ord(s) ────────────────────────────────────────────
 int64_t py_builtin_chr(int64_t n) {
     char* s = (char*)GC_malloc(2);

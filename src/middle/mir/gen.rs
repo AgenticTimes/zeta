@@ -2271,6 +2271,31 @@ impl MirGen {
                         },
                     );
                     self.type_map.insert(dest, Type::Str);
+                } else if op == "+"
+                    && matches!(
+                        self.type_map.get(&left_id),
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                    )
+                    && matches!(
+                        self.type_map.get(&right_id),
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                    )
+                {
+                    // PY-A: `[1, 2] + [3, 4]` — list concatenation. Previously
+                    // the numeric adder ran on the two handles (garbage).
+                    let elem = match self.type_map.get(&left_id).cloned() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
+                        _ => Type::I64,
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_array_concat".to_string(),
+                        args: vec![left_id, right_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map
+                        .insert(dest, Type::DynamicArray(Box::new(elem)));
                 } else if op == "+" {
                     self.stmts.push(MirStmt::SemiringFold {
                         op: SemiringOp::Add,
@@ -2293,6 +2318,48 @@ impl MirGen {
                         _ => Type::I64,
                     };
                     self.type_map.insert(dest, op_type);
+                } else if op == "*"
+                    && matches!(self.type_map.get(&left_id), Some(Type::Str))
+                    && !matches!(self.type_map.get(&right_id), Some(Type::Str))
+                {
+                    // PY-A: `"-" * 40` — string repeat. Previously the numeric
+                    // multiply ran on the pointer and produced garbage.
+                    self.stmts.push(MirStmt::Call {
+                        func: "host_str_repeat".to_string(),
+                        args: vec![left_id, right_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map.insert(dest, Type::Str);
+                } else if op == "*"
+                    && matches!(
+                        self.type_map.get(&left_id),
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                    )
+                    && matches!(
+                        self.type_map.get(&right_id),
+                        Some(Type::I64)
+                            | Some(Type::I32)
+                            | Some(Type::U32)
+                            | Some(Type::U64)
+                            | Some(Type::Usize)
+                    )
+                {
+                    // PY-A: `[0] * 3` — list repeat (also previously garbage).
+                    let elem = match self.type_map.get(&left_id).cloned() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
+                        _ => Type::I64,
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_array_repeat".to_string(),
+                        args: vec![left_id, right_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map
+                        .insert(dest, Type::DynamicArray(Box::new(elem)));
                 } else if op == "*" {
                     self.stmts.push(MirStmt::SemiringFold {
                         op: SemiringOp::Mul,

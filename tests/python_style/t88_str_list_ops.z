@@ -1,0 +1,16 @@
+// PY-A: Python 的字符串/列表运算符 —— `s * n` 重复、`a + b` 列表拼接、`[0] * n` 重复
+//   （此前数值运算符直接作用在句柄上 → 静默垃圾值）
+// expect: -----
+// expect: ababab
+// expect: [1, 2, 3, 4]
+// expect: 4
+// expect: [0, 0, 0]
+print("-" * 5)
+print("ab" * 3)
+
+a = [1, 2]
+b = [3, 4]
+c = a + b
+print(c)
+print(len(c))
+print([0] * 3)
