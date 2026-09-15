@@ -919,6 +919,34 @@ double py_math_atan2(double y, double x) { return atan2(y, x); }
 int64_t py_math_trunc(double x) { return (int64_t)trunc(x); }
 int64_t py_math_isfinite(double x) { return isfinite(x) ? 1 : 0; }
 int64_t py_math_isnan(double x) { return isnan(x) ? 1 : 0; }
+// Remaining libm functions the corpus writes as math.<name>. Before these were
+// registered, each member fell through to a link error (fail-loud), so they
+// were unusable rather than silently wrong — but they are common enough that
+// they belong in the native set. libc has no symbol for isinf (it is a macro),
+// hence the explicit wrapper.
+double py_math_log2(double x) { return log2(x); }
+double py_math_exp2(double x) { return exp2(x); }
+double py_math_expm1(double x) { return expm1(x); }
+double py_math_log1p(double x) { return log1p(x); }
+double py_math_cbrt(double x) { return cbrt(x); }
+double py_math_atan(double x) { return atan(x); }
+double py_math_asin(double x) { return asin(x); }
+double py_math_acos(double x) { return acos(x); }
+double py_math_sinh(double x) { return sinh(x); }
+double py_math_cosh(double x) { return cosh(x); }
+double py_math_tanh(double x) { return tanh(x); }
+double py_math_asinh(double x) { return asinh(x); }
+double py_math_acosh(double x) { return acosh(x); }
+double py_math_atanh(double x) { return atanh(x); }
+double py_math_gamma(double x) { return tgamma(x); }
+double py_math_erf(double x) { return erf(x); }
+double py_math_erfc(double x) { return erfc(x); }
+double py_math_fmod(double a, double b) { return fmod(a, b); }
+double py_math_remainder(double a, double b) { return remainder(a, b); }
+double py_math_copysign(double a, double b) { return copysign(a, b); }
+double py_math_nextafter(double a, double b) { return nextafter(a, b); }
+double py_math_ldexp(double a, int64_t e) { return ldexp(a, (int)e); }
+int64_t py_math_isinf(double x) { return isinf(x) ? 1 : 0; }
 
 // ---- logging (real, to stderr; levels are i64 constants) ----
 #define PY_LOG_DEBUG 10

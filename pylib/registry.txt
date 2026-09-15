@@ -130,6 +130,30 @@ F math factorial py_math_factorial args=i64 ret=i64
 F math degrees py_math_degrees args=f64 ret=f64
 F math radians py_math_radians args=f64 ret=f64
 F math isqrt py_math_isqrt args=i64 ret=i64
+# rest of the common libm surface (math.<name> previously failed to link)
+F math log2 py_math_log2 args=f64 ret=f64
+F math exp2 py_math_exp2 args=f64 ret=f64
+F math expm1 py_math_expm1 args=f64 ret=f64
+F math log1p py_math_log1p args=f64 ret=f64
+F math cbrt py_math_cbrt args=f64 ret=f64
+F math atan py_math_atan args=f64 ret=f64
+F math asin py_math_asin args=f64 ret=f64
+F math acos py_math_acos args=f64 ret=f64
+F math sinh py_math_sinh args=f64 ret=f64
+F math cosh py_math_cosh args=f64 ret=f64
+F math tanh py_math_tanh args=f64 ret=f64
+F math asinh py_math_asinh args=f64 ret=f64
+F math acosh py_math_acosh args=f64 ret=f64
+F math atanh py_math_atanh args=f64 ret=f64
+F math gamma py_math_gamma args=f64 ret=f64
+F math erf py_math_erf args=f64 ret=f64
+F math erfc py_math_erfc args=f64 ret=f64
+F math fmod py_math_fmod args=f64,f64 ret=f64
+F math remainder py_math_remainder args=f64,f64 ret=f64
+F math copysign py_math_copysign args=f64,f64 ret=f64
+F math nextafter py_math_nextafter args=f64,f64 ret=f64
+F math ldexp py_math_ldexp args=f64,i64 ret=f64
+F math isinf py_math_isinf args=f64 ret=i64
 
 # ---- logging (evidence: getLogger 6, basicConfig 4, INFO 4) ------------
 M logging

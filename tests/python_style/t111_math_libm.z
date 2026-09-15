@@ -1,0 +1,50 @@
+// PY-A: math 常见 libm 函数补齐 —— log2/atan/asin/acos/sinh/cosh/tanh/
+//   asinh/acosh/atanh/exp2/expm1/log1p/cbrt/gamma(tgamma)/erf/erfc/
+//   fmod/remainder/copysign/ldexp/isinf。此前这些成员未入注册表 → 落到
+//   按名解析 → 链接失败（fail-loud，不可用）。libc 无 isinf 符号（宏），
+//   故显式包一层。
+// expect: 3.000000
+// expect: 0.785398
+// expect: 1.500000
+// expect: -3.000000
+// expect: 1
+// expect: 0
+// expect: 24.000000
+// expect: 8.000000
+// expect: 3.000000
+// expect: 0.000000
+// expect: 0.000000
+// expect: 0.000000
+// expect: 0.000000
+// expect: 1.000000
+// expect: 0.000000
+// expect: 1.000000
+// expect: 0
+// expect: 0.000000
+// expect: 0.000000
+// expect: 0.000000
+// expect: 0.000000
+// expect: 1024.000000
+import math
+print(math.log2(8.0))
+print(math.atan(1.0))
+print(math.fmod(7.5, 2.0))
+print(math.copysign(3.0, -1.0))
+print(math.isinf(math.inf))
+print(math.isinf(1.0))
+print(math.gamma(5.0))
+print(math.ldexp(1.0, 3))
+print(math.cbrt(27.0))
+print(math.sinh(0.0))
+print(math.expm1(0.0))
+print(math.log1p(0.0))
+print(math.erf(0.0))
+print(math.erfc(0.0))
+print(math.acosh(1.0))
+print(math.remainder(7.0, 3.0))
+print(math.isinf(math.nan))
+print(math.asinh(0.0))
+print(math.atanh(0.0))
+print(math.asin(0.0))
+print(math.acos(1.0))
+print(math.exp2(10.0))
