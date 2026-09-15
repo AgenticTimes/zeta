@@ -1400,6 +1400,17 @@ impl MirGen {
                                 AstNode::Tuple(names) => {
                                     self.exprs.insert(get_id, MirExpr::Var(get_id));
                                     self.type_map.insert(get_id, Type::I64);
+                                    // A Vec<(k, v)> element carries per-position
+                                    // types, so `for k, c in most_common()` can
+                                    // type the key part as str.
+                                    let pair_tys = match self.type_map.get(&collection_id) {
+                                        Some(Type::DynamicArray(e))
+                                        | Some(Type::Array(e, _)) => match &**e {
+                                            Type::Tuple(ts) => Some(ts.clone()),
+                                            _ => None,
+                                        },
+                                        _ => None,
+                                    };
                                     for (i, n) in names.iter().enumerate() {
                                         if let AstNode::Var(nm) = n {
                                             let idx_id = self.next_id_with_lit(i as i64);
@@ -1412,7 +1423,11 @@ impl MirGen {
                                             });
                                             self.name_to_id.insert(nm.clone(), part);
                                             self.exprs.insert(part, MirExpr::Var(part));
-                                            self.type_map.insert(part, Type::I64);
+                                            let pty = pair_tys
+                                                .as_ref()
+                                                .and_then(|ts| ts.get(i).cloned())
+                                                .unwrap_or(Type::I64);
+                                            self.type_map.insert(part, pty);
                                         }
                                     }
                                 }
@@ -4336,18 +4351,26 @@ impl MirGen {
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
-                        // A string-keyed map (its type carries the key kind)
-                        // yields Vec<str> for keys() — map_keys recovers the
-                        // original text from the hash side table.
-                        let key_is_str = method == "keys"
-                            && matches!(
-                                receiver_ty.as_ref(),
-                                Some(Type::Named(_, args))
-                                    if matches!(args.first(), Some(Type::Str))
-                            );
-                        let elem_ty = if key_is_str { Type::Str } else { Type::I64 };
-                        self.type_map
-                            .insert(id, Type::DynamicArray(Box::new(elem_ty)));
+                        // Key kind comes from the map type's args: a string-keyed
+                        // map yields Vec<str> for keys() and Vec<(str, i64)> for
+                        // most_common.
+                        let key_ty = match receiver_ty.as_ref() {
+                            Some(Type::Named(_, args))
+                                if matches!(args.first(), Some(Type::Str)) =>
+                            {
+                                Type::Str
+                            }
+                            _ => Type::I64,
+                        };
+                        let out_ty = if method == "most_common" {
+                            Type::DynamicArray(Box::new(Type::Tuple(vec![
+                                key_ty,
+                                Type::I64,
+                            ])))
+                        } else {
+                            Type::DynamicArray(Box::new(key_ty))
+                        };
+                        self.type_map.insert(id, out_ty);
                         return id;
                     }
                 }

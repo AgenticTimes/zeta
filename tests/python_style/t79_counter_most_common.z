@@ -1,15 +1,17 @@
-// PY-A: collections.Counter 按内容哈希聚合 + most_common([n]) 计数降序
-//   （此前字符串 key 按指针各算 1 次，len 会是 5；most_common 计数全为 1）
-//   NOTE: key 的**显示**仍待「字符串键 map 标签」——故本用例只断言计数与长度。
+// PY-A: collections.Counter —— 按内容哈希聚合；most_common([n]) 计数降序且 key 还原为原串
+//   （此前字符串 key 按指针各算 1 次；key 只显示句柄）
 // expect: 2
+// expect: a
 // expect: 3
+// expect: b
 // expect: 2
-// expect: 3
+// expect: a
 from collections import Counter
 
 c = Counter(["a", "b", "a", "a", "b"])
 print(len(c))
 for k, n in c.most_common():
+    print(k)
     print(n)
 for k, n in c.most_common(1):
-    print(n)
+    print(k)
