@@ -3512,6 +3512,29 @@ impl MirGen {
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
+                // PY-A: `any(xs)` / `all(xs)` over an array — Python truthiness
+                // is non-zero. Previously these emitted bare `any`/`all`
+                // externs and failed to link.
+                if receiver.is_none()
+                    && (method == "any" || method == "all")
+                    && args.len() == 1
+                {
+                    let arg_id = self.lower_expr(&args[0]);
+                    let func = if method == "any" {
+                        "py_builtin_any"
+                    } else {
+                        "py_builtin_all"
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: func.to_string(),
+                        args: vec![arg_id],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::Bool);
+                    return id;
+                }
                 // PY-A: f-string format spec — `__fmtspec__(value, spec)` →
                 // runtime snprintf with the user spec (V1: f64 uses it, i64/str
                 // fall back to plain conversion)

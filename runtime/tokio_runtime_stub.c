@@ -1277,6 +1277,23 @@ int64_t py_functools_reduce_3(int64_t fn, int64_t arr, int64_t init) {
     return acc;
 }
 
+// ---- any / all (array truthiness: non-zero is true) ----
+int64_t py_builtin_any(int64_t arr) {
+    int64_t n = array_len(arr);
+    for (int64_t i = 0; i < n; i++) {
+        if (((int64_t*)arr)[i]) return 1;
+    }
+    return 0;
+}
+
+int64_t py_builtin_all(int64_t arr) {
+    int64_t n = array_len(arr);
+    for (int64_t i = 0; i < n; i++) {
+        if (!((int64_t*)arr)[i]) return 0;
+    }
+    return 1;
+}
+
 // ---- pathlib ----
 // A PyPath is the path string itself (a char* handle), so every os.path.*
 // shim accepts it unchanged; only the Path-only operations need new code.

@@ -96,8 +96,25 @@ fn parse_let(input: &str) -> IResult<&str, AstNode> {
 
 fn parse_for(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag("for")).parse(input)?;
-    let (input, pattern) = ws(parse_pattern).parse(input)?;
-    let (input, _) = ws(tag("in")).parse(input)?;
+    let (rest, first) = ws(parse_pattern).parse(input)?;
+    // PY-A: Python tuple target without parentheses — `for i, v in xs:`.
+    // parse_pattern only accepts a parenthesised tuple, so the unparenthesised
+    // form failed to parse and the whole statement was dropped.
+    let (rest, pattern) = {
+        let mut cur = rest.trim_start();
+        let mut items = vec![first];
+        while let Some(after_comma) = cur.strip_prefix(',') {
+            let (next, p) = ws(parse_pattern).parse(after_comma)?;
+            items.push(p);
+            cur = next.trim_start();
+        }
+        if items.len() > 1 {
+            (cur, AstNode::Tuple(items))
+        } else {
+            (rest, items.remove(0))
+        }
+    };
+    let (input, _) = ws(tag("in")).parse(rest)?;
     let (input, expr) = ws(parse_full_expr).parse(input)?;
     // PY-4: Python `range(n)` / `range(a, b)` → Range node (end-exclusive,
     // matching both Python semantics and Zeta's `..` operator). A step
@@ -124,6 +141,55 @@ fn parse_for(input: &str) -> IResult<&str, AstNode> {
         other => other,
     };
     let (input, body) = delimited(ws(tag("{")), parse_block_body, ws(tag("}"))).parse(input)?;
+    // PY-A: `for i, v in enumerate(X):` — desugar to an index loop:
+    //   for i in range(len(X)): v = X[i]; <body>
+    // enumerate() has no runtime representation and previously the whole loop
+    // body was silently dropped (the loop vanished from the MIR entirely).
+    if let (
+        AstNode::Tuple(names),
+        AstNode::Call {
+            receiver: None,
+            method,
+            args: call_args,
+            ..
+        },
+    ) = (&pattern, &expr)
+    {
+        if method == "enumerate" && names.len() == 2 && call_args.len() == 1 {
+            if let (AstNode::Var(idx), AstNode::Var(val)) = (&names[0], &names[1]) {
+                let coll = call_args[0].clone();
+                let len_call = AstNode::Call {
+                    receiver: None,
+                    method: "len".to_string(),
+                    args: vec![coll.clone()],
+                    type_args: vec![],
+                    structural: false,
+                };
+                let range_expr = AstNode::Range {
+                    start: Box::new(AstNode::Lit(0)),
+                    end: Box::new(len_call),
+                    inclusive: false,
+                };
+                let elem = AstNode::Subscript {
+                    base: Box::new(coll),
+                    index: Box::new(AstNode::Var(idx.clone())),
+                };
+                let mut new_body = vec![AstNode::Assign(
+                    Box::new(AstNode::Var(val.clone())),
+                    Box::new(elem),
+                )];
+                new_body.extend(body);
+                return Ok((
+                    input,
+                    AstNode::For {
+                        pattern: Box::new(AstNode::Var(idx.clone())),
+                        expr: Box::new(range_expr),
+                        body: new_body,
+                    },
+                ));
+            }
+        }
+    }
     Ok((
         input,
         AstNode::For {
