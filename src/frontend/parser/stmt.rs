@@ -765,6 +765,16 @@ fn parse_dotted_name(input: &str) -> IResult<&str, String> {    let (input, firs
     Ok((cur, name))
 }
 
+
+/// PY-A: drop `#` comments from an import member list (`from x import (a,  # c
+/// b)`). Import lists contain no string literals, so a plain cut at `#` is safe.
+fn strip_py_line_comments(s: &str) -> String {
+    s.lines()
+        .map(|l| l.split('#').next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// PY-A: `from x import y[, z [as w]]` — emits `zeta_py_from("module",
 /// "member", "alias")` markers binding the member into scope. Modules and
 /// members are validated against the Python-library registry.
@@ -785,25 +795,56 @@ fn parse_python_from_import(input: &str) -> IResult<&str, AstNode> {
     // then `import`
     let (input, module) = ws(parse_relative_module).parse(input)?;
     let (input, _) = ws(tag("import")).parse(input)?;
-    let (input, rest) = take_while(|c| c != '\n' && c != '\r')(input)?;
+    // The member list may be PARENTHESIZED and span multiple lines — real
+    // Python does this constantly:
+    //     from strategies.code.jq_shim import (
+    //         OrderCost,
+    //         g,
+    //     )
+    // Taking only the rest of the line (the old behaviour) left the members
+    // unparsed, which failed the enclosing block and (via `many0`) silently
+    // dropped the rest of the file.
+    let (input, _) = take_while(|c: char| c == ' ' || c == '\t' || c == '\r')(input)?;
+    let (tail, input) = if let Some(inner) = input.strip_prefix('(') {
+        // Imports have no nested parens, so the first `)` closes the list.
+        match inner.find(')') {
+            Some(idx) => (
+                strip_py_line_comments(&inner[..idx]),
+                &inner[idx + 1..],
+            ),
+            None => (strip_py_line_comments(inner), ""),
+        }
+    } else {
+        let (rest, line) = take_while(|c: char| c != '\n' && c != '\r')(input)?;
+        (strip_py_line_comments(line), rest)
+    };
+    let tail: &str = &tail;
     let mut out: Vec<AstNode> = Vec::new();
     // Star-import: `from X import *` binds the module's public top-level
     // names into scope. A distinct marker tells the resolver to enumerate
     // them (the plain import marker binds nothing).
-    if rest.trim_start().starts_with('*') {
+    if tail.trim_start().starts_with('*') {
         out.push(py_import_marker("zeta_py_star", vec![&module]));
         return Ok((input, AstNode::Block { body: out }));
     }
-    let mut cur = rest;
+    let mut cur = tail;
     loop {
         let (after_member, member) = match ws(parse_ident).parse(cur) {
             Ok(v) => v,
             Err(_) => break,
         };
         let trimmed = after_member.trim_start();
+        // `ws(parse_ident)` above ate the whitespace before `as`, so `t` still
+        // carries the separator space (`t == " alias"`) and testing `t` itself
+        // for an alphanumeric start always failed — `from x import y as z`
+        // silently dropped the alias. Trim first (same bug as in
+        // `parse_python_import`), and require the separating whitespace.
         let (after_alias, alias) = if let Some(t) = trimmed.strip_prefix("as") {
-            if t.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
-                let (r, a) = ws(parse_ident).parse(t).map_err(|_| {
+            let t2 = t.trim_start();
+            if t.len() > t2.len()
+                && t2.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+            {
+                let (r, a) = ws(parse_ident).parse(t2).map_err(|_| {
                     nom::Err::Error(NomError::new(input, nom::error::ErrorKind::Tag))
                 })?;
                 (r, a)

@@ -567,7 +567,41 @@ PROBE item head="my_trade(context) {...}"    alt=stmt consumed=18   rest="{"
 - 新增 `t116_strict_truncated_def`（`// expect-error` + `ZETA_STRICT_PARSE=1`）锁住该行为。
 - **口径变化**：官方退出码 194/194 不变；python_style 117/117；语料**老实口径 7/38 → 9/38**。
 
-### 另一个已定位的小 bug（未修）
+### `from X import (...)` 跨行括号列表 + `from x import y as z`（2026-09-16 追加，已修）
+
+语料最大的文件 `jq_wufu.py` 第 43 行是真实 Python 里到处都在用的形式：
+
+```python
+if os.environ.get('REPLAYQUANT_LOCAL') == '1':
+    from strategies.code.jq_shim import (
+        OrderCost, PriceRelatedSlippage, attribute_history, g, get_current_data, …
+    )
+```
+
+`parse_python_from_import` 原来用 `take_while(|c| c != '\n')` **只取 `import` 之后本行的剩余**，
+括号里一个成员都取不到 → 该 if 体解析失败 → 整份文件从第 42 行起被丢弃（丢 1200+ 行）。
+修法：识别外层括号，取到匹配的 `)`（import 列表不会嵌套括号），并剥掉行内 `#` 注释。
+
+**顺带修同一类老 bug**：`from x import y as z` 的别名分支也是拿**带前导空格的** `t` 做
+`starts_with(alnum)` 判空，别名被静默丢掉（与 `import X as Y` 那个 bug 同源、同修法）。
+
+回归 `t117`：括号 + 注释 + 别名三种形态都验；python_style 117→**118/118**。
+
+**口径说明（重要）**：修好之后语料「退出码通过」从 9 掉回 **7**，这不是倒退 ——
+解析走得越深，越多的真实符号被引用，链接才失败；**丢行数是下降的**
+（`jq_wufu_daily` 1241→1179、`jq_wufu` 1162→1098、`jq_shim` 721→708）。
+以后语料必须同时报三个数：退出码 / 未解析行数 / 完全解析文件数，单看退出码会被反向误导。
+
+修完后的语料分布（38 个文件）：
+- **3 个只差平台符号**（已完全解析，LINK-undefined）：`Debug多标的ETF`、`安全摸狗`、`稳健型ETF`，
+  缺的是 `set_level`/`DataFrame`/`get_security_info`/`datetime` 这类宿主 API。
+- **28 个仍被解析截断**（PARSE-truncated），其中最高频符号是 `set_level`（几乎人人都有）。
+
+### 另外两个已定位的小缺口（未修）
+
+- `from math import pi` + `print(pi)` 打 **0**：`from X import 常量` 的成员没有绑定成裸名
+  （函数成员 `from math import floor` 正常）。常量走的是另一条解析路径，待查。
+
 
 `def X(...):` 后**函数体没有任何语句**（只有注释/空行）时，缩进预处理不会把头部改写成
 `{` —— `opens` 要求 `next_code_indent(&infos, i+1) > indent`，而此处下一个「代码行」是缩进更浅的

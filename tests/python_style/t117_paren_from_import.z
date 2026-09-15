@@ -1,0 +1,21 @@
+// PY-A: `from X import (...)` 跨行括号形式 + `as` 别名。
+// 语料最大的文件 jq_wufu.py 第 43 行就是跨行括号列表
+//     from strategies.code.jq_shim import (
+//         OrderCost,
+//         g,
+//     )
+// 此前解析器只取 `import` 之后「本行剩余」的成员，于是括号里一个成员都没取到，
+// 这个 if 体随之解析失败，整份文件从那里起被静默丢弃（截断）。
+// 顺带修 `from x import y as z` 的别名 —— 同一个「as 后前导空格没 trim」的老 bug
+// （`ws(parse_ident)` 已经把空格吃掉，`t.starts_with(alnum)` 永假，别名被静默丢掉）。
+from math import (
+    floor,
+    # 注释也允许出现在括号列表里
+    sqrt as sq,
+)
+
+print(floor(2.7))
+print(sq(9.0))
+
+// expect: 2
+// expect: 3.000000
