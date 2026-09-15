@@ -332,70 +332,44 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 3. **闭包不继承模块 rename map**：模块内 `lambda m: lowercase(m.group(0))` 里的 `lowercase` 未加前缀 → 链接失败
 4. **`from X import f` 返回值硬编码 i64**
 
-**2026-09-15 批次顺带修掉的 fail-open（静默丢代码 / 错值）**
+**2026-09-15 批次顺带修掉的 fail-open（静默丢代码 / 错值 / 崩溃）**
 1. **`from X import y` 不跑模块 init**（`25acdb0d`）：成员读模块级状态读到未初始化全局（`total()` 得 1 而非 6）
 2. **`@dataclass` 处解析中止**（`6befdec0`）：类与其后**所有**语句被丢弃 → 合成 `__init__` 后修复
 3. **注解赋值 `x: int = 5` 解析中止**（`6d11cd24`）：语句只吃掉 `x`，余下 `: int = 5` 无法解析 → 本语句及后续全部丢失
 4. **Zeta `var x: T = v` 声明从未被解析**（`6d11cd24`）：`var` 当裸表达式，随后 `x: T = v` 中止所在块
-5. **CTFE 后处理无条件删除所有 `comptime fn`**（`6d11cd24`）：假定调用点已全部内联，但数组返回值的 comptime 函数无法物化常量 → 运行期调用悬空（`generate_residues` 未定义）。现已保留数组返回的 comptime 函数；`test_actual_issues` 此前"通过"实为整个函数体被丢弃
+5. **CTFE 无条件删除所有 `comptime fn`**（`6d11cd24`）：数组返回值的 comptime 函数无法物化常量 → 运行期调用悬空；`test_actual_issues` 此前"通过"实为整个函数体被丢弃
 6. **多参 `Thread` 把 tuple 句柄当首参**（`c49e4ff8`）：静默垃圾值 → 合成解包适配器
-7. **f64 线程参数位模式**（`5968d6cc`）：无 MIR bitcast 原语，改为 fail-loud 警告
-8. **`for i, v in enumerate(xs):` 整条语句静默丢弃**（`13d3c3d8`）：`parse_pattern` 只接受**带括号**元组 → `for i, v in ...` 解析失败整条丢掉；且 `enumerate` 无 lowering。现支持无括号元组目标，双名 enumerate 解糖为 `for i in range(len(xs)): v = xs[i]`
-9. **`any`/`all` 链接失败**（`13d3c3d8`）：无内建实现 → 改为数组真值 shim，结果类型 bool
+7. **f64 线程参数位模式**（`5968d6cc`）：无 MIR bitcast 原语 → 改为 fail-loud 警告
+8. **`for i, v in enumerate(xs):` 整条语句静默丢弃**（`13d3c3d8`）：`parse_pattern` 只接受**带括号**元组；现支持无括号目标，双名 enumerate 解糖为索引循环
+9. **`any`/`all`、`zip` 链接失败**（`13d3c3d8`/`f27b33cd`）：现分别实现；`zip` 产出 `(a[i],b[i])` 对以配合元组解构
 10. **`print(Path)`/`str(Path)`/f-string 把字符串型句柄打成指针**（`cf903286`）；**`.parent` 被标 i64** 致 `len(...)` 段错误（`02a3c0e5`）
-11. **`s.ljust(n)`/`rjust(n)` 落空**（`31fd29ad`）：方法表只在 3 元数注册，2 参调用无匹配 → 裸 extern 链接失败；补 2 参 shim + `center`。注意 fill 是**字符串句柄**（实现里解引用），默认值必须是单字符字符串——传字节 `' '`（32）会解引用地址 32 直接段错误
-12. **`"{}".format(...)`**（`31fd29ad`）：字面量模板重写为 f-string 按各参类型格式化；含 `:` 格式说明/`!` 转换/具名/缺参时返回 None → 落空报错，不静默错格式化
-13. **f-string 格式说明静默错**（`a9387dd4`）：`zeta_fmt_f64_spec` 只是给 spec 前置 `%`，只有裸 `.2f` 能用 —— `{x:>8.2f}` 生成非法 C 转换、直接把说明文字 `>8.2f` 打出来；i64/str 的 spec 被整个丢弃（`{n:05d}` → `42`）。现按 Python 语法解析 spec（fill/align/sign/0/width/,/.prec/type）并手工补齐，三种值类型各一个入口（f64 必须显式声明，否则自动 extern 会按 i64 声明并 fptosi）
-14. **`any`/`all` 链接失败**、**`for i, v in enumerate(xs)` 丢循环**（`13d3c3d8`）；**`zip` 裸 extern 链接失败**（`f27b33cd`，现产出 `(a[i],b[i])` 对，配合元组解构）
-15. **`max/min`、`s.split()`（无分隔符）、`sorted(reverse=)`、`d.items()` 全是裸 extern 链接失败**（`a3f1e103`/`13a2077b`）：现分别实现；`d.items()` 复用「键类型 + pair 位置类型」→ `for k, v in d.items()` 键还原为原串。`sorted(key=)` **故意不接管**（仍链接期失败），避免静默按错的东西排序
-16. **`raise ValueError("boom")` 是空操作**（`2fee5c9f`）：`parse_raise` 只认 `raise(expr)`，Python 风格裸 `raise Expr` 退化成裸 `raise` 变量 → **异常从不抛出**、其后语句被丢弃。现两种形式都接（裸表达式仅在**同一行**才接管，避免单 `raise` 重抛吞掉下一条语句）
-17. **`s * n` / `list + list` / `[0] * n` 全是静默垃圾值**（`813987f4`）：数值运算符直接作用在句柄上（`"-" * 5` 得 21520423860）。现按 Python 语义分发：`Str*int`→重复、`list+list`→拼接、`list*int`→重复
-18. **3 段切片 `s[::2]` 解析失败**（`2b0c74d2`）：`parse_subscript_slice` 只认 start/end → `s[::2]` 解析失败并**静默丢弃其后所有语句**；且 `s[::-1]` 曾返回空串。现解析可选 step（省略的 start 在有 step 时用 INT64_MIN 哨兵），新增 `str_slice_step`/`zeta_slice_vec_step` 实现 Python 双符号步长的边界规则
-19. **`re.escape` 链接失败**（`40e61a3a`）：已实现（转义正则元字符）
-20. **幂运算 `**` 崩溃**（`c5c747e2`）：乘法运算符表里没有 `**`，前缀匹配先吃单个 `*`，剩下的 `* 10` 变成对字面量 10 的**指针解引用**（`2 * (*10)`）→ 从地址 10 加载 → SIGSEGV 且无输出。现 `**` 排在 `*` 之前并右结合；整数底走指数循环，含浮点走 libm pow（负整数指数返回 0，Python 会给浮点，已记）
-21. **`map`/`filter` 裸 extern 链接失败**（`4f4dd325`）：现 eager 返回列表（`filter(None, xs)` 按真值过滤）
+11. **`s.ljust(n)`/`rjust(n)` 落空**（`31fd29ad`）：方法表只在 3 元数注册；注意 fill 是**字符串句柄**（解引用），默认必须传单字符字符串——传字节 `' '`（32）会段错误
+12. **`"{}".format(...)`**（`31fd29ad`）：字面量模板重写为 f-string；含格式说明/转换/具名/缺参时返回 None → 落空报错
+13. **f-string 格式说明静默错**（`a9387dd4`）：`{x:>8.2f}` 曾把说明文字当结果打出来；现按 Python 语法解析 spec 并手工补齐（f64 入口必须显式声明，否则自动 extern 会 fptosi）
+14. **`max/min`、`s.split()`（无分隔符）、`sorted(reverse=)`、`d.items()` 链接失败**（`a3f1e103`/`13a2077b`）：现分别实现
+15. **`raise ValueError("boom")` 是空操作**（`2fee5c9f`）：裸 `raise Expr` 退化成裸 `raise` 变量 → 异常从不抛出、其后语句被丢弃
+16. **`s * n` / `list + list` / `[0] * n` 全是静默垃圾值**（`813987f4`）：数值运算符直接作用在句柄上
+17. **3 段切片 `s[::2]` 解析失败**（`2b0c74d2`）：解析失败并静默丢弃其后所有语句；现支持可选 step（双符号边界规则）
+18. **`re.escape` 链接失败**（`40e61a3a`）
+19. **幂运算 `**` 崩溃**（`c5c747e2`）：`2 * (*10)` 对字面量做指针解引用 → SIGSEGV
+20. **`map`/`filter` 链接失败**（`4f4dd325`）：现 eager 返回列表
+21. **列表/字典方法链接失败**（`7c1f7bb7`，loop 子代理落地、我方复核）：根因是数组接收者落进 opaque-fallback → `index`/`count` 被当字符串方法路由；现加专用分发（元素类型感知），mutator 回写接收者
+22. **`repr`/`set()`/`split(sep,maxsplit)`**（`4cba298c`）、**`round(x,n)` 强转 i64 / `enumerate(xs,start)` 把 start 当数组下标 / `for k in d:` 静默 0 次**（`78c9b302`）
+23. **`int(s,base)` / `replace(old,new,count)` / `os.path.join` 3-4 参 / `dict.fromkeys`**（`4dddfb27`）
+24. **`list.sort(key=)` / `sorted(key=, reverse=)`**（`23e54249`）：decorate-sort-undecorate，稳定；`sort(key=f)` 缺参曾是垃圾值
+25. **`x in list` 静默返回 0 / `bool(x)` 链接失败**（`4d4c18f4`）、**`print(sep=,end=)` 被当普通实参打印**（`121834e3`）
+26. **`min(xs, key=f)` 返回函数指针**（`cb9ba317`）：被「min of TWO values」2 参分支吞掉
+27. **`dict.setdefault` / `list.extend`**（`90f0fb53`）；附带记录**既有折叠坑**：`len(字面量尺寸数组)` 是编译期常量 → `extend` 后不会跟着变
+28. **`math` 常量静默为 0 且缺函数**（`f0152f78`）：经验——**"注册表未命中的模块成员 → 落到同名 libc 函数"是一类危险模式**（签名不匹配 → 崩溃/UB，比链接失败更糟）
+29. **`sys.platform`/`os.sep`/`os.linesep` 静默为 0**（`99f389d7`）；`sys.argv` 先放弃、后凭根因修复启用（`c1e9dc94`）
+30. **`os.listdir` 应声明 `ret=vecstr`**（`25aae397`）：`ret=i64` 时结果不带元素类型，成员判断/逐元素比较只能"碰巧"成立
+31. **`strip`/`lstrip`/`rstrip` 字符集形式**（`b161def8`）；同批**全表审计**：148 条 `F` + 80 条 `W` 的 `ret=` 与 C 实现返回类型逐条一致（0 不匹配）
+32. **`math` libm 常用函数补齐**（`78c96a2e`）：`log2/exp2/expm1/log1p/cbrt/atan/asin/acos/sinh/cosh/tanh/asinh/acosh/atanh/gamma/erf/erfc/fmod/remainder/copysign/nextafter/ldexp/isinf`（`isinf` 是 libc 宏、无符号；`ldexp` 第二参为 i64）
+33. **`str.swapcase` 错值 + `str.is*` 谓词族静默 0**（`d8a76934`，loop 子代理落地、我方复核）：`swapcase` 被路由到**大写**函数；`is*` 未注册 → 落到**同名 libc ctype 函数**（`isalnum(int)`）→ 静默 0（见 28 同一模式）。补真 `str_swapcase` + 7 谓词 + `removeprefix`/`removesuffix`。谓词为 **ASCII 语义**（`é.isalpha()` 为 0，Python 为 True），精确 Unicode 分类属已知限界
+34. **`hex`/`oct`/`bin`/`reversed`**（`59ab7a3b`）：四者在 libc 均无同名符号；`hex(-255)` 按 Python 输出 `-0xff`
+35. **`time.strftime` 崩溃**（`12dbcfce`）：模块级调用未入注册表 → 落到 **libc 的 `strftime`**（签名完全不同）→ 格式串被当指针解引用 → **SIGSEGV**（曾误判为挂起）
+36. **构建配方纠正**（docs `b2f017d4`/`cacf817d`）：`tokio_runtime.o` = `ld -r tokio_runtime.c + tokio_runtime_stub.c`（**不含** `py_additions.c`，后者归 `zeta_runtime_c.o`）；混入会造成 **166 个 duplicate symbol**（validate.md §4 已更正）。另：`zetac` 以**相对路径**查对象文件，必须在仓库根目录运行。
 
-**已知冲突（设计取舍，未修）**：Python 的整除 `//` 在本方言里是**行注释**，故 `a // b` 会静默丢掉除数。要支持需在预处理器/解析器区分「表达式中的 `//`」与「行尾注释」，两者字面完全同形，属设计取舍。
-
-22. **列表方法 `index`/`count`/`insert`/`remove`/`pop`/`sort`/`reverse` 与字典 `update`/`pop`/`clear` 全部链接失败**（`7c1f7bb7`，由 loop 子代理落地、我方独立复核）：根因是**数组接收者落进 opaque-fallback**——`index`/`count` 被 `str_method_symbol` 当字符串方法路由到 `host_str_find`/`host_str_count`，其余落到裸 extern。现为编译器已知的 `Array`/`DynamicArray` 接收者加专用分发（元素类型感知：str 按内容 `str_eq`、f64 解位模式按值、i64 直接比较），`map` 接收者补 `update`/`pop`/`pop(k,default)`/`clear`。列表方法原地改写句柄，`insert` 扩容返回新句柄 → 语句形态自动回写接收者变量。语义缺口（故意未做）：`d.pop(k)` 缺键时 Python 抛 KeyError，此处返回 0；`index` 未命中返回 -1（均为 V1 限界，非静默错值）。python_style **94/94**（新增 t91/t92/t93）、官方 194/194、语料 38/38。
-23. **`repr`/`set()`/`split(sep,maxsplit)`**（`4cba298c`）、**`round(x,n)` 浮点实参被强转 i64 / `enumerate(xs,start)` 把 start 当数组下标致循环体从不执行 / `for k in d:` 静默 0 次**（`78c9b302`）：均已修。`round(x)` 用 `nearbyint`（银行家舍入，与 Python 一致），`round(x,n)` 按真实 double 在第 n 位小数取整；`for k in d` 改为迭代 `map_keys(d)`（键还原为原串）。
-24. **`int(s,base)` / `replace(old,new,count)` / `os.path.join` 3-4 参 / `dict.fromkeys`**（`4dddfb27`）：四者此前均为裸 extern 或 arity 落空 → 链接失败，现均已实现（`dict.fromkeys` 对字符串键走内容哈希）。顺带把 `py_additions.c` 里的 `map_*` 声明提到文件顶部（原本在使用点之后 → 隐式声明 `int map_new()` 与显式声明冲突）。
-25. **`list.sort(key=)` / `sorted(key=, reverse=)`**（`23e54249`）：运行时用 decorate-sort-undecorate（键只算一次、原下标作稳定 tie-break，与 Python 稳定排序一致）。两个坑：① `xs.sort(key=f)` 没有 reverse 实参，而运行时签名恒有第三个参数 → 缺参取到垃圾值，导致原地排序**表现得像被 reverse**；② `sorted` 的关键字按**名字**匹配（key/reverse），不依赖源码顺序。
-26. **`x in list` 静默返回 0 / `bool(x)` 链接失败**（`4d4c18f4`）、**`print(sep=,end=)` 被当普通实参打印**（`121834e3`）：均已修。`in` 对数组做线性扫描（字符串元素按内容比较，元素类型由编译器传入）；`bool` 容器看长度、数值/字符串看非零非空；`print` 的 `sep` 替换默认空格、显式 `end` 抑制 println 系列自带换行（终止符单独发射）。
-27. **`min(xs, key=f)` 返回函数指针**（`cb9ba317`）：被既有的「min of TWO values」2 参分支吞掉 → 把 key 可调用当**值**比较。现 `key=` 关键字改走可迭代形式（线性扫描、键每元素只算一次、并列取第一个）。同批修复一处**被先前编辑弄乱的代码**：map/filter 的守卫被 min/max 的守卫覆盖，导致单参 `min(xs)` 在 `args[1]` 上 panic、且 map/filter 裸奔。
-28. **`dict.setdefault` / `list.extend` 链接失败**（`90f0fb53`）：已实现（setdefault 用存在性判断而非"值为 0"；extend 返回可能移动的句柄，语句形态回写接收者）。
-   附带记录的**既有折叠坑**：`len(字面量尺寸数组)` 是编译期常量 → `xs.extend(...)` 之后 `len(xs)` 不会跟着变（元素数据正确）。
-29. **`math` 常量静默为 0 且缺函数**（`f0152f78`）：`math.pi`/`e` 此前只发 warn 然后**当 0 用**（静默错值）；`gcd`/`factorial`/`isqrt` 在 libc 无同名函数 → 链接失败。现补 0 参常量 shim（pi/e/tau/inf/nan）与 `hypot`/`gcd`/`factorial`/`degrees`/`radians`/`isqrt`。
-   经验：**"注册表未命中的模块成员 → 落到同名 libc 函数"是一类危险模式**（签名不匹配 → 崩溃/UB，比链接失败更糟），`time.strftime` 即因此段错误（见 28）。
-30. **`sys.platform` / `os.sep` / `os.linesep` 静默为 0**（`99f389d7`）：三者此前只发 warn 然后当 0 用。现补 0 参 shim（platform 为 `darwin`/`linux`，sep=`"/"`，linesep=`"\n"`）。
-   同批**主动放弃** `sys.argv`：列表能造，但**来自模块成员的 `Vec<str>` 在取下标/迭代时元素类型传不到**（拿到的是句柄与 0），故**不注册**，让使用处 warn 并显式失败，而不是半对半错。其根因（模块成员的容器元素类型未贯穿到下标/for-in）记为待办。
-31. **上述根因已修复 → `sys.argv` 已启用**（`c1e9dc94`）：根因是**模块属性读取**的 `ret=` 映射只认 `f64/str/vec`，`ret=vecstr` 的成员被标成 i64 → 其后所有下标/for-in 丢元素类型（句柄与 0）。现补 `vecstr`/`vecjson`/`vecmatch`。`sys.argv` 由启动构造器捕获，`len()`、下标、迭代**全部返回字符串**。
-32. **`os.listdir` 声明为 `ret=vecstr`**（`25aae397`）：此前 `ret=i64` → 结果不带元素类型，`"name" in os.listdir(...)` 与逐元素字符串比较只能"碰巧"成立（值恰好是 vec 句柄）。现类型正确。用例自造/自删临时文件，不依赖目录内容。
-33. **`strip`/`lstrip`/`rstrip` 的字符集形式**（`b161def8`）：2 参无匹配 → 裸 extern 链接失败。现按**字符集**去掉两端任意字符（`strip("x")` 去任意 x，非子串）。
-   同批**系统审计**了注册表：148 条 `F` + 80 条 `W` 的 `ret=` 与 C 实现返回类型**逐条一致**（0 不匹配、0 条"声明 i64 却返回新分配字符串"），确认 `os.listdir` 那类元素类型丢失**不再存在于别处**。
-34. **`str.swapcase` 与 7 个 `is*` 判定被静默打错/落到 libc**（`d8a76934`，loop 子代理落地、我方复核）：`swapcase` 被方法表路由到**大写**函数（`"aBc"`→`ABC`）；`isalnum`/`isspace`/`isnumeric`/… 未注册 → 落到**同名 libc ctype 函数**（签名 `is*(int)` 不匹配）→ **静默返回 0**（同一危险模式，见 28）。补 `str_swapcase` + 7 个判定 + `removeprefix`/`removesuffix`。
-35. **`math` libm 常用函数补齐**（`78c96a2e`，同批）：`log2/exp2/expm1/log1p/cbrt/atan/asin/acos/sinh/cosh/tanh/asinh/acosh/atanh/gamma/erf/erfc/fmod/remainder/copysign/nextafter/ldexp/isinf`（`isinf` 是 libc 宏、无符号；`ldexp` 第二参为 i64）。
-36. **`strip`/`lstrip`/`rstrip` 字符集形式**（`b161def8`）与 **`hex`/`oct`/`bin`/`reversed`**（`59ab7a3b`）：前者 2 参无匹配 → 裸 extern；后者四者在 libc 也无同名符号（`bin`/`hex`/`oct`）。`hex(-255)` 按 Python 输出 `-0xff`。
-   ⚠️ ~~**待查**：`time.strftime`~~ → **已定位并修复**（`12dbcfce`）：模块级 `time.strftime` 未入注册表 → 落到 **libc 的 `strftime`**（签名完全不同：`char*, size_t, char*, struct tm*`）→ 格式串被当指针解引用 → **SIGSEGV**（先前以为是挂起）。现补 `py_time_strftime`（复用 `py_dt_now`/`py_dt_strftime`）与 `time.localtime` 别名。
-34. **`str.swapcase` 错值 + `str.is*` 谓词族静默 0**（本批）：① `swapcase` 被路由到
-   `host_str_to_uppercase` → `"aBc".swapcase()` 静默返回 `"ABC"`（应为 `"AbC"`）；
-   ② `isalnum`/`isspace`/`isnumeric`/`isdecimal`/`isascii`/`isprintable`/`istitle`
-   未入方法表 → 落到**同名 libc ctype 函数**（`isalnum(int)`，签名与字符串完全不符）→
-   静默返回 0，而非链接失败 —— 与 `time.strftime` 同一类危险模式（roadmap §29）。
-   现补真 `str_swapcase` 与 7 个谓词 + `removeprefix`/`removesuffix`（3.9+，此前裸 extern 链接失败）。
-   谓词为 **ASCII 语义**（`é.isalpha()` 为 0，Python 为 True）—— `isprintable` 对 ≥0x80
-   字节按可打印处理以贴近 CPython；精确 Unicode 分类属已知限界。
-   ⚠️ **构建配方纠正**：`tokio_runtime.o` = `ld -r tokio_runtime.c + tokio_runtime_stub.c`
-   （**不含** `py_additions.c`）；`py_additions.c` 归 `zeta_runtime_c.o`。把 py_additions
-   并进 tokio_runtime.o 会与 zeta_runtime_c.o 冲突 **166 个 duplicate symbol**（validate.md §4 已更正）。
-35. **math 常见 libm 函数补齐**（本批）：`log2`/`exp2`/`expm1`/`log1p`/`cbrt`/`atan`/`asin`/
-   `acos`/`sinh`/`cosh`/`tanh`/`asinh`/`acosh`/`atanh`/`gamma`(tgamma)/`erf`/`erfc`/`fmod`/
-   `remainder`/`copysign`/`nextafter`/`ldexp`/`isinf` 此前未入注册表 → 按名解析 → 链接失败
-   （fail-loud，不可用，非静默错值）。现补 `tokio_runtime_stub.c` 的 `py_math_*` 包装 +
-   registry 条目（C 一行 + 纯数据）。注意 **libc 无 `isinf` 符号**（它是宏），必须显式包一层；
-   `math.ldexp(x, i)` 第二参是 i64（int），不是 f64。
-   ⚠️ 运行时陷阱：`zetac` 以**相对路径**查 `tokio_runtime.o`/`zeta_runtime_c.o`，
-   故调用编译器必须在仓库根目录（否则对象找不到 → 误报 undefined `println_f64` 等）。
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
