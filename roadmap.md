@@ -358,6 +358,7 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
 **已知冲突（设计取舍，未修）**：Python 的整除 `//` 在本方言里是**行注释**，故 `a // b` 会静默丢掉除数。要支持需在预处理器/解析器区分「表达式中的 `//`」与「行尾注释」，两者字面完全同形，属设计取舍。
 
 22. **列表方法 `index`/`count`/`insert`/`remove`/`pop`/`sort`/`reverse` 与字典 `update`/`pop`/`clear` 全部链接失败**（`7c1f7bb7`，由 loop 子代理落地、我方独立复核）：根因是**数组接收者落进 opaque-fallback**——`index`/`count` 被 `str_method_symbol` 当字符串方法路由到 `host_str_find`/`host_str_count`，其余落到裸 extern。现为编译器已知的 `Array`/`DynamicArray` 接收者加专用分发（元素类型感知：str 按内容 `str_eq`、f64 解位模式按值、i64 直接比较），`map` 接收者补 `update`/`pop`/`pop(k,default)`/`clear`。列表方法原地改写句柄，`insert` 扩容返回新句柄 → 语句形态自动回写接收者变量。语义缺口（故意未做）：`d.pop(k)` 缺键时 Python 抛 KeyError，此处返回 0；`index` 未命中返回 -1（均为 V1 限界，非静默错值）。python_style **94/94**（新增 t91/t92/t93）、官方 194/194、语料 38/38。
+23. **`repr`/`set()`/`split(sep,maxsplit)`**（`4cba298c`）、**`round(x,n)` 浮点实参被强转 i64 / `enumerate(xs,start)` 把 start 当数组下标致循环体从不执行 / `for k in d:` 静默 0 次**（`78c9b302`）：均已修。`round(x)` 用 `nearbyint`（银行家舍入，与 Python 一致），`round(x,n)` 按真实 double 在第 n 位小数取整；`for k in d` 改为迭代 `map_keys(d)`（键还原为原串）。
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
