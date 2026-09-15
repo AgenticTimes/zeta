@@ -385,6 +385,14 @@ slice/len 的 header 读取加了合理性校验，非 Vec 句柄不再触发巨
    ⚠️ **构建配方纠正**：`tokio_runtime.o` = `ld -r tokio_runtime.c + tokio_runtime_stub.c`
    （**不含** `py_additions.c`）；`py_additions.c` 归 `zeta_runtime_c.o`。把 py_additions
    并进 tokio_runtime.o 会与 zeta_runtime_c.o 冲突 **166 个 duplicate symbol**（validate.md §4 已更正）。
+35. **math 常见 libm 函数补齐**（本批）：`log2`/`exp2`/`expm1`/`log1p`/`cbrt`/`atan`/`asin`/
+   `acos`/`sinh`/`cosh`/`tanh`/`asinh`/`acosh`/`atanh`/`gamma`(tgamma)/`erf`/`erfc`/`fmod`/
+   `remainder`/`copysign`/`nextafter`/`ldexp`/`isinf` 此前未入注册表 → 按名解析 → 链接失败
+   （fail-loud，不可用，非静默错值）。现补 `tokio_runtime_stub.c` 的 `py_math_*` 包装 +
+   registry 条目（C 一行 + 纯数据）。注意 **libc 无 `isinf` 符号**（它是宏），必须显式包一层；
+   `math.ldexp(x, i)` 第二参是 i64（int），不是 f64。
+   ⚠️ 运行时陷阱：`zetac` 以**相对路径**查 `tokio_runtime.o`/`zeta_runtime_c.o`，
+   故调用编译器必须在仓库根目录（否则对象找不到 → 误报 undefined `println_f64` 等）。
 
 **仍未做（本轮新发现，按优先级）**
 - [x] **P1 关键字实参按名绑定**：解析保留实参名（`__kwarg__` 标记），调用点按形参名重排；
