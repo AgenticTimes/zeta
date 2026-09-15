@@ -519,27 +519,47 @@ parse **38/38**；**link 34/38**（旧的「7 个通过」口径已过时，见�
 → 4 个里有 **3 个**被同一个编译器缺陷卡住，其中 `指数ETF动量轮动.py` **零外部符号**，
 修掉该缺陷即应直接可链接。
 
-**缺陷：函数体降级失败导致 def 被静默丢弃（fail-open）**
-`大市值价值优化.py` 共 7 个顶层 `def`，目标文件里只有 **4 个 T 符号**
-（`initialize`/`before_market_open`/`__closure_0`/`main`）：`my_trade` 变成 `U`（被
-`initialize` 引用但无定义），其后的 `check_limit_up`/`check_stocks`/`filter_*` **连引用都
-没有**——说明降级在某处中断后，该函数其余语句与其后的顶层项一起被丢掉，且**不报错**。
-逐段二分（把 `my_trade` 体 62–93 行换成不同片段后数 T 符号）：
+**缺陷 A：某个 def 之后的所有顶层定义被静默丢弃（触发条件已压缩，根因未定）**
+`大市值价值优化.py` 共 7 个顶层 `def`，目标文件里只有 **4 个 T 符号**：`my_trade` 变成 `U`
+（被 `initialize` 引用但无定义），其后的 `check_limit_up`/`check_stocks`/`filter_*` **连引用都没有**
+——说明在 `my_trade` 处中断后，后续顶层项整体未被处理，且**全程不报错**。
 
-| my_trade 体替换成 | `my_trade` 是否被发射 |
-|---|---|
-| `pass` | ✅ 发射 |
-| `log.info("…[%s]" % (stock))` | ✅ |
-| `b = "x[%s]" % (a)` | ✅ |
-| `for stock in context.portfolio.positions: if stock in stocks: continue` | ✅ |
-| `if current_data[stock].last_price < current_data[stock].high_limit: pass` | ❌ 被丢弃 |
-| `if order_target_value(stock, value): if len(...) == g.n: break` | ❌ 被丢弃 |
+可重复的定位方法：把除目标函数外的所有顶层 def 体替换成 `    pass`，再逐个还原体——
+`restore_my_trade` → 只发射 **2/7**（`my_trade` 自身变 `U`，其后全丢）；
+`restore_check_stocks` → **4/7**（`check_stocks` 变 `U`，其后全丢）；其余 5 个还原后仍 7/7。
+即「**某个函数体会触发一次静默的线性中断**」，中断点之后的一切都被丢弃。
 
-即触发形状是「**字典下标取到的句柄再取字段、参与比较**」这类（`current_data[stock].last_price`）
-——`current_data` 是平台返回的句柄、`[stock]` 又是一个下标，二者叠加后类型无法定型。
-我试着把它缩成独立小文件复现（`get_data()[stock].last_price < get_data()[stock].high_limit`）
-**没能复现**，所以真触发点尚未定位到最小形态；下批应先做「降级失败必须 fail-loud +
-不丢弃后续顶层项」，再定位具体形状。
+已排除的假设：
+- **不是体积/条数限制**——给体加 10 条重复语句或 10 个不同局部变量，均正常发射。
+- 不是单一语句形状：`my_trade` 体分两半各自都正常，**合起来**才中断。
+- 体内部定位：三组语句里只有删掉 s3（`if current_data[stock].last_price <
+  current_data[stock].high_limit: … else: …`，文件 76–80 行）才恢复发射。但 s3 **单独**当体 ✅、
+  s3 + `x = len(context.portfolio.positions)` ✅、s3 + `value = … / (…)` ✅，而
+  **s3 后面再跟任意一条块语句**就中断：`s3 + if …: pass` ❌、`s3 + for …: continue` ❌。
+- 脱离语料上下文后**最小独立复现未成功**，根因**尚未定位**（所以下批要先加「降级失败必须
+  fail-loud」，把静默丢弃变成指名报错，再顺着报错定位）。
+
+⚠️ 更正：上一版记录（commit `b08d129c`）曾断言「函数体降级失败导致 def 被静默丢弃」——
+那是**未经证实的推断**。实测把 `my_trade` 体换成 `pass` 后该 def 确实恢复发射，但**其后的顶层 def
+仍然全丢**，所以「体降级失败」解释不了尾部的丢弃；该断言已作废。
+
+**缺陷 B（顺带发现，可脱离语料复现）：缩进跳跃 + 块语句导致语句顺序错乱**
+
+```
+def f():            # 函数体首行 8 空格（非常规缩进）
+        if 1 < 2:
+            print(1)
+        else:
+            print(2)
+    if 2 > 1:       # 缩回 4 空格后再次起块
+        pass
+    print(3)
+```
+
+编译运行输出 **`3` 然后 `1`**（应为 `1` 然后 `3`）——语句被重排；同内容改成规整缩进
+（4/8 一致）则输出正确。两种情况都会打 `W0003 Typecheck failed (non-fatal)`。
+疑似 PY-1 缩进预处理在「块内缩进 8 → 降到 4 → 再起块」时的块闭合/排序处理有误，
+与缺陷 A 的中断可能同源，待一并查。
 
 **缺陷：`log.*` 平台日志面**（`set_level`/`debug`/`info`，3 个文件命中）——按下面的
 「接入不迁移」层处理（runtime logger shim），与本条编译器缺陷相互独立。
