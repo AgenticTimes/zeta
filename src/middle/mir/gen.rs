@@ -2504,8 +2504,16 @@ impl MirGen {
             AstNode::DictLit { entries } => {
                 let map_id = id;
                 self.stmts.push(MirStmt::MapNew { dest: map_id });
+                let mut key_ty = Type::I64;
+                let mut first_key = true;
                 for (k, v) in entries {
                     let kid0 = self.lower_expr(k);
+                    if first_key {
+                        // Remember whether keys are strings: the map type carries
+                        // the key kind so `d.keys()` is typed Vec<str>.
+                        key_ty = self.type_map.get(&kid0).cloned().unwrap_or(Type::I64);
+                        first_key = false;
+                    }
                     let kid = self.lower_map_key(kid0);
                     let vid = self.lower_expr(v);
                     self.stmts.push(MirStmt::DictInsert {
@@ -2514,9 +2522,14 @@ impl MirGen {
                         val_id: vid,
                     });
                 }
+                let key_ty = if matches!(key_ty, Type::Str) {
+                    Type::Str
+                } else {
+                    Type::I64
+                };
                 self.exprs.insert(map_id, MirExpr::Var(map_id));
                 self.type_map
-                    .insert(map_id, Type::Named("map".to_string(), vec![]));
+                    .insert(map_id, Type::Named("map".to_string(), vec![key_ty]));
                 return map_id;
             }
             AstNode::Range {
@@ -2619,8 +2632,11 @@ impl MirGen {
                                 type_args: vec![],
                             });
                             self.exprs.insert(id, MirExpr::Var(id));
-                            self.type_map
-                                .insert(id, Type::Named("map".to_string(), vec![]));
+                            // String-keyed Counter → keys() is Vec<str>.
+                            self.type_map.insert(
+                                id,
+                                Type::Named("map".to_string(), vec![Type::Str]),
+                            );
                             return id;
                         }
                     }
@@ -4323,8 +4339,18 @@ impl MirGen {
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
+                        // A string-keyed map (its type carries the key kind)
+                        // yields Vec<str> for keys() — map_keys recovers the
+                        // original text from the hash side table.
+                        let key_is_str = method == "keys"
+                            && matches!(
+                                receiver_ty.as_ref(),
+                                Some(Type::Named(_, args))
+                                    if matches!(args.first(), Some(Type::Str))
+                            );
+                        let elem_ty = if key_is_str { Type::Str } else { Type::I64 };
                         self.type_map
-                            .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                            .insert(id, Type::DynamicArray(Box::new(elem_ty)));
                         return id;
                     }
                 }

@@ -1,0 +1,16 @@
+// PY-A: 字符串键 dict 的 keys() 返回原串（键类型随 map 的静态键类型走；int 键字典不受影响）
+//   断言与迭代顺序无关：字符串键能与字面量比较（说明是 str），int 键能参与算术。
+// expect: 2
+// expect: 3
+d = {"a": 1, "b": 2}
+n = 0
+for k in d.keys():
+    if k == "a" or k == "b":
+        n = n + 1
+print(n)
+
+e = {1: 10, 2: 20}
+m = 0
+for k in e.keys():
+    m = m + k
+print(m)
