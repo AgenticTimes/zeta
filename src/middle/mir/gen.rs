@@ -4562,6 +4562,40 @@ impl MirGen {
                 // PY-A: string methods — dispatch to host_str_* runtime by
                 // receiver type (Python s.upper()/s.contains(x)/... )
                 if receiver_ty.as_ref().map_or(false, |t| matches!(t, Type::Str)) {
+                    // ljust/rjust/center take width[, fillchar] — Python's
+                    // common form has ONE argument after the receiver, so the
+                    // 3-arity table entry alone never matched.
+                    if let Some(fname) = match (method.as_str(), arg_ids.len()) {
+                        ("ljust", 2) => Some("host_str_ljust2"),
+                        ("ljust", 3) => Some("host_str_ljust"),
+                        ("rjust", 2) => Some("host_str_rjust2"),
+                        ("rjust", 3) => Some("host_str_rjust"),
+                        ("center", 2) => Some("host_str_center2"),
+                        ("center", 3) => Some("host_str_center"),
+                        _ => None,
+                    } {
+                        self.stmts.push(MirStmt::Call {
+                            func: fname.to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
+                    // `"{} and {}".format(a, b)` on a LITERAL template: rewrite
+                    // to an f-string so the existing to_string_* dispatch
+                    // formats each argument by its own type.
+                    if method == "format" {
+                        if let Some(recv) = receiver {
+                            if let AstNode::StringLit(tmpl) = &**recv {
+                                if let Some(parts) = format_template_parts(tmpl, args) {
+                                    return self.lower_expr(&AstNode::FString(parts));
+                                }
+                            }
+                        }
+                    }
                     let m = str_method_symbol(method.as_str());
                     if let Some((func, argc, ret)) = m {
                         if ret == "split" {
@@ -6637,8 +6671,61 @@ impl Default for MirGen {
 /// PY-A: Python string method -> (runtime symbol, arity, result kind).
 /// Shared by the typed (Str receiver) path and the untyped-receiver fallback,
 /// so the two cannot disagree.
-fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)> {
-    match method {
+/// PY-A: split a `"{} and {}"` format template into FString parts. Returns
+/// None for templates this V1 cannot rewrite (format specs like `{0:>5}`,
+/// conversion flags, named fields, or a missing argument), so the caller falls
+/// through and the use fails loudly at link time rather than mis-formatting.
+fn format_template_parts(tmpl: &str, args: &[AstNode]) -> Option<Vec<AstNode>> {
+    let mut parts: Vec<AstNode> = Vec::new();
+    let mut lit = String::new();
+    let mut auto = 0usize;
+    let mut i = 0usize;
+    while i < tmpl.len() {
+        let c = tmpl[i..].chars().next()?;
+        if c == '{' {
+            if tmpl[i + 1..].starts_with('{') {
+                lit.push('{');
+                i += 2;
+                continue;
+            }
+            let rest = &tmpl[i + 1..];
+            let close = rest.find('}')?;
+            let inner = &rest[..close];
+            if inner.contains(':') || inner.contains('!') {
+                return None;
+            }
+            let idx = if inner.is_empty() {
+                let k = auto;
+                auto += 1;
+                k
+            } else {
+                inner.parse::<usize>().ok()?
+            };
+            let arg = args.get(idx)?;
+            if !lit.is_empty() {
+                parts.push(AstNode::StringLit(std::mem::take(&mut lit)));
+            }
+            parts.push(arg.clone());
+            i = i + 1 + close + 1;
+        } else if c == '}' {
+            if tmpl[i + 1..].starts_with('}') {
+                lit.push('}');
+                i += 2;
+                continue;
+            }
+            return None;
+        } else {
+            lit.push(c);
+            i += c.len_utf8();
+        }
+    }
+    if !lit.is_empty() {
+        parts.push(AstNode::StringLit(lit));
+    }
+    Some(parts)
+}
+
+fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)> {    match method {
         "upper" => Some(("host_str_to_uppercase", 1, "str")),
         "lower" => Some(("host_str_to_lowercase", 1, "str")),
         "capitalize" => Some(("host_str_capitalize", 1, "str")),

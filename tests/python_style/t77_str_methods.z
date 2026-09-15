@@ -1,0 +1,18 @@
+// PY-A: 字符串方法补齐 —— ljust/rjust/center（含 fillchar）+ 字面量模板 .format()
+//   （ljust/rjust 曾只在 3 元数表里 → 2 参调用落空；fill 是字符串句柄而非字节）
+// expect: [ab   ]
+// expect: [   ab]
+// expect: [  ab  ]
+// expect: [ab---]
+// expect: [**ab**]
+// expect: [1 and x]
+// expect: [{9}]
+// expect: [b-a]
+print("[" + "ab".ljust(5) + "]")
+print("[" + "ab".rjust(5) + "]")
+print("[" + "ab".center(6) + "]")
+print("[" + "ab".ljust(5, "-") + "]")
+print("[" + "ab".center(6, "*") + "]")
+print("[" + "{} and {}".format(1, "x") + "]")
+print("[" + "{{{}}}".format(9) + "]")
+print("[" + "{1}-{0}".format("a", "b") + "]")

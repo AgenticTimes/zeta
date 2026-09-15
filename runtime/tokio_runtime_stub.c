@@ -1931,6 +1931,29 @@ int64_t host_str_islower(int64_t s) { return str_is_lower(s); }
 int64_t host_str_join(int64_t sep, int64_t vec) { return str_join(sep, vec); }
 int64_t host_str_ljust(int64_t s, int64_t w, int64_t f) { return str_ljust(s, w, f); }
 int64_t host_str_rjust(int64_t s, int64_t w, int64_t f) { return str_rjust(s, w, f); }
+// Python's ljust(width[, fillchar]) — the 2-argument form is the common one.
+// NOTE: `fill` is a STRING handle (str_ljust dereferences it), so the default
+// must be a one-char string, not the byte value ' '.
+int64_t host_str_ljust2(int64_t s, int64_t w) { return str_ljust(s, w, (int64_t)" "); }
+int64_t host_str_rjust2(int64_t s, int64_t w) { return str_rjust(s, w, (int64_t)" "); }
+
+static int64_t str_center(int64_t s, int64_t width, int64_t fill) {
+    const char* p = s ? (const char*)s : "";
+    char fc = fill ? *(const char*)fill : ' ';
+    size_t n = strlen(p);
+    if (width <= (int64_t)n) return (int64_t)zt_strdup(p);
+    size_t total = (size_t)width;
+    size_t left = (total - n) / 2;
+    size_t right = total - n - left;
+    char* out = (char*)GC_malloc(total + 1);
+    memset(out, fc, left);
+    memcpy(out + left, p, n);
+    memset(out + left + n, fc, right);
+    out[total] = 0;
+    return (int64_t)out;
+}
+int64_t host_str_center(int64_t s, int64_t w, int64_t f) { return str_center(s, w, f); }
+int64_t host_str_center2(int64_t s, int64_t w) { return str_center(s, w, (int64_t)" "); }
 
 // ---- Python string indexing / slicing (s[0], s[-1], s[1:], s[:-1]) ----
 int64_t str_get(int64_t s, int64_t i) {
