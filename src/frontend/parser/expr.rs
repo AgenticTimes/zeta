@@ -1465,13 +1465,29 @@ pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
             // Omitted end uses a sentinel that cannot collide with a real
             // index: `s[:-1]` folds to Lit(-1), so -1 could not distinguish
             // "to the end" from "exclude the last character".
-            let end = slice_args.1.unwrap_or(AstNode::Lit(i64::MIN));
-            expr = AstNode::Call {
-                receiver: Some(Box::new(expr)),
-                method: "__slice__".to_string(),
-                args: vec![slice_args.0, end],
-                type_args: vec![],
-                structural: false,
+            let end = slice_args.1.clone().unwrap_or(AstNode::Lit(i64::MIN));
+            expr = if let Some(step) = slice_args.2 {
+                // `s[start:end:step]` — the sentinel also marks an omitted
+                // start, because a negative step must begin at the end.
+                AstNode::Call {
+                    receiver: Some(Box::new(expr)),
+                    method: "__slice_step__".to_string(),
+                    args: vec![
+                        slice_args.0.unwrap_or(AstNode::Lit(i64::MIN)),
+                        end,
+                        step,
+                    ],
+                    type_args: vec![],
+                    structural: false,
+                }
+            } else {
+                AstNode::Call {
+                    receiver: Some(Box::new(expr)),
+                    method: "__slice__".to_string(),
+                    args: vec![slice_args.0.unwrap_or(AstNode::Lit(0)), end],
+                    type_args: vec![],
+                    structural: false,
+                }
             };
             input = i;
         } else if let Ok((i, args)) = delimited(
@@ -1697,26 +1713,38 @@ fn take_ident(input: &str) -> Option<(&str, &str)> {
 
 /// PY-A: `[start:end]` slice subscript — returns (start, Some(end)); end
 /// may be omitted (`[start:]` → None) and start may be omitted (`[:end]` → 0).
-fn parse_subscript_slice(input: &str) -> IResult<&str, (AstNode, Option<AstNode>)> {
+fn parse_subscript_slice(
+    input: &str,
+) -> IResult<&str, (Option<AstNode>, Option<AstNode>, Option<AstNode>)> {
     let (input, _) = ws(tag("[")).parse(input)?;
     // optional start
     let (input, start) = if let Ok((rest, _)) = ws(tag(":")).parse(input) {
-        let rest = rest;
-        (rest, AstNode::Lit(0))
-    } else {
-        let (rest, e) = ws(parse_expr).parse(input)?;
-        let (rest, _colon) = ws(tag(":")).parse(rest)?;
-        (rest, e)
-    };
-    // optional end (default → Lit(-1) handled by caller as "to the end")
-    let (input, end) = if let Ok((rest, _)) = ws(tag("]")).parse(input) {
         (rest, None)
     } else {
         let (rest, e) = ws(parse_expr).parse(input)?;
-        let (rest, _) = ws(tag("]")).parse(rest)?;
+        let (rest, _colon) = ws(tag(":")).parse(rest)?;
         (rest, Some(e))
     };
-    Ok((input, (start, end)))
+    // optional end
+    let (input, end) = if let Ok((rest, e)) = ws(parse_expr).parse(input) {
+        (rest, Some(e))
+    } else {
+        (input, None)
+    };
+    // optional step — `s[::2]`, `s[::-1]`, `s[1:8:2]`. A 3-part slice used to
+    // fail to parse here, which aborted the whole statement stream.
+    let (input, step) = if let Ok((rest, _)) = ws(tag(":")).parse(input) {
+        if let Ok((r, _)) = ws(tag("]")).parse(rest) {
+            (r, Some(AstNode::Lit(1)))
+        } else {
+            let (r, e) = ws(parse_expr).parse(rest)?;
+            (r, Some(e))
+        }
+    } else {
+        (input, None)
+    };
+    let (input, _) = ws(tag("]")).parse(input)?;
+    Ok((input, (start, end, step)))
 }
 
 // Parse comparison (==, !=, <, >, <=, >=, is, in) with Python-style chaining:

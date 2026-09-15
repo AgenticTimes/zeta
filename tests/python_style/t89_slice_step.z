@@ -1,0 +1,17 @@
+// PY-A: 步长切片 `s[start:end:step]` —— `s[::2]` / `s[::-1]` / `s[4:1:-1]`
+//   此前 3 段切片**解析失败**，会静默丢弃其后所有语句（fail-open）
+// expect: bcd
+// expect: ace
+// expect: fedcba
+// expect: edc
+// expect: [1, 3]
+// expect: [4, 3, 2, 1]
+s = "abcdef"
+print(s[1:4])
+print(s[::2])
+print(s[::-1])
+print(s[4:1:-1])
+
+a = [1, 2, 3, 4]
+print(a[::2])
+print(a[::-1])

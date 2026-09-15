@@ -4629,6 +4629,35 @@ impl MirGen {
 
                 // PY-A: `base[start:end]` slicing → runtime zeta_slice_vec,
                 // returning a Vec-layout handle (len()/indexing work on it).
+                // PY-A: `s[start:end:step]` strided slices — `s[::-1]`,
+                // `a[::2]`. A 3-part slice previously failed to parse, which
+                // silently dropped the rest of the statement stream.
+                if method == "__slice_step__" && arg_ids.len() == 4 {
+                    let (func, ty) = match receiver_ty.as_ref() {
+                        Some(Type::Str) => ("str_slice_step", Type::Str),
+                        other => {
+                            let elem = match other {
+                                Some(Type::Array(e, _)) | Some(Type::DynamicArray(e)) => {
+                                    (**e).clone()
+                                }
+                                _ => Type::I64,
+                            };
+                            (
+                                "zeta_slice_vec_step",
+                                Type::DynamicArray(Box::new(elem)),
+                            )
+                        }
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: func.to_string(),
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, ty);
+                    return id;
+                }
                 if method == "__slice__" && arg_ids.len() == 3 {
                     // Python string slicing: `s[1:]` / `s[:3]` / `s[:-1]`.
                     // The omitted-end sentinel is `Lit(-1)`; an explicit

@@ -483,6 +483,78 @@ int64_t py_map_items(int64_t map) {
     return (int64_t)(base + 2);
 }
 
+// ── PY-A: strided slices `s[::-1]`, `a[::2]` ─────────────────────────
+static int64_t zt_vec_len(int64_t v);
+// INT64_MIN marks an omitted bound; with a negative step an omitted start
+// means "from the end". Step 0 yields an empty result.
+int64_t str_slice_step(int64_t sh, int64_t start, int64_t end, int64_t step) {
+    const char* p = sh ? (const char*)sh : "";
+    int64_t n = (int64_t)strlen(p);
+    if (step == 0) return (int64_t)GC_strdup("");
+    int64_t st, en;
+    if (start == INT64_MIN) {
+        st = (step > 0) ? 0 : n - 1;
+    } else {
+        st = start;
+        if (st < 0) st += n;
+    }
+    if (end == INT64_MIN) {
+        en = (step > 0) ? n : -1;
+    } else {
+        en = end;
+        if (en < 0) en += n;
+    }
+    char* out = (char*)GC_malloc((size_t)n + 1);
+    size_t k = 0;
+    if (step > 0) {
+        if (st < 0) st = 0;
+        if (en > n) en = n;
+        for (int64_t i = st; i < en; i += step) out[k++] = p[i];
+    } else {
+        if (st > n - 1) st = n - 1;
+        if (en < -1) en = -1;
+        for (int64_t i = st; i > en; i += step) {
+            if (i >= 0 && i < n) out[k++] = p[i];
+        }
+    }
+    out[k] = 0;
+    return (int64_t)out;
+}
+
+int64_t zeta_slice_vec_step(int64_t vec, int64_t start, int64_t end, int64_t step) {
+    int64_t n = zt_vec_len(vec);
+    int64_t cap0 = n > 0 ? n : 1;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap0 * 8);
+    base[0] = cap0;
+    base[1] = 0;
+    if (step == 0) return (int64_t)(base + 2);
+    int64_t st, en;
+    if (start == INT64_MIN) {
+        st = (step > 0) ? 0 : n - 1;
+    } else {
+        st = start;
+        if (st < 0) st += n;
+    }
+    if (end == INT64_MIN) {
+        en = (step > 0) ? n : -1;
+    } else {
+        en = end;
+        if (en < 0) en += n;
+    }
+    if (step > 0) {
+        if (st < 0) st = 0;
+        if (en > n) en = n;
+        for (int64_t i = st; i < en; i += step) base[2 + base[1]++] = ((int64_t*)vec)[i];
+    } else {
+        if (st > n - 1) st = n - 1;
+        if (en < -1) en = -1;
+        for (int64_t i = st; i > en; i += step) {
+            if (i >= 0 && i < n) base[2 + base[1]++] = ((int64_t*)vec)[i];
+        }
+    }
+    return (int64_t)(base + 2);
+}
+
 // ── PY-A: string/list operators Python adds on top of arithmetic ─────
 // `"-" * 40`, `[0] * 3`, `[1] + [2]` — without these the numeric operators
 // ran on the handles and produced garbage values.
