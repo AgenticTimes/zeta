@@ -1,0 +1,20 @@
+// PY-A: Python 风格 `raise ValueError("boom")`（无括号形式）
+//   此前被解析成裸 `raise` 变量 → 异常从不抛出，且其后语句被丢弃（fail-open）
+// expect: typed
+// expect: after
+// expect: as-e
+// expect: after
+def boom() -> i64:
+    raise ValueError("boom")
+
+try:
+    boom()
+except Exception:
+    print("typed")
+print("after")
+
+try:
+    boom()
+except Exception as e:
+    print("as-e")
+print("after")

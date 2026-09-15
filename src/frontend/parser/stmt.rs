@@ -1113,9 +1113,26 @@ fn parse_raise(input: &str) -> IResult<&str, AstNode> {
         peek(none_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")),
     ))
     .parse(input)?;
-    let (input, _) = ws(tag("(")).parse(input)?;
-    let (input, arg) = opt(ws(parse_full_expr)).parse(input)?;
-    let (input, _) = ws(tag(")")).parse(input)?;
+    // Two forms: Zeta's `raise(expr)` and Python's bare `raise Expr`
+    // (e.g. `raise ValueError("boom")`). The bare form previously fell through
+    // to a stray `raise` variable, so the exception was never raised and the
+    // statements after it were dropped.
+    let same_line = {
+        let t = input.trim_start_matches(|c| c == ' ' || c == '\t');
+        !t.is_empty() && !t.starts_with('\n') && !t.starts_with('\r')
+    };
+    let (input, arg) = match ws(tag::<_, _, NomError<&str>>("(")).parse(input) {
+        Ok((rest, _)) => {
+            let (rest, a) = opt(ws(parse_full_expr)).parse(rest)?;
+            let (rest, _) = ws(tag(")")).parse(rest)?;
+            (rest, a.unwrap_or(AstNode::Lit(0)))
+        }
+        Err(_) if same_line => match ws(parse_full_expr).parse(input) {
+            Ok((rest, e)) => (rest, e),
+            Err(_) => (input, AstNode::Lit(0)),
+        },
+        Err(_) => (input, AstNode::Lit(0)),
+    };
     let (input, _) = opt(ws(tag(";"))).parse(input)?;
     Ok((
         input,
@@ -1123,7 +1140,7 @@ fn parse_raise(input: &str) -> IResult<&str, AstNode> {
             expr: Box::new(AstNode::Call {
                 receiver: None,
                 method: "zeta_raise".to_string(),
-                args: vec![arg.unwrap_or(AstNode::Lit(0))],
+                args: vec![arg],
                 type_args: vec![],
                 structural: false,
             }),
