@@ -664,8 +664,19 @@ fn parse_python_import(input: &str) -> IResult<&str, AstNode> {
         // optional `as alias`
         let trimmed = after_name.trim_start();
         let (after_alias, alias) = if let Some(t) = trimmed.strip_prefix("as") {
-            if t.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
-                let (r, a) = ws(parse_ident).parse(t).map_err(|_| {
+            // `ws(parse_dotted_name)` above already consumed the whitespace
+            // BEFORE `as`, so `t` still carries the space that must separate
+            // `as` from the alias (`import pandas as pd` ⇒ t == " pd").
+            // Testing `t` itself for an alphanumeric start therefore always
+            // failed, the alias was skipped, and the parser went on to read
+            // `as` as a second module name — leaving "as pd" unconsumed, which
+            // truncated the file at its first line. Trim first, and require the
+            // separating whitespace so `import a asb` is not misread as an alias.
+            let t2 = t.trim_start();
+            if t.len() > t2.len()
+                && t2.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+            {
+                let (r, a) = ws(parse_ident).parse(t2).map_err(|_| {
                     nom::Err::Error(NomError::new(start, nom::error::ErrorKind::Tag))
                 })?;
                 (r, a)

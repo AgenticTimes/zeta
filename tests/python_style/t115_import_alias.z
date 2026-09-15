@@ -1,0 +1,14 @@
+// PY-A: `import X as Y` —— Python 别名导入。
+// 语料里绝大多数文件第 1~2 行就是 `import pandas as pd`；此前解析器把 `as pd`
+// 当成逗号列表里的第二个模块名，于是只吃掉 `import pandas `，把 `as pd` 连同
+// **其后整份文件**留在未解析余量里（CLI 又丢弃 remaining）→ 整个文件从第 1 行
+// 起被静默丢掉，链接出的还是个空 main。
+// 根因：`as` 后的分隔空格没被 trim，`t.starts_with(alnum)` 永假，别名分支被跳过。
+import math as m
+import os.path as p
+
+print(m.pi)
+print(p.basename("/a/b.txt"))
+
+// expect: 3.141593
+// expect: b.txt
