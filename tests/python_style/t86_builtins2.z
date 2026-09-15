@@ -1,0 +1,18 @@
+// PY-A: chr/ord/divmod/dict() —— 此前均为裸 extern（链接失败）
+// expect: A
+// expect: 65
+// expect: 3
+// expect: 1
+// expect: 1
+// expect: 1
+print(chr(65))
+print(ord("A"))
+
+q, r = divmod(7, 2)
+print(q)
+print(r)
+
+d = dict()
+d["x"] = 1
+print(len(d))
+print(d["x"])

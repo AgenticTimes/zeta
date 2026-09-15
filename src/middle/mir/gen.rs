@@ -3663,6 +3663,51 @@ impl MirGen {
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
+                // PY-A: chr(n) / ord(s) / divmod(a, b) / dict() — previously
+                // bare externs (link failure) or missing entirely.
+                if receiver.is_none() && method == "chr" && args.len() == 1 {
+                    let a = self.lower_expr(&args[0]);
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_builtin_chr".to_string(),
+                        args: vec![a],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::Str);
+                    return id;
+                }
+                if receiver.is_none() && method == "ord" && args.len() == 1 {
+                    let a = self.lower_expr(&args[0]);
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_builtin_ord".to_string(),
+                        args: vec![a],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+                // divmod(a, b) → (a / b, a % b) as a tuple, so
+                // `q, r = divmod(a, b)` unpacks via the call-return path.
+                if receiver.is_none() && method == "divmod" && args.len() == 2 {
+                    let q = AstNode::BinaryOp {
+                        op: "/".to_string(),
+                        left: Box::new(args[0].clone()),
+                        right: Box::new(args[1].clone()),
+                    };
+                    let r = AstNode::BinaryOp {
+                        op: "%".to_string(),
+                        left: Box::new(args[0].clone()),
+                        right: Box::new(args[1].clone()),
+                    };
+                    return self.lower_expr(&AstNode::Tuple(vec![q, r]));
+                }
+                // dict() with no arguments is an empty map.
+                if receiver.is_none() && method == "dict" && args.is_empty() {
+                    return self.lower_expr(&AstNode::DictLit { entries: vec![] });
+                }
                 // PY-A: `zip(a, b)` — a Vec of (a[i], b[i]) pairs, so
                 // `for x, y in zip(a, b):` destructures. (Previously a bare
                 // `zip` extern → link failure.)

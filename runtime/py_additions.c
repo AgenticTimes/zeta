@@ -483,6 +483,18 @@ int64_t py_map_items(int64_t map) {
     return (int64_t)(base + 2);
 }
 
+// ── PY-A: chr(n) / ord(s) ────────────────────────────────────────────
+int64_t py_builtin_chr(int64_t n) {
+    char* s = (char*)GC_malloc(2);
+    s[0] = (char)(n & 0xFF);
+    s[1] = 0;
+    return (int64_t)s;
+}
+int64_t py_builtin_ord(int64_t s) {
+    const char* p = s ? (const char*)s : "";
+    return (int64_t)(unsigned char)p[0];
+}
+
 // ── PY-A: max(xs) / min(xs) — the 1-argument form over an i64 array ──
 int64_t py_builtin_max(int64_t vec) {
     int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
