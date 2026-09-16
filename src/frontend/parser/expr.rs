@@ -855,6 +855,17 @@ fn parse_dict_lit(input: &str) -> IResult<&str, AstNode> {
         pair(ws(parse_expr), ws(preceded(tag(":"), ws(parse_expr)))),
     )
     .parse(input)?;
+    // PEP 8 / black style: a trailing comma before the closing brace is normal
+    // Python — `{"a": 1,}` and, more importantly, every multi-line dict. nom's
+    // `separated_list0` rewinds past a final separator that is not followed by
+    // another element, so it must be consumed explicitly. Without this the
+    // `,}` pair failed, the whole statement failed to parse, and the enclosing
+    // block (and everything after it) was silently dropped.
+    let (input, _) = if entries.is_empty() {
+        (input, None)
+    } else {
+        opt(ws(tag(","))).parse(input)?
+    };
     let (input, _) = ws(tag("}")).parse(input)?;
     Ok((input, AstNode::DictLit { entries }))
 }

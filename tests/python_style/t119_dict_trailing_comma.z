@@ -1,0 +1,13 @@
+// PY-A: dict 字面量的尾随逗号 —— PEP 8 / black 风格，跨行 dict 几乎都带。
+// nom 的 `separated_list0` 在「最后的分隔符之后没有元素」时会回退到分隔符之前，
+// 所以 `{"a": 1,}` 里的 `,}` 从来没被消费 → 整个语句解析失败 → 外层块及其后
+// 全部被静默丢弃（wufu_v1/v2 曾因此丢 400+ 行）。
+d = {
+    "holdings_num": 5,
+    "buy_stock_count": 3,
+}
+print(d["holdings_num"])
+print(len(d))
+
+// expect: 5
+// expect: 2
