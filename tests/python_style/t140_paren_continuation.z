@@ -1,0 +1,24 @@
+// PY-A: 括号内续行的缩进在 Python 里没有意义 —— 曾经按缩进触发块提前闭合：
+//   预处理器把 `}` 插在表达式中间（`x = [\n}`），于是 def 在 `[` 那行就被关掉、
+//   其后所有内容被丢弃。命中的真实语料形态是「跨行嵌套列表，续行顶格」。
+// expect: [1, 2, 3]
+// expect: 6
+// expect: 7
+def gather() -> i64:
+    xs = [
+1,
+2,
+3
+        ]
+    print(xs)
+    total = (
+1 + 2 + 3
+    )
+    return total
+
+print(gather())
+
+def after() -> i64:
+    return 7
+
+print(after())

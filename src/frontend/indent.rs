@@ -176,10 +176,17 @@ fn normalize_blocks(lines: &[&str]) -> Result<(Vec<String>, bool), IndentError> 
             continue;
         }
 
+        // A line inside an open bracket is a *continuation*: Python gives its
+        // indentation no meaning, so it must not close blocks. An unindented
+        // continuation line used to trick the dedent pass into emitting `}` in
+        // the middle of the expression — `x = [\n1, 2]` closed the enclosing
+        // `def` right after the `[` line, and everything below it was dropped.
+        let continuation = depth > 0;
+
         // Dedent: emit one `}` per popped level, on its own line before the
         // dedented line (comments/blank lines between are skipped by the
         // parser, so order relative to them is irrelevant).
-        while stack.last().map_or(false, |&top| top > info.indent) {
+        while !continuation && stack.last().map_or(false, |&top| top > info.indent) {
             stack.pop();
             out.push("}".to_string());
             changed = true;
