@@ -1412,6 +1412,18 @@ int64_t order_shares(int64_t a, int64_t b) { return 0; }
 // it. It exists so such source parses and links instead of silently binding to
 // a single-index lookup. To make it fail loudly instead, delete this function:
 // the call then becomes an undefined symbol at link time.
+// PY-A: an opaque "slice object" placeholder for a multi-index subscript's
+// slice element (`df.iloc[:, 0]`). Same platform-shim contract as py_getitem2:
+// locally it carries no real slice, the host may override the symbol. It must
+// NOT be a real Vec slice — the base is an opaque platform object, and reading a
+// Vec header off it (what zeta_slice_vec does) segfaulted for `d[:, 0]`.
+int64_t py_slice_new(int64_t start, int64_t end, int64_t step) {
+    (void)start;
+    (void)end;
+    (void)step;
+    return 0;
+}
+
 int64_t py_getitem2(int64_t base, int64_t i, int64_t j) {
     (void)i;
     (void)j;

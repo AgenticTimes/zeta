@@ -7479,7 +7479,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 if let AstNode::Tuple(items) = &*index {
                     let mut call_args = vec![bid];
                     for item in items {
-                        call_args.push(self.lower_expr(item));
+                        call_args.push(self.lower_multi_index_element(item));
                     }
                     self.stmts.push(MirStmt::Call {
                         func: "py_getitem2".to_string(),
@@ -8005,6 +8005,40 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
             }
         }
         id
+    }
+
+    /// PY-A: lower one element of a comma subscript. A slice element
+    /// (`df.iloc[:, 0]`) must NOT go through the real `zeta_slice_vec` path:
+    /// that interprets the base as a Vec handle, and the base here is an
+    /// opaque platform object (numpy/pandas), so it read a garbage header off
+    /// the handle — `d[:, 0]` on a plain integer base segfaulted. The slice is
+    /// an opaque placeholder, which is all `py_getitem2` needs.
+    fn lower_multi_index_element(&mut self, item: &AstNode) -> u32 {
+        if let AstNode::Call {
+            method, args, ..
+        } = item
+        {
+            if method == "__slice__" || method == "__slice_step__" {
+                let mut ids: Vec<u32> = args.iter().map(|a| self.lower_expr(a)).collect();
+                while ids.len() < 3 {
+                    let filler = self.next_id();
+                    self.exprs.insert(filler, MirExpr::IntLit(0));
+                    self.type_map.insert(filler, Type::I64);
+                    ids.push(filler);
+                }
+                let dest = self.next_id();
+                self.stmts.push(MirStmt::Call {
+                    func: "py_slice_new".to_string(),
+                    args: vec![ids[0], ids[1], ids[2]],
+                    dest,
+                    type_args: vec![],
+                });
+                self.exprs.insert(dest, MirExpr::Var(dest));
+                self.type_map.insert(dest, Type::I64);
+                return dest;
+            }
+        }
+        self.lower_expr(item)
     }
 
     fn next_id(&mut self) -> u32 {

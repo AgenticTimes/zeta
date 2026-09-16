@@ -1486,7 +1486,11 @@ fn parse_primary_atom(input: &str) -> IResult<&str, AstNode> {
 fn parse_multi_index(input: &str) -> IResult<&str, Vec<AstNode>> {
     let (rest, items) = delimited(
         ws(tag("[")),
-        separated_list1(ws(tag(",")), ws(parse_expr)),
+        terminated(
+            separated_list1(ws(tag(",")), ws(parse_multi_index_element)),
+            // Trailing comma: `a[:,]` (all rows, all columns).
+            opt(ws(tag(","))),
+        ),
         ws(tag("]")),
     )
     .parse(input)?;
@@ -1497,6 +1501,84 @@ fn parse_multi_index(input: &str) -> IResult<&str, Vec<AstNode>> {
         )));
     }
     Ok((rest, items))
+}
+
+/// PY-A: one element of a comma subscript. A plain expression, or a slice —
+/// pandas spells “all rows, column 0” as `.iloc[:, 0]` / `.loc[i, :]`, and a
+/// bare `:` is not an expression, so those files failed to parse outright.
+///
+/// A slice element becomes the same shape the single-index slice path builds
+/// (`Call { method: "__slice__" }`) but with a **placeholder receiver**; the
+/// caller binds the real base (see `bind_slice_receiver`).
+fn parse_multi_index_element(input: &str) -> IResult<&str, AstNode> {
+    let slice_call = |start: Option<AstNode>, end: Option<AstNode>, step: Option<AstNode>| {
+        let end = end.unwrap_or(AstNode::Lit(i64::MIN));
+        match step {
+            Some(step) => AstNode::Call {
+                receiver: None,
+                method: "__slice_step__".to_string(),
+                args: vec![start.unwrap_or(AstNode::Lit(i64::MIN)), end, step],
+                type_args: vec![],
+                structural: false,
+            },
+            None => AstNode::Call {
+                receiver: None,
+                method: "__slice__".to_string(),
+                args: vec![start.unwrap_or(AstNode::Lit(0)), end],
+                type_args: vec![],
+                structural: false,
+            },
+        }
+    };
+
+    // Start: `:…` (omitted) or `expr :` (slice) or `expr` (plain element).
+    let (input, start) = if let Ok((rest, _)) = ws(tag(":")).parse(input) {
+        (rest, None)
+    } else {
+        let (rest, e) = ws(parse_expr).parse(input)?;
+        match ws(tag(":")).parse(rest) {
+            Ok((rest2, _)) => (rest2, Some(e)),
+            Err(_) => return Ok((rest, e)),
+        }
+    };
+    // End (optional).
+    let (input, end) = match ws(parse_expr).parse(input) {
+        Ok((rest, e)) => (rest, Some(e)),
+        Err(_) => (input, None),
+    };
+    // Step (optional): `:` or `:expr`.
+    let (input, step) = if let Ok((rest, _)) = ws(tag(":")).parse(input) {
+        match ws(parse_expr).parse(rest) {
+            Ok((r, e)) => (r, Some(e)),
+            Err(_) => (rest, Some(AstNode::Lit(1))),
+        }
+    } else {
+        (input, None)
+    };
+    Ok((input, slice_call(start, end, step)))
+}
+
+/// A slice element of a comma subscript is a view of the subscript's base, so
+/// bind the base that `parse_multi_index_element` left as `receiver: None`.
+/// Without this the slice lowered as a free `__slice__` call (an undefined
+/// symbol) instead of the base's slice.
+fn bind_slice_receiver(elem: AstNode, base: &AstNode) -> AstNode {
+    match elem {
+        AstNode::Call {
+            receiver: None,
+            method,
+            args,
+            type_args,
+            structural,
+        } if method == "__slice__" || method == "__slice_step__" => AstNode::Call {
+            receiver: Some(Box::new(base.clone())),
+            method,
+            args,
+            type_args,
+            structural,
+        },
+        other => other,
+    }
 }
 
 pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
@@ -1598,7 +1680,14 @@ pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
             }
         } else if let Ok((i, items)) = parse_multi_index(input) {
             // The index is a tuple: MIR lowers multi-index subscripts through
-            // the platform shim (see gen.rs / runtime py_getitem2).
+            // the platform shim (see gen.rs / runtime py_getitem2). Slice
+            // elements were built with a placeholder receiver — bind the base
+            // here so they lower as the base's own slice.
+            let base_for_slices = expr.clone();
+            let items: Vec<AstNode> = items
+                .into_iter()
+                .map(|it| bind_slice_receiver(it, &base_for_slices))
+                .collect();
             expr = AstNode::Subscript {
                 base: Box::new(expr),
                 index: Box::new(AstNode::Tuple(items)),

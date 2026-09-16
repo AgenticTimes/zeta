@@ -1,0 +1,17 @@
+// PY-A: 逗号下标里的切片元素（pandas `.iloc[:, 0]` / `.loc[i, :]`）
+//   此前每个下标元素都走 parse_expr，而裸 `:` 不是表达式 ⇒ 整个顶层项被丢弃。
+//   现允许元素是切片，走平台桩 py_slice_new（不透明占位，宿主可覆盖）。
+//   注意：切片元素**不能**走真实 zeta_slice_vec —— 那是把基址当 Vec 头读，
+//   平台句柄上会读到垃圾（`d[:, 0]` 在整数基址上曾直接段错误）。
+// expect: 42
+// expect: 42
+// expect: 42
+// expect: 42
+def pick(v) -> i64:
+    return v
+
+d = 42
+print(pick(d[:, 0]))
+print(pick(d[0, :]))
+print(pick(d[1:3, 0]))
+print(pick(d[7, 9]))
