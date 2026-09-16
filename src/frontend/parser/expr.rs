@@ -2410,7 +2410,30 @@ fn parse_conditional_tail(input: &str, if_pos: usize) -> IResult<&str, AstNode> 
     //     `1 if n > 0 else -1 if n < 0 else 0`  ==  `1 if n > 0 else (-1 if n < 0 else 0)`
     // Using the `_no_if` variant here left the inner `if … else …` unconsumed,
     // which failed the enclosing definition and truncated the file.
-    let (rest, else_expr) = parse_expr(&after_if[else_pos + 4..])?;
+    // A branch may begin with a unary operator (`… else -1`). The general
+    // expression parser rejects a LEADING unary minus in this position (it is
+    // fine in the `then` slot and fine when standalone), so wrap the operand
+    // explicitly instead of failing the whole definition.
+    let else_text = &after_if[else_pos + 4..];
+    let (rest, else_expr) = match parse_expr(else_text) {
+        Ok(v) => v,
+        Err(e) => {
+            let t = else_text.trim_start();
+            match t.strip_prefix('-') {
+                Some(operand_text) => {
+                    let (rest, operand) = parse_expr(operand_text)?;
+                    (
+                        rest,
+                        AstNode::UnaryOp {
+                            op: "-".to_string(),
+                            expr: Box::new(operand),
+                        },
+                    )
+                }
+                None => return Err(e),
+            }
+        }
+    };
     Ok((
         rest,
         AstNode::If {
