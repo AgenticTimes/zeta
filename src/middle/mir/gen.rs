@@ -51,6 +51,8 @@ pub struct MirGen {
     source_file: Option<String>,
     /// PY-A: argparse flag → value kind (program-wide, from the Resolver).
     argparse_kinds: HashMap<String, String>,
+    /// PY-A: Python default argument values per function (see the Resolver).
+    param_defaults: HashMap<String, Vec<Option<AstNode>>>,
     /// Stack of loop result slots for `loop { break EXPR; }` value semantics.
     loop_value_stack: Vec<u32>,
     /// Result slot of the most recently lowered loop (for implicit ret_val).
@@ -125,6 +127,7 @@ impl MirGen {
             shared_type_decls: HashMap::new(),
             source_file: None,
             argparse_kinds: HashMap::new(),
+            param_defaults: HashMap::new(),
             loop_value_stack: Vec::new(),
             last_loop_result: None,
             generated_mirs: vec![],
@@ -446,6 +449,28 @@ impl MirGen {
         }
     }
 
+/// PY-A: a call that binds fewer arguments than the callee declares and has no
+/// default for the rest is a Python `TypeError`. We cannot fail the build here
+/// (platform shims legitimately differ), but staying silent would repeat the
+/// exact failure mode this work removes — a wrong value with no diagnostic —
+/// so name the unbound parameters.
+fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
+    let missing: Vec<&str> = params
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| slots.get(*i).map_or(true, |s| s.is_none()))
+        .map(|(_, n)| n.as_str())
+        .collect();
+    if !missing.is_empty() {
+        eprintln!(
+            "warning: PY-A: `{}` is called without argument(s) for [{}] and it declares no \
+             default — those parameters read 0 (Python would raise TypeError)",
+            callee,
+            missing.join(", ")
+        );
+    }
+}
+
     /// Pre-seed type declarations collected program-wide by the Resolver.
     pub fn with_type_decls(mut self, decls: HashMap<String, TypeDecl>) -> Self {
         self.shared_type_decls = decls;
@@ -461,6 +486,15 @@ impl MirGen {
     /// PY-A: argparse flag kinds collected program-wide by the Resolver.
     pub fn with_argparse_kinds(mut self, kinds: HashMap<String, String>) -> Self {
         self.argparse_kinds = kinds;
+        self
+    }
+
+    /// PY-A: default argument values, so omitted call arguments can be filled.
+    pub fn with_param_defaults(
+        mut self,
+        defaults: HashMap<String, Vec<Option<AstNode>>>,
+    ) -> Self {
+        self.param_defaults = defaults;
         self
     }
 
@@ -4998,6 +5032,15 @@ impl MirGen {
                             _ => pos.push(a.clone()),
                         }
                     }
+                    // PY-A: Python default argument values for the callee, so
+                    // `def add(a, b = 10)` + `add(5)` binds b = 10 instead of
+                    // silently reading 0 (a wrong value with no diagnostic).
+                    let callee_defaults: Option<Vec<Option<AstNode>>> = if receiver.is_none() {
+                        self.param_defaults.get(method.as_str()).cloned()
+                    } else {
+                        None
+                    };
+                    let callee_name = method.clone();
                     let fill = |slots: &mut Vec<Option<AstNode>>,
                                 params: &[String],
                                 pos: Vec<AstNode>,
@@ -5029,6 +5072,16 @@ impl MirGen {
                                 }
                             }
                         }
+                        // Finally, declared defaults.
+                        if let Some(defaults) = &callee_defaults {
+                            for (i, slot) in slots.iter_mut().enumerate() {
+                                if slot.is_none() {
+                                    if let Some(Some(d)) = defaults.get(i) {
+                                        *slot = Some(d.clone());
+                                    }
+                                }
+                            }
+                        }
                     };
                     if !spread.is_empty() {
                         // Unknown signature (external shim / method): there are no
@@ -5044,6 +5097,7 @@ impl MirGen {
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
                                 fill(&mut slots, &params, pos, kw, &spread);
+                                Self::warn_unbound(&callee_name, &params, &slots);
                                 slots.into_iter().flatten().collect()
                             }
                             None => {
@@ -5057,13 +5111,30 @@ impl MirGen {
                             }
                         }
                     } else if kw.is_empty() {
-                        args.clone()
+                        // No keyword arguments, but omitted ones may still need
+                        // their DEFAULTS filled: `add(5)` for `def add(a, b = 10)`
+                        // must bind b = 10 rather than silently reading 0.
+                        match if receiver.is_none() {
+                            self.func_param_names.get(method.as_str()).cloned()
+                        } else {
+                            None
+                        } {
+                            Some(params) => {
+                                let mut slots: Vec<Option<AstNode>> =
+                                    params.iter().map(|_| None).collect();
+                                fill(&mut slots, &params, pos, kw, &[]);
+                                Self::warn_unbound(&callee_name, &params, &slots);
+                                slots.into_iter().flatten().collect()
+                            }
+                            None => args.clone(),
+                        }
                     } else if receiver.is_none() {
                         match self.func_param_names.get(method.as_str()).cloned() {
                             Some(params) => {
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
                                 fill(&mut slots, &params, pos, kw, &[]);
+                                Self::warn_unbound(&callee_name, &params, &slots);
                                 slots.into_iter().flatten().collect()
                             }
                             None => kw.into_iter().map(|(_, v)| v).chain(pos).collect(),

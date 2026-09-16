@@ -863,6 +863,15 @@ impl<'ctx> LLVMCodegen<'ctx> {
             i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
+        // PY-A default-argument marker (`zeta_param_default(index, value)`):
+        // no-op at runtime; the Resolver reads it to fill omitted call
+        // arguments, and the marker itself is emitted as a call to this stub
+        // so it never becomes an undefined symbol.
+        module.add_function(
+            "zeta_param_default",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
         for (name, arity) in [
             ("py_queue_new", 0usize),
             ("py_queue_get", 1),

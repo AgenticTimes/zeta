@@ -82,6 +82,11 @@ pub struct Resolver {
     /// `add_argument` call and the `args.<flag>` read usually live in
     /// different functions, so per-MirGen state would not see it).
     argparse_kinds: RefCell<std::collections::HashMap<String, String>>,
+    /// PY-A: Python default argument values per function name. `params` in the
+    /// AST only holds (name, type); the parser records defaults as a
+    /// body-prologue `zeta_param_default(index, value)` marker, collected here
+    /// so the MIR lowering can fill omitted call arguments.
+    param_defaults: RefCell<std::collections::HashMap<String, Vec<Option<AstNode>>>>,
     /// PY-A: module name → its `__package__` (relative-import anchor). A
     /// package's `__init__` anchors to itself; a submodule anchors to its
     /// parent package.
@@ -129,6 +134,7 @@ impl Resolver {
             py_source_dir: RefCell::new(None),
             source_file: RefCell::new(None),
             argparse_kinds: RefCell::new(std::collections::HashMap::new()),
+            param_defaults: RefCell::new(std::collections::HashMap::new()),
             py_module_pkg: RefCell::new(std::collections::HashMap::new()),
             py_current_module: RefCell::new(None),
             registered_func_defs: RefCell::new(Vec::new()),
@@ -404,6 +410,63 @@ impl Resolver {
                             .insert(alias, (module.clone(), m.clone()));
                     }
                 }
+            }
+        }
+        // PY-A: collect Python default argument values from the body-prologue
+        // markers the parser emits for `def f(a, b = 10)`.
+        if let AstNode::FuncDef { name, params, body, .. } = &ast {
+            let mut defaults: Vec<Option<AstNode>> = vec![None; params.len()];
+            let mut any = false;
+            for st in body {
+                // A body statement is normally `ExprStmt`, but bare expression
+                // nodes end up directly in `body` too (documented in
+                // parse_func's promotion logic) — accept both shapes.
+                let expr = match st {
+                    AstNode::ExprStmt { expr } => expr.as_ref(),
+                    c @ AstNode::Call { .. } => c,
+                    _ => continue,
+                };
+                if let AstNode::Call {
+                    receiver: None,
+                    method,
+                    args,
+                    ..
+                } = expr
+                {
+                    if method == "zeta_param_default" && args.len() == 2 {
+                        if let AstNode::Lit(i) = &args[0] {
+                            if (*i as usize) < defaults.len() {
+                                // Fail-loud when the default's literal kind cannot
+                                // live in the parameter's declared type: an
+                                // unannotated param is i64, so `def f(x = "s")`
+                                // would pass a pointer as an i64 (garbage output)
+                                // and `def f(x = 1.5)` would silently truncate.
+                                if let Some((pname, pty)) = params.get(*i as usize) {
+                                    let mismatch = match &args[1] {
+                                        AstNode::StringLit(_) => pty != "Str" && pty != "str",
+                                        AstNode::FloatLit(_) => pty == "i64",
+                                        _ => false,
+                                    };
+                                    if mismatch {
+                                        eprintln!(
+                                            "warning: PY-A: the default for `{}` has a kind that \
+                                             parameter type `{}` cannot hold — it is coerced \
+                                             (annotate the parameter, or change the default)",
+                                            pname, pty
+                                        );
+                                    }
+                                }
+                                defaults[*i as usize] = Some(args[1].clone());
+                                any = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if any {
+                self.param_defaults
+                    .borrow_mut()
+                    .insert(name.clone(), defaults);
             }
         }
         // PY-A: collect argparse flag kinds program-wide. `add_argument` is
@@ -1733,6 +1796,13 @@ impl Resolver {
             .with_module_global_types(self.module_global_types())
             .with_source_file(self.source_file.borrow().clone())
             .with_argparse_kinds(self.argparse_kinds.borrow().clone())
+            .with_param_defaults(
+                self.param_defaults
+                    .borrow()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            )
             .with_symbol_renames(self.module_renames_for(
                 match ast {
                     AstNode::FuncDef { name, .. } => name.as_str(),

@@ -1336,6 +1336,10 @@ int64_t zeta_nonlocal_decl(int64_t name) { return name; }
 // PY-A: module-global marker — no-op; the resolver/gen route reads/writes
 // through the env instead. Present so the synthesized marker call links.
 int64_t zeta_module_decl(int64_t name) { return name; }
+// PY-A: default-argument marker (`zeta_param_default(index, value)`). No-op at
+// runtime — the Resolver reads it to fill omitted call arguments; this stub
+// only exists so the marker never becomes an undefined symbol.
+int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
 // PY-A: Python-library import markers — no-ops. The Resolver collects them
 // into the module/member alias tables; MirGen does the actual symbol mapping.
 int64_t zeta_py_import(int64_t module, int64_t alias) { (void)module; (void)alias; return 0; }

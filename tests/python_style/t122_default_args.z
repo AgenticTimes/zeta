@@ -1,0 +1,30 @@
+// PY-A: 默认参数值（此前**完全失效**：缺省实参被静默当 0 —— 又一处「静默错值」）。
+// 机制：AST 的 `params` 只有 (name, type)，所以默认值走**函数体前导标记**
+// `zeta_param_default(index, value)`（运行期是 no-op 桩），
+// 由 Resolver 按函数名收集成表，MIR 调用点在「实参不足」时用表里的默认值补槽位。
+// 补槽顺序：位置实参 → 显式 kwarg → `**` 解包 → 默认值。
+// 注意：无标注的形参按 i64 处理，所以字符串/浮点默认值会告警（不会静默出错值）。
+def add(a, b = 10):
+    return a + b
+
+def f(a, b = 2, c = 3):
+    return a * 100 + b * 10 + c
+
+def only_kw(a, b = 5):
+    return a * 10 + b
+
+print(add(5))
+print(add(5, 20))
+print(f(1))
+print(f(1, 9))
+print(f(1, 9, 8))
+print(only_kw(1))
+print(only_kw(1, b = 7))
+
+// expect: 15
+// expect: 25
+// expect: 123
+// expect: 193
+// expect: 198
+// expect: 15
+// expect: 17

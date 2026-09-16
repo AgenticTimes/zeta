@@ -674,7 +674,35 @@ official 194/194、python_style 120→121/121。
 （`AstNode` 里也没有 SetLit，`len(s)` 之类自然无从谈起）。与 dict 字面量共用 `{`，
 需要按内容（有 `:` 才是 dict）分派。
 
-### 新发现：默认参数值根本没生效（未修，跨 `fn`/`def` 全形态）
+### 默认参数值（2026-09-16 追加，**已修** —— 又一处「静默错值」）
+
+修前：`def add(a, b = 10)` + `add(5)` 打 **5**（应为 15）、`def greet(name = "world")` + `greet()` 打 0。
+`parse_param` 其实**解析了**默认值（有 `parse_default_value`）却在构造元组时把 `_default` 丢掉，
+AST 的 `params` 只有 `(name, type)` —— 于是缺省实参静默当 0，错值且零诊断。
+
+修法（不改 AST，沿用本仓库的标记模式）：
+1. `parse_param_full` 保留默认值；`parse_func` 把它作为**函数体前导标记**
+   `zeta_param_default(index, value)` 注入（`parse_param` 仍是两元组包装，另外两个调用点零改动）。
+2. Resolver 按函数名收集成表（**同时接受 `ExprStmt` 包裹与裸 `Call` 两种体形态** ——
+   这个坑害我调了一轮：体里的标记在 register 时已变成裸 `Call`）。
+3. MirGen 收表，调用点补槽顺序：位置实参 → 显式 kwarg → `**` 解包 → **默认值**；
+   找不到默认值又没给实参时 `warn_unbound` 指名警告（Python 会 TypeError）。
+4. 运行期 `zeta_param_default` 是 no-op 桩（`py_additions.c`），否则标记会变成未定义符号。
+
+坑：`kw.is_empty()` 那条分支原本直接 `args.clone()` 短路，**默认值填充根本走不到** ——
+必须让它也走槽位路径。
+
+另有两条「kind 不匹配」现在**告警**（此前静默出错值）：无标注形参按 i64 处理，所以
+`def f(x = "s")` 会把指针当 i64 打（垃圾数字）、`def f(x = 1.5)` 会静默截断成 1。
+警告文案会指出参数名与类型，提示加标注。
+
+回归 `t122`（15/25/123/193/198/15/17 全对）。official 194/194、python_style 122→**123/123**、
+语料指标不变（exit-ok 5、截断 32、丢行 8580）——这是语义修复，不动解析面。
+
+### 遗留：默认参数值的两条限界
+
+- 无标注形参一律 i64 ⇒ 字符串/浮点默认值不可用（有告警，不再静默）
+- 默认值表达式在运行期仍被求值一次（前导桩调用的实参），字面量场景无害
 
 ```
 def add(a, b = 10): return a + b

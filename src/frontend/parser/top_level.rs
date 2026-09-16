@@ -28,6 +28,14 @@ fn parse_default_value(input: &str) -> IResult<&str, AstNode> {
 }
 
 fn parse_param(input: &str) -> IResult<&str, (String, String)> {
+    let (rest, (n, t, _default)) = parse_param_full(input)?;
+    Ok((rest, (n, t)))
+}
+
+/// PY-A: `parse_param` plus the optional Python default value. Kept as a
+/// separate function so the Zeta-style call sites (impl methods, extern decls)
+/// keep their two-tuple signature.
+fn parse_param_full(input: &str) -> IResult<&str, (String, String, Option<AstNode>)> {
     // Parse a function parameter.
     // Two forms are supported:
     // 1. Self parameters: `self`, `&self`, `&mut self` (without explicit type)
@@ -42,21 +50,21 @@ fn parse_param(input: &str) -> IResult<&str, (String, String)> {
         // &mut self (must not be followed by :)
         map(
             (ws(tag("&mut")), ws(tag("self")), peek(not(ws(tag(":"))))),
-            |_| ("&mut self".to_string(), "Self".to_string()),
+            |_| ("&mut self".to_string(), "Self".to_string(), None),
         ),
         // &self (must not be followed by :)
         map(
             (ws(tag("&")), ws(tag("self")), peek(not(ws(tag(":"))))),
-            |_| ("&self".to_string(), "Self".to_string()),
+            |_| ("&self".to_string(), "Self".to_string(), None),
         ),
         // mut self (owned, mutable — must not be followed by :)
         map(
             (ws(tag("mut")), ws(tag("self")), peek(not(ws(tag(":"))))),
-            |_| ("mut self".to_string(), "Self".to_string()),
+            |_| ("mut self".to_string(), "Self".to_string(), None),
         ),
         // self (without &, must not be followed by :)
         map((ws(tag("self")), peek(not(ws(tag(":"))))), |_| {
-            ("self".to_string(), "Self".to_string())
+            ("self".to_string(), "Self".to_string(), None)
         }),
     ));
 
@@ -70,7 +78,7 @@ fn parse_param(input: &str) -> IResult<&str, (String, String)> {
             opt(ws(tag("*"))),
             ws(parse_ident),
         ),
-        |(_, _, name)| (name, "i64".to_string()),
+        |(_, _, name)| (name, "i64".to_string(), None),
     );
 
     // Try regular parameter: `name: type` — PY-A: the type annotation is
@@ -82,7 +90,7 @@ fn parse_param(input: &str) -> IResult<&str, (String, String)> {
             opt(preceded(ws(tag(":")), ws(parse_type))),
             opt(ws(preceded(tag("="), ws(parse_default_value)))),
         ),
-        |(name, ty, _default)| (name, ty.unwrap_or_else(|| "i64".to_string())),
+        |(name, ty, default)| (name, ty.unwrap_or_else(|| "i64".to_string()), default),
     );
 
     // PY-A: allow Python-common names that collide with Zeta keywords in
@@ -104,7 +112,7 @@ fn parse_param(input: &str) -> IResult<&str, (String, String)> {
             opt(preceded(ws(tag(":")), ws(parse_type))),
             opt(ws(preceded(tag("="), ws(parse_default_value)))),
         ),
-        |(name, ty, _default)| (name.to_string(), ty.unwrap_or_else(|| "i64".to_string())),
+        |(name, ty, default)| (name.to_string(), ty.unwrap_or_else(|| "i64".to_string()), default),
     );
 
     alt((parse_self, parse_star, parse_kw_param, parse_regular)).parse(input)
@@ -213,10 +221,10 @@ pub(crate) fn parse_func(input: &str) -> IResult<&str, AstNode> {
         }
     }
 
-    let (input, params) = match delimited(
+    let (input, params_full) = match delimited(
         ws(tag("(")),
         terminated(
-            separated_list0(ws(tag(",")), ws(parse_param)),
+            separated_list0(ws(tag(",")), ws(parse_param_full)),
             opt(ws(tag(","))),
         ),
         ws(tag(")")),
@@ -228,6 +236,11 @@ pub(crate) fn parse_func(input: &str) -> IResult<&str, AstNode> {
             return Err(e);
         }
     };
+
+    let params: Vec<(String, String)> = params_full
+        .iter()
+        .map(|(n, t, _)| (n.clone(), t.clone()))
+        .collect();
 
     let (input, ret_opt) = match opt(preceded(ws(tag("->")), ws(parse_type))).parse(input) {
         Ok(r) => r,
@@ -289,6 +302,32 @@ pub(crate) fn parse_func(input: &str) -> IResult<&str, AstNode> {
             }
         }
     };
+    // PY-A: Python default argument values. The AST's `params` only carries
+    // (name, type), so defaults travel as a body-prologue marker
+    // `zeta_param_default(index, value)`: the Resolver collects them per
+    // function and the MIR lowering fills omitted call arguments from that
+    // table. Before this, `def add(a, b = 10)` + `add(5)` silently used 0 for
+    // `b` — a wrong value with no diagnostic.
+    let mut body = body;
+    if !extern_opt.is_some() {
+        let mut prologue: Vec<AstNode> = Vec::new();
+        for (i, (_n, _t, default)) in params_full.iter().enumerate() {
+            if let Some(d) = default {
+                prologue.push(AstNode::ExprStmt {
+                    expr: Box::new(AstNode::Call {
+                        receiver: None,
+                        method: "zeta_param_default".to_string(),
+                        args: vec![AstNode::Lit(i as i64), d.clone()],
+                        type_args: vec![],
+                        structural: false,
+                    }),
+                });
+            }
+        }
+        prologue.append(&mut body);
+        body = prologue;
+    }
+
     let input = if single_line {
         let (i, _) = ws(tag(";")).parse(input)?;
         i
