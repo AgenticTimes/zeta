@@ -1,6 +1,6 @@
 // src/frontend/parser/expr.rs
 use super::parser::{
-    parse_ident, parse_path, parse_type, parse_type_args, skip_ws_and_comments0, ws,
+    parse_ident, parse_member_ident, parse_path, parse_type, parse_type_args, skip_ws_and_comments0, ws,
 };
 
 use super::pattern::parse_pattern;
@@ -1494,7 +1494,7 @@ pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
 
         let dot_result = ws(tag(".")).parse(input);
         if let Ok((i, _)) = dot_result {
-            let (j, field_or_method) = parse_ident(i)?;
+            let (j, field_or_method) = parse_member_ident(i)?;
 
             // Check for type arguments first (e.g., ::<i32>)
             let (j2, type_args_opt) =

@@ -1,0 +1,24 @@
+// PY-A: `.` 之后的成员名不受保留字限制 + 泛型实参必须吃满整段内容
+//   `self.where` / `p.where` —— `.` 后的成员名走了 parse_ident，而 where 在
+//   保留字黑名单里，于是整条语句失败、整个文件被静默丢弃（jq_shim 445 行）。
+//   `p.where < 5` —— 成员名之后无条件尝试泛型实参，`<` 被当成 `<...>`，
+//   inner-slice 扫描器抓到文件里下一个 `>`（下面的 `p.where > 1`），中间文本被
+//   静默丢掉；同时覆盖 `-> _Frame | None` 的 `_` 前缀类型词边界。
+// expect: 7
+// expect: 1
+// expect: 1
+// expect: 4
+class _Frame:
+    def __init__(self, v):
+        self.where = v
+
+def pick(f) -> _Frame | None:
+    return f
+
+f = pick(_Frame(v=7))
+print(f.where)
+
+p = _Frame(v=3)
+print(p.where < 5)
+print(p.where > 1)
+print(f.where - p.where)

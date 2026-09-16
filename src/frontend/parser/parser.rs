@@ -104,6 +104,24 @@ pub fn parse_ident(input: &str) -> IResult<&str, String> {
     Ok((input, ident.to_string()))
 }
 
+/// Member / attribute name — the identifier that follows a `.`.
+///
+/// Keywords are only keywords at *statement* level, never as a field or method
+/// name: Python spells both `obj.where(...)` and `obj.match(...)` freely. Going
+/// through `parse_ident` here rejected them, and because the failure happens
+/// inside postfix parsing the entire enclosing top-level item (plus everything
+/// after it) was silently dropped — `np.where(mask)` in
+/// `jq_shim.attribute_history` cost the whole 445-line file.
+pub fn parse_member_ident(input: &str) -> IResult<&str, String> {
+    let (input, ident): (&str, &str) = recognize(pair(
+        alt((alpha1, tag("_"))),
+        many0(satisfy(|c: char| c.is_alphanumeric() || c == '_')),
+    ))
+    .parse(input)?;
+
+    Ok((input, ident.to_string()))
+}
+
 /// Parse a path separator (::) followed by an identifier
 fn parse_path_segment(input: &str) -> IResult<&str, String> {
     // Allow scoped package names like @io/uring or @scope/pkg
@@ -407,7 +425,21 @@ pub fn parse_non_array_type(input: &str) -> IResult<&str, String> {
     // Special types excluding array_type and tuple_type to avoid recursion
     // (tuple_type can contain array types)
     let special_types_no_array = alt((
-        tag("_").map(|_| "_".to_string()),
+        // Wildcard/inferred type `_` — a BARE underscore only. Without the
+        // boundary check `tag("_")` matched the leading `_` of a real class
+        // name (`-> _HistoryFrame`), leaving `HistoryFrame` behind, so the whole
+        // definition failed to parse and the rest of the file was dropped.
+        nom::combinator::map(
+            nom::sequence::pair(
+                tag("_"),
+                nom::combinator::peek(nom::combinator::not(
+                    nom::character::complete::satisfy(|c: char| {
+                        c.is_ascii_alphanumeric() || c == '_'
+                    }),
+                )),
+            ),
+            |_| "_".to_string(),
+        ),
         parse_fn_type,
         parse_pointer_type,
         preceded(ws(tag("dyn")), ws(parse_type_path)).map(|p| format!("dyn {}", p)),
@@ -479,7 +511,21 @@ pub fn parse_type(input: &str) -> IResult<&str, String> {
 
     // First try special types
     let special_types = alt((
-        tag("_").map(|_| "_".to_string()),
+        // Wildcard/inferred type `_` — a BARE underscore only. Without the
+        // boundary check `tag("_")` matched the leading `_` of a real class
+        // name (`-> _HistoryFrame`), leaving `HistoryFrame` behind, so the whole
+        // definition failed to parse and the rest of the file was dropped.
+        nom::combinator::map(
+            nom::sequence::pair(
+                tag("_"),
+                nom::combinator::peek(nom::combinator::not(
+                    nom::character::complete::satisfy(|c: char| {
+                        c.is_ascii_alphanumeric() || c == '_'
+                    }),
+                )),
+            ),
+            |_| "_".to_string(),
+        ),
         parse_tuple_type,
         parse_fn_type,
         parse_array_type,
@@ -551,11 +597,24 @@ pub fn parse_type_args(input: &str) -> IResult<&str, Vec<String>> {
         ws(tag(">")),
     )
     .parse(input)?;
-    let (_, args) = terminated(
+    let (rest, args) = terminated(
         separated_list0(ws(tag(",")), ws(parse_generic_arg_text)),
         opt(ws(tag(","))),
     )
     .parse(inner)?;
+    // The WHOLE bracketed content must be a type list. Parsing only a prefix
+    // let a comparison turn into generic args: in `a[b.c < d]` the `<` was
+    // taken as `<…>`, the inner-slice scanner grabbed everything up to the next
+    // `>` anywhere later in the file (even inside a string literal), and the
+    // leftover text was silently thrown away — which dropped the rest of the
+    // file. Rejecting a partial match makes `opt(parse_type_args)` backtrack so
+    // `<` stays a comparison operator.
+    if !rest.trim().is_empty() {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
     Ok((input, args))
 }
 
@@ -855,11 +914,19 @@ pub fn parse_bracketed_type_args(input: &str) -> IResult<&str, Vec<String>> {
         ws(tag("]")),
     )
     .parse(input)?;
-    let (_, args) = terminated(
+    let (rest, args) = terminated(
         separated_list0(ws(tag(",")), ws(parse_generic_arg_text)),
         opt(ws(tag(","))),
     )
     .parse(inner)?;
+    // Same completeness rule as `parse_type_args`: a prefix match would let a
+    // subscript swallow text up to a far-away `]` and silently drop it.
+    if !rest.trim().is_empty() {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
     Ok((input, args))
 }
 
