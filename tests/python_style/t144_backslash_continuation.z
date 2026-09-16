@@ -1,0 +1,18 @@
+// PY-A: 反斜杠续行（`x = 1 + \` 换行 `2`）—— 此前完全不支持：残留的 `\` 让该语句
+//   解析失败，整个 def 连同其后内容被丢弃。Python 里续行行的缩进也没有意义。
+//   修法：预处理器先把 `\<newline>` + 续行前导空白折叠成同一逻辑行（在任何缩进记账之前）。
+// expect: 3
+// expect: 3
+// expect: 4
+def val() -> i64:
+    x = 1 + \
+        2
+    return x
+
+def pick(a) -> i64:
+    return 3 if a else \
+        4
+
+print(val())
+print(pick(1))
+print(pick(0))

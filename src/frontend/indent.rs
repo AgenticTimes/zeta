@@ -113,12 +113,29 @@ pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
         // leak is fine: parse_zeta already leaks preprocessed output
         &Box::leak(normalized.into_boxed_str())
     };
-    let lines: Vec<&str> = input.split('\n').collect();
+    let lines_raw: Vec<&str> = input.split('\n').collect();
+    // PY-A: fold Python's backslash line continuations BEFORE anything else
+    // looks at the text. `x = 1 + \` + newline + `2` is ONE logical line, and
+    // the continuation's indentation carries no meaning. Leaving the `\` in
+    // place made every such statement — and therefore the whole enclosing
+    // definition — fail to parse.
+    let folded = fold_backslash_continuations(&lines_raw);
+    let joined_text: String = match &folded {
+        Some(joined) => joined.join("\n"),
+        None => String::new(),
+    };
+    let lines: Vec<&str> = match &folded {
+        Some(joined) => joined.iter().map(|s| s.as_str()).collect(),
+        None => lines_raw.clone(),
+    };
     let (out, changed) = normalize_blocks(&lines)?;
     if !changed {
-        // Not python-style: pass through untouched (brace-style sources are
-        // the official test suite's contract).
-        return Ok(None);
+        // Not python-style. Still hand back the folded text when continuations
+        // were folded — that is the only edit we made.
+        return match folded {
+            Some(_) => Ok(Some(joined_text)),
+            None => Ok(None),
+        };
     }
     // PY-A: in a python-style file `//` is floor division, not a comment
     // (Python's comment marker is `#`). The parser's comment skipper cannot
@@ -138,6 +155,45 @@ pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
     let lines_rw: Vec<&str> = rewritten.iter().map(|s| s.as_str()).collect();
     let (out, _) = normalize_blocks(&lines_rw)?;
     Ok(Some(out.join("\n")))
+}
+
+/// PY-A: fold Python backslash continuations (`x = 1 + \` NEWLINE `2`) into one
+/// logical line, dropping the continuation lines' leading whitespace. Returns
+/// `None` when there was nothing to fold, so callers can keep the identity
+/// passthrough for brace-style sources.
+fn fold_backslash_continuations(lines: &[&str]) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut in_triple: Option<char> = None;
+    let mut folded_any = false;
+    let mut i = 0usize;
+    while i < lines.len() {
+        let mut code = scan_line(lines[i], &mut in_triple)
+            .map(|info| info.code)
+            .unwrap_or_default();
+        let mut joined = lines[i].to_string();
+        // A trailing backslash in CODE position (not inside a string, not a
+        // comment) continues the logical line. Keep the state machine in step
+        // by scanning each physical line exactly once, in order.
+        while code.trim_end().ends_with('\\') && i + 1 < lines.len() {
+            if let Some(cut) = joined.rfind('\\') {
+                joined.truncate(cut);
+            }
+            i += 1;
+            let next = lines[i];
+            joined.push_str(next.trim_start());
+            code = scan_line(next, &mut in_triple)
+                .map(|info| info.code)
+                .unwrap_or_default();
+            folded_any = true;
+        }
+        out.push(joined);
+        i += 1;
+    }
+    if folded_any {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 /// Indentation → braces for one dialect-agnostic pass. Returns the rewritten
