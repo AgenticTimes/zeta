@@ -1,0 +1,22 @@
+// PY-A: 三元表达式的条件以一元运算符开头（`X if -200 <= diff < 200 else Y`）
+//   条件是从 `if` 到 `else` 之间**切片**出来的，带着前导空白；而 `parse_expr_no_if`
+//   自己不跳前导空白，一元算子的识别又是按位置判断的（`input.starts_with("-")`），
+//   于是「空白 + 一元算子」同时出现时条件解析失败 ⇒ 整个顶层项被丢弃。
+//   同一个条件在普通语句/`if` 条件/括号里都能过，只有切片路径不行。
+//   语料命中：五个策略文件的 `adjust_stock_num` 同款链式三元。
+// expect: 4
+// expect: 3
+// expect: 1
+def grade(diff) -> i64:
+    return 3 if diff >= 500 else \
+        3 if 200 <= diff < 500 else \
+        4 if -200 <= diff < 200 else \
+        5 if -500 <= diff < -200 else \
+        6
+
+def neg(x) -> i64:
+    return 1 if -x < 0 else 0
+
+print(grade(0))
+print(grade(1000))
+print(neg(5))

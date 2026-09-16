@@ -2833,7 +2833,19 @@ fn parse_conditional_tail(input: &str, if_pos: usize) -> IResult<&str, AstNode> 
             )))
         }
     };
-    let (cond_rem, cond) = parse_expr_no_if(&after_if[..else_pos])?;
+    // The condition slice keeps the whitespace after `if`. `parse_expr_no_if`
+    // does NOT skip leading whitespace itself, and its unary-operator
+    // detection is position-based (`input.starts_with("-")`), so a condition
+    // starting with a unary operator failed once a space preceded it:
+    //     `3 if -200 <= diff < 200 else 6`   (hence five corpus files)
+    // Trim the slice first — `-200 <= diff` parses fine standalone because the
+    // caller there already consumed the whitespace.
+    let cond_slice = &after_if[..else_pos];
+    let cond_slice = match skip_ws_and_comments0(cond_slice) {
+        Ok((rest, _)) => rest,
+        Err(_) => cond_slice,
+    };
+    let (cond_rem, cond) = parse_expr_no_if(cond_slice)?;
     if !cond_rem.trim().is_empty() {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
