@@ -1215,6 +1215,9 @@ pub fn parse_zeta(input: &str) -> IResult<&str, Vec<AstNode>> {
     // valid).
     match crate::frontend::indent::indent_preprocess(input) {
         Ok(Some(processed)) => {
+            if let Ok(path) = std::env::var("ZETA_DUMP_PP") {
+                let _ = std::fs::write(&path, &processed);
+            }
             let processed: &'static str =
                 Box::leak(processed.into_boxed_str());
             // Parse the preprocessed text; `remaining` refers to the leaked
