@@ -650,6 +650,24 @@ def inject_local_data(
 `f(b=2, a=1)`（kwarg 按名重排）与 `f(*xs)`（单星解包）均未回归。
 official 194/194、python_style 120→121/121。
 
+### `{**a, **b}` 字典解包（2026-09-16 追加，已修 —— 解锁 wufu_v1/v2）
+
+原样形式的整个 dict 字面量解析失败 → 外层块与其后全部被静默丢弃（`wufu_v1`/`wufu_v2` 各丢 400+ 行）。
+三步实现：
+1. 解析：`parse_dict_entry` 先识别前导 `**`，标成 `zeta_dict_spread` KEY 标记（值位放占位 `Lit(0)`）。
+2. 降级：`DictLit` 遇到该标记就发射 `py_map_update(literal, src)`；仅含 spread 的字面量
+   从**源 map 的键类型**取 key_ty，保证 `d.keys()` 仍是 `Vec<str>`。
+3. 运行期：`py_map_update` 按**原始 key** 直接遍历源 map 槽位拷贝
+   （`base+16 + i*24`，used 标志在 +16）。这一步的关键：**不能**用 `map_keys` 交回的显示文本
+   —— 字符串键存的是内容哈希，重新插入显示文本后 `d["x"]` 永远查不到。实测 `{**a}.keys()`
+   返回 `["x"]` 正是这条的回归证据。
+
+效果：**`wufu_v1`/`wufu_v2` 完全解析通过**（语料截断文件 34 → **32**，
+丢行总数 8695 → **8580**）。回归 `t121`。
+
+注意：运行期改了 `py_additions.c` → 本机需重建 `zeta_runtime_c.o`（该 .o 是 gitignored，
+构建配方见 `validate.md` §4）。
+
 ### 新发现：set 字面量完全不支持（未修）
 
 `{1, 2}` 和 `{1, 2,}` **都**解析失败 —— 不是尾随逗号问题，是集合字面量整体没有支持

@@ -829,6 +829,29 @@ fn parse_dictcomp_full(input: &str) -> IResult<&str, AstNode> {
     Ok((input, call))
 }
 
+/// PY-A: one dict-literal entry — either `key: value` or a `**mapping` spread
+/// (represented as a special KEY marker with a dummy value; the MIR lowering
+/// merges it into the map).
+fn parse_dict_entry(input: &str) -> IResult<&str, (AstNode, AstNode)> {
+    if let Some(after) = input.trim_start().strip_prefix("**") {
+        let (rest, value) = parse_expr(after.trim_start())?;
+        return Ok((
+            rest,
+            (
+                AstNode::Call {
+                    receiver: None,
+                    method: "zeta_dict_spread".to_string(),
+                    args: vec![value],
+                    type_args: vec![],
+                    structural: false,
+                },
+                AstNode::Lit(0),
+            ),
+        ));
+    }
+    pair(ws(parse_expr), ws(preceded(tag(":"), ws(parse_expr)))).parse(input)
+}
+
 fn parse_dict_lit(input: &str) -> IResult<&str, AstNode> {
     // PY-A: dict/set comprehension probe BEFORE consuming `{` — comp_probe
     // needs the opening brace to do its depth scan.
@@ -850,11 +873,8 @@ fn parse_dict_lit(input: &str) -> IResult<&str, AstNode> {
         let (input, _) = ws(tag("}")).parse(input)?;
         return Ok((input, AstNode::DictLit { entries: vec![] }));
     }
-    let (input, entries) = separated_list0(
-        ws(tag(",")),
-        pair(ws(parse_expr), ws(preceded(tag(":"), ws(parse_expr)))),
-    )
-    .parse(input)?;
+    let (input, entries) =
+        separated_list0(ws(tag(",")), parse_dict_entry).parse(input)?;
     // PEP 8 / black style: a trailing comma before the closing brace is normal
     // Python — `{"a": 1,}` and, more importantly, every multi-line dict. nom's
     // `separated_list0` rewinds past a final separator that is not followed by

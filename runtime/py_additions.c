@@ -165,6 +165,22 @@ static int64_t zt_key_display(int64_t key) {
     return s ? s : key;
 }
 
+// {**a, **b} — copy src's entries into dst by RAW key. Copying raw keys (not
+// the display text that map_keys hands back) matters: string-keyed maps store
+// content hashes, and a later d["k"] lookup goes through map_str_key, so
+// re-inserting display text would never be found.
+int64_t py_map_update(int64_t dst, int64_t src) {
+    if (!dst || !src) return 0;
+    int64_t cap = ((int64_t*)src)[0];
+    for (int64_t i = 0; i < cap; i++) {
+        char* e = (char*)src + 16 + i * 24;
+        if (*(uint8_t*)(e + 16)) {
+            map_insert(dst, *(int64_t*)e, *((int64_t*)e + 1));
+        }
+    }
+    return 0;
+}
+
 int64_t map_keys(int64_t map) {
     if (!map) return 0;
     int64_t cap = ((int64_t*)map)[0];

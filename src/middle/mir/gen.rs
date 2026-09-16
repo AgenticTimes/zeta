@@ -2658,6 +2658,41 @@ impl MirGen {
                 let mut key_ty = Type::I64;
                 let mut first_key = true;
                 for (k, v) in entries {
+                    // PY-A: `{**m, ...}` — merge m's entries into the literal.
+                    if let AstNode::Call {
+                        receiver: None,
+                        method,
+                        args: ka,
+                        ..
+                    } = k
+                    {
+                        if method == "zeta_dict_spread" && ka.len() == 1 {
+                            let src_id = self.lower_expr(&ka[0]);
+                            // Take the key kind from the source map so a
+                            // spread-only literal (`{**a}`) is still
+                            // string-keyed and `d.keys()` stays Vec<str>.
+                            if first_key {
+                                if let Some(Type::Named(n, params)) =
+                                    self.type_map.get(&src_id).cloned()
+                                {
+                                    if n == "map" {
+                                        if let Some(kt) = params.first() {
+                                            key_ty = kt.clone();
+                                            first_key = false;
+                                        }
+                                    }
+                                }
+                            }
+                            let scratch = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_map_update".to_string(),
+                                args: vec![map_id, src_id],
+                                dest: scratch,
+                                type_args: vec![],
+                            });
+                            continue;
+                        }
+                    }
                     let kid0 = self.lower_expr(k);
                     if first_key {
                         // Remember whether keys are strings: the map type carries
