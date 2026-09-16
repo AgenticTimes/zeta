@@ -80,9 +80,15 @@ pub fn parse_ident(input: &str) -> IResult<&str, String> {
         |s: &str| {
             ![
                 "let", "mut", "if", "else", "for", "in", "loop", "while", "unsafe", "return",
-                "break", "continue", "fn", "concept", "impl", "enum", "struct", "type", "use",
+                "break", "continue", "fn", "concept", "impl", "enum", "struct", "use",
                 "extern", "dyn", "box", "as", "true", "false", "comptime", "const", "async", "pub",
                 "match", "where", "mod", "defer",
+                // PY-A: `type` is deliberately NOT reserved — Python's builtin
+                // `type(x)` is common and reserving the word made the whole
+                // statement fail to parse, silently dropping the enclosing
+                // definition and the rest of the file. Zeta's `type X = Y`
+                // alias still parses: parse_type_alias matches the keyword
+                // literally and is tried before the expression path.
                 "super",
                 // Built-in types - allow as identifiers so they can be used in paths like u64::MAX
                 // The resolver/typechecker will reject invalid uses later.

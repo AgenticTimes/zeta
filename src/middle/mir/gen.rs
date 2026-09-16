@@ -5263,6 +5263,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // Never let a stale hint leak into an unrelated closure.
                 self.pending_closure_param_types = None;
 
+                // PY-A: `type(x)` — the static type is already known, so fold it
+                // to the Python type NAME as a string (no runtime reflection, no
+                // `_type` extern). `print(type(x))` / `type(x) is int`-style code
+                // in the wild then works instead of failing to link.
+                if method == "type" && receiver.is_none() && arg_ids.len() == 1 {
+                    let tn = match self.type_map.get(&arg_ids[0]) {
+                        Some(Type::Str) => "str",
+                        Some(Type::F64) => "float",
+                        Some(Type::Bool) => "bool",
+                        Some(Type::I64) => "int",
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)) => "list",
+                        Some(Type::Named(n, _)) if n == "map" => "dict",
+                        Some(Type::Named(n, _)) if n == "PySlice" => "slice",
+                        _ => "object",
+                    };
+                    let sid = self.next_id();
+                    self.exprs.insert(sid, MirExpr::StringLit(tn.to_string()));
+                    self.type_map.insert(sid, Type::Str);
+                    self.exprs.insert(id, MirExpr::Var(sid));
+                    return sid;
+                }
                 // PY-A: platform class constructor calls (FixedSlippage(0.001),
                 // OrderCost(...), MACD(...)) — capitalized free calls with no
                 // local definition route to the platform-object runtime.

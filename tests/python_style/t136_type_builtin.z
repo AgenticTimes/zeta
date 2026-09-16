@@ -1,0 +1,22 @@
+// PY-A: `type(x)` —— 编译期折叠成 Python 的类型名字符串（无需运行期反射）。
+// 两处问题一起修：
+//  ① `type` 在保留字表里 → `type(x)` **解析失败** → 外层函数及其后整份文件被静默丢弃；
+//  ② 解除保留后能解析了，但会去找不存在的 `_type` 符号（链接失败）。
+// 现在把静态类型直接折成类型名（int/str/float/list/dict…）——编译器本来就知道类型，
+// 不需要任何运行期支持。Zeta 自己的 `type X = Y` 别名不受影响（字面匹配、优先于表达式路径）。
+x = 1
+s = "a"
+f = 1.5
+xs = [1, 2]
+d = {"a": 1}
+print(type(x))
+print(type(s))
+print(type(f))
+print(type(xs))
+print(type(d))
+
+// expect: int
+// expect: str
+// expect: float
+// expect: list
+// expect: dict
