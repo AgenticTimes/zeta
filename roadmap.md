@@ -726,6 +726,29 @@ REasyQuant 语料里到处是中文 docstring —— 以前解析早早截断、
 **测评**：official **194/194**；python_style **125/125（0 failed）**，`t124_ternary` 由红转绿；
 语料 丢行 8580→**8463**、panic **0**、截断 32。
 
+### 推导式循环变量的类型（2026-09-16 追加，已修 —— 又一类「静默错值」）
+
+**比字典推导更宽的问题**：推导式的循环变量**一律被定型为 i64**，所以只要 iterable 里是字符串，
+体内任何字符串操作都在指针上瞎算，且毫无提示：
+
+```
+[s.upper() for s in ["ab", "cd"]][0]      # 打印 4365082608（指针），应为 "AB"
+[len(s) for s in ["ab", "cde"]][0]        # 打印 33776999900435999，应为 2
+{f: 1 for f in ["a"]}["a"]                # 查不到（0），应为 1
+```
+
+修法：在调用点把 **iterable 的元素类型**交给推导式 lambda 的参数定型
+（新增 `pending_closure_param_types`，`lower_closure` 消费），并让 collect 的结果带
+**元素类型**（`last_closure_ret_ty` 记录 lambda 体的值类型）——列表推导产出的
+`Vec<str>` 不再是 `Vec<i64>`，`x[0]` 才会按字符串打印。
+
+回归 `t127`。official 194/194、python_style 127/127、语料丢行 7859（本轮是语义修复，
+不动解析面）、panic 0。
+
+**遗留（已记录，未修）**：iterable 自身类型未知时（典型：未经标注的**模块级**变量 ——
+env 路由会把类型丢掉为 i64），元素类型仍退回 i64，字符串键可能因此哈希不上。
+根治需要把模块级变量的类型一路带到 env 读取点。
+
 ### 带 if 过滤的字典推导式 + pair 位打包（2026-09-16 追加，已修）
 
 `parse_dictcomp_full` 里明写着「V1: no filter in dictcomp」，所以 `{k: v for k in it if cond}`

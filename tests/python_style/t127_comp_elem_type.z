@@ -1,0 +1,20 @@
+// PY-A: 推导式循环变量的类型必须来自 iterable 的元素类型。
+// 此前一律定型为 i64，于是字符串元素上的操作**静默产出指针/垃圾**：
+//   [s.upper() for s in ["ab"]]     → 打印一个数字（应为 "AB"）
+//   {f: 1 for f in ["a"]}; y["a"]   → 查不到（应为 1）
+// 现在：lambda 参数按 iterable 元素类型定型，collect 的结果也带上元素类型
+// （列表推导产出的 Vec<str> 不再是 Vec<i64>）。
+// 已知限界：iterable 本身类型未知时（例如未经标注的模块级变量，env 路由会丢类型）
+// 元素类型仍会退回 i64，字符串键可能因此哈希不上 —— 见 roadmap 遗留项。
+x = [s.upper() for s in ["ab", "cd"]]
+print(x[0])
+y = {f: 1 for f in ["a", "b"]}
+print(len(y))
+print(y["a"])
+z = [k * 2 for k in [1, 2, 3] if k > 1]
+print(z[1])
+
+// expect: AB
+// expect: 2
+// expect: 1
+// expect: 6
