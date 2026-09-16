@@ -726,6 +726,24 @@ REasyQuant 语料里到处是中文 docstring —— 以前解析早早截断、
 **测评**：official **194/194**；python_style **125/125（0 failed）**，`t124_ternary` 由红转绿；
 语料 丢行 8580→**8463**、panic **0**、截断 32。
 
+### 下划线开头的循环变量（2026-09-16 追加，已修）
+
+`parse_pattern` 的 wildcard 分支用 `tag("_")` 匹配，于是 **`_code` 被吃掉前导 `_`**、
+把 `code` 留在原地 → 整个 `for` 语句解析失败 → 外层函数及其后整份文件被静默丢弃。
+这正是 `jq_wufu_daily.calculate_global_etf_threshold` 里 `for _code, data in arr.items():`
+的形状（块级 leave-one-out 显示该语句单条占 −310）。
+
+修法：wildcard 要求真正的**词边界**（`_` 之后不能跟字母/数字/下划线）。
+
+**效果**：语料截断 30 → **29**、丢行 7594 → **6940**（−654）；
+`jq_wufu_daily` 821 → **511**、`jq_wufu` 744 → **509**（当前最大变成 `jq_shim` 595）。
+回归 `t132`；official 194/194、python_style 132/132、panic 0。
+
+**另记一个同批发现的静默错值（未修）**：**裸 `_` 作循环变量时循环体根本不执行** ——
+`for _ in range(3): n += 1` 打 0（应为 3）。`for _x in range(3)` 正常（3）。官方用例
+`tests/unit-tests/minimal_compiler.z:554` 就有 `for _ in 0..self.indent`（而该文件本身也在
+11 个「静默截断」名单里，所以一直没暴露）。下一刀就是它。
+
 ### 推导式里的元组解包 `for k, v in pairs`（2026-09-16 追加，已修）
 
 运行时只给 lambda **一个元素**，所以多出来的名字必须从**元素的槽位**取。此前

@@ -1,0 +1,18 @@
+// PY-A: 以下划线开头的循环变量（Python 里「这个变量用不到」的惯例写法）。
+// parse_pattern 的 wildcard 分支用 `tag("_")` 匹配，于是 `_code` 被吃掉前导 `_`、
+// 把 `code` 留在原地 → 整个 for 语句解析失败 → 外层函数及其后整份文件被静默丢弃。
+// 修法：wildcard 要求真正的**词边界**（`_` 后面不能跟标识符字符）。
+// 这正是 jq_wufu_daily.calculate_global_etf_threshold 里 `for _code, data in arr.items()`
+// 的形状：修后该文件丢行 821 → 511，语料总丢行 7594 → 6940。
+d = {"a": 1, "b": 2}
+n = 0
+for _code, data in d.items():
+    n += 1
+print(n)
+total = 0
+for _x in range(3):
+    total += 1
+print(total)
+
+// expect: 2
+// expect: 3

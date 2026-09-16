@@ -8,7 +8,11 @@ use nom::IResult;
 use nom::Parser;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
+use nom::combinator::map;
+use nom::combinator::not;
 use nom::combinator::opt;
+use nom::combinator::peek;
+use nom::sequence::pair;
 use nom::multi::separated_list0;
 use nom::sequence::{delimited, preceded, terminated};
 
@@ -16,8 +20,20 @@ use nom::sequence::{delimited, preceded, terminated};
 pub fn parse_pattern(input: &str) -> IResult<&str, AstNode> {
     // First parse a basic pattern
     let (input, pattern) = alt((
-        // Wildcard pattern
-        tag("_").map(|_| AstNode::Ignore),
+        // Wildcard pattern — a BARE `_`. Without the boundary check `_code`
+        // matched the wildcard `_` and left `code` behind, so every
+        // underscore-prefixed loop variable (`for _code, data in …`, the usual
+        // Python spelling for an unused name) failed to parse and the enclosing
+        // function — plus the rest of the file — was silently dropped.
+        map(
+            pair(
+                tag("_"),
+                peek(not(nom::character::complete::satisfy(|c: char| {
+                    c.is_ascii_alphanumeric() || c == '_'
+                }))),
+            ),
+            |_| AstNode::Ignore,
+        ),
         // Tuple pattern: `(pattern, pattern, ...)`
         parse_tuple_pattern,
         // Struct pattern: `Path { field: pattern, ... }` or `Path(pattern, ...)`
