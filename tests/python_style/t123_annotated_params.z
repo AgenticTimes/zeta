@@ -1,0 +1,22 @@
+// PY-A: 带注解的形参 —— 点号限定类型与 PEP 604 联合类型。
+// `def f(df: pd.DataFrame)` 是真实 Python 里最常见的写法之一，`X | None`
+// 也一样；此前这两种注解都让**整个定义**解析失败（many0 又会让其后整份文件
+// 被静默丢弃）。
+//  - 点号路径：`pd.DataFrame`、`a.b.c` —— 原样保留为不透明类型名
+//  - 联合类型：`X | None` 取「第一个不是 None 的分支」（Zeta 没有联合类型，
+//    而 Optional[X] 运行时实际上就是 X）
+def f(x: pd.DataFrame) -> i64:
+    return 1
+
+def g(
+    a: pd.DataFrame,
+    b: pd.DataFrame | None = None,
+    c: list[str] | None = None,
+) -> i64:
+    return 2
+
+print(f(0))
+print(g(0))
+
+// expect: 1
+// expect: 2

@@ -515,6 +515,26 @@ pub fn parse_type(input: &str) -> IResult<&str, String> {
     }
     let (input, base) = alt((special_types, builtin_types, parse_type_path)).parse(input)?;
     s += &base;
+    // PY-A: module-qualified annotations — `def f(df: pd.DataFrame)`, `x: a.b.c`.
+    // Real Python uses these constantly; before this the whole definition failed
+    // to parse (and, via `many0`, silently dropped the rest of the file). The
+    // path is kept verbatim; it stays an opaque type name to Zeta.
+    let (mut input, dotted) = many0(preceded(ws(tag(".")), ws(parse_ident))).parse(input)?;
+    for seg in dotted {
+        s.push('.');
+        s.push_str(&seg);
+    }
+    // PY-A: PEP 604 unions — `X | None`, `list[str] | None`. Zeta has no union
+    // type, so keep the first alternative that is not `None`: that is the type
+    // the value actually carries (`Optional[X]` ⇒ X).
+    while let Ok((after_pipe, _)) = ws(tag("|")).parse(input) {
+        // Recurse: `parse_type` already handles dotted paths and further `|`.
+        let (after_alt, alt_full) = parse_type(after_pipe)?;
+        if s.trim().is_empty() || s.trim() == "None" {
+            s = alt_full;
+        }
+        input = after_alt;
+    }
     Ok((input, s))
 }
 
