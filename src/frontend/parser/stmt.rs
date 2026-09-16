@@ -505,7 +505,46 @@ fn parse_assign(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = opt(ws(tag(";"))).parse(input)?;
 
     if op == "=" {
-        Ok((input, AstNode::Assign(Box::new(lhs), Box::new(rhs))))
+        // PY-A: chained assignment `a = b = expr` (very common Python). The
+        // parser used to consume `a = b` and leave `= expr`, so the statement
+        // failed and the whole definition — plus the rest of the file — was
+        // silently dropped. The right-hand side is evaluated ONCE into the
+        // first target, then copied into the rest (`a = b = 0` ≡ `a = 0; b = a`).
+        // PY-A: chained assignment `a = b = expr` (very common Python). The
+        // rhs parse stops at `b` and leaves `= expr` behind, so that leftover
+        // `expr` is the VALUE OF THE WHOLE CHAIN, while each thing parsed so far
+        // becomes a target. Emit `a = expr; b = a; …` (the rhs is evaluated
+        // once into the first target, then copied left-to-right) — before this
+        // the statement failed to parse and the whole definition, plus the rest
+        // of the file, was silently dropped.
+        let mut targets: Vec<AstNode> = Vec::new();
+        let mut value = rhs;
+        let mut rest = input;
+        loop {
+            let t = rest.trim_start();
+            if !(t.starts_with('=') && !t[1..].starts_with('=')) {
+                break;
+            }
+            // Whatever we parsed just before the `=` is a TARGET, not the value.
+            targets.push(value);
+            let (after_eq, next_rhs) = ws(parse_full_expr).parse(&t[1..])?;
+            value = next_rhs;
+            rest = after_eq;
+        }
+        let (rest, _) = opt(ws(tag(";"))).parse(rest)?;
+        if targets.is_empty() {
+            return Ok((rest, AstNode::Assign(Box::new(lhs), Box::new(value))));
+        }
+        let lhs_for_copy = lhs.clone();
+        let mut body = vec![AstNode::Assign(Box::new(lhs), Box::new(value.clone()))];
+        for t in targets {
+            let val = match &lhs_for_copy {
+                AstNode::Var(_) => lhs_for_copy.clone(),
+                _ => value.clone(),
+            };
+            body.push(AstNode::Assign(Box::new(t), Box::new(val)));
+        }
+        return Ok((rest, AstNode::Block { body }));
     } else {
         // Compound assignment: produce AssignOp with the base operator (without =)
         let bin_op = op.trim_end_matches('=').to_string();

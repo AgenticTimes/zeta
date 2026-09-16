@@ -1,0 +1,23 @@
+// PY-A: 链式赋值 `a = b = expr`（Python 常见写法）。
+// 解析器原来吃掉 `a = b` 就把 `= expr` 留在原地 → 语句失败 → 外层函数及其后整份文件
+// 被静默丢弃（jq_wufu_daily.update_breadth_gate 里 `below = checked = 0` 正是此形状；
+// 修后该文件丢行 511 → 388，语料总丢行 6790 → 6171）。
+// 语义：右值**只求值一次**写进第一个目标，其余目标从左到右复制
+// （`a = b = 0` ≡ `a = 0; b = a`，所以 `below = checked = 0` 后 `checked += 1` 不影响 below）。
+def f():
+    below = checked = 0
+    checked += 1
+    print(below)
+    print(checked)
+
+f()
+x = y = z = 5
+print(x)
+print(y)
+print(z)
+
+// expect: 0
+// expect: 1
+// expect: 5
+// expect: 5
+// expect: 5
