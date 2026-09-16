@@ -1,0 +1,20 @@
+// PY-A: `f = lambda …` 绑定后调用（Python 写法）。
+// 此前只有 Zeta 的 `let f = lambda …` 会登记闭包绑定，Python 的 `=` 不会：
+// 于是 `f(x)` 被发射成「调用名为 f 的符号」→ 链接期 `_f` 未定义，**整份程序链接失败**。
+// 修法：Assign 路径在 rhs 是 Closure 时也设置 pending_closure_binding。
+// 同时补上闭包的**返回类型**（按 closure 名记录 lambda 体的值类型）——
+// 否则字符串闭包的结果按 i64 打印成指针数字。
+def g():
+    f = lambda s: s.upper()
+    print(f("ab"))
+
+g()
+h = lambda x: x + 1
+print(h(41))
+base = 10
+k = lambda x: x + base
+print(k(5))
+
+// expect: AB
+// expect: 42
+// expect: 15

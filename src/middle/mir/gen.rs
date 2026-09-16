@@ -115,6 +115,10 @@ pub struct MirGen {
     /// synthetic closure function name. Lets call sites (`f(41)` where `f =
     /// lambda x: x+1`) lower to a direct named call to the closure function.
     closure_vars: HashMap<String, String>,
+    /// PY-A: value type of each synthetic closure's body, so a call through a
+    /// closure variable (`f = lambda s: s.upper(); f(x)`) yields a string
+    /// rather than an i64-boxed pointer.
+    closure_ret_tys: HashMap<String, Type>,
     /// The var name being bound when a `let f = lambda...` RHS is lowered;
     /// the Closure lowering reads it to record the closure_vars entry.
     pending_closure_binding: Option<String>,
@@ -161,6 +165,7 @@ impl MirGen {
             func_param_names: HashMap::new(),
             closure_counter: 0,
             closure_vars: HashMap::new(),
+            closure_ret_tys: HashMap::new(),
             pending_closure_binding: None,
         }
     }
@@ -846,7 +851,19 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         return;
                     }
                 }
+                // PY-A: Python-style `f = lambda …` must register the closure
+                // binding, exactly like the Zeta `let f = lambda …` path does.
+                // Without it a later `f(x)` emitted a CALL to a symbol named `f`,
+                // which does not exist — the link failed with `_f` undefined.
+                let binding_name = match &**lhs {
+                    AstNode::Var(n) if matches!(&**rhs, AstNode::Closure { .. }) => Some(n.clone()),
+                    _ => None,
+                };
+                if let Some(n) = &binding_name {
+                    self.pending_closure_binding = Some(n.clone());
+                }
                 let rhs_id = self.lower_expr(rhs);
+                self.pending_closure_binding = None;
                 if let AstNode::Subscript { base, index } = &**lhs {
                     let base_id = self.lower_expr(base);
                     let index_id = self.lower_expr(index);
@@ -6181,13 +6198,18 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 if let Some(closure_fn) = self.closure_vars.get(base_func) {
                     let closure_fn = closure_fn.clone();
                     self.stmts.push(MirStmt::Call {
-                        func: closure_fn,
+                        func: closure_fn.clone(),
                         args: arg_ids.clone(),
                         dest: id,
                         type_args: vec![],
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    let ret_ty = self
+                        .closure_ret_tys
+                        .get(&closure_fn)
+                        .cloned()
+                        .unwrap_or(Type::I64);
+                    self.type_map.insert(id, ret_ty);
                     return id;
                 }
 
@@ -7787,6 +7809,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 }
                 if let Some(v) = self.pending_closure_binding.take() {
                     self.closure_vars.insert(v.clone(), closure_name.clone());
+                }
+                if let Some(t) = self.last_closure_ret_ty.clone() {
+                    self.closure_ret_tys.insert(closure_name.clone(), t);
                 }
                 let addr_id = self.next_id();
                 self.exprs.insert(addr_id, MirExpr::FuncAddr(closure_name));
