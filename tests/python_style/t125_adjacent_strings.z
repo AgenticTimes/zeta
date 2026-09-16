@@ -1,0 +1,17 @@
+// PY-A: 相邻字符串字面量隐式拼接（`"a" "b"`、`f"x" f"y"`，可跨行）。
+// 这是基础 Python，长消息与换行排版里到处都是；此前第二个字面量不被消费，
+// 外层调用随之解析失败、**整份文件被静默丢弃**。
+// （`jq_wufu_daily.initialize` 里那条跨行 log.info 正是本类：修后语料丢行 1163→948。）
+r = 0.5
+print("a" "b")
+print(f"x{1}" f"y{2}")
+print(
+    f"滑点{r*100:.2f}% | "
+    f"保守={True}"
+)
+print("pre" f"{1}" "post")
+
+// expect: ab
+// expect: x1y2
+// expect: 滑点50.00% | 保守=true
+// expect: pre1post

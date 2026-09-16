@@ -1363,7 +1363,57 @@ fn utf8_seq_len(first_byte: u8) -> usize {
     }
 }
 
+/// PY-A: implicit concatenation of adjacent string literals — `"a" "b"`,
+/// `f"x={x}" f"y={y}"`. Basic Python (used constantly for long messages, and
+/// wrapped across lines inside calls). Without this the SECOND literal stayed
+/// unconsumed, which failed the enclosing call and silently truncated the file.
+fn concat_string_nodes(a: AstNode, b: AstNode) -> AstNode {
+    fn into_parts(n: AstNode) -> Vec<AstNode> {
+        match n {
+            AstNode::FString(p) => p,
+            AstNode::StringLit(s) => vec![AstNode::StringLit(s)],
+            other => vec![other],
+        }
+    }
+    let mut parts = into_parts(a);
+    parts.extend(into_parts(b));
+    if parts.iter().all(|p| matches!(p, AstNode::StringLit(_))) {
+        let joined: String = parts
+            .into_iter()
+            .map(|p| match p {
+                AstNode::StringLit(s) => s,
+                _ => String::new(),
+            })
+            .collect();
+        return AstNode::StringLit(joined);
+    }
+    AstNode::FString(parts)
+}
+
 pub fn parse_primary(input: &str) -> IResult<&str, AstNode> {
+    let (mut input, mut node) = parse_primary_atom(input)?;
+    if matches!(node, AstNode::StringLit(_) | AstNode::FString(_)) {
+        loop {
+            // `trim_start` (not just spaces) so the two halves may sit on
+            // different lines, as they do inside a wrapped call.
+            let probe = input.trim_start();
+            let Ok((after, next)) = parse_primary_atom(probe) else {
+                break;
+            };
+            if !matches!(next, AstNode::StringLit(_) | AstNode::FString(_)) {
+                break;
+            }
+            if after.len() == probe.len() {
+                break; // zero-width match guard
+            }
+            node = concat_string_nodes(node, next);
+            input = after;
+        }
+    }
+    Ok((input, node))
+}
+
+fn parse_primary_atom(input: &str) -> IResult<&str, AstNode> {
     alt((
         parse_lambda,
         parse_fstring,
