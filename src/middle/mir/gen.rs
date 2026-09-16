@@ -4934,8 +4934,20 @@ impl MirGen {
                 let ordered_args: Vec<AstNode> = {
                     let mut pos: Vec<AstNode> = Vec::new();
                     let mut kw: Vec<(String, AstNode)> = Vec::new();
+                    // PY-A: `f(**mapping)`. The mapping's keys only exist at
+                    // runtime, but the callee's parameter NAMES are static, so
+                    // the call expands to `f(m["a"], m["b"])`.
+                    let mut spread: Vec<AstNode> = Vec::new();
                     for a in args {
                         match a {
+                            AstNode::Call {
+                                receiver: None,
+                                method,
+                                args: ka,
+                                ..
+                            } if method == "zeta_kwargs_unpack" && ka.len() == 1 => {
+                                spread.push(ka[0].clone());
+                            }
                             AstNode::Call {
                                 receiver: None,
                                 method,
@@ -4951,31 +4963,72 @@ impl MirGen {
                             _ => pos.push(a.clone()),
                         }
                     }
-                    if kw.is_empty() {
+                    let fill = |slots: &mut Vec<Option<AstNode>>,
+                                params: &[String],
+                                pos: Vec<AstNode>,
+                                kw: Vec<(String, AstNode)>,
+                                spread: &[AstNode]| {
+                        for (i, a) in pos.into_iter().enumerate() {
+                            if i < slots.len() {
+                                slots[i] = Some(a);
+                            } else {
+                                slots.push(Some(a));
+                            }
+                        }
+                        for (n, v) in kw {
+                            match params.iter().position(|p| *p == n) {
+                                Some(i) => slots[i] = Some(v),
+                                None => slots.push(Some(v)),
+                            }
+                        }
+                        // A `**` mapping fills whatever is still unbound.
+                        for m in spread {
+                            for (i, slot) in slots.iter_mut().enumerate() {
+                                if slot.is_none() {
+                                    *slot = Some(AstNode::Subscript {
+                                        base: Box::new(m.clone()),
+                                        index: Box::new(AstNode::StringLit(
+                                            params[i].clone(),
+                                        )),
+                                    });
+                                }
+                            }
+                        }
+                    };
+                    if !spread.is_empty() {
+                        // Unknown signature (external shim / method): there are no
+                        // parameter names to bind against, so say so instead of
+                        // silently calling with unbound arguments.
+                        let params = if receiver.is_none() {
+                            self.func_param_names.get(method.as_str()).cloned()
+                        } else {
+                            None
+                        };
+                        match params {
+                            Some(params) => {
+                                let mut slots: Vec<Option<AstNode>> =
+                                    params.iter().map(|_| None).collect();
+                                fill(&mut slots, &params, pos, kw, &spread);
+                                slots.into_iter().flatten().collect()
+                            }
+                            None => {
+                                eprintln!(
+                                    "warning: PY-A: `{}` is called with `**` unpacking but its \
+                                     signature is unknown — the mapping is DROPPED (nothing is \
+                                     bound for it)",
+                                    method
+                                );
+                                kw.into_iter().map(|(_, v)| v).chain(pos).collect()
+                            }
+                        }
+                    } else if kw.is_empty() {
                         args.clone()
                     } else if receiver.is_none() {
                         match self.func_param_names.get(method.as_str()).cloned() {
                             Some(params) => {
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
-                                for (i, a) in pos.into_iter().enumerate() {
-                                    if i < slots.len() {
-                                        slots[i] = Some(a);
-                                    }
-                                }
-                                for (n, v) in kw {
-                                    match params.iter().position(|p| *p == n) {
-                                        Some(i) => slots[i] = Some(v),
-                                        None => {
-                                            eprintln!(
-                                                "warning: PY-A: `{}` has no parameter named \
-                                                 `{}` — that keyword argument is passed positionally",
-                                                method, n
-                                            );
-                                            slots.push(Some(v));
-                                        }
-                                    }
-                                }
+                                fill(&mut slots, &params, pos, kw, &[]);
                                 slots.into_iter().flatten().collect()
                             }
                             None => kw.into_iter().map(|(_, v)| v).chain(pos).collect(),

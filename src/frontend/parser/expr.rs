@@ -1673,6 +1673,26 @@ fn parse_logical_and(input: &str) -> IResult<&str, AstNode> {
 /// `name=value`. Keyword NAMES are dropped in V1 (values bind positionally);
 /// this keeps JoinQuant-style calls (`f(x=1, type='fund')`) parseable.
 fn parse_call_arg(input: &str) -> IResult<&str, AstNode> {
+    // PY-A: Python `**mapping` argument unpacking. This MUST be detected
+    // BEFORE the expression fallback: `**d` would otherwise parse as `*(*d)`
+    // (unary deref twice) and the callee silently received zeros — a wrong
+    // value with no diagnostic at all. The call site expands the marker using
+    // the callee's (statically known) parameter names.
+    if let Some(after) = input.trim_start().strip_prefix("**") {
+        if !after.starts_with('*') {
+            let (rest, value) = parse_full_expr(after.trim_start())?;
+            return Ok((
+                rest,
+                AstNode::Call {
+                    receiver: None,
+                    method: "zeta_kwargs_unpack".to_string(),
+                    args: vec![value],
+                    type_args: vec![],
+                    structural: false,
+                },
+            ));
+        }
+    }
     // PY-A LIMIT: `sum(x for x in y)` (bare genexp as sole argument) is NOT
     // supported — the genexp parens collide with the call's parens in the
     // primary/postfix parse order. Write `sum([x for x in y])` instead
