@@ -739,10 +739,14 @@ REasyQuant 语料里到处是中文 docstring —— 以前解析早早截断、
 `jq_wufu_daily` 821 → **511**、`jq_wufu` 744 → **509**（当前最大变成 `jq_shim` 595）。
 回归 `t132`；official 194/194、python_style 132/132、panic 0。
 
-**另记一个同批发现的静默错值（未修）**：**裸 `_` 作循环变量时循环体根本不执行** ——
-`for _ in range(3): n += 1` 打 0（应为 3）。`for _x in range(3)` 正常（3）。官方用例
-`tests/unit-tests/minimal_compiler.z:554` 就有 `for _ in 0..self.indent`（而该文件本身也在
-11 个「静默截断」名单里，所以一直没暴露）。下一刀就是它。
+**同批发现的静默错值（已修，同日）**：**裸 `_` 作循环变量时循环体根本不执行** ——
+`for _ in range(3): n += 1` 打 **0**（应为 3）。根因：range 路径只匹配 `AstNode::Var`，
+wildcard 于是落到**集合路径**，把 Range 当集合迭代 → 零次。修法：range 路径同时接受
+`AstNode::Ignore`（绑定一个丢弃名 `__wildcard`）。`for _ in 0..3`（官方 `minimal_compiler.z:554`
+的写法）与 `for _ in [1,2,3]` 一并验证。回归 `t133`。
+
+⚠️ 官方那个用例之所以一直没暴露：`minimal_compiler.z` 本身就在 11 个「静默截断」名单里
+（见上文）——**同一个文件既是解析截断的受害者，又藏着被截断掩盖的运行期错值**。
 
 ### 推导式里的元组解包 `for k, v in pairs`（2026-09-16 追加，已修）
 

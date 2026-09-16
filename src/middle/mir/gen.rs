@@ -1570,8 +1570,18 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     }
                 };
 
-                // Get variable name from pattern
-                if let AstNode::Var(var_name) = &**pattern {
+                // Get variable name from pattern. A bare `_` (AstNode::Ignore)
+                // is the usual "I don't need the index" spelling — it must still
+                // drive the range loop. Before this the wildcard fell through to
+                // the COLLECTION path, which iterated the Range as a collection
+                // and ran the body zero times, silently (`for _ in range(3)`
+                // printed nothing instead of looping).
+                let range_var: Option<String> = match &**pattern {
+                    AstNode::Var(n) => Some(n.clone()),
+                    AstNode::Ignore => Some("__wildcard".to_string()),
+                    _ => None,
+                };
+                if let Some(var_name) = &range_var {
                     // Lower start and end expressions
                     let start_id = self.lower_expr(&start_expr);
                     let end_id = self.lower_expr(&end_expr);

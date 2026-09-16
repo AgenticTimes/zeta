@@ -1,0 +1,21 @@
+// PY-A: 裸 `_` 作循环变量（「不需要这个下标」的惯用写法）必须照常驱动循环。
+// 此前 range 路径只匹配 `AstNode::Var`，wildcard 落到**集合路径** → 把 Range 当集合迭代
+// → 循环体**一次都不执行**，而且毫无提示：`for _ in range(3): n += 1` 打 0（应为 3）。
+// 官方用例 tests/unit-tests/minimal_compiler.z:554 就写着 `for _ in 0..self.indent`，
+// 而那个文件本身也在「静默截断」名单里，所以这个 bug 一直没暴露。
+n = 0
+for _ in range(3):
+    n += 1
+print(n)
+m = 0
+for _ in [1, 2, 3]:
+    m += 1
+print(m)
+k = 0
+for i in range(3):
+    k += i
+print(k)
+
+// expect: 3
+// expect: 3
+// expect: 3
