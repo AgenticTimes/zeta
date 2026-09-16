@@ -2307,8 +2307,134 @@ fn find_top_level_or(input: &str) -> Option<usize> {
     None
 }
 
+/// PY-A: locate a bare keyword at bracket depth 0, skipping string literals
+/// (including triple-quoted ones). Used to find the `if`/`else` of a Python
+/// conditional expression without being fooled by the same words nested in
+/// parentheses/brackets or inside strings.
+fn find_top_level_kw(input: &str, kw: &str) -> Option<usize> {
+    let b = input.as_bytes();
+    let kwb = kw.as_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        // Triple-quoted strings: `"""` / `'''` — skip to the matching close.
+        if (c == b'"' || c == b'\'') && i + 2 < b.len() && b[i + 1] == c && b[i + 2] == c {
+            let mut j = i + 3;
+            while j + 2 < b.len()
+                && !(b[j] == c && b[j + 1] == c && b[j + 2] == c)
+            {
+                j += 1;
+            }
+            i = if j + 2 < b.len() { j + 3 } else { b.len() };
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => quote = Some(c),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            _ => {}
+        }
+        // ⚠️ `i` walks BYTES, so it can land inside a multi-byte character
+        // (any CJK string literal in the source). Slicing there panics —
+        // `input[i..]` is a `&str` index, not a byte index. A keyword can never
+        // begin mid-character (its first byte is ASCII), so skipping is correct.
+        if depth == 0
+            && input.is_char_boundary(i)
+            && input[i..].starts_with(kw)
+            && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_'))
+        {
+            let after = i + kwb.len();
+            if after >= b.len() || !(b[after].is_ascii_alphanumeric() || b[after] == b'_') {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// PY-A: parse a Python conditional expression `A if C else B`, whose leading
+/// `if` sits at `if_pos` (found at top level by `find_top_level_kw`). The
+/// right-hand side is itself a conditional expression, giving Python's
+/// right-associative nesting (`a if c1 else b if c2 else d`).
+///
+/// Returns `Err` (so the caller falls back to plain or-expression parsing)
+/// unless the shape is exactly `<expr> if <expr> else <expr>` — importantly,
+/// the left side must consume everything up to `if`. That guard is what keeps
+/// this from misfiring on a following `if`-STATEMENT (whose condition would be
+/// followed by a `{`, leaving the condition parse non-empty).
+fn parse_conditional_tail(input: &str, if_pos: usize) -> IResult<&str, AstNode> {
+    let (left_rem, then_expr) = parse_expr_no_if(&input[..if_pos])?;
+    if !left_rem.trim().is_empty() {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    let after_if = &input[if_pos + 2..];
+    let else_pos = match find_top_level_kw(after_if, "else") {
+        Some(p) => p,
+        None => {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )))
+        }
+    };
+    let (cond_rem, cond) = parse_expr_no_if(&after_if[..else_pos])?;
+    if !cond_rem.trim().is_empty() {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    // The ELSE branch is parsed with the full expression parser so that a
+    // nested ternary binds to the right, exactly like Python:
+    //     `1 if n > 0 else -1 if n < 0 else 0`  ==  `1 if n > 0 else (-1 if n < 0 else 0)`
+    // Using the `_no_if` variant here left the inner `if … else …` unconsumed,
+    // which failed the enclosing definition and truncated the file.
+    let (rest, else_expr) = parse_expr(&after_if[else_pos + 4..])?;
+    Ok((
+        rest,
+        AstNode::If {
+            cond: Box::new(cond),
+            then: vec![AstNode::ExprStmt {
+                expr: Box::new(then_expr),
+            }],
+            else_: vec![AstNode::ExprStmt {
+                expr: Box::new(else_expr),
+            }],
+        },
+    ))
+}
+
 // Parse expression without if (for use in if conditions to avoid left recursion)
 fn parse_expr_no_if(input: &str) -> IResult<&str, AstNode> {
+    // PY-A: Python conditional expression `A if C else B`. It binds looser
+    // than `or`/`and`, and — unlike Zeta's prefix `if COND { … }` — starts
+    // with the value. Detected only when the `if` is at bracket depth 0.
+    if let Some(if_pos) = find_top_level_kw(input, "if") {
+        if let Ok((rest, node)) = parse_conditional_tail(input, if_pos) {
+            return Ok((rest, node));
+        }
+    }
     // Split on top-level `||` first, parse each side independently.
     // This avoids a nom 8 combinator interaction where field-access + `<` + `||` + `>`
     // causes sub-parsers to consume operators they shouldn't handle.

@@ -1037,6 +1037,57 @@ impl Resolver {
         ) -> u8 {
             match e {
                 AstNode::StringLit(_) | AstNode::FString { .. } => 1,
+                // PY-A: the ternary `A if C else B` desugars to an `If` node of
+                // two one-expression blocks, so classification has to look at
+                // the branch VALUES. Otherwise `return "big" if a > 3 else
+                // "small"` was classified i64 and callers printed a pointer.
+                AstNode::If { then, else_, .. } => {
+                    let probe = |b: &Vec<AstNode>| -> u8 {
+                        for s in b.iter().rev() {
+                            match s {
+                                AstNode::ExprStmt { expr } => {
+                                    return classify(
+                                        expr,
+                                        funcs,
+                                        prefix,
+                                        module_aliases,
+                                        current_params,
+                                    )
+                                }
+                                AstNode::Return(e) => {
+                                    return classify(
+                                        e,
+                                        funcs,
+                                        prefix,
+                                        module_aliases,
+                                        current_params,
+                                    )
+                                }
+                                // A body statement is often a BARE expression
+                                // (the `ExprStmt` wrapper is normalized away),
+                                // so classify it directly — otherwise a ternary
+                                // `"a" if c else "b"` classified as unknown (0)
+                                // and the caller printed a pointer as i64.
+                                other => {
+                                    return classify(
+                                        other,
+                                        funcs,
+                                        prefix,
+                                        module_aliases,
+                                        current_params,
+                                    )
+                                }
+                            }
+                        }
+                        0
+                    };
+                    let t = probe(then);
+                    if t != 0 {
+                        t
+                    } else {
+                        probe(else_)
+                    }
+                }
                 AstNode::FloatLit(_) => 2,
                 AstNode::Lit(_) | AstNode::Bool(_) => 3,
                 AstNode::Call {

@@ -699,6 +699,32 @@ AST 的 `params` 只有 `(name, type)` —— 于是缺省实参静默当 0，�
 回归 `t122`（15/25/123/193/198/15/17 全对）。official 194/194、python_style 122→**123/123**、
 语料指标不变（exit-ok 5、截断 32、丢行 8580）——这是语义修复，不动解析面。
 
+### 编译器 panic 修复 + 三元表达式进展（2026-09-16 追加）
+
+**① panic 修复（本轮最重要）**：`find_top_level_kw` 用**字节下标切 `&str`**（`input[i..]`），
+遇到中文（多字节）字符串字面量就会 `byte index … is not a char boundary` panic。
+REasyQuant 语料里到处是中文 docstring —— 以前解析早早截断、走不到这里，我这几轮的修复让解析
+走得更深才暴露出来（表现为整份文件编译崩溃、一个二进制都产不出来）。
+编译器**绝不能因源码输入 panic**，已加 `is_char_boundary` 守卫（同文件 `comp_probe` 早有先例）。
+`panic 计数` 已加入语料测评口径，本轮归零。
+
+**② 清掉 `parse_conditional_tail` 里的 3 条 `eprintln!("DBG …")`** —— 每次编译都往 stderr 喷调试信息。
+
+**③ 三元表达式（Python `A if C else B`）进展**：机制本来就在（`parse_conditional_tail`），
+但三处类型/解析环节断链：
+- `If` 作表达式时 **dest 被硬编码成 i64** → 字符串三元 `return "big" if … else "small"` 打出指针数字。
+  改为从分支值取真实类型；`process_block` 里还必须**先解包 `ExprStmt`** 再降级，否则拿到的是无条件值。
+- 返回类型推断的分类器**不认 `If`**，且函数体里的语句常是**裸表达式**（`ExprStmt` 被规整掉）→ 两者都补。
+- `else` 分支改用完整表达式解析 → 右结合嵌套 `1 if n>0 else -1 if n<0 else 0` 可解析。
+
+**④ 仍未修**（`t124_ternary` 因此仍红，10 项对 3 项；该用例是外部新增、专门记录此缺口的）：
+- **分支里的负号**：`… else -1` 解析失败（换成正数就正常）——已缩到最小复现；
+- 无括号嵌套三元只修了一半；
+- 字符串三元经过**模块级/局部变量**再打印仍是 i64（env 路由把别名硬编码成 `Type::I64`）。
+
+**测评**：official **194/194**；python_style 124 passed / 1 failed（`t124_ternary`）；
+语料 丢行 8580 → **8463**、panic **0**、截断 32。
+
 ### 注解：点号限定类型 + PEP 604 联合类型（2026-09-16 追加，已修）
 
 `def f(df: pd.DataFrame)`、`x: a.b.c`、`X | None`、`list[str] | None` —— 两种注解此前都让

@@ -2653,7 +2653,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         // (e.g. bare Var/Lit/BinaryOp expressions in statement position)
                         // Lower the last AST node as an expression to capture its value
                         if let Some(last_ast) = block.last() {
-                            let val_id = mir_gen.lower_expr(last_ast);
+                            // PY-A: unwrap `ExprStmt` — lowering the WRAPPER node
+                            // is not an expression lowering at all, so the value
+                            // came back untyped (i64) and a string branch of a
+                            // ternary was printed as a pointer.
+                            let inner = match last_ast {
+                                AstNode::ExprStmt { expr } => expr.as_ref(),
+                                other => other,
+                            };
+                            let val_id = mir_gen.lower_expr(inner);
                             block_stmts.push(MirStmt::Assign {
                                 lhs: dest,
                                 rhs: val_id,
@@ -2674,6 +2682,26 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // Process then and else blocks
                 let then_stmts = process_block(self, then, dest_id);
                 let else_stmts = process_block(self, else_, dest_id);
+
+                // PY-A: `dest_id` was typed i64 up front, so a conditional
+                // expression whose branches yield STRINGS
+                // (`"big" if a > 3 else "small"`) stored a string pointer in an
+                // i64 slot — `print` then showed a number instead of the text.
+                // Take the type from the branch values instead (they agree in
+                // every real case; disagreement keeps the i64 fallback).
+                let branch_ty = |stmts: &[MirStmt]| -> Option<Type> {
+                    stmts.iter().rev().find_map(|s| match s {
+                        MirStmt::Assign { rhs, .. } => self.type_map.get(rhs).cloned(),
+                        _ => None,
+                    })
+                };
+                if let Some(ty) = branch_ty(&then_stmts).or_else(|| branch_ty(&else_stmts)) {
+                    if !matches!(ty, Type::I64)
+                        || branch_ty(&else_stmts).map_or(true, |t| matches!(t, Type::I64))
+                    {
+                        self.type_map.insert(dest_id, ty);
+                    }
+                }
 
                 // Create If statement with destination
                 self.stmts.push(MirStmt::If {
