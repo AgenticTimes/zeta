@@ -1345,6 +1345,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 pattern,
                 expr,
                 body,
+                else_body,
             } => {
                 // For now, implement simple desugaring for range-based for loops
                 // for i in start..end { body } desugars to:
@@ -1561,9 +1562,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             });
 
                             let body_stmts = self.stmts.split_off(stmts_before);
+                            // PY-A: `for … else` — lowered AFTER the split so
+                            // its statements don't land inside the loop body.
+                            let else_stmts = self.lower_loop_else(else_body);
                             self.stmts.push(MirStmt::While {
                                 cond: cond_id,
                                 body: body_stmts,
+                                else_body: else_stmts,
                             });
                         }
                         return;
@@ -1622,12 +1627,16 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // Get body statements
                     let body_stmts = self.stmts.split_off(stmts_before_body);
 
+                    // PY-A: `for … else` — lowered after the split.
+                    let else_stmts = self.lower_loop_else(else_body);
+
                     // Create For statement in MIR
                     self.stmts.push(MirStmt::For {
                         iterator: range_id,
                         pattern: var_name.clone(),
                         var_id,
                         body: body_stmts,
+                        else_body: else_stmts,
                     });
                 }
             }
@@ -1642,7 +1651,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // (last_loop_result is intentionally NOT cleared here —
                 // gen_fn checks it after the match so the last-stmt logic works.)
             }
-            AstNode::While { cond, body } => {
+            AstNode::While {
+                cond,
+                body,
+                else_body,
+            } => {
                 // Must capture stmts BEFORE lowering the condition,
                 // because lower_expr(cond) can emit SemiringFold side-effects
                 // (e.g. multiplication in `p * p < n`). Those need to be
@@ -1660,9 +1673,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
 
                 // Create While statement in MIR — all cond side-effects
                 // are inside the body so they re-execute each iteration
+                let else_stmts = self.lower_loop_else(else_body);
                 self.stmts.push(MirStmt::While {
                     cond: cond_id,
                     body: while_stmts,
+                    else_body: else_stmts,
                 });
             }
             AstNode::Unsafe { body } => {
@@ -1909,6 +1924,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 self.stmts.push(MirStmt::While {
                     cond: true_id,
                     body: body_stmts,
+                    else_body: vec![],
                 });
             }
             AstNode::Closure { body, .. } => {
@@ -2598,6 +2614,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 self.stmts.push(MirStmt::While {
                     cond: cond_id,
                     body: loop_stmts,
+                    else_body: vec![],
                 });
 
                 self.exprs.insert(result_id, MirExpr::Var(result_id));
@@ -7953,6 +7970,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 self.stmts.push(MirStmt::While {
                     cond: true_id,
                     body: body_stmts,
+                    else_body: vec![],
                 });
 
                 // Store result back to the expression ID so it's accessible
@@ -7993,6 +8011,20 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+
+    /// PY-A: lower a `for … else` / `while … else` body into its own statement
+    /// list, kept OUT of the loop body (codegen runs it only when the loop
+    /// finished without `break`). Empty when there is no `else` clause.
+    fn lower_loop_else(&mut self, else_body: &[AstNode]) -> Vec<MirStmt> {
+        if else_body.is_empty() {
+            return Vec::new();
+        }
+        let before = self.stmts.len();
+        for stmt in else_body {
+            self.lower_ast(stmt);
+        }
+        self.stmts.split_off(before)
     }
 
     /// Get the common type of element expressions.

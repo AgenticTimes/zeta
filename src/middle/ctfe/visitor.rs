@@ -69,9 +69,16 @@ pub trait AstVisitor {
                 }
             }
             // While loop
-            AstNode::While { cond, body } => {
+            AstNode::While {
+                cond,
+                body,
+                else_body,
+            } => {
                 self.visit(cond)?;
                 for stmt in body {
+                    self.visit(stmt)?;
+                }
+                for stmt in else_body {
                     self.visit(stmt)?;
                 }
             }
@@ -80,10 +87,14 @@ pub trait AstVisitor {
                 pattern,
                 expr,
                 body,
+                else_body,
             } => {
                 self.visit(pattern)?;
                 self.visit(expr)?;
                 for stmt in body {
+                    self.visit(stmt)?;
+                }
+                for stmt in else_body {
                     self.visit(stmt)?;
                 }
             }

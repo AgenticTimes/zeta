@@ -449,15 +449,23 @@ impl ConstEvaluator {
             }
 
             // While loop - transform condition and body
-            AstNode::While { cond, body } => {
+            AstNode::While {
+                cond,
+                body,
+                else_body,
+            } => {
                 let transformed_cond = self.transform_expr(cond)?;
                 let transformed_body: Result<Vec<_>, _> =
                     body.iter().map(|stmt| self.transform_expr(stmt)).collect();
                 let transformed_body = transformed_body?;
+                let transformed_else: Result<Vec<_>, _> =
+                    else_body.iter().map(|stmt| self.transform_expr(stmt)).collect();
+                let transformed_else = transformed_else?;
 
                 AstNode::While {
                     cond: Box::new(transformed_cond),
                     body: transformed_body,
+                    else_body: transformed_else,
                 }
             }
 
@@ -466,17 +474,22 @@ impl ConstEvaluator {
                 pattern,
                 expr,
                 body,
+                else_body,
             } => {
                 let transformed_pattern = self.transform_expr(pattern)?;
                 let transformed_expr = self.transform_expr(expr)?;
                 let transformed_body: Result<Vec<_>, _> =
                     body.iter().map(|stmt| self.transform_expr(stmt)).collect();
                 let transformed_body = transformed_body?;
+                let transformed_else: Result<Vec<_>, _> =
+                    else_body.iter().map(|stmt| self.transform_expr(stmt)).collect();
+                let transformed_else = transformed_else?;
 
                 AstNode::For {
                     pattern: Box::new(transformed_pattern),
                     expr: Box::new(transformed_expr),
                     body: transformed_body,
+                    else_body: transformed_else,
                 }
             }
 
@@ -625,7 +638,11 @@ impl ConstEvaluator {
             AstNode::ConstDef { value, .. } => self.eval_const_expr(value),
 
             // While loops
-            AstNode::While { cond, body } => self.eval_while_loop(cond, body),
+            AstNode::While {
+                cond,
+                body,
+                else_body,
+            } => self.eval_while_loop(cond, body, else_body),
 
             // Loop statements
             AstNode::Loop { body } => self.eval_loop(body),
@@ -635,7 +652,8 @@ impl ConstEvaluator {
                 pattern,
                 expr,
                 body,
-            } => self.eval_for_loop(pattern, expr, body),
+                else_body,
+            } => self.eval_for_loop(pattern, expr, body, else_body),
 
             // Return expressions — evaluate the inner value and signal early exit
             AstNode::Return(expr) => {
@@ -1157,7 +1175,12 @@ impl ConstEvaluator {
     }
 
     /// Evaluate a while loop at compile time
-    fn eval_while_loop(&mut self, cond: &AstNode, body: &[AstNode]) -> CtfeResult<ConstValue> {
+    fn eval_while_loop(
+        &mut self,
+        cond: &AstNode,
+        body: &[AstNode],
+        else_body: &[AstNode],
+    ) -> CtfeResult<ConstValue> {
         let mut loop_count = 0;
         const MAX_LOOP_ITERATIONS: usize = 10000000;
 
@@ -1192,6 +1215,12 @@ impl ConstEvaluator {
             loop_count += 1;
         }
 
+        // PY-A: `while … else` — CTFE has no `break` support, so the loop can
+        // only have finished normally; the else body always runs.
+        for stmt in else_body {
+            self.eval_const_expr(stmt)?;
+        }
+
         Ok(ConstValue::Unit)
     }
 
@@ -1211,6 +1240,7 @@ impl ConstEvaluator {
         pattern: &AstNode,
         expr: &AstNode,
         body: &[AstNode],
+        else_body: &[AstNode],
     ) -> CtfeResult<ConstValue> {
         // Extract the range expression: start..end
         // For loops like: for i in start..end { body }
@@ -1274,6 +1304,11 @@ impl ConstEvaluator {
             }
 
             loop_count += 1;
+        }
+
+        // PY-A: `for … else` — CTFE has no `break` support (see eval_while_loop).
+        for stmt in else_body {
+            self.eval_const_expr(stmt)?;
         }
 
         Ok(ConstValue::Unit)

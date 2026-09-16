@@ -92,11 +92,16 @@ pub enum MirStmt {
         pattern: String, // Variable name to bind to
         var_id: u32,     // Variable ID for the loop variable
         body: Vec<MirStmt>,
+        /// PY-A: Python `for … else` — executed only when the loop finished
+        /// without `break`. Empty when there is no `else` clause.
+        else_body: Vec<MirStmt>,
     },
     // While loop
     While {
         cond: u32, // Condition expression
         body: Vec<MirStmt>,
+        /// PY-A: Python `while … else` (see `For::else_body`).
+        else_body: Vec<MirStmt>,
     },
     // Break out of the current while loop (no-op in MIR gen, handled in codegen)
     Break,

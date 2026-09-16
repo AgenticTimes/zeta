@@ -1542,13 +1542,21 @@ impl InferContext {
                 Ok(Type::Tuple(vec![]))
             }
 
-            AstNode::While { cond, body } => {
+            AstNode::While {
+                cond,
+                body,
+                else_body,
+            } => {
                 // Type check the condition - must be boolean
                 let cond_ty = self.infer(cond)?;
                 self.constrain_eq(cond_ty, Type::Bool);
 
                 // Type check the body
                 for stmt in body {
+                    self.infer(stmt)?;
+                }
+                // PY-A: `while … else` body.
+                for stmt in else_body {
                     self.infer(stmt)?;
                 }
 
@@ -1588,6 +1596,7 @@ impl InferContext {
                 pattern,
                 expr,
                 body,
+                else_body,
             } => {
                 // Type check the expression - it should be a range
                 let expr_ty = self.infer(expr)?;
@@ -1609,6 +1618,10 @@ impl InferContext {
 
                 // Type check the body
                 for stmt in body {
+                    self.infer(stmt)?;
+                }
+                // PY-A: `for … else` body.
+                for stmt in else_body {
                     self.infer(stmt)?;
                 }
 

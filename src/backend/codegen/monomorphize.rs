@@ -162,6 +162,7 @@ pub fn substitute_stmt(stmt: &MirStmt, substitution: &Substitution) -> MirStmt {
             pattern,
             var_id,
             body,
+            else_body,
         } => MirStmt::For {
             iterator: *iterator,
             pattern: pattern.clone(),
@@ -170,10 +171,22 @@ pub fn substitute_stmt(stmt: &MirStmt, substitution: &Substitution) -> MirStmt {
                 .iter()
                 .map(|s| substitute_stmt(s, substitution))
                 .collect(),
+            else_body: else_body
+                .iter()
+                .map(|s| substitute_stmt(s, substitution))
+                .collect(),
         },
-        MirStmt::While { cond, body } => MirStmt::While {
+        MirStmt::While {
+            cond,
+            body,
+            else_body,
+        } => MirStmt::While {
             cond: *cond,
             body: body
+                .iter()
+                .map(|s| substitute_stmt(s, substitution))
+                .collect(),
+            else_body: else_body
                 .iter()
                 .map(|s| substitute_stmt(s, substitution))
                 .collect(),

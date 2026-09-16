@@ -262,7 +262,11 @@ impl Resolver {
                     }
                 }
             }
-            AstNode::While { cond, body } => {
+            AstNode::While {
+                cond,
+                body,
+                else_body,
+            } => {
                 // Check condition - should be bool
                 let cond_type = self.infer_type(cond);
                 if cond_type != Type::Bool {
@@ -281,6 +285,12 @@ impl Resolver {
                     ok = false;
                 }
                 for s in body {
+                    if !self.check_node(s) {
+                        ok = false;
+                    }
+                }
+                // PY-A: `while … else` body.
+                for s in else_body {
                     if !self.check_node(s) {
                         ok = false;
                     }

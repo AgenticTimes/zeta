@@ -112,6 +112,7 @@ pub fn dead_code_elimination(mir: &mut Mir) {
                 pattern: _,
                 body,
                 var_id: _,
+                else_body,
             } => {
                 mark_expr_used(*iterator, &mut used, &mir.exprs);
                 // Recursively process nested statements in the loop body
@@ -120,8 +121,19 @@ pub fn dead_code_elimination(mir: &mut Mir) {
                     ..Default::default()
                 };
                 dead_code_elimination(&mut nested_mir);
+                // PY-A: the `for … else` body is a sibling statement list, so
+                // it needs the same reachability pass.
+                let mut nested_else = Mir {
+                    stmts: else_body.clone(),
+                    ..Default::default()
+                };
+                dead_code_elimination(&mut nested_else);
             }
-            MirStmt::While { cond, body } => {
+            MirStmt::While {
+                cond,
+                body,
+                else_body,
+            } => {
                 mark_expr_used(*cond, &mut used, &mir.exprs);
                 // Recursively process nested statements in the loop body
                 let mut nested_mir = Mir {
@@ -129,6 +141,11 @@ pub fn dead_code_elimination(mir: &mut Mir) {
                     ..Default::default()
                 };
                 dead_code_elimination(&mut nested_mir);
+                let mut nested_else = Mir {
+                    stmts: else_body.clone(),
+                    ..Default::default()
+                };
+                dead_code_elimination(&mut nested_else);
             }
             MirStmt::Store {
                 addr_id, val_id, ..
@@ -421,6 +438,7 @@ pub fn common_subexpression_elimination(mir: &mut Mir) {
                         pattern: _,
                         body: _,
                         var_id: _,
+                        else_body: _,
                     } if *iterator == *id => {
                         *iterator = existing_id;
                     }

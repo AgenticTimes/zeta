@@ -218,12 +218,18 @@ impl Resolver {
                         for s in then { walk_nonlocal(s, set); }
                         for s in else_ { walk_nonlocal(s, set); }
                     }
-                    AstNode::While { cond, body } => {
+                    AstNode::While {
+                        cond,
+                        body,
+                        else_body,
+                    } => {
                         walk_nonlocal(cond, set);
                         for s in body { walk_nonlocal(s, set); }
+                        for s in else_body { walk_nonlocal(s, set); }
                     }
-                    AstNode::For { body, .. } => {
+                    AstNode::For { body, else_body, .. } => {
                         for s in body { walk_nonlocal(s, set); }
+                        for s in else_body { walk_nonlocal(s, set); }
                     }
                     _ => {}
                 }
@@ -1258,11 +1264,19 @@ impl Resolver {
                                 collect_calls(then, out);
                                 collect_calls(else_, out);
                             }
-                            AstNode::While { cond, body } => {
+                            AstNode::While {
+                                cond,
+                                body,
+                                else_body,
+                            } => {
                                 collect_calls(std::slice::from_ref(cond.as_ref()), out);
                                 collect_calls(body, out);
+                                collect_calls(else_body, out);
                             }
-                            AstNode::For { body, .. } => collect_calls(body, out),
+                            AstNode::For { body, else_body, .. } => {
+                                collect_calls(body, out);
+                                collect_calls(else_body, out);
+                            }
                             AstNode::Block { body } => collect_calls(body, out),
                             AstNode::ExprStmt { expr } => {
                                 collect_calls(std::slice::from_ref(expr.as_ref()), out)

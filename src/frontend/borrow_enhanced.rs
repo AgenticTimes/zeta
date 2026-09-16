@@ -441,11 +441,26 @@ impl EnhancedBorrowChecker {
                             self.exit_scope();
                         }
                     }
-                    AstNode::While { cond, body } => {
+                    AstNode::While {
+                        cond,
+                        body,
+                        else_body,
+                    } => {
                         ok = self.check(cond, resolver);
                         if ok {
                             self.enter_scope();
                             for stmt in body {
+                                if !self.check(stmt, resolver) {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                            self.exit_scope();
+                        }
+                        // PY-A: `while … else` body lives in its own scope.
+                        if ok {
+                            self.enter_scope();
+                            for stmt in else_body {
                                 if !self.check(stmt, resolver) {
                                     ok = false;
                                     break;
@@ -458,6 +473,7 @@ impl EnhancedBorrowChecker {
                         pattern,
                         expr,
                         body,
+                        else_body,
                     } => {
                         ok = self.check(expr, resolver);
                         if ok {
@@ -476,6 +492,17 @@ impl EnhancedBorrowChecker {
                                         ok = false;
                                         break;
                                     }
+                                }
+                            }
+                            self.exit_scope();
+                        }
+                        // PY-A: `for … else` body lives in its own scope.
+                        if ok {
+                            self.enter_scope();
+                            for stmt in else_body {
+                                if !self.check(stmt, resolver) {
+                                    ok = false;
+                                    break;
                                 }
                             }
                             self.exit_scope();

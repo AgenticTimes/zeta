@@ -1,0 +1,48 @@
+// PY-A: `for … else:` / `while … else:` —— 语义是「循环未 `break` 才执行 else」。
+//   此前完全没有支持：`else` 子句让整个顶层项连同其后内容被丢弃。
+//   实现走「双出口」：正常结束走 else 块、`break` 直接跳到 else 之后 —— 因此不需要
+//   改写 break、也不需要「是否 break 过」的标志变量。
+// expect: 16
+// expect: 1
+// expect: 13
+// expect: 2
+def no_break() -> i64:
+    total = 0
+    for x in [1, 2, 3]:
+        total = total + x
+    else:
+        total = total + 10
+    return total
+
+def with_break() -> i64:
+    total = 0
+    for x in [1, 2, 3]:
+        if x == 2:
+            break
+        total = total + x
+    else:
+        total = total + 100
+    return total
+
+def while_else() -> i64:
+    n = 0
+    while n < 3:
+        n = n + 1
+    else:
+        n = n + 10
+    return n
+
+def while_break() -> i64:
+    n = 0
+    while n < 5:
+        if n == 2:
+            break
+        n = n + 1
+    else:
+        n = n + 100
+    return n
+
+print(no_break())
+print(with_break())
+print(while_else())
+print(while_break())

@@ -141,6 +141,7 @@ fn parse_for(input: &str) -> IResult<&str, AstNode> {
         other => other,
     };
     let (input, body) = delimited(ws(tag("{")), parse_block_body, ws(tag("}"))).parse(input)?;
+    let (input, else_body) = parse_loop_else(input)?;
     // PY-A: `for i, v in enumerate(X):` — desugar to an index loop:
     //   for i in range(len(X)): v = X[i]; <body>
     // enumerate() has no runtime representation and previously the whole loop
@@ -217,6 +218,7 @@ fn parse_for(input: &str) -> IResult<&str, AstNode> {
                         pattern: Box::new(loop_var),
                         expr: Box::new(range_expr),
                         body: new_body,
+                        else_body,
                     },
                 ));
             }
@@ -228,6 +230,7 @@ fn parse_for(input: &str) -> IResult<&str, AstNode> {
             pattern: Box::new(pattern),
             expr: Box::new(expr),
             body,
+            else_body,
         },
     ))
 }
@@ -242,13 +245,27 @@ fn parse_while(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag("while")).parse(input)?;
     let (input, cond) = ws(parse_condition).parse(input)?;
     let (input, body) = delimited(ws(tag("{")), parse_block_body, ws(tag("}"))).parse(input)?;
+    let (input, else_body) = parse_loop_else(input)?;
     Ok((
         input,
         AstNode::While {
             cond: Box::new(cond),
             body,
+            else_body,
         },
     ))
+}
+
+/// PY-A: optional trailing `else` block on a loop — Python's `for … else` /
+/// `while … else`, which runs only when the loop finished WITHOUT `break`.
+/// `while … else` with no `else` parses as an empty vec.
+fn parse_loop_else(input: &str) -> IResult<&str, Vec<AstNode>> {
+    let (input, body) = opt(preceded(
+        ws(tag("else")),
+        delimited(ws(tag("{")), parse_block_body, ws(tag("}"))),
+    ))
+    .parse(input)?;
+    Ok((input, body.unwrap_or_default()))
 }
 
 fn parse_unsafe(input: &str) -> IResult<&str, AstNode> {

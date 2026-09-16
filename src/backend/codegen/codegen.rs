@@ -1623,19 +1623,34 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     ids.insert(*dest_id);
                 }
             }
-            MirStmt::While { cond, body } => {
+            MirStmt::While {
+                cond,
+                body,
+                else_body,
+            } => {
                 if let Some(e) = exprs.get(cond) {
                     self.collect_ids_from_expr_safe(e, ids, exprs);
                 }
                 for s in body {
                     self.collect_ids_from_stmt_safe(s, ids, exprs);
                 }
+                for s in else_body {
+                    self.collect_ids_from_stmt_safe(s, ids, exprs);
+                }
             }
-            MirStmt::For { iterator, body, .. } => {
+            MirStmt::For {
+                iterator,
+                body,
+                else_body,
+                ..
+            } => {
                 if let Some(e) = exprs.get(iterator) {
                     self.collect_ids_from_expr_safe(e, ids, exprs);
                 }
                 for s in body {
+                    self.collect_ids_from_stmt_safe(s, ids, exprs);
+                }
+                for s in else_body {
                     self.collect_ids_from_stmt_safe(s, ids, exprs);
                 }
             }
@@ -2857,9 +2872,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     dest: *dest,
                 }
             }
-            MirStmt::While { cond, body } => {
+            MirStmt::While {
+                cond,
+                body,
+                else_body,
+            } => {
                 // Recursively substitute in loop body
                 let substituted_body: Vec<MirStmt> = body
+                    .iter()
+                    .map(|stmt| self.substitute_stmt(stmt, substitution))
+                    .collect();
+                let substituted_else: Vec<MirStmt> = else_body
                     .iter()
                     .map(|stmt| self.substitute_stmt(stmt, substitution))
                     .collect();
@@ -2867,6 +2890,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 MirStmt::While {
                     cond: *cond,
                     body: substituted_body,
+                    else_body: substituted_else,
                 }
             }
             MirStmt::TryProp {
@@ -2937,11 +2961,16 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 pattern,
                 var_id,
                 body,
+                else_body,
             } => MirStmt::For {
                 iterator: *iterator,
                 pattern: pattern.clone(),
                 var_id: *var_id,
                 body: body
+                    .iter()
+                    .map(|s| self.substitute_stmt(s, substitution))
+                    .collect(),
+                else_body: else_body
                     .iter()
                     .map(|s| self.substitute_stmt(s, substitution))
                     .collect(),
@@ -2955,9 +2984,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 fields: fields.clone(),
                 dest: *dest,
             },
-            MirStmt::While { cond, body } => MirStmt::While {
+            MirStmt::While {
+                cond,
+                body,
+                else_body,
+            } => MirStmt::While {
                 cond: *cond,
                 body: body
+                    .iter()
+                    .map(|s| self.substitute_stmt(s, substitution))
+                    .collect(),
+                else_body: else_body
                     .iter()
                     .map(|s| self.substitute_stmt(s, substitution))
                     .collect(),
@@ -4464,7 +4501,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 self.builder.position_at_end(merge_bb);
                 // dest is handled by assignments in the branches
             }
-            MirStmt::While { cond, body } => {
+            MirStmt::While {
+                cond,
+                body,
+                else_body,
+            } => {
                 let parent_fn = self
                     .builder
                     .get_insert_block()
@@ -4472,10 +4513,21 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     .get_parent()
                     .unwrap();
 
-                // Create basic blocks for loop
+                // PY-A: Python `while … else`. Two exit targets:
+                //   - normal exit (condition false) → the else block
+                //   - `break` → past the else block (break target = loop_exit_bb)
+                // This is exactly Python's semantics, and it needs no `break`
+                // rewriting and no "did we break" flag.
+                let has_else = !else_body.is_empty();
                 let loop_cond_bb = self.context.append_basic_block(parent_fn, "while.cond");
                 let loop_body_bb = self.context.append_basic_block(parent_fn, "while.body");
                 let loop_exit_bb = self.context.append_basic_block(parent_fn, "while.exit");
+                let loop_else_bb = if has_else {
+                    self.context.append_basic_block(parent_fn, "while.else")
+                } else {
+                    loop_exit_bb
+                };
+                let normal_exit_bb = loop_else_bb;
 
                 // Branch to condition block
                 self.builder
@@ -4495,10 +4547,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     )
                     .unwrap();
                 self.builder
-                    .build_conditional_branch(cond_i1, loop_body_bb, loop_exit_bb)
+                    .build_conditional_branch(cond_i1, loop_body_bb, normal_exit_bb)
                     .unwrap();
 
-                // Generate loop body
+                // Generate loop body. `break` must skip the else block, so the
+                // break target is the block AFTER it.
                 self.loop_stack.push((loop_cond_bb, loop_exit_bb));
                 self.builder.position_at_end(loop_body_bb);
                 for s in body {
@@ -4514,6 +4567,22 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     self.builder
                         .build_unconditional_branch(loop_cond_bb)
                         .unwrap();
+                }
+
+                // Else block: reached only on normal completion.
+                if has_else {
+                    self.builder.position_at_end(loop_else_bb);
+                    for s in else_body {
+                        self.gen_stmt(s, exprs);
+                    }
+                    let else_terminated = else_body
+                        .iter()
+                        .any(|s| matches!(s, MirStmt::Return { .. }));
+                    if !else_terminated {
+                        self.builder
+                            .build_unconditional_branch(loop_exit_bb)
+                            .unwrap();
+                    }
                 }
 
                 // Continue at exit block
@@ -4799,6 +4868,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 pattern,
                 var_id,
                 body,
+                else_body,
             } => {
                 // For now, implement simple range-based for loop: for i in start..end
                 // We need to get the range expression
@@ -4813,10 +4883,20 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     // Create basic blocks for loop. `for.inc` exists so
                     // `continue` lands on the increment — jumping straight to
                     // the condition would skip `i = i + 1` and spin forever.
+                    // PY-A: for `for … else`, the normal exit goes to `for.else`
+                    // and `break` targets the block AFTER it (see `loop_stack`
+                    // push below) — that is Python's semantics with no flag.
+                    let has_else = !else_body.is_empty();
                     let loop_cond_bb = self.context.append_basic_block(parent_fn, "for.cond");
                     let loop_body_bb = self.context.append_basic_block(parent_fn, "for.body");
                     let loop_inc_bb = self.context.append_basic_block(parent_fn, "for.inc");
                     let loop_exit_bb = self.context.append_basic_block(parent_fn, "for.exit");
+                    let loop_else_bb = if has_else {
+                        self.context.append_basic_block(parent_fn, "for.else")
+                    } else {
+                        loop_exit_bb
+                    };
+                    let normal_exit_bb = loop_else_bb;
 
                     // Get start and end values
                     let start_val = self.gen_expr_safe(start, exprs).into_int_value();
@@ -4855,7 +4935,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .unwrap();
 
                     self.builder
-                        .build_conditional_branch(cond, loop_body_bb, loop_exit_bb)
+                        .build_conditional_branch(cond, loop_body_bb, normal_exit_bb)
                         .unwrap();
 
                     // Generate loop body
@@ -4908,6 +4988,20 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .unwrap();
 
                     // Continue at exit block
+                    if has_else {
+                        self.builder.position_at_end(loop_else_bb);
+                        for s in else_body {
+                            self.gen_stmt(s, exprs);
+                        }
+                        let else_terminated = else_body
+                            .iter()
+                            .any(|s| matches!(s, MirStmt::Return { .. }));
+                        if !else_terminated {
+                            self.builder
+                                .build_unconditional_branch(loop_exit_bb)
+                                .unwrap();
+                        }
+                    }
                     self.builder.position_at_end(loop_exit_bb);
                 } else {
                     // Not a range iterator - for now, just skip

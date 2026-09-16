@@ -257,6 +257,9 @@ pub enum AstNode {
         pattern: Box<AstNode>,
         expr: Box<AstNode>,
         body: Vec<AstNode>,
+        /// PY-A: Python `for … else` — runs only when the loop finished
+        /// without `break`. Empty when there is no `else` clause.
+        else_body: Vec<AstNode>,
     },
     /// Loop statement.
     Loop { body: Vec<AstNode> },
@@ -264,6 +267,8 @@ pub enum AstNode {
     While {
         cond: Box<AstNode>,
         body: Vec<AstNode>,
+        /// PY-A: Python `while … else` (see `For::else_body`).
+        else_body: Vec<AstNode>,
     },
     /// Unsafe block.
     Unsafe { body: Vec<AstNode> },
