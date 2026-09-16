@@ -1516,20 +1516,34 @@ int64_t zeta_collect_literals(int64_t count, int64_t fn_ptr, ...) {
 
 // __collect_dict__(iter, fn_ptr) — fn returns packed (k<<32)|v pairs; the
 // dict is a fresh platform map handle. V1: k/v both i64.
+// A filtered-out item returns this sentinel (same convention as the list
+// comprehension collect).
+#define ZT_COMP_SKIP (-1)
+
 int64_t zeta_collect_dict(int64_t iter, int64_t fn_ptr) {
     if (!iter) return 0;
     int64_t len = ((int64_t*)(iter - 16))[1];
     int64_t m = map_new();
     int64_t (*fp)(int64_t) = (int64_t(*)(int64_t))fn_ptr;
     for (int64_t i = 0; i < len; i++) {
-        int64_t pair = fp(((int64_t*)iter)[i]);
-        map_insert(m, pair >> 32, pair & 0xFFFFFFFF);
+        int64_t pr = fp(((int64_t*)iter)[i]);
+        if (pr == ZT_COMP_SKIP) continue;   // `if <cond>` filter excluded it
+        int64_t* kv = (int64_t*)pr;
+        map_insert(m, kv[0], kv[1]);
     }
     return m;
 }
-// __pack_pair__(k, v) — pack two i64 into one i64 (V1: k high, v low)
+// __pack_pair__(k, v) — a 2-slot heap pair [key, value]. It used to pack into
+// `(k<<32)|v`, which silently corrupted anything that is not a small positive
+// integer (string keys came back as mangled pointers, and values above 2^32
+// wrapped). Passing the pair by reference costs one allocation and is exact.
+// String keys arrive already content-hashed (the compiler hashes them at the
+// pack site, exactly like a dict literal).
 int64_t zeta_pack_pair(int64_t k, int64_t v) {
-    return (k << 32) | (v & 0xFFFFFFFF);
+    int64_t* p = (int64_t*)GC_malloc(16);
+    p[0] = k;
+    p[1] = v;
+    return (int64_t)p;
 }
 
 // ── PY-A: Python list methods ────────────────────────────────────────

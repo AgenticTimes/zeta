@@ -5699,6 +5699,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // PY-A: dict comprehension collect — lambda returns packed
                 // (k<<32)|v pairs via __pack_pair__; runtime fills a map.
                 if method == "__collect_dict__" && arg_ids.len() == 2 {
+                    // PY-A fail-loud: the lambda's parameter is typed i64, so a
+                    // key that is really a string stays a raw pointer and is
+                    // stored WITHOUT content-hashing — `x["a"]` then misses
+                    // (returns 0) while `len(x)` looks right. Detect the string
+                    // case from the iterable's element type and say so, instead
+                    // of silently handing back wrong lookups.
+                    let elem_is_str = matches!(
+                        self.type_map.get(&arg_ids[0]),
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) if matches!(**e, Type::Str)
+                    );
+                    if elem_is_str {
+                        eprintln!(
+                            "warning: PY-A: string-keyed dict comprehension — keys are not \
+                             content-hashed yet, so `x[k]` lookups will MISS (use a dict \
+                             literal or `.items()` loop instead)"
+                        );
+                    }
                     self.stmts.push(MirStmt::Call {
                         func: "zeta_collect_dict".to_string(),
                         args: arg_ids.clone(),
@@ -5710,7 +5727,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         .insert(id, Type::Named("map".to_string(), vec![]));
                     return id;
                 }
-                // __pack_pair__(k, v) — passthrough to runtime packing
+                // __pack_pair__(k, v) — the runtime keeps the pair as a 2-slot
+                // heap pair, so string keys must be content-hashed first (the
+                // same `lower_map_key` rule a dict literal uses); otherwise the
+                // map would key by pointer and `d[k]` lookups would miss.
+                // String VALUES are refused loudly further down instead of being
+                // silently stored as a pointer-to-i64.
+                if method == "__pack_pair__" && arg_ids.len() == 2 {
+                    let k_ty = self.type_map.get(&arg_ids[0]).cloned().unwrap_or(Type::I64);
+                    if matches!(k_ty, Type::Str) {
+                        let hashed = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "map_str_key".to_string(),
+                            args: vec![arg_ids[0]],
+                            dest: hashed,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(hashed, MirExpr::Var(hashed));
+                        self.type_map.insert(hashed, Type::I64);
+                        arg_ids[0] = hashed;
+                    }
+                }
                 if method == "__pack_pair__" && arg_ids.len() == 2 {
                     self.stmts.push(MirStmt::Call {
                         func: "zeta_pack_pair".to_string(),

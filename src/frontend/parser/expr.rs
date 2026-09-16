@@ -791,6 +791,17 @@ fn parse_dictcomp_full(input: &str) -> IResult<&str, AstNode> {
     let (input, name) = ws(parse_ident).parse(input)?;
     let (input, _) = ws(tag("in")).parse(input)?;
     let (input, iter) = ws(parse_full_expr).parse(input)?;
+    // PY-A: optional `if <cond>` filter — `{k: v for k in it if pred}`. Without
+    // this the trailing `if …` was left unconsumed, the `}` check failed, and
+    // the ENTIRE definition (plus everything after it) was silently dropped.
+    // Mirrors the list comp: the lambda returns the -1 sentinel for filtered-out
+    // items and the runtime collect skips it.
+    let (input, cond) = if let Ok((rest, _)) = ws(tag("if")).parse(input) {
+        let (rest, c) = ws(parse_full_expr).parse(rest)?;
+        (rest, Some(c))
+    } else {
+        (input, None)
+    };
     let cond_body = |pair: AstNode, cond: Option<AstNode>| -> AstNode {
         match cond {
             None => pair,
@@ -811,12 +822,9 @@ fn parse_dictcomp_full(input: &str) -> IResult<&str, AstNode> {
         type_args: vec![],
         structural: false,
     };
-    // filter probes: re-parse with cond is complex here — V1: no filter in
-    // dictcomp (rare in practice for the corpus). Parse loop-less form.
-    let _ = cond_body;
     let lam = AstNode::Closure {
         params: vec![name],
-        body: Box::new(pair_expr),
+        body: Box::new(cond_body(pair_expr, cond)),
     };
     let call = AstNode::Call {
         receiver: Some(Box::new(iter)),

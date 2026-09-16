@@ -1,0 +1,17 @@
+// PY-A: 带 `if` 过滤的字典推导式 `{k: v for k in it if cond}`。
+// 此前 parse_dictcomp_full 明确写着「V1 不支持过滤」，于是 `if …` 不被消费 →
+// 尾随的 `}` 检查失败 → **整个定义连同其后内容被静默丢弃**
+// （jq_wufu_daily.get_hist_arrays 里 `{f: sub[f].values for f in fields if f in sub.columns}`
+// 正是这个形状；修后该文件丢行 948→? 语料总丢行 8038→7859）。
+// 顺带：运行期 `__pack_pair__` 从 `(k<<32)|v` 位打包改成真正的二元组 ——
+// 位打包会把字符串键与大整数悄悄弄坏；pack 点现在对字符串键做内容哈希，
+// 并在键无法安全哈希（推导式变量被定型为 i64）时**显式告警**而不是静默返回错值。
+x = {k: k * 2 for k in [1, 2, 3] if k > 1}
+print(len(x))
+print(x[2])
+y = {k: k for k in [1, 2]}
+print(len(y))
+
+// expect: 2
+// expect: 4
+// expect: 2

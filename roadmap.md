@@ -726,6 +726,28 @@ REasyQuant 语料里到处是中文 docstring —— 以前解析早早截断、
 **测评**：official **194/194**；python_style **125/125（0 failed）**，`t124_ternary` 由红转绿；
 语料 丢行 8580→**8463**、panic **0**、截断 32。
 
+### 带 if 过滤的字典推导式 + pair 位打包（2026-09-16 追加，已修）
+
+`parse_dictcomp_full` 里明写着「V1: no filter in dictcomp」，所以 `{k: v for k in it if cond}`
+的 `if …` 不被消费 → 尾随 `}` 检查失败 → **整个定义连同其后内容被静默丢弃**。
+`jq_wufu_daily.get_hist_arrays` 里的
+`{f: sub[f].values for f in fields if f in sub.columns}` 正是该形状。
+
+修法（对齐列表推导的哨兵约定）：可选 `if <cond>` → lambda 体为
+`if cond { __pack_pair__(k, v) } else { -1 }`，运行期 collect **跳过 -1**。
+
+顺带修运行期的 `__pack_pair__`：原来是 `(k<<32)|v` **位打包**，会把字符串键（指针）
+与大整数悄悄弄坏。改成真正的二元组分配（`GC_malloc` 两槽），并在 pack 点对
+`Str` 类型的键做内容哈希（对齐 dict 字面量的 `lower_map_key` 规则）。
+
+**仍未修 + 已 fail-loud**：推导式的循环变量被定型为 i64，所以**字符串键**在 pack 点
+识别不出是字符串、不做哈希 → `x["a"]` 查不到（但仍 `len` 正确）。已在 collect 处
+按 iterable 元素类型检测并**显式告警**，不再静默给错值。根治需要让推导式 lambda 的
+参数类型从 iterable 元素类型推断。
+
+效果：语料丢行 8038 → **7859**（−179）；official 194/194、python_style **126/126**、panic 0。
+回归 `t126`（整数键 + 过滤 + 无过滤）。
+
 ### 相邻字符串字面量隐式拼接（2026-09-16 追加，已修）
 
 `"a" "b"` / `f"x" f"y"`（可跨行）—— 基础 Python，长消息与换行排版里到处都是。
