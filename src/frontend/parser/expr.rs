@@ -788,9 +788,12 @@ fn parse_dictcomp_full(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag(":")).parse(input)?;
     let (input, val_expr) = ws(parse_full_expr).parse(input)?;
     let (input, _) = ws(tag("for")).parse(input)?;
-    let (input, name) = ws(parse_ident).parse(input)?;
+    let (input, names) = parse_comp_target(input)?;
     let (input, _) = ws(tag("in")).parse(input)?;
     let (input, iter) = ws(parse_full_expr).parse(input)?;
+    let (dc_name, dc_smap) = comp_target_binding(&names);
+    let key_expr = apply_subst(key_expr, &dc_smap);
+    let val_expr = apply_subst(val_expr, &dc_smap);
     // PY-A: optional `if <cond>` filter — `{k: v for k in it if pred}`. Without
     // this the trailing `if …` was left unconsumed, the `}` check failed, and
     // the ENTIRE definition (plus everything after it) was silently dropped.
@@ -823,8 +826,8 @@ fn parse_dictcomp_full(input: &str) -> IResult<&str, AstNode> {
         structural: false,
     };
     let lam = AstNode::Closure {
-        params: vec![name],
-        body: Box::new(cond_body(pair_expr, cond)),
+        params: vec![dc_name],
+        body: Box::new(cond_body(pair_expr, cond.map(|c| apply_subst(c, &dc_smap)))),
     };
     let call = AstNode::Call {
         receiver: Some(Box::new(iter)),
@@ -998,7 +1001,7 @@ fn parse_listcomp_full(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag(open_str)).parse(input)?;
     let (input, elem) = ws(parse_full_expr).parse(input)?;
     let (input, _) = ws(tag("for")).parse(input)?;
-    let (input, name) = ws(parse_ident).parse(input)?;
+    let (input, names) = parse_comp_target(input)?;
     let (input, _) = ws(tag("in")).parse(input)?;
     let (input, iter) = ws(parse_full_expr).parse(input)?;
     // optional filter — everything up to CLOSE is the condition
@@ -1009,6 +1012,10 @@ fn parse_listcomp_full(input: &str) -> IResult<&str, AstNode> {
         (input, None)
     };
     let (input, _) = ws(tag(close_str)).parse(input)?;
+    // PY-A: `for k, v in pairs` — bind through the element's slots.
+    let (name, smap) = comp_target_binding(&names);
+    let elem = apply_subst(elem, &smap);
+    let cond = cond.map(|c| apply_subst(c, &smap));
 
     // Build lambda: |NAME| if COND { collect(EXPR) } — via a single expression:
     // __comp_item__(EXPR, COND) semantics handled in runtime collect.
@@ -1750,6 +1757,115 @@ fn parse_logical_and(input: &str) -> IResult<&str, AstNode> {
 /// PY-A: one call argument — either a plain expression or a keyword argument
 /// `name=value`. Keyword NAMES are dropped in V1 (values bind positionally);
 /// this keeps JoinQuant-style calls (`f(x=1, type='fund')`) parseable.
+/// PY-A: comprehension loop target — `for x in it` or `for k, v in it.items()`.
+fn parse_comp_target(input: &str) -> IResult<&str, Vec<String>> {
+    let (mut input, first) = ws(parse_ident).parse(input)?;
+    let mut names = vec![first];
+    while let Ok((rest, _)) = ws(tag(",")).parse(input) {
+        let (rest2, n) = ws(parse_ident).parse(rest)?;
+        names.push(n);
+        input = rest2;
+    }
+    Ok((input, names))
+}
+
+/// PY-A: rewrite `Var(name)` occurrences. Used to desugar a comprehension's
+/// TUPLE target (`for k, v in pairs`) into a single lambda parameter plus slot
+/// reads: the runtime hands the lambda one element, so the names must come from
+/// the element's slots (`stack_array_get`) rather than from extra parameters.
+fn subst_vars(n: &AstNode, map: &std::collections::HashMap<String, AstNode>) -> AstNode {
+    match n {
+        AstNode::Var(name) => map.get(name).cloned().unwrap_or_else(|| n.clone()),
+        AstNode::Call {
+            receiver,
+            method,
+            args,
+            type_args,
+            structural,
+        } => AstNode::Call {
+            receiver: receiver.as_ref().map(|r| Box::new(subst_vars(r, map))),
+            method: method.clone(),
+            args: args.iter().map(|a| subst_vars(a, map)).collect(),
+            type_args: type_args.clone(),
+            structural: *structural,
+        },
+        AstNode::BinaryOp { op, left, right } => AstNode::BinaryOp {
+            op: op.clone(),
+            left: Box::new(subst_vars(left, map)),
+            right: Box::new(subst_vars(right, map)),
+        },
+        AstNode::UnaryOp { op, expr } => AstNode::UnaryOp {
+            op: op.clone(),
+            expr: Box::new(subst_vars(expr, map)),
+        },
+        AstNode::Subscript { base, index } => AstNode::Subscript {
+            base: Box::new(subst_vars(base, map)),
+            index: Box::new(subst_vars(index, map)),
+        },
+        AstNode::FieldAccess { base, field } => AstNode::FieldAccess {
+            base: Box::new(subst_vars(base, map)),
+            field: field.clone(),
+        },
+        AstNode::Tuple(items) => {
+            AstNode::Tuple(items.iter().map(|i| subst_vars(i, map)).collect())
+        }
+        AstNode::DictLit { entries } => AstNode::DictLit {
+            entries: entries
+                .iter()
+                .map(|(k, v)| (subst_vars(k, map), subst_vars(v, map)))
+                .collect(),
+        },
+        AstNode::FString(parts) => {
+            AstNode::FString(parts.iter().map(|x| subst_vars(x, map)).collect())
+        }
+        AstNode::If { cond, then, else_ } => AstNode::If {
+            cond: Box::new(subst_vars(cond, map)),
+            then: then.iter().map(|s| subst_vars(s, map)).collect(),
+            else_: else_.iter().map(|s| subst_vars(s, map)).collect(),
+        },
+        other => other.clone(),
+    }
+}
+
+/// PY-A: lambda parameter name + substitution map for a comprehension target.
+/// A single name stays the lambda's parameter (no substitution); a tuple target
+/// (`for k, v in pairs`) binds one synthetic parameter and reads each name from
+/// the element's slots — the runtime hands the lambda ONE element, so extra
+/// names must come from that element, not from extra parameters.
+pub(crate) type CompSubst = Option<std::collections::HashMap<String, AstNode>>;
+
+fn comp_target_binding(names: &[String]) -> (String, CompSubst) {
+    if names.len() == 1 {
+        return (names[0].clone(), None);
+    }
+    static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let param = format!(
+        "__comp_e{}",
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let mut map = std::collections::HashMap::new();
+    for (i, n) in names.iter().enumerate() {
+        map.insert(
+            n.clone(),
+            AstNode::Call {
+                receiver: None,
+                method: "stack_array_get".to_string(),
+                args: vec![AstNode::Var(param.clone()), AstNode::Lit(i as i64)],
+                type_args: vec![],
+                structural: false,
+            },
+        );
+    }
+    (param, Some(map))
+}
+
+fn apply_subst(e: AstNode, m: &CompSubst) -> AstNode {
+    match m {
+        Some(m) => subst_vars(&e, m),
+        None => e,
+    }
+}
+
 /// PY-A: `f(x for x in y)` — a GENERATOR EXPRESSION as the call argument. Its
 /// parentheses ARE the call's, so the ordinary expression parse consumed `x`
 /// and left ` for x in y)` unconsumed: the call then failed to parse and the
@@ -1759,7 +1875,7 @@ fn parse_logical_and(input: &str) -> IResult<&str, AstNode> {
 fn parse_call_genexp(input: &str) -> IResult<&str, AstNode> {
     let (input, elem) = ws(parse_full_expr).parse(input)?;
     let (input, _) = ws(tag("for")).parse(input)?;
-    let (input, name) = ws(parse_ident).parse(input)?;
+    let (input, names) = parse_comp_target(input)?;
     let (input, _) = ws(tag("in")).parse(input)?;
     let (input, iter) = ws(parse_full_expr).parse(input)?;
     let (input, cond) = if let Ok((rest, _)) = ws(tag("if")).parse(input) {
@@ -1768,6 +1884,9 @@ fn parse_call_genexp(input: &str) -> IResult<&str, AstNode> {
     } else {
         (input, None)
     };
+    let (name, smap) = comp_target_binding(&names);
+    let elem = apply_subst(elem, &smap);
+    let cond = cond.map(|c| apply_subst(c, &smap));
     let body = match cond {
         None => elem,
         Some(c) => AstNode::If {
