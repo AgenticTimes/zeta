@@ -787,6 +787,17 @@ fn parse_class(input: &str) -> IResult<&str, AstNode> {
             cur = next;
             break;
         }
+        // PY-A: skip a CLASS DOCSTRING — a bare string literal as the first
+        // statement (`class C:\n    """doc."""`). It is documentation, not a
+        // member; without this the class body failed to parse and the class —
+        // plus everything after it — was silently dropped. Functions already
+        // tolerated a docstring; classes did not.
+        if let Ok((after, lit)) = crate::frontend::parser::expr::parse_primary(next) {
+            if matches!(lit, AstNode::StringLit(_)) {
+                cur = after;
+                continue;
+            }
+        }
         // def method(...) { ... } — reuse parse_func (def alias supported)
         match parse_func(next) {
             Ok((rest, AstNode::FuncDef { name: mname, params, body, .. })) => {

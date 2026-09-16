@@ -1,0 +1,14 @@
+// PY-A: 类里的文档字符串（`class C:` 之后紧跟 `"""doc."""`）。
+// 类体解析器没有「跳过裸字符串字面量」的分支（**函数体早就容忍 docstring**），
+// 于是整个类解析失败 → 类及其后整份文件被静默丢弃。
+// jq_shim._LocalContext 正是这个形状：修后该文件丢行 595 → 445。
+class C:
+    """模拟聚宽 context 对象。"""
+
+    def __init__(self, a, b):
+        self.a = a
+        self.b = b
+
+print(1)
+
+// expect: 1
