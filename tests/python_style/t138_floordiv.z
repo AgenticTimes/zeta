@@ -1,0 +1,36 @@
+// PY-A: `//` 整除 —— python 风格源码里 `//` 是运算符（注释是 `#`），但 parser 把它
+//   当行注释吃掉本行余下文本：`int(cash / price // 100) * 100` 变成 `int(cash / price`
+//   （括号不闭合）⇒ 整个顶层项连同其后内容被静默丢弃。
+//   预处理器在确认「这是 python 风格文件」后，把代码位置的 `//` 改写为 parser 认识的
+//   字词运算符 `floordiv`，codegen 用 sdiv+srem 修正（向下取整）/ fdiv+floor。
+//   行首 `//`（本文件这些头部指令）仍是注释；`#` 之后的 `//`（URL）不动。
+// expect: 3
+// expect: -4
+// expect: -4
+// expect: 3
+// expect: 3.000000
+// expect: -4.000000
+// expect: 500
+// expect: 1
+def idiv(a: i64, b: i64) -> i64:
+    return a // b
+
+print(idiv(7, 2))
+print(idiv(-7, 2))
+print(idiv(7, -2))
+print(idiv(-7, -2))
+
+def fdiv(a: f64, b: f64) -> f64:
+    return a // b
+
+print(fdiv(7.5, 2.0))
+print(fdiv(-7.5, 2.0))
+
+def lots(cash: i64, price: f64) -> i64:
+    # 注释里的 URL 不能被改写：https://example.com/a//b
+    return int(cash / price // 100) * 100
+
+print(lots(60000, 120.0))
+
+x = 15
+print(x // 10)

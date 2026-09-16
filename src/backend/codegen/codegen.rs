@@ -1771,6 +1771,54 @@ impl<'ctx> LLVMCodegen<'ctx> {
     }
 
     /// Check if a function name is an operator that should be handled inline
+    /// PY-A: Python floor division for integers. `sdiv`/`srem` truncate toward
+    /// zero, so the quotient needs nudging down by one whenever the remainder
+    /// is non-zero and the operand signs differ (`-7 // 2` is `-4`, not `-3`).
+    fn build_floordiv_int(
+        &self,
+        l: inkwell::values::IntValue<'ctx>,
+        r: inkwell::values::IntValue<'ctx>,
+    ) -> inkwell::values::BasicValueEnum<'ctx> {
+        let zero = l.get_type().const_zero();
+        let q = self.builder.build_int_signed_div(l, r, "floordiv_q").unwrap();
+        let rem = self.builder.build_int_signed_rem(l, r, "floordiv_r").unwrap();
+        let nonzero = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, rem, zero, "floordiv_nz")
+            .unwrap();
+        let sign_mix = self.builder.build_xor(rem, r, "floordiv_xor").unwrap();
+        let differ = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, sign_mix, zero, "floordiv_sd")
+            .unwrap();
+        let adjust = self.builder.build_and(nonzero, differ, "floordiv_adj").unwrap();
+        let adjust = self
+            .builder
+            .build_int_z_extend(adjust, l.get_type(), "floordiv_adj_ext")
+            .unwrap();
+        self.builder
+            .build_int_sub(q, adjust, "floordiv")
+            .unwrap()
+            .into()
+    }
+
+    /// PY-A: float floor division — divide, then floor through the host math
+    /// helper that `math.floor` already uses.
+    fn build_floordiv_float(
+        &self,
+        l: inkwell::values::FloatValue<'ctx>,
+        r: inkwell::values::FloatValue<'ctx>,
+    ) -> inkwell::values::BasicValueEnum<'ctx> {
+        let q = self.builder.build_float_div(l, r, "floordiv_div").unwrap();
+        match self.module.get_function("zeta_floor_f64") {
+            Some(f) => Self::call_site_to_basic_value(
+                self.builder.build_call(f, &[q.into()], "floordiv").unwrap(),
+            )
+            .unwrap_or_else(|| q.into()),
+            None => q.into(),
+        }
+    }
+
     fn is_operator(&self, name: &str) -> bool {
         matches!(
             name,
@@ -1797,6 +1845,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 | "mul"
                 | "div"
                 | "mod"
+                | "floordiv"
                 | "eq"
                 | "ne"
                 | "lt"
@@ -3263,6 +3312,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                                 "-" | "sub" => self.builder.build_float_sub(l, r, "sub").unwrap().into(),
                                 "*" | "mul" => self.builder.build_float_mul(l, r, "mul").unwrap().into(),
                                 "/" | "div" => self.builder.build_float_div(l, r, "div").unwrap().into(),
+                                "floordiv" => self.build_floordiv_float(l, r),
                                 "%" | "mod" => self.builder.build_float_rem(l, r, "mod").unwrap().into(),
                                 "==" | "eq" => {
                                     let cmp = self
@@ -3334,6 +3384,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                                 "-" | "sub" | "sub_i64" => self.builder.build_int_sub(l, r, "sub").unwrap().into(),
                                 "*" | "mul" | "mul_i64" => self.builder.build_int_mul(l, r, "mul").unwrap().into(),
                                 "/" | "div" | "div_i64" => self.builder.build_int_signed_div(l, r, "div").unwrap().into(),
+                                "floordiv" => self.build_floordiv_int(l, r),
                                 "%" | "mod" | "mod_i64" => self.builder.build_int_signed_rem(l, r, "mod").unwrap().into(),
                                 "<<" | "shl" | "shl_i64" => self.builder.build_left_shift(l, r, "shl").unwrap().into(),
                                 ">>" | "shr" | "shr_i64" => self.builder.build_right_shift(l, r, false, "shr").unwrap().into(),
@@ -5276,6 +5327,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         "-" => self.builder.build_float_sub(l, r, "sub").unwrap().into(),
                         "*" => self.builder.build_float_mul(l, r, "mul").unwrap().into(),
                         "/" => self.builder.build_float_div(l, r, "div").unwrap().into(),
+                        "floordiv" => self.build_floordiv_float(l, r),
                         _ => self.i64_type.const_zero().into(),
                     }
                 } else {
@@ -5362,6 +5414,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .build_int_signed_div(left_val, right_val, "div")
                         .unwrap()
                         .into(),
+                    "floordiv" => self.build_floordiv_int(left_val, right_val),
                     "%" => self
                         .builder
                         .build_int_signed_rem(left_val, right_val, "mod")

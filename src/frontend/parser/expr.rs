@@ -2448,8 +2448,24 @@ fn parse_multiplicative(input: &str) -> IResult<&str, AstNode> {
         // (`2 ** 10` became `2 * (*10)` and crashed on the load).
         let multiplicative_ops = ["**", "*", "/", "%"];
 
+        // PY-A: `floordiv` is the word operator the indent preprocessor emits
+        // for Python's `//` (which the parser would otherwise swallow as a line
+        // comment). It is a *word*, so it needs a boundary: a variable named
+        // `floordivx` must keep parsing as a variable.
+        let word_op = |s: &str| -> bool {
+            s.starts_with("floordiv")
+                && !s[8..].chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_')
+        };
+
         // Try without whitespace first
+        if word_op(remaining_input) {
+            found_op = Some("floordiv");
+            remaining_input = &remaining_input[8..];
+        }
         for &op in &multiplicative_ops {
+            if found_op.is_some() {
+                break;
+            }
             if remaining_input.starts_with(op) {
                 found_op = Some(op);
                 remaining_input = &remaining_input[op.len()..];
@@ -2464,11 +2480,17 @@ fn parse_multiplicative(input: &str) -> IResult<&str, AstNode> {
                 Err(_) => remaining_input,
             };
             if i != remaining_input {
-                for &op in &multiplicative_ops {
-                    if i.starts_with(op) {
-                        found_op = Some(op);
-                        remaining_input = &i[op.len()..];
-                        break;
+                if word_op(i) {
+                    found_op = Some("floordiv");
+                    remaining_input = &i[8..];
+                }
+                if found_op.is_none() {
+                    for &op in &multiplicative_ops {
+                        if i.starts_with(op) {
+                            found_op = Some(op);
+                            remaining_input = &i[op.len()..];
+                            break;
+                        }
                     }
                 }
             }

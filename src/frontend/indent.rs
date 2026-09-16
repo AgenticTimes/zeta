@@ -114,7 +114,35 @@ pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
         &Box::leak(normalized.into_boxed_str())
     };
     let lines: Vec<&str> = input.split('\n').collect();
+    let (out, changed) = normalize_blocks(&lines)?;
+    if !changed {
+        // Not python-style: pass through untouched (brace-style sources are
+        // the official test suite's contract).
+        return Ok(None);
+    }
+    // PY-A: in a python-style file `//` is floor division, not a comment
+    // (Python's comment marker is `#`). The parser's comment skipper cannot
+    // tell the dialects apart, so rewrite the operator into `floordiv`, a word
+    // operator the parser does know — and then normalize AGAIN: cutting a line
+    // at `//` leaves its brackets unbalanced (`int(diff_value` never closes),
+    // which poisons the bracket-depth bookkeeping for the rest of the block, so
+    // later headers never got their `{` at all and the definition failed with
+    // or without the operator.
+    let rewritten: Vec<String> = {
+        let mut in_triple_rw: Option<char> = None;
+        lines
+            .iter()
+            .map(|line| rewrite_floordiv_line(line, &mut in_triple_rw))
+            .collect()
+    };
+    let lines_rw: Vec<&str> = rewritten.iter().map(|s| s.as_str()).collect();
+    let (out, _) = normalize_blocks(&lines_rw)?;
+    Ok(Some(out.join("\n")))
+}
 
+/// Indentation → braces for one dialect-agnostic pass. Returns the rewritten
+/// lines and whether anything was actually recognized as python-style.
+fn normalize_blocks(lines: &[&str]) -> Result<(Vec<String>, bool), IndentError> {
     let mut infos: Vec<LineInfo> = Vec::with_capacity(lines.len());
     let mut in_triple: Option<char> = None;
     for (idx, line) in lines.iter().enumerate() {
@@ -201,11 +229,91 @@ pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
         changed = true;
     }
 
-    if changed {
-        Ok(Some(out.join("\n")))
-    } else {
-        Ok(None)
+    Ok((out, changed))
+}
+
+/// Rewrite the floor-division operator on one line, leaving strings, `#`
+/// comments and comment-only `//` lines untouched. A `//` preceded by code on
+/// the line is the operator; a `//` that *starts* the line's code stays a
+/// comment (that is how this repo's own python_style `// expect:` headers are
+/// written).
+fn rewrite_floordiv_line(line: &str, in_triple: &mut Option<char>) -> String {
+    let b = line.as_bytes();
+    let mut out = String::with_capacity(line.len() + 16);
+    let mut i = 0usize;
+    // Has any code token been seen before the `//`? Strings count: a literal
+    // followed by `/` is still an operand.
+    let mut seen_code = false;
+    while i < b.len() {
+        if let Some(q) = *in_triple {
+            match find_triple_close(line, i, q) {
+                Some(p) => {
+                    out.push_str(&line[i..p]);
+                    i = p;
+                    *in_triple = None;
+                }
+                None => {
+                    out.push_str(&line[i..]);
+                    return out;
+                }
+            }
+            continue;
+        }
+        let c = b[i];
+        match c {
+            b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
+                if !seen_code {
+                    // Comment-only line: keep the comment verbatim.
+                    out.push_str(&line[i..]);
+                    return out;
+                }
+                // Spaces on both sides: `a//b` must not glue into
+                // `afloordivb`.
+                out.push_str(" floordiv ");
+                i += 2;
+            }
+            b'#' if !line[i..].starts_with("#[") => {
+                out.push_str(&line[i..]);
+                return out;
+            }
+            b'\'' | b'"' => {
+                let q = c as char;
+                seen_code = true;
+                let start = i;
+                if line[i..].starts_with(&q.to_string().repeat(3)) {
+                    // Keep the real quote characters: unlike `scan_line` this
+                    // output IS the program text, and `'''` must not become
+                    // `"""` (the closing run would no longer match).
+                    out.push_str(&line[i..i + 3]);
+                    i += 3;
+                    *in_triple = Some(q);
+                } else {
+                    i += 1;
+                    while i < b.len() {
+                        if b[i] == b'\\' {
+                            i += 2;
+                            continue;
+                        }
+                        if b[i] as char == q {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    out.push_str(&line[start..i.min(b.len())]);
+                }
+            }
+            _ => {
+                if !c.is_ascii_whitespace() {
+                    seen_code = true;
+                }
+                let len = utf8_len(c);
+                out.push_str(&line[i..(i + len).min(b.len())]);
+                i += len;
+            }
+        }
     }
+    out
 }
 
 /// Indent of the first code line at or after `from`, skipping blank,

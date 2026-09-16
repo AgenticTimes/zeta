@@ -661,7 +661,9 @@ impl InferContext {
 
                 // Determine result type based on operator
                 match op.as_str() {
-                    "+" | "-" | "*" | "/" | "%" => {
+                    // PY-A: `floordiv` — the word operator the Python
+                    // preprocessor emits for `//`.
+                    "+" | "-" | "*" | "/" | "%" | "floordiv" => {
                         // Numeric operations return same type
                         Ok(left_ty)
                     }

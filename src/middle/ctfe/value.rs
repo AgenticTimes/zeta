@@ -253,6 +253,17 @@ impl ConstValue {
                     Ok(left % right)
                 }
             }
+            // PY-A: floor division — Python rounds toward negative infinity,
+            // `wrapping_div` truncates toward zero.
+            "floordiv" => {
+                if right == 0 {
+                    Err(CtfeError::DivisionByZero)
+                } else {
+                    let q = left.wrapping_div(right);
+                    let r = left % right;
+                    Ok(if r != 0 && ((r < 0) != (right < 0)) { q - 1 } else { q })
+                }
+            }
             "&" => Ok(left & right),
             "|" => Ok(left | right),
             "^" => Ok(left ^ right),
@@ -301,6 +312,15 @@ impl ConstValue {
                     Err(CtfeError::DivisionByZero)
                 } else {
                     Ok(left % right)
+                }
+            }
+            // PY-A: floor division — unsigned operands are already floored by
+            // truncation, so this is just the plain quotient.
+            "floordiv" => {
+                if right == 0 {
+                    Err(CtfeError::DivisionByZero)
+                } else {
+                    Ok(left / right)
                 }
             }
             "&" => Ok(left & right),
