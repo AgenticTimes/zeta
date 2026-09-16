@@ -89,8 +89,29 @@ fn parse_float_lit(input: &str) -> IResult<&str, AstNode> {
         }
     }
 
-    // Must have decimal to be a float (for v0.3.8, no exponent support yet)
-    if !has_decimal {
+    // Exponent: `1e8`, `1.5e-3`, `2E+10`. Consumed only when digits really
+    // follow the marker, so `1e` + identifier stays `1` + `e`. Without this the
+    // literal was silently truncated: `v = 1e8` compiled to `v = 1` (the `e8`
+    // became a stray identifier statement) and `f(1e8)` broke the enclosing
+    // call outright.
+    let mut has_exponent = false;
+    if pos < bytes.len() && (bytes[pos] == b'e' || bytes[pos] == b'E') {
+        let mut p = pos + 1;
+        if p < bytes.len() && (bytes[p] == b'+' || bytes[p] == b'-') {
+            p += 1;
+        }
+        let digits_start = p;
+        while p < bytes.len() && (bytes[p].is_ascii_digit() || bytes[p] == b'_') {
+            p += 1;
+        }
+        if input[digits_start..p].bytes().any(|b| b.is_ascii_digit()) {
+            has_exponent = true;
+            pos = p;
+        }
+    }
+
+    // Must have a decimal point or an exponent to be a float.
+    if !has_decimal && !has_exponent {
         return Err(nom::Err::Error(NomError::new(
             input,
             nom::error::ErrorKind::Digit,
@@ -100,10 +121,11 @@ fn parse_float_lit(input: &str) -> IResult<&str, AstNode> {
     let float_str = &input[..pos];
     let remaining = &input[pos..];
 
-    // Remove underscores from the float string
+    // Remove underscores from the float string, keeping the exponent marker and
+    // its sign (`f64::from_str` understands `1e-8`).
     let clean_float: String = float_str
         .chars()
-        .filter(|c| c.is_ascii_digit() || *c == '.')
+        .filter(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
         .collect();
 
     // Consume optional type suffix (e.g. `3.14f64`) so `f(3.14f64)` parses
