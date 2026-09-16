@@ -739,6 +739,24 @@ REasyQuant 语料里到处是中文 docstring —— 以前解析早早截断、
 
 回归 `t125`。official 194/194、python_style **125/125（0 failed）**、panic 0。
 
+**⑥ 语料下一个拦路的分布（2026-09-16 追加，逐函数「体换 pass」测收益）**
+
+`jq_wufu_daily` 当前丢行 948，把每个顶层 def 的体换成 `pass` 看收益，收益最大的几个：
+
+| 收益(行) | 函数 | 换 pass 后剩 |
+|---|---|---|
+| −155 | `get_final_ranked_etfs` | 793 |
+| −89 | `get_hist_arrays` | 859 |
+| −80 | `update_sector_pool` | 868 |
+| −47 | `check_a_share_weak_period` | 901 |
+| −47 | `calculate_global_etf_threshold` | 901 |
+
+即**拦路是多个、分散在不同函数里**，不是单点。对 `get_final_ranked_etfs` 做体内前缀二分时，
+最小的可复现前缀是「docstring + `if not g.merged_etf_pool:`」这两行 —— 但**脱离语料上下文写不出来**
+（最小文件里同样的三行完全正常），所以又是一次「上下文相关」的触发，单独复现不可靠。
+下一轮不要再从「最小前缀」切入，改为**在真实文件里做块级 leave-one-out**（保留上下文），
+或先给这一层加「解析失败即指名报告位置」的诊断，靠报错定位。
+
 **⑤ 语料仍未动**（诚实记录）：把 `jq_wufu_daily.initialize` 的体换成 `pass` 后丢行 1163 → **948**，
 说明该函数体只占约 215 行，**下游还有别的拦路**。下一轮就从 `initialize` 体内部逐段二分，
 再顺着剩下的 948 行继续找。
