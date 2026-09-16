@@ -1540,9 +1540,14 @@ pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
         if let Ok((i, _)) = dot_result {
             let (j, field_or_method) = parse_member_ident(i)?;
 
-            // Check for type arguments first (e.g., ::<i32>)
+            // Type arguments on a member must use the explicit turbofish
+            // (`x.foo::<i64>()`). Accepting a bare `<` here ate comparisons:
+            // `f(a.b<10, c.d>20)` had its `<` read as `<...>` and the inner
+            // slice scanner grabbed everything up to the `>` in `c.d>20`, so
+            // the call broke. No source in the repo uses the bare form
+            // (grep: none), and Rust has the same rule.
             let (j2, type_args_opt) =
-                opt(ws(preceded(opt(tag("::")), parse_type_args))).parse(j)?;
+                opt(ws(preceded(tag("::"), parse_type_args))).parse(j)?;
             let type_args: Vec<String> = type_args_opt.unwrap_or_default();
 
             // Now check if this is a method call (has parentheses) or field access

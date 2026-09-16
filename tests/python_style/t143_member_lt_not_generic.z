@@ -1,0 +1,25 @@
+// PY-A: 成员之后的 `<` 是比较运算符，不是泛型实参的起始
+//   泛型实参此前允许裸 `<`（`opt(tag("::"))`），于是 `f(a.b<10, c.d>20)` 里的 `<`
+//   被当 `<...>`，inner-slice 扫描器向前抓到 `c.d>20` 的 `>`，中间的 `10, c.d`
+//   恰好也能解析成一个类型列表（数字 + 点号路径），完整性校验因此通过，
+//   整个调用被吃掉、顶层项连同其后内容被丢弃。
+//   现改为必须写显式 turbofish `::<T>`（Rust 同规则；仓库内无一处裸 `<` 用法）。
+// expect: 1
+// expect: 1
+// expect: 7
+class Box:
+    def __init__(self, v):
+        self.v = v
+
+def first(x, y) -> i64:
+    return x
+
+def after() -> i64:
+    return 7
+
+bx = Box(v=3)
+by = Box(v=9)
+print(first(bx.v < 10, by.v > 5))
+print(first(1, 2))
+
+print(after())
