@@ -7453,6 +7453,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     },
                     _ => index.clone(),
                 };
+                // PY-A: comma subscript `a[i, j]` (pandas `.iloc[r, c]` /
+                // `.loc[r, c]`). There is no DataFrame in this compiler, so the
+                // receiver is an opaque platform handle. Lower it through the
+                // platform shim instead of pretending a 2-D lookup happened —
+                // without this the parser produced `a = x` for `a = x[0,0]`
+                // (the trailing `[0,0]` parsed as a stray array literal).
+                if let AstNode::Tuple(items) = &*index {
+                    let mut call_args = vec![bid];
+                    for item in items {
+                        call_args.push(self.lower_expr(item));
+                    }
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_getitem2".to_string(),
+                        args: call_args,
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
                 let iid = self.lower_expr(&index);
 
                 // Check if base is an array type (dynamic or static)

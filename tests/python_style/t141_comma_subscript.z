@@ -1,0 +1,23 @@
+// PY-A: 逗号下标 a[i, j]（pandas .iloc[r,c] / .loc[r,c]）
+//   表达式解析器原本没有逗号下标分支：`if x[0,0]:` 让整个顶层项连同其后内容被丢弃，
+//   而 `a = x[0,0]` 能编译但**静默**只取到基址（`[0,0]` 被当成无用的数组字面量语句）。
+//   现在解析为 Tuple 索引，MIR 走平台桩 py_getitem2（本地恒等返回句柄；宿主可覆盖符号，
+//   见 runtime/py_additions.c 注释）。本用例锁定的是「能解析 + 走平台桩 + 后续定义不丢」。
+// expect: 42
+// expect: 0
+// expect: 9
+def at(x, r, c) -> i64:
+    return x[r, c]
+
+def is_up(x) -> i64:
+    if x[0, 0] < x[0, 1]:
+        return 1
+    return 0
+
+print(at(42, 0, 0))
+print(is_up(42))
+
+def after() -> i64:
+    return 9
+
+print(after())

@@ -1403,6 +1403,21 @@ int64_t order_target(int64_t a, int64_t b) { return 0; }
 int64_t order_value(int64_t a, int64_t b) { return 0; }
 int64_t order_shares(int64_t a, int64_t b) { return 0; }
 
+// PY-A: comma subscript on an opaque platform object — pandas
+// `df.iloc[r, c]` / `frame.loc[i, j]`. This compiler has no DataFrame, so the
+// receiver handle is opaque here. This is a PLATFORM SHIM in the same sense as
+// `zeta_platform_obj` below: locally it returns the handle unchanged (no real
+// 2-D semantics — a standalone run of a platform strategy is not semantically
+// meaningful anyway), and a host that links its own `py_getitem2` overrides
+// it. It exists so such source parses and links instead of silently binding to
+// a single-index lookup. To make it fail loudly instead, delete this function:
+// the call then becomes an undefined symbol at link time.
+int64_t py_getitem2(int64_t base, int64_t i, int64_t j) {
+    (void)i;
+    (void)j;
+    return base;
+}
+
 // platform class constructor — opaque handle [class_name | args...]
 int64_t zeta_platform_obj(int64_t name, int64_t a, int64_t b, int64_t c) {
     int64_t* h = (int64_t*)GC_malloc(32);

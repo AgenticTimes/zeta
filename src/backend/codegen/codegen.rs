@@ -983,6 +983,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
             void_type.fn_type(&[i64_type.into(), i64_type.into()], false),
             Some(Linkage::External),
         );
+        // PY-A: comma subscript on an opaque platform object (`df.iloc[r, c]`) —
+        // see the shim in runtime/py_additions.c. Declared with the exact C
+        // signature so the call site cannot be mis-guessed as fewer params.
+        module.add_function(
+            "py_getitem2",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
         module.add_function(
             "zeta_platform_obj",
             i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false),

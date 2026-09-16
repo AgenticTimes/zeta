@@ -1477,6 +1477,28 @@ fn parse_primary_atom(input: &str) -> IResult<&str, AstNode> {
     .parse(input)
 }
 
+/// PY-A: comma subscript `a[i, j]` — pandas `.iloc[r, c]` / `.loc[r, c]`.
+/// Without this branch `if x[0,0]:` lost the whole top-level item outright, and
+/// `a = x[0,0]` was *silently* wrong: the subscript failed, `x` became the
+/// whole right-hand side and `[0,0]` was swallowed as a stray array-literal
+/// statement. Only 2+ indices take this path — a single index must keep using
+/// the plain subscript branch.
+fn parse_multi_index(input: &str) -> IResult<&str, Vec<AstNode>> {
+    let (rest, items) = delimited(
+        ws(tag("[")),
+        separated_list1(ws(tag(",")), ws(parse_expr)),
+        ws(tag("]")),
+    )
+    .parse(input)?;
+    if items.len() < 2 {
+        return Err(nom::Err::Error(NomError::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+    Ok((rest, items))
+}
+
 pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
     let (mut input, mut expr) = parse_primary(input)?;
     loop {
@@ -1569,6 +1591,14 @@ pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
                 };
                 input = k;
             }
+        } else if let Ok((i, items)) = parse_multi_index(input) {
+            // The index is a tuple: MIR lowers multi-index subscripts through
+            // the platform shim (see gen.rs / runtime py_getitem2).
+            expr = AstNode::Subscript {
+                base: Box::new(expr),
+                index: Box::new(AstNode::Tuple(items)),
+            };
+            input = i;
         } else if let Ok((i, index)) =
             delimited(ws(tag("[")), ws(parse_expr), ws(tag("]"))).parse(input)
         {
