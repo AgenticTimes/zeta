@@ -102,6 +102,11 @@ EOF
 
 # 3) 真实项目语料（REasyQuant）
 python3 tools/corpus_baseline.py
+#    调试用环境变量（定位「静默截断」）：本仓库里 zetac 支持两个开关——
+#      ZETA_DUMP_PP=<path>     把缩进预处理后的源码写到 path（看解析器真正吃到的文本）
+#      ZETA_STRICT_PARSE=1     未解析尾部从「W1002 警告」升级为「E1002 致命」（量真实解析率）
+#    典型流程：ZETA_DUMP_PP=/tmp/pp.txt ./target/release/zetac <file> -o /tmp/o
+#             → 在 /tmp/pp.txt 里定位解析停住的那一项，再对它做块级 leave-one-out 二分。
 #    口径：解析通过率（parse 层）38/38；链接通过 34/38（2026-09-16 实测；剩 4 个里
 #    3 个是「函数体降级失败→def 被静默丢弃」的编译器缺陷，见 roadmap「实测更新」）
 ```
