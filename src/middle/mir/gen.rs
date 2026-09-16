@@ -8082,7 +8082,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 type_args: vec![],
             });
             child.exprs.insert(slot_id, MirExpr::Var(slot_id));
-            child.type_map.insert(slot_id, Type::I64);
+            // Give the captured name its REAL type: typing every capture as i64
+            // made `if f in d` inside a comprehension test a string key against
+            // a dict whose handle was treated as an integer — every item was
+            // filtered out and the result silently came back empty.
+            let cap_ty = self
+                .name_to_id
+                .get(name)
+                .and_then(|pid| self.type_map.get(pid))
+                .cloned()
+                .unwrap_or(Type::I64);
+            child.type_map.insert(slot_id, cap_ty);
             child.name_to_id.insert(name.clone(), slot_id);
             child.captured_vars.insert(name.clone(), name_id);
         }

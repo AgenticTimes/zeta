@@ -1,0 +1,15 @@
+// PY-A: 闭包/推导式捕获变量的类型 —— 被捕获的名字必须保留真实类型。
+// 此前捕获一律定型为 i64，所以推导式里 `if f in d`（d 是被捕获的字典）被当成整数比较，
+// **所有元素都被过滤掉、结果静默为空**（len 0 而不是 2）。
+// 修法：lower_closure 里给捕获名取父作用域中该名字的真实类型，而不是硬编码 i64。
+fields = ["a", "b", "c"]
+d = {"a": 1, "b": 2}
+x = {f: 2 for f in fields if f in d}
+print(len(x))
+print(x["a"])
+y = {f: 2 for f in ["a", "b", "c"] if f in d}
+print(len(y))
+
+// expect: 2
+// expect: 2
+// expect: 2
