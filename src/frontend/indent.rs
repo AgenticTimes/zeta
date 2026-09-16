@@ -126,6 +126,18 @@ pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
     let mut out: Vec<String> = Vec::with_capacity(lines.len() + 1);
     let mut stack: Vec<usize> = Vec::new();
     let mut changed = false;
+    // Bracket depth + the FIRST line of the current logical (possibly
+    // multi-line) statement. A signature split over several lines —
+    //     def inject_local_data(
+    //         market_df: pd.DataFrame,
+    //     ) -> None:
+    // — only ends with `:` on its LAST physical line, where the block keyword
+    // is long gone. Testing that line alone never recognized the header, the
+    // colon was left in place, and the definition failed to parse (which then
+    // truncated the rest of the file). Track the logical statement's opening
+    // line so the same detection works regardless of how it is wrapped.
+    let mut depth: i32 = 0;
+    let mut logical_head: Option<(String, usize)> = None;
 
     for i in 0..lines.len() {
         let info = &infos[i];
@@ -145,11 +157,25 @@ pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
             changed = true;
         }
 
+        let depth_after = depth + bracket_delta(&info.code);
+        let (head_code, head_indent) = match &logical_head {
+            Some((h, hi)) if depth > 0 => (h.as_str(), *hi),
+            _ => (info.code.as_str(), info.indent),
+        };
         let next_indent = next_code_indent(&infos, i + 1);
-        let opens = info.code.trim_end().ends_with(':')
+        let opens = depth_after == 0
+            && info.code.trim_end().ends_with(':')
             && !info.code.contains('{')
-            && is_header(&info.code)
-            && next_indent.map_or(false, |ni| ni > info.indent);
+            && is_header(head_code)
+            && next_indent.map_or(false, |ni| ni > head_indent);
+
+        if depth_after > 0 && depth == 0 {
+            logical_head = Some((info.code.clone(), info.indent));
+        }
+        depth = if depth_after < 0 { 0 } else { depth_after };
+        if depth == 0 {
+            logical_head = None;
+        }
 
         let line_out = if opens {
             let mut l = String::new();
@@ -189,6 +215,21 @@ fn next_code_indent(infos: &[LineInfo], from: usize) -> Option<usize> {
         .iter()
         .find(|info| !info.code.trim().is_empty())
         .map(|info| info.indent)
+}
+
+
+/// Net bracket depth of an already-string-blanked code line, used to fold a
+/// multi-line statement into one "logical line" for header detection.
+fn bracket_delta(code: &str) -> i32 {
+    let mut d = 0i32;
+    for c in code.chars() {
+        match c {
+            '(' | '[' | '{' => d += 1,
+            ')' | ']' | '}' => d -= 1,
+            _ => {}
+        }
+    }
+    d
 }
 
 /// Raw line with its header colon (and trailing spaces) removed.

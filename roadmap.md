@@ -597,6 +597,40 @@ if os.environ.get('REPLAYQUANT_LOCAL') == '1':
   缺的是 `set_level`/`DataFrame`/`get_security_info`/`datetime` 这类宿主 API。
 - **28 个仍被解析截断**（PARSE-truncated），其中最高频符号是 `set_level`（几乎人人都有）。
 
+### 跨行函数签名（2026-09-16 追加，已修）
+
+缩进预处理原来**按行**判定头部：`opens` 要求「本行以 `:` 结尾 且 本行以块关键字开头」。
+签名跨行时 `def` 在第一行、`:` 在最后一行，两边都不满足 → 不改写 → 头部冒号原样透传 →
+`parse_func` 解析失败 → 其后整份文件被丢弃。`jq_shim.py` 第 46 行正是这种写法：
+
+```python
+def inject_local_data(
+    market_df: pd.DataFrame,
+    index_df: pd.DataFrame | None = None,
+) -> None:
+```
+
+修法：在预处理里跟踪**括号深度 + 逻辑行首行**（`logical_head`/`head_indent`），
+判定改成「逻辑行结束（深度归零）+ 本行以 `:` 结尾 + 逻辑行首行是块关键字 +
+下一代码行缩进 > 逻辑行首行缩进」。单行情形的行为完全不变。回归 `t118`。
+
+同一修法顺带覆盖跨行条件：`if (a > 1\n and b > 2):` 也能正常改写了（一并进了 `t118`）。
+语料 3 个最大文件的丢行数继续下降（`jq_wufu_daily` 1179→1163、`jq_wufu` 1098→1082、
+`jq_shim` 708→660），语料丢行总数基线记为 **8728**（今后看这个数的变化）。
+
+### 新发现：默认参数值根本没生效（未修，跨 `fn`/`def` 全形态）
+
+```
+def add(a, b = 10): return a + b
+print(add(5))        # 打 5，应为 15
+def greet(name = "world"): return name
+print(greet())       # 打 0，应为 world
+```
+
+`fn add(a: i64, b: i64 = 10)` 同样如此；两个实参都给时正常（`add(5,20)` → 25）。
+即「缺省填充」这条路径整体失效，且字符串默认值也一样（说明不是类型问题）。
+roadmap 早先记的「默认参数值已落地」与实际不符，此处更正并记为待修。
+
 ### 另外两个已定位的小缺口（未修）
 
 - `from math import pi` + `print(pi)` 打 **0**：`from X import 常量` 的成员没有绑定成裸名
