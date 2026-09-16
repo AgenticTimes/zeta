@@ -1750,7 +1750,97 @@ fn parse_logical_and(input: &str) -> IResult<&str, AstNode> {
 /// PY-A: one call argument — either a plain expression or a keyword argument
 /// `name=value`. Keyword NAMES are dropped in V1 (values bind positionally);
 /// this keeps JoinQuant-style calls (`f(x=1, type='fund')`) parseable.
+/// PY-A: `f(x for x in y)` — a GENERATOR EXPRESSION as the call argument. Its
+/// parentheses ARE the call's, so the ordinary expression parse consumed `x`
+/// and left ` for x in y)` unconsumed: the call then failed to parse and the
+/// whole enclosing definition (and the rest of the file) was silently dropped.
+/// Builds the same `__collect__(iter, lambda)` desugar the bracketed list comp
+/// uses; the caller consumes the closing `)`.
+fn parse_call_genexp(input: &str) -> IResult<&str, AstNode> {
+    let (input, elem) = ws(parse_full_expr).parse(input)?;
+    let (input, _) = ws(tag("for")).parse(input)?;
+    let (input, name) = ws(parse_ident).parse(input)?;
+    let (input, _) = ws(tag("in")).parse(input)?;
+    let (input, iter) = ws(parse_full_expr).parse(input)?;
+    let (input, cond) = if let Ok((rest, _)) = ws(tag("if")).parse(input) {
+        let (rest, c) = ws(parse_full_expr).parse(rest)?;
+        (rest, Some(c))
+    } else {
+        (input, None)
+    };
+    let body = match cond {
+        None => elem,
+        Some(c) => AstNode::If {
+            cond: Box::new(c),
+            then: vec![AstNode::ExprStmt { expr: Box::new(elem) }],
+            else_: vec![AstNode::ExprStmt {
+                expr: Box::new(AstNode::Lit(-1)),
+            }],
+        },
+    };
+    let lam = AstNode::Closure {
+        params: vec![name],
+        body: Box::new(body),
+    };
+    Ok((
+        input,
+        AstNode::Call {
+            receiver: Some(Box::new(iter)),
+            method: "__collect__".to_string(),
+            args: vec![lam],
+            type_args: vec![],
+            structural: false,
+        },
+    ))
+}
+
+/// Does the text contain a ` for ` at bracket depth 0 (i.e. this argument is a
+/// bare generator expression)? Depth-scan skipping string literals.
+fn has_top_level_for(s: &str) -> bool {
+    let b = s.as_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'\'' | b'"' => quote = Some(c),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b' ' if depth == 0
+                && i + 5 <= b.len()
+                && s.is_char_boundary(i)
+                && s.is_char_boundary(i + 5)
+                && &s[i..i + 5] == " for " =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
 fn parse_call_arg(input: &str) -> IResult<&str, AstNode> {
+    // PY-A: bare generator expression (`f(x for x in y)`) — must be tried
+    // before the ordinary expression parse, which would stop at `x`.
+    if has_top_level_for(input) {
+        if let Ok(r) = parse_call_genexp(input) {
+            return Ok(r);
+        }
+    }
     // PY-A: Python `**mapping` argument unpacking. This MUST be detected
     // BEFORE the expression fallback: `**d` would otherwise parse as `*(*d)`
     // (unary deref twice) and the callee silently received zeros — a wrong

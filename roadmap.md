@@ -726,6 +726,22 @@ REasyQuant 语料里到处是中文 docstring —— 以前解析早早截断、
 **测评**：official **194/194**；python_style **125/125（0 failed）**，`t124_ternary` 由红转绿；
 语料 丢行 8580→**8463**、panic **0**、截断 32。
 
+### 生成器表达式作为调用实参（2026-09-16 追加，已修）
+
+`f(x for x in y)` —— 它的括号**就是调用自己的括号**，所以普通表达式解析只吃掉 `x`，
+把 ` for x in y)` 留在原地 → 整个调用解析失败 → 外层函数乃至其后整份文件被静默丢弃。
+`jq_wufu_daily._parity_snapshot` 里 `",".join(f"…" for m in ranked[:10])` 正是此形状
+（解析器里原本还挂着一条 "PY-A LIMIT: bare genexp as sole argument is NOT supported"）。
+
+修法：解析实参前先做「**深度 0 处是否存在 ` for `**」探测（跳过字符串字面量），
+命中则按生成器表达式解析，复用列表推导的 `__collect__(iter, lambda)` 脱糖（含 `if` 的 -1 哨兵）。
+
+回归 `t130`（join/sum、带 `if`、以及 `join(list)` 未回归）。official 194/194、python_style 130/130。
+
+⚠️ **诚实记录：语料总丢行没有变化（仍 7859）**，因为 `_parity_snapshot` 里**还有第二个拦路**：
+`[s for s, p in context.portfolio.positions.items() if p.total_amount > 0]` ——
+**推导式里的元组解包**（`for s, p in …`）不支持，解析仍停在同一项。下一刀就是它。
+
 ### 闭包捕获变量的类型（2026-09-16 追加，已修 —— 上一节遗留项的根因）
 
 `lower_closure` 把**所有捕获的自由变量**硬编码成 `Type::I64`，于是推导式/闭包体内对捕获

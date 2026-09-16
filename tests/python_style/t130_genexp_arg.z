@@ -1,0 +1,16 @@
+// PY-A: 生成器表达式作为调用实参 `f(x for x in y)`。
+// 它的括号**就是调用自己的括号**，所以普通表达式解析只吃掉 `x`，把
+// ` for x in y)` 留在原地 → 整个调用解析失败 → 外层函数乃至其后整份文件被静默丢弃
+// （jq_wufu_daily._parity_snapshot 里 `",".join(f"..." for m in ranked[:10])` 正是此形状）。
+// 修法：解析实参前先做「深度 0 处是否存在 ` for `」探测，是则按生成器表达式解析，
+// 复用列表推导的 `__collect__(iter, lambda)` 脱糖（含 `if` 过滤的 -1 哨兵）。
+xs = ["a", "b"]
+print(",".join(s for s in xs))
+print(sum(x for x in [1, 2, 3]))
+print(sum(x for x in [1, 2, 3] if x > 1))
+print(",".join(xs))
+
+// expect: a,b
+// expect: 6
+// expect: 5
+// expect: a,b
