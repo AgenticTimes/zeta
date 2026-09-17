@@ -4169,6 +4169,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // with the existing `zeta_arange` (a Vec of [0..n)), instead of
                 // emitting a free call named `range`. 2/3-arg forms need
                 // offset/step and stay fail-loud below.
+                // `range(a, b)` as a value: a Vec of [a, b) — `zeta_arange` only
+                // covers [0, n), hence the `_from` variant. 3-arg (step) forms
+                // stay fail-loud below.
+                if method == "range" && receiver.is_none() && args.len() == 2 {
+                    let a0 = self.lower_expr(&args[0]);
+                    let a1 = self.lower_expr(&args[1]);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_arange_from".to_string(),
+                        args: vec![a0, a1],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                    return id;
+                }
                 if method == "range" && receiver.is_none() && args.len() == 1 {
                     let n = self.lower_expr(&args[0]);
                     self.stmts.push(MirStmt::Call {

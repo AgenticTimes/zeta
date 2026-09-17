@@ -1514,6 +1514,18 @@ int64_t zeta_arange(int64_t n) {
     for (int64_t i = 0; i < n; i++) base[2 + i] = i;
     return (int64_t)(base + 2);
 }
+
+// PY-A: `range(a, b)` as a VALUE (not a for-head) — a Vec of [a, b).
+// `zeta_arange` only covers [0, n), so this variant takes the start too.
+int64_t zeta_arange_from(int64_t a, int64_t b) {
+    int64_t n = b - a;
+    if (n < 0) n = 0;
+    int64_t v = zeta_arange(n);
+    int64_t* p = (int64_t*)v;
+    for (int64_t i = 0; i < n; i++) p[i] += a;
+    return v;
+}
+
 int64_t zeta_linspace_i64(int64_t a, int64_t b, int64_t n) {
     int64_t cap = n < 8 ? 8 : n;
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);

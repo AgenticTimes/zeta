@@ -1,0 +1,17 @@
+// PY-A: `range(a, b)` 作为值 —— Vec [a, b)。`zeta_arange` 只覆盖 [0, n)，
+//   故新增 `zeta_arange_from(a, b)`（C 侧 + codegen 声明 + 形状分派）。
+//   3 参（带 step）形式仍走编译期指名诊断，不假装支持。
+// expect: 5
+// expect: 2
+def f(a: i64, b: i64) -> i64:
+    xs = range(a, b)
+    return len(xs)
+
+
+def g() -> i64:
+    ys = range(3, 5)
+    return len(ys)
+
+
+print(f(2, 7))
+print(g())
