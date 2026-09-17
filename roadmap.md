@@ -2,8 +2,8 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（149 case 全绿）**
-> 当前通过率（2026-09-17 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **149/149**；REasyQuant 语料**完全解析 32/38**、未解析行合计 **731**（`ZETA_STRICT_PARSE` 口径，退出码见 §二）
+> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（150 case 全绿，逐用例 20s 超时）**
+> 当前通过率（2026-09-17 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **150/150**；REasyQuant 语料**完全解析 32/38**、未解析行合计 **731**（`ZETA_STRICT_PARSE` 口径，退出码见 §二）
 > Python 库注册表：**16 个模块**（见「库导入机制」小节）；第三方库 `zorb install` 可用，已验真实库 `python-stringcase` 全函数正确
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
@@ -50,7 +50,7 @@
 
 ### 二、进度快照（2026-09-17）
 
-**三套基线**：官方 **194/194**；python_style **149/149（0 failed）**；语料「解析通过」**38/38**、「完全解析」**32/38**、未解析行合计 **731**。
+**三套基线**：官方 **194/194**；python_style **150/150（0 failed）**；语料「解析通过」**38/38**、「完全解析」**32/38**、未解析行合计 **731**。
 
 **语料（REasyQuant，38 个文件）** — 度量脚本：`tools/corpus_baseline.py`（解析通过）+ 对 `W1002`「丢了多少行」求和（完全解析口径）
 
@@ -63,7 +63,7 @@
 `指数ETF动量轮动` 146（`initialize`）、`ETF动量EPO` 77（`epo(x, signal, lambda_, method=…)`）、
 `首板高开-低开-弱转强混合策略` 46 与 `追首板涨停` 28（同款 `get_hl_stock`）。
 
-### ⚠️ 新发现（批次八，**未修**）：集合 `for` 里的 `continue` 死循环
+### 批次九（**已修** `b9543737`）：集合 `for` 里的 `continue` 死循环
 
 最小复现（**所有历史二进制都复现，非本次改动引入**）：
 
@@ -85,10 +85,13 @@ range 式 `for` 走的是 `MirStmt::For`（有独立的 `for.inc` 块），所�
 影响面：`for x in list: if cond: continue` 是策略文件里的常见写法（`filter_stocks` 等），
 一跑就挂。**这是本项目目前最严重的正确性缺陷（挂起优于错值）**，优先级高于剩余解析拦路。
 
-拟定修法（待实施 + 验证）：把自增移到「`array_get` 之后、用户体之前」，并给用户可见的
-循环变量单独一个槽存**自增前**的下标（`user_index = index; index = index + 1; <body>`）。
-这样 `continue`（跳到条件）也不会漏掉自增，且体内看到的下标仍是本次迭代的值。
-需要覆盖的用例：`continue`/`break` 在集合 for 内、体内读下标、嵌套循环、元组模式。
+修法（已落地）：把自增移到「`array_get`/模式绑定之后、用户体之前」。**不需要**额外快照槽——
+用户可见名绑的是**元素**（`for i in [1,2,3]` 里 `i` 是元素，绑在 `get_id` 上），
+只有内部下标槽与条件读 `index_var_id`，所以自增提前对循环体不可见。
+回归：`t149_for_continue_advances.z`（continue / break / 体内读循环变量 / 嵌套循环 /
+元组模式 / 空集合 六种形状，pre-fix 挂起、post-fix PASS）。
+顺带给 `tests/python_style/run.sh` 每个用例加 `timeout 20`——挂起的程序会把整套测试卡死
+（本次卡了 30 分钟才发现这条缺陷）。
 
 **本批次七（2026-09-17）——四处 parser/预处理根因（commit `33d21d0e`、`eb8c2f13`、`bcab1438`、`d6ddf042`）**
 
@@ -207,8 +210,7 @@ range 式 `for` 走的是 `MirStmt::For`（有独立的 `for.inc` 块），所�
 
 ### 三、下一步（按价值排序）
 
-1. **集合 `for` 里的 `continue` 死循环**（见上「新发现」，已定位未修）——最严重的正确性缺陷。
-2. 语料剩余拦路（未解析行 731）：`jq_shim` 275
+1. 语料剩余拦路（未解析行 731）：`jq_shim` 275
    （`get_all_securities`）、`指数ETF动量轮动` 146（`initialize`）、`ETF动量EPO` 77
    （`epo(x, signal, lambda_, method=…)`——参数名与内建 `lambda` 撞名，值得一看）、
    `首板高开-低开-弱转强混合策略` 46 / `追首板涨停` 28（同款 `get_hl_stock`）。按 §一 手法逐个走。
