@@ -61,6 +61,30 @@
 
 剩余拦路（2 个文件）：`jq_wufu_local` 159（`_run_nautilus`）、`ETF动量EPO` 77（`epo(…)`）。
 
+**本批次十五（2026-09-17，调研 + 定位，未落地修复）——链接期缺口的第一批**
+
+按「距离能运行 REasyQuant」的调研结论开工清**自研缺口**，先把 `timedelta(16)/date(6)/datetime(1)`
+这一类定位清楚（这是调用点最多的一类，23 处）：
+
+- **实测口径**：语料 38 文件 解析 **37/38**、链接 **1/38**、运行退出码 0 **1/38**；
+  未定义符号去重 **87**；`nm` 查 `zeta_runtime_c.o`/`tokio_runtime.o` 对这 87 个符号
+  **0 命中**（所以不是链接顺序）；`grep -rl "zetac|zeta_" REasyQuant` **0 文件**（宿主未集成）。
+- **根因（已缩到最小复现）**：语料普遍写 `from datetime import datetime, timedelta, date`，
+  **导入的类名遮蔽了模块名**，于是 `datetime.timedelta(days=375)` 变成「对已导入类的方法调用」，
+  最后退化成对 **裸名 `timedelta`** 的自由调用 → 未定义符号。
+  - `import datetime` + `datetime.timedelta(...)` → **正常链接**（走模块句柄）
+  - `from datetime import timedelta` + `timedelta(...)` → **正常链接**（走注册表成员）
+  - `from datetime import datetime, …` + `datetime.timedelta(...)` → ✗ 裸 `timedelta`/`datetime`/`date`
+  最小复现：`/tmp/dt3.py`（三行 import + `datetime.timedelta(days=3)`）。
+- **试过但无效**：在 `pylib/registry.txt` 里补三条 dotted 成员
+  （`F datetime datetime.timedelta py_dt_timedelta …` 等）——**实测仍链接失败**，
+  说明这条路径压根没按「base 文本 + 成员名」查注册表（对照组 `datetime.strptime` 能通，
+  是因为它命中了另一条分支）。该实验已**回滚**（无证据的改动不留）。
+- **下一步（已定位到落点）**：在**方法调用降级**处，对「base 是 `Var(name)` 的 dotted 调用」
+  加一次注册表回退（`name` 恰为已注册模块时按 `name.member` 查），**必须在退化成自由调用之前**。
+  然后同样处理 `range(3)`、`getattr/dict/object/setdefault/_Info` 与 `py_asdict_unexpanded`
+  （后者是**占位符**：没实现就发了符号出去，应改为响亮报错）。
+
 **本批次十四（2026-09-17）——`impl` 不再保留（commit `00acc6fc`）**
 
 - **症状**：`jq_wufu_local._run_nautilus`（159 行）整体被丢；该函数到处用 `impl` 当变量名。
