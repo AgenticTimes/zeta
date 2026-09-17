@@ -104,6 +104,23 @@ pub fn parse_ident(input: &str) -> IResult<&str, String> {
     Ok((input, ident.to_string()))
 }
 
+/// Match a bare keyword that may not be the prefix of an identifier.
+///
+/// `ws(tag("return"))` matched the `return` inside `return_value`, so
+/// `return_value = 1` parsed as `return _value = 1` and the whole definition
+/// was dropped (`breakpoint` / `continue_flag` had the same fate). The
+/// boundary has to be checked on a **leading-whitespace-only** skip — `ws()`
+/// eats the trailing whitespace too, which is what made the old `import` / `as`
+/// guards blind (same bug class).
+pub fn kw_boundary<'a>(input: &'a str, word: &str) -> Option<&'a str> {
+    let (rest, _) = skip_ws_and_comments0(input).ok()?;
+    let rest = rest.strip_prefix(word)?;
+    match rest.chars().next() {
+        Some(c) if c.is_alphanumeric() || c == '_' => None,
+        _ => Some(rest),
+    }
+}
+
 /// Member / attribute name — the identifier that follows a `.`.
 ///
 /// Keywords are only keywords at *statement* level, never as a field or method

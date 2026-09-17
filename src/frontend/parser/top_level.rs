@@ -97,25 +97,37 @@ fn parse_param_full(input: &str) -> IResult<&str, (String, String, Option<AstNod
     // PARAMETER POSITION only (e.g. JoinQuant strategies use `fn` as a param
     // name: `def run_daily(fn, time)`). A dedicated relaxed-ident parser —
     // general statement positions keep the keyword rules.
+    //
+    // The keywords need WORD BOUNDARIES: `tag("type")` also matched the `type`
+    // inside a normal parameter name, so `def f(types)` parsed as a param named
+    // `type` followed by leftover `s` — the parameter list (and with it the
+    // whole definition) failed. `type_s` / `type_name` / `typeOf` had the same
+    // fate (`jq_shim.get_all_securities(types: …)`).
     let parse_kw_param = map(
         (
-            ws(alt((
-                tag("fn"),
-                tag("match"),
-                tag("type"),
-                tag("impl"),
-                tag("open"),
-                tag("high"),
-                tag("low"),
-                tag("set"),
-            ))),
+            parse_kw_param_name,
             opt(preceded(ws(tag(":")), ws(parse_type))),
             opt(ws(preceded(tag("="), ws(parse_default_value)))),
         ),
-        |(name, ty, default)| (name.to_string(), ty.unwrap_or_else(|| "i64".to_string()), default),
+        |(name, ty, default)| (name, ty.unwrap_or_else(|| "i64".to_string()), default),
     );
 
     alt((parse_self, parse_star, parse_kw_param, parse_regular)).parse(input)
+}
+
+/// Keyword-named parameter (`fn`, `type`, …) — see `parse_kw_param`. Uses a
+/// word boundary so that ordinary parameter names starting with a keyword
+/// (`types`, `type_s`, `opener`) are not stolen by the relaxed parser.
+fn parse_kw_param_name(input: &str) -> IResult<&str, String> {
+    for kw in ["fn", "match", "type", "impl", "open", "high", "low", "set"] {
+        if let Some(rest) = super::parser::kw_boundary(input, kw) {
+            return Ok((rest, kw.to_string()));
+        }
+    }
+    Err(nom::Err::Error(nom::error::Error::new(
+        input,
+        nom::error::ErrorKind::Tag,
+    )))
 }
 
 fn parse_use_statement(input: &str) -> IResult<&str, Vec<AstNode>> {

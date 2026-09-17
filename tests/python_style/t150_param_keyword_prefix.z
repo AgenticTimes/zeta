@@ -1,0 +1,18 @@
+// PY-A: 参数名以前缀形式撞关键字（`types` / `type_s` / `typeOf`）
+//   `parse_param` 有一个「放宽的关键字参数名」分支（JoinQuant 的 `def run_daily(fn, time)`），
+//   但那里用的是 `tag("type")` 这类**没有词边界**的匹配：`def f(types)` 被读成
+//   参数名 `type` + 残留 `s` ⇒ 参数表失败 ⇒ 整个定义连同其后内容被丢弃
+//   （`jq_shim.get_all_securities(types: list[str] | None = None, …)`）。
+//   修法：`parse_kw_param_name` 复用 `parser::kw_boundary`（在只跳前导空白的 skip 上判边界）。
+// expect: 7
+// expect: 1
+def f(types, type_s, typeOf) -> i64:
+    return types + type_s + typeOf
+
+def g(types: list[str] | None = None, date: str | None = None) -> i64:
+    if types is None:
+        return 1
+    return 2
+
+print(f(1, 2, 4))
+print(g())
