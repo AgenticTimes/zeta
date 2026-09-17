@@ -1764,3 +1764,31 @@ identity 兜底、UTF-8 边界探针修复。
 最可能：`collect_calls` 只扫已注册函数体，而顶层代码被折进合成 main，这条调用没被收集到
 （或 callee 查找失败 / pargs 为空）。**下一步就用这个两行用例加探针确认收集范围**，
 这比继续猜 MIR 读取点更直接。
+
+
+## 批次二十八（2026-09-17，定位推进 —— 两段已打通，断点收敛到 MIR）
+
+**先更正批次二十七的一个错误判读**：`ZETA_PROBE` 没打印 `PROBE param infer` **不等于「循环没跑」** ——
+该探针只在 `changed` 非空时打印，而 `classify` 不认句柄 ⇒ 自然没有输出。真实原因是**调用形状没覆盖**：
+`from datetime import date` 之后 `date(...)` 是 `Call{receiver: None, method: "date"}`，
+而上一轮我只匹配了 `receiver: Some(Var(root))` 的 dotted 形状。
+
+**这一轮把两段打通并验证了**（改 `resolver.rs` 的形参推断）：
+1. 覆盖 **两种调用形状**：dotted `Root.member(...)` 与 from-import 后的裸 `member(...)`
+   （后者查 `py_member_aliases`）；命中 `find_member(module, member).handle` 就升级形参类型
+2. AST 回写加 `Type::Named(n,_) => n.clone()`
+
+探针实证（`ZETA_PROBE_PT`）：
+```
+PROBE param infer: f -> [Named("PyDate", [])]
+PROBE rewrite callee=f registered=true changed_types=[(0, Named("PyDate", []))]
+```
+⇒ **推断触发、AST 形参文本也确实被改写**（两段都通）。
+
+**断点在 MIR**：`def f(d): return d.year` + `f(date(2020,5,6))` 仍输出 **18388**；
+`nm -u` 看目标文件只调用 `py_dt_date`，**没有 `py_dt_year`** ⇒ MIR 的 FieldAccess/句柄分派
+没有采用形参的声明类型。**已回滚**（端到端症状未变、三套指标未见改善 ⇒ 无证据不留）。
+
+**下一步（很具体）**：给 MIR 的 FieldAccess 路径加探针，打印接收者在 `type_map` / `source_types`
+里的条目（`d.year` 走的是 `py_handle_of` → `method_symbol` 那条链），确认形参类型是否根本没进
+`type_map`，还是进了但 `py_handle_of` 读的是另一个表。
