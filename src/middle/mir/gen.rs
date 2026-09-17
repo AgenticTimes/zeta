@@ -353,6 +353,46 @@ impl MirGen {
     /// PY-A: the library handle tag of a receiver expression, if any
     /// (lets `t.start()` / `lock.acquire()` dispatch exactly instead of by
     /// name-guessing).
+    /// PY-A: the declared type name of a simple variable receiver, for the
+    /// `getattr(obj, "literal")` static rewrite. Unlike `py_handle_of` this is
+    /// not restricted to handle tags: JoinQuant's `g` is a plain struct, and
+    /// `getattr(g, "ranked_etfs_result", [])` must resolve to its field (or to
+    /// the given default) instead of a bogus undefined symbol.
+    fn py_struct_type_of(&self, recv: &AstNode) -> Option<String> {
+        let name = match recv {
+            AstNode::Var(n) => n,
+            _ => return None,
+        };
+        if let Some(id) = self.name_to_id.get(name) {
+            if let Some(Type::Named(n, _)) = self.type_map.get(id) {
+                return Some(n.clone());
+            }
+        }
+        if let Some(Type::Named(n, _)) = self.module_global_types.get(name) {
+            return Some(n.clone());
+        }
+        None
+    }
+
+    /// Field lookup that also accepts a module-mangled type name
+    /// (`jq_shim__G` -> `G`), since `type_decls` keys come from the plain
+    /// class/struct declaration.
+    fn py_struct_has_field(&self, tyname: &str, field: &str) -> bool {
+        let mut candidates = vec![tyname.to_string()];
+        if let Some((_, tail)) = tyname.rsplit_once("__") {
+            candidates.push(tail.to_string());
+        }
+        if let Some((_, tail)) = tyname.rsplit_once('_') {
+            candidates.push(tail.to_string());
+        }
+        candidates.iter().any(|t| {
+            matches!(
+                self.type_decls.get(t),
+                Some(TypeDecl::Struct { fields, .. }) if fields.iter().any(|(f, _)| f == field)
+            )
+        })
+    }
+
     fn py_handle_of(&self, recv: &AstNode) -> Option<String> {
         // A chained call whose callee is a registry member that declares a
         // handle (e.g. `hashlib.md5("x").hexdigest()`): the result's tag is
@@ -4131,8 +4171,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // member is registered (that check is what makes it safe: an
                 // unknown receiver would silently read garbage, see batch 26).
                 // Otherwise fall through to the compile-time diagnostic below.
-                if method == "getattr" && receiver.is_none() && args.len() == 2 {
+                if method == "getattr" && receiver.is_none() && (2..=3).contains(&args.len()) {
                     if let AstNode::StringLit(name) = &args[1] {
+                        // (a) a registry handle with a registered member.
                         if let Some(tag) = self.py_handle_of(&args[0]) {
                             if crate::middle::pylib::method_symbol(&tag, name).is_some() {
                                 let rewritten = AstNode::FieldAccess {
@@ -4140,6 +4181,25 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                     field: name.clone(),
                                 };
                                 return self.lower_expr(&rewritten);
+                            }
+                        }
+                        // (b) a struct-typed receiver (JoinQuant's `g`, a
+                        // module global, a config object): the field exists ->
+                        // plain field access; the field is absent but a default
+                        // was given -> the default, which IS Python's semantics
+                        // for a missing attribute. Absent with no default keeps
+                        // the loud diagnostic below (Python would raise
+                        // AttributeError, we must not silently read 0).
+                        if let Some(tyname) = self.py_struct_type_of(&args[0]) {
+                            if self.py_struct_has_field(&tyname, name) {
+                                let rewritten = AstNode::FieldAccess {
+                                    base: Box::new(args[0].clone()),
+                                    field: name.clone(),
+                                };
+                                return self.lower_expr(&rewritten);
+                            }
+                            if args.len() == 3 {
+                                return self.lower_expr(&args[2]);
                             }
                         }
                     }

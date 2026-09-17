@@ -1,0 +1,14 @@
+// PY-A: `getattr(obj, "字面量名", default)` 静态解析 ——
+//   字段存在 → 字段访问；字段不存在但有 default → 用 default（这就是 Python 语义）；
+//   字段不存在且无 default → 保持响亮诊断（Python 会抛 AttributeError，我们不能静默读 0）。
+// expect: 5
+// expect: 42
+class Config:
+    def __init__(self, n):
+        self.n = n
+        self.tag = "cfg"
+
+
+c = Config(5)
+print(getattr(c, "n", 0))
+print(getattr(c, "missing", 42))
