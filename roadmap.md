@@ -2187,3 +2187,32 @@ python_style **176/176**；官方 **194/194**；语料未定义符号 86 → **8
 **点分本地模块导入解析**：`from strategies.code.jq_shim import (…)` 目前不解析，
 所以 shim 里的函数（`get_price`/`get_security_info`/`get_extras`/`attribute_history`…）
 仍以未定义符号出现。解析它（相对源文件目录 / 搜索根）就能把整个本地 shim 链进来。
+
+
+## 批次五十（2026-09-17，**本地实现接上了**）：本地模块导入 → `<module>__<name>` 路由
+
+三处改动（全在本地/可安装 API 范畴）：
+
+| # | 改动 | 为什么必需 |
+|---|---|---|
+| 1 | 自由调用路由到 `<module>__<member>`（`gen.rs`），结果类型沿用 resolver 推断 | `from <本地模块> import f` 后 `f(...)` 此前留成未解析外部符号 |
+| 2 | 点分本地路径的**祖先搜索**（`resolver.rs`，深度上限 6） | `from strategies.code.jq_shim import …` 从 `strategies/code/jq_wufu.py` 编译时须对着仓库根解析 |
+| 3 | `walk_py_import` 递归进 `if`/`for`/`while` 体 | 策略顶部 `if os.environ.get('REPLAYQUANT_LOCAL') == '1': from <本地 shim> import …` 里的导入是真导入 |
+
+**实测**：
+
+- 最小验证：`from a import f` → `print(f())` = 42；`import a` + `a.f()` = 42（此前两者都链接失败）
+- `REPLAYQUANT_LOCAL=1 zetac strategies/code/jq_wufu.py`：IR 出现 **35 个 `strategies_code_jq_shim__*` 定义**，
+  未定义 30+ → **18**，shim 符号只剩 **4 个 arity 后缀不匹配**的
+  （`__get_price_3`/`__get_price_7`/`__get_trade_days_2`/`__OrderCost_6` —— 定义端无 `_N` 后缀）
+- python_style **176/176**（t53 回归已修：类型推断必须沿用 resolver 的，否则字符串被当 i64 打印指针）
+- 官方 **194/194**
+
+**度量口径变化（诚实说明）**：语料未定义符号去重 85 → **151** —— `if` 分支里的导入现在会被收集，
+**更多本地模块被真正载入**（本地 shim 的 pandas 面符号随之可见）。链接通过数仍 **1/38**，无回退。
+
+**试过但回退**：让 resolver 只走「被选中的分支」（复用 env 折叠）。理论上更干净，实测更差
+（本地模式 18 → 29 未定义）—— 未下沉的分支仍在提供被下沉分支依赖的绑定。已回退并记录。
+
+**下一步**：① 那 4 个 arity 后缀不匹配的符号（定义端要不要带 `_N`）；
+② 本地 shim 自身依赖的 pandas 面（`DataFrame`/`Timedelta`/`Timestamp`/`_Info`/`concat`/`tolist`…）。
