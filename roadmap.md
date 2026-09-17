@@ -1578,3 +1578,34 @@ identity 兜底、UTF-8 边界探针修复。
 **V1 明确不支持（保持 fail-loud / warning）**：短选项 `-x`、位置参数、`nargs`、子命令（`add_subparsers`）、`type=` 传可调用对象、互斥组。**不静默**。
 
 **风险与验证**：① 编译期表是**按解析器实例**还是全局？V1 用**全局 flag→kind**（同名字段跨解析器取后者，并在冲突时 warning）；② 未知 flag 的 `args.<x>` 必须**编译期报错/warning**，不得降级成 0；③ 用例需覆盖 `--flag value`、`--flag=value`、`store_true` 缺省/存在、数值/字符串默认值、`required` 缺失 warning。
+
+
+## 批次二十（2026-09-17，**分析结论：_N 族不能用便宜的本地规则修**）
+
+`*_N` 幽灵符号（`host_str_replace_4` / `py_json_dumps_i64_3` / `py_logger_info_5` /
+`py_logging_*_N` / `host_str_count_1`，13 调用点）的产生链已查明：
+
+1. 接收者类型未知（未标注形参 → type_map 默认 i64），于是走**通用「方法名 → 方法」表**
+   （`gen.rs:8514` `"replace" => ("host_str_replace", 3, "str")`）；
+2. 实际参数个数（receiver + 3 个 kwargs = 4）与该表声明的 arity（3）不符；
+3. codegen 的 arity 消歧（`codegen.rs:2075/2411/2441/2551/2657`，豁免条件只有
+   `starts_with("zeta_")`）给它加后缀 → `host_str_replace_4`。
+
+**两条便宜修法都被否掉**：
+
+| 修法 | 否掉的理由 |
+|---|---|
+| 把 `host_`/`py_` 也加进 arity 消歧的豁免前缀 | 会让 `date.replace(year=…)` 真的调 `host_str_replace`（str 语义）作用在**日期句柄**上 ⇒ **链接通过但运行时静默错值**，正好撞本项目红线 |
+| arity 不匹配时改报编译期错误 | 只是把未定义符号 `host_str_replace_4` 换成 `replace`，**链接仍然失败**，没有净收益 |
+
+**真正的修法只有一条**：让编译器知道接收者的类型（`d` 是 `PyDate`）。也就是回到参数类型推断。
+两条具体路径：
+- **(a) 调用点驱动推断**（最小可用版）：无标注形参若在所有调用点都收到同一"类"实参
+  （如 `date(...)` / `datetime.date(...)` 的返回值），就把该形参定型为该 handle 标签；
+- **(b) 关键字形状分派**（局部、显式规则）：`x.replace(year=…, month=…, day=…)` 的 kwargs 集合
+  与 `date.replace` 签名唯一对应，可据此路由到 `py_dt_replace`。
+  注意这需要先补 `py_dt_replace`（**已试作并验证可编译进 `tokio_runtime.o`**，
+  当时因为接收者类型未知而根本没被走到，遂回滚）。
+
+⚠️ 副产物结论：`*_N` 族与「未标注形参按 i64」「`xs[0]` 返 0」「`in` 早期恒 0」**同根** ——
+都是「类型未知时的兜底分派」。清它等于做参数类型推断。
