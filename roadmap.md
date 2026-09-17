@@ -2114,3 +2114,27 @@ python_style **172 → 173**；官方 **194/194**；语料未定义符号 **75 �
 **仍然有效的结论**（本批测得的证据，供将来接宿主时用）：4 个语料文件只差平台符号
 （`大市值价值优化`/`稳健型ETF` 仅差 `set_level`；`趋势筛选ETF轮动`/`首板低开优化版` 差
 `set_level`+`history`+`get_security_info`+`DataFrame`+`diff`+`dropna`）。
+
+
+## 批次四十七（2026-09-17）：**目标重定位 —— 把 REasyQuant 的「本地实现」跑起来**
+
+用户指示：语料里**只针对聚宽平台**写的样本文件不管；**把本地实现运行起来就行**。
+
+### 本地实现在哪
+
+| 文件 | 行数 | 角色 |
+|---|---|---|
+| `strategies/code/jq_shim.py` | 646 | **本地聚宽 API 模拟**（宿主侧 Python 实现）：`get_price` / `attribute_history` / `get_extras` / `order_target_value` / `get_current_data` / `get_hist_arrays` / `get_all_securities` / `get_trade_days` / `run_daily` / `set_option` / `set_slippage` / `set_order_cost` / `get_security_info` / `set_current_portfolio` / `order` / `query` / `_Bar` / `_LocalContext` / `_HistoryFrame` / `PriceRelatedSlippage` / `OrderCost` |
+| `strategies/code/jq_wufu_local.py` | 379 | **本地回测入口**（`REPLAYQUANT_LOCAL=1 python jq_wufu_local.py --start … --end …`） |
+| `backend/engines/local_backtest_engine.py` | 264 | VectorBT 本地回测引擎 |
+| `backend/engines/jq_shim.py` | 1130 | 引擎侧 shim |
+
+### 实测（编译器现状）
+
+- `jq_shim.py`、`jq_wufu_local.py` **都能解析**（无 W1002）
+- **跨文件导入解析已经可用**：编译器把 shim 的模块级 `g` 解析成 `jq_shim___G`（符号已带模块前缀）
+- 当前阻塞（都是**本地**问题，不是平台问题）：
+  1. `getattr(obj, "字面量名", default)` —— 编译器按「计算名形式」拒绝（jq_shim 4 处 / jq_wufu 10 处 / jq_wufu_daily 11 处 / jq_wufu_local 2 处）。**这些名字全是字面量**，可以静态解析：接收者类型有该字段 → 字段访问；无该字段 → 用 default。类型未知时保持响亮诊断。
+  2. 「无默认值参数按 0 读」的警告（`_Bar` 3 个字段、`jq_shim___G` 42 个全局字段）—— 这是**静默错值**风险，需要默认值/字段初始化语义。
+
+> 结论：下一步做 **`getattr(obj, "literal"[, default])` 的本地实现** —— 它属于本地 API（Python 内置），且是本地实现的头号阻塞。
