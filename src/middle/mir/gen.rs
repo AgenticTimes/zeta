@@ -6917,7 +6917,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // this ensures call sites match the right declaration.
                 // PY-A: zeta_* runtime dispatch names stay bare — the codegen
                 // method-dispatch (opaque fallback) matches them exactly.
-                let func_name = if func.starts_with("zeta_") {
+                // Module-qualified names (`<module>__<name>`) are NOT
+                // arity-suffixed: the suffix exists to disambiguate overloads,
+                // and a module's function is unique — its definition carries no
+                // suffix, so a suffixed CALL referenced a symbol that never
+                // exists (4 undefined symbols: __get_price_3 / __get_price_7 /
+                // __get_trade_days_2 / __OrderCost_6).
+                let func_name = if func.starts_with("zeta_") || func.contains("__") {
                     func.clone()
                 } else {
                     format!("{}_{}", func, arg_ids.len())
@@ -7882,7 +7888,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // the arity suffix would make the call miss the runtime
                     // symbol (get_or_declare strips it, but the emitted call
                     // still references the suffixed name directly).
-                    let call_name = if func_name.starts_with("zeta_") {
+                    let call_name = if func_name.starts_with("zeta_")
+                        || func_name.contains("__")
+                    {
                         func_name.clone()
                     } else {
                         format!("{}_{}", func_name, arg_ids.len())

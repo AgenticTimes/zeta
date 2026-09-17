@@ -2670,7 +2670,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
             }
             // PY-A: zeta_* runtime dispatch names never renamed — arity
             // mismatch resolves via coerce_call_args.
-            if actual_name.starts_with("zeta_") {
+            //
+            // Module-qualified names (`<module>__<name>`) too: a module's
+            // function is unique and its definition carries NO arity suffix, so
+            // declaring `<module>__<name>_<n>` created an undefined symbol the
+            // linker could never satisfy (4 of them: __get_price_3/__get_price_7/
+            // __get_trade_days_2/__OrderCost_6). Default arguments make the
+            // call-site arity differ from the declared one all the time.
+            if actual_name.starts_with("zeta_") || actual_name.contains("__") {
                 return existing;
             }
             let arity_name = format!("{}_{}", actual_name, args_count);
