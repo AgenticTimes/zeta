@@ -81,13 +81,15 @@ for f in "$ROOT"/tests/python_style/t*.z; do
     # ⚠️ `env "${envs[@]}"` with an EMPTY array expands to `env "" prog`, which
     # runs nothing at all — so branch on emptiness instead of expanding blindly.
     if [ ${#envs[@]} -gt 0 ] && [ ${#args[@]} -gt 0 ]; then
-        actual=$(env "${envs[@]}" "$OUTDIR/$name" "${args[@]}" 2>/dev/null)
+        # A hanging program must not stall the whole suite (a `for … continue`
+        # hang once blocked a run for 30 minutes).
+        actual=$(timeout 20 env "${envs[@]}" "$OUTDIR/$name" "${args[@]}" 2>/dev/null)
     elif [ ${#envs[@]} -gt 0 ]; then
-        actual=$(env "${envs[@]}" "$OUTDIR/$name" 2>/dev/null)
+        actual=$(timeout 20 env "${envs[@]}" "$OUTDIR/$name" 2>/dev/null)
     elif [ ${#args[@]} -gt 0 ]; then
-        actual=$("$OUTDIR/$name" "${args[@]}" 2>/dev/null)
+        actual=$(timeout 20 "$OUTDIR/$name" "${args[@]}" 2>/dev/null)
     else
-        actual=$("$OUTDIR/$name" 2>/dev/null)
+        actual=$(timeout 20 "$OUTDIR/$name" 2>/dev/null)
     fi
     # 逐行比对（尾随空行归一化）
     expected="$(printf '%s\n' "${expects[@]:-}" | sed -e ':a' -e '/^[[:space:]]*$/{$d;N;ba' -e '}')"

@@ -1,0 +1,61 @@
+// PY-A: 集合 `for` 里的 `continue` 曾是**死循环**（挂起，比错值更糟）
+//   gen.rs 把集合式 for 降级成「while index < len + **体末** index = index + 1」，
+//   而 codegen 的 MirStmt::While 把 `continue` 跳到**条件块** ⇒ 自增被跳过、下标不动。
+//   修法：把自增移到「array_get/模式绑定之后、用户体之前」——`continue` 也必然推进下标，
+//   且用户可见名仍绑定元素（体内读到的循环变量不变）。
+//   range 式 for 走 MirStmt::For（有独立 for.inc 块），不受此缺陷影响。
+// expect: 4
+// expect: 1
+// expect: abc
+// expect: 12
+// expect: 33
+// expect: 7
+def cont() -> i64:
+    x = 0
+    for i in [1, 2, 3]:
+        if i == 2:
+            continue
+        x = x + i
+    return x
+
+def brk() -> i64:
+    x = 0
+    for i in [1, 2, 3]:
+        if i == 2:
+            break
+        x = x + i
+    return x
+
+def reads_var() -> str:
+    out = ""
+    for s in ["a", "b", "c"]:
+        out = out + s
+    return out
+
+def nested() -> i64:
+    n = 0
+    for a in [1, 2]:
+        for b in [1, 2, 3]:
+            if b == 2:
+                continue
+            n = n + a * b
+    return n
+
+def pairs() -> i64:
+    n = 0
+    for k, v in [[1, 10], [2, 20]]:
+        n = n + k + v
+    return n
+
+def empty() -> i64:
+    n = 7
+    for i in []:
+        n = n + 1
+    return n
+
+print(cont())
+print(brk())
+print(reads_var())
+print(nested())
+print(pairs())
+print(empty())

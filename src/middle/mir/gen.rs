@@ -1540,11 +1540,19 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 _ => {}
                             }
 
-                            for stmt in &body_clone {
-                                self.lower_ast(stmt);
-                            }
-
-                            // i = i + 1
+                            // i = i + 1 — advance BEFORE the user body.
+                            //
+                            // `continue` lowers to a jump to the loop's
+                            // CONDITION block, which skips the rest of the
+                            // body. With the increment at the END of the body
+                            // that meant the index never moved and
+                            //     for i in [1, 2, 3]:
+                            //         if i == 2: continue
+                            // looped forever (a hang — worse than a wrong
+                            // value). Advancing here is invisible to the body:
+                            // the user-visible name is bound to the ELEMENT
+                            // (below), and only the internal index slot and the
+                            // condition read `index_var_id`.
                             let inc_id = self.next_id();
                             let one_id = self.next_id_with_lit(1);
                             self.exprs.insert(
@@ -1560,6 +1568,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 lhs: index_var_id,
                                 rhs: inc_id,
                             });
+
+                            for stmt in &body_clone {
+                                self.lower_ast(stmt);
+                            }
 
                             let body_stmts = self.stmts.split_off(stmts_before);
                             // PY-A: `for … else` — lowered AFTER the split so
