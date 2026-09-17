@@ -1881,3 +1881,20 @@ python_style **161 → 162**；官方 **194/194**。
 > 验证方法提醒：**用 `git stash` 验 pre-fix 只对「未提交的改动」有效**；本轮两个修复已经提交，
 > 所以必须 `git checkout <fix 之前的 commit> -- <涉及文件>` 再重建，否则会得到假 PASS
 > （本轮踩过一次，已用该方法重验并记录）。
+
+
+## 批次三十三（2026-09-17，**已修**）：`json.dumps` 的格式化关键字实参
+
+`_N` 族第二成因（注册表表达不了 Python 签名）里的第一个落地项。该分派的守卫是
+`args.len() == 1`，而 `json.dumps(x, ensure_ascii=False, indent=2)` 多出来的 `__kwarg__`
+实参让它失效 ⇒ 掉到通用路径 ⇒ 幽灵符号 `py_json_dumps_i64_3`（语料 4 处）。
+
+修法（**形状分派**，本会话已验证三次的路线）：保留第一个**位置**实参（排除 `__kwarg__`
+包裹，避免纯 kwargs 调用取错值），忽略格式化 kwargs，并用 `OnceLock` **只打印一次**提示
+—— 只影响排版、不影响值，且**不静默**。
+
+实测：`{"a": 1}` / `[1, 2]` / `"x"` 全对；t163 pre-fix FAIL / post-fix PASS；
+未定义符号去重 **83 → 82**（`py_json_dumps_i64_3` 归零）；python_style **162 → 163**；官方 **194/194**。
+
+> 同一形状的其它两项仍在队列：`log.info(fmt, *args)`（变参，需要 C 侧 variadic helper）
+> 与 `logging.getLogger()`（零参，需允许缺省）。
