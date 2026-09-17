@@ -1,0 +1,23 @@
+// PY-A: pandas / numpy 的**日期拼写**别名到运行时已有的 PyDate / PyDelta 句柄 ——
+//   `pd.Timestamp(str)` / `np.datetime64(...)` / `pd.Timedelta(days=n)` / `np.searchsorted(...)`。
+//   只有**一套**日期表示，所以日期运算与比较继续走 `py_dt_*` 分派。
+//   注意 `py_dt_timedelta` 的单位是**天**（不是秒）：乘 86400 会让「1 月 31 日 + 2 天」跑到 2497 年。
+// expect: 2024 1 31
+// expect: 2024 2 2
+// expect: 1
+// expect: 2
+// expect: 1
+import numpy as np
+import pandas as pd
+
+d = pd.Timestamp("2024-01-31")
+print(d.year, d.month, d.day)
+
+s = d + pd.Timedelta(days=2)
+print(s.year, s.month, s.day)
+
+dates = [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-05"), pd.Timestamp("2024-01-10")]
+v = np.datetime64(pd.Timestamp("2024-01-05"))
+print(np.searchsorted(dates, v, side="left"))
+print(np.searchsorted(dates, v, side="right"))
+print(np.searchsorted(dates, pd.Timestamp("2024-01-03"), side="left"))

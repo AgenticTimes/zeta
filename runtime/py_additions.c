@@ -269,6 +269,50 @@ static int64_t py_map_hash(int64_t key) {
     return (int64_t)h;
 }
 
+// ── PY-A: pandas / numpy spellings of the SAME PyDate / PyDelta handles ──
+// The `datetime` module already produces them and all date arithmetic and
+// comparison in the runtime dispatches on the handle tag, so these are thin
+// aliases — no second date representation to keep in sync.
+int64_t py_dt_strptime(int64_t, int64_t);
+int64_t py_dt_lt(int64_t, int64_t);
+int64_t py_dt_le(int64_t, int64_t);
+
+int64_t py_dt_from_str(int64_t s) {
+    static char* fmt = 0;
+    if (!fmt) {
+        fmt = (char*)GC_malloc(9);
+        strcpy(fmt, "%Y-%m-%d");
+    }
+    return py_dt_strptime(s, (int64_t)fmt);
+}
+
+
+// `np.searchsorted(sorted_dates, value, side="left"|"right")` over a Vec of
+// PyDate handles. `side` arrives as the STRING handle (the registry fills
+// keyword arguments positionally), so the choice is made by content.
+// left  = first index with a[i] >= v   (numpy's default)
+// right = first index with a[i] >  v
+int64_t py_dt_searchsorted(int64_t vec, int64_t value, int64_t side) {
+    int64_t right = 0;
+    if (side) {
+        char* s = (char*)side;
+        right = strcmp(s, "right") == 0;
+    }
+    int64_t lo = 0;
+    int64_t hi = zt_vec_len(vec);
+    while (lo < hi) {
+        int64_t mid = lo + (hi - lo) / 2;
+        int64_t probe = ((int64_t*)vec)[mid];
+        int64_t advance = right ? py_dt_le(probe, value) : py_dt_lt(probe, value);
+        if (advance) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
 int64_t map_get_default(int64_t map, int64_t key, int64_t def) {
     if (!map) return def;
     int64_t cap = ((int64_t*)map)[0];

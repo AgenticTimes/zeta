@@ -422,3 +422,17 @@ W map get map_get_default args=3 ret=i64
 W map setdefault py_map_setdefault args=3 ret=i64
 X py_map_most_common_2 args=i64,i64 ret=i64
 X py_collections_counter_new_str args=i64 ret=i64
+
+# ---- PY-A: pandas / numpy data face (LOCAL implementations) --------------
+# `pd.Timestamp` / `np.datetime64` / `pd.Timedelta` are the pandas/numpy
+# spellings of the PyDate / PyDelta handles `datetime` already produces, so
+# they alias the existing runtime (one date representation, not two).
+# `np.searchsorted` is a binary search over a Vec of PyDate handles; the
+# `side="left"|"right"` keyword arrives as a string handle and is resolved by
+# content in the helper (numpy's default is "left").
+M pandas
+M numpy
+F pandas Timestamp py_dt_from_str args=i64 ret=i64 handle=PyDate
+F pandas Timedelta py_dt_timedelta args=i64 ret=i64 handle=PyDelta
+F numpy datetime64 py_dt_identity args=i64 ret=i64 handle=PyDate
+F numpy searchsorted py_dt_searchsorted args=i64,i64,i64 ret=i64
