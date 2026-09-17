@@ -2629,12 +2629,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     }
                     // Preserve float type for arithmetic ops — `c / d` on f64
                     // operands must stay f64, otherwise later casts misbehave.
+                    //
+                    // But a COMPARISON of two floats is still a bool: `w = 5.0 >
+                    // 1.0` was typed f64, so `w` held the raw integer 1 in a
+                    // double slot and `print(w)` printed 0.000000 — a silent
+                    // wrong value in every float guard.
+                    let is_cmp = matches!(
+                        op.as_str(),
+                        "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" | "in" | "not in"
+                    );
                     let op_type = match (
                         self.type_map.get(&left_id),
                         self.type_map.get(&right_id),
                     ) {
                         (Some(Type::F32) | Some(Type::F64), _)
-                        | (_, Some(Type::F32) | Some(Type::F64)) => Type::F64,
+                        | (_, Some(Type::F32) | Some(Type::F64)) => {
+                            if is_cmp {
+                                Type::Bool
+                            } else {
+                                Type::F64
+                            }
+                        }
                         _ => Type::I64,
                     };
                     self.type_map.insert(dest, op_type);

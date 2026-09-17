@@ -1,0 +1,37 @@
+// PY-A: 浮点比较的结果类型必须是 bool，不是 f64 —— **静默错值**
+//   根因：gen.rs 的 BinaryOp 收尾按「有 f64 操作数 ⇒ 结果是 F64」推断**所有**算子，
+//   于是 `w = 5.0 > 1.0` 把 w 当 f64：比较真值 1 以整数写进 double 槽，
+//   读回来是 ~5e-324，`print(w)` 打 0.000000，`if w` 也走错分支。
+//   修法：比较/逻辑算子（== != < > <= >= && || in not in）在浮点分支里仍返回 Bool。
+// expect: 1
+// expect: 0
+// expect: 1
+// expect: 0
+// expect: 1
+// expect: 11
+// expect: 2
+// expect: 3.000000
+def helper() -> i64:
+    return 0
+
+def check() -> i64:
+    w = 5.0 > 1.0
+    if w:
+        return 11
+    return 22
+
+w1 = 5.0 > 1.0
+w2 = 5.0 < 1.0
+w3 = 5.0 == 5.0
+w4 = 5.0 != 5.0
+a = 5.0
+b = 1.0
+print(w1)
+print(w2)
+print(w3)
+print(w4)
+print(a > b)
+print(check())
+print(w1 + 1)
+d = 7.5 / 2.5
+print(d)
