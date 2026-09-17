@@ -1,0 +1,13 @@
+// PY-A: 内置 `slice(a, b)` / `slice(a, b, step)` —— 语料里 `slice_obj = slice(start_idx, …)`
+//   此前发的是自由调用 `slice`（未定义符号，3 处）。修法：路由到**逗号下标路径同一个**
+//   不透明 slice 句柄 `py_slice_new`（批次五引入），两种写法从此一致。
+//   1/2/3 参形式都覆盖（缺省补 0 / 步长 1），语料里 `slice(-count, None)` 与 `slice(None)` 也可过。
+// expect: 1
+def f(count: i64) -> i64:
+    s = slice(-count, None) if count > 0 else slice(None)
+    t = slice(1, 5)
+    u = slice(1, 5, 2)
+    return 1
+
+
+print(f(3))

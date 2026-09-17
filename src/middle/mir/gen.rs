@@ -4144,6 +4144,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         }
                     }
                 }
+                // PY-A: the builtin `slice(a, b)` / `slice(a, b, step)` —
+                // `slice_obj = slice(start_idx, last_idx + 1)` in the corpus
+                // emitted a free call `slice` (undefined symbol, 3 sites). Route
+                // to the SAME opaque slice handle the comma-subscript path uses
+                // (`py_slice_new`, batch 5), so both spellings agree.
+                if method == "slice" && receiver.is_none() && (1..=3).contains(&args.len()) {
+                    let mut ids: Vec<u32> = args.iter().map(|a| self.lower_expr(a)).collect();
+                    while ids.len() < 3 {
+                        let fill = self.next_id_with_lit(if ids.len() == 2 { 1 } else { 0 });
+                        ids.push(fill);
+                    }
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_slice_new".to_string(),
+                        args: vec![ids[0], ids[1], ids[2]],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
                 // PY-A: `range(n)` as a VALUE (`xs = range(5)`) — materialize it
                 // with the existing `zeta_arange` (a Vec of [0..n)), instead of
                 // emitting a free call named `range`. 2/3-arg forms need
