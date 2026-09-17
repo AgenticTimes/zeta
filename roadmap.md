@@ -2047,3 +2047,23 @@ python_style **167 → 168**；官方 **194/194**。
 
 实测：`range(1,10,2)` → 长度 5；`range(0,9,3)` → 长度 3。
 python_style **172 → 173**；官方 **194/194**；语料未定义符号 **75 → 74**，**`range` 归零**。
+
+
+## 批次四十四（2026-09-17，**修掉一半**）：6 个「离链接最近」的文件其实卡在 codegen
+
+按「离链接最近的 6 个文件」去查时发现它们**根本没走到链接**：
+
+    Function return type does not match operand type of return inst!  ret i64 0  (double)
+    Terminator found in the middle of a basic block!  label %else16
+
+⇒ 函数声明返回 f64，而 `return 0` 直接发 `ret i64 0` ⇒ LLVM 校验失败 ⇒ **整个编译中止**，
+所以既没有链接错误也没有未定义符号（看起来像「缺 0 个符号」）。
+
+**本批修掉其中一半**：`MirStmt::Return` 按当前函数的返回类型强转返回值（i64→f64 走 sitofp）。
+实测该错误行已消失。
+
+**另一半仍在**：「Terminator found in the middle of a basic block」（`label %else16`）——
+疑似 else 分支在已终结的块上继续发射（或发了两次终结指令）。复现：
+`zetac <corpus>/l2_data_layer_probe.py -o /tmp/q`。
+
+> 这条比「补平台符号」更值得先做：它挡着 6 个文件（而现在总共只有 1 个文件链接通过）。
