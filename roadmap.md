@@ -1662,3 +1662,15 @@ identity 兜底、UTF-8 边界探针修复。
 
 > 注意与批次二十的结论并不矛盾：`date.replace` 那 5 处属于「类型未知」（本轮已用形状分派修掉），
 > 这一批属于「注册表表达不了 Python 签名」。两类都在 `_N` 名下，但修法不同。
+
+
+## 批次二十三（2026-09-17，已修）：占位符符号 py_asdict_unexpanded 改为响亮失败
+
+`pylib/registry.txt:208` 把 `dataclasses.asdict` 指向 `py_asdict_unexpanded`，而这个符号在 C 与 src 里都不存在（注释写明 asdict 本应在编译期重写）。于是重写不适用时编译器发一个幽灵符号出去，整个程序在**链接期**失败，报错 `_py_asdict_unexpanded` 对使用者毫无意义（语料 3 处）。
+
+修法：在 `runtime/tokio_runtime_stub.c` 实现该符号 —— 打印可读原因并 `abort()`。于是：① 同一文件的其他代码仍可编译链接；② 只有真走到未展开路径才失败；③ 绝不返回假值（loud failure，不是 fail-open）。同步重建 tracked 的 `tokio_runtime.o`。
+
+度量：语料未定义符号去重 **85 → 84**，`py_asdict_unexpanded` 引用归零；python_style **158/158**；官方 **194/194**；解析 37/38 不回退。
+
+> 同一类「registry 指向不存在符号」一律照此办理：给一个**会响的**实现，不让它去链接期爆。
+> 检查办法：把 `registry.txt` 里出现的符号名去 `nm -g --defined-only tokio_runtime.o zeta_runtime_c.o` 里查，查不到的即占位符。
