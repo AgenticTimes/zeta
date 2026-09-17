@@ -1,0 +1,22 @@
+// PY-A: `impl` 不再保留字 —— Python 代码把它当普通变量名
+//   `impl = strategy._make()` / `engine.add_strategy(impl)` 曾让**每一条读它的语句**解析失败，
+//   整个定义连同其后内容被丢弃（`jq_wufu_local._run_nautilus`，159 行）。
+//   两处配套改动：
+//     ① parse_ident 的保留字表去掉 `impl`（`impl Foo { … }` 仍由 parse_impl 在语句备选
+//        的前面接住）；
+//     ② 顶层 `DEFINITION_KEYWORDS` 的 fail-loud 判定里，`impl` 只在「后面跟 标识符/`<`」
+//        时才算定义关键字 —— 否则顶层 `impl = …` 仍会被判成定义失败。
+// expect: 7
+// expect: 9
+// expect: 5
+impl = 7
+print(impl)
+
+def use_impl() -> i64:
+    impl = 4
+    engine_impl = impl + 5
+    return engine_impl
+
+print(use_impl())
+impl = 5
+print(impl)

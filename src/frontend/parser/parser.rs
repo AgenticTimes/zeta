@@ -80,9 +80,19 @@ pub fn parse_ident(input: &str) -> IResult<&str, String> {
         |s: &str| {
             ![
                 "let", "mut", "if", "else", "for", "in", "loop", "while", "unsafe", "return",
-                "break", "continue", "fn", "concept", "impl", "enum", "struct", "use",
+                "break", "continue", "fn", "concept", "enum", "struct", "use",
                 "extern", "dyn", "box", "as", "true", "false", "comptime", "const", "async", "pub",
                 "match", "where", "mod", "defer",
+                // PY-A: `impl` is deliberately NOT reserved — Python code uses it
+                // as an ordinary variable name (`impl = strategy._make()`,
+                // `engine.add_strategy(impl)`). Reserving it made every
+                // STATEMENT that READ such a variable fail, which dropped the
+                // whole enclosing definition (`jq_wufu_local._run_nautilus`).
+                // Zeta's `impl Foo { … }` block still parses: `parse_impl` is
+                // tried before the expression path in the statement
+                // alternation, and `impl` followed by an identifier + `{` is not
+                // a valid expression statement.
+                
                 // PY-A: `type` is deliberately NOT reserved — Python's builtin
                 // `type(x)` is common and reserving the word made the whole
                 // statement fail to parse, silently dropping the enclosing

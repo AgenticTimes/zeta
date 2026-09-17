@@ -1217,11 +1217,25 @@ fn parse_top_level_item(input: &str) -> IResult<&str, AstNode> {
                 "def", "class", "fn", "struct", "enum", "impl", "trait", "concept", "macro",
                 "mod", "const", "pub",
             ];
-            let is_def_kw = DEFINITION_KEYWORDS.iter().any(|kw| {
-                input.starts_with(kw)
-                    && !input[kw.len()..]
-                        .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
-            });
+            // `impl` is a definition keyword only when it begins an impl BLOCK
+            // (`impl Type { … }`). Now that `impl` may be an ordinary variable
+            // (`impl = strategy._make()`), `impl = …` / `impl.foo()` must still
+            // reach the statement parser — otherwise top-level uses fail while
+            // the same use inside a function body works.
+            let impl_is_block = input.starts_with("impl")
+                && !input[4..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                && matches!(
+                    input[4..].trim_start().chars().next(),
+                    Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '<'
+                );
+            let is_def_kw = DEFINITION_KEYWORDS
+                .iter()
+                .filter(|kw| **kw != "impl" || impl_is_block)
+                .any(|kw| {
+                    input.starts_with(kw)
+                        && !input[kw.len()..]
+                            .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                });
             if is_def_kw {
                 return Err(def_err);
             }
