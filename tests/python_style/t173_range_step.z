@@ -1,0 +1,17 @@
+// PY-A: `range(a, b, step)` 作为值 —— Vec [a, b) 按 step 步进（新增 zeta_arange_step）。
+//   只实现**正步长**：字面量非正步长会在编译期报一条指名错误（Python 允许负步长，
+//   但那需要降序 Vec），而不是静默给出升序结果。
+// expect: 5
+// expect: 3
+def f() -> i64:
+    xs = range(1, 10, 2)
+    return len(xs)
+
+
+def g() -> i64:
+    ys = range(0, 9, 3)
+    return len(ys)
+
+
+print(f())
+print(g())

@@ -4172,6 +4172,33 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // `range(a, b)` as a value: a Vec of [a, b) — `zeta_arange` only
                 // covers [0, n), hence the `_from` variant. 3-arg (step) forms
                 // stay fail-loud below.
+                // `range(a, b, step)` as a value. Positive steps only: a literal
+                // step <= 0 is reported here (Python allows negative steps but
+                // they need a descending Vec) instead of silently producing an
+                // ascending one.
+                if method == "range" && receiver.is_none() && args.len() == 3 {
+                    if let AstNode::Lit(n) = &args[2] {
+                        if *n <= 0 {
+                            eprintln!(
+                                "error: range(a, b, step) with a non-positive literal step \
+                                 is not implemented (negative steps need a descending Vec)"
+                            );
+                        }
+                    }
+                    let a0 = self.lower_expr(&args[0]);
+                    let a1 = self.lower_expr(&args[1]);
+                    let a2 = self.lower_expr(&args[2]);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_arange_step".to_string(),
+                        args: vec![a0, a1, a2],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                    return id;
+                }
                 if method == "range" && receiver.is_none() && args.len() == 2 {
                     let a0 = self.lower_expr(&args[0]);
                     let a1 = self.lower_expr(&args[1]);

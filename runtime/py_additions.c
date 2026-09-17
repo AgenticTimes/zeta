@@ -1526,6 +1526,20 @@ int64_t zeta_arange_from(int64_t a, int64_t b) {
     return v;
 }
 
+// PY-A: `range(a, b, step)` as a VALUE — a Vec of [a, b) stepping by `step`.
+// Only positive steps are implemented (Python's negative-step ranges would need
+// a descending Vec and stay a compile-time diagnostic at the call site).
+int64_t zeta_arange_step(int64_t a, int64_t b, int64_t step) {
+    if (step <= 0) step = 1;
+    int64_t n = (b - a + step - 1) / step;
+    if (n < 0) n = 0;
+    int64_t v = zeta_arange(n);
+    int64_t* p = (int64_t*)v;
+    for (int64_t i = 0; i < n; i++) p[i] = a + i * step;
+    return v;
+}
+
+
 int64_t zeta_linspace_i64(int64_t a, int64_t b, int64_t n) {
     int64_t cap = n < 8 ? 8 : n;
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
