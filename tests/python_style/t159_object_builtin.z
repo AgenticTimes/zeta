@@ -1,0 +1,18 @@
+// PY-A: `object()` —— Python 的裸 object 就是运行时已有的不透明平台句柄
+//   （`zeta_platform_obj`）。此前退化成对**裸名 `object`** 的自由调用 ⇒ 链接期未定义符号
+//   （语料 3 处）。同时给两个**无法降级**的内建（`getattr` / 非循环用法的 `range`）
+//   加编译期诊断：它们仍会发射同名符号，但用户至少能看见是谁干的。
+// expect: 1
+// expect: 1
+def f() -> i64:
+    o = object()
+    return 1
+
+
+def g() -> i64:
+    d = dict()
+    return 1
+
+
+print(f())
+print(g())

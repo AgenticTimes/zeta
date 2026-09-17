@@ -3963,6 +3963,37 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // PY-4: Python-style free-function `len(x)` — dispatch by
                 // argument type: literal-size arrays resolve at compile time,
                 // strings → str_len, others → array_len runtime stub.
+                // PY-A: `object()` — Python's bare object is exactly the opaque
+                // platform handle the runtime already provides. Without this the
+                // call degraded to a free call named `object` and failed at LINK
+                // time (3 corpus call sites).
+                if method == "object" && receiver.is_none() && args.is_empty() {
+                    let z = self.next_id_with_lit(0);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_platform_obj".to_string(),
+                        args: vec![z, z, z, z],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+                // Unimplemented builtins that would otherwise emit a FREE CALL
+                // named after themselves (an undefined symbol at link time, with
+                // zero information about the cause). Ring the bell at COMPILE
+                // time instead; the symbol is still emitted so behaviour is
+                // unchanged, but the message names the culprit.
+                if receiver.is_none()
+                    && ((method == "getattr" && !args.is_empty())
+                        || (method == "range" && !args.is_empty()))
+                {
+                    eprintln!(
+                        "error: builtin `{}` is not implemented in this form (it would link \
+                         against an undefined symbol named `{}`)",
+                        method, method
+                    );
+                }
                 if method == "len" && receiver.is_none() && args.len() == 1 {
                     let arg_id = self.lower_expr(&args[0]);
                     match self.type_map.get(&arg_id).cloned() {
