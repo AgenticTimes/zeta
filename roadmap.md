@@ -92,9 +92,19 @@
     **调用发射根本没走 `py_member_call`（line 3508 那条路）**。`py_member_call` 全文件只有
     一个调用点（3508，位于主 Call arm 2943 之内），所以 `datetime.timedelta(...)` 必然被
     **更早的分支**截走了（或走了另一个 Call arm）。
-  - **下一步（很窄了）**：在 `AstNode::Call` 主 arm（2943 起）里从入口到 3508 之间逐段二分
-    （或给每个 `return` 前加探针），找出 `datetime.timedelta(...)` 实际走的那一支，
-    再把那一支也接到 `py_member_call`。回退与探针都已回滚（无证据不留）。
+  - **批次十八：探针进到了 arm 内部，出现一对「应该一致却不一致」的现象**
+    （env 门控 `ZETA_PROBE_CALL`，在 arm 入口与 3508 前各埋一个）：
+    - `import datetime` 场景（能链）：`arm-entry` ✓ → `reached-3508` ✓ → 链接通过
+    - `from datetime import datetime, timedelta, date` 场景（不能链）：
+      **`arm-entry` ✓ → `reached-3508` ✓**（说明确实走到了 `py_member_call`！）→ 但 `ld` 仍报**裸名** `_datetime`/`_timedelta`
+    - 同时：**没有** `unknown member` 警告 ⇒ 不能证明 `find_member` 未命中
+    - 加了「root 是已注册模块就用它」回退后：探针显示 `find_module=Some("datetime")`（回退生效），
+      **但 `ld` 报错依旧**，且仍无警告
+    ⇒ 矛盾点：**调用点走到了 3508、模块/成员也能解析，但最终发射的仍是裸名**。
+    这只能是「3508 之后还有一条发射路径」或「返回的 symbol 被丢弃/覆盖」。
+    **下一步（非常具体）**：在 3508 命中的分支里打印 `symbol` 实际值，并检查 3508 之后
+    到该 `if` 块结束之间是否有二次发射（例如 handle 方法兜底/identity 兜底）。
+    ⚠️ 回退与探针都已回滚（无证据不留，本会话第三、四次）。
 - **试过但无效**：在 `pylib/registry.txt` 里补三条 dotted 成员
   （`F datetime datetime.timedelta py_dt_timedelta …` 等）——**实测仍链接失败**，
   说明这条路径压根没按「base 文本 + 成员名」查注册表（对照组 `datetime.strptime` 能通，
