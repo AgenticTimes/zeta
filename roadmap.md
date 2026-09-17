@@ -2353,3 +2353,50 @@ F numpy  searchsorted py_dt_searchsorted  args=i64,i64,i64 ret=i64
 
 其中 `get`/`setdefault` 仍出现 ⇒ 说明这些调用点的接收者**不是 map 句柄**（可能是类实例/未知类型），
 需要单独定位；`execute_trade` 同理（看起来是**方法解析**问题，不是库问题）。
+
+
+## 批次五十六（2026-09-17，**回滚收场，附精确证据**）：`.get()` 的两条失败路径
+
+目标：解决 `jq_shim.py` 里仍报未定义的 `get`/`setdefault`（14 个调用点）。**没修成，全部回滚**，
+但把两条**互不相同**的失败路径钉清楚了 —— 这比一个半吊子补丁值钱。
+
+### 路径 A：接收者类型不是 `map` ⇒ 退化成自由调用 `get`（未定义符号）
+
+```python
+CACHE = {}                    # 模块级全局 dict
+def f():
+    CACHE["x"] = 1
+    return CACHE.get("x", 99) # ← 未定义符号 _get
+def g(d: dict):
+    return d.get("k", 7)      # ← 未定义符号 _get（**带注解也一样**）
+```
+
+`map` 方法分派在 `gen.rs` 里有一条**专用分支**（`d.keys()/values()/items()/most_common()`，
+注释写明「`map` 不是 Py* 标签，所以走这条而不是句柄分派」），**其中没有 `get`/`setdefault`**；
+注册表那条 `W map get …` 只在句柄路径上生效。`receiver_ty` 取自 `type_map`，而
+模块全局的读取没有本地槽位（类型在 `module_global_types` 里）⇒ 拿到 I64 ⇒ 分支不进。
+
+### 路径 B：字典**字面量**的 `d.get(k, default)` 走注册表路径，是**正常**的
+
+`t178`（`d = {"a": 1}` + `d.get("a", 99)`）在本批之前是**通过**的 —— 说明 `map_get_default`
+本身没问题，字面量路径能正确取到值。
+
+### 我试了什么（以及为什么回滚）
+
+给那条专用分支补 `get`/`setdefault` 两个 case + 缺省值补 0 + 把 `dict` 当作 `map` 的别名 +
+模块全局类型回退。结果：**4 个既有用例挂掉**（t103/t178/t25/t27），t178 从
+`1 99 5 5 0 0` 变成 `99 99 5 99 7 7` —— `d.get("a", 99)` **返回了默认值 99**，
+即 map 参数变成了 0/错位（`map_get_default(0, k, def)` 正好返回 `def`）。
+
+**说明该分支的 `arg_ids` 布局与我的假设不符**（`keys`/`values` 是 0 参方法，看不出来）。
+⇒ 回滚全部改动，`git checkout -- src/middle/mir/gen.rs`，复核 **python_style 179/179**、
+t178 输出恢复 `1 99 5 5 0 0` ✓。**不留回归、不留未验证的改动。**
+
+### 下一步（已备好切入点）
+
+在 `d.get(k, default)`（字典字面量）上埋一个 env 门控探针，打印该分支的
+`receiver_ty`、`arg_ids` 与最终 `MirStmt::Call` 的 `func`/`args`，与**注册表路径**（现在能正确取值的那条）
+逐字段对比，找出布局差异后再动代码 —— 不再靠猜。
+
+**剩余**：`jq_shim.py`（LOCAL=1）未定义 12 个：
+`DataFrame / _Info / concat / dict / execute_trade / full / get / getattr / setdefault / tolist / unique / where`
