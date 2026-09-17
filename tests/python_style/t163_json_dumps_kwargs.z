@@ -1,0 +1,12 @@
+// PY-A: `json.dumps(x, ensure_ascii=False, indent=2)` —— 格式化关键字实参
+//   该分派原来的守卫是 `args.len() == 1`，带 kwargs 时守卫失败 → 掉到通用路径 →
+//   发出**幽灵符号** `py_json_dumps_i64_3`（语料 4 处）。现在保留第一个**位置**实参，
+//   忽略格式化 kwargs（仅影响排版，不影响值），并且**打印一次提示**（不静默）。
+// expect: {"a": 1}
+// expect: [1, 2]
+// expect: "x"
+import json
+
+print(json.dumps({"a": 1}, ensure_ascii=False, indent=2))
+print(json.dumps([1, 2], ensure_ascii=False))
+print(json.dumps("x"))

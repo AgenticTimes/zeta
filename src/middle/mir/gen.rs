@@ -3076,7 +3076,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // handle carries no runtime tag, so dispatch to the typed
                 // entry point here instead of guessing in C.
                 if let Some((m, mem)) = self.py_member_target(receiver, method) {
-                    if m == "json" && mem == "dumps" && args.len() == 1 {
+                    // `json.dumps(x, ensure_ascii=False, indent=2)` — the extra
+                    // args are `__kwarg__` formatting hints. Before this they made
+                    // `args.len() == 1` fail, the call fell through to the generic
+                    // path and emitted a phantom arity-suffixed symbol
+                    // (`py_json_dumps_i64_3`, 4 corpus call sites). Keep the first
+                    // POSITIONAL value; say once that formatting kwargs are ignored
+                    // (cosmetic only, and never silent).
+                    let first_is_positional = !matches!(
+                        args.first(),
+                        Some(AstNode::Call { method: km, .. }) if km == "__kwarg__"
+                    );
+                    if m == "json" && mem == "dumps" && !args.is_empty() && first_is_positional {
+                        if args.len() > 1 {
+                            static WARNED_DUMPS: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+                            WARNED_DUMPS.get_or_init(|| {
+                                eprintln!(
+                                    "warning: PY-A: json.dumps formatting kwargs \
+                                     (ensure_ascii/indent/…) are ignored"
+                                );
+                            });
+                        }
                         let arg_id = self.lower_expr(&args[0]);
                         let ty = self.type_map.get(&arg_id).cloned().unwrap_or(Type::I64);
                         let sym = match &ty {
