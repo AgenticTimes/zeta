@@ -1,0 +1,30 @@
+// PY-A: 句柄类型形参落表修好之后，**整个 datetime 句柄面**都能用了
+//   （此前 d.year 读垃圾、d.strftime 发裸名、d+td 与 a-b 的结果也没有句柄标签）。
+//   本用例把这条链整段锁住：strftime / 属性 / 日期+timedelta / 日期相减取 days。
+// expect: 2020-05-06
+// expect: 6
+// expect: 9
+// expect: 5
+from datetime import date, timedelta
+
+
+def s1(d: PyDate) -> str:
+    return d.strftime("%Y-%m-%d")
+
+
+def s2(d: PyDate) -> i64:
+    return d.day
+
+
+def s3(d: PyDate, td: PyDelta) -> i64:
+    return (d + td).day
+
+
+def s4(a: PyDate, b: PyDate) -> i64:
+    return (a - b).days
+
+
+print(s1(date(2020, 5, 6)))
+print(s2(date(2020, 5, 6)))
+print(s3(date(2020, 5, 6), timedelta(days=3)))
+print(s4(date(2020, 5, 6), date(2020, 5, 1)))
