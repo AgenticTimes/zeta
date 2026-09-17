@@ -1898,3 +1898,18 @@ python_style **161 → 162**；官方 **194/194**。
 
 > 同一形状的其它两项仍在队列：`log.info(fmt, *args)`（变参，需要 C 侧 variadic helper）
 > 与 `logging.getLogger()`（零参，需允许缺省）。
+
+
+## 批次三十四（2026-09-17，**已修**）：`logging.getLogger()` 零参
+
+Python 里 `getLogger(name)` 的 name 是可选，注册表却是必填 arity ⇒ 0 参被消歧成幽灵符号
+`py_logging_getLogger_0`。**形状分派**修法：0 参补一个空名字 —— 运行期桩里 logger 的身份
+就是它的名字，本地所有 logger 方法都是 no-op，安全且不引入假语义。
+
+度量：未定义符号 **82 → 81**（`py_logging_getLogger_0` 归零）；python_style **163 → 164**；官方 **194/194**。
+
+**同族但更大的两个缺口（已定位，未做）**：
+| 缺口 | 需要什么 |
+|---|---|
+| `log.info(fmt, *args)` 变参（`py_logger_info_4/5`） | C 侧 variadic helper：`py_logger_info_n(lg, fmt, n, a1..a4)`（7 固定参数，仿 `zeta_collect_literals` 的声明方式）+ 形状分派。V1 建议**不做 %-替换**但把实参打印出来（可见而非丢弃） |
+| `logger.addHandler(...)` | 注册表里没有这个成员 —— 需要新增 `W PyLogger addHandler …` + C 桩 |
