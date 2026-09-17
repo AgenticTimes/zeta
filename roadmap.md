@@ -69,13 +69,22 @@
 - **实测口径**：语料 38 文件 解析 **37/38**、链接 **1/38**、运行退出码 0 **1/38**；
   未定义符号去重 **87**；`nm` 查 `zeta_runtime_c.o`/`tokio_runtime.o` 对这 87 个符号
   **0 命中**（所以不是链接顺序）；`grep -rl "zetac|zeta_" REasyQuant` **0 文件**（宿主未集成）。
-- **根因（已缩到最小复现）**：语料普遍写 `from datetime import datetime, timedelta, date`，
-  **导入的类名遮蔽了模块名**，于是 `datetime.timedelta(days=375)` 变成「对已导入类的方法调用」，
-  最后退化成对 **裸名 `timedelta`** 的自由调用 → 未定义符号。
-  - `import datetime` + `datetime.timedelta(...)` → **正常链接**（走模块句柄）
-  - `from datetime import timedelta` + `timedelta(...)` → **正常链接**（走注册表成员）
-  - `from datetime import datetime, …` + `datetime.timedelta(...)` → ✗ 裸 `timedelta`/`datetime`/`date`
-  最小复现：`/tmp/dt3.py`（三行 import + `datetime.timedelta(days=3)`）。
+- **根因（批次十六已修正上一条归因）**：**不是**「导入类名遮蔽模块名」——无任何 import 时同样失败。
+  真正的形状是「同一模块内，不同成员的解析结果不同」：
+
+  | 调用（**无任何 import**） | 结果 |
+  |---|---|
+  | `datetime.strptime(s, fmt)`（2 参） | **链接通过** ✓ |
+  | `datetime.date(2020,1,1)`（3 参） | ✗ 裸 `date` |
+  | `datetime.datetime(2020,1,1)`（3 参） | ✗ 裸 `datetime` |
+  | `datetime.timedelta(3)`（1 参） | ✗ 裸 `timedelta` |
+  | `datetime.now()`（0 参） | ✗ 裸 `now` |
+
+  注册表里 `strptime`/`date`/`datetime`/`timedelta` 都是**同样形状**的 `F datetime <member> <sym> …`，
+  所以差别只能出在**解析/降级路径本身**（疑似与 arity 有关：0/1/3 参走不到注册表命中，
+  2 参能到）。注意 `timedelta` 的注册表项是 `args=i64`（1 参）却仍失败 ⇒ 不是「参数个数对不上」那么简单。
+  **下一步**：在 `py_member_target` / `py_member_call` 上对 `datetime.timedelta` 加探针，
+  打出「是否命中 find_member、命中后走了哪个分支」，而不是继续猜。
 - **试过但无效**：在 `pylib/registry.txt` 里补三条 dotted 成员
   （`F datetime datetime.timedelta py_dt_timedelta …` 等）——**实测仍链接失败**，
   说明这条路径压根没按「base 文本 + 成员名」查注册表（对照组 `datetime.strptime` 能通，
