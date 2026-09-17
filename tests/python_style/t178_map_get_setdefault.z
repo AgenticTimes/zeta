@@ -1,0 +1,20 @@
+// PY-A: dict 的 `.get(k[, default])` 与 `.setdefault(k, v)` —— 注册表里此前没有这两个方法，
+//   调用点会退化成自由调用 `get`/`setdefault`（未定义符号）。本地 shim 里 `.get(` 出现 20 次、
+//   策略里 9 次，是最高频的数据面调用之一。
+//   `.get(k)` 省略 default 时返回 None（我们的 None 就是 0），`.setdefault` 用**存在性**判断，
+//   所以 `{k: 0}` 不会被重新填默认值。
+// expect: 1
+// expect: 99
+// expect: 5
+// expect: 5
+// expect: 0
+// expect: 0
+d = {"a": 1, "z": 0}
+
+print(d.get("a", 99))
+print(d.get("b", 99))
+print(d.setdefault("c", 5))
+print(d.get("c", 99))
+print(d.get("z", 7))
+// {z: 0} 已存在 ⇒ setdefault 不得覆盖成 7
+print(d.setdefault("z", 7))

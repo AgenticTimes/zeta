@@ -103,6 +103,43 @@ fn ensure_fully_parsed(
     Ok(())
 }
 
+
+/// Locate a runtime object file (`zeta_runtime_c.o` / `tokio_runtime.o`)
+/// independently of the current working directory.
+///
+/// These used to be looked up with a bare relative path, so the compiler only
+/// linked correctly when it happened to be run from the repo root: compiling a
+/// file anywhere else silently dropped the whole runtime and the link failed
+/// with every core symbol (`map_get`, `vec_push`, …) reported undefined.
+fn find_runtime_obj(name: &str) -> Option<std::path::PathBuf> {
+    let direct = std::path::Path::new(name);
+    if direct.exists() {
+        return Some(direct.to_path_buf());
+    }
+    if let Ok(dir) = std::env::var("ZETA_RUNTIME_DIR") {
+        let p = std::path::Path::new(&dir).join(name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut cur = exe.parent();
+        for _ in 0..4 {
+            match cur {
+                Some(d) => {
+                    let p = d.join(name);
+                    if p.exists() {
+                        return Some(p);
+                    }
+                    cur = d.parent();
+                }
+                None => break,
+            }
+        }
+    }
+    None
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     scheduler::init_runtime();
 
@@ -412,14 +449,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         // Add Zeta runtime library
                         // First try C runtime object file (simpler, no Rust stdlib dependencies)
-                        let runtime_c_obj = std::path::Path::new("zeta_runtime_c.o");
-                        let runtime_rust_obj = std::path::Path::new("zeta_runtime.o");
-                        let tokio_runtime_obj = std::path::Path::new("tokio_runtime.o");
+                        let runtime_c_obj = find_runtime_obj("zeta_runtime_c.o");
+                        let runtime_rust_obj = find_runtime_obj("zeta_runtime.o");
+                        let tokio_runtime_obj = find_runtime_obj("tokio_runtime.o");
 
-                        if runtime_c_obj.exists() {
-                            cmd.arg(runtime_c_obj);
-                        } else if runtime_rust_obj.exists() {
-                            cmd.arg(runtime_rust_obj);
+                        if let Some(p) = runtime_c_obj {
+                            cmd.arg(p);
+                        } else if let Some(p) = runtime_rust_obj {
+                            cmd.arg(p);
                         } else {
                             let runtime_lib_windows =
                                 std::path::Path::new("runtime_lib/target/release/zeta_runtime.lib");
@@ -432,8 +469,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         // Link tokio_runtime.o if present (provides reactor, waker, timerfd, scheduler)
-                        if tokio_runtime_obj.exists() {
-                            cmd.arg(tokio_runtime_obj);
+                        if let Some(p) = tokio_runtime_obj {
+                            cmd.arg(p);
                         }
 
                         let status = cmd.status()?;
@@ -632,12 +669,10 @@ fn bootstrap_zeta(output: &Option<String>, target: &str) -> Result<(), Box<dyn s
         let mut cmd = std::process::Command::new("gcc");
         cmd.arg(&obj).arg("-o").arg(out).arg("-lc").arg("-lgc")
             .arg("-L/opt/homebrew/opt/bdw-gc/lib").arg("-no-pie");
-        let rc = Path::new("zeta_runtime_c.o");
-        if rc.exists() {
+        if let Some(rc) = find_runtime_obj("zeta_runtime_c.o") {
             cmd.arg(rc);
         }
-        let tr = Path::new("tokio_runtime.o");
-        if tr.exists() {
+        if let Some(tr) = find_runtime_obj("tokio_runtime.o") {
             cmd.arg(tr);
         }
         if !cmd.status()?.success() {

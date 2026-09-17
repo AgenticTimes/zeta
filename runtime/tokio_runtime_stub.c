@@ -3260,5 +3260,18 @@ int64_t zeta_map_len(int64_t m) {
 // `k in dict`
 int64_t py_map_contains(int64_t m, int64_t k) {
     if (!m) return 0;
-    return map_get(m, k) != 0;
+    // Probe the entry table instead of testing `map_get(m, k) != 0`: a key
+    // whose VALUE is 0 (or None/empty) is still present, and the old form
+    // reported it absent — so `"k" in d` was False for `{"k": 0}` and
+    // `d.setdefault("k", v)` overwrote a legitimate 0. Silent wrong value.
+    int64_t cap = ((int64_t*)m)[0];
+    int64_t h = map_hash(k);
+    int64_t idx = h & (cap - 1);
+    while (1) {
+        char* e = (char*)m + 16 + idx * MAP_ENTRY_SIZE;
+        uint8_t used = *(uint8_t*)(e + 16);
+        if (!used) return 0;
+        if (*(int64_t*)e == k) return 1;
+        idx = (idx + 1) & (cap - 1);
+    }
 }

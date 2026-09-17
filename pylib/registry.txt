@@ -418,5 +418,7 @@ X py_argparse_get_bool args=i64,i64 ret=i64
 # Counter.most_common([n]) → Vec of (key, count) pairs, count descending
 # (keys recovered via the map_str_key side table).
 W map most_common py_map_most_common args=1 ret=vec
+W map get map_get_default args=3 ret=i64
+W map setdefault py_map_setdefault args=3 ret=i64
 X py_map_most_common_2 args=i64,i64 ret=i64
 X py_collections_counter_new_str args=i64 ret=i64
