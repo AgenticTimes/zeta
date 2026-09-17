@@ -297,6 +297,41 @@ impl Resolver {
                             walk_py_import(s, out);
                         }
                     }
+                    // Imports nested in an `if` are REAL imports — the
+                    // `if os.environ.get('…') == '1': from <local shim> import …
+                    // else: from jqdata import *` switch at the top of a
+                    // strategy is the whole reason the local implementation can
+                    // be built without the platform. Not walking the branches
+                    // left the shim unloaded and every imported name an
+                    // unresolved external.
+                    AstNode::If { then, else_, .. } => {
+                        // Walk BOTH branches. Skipping the untaken one looks
+                        // tidier but measured worse (local mode 18 -> 29
+                        // unresolved): the branch that is not lowered still
+                        // contributes the bindings the lowered one relies on.
+                        for s in then {
+                            walk_py_import(s, out);
+                        }
+                        for s in else_ {
+                            walk_py_import(s, out);
+                        }
+                    }
+                    AstNode::For { body, else_body, .. } => {
+                        for s in body {
+                            walk_py_import(s, out);
+                        }
+                        for s in else_body {
+                            walk_py_import(s, out);
+                        }
+                    }
+                    AstNode::While { body, else_body, .. } => {
+                        for s in body {
+                            walk_py_import(s, out);
+                        }
+                        for s in else_body {
+                            walk_py_import(s, out);
+                        }
+                    }
                     AstNode::FuncDef { body, .. } => {
                         for s in body {
                             walk_py_import(s, out);
@@ -1639,7 +1674,21 @@ impl Resolver {
         // The file being compiled wins, then explicitly configured paths, then
         // installed packages, then the bundled shim sources.
         if let Some(d) = self.py_source_dir.borrow().clone() {
-            bases.push(d);
+            // The file being compiled wins — and so do its ANCESTORS: a
+            // project-root-relative dotted import (`from strategies.code.jq_shim
+            // import …` compiled from strategies/code/jq_wufu.py) resolves
+            // against the repo root, not against the file's own directory.
+            // Depth is capped so a plain name can never match `/a.py`.
+            let mut cur = Some(d.as_path());
+            for _ in 0..6 {
+                match cur {
+                    Some(p) => {
+                        bases.push(p.to_path_buf());
+                        cur = p.parent();
+                    }
+                    None => break,
+                }
+            }
         }
         if let Ok(p) = std::env::var("ZETA_PYLIB") {
             bases.push(std::path::PathBuf::from(p));

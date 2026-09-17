@@ -10,6 +10,74 @@ use crate::middle::mir::mir::{Mir, MirExpr, MirStmt, SemiringOp};
 use crate::middle::specialization::MonoKey;
 use crate::middle::types::{ArraySize, Type};
 use std::collections::HashMap;
+/// PY-A: `os.environ.get('NAME'[, default])` / `os.getenv('NAME')` with a
+/// LITERAL name — readable at compile time. Python returns None for a
+/// missing key, so a missing variable is a *known* answer, not an unknown
+/// one: `os.environ.get('X') == '1'` is False, `!= '1'` is True.
+pub(crate) fn eval_env_read(call: &AstNode) -> Option<String> {
+    let AstNode::Call {
+        receiver,
+        method,
+        args,
+        ..
+    } = call
+    else {
+        return None;
+    };
+    let is_environ_get = method == "get"
+        && matches!(
+            receiver.as_deref(),
+            Some(AstNode::FieldAccess { base, field })
+                if field == "environ"
+                    && matches!(&**base, AstNode::Var(v) if v == "os")
+        );
+    let is_getenv = method == "getenv"
+        && matches!(receiver.as_deref(), Some(AstNode::Var(v)) if v == "os");
+    if !(is_environ_get || is_getenv) {
+        return None;
+    }
+    let name = match args.first() {
+        Some(AstNode::StringLit(s)) => s,
+        _ => return None,
+    };
+    if let Ok(v) = std::env::var(name) {
+        return Some(v);
+    }
+    match args.get(1) {
+        Some(AstNode::StringLit(d)) => Some(d.clone()),
+        Some(AstNode::Lit(n)) => Some(n.to_string()),
+        // Python: None — never equal to any literal we compare against.
+        _ => Some("\u{0}<unset>".to_string()),
+    }
+}
+
+/// PY-A: fold `if <env read> == 'lit':` / `!=` into a compile-time decision
+/// so only the taken branch is lowered. This is what lets the LOCAL
+/// implementation build without the platform: the strategy's
+/// `if os.environ.get('REPLAYQUANT_LOCAL') == '1': from <shim> import …`
+/// / `else: from jqdata import *` otherwise lowers BOTH branches, dragging
+/// in the JoinQuant host symbols the local run never uses.
+pub(crate) fn fold_env_condition(cond: &AstNode) -> Option<bool> {
+    let (op, left, right) = match cond {
+        AstNode::BinaryOp { op, left, right } if op == "==" || op == "!=" => (op, left, right),
+        _ => return None,
+    };
+    let (call, lit) = match (&**left, &**right) {
+        (AstNode::Call { .. }, other) => (&**left, other),
+        (other, AstNode::Call { .. }) => (&**right, other),
+        _ => return None,
+    };
+    let value = eval_env_read(call)?;
+    let lit_str = match lit {
+        AstNode::StringLit(s) => s.clone(),
+        AstNode::Lit(n) => n.to_string(),
+        _ => return None,
+    };
+    let eq = value == lit_str;
+    Some(if op == "==" { eq } else { !eq })
+}
+
+
 
 /// Type declaration metadata registered during MIR lowering.
 #[derive(Debug, Clone)]
@@ -391,73 +459,6 @@ impl MirGen {
                 Some(TypeDecl::Struct { fields, .. }) if fields.iter().any(|(f, _)| f == field)
             )
         })
-    }
-
-    /// PY-A: `os.environ.get('NAME'[, default])` / `os.getenv('NAME')` with a
-    /// LITERAL name — readable at compile time. Python returns None for a
-    /// missing key, so a missing variable is a *known* answer, not an unknown
-    /// one: `os.environ.get('X') == '1'` is False, `!= '1'` is True.
-    fn eval_env_read(call: &AstNode) -> Option<String> {
-        let AstNode::Call {
-            receiver,
-            method,
-            args,
-            ..
-        } = call
-        else {
-            return None;
-        };
-        let is_environ_get = method == "get"
-            && matches!(
-                receiver.as_deref(),
-                Some(AstNode::FieldAccess { base, field })
-                    if field == "environ"
-                        && matches!(&**base, AstNode::Var(v) if v == "os")
-            );
-        let is_getenv = method == "getenv"
-            && matches!(receiver.as_deref(), Some(AstNode::Var(v)) if v == "os");
-        if !(is_environ_get || is_getenv) {
-            return None;
-        }
-        let name = match args.first() {
-            Some(AstNode::StringLit(s)) => s,
-            _ => return None,
-        };
-        if let Ok(v) = std::env::var(name) {
-            return Some(v);
-        }
-        match args.get(1) {
-            Some(AstNode::StringLit(d)) => Some(d.clone()),
-            Some(AstNode::Lit(n)) => Some(n.to_string()),
-            // Python: None — never equal to any literal we compare against.
-            _ => Some("\u{0}<unset>".to_string()),
-        }
-    }
-
-    /// PY-A: fold `if <env read> == 'lit':` / `!=` into a compile-time decision
-    /// so only the taken branch is lowered. This is what lets the LOCAL
-    /// implementation build without the platform: the strategy's
-    /// `if os.environ.get('REPLAYQUANT_LOCAL') == '1': from <shim> import …`
-    /// / `else: from jqdata import *` otherwise lowers BOTH branches, dragging
-    /// in the JoinQuant host symbols the local run never uses.
-    fn fold_env_condition(cond: &AstNode) -> Option<bool> {
-        let (op, left, right) = match cond {
-            AstNode::BinaryOp { op, left, right } if op == "==" || op == "!=" => (op, left, right),
-            _ => return None,
-        };
-        let (call, lit) = match (&**left, &**right) {
-            (AstNode::Call { .. }, other) => (&**left, other),
-            (other, AstNode::Call { .. }) => (&**right, other),
-            _ => return None,
-        };
-        let value = Self::eval_env_read(call)?;
-        let lit_str = match lit {
-            AstNode::StringLit(s) => s.clone(),
-            AstNode::Lit(n) => n.to_string(),
-            _ => return None,
-        };
-        let eq = value == lit_str;
-        Some(if op == "==" { eq } else { !eq })
     }
 
     fn py_handle_of(&self, recv: &AstNode) -> Option<String> {
@@ -1257,7 +1258,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
             }
             AstNode::If { cond, then, else_ } => {
                 // PY-A: compile-time env switch (see fold_env_condition).
-                if let Some(taken) = Self::fold_env_condition(cond) {
+                if let Some(taken) = fold_env_condition(cond) {
                     let branch: &[AstNode] = if taken { then } else { else_ };
                     for s in branch {
                         self.lower_expr(s);
@@ -3054,6 +3055,42 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 type_args,
                 ..
             } => {
+                // PY-A: `from <user module> import member` — the module's file
+                // is loaded and lowered into THIS binary under
+                // `<module>__<name>` symbols, so a free call to an imported
+                // member must be routed there. Without this the call went out as
+                // an unresolved external, which is why the in-repo LOCAL shim
+                // (strategies/code/jq_shim.py) could never link.
+                if receiver.is_none() {
+                    if let Some((module, member)) = self.py_member_aliases.get(method).cloned() {
+                        if self.py_user_modules.contains(&module) {
+                            let arg_ids: Vec<u32> =
+                                args.iter().map(|a| self.lower_expr(a)).collect();
+                            let func = format!("{}__{}", module.replace('.', "_"), member);
+                            self.stmts.push(MirStmt::Call {
+                                func: func.clone(),
+                                args: arg_ids,
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            // Keep the inferred result type. The resolver
+                            // registers a loaded module's function return types,
+                            // so `first("hello")` stays a str — guessing i64 here
+                            // printed the pointer (t53_param_inference).
+                            if !self.type_map.contains_key(&id) {
+                                let ty = self
+                                    .func_ret_types
+                                    .get(&func)
+                                    .or_else(|| self.func_ret_types.get(&member))
+                                    .cloned()
+                                    .unwrap_or(Type::I64);
+                                self.type_map.insert(id, ty);
+                            }
+                            return id;
+                        }
+                    }
+                }
                 // PY-A: `re.sub(pat, repl, s)` — repl may be a STRING or a
                 // callable (`lambda m: ...`). The closure's parameter must be
                 // typed as a Match so `m.group(0)` inside it dispatches.
