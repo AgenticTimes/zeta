@@ -1,0 +1,19 @@
+// PY-A: `from datetime import datetime, timedelta, date` + `datetime.timedelta(...)`
+//   导入的**类名遮蔽了模块名**，于是没有 import 别名可查 ⇒ `py_member_call` 返回 None
+//   ⇒ `datetime.timedelta(days=375)` 退化成对裸名 `timedelta` 的自由调用 ⇒ 未定义符号
+//   （语料 16 + 6 + 1 = 23 个调用点，是链接侧最大的一族）。
+//   修法：在调用发射点加一次注册表回退 —— 接收者是 `Var(name)` 且 name 恰为**已注册模块**时，
+//   按 `name.member`（以及 `name.name.member` 这种类静态成员的 dotted 键）查注册表。
+// expect: 1
+// expect: 2
+from datetime import datetime, timedelta, date
+
+def use_datetime() -> i64:
+    td = datetime.timedelta(days=3)
+    dd = datetime.date(2020, 1, 1)
+    dt = datetime.datetime(2020, 1, 1)
+    return 1
+
+td2 = timedelta(days=1)
+print(use_datetime())
+print(1 + 1)

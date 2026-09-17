@@ -3483,7 +3483,32 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         .insert(id, Type::Named("PyArgNS".to_string(), vec![]));
                     return id;
                 }
-                if let Some((symbol, handle, ret)) = self.py_member_call(receiver, method) {
+                // PY-A: `from datetime import datetime, timedelta` shadows the
+                // MODULE name with the imported name, so `import`-style aliases
+                // are absent and `py_member_call` bails out — `datetime.timedelta(
+                // days=375)` then degraded to a free call to the bare member name
+                // (undefined `timedelta`, 16 call sites). Resolve by the ROOT TEXT
+                // when it names a registered module.
+                let member_call = self.py_member_call(receiver, method).or_else(|| {
+                    let recv = receiver.as_ref()?;
+                    let (root, parts) = Self::flatten_module_receiver(recv)?;
+                    crate::middle::pylib::find_module(&root)?;
+                    let member = if parts.is_empty() {
+                        method.to_string()
+                    } else {
+                        format!("{}.{}", parts.join("."), method)
+                    };
+                    // The registry keys class-static members by their dotted
+                    // name (`datetime.now`, `date.today`), so try that too.
+                    let dotted = format!("{}.{}", root, member);
+                    crate::middle::pylib::find_member(&root, &member)
+                        .or_else(|| crate::middle::pylib::find_member(&root, &dotted))
+                        .map(|e| (e.symbol.as_str(), e.handle.as_deref(), e.ret.as_str()))
+                });
+                if let Some((symbol, handle, ret)) = member_call {
+                    if std::env::var("ZETA_PROBE_CALL").is_ok() {
+                        eprintln!("PROBE hit symbol={} handle={:?} ret={}", symbol, handle, ret);
+                    }
                     let mut lowered = Vec::with_capacity(args.len());
                     for a in args {
                         lowered.push(self.lower_expr(a));
