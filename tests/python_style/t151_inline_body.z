@@ -1,0 +1,31 @@
+// PY-A: 单行复合体（一行里带体）—— `if not xs: return []` / `else: return 0` /
+//   `for i in xs: total += i` / `def f(x): return x`。Python 允许这种写法，
+//   但缩进预处理器只给「体在下一行、且缩进更深」的头插 `{`（`opens` 的条件），
+//   于是这些行带着冒号原样透传 ⇒ 整个定义连同其后内容被丢弃
+//   （语料 84 行 / 16 文件命中，`get_hl_stock` 的 `if not stock_list:return []`）。
+//   修法：预处理器把这类行改写成 `head { body }`（仅当行首是块关键字、
+//   且顶层（括号深度 0、非 `::`/`:=`、非字符串、非注释）有冒号且冒号后有内容）。
+// expect: 3
+// expect: 1
+// expect: if a: b
+// expect: 7
+def f(xs) -> i64:
+    if not xs:return []
+    if xs == None: return 5
+    total = 0
+    for i in [1, 2]: total = total + i
+    if total: return total
+    else: return 0
+
+d = {"a": 1}
+h = "if a: b"
+
+def comment_colon() -> i64:
+    n = 0
+    if n == 0: n = 7  # note: colon in comment 1,2,3
+    return n
+
+print(f([1]))
+print(d["a"])
+print(h)
+print(comment_colon())

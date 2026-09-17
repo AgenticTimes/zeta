@@ -120,21 +120,28 @@ pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
     // place made every such statement — and therefore the whole enclosing
     // definition — fail to parse.
     let folded = fold_backslash_continuations(&lines_raw);
-    let joined_text: String = match &folded {
-        Some(joined) => joined.join("\n"),
-        None => String::new(),
+    let after_bs: Vec<String> = match &folded {
+        Some(joined) => joined.to_vec(),
+        None => lines_raw.iter().map(|s| s.to_string()).collect(),
     };
-    let lines: Vec<&str> = match &folded {
-        Some(joined) => joined.iter().map(|s| s.as_str()).collect(),
-        None => lines_raw.clone(),
+    // PY-A: one-line compound bodies (`if not xs: return []`) — same rationale
+    // as above, and it must also happen before any indentation bookkeeping.
+    let after_bs_refs: Vec<&str> = after_bs.iter().map(|s| s.as_str()).collect();
+    let inline = fold_inline_bodies(&after_bs_refs);
+    let folded_lines: Vec<String> = match &inline {
+        Some(v) => v.clone(),
+        None => after_bs.clone(),
     };
+    let joined_text = folded_lines.join("\n");
+    let lines: Vec<&str> = folded_lines.iter().map(|s| s.as_str()).collect();
     let (out, changed) = normalize_blocks(&lines)?;
     if !changed {
-        // Not python-style. Still hand back the folded text when continuations
-        // were folded — that is the only edit we made.
-        return match folded {
-            Some(_) => Ok(Some(joined_text)),
-            None => Ok(None),
+        // Not python-style. Still hand back the folded text when we folded
+        // something — that is the only edit we made.
+        return if folded.is_some() || inline.is_some() {
+            Ok(Some(joined_text))
+        } else {
+            Ok(None)
         };
     }
     // PY-A: in a python-style file `//` is floor division, not a comment
@@ -194,6 +201,172 @@ fn fold_backslash_continuations(lines: &[&str]) -> Option<Vec<String>> {
     } else {
         None
     }
+}
+
+/// PY-A: Python allows a compound statement's body on the SAME line —
+/// `if not xs: return []`, `def f(x): return x`. The indent pass only rewrote
+/// headers whose body sat indented on following lines (`opens` requires that),
+/// so these fell through with the colon still in place and the whole enclosing
+/// definition was dropped (84 such lines across 16 corpus files). Rewrite them
+/// to the brace form the parser expects: `head { body }`.
+///
+/// Detection is deliberately narrow: the line must **start** with a block
+/// keyword (so dict literals / lambdas / slices are never candidates) and the
+/// colon must sit at bracket depth 0 in CODE position (not in a string, not a
+/// `::` or `:=`). One level of nesting is handled by recursing on the body; a
+/// doubly-nested one-liner still fails loudly.
+fn fold_inline_bodies(lines: &[&str]) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut in_triple: Option<char> = None;
+    let mut folded_any = false;
+    for line in lines {
+        // Keep the string state in step: lines inside a triple-quoted string
+        // are string content, never code.
+        let inside_string = {
+            let info = scan_line(line, &mut in_triple).ok()?;
+            info.code.trim().is_empty()
+        };
+        if inside_string {
+            out.push(line.to_string());
+            continue;
+        }
+        match rewrite_inline_body(line) {
+            Some(new_line) => {
+                folded_any = true;
+                out.push(new_line);
+            }
+            None => out.push(line.to_string()),
+        }
+    }
+    if folded_any {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+/// One-line body for a single header line, or `None` when the line is not that
+/// shape. Everything is located on the RAW line, so the body keeps its original
+/// bytes (strings and f-strings included).
+fn rewrite_inline_body(line: &str) -> Option<String> {
+    if !is_header_start(line) {
+        return None;
+    }
+    let (colon, code_end) = find_inline_colon(line)?;
+    // Defensive: never slice backwards, whatever the scanner found.
+    if colon >= code_end {
+        return None;
+    }
+    let raw_body = &line[colon + 1..code_end];
+    if raw_body.trim().is_empty() {
+        return None; // ordinary header — the normal path handles it
+    }
+    let body = raw_body.trim();
+    let inner = rewrite_inline_body(body).unwrap_or_else(|| body.to_string());
+    // Keep the whitespace that followed the body so a trailing comment does not
+    // get glued to the closing brace (`}# note` reads badly in ZETA_DUMP_PP).
+    let gap = &raw_body[raw_body.trim_end().len()..];
+    let mut out = String::with_capacity(line.len() + 6);
+    out.push_str(line[..colon].trim_end());
+    out.push_str(" { ");
+    out.push_str(&inner);
+    out.push_str(" }");
+    out.push_str(gap);
+    out.push_str(&line[code_end..]);
+    Some(out)
+}
+
+/// Byte offsets of the first top-level code `:` (not `::`, not `:=`) and of the
+/// end of the code part (comment start or end of line) on a RAW line.
+fn find_inline_colon(line: &str) -> Option<(usize, usize)> {
+    let b = line.as_bytes();
+    let mut i = 0usize;
+    let mut depth = 0i32;
+    while i < b.len() {
+        let c = b[i];
+        match c {
+            b'#' if !line[i..].starts_with("#[") => return find_colon_before(line, i),
+            // `//` is a comment too — without this a `// primes: 2,3,5,7`
+            // trailing comment donated its colon and the slice below went
+            // backwards (a compiler panic on valid input).
+            b'/' if i + 1 < b.len() && b[i + 1] == b'/' => return find_colon_before(line, i),
+            b'\'' | b'"' => {
+                let q = c;
+                if line[i..].starts_with(&(q as char).to_string().repeat(3)) {
+                    // triple-quoted: treat the rest of the line as string
+                    return find_colon_before(line, i);
+                }
+                i += 1;
+                while i < b.len() {
+                    if b[i] == b'\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if b[i] == q {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                i += 1;
+            }
+            b':' if depth == 0 => {
+                let next = b.get(i + 1).copied();
+                let prev = i.checked_sub(1).and_then(|p| b.get(p)).copied();
+                if next != Some(b':') && next != Some(b'=') && prev != Some(b':') {
+                    return Some((i, find_code_end(line)));
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// With a `:` found before `stop`, the code part ends at the comment start (or
+/// EOL). Comment markers inside strings must not count.
+fn find_colon_before(line: &str, stop: usize) -> Option<(usize, usize)> {
+    find_inline_colon(&line[..stop]).map(|(c, _)| (c, stop))
+}
+
+/// Index where the code part ends: the first `#`/`//` outside a string, else EOL.
+fn find_code_end(line: &str) -> usize {
+    let b = line.as_bytes();
+    let mut i = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'#' if !line[i..].starts_with("#[") => return i,
+            b'/' if i + 1 < b.len() && b[i + 1] == b'/' => return i,
+            b'\'' | b'"' => {
+                let q = b[i];
+                if line[i..].starts_with(&(q as char).to_string().repeat(3)) {
+                    return i;
+                }
+                i += 1;
+                while i < b.len() {
+                    if b[i] == b'\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if b[i] == q {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    line.len()
 }
 
 /// Indentation → braces for one dialect-agnostic pass. Returns the rewritten
