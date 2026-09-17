@@ -1,0 +1,17 @@
+// PY-A: `range(n)` 作为**值**（`xs = range(4)`）——此前发的是自由调用 `range`（未定义符号）。
+//   修法：物化成 Vec —— 复用既有的 `zeta_arange`（[0..n)）。2/3 参形式需要 offset/step，
+//   仍走编译期指名诊断（不假装支持）。
+// expect: 4
+// expect: 0
+def f(n: i64) -> i64:
+    xs = range(n)
+    return len(xs)
+
+
+def g() -> i64:
+    ys = range(0)
+    return len(ys)
+
+
+print(f(4))
+print(g())

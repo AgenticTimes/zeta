@@ -4144,6 +4144,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         }
                     }
                 }
+                // PY-A: `range(n)` as a VALUE (`xs = range(5)`) — materialize it
+                // with the existing `zeta_arange` (a Vec of [0..n)), instead of
+                // emitting a free call named `range`. 2/3-arg forms need
+                // offset/step and stay fail-loud below.
+                if method == "range" && receiver.is_none() && args.len() == 1 {
+                    let n = self.lower_expr(&args[0]);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_arange".to_string(),
+                        args: vec![n],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                    return id;
+                }
                 // Unimplemented builtins that would otherwise emit a FREE CALL
                 // named after themselves (an undefined symbol at link time, with
                 // zero information about the cause). Ring the bell at COMPILE
