@@ -6418,7 +6418,26 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     if method == "format" {
                         if let Some(recv) = receiver {
                             if let AstNode::StringLit(tmpl) = &**recv {
-                                if let Some(parts) = format_template_parts(tmpl, args) {
+                                // Split keyword (`__kwarg__`) args from positional
+                                // ones: `"{a}".format(a=1)` is resolved by NAME,
+                                // and auto-indexing must only count positional.
+                                let mut named: Vec<(String, AstNode)> = Vec::new();
+                                let mut positional: Vec<AstNode> = Vec::new();
+                                for a in args {
+                                    match a {
+                                        AstNode::Call { method: km, args: ka, .. }
+                                            if km == "__kwarg__" && ka.len() == 2 =>
+                                        {
+                                            if let AstNode::StringLit(n) = &ka[0] {
+                                                named.push((n.clone(), ka[1].clone()));
+                                            }
+                                        }
+                                        _ => positional.push(a.clone()),
+                                    }
+                                }
+                                if let Some(parts) =
+                                    format_template_parts(tmpl, &positional, &named)
+                                {
                                     return self.lower_expr(&AstNode::FString(parts));
                                 }
                                 // Named fields (`"{a}".format(a=…)`) and index
@@ -8693,7 +8712,11 @@ impl Default for MirGen {
 /// None for templates this V1 cannot rewrite (format specs like `{0:>5}`,
 /// conversion flags, named fields, or a missing argument), so the caller falls
 /// through and the use fails loudly at link time rather than mis-formatting.
-fn format_template_parts(tmpl: &str, args: &[AstNode]) -> Option<Vec<AstNode>> {
+fn format_template_parts(
+    tmpl: &str,
+    args: &[AstNode],
+    named: &[(String, AstNode)],
+) -> Option<Vec<AstNode>> {
     let mut parts: Vec<AstNode> = Vec::new();
     let mut lit = String::new();
     let mut auto = 0usize;
@@ -8728,14 +8751,21 @@ fn format_template_parts(tmpl: &str, args: &[AstNode]) -> Option<Vec<AstNode>> {
                     );
                 });
             }
-            let idx = if field.is_empty() {
+            // `{a}` — a NAMED field: `"{a}".format(a=1)`. Resolve it from the
+            // keyword arguments instead of bailing out (bailing made the call a
+            // free `format` call and the program failed to LINK; 7 corpus sites).
+            let arg: &AstNode = if field.is_empty() {
                 let k = auto;
                 auto += 1;
-                k
+                args.get(k)?
+            } else if let Ok(idx) = field.parse::<usize>() {
+                args.get(idx)?
             } else {
-                field.parse::<usize>().ok()?
+                match named.iter().find(|(n, _)| n == field) {
+                    Some((_, v)) => v,
+                    None => return None,
+                }
             };
-            let arg = args.get(idx)?;
             if !lit.is_empty() {
                 parts.push(AstNode::StringLit(std::mem::take(&mut lit)));
             }

@@ -1,0 +1,17 @@
+// PY-A: 命名域 `.format` —— `"{a}".format(a=1)`
+//   之前 `format_template_parts` 只认自动域 `{}` 与数字域 `{0}`，遇到名字就返回 None
+//   ⇒ 调用退化成自由调用 `format` ⇒ 幽灵符号、链接失败。
+//   修法：把 `__kwarg__` 实参按**名字**建成表，模板里的 `{name}` 直接查表；
+//   同时把「位置实参」与「关键字实参」分开，自动域只按位置实参编号（混用也正确）。
+// expect: 1-2
+// expect: 9-9
+def f(a, b) -> str:
+    return "{a}-{b}".format(a=a, b=b)
+
+
+def g(a) -> str:
+    return "{}-{a}".format(a, a=a)
+
+
+print(f(1, 2))
+print(g(9))
