@@ -4515,10 +4515,18 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         self.gen_stmt(s, exprs);
                     }
                 }
-                let then_has_terminal = then_ends_with_break
-                    || then_ends_with_continue
-                    || then.iter().any(|s| matches!(s, MirStmt::Return { .. }));
-                if !then_has_terminal {
+                // Ask the BLOCK, not the statement list: a branch whose last
+                // statement is an inner `if` with both arms returning IS
+                // terminated, yet contains no top-level `Return` — the old
+                // statement scan missed that and appended a branch after the
+                // `ret` ("Terminator found in the middle of a basic block").
+                // Conversely a `Return` nested mid-branch left the block open
+                // ("does not have terminator"). The block's own state is exact.
+                let then_needs_branch = self
+                    .builder
+                    .get_insert_block()
+                    .map_or(false, |b| b.get_terminator().is_none());
+                if then_needs_branch {
                     self.builder.build_unconditional_branch(merge_bb).unwrap();
                 }
 
@@ -4547,10 +4555,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         self.gen_stmt(s, exprs);
                     }
                 }
-                let else_has_terminal = else_ends_with_break
-                    || else_ends_with_continue
-                    || else_.iter().any(|s| matches!(s, MirStmt::Return { .. }));
-                if !else_has_terminal {
+                // Same block-state check for the else arm.
+                let else_needs_branch = self
+                    .builder
+                    .get_insert_block()
+                    .map_or(false, |b| b.get_terminator().is_none());
+                if else_needs_branch {
                     self.builder.build_unconditional_branch(merge_bb).unwrap();
                 }
 

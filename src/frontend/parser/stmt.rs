@@ -932,6 +932,28 @@ fn parse_python_from_import(input: &str) -> IResult<&str, AstNode> {
 
 /// PY-A: `try/except/finally` — desugars (parser-only, no AST change) into:
 ///   zeta_try_enter()
+/// Does this statement list fall through to the next statement, or does it
+/// definitely transfer control away (return/break/continue)?
+///
+/// The try/except desugaring appends `zeta_try_end()` to a branch, and a call
+/// is not a terminator — appending it after a `return`/`break`/`continue`
+/// produced a basic block with instructions after its terminator:
+/// "Terminator found in the middle of a basic block". This kept 6 corpus files
+/// from compiling at all. Skipping the call on a branch that cannot fall
+/// through is correct: control left the try region anyway.
+fn branch_falls_through(body: &[AstNode]) -> bool {
+    match body.last() {
+        None => true,
+        Some(AstNode::Return(_) | AstNode::Break(_) | AstNode::Continue(_)) => false,
+        // `if c: return … else: return …` — both arms leave, so does the if.
+        Some(AstNode::If { then, else_, .. }) => {
+            !else_.is_empty()
+                && (branch_falls_through(then) || branch_falls_through(else_))
+        }
+        _ => true,
+    }
+}
+
 ///   if zeta_try_setjmp() == 0 { body; zeta_try_end() }
 ///   else { [e = zeta_last_error();] handler; zeta_try_end() }
 ///   [finally body]
@@ -1062,7 +1084,9 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
         structural: false,
     };
     let mut then_branch = body;
-    then_branch.push(mk_call("zeta_try_end"));
+    if branch_falls_through(&then_branch) {
+        then_branch.push(mk_call("zeta_try_end"));
+    }
     let mut else_branch: Vec<AstNode> = Vec::new();
     if let Some(v) = as_var {
         else_branch.push(AstNode::Assign(
@@ -1077,7 +1101,9 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
         ));
     }
     else_branch.extend(handler);
-    else_branch.push(mk_call("zeta_try_end"));
+    if branch_falls_through(&else_branch) {
+        else_branch.push(mk_call("zeta_try_end"));
+    }
     out.push(AstNode::If {
         cond: Box::new(AstNode::BinaryOp {
             op: "==".to_string(),

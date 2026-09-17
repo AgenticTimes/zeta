@@ -1,0 +1,30 @@
+// PY-A: try/except 脱糖时只在**能落穿**的分支末尾补 zeta_try_end()。
+//   回归「Terminator found in the middle of a basic block」：分支最后一条是
+//   return/break/continue 时，再补一个调用会落到终结指令之后，LLVM 校验直接失败
+//   ⇒ 整个编译中止（语料里 6 个文件就是这样被挡住的，连链接都没走到）。
+// expect: 1
+// expect: 5
+//   g(4) = 0 + 2 + 3，i==1 被 continue 跳过
+def f(x: i64) -> i64:
+    try:
+        if x > 0:
+            return 1
+        return 2
+    except:
+        return 3
+
+
+def g(n: i64) -> i64:
+    total = 0
+    for i in range(n):
+        try:
+            if i == 1:
+                continue
+            total = total + i
+        except:
+            continue
+    return total
+
+
+print(f(5))
+print(g(4))
