@@ -1792,3 +1792,29 @@ PROBE rewrite callee=f registered=true changed_types=[(0, Named("PyDate", []))]
 **下一步（很具体）**：给 MIR 的 FieldAccess 路径加探针，打印接收者在 `type_map` / `source_types`
 里的条目（`d.year` 走的是 `py_handle_of` → `method_symbol` 那条链），确认形参类型是否根本没进
 `type_map`，还是进了但 `py_handle_of` 读的是另一个表。
+
+
+## 批次二十九（2026-09-17，**关键更正 + 断点定死**）
+
+**决定性对照实验**（3 行，不需要任何推断机制）：
+
+    from datetime import date
+    def f(d: PyDate) -> i64:
+        return d.year
+    print(f(date(2020, 5, 6)))     # 实测 **18388**（应为 2020）
+
+即：**即使形参显式标注成 `PyDate`，`d.year` 依然读垃圾**。
+
+⇒ **真正的断点在 MIR 侧，与「调用点推断」无关**。这更正了我最近几轮的叙事：
+- 调用点推断（批次二十八已打通两种形状 + AST 回写，探针实证）**不是**当前的必要条件；
+- 更小、更靠前的修法是：**让 MIR 把「形参声明类型」正确落到 `type_map`**，
+  使 `py_handle_of(Var)` 的 `name_to_id + type_map` 分支能返回 `PyDate`。
+  修好之后，批次二十八那套推断（已证明会触发并把 `PyDate` 写进 AST 与签名表）
+  就能把**无标注形参**一并覆盖 —— 两者是叠加关系，不是替代。
+
+**下一步（极小、可复现）**：
+1. 用上面这个 3 行用例（显式 `d: PyDate`）作判据；
+2. 在 MIR 的形参初始化处（`build_mir` 附近）打印 `name_to_id`/`type_map` 里 `d` 的条目，
+   确认是「没落表」还是「落成了别的类型」（如 `Type::from_string("PyDate")` 退化成 I64）；
+3. 顺带查 `Type::from_string` 对未知名字的兜底（`src/middle/types/mod.rs:399` 起的 `_ =>` 分支）
+   —— 若未知名字不映射成 `Type::Named(name)`，句柄标签就永远进不了 `type_map`。
