@@ -1913,3 +1913,20 @@ Python 里 `getLogger(name)` 的 name 是可选，注册表却是必填 arity �
 |---|---|
 | `log.info(fmt, *args)` 变参（`py_logger_info_4/5`） | C 侧 variadic helper：`py_logger_info_n(lg, fmt, n, a1..a4)`（7 固定参数，仿 `zeta_collect_literals` 的声明方式）+ 形状分派。V1 建议**不做 %-替换**但把实参打印出来（可见而非丢弃） |
 | `logger.addHandler(...)` | 注册表里没有这个成员 —— 需要新增 `W PyLogger addHandler …` + C 桩 |
+
+
+## 批次三十五（2026-09-17，**已修**）：变参 `log.info(fmt, *args)`
+
+`_N` 族第二成因里最后一项可修的：Python 的 Logger 方法是**变参**，注册表却是固定 arity
+⇒ 多出来的实参被消歧成 `py_logger_info_4/_5`（语料 5 处）。
+
+三处配套（形状分派 + 运行时 helper，与本会话前几次同一套路）：
+1. `runtime/tokio_runtime_stub.c` 新增 `py_logger_info_n(lg, fmt, n, a1..a4)`
+   （7 个固定参数，仿 `zeta_collect_literals` 的声明方式）。**V1 不做 %-替换，但把实参打印出来**
+   —— 可见、绝不丢弃；同步重建 tracked 的 `tokio_runtime.o`。
+2. codegen 补 7 参 extern 声明（避免 ABI 猜错）。
+3. gen.rs 在句柄方法分支**之前**做形状分派：`method == "info"`、实参 2..=5、接收者是已知
+   `PyLogger`、无 `__kwarg__` 包裹 ⇒ route 到 helper。
+
+度量：未定义符号去重 **81 → 80**；python_style **164 → 165**；官方 **194/194**；解析 37/38 不回退。
+logger 家族只剩 `py_logging_FileHandler_2`（`addHandler` 面，注册表缺成员，单列待做）。
