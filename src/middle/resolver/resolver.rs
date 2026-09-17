@@ -1334,6 +1334,7 @@ impl Resolver {
                         None => continue,
                     };
                     let mut changed: Vec<(usize, Type)> = Vec::new();
+                    let member_aliases = self.py_member_aliases.borrow().clone();
                     for (i, a) in pargs.iter().enumerate() {
                         if i >= param_types.len() || param_types[i] != Type::I64 {
                             continue;
@@ -1347,6 +1348,35 @@ impl Resolver {
                             1 => changed.push((i, Type::Str)),
                             2 => changed.push((i, Type::F64)),
                             _ => {}
+                        }
+                        // PY-A: a param that receives a library HANDLE value
+                        // (`f(datetime.date(2020,1,1))`, or `f(date(…))` after
+                        // `from datetime import date`) must be typed as that
+                        // handle, or every attribute/method inside the callee
+                        // degrades. Both call shapes count: dotted
+                        // `Root.member(…)` and a bare from-imported `member(…)`.
+                        if let AstNode::Call { receiver, method: m, .. } = a {
+                            let target = match receiver {
+                                None => member_aliases.get(m).cloned(),
+                                Some(r) => match &**r {
+                                    AstNode::Var(root) => Some((
+                                        aliases2
+                                            .get(root)
+                                            .cloned()
+                                            .unwrap_or_else(|| root.clone()),
+                                        m.clone(),
+                                    )),
+                                    _ => None,
+                                },
+                            };
+                            if let Some((module, member)) = target {
+                                if let Some(tag) =
+                                    crate::middle::pylib::find_member(&module, &member)
+                                        .and_then(|e| e.handle.clone())
+                                {
+                                    changed.push((i, Type::Named(tag, vec![])));
+                                }
+                            }
                         }
                     }
                     for (i, t) in &changed {
@@ -1380,6 +1410,9 @@ impl Resolver {
                                     params[*i].1 = match t {
                                         Type::Str => "str".to_string(),
                                         Type::F64 => "f64".to_string(),
+                                        // library handle tags are valid type texts;
+                                        // MIR now maps them to Type::Named(handle).
+                                        Type::Named(n, _) => n.clone(),
                                         _ => continue,
                                     };
                                 }

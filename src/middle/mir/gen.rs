@@ -579,6 +579,20 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         // Array param stays I64 — pointer semantics.
                         // Element type is inferred from source_types in Subscript.
                     }
+                    // PY-A: a param annotated with a LIBRARY HANDLE tag
+                    // (`def f(d: PyDate)`) must keep that tag. Without this it
+                    // stayed I64, so `py_handle_of` saw no handle and every
+                    // attribute/method on it degraded: `d.year` read garbage
+                    // (18388 instead of 2020) and `d.strftime(...)` emitted a
+                    // bare symbol. Only overrides the I64 default.
+                    if matches!(self.type_map.get(&id), Some(Type::I64))
+                        && crate::middle::pylib::handle_tag(param_type.trim()).is_some()
+                    {
+                        self.type_map.insert(
+                            id,
+                            Type::Named(param_type.trim().to_string(), vec![]),
+                        );
+                    }
                     self.source_types.insert(id, param_type.clone());
                     self.stmts.push(MirStmt::ParamInit {
                         param_id: id,

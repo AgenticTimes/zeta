@@ -1,0 +1,25 @@
+// PY-A: 句柄类型的形参必须保住 handle 标签
+//   此前 MIR 的形参落表只认 f64 / bool / str / 泛型 T，**其余一律 I64**
+//   ⇒ `py_handle_of` 看不到句柄 ⇒ `d.year` 读到垃圾（18388 而非 2020）、`d.strftime(...)` 发裸名。
+//   修法两处（缺一不可，且互相叠加）：
+//     ① MIR 形参落表识别**库句柄标签**（pylib::handle_tag）——覆盖显式标注
+//        `def f(d: PyDate)`；
+//     ② resolver 的调用点推断把「实参是库句柄」的形参也升级——覆盖无标注
+//        `def f(d)` + `f(date(...))`（两种调用形状：dotted 与 from-import 裸名）。
+// expect: 2020
+// expect: 5
+// expect: 2019
+from datetime import date
+
+
+def annotated(d: PyDate) -> i64:
+    return d.year
+
+
+def inferred(d) -> i64:
+    return d.month
+
+
+print(annotated(date(2020, 5, 6)))
+print(inferred(date(2020, 5, 6)))
+print(annotated(date(2019, 7, 1)))
