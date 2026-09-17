@@ -1012,6 +1012,10 @@ int64_t py_logger_info(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_INFO, 
 int64_t py_logger_warning(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_WARNING, "WARNING", lg, m); }
 int64_t py_logger_error(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_ERROR, "ERROR", lg, m); }
 int64_t py_logging_FileHandler(int64_t p) { return p; }
+// PY-A: `logging.getLogger().addHandler(h)` / `h.setFormatter(f)` — local no-op
+// shims (the handle IS the logger/file path; nothing to attach locally).
+int64_t py_logging_addHandler(int64_t lg, int64_t h) { (void)h; return lg; }
+int64_t py_logging_setFormatter(int64_t h, int64_t f) { (void)f; return h; }
 int64_t py_logging_Formatter(int64_t f) { return f; }
 
 // ============================================================================

@@ -1,0 +1,23 @@
+// PY-A: 语料里整段 logging 初始化模式现在可以编译链接了：
+//   FileHandler(path, mode=…) / setFormatter(Formatter(…)) / getLogger().addHandler(…)
+//   三个缺口分别是：① FileHandler 的 mode 是「提示」，多余实参曾让调用变成幽灵符号
+//   `py_logging_FileHandler_2`；② 注册表**没有** addHandler 成员；③ FileHandler 没有句柄
+//   标签，导致 `_fh.setFormatter(...)` 成了自由调用。
+//   修法：形状分派（丢掉 mode，只打一次提示）+ 注册表补 `W PyLogger addHandler` 与
+//   `W PyFileHandler setFormatter` + 两个 no-op C 桩 + FileHandler 加 handle=PyFileHandler。
+//   logging 走 stderr，故本用例只断言 stdout。
+// expect: 1
+import logging
+
+_lg = logging.getLogger()
+_fh = logging.FileHandler("data/x.log", mode="w")
+_fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+_lg.addHandler(_fh)
+_lg.info("hello %s", 1)
+
+
+def f() -> i64:
+    return 1
+
+
+print(f())

@@ -3591,6 +3591,36 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         }
                     }
                 }
+                // PY-A: `logging.FileHandler(path, mode="w")` — `mode` is a
+                // hint the local no-op shim has no use for, but it must not turn
+                // the call into a phantom arity-suffixed symbol
+                // (`py_logging_FileHandler_2`). Keep the first positional arg.
+                if method == "FileHandler" && args.len() > 1 {
+                    if let Some((m, mem)) = self.py_member_target(receiver, method) {
+                        if m == "logging" && mem == "FileHandler" {
+                            static WARNED_FH: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+                            WARNED_FH.get_or_init(|| {
+                                eprintln!(
+                                    "warning: PY-A: logging.FileHandler mode/… is ignored \
+                                     (local no-op shim)"
+                                );
+                            });
+                            let path = self.lower_expr(&args[0]);
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_logging_FileHandler".to_string(),
+                                args: vec![path],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(
+                                id,
+                                Type::Named("PyFileHandler".to_string(), vec![]),
+                            );
+                            return id;
+                        }
+                    }
+                }
                 // PY-A: `logging.getLogger()` — Python's name argument is
                 // OPTIONAL, but the registry declares one required arg, so a
                 // 0-arg call was arity-mangled into the phantom symbol

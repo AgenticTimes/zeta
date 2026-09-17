@@ -169,13 +169,15 @@ F logging info py_logging_info args=i64 ret=i64
 F logging warning py_logging_warning args=i64 ret=i64
 F logging error py_logging_error args=i64 ret=i64
 F logging critical py_logging_critical args=i64 ret=i64
-F logging FileHandler py_logging_FileHandler args=i64 ret=i64
+F logging FileHandler py_logging_FileHandler args=i64 ret=i64 handle=PyFileHandler
 F logging Formatter py_logging_Formatter args=i64 ret=i64
 W PyLogger debug py_logger_debug args=2
 W PyLogger info py_logger_info args=2
 W PyLogger warning py_logger_warning args=2
 W PyLogger error py_logger_error args=2
 W PyLogger setLevel py_logging_setLevel args=2
+W PyLogger addHandler py_logging_addHandler args=2 ret=i64
+W PyFileHandler setFormatter py_logging_setFormatter args=2 ret_handle=PyFileHandler
 
 # ---- __future__ : accepted, binds nothing ------------------------------
 M __future__
