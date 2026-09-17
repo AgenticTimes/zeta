@@ -914,6 +914,41 @@ fn parse_dict_lit(input: &str) -> IResult<&str, AstNode> {
         let (input, _) = ws(tag("}")).parse(input)?;
         return Ok((input, AstNode::DictLit { entries: vec![] }));
     }
+    // PY-A: `{a, b, c}` is a SET literal, not a dict. Zeta has no set type, and
+    // the existing set comprehension already lowers to a list, so a set literal
+    // does the same (duplicates are NOT collapsed — same accepted limitation as
+    // setcomp). Without this branch the whole enclosing definition was dropped:
+    // `g.stocks={'510500.XSHG', …}` in `initialize`.
+    //
+    // Dispatch by looking for a top-level `:` after the first element — a dict
+    // entry is `KEY: VALUE`, a set element is a bare expression. `{**a}` fails
+    // the probe and falls through to the dict path, which handles it.
+    // `{**a, **b}` must NOT be mistaken for a set — a spread element starts
+    // with `*`, and `parse_expr` happily parses `**a` as a double deref, so the
+    // missing `:` would route it into the set branch (this broke t121).
+    if !input.trim_start().starts_with('*') {
+    if let Ok((after_first, first)) = ws(parse_expr).parse(input) {
+        if ws(tag(":")).parse(after_first).is_err() {
+            let mut rest = after_first;
+            let mut items = vec![first];
+            while let Ok((after_comma, _)) = ws(tag(",")).parse(rest) {
+                match ws(parse_expr).parse(after_comma) {
+                    Ok((r, e)) => {
+                        items.push(e);
+                        rest = r;
+                    }
+                    // Trailing comma — `{1, 2,}`.
+                    Err(_) => {
+                        rest = after_comma;
+                        break;
+                    }
+                }
+            }
+            let (rest, _) = ws(tag("}")).parse(rest)?;
+            return Ok((rest, AstNode::ArrayLit(items)));
+        }
+    }
+    }
     let (input, entries) =
         separated_list0(ws(tag(",")), parse_dict_entry).parse(input)?;
     // PEP 8 / black style: a trailing comma before the closing brace is normal

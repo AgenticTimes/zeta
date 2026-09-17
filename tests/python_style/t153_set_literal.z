@@ -1,0 +1,27 @@
+// PY-A: 集合字面量 `{a, b, c}` —— 此前完全不支持（`{1, 2}` / `{1, 2,}` / 多行 set 全失败），
+//   于是带 set 的整个定义被丢（`指数ETF动量轮动.initialize` 的
+//   `g.stocks={'510500.XSHG', …}`，146 行）。
+//   修法：`parse_dict_lit` 里按「第一个元素后面有没有顶层 `:`」分派——
+//   有 `:` 走 dict，没有则走 set。Zeta 没有 set 类型，而**既有 setcomp 已经降级成 list**，
+//   所以 set 字面量也降级成 list（重复元素不折叠，与 setcomp 同一条已知限界）；
+//   `{**a}` 以 `*` 开头，探针排除后仍走 dict 的 spread 分支。
+// expect: 31
+// expect: 3
+// expect: 0
+// expect: 1
+def has_local() -> i64:
+    stocks = {
+        'a',
+        'b',
+        'c'}
+    n = 0
+    if 'b' in stocks:
+        n = n + 1
+    if 'z' in stocks:
+        n = n + 1
+    return len(stocks) * 10 + n
+
+print(has_local())
+print(len({1, 2, 3}))
+print(len({}))
+print(len({'a': 1}))
