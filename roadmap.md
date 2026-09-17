@@ -2289,3 +2289,36 @@ arity 后缀化、跨模块默认值、构造器默认值）。python_style **17
 > 本会话至此修掉的**静默错值**清单（都属于红线问题）：
 > `for` 里 `continue` 死循环、数组参数 `in`、列表 `==`、浮点比较类型、句柄类型形参落表、
 > `getattr` 无类型校验版、`dict(x)` 别名、跨模块默认参数、构造器默认参数。
+
+
+## 批次五十四（2026-09-17）：一个静默错值 + 两个接线问题 + 度量口径修正
+
+### 1. 静默错值：`py_map_contains` 用「值 != 0」判断存在性
+
+`return map_get(m, k) != 0;` ⇒ 值为 0/None/空的键被判**不存在**：
+`"k" in {"k": 0}` = False，`d.setdefault("k", v)` 会**覆盖**合法的 0。
+改为按开放寻址表探测（读 `used` 标志）。改动在 `runtime/tokio_runtime_stub.c`，
+**并重建 `tokio_runtime.o`**（该 .o 被 git 跟踪，必须一起提交）。
+
+### 2. `dict.get` / `dict.setdefault` 进注册表
+
+```
+W map get map_get_default args=3 ret=i64
+W map setdefault py_map_setdefault args=3 ret=i64
+```
+
+此前未接线 ⇒ 调用点退化成自由调用（未定义符号）。本地 shim 里 `.get(` 20 次、策略 9 次。
+
+### 3. 运行时对象查找与 CWD 解耦（`src/main.rs`）——**修正了度量口径**
+
+`.o` 此前按裸相对路径查找 ⇒ 只有在仓库根运行才链接得上；别处编译会**静默丢掉整个运行时**，
+报出一大堆核心符号未定义，把真实缺口淹没。新增 `find_runtime_obj()`：
+CWD → `$ZETA_RUNTIME_DIR` → 可执行文件目录及 4 层祖先。
+
+**口径修正后**（`jq_shim.py`，`REPLAYQUANT_LOCAL=1`）：真实缺口是 **16 个数据面符号** ——
+`DataFrame / Timedelta / Timestamp / _Info / concat / datetime64 / dict / execute_trade /
+full / get / getattr / searchsorted / setdefault / tolist / unique / where`
+（此前报 70 个，大半是运行时缺失的噪音）。
+
+**验证**：t178（`get` 命中/未命中/default、`setdefault` 插入、`{k:0}` 不得被覆盖）。
+python_style **178/178**；官方 **194/194**；语料 1/38、未定义 140。
