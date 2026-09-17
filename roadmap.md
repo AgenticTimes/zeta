@@ -1741,3 +1741,20 @@ identity 兜底、UTF-8 边界探针修复。
 ### 本轮顺带确认的边界
 - `getattr(a, <计算出的名字>)` 仍走编译期指名诊断（无法静态解析）✓
 - `object()` 的修复（批次二十五）不受影响 ✓
+
+
+## 批次二十七（2026-09-17，分析结论）：给「实参是库句柄」的形参补类型 —— 机制找到了，但一轮没打通
+
+已定位既有机制：**调用点驱动的形参类型推断已经存在**（`resolver.rs:1329` 起，带 `ZETA_PROBE` 探针），
+但它只把形参升级成 **Str / F64** 两种（`classify` 返回 1/2，AST 回写也只认这两种）。
+
+本轮尝试扩到「句柄」：在调用点循环里加一段 —— 若实参是 `AstNode::Call{receiver: Some(Var(root)), method}`
+且 `find_member(module, method).handle` 有值，就把该形参改成 `Type::Named(tag)`，并在 AST 回写里加
+`Type::Named(n,_) => n.clone()`。
+
+**实测未生效**：`def f(d): return d.year` + `f(date(2020,5,6))` 仍输出 **18388**（应为 2020）。
+⇒ 说明这条路上还有第二处（形参类型可能不满足 `param_types[i] == Type::I64` 的前置条件，
+或 MIR 侧读的不是被回写的那个 AST 字段）。**已回滚**（未验证的改动不留）。
+
+**下一步（已收窄）**：用 `ZETA_PROBE=1` 跑上面这个两行用例，看 `PROBE param infer` 是否打印、
+打印的 param_types 是什么；再顺着「MIR 从哪里读形参类型」查第二处。
