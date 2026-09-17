@@ -1930,3 +1930,20 @@ Python 里 `getLogger(name)` 的 name 是可选，注册表却是必填 arity �
 
 度量：未定义符号去重 **81 → 80**；python_style **164 → 165**；官方 **194/194**；解析 37/38 不回退。
 logger 家族只剩 `py_logging_FileHandler_2`（`addHandler` 面，注册表缺成员，单列待做）。
+
+
+## 批次三十六（2026-09-17，**已修**）：语料整段 logging 初始化模式
+
+wufu 系策略里这段初始化此前根本编不过，三个缺口各不一样：
+
+    _fh = logging.FileHandler("...", mode="w")   # ① mode 是提示，多余实参 -> 幽灵符号 _2
+    _fh.setFormatter(logging.Formatter("..."))   # ② FileHandler 无句柄标签 -> setFormatter 自由调用
+    logging.getLogger().addHandler(_fh)          # ③ 注册表没有 addHandler 成员
+
+修法（三处配套，都是本会话反复用的两招：形状分派 + 运行时 no-op 桩）：
+1. **形状分派**：`FileHandler` 多余实参丢弃（只留 path），并**只打一次**提示（不静默）。
+2. **注册表**：`F logging FileHandler … handle=PyFileHandler` + `W PyFileHandler setFormatter …`。
+3. **注册表 + C 桩**：`W PyLogger addHandler …`，并补 `py_logging_addHandler` /
+   `py_logging_setFormatter`（no-op 返回接收者，与既有 logging 桩同风格），重建 tracked 的 `.o`。
+
+度量：未定义符号去重 **80 → 77**，**logger 家族符号全部归零**；python_style **165 → 166**；官方 **194/194**。
