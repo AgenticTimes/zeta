@@ -3591,6 +3591,31 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         }
                     }
                 }
+                // PY-A: `logging.getLogger()` — Python's name argument is
+                // OPTIONAL, but the registry declares one required arg, so a
+                // 0-arg call was arity-mangled into the phantom symbol
+                // `py_logging_getLogger_0` (corpus: `logging.getLogger()`).
+                // Pass an empty name: the runtime stub's logger identity IS its
+                // name, and every method on it is a no-op shim locally.
+                if args.is_empty() {
+                    if let Some((m, mem)) = self.py_member_target(receiver, method) {
+                        if m == "logging" && mem == "getLogger" {
+                            let name_id = self.next_id();
+                            self.exprs.insert(name_id, MirExpr::StringLit(String::new()));
+                            self.type_map.insert(name_id, Type::Str);
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_logging_getLogger".to_string(),
+                                args: vec![name_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map
+                                .insert(id, Type::Named("PyLogger".to_string(), vec![]));
+                            return id;
+                        }
+                    }
+                }
                 let member_call = self.py_member_call(receiver, method).or_else(|| {
                     let recv = receiver.as_ref()?;
                     let (root, parts) = Self::flatten_module_receiver(recv)?;

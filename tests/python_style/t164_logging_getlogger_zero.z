@@ -1,0 +1,16 @@
+// PY-A: `logging.getLogger()` —— Python 里 name 参数是**可选**的，而注册表声明了一个必填
+//   arity，于是 0 参调用被 arity 消歧成幽灵符号 `py_logging_getLogger_0`（语料 1 处）。
+//   修法：0 参时补一个空名字（运行期桩里 logger 的身份就是它的名字，本地全部是 no-op）。
+//   注意：`log.info(fmt, *args)`（变参）与 `logger.addHandler(...)` 都**不在**本用例内 ——
+//   前者需要 C 侧 variadic helper，后者是另一个缺失成员，两者都在 roadmap 里单列。
+// expect: 1
+import logging
+
+_lg = logging.getLogger()
+
+
+def f() -> i64:
+    return 1
+
+
+print(f())
