@@ -1632,3 +1632,33 @@ identity 兜底、UTF-8 边界探针修复。
 2. **运行时对象的构建与跟踪**：`tokio_runtime.o` 被 git 跟踪而 `zeta_runtime_c.o` 未跟踪
    ⇒ fresh clone 只有一半运行时（`main.rs` 的 `if exists()` 链会静默跳过）。
    建议加 `build.rs`/Makefile 目标后 `git rm --cached tokio_runtime.o`，并让 CI 先构建。
+
+
+## 批次二十二（2026-09-17，分析结论）：`_N` 族的**第二个**成因——注册表模型表达不了 Python 的可选/可变参数
+
+批次二十查明的成因是「接收者类型未知 → 通用方法名表 arity 不匹配」。本轮把剩下的 `_N` 符号
+逐个对到语料调用点，发现它们其实是**另一类**问题：
+
+| 幽灵符号 | 语料调用形态 | 冲突点 |
+|---|---|---|
+| `py_logger_info_5` / `py_logger_info_4` | `log.info('sell', s, cdata[s].name)`、`log.info(fmt, x, y)` | Python 的 `Logger.info(fmt, *args)` 是**变参**；注册表只声明 `W PyLogger info … args=2`（C 侧也只有 2 参） |
+| `py_json_dumps_i64_3` | `json.dumps(v, ensure_ascii=False, indent=2)` | 注册表 `F json dumps … args=i64` 只有**位置参数**，没有可选关键字 |
+| `py_logging_getLogger_0` | `logging.getLogger()` | 注册表声明 `args=i64`（必填），Python 里是**可选** |
+| `py_logging_FileHandler_2` / `host_str_count_1` | 同类可选/变参形态 | 同上 |
+
+**结论：注册表的「一个成员 = 一个固定 arity」模型表达不了 Python 的
+「可选参数 / 变参 / 仅关键字参数」**。所以 arity 消歧（`codegen.rs` 那 5 处）对这些名字
+必然产生幽灵符号。
+
+**三条可选修法（按成本排序）**，都需要单独批次：
+1. **注册表支持多 arity 别名**（数据模型扩展）：同一成员登记多个 `args=` 变体，
+   各自映射到不同的 C helper（如 `py_logger_info2` / `py_logger_info_n`）。
+2. **调用点改写**（沿用本轮 `date.replace` 的成功经验）：按**可观测形状**改写 ——
+   `log.info(a, b, c)` → `py_logger_info_str3(a, b, c)`（跳过 Python 的 %-格式化语义时），
+   `json.dumps(v, **kwargs)` → 读取已支持的关键字（`indent`/`ensure_ascii`）后调用固定 arity 入口。
+3. **fail-loud**（最小动作）：arity 不匹配且名字是运行时前缀（`py_`/`host_`）时，
+   在编译期报一条「该运行时入口只接受 N 个参数」的错误，而不是发一个不存在的 `_N` 符号去链接期爆。
+   ⚠️ 不能改成「豁免前缀直接调用」——那会把 5 个参数压进 2 参的 C 函数（ABI 不匹配 ⇒ 静默错值）。
+
+> 注意与批次二十的结论并不矛盾：`date.replace` 那 5 处属于「类型未知」（本轮已用形状分派修掉），
+> 这一批属于「注册表表达不了 Python 签名」。两类都在 `_N` 名下，但修法不同。
