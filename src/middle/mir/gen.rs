@@ -3993,6 +3993,25 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
+                // PY-A: `getattr(obj, "field")` with a LITERAL name is Python's
+                // static attribute access — safe to rewrite to a field access
+                // ONLY when the receiver's handle tag is statically known and the
+                // member is registered (that check is what makes it safe: an
+                // unknown receiver would silently read garbage, see batch 26).
+                // Otherwise fall through to the compile-time diagnostic below.
+                if method == "getattr" && receiver.is_none() && args.len() == 2 {
+                    if let AstNode::StringLit(name) = &args[1] {
+                        if let Some(tag) = self.py_handle_of(&args[0]) {
+                            if crate::middle::pylib::method_symbol(&tag, name).is_some() {
+                                let rewritten = AstNode::FieldAccess {
+                                    base: Box::new(args[0].clone()),
+                                    field: name.clone(),
+                                };
+                                return self.lower_expr(&rewritten);
+                            }
+                        }
+                    }
+                }
                 // Unimplemented builtins that would otherwise emit a FREE CALL
                 // named after themselves (an undefined symbol at link time, with
                 // zero information about the cause). Ring the bell at COMPILE

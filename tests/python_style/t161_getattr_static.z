@@ -1,0 +1,22 @@
+// PY-A: `getattr(obj, "字段")` 字面量名 == 静态属性访问
+//   改写为 FieldAccess，但**只在接收者句柄标签静态已知、且该成员在注册表里**时才做
+//   （这就是「安全」的来源：未知接收者会静默读成垃圾 —— 批次二十六正是这么翻车的）。
+//   不满足条件时仍走编译期指名诊断（下面注释里的例子不再放进本文件，因为它会
+//   让整个程序链接失败，属「预期失败」用例）。
+// expect: 2020
+// expect: 5
+// expect: 2019
+from datetime import date
+
+
+def annotated(d: PyDate) -> i64:
+    return getattr(d, "year")
+
+
+def from_ctor() -> i64:
+    return getattr(date(2020, 5, 6), "month")
+
+
+print(annotated(date(2020, 5, 6)))
+print(from_ctor())
+print(annotated(date(2019, 7, 1)))
