@@ -4088,6 +4088,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // PY-4: Python-style free-function `len(x)` — dispatch by
                 // argument type: literal-size arrays resolve at compile time,
                 // strings → str_len, others → array_len runtime stub.
+                // PY-A: the builtin `format(value, spec)` — `format(cost, '.2f')`.
+                // It emitted a FREE CALL named `format` (undefined symbol, 7
+                // corpus sites). Lower it as `str(value)`: the value is kept and
+                // only the presentation is lost (V1 has no spec engine), and say
+                // so once — never silent.
+                if method == "format" && receiver.is_none() && args.len() == 2 {
+                    static WARNED_FMTB: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+                    WARNED_FMTB.get_or_init(|| {
+                        eprintln!(
+                            "warning: PY-A: builtin format(value, spec) ignores the spec \
+                             (the value is kept)"
+                        );
+                    });
+                    return self.lower_expr(&AstNode::Call {
+                        receiver: None,
+                        method: "str".to_string(),
+                        args: vec![args[0].clone()],
+                        type_args: vec![],
+                        structural: false,
+                    });
+                }
                 // PY-A: `object()` — Python's bare object is exactly the opaque
                 // platform handle the runtime already provides. Without this the
                 // call degraded to a free call named `object` and failed at LINK

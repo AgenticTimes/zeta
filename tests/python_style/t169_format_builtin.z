@@ -1,0 +1,16 @@
+// PY-A: 内置 `format(value, spec)` —— `format(cost, '.2f')`
+//   它此前发的是**自由调用** `format`（未定义符号；语料 7 处，分布在 7 个文件）。
+//   注意这与 `str.format` **方法**是两码事：本批修的是「内置函数」那一支。
+//   修法：降级为 `str(value)`（值保留，只损失排版；V1 没有 spec 引擎），并只打一次提示。
+// expect: 3.5
+// expect: 7
+def f(a: f64) -> str:
+    return format(a, ".2f")
+
+
+def g(b: i64) -> str:
+    return format(b, "03d")
+
+
+print(f(3.5))
+print(g(7))
