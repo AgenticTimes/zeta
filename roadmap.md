@@ -2,7 +2,7 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（157 case 全绿，逐用例 20s 超时）**
+> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（158 case 全绿，逐用例 20s 超时）**
 > 当前通过率（2026-09-17 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **156/156**；REasyQuant 语料**完全解析 37/38**、未解析行合计 **77**（`ZETA_STRICT_PARSE` 口径，退出码见 §二）
 > Python 库注册表：**16 个模块**（见「库导入机制」小节）；第三方库 `zorb install` 可用，已验真实库 `python-stringcase` 全函数正确
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
@@ -1609,3 +1609,26 @@ identity 兜底、UTF-8 边界探针修复。
 
 ⚠️ 副产物结论：`*_N` 族与「未标注形参按 i64」「`xs[0]` 返 0」「`in` 早期恒 0」**同根** ——
 都是「类型未知时的兜底分派」。清它等于做参数类型推断。
+
+
+## 批次二十一（2026-09-17，**已修** `ec95eab9`）：`date.replace` 的 kwargs 形状分派
+
+上一轮否掉两条便宜修法后，选了**唯一不会引入静默错值**的那条：`x.replace(year=, month=, day=)`
+的 kwargs **集合**唯一标识 `date.replace`（str.replace 只吃位置参数），据此在调用发射点分派。
+
+- 运行时补 `py_dt_replace(h, y, m, d)`：未给字段以 `<=0` 表示 ⇒ **部分替换语义正确**
+  （`d.replace(year=2021).month` 仍为 5）；同步重建 tracked 的 `tokio_runtime.o`。
+- 注册表 `W PyDate replace py_dt_replace args=4 ret_handle=PyDate`；gen.rs 按 kwargs 形状分派。
+- 实测：`date(2020,5,6).replace(year=2021,month=1,day=1).year` → 2021；
+  `.replace(year=2021)` → year+month = 2021+5 = 2026。
+- 度量：未定义符号去重 **86 → 85**，`host_str_replace_4` **归零**；python_style 157 → **158**；
+  官方 194/194；解析 37/38 不回退。
+- 教训沉淀：这类「类型未知时的兜底分派」问题，**用调用点可观测的形状（kwargs 集合）消歧**
+  是成本最低且不牺牲语义的做法；不要用「豁免前缀」那种会引入假语义的捷径。
+
+### 剩余结构性两项（都不是补丁，需要单独批次）
+1. **参数类型推断**（未标注形参）：它是 `*_N`、`xs[0]` 返 0、`in` 恒 0 等一系列问题的**共同根因**。
+   两条路径已记录（调用点驱动推断 / 更多「形状分派」规则）。
+2. **运行时对象的构建与跟踪**：`tokio_runtime.o` 被 git 跟踪而 `zeta_runtime_c.o` 未跟踪
+   ⇒ fresh clone 只有一半运行时（`main.rs` 的 `if exists()` 链会静默跳过）。
+   建议加 `build.rs`/Makefile 目标后 `git rm --cached tokio_runtime.o`，并让 CI 先构建。
