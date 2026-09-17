@@ -2067,3 +2067,25 @@ python_style **172 → 173**；官方 **194/194**；语料未定义符号 **75 �
 `zetac <corpus>/l2_data_layer_probe.py -o /tmp/q`。
 
 > 这条比「补平台符号」更值得先做：它挡着 6 个文件（而现在总共只有 1 个文件链接通过）。
+
+
+## 批次四十五（2026-09-17，**已修**）：try/except 脱糖把 `zeta_try_end()` 追加到终结指令之后
+
+**这是挡住 6 个语料文件的真正原因**，也解释了批次四十四的怪现象（「缺 0 个符号」却不过）。
+
+`try/except` 在**前端**脱糖成 `if zeta_try_setjmp()==0 { body; zeta_try_end() } else { …; zeta_try_end() }`，
+而 `zeta_try_end()` 是普通调用**不是终结指令**。分支末条是 `return`/`break`/`continue` 时，
+调用被追加到终结指令之后 ⇒ LLVM 校验失败 ⇒ **整个编译中止**：
+
+    Terminator found in the middle of a basic block!   label %else16
+
+**修法**：`branch_falls_through()`（末条 Return/Break/Continue → false；`if/else` 两臂都不落穿 → false），
+只在能落穿时补 `zeta_try_end()`。
+
+**双向验证**：pre-fix `Terminator found in the middle…` ✗ / post-fix `Compiled to` + 输出 `1 5` ✓（t174）。
+
+**度量**：Terminator 类错误 **6 文件 → 0**；未定义符号去重 74 → **86**（不是回归：这 6 个文件此前
+被编译崩溃挡住，符号从未暴露）；python_style **174/174**；官方 **194/194**；语料解析 37/38。
+
+> 教训：语料文件「0 个未定义符号却链接失败」= 编译在更早阶段崩了，去看**完整 stderr**，
+> 不要只看 ld 的 undefined 块。
