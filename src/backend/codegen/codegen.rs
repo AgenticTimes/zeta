@@ -992,6 +992,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some(Linkage::External),
         );
         module.add_function(
+            "py_list_eq",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
             "py_getitem2",
             i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
             Some(Linkage::External),

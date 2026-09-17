@@ -1,0 +1,40 @@
+// PY-A: 两处**静默错值**（能编译、能跑、结果错）
+//   ① 数组参数上的 `in` 恒为 0：`__contains__` 只看 `type_map` 的类型，而**数组参数**的类型
+//      记在 `source_types`（未标注形参在 type_map 里默认 I64）⇒ `if v in xs` 里的 xs 即使
+//      标了 `[i64]` 也走「不支持」分支返回 0。策略里 `if code in list(...)` 遍地都是。
+//   ② 列表 `==` 恒为 0：`a == b` 编译成两个**句柄**的整数比较 ⇒ 内容相同的列表永远不等。
+//      修法：新增运行时 `py_list_eq(a, b, elem_is_str)`（按内容逐元素比较，字符串用 strcmp），
+//      gen.rs 对数组操作数分派到它（`!=` 取反）。
+// expect: 1
+// expect: 0
+// expect: 1
+// expect: 1
+// expect: 1
+// expect: 0
+// expect: 1
+// expect: 1
+// expect: 0
+// expect: 1
+def has(xs: [i64], v: i64) -> i64:
+    if v in xs:
+        return 1
+    return 0
+
+def has_str(xs: [str], v: str) -> i64:
+    if v in xs:
+        return 1
+    return 0
+
+a = [1, 2]
+b = [1, 2]
+c = [1, 3]
+print(a == b)
+print(a == c)
+print(a != c)
+print([1, 2] == [1, 2])
+print(has([1, 2, 3], 2))
+print(has([1, 2, 3], 9))
+print(has_str(['x', 'y'], 'y'))
+print(['x'] == ['x'])
+print(['x'] == ['y'])
+print("ab" == "ab")

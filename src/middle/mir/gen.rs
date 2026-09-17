@@ -2398,6 +2398,42 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         },
                     );
                     self.type_map.insert(dest, Type::Range);
+                } else if (op == "==" || op == "!=")
+                    && (self.is_array_like(&left_id) || self.is_array_like(&right_id))
+                {
+                    // PY-A: list equality. `a == b` on two lists used to compile
+                    // to a plain integer compare of the two HANDLES, so two
+                    // equal-content lists always compared 0 — a silent wrong
+                    // answer in every `if a == b` guard.
+                    let elem_is_str = self
+                        .array_elem_is_str(&left_id)
+                        || self.array_elem_is_str(&right_id);
+                    let flag = self.next_id();
+                    self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
+                    self.type_map.insert(flag, Type::I64);
+                    let eq_id = self.next_id();
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_list_eq".to_string(),
+                        args: vec![left_id, right_id, flag],
+                        dest: eq_id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(eq_id, MirExpr::Var(eq_id));
+                    self.type_map.insert(eq_id, Type::Bool);
+                    if op == "!=" {
+                        let one = self.next_id_with_lit(1);
+                        self.exprs.insert(
+                            dest,
+                            MirExpr::BinaryOp {
+                                op: "^".to_string(),
+                                left: eq_id,
+                                right: one,
+                            },
+                        );
+                    } else {
+                        self.exprs.insert(dest, MirExpr::Var(eq_id));
+                    }
+                    self.type_map.insert(dest, Type::Bool);
                 } else if op == "+"
                     && (matches!(self.type_map.get(&left_id), Some(Type::Str))
                         || matches!(self.type_map.get(&right_id), Some(Type::Str)))
@@ -5372,16 +5408,30 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // PY-A: `x in list` — linear scan. Previously an array
                     // receiver fell through and the expression silently
                     // produced 0 (false) whatever the elements were.
-                    if matches!(
+                    // An ARRAY PARAMETER is typed via `source_types`, not
+                    // `type_map` (unannotated params default to i64 there), so
+                    // without this fallback `v in xs` inside a function returned
+                    // 0 for every element — silently wrong for the filtering
+                    // code that strategies are full of.
+                    let src_ty = self.source_types.get(&arg_ids[0]).cloned().unwrap_or_default();
+                    let is_array_param =
+                        src_ty.starts_with('[') || src_ty.starts_with("*mut [");
+                    if (matches!(
                         receiver_ty.as_ref(),
                         Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
-                    ) && arg_ids.len() == 2
+                    ) || is_array_param) && arg_ids.len() == 2
                     {
                         let elem_is_str = match receiver_ty.as_ref() {
                             Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
                                 matches!(**e, Type::Str)
                             }
-                            _ => false,
+                            // e.g. `[str]` / `*mut [str]`
+                            _ => {
+                                let inner = src_ty
+                                    .trim_start_matches("*mut ")
+                                    .trim_start_matches('[');
+                                inner.starts_with("str") || inner.starts_with("String")
+                            }
                         };
                         let flag = self.next_id();
                         self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
@@ -8057,6 +8107,31 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+
+    /// Is this value an array (or an array-typed parameter)? Parameters are
+    /// typed through `source_types` because unannotated ones default to i64.
+    fn is_array_like(&self, id: &u32) -> bool {
+        matches!(
+            self.type_map.get(id),
+            Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+        ) || self
+            .source_types
+            .get(id)
+            .map_or(false, |s| s.starts_with('[') || s.starts_with("*mut ["))
+    }
+
+    /// Element-is-string flag for the list helpers (`py_list_contains` /
+    /// `py_list_eq`), taken from either `type_map` or the source-type string.
+    fn array_elem_is_str(&self, id: &u32) -> bool {
+        match self.type_map.get(id) {
+            Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => matches!(**e, Type::Str),
+            _ => {
+                let src = self.source_types.get(id).cloned().unwrap_or_default();
+                let inner = src.trim_start_matches("*mut ").trim_start_matches('[');
+                inner.starts_with("str") || inner.starts_with("String")
+            }
+        }
     }
 
     /// PY-A: lower a `for … else` / `while … else` body into its own statement

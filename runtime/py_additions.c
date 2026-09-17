@@ -543,6 +543,31 @@ int64_t py_max_key(int64_t vec, int64_t keyfn) {
 // `x in list` — linear scan; string elements compare by CONTENT (the
 // compiler passes that in, since element types are static). Previously this
 // silently produced 0.
+// PY-A: list equality by CONTENT. Ruby/Python semantics: same length and every
+// element equal (strings compared with strcmp when elem_is_str). Without this,
+// `a == b` on two lists compiled to an integer compare of the two handle
+// pointers, so equal-content lists always compared false.
+int64_t py_list_eq(int64_t a, int64_t b, int64_t elem_is_str) {
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+    int64_t n = zt_vec_len(a);
+    if (n != zt_vec_len(b)) return 0;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t x = ((int64_t*)a)[i];
+        int64_t y = ((int64_t*)b)[i];
+        if (elem_is_str) {
+            if (!x || !y) {
+                if (x != y) return 0;
+            } else if (strcmp((const char*)x, (const char*)y) != 0) {
+                return 0;
+            }
+        } else if (x != y) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
     int64_t n = zt_vec_len(vec);
     for (int64_t i = 0; i < n; i++) {
