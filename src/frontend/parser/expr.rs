@@ -350,16 +350,24 @@ fn parse_string_lit(input: &str) -> IResult<&str, AstNode> {
     )))
 }
 
-/// Parse a raw string literal: r"..." (no escape processing)
+/// Parse a raw string literal: `r"..."` / `r'...'` (no escape processing).
+///
+/// The single-quoted form was missing, and the failure was *silent* in
+/// assignment position: `x = r'2|3|4|5'` parsed as `x = r` plus a stray string
+/// statement, while the same literal as a call argument
+/// (`df['t'].str.contains(r'2|3|4|5')`) broke the call outright — five corpus
+/// strategies' `filter_audit`.
 fn parse_raw_string_lit(input: &str) -> IResult<&str, AstNode> {
-    let (input, _) = tag("r\"")(input)?;
+    let (input, quote) = alt((tag("r\""), tag("r'"))).parse(input)?;
+    // In a raw string a backslash does NOT escape the quote, so the literal
+    // ends at the first occurrence of the opening quote character.
+    let q = quote.as_bytes()[1] as char;
     let mut content = String::new();
-    let chars = input.chars();
     let mut pos = 0;
 
-    for c in chars {
+    for c in input.chars() {
         pos += c.len_utf8();
-        if c == '"' {
+        if c == q {
             let remaining = &input[pos..];
             return Ok((remaining, AstNode::StringLit(content)));
         } else {

@@ -1,0 +1,15 @@
+// PY-A: 单引号原始字符串 `r'…'` —— 之前只认双引号 `r"…"`，而且失败是**静默**的：
+//   赋值位置 `x = r'2|3|4|5'` 会被解析成 `x = r` + 一条游离的字符串语句；
+//   作为调用实参（`df['t'].str.contains(r'2|3|4|5')`）则直接弄坏实参表，整个顶层项被丢弃。
+//   原始字符串里反斜杠不转义，所以遇到同种引号即结束。
+// expect: 7
+// expect: 2
+// expect: x"y
+// expect: x'y
+def ident(v) -> i64:
+    return len(v)
+
+print(len(r'2|3|4|5'))
+print(ident(r'ab'))
+print(r'x"y')
+print(r"x'y")
