@@ -1686,13 +1686,13 @@ identity 兜底、UTF-8 边界探针修复。
   registry 里已没有「指向不存在符号」的占位符。
   （检查脚本思路已写在此批次；以后新增 registry 条目可复跑。）
 
-### ② 内建降级成幽灵符号： /  / 
+### ② 内建降级成幽灵符号：range / getattr / object
 实测（形如 `b = <builtin>(...)`）：
 
 | 写法 | 结果 |
 |---|---|
 | `b = range(5)` / `range(1, 10, 2)` | ✗ 未定义 `_range`（PY-4 的 range 改写只覆盖 `for … in range()` 头部） |
-| `b = getattr(a, x)` | ✗ 未定义 `_getattr` |
+| `b = getattr(a, "x")` | ✗ 未定义 `_getattr` |
 | `b = object()` | ✗ 未定义 `_object` |
 | `b = dict()` | ✓ 正常 |
 
