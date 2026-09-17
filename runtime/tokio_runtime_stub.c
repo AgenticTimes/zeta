@@ -1058,6 +1058,22 @@ int64_t py_dt_day(int64_t h) {
 }
 // `d.replace(year=Y, month=M, day=D)` — NEW date with those fields replaced;
 // an unsupplied field arrives as <= 0 and keeps the receiver's value.
+// `dataclasses.asdict(x)` where x is NOT a statically-known dataclass: the
+// compiler rewrites the dataclass case (struct fields are known at compile
+// time, see gen.rs), so reaching here means the value could not be expanded.
+// The registry points `dataclasses.asdict` at this symbol on purpose: it used
+// to be a name that existed NOWHERE, so the whole program failed to LINK with
+// a meaningless `_py_asdict_unexpanded`. Now the build succeeds and the failure
+// happens only if this path is actually executed — with a readable message,
+// never a silent zero.
+int64_t py_asdict_unexpanded(int64_t v) {
+    (void)v;
+    fputs("zeta: dataclasses.asdict() on a value that is not a statically known "
+          "dataclass is not supported (unexpanded asdict)\n", stderr);
+    fflush(stderr);
+    abort();
+}
+
 int64_t py_dt_replace(int64_t h, int64_t y, int64_t m, int64_t d) {
     int64_t cy, cm, cd;
     zt_civil_from_days(((int64_t*)h)[0], &cy, &cm, &cd);
