@@ -6421,6 +6421,18 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 if let Some(parts) = format_template_parts(tmpl, args) {
                                     return self.lower_expr(&AstNode::FString(parts));
                                 }
+                                // Named fields (`"{a}".format(a=…)`) and index
+                                // mismatches cannot be rewritten — say so here
+                                // instead of leaving a bare `format` symbol for
+                                // the linker to report.
+                                static WARNED_FMT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+                                WARNED_FMT.get_or_init(|| {
+                                    eprintln!(
+                                        "error: str.format on a literal template could not be \
+                                         rewritten (named fields / index out of range) — \
+                                         the call will link against an undefined `format` symbol"
+                                    );
+                                });
                             }
                         }
                     }
@@ -8697,15 +8709,31 @@ fn format_template_parts(tmpl: &str, args: &[AstNode]) -> Option<Vec<AstNode>> {
             let rest = &tmpl[i + 1..];
             let close = rest.find('}')?;
             let inner = &rest[..close];
-            if inner.contains(':') || inner.contains('!') {
-                return None;
+            // FORMAT SPECS (`{:.2f}`, `{:<0}`) and conversions (`{!r}`) cannot be
+            // expressed through the f-string path. Dropping the spec keeps the
+            // VALUE (only the presentation differs) instead of bailing out of the
+            // rewrite entirely — bailing made the whole call a free `format` call
+            // and the program failed to LINK (9 corpus call sites). Announced once
+            // so it is never silent.
+            let (field, _had_spec) = match inner.find([':', '!']) {
+                Some(pos) => (&inner[..pos], true),
+                None => (inner, false),
+            };
+            if _had_spec {
+                static WARNED_SPEC: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+                WARNED_SPEC.get_or_init(|| {
+                    eprintln!(
+                        "warning: PY-A: str.format format-specs ({{:.2f}} / {{:<0}} / {{!r}}) \
+                         are ignored — the value is kept, the presentation is not"
+                    );
+                });
             }
-            let idx = if inner.is_empty() {
+            let idx = if field.is_empty() {
                 let k = auto;
                 auto += 1;
                 k
             } else {
-                inner.parse::<usize>().ok()?
+                field.parse::<usize>().ok()?
             };
             let arg = args.get(idx)?;
             if !lit.is_empty() {
