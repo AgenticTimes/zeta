@@ -2089,3 +2089,28 @@ python_style **172 → 173**；官方 **194/194**；语料未定义符号 **75 �
 
 > 教训：语料文件「0 个未定义符号却链接失败」= 编译在更早阶段崩了，去看**完整 stderr**，
 > 不要只看 ld 的 undefined 块。
+
+
+## 批次四十六（2026-09-17）：**范围决定 —— 平台 API 不做，只做本地/可安装 API**
+
+用户明确指示：**聚宽平台 API（宿主侧）不在范围内**，只处理**本地 API**与**可安装 API**。
+
+因此把本批已经写好并验证过的平台日志桩**回滚**（`set_level`/`info`/`debug`/`warning`/`error`
+五个 no-op + 一次「无宿主」警告，实测曾把链接通过从 1/38 提到 3/38）。回滚理由：它们是**平台侧**语义，
+按指示不做；保留会让「我们实现了平台语义」这一印象失真。
+
+> 需要时可一个 commit 恢复：`runtime/py_additions.c` 末尾追加那 5 个 `int64_t f(int64_t, ...)`
+> no-op（每个符号只喊一次 `has no host linked`），再按 validate.md §4 重建 `zeta_runtime_c.o`。
+
+**范围划分（后续按此执行）**：
+
+| 类别 | 例子 | 做不做 |
+|---|---|---|
+| 本地 API | stdlib shim、注册表条目、运行时 helper（`py_*`/`zeta_*`） | ✅ 做 |
+| 可安装 API | `zorb install` 装进来的纯 Python 包；`-r requirements.txt` 批量安装 | ✅ 做 |
+| 平台 API | `set_level`/`history`/`get_security_info`/`get_index_stocks`/`order_*`（聚宽宿主） | ❌ **不做**（宿主职责） |
+| 数据面 | pandas/numpy 的 `DataFrame`/`tolist`/`values`/`dropna`/`diff`… | ⚠️ 仅当能**本地实现**时做，不造宿主假数据 |
+
+**仍然有效的结论**（本批测得的证据，供将来接宿主时用）：4 个语料文件只差平台符号
+（`大市值价值优化`/`稳健型ETF` 仅差 `set_level`；`趋势筛选ETF轮动`/`首板低开优化版` 差
+`set_level`+`history`+`get_security_info`+`DataFrame`+`diff`+`dropna`）。
