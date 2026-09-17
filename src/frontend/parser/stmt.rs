@@ -2,7 +2,9 @@
 //! Module for parsing statements in the Zeta language.
 
 use super::expr::{parse_condition, parse_full_expr, parse_match_expr};
-use super::parser::{parse_ident, parse_type, skip_ws_and_comments, ws};
+use super::parser::{
+    parse_ident, parse_type, skip_ws_and_comments, skip_ws_and_comments0, ws,
+};
 use super::pattern::parse_pattern;
 use super::top_level::{parse_const, parse_func, parse_type_alias};
 use crate::frontend::ast::AstNode;
@@ -578,8 +580,26 @@ fn parse_assign(input: &str) -> IResult<&str, AstNode> {
 
 /// PY-A: match-arm form — single value only. Inside a match arm the comma
 /// separates arms, so a bare `return 0,` must NOT consume the next arm.
+/// Match a bare keyword that may not be the prefix of an identifier.
+///
+/// `ws(tag("return"))` matched the `return` inside `return_value`, so
+/// `return_value = 1` parsed as `return _value = 1` and the whole definition
+/// was dropped (`breakpoint` / `continue_flag` had the same fate). The
+/// boundary has to be checked on a **leading-whitespace-only** skip — `ws()`
+/// eats the trailing whitespace too, which is what made the old `import` / `as`
+/// guards blind (same bug class).
+fn kw_boundary<'a>(input: &'a str, word: &str) -> Option<&'a str> {
+    let (rest, _) = skip_ws_and_comments0(input).ok()?;
+    let rest = rest.strip_prefix(word)?;
+    match rest.chars().next() {
+        Some(c) if c.is_alphanumeric() || c == '_' => None,
+        _ => Some(rest),
+    }
+}
+
 pub fn parse_return_single(input: &str) -> IResult<&str, AstNode> {
-    let (input, _) = ws(tag("return")).parse(input)?;
+    let input = kw_boundary(input, "return")
+        .ok_or_else(|| nom::Err::Error(NomError::new(input, nom::error::ErrorKind::Tag)))?;
     let (input, inner) = opt(ws(parse_full_expr)).parse(input)?;
     let (input, _) = opt(ws(tag(";"))).parse(input)?;
     Ok((
@@ -589,7 +609,8 @@ pub fn parse_return_single(input: &str) -> IResult<&str, AstNode> {
 }
 
 pub fn parse_return(input: &str) -> IResult<&str, AstNode> {
-    let (input, _) = ws(tag("return")).parse(input)?;
+    let input = kw_boundary(input, "return")
+        .ok_or_else(|| nom::Err::Error(NomError::new(input, nom::error::ErrorKind::Tag)))?;
     let (mut cur, first) = match opt(ws(parse_full_expr)).parse(input)? {
         (rest, Some(e)) => (rest, Some(e)),
         (rest, None) => (rest, None),
@@ -639,14 +660,16 @@ pub fn parse_return(input: &str) -> IResult<&str, AstNode> {
 }
 
 fn parse_break(input: &str) -> IResult<&str, AstNode> {
-    let (input, _) = ws(tag("break")).parse(input)?;
+    let input = kw_boundary(input, "break")
+        .ok_or_else(|| nom::Err::Error(NomError::new(input, nom::error::ErrorKind::Tag)))?;
     let (input, expr_opt) = opt(ws(parse_full_expr)).parse(input)?;
     let (input, _) = opt(ws(tag(";"))).parse(input)?;
     Ok((input, AstNode::Break(expr_opt.map(Box::new))))
 }
 
 fn parse_continue(input: &str) -> IResult<&str, AstNode> {
-    let (input, _) = ws(tag("continue")).parse(input)?;
+    let input = kw_boundary(input, "continue")
+        .ok_or_else(|| nom::Err::Error(NomError::new(input, nom::error::ErrorKind::Tag)))?;
     let (input, expr_opt) = opt(ws(parse_full_expr)).parse(input)?;
     let (input, _) = opt(ws(tag(";"))).parse(input)?;
     Ok((input, AstNode::Continue(expr_opt.map(Box::new))))

@@ -1,0 +1,20 @@
+// PY-A: 语句关键字作标识符前缀（`return_value` / `breakpoint` / `continue_flag`）
+//   `parse_return`/`parse_break`/`parse_continue` 用的是 `ws(tag("return"))`，
+//   没有词边界，于是 `return_value = 1` 被读成 `return _value = 1` —— 语句解析失败，
+//   整个顶层项连同其后内容被丢弃（`jq_wufu_local._run_local` 里的 `return_value`）。
+//   注意边界必须在「只跳前导空白」的 skip 上判定：`ws()` 会把尾随空白也吃掉，
+//   这正是 `import`/`as` 那两个守卫曾经失效的原因（同一类 bug）。
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: 6
+def prefixed_names() -> i64:
+    return_value = 1
+    breakpoint = 2
+    continue_flag = 3
+    print(return_value)
+    print(breakpoint)
+    print(continue_flag)
+    return return_value + breakpoint + continue_flag
+
+print(prefixed_names())
