@@ -258,6 +258,7 @@ F datetime datetime.now py_dt_now args= ret=i64 handle=PyDate
 F datetime date.today py_dt_now args= ret=i64 handle=PyDate
 W PyDate strftime py_dt_strftime args=2 ret=str
 W PyDate date py_dt_identity args=1 ret_handle=PyDate
+W PyDate replace py_dt_replace args=4 ret_handle=PyDate
 W PyDate year py_dt_year args=1
 W PyDate month py_dt_month args=1
 W PyDate day py_dt_day args=1

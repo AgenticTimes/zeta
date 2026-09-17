@@ -1056,6 +1056,16 @@ int64_t py_dt_day(int64_t h) {
     zt_civil_from_days(((int64_t*)h)[0], &y, &m, &d);
     return d;
 }
+// `d.replace(year=Y, month=M, day=D)` — NEW date with those fields replaced;
+// an unsupplied field arrives as <= 0 and keeps the receiver's value.
+int64_t py_dt_replace(int64_t h, int64_t y, int64_t m, int64_t d) {
+    int64_t cy, cm, cd;
+    zt_civil_from_days(((int64_t*)h)[0], &cy, &cm, &cd);
+    if (y <= 0) y = cy;
+    if (m <= 0) m = cm;
+    if (d <= 0) d = cd;
+    return (int64_t)zt_dt_alloc(zt_days_from_civil(y, m, d), ((int64_t*)h)[1]);
+}
 int64_t py_dt_identity(int64_t h) { return h; }
 int64_t py_dt_strftime(int64_t h, int64_t fmt) {
     int64_t y, m, d;

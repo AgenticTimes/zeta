@@ -3489,6 +3489,74 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // days=375)` then degraded to a free call to the bare member name
                 // (undefined `timedelta`, 16 call sites). Resolve by the ROOT TEXT
                 // when it names a registered module.
+                // PY-A: `x.replace(year=…, month=…, day=…)` — the kwargs SET
+                // identifies `date.replace` uniquely (str.replace takes
+                // positional args only). Without this the call fell through to
+                // the generic name table (`replace` → host_str_replace, arity 3),
+                // the arity mismatch mangled the symbol to
+                // `host_str_replace_4`, and the link failed.
+                if method == "replace" && !args.is_empty() {
+                    let kw = |a: &AstNode| -> Option<String> {
+                        if let AstNode::Call { receiver: None, method, args, .. } = a {
+                            if method == "__kwarg__" && args.len() == 2 {
+                                if let AstNode::StringLit(n) = &args[0] {
+                                    return Some(n.clone());
+                                }
+                            }
+                        }
+                        None
+                    };
+                    let mut slots: Vec<(String, u32)> = Vec::new();
+                    let mut kw_count = 0usize;
+                    let mut all_kwargs = true;
+                    let mut missing_name: Option<String> = None;
+                    for a in args {
+                        match kw(a).as_deref() {
+                            Some(n @ ("year" | "month" | "day")) => {
+                                kw_count += 1;
+                                let v = if let AstNode::Call { args, .. } = a {
+                                    self.lower_expr(&args[1])
+                                } else {
+                                    self.next_id_with_lit(0)
+                                };
+                                slots.push((n.to_string(), v));
+                            }
+                            _ => {
+                                all_kwargs = false;
+                                missing_name = Some(String::new());
+                            }
+                        }
+                    }
+                    let _ = missing_name;
+                    if all_kwargs && kw_count > 0 {
+                        if let Some(recv) = receiver.as_ref() {
+                            let recv_id = self.lower_expr(recv);
+                            let mut ids = [0u32; 3];
+                            for (n, v) in slots {
+                                match n.as_str() {
+                                    "year" => ids[0] = v,
+                                    "month" => ids[1] = v,
+                                    _ => ids[2] = v,
+                                }
+                            }
+                            for slot in ids.iter_mut() {
+                                if *slot == 0 {
+                                    *slot = self.next_id_with_lit(0);
+                                }
+                            }
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_dt_replace".to_string(),
+                                args: vec![recv_id, ids[0], ids[1], ids[2]],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map
+                                .insert(id, Type::Named("PyDate".to_string(), vec![]));
+                            return id;
+                        }
+                    }
+                }
                 let member_call = self.py_member_call(receiver, method).or_else(|| {
                     let recv = receiver.as_ref()?;
                     let (root, parts) = Self::flatten_module_receiver(recv)?;

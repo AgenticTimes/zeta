@@ -1,0 +1,23 @@
+// PY-A: `d.replace(year=…, month=…, day=…)` —— 关键字**集合**唯一标识 date.replace
+//   （str.replace 只吃位置参数）。此前接收者类型未知时落到通用方法名表
+//   （replace → host_str_replace, arity 3），arity 不匹配被消歧加后缀成
+//   `host_str_replace_4` ⇒ 未定义符号（语料 5 处）。修法两件：
+//   ① 运行时补 `py_dt_replace(h, y, m, d)`（未给的字段以 <=0 表示，沿用接收者的值）；
+//   ② 调用发射点按 kwargs 形状分派到它。
+// expect: 2021
+// expect: 2026
+from datetime import date
+
+
+def f(d) -> i64:
+    y = d.replace(year=2021, month=1, day=1)
+    return y.year
+
+
+def g(d) -> i64:
+    y = d.replace(year=2021)
+    return y.year + y.month
+
+
+print(f(date(2020, 5, 6)))
+print(g(date(2020, 5, 6)))
