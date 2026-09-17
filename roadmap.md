@@ -2159,3 +2159,31 @@ python_style **175/175**；官方 **194/194**；语料链接 1/38、未定义符
 | **平台注入的全局** | `jq_wufu.py` 里的 `g`（本单元无定义） | 需要模块全局**跨文件**类型可见性 |
 
 ⇒ 下一步是**模块全局跨文件可见性**（让策略里的 `g` 解析到 shim 的 `_G` 结构体）+ 调用点形参类型推断。
+
+
+## 批次四十九（2026-09-17，**已修**）：`os.environ.get(...) == 'lit'` 编译期折叠
+
+**这是「本地实现」的总开关**。`jq_wufu.py` 里本来就有本地分支：
+
+    if os.environ.get('REPLAYQUANT_LOCAL') == '1':
+        from strategies.code.jq_shim import (OrderCost, PriceRelatedSlippage, g, log, …)
+    else:
+        from jqdata import *          # 聚宽平台
+
+不折叠 ⇒ **两个分支都下沉** ⇒ 平台符号全被拖进来。折叠后（Python 缺键返回 None，
+所以「未设置」是已知答案）：
+
+- `REPLAYQUANT_LOCAL=1 zetac strategies/code/jq_wufu.py`：平台符号
+  `set_level`/`history`/`DataFrame`/`diff`/`dropna` **全部消失**，未定义 30+ → **18**
+- 剩下 18 个 = numpy/pandas 面（`any`/`arange`/`asarray`/`concat`/`isna`/`linspace`/`sum`/`tolist`/`vstack`/`date`）
+  + **未解析的点分本地导入**（`get_extras`/`get_security_info` 其实就在 shim 里）
+  + `log.*` 方法（`info`/`error`/`warning`）
+
+双向验证：pre-fix 编译不产出二进制 ✗ / post-fix `Compiled to` + `unset -> else`、`default -> then` ✓（t176）。
+python_style **176/176**；官方 **194/194**；语料未定义符号 86 → **85**。
+
+### 下一步（本地实现的真正入口）
+
+**点分本地模块导入解析**：`from strategies.code.jq_shim import (…)` 目前不解析，
+所以 shim 里的函数（`get_price`/`get_security_info`/`get_extras`/`attribute_history`…）
+仍以未定义符号出现。解析它（相对源文件目录 / 搜索根）就能把整个本地 shim 链进来。
