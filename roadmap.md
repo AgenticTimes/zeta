@@ -2037,3 +2037,13 @@ python_style **167 → 168**；官方 **194/194**。
 
 > 顺带记录：`zeta_runtime_c.o` 是 gitignored 的本机构建产物 —— 新增 C 符号后必须按
 > validate.md §4 重建，否则 fresh clone/CI 上会变成 undefined symbol。
+
+
+## 批次四十三（2026-09-17，**已修**）：`range(a, b, step)` 作为值
+
+三种形态至此全部覆盖：`range(n)`（批次四十）、`range(a, b)`（批次四十二）、
+`range(a, b, step)`（本批，新增 `zeta_arange_step`）。**只实现正步长**：字面量非正步长
+在编译期报指名错误（负步长需要降序 Vec），不静默给升序结果。
+
+实测：`range(1,10,2)` → 长度 5；`range(0,9,3)` → 长度 3。
+python_style **172 → 173**；官方 **194/194**；语料未定义符号 **75 → 74**，**`range` 归零**。
