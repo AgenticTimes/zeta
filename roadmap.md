@@ -2023,3 +2023,17 @@ python_style **167 → 168**；官方 **194/194**。
 1/2/3 参都覆盖（缺省补 0 / 步长 1）。
 
 度量：未定义符号去重 **76 → 75**，**`slice` 归零**；python_style **170 → 171**；官方 **194/194**。
+
+
+## 批次四十二（2026-09-17，**已修**）：`range(a, b)` 作为值
+
+上一批只覆盖了 `range(n)`；`range(a, b)`（语料 3 处）仍在发自由调用 `range`。`zeta_arange`
+只覆盖 `[0, n)`，故新增 `zeta_arange_from(a, b)`：C 侧 + codegen 两参 extern 声明 + 形状分派；
+3 参（带 step）仍走编译期指名诊断。
+
+实测（stash + 回滚 `.o` 重建 vs 当前）：修复前 `_range` / Linking failed → 修复后
+`range(2,7)` 长度 5、`range(3,5)` 长度 2。python_style **171 → 172**；官方 **194/194**；
+语料 `range` 幽灵符号 **3 → 1**（余下是 3 参形式，按设计保持响亮失败）。
+
+> 顺带记录：`zeta_runtime_c.o` 是 gitignored 的本机构建产物 —— 新增 C 符号后必须按
+> validate.md §4 重建，否则 fresh clone/CI 上会变成 undefined symbol。
