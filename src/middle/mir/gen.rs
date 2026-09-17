@@ -3663,6 +3663,42 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     );
                     return id;
                 }
+                // PY-A: variadic `log.info(fmt, *args)` — the registry declares a
+                // fixed arity, so extra args were arity-mangled into phantom
+                // symbols (`py_logger_info_4/_5`). Route to the variadic helper
+                // (V1: no %-substitution, but the values are PRINTED, never
+                // dropped). Only when the receiver is a known PyLogger and no
+                // arg is a kwarg wrapper.
+                if method == "info" && args.len() >= 2 && args.len() <= 5 {
+                    let no_kwargs = !args.iter().any(|a| {
+                        matches!(a, AstNode::Call { method: km, .. } if km == "__kwarg__")
+                    });
+                    if no_kwargs {
+                        if let Some(recv) = receiver.as_ref() {
+                            if self.py_handle_of(recv).as_deref() == Some("PyLogger") {
+                                let lg = self.lower_expr(recv);
+                                let fmt = self.lower_expr(&args[0]);
+                                let n_lit = self.next_id_with_lit((args.len() - 1) as i64);
+                                let mut vals: Vec<u32> = Vec::new();
+                                for a in &args[1..] {
+                                    vals.push(self.lower_expr(a));
+                                }
+                                while vals.len() < 4 {
+                                    vals.push(self.next_id_with_lit(0));
+                                }
+                                self.stmts.push(MirStmt::Call {
+                                    func: "py_logger_info_n".to_string(),
+                                    args: vec![lg, fmt, n_lit, vals[0], vals[1], vals[2], vals[3]],
+                                    dest: id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(id, MirExpr::Var(id));
+                                self.type_map.insert(id, Type::I64);
+                                return id;
+                            }
+                        }
+                    }
+                }
                 if let Some(recv) = receiver {
                     if let Some(tag) = self.py_handle_of(recv) {
                         if let Some((symbol, ret_handle)) =

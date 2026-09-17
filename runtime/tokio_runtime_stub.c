@@ -985,6 +985,29 @@ int64_t py_logging_warning(int64_t m) { return py_log_emit(PY_LOG_WARNING, "WARN
 int64_t py_logging_error(int64_t m) { return py_log_emit(PY_LOG_ERROR, "ERROR", 0, m); }
 int64_t py_logging_critical(int64_t m) { return py_log_emit(PY_LOG_CRITICAL, "CRITICAL", 0, m); }
 int64_t py_logger_debug(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_DEBUG, "DEBUG", lg, m); }
+// PY-A: `log.info(fmt, *args)` — Python's Logger methods are VARIADIC while the
+// registry declares a fixed arity, so extra args were arity-mangled into phantom
+// symbols (`py_logger_info_4/_5`, 5 corpus call sites). This takes up to four
+// extra values and prints them after the format string. V1 does NO
+// %-substitution: the values are shown as-is, never silently dropped.
+int64_t py_logger_info_n(int64_t lg, int64_t fmt, int64_t n, int64_t a1, int64_t a2,
+                         int64_t a3, int64_t a4) {
+    int64_t vals[4] = {a1, a2, a3, a4};
+    char buf[1024];
+    size_t off = 0;
+    const char* f = (const char*)fmt;
+    if (f) {
+        while (f[off] && off < sizeof(buf) - 64) {
+            buf[off] = f[off];
+            off++;
+        }
+    }
+    for (int64_t i = 0; i < n && i < 4; i++) {
+        off += (size_t)snprintf(buf + off, sizeof(buf) - off, " %lld", (long long)vals[i]);
+    }
+    buf[off < sizeof(buf) ? off : sizeof(buf) - 1] = 0;
+    return py_log_emit(PY_LOG_INFO, "INFO", lg, (int64_t)buf);
+}
 int64_t py_logger_info(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_INFO, "INFO", lg, m); }
 int64_t py_logger_warning(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_WARNING, "WARNING", lg, m); }
 int64_t py_logger_error(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_ERROR, "ERROR", lg, m); }

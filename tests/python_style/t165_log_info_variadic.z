@@ -1,0 +1,19 @@
+// PY-A: `log.info(fmt, *args)` —— Python 的 Logger 方法是**变参**，而注册表声明的是固定
+//   arity，于是多出来的实参被消歧成幽灵符号 `py_logger_info_4/_5`（语料 5 处）。
+//   修法：形状分派到运行时的变参 helper `py_logger_info_n(lg, fmt, n, a1..a4)`
+//   （7 个固定参数，仿 zeta_collect_literals 的声明方式）。
+//   V1 **不做 %-替换**，但把实参**打印出来**（可见、不丢弃）；日志走 stderr，
+//   所以本用例只断言 stdout 与其后的代码未受影响。
+// expect: 1
+import logging
+
+log = logging.getLogger()
+log.info("sell %s %s", 1, 2)
+log.info("plain")
+
+
+def f() -> i64:
+    return 1
+
+
+print(f())
