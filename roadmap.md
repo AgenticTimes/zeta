@@ -2322,3 +2322,34 @@ full / get / getattr / searchsorted / setdefault / tolist / unique / where`
 
 **验证**：t178（`get` 命中/未命中/default、`setdefault` 插入、`{k:0}` 不得被覆盖）。
 python_style **178/178**；官方 **194/194**；语料 1/38、未定义 140。
+
+
+## 批次五十五（2026-09-17）：pandas/numpy **日期面**别名到已有的 PyDate/PyDelta
+
+本地 shim 的日期调用（`np.datetime64(pd.Timestamp(end_date))` 4 处、`pd.Timedelta(days=1)`、
+`np.searchsorted(dates, v, side=…)` 2 处）此前都是未定义符号。它们**不需要新的数据表示**：
+`datetime` 模块早就产出 PyDate/PyDelta，运行时日期运算/比较全按句柄标签分派 ⇒ 只做别名：
+
+```
+M pandas / M numpy
+F pandas Timestamp   py_dt_from_str       args=i64 ret=i64 handle=PyDate
+F pandas Timedelta   py_dt_timedelta      args=i64 ret=i64 handle=PyDelta
+F numpy  datetime64  py_dt_identity       args=i64 ret=i64 handle=PyDate
+F numpy  searchsorted py_dt_searchsorted  args=i64,i64,i64 ret=i64
+```
+
+新增 C：`py_dt_from_str`（`%Y-%m-%d`）、`py_dt_searchsorted`（PyDate Vec 二分；`side=` 以字符串句柄到达，
+按内容判定，默认 left = numpy 语义）。
+
+**踩坑（已修）**：把 `pd.Timedelta(days=n)` 写成 `py_dt_timedelta(n*86400)`，但该函数单位是**天**不是秒
+⇒「2024-01-31 + 2 天」跑到 **2497 年**（静默错值）。直接别名后 `2024-01-31 + 2d` = `2024-02-02` ✓。
+
+**度量**：`jq_shim.py` 未定义 **16 → 12**；语料未定义 **140 → 135**；python_style **179/179**；
+官方 **194/194**；语料链接 1/38。
+
+### 本地 shim 剩余未定义（12）
+
+`DataFrame / _Info / concat / dict / execute_trade / full / get / getattr / setdefault / tolist / unique / where`
+
+其中 `get`/`setdefault` 仍出现 ⇒ 说明这些调用点的接收者**不是 map 句柄**（可能是类实例/未知类型），
+需要单独定位；`execute_trade` 同理（看起来是**方法解析**问题，不是库问题）。
