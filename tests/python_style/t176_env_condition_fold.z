@@ -1,0 +1,16 @@
+// PY-A: `if os.environ.get('NAME'[, default]) == 'lit':` 在编译期折叠 ——
+//   这是「本地实现」能不带平台编译的前提：策略里
+//   `if os.environ.get('REPLAYQUANT_LOCAL') == '1': from <本地 shim> import …`
+//   `else: from jqdata import *` 若不折叠，两个分支都会下沉，平台符号被一起拖进来。
+//   Python 里缺键返回 None，所以「变量未设置」是**已知答案**（== 为假），不是未知。
+// expect: unset -> else
+// expect: default -> then
+import os
+
+if os.environ.get('ZT_NEVER_SET_VAR') == '1':
+    print("wrong")
+else:
+    print("unset -> else")
+
+if os.environ.get('ZT_NEVER_SET_VAR', '1') == '1':
+    print("default -> then")

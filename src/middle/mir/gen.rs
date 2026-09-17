@@ -393,6 +393,73 @@ impl MirGen {
         })
     }
 
+    /// PY-A: `os.environ.get('NAME'[, default])` / `os.getenv('NAME')` with a
+    /// LITERAL name — readable at compile time. Python returns None for a
+    /// missing key, so a missing variable is a *known* answer, not an unknown
+    /// one: `os.environ.get('X') == '1'` is False, `!= '1'` is True.
+    fn eval_env_read(call: &AstNode) -> Option<String> {
+        let AstNode::Call {
+            receiver,
+            method,
+            args,
+            ..
+        } = call
+        else {
+            return None;
+        };
+        let is_environ_get = method == "get"
+            && matches!(
+                receiver.as_deref(),
+                Some(AstNode::FieldAccess { base, field })
+                    if field == "environ"
+                        && matches!(&**base, AstNode::Var(v) if v == "os")
+            );
+        let is_getenv = method == "getenv"
+            && matches!(receiver.as_deref(), Some(AstNode::Var(v)) if v == "os");
+        if !(is_environ_get || is_getenv) {
+            return None;
+        }
+        let name = match args.first() {
+            Some(AstNode::StringLit(s)) => s,
+            _ => return None,
+        };
+        if let Ok(v) = std::env::var(name) {
+            return Some(v);
+        }
+        match args.get(1) {
+            Some(AstNode::StringLit(d)) => Some(d.clone()),
+            Some(AstNode::Lit(n)) => Some(n.to_string()),
+            // Python: None — never equal to any literal we compare against.
+            _ => Some("\u{0}<unset>".to_string()),
+        }
+    }
+
+    /// PY-A: fold `if <env read> == 'lit':` / `!=` into a compile-time decision
+    /// so only the taken branch is lowered. This is what lets the LOCAL
+    /// implementation build without the platform: the strategy's
+    /// `if os.environ.get('REPLAYQUANT_LOCAL') == '1': from <shim> import …`
+    /// / `else: from jqdata import *` otherwise lowers BOTH branches, dragging
+    /// in the JoinQuant host symbols the local run never uses.
+    fn fold_env_condition(cond: &AstNode) -> Option<bool> {
+        let (op, left, right) = match cond {
+            AstNode::BinaryOp { op, left, right } if op == "==" || op == "!=" => (op, left, right),
+            _ => return None,
+        };
+        let (call, lit) = match (&**left, &**right) {
+            (AstNode::Call { .. }, other) => (&**left, other),
+            (other, AstNode::Call { .. }) => (&**right, other),
+            _ => return None,
+        };
+        let value = Self::eval_env_read(call)?;
+        let lit_str = match lit {
+            AstNode::StringLit(s) => s.clone(),
+            AstNode::Lit(n) => n.to_string(),
+            _ => return None,
+        };
+        let eq = value == lit_str;
+        Some(if op == "==" { eq } else { !eq })
+    }
+
     fn py_handle_of(&self, recv: &AstNode) -> Option<String> {
         // A chained call whose callee is a registry member that declares a
         // handle (e.g. `hashlib.md5("x").hexdigest()`): the result's tag is
@@ -1189,6 +1256,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 }
             }
             AstNode::If { cond, then, else_ } => {
+                // PY-A: compile-time env switch (see fold_env_condition).
+                if let Some(taken) = Self::fold_env_condition(cond) {
+                    let branch: &[AstNode] = if taken { then } else { else_ };
+                    for s in branch {
+                        self.lower_expr(s);
+                    }
+                    return;
+                }
                 let cond_id = self.lower_expr(cond);
 
                 // Check if this is expression if (branches produce values) or statement if
