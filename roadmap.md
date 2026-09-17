@@ -2400,3 +2400,45 @@ t178 输出恢复 `1 99 5 5 0 0` ✓。**不留回归、不留未验证的改动
 
 **剩余**：`jq_shim.py`（LOCAL=1）未定义 12 个：
 `DataFrame / _Info / concat / dict / execute_trade / full / get / getattr / setdefault / tolist / unique / where`
+
+
+## 批次五十七（2026-09-17，**探针定位完成，改动仍回滚**）：`receiver_ty` 到不了 map
+
+接批次五十六，用 env 门控探针把 `get`/`setdefault` 的分派真相查清了。
+
+### 真相 1：正确的分派点在哪
+
+`d.get(k, default)` / `d.setdefault(k, v)` 的**正确实现早就在**（`gen.rs` ~6518-6600 那一组
+`map` 块），而且做对了关键一步：**键要经过 `lower_map_key()` 做内容哈希** ✓
+（`map_get_default(recv, lower_map_key(key), default)`）。IR 实测字面量情形就是：
+`call i64 @map_get_default(i64 %58, i64 %59, i64 99)` ✓。
+
+⇒ 批次五十六我把 `get`/`setdefault` 加到了**另一个**分支（~6104 的 `keys/values/items/most_common`
+分支）—— 那条分支**不做 `lower_map_key`**，所以键按指针哈希 ⇒ 查不到 ⇒ 返回默认值。
+**这就是当时 t178 从 `1 99 5 5 0 0` 变成 `99 99 5 99 7 7` 的原因**（t178 值 `99` 正是默认值）。
+
+### 真相 2：为什么注解/全局 dict 还是走不到那条块
+
+探针（`ZETA_PROBE_MAP`）实测：
+
+```
+PROBE_MAP method=get arg_ids=[1, 4, 5] receiver_ty=Some(I64) globals=[]
+```
+
+- `def g(d: dict)` 的形参：`receiver_ty = I64` ✗ —— `dict` 注解**没有**变成 `Named("map")`/`Named("dict")`
+- 模块级 `CACHE = {}`：`module_global_types` 是**空的**（`globals=[]`）✗
+
+所以「放宽 map 判定 + 模块全局类型回退」两个改动**实测无效**（探针为准），按纪律全部回滚 ✓。
+IR 里该调用仍是 `call i64 @get(...)`（自由调用 → 链接失败，**响亮** ✓ 不是静默错值）。
+
+### 下一步（两个具体子项，都有探针可复核）
+
+1. **让 `dict` 注解落表**：`def f(d: dict)` 的形参类型要变成 `Named("map")`（或让 map 判定接受 `dict`），
+   在**参数落表**处修（`gen.rs` 形参类型表 / resolver 的注解解析）。
+2. **让模块级 dict 全局落表**：`CACHE = {}` 要进 `module_global_types`（现在整张表是空的 ——
+   说明该表只在某些编译形态下被填充，需查 resolver 的填充条件）。
+
+复核方式：`ZETA_PROBE_MAP=1 zetac <file>` 看 `receiver_ty` 是否为 `Named("map")`，
+以及 `/tmp/mget3.py` 是否输出 `1` 与 `3`。
+
+**当前状态**：python_style **179/179**、t178 输出 `1 99 5 5 0 0` ✓、工作树干净（仅本 roadmap 提交）。
