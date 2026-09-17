@@ -2,7 +2,7 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（156 case 全绿，逐用例 20s 超时）**
+> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（157 case 全绿，逐用例 20s 超时）**
 > 当前通过率（2026-09-17 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **156/156**；REasyQuant 语料**完全解析 37/38**、未解析行合计 **77**（`ZETA_STRICT_PARSE` 口径，退出码见 §二）
 > Python 库注册表：**16 个模块**（见「库导入机制」小节）；第三方库 `zorb install` 可用，已验真实库 `python-stringcase` 全函数正确
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
@@ -102,9 +102,17 @@
       **但 `ld` 报错依旧**，且仍无警告
     ⇒ 矛盾点：**调用点走到了 3508、模块/成员也能解析，但最终发射的仍是裸名**。
     这只能是「3508 之后还有一条发射路径」或「返回的 symbol 被丢弃/覆盖」。
-    **下一步（非常具体）**：在 3508 命中的分支里打印 `symbol` 实际值，并检查 3508 之后
-    到该 `if` 块结束之间是否有二次发射（例如 handle 方法兜底/identity 兜底）。
-    ⚠️ 回退与探针都已回滚（无证据不留，本会话第三、四次）。
+    **批次十九（已修，commit `5e412456`）**：按上面这条线埋探针后拿到决定性一步 ——
+    `PROBE hit`（3508 命中分支内）**根本不打印** ⇒ `py_member_call` 返回 **None**，
+    随后掉进 handle/identity 兜底发出裸名（这才是根因，不是「二次发射」）。
+    修法：在**调用发射点**加注册表回退 —— 接收者是 `Var(name)` 且 name 恰为已注册模块时，
+    按 `name.member` 查；再补 `name.name.member`（注册表把 `datetime.now` / `date.today`
+    这类类静态成员记成 dotted 键）。
+    **实测**：`date/datetime/timedelta(3)/timedelta(days=3)/now()/strptime(...)` 修复前全部
+    Linking failed → 修复后**全部 Compiled**；t157 pre-fix FAIL / post-fix PASS；
+    未定义符号去重 87 → 86（`timedelta` 16→8）。
+    ⚠️ 期间三四次「无证据的实验」都已回滚（registry dotted 条目、`py_member_target` root 回退、
+    两轮探针）——**留在树上的只有最后这条被实测证明有效的改动**。
 - **试过但无效**：在 `pylib/registry.txt` 里补三条 dotted 成员
   （`F datetime datetime.timedelta py_dt_timedelta …` 等）——**实测仍链接失败**，
   说明这条路径压根没按「base 文本 + 成员名」查注册表（对照组 `datetime.strptime` 能通，
