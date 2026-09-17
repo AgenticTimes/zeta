@@ -3064,8 +3064,32 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 if receiver.is_none() {
                     if let Some((module, member)) = self.py_member_aliases.get(method).cloned() {
                         if self.py_user_modules.contains(&module) {
+                            // Python default arguments: the generic call path
+                            // fills them, and skipping that here silently read 0
+                            // (`add3(1, 2)` gave 3, not 13).
+                            let mut call_args = args.clone();
+                            // The resolver keys a LOADED MODULE's defaults by
+                            // the module-qualified name (`pyfixturearity__add3`);
+                            // the bare name only exists for functions defined in
+                            // the file being compiled.
+                            let qualified = format!("{}__{}", module.replace('.', "_"), member);
+                            let defaults = self
+                                .param_defaults
+                                .get(&qualified)
+                                .or_else(|| self.param_defaults.get(member.as_str()))
+                                .cloned();
+                            if let Some(defaults) = defaults {
+                                for (i, d) in defaults.iter().enumerate() {
+                                    if i >= call_args.len() {
+                                        match d {
+                                            Some(dv) => call_args.push(dv.clone()),
+                                            None => break,
+                                        }
+                                    }
+                                }
+                            }
                             let arg_ids: Vec<u32> =
-                                args.iter().map(|a| self.lower_expr(a)).collect();
+                                call_args.iter().map(|a| self.lower_expr(a)).collect();
                             let func = format!("{}__{}", module.replace('.', "_"), member);
                             self.stmts.push(MirStmt::Call {
                                 func: func.clone(),

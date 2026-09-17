@@ -1,0 +1,13 @@
+// PY-A: 从**本地模块**导入的函数，两件事必须同时对：
+//   1. 符号不能被 arity 后缀化 —— 模块限定名 `<module>__<name>` 的定义端没有 `_N`，
+//      加了就变成链接器永远满足不了的未定义符号（实测 4 个：__get_price_3 /
+//      __get_price_7 / __get_trade_days_2 / __OrderCost_6）。
+//   2. 省略的实参要填上 Python 默认值 —— resolver 把**已载入模块**的默认值按
+//      `<module>__<name>` 建表，裸名只在同文件函数里存在。
+//   不填就是静默错值（add3(1, 2) 会得 3 而不是 13）。
+// expect: 13
+// expect: 6
+from pyfixturearity import add3
+
+print(add3(1, 2))
+print(add3(1, 2, 3))
