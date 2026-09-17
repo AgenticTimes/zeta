@@ -1,13 +1,20 @@
-// PY-A: 从**本地模块**导入的函数，两件事必须同时对：
+// PY-A: 从**本地模块**导入的函数/类，三件事必须同时对：
 //   1. 符号不能被 arity 后缀化 —— 模块限定名 `<module>__<name>` 的定义端没有 `_N`，
 //      加了就变成链接器永远满足不了的未定义符号（实测 4 个：__get_price_3 /
 //      __get_price_7 / __get_trade_days_2 / __OrderCost_6）。
 //   2. 省略的实参要填上 Python 默认值 —— resolver 把**已载入模块**的默认值按
 //      `<module>__<name>` 建表，裸名只在同文件函数里存在。
-//   不填就是静默错值（add3(1, 2) 会得 3 而不是 13）。
+//   3. 构造器 `__init__` 的默认值要跟着**类名**走 —— `Pair(5)` 解析到的是构造函数
+//      `Pair`，不是 `__init__`；标记要从 `__init__` 体里搬到构造函数体（下标减 1，
+//      因为 `__init__` 的形参含 `self`）。
+//   任何一条不满足都是**静默错值**（add3(1, 2) 得 3 而不是 13；Pair(5).total() 得 5 而不是 7）。
 // expect: 13
 // expect: 6
-from pyfixturearity import add3
+// expect: 7
+from pyfixturearity import Pair, add3
 
 print(add3(1, 2))
 print(add3(1, 2, 3))
+
+p = Pair(5)
+print(p.total())

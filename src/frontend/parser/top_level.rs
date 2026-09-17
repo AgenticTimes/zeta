@@ -926,13 +926,48 @@ fn parse_class(input: &str) -> IResult<&str, AstNode> {
     }
 
     // Constructor fn `Name(params) -> Name { return Name { field: init, ... } }`
-    let ctor_body: Vec<AstNode> = vec![AstNode::Return(Box::new(AstNode::StructLit {
+    //
+    // PY-A: carry `__init__`'s default-argument markers onto the synthesized
+    // constructor. The Resolver keys defaults by FUNCTION name, and `Pair(5)`
+    // resolves to the constructor `Pair` — not to `__init__`. Without this,
+    // `def __init__(self, x, y=2)` + `Pair(5)` read 0 for `y`: a wrong value
+    // with no diagnostic. The marker's index counts `self`, which the
+    // constructor's parameter list does not, so it shifts down by one.
+    let mut ctor_body: Vec<AstNode> = Vec::new();
+    for st in &init_stmts {
+        if let AstNode::ExprStmt { expr } = st {
+            if let AstNode::Call {
+                receiver: None,
+                method,
+                args,
+                ..
+            } = &**expr
+            {
+                if method == "zeta_param_default" && args.len() == 2 {
+                    if let AstNode::Lit(i) = &args[0] {
+                        if *i >= 1 {
+                            ctor_body.push(AstNode::ExprStmt {
+                                expr: Box::new(AstNode::Call {
+                                    receiver: None,
+                                    method: method.clone(),
+                                    args: vec![AstNode::Lit(*i - 1), args[1].clone()],
+                                    type_args: vec![],
+                                    structural: false,
+                                }),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ctor_body.push(AstNode::Return(Box::new(AstNode::StructLit {
         variant: name.clone(),
         fields: field_inits
             .iter()
             .map(|(f, expr)| (f.clone(), expr.clone()))
             .collect(),
-    }))];
+    })));
     let ctor = AstNode::FuncDef {
         name: name.clone(),
         generics: Vec::new(),
