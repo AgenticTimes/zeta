@@ -2216,3 +2216,33 @@ python_style **176/176**；官方 **194/194**；语料未定义符号 86 → **8
 
 **下一步**：① 那 4 个 arity 后缀不匹配的符号（定义端要不要带 `_N`）；
 ② 本地 shim 自身依赖的 pandas 面（`DataFrame`/`Timedelta`/`Timestamp`/`_Info`/`concat`/`tolist`…）。
+
+
+## 批次五十一（2026-09-17，**已修**）：模块限定名豁免 arity 后缀化 —— 本地 shim 未定义符号归零
+
+`<module>__<name>` 的定义端不带 `_N`，调用端两处会按实参个数后缀化
+（`gen.rs` 两个调用点 + `codegen.rs` 的「已存在但形参个数不匹配 → 另声明 extern」分支）⇒ 链接器永远满足不了：
+
+    __get_price_3 / __get_price_7 / __get_trade_days_2 / __OrderCost_6 / ___Bar_1 / ___G_0
+
+默认参数让「调用点实参个数 ≠ 声明形参个数」成为常态，所以必然触发。
+
+**修法**：模块限定名（含 `__`）与 `zeta_*` 一样豁免后缀化，实参适配交给 `coerce_call_args`。
+
+**实测**：`REPLAYQUANT_LOCAL=1 zetac strategies/code/jq_wufu.py`
+**shim 前缀未定义符号 6 → 0**（本地 shim 完全接上）；python_style **176/176**；官方 **194/194**。
+
+### ⚠️ 顺带发现的**高优先级缺口**（下一批优先）：默认参数不生效
+
+```python
+def add3(a, b, c=10): return a + b + c
+print(add3(1, 2))     # 实测 3，应为 13   ← 静默错值
+class Pair:
+    def __init__(self, x, y=2): ...
+Pair(5).total()       # 实测 5，应为 7    ← 静默错值
+```
+
+跨模块与同文件都一样。这是**静默错值**（红线问题），不是「缺功能」。
+本轮试过在导入路由处补默认值填充，**实测无效** ⇒ `param_defaults` 表里根本没有该条目，
+说明收集环节（解析器的 body-prologue 标记 → resolver 收集）就没进表。
+按「无证据的改动不留」已回退，测试用例与 fixture 一并移出 —— **不能把错值写成「期望值」**。
