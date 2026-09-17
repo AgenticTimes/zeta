@@ -83,8 +83,18 @@
   注册表里 `strptime`/`date`/`datetime`/`timedelta` 都是**同样形状**的 `F datetime <member> <sym> …`，
   所以差别只能出在**解析/降级路径本身**（疑似与 arity 有关：0/1/3 参走不到注册表命中，
   2 参能到）。注意 `timedelta` 的注册表项是 `args=i64`（1 参）却仍失败 ⇒ 不是「参数个数对不上」那么简单。
-  **下一步**：在 `py_member_target` / `py_member_call` 上对 `datetime.timedelta` 加探针，
-  打出「是否命中 find_member、命中后走了哪个分支」，而不是继续猜。
+  **批次十七：探针跑过了，结论如下（关键一步已确定）**
+  - 加了 env 门控探针 `ZETA_PROBE_DT`（打印 root/parts/alias/find_module），并给
+    `py_member_target` 补了「root 是已注册模块就用它」的回退。探针实测：
+    `root="datetime" alias=None find_module=Some("datetime")` ⇒ **回退生效、模块已认出**；
+    且编译输出里**没有** `unknown member` 警告 ⇒ `find_member("datetime","timedelta")` **命中**。
+  - **但链接期仍然是裸名 `_timedelta` / `_datetime`**（`ld` 报错原文）⇒ 说明
+    **调用发射根本没走 `py_member_call`（line 3508 那条路）**。`py_member_call` 全文件只有
+    一个调用点（3508，位于主 Call arm 2943 之内），所以 `datetime.timedelta(...)` 必然被
+    **更早的分支**截走了（或走了另一个 Call arm）。
+  - **下一步（很窄了）**：在 `AstNode::Call` 主 arm（2943 起）里从入口到 3508 之间逐段二分
+    （或给每个 `return` 前加探针），找出 `datetime.timedelta(...)` 实际走的那一支，
+    再把那一支也接到 `py_member_call`。回退与探针都已回滚（无证据不留）。
 - **试过但无效**：在 `pylib/registry.txt` 里补三条 dotted 成员
   （`F datetime datetime.timedelta py_dt_timedelta …` 等）——**实测仍链接失败**，
   说明这条路径压根没按「base 文本 + 成员名」查注册表（对照组 `datetime.strptime` 能通，
