@@ -2138,3 +2138,24 @@ python_style **172 → 173**；官方 **194/194**；语料未定义符号 **75 �
   2. 「无默认值参数按 0 读」的警告（`_Bar` 3 个字段、`jq_shim___G` 42 个全局字段）—— 这是**静默错值**风险，需要默认值/字段初始化语义。
 
 > 结论：下一步做 **`getattr(obj, "literal"[, default])` 的本地实现** —— 它属于本地 API（Python 内置），且是本地实现的头号阻塞。
+
+
+## 批次四十八（2026-09-17，**已修一半**）：`getattr(obj, "字面量"[, default])` 支持结构体接收者
+
+静态改写此前只支持「2 参 + 注册表 handle」；本批补结构体接收者：字段存在→字段访问、
+字段不存在但有 default→用 default（**Python 语义**）、无 default→**保持响亮诊断**。
+新增 `py_struct_type_of()` / `py_struct_has_field()`（后者兼容 `jq_shim__G`→`G` 前缀剥离）。
+
+**双向验证**：pre-fix `getattr is not implemented in this form` ✗ / post-fix `Compiled to` + `5` `42` ✓（t175）。
+python_style **175/175**；官方 **194/194**；语料链接 1/38、未定义符号 86（未变）。
+
+**没解决的部分（下一批的真正入口）**：本地实现的 20 处 `getattr` 接收者**都无静态类型**：
+
+| 接收者形态 | 例子 | 为什么静态解不了 |
+|---|---|---|
+| import 进来的模块别名 | `getattr(_strategy, "SLIPPAGE_REALISTIC", 0.001)` | 模块不是值，没有 `Type::Named` |
+| 未解析形参 | `getattr(obj, "slip", 0.0)` / `getattr(cost, "cost", {})` | W0003 类型检查失败，形参类型未知（鸭子类型） |
+| 下标表达式 | `getattr(cd[c], "paused", False)` | 非 Var |
+| **平台注入的全局** | `jq_wufu.py` 里的 `g`（本单元无定义） | 需要模块全局**跨文件**类型可见性 |
+
+⇒ 下一步是**模块全局跨文件可见性**（让策略里的 `g` 解析到 shim 的 `_G` 结构体）+ 调用点形参类型推断。
