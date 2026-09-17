@@ -4220,6 +4220,34 @@ impl<'ctx> LLVMCodegen<'ctx> {
             }
             MirStmt::Return { val } => {
                 let ret_val = self.gen_expr_safe(val, exprs);
+                // Coerce to the function's declared return type. A function
+                // declared `-> f64` that does `return 0` (or returns a name typed
+                // i64) emitted `ret i64 0`, which fails LLVM verification
+                // ("Function return type does not match operand type of return
+                // inst") and aborted the WHOLE compile — 6 corpus files never even
+                // reached the linker because of this.
+                let want_float = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|b| b.get_parent())
+                    .map_or(false, |f| {
+                        matches!(
+                            f.get_type().get_return_type(),
+                            Some(inkwell::types::BasicTypeEnum::FloatType(_))
+                        )
+                    });
+                let ret_val = if want_float
+                    && !matches!(
+                        ret_val.get_type(),
+                        inkwell::types::BasicTypeEnum::FloatType(_)
+                    ) {
+                    self.builder
+                        .build_signed_int_to_float(ret_val.into_int_value(), self.f64_type, "ret_sitofp")
+                        .unwrap()
+                        .into()
+                } else {
+                    ret_val
+                };
                 self.builder.build_return(Some(&ret_val)).unwrap();
             }
             MirStmt::SemiringFold { op, values, result } => {
