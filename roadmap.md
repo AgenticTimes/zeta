@@ -1818,3 +1818,27 @@ PROBE rewrite callee=f registered=true changed_types=[(0, Named("PyDate", []))]
    确认是「没落表」还是「落成了别的类型」（如 `Type::from_string("PyDate")` 退化成 I64）；
 3. 顺带查 `Type::from_string` 对未知名字的兜底（`src/middle/types/mod.rs:399` 起的 `_ =>` 分支）
    —— 若未知名字不映射成 `Type::Named(name)`，句柄标签就永远进不了 `type_map`。
+
+
+## 批次三十（2026-09-17，**已修** `d40a19bd`）：句柄类型的形参保住 handle 标签
+
+**病灶（本会话反复撞到的那条主线的真正断点）**：MIR 的形参落表只认 `f64` / `bool` / `str` /
+泛型 `T`，**其余一律 `I64`** ⇒ `py_handle_of` 看不到句柄 ⇒ 句柄上的属性/方法全退化：
+
+    def f(d: PyDate) -> i64: return d.year    # 18388（应为 2020）
+    d.strftime(...)                            # 发裸名
+    d.replace(...)                             # 找不到 PyDate.replace
+
+**两处修法（互相叠加，缺一不可）**：
+1. **MIR 形参落表**识别库句柄标签（`pylib::handle_tag`）→ 落 `Type::Named(tag)`（只覆盖 I64 默认）
+   ⇒ 覆盖**显式标注**。
+2. **resolver 调用点推断**把「实参是库句柄」的形参升级 —— 两种调用形状都认
+   （dotted `Root.member(...)` 与 from-import 后的裸 `member(...)`，后者查 `py_member_aliases`），
+   AST 回写加 `Type::Named(n,_) => n.clone()` ⇒ 覆盖**无标注** `def f(d)` + `f(date(...))`。
+
+**实测**：`d.year` 18388 → **2020**；`d.month` → **5**（经推断路径）。t160 pre-fix FAIL /
+post-fix PASS；python_style **159 → 160**；官方 **194/194**；语料解析 37/38 不回退。
+
+**方法论教训（本会话第三次栽在同一个坑）**：`bash -c` 的**双引号**字符串里写反引号会被
+**命令替换**执行掉（commit message 被吃）。写消息/文档一律用 `python3 - <<'PYEOF'` 的
+**带引号 heredoc** 或 `git commit -F <file>`，不要用 `python3 -c "…"`。
