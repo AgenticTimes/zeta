@@ -3316,3 +3316,45 @@ store i64 %19, ptr %11         ; names = list(...)   ← 写进了 self 的槽 �
 
 ⇒ 库方法内的局部变量 `names` **复用了 `self` 形参的槽** ✗ ⇒ 方法内部算错 ✓。
 独立缺陷 ✓，下一个探针位置：`name_to_id`/局部槽分配时 `self` 别名的处理 ✓。
+
+
+## 批次八十四（2026-09-17，**把「槽位冲突」精确到 codegen 层**，无代码改动）
+
+批次八十三发现库内 `n_rows` 的局部变量 `names` 与 `self` 写进同一个 alloca ✗。本轮把它缩小了范围。
+
+### 三个对照实验（都**正常** ✓）
+
+| 用例 | 位置 | 结果 |
+|---|---|---|
+| `names = list(self.d.keys())` + `len(names)` | 主文件的方法 | **1** ✓ |
+| 完整 `n_rows` 形状（含 `if` + `names[0]`） | 主文件的方法 | **2** ✓ |
+| 同一个类放在**模块**里（`from framelib import Frame`） | 独立模块 | **2** ✓ |
+| 同一个类放在 `/tmp/pandas.z`（注册表里也有 `M pandas` 的**补充**情形 ✓） | 独立模块 | **2** ✓ |
+
+⇒ **不是**「方法里的局部变量」问题 ✗，**也不是**「模块/注册表补充」问题 ✗。
+
+### 探针把范围钉到 codegen
+
+```
+PROBE_SLOT assign name=names existing=None self_id=Some(1) next_id=7
+```
+
+⇒ MIR 层**没有**冲突 ✓：`self` 是 id 1 ✓、`names` 拿到**全新** id 7 ✓。
+但 IR 里两者写的是**同一个 alloca** ✗：
+
+```llvm
+store i64 %0, ptr %11          ; self (id 1)
+store i64 %19, ptr %11         ; names (id 7)  ← 同一个 alloca ✗
+```
+
+⇒ 冲突在 **codegen 的局部 alloca 分配/命名** ✗，不在 MIR ✓。
+（这也解释了为什么三个对照用例都正常 ✓：它们的 id 布局不同 ✓。）
+
+### 下一步（探针位置已明确）
+
+在 codegen 的「为局部 id 分配 alloca」处打印 **id → alloca 名** 的映射 ✓，
+对 `pylib/pandas.z` 的 `n_rows` 看 id 1 与 id 7 为什么落到同一个 alloca ✓。
+复现命令：`zetac /tmp/pl_a.py`（期望 2，实测 0）✓。
+
+> 本轮无代码改动 ✓，树保持绿 ✓ —— 价值在于把「槽位冲突」这个模糊说法
+> 变成了「codegen alloca 分配」这个**具体位置** ✓，并排除了三种可能 ✓。
