@@ -2830,3 +2830,36 @@ PROBE_GT var=POOL globals_set=true gtypes=Some(DynamicArray(I64))
 
 在 `push` 分支入口打印「是否触发 + 接收者 AST 形态 + 写回分支走了哪条」，
 以及 `POOL[0]` 的读取走的是 env 还是本地槽 —— 两处对齐之后再改，**不再一次补两处** ✗。
+
+
+## 批次六十九（2026-09-17，**已修**）：`dict(m)` 浅拷贝
+
+`dict(_cost_config)`（本地 shim）此前落到自由调用 `dict` ✗。Python 的 `dict(m)` 是**浅拷贝**不是别名 ✓，
+实现为 `map_new()` + `py_map_update(new, src)` ✓（后者按**原始键**拷贝 ✓，字符串键的内容哈希保持 ✓）。
+
+**踩到的坑（当场修）**：`py_map_update` **返回 0** ✗ —— 一开始把它的返回值当表达式值 ⇒
+`dict(d)` 得到**空 map** ✗（实测 `c.get("a", 99)` = 99 ✗）。改为表达式值 = 新 map、
+`py_map_update` 的返回值丢进 sink ✓。
+
+**边界**：只在实参**静态是 map** 时做 ✓；类型未知保持**响亮诊断** ✗（拷错句柄会破坏数据 ✓）。
+
+**双向验证**：pre-fix `Undefined symbols` ✗ → post-fix `1`/`2`/`99` ✓（t183；第三行证明是拷贝 ✓）。
+python_style **183/183**；官方 **194/194**；`jq_shim.py` 未定义 **10 → 9**。
+
+### 本地 shim 剩余未定义（9）
+
+`DataFrame / concat / execute_trade / full / get / getattr / tolist / unique / where`
+
+分类：
+- **数据面**（6）：`DataFrame` `concat` `tolist` `unique` `where` `full` —— numpy/pandas 用面，L2 mini-DataFrame
+- **接收者类型未知**（3）：`get`（annotated param / `Any` 返回）`getattr`（同）`execute_trade`（模块全局对象的方法）
+- 已确认**不是库问题**：`execute_trade` 是类方法 ✗、`get`/`getattr` 是类型传播 ✗
+
+### 已查清但**未修**的项（按阻塞程度排序，供后续选择）
+
+| 项 | 影响 | 状态 |
+|---|---|---|
+| 模块级列表 `.append()` 后读元素为 0 | 小（语料里 dict 已修好） | 链路已查清（批次六十七/六十八），两轮未果 |
+| `-> Any` 返回类型丢结构体信息 | 小（仅我的合成复现） | 入口已确认（`infer_untyped_returns`），结构体名在 resolver 侧不可得 |
+| `get`/`getattr` 的接收者类型 | 中（影响本地 shim） | 根因=注解/`Any` 不落表 |
+| 数据面 6 个符号 | 大（本地实现的最后一道坎） | 未动 |
