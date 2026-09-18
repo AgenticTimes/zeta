@@ -8381,6 +8381,32 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.type_map.insert(id, Type::Str);
                     return id;
                 }
+                // A MAP subscript as an EXPRESSION. The assignment path
+                // (`d[k] = v`) already handled maps, but the expression path did
+                // not: `self.d["a"]` fell through to the array branches and read
+                // the map handle as an array — a SEGFAULT, not a wrong value.
+                if matches!(&base_ty, Type::Named(n, _) if n == "map" || n == "dict") {
+                    let key_id = self.lower_map_key(iid);
+                    // The base must live in a LOCAL slot: codegen's DictGet does
+                    // `load_local(map_id)`, and a field read (or any non-local
+                    // expression) has no alloca — `self.d["a"]` SEGFAULTED.
+                    // Materialize it first.
+                    let map_slot = self.next_id();
+                    self.stmts.push(MirStmt::Assign {
+                        lhs: map_slot,
+                        rhs: bid,
+                    });
+                    self.exprs.insert(map_slot, MirExpr::Var(map_slot));
+                    self.type_map.insert(map_slot, base_ty.clone());
+                    self.stmts.push(MirStmt::DictGet {
+                        map_id: map_slot,
+                        key_id,
+                        dest: id,
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
                 if let Type::DynamicArray(_) = base_ty {
                     // Generate array_get call for dynamic arrays
                     self.stmts.push(MirStmt::Call {

@@ -4,8 +4,13 @@
 //     ① `parse_class` 里 `self.x = x` 此前**硬编码 i64** ⇒ 改为取参数声明的类型；
 //     ② 脱糖把 `self` 的类型写成字面量 `"Self"` ⇒ 改为类名（导入模块里是 `模块__类名`）；
 //     ③ 形参落表只认 f64/bool/str/泛型/句柄 ⇒ 补上「已注册的 struct」。
-//   注：从**外部**读同一字段（`c.d.keys()`）或带参数下标（`self.d[k]`）目前会崩溃，
-//   是尚未定位的独立问题，本用例只断言已验证的通路（方法体内 `.keys()`）。
+//   另：字段下标作为**表达式**（`self.d["a"]`）此前会**段错误** —— 赋值路径已处理 map，
+//   表达式路径没有，于是把 map 句柄当数组读。修法：表达式下标补 map 分支，
+//   且把基址**物化到局部槽**（codegen 的 DictGet 用 `load_local`，字段读没有 alloca）。
+//   注：**未注解**的形参做键（`def get(self, k): self.d[k]`）仍会崩溃，是独立问题，
+//   本用例只断言已验证通路（字面量键 / 外部 `.keys()`）。
+// expect: 1
+// expect: 1
 // expect: 1
 class C:
     def __init__(self, d: map):
@@ -14,6 +19,11 @@ class C:
     def keys_len(self):
         return len(self.d.keys())
 
+    def literal_get(self):
+        return self.d["a"]
+
 
 c = C({"a": 1})
 print(c.keys_len())
+print(c.literal_get())
+print(len(c.d.keys()))
