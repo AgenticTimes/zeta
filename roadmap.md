@@ -2967,3 +2967,59 @@ t179 的「回归」其实**不是** `pd.Timestamp` 被抢走 ✓ —— 而是 
 `pylib/pandas.z` 真正替代编译器特例的前提 ✓（用户指出的方向 ✓）。
 
 **回滚**：两个源文件 `git checkout` ✓、`pylib/pandas.z` 移到 `/tmp/` ✓、python_style 复核 ✓。
+
+
+## 批次七十三（2026-09-17，**重构范围与验收先落地**；本轮改动回滚）
+
+按上一轮的承诺，先把「共享声明表」重构的**范围与验收**写清楚，再动代码。同时本轮发现了一个
+**改变重构形状**的事实。
+
+### 新事实：MirGen 里其实有**两张**声明表
+
+```rust
+type_decls:        HashMap<String, TypeDecl>,   // 工作副本
+shared_type_decls: HashMap<String, TypeDecl>,   // 累积/种子表
+```
+
+`lower_to_mir()` 每个 item 开始时都会：
+
+```rust
+self.type_decls.clear();
+self.type_decls.extend(self.shared_type_decls.iter().map(...));   // ← 重新播种
+```
+
+⇒ **在 `type_decls` 里做的细化，下一个 item 就被抹掉** ✗ —— 这是批次六十二/六十三/六十五
+「细化回不去」的**直接机制** ✓（比「克隆」这个说法更精确 ✓）。
+
+### 本轮试过（无证据，已回滚）
+
+| 改动 | 结果 |
+|---|---|
+| 子 MirGen 继承 `shared_type_decls`（而非工作副本） | 无可见变化 ✗ |
+| 细化后同步写回 `shared_type_decls`（新增 `persist_struct_refinement`） | 无可见变化 ✗ |
+
+构造了两个隔离用例（跨 item 读字段、子上下文读字段）——**pre-fix 与 post-fix 输出相同** ✗
+⇒ 按纪律回滚 ✓（python_style 复核 **184/184** ✓）。
+
+### 重构范围（Scope）
+
+把 `type_decls` **单一化并共享**，跨三种边界都成立：
+
+1. **resolver → 各模块 MirGen**（同一张表 ✓，不再每模块克隆 ✗）
+2. **父 MirGen → 子 MirGen**（闭包 / 嵌套 class ✓）
+3. **item → item**（`lower_to_mir` 的 re-seed 不再丢弃细化 ✓）
+
+形态：`Rc<RefCell<HashMap<String, TypeDecl>>>`（编译器单线程 ✓，已确认无 `Send`/`thread::spawn` 使用 ✓）。
+`type_decls` 与 `shared_type_decls` **合并成一个句柄** ✓（工作副本保留为局部临时表亦可 ✓）。
+
+### 验收（Acceptance）
+
+| # | 判据 |
+|---|---|
+| 1 | python_style **184/184**、官方 **194/194** 不回归 |
+| 2 | 现有 t181（结构体字段类型跟随实参）、t180（嵌套 class）、t179（pandas 日期）全绿 |
+| 3 | 恢复 `pylib/pandas.z` + resolver 的「补充加载」后：`pd.DataFrame({...})` 的 `.column_names()`/`.n_rows()`/`concat` 输出正确，且**不再有 `_keys` 未定义符号** |
+| 4 | 三个隔离用例（跨 item / 子上下文 / 跨模块读字段）从「0 或指针」变成正确值 |
+
+> 3 与 4 是这次重构的**真正目的** ✓：让 `pylib/pandas.z` 这类**库实现**能替代编译器特例 ✓
+> （用户指出的方向 ✓），并让「字段类型细化」在所有上下文里都成立 ✓。
