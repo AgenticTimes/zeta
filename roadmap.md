@@ -2539,3 +2539,34 @@ entry:
 （步骤 1 的两处改动本身是对的、且有 IR 证据，可与这一环一起提交。）
 
 复核脚本：`zetac /tmp/nested3.py` 应输出 `5`，IR 里 `__closure_0` 应含 `runtime_malloc` + 字段写入。
+
+
+## 批次六十（2026-09-17，**已修**）：函数体内定义的 class（嵌套 class）真正可用
+
+`_Info`（shim 里函数体内定义的 class）此前是未定义符号；最小复现更是**静默错值**（打印指针）。
+三处缺一不可：
+
+| # | 位置 | 问题 |
+|---|---|---|
+| 1 | `stmt.rs` | `parse_class` 只挂在顶层 `definitions` 的 `alt` ⇒ 嵌套 class 被静默吞掉（无节点、无解析错误）。**nom 的 `alt` 单元组上限 21**，语句列表正好已满 ⇒ 必须写嵌套 alt |
+| 2 | `gen.rs` | 大写名回退只查 `func_ret_types`，而函数内 class 的构造函数 hoist 成闭包（在 `closure_vars`）⇒ `P(n)` 被送到 `zeta_platform_obj` |
+| 3 | `gen.rs` | `lower_closure` 一律 `lower_expr(body)`，而构造函数体是 `Block` ⇒ **语句全丢** ⇒ 构造函数空、`ret 0`。改为 `Block` 逐条 `lower_ast`；并让子 MirGen 继承 `type_decls`/`func_ret_types` |
+
+**双向验证**：pre-fix `4364608240`/`8729216492` ✗ → post-fix `5`/`7` ✓（t180）。
+**实测**：`jq_shim.py` 未定义 **12 → 11**（`_Info` 消失）；python_style **180/180**；官方 **194/194**。
+
+> 语料未定义符号 135 → 136（+1）：嵌套 class 现在会被解析 ⇒ 其方法体里引用的符号也随之可见。
+> 链接通过数不变（1/38），属「看得更多」而非回退。
+
+### 顺带发现（下一批候选）：字符串**字段**的类型传播
+
+```python
+class A:
+    def __init__(self, s):
+        self.name = s
+print(A("hi").name)          # ✗ 打印指针
+print(A("hi").name == "hi")  # ✓ 1（值是对的！）
+```
+
+⇒ 字段的**值**正确（字符串句柄），只是**字段读表达式的类型**是 I64 ⇒ print 走整型路径。
+顶层类同样如此，与嵌套无关。t180 只断言已修好的部分，**没有把错值写成期望值**。
