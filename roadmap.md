@@ -3505,3 +3505,37 @@ python_style 187 → **188/188**；官方 **194/194**。
 
 `a.column("code")[1]` = **0** ✗（应 `y`）—— 列的**长度**对 ✓，但方法**返回值的类型**未知 ✗
 ⇒ 取元素按 i64 ✗。需要「方法返回值注解」落进 `func_ret_types` ✓（`lt(vec, str)` 那条路 ✓）。
+
+## 批次九十（2026-09-17，**返回值类型注解：找到了入口，但转换点有第三个**，改动回滚）
+
+目标：让方法返回值的类型进到调用方 —— `a.column("code")[1]` 取元素 ✓。
+
+### 探针证据（决定性）
+
+```
+PROBE_RET2 base=DataFrame::column found=Some(Named("vec", [Str]))
+```
+
+⇒ **注解确实到达了签名** ✓（`-> lt(vec, str)` 生效 ✓），但被转成 **`Named("vec", [Str])`** ✗
+（而不是 `DynamicArray(Str)` ✗）—— 所以调用方**无法**把结果当列表索引 ✗ ⇒ 取元素按 i64 ⇒ 0 ✗。
+
+### 我改了三个「注解→类型」的转换点，都没生效
+
+| 位置 | 改动 | 结果 |
+|---|---|---|
+| `Type::from_string`（types/mod.rs） | `lt(vec, T)` → `DynamicArray(T)` | 无变化 ✗ |
+| `parse_type_string`（new_resolver.rs） | 同上 | 无变化 ✗ |
+| 脱糖处尊重显式返回注解（top_level.rs） | 显式 `->` 优先于 str/i64 启发式 | 注解确实到了签名 ✓（但转换点不是这三处之一 ✗） |
+
+再加一个「在使用点归一化 `Named("vec"/"list")` → `DynamicArray`」✗ —— **反而让 `pl_c` 从 2 退化成 0** ✗
+⇒ 已回滚 ✓（python_style 复核 **188/188** ✓）。
+
+### 结论 / 下一步
+
+`func_ret_types` 的键与值都对了 ✓（`DataFrame::column` → `Named("vec", [Str])` ✓），
+但**转换发生在第四个地方** ✗（不是 `Type::from_string` ✗、不是两个 `parse_type_string` ✗）。
+下一个探针位置：**方法签名注册处**（`self.funcs.insert(...)` 的 ret 参数 ✓）——
+直接在那里把 `lt(vec, T)` 落成 `DynamicArray(T)` ✓，或在 `get_all_func_signatures` 出口归一化 ✓。
+
+> 注意：在使用点归一化**看起来**更省事 ✓ 但实测**引入回归** ✗（`pl_c` 2→0 ✗），
+> 所以这条路要带着回归测试走 ✓，不能凭「应该更好」就上 ✓。
