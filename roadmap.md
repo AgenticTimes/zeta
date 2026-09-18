@@ -3621,3 +3621,33 @@ python_style **189/189**；官方 **194/194**。
 当时写「打开这两处后列变空（2→0）」✗ —— 实测是**误判** ✗：`pl_c` 的 **0 就是当时的基线** ✓
 （与两处改动无关 ✓），两处改动**没有改变任何取值** ✓（2/0/0 前后一致 ✓）。
 ⇒「`pylib/pandas.z` 的 `column` 返回空」是一个**独立的既有问题** ✓，与本批无关 ✓。
+
+## 批次九十四（2026-09-17，**最小库端到端跑通**：`2` 和 `y`）
+
+批次九十三的两处修复（脱糖显式注解优先 + 签名表出口归一化）合起来，让**库里的类方法返回列表**
+第一次端到端跑通 ✓：
+
+```
+/tmp/frametest/pandas.z   (class DFrame + column(self, key) -> lt(vec, str))
+/tmp/frametest/main2.py   from pandas import DFrame; a = DFrame({"code": ["x","y"]})
+                          print(len(a.column("code")))   → 2 ✓
+                          print(a.column("code")[1])     → y ✓
+```
+
+IR 也确认方法体正确 ✓：`map_str_key(key)` → `map_get(map, hashed_key)` → `ret` ✓。
+
+### 但真实 `pylib/pandas.z` 仍然失败 ✗
+
+同一个最小类放进 `pylib/pandas.z`（或带**额外方法** `column_names`/`n_columns`/`n_rows`/`concat` 的版本）
+⇒ `len(a.column("code"))` = **0** ✗ / 打印**空** ✗。
+⇒ 差异在**额外方法**（或模块级 `concat`）✓ —— 下一个探针：**二分那些额外方法** ✓
+（把 `pylib/pandas.z` 的方法逐个删掉 ✓，看哪一个一删就好 ✓）。
+
+### 回滚与复核
+
+库与 fixture 的注解改动**已回滚** ✓（在真实 `pylib/pandas.z` 里未验证出效果 ✗），
+python_style **189/189** ✓。
+
+> 本轮的意义：**「库里的类返回列表」这条链第一次拿到正确值** ✓（最小库 ✓），
+> 并且把剩余问题缩小到「真实库的额外方法/模块级函数」✓ —— 这是一个可二分的问题 ✓，
+> 不再是「不知道卡在哪」✗。
