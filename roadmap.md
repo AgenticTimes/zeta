@@ -3443,3 +3443,41 @@ Undefined symbols: "_Frame__column", referenced from: _main in ct4.o
 在调用点打印 `self.module.get_function("Frame::column")` 的结果 ✓ **以及** `module` 里
 所有含 `column` 的函数名 ✓ —— 看真正的定义是以什么键注册的 ✓。
 （已回滚本轮改动 ✓，python_style **187/187** ✓、官方 **194/194** ✓。）
+
+## 批次八十八（2026-09-17，**找到真凶：方法参数叫 `name` 会让该方法根本不生成**）
+
+批次八十七的探针在调用点打印了模块里的函数名，结果**决定性**：
+
+```
+PROBE_FQ name=Frame::column exact=false fns=["Frame::n_columns", "n_columns"]
+```
+
+⇒ **`Frame::column` 根本不存在** ✗（同一个类里 `n_columns` ✓ 在 ✓）—— 不是「查到错的函数」✗，
+而是**这个方法压根没被生成** ✗。
+
+### 定位：把参数从 `name` 改名成 `key`
+
+```
+PROBE_FQ name=Frame::column exact=true fns=["Frame::column", "column", "column_inst_i64"]
+```
+
+⇒ 方法出现了 ✓、调用正确 ✓、`len(f.column("code"))` = **2** ✓、**段错误消失** ✓。
+
+**⇒ 编译器缺陷：方法参数名叫 `name` 时，该方法不会被生成** ✗（与方言内部的 `name` 标识符冲突 ✗，
+大概率在方法脱糖/签名收集那一带 ✓ —— 下一个探针：`def column(self, name)` 时 `func_ret_types`
+与 `module` 里该方法的注册情况 ✓）。
+
+### 已落地
+
+- `pylib/pandas.z` 的 `column(self, name)` → `column(self, key)` ✓（**绕开**该缺陷 ✓），
+  并在文件头写明这个坑 ✓；
+- 实测：库路径**不再段错误** ✓、`len(...)` = 2 ✓；
+- python_style **187/187** ✓、官方 **194/194** ✓。
+
+### 仍差一步（已定位）
+
+`a.column("code")[1]` = **0** ✗（应 `y`）—— 列本身对 ✓（`len` = 2 ✓），
+但**方法返回值的类型**未知 ✗ ⇒ 取元素按 i64 ✗。
+我试了给方法加 `-> lt(vec, str)` 并让 `from_string` 认识 `lt(vec, T)` ⇒ `DynamicArray(T)` ✗ ——
+**本轮未验证出效果** ✗（该注解可能没走到方法返回值那条路 ✓），故**已回滚** ✓。
+下一步：查**方法返回值注解**是否落进 `func_ret_types` ✓（探针位置明确 ✓）。
