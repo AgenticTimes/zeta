@@ -2863,3 +2863,30 @@ python_style **183/183**；官方 **194/194**；`jq_shim.py` 未定义 **10 → 
 | `-> Any` 返回类型丢结构体信息 | 小（仅我的合成复现） | 入口已确认（`infer_untyped_returns`），结构体名在 resolver 侧不可得 |
 | `get`/`getattr` 的接收者类型 | 中（影响本地 shim） | 根因=注解/`Any` 不落表 |
 | 数据面 6 个符号 | 大（本地实现的最后一道坎） | 未动 |
+
+
+## 批次七十（2026-09-17，**已修两个符号**）：数据面最小两块
+
+| 符号 | 做法 | 为什么诚实 |
+|---|---|---|
+| `np.full(n, v)` | 新 C helper `py_vec_full`（与 `zeta_dynarray_new`/`vec_push` 同一套头部布局 ⇒ 结果是普通 Vec ✓） | 语义与 numpy 一致 ✓ |
+| `.tolist()`（未定型接收者） | 兜底表 → `zeta_identity`，结果 kind 记 `vec` | 我们的数组本来就是 Vec ✓；identity **不解引用** ✓ 未知接收者不会读坏数据 ✓ |
+
+**实测**：`np.full(3,7)` → 3 / 7 ✓；`[10,20,30].tolist()` → 3 / 20 ✓；
+`jq_shim.py`（LOCAL=1）未定义 **9 → 7** ✓；python_style **184/184**；官方 **194/194**。
+
+**顺带确认（既有，非本次引入）**：未定型**形参**接收数组字面量时元素读出为 0
+（去掉 `.tolist()` 的对照同样 `3`/`0` ✗）。t184 只用已定型数组 —— 不把错值写成期望值 ✓。
+
+**为什么不实现 `np.where`**：numpy 的 `where(mask)` 返回**索引数组的元组**，
+`where(mask)[0]` 取的是「整个索引数组」✗；我们没有元组表示 ⇒ 实现成「返回索引 Vec」会让
+`[0]` 变成「第一个索引」✗ —— **语义不同** ✗ ⇒ 保持响亮诊断 ✓（不制造假语义 ✓）。
+
+### 本地 shim 剩余未定义（7）
+
+`DataFrame / concat / execute_trade / get / getattr / unique / where`
+
+- `DataFrame` + `concat`：真正的 L2 mini-DataFrame（构造 + 列/行 + `sort_values`）—— 最大的一块
+- `get` / `getattr` / `execute_trade`：接收者类型未知（注解/`Any` 不落表）
+- `unique`：可做（Vec 去重 ✓，语义一致 ✓）—— 下一轮候选
+- `where`：**不做**（元组语义，见上 ✗）
