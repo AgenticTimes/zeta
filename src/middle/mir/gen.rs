@@ -6923,6 +6923,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 (qualified, false, false)
                             }
                         }
+                    } else if let Type::Named(tn, _) = rty {
+                        // A method on a KNOWN struct must be called by its
+                        // QUALIFIED name: the definitions are emitted as
+                        // `DataFrame::column`, while the plain name resolved to
+                        // an unrelated stub (`@column`) whose result type is i64
+                        // — so `a.column("code")[1]` then did a MAP subscript on
+                        // a Vec and SEGFAULTED.
+                        (format!("{}::{}", tn, method), false, false)
                     } else {
                         // For inherent methods, use plain method name.
                         // The codegen's get_function split("::") fallback would resolve
