@@ -2487,3 +2487,55 @@ print(make(5))     # 实测 4372832720（指针！）应为 5
 
 复核：`zetac /tmp/nested3.py` 应输出 `5`，且 IR 里应出现 `define i64 @…P…(`。
 （本轮未改代码 —— 只做定位，树保持干净。）
+
+
+## 批次五十九（2026-09-17，**三步定位完成，代码仍回滚**）：嵌套 class 的解析已通、构造器体为空
+
+接批次五十八，按计划把 `parse_class` 加进语句解析。**推进了三步，但最终仍回滚** —— 过程有证据。
+
+### 步骤 1：语句解析器接纳 `parse_class` ✓（但撞上 nom 的 21 元组上限）
+
+`parse_class` 只挂在顶层 `definitions` 的 `alt(...)` 里。加进 `parse_stmt` 的 `alt` 后编译失败：
+
+    the method `parse` exists for struct `Choice<...>`, but its trait bounds were not satisfied
+
+因为 **nom 的 `alt` 单个元组最多 21 个备选**，而语句列表正好已有 21 个 ✗。改用**嵌套 alt**
+（`alt((parse_func, parse_class))` 作为一个元素）✓ 编译通过 ✓ ⇒ **嵌套 class 从此能被解析** ✓
+（IR 里出现了被 hoist 的构造函数 `define i64 @__closure_0(i64 %0)` ✓）。
+
+### 步骤 2：`P(n)` 被送到平台对象运行时 ✗（大写名回退）
+
+`gen.rs:5944` 的大写名回退只检查 `func_ret_types`：
+
+    let user_fn_defined = self.func_ret_types.contains_key(&method.clone());
+
+嵌套 class 的构造函数是 **hoist 成闭包** 的（在 `closure_vars` 里 ✗ 不在 `func_ret_types` 里），
+于是 `P(n)` 落进 `zeta_platform_obj` ✗。把 `closure_vars`/`hoisted_names` 一并纳入判断后，
+IR 变成正确的 `call i64 @__closure_0(i64 %5)` ✓。
+
+### 步骤 3：构造函数的**函数体是空的** ✗（真正的缺口）
+
+```
+define i64 @__closure_0(i64 %0) {
+entry:
+  %1 = alloca i64, align 8
+  store i64 %0, ptr %2, align 4
+  store i64 0, ptr %1, align 4
+  %4 = load i64, ptr %1, align 4
+  ret i64 %4                      ; ← 没有 runtime_malloc、没有字段写入，直接返回 0
+}
+```
+
+即：class 脱糖出的 `Block{StructDef, ImplBlock, FuncDef(ctor)}` 落在**函数体内**时，
+这些 **item 节点没有被真正 lower** ⇒ 结构体没注册、构造函数体是空的。
+于是 `P(n)` 返回 0/垃圾 ⇒ 字段读仍是错值；且因为调用点已改为调用这个空函数，
+行为从「垃圾值」变成「崩溃（SIGTRAP）」✗ —— **比之前更差**，所以回滚 ✓。
+
+### 结论 / 下一步
+
+**回滚**（`stmt.rs` / `top_level.rs` / `gen.rs`），复核 python_style **179/179** ✓。
+要修的不是「解析」也不是「调用点」，而是 **函数体内的 item 节点（StructDef / ImplBlock / ctor）
+没有走到 item 的 lowering 路径** —— 这是嵌套 class 的最后一环，也是唯一还没做的一环。
+（步骤 1 的两处改动本身是对的、且有 IR 证据，可与这一环一起提交。）
+
+复核脚本：`zetac /tmp/nested3.py` 应输出 `5`，IR 里 `__closure_0` 应含 `runtime_malloc` + 字段写入。
