@@ -2704,3 +2704,33 @@ python_style 181/181 ✓、官方 194/194 ✓ —— 属「无证据的改动」
 
 > 注：`nested2` 是我为复现 shim 的 `get_security_info` 写的合成用例；
 > 真实 shim 里该函数的用法可能不同，所以这条按「合成复现」记录。
+
+
+## 批次六十五（2026-09-17，**未修成，改动回滚**）：`infer_untyped_returns` 是正确入口，但结构体名不在手边
+
+按上一轮的结论去**细化函数返回类型**，找到了既有机制 `infer_untyped_returns`
+（注释写着「conservative evidence-only inference」，已有 str/f64 推断 + 6 轮迭代传播 ✓），
+在它的循环里加了「返回 `<已知结构体>(...)` ⇒ 该函数返回该结构体」的细化（`-> Any` / `-> object` 也视为可推断 ✓）。
+
+探针证据：
+
+```
+PROBE_RET fn=get_security_info ret="Any" rets=1 has_Info=false decls=[]
+```
+
+- 函数选对了 ✓（`ret="Any"` ✓、`rets=1` ✓ —— 返回语句被正确收集 ✓）
+- **但 resolver 的 `type_decls` 是空的** ✗（`decls=[]` ✗）—— 这个字段在这条路径上**根本没被填充** ✗；
+  结构体注册实际发生在 **MirGen** 的 `type_decls` 里（批次六十~六十三用的就是那份 ✓）
+
+改用「扫描已注册 AST 收集 struct 名」代替空的 `type_decls` ✗ —— **仍未生效** ✗
+（顶层 class 的 `def f() -> Any: return A("hi")` 也还是打印指针 ✗）。
+
+按纪律回滚 ✓：python_style **181/181** ✓、官方 194/194 ✓。
+
+### 本轮净收益：两个「下一步该往哪走」的硬事实
+
+1. `infer_untyped_returns` 是**正确的入口**（能看到函数、返回语句、`-> Any`）✓；
+2. 但**结构体名在 resolver 侧不可得** ✗（`type_decls` 空 ✗，扫描 AST 的替代方案也没生效 ✗）
+   ⇒ 要么把结构体注册**提前到 resolver**（让那份 `type_decls` 真正被填充 ✓），
+   要么把返回类型细化**挪到 MirGen 侧**（那里有 `type_decls` ✓，但只有当前 item 的 AST ✗
+   —— 需要一次跨函数的预扫描 ✓）。
