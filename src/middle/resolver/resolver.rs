@@ -1490,6 +1490,15 @@ impl Resolver {
                 let ty = match rhs {
                     Some(AstNode::StringLit(_)) | Some(AstNode::FString { .. }) => Some(Type::Str),
                     Some(AstNode::FloatLit(_)) => Some(Type::F64),
+                    // `CACHE = {}` / `POOL = []` — a module-level container is
+                    // the common case and its type was simply missing, so the
+                    // whole table came out EMPTY (probe: globals=[]) and every
+                    // `CACHE.get(k)` on a module global fell through to a free
+                    // call named `get` (undefined symbol).
+                    Some(AstNode::DictLit { .. }) => Some(Type::Named("map".to_string(), vec![])),
+                    Some(AstNode::ArrayLit(_)) => {
+                        Some(Type::DynamicArray(Box::new(Type::I64)))
+                    }
                     Some(AstNode::Call { receiver, method, .. }) => {
                         // Resolve `X.Y(...)` / `Y(...)` through the registry to
                         // its declared result (handle tag or str).

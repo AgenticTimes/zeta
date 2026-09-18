@@ -1,0 +1,22 @@
+// PY-A: 模块级容器的**类型**必须落进 `module_global_types`。
+//   `CACHE = {}` / `POOL = []` 这类 RHS 此前不产生类型 ⇒ 整张表是空的（探针 globals=[]）⇒
+//   模块全局上的 `.get(k, d)` 退化成自由调用 `get`（未定义符号）。
+//   这正是本地 shim 里 `_local_cache.get(...)` 的形态（9 个调用点）。
+//   注：模块级**列表**的 `.append()` 另有问题（append 后读元素仍是 0），见 roadmap 批次六十六，
+//   与本用例无关，故不在此断言。
+// expect: 1
+// expect: 99
+CACHE = {}
+
+
+def put(k, v):
+    CACHE[k] = v
+
+
+def get_or(k, d):
+    return CACHE.get(k, d)
+
+
+put("a", 1)
+print(get_or("a", 99))
+print(get_or("b", 99))
