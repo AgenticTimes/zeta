@@ -2734,3 +2734,30 @@ PROBE_RET fn=get_security_info ret="Any" rets=1 has_Info=false decls=[]
    ⇒ 要么把结构体注册**提前到 resolver**（让那份 `type_decls` 真正被填充 ✓），
    要么把返回类型细化**挪到 MirGen 侧**（那里有 `type_decls` ✓，但只有当前 item 的 AST ✗
    —— 需要一次跨函数的预扫描 ✓）。
+
+
+## 批次六十六（2026-09-17，**已修**）：模块级容器的类型落表
+
+**根因**（探针 `globals=[]`）：`module_global_types()` 只在 RHS 类型可推导时插入，
+而 `CACHE = {}` / `POOL = []` 这类**容器字面量没有分支** ⇒ **整张表为空** ⇒
+模块全局上的 `.get(k, d)` 退化为自由调用 `get`（未定义符号）。
+这正是本地 shim 里 `_local_cache.get(...)`（9 个调用点）的形态 ✓。
+
+**修法**：RHS 匹配补 `DictLit` → `Named("map")`、`ArrayLit` → `DynamicArray(i64)`。
+
+**实测**：`/tmp/mget3.py` 的 `f()` 从「未定义符号」变成 **1** ✓；
+`jq_shim.py` 未定义 **11 → 10**（`setdefault` 消失）；`jq_wufu.py` 20；
+python_style **182/182**（t182）；官方 **194/194**。
+
+### 顺带发现（未修）：模块级**列表**的 `.append()` 之后读元素仍是 0
+
+```python
+POOL = []
+def add(x):
+    POOL.append(x)
+    return POOL[0]
+print(add(5))     # 实测 0，应为 5
+```
+
+疑似 `vec_push` 返回**新句柄**后，**全局变量的回写**没生效（局部变量有专门的重绑定逻辑 ✓）。
+t182 只断言已修好的 dict 部分 —— **没有把错值写成期望值** ✓。
