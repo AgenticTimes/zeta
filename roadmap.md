@@ -3058,3 +3058,43 @@ self.type_decls.extend(self.shared_type_decls.iter().map(...));   // ← 重新�
 所以下一个要回答的问题非常具体：**`def __init__(self, data: map)` 的注解 `map` 为什么没有变成字段类型 `map`** ✗
 （探针位置：class 脱糖时的 `init_params` → 字段表 ✓，以及 `Type::from_string("map")` 的实际返回 ✓）。
 这一步不需要动共享表 ✓ —— 共享表那套（批次七十三的范围）**先搁置** ✓，因为验收证明它不是当前的瓶颈 ✗。
+
+
+## 批次七十五（2026-09-17，**两个确凿缺陷已定位，但链路仍差最后一环 ⇒ 回滚**）
+
+按批次七十四的窄问题（「`data: map` 注解为什么没变成字段类型 `map`」）查下去，**找到两个确凿缺陷**，
+但整条链**仍差最后一环**，验收不达标 ⇒ 按纪律回滚 ✓。
+
+### 缺陷一：字段类型对「参数右值」硬编码成 i64 ✗
+
+`parse_class` 里从 `self.x = <rhs>` 推字段类型：
+
+```rust
+AstNode::Var(name) if param_names.contains(&name.as_str()) => {
+    // `self.x = x` — type unknown, call-site coercion adapts
+    "i64".to_string()          // ← 无视参数的注解 ✗
+}
+```
+
+⇒ `def __init__(self, d: map)` 的字段仍被记成 `i64` ✗。
+改成「取该参数声明的类型」后，**探针确认生效** ✓：`decls=[("C", [("d", "map")])]` ✓（此前是 i64 ✗）。
+
+### 缺陷二：脱糖把 `self` 的类型写成字面量 `"Self"` ✗
+
+```rust
+let mut new_params = vec![("&mut self".to_string(), "Self".to_string())];
+```
+
+⇒ 方法体内 `self` 的类型是 `Named("Self")` ✗（不是类名 ✗）⇒ 字段读**根本找不到结构体** ✗
+（探针：`base_ty=Some(I64)` ✗）。改成类名后，字段读仍拿不到 `map` ✗。
+
+### 仍差的一环
+
+两个缺陷都修掉之后，`_keys` **仍然未定义** ✗ ⇒ 说明 `self.d.keys()` 的**接收者类型**在方法体内
+仍未成为 `Named("map")` ✗。下一个探针位置很明确：**方法体内 `.keys()` 调用点的接收者类型**
+（即字段读返回的 `field_ty` 与 `type_map` 实际落表值 ✓），以及 map 方法分派分支的条件 ✓。
+
+### 回滚与复核
+
+`git checkout` 两个文件 ✓、python_style **184/184** ✓。
+两个缺陷的**位置与修法都写在这里** ✓ —— 下一轮直接落这两处 + 一次探针即可 ✓，不必重新定位 ✓。
