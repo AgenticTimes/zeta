@@ -770,7 +770,7 @@ fn skip_decorator_lines(input: &str) -> &str {
     }
 }
 
-fn parse_class(input: &str) -> IResult<&str, AstNode> {
+pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     let input = skip_decorator_lines(input);
     let (input, _) = ws(terminated(tag("class"), peek(none_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")))).parse(input)?;
     let (input, name) = ws(parse_ident).parse(input)?;

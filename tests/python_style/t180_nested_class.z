@@ -1,0 +1,35 @@
+// PY-A: **函数体内定义的 class** —— 三处都必须对，缺一处就是错值：
+//   1. 语句解析器要接纳 `parse_class`（它此前只挂在顶层 definitions 的 alt 里，
+//      嵌套 class 被静默吞掉：没有节点、没有解析错误、构造函数根本不存在）；
+//      nom 的 `alt` 单元组上限 21 个，所以要写成嵌套 alt。
+//   2. 大写名回退要认得 hoist 出来的构造函数（它进的是 closure_vars，不是 func_ret_types），
+//      否则 `P(n)` 会被送到平台对象运行时。
+//   3. 闭包 lowering 必须能处理**语句块体**：构造函数的体是 Block，而
+//      `lower_expr(Block)` 会丢掉每一条语句 ⇒ 构造函数变空、直接 ret 0 ⇒ 字段读全是垃圾。
+// expect: 5
+// expect: 7
+def make(n):
+    class P:
+        def __init__(self, x):
+            self.x = x
+
+    p = P(n)
+    return p.x
+
+
+def make2(a, b):
+    class Q:
+        def __init__(self, x, y):
+            self.x = x
+            self.y = y
+
+    return Q(a, b).x + Q(a, b).y
+
+
+// 注：字符串**字段**的类型传播是另一个独立缺口（顶层类同样如此，非嵌套特有）：
+//   `A("hi").name == "hi"` 为真 ✓（值是对的），但直接 print 会按 i64 打印指针 ✗。
+//   见 roadmap 批次六十。此处只断言已修好的部分。
+
+
+print(make(5))
+print(make2(3, 4))

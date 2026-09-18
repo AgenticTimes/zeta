@@ -5936,9 +5936,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // local definition route to the platform-object runtime.
                 // If a user-defined function with this name exists (class
                 // desugar emits `Accumulator(...)` constructors), it wins.
-                let user_fn_defined = self
-                    .func_ret_types
-                    .contains_key(&method.clone());
+                // A class defined inside a function is hoisted like a nested
+                // def, so its constructor lives in `closure_vars` under the
+                // class name — NOT in `func_ret_types`. Missing that check sent
+                // `P(n)` to the opaque platform-object runtime.
+                let user_fn_defined = self.func_ret_types.contains_key(&method.clone())
+                    || self.closure_vars.contains_key(&method.clone())
+                    || self.hoisted_names.contains_key(&method.clone());
                 if method.chars().next().map_or(false, |c| c.is_uppercase())
                     && receiver.is_none()
                     && !user_fn_defined
@@ -8884,6 +8888,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         let mut child = MirGen::new()
             .with_nonlocal_names(self.nonlocal_names.clone())
             .with_module_globals(self.module_globals.clone())
+            // The child context needs the struct/enum declarations the parent
+            // already registered. A class defined inside a function is lowered
+            // through this path (hoisted ctor), and without the declaration its
+            // `StructLit` body lowered to NOTHING — the constructor returned 0
+            // and every field read was garbage.
+            .with_type_decls(self.type_decls.clone())
+            .with_func_ret_types(self.func_ret_types.clone())
             // A closure inside an imported module must resolve that module's
             // own functions too (`lambda m: lowercase(m.group(0))`).
             .with_symbol_renames(self.symbol_renames.clone());
@@ -8951,7 +8962,24 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
             eprintln!("PROBE closure {} body stmts={}", closure_name,
                 match body { AstNode::Block { body } => body.len(), _ => 1 });
         }
-        let body_val = child.lower_expr(body);
+        // A hoisted FUNCTION body (the constructor synthesized for a class
+        // defined inside a function) is a STATEMENT LIST, not an expression.
+        // `lower_expr` on a Block dropped every statement, so the constructor
+        // came out empty (`ret 0`) and every field read was garbage — while a
+        // lambda/comprehension body really is an expression and keeps the old
+        // path.
+        let body_val = match body {
+            AstNode::Block { body: stmts } => {
+                for st in stmts {
+                    child.lower_ast(st);
+                }
+                let z = child.next_id();
+                child.exprs.insert(z, MirExpr::IntLit(0));
+                child.type_map.insert(z, Type::I64);
+                z
+            }
+            _ => child.lower_expr(body),
+        };
         // Remember the body's value type for the enclosing comprehension (the
         // child MirGen owns that type map, so read it here).
         self.last_closure_ret_ty = child.type_map.get(&body_val).cloned();

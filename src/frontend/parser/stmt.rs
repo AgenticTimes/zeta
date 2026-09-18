@@ -6,7 +6,7 @@ use super::parser::{
     kw_boundary, parse_ident, parse_type, skip_ws_and_comments, skip_ws_and_comments0, ws,
 };
 use super::pattern::parse_pattern;
-use super::top_level::{parse_const, parse_func, parse_type_alias};
+use super::top_level::{parse_class, parse_const, parse_func, parse_type_alias};
 use crate::frontend::ast::AstNode;
 use nom::IResult;
 use nom::Parser;
@@ -1336,7 +1336,13 @@ pub fn parse_stmt(input: &str) -> IResult<&str, AstNode> {
         parse_assign,
         parse_type_alias,
         parse_const,
-        parse_func,
+        // PY-A: a `class` inside a function body. `parse_class` was only wired
+        // into the top-level definitions list, so a nested class was SWALLOWED
+        // by the statement path: no node, no parse error — the synthesized
+        // constructor never existed and `P(n)` produced garbage.
+        // (nom's `alt` takes at most 21 alternatives in one tuple, hence the
+        // nested alt instead of a 22nd entry.)
+        alt((parse_func, parse_class)),
         parse_python_from_import,
         parse_python_import,
         parse_try_stmt,
