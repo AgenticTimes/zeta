@@ -1,0 +1,12 @@
+// PY-A: **库里的类**（模块中定义）的方法要能正确执行 —— 这条链上有三处修过：
+//   ① 方法调用用「唯一的限定名」解析（接收者类型未知时平名会落到无关的桩 ✗）；
+//   ② `::` 限定名不做 arity 后缀（定义端没有 ✗）；
+//   ③ map 的键类型由 `lt(map, str)` 注解带进来，`lower_map_key_typed` 才能内容哈希 ✓。
+//   方法体里还有局部变量 + `list(...)` + 链式下标，一起回归。
+// expect: 2
+// expect: 2
+from pyframe import Frame
+
+f = Frame({"code": ["x", "y"], "n": [1, 2]})
+print(f.n_rows())
+print(f.n_columns())
