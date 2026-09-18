@@ -2605,3 +2605,41 @@ PROBE_FLD field=name base_ty=Some(Str) decls=["A"] retA=Some(Variable(TypeVar(0)
 
 `A("hi").name` 的**值是对的**（`== "hi"` 为真 ✓），错的是**类型信息在调用边界被泛型统一冲掉** ✗。
 要修就修在**调用结果类型**上，但必须找到**最后一个覆写点** —— 否则改了也不生效（本轮已证实）。
+
+
+## 批次六十二（2026-09-17，**根因完全查明：字段类型声明 + 子 MirGen 克隆**，改动回滚）
+
+接批次六十一，把「字符串字段打印成指针」查到底了 —— 现在**根因与「为什么前两次修法都不生效」都清楚了**。
+
+### 探针实证（`declared=[("name","i64")]`）
+
+```
+PROBE_FLD2 field=name base_ty=Some(Str) declared=Some([("name", "i64")])
+```
+
+⇒ 结构体字段的**声明类型是 i64** ✗。来源：`def __init__(self, s)` 的参数**没有注解**，
+class 脱糖时把字段类型记成默认的 `i64`。而运行时**值**是正确的字符串句柄 ✓
+（所以 `A("hi").name == "hi"` 为真 ✓）。字段读按 `i64` 用 ⇒ `print` 打印指针 ✗。
+
+### 为什么「在字段读处查 `type_decls`」和「在调用结果处强制 `Named(struct)`」都不生效
+
+第三次尝试：在 **`StructLit` lowering** 处按实际存入的值**细化声明类型**（i64 → str）✓
+—— 这是对的修法方向，但**仍然不生效** ✗。原因：
+
+**构造函数是被 hoist 到子 MirGen 里 lower 的**，而子 MirGen 拿到的是
+`type_decls.clone()`（批次六十为了让嵌套 class 的 `StructLit` 能解析而加的 ✗）⇒
+**在子上下文里做的细化，回不到父上下文** ✗。父上下文给 `A("hi").name` 定型时，
+看到的仍是旧的 `i64` ✗。
+
+⇒ 结论：这个修法要生效，必须让 `type_decls` **共享**（`Rc<RefCell<…>>` 之类的重构 ✗），
+或者把细化搬到**父上下文**里做（在 class item 的 lowering 处，而不是在构造函数体里 ✗）。
+
+### 回滚与复核
+
+`git checkout -- src/middle/mir/gen.rs`，python_style **180/180** ✓，`/tmp/strfield.py` 行为不变 ✓。
+
+### 下一步（两条路，都已想清楚）
+
+1. **共享 `type_decls`**（把 `HashMap` 换成共享句柄）—— 一次重构解决「子上下文细化回不去」这一类问题；
+2. 或**在父上下文细化**：class item lowering 时，用 `__init__` 的 `self.x = <expr>` 右值类型
+   直接写父上下文的 `type_decls`（不经过构造函数体）。
