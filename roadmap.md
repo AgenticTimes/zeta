@@ -3289,3 +3289,30 @@ python_style **186/186**；官方 **194/194**；`jq_shim.py` 未定义 **6**（�
 ⇒ 疑似**限定名调用点的返回类型**查不到 ✓（`func_ret_types` 的键可能是平名或别的拼写 ✗），
 返回值被定型为 i64 ✗，链式读取自然错 ✗。
 下一个探针：**限定名方法的 `func_ret_types` 键**（打印表里的键集合 ✓）。
+
+
+## 批次八十三（2026-09-17，**两处已修 + 新发现槽位冲突**）：方法调用按唯一限定名解析
+
+`a.n_rows()`（库 `DataFrame`）返回 **0** ✗。探针：
+
+```
+PROBE_RT method=n_rows receiver_ty=Some(I64) matching_keys=["n_rows", "DataFrame::n_rows", …]
+PROBE_FN method=n_rows receiver_ty=Some(I64) chosen_func=DataFrame::n_rows   ← 修后 ✓
+```
+
+- 接收者类型**未知**（`pd.DataFrame(...)` 的结果类型未被跟踪 ⇒ I64 ✗）⇒ 平名解析到**无关的桩** ✗
+- 修法：接收者不是 struct/array 时，若 `func_ret_types` 里以 `::<method>` 结尾的键**唯一** ✓ 就用它 ✓
+  （多于一个候选保持平名 ✓ 不猜 ✓）；`::` 限定名**不做 arity 后缀** ✓（定义端没有 ✗）
+
+**实测**：`chosen_func=DataFrame::n_rows` ✓；python_style **186/186**；官方 **194/194**。
+
+### 新发现的编译器缺陷（下一步，IR 铁证）：局部变量与 `self` 槽位冲突
+
+```llvm
+store i64 %0, ptr %11          ; self
+store i64 %19, ptr %11         ; names = list(...)   ← 写进了 self 的槽 ✗
+%21 = call i64 @vec_len(i64 %20)   ; 算的是 len(self) 而不是 len(names) ✗
+```
+
+⇒ 库方法内的局部变量 `names` **复用了 `self` 形参的槽** ✗ ⇒ 方法内部算错 ✓。
+独立缺陷 ✓，下一个探针位置：`name_to_id`/局部槽分配时 `self` 别名的处理 ✓。
