@@ -6932,11 +6932,28 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         // a Vec and SEGFAULTED.
                         (format!("{}::{}", tn, method), false, false)
                     } else {
-                        // For inherent methods, use plain method name.
-                        // The codegen's get_function split("::") fallback would resolve
-                        // Type::method to method, but the split creates wrong-name externs.
-                        // Using the plain name ensures get_function finds the right function.
-                        (method.clone(), false, false)
+                        // The receiver's type may be UNKNOWN (e.g. the result of
+                        // `pd.DataFrame(...)` whose type is not tracked), in which
+                        // case the plain name resolved to an unrelated stub whose
+                        // result type is i64. Fall back to the UNIQUE qualified
+                        // definition `X::method` when there is exactly one — with
+                        // more than one candidate we keep the plain name rather
+                        // than guessing.
+                        let suffix = format!("::{}", method);
+                        let mut cands = self
+                            .func_ret_types
+                            .keys()
+                            .filter(|k| k.ends_with(&suffix))
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        cands.sort();
+                        cands.dedup();
+                        if cands.len() == 1 {
+                            (cands.remove(0), false, false)
+                        } else {
+                            // For inherent methods, use plain method name.
+                            (method.clone(), false, false)
+                        }
                     }
                 } else {
                     (method.clone(), false, false)
@@ -7101,7 +7118,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // suffix, so a suffixed CALL referenced a symbol that never
                 // exists (4 undefined symbols: __get_price_3 / __get_price_7 /
                 // __get_trade_days_2 / __OrderCost_6).
-                let func_name = if func.starts_with("zeta_") || func.contains("__") {
+                // `::`-qualified names are like module-qualified ones: the
+                // definition carries no arity suffix, so a suffixed CALL would
+                // reference a symbol that never exists.
+                let func_name = if func.starts_with("zeta_")
+                    || func.contains("__")
+                    || func.contains("::")
+                {
                     func.clone()
                 } else {
                     format!("{}_{}", func, arg_ids.len())
