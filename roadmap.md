@@ -3386,3 +3386,31 @@ python_style **187/187**；官方 **194/194**；`jq_shim.py`（LOCAL=1）未定�
 
 `a.column("code")[1]` 取元素：一种写法打印**空**、另一种（先赋值再取）**段错误**。
 `len(a.column("code"))` = 2 说明**列本身是对的** ⇒ 问题在**取元素**那一步。
+
+## 批次八十六（2026-09-17，**把「取元素」缩到 codegen 的限定名解析**，改动回滚）
+
+目标：`c = f.column("code")` 之后 `c[1]` —— 实测 `c[0] == "x"` 为 **0** ✗、`print(c[1])` **段错误** ✗。
+
+### 已确认的链路事实
+
+| 观察 | 结论 |
+|---|---|
+| `len(f.column("code"))` = **2** ✓ | 列本身正确 ✓ |
+| MIR 探针：`PROBE_FN2 method=column receiver_ty=Some(Named("Frame", [])) chosen=Frame::column` ✓ | **MIR 层选对了限定名** ✓ |
+| IR 里定义是 `@"Frame::column"` ✓，而调用是 `@column` ✗ | **转换发生在 codegen** ✗ |
+
+⇒ 下一处探针位置很明确：codegen 的 `get_or_declare_function` ✓ ——
+看 `"Frame::column"` 是否**在** `::` 拆分/`_N` 剥离这些回退**之前**被查到 ✓
+（现在的行为像是：限定名查不到 ⇒ 回退到平名 ⇒ 命中一个**无关的桩** ✗）。
+
+### 试过什么（无验证效果，已回滚）
+
+1. 让 `from_string` 认识 `lt(vec, T)` / `lt(list, T)` ⇒ `DynamicArray(T)` ✓
+   （给库一个「返回列表」的拼写 ✓）
+2. 给 `pylib/pandas.z` 的 `column`/`column_names` 加 `-> lt(vec, str)` ✓
+3. 给测试 fixture 的 `column` 加同样的返回注解 ✓
+
+结果：**段错误依旧** ✗ ⇒ 无验证效果 ⇒ 全部回滚 ✓（python_style 复核 **187/187** ✓）。
+
+> 说明：第 1 条本身是**有用能力** ✓（库需要一种写法表达「返回列表」✓），
+> 但它不是当前瓶颈 ✗ —— 瓶颈在 codegen 的限定名解析 ✓。等那一处修好后可以再回来加 ✓。
