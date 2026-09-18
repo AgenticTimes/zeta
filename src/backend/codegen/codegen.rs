@@ -2410,6 +2410,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
         if type_args.is_empty() {
             // Check mangled name first (AstNode::Lit → AstNode__Lit)
             if name.contains("::") {
+                // The EXACT qualified name first, and if it is not there yet (the
+                // definition may be emitted later in the same module) DECLARE it —
+                // do NOT fall back to the mangled or bare method name: those matched
+                // an unrelated i64-returning stub, so `a.column("code")[1]` indexed a
+                // Vec as a map and SEGFAULTED.
+                if let Some(f) = self.module.get_function(name) {
+                    return f;
+                }
                 let mangled = name.replace("::", "__");
                 if let Some(f) = self.module.get_function(&mangled) {
                     return f;
