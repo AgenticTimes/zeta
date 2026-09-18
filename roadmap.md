@@ -2890,3 +2890,47 @@ python_style **183/183**；官方 **194/194**；`jq_shim.py` 未定义 **10 → 
 - `get` / `getattr` / `execute_trade`：接收者类型未知（注解/`Any` 不落表）
 - `unique`：可做（Vec 去重 ✓，语义一致 ✓）—— 下一轮候选
 - `where`：**不做**（元组语义，见上 ✗）
+
+
+## 批次七十一（2026-09-17，**架构方向修正 + 改动回滚**）：DataFrame 应该是**库实现**
+
+用户指出：**DataFrame 也应该是库实现**（不该是编译器特例）。这个方向是对的 ✓，而且项目里
+**已有**这套设施 ✓ —— 我按它试了一轮，撞到两个具体障碍，按纪律回滚。
+
+### 已有设施（不需要新造）
+
+| 设施 | 状态 |
+|---|---|
+| 库源码位置 | `pylib/*.py|.z`、`build/stubs/`、`~/.zeta/packages`（`find_py_module_file` 逐个搜 ✓） |
+| 库内可声明运行时函数 | `extern fn name(a: i64) -> i64;` ✓（`build/stubs/std/time.z` 就是这么写的 ✓） |
+| 模块成员调用路由 | 批次五十已做：`pd.DataFrame(...)` → `pandas__DataFrame` ✓ |
+| 包管理 | `zorb install` ✓（纯 Python 包 ✓） |
+
+于是写了 `pylib/pandas.z`（列映射模型：一列 = 一个列表；`DataFrame` 类 + `concat` 函数 ✓），
+**零编译器特例** ✓。实测：库**确实被加载** ✓（`imported module pandas from pylib/pandas.z` ✓）、
+`_DataFrame::column_names` 等符号**确实生成了** ✓。
+
+### 障碍一：模块同时存在于**注册表**时，本地文件被忽略
+
+`registry.txt` 里已有 `M pandas`（批次五十五为 `pd.Timestamp → PyDate` 句柄加的 ✓，
+而句柄标签是**注册表独有**的表达力 ✗ 库文件给不了 ✗）。原逻辑是「注册表赢，本地文件忽略」✗。
+我改成**两者并存**（库作为补充 ✓）—— 库加载成功 ✓，但 **t179_pandas_datetime 回归** ✗：
+库的存在改变了 `pd.Timestamp` 的解析 ✗。
+
+### 障碍二：库内**持有 map 的字段**丢失类型
+
+`self.data.keys()` → 未定义 `_keys` ✗（字段类型细化只覆盖 str/f64/bool ✗，map 未覆盖 ✗）。
+试了给细化加 map 分支 ✗ —— 未生效 ✗（字段声明仍是 i64 ✗，与批次六十三同一处机制 ✓）。
+
+### 回滚与复核
+
+`git checkout` 两个文件 ✓、`pylib/pandas.z` 移到 `/tmp/` ✓，python_style 复核通过 ✓。
+
+### 下一步（把方向坐实的两件事，都很具体）
+
+1. **让「补充」路径优先注册表成员**：模块既在注册表又有库文件时，注册表里**已登记的成员**
+   （`Timestamp`/`Timedelta` → 句柄 ✓）仍走 C shim ✓，库文件只补**未登记**的名字（`DataFrame`/`concat` ✓）
+   —— 这样 t179 不会回归 ✓；
+2. **字段类型细化覆盖 map**（批次六十三那处 ✓），库内 `self.data.keys()` 才能解析到 `map_keys` ✓。
+
+> 这两件做完，`pylib/pandas.z` 就能真正替代编译器特例 ✓ —— 也正是用户指出的方向 ✓。
