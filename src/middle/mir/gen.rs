@@ -5058,6 +5058,39 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 if receiver.is_none() && method == "dict" && args.is_empty() {
                     return self.lower_expr(&AstNode::DictLit { entries: vec![] });
                 }
+                // `dict(m)` is a SHALLOW COPY in Python, not an alias: mutating
+                // the result must not touch the source. Only done when the
+                // argument is statically a map — an unknown argument keeps the
+                // loud diagnostic (copying an unknown handle would corrupt data).
+                if receiver.is_none() && method == "dict" && args.len() == 1 {
+                    let src_id = self.lower_expr(&args[0]);
+                    let is_map = matches!(
+                        self.type_map.get(&src_id),
+                        Some(Type::Named(n, _)) if n == "map" || n == "dict"
+                    );
+                    if is_map {
+                        let fresh = self.next_id();
+                        self.stmts.push(MirStmt::MapNew { dest: fresh });
+                        self.exprs.insert(fresh, MirExpr::Var(fresh));
+                        self.type_map
+                            .insert(fresh, Type::Named("map".to_string(), vec![]));
+                        // The VALUE of `dict(m)` is the new map, not
+                        // py_map_update's return (which is 0 — using it as the
+                        // dest made `dict(d)` an empty map).
+                        let sink = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_map_update".to_string(),
+                            args: vec![fresh, src_id],
+                            dest: sink,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(sink, MirExpr::Var(sink));
+                        self.type_map.insert(sink, Type::I64);
+                        self.exprs.insert(id, MirExpr::Var(fresh));
+                        self.type_map.insert(id, Type::Named("map".to_string(), vec![]));
+                        return id;
+                    }
+                }
                 // PY-A: `zip(a, b)` — a Vec of (a[i], b[i]) pairs, so
                 // `for x, y in zip(a, b):` destructures. (Previously a bare
                 // `zip` extern → link failure.)

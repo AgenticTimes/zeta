@@ -1,0 +1,14 @@
+// PY-A: `dict(m)` 是**浅拷贝**，不是别名 —— 改结果不能动源。
+//   0 参形式（空 map）此前已支持；1 参形式此前落到自由调用 `dict`（未定义符号）。
+//   实现 = `map_new()` + `py_map_update(new, src)`，且**表达式的值必须是新 map**：
+//   `py_map_update` 返回 0，把它当 dest 会让 `dict(d)` 变成空 map（本轮踩过）。
+//   仅在实参**静态是 map** 时做；类型未知时保持响亮诊断（拷错句柄会破坏数据）。
+// expect: 1
+// expect: 2
+// expect: 99
+d = {"a": 1}
+c = dict(d)
+c["b"] = 2
+print(c.get("a", 99))
+print(c.get("b", 99))
+print(d.get("b", 99))
