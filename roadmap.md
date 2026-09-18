@@ -2669,3 +2669,38 @@ nested2:  def security(code): class _Info: def __init__(self, c): self.display_n
 顶层 class 的字符串字段 ✓、函数内 class 的**整型**字段 ✓ 都已正确 ⇒ 剩下的是
 「闭包 ctor + 字符串字段」这个组合，切入点：在闭包路径确认 `type_decls` 的键与
 `base_func`（hoist 名/类名）是否一致，以及 f-string 赋值的字段是否被识别为 str。
+
+
+## 批次六十四（2026-09-17，**未修成，改动回滚**）：`-> Any` 返回类型是剩下的那层
+
+继续追「函数内 class 的字符串字段」。探针把最后一层挖出来了：
+
+```
+PROBE_CLS read field=display_name base_ty=Some(Named("Any", [])) resolved=None
+PROBE_CLS base_func=_Info in_decls=true arg_tys=[Some(Str)] decls=[("_Info", [("display_name","i64"),("start_date","str")])]
+```
+
+### 真正的原因不是「闭包 ctor + 字符串字段」，而是**读的位置跨了 `Any`**
+
+`nested2` 的实际读点是 `get_security_info("...").display_name` —— 基是**调用
+`get_security_info`**，而它的注解是 **`-> Any`** ✗ ⇒ 读点拿到的基类型是 `Named("Any")` ✗，
+既不是结构体、也无法反查到 `_Info` ✗ ⇒ 字段类型退化成 i64 ✗ ⇒ 打印指针。
+
+（`decls` 里 `start_date` 是 `str` ✓ 而 `display_name` 是 `i64` ✗ —— 因为前者右值是**字面量**
+（解析期可知 ✓），后者是 **f-string** ✗（解析期不可知 ✓），正好印证「字段类型靠实参/字面量细化」这条链 ✓。）
+
+### 试过什么
+
+给字段读加「`Named` 查不到就再按 `Call{method}` 反查」的链式回退 ✗，
+并修好被正则误删的闭包路径细化块 ✗。结果：**两处都没有改变任何输出** ✗
+（`nested2` 仍打印指针 ✓、`make("hi")` 这类函数内 class 字符串字段同样如此 ✓），
+python_style 181/181 ✓、官方 194/194 ✓ —— 属「无证据的改动」，**已回滚** ✓。
+
+### 结论 / 下一步
+
+要修必须**细化函数的返回类型**：当函数声明为 `-> Any`（或未知）而函数体**返回一个已知结构体实例**时，
+把 `func_ret_types[fn]` 细化成该结构体 —— 这与批次六十三对字段做的细化是同一类手法
+（在**父上下文**做，别丢进子 MirGen ✗）。
+
+> 注：`nested2` 是我为复现 shim 的 `get_security_info` 写的合成用例；
+> 真实 shim 里该函数的用法可能不同，所以这条按「合成复现」记录。
