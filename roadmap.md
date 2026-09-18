@@ -3414,3 +3414,32 @@ python_style **187/187**；官方 **194/194**；`jq_shim.py`（LOCAL=1）未定�
 
 > 说明：第 1 条本身是**有用能力** ✓（库需要一种写法表达「返回列表」✓），
 > 但它不是当前瓶颈 ✗ —— 瓶颈在 codegen 的限定名解析 ✓。等那一处修好后可以再回来加 ✓。
+
+## 批次八十七（2026-09-17，**找到 codegen 里的「同名两个函数对象」**，改动回滚）
+
+上一轮把范围缩到 codegen 的 `get_or_declare_function` ✓，本轮**直接验证**了它：
+
+### 实验：在 `::` 分支里**优先**查精确限定名
+
+在 `name.contains("::")` 分支最前面插入 `self.module.get_function(name)` ✓ —— 结果：
+
+```
+Undefined symbols: "_Frame__column", referenced from: _main in ct4.o
+```
+
+⇒ 精确名 `Frame::column` **查不到** ✗ ⇒ 回退到 `__` 变形 ✓ ⇒ 但那个 `Frame__column`
+**没有定义** ✗ ⇒ 链接失败 ✓。（改动前则回退到平名 `column` ✓ —— 那个**存在** ✓，
+但是个**无关的桩** ✗ ⇒ 静默错值/段错误 ✗。）
+
+⇒ 结论：**同一个方法存在两个函数对象** ✓ ——
+- `@"Frame::column"` = **真正的定义** ✓（IR 里能看到 ✓，来自 `mir.name` ✓）
+- `Frame__column` = 另一个注册项 ✗（无定义 ✗）
+
+而 `get_function("Frame::column")` 在**调用点**返回 **None** ✗ —— 像是**注册/顺序**问题 ✓
+（定义在 IR 里排在 `main` 之前 ✓，但 codegen 侧的注册未必 ✓）。
+
+### 下一步（探针位置）
+
+在调用点打印 `self.module.get_function("Frame::column")` 的结果 ✓ **以及** `module` 里
+所有含 `column` 的函数名 ✓ —— 看真正的定义是以什么键注册的 ✓。
+（已回滚本轮改动 ✓，python_style **187/187** ✓、官方 **194/194** ✓。）
