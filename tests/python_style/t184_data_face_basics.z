@@ -1,0 +1,21 @@
+// PY-A: 数据面最小两块 —— `np.full(n, v)`（新 C helper `py_vec_full`，与
+//   `zeta_dynarray_new`/`vec_push` 同一套头部布局，结果是普通 Vec）与 `.tolist()`。
+//   `.tolist()` 对**未定型接收者**走兜底表 → `zeta_identity`（我们的数组本来就是 Vec，
+//   而 identity 不解引用，所以未知接收者也不会读坏数据）；结果类型记作 `vec`，
+//   这样后续 `[i]` 仍走数组路径。
+//   注：未定型**形参**接收数组字面量时元素读出来是 0，这是**既有**问题（去掉 tolist 的对照同样如此），
+//   与本用例无关，故此处用已定型的数组。
+// expect: 3
+// expect: 7
+// expect: 3
+// expect: 20
+import numpy as np
+
+ys = np.full(3, 7)
+print(len(ys))
+print(ys[1])
+
+xs = [10, 20, 30]
+zs = xs.tolist()
+print(len(zs))
+print(zs[1])

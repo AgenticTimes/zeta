@@ -6398,6 +6398,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         }
                         ("measure_all", _) => Some(("zeta_qc_measure", "i64")),
                         ("allocate", _) => Some(("zeta_dynarray_new", "i64")),
+                        // `.tolist()` on an array we do not have a static type
+                        // for: our arrays ARE Vecs, so the list is the same
+                        // handle. Identity never dereferences, so an unknown
+                        // receiver cannot corrupt data.
+                        ("tolist", 1) => Some(("zeta_identity", "vec")),
                         // PY-A: pandas-style chainables route through identity;
                         // ALL other unknown methods also chain by identity so
                         // real-world sources link. (Earlier strict `_ => None`
@@ -6430,6 +6435,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             "str" => Type::Str,
                             "bool" => Type::Bool,
                             "split" => Type::DynamicArray(Box::new(Type::Str)),
+                            "vec" => Type::DynamicArray(Box::new(Type::I64)),
                             _ => Type::I64,
                         },
                     );

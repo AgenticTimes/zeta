@@ -1321,6 +1321,18 @@ int64_t zeta_bitarray_new(int64_t nbits) {
 }
 // memory::DynamicArray::new(cap) — same [cap | len | data...] layout as the
 // Vec runtime so vec_push/vec_get/vec_len work uniformly. Cap 0 → 8.
+// PY-A: `np.full(n, v)` — a Vec of n copies of v. Uses the same header layout
+// as zeta_dynarray_new/vec_push (cap/len before the data pointer), so the
+// result is an ordinary Vec the rest of the runtime already understands.
+int64_t zeta_dynarray_new(int64_t);
+int64_t vec_push(int64_t, int64_t);
+int64_t py_vec_full(int64_t n, int64_t v) {
+    if (n < 0) n = 0;
+    int64_t h = zeta_dynarray_new(n);
+    for (int64_t i = 0; i < n; i++) h = vec_push(h, v);
+    return h;
+}
+
 int64_t zeta_dynarray_new(int64_t cap) {
     if (cap < 8) cap = 8;
     int64_t* buf = (int64_t*)GC_malloc((size_t)(2 + cap) * 8);

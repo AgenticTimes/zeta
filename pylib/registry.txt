@@ -436,3 +436,4 @@ F pandas Timestamp py_dt_from_str args=i64 ret=i64 handle=PyDate
 F pandas Timedelta py_dt_timedelta args=i64 ret=i64 handle=PyDelta
 F numpy datetime64 py_dt_identity args=i64 ret=i64 handle=PyDate
 F numpy searchsorted py_dt_searchsorted args=i64,i64,i64 ret=i64
+F numpy full py_vec_full args=i64,i64 ret=vec
