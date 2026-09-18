@@ -7,8 +7,10 @@
 //   另：字段下标作为**表达式**（`self.d["a"]`）此前会**段错误** —— 赋值路径已处理 map，
 //   表达式路径没有，于是把 map 句柄当数组读。修法：表达式下标补 map 分支，
 //   且把基址**物化到局部槽**（codegen 的 DictGet 用 `load_local`，字段读没有 alloca）。
-//   注：**未注解**的形参做键（`def get(self, k): self.d[k]`）仍会崩溃，是独立问题，
-//   本用例只断言已验证通路（字面量键 / 外部 `.keys()`）。
+//   注：**未注解**的形参做键（`def get(self, k): self.d[k]`）目前**取不到值**（返回 0）——
+//   map 的声明类型里没有键类型，`lower_map_key` 只按**键自身**的静态类型决定是否内容哈希。
+//   这是独立问题，本用例只断言已验证通路（字面量键 / 注解 `k: str` / 外部 `.keys()`）。
+// expect: 1
 // expect: 1
 // expect: 1
 // expect: 1
@@ -22,8 +24,12 @@ class C:
     def literal_get(self):
         return self.d["a"]
 
+    def param_get(self, k: str):
+        return self.d[k]
+
 
 c = C({"a": 1})
 print(c.keys_len())
 print(c.literal_get())
 print(len(c.d.keys()))
+print(c.param_get("a"))

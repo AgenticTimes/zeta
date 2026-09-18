@@ -6402,7 +6402,20 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // (user structs from undefined modules, BitArray, Sieve,
                 // QuantumCircuit) map to runtime equivalents by NAME so
                 // object-style tests link and run. V1 heuristic.
+                // A method defined on a KNOWN struct must win over the opaque
+                // fallback: `c.get("a")` matched `("get", 2) => array_get` and
+                // read the struct as an ARRAY (the key became an element offset
+                // → SEGFAULT) instead of calling `C::get`.
+                let struct_has_method = match receiver_ty.as_ref() {
+                    Some(Type::Named(tn, _)) => {
+                        let qualified = format!("{}::{}", tn, method);
+                        self.func_ret_types.contains_key(&qualified)
+                            || self.func_ret_types.contains_key(method.as_str())
+                    }
+                    _ => false,
+                };
                 let opaque_fallback: Option<(&str, &str)> = if receiver.is_some()
+                    && !struct_has_method
                     && receiver_ty.as_ref().map_or(true, |t| {
                         let is_str = matches!(t, Type::Str);
                         let is_map = matches!(t, Type::Named(n, _) if n == "map");
