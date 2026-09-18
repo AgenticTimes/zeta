@@ -2145,6 +2145,30 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
     /// PY-A: normalize a dict key — string keys hash by CONTENT (map_str_key,
     /// FNV-1a) because identical literals allocate distinct handles and the
     /// runtime map compares keys numerically. Non-string keys pass through.
+    /// Content-hash a key for a map whose declared KEY TYPE is `str`.
+    /// `lower_map_key` only hashes when the KEY's own type is `Str`; with an
+    /// unannotated parameter the key is I64, so a content-hashing map was
+    /// probed by POINTER — a silent miss (value 0, no diagnostic).
+    fn lower_map_key_typed(&mut self, id: u32, map_ty: Option<&Type>) -> u32 {
+        let key_is_str = matches!(
+            map_ty,
+            Some(Type::Named(_, targs)) if matches!(targs.first(), Some(Type::Str))
+        );
+        if key_is_str {
+            let nid = self.next_id();
+            self.stmts.push(MirStmt::Call {
+                func: "map_str_key".to_string(),
+                args: vec![id],
+                dest: nid,
+                type_args: vec![],
+            });
+            self.exprs.insert(nid, MirExpr::Var(nid));
+            self.type_map.insert(nid, Type::I64);
+            return nid;
+        }
+        self.lower_map_key(id)
+    }
+
     fn lower_map_key(&mut self, id: u32) -> u32 {
         if matches!(self.type_map.get(&id), Some(Type::Str)) {
             let nid = self.next_id();
@@ -7130,16 +7154,29 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     }) = self.type_decls.get_mut(base)
                     {
                         for (i, aid) in arg_ids.iter().enumerate() {
-                            let concrete = match self.type_map.get(aid) {
-                                Some(Type::Str) => "str",
-                                Some(Type::F64) => "f64",
-                                Some(Type::F32) => "f32",
-                                Some(Type::Bool) => "bool",
-                                _ => continue,
+                            let concrete: Option<String> = match self.type_map.get(aid) {
+                                Some(Type::Str) => Some("str".to_string()),
+                                Some(Type::F64) => Some("f64".to_string()),
+                                Some(Type::F32) => Some("f32".to_string()),
+                                Some(Type::Bool) => Some("bool".to_string()),
+                                // A map value CARRIES its key type and the field must keep it:
+                                // without it a content-hashing map probed with an unannotated
+                                // parameter key misses (value 0, no diagnostic). Note
+                                // `from_string` parses generics as `lt(Name, Args)`, not `<...>`.
+                                Some(Type::Named(m, targs)) if m == "map" => {
+                                    let k = match targs.first() {
+                                        Some(Type::Str) => "str",
+                                        _ => "i64",
+                                    };
+                                    Some(format!("lt(map, {})", k))
+                                }
+                                _ => None,
                             };
-                            if let Some((_, dt)) = decl_fields.get_mut(i) {
-                                if dt.as_str() == "i64" {
-                                    *dt = concrete.to_string();
+                            if let Some(concrete) = concrete {
+                                if let Some((_, dt)) = decl_fields.get_mut(i) {
+                                    if dt.as_str() == "i64" || dt.as_str() == "map" {
+                                        *dt = concrete;
+                                    }
                                 }
                             }
                         }
@@ -8399,7 +8436,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // not: `self.d["a"]` fell through to the array branches and read
                 // the map handle as an array — a SEGFAULT, not a wrong value.
                 if matches!(&base_ty, Type::Named(n, _) if n == "map" || n == "dict") {
-                    let key_id = self.lower_map_key(iid);
+                    let key_id = self.lower_map_key_typed(iid, Some(&base_ty));
                     // The base must live in a LOCAL slot: codegen's DictGet does
                     // `load_local(map_id)`, and a field read (or any non-local
                     // expression) has no alloca — `self.d["a"]` SEGFAULTED.

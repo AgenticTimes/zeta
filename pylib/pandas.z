@@ -3,15 +3,19 @@
 # 这是**库实现**，不是编译器特例：`import pandas as pd` 会加载本文件，
 # `pd.DataFrame(...)` 解析到这里的 `DataFrame`（模块限定名 `pandas__DataFrame`）。
 # 支持：构造、concat（按列拼接）、列名列表、列数、列向量。
+# 注意：`data` 的注解写成 `lt(map, str)` —— 这是 Zeta 的泛型拼写（不是 `<...>`）。
+# 键类型必须写出来：`lower_map_key` 只按**键自身**的静态类型决定内容哈希，
+# 未注解的形参做键时会按指针探测内容哈希的 map ⇒ 静默取不到值。
+#
 # 不支持（有意为之，保持响亮失败而不是假语义）：`df["col"]` 需要类的
 # `__getitem__`，方言还没有；`sort_values`/`iloc` 是行级操作，列映射模型表达不了。
 
 
 class DataFrame:
-    def __init__(self, data: map):
+    def __init__(self, data: lt(map, str)):
         self.data = data
 
-    def column(self, name: str):
+    def column(self, name):
         return self.data[name]
 
     def column_names(self):

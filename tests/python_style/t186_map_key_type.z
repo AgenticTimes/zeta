@@ -1,0 +1,19 @@
+// PY-A: map 的**键类型**决定要不要内容哈希。
+//   `lower_map_key` 只看**键自身**的静态类型 ⇒ 未注解形参做键时是 I64 ⇒
+//   对内容哈希的 map 按**指针**探测 ⇒ 静默取不到值（返回 0，无诊断）。
+//   修法：新增 `lower_map_key_typed(iid, map_ty)`，按 **map 声明的键类型**决定 ✓，
+//   表达式下标改用它 ✓。
+//   而 map 的键类型要靠**注解**带进来 —— 泛型拼写是 `lt(Name, Args)`（不是 `<...>`）：
+//      `def __init__(self, d: lt(map, str))` ✓
+//   （调用点细化也会补键类型，但库/方法的 lower 顺序在前时来不及 ⇒ 注解才是可靠来源。）
+// expect: 1
+class C:
+    def __init__(self, d: lt(map, str)):
+        self.d = d
+
+    def get(self, k):
+        return self.d[k]
+
+
+c = C({"a": 1})
+print(c.get("a"))
