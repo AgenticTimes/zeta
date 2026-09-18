@@ -1937,7 +1937,20 @@ impl Resolver {
         let ret_types: HashMap<String, Type> = self
             .get_all_func_signatures()
             .iter()
-            .map(|(name, (_, ret, _))| (name.clone(), ret.clone()))
+            .map(|(name, (_, ret, _))| {
+                // Normalize `vec`/`list` to the ARRAY type at the single place
+                // where signatures are handed to MIR: several annotation parsers
+                // turn a library's `-> lt(vec, str)` into `Named("vec", [T])`,
+                // which a caller cannot index as a list.
+                let ret = match ret {
+                    Type::Named(n, args) if n == "vec" || n == "list" => match args.first() {
+                        Some(t) => Type::DynamicArray(Box::new(t.clone())),
+                        None => Type::DynamicArray(Box::new(Type::I64)),
+                    },
+                    other => other.clone(),
+                };
+                (name.clone(), ret)
+            })
             .collect();
         let mut mir_gen = crate::middle::mir::r#gen::MirGen::new()
             .with_global_consts(self.ctfe_consts.clone())

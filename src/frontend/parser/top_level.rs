@@ -812,7 +812,16 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
         }
         // def method(...) { ... } — reuse parse_func (def alias supported)
         match parse_func(next) {
-            Ok((rest, AstNode::FuncDef { name: mname, params, body, .. })) => {
+            Ok((
+                rest,
+                AstNode::FuncDef {
+                    name: mname,
+                    params,
+                    body,
+                    ret,
+                    ..
+                },
+            )) => {
                 if mname == "__init__" {
                     has_init = true;
                     init_params = params
@@ -834,9 +843,11 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                             new_params.push((pn.clone(), pt.clone()));
                         }
                     }
-                    // Return type inference: string-returning bodies (f-string
-                    // or string literal results) get "str", else i64.
-                    let ret = if body_is_string_return(&body) {
+                    // An EXPLICIT return annotation wins; the body heuristic only
+                    // applies to unannotated methods (the parser marks those "()").
+                    let ret = if !ret.is_empty() && ret != "()" && ret != "i64" {
+                        ret.clone()
+                    } else if body_is_string_return(&body) {
                         "str".to_string()
                     } else {
                         "i64".to_string()

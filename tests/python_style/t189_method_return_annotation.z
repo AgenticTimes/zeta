@@ -1,0 +1,20 @@
+// PY-A: 方法的**显式返回注解**必须生效（此前被脱糖处的 str/i64 启发式覆盖 ✗）。
+//   两处配合才成：
+//     ① 脱糖：显式 `->` 优先于启发式（未注解的方法标记为 "()" 才走启发式）；
+//     ② 签名表出口（`lower_to_mir`）：把 `vec`/`list` 归一化成数组类型 ——
+//        否则库写的 `-> lt(vec, str)` 会变成 `Named("vec", [T])`，调用方无法当列表索引。
+//   本用例覆盖 ①：`label(self) -> str` 返回字段（方法体不是字符串字面量 ⇒ 启发式会判 i64 ⇒
+//   打印指针 ✗）。
+// expect: hi
+// expect: 1
+class C:
+    def __init__(self, s: str):
+        self.s = s
+
+    def label(self) -> str:
+        return self.s
+
+
+c = C("hi")
+print(c.label())
+print(c.label() == "hi")
