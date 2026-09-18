@@ -6931,6 +6931,34 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         type_args: vec![],
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
+                    // A class defined INSIDE a function is hoisted as a closure,
+                    // so its constructor arrives here — apply the same struct
+                    // treatment as the ordinary call path: return the struct and
+                    // refine its field types from the arguments (otherwise a
+                    // `str` field of such a class prints as a pointer).
+                    if let Some(TypeDecl::Struct {
+                        fields: decl_fields,
+                        ..
+                    }) = self.type_decls.get_mut(base_func)
+                    {
+                        for (i, aid) in arg_ids.iter().enumerate() {
+                            let concrete = match self.type_map.get(aid) {
+                                Some(Type::Str) => "str",
+                                Some(Type::F64) => "f64",
+                                Some(Type::F32) => "f32",
+                                Some(Type::Bool) => "bool",
+                                _ => continue,
+                            };
+                            if let Some((_, dt)) = decl_fields.get_mut(i) {
+                                if dt.as_str() == "i64" {
+                                    *dt = concrete.to_string();
+                                }
+                            }
+                        }
+                        self.type_map
+                            .insert(id, Type::Named(base_func.to_string(), vec![]));
+                        return id;
+                    }
                     let ret_ty = self
                         .closure_ret_tys
                         .get(&closure_fn)
@@ -6960,7 +6988,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 let base_name = func_name.rsplit_once('_').map(|(b, _)| b.to_string());
                 self.stmts.push(MirStmt::Call {
                     func: func_name,
-                    args: arg_ids,
+                    args: arg_ids.clone(),
                     dest: id,
                     type_args: mir_type_args.clone(),
                 });
@@ -6996,6 +7024,38 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             );
                         }
                         sub.apply(&ret_ty)
+                    };
+                    // A constructor of a struct declared in this program returns
+                    // that struct, and its ARGUMENTS tell us the field types.
+                    // `def __init__(self, s)` is unannotated, so the class
+                    // desugaring recorded every field as i64: the runtime value
+                    // was a correct string handle (`A("hi").name == "hi"` was
+                    // True) but the field READ was typed i64 and `print` showed
+                    // the pointer. Refine here, in the PARENT context — a child
+                    // MirGen gets a clone of `type_decls`, so a refinement made
+                    // while lowering the constructor body never comes back.
+                    let ret_ty = if let Some(TypeDecl::Struct {
+                        fields: decl_fields,
+                        ..
+                    }) = self.type_decls.get_mut(base)
+                    {
+                        for (i, aid) in arg_ids.iter().enumerate() {
+                            let concrete = match self.type_map.get(aid) {
+                                Some(Type::Str) => "str",
+                                Some(Type::F64) => "f64",
+                                Some(Type::F32) => "f32",
+                                Some(Type::Bool) => "bool",
+                                _ => continue,
+                            };
+                            if let Some((_, dt)) = decl_fields.get_mut(i) {
+                                if dt.as_str() == "i64" {
+                                    *dt = concrete.to_string();
+                                }
+                            }
+                        }
+                        Type::Named(base.to_string(), vec![])
+                    } else {
+                        ret_ty
                     };
                     self.type_map.insert(id, ret_ty);
                 }
@@ -7659,8 +7719,38 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         field: field.clone(),
                     },
                 );
-                // 3. For now, assume field type is i64 (will need proper type inference later)
-                self.type_map.insert(id, Type::I64);
+                // 3. Take the field's DECLARED type from the struct. Typing
+                //    every field as i64 meant a `str` field was used as an
+                //    integer afterwards: `print(A("hi").name)` printed the
+                //    pointer, while `A("hi").name == "hi"` was still True —
+                //    the value was right, only its TYPE was lost.
+                let struct_field_ty = |decls: &HashMap<String, TypeDecl>, tn: &str, f: &str| {
+                    let mut cands = vec![tn.to_string()];
+                    if let Some((_, tail)) = tn.rsplit_once("__") {
+                        cands.push(tail.to_string());
+                    }
+                    cands.iter().find_map(|t| match decls.get(t) {
+                        Some(TypeDecl::Struct { fields, .. }) => fields
+                            .iter()
+                            .find(|(x, _)| x == f)
+                            .map(|(_, ft)| Type::from_string(ft)),
+                        _ => None,
+                    })
+                };
+                let field_ty = match self.type_map.get(&base_id) {
+                    Some(Type::Named(tn, _)) => struct_field_ty(&self.type_decls, tn, field),
+                    // `A("hi").name` — recover the struct from the call itself
+                    // when the base's type was lost upstream.
+                    _ => match &**base {
+                        AstNode::Call {
+                            receiver: None,
+                            method,
+                            ..
+                        } => struct_field_ty(&self.type_decls, method, field),
+                        _ => None,
+                    },
+                };
+                self.type_map.insert(id, field_ty.unwrap_or(Type::I64));
             }
             AstNode::StructLit { variant, fields } => {
                 // Implement proper struct literal creation

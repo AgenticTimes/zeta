@@ -1,0 +1,27 @@
+// PY-A: 结构体字段的**声明类型**要跟着实际存入的值走。
+//   `def __init__(self, s)` 没有注解 ⇒ class 脱糖把字段类型记成默认的 i64，
+//   于是 `A("hi").name` 的**值**是对的字符串句柄（`== "hi"` 为真），
+//   但字段读被定型为 i64 ⇒ print 打印指针。
+//   修法两处**必须同时**（缺一无效）：
+//     ① 调用点（父上下文）用实参类型细化 `type_decls` 里的字段类型 ——
+//        不能在构造函数体里细化：构造函数在**子 MirGen** 里 lower，拿到的是 type_decls 的克隆，
+//        子上下文的修改回不来；
+//     ② 字段读按 `type_decls` 的声明类型落表（原来无条件 i64）。
+// expect: hi
+// expect: 1
+// expect: 42
+class A:
+    def __init__(self, s):
+        self.name = s
+
+
+class B:
+    def __init__(self, n, s):
+        self.n = n
+        self.tag = s
+
+
+a = A("hi")
+print(a.name)
+print(a.name == "hi")
+print(B(42, "x").n)
