@@ -5,7 +5,8 @@
 //   不再回退到变形名或平名 ✓。
 //   注：方法**返回值**的类型仍需注解（`lt(vec, str)`）才能正确取元素 —— 那是另一处，本用例不断言。
 // expect: 2
-// expect: 1   (只有一列)
+// expect: 1
+//   （只有一列）
 class F:
     def __init__(self, d: lt(map, str)):
         self.d = d
