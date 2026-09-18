@@ -693,6 +693,38 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // attribute/method on it degraded: `d.year` read garbage
                     // (18388 instead of 2020) and `d.strftime(...)` emitted a
                     // bare symbol. Only overrides the I64 default.
+                    // A param whose declared type names a STRUCT we know
+                    // (`&mut self: C`, or `def f(p: C)`) must keep that type:
+                    // staying I64 meant the field read inside the method could
+                    // not find the struct, so `self.<map field>.keys()` was an
+                    // undefined `_keys`.
+                    // A struct defined in an IMPORTED module is registered under
+                    // its mangled name (`pandas__DataFrame`), so accept that
+                    // spelling too — otherwise `self` in the library's own
+                    // methods stayed I64 and every `self.<map field>.keys()` was
+                    // an undefined `_keys`.
+                    if matches!(self.type_map.get(&id), Some(Type::I64)) {
+                        let mut struct_key: Option<String> = None;
+                        if matches!(self.type_decls.get(pt_str), Some(TypeDecl::Struct { .. })) {
+                            struct_key = Some(pt_str.to_string());
+                        } else if let Some(k) = self
+                            .type_decls
+                            .keys()
+                            .find(|k| {
+                                k.ends_with(&format!("__{}", pt_str))
+                                    && matches!(
+                                        self.type_decls.get(*k),
+                                        Some(TypeDecl::Struct { .. })
+                                    )
+                            })
+                            .cloned()
+                        {
+                            struct_key = Some(k);
+                        }
+                        if let Some(k) = struct_key {
+                            self.type_map.insert(id, Type::Named(k, vec![]));
+                        }
+                    }
                     if matches!(self.type_map.get(&id), Some(Type::I64))
                         && crate::middle::pylib::handle_tag(param_type.trim()).is_some()
                     {
@@ -3063,7 +3095,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // (strategies/code/jq_shim.py) could never link.
                 if receiver.is_none() {
                     if let Some((module, member)) = self.py_member_aliases.get(method).cloned() {
-                        if self.py_user_modules.contains(&module) {
+                        // A member the REGISTRY already declares keeps its C
+                        // shim: a library that SUPPLEMENTS a registered module
+                        // would otherwise steal `pd.Timestamp` from the
+                        // handle-typed shim (regressed t179).
+                        let registered =
+                            crate::middle::pylib::find_member(&module, &member).is_some();
+                        if self.py_user_modules.contains(&module) && !registered {
                             // Python default arguments: the generic call path
                             // fills them, and skipping that here silently read 0
                             // (`add3(1, 2)` gave 3, not 13).

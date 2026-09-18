@@ -823,8 +823,12 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                     init_stmts = body;
                 } else {
                     // Python `def m(self, a, b)` → `fn m(&mut self, a, b)`
+                    // `self` must be typed as the CLASS, not the literal
+                    // "Self": with "Self" the field read inside a method could
+                    // not find the struct at all, so every `self.<field>` was
+                    // typed i64 (a `map` field's `.keys()` -> undefined `_keys`).
                     let mut new_params: Vec<(String, String)> =
-                        vec![("&mut self".to_string(), "Self".to_string())];
+                        vec![("&mut self".to_string(), name.clone())];
                     for (pn, pt) in &params {
                         if pn != "self" && pn != "&self" && pn != "&mut self" {
                             new_params.push((pn.clone(), pt.clone()));
@@ -910,8 +914,18 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                                 "DynamicArray".to_string()
                             }
                             AstNode::Var(name) if param_names.contains(&name.as_str()) => {
-                                // `self.x = x` — type unknown, call-site coercion adapts
-                                "i64".to_string()
+                                // `self.x = x` — take the PARAMETER's declared
+                                // type when it has one. Hardcoding i64 ignored
+                                // `def __init__(self, d: map)`: every library
+                                // field became i64 and its own
+                                // `self.data.keys()` turned into an undefined
+                                // `_keys`.
+                                init_params
+                                    .iter()
+                                    .find(|(n, _)| n == name)
+                                    .map(|(_, ty)| ty.clone())
+                                    .filter(|ty| !ty.is_empty())
+                                    .unwrap_or_else(|| "i64".to_string())
                             }
                             _ => "i64".to_string(),
                         };

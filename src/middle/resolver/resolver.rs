@@ -413,15 +413,17 @@ impl Resolver {
                 if !in_registry {
                     let _ = self.load_user_python_module(&module);
                 } else if let Some((path, _)) = self.find_py_module_file(&module) {
-                    // The built-in shim wins over a same-named file. Say so —
-                    // silently ignoring the user's file is exactly the kind of
-                    // surprise this compiler must not spring.
+                    // A local file for a module that ALSO has a built-in shim is
+                    // a SUPPLEMENT: the registry keeps the members only it can
+                    // express (handle-typed `pd.Timestamp` -> PyDate) and the
+                    // file adds the rest as LIBRARY code.
                     eprintln!(
-                        "warning: PY-A: `{}` resolves to the built-in shim; the local file {} \
-                         is ignored (rename it, or import it under a different name)",
+                        "warning: PY-A: `{}` has both a built-in shim and the local library \
+                         {} — the library supplements it (registered members win)",
                         module,
                         path.display()
                     );
+                    let _ = self.load_user_python_module(&module);
                 }
                 let is_user = self.py_user_modules.borrow().contains(&module);
                 match &member {

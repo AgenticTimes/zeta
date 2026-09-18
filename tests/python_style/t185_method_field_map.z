@@ -1,0 +1,19 @@
+// PY-A: 类的字段类型必须来自**参数注解**，且方法体内的 `self` 必须被定型为**类本身** ——
+//   两者缺一，`self.<map 字段>.keys()` 就变成未定义符号 `_keys`（库实现无法链接）。
+//   三处修法：
+//     ① `parse_class` 里 `self.x = x` 此前**硬编码 i64** ⇒ 改为取参数声明的类型；
+//     ② 脱糖把 `self` 的类型写成字面量 `"Self"` ⇒ 改为类名（导入模块里是 `模块__类名`）；
+//     ③ 形参落表只认 f64/bool/str/泛型/句柄 ⇒ 补上「已注册的 struct」。
+//   注：从**外部**读同一字段（`c.d.keys()`）或带参数下标（`self.d[k]`）目前会崩溃，
+//   是尚未定位的独立问题，本用例只断言已验证的通路（方法体内 `.keys()`）。
+// expect: 1
+class C:
+    def __init__(self, d: map):
+        self.d = d
+
+    def keys_len(self):
+        return len(self.d.keys())
+
+
+c = C({"a": 1})
+print(c.keys_len())
