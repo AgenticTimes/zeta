@@ -4795,6 +4795,131 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
+                // 批次145 重放(批次123): builtin `getattr(obj, "name" [, default])`.
+                // 已知 struct（或可从构造调用恢复类名）→ 改写为 FieldAccess，
+                // 复用字段/零参方法分派与类型；字段不存在 → default；
+                // 未跟踪接收者 → 有 default 用 default（一次告警）；
+                // 无 default 或动态名 → py_getattr_dynamic 运行期响亮 abort。
+                if receiver.is_none() && method == "getattr" && (args.len() == 2 || args.len() == 3)
+                {
+                    if let AstNode::StringLit(lit) = &args[1] {
+                        let obj_id = self.lower_expr(&args[0]);
+                        // 类名：接收者的 Named 类型，或构造调用的方法名
+                        let class_of = |ty: Option<&Type>, node: &AstNode| -> Option<String> {
+                            if let Some(Type::Named(n, _)) = ty {
+                                if n != "map" && n != "dict" {
+                                    return Some(n.clone());
+                                }
+                            }
+                            if let AstNode::Call {
+                                receiver: None,
+                                method: m,
+                                ..
+                            } = node
+                            {
+                                return Some(m.clone());
+                            }
+                            None
+                        };
+                        let obj_ty = self.type_map.get(&obj_id).cloned();
+                        let cls = class_of(obj_ty.as_ref(), &args[0]);
+                        match cls {
+                            Some(tn) => {
+                                let field_exists = self.type_decls.get(&tn).and_then(|d| match d {
+                                    TypeDecl::Struct { fields, .. } => fields
+                                        .iter()
+                                        .find(|(fname, _)| fname.as_str() == lit.as_str())
+                                        .map(|(_, ft)| Type::from_string(ft)),
+                                    _ => None,
+                                });
+                                if field_exists.is_some() || args.len() == 2 {
+                                    let fa = AstNode::FieldAccess {
+                                        base: Box::new(args[0].clone()),
+                                        field: lit.clone(),
+                                    };
+                                    return self.lower_expr(&fa);
+                                }
+                                // 已知 struct 但字段不存在 → default
+                                if args.len() == 3 {
+                                    return self.lower_expr(&args[2]);
+                                }
+                            }
+                            None => {
+                                if args.len() == 3 {
+                                    eprintln!(
+                                        "warning: PY-A: getattr on untyped receiver uses the default for '{}'",
+                                        lit
+                                    );
+                                    return self.lower_expr(&args[2]);
+                                }
+                            }
+                        }
+                        // 响亮失败：py_getattr_dynamic
+                        let name_id = self.next_id();
+                        self.exprs
+                            .insert(name_id, MirExpr::StringLit(lit.clone()));
+                        self.type_map.insert(name_id, Type::Str);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_getattr_dynamic".to_string(),
+                            args: vec![obj_id, name_id],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::I64);
+                        return id;
+                    }
+                    // 动态名（非字面量）→ 响亮失败
+                    let obj_id = self.lower_expr(&args[0]);
+                    let name_id = self.lower_expr(&args[1]);
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_getattr_dynamic".to_string(),
+                        args: vec![obj_id, name_id],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+                // 批次145 重放(批次123): builtin next(it[, default]) + opaque .next().
+                if receiver.is_none() && method == "next" && !args.is_empty() {
+                    if args.len() >= 2 {
+                        eprintln!("warning: PY-A: next(it, default) returns the default (V1)");
+                        return self.lower_expr(&args[1]);
+                    }
+                    let aid = self.lower_expr(&args[0]);
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_builtin_next".to_string(),
+                        args: vec![aid],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
+                if method == "next" && receiver.is_some() {
+                    // 已知 struct 的 next 方法 → 限定调用；否则 opaque → 0 (exhausted)。
+                    let sid = self.lower_expr(receiver.as_ref().unwrap());
+                    let known_next = match self.type_map.get(&sid).cloned() {
+                        Some(Type::Named(tn, _)) => {
+                            self.func_ret_types.contains_key(&format!("{}::next", tn))
+                        }
+                        _ => false,
+                    };
+                    if !known_next {
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_method_next".to_string(),
+                            args: vec![sid],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::I64);
+                        return id;
+                    }
+                }
                 // PY-A: min(xs, key=f) / max(xs, key=f) — linear scan calling
                 // the key once per element (ties keep the first, like Python).
                 if receiver.is_none()
@@ -5858,14 +5983,6 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 } else {
                     None
                 };
-                if std::env::var("ZETA_PROBE").is_ok() && method == "unique" {
-                    eprintln!(
-                        "PROBE unique call: receiver_ty={:?} arg_ids={:?} rt_has={}",
-                        receiver_ty,
-                        arg_ids,
-                        self.func_ret_types.contains_key("DataFrame::__contains__"),
-                    );
-                }
                 // PY-A: keyword arguments — bind by parameter name when the
                 // callee's signature is known (Python semantics). The parser
                 // wraps `name=value` as a __kwarg__ marker.

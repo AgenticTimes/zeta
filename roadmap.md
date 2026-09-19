@@ -4929,3 +4929,21 @@ python_style **219 → 225**；官方 **194/194**。
 1. getattr 系 4 例（同一 lowering 点的可能性大）
 2. dunder len/setitem + pandas 链式簇
 3. numpy where/eye 簇
+
+### 批次一百四十五 第二轮（同日）：getattr/next 族重放
+
+1. **builtin `getattr(obj, "name" [, default])`**：已知 struct（或从构造调用恢复类名）且字段存在 → 改写 FieldAccess（复用零参方法分派/字段类型）；字段不存在或未跟踪接收者 → default（一次告警）；无 default/动态名 → `py_getattr_dynamic` 响亮 abort（批次 123 红线）
+2. **builtin `next(it[, default])`**：带 default → default（一次告警）；无 default → `py_builtin_next` abort
+3. **opaque `.next()`**：`py_method_next` 返回 0（exhausted，一次告警；已知 struct 的 next 方法走限定调用）
+4. 修复重放引入的 MIRgen 悬挂 Var 模式：默认值/FieldAccess 改写直接 `return self.lower_expr(...)`，不再 `Var(did)` 指向未存槽 id
+5. 移除临时 ZETA_PROBE 探针
+
+### 度量（第二轮后）
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 229/260 | **232/260** |
+| t215/t219/t222/t234 | FAIL | **PASS** |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+
+剩余 28 失败：dunder len/setitem（t196/t197）、pandas 链式（t198/t200/t201/t202/t204/t207/t208/t210/t228/t229）、numpy（t212/t217/t218/t221/t227/t230）、isinstance（t87）、listcomp（t216/t233）、strftime（t220）、logger（t223）、dict set cast（t231）、path open（t232）、ann-attr（t246）。
