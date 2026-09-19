@@ -8867,6 +8867,29 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
 
                 let size = elements.len();
 
+                // Python's `[]` is a GROWABLE list, never a 0-length fixed array.
+                // As a `StackArray` of size 0 it had no `[cap|len]` header, so
+                // `xs.append(v)`'s `vec_push` read the header 16 bytes BEFORE the
+                // alloca (garbage) and wrote past the buffer — stack corruption.
+                // That is the UB behind the pandas cluster's Bus errors / SEGVs
+                // (`idx: lt(vec, str) = []` + `idx.append(str(i))` in
+                // pylib/pandas.z) and behind t207's `len(xs)` staying 0.
+                if size == 0 {
+                    let capacity_id = self.next_id();
+                    self.exprs.insert(capacity_id, MirExpr::IntLit(0));
+                    self.type_map.insert(capacity_id, Type::I64);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_dynarray_new".to_string(),
+                        args: vec![capacity_id],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                    return id;
+                }
+
                 // HYBRID MEMORY SYSTEM: Check if this should be a stack array
                 // For small, fixed-size arrays, use stack allocation
                 if size <= 20000 {

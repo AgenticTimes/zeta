@@ -1,0 +1,20 @@
+// PY-A: 空列表字面量 `[]` 必须是可增长的 DynamicArray（批次 149）。
+// 此前 `[]` 是 0 长 StackArray（无 [cap|len] 头）⇒ `xs.append()` 的 vec_push
+// 会读 alloca 之前 16 字节当 cap/len（垃圾）并写越界 = 栈破坏：
+// `len(xs)` 恒 0，pylib/pandas.z 的 `idx: lt(vec, str) = []` + `idx.append(...)`
+// 也因此 UB（Bus error / SEGV 的来源）。
+// expect: 0
+// expect: 1
+// expect: 7
+// expect: 2
+// expect: 9
+xs = []
+print(len(xs))
+xs.append(7)
+print(len(xs))
+print(xs[0])
+ys = []
+ys.append(7)
+ys.append(9)
+print(len(ys))
+print(ys[1])
