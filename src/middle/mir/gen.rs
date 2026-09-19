@@ -6308,19 +6308,50 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         // No keyword arguments, but omitted ones may still need
                         // their DEFAULTS filled: `add(5)` for `def add(a, b = 10)`
                         // must bind b = 10 rather than silently reading 0.
-                        match if receiver.is_none() {
-                            self.func_param_names.get(method.as_str()).cloned()
+                        let names = self.func_param_names.get(method.as_str()).cloned();
+                        let method_defaults = if receiver.is_some() {
+                            self.param_defaults.get(method.as_str()).cloned()
                         } else {
                             None
-                        } {
-                            Some(params) => {
+                        };
+                        match names {
+                            Some(params) if receiver.is_none() => {
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
                                 fill(&mut slots, &params, pos, kw, &[]);
                                 Self::warn_unbound(&callee_name, &params, &slots);
                                 slots.into_iter().flatten().collect()
                             }
-                            None => args.clone(),
+                            // Method call whose callee DECLARES defaults.
+                            // `func_param_names` / `param_defaults` are keyed
+                            // by the bare method name and index `self` at 0,
+                            // which the dispatch site prepends — so drop it
+                            // here. Without this `a.reset_index()` left the
+                            // argument unbound and codegen padded 0, i.e.
+                            // drop=0 (=False) instead of the declared True
+                            // (t229, wrong value with no diagnostic).
+                            Some(params)
+                                if method_defaults
+                                    .as_ref()
+                                    .map_or(false, |d| d.iter().any(|x| x.is_some())) =>
+                            {
+                                let params: Vec<String> =
+                                    params.into_iter().skip(1).collect();
+                                let mut slots: Vec<Option<AstNode>> =
+                                    params.iter().map(|_| None).collect();
+                                fill(&mut slots, &params, pos, kw, &[]);
+                                if let Some(d) = &method_defaults {
+                                    for (i, slot) in slots.iter_mut().enumerate() {
+                                        if slot.is_none() {
+                                            if let Some(Some(v)) = d.get(i + 1) {
+                                                *slot = Some(v.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                                slots.into_iter().flatten().collect()
+                            }
+                            _ => args.clone(),
                         }
                     } else if receiver.is_none() {
                         match self.func_param_names.get(method.as_str()).cloned() {
@@ -7749,16 +7780,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // `::`-qualified names are like module-qualified ones: the
                 // definition carries no arity suffix, so a suffixed CALL would
                 // reference a symbol that never exists.
-                let func_name = if func.starts_with("zeta_")
+                // Whether the `_<argc>` disambiguation suffix was actually
+                // appended — the return-type lookup below must NOT strip an
+                // underscore that was part of the NAME. `DataFrame::reset_index`
+                // was read as base `DataFrame::reset`, missed `func_ret_types`,
+                // and typed the result I64 ⇒ `b.columns` became a bogus struct
+                // field read (`array_len` of stack garbage = 0) instead of
+                // `DataFrame::columns` (batch 99 fixed this in codegen only).
+                let suffixed = !(func.starts_with("zeta_")
                     || func.contains("__")
-                    || func.contains("::")
-                {
-                    func.clone()
-                } else {
+                    || func.contains("::"));
+                let func_name = if suffixed {
                     format!("{}_{}", func, arg_ids.len())
+                } else {
+                    func.clone()
                 };
                 // Pre-compute base name for return-type lookup before moving func_name.
-                let base_name = func_name.rsplit_once('_').map(|(b, _)| b.to_string());
+                let base_name = if suffixed { Some(func.clone()) } else { None };
                 self.stmts.push(MirStmt::Call {
                     func: func_name,
                     args: arg_ids.clone(),
