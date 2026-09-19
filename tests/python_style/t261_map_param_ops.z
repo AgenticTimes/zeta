@@ -1,0 +1,33 @@
+// PY-A: `lt(map, K, V)` 形参上的成员判定/取值（批次 149）。
+// 此前 `k in m` 对 map 形参恒 0（静默错值）；在类方法里还会落进
+// 「唯一 __contains__ 兜底」把 map 当 self 调 Class::__contains__ ⇒ 段错误。
+// expect: 1
+// expect: 0
+// expect: y
+// expect: 1
+// expect: 1
+// expect: 0
+def member(m: lt(map, str, str), k: str) -> i64:
+    if k in m:
+        return 1
+    return 0
+
+def pick(m: lt(map, str, str), k: str) -> str:
+    return m[k]
+
+class Box:
+    def __init__(self, m: lt(map, str, str)):
+        self.m = m
+    def has(self, k: str) -> bool:
+        return k in self.m
+    def n(self) -> i64:
+        return len(self.m)
+
+d: lt(map, str, str) = {"x": "y"}
+print(member(d, "x"))
+print(member(d, "z"))
+print(pick(d, "x"))
+print(len(d))
+b = Box(d)
+print(b.n())
+print(b.has("z"))

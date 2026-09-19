@@ -6373,9 +6373,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     let is_str = receiver_ty
                         .as_ref()
                         .map_or(false, |t| matches!(t, Type::Str));
+                    // A `lt(map, K, V)` PARAMETER is typed via `source_types`,
+                    // not type_map (params default to I64), so `k in m` inside a
+                    // method missed the map branch and fell through to the
+                    // unique-`__contains__` heuristic below — which dispatched
+                    // `DataFrame::__contains__(m, k)` with the MAP as `self`
+                    // (segfault in pylib/pandas.z `rename`, t204).
+                    let src_ty = self.source_types.get(&arg_ids[0]).cloned().unwrap_or_default();
                     let is_map = receiver_ty
                         .as_ref()
-                        .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"));
+                        .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
+                        || src_ty.starts_with("map<");
                     if is_str && arg_ids.len() == 2 {
                         self.stmts.push(MirStmt::Call {
                             func: "host_str_contains".to_string(),
@@ -6395,7 +6403,6 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // without this fallback `v in xs` inside a function returned
                     // 0 for every element — silently wrong for the filtering
                     // code that strategies are full of.
-                    let src_ty = self.source_types.get(&arg_ids[0]).cloned().unwrap_or_default();
                     let is_array_param =
                         src_ty.starts_with('[') || src_ty.starts_with("*mut [");
                     if (matches!(
@@ -6472,7 +6479,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         let qualified = match named_hit {
                             Some(q) => Some(q),
                             None => {
-                                if !matches!(receiver_ty.as_ref(), Some(Type::Named(_, _))) {
+                                // The unique-definition fallback may only fire for
+                                // the method's own `self`: it passes the receiver
+                                // as `self`, so firing it on any untyped receiver
+                                // calls `Class::__contains__(<non-self>, k)` — a
+                                // segfault, not a diagnostic.
+                                let self_slot = self.name_to_id.get("self").copied();
+                                if !matches!(receiver_ty.as_ref(), Some(Type::Named(_, _)))
+                                    && self_slot == Some(arg_ids[0])
+                                {
                                     let hits: Vec<String> = self
                                         .func_ret_types
                                         .keys()
@@ -9695,7 +9710,34 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
             .with_func_ret_types(self.func_ret_types.clone())
             // A closure inside an imported module must resolve that module's
             // own functions too (`lambda m: lowercase(m.group(0))`).
-            .with_symbol_renames(self.symbol_renames.clone());
+            .with_symbol_renames(self.symbol_renames.clone())
+            // The import tables, module-global types, defaults and CLI kinds
+            // are PROGRAM-wide context: without them a closure body could not
+            // see them at all — `[pd.DataFrame(r) for r in rs]` emitted a bare
+            // `_DataFrame` (link failure, t216) because `pd` only existed in
+            // the parent's alias table.
+            .with_py_imports(
+                self.py_module_aliases.clone(),
+                self.py_member_aliases.clone(),
+            )
+            .with_py_user_modules(self.py_user_modules.clone())
+            .with_module_global_types(self.module_global_types.clone())
+            .with_func_param_names(self.func_param_names.clone())
+            .with_argparse_kinds(self.argparse_kinds.clone())
+            .with_param_defaults(self.param_defaults.clone())
+            .with_source_file(self.source_file.clone())
+            .with_global_consts(self.global_consts.clone());
+        // Lambda values bound in the ENCLOSING scope (`f = lambda x: …;` then a
+        // comprehension calling `f(x)`) plus the class of an enclosing method
+        // are lowering context the child cannot rebuild — without them the call
+        // site emitted a ghost `_f` symbol.
+        child.shared_type_decls = self.shared_type_decls.clone();
+        child.closure_vars = self.closure_vars.clone();
+        child.closure_ret_tys = self.closure_ret_tys.clone();
+        child.hoisted_names = self.hoisted_names.clone();
+        child.current_class = self.current_class.clone();
+        child.re_repl_param = self.re_repl_param;
+        child.fn_depth = self.fn_depth + 1;
         let param_hint = self.pending_closure_param_types.take();
         for (pi, p) in params.iter().enumerate() {
             let id = child.next_id();
