@@ -5221,3 +5221,76 @@ t263（空表可增长）。
 先按「**注册表里有没有、只是降级层没接**」排查，而不是先动类型系统 —— 本批 13 例里
 11 例是这一类。判据：`grep <symbol> pylib/registry.txt runtime/*.c src/backend/codegen/runtime_decls_registry.rs`
 三处都在 ⇒ 缺口在 MIR 分派；三处都没有 ⇒ 才是真缺口。
+
+---
+
+## 批次一百五十（2026-09-19）：目标下沉到「跑起 REasyQuant 本地回测」
+
+**目标锚点**（用户 2026-09-17 定的范围，见 memory）：只做**本地/可安装** API，
+不碰聚宽平台 API；验收 = 把 `strategies/code/jq_wufu_local.py` 用 zetac 编译起来，
+`--engine local` 能产出回测结果。
+
+**复现命令**（不修改 REasyQuant 项目代码）：
+
+```bash
+REPLAYQUANT_LOCAL=1 ./target/release/zetac \
+  ~/source/quant/REasyQuant/strategies/code/jq_wufu_local.py -o /tmp/wl/wufu_local
+# 数未定义符号：
+grep -A200 'Undefined symbols' <log> | grep -oE '^\s+"_[^"]+"' | sort -u | wc -l
+```
+
+### 本批修掉：编译中止（连链接都到不了）
+
+`jq_wufu_local.py` 此前不是「链接失败」而是**编译中止**：
+
+```
+Error: "Function return type does not match operand type of return inst!
+  ret double 0.000000e+00 / i64"
+```
+
+| # | 根因 | 修法 |
+|---|---|---|
+| 1 | `infer_fn_return_type` 只扫**顶层** `Return`；`if` 体内的 `return 0.0` 看不见 ⇒ 函数声明 i64 却发出 `ret double` ⇒ LLVM 校验失败 ⇒ 整个编译中止。codegen 的 Return 只有 `i64→f64` 单向补齐，缺反向 | 补 `f64→i64`(fptosi)：**声明是 i64 就按 i64 返回**（源码契约），编译器不再产生非法 IR |
+| 2 | Python 拼写 `float`/`int` 没映射：`-> float` 被当不透明 Named ⇒ 被调用方签名 double、**调用点按 i64 取结果** ⇒ `print(fee(2.0))` 打出位模式 `4611686018427387904`（静默错值）；`amount: float` 拿 i64 ABI（79 条 ABI coerce 警告） | 三处类型解析器都要补（只补一处不生效）：`new_resolver::parse_type_string` · `Type::from_string` · `typecheck_new::string_to_type`（Resolver 的 `parse_type_string` 委托到它）+ gen.rs 形参落表的 `f64` 判据 |
+
+回归锁：**t264**（pre-fix 实测编译中止）。度量：python_style 260/264 → **261/264**，
+官方 194/194 · 语料 38/38 持平。
+
+### 现在的状态：能编译到链接期，**未定义符号 56 个**
+
+按「谁来修、在不在 local 路径上」分桶：
+
+| 桶 | 符号（示例） | 归属 | local 路径需要？ |
+|---|---|---|---|
+| A. 未运行引擎被整图编译 | `Cerebro` `adddata` `backend_strategy_backtrader_backend__BacktraderBackend` `backend_strategy_nautilus_backend__NautilusBackend___context_factory` `...___price_lookup` `getvalue` `from_int` `from_str` `decimal__Decimal` `__jq_bar_types` | `_run_backtrader` / nautilus 引擎。**惰性 import 也在函数体内被编译**，于是把链接拖死 | **不需要**——但**必须先解决「要不要链」**：`--engine` 是运行期参数，编译器不知道只跑 local。两条路：① 编译期按不可用引擎折叠（`_run_backtrader/_run_nautilus` 整体裁掉）；② 给这些外部依赖提供**响亮失败**的桩 |
+| B. 导入模块的私有成员 / 函数内延迟 import | `backend_datasrc_market_data___baostock_login` `..._logout` `backend_datasrc_adjustment__anchor_to_reference` `backend_datasrc_fund_adj_adjustment___fetch_fund_adj` `backend_datasrc_calibration__DataCalibrator___reference_loader` | 源里都已定义（`market_data.py:612` / `adjustment.py:131` / `fund_adj_adjustment.py:61`），但**函数内** `from .market_data import _baostock_login` 后再裸名调用 ⇒ 调用点被 mangle、定义侧没发射 | **需要**（本地行情靠 baostock/本地 parquet，不走平台） |
+| C. 嵌套 def / 匿名闭包 | `___closure`（闭包名丢了编号）、`LocalBackend::_price_lookup` 这类嵌套 def 的 mangle 名 | `_price_lookup(code, _d)` 是**函数内嵌套 def**，被当方法调用 | **需要**（`LocalBackend._price_lookup` 在 local 路径上） |
+| D. vec/Series 接收者的方法分派落到「类型名当限定名」 | `[dynamic]str__median` `[dynamic]str__isna` `[dynamic]str__notna` `DataFrame__abs` `DataFrame__median` | `df["x"].median()` / `.isna()` / `.notna()` / `.abs()`：接收者静态类型是 DynamicArray/DataFrame，分派把它 display_name 当限定名 → 发一个谁也定义不了的符号 | **需要**（data 层 adjustment/split_factors/fundamental_data 大量使用） |
+| E. `-> Any` 接收者的方法分派 | `Any__filter` | 与 memory 里已记的「`Named("Any")` 反查不到结构体声明」同源 | 需要（要确认具体调用点） |
+| F. 库/注册表缺口（可安装或纯 Python） | `PyDate__to_pydatetime`（`jq_wufu_local.py:279` 直接用）· `PyDate__tz_convert` · `decimal__Decimal` · `getsignal`（stdlib `signal`）· `cache_clear`（`functools.lru_cache` 包装）· `encode`（str 方法）· `get_loc`/`get_level_values`（pandas 索引面）· `clip`/`all`/`any`（Series 面） | 逐项补 W 表 / registry / pylib | 多数**需要** |
+| G. 平台 API（**不做**，按用户范围） | `all_instruments` `fund_daily` `index_components` `index_daily` `fund_etf_hist_em` `fund_etf_category_sina` `auth` `download` | 聚宽平台。**不补齐**，必须在本地路径上换成 baostock/本地 parquet 数据源 | 明确不做 |
+
+### 下一队列（批次一百五十一，建议顺序）
+
+1. **A 桶先做**：不解决「未运行引擎也被链接」，后面每修一个符号都会被 A 桶噪声淹没；
+   而且 A 桶里有 10+ 个符号，做掉之后真实缺口才看得清。建议先做**编译期折叠**
+   （`--engine` 的取值是运行期参数，所以要按「引擎不可用」而不是按 engine 值折叠：
+   `backtrader`/`nautilus` 在本机不是可安装的纯 Python 依赖）。
+2. **C 桶（嵌套 def / 闭包命名）**：这是纯编译器缺陷（符号名丢了编号 = 发错名），
+   影响面比一个用例大，且 pre-fix/post-fix 可用最小复现锁定。
+3. **D 桶（vec/Series 方法分派）**：一次修好 `median/isna/notna/abs` 四类，
+   data 层立刻少一大片。
+4. **B 桶（私有成员 + 函数内 import）**：与「模块内私有名导出」一体。
+5. **F 桶**：逐个小口补（`to_pydatetime` 优先——`jq_wufu_local.py:279` 在 local 路径上直用）。
+6. 至此才谈「链接成功 → 运行 → 出回测收益」。
+
+### 方法论沉淀
+
+- **「编译中止」优先于「链接失败」**：`Function return type does not match` 这类
+  LLVM 校验错误会让整个编译停住，症状看起来像「编译器坏了」，实际是一条
+  `ret` 未按声明类型转换。排查入口：`--emit-llvm 2>ir.ll` 后扫
+  `define i64 @f` 内是否有 `ret double`。
+- **同一条类型别名要补多处**：`float` 只在 `Type::from_string` 补了**不生效** ——
+  签名走 `Resolver::parse_type_string` → `typecheck_new::string_to_type`。
+  改类型别名前先 `grep -rn 'fn parse_type_string\|fn string_to_type\|fn from_string'`。
+- 未定义符号清单要**按归属分桶**再动手，否则会在「明确不做的平台 API」上浪费预算。
