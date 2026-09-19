@@ -1443,6 +1443,35 @@ int64_t py_path_suffix(int64_t p) {
     return (int64_t)zt_strdup(dot);
 }
 
+// `Path.mkdir(parents=True, exist_ok=True)` — 29 call sites in REasyQuant, all
+// with both flags, so the call arrives as the 3-arg form (registry declares the
+// bare `mkdir`), which nothing defined (`_PyPath__mkdir` / arity-suffixed).
+// `parents` → create the whole chain (mkdir -p); `exist_ok` → tolerate EEXIST.
+int64_t py_path_mkdir(int64_t p) {
+    return p ? (int64_t)mkdir((const char*)p, 0777) : -1;
+}
+int64_t py_path_mkdir_3(int64_t p, int64_t parents, int64_t exist_ok) {
+    if (!p) return -1;
+    const char* s = (const char*)p;
+    if (parents) {
+        char tmp[4096];
+        snprintf(tmp, sizeof tmp, "%s", s);
+        for (char* q = tmp + 1; *q; q++) {
+            if (*q == '/') {
+                *q = '\0';
+                mkdir(tmp, 0777);
+                *q = '/';
+            }
+        }
+        int64_t r = (int64_t)mkdir(tmp, 0777);
+        if (r != 0 && exist_ok && errno == EEXIST) return 0;
+        return r;
+    }
+    int64_t r = (int64_t)mkdir(s, 0777);
+    if (r != 0 && exist_ok && errno == EEXIST) return 0;
+    return r;
+}
+
 int64_t py_path_read_text(int64_t p) {
     const char* path = p ? (const char*)p : "";
     FILE* f = fopen(path, "rb");
