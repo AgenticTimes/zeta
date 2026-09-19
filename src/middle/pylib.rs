@@ -439,6 +439,21 @@ pub fn handle_tag(t: &str) -> Option<&'static str> {
             .unwrap();
         return Some(h);
     }
+    // The PYTHON spelling of the class the library constructs — `-> Path` /
+    // `def f(p: Path)` rather than the tag `PyPath`. `F <module> <Class> …
+    // handle=<Tag>` is exactly that mapping, so teach this lookup about it:
+    // without it a user annotation stayed `Named("Path")`, method dispatch
+    // found no user struct and no handle tag, and emitted `Path::open` →
+    // undefined `_Path__open` (t232).
+    for m in &registry().modules {
+        for f in &m.members {
+            if f.name == t {
+                if let Some(h) = &f.handle {
+                    return Some(h.as_str());
+                }
+            }
+        }
+    }
     None
 }
 

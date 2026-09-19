@@ -755,6 +755,14 @@ int64_t py_os_makedirs(int64_t path) {
     }
     return (int64_t)mkdir(tmp, 0777);
 }
+// `os.makedirs(p, exist_ok=True)` — the 2-arg call site (registry declares
+// the 1-arg form; the runtime's `_N` convention carries the optional arg).
+// exist_ok only suppresses an "already exists" raise, which this shim never
+// raises, so it is ignored (never dropped data).
+int64_t py_os_makedirs_2(int64_t path, int64_t exist_ok) {
+    (void)exist_ok;
+    return py_os_makedirs(path);
+}
 int64_t py_os_remove(int64_t path) { return path ? (int64_t)remove((const char*)path) : -1; }
 
 // ---- os.path ----
@@ -1439,6 +1447,13 @@ int64_t py_path_read_text(int64_t p) {
     fclose(f);
     buf[rd] = 0;
     return (int64_t)buf;
+}
+
+// `p.read_text(encoding="utf-8")` — the 2-arg call site (registry declares
+// the 1-arg form; encoding is irrelevant because the text is read as bytes).
+int64_t py_path_read_text_2(int64_t p, int64_t encoding) {
+    (void)encoding;
+    return py_path_read_text(p);
 }
 
 int64_t py_path_write_text(int64_t p, int64_t text) {

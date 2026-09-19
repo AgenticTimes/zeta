@@ -2128,6 +2128,14 @@ impl Resolver {
                         Some(t) => Type::DynamicArray(Box::new(t.clone())),
                         None => Type::DynamicArray(Box::new(Type::I64)),
                     },
+                    // `-> Path` / `-> Timestamp`: the library's PYTHON class
+                    // spelling must become its registry handle tag, otherwise
+                    // method dispatch on the result looks for `Path::open`
+                    // (undefined) instead of the `W PyPath open` entry (t232).
+                    Type::Named(n, args) => match crate::middle::pylib::handle_tag(n) {
+                        Some(tag) => Type::Named(tag.to_string(), args.clone()),
+                        None => ret.clone(),
+                    },
                     other => other.clone(),
                 };
                 (name.clone(), ret)

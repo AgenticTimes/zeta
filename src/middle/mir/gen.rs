@@ -4069,7 +4069,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // (V1: no %-substitution, but the values are PRINTED, never
                 // dropped). Only when the receiver is a known PyLogger and no
                 // arg is a kwarg wrapper.
-                if method == "info" && args.len() >= 2 && args.len() <= 5 {
+                if matches!(method.as_str(), "info" | "warning" | "error")
+                    && args.len() >= 2
+                    && args.len() <= 5
+                {
                     let no_kwargs = !args.iter().any(|a| {
                         matches!(a, AstNode::Call { method: km, .. } if km == "__kwarg__")
                     });
@@ -4087,7 +4090,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                     vals.push(self.next_id_with_lit(0));
                                 }
                                 self.stmts.push(MirStmt::Call {
-                                    func: "py_logger_info_n".to_string(),
+                                    func: format!("py_logger_{}_n", method),
                                     args: vec![lg, fmt, n_lit, vals[0], vals[1], vals[2], vals[3]],
                                     dest: id,
                                     type_args: vec![],
@@ -4107,6 +4110,26 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             let mut lowered = vec![self.lower_expr(recv)];
                             for a in args {
                                 lowered.push(self.lower_expr(a));
+                            }
+                            // `p.open()` — Python omits the mode (which defaults
+                            // to "r"); the registry declares `args=2`, so the
+                            // 1-arg call arity-mangled the symbol to an
+                            // undefined `py_file_open_1` (t232). `py_file_open`
+                            // already treats a null mode as "r", so 0 is the
+                            // right filler. Deliberately NOT generic: a missing
+                            // POSITIONAL argument must stay loud (there ARE
+                            // `_N` variants in the runtime, e.g.
+                            // `py_threading_thread_new_2`).
+                            if tag == "PyPath" && method == "open" {
+                                if lowered.len() == 1 || (lowered.len() == 2
+                                    && matches!(args.first(), Some(AstNode::Call { method: km, .. }) if km == "__kwarg__"))
+                                {
+                                    lowered.truncate(1);
+                                    let z = self.next_id();
+                                    self.exprs.insert(z, MirExpr::IntLit(0));
+                                    self.type_map.insert(z, Type::I64);
+                                    lowered.push(z);
+                                }
                             }
                             // `d.get(k)` — Python's optional default; the
                             // registry declares the 3-argument form.
