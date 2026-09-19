@@ -4947,3 +4947,29 @@ python_style **219 → 225**；官方 **194/194**。
 | 官方 / 语料 | 194/194 · 38/38 | 持平 |
 
 剩余 28 失败：dunder len/setitem（t196/t197）、pandas 链式（t198/t200/t201/t202/t204/t207/t208/t210/t228/t229）、numpy（t212/t217/t218/t221/t227/t230）、isinstance（t87）、listcomp（t216/t233）、strftime（t220）、logger（t223）、dict set cast（t231）、path open（t232）、ann-attr（t246）。
+
+### 批次一百四十六（2026-09-19，**部分收口**）：dunder len/setitem + getattr 幽灵红线修复
+
+1. **`len(obj)` → `__len__` 分派**：Named 接收者且类定义 `__len__` 时发射限定调用（t196：`len(F())`=3、`len(df)`=行数、空 DF=0）
+2. **下标赋值 → `__setitem__` 分派**（批次 102 重放）：`f["a"] = 1` / `df["col"] = [...]` 命中 `Class::__setitem__`（VoidCall）；此前落 DictInsert 写 struct 指针（垃圾写）
+3. **map 赋值键哈希**：Assign 路径改用 `lower_map_key_typed`（按 map 声明的键类型，与表达式路径一致；参数键此前按指针哈希永不匹配）
+4. **N 参 min/max**：`max(1, 5, 3)` 两两折叠（f64 走 llvm.minnum/maxnum 内联）；此前仅 2 参，3 参落裸名 `_min`/`_max`（t230）
+5. **getattr 幽灵红线回归修复**：145 引入的 2 参无 default 路径误发 `py_getattr_dynamic`（编译成功）破坏 t225；改回字面量未命中即落出本块走幽灵链接失败
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 232/260 | **237/260**（t196/t197/t198/t230/t225 + 连带） |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+
+### 剩余 23 失败
+
+- 链接失败 6：t216/t233（listcomp）、t220（strftime）、t223（logger `_3` 变体）、t231（fromkeys/dict/add）、t232（Path open/read_text）、t246（set）
+- 输出错 17：t193/t200/t201/t202/t204/t207/t208/t210/t228/t229（pandas 链式）、t212/t217/t218/t221/t227（numpy where/eye/free_names）、t87（isinstance）
+
+### 下一队列
+
+1. pandas 链式簇（head/tail/rename/reset_index 的 self 方法链 + 切片）——最大簇 10 例
+2. numpy where/eye/free_names 簇
+3. 链接失败 6 例逐个（多为缺 registry X 条目或 W 方法）

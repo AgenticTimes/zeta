@@ -1059,11 +1059,30 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     let source_ty = self.source_types.get(&base_id).cloned().unwrap_or_default();
                     let is_array_param =
                         source_ty.starts_with("[") || source_ty.starts_with("*mut [");
+                    // 批次146 重放: subscript ASSIGN on a KNOWN struct with
+                    // `__setitem__` (`f["a"] = 1`, `df["col"] = [...]`) must
+                    // dispatch the qualified method — previously it fell to
+                    // DictInsert on the struct pointer (garbage write).
+                    if let Type::Named(n, _) = &base_ty {
+                        if n != "map" && n != "dict" {
+                            let qualified = format!("{}::__setitem__", n);
+                            if self.func_ret_types.contains_key(&qualified) {
+                                self.stmts.push(MirStmt::VoidCall {
+                                    func: qualified,
+                                    args: vec![base_id, index_id, rhs_id],
+                                });
+                                return;
+                            }
+                        }
+                    }
                     // `d[k] = v` on a dict/Counter: a map insert, keyed by the
                     // content hash (the index was already lowered through
                     // lower_map_key for map literals; do the same here).
                     if matches!(&base_ty, Type::Named(n, _) if n == "map") {
-                        let key_id = self.lower_map_key(index_id);
+                        // 批次146: hash by the MAP's declared key type (same as
+                        // the expression path) — a param-typed key used to be
+                        // pointer-hashed and never matched.
+                        let key_id = self.lower_map_key_typed(index_id, Some(&base_ty));
                         self.stmts.push(MirStmt::DictInsert {
                             map_id: base_id,
                             key_id,
@@ -4555,6 +4574,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             self.type_map.insert(id, Type::I64);
                             return id;
                         }
+                        // 批次146 重放: `len(obj)` dispatches to the object's
+                        // `__len__` method (t196: `len(F())`, `len(df)`).
+                        Some(Type::Named(n, _))
+                            if self
+                                .func_ret_types
+                                .contains_key(&format!("{}::__len__", n)) =>
+                        {
+                            self.stmts.push(MirStmt::Call {
+                                func: format!("{}::__len__", n),
+                                args: vec![arg_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(id, Type::I64);
+                            return id;
+                        }
                         Some(Type::Str) => {
                             self.stmts.push(MirStmt::Call {
                                 func: "str_len".to_string(),
@@ -4695,7 +4731,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 }
                 if receiver.is_none()
                     && (method == "min" || method == "max")
-                    && args.len() == 2
+                    && args.len() >= 2
                 {
                     // A `key=` keyword selects the ITERABLE form; handle it
                     // here, before the min-of-two path treats the callable as a
@@ -4729,35 +4765,43 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             return id;
                         }
                     }
-                    let a_id = self.lower_expr(&args[0]);
-                    let b_id = self.lower_expr(&args[1]);
-                    let any_f = matches!(self.type_map.get(&a_id), Some(Type::F64) | Some(Type::F32))
-                        || matches!(self.type_map.get(&b_id), Some(Type::F64) | Some(Type::F32));
-                    if any_f {
-                        // f64 via llvm.minnum/maxnum intrinsics (double args)
-                        let intr = format!(
-                            "llvm.{}.f64",
-                            if method == "min" { "minnum" } else { "maxnum" }
-                        );
-                        self.stmts.push(MirStmt::Call {
-                            func: intr,
-                            args: vec![a_id, b_id],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::F64);
-                        return id;
-                    }
-                    let stem = if method == "min" { "zeta_min" } else { "zeta_max" };
-                    self.stmts.push(MirStmt::Call {
-                        func: format!("{}_{}", stem, "i64"),
-                        args: vec![a_id, b_id],
-                        dest: id,
-                        type_args: vec![],
+                    // 批次146: N 参 min/max（max(1, 5, 3)）—— 两两折叠；此前
+                    // 仅 2 参，3 参落裸名 `_min`/`_max` 链接失败（t230）。
+                    let ids: Vec<u32> = args.iter().map(|a| self.lower_expr(a)).collect();
+                    let any_f = ids.iter().any(|i| {
+                        matches!(self.type_map.get(i), Some(Type::F64) | Some(Type::F32))
                     });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    let stem = if method == "min" { "zeta_min" } else { "zeta_max" };
+                    let mut acc = ids[0];
+                    for (k, &arg) in ids.iter().enumerate().skip(1) {
+                        let last = k + 1 == ids.len();
+                        let dest = if last { id } else { self.next_id() };
+                        if any_f {
+                            // f64 via llvm.minnum/maxnum intrinsics (double args)
+                            let intr = format!(
+                                "llvm.{}.f64",
+                                if method == "min" { "minnum" } else { "maxnum" }
+                            );
+                            self.stmts.push(MirStmt::Call {
+                                func: intr,
+                                args: vec![acc, arg],
+                                dest,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(dest, MirExpr::Var(dest));
+                            self.type_map.insert(dest, Type::F64);
+                        } else {
+                            self.stmts.push(MirStmt::Call {
+                                func: format!("{}_{}", stem, "i64"),
+                                args: vec![acc, arg],
+                                dest,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(dest, MirExpr::Var(dest));
+                            self.type_map.insert(dest, Type::I64);
+                        }
+                        acc = dest;
+                    }
                     return id;
                 }
                 if method == "sum" && std::env::var("ZETA_PROBE").is_ok() {
@@ -4854,11 +4898,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 }
                             }
                         }
-                        // 响亮失败：py_getattr_dynamic
-                        let name_id = self.next_id();
-                        self.exprs
-                            .insert(name_id, MirExpr::StringLit(lit.clone()));
-                        self.type_map.insert(name_id, Type::Str);
+                        // 字面量名未命中（已知 struct 缺字段 / 未跟踪接收者）
+                        // 且无 default → 故意保持幽灵路径（批次 123 红线，守 t225：
+                        // 链接期未定义符号即编译失败，不静默读 0）。
+                        // 不 return，落出本块即可。
+                    } else {
+                        // 动态名（非字面量）→ 响亮失败
+                        let obj_id = self.lower_expr(&args[0]);
+                        let name_id = self.lower_expr(&args[1]);
                         self.stmts.push(MirStmt::Call {
                             func: "py_getattr_dynamic".to_string(),
                             args: vec![obj_id, name_id],
@@ -4869,18 +4916,6 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         self.type_map.insert(id, Type::I64);
                         return id;
                     }
-                    // 动态名（非字面量）→ 响亮失败
-                    let obj_id = self.lower_expr(&args[0]);
-                    let name_id = self.lower_expr(&args[1]);
-                    self.stmts.push(MirStmt::Call {
-                        func: "py_getattr_dynamic".to_string(),
-                        args: vec![obj_id, name_id],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
-                    return id;
                 }
                 // 批次145 重放(批次123): builtin next(it[, default]) + opaque .next().
                 if receiver.is_none() && method == "next" && !args.is_empty() {
@@ -4924,7 +4959,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // the key once per element (ties keep the first, like Python).
                 if receiver.is_none()
                     && (method == "min" || method == "max")
-                    && args.len() == 2
+                    && args.len() >= 2
                 {
                     let keyf = match &args[1] {
                         AstNode::Call {
