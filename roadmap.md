@@ -5010,3 +5010,23 @@ python_style **219 → 225**；官方 **194/194**。
 2. numpy where/eye/free_names 簇（t212/t217/t218/t221/t227/t230 ✓已收）
 3. 链接失败 6 例：t216/t233（listcomp 闭包内 DataFrame）、t220（strftime W 表）、t223（logger `_3` 变体）、t231（fromkeys/dict/add）、t232（Path open）、t246（set）
 4. isinstance（t87）
+
+### 批次一百四十七（2026-09-19，**部分收口**）：限定名统一尝试 + 战术回退
+
+1. **尝试**：rename_definition 补 ImplBlock 重命名（ty + 方法 self/ret 同步）+ defs 分发放行 ImplBlock —— 方法注册统一为 `pandas__DataFrame::method`。**结果：级联失败**（t202 由过转崩）——根因是 pylib 类的字段是**隐式**的（来自 `__init__` 赋值，StructDef 无字段声明），重命名后 `self.data` 的字段类型查找落空，且构造体内 StructLit variant 未随改。**已回退**（git checkout resolver.rs），gen.rs/codegen.rs 的手术修复保留
+2. **t225 回归修复**：145 的 2 参 getattr 误发 py_getattr_dynamic（编译成功）破坏幽灵红线；改回字面量未命中即落出本块（链接失败 = 预期）
+3. **结构性结论**：head/tail/rename 簇（8 例 SEGV/错值）的正确修法是**解析器级隐式字段合成**——parse_class 从 `__init__` 的 `self.x = ...` 赋值合成 StructDef 字段声明（带类型推断），使 self 类型化、字段读取、map 键哈希全链可用；这是批次 148 的主任务
+
+### 度量（批次一百四十七 收口）
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 238/260 | **238/260**（t225 修复对冲了重命名扰动） |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+
+### 下一队列（批次一百四十八）
+
+1. **隐式字段合成**（parse_class：`__init__` 的 `self.x = <expr>` → StructDef 字段 `x: <推断类型>`）——解锁 head/tail/rename 簇 8 例 + t198/t210/t228
+2. numpy where/eye 簇（t212/t217/t218/t221/t227）
+3. 链接失败 6 例（t216/t220/t223/t231/t232/t246）
+4. isinstance（t87）、listcomp 闭包（t216/t233）
