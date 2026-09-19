@@ -844,6 +844,11 @@ int64_t py_os_environ_get(int64_t k, int64_t dflt) {
     if (v) return (int64_t)zt_strdup(v);
     return dflt ? dflt : (int64_t)zt_strdup("");
 }
+// `os.environ.get("KEY")` — the 1-arg form (Python's default is None, i.e. an
+// empty string here). The registry declares the 2-arg form, so the 1-arg call
+// site arity-mangled the symbol to `py_os_environ_get_1`, which nothing defined:
+// 10 undefined-symbol reference sites in the REasyQuant local-backtest link.
+int64_t py_os_environ_get_1(int64_t k) { return py_os_environ_get(k, 0); }
 int64_t py_os_environ_setdefault(int64_t k, int64_t v) {
     if (!k) return v;
     const char* cur = getenv((const char*)k);

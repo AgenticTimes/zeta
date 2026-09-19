@@ -1,0 +1,18 @@
+// PY-A: 调用点形状与 registry 声明的 arity 不一致 ⇒ 被 arity 后缀成**未定义的符号**。
+// 两处都是 REasyQuant 本地回测链接里的真实引用：
+//   `os.environ.get(K)`（1 参，声明 2 参）→ `py_os_environ_get_1`（10 处引用）
+//   `pd.Timestamp(s, unit=…, tz=…)`（3 参，声明 1 参）→ `py_dt_from_str_3`（2 处引用）
+// 修法沿用运行时既有的 `_N` 约定：C 侧补真实现（不是丢参数、不是假值）。
+// env: ZETA_T266_VAL=ok
+// expect: 
+// expect: ok
+// expect: 2020
+// expect: 5
+import os
+import pandas as pd
+
+print(os.environ.get("ZETA_T266_UNSET"))
+print(os.environ.get("ZETA_T266_VAL"))
+d = pd.Timestamp("2020-05-06", unit="ns", tz="UTC")
+print(d.year)
+print(d.month)

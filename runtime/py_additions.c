@@ -286,6 +286,17 @@ int64_t py_dt_from_str(int64_t s) {
     return py_dt_strptime(s, (int64_t)fmt);
 }
 
+// `pd.Timestamp(ts, unit="ns", tz="UTC")` — the 3-arg call site (registry
+// declares the 1-arg form, so the call arity-mangled to
+// `py_dt_from_str_3`, which nothing defined). unit/tz are IGNORED: the PyDate
+// handle is timezone-naive and carries no sub-day precision, so they cannot be
+// honoured — and inventing an offset would be a silent wrong value.
+int64_t py_dt_from_str_3(int64_t s, int64_t unit, int64_t tz) {
+    (void)unit;
+    (void)tz;
+    return py_dt_from_str(s);
+}
+
 
 // `np.searchsorted(sorted_dates, value, side="left"|"right")` over a Vec of
 // PyDate handles. `side` arrives as the STRING handle (the registry fills
