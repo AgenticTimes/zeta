@@ -5149,3 +5149,47 @@ commit：`7e9aad9e` `af7e2f77` `e8565b73` `595e9607` `0ff12fda` `6d90181a`（均
 - **t233**：闭包内经 env 取到的**函数值**做调用，需要**间接调用**（MIR 现无
   `CallIndirect`；codegen 无 `inttoptr` + `build_indirect_call`）。闭包值本身已是
   `MirExpr::FuncAddr`（i64 函数地址），所以这是一条**新增能力**，不是修 bug。
+
+### 批次一百四十九 **收口**（2026-09-19）
+
+> 上文「剩余 7 例的精确定位」写成后本批又连收 4 例，以本节为准。
+
+**最终度量**：python_style **260/263**（起点 243/260）· 官方 **194/194** · 语料 **38/38**。
+11 个 commit 全部 push（`agentic`）：`7e9aad9e` → `e5890fd0`。
+
+**本批翻绿的 13 例**：t216 · t223 · t232 · t212 · t218 · t227 · t221 · t193 · t208 ·
+t228 · t229 · t204 · t246；新增回归锁 t261（map 形参成员判定）· t262（set/fromkeys）·
+t263（空表可增长）。
+
+**最值钱的三条**（都是「一层元数据错 → 整簇症状」）：
+
+| 根因 | 症状面 | 修法落点 |
+|---|---|---|
+| 调用点 `rsplit_once('_')` 把 `::`-限定名的**名字里的 `_`** 当 arity 后缀切掉 ⇒ 返回类型查不到 ⇒ I64 | `reset_index`/`sort_index`/`pct_change` 三个方法的结果全变 I64，`b.columns` 变成结构体字段读（t204/t208/t228/t229） | `suffixed` 布尔判据（批次 99 在 codegen 修过、gen.rs 漏了） |
+| 方法调用的**默认参数**从不注入 ⇒ codegen 补 0 | `a.reset_index()` 的 `drop` = 0（=False），走错分支（t229） | 方法调用且该名字声明过默认值时，按 `func_param_names`（skip self）建槽位填 `param_defaults[i+1]` |
+| 形参**没有 `lt(...)` 分支** ⇒ map/vec 形参一律 I64 | `out[columns[key]] = col` 里 `columns[key]` 无值类型 ⇒ **裸字符串指针当键插入**，查询走内容哈希全 miss → `b["y"]` SEGV（t204） | 新增 `lt_annotation_type()`，形参落表处解析成规范 MIR 类型 |
+
+**剩余 3 例（带本批实测结论，下一批直接从这里开）**
+
+1. **t207（列表字面量语义）** —— 本批做了两次受控实验，结论明确：
+   - 已修并保留：`[]` → `DynamicArray`（pre-fix 实测 `0 0 7 0 9`，post-fix `0 1 7 2 9`）。
+     修之前 `[]` 是 0 长 StackArray，`vec_push` 读 alloca 前 16 字节当 cap/len 并写越界
+     （pylib 里 `idx: lt(vec,str) = []` + `idx.append(...)` 的 UB 来源）。
+   - **非空字面量改 DynamicArray：已实测并回退**（`ZETA_PY_LIST_LITERAL` 实验开关的
+     代码已删除，仅留在本节记录）。改成功后 t207 的 `len(ys)` 正确（1 → 2），但**代价**：
+     `[1.5, 2.5]` 元素打印成非规格化数（`vec_push` 是 i64 通道，f64 元素按位重解释 ——
+     t56/t139 红）、`f(*args)` 解不开（starred 展开靠 `Array(_, Literal(n))` 拿长度 ——
+     t33 红）、t24 红。⇒ 要落地必须**同时**做两件事：① pushed/loaded 时按元素类型
+     bitcast f64↔i64；② starred 展开改从字面量 AST 取长度而不是从类型取。
+     另附：`array_push` 在 AOT 里是**空桩**（`runtime/tokio_runtime_stub.c:241`
+     `(void)arr;(void)val;`）—— `DynamicArrayLit` 的既有降级也在用它，元素被静默丢弃，
+     属**独立的既存缺陷**。
+   - `zs: lt(vec, str) = []` 的注解仍被丢：`parse_assign`（`stmt.rs:371`）解析出 `_ty`
+     后**直接丢弃**。要么让 `Assign` 带注解，要么按「先查类型再降级 RHS」的顺序。
+2. **t231（`dict(x)` 未定型形参）** —— gen.rs 的注释写明是**故意**的响亮失败
+   （「copying an unknown handle would corrupt data」）。要过就需要「调用点推断覆盖
+   无标注形参」（py_asdict 那条线上已有同类机制的雏形），不是在这里放宽。
+3. **t233（经 env 取到的函数值做调用）** —— 闭包值已经是 `MirExpr::FuncAddr`（i64
+   函数地址），缺的是 **间接调用**：MIR 无 `CallIndirect`，codegen 无
+   `inttoptr` + `build_indirect_call`。这是**新增能力**而不是修 bug；顺带也会让
+   `g = f; g(1)`（当前裸 `_g` 链接失败）可用。
