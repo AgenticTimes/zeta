@@ -5294,3 +5294,88 @@ Error: "Function return type does not match operand type of return inst!
   签名走 `Resolver::parse_type_string` → `typecheck_new::string_to_type`。
   改类型别名前先 `grep -rn 'fn parse_type_string\|fn string_to_type\|fn from_string'`。
 - 未定义符号清单要**按归属分桶**再动手，否则会在「明确不做的平台 API」上浪费预算。
+
+---
+
+## 批次一百五十一（2026-09-19）：裸 `try/finally` 是一等语法 —— 又一个非法 IR
+
+**症状**（`backend/datasrc/market_data_universe.py` 独立编译）：
+
+```
+Error: "Terminator found in the middle of a basic block! label %entry"
+```
+
+**最小复现**（5 行，pre-fix 必现）：
+
+```python
+def f(n: i64) -> i64:
+    try:
+        return 3
+    finally:
+        print(9)
+```
+
+发出的 IR：
+
+```llvm
+entry:
+  ret i64 3                        ; try 体里的 return
+  call void @println_i64(i64 9)     ; finally 体 —— 落在终止指令之后
+  ...
+  ret i64 %arr_handle
+```
+
+**根因（在 parser 的回退路径，不在 codegen）**：`parse_try_stmt` 在没有 `except`
+时**直接 Err**（`if !saw_except { return Err(...) }`），外层于是用**普通块**把
+`finally { … }` 收下 ⇒ 它的语句成了 try 体之后的**同级语句**；try 体里一旦有
+`return`，`finally` 的指令就排在 `ret` 后面 ⇒ LLVM 拒绝整个模块。
+
+**修法（两处，互为补充）**
+
+1. **根因**：`saw_except` 检查移到 finally 解析**之后**，条件放宽为
+   `!saw_except && finally_body.is_empty()` ⇒ `try/finally` 走与
+   `try/except/finally` 同一套 setjmp/If 降级（`finally` 落在 If 的 merge 块之后）。
+2. **不变量**：codegen 新增 `ensure_emittable_block()` —— 发射语句前若当前基本块
+   已有终止指令，就把该语句放进一个**新建的无前驱块**。任何 MIR 生产者都不可能
+   再产出非法 IR；语句仍可见（不静默删）。在函数主语句循环显式调用。
+
+**度量**：python_style 261/265 → **262/265**（新增 t265，pre-fix 实测 Terminator）
+· 官方 194/194 · 语料 38/38 持平。
+
+### ⚠️ 两条必须记住的**方法论**结论（本批踩出来的）
+
+1. **「独立编译」与「整体编译」会给出不同的结论 —— 不能互相代替**。
+   本缺陷在 `market_data_universe.py` **独立**编译时中止，而在 wufu local
+   **整体**编译里**根本不出现**（pre-fix 日志 Terminator 计数 = 0）。实测：
+   未定义符号清单 pre/post 完全一致（56 个，仅闭包编号因全局计数器而不同），
+   `_backend_datasrc_market_data_universe__get_universe` 两个版本都已定义。
+   ⇒ 这个修复是**红线类健壮性**修复，**对 `--engine local` 的符号集合没有净影响**。
+   （我在上一轮口头汇报里说过它「卡住 local 路径的 get_universe」，那是**过度推断**，
+   特此更正：结论要以 pre/post 符号清单对拉为准，不能从「单文件编译失败」推到
+   「整体链接失败」。）
+2. **覆盖盲区**：三套基线都不编译 `backend/**` 下的**模块文件**（语料是
+   `strategies/`，官方单测与 python_style 是自包含用例）。所以「194/194 + 38/38 +
+   wufu local 能到链接期」**不蕴含**「没有非法 IR」。本缺陷正是从这个盲区漏出来的。
+   建议：把 `backend/**/*.py` 的**独立 compile-only** 加进 `tools/run_all.sh`
+   （判据只看「有没有 codegen Error」，不看链接），成本低、能抓这类整模块级缺陷。
+
+**已知遗留（未修）**：`try` 体内 `return` / 异常仍然**不执行 `finally`**（只有正常
+完成路径会执行）。Python 语义要求每条退出路径都跑到 —— 需在 desugar 层把 finally
+体插到每个 `Return` 之前（或引入 goto），是独立改动。本批只保证「不产生非法 IR +
+正常路径语义正确」。语料里 `try: … return codes finally: _baostock_logout()` 这类
+**清理型 finally 会被跳过**（资源泄漏，不是错值），应排在后续批次。
+
+### 下一队列（批次一百五十二，按「离跑通 local 的距离」重排）
+
+1. **`getattr` 39 处**（`error: builtin getattr is not implemented in this form`）——
+   local 路径整体编译里出现 **39 次**，是目前**最大的一块**；每次都是一个
+   「静默走默认值 / 幽灵符号」的隐患。先按调用点分类（`g` 对象字段 vs 其他）。
+2. **间接调用**（t233 同源）：解掉 `LocalBackend._price_lookup`（local 路径上）
+   + nautilus 的 `__context_factory`/`__price_lookup`。MIR 需 `CallIndirect`，
+   闭包值已是 `FuncAddr`。
+3. **`finally` 语义**（本节遗留）：清理型 finally 被跳过。
+4. **A 桶**：backtrader/nautilus —— 库桩（一个 `py_unavailable` C 函数 + N 条
+   registry）或编译期裁剪，二选一。
+5. **D 桶**（`[dynamic]str__median/isna/notna`、`DataFrame__abs/median`）→
+   **B 桶**（私有成员 + 函数内 import）→ **E/F 桶**逐个小口。
+6. 最后才谈「链接成功 → 运行 → 出回测收益」。
