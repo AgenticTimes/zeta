@@ -4256,6 +4256,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 self.type_map.insert(t, Type::I64);
                                 lowered.push(t);
                             }
+                            if std::env::var("ZETA_PROBE_W").is_ok() {
+                                eprintln!(
+                                    "PROBE siteA tag={} method={} ret_handle={:?} ret={:?}",
+                                    tag, method, ret_handle,
+                                    crate::middle::pylib::method_ret(&tag, method)
+                                );
+                            }
                             self.stmts.push(MirStmt::Call {
                                 func: symbol.to_string(),
                                 args: lowered,
@@ -4273,6 +4280,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                         Some("vecstr") => {
                                             Type::DynamicArray(Box::new(Type::Str))
                                         }
+                                        Some("vecpath") => Type::DynamicArray(Box::new(
+                                            Type::Named("PyPath".to_string(), vec![]),
+                                        )),
                                         Some("vecjson") => Type::DynamicArray(Box::new(
                                             Type::Named("PyJson".to_string(), vec![]),
                                         )),
@@ -7024,6 +7034,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                         "vecstr" => {
                                             Type::DynamicArray(Box::new(Type::Str))
                                         }
+                                        "vecpath" => Type::DynamicArray(Box::new(
+                                            Type::Named("PyPath".to_string(), vec![]),
+                                        )),
+                                        "vecjson" => Type::DynamicArray(Box::new(
+                                            Type::Named("PyJson".to_string(), vec![]),
+                                        )),
+                                        "vecmatch" => Type::DynamicArray(Box::new(
+                                            Type::Named("PyMatch".to_string(), vec![]),
+                                        )),
                                         _ => Type::I64,
                                     },
                                 },
@@ -7596,6 +7615,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 Some("str") => Type::Str,
                                 Some("f64") => Type::F64,
                                 Some("vecstr") => Type::DynamicArray(Box::new(Type::Str)),
+                                Some("vecpath") => Type::DynamicArray(Box::new(
+                                    Type::Named("PyPath".to_string(), vec![]),
+                                )),
+                                Some("vecjson") => Type::DynamicArray(Box::new(
+                                    Type::Named("PyJson".to_string(), vec![]),
+                                )),
+                                Some("vecmatch") => Type::DynamicArray(Box::new(
+                                    Type::Named("PyMatch".to_string(), vec![]),
+                                )),
                                 _ => Type::I64,
                             },
                         };
@@ -8456,6 +8484,16 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                     {
                                         "str" => Type::Str,
                                         "f64" => Type::F64,
+                                        "vecstr" => Type::DynamicArray(Box::new(Type::Str)),
+                                        "vecpath" => Type::DynamicArray(Box::new(
+                                            Type::Named("PyPath".to_string(), vec![]),
+                                        )),
+                                        "vecjson" => Type::DynamicArray(Box::new(
+                                            Type::Named("PyJson".to_string(), vec![]),
+                                        )),
+                                        "vecmatch" => Type::DynamicArray(Box::new(
+                                            Type::Named("PyMatch".to_string(), vec![]),
+                                        )),
                                         _ => Type::I64,
                                     },
                                 };
@@ -8517,6 +8555,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                         "vecstr" => {
                                             Type::DynamicArray(Box::new(Type::Str))
                                         }
+                                        "vecpath" => Type::DynamicArray(Box::new(
+                                            Type::Named("PyPath".to_string(), vec![]),
+                                        )),
                                         "vecjson" => Type::DynamicArray(Box::new(
                                             Type::Named("PyJson".to_string(), vec![]),
                                         )),
@@ -8566,6 +8607,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         self.exprs.insert(id, MirExpr::Var(id));
                         // A handle-returning attribute (Path.parent) keeps its
                         // tag so the next `.name`/`.parent` still dispatches.
+                        // The vec kinds matter too: `Path(...).parents[2]` must be
+                        // DynamicArray(PyPath) so `[2]` yields a PyPath handle,
+                        // otherwise `.exists()` / `.read_text()` on it emitted
+                        // bare symbols (`_exists` 7 / `_read_text` 6 reference
+                        // sites in the REasyQuant local backtest).
                         let ty = match ret_handle {
                             Some(h) => Type::Named(h.to_string(), vec![]),
                             None => match crate::middle::pylib::method_ret(&tag, field)
@@ -8573,6 +8619,16 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             {
                                 "str" => Type::Str,
                                 "f64" => Type::F64,
+                                "vecstr" => Type::DynamicArray(Box::new(Type::Str)),
+                                "vecpath" => Type::DynamicArray(Box::new(
+                                    Type::Named("PyPath".to_string(), vec![]),
+                                )),
+                                "vecjson" => Type::DynamicArray(Box::new(
+                                    Type::Named("PyJson".to_string(), vec![]),
+                                )),
+                                "vecmatch" => Type::DynamicArray(Box::new(
+                                    Type::Named("PyMatch".to_string(), vec![]),
+                                )),
                                 _ => Type::I64,
                             },
                         };

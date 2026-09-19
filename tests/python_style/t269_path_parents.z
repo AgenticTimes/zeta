@@ -1,0 +1,27 @@
+// PY-A: `Path.parents[N]` 支持（批次 153）。
+// `W PyPath parents` 此前**不存在** ⇒ `Path(...).parents[N]` 走 opaque 兜底成
+// **静默空值**（本用例 pre-fix 实测：编译通过、一行输出都没有），
+// 若后面接 `.exists()` / `.read_text()` 则进一步变成裸符号（`_exists` / `_read_text`）。
+// 注：REasyQuant 里 `_exists`(7) / `_read_text`(6) 的**主体**是模块级全局
+// （`_LISTING_CACHE = _PROJECT_ROOT / …`），那需要**解析器侧的模块全局类型推断**，
+// 不在本用例覆盖范围内。
+// `PyPath` 句柄本身就是路径字符串，所以 parents 是一个字符串 Vec：
+//   parents[0] = 父目录，parents[k] = 去掉末尾 k+1 段。
+// 注意：`resolve()` 在本实现里是「拼 CWD」（不是 realpath），所以只用字面量路径
+// 断言长度，链式只断言最后一段。
+// expect: b
+// expect: a
+// expect: tmp
+// expect: 4
+// expect: b
+from pathlib import Path
+
+p = Path("/tmp/a/b/c")
+print(p.parents[0].name)
+print(p.parents[1].name)
+print(p.parents[2].name)
+print(len(p.parents))
+
+# Call 接收者链式也要能穿过
+r = Path("/tmp/a/b/c").resolve().parents[0]
+print(r.name)

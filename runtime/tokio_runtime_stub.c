@@ -19,6 +19,10 @@
 static pthread_mutex_t zt_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void array_push(int64_t arr, int64_t val);
+// Defined in runtime/py_additions.c (linked as a separate object) — needed by
+// py_path_parents below.
+int64_t zeta_dynarray_new(int64_t cap);
+int64_t vec_push(int64_t data_ptr, int64_t val);
 
 
 void println_i64(int64_t v) { printf("%lld\n", (long long)v); }
@@ -1459,6 +1463,31 @@ int64_t py_path_read_text(int64_t p) {
 int64_t py_path_read_text_2(int64_t p, int64_t encoding) {
     (void)encoding;
     return py_path_read_text(p);
+}
+
+// pathlib.Path.parents — a Vec of ancestor paths: `parents[0]` is the parent,
+// `parents[k]` drops the last k+1 components. `PyPath` handles ARE the path
+// string, so each element is a string handle. Without this, `Path(__file__)
+// .resolve().parents[2]` left the module-root global untyped and every
+// `.exists()` / `.read_text()` on it emitted a bare symbol (`_exists` 6 refs /
+// `_read_text` 6 refs in the REasyQuant local backtest: etf_listing,
+// market_data_universe, data_ops_log, sources_selector).
+int64_t py_path_parents(int64_t p) {
+    const char* src = p ? (const char*)p : "";
+    size_t n = strlen(src);
+    char* buf = (char*)GC_malloc(n + 1);
+    memcpy(buf, src, n + 1);
+    int64_t h = zeta_dynarray_new(8);
+    for (size_t i = n; i > 0; i--) {
+        if (buf[i - 1] != '/') continue;
+        buf[i - 1] = '\0';
+        if (i - 1 == 0) {
+            h = vec_push(h, (int64_t)zt_strdup("/"));
+            break;
+        }
+        h = vec_push(h, (int64_t)zt_strdup(buf));
+    }
+    return h;
 }
 
 int64_t py_path_write_text(int64_t p, int64_t text) {
