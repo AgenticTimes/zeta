@@ -2,12 +2,12 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（至 t260；`*.z` 需 `git add -f`）**
-> **当前进度快照（2026-09-19 晚，批次 143 收口后）——见文末「进度快照」**
+> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（至 t263；`*.z` 需 `git add -f`）**
+> **当前进度快照（2026-09-19，批次 149 收口后）：python_style 260/263 · 官方 194/194 · 语料解析 38/38 —— 见文末「批次一百四十九 收口」**
 > Python 库注册表：**16 个模块**（见「库导入机制」小节）；第三方库 `zorb install` 可用，已验真实库 `python-stringcase` 全函数正确
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
-> **流程硬规则（AGENTS / goal 验收强制）**：每完成一个 goal batch 任务 → **立刻 `commit` + `push`**（缺一不可）；禁止攒多批再捆提交。禁止对未提交大文件 `git checkout --` / `rm`（改用 `mv` → `.trash/`）。当前违规：`3b79889f` 已 commit、**尚未 push**。
+> **流程硬规则（AGENTS / goal 验收强制）**：每完成一个 goal batch 任务 → **立刻 `commit` + `push`**（缺一不可）；禁止攒多批再捆提交。禁止对未提交大文件 `git checkout --` / `rm`（改用 `mv` → `.trash/`）。推送目标是 **`git push agentic bootstrap`**（`origin` 是 https，无凭据会失败）。当前无未推送提交。
 
 ## 排查方法论 + 进度快照（2026-09-17）
 
@@ -5193,3 +5193,31 @@ t263（空表可增长）。
    函数地址），缺的是 **间接调用**：MIR 无 `CallIndirect`，codegen 无
    `inttoptr` + `build_indirect_call`。这是**新增能力**而不是修 bug；顺带也会让
    `g = f; g(1)`（当前裸 `_g` 链接失败）可用。
+
+### 下一队列（批次一百五十，按价值/前置排序）
+
+本批把「注册表里已有、降级层没接」这一类清完后，剩下 3 例都不是单点，各自带**前置改造**。
+建议顺序（1 是 2 的前置）：
+
+1. **列表字面量语义落地（t207）—— 两个前置必须一起做，否则会引发已实测的回归**
+   - ① `vec_push`/`array_get` 是 i64 通道，f64 元素必须按元素静态类型 **bitcast f64↔i64**
+     （否则 `[1.5, 2.5]` 打印成非规格化数 —— 实测 t56/t139 红）。
+   - ② `f(*args)` 的展开目前靠 `Type::Array(_, ArraySize::Literal(n))` 取长度，字面量改成
+     DynamicArray 后长度信息丢失（实测 f(*args) 变 0 参 —— t33 红）。须改从**字面量 AST**
+     取长度，而不是从类型取。
+   - 前置缺陷（独立于本项，值得顺手清）：**`array_push` 在 AOT 是空桩**
+     （`runtime/tokio_runtime_stub.c:241` `(void)arr;(void)val;`），而既有
+     `DynamicArrayLit` 降级仍在用它 ⇒ 该语法的元素被**静默丢弃**（当前无测试覆盖）。
+   - 另：`zs: lt(vec, str) = []` 的注解仍被丢 —— `parse_assign`（`stmt.rs:371`）解析出
+     `_ty` 后直接扔掉。要么让 `Assign` 带注解字段，要么「先定类型再降级 RHS」。
+2. **`dict(x)` 未定型形参（t231）** —— 现为**故意**的响亮失败（gen.rs 注释：
+   「copying an unknown handle would corrupt data」）。要过需要「调用点推断覆盖无标注
+   形参」；py_asdict 那条线上已有同类机制雏形（AST 回写 + Named 分支），复用而不是在此放宽。
+3. **间接调用（t233）** —— 闭包值已是 `MirExpr::FuncAddr`（i64 函数地址），缺 MIR
+   `CallIndirect` + codegen `inttoptr` / `build_indirect_call`。属**新增能力**；顺带解锁
+   `g = f; g(1)`（当前裸 `_g` 链接失败）。
+
+**方法论沉淀（本批反复用到，优先复用）**：症状是「未定义 `_Xxx` / 整簇段错误」时，
+先按「**注册表里有没有、只是降级层没接**」排查，而不是先动类型系统 —— 本批 13 例里
+11 例是这一类。判据：`grep <symbol> pylib/registry.txt runtime/*.c src/backend/codegen/runtime_decls_registry.rs`
+三处都在 ⇒ 缺口在 MIR 分派；三处都没有 ⇒ 才是真缺口。
