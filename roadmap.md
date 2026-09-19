@@ -5605,3 +5605,43 @@ _LISTING_CACHE = _PROJECT_ROOT / "data" / "universe" / "etf_listing.json"
 下一批从「全量编译里 `<mod>__init` 的函数体为什么没被 `walk` 到」开刀
 （建议：在 `module_global_types` 里对每个 def 打点，看 448 个 def 中 `<mod>__init`
 的在不在、body 是否为空）。
+
+### 批次一百五十四（2026-09-19）：模块全局类型表在全量编译下为空（**已修**）+ 2 个 `Path` 面补齐
+
+**决定性一步**：批次 153 追加里我加的 `bare_globals` 用 `rsplit_once("__")` 剥模块前缀，
+对**以下划线开头**的全局名是错的 ——
+
+```
+prefix = "backend_datasrc_etf_listing__"   # 结尾两个下划线
+name   = "_PROJECT_ROOT"                   # 开头一个下划线
+拼接   → "...etf_listing" + "___" + "PROJECT_ROOT"   # 连成三个下划线
+rsplit_once("__") → "PROJECT_ROOT"          # 前导下划线被吃掉
+```
+
+walk 查的是源码裸名 `_PROJECT_ROOT` ⇒ 仍不匹配 ⇒ **整表为空**
+（探针：defs=448 / globals=372 / **typed=0**；单模块编译正常，因为裸名直接进 globals）。
+修法：按**已知模块前缀**（`py_loaded_modules` 逐个 `<module with _ for .>__` 做
+`strip_prefix`）剥离，不再猜分隔符。
+
+**顺带补齐的 Path 面**（都是「接收者类型修好后**才暴露**出来的下一层」）：
+
+| 调用 | 之前 | 现在 |
+|---|---|---|
+| `p.write_text(s, encoding="utf-8")` | `py_path_write_text_3` 未定义 | C `_3`（忽略 encoding：字节原样写） |
+| `d.mkdir(parents=True, exist_ok=True)` | `_PyPath__mkdir` 未定义（**corpus 29 处，全是这个形态**） | `W PyPath mkdir` + C `_3`（parents→建链，exist_ok→容忍 EEXIST） |
+
+**度量**
+
+| 口径 | before | after |
+|---|---|---|
+| wufu local 未定义符号 | 87 / **204** 引用点 | **87 / 194**（`_exists` 7→**2** · `_read_text` 6→**2**） |
+| python_style / 官方 / 语料 | 267/270 · 194/194 · 38/38 | 持平 |
+
+累计（本会话）：**89 符号 / 219 引用点 → 87 / 194**。
+
+**方法论沉淀（第三次同类）**：修好一层类型后，**下一层的裸符号会浮现**，
+且往往形态不同 —— 本批依次暴露 `py_path_write_text_3` → `_PyPath__mkdir`。
+每修一层都要重新取符号清单（`grep -A400 'Undefined symbols'` 后再解析，
+**不要用 `-A200`：会截断**）。剩余 `_exists`(2)/`_read_text`(2) 的调用点
+（`market_data_universe` 的 f-string 路径、`nautilus_engine._make_equity`、
+`ParquetCache::save`）留待下批逐个看。
