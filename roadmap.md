@@ -5508,3 +5508,74 @@ line 76  PY-A: imported module `backend.datasrc.market_data` from …/market_dat
    **classmethod 的 `cls` 与装饰器被忽略**这条既有债务）
 6. **把 `backend/**/*.py` 独立 compile-only 加进 `tools/run_all.sh`**（覆盖盲区，
    本批已第二次靠它发现差异）
+
+---
+
+## 批次一百五十三（2026-09-19）：字典字段类型化 + `Path.parents`
+
+### 1. `self.x = {}` 字段被类型化成 i64（含**一处静默错值**）
+
+`parse_class` 的字段类型推断只认字面量/bool/浮点/字符串/数组，`AstNode::DictLit`
+落在 `_ => "i64"` ⇒ 字典字段是 I64：
+
+| 写法 | 之前 | 现在 |
+|---|---|---|
+| `self.m.get(k, d)` | 裸 `_get`（链接失败） | `W map get map_get_default` |
+| `self.m.values()` | 裸 `_values`（链接失败） | map 方法分支 |
+| **`k in self.m`** | **恒返回 0 —— 静默错值** | 正确 1/0 |
+
+第三行是本批最重要的一条：它**不报错**，只把成员判定恒判为假。
+（独立最小复现：只留 `k in self.m`，pre-fix 编译通过并打印 0，post-fix 打印 1。）
+
+修法：字段推断补 `DictLit => "map"`；`Type::from_string` 把 `dict[K,V]` / 裸 `dict`
+归一化成 `map`（所有 map 消费点都按名字 `"map"` 分派）。
+实测消掉 `_PositionLedger::clear_today_buys` / `on_trading_day` 两处 `_values`。
+回归锁 **t268**。
+
+### 2. `Path.parents[N]` 新能力（+ 4 处 W 表结果类型补全）
+
+`W PyPath parents` 此前不存在 ⇒ `Path(__file__).resolve().parents[2]` 断链：
+
+- `.parents` 落 opaque 兜底 = **静默空值**（t269 pre-fix：`Compiled to` 但零输出）
+- 后面接 `.exists()` / `.read_text()` 则变成裸符号（`_exists` 7 / `_read_text` 6）
+
+修法：C `py_path_parents` → Vec（元素即路径字符串句柄）+ registry 新结果种类
+`ret=vecpath` + `vecpath → DynamicArray(Named("PyPath"))` 补进 **4 处** W 表结果类型映射
+（4283 句柄分派 / 7037 B4 唯一名 / 7618 Named 接收者 / 8488+8558+8616 FieldAccess）。
+**少了任何一处**，`[N]` 拿到的都是 I64 ⇒ 后续方法又发裸符号 —— 本批是逐处定位出来的，
+这也是「同一条类型映射散落在多处」这条债的又一实例（同批次 152 的 `float` 别名）。
+回归锁 **t269**（`b a tmp` / `4` / 链式 `b`）。
+
+### ⚠️ 3. 由此**新定位**的一个独立机制：模块全局类型推断（未修）
+
+REasyQuant 里 `_exists` / `_read_text` 的**主体**调用点**没有**因此减少（7→7 / 6→6）。
+逐层追到根因（MIR 铁证）：
+
+```
+_LISTING_CACHE = _PROJECT_ROOT / "data" / "universe" / "etf_listing.json"
+→ MIR: zeta_env_get(...) 的类型是 I64  →  call exists_1        # 不是 PyPath
+```
+
+即**解析器侧的 `module_global_types` 推断**没有覆盖
+`Path(...).resolve().parents[2]` 与 `/` 运算符链 ⇒ 全局记为「未定型」⇒
+方法调用发裸符号。这与 MIR 层类型（本批修的）**无关**，是独立的一块。
+受影响符号：`_exists`(7) / `_read_text`(6) / `_is_file` / `_mkdir` 等涉及
+`_PROJECT_ROOT` 派生全局的调用点。**下一批优先做这个**（收益 13+ 引用点，
+且是「模块级常量链」这一整类）。
+
+### 度量（本批累计）
+
+| 口径 | 批次 152 后 | 现在 |
+|---|---|---|
+| python_style | 264/267 | **266/269**（+t268/t269） |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+| wufu local 未定义符号 | 88 / 208 | **88 / 208**（本批两条修复都不在这条链上，见 §3） |
+
+### 下一队列（批次一百五十四）
+
+1. **模块全局类型推断**（§3）—— 本批新定位，收益 13+ 引用点，是「常量链」整类
+2. **家族 B1**（循环 import 的名字解析时机）
+3. **`getattr` 39 处**
+4. **间接调用**（`LocalBackend._price_lookup`）
+5. 库桩（A 桶）/ D 桶 vec-Series 分派 / `_cls`·`_date` 家族
+6. 工具：`backend/**/*.py` 独立 compile-only 进 `tools/run_all.sh`
