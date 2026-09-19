@@ -2,11 +2,12 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（252 case；t248–t252 本批；t199/t203/t206 失败来自既有脏 `pylib/pandas.z`，与本批无关）**
-> 当前通过率（2026-09-19 实测，validate.md §3 口径）：官方 **194/194**（编译）；python_style **本批相关全绿（t247–t252）**；REasyQuant 语料**完全解析 38/38**、未解析行合计 **0**（`ZETA_STRICT_PARSE` 口径，退出码见 §二）
+> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（至 t260；`*.z` 需 `git add -f`）**
+> **当前进度快照（2026-09-19 晚，批次 143 收口后）——见文末「进度快照」**
 > Python 库注册表：**16 个模块**（见「库导入机制」小节）；第三方库 `zorb install` 可用，已验真实库 `python-stringcase` 全函数正确
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
+> **流程硬规则（AGENTS / goal 验收强制）**：每完成一个 goal batch 任务 → **立刻 `commit` + `push`**（缺一不可）；禁止攒多批再捆提交。禁止对未提交大文件 `git checkout --` / `rm`（改用 `mv` → `.trash/`）。当前违规：`3b79889f` 已 commit、**尚未 push**。
 
 ## 排查方法论 + 进度快照（2026-09-17）
 
@@ -4821,4 +4822,43 @@ python_style **219 → 225**；官方 **194/194**。
 1. 全量三基线确认
 2. t206 DataFrame.columns / `in` 容器类型
 3. soft 桩 / 语料 undef
+
+---
+
+## 进度快照（2026-09-19 17:16，批次一百四十三收口）
+
+### 位置
+
+| 项 | 状态 |
+|---|---|
+| advice P0 | **129–143 全线 ✅**（注册表 A、ABI B1–B4、D/D4 桩、C1+C2、B3 dyn） |
+| 最新批次 | **143 已修**：误 `git checkout` 后按规格恢复 `While.pre_cond` / for-in-str / B4；`handle_tag` 补全 W 表 handle |
+| HEAD | `3b79889f` — `feat(py-a): batches 129–143 — registry, dyn/ABI, parse recover, B4 restore` |
+| 分支 | `bootstrap` 领先 `origin/bootstrap` **387**；**该 commit 未 push** |
+| 流程违规 | 129–143 曾长期不 commit，后捆成 `3b79889f`；**AGENTS 要求每 batch 立刻 commit+push —— 该提交尚未 push** |
+
+### 焦点验证（刚测）
+
+| 用例 | 结果 |
+|---|---|
+| t192 `while` + `pre_cond` | ✅ |
+| t205 for-in-str | ✅ |
+| t260 B4 / Path.exists | ✅ |
+| t206 `drop`/`columns`/`in DataFrame` | ❌ 仍全 0（另案） |
+
+### 基线数字
+
+| 套件 | 数字 | 备注 |
+|---|---|---|
+| 官方 | **待重跑** | 事故前口径 194/194 |
+| python_style | **待重跑** | 焦点 t192/t205/t260 绿；全量未确认 |
+| 语料 parse | **38/38**（事故前） | 未解析行 0 |
+| 语料 undef | **~65** | 目标 → &lt;40 |
+
+### 下一刀 = 批次 144
+
+1. `./tools/run_all.sh` 写出真实三基线数字  
+2. 修 t206（`DataFrame.columns` / `in` 容器类型丢成 I64）  
+3. soft 桩消化 + 语料 undef  
+4. **每完成一项：commit + push**（勿再捆批）
 
