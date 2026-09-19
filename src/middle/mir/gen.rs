@@ -5225,7 +5225,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
-                if method == "fromkeys" && args.len() == 2 {
+                if method == "fromkeys" && (args.len() == 1 || args.len() == 2) {
                     let is_dict = receiver.is_none()
                         || matches!(receiver.as_deref(), Some(AstNode::Var(v)) if v == "dict");
                     if is_dict {
@@ -5235,7 +5235,18 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             Some(Type::DynamicArray(e)) | Some(Type::Array(e, _))
                                 if matches!(**e, Type::Str)
                         );
-                        let val = self.lower_expr(&args[1]);
+                        // `dict.fromkeys(keys)` — Python defaults the value to
+                        // None; the i64 model uses 0. Without this the 1-arg
+                        // form fell to a bare `_fromkeys` (link failure, t231).
+                        let val = match args.get(1) {
+                            Some(v) => self.lower_expr(v),
+                            None => {
+                                let z = self.next_id();
+                                self.exprs.insert(z, MirExpr::IntLit(0));
+                                self.type_map.insert(z, Type::I64);
+                                z
+                            }
+                        };
                         let flag = self.next_id();
                         self.exprs.insert(flag, MirExpr::IntLit(keys_are_str as i64));
                         self.type_map.insert(flag, Type::I64);
@@ -5314,11 +5325,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.type_map.insert(id, ty);
                     return id;
                 }
-                if receiver.is_none() && method == "set" && args.len() == 1 {
-                    let a = self.lower_expr(&args[0]);
-                    let elem = match self.type_map.get(&a).cloned() {
-                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
-                        _ => Type::I64,
+                if receiver.is_none() && method == "set" && args.len() <= 1 {
+                    // `set()` with no argument — empty set. Zeta has no set
+                    // type (set literals already degrade to lists, batch 11),
+                    // so this is an empty dynamic array. Without the 0-arg case
+                    // the call emitted a bare `_set` (link failure, t246/t231).
+                    // `py_builtin_set(0)` is null-safe (`zt_vec_len(0) == 0`).
+                    let (a, elem) = match args.first() {
+                        Some(arg) => {
+                            let a = self.lower_expr(arg);
+                            let elem = match self.type_map.get(&a).cloned() {
+                                Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
+                                _ => Type::I64,
+                            };
+                            (a, elem)
+                        }
+                        None => {
+                            let z = self.next_id();
+                            self.exprs.insert(z, MirExpr::IntLit(0));
+                            self.type_map.insert(z, Type::I64);
+                            (z, Type::I64)
+                        }
                     };
                     self.stmts.push(MirStmt::Call {
                         func: "py_builtin_set".to_string(),
@@ -6548,6 +6575,35 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // mutates in place — so write the result back.
                     if method == "push"
                         && let Some(recv_ast) = receiver
+                        && let AstNode::Var(name) = &**recv_ast
+                        && let Some(&slot) = self.name_to_id.get(name)
+                    {
+                        self.stmts.push(MirStmt::Assign { lhs: slot, rhs: id });
+                    }
+                    return id;
+                }
+
+                // PY-A: `s.add(v)` on a set (which is a Vec here) — dedup push.
+                // `py_set_add` was declared + registered since the set work but
+                // nothing ever emitted it, so `set(); s.add(1)` linked against a
+                // bare `_add` (t246/t231). Same rebind rule as `push`: the runtime
+                // returns the possibly-grown handle and Python mutates in place.
+                if receiver.is_some()
+                    && method == "add"
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::DynamicArray(_)))
+                    && arg_ids.len() == 2
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_set_add".to_string(),
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, receiver_ty.clone().unwrap());
+                    if let Some(recv_ast) = receiver
                         && let AstNode::Var(name) = &**recv_ast
                         && let Some(&slot) = self.name_to_id.get(name)
                     {

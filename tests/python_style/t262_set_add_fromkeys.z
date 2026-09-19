@@ -1,0 +1,18 @@
+// PY-A: `set()` 0 参 / `set.add` / `dict.fromkeys(keys)` 1 参（批次 149）。
+// 此前 `set()` 与 `s.add(x)` 都发裸符号（`_set` / `_add` 链接失败）；
+// `dict.fromkeys(["x","y"])` 1 参同理（`_fromkeys`）。
+// set 在 V1 里就是去重 Vec（集合字面量早已降级成 list）。
+// expect: 0
+// expect: 1
+// expect: 2
+// expect: 2
+// expect: 0
+s = set()
+print(len(s))
+s.add(1)
+s.add(1)
+print(len(s))
+print(len(set([1, 1, 2])))
+fk = dict.fromkeys(["x", "y"])
+print(len(fk))
+print(fk.get("x", -1))
