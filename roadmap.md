@@ -5645,3 +5645,33 @@ walk 查的是源码裸名 `_PROJECT_ROOT` ⇒ 仍不匹配 ⇒ **整表为空**
 **不要用 `-A200`：会截断**）。剩余 `_exists`(2)/`_read_text`(2) 的调用点
 （`market_data_universe` 的 f-string 路径、`nautilus_engine._make_equity`、
 `ParquetCache::save`）留待下批逐个看。
+
+### 批次一百五十四 追加：`_exists`/`_read_text` 清零 + `Path.glob`
+
+**再导出的全局名读的是 mangled 键**：`market_data_universe.py` 自己**不定义**
+`_PROJECT_ROOT`，而是从 `.market_data_sources` import；它的读取走
+`backend_datasrc_market_data_sources___PROJECT_ROOT`，而表里只有 walk 从源码 AST
+取到的裸名 ⇒ 查不到 ⇒ 该模块仍是 I64 ⇒ `cache_path.exists()` 发裸符号。
+修法：walk **两个键都写**（裸名 + `<prefix><name>`；前缀从 module body 的注册名
+`<mod>__init` 尾部剥 `init` 得到）。
+
+**`Path.glob`**：`_LOG_DIR.glob("*.jsonl")` 等（data_ops_log / task_store /
+ml.store / tools.strategy）→ `_PyPath__glob`。补 C `py_path_glob`（`glob(3)` → 路径
+字符串 Vec）+ `W PyPath glob … ret=vecpath`。
+
+**度量**：wufu local **87/194 → 85/186**；`_exists` **2→0** · `_read_text` **2→0**；
+python_style 267/270 · 官方 194/194 · 语料 38/38 持平。
+累计（本会话）：**89 符号 / 219 引用点 → 85 / 186**。
+
+**本批的完整修复链（每一步都是上一步的直接后果，形态各不相同）**：
+
+```
+bare_globals 前缀剥离（rsplit_once("__") 吃掉前导下划线）
+  → py_path_write_text_3（类型修好后 write_text 变 3 参）
+  → _PyPath__mkdir（29 处 corpus 调用，W 表从未有 mkdir）
+  → 再导出全局的 mangled 键（同名跨模块读取走的是 mangled 名）
+  → _PyPath__glob（W 表缺口）
+```
+
+⇒ 施工纪律：**每修一层都必须重新取符号清单核对**（`grep -A400 'Undefined symbols'`，
+**不要 `-A200`**），不能复用上一轮的结论。
