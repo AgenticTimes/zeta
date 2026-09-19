@@ -1,0 +1,31 @@
+// PY-A: `self.x = {}` 这类字典字段必须被类型化成 map（批次 153）。
+// parse_class 的字段类型推断只认字面量/bool/浮点/字符串/数组，`DictLit` 落在
+// `_ => i64` ⇒ 字段是 I64 ⇒ 字段上的 map 操作全部失配：
+//   `self.m.get(k, d)` → 裸 `_get`（链接失败）
+//   `k in self.m`      → 走「不支持的 in」分支恒返回 **0**（静默错值！）
+//   `self.m.values()`  → 裸 `_values`
+// REasyQuant 的 PositionLedger（`self._positions` / `self._today_buys`）就在 local 路径上。
+// expect: 5
+// expect: 0
+// expect: 1
+// expect: 0
+// expect: 2
+class C:
+    def __init__(self):
+        self.m = {"a": 5, "b": 6}
+
+    def getv(self, k: str) -> i64:
+        return self.m.get(k, 0)
+
+    def has(self, k: str) -> bool:
+        return k in self.m
+
+    def n(self) -> i64:
+        return len(self.m.values())
+
+c = C()
+print(c.getv("a"))
+print(c.getv("z"))
+print(c.has("a"))
+print(c.has("z"))
+print(c.n())

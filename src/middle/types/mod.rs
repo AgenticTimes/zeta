@@ -303,6 +303,8 @@ impl Type {
             // Python builtin scalar spellings (see new_resolver::parse_type_string).
             "int" => Type::I64,
             "float" => Type::F64,
+            // Bare `dict` — same normalization as the generic form below.
+            "dict" => Type::Named("map".to_string(), vec![]),
             // V4I64 native vector type
             "v4i64" => Type::V4I64,
             // SIMD vector types
@@ -675,7 +677,15 @@ impl Type {
                         args.push(Type::from_string(current.trim()));
                     }
 
-                    return Type::Named(type_name.trim().to_string(), args);
+                    // Python's `dict[K, V]` must produce the SAME type as
+                    // `lt(map, K, V)`: every map operation (subscript, `in`,
+                    // `.get/.keys/.values/.items/.setdefault`) dispatches on the
+                    // name `map`. A `self.m: dict[str, str]` field therefore fell
+                    // through to an opaque bare symbol (`_get` / `_values` — 7
+                    // reference sites each in the REasyQuant local backtest).
+                    let name = type_name.trim();
+                    let name = if name == "dict" { "map" } else { name };
+                    return Type::Named(name.to_string(), args);
                 }
 
                 // Simple named type without generics

@@ -997,6 +997,14 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                         let ty = match &**rhs {
                             AstNode::Lit(_) => "i64".to_string(),
                             AstNode::Bool(_) => "bool".to_string(),
+                            // `self.x = {}` — a dict literal field. Without this arm
+                            // the field typed i64, so EVERY map operation on it
+                            // (`self.m.get(k, d)`, `.values()`, `.keys()`, `k in
+                            // self.m`) fell through to an opaque bare symbol
+                            // (`_get` / `_values` / `_exists` — 7 reference sites
+                            // each in the REasyQuant local backtest, e.g.
+                            // `PositionLedger._positions` / `._today_buys`).
+                            AstNode::DictLit { .. } => "map".to_string(),
                             AstNode::FloatLit(_) => "f64".to_string(),
                             AstNode::StringLit(_) => "str".to_string(),
                             AstNode::ArrayLit(_) | AstNode::DynamicArrayLit { .. } => {
