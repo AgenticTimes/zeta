@@ -3267,6 +3267,48 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         }
                     }
                 }
+                // 批次148 重放(批次122): np.where — 1-arg = nonzero indices
+                // (Vec), 3-arg = elementwise/scalar select. The C runtime
+                // dispatches on zt_looks_like_vec; the registry's ret=i64 loses
+                // the Vec-ness, so the following [0] subscript guessed a map
+                // and SEGV'd. Intercept BEFORE the registry dispatch and type
+                // the result by the cond's static shape.
+                // `np.where(...)`：receiver 是模块别名（np），参数才是 mask/三元。
+                // 仅自由调用（np.where）——DataFrame 的方法 `.where(a)` 仍走
+                // 幽灵路径（t213 期望编译报错）。
+                let where_is_free = matches!(
+                    receiver.as_ref().map(|r| &**r),
+                    Some(AstNode::Var(v)) if self.py_module_aliases.contains_key(v.as_str())
+                );
+                if where_is_free && method == "where" && (args.len() == 1 || args.len() == 3) {
+                    let ids: Vec<u32> = args.iter().map(|a| self.lower_expr(a)).collect();
+                    let (func, ret) = if args.len() == 1 {
+                        ("zeta_np_where1", Type::DynamicArray(Box::new(Type::I64)))
+                    } else {
+                        let cond_vec = matches!(
+                            self.type_map.get(&ids[0]),
+                            Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                        );
+                        (
+                            "zeta_np_where3",
+                            if cond_vec {
+                                Type::DynamicArray(Box::new(Type::I64))
+                            } else {
+                                Type::I64
+                            },
+                        )
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: func.to_string(),
+                        args: ids,
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, ret);
+                    return id;
+                }
+
                 // PY-A: `re.sub(pat, repl, s)` — repl may be a STRING or a
                 // callable (`lambda m: ...`). The closure's parameter must be
                 // typed as a Match so `m.group(0)` inside it dispatches.
@@ -8833,6 +8875,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 }
             }
             AstNode::Subscript { base, index } => {
+                // 批次148 重放: `np.where(mask)[0]` — numpy 的 where 返回元组，
+                // [0] 取第一个数组。V1：where 调用已返回索引 Vec，[0] 即其本身
+                // （否则 array_get 取出首索引，随后的 len(idx) 对标量求长度 SEGV）。
+                if let AstNode::Call { receiver, method, .. } = &**base {
+                    if method == "where"
+                        && matches!(**index, AstNode::Lit(0))
+                        && receiver.as_ref().map_or(false, |r| matches!(**r, AstNode::Var(_)))
+                    {
+                        return self.lower_expr(base);
+                    }
+                }
                 let bid = self.lower_expr(base);
                 let base_ty_pre = self.type_map.get(&bid).cloned().unwrap_or(Type::I64);
                 // PY-A: negative index `arr[-k]` → `arr[n-k]` for arrays with a

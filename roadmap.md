@@ -5064,3 +5064,28 @@ python_style **219 → 225**；官方 **194/194**。
 |---|---|---|
 | python_style | 241/260 | **242/260**（t87） |
 | 官方 / 语料 | 194/194 · 38/38 | 持平 |
+
+### 批次一百四十八（2026-09-19，**部分收口**）：np.where 重放 + isinstance PyDynamic
+
+1. **np.where MIR 拦截重建**（批次 122 重放）：1 参 → `zeta_np_where1`（索引 Vec）；3 参 → `zeta_np_where3`（标量 select / 元素级）；静态类型按 cond 形状（Vec/I64）——此前 registry `ret=i64` 使 `np.where(mask)[0]` 落 map 猜测 SEGV（t217/t218）
+2. **幽灵边界**：仅自由调用 `np.where` 拦截（receiver 为模块别名）；DataFrame 方法 `.where(a)` 保持幽灵链接失败（t213 期望编译报错）
+3. **isinstance PyDynamic**（批次 141 B3 回归修复）：未标注形参按 i64 ABI 判 int（t87）
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 238/260 | **243/260**（t217/t218/t87/t230/t225 + 连带） |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+
+### 剩余 17 失败
+
+- pandas 链式 8：t193/t204/t207/t208/t210/t228/t229/t201（隐式字段合成为前置，批次 148 主任务）
+- 链接失败 6：t216/t233（listcomp 闭包内 DataFrame 构造）、t220（strftime W 表缺口）、t223（logger `_3` 变体 shim）、t231（fromkeys/dict/add）、t232（Path open/read_text shim）、t246（set）
+- numpy 2：t212（free names 环境读类型）、t221（eye 二维行语义）
+
+### 下一队列（批次一百四十九）
+
+1. **隐式字段合成**（parse_class：`__init__` 的 `self.x = <expr>` → StructDef 字段，类型从构造参数/字面量推断）——pandas 链式 8 例的前置
+2. numpy free-names：`from numpy import arange` 等别名调用返回类型的 env 往返
+3. 链接失败 6 例逐个（多为缺 registry X 条目或 W 方法）
