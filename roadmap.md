@@ -5579,3 +5579,29 @@ _LISTING_CACHE = _PROJECT_ROOT / "data" / "universe" / "etf_listing.json"
 4. **间接调用**（`LocalBackend._price_lookup`）
 5. 库桩（A 桶）/ D 桶 vec-Series 分派 / `_cls`·`_date` 家族
 6. 工具：`backend/**/*.py` 独立 compile-only 进 `tools/run_all.sh`
+
+### 批次一百五十三 追加：模块级「常量链」推断（**部分达成**，附精确剩余点）
+
+**修掉的（有独立证据）**
+
+| 项 | 之前 | 现在 |
+|---|---|---|
+| `_ROOT = Path(__file__).resolve().parents[2]` 派生路径链 | 全局落空 ⇒ I64 ⇒ `.exists()` 发裸符号 | 递归 `infer_global_ty()` 解析（Var 别名 / `/` 走 `handle_op` / `Subscript` 取元素 / `FieldAccess` 取 W 表属性 / `Call` 的 handle 链**与**按名 import 的成员调用） |
+| 多模块编译下 `module_globals` 存 mangled 名 | walk 用裸名判断 ⇒ **整表空**（探针 defs=448/globals=372/**typed=0**） | 补 `bare_globals`（`rsplit_once("__")` 去前缀） |
+| `cache_path: Path` 形参的静态类型是 `Named("Path")` | W 表按 `PyPath` 键 ⇒ `Path::write_text` 未定义 | Named 接收者分派先 `handle_tag(tn)` 归一再查 W 表 |
+| W 表结果类型映射散在 MIR 4 处 | 批次 153 为 `vecpath` 逐处补过 | 新增 `method_result_ty()` 作为**单点映射**（resolver 侧） |
+
+**证据**：t270（新增）pre-fix `Undefined symbols` → post-fix `x.json / 0 / 0`；
+单模块编译探针显示 `_PROJECT_ROOT`/`_LISTING_CACHE`/`_ETF_UNIVERSE_CACHE` 均为
+`Named("PyPath")`，**etf_listing 独立编译的 `_exists`/`_read_text` 归零**。
+度量：python_style **267/270** · 官方 194/194 · 语料 38/38 ·
+**wufu local 88/208 → 87/204**（`_debug` 消失，**无新增符号**）。
+
+**⚠️ 未达成（不要误读为已修）**：**整体**编译里那张表**仍然是空的**
+（同一探针：defs=448 / globals=372 / **typed=0**），所以 etf_listing 等模块的
+`_exists` / `_read_text` 在 wufu-local 链接里**仍在**。已逐一排除：mangled 名字（已修）、
+`Path(...)` 接收者（已修）、`parents`（批次 153 已加）、`/` 运算符（已验）。
+最小复现都能命中（单模块 ✓、「import 一个模块」✓），**只有全量模块图不行** ⇒
+下一批从「全量编译里 `<mod>__init` 的函数体为什么没被 `walk` 到」开刀
+（建议：在 `module_global_types` 里对每个 def 打点，看 448 个 def 中 `<mod>__init`
+的在不在、body 是否为空）。
