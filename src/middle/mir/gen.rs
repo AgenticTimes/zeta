@@ -2795,7 +2795,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.exprs.insert(dest, MirExpr::Var(dest));
                     self.type_map
                         .insert(dest, Type::DynamicArray(Box::new(elem)));
-                } else if op == "*" {
+                } else if op == "*" || op == "@" {
+                    // 批次145 重放: `@`（Python matmul）与 `*` 同走 SemiringFold
+                    // Mul——标量 matmul 即乘法（t214: 3@4=12）；数组 matmul 超出
+                    // V1 范围。此前 `@` 落入未知 op 分支 → Call{func:"@"} → 链接失败。
                     self.stmts.push(MirStmt::SemiringFold {
                         op: SemiringOp::Mul,
                         values: vec![left_id, right_id],
@@ -4764,6 +4767,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     let arg_id = self.lower_expr(&args[0]);
                     let (func, extra) = match self.type_map.get(&arg_id).cloned() {
                         Some(Type::DynamicArray(_)) => ("zeta_sum_vec".to_string(), Vec::new()),
+                        // 批次145: PyDynamic/未跟踪的实参（如未注解形参）在运行期
+                        // 是动态 vec —— 此前落到 zeta_sum_n 静态路径打印 0（t224 f）。
+                        Some(Type::PyDynamic) | None => {
+                            ("zeta_sum_vec".to_string(), Vec::new())
+                        }
                         Some(Type::Array(_, ArraySize::Literal(n))) => (
                             "zeta_sum_n".to_string(),
                             vec![{
@@ -5850,6 +5858,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 } else {
                     None
                 };
+                if std::env::var("ZETA_PROBE").is_ok() && method == "unique" {
+                    eprintln!(
+                        "PROBE unique call: receiver_ty={:?} arg_ids={:?} rt_has={}",
+                        receiver_ty,
+                        arg_ids,
+                        self.func_ret_types.contains_key("DataFrame::__contains__"),
+                    );
+                }
                 // PY-A: keyword arguments — bind by parameter name when the
                 // callee's signature is known (Python semantics). The parser
                 // wraps `name=value` as a __kwarg__ marker.
@@ -6577,6 +6593,52 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     }
                 }
 
+                // 批次145 重放: list methods on dyn/untyped receivers —
+                // `xs.sum()` / `xs.unique()` previously fell to bare externs
+                // (`_sum`/`_unique`) and failed to link. The C runtime provides
+                // zeta_sum_vec / zeta_vec_unique (order-preserving dedup).
+                // Some(I64) 也纳入：字面量列表的元素类型在部分 lowering 轮次
+                // 未跟踪（与 Call 路径的 I64 遗留一致）。DynamicArray 与定长
+                // Array 也在此拦截（保持元素类型），否则会掉进 opaque 回退的
+                // str_fallback 发射裸名 `_unique`/`_sum`（链接失败）。
+                let vec_elem = match receiver_ty.as_ref() {
+                    Some(Type::DynamicArray(e)) => Some((**e).clone()),
+                    Some(Type::Array(e, _)) => Some((**e).clone()),
+                    _ => None,
+                };
+                if matches!(
+                    receiver_ty.as_ref(),
+                    Some(Type::PyDynamic)
+                        | Some(Type::I64)
+                        | Some(Type::DynamicArray(_))
+                        | Some(Type::Array(_, _))
+                        | None
+                ) {
+                    let elem = vec_elem.unwrap_or(Type::Str);
+                    let vfunc = match (method.as_str(), arg_ids.len()) {
+                        ("sum", 1) => Some("zeta_sum_vec"),
+                        ("unique", 1) => Some("zeta_vec_unique"),
+                        _ => None,
+                    };
+                    if let Some(fname) = vfunc {
+                        self.stmts.push(MirStmt::Call {
+                            func: fname.to_string(),
+                            args: vec![arg_ids[0]],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(
+                            id,
+                            match method.as_str() {
+                                "unique" => Type::DynamicArray(Box::new(elem)),
+                                _ => Type::I64,
+                            },
+                        );
+                        return id;
+                    }
+                }
+
                 // PY-A fallback: method calls on unknown/opaque receivers
                 // (user structs from undefined modules, BitArray, Sieve,
                 // QuantumCircuit) map to runtime equivalents by NAME so
@@ -6848,6 +6910,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         ("pop", 3) => Some("zeta_map_pop_default"),
                         ("clear", 1) => Some("zeta_map_clear"),
                         ("setdefault", 3) => Some("py_map_setdefault"),
+                        // 批次145 重放: `del d[k]` desugars to
+                        // `d.__delitem__(k)`; batch 127 mapped it to
+                        // zeta_map_pop — lost in the 143 restore (t239).
+                        ("__delitem__", 2) => Some("zeta_map_pop"),
                         _ => None,
                     };
                     if let Some(fname) = dfunc {
@@ -6856,6 +6922,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         let call_args = match (method.as_str(), arg_ids.len()) {
                             ("update", 2) => vec![arg_ids[0], arg_ids[1]],
                             ("pop", 2) => vec![arg_ids[0], self.lower_map_key(arg_ids[1])],
+                            ("__delitem__", 2) => {
+                                vec![arg_ids[0], self.lower_map_key(arg_ids[1])]
+                            }
                             ("pop", 3) => vec![
                                 arg_ids[0],
                                 self.lower_map_key(arg_ids[1]),
@@ -7071,6 +7140,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         match method.as_str() {
                             "push" => ("array_push".to_string(), false, true),
                             "len" => ("array_len".to_string(), true, false),
+                            // 批次145 重放: order-preserving dedup / sum on vecs
+                            "unique" => ("zeta_vec_unique".to_string(), false, false),
+                            "sum" => ("zeta_sum_vec".to_string(), false, false),
                             _ => {
                                 // For other methods, use qualified name: Type::method
                                 let rty_name = rty.display_name();
@@ -8635,6 +8707,31 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, Type::Str);
                     return id;
+                }
+                // 批次145 重放: subscript on a KNOWN struct with `__getitem__`
+                // (`df["c"]`) must dispatch the qualified method — previously it
+                // fell through to DictGet on the struct pointer (map_get on a
+                // non-map → garbage/SEGV). Batch 99's fix, lost in the 143
+                // restore.
+                if let Type::Named(tn, _) = &base_ty {
+                    if tn != "map" && tn != "dict" {
+                        let qualified = format!("{}::__getitem__", tn);
+                        if self.func_ret_types.contains_key(&qualified) {
+                            let ret_ty = self.func_ret_types.get(&qualified).cloned();
+                            self.stmts.push(MirStmt::Call {
+                                func: qualified,
+                                args: vec![bid, iid],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(
+                                id,
+                                ret_ty.unwrap_or(Type::I64),
+                            );
+                            return id;
+                        }
+                    }
                 }
                 // A MAP subscript as an EXPRESSION. The assignment path
                 // (`d[k] = v`) already handled maps, but the expression path did

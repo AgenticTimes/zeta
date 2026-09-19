@@ -4897,3 +4897,35 @@ python_style **219 → 225**；官方 **194/194**。
 1. 链接失败 17 例：按原批次重放（`_@`、`_map____delitem__`、`_unique` 优先——每个都是一处发射点修复）
 2. 输出错 20 例：按 dunder 分派聚类处理
 3. soft 桩消化 + 语料 undef <40
+
+## 批次一百四十五（2026-09-19，**进行中**）：事故余波重放 第一轮
+
+**范围**：143 事故丢失修复的按批重放（37 失败 → 31）。
+
+### 重放的修复（4 组发射点 + 1 组库注解）
+
+1. **Subscript→`__getitem__` 分派**（批次 99 重放）：Named struct 上的下标 `df["c"]` 此前直接 DictGet（对 struct 指针 map_get → SEGV/0）；现命中 `Class::__getitem__` 限定调用（t194 簇前置）
+2. **vec 方法表**：`xs.sum()`/`xs.unique()`（PyDynamic/I64/DynamicArray/Array/None 接收者）→ `zeta_sum_vec`/`zeta_vec_unique`（保持元素类型；此前落 opaque str_fallback 发射裸名 `_sum`/`_unique`）
+3. **map `__delitem__`**（批次 127 重放）：`del d[k]` → `zeta_map_pop` + 内容哈希键（t239）
+4. **matmul `@`**：与 `*` 同走 SemiringFold Mul（标量 matmul 即乘法；此前 `Call{func:"@"}` 链接失败，t214）
+5. **内建 sum**：PyDynamic/未跟踪实参 → `zeta_sum_vec`（此前走静态 `zeta_sum_n` 打 0，t224）
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 223/260 | **229/260** |
+| t203/t211/t214/t224/t239 | FAIL | **PASS** |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+
+### 剩余 31 失败的分类
+
+- **链接失败 12**：getattr 系（t215/t219/t222/t234，批次 123 重放）、listcomp（t216/t233）、strftime（t220）、logger（t223）、dict set cast（t231）、path open（t232）、ann-attr（t246）、numpy clip（t230）
+- **输出错 19**：len/setitem dunder（t196/t197）、pandas 链式（t198/t200/t201/t202/t204/t207/t208/t210/t228/t229）、numpy where/eye（t212/t217/t218/t221/t227）、isinstance（t87）
+- 工具注记：`--dump-mir` 已接线（144），本轮排查全靠它
+
+### 下一队列
+
+1. getattr 系 4 例（同一 lowering 点的可能性大）
+2. dunder len/setitem + pandas 链式簇
+3. numpy where/eye 簇

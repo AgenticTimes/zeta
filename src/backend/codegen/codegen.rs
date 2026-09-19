@@ -5553,6 +5553,8 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         "+" => self.builder.build_float_add(l, r, "add").unwrap().into(),
                         "-" => self.builder.build_float_sub(l, r, "sub").unwrap().into(),
                         "*" => self.builder.build_float_mul(l, r, "mul").unwrap().into(),
+                        // 批次145 重放: scalar matmul on floats multiplies too
+                        "@" => self.builder.build_float_mul(l, r, "matmul_f").unwrap().into(),
                         "/" => self.builder.build_float_div(l, r, "div").unwrap().into(),
                         "floordiv" => self.build_floordiv_float(l, r),
                         _ => self.i64_type.const_zero().into(),
@@ -5634,6 +5636,13 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     "*" => self
                         .builder
                         .build_int_mul(left_val, right_val, "mul")
+                        .unwrap()
+                        .into(),
+                    // 批次145 重放: Python `@` matmul — scalars multiply
+                    // (t214: `3 @ 4` = 12); array matmul is out of V1 scope.
+                    "@" => self
+                        .builder
+                        .build_int_mul(left_val, right_val, "matmul_scalar")
                         .unwrap()
                         .into(),
                     "/" => self
