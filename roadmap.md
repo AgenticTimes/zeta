@@ -4990,3 +4990,23 @@ python_style **219 → 225**；官方 **194/194**。
 
 - **切片 end 为 PyDynamic 参数时结果错误**：`def sl(col, n): return col[:n]` 对 `["x","y"]` 返回空（`zeta_slice_vec(handle, 0, 1)` 本应正确；疑 PyDynamic end 的 lowering 或静态数组 header 探测）——head/tail/rename 簇（10 例）的公共根因
 - 其余：numpy where/eye 簇、isinstance、listcomp DataFrame、strftime/logger/path 链接失败
+
+### 批次一百四十六 第三轮（同日）：current_class 规范化 + 收口
+
+1. **current_class 剥模块 mangle 前缀**（pandas__DataFrame → DataFrame）：type_decls/func_ret_types 以裸类名为键
+2. 定位到的深层债务：**方法限定名不统一**——同一 pylib 类的方法同时存在 `DataFrame::columns` 与 `pandas__DataFrame::column_names` 两种注册形态（"5 处改名点"债务的具体形态），导致 self 类型化只对部分方法生效；head/tail/rename 簇（t200/t204/t207/t208/t210/t228/t229/t201）的 SEGV 仍源于此
+3. 本轮已收复：t230（N 参 min/max）、t225（getattr 幽灵红线回归修复）、t202（vec FieldAccess identity）
+
+### 度量（批次一百四十六 收口）
+
+| 口径 | 143 事故后 | 现在 |
+|---|---|---|
+| python_style | 220/260 | **238/260**（+18） |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+
+### 下一队列（批次一百四十七）
+
+1. **方法限定名统一**（P1 级还债）：load_user_python_module 的方法注册收敛为单一形态（DataFrame::method），消除 `pandas__DataFrame::x` / `DataFrame::x` 双态——head/tail/rename 簇 10 例的根因
+2. numpy where/eye/free_names 簇（t212/t217/t218/t221/t227/t230 ✓已收）
+3. 链接失败 6 例：t216/t233（listcomp 闭包内 DataFrame）、t220（strftime W 表）、t223（logger `_3` 变体）、t231（fromkeys/dict/add）、t232（Path open）、t246（set）
+4. isinstance（t87）

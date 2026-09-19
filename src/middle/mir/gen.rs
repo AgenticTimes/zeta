@@ -653,7 +653,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // the field's declared map type and `key in self.data` inside
                 // `__contains__` cannot dispatch.
                 self.current_class = if fname.contains("::") {
-                    fname.split("::").next().map(|s| s.to_string())
+                    // 剥模块 mangle 前缀（pandas__DataFrame → DataFrame），
+                    // type_decls/func_ret_types 以裸类名为键
+                    let cc = fname.split("::").next().unwrap_or("");
+                    let cc = cc.rsplit_once("__").map(|(_, t)| t).unwrap_or(cc);
+                    Some(cc.to_string())
                 } else {
                     None
                 };
