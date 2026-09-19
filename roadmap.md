@@ -5053,3 +5053,14 @@ python_style **219 → 225**；官方 **194/194**。
 - pandas 链式 6：t193/t204/t207/t208/t210/t228/t229（rename/reset_index/dedup/append）
 - 链接失败 6：t216/t233（listcomp 闭包内 DataFrame）、t220（strftime）、t223（logger `_3`）、t231（fromkeys/dict/add）、t232（Path open/read_text）、t246（set）
 - t87（isinstance：直接运行输出正确，runner 口径待查）
+
+### 批次一百四十七 追加（同日）：isinstance PyDynamic 修复
+
+- **isinstance(x, int)**：B3（批次 141）把未标注形参类型改为 PyDynamic 后，静态类型判定对 PyDynamic 落 0（t87 `f(5)`）。按 i64 ABI 现实把 PyDynamic 纳入 int 判定
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 241/260 | **242/260**（t87） |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |

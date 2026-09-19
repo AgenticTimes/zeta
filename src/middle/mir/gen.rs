@@ -5072,6 +5072,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                     | Some(Type::U32)
                                     | Some(Type::U64)
                                     | Some(Type::Usize)
+                                    // 批次147: PyDynamic 值按 i64 ABI 传递——
+                                    // B3 引入后未标注形参的 isinstance(x, int)
+                                    // 落 0（t87 f(5)）；按 ABI 现实判 int。
+                                    | Some(Type::PyDynamic)
                             ),
                             "float" => matches!(vt, Some(Type::F64) | Some(Type::F32)),
                             "str" => matches!(vt, Some(Type::Str)),
