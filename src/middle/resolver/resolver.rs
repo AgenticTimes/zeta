@@ -1749,11 +1749,30 @@ impl Resolver {
         // (probe: defs=448 globals=372 typed=0), leaving every module-level path
         // constant untyped in the linked program (etf_listing's `_LISTING_CACHE`
         // → bare `_exists`). Accept both spellings.
+        // Strip the KNOWN module prefix (`<module with _ for .>__`) rather than
+        // splitting on "__": a global like `_PROJECT_ROOT` is stored as
+        // `backend_datasrc_etf_listing___PROJECT_ROOT` (THREE underscores — the
+        // separator's two plus the name's leading one), and `rsplit_once("__")`
+        // would yield `PROJECT_ROOT` (leading underscore lost) so the lookup for
+        // `_PROJECT_ROOT` still missed. That bug is why the table stayed empty
+        // (typed=0) even after the first attempt.
+        let prefixes: Vec<String> = self
+            .py_loaded_modules
+            .borrow()
+            .iter()
+            .map(|m| format!("{}__", m.replace('.', "_")))
+            .collect();
         let bare_globals: std::collections::HashSet<String> = globals
             .iter()
-            .map(|g| match g.rsplit_once("__") {
-                Some((_, tail)) if !tail.is_empty() => tail.to_string(),
-                _ => g.clone(),
+            .map(|g| {
+                for pfx in &prefixes {
+                    if let Some(rest) = g.strip_prefix(pfx.as_str()) {
+                        if !rest.is_empty() {
+                            return rest.to_string();
+                        }
+                    }
+                }
+                g.clone()
             })
             .collect();
         let mut out: HashMap<String, Type> = HashMap::new();

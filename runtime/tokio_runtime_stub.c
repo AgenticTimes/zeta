@@ -1465,6 +1465,16 @@ int64_t py_path_read_text_2(int64_t p, int64_t encoding) {
     return py_path_read_text(p);
 }
 
+// `p.write_text(s, encoding="utf-8")` — the 3-arg call site (registry declares
+// receiver+text, so the call arity-mangled to `py_path_write_text_3`, which
+// nothing defined). `encoding` is ignored: the bytes are written verbatim, and
+// re-encoding a `str` handle would be a silent transformation.
+int64_t py_path_write_text(int64_t p, int64_t text);
+int64_t py_path_write_text_3(int64_t p, int64_t text, int64_t encoding) {
+    (void)encoding;
+    return py_path_write_text(p, text);
+}
+
 // pathlib.Path.parents — a Vec of ancestor paths: `parents[0]` is the parent,
 // `parents[k]` drops the last k+1 components. `PyPath` handles ARE the path
 // string, so each element is a string handle. Without this, `Path(__file__)
