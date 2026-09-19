@@ -1154,14 +1154,17 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
         }
         cur = next;
     }
-    if !saw_except {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Tag,
-        )));
-    }
-
     // optional finally
+    //
+    // NOTE the ordering: a bare `try/finally` (NO `except`) must be accepted
+    // too. Rejecting it here used to `Err` the whole `try` statement, and the
+    // caller's fallback then parsed `finally { … }` as a PLAIN BLOCK — its
+    // statements leaked into the enclosing body *after* the try body. With
+    // `try: … return X` + `finally: cleanup()` that put instructions after a
+    // `ret` in the same basic block: "Terminator found in the middle of a basic
+    // block", which aborted the WHOLE compile
+    // (`backend/datasrc/market_data_universe.py`). The `saw_except` check moved
+    // below the finally parse so `try/finally` is a first-class form.
     let mut finally_body: Vec<AstNode> = Vec::new();
     let t = cur.trim_start();
     if t.starts_with("finally") {
@@ -1180,6 +1183,12 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
             finally_body = fbody;
             cur = next;
         }
+    }
+    if !saw_except && finally_body.is_empty() {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
     }
 
     // ── desugar (error-state polling — no setjmp) ──

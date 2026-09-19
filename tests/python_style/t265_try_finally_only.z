@@ -1,0 +1,25 @@
+// PY-A: 裸 `try/finally`（没有 `except`）必须是一等语法（批次 151）。
+// 此前 parse_try_stmt 在没有 except 时直接 Err，外层回退把 `finally { … }`
+// 当成**普通块**接着排 ⇒ 语句落在 try 体之后；try 体里一旦有 `return`，
+// 就变成「终止指令后面还有指令」的非法 IR：
+//     Terminator found in the middle of a basic block
+// 整个编译中止（REasyQuant backend/datasrc/market_data_universe.py 复现）。
+// expect: 9
+// expect: 7
+// expect: 3
+def g(n: i64) -> i64:
+    r = 0
+    try:
+        r = 7
+    finally:
+        print(9)
+    return r
+
+def f(n: i64) -> i64:
+    try:
+        return 3
+    finally:
+        pass
+
+print(g(1))
+print(f(1))

@@ -1538,6 +1538,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
             }
         }
         for stmt in &mir.stmts {
+            self.ensure_emittable_block();
             self.gen_stmt(stmt, &mir.exprs);
         }
         if self
@@ -3078,6 +3079,35 @@ impl<'ctx> LLVMCodegen<'ctx> {
             MirStmt::Break => MirStmt::Break,
             MirStmt::Continue => MirStmt::Continue,
         }
+    }
+
+    /// The MIR stream may contain statements AFTER a terminator. Concretely the
+    /// `try/finally` desugar (`stmt.rs::parse_try`) appends the `finally` body as
+    /// a SIBLING of the try's `if`, so a `return` inside the try leaves those
+    /// statements in an already-terminated basic block:
+    ///
+    /// ```llvm
+    /// entry:
+    ///   ret i64 3                       ; `return 3`
+    ///   call void @println_i64(i64 9)    ; `finally:` — past the terminator
+    /// ```
+    ///
+    /// LLVM rejects that (`Terminator found in the middle of a basic block`) and
+    /// the WHOLE compile aborts — `backend/datasrc/market_data_universe.py` never
+    /// reached the linker, so `get_universe` (needed by the local backtest entry)
+    /// was never emitted. Such statements are unreachable, so park them in a
+    /// fresh predecessor-less block: the IR stays valid and the code stays
+    /// visible instead of being silently deleted.
+    fn ensure_emittable_block(&mut self) {
+        let Some(bb) = self.builder.get_insert_block() else {
+            return;
+        };
+        if bb.get_terminator().is_none() {
+            return;
+        }
+        let Some(f) = bb.get_parent() else { return };
+        let dead = self.context.append_basic_block(f, "unreachable");
+        self.builder.position_at_end(dead);
     }
 
     fn gen_stmt(&mut self, stmt: &MirStmt, exprs: &HashMap<u32, MirExpr>) {
