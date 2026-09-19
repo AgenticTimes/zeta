@@ -5089,3 +5089,63 @@ python_style **219 → 225**；官方 **194/194**。
 1. **隐式字段合成**（parse_class：`__init__` 的 `self.x = <expr>` → StructDef 字段，类型从构造参数/字面量推断）——pandas 链式 8 例的前置
 2. numpy free-names：`from numpy import arange` 等别名调用返回类型的 env 往返
 3. 链接失败 6 例逐个（多为缺 registry X 条目或 W 方法）
+
+---
+
+## 批次一百四十九（2026-09-19，**已收口**）：注解/调用点形状 vs 注册表 —— 13 个裸符号/静默错值
+
+本批不再奔「隐式字段合成」那条大改（批次 147 判定它是 head/tail 簇的前置），而是先按
+**「注册表里已经有、只是降级层没接」**逐项清缺口 —— 证据导向、每项都可 pre/post 对拉。
+
+### 修掉的（每条都有 pre-fix FAIL / post-fix PASS 的独立证据）
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `k in m`（`m: lt(map,K,V)` 形参）**恒 0**；类方法里**段错误** | `in` 的 map 分支只认 `type_map` 的 `Named("map")`，而 `lt(...)` 注解**从不进 type_map**（形参落表处没有 `lt` 分支，一律留 I64），类型只在 `source_types` 里 ⇒ 自由函数落「不支持」返回 0；类方法落「唯一 `X::__contains__` 兜底」，把 map 实参当 `self` 发 `DataFrame::__contains__(map,k)` | `is_map` 加 `source_types` 的 `map<` 回退（沿用 6393 行既有的 `is_array_param` 范式）；给唯一 `__contains__` 兜底加 `self` 槽位闸门 |
+| 2 | 列表推导体里 `pd.DataFrame(r)` → 裸 `_DataFrame` | `lower_closure` 建子 MirGen 只拷 nonlocal/module_globals/type_decls/func_ret_types/symbol_renames，**不拷 import 表** | 子 MirGen 补齐 py_imports / py_user_modules / module_global_types / func_param_names / argparse_kinds / param_defaults / source_file / global_consts / shared_type_decls / closure_vars / closure_ret_tys / hoisted_names / current_class / re_repl_param |
+| 3 | `set()` / `s.add(v)` / `dict.fromkeys(k)`（1 参）三类裸符号 | `py_builtin_set` / `py_set_add` / `py_map_fromkeys` 早已在 runtime+注册表里；`set` 只接 1 参、`add` 无人发射、`fromkeys` 只接 2 参 | `set()` 0 参走 `py_builtin_set(0)`（`zt_vec_len(0)==0` null 安全）；`s.add` → `py_set_add` + 与 `push` 同款回写；`fromkeys` 1 参补缺省值 0 |
+| 4 | `-> Path` / `def f(p: Path)`（**Python 类名**）→ 裸 `_Path__open` | `handle_tag()` 只认**标签**（PyPath），不认 Python 类名；`F <mod> <Class> … handle=<Tag>` 就是这层映射却没被用 | `handle_tag` 增加「按模块成员名查 handle=」；resolver 返回类型归一化处套用 |
+| 5 | `p.open()` → `py_file_open_1`（未定义）；`q.open(encoding=…)` 同理 | 注册表声明 2 参（receiver+mode），1 参调用被 arity 后缀 | **只对 `PyPath.open` 定点补**：缺 mode / 只有 kwarg → 补 0（`py_file_open` 本就把 null mode 当 "r"）。**不做通用补参**——运行时有**故意的 `_N` 变体**（`py_threading_thread_new_2`），第一版通用规则把 t62 从 42 打成 1，已回退 |
+| 6 | `os.makedirs(p, exist_ok=True)` / `p.read_text(encoding=…)` | 同上（kwarg 进不去固定 arity 的 C 符号） | 按运行时既有 `_N` 约定补真实现：`py_os_makedirs_2`、`py_path_read_text_2`（忽略那个语义上无意义的可选参），重建 `tokio_runtime.o` |
+| 7 | `log.error(fmt,x)` / `log.warning(fmt,x)` → `_3` 裸符号 | `py_logger_error_n`/`warning_n` 早已在 runtime+注册表+codegen 声明里，只有 MIR 分派写死 `info` | 分派扩到 `info|warning|error`，符号名按级别拼 |
+| 8 | `datetime.datetime(…).strftime(fmt)`（**无 import**）→ `_PyDate__strftime` | 无别名时构造调用解析得晚（`find_module` 回退在调用发射点，不在 AST 形状处）⇒ `py_handle_of` 对 Call 形状接收者返 None ⇒ 落「Named 接收者方法」分支，那里无条件 `tn::method` | Named 接收者分支**之前**查一次 W 表：`tn` 是句柄标签时直接发 shim。这也解释了为什么 `.year`（字段路径）一直通、`.strftime(…)`（Call）不通 |
+| 9 | `np.arange(4)[2]` 段错误 | `py_member_call` 对磁盘模块只能报粗粒度返回种类（"str"/"f64"/"i64"），`-> lt(vec,i64)` 被压成 I64 ⇒ `[2]` 走 map 猜测 | 调用点优先取 `func_ret_types[symbol]` 的声明类型 |
+| 10 | `from numpy import where` 的 3 参形态打印指针 | 批次 148 的 np.where 拦截只认「receiver 是模块别名」；裸名落到 pylib 的 1 参包装，3 参被静默截断 | 裸名经 `py_member_target(None,"where")` 解析为 numpy.where 时同样拦截 |
+| 11 | `map<K,V>` 的 **V 完全没进类型图** | 字典字面量只记键类型 `Named("map",[K])` ⇒ `a = m["code"]` 是 I64 ⇒ `a[0]` 走 map_get(Vec 句柄) 段错误 | 字面量按第一个值的静态类型补第二类型参数；下标表达式从 `targs[1]` 取结果类型 |
+| 12 | `np.zeros((r,c))` **挂死** | `pylib/numpy.z` 注释写「元组形由 MIR → zeta_np_zeros2」，但 MIR 里**没有这段拦截**（`grep zeta_np_zeros src/` 为空）⇒ 元组句柄当长度，分配天文数字平坦数组 | 补拦截：元组 2 元素 → `zeta_np_zeros2(r,c)`，结果 DynamicArray(I64) |
+
+### 度量
+
+| 口径 | 本批起点 | 现在 |
+|---|---|---|
+| python_style | 243/260 | **255/262**（+12，含新增 t261/t262） |
+| 官方 / 语料 | 194/194 · 38/38 | 持平（每步都复跑） |
+
+commit：`7e9aad9e` `af7e2f77` `e8565b73` `595e9607` `0ff12fda` `6d90181a`（均已 push agentic）。
+
+### 剩余 7 例的**精确定位**（下一批直接从这里开）
+
+- **pandas 5 例（t204/t207/t208/t228/t229）—— 同一簇，根因已缩小到两处**：
+  1. **库方法内 `self.copy()` / `len(self.data)` 与外部调用结果不一致**（可复现、可二分）：
+     - `a.n_columns()`（内部 `len(self.data)`）→ **2** ✓
+     - `len(a.data)`（外部对同一字段）→ **0** ✗
+     - `b = a.fillna(0); b.n_columns()` → **2** ✓ 而 `len(b.columns)` → **0** ✗
+     ⇒ **字段读的静态类型在「方法内」与「方法外」两条路径上不一致**，即批次 146/147
+     记的那条债（`pandas__DataFrame::x` / `DataFrame::x` 双态 + 隐式字段），
+      但它**不是** batch 147 试过的做法能修的（那次是重命名 ImplBlock，级联失败已回退）。
+     下一步应从「字段类型查找」单点埋探针（`py_struct_type_of` / 8392 行附近），
+      而不是再动命名。
+  2. **`[]` 字面量是 0 长 StackArray，不是可增长的 DynamicArray**（t207 的直接根因）：
+     `xs = []` → `Array(I64, Literal(0))` + `StackArray` ⇒ `xs.append("hi")` 的
+     `vec_push` 写进栈内存，`len(xs)` 恒 0。**且注解被丢弃**：`zs: lt(vec,str) = []`
+     的 `lt(vec,str)` 在 `parse_assign`（stmt.rs:371）里解析完就扔 ⇒ `zs` 仍是
+     `Array(I64,0)`。Python 列表语义要求字面量走 `DynamicArray`——这与 Rust 风格的
+     `[T; N]` 语义冲突，需要一次「Python 语料专用」的判定（如 `parse_array_lit` 标记
+     来源），是**独立的设计决定**，不要顺手改。
+- **t231**：`dict(x)` 对**未定型形参**是**故意**的响亮失败（gen.rs 5428 注释：
+  「copying an unknown handle would corrupt data」）。要让它通过需要「调用点推断
+  覆盖无标注形参」——批次 py_asdict 那条线上已有同类机制（AST 回写 + Named 分支），
+  应复用而不是在这里放宽。
+- **t233**：闭包内经 env 取到的**函数值**做调用，需要**间接调用**（MIR 现无
+  `CallIndirect`；codegen 无 `inttoptr` + `build_indirect_call`）。闭包值本身已是
+  `MirExpr::FuncAddr`（i64 函数地址），所以这是一条**新增能力**，不是修 bug。
