@@ -3112,7 +3112,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 let map_id = id;
                 self.stmts.push(MirStmt::MapNew { dest: map_id });
                 let mut key_ty = Type::I64;
+                // The VALUE type is tracked as the map's second type argument, so
+                // `a = m["code"]` keeps DynamicArray(Str) instead of degrading to
+                // I64 — `a[0]` then did a map_get on a Vec handle (SEGV, t193).
+                let mut val_ty = Type::I64;
                 let mut first_key = true;
+                let mut first_val = true;
                 for (k, v) in entries {
                     // PY-A: `{**m, ...}` — merge m's entries into the literal.
                     if let AstNode::Call {
@@ -3158,6 +3163,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     }
                     let kid = self.lower_map_key(kid0);
                     let vid = self.lower_expr(v);
+                    if first_val {
+                        val_ty = self.type_map.get(&vid).cloned().unwrap_or(Type::I64);
+                        first_val = false;
+                    }
                     self.stmts.push(MirStmt::DictInsert {
                         map_id,
                         key_id: kid,
@@ -3170,8 +3179,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     Type::I64
                 };
                 self.exprs.insert(map_id, MirExpr::Var(map_id));
-                self.type_map
-                    .insert(map_id, Type::Named("map".to_string(), vec![key_ty]));
+                self.type_map.insert(
+                    map_id,
+                    Type::Named("map".to_string(), vec![key_ty, val_ty]),
+                );
                 return map_id;
             }
             AstNode::Range {
@@ -3310,6 +3321,37 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, ret);
                     return id;
+                }
+
+                // np.zeros((r, c)) — the TUPLE form must unpack into the 2-arg
+                // primitive. `pylib/numpy.z`'s `zeros(n)` wrapper took the tuple
+                // handle as the length, so the runtime allocated a nonsense flat
+                // array and the program HUNG (t221). The MIR interception the
+                // library comment referred to did not exist.
+                let zeros_is_free = matches!(
+                    receiver.as_ref().map(|r| &**r),
+                    Some(AstNode::Var(v)) if self.py_module_aliases.contains_key(v.as_str())
+                ) || (receiver.is_none()
+                    && self
+                        .py_member_target(&None, "zeros")
+                        .map_or(false, |(m, mem)| m == "numpy" && mem == "zeros"));
+                if zeros_is_free && method == "zeros" && args.len() == 1 {
+                    if let AstNode::Tuple(items) = &args[0] {
+                        if items.len() == 2 {
+                            let r = self.lower_expr(&items[0]);
+                            let c = self.lower_expr(&items[1]);
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_np_zeros2".to_string(),
+                                args: vec![r, c],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map
+                                .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                            return id;
+                        }
+                    }
                 }
 
                 // PY-A: `re.sub(pat, repl, s)` — repl may be a STRING or a
@@ -9147,7 +9189,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         dest: id,
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    // `m[k]` keeps the map's VALUE type (second type argument of
+                    // `map<K, V>`), so a Vec-valued map stays indexable.
+                    let val_ty = match &base_ty {
+                        Type::Named(_, targs) => {
+                            targs.get(1).cloned().unwrap_or(Type::I64)
+                        }
+                        _ => Type::I64,
+                    };
+                    self.type_map.insert(id, val_ty);
                     return id;
                 }
                 if let Type::DynamicArray(_) = base_ty {
