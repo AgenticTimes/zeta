@@ -5256,7 +5256,11 @@ Error: "Function return type does not match operand type of return inst!
 回归锁：**t264**（pre-fix 实测编译中止）。度量：python_style 260/264 → **261/264**，
 官方 194/194 · 语料 38/38 持平。
 
-### 现在的状态：能编译到链接期，**未定义符号 56 个**
+### 现在的状态：能编译到链接期，**未定义符号 89 个 / 219 个引用点**
+
+> ⚠️ 本行原写「56 个」——那是 `grep -A200 'Undefined symbols'` **截断在 200 行**
+> 少数了 33 个（该块有 219 行引用明细）。正确口径与影响见批次 151。下表的分桶
+> 因此也漏了几个高频项（最典型的是 `_py_os_environ_get_1`，10 处引用，全库第一）。
 
 按「谁来修、在不在 local 路径上」分桶：
 
@@ -5379,3 +5383,41 @@ entry:
 5. **D 桶**（`[dynamic]str__median/isna/notna`、`DataFrame__abs/median`）→
    **B 桶**（私有成员 + 函数内 import）→ **E/F 桶**逐个小口。
 6. 最后才谈「链接成功 → 运行 → 出回测收益」。
+
+### 批次一百五十一 追加（同日）：arity 后缀裸符号 + 未定义符号口径更正
+
+**口径更正**：`grep -A200 'Undefined symbols'` **截断在 200 行**，而该块有 **219 行**
+引用明细 ⇒ 少数 33 个符号。正确数法：
+
+```python
+python3 - <<'PY'
+import re; t=open(LOG).read(); blk=t[t.index('Undefined symbols'):]
+print(len(set(re.findall(r'^\s+"([^"]+)"', blk, re.M))))   # 符号数
+PY
+# 引用点总数：把每个符号名下面 "… in wufu_local.o" 的行计数
+```
+
+**实测**：wufu local **89 符号 / 219 引用点 → 88 / 210**。
+
+**本批修掉的 2 个（合计 12 处引用）——「调用点形状 ≠ registry 声明 arity」**
+
+| 调用 | registry | 调用点 arity | 之前 | 现在 |
+|---|---|---|---|---|
+| `os.environ.get(K)` | `args=i64,i64` | 1（Python default 可省） | 未定义 `py_os_environ_get_1`（**10 处引用，全库第一**） | C 侧 `py_os_environ_get_1(k) → py_os_environ_get(k, 0)` |
+| `pd.Timestamp(s, unit=…, tz=…)` | `args=i64` | 3 | 未定义 `py_dt_from_str_3`（2 处） | C 侧 `py_dt_from_str_3(s,unit,tz)`：**忽略** unit/tz（PyDate 句柄本就不带时区/日内精度，编造偏移=静默错值） |
+
+沿用运行时既有 `_N` 约定（同批次 149 的 `py_os_makedirs_2` / `py_path_read_text_2`）：
+**C 侧补真实现**，不在 MIR 里丢参数、不返假值。回归锁 **t266**（`// env:` 设值 +
+未设键打空行 + Timestamp 的 year/month）。python_style **263/266**，
+官方 194/194 · 语料 38/38 持平。
+
+**关键施工结论：修一个会露出下一个 ⇒ 剩余缺口必须迭代到不动点。**
+
+本轮修掉 2 个，同时**新出现** `_backend_datasrc_market_data__fetch_stock_data`：
+`os.environ.get` 通了之后，原本半途放弃的函数编译到了下一处缺口。
+成因是**项目侧既有隐患**：`market_data_sources.py:60` 写
+`from .market_data import _baostock_login, _baostock_logout, fetch_stock_data`，
+而 facade `market_data.py` **并没有** re-export `fetch_stock_data`
+（CPython 只在真的走到那条 source 时才 ImportError）。
+⇒ 不能按一次性清单估工；每轮以「符号数 + 引用点数」两个指标收敛，
+并留意**新出现的符号**（不是回归，是原先被前一个错误遮住的下一层）。
