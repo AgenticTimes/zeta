@@ -1,0 +1,25 @@
+// PY-A: `and` / `or` 是**取值**运算（Python 语义），不是布尔运算（批次 152）。
+// 此前 codegen 把它们降到 `and/or` + zext ⇒ 结果恒 0/1：
+//   `cfg = m or {}` 之后 `cfg.get(k, d)` 把布尔 1 当 map 句柄（幽灵符号 `_get`，
+//   REasyQuant 本地回测里 `CostModel::from_jq` 三处），
+//   `t = s or "x"` 之后 `.upper()` 丢字符串。
+// expect: 7
+// expect: 3
+// expect: 0
+// expect: 7
+// expect: 5
+// expect: AB
+def pick(m) -> i64:
+    cfg = m or {}
+    return cfg.get("a", 0)
+
+def up(s: str) -> str:
+    t = s or "x"
+    return t.upper()
+
+print(0 or 7)
+print(3 or 7)
+print(0 and 7)
+print(3 and 7)
+print(pick({"a": 5}))
+print(up("ab"))

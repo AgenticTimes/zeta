@@ -5734,6 +5734,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .build_right_shift(left_val, right_val, true, "shr")
                         .unwrap()
                         .into(),
+                    // Python `and`/`or` are VALUE-selecting, not boolean:
+                    // `x or d` yields x when truthy else d (same for `and`).
+                    // Returning 0/1 lost the value: `cfg = m or {}` then
+                    // `cfg.get(k, d)` read the map handle as the boolean 1
+                    // (SEGV), and `t = s or "x"` lost the string entirely.
                     "&&" => {
                         let left_bool = self
                             .builder
@@ -5741,26 +5746,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
                                 inkwell::IntPredicate::NE,
                                 left_val,
                                 self.i64_type.const_int(0, false),
-                                "left_bool",
+                                "and_left_truthy",
                             )
-                            .unwrap();
-                        let right_bool = self
-                            .builder
-                            .build_int_compare(
-                                inkwell::IntPredicate::NE,
-                                right_val,
-                                self.i64_type.const_int(0, false),
-                                "right_bool",
-                            )
-                            .unwrap();
-                        let bool_and = self
-                            .builder
-                            .build_and(left_bool, right_bool, "and")
                             .unwrap();
                         self.builder
-                            .build_int_z_extend(bool_and, self.i64_type, "and_ext")
+                            .build_select(
+                                left_bool,
+                                right_val,
+                                left_val,
+                                "and_val",
+                            )
                             .unwrap()
-                            .into()
                     }
                     "||" => {
                         let left_bool = self
@@ -5769,26 +5765,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
                                 inkwell::IntPredicate::NE,
                                 left_val,
                                 self.i64_type.const_int(0, false),
-                                "left_bool",
+                                "or_left_truthy",
                             )
-                            .unwrap();
-                        let right_bool = self
-                            .builder
-                            .build_int_compare(
-                                inkwell::IntPredicate::NE,
-                                right_val,
-                                self.i64_type.const_int(0, false),
-                                "right_bool",
-                            )
-                            .unwrap();
-                        let bool_or = self
-                            .builder
-                            .build_or(left_bool, right_bool, "or")
                             .unwrap();
                         self.builder
-                            .build_int_z_extend(bool_or, self.i64_type, "or_ext")
+                            .build_select(
+                                left_bool,
+                                left_val,
+                                right_val,
+                                "or_val",
+                            )
                             .unwrap()
-                            .into()
                     }
                     _ => {
                         panic!("Unsupported binary operator in BinaryOp: {}", op);

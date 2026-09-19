@@ -2940,6 +2940,38 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         }
                         _ => Type::I64,
                     };
+                    // Python `and`/`or` are VALUE-selecting, not boolean:
+                    // `cfg = m or {}` evaluates to `m` (a map) or `{}` (a map), and
+                    // `t = s or "x"` to a string. Typing the result I64 turned every
+                    // downstream method call (`cfg.get(k, d)`, `t.upper()`) into an
+                    // opaque bare symbol — `_get` had 7 reference sites in the
+                    // REasyQuant local backtest, 3 of them from
+                    // `CostModel::from_jq`'s `cfg = config or {}` + `cfg.get(...)`.
+                    // Only refine when the operands agree on a concrete type (or one
+                    // is concrete and the other is the untyped default), so
+                    // `if a or b:` keeps Bool.
+                    let op_type = if matches!(op.as_str(), "||" | "&&") {
+                        let lt = self.type_map.get(&left_id).cloned();
+                        let rt = self.type_map.get(&right_id).cloned();
+                        let concrete = |t: &Option<Type>| match t {
+                            Some(Type::I64)
+                            | Some(Type::PyDynamic)
+                            | Some(Type::Bool)
+                            | None => None,
+                            other => other.clone(),
+                        };
+                        match (concrete(&lt), concrete(&rt)) {
+                            (Some(a), Some(b)) if a == b => a,
+                            (Some(a), _) => a,
+                            (_, Some(b)) => b,
+                            _ => match (lt, rt) {
+                                (Some(a), Some(b)) if a == b => a,
+                                _ => Type::I64,
+                            },
+                        }
+                    } else {
+                        op_type
+                    };
                     self.type_map.insert(dest, op_type);
                 }
                 return dest;
