@@ -5421,3 +5421,90 @@ PY
 （CPython 只在真的走到那条 source 时才 ImportError）。
 ⇒ 不能按一次性清单估工；每轮以「符号数 + 引用点数」两个指标收敛，
 并留意**新出现的符号**（不是回归，是原先被前一个错误遮住的下一层）。
+
+---
+
+## 批次一百五十二（2026-09-19）：`and`/`or` 取值语义 —— Python 语义的静默错值
+
+**症状**（REasyQuant 本地回测里 7 处 `_get` 幽灵符号的根因之一）
+
+```python
+def from_jq(cls, config: dict | None) -> CostModel:
+    cfg = config or {}
+    return cls(slippage=float(cfg.get("slippage", 0.0)), …)   # ← 裸 `_get`
+```
+
+**根因**：Python 的 `x or d` 值是 `x`（真值时）或 `d`（`and` 对称），但 codegen 把它
+实现成**布尔**运算（`icmp ne 0` → `and`/`or` → `zext`）⇒ 结果恒 0/1：
+
+| 表达式 | pre-fix | 正确（Python） |
+|---|---|---|
+| `0 or 7` | 1 | 7 |
+| `3 or 7` | 1 | 3 |
+| `0 and 7` | 0 | 0 |
+| `3 and 7` | 1 | 7 |
+
+⇒ `cfg = m or {}` 之后 `cfg` 是布尔 1，`cfg.get(k,d)` 把 1 当 map 句柄；
+`t = s or "x"` 之后 `.upper()` 丢字符串。
+
+**修法（两处必须同时改）**
+
+1. **codegen**：`or` → `select(truthy(left), left, right)`；`and` →
+   `select(truthy(left), right, left)`。两侧都是 i64，select 后仍 i64，ABI 不变。
+2. **MIR 结果类型**：同类型操作数取该类型；一侧是不透明默认（I64/PyDynamic/Bool）
+   时取另一侧的具体类型 ⇒ `cfg` 是 map（`.get()` 走 `W map get map_get_default`），
+   而 `if a or b:` 仍是 Bool。
+
+> ⚠️ **只做 (2) 会从「链接失败」变成「段错误」**（类型说是 map、值却是布尔 1）——
+> 实测踩到并回退，两处一起落地才成立。这是本项目「只改类型不改值 = 静默错值」的
+> 又一例，值得当检查项。
+
+**度量**：python_style 263/266 → **264/267**（新增 t267）· 官方 194/194 · 语料 38/38
+**持平**（含语义变更也未回退）· wufu local **88 符号 / 208 引用点**（`_dict` 5→3，
+`CostModel::from_jq` 的 3 处 `_get` 消失）。
+
+### 本轮另外两个**已定位到根因**的符号家族（下一批直接开工）
+
+**家族 B1：`from <文件模块> import <名字>` 在模块**尚未加载**时就被解析 ⇒ 永久外部桩**
+
+日志行号是铁证（`out4.log`）：
+
+```
+line 18  unknown member `_baostock_login` in Python module `backend.datasrc.market_data`
+line 20  unknown member `fetch_stock_data`  in …`backend.datasrc.market_data`
+line 21  unknown member `fetch_benchmark_returns` in …
+line 22  unknown member `get_universe`      in …
+line 58  unknown member `_FETCH_SOURCE_NAMES` in …
+line 76  PY-A: imported module `backend.datasrc.market_data` from …/market_data.py   ← 才加载
+```
+
+**6 个名字全部在 facade 加载之前被解析**（18/20/21/22/58 < 76），于是 `known=false`
+→ 警告 + 记成 external shim → 调用点发裸 mangle 符号（`_baostock_login` 6 处引用）。
+成因是**循环 import**：`market_data` → `market_data_sources` →（函数内延迟 import）
+`market_data`，加载器遇到「正在加载中」就放弃 ⇒ `is_user` 仍为 false。
+修法方向：from-import 的**名字解析推迟到目标模块加载完成之后**（占位/两遍解析），
+或让 `load_user_python_module` 对循环可达（排队待解析）。收益 ≈ 6 名字 / 14 引用点。
+
+**家族 B2：模块级函数被**选择性发射**（不是解析失败）**
+
+`wufu_local.o` 里 `backend_datasrc_adjustment__compute_split_factors` /
+`detect_split_dates` / `__init` **有**（T），而 `anchor_to_reference` /
+`apply_qfq_adjustment` **完全没有**（连别的名字下也没有，`nm | grep -i anchor` 为空），
+但调用点要的是 `_backend_datasrc_adjustment__anchor_to_reference`（2 处引用）。
+⇒ 定义侧压根没发射，不是 mangle 不一致。**注意**：`adjustment.py` **独立**编译时
+有 `[W1002] … 163 line(s) … NOT parsed`（起点 `def apply_qfq_adjustment(`），
+而 wufu local **整体**编译里 W1002 计数 = **0** —— 又一次「独立 vs 整体结论不同」。
+下一步：先用 `--dump-mir`/`nm` 判定 `anchor_to_reference` 是「未发射」还是「发射到
+别的名字」，再决定是发射条件（可达性）还是解析截断。
+
+### 下一队列（批次一百五十三）
+
+1. **家族 B1**（循环 import 的名字解析时机）—— 完整定位、收益明确（6 名字/14 引用）
+2. **家族 B2**（选择性发射 / 独立 vs 整体不一致）—— 需先做上面的判定实验
+3. **`getattr` 39 处**：最大的单块，先按调用点分类
+4. **间接调用**：`LocalBackend._price_lookup`（local 路径）+ nautilus 两个
+5. 库桩（A 桶）/ D 桶 vec-Series 分派 / 未类型化接收者的 `.get/.values/.cls/.date`
+   家族（`_get` 7 · `_values` 7 · `_cls` 7 · `_date` 7 —— 注意 `_cls`/`_date` 多来自
+   **classmethod 的 `cls` 与装饰器被忽略**这条既有债务）
+6. **把 `backend/**/*.py` 独立 compile-only 加进 `tools/run_all.sh`**（覆盖盲区，
+   本批已第二次靠它发现差异）
