@@ -1780,6 +1780,7 @@ impl Resolver {
                 bare_globals: &std::collections::HashSet<String>,
                 aliases: &HashMap<String, String>,
                 member_aliases: &HashMap<String, (String, String)>,
+                module_prefix: Option<&str>,
                 out: &mut HashMap<String, Type>) {
             for s in stmts {
                 let (name, rhs) = match s {
@@ -1792,7 +1793,7 @@ impl Resolver {
                         _ => continue,
                     },
                     AstNode::Block { body } => {
-                        walk(body, globals, bare_globals, aliases, member_aliases, out);
+                        walk(body, globals, bare_globals, aliases, member_aliases, module_prefix, out);
                         continue;
                     }
                     _ => continue,
@@ -1811,14 +1812,36 @@ impl Resolver {
                     infer_global_ty(r, &out, &aliases, &member_aliases)
                 });
                 if let Some(t) = ty {
-                    out.insert(name, t);
+                    // Key it under the BARE source name (what a function body in
+                    // the same module reads) AND under the module-mangled name
+                    // (`<prefix><name>`) — a name re-exported from another module
+                    // (`_PROJECT_ROOT` imported into market_data_universe) is read
+                    // through the mangled global, so one key alone misses.
+                    out.insert(name.clone(), t.clone());
+                    if let Some(pfx) = module_prefix {
+                        out.insert(format!("{}{}", pfx, name), t);
+                    }
                 }
             }
         }
         let defs = self.registered_func_defs.borrow().clone();
         for d in &defs {
-            if let AstNode::FuncDef { body, .. } = d {
-                walk(body, &globals, &bare_globals, &aliases, &member_aliases, &mut out);
+            if let AstNode::FuncDef { name, body, .. } = d {
+                // A module body is registered as `<module with _ for .>__init`;
+                // the prefix tells us the mangled spelling of its globals.
+                let prefix = name
+                    .strip_suffix("init")
+                    .filter(|p| p.ends_with("__"))
+                    .map(|p| p.to_string());
+                walk(
+                    body,
+                    &globals,
+                    &bare_globals,
+                    &aliases,
+                    &member_aliases,
+                    prefix.as_deref(),
+                    &mut out,
+                );
             }
         }
         out

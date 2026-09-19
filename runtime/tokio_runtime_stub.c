@@ -13,6 +13,7 @@
 #include <sys/time.h>
 #include <math.h>
 #include <dirent.h>
+#include <glob.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -1447,6 +1448,25 @@ int64_t py_path_suffix(int64_t p) {
 // with both flags, so the call arrives as the 3-arg form (registry declares the
 // bare `mkdir`), which nothing defined (`_PyPath__mkdir` / arity-suffixed).
 // `parents` → create the whole chain (mkdir -p); `exist_ok` → tolerate EEXIST.
+// `Path.glob("*.jsonl")` — a Vec of matching paths (sorted by glob(3)).
+// REasyQuant hits this in data_ops_log / task_store / ml.store / tools.strategy.
+int64_t py_path_glob(int64_t p, int64_t pattern) {
+    const char* dir = p ? (const char*)p : ".";
+    const char* pat = pattern ? (const char*)pattern : "*";
+    char buf[4096];
+    snprintf(buf, sizeof buf, "%s/%s", dir, pat);
+    int64_t h = zeta_dynarray_new(8);
+    glob_t g;
+    memset(&g, 0, sizeof g);
+    if (glob(buf, 0, NULL, &g) == 0) {
+        for (size_t i = 0; i < g.gl_pathc; i++) {
+            h = vec_push(h, (int64_t)zt_strdup(g.gl_pathv[i]));
+        }
+    }
+    globfree(&g);
+    return h;
+}
+
 int64_t py_path_mkdir(int64_t p) {
     return p ? (int64_t)mkdir((const char*)p, 0777) : -1;
 }

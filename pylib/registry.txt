@@ -257,6 +257,7 @@ W PyPath stem py_path_stem args=1 ret=str
 W PyPath suffix py_path_suffix args=1 ret=str
 W PyPath read_text py_path_read_text args=1 ret=str
 W PyPath parents py_path_parents args=1 ret=vecpath
+W PyPath glob py_path_glob args=2 ret=vecpath
 W PyPath mkdir py_path_mkdir args=1
 W PyPath write_text py_path_write_text args=2
 # Path.open — MIR injects default mode="r" (see gen.rs); arity here is
