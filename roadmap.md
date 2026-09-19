@@ -4862,3 +4862,38 @@ python_style **219 → 225**；官方 **194/194**。
 3. soft 桩消化 + 语料 undef  
 4. **每完成一项：commit + push**（勿再捆批）
 
+
+## 批次一百四十四（2026-09-19，**部分收口**）：事故余波清点 + t206 修复链
+
+**范围**：批次 144 快照清单第①②项；③ soft 桩/undef 留下一批。
+
+### 做了什么
+
+1. **全量三基线重跑**（143 事故后首次）：官方 194/194、语料 38/38、python_style **220/260**（40 失败 = 恢复规格不完整的欠账，非新增回归）
+2. **t206 修复链**（3 处编译器 + 1 处库注解）：
+   - gen.rs FieldAccess：已知 struct 上 `df.columns`（无括号）命中零参方法时发射限定名 `DataFrame::columns`（此前退化为裸字段读 → 对 map 句柄做 array_len → 恒 0）
+   - gen.rs `in`：`x in obj` 对定义了 `__contains__` 的 Named 接收者发射限定调用；接收者类型未跟踪时按"唯一限定定义"回退（对齐 Call 路径的既有做法）
+   - gen.rs self 类型化：MirGen 增加 current_class，方法 lowering 时 `self` 绑定为 Named(类名)（`__contains__` 的 self 此前是 PyDynamic，`self.data` 丢 map 类型）
+   - codegen DictGet/DictInsert：map_id 从 load_local 改为 gen_expr_safe（map 可以是 `self.data` 这类表达式；此前读从未写入的槽位 → 垃圾 → 0）
+   - pandas.z：`__contains__/__delitem__/column/__getitem__` 的 key 注解 `str`（跨方法边界后键哈希由键的静态类型决定——库文件头部注释记载的同族问题）
+3. **--dump-mir 接线**：死标志激活（编译路径输出各函数 MIR Debug，本次排查即靠它）
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 220/260 | **223/260**（t206 + 2 连带） |
+| t206_df_drop_str | 全 0 | **1 0 1 1 0 1 1 0 全绿** |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+
+### 事故余波分类（37 失败，下一批队列）
+
+- **链接失败 17**：恢复时丢失的修复需按原批次重放 —— `_unique` 裸名（t211）、`_@`（matmul 操作符未映射，t214）、`_map____delitem__`（批次 127 del→zeta_map_pop 丢失，t239/t246）、getattr 系（t215/t219/t222）、numpy 系（t212/t217/t221/t227/t230）
+- **输出错 20**：pandas/dunder 家族（t193–t210/t227–t229/t87）——疑似限定名/dunder 分派同簇
+- p7（drop 后 `b["code"][0]`）SIGBUS 另案
+
+### 下一队列
+
+1. 链接失败 17 例：按原批次重放（`_@`、`_map____delitem__`、`_unique` 优先——每个都是一处发射点修复）
+2. 输出错 20 例：按 dunder 分派聚类处理
+3. soft 桩消化 + 语料 undef <40

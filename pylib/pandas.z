@@ -21,12 +21,13 @@ class DataFrame:
     def __init__(self, data: lt(map, str, vecstr)):
         self.data = data
 
-    def column(self, key) -> lt(vec, str):
+    def column(self, key: str) -> lt(vec, str):
         # 参数必须叫 key（勿用 name）：批次八十八证实形参名 name 会让方法不生成。
         # 体里也必须用 key —— 改名时漏改引用会静默取错/段错误（批次九十五）。
+        # key: str 注解（批次一四四）：map 下标的键哈希由键的静态类型决定。
         return self.data[key]
 
-    def __getitem__(self, key) -> lt(vec, str):
+    def __getitem__(self, key: str) -> lt(vec, str):
         # 与 column 同语义；下标 `df["col"]` 分派到这里（批次九十九）。
         return self.data[key]
 
@@ -42,9 +43,10 @@ class DataFrame:
         # `(nrows, ncols)` 用二元列表；语料写 `df.shape` / `df.shape[0]`（批次一百零三）。
         return [self.n_rows(), self.n_columns()]
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # `"col" in df` → 列名成员（批次一百零三）。
-        # 用 `key in self.data`（map 成员）；列名列表路径亦可，但 data 更直接。
+        # key 必须注解 str：跨方法边界的形参在批次一四四前是 PyDynamic，
+        # lower_map_key 按指针探测哈希，与 map 的内容哈希键不匹配（恒 0）。
         return key in self.data
 
     def copy(self) -> DataFrame:
@@ -57,8 +59,9 @@ class DataFrame:
         # `len(df)` → 行数（批次一百零一）；与 Python DataFrame.__len__ 一致。
         return self.n_rows()
 
-    def __delitem__(self, key):
+    def __delitem__(self, key: str):
         # `del df["col"]`（批次一百零四）；map.pop + 内容哈希键。
+        # key: str 注解同理（drop 的 del out[k] 跨边界，未注解则删不掉）。
         self.data.pop(key)
 
     def keys(self) -> lt(vec, str):

@@ -162,6 +162,10 @@ pub struct MirGen {
     /// PY-A: set while lowering the replacement closure of `re.sub`, so its
     /// parameter is typed as a Match (`m.group(0)` must dispatch).
     re_repl_param: bool,
+    /// PY-A: class name when lowering a class method (`DataFrame::columns`),
+    /// so `self` binds as Named(class) and `self.<field>` keeps the field's
+    /// declared type (map membership in `__contains__` dispatches on it).
+    current_class: Option<String>,
     /// Names captured from enclosing scopes in the closure currently being
     /// lowered (name → env key id) — used to route assignments to env stores.
     captured_vars: std::collections::HashMap<String, u32>,
@@ -224,6 +228,7 @@ impl MirGen {
             symbol_renames: HashMap::new(),
             module_global_types: HashMap::new(),
             re_repl_param: false,
+            current_class: None,
             captured_vars: std::collections::HashMap::new(),
             async_state_ptr: None,
             async_segment_count: 0,
@@ -641,7 +646,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         let is_extern = matches!(ast, AstNode::ExternFunc { .. });
 
         if !is_extern {
-            if let AstNode::FuncDef { params, generics, .. } = ast {
+            if let AstNode::FuncDef { name: fname, params, generics, .. } = ast {
+                // PY-A: pylib class methods are registered under their
+                // qualified name (`DataFrame::columns`). Record the class so
+                // `self` binds as Named(class) — without it `self.data` loses
+                // the field's declared map type and `key in self.data` inside
+                // `__contains__` cannot dispatch.
+                self.current_class = if fname.contains("::") {
+                    fname.split("::").next().map(|s| s.to_string())
+                } else {
+                    None
+                };
                 // Declared type-parameter names in order (PY: fn f[T](x: T) is
                 // monomorphized with TypeVar(i) → type_args[i]; the param's
                 // type_map entry must be that Variable for substitution to
@@ -745,6 +760,20 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // Register "self" as an alias so the body can reference it.
                     if name == "&self" || name == "&mut self" {
                         self.name_to_id.insert("self".to_string(), id);
+                    }
+                    // PY-A: type `self` as its class (methods lowered from
+                    // Python `def m(self)` carry no annotation, so the slot
+                    // stays PyDynamic and `self.<field>` loses the declared
+                    // type — `key in self.data` then cannot see the map).
+                    if name.trim_start_matches('&') == "self" {
+                        if let Some(cls) = self.current_class.clone() {
+                            if matches!(
+                                self.type_map.get(&id),
+                                Some(Type::I64) | Some(Type::PyDynamic)
+                            ) {
+                                self.type_map.insert(id, Type::Named(cls, vec![]));
+                            }
+                        }
                     }
                 }
             }
@@ -6191,6 +6220,56 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         self.type_map.insert(id, Type::Bool);
                         return id;
                     }
+                    // PY-A: `x in obj` — dispatch to a `__contains__` method
+                    // when the container is a KNOWN struct, or when exactly
+                    // one `X::__contains__` definition exists (the receiver's
+                    // Named type is pass-order dependent: the constructor call
+                    // does not always record it, leaving I64 here — mirrors
+                    // the Call path's unique-qualified fallback).
+                    if arg_ids.len() == 2 {
+                        let named_hit = match receiver_ty.as_ref() {
+                            Some(Type::Named(tn, _)) => {
+                                let q = format!("{}::__contains__", tn);
+                                if self.func_ret_types.contains_key(&q) {
+                                    Some(q)
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        };
+                        let qualified = match named_hit {
+                            Some(q) => Some(q),
+                            None => {
+                                if !matches!(receiver_ty.as_ref(), Some(Type::Named(_, _))) {
+                                    let hits: Vec<String> = self
+                                        .func_ret_types
+                                        .keys()
+                                        .filter(|k| k.ends_with("::__contains__"))
+                                        .cloned()
+                                        .collect();
+                                    if hits.len() == 1 {
+                                        hits.into_iter().next()
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            }
+                        };
+                        if let Some(q) = qualified {
+                            self.stmts.push(MirStmt::Call {
+                                func: q,
+                                args: arg_ids.clone(),
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(id, Type::Bool);
+                            return id;
+                        }
+                    }
                     eprintln!(
                         "warning: `in` membership is only supported for strings/dicts in V1 (container type: {:?})",
                         receiver_ty
@@ -7942,6 +8021,25 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             },
                         };
                         self.type_map.insert(id, ty);
+                        return id;
+                    }
+                }
+                // PY-A: zero-argument method read via FieldAccess on a KNOWN
+                // struct — `df.columns` (no parens) must dispatch to
+                // `DataFrame::columns`, not read a raw slot. Without this the
+                // field read returned the `data` map handle and
+                // `len(df.columns)` did array_len on a map → printed 0.
+                if let Some(Type::Named(tn, _)) = self.type_map.get(&base_id).cloned() {
+                    let qualified = format!("{}::{}", tn, field);
+                    if let Some(ret_ty) = self.func_ret_types.get(&qualified).cloned() {
+                        self.stmts.push(MirStmt::Call {
+                            func: qualified,
+                            args: vec![base_id],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, ret_ty);
                         return id;
                     }
                 }

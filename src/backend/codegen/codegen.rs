@@ -4431,7 +4431,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 key_id,
                 val_id,
             } => {
-                let map_i64 = self.load_local(*map_id);
+                // 批次144: same as DictGet — the map may be an expression
+                // (`df.copy().data[k] = v` style chains), not only a local.
+                let map_i64 = self.gen_expr_safe(map_id, exprs);
                 let map_ptr = self
                     .builder
                     .build_int_to_ptr(map_i64.into_int_value(), self.ptr_type, "map_ptr")
@@ -4489,7 +4491,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 key_id,
                 dest,
             } => {
-                let map_i64 = self.load_local(*map_id);
+                // 批次144: the map may be an EXPRESSION (`self.data` inside
+                // `__contains__`), not only a local variable — load_local read
+                // a never-stored slot and map_get returned garbage/0. gen_expr
+                // handles Var identically (slot load) plus FieldAccess et al.
+                let map_i64 = self.gen_expr_safe(map_id, exprs);
                 let map_ptr = self
                     .builder
                     .build_int_to_ptr(map_i64.into_int_value(), self.ptr_type, "map_ptr")
