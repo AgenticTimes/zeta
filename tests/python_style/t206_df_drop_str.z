@@ -1,0 +1,26 @@
+// PY-A: DataFrame.drop("v") — bare str must delete one column, not for-in chars.
+// List form and columns= kwargs must keep working (MIR wraps Type::Str → [str]).
+// expect: 1
+// expect: 0
+// expect: 1
+// expect: 1
+// expect: 0
+// expect: 1
+// expect: 1
+// expect: 0
+from pandas import DataFrame
+
+a = DataFrame({"code": ["a", "b"], "v": ["1", "2"]})
+b = a.drop("v")
+print(len(b.columns))
+print("v" in b)
+print("code" in b)
+# multi-char label
+c = a.drop("code")
+print(len(c.columns))
+print("code" in c)
+print("v" in c)
+# list form still works
+d = a.drop(["v"])
+print(len(d.columns))
+print("v" in d)

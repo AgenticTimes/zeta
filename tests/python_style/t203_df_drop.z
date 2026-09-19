@@ -1,0 +1,31 @@
+// PY-A: DataFrame.drop 删列（copy+del）+ df.index=range(n_rows)。
+// 位置 `drop(["x"])`；单参方法下 kwargs 值绑到 labels，故 `columns=["x"]` 也通。
+// 方法多参 kwargs 名匹配仍静默错（延后）。df.values 嵌套矩阵本批不做。
+// expect: 1
+// expect: 0
+// expect: 1
+// expect: a
+// expect: 2
+// expect: 1
+// expect: 0
+// expect: 2
+// expect: 0
+// expect: 1
+from pandas import DataFrame
+
+a = DataFrame({"code": ["a", "b"], "x": ["1", "2"]})
+b = a.drop(["x"])
+print(len(b.columns))
+print("x" in b)
+print("code" in b)
+print(b["code"][0])
+# 原表未变
+print(len(a.columns))
+# 语料/探针拼写 columns=（单参方法把 kwargs 值绑到 labels）
+c = a.drop(columns=["x"])
+print(len(c.columns))
+print("x" in c)
+idx = a.index
+print(len(idx))
+print(idx[0])
+print(idx[1])

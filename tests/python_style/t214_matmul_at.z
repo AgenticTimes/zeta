@@ -1,0 +1,16 @@
+// PY-A: Python `@` matmul operator — same precedence as `*`/`/`/`%`.
+// Previously `a @ b` aborted the enclosing item (W1002 dropped the rest of
+// the file; ETF动量EPO lost 77 lines starting at `def epo`).
+// Runtime is a documented i64 mul stub (`zeta_matmul`), not ndarray matmul.
+// expect: 12
+// expect: 6
+// expect: 24
+// expect: ok
+print(3 @ 4)
+print(2 * 3 @ 1)   # (* and @ same precedence, left-assoc) → (2*3)@1 = 6
+print(2 @ 3 * 4)   # → (2@3)*4 = 24
+
+def f(a, b):
+    return a @ b
+
+print("ok" if f(5, 2) == 10 else "bad")

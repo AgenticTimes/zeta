@@ -41,11 +41,11 @@ git push agentic bootstrap                  # origin 是 https 无凭据，用 a
 | `zetac` | 编译 .z → 原生二进制 | `./target/release/zetac x.z -o x && ./x` |
 | `pipeline_dump` | AST→注册→MIR 全链 dump | `./target/release/pipeline_dump x.z [-v/-ast]` |
 | `indent_dump` | 预处理后的源码（缩进→{}） | `./target/release/indent_dump x.z` |
-| IR dump | zetac 的 stderr 就是 LLVM IR | `./target/release/zetac x.z -o x 2>&1 \| awk '/define i64 @f/,/^}/'` |
+| IR dump | 仅 `--emit-llvm` / `ZETA_DUMP_IR=1` | `ZETA_DUMP_IR=1 ./target/release/zetac x.z -o x 2>&1 \| awk '/define i64 @f/,/^}/'` |
 | `nm` | 符号表（undefined 排查） | `nm binary \| grep xxx` |
+| `tools/check_registry_symbols.sh` | registry F/W/X ↔ runtime .o | `./tools/check_registry_symbols.sh` |
+| `tools/run_all.sh` | 三套基线 → JSON | `./tools/run_all.sh`（写 `/tmp/zeta_baseline.json`） |
 | `lldb` | 运行期崩溃定位 | `lldb -b -o run -o "bt 3" ./x` |
-| `ZETA_PROBE=1` | 源码内探针开关 | 部分函数有 env 探针 |
-| `zorb` | 第三方库安装（最小闭环） | `zorb install <路径\|URL\|git>` / `list` / `remove` / `path`；安装到 `$ZETA_PACKAGES_DIR` 或 `~/.zeta/packages`，即 `import X` 的搜索目录 |
 
 ### 常用诊断模式
 
@@ -75,6 +75,10 @@ clang -c -O2 -I/opt/homebrew/include runtime/py_additions.c -o /tmp/add.o
 # 0) 第三方库安装（最小闭环，可选）
 ./target/release/zorb install ./mypkg     # 目录包需 __init__.py；也接受 X.py / URL / git
 ZETA_PACKAGES_DIR=/tmp/pkgs ./target/release/zorb list   # 安装目录可覆盖（便于测试）
+
+# ★ 推荐：一条命令跑三套基线 → /tmp/zeta_baseline.json（advice Q4）
+./tools/run_all.sh
+#    可选：--skip-official / --skip-python / --skip-corpus / --json-only
 
 # 1) python_style（本仓库语法/语义回归，expect 注释自包含）
 ./tests/python_style/run.sh

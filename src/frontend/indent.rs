@@ -24,7 +24,96 @@
 //! V1 limitations: single-line blocks (`if x: stmt`) are not supported;
 //! a header colon must be followed by a newline + deeper indent.
 
+use std::cell::RefCell;
 use std::fmt;
+
+// C1: last indent-preprocess line map (preprocessed line → original 1-based line).
+// Also keeps the preprocessed text so `ensure_fully_parsed` can turn a remaining
+// suffix into a byte offset → source line.
+thread_local! {
+    static LAST_PP: RefCell<Option<(String, Vec<usize>)>> = const { RefCell::new(None) };
+}
+
+/// Record preprocess output for C1 line lookup (called from `parse_zeta`).
+pub fn set_last_preprocess(text: String, origins: Vec<usize>) {
+    LAST_PP.with(|c| *c.borrow_mut() = Some((text, origins)));
+}
+
+pub fn clear_last_preprocess() {
+    LAST_PP.with(|c| *c.borrow_mut() = None);
+}
+
+/// Map a byte offset into the last preprocessed text to a 1-based **original** line.
+/// Falls back to counting newlines in `fallback_source` when no map is stored.
+pub fn original_line_at(byte_offset: usize, fallback_source: &str) -> usize {
+    LAST_PP.with(|c| {
+        if let Some((pp, origins)) = c.borrow().as_ref() {
+            let off = byte_offset.min(pp.len());
+            let pp_line = pp[..off].bytes().filter(|&b| b == b'\n').count();
+            return origins.get(pp_line).copied().unwrap_or(pp_line + 1);
+        }
+        let off = byte_offset.min(fallback_source.len());
+        fallback_source[..off].bytes().filter(|&b| b == b'\n').count() + 1
+    })
+}
+
+/// Resolve the byte offset of `remaining` (a suffix of the parsed text) inside
+/// the last preprocess buffer, or inside `fallback_source` for brace-style.
+pub fn remaining_byte_offset(remaining: &str, fallback_source: &str) -> usize {
+    LAST_PP.with(|c| {
+        if let Some((pp, _)) = c.borrow().as_ref() {
+            if pp.ends_with(remaining) {
+                return pp.len() - remaining.len();
+            }
+            // remaining may be a suffix after nom consumed a different view;
+            // try pointer-free: find remaining as suffix by length clamp.
+            if remaining.len() <= pp.len() && pp[pp.len() - remaining.len()..] == *remaining {
+                return pp.len() - remaining.len();
+            }
+        }
+        if fallback_source.ends_with(remaining) {
+            return fallback_source.len() - remaining.len();
+        }
+        fallback_source.len().saturating_sub(remaining.len())
+    })
+}
+
+/// Estimate per-preprocessed-line origins by walking the original source.
+fn estimate_line_origins(original: &str, processed: &str) -> Vec<usize> {
+    let orig_lines: Vec<&str> = original.lines().collect();
+    let mut origins: Vec<usize> = Vec::new();
+    let mut search_from = 0usize;
+    for pline in processed.lines() {
+        let key: String = pline
+            .trim()
+            .trim_end_matches('{')
+            .trim()
+            .trim_end_matches(':')
+            .trim()
+            .to_string();
+        if key.is_empty() || key.chars().all(|c| c == '}') {
+            origins.push(origins.last().copied().unwrap_or(1));
+            continue;
+        }
+        let mut found = None;
+        for (j, ol) in orig_lines.iter().enumerate().skip(search_from) {
+            let ot = ol.trim();
+            if ot.is_empty() {
+                continue;
+            }
+            if ot.contains(&key) || key.contains(ot.trim_end_matches(':').trim()) {
+                found = Some(j + 1);
+                search_from = j;
+                break;
+            }
+        }
+        origins.push(found.unwrap_or_else(|| origins.last().copied().unwrap_or(1)));
+    }
+    if origins.is_empty() {
+        origins.push(1);
+    }
+    origins
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndentError {
@@ -139,8 +228,13 @@ pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
         // Not python-style. Still hand back the folded text when we folded
         // something — that is the only edit we made.
         return if folded.is_some() || inline.is_some() {
+            let origins = estimate_line_origins(input, &joined_text);
+            set_last_preprocess(joined_text.clone(), origins);
             Ok(Some(joined_text))
         } else {
+            // Identity: map each source line to itself for C1.
+            let origins: Vec<usize> = (1..=input.lines().count().max(1)).collect();
+            set_last_preprocess(input.to_string(), origins);
             Ok(None)
         };
     }
@@ -161,7 +255,10 @@ pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
     };
     let lines_rw: Vec<&str> = rewritten.iter().map(|s| s.as_str()).collect();
     let (out, _) = normalize_blocks(&lines_rw)?;
-    Ok(Some(out.join("\n")))
+    let text = out.join("\n");
+    let origins = estimate_line_origins(input, &text);
+    set_last_preprocess(text.clone(), origins);
+    Ok(Some(text))
 }
 
 /// PY-A: fold Python backslash continuations (`x = 1 + \` NEWLINE `2`) into one

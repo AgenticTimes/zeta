@@ -1,0 +1,18 @@
+// C2: with ZETA_PARSE_RECOVER=1, a bad top-level item must NOT bury later fns.
+// env: ZETA_PARSE_RECOVER=1
+// expect: 1
+// expect: 2
+fn first() -> i64 {
+    return 1
+}
+
+!!!
+
+fn second() -> i64 {
+    return 2
+}
+
+fn main() {
+    print(first())
+    print(second())
+}

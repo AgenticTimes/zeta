@@ -1,0 +1,6 @@
+// PY-A: try: from .mod import X must bind when try Block is promoted to ret_expr
+// (parse_func pops trailing Block out of body). Without walking ret_expr,
+// register_universe stayed a bare external.
+// expect: 3
+from pytryimport.consts import setup
+print(setup())

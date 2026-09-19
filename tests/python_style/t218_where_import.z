@@ -1,0 +1,5 @@
+// PY-A: `where` is a free identifier (from numpy import where), not a keyword
+// expect: 10
+from numpy import where
+
+print(where(True, 10, 20))

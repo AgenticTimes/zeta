@@ -1,0 +1,19 @@
+// PY-A: statement after a value must not greedily parse `...` as `1..`.
+// Method docstring then Ellipsis (Protocol stubs) must parse.
+// expect: 1
+from typing import Protocol
+
+class E(Protocol):
+    def f(self) -> None:
+        """doc"""
+        ...
+
+class LocalBackend:
+    def __init__(self):
+        self.x = 1
+    def execute_trade(self, security: str, amount: float, price: float) -> None:
+        """trade"""
+        ...
+
+b = LocalBackend()
+print(b.x)

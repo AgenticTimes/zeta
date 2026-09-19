@@ -1,0 +1,8 @@
+// PY-A: `del self.x` must consume the attribute (not stop at `self`).
+// parse_primary-only left `.x` unparsed and aborted the enclosing class.
+// expect: 1
+class Ledger:
+    def clear(self) -> None:
+        del self.n
+
+print(1)

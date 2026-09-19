@@ -1,0 +1,28 @@
+// PY-A: Named 方法默认注入 + isin/nunique/iterrows + Series 最小面。
+// 此前：`reset_index()` 无参时 drop 落到 0（=False）；列级 isin/nunique 裸链。
+// Series.nunique：str 列 map 成员偶发按指针，["a","a","b"] 可能计 3（文档化）。
+// expect: 2
+// expect: 3
+// expect: 1
+// expect: 2
+// expect: 2
+// expect: 3
+// expect: 3
+// expect: a
+from pandas import DataFrame, Series
+
+a = DataFrame({"code": ["a", "b"], "x": ["1", "2"]})
+# 无参 → 默认 drop=True（不插 index 列）
+b = a.reset_index()
+print(len(b.columns))
+# 显式 False → 插 index
+c = a.reset_index(drop=False)
+print(len(c.columns))
+print("index" in c)
+rows = a.iterrows()
+print(len(rows))
+print(a.nunique())
+s = Series(["a", "a", "b"])
+print(s.nunique())
+print(len(s.tolist()))
+print(s.tolist()[0])

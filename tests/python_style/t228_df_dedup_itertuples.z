@@ -1,0 +1,29 @@
+// PY-A: DataFrame.drop_duplicates / itertuples / pct_change（typed）。
+// 此前：drop_duplicates/itertuples 链接 `_DataFrame__*`；pct_change 走 opaque i64。
+// expect: 2
+// expect: 2
+// expect: a
+// expect: 3
+// expect: 0
+// expect: 1
+// expect: 3
+// expect: 1
+// expect: a
+from pandas import DataFrame
+
+def main() -> i64:
+    a = DataFrame({"code": ["a", "a", "b"], "x": ["1", "1", "2"]})
+    d = a.drop_duplicates(["code", "x"])
+    print(len(d))
+    print(len(d.columns))
+    print(d["code"][0])
+    rows = a.itertuples(False)
+    print(len(rows))
+    print(rows[0])
+    print(rows[1])
+    r = a.reset_index(False)
+    print(len(r.columns))
+    print("index" in r)
+    p = a.pct_change()
+    print(p["code"][0])
+    return 0

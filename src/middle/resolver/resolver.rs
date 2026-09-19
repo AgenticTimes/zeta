@@ -70,6 +70,13 @@ pub struct Resolver {
     /// PY-A: per-module top-level definition names (rename map source).
     py_module_own_names:
         RefCell<std::collections::HashMap<String, std::collections::HashSet<String>>>,
+    /// PY-A: facade re-exports — `from .sub import f` inside `pkg` records
+    /// `pkg[f] → (pkg.sub, f)`. Consumers doing `from pkg import f` must bind
+    /// the *defining* module, or calls emit `pkg__f` while only `pkg_sub__f`
+    /// exists (REasyQuant `market_data` facade pattern).
+    py_module_reexports: RefCell<
+        std::collections::HashMap<String, std::collections::HashMap<String, (String, String)>>,
+    >,
     /// PY-A: mangled module definition name → owning module.
     py_mangled_to_module: RefCell<std::collections::HashMap<String, String>>,
     /// PY-A: modules already loaded from disk (recursion / duplicate guard).
@@ -129,6 +136,7 @@ impl Resolver {
             py_member_aliases: RefCell::new(std::collections::HashMap::new()),
             py_user_modules: RefCell::new(std::collections::HashSet::new()),
             py_module_own_names: RefCell::new(std::collections::HashMap::new()),
+            py_module_reexports: RefCell::new(std::collections::HashMap::new()),
             py_mangled_to_module: RefCell::new(std::collections::HashMap::new()),
             py_loaded_modules: RefCell::new(std::collections::HashSet::new()),
             py_source_dir: RefCell::new(None),
@@ -192,9 +200,12 @@ impl Resolver {
                             }
                         }
                     }
-                    AstNode::FuncDef { body, .. } => {
+                    AstNode::FuncDef { body, ret_expr, .. } => {
                         for s in body {
                             walk_nonlocal(s, set);
+                        }
+                        if let Some(e) = ret_expr {
+                            walk_nonlocal(e, set);
                         }
                     }
                     AstNode::Block { body } => {
@@ -235,9 +246,6 @@ impl Resolver {
                 }
             }
             walk_nonlocal(&ast, &mut self.nonlocal_names.borrow_mut());
-            if std::env::var("ZETA_PROBE").is_ok() {
-                eprintln!("PROBE nonlocal set: {:?}", self.nonlocal_names.borrow());
-            }
         }
         // PY-A: collect module-top-level bare assignment names (implicit
         // module globals) so reads from other functions fall back to env.
@@ -290,8 +298,33 @@ impl Resolver {
                         } else if method == "zeta_py_from" && strs.len() >= 3 {
                             out.push((strs[0].clone(), strs[1].clone(), strs[2].clone()));
                         }
+                        // Still walk args (no nested imports expected).
+                    }
+                    AstNode::Call { receiver, args, .. } => {
+                        // PY-A: try/except desugars to Calls (`zeta_try_enter`,
+                        // setjmp, …) wrapping the real body. Previously only
+                        // import-marker Calls were matched and other Calls
+                        // were NOT recursed into — imports sitting beside
+                        // them in a Block were fine, but any import nested
+                        // under a non-marker Call was skipped. Recurse.
+                        if let Some(r) = receiver {
+                            walk_py_import(r, out);
+                        }
+                        for a in args {
+                            walk_py_import(a, out);
+                        }
                     }
                     AstNode::ExprStmt { expr } => walk_py_import(expr, out),
+                    AstNode::Return(e) => walk_py_import(e, out),
+                    AstNode::Assign(lhs, rhs) => {
+                        walk_py_import(lhs, out);
+                        walk_py_import(rhs, out);
+                    }
+                    AstNode::Let { expr, .. } => walk_py_import(expr, out),
+                    AstNode::BinaryOp { left, right, .. } => {
+                        walk_py_import(left, out);
+                        walk_py_import(right, out);
+                    }
                     AstNode::Block { body } => {
                         for s in body {
                             walk_py_import(s, out);
@@ -304,11 +337,14 @@ impl Resolver {
                     // be built without the platform. Not walking the branches
                     // left the shim unloaded and every imported name an
                     // unresolved external.
-                    AstNode::If { then, else_, .. } => {
-                        // Walk BOTH branches. Skipping the untaken one looks
-                        // tidier but measured worse (local mode 18 -> 29
-                        // unresolved): the branch that is not lowered still
-                        // contributes the bindings the lowered one relies on.
+                    AstNode::If { cond, then, else_, .. } => {
+                        // Also walk `cond`: try/except desugars to
+                        // `if zeta_try_setjmp() == 0` and the import lives in
+                        // `then` — cond walk is cheap; then/else are required.
+                        // Skipping then/else left `try: from … import X` unbound
+                        // (bare `_X` at link) while the same import outside try
+                        // worked.
+                        walk_py_import(cond, out);
                         for s in then {
                             walk_py_import(s, out);
                         }
@@ -324,7 +360,8 @@ impl Resolver {
                             walk_py_import(s, out);
                         }
                     }
-                    AstNode::While { body, else_body, .. } => {
+                    AstNode::While { cond, body, else_body, .. } => {
+                        walk_py_import(cond, out);
                         for s in body {
                             walk_py_import(s, out);
                         }
@@ -332,9 +369,18 @@ impl Resolver {
                             walk_py_import(s, out);
                         }
                     }
-                    AstNode::FuncDef { body, .. } => {
+                    AstNode::FuncDef { body, ret_expr, .. } => {
                         for s in body {
                             walk_py_import(s, out);
+                        }
+                        // parse_func promotes a trailing Block/If/… into
+                        // `ret_expr`, leaving `body` empty. `try/except`
+                        // desugars to exactly such a Block — so a
+                        // `try: from … import X` lived only in ret_expr and
+                        // was never collected (bare `_X` at link) while the
+                        // same import as a non-trailing stmt worked.
+                        if let Some(e) = ret_expr {
+                            walk_py_import(e, out);
                         }
                     }
                     _ => {}
@@ -364,16 +410,32 @@ impl Resolver {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        if names.is_empty() {
+                        let mut bound = 0usize;
+                        for n in names {
+                            let (sm, sn) = self.resolve_reexport_target(&module, &n);
+                            self.py_member_aliases
+                                .borrow_mut()
+                                .insert(n, (sm, sn));
+                            bound += 1;
+                        }
+                        // Facade packages often only re-export; those names are
+                        // not in own_names (no local def) but must still bind.
+                        if let Some(rex) = self.py_module_reexports.borrow().get(&module).cloned() {
+                            for (alias, (sm, sn)) in rex {
+                                if alias.starts_with('_') {
+                                    continue;
+                                }
+                                self.py_member_aliases
+                                    .borrow_mut()
+                                    .insert(alias, (sm, sn));
+                                bound += 1;
+                            }
+                        }
+                        if bound == 0 {
                             eprintln!(
                                 "warning: PY-A: `from {} import *` bound no public names",
                                 module
                             );
-                        }
-                        for n in names {
-                            self.py_member_aliases
-                                .borrow_mut()
-                                .insert(n.clone(), (module.clone(), n));
                         }
                     }
                     continue;
@@ -448,9 +510,62 @@ impl Resolver {
                                 m, module
                             );
                         }
+                        // Follow facade re-exports to the defining module so
+                        // `from pkg import f` links against `pkg_sub__f`, not a
+                        // missing `pkg__f`. Record the edge when this import
+                        // itself lives inside a user module being loaded.
+                        let (src_mod, src_mem) = self.resolve_reexport_target(&module, m);
+                        if let Some(current) = self.py_current_module.borrow().clone() {
+                            if current != src_mod || alias != src_mem {
+                                self.py_module_reexports
+                                    .borrow_mut()
+                                    .entry(current)
+                                    .or_default()
+                                    .insert(alias.clone(), (src_mod.clone(), src_mem.clone()));
+                            }
+                        }
                         self.py_member_aliases
                             .borrow_mut()
-                            .insert(alias, (module.clone(), m.clone()));
+                            .insert(alias, (src_mod, src_mem));
+                    }
+                }
+            }
+            // PY-A: `initialize = _strategy.initialize` — bind LHS to the
+            // defining module member so bare `initialize(...)` links to
+            // `jq_wufu__initialize`, not ghost `_initialize` (jq_wufu_local).
+            // Also `_LocalPortfolio = LocalBackend` when LocalBackend was
+            // `from … import`ed (not a local class) — same-module own_names
+            // chase misses imports (jq_shim).
+            {
+                let mut field_binds: Vec<(String, String, String)> = Vec::new();
+                walk_module_member_assigns(&ast, &mut field_binds);
+                for (local, mod_alias, member) in field_binds {
+                    let Some(module) = self.py_module_aliases.borrow().get(&mod_alias).cloned()
+                    else {
+                        continue;
+                    };
+                    let (src_mod, src_mem) = self.resolve_reexport_target(&module, &member);
+                    self.py_member_aliases
+                        .borrow_mut()
+                        .insert(local, (src_mod, src_mem));
+                }
+                let mut name_binds: Vec<(String, String)> = Vec::new();
+                walk_name_aliases(&ast, &mut name_binds);
+                for (alias, target) in name_binds {
+                    let Some((sm, sn)) = self.py_member_aliases.borrow().get(&target).cloned()
+                    else {
+                        continue;
+                    };
+                    let (src_mod, src_mem) = self.resolve_reexport_target(&sm, &sn);
+                    self.py_member_aliases
+                        .borrow_mut()
+                        .insert(alias.clone(), (src_mod.clone(), src_mem.clone()));
+                    if let Some(current) = self.py_current_module.borrow().clone() {
+                        self.py_module_reexports
+                            .borrow_mut()
+                            .entry(current)
+                            .or_default()
+                            .insert(alias, (src_mod, src_mem));
                     }
                 }
             }
@@ -877,7 +992,9 @@ impl Resolver {
                         }
                         self.registered_funcs.insert(qualified, qualified_ast);
                     }
-                    // Also register with simple name for backwards compat
+                    // Also register with simple name for backwards compat.
+                    // Defaults stay keyed by the bare method name (`reset_index`);
+                    // MirGen::callee_sig_for_call also looks up `Type::method`.
                     self.register(b);
                 }
             }
@@ -1036,6 +1153,20 @@ impl Resolver {
         &self.funcs
     }
 
+    /// B3: list `(func, param)` where the registered type is `PyDynamic`.
+    pub fn report_untyped_params(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for (fname, (params, _ret, _)) in &self.funcs {
+            for (pname, ty) in params {
+                if matches!(ty, Type::PyDynamic) {
+                    out.push((fname.clone(), pname.clone()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     /// PY-A: infer the return type of untyped Python-style functions.
     ///
     /// `def f(s): return s.capitalize()` is declared i64 by the parser, so a
@@ -1051,9 +1182,6 @@ impl Resolver {
         // Includes functions from imported modules: they were registered
         // through the same path, so their bodies are here too.
         let asts: Vec<AstNode> = self.registered_func_defs.borrow().clone();
-        if std::env::var("ZETA_PROBE").is_ok() {
-
-        }
         fn collect_returns(body: &[AstNode], out: &mut Vec<AstNode>) {
             for s in body {
                 match s {
@@ -1373,7 +1501,11 @@ impl Resolver {
                     let mut changed: Vec<(usize, Type)> = Vec::new();
                     let member_aliases = self.py_member_aliases.borrow().clone();
                     for (i, a) in pargs.iter().enumerate() {
-                        if i >= param_types.len() || param_types[i] != Type::I64 {
+                        // B3: unannotated params are PyDynamic (was I64). Both
+                        // remain upgradeable from call-site evidence.
+                        if i >= param_types.len()
+                            || !matches!(param_types[i], Type::I64 | Type::PyDynamic)
+                        {
                             continue;
                         }
                         let cur_params2: Vec<(String, Type)> = self
@@ -1422,9 +1554,6 @@ impl Resolver {
                     let changed_pairs = changed.clone();
                     let changed = !changed.is_empty();
                     if changed {
-                        if std::env::var("ZETA_PROBE").is_ok() {
-                            eprintln!("PROBE param infer: {} -> {:?}", callee, param_types);
-                        }
                         let types_snapshot = param_types.clone();
                         let changed_types: Vec<(usize, Type)> = changed_pairs.clone();
                         if let Some(entry) = self.funcs.get_mut(&callee) {
@@ -1817,6 +1946,17 @@ impl Resolver {
                 own.insert(n);
             }
         }
+        // PY-A: `_LocalPortfolio = LocalBackend` — same-module class/func alias.
+        // own_names alone mangled the alias to `mod___LocalPortfolio` (ghost
+        // extern); the real ctor is `mod__LocalBackend`. Record as a re-export
+        // so `from mod import _LocalPortfolio` / renames chase the target
+        // (jq_shim / jq_wufu_local).
+        {
+            let mut rex = self.py_module_reexports.borrow_mut();
+            for stmt in &body_stmts {
+                collect_same_module_aliases(stmt, module, &own, &mut rex);
+            }
+        }
         // `synthesize_implicit_main` injected `zeta_module_decl("NAME")` markers
         // for the module's bare assignments. They must carry the module prefix
         // too, or every module's `LIMIT` would share one global slot.
@@ -1907,6 +2047,28 @@ impl Resolver {
         true
     }
 
+    /// PY-A: chase facade re-exports (`pkg.f` → `pkg.sub.f` → …) to the
+    /// defining module. Caps the chain so a cycle cannot hang the compiler.
+    fn resolve_reexport_target(&self, module: &str, member: &str) -> (String, String) {
+        let mut m = module.to_string();
+        let mut n = member.to_string();
+        for _ in 0..32 {
+            let next = self
+                .py_module_reexports
+                .borrow()
+                .get(&m)
+                .and_then(|map| map.get(&n).cloned());
+            match next {
+                Some((nm, nn)) if nm != m || nn != n => {
+                    m = nm;
+                    n = nn;
+                }
+                _ => break,
+            }
+        }
+        (m, n)
+    }
+
     /// PY-A: does this user module have an import-time initializer?
     pub fn py_module_init_symbol(&self, module: &str) -> Option<String> {
         if !self.py_user_modules.borrow().contains(module) {
@@ -1918,6 +2080,9 @@ impl Resolver {
     /// PY-A: rename map for the function being lowered — bare references to a
     /// module's own top-level names are redirected to their `mod__` mangled
     /// form, so a module's internals resolve without rewriting its whole AST.
+    /// Re-exported names map to the *defining* module's mangled symbol so a
+    /// later `from pkg import f` cannot overwrite the global alias table and
+    /// break `pkg.compute()` (which still needs `pkg_sub__f`).
     fn module_renames_for(&self, func_name: &str) -> std::collections::HashMap<String, String> {
         let mut out = std::collections::HashMap::new();
         let module = match self.py_mangled_to_module.borrow().get(func_name) {
@@ -1928,6 +2093,22 @@ impl Resolver {
             let prefix = format!("{}__", module.replace('.', "_"));
             for n in own {
                 out.insert(n.clone(), format!("{}{}", prefix, n));
+            }
+        }
+        if let Some(reexports) = self.py_module_reexports.borrow().get(&module) {
+            for (alias, (src_mod, src_mem)) in reexports {
+                // Registry shims (`pathlib.Path` → `py_path_new`,
+                // `datetime.timedelta` → `py_dt_timedelta`) must NOT be
+                // rewritten to `mod__name`. That rename ran before
+                // `py_member_call` and turned `_Path(...)` /
+                // `timedelta(...)` into unresolved `pathlib__Path` /
+                // `datetime__timedelta` externs (jq_wufu_local).
+                // Leave them to `py_member_aliases` → registry symbol.
+                if crate::middle::pylib::find_member(src_mod, src_mem).is_some() {
+                    continue;
+                }
+                let mangled = format!("{}__{}", src_mod.replace('.', "_"), src_mem);
+                out.insert(alias.clone(), mangled);
             }
         }
         out
@@ -1996,9 +2177,6 @@ impl Resolver {
 
     /// PY-A V3: is this name declared `nonlocal` anywhere?
     pub fn is_nonlocal_name(&self, name: &str) -> bool {
-        if std::env::var("ZETA_PROBE").is_ok() {
-            eprintln!("PROBE is_nonlocal({}) = {}", name, self.nonlocal_names.borrow().contains(name));
-        }
         self.nonlocal_names.borrow().contains(name)
     }
 
@@ -3387,6 +3565,115 @@ fn module_level_bindings(stmt: &AstNode) -> Vec<String> {
         _ => {}
     }
     out
+}
+
+/// PY-A: `_Alias = RealName` where RealName is a def/class in the same module.
+fn collect_same_module_aliases(
+    stmt: &AstNode,
+    module: &str,
+    own: &std::collections::HashSet<String>,
+    reexports: &mut std::collections::HashMap<String, std::collections::HashMap<String, (String, String)>>,
+) {
+    match stmt {
+        AstNode::Assign(lhs, rhs) => {
+            if let (AstNode::Var(alias), AstNode::Var(target)) = (&**lhs, &**rhs) {
+                if own.contains(target) && alias != target {
+                    reexports
+                        .entry(module.to_string())
+                        .or_default()
+                        .insert(alias.clone(), (module.to_string(), target.clone()));
+                }
+            }
+        }
+        AstNode::Block { body } => {
+            for s in body {
+                collect_same_module_aliases(s, module, own, reexports);
+            }
+        }
+        AstNode::If { then, else_, .. } => {
+            for s in then {
+                collect_same_module_aliases(s, module, own, reexports);
+            }
+            for s in else_ {
+                collect_same_module_aliases(s, module, own, reexports);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// PY-A: `local = mod_alias.member` — collect (local, mod_alias, member).
+fn walk_module_member_assigns(n: &AstNode, out: &mut Vec<(String, String, String)>) {
+    match n {
+        AstNode::Assign(lhs, rhs) => {
+            if let AstNode::Var(local) = &**lhs {
+                if let AstNode::FieldAccess { base, field } = &**rhs {
+                    if let AstNode::Var(mod_alias) = &**base {
+                        out.push((local.clone(), mod_alias.clone(), field.clone()));
+                    }
+                }
+            }
+        }
+        AstNode::FuncDef { body, ret_expr, .. } => {
+            for s in body {
+                walk_module_member_assigns(s, out);
+            }
+            if let Some(e) = ret_expr {
+                walk_module_member_assigns(e, out);
+            }
+        }
+        AstNode::Block { body } => {
+            for s in body {
+                walk_module_member_assigns(s, out);
+            }
+        }
+        AstNode::If { then, else_, .. } => {
+            for s in then {
+                walk_module_member_assigns(s, out);
+            }
+            for s in else_ {
+                walk_module_member_assigns(s, out);
+            }
+        }
+        AstNode::ExprStmt { expr } => walk_module_member_assigns(expr, out),
+        _ => {}
+    }
+}
+
+/// PY-A: `Alias = ImportedName` — collect (alias, target).
+fn walk_name_aliases(n: &AstNode, out: &mut Vec<(String, String)>) {
+    match n {
+        AstNode::Assign(lhs, rhs) => {
+            if let (AstNode::Var(alias), AstNode::Var(target)) = (&**lhs, &**rhs) {
+                if alias != target {
+                    out.push((alias.clone(), target.clone()));
+                }
+            }
+        }
+        AstNode::FuncDef { body, ret_expr, .. } => {
+            for s in body {
+                walk_name_aliases(s, out);
+            }
+            if let Some(e) = ret_expr {
+                walk_name_aliases(e, out);
+            }
+        }
+        AstNode::Block { body } => {
+            for s in body {
+                walk_name_aliases(s, out);
+            }
+        }
+        AstNode::If { then, else_, .. } => {
+            for s in then {
+                walk_name_aliases(s, out);
+            }
+            for s in else_ {
+                walk_name_aliases(s, out);
+            }
+        }
+        AstNode::ExprStmt { expr } => walk_name_aliases(expr, out),
+        _ => {}
+    }
 }
 
 /// PY-A: rewrite `zeta_module_decl("X")` → `zeta_module_decl("<prefix>X")`

@@ -1,0 +1,15 @@
+// PY-A: 语句形 `assert cond` / `assert cond, msg` 必须响亮失败。
+// 此前拆成 ExprStmt(Var("assert")) + ExprStmt(条件)，二者皆空操作；
+// `assert False` 后代码继续跑。调用形 `assert(cond)` 本已可用。
+// expect: 1
+// expect: ok
+// expect: 2
+print(1)
+assert True
+assert 1 == 1
+assert(True)
+print("ok")
+print(2)
+# 若仍静默会打出 99；响亮则进程在此中止，stdout 只有上面三行
+assert False
+print(99)

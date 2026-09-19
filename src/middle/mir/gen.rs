@@ -665,7 +665,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // Arrays pass as i64 pointers; true f64/i32 params get their
                     // natural type so codegen can emit the correct LLVM signature.
                     let pt_str = param_type.trim();
-                    if pt_str == "f64" || pt_str == "f32" {
+                    // B3: unannotated / dyn params are PyDynamic (ABI still i64).
+                    if pt_str.is_empty() || pt_str == "dyn" || pt_str == "PyDynamic" {
+                        self.type_map.insert(id, Type::PyDynamic);
+                    } else if pt_str == "f64" || pt_str == "f32" {
                         self.type_map.insert(id, Type::F64);
                     } else if pt_str == "bool" {
                         self.type_map.insert(id, Type::Bool);
@@ -703,7 +706,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // spelling too — otherwise `self` in the library's own
                     // methods stayed I64 and every `self.<map field>.keys()` was
                     // an undefined `_keys`.
-                    if matches!(self.type_map.get(&id), Some(Type::I64)) {
+                    if matches!(self.type_map.get(&id), Some(Type::I64) | Some(Type::PyDynamic)) {
                         let mut struct_key: Option<String> = None;
                         if matches!(self.type_decls.get(pt_str), Some(TypeDecl::Struct { .. })) {
                             struct_key = Some(pt_str.to_string());
@@ -725,7 +728,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             self.type_map.insert(id, Type::Named(k, vec![]));
                         }
                     }
-                    if matches!(self.type_map.get(&id), Some(Type::I64))
+                    if matches!(self.type_map.get(&id), Some(Type::I64) | Some(Type::PyDynamic))
                         && crate::middle::pylib::handle_tag(param_type.trim()).is_some()
                     {
                         self.type_map.insert(
@@ -1585,6 +1588,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 rhs: raw_id,
                             });
                             let collection_id = coll_slot;
+                            // Batch 110: `for c in "ab"` — Str is char*, not a
+                            // vec header. array_len/array_get → hang / garbage.
+                            let coll_is_str =
+                                matches!(self.type_map.get(&collection_id), Some(Type::Str));
+                            let (len_fn, get_fn) = if coll_is_str {
+                                ("str_len", "str_get")
+                            } else {
+                                ("array_len", "array_get")
+                            };
                             let len_id = self.next_id();
                             // NOTE: the id must be a Var (mutable slot), not an
                             // IntLit placeholder — codegen constant-folds a
@@ -1592,7 +1604,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             // making the loop bound a constant 0.
                             self.exprs.insert(len_id, MirExpr::Var(len_id));
                             self.stmts.push(MirStmt::Call {
-                                func: "array_len".to_string(),
+                                func: len_fn.to_string(),
                                 args: vec![collection_id],
                                 dest: len_id,
                                 type_args: vec![],
@@ -1636,7 +1648,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             // Bind the pattern to collection[index].
                             let get_id = self.next_id();
                             self.stmts.push(MirStmt::Call {
-                                func: "array_get".to_string(),
+                                func: get_fn.to_string(),
                                 args: vec![collection_id, index_var_id],
                                 dest: get_id,
                                 type_args: vec![],
@@ -1645,14 +1657,18 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             // loop item so `for k in d.keys(): print(k)`
                             // dispatches as a string (only pointer-shaped
                             // element types; F64 elements live as raw bits).
-                            let elem_ty = match self.type_map.get(&collection_id).cloned() {
-                                Some(Type::DynamicArray(e))
-                                | Some(Type::Array(e, _)) => match *e {
-                                    Type::Str => Some(Type::Str),
-                                    Type::Named(n, args) => Some(Type::Named(n, args)),
+                            let elem_ty = if coll_is_str {
+                                Some(Type::Str)
+                            } else {
+                                match self.type_map.get(&collection_id).cloned() {
+                                    Some(Type::DynamicArray(e))
+                                    | Some(Type::Array(e, _)) => match *e {
+                                        Type::Str => Some(Type::Str),
+                                        Type::Named(n, args) => Some(Type::Named(n, args)),
+                                        _ => None,
+                                    },
                                     _ => None,
-                                },
-                                _ => None,
+                                }
                             };
                             match &*pattern_clone {
                                 AstNode::Var(item_name) => {
@@ -1741,6 +1757,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             let else_stmts = self.lower_loop_else(else_body);
                             self.stmts.push(MirStmt::While {
                                 cond: cond_id,
+                                pre_cond: vec![],
                                 body: body_stmts,
                                 else_body: else_stmts,
                             });
@@ -1830,27 +1847,24 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 body,
                 else_body,
             } => {
-                // Must capture stmts BEFORE lowering the condition,
-                // because lower_expr(cond) can emit SemiringFold side-effects
-                // (e.g. multiplication in `p * p < n`). Those need to be
-                // re-evaluated each iteration, so they must go in the body.
+                // Cond side-effects (e.g. `array_len` in `while j < len(xs)`)
+                // must re-run every iteration *before* the condition load —
+                // including on `continue`. Put them in `pre_cond`, not body.
                 let stmts_before_cond = self.stmts.len();
                 let cond_id = self.lower_expr(cond);
+                let pre_cond = self.stmts.split_off(stmts_before_cond);
 
-                // Generate loop body
+                let stmts_before_body = self.stmts.len();
                 for stmt in body {
                     self.lower_ast(stmt);
                 }
+                let body_stmts = self.stmts.split_off(stmts_before_body);
 
-                // Grab all statements emitted for this while (cond + body)
-                let while_stmts = self.stmts.split_off(stmts_before_cond);
-
-                // Create While statement in MIR — all cond side-effects
-                // are inside the body so they re-execute each iteration
                 let else_stmts = self.lower_loop_else(else_body);
                 self.stmts.push(MirStmt::While {
                     cond: cond_id,
-                    body: while_stmts,
+                    pre_cond,
+                    body: body_stmts,
                     else_body: else_stmts,
                 });
             }
@@ -2097,6 +2111,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 let true_id = self.next_id_with_lit(1);
                 self.stmts.push(MirStmt::While {
                     cond: true_id,
+                    pre_cond: vec![],
                     body: body_stmts,
                     else_body: vec![],
                 });
@@ -2862,6 +2877,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 self.type_map.insert(cond_id, Type::I64);
                 self.stmts.push(MirStmt::While {
                     cond: cond_id,
+                    pre_cond: vec![],
                     body: loop_stmts,
                     else_body: vec![],
                 });
@@ -6005,6 +6021,26 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // Never let a stale hint leak into an unrelated closure.
                 self.pending_closure_param_types = None;
 
+                // Batch 111: `df.drop("col")` — library expects lt(vec,str).
+                // Wrap a lone Str arg into a 1-element StackArray.
+                if method == "drop" && arg_ids.len() >= 2 {
+                    let lab = arg_ids[arg_ids.len() - 1];
+                    if matches!(self.type_map.get(&lab), Some(Type::Str)) {
+                        let arr = self.next_id();
+                        self.exprs.insert(
+                            arr,
+                            MirExpr::StackArray {
+                                elements: vec![lab],
+                                size: 1,
+                            },
+                        );
+                        self.type_map
+                            .insert(arr, Type::DynamicArray(Box::new(Type::Str)));
+                        let last = arg_ids.len() - 1;
+                        arg_ids[last] = arr;
+                    }
+                }
+
                 // PY-A: `type(x)` — the static type is already known, so fold it
                 // to the Python type NAME as a string (no runtime reflection, no
                 // `_type` extern). `print(type(x))` / `type(x) is int`-style code
@@ -6419,6 +6455,46 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             self.stmts.push(MirStmt::Assign { lhs: slot, rhs: id });
                         }
                         return id;
+                    }
+                }
+
+                // B4: dyn receiver → unique W-table method by name only.
+                // Also allow I64 leftovers (pre-B3 default) with the same SKIP
+                // denylist — unique names like `get`/`keys` must not steal.
+                if matches!(receiver_ty.as_ref(), Some(Type::PyDynamic)) {
+                    const SKIP: &[&str] = &[
+                        "get", "set", "keys", "values", "items", "clear", "pop",
+                        "update", "append", "push", "len", "tolist",
+                        "__contains__", "__getitem__", "__setitem__", "__delitem__",
+                        "__len__", "__iter__", "__enter__", "__exit__",
+                    ];
+                    if !SKIP.contains(&method.as_str()) {
+                        if let Some((_handle, symbol, ret_handle, ret)) =
+                            crate::middle::pylib::method_by_unique_name(method)
+                        {
+                            self.stmts.push(MirStmt::Call {
+                                func: symbol.to_string(),
+                                args: arg_ids.clone(),
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(
+                                id,
+                                match ret_handle {
+                                    Some(h) => Type::Named(h.to_string(), vec![]),
+                                    None => match ret {
+                                        "str" => Type::Str,
+                                        "f64" => Type::F64,
+                                        "vecstr" => {
+                                            Type::DynamicArray(Box::new(Type::Str))
+                                        }
+                                        _ => Type::I64,
+                                    },
+                                },
+                            );
+                            return id;
+                        }
                     }
                 }
 
@@ -8930,6 +9006,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 let true_id = self.next_id_with_lit(1);
                 self.stmts.push(MirStmt::While {
                     cond: true_id,
+                    pre_cond: vec![],
                     body: body_stmts,
                     else_body: vec![],
                 });

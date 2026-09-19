@@ -1,0 +1,11 @@
+// C1: unparsed tail reports `file:line:` in W1002 (default many0, no recover).
+// expect: 1
+fn good() -> i64 {
+    return 1
+}
+
+fn main() {
+    print(good())
+}
+
+!!!

@@ -1,0 +1,8 @@
+// PY-A: getattr(untyped, "x", default) uses the default (loud warning once).
+// expect: 99
+def f(obj) -> i64:
+    return getattr(obj, "missing", 99)
+
+def main() -> i64:
+    print(f(0))
+    return 0

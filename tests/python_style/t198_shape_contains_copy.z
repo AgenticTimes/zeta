@@ -1,0 +1,21 @@
+// PY-A: df.shape / "col" in df / df.copy —— shape 曾 FieldAccess 读垃圾；
+//   in DataFrame 曾静默 false；copy 方法曾链接失败。
+// expect: 2
+// expect: 2
+// expect: 1
+// expect: 0
+// expect: 2
+// expect: y
+from pandas import DataFrame
+
+a = DataFrame({"code": ["x", "y"], "v": ["1", "2"]})
+s = a.shape
+print(s[0])
+print(s[1])
+print("code" in a)
+print("nope" in a)
+
+b = a.copy()
+b["code"] = ["y", "z"]
+print(len(b))
+print(b["code"][0])

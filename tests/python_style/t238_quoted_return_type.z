@@ -1,0 +1,6 @@
+// PY-A: quoted forward-ref return types (`-> "Foo | None"`) must parse.
+// expect: 1
+def f(x: str) -> "Foo | None":
+    return 1
+
+print(f("a"))

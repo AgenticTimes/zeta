@@ -1,0 +1,9 @@
+// PY-A: pd.DataFrame inside listcomp must use pandas__DataFrame (not bare _DataFrame)
+// expect: 2
+// expect: 1
+import pandas as pd
+
+results = {"a": {"c": ["x"]}, "b": {"c": ["y"]}}
+dfs = [pd.DataFrame(r) for r in results.values()]
+print(len(dfs))
+print(dfs[0].n_rows())

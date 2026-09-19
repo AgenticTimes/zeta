@@ -1,0 +1,7 @@
+// PY-A: `...` Ellipsis statement (abstractmethod stubs).
+// expect: 1
+class S:
+    def f(self):
+        ...
+
+print(1)

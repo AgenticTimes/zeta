@@ -1,0 +1,20 @@
+// PY-A: numpy 自由名 / 模块成员 —— registry 链到 zeta_*，bare asarray 恒等。
+// expect: 1
+// expect: 5
+// expect: 6
+// expect: 9
+// expect: 2
+// expect: 5
+// expect: 6
+// expect: 9
+import numpy as np
+from numpy import arange, asarray, linspace, sum as npsum
+
+print(arange(3)[1])
+print(linspace(0, 10, 3)[1])
+print(npsum([1, 2, 3]))
+print(asarray([9, 8])[0])
+print(np.arange(4)[2])
+print(np.linspace(0, 10, 3)[1])
+print(np.sum([1, 2, 3]))
+print(np.asarray([9, 8])[0])

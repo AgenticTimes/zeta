@@ -1,0 +1,65 @@
+# pylib/runtime_core.txt — core runtime externs (A2b)
+# Format: SYM args=t1,t2 ret=T [variadic=1]
+# Regenerate decls: python3 tools/gen_from_registry.py --emit-core
+
+array_free args=i64 ret=void
+array_get args=i64,i64 ret=i64
+array_len args=i64 ret=i64
+array_new args=i64,i64 ret=i64
+array_push args=i64,i64 ret=i64
+array_set args=i64,i64,i64 ret=void
+array_set_len args=i64,i64 ret=void
+map_free args=ptr ret=void
+map_get args=ptr,i64 ret=i64
+map_insert args=ptr,i64,i64 ret=void
+map_new args= ret=ptr
+print_bool args=i64 ret=void
+print_f64 args=f64 ret=void
+print_i64 args=i64 ret=void
+print_result args=i64,i64 ret=void
+print_str args=i64 ret=void
+println_f64 args=f64 ret=void
+println_i64 args=i64 ret=void
+println_str args=i64 ret=void
+zeta_arange args=i64 ret=i64
+zeta_arange_from args=i64,i64 ret=i64
+zeta_arange_step args=i64,i64,i64 ret=i64
+zeta_array_get_bool args=i64,i64 ret=i64
+zeta_array_get_i64 args=i64,i64 ret=i64
+zeta_array_set_bool args=i64,i64,i64 ret=void
+zeta_array_set_i64 args=i64,i64,i64 ret=void
+zeta_assert_fail args=i64 ret=void
+zeta_collect_dict args=i64,i64 ret=i64
+zeta_collect_literals args=i64,i64,i64,i64,i64,i64,i64,i64 ret=i64 variadic=1
+zeta_collect_vec_n args=i64,i64,i64 ret=i64
+zeta_diff_n args=i64,i64 ret=i64
+zeta_dynarray_new args=i64 ret=i64
+zeta_env_get args=i64 ret=i64
+zeta_env_set args=i64,i64 ret=void
+zeta_float_f64 args=f64 ret=f64
+zeta_float_i64 args=i64 ret=f64
+zeta_float_str args=i64 ret=f64
+zeta_floor_f64 args=f64 ret=f64
+zeta_fmt_f64_spec args=f64,i64 ret=i64
+zeta_identity1 args=i64 ret=i64
+zeta_int_f64 args=f64 ret=i64
+zeta_int_i64 args=i64 ret=i64
+zeta_int_str args=i64 ret=i64
+zeta_linspace_i64 args=i64,i64,i64 ret=i64
+zeta_list args=i64 ret=i64
+zeta_log_noop1 args=i64 ret=void
+zeta_log_noop2 args=i64,i64 ret=void
+zeta_map_len args=i64 ret=i64
+zeta_map_set_tag args=i64,i64,i64 ret=void
+zeta_module_decl args=i64 ret=i64
+zeta_nonlocal_decl args=i64 ret=i64
+zeta_pack_pair args=i64,i64 ret=i64
+zeta_param_default args=i64,i64 ret=i64
+zeta_platform_obj args=i64,i64,i64,i64 ret=i64
+zeta_print_i64 args=i64 ret=void
+zeta_println_i64 args=i64 ret=void
+zeta_py_from args=i64,i64,i64 ret=i64
+zeta_py_import args=i64,i64 ret=i64
+zeta_round_f64 args=f64,i64 ret=i64
+zeta_sieve_new args=i64 ret=i64
+zeta_sorted_vec_len args=i64,i64 ret=i64

@@ -1,0 +1,13 @@
+// PY-A: importlib.import_module is registered (links); dynamic getattr links to loud stub.
+// Compiling this file must succeed (symbols resolve). Running import_module aborts —
+// we only exercise the next()/opaque path here; import_module link is covered by
+// jq_wufu_local remeasure + registry F entry.
+// expect: 7
+import importlib
+
+def main() -> i64:
+    # Touch the module alias so import is not DCE'd; do not call import_module
+    # (loud abort). Registry presence is verified by link of jq_wufu_local.
+    _ = importlib
+    print(7)
+    return 0

@@ -99,6 +99,9 @@ pub enum MirStmt {
     // While loop
     While {
         cond: u32, // Condition expression
+        /// Side-effects of evaluating `cond` (e.g. `array_len`). Re-run in
+        /// `while.cond` (and on `continue`) before loading the condition slot.
+        pre_cond: Vec<MirStmt>,
         body: Vec<MirStmt>,
         /// PY-A: Python `while … else` (see `For::else_body`).
         else_body: Vec<MirStmt>,

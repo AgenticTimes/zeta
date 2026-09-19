@@ -10,18 +10,249 @@
 # 键类型必须写出来：`lower_map_key` 只按**键自身**的静态类型决定内容哈希，
 # 未注解的形参做键时会按指针探测内容哈希的 map ⇒ 静默取不到值。
 #
-# 不支持（有意为之，保持响亮失败而不是假语义）：`df["col"]` 需要类的
-# `__getitem__`，方言还没有；`sort_values`/`iloc` 是行级操作，列映射模型表达不了。
+# `df["col"]` 走类的 `__getitem__`（编译器对 Named 接收者下标分派）；
+# `sort_values`/`iloc` 仍是行级操作，列映射模型表达不了（响亮失败）。
+#
+# D4: `# stub: <name>` 库层假值桩（`--list-stubs` 扫）；`soft:` = 基线依赖暂不 abort。
 
+extern fn py_stub_abort(name: i64) -> i64;
 
 class DataFrame:
-    def __init__(self, data: lt(map, str)):
+    def __init__(self, data: lt(map, str, vecstr)):
         self.data = data
 
-    def column(self, key):
-        return self.data[name]
+    def column(self, key) -> lt(vec, str):
+        # 参数必须叫 key（勿用 name）：批次八十八证实形参名 name 会让方法不生成。
+        # 体里也必须用 key —— 改名时漏改引用会静默取错/段错误（批次九十五）。
+        return self.data[key]
 
-    def column_names(self):
+    def __getitem__(self, key) -> lt(vec, str):
+        # 与 column 同语义；下标 `df["col"]` 分派到这里（批次九十九）。
+        return self.data[key]
+
+    def __setitem__(self, key, val):
+        # 列赋值 `df["col"] = [...]`（批次一百零二）；体写 self.data[key]。
+        self.data[key] = val
+
+    def empty(self) -> bool:
+        # Python property：`df.empty`；零参方法由 FieldAccess 分派（批次一百）。
+        return self.n_rows() == 0
+
+    def shape(self) -> lt(vec, i64):
+        # `(nrows, ncols)` 用二元列表；语料写 `df.shape` / `df.shape[0]`（批次一百零三）。
+        return [self.n_rows(), self.n_columns()]
+
+    def __contains__(self, key) -> bool:
+        # `"col" in df` → 列名成员（批次一百零三）。
+        # 用 `key in self.data`（map 成员）；列名列表路径亦可，但 data 更直接。
+        return key in self.data
+
+    def copy(self) -> DataFrame:
+        # 浅拷贝列 map；`dict(m)` 已可用（批次六十九）。
+        # 必须标注 -> DataFrame：否则调用点把返回值当 i64，后续
+        # `b["col"]=`/`len(b)` 不走 __setitem__/__len__（段错误/错长）。
+        return DataFrame(dict(self.data))
+
+    def __len__(self):
+        # `len(df)` → 行数（批次一百零一）；与 Python DataFrame.__len__ 一致。
+        return self.n_rows()
+
+    def __delitem__(self, key):
+        # `del df["col"]`（批次一百零四）；map.pop + 内容哈希键。
+        self.data.pop(key)
+
+    def keys(self) -> lt(vec, str):
+        return self.column_names()
+
+    def to_dict(self) -> lt(map, str, vecstr):
+        return dict(self.data)
+
+    def to_parquet(self, path):
+        # V1 no-op：语料 `df.to_parquet` / ParquetCache.save；真 I/O 后补。
+        return 0
+
+    def head(self, n) -> DataFrame:
+        # 列映射：每列截前 n 行。用 self.column_names()（批次一百零六已修
+        # 同类 self.方法() 返回 vec 的类型查找）。勿用 while/append 或 [col[i]]
+        # 拼 str 列：会写出 (null)；用 col[:n]。
+        out = {}
+        cols = self.column_names()
+        j = 0
+        nc = len(cols)
+        while j < nc:
+            key = cols[j]
+            col = self.column(key)
+            out[key] = col[:n]
+            j = j + 1
+        return DataFrame(out)
+
+    def tail(self, n) -> DataFrame:
+        # 列映射：每列截后 n 行。负切片 `col[-n:]` 仍 SEGFAULT，故用
+        # start = len(col) - n; col[start:]（与 head 对称）。
+        out = {}
+        cols = self.column_names()
+        j = 0
+        nc = len(cols)
+        while j < nc:
+            key = cols[j]
+            col = self.column(key)
+            start = len(col) - n
+            if start < 0:
+                start = 0
+            out[key] = col[start:]
+            j = j + 1
+        return DataFrame(out)
+
+    # stub: soft:pandas.DataFrame.dropna
+    def dropna(self) -> DataFrame:
+        # 列映射模型列均为 str、无 NaN 哨兵时等价恒等 copy。
+        # 必须 -> DataFrame：缺方法会链到裸 `_dropna`；勿走 opaque identity→i64。
+        # 真 NaN / axis / how / subset —— 响亮未做（列映射表达不了行级 mask）。
+        return self.copy()
+
+    def drop(self, labels: lt(vec, str)) -> DataFrame:
+        # 按列名删除：copy + del。必须 -> DataFrame（与 copy 同理）。
+        # 位置 `df.drop(["x"])`；单参方法下任意 kwargs 值绑到 labels，
+        # 故探针/语料拼写 `drop(columns=["x"])` 也通（多参 kwargs 名匹配仍静默，延后）。
+        # 单 str `drop("x")`：MIR 在调用点把 Type::Str 包成一元列表（批次一百一十一）；
+        # 库内 isinstance 分支不可行（未注解形参恒 i64；注解 vec 则 isinstance 看声明类型）。
+        out = self.copy()
+        for k in labels:
+            del out[k]
+        return out
+
+    def rename(self, columns: lt(map, str, str)) -> DataFrame:
+        # 列改名：`df.rename(columns={old: new})`。形参必须注解 map，
+        # 否则字面量 kwargs 绑到未注解形参时 len/查键静默空（探针）。
+        # 单参方法下 kwargs 值绑到 columns，故 `columns=` 拼写可用。
+        out = {}
+        cols = self.column_names()
+        j = 0
+        nc = len(cols)
+        while j < nc:
+            key = cols[j]
+            col = self.column(key)
+            if key in columns:
+                out[columns[key]] = col
+            else:
+                out[key] = col
+            j = j + 1
+        return DataFrame(out)
+
+    def index(self) -> lt(vec, i64):
+        # 行下标 0..n_rows-1；语料 `df.index` / `.tolist()`。
+        # `df.values`（嵌套矩阵）列映射难表达，本批不做。
+        return list(range(self.n_rows()))
+
+    def reset_index(self, drop=True) -> DataFrame:
+        # 语料热：`reset_index(drop=True)` / 无参（默认 True，批次 121 Named 方法默认注入）。
+        # drop=False：插入 `"index"` 列（str 行号；列映射值类型是 vecstr）。
+        if drop:
+            return self.copy()
+        out = dict(self.data)
+        idx: lt(vec, str) = []
+        i = 0
+        n = self.n_rows()
+        while i < n:
+            idx.append(str(i))
+            i = i + 1
+        out["index"] = idx
+        return DataFrame(out)
+
+    def drop_duplicates(self, subset) -> DataFrame:
+        # 按 subset 列拼键保序去重（keep=first）。空 subset → 全列。
+        # 形参勿注解 vec：字面量下标易 SEGV；for-in 列名可用。keep=last 未做。
+        cols = subset
+        if len(cols) == 0:
+            cols = self.column_names()
+        n = self.n_rows()
+        seen: lt(map, str, i64) = {}
+        keep: lt(vec, i64) = []
+        i = 0
+        while i < n:
+            key = ""
+            for c in cols:
+                col = self.column(c)
+                key = key + col[i] + "|"
+            if key in seen:
+                i = i + 1
+                continue
+            seen[key] = 1
+            keep.append(i)
+            i = i + 1
+        out = {}
+        for c in self.column_names():
+            src = self.column(c)
+            dst: lt(vec, str) = []
+            k = 0
+            nk = len(keep)
+            while k < nk:
+                dst.append(src[keep[k]])
+                k = k + 1
+            out[c] = dst
+        return DataFrame(out)
+
+    def itertuples(self, index=False) -> lt(vec, i64):
+        # 语料：`for row in df.itertuples(index=False)`。列映射无 namedtuple；
+        # 返回行下标列表（可迭代、链接成功）。`row.high` 属性 —— 未做。
+        return list(range(self.n_rows()))
+
+    def iterrows(self) -> lt(vec, i64):
+        # 语料：`for _, row in df.iterrows()`。无 (idx, Series) 对；行下标列表桩。
+        return list(range(self.n_rows()))
+
+    # stub: soft:pandas.DataFrame.isin
+    def isin(self, values) -> DataFrame:
+        # DF 级 isin 未做行 mask；typed copy 压过裸 `_isin`。列级见 opaque/Series。
+        return self.copy()
+
+    def nunique(self) -> i64:
+        # 全表唯一行数近似：行数（列映射无真复合键）。列 `.nunique` 走 opaque。
+        return self.n_rows()
+
+    # stub: soft:pandas.DataFrame.pct_change
+    def pct_change(self) -> DataFrame:
+        # 列均为 str、无数值差分；typed copy 压过 opaque identity→i64。
+        return self.copy()
+
+    # stub: soft:pandas.DataFrame.fillna
+    def fillna(self, value) -> DataFrame:
+        # 列均为 str、无 NaN 语义时等价恒等。必须 -> DataFrame：opaque 里的
+        # fillna→zeta_identity 把结果标成 i64，随后 `.columns` 静默变 0。
+        return self.copy()
+
+    # stub: soft:pandas.DataFrame.ffill
+    def ffill(self) -> DataFrame:
+        # 前向填充：列映射无 NaN → copy。压过裸 `_ffill` / 动态 `str__ffill`。
+        return self.copy()
+
+    # stub: soft:pandas.DataFrame.sort_index
+    def sort_index(self) -> DataFrame:
+        # 行索引已是 0..n-1；语料链式 `.sort_index()`。
+        return self.copy()
+
+    # stub: soft:pandas.DataFrame.reindex
+    def reindex(self, labels) -> DataFrame:
+        # 真对齐未做；typed copy 链接用（bt_helpers）。
+        return self.copy()
+
+    # stub: soft:pandas.DataFrame.astype
+    def astype(self, dtype) -> DataFrame:
+        # 列已是 str；`astype("str")` / 链式类型标注用。同 fillna，避免 identity→i64。
+        return self.copy()
+
+    def groupby(self, by) -> GroupBy:
+        # 列映射表达不了分组。必须有方法：否则 `_DataFrame__groupby` / `_groupby`
+        # 链接失败。返回 Named GroupBy（勿 zeta_identity→i64 垃圾指针）。
+        # 真分组 / for (k,g) in gb 迭代 —— 未做；聚合见 GroupBy.mean/sum。
+        return GroupBy(self.copy())
+
+    def columns(self) -> lt(vec, str):
+        # 与 column_names 同语义；语料写 `df.columns` / `"x" in df.columns`。
+        return self.column_names()
+    def column_names(self) -> lt(vec, str):
+        # 必须有返回注解：批次九十九修掉「含 `_` 的限定名误切后缀」后，
+        # 未注解时 colnames[j] 会走 map_get（以前碰巧查到 column 的列表类型）。
         return list(self.data.keys())
 
     def n_columns(self):
@@ -34,20 +265,97 @@ class DataFrame:
         return len(self.data[names[0]])
 
 
-def concat(frames, ignore_index=False):
+# 分组句柄：列映射无真分组。mean/sum 必须是库方法（返回空 DF），否则 Named
+# 接收者仍会落入 opaque `mean→zeta_identity`（静默 i64 / 垃圾指针）。
+class GroupBy:
+    def __init__(self, frame: DataFrame):
+        self.frame = frame
+
+    def mean(self) -> DataFrame:
+        # 空 DF（非 identity）；真按组均值未做。
+        return DataFrame({})
+
+    def sum(self) -> DataFrame:
+        # 空 DF（非 identity）；真按组求和未做。
+        return DataFrame({})
+
+
+# 最小 Series：一列 + 可选 name。语料 `pd.Series(...)` / 返回注解。
+# 列映射 DF 的 `df[col]` 仍是 vec（未改成 Series，避免打断既有下标语义）。
+class Series:
+    def __init__(self, data: lt(vec, str)):
+        self.data = data
+
+    def tolist(self) -> lt(vec, str):
+        return self.data
+
+    def nunique(self) -> i64:
+        # 保序去重计数；空 → 0。
+        seen: lt(map, str, i64) = {}
+        n = 0
+        for x in self.data:
+            if x in seen:
+                continue
+            seen[x] = 1
+            n = n + 1
+        return n
+
+    # stub: soft:pandas.Series.isin
+    def isin(self, values) -> lt(vec, i64):
+        # 桩：全 1 掩码（链接/链式用）。真成员测试另批（`in`/`==` 在未定型
+        # values 上易静默 0 或 SEGV）。
+        out: lt(vec, i64) = []
+        for x in self.data:
+            out.append(1)
+        return out
+
+    def iterrows(self) -> lt(vec, i64):
+        # 下标列表桩（与 DF.iterrows 同形）。
+        return list(range(len(self.data)))
+
+
+# D4: loud stubs — not used by python_style baselines; call py_stub_abort.
+
+# stub: pandas.date_range
+def date_range(start, end):
+    return py_stub_abort("pandas.date_range")
+
+# stub: pandas.to_datetime
+def to_datetime(arg):
+    return py_stub_abort("pandas.to_datetime")
+
+# stub: pandas.to_numeric
+def to_numeric(arg):
+    return py_stub_abort("pandas.to_numeric")
+
+# stub: soft:pandas.isna
+def isna(x) -> bool:
+    # 列映射无 NaN 哨兵 → 恒 False。`pd.isna` / 链式 `.isna`（opaque）另有路径。
+    return False
+
+# stub: soft:pandas.isnull
+def isnull(x) -> bool:
+    return False
+
+
+# frames 必须标注 [DataFrame]：未标注时 frames[i] 丢掉 struct 字段（.data 变空/空指针）。
+# lt(vec, DataFrame) 不够 —— 实测只有 `[DataFrame]` 能让元素类型落到下标结果上。
+# map 的值类型由 `lt(map, str, vecstr)` / 字面量推断带上，列上的 `prev + col` 才能走列表拼接。
+def concat(frames: [DataFrame], ignore_index=False):
+    first = frames[0]
+    colnames = first.column_names()
+    ncols = len(colnames)
     out = {}
-    i = 0
-    while i < len(frames):
-        f = frames[i]
-        names = list(f.data.keys())
-        j = 0
-        while j < len(names):
-            name = names[j]
-            col = f.data[name]
-            if name in out:
-                out[name] = out[name] + col
-            else:
-                out[name] = col
-            j = j + 1
-        i = i + 1
+    j = 0
+    while j < ncols:
+        col_key = colnames[j]
+        merged = first.column(col_key)
+        i = 1
+        nframes = len(frames)
+        while i < nframes:
+            f = frames[i]
+            merged = merged + f.column(col_key)
+            i = i + 1
+        out[col_key] = merged
+        j = j + 1
     return DataFrame(out)

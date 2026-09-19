@@ -95,6 +95,8 @@ F os listdir py_os_listdir args=i64 ret=vecstr
 F os makedirs py_os_makedirs args=i64 ret=i64
 F os remove py_os_remove args=i64 ret=i64
 F os path.join py_os_path_join args=i64,i64 ret=str
+X py_os_path_join_3 args=i64,i64,i64 ret=str
+X py_os_path_join_4 args=i64,i64,i64,i64 ret=str
 F os path.basename py_os_path_basename args=i64 ret=str
 F os path.dirname py_os_path_dirname args=i64 ret=str
 F os path.splitext py_os_path_splitext args=i64 ret=str
@@ -179,14 +181,22 @@ W PyLogger setLevel py_logging_setLevel args=2
 W PyLogger addHandler py_logging_addHandler args=2 ret=i64
 W PyFileHandler setFormatter py_logging_setFormatter args=2 ret_handle=PyFileHandler
 
+# ---- dotenv : optional .env loader (REasyQuant market_data_sources) -------
+# Import must bind; loading env files is a no-op for compiled local runs.
+M dotenv
+F dotenv load_dotenv py_noop2 args=i64,i64 ret=i64
+X py_noop2 args=i64,i64 ret=i64
+
 # ---- __future__ : accepted, binds nothing ------------------------------
 M __future__
 N __future__
 
-# ---- typing : annotation-only module. Its members are TYPES used in
-#      annotations, so they bind nothing at runtime; declaring it no-op
-#      silences the "unknown member" warnings without inventing shims.
-N typing
+# ---- typing : most members are annotation-only (N would silence imports).
+#      `cast(typ, val)` is a real call site in typed corpora — return val.
+M typing
+F typing cast py_typing_cast args=i64,i64 ret=i64
+X py_typing_cast args=i64,i64 ret=i64
+X py_set_add args=i64,i64 ret=i64
 
 # ---- warnings : warn() prints to stderr; the float-filter config is a
 #      recorded no-op (there is no filter state in this runtime) ----------
@@ -204,10 +214,10 @@ M dataclasses
 F dataclasses dataclass py_noop1 args=i64 ret=i64
 F dataclasses field py_noop1 args=i64 ret=i64
 # asdict is rewritten at compile time (struct fields are known statically).
-# This symbol deliberately does not exist in the runtime: if the rewrite does
-# not fire (unknown receiver type), the link fails loudly instead of
-# returning a silently-empty dict.
-F dataclasses asdict py_asdict_unexpanded args=i64 ret=i64
+# stub=1: C path is py_stub_abort (task D); still declared so rewrite-miss links.
+F dataclasses asdict py_asdict_unexpanded args=i64 ret=i64 stub=1
+# D: shared loud-fail helper — STRICT abort (default) / LENIENT warn-once.
+X py_stub_abort args=i64 ret=i64
 
 # ---- hashlib : md5/sha1/sha256 (macOS CommonCrypto backend) ------------
 M hashlib
@@ -247,6 +257,9 @@ W PyPath stem py_path_stem args=1 ret=str
 W PyPath suffix py_path_suffix args=1 ret=str
 W PyPath read_text py_path_read_text args=1 ret=str
 W PyPath write_text py_path_write_text args=2
+# Path.open — MIR injects default mode="r" (see gen.rs); arity here is
+# receiver+mode so registry typing matches py_file_open.
+W PyPath open py_file_open args=2 ret_handle=PyFile
 
 # ---- datetime (evidence: the corpus's heaviest stdlib need — timedelta 14,
 #      strptime 6, date/datetime construction, arithmetic, comparisons) ----
@@ -402,6 +415,10 @@ F collections Counter py_collections_counter_new args=i64 ret=i64 handle=map
 F collections defaultdict py_collections_defaultdict args=i64 ret=i64 handle=map
 X zeta_map_len args=i64 ret=i64
 X py_map_contains args=i64,i64 ret=i64
+X py_map_update args=i64,i64 ret=i64
+X py_map_fromkeys args=i64,i64,i64 ret=i64
+X py_array_concat args=i64,i64 ret=i64
+X py_int_base args=i64,i64 ret=i64
 
 # ---- argparse (V1: long options only; type=int/float/str; action=store_true).
 #      `add_argument` and `args.<field>` are compiler-side rewrites (the flag
@@ -434,6 +451,64 @@ M pandas
 M numpy
 F pandas Timestamp py_dt_from_str args=i64 ret=i64 handle=PyDate
 F pandas Timedelta py_dt_timedelta args=i64 ret=i64 handle=PyDelta
+# read_parquet / to_parquet — V1 stubs (empty DF / no-op). Registry bind stops
+# `pandas__read_parquet` ghost externs from module_renames; real I/O is later.
+F pandas read_parquet py_pd_read_parquet args=i64 ret=i64
+F pandas to_parquet py_noop2 args=i64,i64 ret=i64
+X py_pd_read_parquet args=i64 ret=i64
+# Method form when DF typed; bare fallthrough symbols live in py_additions.c.
+W DataFrame to_parquet py_noop2 args=2
 F numpy datetime64 py_dt_identity args=i64 ret=i64 handle=PyDate
 F numpy searchsorted py_dt_searchsorted args=i64,i64,i64 ret=i64
 F numpy full py_vec_full args=i64,i64 ret=vec
+# Zeta-rewrite（批次一百二十）：arange/asarray/zeros 由 pylib/numpy.z 包装；
+# `where` 仍留 `F`——registry 占位让 `from numpy import where` 不走 1 参库函数，
+# 真正分派在 MIR（zeta_np_where1/3）。linspace/sum/eye/diag 暂留 `F`。
+F numpy where zeta_np_where1 args=i64 ret=i64
+F numpy linspace zeta_linspace_i64 args=i64,i64,i64 ret=vec
+F numpy sum zeta_sum_vec args=i64 ret=i64
+F numpy eye zeta_np_eye args=i64 ret=vec
+F numpy diag zeta_np_diag args=i64 ret=vec
+F numpy fill_diagonal zeta_np_fill_diagonal args=i64,i64 ret=i64
+F numpy diagonal zeta_np_diagonal args=i64 ret=vec
+X zeta_arange args=i64 ret=vec
+X zeta_identity args=i64 ret=i64
+X zeta_identity2 args=i64,i64 ret=i64
+X zeta_vec_unique args=i64 ret=vec
+X zeta_vec_nunique args=i64 ret=i64
+X zeta_np_where1 args=i64 ret=vec
+X zeta_np_where3 args=i64,i64,i64 ret=i64
+X zeta_np_eye args=i64 ret=vec
+X zeta_np_zeros args=i64 ret=vec
+X zeta_np_zeros2 args=i64,i64 ret=vec
+X zeta_np_diag args=i64 ret=vec
+X zeta_np_fill_diagonal args=i64,i64 ret=i64
+X zeta_np_diagonal args=i64 ret=vec
+X zeta_sum_n args=i64,i64 ret=i64
+X py_logger_warning_n args=i64,i64,i64,i64,i64,i64,i64 ret=i64
+X py_logger_error_n args=i64,i64,i64,i64,i64,i64,i64 ret=i64
+X zeta_np_solve_stub args=i64,i64 ret=i64
+
+# ---- importlib / call-through / getattr / next (batch 123) -------------
+M importlib
+F importlib import_module py_import_module args=i64 ret=i64
+X py_import_module args=i64 ret=i64
+X py_getattr_dynamic args=i64,i64 ret=i64
+X py_builtin_next args=i64 ret=i64
+X py_method_next args=i64 ret=i64
+X zeta_call_fn_arg args=i64,i64 ret=i64
+
+# scipy.linalg.solve — loud stub (returns RHS; not a real factorisation).
+M scipy.linalg
+F scipy.linalg solve zeta_np_solve_stub args=i64,i64 ret=i64
+
+# ---- batch 139: move remaining hand decls from codegen::new → registry ----
+X py_fmt_i64 args=i64,i64 ret=i64
+X py_fmt_f64 args=f64,i64 ret=i64
+X py_fmt_str args=i64,i64 ret=i64
+X py_round_n args=f64,i64 ret=f64
+X py_round_i64 args=f64 ret=i64
+X py_slice_new args=i64,i64,i64 ret=i64
+X py_list_eq args=i64,i64,i64 ret=i64
+X py_getitem2 args=i64,i64,i64 ret=i64
+X py_logger_info_n args=i64,i64,i64,i64,i64,i64,i64 ret=i64

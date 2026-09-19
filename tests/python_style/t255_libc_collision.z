@@ -1,0 +1,6 @@
+// B2: undeclared `isalnum` falls through waterfall → libc collision warning.
+// Runtime may link libc isalnum; we only assert the program still runs.
+// expect: 1
+fn main() {
+    print(isalnum(65))
+}

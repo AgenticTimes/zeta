@@ -1,0 +1,7 @@
+// D4: loud pylib stub → py_stub_abort.
+// expect-abort: stub not implemented: pandas.date_range
+from pandas import date_range
+
+fn main() {
+    date_range("2020-01-01", "2020-01-02")
+}

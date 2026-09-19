@@ -1,0 +1,10 @@
+// PY-A: DataFrame.head(n) 列截断 —— 此前 self.column_names() 在同类方法内
+//   返回 vec 元素为 0，再 while/append 拼列 → SEGFAULT / (null)。
+// expect: 1
+// expect: x
+from pandas import DataFrame
+
+a = DataFrame({"code": ["x", "y"], "v": ["1", "2"]})
+h = a.head(1)
+print(len(h))
+print(h["code"][0])

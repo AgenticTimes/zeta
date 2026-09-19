@@ -1,0 +1,25 @@
+// PY-A: dict(m) 未定型 / set() / set.add / dict.fromkeys(1 参) / typing.cast
+// expect: 1
+// expect: 1
+// expect: 2
+// expect: 0
+// expect: 42
+from typing import cast
+
+def copy_dict(x):
+    return dict(x)
+
+d0 = {"a": 1}
+d1 = copy_dict(d0)
+print(d1["a"])
+
+s = set()
+s.add(1)
+s.add(1)
+print(len(s))
+
+fk = dict.fromkeys(["x", "y"])
+print(len(fk))
+print(fk.get("x", -1))
+
+print(cast(int, 42))

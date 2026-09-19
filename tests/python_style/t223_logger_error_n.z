@@ -1,0 +1,10 @@
+// PY-A: log.error/warning with extra args → *_n helpers (not py_logger_error_3).
+// expect: 0
+import logging
+
+def main() -> i64:
+    log = logging.getLogger('t')
+    log.error('fail', 1)
+    log.warning('warn', 2)
+    print(0)
+    return 0

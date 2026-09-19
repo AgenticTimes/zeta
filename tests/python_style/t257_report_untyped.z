@@ -1,0 +1,9 @@
+// B3: unannotated params are `dyn`; --report-untyped lists them.
+// expect: 3
+fn add(a, b) -> i64 {
+    return a + b
+}
+
+fn main() {
+    print(add(1, 2))
+}

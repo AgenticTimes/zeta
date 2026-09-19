@@ -343,6 +343,57 @@ int64_t zeta_sum_vec(int64_t data) {
     for (int64_t i = 0; i < len; i++) acc += ((int64_t*)data)[i];
     return acc;
 }
+
+// Series/list `.unique()` — order-preserving dedup. Compare by i64 equality
+// first (ints / identical pointers); else by C-string content (str columns).
+int64_t zeta_vec_unique(int64_t data) {
+    if (!data) return 0;
+    int64_t n = 0;
+    if (!zt_vec_header_ok(data, &n)) return 0;
+    /* Manual grow — avoid vec_push re-entry quirks on a freshly minted header. */
+    int64_t cap = n < 8 ? 8 : n;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap;
+    base[1] = 0;
+    int64_t out = (int64_t)(base + 2);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t v = ((int64_t*)data)[i];
+        int found = 0;
+        int64_t on = base[1];
+        for (int64_t j = 0; j < on; j++) {
+            int64_t u = ((int64_t*)out)[j];
+            if (u == v) { found = 1; break; }
+            if (u && v) {
+                const char* su = (const char*)u;
+                const char* sv = (const char*)v;
+                if (su[0] == sv[0] && strcmp(su, sv) == 0) { found = 1; break; }
+            }
+        }
+        if (!found) {
+            if (base[1] >= base[0]) {
+                int64_t nc = base[0] * 2;
+                int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)nc * 8);
+                nb[0] = nc;
+                nb[1] = base[1];
+                for (int64_t k = 0; k < base[1]; k++) nb[2 + k] = base[2 + k];
+                base = nb;
+                out = (int64_t)(base + 2);
+            }
+            ((int64_t*)out)[base[1]] = v;
+            base[1] += 1;
+        }
+    }
+    return out;
+}
+
+// Series/list `.nunique()` — count of order-preserving unique elements.
+int64_t zeta_vec_nunique(int64_t data) {
+    int64_t u = zeta_vec_unique(data);
+    if (!u) return 0;
+    int64_t n = 0;
+    if (!zt_vec_header_ok(u, &n)) return 0;
+    return n;
+}
 int64_t zeta_sum_n(int64_t data, int64_t n) {
     int64_t acc = 0;
     for (int64_t i = 0; i < n; i++) acc += ((int64_t*)data)[i];
@@ -999,6 +1050,19 @@ int64_t py_builtin_set(int64_t vec) {
     return (int64_t)(base + 2);
 }
 
+// set.add(x) — push if absent; returns the (possibly grown) vec handle.
+extern int64_t vec_push(int64_t vec, int64_t val);
+int64_t py_set_add(int64_t vec, int64_t v) {
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 0; i < n; i++) {
+        if (((int64_t*)vec)[i] == v) return vec;
+    }
+    return vec_push(vec, v);
+}
+
+// typing.cast(typ, val) — annotation-only; return val unchanged.
+int64_t py_typing_cast(int64_t _ty, int64_t val) { (void)_ty; return val; }
+
 // ── PY-A: map(f, xs) / filter(f, xs) — eager, returning a Vec ─────────
 // `fn` is a Zeta function pointer; filter(None, xs) keeps truthy elements.
 int64_t py_builtin_map(int64_t fn, int64_t vec) {
@@ -1036,6 +1100,160 @@ int64_t zeta_pow_i64(int64_t base, int64_t exp) {
         exp >>= 1;
     }
     return r;
+}
+
+// ── PY-A: Python `@` matmul ──────────────────────────────────────────
+// Parse/MIR need a symbol so `I @ corr` does not abort the enclosing def.
+// Real ndarray matmul is NOT implemented — this is an i64 multiply stub
+// that warns once on stderr (fail-loud for anyone expecting numpy `@`).
+int64_t zeta_matmul(int64_t a, int64_t b) {
+    static int warned;
+    if (!warned) {
+        fprintf(stderr,
+                "warning: zeta_matmul is an i64 mul stub (not ndarray matmul)\n");
+        warned = 1;
+    }
+    return a * b;
+}
+
+// ── PY-A: np.where ───────────────────────────────────────────────────
+// 1-arg: flat index vector where mask[i] != 0. Numpy returns `(indices,)`;
+// MIR rewrites `np.where(mask)[0]` to this flat call so the common corpus
+// spelling works without nested-vec element types.
+// 3-arg: scalar/element-wise select (cond ? x : y).
+int64_t zeta_dynarray_new(int64_t);
+
+static int zt_looks_like_vec(int64_t v) {
+    if (v < 0x1000) return 0; /* small ints / bools are scalars */
+    int64_t cap = ((int64_t*)(v - 16))[0];
+    int64_t len = ((int64_t*)(v - 16))[1];
+    if (cap < 0 || len < 0 || len > cap || cap > (1LL << 30)) return 0;
+    return 1;
+}
+
+int64_t zeta_np_where1(int64_t mask) {
+    if (!zt_looks_like_vec(mask)) {
+        int64_t idxs = zeta_dynarray_new(1);
+        if (mask) idxs = vec_push(idxs, 0);
+        return idxs;
+    }
+    int64_t n = zt_vec_len(mask);
+    int64_t idxs = zeta_dynarray_new(n > 0 ? n : 8);
+    for (int64_t i = 0; i < n; i++) {
+        if (((int64_t*)mask)[i]) idxs = vec_push(idxs, i);
+    }
+    return idxs;
+}
+
+int64_t zeta_np_where3(int64_t cond, int64_t x, int64_t y) {
+    int c_vec = zt_looks_like_vec(cond);
+    int x_vec = zt_looks_like_vec(x);
+    int y_vec = zt_looks_like_vec(y);
+    if (!c_vec) {
+        return cond ? x : y;
+    }
+    int64_t cn = zt_vec_len(cond);
+    int64_t xn = x_vec ? zt_vec_len(x) : 0;
+    int64_t yn = y_vec ? zt_vec_len(y) : 0;
+    int64_t out = zeta_dynarray_new(cn > 0 ? cn : 8);
+    for (int64_t i = 0; i < cn; i++) {
+        int64_t c = ((int64_t*)cond)[i];
+        int64_t xv = x;
+        int64_t yv = y;
+        if (x_vec && xn > 0) xv = ((int64_t*)x)[i < xn ? i : xn - 1];
+        if (y_vec && yn > 0) yv = ((int64_t*)y)[i < yn ? i : yn - 1];
+        out = vec_push(out, c ? xv : yv);
+    }
+    return out;
+}
+
+// ── PY-A: numpy eye / zeros / diag / fill_diagonal / diagonal / solve stub ──
+// Flat row-major matrices (n*n). Honest V1 — not a full ndarray.
+int64_t zeta_np_eye(int64_t n) {
+    if (n < 0) n = 0;
+    int64_t N = n * n;
+    int64_t h = zeta_dynarray_new(N > 0 ? N : 8);
+    for (int64_t i = 0; i < N; i++) h = vec_push(h, 0);
+    for (int64_t i = 0; i < n; i++) ((int64_t*)h)[i * n + i] = 1;
+    return h;
+}
+
+int64_t zeta_np_zeros(int64_t n) {
+    if (n < 0) n = 0;
+    int64_t h = zeta_dynarray_new(n > 0 ? n : 8);
+    for (int64_t i = 0; i < n; i++) h = vec_push(h, 0);
+    return h;
+}
+
+int64_t zeta_np_zeros2(int64_t r, int64_t c) {
+    if (r < 0) r = 0;
+    if (c < 0) c = 0;
+    return zeta_np_zeros(r * c);
+}
+
+// Vector → flat diagonal matrix (n×n).
+int64_t zeta_np_diag(int64_t v) {
+    int64_t n = zt_looks_like_vec(v) ? zt_vec_len(v) : 0;
+    if (n <= 0) {
+        /* scalar: 1×1 */
+        int64_t h = zeta_dynarray_new(1);
+        return vec_push(h, v);
+    }
+    int64_t h = zeta_np_zeros2(n, n);
+    for (int64_t i = 0; i < n; i++) ((int64_t*)h)[i * n + i] = ((int64_t*)v)[i];
+    return h;
+}
+
+// Extract diagonal of flat square matrix → vector. Non-square / opaque → identity.
+int64_t zeta_np_diagonal(int64_t m) {
+    if (!zt_looks_like_vec(m)) return m;
+    int64_t N = zt_vec_len(m);
+    int64_t n = 0;
+    while (n * n < N) n++;
+    if (n * n != N || n == 0) {
+        static int w;
+        if (!w) { w = 1; fprintf(stderr, "warning: PY-A: np.diagonal on non-square — identity\n"); }
+        return m;
+    }
+    int64_t h = zeta_dynarray_new(n);
+    for (int64_t i = 0; i < n; i++) h = vec_push(h, ((int64_t*)m)[i * n + i]);
+    return h;
+}
+
+// fill_diagonal(a, val): in-place on flat square; val may be scalar or vec.
+int64_t zeta_np_fill_diagonal(int64_t a, int64_t val) {
+    if (!zt_looks_like_vec(a)) {
+        static int w;
+        if (!w) { w = 1; fprintf(stderr, "warning: PY-A: np.fill_diagonal on non-vec — no-op\n"); }
+        return a;
+    }
+    int64_t N = zt_vec_len(a);
+    int64_t n = 0;
+    while (n * n < N) n++;
+    if (n * n != N) {
+        static int w2;
+        if (!w2) { w2 = 1; fprintf(stderr, "warning: PY-A: np.fill_diagonal on non-square — no-op\n"); }
+        return a;
+    }
+    int val_vec = zt_looks_like_vec(val);
+    int64_t vn = val_vec ? zt_vec_len(val) : 0;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t v = val;
+        if (val_vec && vn > 0) v = ((int64_t*)val)[i < vn ? i : vn - 1];
+        ((int64_t*)a)[i * n + i] = v;
+    }
+    return a;
+}
+
+// Loud stub: solve(A, b) → b (not a factorisation). Documents the gap.
+int64_t zeta_np_solve_stub(int64_t a, int64_t b) {
+    (void)a;
+    static int w;
+    if (!w) {
+        w = 1;
+        fprintf(stderr, "warning: PY-A: scipy.linalg.solve is a stub — returning RHS\n");
+    }
+    return b;
 }
 
 // ── PY-A: re.escape + list.index/count ───────────────────────────────
@@ -1836,7 +2054,7 @@ int64_t zeta_map_update(int64_t m, int64_t other) {
     int64_t cap = ((int64_t*)other)[0];
     for (int64_t i = 0; i < cap; i++) {
         char* e = (char*)other + 16 + i * MAP_ENTRY_SIZE;
-        if (*(uint8_t*)(e + 16)) map_insert(m, *(int64_t*)e, *((int64_t*)e + 1));
+        if (*(uint8_t*)(e + 16) == 1) map_insert(m, *(int64_t*)e, *((int64_t*)e + 1));
     }
     return m;
 }
@@ -1873,4 +2091,140 @@ int64_t zeta_map_clear(int64_t m) {
         *(uint8_t*)((char*)m + 16 + i * MAP_ENTRY_SIZE + 16) = 0;
     ((int64_t*)m)[1] = 0;
     return m;
+}
+
+// ---- Batch 123: call-through / importlib / getattr / next --------------
+// Call a captured 1-arg function pointer (listcomp `condition(m)`).
+int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
+    typedef int64_t (*fn1_t)(int64_t);
+    if (!fn_ptr) {
+        fputs("zeta: zeta_call_fn_arg(NULL)\n", stderr);
+        fflush(stderr);
+        abort();
+    }
+    return ((fn1_t)fn_ptr)(arg);
+}
+
+// importlib.import_module — no dynamic loader; abort with a clear reason.
+int64_t py_import_module(int64_t name) {
+    const char* s = name ? (const char*)name : "<null>";
+    fprintf(stderr,
+            "zeta: importlib.import_module(%s) is not supported "
+            "(no dynamic module loader)\n",
+            s);
+    fflush(stderr);
+    abort();
+    return 0;
+}
+
+// getattr(obj, <dynamic name>) — abort (never silent / never ghost link).
+int64_t py_getattr_dynamic(int64_t obj, int64_t name) {
+    (void)obj;
+    const char* s = name ? (const char*)name : "<null>";
+    fprintf(stderr,
+            "zeta: getattr(obj, %s) with a dynamic attribute name is not "
+            "supported (needs a literal name or a default)\n",
+            s);
+    fflush(stderr);
+    abort();
+    return 0;
+}
+
+// builtin next(it) without default — abort (iterator protocol incomplete).
+int64_t py_builtin_next(int64_t it) {
+    (void)it;
+    fputs("zeta: next(it) without a default is not supported "
+          "(use next(it, default) or implement iteration)\n",
+          stderr);
+    fflush(stderr);
+    abort();
+    return 0;
+}
+
+// Opaque receiver `.next()` (e.g. baostock rs.next()): report exhausted.
+int64_t py_method_next(int64_t self) {
+    (void)self;
+    static int w = 0;
+    if (!w) {
+        w = 1;
+        fputs("warning: PY-A: .next() on untyped receiver returns 0 (exhausted)\n",
+              stderr);
+    }
+    return 0;
+}
+
+// ── PY-A batch 128: bare-name fallthroughs (library/runtime, not codegen) ──
+// MIR special-cases 2-arg zip / typed isinstance; kwargs like zip(a,b,strict=True)
+// and opaque receivers still emit bare `_zip` / `_to_parquet` / `_hasattr`.
+extern int64_t py_path_write_text(int64_t p, int64_t text);
+
+int64_t zip(int64_t a, int64_t b, int64_t c) {
+    (void)c; /* ignore strict= / third iterable for V1 */
+    return py_zip(a, b);
+}
+int64_t isinstance(int64_t obj, int64_t ty) {
+    (void)obj;
+    (void)ty;
+    return 0;
+}
+int64_t hasattr(int64_t obj, int64_t name) {
+    (void)obj;
+    (void)name;
+    return 0;
+}
+int64_t setattr(int64_t obj, int64_t name, int64_t val) {
+    (void)obj;
+    (void)name;
+    (void)val;
+    return 0;
+}
+// NOTE: no bare `to_parquet` — DataFrame.to_parquet also emits `@to_parquet`
+// and duplicates against this .o (same class as clear/ffill).
+int64_t write_text(int64_t self, int64_t text) {
+    return py_path_write_text(self, text);
+}
+int64_t frozenset(int64_t xs) { return xs; }
+int64_t enumerate(int64_t xs) { return xs; }
+
+// NOTE: do NOT export bare `clear`/`update`/`add`/`ffill`/`to_parquet`/
+// `numpy__isfinite`/… — library methods with those names also emit the same
+// linker symbol and duplicate against zeta_runtime_c.o (batches 128–129).
+// Untyped fallthrough is MIR opaque_fallback / pylib/*.z, not bare C aliases.
+
+// ==================== D: loud stubs (advice.md) ====================
+// Default: abort with the symbol name. ZETA_LENIENT_STUBS=1 → warn once
+// per symbol on stderr and return 0 (keeps soft stubs green while CI logs
+// which stubs are actually hit). name_ptr is a C string handle (i64).
+#define ZT_STUB_WARN_MAX 64
+static char zt_stub_warned[ZT_STUB_WARN_MAX][96];
+static int zt_stub_warned_n;
+
+static int zt_stub_already_warned(const char* name) {
+    for (int i = 0; i < zt_stub_warned_n; i++) {
+        if (strcmp(zt_stub_warned[i], name) == 0) return 1;
+    }
+    if (zt_stub_warned_n < ZT_STUB_WARN_MAX) {
+        strncpy(zt_stub_warned[zt_stub_warned_n], name, 95);
+        zt_stub_warned[zt_stub_warned_n][95] = '\0';
+        zt_stub_warned_n++;
+    }
+    return 0;
+}
+
+int64_t py_stub_abort(int64_t name_ptr) {
+    const char* name = name_ptr
+        ? (const char*)(uintptr_t)name_ptr
+        : "<unknown>";
+    if (getenv("ZETA_LENIENT_STUBS") != NULL) {
+        if (!zt_stub_already_warned(name)) {
+            fprintf(stderr, "warning: zeta stub not implemented: %s\n", name);
+            fflush(stderr);
+        }
+        return 0;
+    }
+    (void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
+    fprintf(stderr, "zeta: stub not implemented: %s\n", name);
+    fflush(stderr);
+    abort();
+    return 0;
 }

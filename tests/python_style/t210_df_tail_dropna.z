@@ -1,0 +1,17 @@
+// PY-A: DataFrame.tail(n) / dropna() —— 列映射。
+// tail：len-n 起切片（负切片仍 SEGFAULT）。dropna：无 NaN 哨兵 → typed copy。
+// expect: 1
+// expect: y
+// expect: 2
+// expect: 2
+// expect: x
+from pandas import DataFrame
+
+a = DataFrame({"code": ["x", "y"], "v": ["1", "2"]})
+t = a.tail(1)
+print(len(t))
+print(t["code"][0])
+d = a.dropna()
+print(len(d))
+print(len(d.columns))
+print(d["code"][0])

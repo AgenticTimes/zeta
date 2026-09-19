@@ -1642,7 +1642,9 @@ pub(crate) fn parse_postfix(input: &str) -> IResult<&str, AstNode> {
         if pos < bytes.len() && bytes[pos] == b'.' {
             // Check if next character is also dot or equals
             if pos + 1 < bytes.len() && bytes[pos + 1] == b'.' {
-                // This is ".." or "..="
+                // `...` is Ellipsis (stmt/type arg), not field access and not
+                // a `..` range — stop postfix so the statement parser sees it.
+                // (`..` / `..=` are also stopped here for the range parser.)
                 is_range_operator = true;
             }
         }
@@ -2635,7 +2637,10 @@ fn parse_multiplicative(input: &str) -> IResult<&str, AstNode> {
         // `**` must come before `*`, or the prefix match eats it as a bare
         // multiply and the leftover `* x` parses as a pointer dereference
         // (`2 ** 10` became `2 * (*10)` and crashed on the load).
-        let multiplicative_ops = ["**", "*", "/", "%"];
+        // PY-A: `@` is Python matmul (same precedence as `*`/`/`/`%`).
+        // Without it, `I @ corr` aborts the enclosing `def` and silently drops
+        // the rest of the file (ETF动量EPO: 77 unparsed lines).
+        let multiplicative_ops = ["**", "*", "/", "%", "@"];
 
         // PY-A: `floordiv` is the word operator the indent preprocessor emits
         // for Python's `//` (which the parser would otherwise swallow as a line
@@ -2728,6 +2733,14 @@ fn parse_range(input: &str) -> IResult<&str, AstNode> {
 
         // Try without whitespace first
         if remaining_input.starts_with(op) {
+            // PY-A: `...` (Ellipsis) starts with `..` but is NOT a range.
+            // `x = 1` then newline then `...` (abstractmethod stub) used to
+            // greedily parse as `1..` + unary(`.`), abort the `def`, and drop
+            // the enclosing class (`ExecutionBackend(Protocol)` → LocalBackend
+            // never reached → bare `_execute_trade`).
+            if op == ".." && remaining_input.starts_with("...") {
+                continue;
+            }
             found_op = true;
             remaining_input = &remaining_input[op.len()..];
         }
@@ -2739,6 +2752,9 @@ fn parse_range(input: &str) -> IResult<&str, AstNode> {
                 Err(_) => remaining_input,
             };
             if i.starts_with(op) {
+                if op == ".." && i.starts_with("...") {
+                    continue;
+                }
                 found_op = true;
                 remaining_input = &i[op.len()..];
             }

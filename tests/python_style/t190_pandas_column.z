@@ -1,0 +1,15 @@
+// PY-A: 真实 pylib/pandas.z 的 DataFrame.column —— 批次九十四最小库通、真实库空；
+//   根因是参数改名 key 后方法体仍写 self.data[name]（未定义）⇒ 段错误/空列。
+//   修：体用 key；返回注解 lt(vec, str) 以便取元素。
+// expect: 2
+// expect: x
+// expect: y
+// expect: 1
+from pandas import DataFrame
+
+a = DataFrame({"code": ["x", "y"]})
+c = a.column("code")
+print(len(c))
+print(c[0])
+print(c[1])
+print(a.n_columns())

@@ -1,0 +1,10 @@
+// PY-A: d.clear() / d.update(o) must lower to zeta_map_* (not bare _clear).
+// expect: 2
+d = {}
+d["a"] = 1
+d.clear()
+d["b"] = 2
+e = {}
+e["c"] = 3
+d.update(e)
+print(len(d))

@@ -1,0 +1,18 @@
+// PY-A: pylib/pandas.z 的 concat —— 列表里的 DataFrame 需 [DataFrame] 注解；
+//   while 条件不能直接 len(...)；map 取出的列不能用 prev+col（会空），要按元素拼。
+// expect: 2
+// expect: 1
+// expect: 2
+// expect: x
+// expect: y
+from pandas import DataFrame, concat
+
+a = DataFrame({"code": ["x"]})
+b = DataFrame({"code": ["y"]})
+c = concat([a, b])
+print(c.n_rows())
+print(c.n_columns())
+col = c.column("code")
+print(len(col))
+print(col[0])
+print(col[1])

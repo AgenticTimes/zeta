@@ -1,0 +1,15 @@
+// PY-A: len(obj) 走类 `__len__`；此前 Named 落到 array_len 恒返 0（静默错长）。
+// expect: 3
+// expect: 2
+// expect: 0
+class F:
+    def __len__(self):
+        return 3
+
+print(len(F()))
+
+from pandas import DataFrame
+a = DataFrame({"code": ["x", "y"]})
+print(len(a))
+b = DataFrame({})
+print(len(b))

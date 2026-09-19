@@ -1,0 +1,10 @@
+// PY-A: for-in over a str must walk characters (str_len/str_get),
+// not array_len/array_get (hang / silent wrong).
+// expect: a
+// expect: b
+// expect: x
+for c in "ab":
+    print(c)
+s = "x"
+for c in s:
+    print(c)

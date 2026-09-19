@@ -130,17 +130,22 @@ void map_insert(int64_t map, int64_t key, int64_t val) {
         *(int64_t*)nb=nc; *((int64_t*)nb+1)=0;
         for (int64_t i=0;i<cap;i++){
             char* e=(char*)map+16+i*MAP_ENTRY_SIZE;
-            if (*(uint8_t*)(e+16)) map_insert((int64_t)nb,*(int64_t*)e,*((int64_t*)e+1));
+            if (*(uint8_t*)(e+16)==1) map_insert((int64_t)nb,*(int64_t*)e,*((int64_t*)e+1));
         }
         memcpy((void*)map,nb,16+nc*MAP_ENTRY_SIZE);
         hdr=(int64_t*)map; cap=nc;
     }
     int64_t h=map_hash(key); int64_t idx=h&(cap-1);
+    int64_t tomb=-1;
     while(1){
         char* e=(char*)map+16+idx*MAP_ENTRY_SIZE;
         uint8_t used=*(uint8_t*)(e+16);
-        if(!used){*(int64_t*)e=key;*((int64_t*)e+1)=val;*(uint8_t*)(e+16)=1;hdr[1]++;return;}
-        if(*(int64_t*)e==key){*((int64_t*)e+1)=val;return;}
+        if(!used){
+            if(tomb>=0){ idx=tomb; e=(char*)map+16+idx*MAP_ENTRY_SIZE; }
+            *(int64_t*)e=key;*((int64_t*)e+1)=val;*(uint8_t*)(e+16)=1;hdr[1]++;return;
+        }
+        if(used==2 && tomb<0) tomb=idx;
+        if(used==1 && *(int64_t*)e==key){*((int64_t*)e+1)=val;return;}
         idx=(idx+1)&(cap-1);
     }
 }
@@ -151,7 +156,7 @@ int64_t map_get(int64_t map, int64_t key) {
         char* e=(char*)map+16+idx*MAP_ENTRY_SIZE;
         uint8_t used=*(uint8_t*)(e+16);
         if(!used)return 0;
-        if(*(int64_t*)e==key)return *((int64_t*)e+1);
+        if(used==1 && *(int64_t*)e==key)return *((int64_t*)e+1);
         idx=(idx+1)&(cap-1);
     }
 }
@@ -200,8 +205,6 @@ int64_t array_new(int64_t size, int64_t elem_size) { return runtime_malloc(size 
 int64_t array_new_1(int64_t size) { return runtime_malloc(size); }
 // LLVM renames overloaded array_new_1 to array_new.10 internally
 // array_new_10 是 array_new 的 1 参数重载版本（LLVM 内部重命名为 array_new.10）
-// 用 __asm__ 同时导出 LLVM 期望的名字
-__asm__(".globl _array_new.10\n\t.set _array_new.10, _array_new_10\n");
 int64_t array_new_10(int64_t size) { return runtime_malloc(size); }
 
 // Multi-arg print overloads: LLVM renames print -> print.N per module, and arity
@@ -217,76 +220,9 @@ int64_t print4(int64_t a, int64_t b, int64_t c, int64_t d) { _print_one(a); _pri
 int64_t print5(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e) { _print_one(a); _print_one(b); _print_one(c); _print_one(d); _print_one(e); return 0; }
 int64_t print6(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f) { _print_one(a); _print_one(b); _print_one(c); _print_one(d); _print_one(e); _print_one(f); return 0; }
 
-// LLVM auto-renames same-named externs with .N suffixes per module (array_new.11,
-// print.31, ...). Export aliases for every suffix observed in unit-tests so the
-// linker resolves them to the canonical implementations.
-__asm__(
-    ".globl _array_new.11\n\t.set _array_new.11, _array_new\n"
-    ".globl _array_new.12\n\t.set _array_new.12, _array_new\n"
-    ".globl _array_new.13\n\t.set _array_new.13, _array_new\n"
-    ".globl _array_new.35\n\t.set _array_new.35, _array_new\n"
-    ".globl _array_new.36\n\t.set _array_new.36, _array_new\n"
-    ".globl _array_new.34\n\t.set _array_new.34, _array_new\n"
-    ".globl _print.11\n\t.set _print.11, _println_i64\n"
-    ".globl _print.13\n\t.set _print.13, _print2\n"
-    ".globl _print.15\n\t.set _print.15, _println_i64\n"
-    ".globl _print.17\n\t.set _print.17, _println_i64\n"
-    ".globl _print.19\n\t.set _print.19, _println_i64\n"
-    ".globl _print.21\n\t.set _print.21, _println_i64\n"
-    ".globl _print.23\n\t.set _print.23, _println_i64\n"
-    ".globl _print.25\n\t.set _print.25, _println_i64\n"
-    ".globl _print.27\n\t.set _print.27, _print6\n"
-    ".globl _print.29\n\t.set _print.29, _println_i64\n"
-    ".globl _print.30\n\t.set _print.30, _print\n"
-    ".globl _print.31\n\t.set _print.31, _print\n"
-    ".globl _print.32\n\t.set _print.32, _println_i64\n"
-    ".globl _print.33\n\t.set _print.33, _println_i64\n"
-    ".globl _print.35\n\t.set _print.35, _println_i64\n"
-    ".globl _print.36\n\t.set _print.36, _println_i64\n"
-    ".globl _print.37\n\t.set _print.37, _println_i64\n"
-    ".globl _print.38\n\t.set _print.38, _println_i64\n"
-    ".globl _print.39\n\t.set _print.39, _println_i64\n"
-    ".globl _print.40\n\t.set _print.40, _println_i64\n"
-    ".globl _print.42\n\t.set _print.42, _print2\n"
-    ".globl _print.43\n\t.set _print.43, _println_i64\n"
-    ".globl _print.44\n\t.set _print.44, _println_i64\n"
-    ".globl _print.46\n\t.set _print.46, _println_i64\n"
-    ".globl _print.47\n\t.set _print.47, _println_i64\n"
-    ".globl _print.49\n\t.set _print.49, _println_i64\n"
-    ".globl _print.51\n\t.set _print.51, _println_i64\n"
-    ".globl _print.54\n\t.set _print.54, _println_i64\n"
-    ".globl _print.58\n\t.set _print.58, _println_i64\n"
-    ".globl _print.60\n\t.set _print.60, _println_i64\n"
-    ".globl _print.62\n\t.set _print.62, _println_i64\n"
-    ".globl _print.65\n\t.set _print.65, _println_i64\n"
-    ".globl _print.69\n\t.set _print.69, _println_i64\n"
-    ".globl _print.71\n\t.set _print.71, _println_i64\n"
-    ".globl _print.73\n\t.set _print.73, _println_i64\n"
-    ".globl _print.75\n\t.set _print.75, _println_i64\n"
-    ".globl _print.77\n\t.set _print.77, _print2\n"
-    ".globl _print.79\n\t.set _print.79, _print2\n"
-    ".globl _print.81\n\t.set _print.81, _print2\n"
-    ".globl _print.83\n\t.set _print.83, _println_i64\n"
-    ".globl _print.85\n\t.set _print.85, _println_i64\n"
-    ".globl _print.87\n\t.set _print.87, _println_i64\n"
-    ".globl _print.89\n\t.set _print.89, _println_i64\n"
-    ".globl _print.91\n\t.set _print.91, _println_i64\n"
-    ".globl _print.93\n\t.set _print.93, _println_i64\n"
-    ".globl _print.95\n\t.set _print.95, _println_i64\n"
-    ".globl _print.97\n\t.set _print.97, _println_i64\n"
-    ".globl _print.99\n\t.set _print.99, _println_i64\n"
-    ".globl _print.101\n\t.set _print.101, _println_i64\n"
-    ".globl _print.103\n\t.set _print.103, _println_i64\n"
-    ".globl _println_i64.9\n\t.set _println_i64.9, _println_i64\n"
-    ".globl _array_push.1\n\t.set _array_push.1, _array_push\n"
-    ".globl _array_len.2\n\t.set _array_len.2, _array_len\n"
-    ".globl _array_get.3\n\t.set _array_get.3, _array_get\n"
-    ".globl _stack_array_get.4\n\t.set _stack_array_get.4, _stack_array_get\n"
-    ".globl _array_set.5\n\t.set _array_set.5, _array_set\n"
-    ".globl _stack_array_set.6\n\t.set _stack_array_set.6, _stack_array_set\n"
-    ".globl _array_free.7\n\t.set _array_free.7, _array_free\n"
-    ".globl _array_set_len.8\n\t.set _array_set_len.8, _array_set_len\n"
-);
+// LLVM .N rename aliases — data in pylib/runtime_aliases.txt;
+// regenerate: python3 tools/gen_from_registry.py --emit-aliases
+#include "aliases.inc.c"
 
 // print.N alias with N args maps to printf-style — declare variadic impl
 int64_t print_variadic(int64_t n, ...);
@@ -1008,6 +944,42 @@ int64_t py_logger_info_n(int64_t lg, int64_t fmt, int64_t n, int64_t a1, int64_t
     buf[off < sizeof(buf) ? off : sizeof(buf) - 1] = 0;
     return py_log_emit(PY_LOG_INFO, "INFO", lg, (int64_t)buf);
 }
+int64_t py_logger_warning_n(int64_t lg, int64_t fmt, int64_t n, int64_t a1, int64_t a2,
+                            int64_t a3, int64_t a4) {
+    int64_t vals[4] = {a1, a2, a3, a4};
+    char buf[1024];
+    size_t off = 0;
+    const char* f = (const char*)fmt;
+    if (f) {
+        while (f[off] && off < sizeof(buf) - 64) {
+            buf[off] = f[off];
+            off++;
+        }
+    }
+    for (int64_t i = 0; i < n && i < 4; i++) {
+        off += (size_t)snprintf(buf + off, sizeof(buf) - off, " %lld", (long long)vals[i]);
+    }
+    buf[off < sizeof(buf) ? off : sizeof(buf) - 1] = 0;
+    return py_log_emit(PY_LOG_WARNING, "WARNING", lg, (int64_t)buf);
+}
+int64_t py_logger_error_n(int64_t lg, int64_t fmt, int64_t n, int64_t a1, int64_t a2,
+                          int64_t a3, int64_t a4) {
+    int64_t vals[4] = {a1, a2, a3, a4};
+    char buf[1024];
+    size_t off = 0;
+    const char* f = (const char*)fmt;
+    if (f) {
+        while (f[off] && off < sizeof(buf) - 64) {
+            buf[off] = f[off];
+            off++;
+        }
+    }
+    for (int64_t i = 0; i < n && i < 4; i++) {
+        off += (size_t)snprintf(buf + off, sizeof(buf) - off, " %lld", (long long)vals[i]);
+    }
+    buf[off < sizeof(buf) ? off : sizeof(buf) - 1] = 0;
+    return py_log_emit(PY_LOG_ERROR, "ERROR", lg, (int64_t)buf);
+}
 int64_t py_logger_info(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_INFO, "INFO", lg, m); }
 int64_t py_logger_warning(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_WARNING, "WARNING", lg, m); }
 int64_t py_logger_error(int64_t lg, int64_t m) { return py_log_emit(PY_LOG_ERROR, "ERROR", lg, m); }
@@ -1088,17 +1060,11 @@ int64_t py_dt_day(int64_t h) {
 // `dataclasses.asdict(x)` where x is NOT a statically-known dataclass: the
 // compiler rewrites the dataclass case (struct fields are known at compile
 // time, see gen.rs), so reaching here means the value could not be expanded.
-// The registry points `dataclasses.asdict` at this symbol on purpose: it used
-// to be a name that existed NOWHERE, so the whole program failed to LINK with
-// a meaningless `_py_asdict_unexpanded`. Now the build succeeds and the failure
-// happens only if this path is actually executed — with a readable message,
-// never a silent zero.
+// Registry: stub=1. Loud fail via py_stub_abort (D / advice.md).
+int64_t py_stub_abort(int64_t name_ptr);
 int64_t py_asdict_unexpanded(int64_t v) {
     (void)v;
-    fputs("zeta: dataclasses.asdict() on a value that is not a statically known "
-          "dataclass is not supported (unexpanded asdict)\n", stderr);
-    fflush(stderr);
-    abort();
+    return py_stub_abort((int64_t)(uintptr_t)"py_asdict_unexpanded");
 }
 
 int64_t py_dt_replace(int64_t h, int64_t y, int64_t m, int64_t d) {
@@ -1275,6 +1241,19 @@ int64_t py_warnings_noop(int64_t a) {
 // and other Python surface that has no runtime effect here.
 int64_t py_noop1(int64_t a) {
     (void)a;
+    return 0;
+}
+
+// 2-arg accepted-and-ignored shim (`load_dotenv(path, override)`, …).
+int64_t py_noop2(int64_t a, int64_t b) {
+    (void)a;
+    (void)b;
+    return 0;
+}
+
+// V1: `pd.read_parquet(path)` — empty frame handle (0). Real parquet I/O later.
+int64_t py_pd_read_parquet(int64_t path) {
+    (void)path;
     return 0;
 }
 

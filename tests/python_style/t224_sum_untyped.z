@@ -1,0 +1,13 @@
+// PY-A: builtin sum(untyped) → zeta_sum_vec; .sum() on untyped → same.
+// expect: 6
+// expect: 6
+def f(xs) -> i64:
+    return sum(xs)
+
+def g(xs) -> i64:
+    return xs.sum()
+
+def main() -> i64:
+    print(f([1, 2, 3]))
+    print(g([1, 2, 3]))
+    return 0

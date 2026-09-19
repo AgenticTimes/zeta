@@ -1,0 +1,17 @@
+// PY-A: getattr(obj, "literal") on ctor Call + nested FieldAccess Named receivers
+// expect: 3
+// expect: 7
+// expect: 9
+class Point:
+    def __init__(self, x: i64, y: i64):
+        self.x = x
+        self.y = y
+
+class Wrap:
+    def __init__(self, p: Point):
+        self.p = p
+
+print(getattr(Point(3, 4), "x"))
+w = Wrap(Point(7, 8))
+print(getattr(w.p, "x"))
+print(getattr(w.p, "missing", 9))

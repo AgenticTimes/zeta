@@ -101,9 +101,9 @@ impl NewTypeCheck for Resolver {
 
         // Debug: print what we're parsing (disabled for performance)
 
-        // Safety check: prevent infinite recursion
-        if s.is_empty() {
-            return Type::Named("".to_string(), Vec::new());
+        // Safety check: empty / dyn → PyDynamic (B3)
+        if s.is_empty() || s == "dyn" || s == "PyDynamic" {
+            return Type::PyDynamic;
         }
 
         // Simple types should not recurse

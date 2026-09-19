@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # tests/python_style/run.sh — Python 风格测试套件
 # 用例格式：`// expect: <一行输出>`（按序）；`// expect-error`（编译必须失败）；
+#           `// expect-abort: <stderr 子串>`（编译成功、运行必须非 0 且 stderr 含该串）
 #           `// args: <argv...>`（可选，运行程序时传入的命令行参数）
 #           `// env: K=V`（可选，编译/运行该用例时的环境变量）
 #           `// known-fail: <原因>`（已知缺口，单列不计入通过率）
@@ -47,6 +48,7 @@ for f in "$ROOT"/tests/python_style/t*.z; do
 
     known=$(grep -c '^// known-fail:' "$f" || true)
     want_error=$(grep -c '^// expect-error' "$f" || true)
+    want_abort=$(grep '^// expect-abort:' "$f" | head -1 | sed 's|^// expect-abort: ||' || true)
 
     # known-fail: 单列；若意外通过则报 XPASS
     if [ "$known" != "0" ]; then
@@ -78,6 +80,32 @@ for f in "$ROOT"/tests/python_style/t*.z; do
         fail=$((fail+1)); failed_files="$failed_files $name"
         continue
     fi
+
+    # D: 运行期响亮失败 — 必须非 0 退出且 stderr 含期望子串
+    if [ -n "$want_abort" ]; then
+        set +e
+        if [ ${#envs[@]} -gt 0 ]; then
+            err=$(timeout 20 env "${envs[@]}" "$OUTDIR/$name" 2>&1 >/dev/null)
+            rc=$?
+        else
+            err=$(timeout 20 "$OUTDIR/$name" 2>&1 >/dev/null)
+            rc=$?
+        fi
+        set -u
+        if [ "$rc" -eq 0 ]; then
+            echo "FAIL       $name (期望 abort，却退出 0)"
+            fail=$((fail+1)); failed_files="$failed_files $name"
+        elif printf '%s' "$err" | grep -qF "$want_abort"; then
+            echo "PASS       $name"
+            pass=$((pass+1))
+        else
+            echo "FAIL       $name (stderr 未含: $want_abort)"
+            echo "  stderr: $(printf '%s' "$err" | tr '\n' ' ' | head -c 200)"
+            fail=$((fail+1)); failed_files="$failed_files $name"
+        fi
+        continue
+    fi
+
     # ⚠️ `env "${envs[@]}"` with an EMPTY array expands to `env "" prog`, which
     # runs nothing at all — so branch on emptiness instead of expanding blindly.
     if [ ${#envs[@]} -gt 0 ] && [ ${#args[@]} -gt 0 ]; then

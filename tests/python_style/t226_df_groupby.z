@@ -1,0 +1,14 @@
+// PY-A: DataFrame.groupby 返回 Named GroupBy（链接）；mean/sum 空 DF（非 identity）。
+// 此前：groupby 故意不在 opaque identity → `_DataFrame__groupby` / `_groupby` 链接失败。
+// expect: 1
+// expect: 0
+// expect: 0
+from pandas import DataFrame
+
+a = DataFrame({"code": ["a", "b"], "x": ["1", "2"]})
+g = a.groupby("code")
+print(1)
+m = g.mean()
+print(len(m.columns))
+s = g.sum()
+print(len(s.columns))

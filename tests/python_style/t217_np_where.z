@@ -1,0 +1,20 @@
+// PY-A: np.where(mask)[0] index vec + np.where(cond,x,y) scalar/vec select
+// expect: 2
+// expect: 0
+// expect: 2
+// expect: 10
+// expect: 20
+// expect: 10
+// expect: 2
+import numpy as np
+
+mask = [1, 0, 1]
+idx = np.where(mask)[0]
+print(len(idx))
+print(idx[0])
+print(idx[1])
+print(np.where(True, 10, 20))
+print(np.where(False, 10, 20))
+sel = np.where([1, 0], [10, 20], [1, 2])
+print(sel[0])
+print(sel[1])

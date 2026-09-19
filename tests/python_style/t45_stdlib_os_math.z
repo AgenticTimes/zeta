@@ -1,0 +1,24 @@
+// PY-A: stdlib 批 2 —— os/os.path（含子模块点号成员）/ math 补全 / logging / __future__
+//   证据驱动：语料里 datetime 12、json 6、os 5、logging 5、math 15 个调用点。
+// expect: a/b
+// expect: z.txt
+// expect: /x/y
+// expect: .txt
+// expect: 1
+// expect: 1
+// expect: 20
+// expect: 1
+import os
+from os.path import join, basename, dirname, splitext
+from math import exp, floor, isfinite, log
+import logging
+from __future__ import annotations
+
+print(join("a", "b"))
+print(basename("/x/y/z.txt"))
+print(dirname("/x/y/z.txt"))
+print(splitext("/x/y/z.txt"))
+print(os.path.exists("/tmp"))
+print(floor(exp(0.0)))
+print(logging.INFO)
+print(isfinite(log(1.0)))

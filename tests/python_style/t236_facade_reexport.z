@@ -1,0 +1,10 @@
+// PY-A: facade re-export — `from pkg import X` must link to defining module
+// (`pkg_impl__X`), not a missing `pkg__X`. Matches REasyQuant
+// `backend.datasrc.market_data` re-exporting MarketDataFetcher.
+// expect: 1
+// expect: 42
+from pyreexport import MarketDataFetcher, warmup_start_of
+
+f = MarketDataFetcher()
+print(f.get())
+print(warmup_start_of(42))

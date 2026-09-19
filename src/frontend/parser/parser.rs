@@ -82,7 +82,12 @@ pub fn parse_ident(input: &str) -> IResult<&str, String> {
                 "let", "mut", "if", "else", "for", "in", "loop", "while", "unsafe", "return",
                 "break", "continue", "fn", "concept", "enum", "struct", "use",
                 "extern", "dyn", "box", "as", "true", "false", "comptime", "const", "async", "pub",
-                "match", "where", "mod", "defer",
+                "match", "mod", "defer",
+                // PY-A: `where` is deliberately NOT reserved — Python uses it as
+                // a free name (`from numpy import where`; `where(mask)`). Reserving
+                // it made the call (and often the enclosing def) fail to parse.
+                // Zeta's `where` clause on impls still parses via dedicated
+                // `parse_*` paths that match the keyword literally.
                 // PY-A: `impl` is deliberately NOT reserved — Python code uses it
                 // as an ordinary variable name (`impl = strategy._make()`,
                 // `engine.add_strategy(impl)`). Reserving it made every
@@ -647,6 +652,12 @@ pub fn parse_type_args(input: &str) -> IResult<&str, Vec<String>> {
 
 /// Parse generic argument text (now parses a full type)
 pub fn parse_generic_arg_text(input: &str) -> IResult<&str, String> {
+    // PY-A: variadic type-arg marker — `tuple[str, ...]`, `Callable[..., T]`.
+    // Without this, `tuple[str, ...]` aborted the enclosing `def`/`class`
+    // (ParquetCache.load) and dropped the rest of `cache.py`.
+    if let Ok((rest, _)) = ws(tag("...")).parse(input) {
+        return Ok((rest, "...".to_string()));
+    }
     parse_type(input)
 }
 

@@ -1,0 +1,17 @@
+// PY-A: class-body decorators (`@staticmethod` / `@classmethod` / `@property`)
+// must not abort the whole class parse. V1 ignores decorator semantics but
+// still registers the method (REasyQuant MarketDataFetcher pattern).
+// expect: 2
+class C:
+    def __init__(self):
+        self.x = 1
+
+    @staticmethod
+    def f():
+        return 2
+
+    @property
+    def y(self):
+        return self.x
+
+print(C.f())

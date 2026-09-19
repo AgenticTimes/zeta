@@ -1,0 +1,8 @@
+// B4: dyn receiver → unique W-table method (Path.exists).
+// expect: 1
+from pathlib import Path
+
+def check(p) -> i64:
+    return p.exists()
+
+print(check(Path(".")))

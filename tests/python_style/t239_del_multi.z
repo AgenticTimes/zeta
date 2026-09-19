@@ -1,0 +1,11 @@
+// PY-A: `del a, b` must consume all targets (else try-body truncates).
+// `del d[k]` removes the key (parse_unary target + zeta_map_pop).
+// expect: 1
+// expect: 3
+d = {"a": 1, "b": 2}
+del d["a"]
+print(len(d))
+x = 1
+y = 2
+del x, y
+print(3)

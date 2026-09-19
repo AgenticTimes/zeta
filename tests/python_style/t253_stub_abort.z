@@ -1,0 +1,7 @@
+// D: asdict on a non-dataclass hits py_asdict_unexpanded → py_stub_abort.
+// expect-abort: stub not implemented: py_asdict_unexpanded
+from dataclasses import asdict
+
+fn main() {
+    asdict(1)
+}

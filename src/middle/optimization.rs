@@ -131,11 +131,16 @@ pub fn dead_code_elimination(mir: &mut Mir) {
             }
             MirStmt::While {
                 cond,
+                pre_cond,
                 body,
                 else_body,
             } => {
                 mark_expr_used(*cond, &mut used, &mir.exprs);
-                // Recursively process nested statements in the loop body
+                let mut nested_pre = Mir {
+                    stmts: pre_cond.clone(),
+                    ..Default::default()
+                };
+                dead_code_elimination(&mut nested_pre);
                 let mut nested_mir = Mir {
                     stmts: body.clone(),
                     ..Default::default()

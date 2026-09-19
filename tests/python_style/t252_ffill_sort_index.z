@@ -1,0 +1,8 @@
+// PY-A: DataFrame.ffill / sort_index / reindex library methods must link.
+// expect: 1
+from pandas import DataFrame
+a = DataFrame({"x": ["1", "2"]})
+b = a.ffill()
+c = b.sort_index()
+d = c.reindex(["x"])
+print(1)

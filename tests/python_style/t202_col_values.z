@@ -1,0 +1,18 @@
+// PY-A: 列向量 `.values` 是恒等（列映射模型里列已是 list）。
+// 此前 FieldAccess 读非 struct 布局垃圾 → SEGFAULT（语料 `sub[f].values`）。
+// expect: 10
+// expect: 20
+// expect: x
+// expect: y
+
+xs = [10, 20]
+v = xs.values
+print(v[0])
+print(v[1])
+
+from pandas import DataFrame
+sub = DataFrame({"code": ["x", "y"], "v": ["1", "2"]})
+f = "code"
+col = sub[f].values
+print(col[0])
+print(col[1])

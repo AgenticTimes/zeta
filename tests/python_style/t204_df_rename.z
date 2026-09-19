@@ -1,0 +1,25 @@
+// PY-A: DataFrame.rename(columns={old: new}) 列改名。
+// 形参须 lt(map, str, str)：未注解时 kwargs dict 静默空。
+// 单参方法下 kwargs 值绑到 columns，故 columns= 拼写可用。
+// expect: 2
+// expect: 0
+// expect: 1
+// expect: 1
+// expect: a
+// expect: 1
+// expect: 1
+// expect: 2
+from pandas import DataFrame
+
+a = DataFrame({"code": ["a", "b"], "x": ["1", "2"]})
+b = a.rename(columns={"x": "y"})
+print(len(b.columns))
+print("x" in b)
+print("y" in b)
+print(b["y"][0])
+print(b["code"][0])
+# 原表未变
+print("x" in a)
+print(a["x"][0])
+# 多列保留
+print(len(a.columns))

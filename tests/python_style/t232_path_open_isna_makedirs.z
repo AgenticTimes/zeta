@@ -1,0 +1,26 @@
+// PY-A: Path.open 默认 mode / encoding= 忽略 / Named Path / isna / makedirs exist_ok
+// expect: hi
+// expect: hi
+// expect: 1
+// expect: 0
+// expect: 1
+from pathlib import Path
+import os
+from pandas import isna
+
+p = Path("/tmp/zeta_t232_path.txt")
+p.write_text("hi")
+with p.open() as f:
+    print(f.read())
+
+def make() -> Path:
+    return Path("/tmp/zeta_t232_path.txt")
+
+q = make()
+with q.open(encoding="utf-8") as f:
+    print(f.read())
+print(q.read_text(encoding="utf-8") == "hi")
+
+print(isna(0))
+os.makedirs("/tmp/zeta_t232_makedirs", exist_ok=True)
+print(1)

@@ -175,6 +175,10 @@ pub enum Type {
 
     // Identity types (string-based capabilities)
     Identity(Box<IdentityType>),
+
+    /// B3 (advice.md): unannotated Python-style param/return. ABI still i64;
+    /// type layer tracks "this was guessed" for `--report-untyped`.
+    PyDynamic,
 }
 
 /// Trait bounds for generic type parameters
@@ -281,6 +285,7 @@ impl Type {
 
         // Handle primitive types
         match s {
+            "" | "dyn" | "PyDynamic" => Type::PyDynamic,
             "i8" => Type::I8,
             "i16" => Type::I16,
             "i32" => Type::I32,
@@ -711,6 +716,7 @@ impl Type {
             Type::I16 => "i16".to_string(),
             Type::I32 => "i32".to_string(),
             Type::I64 => "i64".to_string(),
+            Type::PyDynamic => "dyn".to_string(),
             Type::U8 => "u8".to_string(),
             Type::U16 => "u16".to_string(),
             Type::U32 => "u32".to_string(),
@@ -822,6 +828,7 @@ impl Type {
             Type::I16 => "i16".to_string(),
             Type::I32 => "i32".to_string(),
             Type::I64 => "i64".to_string(),
+            Type::PyDynamic => "dyn".to_string(),
             Type::U8 => "u8".to_string(),
             Type::U16 => "u16".to_string(),
             Type::U32 => "u32".to_string(),
@@ -1462,6 +1469,8 @@ impl Substitution {
             (Type::I16, Type::I16) => Ok(()),
             (Type::I32, Type::I32) => Ok(()),
             (Type::I64, Type::I64) => Ok(()),
+            // B3: dyn is a soft unknown — unifies with anything (ABI still i64).
+            (Type::PyDynamic, _) | (_, Type::PyDynamic) => Ok(()),
             (Type::U8, Type::U8) => Ok(()),
             (Type::U16, Type::U16) => Ok(()),
             (Type::U32, Type::U32) => Ok(()),

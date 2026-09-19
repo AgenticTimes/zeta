@@ -81,16 +81,15 @@ fn parse_param_full(input: &str) -> IResult<&str, (String, String, Option<AstNod
         |(_, _, name)| (name, "i64".to_string(), None),
     );
 
-    // Try regular parameter: `name: type` — PY-A: the type annotation is
-    // optional (Python style `def f(x):`), defaulting to i64. Call-site
-    // coercion (coerce_call_args) adapts f64 args at monomorphic call sites.
+    // Try regular parameter: `name: type` — PY-A / B3: type annotation optional
+    // (Python style `def f(x):`); default is `dyn` (Type::PyDynamic), ABI still i64.
     let parse_regular = map(
         (
             ws(parse_ident),
             opt(preceded(ws(tag(":")), ws(parse_type))),
             opt(ws(preceded(tag("="), ws(parse_default_value)))),
         ),
-        |(name, ty, default)| (name, ty.unwrap_or_else(|| "i64".to_string()), default),
+        |(name, ty, default)| (name, ty.unwrap_or_else(|| "dyn".to_string()), default),
     );
 
     // PY-A: allow Python-common names that collide with Zeta keywords in
@@ -109,7 +108,7 @@ fn parse_param_full(input: &str) -> IResult<&str, (String, String, Option<AstNod
             opt(preceded(ws(tag(":")), ws(parse_type))),
             opt(ws(preceded(tag("="), ws(parse_default_value)))),
         ),
-        |(name, ty, default)| (name, ty.unwrap_or_else(|| "i64".to_string()), default),
+        |(name, ty, default)| (name, ty.unwrap_or_else(|| "dyn".to_string()), default),
     );
 
     alt((parse_self, parse_star, parse_kw_param, parse_regular)).parse(input)
@@ -254,7 +253,12 @@ pub(crate) fn parse_func(input: &str) -> IResult<&str, AstNode> {
         .map(|(n, t, _)| (n.clone(), t.clone()))
         .collect();
 
-    let (input, ret_opt) = match opt(preceded(ws(tag("->")), ws(parse_type))).parse(input) {
+    let (input, ret_opt) = match opt(preceded(
+        ws(tag("->")),
+        ws(alt((parse_py_quoted_type, parse_type))),
+    ))
+    .parse(input)
+    {
         Ok(r) => r,
         Err(e) => {
             return Err(e);
@@ -770,18 +774,62 @@ fn skip_decorator_lines(input: &str) -> &str {
     }
 }
 
+/// PY-A: quoted forward reference in a return annotation —
+/// `-> "OhlcvRepairReport | None"`. Real Python uses strings for forward
+/// refs; rejecting them aborted `parse_func` and, inside a class body, the
+/// **entire class** (MarketDataFetcher lost every method after the first
+/// quoted `->`). Accept the string and parse its first union arm as the
+/// type; on failure keep the raw name (opaque Named).
+fn parse_py_quoted_type(input: &str) -> IResult<&str, String> {
+    let (input, node) = crate::frontend::parser::expr::parse_primary(input)?;
+    let s = match node {
+        AstNode::StringLit(s) => s,
+        _ => {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+    };
+    let first = s.split('|').next().unwrap_or(&s).trim();
+    if first.is_empty() {
+        return Ok((input, "i64".to_string()));
+    }
+    if let Ok((_, ty)) = parse_type(first) {
+        Ok((input, ty))
+    } else {
+        // Keep a usable type name (`OhlcvRepairReport`) rather than i64 so
+        // later member lookups have something to hang onto.
+        let name: String = first
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        Ok((input, if name.is_empty() { "i64".into() } else { name }))
+    }
+}
+
 pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     let input = skip_decorator_lines(input);
     let (input, _) = ws(terminated(tag("class"), peek(none_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")))).parse(input)?;
     let (input, name) = ws(parse_ident).parse(input)?;
-    // Inheritance bases are not supported — reject explicitly (never fail-open)
-    if let Ok((after, _)) = ws(tag("(")).parse(input) {
-        let _ = after;
-        return Err(nom::Err::Failure(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Tag,
-        )));
-    }
+    // PY-A: inheritance bases (`class A(B):`, `class S(abc.ABC):`) — V1 does
+    // not model MRO, but *rejecting* the `(` used to Failure the whole class
+    // and drop every following top-level def (`market_data_sources.py` lost
+    // `_baostock_login` / `_from_rq_code` / …). Consume the base list and
+    // continue; bases are ignored.
+    let input = if let Ok((after_paren, _)) = ws(tag("(")).parse(input) {
+        match after_paren.find(')') {
+            Some(idx) => &after_paren[idx + 1..],
+            None => {
+                return Err(nom::Err::Failure(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Tag,
+                )));
+            }
+        }
+    } else {
+        input
+    };
     let (input, _) = ws(tag("{")).parse(input)?;
 
     // Collect methods and __init__
@@ -810,6 +858,18 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                 continue;
             }
         }
+        // PY-A: method decorators (`@staticmethod`, `@property`, …) sit
+        // inside the class body. Skipping them only *before* `class` left
+        // `@staticmethod\n    def f` as the next item — `parse_func` failed,
+        // the whole class aborted, and every method after `__init__` (often
+        // the entire class in real code) was dropped. Consume decorator lines
+        // here; V1 still ignores decorator *semantics* (no call rewriting).
+        let next = skip_decorator_lines(next);
+        let (next, _) = skip_ws_and_comments(next)?;
+        if next.starts_with('}') {
+            cur = next;
+            break;
+        }
         // def method(...) { ... } — reuse parse_func (def alias supported)
         match parse_func(next) {
             Ok((
@@ -819,6 +879,7 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                     params,
                     body,
                     ret,
+                    ret_expr,
                     ..
                 },
             )) => {
@@ -829,7 +890,13 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                         .filter(|(n, _)| n != "self" && n != "&self" && n != "&mut self")
                         .cloned()
                         .collect();
-                    init_stmts = body;
+                    // `__init__` body may have promoted a trailing ExprStmt into
+                    // ret_expr (parse_func); fold it back so field extraction sees it.
+                    let mut init_body = body;
+                    if let Some(re) = ret_expr {
+                        init_body.push(AstNode::ExprStmt { expr: re });
+                    }
+                    init_stmts = init_body;
                 } else {
                     // Python `def m(self, a, b)` → `fn m(&mut self, a, b)`
                     // `self` must be typed as the CLASS, not the literal
@@ -845,13 +912,24 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                     }
                     // An EXPLICIT return annotation wins; the body heuristic only
                     // applies to unannotated methods (the parser marks those "()").
+                    // Include ret_expr so a sole `return "x"` / expression body
+                    // still counts as a string return after parse_func promotion.
                     let ret = if !ret.is_empty() && ret != "()" && ret != "i64" {
                         ret.clone()
-                    } else if body_is_string_return(&body) {
+                    } else if body_is_string_return(&body)
+                        || ret_expr
+                            .as_ref()
+                            .map_or(false, |e| matches!(e.as_ref(), AstNode::StringLit(_)))
+                    {
                         "str".to_string()
                     } else {
                         "i64".to_string()
                     };
+                    // CRITICAL: keep parse_func's ret_expr. A method whose only
+                    // statement is an ExprStmt (`self.d.pop(key)`, `self.x`) has
+                    // that stmt promoted out of `body` into `ret_expr`. Dropping
+                    // it here left `__delitem__` / one-liner methods as empty
+                    // stubs (ret 0) with no MIR for the call.
                     methods.push(AstNode::FuncDef {
                         name: mname,
                         generics: Vec::new(),
@@ -860,7 +938,7 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                         ret,
                         body,
                         attrs: Vec::new(),
-                        ret_expr: None,
+                        ret_expr,
                         single_line: false,
                         doc: String::new(),
                         pub_: false,
@@ -931,11 +1009,15 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                                 // field became i64 and its own
                                 // `self.data.keys()` turned into an undefined
                                 // `_keys`.
+                                // B3: unannotated params are `"dyn"`; treat that
+                                // like the old empty/i64 default so constructor
+                                // call-site field refinement (`dt == "i64"`) still
+                                // upgrades `self.name = s` when `s` is a string.
                                 init_params
                                     .iter()
                                     .find(|(n, _)| n == name)
                                     .map(|(_, ty)| ty.clone())
-                                    .filter(|ty| !ty.is_empty())
+                                    .filter(|ty| !ty.is_empty() && ty != "dyn")
                                     .unwrap_or_else(|| "i64".to_string())
                             }
                             _ => "i64".to_string(),
@@ -1310,6 +1392,7 @@ pub fn parse_zeta(input: &str) -> IResult<&str, Vec<AstNode>> {
     // record: docs/python-syntax.md R1). Brace-style sources pass through
     // unchanged (Ok(None) keeps the original &str so `remaining` slices stay
     // valid).
+    crate::frontend::indent::clear_last_preprocess();
     match crate::frontend::indent::indent_preprocess(input) {
         Ok(Some(processed)) => {
             if let Ok(path) = std::env::var("ZETA_DUMP_PP") {
@@ -1472,6 +1555,13 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
 }
 
 fn parse_zeta_impl(input: &str) -> IResult<&str, Vec<AstNode>> {
+    // C2 recovery is opt-in (`ZETA_PARSE_RECOVER=1`). Default keeps historical
+    // `many0` stop-at-first-error behaviour so official/corpus floors stay green
+    // while C1 line maps still apply to the leftover tail (W1002).
+    if std::env::var("ZETA_PARSE_RECOVER").is_ok() {
+        return parse_zeta_impl_recover(input);
+    }
+
     let (input, _) = skip_ws_and_comments(input)?;
 
     let parse_result = many0(ws(alt((
@@ -1494,4 +1584,128 @@ fn parse_zeta_impl(input: &str) -> IResult<&str, Vec<AstNode>> {
         .collect::<Vec<AstNode>>();
 
     Ok((input, asts))
+}
+
+fn parse_zeta_impl_recover(input: &str) -> IResult<&str, Vec<AstNode>> {
+    let (mut input, _) = skip_ws_and_comments(input)?;
+    let mut asts: Vec<AstNode> = Vec::new();
+
+    loop {
+        let (next, _) = match skip_ws_and_comments(input) {
+            Ok(v) => v,
+            Err(_) => break,
+        };
+        input = next;
+        if input.is_empty() {
+            break;
+        }
+
+        let before_len = input.len();
+
+        match parse_use_statement(input) {
+            Ok((rest, nodes)) => {
+                if rest.len() == before_len {
+                    break;
+                }
+                for n in nodes {
+                    if !matches!(n, AstNode::Skip) {
+                        asts.push(n);
+                    }
+                }
+                input = rest;
+                continue;
+            }
+            Err(_) => {}
+        }
+
+        match parse_top_level_item(input) {
+            Ok((rest, node)) => {
+                if rest.len() == before_len {
+                    break;
+                }
+                if !matches!(node, AstNode::Skip) {
+                    asts.push(node);
+                }
+                input = rest;
+                continue;
+            }
+            Err(_) => {
+                let snippet: String = input.chars().take(48).collect();
+                let base_off =
+                    crate::frontend::indent::remaining_byte_offset(input, "");
+                let line = crate::frontend::indent::original_line_at(base_off, "");
+                eprintln!(
+                    "warning: [W1003] :{line}: skipped unparseable top-level item; \
+                     syncing to next def/class/import/…. Near: '{}'",
+                    snippet.replace('\n', "\\n")
+                );
+                if std::env::var("ZETA_STRICT_PARSE").is_ok() {
+                    return Err(nom::Err::Failure(nom::error::Error::new(
+                        input,
+                        nom::error::ErrorKind::Tag,
+                    )));
+                }
+                let advanced = skip_to_top_level_sync(input);
+                if advanced.len() >= before_len {
+                    break;
+                }
+                input = advanced;
+            }
+        }
+    }
+
+    Ok((input, asts))
+}
+
+/// C2: advance to the next line that looks like a top-level sync point.
+fn skip_to_top_level_sync(input: &str) -> &str {
+    let mut rest = match input.find('\n') {
+        Some(p) => &input[p + 1..],
+        None => return "",
+    };
+    while !rest.is_empty() {
+        let line_end = rest.find('\n').unwrap_or(rest.len());
+        let line = &rest[..line_end];
+        let trimmed = line.trim_start();
+        if is_top_level_sync_line(trimmed) {
+            return rest;
+        }
+        rest = if line_end < rest.len() {
+            &rest[line_end + 1..]
+        } else {
+            ""
+        };
+    }
+    ""
+}
+
+fn is_top_level_sync_line(trimmed: &str) -> bool {
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+        return false;
+    }
+    if trimmed.starts_with('@') {
+        return true;
+    }
+    const PREFIXES: &[&str] = &[
+        "def ", "def\t", "class ", "class\t", "fn ", "fn\t", "import ", "from ",
+        "struct ", "enum ", "impl ", "concept ", "trait ", "type ", "const ",
+        "async def", "async fn", "pub ", "try:", "try ", "with ",
+    ];
+    for p in PREFIXES {
+        if trimmed.starts_with(p) {
+            return true;
+        }
+    }
+    for kw in ["def", "class", "fn", "import", "from", "struct", "enum", "impl"] {
+        if trimmed == kw {
+            return true;
+        }
+        if let Some(rest) = trimmed.strip_prefix(kw) {
+            let c = rest.chars().next().unwrap_or('\0');
+            if c == '(' || c == ':' || c.is_whitespace() {
+                return true;
+            }
+        }
+    }
+    false
 }

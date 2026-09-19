@@ -1,0 +1,14 @@
+// PY-A: Thread(target, args=(...))
+//   Single-element args tuple passed to the thread target.
+// expect: 42
+// expect: 0
+
+from threading import Thread
+
+def work(x):
+    return x + 1
+
+t = Thread(work, args=(41,))
+t.start()
+print(t.join())
+print(t.is_alive())

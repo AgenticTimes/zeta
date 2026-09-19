@@ -50,6 +50,11 @@ cargo build --release
 
 # Run tests
 cargo test
+
+# Three baselines (official + python_style + corpus) → /tmp/zeta_baseline.json
+./tools/run_all.sh
+# Registry ↔ runtime .o symbol check
+./tools/check_registry_symbols.sh
 ```
 
 ### 📝 Zeta by Example

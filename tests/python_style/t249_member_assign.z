@@ -1,0 +1,5 @@
+// PY-A: `f = mod.member` must bind bare calls to the defining module symbol.
+// expect: 7
+import pyalias_strat as _strategy
+initialize = _strategy.initialize
+print(initialize(0))

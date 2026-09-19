@@ -1,0 +1,8 @@
+// PY-A: same-module class alias + cross-module import must link the target.
+// `_LocalPortfolio = LocalBackend` must not become ghost `mod___LocalPortfolio`.
+// expect: 1
+# fixture lives next to this test (python_style/pyalias/)
+from pyalias_shim import _LocalPortfolio as _LP
+
+p = _LP(1)
+print(p.x)

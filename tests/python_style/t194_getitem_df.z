@@ -1,0 +1,26 @@
+// PY-A: 类 `__getitem__` + `df["col"]` —— 下标曾把 struct 当 map（SEGFAULT）；
+//   方法返回类型查找对含 `_` 的限定名误切后缀（`F::__getitem__`→`F::__getitem`）
+//   丢掉 `-> lt(vec, str)`，`c[0]` 走 DictGet 打出 0。
+// expect: 2
+// expect: x
+// expect: y
+// expect: 2
+// expect: x
+from pandas import DataFrame
+
+class F:
+    def __init__(self, d: lt(map, str, vecstr)):
+        self.d = d
+    def __getitem__(self, key) -> lt(vec, str):
+        return self.d[key]
+
+f = F({"code": ["x", "y"]})
+c = f["code"]
+print(len(c))
+print(c[0])
+print(c[1])
+
+a = DataFrame({"code": ["x", "y"]})
+d = a["code"]
+print(len(d))
+print(d[0])

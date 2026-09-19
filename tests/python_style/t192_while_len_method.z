@@ -1,0 +1,15 @@
+// PY-A: `while j < len(xs)` 在 xs 来自方法返回值时，曾把 array_len 塞进 body，
+//   而 while.cond 读未初始化槽 ⇒ 循环永不进入。修法：While.pre_cond，在 cond 块先跑。
+// expect: 2
+class F:
+    def items(self):
+        return ["a", "b"]
+
+f = F()
+xs = f.items()
+j = 0
+n = 0
+while j < len(xs):
+    n = n + 1
+    j = j + 1
+print(n)

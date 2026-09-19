@@ -1,0 +1,23 @@
+// PY-A: 同类方法内 `self.other()` 返回 lt(vec, str) 时，调用方须带 DynamicArray
+//   元素类型；否则 xs[0] 走 map_get 得 0（批次一百零五根因 / 一百零六修）。
+// expect: a
+// expect: a
+// expect: code
+// expect: x
+
+class C:
+    def names(self) -> lt(vec, str):
+        return ["a", "b"]
+    def first(self) -> str:
+        xs = self.names()
+        return xs[0]
+
+c = C()
+print(c.first())
+print(c.names()[0])
+
+from pandas import DataFrame
+a = DataFrame({"code": ["x", "y"], "v": ["1", "2"]})
+print(a.column_names()[0])
+h = a.head(1)
+print(h["code"][0])

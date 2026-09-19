@@ -178,10 +178,15 @@ pub fn substitute_stmt(stmt: &MirStmt, substitution: &Substitution) -> MirStmt {
         },
         MirStmt::While {
             cond,
+            pre_cond,
             body,
             else_body,
         } => MirStmt::While {
             cond: *cond,
+            pre_cond: pre_cond
+                .iter()
+                .map(|s| substitute_stmt(s, substitution))
+                .collect(),
             body: body
                 .iter()
                 .map(|s| substitute_stmt(s, substitution))

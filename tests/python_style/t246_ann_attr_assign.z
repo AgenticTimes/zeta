@@ -1,0 +1,20 @@
+// PY-A: annotated attribute assignment `self.x: T = v` must parse.
+// Without it, PositionLedger/LocalBackend are silently dropped.
+// expect: 2
+class PositionLedger:
+    def __init__(self):
+        self._positions: dict[str, float] = {}
+        self._today_buys: set[str] = set()
+        self._current_date: str | None = None
+        self.n = 2
+
+class LocalBackend:
+    def __init__(self):
+        self._current_date: str | None = None
+        self.x = 2
+    def execute_trade(self, security: str, amount: float, price: float) -> None:
+        return
+
+b = LocalBackend()
+pl = PositionLedger()
+print(b.x)

@@ -1,0 +1,7 @@
+// PY-A: DataFrame.where 列映射表达不了行 mask —— 必须响亮失败（链接缺符号），
+// 不得走 zeta_identity 静默成 i64。
+// expect-error
+from pandas import DataFrame
+
+a = DataFrame({"c": ["x", "y"]})
+print(a.where(a))

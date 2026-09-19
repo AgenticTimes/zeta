@@ -1,0 +1,26 @@
+// PY-A: DataFrame.empty / .columns 属性 —— 缺字段曾 FieldAccess 读垃圾指针，
+//   `not df.empty` 恒假（静默错控制流）；零参方法作属性分派 + 库端实现。
+// expect: 0
+// expect: ok
+// expect: 1
+// expect: empty
+// expect: 1
+// expect: code
+from pandas import DataFrame
+
+a = DataFrame({"code": ["x", "y"]})
+print(a.empty)
+if not a.empty:
+    print("ok")
+else:
+    print("blocked")
+
+b = DataFrame({})
+print(b.empty)
+if b.empty:
+    print("empty")
+else:
+    print("full")
+
+print(len(a.columns))
+print(a.columns[0])

@@ -1,0 +1,12 @@
+// PY-A: class inheritance bases are consumed (V1 ignores MRO) so the class
+// and following defs still parse — REasyQuant `class S(abc.ABC)`.
+// expect: 7
+class Base:
+    def g(self):
+        return 1
+
+class S(Base):
+    def f(self):
+        return 7
+
+print(S().f())

@@ -71,20 +71,26 @@ use zetac::runtime::actor::scheduler;
 fn ensure_fully_parsed(
     remaining: &str,
     source: &str,
+    path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let leftover = remaining.trim_start_matches(|c: char| c.is_whitespace());
     if leftover.is_empty() {
         return Ok(());
     }
-    // The leftover is a suffix of the PREPROCESSED text, which may differ in
-    // length from `source` (the indent pass rewrites headers and appends
-    // closing braces), so do NOT report an absolute source line — it would be
-    // wrong. Report the size of the dropped tail plus the text it starts at.
-    let _ = source;
+    // C1: map remaining suffix → original source line via indent preprocess table.
+    let base_off = zetac::frontend::indent::remaining_byte_offset(remaining, source);
+    let trim = remaining.len() - leftover.len();
+    let byte_off = base_off + trim;
+    let line = zetac::frontend::indent::original_line_at(byte_off, source);
     let left = leftover.lines().count();
     let snippet: String = leftover.chars().take(60).collect();
+    let loc = if path.is_empty() {
+        format!("{line}:")
+    } else {
+        format!("{path}:{line}:")
+    };
     let msg = format!(
-        "{left} line(s) at the end of the input were NOT parsed, so everything \
+        "{loc} {left} line(s) at the end of the input were NOT parsed, so everything \
          from the text below onward is DROPPED from the program (parse stops at \
          the first top-level item it cannot handle). First unparsed text: '{}'",
         snippet.replace('\n', "\\n")
@@ -145,6 +151,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args: Vec<String> = std::env::args().collect();
     let dump_mir = args.iter().any(|a| a == "--dump-mir");
+    // Q1 (advice.md): IR dump only when requested — default compiles stay quiet.
+    let dump_ir = args.iter().any(|a| a == "--emit-llvm")
+        || std::env::var("ZETA_DUMP_IR").is_ok();
+
+    // D3/D4: stub inventory = registry stub=1 ∪ pylib `# stub:` markers.
+    if args.iter().any(|a| a == "--list-stubs") {
+        let stubs = zetac::middle::pylib::all_stub_symbols();
+        let reg_n = zetac::middle::pylib::stub_symbols().len();
+        let file_n = zetac::middle::pylib::pylib_file_stubs().len();
+        println!(
+            "Zeta stubs ({} = registry {} + pylib {}):",
+            stubs.len(),
+            reg_n,
+            file_n
+        );
+        for s in &stubs {
+            println!("  {}", s);
+        }
+        return Ok(());
+    }
+
+    // B1: strict ABI matrix — also accepted as env ZETA_STRICT_ABI=1.
+    let strict_abi = args.iter().any(|a| a == "--strict-abi")
+        || std::env::var("ZETA_STRICT_ABI").is_ok();
+    // B3: print unannotated (dyn) params after register.
+    let report_untyped = args.iter().any(|a| a == "--report-untyped");
 
     // Handle --explain flag: print error code explanation
     if let Some(pos) = args.iter().position(|a| a == "--explain") {
@@ -207,6 +239,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "--dump-mir" => {}
+            "--emit-llvm" => {} // handled via dump_ir; keep arg from becoming "input"
+            "--list-stubs" => {} // handled early; keep from becoming "input"
+            "--strict-abi" => {} // handled early; keep from becoming "input"
+            "--report-untyped" => {} // handled via flag; keep from becoming "input"
             "--features" => {
                 i += 1;
                 if i < args.len() {
@@ -235,7 +271,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let result = parse_zeta(code);
         match result {
             Ok((remaining, asts)) => {
-                ensure_fully_parsed(remaining, code)?;
+                ensure_fully_parsed(remaining, code, &file)?;
                 // Run CTFE evaluation on parsed ASTs
                 let asts = match zetac::middle::const_eval::evaluate_constants(&asts) {
                     Ok(ctfe_asts) => {
@@ -284,9 +320,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for ast in &expanded_asts {
                     resolver.register(ast.clone());
                 }
-                // PY-A: untyped functions default to i64; infer string/float
+                // PY-A: untyped functions default to dyn (B3); infer string/float
                 // returns so call sites are typed correctly.
                 resolver.infer_untyped_returns(&expanded_asts);
+
+                if report_untyped {
+                    let list = resolver.report_untyped_params();
+                    println!("untyped params ({}):", list.len());
+                    for (f, p) in &list {
+                        println!("  {}.{}", f, p);
+                    }
+                }
 
                 // Use expanded ASTs for typechecking
                 let _typecheck_asts = &expanded_asts;
@@ -386,8 +430,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let context = Context::create();
                 let mut codegen = LLVMCodegen::new(&context, "module");
+                if strict_abi {
+                    codegen.strict_abi = true;
+                }
                 codegen.gen_mirs(&all_mirs);
-                codegen.module.print_to_stderr();
+                codegen.report_abi_coercions();
+                if let Some(msg) = codegen.abi_fatal.take() {
+                    return Err(msg.into());
+                }
+                if dump_ir {
+                    codegen.module.print_to_stderr();
+                }
 
                 if let Some(out) = output {
                     let obj_path = format!("{}.o", out);
@@ -515,7 +568,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let code = fs::read_to_string("examples/selfhost.z")?;
         let (remaining, asts) = parse_zeta(&code)
             .map_err(|e| format!("Parse error: {:?}", e))?;
-        ensure_fully_parsed(remaining, &code)?;
+        ensure_fully_parsed(remaining, &code, "examples/selfhost.z")?;
 
         let mut resolver = Resolver::new();
         for ast in &asts {

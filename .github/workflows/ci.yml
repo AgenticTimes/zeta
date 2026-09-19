@@ -81,3 +81,33 @@ jobs:
           echo "hyperfine not available - skipping"
         echo "=== Self-host compilation ==="
         time ./target/release/zetac ./zeta_src/main.z 2>&1
+
+  # advice.md 任务 L：三套基线进 CI（Q4 run_all.sh）
+  baselines:
+    runs-on: [self-hosted, galaxy, wsl2, x86-64]
+    needs: test
+    steps:
+    - uses: actions/checkout@v4
+    - name: Ensure generated registry artifacts are fresh
+      run: |
+        python3 tools/gen_from_registry.py --emit --emit-core --emit-jit --emit-aliases
+        git diff --exit-code -- \
+          src/backend/codegen/runtime_decls_registry.rs \
+          src/backend/codegen/runtime_decls_core.rs \
+          src/backend/codegen/jit_mappings_gen.rs \
+          runtime/aliases.inc.c
+    - name: Build release zetac
+      run: cargo build --release -p zetac
+    - name: Registry ↔ runtime .o nm check
+      run: python3 tools/gen_from_registry.py --check
+    - name: Run three-suite baselines
+      run: |
+        mkdir -p artifacts
+        OUT_JSON="$PWD/artifacts/zeta_baseline.json" ./tools/run_all.sh
+    - name: Upload baseline JSON
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: zeta-baseline
+        path: artifacts/zeta_baseline.json
+        if-no-files-found: warn

@@ -54,6 +54,10 @@ pub struct LLVMCodegen<'ctx> {
     pub struct_defs: std::collections::HashMap<String, Vec<String>>,
     /// Monotonic counter for unique spawn thunk wrapper names
     pub spawn_counter: u32,
+    /// B1: `--strict-abi` / `ZETA_STRICT_ABI=1`
+    pub strict_abi: bool,
+    pub abi_warn_count: u32,
+    pub abi_fatal: Option<String>,
 }
 
 impl<'ctx> LLVMCodegen<'ctx> {
@@ -1296,6 +1300,20 @@ impl<'ctx> LLVMCodegen<'ctx> {
             current_type_map: None,
             struct_defs: std::collections::HashMap::new(),
             spawn_counter: 0,
+            strict_abi: std::env::var("ZETA_STRICT_ABI").is_ok(),
+            abi_warn_count: 0,
+            abi_fatal: None,
+        }
+    }
+
+    /// B1: print coerce summary when any non-allowlisted cast fired.
+    pub fn report_abi_coercions(&self) {
+        if self.abi_warn_count > 0 {
+            eprintln!(
+                "warning: ABI coerce: {} non-allowlisted cast(s) \
+                 (narrow/fptosi/float↔ptr); set ZETA_STRICT_ABI=1 to fail",
+                self.abi_warn_count
+            );
         }
     }
 }
@@ -1654,11 +1672,15 @@ impl<'ctx> LLVMCodegen<'ctx> {
             }
             MirStmt::While {
                 cond,
+                pre_cond,
                 body,
                 else_body,
             } => {
                 if let Some(e) = exprs.get(cond) {
                     self.collect_ids_from_expr_safe(e, ids, exprs);
+                }
+                for s in pre_cond {
+                    self.collect_ids_from_stmt_safe(s, ids, exprs);
                 }
                 for s in body {
                     self.collect_ids_from_stmt_safe(s, ids, exprs);
@@ -2918,10 +2940,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
             }
             MirStmt::While {
                 cond,
+                pre_cond,
                 body,
                 else_body,
             } => {
-                // Recursively substitute in loop body
+                let substituted_pre: Vec<MirStmt> = pre_cond
+                    .iter()
+                    .map(|stmt| self.substitute_stmt(stmt, substitution))
+                    .collect();
                 let substituted_body: Vec<MirStmt> = body
                     .iter()
                     .map(|stmt| self.substitute_stmt(stmt, substitution))
@@ -2933,6 +2959,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
                 MirStmt::While {
                     cond: *cond,
+                    pre_cond: substituted_pre,
                     body: substituted_body,
                     else_body: substituted_else,
                 }
@@ -3030,10 +3057,15 @@ impl<'ctx> LLVMCodegen<'ctx> {
             },
             MirStmt::While {
                 cond,
+                pre_cond,
                 body,
                 else_body,
             } => MirStmt::While {
                 cond: *cond,
+                pre_cond: pre_cond
+                    .iter()
+                    .map(|s| self.substitute_stmt(s, substitution))
+                    .collect(),
                 body: body
                     .iter()
                     .map(|s| self.substitute_stmt(s, substitution))
@@ -4585,6 +4617,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
             }
             MirStmt::While {
                 cond,
+                pre_cond,
                 body,
                 else_body,
             } => {
@@ -4616,8 +4649,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     .build_unconditional_branch(loop_cond_bb)
                     .unwrap();
 
-                // Generate condition block
+                // Generate condition block — run pre_cond first so side
+                // effects of the condition (len/calls) refresh the slot.
                 self.builder.position_at_end(loop_cond_bb);
+                for s in pre_cond {
+                    self.gen_stmt(s, exprs);
+                }
                 let cond_i64 = self.gen_expr_safe(cond, exprs).into_int_value();
                 let cond_i1 = self
                     .builder
@@ -6153,13 +6190,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
     }
 
     /// Coerce call arguments to the callee's declared parameter types.
-    /// Fixes "Call parameter type does not match" errors when an i64 value
-    /// (e.g. a u8 produced by a trunc) is passed to a function expecting i64.
-    fn coerce_call_args<'a>(
-        &self,
+    /// B1 matrix: widen/sitofp allow; narrow/fptosi/float↔ptr warn (+fatal if strict).
+    fn coerce_call_args(
+        &mut self,
         callee: inkwell::values::FunctionValue<'ctx>,
         args: Vec<BasicMetadataValueEnum<'ctx>>,
     ) -> Vec<BasicMetadataValueEnum<'ctx>> {
+        let callee_name = callee
+            .get_name()
+            .to_str()
+            .unwrap_or("<unknown>")
+            .to_string();
         let fn_type = callee.get_type();
         let n_params = fn_type.count_param_types() as usize;
         let mut result = Vec::with_capacity(args.len());
@@ -6169,7 +6210,6 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 continue;
             }
             let param_ty = fn_type.get_param_types()[i];
-            // Convert BasicMetadataTypeEnum → BasicTypeEnum (panics on MetadataType)
             let param_basic: inkwell::types::BasicTypeEnum<'ctx> = match param_ty {
                 inkwell::types::BasicMetadataTypeEnum::IntType(t) => t.into(),
                 inkwell::types::BasicMetadataTypeEnum::FloatType(t) => t.into(),
@@ -6192,6 +6232,15 @@ impl<'ctx> LLVMCodegen<'ctx> {
                             Err(_) => result.push(BasicMetadataValueEnum::IntValue(iv)),
                         }
                     } else if arg_ty.get_bit_width() > pt.get_bit_width() {
+                        self.abi_note(
+                            &callee_name,
+                            i,
+                            &format!(
+                                "narrow i{}→i{}",
+                                arg_ty.get_bit_width(),
+                                pt.get_bit_width()
+                            ),
+                        );
                         match self.builder.build_int_truncate(iv, pt, "arg_trunc") {
                             Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
                             Err(_) => result.push(BasicMetadataValueEnum::IntValue(iv)),
@@ -6207,22 +6256,26 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     }
                 }
                 (BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => {
+                    self.abi_note(
+                        &callee_name,
+                        i,
+                        &format!("fptosi → i{}", pt.get_bit_width()),
+                    );
                     match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") {
                         Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
                         Err(_) => result.push(BasicMetadataValueEnum::FloatValue(fv)),
                     }
                 }
+                (BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_))
+                | (BasicMetadataValueEnum::PointerValue(_), inkwell::types::BasicTypeEnum::FloatType(_)) => {
+                    self.abi_note(&callee_name, i, "float↔ptr (forbidden)");
+                    result.push(arg);
+                }
                 _ => result.push(arg),
             }
         }
-        // PY-A: arity adaptation — when the call site passes more/fewer args
-        // than the callee declares (Python *args stubs, optional params),
-        // pad with zeros / truncate instead of emitting an invalid call that
-        // fails module verification.
         if result.len() < n_params {
             for i in result.len()..n_params {
-                // Convert via BasicTypeEnum (From<BasicValueEnum> covers the
-                // metadata variants we need — same as push pattern above).
                 let pt_meta = fn_type.get_param_types()[i];
                 let zero: BasicMetadataValueEnum<'ctx> = match pt_meta {
                     inkwell::types::BasicMetadataTypeEnum::FloatType(t) => {
@@ -6247,6 +6300,22 @@ impl<'ctx> LLVMCodegen<'ctx> {
             result.truncate(n_params);
         }
         result
+    }
+
+    fn abi_note(&mut self, callee: &str, arg_i: usize, kind: &str) {
+        self.abi_warn_count = self.abi_warn_count.saturating_add(1);
+        if self.abi_warn_count <= 8 {
+            eprintln!(
+                "warning: ABI coerce in call to `{}` arg[{}]: {}",
+                callee, arg_i, kind
+            );
+        }
+        if self.strict_abi && self.abi_fatal.is_none() {
+            self.abi_fatal = Some(format!(
+                "strict-abi: forbidden coerce in `{}` arg[{}]: {}",
+                callee, arg_i, kind
+            ));
+        }
     }
 
     /// Convert a Zeta type to an LLVM type
@@ -6591,6 +6660,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Type::I16 => self.context.i16_type().into(),
             Type::I32 => self.context.i32_type().into(),
             Type::I64 => self.context.i64_type().into(),
+            Type::PyDynamic => self.context.i64_type().into(), // B3: ABI = i64
             Type::U8 => self.context.i8_type().into(),
             Type::U16 => self.context.i16_type().into(),
             Type::U32 => self.context.i32_type().into(),

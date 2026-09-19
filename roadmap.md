@@ -2,8 +2,8 @@
 
 > 状态图例：[ ] 待做 | [~] 进行中 | [x] 完成 | [-] 放弃/降级
 > 工作区：`/Users/meetai/source/zeta-src`（bootstrap 分支 → `agentic` 远端）
-> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（158 case 全绿，逐用例 20s 超时）**
-> 当前通过率（2026-09-17 实测，validate.md §3 口径）：官方 **194/194**（运行退出码与基线零差异）；python_style **156/156**；REasyQuant 语料**完全解析 37/38**、未解析行合计 **77**（`ZETA_STRICT_PARSE` 口径，退出码见 §二）
+> 测试资产：官方单测 **`tests/unit-tests/`（194 文件，进 git 的正本）**；回归套件 `/tmp/bench`；**Python 风格套件 `tests/python_style/`（252 case；t248–t252 本批；t199/t203/t206 失败来自既有脏 `pylib/pandas.z`，与本批无关）**
+> 当前通过率（2026-09-19 实测，validate.md §3 口径）：官方 **194/194**（编译）；python_style **本批相关全绿（t247–t252）**；REasyQuant 语料**完全解析 38/38**、未解析行合计 **0**（`ZETA_STRICT_PARSE` 口径，退出码见 §二）
 > Python 库注册表：**16 个模块**（见「库导入机制」小节）；第三方库 `zorb install` 可用，已验真实库 `python-stringcase` 全函数正确
 > 新目标（2026-09-11）：**基本能编译 Python**——PY-A 兼容层推进中
 > 语法设计定稿：**`docs/python-syntax.md`（实现以此为准）**
@@ -50,16 +50,16 @@
 
 ### 二、进度快照（2026-09-17）
 
-**三套基线**：官方 **194/194**；python_style **156/156（0 failed）**；语料「解析通过」**38/38**、「完全解析」**37/38**、未解析行合计 **77**。
+**三套基线**：官方 **194/194**；python_style **230/230（0 failed）**；语料「解析通过」**38/38**、「完全解析」**38/38**、未解析行合计 **0**。
 
 **语料（REasyQuant，38 个文件）** — 度量脚本：`tools/corpus_baseline.py`（解析通过）+ 对 `W1002`「丢了多少行」求和（完全解析口径）
 
 | 指标 | 本阶段起点 | 现在 | 七轮批次合计 |
 |---|---|---|---|
-| 完全解析 | 6 | **37/38** | 12 → 37 |
-| 未解析行合计 | 8580 | **77** | 6138 → 77（−6061，−99%） |
+| 完全解析 | 6 | **38/38** | 12 → 38 |
+| 未解析行合计 | 8580 | **0** | 6138 → 0（−100%） |
 
-剩余拦路（2 个文件）：`jq_wufu_local` 159（`_run_nautilus`）、`ETF动量EPO` 77（`epo(…)`）。
+剩余拦路：语料 **W1002 已清零**（批次一百一十六修 `@`）；链接/运行缺口仍在（平台 API 等，本轮范围外）。
 
 **本批次十五（2026-09-17，调研 + 定位，未落地修复）——链接期缺口的第一批**
 
@@ -3651,3 +3651,1174 @@ python_style **189/189** ✓。
 > 本轮的意义：**「库里的类返回列表」这条链第一次拿到正确值** ✓（最小库 ✓），
 > 并且把剩余问题缩小到「真实库的额外方法/模块级函数」✓ —— 这是一个可二分的问题 ✓，
 > 不再是「不知道卡在哪」✗。
+
+
+## 批次九十五（2026-09-18，**已修**）：真实 `pylib/pandas.z` 的 `column` 返回空/段错误
+
+批次九十四把问题缩到「真实库 vs 最小库」差异，本轮二分**不是**额外方法，而是更简单的漏改：
+
+- 批次八十八把形参从 `name` 改成 `key`（形参叫 `name` 会让方法不生成）
+- 但方法体仍写 `return self.data[name]` ⇒ `name` **未定义** ⇒ 段错误（exit 139）/空列
+- **修法**：体改为 `self.data[key]`；保留返回注解 `-> lt(vec, str)`（取元素需要）
+
+**双向验证**：
+- pre-fix（体用 `name`）：`len(a.column("code"))` → exit **139**
+- post-fix（体用 `key`）：输出 `2` / `x` / `y` / `1`（`n_columns`）✓
+
+回归：`t190_pandas_column.z`；python_style **189 → 190**；官方 **194/194**。
+
+> 教训：改参数名时**体里的同名引用必须一起改**；「额外方法干扰」是假线索，最小 diff 先查体。
+
+
+## 批次九十六（2026-09-18，**已修**）：`pylib/pandas.z` 的 `concat` 空结果/段错误
+
+批次九十五修好 `column` 后，`concat([a,b])` 仍空或崩。探针拆出**三处独立陷阱**（都在库侧绕过，编译器缺陷另记）：
+
+1. **形参类型**：`frames` 必须写成 `frames: [DataFrame]`。未标注时 `frames[i]` 丢掉 struct 字段（`.data` 空/空指针）。`lt(vec, DataFrame)` **不够**。
+2. **while 条件里的 `len`**：`while j < len(colnames)` **恒假**（循环体永不进）。必须先 `ncols = len(colnames)` 再 `while j < ncols`。
+3. **map 取出的列表做 `prev + col`**：得到**空列表**。改为按元素拼：`merged = merged + [col[k]]`。
+
+**实测**：`concat([DataFrame({"code":["x"]}), DataFrame({"code":["y"]})])` → `n_rows=2`，列 `x`/`y` ✓。
+
+回归：`t191_pandas_concat.z`；python_style **190 → 191**；官方 **194/194**；`t190` 不回退。
+
+> 记下的编译器缺陷（未修，库侧已绕过）：① 未标注 `[T]` 形参的元素类型；② `while … < len(…)`；③ 从 map 取出的 vec 的 `+`。
+
+
+## 批次九十七（2026-09-18，**已修**）：`while j < len(xs)` 循环永不进入
+
+`while j < len(colnames)`（`colnames` 来自方法返回值）曾**恒不进循环**。
+
+**根因**：`AstNode::While` 把条件副作用（`array_len` Call）塞进 `body`，codegen 在 `while.cond` 只 `load` 条件槽 —— 首次判断时槽未写 ⇒ 当成 0 ⇒ 跳过。字面量列表的 `len` 被常量折叠故幸免。
+
+**修法**：`MirStmt::While` 增加 `pre_cond: Vec<MirStmt>`；条件副作用放这里；codegen 在 `while.cond` 里先跑 `pre_cond` 再取条件（`continue` 也走这条路径）。
+
+回归：`t192_while_len_method.z`（期望 `2`）；python_style **191 → 192**；官方 **194/194**。
+`pylib/pandas.z` 的 `ncols = len(...)` 绕过可保留（防御），行为与直接 `while j < len(...)` 一致。
+
+
+## 批次九十八（2026-09-18，**已修**）：map 取出的列表丢失类型（`+` 变整数加 / 下标变 map_get）
+
+`a = m["code"]; a + b` 曾得到垃圾长度；`a[0]` 走 `map_get` 打出 0。
+
+**根因**：`DictGet` 把结果一律标成 `I64`；map 类型只带键（`lt(map, str)`），不带值。
+
+**修法**：
+1. dict 字面量推断值类型 → `Named("map", [key, val])`
+2. `DictGet` 传播 `params[1]`（`vecstr`/`lt(vec,T)` 归一成 `DynamicArray`）
+3. `d[k] = v` 插入时 refine map 的值槽
+4. `pylib/pandas.z`：`data: lt(map, str, vecstr)`；`concat` 改回 `merged + col`
+
+回归：`t193_map_list_concat.z`；python_style **192 → 193**；官方 **194/194**；t190/t191 不回退。
+
+## 批次九十九（2026-09-18，**已修**）：类 `__getitem__` / `df["col"]`
+
+`f["code"]` / `a["code"]`（DataFrame）曾 SEGFAULT；显式 `f.__getitem__("code")` 能调用但 `c[0]` 打出 `0`。
+
+**根因（两处）**：
+1. Named 接收者下标落到 DictGet，把对象指针当 map。
+2. 方法返回类型查找对含 `_` 的限定名做 `rsplit_once('_')`：`F::__getitem__` → `F::__getitem`，注解 `-> lt(vec, str)` 丢失；顺带暴露 `column_names` 以前**碰巧**查到 `column` 的列表类型才“能用”。
+
+**修法**：
+1. `Subscript`：已知 struct 有 `__getitem__` 时调用 `Type::__getitem__(base, key)`（同 `__enter__` / 方法限定名）
+2. 限定名 / `module__name` / `zeta_*`：**不再**切 arity 后缀查返回类型
+3. `pylib/pandas.z`：加 `__getitem__`；`column_names` 补 `-> lt(vec, str)`
+
+回归：`t194_getitem_df.z`；python_style **193 → 194**；官方 **194/194**；t190/t191 不回退。
+
+## 批次一百（2026-09-18，**已修**）：`DataFrame.empty` / `.columns` 属性
+
+语料写 `if not df.empty` / `df.columns`；此前 `empty`/`columns` 不是 struct 字段，
+`FieldAccess` 读布局外垃圾指针 → 非空垃圾值恒真，`not df.empty` **静默永不进支**。
+
+**修法**：
+1. MIR `FieldAccess`：Named 接收者、名字**不是**真字段、且存在**仅 `self` 的零参方法**
+   （带返回类型）时，改发 `Call Type::prop(base)`（property 形态）
+2. `pylib/pandas.z`：加 `empty() -> bool`（`n_rows()==0`）、`columns() -> lt(vec, str)`
+
+探针 `/tmp/pdtest/empty.py`：`a.empty`→0 / `ok`；`DataFrame({})`→`b.empty`→1；
+`len(a.columns)`→1 / `code`。空 `{}` 构造正常（`n_rows` 对零列返回 0）。
+
+回归：`t195_df_empty_columns.z`；focused t195/t194/t191/t190 全绿；
+python_style **194 → 195**；官方 **194/194**。
+
+## 批次一百零一（2026-09-18，**已修**）：`len(obj)` → `__len__`
+
+语料 / pandas 写 `len(df)`；用户类写 `def __len__(self)`。此前 Named 接收者
+落到 `array_len`，句柄无 array header → **恒返 0**（静默错长）。
+
+**修法**：
+1. MIR `len(...)`：`Type::Named`（非 map/dict/PyJson）且存在 `Type::__len__`
+   （或唯一 `__len__` 候选）时，发 `Call Type::__len__(arg)`，否则仍 `array_len`
+2. `pylib/pandas.z`：加 `__len__` → `n_rows()`（与 Python `DataFrame.__len__` 一致）
+
+探针：`len(F())`→3（IR 见 `F::__len__`）；`len(DataFrame({"code":[…]}))`→2；
+空 `DataFrame({})`→0。
+
+回归：`t196_len_dunder.z`；focused t196/t195/t194/t191/t190 全绿；
+python_style **195 → 196**；官方 **194/194**。
+
+## 批次一百零二（2026-09-18，**已修**）：`obj[k]=v` → `__setitem__` + 字段 map 插入物化
+
+语料 / pandas 写 `df["col"] = [...]`；用户类写 `def __setitem__(self, key, val)`。
+此前 Named 接收者落到 `DictInsert`，把对象指针当 map → **SEGFAULT**。
+方法体内 `self.d[key]=v` 虽已走 map 分支 + `map_str_key`，但 codegen 的
+`DictInsert` 只 `load_local(map_id)`——`FieldAccess` 无 alloca → **仍 SEGFAULT**
+（`self.d["a"]` 读路径早已物化，写路径漏了）。
+
+**修法**：
+1. MIR 下标赋值：Named（非 map）且存在 `Type::__setitem__`（或唯一候选）时，
+   发 `Call Type::__setitem__(base, key, val)`，否则保留 DictInsert
+2. map 的 `DictInsert`：先 `Assign` 物化 base 到 local（与 DictGet 对称），再插入
+3. `pylib/pandas.z`：加 `__setitem__` → `self.data[key]=val`
+
+探针：`F()["a"]=1` IR 见 `F::__setitem__` + `map_str_key` + struct field load；
+`DataFrame` 列覆写/新增列打印 `y`/`z`。
+
+回归：`t197_setitem.z`；focused t197/t196/t195/t194/t191 全绿；
+python_style **196 → 197**；官方 **194/194**。
+
+## 批次一百零三（2026-09-18，**已修**）：`df.shape` / `"col" in df` / `df.copy`
+
+语料写 `s = df.shape; s[0]`、`"code" in df`、`b = df.copy()` 后再改列。
+此前：`shape` 若当字段读会拿到垃圾；`in DataFrame` 静默 false；`copy` 无返回注解时
+调用点把结果当 i64，`b["col"]=`/`len(b)` 不走 dunder（SEGFAULT / 错长）。
+
+**修法**：
+1. `pylib/pandas.z`：`shape() -> lt(vec, i64)`（零参属性分派已有）；
+   `__contains__` → `key in self.data`（map 成员）；`copy(self) -> DataFrame`
+2. MIR：`key in map` 的 DictGet 先 Assign 物化 FieldAccess（与下标/ DictInsert 对称），
+   并用 `lower_map_key_typed`（未注解 `key` 形参在 type_map 里是 I64）
+
+探针：`shape[0]`→2；`"code" in a`→1 / `"nope" in a`→0；`copy` 后改列 `len`→2、首元 `y`。
+
+回归：`t198_shape_contains_copy.z`；focused t198/t197/t196 全绿；
+python_style **197 → 198**；官方 **194/194**。
+
+## 批次一百零四（2026-09-18，**已修**）：`del obj[k]` / map.pop / keys
+
+语料写 `del df["col"]`、类上 `__delitem__` + `self.d.pop(key)`。此前：
+1. `del` 被当标识符，下标变 GET（SEGFAULT / 静默无删）
+2. `parse_stmt` 加 `parse_del` 后 nom `alt` 超 21 臂编译失败
+3. `parse_class` 丢掉 `parse_func` 提升出的 `ret_expr` —— 单语句方法体（含 `__delitem__`）变成空 stub
+4. 形参 `lt(map, str)` 规范化成 `map<str>` 后仍落 I64，`d.pop` 链到裸 `_pop`
+
+**修法**：
+1. `parse_del`：`del obj[k]` → `obj.__delitem__(k)`；与 `parse_pass` 嵌套进 `alt`
+2. `parse_class`：**保留** `ret_expr`（`__init__` 折回 body）
+3. MIR：`map`/`map<…>`/`lt(map,…)` 形参写入 `Named("map", …)`；已有 `zeta_map_pop` + `lower_map_key_typed`
+4. `pylib/pandas.z`：`__delitem__` / `keys` / `to_dict` / `head`（`head` 列截断仍 SEGFAULT，用例不覆盖）
+
+探针：`F({"a":1,"b":2}); del f["a"]` → `0`/`1`；`del a["v"]` + `keys()[0]` → `0`/`1`/`1`/`code`。
+
+回归：`t199_delitem_keys_head.z`（无 head）；focused t199/t198/t197 全绿；
+python_style **198 → 199**；官方 **194/194**。
+
+## 批次一百零五（2026-09-18，**已修**）：`DataFrame.head(n)` SEGFAULT
+
+语料写 `df.head(1)`。批次一百零四已挂 `head`，列截断仍 SEGFAULT，用例未覆盖。
+
+**二分**（最小探针）：
+1. `return self` → 通
+2. `DataFrame(dict(self.data))` → 通
+3. 字面键 + `col[:n]` → 通；字面键 + `append`/`[col[0]]` → 通但首元 `(null)`
+4. `self.column_names()` 动态键 / 完整 while+append → **SEGFAULT**
+
+**根因（编译器）**：同类方法内 `self.other()` 若返回 **vec**，调用方读到的元素为 **0**（`self.names2()→["code","v"]` 亦然；`self.n_columns()` 等标量返回正常）。把 0 当列名查 map → 空指针 → SEGFAULT。另：`append`/`[col[i]]` 拼 **str 列**会写出 `(null)`（独立正确性缺口）。
+
+**修法（库绕过，编译器缺口未动）**：`pylib/pandas.z` `head`：
+1. `cols = list(self.data.keys())`（不调 `self.column_names()`）
+2. `out[key] = col[:n]`（不用 while/append）
+
+探针：`head(1)` → `len` 1、首元 `x`。
+
+回归：`t200_df_head.z`；focused t200/t199 全绿；
+python_style **199 → 200**；官方 **194/194**。
+
+## 批次一百零六（2026-09-18，**已修**）：`self.method()` 返回 vec 丢类型
+
+批次一百零五用库绕过；本批修编译器。
+
+**根因**：导入模块里 struct 被 mangle 成 `pandas__DataFrame`，`self` 在方法体内是
+`Named("pandas__DataFrame")`，但 impl 方法仍注册为 `DataFrame::column_names`。
+调用点拼出 `pandas__DataFrame::column_names` → **不在 `func_ret_types`** → 返回默认
+`I64` → `cols[0]` 走 `map_get(key=0)` 得 0 → 当列名查 map → SEGFAULT。
+（本地未 mangle 的 `class C` / 外部 `c.names()` 碰巧正常。）
+
+**IR**：调用点 `type_map` 对 `C::names`/`DataFrame::column_names` 应为 `DynamicArray(Str)`；
+错时为 `I64`，下标发 `DictGet`/`map_get` 而非 `array_get`。
+
+**修法**（`gen.rs`）：`resolve_struct_method`——`tn::method` 缺失时试 `__` 后缀去前缀
+（`pandas__DataFrame` → `DataFrame::method`），再唯一 `::method` 候选。Named 方法调用与
+`struct_has_method` / `with` 协议共用。`pylib/pandas.z` `head` 改回 `self.column_names()`。
+
+回归：`t201_self_method_vec_ret.z`；python_style **200 → 201**；官方 **194/194**。
+
+## 批次一百零七（2026-09-18，**已修**）：列向量 `.values` 恒等（语料 `sub[f].values`）
+
+语料写 `{f: sub[f].values for f in fields if f in sub.columns}`；列映射模型里
+`sub[f]` 已是 list，`.values` 应为恒等。此前对 DynamicArray 走裸 FieldAccess，
+读布局外垃圾 → **SEGFAULT**。
+
+**候选排序**（探针）：
+1. **`col.values` / `sub[f].values`** — SEGV（本批）
+2. `df.values` / `df.index` — 编译通、打出垃圾指针（struct 缺属性；与一百同类）
+3. `df.drop` / `rename` — 链接失败（方法未实现）；kwargs 列表实参另有静默错
+4. 空 list `append(str)` 再 `print` — 打指针数（类型丢；经 DF 取回仍对）
+5. `1 in series` — SEGV（列非 Series）
+
+**修法**（`gen.rs`）：
+1. FieldAccess：`field=="values"` 且 base `is_array_like` → Assign 恒等，保留元素类型
+2. opaque_fallback：`("values", 1)` → `zeta_identity`；identity+vec 时保留接收者 DynamicArray 元素类型（避免 tolist/values 退化成 `I64` 元素）
+
+探针：`[10,20].values[0]`→10；`DataFrame(...)[f].values[0]`→`x`。
+
+回归：`t202_col_values.z`；focused t202/t201/t200/t199 全绿；
+python_style **201 → 202**；官方 **194/194**。
+
+## 批次一百零八（2026-09-18，**已修**）：`df.drop` + `df.index`
+
+语料/探针写 `df.drop(columns=[...])`；列映射可用 copy+del 表达。`df.values`
+（嵌套矩阵）难做；`df.index` 可降为 `range(n_rows)` 列表。
+
+**探针**：
+1. 方法 kwargs 多参（`labels=`/`columns=`）—— 名匹配静默失败（columns 恒 None）
+2. **单参** `drop(labels)` —— 位置 `drop(["x"])` 正确；任意 kwargs 值绑到唯一形参，
+   故 `drop(columns=["x"])` **碰巧可用**（与探针拼写一致）
+3. 单 str `drop("x")` + for-in —— SEGV/挂起；只用 `lt(vec, str)` 列表形
+4. `df.index` —— 此前 FieldAccess 垃圾指针；零参方法 → `list(range(n_rows()))`
+
+**修法**（`pylib/pandas.z`）：
+1. `drop(self, labels: lt(vec, str)) -> DataFrame`：`out=self.copy()`；`for k in labels: del out[k]`
+2. `index(self) -> lt(vec, i64)`：`list(range(self.n_rows()))`（属性分派已有）
+3. `df.values` / 多参 kwargs 名匹配 / 单 str drop —— **延后**
+
+回归：`t203_df_drop.z`；python_style **202 → 203**；官方 **194/194**。
+
+## 批次一百零九（2026-09-18，**已修**）：`df.rename(columns={old: new})`
+
+候选：A rename kwargs dict；B `for c in "ab"` 挂起（影响 `drop("x")`）；C 其它。
+
+**探针**：
+1. **A**：缺方法 → `_DataFrame__rename` 链接失败。`columns: lt(map, str, str)` 时
+   kwargs `columns={…}` **可用**；未注解形参绑 dict 则 `len==0`/查键静默空。
+2. **B**：`for c in "ab"` 走 `array_len`/`array_get`（str 非数组）→ 死循环打垃圾 /
+   `drop("x")` SEGV。属编译器 for-in，本批不修。
+3. 选 **A**（库侧小修，语料热、探针已确认 kwargs dict）。
+
+**修法**（`pylib/pandas.z`）：
+`rename(self, columns: lt(map, str, str)) -> DataFrame`：按 `column_names` 拷列，
+`key in columns` 则用新名写入 out map。
+
+回归：`t204_df_rename.z`；python_style **203 → 204**；官方 **194/194**。
+
+## 批次一百一十（2026-09-18，**已修**）：`for c in "ab"` 字符迭代
+
+**根因**：`gen.rs` 集合 for-in 一律 `array_len`/`array_get`；`Type::Str` 是
+`char*`，`array_len` 读伪长度 → 死循环/垃圾输出；连带阻塞单 str
+`drop("x")`（若对 labels 做 for-in）。
+
+**修法**：`coll_is_str` 时改走 `str_len`/`str_get`，元素类型标 `Type::Str`
+（与 `s[i]` 下标路径一致）。
+
+**未做**：`drop("x")` 单 str 重载——多字符列名不能靠 for-in 字符拆；应
+`del out[labels]` 或包成 `[labels]`，另批。
+
+回归：`t205_for_in_str.z`；python_style **204 → 205**；官方 **194/194**。
+
+## 批次一百一十一（2026-09-18，**已修**）：`df.drop("col")` 单 str
+
+**探针**（for-in-str 修后）：
+1. `drop("v")` / `drop("code")` 仍 SEGV——形参 `lt(vec, str)`，for-in 走 `array_len` 把
+   `char*` 当 vec 头。
+2. 库内 `isinstance(labels, str)` **不可行**：未注解形参默认 i64；注解 vec 则
+   isinstance 看声明类型（恒 list/否），不是实参运行时值。
+3. 手写 `drop([lab])` / `drop(labels: str)` + `del out[labels]` 均可用。
+
+**修法**：MIR 调用点——`method=="drop"` 且非 self 实参 `Type::Str` 时包成一元
+`StackArray`（与 `[lab]` 同形）。库仍 `for k in labels: del out[k]`。
+
+回归：`t206_df_drop_str.z`；python_style **205 → 206**；官方 **194/194**。
+
+## 批次一百一十二（2026-09-18，**已修**）：空 list `append(str)` 类型丢失
+
+**候选排序**（探针）：
+1. `index.tolist()` — 已通（identity + index 列表）
+2. `1 in list` / `"x" in col` — 已通
+3. `df.values` 矩阵 — len=0 静默错，列映射难做，**延后**
+4. `reset_index`/`fillna`/`astype` — 链接缺 `_DataFrame__reset_index`，库侧另批
+5. **空 `[]` + `append("hi")` + `print`** — 打指针数；`len` 恒 0（本批）
+
+**根因**：
+1. `[]` 标成 `Array(I64, Literal(0))` → `len()` 常量折叠 0；`append` 后类型不更新
+2. 元素仍当 I64 → `println_i64`（指针当整数）；数据其实已写入（`xs[0]=="hi"` 为真）
+3. `xs: lt(vec, str) = []` 的注解被忽略，只抄 RHS
+
+**修法**（`gen.rs`）：
+1. 空 `[]` → `DynamicArray(I64)`（`len` 走 `vec_len`）
+2. `append`/`push` 回写句柄时按推入值 refine → `DynamicArray(Str)` 等
+3. `TypeAnnotatedPattern` 尊重 `lt(vec, str)` 注解
+
+回归：`t207_empty_append_str.z`；python_style **206 → 207**；官方 **194/194**。
+
+## 批次一百一十三（2026-09-18，**已修**）：reset_index/fillna/astype typed copy + groupby 响亮
+
+**候选排序**（探针 + 语料热度）：
+1. **`df.values` 矩阵** — `len==0`/type=int 静默错；方法内拼 list-of-lists 可行但
+   下标/注解易 SEGV（嵌套元素类型丢），**继续延后**
+2. **`reset_index`** — 链接缺 `_DataFrame__reset_index`（响亮）；语料 25 处多为
+   `reset_index(drop=True)`（本批）
+3. **`fillna`/`astype`** — 未实现时走 opaque `zeta_identity`→结果标 **i64**，
+   `len(columns)` 静默 **0**（比链接失败更糟）
+4. **`groupby`** — 同 identity 静默打垃圾指针；列映射表达不了分组
+
+**修法**：
+1. `pylib/pandas.z`：`reset_index`/`fillna`/`astype` → `self.copy()`（`-> DataFrame`），
+   让 `struct_has_method` 压过 opaque identity
+2. `gen.rs`：从 opaque identity 名单**去掉 `groupby`** → `_DataFrame__groupby` 链接失败（响亮）
+
+**未做**：真 NaN fill、dtype 转换、`df.values` 行矩阵、groupby 语义。
+
+回归：`t208_df_reset_fillna_astype.z`；python_style **207 → 208**；官方 **194/194**。
+
+## 批次一百一十四（2026-09-18，**已修**）：语句形 `assert` 响亮失败
+
+**候选排序**（探针）：
+1. **`df.values` 列主矩阵** — 方法内 `lt(vec, vecstr)` + append 可编译，但调用点嵌套元素类型丢失
+   （`v[0][0]`→0 / SEGV）；注解回写仍丢。真矩阵需编译器嵌套返回类型，**继续延后**
+2. **`assert False` 不响亮**（本批）— 拆成 `Var("assert")` + 条件两个 ExprStmt，皆空操作；
+   `assert(cond)` 调用形本已走 `zeta_assert_fail`
+3. `sort_values`/`merge`/`to_csv`/`iloc` — 行级/IO，列映射只能 identity 或链接失败，非语义赢
+
+**根因**：无 `parse_assert`；与旧 `del`/`raise` 同病（关键字当标识符）。
+`assert False, "msg"` 还把后续源码留在 remaining 里静默丢掉。
+
+**修法**（`stmt.rs`）：
+1. `parse_assert`：`assert cond` / `assert cond, msg` → `Call assert(...)`（复用 MIR）
+2. 后接 `(` 时退回，保留 `assert(...)` 调用形
+3. 挂入 `alt((parse_pass, parse_del, parse_assert))`
+
+**未做**：`df.values` 嵌套返回类型；真 NaN/`sort_values`。
+
+回归：`t209_assert_stmt.z`；python_style **208 → 209**；官方 **194/194**。
+
+## 批次一百一十五（2026-09-18，**已修**）：pandas tail/dropna + 列 unique + numpy 自由名
+
+**范围**（跳过 JoinQuant 平台 API）：类别 2–6 探针后落地最高影响项。
+
+### 探针结论
+
+| 项 | 失败形态 | 本批 |
+|---|---|---|
+| `df.tail` / `df.dropna` | 裸 `_tail`/`_dropna` 链接失败 | **库实现** |
+| `col.unique()` / `xs.unique()` | 裸 `_unique` | **runtime `zeta_vec_unique`** |
+| `df.where` | 列映射表达不了行 mask | **保持响亮**（`_DataFrame__where`） |
+| bare `arange`/`linspace`/`sum` | 已通（MIR） | — |
+| `np.arange`/`linspace`/`sum`/`asarray` | 注册表缺员 → 幽灵 `_arange(module,…)` | **registry** |
+| bare `asarray` | 幽灵 `_asarray` | **MIR 恒等** |
+| `getattr` 无类型接收者 | 仍响亮诊断 | **不动**（静默 default 会错值） |
+| 本地模块依赖图 | 无小赢 | **跳过** |
+| `ETF动量EPO` / `epo` | 停在 `I @ corr` —— **`@` 矩阵乘未解析**（非 `lambda_`） | **非 quick，跳过** |
+
+### 修法
+
+1. `pylib/pandas.z`：`tail(n)`（`start=len-n; col[start:]`，负切片仍 SEGV）；`dropna()` → typed `copy()`（无 NaN 哨兵）
+2. `runtime/py_additions.c`：`zeta_vec_unique` 保序去重（指针等或 `strcmp`）
+3. `gen.rs` opaque：`unique`→`zeta_vec_unique`（返回 **DynamicArray**，勿保留 `Array(_, Literal(n))` 否则 `len` 常量折叠成去重前长度）；`dropna`→identity（Series）；`where` **不入** identity
+4. `registry.txt`：`numpy.{arange,linspace,sum,asarray}` → `zeta_arange` / `zeta_linspace_i64` / `zeta_sum_vec` / `zeta_identity`
+5. MIR：bare `asarray(x)` 恒等；顺带修正 arange/linspace 的 `type_map` 为 DynamicArray
+
+回归：`t210_df_tail_dropna` / `t211_col_unique` / `t212_numpy_free_names` / `t213_where_loud`；
+python_style **209 → 213**；官方 **194/194**。
+
+### 类别 2–6 仍开放
+
+2. **where**：真行 mask / `np.where(cond,x,y)` 未做；`dropna` 真 NaN/axis/subset 未做
+3. numpy：`arange` 多参/float、`asarray(dtype=)`、`sum` 轴/NaN 传播未做
+4. **getattr**：无静态类型接收者 + default 仍响亮（有意）；已知 struct + 字面量属性名已通
+5. 本地模块依赖图：未动
+6. **epo / `@`**：~~卡在 matmul 解析~~ → **批次一百一十六已修**（解析清零；runtime 仍为 i64 桩）
+
+## 批次一百一十六（2026-09-18，**已修**）：Python `@` matmul 解析
+
+**范围**：类别 2–6 继续，优先 ETF动量EPO 的 `@`（跳过 JoinQuant 平台 API）。
+
+### 探针
+
+| 项 | 失败形态 | 本批 |
+|---|---|---|
+| 最小 `a @ b` | W1002 从 `@ b` 起丢 2 行 | **parser** |
+| `def f(): c = a @ b` | 整个 `def` 被丢 | **同上** |
+| `epo` 签名 `lambda_` | 无 W1002（已通） | — |
+| ETF动量EPO 全文 | W1002 **77** 行，从 `def epo` 起 | **修 `@` 后 → 0** |
+| `getattr(p,"x")` 已知 struct | 已通 | **跳过** |
+
+### 修法
+
+1. `expr.rs` `parse_multiplicative`：`@` 与 `*`/`/`/`%` 同级（`["**","*","/","%","@"]`）
+2. `gen.rs`：`op == "@"` → `Call zeta_matmul`（避免 fallthrough 发名为 `@` 的自由调用）
+3. `py_additions.c`：`zeta_matmul` = **i64 乘积桩** + stderr 警告一次（非 ndarray；真 matmul 待做）
+4. 重建 gitignored `zeta_runtime_c.o`
+
+### 度量
+
+| | before | after |
+|---|---|---|
+| ETF动量EPO W1002 丢行 | **77** | **0** |
+| 语料完全解析 | 37/38 | **38/38** |
+| 语料未解析行合计 | 77 | **0** |
+
+回归：`t214_matmul_at.z`；python_style **213 → 214**；官方 **194/194**。
+
+## 批次一百一十七（2026-09-18，**已修**）：getattr 字面量扩面 + listcomp DataFrame + np.where
+
+**范围**：类别 2–5（跳过 JoinQuant 平台；解析 #6 已清）。
+
+### 探针（jq_shim 链接缺口，平台外）
+
+| 项 | before | 本批 |
+|---|---|---|
+| `pd.DataFrame` in listcomp | 裸 `_DataFrame(env,r)` | **闭包继承 py_imports** |
+| `np.where(mask)[0]` | 裸 `_where` | **MIR + `zeta_np_where1`** |
+| `getattr(Point(5),"x")` / `getattr(w.p,"x")` | 响亮 `_getattr` | **Call/FieldAccess Named** |
+| untyped `getattr(obj,"slip",0)` | 泛化诊断 | **指名接收者/缺类型**（仍不静默 default） |
+| bare `from numpy import where` | `where` 关键字 → W1002 | **取消保留** |
+| `_get` / 平台符号 | 仍缺 | **不动**（注解/`Any`/宿主） |
+
+### 修法
+
+1. `lower_closure`：继承 `py_module_aliases` / `py_member_aliases` / `py_user_modules` / `module_global_types`；模块别名不进 `zeta_env_get`
+2. `py_struct_type_of`：支持 ctor `Call` 与嵌套 `FieldAccess`；getattr 失败诊断带接收者形状
+3. `np.where`：MIR 分派 `zeta_np_where1`（扁平索引；`[0]` 形直接扁平）/ `zeta_np_where3`；registry 占位；重建 `zeta_runtime_c.o`
+4. `parse_ident`：`where` 不再保留（同 `type`/`impl`）
+
+### 度量
+
+| | before | after |
+|---|---|---|
+| jq_shim 非平台裸名 | DataFrame/where/getattr/get/… | **去掉 DataFrame、where** |
+| 语料完全解析 | 38/38 | **38/38** |
+| 语料未解析行 | 0 | **0** |
+
+回归：`t215_getattr_ctor_field` / `t216_df_listcomp` / `t217_np_where` / `t218_where_import` / `t219_getattr_loud`；
+python_style **214 → 219**；官方 **194/194**。
+
+### 类别 2–5 仍开放
+
+2. **where**：`DataFrame.where` 仍响亮；`np.where` 无 axis/broadcast 细项；真行 mask 未做
+3. **get**：未定型接收者仍裸 `_get`（需 map 类型传播 / `Any`）
+4. **getattr**：动态名、`Any`/未注解形参、下标接收者仍响亮（有意）；平台 `g` 不在范围
+5. 本地模块：闭包 import 表已修；更深跨模块默认参数等未动
+
+## 批次一百一十八（2026-09-18，**已修**）：非平台链接缺口 —— strftime / date / numpy 数值面 / logger_*_n / getattr default
+
+**范围**：样本策略非平台 undef（**跳过** JoinQuant：`set_level`/`info`/`get_trades`/…）。
+
+### 探针（before → after）
+
+| 符号/形态 | before | 本批 |
+|---|---|---|
+| `datetime.datetime(...).strftime` 无 `import datetime`（jqdata `*`） | 裸 `PyDate__strftime` | `py_handle_of` 走 `find_module` fallback → `py_dt_strftime` |
+| `.date()` 未定型 | 裸 `date` | opaque → `py_dt_identity` |
+| `np.eye` / `np.zeros((r,c))` / `diag` / `diagonal` / `fill_diagonal` | 裸名 / 元组当标量 | C 实实现 + MIR `zeros2` 展开 |
+| `scipy.linalg.solve` | 裸 `solve` | **响亮桩** `zeta_np_solve_stub`（回 RHS） |
+| `np.sum` / 未定型 `.sum()` / `sum(xs)` | 部分裸 | registry + `zeta_sum_vec` |
+| `corr`/`cov`/`pct_change` 未定型 | 裸名 | opaque → `zeta_identity`（列映射不可表达） |
+| `log.error/warning(fmt, x)` | `py_logger_*_3` 幽灵 | `py_logger_*_n`（同 info_n） |
+| `getattr(untyped,"x",default)` | 幽灵 `_getattr` | **用 default** + 警告一次；无 default 仍响亮 |
+
+### 修法（易错点）
+
+1. **`py_handle_of`**：`datetime.datetime(...)` 在无 import 别名时仍要从 `flatten_module_receiver` + `find_module` 取 `handle=PyDate`，否则方法名被 mangling 成 `PyDate__strftime`。
+2. **`np.zeros((r,c))`**：绝不能把 StackArray 指针塞进 1 参 C；MIR 展开为 `zeta_np_zeros2(r,c)`。
+3. **logger 变参**：registry 固定 arity ⇒ 多参被 arity-mangle；统一走 `*_n(lg,fmt,n,a1..a4)`，V1 **不做 %-替换**但打印实参。
+4. **groupby 故意不 identity**：列映射 DF 表达不了分组；identity 会静默打出垃圾指针。
+
+### 度量（7 样本：`l1_fixed_pool_momentum` / `指数ETF动量轮动` / `Debug多标的ETF` / `安全摸狗` / `稳健型ETF` / `ETF动量EPO` / `jq_shim`）
+
+| 口径 | 结果 |
+|---|---|
+| raw link | **1/7**（仅 `l1_fixed_pool_momentum`） |
+| if-platform-stubbed（非平台 undef 为空） | **6/7** |
+| 仍拦 | `jq_shim` → `groupby`（有意响亮）+ 平台 `execute_trade` |
+
+回归：`t220_strftime_noimport` / `t221_numpy_eye_zeros` / `t222_getattr_default` / `t223_logger_error_n` / `t224_sum_untyped` / `t225_getattr_no_default`；
+python_style **219 → 225**；官方 **194/194**。
+
+### 仍开放（非本批）
+
+- JoinQuant 平台 API（宿主 shim）
+- `groupby` 真语义 / 未定型 `.get`
+- `np.corrcoef`/`polyfit`/`var` 等自由名；真 `linalg.solve`
+
+## 批次一百一十九（2026-09-18，**已修**）：DataFrame.groupby → Named GroupBy（链接）
+
+**范围**：NO JoinQuant 平台。jq_shim 非平台链接拦路仅剩 `groupby`。
+
+### 修法
+
+1. `pylib/pandas.z`：`DataFrame.groupby(by) -> GroupBy`（`GroupBy(self.copy())`）
+2. `GroupBy.mean` / `GroupBy.sum` → 空 `DataFrame({})`（库方法压过 opaque `mean→zeta_identity`，避免 Named 上静默 i64）
+3. 未定型 `.groupby` 仍不进 opaque identity（保持响亮）
+
+**未做**：真分组、`for (k,g) in gb` 迭代、按组聚合语义。
+
+### 度量（7 样本）
+
+| 口径 | 结果 |
+|---|---|
+| raw link | **1/7**（仅 `l1_fixed_pool_momentum`） |
+| if-platform-stubbed | **7/7**（groupby 已消；jq_shim 仅剩平台 `execute_trade`） |
+
+回归：`t226_df_groupby`；python_style **225 → 226**；官方 **194/194**。
+
+## 批次一百二十（2026-09-19，**已修**）：Zeta-rewrite —— `pylib/numpy.z` + pandas 去重/迭代面
+
+**方向**：库 API 落在 `pylib/*.z`；C/registry 只留原语（`X` + MIR 分派）。NO JoinQuant 平台 API。
+
+### 语料 survey（`strategies/code/*.py`，相对既有 pandas.z/registry）
+
+| 热度 | API | 本批前 |
+|---|---|---|
+| np 高 | `sum/mean/log/arange/asarray/linspace/where/zeros/eye` | 后半已 registry/MIR；**mean/any/vstack/log** 仍裸 |
+| pd 高 | `DataFrame/Timestamp/concat` | 库 + registry 句柄 |
+| DF 方法 | `drop_duplicates` / `itertuples` | **响亮** `_DataFrame__*` |
+| DF 方法 | `pct_change` | opaque identity→i64 |
+| DF 方法 | `reset_index(drop=False)` | 方法默认未注入，无参 drop=0 |
+
+### jq_wufu 非平台 undef（滤平台/宿主后）
+
+- `jq_wufu_local`：`_DataFrame__drop_duplicates`、`_DataFrame__itertuples`、`_any`、`_vstack`、`_pandas__Series`/`date_range`/…、`_Path__open`、`_isin`/`_iterrows`/`_nunique`…
+- `jq_wufu`：`_any`、`_vstack`、`_dict`/`_setdefault`/`_condition`（+ 平台 `execute_trade`）
+
+### 修法
+
+1. **`pylib/numpy.z`**：`arange`/`asarray`/`zeros` 包装 `zeta_*`；补 `mean`/`any`/`vstack`/`log`/`isnan`/`append`；`where` 文档桩
+2. **registry**：撤 `F numpy {arange,asarray,zeros}`（库赢）；**`where` 仍留 `F`**（否则 `from numpy import where` 3 参落到 1 参库函数）；保留 linspace/sum/eye/diag 的 `F` + 全部 `X`
+3. **MIR**：`py_member_call` 对库 `DynamicArray` 返回标 `vec`（否则 `np.arange` 当 i64 → SEGV）
+4. **`pylib/pandas.z`**：`drop_duplicates`（保序去重）、`itertuples`（行下标列表）、`pct_change`（typed copy）；`reset_index` 仍恒 copy（Named 方法默认未注入）
+
+### 易错点
+
+- 注册表 `F` 与 `.z` 同名时 **registered members win** —— 不撤 `F` 则库包装永不调用
+- `drop_duplicates(subset)` **勿注解** `lt(vec,str)`：字面量下标 SEGV；用 for-in
+- `reset_index` 无参时 drop 落到 0（与 False 同）；插 index 列会毁掉语料 `reset_index()` → 等默认注入
+
+回归：`t227_numpy_z_wrappers` / `t228_df_dedup_itertuples`；python_style **226 → 228**；官方 **194/194**。
+
+### 下一队列
+
+1. Named 方法默认值注入（解锁 `reset_index(drop=False)` 真插列）
+2. `np.log`/`vstack` 真语义；`itertuples` namedtuple / `row.col`
+3. `pd.Series` / `to_datetime` / `isin` / `iterrows` / `nunique`
+4. `Path.open` / `makedirs` 等 pathlib 面
+
+## 批次一百二十一（2026-09-19，**已修**）：Named 方法默认 + pandas isin/nunique/iterrows/Series + numpy clip
+
+**范围**：NO JoinQuant 平台。Zeta-rewrite 库面继续「用到再补」。
+
+### 修法
+
+1. **MIR**：Named 方法也走 `callee_sig_for_call`（剥 `self`）注入默认/kwargs —— `df.reset_index()` 得 `drop=True`
+2. **`pylib/pandas.z`**：`reset_index` 真分 `drop`；`iterrows`/`isin`/`nunique`；最小 `Series`；`date_range`/`to_datetime`/`to_numeric` 桩
+3. **opaque**：列级 `isin`/`nunique`/`iterrows`/`clip`/`min`/`max`（清裸链）；`zeta_vec_nunique` + `zeta_identity2`
+4. **`pylib/numpy.z`**：`clip`/`max`/`min`；内建 **`max`/`min` 多参折叠**（`max(a,b,c)`）
+
+### 易错点
+
+- 方法默认必须**跳过 self 槽**，否则位置参绑到 self
+- `Series.__len__` → `len(self.data)` 易递归挂死；勿加，用 `len(s.tolist())`
+- 注册表勿对 `Series`/`date_range` 加 `F`（registered members win）
+
+### 度量
+
+| 口径 | before (批 120) | after |
+|---|---|---|
+| python_style | 228/228 | **230/230** |
+| 官方 | 194/194 | **194/194** |
+| jq_wufu_local 非平台 undef | 35 | **25** |
+
+清掉：`_isin`/`_iterrows`/`_nunique`/`_pandas__Series`/`date_range`/`to_datetime`/`to_numeric`/`_clip`/`_max`/`_min`。
+
+回归：`t229_method_defaults_isin` / `t230_numpy_clip_minmax`；`t208`/`t228` 更新。
+
+### 下一队列
+
+1. pathlib：`Path.open` / `exists` / `read_text` / `resolve`
+2. `dict`/`setdefault`/`fromkeys` 未定型接收者
+3. `np.log`/`vstack` 真语义；Series 真 `isin` 掩码
+4. `itertuples` namedtuple / `row.col`
+
+## 批次一百二十二（2026-09-19，**已修**）：dict/set/pathlib/isna/cast 链接面
+
+**范围**：NO JoinQuant 平台。用到再补；跳过宿主 `query_hs300`/`register_universe`/`get_row_data`/`initialize`/`load`/`covers_range`/`set_cost_config`/`cache_clear`。
+
+### 修法
+
+1. **MIR**：`dict(m)` 未定型也浅拷贝；`set()` 空集；`dict.fromkeys(keys)` 1 参；`typing.cast` → 第二参；opaque `setdefault`/`isna`/`set.add`；`os.makedirs(..., exist_ok=)` 剥 `__kwarg__`
+2. **pathlib**：`-> Path` / PyPath 方法早拦截；`open(encoding=)` 忽略非 mode 字符串；kwargs 多 arity 的 `read_text`/`exists`/`resolve` 只传 path
+3. **库**：`pandas.isna`/`isnull`；`numpy.condition` 桩；registry `typing.cast` + `PyPath.open`；C `py_set_add` / `py_typing_cast`
+
+### 易错点
+
+- 解析把 `encoding="utf-8"` 收成 `__kwarg__`；勿当 `open` 的 mode
+- Named(`Path`) ≠ handle `PyPath` —— 注解返回类型会走 `Path__*` 幽灵名
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 230/230 | **232/232** |
+| 官方 | 194/194 | **194/194** |
+| jq_wufu_local 非平台 undef | 25 | **13** |
+
+清掉：`_dict`/`_set`/`_setdefault`/`_fromkeys`/`_add`/`_cast`/`_exists`/`_resolve`/`_Path__open`/`_read_text`/`_[dynamic]str__isna`/`_py_os_makedirs_2`。
+
+回归：`t231_dict_set_cast_fromkeys` / `t232_path_open_isna_makedirs`。
+
+### 仍剩（13，多为宿主/闭包）
+
+`cache_clear` `condition` `covers_range` `get_row_data` `getattr` `import_module` `initialize` `load` `next` `query_hs300_stocks` `query_zz500_stocks` `register_universe` `set_cost_config`
+
+## 批次一百二十三（2026-09-19，**已修**）：compiler/lang —— listcomp 自由调用捕获 / next / importlib / getattr 动态名
+
+**范围**：NO JoinQuant 平台。跳过宿主 `query_*` / `register_universe` / `get_row_data` / `initialize` / `load` / `covers_range` / `set_cost_config` / `cache_clear`。
+
+### 根因（易错）
+
+| 符号 | 真因 | 误判 |
+|---|---|---|
+| `_condition` | listcomp `[m for m in xs if condition(m)]` 把自由调用的 **callee 名** 当成符号，未进 `collect_free_vars` | 曾加 `numpy.condition` 桩（批 122）——无关 |
+| `_next` | 语料是 **`rs.next()`**（baostock），不是 builtin `next(it)` | — |
+| `_import_module` | `importlib.import_module` 无 registry | — |
+| `_getattr` | `getattr(mod, name)` **动态名**（`market_data.__getattr__`） | 字面量+default 路径已通 |
+
+### 修法
+
+1. **`collect_free_vars`**：无 receiver 的 Call 把 `method` 当自由变量；捕获时跳过 builtin / `func_ret_types` / 未绑定名
+2. **Call**：局部 callee 且不在 `closure_vars` → `zeta_call_fn_arg`（保留 `f = lambda` 的直接 `__closure_N` 路径，避免打成 i64）
+3. **builtin `next(it, default)`** → default + 警告；`next(it)` → `py_builtin_next` 响亮 abort
+4. **opaque `.next()`** → `py_method_next` 返回 **0**（exhausted；勿用 identity，否则 `while rs.next()` 死循环）
+5. **`importlib.import_module`** → registry + `py_import_module` abort
+6. **动态 `getattr`** → `py_getattr_dynamic` abort（字面量无 default 的 untyped 仍故意幽灵，守 t225）
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 232/232 | **235/235** |
+| 官方 | 194/194 | **194/194** |
+| jq_wufu_local 焦点 undef（13） | 13 | **9** |
+
+清掉：`condition` `getattr` `import_module` `next`。
+
+仍剩（全宿主，本批跳过）：`cache_clear` `covers_range` `get_row_data` `initialize` `load` `query_hs300_stocks` `query_zz500_stocks` `register_universe` `set_cost_config`。
+
+回归：`t233_listcomp_condition_capture` / `t234_next_import_getattr` / `t235_importlib_module`。
+
+## 批次一百二十五（2026-09-19，**已修**）：sources 整模块可编 —— del多目标 / 类继承 / `...` / with+return
+
+**范围**：NO JoinQuant。让 `market_data_sources.py` 本地函数真正进 `.o`。
+
+### 根因链
+
+| 拦路 | 后果 |
+|---|---|
+| `del a, b` 只吃第一个目标 | 顶层 `try: … del _load_dotenv, _Path` 炸 → **整文件从 try 起全丢** |
+| `class S(abc.ABC)` 显式 Failure | 抽象基类起整文件截断 |
+| 方法体 `...` 不识 | 抽象方法炸类 |
+| `with lock: return` 在 return 后仍 `__exit__` | LLVM terminator → 链接前崩溃 |
+
+### 修法
+
+1. `parse_del`：逗号分隔多目标（primary/subscript）
+2. `parse_class`：吞掉 `(bases)`，V1 忽略 MRO
+3. `parse_ellipsis_stmt`：`...` ≡ pass
+4. `with`：仅当 `branch_falls_through(body)` 时追加 `__exit__`；`branch_falls_through` 识别嵌套 `Block`
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 238 | **242** |
+| `jq_wufu_local` 中 `sources__*` | 仅 `init` + 大量 U | **大量 T**（`_baostock_login` / `_jqdata_init` / `_from_rq_code`…） |
+| 链接 | Terminator 崩溃 | **Linking failed**（正常 undef 表，~85，多为第三方/裸方法） |
+
+回归：`t239`–`t242`。
+
+### 下一队列
+
+1. 裸方法：`covers_range` / `load` / `register_universe` / `ParquetCache`
+2. `Path`/`timedelta` → stdlib（勿 `module__Path`）
+3. facade 再导出边：`market_data___baostock_login` 仍 U（循环导入时序）
+4. `--engine local` 避开 backtrader/nautilus
+
+## 批次一百二十六（2026-09-19，**已修**）：try 内 from-import + Path/timedelta 勿错绑
+
+**范围**：NO JoinQuant。清 `register_universe` 裸名与 `pathlib__Path` / `datetime__timedelta`。
+
+### 根因
+
+| 现象 | 根因 |
+|---|---|
+| `try: from … import X` → 链接 `_X` | `parse_func` 把 try 的尾 `Block` 提到 `ret_expr`，`walk_py_import` 只扫空 `body` |
+| `_Path(...)` → `pathlib__Path` | `module_renames_for` 把 registry 再导出编成 `mod__name`，抢在 `py_member_call` 之前 |
+
+### 修法
+
+1. `walk_py_import` / `walk_nonlocal`：扫 `FuncDef.ret_expr`；并递归非 import 的 `Call`/`Return`/…
+2. `module_renames_for`：`find_member` 命中的 registry 成员跳过 rename（交给 `py_member_aliases` → `py_path_new` / `py_dt_timedelta`）
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 242 | **244**（t243/t244） |
+| 官方 | 194/194 | **194/194** |
+| `jq_wufu_local` undef | ~85 | **~82** |
+| `_register_universe` | U | **消**（链到 `…universe__register_universe`） |
+| `_pathlib__Path` / `_datetime__timedelta` | U | **消**（`py_path_new` / `py_dt_timedelta`） |
+
+回归：`t243_try_from_import` / `t244_path_timedelta_as`（+ `pathas_fixture.py` / `pytryimport/`）。
+
+仍剩（摘）：`_dotenv__load_dotenv` / `_pandas__read_parquet`（registry 无条目）、裸方法 `_execute_trade` / `_initialize` / `_set_cost_config`、第三方 bt/ak/baostock。
+
+### 下一队列
+
+1. registry 补 `dotenv` / `read_parquet` 或 noop
+2. 接收者方法：`set_cost_config` / `execute_trade` / `initialize`
+3. `--engine local`
+
+## 批次一百二十七（2026-09-19，**已修**）：ann-attr / del-attr 解锁 LocalBackend
+
+**范围**：NO JoinQuant。`wufu_backend.PositionLedger`/`LocalBackend` 曾整段丢光。
+
+### 根因链
+
+| 拦路 | 后果 |
+|---|---|
+| `self.x: T = v` 只认裸名 ann-assign | `set[str]`/`str\|None` 属性注解炸类 |
+| `del self.m[k]` 用 `parse_primary` 只吃 `self` | 剩 `._positions[k]` 炸 `sell` → PositionLedger 起整文件截断 |
+| `CostModel::fee` `ret double` vs `define i64` | PositionLedger 可解析后 LLVM verify 整仓 abort |
+| `del d[k]` → `map____delitem__` 无分派 | t239 真删除无法链接 |
+
+### 修法
+
+1. `parse_assign`：ann-assign 目标扩到 `Var`/`FieldAccess`/`Subscript`（`parse_unary`）
+2. `parse_del`：目标改 `parse_unary`；`map.__delitem__` → 已有 `zeta_map_pop`
+3. codegen `Return`：`f64→i64` bitcast（对称已有 `i64→f64`）
+4. `map_insert`/`map_get`：识别 tombstone（`used==2`）；重建 `tokio_runtime.o` / `zeta_runtime_c.o`
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 244 | **247**（t246/t247；t239 expect 2→1） |
+| `wufu_backend` W1002 | 212 行自 PositionLedger | **0** |
+| `LocalBackend::*` / `execute_trade` / `set_cost_config` | 无 / 裸 U | **define** |
+| `jq_wufu_local` 链接 | LLVM type abort | **Linking failed**（正常 undef ~92） |
+| 消掉 | `_dotenv__load_dotenv` / `_pandas__read_parquet` / 裸 `_execute_trade` | — |
+
+回归：`t246_ann_attr_assign` / `t247_del_attr` / `t239_del_multi` / t243–t245。
+
+### 仍剩（摘）
+
+- 别名：`_jq_shim___LocalPortfolio` / `_initialize`
+- 第三方：bt / nautilus / akshare / baostock / pyarrow
+- 语言：`_zip` `_isinstance` `_hasattr` `_setattr` `_clear`（map.clear 裸名）
+- `--engine local` 避开 bt/nautilus
+
+## 批次一百二十八（2026-09-19，**已修**）：import 类别名 + 裸 map/pandas 方法
+
+**范围**：NO JoinQuant。清 `_jq_shim___LocalPortfolio`；`d.clear`/`d.update`/`s.add` 与 DF 链式方法；勿再导出与类方法同名的 C 裸符号。
+
+### 根因
+
+| 现象 | 根因 |
+|---|---|
+| `_jq_shim___LocalPortfolio` | `_LocalPortfolio = LocalBackend` 且 RHS 来自 `from … import` —— `own_names` 追不到；需 `walk_name_aliases` 抄 `py_member_aliases` |
+| `_initialize`（批 127 仍记） | 已由 `walk_module_member_assigns` 清 |
+| `_clear`/`_update`/`_add` | 接收者丢 `map` 标签（或 struct 字段落成 I64）→ 未进 map 分派 |
+| `[dynamic]i64__all` 等 | DynamicArray 未知方法拼 `Type::method` 幽灵名 |
+| 裸 C `clear`/`to_parquet` | 与 `Ledger::clear` / `DataFrame::to_parquet` 同发 `@clear` → **duplicate symbol** |
+
+### 修法
+
+1. resolver：`walk_name_aliases` — `Alias = ImportedName` → 写入 `py_member_aliases`（+ 当前模块 reexport）
+2. MIR opaque：`clear`→`zeta_map_clear`，`update`→`zeta_map_update`，`ffill`/`sort_index`/…→identity；`add` 在 I64/vec/map 句柄上 → `py_set_add`
+3. MIR map 块：`("add", 2)` → `py_set_add`；DynamicArray：`all`/`any`/`ffill`/`notna`/… 勿拼 `[dynamic]T__*`
+4. `pylib/pandas.z`：`ffill`/`sort_index`/`reindex`；`numpy.z`：`isfinite`/`isinf`；C 仅留 **无同名方法冲突** 的符号（`numpy__isfinite` 等）
+5. **禁止** 再加裸名 `clear`/`update`/`ffill`/`to_parquet` 进 `py_additions.c`
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 247 | **252**（t248–t252） |
+| `jq_wufu_local` 链接 undef | ~80 | **~65** |
+| `_jq_shim___LocalPortfolio` / `_clear` / `_update` / `_add` / `[dynamic]*` / `_ffill` | U | **消** |
+
+回归：`t248_class_alias` / `t249_member_assign` / `t250_import_class_alias` / `t251_map_clear_update` / `t252_ffill_sort_index`。
+
+### 仍剩（摘）
+
+- 第三方/宿主：bt `Cerebro`/`setcash`、nautilus 模型、baostock/ak/tushare、`query_*`、`cache_clear`
+- 反射/杂项：`_cls`/`_call`/`_init`/`_date`、`decimal__Decimal`、`___closure`
+- `LocalBackend___price_lookup` 等 backend 幽灵成员
+- `--engine local` 仍不删 bt/nautilus 函数体（无 DCE）→ 链接仍见其 undef
+
+### 下一队列
+
+1. facade/私有方法：`___price_lookup` / `baostock_login` 再导出时序
+2. pyarrow/`read_table`/`write_table` 响亮桩（勿与 DF 方法同名裸 C）
+3. 可选：常量 `engine=="local"` 时跳过编 bt/nautilus 模块（大改，另开）
+
+## 批次一百二十九（2026-09-19，**已修**）：advice.md 速赢包 Q1–Q5
+
+**范围**：工程债还债（[advice.md](advice.md) §1），不改语料语义。`ARRAY_SYNTAX_DOCUMENTATION.md` 无待改优化项（仅语法说明）。
+
+### 做了什么
+
+| # | 项 | 改动 |
+|---|---|---|
+| Q1 | IR dump 改 flag | `main.rs`：仅 `--emit-llvm` 或 `ZETA_DUMP_IR=1` 时 `print_to_stderr` |
+| Q5 | PROBE 清理 | 删除全部 `eprintln!("PROBE …")`（codegen / gen / resolver） |
+| Q3 | 死代码 | 删 `optimized_mir.rs` / `optimized_gen.rs` / `evaluator_complete.rs` / `module_resolver.rs.backup` / `*.o.tmp` / `tokio_runtime_old.o` |
+| Q2 | nm 核对 | 新增 `tools/check_registry_symbols.sh`；`py_asdict_unexpanded` 列入允许缺失 |
+| Q4 | 统一基线 | 新增 `tools/run_all.sh` → `/tmp/zeta_baseline.json`；`validate.md` 引用 |
+
+### 验收
+
+- 正常编译 stderr 无 IR 洪水；`ZETA_DUMP_IR=1` 才有 IR
+- `rg PROBE src/` 零命中
+- `./tools/check_registry_symbols.sh` 退出 0
+- `./tools/run_all.sh --skip-official --skip-corpus` 产出 JSON
+- 冒烟：t247/t248/t250–t252 绿
+
+### 下一队列（advice 排期）
+
+1. 任务 A1（registry 字段扩展）+ 可选 CI 雏形（L）
+2. 修 8 个 duplicate-symbol 回归（见批 130）
+
+## 批次一百三十（2026-09-19，**已修**）：基线绿 + A1 registry 字段
+
+**范围**：[ARCHITECTURE-REVIEW](docs/ARCHITECTURE-REVIEW-2026-09.md) / [advice.md](advice.md)。
+
+### 做了什么
+
+1. **修 8 个 python_style 回归**：删 `numpy__isfinite`/`isinf` C 裸桩（与 `numpy.z` 方法同名 duplicate）
+2. **Q4 收口**：`validate.md` §3 推荐 `./tools/run_all.sh`
+3. **A1**：`pylib.rs` 解析 `stub=`/`decl=`/`alias-of=`；`asdict` → `stub=1 decl=0`；`all_externs` 跳过；nm 脚本跳过 `stub=1`；单测 2 个
+
+### 度量
+
+| 口径 | 结果 |
+|---|---|
+| python_style | **252/252** |
+| 官方 | **194/194** |
+| `check_registry_symbols.sh` | 0 |
+| pylib 单测 | 2/2 |
+
+### 下一队列
+
+1. A2：`tools/gen_from_registry.py` → `runtime_decls.rs`
+2. `run_all` 全量含语料；CI 雏形（L）
+3. 穿插 `jq_wufu_local` undef（~65）
+
+## 批次一百三十一（2026-09-19，**已修**）：A2 registry → 生成声明
+
+**范围**：advice 任务 A2（registry 单一事实源的声明侧）。
+
+### 做了什么
+
+1. `tools/gen_from_registry.py --emit` → `src/backend/codegen/runtime_decls_registry.rs`（273 个 `py_*`）
+2. `--check`：nm 核对（跳过 `stub=1`）
+3. `codegen::new` 用 `declare_registry_runtime_fns` 替换运行期 `all_externs()` 循环
+4. 核心 `map_*`/`zeta_*`/`println_*` 仍手写（A2b：另立 `runtime_core.txt` 再生成）
+
+### 验收
+
+- `cargo build -p zetac` 绿
+- `--check` 退出 0
+- 冒烟 t212/t227/t250–t252
+
+### 下一队列
+
+1. A2b：核心运行时表数据化（净减 codegen `new()` 手写块）
+2. A3：别名 `.set` → `aliases.inc.c`
+3. A4：`get_or_declare_function` 表驱动影子模式
+
+## 批次一百三十二（2026-09-19，**已修**）：A3 别名数据化 + runtime 构建脚本
+
+**范围**：advice A3 + M。
+
+### 做了什么
+
+1. `pylib/runtime_aliases.txt`（66 条 LLVM `.N` → 规范符号）
+2. `gen_from_registry.py --emit-aliases` → `runtime/aliases.inc.c`
+3. `tokio_runtime_stub.c` 手写 `__asm__` 块改为 `#include "aliases.inc.c"`
+4. `tools/build_runtime.sh`（`--gen` 顺带重生 decls/aliases）
+
+### 验收
+
+- stub 重编后 `nm` 仍见 `_print.31` / `_array_new.10`
+- 官方/python_style 冒烟绿
+
+### 下一队列
+
+1. A4：`get_or_declare_function` 表驱动影子模式
+2. A2b：核心 runtime 声明表
+3. CI：`run_all.sh` job（L）
+
+## 批次一百三十三（2026-09-19，**已修**）：A4 表驱动查找（影子→切换）
+
+**范围**：advice A4。
+
+### 做了什么
+
+1. `pylib::lookup_declared_symbol`：`decl=1 && !stub && py_*` 符号索引（含 `alias-of`）
+2. 影子批次：表 vs 瀑布并行，mismatch=0 后切换
+3. `get_or_declare_function`：**表命中优先**，瀑布仅兜底；未登记 `py_*` 仍告警
+4. 补登记漏表符号：`py_map_update`/`py_array_concat`/`py_os_path_join_{3,4}`/`py_int_base`/`py_map_fromkeys`；decls → 279
+5. 表命中校验 arity（避免 `reduce_3`/`join_3` 被剥后缀落到错误重载）
+
+### 验收
+
+- 官方 194/194；python_style 252/252；corpus 38/38
+- t212/t227/t250–t252 绿；A4 未登记兜底告警趋零
+
+### 下一队列
+
+1. A2b：核心 `map_*`/`zeta_*`/`println_*` 声明表
+2. A5：jit.rs 映射从注册表生成
+3. CI：`run_all.sh` job（L）
+
+## 批次一百三十四（2026-09-19，**已修**）：A2b 核心 runtime 声明表
+
+**范围**：advice A2b。
+
+### 做了什么
+
+1. `pylib/runtime_core.txt`（61：`map_*`/`zeta_*`/`print(ln)_*`/`array_*`，含 `variadic`/`ptr`/`f64`）
+2. `gen_from_registry.py --emit-core` → `runtime_decls_core.rs`；`codegen::new` 开头一次 `declare_core_runtime_fns`
+3. 删手写核心 `add_function`（new 内 ~221 → ~146）；`build_runtime.sh --gen` 顺带 `--emit-core`
+4. 修复：剥离时误删 `declare_registry_runtime_fns` 与 `str_get`/`str_slice`/`py_slice_new` 等 → 已恢复
+
+### 验收
+
+- 官方 194/194；python_style 252/252；corpus 38/38
+- 冒烟 t71/t98/t105/t212/t251
+
+### 下一队列
+
+1. A5：jit.rs 映射从注册表生成
+2. 清掉 new() 里仍与 registry 重复的手写 `py_*`
+3. CI：`run_all.sh` job（L）
+
+## 批次一百三十五（2026-09-19，**已修**）：A5 JIT 映射数据化
+
+**范围**：advice A5。
+
+### 做了什么
+
+1. `pylib/jit_mappings.txt`（131：LLVM 名 → Rust host 路径）
+2. `gen_from_registry.py --emit-jit` → `jit_mappings_gen.rs`；`finalize_and_jit` 一次 `register_jit_mappings`
+3. 保留 `vec_push_`/`vec_get_`/`vec_len_` 前缀特化循环；`jit.rs` 净减 ~500 行手写 mapping
+4. `build_runtime.sh --gen` 顺带 `--emit-jit`
+
+### 验收
+
+- JIT 冒烟：`zetac` 无 `-o` → `3` / exit 0
+- 官方 194/194；python_style 252/252；corpus 38/38
+
+### 下一队列
+
+1. 清掉 `codegen::new` 里与 registry 重复的手写 `py_*`
+2. CI：`run_all.sh` job（L）
+3. A 系列收口后穿插语料功能批次
+
+## 批次一百三十六（2026-09-19，**已修**）：L 基线进 CI
+
+**范围**：advice L（雏形）。
+
+### 做了什么
+
+1. `.github/workflows/ci.yml` 新增 `baselines` job（`needs: test`）
+2. 步骤：`gen_from_registry.py --emit*` + `git diff --exit-code`（生成物不过期）→ `cargo build -p zetac --release` → `--check`（nm）→ `tools/run_all.sh`
+3. 上传 artifact：`zeta-baseline`（`artifacts/zeta_baseline.json`）
+
+### 验收
+
+- 本地：`gen --emit*` 无 diff；`--check` 退出 0
+- CI 在 self-hosted galaxy runner 上跑通（push/PR 后由 Actions 验证）
+
+### 下一队列
+
+1. D：桩响亮化（stub 运行时告警）
+2. 清掉 `codegen::new` 重复手写 `py_*`
+3. 穿插语料功能 / B1 强转矩阵
+
+## 批次一百三十七（2026-09-19，**已修**）：D 桩响亮化
+
+**范围**：advice D（机制，不批量迁移假值桩）。
+
+### 做了什么
+
+1. `py_stub_abort`（`py_additions.c`）：默认 abort + 符号名；`ZETA_LENIENT_STUBS=1` → 每符号 stderr 告警一次并返回 0
+2. `py_asdict_unexpanded` → 走 `py_stub_abort`；registry `stub=1` 且 `decl=1`（声明 abort wrapper）
+3. `zetac --list-stubs`；`gen`/`nm` 对 stub 声明一并核对
+4. `t253_stub_abort.z` + `run.sh` 的 `// expect-abort:`
+
+### 验收
+
+- `--list-stubs` 输出与 registry stub 数一致（当前 1：`py_asdict_unexpanded`）
+- t253：strict 下 abort，stderr 含 `stub not implemented: py_asdict_unexpanded`
+- 官方 / python_style / corpus 三基线绿
+
+### 下一队列
+
+1. 假值桩逐步标 `stub=1` 并改走 abort（isin/dropna 等需 LENIENT 或真实现后再迁）
+2. 清掉 `codegen::new` 重复手写 `py_*`
+3. 穿插语料功能 / B1 强转矩阵
+
+## 批次一百三十八（2026-09-19，**已修**）：B1 强转矩阵
+
+**范围**：advice B1。
+
+### 做了什么
+
+1. `coerce_call_args` 白名单：同宽 / zext / sitofp 放行；narrow / fptosi / float↔ptr → stderr 告警（每模块最多 8 条样例 + 汇总）
+2. `--strict-abi` / `ZETA_STRICT_ABI=1`：矩阵外强制失败（`abi_fatal`）
+3. `t254_abi_coerce_warn.z`：默认告警仍通过；`--strict-abi` 退出非 0
+
+### 验收
+
+- 默认编译不破坏基线；t254 输出 `1`
+- `--strict-abi` 对 t254 报 `strict-abi: forbidden coerce … fptosi`
+- 官方 / python_style / corpus 三基线绿
+
+### 下一队列
+
+1. B2：libc 碰撞检查（isalnum/strftime/abs…）
+2. B3：`Type::PyDynamic` + `--report-untyped`
+3. 假值桩逐步标 stub / 语料功能穿插
+
+## 批次一百三十九（2026-09-19，**已修**）：A 收尾 + B2 libc 碰撞
+
+**范围**：advice 排期 139（A 清 `codegen::new` 残余 `py_*` + B2）。
+
+### 做了什么
+
+1. A 收尾：`py_fmt_*` / `py_round_*` / `py_slice_new` / `py_list_eq` / `py_getitem2` / `py_logger_info_n` 迁入 `registry.txt`；删 `new()` 内与 registry 重复的 queue/threading/`py_file_open` 等手写声明（手写 `add_function` 150→137，`py_*` 残余 0）
+2. B2：waterfall 发明 bare extern 时命中 libc 名表 → stderr 告警
+3. `t255_libc_collision.z`：`isalnum` 触发告警且仍可运行
+
+### 验收
+
+- t255 编译 stderr 含 `collides with libc`；运行输出 `1`
+- t27 等依赖 `py_fmt_*`/`py_round_*` 的用例仍绿
+- 官方 / python_style / corpus 三基线绿
+
+### 下一队列
+
+1. B3：`Type::PyDynamic` + `--report-untyped`
+2. C1/C2：解析行号 + 顶层同步恢复
+3. soft 桩逐步真实现或 LENIENT 后响亮化
+
+## 批次一百四十（2026-09-19，**已修**）：D4 库层假值桩
+
+**范围**：advice D4。
+
+### 做了什么
+
+1. 约定 `# stub: <name>` / `# stub: soft:<name>` 标记 `pylib/numpy.z`、`pylib/pandas.z`
+2. `pylib_file_stubs` + `all_stub_symbols`；`zetac --list-stubs` / `gen --list` 合并 registry + pylib（20 = 1+19）
+3. 响亮迁移（基线未用）：`numpy.{vstack,log,isnan,isfinite,isinf}`、`pandas.{date_range,to_datetime,to_numeric}` → `py_stub_abort`
+4. soft 保留假值：`dropna/fillna/astype/isin/…`（基线依赖 typed copy）
+5. `t256_pylib_stub_abort.z`
+
+### 验收
+
+- `--list-stubs` 与 `gen --list` 一致（20）
+- t256：abort + `pandas.date_range`
+- 官方 / python_style / corpus 三基线绿
+
+### 下一队列
+
+1. B3：`Type::PyDynamic` + `--report-untyped`（与 E4 合批）
+2. C1/C2：解析行号 + 顶层同步恢复
+3. soft 桩逐步真实现或 LENIENT 后响亮化
+
+## 批次一百四十一（2026-09-19，**已修**）：B3 `Type::PyDynamic` + `--report-untyped`
+
+**范围**：advice B3（E4 签名 `Type` 结构化未合入，仍 `from_string`）。
+
+### 做了什么
+
+1. `Type::PyDynamic`（`"dyn"`）：未标注形参默认 `dyn` 而非 `i64`；ABI 仍映射 i64
+2. `zetac --report-untyped`：列出 `(func, param)` 中仍为 `PyDynamic` 的形参
+3. 调用点推断 / 类字段细化：把 `dyn` 与旧 `i64` 默认同等视为可升级（否则 t53/t160/t147/t167/t181/t182 回归）
+4. `t257_report_untyped.z`：清单含 `add.a`/`add.b`，运行输出 `3`
+
+### 验收
+
+- `--report-untyped` 对 t257 打印 `untyped params (2): add.a / add.b`
+- python_style **257/257**；官方 **194/194**；语料 **38/38** parse
+
+### 下一队列
+
+1. C1/C2：解析行号映射 + 顶层同步恢复
+2. B4：dyn 接收者走 W 方法表分发
+3. soft 桩逐步真实现；E4 可与后续类型清理合批
+
+## 批次一百四十二（2026-09-19，**已修**）：C1 行号映射 + C2 同步恢复（opt-in）
+
+**范围**：advice C1 + C2。
+
+### 做了什么
+
+1. C1：`indent_preprocess` 写 TLS 行源映射；`ensure_fully_parsed` 的 W1002 升级为 `path:line:`（`t258`）
+2. C2：`parse_zeta_impl_recover` + `skip_to_top_level_sync`（W1003）；**默认关**，`ZETA_PARSE_RECOVER=1` 开启（默认开曾让官方 184/194、语料 34/38）
+3. `t259_parse_sync_recover.z`：`// env: ZETA_PARSE_RECOVER=1`，中间 `!!!` 后仍跑到 `second`
+
+### 验收
+
+- t258：stderr `W1002 …/t258_parse_line_map.z:11:`
+- t259 + RECOVER：输出 `1`/`2` + W1003
+- 官方 **194/194**；python_style **259/259**；语料 **38/38**
+
+### 下一队列
+
+1. B4：dyn 接收者走 W 方法表分发；语料 undef 攻坚
+2. soft 桩真实现 / LENIENT 后响亮化
+3. 观察 RECOVER 误恢复后再考虑翻默认
+
+## 批次一百四十三（2026-09-19，**已修**）：B4 + 误回退恢复
+
+**范围**：advice B4；事故恢复（`git checkout` 丢掉未提交 gen.rs）。
+
+### 做了什么
+
+1. **恢复**（按 roadmap 规格重写，非整文件找回）：
+   - `While.pre_cond`：mir + gen（条件副作用）+ codegen（`while.cond`/`continue` 先跑）
+   - for-in-str：`coll_is_str` → `str_len`/`str_get`（t205）
+   - `df.drop(str)` 调用点包一元 `StackArray`（批次 111）
+2. **B4**：`method_by_unique_name` 仅 `PyDynamic` + SKIP 容器/dunder 名
+3. **附带**：`handle_tag` 改为查 W 表全部 handle（原先只有 PyDate/PyDelta，导致升级后的 `PyPath` 形参仍 I64、`p.exists()` 裸链）
+4. 摘除 t205/t260 `known-fail`
+
+### 验收
+
+- t192 / t205 / t260 PASS
+- 官方 / python_style 需全量再跑（t206 `columns`/`in DataFrame` 另案，非本次回退主因）
+
+### 教训
+
+- **每个 batch 必须 commit**；禁止对未提交大文件 `git checkout --` / `rm`（改用 `mv` 进 `.trash/`）
+
+### 下一队列
+
+1. 全量三基线确认
+2. t206 DataFrame.columns / `in` 容器类型
+3. soft 桩 / 语料 undef
+

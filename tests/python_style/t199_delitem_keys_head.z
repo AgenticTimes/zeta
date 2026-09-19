@@ -1,0 +1,14 @@
+// PY-A: `del obj[k]` → `__delitem__`；此前 del 当标识符、下标变 GET。
+//   另补 keys（head 见 t200）。
+// expect: 0
+// expect: 1
+// expect: 1
+// expect: code
+from pandas import DataFrame
+
+a = DataFrame({"code": ["x", "y"], "v": ["1", "2"]})
+del a["v"]
+print("v" in a)
+print("code" in a)
+print(len(a.columns))
+print(a.keys()[0])

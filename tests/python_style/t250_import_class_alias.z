@@ -1,0 +1,8 @@
+// PY-A: alias of an *imported* class must chase the defining module.
+// jq_shim: `from wufu_backend import LocalBackend` then `_LocalPortfolio = LocalBackend`.
+// expect: 1
+from pyalias_backend import LocalBackend as LB
+
+_LocalPortfolio = LB
+p = _LocalPortfolio(1)
+print(p.x)

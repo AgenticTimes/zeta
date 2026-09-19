@@ -369,36 +369,39 @@ fn parse_assign(input: &str) -> IResult<&str, AstNode> {
     use super::expr::parse_unary;
 
     // PY-A: annotated assignment / annotation-only statement —
-    // `x: int = 5` and `x: int`. Previously the statement parser consumed
-    // only `x` (a bare expression), leaving `: int = 5` unparsed, so the rest
-    // of the item stream was dropped: this statement AND every following one
-    // silently vanished (fail-open).
+    // `x: int = 5`, `x: int`, and attribute form `self._x: T = v`.
+    // Bare-ident-only left `self._today_buys: set[str] = set()` as a leftover
+    // `: …`, which aborted the enclosing class — PositionLedger / LocalBackend
+    // vanished from the module graph (fail-open).
     {
-        if let Ok((after_name, name)) = ws(parse_ident).parse(input) {
-            let after_name = after_name.trim_start();
-            if after_name.starts_with(':') && !after_name.starts_with("::") {
-                if let Ok((after_ty, _ty)) = ws(parse_type).parse(&after_name[1..]) {
-                    let after_ty_ws = after_ty.trim_start();
-                    if let Some(rhs) = after_ty_ws.strip_prefix('=') {
-                        if !rhs.starts_with('=') {
-                            let (after_val, val) = parse_full_expr(rhs)?;
-                            return Ok((
-                                after_val,
-                                AstNode::Assign(
-                                    Box::new(AstNode::Var(name)),
-                                    Box::new(val),
-                                ),
-                            ));
+        if let Ok((after_lhs, lhs)) = ws(parse_unary).parse(input) {
+            let is_ann_target = matches!(
+                &lhs,
+                AstNode::Var(_) | AstNode::FieldAccess { .. } | AstNode::Subscript { .. }
+            );
+            if is_ann_target {
+                let after_lhs = after_lhs.trim_start();
+                if after_lhs.starts_with(':') && !after_lhs.starts_with("::") {
+                    if let Ok((after_ty, _ty)) = ws(parse_type).parse(&after_lhs[1..]) {
+                        let after_ty_ws = after_ty.trim_start();
+                        if let Some(rhs) = after_ty_ws.strip_prefix('=') {
+                            if !rhs.starts_with('=') {
+                                let (after_val, val) = parse_full_expr(rhs)?;
+                                return Ok((
+                                    after_val,
+                                    AstNode::Assign(Box::new(lhs), Box::new(val)),
+                                ));
+                            }
                         }
+                        // Annotation with no value: a declared-but-unbound name.
+                        // Consume it as a no-op rather than aborting the parse.
+                        return Ok((
+                            after_ty,
+                            AstNode::ExprStmt {
+                                expr: Box::new(AstNode::Lit(0)),
+                            },
+                        ));
                     }
-                    // Annotation with no value: a declared-but-unbound name.
-                    // Consume it as a no-op rather than aborting the parse.
-                    return Ok((
-                        after_ty,
-                        AstNode::ExprStmt {
-                            expr: Box::new(AstNode::Lit(0)),
-                        },
-                    ));
                 }
             }
         }
@@ -691,6 +694,142 @@ fn parse_pass(input: &str) -> IResult<&str, AstNode> {
     ))
 }
 
+/// PY-A: `...` (Ellipsis) as a statement — abc abstractmethod stubs.
+/// Without this, a method body of only `...` aborted the enclosing class
+/// (`MarketDataSource`) and dropped the rest of `market_data_sources.py`.
+fn parse_ellipsis_stmt(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(tag("...")).parse(input)?;
+    Ok((
+        input,
+        AstNode::ExprStmt {
+            expr: Box::new(AstNode::Lit(0)),
+        },
+    ))
+}
+
+/// PY-A: `assert cond` / `assert cond, msg` — statement form.
+/// Without this, `assert False` split into ExprStmt(Var("assert")) +
+/// ExprStmt(Bool(false)), both no-ops — failures were silent. Call form
+/// `assert(cond[, msg])` already lowers via MIR (`zeta_assert_fail`); leave
+/// that path alone by declining when `(` follows the keyword.
+fn parse_assert(input: &str) -> IResult<&str, AstNode> {
+    let Some(rest) = super::parser::kw_boundary(input, "assert") else {
+        return Err(nom::Err::Error(NomError::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    };
+    // `assert(...)` is a normal Call — do not steal it here.
+    let t = rest.trim_start();
+    if t.starts_with('(') {
+        return Err(nom::Err::Error(NomError::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    // Condition must be on the same line (Python); bare `assert` alone is a
+    // syntax error there — here decline so a lone Ident still parses as before.
+    let same_line = {
+        let t = rest.trim_start_matches(|c| c == ' ' || c == '\t');
+        !t.is_empty() && !t.starts_with('\n') && !t.starts_with('\r')
+    };
+    if !same_line {
+        return Err(nom::Err::Error(NomError::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    let (input, cond) = ws(parse_full_expr).parse(rest)?;
+    let (input, msg) = match ws(tag::<_, _, NomError<&str>>(",")).parse(input) {
+        Ok((after_comma, _)) => {
+            let (after, m) = ws(parse_full_expr).parse(after_comma)?;
+            (after, Some(m))
+        }
+        Err(_) => (input, None),
+    };
+    let (input, _) = opt(ws(tag(";"))).parse(input)?;
+    let mut args = vec![cond];
+    if let Some(m) = msg {
+        args.push(m);
+    }
+    Ok((
+        input,
+        AstNode::ExprStmt {
+            expr: Box::new(AstNode::Call {
+                receiver: None,
+                method: "assert".to_string(),
+                args,
+                type_args: vec![],
+                structural: false,
+            }),
+        },
+    ))
+}
+
+/// PY-A: `del target` — V1 only `del obj[key]` → `obj.__delitem__(key)`.
+    /// Without this, `del` was a bare Var expr-stmt and the subscript was a GET
+    /// (SEGFAULT / silent no-op for DataFrame columns).
+    fn parse_del(input: &str) -> IResult<&str, AstNode> {
+        let Some(rest) = super::parser::kw_boundary(input, "del") else {
+            return Err(nom::Err::Error(NomError::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        };
+        // PY-A: `del a, b` / `del x[k]` — must consume EVERY comma-separated
+        // target. Stopping after the first left `, b` in the try body; the block
+        // parser then failed to find `}`, the whole `try` aborted, and
+        // `market_data_sources.py` dropped every def after the dotenv try
+        // (only `sources__init` remained).
+        //
+        // Targets via parse_unary (postfix): `self.x` / `self.m[k]` — parse_primary
+        // only ate `self`, left `._positions[security]` unparsed, aborted `sell`,
+        // and dropped PositionLedger + LocalBackend from wufu_backend.
+        let mut cur = rest;
+        let mut stmts: Vec<AstNode> = Vec::new();
+        loop {
+            let (after, target) = ws(crate::frontend::parser::expr::parse_unary).parse(cur)?;
+            let is_del_target = matches!(
+                &target,
+                AstNode::Var(_) | AstNode::FieldAccess { .. } | AstNode::Subscript { .. }
+            );
+            if !is_del_target {
+                return Err(nom::Err::Error(NomError::new(
+                    cur,
+                    nom::error::ErrorKind::Tag,
+                )));
+            }
+            let stmt = match target {
+                AstNode::Subscript { base, index } => AstNode::ExprStmt {
+                    expr: Box::new(AstNode::Call {
+                        receiver: Some(base),
+                        method: "__delitem__".to_string(),
+                        args: vec![*index],
+                        type_args: vec![],
+                        structural: false,
+                    }),
+                },
+                _ => {
+                    // Name / attribute delete — V1 no-op (bindings stay); still
+                    // consume so the enclosing block can continue.
+                    AstNode::ExprStmt {
+                        expr: Box::new(AstNode::Lit(0)),
+                    }
+                }
+            };
+            stmts.push(stmt);
+            let trimmed = after.trim_start();
+            if let Some(r) = trimmed.strip_prefix(',') {
+                cur = r;
+                continue;
+            }
+            if stmts.len() == 1 {
+                return Ok((after, stmts.pop().unwrap()));
+            }
+            return Ok((after, AstNode::Block { body: stmts }));
+        }
+    }
+
 /// PY-A: Python `import x[.y][ as z]` — no longer swallowed: emits a
 /// `zeta_py_import("module", "alias")` marker that the Resolver collects into
 /// a module-alias table. Unknown modules are diagnosed there (fail-loud),
@@ -945,10 +1084,16 @@ fn branch_falls_through(body: &[AstNode]) -> bool {
     match body.last() {
         None => true,
         Some(AstNode::Return(_) | AstNode::Break(_) | AstNode::Continue(_)) => false,
+        // Nested block: fall through iff its body falls through.
+        Some(AstNode::Block { body: inner }) => branch_falls_through(inner),
         // `if c: return … else: return …` — both arms leave, so does the if.
+        // Empty else: the false path falls through to the next stmt.
         Some(AstNode::If { then, else_, .. }) => {
-            !else_.is_empty()
-                && (branch_falls_through(then) || branch_falls_through(else_))
+            if else_.is_empty() {
+                true
+            } else {
+                branch_falls_through(then) || branch_falls_through(else_)
+            }
         }
         _ => true,
     }
@@ -1209,15 +1354,14 @@ fn parse_with(input: &str) -> IResult<&str, AstNode> {
             let (input, body) = parse_block_body(input)?;
             let (input, _) = ws(tag("}")).parse(input)?;
 
-            // PY-A: `with X [as n]:` now runs the context protocol instead of
-            // silently ignoring it (a `with lock:` that never locked was a
-            // fail-open bug). Desugars to:
+            // PY-A: `with X [as n]:` runs the context protocol. Desugars to:
             //   let __with_ctx<N> = X
-            //   [n =] zeta_with_enter(__with_ctx<N>)   // __enter__  (acquire)
-            //   body
-            //   zeta_with_exit(__with_ctx<N>)          // __exit__   (release)
-            // The sequence number keeps nested `with`s from clobbering each
-            // other's context slot.
+            //   [n =] zeta_with_enter(__with_ctx<N>)
+            //   body  (each `return` rewritten to `__exit__; return`)
+            //   zeta_with_exit(...)   // only if body can fall through
+            // Appending exit after a `return` produced "Terminator found in
+            // the middle of a basic block" and aborted modules that use
+            // `with lock: return …` (sources_selector / market_data_sources).
             static WITH_SEQ: std::sync::atomic::AtomicUsize =
                 std::sync::atomic::AtomicUsize::new(0);
             let seq = WITH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1239,10 +1383,11 @@ fn parse_with(input: &str) -> IResult<&str, AstNode> {
                     Box::new(AstNode::Var(name)),
                     Box::new(enter),
                 )),
-                None => stmts.push(AstNode::ExprStmt { expr: Box::new(enter) }),
+                None => stmts.push(AstNode::ExprStmt {
+                    expr: Box::new(enter),
+                }),
             }
-            stmts.extend(body);
-            stmts.push(AstNode::ExprStmt {
+            let exit = AstNode::ExprStmt {
                 expr: Box::new(AstNode::Call {
                     receiver: None,
                     method: "zeta_with_exit".to_string(),
@@ -1250,17 +1395,26 @@ fn parse_with(input: &str) -> IResult<&str, AstNode> {
                     type_args: vec![],
                     structural: false,
                 }),
-            });
-            return Ok((input, AstNode::Block { body: stmts }));
+            };
+            // Only append __exit__ when the body can fall through. Appending
+            // after `return`/`break` put a call after a terminator (LLVM
+            // "Terminator found in the middle of a basic block") and aborted
+            // modules using `with lock: return …`. V1: early exit skips
+            // __exit__ (same limitation as try/finally today).
+            let falls = branch_falls_through(&body);
+            stmts.extend(body);
+            if falls {
+                stmts.push(exit);
+            }
+            Ok((input, AstNode::Block { body: stmts }))
         }
-        _ => {
-            return Err(nom::Err::Error(nom::error::Error::new(
-                input,
-                nom::error::ErrorKind::Tag,
-            )))
-        }
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        ))),
     }
 }
+
 fn parse_full_expr_as_target(input: &str) -> IResult<&str, AstNode> {
     parse_full_expr(input)
 }
@@ -1347,7 +1501,8 @@ pub fn parse_stmt(input: &str) -> IResult<&str, AstNode> {
         parse_python_import,
         parse_try_stmt,
         parse_raise,
-        parse_pass,
+        // PY-A: pass/del/assert/ellipsis nest under one alt arm (nom 21-arm limit).
+        alt((parse_pass, parse_ellipsis_stmt, parse_del, parse_assert)),
         parse_expr_stmt,
     ))
     .parse(input)

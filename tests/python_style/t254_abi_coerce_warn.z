@@ -1,0 +1,10 @@
+// B1: f64 arg → i64 param triggers fptosi coerce (warn by default).
+// expect: 1
+fn take_i(x: i64) -> i64 {
+    if x < 0 { 0 - x } else { x }
+}
+
+fn main() {
+    let x: f64 = -1.0
+    print(take_i(x))
+}

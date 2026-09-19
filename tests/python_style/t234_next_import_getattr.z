@@ -1,0 +1,8 @@
+// PY-A: next(it, default) returns default; untyped .next() returns 0 (exhausted).
+// expect: 42
+// expect: 0
+def main() -> i64:
+    print(next([1, 2], 42))
+    rs = 0
+    print(rs.next())
+    return 0

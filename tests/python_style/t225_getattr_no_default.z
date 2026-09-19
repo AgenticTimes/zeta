@@ -1,0 +1,6 @@
+// PY-A: getattr without default on untyped still fail-loud (ghost link).
+// expect-error
+def f(obj):
+    return getattr(obj, "slip")
+
+print(f(1))

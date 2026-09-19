@@ -1,0 +1,24 @@
+// PY-A: empty list append(str) — element type + len must not stay I64/0.
+// Was: print(xs[0]) → pointer digits; len(xs) folded to literal 0 forever.
+// expect: 0
+// expect: 1
+// expect: hi
+// expect: 2
+// expect: x
+// expect: hi
+// expect: bye
+xs = []
+print(len(xs))
+xs.append("hi")
+print(len(xs))
+print(xs[0])
+# non-empty start: len must grow (not stay Literal(1))
+ys = ["x"]
+ys.append("hi")
+print(len(ys))
+print(ys[0])
+print(ys[1])
+# annotated empty also prints as str
+zs: lt(vec, str) = []
+zs.append("bye")
+print(zs[0])

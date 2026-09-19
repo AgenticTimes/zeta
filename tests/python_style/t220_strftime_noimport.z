@@ -1,0 +1,9 @@
+// PY-A: datetime.datetime(...).strftime without `import datetime`
+// (star-import / bare name) must dispatch py_dt_strftime, not PyDate__strftime.
+// expect: 2019-12-20
+def f(year: i64) -> str:
+    return datetime.datetime(year - 1, 12, 20).strftime('%Y-%m-%d')
+
+def main() -> i64:
+    print(f(2020))
+    return 0

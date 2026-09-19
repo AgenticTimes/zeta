@@ -1,0 +1,6 @@
+// PY-A: from-import aliases inside a loaded module must not be rewritten by
+// symbol_renames to unresolved `pathlib__Path` (must call py_path_new).
+// expect: /tmp
+// expect: 1
+from pathas_fixture import check
+print(check())

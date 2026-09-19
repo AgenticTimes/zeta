@@ -1,0 +1,17 @@
+// PY-A: 从 map 取出的列表必须保留 DynamicArray 类型，否则 `a+b` 走整数加、`a[i]` 走 map_get。
+// expect: 2
+// expect: x
+// expect: y
+// expect: 3
+// expect: x
+// expect: z
+m = {"code": ["x", "y"]}
+a = m["code"]
+print(len(a))
+print(a[0])
+print(a[1])
+b = ["z"]
+c = a + b
+print(len(c))
+print(c[0])
+print(c[2])

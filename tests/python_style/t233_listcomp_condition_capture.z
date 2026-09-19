@@ -1,0 +1,13 @@
+// PY-A: listcomp filter must capture local callee `condition` (not ghost `_condition`).
+// expect: 2
+def main() -> i64:
+    steps = [(0, lambda m: m > 0, True)]
+    xs = [1, 2, -1, 0]
+    n = 0
+    for _, condition, enabled in steps:
+        if enabled:
+            out = [m for m in xs if condition(m)]
+            for x in out:
+                n = n + 1
+    print(n)
+    return 0

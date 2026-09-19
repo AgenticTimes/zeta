@@ -1,0 +1,7 @@
+// PY-A: untyped getattr WITH default uses the default (documented stub;
+// never invents a field read). Compile succeeds; value is the default.
+// expect: 0
+def f(obj):
+    return getattr(obj, "slip", 0)
+
+print(f(1))

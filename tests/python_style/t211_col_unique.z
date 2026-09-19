@@ -1,0 +1,17 @@
+// PY-A: 列/列表 `.unique()` —— zeta_vec_unique 保序去重（非 identity）。
+// expect: 2
+// expect: a
+// expect: b
+// expect: 2
+// expect: x
+from pandas import DataFrame
+
+xs = ["a", "b", "a"]
+u = xs.unique()
+print(len(u))
+print(u[0])
+print(u[1])
+df = DataFrame({"c": ["x", "y", "x"]})
+cu = df["c"].unique()
+print(len(cu))
+print(cu[0])
