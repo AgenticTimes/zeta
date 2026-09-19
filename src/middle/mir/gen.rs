@@ -7441,6 +7441,38 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     }
                 }
 
+                // A handle-tag receiver (`PyDate`, `PyPath`, …) whose handle
+                // could not be derived from the AST — `datetime.datetime(…)
+                // .strftime(…)` with no `import datetime` resolves the
+                // constructor late, so `py_handle_of` saw nothing — still has a
+                // statically known tag. Dispatch the W-table shim; without this
+                // the Named branch below emitted `PyDate::strftime`, i.e. an
+                // undefined `_PyDate__strftime` (t220).
+                if let Some(Type::Named(tn, _)) = receiver_ty.as_ref() {
+                    if let Some((sym, ret_handle)) =
+                        crate::middle::pylib::method_symbol(tn, method)
+                    {
+                        self.stmts.push(MirStmt::Call {
+                            func: sym.to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        let ty = match ret_handle {
+                            Some(h) => Type::Named(h.to_string(), vec![]),
+                            None => match crate::middle::pylib::method_ret(tn, method) {
+                                Some("str") => Type::Str,
+                                Some("f64") => Type::F64,
+                                Some("vecstr") => Type::DynamicArray(Box::new(Type::Str)),
+                                _ => Type::I64,
+                            },
+                        };
+                        self.type_map.insert(id, ty);
+                        return id;
+                    }
+                }
+
                 // Check if this is a method call on a dynamic array
                 let (func, is_array_len, is_array_push) = if let Some(ref rty) = receiver_ty {
                     // Check if receiver is a dynamic array type
