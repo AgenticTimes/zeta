@@ -3279,7 +3279,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 let where_is_free = matches!(
                     receiver.as_ref().map(|r| &**r),
                     Some(AstNode::Var(v)) if self.py_module_aliases.contains_key(v.as_str())
-                );
+                ) || (receiver.is_none()
+                    && self
+                        .py_member_target(&None, "where")
+                        .map_or(false, |(m, mem)| m == "numpy" && mem == "where"));
                 if where_is_free && method == "where" && (args.len() == 1 || args.len() == 3) {
                     let ids: Vec<u32> = args.iter().map(|a| self.lower_expr(a)).collect();
                     let (func, ret) = if args.len() == 1 {
@@ -4047,18 +4050,28 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         type_args: vec![],
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
+                    // A module loaded from disk (`numpy__arange`) carries its
+                    // declared return type in `func_ret_types`; `py_member_call`
+                    // can only report the coarse "str"/"f64"/"i64" kind, so a
+                    // `-> lt(vec, i64)` library function came back typed I64 and
+                    // `np.arange(4)[2]` did a MAP subscript on a Vec (SEGV,
+                    // t212/t227). Prefer the declared type when we have one.
+                    let declared_ret = self.func_ret_types.get(symbol).cloned();
                     self.type_map.insert(
                         id,
                         match (handle, ret) {
                             (Some(h), _) => Type::Named(h.to_string(), vec![]),
-                            (None, "f64") => Type::F64,
-                            (None, "str") => Type::Str,
-                            (None, "vec") => Type::DynamicArray(Box::new(Type::I64)),
-                            (None, "vecstr") => Type::DynamicArray(Box::new(Type::Str)),
-                            (None, "vecmatch") => Type::DynamicArray(Box::new(
-                                Type::Named("PyMatch".to_string(), vec![]),
-                            )),
-                            _ => Type::I64,
+                            (None, r) => declared_ret.unwrap_or_else(|| match r {
+                                "f64" => Type::F64,
+                                "str" => Type::Str,
+                                "vec" => Type::DynamicArray(Box::new(Type::I64)),
+                                "vecstr" => Type::DynamicArray(Box::new(Type::Str)),
+                                "vecmatch" => Type::DynamicArray(Box::new(Type::Named(
+                                    "PyMatch".to_string(),
+                                    vec![],
+                                ))),
+                                _ => Type::I64,
+                            }),
                         },
                     );
                     return id;
