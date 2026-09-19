@@ -1593,12 +1593,175 @@ impl Resolver {
     /// PY-A: static type of each module-level global. The module's statements
     /// live in the synthesized `main`, so this scans every registered function
     /// body for assignments to names that became module globals.
+
     pub fn module_global_types(&self) -> HashMap<String, Type> {
+    /// Infer the MIR type of a module-level expression. `seen` holds the types of
+    /// globals defined EARLIER in the same module (so aliases and constant chains
+    /// resolve in declaration order); `aliases` maps import aliases to modules.
+    fn infer_global_ty(
+        n: &AstNode,
+        seen: &HashMap<String, Type>,
+        aliases: &HashMap<String, String>,
+        member_aliases: &HashMap<String, (String, String)>,
+    ) -> Option<Type> {
+        use crate::middle::pylib;
+        match n {
+            AstNode::StringLit(_) | AstNode::FString { .. } => Some(Type::Str),
+            AstNode::FloatLit(_) => Some(Type::F64),
+            AstNode::Bool(_) => Some(Type::Bool),
+            AstNode::Lit(_) => Some(Type::I64),
+            AstNode::DictLit { .. } => Some(Type::Named("map".to_string(), vec![])),
+            AstNode::ArrayLit(_) | AstNode::DynamicArrayLit { .. } => {
+                Some(Type::DynamicArray(Box::new(Type::I64)))
+            }
+            // An alias to an earlier global keeps that global's type
+            // (`_CACHE = _LISTING_CACHE`).
+            AstNode::Var(v) => seen.get(v).cloned(),
+            // `A / B` — pathlib join (and, later, other handle operators).
+            AstNode::BinaryOp { op, left, right } => {
+                let lt = infer_global_ty(left, seen, aliases, member_aliases)?;
+                let rt = match &**right {
+                    AstNode::StringLit(_) => Type::Str,
+                    other => infer_global_ty(other, seen, aliases, member_aliases)?,
+                };
+                let (lname, rname) = match (&lt, &rt) {
+                    (Type::Named(l, _), Type::Named(r, _)) => (l.clone(), r.clone()),
+                    (Type::Named(l, _), Type::Str) => (l.clone(), "str".to_string()),
+                    _ => return None,
+                };
+                pylib::handle_op(op, &lname, &rname).map(|(_sym, kind)| match kind {
+                    "path" => Type::Named("PyPath".to_string(), vec![]),
+                    "date" => Type::Named("PyDate".to_string(), vec![]),
+                    "delta" => Type::Named("PyDelta".to_string(), vec![]),
+                    "bool" => Type::Bool,
+                    _ => Type::I64,
+                })
+            }
+            // `p.parents[2]` — index into a Vec-returning attribute.
+            AstNode::Subscript { base, .. } => match infer_global_ty(base, seen, aliases, member_aliases)? {
+                Type::DynamicArray(e) => Some(*e),
+                Type::Tuple(ts) => ts.first().cloned(),
+                _ => None,
+            },
+            // `handle.attr` — a W-table method used as a property (Path.parents).
+            AstNode::FieldAccess { base, field } => {
+                let b = infer_global_ty(base, seen, aliases, member_aliases)?;
+                match b {
+                    Type::Named(tag, _) => method_result_ty(&tag, field),
+                    _ => None,
+                }
+            }
+            // `X.Y(...)` / `Y(...)` through the registry, or `handle.method()`.
+            AstNode::Call {
+                receiver, method, ..
+            } => {
+                if let Some(recv) = receiver {
+                    if let Some(Type::Named(tag, _)) = infer_global_ty(recv, seen, aliases, member_aliases) {
+                        if let Some(t) = method_result_ty(&tag, method) {
+                            return Some(t);
+                        }
+                    }
+                    // `mod.member(...)` — a registry module member.
+                    let mut parts: Vec<String> = Vec::new();
+                    let mut cur: &AstNode = recv;
+                    loop {
+                        match cur {
+                            AstNode::FieldAccess { base, field } => {
+                                parts.push(field.clone());
+                                cur = base;
+                            }
+                            AstNode::Var(root) => {
+                                parts.push(root.clone());
+                                break;
+                            }
+                            _ => return None,
+                        }
+                    }
+                    parts.reverse();
+                    let root = parts.remove(0);
+                    let rest = if parts.is_empty() {
+                        method.to_string()
+                    } else {
+                        format!("{}.{}", parts.join("."), method)
+                    };
+                    let module = aliases.get(&root)?;
+                    let e = pylib::find_member(module, &rest)?;
+                    return match (e.handle.as_deref(), e.ret.as_str()) {
+                        (Some(h), _) => Some(Type::Named(h.to_string(), vec![])),
+                        (None, "str") => Some(Type::Str),
+                        (None, "f64") => Some(Type::F64),
+                        _ => Some(Type::I64),
+                    };
+                }
+                // `Path(__file__)` — a member imported BY NAME
+                // (`from pathlib import Path`). This is where a module-level
+                // path constant starts, so it must be resolved before the
+                // receiver-less case gives up.
+                let (module, member) = member_aliases.get(method)?;
+                let e = pylib::find_member(module, member)?;
+                match (e.handle.as_deref(), e.ret.as_str()) {
+                    (Some(h), _) => Some(Type::Named(h.to_string(), vec![])),
+                    (None, "str") => Some(Type::Str),
+                    (None, "f64") => Some(Type::F64),
+                    _ => Some(Type::I64),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The MIR type of a `W`-table method's declared result. Kept in ONE place:
+    /// the same mapping had to be patched at four separate call sites in the MIR
+    /// layer for `vecpath` (batch 153) — forgetting one silently typed the result
+    /// I64 and every later method call on it became a bare symbol.
+    fn method_result_ty(tag: &str, method: &str) -> Option<Type> {
+        use crate::middle::pylib;
+        if let Some((_sym, Some(h))) = pylib::method_symbol(tag, method) {
+            return Some(Type::Named(h.to_string(), vec![]));
+        }
+        match pylib::method_ret(tag, method)? {
+            "str" => Some(Type::Str),
+            "f64" => Some(Type::F64),
+            "vecstr" => Some(Type::DynamicArray(Box::new(Type::Str))),
+            "vecpath" => Some(Type::DynamicArray(Box::new(Type::Named(
+                "PyPath".to_string(),
+                vec![],
+            )))),
+            "vecjson" => Some(Type::DynamicArray(Box::new(Type::Named(
+                "PyJson".to_string(),
+                vec![],
+            )))),
+            "vecmatch" => Some(Type::DynamicArray(Box::new(Type::Named(
+                "PyMatch".to_string(),
+                vec![],
+            )))),
+            "vec" => Some(Type::DynamicArray(Box::new(Type::I64))),
+            _ => Some(Type::I64),
+        }
+    }
         let globals = self.module_globals.borrow().clone();
         let aliases = self.py_module_aliases.borrow().clone();
+        let member_aliases = self.py_member_aliases.borrow().clone();
+        // In a MULTI-module compile `module_globals` holds the MANGLED form for
+        // imported modules (`backend_datasrc_etf_listing___LISTING_CACHE`) while
+        // the walk below sees the BARE source name (`_LISTING_CACHE`) — so the
+        // containment test never matched and the whole table came out EMPTY
+        // (probe: defs=448 globals=372 typed=0), leaving every module-level path
+        // constant untyped in the linked program (etf_listing's `_LISTING_CACHE`
+        // → bare `_exists`). Accept both spellings.
+        let bare_globals: std::collections::HashSet<String> = globals
+            .iter()
+            .map(|g| match g.rsplit_once("__") {
+                Some((_, tail)) if !tail.is_empty() => tail.to_string(),
+                _ => g.clone(),
+            })
+            .collect();
         let mut out: HashMap<String, Type> = HashMap::new();
         fn walk(stmts: &[AstNode], globals: &std::collections::HashSet<String>,
-                aliases: &HashMap<String, String>, out: &mut HashMap<String, Type>) {
+                bare_globals: &std::collections::HashSet<String>,
+                aliases: &HashMap<String, String>,
+                member_aliases: &HashMap<String, (String, String)>,
+                out: &mut HashMap<String, Type>) {
             for s in stmts {
                 let (name, rhs) = match s {
                     AstNode::Assign(lhs, rhs) => match &**lhs {
@@ -1610,77 +1773,24 @@ impl Resolver {
                         _ => continue,
                     },
                     AstNode::Block { body } => {
-                        walk(body, globals, aliases, out);
+                        walk(body, globals, bare_globals, aliases, member_aliases, out);
                         continue;
                     }
                     _ => continue,
                 };
-                if !globals.contains(&name) {
+                if !globals.contains(&name) && !bare_globals.contains(&name) {
                     continue;
                 }
-                let ty = match rhs {
-                    Some(AstNode::StringLit(_)) | Some(AstNode::FString { .. }) => Some(Type::Str),
-                    Some(AstNode::FloatLit(_)) => Some(Type::F64),
-                    // `CACHE = {}` / `POOL = []` — a module-level container is
-                    // the common case and its type was simply missing, so the
-                    // whole table came out EMPTY (probe: globals=[]) and every
-                    // `CACHE.get(k)` on a module global fell through to a free
-                    // call named `get` (undefined symbol).
-                    Some(AstNode::DictLit { .. }) => Some(Type::Named("map".to_string(), vec![])),
-                    Some(AstNode::ArrayLit(_)) => {
-                        Some(Type::DynamicArray(Box::new(Type::I64)))
-                    }
-                    Some(AstNode::Call { receiver, method, .. }) => {
-                        // Resolve `X.Y(...)` / `Y(...)` through the registry to
-                        // its declared result (handle tag or str).
-                        let member = match receiver {
-                            Some(recv) => {
-                                let mut parts: Vec<String> = Vec::new();
-                                let mut cur: &AstNode = recv;
-                                loop {
-                                    match cur {
-                                        AstNode::FieldAccess { base, field } => {
-                                            parts.push(field.clone());
-                                            cur = base;
-                                        }
-                                        AstNode::Var(root) => {
-                                            parts.push(root.clone());
-                                            break;
-                                        }
-                                        _ => break,
-                                    }
-                                }
-                                parts.reverse();
-                                // A receiver that is not a `name(.name)*` chain
-                                // (e.g. a call result) yields nothing — never
-                                // index an empty vector.
-                                if parts.is_empty() {
-                                    None
-                                } else {
-                                    let root = parts.remove(0);
-                                    let rest = if parts.is_empty() {
-                                        method.to_string()
-                                    } else {
-                                        format!("{}.{}", parts.join("."), method)
-                                    };
-                                    aliases.get(&root).map(|module| (module.clone(), rest))
-                                }
-                            }
-                            None => None,
-                        };
-                        member.and_then(|(module, mem)| {
-                            crate::middle::pylib::find_member(&module, &mem).map(|e| {
-                                match (e.handle.as_deref(), e.ret.as_str()) {
-                                    (Some(h), _) => Type::Named(h.to_string(), vec![]),
-                                    (None, "str") => Type::Str,
-                                    (None, "f64") => Type::F64,
-                                    _ => Type::I64,
-                                }
-                            })
-                        })
-                    }
-                    _ => None,
-                };
+                // Resolve a module-level global's type — including CONSTANT
+                // CHAINS (`_CACHE = _PROJECT_ROOT / "data" / "x.json"`,
+                // `_ROOT = Path(__file__).resolve().parents[2]`). Real projects
+                // build paths that way; before this the global stayed I64 and
+                // every `.exists()` / `.read_text()` on it emitted a bare symbol
+                // (`_exists` 7 / `_read_text` 6 reference sites in the REasyQuant
+                // local backtest).
+                let ty = rhs.and_then(|r| {
+                    infer_global_ty(r, &out, &aliases, &member_aliases)
+                });
                 if let Some(t) = ty {
                     out.insert(name, t);
                 }
@@ -1689,7 +1799,7 @@ impl Resolver {
         let defs = self.registered_func_defs.borrow().clone();
         for d in &defs {
             if let AstNode::FuncDef { body, .. } = d {
-                walk(body, &globals, &aliases, &mut out);
+                walk(body, &globals, &bare_globals, &aliases, &member_aliases, &mut out);
             }
         }
         out

@@ -1,0 +1,24 @@
+// PY-A: 模块级常量链的类型推断（批次 153 追加）。
+// `_ROOT = Path(__file__).resolve().parents[2]` + `_CACHE = _ROOT / "data" / "x.json"`
+// 这类「模块根 + 派生素材路径」是真实项目的标准写法。此前 `module_global_types`
+// 只认字面量/DictLit/ArrayLit/模块成员调用，常量链落空 ⇒ 全局是 I64 ⇒
+// 函数体里读它（zeta_env_get）拿到 I64 ⇒ `.exists()` / `.read_text()` 发裸符号
+// （REasyQuant: `_exists` 7 / `_read_text` 6 处引用）。
+// expect: x.json
+// expect: 0
+// expect: 0
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[2]
+_CACHE = _ROOT / "data" / "universe" / "x.json"
+
+print(_CACHE.name)
+print(_CACHE.exists())
+
+# 函数体里读全局（走 env）也必须保留类型
+def probe() -> i64:
+    if _CACHE.exists():
+        return 1
+    return 0
+
+print(probe())

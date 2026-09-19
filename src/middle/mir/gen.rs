@@ -7599,8 +7599,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // the Named branch below emitted `PyDate::strftime`, i.e. an
                 // undefined `_PyDate__strftime` (t220).
                 if let Some(Type::Named(tn, _)) = receiver_ty.as_ref() {
+                    // The receiver's type may carry the PYTHON class spelling
+                    // (`Path`, `Timestamp`) rather than the registry handle tag
+                    // (`PyPath`). Resolve it through the same table the parameter
+                    // path uses, otherwise `cache_path.write_text(...)` emitted
+                    // `Path::write_text` (undefined) even though `W PyPath
+                    // write_text` exists.
+                    let tag = crate::middle::pylib::handle_tag(tn)
+                        .map(|h| h.to_string())
+                        .unwrap_or_else(|| tn.clone());
                     if let Some((sym, ret_handle)) =
-                        crate::middle::pylib::method_symbol(tn, method)
+                        crate::middle::pylib::method_symbol(&tag, method)
                     {
                         self.stmts.push(MirStmt::Call {
                             func: sym.to_string(),
@@ -7611,7 +7620,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         self.exprs.insert(id, MirExpr::Var(id));
                         let ty = match ret_handle {
                             Some(h) => Type::Named(h.to_string(), vec![]),
-                            None => match crate::middle::pylib::method_ret(tn, method) {
+                            None => match crate::middle::pylib::method_ret(&tag, method) {
                                 Some("str") => Type::Str,
                                 Some("f64") => Type::F64,
                                 Some("vecstr") => Type::DynamicArray(Box::new(Type::Str)),
