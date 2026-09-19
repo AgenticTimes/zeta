@@ -466,6 +466,24 @@ impl MirGen {
         })
     }
 
+    /// 批次147: qualified-method name with module-mangle candidates.
+    /// `self` in a library's own method is typed Named("pandas__DataFrame")
+    /// (the mangled struct), while func_ret_types keys the method as
+    /// "DataFrame::column_names" (unmangled) — try both spellings.
+    fn qualified_method_candidate(&self, tn: &str, method: &str) -> Option<String> {
+        let direct = format!("{}::{}", tn, method);
+        if self.func_ret_types.contains_key(&direct) {
+            return Some(direct);
+        }
+        if let Some((_, tail)) = tn.rsplit_once("__") {
+            let cand = format!("{}::{}", tail, method);
+            if self.func_ret_types.contains_key(&cand) {
+                return Some(cand);
+            }
+        }
+        None
+    }
+
     fn py_handle_of(&self, recv: &AstNode) -> Option<String> {
         // A chained call whose callee is a registry member that declares a
         // handle (e.g. `hashlib.md5("x").hexdigest()`): the result's tag is
@@ -1069,8 +1087,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // DictInsert on the struct pointer (garbage write).
                     if let Type::Named(n, _) = &base_ty {
                         if n != "map" && n != "dict" {
-                            let qualified = format!("{}::__setitem__", n);
-                            if self.func_ret_types.contains_key(&qualified) {
+                            if let Some(qualified) =
+                                self.qualified_method_candidate(n, "__setitem__")
+                            {
                                 self.stmts.push(MirStmt::VoidCall {
                                     func: qualified,
                                     args: vec![base_id, index_id, rhs_id],
@@ -4572,26 +4591,25 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 }
                 if method == "len" && receiver.is_none() && args.len() == 1 {
                     let arg_id = self.lower_expr(&args[0]);
-                    match self.type_map.get(&arg_id).cloned() {
-                        Some(Type::Array(_, ArraySize::Literal(n))) => {
-                            self.exprs.insert(id, MirExpr::IntLit(n as i64));
-                            self.type_map.insert(id, Type::I64);
-                            return id;
-                        }
-                        // 批次146 重放: `len(obj)` dispatches to the object's
-                        // `__len__` method (t196: `len(F())`, `len(df)`).
-                        Some(Type::Named(n, _))
-                            if self
-                                .func_ret_types
-                                .contains_key(&format!("{}::__len__", n)) =>
-                        {
+                    let arg_ty = self.type_map.get(&arg_id).cloned();
+                    // 批次146 重放: `len(obj)` dispatches to the object's
+                    // `__len__` method (t196: `len(F())`, `len(df)`).
+                    if let Some(Type::Named(n, _)) = &arg_ty {
+                        if let Some(qlen) = self.qualified_method_candidate(n, "__len__") {
                             self.stmts.push(MirStmt::Call {
-                                func: format!("{}::__len__", n),
+                                func: qlen,
                                 args: vec![arg_id],
                                 dest: id,
                                 type_args: vec![],
                             });
                             self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(id, Type::I64);
+                            return id;
+                        }
+                    }
+                    match arg_ty {
+                        Some(Type::Array(_, ArraySize::Literal(n))) => {
+                            self.exprs.insert(id, MirExpr::IntLit(n as i64));
                             self.type_map.insert(id, Type::I64);
                             return id;
                         }
@@ -6401,12 +6419,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     if arg_ids.len() == 2 {
                         let named_hit = match receiver_ty.as_ref() {
                             Some(Type::Named(tn, _)) => {
-                                let q = format!("{}::__contains__", tn);
-                                if self.func_ret_types.contains_key(&q) {
-                                    Some(q)
-                                } else {
-                                    None
-                                }
+                                self.qualified_method_candidate(tn, "__contains__")
                             }
                             _ => None,
                         };
@@ -7313,7 +7326,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         // an unrelated stub (`@column`) whose result type is i64
                         // — so `a.column("code")[1]` then did a MAP subscript on
                         // a Vec and SEGFAULTED.
-                        (format!("{}::{}", tn, method), false, false)
+                        (
+                            self.qualified_method_candidate(tn, method)
+                                .unwrap_or_else(|| format!("{}::{}", tn, method)),
+                            false,
+                            false,
+                        )
                     } else {
                         // The receiver's type may be UNKNOWN (e.g. the result of
                         // `pd.DataFrame(...)` whose type is not tracked), in which
@@ -8891,8 +8909,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // restore.
                 if let Type::Named(tn, _) = &base_ty {
                     if tn != "map" && tn != "dict" {
-                        let qualified = format!("{}::__getitem__", tn);
-                        if self.func_ret_types.contains_key(&qualified) {
+                        if let Some(qualified) =
+                            self.qualified_method_candidate(tn, "__getitem__")
+                        {
                             let ret_ty = self.func_ret_types.get(&qualified).cloned();
                             self.stmts.push(MirStmt::Call {
                                 func: qualified,

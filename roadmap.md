@@ -5030,3 +5030,26 @@ python_style **219 → 225**；官方 **194/194**。
 2. numpy where/eye 簇（t212/t217/t218/t221/t227）
 3. 链接失败 6 例（t216/t220/t223/t231/t232/t246）
 4. isinstance（t87）、listcomp 闭包（t216/t233）
+
+### 批次一百四十七（2026-09-19，**已收口**）：限定名候选查找——双态统一的外科实现
+
+**方案变更**：直接重命名 ImplBlock 会级联（ctor StructLit variant、字段类型查找、py_struct_type_of 等消费者都需要同步），已回退。改为**读取侧容忍双态**：新增 `qualified_method_candidate(tn, method)`——先试 `{tn}::{method}`，未命中则剥模块 mangle 前缀（`pandas__DataFrame` → `DataFrame`）重试。接入全部 5 个分派点（Call 限定路径 / len→__len__ / 下标赋值→__setitem__ / 下标→__getitem__ / in→__contains__）。
+
+### 根因（head/tail 簇 SEGV 的完整链条）
+
+`self` 在库方法内被类型化为 `Named("pandas__DataFrame")`（mangled struct），而 func_ret_types 以 `DataFrame::column_names`（未 mangled）为键 → 方法返回类型查找 MISS → `cols` 退化 I64 → `cols[j]` 落入 map 猜测 → map_get(vec 句柄) SEGV。
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 238/260 | **241/260**（t200/t201/t204 部分路径 + 连带） |
+| t196/t197/t198/t200/t201/t202/t206/t87 | FAIL/部分 | **PASS** |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+
+### 剩余 19 失败
+
+- numpy 簇 5：t212/t217/t218/t221/t227（where/eye/free_names/wrappers）
+- pandas 链式 6：t193/t204/t207/t208/t210/t228/t229（rename/reset_index/dedup/append）
+- 链接失败 6：t216/t233（listcomp 闭包内 DataFrame）、t220（strftime）、t223（logger `_3`）、t231（fromkeys/dict/add）、t232（Path open/read_text）、t246（set）
+- t87（isinstance：直接运行输出正确，runner 口径待查）
