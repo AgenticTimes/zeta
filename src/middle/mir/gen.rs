@@ -8267,6 +8267,26 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         return id;
                     }
                 }
+                // 批次147 重放: FieldAccess on a VEC/LIST handle (`xs.values`,
+                // `.tolist`) — vecs have no fields, the handle IS the value
+                // (identity). A raw struct field read on a vec handle
+                // returned garbage and crashed the subscript (t202).
+                // 定长数组字面量与动态 vec 共享堆布局（[cap|len|elems]），
+                // 两者皆 identity。
+                match self.type_map.get(&base_id).cloned() {
+                    Some(Type::DynamicArray(elem)) => {
+                        self.exprs.insert(id, MirExpr::Var(base_id));
+                        self.type_map.insert(id, Type::DynamicArray(elem));
+                        return id;
+                    }
+                    Some(Type::Array(elem, _)) => {
+                        self.exprs.insert(id, MirExpr::Var(base_id));
+                        self.type_map
+                            .insert(id, Type::DynamicArray(elem));
+                        return id;
+                    }
+                    _ => {}
+                }
                 // 2. Create FieldAccess expression
                 self.exprs.insert(
                     id,

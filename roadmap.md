@@ -4973,3 +4973,20 @@ python_style **219 → 225**；官方 **194/194**。
 1. pandas 链式簇（head/tail/rename/reset_index 的 self 方法链 + 切片）——最大簇 10 例
 2. numpy where/eye/free_names 簇
 3. 链接失败 6 例逐个（多为缺 registry X 条目或 W 方法）
+
+### 批次一百四十六 第二轮（同日）：vec identity + N 参 min/max
+
+1. **vec/lList FieldAccess identity**：`xs.values` / `.tolist` 在 DynamicArray 与定长 Array 上 = 句柄本身（vec 无字段；此前裸字段读 → 垃圾 → 后续下标 SEGV，t202）
+2. **N 参 min/max**：`max(1, 5, 3)` 两两折叠 f64/i64（t230）
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 237/260 | **238/260** |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+
+### 新定位的缺陷（未修，下一批）
+
+- **切片 end 为 PyDynamic 参数时结果错误**：`def sl(col, n): return col[:n]` 对 `["x","y"]` 返回空（`zeta_slice_vec(handle, 0, 1)` 本应正确；疑 PyDynamic end 的 lowering 或静态数组 header 探测）——head/tail/rename 簇（10 例）的公共根因
+- 其余：numpy where/eye 簇、isinstance、listcomp DataFrame、strftime/logger/path 链接失败
