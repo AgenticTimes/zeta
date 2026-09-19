@@ -1,0 +1,24 @@
+// PY-A: 两个 float 相关缺陷（均在 REasyQuant 本地回测路径上阻塞编译/静默错值）。
+//  1) `if` 体内的 `return <float>`：函数被推断成 i64 却发出 `ret double` ⇒ LLVM 校验
+//     失败 "Function return type does not match operand type of return inst!"，
+//     **整个编译中止**（jq_wufu_local.py 因此连链接都到不了）。
+//  2) Python 拼写 `-> float` 没映射到 f64：被调用方签名是 double，调用点却按 i64 取结果
+//     ⇒ print 打出 f64 的位模式（4611686018427387904）而非 2.000000。
+// expect: 0
+// expect: 1
+// expect: 3.000000
+// expect: 2.000000
+def g(a: f64) -> i64:
+    if a <= 0.0:
+        return 0.0
+    return 1
+
+def fee(a: float) -> float:
+    if a <= 0.0:
+        return 0.0
+    return a * 2.0
+
+print(g(-1.0))
+print(g(2.0))
+print(fee(1.5))
+print(fee(1.0))

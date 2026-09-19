@@ -705,7 +705,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // B3: unannotated / dyn params are PyDynamic (ABI still i64).
                     if pt_str.is_empty() || pt_str == "dyn" || pt_str == "PyDynamic" {
                         self.type_map.insert(id, Type::PyDynamic);
-                    } else if pt_str == "f64" || pt_str == "f32" {
+                    } else if pt_str == "f64" || pt_str == "f32" || pt_str == "float" {
                         self.type_map.insert(id, Type::F64);
                     } else if pt_str == "bool" {
                         self.type_map.insert(id, Type::Bool);

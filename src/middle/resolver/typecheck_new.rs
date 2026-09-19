@@ -123,6 +123,13 @@ impl NewTypeCheck for Resolver {
             "f32" => return Type::F32,
             "f64" => return Type::F64,
             "char" => return Type::Char,
+            // Python builtin scalar spellings. Without these `-> float` stayed an
+            // opaque Named type, so the CALLER typed the result i64 and printed
+            // the f64 bit pattern (`print(fee(2.0))` → 4611686018427387904) even
+            // though the callee's own signature was double. Same class of leak as
+            // new_resolver::parse_type_string / Type::from_string.
+            "int" => return Type::I64,
+            "float" => return Type::F64,
             _ => {}
         }
 

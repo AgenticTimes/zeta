@@ -300,6 +300,9 @@ impl Type {
             "bool" => Type::Bool,
             "char" => Type::Char,
             "str" => Type::Str,
+            // Python builtin scalar spellings (see new_resolver::parse_type_string).
+            "int" => Type::I64,
+            "float" => Type::F64,
             // V4I64 native vector type
             "v4i64" => Type::V4I64,
             // SIMD vector types

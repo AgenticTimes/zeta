@@ -417,6 +417,15 @@ impl InferContext {
             "str" => Ok(Type::Str),
             "f32" => Ok(Type::F32),
             "f64" => Ok(Type::F64),
+            // Python builtin scalar spellings. Real corpus code writes
+            // `def fee(self, amount: float, fill_price: float) -> float`;
+            // leaving these as opaque Named types gave every such parameter an
+            // i64 ABI (an fptosi at every call site) and made `-> float` a
+            // function that returns f64 only when `infer_fn_return_type`
+            // happened to see a float literal — otherwise invalid IR
+            // (i64 function, `ret double`) aborted the whole compile.
+            "int" => Ok(Type::I64),
+            "float" => Ok(Type::F64),
             "char" => Ok(Type::Char),
             "u8" => Ok(Type::U8),
             "u16" => Ok(Type::U16),

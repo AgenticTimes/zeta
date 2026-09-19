@@ -4292,6 +4292,29 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .build_signed_int_to_float(ret_val.into_int_value(), self.f64_type, "ret_sitofp")
                         .unwrap()
                         .into()
+                } else if !want_float
+                    && matches!(
+                        ret_val.get_type(),
+                        inkwell::types::BasicTypeEnum::FloatType(_)
+                    )
+                {
+                    // The reverse direction, which was missing: a function whose
+                    // INFERRED return type is i64 (a TOP-LEVEL `return 1` decided
+                    // that) but which has a `return 0.0` nested inside an
+                    // `if`/`while` emitted `ret double` in an i64 function —
+                    // "Function return type does not match operand type of return
+                    // inst!" aborted the WHOLE compile, so
+                    // strategies/code/jq_wufu_local.py could never reach the
+                    // linker at all. `infer_fn_return_type` only scans top-level
+                    // returns, so nested ones are never consulted.
+                    self.builder
+                        .build_float_to_signed_int(
+                            ret_val.into_float_value(),
+                            self.i64_type,
+                            "ret_fptosi",
+                        )
+                        .unwrap()
+                        .into()
                 } else {
                     ret_val
                 };
