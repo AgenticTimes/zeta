@@ -773,6 +773,19 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             Type::Named(param_type.trim().to_string(), vec![]),
                         );
                     }
+                    // `lt(map, K, V)` / `lt(vec, T)`: the ANNOTATION is the only
+                    // place a parameter's element/value type exists. Leaving the
+                    // param I64 degraded every consumer at once — `m[k]` lost its
+                    // value type, so `out[m[k]] = v` inserted a RAW string handle
+                    // as a key while lookups hashed it (`"y" in df` = 0, then a
+                    // miss → 0 → SEGV, t204), and `k in m` never took the map
+                    // branch. Canonical forms only: `vec`→DynamicArray,
+                    // `map`→Named("map",[K,V]) (V added by this batch).
+                    if matches!(self.type_map.get(&id), Some(Type::I64) | Some(Type::PyDynamic)) {
+                        if let Some(ty) = lt_annotation_type(pt_str) {
+                            self.type_map.insert(id, ty);
+                        }
+                    }
                     self.source_types.insert(id, param_type.clone());
                     self.stmts.push(MirStmt::ParamInit {
                         param_id: id,
@@ -10207,6 +10220,40 @@ fn list_elem_suffix(elem: &Type) -> &'static str {
         Type::Str => "_str",
         Type::F64 => "_f64",
         _ => "",
+    }
+}
+
+/// `lt(map, K, V)` / `lt(vec, T)` annotation → the canonical MIR type, or
+/// `None` for anything else. `parse_lt_type` renders the sugar as `map<K, V>`
+/// / `vec<T>`, and `vecstr` is the library shorthand for `vec<str>`.
+fn lt_annotation_type(s: &str) -> Option<Type> {
+    let s = s.trim();
+    let (head, inner) = match s.split_once('<') {
+        Some((h, rest)) => (h.trim(), Some(rest.trim_end_matches('>'))),
+        None => (s, None),
+    };
+    let one = |t: &str| -> Type {
+        let t = t.trim();
+        match t {
+            "vecstr" => Type::DynamicArray(Box::new(Type::Str)),
+            _ => Type::from_string(t),
+        }
+    };
+    match head {
+        "vec" | "list" => Some(Type::DynamicArray(Box::new(
+            inner
+                .and_then(|i| i.split(',').next())
+                .map(one)
+                .unwrap_or(Type::I64),
+        ))),
+        "vecstr" => Some(Type::DynamicArray(Box::new(Type::Str))),
+        "map" | "dict" => {
+            let mut it = inner.unwrap_or("").split(',');
+            let k = it.next().map(one).unwrap_or(Type::I64);
+            let v = it.next().map(one).unwrap_or(Type::I64);
+            Some(Type::Named("map".to_string(), vec![k, v]))
+        }
+        _ => None,
     }
 }
 
