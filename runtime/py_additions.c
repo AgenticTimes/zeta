@@ -839,6 +839,24 @@ int64_t zt_bare_mask(int64_t v, int want_notna) {
 // `~mask` on a boolean vector — element-wise NOT (Python's `~` on a Series).
 // Without this `~invalid` evaluated to the integer bitwise-NOT of the VECTOR
 // HANDLE (0/-garbage), so `df.loc[~invalid]` received a bogus mask.
+// `mask_a | mask_b` — ELEMENT-WISE or for two boolean/label vectors (Python's
+// Series `|`). The generic `|` path concatenated them, so
+// `out["close"].isna() | (out["close"] < cfg.min_price)` produced a 2N-element
+// "mask" and `df.loc[...]` then kept 2N rows.
+int64_t py_vec_or(int64_t a, int64_t b) {
+    if (!a) return b;
+    if (!b) return a;
+    int64_t na = zt_vec_len(a), nb = zt_vec_len(b);
+    int64_t n = na > nb ? na : nb;
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        int ta = i < na && zt_map_or_vec_truthy(((int64_t*)a)[i]);
+        int tb = i < nb && zt_map_or_vec_truthy(((int64_t*)b)[i]);
+        vec_push(out, (ta || tb) ? 1 : 0);
+    }
+    return out;
+}
+
 int64_t py_vec_not(int64_t vec) {
     if (!vec) return 0;
     int64_t n = zt_vec_len(vec);

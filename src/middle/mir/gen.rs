@@ -3175,6 +3175,24 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => Some(*e),
                         _ => None,
                     };
+                    // A boolean/label mask PAIR must be OR-ed element-wise, not
+                    // concatenated: `isna(col) | (col < x)` produced 2N elements and
+                    // `df.loc[...]` kept 2N rows.
+                    let boolish = |t: Option<Type>| matches!(t, Some(Type::Bool));
+                    if boolish(self.type_map.get(&left_id).cloned())
+                        || boolish(self.type_map.get(&right_id).cloned())
+                    {
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_vec_or".to_string(),
+                            args: vec![left_id, right_id],
+                            dest,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(dest, MirExpr::Var(dest));
+                        self.type_map
+                            .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                        return dest;
+                    }
                     let elem = match (
                         elem_of(self.type_map.get(&left_id).cloned()),
                         elem_of(self.type_map.get(&right_id).cloned()),
