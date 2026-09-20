@@ -7461,6 +7461,34 @@ call, no NULL-handle dereference).",
                         return id;
                     }
                 }
+                // `col.clip(lower=0, upper=...)` on a numeric COLUMN — element-wise
+                // clamp. Without this the call hit the zero-arity `clip` stub and
+                // aborted (measured in `validate_and_repair_stock_ohlcv`).
+                if method == "clip"
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::DynamicArray(_) | Type::Array(_, _)))
+                {
+                    let lo = arg_ids.get(1).copied().unwrap_or(0);
+                    let hi = arg_ids.get(2).copied().unwrap_or(0);
+                    let has_lo = if arg_ids.len() > 1 { 1i64 } else { 0 };
+                    let has_hi = if arg_ids.len() > 2 { 1i64 } else { 0 };
+                    let f1 = self.next_id();
+                    self.exprs.insert(f1, MirExpr::IntLit(has_lo));
+                    self.type_map.insert(f1, Type::I64);
+                    let f2 = self.next_id();
+                    self.exprs.insert(f2, MirExpr::IntLit(has_hi));
+                    self.type_map.insert(f2, Type::I64);
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_vec_clip".to_string(),
+                        args: vec![arg_ids[0], lo, hi, f1, f2],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, receiver_ty.clone().unwrap());
+                    return id;
+                }
                 // `series.max()` / `.min()` on a COLUMN — same ghost family
                 // (`[dynamic]str__max`), reached once annotated params keep their
                 // DataFrame type (`covers_range` does `cache_df[date_col].max()`).

@@ -209,6 +209,8 @@ class DataFrame:
     def itertuples(self, index=False) -> lt(vec, i64):
         # 语料：`for row in df.itertuples(index=False)`。列映射无 namedtuple；
         # 返回行下标列表（可迭代、链接成功）。`row.high` 属性 —— 未做。
+        # 注意：t228 固定了「返回行下标」这一口径；改成「每行一个 map」需要同步
+        # 更新该用例（本项目 `validate_and_repair_stock_ohlcv` 需要的是 map 行）。
         return list(range(self.n_rows()))
 
     def iterrows(self) -> lt(vec, i64):

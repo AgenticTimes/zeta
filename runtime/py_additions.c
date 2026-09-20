@@ -883,6 +883,79 @@ int64_t py_vec_all(int64_t vec) {
 // bug (`len(keys)` came out as the MASK's length, so the loop ran out of range and
 // `map_get` was called with a raw index as the key).
 int zt_map_or_vec_truthy(int64_t v);
+// `df.itertuples(index=False)` / `df.iterrows()` — the column-map model has no
+// namedtuple, so each ROW is a map {column -> value}. Rows come back as a vec of
+// map handles; `row.<col>` reaches them through the map-attribute path.
+// `series.clip(lower=..., upper=...)` — element-wise clamp of a numeric column
+// (strings are parsed; unparsable ones pass through unchanged).
+int64_t py_vec_clip(int64_t vec, double lo, double hi, int64_t has_lo, int64_t has_hi);
+// Bare-symbol fallbacks (the compiler cannot always prove the receiver is a vec):
+// treat a plausible vector as one, otherwise pass the value through with a warning.
+int64_t clip(int64_t v) { return zt_maybe_vec(v) ? py_vec_clip(v, 0, 0, 0, 0) : v; }
+int64_t clip_2(int64_t v, int64_t lo) { return zt_maybe_vec(v) ? py_vec_clip(v, (double)lo, 0, 1, 0) : v; }
+int64_t clip_3(int64_t v, int64_t lo, int64_t hi) {
+    return zt_maybe_vec(v) ? py_vec_clip(v, (double)lo, (double)hi, 1, 1) : v;
+}
+int64_t clip_4(int64_t v, int64_t lo, int64_t hi, int64_t x) {
+    (void)x;
+    return zt_maybe_vec(v) ? py_vec_clip(v, (double)lo, (double)hi, 1, 1) : v;
+}
+
+int64_t py_vec_clip(int64_t vec, double lo, double hi, int64_t has_lo, int64_t has_hi) {
+    if (!vec) return vec;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        const char* v = (const char*)((int64_t*)vec)[i];
+        char* endp = NULL;
+        double d = v ? strtod(v, &endp) : 0;
+        int is_num = v && endp && *endp == 0 && endp != v;
+        if (!is_num) {
+            vec_push(out, (int64_t)v);
+            continue;
+        }
+        if (has_lo && d < lo) d = lo;
+        if (has_hi && d > hi) d = hi;
+        char buf[64];
+        snprintf(buf, sizeof buf, "%.10g", d);
+        vec_push(out, (int64_t)GC_strdup(buf));
+    }
+    return out;
+}
+
+int64_t py_df_itertuples(int64_t frame, int64_t with_index) {
+    if (!frame) return zeta_dynarray_new(1);
+    int64_t map = *(int64_t*)frame;
+    if (!map) return zeta_dynarray_new(1);
+    int64_t keys = map_keys(map);
+    int64_t nk = zt_vec_len(keys);
+    int64_t nrows = 0;
+    for (int64_t j = 0; j < nk; j++) {
+        int64_t col = map_get(map, map_str_key(((int64_t*)keys)[j]));
+        int64_t n = col ? zt_vec_len(col) : 0;
+        if (n > nrows) nrows = n;
+    }
+    int64_t out = zeta_dynarray_new(nrows > 0 ? nrows : 1);
+    for (int64_t i = 0; i < nrows; i++) {
+        int64_t row = map_new();
+        for (int64_t j = 0; j < nk; j++) {
+            int64_t kdisp = ((int64_t*)keys)[j];
+            int64_t col = map_get(map, map_str_key(kdisp));
+            int64_t n = col ? zt_vec_len(col) : 0;
+            int64_t v = (i < n) ? ((int64_t*)col)[i] : 0;
+            map_insert(row, map_str_key(kdisp), v);
+        }
+        if (with_index) {
+            char buf[32];
+            snprintf(buf, sizeof buf, "%lld", (long long)i);
+            map_insert(row, map_str_key((int64_t)GC_strdup("index")),
+                       (int64_t)GC_strdup(buf));
+        }
+        vec_push(out, row);
+    }
+    return out;
+}
+
 int64_t py_df_loc(int64_t frame, int64_t mask) {
     if (!frame) return 0;
     int64_t map = *(int64_t*)frame;
