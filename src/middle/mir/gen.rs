@@ -3342,6 +3342,30 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.exprs.insert(dest, MirExpr::Var(dest));
                     self.type_map
                         .insert(dest, Type::DynamicArray(Box::new(elem)));
+                } else if op == "*"
+                    && matches!(
+                        self.type_map.get(&left_id),
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                    )
+                    && matches!(
+                        self.type_map.get(&right_id),
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                    )
+                {
+                    // Two VECTORS: pandas' `df["close"] * df["volume"]` is an
+                    // ELEMENT-WISE product. The SemiringFold (matmul) path below
+                    // walked the STRING elements as arrays and crashed in
+                    // `array_len` (measured: `validate_and_repair_stock_ohlcv`'s
+                    // `amount` recompute, `probe + 3316`).
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_vec_mul".to_string(),
+                        args: vec![left_id, right_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map
+                        .insert(dest, Type::DynamicArray(Box::new(Type::Str)));
                 } else if op == "*" || op == "@" {
                     // 批次145 重放: `@`（Python matmul）与 `*` 同走 SemiringFold
                     // Mul——标量 matmul 即乘法（t214: 3@4=12）；数组 matmul 超出

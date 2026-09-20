@@ -7128,3 +7128,22 @@ print 后得到精确断点：
 对照：`out["volume"].fillna(0).clip(lower=0)` 与本步无关（E1/E2/E3 全绿）。
 
 位置：`probe + 3316`（drv629）。下一批：修「向量 × 向量（字符串元素）」这一条。
+
+### 批次 240：**向量 × 向量**改为逐元素乘（不再走 matmul/semiring）
+
+`c = a * b`（两个字符串向量）此前落到 `SemiringFold { op: Mul }`（矩阵乘），
+它把元素当数组走 ⇒ `array_len` 读字符串句柄的 `arr-16` ⇒ 崩。pandas 语义是**逐元素**。
+
+修法：
+- 运行期 `py_vec_mul(a, b)`：逐元素 `strtod` 两边相乘，解析不出的原样保留；
+- MIR：`op == "*"` 且两侧都是数组 ⇒ `py_vec_mul`（放在 `else if op == "*" || op == "@"` **之前**）。
+
+最小复现 `/tmp/vm.z`（`a=["1.5","2.5"]; b=["3.0","4.0"]; c=a*b`）：
+修复前 SEGV，修复后 `2 / 10` ✓。
+
+顺带（同一函数 `remove_extreme_return_bars` 的下一处）：
+`grp["close"].pct_change().abs()` 也缺运行期实现 —— 已加 `py_vec_pct_change` /
+`py_vec_abs` 与 weak 回退 `pct_change`/`pct_change_1`/`abs_1`（shim 自己也发 `pct_change`
+符号 ⇒ 必须 weak，否则 `duplicate symbol '_pct_change'`）。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。

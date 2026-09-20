@@ -843,6 +843,97 @@ int64_t zt_bare_mask(int64_t v, int want_notna) {
 // Series `|`). The generic `|` path concatenated them, so
 // `out["close"].isna() | (out["close"] < cfg.min_price)` produced a 2N-element
 // "mask" and `df.loc[...]` then kept 2N rows.
+// `vec * vec` — ELEMENT-WISE product (pandas `df["close"] * df["volume"]`).
+// The generic `*` path routed two arrays to the SEMIRING fold (matmul), which
+// walked the elements as arrays and crashed in `array_len` (measured:
+// `validate_and_repair_stock_ohlcv` + the `amount` recompute). Column elements
+// are STRINGS (parquet), so parse both sides; an unparsable element keeps the
+// left value (loud in the sense that the result is a number, never a pointer).
+// `series.pct_change()` — element-wise (v[i]-v[i-1])/v[i-1] with the first
+// element 0. Used by `remove_extreme_return_bars`; without it the call hit a
+// zero-arity stub and the following `~mask` produced 0, which made
+// `DataFrame.loc` abort loudly ("mask is missing").
+int64_t py_vec_pct_change(int64_t vec) {
+    if (!vec) return vec;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    double prev = 0;
+    for (int64_t i = 0; i < n; i++) {
+        const char* v = (const char*)((int64_t*)vec)[i];
+        char* e = NULL;
+        double d = v ? strtod(v, &e) : 0;
+        int ok = v && e && *e == 0 && e != v;
+        double r = 0;
+        if (i > 0 && ok && prev != 0) r = (d - prev) / prev;
+        if (ok) prev = d;
+        char buf[64];
+        snprintf(buf, sizeof buf, "%.10g", r);
+        vec_push(out, (int64_t)GC_strdup(buf));
+    }
+    return out;
+}
+
+// `series.abs()` — numeric magnitude; non-numeric elements pass through.
+int64_t py_vec_abs(int64_t vec) {
+    if (!vec) return vec;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        const char* v = (const char*)((int64_t*)vec)[i];
+        char* e = NULL;
+        double d = v ? strtod(v, &e) : 0;
+        if (!v || !e || *e != 0 || e == v) {
+            vec_push(out, (int64_t)v);
+            continue;
+        }
+        char buf[64];
+        snprintf(buf, sizeof buf, "%.10g", d < 0 ? -d : d);
+        vec_push(out, (int64_t)GC_strdup(buf));
+    }
+    return out;
+}
+
+int64_t py_vec_pct_change(int64_t vec);
+int64_t py_vec_abs(int64_t vec);
+static int zt_maybe_vec_arity1(int64_t v) { return v > 0x1000; }
+// weak: the shim (`pylib/pandas.z`) also emits a `pct_change` symbol, and the
+// program's own definition must win (measured `duplicate symbol '_pct_change'`).
+__attribute__((weak)) int64_t pct_change(int64_t v) {
+    return zt_maybe_vec_arity1(v) ? py_vec_pct_change(v) : v;
+}
+__attribute__((weak)) int64_t pct_change_1(int64_t v) {
+    return zt_maybe_vec_arity1(v) ? py_vec_pct_change(v) : v;
+}
+__attribute__((weak)) int64_t abs_1(int64_t v) {
+    return zt_maybe_vec_arity1(v) ? py_vec_abs(v) : (v < 0 ? -v : v);
+}
+int64_t vec_abs(int64_t v) { return zt_maybe_vec_arity1(v) ? py_vec_abs(v) : v; }
+
+int64_t py_vec_mul(int64_t a, int64_t b) {
+    if (!a || !b) return a ? a : b;
+    int64_t na = zt_vec_len(a), nb = zt_vec_len(b);
+    int64_t n = na < nb ? na : nb;
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        const char* sa = (const char*)((int64_t*)a)[i];
+        const char* sb = (const char*)((int64_t*)b)[i];
+        char* ea = NULL;
+        char* eb = NULL;
+        double da = sa ? strtod(sa, &ea) : 0;
+        double db = sb ? strtod(sb, &eb) : 0;
+        int oka = sa && ea && *ea == 0 && ea != sa;
+        int okb = sb && eb && *eb == 0 && eb != sb;
+        if (!oka || !okb) {
+            vec_push(out, (int64_t)(oka ? sa : sb));
+            continue;
+        }
+        char buf[64];
+        snprintf(buf, sizeof buf, "%.10g", da * db);
+        vec_push(out, (int64_t)GC_strdup(buf));
+    }
+    return out;
+}
+
 int64_t py_vec_or(int64_t a, int64_t b) {
     if (!a) return b;
     if (!b) return a;
