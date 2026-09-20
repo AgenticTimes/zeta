@@ -7109,3 +7109,22 @@ call DataFrame::loc(%116, %117)`。
 
 崩点：`DataFrame::n_rows + 16 ← __len__ ← validate_and_repair_stock_ohlcv + 2912`
 （`len(out)` 现在派发到**正确**的方法，只是 `out` 的值仍坏 —— 下一批继续）。
+
+### 批次 239：清洗函数崩溃点二分到**一行** —— `out["close"] * out["volume"]`
+
+把 `validate_and_repair_stock_ohlcv` 的函数体整段复刻到 harness（同样签名
+`(df: pd.DataFrame, stock_code: str, cfg: MarketCleanConfig | None = None)`），逐步
+print 后得到精确断点：
+
+    A 892 9   B … C … D … E 892 9         ← 前面全部正常
+    E1 vol_fillna 892 / E2 vol_clip 892 / E3 set 892 9 / E4 pre 892 9
+    E4a close 892 vol 892                  ← 两个向量都能取长度
+    prod = out["close"] * out["volume"]    ← ✗ 崩在 array_len + 4
+
+即 **两个都已就绪的向量相乘** 时踩坏指针：`array_len` 拿到的实参不是数组句柄
+（字符串句柄被当数组 → `arr-16` 越界）。parquet 读出来的列元素是**字符串**，
+所以「向量 × 向量」必须先按数值解析，不能对元素取 `array_len`。
+
+对照：`out["volume"].fillna(0).clip(lower=0)` 与本步无关（E1/E2/E3 全绿）。
+
+位置：`probe + 3316`（drv629）。下一批：修「向量 × 向量（字符串元素）」这一条。
