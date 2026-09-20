@@ -175,6 +175,10 @@ pub struct MirGen {
     /// (`logging.getLogger(__name__)` produced a NULL-ish name and `fprintf`
     /// crashed in `strlen`; a bare `print(__name__)` printed 1).
     current_module: String,
+    /// Fields already computed inside a synthesized constructor. `__init__`'s
+    /// `self` is dropped from the ctor signature, so a LATER field whose
+    /// initializer reads `self.<earlier field>` had no `self` slot at all.
+    self_field_aliases: Vec<(String, u32)>,
     /// Names captured from enclosing scopes in the closure currently being
     /// lowered (name → env key id) — used to route assignments to env stores.
     captured_vars: std::collections::HashMap<String, u32>,
@@ -240,6 +244,7 @@ impl MirGen {
             re_repl_param: false,
             current_class: None,
             current_module: "__main__".to_string(),
+            self_field_aliases: Vec::new(),
             captured_vars: std::collections::HashMap::new(),
             async_state_ptr: None,
             async_segment_count: 0,
@@ -8797,6 +8802,31 @@ call, no NULL-handle dereference).",
                 self.type_map.insert(id, Type::I64);
             }
             AstNode::FieldAccess { base, field } => {
+                // `self.<field>` where `self` is NOT bound (a synthesized
+                // constructor): the value is the one already computed for that
+                // field — see `self_field_aliases`. Guarded on `self` being
+                // absent, so a real `self` (methods, Rust-style literals) keeps
+                // reading the actual field. Measured: `self.cache_dir` read via
+                // an unassigned slot → `py_os_path_join` dereferenced NULL
+                // (MarketDataFetcher.__init__+92).
+                if !self.name_to_id.contains_key("self") {
+                    if let AstNode::Var(v) = &**base {
+                        if v == "self" {
+                            if let Some((_, aid)) = self
+                                .self_field_aliases
+                                .iter()
+                                .rev()
+                                .find(|(f, _)| f == field)
+                                .cloned()
+                            {
+                                let ty = self.type_map.get(&aid).cloned().unwrap_or(Type::I64);
+                                self.exprs.insert(id, MirExpr::Var(aid));
+                                self.type_map.insert(id, ty);
+                                return id;
+                            }
+                        }
+                    }
+                }
                 // PY-A: argparse results namespace — `args.<flag>` is typed from
                 // the kind recorded at `add_argument` (a static method table
                 // cannot enumerate dynamic field names). An undeclared flag is
@@ -9098,11 +9128,19 @@ call, no NULL-handle dereference).",
             AstNode::StructLit { variant, fields } => {
                 // Implement proper struct literal creation
                 let mut field_ids = Vec::new();
+                // Fields are lowered in source order and a Python `__init__` may
+                // read a field it assigned a line earlier (`self.a = x` then
+                // `self.b = join(self.a, ...)`). The synthesized ctor has NO
+                // `self`, so record each computed value under its field name for
+                // the later initializers of this same literal. Nesting is safe:
+                // the list is truncated back on the way out.
+                let alias_mark = self.self_field_aliases.len();
                 for (field_name, field_expr) in fields {
-                    // Evaluate each field expression
                     let field_id = self.lower_expr(field_expr);
+                    self.self_field_aliases.push((field_name.clone(), field_id));
                     field_ids.push((field_name.clone(), field_id));
                 }
+                self.self_field_aliases.truncate(alias_mark);
                 // Create Struct expression
                 self.exprs.insert(
                     id,
