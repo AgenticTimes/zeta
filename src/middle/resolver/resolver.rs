@@ -1630,6 +1630,7 @@ impl Resolver {
         seen: &HashMap<String, Type>,
         aliases: &HashMap<String, String>,
         member_aliases: &HashMap<String, (String, String)>,
+        fn_rets: &HashMap<String, Type>,
     ) -> Option<Type> {
         use crate::middle::pylib;
         match n {
@@ -1647,7 +1648,7 @@ impl Resolver {
                 // `wufu_constants`' universe registration.
                 let elem = items
                     .first()
-                    .and_then(|e| infer_global_ty(e, seen, aliases, member_aliases))
+                    .and_then(|e| infer_global_ty(e, seen, aliases, member_aliases, fn_rets))
                     .unwrap_or(Type::I64);
                 Some(Type::DynamicArray(Box::new(elem)))
             }
@@ -1659,10 +1660,10 @@ impl Resolver {
             AstNode::Var(v) => seen.get(v).cloned(),
             // `A / B` — pathlib join (and, later, other handle operators).
             AstNode::BinaryOp { op, left, right } => {
-                let lt = infer_global_ty(left, seen, aliases, member_aliases)?;
+                let lt = infer_global_ty(left, seen, aliases, member_aliases, fn_rets)?;
                 let rt = match &**right {
                     AstNode::StringLit(_) => Type::Str,
-                    other => infer_global_ty(other, seen, aliases, member_aliases)?,
+                    other => infer_global_ty(other, seen, aliases, member_aliases, fn_rets)?,
                 };
                 let (lname, rname) = match (&lt, &rt) {
                     (Type::Named(l, _), Type::Named(r, _)) => (l.clone(), r.clone()),
@@ -1678,14 +1679,14 @@ impl Resolver {
                 })
             }
             // `p.parents[2]` — index into a Vec-returning attribute.
-            AstNode::Subscript { base, .. } => match infer_global_ty(base, seen, aliases, member_aliases)? {
+            AstNode::Subscript { base, .. } => match infer_global_ty(base, seen, aliases, member_aliases, fn_rets)? {
                 Type::DynamicArray(e) => Some(*e),
                 Type::Tuple(ts) => ts.first().cloned(),
                 _ => None,
             },
             // `handle.attr` — a W-table method used as a property (Path.parents).
             AstNode::FieldAccess { base, field } => {
-                let b = infer_global_ty(base, seen, aliases, member_aliases)?;
+                let b = infer_global_ty(base, seen, aliases, member_aliases, fn_rets)?;
                 match b {
                     Type::Named(tag, _) => method_result_ty(&tag, field),
                     _ => None,
@@ -1696,7 +1697,7 @@ impl Resolver {
                 receiver, method, ..
             } => {
                 if let Some(recv) = receiver {
-                    if let Some(Type::Named(tag, _)) = infer_global_ty(recv, seen, aliases, member_aliases) {
+                    if let Some(Type::Named(tag, _)) = infer_global_ty(recv, seen, aliases, member_aliases, fn_rets) {
                         if let Some(t) = method_result_ty(&tag, method) {
                             return Some(t);
                         }
@@ -1733,11 +1734,26 @@ impl Resolver {
                         _ => Some(Type::I64),
                     };
                 }
+                // A same-file function: its declared return type is the element
+                // type of a comprehension built from it.
+                if let Some(t) = fn_rets.get(method) {
+                    return Some(t.clone());
+                }
                 // `Path(__file__)` — a member imported BY NAME
                 // (`from pathlib import Path`). This is where a module-level
                 // path constant starts, so it must be resolved before the
                 // receiver-less case gives up.
                 let (module, member) = member_aliases.get(method)?;
+                // A USER function imported by name (`from ..datasrc.code_conv
+                // import jq_to_bs`): its declared return type is what a
+                // comprehension or call over it produces. Module-level constants
+                // are built exactly that way (`WUFU_BS_CODES = [jq_to_bs(c) for c
+                // in WUFU_JQ_CODES]`), and without this the constant had no type —
+                // every later `LIST + LIST` became a NUMERIC add.
+                let mangled = format!("{}__{}", module.replace('.', "_"), member);
+                if let Some(t) = fn_rets.get(&mangled).or_else(|| fn_rets.get(member)) {
+                    return Some(t.clone());
+                }
                 let e = pylib::find_member(module, member)?;
                 match (e.handle.as_deref(), e.ret.as_str()) {
                     (Some(h), _) => Some(Type::Named(h.to_string(), vec![])),
@@ -1823,6 +1839,7 @@ impl Resolver {
                 bare_globals: &std::collections::HashSet<String>,
                 aliases: &HashMap<String, String>,
                 member_aliases: &HashMap<String, (String, String)>,
+                fn_rets: &HashMap<String, Type>,
                 module_prefix: Option<&str>,
                 out: &mut HashMap<String, Type>) {
             for s in stmts {
@@ -1836,11 +1853,20 @@ impl Resolver {
                         _ => continue,
                     },
                     AstNode::Block { body } => {
-                        walk(body, globals, bare_globals, aliases, member_aliases, module_prefix, out);
+                        walk(body, globals, bare_globals, aliases, member_aliases, fn_rets, module_prefix, out);
                         continue;
                     }
                     _ => continue,
                 };
+                if name.contains("WUFU") && std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+                    eprintln!(
+                        "WALK {}: in_globals={} in_bare={} rhs={:?}",
+                        name,
+                        globals.contains(&name),
+                        bare_globals.contains(&name),
+                        rhs.map(|r| std::mem::discriminant(r))
+                    );
+                }
                 if !globals.contains(&name) && !bare_globals.contains(&name) {
                     continue;
                 }
@@ -1852,8 +1878,11 @@ impl Resolver {
                 // (`_exists` 7 / `_read_text` 6 reference sites in the REasyQuant
                 // local backtest).
                 let ty = rhs.and_then(|r| {
-                    infer_global_ty(r, &out, &aliases, &member_aliases)
+                    infer_global_ty(r, &out, &aliases, &member_aliases, fn_rets)
                 });
+                if name.contains("WUFU") && std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+                    eprintln!("INFER {}: {:?}", name, ty);
+                }
                 if let Some(t) = ty {
                     // Key it under the BARE source name (what a function body in
                     // the same module reads) AND under the module-mangled name
@@ -1868,6 +1897,18 @@ impl Resolver {
             }
         }
         let defs = self.registered_func_defs.borrow().clone();
+        // Return types of every registered function. A module-level constant built
+        // by a comprehension over an annotated helper
+        // (`WUFU_BS_CODES = [jq_to_bs(c) for c in WUFU_JQ_CODES]`, `-> str`) had no
+        // inferable type, so the global stayed I64 and
+        // `WUFU_BS_CODES + WUFU_INDEX_BS_CODES` compiled as a NUMERIC add — the
+        // garbage handle then went to `dict.fromkeys` and `py_map_fromkeys`
+        // dereferenced it (50% SIGSEGV per run, 100% with MallocScribble=1).
+        let fn_rets: HashMap<String, Type> = self
+            .funcs
+            .iter()
+            .map(|(n, (_, r, _))| (n.clone(), r.clone()))
+            .collect();
         for d in &defs {
             if let AstNode::FuncDef { name, body, .. } = d {
                 // A module body is registered as `<module with _ for .>__init`;
@@ -1882,6 +1923,7 @@ impl Resolver {
                     &bare_globals,
                     &aliases,
                     &member_aliases,
+                    &fn_rets,
                     prefix.as_deref(),
                     &mut out,
                 );
