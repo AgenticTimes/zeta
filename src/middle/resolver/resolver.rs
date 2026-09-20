@@ -1808,6 +1808,9 @@ impl Resolver {
             })
             .collect();
         let mut out: HashMap<String, Type> = HashMap::new();
+        if std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+            eprintln!("GLOBALS probe: globals={} prefixes={:?}", globals.len(), prefixes);
+        }
         fn walk(stmts: &[AstNode], globals: &std::collections::HashSet<String>,
                 bare_globals: &std::collections::HashSet<String>,
                 aliases: &HashMap<String, String>,
@@ -1874,6 +1877,14 @@ impl Resolver {
                     prefix.as_deref(),
                     &mut out,
                 );
+            }
+        }
+        if std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+            let mut keys: Vec<String> = out.keys().cloned().collect();
+            keys.sort();
+            eprintln!("GLOBALS out: n={} keys={:?}", out.len(), keys);
+            for (k, v) in &out {
+                eprintln!("   {} -> {:?}", k, v);
             }
         }
         out

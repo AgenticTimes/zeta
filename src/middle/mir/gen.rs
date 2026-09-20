@@ -351,6 +351,46 @@ impl MirGen {
     /// PY-A: canonical (module, member) for a library call, before symbol
     /// mapping — lets special cases (json.dumps' typed dispatch) recognise
     /// the call site.
+    /// Static type of a module-level global. The resolver's table carries both
+    /// the BARE name and the `<module>__<name>` mangled form, but the mangled
+    /// form is only added for modules already registered when the table was
+    /// built — in a multi-module compile that prefix list can be empty, so
+    /// `import a; a.C.exists()` looked up `a__C`, missed, typed the value I64 and
+    /// emitted a bare `_a__C.exists` (link error). `from a import C` worked
+    /// because it looks up the bare name. Fall back to stripping each KNOWN
+    /// module prefix (`_PROJECT_ROOT` keeps its leading underscore — splitting on
+    /// `__` would yield `PROJECT_ROOT` and still miss).
+    fn global_ty_of(&self, name: &str) -> Option<Type> {
+        if let Some(t) = self.module_global_types.get(name) {
+            return Some(t.clone());
+        }
+        let mut prefixes: Vec<String> = self
+            .py_module_aliases
+            .values()
+            .map(|m| format!("{}__", m.replace('.', "_")))
+            .collect();
+        prefixes.sort();
+        prefixes.dedup();
+        for pfx in prefixes {
+            if let Some(rest) = name.strip_prefix(pfx.as_str()) {
+                if !rest.is_empty() {
+                    if let Some(t) = self.module_global_types.get(rest) {
+                        return Some(t.clone());
+                    }
+                }
+            }
+        }
+        if let Some(idx) = name.rfind("__") {
+            let rest = &name[idx + 2..];
+            if !rest.is_empty() {
+                if let Some(t) = self.module_global_types.get(rest) {
+                    return Some(t.clone());
+                }
+            }
+        }
+        None
+    }
+
     fn py_member_target(
         &self,
         receiver: &Option<Box<AstNode>>,
@@ -369,6 +409,20 @@ impl MirGen {
                 (module, member)
             }
         };
+        // `a.C.exists()` where `a.C` is a module-level VALUE, not a registry
+        // member: the generic member path appended the method to the global's
+        // name and emitted a bare `_a__C.exists` (link error). If the registry has
+        // no such member but the dotted prefix names a typed global, this is a
+        // handle method call on that value — return None so the caller lowers
+        // `a.C` as a value and dispatches on its handle tag.
+        if crate::middle::pylib::find_member(&module, &member).is_none() {
+            if let Some((prefix, _last)) = member.rsplit_once('.') {
+                let mangled = format!("{}_{}", module.replace('.', "_"), prefix);
+                if self.global_ty_of(&mangled).is_some() || self.global_ty_of(prefix).is_some() {
+                    return None;
+                }
+            }
+        }
         Some((module, member))
     }
 
@@ -398,6 +452,18 @@ impl MirGen {
         };
         if let Some(entry) = crate::middle::pylib::find_member(&module, &member) {
             return Some((entry.symbol.as_str(), entry.handle.as_deref(), entry.ret.as_str()));
+        }
+        // `a.C.exists()` where `a.C` is a module-level VALUE: the member chain is
+        // not a registry shim, so the disk-module fallback below would emit
+        // `a__C.exists` — a symbol that does not exist (link error). If the dotted
+        // prefix names a typed global, this is a handle method call on that value;
+        // return None so the caller lowers `a.C` as a value and dispatches on its
+        // handle tag (same fix as in py_member_target).
+        if let Some((prefix, _last)) = member.rsplit_once('.') {
+            let mangled = format!("{}_{}", module.replace('.', "_"), prefix);
+            if self.global_ty_of(&mangled).is_some() || self.global_ty_of(prefix).is_some() {
+                return None;
+            }
         }
         // Not a registry shim: a module loaded from disk resolves to its
         // `mod__name` mangled symbol (no handle tag, i64 result).
@@ -470,7 +536,7 @@ impl MirGen {
                 return Some(n.clone());
             }
         }
-        if let Some(Type::Named(n, _)) = self.module_global_types.get(name) {
+        if let Some(Type::Named(n, _)) = self.global_ty_of(name) {
             return Some(n.clone());
         }
         None
@@ -2565,11 +2631,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.exprs.insert(slot_id, MirExpr::Var(slot_id));
                     // Keep the global's static type: an untyped env read made
                     // `q.put(x)` a bare call, because the handle tag was lost.
-                    let ty = self
-                        .module_global_types
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(Type::I64);
+                    let ty = self.global_ty_of(name).unwrap_or(Type::I64);
                     self.type_map.insert(slot_id, ty);
                     return slot_id;
                 }
@@ -8928,7 +8990,7 @@ call, no NULL-handle dereference).",
                             let key = format!("{}{}", module.replace('.', "_") + "__", parts[0]);
                             let key_id = self.next_id();
                             self.exprs
-                                .insert(key_id, MirExpr::StringLit(key));
+                                .insert(key_id, MirExpr::StringLit(key.clone()));
                             self.type_map.insert(key_id, Type::Str);
                             self.stmts.push(MirStmt::Call {
                                 func: "zeta_env_get".to_string(),
@@ -8937,7 +8999,13 @@ call, no NULL-handle dereference).",
                                 type_args: vec![],
                             });
                             self.exprs.insert(id, MirExpr::Var(id));
-                            self.type_map.insert(id, Type::I64);
+                            // Keep the global's static type. Hardcoding I64 made
+                            // `import a; a.C.exists()` a call on an untyped value:
+                            // the handle tag was lost and the link failed with a
+                            // bare `_a__C.exists`. `from a import C` worked (its
+                            // binding path already carried the type).
+                            let ty = self.global_ty_of(&key).unwrap_or(Type::I64);
+                            self.type_map.insert(id, ty);
                             return id;
                         }
                         let member = parts.join(".");
