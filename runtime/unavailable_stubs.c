@@ -37,7 +37,7 @@ static int64_t zt_unavailable_soft(const char* what);
 // (utmp!) — measured as `EXC_BAD_ACCESS at 0x8` inside `getutmpx` called from
 // `_baostock_login`. A weak definition here shadows that: the platform source is
 // unavailable in the local path, and the caller's try/except takes the fallback.
-__attribute__((weak)) int64_t login(void) { return zt_unavailable_soft("baostock.login"); }
+int64_t login(void) { return zt_unavailable_soft("baostock.login"); }
 __attribute__((weak)) int64_t logout(void) { return zt_unavailable_soft("baostock.logout"); }
 
 static int64_t zt_unavailable_soft(const char* what) {
