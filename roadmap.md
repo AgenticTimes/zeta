@@ -6669,3 +6669,17 @@ _parquet_cache.load(path) → loaded 1
 
 下一批：对比「模块级调用」与「方法内调用」的 MIR（重点看
 `-> pd.DataFrame | None` 这种**联合注解**的返回值处理，以及 `df["col"] = v` 的接收者取值）。
+
+### 批次 209 排除法（`load_metadata` 在 `_load_cache` 内崩）
+
+| 假设 | 实验 | 结果 |
+|---|---|---|
+| 嵌套 try 本身有问题 | `outer{try: inner{try: raise}}` | ✓ 正常（inner caught） |
+| 函数内局部导入 + try | `inner{try: import json as pq; pq.loads(bad)}` | ✓ 正常 |
+| C 桩的 `zeta_raise` 穿过嵌套 try | `inner{try: _rqdatac_init()}` | ✓ 正常（`r 0`，项目自己捕获） |
+| **模块级**调用 `_parquet_cache.load_metadata(path)` | 同 driver 语境 | ✓ 正常（打印 warning，`meta_n 0`） |
+
+⇒ 同一函数、同一参数，**模块级调用正常，`_load_cache` 内调用崩**
+（`load_metadata + 184` ← `_load_cache + 232`）。区别只在调用链深度/所处的 try 栈
+（`fetch_stocks` 内部已有多层 try+setjmp）。下一批：数一数 `fetch_stocks → _load_cache →
+load_metadata` 这条链上的 `_setjmp` 帧数，与「模块级」对比（怀疑是**深层 setjmp/longjmp** 的已知脆弱点）。
