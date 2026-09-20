@@ -7568,3 +7568,19 @@ struct-field store 目前按 i64 走，需要按字段类型 bitcast/float store
 
 （本轮累计效果：崩点从「清洗函数内部」推进到「清洗函数已返回、调用方拿到的帧不对；
 护栏把崩溃变成可观测的空帧 + stderr 说明」。）
+
+### 批次 263：groupby **返回了 len=1 的向量**，但 `remove_extreme_return_bars` 的 for 循环 0 次
+
+探针（verbatim 复刻 harness，`ZT_PROBE_LOC=1`）：
+
+    groupby frame=… key=… keytext=stock_code          ← key 正确
+    groupby keyvec=… n=892 first=… ncols_m=9           ← 命中列，892 行
+    groupby done npairs=1 out=… outn=0                 ← 分组得到 1 组
+    groupby return out=… len=1                         ← 返回值确实是 len=1 的向量
+    S13extreme 0 0                                     ← 但循环一次都没进 ⇒ 走了 if not parts 分支
+
+⇒ `py_df_groupby` 的结果**在调用点丢失**：循环拿到的不是那个 len=1 的向量
+（`array_len` 得 0），于是 `parts` 为空、`market_df.iloc[0:0]` 空帧、清洗整体返回空。
+
+下一批：打印 `remove_extreme_return_bars` 的 for 循环所用集合 id（MIR 里 `py_df_groupby`
+的 dest 与循环的 collection 是否同一个），定位这个「返回值没进循环槽位」的问题。

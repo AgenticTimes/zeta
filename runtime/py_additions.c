@@ -1226,7 +1226,9 @@ int64_t py_df_setitem(int64_t frame, int64_t key, int64_t val) {
 // and the subframe is a shim DataFrame struct (one field: the column map).
 int64_t py_df_groupby(int64_t frame, int64_t key) {
     if (getenv("ZT_PROBE_LOC")) {
-        fprintf(stderr, "[probe] groupby frame=%lld key=%lld\n", (long long)frame, (long long)key);
+        int64_t kp = (key > 0x100000000LL && key < 0x7fffffffffffLL) ? key : 0;
+        fprintf(stderr, "[probe] groupby frame=%lld key=%lld keytext=%s\n",
+                (long long)frame, (long long)key, kp ? (const char*)kp : "(not-a-ptr)");
         fflush(stderr);
     }
     int64_t out = zeta_dynarray_new(4);
@@ -1235,6 +1237,13 @@ int64_t py_df_groupby(int64_t frame, int64_t key) {
     if (!map) return out;
     int64_t k = map_str_key(key);
     int64_t keys_vec = map_get(map, k);
+    if (!keys_vec && getenv("ZT_PROBE_LOC")) {
+        int64_t kn = map_keys(map);
+        fprintf(stderr, "[probe] groupby lookup MISS key=%lld hashed=%lld ncols=%lld firstkey=%s\n",
+                (long long)key, (long long)k, (long long)zt_vec_len(kn),
+                zt_vec_len(kn) > 0 ? (const char*)((int64_t*)kn)[0] : "-");
+        fflush(stderr);
+    }
     if (!keys_vec) return out;
     int64_t n = zt_vec_len(keys_vec);
     if (getenv("ZT_PROBE_LOC")) {
@@ -1305,9 +1314,19 @@ int64_t py_df_groupby(int64_t frame, int64_t key) {
             }
         }
     }
+    if (getenv("ZT_PROBE_LOC")) {
+        fprintf(stderr, "[probe] groupby done npairs=%lld out=%lld outn=%lld\n",
+                (long long)zt_vec_len(pairs), (long long)out, (long long)zt_vec_len(out));
+        fflush(stderr);
+    }
     // `pairs` holds the pair blocks directly.
     for (int64_t i = 0; i < zt_vec_len(pairs); i++) {
         out = vec_push(out, ((int64_t*)pairs)[i]);
+    }
+    if (getenv("ZT_PROBE_LOC")) {
+        fprintf(stderr, "[probe] groupby return out=%lld len=%lld\n",
+                (long long)out, (long long)zt_vec_len(out));
+        fflush(stderr);
     }
     return out;
 }
