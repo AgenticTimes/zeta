@@ -7179,3 +7179,23 @@ print 后得到精确断点：
 
 下一批优先级：(a) `remove_extreme_return_bars`（`vec > 标量` 掩码链，`/tmp/pc.z` 已复现）；
 (b) `fetch_stocks` 里 `len(cached)` 的坏帧来源。
+
+### 批次 243：`column > 标量` 逐元素比较（掩码不再是 Bool）
+
+`mask = ret > max_abs_daily_return` 此前结果类型是 **Bool**，掩码被当向量用：
+`len(mask)` 读 `mask-16`（小整数减 16 ⇒ 越界）⇒ 段错误；`DataFrame.loc` 则响亮
+abort（"mask is missing"）。
+
+修法：MIR 在比较运算两侧**恰好一侧**是数组时改走运行期
+`py_vec_{gt,lt,ge,le,eq,ne}[_i](vec, scalar)`（`_i` 变体吃 i64 字面量，避免调用点做浮点转换），
+结果标成 `DynamicArray(I64)`。
+
+验证：
+- `/tmp/cmp.z`：`a = ["1.0","2.0"]; m = a > 0.5` → `m 2` ✓（修复前 SEGV）
+- `/tmp/pc.z` 整条链：`ret 4 / abs 4 / mask 4 / not 4` ✓
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+崩点仍在 `validate_and_repair_stock_ohlcv + 2884`（`report.output_rows = len(out)`，
+`out` 来自 `remove_extreme_return_bars`）：说明掩码链已通，问题落在它内部更后面
+（`groupby` 迭代 / `concat` / `iloc[0:0]` 等）或该函数返回值本身。

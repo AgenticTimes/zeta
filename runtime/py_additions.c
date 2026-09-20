@@ -916,6 +916,50 @@ __attribute__((weak)) int64_t abs_1(int64_t v) {
 }
 int64_t vec_abs(int64_t v) { return zt_maybe_vec_arity1(v) ? py_vec_abs(v) : v; }
 
+// `column > scalar` (and friends) — ELEMENT-WISE comparison producing a 0/1
+// mask. Without this the MIR typed the result Bool, so the mask was used as a
+// vector: `len(mask)` read `mask-16` on a small integer and `DataFrame.loc`
+// aborted ("mask is missing"). Measured in `remove_extreme_return_bars`
+// (`mask = ret > max_abs_daily_return`).
+static int64_t zt_vec_cmp(int64_t vec, double rhs, int kind) {
+    if (!vec) return vec;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        const char* v = (const char*)((int64_t*)vec)[i];
+        char* e = NULL;
+        double d = v ? strtod(v, &e) : 0;
+        int ok = v && e && *e == 0 && e != v;
+        int r = 0;
+        if (ok) {
+            switch (kind) {
+                case 0: r = d > rhs; break;
+                case 1: r = d < rhs; break;
+                case 2: r = d >= rhs; break;
+                case 3: r = d <= rhs; break;
+                case 4: r = d == rhs; break;
+                default: r = d != rhs; break;
+            }
+        }
+        vec_push(out, r ? 1 : 0);
+    }
+    return out;
+}
+// `_i` variants take an integer rhs, so the compiler can pass an i64 literal
+// without a float conversion at the call site.
+#define ZT_CMP_WRAP(name, kind)                                                    \
+    int64_t py_vec_##name(int64_t v, double r) { return zt_vec_cmp(v, r, kind); }  \
+    int64_t py_vec_##name##_i(int64_t v, int64_t r) {                              \
+        return zt_vec_cmp(v, (double)r, kind);                                     \
+    }
+ZT_CMP_WRAP(gt, 0)
+ZT_CMP_WRAP(lt, 1)
+ZT_CMP_WRAP(ge, 2)
+ZT_CMP_WRAP(le, 3)
+ZT_CMP_WRAP(eq, 4)
+ZT_CMP_WRAP(ne, 5)
+#undef ZT_CMP_WRAP
+
 int64_t py_vec_mul(int64_t a, int64_t b) {
     if (!a || !b) return a ? a : b;
     int64_t na = zt_vec_len(a), nb = zt_vec_len(b);

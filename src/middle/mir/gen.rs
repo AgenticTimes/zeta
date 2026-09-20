@@ -3391,6 +3391,54 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         _ => Type::I64,
                     };
                     self.type_map.insert(dest, op_type);
+                } else if matches!(op.as_str(), ">" | "<" | ">=" | "<=" | "==" | "!=") && {
+                    let is_arr = |t: Option<Type>| {
+                        matches!(t, Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)))
+                    };
+                    is_arr(self.type_map.get(&left_id).cloned())
+                        ^ is_arr(self.type_map.get(&right_id).cloned())
+                } {
+                    // `column > scalar` — ELEMENT-WISE comparison producing a 0/1
+                    // mask. Without this the result was typed Bool, so the mask
+                    // was used as a vector: `len(mask)` read `mask-16` on a small
+                    // integer and `DataFrame.loc` aborted ("mask is missing").
+                    // Measured in `remove_extreme_return_bars`
+                    // (`mask = ret > max_abs_daily_return`).
+                    let arr_side = |t: Option<Type>| {
+                        matches!(t, Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)))
+                    };
+                    let left_is_arr = arr_side(self.type_map.get(&left_id).cloned());
+                    let (vec_id, num_id) = if left_is_arr {
+                        (left_id, right_id)
+                    } else {
+                        (right_id, left_id)
+                    };
+                    let base = match op.as_str() {
+                        ">" => "py_vec_gt",
+                        "<" => "py_vec_lt",
+                        ">=" => "py_vec_ge",
+                        "<=" => "py_vec_le",
+                        "==" => "py_vec_eq",
+                        _ => "py_vec_ne",
+                    };
+                    let num_is_float = matches!(
+                        self.type_map.get(&num_id),
+                        Some(Type::F32) | Some(Type::F64)
+                    );
+                    let func = if num_is_float {
+                        base.to_string()
+                    } else {
+                        format!("{}_i", base)
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func,
+                        args: vec![vec_id, num_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map
+                        .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
                 } else {
                     // For comparison operators used in loop conditions, create BinaryOp expression
                     // instead of caching the result in a variable
