@@ -1471,13 +1471,22 @@ fn collect_module_global(stmt: &AstNode, out: &mut Vec<String>) {
 /// (an `if __name__ == "__main__":` guard body unwraps to a Block, bare calls,
 /// import no-ops) are collected into a synthesized `fn main` when the module
 /// has none — otherwise the compiled binary has no entry point.
+/// `main()` as a bare statement (the unwrapped `__main__` guard).
+fn is_bare_main_call(a: &AstNode) -> bool {
+    let call = match a {
+        AstNode::ExprStmt { expr } => &**expr,
+        other => other,
+    };
+    matches!(
+        call,
+        AstNode::Call { receiver: None, method, args, .. } if method == "main" && args.is_empty()
+    )
+}
+
 fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
     let has_main = asts
         .iter()
         .any(|a| matches!(a, AstNode::FuncDef { name, .. } if name == "main"));
-    if has_main {
-        return asts;
-    }
     let mut out = Vec::with_capacity(asts.len() + 1);
     let mut main_body: Vec<AstNode> = Vec::new();
     // Definition allowlist: these stay at top level; EVERYTHING else is a
@@ -1513,6 +1522,9 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
                     if is_definition(&node) {
                         out.push(node);
                     } else {
+                        if has_main && is_bare_main_call(&node) {
+                            continue;
+                        }
                         collect_module_global(&node, &mut module_globals);
                         main_body.push(node);
                     }
@@ -1520,6 +1532,15 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
             }
             other if is_definition(&other) => out.push(other),
             stmt => {
+                // The `if __name__ == "__main__": main()` guard is UNWRAPPED at
+                // parse time (stmt.rs) into a bare `main()` call, so by now the
+                // entry invocation sits in the module-statement list. Merging it
+                // into `main` itself would recurse forever (measured: an
+                // infinite "A" stream, then SEGV), and the program entry already
+                // calls `main` — drop it.
+                if has_main && is_bare_main_call(&stmt) {
+                    continue;
+                }
                 collect_module_global(&stmt, &mut module_globals);
                 main_body.push(stmt);
             }
@@ -1538,6 +1559,27 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
                 structural: false,
             }),
         });
+    }
+    // A file that ALREADY defines `main` (the `if __name__ == "__main__": main()`
+    // convention — every real Python entry point) used to take an early return
+    // here, so its module-level statements were NEVER COLLECTED AND NEVER RAN:
+    // `jq_wufu_local.py`'s `if os.environ.get('REPLAYQUANT_LOCAL') == '1': import
+    // jq_wufu as _strategy; from strategies.code.jq_shim import (...)` silently
+    // did nothing, leaving `_strategy` unbound and the whole local backtest
+    // crashing before its first output. Prepend the module statements to the
+    // user's `main` instead (Python runs them at import, i.e. before main).
+    if has_main {
+        for node in &mut out {
+            if let AstNode::FuncDef { name, body, .. } = node {
+                if name == "main" {
+                    let mut merged = std::mem::take(&mut main_body);
+                    merged.extend(std::mem::take(body));
+                    *body = merged;
+                    break;
+                }
+            }
+        }
+        return out;
     }
     // PY-A: a module whose only content is definitions (a "library" module
     // run as a script) still needs an entry point to link as an executable —

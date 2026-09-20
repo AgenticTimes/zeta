@@ -1,0 +1,21 @@
+// PY-A: 定义了 main() 的文件里，模块级语句必须照样执行（批次 156）。
+// 此前 `synthesize_implicit_main` 一见 `def main` 就 early-return ⇒ 模块级语句
+// **从不执行**。`jq_wufu_local.py` 的本地模式分支
+// （`if os.environ.get('REPLAYQUANT_LOCAL') == '1': import jq_wufu as _strategy;
+//   from strategies.code.jq_shim import (...)`）因此静默不生效 ⇒ `_strategy`
+// 未绑定 ⇒ 本地回测在打印第一行日志后就崩。
+// 注：`if __name__ == "__main__": main()` 在 parse 期就被解成裸 `main()` 调用，
+// 合并进 main 会**自我递归**（实测无限输出后 SEGV），所以那一句要丢掉 ——
+// 程序入口本来就会调 main。
+// expect: A
+// expect: B
+// expect: 5
+print("A")
+X = 5
+
+def main():
+    print("B")
+    print(X)
+
+if __name__ == "__main__":
+    main()

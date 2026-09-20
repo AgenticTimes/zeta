@@ -921,6 +921,14 @@ int64_t py_logging_basicConfig(int64_t level) {
     if (level >= PY_LOG_DEBUG && level <= PY_LOG_CRITICAL) py_log_level = level;
     return 0;
 }
+// `logging.basicConfig(level=logging.INFO, format="...")` — the 2-arg call
+// site (registry declares the level only). The FORMAT string is not honoured
+// (this shim's logger writes its own fixed prefix); the level is, so the
+// message threshold is right.
+int64_t py_logging_basicConfig_2(int64_t level, int64_t format) {
+    (void)format;
+    return py_logging_basicConfig(level);
+}
 int64_t py_logging_setLevel(int64_t level) {
     if (level >= PY_LOG_DEBUG && level <= PY_LOG_CRITICAL) py_log_level = level;
     return 0;
