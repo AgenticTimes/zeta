@@ -6156,3 +6156,28 @@ MIR 铁证：`MarketDataFetcher.__init__` 里 `16: FieldAccess{base:18,"cache_di
 1. `_listing_dates_cached + 524`（缓存读取 / `{str(k): str(v) for k,v in data.items()}`）
 2. 结构体字段读取的**静态类型**（`c.cache_dir` 现在按 i64 分派 ⇒ `len()` 得 0）
 3. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
+
+### 批次一百六十七（2026-09-19）：跨模块模块级全局的类型
+
+`FieldAccess` 的「用户模块命名空间读」分支把结果类型**硬编码 I64** ⇒ 句柄标签丢失，
+`import a; a.C.exists()` 变成裸符号 `_a__C.exists`（链接失败）；而
+`from a import C` 走绑定路径，一直是对的。
+
+修法：新增 `MirGen::global_ty_of()`（原名 → 已知模块前缀剥离 → `rfind("__")` 兜底；
+`_PROJECT_ROOT` 是三个下划线，按 `__` split 会丢前导下划线 —— 注释里记过这个坑）；
+两处改用该助手；`py_member_call`/`py_member_target` 在注册表未命中时，若点号前缀是
+**有类型的全局**则返回 `None`，让调用方把 `a.C` 当**值**降级并按句柄标签分派。
+
+实测：三种写法（直接 / from-import / 别名）全部链接 ✓ 且运行 ✓。
+
+**遗留（下一批）**：`module_global_types()` 的**计算时机** —— 根文件 `main` 在 import 之前
+就被降级（探针：`globals=1 prefixes=[]`，应为数百）⇒ 根文件读跨模块全局会退化成
+「no registry entry and is not a value — lowering it as 0」的响亮告警。
+项目自身路径（模块内读自己的全局）不受影响。
+
+### 下一队列（批次一百六十八）
+
+1. `_listing_dates_cached + 524`（现场 `x0=0`、`x2=-48`；日志显示已走进 jqdata 分支，
+   说明**缓存分支没有提前返回**）
+2. `module_global_types()` 的时机（根文件 main 先于 import 降级）
+3. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
