@@ -660,6 +660,24 @@ extern int64_t map_str_key(int64_t handle);
 
 #define ZT_PQ_STR_CAP 4096
 static void pq_fmt_ns_date(int64_t ns, char* out, size_t cap) {
+    // The column's timestamp UNIT is not always nanoseconds: the footer's
+    // logical type carries it, but readers here only have the raw INT64. Pandas
+    // writes ns for most caches, yet some ETFs came back as MICROseconds, which
+    // formatted as `1970-01-20` (a 1000x error) and then collapsed
+    // `drop_duplicates(subset=["trade_date"])` from 892 rows to 2.
+    // Normalise by magnitude — dates between 1970 and 2100 land in disjoint
+    // ranges, so this is unambiguous:
+    //   seconds  ~1.7e9   ms ~1.7e12   us ~1.7e15   ns ~1.7e18
+    {
+        int64_t a = ns < 0 ? -ns : ns;
+        if (a < 100000000000LL) {          // seconds
+            ns *= 1000000000LL;
+        } else if (a < 100000000000000LL) { // milliseconds
+            ns *= 1000000LL;
+        } else if (a < 100000000000000000LL) { // microseconds
+            ns *= 1000LL;
+        }
+    }
     // days since epoch (UTC), civil-from-days (Howard Hinnant's algorithm)
     int64_t days = ns / 86400000000000LL;
     if (ns < 0 && ns % 86400000000000LL) days -= 1;

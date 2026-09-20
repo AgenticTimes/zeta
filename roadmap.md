@@ -7808,3 +7808,34 @@ lldb 现场（`fetch_stocks + 3336`）：
 address 0x0），说明某条路径返回了 `pd.DataFrame()`（无参构造）。
 
 下一批：查这两个静默错值（掩码 / drop_duplicates 的 keep="last"）。
+
+### 批次 273：**parquet 时间戳单位不是纳秒** ⇒ 日期全错（重大静默错值）
+
+探针（`_zeta_local_drv.py` 打印列值）：
+
+    raw0 1970-01-20 / raw1 1970-01-20      ← ✗ 应该是 2022-05-05
+    uniq dates 2                            ← ✗ 892 行只有 2 个“日期”
+    dedup 892 -> 2                          ← ✗ drop_duplicates 因此砍到 2 行
+    invalid sum 892 / filtered 0            ← ✗ 整池被当无效
+
+根因：`pq_fmt_ns_date(ns)` 直接按 ns 除以 86400000000000；而这个文件里 INT64 是
+**微秒**（≈1.7e15），于是算成 1970-01-20（差 1000 倍）。footer 的 logical type 有单位，
+但读取路径只拿到了裸 INT64。
+
+修法：`pq_fmt_ns_date` 按**数量级**归一化（1970–2100 的秒/毫秒/微秒/纳秒落在互不重叠的区间）：
+
+    秒 ~1.7e9   → ×1e9
+    毫秒 ~1.7e12 → ×1e6
+    微秒 ~1.7e15 → ×1e3
+    纳秒 ~1.7e18 → 原样
+
+验证（同一 harness）：
+
+    raw0 2022-05-05 / raw1 2022-05-06
+    uniq dates 892
+    dedup 892 -> 892        ✓✓
+
+**剩余**：`invalid sum 892`（阈值 `cfg.min_price` 仍读成位模式 4576918229304087675 ——
+跨模块 dataclass 字段类型问题），以及驱动里 `py_df_groupby + 716` 的字符串键解引用。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
