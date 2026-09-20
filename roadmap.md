@@ -6199,3 +6199,30 @@ MIR 铁证：`MarketDataFetcher.__init__` 里 `16: FieldAccess{base:18,"cache_di
    `.get()` 既不走 map 分支也不走 PyJson 分支 ⇒ 裸 `get`
 2. `str.startswith(<tuple>)`（Python 支持元组前缀，实测返回 0）
 3. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
+
+### 批次一百六十九（2026-09-19）：`-> dict` + `json.loads` 的返回类型 + map 原语护栏
+
+隔离复现：
+
+```python
+def f() -> dict:
+    return json.loads('{"a": 1}')
+d = f(); e = d.get("a", 0)      # ⇒ 挂死（lldb: map_get_default+112 自旋）
+```
+
+`-> dict[...]` 把返回值定型 `map`，运行期却是 PyJson 单元 ⇒ `map_get_default` 把 **tag 当容量**
+读 ⇒ `idx = hash & (cap-1)` 死循环。
+
+- **真修**：`lower_to_mir` 里「声明 `dict` + 函数体 `return json.loads(...)`」⇒ 返回类型取 `PyJson`
+  （`.get(k,default)`/`len()`/`.items()` 路径已存在）。实测 `1` ✓。
+- **护栏**：map 原语见句柄首字 1..8（Json tag；map 容量恒 ≥16）⇒ 打印诊断 + abort
+  （不静默重解释、不挂死）。
+
+**运行状态**：数据源选择/回退循环跑起来了（含 `[source-priority]`、`[baostock]` 日志），
+但**请求的股票集合是 0 只**，循环若干轮后挂死。
+
+### 下一队列（批次一百七十）
+
+1. 「行情请求 0 只」——universe/股票集合为空（数据层入口）
+2. 循环后的挂死栈
+3. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
