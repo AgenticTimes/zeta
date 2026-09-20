@@ -8046,3 +8046,22 @@ shim 的 `DataFrame.__getitem__(key)` 假设 key 是**列名**（`self.data[map_
 但 `/tmp/mask.z` 仍然 `sub 0 0` —— MIR 显示 `a` 是**模块级全局**（`zeta_env_set` 存过），
 其类型在调用点可能不是 `Named("DataFrame")`（或掩码表达式的类型不是 `DynamicArray(I64)`），
 下一批把这条判据放宽/改用「实参是不是 I64 向量」来定（不看接收者类型），并在 MIR 里核对。
+
+### 批次 284：`df[<布尔掩码>]` 改为行过滤（走 `DataFrame::loc`）
+
+定位：掩码下标**不走**方法调用分支，而是走 Subscript 的
+`qualified_method_candidate(tn, "__getitem__")`（这就是为什么上一批在方法分支里加的判据
+没有命中——探针显示那条分支只看到 `arg1 = Str` 的调用）。
+
+修法：在 Subscript 里，若基类型含 `DataFrame` 且下标类型是 `DynamicArray(I64)`，
+就派发 `loc`（限定名优先，回退 `DataFrame::loc`），结果标 `DataFrame`。
+
+验证 `/tmp/mask.z`：
+
+    m = a["d"] >= "2024-01-01"   → m 3 2     ✓
+    sub = a[m]                    → sub 2 2   ✓（此前 0 0）
+
+驱动仍打印 `行情请求 119 只，区间 1969-08-04 ~`（并列第 2/3 个实参不对，而 harness 里同一段
+代码的三个值都是对的）——下一批继续查 `run_backtest → fetch_stocks` 的实参传递。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。

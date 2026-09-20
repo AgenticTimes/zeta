@@ -11125,6 +11125,37 @@ call, no NULL-handle dereference).",
                 // non-map → garbage/SEGV). Batch 99's fix, lost in the 143
                 // restore.
                 if let Type::Named(tn, _) = &base_ty {
+                    // `df[<boolean mask>]` — pandas ROW FILTERING, not a column
+                    // lookup. `__getitem__` assumes a column name
+                    // (`self.data[map_str_key(key)]`), so a mask went into the map
+                    // lookup: garbage key / empty frame (measured: `a[m]` gave
+                    // `0 0`, and `fetch_stocks`'s
+                    // `cached[(cached["trade_date"] >= eff_start) & (…)]` crashed
+                    // inside `map_str_key`).
+                    let mask_like = matches!(
+                        self.type_map.get(&iid),
+                        Some(Type::DynamicArray(e)) if matches!(**e, Type::I64)
+                    );
+                    if mask_like && tn.contains("DataFrame") {
+                        let target = self
+                            .qualified_method_candidate(tn, "loc")
+                            .unwrap_or_else(|| "DataFrame::loc".to_string());
+                        let ret_ty = self.func_ret_types.get(&target).cloned();
+                        self.stmts.push(MirStmt::Call {
+                            func: target,
+                            args: vec![bid, iid],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(
+                            id,
+                            ret_ty.unwrap_or_else(|| {
+                                Type::Named("DataFrame".to_string(), vec![])
+                            }),
+                        );
+                        return id;
+                    }
                     if tn != "map" && tn != "dict" {
                         if let Some(qualified) =
                             self.qualified_method_candidate(tn, "__getitem__")
