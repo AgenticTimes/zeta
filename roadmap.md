@@ -6905,3 +6905,20 @@ print("via", use(c))        # ✗ **整条语句静默消失**（rc=0，无任�
 
 下一批：给 `DataFrame.loc(mask)` 一个**真实的按行过滤**实现（列映射模型完全可以做：
 对每列向量按掩码取子集；`df.columns` 不变），或至少改成**响亮 abort**，绝不返回 0 让调用方崩。
+
+### 批次 225 补充：`_parquet_cache.load` 返回的帧「0 列却有 892 行」
+
+探针（driver 语境）：
+
+    exists 1
+    load_none 0                    ← 拿到了帧
+    cols 0 / rows 892              ← **列数 0，行数 892**（不一致）
+
+而 `_load_cache("000300.XSHG")` 最终返回 **None**（内部 `if df is None: return None` 或 except）。
+
+`len(df)` 走 `n_rows()`（`list(self.data.keys())` 为空应得 0），却给出 892 ⇒ 说明 `len(df)`
+与 `df.columns` 看到的**不是同一个字段/路径**；而 `.loc[mask]` 新实现里 `out = {}` +
+逐列 append + `DataFrame(out)` 是重点怀疑对象（字典构建/字段写入）。
+
+下一批：在最小复现里跑一遍 `.loc[mask]` 并同时打印 `len(df.columns)` 与 `len(df)`，
+定位是「`DataFrame(out)` 的 `data` 字段没写进去」还是「`n_rows()` 读错了字段」。
