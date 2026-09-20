@@ -7870,6 +7870,41 @@ call, no NULL-handle dereference).",
                         return id;
                     }
                 }
+                // `df[<boolean mask>]` — the shim's `__getitem__` assumes a
+                // COLUMN NAME (`self.data[map_str_key(key)]`), so a row mask went
+                // into the map lookup and crashed inside `map_str_key`
+                // (measured: `fetch_stocks`'s
+                // `cached[(cached["trade_date"] >= eff_start) & (… <= req_end)]`).
+                // A `DynamicArray(I64)` argument is a mask ⇒ row filtering.
+                if (method == "__getitem__" || method == "column")
+                    && receiver_ty.as_ref().map_or(false, |t| match t {
+                        Type::Named(n, _) => {
+                            n == "DataFrame" || n.ends_with(".DataFrame")
+                        }
+                        _ => false,
+                    })
+                    && matches!(
+                        arg_ids.get(1).and_then(|a| self.type_map.get(a)),
+                        Some(Type::DynamicArray(_))
+                    )
+                {
+                    let is_int_vec = matches!(
+                        arg_ids.get(1).and_then(|a| self.type_map.get(a)),
+                        Some(Type::DynamicArray(e)) if matches!(**e, Type::I64)
+                    );
+                    if is_int_vec {
+                        self.stmts.push(MirStmt::Call {
+                            func: "DataFrame::loc".to_string(),
+                            args: vec![arg_ids[0], arg_ids[1]],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map
+                            .insert(id, Type::Named("DataFrame".to_string(), vec![]));
+                        return id;
+                    }
+                }
                 // `col.clip(lower=0, upper=...)` on a numeric COLUMN — element-wise
                 // clamp. Without this the call hit the zero-arity `clip` stub and
                 // aborted (measured in `validate_and_repair_stock_ohlcv`).
