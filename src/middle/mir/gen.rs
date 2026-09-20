@@ -4768,7 +4768,34 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // `-> lt(vec, i64)` library function came back typed I64 and
                     // `np.arange(4)[2]` did a MAP subscript on a Vec (SEGV,
                     // t212/t227). Prefer the declared type when we have one.
-                    let declared_ret = self.func_ret_types.get(symbol).cloned();
+                    let declared_ret = self
+                        .func_ret_types
+                        .get(symbol)
+                        .cloned()
+                        .or_else(|| {
+                            // `pd.DataFrame({...})` POSITIONAL inside a FUNCTION
+                            // body resolves to the shim class's arity-mangled
+                            // ctor (`DataFrame_2`), which carries no declared
+                            // return type — the result was typed I64, so every
+                            // later `df.columns` / `df.data` became a MAP lookup
+                            // (measured: `ParquetCache.load` returned 892 rows /
+                            // **0 columns**, and `df.itertuples` crashed). At
+                            // module level the same call goes through the typed
+                            // path, which is why only function bodies broke.
+                            if method == "DataFrame" && symbol.contains("DataFrame") {
+                                Some(Type::Named("DataFrame".to_string(), vec![]))
+                            } else {
+                                None
+                            }
+                        });
+                    // FORCE the shim struct for the pandas ctor: the arity-mangled
+                    // entry DOES declare a ret (i64), so `or_else` above never
+                    // fired and the result stayed I64.
+                    let declared_ret = if method == "DataFrame" && symbol.starts_with("DataFrame") {
+                        Some(Type::Named("DataFrame".to_string(), vec![]))
+                    } else {
+                        declared_ret
+                    };
                     self.type_map.insert(
                         id,
                         match (handle, ret) {

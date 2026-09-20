@@ -1,0 +1,19 @@
+// 批次 237：`-> pd.DataFrame`（**模块限定名注解**）的返回值必须是 shim 的结构体，
+// 否则调用方把帧当 map 处理 —— `df.columns` 退化成 `map_get_default(df, "columns")`
+// 恒等于 0（实测 `ParquetCache.load` 返回 892 行 / **0 列**，随后清洗函数段错误）。
+import pandas as pd
+
+// expect: 2
+// expect: 3
+def make_frame() -> pd.DataFrame:
+    d = pd.DataFrame({"a": ["1", "2"], "b": ["x", "y"], "c": ["p", "q"]})
+    return d
+
+def n_cols(f: pd.DataFrame) -> i64:
+    return len(f.columns)
+
+def main() -> i64:
+    m = make_frame()
+    print(len(m))
+    print(len(m.columns))
+    return 0

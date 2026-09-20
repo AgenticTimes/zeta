@@ -2594,7 +2594,21 @@ impl Resolver {
                     // (undefined) instead of the `W PyPath open` entry (t232).
                     Type::Named(n, args) => match crate::middle::pylib::handle_tag(n) {
                         Some(tag) => Type::Named(tag.to_string(), args.clone()),
-                        None => ret.clone(),
+                        // `-> pd.DataFrame` (`ParquetCache.load`) / `-> pd.Series`:
+                        // the MODULE-QUALIFIED annotation name matched no shim
+                        // struct, so the caller's `df.columns` / `df.data` became
+                        // MAP lookups (measured: `load()` returned 892 rows /
+                        // **0 columns**, and `df.itertuples` crashed). Strip the
+                        // qualifier when the last segment names a shim class.
+                        None => match n.rsplit('.').next() {
+                            Some(last)
+                                if n.contains('.')
+                                    && matches!(last, "DataFrame" | "Series" | "GroupBy") =>
+                            {
+                                Type::Named(last.to_string(), args.clone())
+                            }
+                            _ => ret.clone(),
+                        },
                     },
                     other => other.clone(),
                 };
