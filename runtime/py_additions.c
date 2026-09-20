@@ -1128,6 +1128,15 @@ int64_t py_df_empty_like(int64_t frame) {
         fprintf(stderr,
                 "PY-A: empty-like on a non-frame %lld — returning an empty frame\n",
                 (long long)frame);
+        {
+            void* bt[10];
+            int nb = backtrace(bt, 10);
+            char** syms = backtrace_symbols(bt, nb);
+            for (int i = 1; i < nb && i < 6; i++) {
+                fprintf(stderr, "[probe]   empty-like bt[%d] %s\n", i, syms ? syms[i] : "?");
+            }
+            free(syms);
+        }
         int64_t* out = (int64_t*)GC_malloc(sizeof(int64_t));
         out[0] = map_new();
         return (int64_t)out;

@@ -7622,3 +7622,22 @@ struct-field store 目前按 i64 走，需要按字段类型 bitcast/float store
 
 - **契约测试**：`pylib.rs` 加 `#[test]` 把 parse_registry 结果（模块数/F/W/X 条目元组）序列化成 JSON fixture；`gen_from_registry.py --dump-json` 输出同构 JSON；CI diff 两份。分叉即红。
 - **告警收敛**：B1/B2/A4 兜底三处裸 `eprintln!` 改走 `diagnostics.rs`（W2xxx 段：ABI/registry）；span 暂留 None（C3 再补）。验收：`grep eprintln src/backend src/middle` 仅剩预期少数。
+
+### 批次 264：定位到 `market_df.iloc[0:0]` 的 `py_df_empty_like` **收错实参**
+
+verbatim 复刻 `remove_extreme_return_bars`（放在 harness 里，可 dump MIR）后：
+
+    MIR: Call DataFrame::groupby(1,27,29) -> 24      ← shim 调用（未使用）
+         Call py_df_groupby(1,31)     -> 32         ← 我们的调用（type_map[32] = DynamicArray(Tuple)）
+         Call array_len(33)           -> 34         ← 循环用它（33 是 32 的拷贝，类型也对）
+    REB sub 892 892 9                               ← 循环体跑到了，子帧正确
+    REB parts 1 removed 0                           ← parts 非空
+    PY-A: empty-like on a non-frame …               ← 但这里触发
+    [probe] empty-like bt[1] … myreb + 972           ← 来自 `market_df.iloc[0:0]` 那句
+    myreb 0 0 0                                     ← 最终空
+
+⇒ MIR 的 `__slice__` 分支里 `py_df_empty_like` 拿到的是 **`arg_ids[0]`（切片的第一个参数）**，
+不是 DataFrame 接收者；那个值不是帧，于是护栏返回空帧、整条流变空。
+
+下一批：在那条分支里取**真正的接收者**（`df.iloc[a:b]` 的 `df`），或把该分支改成
+「在 shim 层处理切片」；随后 `pd.concat(parts)` 就能拿到正确子帧。
