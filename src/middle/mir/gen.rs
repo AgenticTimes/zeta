@@ -3128,6 +3128,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 self.type_map.insert(id, Type::Str);
             }
             AstNode::BinaryOp { op, left, right } => {
+                // `x in ("sh", "sz")` — a TUPLE literal on the right. Tuples are
+                // `StackArray`s with a `[len|elems]` layout, which the membership
+                // path reads as a dynamic array ⇒ every membership test against a
+                // tuple answered 0 (`"sz" in ("sh","sz")` → 0, while the same value
+                // in a LIST worked). `code_conv.normalize_to_jq` is built on such
+                // tuples, so `sh.513120` never normalized and every wufu code
+                // failed to resolve to a cache file.
+                if matches!(op.as_str(), "in" | "not in") {
+                    if let AstNode::Tuple(items) = &**right {
+                        let rewritten = AstNode::BinaryOp {
+                            op: op.clone(),
+                            left: left.clone(),
+                            right: Box::new(AstNode::ArrayLit(items.clone())),
+                        };
+                        return self.lower_expr(&rewritten);
+                    }
+                }
                 let left_id = self.lower_expr(left);
                 let right_id = self.lower_expr(right);
                 let dest = self.next_id();
@@ -3560,7 +3577,37 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         Some(bits) => self.next_id_with_lit(bits),
                         None => num_id,
                     };
-                    let func = if lit_bits.is_some() {
+                    // A STRING vector (our "YYYY-MM-DD" dates) must compare with
+                    // strcmp: the numeric variants parsed the dates with strtod
+                    // and `col >= "2023-08-05"` answered 0 for every row, making
+                    // the cache-coverage check see an empty slice.
+                    let elem_is_str = matches!(
+                        self.type_map.get(&vec_id),
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) if matches!(**e, Type::Str)
+                    ) && matches!(self.type_map.get(&num_id), Some(Type::Str));
+                    let kind = match op.as_str() {
+                        ">" => 0i64,
+                        "<" => 1,
+                        ">=" => 2,
+                        "<=" => 3,
+                        "==" => 4,
+                        _ => 5,
+                    };
+                    let func = if elem_is_str {
+                        let kid = self.next_id_with_lit(kind);
+                        let kid2 = self.next_id_with_lit(kind);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_vec_cmp_str".to_string(),
+                            args: vec![vec_id, num_arg, kid],
+                            dest,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(dest, MirExpr::Var(dest));
+                        self.type_map
+                            .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                        let _ = kid2;
+                        return dest;
+                    } else if lit_bits.is_some() {
                         format!("{}_bits", base)
                     } else if num_is_float {
                         base.to_string()

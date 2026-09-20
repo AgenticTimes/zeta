@@ -8005,3 +8005,26 @@ lldb 现场：`DataFrame::n_rows: ldr x0, [x8]`，`EXC_BAD_ACCESS (code=1, addre
 但**方法内的字符串下标**在这次调用里坏了。下一批：在 harness 里单测
 `cached["trade_date"]`（同一 harness 的 `_load_cache` 结果上），看是下标键坏还是
 `&` 两侧的切片表达式坏。
+
+### 批次 282：**字符串向量比较按数值做** ⇒ 日期区间全空（缓存覆盖判断永远失败）
+
+harness（`_load_cache` 结果上直接比）：
+
+    col = c["trade_date"]                1615 行  ✓
+    eff = warmup_start_of("2024-01-02")  2023-08-05 ✓
+    m1 = col >= eff                      → m1 1615 **0**   ✗（应约 744 行为真）
+
+根因：向量比较一律走数值路径（`py_vec_ge` 用 `strtod` 解析元素）⇒ `"2022-05-05"` 解析成
+2022、"2023-08-05" 解析成 2023 ⇒ 2022 ≥ 2023 恒假 ⇒ `cached[(cached["trade_date"] >= eff_start)
+& (… <= req_end)]` 得到**空帧** ⇒ `len(partial) > 0` 恒假 ⇒ 每个标的都被判「缓存不覆盖」。
+
+修法：新增运行期 `py_vec_cmp_str(vec, rhs, kind)`（`strcmp`，`YYYY-MM-DD` 天然按时间序），
+MIR 在「元素类型是 Str 且右操作数也是 Str」时改走它。
+
+验证：`m1 1615 744` ✓（此前恒 0）。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+**剩余**：驱动仍在 `fetch_stocks + 3784` 的 `DataFrame::__getitem__`（key 是坏指针）崩，
+而同一表达式在 harness（模块级与方法内都测过）是正确的 —— 下一批继续缩小差异
+（怀疑 `&` 掩码运算或该处前面的分支把槽位写坏）。

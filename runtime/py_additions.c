@@ -1005,6 +1005,33 @@ ZT_CMP_WRAP_BITS(ne, 5)
     int64_t py_vec_##name##_i(int64_t v, int64_t r) {                              \
         return zt_vec_cmp(v, (double)r, kind);                                     \
     }
+// String-vector comparison: our dates are "YYYY-MM-DD" strings, which order
+// chronologically under `strcmp`, but the numeric variants parsed them with
+// `strtod` — `col >= "2023-08-05"` compared 2022 vs 2023 and answered 0 for
+// every row, so `cached[(cached["trade_date"] >= eff_start) & …]` produced an
+// EMPTY frame and the cache never looked like it covered the range.
+int64_t py_vec_cmp_str(int64_t vec, int64_t rhs, int64_t kind) {
+    if (!vec) return vec;
+    const char* r = rhs ? (const char*)rhs : "";
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        const char* v = (const char*)((int64_t*)vec)[i];
+        int c = v ? strcmp(v, r) : -1;
+        int res = 0;
+        switch (kind) {
+            case 0: res = c > 0; break;
+            case 1: res = c < 0; break;
+            case 2: res = c >= 0; break;
+            case 3: res = c <= 0; break;
+            case 4: res = c == 0; break;
+            default: res = c != 0; break;
+        }
+        out = vec_push(out, res ? 1 : 0);
+    }
+    return out;
+}
+
 ZT_CMP_WRAP(gt, 0)
 ZT_CMP_WRAP(lt, 1)
 ZT_CMP_WRAP(ge, 2)
