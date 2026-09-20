@@ -6139,3 +6139,20 @@ Segmentation fault
    —— 「无 alloca 的调用实参」家族（`py_os_path_join + 44`）
 2. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
 3. -O3 longjmp 误编译（`ZETA_NO_OPT=1` 可对照）
+
+### 批次一百六十六（2026-09-19）：构造器内 `self.<字段>` 读取
+
+MIR 铁证：`MarketDataFetcher.__init__` 里 `16: FieldAccess{base:18,"cache_dir"}` 而
+`18: Var(18)` **从未被赋值**（`param_indices` 只有 `cache_dir`）——
+解析器合成构造器时丢掉了 `self`，`self.x = v` 只进「字段初始化表」，
+**后一行读** `self.x` 落到无 alloca 的槽 ⇒ codegen 取 NULL ⇒
+`py_os_path_join` 解引用崩（`MarketDataFetcher.__init__+92`）。
+
+修法：`StructLit` 按源码顺序登记 `self_field_aliases`；`FieldAccess` 最前面查别名；
+**护栏**：仅当 `self` 未绑定时启用（真 `self` 方法 / Rust 风格字面量不变）；嵌套用长度截断。
+
+### 下一队列（批次一百六十七）
+
+1. `_listing_dates_cached + 524`（缓存读取 / `{str(k): str(v) for k,v in data.items()}`）
+2. 结构体字段读取的**静态类型**（`c.cache_dir` 现在按 i64 分派 ⇒ `len()` 得 0）
+3. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
