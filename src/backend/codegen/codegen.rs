@@ -2289,6 +2289,27 @@ impl<'ctx> LLVMCodegen<'ctx> {
         // to be provided via the JIT's global mapping table.
         // If we're still in the module definition phase, emit a declaration.
         if name.contains("::") || self.module.get_function(name).is_none() {
+            // Check for an EXISTING definition first — raw name, mangled (`::` → `__`)
+            // and the `fns` cache. Declaring a second symbol with a different
+            // signature is what made `DataFrame::copy`'s call site emit a call with
+            // NO argument setup (the extern was declared as "1 arg, VOID return"
+            // while the definition takes `self` and returns a handle): the callee's
+            // `self` was whatever the PREVIOUS statement had left in x0.
+            if let Some(f) = self.module.get_function(name) {
+                return f;
+            }
+            if name.contains("::") {
+                let mangled = name.replace("::", "__");
+                if let Some(f) = self.module.get_function(&mangled) {
+                    return f;
+                }
+                if let Some(&f) = self.fns.get(&mangled) {
+                    return f;
+                }
+                if let Some(&f) = self.fns.get(name) {
+                    return f;
+                }
+            }
             // Create a declaration for the function (will be resolved at link time)
             let void_type = self.context.void_type();
             let fn_type = void_type.fn_type(&[self.i64_type.into()], false);
