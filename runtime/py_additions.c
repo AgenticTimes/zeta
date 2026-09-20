@@ -688,14 +688,27 @@ int64_t py_list_eq(int64_t a, int64_t b, int64_t elem_is_str) {
     return 1;
 }
 
+// ponytail: content fallback for an UNKNOWN element type. A caller that cannot
+// prove the element type passes elem_is_str=0 and only handles are compared —
+// so `[c for c in to_fetch if normalize(c) not in fetched_codes]` treated every
+// string as absent and `fetch_stocks` carried the whole universe forward (then
+// crashed on the garbage set handle). `GC_base()` proves a value is a real GC
+// pointer WITHOUT dereferencing it, so the extra string compare cannot read a
+// wild address. Ceiling: two distinct objects with identical text compare equal
+// — which is exactly Python's `in` semantics for strings.
+static int zt_ptr_is_gc_object(int64_t p) {
+    return p > 0x1000 && GC_base((void*)p) != 0;
+}
 int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
     int64_t n = zt_vec_len(vec);
     for (int64_t i = 0; i < n; i++) {
         int64_t v = ((int64_t*)vec)[i];
+        if (v == x && v != 0) return 1;
         if (elem_is_str) {
             if (v && x && strcmp((const char*)v, (const char*)x) == 0) return 1;
-        } else if (v == x) {
-            return 1;
+        } else if (v && x && zt_ptr_is_gc_object(v) && zt_ptr_is_gc_object(x)) {
+            if (getenv("ZT_DEBUG_CONTAINS")) fprintf(stderr, "CONTAINS cmp '%s' vs '%s'\n", (const char*)v, (const char*)x);
+            if (strcmp((const char*)v, (const char*)x) == 0) return 1;
         }
     }
     return 0;

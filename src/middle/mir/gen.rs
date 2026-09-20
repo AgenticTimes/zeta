@@ -2999,6 +2999,65 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.exprs.insert(dest, MirExpr::Var(dest));
                     self.type_map
                         .insert(dest, Type::DynamicArray(Box::new(elem)));
+                } else if op == "|"
+                    && matches!(
+                        self.type_map.get(&left_id),
+                        Some(Type::Named(n, _)) if n == "set"
+                    )
+                    || (op == "|"
+                        && (matches!(
+                            self.type_map.get(&left_id),
+                            Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                        ) || matches!(
+                            self.type_map.get(&right_id),
+                            Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                        )))
+                {
+                    // Python sets DEGRADE TO LISTS here, so `s |= {...}` is a
+                    // UNION. Without this the bitwise-or ran on two HANDLES and
+                    // produced garbage: the set stayed empty, `c not in
+                    // fetched_codes` was always true, and the garbage handle
+                    // afterwards crashed `py_list_contains` (measured in
+                    // `fetch_stocks`). Approximated by concatenation — membership
+                    // stays correct, duplicates survive (dedup needs runtime
+                    // content comparison; tracked in the roadmap).
+                    let elem = match self.type_map.get(&left_id).cloned() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
+                        _ => Type::I64,
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_array_concat".to_string(),
+                        args: vec![left_id, right_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map
+                        .insert(dest, Type::DynamicArray(Box::new(elem)));
+                } else if op == "|"
+                    && matches!(
+                        self.type_map.get(&left_id),
+                        Some(Type::Named(n, _)) if n == "map" || n == "dict" || n == "set"
+                    )
+                    && matches!(
+                        self.type_map.get(&right_id),
+                        Some(Type::Named(n, _)) if n == "map" || n == "dict" || n == "set"
+                    )
+                {
+                    // `s |= {...}` / `d |= {...}` desugar to `x = x | y`. Without
+                    // this the bitwise-or ran on the two HANDLES, so the set stayed
+                    // EMPTY: `c not in fetched_codes` was always true (measured in
+                    // `fetch_stocks`, which then carried every code forward and
+                    // finally crashed inside `py_list_contains` on the set handle).
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_map_update".to_string(),
+                        args: vec![left_id, right_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    let lt = self.type_map.get(&left_id).cloned().unwrap_or(Type::I64);
+                    self.type_map.insert(dest, lt);
                 } else if op == "+" {
                     self.stmts.push(MirStmt::SemiringFold {
                         op: SemiringOp::Add,
