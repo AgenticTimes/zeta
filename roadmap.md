@@ -6446,3 +6446,14 @@ MIR：`_source_score` 里 `zeta_env_get(_DEFAULT_SOURCE_SCORE)` → subscript �
 2. `fetch_stocks` 源回退循环不收敛（119 → 238 → …）
 3. `区间 1969-08-04 ~ `：日期显示异常
 4. `py_pd_read_parquet` 真实实现——跑出指标的最后一环
+
+### 批次一百八十四（2026-09-19）：`DictLit` 推导 `map<K, V>`（修掉裸 `get`）
+
+`infer_global_ty` 的 `DictLit` 按首条推键/值类型 ⇒
+`_DEFAULT_SOURCE_SCORE -> map<Str, map<Str, F64>>` ⇒ `[asset].get(source, 0.5)` 回到 map 路径，
+`_get` 未实现桩不再触发。
+
+**并纠正批次 183 的误判**：那时把偶发的 `MarketDataFetcher.__init__` 崩溃当成回归而回退；
+本次同产物连跑 3 次全部越过该点（3/3 rc=124 超时）⇒ 那是一次 flake。
+
+**运行状态**：3/3 卡在 `fetch_stocks` 源回退循环（119 → 238 → …）。
