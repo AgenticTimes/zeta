@@ -7250,42 +7250,28 @@ call, no NULL-handle dereference).",
                 {
                     if let AstNode::Tuple(items) | AstNode::ArrayLit(items) = &args[0] {
                         if !items.is_empty() {
-                            let func = if method == "startswith" {
-                                "host_str_starts_with"
-                            } else {
-                                "host_str_ends_with"
-                            };
-                            let mut acc: Option<u32> = None;
-                            for it in items {
-                                let nid = self.lower_expr(it);
-                                let cid = self.next_id();
-                                self.stmts.push(MirStmt::Call {
-                                    func: func.to_string(),
-                                    args: vec![arg_ids[0], nid],
-                                    dest: cid,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(cid, MirExpr::Var(cid));
-                                self.type_map.insert(cid, Type::Bool);
-                                acc = Some(match acc {
-                                    None => cid,
-                                    Some(prev) => {
-                                        let oid = self.next_id();
-                                        self.exprs.insert(
-                                            oid,
-                                            MirExpr::BinaryOp {
-                                                op: "||".to_string(),
-                                                left: prev,
-                                                right: cid,
-                                            },
-                                        );
-                                        self.type_map.insert(oid, Type::Bool);
-                                        oid
-                                    }
-                                });
-                            }
-                            let a = acc.unwrap();
-                            self.exprs.insert(id, MirExpr::Var(a));
+                            // Build the prefix VEC via the existing literal
+                            // lowering, then test them in the runtime. The
+                            // OR-chain version compiled to two calls plus an
+                            // `||` expression and returned 0 for a matching
+                            // prefix (measured: `_is_likely_index("000300.XSHG")`
+                            // was False), so keep the combination inside one
+                            // helper.
+                            let lit = AstNode::ArrayLit(items.clone());
+                            let vec_id = self.lower_expr(&lit);
+                            let flag_id = self.next_id();
+                            self.exprs.insert(
+                                flag_id,
+                                MirExpr::IntLit(if method == "startswith" { 0 } else { 1 }),
+                            );
+                            self.type_map.insert(flag_id, Type::I64);
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_str_prefix_any".to_string(),
+                                args: vec![arg_ids[0], vec_id, flag_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
                             self.type_map.insert(id, Type::Bool);
                             return id;
                         }

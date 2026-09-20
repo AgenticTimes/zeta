@@ -699,6 +699,28 @@ int64_t py_list_eq(int64_t a, int64_t b, int64_t elem_is_str) {
 static int zt_ptr_is_gc_object(int64_t p) {
     return p > 0x1000 && GC_base((void*)p) != 0;
 }
+// `s.startswith(("a", "b"))` / `s.endswith(...)` — Python takes a TUPLE of
+// prefixes. Combining per-prefix calls with `||` in the MIR returned 0 for a
+// matching prefix (measured: `_is_likely_index("000300.XSHG")` was False, so
+// A-share index codes were scored as ordinary ETFs), so the whole test lives in
+// one helper.
+int64_t py_str_prefix_any(int64_t s, int64_t vec, int64_t is_end) {
+    if (!s || !vec) return 0;
+    int64_t n = zt_vec_len(vec);
+    const char* str = (const char*)s;
+    size_t slen = strlen(str);
+    for (int64_t i = 0; i < n; i++) {
+        const char* p = (const char*)((int64_t*)vec)[i];
+        if (!p) continue;
+        size_t plen = strlen(p);
+        if (is_end) {
+            if (plen <= slen && memcmp(str + (slen - plen), p, plen) == 0) return 1;
+        } else if (plen <= slen && memcmp(str, p, plen) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
 int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
     int64_t n = zt_vec_len(vec);
     if (getenv("ZT_DEBUG_CONTAINS")) fprintf(stderr, "CONTAINS vec=%p n=%lld x=%p str=%lld\n", (void*)vec, (long long)n, (void*)x, (long long)elem_is_str);
