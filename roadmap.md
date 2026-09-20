@@ -7790,3 +7790,21 @@ lldb 现场（`fetch_stocks + 3336`）：
 
 下一批：盯 `sh_515170` / `sz_159509` 这两个标的的缓存文件，看 `_load_cache` 为什么给出
 `data == NULL` 的帧（大概率是某条 `pd.DataFrame()` 空构造或 tuple 解构分支）。
+
+### 批次 272：**清洗把 892 行砍成 2 行**（静默错值，新线索）
+
+把 `sh_515170` / `sz_159509` 两个缓存文件单独过一遍清洗：
+
+    loaded 515170.XSHG 892 9
+      clean 2 9 2          ← ✗ 892 行只剩 2 行！
+    loaded 159509.XSHE 747 9
+      clean 2 9 2          ← ✗ 747 → 2
+
+`validate_and_repair_stock_ohlcv` 正常时只该去掉重复/无效价/极端 bar（几百行里掉几十行量级），
+砍到 2 行说明**某个过滤掩码算错了**（`invalid = isna(close) | (close < cfg.min_price)` 或
+`drop_duplicates(subset=["trade_date"], keep="last")`）——这是「值算错」而不仅「崩」。
+
+同时：驱动里 `len(cached)` 的崩溃是帧 `data == NULL`（`DataFrame::n_rows` 读 `[x8]` 时
+address 0x0），说明某条路径返回了 `pd.DataFrame()`（无参构造）。
+
+下一批：查这两个静默错值（掩码 / drop_duplicates 的 keep="last"）。
