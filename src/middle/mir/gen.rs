@@ -7750,6 +7750,34 @@ call, no NULL-handle dereference).",
                     {
                         self.stmts.push(MirStmt::Assign { lhs: slot, rhs: id });
                     }
+                    // `lst = []` followed by `lst.append(x)`: an EMPTY literal
+                    // typed the element I64, which is "unknown" — not "numeric".
+                    // `x in lst` then passed elem_is_str=0 and compared HANDLES, so
+                    // every string counted as absent (measured:
+                    // `[c for c in items if c not in fetched]` kept everything, and
+                    // `fetch_stocks`'s source loop carried on with the wrong set).
+                    // Refine I64 -> the appended value's type.
+                    if func == "vec_push" && arg_ids.len() == 2 {
+                        if let Some(AstNode::Var(name)) = receiver.as_ref().map(|r| &**r) {
+                            if let Some(&slot) = self.name_to_id.get(name) {
+                                let elem_is_i64 = matches!(
+                                    self.type_map.get(&slot),
+                                    Some(Type::DynamicArray(e)) if matches!(**e, Type::I64)
+                                );
+                                if elem_is_i64 {
+                                    let vty = self
+                                        .type_map
+                                        .get(&arg_ids[1])
+                                        .cloned()
+                                        .unwrap_or(Type::I64);
+                                    if !matches!(vty, Type::I64) {
+                                        self.type_map
+                                            .insert(slot, Type::DynamicArray(Box::new(vty)));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     return id;
                 }
 
