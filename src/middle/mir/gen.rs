@@ -10433,6 +10433,32 @@ call, no NULL-handle dereference).",
                 }
             }
             AstNode::Subscript { base, index } => {
+                // `df.loc[<掩码>]` / `df.iloc[<掩码>]`: `.loc` is a PROPERTY that
+                // then gets subscripted — the runtime has no property objects, so
+                // rewrite the pair into a plain METHOD call `df.loc(<掩码>)`. Without
+                // this the subscript became a map_get with a BOOLEAN key, returned
+                // 0 and `…copy()` dereferenced it.
+                if let AstNode::FieldAccess { base: recv, field } = &**base {
+                    if field == "loc" || field == "iloc" {
+                        let recv_id = self.lower_expr(recv);
+                        let arg_id = self.lower_expr(index);
+                        let recv_ty = self.type_map.get(&recv_id).cloned();
+                        let func = match recv_ty.as_ref() {
+                            Some(Type::Named(n, _)) => format!("{}::{}", n, field),
+                            _ => format!("DataFrame::{}", field),
+                        };
+                        self.stmts.push(MirStmt::Call {
+                            func,
+                            args: vec![recv_id, arg_id],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        let ty = recv_ty.unwrap_or(Type::Named("DataFrame".to_string(), vec![]));
+                        self.type_map.insert(id, ty);
+                        return id;
+                    }
+                }
                 // 批次148 重放: `np.where(mask)[0]` — numpy 的 where 返回元组，
                 // [0] 取第一个数组。V1：where 调用已返回索引 Vec，[0] 即其本身
                 // （否则 array_get 取出首索引，随后的 len(idx) 对标量求长度 SEGV）。
