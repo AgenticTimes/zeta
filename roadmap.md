@@ -6415,3 +6415,13 @@ MIR 里「多个单前缀调用 + `||`」在隔离用例正确、项目里仍返
 
 **运行状态**：**已无崩溃**，但 `fetch_stocks` 的源回退循环不收敛（119 → 238 → …，>900s）。
 下一批：`to_fetch`/`fetched_codes` 为何不缩减 + `区间 1969-08-04 ~ `。
+
+### 批次一百八十二（2026-09-19）：`bs.login()` 撞 libc `login(3)`
+
+`baostock` 不在 registry ⇒ `bs.login()` 落到裸符号 `login` ⇒ 链接器用 **libc `login(3)`**
+（utmpx）满足 ⇒ `EXC_BAD_ACCESS at 0x8`（`getutmpx` ← `login` ← `_baostock_login`）。
+
+修法：stub 里 weak 定义 `login`/`logout`（说明 + `zeta_raise`），平台源失败走调用方 try/except。
+
+**新崩点**：裸成员 `_get`（未类型化接收者的 `.get(...)`）⇒ abort 桩。
+**仍未收敛**：`fetch_stocks` 源回退循环 119 → 238 → …；`区间 1969-08-04 ~ `。
