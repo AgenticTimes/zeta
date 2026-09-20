@@ -7456,8 +7456,43 @@ call, no NULL-handle dereference).",
                             None => kw.into_iter().map(|(_, v)| v).chain(pos).collect(),
                         }
                     } else {
-                        // Method/library call: names are the registry's business.
-                        kw.into_iter().map(|(_, v)| v).chain(pos).collect()
+                        // Method call WITH kwargs — bind by NAME like the
+                        // free-function path, dropping the leading `self`
+                        // (`func_param_names`/`param_defaults` index self at 0,
+                        // and the dispatch site prepends the receiver).
+                        // Appending the kwarg values instead shifted every later
+                        // argument: `cache.covers_range(df, a, b, buffer_days=5)`
+                        // put `5` into the slot of the first defaulted parameter
+                        // and `covers_range` then read garbage as `cache_df`
+                        // (measured: `DataFrame::n_rows` SEGV from
+                        // `ParquetCache::covers_range + 160`).
+                        let names = self.func_param_names.get(method.as_str()).cloned();
+                        let mdef = self.param_defaults.get(method.as_str()).cloned();
+                        match names {
+                            Some(params) if params.len() > 1 => {
+                                let params: Vec<String> =
+                                    params.into_iter().skip(1).collect();
+                                let mut slots: Vec<Option<AstNode>> =
+                                    params.iter().map(|_| None).collect();
+                                fill(&mut slots, &params, pos, kw, &[]);
+                                if let Some(d) = &mdef {
+                                    for (i, slot) in slots.iter_mut().enumerate() {
+                                        if slot.is_none() {
+                                            if let Some(Some(v)) = d.get(i + 1) {
+                                                *slot = Some(v.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                                Self::warn_unbound(&callee_name, &params, &slots);
+                                slots.into_iter().flatten().collect()
+                            }
+                            _ => {
+                                // Unknown signature: keep the old behaviour
+                                // (value order preserved, names dropped).
+                                kw.into_iter().map(|(_, v)| v).chain(pos).collect()
+                            }
+                        }
                     }
                 };
                 // PY-A: starred args `f(*arr)` expand to per-element args

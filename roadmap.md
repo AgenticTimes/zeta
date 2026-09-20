@@ -7691,3 +7691,27 @@ verbatim 复刻 harness 打印：
 （`fetch_stocks + 3836`）⇒ `_load_cache` 已返回**有效帧**，清洗链路整体打通，进入缓存覆盖判断。
 
 度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+### 批次 267：**方法调用带 kwargs 时按位置追加** ⇒ 参数整体错位（静默错值）
+
+最小复现 `/tmp/kw2.z`：
+
+    class H:
+        def m(self, a: i64, b: i64 = 1, c: i64 = 2) -> i64: return a + b + c
+    h.m(10, c=100)     → 110  ✗（应为 111；kwarg 值 100 落到了 b 的位置）
+    h.m(10, 20, c=100) → 130  ✓（纯位置时看不出）
+
+根因：MIR 的关键字参数重绑定只对**自由函数**做（`func_param_names` 仅当 `receiver.is_none()`
+才查），方法调用走最后的 `else` 分支 —— 把 kwarg 的**值**按顺序接到位置参数后面。
+
+影响：`_parquet_cache.covers_range(cached, eff_start, req_end, buffer_days=5)` ⇒ `5` 落进
+第一个有默认值的形参位置 ⇒ `covers_range` 里的 `cache_df` 读到垃圾
+（实测 `DataFrame::n_rows` SEGV from `ParquetCache::covers_range + 160`）。
+
+修法：方法调用也按**参数名**绑定（`self` 索引 0，调用点已把头一个位置留给 receiver，
+所以 `skip(1)`），并同样补上声明的默认值；签名未知时保持旧行为。
+
+验证：`h.m(10, c=100)` 修复后 **111** ✓；`covers_range(...)` 位置调用与 kwarg 调用都能返回。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+驱动崩点：`fetch_stocks + 3336`（`len(cached)`）—— 同一「坏帧」家族的下一处。
