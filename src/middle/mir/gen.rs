@@ -132,6 +132,13 @@ pub struct MirGen {
     /// i64 even for a list of strings, so `[s.upper() for s in strs]` and
     /// `{f: g[f] for f in fs}` silently operated on pointers.
     pending_closure_param_types: Option<Vec<Type>>,
+    /// Batch 288: slots holding the result of `PyJson.items()` — the pair's
+    /// value half is a PyJson handle but the array element type is i64
+    /// (untyped pair). The dict-comprehension hint consults this to type the
+    /// lambda's value param, so `{k: int(v.get("ok", 0)) … for k, v in
+    /// raw.items()}` (sources_selector.py:125) reaches `py_json_get_default`
+    /// instead of the bare `get` ghost symbol (runtime abort).
+    py_json_items_ids: std::collections::HashSet<u32>,
     /// PY-A: value type of the most recently lowered closure body, so a
     /// comprehension's result can carry a real element type instead of i64.
     last_closure_ret_ty: Option<Type>,
@@ -233,6 +240,7 @@ impl MirGen {
             argparse_kinds: HashMap::new(),
             param_defaults: HashMap::new(),
             pending_closure_param_types: None,
+            py_json_items_ids: std::collections::HashSet::new(),
             last_closure_ret_ty: None,
             loop_value_stack: Vec::new(),
             last_loop_result: None,
@@ -2162,6 +2170,21 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                         },
                                         _ => None,
                                     };
+                                    // Batch 288: a json.items() pair — the key
+                                    // half is the hashed i64, the value half a
+                                    // PyJson handle (the array element type is
+                                    // plain i64, see py_json_items_ids at the
+                                    // `.items()` lowering).
+                                    let pair_tys = pair_tys.or_else(|| {
+                                        if self.py_json_items_ids.contains(&raw_id) {
+                                            Some(vec![
+                                                Type::I64,
+                                                Type::Named("PyJson".to_string(), vec![]),
+                                            ])
+                                        } else {
+                                            None
+                                        }
+                                    });
                                     for (i, n) in names.iter().enumerate() {
                                         if let AstNode::Var(nm) = n {
                                             let idx_id = self.next_id_with_lit(i as i64);
@@ -4562,11 +4585,53 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // (measured: `__source_score` undefined, from
                     // `_ranked_fetch_sources`'s `key=lambda s: … _source_score(s, bs_code)`).
                     // Rebuild the mangled name from the current module.
-                    if method.starts_with('_') && !method.starts_with("__") {
+                    // Batch 288 guard: an `_`-leading bare call that is an
+                    // IMPORT ALIAS (`from dotenv import load_dotenv as
+                    // _load_dotenv`, market_data_sources.py:17-19) must not be
+                    // mangled to `module___load_dotenv` — no such definition
+                    // exists and LINKING fails for the whole program.
+                    // Batch 288 guard 2: NESTED defs are hoisted to synthetic
+                    // `__closure_N` functions and bound by user name in
+                    // closure_vars/hoisted_names (gen.rs:1688); the call path
+                    // at :9442 dispatches them. Mangling `_src`/`_ensure`
+                    // (data_ops_log.py:132,136) to `module___src` preempted
+                    // that lookup → undefined symbols.
+                    if method.starts_with('_')
+                        && !method.starts_with("__")
+                        && !self.py_member_aliases.contains_key(method.as_str())
+                        && !self.module_globals.contains(method.as_str())
+                        && !self.closure_vars.contains_key(method.as_str())
+                        && !self.hoisted_names.contains_key(method.as_str())
+                        // Batch 288 guard 4: a leading-underscore CLASS name
+                        // (t137 `_Frame(v=7)`) — the constructor is emitted
+                        // under its bare name; mangling breaks the link.
+                        && !self.type_decls.contains_key(method.as_str())
+                    {
                         if !self.current_module.is_empty() {
                             let m = self.current_module.clone();
-                            let mangled =
+                            let mut mangled =
                                 format!("{}__{}", m.replace('.', "_"), method);
+                            // Batch 288 guard 3: the caller's module context
+                            // can be wrong — `MarketDataFetcher.
+                            // is_cache_fully_covered` (market_data_fetcher.py:
+                            // 151-158) lowered under `__main__` mangled `_to_ts`
+                            // to `__main______to_ts` while the definition is
+                            // `backend_datasrc_market_data_fetcher___to_ts`.
+                            // Only trust the current-module name when such a
+                            // definition actually exists; otherwise adopt the
+                            // unique defined `module__<method>` (ambiguity keeps
+                            // the old behavior so real misses still surface).
+                            if !self.func_ret_types.contains_key(&mangled) {
+                                let suffix = format!("__{}", method);
+                                let hits: Vec<&String> = self
+                                    .func_ret_types
+                                    .keys()
+                                    .filter(|k| k.ends_with(&suffix.as_str()))
+                                    .collect();
+                                if hits.len() == 1 {
+                                    mangled = hits[0].clone();
+                                }
+                            }
                             let rewritten = AstNode::Call {
                                 receiver: None,
                                 method: mangled,
@@ -5279,6 +5344,10 @@ call, no NULL-handle dereference).",
                             self.type_map.insert(dest, ty.clone());
                             self.exprs.insert(id, MirExpr::Var(dest));
                             self.type_map.insert(id, ty);
+                            if method == "items" {
+                                self.py_json_items_ids.insert(id);
+                                self.py_json_items_ids.insert(dest);
+                            }
                             return id;
                         }
                         if let Some((symbol, ret_handle)) =
@@ -5835,6 +5904,31 @@ call, no NULL-handle dereference).",
                     && ((method == "getattr" && !args.is_empty())
                         || (method == "range" && !args.is_empty()))
                 {
+                    // PY-A (batch 288): the statement path reaches this guard
+                    // for dynamic-name getattr (`getattr(import_module(src),
+                    // name)` in market_data's PEP 562 facade, and
+                    // `getattr(bs, MAP[api])` in fundamental_data). The lower_expr
+                    // route already maps those to py_getattr_dynamic; here the
+                    // bare `getattr` free call leaked an undefined symbol and
+                    // killed LINKING for the whole program. Route it the same
+                    // way. Literal names keep the ghost path (t225 expects the
+                    // link failure).
+                    if method == "getattr"
+                        && args.len() >= 2
+                        && !matches!(args[1], AstNode::StringLit(_))
+                    {
+                        let a0 = self.lower_expr(&args[0]);
+                        let a1 = self.lower_expr(&args[1]);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_getattr_dynamic".to_string(),
+                            args: vec![a0, a1],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::I64);
+                        return id;
+                    }
                     eprintln!(
                         "error: builtin `{}` is not implemented in this form (it would link \
                          against an undefined symbol named `{}`)",
@@ -7673,13 +7767,33 @@ call, no NULL-handle dereference).",
                     if matches!(method.as_str(), "__collect__" | "__collect_dict__") {
                         if let AstNode::Closure { .. } = a {
                             if let Some(recv_id) = arg_ids.first() {
-                                let elem = match self.type_map.get(recv_id).cloned() {
-                                    Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
-                                        (*e).clone()
-                                    }
-                                    _ => Type::I64,
-                                };
-                                self.pending_closure_param_types = Some(vec![elem]);
+                                if method == "__collect_dict__"
+                                    && self.py_json_items_ids.contains(recv_id)
+                                {
+                                    // Batch 288: `for k, v in json_obj.items()`
+                                    // — the parser binds the tuple target to
+                                    // ONE lambda param holding the packed pair
+                                    // (expr.rs comp_target_binding), so the
+                                    // hint types the PAIR; the slot reads
+                                    // (`stack_array_get(e, i)`) inherit the
+                                    // element type below. Without this
+                                    // `v.get("ok", 0)` (sources_selector.py:125)
+                                    // loses the PyJson tag and degrades to the
+                                    // bare `get` ghost (runtime abort).
+                                    self.pending_closure_param_types = Some(vec![
+                                        Type::DynamicArray(Box::new(Type::Named(
+                                            "PyJson".to_string(),
+                                            vec![],
+                                        ))),
+                                    ]);
+                                } else {
+                                    let elem = match self.type_map.get(recv_id).cloned() {
+                                        Some(Type::DynamicArray(e))
+                                        | Some(Type::Array(e, _)) => (*e).clone(),
+                                        _ => Type::I64,
+                                    };
+                                    self.pending_closure_param_types = Some(vec![elem]);
+                                }
                             }
                         }
                     }
@@ -8646,6 +8760,29 @@ call, no NULL-handle dereference).",
                     }
                 }
 
+                // Batch 288: slot read of a TYPED element. The comprehension
+                // tuple target desugars to `stack_array_get(ELEMENT, i)`; with
+                // the element's DynamicArray hint in play, the slot carries the
+                // element type instead of a bare i64 — that is how the value
+                // half of a json.items() pair stays a PyJson handle.
+                if method == "stack_array_get" && receiver.is_none() && arg_ids.len() == 2 {
+                    let elem_ty = match self.type_map.get(&arg_ids[0]).cloned() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => Some(*e),
+                        _ => None,
+                    };
+                    if let Some(elem_ty) = elem_ty {
+                        self.stmts.push(MirStmt::Call {
+                            func: "stack_array_get".to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, elem_ty);
+                        return id;
+                    }
+                }
+
                 // PY-A fallback: method calls on unknown/opaque receivers
                 // (user structs from undefined modules, BitArray, Sieve,
                 // QuantumCircuit) map to runtime equivalents by NAME so
@@ -9196,9 +9333,35 @@ call, no NULL-handle dereference).",
                     if let Some((sym, ret_handle)) =
                         crate::middle::pylib::method_symbol(&tag, method)
                     {
+                        // Batch 288: siteB mirror of siteA's PyJson `get`
+                        // padding (see the tag==PyJson block upstream) — the
+                        // registry declares the 4-argument form
+                        // (recv, key, default, default-tag). Reached when the
+                        // receiver's tag comes from its TYPE (a comprehension
+                        // pair slot) rather than the AST.
+                        let mut lowered = arg_ids.clone();
+                        if tag == "PyJson" && method == "get" {
+                            if lowered.len() == 2 {
+                                let z = self.next_id();
+                                self.exprs.insert(z, MirExpr::IntLit(0));
+                                self.type_map.insert(z, Type::I64);
+                                lowered.push(z);
+                            }
+                            if lowered.len() == 3 {
+                                let dtag: i64 = match self.type_map.get(&lowered[2]) {
+                                    Some(Type::Str) => 2,
+                                    Some(Type::F64) | Some(Type::F32) => 1,
+                                    _ => 0,
+                                };
+                                let t = self.next_id();
+                                self.exprs.insert(t, MirExpr::IntLit(dtag));
+                                self.type_map.insert(t, Type::I64);
+                                lowered.push(t);
+                            }
+                        }
                         self.stmts.push(MirStmt::Call {
                             func: sym.to_string(),
-                            args: arg_ids.clone(),
+                            args: lowered,
                             dest: id,
                             type_args: vec![],
                         });

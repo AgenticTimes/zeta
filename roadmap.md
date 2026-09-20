@@ -8126,3 +8126,70 @@ handoff §2 的 274/2 与工作区不符。本批改动经行级归因**未引�
 `market_data.py:138` 的 `getattr(importlib.import_module(source), name)` ——
 内置 `getattr` 未实现，链接失败（稳定复现 3/3）。下一批：实现 `getattr` 的
 这个形态（或按 §7.11 规矩响亮护栏），再复跑 drvA。
+
+---
+
+## 批次 288 —— getattr 动态名护栏 + 模块 mangle 兜底三连护栏 + ImportError 语义（drvA 打通：ranked 3 == CPython）
+
+### 起点（handoff §4.3 顺延）
+批次 287 解除死锁后，drvA 链接失败于 `getattr(importlib.import_module(source), name)`
+（market_data.py:138，PEP 562 `__getattr__` 门面）。修好后逐个暴露出四类链接/行为错，
+全部归因并修复：
+
+1. **动态名 `getattr`**：非字面量名此前走「幽灵裸符号」路径。现 MIR 直接分派
+   `py_getattr_dynamic(obj, name)`：命中进程级 env 表（模块全局按裸名
+   `zeta_env_set` 存放、跨模块共享 —— 恰是 market_data 门面委托的语义）则返回，
+   否则**响亮 abort**（沿用 §7.11 规矩）。为此在运行时补 `map_has`
+   （map_get 分不开「键不存在」与「存了 0/False」）。字面量名仍走原路径，
+   t225 expect-error 口径不变。
+2. **import 别名被误 mangle**（`from dotenv import load_dotenv as _load_dotenv`，
+   market_data_sources.py:17-19）：批次 286 的 `_<name>` 兜底把它改写成
+   `module___load_dotenv`（无此定义）⇒ 全程序链接失败。护栏：
+   `py_member_aliases`/`module_globals` 命中不改写。
+3. **嵌套 def 被误 mangle**（`_src`/`_ensure`/`_log`/`_to_ts`，
+   data_ops_log.py:132 等 6 处）：嵌套 def 在 gen.rs:1688 被提升到
+   `__closure_N` 并以用户名字登记在 `closure_vars`/`hoisted_names`，调用点在
+   :9442 有正规分派 —— 但兜底先拦截、抢先改写。护栏：两表命中不改写；
+   另外**模块上下文可能错位**（`MarketDataFetcher.is_cache_fully_covered`
+   在 `__main__` 上下文里被降级，把 `_to_ts` mangle 成 `__main______to_ts`，
+   而定义是 `backend_datasrc_market_data_fetcher___to_ts`）：兜底先验证
+   `func_ret_types` 里确有当前模块的定义，否则在唯一同名定义间取之（多义保持
+   旧行为，让真实缺失仍然响亮地链接失败）。同类：前导下划线**类名**
+   （t137 `_Frame(v=7)`）命中 `type_decls` 时不改写 —— t137 由红转绿。
+4. **PyJson `.items()` 对 + `v.get(k, d)`**（sources_selector.py:125）：
+   `for k, v in json.items()` 的值半是 PyJson 句柄但对数组元素类型是裸 i64，
+   `v.get` 丢标签掉进裸 `get` 幽灵符号 ⇒ 运行时 abort（lldb 断点回溯实测
+   `__closure_34 ← zeta_collect_dict ← _read_source_stats_unlocked`）。
+   修：`py_json_items_ids` 登记 items() 结果槽；dict 推导的成对参数提示为
+   `DynamicArray(PyJson)`，`stack_array_get(对, i)` 随元素类型定型；For 语句
+   元组解包同样对 items() 对给出 `[I64, PyJson]`。siteB（按类型分派 W 表）
+   补上 siteA 的 `PyJson.get` 参数补齐（registry 声明 args=4，缺 dtag 会
+   arity-mangle 成不存在的 `py_json_get_default_3`）。
+
+### 关键行为差：`import 未安装包` 必须抛 ImportError
+修完链接后 drvA 输出 `ranked 4`，比 CPython 多一个 baostock：
+`zeta_py_import` 是无痕 no-op ⇒ `_has_baostock()`（sources_selector.py:57-62 的
+try/except ImportError）恒真。按验收 venv 实测逐包探测（baostock/tushare/jqdatasdk/
+rqdatac/akshare/yfinance/pyarrow/backtrader/nautilus_trader 均 MISSING，dotenv OK），
+运行时对名单内模块（含子模块前缀）`zeta_raise(1)`，其余照旧。结果与 CPython
+完全一致：**ranked 3 = [yfinance, akshare_etf, akshare_stock]（含顺序）**。
+
+### 已知残留（记账，不阻塞）
+- json 对象键在 map 里是**内容哈希 i64**：`{k: … for k, v in obj.items()}` 产出的
+  字典以哈希为键，之后用原字符串 `.get` 会 miss（t288 探针实测 -1）。CPython 里
+  这是真字符串键。stats 文件为空时两侧等价（都走默认分支），验收口径暂无影响；
+  后续如触发再按「pairs 带原键」方向还债。
+- `str(动态值)` 崩（rc=138 SIGBUS）——探针改用了成员判断，正式代码不依赖。
+
+### 验证
+- `tests/python_style/t288_nested_def_json_items_get.z`（新增，PASS：41/3/3）。
+- 三基线：官方 195/195（run_all.sh，含 t287）；python_style **276/2**
+  （仅存量红 t231/t233；t137 已修复、t244 本轮绿）；语料 38/38=100%
+  （口径：把 `_zeta_local_drv.py` 移出 strategies/code 后统计）。
+- handoff §9 自检 harness 全对：universe 119 sz.159985 sh.512070 /
+  cached 892 9 2022-05-05 2025-12-31 / clean 892 9 892。
+- drvA（ranked 探针）编译+链接+运行 rc=0，输出与 CPython 对齐。
+
+**下一步**：把 harness 扩到 `run_backtest("2024-01-02","2024-02-29",1000000.0,
+engine="local")`，对照验收指标（final_value 994575.84 / return -0.5424 /
+trading_days 37）。

@@ -222,6 +222,21 @@ int64_t map_get(int64_t map0, int64_t key) {
         idx=(idx+1)&(cap-1);
     }
 }
+// Key-existence probe: map_get cannot distinguish "absent" from a stored 0
+// (batch 288: the PEP 562 facade getattrs module state like `_rq_initialized`,
+// whose live value IS 0/False).
+int64_t map_has(int64_t map0, int64_t key) {
+    int64_t map = map_resolve(map0);
+    if (!map) return 0;
+    int64_t cap=((int64_t*)map)[0]; int64_t h=map_hash(key); int64_t idx=h&(cap-1);
+    while(1){
+        char* e=(char*)map+16+idx*MAP_ENTRY_SIZE;
+        uint8_t used=*(uint8_t*)(e+16);
+        if(!used)return 0;
+        if(used==1 && *(int64_t*)e==key)return 1;
+        idx=(idx+1)&(cap-1);
+    }
+}
 void map_free(int64_t map){(void)map;} /* GC-managed */
 
 void flush(void) { fflush(stdout); }

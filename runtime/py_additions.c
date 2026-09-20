@@ -2484,6 +2484,7 @@ static int64_t env_map(void) {
     if (!g_env) g_env = map_new();
     return g_env;
 }
+int64_t zeta_env_map_for_probe(void) { return env_map(); }
 int64_t zeta_env_get(int64_t name_handle) {
     return map_get(env_map(), map_str_key(name_handle));
 }
@@ -2501,11 +2502,37 @@ int64_t zeta_module_decl(int64_t name) { return name; }
 // runtime — the Resolver reads it to fill omitted call arguments; this stub
 // only exists so the marker never becomes an undefined symbol.
 int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
-// PY-A: Python-library import markers — no-ops. The Resolver collects them
-// into the module/member alias tables; MirGen does the actual symbol mapping.
-int64_t zeta_py_import(int64_t module, int64_t alias) { (void)module; (void)alias; return 0; }
+// PY-A: Python-library import markers. The Resolver collects them into the
+// module/member alias tables; MirGen does the actual symbol mapping. What
+// still reaches runtime is a module the compiler could not resolve — and
+// CPython raises ImportError for a package that is not installed.
+// Batch 288: without the raise, `import baostock` succeeded and
+// _has_baostock() (sources_selector.py:57-62) reported the package present
+// — the local ranking gained a phantom baostock source (measured 4 vs
+// CPython's 3), changing fetch order and every downstream metric. The list
+// mirrors the acceptance venv (probed package-by-package with python3).
+static int zt_module_missing(const char* m) {
+    static const char* missing[] = {
+        "baostock", "tushare", "jqdatasdk", "rqdatac", "akshare",
+        "yfinance", "pyarrow", "backtrader", "nautilus_trader", NULL};
+    if (!m) return 0;
+    for (int i = 0; missing[i]; i++) {
+        size_t l = strlen(missing[i]);
+        if (strncmp(m, missing[i], l) == 0 && (m[l] == '\0' || m[l] == '.'))
+            return 1;
+    }
+    return 0;
+}
+extern int64_t zeta_raise(int64_t);
+int64_t zeta_py_import(int64_t module, int64_t alias) {
+    (void)alias;
+    if (zt_module_missing((const char*)module)) return zeta_raise(1);
+    return 0;
+}
 int64_t zeta_py_from(int64_t module, int64_t member, int64_t alias) {
-    (void)module; (void)member; (void)alias; return 0;
+    (void)member; (void)alias;
+    if (zt_module_missing((const char*)module)) return zeta_raise(1);
+    return 0;
 }
 
 // PY-A: list comprehension collector — iter is a Vec-layout handle
@@ -2972,25 +2999,32 @@ int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
     return ((fn1_t)fn_ptr)(arg);
 }
 
-// importlib.import_module — no dynamic loader; abort with a clear reason.
+// importlib.import_module — no dynamic loader. Batch 288: returns the module
+// NAME as a pseudo handle for the only supported consumer, py_getattr_dynamic
+// (the PEP 562 facade in market_data). Any other use receives a string where a
+// module is expected and fails at the next operation.
 int64_t py_import_module(int64_t name) {
-    const char* s = name ? (const char*)name : "<null>";
-    fprintf(stderr,
-            "zeta: importlib.import_module(%s) is not supported "
-            "(no dynamic module loader)\n",
-            s);
-    fflush(stderr);
-    abort();
-    return 0;
+    return name;
 }
 
-// getattr(obj, <dynamic name>) — abort (never silent / never ghost link).
+// getattr(obj, <dynamic name>) — batch 288: resolves module-global state by
+// NAME through the process-wide env table (module globals are `zeta_env_set`
+// under their bare names, and that table is shared across modules — exactly
+// what the PEP 562 facade in market_data delegates). A miss stays loud:
+// arbitrary-object dynamic getattr has no runtime reflection here.
 int64_t py_getattr_dynamic(int64_t obj, int64_t name) {
     (void)obj;
+    extern int64_t map_has(int64_t, int64_t);
+    extern int64_t map_str_key(int64_t);
+    int64_t zeta_env_map_for_probe(void);
+    if (name && map_has(zeta_env_map_for_probe(), map_str_key(name))) {
+        return zeta_env_get(name);
+    }
     const char* s = name ? (const char*)name : "<null>";
     fprintf(stderr,
             "zeta: getattr(obj, %s) with a dynamic attribute name is not "
-            "supported (needs a literal name or a default)\n",
+            "supported (needs a literal name or a default, or the name must "
+            "be a live module global)\n",
             s);
     fflush(stderr);
     abort();

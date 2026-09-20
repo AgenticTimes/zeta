@@ -1,0 +1,24 @@
+// PY-A: 批次 288 —— (1) 前导下划线的嵌套 def 不得走模块 mangle；(2) PyJson
+//   `items()` 的 (k, v) 对：v 半必须是 PyJson 句柄，`v.get(k, d)` 才会按
+//   W 表分派 py_json_get_default（siteB 与 siteA 一样要补 default-tag 参数）。
+//   修复前：(1) `_add`/`_scale` 被改写成 `module___add` ⇒ undefined symbol、
+//   整个程序链接失败（drvD 实测）；(2) v 丢标签 ⇒ 裸 `get` 幽灵符号 ⇒
+//   运行时 abort（sources_selector.py:125 的 `int(v.get("ok", 0))`）。
+// expect: 41
+// expect: 3
+// expect: 3
+def outer(a, b):
+    def _add(x, y):
+        return x + y
+    def _scale(v):
+        return v * 2
+    return _add(_scale(a), b)
+print(outer(20, 1))
+import json
+stats = json.loads("{\"sh.1\": {\"ok\": 3}}")
+one = stats.get("sh.1")
+print(one.get("ok", 0))
+tot = 0
+for kk, vv in stats.items():
+    tot = tot + int(vv.get("ok", 0))
+print(tot)
