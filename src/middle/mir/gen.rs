@@ -4400,11 +4400,36 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             if self.py_handle_of(recv).as_deref() == Some("PyLogger") {
                                 let lg = self.lower_expr(recv);
                                 let fmt = self.lower_expr(&args[0]);
-                                let n_lit = self.next_id_with_lit((args.len() - 1) as i64);
                                 let mut vals: Vec<u32> = Vec::new();
+                                let mut n_extra = 0i64;
                                 for a in &args[1..] {
+                                    // `log.info(fmt, *args)` — a varargs HANDLE has no
+                                    // static length, and lowering the starred operand
+                                    // emitted a raw Deref that codegen compiled into
+                                    // `ldr [x8]` with x8 == the (possibly EMPTY, i.e. 0)
+                                    // handle → SEGV in `_LogAdapter::info` (measured:
+                                    // args param == 0 at the fault). Skip such an
+                                    // operand, but say so — never silently and never a
+                                    // bogus dereference.
+                                    if let AstNode::UnaryOp { op, expr } = a {
+                                        if op == "*" {
+                                            eprintln!(
+                                                "PY-A: `log.{}(..., *{})` — a starred operand \
+has no static length here; it is NOT expanded (no values dropped from a fixed-arity log \
+call, no NULL-handle dereference).",
+                                                method,
+                                                match &**expr {
+                                                    AstNode::Var(v) => v.as_str(),
+                                                    _ => "expr",
+                                                }
+                                            );
+                                            continue;
+                                        }
+                                    }
+                                    n_extra += 1;
                                     vals.push(self.lower_expr(a));
                                 }
+                                let n_lit = self.next_id_with_lit(n_extra);
                                 while vals.len() < 4 {
                                     vals.push(self.next_id_with_lit(0));
                                 }
