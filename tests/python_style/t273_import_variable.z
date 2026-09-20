@@ -1,0 +1,12 @@
+// PY-A: `from <模块> import <变量>` 必须绑定到该模块的 env 全局（批次 157）。
+// 此前只有**函数**导入有解析路径（调用走 py_member_call），变量导入没有 ⇒ `D`
+// 落到未初始化槽位：`len(D)` 恒 0，把它当 dict 用（`reg()` 里 `D[k]=v`）则 SEGV。
+// expect: 1
+// expect: 2
+// expect: 2
+from pyvarfixture import D, reg, size
+
+print(len(D))
+reg("b", 2)
+print(size())
+print(len(D))

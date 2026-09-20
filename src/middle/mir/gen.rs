@@ -2436,6 +2436,25 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             return self.lower_expr(&AstNode::Var(mangled));
                         }
                     }
+                    // `from <module> import <VARIABLE>` — a member import read as
+                    // a bare NAME (not a call). Function imports work because
+                    // calls go through `py_member_call`; a variable had no path at
+                    // all, so `D` became an uninitialized slot and read 0:
+                    //   from regmod import D ; len(D)  →  0   (should be the dict)
+                    //   from regmod import D, reg      →  SEGV (bad handle)
+                    // The value lives in the module's env global `<mod>__<member>`
+                    // (the loader stores every module-level binding there).
+                    if let Some((module, member)) =
+                        self.py_member_aliases.get(name.as_str()).cloned()
+                    {
+                        if self.py_user_modules.contains(&module) {
+                            let mangled =
+                                format!("{}__{}", module.replace('.', "_"), member);
+                            if self.module_globals.contains(&mangled) {
+                                return self.lower_expr(&AstNode::Var(mangled));
+                            }
+                        }
+                    }
                 }
                 // PY-A V3: nonlocal names ALWAYS read through env (fresh
                 // value), even when a local alias exists.
