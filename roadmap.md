@@ -5675,3 +5675,41 @@ bare_globals 前缀剥离（rsplit_once("__") 吃掉前导下划线）
 
 ⇒ 施工纪律：**每修一层都必须重新取符号清单核对**（`grep -A400 'Undefined symbols'`，
 **不要 `-A200`**），不能复用上一轮的结论。
+
+### 批次一百五十五（2026-09-19）：`-> dict` 注解归一化 + `dict.get()` 值类型
+
+| 项 | 根因 | 修法 |
+|---|---|---|
+| `def f() -> dict:` 之后 `.get(...)` 发裸符号（`_get` 7 引用） | **签名**解析走 `typecheck_new::string_to_type`，**没做** `dict → map`（批次 153 只补了 `Type::from_string`） | 裸名 / 泛型 `dict[...]` / `lt(dict,…)` 三处都归一（**同一别名散落 N 个解析器** —— 本会话第三次，前两次：`float`、`vecpath`） |
+| `dict.get(k[,d])` 返回类型写死 I64 | map 分支两处（2 参 DictGet / 3 参 `map_get_default`）都 `insert(id, Type::I64)` ⇒ str 值字典打印出**裸句柄数字**、比较虽对但 `print` 是错值 | 取接收者 `map<K,V>` 的 **V** 类型（缺省 I64） |
+
+**关键的施工教训（响亮 → 静默 的退化，已拦下）**：只做第一项时，
+`dict[str,str].get()` 会**编译通过但打印句柄数字** —— 从「链接失败（响亮）」变成
+「静默错值」。**第二项是第一项的前置条件，必须同批落地**。这也是红线
+「不支持的语法必须报错，不得静默吞掉产生错值」的正面样本：类型修好之前，
+是**链接**在替我们兜底。
+
+**度量**：python_style **268/271**（+t271）· 官方 194/194 · 语料 38/38 ·
+wufu local **85/187 → 85/185**（`_get` 8→7 · `_setdefault` 3→2）。
+
+### 批次一百五十五 附：本轮**尝试并回退**的一项（留给下批）
+
+**模块内私有函数/方法体的 `symbol_renames` 缺失**（`_to_ts` 8 引用 ·
+`_baostock_login` 6 · `_baostock_logout` 4 = 同一族）：
+
+- `module_renames_for(func_name)` 用 `py_mangled_to_module[func_name]` 查模块，
+  而**方法**的 MIR 名是 `Class::method`（裸类名）⇒ 查不到 ⇒ 整张 rename 表为空 ⇒
+  方法体内调用同模块的私有函数时发出**裸名**，而定义侧是 `<prefix>_to_ts` ⇒ undefined。
+- 我加了「按类名在 `py_module_own_names` 里唯一匹配」的回退：**MIR 侧确实生效**
+  （dump 显示方法体内已改成 `backend_datasrc_market_data_fetcher___to_ts`），
+  但**度量没动**，反而多了 2 个幽灵（`_nautilus_trader_model_objects__Money`、
+  `_pd.Timestamp__date` —— 来自 reexports 表在新上下文里被应用），故**已回退**。
+- 剩余未覆盖的 3 个子形态（下批从这里开）：
+  1. 方法体的 **free 镜像/trampoline**（`_fetch_stocks` / `_fetch_stocks_inst_i64`）——
+     它们没有 rename 表；
+  2. **模块级自由函数**（`_is_cache_fully_covered`）—— 同样发裸名；
+  3. **同名文件被加载成两个模块**（`jq_shim` 与 `strategies.code.jq_shim`）⇒
+     类名匹配命中 2 个模块 ⇒ 我的「唯一匹配」直接放弃（探针实测 hits=["jq_shim",
+     "strategies.code.jq_shim"]）。
+  ⇒ 收益可观（18 引用点 / 3 个符号），但需要把 rename 挂到**镜像生成**与
+  **模块级函数**两条路径上，而不是在查找侧兜。
