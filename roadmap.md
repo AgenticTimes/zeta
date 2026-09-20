@@ -5713,3 +5713,87 @@ wufu local **85/187 → 85/185**（`_get` 8→7 · `_setdefault` 3→2）。
      "strategies.code.jq_shim"]）。
   ⇒ 收益可观（18 引用点 / 3 个符号），但需要把 rename 挂到**镜像生成**与
   **模块级函数**两条路径上，而不是在查找侧兜。
+
+---
+
+## 批次一百五十六（2026-09-19）：本地回测入口**首次链接成功** + 模块级语句不再被丢弃
+
+**目标锚点**：用户要求 `strategies/code/jq_wufu_local.py --engine local` **完全编译运行**。
+
+### 1. 「有 `def main` 就不跑模块级语句」——本地入口因此静默失效（**已修**）
+
+`synthesize_implicit_main` 一见 `def main` 就 `return asts`（early return）⇒ 模块级
+语句**从不收集、从不执行**。`jq_wufu_local.py` 的本地模式全靠模块级语句：
+
+```python
+if os.environ.get('REPLAYQUANT_LOCAL') == '1':
+    import jq_wufu as _strategy
+    from strategies.code.jq_shim import (get_cost_config, get_price, ...)
+```
+
+⇒ 静默不生效、`_strategy` 未绑定 ⇒ 回测在打印第一行日志后崩。
+
+修法：不再 early return，把模块级语句**前置进用户的 `main`**。
+⚠️ 关键细节：`if __name__ == "__main__": main()` 在 parse 期已被解开成裸 `main()`
+调用 ⇒ 前置会**自我递归**（实测无限 `A` 输出后 SEGV）⇒ 该调用必须丢弃。
+回归锁 **t272**（pre-fix 实测只打 `B 10`：A 丢失、X 读到垃圾）。
+
+### 2. 85 个未定义符号 → 0：`runtime/unavailable_stubs.c`（**生成 + weak**）
+
+对「模块图里被调用、无人定义」的符号各给一个**响亮 abort**（打印自己的名字；
+`ZETA_LENIENT_STUBS=1` 降级为 warning + 返回 0，便于一次跑出全部未实现路径）。
+`tools/build_runtime.sh` 并进 `tokio_runtime.o`。
+
+> ⚠️ **必须是 weak 符号**：runtime 对象链进**每个**程序，`_add`/`_get`/`_dict`/`_init`/
+> `_date` 这类名字与普通程序定义撞车 —— 实测 strong 版本把官方套件从 194 打到
+> **188**（`1 duplicate symbols`）。加 `__attribute__((weak))` 后程序自身定义优先。
+>
+> ⚠️ 生成时注意 **macOS 名字约定**：`ld` 报的名字带前导下划线（`_Cerebro`），
+> C 里要写 `Cerebro`（再被编译器加一个下划线）；`[dynamic]str__isna` 这类非法标识符
+> 走 `__asm__("<linker 名>")`。
+
+### 3. 当前运行状态（实测）
+
+```bash
+$ REPLAYQUANT_LOCAL=1 zetac .../strategies/code/jq_wufu_local.py -o /tmp/wl/wufu_local
+rc=0  →  489 KB 可执行文件
+$ ./wufu_local --start 2024-01-02 --end 2024-02-29
+[INFO] 获取数据...        # 首次有输出（此前零输出）
+Trace/BPT trap: 5 (rc=133)
+```
+
+**lldb 精确定位**：
+
+```
+frame #0: backend_datasrc_market_data__init + 2380  →  brk #0x1
+frame #1: run_backtest + 92
+frame #2: main + 1032
+```
+
+崩点紧跟该模块**模块级 try/except** 的 `zeta_try_end`；该 try 的 import
+（`from .market_data_universe import WUFU_BS_CODES, …` — 名字实际不在那个模块，
+真实 Python 下必然抛 ImportError 并被 `except ImportError: pass` 接住）⇒ 走的是
+**setjmp 返回非 0（longjmp）那条路**。**已排除**：IR 非法（then/else 都 `br` 到 merge，
+函数以 `ret i64 0` 结尾）、`_setjmp` 缺 `returns_twice`（IR 里声明带
+`#3 = { returns_twice }`）⇒ 结论是 **-O 阶段把 longjmp 返回路径优化成不可达**。
+最小复现 `try: raise … except: pass` **不复现**，触发条件与函数体规模/上下文相关。
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 268/271 | **269/272**（+t272） |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+| wufu local | 链接失败 | **链接成功**；运行到 `获取数据...` 后崩在上述已知点 |
+
+### 下一队列（批次一百五十七）
+
+1. **longjmp 返回路径被 -O 判为不可达**（本批精确定位）——最小复现要靠**堆大函数体**
+   （已试小函数/纯 raise 不复现）；可先用「把 `zeta_try_*` 相关函数标记
+   `optnone`/在 `finalize_and_aot` 关掉该函数的优化」验证方向
+2. 数据层：`py_pd_read_parquet` 目前是**返回 0 的桩**（`runtime/tokio_runtime_stub.c:1273`）
+   ⇒ 即使崩点修好，"运行出回测结果"还需要**真实 parquet 读取**（2636 个 parquet /
+   669MB 在 `REasyQuant/data/`）+ pandas 面（`Series.max/min/abs/isna/median/clip` 等）
+3. `unavailable_stubs.c` 的 85 条要按「运行真正撞到哪条」逐条替换为真实现
+   （lenient 模式一次性跑出全部命中）
+4. 家族 B1（循环 import 名字解析）、`getattr` 39 处、间接调用（`LocalBackend._price_lookup`）
