@@ -7857,3 +7857,15 @@ address 0x0），说明某条路径返回了 `pd.DataFrame()`（无参构造）�
 
 **剩余**：驱动 `fetch_stocks + 3336`（`len(cached)`）处帧的 `data == 0`（EXC_BAD_ACCESS at 0x0）
 ——无参 `DataFrame()` 已规范化成空 map，所以这条来自**别的**路径，下一批继续。
+
+### 批次 275：`len(cached)` 的崩溃是**帧指针本身为 NULL**（不是 data）
+
+lldb 现场：`DataFrame::n_rows: ldr x0, [x8]`，`EXC_BAD_ACCESS (code=1, address=0x0)` —— 即
+`self`（帧指针）本身是 0，于是 `[x8]` 直接读地址 0。
+
+排除：无参 `DataFrame()` 已规范成空 map（批次 274）；`GLOBAL_ETF_POOL`（17 只）逐个
+`_load_cache` 全部正常（`done bad 0`）。
+
+⇒ 是**某条路径返回了 0 帧**（`pd.DataFrame()` 的构造本身返回 0，或 tuple 解构拿到 0），
+而不是 data 为 0。下一批：在 `validate_and_repair_stock_ohlcv` 的两个返回点各加一次
+「帧是否可读」的响亮检查（运行期助手），把 0 帧挡在返回处并打印调用者。
