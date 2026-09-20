@@ -7333,6 +7333,20 @@ call, no NULL-handle dereference).",
                         }
                     }
                 }
+                // `pd.to_datetime(vecstr).normalize()` — our shim represents dates
+                // as "YYYY-MM-DD" strings, so `.normalize()` (drop the time part)
+                // is the identity. Without this the call resolved to the ghost
+                // `[dynamic]str__normalize` and the link failed.
+                if method == "normalize"
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::DynamicArray(_)))
+                    && arg_ids.len() == 1
+                {
+                    self.exprs.insert(id, MirExpr::Var(arg_ids[0]));
+                    self.type_map.insert(id, receiver_ty.clone().unwrap());
+                    return id;
+                }
                 // `s.startswith(("000", "399"))` — Python accepts a TUPLE of
                 // prefixes. The tuple handle was passed straight to
                 // host_str_starts_with, which returned 0 for everything

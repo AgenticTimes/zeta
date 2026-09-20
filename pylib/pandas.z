@@ -330,9 +330,12 @@ class Series:
 def date_range(start, end):
     return py_stub_abort("pandas.date_range")
 
-# stub: pandas.to_datetime
-def to_datetime(arg):
-    return py_stub_abort("pandas.to_datetime")
+def to_datetime(arg) -> lt(vec, str):
+    # 本实现的「列」就是字符串向量，日期一律存成 "YYYY-MM-DD"（字典序与时间序一致，
+    # 缓存覆盖检查、切片比较都依赖这一点）。真实 pandas 在这里把字符串转成
+    # datetime64；对后续比较/切片语义而言**直通**即可，且不丢信息、不产生错值。
+    # （此前是 py_stub_abort 的响亮桩，本地回测走到 ParquetCache.load 就停机。）
+    return list(arg)
 
 # stub: pandas.to_numeric
 def to_numeric(arg):
