@@ -801,6 +801,7 @@ int64_t py_vec_extreme(int64_t vec, int64_t want_max) {
 int64_t py_vec_max(int64_t vec) { return py_vec_extreme(vec, 1); }
 int64_t py_vec_min(int64_t vec) { return py_vec_extreme(vec, 0); }
 
+int zt_map_or_vec_truthy(int64_t v);  /* fwd */
 static int zt_slot_truthy(int64_t v) {
     if (!v) return 0;
     if (v > 0x1000 && (v & 0x7) == 0) {
@@ -835,6 +836,19 @@ int64_t zt_bare_mask(int64_t v, int want_notna) {
     return v;
 }
 
+// `~mask` on a boolean vector — element-wise NOT (Python's `~` on a Series).
+// Without this `~invalid` evaluated to the integer bitwise-NOT of the VECTOR
+// HANDLE (0/-garbage), so `df.loc[~invalid]` received a bogus mask.
+int64_t py_vec_not(int64_t vec) {
+    if (!vec) return 0;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        vec_push(out, zt_map_or_vec_truthy(((int64_t*)vec)[i]) ? 0 : 1);
+    }
+    return out;
+}
+
 int64_t py_vec_notna(int64_t vec) {
     int64_t m = py_vec_isna(vec);
     int64_t n = zt_vec_len(m);
@@ -845,6 +859,7 @@ int64_t py_vec_notna(int64_t vec) {
     return out;
 }
 
+int zt_map_or_vec_truthy(int64_t v) { return zt_slot_truthy(v); }
 int64_t py_vec_any(int64_t vec) {
     if (!vec) return 0;
     int64_t n = zt_vec_len(vec);
@@ -860,6 +875,40 @@ int64_t py_vec_all(int64_t vec) {
         if (!zt_slot_truthy(((int64_t*)vec)[i])) return 0;
     }
     return 1;
+}
+
+// `df.loc[<bool mask>]` — row filtering in the column-map model: the frame is a
+// heap cell whose field 0 is the column map; each column vector is filtered by the
+// mask. Done in C on purpose: the same logic in the shim hit a slot-allocation
+// bug (`len(keys)` came out as the MASK's length, so the loop ran out of range and
+// `map_get` was called with a raw index as the key).
+int zt_map_or_vec_truthy(int64_t v);
+int64_t py_df_loc(int64_t frame, int64_t mask) {
+    if (!frame) return 0;
+    int64_t map = *(int64_t*)frame;
+    if (!map) return 0;
+    if (!mask) {
+        fprintf(stderr, "PY-A: DataFrame.loc: mask is missing\n");
+        fflush(stderr);
+        abort();
+    }
+    int64_t keys = map_keys(map);
+    int64_t nk = zt_vec_len(keys);
+    int64_t mlen = zt_vec_len(mask);
+    int64_t out = map_new();
+    for (int64_t j = 0; j < nk; j++) {
+        int64_t kdisp = ((int64_t*)keys)[j];
+        int64_t col = map_get(map, map_str_key(kdisp));
+        int64_t n = col ? zt_vec_len(col) : 0;
+        int64_t kept = zeta_dynarray_new(n > 0 ? n : 1);
+        for (int64_t i = 0; i < n; i++) {
+            if (i < mlen && zt_map_or_vec_truthy(((int64_t*)mask)[i])) {
+                vec_push(kept, ((int64_t*)col)[i]);
+            }
+        }
+        map_insert(out, map_str_key(kdisp), kept);
+    }
+    return out;
 }
 
 int64_t py_vec_isna(int64_t vec) {

@@ -150,24 +150,9 @@ class DataFrame:
     def loc(self, mask: lt(vec, i64)) -> DataFrame:
         # 行级过滤（列映射模型可以直接做）：`df.loc[<0/1 掩码>]` ⇒ 每列向量按掩码取子集。
         # 掩码不是向量时**响亮失败**，绝不返回 0（此前的路径让调用方对 0 调 .copy() 而崩）。
-        out = {}
-        if mask is None:
-            raise ValueError("DataFrame.loc: mask is None")
-        names = list(self.data.keys())
-        j = 0
-        ncols = len(names)
-        while j < ncols:
-            col = self.data[names[j]]
-            kept = []
-            i = 0
-            n = len(col)
-            while i < n:
-                if mask[i]:
-                    kept.append(col[i])
-                i = i + 1
-            out[names[j]] = kept
-            j = j + 1
-        return DataFrame(out)
+        # 行过滤交给运行期实现（shim 里同样的逻辑会踩槽位分配 bug：
+        # `len(keys)` 取到了 mask 的长度、循环越界、map_get 拿到裸索引当键）。
+        return DataFrame(py_df_loc(self, mask))
 
     def iloc(self, mask: lt(vec, i64)) -> DataFrame:
         # `df.iloc[<掩码>]` 在本模型里与 loc 同义（都是按行取子集）。
