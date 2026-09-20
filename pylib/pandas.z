@@ -337,9 +337,21 @@ def to_datetime(arg) -> lt(vec, str):
     # （此前是 py_stub_abort 的响亮桩，本地回测走到 ParquetCache.load 就停机。）
     return list(arg)
 
-# stub: pandas.to_numeric
-def to_numeric(arg):
-    return py_stub_abort("pandas.to_numeric")
+def to_numeric(arg, errors="raise") -> lt(vec, str):
+    # 本实现的「列」是字符串向量，而校验/比较需要数值语义：逐个解析并**规范化**成
+    # 紧凑数值文本（可再解析回来，不丢精度）。解析失败时按 errors 处理
+    # （"coerce" ⇒ "nan"，否则抛错）——绝不静默把坏值当 0。
+    out = []
+    for x in arg:
+        try:
+            v = float(x)
+            out.append(str(v))
+        except Exception as e:
+            if errors == "coerce":
+                out.append("nan")
+            else:
+                raise ValueError("to_numeric: cannot parse " + str(x))
+    return out
 
 # stub: soft:pandas.isna
 def isna(x) -> bool:
