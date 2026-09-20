@@ -2411,7 +2411,37 @@ impl Resolver {
         out
     }
 
+    /// Does this function's body `return json.loads(...)`?
+    fn returns_json_loads(body: &[AstNode]) -> bool {
+        fn is_json_loads(n: &AstNode) -> bool {
+            match n {
+                AstNode::Call {
+                    receiver: Some(recv),
+                    method,
+                    ..
+                } => {
+                    if let AstNode::Var(v) = &**recv {
+                        if v == "json" && method == "loads" {
+                            return true;
+                        }
+                    }
+                    false
+                }
+                _ => false,
+            }
+        }
+        body.iter().any(|st| match st {
+            AstNode::Return(e) => is_json_loads(e),
+            AstNode::Block { body } => Self::returns_json_loads(body),
+            AstNode::If { then, else_, .. } => {
+                Self::returns_json_loads(then) || Self::returns_json_loads(else_)
+            }
+            _ => false,
+        })
+    }
+
     pub fn lower_to_mir(&self, ast: &AstNode) -> Mir {
+        let defs_snapshot = self.registered_func_defs.borrow().clone();
         let ret_types: HashMap<String, Type> = self
             .get_all_func_signatures()
             .iter()
@@ -2435,6 +2465,25 @@ impl Resolver {
                     },
                     other => other.clone(),
                 };
+                // `-> dict[...]` on a function whose body returns `json.loads(...)`:
+                // the declared type says map while the VALUE is a PyJson cell, so
+                // `stats.get(k, d)` compiled to the map primitive and HUNG —
+                // `map_get_default` read the JSON tag as a capacity and spun
+                // (measured with lldb in the local backtest). The runtime identity
+                // wins: type it PyJson, whose `.get(k, default)` / `len()` /
+                // `.items()` paths already exist.
+                let is_dict_ret = matches!(&ret, Type::Named(n, _) if n == "map" || n == "dict");
+                if is_dict_ret {
+                    if let Some(AstNode::FuncDef { body, .. }) =
+                        defs_snapshot.iter().find(|d| {
+                            matches!(d, AstNode::FuncDef { name: n, .. } if n == name)
+                        })
+                    {
+                        if Self::returns_json_loads(body) {
+                            return (name.clone(), Type::Named("PyJson".to_string(), vec![]));
+                        }
+                    }
+                }
                 (name.clone(), ret)
             })
             .collect();

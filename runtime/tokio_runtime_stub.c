@@ -134,6 +134,29 @@ int64_t map_new(void) {
 // (smaller) old block — heap corruption: "GC Warning: Failed to expand heap by
 // 12143674558099984 KiB" and a SIGSEGV for any dict past ~12 keys (the ETF
 // listing cache, 50 KB, died in zj_parse_value).
+// A `-> dict` annotation on a function whose body returns `json.loads(...)` types
+// the result `map`, while the VALUE is a PyJson cell [tag, payload] (tag 1..5). The
+// map primitives then read the TAG as a capacity — `idx = hash & (cap-1)` spun
+// forever and the local backtest HUNG inside `map_get_default` (measured with
+// lldb). A map's first word is its capacity (>= 16), so a first word in 1..8
+// identifies a Json value: report it loudly instead of hanging or returning a
+// silent 0. (Fixing the TYPE is the real fix; this turns a hang into a
+// diagnostic.)
+int zt_map_is_json_handle(int64_t h) {
+    if (!h) return 0;
+    int64_t w0 = *(int64_t*)h;
+    return (w0 >= 1 && w0 <= 8);
+}
+void zt_map_json_mismatch(const char* fn) {
+    fprintf(stderr,
+            "PY-A: `%s` was called on a JSON value (a `-> dict` annotation on a "
+            "function returning json.loads() types it as a map). Refusing to "
+            "reinterpret it as a hash table.\n",
+            fn);
+    fflush(stderr);
+    abort();
+}
+
 #define MAP_MOVED (-1)
 int64_t map_resolve(int64_t map) {
     // Follow the WHOLE forward chain: a block that was moved twice is itself a
@@ -147,6 +170,7 @@ int64_t map_resolve(int64_t map) {
 void map_insert(int64_t map0, int64_t key, int64_t val) {
     int64_t map = map_resolve(map0);
     if (!map) return;
+    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("map_insert");
     int64_t* hdr=(int64_t*)map; int64_t cap=hdr[0]; int64_t len=hdr[1];
     if (len*4 >= cap*3) {
         int64_t nc=cap*2;
@@ -176,6 +200,7 @@ void map_insert(int64_t map0, int64_t key, int64_t val) {
 int64_t map_get(int64_t map0, int64_t key) {
     int64_t map = map_resolve(map0);
     if (!map) return 0;
+    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("map_get");
     int64_t cap=((int64_t*)map)[0]; int64_t h=map_hash(key); int64_t idx=h&(cap-1);
     while(1){
         char* e=(char*)map+16+idx*MAP_ENTRY_SIZE;
@@ -3382,6 +3407,7 @@ int64_t py_collections_defaultdict(int64_t factory) { (void)factory; return map_
 // len(dict) — count the used entries (map slots are [key|value|used]).
 int64_t zeta_map_len(int64_t m) {
         m = map_resolve(m);
+    if (zt_map_is_json_handle(m)) zt_map_json_mismatch("zeta_map_len");
 if (!m) return 0;
     int64_t cap = ((int64_t*)m)[0];
     int64_t n = 0;
@@ -3394,6 +3420,7 @@ if (!m) return 0;
 // `k in dict`
 int64_t py_map_contains(int64_t m, int64_t k) {
         m = map_resolve(m);
+    if (zt_map_is_json_handle(m)) zt_map_json_mismatch("py_map_contains");
 if (!m) return 0;
     // Probe the entry table instead of testing `map_get(m, k) != 0`: a key
     // whose VALUE is 0 (or None/empty) is still present, and the old form
