@@ -1467,6 +1467,32 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     left: target.clone(),
                     right: value.clone(),
                 });
+                // A plain `Var` target is handled HERE so the slot's static type
+                // can be refreshed from the combined value. `c: set[str] =
+                // set(); c |= {"q"}` kept the slot's OLD type (`DynamicArray(I64)`
+                // = "unknown"), so `"q" in c` later passed elem_is_str=0 and
+                // compared HANDLES — every string counted as absent (measured in
+                // `fetch_stocks`'s `fetched_codes`).
+                if let AstNode::Var(name) = &**target {
+                    let rhs_id = self.lower_expr(&new_rhs);
+                    let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
+                    match self.name_to_id.get(name).copied() {
+                        Some(slot) => {
+                            self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
+                            if !matches!(ty, Type::I64 | Type::PyDynamic) {
+                                self.type_map.insert(slot, ty);
+                            }
+                        }
+                        None => {
+                            let slot = self.next_id();
+                            self.exprs.insert(slot, MirExpr::Var(slot));
+                            self.type_map.insert(slot, ty);
+                            self.name_to_id.insert(name.clone(), slot);
+                            self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
+                        }
+                    }
+                    return;
+                }
                 let assign = AstNode::Assign(target.clone(), new_rhs);
                 self.lower_ast(&assign);
             }
@@ -3066,9 +3092,28 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // `fetch_stocks`). Approximated by concatenation — membership
                     // stays correct, duplicates survive (dedup needs runtime
                     // content comparison; tracked in the roadmap).
-                    let elem = match self.type_map.get(&left_id).cloned() {
-                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
-                        _ => Type::I64,
+                    // Prefer whichever side carries a REAL element type: `set()`
+                    // reports I64 = "unknown", and taking that side made
+                    // `c |= {"q"}` a DynamicArray(I64) — so `"q" in c` compared
+                    // HANDLES afterwards and every string counted as absent.
+                    let elem_of = |t: Option<Type>| match t {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => Some(*e),
+                        _ => None,
+                    };
+                    let elem = match (
+                        elem_of(self.type_map.get(&left_id).cloned()),
+                        elem_of(self.type_map.get(&right_id).cloned()),
+                    ) {
+                        (Some(l), Some(r)) => {
+                            if matches!(l, Type::I64) {
+                                r
+                            } else {
+                                l
+                            }
+                        }
+                        (Some(l), None) => l,
+                        (None, Some(r)) => r,
+                        (None, None) => Type::I64,
                     };
                     self.stmts.push(MirStmt::Call {
                         func: "py_array_concat".to_string(),
