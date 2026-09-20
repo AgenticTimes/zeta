@@ -6391,3 +6391,15 @@ RHS 为 `DynamicArray(I64)`/`I64`/`PyDynamic` 时按注解细化。
 **未收敛**：最小复现 `c: set[str] = set(); c |= {"q"}; "q" in c` 仍为 0 ——
 MIR 显示 `py_builtin_set` 结果仍是 `DynamicArray(I64)`（细化没落到该槽位），
 `in` 取到的是细化前的类型。下一批：在 `py_builtin_set` 落点直接用注解。
+
+### 批次一百七十九/一百八十（2026-09-19）：`|=` 类型刷新 + 元组前缀 `startswith`
+
+| # | 缺陷 | 铁证 | 修法 |
+|---|---|---|---|
+| 179 | `x \|= y` 写回已存在槽位时不刷新静态类型 | `c: set[str] = set(); c \|= {"q"}; "q" in c` → 0 ✗（槽位仍是 `set()` 的 `DynamicArray(I64)`） | `AssignOp` 对 `Var` 目标走专门路径：先降级合并表达式，把非 I64/PyDynamic 的类型写回槽位，再 Assign |
+| 180 | `startswith(<tuple>)` 恒 0 | `"000300".startswith(("000","399"))` → 0 ✗ | 元组/数组字面量实参展开成多个单前缀调用并 `\|\|` 合并 |
+
+实测：`f()`→1 ✓、`f(["a","b","c"])` 集合并集→2 ✓、`startswith(("000","399"))`→1 ✓。
+
+**遗留**：项目内 `_is_likely_index("000300.XSHG")` 仍为 0（隔离用例已修）；
+崩点 `_is_likely_index + 52`（`EXC_BAD_ACCESS at 0x0`）待下一批单测该函数。
