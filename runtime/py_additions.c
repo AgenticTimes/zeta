@@ -805,6 +805,29 @@ static int zt_slot_truthy(int64_t v) {
     return v != 0;
 }
 int64_t py_vec_isna(int64_t vec);
+int64_t py_vec_isna(int64_t vec);
+int64_t py_vec_notna(int64_t vec);
+// Bare-symbol fallbacks: when the compiler cannot prove the receiver is a
+// vector it emits `isna`/`notna` (+ arity variants). Treat a plausible vector
+// that way; anything else is passed through unchanged with a warning (never a
+// wild read, never a fabricated mask).
+static int zt_maybe_vec(int64_t v) {
+    if (v < 0x1000) return 0;
+    int64_t cap = ((int64_t*)(v - 16))[0];
+    int64_t len = ((int64_t*)(v - 16))[1];
+    return cap >= 0 && len >= 0 && len <= cap && cap <= (1LL << 30);
+}
+int64_t zt_bare_mask(int64_t v, int want_notna) {
+    if (zt_maybe_vec(v)) {
+        return want_notna ? py_vec_notna(v) : py_vec_isna(v);
+    }
+    fprintf(stderr,
+            "PY-A: `%s` called on a value that is not a vector — returned as-is\n",
+            want_notna ? "notna" : "isna");
+    fflush(stderr);
+    return v;
+}
+
 int64_t py_vec_notna(int64_t vec) {
     int64_t m = py_vec_isna(vec);
     int64_t n = zt_vec_len(m);
@@ -2441,3 +2464,8 @@ int64_t py_stub_abort(int64_t name_ptr) {
 }
 
 
+
+int64_t isna(int64_t v) { return zt_bare_mask(v, 0); }
+int64_t isna_1(int64_t v) { return zt_bare_mask(v, 0); }
+int64_t notna(int64_t v) { return zt_bare_mask(v, 1); }
+int64_t notna_1(int64_t v) { return zt_bare_mask(v, 1); }

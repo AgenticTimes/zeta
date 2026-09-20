@@ -10718,6 +10718,13 @@ call, no NULL-handle dereference).",
                     let from_ty = match &base_ty_clone {
                         Type::DynamicArray(elem) => Some((**elem).clone()),
                         Type::Array(elem, _) => Some((**elem).clone()),
+                        // `df["close"]` on a `map<Str, vecstr>`-typed DataFrame:
+                        // the dict path (DictGet) must keep the VALUE type, else
+                        // the result is I64 and every column method call fell to a
+                        // bare ghost (`notna_1`, `[dynamic]str__isna`, …).
+                        Type::Named(n, targs) if n == "map" || n == "dict" || n == "dict_like" => {
+                            targs.get(1).cloned()
+                        }
                         _ => None,
                     };
                     if let Some(et) = from_ty {
