@@ -7021,3 +7021,23 @@ call DataFrame::loc(%116, %117)`。
 
 下一批：定位 codegen 里 `MirStmt::Assign` 的 rhs 取值路径（`gen_expr_safe(rhs)` 为什么
 会落到别的 alloca），并核对 `locals` 与 `exprs` 的 id 是否在同一编号空间。
+
+### 批次 228 补充 2：MIR/IR 复核后**都正确**（把 debug 打印加进 `loc` 后连打印都没到）
+
+复核结论修正：
+
+- `[1,0,1]` 的 MIR 是 `zeta_dynarray_new → vec_push×3（每次 `Assign{h, sink}` 回写） → exprs[id]=Var(h)` ✓
+  （IR 里的 `%109 = load ptr %2` 其实是**同一个槽**的 alloca：IR 的 `%N` 编号与 MIR 的 id 不是一套）
+- `pandas__DataFrame` 的 IR 是 `runtime_malloc(8)` + 存字段 0 + 返回堆指针 ✓
+- `main` 里 `pandas__DataFrame → df 槽 → DataFrame::loc(df, mask)` ✓
+
+把探针加进 `loc` 的**第一行**（`print("LOC …" + str(len(self.data)))`）后**连打印都没出现**，
+且崩点仍是 `map_get`：
+
+⇒ 崩溃发生在 `len(self.data)` 这一句 —— 即**进入 `loc` 后读 `self.data` 就是坏的**。
+但同一帧对象在 `main` 里刚被 `df.columns` / `len(df)` 正常使用过（`/tmp/loc2.z` ✓）。
+
+下一批（不必再猜 IR）：把 `main` 里 `pandas__DataFrame` 的返回值**立刻**用 `print(len(df))` 验证，
+再把 `loc` 的探针换成「先不读 `self.data`，只打印入参 mask」——二分到底是 **self 坏**还是 **mask 坏**，
+然后顺着「谁在两次调用之间改了这个对象」查（重点：`zeta_map_set_tag` 的侧表、env 写入、
+以及 `DataFrame(...)` 的字段是否被 GC 移动/复用）。
