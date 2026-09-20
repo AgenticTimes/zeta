@@ -7641,3 +7641,25 @@ verbatim 复刻 `remove_extreme_return_bars`（放在 harness 里，可 dump MIR
 
 下一批：在那条分支里取**真正的接收者**（`df.iloc[a:b]` 的 `df`），或把该分支改成
 「在 shim 层处理切片」；随后 `pd.concat(parts)` 就能拿到正确子帧。
+
+### 批次 265：`df.loc[<切片>]` 的**帧套帧**修掉；`remove_extreme_return_bars` 现在只剩 tuple 返回
+
+两个改动：
+
+1. shim 的 `loc`：掩码不是向量时**直接在 shim 里**返回 `DataFrame(py_df_empty_like(self))`，
+   不再经过 `py_df_loc`；
+2. `py_df_loc` 的「掩码不是向量」护栏改为返回**列 map**（而不是帧结构体）——
+   否则 shim 再包一层 `DataFrame(...)` 就成了**帧套帧**，下游 `self.data` 拿到的是帧指针
+   （这正是 `market_df.iloc[0:0]` 那句把整条流变空的原因）；
+3. 删掉 MIR 里我上一批加的 `__slice__` 分支（它把**切片参数**当接收者传给
+   `py_df_empty_like`；shim 自己已经能正确处理缺掩码）。
+
+效果（verbatim 复刻 harness）：
+
+    REB sub 892 892 9      ← 循环体正常，子帧 892×9
+    REB parts 1 removed 0  ← parts 非空、concat 被调用
+    （此前这里就开始帧套帧 → 整条流变空）
+
+**当前卡点**：`return pd.concat(parts, ignore_index=True), removed` 之后，调用方解构拿到的
+`o` 是坏帧（`n_rows` 崩）——即**堆 tuple 返回 + `.append` 构建的 parts** 这条组合，
+下一批查（`conat` 单测通过，所以嫌疑在 tuple 返回）。

@@ -155,6 +155,12 @@ class DataFrame:
         # 掩码不是向量时**响亮失败**，绝不返回 0（此前的路径让调用方对 0 调 .copy() 而崩）。
         # 行过滤交给运行期实现（shim 里同样的逻辑会踩槽位分配 bug：
         # `len(keys)` 取到了 mask 的长度、循环越界、map_get 拿到裸索引当键）。
+        # `df.loc[<切片>]`（`x.m[a:b]` 降级会先调用 m，掩码根本传不进来）：
+        # 掩码不是向量时返回**同列空帧**。直接在 shim 里返回，避免
+        # `DataFrame(py_df_loc(...))` 把「帧」当成 columns map 再包一层（帧套帧 ⇒
+        # 下游 `self.data` 拿到的是帧指针，整条流变空，实测 `remove_extreme_return_bars`）。
+        if py_is_vec(mask) == 0:
+            return DataFrame(py_df_empty_like(self))
         return DataFrame(py_df_loc(self, mask))
 
     def iloc(self, mask: lt(vec, i64)) -> DataFrame:

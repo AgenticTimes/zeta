@@ -1412,7 +1412,14 @@ int64_t py_df_loc(int64_t frame, int64_t mask) {
         fprintf(stderr,
                 "PY-A: DataFrame.loc: mask %lld is not a vector — empty selection\n",
                 (long long)mask);
-        return py_df_empty_like(frame);
+        // Return the COLUMN MAP: the shim wraps this in `DataFrame(...)`, so
+        // handing back a frame struct made a frame-in-frame and every later
+        // `self.data` read a struct pointer (measured: `remove_extreme_return_bars`
+        // returned an empty result through `market_df.iloc[0:0]`).
+        {
+            int64_t ef = py_df_empty_like(frame);
+            return ef ? *(int64_t*)ef : map_new();
+        }
     }
     int64_t keys = map_keys(map);
     int64_t nk = zt_vec_len(keys);

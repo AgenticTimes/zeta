@@ -8202,30 +8202,6 @@ call, no NULL-handle dereference).",
                     self.type_map.insert(id, ty);
                     return id;
                 }
-                // `df.iloc[0:0]` / `df.loc[:0]` — the base is a shim STRUCT, so
-                // the generic vector slice produced garbage (`zeta_slice_vec` on
-                // a 1-word struct reads its header 16 bytes before the block):
-                // `return d.iloc[0:0], 7` then handed the caller a dead frame and
-                // `len(o)` SEGV'd. An empty selection on a frame keeps the columns
-                // and drops the rows.
-                if method == "__slice__"
-                    && arg_ids.len() == 3
-                    && matches!(
-                        receiver_ty.as_ref(),
-                        Some(Type::Named(n, _)) if n == "DataFrame" || n == "Series"
-                    )
-                {
-                    self.stmts.push(MirStmt::Call {
-                        func: "py_df_empty_like".to_string(),
-                        args: vec![arg_ids[0]],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map
-                        .insert(id, Type::Named("DataFrame".to_string(), vec![]));
-                    return id;
-                }
                 if method == "__slice__" && arg_ids.len() == 3 {
                     // Python string slicing: `s[1:]` / `s[:3]` / `s[:-1]`.
                     // The omitted-end sentinel is `Lit(-1)`; an explicit
