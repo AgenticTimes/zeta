@@ -7041,3 +7041,11 @@ call DataFrame::loc(%116, %117)`。
 再把 `loc` 的探针换成「先不读 `self.data`，只打印入参 mask」——二分到底是 **self 坏**还是 **mask 坏**，
 然后顺着「谁在两次调用之间改了这个对象」查（重点：`zeta_map_set_tag` 的侧表、env 写入、
 以及 `DataFrame(...)` 的字段是否被 GC 移动/复用）。
+
+### 批次 231（2026-09-20）：`~mask` ⇒ `!` 的归并（loc 掩码恢复）
+
+`out.loc[~invalid]` 的 `~invalid` 被降级成 `Call{func:"!"}`（整数逻辑非）⇒ mask=0 ⇒
+响亮断言 `DataFrame.loc: mask is missing`。修法：`!` 分支先看类型，向量走 `py_vec_not`。
+
+崩点推进到 `validate_and_repair_stock_ohlcv + 2020`（-O0 产物），这是本会话在清洗函数里
+到达的最深位置。
