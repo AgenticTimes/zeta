@@ -7555,3 +7555,16 @@ struct-field store 目前按 i64 走，需要按字段类型 bitcast/float store
 3. 优化器修复接线或诚实删除（H）
 4. gen.rs 拆分第一刀（F1：argparse/env/f-string 搬出 lower_expr）
 5. registry 双解析器契约测试 + 告警通道收敛进 diagnostics
+
+### 批次 262：`_load_cache` 现在**能返回**，但值是空帧（`cache 0 0`）
+
+聚焦 harness（只调 `f._load_cache("000300.XSHG")`）：rc=0、`cache 0 0` ✗，
+旁边一条 `PY-A: empty-like on a non-frame … — returning an empty frame`。
+
+⇒ 清洗链路不再崩，但**某处 `py_df_loc` / `py_df_empty_like` 收到了非帧句柄**
+（掩码/接收者坏），我的两条"响亮降级"护栏把它变成了空帧，于是整条流变成空。
+下一批：给这两个护栏加上**调用点信息**（`__builtin_return_address` + 调用栈），
+找出是哪个 `df.loc[...]` / `df.iloc[...]` 收到坏句柄，再顺着调用点定位。
+
+（本轮累计效果：崩点从「清洗函数内部」推进到「清洗函数已返回、调用方拿到的帧不对；
+护栏把崩溃变成可观测的空帧 + stderr 说明」。）
