@@ -8085,3 +8085,44 @@ shim 的 `DataFrame.__getitem__(key)` 假设 key 是**列名**（`self.data[map_
 两者很可能是同一族（调用实参/闭包快照）。
 
 度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+### 批次 287：**`with lock: return v` 死锁 + 静默错值**（drv 挂住 rc=124 的真正根因）
+
+`sample` 活栈直接命中：`_ranked_fetch_sources → _load_source_stats →
+py_threading_lock_acquire → __psynch_mutexwait`（全进程唯一线程）⇒ 锁泄漏死锁，
+不是 `sorted`/元组比较自旋。
+
+最小复现（修复前）：
+
+    lk = threading.Lock()
+    def f():
+        with lk:
+            return 7
+    f(); f()          → 第一次正常，第二次挂死 rc=124
+
+双重根因（都在解析器的 with desugar）：
+
+1. `src/frontend/parser/stmt.rs::parse_with`：desugar 只在 body「能走到尾」时
+   追加 `__exit__`（旧注释自认 V1 限制、点名 sources_selector）⇒ 体内 `return`
+   提前离开时锁永不释放。
+   修：body 就地重写 `return v` ⇒ `{ __with_ret_N = v; __exit__(); return __with_ret_N }`；
+   `break`/`continue` 仅当绑定到 with **外层**循环时前置 `__exit__`（降入循环体后
+   标志复位，防"体内 break 提前放锁"，lock5 探针验证 `locked()==1`）。
+2. 重写暴露第二坑（修复过程中实测返回 0）：`top_level.rs:294-302` 的函数体尾
+   语句提升把整个 desugar Block pop 成 `ret_expr` 走表达式路径，`return` 被吞、
+   恒返 0（**修复前该形态同样错值，只是被死锁掩盖**）。
+   修：以 `return` 结尾的 Block 是语句块不是表达式值，不提升。
+
+验证：lock2/3/5 探针全对（42 42 / 7 7 / locked_inside 1 + 9 9，二次调用不挂）；
+新增回归用例 `tests/python_style/t287_with_lock_return.z`（PASS）。
+
+**基线口径修正**：干净 HEAD（不含本批）实测 t137_member_keyword_and_typeargs、
+t244_path_timedelta_as 已红（Linking failed，与 with 无关；t244 的
+pathas_fixture.py 是未跟踪 fixture），t228 时红时绿（还债计划①的非确定性）。
+即当前 python_style 实际为 273/4 口径（t231/t233 存量红 + t137/t244 既有红），
+handoff §2 的 274/2 与工作区不符。本批改动经行级归因**未引入新红**。
+
+**剩余**：drvA（`_ranked_fetch_sources`）现在死锁解除，但链上撞到
+`market_data.py:138` 的 `getattr(importlib.import_module(source), name)` ——
+内置 `getattr` 未实现，链接失败（稳定复现 3/3）。下一批：实现 `getattr` 的
+这个形态（或按 §7.11 规矩响亮护栏），再复跑 drvA。

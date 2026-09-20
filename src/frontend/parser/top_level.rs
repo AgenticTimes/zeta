@@ -292,11 +292,24 @@ pub(crate) fn parse_func(input: &str) -> IResult<&str, AstNode> {
                         // can end up directly in body without ExprStmt wrapping.
                         // Promote them to ret_expr for proper return value handling.
                         match last {
+                            // PY-A (batch 287): a Block whose last stmt is a
+                            // `return` is a statement block, not a value —
+                            // the `with lock: return …` desugar ends with the
+                            // rewritten `return __with_ret_N`; promoting the
+                            // block to ret_expr routed it through the expr
+                            // path, which dropped that return and emitted
+                            // `return 0` instead (silent misvalue).
+                            AstNode::Block { body: inner } => {
+                                if matches!(inner.last(), Some(AstNode::Return(_))) {
+                                    None
+                                } else {
+                                    b.pop().map(Box::new)
+                                }
+                            }
                             AstNode::If { .. }
                             | AstNode::Call { .. }
                             | AstNode::PathCall { .. }
                             | AstNode::Match { .. }
-                            | AstNode::Block { .. }
                             | AstNode::Loop { .. } => b.pop().map(Box::new),
                             _ => None,
                         }

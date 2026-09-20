@@ -1,0 +1,21 @@
+// PY-A: 批次 287 —— `with lock: return v` 必须释放锁并带回正确值。
+//   修复前：`return` 走 with 体内提前退出 ⇒ 锁永不释放（第二次调用挂死 rc=124）；
+//   且 desugar 的尾 Block 被 func 提升成 ret_expr ⇒ 表达式路径丢返回值（恒 0，静默错值）。
+// expect: 42
+// expect: 42
+// expect: 9
+import threading
+lk = threading.Lock()
+def g():
+    return 42
+def f():
+    with lk:
+        return g()
+print(f())
+print(f())
+def h():
+    x = 0
+    with lk:
+        x = 8
+        return x + 1
+print(h())

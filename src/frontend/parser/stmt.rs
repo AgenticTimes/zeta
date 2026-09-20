@@ -1099,6 +1099,81 @@ fn branch_falls_through(body: &[AstNode]) -> bool {
     }
 }
 
+/// PY-A: exit call for the with-desugar (see `parse_with`).
+fn zeta_with_exit_stmt(ctx: &str) -> AstNode {
+    AstNode::ExprStmt {
+        expr: Box::new(AstNode::Call {
+            receiver: None,
+            method: "zeta_with_exit".to_string(),
+            args: vec![AstNode::Var(ctx.to_string())],
+            type_args: vec![],
+            structural: false,
+        }),
+    }
+}
+
+/// PY-A: rewrite terminators inside a `with` body so __exit__ runs before
+/// the block is left. `return v` (always leaves the with) becomes
+/// `{ __with_ret_N = v; exit(); return __with_ret_N }` — in-place insertion
+/// keeps if/loop arm control flow intact. `break`/`continue` only leave the
+/// with when they bind to a loop OUTSIDE it, so `at_loop_depth` (true while
+/// the nearest enclosing loop is still the with's own block) gates whether
+/// an exit is prepended; descending into a loop body clears the flag.
+fn rewrite_with_exits(body: Vec<AstNode>, ctx: &str, seq: usize, at_loop_depth: bool) -> Vec<AstNode> {
+    let mut out: Vec<AstNode> = Vec::with_capacity(body.len());
+    for stmt in body {
+        match stmt {
+            AstNode::Return(v) => {
+                let ret_var = format!("__with_ret_{}", seq);
+                out.push(AstNode::Assign(
+                    Box::new(AstNode::Var(ret_var.clone())),
+                    v,
+                ));
+                out.push(zeta_with_exit_stmt(ctx));
+                out.push(AstNode::Return(Box::new(AstNode::Var(ret_var))));
+            }
+            AstNode::Break(opt) if at_loop_depth => {
+                out.push(zeta_with_exit_stmt(ctx));
+                out.push(AstNode::Break(opt));
+            }
+            AstNode::Continue(opt) if at_loop_depth => {
+                out.push(zeta_with_exit_stmt(ctx));
+                out.push(AstNode::Continue(opt));
+            }
+            AstNode::If { cond, then, else_ } => out.push(AstNode::If {
+                cond,
+                then: rewrite_with_exits(then, ctx, seq, at_loop_depth),
+                else_: rewrite_with_exits(else_, ctx, seq, at_loop_depth),
+            }),
+            AstNode::IfLet { pattern, expr, then, else_ } => out.push(AstNode::IfLet {
+                pattern,
+                expr,
+                then: rewrite_with_exits(then, ctx, seq, at_loop_depth),
+                else_: rewrite_with_exits(else_, ctx, seq, at_loop_depth),
+            }),
+            AstNode::Block { body: inner } => {
+                out.push(AstNode::Block { body: rewrite_with_exits(inner, ctx, seq, at_loop_depth) })
+            }
+            AstNode::Loop { body } => out.push(AstNode::Loop {
+                body: rewrite_with_exits(body, ctx, seq, false),
+            }),
+            AstNode::For { pattern, expr, body, else_body } => out.push(AstNode::For {
+                pattern,
+                expr,
+                body: rewrite_with_exits(body, ctx, seq, false),
+                else_body: rewrite_with_exits(else_body, ctx, seq, at_loop_depth),
+            }),
+            AstNode::While { cond, body, else_body } => out.push(AstNode::While {
+                cond,
+                body: rewrite_with_exits(body, ctx, seq, false),
+                else_body: rewrite_with_exits(else_body, ctx, seq, at_loop_depth),
+            }),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 ///   if zeta_try_setjmp() == 0 { body; zeta_try_end() }
 ///   else { [e = zeta_last_error();] handler; zeta_try_end() }
 ///   [finally body]
@@ -1411,17 +1486,21 @@ fn parse_with(input: &str) -> IResult<&str, AstNode> {
                 expr: Box::new(AstNode::Call {
                     receiver: None,
                     method: "zeta_with_exit".to_string(),
-                    args: vec![AstNode::Var(ctx)],
+                    args: vec![AstNode::Var(ctx.clone())],
                     type_args: vec![],
                     structural: false,
                 }),
             };
-            // Only append __exit__ when the body can fall through. Appending
-            // after `return`/`break` put a call after a terminator (LLVM
-            // "Terminator found in the middle of a basic block") and aborted
-            // modules using `with lock: return …`. V1: early exit skips
-            // __exit__ (same limitation as try/finally today).
+            // PY-A: early terminators inside the body must still run __exit__.
+            // `with lock: return …` (sources_selector._load_source_stats) kept
+            // the mutex forever and deadlocked the next acquirer (measured:
+            // hang in py_threading_lock_acquire). Rewrite each `return` in
+            // place to `__with_ret_N = v; exit(); return __with_ret_N`, and
+            // prepend a bare `exit()` to break/continue that bind to an
+            // enclosing loop of the WITH (not to a loop inside the body —
+            // that flag resets once we descend into a loop body).
             let falls = branch_falls_through(&body);
+            let body = rewrite_with_exits(body, &ctx, seq, true);
             stmts.extend(body);
             if falls {
                 stmts.push(exit);
