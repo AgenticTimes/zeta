@@ -735,6 +735,11 @@ int64_t zt_parquet_build_map(const char* path) {
             strcpy(copy, s);
             pq_vec_push(&vec, (int64_t)copy);
         }
+        if (getenv("ZT_DEBUG_PQ")) {
+            fprintf(stderr, "PQ col=%s vec=%p len=%lld first=%p '%s'\n", c->name,
+                    (void*)vec, (long long)((int64_t*)vec)[-1], (void*)((int64_t*)vec)[0],
+                    (char*)((int64_t*)vec)[0] ? (char*)((int64_t*)vec)[0] : "");
+        }
         map_insert(out, map_str_key((int64_t)c->name), vec);
     }
     (void)pq_vec_cap;
