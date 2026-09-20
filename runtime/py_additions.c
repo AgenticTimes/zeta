@@ -2392,3 +2392,67 @@ int64_t zt_snappy_uncompress(const char* in, int64_t in_len, char* out, int64_t 
     }
     return (n == want) ? n : -1;
 }
+
+// ============================================================================
+// Parquet RLE / bit-packed hybrid decoder — used for definition levels and for
+// dictionary indices (RLE_DICTIONARY encoded pages). Stream layout:
+//   varint header; header&1 -> bit-packed run of (header>>1)*8 values,
+//   otherwise an RLE run of (header>>1) copies of one value stored in
+//   ceil(bit_width/8) little-endian bytes. Bit-packed values are packed
+//   LSB-first, continuing across byte boundaries.
+// Returns the number of values written, or -1 when the input is malformed.
+// ============================================================================
+int64_t zt_rle_bitpack_decode(const char* in, int64_t in_len, int bit_width,
+                              int64_t* out, int64_t out_cap) {
+    if (!in || in_len <= 0 || bit_width < 0 || bit_width > 32 || !out) return -1;
+    const unsigned char* src = (const unsigned char*)in;
+    int64_t i = 0, n = 0;
+    const int byte_width = (bit_width + 7) / 8;
+    while (i < in_len) {
+        int64_t hdr = 0, sh = 0;
+        while (i < in_len && sh < 64) {
+            unsigned char b = src[i++];
+            hdr |= (int64_t)(b & 0x7f) << sh;
+            sh += 7;
+            if (!(b & 0x80)) break;
+        }
+        if (hdr & 1) {
+            int64_t count = (hdr >> 1) * 8;
+            if (bit_width == 0) {
+                for (int64_t k = 0; k < count && n < out_cap; k++) out[n++] = 0;
+                if (n >= out_cap) return n;
+                continue;
+            }
+            int64_t bits = count * bit_width;
+            int64_t bytes = (bits + 7) / 8;
+            if (i + bytes > in_len) return -1;
+            int64_t bitpos = 0;
+            for (int64_t k = 0; k < count; k++) {
+                int64_t v = 0;
+                for (int b = 0; b < bit_width; b++) {
+                    int64_t bp = bitpos + b;
+                    int64_t byte = i + bp / 8;
+                    int bit = (int)(bp % 8);
+                    if (bp / 8 >= bytes) return -1;
+                    if (src[byte] & (1u << bit)) v |= (int64_t)1 << b;
+                }
+                bitpos += bit_width;
+                if (n < out_cap) out[n++] = v;
+                if (n >= out_cap) { i += bytes; goto done; }
+            }
+            i += bytes;
+        } else {
+            int64_t count = hdr >> 1;
+            if (i + byte_width > in_len) return -1;
+            int64_t v = 0;
+            for (int b = 0; b < byte_width; b++) v |= (int64_t)src[i + b] << (8 * b);
+            i += byte_width;
+            for (int64_t k = 0; k < count; k++) {
+                if (n >= out_cap) goto done;
+                out[n++] = v;
+            }
+        }
+    }
+done:
+    return n;
+}
