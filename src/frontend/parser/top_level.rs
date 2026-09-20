@@ -839,7 +839,7 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     let mut has_init = false;
     // PY-A: bare annotated fields (`@dataclass class P: x: int`) — no
     // `__init__`; the constructor is synthesized from these declarations.
-    let mut annotated_fields: Vec<(String, String)> = Vec::new();
+    let mut annotated_fields: Vec<(String, String, Option<AstNode>)> = Vec::new();
     let mut cur = input;
     loop {
         let (next, _) = skip_ws_and_comments(cur)?;
@@ -958,14 +958,20 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                 // Previously this aborted the whole class parse — and since
                 // the class was the current top-level item, every statement
                 // after it was silently dropped too (fail-open).
-                match parse_param(next) {
-                    Ok((rest, (fname, fty)))
+                match parse_param_full(next) {
+                    Ok((rest, (fname, fty, def)))
                         if !fname.starts_with('*')
                             && fname != "self"
                             && fname != "&self"
                             && fname != "&mut self" =>
                     {
-                        annotated_fields.push((fname, fty));
+                        // `x: int = 40` — a dataclass field DEFAULT (parse_param_full
+                        // already carries it). Without it the synthesized
+                        // constructor had no value for the field and every read
+                        // returned 0: `MarketCleanConfig()` gave `min_price 0 /
+                        // drop_extreme 0 / max_abs 0` — silent wrong values that
+                        // then drove the whole cleaning path.
+                        annotated_fields.push((fname, fty, def));
                         cur = rest;
                     }
                     _ => return Err(e),
@@ -981,11 +987,33 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     // PY-A: dataclass-style body — no `__init__`, fields declared as bare
     // annotations. Synthesize the constructor and field table from them, in
     // declaration order (`P(1, 2)` → `P { x: 1, y: 2 }`).
+    // Dataclass field defaults become constructor-parameter defaults (the same
+    // `zeta_param_default` prologue the parser emits for `def f(a, b=1)`), so
+    // `MarketCleanConfig()` gets `min_price = 0.01` instead of 0. The marker
+    // index counts `self`, which the synthesized constructor lacks — hence i+1.
+    let mut dataclass_defaults: Vec<AstNode> = Vec::new();
     if !has_init && !annotated_fields.is_empty() {
-        for (n, t) in &annotated_fields {
+        for (i, (n, t, def)) in annotated_fields.iter().enumerate() {
             fields.push((n.clone(), t.clone()));
-            field_inits.push((n.clone(), AstNode::Var(n.clone())));
+            // Parameters keep DECLARATION order (the marker index must match).
             init_params.push((n.clone(), t.clone()));
+            match def {
+                Some(d) => {
+                    field_inits.push((n.clone(), d.clone()));
+                    dataclass_defaults.push(AstNode::ExprStmt {
+                        expr: Box::new(AstNode::Call {
+                            receiver: None,
+                            method: "zeta_param_default".to_string(),
+                            args: vec![AstNode::Lit(i as i64), d.clone()],
+                            type_args: vec![],
+                            structural: false,
+                        }),
+                    });
+                }
+                None => {
+                    field_inits.push((n.clone(), AstNode::Var(n.clone())));
+                }
+            }
         }
     }
     let param_names: Vec<&str> = init_params.iter().map(|(n, _)| n.as_str()).collect();
@@ -1100,7 +1128,7 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     // `def __init__(self, x, y=2)` + `Pair(5)` read 0 for `y`: a wrong value
     // with no diagnostic. The marker's index counts `self`, which the
     // constructor's parameter list does not, so it shifts down by one.
-    let mut ctor_body: Vec<AstNode> = Vec::new();
+    let mut ctor_body: Vec<AstNode> = dataclass_defaults.clone();
     for st in &init_stmts {
         if let AstNode::ExprStmt { expr } = st {
             if let AstNode::Call {

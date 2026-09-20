@@ -7414,3 +7414,40 @@ tup2/re/sl 全部打挂**（`ncols/cols/el` 三条 SEGV），说明 `stack_array
 要么让元素的 alloca 提升到调用方帧（escape 分析）。当前 tuple 返回保持原状（既有用例全绿）。
 
 度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+### 批次 255：`return (a, b)` 的 tuple 走**堆数组**（栈悬垂修复）
+
+`return d.iloc[0:0], 7` 的 MIR 完全正确（`StackArray[11,12]` → `Return val: 2`），但调用方
+拿到垃圾 ⇒ 返回的是**已失效的 alloca**。改成运行期堆数组：
+
+    zeta_dynarray_new(n) -> h
+    vec_push(h, e0) -> s0 ; vec_push(h, e1) -> s1      ← 每次都推到**原始 h**
+    Return h（类型标 Tuple）
+
+关键坑（第一次尝试打挂 tup2/re/sl）：**不能把 `vec_push` 的返回值串起来当下一个句柄**
+（`cur = pushed`）——必须完全照抄 ArrayLit 降级的写法（推到原 `h`、每个 dest 注册成自己的
+`Var`），否则 `vec_push` 收到未注册槽位，崩在 `vec_push + 24`。
+
+### 批次 256：`df.iloc[0:0]`（绑定方法上的切片）
+
+`x.m[a:b]` 会被降级成「先调用 m（**不带掩码**）再对结果切片」⇒ `zeta_slice_vec` 拿结构体当
+向量取头（`data-16`）⇒ 垃圾。加两处：MIR 里收到者是 `DataFrame/Series` 时直接走
+`py_df_empty_like`；运行期 `py_df_loc` 掩码不是向量时也返回空帧并**在 stderr 说明**；
+`py_df_empty_like` 对非帧句柄响亮打印后返回空帧。
+
+### 批次 257：**`@dataclass` 字段默认值**此前完全没生效（静默 0）
+
+实测（本轮最关键发现）：
+
+    c = MarketCleanConfig()
+    min_price 0 / drop_extreme 0 / max_abs 0        ← 全 0（应为 0.01 / True / 0.20）
+
+⇒ 清洗路径整条走偏（阈值 0、跳过极端 bar 清洗）——**静默错值**（红线）。
+修法：`annotated_fields` 现在带默认值（用 `parse_param_full`），并把它作为构造函数参数的
+默认（`zeta_param_default` 前导标记，索引按声明顺序），字段初值也用默认值。
+
+修后：`drop_extreme 1`（True ✓）、`min_price/max_abs` 打印出来是 **double 的位模式**
+（4576918229304087675 = 0.01 的位、4596373779694328218 = 0.20 的位）⇒ 值对了，
+但**字段读取的静态类型仍是 I64**（`println_i64` 打位模式），下一批修这条类型。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。

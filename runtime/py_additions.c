@@ -19,6 +19,8 @@ int64_t map_new(void);
 int64_t map_insert(int64_t, int64_t, int64_t);
 // A grown dict forwards from its old block; every reader must resolve first.
 int64_t map_resolve(int64_t);
+int64_t py_df_empty_like(int64_t frame);
+static int zt_maybe_map(int64_t);
 int zt_map_is_json_handle(int64_t);
 void zt_map_json_mismatch(const char*, int64_t);
 int64_t map_get(int64_t, int64_t);
@@ -822,6 +824,13 @@ int64_t py_vec_notna(int64_t vec);
 // vector it emits `isna`/`notna` (+ arity variants). Treat a plausible vector
 // that way; anything else is passed through unchanged with a warning (never a
 // wild read, never a fabricated mask).
+// A plausible `map<..>` block: header is `[cap|len]` with sane bounds.
+static int zt_maybe_map(int64_t m) {
+    if (!m || m < 0x1000) return 0;
+    int64_t cap = ((int64_t*)(m - 16))[0];
+    if (cap < 0 || cap > (1LL << 26)) return 0;
+    return 1;
+}
 static int zt_maybe_vec(int64_t v) {
     if (v < 0x1000) return 0;
     int64_t cap = ((int64_t*)(v - 16))[0];
@@ -1101,8 +1110,18 @@ int64_t py_is_vec(int64_t v) { return zt_maybe_vec(v) ? 1 : 0; }
 // missing") — measured in `remove_extreme_return_bars`'s `if not parts:` path.
 int64_t py_df_empty_like(int64_t frame) {
     if (!frame) return 0;
-    int64_t map = *(int64_t*)frame;
-    if (!map) return 0;
+    int64_t map = map_resolve(*(int64_t*)frame);
+    // A bogus frame (e.g. the result of `DataFrame::iloc` called with the mask
+    // that a bound-method slice never supplies) must not reach `map_keys`:
+    // measured as `map_keys + 144 ← py_df_empty_like ← hA` in `df.iloc[0:0]`.
+    if (!map || !zt_maybe_map(map)) {
+        fprintf(stderr,
+                "PY-A: empty-like on a non-frame %lld — returning an empty frame\n",
+                (long long)frame);
+        int64_t* out = (int64_t*)GC_malloc(sizeof(int64_t));
+        out[0] = map_new();
+        return (int64_t)out;
+    }
     int64_t nm = map_new();
     int64_t names = map_keys(map);
     int64_t n = zt_vec_len(names);
@@ -1336,6 +1355,16 @@ int64_t py_df_loc(int64_t frame, int64_t mask) {
         fprintf(stderr, "PY-A: DataFrame.loc: mask is missing\n");
         fflush(stderr);
         abort();
+    }
+    // A bound-method slice (`df.iloc[0:0]`) reaches the shim with no mask at all:
+    // the MIR emits the method call first and the slice handling afterwards, so
+    // the mask argument is never a vector. "No rows selected" keeps the columns —
+    // and we say so on stderr rather than reading garbage as a mask.
+    if (!zt_maybe_vec(mask)) {
+        fprintf(stderr,
+                "PY-A: DataFrame.loc: mask %lld is not a vector — empty selection\n",
+                (long long)mask);
+        return py_df_empty_like(frame);
     }
     int64_t keys = map_keys(map);
     int64_t nk = zt_vec_len(keys);

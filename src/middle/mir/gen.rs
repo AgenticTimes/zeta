@@ -1583,7 +1583,60 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 self.lower_ast(&assign);
             }
             AstNode::Return(inner) => {
-                let val = self.lower_expr(inner);
+                // `return (a, b)` must hand back a HEAP array. A StackArray is an
+                // alloca: the pointer dies with the frame, so the caller's
+                // `stack_array_get` destructuring read dead stack (measured:
+                // `return d.iloc[0:0], 7` → `len(o)` SEGV). Build a real
+                // `[cap|len]` array — `stack_array_get(arr, i)` reads
+                // `((i64*)arr)[i]`, i.e. exactly the dynarray DATA pointer that
+                // `zeta_dynarray_new`/`vec_push` hand out.
+                let val = if let AstNode::Tuple(items) = &**inner {
+                    let mut vals = Vec::with_capacity(items.len());
+                    let mut tys = Vec::with_capacity(items.len());
+                    for it in items {
+                        let vid = self.lower_expr(it);
+                        tys.push(self.type_map.get(&vid).cloned().unwrap_or(Type::I64));
+                        vals.push(vid);
+                    }
+                    let cap = self.next_id_with_lit(items.len() as i64);
+                    let h = self.next_id();
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_dynarray_new".to_string(),
+                        args: vec![cap],
+                        dest: h,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(h, MirExpr::Var(h));
+                    self.type_map.insert(
+                        h,
+                        Type::DynamicArray(Box::new(tys.first().cloned().unwrap_or(Type::I64))),
+                    );
+                    // Mirror the ArrayLit lowering EXACTLY: every push targets the
+                    // ORIGINAL handle `h` (the runtime grows it and returns a new
+                    // data pointer, which the codegen tracks via the call's dest),
+                    // and each dest is registered as its own Var. Chaining the
+                    // handles (`cur = pushed`) made `vec_push` receive an
+                    // unregistered slot and SEGV inside `vec_push + 24`.
+                    for v in vals {
+                        let sink = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "vec_push".to_string(),
+                            args: vec![h, v],
+                            dest: sink,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(sink, MirExpr::Var(sink));
+                        self.type_map.insert(
+                            sink,
+                            Type::DynamicArray(Box::new(tys.first().cloned().unwrap_or(Type::I64))),
+                        );
+                    }
+                    self.type_map.insert(h, Type::Tuple(tys));
+                    self.tuple_slots.insert(h);
+                    h
+                } else {
+                    self.lower_expr(inner)
+                };
                 self.stmts.push(MirStmt::Return { val });
             }
             AstNode::BinaryOp { op, left, right } => {
@@ -8147,6 +8200,30 @@ call, no NULL-handle dereference).",
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, ty);
+                    return id;
+                }
+                // `df.iloc[0:0]` / `df.loc[:0]` — the base is a shim STRUCT, so
+                // the generic vector slice produced garbage (`zeta_slice_vec` on
+                // a 1-word struct reads its header 16 bytes before the block):
+                // `return d.iloc[0:0], 7` then handed the caller a dead frame and
+                // `len(o)` SEGV'd. An empty selection on a frame keeps the columns
+                // and drops the rows.
+                if method == "__slice__"
+                    && arg_ids.len() == 3
+                    && matches!(
+                        receiver_ty.as_ref(),
+                        Some(Type::Named(n, _)) if n == "DataFrame" || n == "Series"
+                    )
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_df_empty_like".to_string(),
+                        args: vec![arg_ids[0]],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::Named("DataFrame".to_string(), vec![]));
                     return id;
                 }
                 if method == "__slice__" && arg_ids.len() == 3 {
