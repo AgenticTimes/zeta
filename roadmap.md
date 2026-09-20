@@ -6049,3 +6049,29 @@ frame #0: _platform_strlen（坏指针）
 1. `__name__`（应为模块名字符串）—— 当前是符号名 ⇒ logger 名坏指针
 2. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一块
 3. -O3 longjmp 误编译（`ZETA_NO_OPT=1` 可对照）
+
+### 批次一百六十三（2026-09-19）：`__name__` + 平台源响亮回退 + 句柄运算数物化
+
+| # | 缺陷 | 铁证 | 修法 |
+|---|---|---|---|
+| 1 | `__name__` **完全没有实现** | `print(__name__)` → **1**；`getLogger(__name__)` 拿坏指针 ⇒ `run_backtest` 首行日志在 `fprintf/strlen` 崩 | MirGen 增 `current_module`（resolver 用 `py_mangled_to_module[fn]` 填，根文件 `"__main__"`），`Var("__name__")` 降为该模块名字符串，随闭包传播。实测 `[WARNING] nm: hello` ✓ |
+| 2 | 平台桩 `abort()` 把本地回测停在第一次平台调用 | `_auth` 立刻 abort | 平台族（jqdatasdk/rqdatac/tushare/akshare/pyarrow 读表）改成**打一行说明 + `zeta_raise(1)`** —— 与 CPython 同形，项目自己的 try/except 走本地回退。（先试「返回 0」会把 `auth` 伪装成**成功**："jqdatasdk authenticated successfully" 之后拿 0 句柄再崩 ✗） |
+| 3 | 句柄运算符操作数不物化 ⇒ codegen `load_local` 取 NULL | `self.cache_dir / "x"` → `py_os_path_join` 解引用崩（`MarketDataFetcher.__init__+68`） | `handle_op`（`/`、日期加减）两操作数先 `materialize_for_call`（与 map 下标路径同规则） |
+
+**运行状态（lldb，no-opt，本会话最远）**：
+
+```
+[INFO] strategies.code.jq_wufu_local: 获取数据...
+PY-A: platform source `_auth` is not available — falling back
+[WARNING] backend.market_data: jqdatasdk auth failed: 1        ← 项目自己的回退生效 ✓
+frame #0: _LogAdapter::info + 44                               ← 闭包内的用户类方法分派
+frame #2: MarketDataFetcher::fetch_stocks + 964                ← 已在数据层内部 ✓
+```
+
+⇒ **模块初始化 / 宇宙注册 / 符号解析 / 构造器 / 首行日志 / 平台回退** 全通。
+
+### 下一队列（批次一百六十四）
+
+1. 闭包内的用户类方法分派（`_LogAdapter::info`，崩在 +44）
+2. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
+3. -O3 longjmp 误编译（`ZETA_NO_OPT=1` 可对照）
