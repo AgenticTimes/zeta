@@ -391,6 +391,19 @@ impl MirGen {
         }
         // Not a registry shim: a module loaded from disk resolves to its
         // `mod__name` mangled symbol (no handle tag, i64 result).
+        //
+        // Canonicalize the module name first: the SAME file is reachable as
+        // `jq_shim` (bare, via the strategy dir on sys.path) and as
+        // `strategies.code.jq_shim` (dotted). The definitions land under whichever
+        // spelling loaded first (`jq_shim__get_cost_config`), so a literal
+        // spelling here emitted a second, undefined prefix — measured as
+        // `U _strategies_code_jq_shim__get_cost_config` against
+        // `T _jq_shim__get_cost_config`.
+        let module = self
+            .py_module_aliases
+            .get(&module)
+            .cloned()
+            .unwrap_or(module);
         if self.py_user_modules.contains(&module) {
             let prefix = format!("{}__", module.replace('.', "_"));
             let sym = format!("{}{}", prefix, member);

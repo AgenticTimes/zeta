@@ -161,3 +161,11 @@ int64_t __attribute__((weak)) nautilus_trader_model_objects__Money(void) { retur
 // `logger.info(...)` reached through a closure whose receiver type was lost
 // (diagnostic-only link aid; the normal build type-checks it).
 int64_t __attribute__((weak)) info(void) { return zt_unavailable("_info"); }
+
+// batch 159 追加: still-unresolved data-layer / cross-module-name symbols.
+int64_t __attribute__((weak)) filter(void) { return zt_unavailable("_filter"); }
+int64_t zt_stub_pd_Timestamp__date(void) __asm__("_pd.Timestamp__date");
+int64_t __attribute__((weak)) zt_stub_pd_Timestamp__date(void) { return zt_unavailable("_pd.Timestamp__date"); }
+int64_t __attribute__((weak)) strategies_code_jq_shim__OrderCost(void) { return zt_unavailable("_strategies_code_jq_shim__OrderCost"); }
+int64_t __attribute__((weak)) strategies_code_jq_shim__PriceRelatedSlippage(void) { return zt_unavailable("_strategies_code_jq_shim__PriceRelatedSlippage"); }
+int64_t __attribute__((weak)) strategies_code_jq_shim__attribute_history(void) { return zt_unavailable("_strategies_code_jq_shim__attribute_history"); }
