@@ -740,7 +740,14 @@ int64_t zt_parquet_build_map(const char* path) {
                     (void*)vec, (long long)((int64_t*)vec)[-1], (void*)((int64_t*)vec)[0],
                     (char*)((int64_t*)vec)[0] ? (char*)((int64_t*)vec)[0] : "");
         }
-        map_insert(out, map_str_key((int64_t)c->name), vec);
+        // The column name must be GC-allocated: `map_str_key` REGISTERS the
+        // handle in its hash side table (so `map_keys` can print the text back),
+        // and `c->name` lives inside a STACK-allocated zt_pq_col — the stale
+        // pointer made a later `map_insert` probe a wild address
+        // (EXC_BAD_ACCESS at 0x19007cf230, measured in _load_cache).
+        char* name_copy = (char*)GC_malloc(strlen(c->name) + 1);
+        strcpy(name_copy, c->name);
+        map_insert(out, map_str_key((int64_t)name_copy), vec);
     }
     (void)pq_vec_cap;
     (void)pq_vec_len;
