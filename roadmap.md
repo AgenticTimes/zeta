@@ -6958,3 +6958,21 @@ IR 对照：
 
 下一批：把 `loc` 的 MIR/IR 里每个 `map_get` 的 map 来源标出来（`self.data` vs `out`），
 确认是哪一处拿到了 JSON 句柄；必要时把 `loc` 的返回改成 `self.copy()` + 覆盖列，避开新建字典。
+
+### 批次 227 补充：`loc` 的 IR 与 `n_rows` 完全同形，但运行期 `self.data` 是 0
+
+IR 对照（同一模块）：
+
+    DataFrame::loc   : inttoptr i64 %65 → load { i64 } → extractvalue 0 → map_ptr → map_get   ✓
+    DataFrame::n_rows: inttoptr i64 %17 → load { i64 } → extractvalue 0 → map_ptr → map_keys  ✓
+
+⇒ 字段读取的**编译形态已一致**（批次 197/218 的修法生效）。但运行期 `map_get` 的 map 是 0/坏值：
+最小复现 `/tmp/loc3.z`（`pd.DataFrame({...})` 后**直接** `df.loc([1,0,1])`，中间没有任何语句）：
+
+    df = pd.DataFrame({"a": [...], "b": [...]})
+    e  = df.loc([1, 0, 1])          ← segfault in map_get ← DataFrame::loc
+    （同一份帧先 `df.columns` / `len(df)` 都是对的）
+
+⇒ 帧对象在 ctor 之后、`loc` 之前的某一刻丢失了 `data` 字段（怀疑 `DataFrame(...)` 的
+StructNew 落在**栈**上，或 `zeta_map_set_tag`/env 写入把它挤掉）。
+下一批：检查 `DataFrame(...)` 构造点的 IR（StructNew 是堆还是栈）与两次调用之间对该对象的写入。
