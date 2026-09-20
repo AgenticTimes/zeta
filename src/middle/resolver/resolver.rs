@@ -1638,7 +1638,18 @@ impl Resolver {
             AstNode::FloatLit(_) => Some(Type::F64),
             AstNode::Bool(_) => Some(Type::Bool),
             AstNode::Lit(_) => Some(Type::I64),
-            AstNode::DictLit { .. } => Some(Type::Named("map".to_string(), vec![])),
+            AstNode::DictLit { entries } => Some(Type::Named(
+                "map".to_string(),
+                match entries.first() {
+                    Some((k, v)) => vec![
+                        infer_global_ty(k, seen, aliases, member_aliases, fn_rets)
+                            .unwrap_or(Type::Str),
+                        infer_global_ty(v, seen, aliases, member_aliases, fn_rets)
+                            .unwrap_or(Type::I64),
+                    ],
+                    None => vec![],
+                },
+            )),
             AstNode::ArrayLit(items) => {
                 // Element type from the FIRST element: a str list typed
                 // `DynamicArray(I64)` made every later consumer treat the elements
