@@ -6310,3 +6310,32 @@ k 4307507541 / k 4307496678    ← 键是**数字**（裸句柄），不是内�
 1. `区间 1969-08-04 ~ `：`fetch_stocks` 内日期 f-string 仍异常（同一类问题？）
 2. 源循环之后的崩溃栈
 3. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
+
+### 批次一百七十五（2026-09-19）：裸日志方法符号 + 语料口径修正
+
+`fetch_stocks` 内 `_log` 闭包的 `logger.info(msg)`：`logger` 是**跨模块再导出**的模块全局
+（`data_ops_log.logger` → `market_data_sources.logger` → `market_data_fetcher.logger`），
+闭包拿不到静态类型 ⇒ 退化成**裸方法名 `info`** ⇒ 撞 abort 桩 ⇒ 本地回测第一次写日志就停机。
+
+lldb：`info` ← `__closure_0` ← `MarketDataFetcher::fetch_stocks + 956`。
+
+修法：运行期补上 `info`/`warning`/`error`/`debug`/`critical` 裸符号（走无 logger 名的路径，
+消息照常打印）。
+
+**语料口径修正**：`tools/corpus_baseline.py` 扫 `REasyQuant/strategies`，
+我放在 `strategies/code/` 的临时 harness 被计入 ⇒ 数字被抬高。清掉 11 个废弃 harness 后：
+
+```
+语料: 38 文件 / 38/38 = 100%      ← 项目真实语料
+官方 194/194、python_style 271/274 不变
+```
+
+**下一处崩点**：`py_list_contains + 28` ← `__closure_48` ← `zeta_collect_vec_n + 112`
+← `MarketDataFetcher::fetch_stocks + 3380`（`fetch_stocks` 里的推导式 `in`，
+类型已知但运行期句柄是野值）。
+
+### 下一队列（批次一百七十六）
+
+1. `fetch_stocks` 推导式里 `in` 的野句柄（Scribble 下 100%）
+2. `区间 1969-08-04 ~ `：日期显示异常
+3. `py_pd_read_parquet` 真实实现——跑出指标的最后一环
