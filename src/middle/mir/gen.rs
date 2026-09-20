@@ -1151,6 +1151,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         && !matches!(&**rhs, AstNode::Tuple(_))
                     {
                         let rhs_id = self.lower_expr(rhs);
+                        // Element type from the SOURCE, not hardcoded I64:
+                        // `num, exch = jq.split(".")` gave correctly-valued but
+                        // I64-typed names, so `num.isdigit()` /
+                        // `num.startswith(("000","399"))` dispatched as handle
+                        // methods on an integer — a garbage pointer and a SEGV in
+                        // `_is_likely_index` (measured in the local backtest).
                         for (i, l) in litems.iter().enumerate() {
                             if let AstNode::Var(name) = l {
                                 let elem_id = self.next_id();
@@ -1166,7 +1172,21 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 });
                                 self.name_to_id.insert(name.clone(), elem_id);
                                 self.exprs.insert(elem_id, MirExpr::Var(elem_id));
-                                self.type_map.insert(elem_id, Type::I64);
+                                // Element type from the SOURCE, not hardcoded I64:
+                                // `num, exch = jq.split(".")` produced correctly
+                                // valued but I64-typed names, so `num.isdigit()` and
+                                // `num.startswith(("000","399"))` dispatched as
+                                // handle methods on an integer — garbage pointer,
+                                // SEGV in `_is_likely_index` (local backtest).
+                                let ty = match self.type_map.get(&rhs_id).cloned() {
+                                    Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
+                                    Some(Type::Tuple(ts)) => {
+                                        ts.get(i).cloned().unwrap_or(Type::I64)
+                                    }
+                                    Some(Type::Str) => Type::Str,
+                                    _ => Type::I64,
+                                };
+                                self.type_map.insert(elem_id, ty);
                             }
                         }
                         return;
@@ -5581,6 +5601,41 @@ call, no NULL-handle dereference).",
                     if let AstNode::Var(tn) = &args[1] {
                         let val_id = self.lower_expr(&args[0]);
                         let vt = self.type_map.get(&val_id).cloned();
+                        // A parsed JSON value's Python type is only known at
+                        // RUNTIME — one static PyJson tag covers objects, arrays,
+                        // strings and numbers. Answering statically returned 0, so
+                        // `if isinstance(data, dict) and len(data) > 50:` fell
+                        // through to the platform path: the ETF listing cache was
+                        // parsed CORRECTLY (1724 keys) and then ignored, and the
+                        // fallback crashed. Dispatch on the runtime tag instead
+                        // (ZJ_INT 1 / ZJ_F64 2 / ZJ_STR 3 / ZJ_ARR 4 / ZJ_OBJ 5).
+                        if matches!(&vt, Some(Type::Named(n, _)) if n == "PyJson") {
+                            let tag = match tn.as_str() {
+                                "int" => Some(1i64),
+                                "float" => Some(2),
+                                "str" | "str_holder" => Some(3),
+                                "list" => Some(4),
+                                "dict" => Some(5),
+                                _ => None,
+                            };
+                            if let Some(t) = tag {
+                                let vid = self.next_id();
+                                self.exprs.insert(vid, MirExpr::Var(val_id));
+                                self.type_map.insert(vid, vt.clone().unwrap_or(Type::I64));
+                                let tid = self.next_id();
+                                self.exprs.insert(tid, MirExpr::IntLit(t));
+                                self.type_map.insert(tid, Type::I64);
+                                self.stmts.push(MirStmt::Call {
+                                    func: "py_json_is_kind".to_string(),
+                                    args: vec![vid, tid],
+                                    dest: id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(id, MirExpr::Var(id));
+                                self.type_map.insert(id, Type::Bool);
+                                return id;
+                            }
+                        }
                         let hit = match tn.as_str() {
                             "int" => matches!(
                                 vt,

@@ -2678,6 +2678,13 @@ int64_t py_json_len(int64_t j) {
     }
 }
 int64_t py_json_kind(int64_t j) { return zj_tag(j); }
+// `isinstance(<parsed json>, dict|list|str|int|float)` — the tag is a runtime
+// property of the value, so the answer must come from here (a static answer
+// returned 0 for every object and the caller fell through to a wrong branch).
+int64_t py_json_is_kind(int64_t j, int64_t tag) {
+    if (!j) return 0;
+    return zj_tag(j) == tag ? 1 : 0;
+}
 int64_t py_json_as_i64(int64_t j) {
     if (!j) return 0;
     switch (zj_tag(j)) {
