@@ -6339,3 +6339,28 @@ lldb：`info` ← `__closure_0` ← `MarketDataFetcher::fetch_stocks + 956`。
 1. `fetch_stocks` 推导式里 `in` 的野句柄（Scribble 下 100%）
 2. `区间 1969-08-04 ~ `：日期显示异常
 3. `py_pd_read_parquet` 真实实现——跑出指标的最后一环
+
+### 批次一百七十六（2026-09-19）：空列表 `append` 的元素类型 + 裸日志符号 weak
+
+| # | 缺陷 | 铁证 | 修法 |
+|---|---|---|---|
+| 1 | `lst = []` + `lst.append(x)` 元素类型停在 I64（=未知） | `x in lst` 传 `elem_is_str=0`，`py_list_contains` 比**句柄地址** ⇒ 字符串永远「不在」⇒ `h(["a","b","c"])` 返回 3 ✗（应 2） | `vec_push` 落点：接收者为 `DynamicArray(I64)` 且追加值类型 ≠ I64 ⇒ 细化槽位类型（单向 I64→具体） |
+| 2 | 上一批的裸日志符号与程序自身定义冲突 | `duplicate symbol '_warning'/_error'/_info'`（REasyQuant 的 `_LogAdapter` 方法就落成裸名） | 运行期那几个符号改 `__attribute__((weak))`，程序自身定义优先 |
+
+**连带收益**：python_style **271 → 272 passed / 2 failed**（`t207_empty_append_str` 转通过）。
+
+**下一处崩点**：
+
+```
+py_list_contains + 28 ← __closure_92 ← zeta_collect_vec_n + 112 ← MarketDataFetcher::fetch_stocks + 3360
+```
+
+即 `fetch_stocks` 里 `[c for c in to_fetch if self._normalize_stock_code(c) not in fetched_codes]`
+这类推导式的 `fetched_codes`（函数局部，类型仍未知）⇒ `vec` 句柄野值。
+
+### 下一队列（批次一百七十七）
+
+1. `push`/`+` 之外的列表来源也要细化元素类型；`in` 的 `elem_is_str==0` 走**运行期内容比较兜底**
+2. `py_list_contains` 入口对 0/不可用句柄做守卫（响亮诊断，不野读）
+3. `区间 1969-08-04 ~ `：日期显示异常
+4. `py_pd_read_parquet` 真实实现——跑出指标的最后一环
