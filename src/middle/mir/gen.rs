@@ -3713,9 +3713,62 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 let cond_id = self.lower_expr(cond);
                 let dest_id = self.next_id();
 
+                // The destination's type must come from the BRANCHES: typing it
+                // I64 unconditionally made `prefix = "sh" if c else "sz"` hold a
+                // string handle in an I64 slot — `len(prefix)` then did
+                // `array_len(handle)` and produced garbage, `f"{prefix}.{left}"`
+                // printed `<address>.<code>`, and the whole wufu universe came out
+                // as `4296191491.513180`. That is why `get_universe("wufu")`
+                // returned junk codes and `_load_cache` failed for all of them.
+                let branch_ty = {
+                    let tail_of = |blk: &[AstNode]| -> Option<Type> {
+                        // The ternary's arms arrive as BLOCKS (`Block { body }`),
+                        // so unwrap down to the last real statement.
+                        let mut tail = blk.last();
+                        while let Some(AstNode::Block { body }) = tail {
+                            tail = body.last();
+                        }
+                        let blk: &[AstNode] = match tail {
+                            Some(t) => std::slice::from_ref(t),
+                            None => &[],
+                        };
+                        match blk.last() {
+                            Some(AstNode::ExprStmt { expr }) | Some(AstNode::Return(expr)) => {
+                                match &**expr {
+                                    AstNode::StringLit(_) | AstNode::FString { .. } => {
+                                        Some(Type::Str)
+                                    }
+                                    AstNode::FloatLit(_) => Some(Type::F64),
+                                    AstNode::Bool(_) => Some(Type::Bool),
+                                    AstNode::Lit(_) => Some(Type::I64),
+                                    _ => None,
+                                }
+                            }
+                            Some(AstNode::Assign(_, rhs)) => match &**rhs {
+                                AstNode::StringLit(_) | AstNode::FString { .. } => {
+                                    Some(Type::Str)
+                                }
+                                AstNode::FloatLit(_) => Some(Type::F64),
+                                AstNode::Bool(_) => Some(Type::Bool),
+                                AstNode::Lit(_) => Some(Type::I64),
+                                _ => None,
+                            },
+                            _ => None,
+                        }
+                    };
+                    let t = tail_of(then);
+                    let e = tail_of(else_);
+                    match (t, e) {
+                        (Some(a), Some(b)) if a == b => Some(a),
+                        (Some(a), None) => Some(a),
+                        (None, Some(b)) => Some(b),
+                        _ => None,
+                    }
+                };
                 // Create destination for expression result
                 self.exprs.insert(dest_id, MirExpr::Var(dest_id));
-                self.type_map.insert(dest_id, Type::I64);
+                self.type_map
+                    .insert(dest_id, branch_ty.unwrap_or(Type::I64));
 
                 // Helper function to process block
                 fn process_block(

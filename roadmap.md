@@ -7880,3 +7880,30 @@ lldb 现场：`DataFrame::n_rows: ldr x0, [x8]`，`EXC_BAD_ACCESS (code=1, addre
 
 ⇒ 不用跑整个回测就能复现驱动的崩溃，而且只需在循环里逐行打印就能**点名**是哪只标的/
 哪一步。下一批就用它定位（本轮补打印的补丁没生效，需重新落一次并确认输出）。
+
+### 批次 277：**wufu universe 的代码全是垃圾串**（`4296191491.513180`）
+
+驱动说「行情请求 119 只」，但把 `get_universe("wufu", date="2024-01-02")` 的返回打出来：
+
+    universe 119
+    code 0 4296191491.513180 len 17      ← ✗ 应为 513090.XSHG
+    code 1 4296191494.159883 len 17
+    code 2 4296191491.563300 len 17
+
+即「**一个地址数值 `.` 真实代码**」——是 `jq_to_bs` 这类 `f"{prefix}.{left}"` 里 `prefix`
+不对。最小复现 `/tmp/cd2.z`：
+
+    def f(right: str, left: str) -> str:
+        prefix = "sh" if right == "XSHG" else "sz"
+        print("prefix", prefix, len(prefix))      # → prefix 4367452677 len 20064246142337024 ✗
+        return f"{prefix}.{left}"
+
+⇒ 三元表达式的**目的地类型**被硬编码成 I64（`AstNode::If` 表达式降级处），
+字符串句柄进了 I64 槽 ⇒ `len()` 走 `array_len` 得到垃圾。
+
+已做的改动：三元目的地类型改为从**分支**推断（字符串/浮点/布尔/整数），
+并会 unwrap `Block { body }` 形态的分支。探针确认 `branch_ty=Some(Str)` 已被算出，
+但 `prefix` 在下游**仍被当 I64 打印**（说明还有第二处按 I64 传播，或在 `print` 分派处）。
+本轮先把这条线索固化（它是 `_load_cache` 对全部 119 只失败的根因）。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
