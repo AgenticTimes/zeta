@@ -6552,3 +6552,28 @@ liby init         ← 模块 init **确实执行了**（V 已写入 env）
 陷阱发生在 `pkg.user.show()` 进入处附近（`EXC_BREAKPOINT`，非 `zt_unavailable` 的 abort），
 下一批：反汇编 `pkg_user__show` 的头几条指令 + 核对 `import pkg.user; pkg.user.show()`
 是否被解析成了别的符号。
+
+### 批次 196/197（2026-09-20）：`_cache_path` 垃圾前缀已缩到最小
+
+探针（真实 `MarketDataFetcher`）：
+
+```
+cd_eq 1                                  ← f.cache_dir 与正确路径**相等**
+p `gv/stocks/000300_XSHG.parquet         ← ✗ 仍是 2 字节垃圾前缀
+plen 32 / exists 0
+```
+
+⇒ `cache_dir` 本身正确，但 ctor 里那句 `self.stock_cache_dir = os.path.join(self.cache_dir,
+"stocks")` 产出了垃圾。
+
+**两字段的最小复现（/tmp/fld3.z）却是对的**：
+
+```
+eq_cd 1 / eq_scd 1        ← 值全对（只是 print 走了 i64 路径）
+```
+
+⇒ 与字段**数量/顺序**有关（真实类字段更多）。另外确认：结构体字段读取的**静态类型是 i64**
+（`len(f.cache_dir)` 得 0、`print` 出数字），值是对的。
+
+下一批：把 `MarketDataFetcher.__init__` 的字段按顺序逐个加进最小复现，定位是第几个字段
+开始串位（或直接看 ctor 的 MIR 里 `Struct` 的字段顺序与 `FieldAccess` 的索引）。
