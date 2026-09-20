@@ -6841,3 +6841,24 @@ print("via", use(c))        # ✗ **整条语句静默消失**（rc=0，无任�
 同时也能解释为什么内联复现都正常：那段代码在**函数内**才走到这条发射路径。
 下一批：在 codegen 的 `MirStmt::Call` 实参发射里找出「参数 id 不在 `locals` 时静默跳过」的分支
 （`locals.get(id)` 为 None ⇒ 应当回退 `gen_expr_safe(id)` 或响亮报错，绝不能发一个**无实参**的调用）。
+
+### 批次 221 补充：可疑的「1 参数 / void 返回」extern 声明
+
+`codegen.rs` 里有一处兜底（约 2291 行附近，位于「未解析函数的通用处理」分支）：
+
+    if name.contains("::") || self.module.get_function(name).is_none() {
+        let void_type = self.context.void_type();
+        let fn_type = void_type.fn_type(&[self.i64_type.into()], false);   // 固定 1 参 + void 返回
+        self.module.add_function(name, fn_type, Some(Linkage::External));
+        return f;
+    }
+
+凡是名字里带 `::` 的调用（`DataFrame::copy`、`DataFrame::empty`…）在**定义尚未出现时**
+都会拿到这个「1 参数、void 返回」的声明 —— 与真正定义（含 `self` 的 1 参、返回句柄）**不一致**，
+于是实参装载/返回值处理都可能错位（正是反汇编里「调用点没装载实参」的形态）。
+
+`get_or_declare_function`（另一处，2416 行）已经改成**先查定义**再声明；这处旧兜底应同规则处理
+（或直接删掉，交给 2416 那处）。
+
+下一批：给这处兜底加上「先查 `name` / mangled / fns 缓存」的前置检查（与 2416 对齐），
+再跑 driver 看 `DataFrame::copy` 的调用点是否变成正确的实参装载。
