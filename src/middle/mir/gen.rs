@@ -6192,8 +6192,22 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         return id;
                     }
                     let nid = self.lower_to_string(arg_id);
+                    // `str(<PyPath>)` yields a STRING: the handle IS the path, so
+                    // `lower_to_string` passes it through unchanged. Only the
+                    // RESULT id is retyped — retyping the source id would make the
+                    // original PyPath slot dispatch as Str later, and routing
+                    // through a fresh id has no alloca (SEGV; measured as t73).
+                    // Without this, `self.cache_dir = cache_dir or str(_PROJECT_ROOT
+                    // / "data")` produced an integer-typed value and
+                    // `os.path.join(self.cache_dir, …)` dereferenced the number.
+                    let src_is_path =
+                        matches!(self.type_map.get(&nid), Some(Type::Named(n, _)) if n == "PyPath");
                     self.exprs.insert(id, MirExpr::Var(nid));
-                    let ty = self.type_map.get(&nid).cloned().unwrap_or(Type::Str);
+                    let ty = if src_is_path {
+                        Type::Str
+                    } else {
+                        self.type_map.get(&nid).cloned().unwrap_or(Type::Str)
+                    };
                     self.type_map.insert(id, ty);
                     return id;
                 }
