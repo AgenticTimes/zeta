@@ -1085,7 +1085,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     }
                     AstNode::TypeAnnotatedPattern {
                         pattern: inner_pattern,
-                        ty: _,
+                        ty,
                     } => {
                         // For type-annotated patterns, extract the inner pattern
                         // The type checking should have been done by the type checker
@@ -1099,11 +1099,31 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             self.name_to_id.insert(name.clone(), lhs_id);
                             self.exprs.insert(lhs_id, MirExpr::Var(lhs_id));
                             // Copy type from RHS to LHS
-                            if let Some(rhs_type) = self.type_map.get(&rhs_id) {
-                                self.type_map.insert(lhs_id, rhs_type.clone());
-                            } else {
-                                self.type_map.insert(lhs_id, Type::I64);
-                            }
+                            let rhs_ty = self.type_map.get(&rhs_id).cloned();
+                            // `x: set[str] = set()` — the ANNOTATION is the only
+                            // place the element type exists: `set()` lowers to an
+                            // empty DynamicArray, so dropping the annotation left
+                            // the element I64 ("unknown") and `"q" in c` compared
+                            // HANDLES — every string counted as absent (measured:
+                            // `fetched_codes: set[str] = set()` in fetch_stocks).
+                            let refined = rhs_ty.clone().map(|t| {
+                                match (&t, Self::annotation_elem_ty(ty)) {
+                                    (Type::DynamicArray(e), Some(el))
+                                        if matches!(**e, Type::I64) =>
+                                    {
+                                        Type::DynamicArray(Box::new(el))
+                                    }
+                                    // `set()` may come back wholly untyped
+                                    // (I64 / PyDynamic) — the annotation still
+                                    // says what the container holds.
+                                    (Type::I64, Some(el)) | (Type::PyDynamic, Some(el)) => {
+                                        Type::DynamicArray(Box::new(el))
+                                    }
+                                    _ => t,
+                                }
+                            });
+                            self.type_map
+                                .insert(lhs_id, refined.unwrap_or(Type::I64));
                         }
                         // Note: We could add runtime identity checking here if needed,
                         // but the type checker should have already validated the type.
@@ -2445,6 +2465,31 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
 
     /// PY-A: ensure an expression id is a string handle — non-string values
     /// go through the to_string_* runtime dispatch (Python `str()`).
+    /// Element type declared by a container ANNOTATION (`list[str]`,
+    /// `set[str]`, `frozenset[int]`). Zeta has no set type — sets degrade to
+    /// DynamicArray — so the annotation is the only source of the element type.
+    fn annotation_elem_ty(ty: &str) -> Option<Type> {
+        let t = ty.trim();
+        for kw in ["list", "set", "frozenset", "List", "Set", "FrozenSet"] {
+            if let Some(rest) = t.strip_prefix(kw) {
+                if let Some(inner) = rest
+                    .trim()
+                    .strip_prefix('[')
+                    .and_then(|r| r.trim_end().strip_suffix(']'))
+                {
+                    return match inner.trim() {
+                        "str" | "String" => Some(Type::Str),
+                        "int" | "i64" => Some(Type::I64),
+                        "float" | "f64" => Some(Type::F64),
+                        "bool" => Some(Type::Bool),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        None
+    }
+
     /// Both arms of an inline conditional are string literals/f-strings.
     fn both_branches_are_strings(n: &AstNode) -> bool {
         let strish = |x: &AstNode| {

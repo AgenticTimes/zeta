@@ -701,6 +701,7 @@ static int zt_ptr_is_gc_object(int64_t p) {
 }
 int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
     int64_t n = zt_vec_len(vec);
+    if (getenv("ZT_DEBUG_CONTAINS")) fprintf(stderr, "CONTAINS vec=%p n=%lld x=%p str=%lld\n", (void*)vec, (long long)n, (void*)x, (long long)elem_is_str);
     for (int64_t i = 0; i < n; i++) {
         int64_t v = ((int64_t*)vec)[i];
         if (v == x && v != 0) return 1;
