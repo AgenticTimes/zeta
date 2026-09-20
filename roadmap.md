@@ -6403,3 +6403,15 @@ MIR 显示 `py_builtin_set` 结果仍是 `DynamicArray(I64)`（细化没落到�
 
 **遗留**：项目内 `_is_likely_index("000300.XSHG")` 仍为 0（隔离用例已修）；
 崩点 `_is_likely_index + 52`（`EXC_BAD_ACCESS at 0x0`）待下一批单测该函数。
+
+### 批次一百八十一（2026-09-19）：元组前缀 `startswith` 下沉到运行期助手
+
+MIR 里「多个单前缀调用 + `||`」在隔离用例正确、项目里仍返回 0 ⇒ 改为整体下沉：
+`py_str_prefix_any(s, vec, is_end)` 一次调用完成任一前缀匹配。
+
+**项目铁证**：`_is_likely_index("000300.XSHG")` → 1 ✓、`("sh.510300")` → 0 ✓、
+`("399001.XSHE")` → 1 ✓（此前恒 0 ⇒ 指数被当普通 ETF；`_is_likely_index + 52` 的
+`EXC_BAD_ACCESS at 0x0` 一并消失）。
+
+**运行状态**：**已无崩溃**，但 `fetch_stocks` 的源回退循环不收敛（119 → 238 → …，>900s）。
+下一批：`to_fetch`/`fetched_codes` 为何不缩减 + `区间 1969-08-04 ~ `。
