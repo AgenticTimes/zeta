@@ -404,6 +404,31 @@ pub fn handle_op(op: &str, left: &str, right: &str) -> Option<(&'static str, &'s
         return Some(("py_os_path_join", "path"));
     }
     let is_dt = |t: &str| t == "PyDate" || t == "PyDelta";
+    // ISO-date STRING vs Timestamp scalar (covers_range compares the string
+    // trade_date column against `pd.Timestamp ± Timedelta`): parse the string
+    // side at runtime and reuse the date comparison. With str on the RIGHT the
+    // relation flips.
+    match (left, right) {
+        ("str", "PyDate") => {
+            return match op {
+                "<" => Some(("py_dt_str_lt", "bool")),
+                "<=" => Some(("py_dt_str_le", "bool")),
+                ">" => Some(("py_dt_str_gt", "bool")),
+                ">=" => Some(("py_dt_str_ge", "bool")),
+                _ => None,
+            }
+        }
+        ("PyDate", "str") => {
+            return match op {
+                "<" => Some(("py_dt_str_gt", "bool")),
+                "<=" => Some(("py_dt_str_ge", "bool")),
+                ">" => Some(("py_dt_str_lt", "bool")),
+                ">=" => Some(("py_dt_str_le", "bool")),
+                _ => None,
+            }
+        }
+        _ => {}
+    }
     if !is_dt(left) || !is_dt(right) {
         return None;
     }
@@ -450,6 +475,26 @@ pub fn handle_tag(t: &str) -> Option<&'static str> {
             if f.name == t {
                 if let Some(h) = &f.handle {
                     return Some(h.as_str());
+                }
+            }
+        }
+    }
+    // MODULE-QUALIFIED spelling (`-> pd.Timestamp`, `def f(x: pd.Timedelta)`):
+    // the registry keys by the bare class name, so `handle_tag("pd.Timestamp")`
+    // missed, the return stayed `Named("pd.Timestamp")`, and the vec-cmp
+    // PyDate arm / handle_op / W-table all fell through (measured: the
+    // `trade_date >= eff_start` mask in fetch_stocks came out all-zero).
+    // RESTRICTED to the date tags: a blanket tail-match also re-typed
+    // `-> pd.DataFrame | None` etc. at every caller in one step, which the
+    // not-yet-complete DataFrame shim could not carry (SIGBUS measured in
+    // `_load_cache`).
+    if let Some((_, tail)) = t.rsplit_once('.') {
+        for m in &registry().modules {
+            for f in &m.members {
+                if f.name == tail {
+                    if matches!(f.handle.as_deref(), Some("PyDate") | Some("PyDelta")) {
+                        return f.handle.as_deref();
+                    }
                 }
             }
         }

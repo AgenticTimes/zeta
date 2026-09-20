@@ -8193,3 +8193,61 @@ rqdatac/akshare/yfinance/pyarrow/backtrader/nautilus_trader 均 MISSING，dotenv
 **下一步**：把 harness 扩到 `run_backtest("2024-01-02","2024-02-29",1000000.0,
 engine="local")`，对照验收指标（final_value 994575.84 / return -0.5424 /
 trading_days 37）。
+
+## 批次 289 —— fetch_stocks 缓存命中路径全线打通（mdf_len 408）：AnnAssign 定型 + and/or 短路 + 掩码/日期护栏 + PyDate/Path 运行时补齐
+
+### 起点（handoff §4 接手点）
+fetch_stocks 的缓存门（market_data_fetcher.py:552-578）`cached is not None and len(cached) > 0` /
+`partial is not None and len(partial) > 0` 恒假 ⇒ 每只票都判「无缓存」，推进到 baostock 取数即崩。
+本批节点：strict 模式 drv 打出 `mdf_none 0 / mdf_len 408`（3 票 × 136 行），三只票全部走缓存。
+
+### 修复清单
+1. **AnnAssign 注解定型**：parser（stmt.rs parse_assign）此前把 `partial: pd.DataFrame | None = None`
+   的注解直接丢弃 ⇒ 槽位停在 I64，且重绑定不刷新类型，`len(partial)` 永远分派 `array_len`
+   （对 DataFrame 句柄读 vec 头 = 0 行）。现在 class 形注解包成 `TypeAnnotatedPattern`，
+   gen.rs Assign 分支在槽位未定型（None/I64/PyDynamic）时经 `annotation_named_ty` 采用
+   （要求 `Class::` 前缀确实在 func_ret_types 注册）。
+2. **`and`/`or` 短路**：批次 152 的 eager 取值改为嵌套 If + stmt-buffer 延迟降级——
+   `df is not None and len(df) > 0` 不再对 None 句柄跑 `len`（drvE/drvF SIGBUS 根因）。
+3. **取值定型护栏**：短路 dest 类型沿用「只认具体类型」规则（PyDynamic/None/I64/Bool 非具体），
+   否则 `cfg = m or {}` 被未定型形参毒化 ⇒ `cfg.get` 退化裸符号 `_get`（t267 回归红，已修绿）。
+4. **浮点条件值**：and/or 两侧 int/float 混排时条件值是 double，codegen If/While 无条件
+   `.into_int_value()` ⇒ codegen.rs:4625 panic，语料 wufu_bt/v1/v2 三文件解析塌（rc=101）。
+   新增 `cond_i1_from`：float 用 `fcmp ONE v, 0.0`（NaN 为真，符合 Python）。
+5. **容器条件真值**：`if all_data:` 对空 list 恒真 ⇒ `pd.concat([])` 读 frames[0] 越界。
+   DynamicArray/map 条件的分支走 runtime `py_not`（空 vec/map/str 为假）。
+6. **逐元素 vec 掩码**：`(col >= x) & (col <= y)` 此前对两个句柄做标量 LLVM `and`
+   （垃圾指针过了 py_is_vec、进 loc/sum 才崩）⇒ 分派 `py_vec_and`/`py_vec_or`。
+7. **str 列 vs Timestamp 标量**：trade_date 列是 "YYYY-MM-DD" 字符串，与 PyDate 句柄比较时
+   数值变体把指针当数 ⇒ 掩码全 0、partial 恒空、concat 崩。补 `py_dt_str_lt/le/gt/ge`
+   （句柄 strftime 后 strcmp；ISO 日期字典序=时间序）；`handle_tag` 识别模块限定
+   `pd.Timestamp`/`pd.Timedelta`（限 date 类——全量尾匹配会一步把所有 `-> pd.DataFrame`
+   调用点改型，DataFrame shim 未齐，实测 `_load_cache` SIGBUS）。
+8. **pd.Timestamp 幂等**：入参已是 PyDate 时直接取句柄（此前 py_dt_from_str 在
+   [days][secs] 单元上当字符串解析 ⇒ 1969-… 垃圾 warmup 日期）。
+9. **闭包自由变量**：collect_free_vars 补 Tuple/DictLit/FString/While/AssignOp 等递归
+   （`key=lambda s: (s != "tushare", -score(bs))` 此前捕获集为空 ⇒ 闭包读未初始化槽，
+   str_trim SIGSEGV）；Let 绑定名正确进入 bound。
+10. **void 声明 shadowing**：builtin 表无体 void 声明（如 `flush`）与用户 `def` 重名时，
+    定义复用 void 签名、函数体 `ret i64 0` 过不了 LLVM 校验 ⇒ 编译中止。
+    `void_decl_shadow` 检测后按 arity 改名；空函数 stub 跟随签名（void→ret void、f64→0.0）。
+11. **运行时补齐**（tokio_runtime_stub.c/registry）：`py_dt_now_1`（Timestamp.now()）、
+    `PyDate__astimezone`（identity）、`isoformat`（%Y-%m-%d[T%H:%M:%S] 子集）、
+    `py_file_open_3`（encoding 忽略）、`threading.main_thread`。
+
+### 验证
+- 三基线：官方 **194/194**；python_style **277/2**（仅存量红 t231/t233）；语料 **38/38=100%**
+  （口径：`_zeta_local_drv.py` 移出 strategies/code 后统计）。
+- 新增 `tests/python_style/t289_and_or_shortcircuit.z`（PASS：7/5/0/7/BOOM/9；BOOM 恰打印一次，
+  证明 `7 or boom(1)`、`0 and boom(2)` 的右侧未求值）。
+- strict 模式缓存门探针：`mdf_none 0` / `mdf_len 408`，run_rc=0，无 "NOT implemented"。
+- handoff §9 自检 harness 全对：universe 119 sz.159985 sh.512070 / cached 892 9 2022-05-05 2025-12-31 /
+  clean 892 9 892。
+
+### 已知残留（记账，不阻塞）
+- 短路 `or`/`and` 左侧真值按句柄 `!= 0` 判：**空容器** `{} or d` 会取 `{}`（与 CPython 不一致；
+  HEAD 的 eager select 同缺口，语料无触发点）。cond 类型是 Bool，容器 py_not 路径未覆盖到短路。
+- 官方基线以 run_all.sh 实测 194/194 为准（批次 288 条目记的 195 与 roadmap:54 快照口径不一致）。
+
+**下一步**：harness 扩到 `run_backtest("2024-01-02","2024-02-29",1000000.0, engine="local")`，
+对照验收指标（final_value 994575.84 / return -0.5424 / trading_days 37）。

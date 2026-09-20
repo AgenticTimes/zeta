@@ -382,15 +382,34 @@ fn parse_assign(input: &str) -> IResult<&str, AstNode> {
             if is_ann_target {
                 let after_lhs = after_lhs.trim_start();
                 if after_lhs.starts_with(':') && !after_lhs.starts_with("::") {
-                    if let Ok((after_ty, _ty)) = ws(parse_type).parse(&after_lhs[1..]) {
+                    if let Ok((after_ty, ty)) = ws(parse_type).parse(&after_lhs[1..]) {
                         let after_ty_ws = after_ty.trim_start();
                         if let Some(rhs) = after_ty_ws.strip_prefix('=') {
                             if !rhs.starts_with('=') {
                                 let (after_val, val) = parse_full_expr(rhs)?;
-                                return Ok((
-                                    after_val,
-                                    AstNode::Assign(Box::new(lhs), Box::new(val)),
-                                ));
+                                // A class-shaped annotation (`pd.DataFrame | None`)
+                                // is the ONLY record of the slot's real type when
+                                // the initializer is `None` — keep it attached so
+                                // MIR lowering can refresh the slot type.
+                                let class_like = ty
+                                    .split('|')
+                                    .map(|p| p.trim())
+                                    .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("none"))
+                                    .any(|p| {
+                                        p.rsplit('.')
+                                            .next()
+                                            .map(|t| t.starts_with(char::is_uppercase))
+                                            .unwrap_or(false)
+                                    });
+                                let lhs = if class_like && matches!(&lhs, AstNode::Var(_)) {
+                                    Box::new(AstNode::TypeAnnotatedPattern {
+                                        pattern: Box::new(lhs),
+                                        ty,
+                                    })
+                                } else {
+                                    Box::new(lhs)
+                                };
+                                return Ok((after_val, AstNode::Assign(lhs, Box::new(val))));
                             }
                         }
                         // Annotation with no value: a declared-but-unbound name.

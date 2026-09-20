@@ -300,6 +300,19 @@ int64_t py_dt_lt(int64_t, int64_t);
 int64_t py_dt_le(int64_t, int64_t);
 
 int64_t py_dt_from_str(int64_t s) {
+    // `pd.Timestamp(x)` where x is ALREADY a PyDate: callees with union-typed
+    // params (`covers_range(start: str | pd.Timestamp)`) lose the tag at MIR,
+    // so this runs on a handle too (measured: re-parsing the PyDate cell's
+    // bytes produced the 1969-… garbage dates in `_to_ts`/covers_range).
+    // Discriminator: a date-only ISO STRING is exactly "%Y-%m-%d" or longer
+    // (10 bytes); a PyDate cell's first 8 bytes are one int64 days, and no
+    // real-world epoch (≈ year 2423, days<2^31) puts an ASCII byte in the top
+    // 4 — so bytes 4..7 are 0x00 (or 0xFF for negative/pre-1970) there.
+    // Verified: str[4] == 0 iff s is NOT a valid ISO date string.
+    if (s) {
+        const unsigned char* b = (const unsigned char*)s;
+        if (b[4] == 0 || b[4] == 0xFF) return s;  // already a date handle
+    }
     static char* fmt = 0;
     if (!fmt) {
         fmt = (char*)GC_malloc(9);
@@ -318,6 +331,16 @@ int64_t py_dt_from_str_3(int64_t s, int64_t unit, int64_t tz) {
     (void)tz;
     return py_dt_from_str(s);
 }
+
+// str vs date SCALAR compare — `covers_range` compares the string trade_date
+// column (the parquet reader formats dates "YYYY-MM-DD") against Timestamp
+// scalars. Parse the string side and reuse the date comparisons.
+int64_t py_dt_gt(int64_t, int64_t);
+int64_t py_dt_ge(int64_t, int64_t);
+int64_t py_dt_str_lt(int64_t s, int64_t d) { return py_dt_lt(py_dt_from_str(s), d); }
+int64_t py_dt_str_le(int64_t s, int64_t d) { return py_dt_le(py_dt_from_str(s), d); }
+int64_t py_dt_str_gt(int64_t s, int64_t d) { return py_dt_gt(py_dt_from_str(s), d); }
+int64_t py_dt_str_ge(int64_t s, int64_t d) { return py_dt_ge(py_dt_from_str(s), d); }
 
 
 // `np.searchsorted(sorted_dates, value, side="left"|"right")` over a Vec of
@@ -1075,6 +1098,25 @@ int64_t py_vec_or(int64_t a, int64_t b) {
         int ta = i < na && zt_map_or_vec_truthy(((int64_t*)a)[i]);
         int tb = i < nb && zt_map_or_vec_truthy(((int64_t*)b)[i]);
         out = vec_push(out, (ta || tb) ? 1 : 0);
+    }
+    return out;
+}
+
+// `(col >= x) & (col <= y)` — element-wise AND of two 0/1 masks. Without this
+// the MIR fell through to the scalar `Call{func:"&"}` path and LLVM emitted a
+// bitwise `and` of the two VECTOR HANDLES — a garbage pointer that passed
+// `py_is_vec` and crashed later (measured: `fetch_stocks`'s cache-window
+// filter, SIGSEGV inside `sum(mask)`/`DataFrame::loc`).
+int64_t py_vec_and(int64_t a, int64_t b) {
+    if (!a) return b;
+    if (!b) return a;
+    int64_t na = zt_vec_len(a), nb = zt_vec_len(b);
+    int64_t n = na > nb ? na : nb;
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        int ta = i < na && zt_map_or_vec_truthy(((int64_t*)a)[i]);
+        int tb = i < nb && zt_map_or_vec_truthy(((int64_t*)b)[i]);
+        out = vec_push(out, (ta && tb) ? 1 : 0);
     }
     return out;
 }

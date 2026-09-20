@@ -18,6 +18,7 @@ F threading Thread py_threading_thread_new args=i64 ret=i64 handle=PyThread
 F threading Lock py_threading_lock_new args= ret=i64 handle=PyLock
 F threading RLock py_threading_lock_new args= ret=i64 handle=PyLock
 F threading current_thread py_threading_current_thread args= ret=i64
+F threading main_thread py_threading_main_thread args= ret=i64
 F threading get_ident py_threading_get_ident args= ret=i64
 F threading active_count py_threading_active_count args= ret=i64
 W PyThread start py_threading_thread_start args=1

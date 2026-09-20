@@ -1339,6 +1339,16 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
         mangled
     }
+    /// A pre-declared, body-less VOID symbol (the module's builtin table has
+    /// several, e.g. `flush`) can never match a user `def` — every Python
+    /// function is emitted with an i64/f64 return. Without this check the
+    /// definition reused the builtin's void signature and the body's
+    /// `ret i64 0` failed LLVM verification ("return instr that returns
+    /// non-void in Function of void return type"), aborting the compile.
+    fn void_decl_shadow(f: FunctionValue<'ctx>) -> bool {
+        f.count_basic_blocks() == 0 && f.get_type().get_return_type().is_none()
+    }
+
     fn infer_fn_return_type(&self, mir: &Mir) -> inkwell::types::BasicTypeEnum<'ctx> {
         for stmt in &mir.stmts {
             if let MirStmt::Return { val } = stmt {
@@ -1400,7 +1410,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     && self
                         .module
                         .get_function(&fn_name)
-                        .map(|f| f.count_params() != mir.param_indices.len() as u32)
+                        .map(|f| {
+                            f.count_params() != mir.param_indices.len() as u32
+                                || Self::void_decl_shadow(f)
+                        })
                         .unwrap_or(false);
                 let actual_name = if is_overloaded {
                     format!("{}_{}", fn_name, mir.param_indices.len())
@@ -1459,7 +1472,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 } else if self
                     .module
                     .get_function(&fn_name)
-                    .map(|f| f.count_params() != param_count)
+                    .map(|f| {
+                        f.count_params() != param_count || Self::void_decl_shadow(f)
+                    })
                     .unwrap_or(false)
                 {
                     format!("{}_{}", fn_name, param_count)
@@ -1485,7 +1500,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
         } else if self
             .module
             .get_function(&fn_name)
-            .map(|f| f.count_params() != param_count)
+            .map(|f| f.count_params() != param_count || Self::void_decl_shadow(f))
             .unwrap_or(false)
         {
             format!("{}_{}", fn_name, param_count)
@@ -1508,12 +1523,24 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 fn_val.set_linkage(Linkage::External);
                 return;
             }
-            // User-defined empty function: emit ret i64 0 stub.
+            // User-defined empty function: emit a zero-return stub that
+            // matches the (possibly pre-declared) signature — a void one
+            // must get a bare `ret void`.
             let entry = self.context.append_basic_block(fn_val, "entry");
             self.builder.position_at_end(entry);
-            self.builder
-                .build_return(Some(&self.i64_type.const_zero()))
-                .unwrap();
+            match fn_val.get_type().get_return_type() {
+                None => {
+                    let _ = self.builder.build_return(None);
+                }
+                Some(inkwell::types::BasicTypeEnum::FloatType(ft)) => {
+                    let _ = self.builder.build_return(Some(&ft.const_zero()));
+                }
+                _ => {
+                    let _ = self
+                        .builder
+                        .build_return(Some(&self.i64_type.const_zero()));
+                }
+            }
             return;
         }
 
@@ -4595,16 +4622,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
             } => {
                 for (i, s) in then.iter().enumerate() {}
                 for (i, s) in else_.iter().enumerate() {}
-                let cond_i64 = self.gen_expr_safe(cond, exprs).into_int_value();
-                let cond_i1 = self
-                    .builder
-                    .build_int_compare(
-                        IntPredicate::NE,
-                        cond_i64,
-                        self.i64_type.const_zero(),
-                        "cond_i1",
-                    )
-                    .unwrap();
+                let cond_i1 = {
+                    let cv = self.gen_expr_safe(cond, exprs);
+                    self.cond_i1_from(*cond, cv, "cond_i1")
+                };
                 let parent_fn = self
                     .builder
                     .get_insert_block()
@@ -4735,16 +4756,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 for s in pre_cond {
                     self.gen_stmt(s, exprs);
                 }
-                let cond_i64 = self.gen_expr_safe(cond, exprs).into_int_value();
-                let cond_i1 = self
-                    .builder
-                    .build_int_compare(
-                        IntPredicate::NE,
-                        cond_i64,
-                        self.i64_type.const_zero(),
-                        "while.cond",
-                    )
-                    .unwrap();
+                let cond_i1 = {
+                    let cv = self.gen_expr_safe(cond, exprs);
+                    self.cond_i1_from(*cond, cv, "while.cond")
+                };
                 self.builder
                     .build_conditional_branch(cond_i1, loop_body_bb, normal_exit_bb)
                     .unwrap();
@@ -5317,6 +5332,92 @@ impl<'ctx> LLVMCodegen<'ctx> {
             }
             _ => {}
         }
+    }
+
+    /// Branch-condition i1 from an arbitrary-condition value. Ints keep the
+    /// existing semantics (container truthiness via `py_not`, else `!= 0`);
+    /// floats use Python truthiness `fcmp ONE (v, 0.0)` — NaN is truthy.
+    /// An `and`/`or` chain whose operands mix int and float yields a double
+    /// condition value, so the raw `.into_int_value()` used to panic here
+    /// (wufu_bt/v1/v2 regression, batch 289 short-circuit lowering).
+    fn cond_i1_from(
+        &mut self,
+        cond: u32,
+        val: BasicValueEnum<'ctx>,
+        name: &str,
+    ) -> inkwell::values::IntValue<'ctx> {
+        if let BasicValueEnum::FloatValue(fv) = val {
+            return self
+                .builder
+                .build_float_compare(
+                    inkwell::FloatPredicate::ONE,
+                    fv,
+                    self.f64_type.const_zero(),
+                    name,
+                )
+                .unwrap();
+        }
+        let cond_i64 = val.into_int_value();
+        match self.container_cond_i1(cond, cond_i64, name) {
+            Some(i1) => i1,
+            None => self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    cond_i64,
+                    self.i64_type.const_zero(),
+                    name,
+                )
+                .unwrap(),
+        }
+    }
+
+    /// Python truthiness for container-typed branch conditions. Under the
+    /// i64 representation a list/map handle is always non-zero, so
+    /// `if all_data:` took the then-branch on an EMPTY list (measured:
+    /// `pd.concat([])` reached `frames[0]` out-of-range and crashed).
+    /// For a `DynamicArray` / `map`-typed condition, ask the runtime
+    /// `py_not` helper (which knows empty vec/map/string) instead.
+    /// Returns None when the plain `!= 0` check is correct.
+    fn container_cond_i1(
+        &mut self,
+        cond: u32,
+        cond_i64: inkwell::values::IntValue<'ctx>,
+        name: &str,
+    ) -> Option<inkwell::values::IntValue<'ctx>> {
+        use crate::middle::types::Type;
+        let is_container = match self.current_type_map.as_ref().and_then(|tm| tm.get(&cond)) {
+            Some(Type::DynamicArray(_)) => true,
+            Some(Type::Named(n, _)) => n == "map",
+            _ => false,
+        };
+        if !is_container {
+            return None;
+        }
+        let py_not = match self.module.get_function("py_not") {
+            Some(f) if f.get_type().get_return_type().is_some() => f,
+            Some(_) => return None,
+            None => self.module.add_function(
+                "py_not",
+                self.i64_type.fn_type(&[self.i64_type.into()], false),
+                Some(Linkage::External),
+            ),
+        };
+        let call = self
+            .builder
+            .build_call(py_not, &[cond_i64.into()], "py_notv")
+            .unwrap();
+        let notv = Self::call_site_to_basic_value(call)?.into_int_value();
+        Some(
+            self.builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    notv,
+                    self.i64_type.const_zero(),
+                    name,
+                )
+                .unwrap(),
+        )
     }
 
     fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {

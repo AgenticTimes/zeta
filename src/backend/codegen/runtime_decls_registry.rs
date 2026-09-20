@@ -42,6 +42,10 @@ pub fn declare_registry_runtime_fns<'ctx>(
     module.add_function("py_dt_searchsorted", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("py_dt_strftime", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("py_dt_strptime", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+    module.add_function("py_dt_str_lt", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+    module.add_function("py_dt_str_le", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+    module.add_function("py_dt_str_gt", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+    module.add_function("py_dt_str_ge", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("py_dt_timedelta", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
     module.add_function("py_dt_year", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
     module.add_function("py_event_clear", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));

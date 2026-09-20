@@ -571,6 +571,16 @@ int64_t py_threading_get_ident(void) { return (int64_t)pthread_self(); }
 int64_t py_threading_current_thread(void) { return (int64_t)pthread_self(); }
 int64_t py_threading_active_count(void) { return 1; }
 
+// `threading.main_thread()` — the constructor runs on the thread that loads
+// the image (the main thread), so the captured identity is exact even if the
+// first call happens from a worker. `current_thread() is main_thread()`
+// compares the same pthread_self representation.
+static int64_t zt_main_thread_self;
+__attribute__((constructor)) static void zt_capture_main_thread(void) {
+    zt_main_thread_self = (int64_t)pthread_self();
+}
+int64_t py_threading_main_thread(void) { return zt_main_thread_self; }
+
 // ---- threading.Lock (real mutex) ----
 int64_t py_threading_lock_new(void) {
     pthread_mutex_t* m = (pthread_mutex_t*)GC_malloc(sizeof(pthread_mutex_t));
@@ -1173,6 +1183,12 @@ int64_t py_dt_now(void) {
         zt_days_from_civil(tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday),
         tmv.tm_hour * 3600 + tmv.tm_min * 60 + tmv.tm_sec);
 }
+/* `pd.Timestamp.now()` lowers with the class handle as arg 0 → arity-suffixed
+ * symbol `py_dt_now_1`; the receiver is meaningless here. */
+int64_t py_dt_now_1(int64_t receiver) {
+    (void)receiver;
+    return py_dt_now();
+}
 int64_t py_dt_year(int64_t h) {
     int64_t y, m, d;
     zt_civil_from_days(((int64_t*)h)[0], &y, &m, &d);
@@ -1209,6 +1225,26 @@ int64_t py_dt_replace(int64_t h, int64_t y, int64_t m, int64_t d) {
     return (int64_t)zt_dt_alloc(zt_days_from_civil(y, m, d), ((int64_t*)h)[1]);
 }
 int64_t py_dt_identity(int64_t h) { return h; }
+/* `datetime.now(tz).astimezone()` — only consumer is data_ops_log._now_iso()
+ * (a log-line timestamp); local-naive identity is enough. */
+int64_t PyDate__astimezone(int64_t h) { return h; }
+/* `dt.isoformat(timespec=…)` — "YYYY-MM-DDTHH:MM:SS" once a time component
+ * exists, plain date otherwise (extra timespec arg is ignored). */
+int64_t isoformat(int64_t h) {
+    int64_t y, m, d;
+    zt_civil_from_days(((int64_t*)h)[0], &y, &m, &d);
+    int64_t secs = ((int64_t*)h)[1];
+    char buf[64];
+    if (secs != 0)
+        snprintf(buf, sizeof buf, "%04lld-%02lld-%02lldT%02lld:%02lld:%02lld",
+                 (long long)y, (long long)m, (long long)d,
+                 (long long)(secs / 3600), (long long)((secs / 60) % 60),
+                 (long long)(secs % 60));
+    else
+        snprintf(buf, sizeof buf, "%04lld-%02lld-%02lld",
+                 (long long)y, (long long)m, (long long)d);
+    return (int64_t)zt_strdup(buf);
+}
 int64_t py_dt_strftime(int64_t h, int64_t fmt) {
     int64_t y, m, d;
     zt_civil_from_days(((int64_t*)h)[0], &y, &m, &d);
@@ -3065,6 +3101,12 @@ int64_t py_file_open(int64_t path, int64_t mode) {
     h->fp = fp;
     h->closed = 0;
     return (int64_t)h;
+}
+/* `path.open("a", encoding="utf-8")` — kwargs coerce positionally, so the
+ * call site emits the arity-suffixed symbol; encoding is ignored. */
+int64_t py_file_open_3(int64_t path, int64_t mode, int64_t encoding) {
+    (void)encoding;
+    return py_file_open(path, mode);
 }
 static zt_file_t* zt_file(int64_t h) {
     if (!h) return NULL;

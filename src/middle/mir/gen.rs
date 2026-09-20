@@ -1202,6 +1202,22 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                     _ => t,
                                 }
                             });
+                            // `partial: pd.DataFrame | None = None` — the None
+                            // initializer types the slot I64, and later rebinds
+                            // do not refresh types, so `len(partial)` kept
+                            // dispatching `array_len` on the DataFrame object
+                            // (header read = 0 rows) and every fetch_stocks
+                            // cache gate failed. The annotation names the real
+                            // class; adopt it when the initializer is untyped.
+                            let untyped_init = matches!(
+                                refined,
+                                None | Some(Type::I64) | Some(Type::PyDynamic)
+                            );
+                            let refined = if untyped_init {
+                                self.annotation_named_ty(ty).or(refined)
+                            } else {
+                                refined
+                            };
                             self.type_map
                                 .insert(lhs_id, refined.unwrap_or(Type::I64));
                         }
@@ -1252,6 +1268,31 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 }
             }
             AstNode::Assign(lhs, rhs) => {
+                // PY-A: annotated assignment `partial: pd.DataFrame | None = None`
+                // — the parser keeps the class-shaped annotation attached. Lower
+                // the plain assignment first, then (when the slot is still
+                // untyped) adopt the annotated class: `= None` types the slot
+                // I64 and rebinds never refresh it, so `len(partial)` used to
+                // dispatch `array_len` on a DataFrame handle (header read = 0
+                // rows) and every fetch_stocks cache gate failed.
+                if let AstNode::TypeAnnotatedPattern { pattern: inner, ty } = &**lhs {
+                    if let AstNode::Var(name) = &**inner {
+                        let bare = AstNode::Assign(
+                            Box::new((**inner).clone()),
+                            Box::new((**rhs).clone()),
+                        );
+                        self.lower_ast(&bare);
+                        if let Some(&slot) = self.name_to_id.get(name.as_str()) {
+                            let cur = self.type_map.get(&slot).cloned();
+                            if matches!(cur, None | Some(Type::I64) | Some(Type::PyDynamic)) {
+                                if let Some(nt) = self.annotation_named_ty(ty) {
+                                    self.type_map.insert(slot, nt);
+                                }
+                            }
+                        }
+                        return;
+                    }
+                }
                 // PY-A: parallel assignment `a, b = x, y` (tuple unpacking with
                 // tuple rhs; call-return unpacking needs temps — later item)
                 if let (AstNode::Tuple(litems), AstNode::Tuple(ritems)) = (&**lhs, &**rhs) {
@@ -2732,6 +2773,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         None
     }
 
+    /// `pd.DataFrame | None` → `Type::Named("DataFrame")` when the tail class
+    /// actually has methods registered (a `Class::method` key exists). Only
+    /// uppercase class tokens qualify, so `str`/`int` annotations are ignored.
+    fn annotation_named_ty(&self, ty: &str) -> Option<Type> {
+        for part in ty.split('|') {
+            let p = part.trim();
+            if p.is_empty() || p.eq_ignore_ascii_case("none") {
+                continue;
+            }
+            let last = p.rsplit('.').next().unwrap_or(p);
+            if !last.starts_with(char::is_uppercase) {
+                continue;
+            }
+            let prefix = format!("{}::", last);
+            if self.func_ret_types.keys().any(|k| k.starts_with(&prefix)) {
+                return Some(Type::Named(last.to_string(), vec![]));
+            }
+        }
+        None
+    }
+
     /// Both arms of an inline conditional are string literals/f-strings.
     fn both_branches_are_strings(n: &AstNode) -> bool {
         let strish = |x: &AstNode| {
@@ -3167,6 +3229,75 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         };
                         return self.lower_expr(&rewritten);
                     }
+                }
+                // PY-A: `and`/`or` must SHORT-CIRCUIT. The old path lowered
+                // BOTH sides eagerly and let codegen `select` between the two
+                // values — so `df is not None and len(df) > 0` ran `len(df)`
+                // even when df was the None handle (crash measured in
+                // `MarketDataFetcher::fetch_stocks`, drvE/drvF SIGBUS). The
+                // value-select typing below is preserved: dest takes the whole
+                // result via a nested If whose branches splice the deferred
+                // lowering (same stmt-buffer swap the if-expression uses).
+                if matches!(op.as_str(), "&&" | "||") {
+                    let left_id = self.lower_expr(left);
+                    let dest = self.next_id();
+                    let zero_id = self.next_id_with_lit(0);
+                    let cond_id = self.next_id();
+                    self.exprs.insert(
+                        cond_id,
+                        MirExpr::BinaryOp {
+                            op: "!=".to_string(),
+                            left: left_id,
+                            right: zero_id,
+                        },
+                    );
+                    self.type_map.insert(cond_id, Type::Bool);
+
+                    let saved_stmts = std::mem::take(&mut self.stmts);
+                    let right_id = self.lower_expr(right);
+                    let mut right_stmts = std::mem::take(&mut self.stmts);
+                    self.stmts = saved_stmts;
+
+                    let left_then = vec![MirStmt::Assign { lhs: dest, rhs: left_id }];
+                    let right_then_assign = {
+                        right_stmts.push(MirStmt::Assign { lhs: dest, rhs: right_id });
+                        right_stmts
+                    };
+                    let (then_b, else_b) = if op == "&&" {
+                        // a and b: falsy a selects a; truthy a evaluates b.
+                        (right_then_assign, left_then)
+                    } else {
+                        (left_then, right_then_assign)
+                    };
+                    // Value semantics typing (batch 152, kept through the
+                    // short-circuit rewrite): only adopt a CONCRETE operand
+                    // type — an untyped param (PyDynamic/None/I64/Bool) must
+                    // not poison the dest, or `cfg = m or {}` would type cfg
+                    // PyDynamic and `cfg.get` would dispatch to `_get`.
+                    let lt = self.type_map.get(&left_id).cloned();
+                    let rt = self.type_map.get(&right_id).cloned();
+                    let concrete = |t: &Option<Type>| match t {
+                        Some(Type::I64) | Some(Type::PyDynamic) | Some(Type::Bool) | None => None,
+                        other => other.clone(),
+                    };
+                    let dest_ty = match (concrete(&lt), concrete(&rt)) {
+                        (Some(a), Some(b)) if a == b => a,
+                        (Some(a), _) => a,
+                        (_, Some(b)) => b,
+                        _ => match (lt, rt) {
+                            (Some(a), Some(b)) if a == b => a,
+                            _ => Type::I64,
+                        },
+                    };
+                    self.type_map.insert(dest, dest_ty);
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.stmts.push(MirStmt::If {
+                        cond: cond_id,
+                        then: then_b,
+                        else_: else_b,
+                        dest: Some(dest),
+                    });
+                    return dest;
                 }
                 let left_id = self.lower_expr(left);
                 let right_id = self.lower_expr(right);
@@ -3616,6 +3747,47 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         "==" => 4,
                         _ => 5,
                     };
+                    // `trade_date >= pd.Timestamp("2023-08-05")` — the column is
+                    // a vector of "YYYY-MM-DD" STRINGS (the parquet reader
+                    // formats INT64 dates that way) while the scalar is a PyDate
+                    // HANDLE. The numeric variants passed the raw pointer as
+                    // rhs (`strtod("2022-05-05")=2022 >= 4.3e9` → all-false
+                    // mask), so `partial` in `fetch_stocks` was always EMPTY,
+                    // nothing was ever appended to `all_data`, and the empty
+                    // list's pointer-truthiness then fed `concat([])` a NULL
+                    // first frame (SIGSEGV in `column_names`). Render the
+                    // handle as its date string and strcmp instead —
+                    // "YYYY-MM-DD" sorts chronologically.
+                    let num_is_dt = matches!(
+                        self.type_map.get(&num_id),
+                        Some(Type::Named(n, _)) if n == "PyDate"
+                    );
+                    if num_is_dt {
+                        let fmt_id = self.next_id();
+                        self.exprs
+                            .insert(fmt_id, MirExpr::StringLit("%Y-%m-%d".to_string()));
+                        self.type_map.insert(fmt_id, Type::Str);
+                        let ts_id = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_dt_strftime".to_string(),
+                            args: vec![num_id, fmt_id],
+                            dest: ts_id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(ts_id, MirExpr::Var(ts_id));
+                        self.type_map.insert(ts_id, Type::Str);
+                        let kid = self.next_id_with_lit(kind);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_vec_cmp_str".to_string(),
+                            args: vec![vec_id, ts_id, kid],
+                            dest,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(dest, MirExpr::Var(dest));
+                        self.type_map
+                            .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                        return dest;
+                    }
                     let func = if elem_is_str {
                         let kid = self.next_id_with_lit(kind);
                         let kid2 = self.next_id_with_lit(kind);
@@ -3640,6 +3812,28 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.stmts.push(MirStmt::Call {
                         func,
                         args: vec![vec_id, num_arg],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map
+                        .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                } else if matches!(op.as_str(), "&" | "|") && {
+                    let is_arr_mask = |t: Option<Type>| {
+                        matches!(t, Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)))
+                    };
+                    is_arr_mask(self.type_map.get(&left_id).cloned())
+                        || is_arr_mask(self.type_map.get(&right_id).cloned())
+                } {
+                    // `(col >= x) & (col <= y)` — element-wise mask AND/OR.
+                    // Falling through to the generic path emitted a scalar
+                    // LLVM `and` of the two vector HANDLES (garbage pointer
+                    // that passed `py_is_vec`, then SIGSEGV in `sum`/`loc`;
+                    // measured in `fetch_stocks`' cache-window filter).
+                    let func = if op == "&" { "py_vec_and" } else { "py_vec_or" };
+                    self.stmts.push(MirStmt::Call {
+                        func: func.to_string(),
+                        args: vec![left_id, right_id],
                         dest,
                         type_args: vec![],
                     });
@@ -5171,6 +5365,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     let mut lowered = Vec::with_capacity(args.len());
                     for a in args {
                         lowered.push(self.lower_expr(a));
+                    }
+                    // `pd.Timestamp(x)` where x is ALREADY a PyDate: the symbol
+                    // parses a STRING pointer; handed a PyDate cell ([days][secs])
+                    // it produced garbage dates (the 1969-… warmup, `_to_ts` →
+                    // covers_range). Type it as identity instead.
+                    if symbol == "py_dt_from_str"
+                        && lowered.len() == 1
+                        && matches!(
+                            self.type_map.get(&lowered[0]),
+                            Some(Type::Named(n, _)) if n == "PyDate"
+                        )
+                    {
+                        let src = lowered[0];
+                        self.exprs.insert(id, MirExpr::Var(src));
+                        self.type_map
+                            .insert(id, Type::Named("PyDate".to_string(), vec![]));
+                        return id;
                     }
                     self.stmts.push(MirStmt::Call {
                         func: symbol.to_string(),
@@ -12099,8 +12310,11 @@ call, no NULL-handle dereference).",
             }
             AstNode::Let { pattern, expr, .. } => {
                 Self::collect_free_vars(expr, bound, free);
-                // let 绑定的名字成为局部，不改变外层 free 集（近似）
-                let _ = pattern;
+                // Let-bound names are local from here on; the old code left a
+                // duplicate unreachable arm and never inserted them, so a body
+                // that `let`s a name shadowing an outer binding captured the
+                // OUTER one through the env.
+                Self::collect_bound_names(pattern, bound);
             }
             AstNode::Return(e) => Self::collect_free_vars(e, bound, free),
             AstNode::Block { body } => {
@@ -12109,12 +12323,125 @@ call, no NULL-handle dereference).",
                 }
             }
             AstNode::ExprStmt { expr } => Self::collect_free_vars(expr, bound, free),
-            AstNode::Let { pattern, expr, .. } => {
-                Self::collect_free_vars(expr, bound, free);
-                if let AstNode::Var(n) = &**pattern {
-                    // bound inside this scope after the let
-                    bound.insert(n.clone());
+            // `key=lambda s: (s != "tushare", -score(bs))` — `bs` sits inside a
+            // Tuple, which the old matcher never descended into: the capture
+            // list came out EMPTY, no env_set/env_get was emitted, and the
+            // closure read an uninitialized stack slot (str_trim SIGSEGV on a
+            // dynamic string; a stale literal pointer "worked" by luck).
+            AstNode::Tuple(items) | AstNode::ArrayLit(items) => {
+                for it in items {
+                    Self::collect_free_vars(it, bound, free);
                 }
+            }
+            AstNode::FString(parts) => {
+                for p in parts {
+                    Self::collect_free_vars(p, bound, free);
+                }
+            }
+            AstNode::DictLit { entries } => {
+                for (k, v) in entries {
+                    Self::collect_free_vars(k, bound, free);
+                    Self::collect_free_vars(v, bound, free);
+                }
+            }
+            AstNode::DynamicArrayLit { elements, .. } => {
+                for e in elements {
+                    Self::collect_free_vars(e, bound, free);
+                }
+            }
+            AstNode::ArrayRepeat { value, size } => {
+                Self::collect_free_vars(value, bound, free);
+                Self::collect_free_vars(size, bound, free);
+            }
+            AstNode::PathCall { args, .. } | AstNode::Spawn { args, .. } => {
+                for a in args {
+                    Self::collect_free_vars(a, bound, free);
+                }
+            }
+            AstNode::AssignOp { target, value, .. } => {
+                Self::collect_free_vars(target, bound, free);
+                Self::collect_free_vars(value, bound, free);
+            }
+            AstNode::Cast { expr, .. }
+            | AstNode::Await(expr)
+            | AstNode::TimingOwned { inner: expr, .. } => {
+                Self::collect_free_vars(expr, bound, free);
+            }
+            AstNode::TryProp { expr } => Self::collect_free_vars(expr, bound, free),
+            AstNode::StructLit { fields, .. } => {
+                for (_, v) in fields {
+                    Self::collect_free_vars(v, bound, free);
+                }
+            }
+            AstNode::Break(v) | AstNode::Continue(v) => {
+                if let Some(v) = v {
+                    Self::collect_free_vars(v, bound, free);
+                }
+            }
+            AstNode::While { cond, body, else_body } => {
+                Self::collect_free_vars(cond, bound, free);
+                for st in body {
+                    Self::collect_free_vars(st, bound, free);
+                }
+                for st in else_body {
+                    Self::collect_free_vars(st, bound, free);
+                }
+            }
+            AstNode::For { pattern, expr, body, else_body } => {
+                Self::collect_free_vars(expr, bound, free);
+                for st in body {
+                    Self::collect_free_vars(st, bound, free);
+                }
+                for st in else_body {
+                    Self::collect_free_vars(st, bound, free);
+                }
+                Self::collect_bound_names(pattern, bound);
+            }
+            AstNode::Loop { body } | AstNode::Unsafe { body } => {
+                for st in body {
+                    Self::collect_free_vars(st, bound, free);
+                }
+            }
+            AstNode::Match { scrutinee, arms } => {
+                Self::collect_free_vars(scrutinee, bound, free);
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        Self::collect_free_vars(g, bound, free);
+                    }
+                    Self::collect_free_vars(&arm.body, bound, free);
+                }
+            }
+            AstNode::Closure { params, body, .. } => {
+                // A nested lambda's params are bound for its body; the rest of
+                // its free names belong to THIS closure's env.
+                let saved: Vec<String> = params.clone();
+                for p in &saved {
+                    bound.insert(p.clone());
+                }
+                Self::collect_free_vars(body, bound, free);
+                for p in &saved {
+                    bound.remove(p);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Insert every `Var` name reachable in a pattern (Var / Tuple /
+    /// BindPattern / TypeAnnotatedPattern) into `bound`.
+    fn collect_bound_names(pat: &AstNode, bound: &mut std::collections::HashSet<String>) {
+        match pat {
+            AstNode::Var(n) => {
+                bound.insert(n.clone());
+            }
+            AstNode::Tuple(items) => {
+                for it in items {
+                    Self::collect_bound_names(it, bound);
+                }
+            }
+            AstNode::BindPattern { pattern, .. } => Self::collect_bound_names(pattern, bound),
+            AstNode::TypeAnnotatedPattern { pattern, .. } => {
+                Self::collect_bound_names(pattern, bound)
             }
             _ => {}
         }
