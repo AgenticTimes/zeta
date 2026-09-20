@@ -154,6 +154,15 @@ int64_t __attribute__((weak)) query_history_k_data_plus(void) { return zt_unavai
 int64_t __attribute__((weak)) query_hs300_stocks(void) { return zt_unavailable_soft("_query_hs300_stocks"); }
 int64_t __attribute__((weak)) query_zz500_stocks(void) { return zt_unavailable_soft("_query_zz500_stocks"); }
 int64_t __attribute__((weak)) read_table(void) { return zt_unavailable_soft("_read_table"); }
+// Arity-mangled variant: a BOUND method call passes the receiver, so
+// `pq.read_table(path)` compiles to `read_table_2(recv, path)`. Without this
+// entry the linker picked a zero-returning stand-in and the caller walked into
+// `t.schema.metadata` with t == 0 (SEGV at load_metadata + 184 instead of the
+// project's try/except taking the fallback).
+int64_t __attribute__((weak)) read_table_2(int64_t a, int64_t b) {
+    (void)a; (void)b;
+    return zt_unavailable_soft("_read_table");
+}
 int64_t __attribute__((weak)) replace_schema_metadata(void) { return zt_unavailable_soft("_replace_schema_metadata"); }
 int64_t __attribute__((weak)) set_slippage_perc(void) { return zt_unavailable("_set_slippage_perc"); }
 int64_t __attribute__((weak)) setcash(void) { return zt_unavailable("_setcash"); }

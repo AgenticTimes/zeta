@@ -1237,7 +1237,16 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
         type_args: vec![],
         structural: false,
     };
+    // ALWAYS pop the try frame:
+    //  - in the HANDLER branch it must happen FIRST (the longjmp already restored
+    //    the stack; the frame's job is done), otherwise `except ...: return {}`
+    //    leaked the frame — `ParquetCache.load_metadata` did exactly that and the
+    //    NEXT `raise` longjmped into a stale frame, so the caller continued into
+    //    `t.schema.metadata` with t == 0 (SEGV at load_metadata + 184).
+    //  - at the end of the body branch (fall-through).
     let mut then_branch = body;
+    // Only when the body FALLS THROUGH: appending a call after a `raise`/`return`
+    // puts a terminator in the middle of a basic block (the backend rejects it).
     if branch_falls_through(&then_branch) {
         then_branch.push(mk_call("zeta_try_end"));
     }
@@ -1254,10 +1263,12 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
             }),
         ));
     }
+    // Pop the frame AFTER capturing the error value (`zeta_last_error()` reads the
+    // top frame) and BEFORE the handler body — otherwise `except ... as e` saw the
+    // OUTER frame's code. Keeping it unpopped leaked the frame, so a later `raise`
+    // longjmped into a dead frame (SEGV in load_metadata).
+    else_branch.push(mk_call("zeta_try_end"));
     else_branch.extend(handler);
-    if branch_falls_through(&else_branch) {
-        else_branch.push(mk_call("zeta_try_end"));
-    }
     out.push(AstNode::If {
         cond: Box::new(AstNode::BinaryOp {
             op: "==".to_string(),
