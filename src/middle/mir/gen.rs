@@ -4675,6 +4675,19 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 "str" => Type::Str,
                                 "vec" => Type::DynamicArray(Box::new(Type::I64)),
                                 "vecstr" => Type::DynamicArray(Box::new(Type::Str)),
+                                // `pd.read_parquet(...)`: the runtime reader
+                                // returns the column map (name -> vector of value
+                                // strings). Without this the result was I64, so
+                                // `df["trade_date"]` was a MAP subscript on an
+                                // integer and `"col" in df` reported the
+                                // unsupported-container warning.
+                                "map" => Type::Named(
+                                    "map".to_string(),
+                                    vec![
+                                        Type::Str,
+                                        Type::DynamicArray(Box::new(Type::Str)),
+                                    ],
+                                ),
                                 "vecmatch" => Type::DynamicArray(Box::new(Type::Named(
                                     "PyMatch".to_string(),
                                     vec![],
