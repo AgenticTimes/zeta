@@ -7166,3 +7166,16 @@ print 后得到精确断点：
 （栈里已经没有清洗函数）⇒ 数据层首次完整通过一只标的的清洗。
 
 度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+### 批次 242：两处新发现（清洗路径分叉 + try 返回值）
+
+1. **`remove_extreme_return_bars` 仍是崩点**：`drv641`（显式 `MarketCleanConfig()`，
+   `drop_extreme_bars=True`）崩在 `validate_and_repair_stock_ohlcv + 2888`（= `len(out)`），
+   而 driver（用项目自身配置）已越过清洗函数 ⇒ 说明项目默认配置**关掉了**极端 bar 清洗，
+   所以我们看到的 `fetch_stocks + 3324` 是**另一处**问题（`cached is not None and len(cached) > 0`，
+   反汇编确认：`cset ne` + `cset gt` 正是这两个条件）。
+2. **`try` 内 `return <局部帧>`**：探针 `/tmp/un3.z` 输出正确（`try_ret 2 2`）但**退出码为 1**
+   —— 隐式返回 0 被写成 1，另记一笔（不影响本批判定）。
+
+下一批优先级：(a) `remove_extreme_return_bars`（`vec > 标量` 掩码链，`/tmp/pc.z` 已复现）；
+(b) `fetch_stocks` 里 `len(cached)` 的坏帧来源。
