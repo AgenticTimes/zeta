@@ -7238,6 +7238,59 @@ call, no NULL-handle dereference).",
                     return id;
                 }
 
+                // `s.startswith(("000", "399"))` — Python accepts a TUPLE of
+                // prefixes. The tuple handle was passed straight to
+                // host_str_starts_with, which returned 0 for everything
+                // (measured: `_is_likely_index("000300.XSHG")` was False, so A-share
+                // index codes were scored as ordinary ETFs in the source selector).
+                // Expand the literal into OR-ed single-prefix tests.
+                if matches!(method.as_str(), "startswith" | "endswith")
+                    && args.len() == 1
+                    && arg_ids.len() == 2
+                {
+                    if let AstNode::Tuple(items) | AstNode::ArrayLit(items) = &args[0] {
+                        if !items.is_empty() {
+                            let func = if method == "startswith" {
+                                "host_str_starts_with"
+                            } else {
+                                "host_str_ends_with"
+                            };
+                            let mut acc: Option<u32> = None;
+                            for it in items {
+                                let nid = self.lower_expr(it);
+                                let cid = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: func.to_string(),
+                                    args: vec![arg_ids[0], nid],
+                                    dest: cid,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(cid, MirExpr::Var(cid));
+                                self.type_map.insert(cid, Type::Bool);
+                                acc = Some(match acc {
+                                    None => cid,
+                                    Some(prev) => {
+                                        let oid = self.next_id();
+                                        self.exprs.insert(
+                                            oid,
+                                            MirExpr::BinaryOp {
+                                                op: "||".to_string(),
+                                                left: prev,
+                                                right: cid,
+                                            },
+                                        );
+                                        self.type_map.insert(oid, Type::Bool);
+                                        oid
+                                    }
+                                });
+                            }
+                            let a = acc.unwrap();
+                            self.exprs.insert(id, MirExpr::Var(a));
+                            self.type_map.insert(id, Type::Bool);
+                            return id;
+                        }
+                    }
+                }
                 // PY-A: `x in container` membership — strings via
                 // host_str_contains; other container kinds are a V1 limit
                 // (emit 0 with a compile-time note).
