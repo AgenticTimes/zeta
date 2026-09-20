@@ -6378,3 +6378,16 @@ py_list_contains + 28 ← __closure_92 ← zeta_collect_vec_n + 112 ← MarketDa
 **仍未收敛**：函数参数/局部集合的并集与「参数列表的 `in`」仍错（模块级字面量正确）；
 且 `py_list_contains` 新分支未被执行到 ⇒ 下一批先确认链接的运行期是否最新
 （`cargo build` 让内嵌的 `zeta_runtime_c.o` 同步）。
+
+### 批次一百七十八（2026-09-19）：容器注解参与元素类型
+
+`TypeAnnotatedPattern` 丢弃注解（`ty: _`）⇒ `c: set[str] = set()` 的元素类型停在「未知」
+⇒ `"q" in c` 传 `elem_is_str=0` ⇒ 比句柄 ⇒ 字符串恒「不在」
+（`fetch_stocks` 的 `fetched_codes` 链）。
+
+修法：保留注解，新增 `annotation_elem_ty`（`list[str]`/`set[str]`/`frozenset[int]` 等），
+RHS 为 `DynamicArray(I64)`/`I64`/`PyDynamic` 时按注解细化。
+
+**未收敛**：最小复现 `c: set[str] = set(); c |= {"q"}; "q" in c` 仍为 0 ——
+MIR 显示 `py_builtin_set` 结果仍是 `DynamicArray(I64)`（细化没落到该槽位），
+`in` 取到的是细化前的类型。下一批：在 `py_builtin_set` 落点直接用注解。
