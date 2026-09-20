@@ -6226,3 +6226,26 @@ d = f(); e = d.get("a", 0)      # ⇒ 挂死（lldb: map_get_default+112 自旋�
 1. 「行情请求 0 只」——universe/股票集合为空（数据层入口）
 2. 循环后的挂死栈
 3. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
+
+### 批次 169 后的诊断（「行情请求 0 只」根因）
+
+隔离探针（导入真模块）：
+
+```
+wufu n 0            ← get_universe("wufu") 空
+keys 2              ← UNIVERSES 里确实有 2 个条目
+k 4307507541 / k 4307496678    ← 键是**数字**（裸句柄），不是内容哈希
+```
+
+⇒ `market_data_universe.UNIVERSES[name] = codes`（在 `register_universe` 内）写入时
+`UNIVERSES` 被判成 **I64**（不是 `map`）⇒ 键未内容哈希 ⇒ `name in UNIVERSES` 查不到
+⇒ 股票池为空 ⇒ 全链路「0 只」。
+
+最小复现（同文件 / 跨模块 / 带 `dict[str, list[str]]` 注解）都**正常**（`n=2`、`bin=1`），
+说明这是**批次 167 遗留的时机问题**在同一项目规模下暴露：
+`module_global_types()` 探针显示 `globals=1 prefixes=[]`（应为数百），
+即 mdu 的函数在被降级时，它自己的模块全局名集合还没登记完。
+
+⇒ 批次 170 的第一个任务：修 `module_globals` / `module_global_types` 的**登记时机**
+（把 Python 模块的加载与登记挪到「降级之前」），修好后 `UNIVERSES` 恢复 `map`，
+键走内容哈希，股票池非空。
