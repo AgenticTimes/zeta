@@ -7964,3 +7964,24 @@ lldb 现场：`DataFrame::n_rows: ldr x0, [x8]`，`EXC_BAD_ACCESS (code=1, addre
 `_fetch_remote_bs + 652 ← fetch_stocks + 7364` —— 即**缓存链路已通**，
 现在是「某些标的缓存不覆盖请求区间 ⇒ 进入联网拉取」，而本地构建里 baostock 是
 **响亮未实现**的（设计如此）。这属于**数据可得性**边界，不再是编译器缺陷。
+
+### 批次 280：驱动里 `fetch_stocks` 收到的**日期参数是坏的**（不是缓存不覆盖）
+
+驱动日志：
+
+    [INFO] jq_shim: 行情请求 119 只，区间 1969-08-04 ~        ← ✗ start=1969-08-04、end 为空
+
+而同一表达式在 harness 里是正确的：
+
+    warmup_start_of("2024-01-02") → 2023-08-05        ✓
+    f"行情请求 {2} 只，区间 {w} ~ {e}" → 2023-08-05 ~ 2024-02-29   ✓
+
+`1969-08-04` = **1970-01-01 往前 150 天** ⇒ 传进去的其实是「150 天的差值」而不是日期；
+`end_date` 直接是空串。`len(stock_codes)` 却是正确的 119。
+
+⇒ 调用点 `fetcher.fetch_stocks(codes, warmup_start, end_date)`（`jq_wufu_local.run_backtest`）
+在这条路径上把第 2/3 个实参传坏了 —— 这也是「缓存全不覆盖 ⇒ 进入未实现的 baostock」
+的直接原因（数据可得性问题其实是参数传递问题）。
+
+下一批：在 `run_backtest` 里把 `warmup_start` / `end_date` 打印出来（harness 复刻那几行），
+定位是返回值被覆盖还是实参传递错位；修好后缓存覆盖判断就能命中，驱动应能进入回测。
