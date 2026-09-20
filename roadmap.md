@@ -6513,3 +6513,28 @@ weak 的 `login` 仍输给 libc（`getutmpx` ← `login(3)` ← `_baostock_login
    `trade_date/stock_code/open/high/low/close/volume/amount`，产出「列名 → 向量」的 DataFrame 表示）
 2. 源回退循环收敛验证（有了缓存命中后）
 3. `区间 1969-08-04 ~ ` 日期显示；列表下标打印分发
+
+### 批次 193/194（2026-09-20）：parquet 完全可用 + 缓存路径的定位
+
+**已完成**：`pd.read_parquet` 在 zeta 程序里完全可用（9 列 × 892 行，值与 pyarrow 一致）：
+
+```
+nk 9 / k close…stock_code / hasdate 1 / cols 9 / rows 892 / d0 2022-05-05
+```
+
+（修法是给 **MIR 调用点**的 `match ret` 也加上 `"map"` 分支；上一批只改了解析器那处。）
+
+**缓存仍 0 命中的定位**（探针）：
+
+```
+path `gv/stocks/000300_XSHG.parquet     ← 前缀是 2 字节垃圾（应为 /Users/.../data）
+exists 0 / loaded 0
+root /Users/meetai/source/quant/REasyQuant   ✓（模块内部算出来的 _PROJECT_ROOT 正确）
+f.cache_dir → 4370300384   ← **字段读取按 i64 分派**（值是句柄，类型丢失）
+mf.__file__ → len 1        ← 跨模块读模块属性 `__file__` 得到垃圾
+```
+
+⇒ 下一批三条并进：
+1. **结构体字段的静态类型**（`self.cache_dir: str` 读出后应仍是 Str；现在按 i64 打印/分派）
+2. `f"{safe}.parquet"` / `os.path.join(...)` 在 `_cache_path` 里产生垃圾前缀的原因
+3. 跨模块 `mod.__file__`
