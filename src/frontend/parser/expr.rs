@@ -1197,9 +1197,13 @@ pub(crate) fn parse_unary(input: &str) -> IResult<&str, AstNode> {
         let (input, _) = tag("!")(input)?;
         (input, Some("!"))
     } else if starts_with_kw(input, "not") {
-        // PY-A: Python `not` == `!`
+        // PY-A: `not` keeps its OWN operator. Mapping it to `!` made
+        // `if not parts:` lower to `py_vec_not(parts)` (the `!` branch treats an
+        // ARRAY as `~mask`), so a 1-element list became a list — truthy — and the
+        // wrong branch was taken (measured: `remove_extreme_return_bars` returned
+        // an empty frame). `~`/`!` stay element-wise for arrays.
         let (input, _) = tag("not")(input)?;
-        (input, Some("!"))
+        (input, Some("not"))
     } else if input.starts_with("~") {
         // PY-A: Python `~` == bitwise not — same as `!` for i64 masks
         let (input, _) = tag("~")(input)?;

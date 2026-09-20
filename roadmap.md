@@ -7663,3 +7663,31 @@ verbatim 复刻 `remove_extreme_return_bars`（放在 harness 里，可 dump MIR
 **当前卡点**：`return pd.concat(parts, ignore_index=True), removed` 之后，调用方解构拿到的
 `o` 是坏帧（`n_rows` 崩）——即**堆 tuple 返回 + `.append` 构建的 parts** 这条组合，
 下一批查（`conat` 单测通过，所以嫌疑在 tuple 返回）。
+
+### 批次 266：**`not` 被当成 `~`** —— 静默错值（本轮最大收获）
+
+verbatim 复刻 harness 打印：
+
+    REB sub 892 892 9          ← 循环体正常
+    REB parts 1 removed 0      ← parts 有 1 个元素
+    REB notparts [0] 1         ← ✗ `not parts` 打印出 **[0]**（一个列表！）
+    REB early                  ← 于是走了 `if not parts:` 的“空”分支
+
+根因：解析器把 Python 的 `not` 也归一成 `"!"`，而 MIR 的 `!` 分支对**数组操作数**按
+`~mask` 处理（`py_vec_not`）⇒ `not parts` 变成 `py_vec_not(parts)` = 一个列表 ⇒ 恒真。
+`if not parts:` 因此走了错分支，`remove_extreme_return_bars` 返回空帧。
+
+修法：
+- 解析器：`not` 保留自己的算子名（`~` / `!` 仍是逐元素）；
+- MIR：新增 `not` 分支 → 运行期 `py_not(x)`（0/NULL/空串/空列表/空表 视为假）；
+- 运行期新增 `py_not`（数组按 len、map 按 keys 数、字符串按首字节）。
+
+效果：
+
+    REB notparts 0 1                ← ✓ 正确
+    [concat] enter nframes 1 / first rows 892 / ncols 9   ← ✓ concat 真正跑起来了
+
+**驱动里程碑**：崩点从「数据清洗」推进到 **`ParquetCache::covers_range` + 160**
+（`fetch_stocks + 3836`）⇒ `_load_cache` 已返回**有效帧**，清洗链路整体打通，进入缓存覆盖判断。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。

@@ -1103,6 +1103,19 @@ int zt_map_or_vec_truthy(int64_t v);
 // map handles; `row.<col>` reaches them through the map-attribute path.
 // Is the handle a plausible dynamic array? Used by the shim to tell a MASK from
 // a slice/absent key (`df.iloc[0:0]` arrives as 0).
+// Python `not x` — falsy for 0, NULL, an EMPTY string, an EMPTY list/map.
+// (`!` cannot be reused: for an array it means `~mask`.)
+int64_t py_not(int64_t x) {
+    if (!x) return 1;
+    if (zt_maybe_vec(x)) return zt_vec_len(x) == 0 ? 1 : 0;
+    if (zt_maybe_map(x)) return zt_vec_len(map_keys(x)) == 0 ? 1 : 0;
+    if (x > 0x100000000LL && x < 0x7fffffffffffLL) {
+        const char* s = (const char*)x;
+        return s[0] == 0 ? 1 : 0;
+    }
+    return 0;
+}
+
 int64_t py_is_vec(int64_t v) { return zt_maybe_vec(v) ? 1 : 0; }
 
 // Hash a `map<str, _>` key slot. Small strings can arrive PACKED into the

@@ -11133,8 +11133,25 @@ call, no NULL-handle dereference).",
             }
             AstNode::UnaryOp { op, expr } => {
                 // Handle unary operators like ! (not)
-                // PY-A: Python `not` lowers identically to `!`
-                let op: &str = if op == "not" { "!" } else { op };
+                // Python `not` is LOGICAL negation — it must NOT become `!`,
+                // because the `!` branch treats an ARRAY operand as `~mask`
+                // (element-wise NOT). `if not parts:` on a 1-element list became
+                // `py_vec_not(parts)` → a list, which is truthy, so the code took
+                // the wrong branch and the whole cleaning result came out empty.
+                // Lower it to the runtime helper instead (falsy = 0 / empty array).
+                if op == "not" {
+                    let expr_id = self.lower_expr(expr);
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_not".to_string(),
+                        args: vec![expr_id],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::Bool);
+                    return id;
+                }
+                let op: &str = op;
                 let expr_id = self.lower_expr(expr);
                 let dest = self.next_id();
 
