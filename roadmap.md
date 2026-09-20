@@ -6976,3 +6976,18 @@ IR 对照（同一模块）：
 ⇒ 帧对象在 ctor 之后、`loc` 之前的某一刻丢失了 `data` 字段（怀疑 `DataFrame(...)` 的
 StructNew 落在**栈**上，或 `zeta_map_set_tag`/env 写入把它挤掉）。
 下一批：检查 `DataFrame(...)` 构造点的 IR（StructNew 是堆还是栈）与两次调用之间对该对象的写入。
+
+### 批次 228：断在 `DataFrame::loc` 入口 —— **实参本身就不对**
+
+lldb（`breakpoint DataFrame::loc`）：
+
+    x0 = 0x0000000100385f10      ← 内容看着像一串字符串指针（像 map/vec 的数据区）
+    x1 = 0x0000000000000002      ← **mask 竟然是整数 2**（应为 `[1,0,1]` 的向量句柄）
+
+即调用方把「2」当第二个实参传进来了（像元数/步长之类的标量），而第一个实参不是 DataFrame 结构体。
+IR 侧却完全正常：`pandas__DataFrame` 走 `runtime_malloc(8)` + 存字段 0 + 返回堆指针；
+`main` 里 `%103=call pandas__DataFrame → store %63 → load → store %18 → %116=load %18 →
+call DataFrame::loc(%116, %117)`。
+
+⇒ 下一批：核对 `df.loc([1,0,1])` 这条链上 `%117` 的来源（IR 里它应是向量句柄），
+以及为什么运行时成了 2；同时确认 `pd.DataFrame({...})` 的返回值在运行时到底是结构体还是 map。
