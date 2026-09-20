@@ -6270,3 +6270,26 @@ k 4307507541 / k 4307496678    ← 键是**数字**（裸句柄），不是内�
 1. `run_backtest` 开头段逐句 `flush()` 二分（universe 过滤 → `MarketDataFetcher()` →
    `warmup_start_of` → `fetch_stocks`）
 2. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
+
+### 批次一百七十一/一百七十二（2026-09-19）：列表推导式常量类型 ⇒ 消灭非确定性段错误
+
+**症状**：driver 每次运行 ~50% SIGSEGV；`MallocScribble=1` 100%；lldb（关 ASLR）不崩但给错值。
+崩溃报告落在 `py_map_fromkeys` ← `wufu_constants._register_into_datasrc`。
+
+**根因**：`WUFU_BS_CODES = [jq_to_bs(c) for c in WUFU_JQ_CODES]` 在 AST 里是
+`Call{receiver: Some(Var("…JQ_CODES")), method: "__collect__", args: [Closure{…}]}`，
+`infer_global_ty` 无此分支 ⇒ 常量无类型 ⇒ I64 ⇒ `LIST + LIST` 走 `SemiringFold`（数值加）
+⇒ `dict.fromkeys(<垃圾整数>)` ⇒ `py_map_fromkeys` 野读。
+
+**修法**：`infer_global_ty` 增 `__collect__`：元素类型取闭包体/迭代对象的类型，
+**推不出也返回 `DynamicArray`**（推导式永远是列表）。另：`module_global_types` 把 `funcs` 的
+**返回类型表**穿透给 `infer_global_ty`，Call 分支先查用户函数返回类型。
+
+**实测**（`MallocScribble=1`，4/4 稳定）：`UNIVERSES=2`、`BS=115`、`IDX=4`、
+**`get_universe("wufu")=119`** ✓；driver 日志由「行情请求 **0** 只」变为「**119** 只」。
+
+### 下一队列（批次一百七十三）
+
+1. 区间显示 `1969-08-04`：日期参数被丢成 0/epoch
+2. rqdatac 回退之后的崩溃栈
+3. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
