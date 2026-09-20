@@ -6538,3 +6538,17 @@ mf.__file__ → len 1        ← 跨模块读模块属性 `__file__` 得到垃�
 1. **结构体字段的静态类型**（`self.cache_dir: str` 读出后应仍是 Str；现在按 i64 打印/分派）
 2. `f"{safe}.parquet"` / `os.path.join(...)` 在 `_cache_path` 里产生垃圾前缀的原因
 3. 跨模块 `mod.__file__`
+
+### 批次 195 补充定位（最小复现 /tmp/mm12）
+
+给 `pkg/liby.py` 的 init 加一句打印后：
+
+```
+liby init         ← 模块 init **确实执行了**（V 已写入 env）
+（随后 Trace/BPT trap，rc=133，show() 的打印没有出现）
+```
+
+⇒ 不是 init 顺序、也不是 env 键问题（MIR 里读写键都是 `pkg_liby__V`）。
+陷阱发生在 `pkg.user.show()` 进入处附近（`EXC_BREAKPOINT`，非 `zt_unavailable` 的 abort），
+下一批：反汇编 `pkg_user__show` 的头几条指令 + 核对 `import pkg.user; pkg.user.show()`
+是否被解析成了别的符号。
