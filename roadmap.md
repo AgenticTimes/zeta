@@ -7388,3 +7388,29 @@ tuple 返回）。下一批用「把真实函数体逐段替换成 harness 版�
 `(frame, 0)` 元组（✓）、`concat`（✓）。下一批：在 `remove_extreme_return_bars` 的
 `if market_df.empty or max_abs_daily_return <= 0: return market_df, 0` 这条**提前返回**上取证
 （`max_abs_daily_return` 是浮点**字段**实参 —— 与批次 245 的浮点实参 ABI 同族）。
+
+### 批次 252：`for k, g in df.groupby(col)` 不再经过 GroupBy 结构体（key 曾恒为 0）
+
+探针实证：走 shim 的 `GroupBy(self, by)` 时运行期收到 **key = 0**，于是所有组塌缩成一组。
+修法：MIR 的 for 降级**直接用调用点自己的 receiver 和 key**（识别 `AstNode::Call{method:"groupby"}`
+后调 `py_df_groupby(recv, key)`），不再依赖 shim 结构体的字段布局。
+
+修后探针：`groupby frame=… key=4335896747`（有效字符串指针）✓，`vec_not out n=3` ✓。
+
+### 批次 253：tuple 元素先物化（`materialize_for_call`）
+
+`return d.iloc[0:0], 7` 的 tuple 元素是**计算值**；此前直接塞进 StackArray，元素槽位在被读时
+尚未写入。现在对 `Call/Subscript/FieldAccess/BinaryOp` 形状的元素先 `materialize_for_call`。
+（MIR 实证：`2: StackArray { elements: [11, 12] }`，`11` 是物化后的槽位 ✓。）
+
+### 批次 254：定位「返回 tuple 里的 StackArray」是**栈指针**
+
+`hA()` 的 MIR 完全正确（`StackArray[11,12]` → `Return val: 2`），但调用方拿到垃圾 ⇒
+指向的是**已失效的栈帧**（alloca）。
+
+试过把 `return (a, b)` 改成堆数组（`zeta_dynarray_new` + `vec_push`）—— **会把原本能过的
+tup2/re/sl 全部打挂**（`ncols/cols/el` 三条 SEGV），说明 `stack_array_get` 的取用方
+与堆数组的表示不兼容。已**回退**，留待下一步：要么让调用方也认 dynarray 数据指针，
+要么让元素的 alloca 提升到调用方帧（escape 分析）。当前 tuple 返回保持原状（既有用例全绿）。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。

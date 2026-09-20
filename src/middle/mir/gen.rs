@@ -1906,11 +1906,41 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             // PY-A: `for k in d:` over a dict iterates its KEYS.
                             // The map layout has no array length, so the loop
                             // silently ran zero times before.
-                            // `for k, grp in df.groupby(col)` — the GroupBy struct
-                            // carries (frame, key); iterate real pairs instead of
-                            // the struct handle (which the loop read as garbage:
-                            // `remove_extreme_return_bars` produced a dead frame).
-                            let raw_id = if matches!(
+                            // `for k, grp in df.groupby(col)` — call the runtime
+                            // grouping DIRECTLY with the call's own receiver/key
+                            // (probed: going through the shim's `GroupBy` struct
+                            // delivered key == 0, so every group collapsed).
+                            let grp_call = match &*expr_clone {
+                                AstNode::Call {
+                                    receiver: Some(recv),
+                                    method,
+                                    args,
+                                    ..
+                                } if method == "groupby" && !args.is_empty() => {
+                                    Some((recv.clone(), args[0].clone()))
+                                }
+                                _ => None,
+                            };
+                            let raw_id = if let Some((recv, key)) = grp_call {
+                                let recv_id = self.lower_expr(&recv);
+                                let key_id = self.lower_expr(&key);
+                                let pid = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "py_df_groupby".to_string(),
+                                    args: vec![recv_id, key_id],
+                                    dest: pid,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(pid, MirExpr::Var(pid));
+                                self.type_map.insert(
+                                    pid,
+                                    Type::DynamicArray(Box::new(Type::Tuple(vec![
+                                        Type::Str,
+                                        Type::Named("DataFrame".to_string(), vec![]),
+                                    ]))),
+                                );
+                                pid
+                            } else if matches!(
                                 self.type_map.get(&raw_id),
                                 Some(Type::Named(n, _)) if n == "GroupBy"
                             ) {
@@ -11206,6 +11236,22 @@ call, no NULL-handle dereference).",
                 let mut element_ids = Vec::new();
                 for elem in elements {
                     let elem_id = self.lower_expr(elem);
+                    // A COMPUTED element (call / subscript / field / binary op)
+                    // must be materialized BEFORE the tuple handle is built:
+                    // `return d.iloc[0:0], 7` put an uninitialized slot into the
+                    // pair, so the caller's frame was garbage and `len(o)` SEGV'd
+                    // (measured: `remove_extreme_return_bars`'s empty-parts path).
+                    let elem_id = if matches!(
+                        elem,
+                        AstNode::Call { .. }
+                            | AstNode::Subscript { .. }
+                            | AstNode::FieldAccess { .. }
+                            | AstNode::BinaryOp { .. }
+                    ) {
+                        self.materialize_for_call(elem_id)
+                    } else {
+                        elem_id
+                    };
                     element_ids.push(elem_id);
                 }
                 let size = element_ids.len();
