@@ -2427,7 +2427,21 @@ impl Resolver {
                 (name.clone(), ret)
             })
             .collect();
+        // `__name__` = the module this function belongs to (the root file is
+        // `__main__`). `py_mangled_to_module` maps a definition's mangled name to
+        // its module, so a function that is not there belongs to the root file.
+        let fn_name_for_module = match ast {
+            AstNode::FuncDef { name, .. } => name.as_str(),
+            _ => "",
+        };
+        let current_module = self
+            .py_mangled_to_module
+            .borrow()
+            .get(fn_name_for_module)
+            .cloned()
+            .unwrap_or_else(|| "__main__".to_string());
         let mut mir_gen = crate::middle::mir::r#gen::MirGen::new()
+            .with_current_module(current_module)
             .with_global_consts(self.ctfe_consts.clone())
             .with_func_ret_types(ret_types)
             .with_func_param_names(self.func_param_names())

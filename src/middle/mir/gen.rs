@@ -171,6 +171,10 @@ pub struct MirGen {
     /// so `self` binds as Named(class) and `self.<field>` keeps the field's
     /// declared type (map membership in `__contains__` dispatches on it).
     current_class: Option<String>,
+    /// The module this function belongs to — the value of `__name__`
+    /// (`logging.getLogger(__name__)` produced a NULL-ish name and `fprintf`
+    /// crashed in `strlen`; a bare `print(__name__)` printed 1).
+    current_module: String,
     /// Names captured from enclosing scopes in the closure currently being
     /// lowered (name → env key id) — used to route assignments to env stores.
     captured_vars: std::collections::HashMap<String, u32>,
@@ -235,6 +239,7 @@ impl MirGen {
             module_global_types: HashMap::new(),
             re_repl_param: false,
             current_class: None,
+            current_module: "__main__".to_string(),
             captured_vars: std::collections::HashMap::new(),
             async_state_ptr: None,
             async_segment_count: 0,
@@ -644,6 +649,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
     }
 
     /// PY-A: the file being compiled, so `__file__` can resolve to it.
+    pub fn with_current_module(mut self, module: String) -> Self {
+        self.current_module = module;
+        self
+    }
+
     pub fn with_source_file(mut self, path: Option<String>) -> Self {
         self.source_file = path;
         self
@@ -2271,6 +2281,21 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
     /// `lower_map_key` only hashes when the KEY's own type is `Str`; with an
     /// unannotated parameter the key is I64, so a content-hashing map was
     /// probed by POINTER — a silent miss (value 0, no diagnostic).
+    /// Copy a value into a FRESH slot so it can be passed to a runtime call:
+    /// codegen's call-arg path reads operands from local slots, and an
+    /// expression result (FieldAccess, call, subscript) has no alloca.
+    fn materialize_for_call(&mut self, id: u32) -> u32 {
+        let ty = self.type_map.get(&id).cloned().unwrap_or(Type::I64);
+        let slot = self.next_id();
+        self.stmts.push(MirStmt::Assign {
+            lhs: slot,
+            rhs: id,
+        });
+        self.exprs.insert(slot, MirExpr::Var(slot));
+        self.type_map.insert(slot, ty);
+        slot
+    }
+
     fn lower_map_key_typed(&mut self, id: u32, map_ty: Option<&Type>) -> u32 {
         let key_is_str = matches!(
             map_ty,
@@ -2453,6 +2478,16 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // PY-A: a module's own top-level name reads its module-global
                 // slot (`mod__NAME` in the env). Locals win, so only rewrite
                 // when nothing local shadows it.
+                // `__name__` — Python's module-name string. It had NO handling at
+                // all (a bare `print(__name__)` printed 1), and
+                // `logging.getLogger(__name__)` produced a bad pointer that crashed
+                // `fprintf`/`strlen` inside the first log line of `run_backtest`.
+                if name == "__name__" && !self.name_to_id.contains_key("__name__") {
+                    let v = self.current_module.clone();
+                    self.exprs.insert(id, MirExpr::StringLit(v));
+                    self.type_map.insert(id, Type::Str);
+                    return id;
+                }
                 if !self.name_to_id.contains_key(name.as_str()) {
                     if let Some(mangled) = self.symbol_renames.get(name.as_str()).cloned() {
                         if mangled != *name && self.module_globals.contains(&mangled) {
@@ -2703,6 +2738,16 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     tag_name(self.type_map.get(&right_id).cloned()),
                 ) {
                     if let Some((sym, kind)) = crate::middle::pylib::handle_op(op, &lt, &rt) {
+                        // The codegen's call-arg path loads an operand from its
+                        // LOCAL slot; a FieldAccess / call result has no alloca, so
+                        // `self.cache_dir / "x"` (or `_PROJECT_ROOT / "data"` where
+                        // the global came through a field) loaded NULL and
+                        // `py_os_path_join` dereferenced it — measured SEGV at
+                        // `MarketDataFetcher.__init__+68`. Materialize both
+                        // operands into fresh slots first (same rule the map
+                        // subscript path already follows).
+                        let left_id = self.materialize_for_call(left_id);
+                        let right_id = self.materialize_for_call(right_id);
                         self.stmts.push(MirStmt::Call {
                             func: sym.to_string(),
                             args: vec![left_id, right_id],
@@ -10413,6 +10458,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         child.closure_ret_tys = self.closure_ret_tys.clone();
         child.hoisted_names = self.hoisted_names.clone();
         child.current_class = self.current_class.clone();
+        child.current_module = self.current_module.clone();
         child.re_repl_param = self.re_repl_param;
         child.fn_depth = self.fn_depth + 1;
         let param_hint = self.pending_closure_param_types.take();

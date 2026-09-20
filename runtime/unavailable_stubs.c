@@ -23,6 +23,31 @@
 // symbols" for ~6 official tests. Weak lets the program's own definition win
 // and the stub only fill a genuine gap.
 
+// Platform data-source entry points (`jqdatasdk.auth`, rqdatac/tushare/akshare/
+// pyarrow readers). Per the project scope the PLATFORM APIs are not implemented,
+// so the correct runtime behaviour is "the source is unavailable" — CPython
+// raises there and the caller falls back to the local cache. Returning 0 keeps
+// that fallback alive; aborting it would stop the local backtest at the first
+// platform call (measured: `_auth` aborted inside `_jqdata_init`).
+extern int64_t zeta_raise(int64_t code);
+static int64_t zt_unavailable_soft(const char* what) {
+    static const char* warned[64];
+    static int n = 0;
+    for (int i = 0; i < n; i++) {
+        if (warned[i] == what) return 0;
+    }
+    if (n < 64) warned[n++] = what;
+    fprintf(stderr, "PY-A: platform source `%s` is not available — falling back\n", what);
+    fflush(stderr);
+    // RAISE, exactly like CPython does when the provider is missing/unauthorised:
+    // the project wraps every provider call in try/except and takes the LOCAL
+    // fallback. Returning 0 instead made `jqdatasdk.auth` look like it SUCCEEDED
+    // ("authenticated successfully") and the code walked into the platform branch
+    // with 0 handles (next crash).
+    zeta_raise(1);
+    return 0;
+}
+
 static int64_t zt_unavailable(const char* what) {
     fprintf(stderr,
             "PY-A: `%s` is NOT implemented in this build — the local backtest "
@@ -58,9 +83,9 @@ int64_t __attribute__((weak)) _to_ts(void) { return zt_unavailable("__to_ts"); }
 int64_t __attribute__((weak)) add(void) { return zt_unavailable("_add"); }
 int64_t __attribute__((weak)) adddata(void) { return zt_unavailable("_adddata"); }
 int64_t __attribute__((weak)) all(void) { return zt_unavailable("_all"); }
-int64_t __attribute__((weak)) all_instruments(void) { return zt_unavailable("_all_instruments"); }
+int64_t __attribute__((weak)) all_instruments(void) { return zt_unavailable_soft("_all_instruments"); }
 int64_t __attribute__((weak)) any(void) { return zt_unavailable("_any"); }
-int64_t __attribute__((weak)) auth(void) { return zt_unavailable("_auth"); }
+int64_t __attribute__((weak)) auth(void) { return zt_unavailable_soft("_auth"); }
 int64_t __attribute__((weak)) backend_datasrc_adjustment__anchor_to_reference(void) { return zt_unavailable("_backend_datasrc_adjustment__anchor_to_reference"); }
 int64_t __attribute__((weak)) backend_datasrc_adjustment__apply_qfq_adjustment(void) { return zt_unavailable("_backend_datasrc_adjustment__apply_qfq_adjustment"); }
 int64_t __attribute__((weak)) backend_datasrc_calibration__DataCalibrator___reference_loader(void) { return zt_unavailable("_backend_datasrc_calibration__DataCalibrator___reference_loader"); }
@@ -83,22 +108,22 @@ int64_t __attribute__((weak)) date(void) { return zt_unavailable("_date"); }
 int64_t __attribute__((weak)) decimal__Decimal(void) { return zt_unavailable("_decimal__Decimal"); }
 int64_t __attribute__((weak)) decode(void) { return zt_unavailable("_decode"); }
 int64_t __attribute__((weak)) dict(void) { return zt_unavailable("_dict"); }
-int64_t __attribute__((weak)) download(void) { return zt_unavailable("_download"); }
+int64_t __attribute__((weak)) download(void) { return zt_unavailable_soft("_download"); }
 int64_t __attribute__((weak)) encode(void) { return zt_unavailable("_encode"); }
 int64_t __attribute__((weak)) from_int(void) { return zt_unavailable("_from_int"); }
 int64_t __attribute__((weak)) from_str(void) { return zt_unavailable("_from_str"); }
-int64_t __attribute__((weak)) fund_daily(void) { return zt_unavailable("_fund_daily"); }
-int64_t __attribute__((weak)) fund_etf_category_sina(void) { return zt_unavailable("_fund_etf_category_sina"); }
-int64_t __attribute__((weak)) fund_etf_hist_em(void) { return zt_unavailable("_fund_etf_hist_em"); }
+int64_t __attribute__((weak)) fund_daily(void) { return zt_unavailable_soft("_fund_daily"); }
+int64_t __attribute__((weak)) fund_etf_category_sina(void) { return zt_unavailable_soft("_fund_etf_category_sina"); }
+int64_t __attribute__((weak)) fund_etf_hist_em(void) { return zt_unavailable_soft("_fund_etf_hist_em"); }
 int64_t __attribute__((weak)) get(void) { return zt_unavailable("_get"); }
 int64_t __attribute__((weak)) get_level_values(void) { return zt_unavailable("_get_level_values"); }
 int64_t __attribute__((weak)) get_loc(void) { return zt_unavailable("_get_loc"); }
-int64_t __attribute__((weak)) get_row_data(void) { return zt_unavailable("_get_row_data"); }
-int64_t __attribute__((weak)) getsignal(void) { return zt_unavailable("_getsignal"); }
+int64_t __attribute__((weak)) get_row_data(void) { return zt_unavailable_soft("_get_row_data"); }
+int64_t __attribute__((weak)) getsignal(void) { return zt_unavailable_soft("_getsignal"); }
 int64_t __attribute__((weak)) getvalue(void) { return zt_unavailable("_getvalue"); }
-int64_t __attribute__((weak)) index_components(void) { return zt_unavailable("_index_components"); }
-int64_t __attribute__((weak)) index_daily(void) { return zt_unavailable("_index_daily"); }
-int64_t __attribute__((weak)) init(void) { return zt_unavailable("_init"); }
+int64_t __attribute__((weak)) index_components(void) { return zt_unavailable_soft("_index_components"); }
+int64_t __attribute__((weak)) index_daily(void) { return zt_unavailable_soft("_index_daily"); }
+int64_t __attribute__((weak)) init(void) { return zt_unavailable_soft("_init"); }
 int64_t __attribute__((weak)) intersection(void) { return zt_unavailable("_intersection"); }
 int64_t __attribute__((weak)) isna(void) { return zt_unavailable("_isna"); }
 int64_t __attribute__((weak)) limit(void) { return zt_unavailable("_limit"); }
@@ -113,21 +138,21 @@ int64_t __attribute__((weak)) nautilus_trader_model_instruments__Equity(void) { 
 int64_t __attribute__((weak)) nautilus_trader_model_objects__Price(void) { return zt_unavailable("_nautilus_trader_model_objects__Price"); }
 int64_t __attribute__((weak)) nautilus_trader_model_objects__Quantity(void) { return zt_unavailable("_nautilus_trader_model_objects__Quantity"); }
 int64_t __attribute__((weak)) normalize(void) { return zt_unavailable("_normalize"); }
-int64_t __attribute__((weak)) pro_api(void) { return zt_unavailable("_pro_api"); }
-int64_t __attribute__((weak)) query_all_stock(void) { return zt_unavailable("_query_all_stock"); }
-int64_t __attribute__((weak)) query_history_k_data_plus(void) { return zt_unavailable("_query_history_k_data_plus"); }
-int64_t __attribute__((weak)) query_hs300_stocks(void) { return zt_unavailable("_query_hs300_stocks"); }
-int64_t __attribute__((weak)) query_zz500_stocks(void) { return zt_unavailable("_query_zz500_stocks"); }
-int64_t __attribute__((weak)) read_table(void) { return zt_unavailable("_read_table"); }
-int64_t __attribute__((weak)) replace_schema_metadata(void) { return zt_unavailable("_replace_schema_metadata"); }
+int64_t __attribute__((weak)) pro_api(void) { return zt_unavailable_soft("_pro_api"); }
+int64_t __attribute__((weak)) query_all_stock(void) { return zt_unavailable_soft("_query_all_stock"); }
+int64_t __attribute__((weak)) query_history_k_data_plus(void) { return zt_unavailable_soft("_query_history_k_data_plus"); }
+int64_t __attribute__((weak)) query_hs300_stocks(void) { return zt_unavailable_soft("_query_hs300_stocks"); }
+int64_t __attribute__((weak)) query_zz500_stocks(void) { return zt_unavailable_soft("_query_zz500_stocks"); }
+int64_t __attribute__((weak)) read_table(void) { return zt_unavailable_soft("_read_table"); }
+int64_t __attribute__((weak)) replace_schema_metadata(void) { return zt_unavailable_soft("_replace_schema_metadata"); }
 int64_t __attribute__((weak)) set_slippage_perc(void) { return zt_unavailable("_set_slippage_perc"); }
 int64_t __attribute__((weak)) setcash(void) { return zt_unavailable("_setcash"); }
 int64_t __attribute__((weak)) setdefault(void) { return zt_unavailable("_setdefault"); }
-int64_t __attribute__((weak)) stock_zh_a_hist(void) { return zt_unavailable("_stock_zh_a_hist"); }
+int64_t __attribute__((weak)) stock_zh_a_hist(void) { return zt_unavailable_soft("_stock_zh_a_hist"); }
 int64_t __attribute__((weak)) subscribe_bars(void) { return zt_unavailable("_subscribe_bars"); }
 int64_t __attribute__((weak)) update(void) { return zt_unavailable("_update"); }
 int64_t __attribute__((weak)) values(void) { return zt_unavailable("_values"); }
-int64_t __attribute__((weak)) write_table(void) { return zt_unavailable("_write_table"); }
+int64_t __attribute__((weak)) write_table(void) { return zt_unavailable_soft("_write_table"); }
 
 // Added for the ZETA_NO_OPT=1 (unoptimized) link: these paths are
 // optimized away in the normal build, so they never showed up as undefined.
