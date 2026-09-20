@@ -6712,3 +6712,14 @@ def g():
 **`t.schema.metadata or {}` 这句在 `t` 为 0 时被求值**：`or` 的右操作数被**过早求值**，
 且左操作数的两次解引用（+184/+188）没有空值保护。下一批：
 ① 看 `g + 104` 的指令；② 决定是给 `or` 加短路，还是在 `t.schema` 这条链上加保护。
+
+### 批次 211（2026-09-20）：平台桩去重压掉了 raise（系统性修复）
+
+`zt_unavailable_soft` 的去重写成 `if (warned[i] == what) return 0;` ⇒ **第二次调用直接返回 0、不抛异常**
+⇒ 调用方走进空对象解引用（`t.schema.metadata`、`DataFrame::n_rows`）。
+
+修法：去重只跳过打印，`zeta_raise(1)` 每次执行。
+最小复现 `/tmp/stubtry.z` 由「两个函数里第二个崩」变为 **两行都正常**：
+`caught / f 0 / caught2 / g 0 / rc=0`。
+
+driver 崩点前移到 `DataFrame::n_rows + 12` ← `__len__` ← `fetch_stocks + 1400`（对 None 调 len）。
