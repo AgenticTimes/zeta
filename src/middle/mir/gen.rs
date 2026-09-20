@@ -10849,14 +10849,32 @@ call, no NULL-handle dereference).",
                     return dest;
                 }
                 if op == "!" {
-                    // Logical NOT operator
-                    let stmt = MirStmt::Call {
-                        func: "!".to_string(),
-                        args: vec![expr_id],
-                        dest,
-                        type_args: vec![],
-                    };
-                    self.stmts.push(stmt);
+                    // A VECTOR operand is Python's `~mask` (element-wise NOT): the
+                    // parser/lowering maps `~` onto `!`, so `df.loc[~invalid]` used
+                    // to call the INTEGER `!` on the vector handle — `loc` then got
+                    // mask == 0 (measured: "DataFrame.loc: mask is missing").
+                    if matches!(
+                        self.type_map.get(&expr_id),
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                    ) {
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_vec_not".to_string(),
+                            args: vec![expr_id],
+                            dest,
+                            type_args: vec![],
+                        });
+                        self.type_map
+                            .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                    } else {
+                        // Logical NOT operator
+                        let stmt = MirStmt::Call {
+                            func: "!".to_string(),
+                            args: vec![expr_id],
+                            dest,
+                            type_args: vec![],
+                        };
+                        self.stmts.push(stmt);
+                    }
                 } else if op == "*" {
                     // Pointer dereference - use Deref MirExpr with pointee width
                     let pointee_width = self.pointee_widths.get(&expr_id).copied().unwrap_or(8);
