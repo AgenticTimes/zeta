@@ -8065,3 +8065,23 @@ shim 的 `DataFrame.__getitem__(key)` 假设 key 是**列名**（`self.data[map_
 代码的三个值都是对的）——下一批继续查 `run_backtest → fetch_stocks` 的实参传递。
 
 度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+### 批次 285：崩点推进到「数据源排序」的闭包键
+
+新 harness（复刻 `run_backtest` 取数前的几行）栈：
+
+    _is_likely_index + 136 ← _asset_class_for_code ← _source_score
+        ← __closure_18 ← py_sorted_key ← _ranked_fetch_sources ← fetch_stocks + 8380
+
+即已经走到 `sorted(candidates, key=lambda s: (s != "tushare", -_source_score(s, bs_code)))`
+（**数据源排序**），崩在 `_is_likely_index(bs_code)`。
+
+隔离验证：`_is_likely_index` 的核心逻辑（`jq.split(".")` → `num.isdigit()` →
+`num.startswith(("000","399"))`）单独跑是正确的（`num 000300 XSHG 6 isdigit 1 / startswith 1 / a 1`）；
+`lambda` 捕获**形参**的闭包（`key=lambda s: _is_idx(base) + len(s)`）也正确（`f 2` rc=0）。
+
+⇒ 说明是这条链上更具体的一处（闭包捕获/`-` 一元/`_source_score` 内的字典访问）把 `bs_code`
+弄坏。对比：驱动日志里那次调用打印的是 `区间 1969-08-04 ~`（同样像「值被换成了别的东西」），
+两者很可能是同一族（调用实参/闭包快照）。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
