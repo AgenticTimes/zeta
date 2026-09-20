@@ -7344,3 +7344,18 @@ MIR 实证：`[dynamic]str::map(<vec>, <closure>)` 只传 **两个** 实参，�
 我没复刻到的语句（候选：`report = OhlcvRepairReport(input_rows=len(df))` 的 kwarg 构造、
 `int(invalid.sum())`、`report.<字段> = …` 的连续结构体字段写、末尾 `reset_index` 的
 tuple 返回）。下一批用「把真实函数体逐段替换成 harness 版本」的二分法定位。
+
+### 批次 250：harness 生成踩到 W1002（解析器静默截断）
+
+用脚本把 `data_cleaning.py` 的函数体（169–234 行）逐字复制到 harness 并在语句后插打印时，
+生成的 `myvalidate` **整体被丢弃**：编译输出
+
+    warning: [W1002] …/_zeta_local_drv.py:13: 106 line(s) at the end of the input were NOT
+    parsed … First unparsed text: 'def myvalidate(\n    df: pd.DataFrame,\n    stock_code: str,\n '
+
+于是程序里根本没有那段代码，表现成「rc=0 且一行输出都没有」——差点误判成「复刻版通过」。
+
+**教训（以后照做）**：harness/driver 行为反常时，**先 grep `W1002`**，
+确认没有被解析器丢掉；「无输出 + rc=0」在本项目里首先怀疑 W1002，而不是「通过」。
+
+（本批无代码改动：批次 249 的修复已提交并通过探针验证 `vec_not out n=892`。）
