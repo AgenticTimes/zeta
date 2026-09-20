@@ -2445,6 +2445,32 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
 
     /// PY-A: ensure an expression id is a string handle — non-string values
     /// go through the to_string_* runtime dispatch (Python `str()`).
+    /// Both arms of an inline conditional are string literals/f-strings.
+    fn both_branches_are_strings(n: &AstNode) -> bool {
+        let strish = |x: &AstNode| {
+            matches!(
+                x,
+                AstNode::StringLit(_) | AstNode::FString { .. } | AstNode::FString(..)
+            )
+        };
+        match n {
+            AstNode::If { then, else_, .. } => {
+                let t = then.iter().rev().find_map(|s| match s {
+                    AstNode::ExprStmt { expr } => Some(&**expr),
+                    AstNode::Return(e) => Some(&**e),
+                    _ => None,
+                });
+                let e = else_.iter().rev().find_map(|s| match s {
+                    AstNode::ExprStmt { expr } => Some(&**expr),
+                    AstNode::Return(e) => Some(&**e),
+                    _ => None,
+                });
+                matches!((t, e), (Some(a), Some(b)) if strish(a) && strish(b))
+            }
+            _ => false,
+        }
+    }
+
     fn lower_to_string(&mut self, id: u32) -> u32 {
         if matches!(self.type_map.get(&id), Some(Type::Str)) {
             return id;
@@ -2820,6 +2846,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 let mut part_ids: Vec<u32> = Vec::new();
                 for p in parts {
                     let pid = self.lower_expr(p);
+                    // An INLINE CONDITIONAL whose branches are both strings
+                    // (`f"{'sh' if exch == 'XSHG' else 'sz'}.{num}"`) left the
+                    // part typed i64, so `lower_to_string` stringified the raw
+                    // handle: `jq_to_bs("510300.XSHG")` returned
+                    // `4339988730.510300` instead of `sh.510300` — i.e. EVERY
+                    // code in the wufu universe came out numerically garbage.
+                    if matches!(self.type_map.get(&pid), Some(Type::I64) | Some(Type::PyDynamic)) {
+                        if Self::both_branches_are_strings(p) {
+                            self.type_map.insert(pid, Type::Str);
+                        }
+                    }
                     let pid = self.lower_to_string(pid);
                     part_ids.push(pid);
                 }
