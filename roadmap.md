@@ -6922,3 +6922,24 @@ print("via", use(c))        # ✗ **整条语句静默消失**（rc=0，无任�
 
 下一批：在最小复现里跑一遍 `.loc[mask]` 并同时打印 `len(df.columns)` 与 `len(df)`，
 定位是「`DataFrame(out)` 的 `data` 字段没写进去」还是「`n_rows()` 读错了字段」。
+
+### 批次 225 补充 2：`.loc` 里 `self.data` 读到的是 **PyJson**（字段布局不一致）
+
+最小复现（`/tmp/loc.z`，只有 `pd.DataFrame({...})` + `df.loc([1,0,1])`）：
+
+    /tmp/loc  →  abort
+    lldb:
+      #3 zt_map_json_mismatch + 60     ← 运行期护栏（响亮，符合红线）
+      #4 map_get + 208
+      #5 DataFrame::loc + 256          ← 就在新写的 loc 里
+      #6 main
+
+即 `loc` 内部对 `self.data` 取 map_get 时，**该值被自己的护栏判成 PyJson** ⇒ 说明
+`DataFrame` 结构体里 `self.data` 读到的**不是**构造函数写入的那个 map。
+
+与 Python 的差异点：`_load_cache` 里有 `df.attrs["source"] = meta["source"]` ——
+Python 允许运行时给对象加属性，而本实现的结构体字段是**编译期固定**的；
+字段索引/字段数在这类「动态加字段」后可能不再一致（批次 218 的按声明类型查表正是为此）。
+
+下一批：打印 `DataFrame` 结构体的字段清单（构造处 vs 读取处）以及 `self.data` 的字段索引，
+确认是不是 `attrs` 之类的动态字段把它挤偏了。
