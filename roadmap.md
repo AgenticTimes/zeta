@@ -6181,3 +6181,21 @@ MIR 铁证：`MarketDataFetcher.__init__` 里 `16: FieldAccess{base:18,"cache_di
    说明**缓存分支没有提前返回**）
 2. `module_global_types()` 的时机（根文件 main 先于 import 降级）
 3. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
+
+### 批次一百六十八（2026-09-19）：`isinstance(<json>, dict)` + 元组解构类型（语料 **46/46 → 48/48**）
+
+| # | 缺陷 | 铁证 | 修法 |
+|---|---|---|---|
+| 1 | `isinstance(parsed_json, dict)` 恒 0（**静默错值**） | 隔离程序：`len(data)=1724` 但 `isinstance(data,dict)=0` ⇒ `_listing_dates_cached` 丢弃已解析的缓存、走平台分支并崩 | `PyJson` 走**运行期**标签分派 `py_json_is_kind(v,tag)`（ZJ_INT 1/F64 2/STR 3/ARR 4/OBJ 5） |
+| 2 | 元组解构元素硬编码 i64 | `num, exch = jq.split(".")` 值对但类型 i64 ⇒ `num.startswith(("000","399"))` 对整数做句柄分派 ⇒ SEGV（`_is_likely_index+56`） | 按源值类型取元素类型（DynamicArray/Array → e，Tuple → ts[i]，Str → Str） |
+
+**运行状态**：`etf_listing` 缓存分支打通（日志出现「缓存命中 0 只；待拉取 0 只」），
+崩点前移到 `_source_score` 的 `stats.get(source, {...})` —— 裸 `get` 幽灵符号（裸 `get` 在
+隔离复现里表现为**挂死**）。
+
+### 下一队列（批次一百六十九）
+
+1. `dict.get` 的类型来源：`-> dict[str, dict[str,int]]` 返回 `json.loads` 的函数，
+   `.get()` 既不走 map 分支也不走 PyJson 分支 ⇒ 裸 `get`
+2. `str.startswith(<tuple>)`（Python 支持元组前缀，实测返回 0）
+3. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
