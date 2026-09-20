@@ -7374,6 +7374,44 @@ call, no NULL-handle dereference).",
                         }
                     }
                 }
+                // `mask.any()` / `mask.all()` on a boolean or label vector —
+                // same ghost family as `.isna()` (`[dynamic]i64__all`).
+                if matches!(method.as_str(), "any" | "all")
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::DynamicArray(_) | Type::Array(_, _)))
+                    && arg_ids.len() == 1
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: format!("py_vec_{}", method),
+                        args: vec![arg_ids[0]],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::Bool);
+                    return id;
+                }
+                // `series.isna()` on a COLUMN (a string vector): the shim's module
+                // function cannot be a vec METHOD, so it compiled to the ghost
+                // `[dynamic]str__isna` and aborted. Route to the runtime helper.
+                if method == "isna"
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::DynamicArray(_) | Type::Array(_, _)))
+                    && arg_ids.len() == 1
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_vec_isna".to_string(),
+                        args: vec![arg_ids[0]],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                    return id;
+                }
                 // `pd.to_datetime(vecstr).normalize()` — our shim represents dates
                 // as "YYYY-MM-DD" strings, so `.normalize()` (drop the time part)
                 // is the identity. Without this the call resolved to the ghost

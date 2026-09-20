@@ -721,6 +721,57 @@ int64_t py_str_prefix_any(int64_t s, int64_t vec, int64_t is_end) {
     }
     return 0;
 }
+// `series.isna()` — our columns are string vectors and the only "missing" spelling
+// is the literal "nan" produced by `pd.to_numeric(..., errors="coerce")` (plus the
+// empty string). Returns a NEW vector of 0/1 so `mask | other` and boolean
+// indexing keep working.
+// `mask.any()` / `mask.all()` on a boolean/label vector. Truthiness: an integer
+// slot is true when non-zero; a string slot when non-empty (and not "0"/"nan").
+static int zt_slot_truthy(int64_t v) {
+    if (!v) return 0;
+    if (v > 0x1000 && (v & 0x7) == 0) {
+        const char* s = (const char*)v;
+        if (s[0] == 0) return 0;
+        if (strcmp(s, "0") == 0 || strcmp(s, "nan") == 0 || strcmp(s, "False") == 0) return 0;
+        return 1;
+    }
+    return v != 0;
+}
+int64_t py_vec_any(int64_t vec) {
+    if (!vec) return 0;
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 0; i < n; i++) {
+        if (zt_slot_truthy(((int64_t*)vec)[i])) return 1;
+    }
+    return 0;
+}
+int64_t py_vec_all(int64_t vec) {
+    if (!vec) return 1;
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 0; i < n; i++) {
+        if (!zt_slot_truthy(((int64_t*)vec)[i])) return 0;
+    }
+    return 1;
+}
+
+int64_t py_vec_isna(int64_t vec) {
+    if (!vec) return zeta_dynarray_new(1);
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        const char* v = (const char*)((int64_t*)vec)[i];
+        int64_t flag = 0;
+        if (!v || v[0] == 0) {
+            flag = 1;
+        } else if (strcmp(v, "nan") == 0 || strcmp(v, "NaN") == 0 ||
+                   strcmp(v, "None") == 0) {
+            flag = 1;
+        }
+        vec_push(out, flag);
+    }
+    return out;
+}
+
 int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
     int64_t n = zt_vec_len(vec);
     if (getenv("ZT_DEBUG_CONTAINS")) fprintf(stderr, "CONTAINS vec=%p n=%lld x=%p str=%lld\n", (void*)vec, (long long)n, (void*)x, (long long)elem_is_str);
