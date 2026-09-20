@@ -6018,3 +6018,34 @@ call strftime_2      args [23, 26] -> 24    # 在 I64 接收者上分派 ✗
 3. -O3 longjmp 误编译（`ZETA_NO_OPT=1` 可对照）
 4. 顺带记一个小 parser 坑：把函数命名为 `use` 会与 `use` 语句冲突（`from mdf import use` +
    `print(use())` 触发 W1002 丢尾部）
+
+### 批次一百六十二（2026-09-19）：`str(<PyPath>)` 的类型（语料 **45/45 → 46/46**）
+
+`MarketDataFetcher.__init__` 里 `str(_PROJECT_ROOT / "data")` 是 `lower_to_string` 的
+**直通**（PyPath 句柄本身就是路径字符串），但直通**没改类型** ⇒ 结果仍是 `Named("PyPath")`
+⇒ 上层 `or` 的取值类型与 `os.path.join` 的分派按 i64 走 ⇒ 把句柄当数字解引用
+（lldb：`ldr x0,[x8]`，`x8 = NULL`）。
+
+修法只重标**结果 id** 为 `Str`：就地改源 id 会污染原变量的后续 `.parent/.exists()` 分派；
+经新 id 转手又没有 alloca（t73 立刻 SEGV，已实测回滚）⇒ **只改结果 id 的类型**。
+
+### 批次 162 后的运行状态（lldb，no-opt）
+
+崩点继续前移：`get_universe` → `fetch_stocks`/`_to_ts` → `MarketDataFetcher.__init__` →
+**`run_backtest` 的第一行日志** `logger.info("获取数据...")`：
+
+```
+frame #5: drv24`py_logger_info + 108          ← fprintf(stderr, "[INFO] %s: %s")
+frame #6: strategies_code_jq_wufu_local__run_backtest + 384
+frame #0: _platform_strlen（坏指针）
+```
+
+即 logger 的**名字**是坏指针 —— `logging.getLogger(__name__)` 里的 `__name__` 被解析成了
+一个**符号名**（早前日志里出现过 `[INFO] backend_strategy_wufu_constants__DEFENSIVE_ETF_JQ:`
+这种前缀），而正确值是**模块名字符串**。⇒ 下一批：`__name__` 的取值范围。
+
+### 下一队列（批次一百六十三）
+
+1. `__name__`（应为模块名字符串）—— 当前是符号名 ⇒ logger 名坏指针
+2. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一块
+3. -O3 longjmp 误编译（`ZETA_NO_OPT=1` 可对照）
