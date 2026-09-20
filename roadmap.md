@@ -6862,3 +6862,28 @@ print("via", use(c))        # ✗ **整条语句静默消失**（rc=0，无任�
 
 下一批：给这处兜底加上「先查 `name` / mangled / fns 缓存」的前置检查（与 2416 对齐），
 再跑 driver 看 `DataFrame::copy` 的调用点是否变成正确的实参装载。
+
+### 批次 223：IR 正确、汇编却缺实参（pipeline 猜想）
+
+`--emit-llvm` 的 IR（同一份 driver，`ZETA_NO_OPT=1`）：
+
+    merge:
+      %250 = load i64, ptr %78, align 4          ; %78 = alloca，entry 里 `store i64 %0, ptr %78`
+      %251 = call i64 @"DataFrame::copy"(i64 %250)   ; ✓ 实参在
+      …
+    define i64 @"DataFrame::copy"(i64 %0) { … }     ; 全模块只有这一个定义，没有第二份 declare
+
+而同一处**机器码**（lldb 反汇编，刚重新编译过的 drv400）：
+
+    +788: ldr x8,[sp,#0x4d0]
+    +792: ldr x0,[x8]
+    +796: bl map_get
+    +800: str x0,[sp,#0x530]
+    +804: bl DataFrame::copy        ; ← x0 是 map_get 的残留，**没有 load %78 那一步**
+
+⇒ IR 完全正确、汇编与该 IR 不一致。最可能的解释：**产出目标文件的模块与 `--emit-llvm` 打印的
+模块不是同一份**（例如 dump 发生在某个 fixup/优化之后，而 .o 用的是更早的模块），
+或存在一次**寄存器复用/参数装载被跳过**的后端预处理。
+
+下一批：在 codegen 里把「生成 .o 之前的最终 IR」也打印一份（同一路径、紧邻 dump），
+比较两处 IR 是否一致；若一致 ⇒ 定位到 LLVM 之后的那次变换；若不一致 ⇒ 找到被跳过的 fixup。
