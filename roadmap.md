@@ -7715,3 +7715,21 @@ verbatim 复刻 harness 打印：
 
 度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
 驱动崩点：`fetch_stocks + 3336`（`len(cached)`）—— 同一「坏帧」家族的下一处。
+
+### 批次 268：单标的走 `fetch_stocks` 会走到「未实现的 baostock」——这是**数据可得性**问题
+
+聚焦 harness：`f.fetch_stocks(["000300.XSHG"], "2024-01-02", "2024-02-29")`
+→ 缓存**不覆盖**该区间 ⇒ 进入联网分支 ⇒
+
+    PY-A: `_backend_datasrc_market_data___baostock_login` is NOT implemented in this build
+    （响亮 abort —— 设计如此，不是静默桩）
+
+⇒ 说明当前本地 parquet 缓存对该标的只覆盖到 2022 附近；2024-01/02 的区间要靠
+「拉取」而拉取源在本地构建里是缺口。驱动里之所以能过几只，是因为那些标的缓存命中。
+
+下一批（数据面，不再是编译器）：
+1. 先确认 CPython 基准跑同一区间时是否也走拉取（`REPLAYQUANT_LOCAL=1` 下 `jq_shim` 是否
+   直接供数）——基准给的是 `trading_days 37`，说明它拿到了数据；
+2. 若基准走的是 jq_shim 直供，则本地路径应让 `MarketDataFetcher` 也优先用 shim/缓存，
+   而不是掉到 baostock（可用 `QUANTGPT_CACHE_ONLY=1` 观察）；
+3. 之后继续把「坏帧」家族在 `len(cached)` 那处的实例定位掉。
