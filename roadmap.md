@@ -7049,3 +7049,22 @@ call DataFrame::loc(%116, %117)`。
 
 崩点推进到 `validate_and_repair_stock_ohlcv + 2020`（-O0 产物），这是本会话在清洗函数里
 到达的最深位置。
+
+### 批次 235：`_parquet_cache.load` 返回的帧「892 行 / 0 列」，`.loc(...).copy()` 之后却有 9 列
+
+探针（driver 语境，真实文件）：
+
+    df = _parquet_cache.load(path)
+    in  892 rows / 0 cols        ← ✗ 列数为 0
+    out = df.loc(<全 1 掩码>).copy()
+    out 892 rows / 9 cols        ← ✓ 9 列回来了
+
+同一方法 `columns`（→ `column_names()` → `list(self.data.keys())`）在两处给出 0 和 9
+⇒ **`load` 返回的那个帧的 `data` 是空的**（或字段读取取到了空 map），而 `loc` 走的是
+「C 里按 `map_keys` 重建」的路径，所以拿到的是真数据。
+
+另外验证：`list(d.keys())` / `len(d)` / `len(ks[0])` 本身都正确（`ks_len 2 / map_len 2 / ks0 1`）。
+
+下一批：查 `ParquetCache.load` 的返回路径 —— `df = pd.read_parquet(path)`（9 列 ✓）之后，
+`for col in date_cols: if col in df.columns: df[col] = pd.to_datetime(df[col])` 与
+`return df` 之间，`df` 的 `data` 是不是被某次 `__setitem__`/`to_datetime` 换成了空 map。
