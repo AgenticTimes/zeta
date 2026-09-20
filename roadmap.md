@@ -7839,3 +7839,21 @@ address 0x0），说明某条路径返回了 `pd.DataFrame()`（无参构造）�
 跨模块 dataclass 字段类型问题），以及驱动里 `py_df_groupby + 716` 的字符串键解引用。
 
 度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+### 批次 274：字符串键改用 `GC_base` 证明（不再靠指针区间猜）+ 补齐 `vec_push` 捕获
+
+1. `zt_safe_str_key` 之前用「值域 4G~128T」推断字符串指针 —— **不够**：打包小字符串与过期指针
+   都可能落在区间内，`map_str_key` 一解引用就崩（`py_df_groupby + 716` 的 `ldrb [x19]`）。
+   现在用 **`GC_base((void*)v) == v`**（我们的字符串都是 GC 分配）来证明可安全 intern；
+   不是 GC 块就当**不透明整数**参与哈希。⇒ 驱动的 groupby 崩溃消失。
+2. 又扫出两处**未回写** `vec_push` 返回值：`if (!same) vec_push(out, v);`
+   与 `for (…) vec_push(vec, val);`（第 251 批的 sed 没覆盖 `if`/`for` 前缀的写法）
+   ⇒ 扩容时句柄变旧，同一「堆破坏/非确定性」家族。
+
+验证（清洗 harness，`_load_cache` 前两步）：清洗后 **`clean 892 9 892`** ✓
+（lldb 下两个标的都通过；此前是 `clean 2 9 2`，因为时间戳被读成 1970）。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+**剩余**：驱动 `fetch_stocks + 3336`（`len(cached)`）处帧的 `data == 0`（EXC_BAD_ACCESS at 0x0）
+——无参 `DataFrame()` 已规范化成空 map，所以这条来自**别的**路径，下一批继续。

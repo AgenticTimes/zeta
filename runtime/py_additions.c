@@ -769,7 +769,7 @@ int64_t py_vec_discard(int64_t vec, int64_t x, int64_t elem_is_str) {
         if (!same && v && x && elem_is_str) {
             same = strcmp((const char*)v, (const char*)x) == 0;
         }
-        if (!same) vec_push(out, v);
+        if (!same) out = vec_push(out, v);
     }
     return out;
 }
@@ -1124,7 +1124,12 @@ int64_t py_is_vec(int64_t v) { return zt_maybe_vec(v) ? 1 : 0; }
 // inside inlined `map_str_key` from `py_df_groupby`. Non-pointer values hash
 // as opaque integers, which keeps equal values equal.
 int64_t zt_safe_str_key(int64_t v) {
-    if (v > 0x100000000LL && v < 0x7fffffffffffLL) return map_str_key(v);
+    // A range heuristic is NOT enough: packed small strings and stale pointers
+    // can land inside the plausible window, and `map_str_key` dereferences its
+    // argument (`ldrb [x19]`) — measured as a SEGV in inlined `map_str_key` from
+    // `py_df_groupby + 716`. Our strings are GC allocations, so ask the collector:
+    // only a real GC block base is safe to hand to `map_str_key`.
+    if (v && (int64_t)GC_base((void*)v) == v) return map_str_key(v);
     return v;
 }
 
@@ -1235,7 +1240,7 @@ int64_t py_df_setitem(int64_t frame, int64_t key, int64_t val) {
     }
     int64_t nrows = zt_frame_rows(map);
     int64_t vec = zeta_dynarray_new(nrows > 0 ? nrows : 1);
-    for (int64_t i = 0; i < nrows; i++) vec_push(vec, val);
+    for (int64_t i = 0; i < nrows; i++) vec = vec_push(vec, val);
     map_insert(map, k, vec);
     return 0;
 }
