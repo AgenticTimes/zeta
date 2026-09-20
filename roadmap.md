@@ -6823,3 +6823,21 @@ print("via", use(c))        # ✗ **整条语句静默消失**（rc=0，无任�
 （MIR 里还有一处 `Assign{lhs:3,…}` + `zeta_env_set` —— 对**形参**做 env 写，值得怀疑）。
 下一批：把这两条按**同样的顺序**放进一个「只有函数边界不同」的复现里逐步二分
 （例如把 harness 的语句包进一个 `def g(d, norm)` 而不是顶层）。
+
+### 批次 221：调用点**没有装载实参**（反汇编铁证）
+
+`validate_and_repair_stock_ohlcv` 里 `df.copy()` 的调用点（lldb 反汇编）：
+
+    +796: bl map_get                 ; 上一条语句的结果落在 x0
+    +800: str x0,[sp,#0x410]
+    +804: bl DataFrame::copy         ; ← **没有重新装载 x0**
+    +808: str x0,[sp,#0x470]
+    +816: bl DataFrame::empty        ; ← 同样没有装载实参（拿的是 copy 的返回值）
+
+⇒ 不是「值被清零」，而是**该调用点根本没写实参寄存器**：`copy`/`empty` 收到的是上一条语句
+（`map_get`）残留在 x0 里的东西。MIR 是 `Call{func:"DataFrame::copy", args:[1]}`（形参 1 = df），
+而 codegen 在这个位置**跳过了 `locals[1]` 的装载**。
+
+同时也能解释为什么内联复现都正常：那段代码在**函数内**才走到这条发射路径。
+下一批：在 codegen 的 `MirStmt::Call` 实参发射里找出「参数 id 不在 `locals` 时静默跳过」的分支
+（`locals.get(id)` 为 None ⇒ 应当回退 `gen_expr_safe(id)` 或响亮报错，绝不能发一个**无实参**的调用）。
