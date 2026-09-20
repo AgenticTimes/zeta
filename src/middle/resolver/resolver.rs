@@ -461,6 +461,17 @@ impl Resolver {
                     Some(m) => m,
                     None => continue, // already reported (fail-loud)
                 };
+                // Record the RAW specifier → resolved module so the MIR can map a
+                // RELATIVE import (`from ..datasrc.x import f`) back to its module
+                // when it decides whether to run `<module>__init`. Without this a
+                // function-local relative import never triggered the target's
+                // module init, so `register_universe` wrote into an uninitialized
+                // `UNIVERSES` and the registration was lost (silent wrong state).
+                if !spec.is_empty() && spec != module {
+                    self.py_module_aliases
+                        .borrow_mut()
+                        .insert(spec.clone(), module.clone());
+                }
                 // `from . import submod` — a bare-dots spec whose member is a
                 // SUBMODULE imports that module (binds `submod` to `pkg.submod`),
                 // not a member of `pkg`.
@@ -1619,8 +1630,21 @@ impl Resolver {
             AstNode::Bool(_) => Some(Type::Bool),
             AstNode::Lit(_) => Some(Type::I64),
             AstNode::DictLit { .. } => Some(Type::Named("map".to_string(), vec![])),
-            AstNode::ArrayLit(_) | AstNode::DynamicArrayLit { .. } => {
-                Some(Type::DynamicArray(Box::new(Type::I64)))
+            AstNode::ArrayLit(items) => {
+                // Element type from the FIRST element: a str list typed
+                // `DynamicArray(I64)` made every later consumer treat the elements
+                // as integers — `dict.fromkeys(CODES + ["y"])` then passed
+                // `keys_are_str = false`, inserted the keys UNHASHED, and
+                // `list(...)` returned duplicates (dedup lost) — which broke
+                // `wufu_constants`' universe registration.
+                let elem = items
+                    .first()
+                    .and_then(|e| infer_global_ty(e, seen, aliases, member_aliases))
+                    .unwrap_or(Type::I64);
+                Some(Type::DynamicArray(Box::new(elem)))
+            }
+            AstNode::DynamicArrayLit { elem_type, .. } => {
+                Some(Type::DynamicArray(Box::new(Type::from_string(elem_type))))
             }
             // An alias to an earlier global keeps that global's type
             // (`_CACHE = _LISTING_CACHE`).
@@ -2051,6 +2075,14 @@ impl Resolver {
                 return false;
             }
         };
+        // Mark this module as a USER MODULE **before** parsing/registering it:
+        // the registration below recurses into `register`, whose import handling
+        // resolves members of imported modules. During a CIRCULAR import the
+        // target is still mid-load, so `py_user_modules` was not populated yet,
+        // `is_user` came out false and every member reference was reported as
+        // "unknown member — external shim" ⇒ bare symbols (261 such warnings in
+        // the REasyQuant local-backtest compile, e.g. `get_cost_config`).
+        self.py_user_modules.borrow_mut().insert(module.to_string());
         // Same FILE under another name? Alias onto the already-loaded module so
         // both spellings share one prefix (`<canonical>__member`). Without this
         // the second spelling defined/emit lookups under a DIFFERENT prefix and
@@ -2294,7 +2326,17 @@ impl Resolver {
         let mut out = std::collections::HashMap::new();
         let module = match self.py_mangled_to_module.borrow().get(func_name) {
             Some(m) => m.clone(),
-            None => return out,
+            None => {
+                // A METHOD's MIR name is `Class::method` and is NOT a key in
+                // `py_mangled_to_module` (which holds definitions), so its rename
+                // table is empty and module-private helpers referenced from a
+                // method body stay bare (`_to_ts`). Matching the class against the
+                // owning module fixed that, but ALSO applied the module's
+                // re-exports table inside method bodies, which produced fresh
+                // ghosts (`_pd.Timestamp__date`, `_filter`) — so it stays off
+                // until the re-exports table is reliable (see roadmap batch 158).
+                return out;
+            }
         };
         if let Some(own) = self.py_module_own_names.borrow().get(&module) {
             let prefix = format!("{}__", module.replace('.', "_"));
@@ -2312,6 +2354,15 @@ impl Resolver {
                 // `datetime__timedelta` externs (jq_wufu_local).
                 // Leave them to `py_member_aliases` → registry symbol.
                 if crate::middle::pylib::find_member(src_mod, src_mem).is_some() {
+                    continue;
+                }
+                // Only rename when `src_mod` really IS a module (loaded from disk
+                // or known to the registry). A dotted ATTRIBUTE path
+                // (`pd.Timestamp.date`) is not, and renaming `date` to
+                // `pd.Timestamp__date` produced a ghost symbol.
+                if !self.py_user_modules.borrow().contains(src_mod)
+                    && crate::middle::pylib::find_module(src_mod).is_none()
+                {
                     continue;
                 }
                 // Same canonicalization as `py_member_call`: the definition may

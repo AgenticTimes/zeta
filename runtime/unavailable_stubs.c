@@ -157,3 +157,7 @@ int64_t __attribute__((weak)) to_pydatetime(void) { return zt_unavailable("_to_p
 // nautilus engine constructors — never reached with `--engine local`.
 int64_t __attribute__((weak)) nautilus_trader_backtest_engine__BacktestEngine(void) { return zt_unavailable("_nautilus_trader_backtest_engine__BacktestEngine"); }
 int64_t __attribute__((weak)) nautilus_trader_model_objects__Money(void) { return zt_unavailable("_nautilus_trader_model_objects__Money"); }
+
+// `logger.info(...)` reached through a closure whose receiver type was lost
+// (diagnostic-only link aid; the normal build type-checks it).
+int64_t __attribute__((weak)) info(void) { return zt_unavailable("_info"); }

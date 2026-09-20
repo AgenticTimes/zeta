@@ -3704,7 +3704,20 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         // `zeta_py_import` args = (module, alias);
                         // `zeta_py_from` args = (module, member, alias) — the
                         // module is first in both. `zeta_py_star` = (module,).
-                        if self.py_user_modules.contains(module) {
+                        // A function-local RELATIVE import carries the raw spec
+                        // (`..datasrc.market_data_universe`); map it to the
+                        // resolved module first, or the containment test fails and
+                        // the module init is never emitted.
+                        let module = self
+                            .py_module_aliases
+                            .get(module)
+                            .cloned()
+                            .unwrap_or_else(|| module.clone());
+                        if self.py_user_modules.contains(&module)
+                            || self
+                                .func_ret_types
+                                .contains_key(&format!("{}__init", module.replace('.', "_")))
+                        {
                             let init_sym = format!("{}__init", module.replace('.', "_"));
                             let init_dest = self.next_id();
                             self.stmts.push(MirStmt::Call {
@@ -6049,11 +6062,36 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         _ => None,
                     };
                     if let Some(call_args) = lowered_args {
-                        // PY-A: list(x) is a passthrough — handles are already
-                        // array-like; forcing zeta_list breaks StackArray
-                        // handles (no Vec header).
+                        // `list(<map>)` is Python's KEYS list — a map handle is
+                        // NOT array-like, so the passthrough below returned the
+                        // map itself (type and value both wrong): `WUFU_JQ_CODES =
+                        // list(dict.fromkeys(POOL + POOL2))` then held a map, so
+                        // `wufu_constants._register_into_datasrc()` registered an
+                        // empty universe and the local entry raised
+                        // "Unknown universe: wufu".
                         if method == "list" {
                             let src = call_args[0];
+                            if let Some(Type::Named(n, targs)) =
+                                self.type_map.get(&src).cloned()
+                            {
+                                if n == "map" || n == "dict" {
+                                    let nid = self.next_id();
+                                    self.stmts.push(MirStmt::Call {
+                                        func: "map_keys".to_string(),
+                                        args: vec![src],
+                                        dest: nid,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs.insert(nid, MirExpr::Var(nid));
+                                    let kty = targs.first().cloned().unwrap_or(Type::I64);
+                                    self.type_map
+                                        .insert(nid, Type::DynamicArray(Box::new(kty.clone())));
+                                    self.exprs.insert(id, MirExpr::Var(nid));
+                                    self.type_map
+                                        .insert(id, Type::DynamicArray(Box::new(kty)));
+                                    return nid;
+                                }
+                            }
                             self.exprs.insert(id, MirExpr::Var(src));
                             if let Some(t) = self.type_map.get(&src).cloned() {
                                 self.type_map.insert(id, t);
