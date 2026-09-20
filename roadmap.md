@@ -5911,3 +5911,52 @@ ValueError: Unknown universe: wufu. Available: ['small_scale', 'hs300', 'csi500'
 2. -O3 误编译 longjmp 返回路径（`ZETA_NO_OPT=1` 可对照）
 3. 数据层 `py_pd_read_parquet` 真实实现（2636 parquet / 669MB）——**运行出真实结果的前置**
 4. 107 条桩按「运行真正撞到哪条」逐条替换（`ZETA_LENIENT_STUBS=1` 一次跑全）
+
+---
+
+## 批次一百五十九（2026-09-19）：把「wufu universe 注册丢失」查到底（语料 **38/38 → 42/42**）
+
+目标：让 local wufu 回测**跑起来**。本批不追新符号，而是把「`get_universe("wufu")` 抛
+`Unknown universe`」这条链逐层拆开——**四层，每层都是独立缺陷**。
+
+### 链条与修法
+
+| # | 层 | 症状/证据 | 修法 |
+|---|---|---|---|
+| 1 | `list(<map>)` 返回 map 本身 | `WUFU_JQ_CODES = list(dict.fromkeys(…))` 拿到 map ⇒ 下游 `WUFU_BS_CODES` 为空 | map/dict 接收者 → `map_keys(x)`，元素类型取键类型（`list(x)` 的「透传」只对数组成立） |
+| 2 | 模块级 str 列表被记成 `DynamicArray(I64)` | `dict.fromkeys(CODES + ["y"])` 的 `keys_are_str=false` ⇒ 键**未做内容哈希** ⇒ 去重丢失 | `infer_global_ty` 的 `ArrayLit` 取**第一个元素**的类型 |
+| 3 | 函数内**相对** import 不触发目标 module init | MIR 里没有 `market_data_universe__init`；marker 携带的是**原始相对 spec**（`..datasrc.market_data_universe`），init 发射处拿它查 `py_user_modules` ⇒ 查不到 ⇒ 模块从未初始化 ⇒ `register_universe` 写进未初始化的 `UNIVERSES` ⇒ 注册丢失 | ① resolver 记 `原始 spec → 解析后模块名`；② MIR 先归一，再用 `py_user_modules` **或** `func_ret_types` 里有 `<mod>__init` 判定 |
+| 4 | 循环 import 期间目标模块被当作外部 shim | `py_user_modules` 只在**加载成功后**登记，而 `register` 递归处理 import ⇒ 循环期间 `is_user=false` ⇒ 成员引用全变 "unknown member — external shim" ⇒ 裸符号（**实测该告警 261 → 89**） | `load_user_python_module` 一找到文件就登记为 user module |
+
+附带：re-exports 表只对**真实模块**生效（`pd.Timestamp.date` 这类点号属性路径不参与重命名，
+否则产生 `_pd.Timestamp__date` 幽灵）；「按类名匹配所属模块」的 rename 回退**只取 own names**
+（取 re-exports 会产生新幽灵）。
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| 语料解析 | 38/38 | **42/42** ⬆ |
+| 官方 | 194/194 | 194/194 |
+| python_style | 271/274 | 271/274 |
+| driver "unknown member" 告警 | 261 | **89** |
+
+### 运行状态（lldb，no-opt 构建）
+
+```
+[INFO] …: 获取数据...
+PY-A: `__to_ts` is NOT implemented in this build …      ← 已越过 get_universe ✓
+```
+
+⇒ **宇宙注册问题已解决**，程序进入数据层。剩下的 `_to_ts` 属「方法体内调用同模块私有函数」
+（`module_renames_for` 对 `Class::method` 拿不到模块）——已定位到修法，但需要先把
+re-exports 表做可靠（本批已缩小到 own-names-only）。
+
+### 下一队列（批次一百六十）
+
+1. **`_to_ts` 一族**：方法体的 rename 表（own-names-only 已就绪，需确认不再产生
+   `_pd.Timestamp__date`/`_filter` 这两个幽灵后再打开）
+2. `_filter` / `_pd.Timestamp__date` 的来源（数据层 pandas/numpy 面）
+3. `py_pd_read_parquet` 真实实现（2636 parquet / 669MB）——**跑出指标的最后一块**
+4. -O3 误编译 longjmp 路径（`ZETA_NO_OPT=1` 可对照；O3 下 trap 在
+   `market_data__init` 的 try/except）
