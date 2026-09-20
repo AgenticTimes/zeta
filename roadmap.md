@@ -7748,3 +7748,21 @@ verbatim 复刻 harness 打印：
 下一步（更干净）：`py_df_groupby` 里别再走 `map_str_key` 互化，直接用
 `map_keys(map)` 给出的**显示字符串**做 `map_get(map, cname)`（`map_get` 按内容哈希），
 或者给运行期的字符串句柄加**真正的**标识（tag/魔术头）而不是猜。
+
+### 批次 270：`pd.concat` 被走到了，但 `frames[0].data` 不是 map
+
+`QUANTGPT_CACHE_ONLY=1` 下的新崩点：
+
+    map_keys + 144 ← DataFrame::column_names + 24 ← pandas__concat + 84
+                  ← remove_extreme_return_bars + 788
+
+即 `pd.concat(parts, ...)` 里的 `first.column_names()` → `map_keys(self.data)`，而
+`self.data` 不是 map ⇒ `parts[0]`（`grp.loc[~mask]` 的结果）不是真帧。
+提示：`grp` 是 groupby 产出的 sub-frame；它的 `self.data` 若等于**pair 块的第 0 槽**
+（key 字符串），就会在 `map_keys` 里崩 —— 与 `for k, g in ...` 解构取到的元素有关。
+
+**同时记录一个被回退的实验**：把 `py_df_groupby` 的列名从 `zt_safe_str_key(...)`
+（intern 后查表）改成直接用 `map_keys` 的显示字符串查表 ⇒ `/tmp/gb.z` 立刻退化成
+`group a 0 0`（列全丢）⇒ 证明 `map_get` 是**按 intern 句柄**索引的，必须 interning。
+
+度量（回退后）：官方 194/194、python_style 274/2、语料 39/39 全绿。

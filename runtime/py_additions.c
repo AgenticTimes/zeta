@@ -1315,6 +1315,9 @@ int64_t py_df_groupby(int64_t frame, int64_t key) {
         for (int64_t c = 0; c < ncols; c++) {
             // `map_keys` yields the STORED key representation; `map_get`/`map_insert`
             // in this runtime key `map<str, _>` by `map_str_key`, so hash here.
+            // `map_get` keys by the INTERNED handle (`map_str_key`), so the
+            // display string from `map_keys` must be interned first — using it
+            // directly lost every column (measured: `group a 0 0` in /tmp/gb.z).
             int64_t hc = zt_safe_str_key(((int64_t*)col_names)[c]);
             int64_t col = map_get(map, hc);
             if (!col) continue;
