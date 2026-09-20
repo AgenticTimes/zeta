@@ -6577,3 +6577,38 @@ eq_cd 1 / eq_scd 1        ← 值全对（只是 print 走了 i64 路径）
 
 下一批：把 `MarketDataFetcher.__init__` 的字段按顺序逐个加进最小复现，定位是第几个字段
 开始串位（或直接看 ctor 的 MIR 里 `Struct` 的字段顺序与 `FieldAccess` 的索引）。
+
+### 批次 202 定位（元组字面量的真实根因，**暂不回填**）
+
+`ParquetCache.load` 崩溃的地址给了决定性线索：
+
+```
+EXC_BAD_ACCESS at 0x61645f6564617274      = "trade_date" 的 8 个字节（小端）
+  py_list_contains + 152（strcmp）
+```
+
+源码是 `date_cols: tuple[str, ...] = ("trade_date",)`，而**解析器把 `(x,)` 当普通括号表达式**
+（`parse_tuple_or_paren` 里 `opt(tag(","))` 吃掉了尾逗号却不记录）⇒ `date_cols` 退化成**字符串本身**：
+
+```
+t = ("trade_date",)
+t[0]      → "t"          （读的是字符串首字符）
+len(t)    → 10           （是字符串长度）
+for x in t → 逐字符迭代
+"trade_date" in t → 1    （子串匹配，恰好为真）
+```
+
+于是 `for col in date_cols:` 里 `col` 是**字符**，`array_get` 把字符串前 8 字节当成整数
+传进 `strcmp` ⇒ 正是那个崩溃地址。
+
+**试过并已回退**：① 让解析器保留尾逗号（`(x,)` → `Tuple`）；② 元组元素物化进槽位。
+两个改动本身语义正确，但会让**单元素元组的表示**暴露出来（`(x,)[0]` 得到 0、
+`x in (y,)` 比较句柄），官方 194→193、python_style 272→271（t62_thread_args）、
+语料 39→36 ⇒ **必须先把元组的运行时表示（元素读取 / 成员判定 / 迭代）修对**，
+再回填这两处。已 `git checkout` 回退，基线复测 194/194、272/274、39/39 全绿。
+
+### 下一队列（批次 203）
+
+1. **元组表示**：StackArray 的元素读取（`t[0]`）、`len(t)`、`for x in t`、`x in t`
+   —— 修对之后再回填「尾逗号 → Tuple」与「元素物化」
+2. 之后：`ParquetCache.load` 走通 ⇒ 缓存命中 ⇒ `to_fetch` 收敛 ⇒ 进入回测
