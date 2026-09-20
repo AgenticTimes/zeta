@@ -7766,3 +7766,27 @@ verbatim 复刻 harness 打印：
 `group a 0 0`（列全丢）⇒ 证明 `map_get` 是**按 intern 句柄**索引的，必须 interning。
 
 度量（回退后）：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+### 批次 271：`len(cached)` 崩溃点是**帧的 data 为 NULL**，并锁定具体标的
+
+lldb 现场（`fetch_stocks + 3336`）：
+
+    DataFrame::n_rows: ldr x0, [x8]      ← x8 = self.data == 0（NULL map）
+    stop reason = EXC_BAD_ACCESS (code=1, address=0x0)
+
+而崩溃前最后两条日志是这两个文件的元数据读取失败：
+
+    load_metadata failed for …/data/stocks/sh_515170.parquet: 1
+    load_metadata failed for …/data/stocks/sz_159509.parquet: 1
+
+⇒ 下一个标的（或这两个之一）返回的帧 `data` 是 **NULL**（而不是一个 map），
+`len(cached)` 就崩在这里。
+
+隔离复现全部通过（本轮逐一验证，都是绿的）：
+- `_load_cache` 连续多次调用（含不存在的代码 → -1）✓
+- verbatim 复刻 `remove_extreme_return_bars`（含 concat + tuple 返回）→ `myreb 892 9 0` ✓
+- `groupby → sort → pct_change → mask → loc → concat` 全链 ✓
+- `covers_range`（位置/kwarg 两种调用）✓
+
+下一批：盯 `sh_515170` / `sz_159509` 这两个标的的缓存文件，看 `_load_cache` 为什么给出
+`data == NULL` 的帧（大概率是某条 `pd.DataFrame()` 空构造或 tuple 解构分支）。
