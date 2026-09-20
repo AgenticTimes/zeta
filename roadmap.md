@@ -7869,3 +7869,14 @@ lldb 现场：`DataFrame::n_rows: ldr x0, [x8]`，`EXC_BAD_ACCESS (code=1, addre
 ⇒ 是**某条路径返回了 0 帧**（`pd.DataFrame()` 的构造本身返回 0，或 tuple 解构拿到 0），
 而不是 data 为 0。下一批：在 `validate_and_repair_stock_ohlcv` 的两个返回点各加一次
 「帧是否可读」的响亮检查（运行期助手），把 0 帧挡在返回处并打印调用者。
+
+### 批次 276：**拿到可复现驱动崩溃的 harness**
+
+    codes = list(W.GLOBAL_ETF_POOL) + list(W.CHINA_ETF_POOL)   # 114 只（驱动报 119）
+    for code in codes: d = f._load_cache(code)
+
+    pool 114
+    （随后 Bus error，与驱动 `fetch_stocks` 里的 `len(cached)` 同源）
+
+⇒ 不用跑整个回测就能复现驱动的崩溃，而且只需在循环里逐行打印就能**点名**是哪只标的/
+哪一步。下一批就用它定位（本轮补打印的补丁没生效，需重新落一次并确认输出）。
