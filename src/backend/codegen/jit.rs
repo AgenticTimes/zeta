@@ -17,6 +17,13 @@ use std::path::Path;
 /// loop optimizations, and the full -O3 pipeline.
 /// Uses LLVMRunPasses C API directly (LLVM 17+ new PM).
 fn optimize_module<'ctx>(module: &inkwell::module::Module<'ctx>, target_machine: &TargetMachine) {
+    // `ZETA_NO_OPT=1` skips the pipeline. Diagnostic only: it tells a
+    // MISCOMPILE (the -O3 pipeline turns valid IR into something that traps)
+    // apart from bad generated IR. Never use it for releases — the object is
+    // ~5x bigger and slower.
+    if std::env::var("ZETA_NO_OPT").is_ok() {
+        return;
+    }
     // Run the full -O3 pipeline on the module via LLVM's new PM pass builder
     unsafe {
         let pipeline = CString::new("default<O3>").unwrap();

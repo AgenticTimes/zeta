@@ -128,3 +128,28 @@ int64_t __attribute__((weak)) subscribe_bars(void) { return zt_unavailable("_sub
 int64_t __attribute__((weak)) update(void) { return zt_unavailable("_update"); }
 int64_t __attribute__((weak)) values(void) { return zt_unavailable("_values"); }
 int64_t __attribute__((weak)) write_table(void) { return zt_unavailable("_write_table"); }
+
+// Added for the ZETA_NO_OPT=1 (unoptimized) link: these paths are
+// optimized away in the normal build, so they never showed up as undefined.
+int64_t __attribute__((weak)) PyDate__astimezone(void) { return zt_unavailable("_PyDate__astimezone"); }
+int64_t __attribute__((weak)) add_data(void) { return zt_unavailable("_add_data"); }
+int64_t __attribute__((weak)) add_instrument(void) { return zt_unavailable("_add_instrument"); }
+int64_t __attribute__((weak)) add_strategy(void) { return zt_unavailable("_add_strategy"); }
+int64_t __attribute__((weak)) add_venue(void) { return zt_unavailable("_add_venue"); }
+int64_t __attribute__((weak)) addanalyzer(void) { return zt_unavailable("_addanalyzer"); }
+int64_t __attribute__((weak)) addstrategy(void) { return zt_unavailable("_addstrategy"); }
+int64_t __attribute__((weak)) equity(void) { return zt_unavailable("_equity"); }
+int64_t __attribute__((weak)) host_str_replace_2(void) { return zt_unavailable("_host_str_replace_2"); }
+int64_t __attribute__((weak)) isoformat(void) { return zt_unavailable("_isoformat"); }
+int64_t __attribute__((weak)) make_price(void) { return zt_unavailable("_make_price"); }
+int64_t __attribute__((weak)) make_qty(void) { return zt_unavailable("_make_qty"); }
+int64_t __attribute__((weak)) map(void) { return zt_unavailable("_map"); }
+int64_t __attribute__((weak)) market(void) { return zt_unavailable("_market"); }
+int64_t __attribute__((weak)) py_dt_now_1(void) { return zt_unavailable("_py_dt_now_1"); }
+int64_t __attribute__((weak)) py_file_open_3(void) { return zt_unavailable("_py_file_open_3"); }
+int64_t __attribute__((weak)) py_logger_debug_9(void) { return zt_unavailable("_py_logger_debug_9"); }
+int64_t __attribute__((weak)) routine(void) { return zt_unavailable("_routine"); }
+int64_t __attribute__((weak)) sort_data(void) { return zt_unavailable("_sort_data"); }
+int64_t __attribute__((weak)) submit_order(void) { return zt_unavailable("_submit_order"); }
+int64_t __attribute__((weak)) timestamp(void) { return zt_unavailable("_timestamp"); }
+int64_t __attribute__((weak)) to_pydatetime(void) { return zt_unavailable("_to_pydatetime"); }
