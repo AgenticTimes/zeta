@@ -727,6 +727,73 @@ int64_t py_str_prefix_any(int64_t s, int64_t vec, int64_t is_end) {
 // indexing keep working.
 // `mask.any()` / `mask.all()` on a boolean/label vector. Truthiness: an integer
 // slot is true when non-zero; a string slot when non-empty (and not "0"/"nan").
+// `series.max()` / `.min()` — numeric when every element parses as a number
+// (that is what the pandas path expects for prices/dates-as-strings), otherwise
+// the lexicographic extreme. "nan"/empty slots are skipped; an all-missing vector
+// yields "nan" so callers never see a fabricated 0.
+// Python `set`s degrade to lists here, so `s.discard(x)` / `s.remove(x)` need a
+// real removal: rebuild the vector without the first matching slot (by CONTENT
+// when both look like strings, so it behaves like a set for string members).
+// `s.add(x)` on our list-backed set: append only when absent (sets DEDUP — a
+// plain push made `s.add(1); s.add(1)` report len 2, t262).
+int64_t py_vec_add_unique(int64_t vec, int64_t x, int64_t elem_is_str) {
+    int64_t n = zt_vec_len(vec);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        if (v == x) return vec;
+        if (v && x && elem_is_str && strcmp((const char*)v, (const char*)x) == 0) return vec;
+    }
+    vec_push(vec, x);
+    return vec;
+}
+
+int64_t py_vec_discard(int64_t vec, int64_t x, int64_t elem_is_str) {
+    if (!vec) return vec;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        int same = (v == x);
+        if (!same && v && x && elem_is_str) {
+            same = strcmp((const char*)v, (const char*)x) == 0;
+        }
+        if (!same) vec_push(out, v);
+    }
+    return out;
+}
+
+int64_t py_vec_extreme(int64_t vec, int64_t want_max) {
+    if (!vec) return (int64_t)GC_strdup("nan");
+    int64_t n = zt_vec_len(vec);
+    int have_num = 0, have_str = 0;
+    double best_num = 0;
+    const char* best_str = NULL;
+    for (int64_t i = 0; i < n; i++) {
+        const char* v = (const char*)((int64_t*)vec)[i];
+        if (!v || v[0] == 0 || strcmp(v, "nan") == 0) continue;
+        char* endp = NULL;
+        double d = strtod(v, &endp);
+        int is_num = (endp && *endp == 0);
+        if (is_num) {
+            if (!have_num || (want_max ? d > best_num : d < best_num)) best_num = d;
+            have_num = 1;
+        }
+        if (!have_str || (want_max ? strcmp(v, best_str) > 0 : strcmp(v, best_str) < 0)) {
+            best_str = v;
+        }
+        have_str = 1;
+    }
+    if (have_num) {
+        char buf[64];
+        snprintf(buf, sizeof buf, "%.10g", best_num);
+        return (int64_t)GC_strdup(buf);
+    }
+    if (have_str) return (int64_t)GC_strdup(best_str);
+    return (int64_t)GC_strdup("nan");
+}
+int64_t py_vec_max(int64_t vec) { return py_vec_extreme(vec, 1); }
+int64_t py_vec_min(int64_t vec) { return py_vec_extreme(vec, 0); }
+
 static int zt_slot_truthy(int64_t v) {
     if (!v) return 0;
     if (v > 0x1000 && (v & 0x7) == 0) {
@@ -737,6 +804,17 @@ static int zt_slot_truthy(int64_t v) {
     }
     return v != 0;
 }
+int64_t py_vec_isna(int64_t vec);
+int64_t py_vec_notna(int64_t vec) {
+    int64_t m = py_vec_isna(vec);
+    int64_t n = zt_vec_len(m);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        vec_push(out, ((int64_t*)m)[i] ? 0 : 1);
+    }
+    return out;
+}
+
 int64_t py_vec_any(int64_t vec) {
     if (!vec) return 0;
     int64_t n = zt_vec_len(vec);

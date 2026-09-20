@@ -1344,6 +1344,10 @@ int64_t py_noop2(int64_t a, int64_t b) {
     (void)b;
     return 0;
 }
+// Arity-mangled neighbours of `py_noop2` (`df.to_parquet(path, meta, kw)` style
+// calls compiled to `py_noop2_3`).
+int64_t py_noop2_3(int64_t a, int64_t b, int64_t c) { (void)a; (void)b; (void)c; return 0; }
+int64_t py_noop3(int64_t a, int64_t b, int64_t c) { (void)a; (void)b; (void)c; return 0; }
 
 // `pd.read_parquet(path)` — a real reader (runtime/parquet_min.c): SNAPPY +
 // PLAIN/RLE_DICTIONARY pages, returning the runtime's column map

@@ -947,6 +947,37 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             self.type_map.insert(id, ty);
                         }
                     }
+                    // A CLASS annotation (`df: pd.DataFrame`, `cfg: MarketCleanConfig`)
+                    // is the only place a parameter's struct/handle identity exists.
+                    // Leaving the param I64 made `len(df)` dispatch to `array_len`
+                    // (0) and `df.empty` a bare `empty` call — measured:
+                    // `validate_and_repair_stock_ohlcv` took its `if df.empty:
+                    // return pd.DataFrame()` early exit and the cache load returned
+                    // an EMPTY frame.
+                    if matches!(self.type_map.get(&id), Some(Type::I64) | Some(Type::PyDynamic)) {
+                        let ann = param_type.trim();
+                        if !ann.is_empty() && ann != "dyn" && ann != "()" {
+                            let ty = Type::from_string(ann);
+                            if matches!(ty, Type::Named(_, _)) {
+                                let mapped = match &ty {
+                                    Type::Named(n, args) => match crate::middle::pylib::handle_tag(n)
+                                    {
+                                        Some(tag) => Type::Named(tag.to_string(), args.clone()),
+                                        None => {
+                                            // `pandas.DataFrame` -> `DataFrame`
+                                            let last = n
+                                                .rsplit(['.', ':'])
+                                                .find(|s| !s.is_empty())
+                                                .unwrap_or(n);
+                                            Type::Named(last.to_string(), args.clone())
+                                        }
+                                    },
+                                    _ => ty.clone(),
+                                };
+                                self.type_map.insert(id, mapped);
+                            }
+                        }
+                    }
                     self.source_types.insert(id, param_type.clone());
                     self.stmts.push(MirStmt::ParamInit {
                         param_id: id,
@@ -7374,6 +7405,81 @@ call, no NULL-handle dereference).",
                         }
                     }
                 }
+                // Python `set` methods on our list-backed sets: `s.add(x)` is a
+                // push; `s.discard(x)` / `s.remove(x)` rebuild without the slot.
+                // They compiled to ghosts (`_set__add`) and failed the link.
+                if matches!(method.as_str(), "add" | "discard" | "remove")
+                    && receiver_ty.as_ref().map_or(false, |t| {
+                        matches!(t, Type::DynamicArray(_) | Type::Array(_, _))
+                            || matches!(t, Type::Named(n, _) if n == "set" || n == "frozenset")
+                            || matches!(t, Type::Str) == false && matches!(t, Type::I64 | Type::PyDynamic)
+                    })
+                {
+                    if method == "add" && arg_ids.len() == 2 {
+                        let elem_is_str = matches!(self.type_map.get(&arg_ids[1]), Some(Type::Str));
+                        let flag = self.next_id();
+                        self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
+                        self.type_map.insert(flag, Type::I64);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_vec_add_unique".to_string(),
+                            args: vec![arg_ids[0], arg_ids[1], flag],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        // vec_push may reallocate and returns the new handle — write
+                        // it back so a growing set is not silently lost.
+                        if let Some(AstNode::Var(name)) = receiver.as_ref().map(|r| &**r) {
+                            if let Some(&slot) = self.name_to_id.get(name) {
+                                self.stmts.push(MirStmt::Assign { lhs: slot, rhs: id });
+                            }
+                        }
+                        self.type_map.insert(id, receiver_ty.clone().unwrap());
+                        return id;
+                    }
+                    if arg_ids.len() == 2 {
+                        let elem_is_str = matches!(
+                            self.type_map.get(&arg_ids[1]),
+                            Some(Type::Str)
+                        );
+                        let flag = self.next_id();
+                        self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
+                        self.type_map.insert(flag, Type::I64);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_vec_discard".to_string(),
+                            args: vec![arg_ids[0], arg_ids[1], flag],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        if let Some(AstNode::Var(name)) = receiver.as_ref().map(|r| &**r) {
+                            if let Some(&slot) = self.name_to_id.get(name) {
+                                self.stmts.push(MirStmt::Assign { lhs: slot, rhs: id });
+                            }
+                        }
+                        self.type_map.insert(id, receiver_ty.clone().unwrap());
+                        return id;
+                    }
+                }
+                // `series.max()` / `.min()` on a COLUMN — same ghost family
+                // (`[dynamic]str__max`), reached once annotated params keep their
+                // DataFrame type (`covers_range` does `cache_df[date_col].max()`).
+                if matches!(method.as_str(), "max" | "min")
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::DynamicArray(_) | Type::Array(_, _)))
+                    && arg_ids.len() == 1
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: format!("py_vec_{}", method),
+                        args: vec![arg_ids[0]],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::Str);
+                    return id;
+                }
                 // `mask.any()` / `mask.all()` on a boolean or label vector —
                 // same ghost family as `.isna()` (`[dynamic]i64__all`).
                 if matches!(method.as_str(), "any" | "all")
@@ -7395,14 +7501,14 @@ call, no NULL-handle dereference).",
                 // `series.isna()` on a COLUMN (a string vector): the shim's module
                 // function cannot be a vec METHOD, so it compiled to the ghost
                 // `[dynamic]str__isna` and aborted. Route to the runtime helper.
-                if method == "isna"
+                if matches!(method.as_str(), "isna" | "notna")
                     && receiver_ty
                         .as_ref()
                         .map_or(false, |t| matches!(t, Type::DynamicArray(_) | Type::Array(_, _)))
                     && arg_ids.len() == 1
                 {
                     self.stmts.push(MirStmt::Call {
-                        func: "py_vec_isna".to_string(),
+                        func: format!("py_vec_{}", method),
                         args: vec![arg_ids[0]],
                         dest: id,
                         type_args: vec![],
