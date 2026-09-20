@@ -6723,3 +6723,25 @@ def g():
 `caught / f 0 / caught2 / g 0 / rc=0`。
 
 driver 崩点前移到 `DataFrame::n_rows + 12` ← `__len__` ← `fetch_stocks + 1400`（对 None 调 len）。
+
+### 批次 215 定位（缓存返回的 DataFrame 为空 ⇒ 缩到「方法调用静默消失」）
+
+复刻 `validate_and_repair_stock_ohlcv` 的调用形态后发现：函数的早退分支
+`if df is None or df.empty: return pd.DataFrame(), report` 被命中（返回空 DataFrame），
+即**参数位置上的 DataFrame** 的 `self.data` 取不到。继续缩：
+
+```python
+class C:
+    def __init__(self, d) -> None: self.data = d
+    def n(self) -> int: return len(self.data)
+
+c = C([1, 2, 3])
+print("direct", c.n())      # ✓ 打印 3
+def use(x) -> int:
+    return x.n()            # ← 形参 x 未注解
+print("via", use(c))        # ✗ **整条语句静默消失**（rc=0，无任何输出）
+```
+
+⇒ 这是「**未注解形参上的方法调用让整条语句消失**」的静默失败（比崩更糟）。
+下一批：看 `use` 的 MIR（`x.n()` 是否被丢/改成幽灵后连 print 一起丢），
+并修「静默丢语句」这条红线（编译器不得静默丢失语句）。
