@@ -6486,3 +6486,30 @@ weak 的 `login` 仍输给 libc（`getutmpx` ← `login(3)` ← `_baostock_login
 **精确定位**：第二次「待拉取 238 只」**没有**配套的「行情请求 …」⇒ 同一次
 `fetch_stocks` 调用内，缓存扫描 for 循环的**循环体执行了两遍**（`to_fetch` 翻倍）。
 下一批：把该循环（含 `try/except` + `continue`）做成最小复现。
+
+### 批次 187 结论（关键路径重排）
+
+排查「源回退循环不收敛」时确认：**每条路径都回到同一个根** ——
+`MarketDataFetcher._load_cache()` → `_parquet_cache.load()` → `pd.read_parquet()`
+→ 运行期 `py_pd_read_parquet` 仍是 `return 0` 的桩 ⇒ `cached = None`
+⇒ 每个代码都进 `to_fetch` ⇒ 触发平台/回退链（本实现里平台不可用）⇒ 循环。
+
+已排除（最小复现均正常）：
+
+| 形状 | 结果 |
+|---|---|
+| `try/except` + `continue` 的 for 循环 | ✓ 不多跑 |
+| `try` 块之后接 for 循环 | ✓ 不多跑 |
+| 注解空列表 `out: list[str] = []` 与形参别名 | ✓ 不增长 |
+| 缓存扫描循环的简化复刻 | ✓ `n 3 f 3` 一次 |
+
+⇒ **关键路径就是 `py_pd_read_parquet`（真实 parquet 读取）**：它一旦可用，
+缓存命中 ⇒ `to_fetch` 收敛 ⇒ 直接进入回测（本地数据 2636 个 parquet / 669 MB）。
+随后仍待处理：`区间 1969-08-04 ~ `、列表下标的打印分发。
+
+### 下一队列（批次 188）
+
+1. **`py_pd_read_parquet` 真实实现**（先支持本项目缓存表的 schema：
+   `trade_date/stock_code/open/high/low/close/volume/amount`，产出「列名 → 向量」的 DataFrame 表示）
+2. 源回退循环收敛验证（有了缓存命中后）
+3. `区间 1969-08-04 ~ ` 日期显示；列表下标打印分发
