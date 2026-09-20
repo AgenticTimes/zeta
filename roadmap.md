@@ -7733,3 +7733,18 @@ verbatim 复刻 harness 打印：
 2. 若基准走的是 jq_shim 直供，则本地路径应让 `MarketDataFetcher` 也优先用 shim/缓存，
    而不是掉到 baostock（可用 `QUANTGPT_CACHE_ONLY=1` 观察）；
 3. 之后继续把「坏帧」家族在 `len(cached)` 那处的实例定位掉。
+
+### 批次 269：`py_df_groupby + 716` —— 字符串键在**看起来像指针**时仍解引用崩溃
+
+`QUANTGPT_CACHE_ONLY=1` 下驱动回到清洗路径，崩点：
+
+    py_df_groupby + 716 ← remove_extreme_return_bars + 272
+                        ← validate_and_repair_stock_ohlcv + 2900 ← _load_cache + 816
+
+反汇编 +716 正是 `ldrb w10, [x19]`（内联的字符串哈希读首字节），而它**前面**就是我加的
+`zt_safe_str_key` 范围判断（`> 4G && < 128T` 才算指针）⇒ 这个值**通过了指针检查但不是可读内存**。
+
+⇒ 结论：靠"值域启发式"判断字符串句柄不够可靠（打包小字符串、过期指针都可能落在区间内）。
+下一步（更干净）：`py_df_groupby` 里别再走 `map_str_key` 互化，直接用
+`map_keys(map)` 给出的**显示字符串**做 `map_get(map, cname)`（`map_get` 按内容哈希），
+或者给运行期的字符串句柄加**真正的**标识（tag/魔术头）而不是猜。
