@@ -6745,3 +6745,19 @@ print("via", use(c))        # ✗ **整条语句静默消失**（rc=0，无任�
 ⇒ 这是「**未注解形参上的方法调用让整条语句消失**」的静默失败（比崩更糟）。
 下一批：看 `use` 的 MIR（`x.n()` 是否被丢/改成幽灵后连 print 一起丢），
 并修「静默丢语句」这条红线（编译器不得静默丢失语句）。
+
+### 批次 217（2026-09-20）：注解形参修好后的连锁推进
+
+修好「注解形参类型」后，`validate_and_repair_stock_ohlcv` 真正开始执行，随之暴露一串
+「列上的方法调用」幽灵符号（`_notna`、`[dynamic]str__isna`、`[dynamic]str__max`、
+`_set__add`、`py_noop2_3` …）。本轮补齐：
+
+- MIR：map 下标（`df["close"]`）取 `map<K,V>` 的 **V** 作为结果类型（此前恒 I64 ⇒ 列方法全落幽灵）
+- MIR：`.isna/.notna/.any/.all/.max/.min` 于向量接收者；`set.add`（去重）/`discard`/`remove`
+- 运行期：`py_vec_isna/notna/any/all/extreme/add_unique/discard` + 裸 `isna*/notna*` 安全回退
+  （先验证是不是向量，不是就原样返回并告警）+ `py_noop2_3`/`py_noop3`
+
+**新崩点**：`DataFrame::copy + 24` ← `validate_and_repair_stock_ohlcv + 808`
+（`out = df.copy()` 里的 `self.data` 字段取值 —— 结构体字段索引在「基类型是形参」时仍会走
+`variant=""`/`field_count=2` 的兜底）。下一批：把字段索引按**声明类型**查（此前试过一版会
+`ExtractOutOfRange`，需要同时把 field_count 对齐）。
