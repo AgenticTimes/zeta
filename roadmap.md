@@ -6249,3 +6249,24 @@ k 4307507541 / k 4307496678    ← 键是**数字**（裸句柄），不是内�
 ⇒ 批次 170 的第一个任务：修 `module_globals` / `module_global_types` 的**登记时机**
 （把 Python 模块的加载与登记挪到「降级之前」），修好后 `UNIVERSES` 恢复 `map`，
 键走内容哈希，股票池非空。
+
+### 批次一百七十（2026-09-19）：跨模块模块级列表的 `in`（语料 **48/48 → 50/50**）
+
+链接期铁证：`Undefined symbols: _backend_strategy_wufu_constants__WUFU_INDEX_BS_CODES.__contains__`
+—— `x not in mod.LIST`（跨模块模块级 List，值走 env 读、`type_map` 无条目）⇒ `receiver_ty=I64`
+⇒ 成员判定落到「唯一 `__contains__` 定义」兜底 ⇒ 发出不存在的符号。
+
+修法：`__contains__` 分支内用 `receiver_global_key()`（`Var(n)`→n；`mod.NAME`→
+`<module with . as _>__NAME`）+ `global_ty_of()` **就地**恢复容器类型。
+
+**只在本分支生效**（第一次改动通用 `receiver_ty` ⇒ `df.sort_values(...)` 变
+`_map__sort_values` 幽灵，已回退并收窄）。
+
+**driver 现状**：链接 ✓、universe 非空（探针 579/827），仍在 `run_backtest` 开头几条语句
+（universe 过滤之后、`fetch_stocks` 之前）崩溃，输出被崩溃吞掉。
+
+### 下一队列（批次一百七十一）
+
+1. `run_backtest` 开头段逐句 `flush()` 二分（universe 过滤 → `MarketDataFetcher()` →
+   `warmup_start_of` → `fetch_stocks`）
+2. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
