@@ -986,6 +986,18 @@ static int64_t py_log_emit(int64_t level, const char* tag, int64_t logger, int64
             msg ? (const char*)msg : "");
     return 0;
 }
+// BARE logging method symbols. `logger` is re-exported across modules in
+// REasyQuant (`data_ops_log.logger` -> `market_data_sources.logger` ->
+// `market_data_fetcher.logger`), and when the closure that logs cannot recover
+// its static type the call falls back to the METHOD NAME alone (`info`). That
+// used to hit an abort stub and stop the local backtest the moment it logged.
+// These print through the logger-less path (the message is never swallowed, the
+// logger NAME is simply unknown) — this is diagnostics, not a value path.
+int64_t info(int64_t lg, int64_t m) { (void)lg; return py_log_emit(PY_LOG_INFO, "INFO", 0, m); }
+int64_t warning(int64_t lg, int64_t m) { (void)lg; return py_log_emit(PY_LOG_WARNING, "WARNING", 0, m); }
+int64_t error(int64_t lg, int64_t m) { (void)lg; return py_log_emit(PY_LOG_ERROR, "ERROR", 0, m); }
+int64_t debug(int64_t lg, int64_t m) { (void)lg; return py_log_emit(PY_LOG_DEBUG, "DEBUG", 0, m); }
+int64_t critical(int64_t lg, int64_t m) { (void)lg; return py_log_emit(PY_LOG_CRITICAL, "CRITICAL", 0, m); }
 int64_t py_logging_debug(int64_t m) { return py_log_emit(PY_LOG_DEBUG, "DEBUG", 0, m); }
 int64_t py_logging_info(int64_t m) { return py_log_emit(PY_LOG_INFO, "INFO", 0, m); }
 int64_t py_logging_warning(int64_t m) { return py_log_emit(PY_LOG_WARNING, "WARNING", 0, m); }
