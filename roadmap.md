@@ -8028,3 +8028,21 @@ MIR 在「元素类型是 Str 且右操作数也是 Str」时改走它。
 **剩余**：驱动仍在 `fetch_stocks + 3784` 的 `DataFrame::__getitem__`（key 是坏指针）崩，
 而同一表达式在 harness（模块级与方法内都测过）是正确的 —— 下一批继续缩小差异
 （怀疑 `&` 掩码运算或该处前面的分支把槽位写坏）。
+
+### 批次 283：`df[<布尔掩码>]` 被当成列名（`fetch_stocks` 崩溃的真正原因）
+
+最小复现 `/tmp/mask.z`：
+
+    a = pd.DataFrame({"x":[…], "d":["2023-01-01","2024-01-01","2025-01-01"]})
+    m = a["d"] >= "2024-01-01"      → m 3 **2**    ✓（批次 282 的 strcmp 修复生效）
+    sub = a[m]                       → sub **0 0**  ✗（应为 2 行 2 列）
+
+shim 的 `DataFrame.__getitem__(key)` 假设 key 是**列名**（`self.data[map_str_key(key)]`），
+所以传掩码时把向量当字符串键 → `map_str_key` 解引用崩溃 / 返回空帧。
+这与驱动在 `fetch_stocks + 3784`（`cached[(cached["trade_date"] >= eff_start) & …]`）
+处的崩溃是同一个原因。
+
+已加 MIR 分支（接收者 `DataFrame` 且第一个参数是 `DynamicArray(I64)` ⇒ 走 `DataFrame::loc`），
+但 `/tmp/mask.z` 仍然 `sub 0 0` —— MIR 显示 `a` 是**模块级全局**（`zeta_env_set` 存过），
+其类型在调用点可能不是 `Named("DataFrame")`（或掩码表达式的类型不是 `DynamicArray(I64)`），
+下一批把这条判据放宽/改用「实参是不是 I64 向量」来定（不看接收者类型），并在 MIR 里核对。
