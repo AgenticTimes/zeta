@@ -9696,7 +9696,19 @@ call, no NULL-handle dereference).",
                 let alias_mark = self.self_field_aliases.len();
                 for (field_name, field_expr) in fields {
                     let field_id = self.lower_expr(field_expr);
-                    self.self_field_aliases.push((field_name.clone(), field_id));
+                    // Register the alias as a REAL SLOT, not as the expression id.
+                    // A literal/expression id has no alloca, so a later
+                    // `self.x` read passed it to a runtime call and codegen loaded
+                    // the (missing) slot: `self.cd = "/tmp/root/data";
+                    // self.scd = os.path.join(self.cd, "stocks")` produced just
+                    // "stocks" — and `MarketDataFetcher.cache_dir` came out as
+                    // 2 bytes of garbage, which made every cache path miss.
+                    let slot = self.next_id();
+                    self.stmts.push(MirStmt::Assign { lhs: slot, rhs: field_id });
+                    let ty = self.type_map.get(&field_id).cloned().unwrap_or(Type::I64);
+                    self.exprs.insert(slot, MirExpr::Var(slot));
+                    self.type_map.insert(slot, ty);
+                    self.self_field_aliases.push((field_name.clone(), slot));
                     field_ids.push((field_name.clone(), field_id));
                 }
                 self.self_field_aliases.truncate(alias_mark);
