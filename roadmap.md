@@ -6652,3 +6652,20 @@ for x in t → 逐字符迭代
 写 `df["stock_code"] = norm` 时 map 句柄或其 `cap` 是野值（地址形如 0x1900… ，像栈地址）。
 已先修一处明显的（列名是栈上的 `c->name` 直接交给 `map_str_key`，而后者会把句柄登记进
 哈希侧表 ⇒ 悬垂指针）；仍崩，下一批查 DataFrame shim 的 `self.data` 取值。
+
+### 批次 206 定位（缓存链：**同一段代码，模块级能跑、方法内崩**）
+
+逐条复刻 `ParquetCache.load` 与 `_load_cache` 的语句，**在 driver 语境（模块级）全部成功**：
+
+```
+exists 1 / df cols 892 / assigned 892 / dt ok
+norm 000300.XSHG / meta_n 0 / meta_src 0 / repair_ok 1
+_parquet_cache.load(path) → loaded 1
+```
+
+但 `MarketDataFetcher._load_cache("000300.XSHG")`（**方法内**）仍然 Bus error，且崩在
+`map_insert + 280` ← `_load_cache + 220`（该函数里唯一一次 map 写入是 `df["stock_code"] = norm`）
+⇒ 说明 `df`（`_parquet_cache.load(path)` 的返回值）在**方法语境**下是野值。
+
+下一批：对比「模块级调用」与「方法内调用」的 MIR（重点看
+`-> pd.DataFrame | None` 这种**联合注解**的返回值处理，以及 `df["col"] = v` 的接收者取值）。
