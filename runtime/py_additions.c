@@ -2310,3 +2310,85 @@ int64_t py_stub_abort(int64_t name_ptr) {
     abort();
     return 0;
 }
+
+// ============================================================================
+// SNAPPY decoder — parquet's default compression (pandas `to_parquet` writes
+// SNAPPY + PLAIN/RLE_DICTIONARY). Self-contained so `pd.read_parquet` can be
+// implemented without an external library.
+//
+// Format: varint(uncompressed length), then elements. Each element starts with a
+// tag byte whose low 2 bits select the kind:
+//   0 literal : length-1 in bits 2..7; 60..63 mean the length-1 is stored in the
+//               next 1..4 little-endian bytes.
+//   1 copy    : length 4 + bits 2..4, offset = (bits 5..7)<<8 | next byte.
+//   2 copy    : length 1 + bits 2..7, offset = LE16.
+//   3 copy    : length 1 + bits 2..7, offset = LE32.
+// ============================================================================
+static int64_t zt_snappy_varint(const unsigned char* p, int64_t n, int64_t* consumed) {
+    int64_t v = 0, shift = 0, i = 0;
+    while (i < n && shift < 64) {
+        unsigned char b = p[i++];
+        v |= (int64_t)(b & 0x7f) << shift;
+        shift += 7;
+        if (!(b & 0x80)) break;
+    }
+    if (consumed) *consumed = i;
+    return v;
+}
+
+// Returns the uncompressed size written, or -1 on malformed input / overflow.
+int64_t zt_snappy_uncompress(const char* in, int64_t in_len, char* out, int64_t out_cap) {
+    if (!in || in_len <= 0 || !out || out_cap <= 0) return -1;
+    const unsigned char* src = (const unsigned char*)in;
+    int64_t hdr = 0;
+    int64_t want = zt_snappy_varint(src, in_len, &hdr);
+    if (want < 0 || want > out_cap) return -1;
+    int64_t i = hdr, n = 0;
+    unsigned char* dst = (unsigned char*)out;
+    while (i < in_len) {
+        unsigned char tag = src[i++];
+        int kind = tag & 3;
+        if (kind == 0) {
+            int64_t len = (tag >> 2) + 1;
+            if (len > 60) {
+                int64_t extra = len - 60;
+                if (i + extra > in_len) return -1;
+                int64_t v = 0;
+                for (int64_t k = 0; k < extra; k++) v |= (int64_t)src[i + k] << (8 * k);
+                i += extra;
+                len = v + 1;
+            }
+            if (i + len > in_len || n + len > want) return -1;
+            memcpy(dst + n, src + i, (size_t)len);
+            i += len;
+            n += len;
+        } else {
+            int64_t len, offset;
+            if (kind == 1) {
+                if (i + 1 > in_len) return -1;
+                len = 4 + ((tag >> 2) & 7);
+                offset = ((int64_t)(tag >> 5) << 8) | src[i];
+                i += 1;
+            } else if (kind == 2) {
+                if (i + 2 > in_len) return -1;
+                len = 1 + (tag >> 2);
+                offset = (int64_t)src[i] | ((int64_t)src[i + 1] << 8);
+                i += 2;
+            } else {
+                if (i + 4 > in_len) return -1;
+                len = 1 + (tag >> 2);
+                offset = (int64_t)src[i] | ((int64_t)src[i + 1] << 8) |
+                         ((int64_t)src[i + 2] << 16) | ((int64_t)src[i + 3] << 24);
+                i += 4;
+            }
+            if (offset <= 0 || offset > n || n + len > want) return -1;
+            // Byte-by-byte: `offset` may be smaller than `len` (overlapping copy,
+            // which snappy allows and exploits for runs).
+            for (int64_t k = 0; k < len; k++) {
+                dst[n] = dst[n - offset];
+                n++;
+            }
+        }
+    }
+    return (n == want) ? n : -1;
+}
