@@ -4448,6 +4448,41 @@ call, no NULL-handle dereference).",
                 }
                 if let Some(recv) = receiver {
                     if let Some(tag) = self.py_handle_of(recv) {
+                        // `.items()` / `.values()` on a parsed JSON OBJECT: the
+                        // object's payload IS a dict, but the registry has no
+                        // entry for those on PyJson, so the call arity-mangled
+                        // into a stub returning 0 — `{str(k): str(v) for k, v in
+                        // data.items()}` silently produced {} (measured: the ETF
+                        // listing cache parsed to 1724 keys and the comprehension
+                        // to 0). Route to the map helpers on the object payload.
+                        if tag == "PyJson"
+                            && args.is_empty()
+                            && (method == "items" || method == "values")
+                        {
+                            let recv_id = self.lower_expr(recv);
+                            let dest = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: format!("py_json_{}", method),
+                                args: vec![recv_id],
+                                dest,
+                                type_args: vec![],
+                            });
+                            // Elements keep their JSON identity: `for v in
+                            // obj.values(): print(v)` must print the VALUE, not
+                            // the raw 64-bit handle (t57 regression). pairs from
+                            // `.items()` stay untyped slots.
+                            let elem = if method == "values" {
+                                Type::Named("PyJson".to_string(), vec![])
+                            } else {
+                                Type::I64
+                            };
+                            let ty = Type::DynamicArray(Box::new(elem));
+                            self.exprs.insert(dest, MirExpr::Var(dest));
+                            self.type_map.insert(dest, ty.clone());
+                            self.exprs.insert(id, MirExpr::Var(dest));
+                            self.type_map.insert(id, ty);
+                            return id;
+                        }
                         if let Some((symbol, ret_handle)) =
                             crate::middle::pylib::method_symbol(&tag, method)
                         {

@@ -17,6 +17,8 @@ static int64_t zt_vec_len(int64_t v);
 // declared here before any use so no implicit-declaration conflict arises.
 int64_t map_new(void);
 int64_t map_insert(int64_t, int64_t, int64_t);
+// A grown dict forwards from its old block; every reader must resolve first.
+int64_t map_resolve(int64_t);
 int64_t map_get(int64_t, int64_t);
 int64_t map_str_key(int64_t);
 int64_t py_map_contains(int64_t, int64_t);
@@ -171,6 +173,8 @@ static int64_t zt_key_display(int64_t key) {
 // content hashes, and a later d["k"] lookup goes through map_str_key, so
 // re-inserting display text would never be found.
 int64_t py_map_update(int64_t dst, int64_t src) {
+    dst = map_resolve(dst);
+    src = map_resolve(src);
     if (!dst || !src) return 0;
     int64_t cap = ((int64_t*)src)[0];
     for (int64_t i = 0; i < cap; i++) {
@@ -184,6 +188,7 @@ int64_t py_map_update(int64_t dst, int64_t src) {
 
 int64_t map_keys(int64_t map) {
     if (!map) return 0;
+    map = map_resolve(map);
     int64_t cap = ((int64_t*)map)[0];
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(cap ? cap : 8) * 8);
     base[0] = cap ? cap : 8; base[1] = 0;
@@ -198,6 +203,7 @@ int64_t map_keys(int64_t map) {
 }
 int64_t map_values(int64_t map) {
     if (!map) return 0;
+    map = map_resolve(map);
     int64_t cap = ((int64_t*)map)[0];
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(cap ? cap : 8) * 8);
     base[0] = cap ? cap : 8; base[1] = 0;
@@ -217,6 +223,7 @@ int64_t map_values(int64_t map) {
 // zt_key_display, so string keys come back as the original text.
 static int64_t zt_map_most_common(int64_t map, int64_t limit) {
     if (!map) return 0;
+    map = map_resolve(map);
     int64_t cap = ((int64_t*)map)[0];
     if (cap < 0) cap = 0;
     int64_t* keys = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
@@ -327,6 +334,7 @@ int64_t py_dt_searchsorted(int64_t vec, int64_t value, int64_t side) {
 
 int64_t map_get_default(int64_t map, int64_t key, int64_t def) {
     if (!map) return def;
+    map = map_resolve(map);
     int64_t cap = ((int64_t*)map)[0];
     int64_t h = py_map_hash(key);
     int64_t idx = h & (cap - 1);
@@ -599,6 +607,7 @@ int64_t py_sorted_vec_rev(int64_t vec, int64_t len, int64_t rev) {
 // table so string keys come back as text. ────────────────────────────
 int64_t py_map_items(int64_t map) {
     if (!map) return 0;
+    map = map_resolve(map);
     int64_t cap = ((int64_t*)map)[0];
     if (cap < 0) cap = 0;
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(cap ? cap : 1) * 8);
@@ -2078,6 +2087,8 @@ int64_t zeta_list_reverse(int64_t vec) {
 // d.update(other) — copy every entry of `other`, overwriting on collision.
 // Keys are already content-hashed in the stored maps, so copy them verbatim.
 int64_t zeta_map_update(int64_t m, int64_t other) {
+    m = map_resolve(m);
+    other = map_resolve(other);
     if (!m || !other) return m;
     int64_t cap = ((int64_t*)other)[0];
     for (int64_t i = 0; i < cap; i++) {
@@ -2091,6 +2102,7 @@ int64_t zeta_map_update(int64_t m, int64_t other) {
 // fine for the dict sizes Python code uses here.
 int64_t zeta_map_pop_default(int64_t m, int64_t key, int64_t def) {
     if (!m) return def;
+    m = map_resolve(m);
     int64_t cap = ((int64_t*)m)[0];
     if (cap < 0) cap = 0;
     int64_t* ks = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
@@ -2113,6 +2125,8 @@ int64_t zeta_map_pop_default(int64_t m, int64_t key, int64_t def) {
 int64_t zeta_map_pop(int64_t m, int64_t key) { return zeta_map_pop_default(m, key, 0); }
 int64_t zeta_map_clear(int64_t m) {
     if (!m) return m;
+    m = map_resolve(m);
+    m = map_resolve(m);
     int64_t cap = ((int64_t*)m)[0];
     if (cap < 0) cap = 0;
     for (int64_t i = 0; i < cap; i++)

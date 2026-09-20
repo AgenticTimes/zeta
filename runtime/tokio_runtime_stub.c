@@ -126,7 +126,26 @@ int64_t map_new(void) {
     *(int64_t*)base=cap; *((int64_t*)base+1)=0;
     return (int64_t)base;
 }
-void map_insert(int64_t map, int64_t key, int64_t val) {
+// A dict HANDLE is a raw int64 passed BY VALUE, so growth may not move the
+// block: every holder would keep a stale pointer. The old block therefore
+// becomes a FORWARDER — word0 = MAP_MOVED (negative cap), word1 = new address.
+// It is exactly its own 16-byte header, so nothing overflows. Measured bug: the
+// old code `memcpy(map, nb, 16+nc*ENTRY)` wrote the (bigger) new table INTO the
+// (smaller) old block — heap corruption: "GC Warning: Failed to expand heap by
+// 12143674558099984 KiB" and a SIGSEGV for any dict past ~12 keys (the ETF
+// listing cache, 50 KB, died in zj_parse_value).
+#define MAP_MOVED (-1)
+int64_t map_resolve(int64_t map) {
+    // Follow the WHOLE forward chain: a block that was moved twice is itself a
+    // forwarder. Resolving only one hop left `map_insert` on a block whose cap is
+    // MAP_MOVED, so `idx = hash & (cap-1)` went wildly out of bounds and wrote
+    // over the GC heap ("Failed to expand heap by 18014398509481968 KiB").
+    int guard = 0;
+    while (map && ((int64_t*)map)[0] < 0 && guard++ < 64) map = ((int64_t*)map)[1];
+    return map;
+}
+void map_insert(int64_t map0, int64_t key, int64_t val) {
+    int64_t map = map_resolve(map0);
     if (!map) return;
     int64_t* hdr=(int64_t*)map; int64_t cap=hdr[0]; int64_t len=hdr[1];
     if (len*4 >= cap*3) {
@@ -137,8 +156,8 @@ void map_insert(int64_t map, int64_t key, int64_t val) {
             char* e=(char*)map+16+i*MAP_ENTRY_SIZE;
             if (*(uint8_t*)(e+16)==1) map_insert((int64_t)nb,*(int64_t*)e,*((int64_t*)e+1));
         }
-        memcpy((void*)map,nb,16+nc*MAP_ENTRY_SIZE);
-        hdr=(int64_t*)map; cap=nc;
+        hdr[0]=MAP_MOVED; hdr[1]=(int64_t)nb;   // old handle forwards to the new block
+        map=(int64_t)nb; hdr=(int64_t*)map; cap=nc;
     }
     int64_t h=map_hash(key); int64_t idx=h&(cap-1);
     int64_t tomb=-1;
@@ -154,7 +173,8 @@ void map_insert(int64_t map, int64_t key, int64_t val) {
         idx=(idx+1)&(cap-1);
     }
 }
-int64_t map_get(int64_t map, int64_t key) {
+int64_t map_get(int64_t map0, int64_t key) {
+    int64_t map = map_resolve(map0);
     if (!map) return 0;
     int64_t cap=((int64_t*)map)[0]; int64_t h=map_hash(key); int64_t idx=h&(cap-1);
     while(1){
@@ -1627,7 +1647,8 @@ int64_t py_json_dumps_vec(int64_t vec) {
 // V1: object keys come back from the hash side table; values are serialized
 // as integers (the map stores raw 64-bit slots with no type tag).
 int64_t py_json_dumps_map(int64_t map) {
-    if (!map) return (int64_t)zt_strdup("{}");
+        map = map_resolve(map);
+if (!map) return (int64_t)zt_strdup("{}");
     int64_t cap = ((int64_t*)map)[0];
     size_t outcap = 256;
     char* out = (char*)GC_malloc(outcap);
@@ -2588,7 +2609,7 @@ static void zj_dump_into(int64_t j, char** out, size_t* n, size_t* cap) {
             break;
         }
         case ZJ_OBJ: {
-            int64_t m = zj_payload(j);
+            int64_t m = map_resolve(zj_payload(j));
             int64_t cap_entries = m ? ((int64_t*)m)[0] : 0;
             zj_put(out, n, cap, "{", 1);
             int first = 1;
@@ -2643,7 +2664,7 @@ int64_t py_json_len(int64_t j) {
             return vec ? ((int64_t*)(vec - 16))[1] : 0;
         }
         case ZJ_OBJ: {
-            int64_t m = zj_payload(j);
+            int64_t m = map_resolve(zj_payload(j));
             int64_t cap = m ? ((int64_t*)m)[0] : 0;
             int64_t count = 0;
             for (int64_t i = 0; i < cap; i++) {
@@ -2867,11 +2888,21 @@ int64_t py_json_get_default(int64_t j, int64_t key, int64_t dflt, int64_t dflt_t
 // Object keys as a Vec of strings (Python's dict.keys()); arrays yield the
 // indices as strings, matching Python's list-of-keys absence with a usable
 // fallback.
+// A parsed JSON OBJECT's payload is a dict; expose it so the dict helpers
+// (which handle growth/forwarding) can be reused by `.items()` / `.values()`.
+// Non-objects yield 0 — "no items", never garbage.
+int64_t map_values(int64_t);
+int64_t py_map_items(int64_t);
+int64_t py_json_as_map(int64_t j) {
+    return (j && zj_tag(j) == ZJ_OBJ) ? map_resolve(zj_payload(j)) : 0;
+}
+int64_t py_json_items(int64_t j) { return py_map_items(py_json_as_map(j)); }
+
 int64_t py_json_keys(int64_t j) {
     int64_t vec = zj_vec_new_cap(8);
     if (!j) return vec;
     if (zj_tag(j) == ZJ_OBJ) {
-        int64_t m = zj_payload(j);
+        int64_t m = map_resolve(zj_payload(j));
         int64_t cap = m ? ((int64_t*)m)[0] : 0;
         for (int64_t i = 0; i < cap; i++) {
             char* e = (char*)m + 16 + i * 24;
@@ -2895,7 +2926,7 @@ int64_t py_json_values(int64_t j) {
     int64_t vec = zj_vec_new_cap(8);
     if (!j) return vec;
     if (zj_tag(j) == ZJ_OBJ) {
-        int64_t m = zj_payload(j);
+        int64_t m = map_resolve(zj_payload(j));
         int64_t cap = m ? ((int64_t*)m)[0] : 0;
         for (int64_t i = 0; i < cap; i++) {
             char* e = (char*)m + 16 + i * 24;
@@ -3343,7 +3374,8 @@ int64_t py_collections_defaultdict(int64_t factory) { (void)factory; return map_
 
 // len(dict) — count the used entries (map slots are [key|value|used]).
 int64_t zeta_map_len(int64_t m) {
-    if (!m) return 0;
+        m = map_resolve(m);
+if (!m) return 0;
     int64_t cap = ((int64_t*)m)[0];
     int64_t n = 0;
     for (int64_t i = 0; i < cap; i++) {
@@ -3354,7 +3386,8 @@ int64_t zeta_map_len(int64_t m) {
 }
 // `k in dict`
 int64_t py_map_contains(int64_t m, int64_t k) {
-    if (!m) return 0;
+        m = map_resolve(m);
+if (!m) return 0;
     // Probe the entry table instead of testing `map_get(m, k) != 0`: a key
     // whose VALUE is 0 (or None/empty) is still present, and the old form
     // reported it absent — so `"k" in d` was False for `{"k": 0}` and
