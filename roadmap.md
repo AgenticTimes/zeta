@@ -6790,3 +6790,14 @@ print("via", use(c))        # ✗ **整条语句静默消失**（rc=0，无任�
 下一批：把 `OhlcvRepairReport(input_rows=len(df))` 这类**结构体构造**加进最小复现，
 怀疑构造过程把 `df` 所在槽位/寄存器写坏（或默认参数 `cfg = cfg or MarketCleanConfig()`
 的求值顺序问题）。
+
+### 批次 219 补充（最小复现仍正常）
+
+把真实函数的前置语句（含 `cfg: MarketCleanConfig | None = None` 默认参数、
+`cfg = cfg or MarketCleanConfig()`、`OhlcvRepairReport(input_rows=len(df))`）逐条搬进最小复现：
+
+    f 892 ✓（不再崩）
+
+⇒ 形态本身都正常。下一批改用**调用真实函数**并显式传第三参
+（`validate_and_repair_stock_ohlcv(df, norm, MarketCleanConfig())`）对比默认参数路径；
+同时打印 `len(df)` **函数内**（通过一个包装函数）来确认形参 `df` 在真实函数里是否已经是 0。
