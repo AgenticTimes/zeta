@@ -189,6 +189,14 @@ impl Resolver {
     }
 
     pub fn register(&mut self, ast: AstNode) {
+        if std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+            eprintln!(
+                "REGISTER: defs={} globals={} loaded_mods={}",
+                self.registered_func_defs.borrow().len(),
+                self.module_globals.borrow().len(),
+                self.py_loaded_modules.borrow().len()
+            );
+        }
         // PY-A: keep the definition for return-type inference (imported
         // modules register through this same path).
         if matches!(ast, AstNode::FuncDef { .. }) {
