@@ -9345,6 +9345,47 @@ call, no NULL-handle dereference).",
                 // reported and lowered to 0 rather than silently defaulting.
                 {
                     let probe_id = self.lower_expr(base);
+                    // A struct FIELD read keeps its DECLARED type. Without this every
+                    // `self.cache_dir` / `f.cache_dir` came back I64: `len(field)` was
+                    // 0 and `str(field)` printed the handle as digits (measured on
+                    // `MarketDataFetcher.cache_dir`). The declared field type string
+                    // lives in `type_decls`.
+                    if let Some(Type::Named(cls, _)) = self.type_map.get(&probe_id).cloned() {
+                        let decl = self
+                            .type_decls
+                            .get(&cls)
+                            .or_else(|| self.shared_type_decls.get(&cls))
+                            .or_else(|| {
+                                // module-qualified keys (`mod__Cls`)
+                                let suffix = format!("__{}", cls);
+                                self.shared_type_decls
+                                    .iter()
+                                    .find(|(k, _)| k.ends_with(suffix.as_str()))
+                                    .map(|(_, v)| v)
+                            });
+                        if let Some(TypeDecl::Struct { fields, .. }) = decl {
+                            if let Some((_, ty)) = fields.iter().find(|(f, _)| f == field) {
+                                let mapped = match ty.as_str() {
+                                    "str" | "String" => Some(Type::Str),
+                                    "f64" | "float" => Some(Type::F64),
+                                    "bool" => Some(Type::Bool),
+                                    "i64" | "int" | "dyn" => None,
+                                    other => {
+                                        if let Some(tag) = crate::middle::pylib::handle_tag(other) {
+                                            Some(Type::Named(tag.to_string(), vec![]))
+                                        } else if other == "PyPath" {
+                                            Some(Type::Named("PyPath".to_string(), vec![]))
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                };
+                                if let Some(m) = mapped {
+                                    self.type_map.insert(id, m);
+                                }
+                            }
+                        }
+                    }
                     if matches!(
                         self.type_map.get(&probe_id),
                         Some(Type::Named(n, _)) if n == "PyArgNS"

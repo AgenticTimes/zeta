@@ -1028,6 +1028,58 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                                     .filter(|ty| !ty.is_empty() && ty != "dyn")
                                     .unwrap_or_else(|| "i64".to_string())
                             }
+                            // A field whose initializer is a CALL keeps the
+                            // callee's declared result type when the registry
+                            // knows it (`self.cache_dir = os.path.join(...)` is a
+                            // str). Falling back to i64 typed every such field as
+                            // an integer: `len(f.cache_dir)` was 0 and
+                            // `str(f.cache_dir)` printed the handle as digits.
+                            AstNode::Call {
+                                receiver, method, ..
+                            } if receiver.is_some() => {
+                                let mut ty = "i64".to_string();
+                                if let Some(recv) = receiver {
+                                    let mut parts: Vec<String> = Vec::new();
+                                    let mut cur: &AstNode = recv;
+                                    loop {
+                                        match cur {
+                                            AstNode::FieldAccess { base, field } => {
+                                                parts.push(field.clone());
+                                                cur = base;
+                                            }
+                                            AstNode::Var(root) => {
+                                                parts.push(root.clone());
+                                                break;
+                                            }
+                                            _ => break,
+                                        }
+                                    }
+                                    parts.reverse();
+                                    // The receiver's dotted path IS the module
+                                    // (`os.path`), the method is the member.
+                                    let module = parts.join(".");
+                                    let fallback = module
+                                        .strip_prefix(parts[0].as_str())
+                                        .and_then(|rest| rest.strip_prefix('.'))
+                                        .map(|rest| rest.to_string());
+                                    if let Some(e) =
+                                        crate::middle::pylib::find_member(&module, method)
+                                            .or_else(|| {
+                                                fallback.as_deref().and_then(|rest| {
+                                                    crate::middle::pylib::find_member(
+                                                        parts[0].as_str(),
+                                                        rest,
+                                                    )
+                                                })
+                                            })
+                                    {
+                                        if e.ret == "str" {
+                                            ty = "str".to_string();
+                                        }
+                                    }
+                                }
+                                ty
+                            }
                             _ => "i64".to_string(),
                         };
                         if !fields.iter().any(|(f, _)| f == field) {
