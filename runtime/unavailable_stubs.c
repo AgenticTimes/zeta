@@ -30,6 +30,16 @@
 // that fallback alive; aborting it would stop the local backtest at the first
 // platform call (measured: `_auth` aborted inside `_jqdata_init`).
 extern int64_t zeta_raise(int64_t code);
+static int64_t zt_unavailable_soft(const char* what);
+
+// `bs.login()` — baostock is NOT in the registry, so the member call compiles to
+// the BARE symbol `login`, which the linker satisfies with libc's `login(3)`
+// (utmp!) — measured as `EXC_BAD_ACCESS at 0x8` inside `getutmpx` called from
+// `_baostock_login`. A weak definition here shadows that: the platform source is
+// unavailable in the local path, and the caller's try/except takes the fallback.
+__attribute__((weak)) int64_t login(void) { return zt_unavailable_soft("baostock.login"); }
+__attribute__((weak)) int64_t logout(void) { return zt_unavailable_soft("baostock.logout"); }
+
 static int64_t zt_unavailable_soft(const char* what) {
     static const char* warned[64];
     static int n = 0;
