@@ -10386,7 +10386,11 @@ call, no NULL-handle dereference).",
                     // merely TYPED Tuple may actually hold a map/dict (a
                     // dict-comprehension's result leaks a Tuple annotation), and
                     // indexing that with stack_array_get read the map header.
-                    let is_tuple = self.tuple_slots.contains(&bid);
+                    // `is_tuple` covers tuple LITERALS; a function that RETURNS a
+                    // tuple comes back as `Named("tuple", …)`, so accept that too
+                    // (the value is a stack array at runtime either way).
+                    let is_tuple = self.tuple_slots.contains(&bid)
+                        || matches!(self.type_map.get(&bid), Some(Type::Named(n, _)) if n == "tuple");
                     let tuple_base = self.type_map.get(&bid).cloned();
                     if is_tuple {
                     if let Some(Type::Tuple(ts)) = tuple_base {
@@ -10402,6 +10406,17 @@ call, no NULL-handle dereference).",
                             _ => Type::I64,
                         };
                         self.type_map.insert(id, elem);
+                        return id;
+                    }
+                    if matches!(tuple_base, Some(Type::Named(ref n, _)) if n == "tuple") {
+                        self.stmts.push(MirStmt::Call {
+                            func: "stack_array_get".to_string(),
+                            args: vec![bid, iid],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::I64);
                         return id;
                     }
                     }
