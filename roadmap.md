@@ -6683,3 +6683,32 @@ _parquet_cache.load(path) → loaded 1
 （`load_metadata + 184` ← `_load_cache + 232`）。区别只在调用链深度/所处的 try 栈
 （`fetch_stocks` 内部已有多层 try+setjmp）。下一批：数一数 `fetch_stocks → _load_cache →
 load_metadata` 这条链上的 `_setjmp` 帧数，与「模块级」对比（怀疑是**深层 setjmp/longjmp** 的已知脆弱点）。
+
+### 批次 210 补充：最小复现与当前崩帧
+
+`/tmp/stubtry.z`（最小复现）：
+
+```python
+def f():
+    try:
+        import pyarrow.parquet as pq
+        t = pq.read_table("/tmp/x")
+        return 1
+    except Exception as e:
+        print("caught"); return 0        # ✓ 正常（caught / f 0）
+
+def g():
+    try:
+        import pyarrow.parquet as pq
+        t = pq.read_table("/tmp/x")
+        m = t.schema.metadata or {}      # ← 崩
+        return len(m)
+    except Exception as e:
+        print("caught2"); return 0
+```
+
+修复后 `f` 正常、`g` 崩在 **`g + 104`**（lldb），`_read_table_2` 已是 **T（我们的桩）**。
+⇒ 帧弹栈已修好（longjmp 落在 `g` 自己的帧里），剩下的问题是
+**`t.schema.metadata or {}` 这句在 `t` 为 0 时被求值**：`or` 的右操作数被**过早求值**，
+且左操作数的两次解引用（+184/+188）没有空值保护。下一批：
+① 看 `g + 104` 的指令；② 决定是给 `or` 加短路，还是在 `t.schema` 这条链上加保护。
