@@ -6457,3 +6457,23 @@ MIR：`_source_score` 里 `zeta_env_get(_DEFAULT_SOURCE_SCORE)` → subscript �
 本次同产物连跑 3 次全部越过该点（3/3 rc=124 超时）⇒ 那是一次 flake。
 
 **运行状态**：3/3 卡在 `fetch_stocks` 源回退循环（119 → 238 → …）。
+
+### 批次 185 观察（源回退循环不收敛）
+
+driver 日志序列：`行情请求 119 只` → `待拉取 119 只` → `[baostock] 批量拉取 119 只`
+→ `待拉取 238 只`（= 2×119）→ `[source-priority] …：238 只`。
+
+探针（同一 driver 语境）：
+
+```
+u 119 / f 119 / u2 119        ← get_universe 与过滤结果都是 119，且重复调用不累积
+UNIVERSES -> Named("map", [Str, DynamicArray(Str)])   ← 全局类型表正确
+```
+
+⇒ `get_universe`/`register_universe` 没有重复注册；问题在 `fetch_stocks` **之后**
+（第二次进入的 238 从哪来）。下一批用 lldb 在 `fetch_stocks` 打断点、打印入参长度与调用栈，
+确认是「同一函数体被执行两次」还是「调用方传了 238」。
+
+**附带观察**：探针里 `u[i]` 用 **F64 路径**打印成 `4366971587.515880`（应为字符串
+`sh.515880`）⇒ `列表下标结果的打印分发` 仍有类型丢失（不影响 `in` 的成员判定：
+实测 `u[0] in WUFU_INDEX_BS_CODES` 为 0，与「该码不是指数」一致）。
