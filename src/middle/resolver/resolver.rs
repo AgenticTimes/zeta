@@ -1692,6 +1692,41 @@ impl Resolver {
                     _ => None,
                 }
             }
+            // `<vec>.__collect__(<closure>)` — a LIST COMPREHENSION's desugaring
+            // (`WUFU_BS_CODES = [jq_to_bs(c) for c in WUFU_JQ_CODES]`). Without
+            // this the constant had NO type, stayed I64, and `LIST + LIST`
+            // compiled as a NUMERIC add — the garbage handle went to
+            // `dict.fromkeys` and `py_map_fromkeys` dereferenced it (50% SIGSEGV
+            // per run, 100% with MallocScribble=1). A comprehension is ALWAYS a
+            // list, so an unknown element type still yields DynamicArray.
+            AstNode::Call {
+                receiver: Some(recv),
+                method,
+                args,
+                ..
+            } if method == "__collect__" => {
+                let elem = args
+                    .first()
+                    .and_then(|cl| match cl {
+                        AstNode::Closure { body, .. } => infer_global_ty(
+                            body,
+                            seen,
+                            aliases,
+                            member_aliases,
+                            fn_rets,
+                        ),
+                        other => infer_global_ty(
+                            other,
+                            seen,
+                            aliases,
+                            member_aliases,
+                            fn_rets,
+                        ),
+                    })
+                    .or_else(|| infer_global_ty(recv, seen, aliases, member_aliases, fn_rets))
+                    .unwrap_or(Type::I64);
+                Some(Type::DynamicArray(Box::new(elem)))
+            }
             // `X.Y(...)` / `Y(...)` through the registry, or `handle.method()`.
             AstNode::Call {
                 receiver, method, ..
@@ -1859,13 +1894,16 @@ impl Resolver {
                     _ => continue,
                 };
                 if name.contains("WUFU") && std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
-                    eprintln!(
-                        "WALK {}: in_globals={} in_bare={} rhs={:?}",
-                        name,
-                        globals.contains(&name),
-                        bare_globals.contains(&name),
-                        rhs.map(|r| std::mem::discriminant(r))
-                    );
+                    if let Some(r) = rhs {
+                        let d = format!("{:?}", r);
+                        let head: String = d.chars().take(320).collect();
+                        eprintln!(
+                            "WALK {}: in_bare={} rhs={}",
+                            name,
+                            bare_globals.contains(&name),
+                            head
+                        );
+                    }
                 }
                 if !globals.contains(&name) && !bare_globals.contains(&name) {
                     continue;
