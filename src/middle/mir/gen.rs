@@ -7209,7 +7209,18 @@ call, no NULL-handle dereference).",
                             }
                         }
                     }
-                    arg_ids.push(self.lower_expr(a));
+                    let aid = self.lower_expr(a);
+                    // An INLINE expression (tuple / array / struct literal) has no
+                    // alloca: passing it straight to a call let the callee read an
+                    // unset slot. Measured: `ParquetCache.load(path)` received a
+                    // dangling `date_cols` default and
+                    // `MarketDataFetcher._load_cache` then crashed in `map_insert`.
+                    let aid = if matches!(self.exprs.get(&aid), Some(MirExpr::Var(_))) {
+                        aid
+                    } else {
+                        self.materialize_for_call(aid)
+                    };
+                    arg_ids.push(aid);
                 }
                 // Never let a stale hint leak into an unrelated closure.
                 self.pending_closure_param_types = None;
