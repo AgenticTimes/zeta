@@ -500,6 +500,30 @@ impl MirGen {
             .get(&module)
             .cloned()
             .unwrap_or(module);
+        // `import pkg.user` (a DOTTED import without an alias) registers the
+        // alias for the ROOT only, so `pkg.user.show()` came out as a bare
+        // `show_1` ghost call. When an alias plus the split member path names a
+        // real user module, treat that as the module: `pkg` + `.` + `user` ->
+        // `pkg.user`, leaving `show` as the member.
+        if let Some((first, rest_parts)) = member.split_once('.') {
+            let dotted = format!("{}.{}", module, first);
+            if self.py_user_modules.contains(&dotted) {
+                let new_member = rest_parts.to_string();
+                if let Some(entry) = crate::middle::pylib::find_member(&dotted, &new_member) {
+                    return Some((
+                        entry.symbol.as_str(),
+                        entry.handle.as_deref(),
+                        entry.ret.as_str(),
+                    ));
+                }
+                // A user module's function: `<module with _>__<member>`.
+                return Some((
+                    Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
+                    None,
+                    "i64",
+                ));
+            }
+        }
         if self.py_user_modules.contains(&module) {
             let prefix = format!("{}__", module.replace('.', "_"));
             let sym = format!("{}{}", prefix, member);
@@ -7251,6 +7275,64 @@ call, no NULL-handle dereference).",
                     return id;
                 }
 
+                // `pkg.user.show()` — the receiver is a DOTTED MODULE PATH, not a
+                // value. `import pkg.user` registers only the ROOT alias, so the
+                // receiver lowered to an env read of the non-existent global
+                // `pkg__user` (0) and the call became a bare `show_1` ghost. When
+                // alias + parts names a real user module, call its function.
+                if let Some(recv) = receiver {
+                    if let Some((root, parts)) = Self::flatten_module_receiver(recv) {
+                        if std::env::var("ZETA_PROBE_CALL").is_ok() {
+                            eprintln!(
+                                "MODCALL probe: root={:?} parts={:?} method={} aliases_has_root={} user_mods={}",
+                                root,
+                                parts,
+                                method,
+                                self.py_module_aliases.contains_key(&root),
+                                self.py_user_modules.len()
+                            );
+                        }
+                        // `import pkg.user` may register the alias under the FULL
+                        // dotted name (key `pkg.user`) rather than the root, so try
+                        // both spellings before giving up.
+                        let dotted_text = if parts.is_empty() {
+                            root.clone()
+                        } else {
+                            format!("{}.{}", root, parts.join("."))
+                        };
+                        let alias_mod = self
+                            .py_module_aliases
+                            .get(&root)
+                            .cloned()
+                            .or_else(|| self.py_module_aliases.get(&dotted_text).cloned())
+                            .or_else(|| {
+                                self.py_user_modules
+                                    .contains(&dotted_text)
+                                    .then(|| dotted_text.clone())
+                            });
+                        if let Some(alias_mod) = alias_mod {
+                            let dotted = if parts.is_empty() {
+                                alias_mod.clone()
+                            } else {
+                                format!("{}.{}", alias_mod, parts.join("."))
+                            };
+                            if self.py_user_modules.contains(&dotted) {
+                                let sym = format!("{}__{}", dotted.replace('.', "_"), method);
+                                let arg_ids: Vec<u32> =
+                                    args.iter().map(|a| self.lower_expr(a)).collect();
+                                self.stmts.push(MirStmt::Call {
+                                    func: sym,
+                                    args: arg_ids,
+                                    dest: id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(id, MirExpr::Var(id));
+                                self.type_map.insert(id, Type::I64);
+                                return id;
+                            }
+                        }
+                    }
+                }
                 // `s.startswith(("000", "399"))` — Python accepts a TUPLE of
                 // prefixes. The tuple handle was passed straight to
                 // host_str_starts_with, which returned 0 for everything
