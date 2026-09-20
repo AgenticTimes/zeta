@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <gc.h>
 
 int64_t zt_snappy_uncompress(const char* in, int64_t in_len, char* out, int64_t out_cap);
 int64_t zt_rle_bitpack_decode(const char* in, int64_t in_len, int bit_width, int64_t* out,
@@ -642,4 +643,101 @@ int64_t zt_rle_bitpack_decode(const char* in, int64_t in_len, int bit_width,
     }
 done:
     return n;
+}
+// ============================================================================
+// Build the runtime's DataFrame representation: a map from column NAME (content
+// hashed with map_str_key, exactly like every other dict in the runtime) to a
+// vector of value strings. The pandas shim in pylib/pandas.z wraps this map
+// (`DataFrame(data: map<str, vecstr>)`), so values are strings:
+//   - `trade_date` (INT64 nanoseconds) is formatted as "YYYY-MM-DD", which is
+//     what the cache-coverage checks compare against,
+//   - doubles use %.10g so a numeric parse round-trips,
+//   - byte arrays are copied verbatim.
+// ============================================================================
+extern int64_t map_new(void);
+extern void map_insert(int64_t map, int64_t key, int64_t val);
+extern int64_t map_str_key(int64_t handle);
+
+#define ZT_PQ_STR_CAP 4096
+static void pq_fmt_ns_date(int64_t ns, char* out, size_t cap) {
+    // days since epoch (UTC), civil-from-days (Howard Hinnant's algorithm)
+    int64_t days = ns / 86400000000000LL;
+    if (ns < 0 && ns % 86400000000000LL) days -= 1;
+    int64_t z = days + 719468;
+    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    int64_t doe = z - era * 146097;
+    int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int64_t y = yoe + era * 400;
+    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    int64_t mp = (5 * doy + 2) / 153;
+    int64_t d = doy - (153 * mp + 2) / 5 + 1;
+    int64_t m = mp < 10 ? mp + 3 : mp - 9;
+    if (m <= 2) y += 1;
+    snprintf(out, cap, "%04lld-%02lld-%02lld", (long long)y, (long long)m, (long long)d);
+}
+
+static int64_t pq_vec_new(void) {
+    // A runtime vector: [cap, len, ...] header with a data pointer returned as
+    // the handle (same layout zt_vec_len/vec_push expect). GC-allocated so the
+    // collector sees it and the runtime's vector helpers accept it.
+    int64_t* b = (int64_t*)GC_malloc(16 + 16 * 8);
+    b[0] = 16;
+    b[1] = 0;
+    return (int64_t)(b + 2);
+}
+static int64_t pq_vec_cap(int64_t h) { return ((int64_t*)h)[-2]; }
+static int64_t pq_vec_len(int64_t h) { return ((int64_t*)h)[-1]; }
+static void pq_vec_push(int64_t* hp, int64_t v) {
+    int64_t* b = (int64_t*)(*hp) - 2;
+    if (b[1] >= b[0]) {
+        int64_t ncap = b[0] * 2;
+        int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)ncap * 8);
+        nb[0] = ncap;
+        nb[1] = b[1];
+        memcpy(nb + 2, b + 2, (size_t)b[1] * 8);
+        *hp = (int64_t)(nb + 2);
+        b = nb;
+    }
+    ((int64_t*)(*hp))[b[1]] = v;
+    b[1] += 1;
+}
+
+int64_t zt_parquet_build_map(const char* path) {
+    zt_pq_meta m;
+    if (!zt_parquet_meta(path, &m)) return 0;
+    int64_t out = map_new();
+    for (int i = 0; i < m.ncols; i++) {
+        zt_pq_col* c = &m.cols[i];
+        static int64_t vals[1 << 16];
+        int64_t n = zt_pq_read_column(path, c, 1, vals, 1 << 16);
+        if (n < 0) n = 0;
+        int64_t vec = pq_vec_new();
+        for (int64_t k = 0; k < n; k++) {
+            char buf[64];
+            const char* s = NULL;
+            if (c->phys_type == 5) {              // DOUBLE
+                double d;
+                memcpy(&d, &vals[k], 8);
+                snprintf(buf, sizeof buf, "%.10g", d);
+                s = buf;
+            } else if (c->phys_type == 6) {       // BYTE_ARRAY
+                s = (const char*)vals[k];
+                if (!s) s = "";
+            } else {                              // INT64 / INT32
+                if (strcmp(c->name, "trade_date") == 0) {
+                    pq_fmt_ns_date(vals[k], buf, sizeof buf);
+                } else {
+                    snprintf(buf, sizeof buf, "%lld", (long long)vals[k]);
+                }
+                s = buf;
+            }
+            char* copy = (char*)GC_malloc(strlen(s) + 1);
+            strcpy(copy, s);
+            pq_vec_push(&vec, (int64_t)copy);
+        }
+        map_insert(out, map_str_key((int64_t)c->name), vec);
+    }
+    (void)pq_vec_cap;
+    (void)pq_vec_len;
+    return out;
 }

@@ -1862,6 +1862,16 @@ impl Resolver {
                 vec![],
             )))),
             "vec" => Some(Type::DynamicArray(Box::new(Type::I64))),
+            // `pd.read_parquet(...)` — the reader returns the runtime's column
+            // map (name -> vector of value strings), which is what the pandas
+            // shim's `DataFrame(data: map<str, vecstr>)` wraps.
+            "map" => Some(Type::Named(
+                "map".to_string(),
+                vec![
+                    Type::Str,
+                    Type::DynamicArray(Box::new(Type::Str)),
+                ],
+            )),
             _ => Some(Type::I64),
         }
     }

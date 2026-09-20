@@ -456,7 +456,7 @@ F pandas Timestamp py_dt_from_str args=i64 ret=i64 handle=PyDate
 F pandas Timedelta py_dt_timedelta args=i64 ret=i64 handle=PyDelta
 # read_parquet / to_parquet — V1 stubs (empty DF / no-op). Registry bind stops
 # `pandas__read_parquet` ghost externs from module_renames; real I/O is later.
-F pandas read_parquet py_pd_read_parquet args=i64 ret=i64
+F pandas read_parquet py_pd_read_parquet args=i64 ret=map
 F pandas to_parquet py_noop2 args=i64,i64 ret=i64
 X py_pd_read_parquet args=i64 ret=i64
 # Method form when DF typed; bare fallthrough symbols live in py_additions.c.

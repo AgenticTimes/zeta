@@ -1334,10 +1334,13 @@ int64_t py_noop2(int64_t a, int64_t b) {
     return 0;
 }
 
-// V1: `pd.read_parquet(path)` — empty frame handle (0). Real parquet I/O later.
+// `pd.read_parquet(path)` — a real reader (runtime/parquet_min.c): SNAPPY +
+// PLAIN/RLE_DICTIONARY pages, returning the runtime's column map
+// (name -> vector of value strings, `trade_date` as "YYYY-MM-DD").
+extern int64_t zt_parquet_build_map(const char* path);
 int64_t py_pd_read_parquet(int64_t path) {
-    (void)path;
-    return 0;
+    if (!path) return 0;
+    return zt_parquet_build_map((const char*)path);
 }
 
 // ---- hashlib (md5/sha1/sha256) ----
