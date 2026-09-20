@@ -1731,6 +1731,30 @@ impl Resolver {
             AstNode::Call {
                 receiver, method, ..
             } => {
+                // A user function called by its BARE name: its declared return
+                // type. `from ..datasrc.code_conv import jq_to_bs` may carry a
+                // RELATIVE spec in `member_aliases`, so the `<module>__<member>`
+                // key cannot be built here — accept a UNIQUE `__<name>` suffix
+                // match. This is what types `[jq_to_bs(c) for c in WUFU_JQ_CODES]`
+                // (the universe list is a list of STRINGS, not raw handles).
+                if receiver.is_none() {
+                    if let Some(t) = fn_rets.get(method) {
+                        return Some(t.clone());
+                    }
+                    let suffix = format!("__{}", method);
+                    let hits: Vec<Type> = fn_rets
+                        .iter()
+                        .filter(|(k, _)| k.ends_with(suffix.as_str()))
+                        .map(|(_, v)| v.clone())
+                        .collect();
+                    // Two same-named helpers can exist (REasyQuant has BOTH
+                    // `backend.datasrc.code_conv.jq_to_bs` and
+                    // `backend.strategy.code_conv.jq_to_bs`); when every candidate
+                    // agrees on the return type the answer is unambiguous.
+                    if !hits.is_empty() && hits.iter().all(|t| *t == hits[0]) {
+                        return Some(hits[0].clone());
+                    }
+                }
                 if let Some(recv) = receiver {
                     if let Some(Type::Named(tag, _)) = infer_global_ty(recv, seen, aliases, member_aliases, fn_rets) {
                         if let Some(t) = method_result_ty(&tag, method) {
