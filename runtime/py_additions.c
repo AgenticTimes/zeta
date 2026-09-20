@@ -20,7 +20,7 @@ int64_t map_insert(int64_t, int64_t, int64_t);
 // A grown dict forwards from its old block; every reader must resolve first.
 int64_t map_resolve(int64_t);
 int zt_map_is_json_handle(int64_t);
-void zt_map_json_mismatch(const char*);
+void zt_map_json_mismatch(const char*, int64_t);
 int64_t map_get(int64_t, int64_t);
 int64_t map_str_key(int64_t);
 int64_t py_map_contains(int64_t, int64_t);
@@ -344,7 +344,7 @@ int64_t py_dt_searchsorted(int64_t vec, int64_t value, int64_t side) {
 int64_t map_get_default(int64_t map, int64_t key, int64_t def) {
     if (!map) return def;
     map = map_resolve(map);
-    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("map_get_default");
+    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("map_get_default", map);
     int64_t cap = ((int64_t*)map)[0];
     int64_t h = py_map_hash(key);
     int64_t idx = h & (cap - 1);
@@ -618,7 +618,7 @@ int64_t py_sorted_vec_rev(int64_t vec, int64_t len, int64_t rev) {
 int64_t py_map_items(int64_t map) {
     if (!map) return 0;
     map = map_resolve(map);
-    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("py_map_items");
+    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("py_map_items", map);
     int64_t cap = ((int64_t*)map)[0];
     if (cap < 0) cap = 0;
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(cap ? cap : 1) * 8);

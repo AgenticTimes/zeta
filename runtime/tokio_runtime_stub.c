@@ -145,15 +145,24 @@ int64_t map_new(void) {
 // diagnostic.)
 int zt_map_is_json_handle(int64_t h) {
     if (!h) return 0;
+    // A VECTOR's data pointer starts right after its [cap|len] header — its "first
+    // word" is the first ELEMENT, so `[1, 0, 1]` looked exactly like a JSON tag
+    // (measured: `df.loc([1,0,1])` aborted inside `loc`). Exclude plausible vectors
+    // first; only then treat a small first word as a JSON tag.
+    if (h > 0x1000) {
+        int64_t cap = ((int64_t*)(h - 16))[0];
+        int64_t len = ((int64_t*)(h - 16))[1];
+        if (cap >= 0 && cap <= (1LL << 30) && len >= 0 && len <= cap) return 0;
+    }
     int64_t w0 = *(int64_t*)h;
     return (w0 >= 1 && w0 <= 8);
 }
-void zt_map_json_mismatch(const char* fn) {
+void zt_map_json_mismatch(const char* fn, int64_t handle) {
     fprintf(stderr,
-            "PY-A: `%s` was called on a JSON value (a `-> dict` annotation on a "
-            "function returning json.loads() types it as a map). Refusing to "
-            "reinterpret it as a hash table.\n",
-            fn);
+            "PY-A: `%s` was called on a JSON value (handle=%p, first word=%lld) — a "
+            "`-> dict` annotation on a function returning json.loads() types it as a "
+            "map. Refusing to reinterpret it as a hash table.\n",
+            fn, (void*)handle, (long long)(handle ? *(int64_t*)handle : -1));
     fflush(stderr);
     abort();
 }
@@ -171,7 +180,7 @@ int64_t map_resolve(int64_t map) {
 void map_insert(int64_t map0, int64_t key, int64_t val) {
     int64_t map = map_resolve(map0);
     if (!map) return;
-    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("map_insert");
+    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("map_insert", map);
     int64_t* hdr=(int64_t*)map; int64_t cap=hdr[0]; int64_t len=hdr[1];
     if (len*4 >= cap*3) {
         int64_t nc=cap*2;
@@ -201,7 +210,7 @@ void map_insert(int64_t map0, int64_t key, int64_t val) {
 int64_t map_get(int64_t map0, int64_t key) {
     int64_t map = map_resolve(map0);
     if (!map) return 0;
-    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("map_get");
+    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("map_get", map);
     int64_t cap=((int64_t*)map)[0]; int64_t h=map_hash(key); int64_t idx=h&(cap-1);
     while(1){
         char* e=(char*)map+16+idx*MAP_ENTRY_SIZE;
@@ -3438,7 +3447,7 @@ int64_t py_collections_defaultdict(int64_t factory) { (void)factory; return map_
 // len(dict) — count the used entries (map slots are [key|value|used]).
 int64_t zeta_map_len(int64_t m) {
         m = map_resolve(m);
-    if (zt_map_is_json_handle(m)) zt_map_json_mismatch("zeta_map_len");
+    if (zt_map_is_json_handle(m)) zt_map_json_mismatch("zeta_map_len", m);
 if (!m) return 0;
     int64_t cap = ((int64_t*)m)[0];
     int64_t n = 0;
@@ -3451,7 +3460,7 @@ if (!m) return 0;
 // `k in dict`
 int64_t py_map_contains(int64_t m, int64_t k) {
         m = map_resolve(m);
-    if (zt_map_is_json_handle(m)) zt_map_json_mismatch("py_map_contains");
+    if (zt_map_is_json_handle(m)) zt_map_json_mismatch("py_map_contains", m);
 if (!m) return 0;
     // Probe the entry table instead of testing `map_get(m, k) != 0`: a key
     // whose VALUE is 0 (or None/empty) is still present, and the old form

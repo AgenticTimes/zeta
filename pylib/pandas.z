@@ -147,7 +147,7 @@ class DataFrame:
         # `df.values`（嵌套矩阵）列映射难表达，本批不做。
         return list(range(self.n_rows()))
 
-    def loc(self, mask) -> DataFrame:
+    def loc(self, mask: lt(vec, i64)) -> DataFrame:
         # 行级过滤（列映射模型可以直接做）：`df.loc[<0/1 掩码>]` ⇒ 每列向量按掩码取子集。
         # 掩码不是向量时**响亮失败**，绝不返回 0（此前的路径让调用方对 0 调 .copy() 而崩）。
         out = {}
@@ -169,7 +169,7 @@ class DataFrame:
             j = j + 1
         return DataFrame(out)
 
-    def iloc(self, mask) -> DataFrame:
+    def iloc(self, mask: lt(vec, i64)) -> DataFrame:
         # `df.iloc[<掩码>]` 在本模型里与 loc 同义（都是按行取子集）。
         return self.loc(mask)
 
