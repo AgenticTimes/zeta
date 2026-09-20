@@ -337,13 +337,19 @@ git diff src/middle/mir/gen.rs     # 看批次 286 兜底全文
 
 ## 11. 临时 harness 的当前内容
 
-`~/source/quant/REasyQuant/strategies/code/_zeta_local_drv.py`（未跟踪）当前装的是
-**最小复现 `_ranked_fetch_sources`** 的探针：
+`~/source/quant/REasyQuant/strategies/code/_zeta_local_drv.py`（**未跟踪**，随用随改）当前装的是
+**§9 的自检片段**（universe + 缓存 + 清洗三步，实测输出见 §9）。
+
+两种常用替换：
 
 ```python
+# A) 最小复现当前卡点（超时 rc=124）
 from backend.datasrc.sources_selector import _ranked_fetch_sources
 r = _ranked_fetch_sources("sh.159985")
 print("ranked", len(r))
+
+# B) 跑整个策略（真正目标）—— 见 §3.2
 ```
 
-要回到「跑整个策略」就把 §3.2 的标准形态覆盖回去。
+> 注意：这个文件在 `strategies/code/` 下，**会被语料基线扫到**（`corpus_baseline.py` 递归
+> `strategies/**/*.py`）。要跑语料口径时把它移走（`mv` 到 `/tmp`），否则统计数会多一个文件。
