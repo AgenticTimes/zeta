@@ -6761,3 +6761,32 @@ print("via", use(c))        # ✗ **整条语句静默消失**（rc=0，无任�
 （`out = df.copy()` 里的 `self.data` 字段取值 —— 结构体字段索引在「基类型是形参」时仍会走
 `variant=""`/`field_count=2` 的兜底）。下一批：把字段索引按**声明类型**查（此前试过一版会
 `ExtractOutOfRange`，需要同时把 field_count 对齐）。
+
+### 批次 219 定位（`DataFrame::copy` 的 `self` 是 0）
+
+反汇编 `DataFrame::copy`（lldb）：
+
+    +8 : str x0,[sp,#0x10]      ; self
+    +12: bl map_new             ; dict() 新建 map
+    +20: ldr x8,[sp,#0x10]      ; x8 = self
+    +24: ldr x1,[x8]            ; ← 崩：self 为 0
+    +28: bl py_map_update
+
+⇒ `df.copy()` 的**接收者**是 0。但把同一形态缩到最小却完全正常：
+
+    class 无关的最小复现：
+    def cp(d: pd.DataFrame) -> int:
+        e = d.copy()
+        return len(e)
+    → direct_copy 892 ✓ / fn_copy 892 ✓
+
+即「注解形参 + `.copy()`」本身没问题。真实函数的前置语句是
+
+    cfg = cfg or MarketCleanConfig()
+    report = OhlcvRepairReport(input_rows=len(df))
+    if df is None or df.empty: return pd.DataFrame(), report
+    out = df.copy()                                   ← 崩
+
+下一批：把 `OhlcvRepairReport(input_rows=len(df))` 这类**结构体构造**加进最小复现，
+怀疑构造过程把 `df` 所在槽位/寄存器写坏（或默认参数 `cfg = cfg or MarketCleanConfig()`
+的求值顺序问题）。
