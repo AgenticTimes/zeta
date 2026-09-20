@@ -7931,3 +7931,36 @@ lldb 现场：`DataFrame::n_rows: ldr x0, [x8]`，`EXC_BAD_ACCESS (code=1, addre
 **剩余**：驱动仍在 `fetch_stocks + 3336`（`len(cached)`）崩，但同一函数在 harness 里
 （119 只逐个 `_load_cache`）是 rc=0 / 118 成功 —— 说明差异在 `fetch_stocks` 内部
 （上市日过滤、`eff_start`、kwarg 路径），下一批用同一 harness 复刻 `fetch_stocks` 的循环体。
+
+### 批次 279：**`x in ("sh", "sz")` 恒为假** —— 整个代码归一化因此失效（重大静默错值）
+
+最小复现 `/tmp/inz.z`：
+
+    x = "sz"
+    print(x == "sz")        → 1   ✓
+    print(x in ("sh","sz")) → 0   ✗      ← 元组容器恒假
+    print(x in ["sh","sz"]) → 1   ✓      ← 列表正常
+
+根因：`x in y` 被解析成 `y.__contains__(x)`；当 `y` 是**元组字面量**时它是 `StackArray`
+（`[len|elems]` 布局），而成员测试路径按动态数组（`[cap|len|…]`）读 ⇒ 永远找不到。
+
+影响面极大：`backend/datasrc/code_conv.py` 的 `normalize_to_jq` 正是
+`if parts[0].lower() in ("sh", "sz")` / `if exch in ("SH", "SZ")` 这种写法 ⇒ 所有
+`sh.513120` 形态的代码**都不会被归一化成 jq 代码** ⇒ `_cache_path` 派生出不存在的文件名
+⇒ 119 只全部取不到缓存 ⇒ 驱动掉进联网分支（未实现的 baostock，响亮 abort）。
+
+修法：解析器构造 `__contains__` 时，若右操作数是元组字面量就降级成**列表字面量**
+（Python 的 `in` 不区分容器类型）。
+
+验证：
+
+    in 1                      ✓（元组成员测试）
+    g 159985.XSHE             ✓（normalize_to_jq 恢复）
+    universe 119 sz.159985 sh.512070（jq 形态）✓
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+**驱动进展（里程碑）**：崩点从「`len(cached)`（缓存读取）」推进到
+`_fetch_remote_bs + 652 ← fetch_stocks + 7364` —— 即**缓存链路已通**，
+现在是「某些标的缓存不覆盖请求区间 ⇒ 进入联网拉取」，而本地构建里 baostock 是
+**响亮未实现**的（设计如此）。这属于**数据可得性**边界，不再是编译器缺陷。

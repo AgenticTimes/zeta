@@ -2338,7 +2338,18 @@ fn parse_comparison(input: &str) -> IResult<&str, AstNode> {
         let right = &operands[i + 1];
         let node = match op.as_str() {
             "in" => AstNode::Call {
-                receiver: Some(Box::new(right.clone())),
+                // `x in ("sh", "sz")` — a TUPLE on the right. Tuples lower to
+                // `StackArray`s whose layout the membership path reads as a
+                // dynamic array, so EVERY membership test against a tuple
+                // answered 0 (`"sz" in ("sh","sz")` → 0 while the same value in a
+                // LIST worked). `code_conv.normalize_to_jq` is built on such
+                // tuples, so `sh.513120` never normalized and all 119 wufu codes
+                // failed to resolve. Python's `in` does not care about the
+                // container type, so lower the tuple as a list literal.
+                receiver: Some(Box::new(match right {
+                    AstNode::Tuple(items) => AstNode::ArrayLit(items.clone()),
+                    other => other.clone(),
+                })),
                 method: "__contains__".to_string(),
                 args: vec![left.clone()],
                 type_args: vec![],
