@@ -6801,3 +6801,25 @@ print("via", use(c))        # ✗ **整条语句静默消失**（rc=0，无任�
 ⇒ 形态本身都正常。下一批改用**调用真实函数**并显式传第三参
 （`validate_and_repair_stock_ohlcv(df, norm, MarketCleanConfig())`）对比默认参数路径；
 同时打印 `len(df)` **函数内**（通过一个包装函数）来确认形参 `df` 在真实函数里是否已经是 0。
+
+### 批次 220（2026-09-20）：把 `DataFrame::copy` 的 self==0 缩到「函数内特有的槽位失效」
+
+| 实验 | 结果 |
+|---|---|
+| 直接调 `validate_and_repair_stock_ohlcv(df, norm)`（harness） | 崩（`DataFrame::copy + 24`，self==0） |
+| 显式传第三参 `MarketCleanConfig()` | 崩（同上）⇒ 与默认参数无关 |
+| 把函数体全部语句**内联**到 harness（含 `MarketCleanConfig()` / `OhlcvRepairReport(input_rows=len(df))` / `df.copy()` / `df.empty`） | **全部正常**（`copy 9 892`） |
+| `df.empty` 之后再 `df.copy()`（怀疑 empty 写坏实参） | 正常（`b_empty 0 / len 892 / c_copy 9 892`） |
+| 函数内 `try:` 包住调用 | 仍崩 ⇒ 与 try 无关 |
+
+函数自身 MIR 检查：
+
+- `df` 形参 = slot **1**，`ParamInit{param_id:1}`，**没有任何语句写 slot 1**（脚本统计 0 处）
+- `DataFrame::__len__(1)`、`DataFrame::empty(1)` 都传入 slot 1 且**正常返回**
+- 紧接着 `DataFrame::copy(1)` 却让被调方拿到 self==0
+
+⇒ 值在「`empty` 之后、`copy` 之前」被清零。这段区间里的语句只有
+`report = OhlcvRepairReport(input_rows=len(df))` 与 `cfg = cfg or MarketCleanConfig()`
+（MIR 里还有一处 `Assign{lhs:3,…}` + `zeta_env_set` —— 对**形参**做 env 写，值得怀疑）。
+下一批：把这两条按**同样的顺序**放进一个「只有函数边界不同」的复现里逐步二分
+（例如把 harness 的语句包进一个 `def g(d, norm)` 而不是顶层）。
