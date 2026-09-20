@@ -1,0 +1,20 @@
+import pandas as pd
+
+// 批次 238：`-> tuple[pd.DataFrame, int]` 的元素类型是 `Named("tuple", [...])`，
+// 解构时只处理了 `Type::Tuple` ⇒ 掉到 I64 默认分支：`len(out.columns)` 变成 map 取值（0）、
+// `out["a"]` 变成对结构体句柄做 map 下标（SEGV）。实测 `remove_extreme_return_bars`。
+// expect: 2
+// expect: 2
+// expect: 1
+def split(f: pd.DataFrame) -> tuple[pd.DataFrame, i64]:
+    return f, 1
+
+def mk() -> pd.DataFrame:
+    return pd.DataFrame({"a": ["1", "2"], "b": ["x", "y"]})
+
+def main() -> i64:
+    out, n = split(mk())
+    print(len(out))
+    print(len(out.columns))
+    print(n)
+    return 0

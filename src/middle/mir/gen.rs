@@ -1295,6 +1295,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                     Some(Type::Tuple(ts)) => {
                                         ts.get(i).cloned().unwrap_or(Type::I64)
                                     }
+                                    // A function returning a tuple ANNOTATED in
+                                    // Python spelling (`-> tuple[pd.DataFrame, int]`,
+                                    // `remove_extreme_return_bars`) is typed
+                                    // `Named("tuple", [..])`, not `Type::Tuple` —
+                                    // the element fell to the I64 default, so the
+                                    // destructured frame had a garbage type
+                                    // (`len(out.columns)` → MAP lookup = 0;
+                                    // `out["a"]` → SEGV).
+                                    Some(Type::Named(n, ts)) if n == "tuple" => {
+                                        ts.get(i).cloned().unwrap_or(Type::I64)
+                                    }
                                     Some(Type::Str) => Type::Str,
                                     _ => Type::I64,
                                 };

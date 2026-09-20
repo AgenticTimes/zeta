@@ -7092,3 +7092,20 @@ call DataFrame::loc(%116, %117)`。
 
 下一批：定位用户函数**返回注解**的解析路径（`pd.DataFrame` 这种**点号限定名**），
 把 `DataFrame` 解析到 shim 的结构体（而不是退化成 `map`）。
+
+### 批次 238：`-> tuple[pd.DataFrame, int]` 的元素类型（解构后 frame 类型丢失）
+
+`remove_extreme_return_bars` 返回 `tuple[pd.DataFrame, int]`；该类型是
+`Named("tuple", [Named("DataFrame"), I64])`，而解构代码只匹配 `Type::Tuple(ts)`
+⇒ 掉到 `_ => Type::I64` 默认分支。于是解构出来的帧被当整数：
+`len(out.columns)` → map 取值（恒 0）、`out["a"]` → 对结构体句柄做 map 下标（SEGV）。
+
+修法两处：
+1. `resolver.rs::shim_class_normalize` 递归进 `Type::Tuple`（此前只进 `Named`/`DynamicArray`）；
+2. `gen.rs` 解构分支同时接受 `Named("tuple", ts)`。
+
+回归用例 `tests/python_style/t274_tuple_return_dframe.z`（期望 2 / 2 / 1）。
+度量：官方 194/194、python_style **274**/2、语料 39/39 全绿。
+
+崩点：`DataFrame::n_rows + 16 ← __len__ ← validate_and_repair_stock_ohlcv + 2912`
+（`len(out)` 现在派发到**正确**的方法，只是 `out` 的值仍坏 —— 下一批继续）。

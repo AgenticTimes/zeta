@@ -2573,6 +2573,32 @@ impl Resolver {
         })
     }
 
+/// `pd.DataFrame` → `DataFrame` (shim struct) anywhere inside a type,
+/// including nested type arguments (`tuple[pd.DataFrame, int]`, `[pd.DataFrame]`).
+fn shim_class_normalize(t: &Type) -> Type {
+    match t {
+        Type::Named(n, args) => {
+            if let Some(tag) = crate::middle::pylib::handle_tag(n) {
+                return Type::Named(tag.to_string(), args.iter().map(Self::shim_class_normalize).collect());
+            }
+            let last = n.rsplit('.').next().unwrap_or(n.as_str());
+            let name = if n.contains('.') && matches!(last, "DataFrame" | "Series" | "GroupBy") {
+                last.to_string()
+            } else {
+                n.clone()
+            };
+            Type::Named(name, args.iter().map(Self::shim_class_normalize).collect())
+        }
+        Type::DynamicArray(inner) => Type::DynamicArray(Box::new(Self::shim_class_normalize(inner))),
+        // `-> tuple[pd.DataFrame, int]` (`remove_extreme_return_bars`): the frame
+        // element kept the qualified name, so the DESTRUCTURED name was typed
+        // `pd.DataFrame` and `len(out.columns)` was a MAP lookup (0) while
+        // `out["a"]` was a map subscript on a struct handle (SEGV, measured).
+        Type::Tuple(items) => Type::Tuple(items.iter().map(Self::shim_class_normalize).collect()),
+        other => other.clone(),
+    }
+}
+
     pub fn lower_to_mir(&self, ast: &AstNode) -> Mir {
         let defs_snapshot = self.registered_func_defs.borrow().clone();
         let ret_types: HashMap<String, Type> = self
@@ -2599,16 +2625,12 @@ impl Resolver {
                         // struct, so the caller's `df.columns` / `df.data` became
                         // MAP lookups (measured: `load()` returned 892 rows /
                         // **0 columns**, and `df.itertuples` crashed). Strip the
-                        // qualifier when the last segment names a shim class.
-                        None => match n.rsplit('.').next() {
-                            Some(last)
-                                if n.contains('.')
-                                    && matches!(last, "DataFrame" | "Series" | "GroupBy") =>
-                            {
-                                Type::Named(last.to_string(), args.clone())
-                            }
-                            _ => ret.clone(),
-                        },
+                        // qualifier when the last segment names a shim class —
+                        // RECURSIVELY, because it also appears NESTED
+                        // (`-> tuple[pd.DataFrame, int]`, which
+                        // `remove_extreme_return_bars` returns: the destructured
+                        // frame was empty and `len(out)` crashed in `array_len`).
+                        None => Self::shim_class_normalize(&Type::Named(n.clone(), args.clone())),
                     },
                     other => other.clone(),
                 };
