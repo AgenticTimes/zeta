@@ -746,3 +746,10 @@ int64_t zt_parquet_build_map(const char* path) {
     (void)pq_vec_len;
     return out;
 }
+
+// Alias used by pylib/pandas.z's `read_parquet` shim (which wraps the column map
+// into the DataFrame class).
+int64_t zeta_parquet_read_map(int64_t path) {
+    if (!path) return 0;
+    return zt_parquet_build_map((const char*)path);
+}

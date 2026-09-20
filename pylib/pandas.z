@@ -253,6 +253,13 @@ class DataFrame:
     def columns(self) -> lt(vec, str):
         # 与 column_names 同语义；语料写 `df.columns` / `"x" in df.columns`。
         return self.column_names()
+    def columns(self) -> lt(vec, str):
+        # Python property `df.columns`（ParquetCache.load 用 `col in df.columns`
+        # 决定是否 to_datetime）。缺这个方法时该表达式落到通用路径，把列名当容器
+        # 传给 py_list_contains ⇒ strcmp 解引用 ASCII 字节（EXC_BAD_ACCESS at
+        # 0x61645f6564617274 = "trade_date"）。
+        return self.column_names()
+
     def column_names(self) -> lt(vec, str):
         # 必须有返回注解：批次九十九修掉「含 `_` 的限定名误切后缀」后，
         # 未注解时 colnames[j] 会走 map_get（以前碰巧查到 column 的列表类型）。
@@ -344,6 +351,14 @@ def isnull(x) -> bool:
 # frames 必须标注 [DataFrame]：未标注时 frames[i] 丢掉 struct 字段（.data 变空/空指针）。
 # lt(vec, DataFrame) 不够 —— 实测只有 `[DataFrame]` 能让元素类型落到下标结果上。
 # map 的值类型由 `lt(map, str, vecstr)` / 字面量推断带上，列上的 `prev + col` 才能走列表拼接。
+def read_parquet(path) -> DataFrame:
+    # 真实读取在运行期（runtime/parquet_min.c：SNAPPY + PLAIN/RLE_DICTIONARY），
+    # 返回「列名 -> 值向量」的 map；这里包装成 shim 的 DataFrame，
+    # 这样 `df.columns` / `df[col] = ...` / `df.empty` 等 DataFrame 语义才成立
+    # （此前直接返回裸 map，ParquetCache.load 里的 `col in df.columns` 拿到垃圾）。
+    return DataFrame(zeta_parquet_read_map(path))
+
+
 def concat(frames: [DataFrame], ignore_index=False):
     first = frames[0]
     colnames = first.column_names()

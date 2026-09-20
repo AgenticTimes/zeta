@@ -1344,6 +1344,7 @@ int64_t py_pd_read_parquet(int64_t path) {
     return zt_parquet_build_map((const char*)path);
 }
 
+
 // ---- hashlib (md5/sha1/sha256) ----
 // Accumulates the input in a growable GC buffer and hashes it on demand, so
 // both `sha256(data).hexdigest()` and the streaming `h = sha256();
