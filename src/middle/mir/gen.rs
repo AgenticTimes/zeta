@@ -10871,6 +10871,23 @@ call, no NULL-handle dereference).",
                     // SKIP the common Var(dest) insert below — the Deref expr is used inline
                     // by gen_expr_safe, so we don't need an alloca to load from.
                     return dest;
+                } else if op == "~"
+                    && matches!(
+                        self.type_map.get(&expr_id),
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                    )
+                {
+                    // `~mask` on a mask VECTOR (Python's `df.loc[~invalid]`):
+                    // element-wise NOT. The integer bitwise-NOT of the handle made
+                    // the mask garbage (measured: `loc` received mask == 0).
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_vec_not".to_string(),
+                        args: vec![expr_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.type_map
+                        .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
                 } else if op == "-" {
                     // PY-A fix: floating-point operands must NOT go through
                     // the i64 unary_minus runtime (bit-pattern negation →
