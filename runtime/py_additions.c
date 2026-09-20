@@ -74,6 +74,13 @@ int64_t str_split(int64_t s, int64_t sep) {
     return (int64_t)(base + 2);
 }
 int64_t host_str_split(int64_t s, int64_t sep) { return str_split(s, sep); }
+// Arity variant (`s.split(sep, maxsplit)` — Python's 2-arg form). The runtime's
+// split has no maxsplit, so the third argument is accepted and ignored rather
+// than leaving an unresolved symbol.
+int64_t host_str_split_3(int64_t s, int64_t sep, int64_t maxsplit) {
+    (void)maxsplit;
+    return str_split(s, sep);
+}
 
 // map_str_key — deterministic 64-bit FNV-1a content hash for string dict
 // keys. The open-addressing map hashes/compares keys numerically; string

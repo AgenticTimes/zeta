@@ -160,12 +160,22 @@ pub fn finalize_and_aot<'ctx>(
 
     let target_triple = TargetTriple::create(&triple);
     let target = Target::from_triple(&target_triple)?;
+    // `ZETA_NO_OPT=1` also disables the LLVM -O3 pipeline here. The IR printed by
+    // `--emit-llvm` is the UNOPTIMIZED module, and a miscompile at -O3 can make the
+    // assembly disagree with it (measured: `call i64 @"DataFrame::copy"(i64 %250)`
+    // in the IR vs. a `bl DataFrame::copy` with NO argument load in the object).
+    // Keep the debug switch honest end-to-end.
+    let opt_level = if std::env::var("ZETA_NO_OPT").is_ok() {
+        OptimizationLevel::None
+    } else {
+        OptimizationLevel::Aggressive
+    };
     let target_machine = target
         .create_target_machine(
             &target_triple,
             &cpu,
             &features,
-            OptimizationLevel::Aggressive,
+            opt_level,
             inkwell::targets::RelocMode::Default,
             inkwell::targets::CodeModel::Default,
         )
