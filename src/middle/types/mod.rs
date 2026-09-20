@@ -282,6 +282,22 @@ impl Type {
     /// Parse a type from a string representation
     pub fn from_string(s: &str) -> Type {
         let s = s.trim();
+        // PEP 604 unions (`pd.DataFrame | None`, `str | os.PathLike`): the value is
+        // one of the members, so take the FIRST non-`None` one. Without this the
+        // whole spelling failed to parse and the type degraded — measured:
+        // `ParquetCache.load(...) -> pd.DataFrame | None` came back as a MAP, so
+        // `df["col"] = v` compiled to `DictInsert` against the DataFrame STRUCT
+        // pointer and crashed inside `map_insert`.
+        if s.contains('|') {
+            for part in s.split('|') {
+                let p = part.trim();
+                if p.is_empty() || p == "None" || p == "none" || p == "NoneType" {
+                    continue;
+                }
+                return Type::from_string(p);
+            }
+            return Type::PyDynamic;
+        }
 
         // Handle primitive types
         match s {

@@ -626,6 +626,17 @@ impl MirGen {
                 return Some(cand);
             }
         }
+        // A DOTTED type name (`pd.DataFrame`, from a `-> pd.DataFrame | None`
+        // annotation) must still find the class's methods: without this
+        // `df["col"] = v` missed `DataFrame::__setitem__` entirely and fell
+        // through to `DictInsert` on the DataFrame STRUCT pointer — a garbage
+        // write that crashed inside `map_insert`.
+        if let Some(last) = tn.rsplit('.').next() {
+            let cand = format!("{}::{}", last, method);
+            if self.func_ret_types.contains_key(&cand) {
+                return Some(cand);
+            }
+        }
         None
     }
 

@@ -96,6 +96,20 @@ impl InferContext {
     /// Parse type string to Type
     fn parse_type_string(&self, s: &str) -> Result<Type, String> {
         let s = s.trim();
+        // PEP 604 unions (`pd.DataFrame | None`): take the first non-None member.
+        // Left unparsed, `ParquetCache.load(...) -> pd.DataFrame | None` degraded to
+        // a MAP, so `df["col"] = v` compiled to `DictInsert` against the DataFrame
+        // STRUCT pointer (crash inside `map_insert`).
+        if s.contains('|') {
+            for part in s.split('|') {
+                let p = part.trim();
+                if p.is_empty() || p == "None" || p == "none" || p == "NoneType" {
+                    continue;
+                }
+                return self.parse_type_string(p);
+            }
+            return Ok(Type::PyDynamic);
+        }
 
         // Check for reference types
         if s.starts_with("&mut ") {
