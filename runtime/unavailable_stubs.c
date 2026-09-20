@@ -41,14 +41,22 @@ int64_t login(void) { return zt_unavailable_soft("baostock.login"); }
 __attribute__((weak)) int64_t logout(void) { return zt_unavailable_soft("baostock.logout"); }
 
 static int64_t zt_unavailable_soft(const char* what) {
+    // The dedup suppresses only the MESSAGE — the RAISE must happen on EVERY call.
+    // Suppressing the raise too made the SECOND call of a platform function return
+    // 0 instead of raising: `pq.read_table(...)` in a later function returned a
+    // null table and the caller then dereferenced `t.schema` (SEGV) instead of
+    // taking its own try/except fallback.
     static const char* warned[64];
     static int n = 0;
+    int seen = 0;
     for (int i = 0; i < n; i++) {
-        if (warned[i] == what) return 0;
+        if (warned[i] == what) { seen = 1; break; }
     }
-    if (n < 64) warned[n++] = what;
-    fprintf(stderr, "PY-A: platform source `%s` is not available — falling back\n", what);
-    fflush(stderr);
+    if (!seen) {
+        if (n < 64) warned[n++] = what;
+        fprintf(stderr, "PY-A: platform source `%s` is not available — falling back\n", what);
+        fflush(stderr);
+    }
     // RAISE, exactly like CPython does when the provider is missing/unauthorised:
     // the project wraps every provider call in try/except and takes the LOCAL
     // fallback. Returning 0 instead made `jqdatasdk.auth` look like it SUCCEEDED
