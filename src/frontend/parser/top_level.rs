@@ -1600,6 +1600,60 @@ fn is_bare_main_call(a: &AstNode) -> bool {
     )
 }
 
+/// BATCH-290: set by the resolver's IMPORT path around `parse_zeta`. Tells
+/// `synthesize_implicit_main` this file is never the executable entry, so the
+/// `__main__` guard must survive as a runtime check and `main` must stay a
+/// function. Compilation is single-threaded; a plain atomic suffices.
+static PARSING_IMPORTED_MODULE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_parsing_imported_module(on: bool) {
+    PARSING_IMPORTED_MODULE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn parsing_imported_module() -> bool {
+    PARSING_IMPORTED_MODULE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// BATCH-290: `if __name__ == "__main__":` (either operand order, `==` or `is`).
+/// The parser no longer unwraps it, so it reaches here as an `If` node.
+fn is_main_guard(a: &AstNode) -> bool {
+    let cond = match a {
+        AstNode::If { cond, else_, .. } if else_.is_empty() => &**cond,
+        _ => return false,
+    };
+    let op_ok = matches!(cond, AstNode::BinaryOp { op, .. } if op == "==" || op == "is");
+    if !op_ok {
+        return false;
+    }
+    let (left, right) = match cond {
+        AstNode::BinaryOp { left, right, .. } => (left, right),
+        _ => return false,
+    };
+    let is_name = |n: &AstNode| matches!(n, AstNode::Var(v) if v == "__name__");
+    let is_main = |n: &AstNode| matches!(n, AstNode::StringLit(s) if s == "__main__");
+    (is_name(left) && is_main(right)) || (is_main(left) && is_name(right))
+}
+
+/// BATCH-290: in a file that defines `main`, a `__main__` guard's body is
+/// spliced into the module statements (which the merge prepends to `main`),
+/// minus any bare `main()` self-call — the old parse-time unwrap, moved to
+/// the one place that knows the recursion is unsafe.
+fn splice_main_guard_body(
+    guard: AstNode,
+    main_body: &mut Vec<AstNode>,
+    module_globals: &mut Vec<String>,
+) {
+    let AstNode::If { then, .. } = guard else { return };
+    for node in then {
+        if is_bare_main_call(&node) {
+            continue;
+        }
+        collect_module_global(&node, module_globals);
+        main_body.push(node);
+    }
+}
+
 fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
     let has_main = asts
         .iter()
@@ -1630,6 +1684,12 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
     // Only collected here (the implicit-main path): explicit `fn main`
     // bodies never touch this, so lambda/closure bindings are unaffected.
     let mut module_globals: Vec<String> = Vec::new();
+    // BATCH-290: when parsing an IMPORTED module, the `__main__` guard must
+    // survive as a runtime check (its `__name__` lowers to the module name →
+    // false) and the user's `main` must stay a FUNCTION — the resolver runs the
+    // module statements as the import-time initializer, so merging them into
+    // `main` would execute the whole entry point on every import.
+    let module_ctx = parsing_imported_module();
     for a in asts {
         match a {
             // PY-A: a class desugars to [struct, impl, ctor] wrapped in a
@@ -1642,6 +1702,10 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
                         if has_main && is_bare_main_call(&node) {
                             continue;
                         }
+                        if has_main && !module_ctx && is_main_guard(&node) {
+                            splice_main_guard_body(node, &mut main_body, &mut module_globals);
+                            continue;
+                        }
                         collect_module_global(&node, &mut module_globals);
                         main_body.push(node);
                     }
@@ -1649,13 +1713,18 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
             }
             other if is_definition(&other) => out.push(other),
             stmt => {
-                // The `if __name__ == "__main__": main()` guard is UNWRAPPED at
-                // parse time (stmt.rs) into a bare `main()` call, so by now the
-                // entry invocation sits in the module-statement list. Merging it
-                // into `main` itself would recurse forever (measured: an
-                // infinite "A" stream, then SEGV), and the program entry already
-                // calls `main` — drop it.
+                // BATCH-290: the `if __name__ == "__main__":` guard now SURVIVES
+                // parsing as an If (stmt.rs no longer unwraps it). When this file
+                // defines `main`, its module statements get PREPENDED into that
+                // main — a surviving guard whose body calls `main()` would then
+                // recurse forever (measured: an infinite "A" stream, then SEGV),
+                // and the program entry already calls `main`. Splice the guard's
+                // non-`main()` work in and drop the self-call.
                 if has_main && is_bare_main_call(&stmt) {
+                    continue;
+                }
+                if has_main && !module_ctx && is_main_guard(&stmt) {
+                    splice_main_guard_body(stmt, &mut main_body, &mut module_globals);
                     continue;
                 }
                 collect_module_global(&stmt, &mut module_globals);
@@ -1686,6 +1755,29 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
     // crashing before its first output. Prepend the module statements to the
     // user's `main` instead (Python runs them at import, i.e. before main).
     if has_main {
+        if module_ctx {
+            // Imported module: `main` stays a function (registered mangled by
+            // the resolver); the module statements go into a dedicated carrier
+            // the resolver extracts as the import-time initializer.
+            out.push(AstNode::FuncDef {
+                name: "__zeta_module_body__".to_string(),
+                generics: Vec::new(),
+                lifetimes: Vec::new(),
+                params: Vec::new(),
+                ret: "i64".to_string(),
+                body: main_body,
+                attrs: Vec::new(),
+                ret_expr: None,
+                single_line: false,
+                doc: String::new(),
+                pub_: false,
+                async_: false,
+                const_: false,
+                comptime_: false,
+                where_clauses: Vec::new(),
+            });
+            return out;
+        }
         for node in &mut out {
             if let AstNode::FuncDef { name, body, .. } = node {
                 if name == "main" {

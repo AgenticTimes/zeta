@@ -2289,13 +2289,16 @@ impl Resolver {
         } else {
             src.clone()
         };
+        crate::frontend::parser::top_level::set_parsing_imported_module(true);
         let asts = match crate::frontend::parser::top_level::parse_zeta(&pre) {
             Ok((_rem, a)) => a,
             Err(_) => {
+                crate::frontend::parser::top_level::set_parsing_imported_module(false);
                 eprintln!("warning: PY-A: cannot parse module file {}", path.display());
                 return false;
             }
         };
+        crate::frontend::parser::top_level::set_parsing_imported_module(false);
         let prefix = format!("{}__", module.replace('.', "_"));
         // Registrations below recurse into `register`, whose import handling
         // resolves relative specifiers — it must see THIS module as context.
@@ -2307,9 +2310,19 @@ impl Resolver {
         // module-level constants silently unbound (`cfg.get()` returned 0).
         let mut defs: Vec<AstNode> = Vec::new();
         let mut body_stmts: Vec<AstNode> = Vec::new();
+        // BATCH-290: an imported module that DEFINES `main` gets its module
+        // statements in the `__zeta_module_body__` carrier instead of merged
+        // into `main` — then `main` is a regular (mangled) definition and only
+        // the statements run at import. Without a carrier, the synthesized
+        // `main` IS the statement list (library modules, historical path).
+        let has_carrier = asts.iter().any(|a| {
+            matches!(a, AstNode::FuncDef { name, .. } if name == "__zeta_module_body__")
+        });
         for a in asts {
             match a {
-                AstNode::FuncDef { ref name, ref body, .. } if name == "main" => {
+                AstNode::FuncDef { ref name, ref body, .. }
+                    if name == "__zeta_module_body__" || (!has_carrier && name == "main") =>
+                {
                     body_stmts.extend(body.iter().cloned());
                 }
                 other => defs.push(other),

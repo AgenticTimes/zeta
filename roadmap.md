@@ -8251,3 +8251,54 @@ fetch_stocks 的缓存门（market_data_fetcher.py:552-578）`cached is not None
 
 **下一步**：harness 扩到 `run_backtest("2024-01-02","2024-02-29",1000000.0, engine="local")`，
 对照验收指标（final_value 994575.84 / return -0.5424 / trading_days 37）。
+
+## 批次 290 —— `if __name__ == "__main__"` 守卫语义修正：import 不再执行入口（drvSF 首次真正跑进 run_backtest）
+
+### 起点（批次 289 顺延）
+标准驱动（`from strategies.code.jq_wufu_local import run_backtest; run_backtest(...)`）
+链接成功后一运行就是垃圾窗口 `行情请求 119 只，区间 1969-08-04 ~` + SIGSEGV。
+探针隔离实测：**`import strategies.code.jq_wufu_local` 这一行本身就把整场回测跑完了**
+（在探针自己的任何 print 之前）。两类根因叠加：
+
+1. **解析期无条件解包守卫**（stmt.rs:344-356）：任何模块的
+   `if __name__ == "__main__": main()` 都被剥掉条件、变成裸语句。
+2. **resolver 的模块 init 提取**（resolver.rs:2312）：`parse_zeta` 会把 has_main
+   文件的模块语句**并进用户 main 的开头**（批次 287 修的行为），而 import 路径
+   把 `FuncDef main` 的**整个 body 当作模块语句表** ⇒ 用户的 main 函数体（含
+   argparse/回测调用）在 import 时全部执行。守卫解包只是让这条路更早爆。
+
+### 修复
+- stmt.rs：删除守卫解包。`If` 节点原样进 AST；MIR 已有
+  `__name__ → StringLit(current_module)`（gen.rs:2971，root 为 `__main__`，
+  resolver.rs:2666 按 `py_mangled_to_module` 给每个函数正确模块名），条件在
+  import 模块里自然为假。字符串 `==` 运行时比较已可用（实测 cmp 0/1 正确）。
+- top_level.rs：新增 `PARSING_IMPORTED_MODULE` 标志（resolver/module_resolver 的
+  import 解析路径包一层 set/reset）。
+  - **root + has_main**：守卫改在 `synthesize_implicit_main` 里 splice
+    （`is_main_guard`/`splice_main_guard_body`）——把守卫体内非 `main()` 的语句
+    并入模块语句、丢掉自调用（防止语句被 prepend 进 main 后无限递归，即旧注释
+    记录的「无穷 A + SEGV」）。
+  - **import + has_main**：守卫 If 原样保留（条件为假、整体跳过）；模块语句不再
+    并进用户 main，而是装进载体 `FuncDef __zeta_module_body__`，resolver 见到
+    载体时只提取载体做 `<module>__init`，用户的 `main` 作为普通 mangled 函数注册。
+- runtime/unavailable_stubs.c：补 `_NautilusJqStrategy___jq_bar_types` /
+  `__subscribe_bars` 两个 weak stub（批次 289 遗留的链接缺口，沿用 §7.11 惯例；
+  此前 gen.rs 侧 Named-receiver 兜底方案实测会误伤 6 处而回退）。
+
+### 效果
+- 探针（root 守卫 / import 守卫 / has_main 与否四象限）输出与 CPython 语义一致。
+- drvSF（标准驱动，`run_backtest("2024-01-02","2024-02-29",1000000.0, engine="local")`）
+  首次真正执行驱动的调用：窗口正确 `2023-08-05 ~ 2024-02-29`，缓存命中 91 只，
+  走到 jq_wufu_local.py:81 `market_df["trade_date"].dt.strftime(...)` 才崩
+  （lldb：`_st_fmt` 收到垃圾 fmt 指针，`.dt` 访问器链未接 `py_dt_strftime`）。
+
+### 验证
+- 新增 `tests/python_style/t290_main_guard.z`（+ `guardmain_fixture.py`）：
+  import 带守卫的 has_main 模块不得打印，root 守卫照常执行（ENTRY/ROOT/3）。
+- 四门禁全绿：官方 194/194；python_style **278/2**（仅存量红 t231/t233；
+  注：并行跑驱动的编译与套件会产生假失败——串行复测为准）；语料 38/38=100%
+  （口径：驱动移出 strategies/code）；§9 harness 逐字对上
+  （universe 119 sz.159985 sh.512070 / cached 892 9 2022-05-05 2025-12-31 / clean 892 9 892）。
+
+**下一步**：批次 291 —— Series `.dt.strftime` 访问器链（`df[col].dt.strftime(fmt).unique()`），
+随后处理「合计 12375 行，0 只标的」的计数疑点与 LocalBackend 主循环。

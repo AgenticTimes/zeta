@@ -115,6 +115,12 @@ int64_t __attribute__((weak)) backend_datasrc_market_data__fetch_stock_data(void
 int64_t __attribute__((weak)) backend_strategy_backtrader_backend__BacktraderBackend(void) { return zt_unavailable("_backend_strategy_backtrader_backend__BacktraderBackend"); }
 int64_t __attribute__((weak)) backend_strategy_nautilus_backend__NautilusBackend___context_factory(void) { return zt_unavailable("_backend_strategy_nautilus_backend__NautilusBackend___context_factory"); }
 int64_t __attribute__((weak)) backend_strategy_nautilus_backend__NautilusBackend___price_lookup(void) { return zt_unavailable("_backend_strategy_nautilus_backend__NautilusBackend___price_lookup"); }
+// Nested `_Impl` of NautilusJqStrategy::_make (nautilus-only path): its
+// `self._jq_bar_types()` / `self.subscribe_bars()` callsite lowers against the
+// OUTER class (receiver typed `module__NautilusJqStrategy`) — no definition
+// exists (external nautilus base / never-emitted nested class).
+int64_t __attribute__((weak)) backend_strategy_nautilus_backend__NautilusJqStrategy___jq_bar_types(void) { return zt_unavailable("_backend_strategy_nautilus_backend__NautilusJqStrategy___jq_bar_types"); }
+int64_t __attribute__((weak)) backend_strategy_nautilus_backend__NautilusJqStrategy__subscribe_bars(void) { return zt_unavailable("_backend_strategy_nautilus_backend__NautilusJqStrategy__subscribe_bars"); }
 int64_t __attribute__((weak)) backend_strategy_wufu_backend__LocalBackend___price_lookup(void) { return zt_unavailable("_backend_strategy_wufu_backend__LocalBackend___price_lookup"); }
 int64_t __attribute__((weak)) cache_clear(void) { return zt_unavailable("_cache_clear"); }
 int64_t __attribute__((weak)) call(void) { return zt_unavailable("_call"); }

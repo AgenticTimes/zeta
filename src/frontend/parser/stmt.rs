@@ -341,19 +341,14 @@ fn parse_if_tail(input: &str) -> IResult<&str, AstNode> {
 
     let else_: Vec<AstNode> = else_opt.unwrap_or(vec![]);
 
-    // PY-A: `if __name__ == "__main__":` — unwrap the guard so the body
-    // always runs (module main detection has no runtime meaning here).
-    {
-        let is_name = |n: &AstNode| matches!(n, AstNode::Var(v) if v == "__name__");
-        let is_main = |n: &AstNode| matches!(n, AstNode::StringLit(s) if s == "__main__");
-        if let AstNode::BinaryOp { op, left, right } = &cond {
-            if (op == "==" || op == "is")
-                && ((is_name(left) && is_main(right)) || (is_main(left) && is_name(right)))
-            {
-                return Ok((input, AstNode::Block { body: then }));
-            }
-        }
-    }
+    // BATCH-290: the `if __name__ == "__main__":` guard is NO LONGER unwrapped
+    // here. Unwrapping it for EVERY module made `import pkg.mod` execute that
+    // module's entry point (with garbage argparse args — measured: importing
+    // `jq_wufu_local` ran a whole bogus backtest before the driver's own code).
+    // The If survives; MIR lowers `__name__` to the compiling module's name
+    // (gen.rs), so the guard runs only in the root (`__main__`) module — CPython
+    // semantics. The recursion this unwrap originally dodged is handled in
+    // `synthesize_implicit_main` (top_level.rs) instead.
 
     Ok((
         input,

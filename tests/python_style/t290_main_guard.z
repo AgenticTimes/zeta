@@ -1,0 +1,18 @@
+// PY-A: `if __name__ == "__main__"` 只许在 ROOT 模块执行（批次 290）。
+// 此前解析期无条件解包该守卫，且 has_main 模块的语句被并进用户 main ——
+// `import` 一个带守卫的模块会把它的整个入口（含 argparse 垃圾参数）在导入时
+// 跑一遍（实测：import jq_wufu_local 直接跑起一场假回测）。
+// expect: ENTRY
+// expect: ROOT
+// expect: 3
+from guardmain_fixture import hi
+
+print("ENTRY")
+
+def main() -> i64:
+    print("ROOT")
+    print(hi())
+    return 0
+
+if __name__ == "__main__":
+    main()
