@@ -7230,3 +7230,26 @@ abort（"mask is missing"）。
 harness 里**全部通过**（`ret 892 / mask 892 / sum 891 / not 892 / loc 1 9`），
 ⇒ 该函数**内部**某处的静态类型没落到实处（怀疑 `grp["close"]` 的 `lt(vec,str)` 或
 `cfg.max_abs_daily_return` 取值），下一批用运行期探针（env 门控打印）定位。
+
+### 批次 245：浮点**字面量**在运行期助手实参里变成 0
+
+`mask = ret > 0.2` 走 `py_vec_gt(vec, 0.2)`，但运行期探针显示 **rhs=0**：
+codegen 把浮点字面量放进**整数寄存器**，而 C 侧声明是 `double` ⇒ ABI 不匹配读成 0。
+后果：掩码变成「全部 > 0」⇒ `mask.sum() == 891/892`，`~mask` 全 0，`DataFrame.loc`
+响亮 abort（"mask is missing"）。
+
+修法：MIR 在 RHS 是 `FloatLit` 且另一侧是数组时，改走
+`py_vec_{gt,lt,ge,le,eq,ne}_bits(vec, <f64 的位模式>)`，C 侧 `memcpy` 还原 double。
+（变量形式的浮点实参仍走原 `double` 版本。）
+
+验证 `/tmp/cmp3.z`：`sum 1`（只有 1.0→2.0 这一处变化超过 0.5）、`not 3` ✓。
+修复前是 `sum 891`。
+
+另外运行期加了 `ZT_PROBE_LOC=1` 门控探针（`vec_cmp` / `vec_not` / `df_loc`），
+用来在真实调用链里确认哪个助手被调用、实参是多少 —— 本轮正是靠它定位的。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+**剩余**：`remove_extreme_return_bars` 仍在 `grp.loc[~mask]` 处拿到 mask=0：
+探针显示 `vec_not in=<有效指针>` 之后 `df_loc mask=0` ⇒ `~mask` 的结果没有被写进
+`loc` 读的那个槽位（嵌套表达式 `grp.loc[~mask]` 的临时值未物化），下一批查这条。

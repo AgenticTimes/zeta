@@ -3448,15 +3448,35 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     let num_is_float = matches!(
                         self.type_map.get(&num_id),
                         Some(Type::F32) | Some(Type::F64)
-                    );
-                    let func = if num_is_float {
+                    ) || matches!(self.exprs.get(&num_id), Some(MirExpr::FloatLit(_)));
+                    // A float literal's type_map entry is not always F64, so
+                    // `ret > 0.2` used to pick the `_i` variant and pass a
+                    // truncated 0 (`sum` was 891/892 instead of a small count,
+                    // and an all-true mask then aborted in `DataFrame.loc`).
+                    // A float LITERAL must travel as its bit pattern: the codegen
+                    // puts literals in integer registers, so a `double` parameter
+                    // arrived as 0 (`ret > 0.2` behaved like `ret > 0`; measured
+                    // `sum == 891/892` and an all-true mask).
+                    let lit_bits = match self.exprs.get(&num_id) {
+                        Some(MirExpr::FloatLit(v)) if num_is_float => {
+                            Some(v.to_bits() as i64)
+                        }
+                        _ => None,
+                    };
+                    let num_arg = match lit_bits {
+                        Some(bits) => self.next_id_with_lit(bits),
+                        None => num_id,
+                    };
+                    let func = if lit_bits.is_some() {
+                        format!("{}_bits", base)
+                    } else if num_is_float {
                         base.to_string()
                     } else {
                         format!("{}_i", base)
                     };
                     self.stmts.push(MirStmt::Call {
                         func,
-                        args: vec![vec_id, num_id],
+                        args: vec![vec_id, num_arg],
                         dest,
                         type_args: vec![],
                     });

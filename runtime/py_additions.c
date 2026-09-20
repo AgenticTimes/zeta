@@ -922,6 +922,7 @@ int64_t vec_abs(int64_t v) { return zt_maybe_vec_arity1(v) ? py_vec_abs(v) : v; 
 // aborted ("mask is missing"). Measured in `remove_extreme_return_bars`
 // (`mask = ret > max_abs_daily_return`).
 static int64_t zt_vec_cmp(int64_t vec, double rhs, int kind) {
+    if (getenv("ZT_PROBE_LOC")) fprintf(stderr, "[probe] vec_cmp kind=%d vec=%lld rhs=%g\n", kind, (long long)vec, rhs);
     if (!vec) return vec;
     int64_t n = zt_vec_len(vec);
     int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
@@ -947,6 +948,23 @@ static int64_t zt_vec_cmp(int64_t vec, double rhs, int kind) {
 }
 // `_i` variants take an integer rhs, so the compiler can pass an i64 literal
 // without a float conversion at the call site.
+// `_bits` takes the f64 BIT PATTERN as an integer: the codegen passes a float
+// LITERAL in an integer register (measured: `ret > 0.2` reached the helper with
+// rhs == 0), so the value must travel as i64 and be reinterpreted here.
+#define ZT_CMP_WRAP_BITS(name, kind)                                               \
+    int64_t py_vec_##name##_bits(int64_t v, int64_t bits) {                        \
+        double r;                                                                  \
+        memcpy(&r, &bits, sizeof r);                                               \
+        return zt_vec_cmp(v, r, kind);                                             \
+    }
+ZT_CMP_WRAP_BITS(gt, 0)
+ZT_CMP_WRAP_BITS(lt, 1)
+ZT_CMP_WRAP_BITS(ge, 2)
+ZT_CMP_WRAP_BITS(le, 3)
+ZT_CMP_WRAP_BITS(eq, 4)
+ZT_CMP_WRAP_BITS(ne, 5)
+#undef ZT_CMP_WRAP_BITS
+
 #define ZT_CMP_WRAP(name, kind)                                                    \
     int64_t py_vec_##name(int64_t v, double r) { return zt_vec_cmp(v, r, kind); }  \
     int64_t py_vec_##name##_i(int64_t v, int64_t r) {                              \
@@ -1000,6 +1018,7 @@ int64_t py_vec_or(int64_t a, int64_t b) {
 }
 
 int64_t py_vec_not(int64_t vec) {
+    if (getenv("ZT_PROBE_LOC")) fprintf(stderr, "[probe] vec_not in=%lld\n", (long long)vec);
     if (!vec) return 0;
     int64_t n = zt_vec_len(vec);
     int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
@@ -1236,6 +1255,7 @@ int64_t py_df_itertuples(int64_t frame, int64_t with_index) {
 }
 
 int64_t py_df_loc(int64_t frame, int64_t mask) {
+    if (getenv("ZT_PROBE_LOC")) fprintf(stderr, "[probe] df_loc frame=%lld mask=%lld\n", (long long)frame, (long long)mask);
     if (!frame) return 0;
     int64_t map = *(int64_t*)frame;
     if (!map) return 0;
