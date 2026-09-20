@@ -5892,12 +5892,62 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     }
                 }
 
-                // Determine struct type from the Struct expression
+                // Determine struct type from the Struct expression; when the base
+                // is not a literal Struct (a function PARAMETER or a call result)
+                // fall back to the base's DECLARED type name — the old `("", 2)`
+                // fallback made the field index a nondeterministic global scan and
+                // the loaded struct a 2-field stand-in (measured: `df.copy()`'s
+                // `self.data` read crashed in DataFrame::copy).
                 let (variant, field_count) = if let MirExpr::Struct { variant, fields } = base_expr
                 {
                     (variant.clone(), fields.len())
                 } else {
-                    (String::new(), 2)
+                    let declared = self
+                        .current_type_map
+                        .as_ref()
+                        .and_then(|tm| tm.get(base))
+                        .and_then(|t| match t {
+                            Type::Named(n, _) => Some(n.clone()),
+                            _ => None,
+                        });
+                    let declared_dbg = declared.clone();
+                    match declared.and_then(|n| {
+                        // `pandas__DataFrame` / `pandas.DataFrame` -> `DataFrame`
+                        let plain = n.rsplit("__").next().unwrap_or(&n).to_string();
+                        let last = n.rsplit('.').next().unwrap_or(&n).to_string();
+                        let mut cands = vec![n.clone()];
+                        if plain != n {
+                            cands.push(plain);
+                        }
+                        if last != n && !cands.contains(&last) {
+                            cands.push(last);
+                        }
+                        // Only trust the declared type when the matched struct
+                        // ACTUALLY has this field: otherwise keep the old
+                        // `("", 2)` behaviour. (A first attempt returned a struct
+                        // that did not contain the field, built a 0-field struct
+                        // type and panicked with `ExtractOutOfRange`.)
+                        let want = field.to_string();
+                        cands.into_iter().find_map(|cand| {
+                            let pfx = format!("struct_{}_", cand);
+                            self.struct_defs
+                                .iter()
+                                .filter(|(k, fields)| {
+                                    k.starts_with(&pfx) && fields.iter().any(|f| *f == want)
+                                })
+                                .map(|(k, fields)| {
+                                    let cnt = k
+                                        .strip_prefix(&pfx)
+                                        .and_then(|c| c.parse::<usize>().ok())
+                                        .unwrap_or(fields.len());
+                                    (cand.clone(), fields.len().max(cnt).max(1))
+                                })
+                                .max_by_key(|(_, c)| *c)
+                        })
+                    }) {
+                        Some(vc) => vc,
+                        None => (String::new(), 2),
+                    }
                 };
 
                 // Use same type key format as the Struct handler: "{variant}_fields_{count}"
