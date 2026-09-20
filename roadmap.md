@@ -7068,3 +7068,27 @@ call DataFrame::loc(%116, %117)`。
 下一批：查 `ParquetCache.load` 的返回路径 —— `df = pd.read_parquet(path)`（9 列 ✓）之后，
 `for col in date_cols: if col in df.columns: df[col] = pd.to_datetime(df[col])` 与
 `return df` 之间，`df` 的 `data` 是不是被某次 `__setitem__`/`to_datetime` 换成了空 map。
+
+### 批次 236：**函数返回值** `-> pd.DataFrame` 退化成 `map`（本族总根因）
+
+最小复现（同一程序内对照，均为 -O0 产物）：
+
+    d = pd.read_parquet(PATH)          # 模块级：rp 892 9      ✓
+    e = pd.DataFrame({"a":["1","2"]})  # 模块级：ctor 2 1     ✓
+    def inside(path) -> i64: d = pd.read_parquet(path); return len(d.columns)
+    inside(PATH)                       # inside_rp 9          ✓ 函数**内部**是对的
+    def mk() -> pd.DataFrame: d = pd.DataFrame(...); return d
+    m = mk(); len(m.columns)           # mk 2 0               ✗ 传出去就成了 map
+
+⇒ 函数**内部**一切正常；**跨函数返回**后，调用方拿到的值按 **map** 处理：
+`m.columns` 生成的是 `map_get_default(m, "columns", …)`（MIR 实测）而不是
+`DataFrame::columns` ⇒ 列数恒 0、`m.data` 也变成 map 取值（恒空）。
+
+对照：`pd.DataFrame(...)` 构造器在 MIR 里是 `Named("DataFrame")`（gen.rs 4711 显式标注），
+所以模块级写得对；**只有「用户函数声明 `-> pd.DataFrame`」这条注解→类型的路**丢成了 map。
+
+这条覆盖了此前所有「方法内/深链取到坏值」的现象（`copy` / `loc` / `reset_index` /
+`load` / `array_len` 各一次都是它的不同表象）。
+
+下一批：定位用户函数**返回注解**的解析路径（`pd.DataFrame` 这种**点号限定名**），
+把 `DataFrame` 解析到 shim 的结构体（而不是退化成 `map`）。
