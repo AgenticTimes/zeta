@@ -391,6 +391,26 @@ impl MirGen {
         None
     }
 
+    /// Key for a module-level global read: `Var(n)` -> n, and a module member
+    /// (`mod.NAME`) -> `<module with . as _>__NAME` (plus the bare spelling,
+    /// which `global_ty_of` also accepts).
+    fn receiver_global_key(
+        aliases: &HashMap<String, String>,
+        r: &AstNode,
+    ) -> Option<String> {
+        match r {
+            AstNode::Var(n) => Some(n.clone()),
+            _ => {
+                let (root, parts) = Self::flatten_module_receiver(r)?;
+                if parts.len() != 1 {
+                    return None;
+                }
+                let module = aliases.get(&root)?.clone();
+                Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
+            }
+        }
+    }
+
     fn py_member_target(
         &self,
         receiver: &Option<Box<AstNode>>,
@@ -3877,11 +3897,21 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             .get(module)
                             .cloned()
                             .unwrap_or_else(|| module.clone());
-                        if self.py_user_modules.contains(&module)
-                            || self
-                                .func_ret_types
-                                .contains_key(&format!("{}__init", module.replace('.', "_")))
-                        {
+                        let is_user = self.py_user_modules.contains(&module);
+                        let has_init = self
+                            .func_ret_types
+                            .contains_key(&format!("{}__init", module.replace('.', "_")));
+                        if std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+                            eprintln!(
+                                "IMPORT lowering `{}`: user={} has_init={} user_mods={} cur={:?}",
+                                module,
+                                is_user,
+                                has_init,
+                                self.py_user_modules.len(),
+                                self.current_module
+                            );
+                        }
+                        if is_user || has_init {
                             let init_sym = format!("{}__init", module.replace('.', "_"));
                             let init_dest = self.next_id();
                             self.stmts.push(MirStmt::Call {
@@ -6703,7 +6733,7 @@ call, no NULL-handle dereference).",
                 } else {
                     None
                 };
-                // PY-A: keyword arguments — bind by parameter name when the
+                // PY-A: keyword arguments — bind by parameter name when the                // PY-A: keyword arguments — bind by parameter name when the
                 // callee's signature is known (Python semantics). The parser
                 // wraps `name=value` as a __kwarg__ marker.
                 let ordered_args: Vec<AstNode> = {
@@ -7026,6 +7056,23 @@ call, no NULL-handle dereference).",
                 // host_str_contains; other container kinds are a V1 limit
                 // (emit 0 with a compile-time note).
                 if method == "__contains__" {
+                    // A module-level LIST/CONSTANT read across a module boundary has
+                    // no `type_map` entry (the value arrives through an env read), so
+                    // `x in mod.LIST` typed the container I64 — every branch below
+                    // missed and the expression compiled to a bare
+                    // `<mod>__LIST.__contains__` ghost symbol (measured:
+                    // `_backend_strategy_wufu_constants__WUFU_INDEX_BS_CODES
+                    // .__contains__`, which broke the strategy's index filter).
+                    // Scoped to THIS branch on purpose: widening the general dispatch
+                    // turned `df.sort_values(...)` into a `map__sort_values` ghost.
+                    let receiver_ty = match receiver_ty {
+                        Some(Type::I64) | Some(Type::PyDynamic) => receiver
+                            .as_ref()
+                            .and_then(|r| Self::receiver_global_key(&self.py_module_aliases, r))
+                            .and_then(|k| self.global_ty_of(&k))
+                            .or(receiver_ty),
+                        other => other,
+                    };
                     let is_str = receiver_ty
                         .as_ref()
                         .map_or(false, |t| matches!(t, Type::Str));
