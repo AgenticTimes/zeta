@@ -5797,3 +5797,46 @@ frame #2: main + 1032
 3. `unavailable_stubs.c` 的 85 条要按「运行真正撞到哪条」逐条替换为真实现
    （lenient 模式一次性跑出全部命中）
 4. 家族 B1（循环 import 名字解析）、`getattr` 39 处、间接调用（`LocalBackend._price_lookup`）
+
+### 批次一百五十六 追加：-O3 误编译**已证实** + 下一个真阻塞（`from mod import VAR`）
+
+**1. `ZETA_NO_OPT=1` 诊断开关**（`jit.rs::optimize_module` 直接返回）——只差是否跑 O3，
+同一个二进制：
+
+| 构建 | 运行结果 |
+|---|---|
+| 正常（O3） | `[INFO] 获取数据...` → **SIGTRAP**（`brk #0x1`） |
+| `ZETA_NO_OPT=1` | `[INFO] 获取数据...` → `Unhandled exception: code=4372430400`（**可读诊断**，rc=1） |
+
+⇒ 批次 156 排除「IR 非法」「`_setjmp` 缺 returns_twice」后，本条**证实** O3 把 longjmp
+返回路径优化成了不可达。（顺带发现：未优化时还会多出 **22** 个未定义符号 —— 这些路径
+被 O3 当死代码删了，已一并补桩。）
+
+**2. 下一个真阻塞：`from <模块> import <变量>` 坏掉**（2 文件最小复现）
+
+```python
+# regmod.py
+D = {"a": 1}
+def size() -> i64: return len(D)
+def reg(k: str, v: i64) -> None: D[k] = v
+# use.py
+from regmod import D, reg, size
+print(size()); reg("b", 2); print(size())
+```
+
+| 变体 | 实测 |
+|---|---|
+| `from regmod import reg, size`（**不**导入变量） | `1 2` ✓（跨模块改写模块全局 dict 正常） |
+| `from regmod import D, reg, size` | **SEGV** ✗ |
+| `from regmod2 import D` + `len(D)` | **0**（应为 1）✗ |
+
+⇒ 函数导入正常、**变量导入拿到 0/坏槽**。`jq_wufu_local` 的
+`from backend.strategy.wufu_constants import WUFU_INDEX_BS_CODES`（模块级列表）
+正是这种用法 ⇒ 本地回测必然踩到，也是 `get_universe("wufu")` 抛
+`Unknown universe` 的链条末端。
+
+**下一队列（批次一百五十七）**：
+1. **修 `from mod import VAR` 的绑定**（最小复现已就位；优先于其它）
+2. -O3 误编译 longjmp 返回路径（可用 `ZETA_NO_OPT` 对比 + 堆大函数体的最小复现）
+3. 数据层 `py_pd_read_parquet` 真实实现（2636 个 parquet/669MB 在 REasyQuant/data/）
+4. 85+22 条桩按「运行真正撞到哪条」逐条替换（`ZETA_LENIENT_STUBS=1` 一次跑全）
