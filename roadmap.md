@@ -7319,3 +7319,28 @@ MIR 实证：`[dynamic]str::map(<vec>, <closure>)` 只传 **两个** 实参，�
 这次是 `map_keys + 60` —— `out` 的 map 是垃圾。`concat` 本身已在 `/tmp/cc.z` 验证正确
 （`c 3 2 / d 2 2`），所以嫌疑落在 `remove_extreme_return_bars` 的返回值经
 **tuple 解构**交给调用方这一段，下一批查。
+
+### 批次 249：`|` 的判据放宽到「任一侧是向量」（掩码 2N 的根因）
+
+探针实证（`drv701`，真实 `validate_and_repair_stock_ohlcv`）：
+
+    vec_cmp kind=1 out=… n=892            ← `out["close"] < cfg.min_price`
+    vec_not in=…  out=… **n=1784**        ← 2 × 892！
+    df_loc frame=… mask=<1784 元素向量>   ← 随后 n_rows 崩
+
+`invalid = out["close"].isna() | (out["close"] < cfg.min_price)`：`isna()` 的静态类型是
+`DynamicArray(I64)`（批次 241 之后），**不是 Bool**，所以批次 234 的 `boolish` 判据没命中，
+`|` 掉回「向量拼接」⇒ 掩码变成 2N。
+
+修法：判据放宽为「**任一侧是 DynamicArray/Array** 就逐元素 OR」（Python 里只有 `+` 拼接）。
+
+修后探针：`vec_not out n=892` ✓（掩码长度正确）。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+**崩点**：`len(out)`（`validate_and_repair_stock_ohlcv + 2884`）仍在。
+但**把该函数体整段复刻到 harness 时同一路径是通过的**（`pre 892 9 / after extreme 892 9 0`，
+连跑 3 次 rc=0），而直接调用真实函数则 **3/3 稳定 SEGV** ⇒ 差异在真实函数体里
+我没复刻到的语句（候选：`report = OhlcvRepairReport(input_rows=len(df))` 的 kwarg 构造、
+`int(invalid.sum())`、`report.<字段> = …` 的连续结构体字段写、末尾 `reset_index` 的
+tuple 返回）。下一批用「把真实函数体逐段替换成 harness 版本」的二分法定位。

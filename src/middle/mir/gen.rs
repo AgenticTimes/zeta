@@ -3213,8 +3213,18 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // A boolean/label mask PAIR must be OR-ed element-wise, not
                     // concatenated: `isna(col) | (col < x)` produced 2N elements and
                     // `df.loc[...]` kept 2N rows.
+                    // Either side being a VECTOR is enough: Python's `|` on two
+                    // Series is element-wise OR (only `+` concatenates), and
+                    // `isna(col)` is typed `DynamicArray(I64)`, not Bool — so the
+                    // `|` used to fall through to the concat path and the mask came
+                    // out 2N long (`vec_not` saw n=1784 for 892 rows).
+                    let vecish = |t: Option<Type>| {
+                        matches!(t, Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)))
+                    };
                     let boolish = |t: Option<Type>| matches!(t, Some(Type::Bool));
-                    if boolish(self.type_map.get(&left_id).cloned())
+                    if vecish(self.type_map.get(&left_id).cloned())
+                        || vecish(self.type_map.get(&right_id).cloned())
+                        || boolish(self.type_map.get(&left_id).cloned())
                         || boolish(self.type_map.get(&right_id).cloned())
                     {
                         self.stmts.push(MirStmt::Call {
