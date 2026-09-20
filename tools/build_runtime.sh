@@ -40,4 +40,6 @@ else
 fi
 
 clang -c -O2 "${INC[@]}" runtime/py_additions.c -o zeta_runtime_c.o
+clang -c -O2 "${INC[@]}" runtime/parquet_min.c -o /tmp/zt_pq.o
+ld -r zeta_runtime_c.o /tmp/zt_pq.o -o zeta_runtime_c.o
 echo "ok: tokio_runtime.o ($(nm tokio_runtime.o | rg -c ' T ' || true) T) + zeta_runtime_c.o"
