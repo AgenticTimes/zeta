@@ -6364,3 +6364,17 @@ py_list_contains + 28 ← __closure_92 ← zeta_collect_vec_n + 112 ← MarketDa
 2. `py_list_contains` 入口对 0/不可用句柄做守卫（响亮诊断，不野读）
 3. `区间 1969-08-04 ~ `：日期显示异常
 4. `py_pd_read_parquet` 真实实现——跑出指标的最后一环
+
+### 批次一百七十七（2026-09-19）：`set |= {...}` 的按位或
+
+`|=` 脱糖 → `x = x | y`，两个「集合」（V1 降级为 DynamicArray）走了**按位或** ⇒ 垃圾句柄
+⇒ 集合恒空 ⇒ `c not in fetched_codes` 恒真 ⇒ `fetch_stocks` 带着整池继续 ⇒ 最后在
+`py_list_contains` 野读崩溃。
+
+修法：`op == "|"` 且任一侧是 array（或 `Named("set")`）⇒ `py_array_concat`；
+`py_list_contains` 在 `elem_is_str == 0` 时用 `GC_base()` 证明是 GC 对象后按内容比较
+（不解引用，安全；`ZT_DEBUG_CONTAINS=1` 诊断）。
+
+**仍未收敛**：函数参数/局部集合的并集与「参数列表的 `in`」仍错（模块级字面量正确）；
+且 `py_list_contains` 新分支未被执行到 ⇒ 下一批先确认链接的运行期是否最新
+（`cargo build` 让内嵌的 `zeta_runtime_c.o` 同步）。
