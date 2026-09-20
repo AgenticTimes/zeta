@@ -179,6 +179,11 @@ pub struct MirGen {
     /// `self` is dropped from the ctor signature, so a LATER field whose
     /// initializer reads `self.<earlier field>` had no `self` slot at all.
     self_field_aliases: Vec<(String, u32)>,
+    /// Ids that hold a TUPLE value (a StackArray literal, possibly copied into a
+    /// slot by an assignment). The static type is not enough: a dict
+    /// comprehension's result can leak a `Tuple` annotation while the value is a
+    /// map, and indexing that with `stack_array_get` read the map header.
+    tuple_slots: std::collections::HashSet<u32>,
     /// Names captured from enclosing scopes in the closure currently being
     /// lowered (name → env key id) — used to route assignments to env stores.
     captured_vars: std::collections::HashMap<String, u32>,
@@ -245,6 +250,7 @@ impl MirGen {
             current_class: None,
             current_module: "__main__".to_string(),
             self_field_aliases: Vec::new(),
+            tuple_slots: std::collections::HashSet::new(),
             captured_vars: std::collections::HashMap::new(),
             async_state_ptr: None,
             async_segment_count: 0,
@@ -1460,6 +1466,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         self.exprs.insert(new_id, MirExpr::Var(new_id));
                         let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
                         self.type_map.insert(new_id, ty);
+                        if self.tuple_slots.contains(&rhs_id) {
+                            self.tuple_slots.insert(new_id);
+                        }
                         self.stmts.push(MirStmt::Assign {
                             lhs: new_id,
                             rhs: rhs_id,
@@ -4292,16 +4301,26 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                      target)"
                                 );
                             }
-                            let packed = self.next_id();
+                            // `py_threading_thread_new_2(fn, arg)` takes ONE
+                            // argument: a single-element `Thread(f, args=(41,))`
+                            // must pass the ELEMENT. (Before one-element tuples
+                            // existed the parser collapsed `(41,)` to `41`, so this
+                            // worked by accident.)
                             let n = elem_ids.len();
-                            self.exprs.insert(
-                                packed,
-                                MirExpr::StackArray {
-                                    elements: elem_ids,
-                                    size: n,
-                                },
-                            );
-                            self.type_map.insert(packed, Type::Tuple(vec![Type::I64; n]));
+                            let packed = if n == 1 {
+                                elem_ids.remove(0)
+                            } else {
+                                let packed = self.next_id();
+                                self.exprs.insert(
+                                    packed,
+                                    MirExpr::StackArray {
+                                        elements: elem_ids,
+                                        size: n,
+                                    },
+                                );
+                                self.type_map.insert(packed, Type::Tuple(vec![Type::I64; n]));
+                                packed
+                            };
                             self.stmts.push(MirStmt::Call {
                                 func: "py_threading_thread_new".to_string(),
                                 args: vec![adapter_addr, packed],
@@ -10337,6 +10356,34 @@ call, no NULL-handle dereference).",
                     None => self.lower_expr(&index),
                 };
 
+                // `t[i]` on a TUPLE (a StackArray literal): index the stack array.
+                // Without this the subscript fell into the DICT branch (DictGet on a
+                // stack-array pointer) and `("a",)[0]` read 0.
+                {
+                    // Only INLINE tuple literals (`(a, b)[0]`): a variable that is
+                    // merely TYPED Tuple may actually hold a map/dict (a
+                    // dict-comprehension's result leaks a Tuple annotation), and
+                    // indexing that with stack_array_get read the map header.
+                    let is_tuple = self.tuple_slots.contains(&bid);
+                    let tuple_base = self.type_map.get(&bid).cloned();
+                    if is_tuple {
+                    if let Some(Type::Tuple(ts)) = tuple_base {
+                        self.stmts.push(MirStmt::Call {
+                            func: "stack_array_get".to_string(),
+                            args: vec![bid, iid],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        let elem = match &*index {
+                            AstNode::Lit(k) => ts.get(*k as usize).cloned().unwrap_or(Type::I64),
+                            _ => Type::I64,
+                        };
+                        self.type_map.insert(id, elem);
+                        return id;
+                    }
+                    }
+                }
                 // Check if base is an array type (dynamic or static)
                 let base_ty = self.type_map.get(&bid).cloned().unwrap_or(Type::I64);
                 let base_ty_clone = base_ty.clone(); // clone for later elem-type lookup
@@ -10689,6 +10736,7 @@ call, no NULL-handle dereference).",
                     },
                 );
                 self.type_map.insert(id, Type::Tuple(vec![Type::I64; size]));
+                self.tuple_slots.insert(id);
             }
             AstNode::Ignore => {
                 // Wildcard / ignore expression.

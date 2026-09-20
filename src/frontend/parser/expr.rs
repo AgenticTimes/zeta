@@ -795,13 +795,14 @@ fn parse_tuple_or_paren(input: &str) -> IResult<&str, AstNode> {
             }
         }
     }
-    let (input, mut items) = terminated(
-        separated_list0(ws(tag(",")), ws(parse_expr)),
-        opt(ws(tag(","))),
-    )
-    .parse(input)?;
+    let (input, mut items) = separated_list0(ws(tag(",")), ws(parse_expr)).parse(input)?;
+    let (input, trailing_comma) = opt(ws(tag(","))).parse(input)?;
     let (input, _) = ws(tag(")")).parse(input)?;
-    if items.len() == 1 {
+    // `()` is the empty tuple; `(x,)` is a one-element tuple; only `(x)` — a
+    // parenthesized expression — unwraps. (Taking the remove path for an EMPTY
+    // list panicked: `removal index (is 0) should be < len (is 0)`, measured on
+    // the strategies corpus.)
+    if items.len() == 1 && trailing_comma.is_none() {
         Ok((input, items.remove(0)))
     } else {
         Ok((input, AstNode::Tuple(items)))

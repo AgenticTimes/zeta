@@ -487,6 +487,16 @@ int64_t py_threading_thread_new(int64_t fn) {
 int64_t py_threading_thread_new_2(int64_t fn, int64_t arg) {
     py_thread_t* t = (py_thread_t*)GC_malloc(sizeof(py_thread_t));
     t->fn = (int64_t (*)(int64_t))fn;
+    // `Thread(f, args=(41,))` — the compiler may hand over the PACKED args array
+    // (a runtime vector, [cap|len|elems…]); a single-element one means "one
+    // argument", so unwrap it. Without this the target received the ARRAY HANDLE
+    // and `t.join()` printed the handle instead of 42 (measured: t62).
+    if (arg >= 0x1000) {
+        int64_t* hdr = ((int64_t*)arg) - 2;
+        if (hdr[0] > 0 && hdr[0] <= (1LL << 30) && hdr[1] == 1) {
+            arg = ((int64_t*)arg)[0];
+        }
+    }
     t->arg = arg;
     t->result = 0;
     t->started = 0;
