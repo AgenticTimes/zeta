@@ -6991,3 +6991,33 @@ call DataFrame::loc(%116, %117)`。
 
 ⇒ 下一批：核对 `df.loc([1,0,1])` 这条链上 `%117` 的来源（IR 里它应是向量句柄），
 以及为什么运行时成了 2；同时确认 `pd.DataFrame({...})` 的返回值在运行时到底是结构体还是 map。
+
+### 批次 228 补充：`[1,0,1]` 的 vec_push 回写把向量槽写坏了（IR 铁证）
+
+`main` 的 IR（`e = df.loc([1,0,1])` 这段）：
+
+    %106 = call i64 @zeta_dynarray_new(i64 3)
+    store i64 %106, ptr %26
+    %107 = load i64, ptr %26
+    %108 = call i64 @vec_push(i64 %107, i64 1)     ; 推入第一个元素 ✓
+    %109 = load i64, ptr %2                        ; ✗✗ 从**无关的 alloca** 取值
+    store i64 %109, ptr %26                        ; ✗✗ 把向量槽覆盖成那个值
+    %110 = load i64, ptr %26                       ; 此时 %26 已不是向量
+    %111 = call i64 @vec_push(i64 %110, i64 0)     ; 往垃圾里推
+    …
+    %115 = load i64, ptr %64
+    store i64 %115, ptr %26                        ; 最终 mask 槽 = 垃圾
+    %117 = load i64, ptr %26
+    %118 = call i64 @"DataFrame::loc"(i64 %116, i64 %117)
+
+而同一段 MIR 是正确的：
+
+    Call { func: "vec_push", args: [22, 18], dest: 23 }
+    Assign { lhs: 22, rhs: 23 }        ; ✓ 回写的是 push 的 dest
+
+⇒ **MIR 对、IR 错**：`Assign{lhs: 22, rhs: 23}` 在 codegen 里被编译成「从另一个 alloca 取值」，
+于是每次 `vec_push` 之后向量变量都被写坏。这也解释了批次 222/223 里
+`DataFrame::copy` 实参为 0 的形态（同一个「Assign 的 rhs 取错槽」家族）。
+
+下一批：定位 codegen 里 `MirStmt::Assign` 的 rhs 取值路径（`gen_expr_safe(rhs)` 为什么
+会落到别的 alloca），并核对 `locals` 与 `exprs` 的 id 是否在同一编号空间。
