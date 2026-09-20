@@ -7584,3 +7584,41 @@ struct-field store 目前按 i64 走，需要按字段类型 bitcast/float store
 
 下一批：打印 `remove_extreme_return_bars` 的 for 循环所用集合 id（MIR 里 `py_df_groupby`
 的 dest 与循环的 collection 是否同一个），定位这个「返回值没进循环槽位」的问题。
+
+## 还债执行计划（批次 260+，2026-09-20 定稿）
+
+> 五项任务的具体方案与验收命令。顺序：先做 ④ 的前置脚本（半小时，是 ④ 与后续所有重构的安全网），再 ①→②→③→④→⑤。总计约 4~5 个工作日。
+
+### ① t228 非确定性专项（0.5~1 天）
+
+- **复现**：run.sh 对 t228 连跑 20 次；全过则改整包循环（批处理顺序影响进程内存布局）。
+- **排除 MIR 层**：同一输入两次编译各 `--dump-mir`，diff 两份——有差异 = lowering 的 HashMap 迭代序问题（修法：遍历换 BTreeMap/排序）；无差异 = 运行期问题，进下一步。
+- **运行期定位**：C 运行时与生成二进制带 ASan 重编，重点怀疑 vec_push 返回值未回写的残留点（批次 251 修了 15 处）与 `load_local` 读未初始化槽位。
+- **验收**：20 连跑零失败 + ASan 干净 + 根因写入 roadmap。
+
+### ② 单态化修真（1 天）
+
+- **I1**：`resolver.rs:2856` 的 subst 改为「FuncDef 泛型名 → key.type_args」按位 zip；`substitute` 只替换参数/返回类型注解（表达式体的具体化由 codegen 按位替换承担，`mir_type_args` 的 `sub.apply` 链已验证）。
+- **I2**：删除特化缓存（`SPECIALIZATION_CACHE_FILE` 读写 + `.zeta_specialization_cache.json`——实测恒空且加载注入 `Mir::default()` 污染 codegen）。等 I1 做实后再评估缓存价值。
+- **验收**：`fn id[T](x: T) -> T` 的 i64/f64/str 三态单态化正确；官方 + python_style 全绿。
+
+### ③ 优化器：修复接线，两周内无收益则删除（1 天）
+
+- 修 `optimization.rs:347` CSE 键加入字面量值；DCE 去掉"clone 临时 Mir 后丢弃"的死逻辑。
+- `main.rs` 在 `opt_level > 0 && ZETA_ENABLE_MIR_OPTS=1` 时调用——默认关。
+- **判据**：语料 39 文件开/关对比 `.o` 体积与编译耗时；无可测收益 → 删除 optimization.rs 全部 599 行，`-O` 注明"透传 LLVM O3"。
+
+### ④ gen.rs 拆分第一刀（1~2 天）
+
+- **前置**：`tools/mir_diff.sh`——语料 39 文件逐个 `--dump-mir` 存基准；重构后 diff 必须为空（纯搬运的机器证明）。
+- **切口**（每片独立成块，拆到 `mir/gen/*.rs` 的同 crate `impl MirGen`）：
+  1. `eval_env_read`/`fold_env_condition`（gen.rs:14–113 附近）→ env_fold.rs
+  2. argparse `PyArgNS` 分派块 → argparse.rs
+  3. f-string/格式化分派 → fstring.rs
+- **手法**：每片改为一行调用 `self.lower_xxx(...)`；每搬一片跑 MIR diff + 三基线；git diff 审查"只移动未修改"。
+- **验收**：`lower_expr` 净减 ≥1,500 行；MIR diff 为空。
+
+### ⑤ registry 契约测试 + 告警收敛（各 0.5 天）
+
+- **契约测试**：`pylib.rs` 加 `#[test]` 把 parse_registry 结果（模块数/F/W/X 条目元组）序列化成 JSON fixture；`gen_from_registry.py --dump-json` 输出同构 JSON；CI diff 两份。分叉即红。
+- **告警收敛**：B1/B2/A4 兜底三处裸 `eprintln!` 改走 `diagnostics.rs`（W2xxx 段：ABI/registry）；span 暂留 None（C3 再补）。验收：`grep eprintln src/backend src/middle` 仅剩预期少数。
