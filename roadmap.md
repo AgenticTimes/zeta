@@ -7147,3 +7147,22 @@ print 后得到精确断点：
 符号 ⇒ 必须 weak，否则 `duplicate symbol '_pct_change'`）。
 
 度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+### 批次 241：`[dynamic]str::` 方法（`pct_change` / `abs`）与结果类型
+
+- 运行期补上动态数组方法的真符号：`_[dynamic]str__pct_change` / `_[dynamic]str__abs`
+  （此前只有一个 `pct_change` weak 回退，链接时 `Undefined symbols: _[dynamic]str__pct_change`）。
+- MIR：接收者是数组时，`pct_change` / `abs` 直接走 `py_vec_pct_change` / `py_vec_abs`
+  并把结果标成 `DynamicArray(Str)`（此前被标成 I64 ⇒ `c[2]` 是整数下标、`print_str` 崩）。
+
+验证 `/tmp/pc4.z`：
+
+    a = ["1.0", "2.0", "4.0"]
+    c = a.pct_change()   → len 3 / c[2] = 1     ✓（(4-2)/2）
+    b = a.abs()          → len 3                ✓
+
+**驱动进展（重要）**：`validate_and_repair_stock_ohlcv` **整段跑完**，
+崩点从 `_load_cache` 移到 `MarketDataFetcher::fetch_stocks + 3324`
+（栈里已经没有清洗函数）⇒ 数据层首次完整通过一只标的的清洗。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。

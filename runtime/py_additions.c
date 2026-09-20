@@ -898,6 +898,13 @@ int64_t py_vec_abs(int64_t vec);
 static int zt_maybe_vec_arity1(int64_t v) { return v > 0x1000; }
 // weak: the shim (`pylib/pandas.z`) also emits a `pct_change` symbol, and the
 // program's own definition must win (measured `duplicate symbol '_pct_change'`).
+// The MIR emits the DYNAMIC-array method symbol `[dynamic]str::<m>` for a
+// vector receiver (`df["close"].pct_change()`); these are the actual targets.
+int64_t zt_dyn_str_pct_change(int64_t v) __asm__("_[dynamic]str__pct_change");
+int64_t zt_dyn_str_pct_change(int64_t v) { return py_vec_pct_change(v); }
+int64_t zt_dyn_str_abs(int64_t v) __asm__("_[dynamic]str__abs");
+int64_t zt_dyn_str_abs(int64_t v) { return py_vec_abs(v); }
+
 __attribute__((weak)) int64_t pct_change(int64_t v) {
     return zt_maybe_vec_arity1(v) ? py_vec_pct_change(v) : v;
 }

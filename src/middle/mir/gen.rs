@@ -7626,6 +7626,28 @@ call, no NULL-handle dereference).",
                         .insert(id, Type::DynamicArray(Box::new(Type::I64)));
                     return id;
                 }
+                // `series.pct_change()` / `series.abs()` on a COLUMN (a string
+                // vector): compiled to the ghost `[dynamic]str__pct_change`, and
+                // the runtime helper was typed I64 — so `c[2]` was an integer
+                // subscript of a vector and `print_str(c[2])` crashed (measured:
+                // `remove_extreme_return_bars` in the local backtest).
+                if matches!(method.as_str(), "pct_change" | "abs")
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::DynamicArray(_) | Type::Array(_, _)))
+                    && arg_ids.len() == 1
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: format!("py_vec_{}", method),
+                        args: vec![arg_ids[0]],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(Type::Str)));
+                    return id;
+                }
                 // `pd.to_datetime(vecstr).normalize()` — our shim represents dates
                 // as "YYYY-MM-DD" strings, so `.normalize()` (drop the time part)
                 // is the identity. Without this the call resolved to the ghost
