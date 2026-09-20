@@ -2470,6 +2470,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     if let Some((module, member)) =
                         self.py_member_aliases.get(name.as_str()).cloned()
                     {
+                        // Canonicalize (same file under two module names — see
+                        // `py_member_call`), or the env key carries the wrong
+                        // prefix and the read misses.
+                        let module = self
+                            .py_module_aliases
+                            .get(&module)
+                            .cloned()
+                            .unwrap_or(module);
                         if self.py_user_modules.contains(&module) {
                             let mangled =
                                 format!("{}__{}", module.replace('.', "_"), member);
@@ -3322,6 +3330,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             // the module-qualified name (`pyfixturearity__add3`);
                             // the bare name only exists for functions defined in
                             // the file being compiled.
+                            // Canonicalize: the SAME file is reachable as
+                            // `jq_shim` and as `strategies.code.jq_shim`, and the
+                            // definitions live under whichever spelling loaded
+                            // FIRST. Without this the call site emitted a second,
+                            // undefined prefix (`U _strategies_code_jq_shim__…`
+                            // against `T _jq_shim__…`, 22 reference sites).
+                            let module = self
+                                .py_module_aliases
+                                .get(&module)
+                                .cloned()
+                                .unwrap_or(module);
                             let qualified = format!("{}__{}", module.replace('.', "_"), member);
                             let defaults = self
                                 .param_defaults
