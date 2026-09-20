@@ -7907,3 +7907,27 @@ lldb 现场：`DataFrame::n_rows: ldr x0, [x8]`，`EXC_BAD_ACCESS (code=1, addre
 本轮先把这条线索固化（它是 `_load_cache` 对全部 119 只失败的根因）。
 
 度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+### 批次 278：**三元表达式的类型被后一处 I64 判断覆盖** —— wufu universe 全线打通 ✅
+
+`AstNode::If`（三元表达式）降级末尾已经有一段「从句尾语句推类型」的逻辑，它对
+`prefix = "sh" if c else "sz"` 两端都是普通 `Assign` 的分支推成 **I64**，把我按 AST 推断出的
+`Str` **覆盖**掉 ⇒ 字符串句柄进 I64 槽 ⇒ `len()` 走 `array_len` ⇒ `f"{prefix}.{code}"`
+拼出 `<地址>.<代码>`。
+
+修法：
+1. 把我按 AST 分支推断的结果改名 `ast_branch_ty` 保存；
+2. 在语句级推断**之后**再写一次（AST 推断权威）。
+
+验证：
+
+    /tmp/tern.z  → s sh 2 / s sz 2        ✓
+    /tmp/cd2.z   → prefix sh 2 / a sh.513180 / b sz.159883   ✓
+    universe 119 sz.159985 sh.512070      ✓（此前是 4296191491.513180）
+    loaded 118 of 119                     ✓（此前 0）
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+**剩余**：驱动仍在 `fetch_stocks + 3336`（`len(cached)`）崩，但同一函数在 harness 里
+（119 只逐个 `_load_cache`）是 rc=0 / 118 成功 —— 说明差异在 `fetch_stocks` 内部
+（上市日过滤、`eff_start`、kwarg 路径），下一批用同一 harness 复刻 `fetch_stocks` 的循环体。

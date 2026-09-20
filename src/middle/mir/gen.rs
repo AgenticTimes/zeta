@@ -3720,7 +3720,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // printed `<address>.<code>`, and the whole wufu universe came out
                 // as `4296191491.513180`. That is why `get_universe("wufu")`
                 // returned junk codes and `_load_cache` failed for all of them.
-                let branch_ty = {
+                let ast_branch_ty: Option<Type> = {
                     let tail_of = |blk: &[AstNode]| -> Option<Type> {
                         // The ternary's arms arrive as BLOCKS (`Block { body }`),
                         // so unwrap down to the last real statement.
@@ -3768,7 +3768,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // Create destination for expression result
                 self.exprs.insert(dest_id, MirExpr::Var(dest_id));
                 self.type_map
-                    .insert(dest_id, branch_ty.unwrap_or(Type::I64));
+                    .insert(dest_id, ast_branch_ty.clone().unwrap_or(Type::I64));
 
                 // Helper function to process block
                 fn process_block(
@@ -3894,6 +3894,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     {
                         self.type_map.insert(dest_id, ty);
                     }
+                }
+                // The AST-level inference is AUTHORITATIVE and must win: the
+                // statement-level pass above derives I64 for
+                // `s = "sh" if c else "sz"` (both arms are plain Assigns), which
+                // made `len(s)` emit `array_len` on a string handle and
+                // `f"{prefix}.{code}"` print `<address>.<code>` for every code in
+                // the wufu universe (measured: `4296191491.513180`).
+                if let Some(ast_ty) = ast_branch_ty {
+                    self.type_map.insert(dest_id, ast_ty);
                 }
 
                 // Create If statement with destination
