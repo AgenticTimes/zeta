@@ -1906,7 +1906,31 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             // PY-A: `for k in d:` over a dict iterates its KEYS.
                             // The map layout has no array length, so the loop
                             // silently ran zero times before.
+                            // `for k, grp in df.groupby(col)` — the GroupBy struct
+                            // carries (frame, key); iterate real pairs instead of
+                            // the struct handle (which the loop read as garbage:
+                            // `remove_extreme_return_bars` produced a dead frame).
                             let raw_id = if matches!(
+                                self.type_map.get(&raw_id),
+                                Some(Type::Named(n, _)) if n == "GroupBy"
+                            ) {
+                                let pid = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "py_groupby_pairs".to_string(),
+                                    args: vec![raw_id],
+                                    dest: pid,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(pid, MirExpr::Var(pid));
+                                self.type_map.insert(
+                                    pid,
+                                    Type::DynamicArray(Box::new(Type::Tuple(vec![
+                                        Type::Str,
+                                        Type::Named("DataFrame".to_string(), vec![]),
+                                    ]))),
+                                );
+                                pid
+                            } else if matches!(
                                 self.type_map.get(&raw_id),
                                 Some(Type::Named(n, _)) if n == "map"
                             ) {

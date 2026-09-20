@@ -1121,6 +1121,87 @@ int64_t py_df_setitem(int64_t frame, int64_t key, int64_t val) {
     return 0;
 }
 
+// ---- groupby -------------------------------------------------------------
+// `for key, grp in df.groupby("col")` — the shim's GroupBy carried only the
+// frame, so the loop iterated a struct handle (garbage) and the whole
+// `remove_extreme_return_bars` path produced a dead frame. Each element here is
+// a raw 2-slot block `[key, subframe]` (what `stack_array_get(elem, i)` reads),
+// and the subframe is a shim DataFrame struct (one field: the column map).
+int64_t py_df_groupby(int64_t frame, int64_t key) {
+    int64_t out = zeta_dynarray_new(4);
+    if (!frame) return out;
+    int64_t map = *(int64_t*)frame;
+    if (!map) return out;
+    int64_t k = map_str_key(key);
+    int64_t keys_vec = map_get(map, k);
+    if (!keys_vec) return out;
+    int64_t n = zt_vec_len(keys_vec);
+
+    // Column list is needed to rebuild each sub-frame.
+    int64_t col_names = map_keys(map);
+    int64_t ncols = zt_vec_len(col_names);
+
+    int64_t seen = map_new();          // key -> pair index (order preserving)
+    int64_t pairs = zeta_dynarray_new(4);
+
+    for (int64_t i = 0; i < n; i++) {
+        const char* kv = (const char*)((int64_t*)keys_vec)[i];
+        // Keys in a `map<str, _>` are HASHED (`map_str_key`); the raw pointer
+        // differs per row even for equal strings (each value is its own
+        // allocation), so grouping by pointer produced one group per row.
+        int64_t hk = map_str_key((int64_t)kv);
+        int64_t idx = map_get(seen, hk);
+        int64_t pair = 0;
+        if (idx) {
+            pair = ((int64_t*)pairs)[idx - 1];
+        } else {
+            int64_t* p = (int64_t*)GC_malloc(2 * sizeof(int64_t));
+            int64_t* sub = (int64_t*)GC_malloc(sizeof(int64_t));
+            sub[0] = map_new();
+            p[0] = (int64_t)kv;
+            p[1] = (int64_t)sub;
+            vec_push(pairs, (int64_t)p);
+            map_insert(seen, hk, zt_vec_len(pairs));
+            pair = (int64_t)p;
+        }
+        int64_t* sub = (int64_t*)((int64_t*)pair)[1];
+        int64_t smap = sub[0];
+        for (int64_t c = 0; c < ncols; c++) {
+            // `map_keys` yields the STORED key representation; `map_get`/`map_insert`
+            // in this runtime key `map<str, _>` by `map_str_key`, so hash here.
+            int64_t hc = map_str_key(((int64_t*)col_names)[c]);
+            int64_t col = map_get(map, hc);
+            if (!col) continue;
+            int64_t dst = map_get(smap, hc);
+            if (!dst) {
+                dst = zeta_dynarray_new(4);
+                map_insert(smap, hc, dst);
+            }
+            if (i < zt_vec_len(col)) {
+                int64_t pushed = vec_push(dst, ((int64_t*)col)[i]);
+                // `vec_push` returns a NEW pointer when it grows; the map must be
+                // updated or the column reads a stale 0-length header (measured:
+                // every group reported `len(grp) == 0`).
+                if (pushed != dst) {
+                    dst = pushed;
+                    map_insert(smap, hc, dst);
+                }
+            }
+        }
+    }
+    // `pairs` holds the pair blocks directly.
+    for (int64_t i = 0; i < zt_vec_len(pairs); i++) {
+        vec_push(out, ((int64_t*)pairs)[i]);
+    }
+    return out;
+}
+
+// `gb.pairs()` — the GroupBy struct holds (frame, key) in that order.
+int64_t py_groupby_pairs(int64_t gb) {
+    if (!gb) return zeta_dynarray_new(1);
+    return py_df_groupby(((int64_t*)gb)[0], ((int64_t*)gb)[1]);
+}
+
 int64_t py_df_itertuples(int64_t frame, int64_t with_index) {
     if (!frame) return zeta_dynarray_new(1);
     int64_t map = *(int64_t*)frame;

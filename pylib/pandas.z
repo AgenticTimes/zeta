@@ -259,11 +259,11 @@ class DataFrame:
         # 列已是 str；`astype("str")` / 链式类型标注用。同 fillna，避免 identity→i64。
         return self.copy()
 
-    def groupby(self, by) -> GroupBy:
-        # 列映射表达不了分组。必须有方法：否则 `_DataFrame__groupby` / `_groupby`
-        # 链接失败。返回 Named GroupBy（勿 zeta_identity→i64 垃圾指针）。
-        # 真分组 / for (k,g) in gb 迭代 —— 未做；聚合见 GroupBy.mean/sum。
-        return GroupBy(self.copy())
+    def groupby(self, by, sort=True) -> GroupBy:
+        # GroupBy 现在带 (frame, key)：`for k, grp in df.groupby(col)` 由 MIR 的
+        # for 降级走运行期 `py_groupby_pairs` 真分组；`.mean()/.sum()/.tail(n)`
+        # 等仍为桩（未做）。
+        return GroupBy(self, by)
 
     def columns(self) -> lt(vec, str):
         # 与 column_names 同语义；语料写 `df.columns` / `"x" in df.columns`。
@@ -293,8 +293,9 @@ class DataFrame:
 # 分组句柄：列映射无真分组。mean/sum 必须是库方法（返回空 DF），否则 Named
 # 接收者仍会落入 opaque `mean→zeta_identity`（静默 i64 / 垃圾指针）。
 class GroupBy:
-    def __init__(self, frame: DataFrame):
+    def __init__(self, frame: DataFrame, key: str = ""):
         self.frame = frame
+        self.key = key
 
     def mean(self) -> DataFrame:
         # 空 DF（非 identity）；真按组均值未做。

@@ -7199,3 +7199,34 @@ abort（"mask is missing"）。
 崩点仍在 `validate_and_repair_stock_ohlcv + 2884`（`report.output_rows = len(out)`，
 `out` 来自 `remove_extreme_return_bars`）：说明掩码链已通，问题落在它内部更后面
 （`groupby` 迭代 / `concat` / `iloc[0:0]` 等）或该函数返回值本身。
+
+### 批次 244：`for k, grp in df.groupby(col)` 真分组（GroupBy 不再是空壳）
+
+`DataFrame.groupby` 此前返回 `GroupBy(self.copy())`，`GroupBy` 只有 `mean/sum` 两个桩、
+**没有迭代协议** ⇒ `for _code, grp in df.groupby("stock_code")` 迭代的是结构体句柄
+（垃圾），`remove_extreme_return_bars` 于是产出死帧。
+
+修法（三处）：
+1. **运行期** `py_df_groupby(frame, key)`：按 `map_str_key` 分组（**必须哈希**——
+   每个字符串值都是独立分配，按指针分组会一组一行），每组重建子帧，返回
+   「`[key, subframe]` 两槽块」的向量（`stack_array_get(elem, i)` 正好读这两槽）；
+   `py_groupby_pairs(gb)` 解包 GroupBy 的 (frame, key)。
+   两处坑：列的 `map_get`/`map_insert` 也要用 `map_str_key`；`vec_push` **扩容时会返回新指针**，
+   必须回写 map（否则列指向旧的 0 长度头，表现为「每组 `len(grp)==0`」）。
+2. **shim**：`GroupBy.__init__(frame, key)`；`DataFrame.groupby(self, by, sort=True) -> GroupBy`。
+3. **MIR 的 for 降级**：迭代对象类型是 `Named("GroupBy")` 时改调 `py_groupby_pairs`，
+   并把元素类型标成 `Tuple([Str, Named("DataFrame")])`（这样 `grp["close"]` / `grp.loc[...]`
+   才按 DataFrame 派发）。
+
+验证 `/tmp/gb.z`（`df` 2 列 4 行、两个 code）：
+
+    group a 2 2 / group b 2 2 / groups 2 parts 2     ✓
+    （修复前：group a 0 0，且迭代 4 次 —— 每组一行）
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+**剩余**：`remove_extreme_return_bars` 现在走到 `grp.loc[~mask]` 时 `py_df_loc` 响亮 abort
+（"mask is missing"）。单独复刻该链条（`pct_change → abs → > 标量 → sum → ~ → loc`）在同一
+harness 里**全部通过**（`ret 892 / mask 892 / sum 891 / not 892 / loc 1 9`），
+⇒ 该函数**内部**某处的静态类型没落到实处（怀疑 `grp["close"]` 的 `lt(vec,str)` 或
+`cfg.max_abs_daily_return` 取值），下一批用运行期探针（env 门控打印）定位。
