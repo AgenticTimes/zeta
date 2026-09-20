@@ -4264,6 +4264,22 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         });
                     }
                 }
+                // `typing.cast(T, v)` is a NO-OP that only narrows the STATIC
+                // type: lower `v` and keep ITS type. Going through the registry
+                // (`F typing cast py_typing_cast args=i64,i64 ret=i64`) retyped the
+                // value I64, so `cast(pd.Timestamp, ts).strftime(...)` dispatched on
+                // an I64 receiver — the PyDate handle was read as an integer and
+                // `strftime` crashed (measured: `warmup_start_of` + strftime_l).
+                // Verified MIR: `py_typing_cast(…) -> 9: I64` feeding
+                // `strftime_2(9, …)`.
+                if method == "cast"
+                    && args.len() == 2
+                    && self
+                        .py_member_target(receiver, "cast")
+                        .map_or(false, |(m, mem)| m == "typing" && mem == "cast")
+                {
+                    return self.lower_expr(&args[1]);
+                }
                 let member_call = self.py_member_call(receiver, method).or_else(|| {
                     let recv = receiver.as_ref()?;
                     let (root, parts) = Self::flatten_module_receiver(recv)?;
