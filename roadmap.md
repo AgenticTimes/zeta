@@ -7985,3 +7985,23 @@ lldb 现场：`DataFrame::n_rows: ldr x0, [x8]`，`EXC_BAD_ACCESS (code=1, addre
 
 下一批：在 `run_backtest` 里把 `warmup_start` / `end_date` 打印出来（harness 复刻那几行），
 定位是返回值被覆盖还是实参传递错位；修好后缓存覆盖判断就能命中，驱动应能进入回测。
+
+### 批次 281：**在新的 harness 里 `fetch_stocks` 的 `cached["trade_date"]` 崩**（键是坏指针）
+
+把 `run_backtest` 的数据准备那几行复刻出来：
+
+    codes 119 / warmup_start 2023-08-05 / end_date 2024-02-29      ✓ 三个值都正确
+    → fetch_stocks(...) 里崩：
+       map_str_key + 20 ← DataFrame::__getitem__ + 24 ← fetch_stocks + 3784
+
+⇒ 传进去的日期是对的，但在 `fetch_stocks` 里 `DataFrame.__getitem__(<key>)` 的 key
+是**坏指针**（`map_str_key` 一解引用就崩）。对应源码是
+
+    partial = cached[(cached["trade_date"] >= eff_start) & (cached["trade_date"] <= req_end)]
+
+里的 `cached["trade_date"]`（字符串字面量作为下标）。
+
+这条与之前「驱动日志显示 1969-08-04 ~」是同一段代码的不同表现：日期实参正常，
+但**方法内的字符串下标**在这次调用里坏了。下一批：在 harness 里单测
+`cached["trade_date"]`（同一 harness 的 `_load_cache` 结果上），看是下标键坏还是
+`&` 两侧的切片表达式坏。
