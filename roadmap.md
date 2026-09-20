@@ -6943,3 +6943,18 @@ Python 允许运行时给对象加属性，而本实现的结构体字段是**�
 
 下一批：打印 `DataFrame` 结构体的字段清单（构造处 vs 读取处）以及 `self.data` 的字段索引，
 确认是不是 `attrs` 之类的动态字段把它挤偏了。
+
+### 批次 226：`.loc` 的最小复现与 IR 对照
+
+`/tmp/loc2.z`（无 `.loc`）：`cols 2 / rows 3 / a0 1` ✓
+`/tmp/loc.z`（加 `df.loc([1,0,1])`）：**abort** 于护栏 `zt_map_json_mismatch ← map_get ← DataFrame::loc + 256`
+
+IR 对照：
+
+- `DataFrame::n_rows` 正确读 `{ i64 }` 的字段 0 ⇒ `map_keys` ✓
+- `DataFrame::loc` 里出现 `%map_ptr11 = inttoptr i64 %92 to ptr` / `map_get(ptr %map_ptr11, i64 %93)`，
+  其中 `%92 = load i64, ptr %54` —— 需要确认 `%54` 是 `self.data` 还是新建的 `out` 字典；
+  护栏判定「首字 1..8（像 JSON tag）」⇒ 该句柄**不是**普通 map。
+
+下一批：把 `loc` 的 MIR/IR 里每个 `map_get` 的 map 来源标出来（`self.data` vs `out`），
+确认是哪一处拿到了 JSON 句柄；必要时把 `loc` 的返回改成 `self.copy()` + 覆盖列，避开新建字典。
