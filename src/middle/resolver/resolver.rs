@@ -2329,12 +2329,31 @@ impl Resolver {
             None => {
                 // A METHOD's MIR name is `Class::method` and is NOT a key in
                 // `py_mangled_to_module` (which holds definitions), so its rename
-                // table is empty and module-private helpers referenced from a
-                // method body stay bare (`_to_ts`). Matching the class against the
-                // owning module fixed that, but ALSO applied the module's
-                // re-exports table inside method bodies, which produced fresh
-                // ghosts (`_pd.Timestamp__date`, `_filter`) — so it stays off
-                // until the re-exports table is reliable (see roadmap batch 158).
+                // table was empty and module-private helpers referenced from a
+                // method body stayed bare (`_to_ts`, 8 reference sites). Match the
+                // class against the module that OWNS it, and build the table from
+                // OWN NAMES ONLY: the re-exports half produced fresh ghosts
+                // (`_pd.Timestamp__date`, `_filter`) when applied inside methods.
+                let head = func_name.split("::").next().unwrap_or("").to_string();
+                let hits: Vec<String> = if head.is_empty() {
+                    Vec::new()
+                } else {
+                    self.py_module_own_names
+                        .borrow()
+                        .iter()
+                        .filter(|(_, names)| names.contains(&head))
+                        .map(|(m, _)| m.clone())
+                        .collect()
+                };
+                if hits.len() == 1 {
+                    let module = hits.into_iter().next().unwrap();
+                    let prefix = format!("{}__", module.replace('.', "_"));
+                    if let Some(own) = self.py_module_own_names.borrow().get(&module) {
+                        for n in own {
+                            out.insert(n.clone(), format!("{}{}", prefix, n));
+                        }
+                    }
+                }
                 return out;
             }
         };
