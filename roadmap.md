@@ -6425,3 +6425,24 @@ MIR 里「多个单前缀调用 + `||`」在隔离用例正确、项目里仍返
 
 **新崩点**：裸成员 `_get`（未类型化接收者的 `.get(...)`）⇒ abort 桩。
 **仍未收敛**：`fetch_stocks` 源回退循环 119 → 238 → …；`区间 1969-08-04 ~ `。
+
+### 批次一百八十三（2026-09-19）：裸成员 `get` 的定位（未落地，已回退）
+
+崩点：`PY-A: _get is NOT implemented` → lldb：`get` ← `_source_score + 368`。
+
+MIR：`_source_score` 里 `zeta_env_get(_DEFAULT_SOURCE_SCORE)` → subscript → **`get_3`**（裸 + 元数后缀）。
+全局类型表里它是 `Named("map", [])`（**无类型参数**）⇒ 下标后的值类型 I64 ⇒ `.get(...)`
+掉出 map 分派 ⇒ 裸 `get`。
+
+试过「`DictLit` 按首条推导 `map<K, V>`」（表里确实变成
+`map<Str, map<Str, F64>>` ✓），但**引入回归**：`MarketDataFetcher.__init__` 的
+`py_os_path_join` 又以 0x1 崩溃 ✗ ⇒ 已 `git checkout` 回退。
+下一批要用更窄的方式（例如只在「值本身是 DictLit」时递归，或在 `infer_global_ty`
+里给 DictLit 单独加一个 `map<Str, map<...>>` 变体）重试。
+
+### 下一队列（批次一百八十四）
+
+1. nested dict 的值类型（`_DEFAULT_SOURCE_SCORE[asset].get(...)`）——窄化重试
+2. `fetch_stocks` 源回退循环不收敛（119 → 238 → …）
+3. `区间 1969-08-04 ~ `：日期显示异常
+4. `py_pd_read_parquet` 真实实现——跑出指标的最后一环
