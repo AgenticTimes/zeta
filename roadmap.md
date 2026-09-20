@@ -7451,3 +7451,23 @@ tup2/re/sl 全部打挂**（`ncols/cols/el` 三条 SEGV），说明 `stack_array
 但**字段读取的静态类型仍是 I64**（`println_i64` 打位模式），下一批修这条类型。
 
 度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+### 批次 258：`f64` 结构体字段存的是**位模式**（类型对了、值错了）
+
+最小复现 `/tmp/dc.z`：
+
+    @dataclass
+    class C:
+        a: float = 0.5
+        b: bool = True
+        c: int = 7
+    x = C(); print("a", x.a)   → 4602678819172646912.000000   ✗（0.5 的位模式）
+    print("b", x.b)            → 1     ✓
+    print("c", x.c)            → 7     ✓
+
+⇒ 字段**类型**已是 F64（打印走浮点 ✓），但**存入的是 f64 的位模式**（i64 store），
+读出来再当 double 解释就变成天文数字/非规格化小数。
+
+影响：`cfg.min_price` / `cfg.max_abs_daily_return` 这类阈值字段参与比较时得到错误阈值
+（`close < min_price` 恒 false）。下一批：修结构体字面量/字段存取的 f64 存储（codegen 的
+struct-field store 目前按 i64 走，需要按字段类型 bitcast/float store）。
