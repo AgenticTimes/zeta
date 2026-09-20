@@ -26,14 +26,15 @@ int64_t zeta_dynarray_new(int64_t cap);
 int64_t vec_push(int64_t data_ptr, int64_t val);
 
 
+static const char* zt_str_or_null(int64_t v) { return v ? (const char*)v : "<null>"; }
 void println_i64(int64_t v) { printf("%lld\n", (long long)v); }
 void print_i64(int64_t v) { printf("%lld", (long long)v); }
 void println_f64(double v) { printf("%.6f\n", v); }
 void print_f64(double v) { printf("%.6f", v); }
 void print_bool(int64_t v) { printf("%s", v ? "true" : "false"); }
-void print_str(int64_t v) { printf("%s", (char*)v); }
-void println_str(int64_t v) { printf("%s\n", (char*)v); }
-void print(int64_t v) { fputs((char*)v, stdout); }
+void print_str(int64_t v) { printf("%s", zt_str_or_null(v)); }
+void println_str(int64_t v) { printf("%s\n", zt_str_or_null(v)); }
+void print(int64_t v) { fputs(zt_str_or_null(v), stdout); }
 
 // === String runtime (str_* mapped to host_str_* by codegen, GC-allocated) ===
 int64_t str_len(int64_t s) { return s ? (int64_t)strlen((char*)s) : 0; }
