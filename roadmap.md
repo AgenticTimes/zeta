@@ -7510,3 +7510,48 @@ struct-field store 目前按 i64 走，需要按字段类型 bitcast/float store
 ⇒ `_load_cache` 返回的帧坏 —— 下一批查它的 tuple 返回 / 解构。
 
 度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+## 架构复查（2026-09-20，docs-only 批：不改代码）
+
+> 位置：批次 259 收口后。方法：codegraph 调用图 + grep 复核 advice.md / ARCHITECTURE-REVIEW-2026-09 的每项判断，
+> 结论分「已偿还 / 仍存在 / 新发现」三档，作为后续还债批次的输入。
+
+### 基线现值
+
+官方 **194/194**、python_style **273/276**（`t228` 偶发失败——单跑通过，非确定性，见下）、语料 **39/39**。
+
+### 已偿还（129–259 的净成果）
+
+| 项 | 现状证据 |
+|---|---|
+| 符号注册表（advice A） | 表驱动优先 + `gen_from_registry.py` 四类生成物 + CI `--emit*` `git diff` 防过期 + nm `--check` |
+| 桩响亮化（D/D4） | `py_stub_abort` + `--list-stubs`（registry + pylib 双扫） |
+| 强转矩阵（B1/B2） | 白名单告警 + `--strict-abi` + libc 碰撞告警 |
+| 解析行号/恢复（C1/C2） | W1002 带 `path:line:`；C2 同步恢复 opt-in（`ZETA_PARSE_RECOVER`，默认关——默认开曾掉官方 10 例） |
+| 类型动态化（B3/B4） | `Type::PyDynamic` 22 处消费；限定名候选查找容忍模块 mangle 双态 |
+| 工具链 | `--dump-mir` 已接线；基线三套进 CI（baselines job） |
+
+### 仍存在（P1 未动，自 2026-09 评审起）
+
+1. **单态化自映射**：`resolver.rs:2856` 附近 `type_args.zip(type_args)` 恒等替换依旧（真替换仍由 codegen 按位做）。
+2. **优化器零接线**：调用图确认 `optimize` 无 caller；`optimization.rs:347` FloatLit CSE 键碰撞 bug 原样（从未上线故无害，但 599 行仍是"假装有优化"）。`jit.rs:168` 的 `ZETA_NO_OPT` 只控制 LLVM 侧。
+3. **巨石继续生长**：`gen.rs` **12,110** 行（较事故前 +1.1k）、`codegen.rs` 7,049、`resolver.rs` 4,261；F（拆分）/J（Arc 共享、管线收敛）零进展。
+4. **死代码**：`proc_macro.rs`/`macro_expand_advanced.rs`/`borrow_enhanced.rs`/`identity_ownership.rs` 四件 + `lib.rs` `#![allow(dead_code)]` 依旧。
+5. **诊断 span**：`lib.rs` 仍有 `span: None`；C1 只覆盖 W1002 尾部告警，类型错误仍报 (1,1)。
+6. **管线四份拷贝**：`main.rs` 4 处 / `lib.rs` 2 处 `parse_zeta(` 调用链并存。
+7. **特化缓存空转**：`.zeta_specialization_cache.json` 仍为 `{"entries": {}}`。
+
+### 新发现 / 仍开的口子
+
+- **`t228` 非确定性失败**（批次 241、259 两遇；本轮全量 276 中又现）：单跑与重跑均过、批内偶发挂——典型架构级症状（HashMap 迭代序影响 / 未初始化读 / 句柄悬空）。**建议列为下一还债批首位**：先在 run.sh 内对 t228 做 20 连跑 + ASan 定位，而非继续当偶发。
+- **registry 双解析器无契约测试**：`registry.txt` 被 `pylib.rs`（Rust）与 `gen_from_registry.py`（Python）两头解析；CI 只 diff 生成物，抓不住两侧语义分叉（如 Rust 接受了 Python 不认识的写法）。半天工作量。
+- **运行时 .o 仍手工入库且随源漂移**：工作区长期有 `M zeta_runtime_c.o`（构建脚本产物）；建议 CI 校验 .o 哈希与 C 源一致性（advice M 未收尾）。
+- **`span: None` × W1003**：C2 恢复告警已有行号，但类型/ABI 告警（B1/B2/A4 兜底）仍裸 eprintln，未走 diagnostics——告警通道继续发散。
+
+### 下一步还债队列（建议顺序）
+
+1. `t228` 非确定性专项（正确性 > 一切）
+2. 单态化修真（I1 自映射 + I2 缓存做实或删除）
+3. 优化器修复接线或诚实删除（H）
+4. gen.rs 拆分第一刀（F1：argparse/env/f-string 搬出 lower_expr）
+5. registry 双解析器契约测试 + 告警通道收敛进 diagnostics
