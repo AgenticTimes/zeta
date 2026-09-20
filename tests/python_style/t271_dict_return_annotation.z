@@ -1,0 +1,20 @@
+// PY-A: `-> dict` / `-> dict[K, V]` 返回注解必须归一化成 map（批次 155）。
+// 签名解析路径（`typecheck_new::string_to_type`）此前**没做** `dict → map` 的归一化，
+// 而 MIR 侧的 `Type::from_string` 做了 ⇒ 调用点把 `-> dict` 的返回值当 I64 ⇒
+// `.get(...)` / `.values()` 落到 opaque 兜底发裸符号
+// （REasyQuant：`DataCalibrator._load_split_factors() -> dict` 之后的 `.get(stock_code)`，
+//  `_get` 共 7 处引用）。
+// expect: 1
+// expect: skip
+// expect: 2
+class C:
+    def m(self) -> dict:
+        return {"a": 1}
+
+def pick(k: str) -> dict[str, str]:
+    return {"a": "skip", "b": "full"}
+
+c = C()
+print(c.m().get("a", 0))
+print(pick("a").get("a", "x"))
+print(len(pick("x").values()))

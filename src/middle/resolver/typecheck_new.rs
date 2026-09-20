@@ -108,6 +108,8 @@ impl NewTypeCheck for Resolver {
 
         // Simple types should not recurse
         match s {
+            // Bare `dict` — same normalization as the generic paths below.
+            "dict" => return Type::Named("map".to_string(), Vec::new()),
             "i64" => return Type::I64,
             "i32" => return Type::I32,
             "bool" => return Type::Bool,
@@ -271,7 +273,16 @@ impl NewTypeCheck for Resolver {
                 args.push(self.string_to_type(arg));
             }
 
-            return Type::Named(type_name.to_string(), args);
+            // Python's `dict[K, V]` / `lt(dict, K, V)` must yield the SAME type
+            // as `lt(map, K, V)`: every map operation dispatches on the name
+            // `map`, so a `-> dict` return left the caller's `.get(...)` /
+            // `.values()` an opaque bare symbol (`_get` had 7 reference sites
+            // through `DataCalibrator._load_split_factors() -> dict` + `.get(k)`).
+            {
+                let tn = type_name.trim();
+                let tn = if tn == "dict" { "map" } else { tn };
+                return Type::Named(tn.to_string(), args);
+            }
         }
 
         // Check for generic type: Vec<i32>, Option<T>, Result<T, E>
@@ -336,7 +347,16 @@ impl NewTypeCheck for Resolver {
                 args.push(self.string_to_type(current.trim()));
             }
 
-            return Type::Named(type_name.to_string(), args);
+            // Python's `dict[K, V]` / `lt(dict, K, V)` must yield the SAME type
+            // as `lt(map, K, V)`: every map operation dispatches on the name
+            // `map`, so a `-> dict` return left the caller's `.get(...)` /
+            // `.values()` an opaque bare symbol (`_get` had 7 reference sites
+            // through `DataCalibrator._load_split_factors() -> dict` + `.get(k)`).
+            {
+                let tn = type_name.trim();
+                let tn = if tn == "dict" { "map" } else { tn };
+                return Type::Named(tn.to_string(), args);
+            }
         }
 
         // Handle base types

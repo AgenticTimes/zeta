@@ -7319,6 +7319,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     return id;
                 }
 
+                // `map.get(k[, d])` returns the map's VALUE type. Hardcoding
+                // I64 made the caller compare a str handle against a string
+                // (`SOURCE_STRATEGIES.get(source, "full") == "skip"` in
+                // calibration.py) — the comparison still worked, but `print`
+                // showed the raw handle, i.e. one silent wrong VALUE per use.
+                let map_value_ty = match receiver_ty.as_ref() {
+                    Some(Type::Named(_, targs)) => targs.get(1).cloned().unwrap_or(Type::I64),
+                    _ => Type::I64,
+                };
                 // PY-A: dict methods — Python d.get(k) (missing key → 0)
                 if method == "get"
                     && receiver_ty
@@ -7334,7 +7343,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         dest: id,
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    self.type_map.insert(id, map_value_ty);
                     return id;
                 }
                 // PY-A: d.get(k, default) — 3-arg form via runtime
@@ -7352,7 +7361,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         type_args: vec![],
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    self.type_map.insert(id, map_value_ty);
                     return id;
                 }
 
@@ -7618,8 +7627,26 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
+                        // `map.get(k, d)` returns the map's VALUE type — the W
+                        // table can only declare a coarse `ret=i64`, and with
+                        // that the caller compared a str handle against a string
+                        // (`SOURCE_STRATEGIES.get(source, "full") == "skip"` in
+                        // calibration.py) — a SILENT wrong answer. `-> dict`
+                        // annotations now reach here (batch 155), so the V type
+                        // must come from the receiver.
+                        let map_value_ty = if tag == "map" && method == "get" {
+                            match receiver_ty.as_ref() {
+                                Some(Type::Named(_, targs)) => {
+                                    targs.get(1).cloned().unwrap_or(Type::I64)
+                                }
+                                _ => Type::I64,
+                            }
+                        } else {
+                            Type::I64
+                        };
                         let ty = match ret_handle {
                             Some(h) => Type::Named(h.to_string(), vec![]),
+                            None if tag == "map" && method == "get" => map_value_ty,
                             None => match crate::middle::pylib::method_ret(&tag, method) {
                                 Some("str") => Type::Str,
                                 Some("f64") => Type::F64,
