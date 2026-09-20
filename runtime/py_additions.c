@@ -1025,6 +1025,7 @@ int64_t py_vec_not(int64_t vec) {
     for (int64_t i = 0; i < n; i++) {
         vec_push(out, zt_map_or_vec_truthy(((int64_t*)vec)[i]) ? 0 : 1);
     }
+    if (getenv("ZT_PROBE_LOC")) fprintf(stderr, "[probe] vec_not out=%lld n=%lld\n", (long long)out, (long long)n);
     return out;
 }
 

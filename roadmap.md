@@ -7253,3 +7253,25 @@ codegen 把浮点字面量放进**整数寄存器**，而 C 侧声明是 `double
 **剩余**：`remove_extreme_return_bars` 仍在 `grp.loc[~mask]` 处拿到 mask=0：
 探针显示 `vec_not in=<有效指针>` 之后 `df_loc mask=0` ⇒ `~mask` 的结果没有被写进
 `loc` 读的那个槽位（嵌套表达式 `grp.loc[~mask]` 的临时值未物化），下一批查这条。
+
+### 批次 246：`~mask` 结果丢失 —— IR 正确，问题在第二次执行
+
+faithful 复刻（`df["stock_code"] = "000300.XSHG"` 之后调用函数体）后稳定复现：
+
+    inloop 892 892 892 0        ← 第一次迭代（0 是**正确**的：真实日收益都 < 0.2）
+    vec_not in=… out=… n=892 / df_loc mask=… / appended 1 892   ✓
+    vec_not in=… out=… **n=1**   ← 第二次（输入只有 1 个元素）
+    df_loc mask=0               ← ✗ 响亮 abort
+
+同时核对了 LLVM IR（`define i64 @reb` 内）：
+
+    %146 = load i64, ptr %17      ; mask
+    %147 = call i64 @py_vec_not(i64 %146)
+    store i64 %147, ptr %71
+    %148 = load i64, ptr %49      ; grp
+    %149 = load i64, ptr %71      ; ~mask ✓
+    %150 = call i64 @"DataFrame::loc"(i64 %148, i64 %149)
+
+⇒ **IR 完全正确**（存了也读了），但运行期第二次执行时 `loc` 读到 0，
+而且那次 `py_vec_not` 的输入只有 1 个元素 ⇒ 现场是「第二次执行时槽位/实参错位」。
+（`ZT_PROBE_LOC=1` 探针留在运行期，后续继续用。）
