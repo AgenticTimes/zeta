@@ -7359,3 +7359,32 @@ tuple 返回）。下一批用「把真实函数体逐段替换成 harness 版�
 确认没有被解析器丢掉；「无输出 + rc=0」在本项目里首先怀疑 W1002，而不是「通过」。
 
 （本批无代码改动：批次 249 的修复已提交并通过探针验证 `vec_not out n=892`。）
+
+### 批次 251：**`vec_push` 返回值未回写** ⇒ 堆破坏/非确定性（重要）
+
+现象：同一二进制多次运行，崩点飘忽（S12 / S7 / GC "Failed to expand heap by
+13582167728875120 KiB"）——典型的**堆破坏**。
+
+根因：运行期一批向量助手（`py_vec_not` / `py_vec_isna` / `py_vec_or` / `py_vec_clip`
+/ `py_vec_abs` / `py_vec_pct_change` / `py_vec_cmp` …）都写成
+
+    vec_push(out, x);        // ✗ 忽略返回值
+
+而 `vec_push` 在**扩容时返回新指针**：元素一多，`out` 仍指向旧块，后续写入落空/错位。
+（同一坑此前已在 `py_df_groupby` 里踩过一次，这次是全文件系统排查。）
+
+修法：把 `vec_push(out|kept|m|nm, …)` 一律改成 `x = vec_push(x, …)`（15 → 16 处）。
+
+效果：harness **3/3 稳定**停在同一位置（此前 1/0/1）。
+
+顺带加的护栏：`vec_push` 现在校验句柄是真正的 `[cap|len]` 块，否则**响亮 abort** 并打印
+调用方（此前表现为 libgc 的「Failed to expand heap by … KiB」，把真凶藏起来）。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+**当前卡点**：`myvalidate`（复刻的清洗函数体）在
+`out, n_ext = remove_extreme_return_bars(out, 0.2)` 之后 `len(out)` 崩
+（探针显示函数**已返回**、且内部**没有**走 groupby）。已排除：跨模块 tuple 返回（✓）、
+`(frame, 0)` 元组（✓）、`concat`（✓）。下一批：在 `remove_extreme_return_bars` 的
+`if market_df.empty or max_abs_daily_return <= 0: return market_df, 0` 这条**提前返回**上取证
+（`max_abs_daily_return` 是浮点**字段**实参 —— 与批次 245 的浮点实参 ABI 同族）。

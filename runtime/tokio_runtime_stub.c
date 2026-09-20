@@ -23,6 +23,8 @@ void array_push(int64_t arr, int64_t val);
 // Defined in runtime/py_additions.c (linked as a separate object) — needed by
 // py_path_parents below.
 int64_t zeta_dynarray_new(int64_t cap);
+#include <dlfcn.h>
+
 int64_t vec_push(int64_t data_ptr, int64_t val);
 
 
@@ -374,6 +376,19 @@ int64_t vec_push(int64_t data_ptr, int64_t val) {
     int64_t* base = (int64_t*)(data_ptr - 16);
     int64_t cap = base[0];
     int64_t len = base[1];
+    // Guardrail: a handle that is not a real `[cap|len]` block turns into a
+    // multi-petabyte GC request ("Failed to expand heap by … KiB"), which hides
+    // the real bug. Fail loudly with the caller instead.
+    if (cap < 0 || cap > (1LL << 30) || len < 0 || len > cap) {
+        void* ra = __builtin_return_address(0);
+        Dl_info di;
+        const char* sym = (dladdr(ra, &di) && di.dli_sname) ? di.dli_sname : "?";
+        fprintf(stderr,
+                "PY-A: vec_push on a non-array handle %lld (cap=%lld len=%lld) from %s\n",
+                (long long)data_ptr, (long long)cap, (long long)len, sym);
+        fflush(stderr);
+        abort();
+    }
     if (len >= cap) {
         // floor the growth so a zero-capacity array (e.g. `[]`) can grow:
         // cap * 2 would otherwise stay 0 forever and every push would

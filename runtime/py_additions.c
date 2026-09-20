@@ -871,7 +871,7 @@ int64_t py_vec_pct_change(int64_t vec) {
         if (ok) prev = d;
         char buf[64];
         snprintf(buf, sizeof buf, "%.10g", r);
-        vec_push(out, (int64_t)GC_strdup(buf));
+        out = vec_push(out, (int64_t)GC_strdup(buf));
     }
     return out;
 }
@@ -886,12 +886,12 @@ int64_t py_vec_abs(int64_t vec) {
         char* e = NULL;
         double d = v ? strtod(v, &e) : 0;
         if (!v || !e || *e != 0 || e == v) {
-            vec_push(out, (int64_t)v);
+            out = vec_push(out, (int64_t)v);
             continue;
         }
         char buf[64];
         snprintf(buf, sizeof buf, "%.10g", d < 0 ? -d : d);
-        vec_push(out, (int64_t)GC_strdup(buf));
+        out = vec_push(out, (int64_t)GC_strdup(buf));
     }
     return out;
 }
@@ -967,7 +967,7 @@ static int64_t zt_vec_cmp(int64_t vec, double rhs, int kind) {
                 default: r = d != rhs; break;
             }
         }
-        vec_push(out, r ? 1 : 0);
+        out = vec_push(out, r ? 1 : 0);
     }
     if (zt_probe) fprintf(stderr, "[probe] vec_cmp out=%lld n=%lld\n", (long long)out, (long long)n);
     return out;
@@ -1019,12 +1019,12 @@ int64_t py_vec_mul(int64_t a, int64_t b) {
         int oka = sa && ea && *ea == 0 && ea != sa;
         int okb = sb && eb && *eb == 0 && eb != sb;
         if (!oka || !okb) {
-            vec_push(out, (int64_t)(oka ? sa : sb));
+            out = vec_push(out, (int64_t)(oka ? sa : sb));
             continue;
         }
         char buf[64];
         snprintf(buf, sizeof buf, "%.10g", da * db);
-        vec_push(out, (int64_t)GC_strdup(buf));
+        out = vec_push(out, (int64_t)GC_strdup(buf));
     }
     return out;
 }
@@ -1038,7 +1038,7 @@ int64_t py_vec_or(int64_t a, int64_t b) {
     for (int64_t i = 0; i < n; i++) {
         int ta = i < na && zt_map_or_vec_truthy(((int64_t*)a)[i]);
         int tb = i < nb && zt_map_or_vec_truthy(((int64_t*)b)[i]);
-        vec_push(out, (ta || tb) ? 1 : 0);
+        out = vec_push(out, (ta || tb) ? 1 : 0);
     }
     return out;
 }
@@ -1049,7 +1049,7 @@ int64_t py_vec_not(int64_t vec) {
     int64_t n = zt_vec_len(vec);
     int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
     for (int64_t i = 0; i < n; i++) {
-        vec_push(out, zt_map_or_vec_truthy(((int64_t*)vec)[i]) ? 0 : 1);
+        out = vec_push(out, zt_map_or_vec_truthy(((int64_t*)vec)[i]) ? 0 : 1);
     }
     if (getenv("ZT_PROBE_LOC")) fprintf(stderr, "[probe] vec_not out=%lld n=%lld\n", (long long)out, (long long)n);
     return out;
@@ -1060,7 +1060,7 @@ int64_t py_vec_notna(int64_t vec) {
     int64_t n = zt_vec_len(m);
     int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
     for (int64_t i = 0; i < n; i++) {
-        vec_push(out, ((int64_t*)m)[i] ? 0 : 1);
+        out = vec_push(out, ((int64_t*)m)[i] ? 0 : 1);
     }
     return out;
 }
@@ -1139,14 +1139,14 @@ int64_t py_vec_clip(int64_t vec, double lo, double hi, int64_t has_lo, int64_t h
         double d = v ? strtod(v, &endp) : 0;
         int is_num = v && endp && *endp == 0 && endp != v;
         if (!is_num) {
-            vec_push(out, (int64_t)v);
+            out = vec_push(out, (int64_t)v);
             continue;
         }
         if (has_lo && d < lo) d = lo;
         if (has_hi && d > hi) d = hi;
         char buf[64];
         snprintf(buf, sizeof buf, "%.10g", d);
-        vec_push(out, (int64_t)GC_strdup(buf));
+        out = vec_push(out, (int64_t)GC_strdup(buf));
     }
     return out;
 }
@@ -1196,9 +1196,13 @@ int64_t py_df_setitem(int64_t frame, int64_t key, int64_t val) {
 // a raw 2-slot block `[key, subframe]` (what `stack_array_get(elem, i)` reads),
 // and the subframe is a shim DataFrame struct (one field: the column map).
 int64_t py_df_groupby(int64_t frame, int64_t key) {
+    if (getenv("ZT_PROBE_LOC")) {
+        fprintf(stderr, "[probe] groupby frame=%lld key=%lld\n", (long long)frame, (long long)key);
+        fflush(stderr);
+    }
     int64_t out = zeta_dynarray_new(4);
     if (!frame) return out;
-    int64_t map = *(int64_t*)frame;
+    int64_t map = map_resolve(*(int64_t*)frame);
     if (!map) return out;
     int64_t k = map_str_key(key);
     int64_t keys_vec = map_get(map, k);
@@ -1233,13 +1237,18 @@ int64_t py_df_groupby(int64_t frame, int64_t key) {
             pair = (int64_t)p;
         }
         int64_t* sub = (int64_t*)((int64_t*)pair)[1];
-        int64_t smap = sub[0];
+        // Resolve the sub-map every round: `map_insert` below grows it into a
+        // FORWARDING block, and reading/inserting through the stale block made
+        // `map_get` return a non-zero garbage handle that then went into
+        // `vec_push` as a capacity (GC: "Failed to expand heap by 13582167728875120 KiB").
+        int64_t smap = map_resolve(sub[0]);
         for (int64_t c = 0; c < ncols; c++) {
             // `map_keys` yields the STORED key representation; `map_get`/`map_insert`
             // in this runtime key `map<str, _>` by `map_str_key`, so hash here.
             int64_t hc = map_str_key(((int64_t*)col_names)[c]);
             int64_t col = map_get(map, hc);
             if (!col) continue;
+            smap = map_resolve(smap);
             int64_t dst = map_get(smap, hc);
             if (!dst) {
                 dst = zeta_dynarray_new(4);
@@ -1259,7 +1268,7 @@ int64_t py_df_groupby(int64_t frame, int64_t key) {
     }
     // `pairs` holds the pair blocks directly.
     for (int64_t i = 0; i < zt_vec_len(pairs); i++) {
-        vec_push(out, ((int64_t*)pairs)[i]);
+        out = vec_push(out, ((int64_t*)pairs)[i]);
     }
     return out;
 }
@@ -1298,7 +1307,7 @@ int64_t py_df_itertuples(int64_t frame, int64_t with_index) {
             map_insert(row, map_str_key((int64_t)GC_strdup("index")),
                        (int64_t)GC_strdup(buf));
         }
-        vec_push(out, row);
+        out = vec_push(out, row);
     }
     return out;
 }
@@ -1339,7 +1348,7 @@ int64_t py_df_loc(int64_t frame, int64_t mask) {
         int64_t kept = zeta_dynarray_new(n > 0 ? n : 1);
         for (int64_t i = 0; i < n; i++) {
             if (i < mlen && zt_map_or_vec_truthy(((int64_t*)mask)[i])) {
-                vec_push(kept, ((int64_t*)col)[i]);
+                kept = vec_push(kept, ((int64_t*)col)[i]);
             }
         }
         map_insert(out, map_str_key(kdisp), kept);
@@ -1360,7 +1369,7 @@ int64_t py_vec_isna(int64_t vec) {
                    strcmp(v, "None") == 0) {
             flag = 1;
         }
-        vec_push(out, flag);
+        out = vec_push(out, flag);
     }
     return out;
 }
