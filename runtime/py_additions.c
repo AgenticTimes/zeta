@@ -923,6 +923,44 @@ int64_t py_vec_clip(int64_t vec, double lo, double hi, int64_t has_lo, int64_t h
     return out;
 }
 
+static int zt_maybe_vec_fwd(int64_t v) {
+    if (v < 0x1000) return 0;
+    int64_t cap = ((int64_t*)(v - 16))[0];
+    int64_t len = ((int64_t*)(v - 16))[1];
+    return cap >= 0 && len >= 0 && len <= cap && cap <= (1LL << 30);
+}
+static int64_t zt_frame_rows(int64_t map) {
+    int64_t keys = map_keys(map);
+    int64_t nk = zt_vec_len(keys);
+    int64_t nrows = 0;
+    for (int64_t j = 0; j < nk; j++) {
+        int64_t col = map_get(map, map_str_key(((int64_t*)keys)[j]));
+        int64_t n = col ? zt_vec_len(col) : 0;
+        if (n > nrows) nrows = n;
+    }
+    return nrows;
+}
+// `df["col"] = value` — a VECTOR value is stored as-is; a SCALAR is BROADCAST to
+// the frame's row count (pandas semantics). Storing the scalar (a string handle
+// for `df["stock_code"] = norm`) made `dict(self.data)` / per-column operations
+// treat that handle as a vector — measured as `map_resolve` crashing inside
+// `DataFrame::copy` (via `reset_index`).
+int64_t py_df_setitem(int64_t frame, int64_t key, int64_t val) {
+    if (!frame) return 0;
+    int64_t map = *(int64_t*)frame;
+    if (!map) return 0;
+    int64_t k = map_str_key(key);
+    if (zt_maybe_vec_fwd(val)) {
+        map_insert(map, k, val);
+        return 0;
+    }
+    int64_t nrows = zt_frame_rows(map);
+    int64_t vec = zeta_dynarray_new(nrows > 0 ? nrows : 1);
+    for (int64_t i = 0; i < nrows; i++) vec_push(vec, val);
+    map_insert(map, k, vec);
+    return 0;
+}
+
 int64_t py_df_itertuples(int64_t frame, int64_t with_index) {
     if (!frame) return zeta_dynarray_new(1);
     int64_t map = *(int64_t*)frame;

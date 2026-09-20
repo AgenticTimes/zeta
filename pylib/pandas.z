@@ -32,8 +32,11 @@ class DataFrame:
         return self.data[key]
 
     def __setitem__(self, key, val):
-        # 列赋值 `df["col"] = [...]`（批次一百零二）；体写 self.data[key]。
-        self.data[key] = val
+        # 列赋值：`df["col"] = [...]` 存向量；**标量按 pandas 语义广播成整列**。
+        # 直接把标量（如 `df["stock_code"] = norm` 的字符串句柄）塞进列映射，
+        # 会让后续 `dict(self.data)`、逐列操作把它当成向量 ——
+        # 实测 `reset_index` → `DataFrame::copy` 里的 `map_resolve` 段错误。
+        py_df_setitem(self, key, val)
 
     def empty(self) -> bool:
         # Python property：`df.empty`；零参方法由 FieldAccess 分派（批次一百）。
@@ -207,15 +210,14 @@ class DataFrame:
         return DataFrame(out)
 
     def itertuples(self, index=False) -> lt(vec, i64):
-        # 语料：`for row in df.itertuples(index=False)`。列映射无 namedtuple；
-        # 返回行下标列表（可迭代、链接成功）。`row.high` 属性 —— 未做。
-        # 注意：t228 固定了「返回行下标」这一口径；改成「每行一个 map」需要同步
-        # 更新该用例（本项目 `validate_and_repair_stock_ohlcv` 需要的是 map 行）。
-        return list(range(self.n_rows()))
+        # 列映射模型没有 namedtuple ⇒ **每一行是一个 map** {列名: 值}（运行期构造），
+        # `row.high` 经 map 属性路径取到本行那一列的值。此前返回行下标列表，
+        # `row.high` 把下标当指针解引用（实测：清洗函数 +2020 段错误）。
+        return py_df_itertuples(self, 1 if index else 0)
 
     def iterrows(self) -> lt(vec, i64):
-        # 语料：`for _, row in df.iterrows()`。无 (idx, Series) 对；行下标列表桩。
-        return list(range(self.n_rows()))
+        # 同上（无 (idx, Series) 对，行即 map，含 index 键）。
+        return py_df_itertuples(self, 1)
 
     # stub: soft:pandas.DataFrame.isin
     def isin(self, values) -> DataFrame:

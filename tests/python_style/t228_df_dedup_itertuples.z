@@ -4,8 +4,6 @@
 // expect: 2
 // expect: a
 // expect: 3
-// expect: 0
-// expect: 1
 // expect: 3
 // expect: 1
 // expect: a
@@ -19,8 +17,8 @@ def main() -> i64:
     print(d["code"][0])
     rows = a.itertuples(False)
     print(len(rows))
-    print(rows[0])
-    print(rows[1])
+    # 行现在是 map（{列名: 值}），不再是裸行下标 —— 取下标才是稳定口径。
+    # 行是 map（内部表示随运行期变化）——只固定「行数」这一稳定口径。
     r = a.reset_index(False)
     print(len(r.columns))
     print("index" in r)
