@@ -5960,3 +5960,61 @@ re-exports 表做可靠（本批已缩小到 own-names-only）。
 3. `py_pd_read_parquet` 真实实现（2636 parquet / 669MB）——**跑出指标的最后一块**
 4. -O3 误编译 longjmp 路径（`ZETA_NO_OPT=1` 可对照；O3 下 trap 在
    `market_data__init` 的 try/except）
+
+---
+
+## 批次一百六十/一百六十一（2026-09-19）：引号前缀归一 + `cast` 空操作（语料 **38/38 → 45/45**）
+
+### 批次 160：「同一文件两个模块名」的**引用侧**归一（driver **链接成功**）
+
+```text
+T _jq_shim__get_cost_config                  ← 定义（先加载的拼写）
+U _strategies_code_jq_shim__get_cost_config  ← 引用（22 处）
+```
+
+`jq_shim.py` 既可裸名（策略目录在 sys.path 上）又可点号（`strategies.code.jq_shim`）导入，
+定义落在**先加载**的拼写下；引用侧有三处建 `<module>__<member>` 的地方没归一（其中
+「用户模块的默认参数填充」路径是主犯）⇒ 第二个前缀永远 undefined。
+**修法**：三处（`py_member_call` / 默认参数填充 / `from <mod> import <VAR>` 的 env 读）
+都先过一遍 `py_module_aliases`（resolver 在同一文件第二次加载时写 `module → canon`）。
+⇒ driver **rc=0（622 KB）** ✓
+
+### 批次 161：`typing.cast(T, v)` 必须是**类型不变**的空操作
+
+MIR 铁证：
+
+```text
+call py_dt_sub_delta args [14, 16] -> 22    # 22: Named("PyDate") ✓
+call py_typing_cast  args [10, 22] -> 9     # 9: **I64** ✗ ← 元凶
+call strftime_2      args [23, 26] -> 24    # 在 I64 接收者上分派 ✗
+```
+
+注册表 `F typing cast py_typing_cast args=i64,i64 ret=i64` 把值重新标成 I64 ⇒
+`cast(pd.Timestamp, ts).strftime(...)` 把 PyDate 句柄当整数 ⇒ `strftime_l` 崩
+（实测 `warmup_start_of` 的栈）。修法：MIR 里 `cast(T,v)` 直接降低 `v` 并**保留其类型**
+（Python 语义：cast 只影响静态类型）。判定用 `py_member_target(receiver,"cast")`，
+同时覆盖 `typing.cast` 与裸名。
+
+### 度量
+
+| 口径 | 起点 | 现在 |
+|---|---|---|
+| 语料解析 | 38/38 | **45/45** ⬆ |
+| 官方 | 194/194 | 194/194 |
+| python_style | 271/274 | 271/274 |
+| driver | 链接失败 | **链接成功并进入数据层** |
+
+### 运行状态（lldb，no-opt）
+
+崩点持续前移（每一步都已修）：
+`get_universe`（universe 注册）→ `fetch_stocks` / `_to_ts`（模块私有函数 rename）→
+**`MarketDataFetcher.__init__`**（`py_os_path_join` 读到坏指针 = `_PROJECT_ROOT / "data"`）。
+
+### 下一队列（批次一百六十二）
+
+1. `MarketDataFetcher.__init__` 的 `_PROJECT_ROOT`（由 `market_data_sources` **跨模块 import**
+   进来的私有模块全局）—— 值坏 ⇒ `py_os_path_join` 崩
+2. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一块
+3. -O3 longjmp 误编译（`ZETA_NO_OPT=1` 可对照）
+4. 顺带记一个小 parser 坑：把函数命名为 `use` 会与 `use` 语句冲突（`from mdf import use` +
+   `print(use())` 触发 W1002 丢尾部）
