@@ -7471,3 +7471,21 @@ tup2/re/sl 全部打挂**（`ncols/cols/el` 三条 SEGV），说明 `stack_array
 影响：`cfg.min_price` / `cfg.max_abs_daily_return` 这类阈值字段参与比较时得到错误阈值
 （`close < min_price` 恒 false）。下一批：修结构体字面量/字段存取的 f64 存储（codegen 的
 struct-field store 目前按 i64 走，需要按字段类型 bitcast/float store）。
+
+### 批次 259：`f64` 结构体字段**读回来要 bitcast**（0.5 → 4.6e18 的根因）
+
+`StructFieldStore` 故意把浮点 **bit-cast** 进 8 字节槽（保持槽宽统一），但 `FieldAccess`
+读回来时没有反向 bit-cast，消费方按「整数→浮点」数值转换 ⇒ 0.5 变成 4602678819172646912.0。
+
+修法：`FieldAccess` 生成代码时，若该表达式在 `current_type_map` 里是 `F32/F64`，
+就把取出的 i64 **bit-cast** 回浮点。
+
+验证 `/tmp/dc.z`（同文件 dataclass）：修复前 `a 4602678819172646912.000000` → 修复后 **`a 0.500000`** ✓。
+
+**已知剩余**：跨模块（imported）dataclass 的字段类型查不到 —— 字段类型表 `type_decls` 是
+**每模块**的，`FieldAccess` 的 `struct_field_ty` 只查本模块 ⇒ 外部类的字段退化成 I64
+（`_zeta_helper.HCfg().a` 打印的是位模式）。项目自身代码里 `MarketCleanConfig` 与使用者在
+同一模块，所以那条路径不受影响；但像 `jq_shim` 那样跨模块引用时会丢类型。
+
+度量：官方 194/194、python_style 274/2（`t228` 本轮偶发失败、单跑与重跑均通过——非确定性，
+与批次 241 记录的现象一致）、语料 39/39。

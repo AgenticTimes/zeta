@@ -6010,9 +6010,47 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 };
 
                 // Extract value from struct
-                self.builder
+                let extracted = self
+                    .builder
                     .build_extract_value(loaded_struct.into_struct_value(), field_index, "")
-                    .unwrap()
+                    .unwrap();
+                // An `f64` field holds the double's BIT PATTERN: `StructFieldStore`
+                // deliberately bit-casts floats into the 8-byte slot, so reading it
+                // back must bit-cast too. A numeric i64→f64 conversion turned
+                // `0.5` into 4602678819172646912.0 (measured on
+                // `MarketCleanConfig().min_price`, which then drove every price
+                // threshold wrong).
+                let field_is_f64 = expr_id
+                    .and_then(|id| {
+                        self.current_type_map
+                            .as_ref()
+                            .and_then(|tm| tm.get(&id).cloned())
+                    })
+                    .map_or(false, |t| matches!(t, Type::F32 | Type::F64));
+                if field_is_f64 {
+                    if let BasicValueEnum::IntValue(iv) = extracted {
+                        let target = if matches!(
+                            expr_id.and_then(|id| {
+                                self.current_type_map.as_ref().and_then(|tm| tm.get(&id).cloned())
+                            }),
+                            Some(Type::F32)
+                        ) {
+                            self.context.f32_type()
+                        } else {
+                            self.context.f64_type()
+                        };
+                        let width = match target {
+                            inkwell::types::FloatType { .. } => (),
+                            _ => (),
+                        };
+                        let _ = width;
+                        self.builder.build_bit_cast(iv, target, "field_fbits_out").unwrap()
+                    } else {
+                        extracted
+                    }
+                } else {
+                    extracted
+                }
             }
             MirExpr::As { expr, target_type } => {
                 // Generate the expression value
