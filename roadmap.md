@@ -6101,3 +6101,41 @@ frame #5: backend_datasrc_etf_listing___listing_dates_cached + 128
 1. `py_json_loads` 输入指针（etf_listing 缓存 JSON）——先确认传入的是否合法字符串
 2. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
 3. -O3 longjmp 误编译（`ZETA_NO_OPT=1` 可对照）
+
+### 批次一百六十五（2026-09-19）：dict 扩容堆破坏（重大）+ JSON `.items()/.values()`
+
+**根因（越界写）**：`map_insert` 扩容时 `memcpy(map, nb, 16+nc*MAP_ENTRY_SIZE)` ——
+把「大的新表」拷进「小的旧块」（旧块只有 `16+cap*ENTRY`）⇒ 越界写 2 倍、踩坏 GC 元数据。
+
+铁证（任何 ≥13 键的 dict）：
+
+```
+GC Warning: Failed to expand heap by 12143674558099984 KiB
+GC Warning: Out of Memory! Heap size: 0 MiB. Returning NULL!
+Segmentation fault
+```
+
+`data/universe/etf_listing.json`（50 KB / 1724 键）正是死在这里；25 键时 `len(d)` 还会**静默返回 0**。
+
+**修法**：句柄按值传 ⇒ 扩容不能让块搬家 ⇒ 旧块变**转发块**（`word0 = MAP_MOVED(-1)`、
+`word1 = 新地址`，正好是它自己的 16 字节头），所有读表函数先 `map_resolve()`；
+且必须**跟完整条链**（只跟一跳会让 `map_insert` 落在 cap=-1 的块上，
+`idx = hash & (cap-1)` 越界 ⇒ 二次破坏 —— 首修后 25 键 len 仍 0 即此）。
+
+改动点：stub 的 `map_insert`/`map_get`/`py_json_len`/`py_json_dumps_map`/`zeta_map_len`/
+`py_map_contains`/`py_json_keys`/`py_json_values`；py_additions.c 的 `map_keys`/`map_values`/
+`zt_map_most_common`/`map_get_default`/`py_map_items`/`py_map_update`/`zeta_map_update`/
+`zeta_map_pop*`/`zeta_map_clear`。
+
+**JSON 对象方法**：`.items()`/`.values()` 在注册表里没有 PyJson 条目 ⇒ arity-mangle 成桩返回 0
+⇒ `{str(k): str(v) for k, v in data.items()}` 静默得 `{}`。新增 `py_json_as_map` 复用 dict 助手；
+`.values()` 元素类型保持 `PyJson`（否则打印句柄数字 —— t57 回归，已修回）。
+
+**实测**：13/25/60/200 键 dict 全对；etf_listing.json → **1724 键**、推导式 → **1724** ✓。
+
+### 下一队列（批次一百六十六）
+
+1. `MarketDataFetcher.__init__ + 92` 的第二次 `os.path.join(self.cache_dir, "stocks")`
+   —— 「无 alloca 的调用实参」家族（`py_os_path_join + 44`）
+2. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
+3. -O3 longjmp 误编译（`ZETA_NO_OPT=1` 可对照）
