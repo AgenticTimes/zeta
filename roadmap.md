@@ -6075,3 +6075,29 @@ frame #2: MarketDataFetcher::fetch_stocks + 964                ← 已在数据�
 1. 闭包内的用户类方法分派（`_LogAdapter::info`，崩在 +44）
 2. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
 3. -O3 longjmp 误编译（`ZETA_NO_OPT=1` 可对照）
+
+### 批次一百六十四（2026-09-19）：`log.info(fmt, *args)` 空 varargs 解引用
+
+lldb：`_LogAdapter::info` 里 `ldr x8,[sp,#0x38]`（args 参数=**0**，本次调用无额外实参）
+→ `ldr x3,[x8]` **EXC_BAD_ACCESS address=0x0**。原因：日志变参路径对 `*args`
+直接 `lower_expr` ⇒ 降成 `MirExpr::Deref` ⇒ codegen 发**裸 load**，而变参句柄可能为空。
+
+修法：遇到 starred 操作数**跳过 + 编译期 eprintln 说明**（不硬展开、不解引用、不静默），
+`n_lit` 按**实际展开元素数**计数（原来用 `args.len()-1`，会把跳过项也算进去）。
+
+**运行状态（本会话最远）**：
+
+```
+[INFO] strategies.code.jq_wufu_local: 获取数据...
+PY-A: platform source `_auth` is not available — falling back
+[WARNING] backend.market_data: jqdatasdk auth failed: 1
+[INFO] jq_shim: 行情请求 0 只，区间 1969-08-04 ~     ← 日志链贯通
+frame #0: GC_generic_malloc_many                     ← py_json_loads 解析崩
+frame #5: backend_datasrc_etf_listing___listing_dates_cached + 128
+```
+
+### 下一队列（批次一百六十五）
+
+1. `py_json_loads` 输入指针（etf_listing 缓存 JSON）——先确认传入的是否合法字符串
+2. `py_pd_read_parquet` 真实实现（2636 parquet / 669 MB）——跑出指标的最后一环
+3. -O3 longjmp 误编译（`ZETA_NO_OPT=1` 可对照）
