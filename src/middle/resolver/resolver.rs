@@ -81,6 +81,13 @@ pub struct Resolver {
     py_mangled_to_module: RefCell<std::collections::HashMap<String, String>>,
     /// PY-A: modules already loaded from disk (recursion / duplicate guard).
     py_loaded_modules: RefCell<std::collections::HashSet<String>>,
+    /// resolved file path → the module name it was loaded under. The SAME file is
+    /// reachable under two names (`strategies.code.jq_shim` vs the bare
+    /// `jq_shim`, both on sys.path), and each name got its own prefix — so a
+    /// consumer importing the bare form emitted `jq_shim__new_context` while the
+    /// definition was emitted as `strategies_code_jq_shim__new_context`
+    /// (undefined). Canonicalize onto the first name loaded.
+    py_loaded_paths: RefCell<std::collections::HashMap<std::path::PathBuf, String>>,
     /// PY-A: directory of the file being compiled (module search root).
     py_source_dir: RefCell<Option<std::path::PathBuf>>,
     /// PY-A: the file being compiled — the value of `__file__`.
@@ -139,6 +146,7 @@ impl Resolver {
             py_module_reexports: RefCell::new(std::collections::HashMap::new()),
             py_mangled_to_module: RefCell::new(std::collections::HashMap::new()),
             py_loaded_modules: RefCell::new(std::collections::HashSet::new()),
+            py_loaded_paths: RefCell::new(std::collections::HashMap::new()),
             py_source_dir: RefCell::new(None),
             source_file: RefCell::new(None),
             argparse_kinds: RefCell::new(std::collections::HashMap::new()),
@@ -2015,10 +2023,57 @@ impl Resolver {
         let (path, is_py) = match self.find_py_module_file(module) {
             Some(v) => v,
             None => {
+                // The bare spelling of an ALREADY-LOADED module (`from jq_shim
+                // import X` while the file was loaded as
+                // `strategies.code.jq_shim`): the project puts the strategy
+                // directory on sys.path at runtime, so both spellings are the
+                // same file. Without this the consumer emitted
+                // `jq_shim__new_context` while the definition lived under
+                // `strategies_code_jq_shim__new_context` (undefined). Alias onto
+                // the loaded module when exactly one matches by basename.
+                let hits: Vec<String> = self
+                    .py_loaded_modules
+                    .borrow()
+                    .iter()
+                    .filter(|m| {
+                        m.rsplit('.').next() == Some(module)
+                            || m.split('.').last() == Some(module)
+                    })
+                    .cloned()
+                    .collect();
+                if hits.len() == 1 {
+                    self.py_module_aliases
+                        .borrow_mut()
+                        .insert(module.to_string(), hits[0].clone());
+                    return true;
+                }
                 self.py_loaded_modules.borrow_mut().remove(module);
                 return false;
             }
         };
+        // Same FILE under another name? Alias onto the already-loaded module so
+        // both spellings share one prefix (`<canonical>__member`). Without this
+        // the second spelling defined/emit lookups under a DIFFERENT prefix and
+        // every member reference became an undefined symbol (measured:
+        // `_jq_shim__new_context` / `_jq_shim___LocalPortfolio`).
+        {
+            let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            let existing = self.py_loaded_paths.borrow().get(&key).cloned();
+            match existing {
+                Some(canon) if canon != module => {
+                    self.py_module_aliases
+                        .borrow_mut()
+                        .insert(module.to_string(), canon);
+                    return true;
+                }
+                Some(_) => {}
+                None => {
+                    self.py_loaded_paths
+                        .borrow_mut()
+                        .insert(key, module.to_string());
+                }
+            }
+        }
         // `__package__` anchor for relative imports: a package's `__init__`
         // anchors to itself; a submodule anchors to its parent package.
         {
@@ -2259,7 +2314,16 @@ impl Resolver {
                 if crate::middle::pylib::find_member(src_mod, src_mem).is_some() {
                     continue;
                 }
-                let mangled = format!("{}__{}", src_mod.replace('.', "_"), src_mem);
+                // Same canonicalization as `py_member_call`: the definition may
+                // live under the OTHER spelling of the same file
+                // (`jq_shim__OrderCost` vs `strategies_code_jq_shim__OrderCost`).
+                let canon = self
+                    .py_module_aliases
+                    .borrow()
+                    .get(src_mod)
+                    .cloned()
+                    .unwrap_or_else(|| src_mod.clone());
+                let mangled = format!("{}__{}", canon.replace('.', "_"), src_mem);
                 out.insert(alias.clone(), mangled);
             }
         }

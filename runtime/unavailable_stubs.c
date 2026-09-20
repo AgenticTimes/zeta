@@ -153,3 +153,7 @@ int64_t __attribute__((weak)) sort_data(void) { return zt_unavailable("_sort_dat
 int64_t __attribute__((weak)) submit_order(void) { return zt_unavailable("_submit_order"); }
 int64_t __attribute__((weak)) timestamp(void) { return zt_unavailable("_timestamp"); }
 int64_t __attribute__((weak)) to_pydatetime(void) { return zt_unavailable("_to_pydatetime"); }
+
+// nautilus engine constructors — never reached with `--engine local`.
+int64_t __attribute__((weak)) nautilus_trader_backtest_engine__BacktestEngine(void) { return zt_unavailable("_nautilus_trader_backtest_engine__BacktestEngine"); }
+int64_t __attribute__((weak)) nautilus_trader_model_objects__Money(void) { return zt_unavailable("_nautilus_trader_model_objects__Money"); }

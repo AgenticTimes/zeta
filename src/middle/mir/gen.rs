@@ -106,6 +106,11 @@ pub struct MirGen {
     global_consts: HashMap<String, crate::middle::ctfe::value::ConstValue>,
     // Preserve original source-level type strings for parameters (e.g., "*mut u64")
     source_types: HashMap<u32, String>,
+    /// NAME → element count for a `x = [ … ]` literal binding. `f(*x)` used to
+    /// read the count from `Type::Array(_, Literal(n))`; now that non-float list
+    /// literals are DynamicArrays that type is gone, so the count is remembered
+    /// here (a runtime length cannot drive a compile-time unroll).
+    array_lit_lens: HashMap<String, usize>,
     /// Tracks pointee element width (in bytes) for pointer-typed expression IDs.
     /// Populated by the offset/add handler, used when generating Store/Deref.
     pointee_widths: HashMap<u32, u8>,
@@ -207,6 +212,7 @@ impl MirGen {
             name_to_id: HashMap::new(),
             global_consts: HashMap::new(),
             source_types: HashMap::new(),
+            array_lit_lens: HashMap::new(),
             pointee_widths: HashMap::new(),
             type_decls: HashMap::new(),
             shared_type_decls: HashMap::new(),
@@ -1189,6 +1195,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         });
                     }
                 } else if let AstNode::Var(name) = &**lhs {
+                    // Remember the literal's element count for `f(*x)` below.
+                    if let AstNode::ArrayLit(items) = &**rhs {
+                        self.array_lit_lens.insert(name.clone(), items.len());
+                    }
                     // PY-A: Python-style bare assignment — implicitly declare
                     // the variable when it is not already bound (function
                     // locals; module-level variables are a later item).
@@ -5465,6 +5475,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     let is_dict = receiver.is_none()
                         || matches!(receiver.as_deref(), Some(AstNode::Var(v)) if v == "dict");
                     if is_dict {
+                        // A LITERAL key list is built inline as a dict literal:
+                        // a literal list lowers to a StackArray (no `[cap|len]`
+                        // header), so the runtime helper read a garbage length and
+                        // walked off the buffer — measured as a SEGV inside
+                        // `py_map_fromkeys` during `wufu_constants`' module init.
+                        if let AstNode::ArrayLit(items) = &args[0] {
+                            let val_expr = match args.get(1) {
+                                Some(v) => v.clone(),
+                                None => AstNode::Lit(0),
+                            };
+                            return self.lower_expr(&AstNode::DictLit {
+                                entries: items
+                                    .iter()
+                                    .map(|k| (k.clone(), val_expr.clone()))
+                                    .collect(),
+                            });
+                        }
                         let keys = self.lower_expr(&args[0]);
                         let keys_are_str = matches!(
                             self.type_map.get(&keys),
@@ -6535,7 +6562,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             let arr_id = self.lower_expr(expr);
                             let n = match self.type_map.get(&arr_id).cloned() {
                                 Some(Type::Array(_, ArraySize::Literal(n))) => n,
-                                _ => 0,
+                                // Non-float list literals are DynamicArrays now,
+                                // so fall back to the remembered literal length
+                                // (0 would silently drop every argument).
+                                _ => match &**expr {
+                                    AstNode::Var(v) => {
+                                        self.array_lit_lens.get(v).copied().unwrap_or(0)
+                                    }
+                                    _ => 0,
+                                },
                             };
                             for i in 0..n {
                                 let idx_id = self.next_id();
@@ -9152,19 +9187,54 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // That is the UB behind the pandas cluster's Bus errors / SEGVs
                 // (`idx: lt(vec, str) = []` + `idx.append(str(i))` in
                 // pylib/pandas.z) and behind t207's `len(xs)` staying 0.
-                if size == 0 {
+                // Lower the elements ONCE — the branch below decides the
+                // representation, and lowering twice would duplicate side effects.
+                let mut lowered_elems = Vec::new();
+                for element in elements {
+                    lowered_elems.push(self.lower_expr(element));
+                }
+                let elem_ty_pre = self.get_common_element_type(&lowered_elems);
+                // A Python list literal must be a GROWABLE list with the
+                // `[cap|len]` header: every vec_* runtime call (concat /
+                // fromkeys / len / index / push) reads that header. As a
+                // StackArray those calls read 16 bytes BEFORE the buffer and
+                // walked off it — measured as a SEGV in `py_map_fromkeys`, from
+                // `wufu_constants`' `dict.fromkeys(GLOBAL_ETF_POOL + …)`.
+                // FLOAT lists keep the StackArray form: `vec_push` is an i64
+                // channel, so an f64 element would be reinterpreted as its bit
+                // pattern (t56/t139 went red when EVERY literal became dynamic).
+                if size == 0 || !matches!(elem_ty_pre, Type::F32 | Type::F64) {
+                    let start = if size == 0 { Vec::new() } else { lowered_elems };
+                    let elem_ty = if size == 0 { Type::I64 } else { elem_ty_pre };
                     let capacity_id = self.next_id();
-                    self.exprs.insert(capacity_id, MirExpr::IntLit(0));
+                    self.exprs.insert(capacity_id, MirExpr::IntLit(size as i64));
                     self.type_map.insert(capacity_id, Type::I64);
+                    let h = self.next_id();
                     self.stmts.push(MirStmt::Call {
                         func: "zeta_dynarray_new".to_string(),
                         args: vec![capacity_id],
-                        dest: id,
+                        dest: h,
                         type_args: vec![],
                     });
-                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.exprs.insert(h, MirExpr::Var(h));
                     self.type_map
-                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                        .insert(h, Type::DynamicArray(Box::new(elem_ty.clone())));
+                    for e in start {
+                        let sink = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "vec_push".to_string(),
+                            args: vec![h, e],
+                            dest: sink,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(sink, MirExpr::Var(sink));
+                        self.type_map
+                            .insert(sink, Type::DynamicArray(Box::new(elem_ty.clone())));
+                        self.stmts.push(MirStmt::Assign { lhs: h, rhs: sink });
+                    }
+                    self.exprs.insert(id, MirExpr::Var(h));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(elem_ty)));
                     return id;
                 }
 
@@ -9173,14 +9243,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 if size <= 20000 {
                     // Reasonable stack size limit
 
-                    // Lower each element expression
-                    let mut element_ids = Vec::new();
-                    for element in elements {
-                        let elem_id = self.lower_expr(element);
-                        element_ids.push(elem_id);
-                    }
-
-                    // Clone element_ids before moving it
+                    let element_ids = lowered_elems;
                     let element_ids_clone = element_ids.clone();
 
                     // Create StackArray expression
@@ -9372,6 +9435,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 let base_ty_pre = self.type_map.get(&bid).cloned().unwrap_or(Type::I64);
                 // PY-A: negative index `arr[-k]` → `arr[n-k]` for arrays with a
                 // compile-time-known size (Python semantics).
+                // A DynamicArray base needs the count at RUNTIME: `arr[-k]` →
+                // `arr[vec_len(arr) - k]`. Previously only compile-time-sized
+                // arrays were folded, so `data[-1]` on a list ran `array_get(-1)`
+                // and read out of bounds (t24 printed 4 instead of 40).
+                let mut negative_dyn_index: Option<u32> = None;
                 let index: Box<AstNode> = match (&**index, &base_ty_pre) {
                     (
                         AstNode::UnaryOp { op, expr },
@@ -9382,6 +9450,37 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         }
                         _ => index.clone(),
                     },
+                    (AstNode::UnaryOp { op, expr }, Type::DynamicArray(_)) if op == "-" => {
+                        match &**expr {
+                            AstNode::Lit(k) if *k > 0 => {
+                                let len_id = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "vec_len".to_string(),
+                                    args: vec![bid],
+                                    dest: len_id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(len_id, MirExpr::Var(len_id));
+                                self.type_map.insert(len_id, Type::I64);
+                                let k_id = self.next_id();
+                                self.exprs.insert(k_id, MirExpr::IntLit(*k));
+                                self.type_map.insert(k_id, Type::I64);
+                                let idx = self.next_id();
+                                self.exprs.insert(
+                                    idx,
+                                    MirExpr::BinaryOp {
+                                        op: "-".to_string(),
+                                        left: len_id,
+                                        right: k_id,
+                                    },
+                                );
+                                self.type_map.insert(idx, Type::I64);
+                                negative_dyn_index = Some(idx);
+                                index.clone()
+                            }
+                            _ => index.clone(),
+                        }
+                    }
                     _ => index.clone(),
                 };
                 // PY-A: comma subscript `a[i, j]` (pandas `.iloc[r, c]` /
@@ -9405,7 +9504,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
-                let iid = self.lower_expr(&index);
+                let iid = match negative_dyn_index {
+                    Some(pre) => pre,
+                    None => self.lower_expr(&index),
+                };
 
                 // Check if base is an array type (dynamic or static)
                 let base_ty = self.type_map.get(&bid).cloned().unwrap_or(Type::I64);
