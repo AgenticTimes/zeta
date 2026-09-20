@@ -158,7 +158,12 @@ class DataFrame:
         return DataFrame(py_df_loc(self, mask))
 
     def iloc(self, mask: lt(vec, i64)) -> DataFrame:
-        # `df.iloc[<掩码>]` 在本模型里与 loc 同义（都是按行取子集）。
+        # `df.iloc[<掩码>]` 在本模型里与 loc 同义（按行取子集）。
+        # 切片/空选择（`df.iloc[0:0]`）不是向量 ⇒ 返回**同列的空帧**；
+        # 此前那个 0 直接进 `py_df_loc`，运行期响亮 abort（实测
+        # `remove_extreme_return_bars` 的 `if not parts:` 分支）。
+        if py_is_vec(mask) == 0:
+            return DataFrame(py_df_empty_like(self))
         return self.loc(mask)
 
     def reset_index(self, drop=True) -> DataFrame:
@@ -390,7 +395,9 @@ def read_parquet(path) -> DataFrame:
     return DataFrame(zeta_parquet_read_map(path))
 
 
-def concat(frames: [DataFrame], ignore_index=False):
+def concat(frames: [DataFrame], ignore_index=False) -> DataFrame:
+    # 必须有返回注解：未注解时返回类型默认 I64，调用方（`remove_extreme_return_bars`
+    # 的 `return pd.concat(parts, …), removed`）把帧当整数 ⇒ 帧列数/行数全 0。
     first = frames[0]
     colnames = first.column_names()
     ncols = len(colnames)

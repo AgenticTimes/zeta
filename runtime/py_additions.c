@@ -24,6 +24,9 @@ void zt_map_json_mismatch(const char*, int64_t);
 int64_t map_get(int64_t, int64_t);
 int64_t map_str_key(int64_t);
 int64_t py_map_contains(int64_t, int64_t);
+#include <dlfcn.h>
+#include <execinfo.h>
+
 int64_t vec_push(int64_t, int64_t);
 int64_t zeta_dynarray_new(int64_t cap);
 
@@ -923,6 +926,7 @@ int64_t vec_abs(int64_t v) { return zt_maybe_vec_arity1(v) ? py_vec_abs(v) : v; 
 // (`mask = ret > max_abs_daily_return`).
 static int64_t zt_vec_cmp(int64_t vec, double rhs, int kind) {
     if (getenv("ZT_PROBE_LOC")) fprintf(stderr, "[probe] vec_cmp kind=%d vec=%lld rhs=%g\n", kind, (long long)vec, rhs);
+    int zt_probe = getenv("ZT_PROBE_LOC") != NULL;
     if (!vec) return vec;
     int64_t n = zt_vec_len(vec);
     int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
@@ -944,6 +948,7 @@ static int64_t zt_vec_cmp(int64_t vec, double rhs, int kind) {
         }
         vec_push(out, r ? 1 : 0);
     }
+    if (zt_probe) fprintf(stderr, "[probe] vec_cmp out=%lld n=%lld\n", (long long)out, (long long)n);
     return out;
 }
 // `_i` variants take an integer rhs, so the compiler can pass an i64 literal
@@ -1066,6 +1071,28 @@ int zt_map_or_vec_truthy(int64_t v);
 // `df.itertuples(index=False)` / `df.iterrows()` — the column-map model has no
 // namedtuple, so each ROW is a map {column -> value}. Rows come back as a vec of
 // map handles; `row.<col>` reaches them through the map-attribute path.
+// Is the handle a plausible dynamic array? Used by the shim to tell a MASK from
+// a slice/absent key (`df.iloc[0:0]` arrives as 0).
+int64_t py_is_vec(int64_t v) { return zt_maybe_vec(v) ? 1 : 0; }
+
+// A frame with the SAME columns and zero rows (`df.iloc[0:0]`). Previously the
+// empty-slice case reached `py_df_loc` with mask 0 and aborted ("mask is
+// missing") — measured in `remove_extreme_return_bars`'s `if not parts:` path.
+int64_t py_df_empty_like(int64_t frame) {
+    if (!frame) return 0;
+    int64_t map = *(int64_t*)frame;
+    if (!map) return 0;
+    int64_t nm = map_new();
+    int64_t names = map_keys(map);
+    int64_t n = zt_vec_len(names);
+    for (int64_t i = 0; i < n; i++) {
+        map_insert(nm, ((int64_t*)names)[i], zeta_dynarray_new(1));
+    }
+    int64_t* out = (int64_t*)GC_malloc(sizeof(int64_t));
+    out[0] = nm;
+    return (int64_t)out;
+}
+
 // `series.clip(lower=..., upper=...)` — element-wise clamp of a numeric column
 // (strings are parsed; unparsable ones pass through unchanged).
 int64_t py_vec_clip(int64_t vec, double lo, double hi, int64_t has_lo, int64_t has_hi);
@@ -1256,7 +1283,22 @@ int64_t py_df_itertuples(int64_t frame, int64_t with_index) {
 }
 
 int64_t py_df_loc(int64_t frame, int64_t mask) {
-    if (getenv("ZT_PROBE_LOC")) fprintf(stderr, "[probe] df_loc frame=%lld mask=%lld\n", (long long)frame, (long long)mask);
+    if (getenv("ZT_PROBE_LOC")) {
+        void* ra = __builtin_return_address(0);
+        Dl_info di;
+        const char* sym = (dladdr(ra, &di) && di.dli_sname) ? di.dli_sname : "?";
+        fprintf(stderr, "[probe] df_loc frame=%lld mask=%lld from=%s\n",
+                (long long)frame, (long long)mask, sym);
+        {
+            void* bt[12];
+            int nb = backtrace(bt, 12);
+            char** syms = backtrace_symbols(bt, nb);
+            for (int i = 1; i < nb && i < 7; i++) {
+                fprintf(stderr, "[probe]   bt[%d] %s\n", i, syms ? syms[i] : "?");
+            }
+            free(syms);
+        }
+    }
     if (!frame) return 0;
     int64_t map = *(int64_t*)frame;
     if (!map) return 0;

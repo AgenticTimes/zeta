@@ -7275,3 +7275,25 @@ faithful 复刻（`df["stock_code"] = "000300.XSHG"` 之后调用函数体）后
 ⇒ **IR 完全正确**（存了也读了），但运行期第二次执行时 `loc` 读到 0，
 而且那次 `py_vec_not` 的输入只有 1 个元素 ⇒ 现场是「第二次执行时槽位/实参错位」。
 （`ZT_PROBE_LOC=1` 探针留在运行期，后续继续用。）
+
+### 批次 247：两处修复 —— `iloc[0:0]` 空切片 + `pd.concat` 缺返回注解
+
+1. **`df.iloc[0:0]`**：切片不是向量，shim 的 `iloc(mask: lt(vec,i64))` 收到 0 ⇒ 直接进
+   `py_df_loc` 响亮 abort。运行期新增 `py_is_vec` / `py_df_empty_like`，shim 的 `iloc`
+   在 key 不是向量时返回**同列的空帧**（`remove_extreme_return_bars` 的 `if not parts:` 分支）。
+2. **`pd.concat` 缺返回注解**：未注解 ⇒ 返回类型默认 I64 ⇒ 调用方
+   （`return pd.concat(parts, …), removed`）把帧当整数，`c 0 0 / d 0 0`。
+   补上 `-> DataFrame` 后：`c 3 2 / d 2 2` ✓。
+   （同一族：shim 里**函数都必须写返回注解**，批次 99 的老规矩。）
+
+诊断手段（本轮靠它定位）：运行期探针加 `__builtin_return_address` + `dladdr`；
+再到 lldb 里给 `py_df_loc` 加 `$x1 == 0` 条件断点，拿到完整栈
+`py_df_loc ← DataFrame::loc ← DataFrame::iloc ← reb + 932` —— 一眼看出是 `iloc[0:0]`。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+**新阻塞**：链接报 `Undefined symbols: _[dynamic]str__map`（`fetch_stocks` 里
+`result["stock_code"].map(lambda x: self._normalize_stock_code(str(x)))`）。
+`pd.concat` 注解修好后 receiver 被正确判成「字符串向量」⇒ 派发到 `[dynamic]str__map`；
+运行期还没有这个符号。它吃的是 **lambda（可能带闭包环境）**，需要先确认编译器传参
+约定（`(vec, fn)` 还是 `(vec, fn, env)`）再实现，避免静默错值。
