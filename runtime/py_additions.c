@@ -755,7 +755,7 @@ int64_t py_vec_add_unique(int64_t vec, int64_t x, int64_t elem_is_str) {
         if (v == x) return vec;
         if (v && x && elem_is_str && strcmp((const char*)v, (const char*)x) == 0) return vec;
     }
-    vec_push(vec, x);
+    vec = vec_push(vec, x);
     return vec;
 }
 
@@ -1105,6 +1105,16 @@ int zt_map_or_vec_truthy(int64_t v);
 // a slice/absent key (`df.iloc[0:0]` arrives as 0).
 int64_t py_is_vec(int64_t v) { return zt_maybe_vec(v) ? 1 : 0; }
 
+// Hash a `map<str, _>` key slot. Small strings can arrive PACKED into the
+// 8-byte slot (`sz.15998` = 0x38393935312e7a73) instead of as a `char*`, and
+// `map_str_key` dereferences its argument (`ldrb [x20]`) — measured as a SEGV
+// inside inlined `map_str_key` from `py_df_groupby`. Non-pointer values hash
+// as opaque integers, which keeps equal values equal.
+int64_t zt_safe_str_key(int64_t v) {
+    if (v > 0x100000000LL && v < 0x7fffffffffffLL) return map_str_key(v);
+    return v;
+}
+
 // A frame with the SAME columns and zero rows (`df.iloc[0:0]`). Previously the
 // empty-slice case reached `py_df_loc` with mask 0 and aborted ("mask is
 // missing") — measured in `remove_extreme_return_bars`'s `if not parts:` path.
@@ -1227,6 +1237,13 @@ int64_t py_df_groupby(int64_t frame, int64_t key) {
     int64_t keys_vec = map_get(map, k);
     if (!keys_vec) return out;
     int64_t n = zt_vec_len(keys_vec);
+    if (getenv("ZT_PROBE_LOC")) {
+        fprintf(stderr, "[probe] groupby keyvec=%lld n=%lld first=%lld ncols_m=%lld\n",
+                (long long)keys_vec, (long long)n,
+                (long long)(n > 0 ? ((int64_t*)keys_vec)[0] : 0),
+                (long long)zt_vec_len(map_keys(map)));
+        fflush(stderr);
+    }
 
     // Column list is needed to rebuild each sub-frame.
     int64_t col_names = map_keys(map);
@@ -1236,11 +1253,14 @@ int64_t py_df_groupby(int64_t frame, int64_t key) {
     int64_t pairs = zeta_dynarray_new(4);
 
     for (int64_t i = 0; i < n; i++) {
-        const char* kv = (const char*)((int64_t*)keys_vec)[i];
+        int64_t kraw = ((int64_t*)keys_vec)[i];
         // Keys in a `map<str, _>` are HASHED (`map_str_key`); the raw pointer
         // differs per row even for equal strings (each value is its own
         // allocation), so grouping by pointer produced one group per row.
-        int64_t hk = map_str_key((int64_t)kv);
+        // Small strings can also arrive PACKED into the 8-byte slot
+        // (`sz.15998` = 0x38393935312e7a73), so only dereference what looks like
+        // a real pointer: `map_str_key` read `[x20]` on a packed value and SEGV'd.
+        int64_t hk = zt_safe_str_key(kraw);
         int64_t idx = map_get(seen, hk);
         int64_t pair = 0;
         if (idx) {
@@ -1249,9 +1269,9 @@ int64_t py_df_groupby(int64_t frame, int64_t key) {
             int64_t* p = (int64_t*)GC_malloc(2 * sizeof(int64_t));
             int64_t* sub = (int64_t*)GC_malloc(sizeof(int64_t));
             sub[0] = map_new();
-            p[0] = (int64_t)kv;
+            p[0] = kraw;
             p[1] = (int64_t)sub;
-            vec_push(pairs, (int64_t)p);
+            pairs = vec_push(pairs, (int64_t)p);
             map_insert(seen, hk, zt_vec_len(pairs));
             pair = (int64_t)p;
         }
@@ -1264,7 +1284,7 @@ int64_t py_df_groupby(int64_t frame, int64_t key) {
         for (int64_t c = 0; c < ncols; c++) {
             // `map_keys` yields the STORED key representation; `map_get`/`map_insert`
             // in this runtime key `map<str, _>` by `map_str_key`, so hash here.
-            int64_t hc = map_str_key(((int64_t*)col_names)[c]);
+            int64_t hc = zt_safe_str_key(((int64_t*)col_names)[c]);
             int64_t col = map_get(map, hc);
             if (!col) continue;
             smap = map_resolve(smap);

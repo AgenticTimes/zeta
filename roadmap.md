@@ -7489,3 +7489,24 @@ struct-field store 目前按 i64 走，需要按字段类型 bitcast/float store
 
 度量：官方 194/194、python_style 274/2（`t228` 本轮偶发失败、单跑与重跑均通过——非确定性，
 与批次 241 记录的现象一致）、语料 39/39。
+
+### 批次 260：`@dataclass` 里的 `list()`/`dict()` 默认值 → 字面量
+
+`jq_shim._G` 有 `global_etf_pool: list[str] = list()` 这样的字段。修好「默认值生效」之后，
+这个默认值被**真的用上**了，于是链接报 `Undefined symbols: _list`（builtin `list` 没有运行期符号）。
+映射：`list()` → `[]`（可增长列表）、`dict()` → `{}`。修复后驱动重新可编译。
+
+### 批次 261：小字符串会**打包进 64 位槽**，`map_str_key` 不能无条件解引用
+
+`py_df_groupby` 崩溃反汇编显示 `ldrb w10, [x20]`（内联的 `map_str_key` 读首字节）。
+打印 key 向量首元素得 `4051332240417651315` = 十六进制 `0x38393935312e7a73` = ASCII **`sz.15998`**
+⇒ 这是**打包进 8 字节的小字符串**（不是 `char*`）。`map_str_key` 会把它当地址解引用 ⇒ SEGV。
+
+修法：新增 `zt_safe_str_key(v)` —— 看着像指针（>4G 且 <128T）才 `map_str_key`，
+否则当作**不透明整数**参与哈希（等值仍相等）。`py_df_groupby` 的 key 与列名两处都改用它。
+
+**重大进展**：`validate_and_repair_stock_ohlcv` 现在**整段跑完并返回**，
+崩点移到 `MarketDataFetcher::fetch_stocks + 3324`（`cached is not None and len(cached) > 0`）
+⇒ `_load_cache` 返回的帧坏 —— 下一批查它的 tuple 返回 / 解构。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。

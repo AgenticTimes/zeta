@@ -997,8 +997,32 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
             fields.push((n.clone(), t.clone()));
             // Parameters keep DECLARATION order (the marker index must match).
             init_params.push((n.clone(), t.clone()));
+            // `x: list[str] = list()` / `= dict()` — a CALL default. Lowering it
+            // verbatim emitted a call to the builtin `list`, which has no runtime
+            // symbol (`Undefined symbols: _list` in `jq_shim._G`). `list()` IS an
+            // empty growable list, so map it to the literal form the ArrayLit
+            // lowering already handles; same for `dict()`.
+            let norm_default = |d: &AstNode| -> AstNode {
+                if let AstNode::Call {
+                    receiver: None,
+                    method,
+                    args,
+                    ..
+                } = d
+                {
+                    if args.is_empty() {
+                        match method.as_str() {
+                            "list" => return AstNode::ArrayLit(vec![]),
+                            "dict" => return AstNode::DictLit { entries: vec![] },
+                            _ => {}
+                        }
+                    }
+                }
+                d.clone()
+            };
             match def {
                 Some(d) => {
+                    let d = &norm_default(d);
                     field_inits.push((n.clone(), d.clone()));
                     dataclass_defaults.push(AstNode::ExprStmt {
                         expr: Box::new(AstNode::Call {
