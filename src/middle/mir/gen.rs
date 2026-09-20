@@ -4554,6 +4554,29 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             return self.lower_expr(&rewritten);
                         }
                     }
+                    // A module-PRIVATE call (`_source_score`) from inside a
+                    // CLOSURE: the child MirGen inherits `symbol_renames`, but the
+                    // enclosing function never called that name itself, so the
+                    // table can be empty and the closure emitted a bare
+                    // `_source_score` — the linker then resolved it to nothing
+                    // (measured: `__source_score` undefined, from
+                    // `_ranked_fetch_sources`'s `key=lambda s: … _source_score(s, bs_code)`).
+                    // Rebuild the mangled name from the current module.
+                    if method.starts_with('_') && !method.starts_with("__") {
+                        if !self.current_module.is_empty() {
+                            let m = self.current_module.clone();
+                            let mangled =
+                                format!("{}__{}", m.replace('.', "_"), method);
+                            let rewritten = AstNode::Call {
+                                receiver: None,
+                                method: mangled,
+                                args: args.clone(),
+                                type_args: type_args.clone(),
+                                structural: false,
+                            };
+                            return self.lower_expr(&rewritten);
+                        }
+                    }
                 }
                 // PY-A: `with X [as n]:` desugar — route the context protocol.
                 // Library handles use their tagged method (PyLock → mutex
