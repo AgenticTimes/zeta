@@ -5840,3 +5840,74 @@ print(size()); reg("b", 2); print(size())
 2. -O3 误编译 longjmp 返回路径（可用 `ZETA_NO_OPT` 对比 + 堆大函数体的最小复现）
 3. 数据层 `py_pd_read_parquet` 真实实现（2636 个 parquet/669MB 在 REasyQuant/data/）
 4. 85+22 条桩按「运行真正撞到哪条」逐条替换（`ZETA_LENIENT_STUBS=1` 一次跑全）
+
+---
+
+## 批次一百五十七（2026-09-19）：`from mod import VAR` + `pd.DataFrame(columns=…)` + **CPython 参考基准**
+
+### 1. `from <模块> import <变量>`（**已修**，t273）
+
+**函数**导入有解析路径（调用走 `py_member_call` → `<mod>__<func>`），**变量**导入没有：
+`AstNode::Var` 的降级只有 `symbol_renames`（对**根文件的 main** 是空表）与 nonlocal 两条分支
+⇒ `D` 绑成未定义的新槽位（MIR 里是自引用 `8: Var(8)`）⇒ `len(D)` = 0；当 dict 用则 SEGV。
+
+| 2 文件最小复现 | 之前 | 现在 |
+|---|---|---|
+| `from regmod import reg, size`（不导入变量） | `1 2` ✓ | ✓ |
+| `from regmod import D, reg, size` | **SEGV** | `1 2 2` ✓ |
+| `from regmod2 import D` + `len(D)` | **0** | `1` ✓ |
+
+修法：`Var` 降级里新增一条 —— 命中 `py_member_aliases` 且目标模块在 `py_user_modules`
+时改写为该模块的 env 全局 `<mod>__<member>`（loader 已把每个模块级绑定存进 env）。
+局部名优先，不改变遮蔽语义。
+
+### 2. `pd.DataFrame(columns=[…])`（**已修**，t274）
+
+通用路径丢掉 kwarg 名、把值当 `data` 传 ⇒ 列映射里存进一个 Vec ⇒ `len(df)` /`.columns` SEGV。
+修法（三步都必要，见 commit `8c0b4cf4`）：识别 kwargs-only → 按 `columns=` 建
+「名字 → 空列」dict **字面量**（字面量列表是 StackArray，走运行时 helper 会读成长度 0）
+→ 用**原 receiver** 重入普通路径（直接发自由调用会拿不到返回类型 ⇒ `e.columns` 退化成
+字段读 + `array_len` = 0）。
+
+### 3. ⭐ **CPython 参考基准**（本批最重要的产出）
+
+**CPython 跑项目文档里的入口也失败**，错误与我们的检查一致：
+
+```bash
+$ REPLAYQUANT_LOCAL=1 .venv/bin/python strategies/code/jq_wufu_local.py --start 2024-01-02 --end 2024-02-29
+ValueError: Unknown universe: wufu. Available: ['small_scale', 'hs300', 'csi500', …]
+```
+
+⇒ `get_universe("wufu")` 需要 `backend.strategy.wufu_constants` **先被 import**
+（wufu universe 由它的模块级 `_register_into_datasrc()` 注册），而入口在第 67 行调用
+`get_universe` **之后**才 import 它 —— **项目自身的缺陷，不是编译差异**。
+
+补上注册再跑（`REasyQuant/_zeta_local_drv.py`，本项目侧的**临时对照程序**，不入库）：
+
+```json
+{"initial_cash": 1000000.0, "final_value": 994575.84, "return": -0.5424,
+ "trading_days": 37, "engine": "local",
+ "final_holdings": [{"code":"159509.XSHE","amount":260900,"avg_cost":1.2804},
+                    {"code":"510880.XSHG","amount":115300,"avg_cost":2.8972},
+                    {"code":"515220.XSHG","amount":264500,"avg_cost":1.2087}]}
+```
+
+**验收目标由此明确**：编译后的程序跑同一段代码（含注册步骤）应给出**同样的指标**。
+
+### 度量
+
+| 口径 | before | after |
+|---|---|---|
+| python_style | 269/272 | **271/274**（+t273/t274） |
+| 官方 / 语料 | 194/194 · 38/38 | 持平 |
+| 对照程序（driver）编译 | 链接失败 | 仍差 `_DataFrame`（个别调用形状未覆盖） |
+
+### 下一队列（批次一百五十八）
+
+1. **对照程序剩余的 `_DataFrame`**：`data_cleaning.code_coverage_stats` 里
+   `pd.DataFrame(columns=[…])` 的 MIR 仍是 `DataFrame_2 args 9,10`（两个位置参数）——
+   与 t274 通过的形状不同，需 dump 出这两个 id 的来源再定；`nav.py` 的
+   `pd.DataFrame(index=…, dtype=…)` 同族
+2. -O3 误编译 longjmp 返回路径（`ZETA_NO_OPT=1` 可对照）
+3. 数据层 `py_pd_read_parquet` 真实实现（2636 parquet / 669MB）——**运行出真实结果的前置**
+4. 107 条桩按「运行真正撞到哪条」逐条替换（`ZETA_LENIENT_STUBS=1` 一次跑全）
