@@ -901,6 +901,27 @@ int64_t py_vec_abs(int64_t vec);
 static int zt_maybe_vec_arity1(int64_t v) { return v > 0x1000; }
 // weak: the shim (`pylib/pandas.z`) also emits a `pct_change` symbol, and the
 // program's own definition must win (measured `duplicate symbol '_pct_change'`).
+// `series.map(lambda …)` on a string vector: the MIR passes (vec, fn_ptr) — the
+// closure is compiled to a plain function (`__closure_N`), same convention as
+// `py_functools_reduce`. Used by `fetch_stocks`'s
+// `result["stock_code"].map(lambda x: …)`.
+int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
+int64_t zt_dyn_str_map(int64_t vec, int64_t fn) {
+    if (!vec) return vec;
+    if (!fn) {
+        fprintf(stderr, "PY-A: [dynamic]str::map called without a function\n");
+        abort();
+    }
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t r = ((int64_t(*)(int64_t))fn)(((int64_t*)vec)[i]);
+        int64_t pushed = vec_push(out, r);
+        if (pushed != out) out = pushed;
+    }
+    return out;
+}
+
 // The MIR emits the DYNAMIC-array method symbol `[dynamic]str::<m>` for a
 // vector receiver (`df["close"].pct_change()`); these are the actual targets.
 int64_t zt_dyn_str_pct_change(int64_t v) __asm__("_[dynamic]str__pct_change");

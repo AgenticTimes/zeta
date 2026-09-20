@@ -7297,3 +7297,25 @@ faithful 复刻（`df["stock_code"] = "000300.XSHG"` 之后调用函数体）后
 `pd.concat` 注解修好后 receiver 被正确判成「字符串向量」⇒ 派发到 `[dynamic]str__map`；
 运行期还没有这个符号。它吃的是 **lambda（可能带闭包环境）**，需要先确认编译器传参
 约定（`(vec, fn)` 还是 `(vec, fn, env)`）再实现，避免静默错值。
+
+### 批次 248：`[dynamic]str__map`（`series.map(lambda …)`）
+
+`pd.concat` 注解修好后，`fetch_stocks` 里
+`result["stock_code"].map(lambda x: self._normalize_stock_code(str(x)))` 的 receiver
+被正确判成字符串向量 ⇒ 派发到 `_[dynamic]str__map`，运行期缺这个符号（链接失败）。
+
+MIR 实证：`[dynamic]str::map(<vec>, <closure>)` 只传 **两个** 实参，闭包被编译成顶层
+函数 `__closure_0`（`param_indices: [("v", 1)]`）⇒ ABI 是 `(vec, fn_ptr)`，与
+`py_functools_reduce` 同一约定。
+
+运行期新增 `zt_dyn_str_map`（asm 名 `_[dynamic]str__map`）：逐元素 `fn(x)`，
+按 `vec_push` 的返回值回写句柄；`fn == 0` 时**响亮 abort**（绝不静默产出垃圾）。
+
+验证 `/tmp/mapz.z`：`a.map(lambda v: len(v))` → `len 2` ✓。
+
+度量：官方 194/194、python_style 274/2、语料 39/39 全绿。
+
+**崩点**：回到 `validate_and_repair_stock_ohlcv + 2884`（`report.output_rows = len(out)`），
+这次是 `map_keys + 60` —— `out` 的 map 是垃圾。`concat` 本身已在 `/tmp/cc.z` 验证正确
+（`c 3 2 / d 2 2`），所以嫌疑落在 `remove_extreme_return_bars` 的返回值经
+**tuple 解构**交给调用方这一段，下一批查。
