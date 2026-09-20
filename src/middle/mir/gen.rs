@@ -4125,6 +4125,90 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         }
                     }
                 }
+                // `pd.DataFrame(columns=[...])` / `pd.DataFrame(index=…, dtype=…)`
+                // — the KWARG-ONLY schema constructors. The kwarg NAME is dropped
+                // by the generic path, so the VALUE list was passed as `data`: the
+                // shim's ctor stored a Vec where a column map belongs and
+                // `len(df)` SEGV'd (measured). Build the map the ctor wants:
+                // each named column becomes an EMPTY column; a schema-less frame
+                // becomes an empty map. 10 `columns=` + 4 `index=/dtype=` sites in
+                // REasyQuant's data/ML layer hit this.
+                if method == "DataFrame"
+                    && !args.is_empty()
+                    && args.iter().all(|a| {
+                        matches!(a, AstNode::Call { method: km, args: ka, .. }
+                            if km == "__kwarg__" && ka.len() == 2)
+                    })
+                {
+                    let is_pd = match receiver.as_deref() {
+                        Some(AstNode::Var(v)) => {
+                            self.py_module_aliases.get(v).map_or(false, |m| m == "pandas")
+                        }
+                        None => self
+                            .py_member_target(&None, "DataFrame")
+                            .map_or(false, |(m, mem)| m == "pandas" && mem == "DataFrame"),
+                        _ => false,
+                    };
+                    if is_pd {
+                        let mut columns: Option<AstNode> = None;
+                        for a in args {
+                            if let AstNode::Call { method: km, args: ka, .. } = a {
+                                if km == "__kwarg__" && ka.len() == 2 {
+                                    if let AstNode::StringLit(n) = &ka[0] {
+                                        if n == "columns" {
+                                            columns = Some(ka[1].clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // A LITERAL column list is built as a dict literal of
+                        // `name: []` in MIR: a literal list lowers to a
+                        // StackArray (no `[cap|len]` header), so the runtime
+                        // helper below would read its length as 0 and produce an
+                        // EMPTY frame (measured: `len(df.columns)` was 0, not 2).
+                        // Non-literal lists (`list(fields)`, `df.columns`) are real
+                        // DynamicArrays and go through the helper.
+                        let data = match columns {
+                            Some(AstNode::ArrayLit(items)) => AstNode::DictLit {
+                                entries: items
+                                    .iter()
+                                    .map(|it| {
+                                        (
+                                            it.clone(),
+                                            AstNode::DynamicArrayLit {
+                                                elem_type: "str".to_string(),
+                                                elements: vec![],
+                                            },
+                                        )
+                                    })
+                                    .collect(),
+                            },
+                            Some(expr) => AstNode::Call {
+                                receiver: None,
+                                method: "zeta_df_with_columns".to_string(),
+                                args: vec![expr],
+                                type_args: vec![],
+                                structural: false,
+                            },
+                            None => AstNode::DictLit { entries: vec![] },
+                        };
+                        // Re-enter the ORDINARY path with a positional data
+                        // argument: it is the one that resolves the ctor symbol
+                        // (`pandas__DataFrame`) AND types the result
+                        // (`Named("DataFrame")`, which the later `.columns` /
+                        // `len()` dispatch needs). Emitting a bare free call here
+                        // left the result I64, so `e.columns` became a struct
+                        // field read + `array_len` → 0 (measured).
+                        return self.lower_expr(&AstNode::Call {
+                            receiver: receiver.clone(),
+                            method: "DataFrame".to_string(),
+                            args: vec![data],
+                            type_args: type_args.clone(),
+                            structural: false,
+                        });
+                    }
+                }
                 let member_call = self.py_member_call(receiver, method).or_else(|| {
                     let recv = receiver.as_ref()?;
                     let (root, parts) = Self::flatten_module_receiver(recv)?;

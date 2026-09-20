@@ -1,0 +1,15 @@
+// PY-A: `pd.DataFrame(columns=[...])` —— 只要 kwargs 的 schema 构造（批次 157）。
+// 通用路径会丢掉 kwarg 的**名字**、把值当 `data` 传，于是 shim 的列映射里存进一个
+// Vec ⇒ `len(df)`/`df.columns` 按 map 解释 ⇒ SEGV（实测）。修法：按 columns
+// 建出「名字 → 空列」的 map 再交给 ctor（无 columns 时给空 map）。
+// expect: 0
+// expect: 2
+// expect: 1
+import pandas as pd
+
+e = pd.DataFrame(columns=["a", "b"])
+print(len(e))
+print(len(e.columns))
+
+d = pd.DataFrame({"a": ["1"]})
+print(len(d))

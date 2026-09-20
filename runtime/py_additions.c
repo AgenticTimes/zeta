@@ -21,6 +21,7 @@ int64_t map_get(int64_t, int64_t);
 int64_t map_str_key(int64_t);
 int64_t py_map_contains(int64_t, int64_t);
 int64_t vec_push(int64_t, int64_t);
+int64_t zeta_dynarray_new(int64_t cap);
 
 // Python-style string equality (by content, not pointer)
 int64_t str_eq(int64_t a, int64_t b) {
@@ -939,6 +940,22 @@ int64_t py_map_fromkeys(int64_t keys, int64_t val, int64_t keys_are_str) {
     for (int64_t i = 0; i < n; i++) {
         int64_t k = keys_are_str ? map_str_key(((int64_t*)keys)[i]) : ((int64_t*)keys)[i];
         map_insert(m, k, val);
+    }
+    return m;
+}
+
+// `pd.DataFrame(columns=[...])` — the KWARG-ONLY schema constructor. The shim's
+// DataFrame is a column map (`map<str, vec<str>>`), so build one: each listed
+// column becomes an EMPTY column (matching "empty frame with this schema").
+// Without this the call fell to a bare `DataFrame` symbol (`_DataFrame`,
+// undefined) — 10 `columns=` sites in REasyQuant's data/ML layer.
+int64_t zeta_df_with_columns(int64_t names) {
+    int64_t m = map_new();
+    int64_t n = zt_vec_len(names);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t name = ((int64_t*)names)[i];
+        int64_t empty = zeta_dynarray_new(8);
+        map_insert(m, map_str_key(name), empty);
     }
     return m;
 }
