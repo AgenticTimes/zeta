@@ -9508,3 +9508,71 @@ consciousness/reality 四个（440+413+405+51=1,309，逐目录 `wc -l` 已复�
   既有判据（`run_all.sh:134` 要 `py_fail==0`，t231/t233 存量红）。三项数字
   official **194/194** · python_style **285 passed, 2 failed, 4 known-fail, 0 xpass** ·
   语料 **39/39 = 100%** —— 与批次 309/310 逐项相同 ⇒ 零基线位移。
+
+---
+
+## 批次 312（refactor 立即档 ⑧ 续 —— 轴 A 第五块：清掉 `src/bin/` 的一次性调试残渣，顺带撞出"CI 里根本不存在的性能门禁"）
+
+### 为什么这批不只是"少 1,009 行"
+`src/bin/*.rs` 由 cargo **自动发现**成 bin target，每次 `cargo build --release` 都编；
+更要紧的是它们**直接调编译器内部 API**（`parse_simd_type`、`skip_ws_and_comments0`、
+`parse_full_expr`、`Type::from_string`…）⇒ 只要它们还在，这些签名就动不得。
+轴 B/C 的每次重构都在给这 11 个从来没人跑的文件付税。
+
+### 判据（三条同时成立才删）
+1. 头部语义 = 一次性版本对齐/单点 print 调试（如 `//! Analyze v0.5.0 syntax issues`、
+   `//! Performance benchmarking for v0.3.24`），**不是** `#[test]`、不带断言、不进 CI；
+2. 全仓引用为零：`grep -rl <name>` 排除 `.git`/`target`/`conversations` 后只剩
+   `.codegraph/codegraph.db`（索引自身的陈旧条目）；
+3. `cargo check -p zetac --all-targets` 删后 rc=0（`--all-targets` 才真编 bin+test+example，
+   只 `cargo check` 会漏 —— 批次 309 的教训延续）。
+
+**保留**（有明确用途，不参与删除）：`zorb.rs`(315，包安装器 V1，头部带 usage)、
+`zeta-lsp.rs`(50，LSP 入口)、`indent_dump.rs`(14) 与 `pipeline_dump.rs`(59)（带
+`cargo run --release --bin …` 用法注释、且 `validate.md` 在引用）。
+
+删除清单（11 个，**1,009 行**）：`analyze_v0_5_0_syntax_issues` 266、`performance_benchmark` 257、
+`real_v0_5_0_compatibility` 160、`primezeta_compatibility_test` 82、`direct_array_test` 67、
+`test_array_parse` 44、`debug_simd` 44、`test_vector_from_string` 33、`debug_parse_type2` 26、
+`debug_parse_if` 17、`debug_ws` 13。
+（`performance_benchmark` 被删的理由：它是 v0.3.24 时代对 `parse_zeta` 打**内置字符串**的一次性
+计时，**不是** ⑪ 要的"端到端 `time zetac` 前后对照"基线 —— 后者本批另立工具，见下。）
+
+### `mir/gen.rs` 的 5 个 never-read 字段（15 行）：判成 (a) 类，删
+批次 311 把这条留给"要连带删写入侧"的怀疑；实测**根本没有写入侧** ——
+`async_state_ptr`/`async_segment_count`/`is_async_fn`/`async_saved_vars`/`closure_counter`
+在 gen.rs 里的全部出现 = 4 处声明 + 1 处 `closure_counter` 声明 + `new()` 里的 5 行初始化
+（`grep -n` 命中行号 214/216/218/220/226 + 282-288，无第三处）⇒ 只写常量、无人读的**纯残留**。
+`closure_counter` 的身份已确认被取代：活的命名在 `:13138 self.closure_seq` + `:13170`
+的 `__closure_{n}_{bare}_c{hash:08x}`（T0/B.5 为消除 HashMap 随机序而改），
+其文档注释"monotonic counter for synthetic closure function names"读起来像还在用 ⇒ 删掉最省事。
+"从不被读也从不被写的字段不可能影响 MIR"这一条比字节 diff 更强，故未做 `--dump-mir` 前后比对
+（三基线 + 语料 39/39 仍照常复跑，见验证）。
+
+### 撞出来的更大一块：`Benchmarks` 这个 workflow 引用的东西**仓里根本没有**
+`.github/workflows/benchmarks.yml`（触发：push 到 main/dev + **每天 02:00 UTC cron** + 手动）里：
+- `:106` `cargo build --bench compiler_bench`、`:148` `--bench runtime_bench` ⇒ **`benches/` 目录不存在**
+  （`ls benches` → No such file or directory）；
+- `:190/:199/:205/:209` `cargo build|run --bin regression_test` ⇒ **`src/bin/regression_test.rs` 不存在**；
+- 而 `Cargo.toml:94` 明明有 `criterion = { version = "0.8.1", features = ["html_reports"] }`，
+  且全仓**没有 `[[bench]]` 段** ⇒ 依赖付了、harness 没接。
+⇒ **refactor ⑪"性能基线测量"在 CI 里是一个看起来存在、实际每天必然失败的作业**。
+这既是假接线（同 #15 的 `run_all.sh` 未入库、G.8 的桩），也解释了为什么"性能没基线"这件事
+一直没被当成缺陷 —— 门禁本身是幽灵。
+（注：仓内 `criterion` 是 dev-dependency，而 `[[bench]]` + `harness = false` 要改
+`Cargo.toml` —— 该文件正被并发工作流持有（当前未提交改动 -24/+2），所以本批**不改 Cargo.toml**，
+⑪ 先走"仓内工具脚本"路线：`tools/perf_baseline.sh` 直接量端到端 `zetac` 编译耗时。）
+
+### 实测收益（可抽查的数）
+- `touch src/bin/*.rs && /usr/bin/time -p cargo build --release --bins`：
+  删前 15 个 bin = **real 1.46s / user 7.78s**；删后 4 个 bin = **real 0.77s / user 3.26s**
+  ⇒ CPU 时间 **-58%**（多核下墙钟差被并行掩盖，user 才是可信量）。
+- `./tools/dc_audit.sh`（默认特性）命中 **114 → 101**（-13，`--diff` 无新增命中）；
+  `src/bin/` 目录命中从 27 降到 12，全部集中在保留的 `zorb.rs`。
+
+### 验证
+- `cargo check -p zetac --all-targets` rc=0（`/tmp/chk312.txt` 内 error 计数 0）。
+- `./tools/run_all.sh > /tmp/gate_312.txt 2>&1`（2026-09-21T19:12:20Z）直读退出码：rc=1 =
+  既有判据（`run_all.sh:134` 要 `py_fail==0`）。三项 official **194/194** ·
+  python_style **285 passed, 2 failed, 4 known-fail, 0 xpass** · 语料 **39/39 = 100%**
+  —— 与批次 310/311 逐项相同 ⇒ 零基线位移。

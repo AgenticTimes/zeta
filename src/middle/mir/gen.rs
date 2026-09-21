@@ -210,20 +210,10 @@ pub struct MirGen {
     /// Names captured from enclosing scopes in the closure currently being
     /// lowered (name → env key id) — used to route assignments to env stores.
     captured_vars: std::collections::HashMap<String, u32>,
-    /// Async state machine: state pointer expression ID.
-    async_state_ptr: Option<u32>,
-    /// Async state machine: current segment index for dispatch.
-    async_segment_count: u32,
-    /// Whether we are lowering an async function body.
-    is_async_fn: bool,
-    /// Snapshot of name_to_id at current await point for variable save/restore.
-    async_saved_vars: Vec<(String, u32)>,
     /// Known function return types (base name -> Type), injected by Resolver.
     func_ret_types: HashMap<String, Type>,
     /// Parameter names per function, for keyword-argument binding.
     func_param_names: HashMap<String, Vec<String>>,
-    /// PY-A: monotonic counter for synthetic closure function names.
-    closure_counter: u32,
     /// PY-A: variables bound to a lambda/closure value, mapped to the
     /// synthetic closure function name. Lets call sites (`f(41)` where `f =
     /// lambda x: x+1`) lower to a direct named call to the closure function.
@@ -279,13 +269,8 @@ impl MirGen {
             self_field_aliases: Vec::new(),
             tuple_slots: std::collections::HashSet::new(),
             captured_vars: std::collections::HashMap::new(),
-            async_state_ptr: None,
-            async_segment_count: 0,
-            is_async_fn: false,
-            async_saved_vars: vec![],
             func_ret_types: HashMap::new(),
             func_param_names: HashMap::new(),
-            closure_counter: 0,
             closure_vars: HashMap::new(),
             closure_ret_tys: HashMap::new(),
             pending_closure_binding: None,
