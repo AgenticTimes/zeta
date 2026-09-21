@@ -568,6 +568,118 @@ pub fn all_stub_symbols() -> Vec<&'static str> {
     v
 }
 
+/// G.8a (refactor.md): what a `# stub:` marker is called **as** inside MIR, so a
+/// compile can report the fake values its own program actually reaches.
+///
+/// Measured against `pylib/*.z` (probe: one call per marker, `--dump-mir`):
+///  - `numpy.vstack` lowers to a module-prefixed function, called `numpy__vstack`;
+///  - `pandas.DataFrame.dropna` / `pandas.Series.isin` are class members, called
+///    `DataFrame::dropna` / `Series::isin`;
+///  - a receiver whose static type is unknown dispatches by member name
+///    (`[dynamic]str::isin`), and codegen's own disambiguators add bare
+///    (`isin`) and `_inst_i64` / `__<arity>` variants.
+/// So `exact` covers the first two shapes; `member` catches the rest, which is
+/// deliberately allowed to over-report — a fake value you did not call is a
+/// noisy line, one you did call and missed is a wrong program.
+pub struct StubSite {
+    /// The marker as written (`soft:` prefix preserved: soft stubs return fake
+    /// values, the rest abort at run time via `py_stub_abort`).
+    pub marker: &'static str,
+    /// The statically resolved MIR call target, when there is exactly one shape.
+    pub exact: Option<String>,
+    /// Trailing member name, for name-dispatched call sites.
+    pub member: String,
+}
+
+/// `numpy.vstack` -> `numpy__vstack`; `pandas.DataFrame.dropna` ->
+/// `DataFrame::dropna`; a single-segment marker (a registry symbol) is its own
+/// call target.
+fn stub_call_shape(marker: &str) -> (Option<String>, String) {
+    let bare = marker.strip_prefix("soft:").unwrap_or(marker);
+    let parts: Vec<&str> = bare.split('.').collect();
+    match parts.as_slice() {
+        [member] => (Some((*member).to_string()), (*member).to_string()),
+        [module, member] => (
+            Some(format!("{}__{}", module, member)),
+            (*member).to_string(),
+        ),
+        [_module, class, method] => (
+            Some(format!("{}::{}", class, method)),
+            (*method).to_string(),
+        ),
+        _ => (None, bare.to_string()),
+    }
+}
+
+/// The bare member name a call target dispatches on, undoing codegen's
+/// disambiguators: a `[dynamic]<ty>::` prefix, an `_inst_<ty>` suffix and
+/// trailing all-digit/empty `_` segments (`isin__2`). `log10` must stay `log10`,
+/// so segments are only dropped while they are digits or empty.
+fn dispatched_member(target: &str) -> &str {
+    let mut s = target
+        .strip_prefix("[dynamic]")
+        .unwrap_or(target)
+        .rsplit("::")
+        .next()
+        .unwrap_or(target);
+    if let Some(i) = s.find("_inst_") {
+        s = &s[..i];
+    }
+    let segs: Vec<&str> = s.split('_').collect();
+    let last = segs.iter().rposition(|t| !t.is_empty());
+    match last {
+        Some(i)
+            if i + 1 == segs.len()
+                && segs[i].chars().all(|c| c.is_ascii_digit())
+                && i > 0 =>
+        {
+            // `isin__2` → the arity suffix is `__` + digits, so the prefix still
+            // carries a separator; `values_2` carries one too.
+            s[..segs[..i].join("_").len()].trim_end_matches('_')
+        }
+        _ => s,
+    }
+}
+
+/// Every marked stub, with how it can appear as a MIR call target.
+pub fn stub_sites() -> Vec<StubSite> {
+    let mut v: Vec<StubSite> = Vec::new();
+    for marker in all_stub_symbols() {
+        let (exact, member) = stub_call_shape(marker);
+        v.push(StubSite {
+            marker,
+            exact,
+            member,
+        });
+    }
+    v
+}
+
+/// Classify one MIR call target: the markers it reaches, and whether that is a
+/// statically exact binding (`true`) or a member-name match (`false`).
+pub fn stub_call_match(target: &str) -> Option<(Vec<&'static str>, bool)> {
+    static INDEX: OnceLock<(
+        HashMap<String, Vec<&'static str>>,
+        HashMap<String, Vec<&'static str>>,
+    )> = OnceLock::new();
+    let (exact_idx, member_idx) = INDEX.get_or_init(|| {
+        let mut e: HashMap<String, Vec<&'static str>> = HashMap::new();
+        let mut m: HashMap<String, Vec<&'static str>> = HashMap::new();
+        for site in stub_sites() {
+            if let Some(x) = &site.exact {
+                e.entry(x.clone()).or_default().push(site.marker);
+            }
+            m.entry(site.member.clone()).or_default().push(site.marker);
+        }
+        (e, m)
+    });
+    if let Some(v) = exact_idx.get(target) {
+        return Some((v.clone(), true));
+    }
+    let v = member_idx.get(dispatched_member(target))?;
+    Some((v.clone(), false))
+}
+
 /// A4: map a registry symbol (or its `alias-of`) to the canonical declared name.
 /// `decl=1` py_* entries (including stub=1 abort wrappers) — same set
 /// `declare_registry_runtime_fns` emits after task D.
@@ -663,5 +775,71 @@ mod tests {
         let all = all_stub_symbols();
         assert!(all.contains(&"py_asdict_unexpanded"));
         assert!(all.iter().any(|s| s.contains("pandas.date_range")));
+    }
+
+    // G.8a: the report is only as good as the marker → MIR-call-target mapping,
+    // so both directions are pinned here (measured against `--dump-mir`).
+    #[test]
+    fn g8a_marker_shapes_map_to_call_targets() {
+        assert_eq!(
+            stub_call_shape("numpy.vstack"),
+            (
+                Some("numpy__vstack".to_string()),
+                "vstack".to_string()
+            )
+        );
+        assert_eq!(
+            stub_call_shape("soft:pandas.DataFrame.dropna"),
+            (Some("DataFrame::dropna".to_string()), "dropna".to_string())
+        );
+        assert_eq!(
+            stub_call_shape("py_asdict_unexpanded"),
+            (
+                Some("py_asdict_unexpanded".to_string()),
+                "py_asdict_unexpanded".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn g8a_dispatched_member_undoes_codegen_suffixes() {
+        assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");
+        assert_eq!(dispatched_member("isin_inst_i64"), "isin");
+        assert_eq!(dispatched_member("isin__2"), "isin");
+        assert_eq!(dispatched_member("values_2"), "values");
+        assert_eq!(dispatched_member("DataFrame::dropna"), "dropna");
+        // digits that are part of the NAME must survive, and so must a
+        // module-prefixed target (it has no member-only form).
+        assert_eq!(dispatched_member("log10"), "log10");
+        assert_eq!(dispatched_member("numpy__vstack"), "numpy__vstack");
+    }
+
+    #[test]
+    fn g8a_stub_call_match_classifies_exact_and_name_hits() {
+        let (markers, exact) = stub_call_match("numpy__isnan").expect("exact shape");
+        assert!(exact);
+        assert!(markers.contains(&"numpy.isnan"));
+        let (markers, exact) = stub_call_match("[dynamic]str::isin").expect("member shape");
+        assert!(!exact);
+        assert!(markers.iter().any(|s| s.ends_with(".isin")));
+        assert!(stub_call_match("print").is_none());
+        assert!(stub_call_match("zeta_env_get").is_none());
+    }
+
+    #[test]
+    fn g8a_every_registered_marker_has_a_matchable_shape() {
+        // A marker that maps to nothing could never appear in a report — the
+        // index would be silently incomplete instead of merely over-reporting.
+        for site in stub_sites() {
+            let shape = site
+                .exact
+                .clone()
+                .unwrap_or_else(|| site.member.clone());
+            assert!(
+                !shape.is_empty() && stub_call_match(&shape).is_some(),
+                "stub marker {} has no matchable call shape",
+                site.marker
+            );
+        }
     }
 }

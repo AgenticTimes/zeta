@@ -286,6 +286,101 @@ fn refine_param_types(mirs: &mut [zetac::middle::mir::mir::Mir]) {
     }
 }
 
+/// G.8a (refactor.md 立即档 ③): `--report-stubs` — which fake-value stubs THIS
+/// program actually reaches. The `# stub:` markers say what exists; the report
+/// answers the question that matters for correctness review: is my program
+/// standing on one right now?
+///
+/// Read-only by construction: it walks the lowered MIR and writes stderr, and a
+/// program that calls no stub prints nothing at all (that silence is G.8a's
+/// acceptance criterion). Names come from MIR call targets, so a
+/// name-dispatched call site (`isin`, `isin_inst_i64`, …) is matched by member
+/// name and marked as possibly over-reporting — a fake value you did not call
+/// costs one noisy line, one you did call and missed costs a wrong program.
+fn report_stub_calls(mirs: &[Mir]) {
+    use std::collections::BTreeMap;
+    use zetac::middle::mir::mir::MirStmt;
+    use zetac::middle::pylib::stub_call_match;
+
+    // marker -> (call sites, of which name-dispatched, one example target)
+    type Hit = (usize, usize, String);
+    fn walk(stmts: &[MirStmt], hits: &mut BTreeMap<&'static str, Hit>) {
+        for st in stmts {
+            let func = match st {
+                MirStmt::Call { func, .. } | MirStmt::VoidCall { func, .. } => func,
+                MirStmt::If { then, else_, .. } => {
+                    walk(then, hits);
+                    walk(else_, hits);
+                    continue;
+                }
+                MirStmt::For {
+                    body, else_body, ..
+                } => {
+                    walk(body, hits);
+                    walk(else_body, hits);
+                    continue;
+                }
+                MirStmt::While {
+                    pre_cond,
+                    body,
+                    else_body,
+                    ..
+                } => {
+                    walk(pre_cond, hits);
+                    walk(body, hits);
+                    walk(else_body, hits);
+                    continue;
+                }
+                _ => continue,
+            };
+            let Some((markers, exact)) = stub_call_match(func) else {
+                continue;
+            };
+            for m in markers {
+                let e = hits.entry(m).or_insert((0, 0, func.clone()));
+                e.0 += 1;
+                if !exact {
+                    e.1 += 1;
+                }
+            }
+        }
+    }
+
+    let mut hits: BTreeMap<&'static str, Hit> = BTreeMap::new();
+    for m in mirs {
+        walk(&m.stmts, &mut hits);
+    }
+    if hits.is_empty() {
+        return;
+    }
+    eprintln!(
+        "stub report: {} fake-value stub(s) reached by this program",
+        hits.len()
+    );
+    for (marker, (n, dyn_n, example)) in &hits {
+        let kind = if marker.starts_with("soft:") {
+            "soft: fake value"
+        } else {
+            "aborts at run time"
+        };
+        let how = if *dyn_n == 0 {
+            String::new()
+        } else if *dyn_n == *n {
+            " (name-dispatched, may over-report)".to_string()
+        } else {
+            format!(" ({} of {} name-dispatched, may over-report)", dyn_n, n)
+        };
+        eprintln!(
+            "  {:<44} x{:<3} {:<18} as `{}`{}",
+            marker,
+            n,
+            kind,
+            example,
+            how
+        );
+    }
+}
+
 /// PY-A: `parse_zeta` is built on nom's `many0`, which STOPS at the first
 /// top-level item it cannot parse and returns the prefix it managed to parse.
 /// A caller that ignores the leftover (as the CLI used to) silently compiles a
@@ -402,6 +497,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || std::env::var("ZETA_STRICT_ABI").is_ok();
     // B3: print unannotated (dyn) params after register.
     let report_untyped = args.iter().any(|a| a == "--report-untyped");
+    // G.8a (refactor.md): print the fake-value stubs THIS program calls.
+    let report_stubs = args.iter().any(|a| a == "--report-stubs");
 
     // Handle --explain flag: print error code explanation
     if let Some(pos) = args.iter().position(|a| a == "--explain") {
@@ -468,6 +565,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--list-stubs" => {} // handled early; keep from becoming "input"
             "--strict-abi" => {} // handled early; keep from becoming "input"
             "--report-untyped" => {} // handled via flag; keep from becoming "input"
+            "--report-stubs" => {} // handled via flag; keep from becoming "input"
             "--features" => {
                 i += 1;
                 if i < args.len() {
@@ -666,6 +764,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // BATCH-295: refine unannotated PARAM types from call-site
                 // argument types (see `refine_param_types`).
                 refine_param_types(&mut all_mirs);
+
+                if report_stubs {
+                    report_stub_calls(&all_mirs);
+                }
 
                 let context = Context::create();
                 let mut codegen = LLVMCodegen::new(&context, "module");

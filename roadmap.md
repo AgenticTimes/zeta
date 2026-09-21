@@ -8930,15 +8930,75 @@ resolver.rs:67），其构建遍历 HashMap ⇒ 后写者胜、谁后写随机�
 ⇒ 修法 = 撞名响亮告警（W2002）+ 键带模块限定，独立成批。
 
 ### 附记：主线自检 h9 链接失败的归因（不改主线代码）
-`/tmp/wl/h9.py` 链接期缺 `_validate_and_repair_stock_ohlcv`。**非本批引入**：
-批次 300 之前的二进制（`/tmp/wl/zetac_head`）编译同一文件同样失败且更差
-（`_get_universe` 也缺）。真因是本批之前就已存在的**解析截断**：
-`data_cleaning.py` 第 98 行的 `@classmethod`（类体成员装饰器，
-`top_level.rs:775` 只认 `staticmethod`）使 many0 在此停止，W1002 实测报出
-「177 行未被解析，起始文本 `@classmethod … class IndicatorCache:`」，
-而被丢区间正好覆盖 169 行的 `validate_and_repair_stock_ohlcv`
-⇒ 引用有、定义无 ⇒ 链接失败。属于 `refactor.md` **G.7b**（顶层同步恢复，
-行为变更、需协调）的范围，也是 G.7b 收益的直接证据。
+`/tmp/wl/h9.py` 链接期缺 `_validate_and_repair_stock_ohlcv`（Mach-O 前导下划线，
+即 LLVM 侧的 `validate_and_repair_stock_ohlcv`）。**非本批引入**：批次 300 之前的
+二进制（`/tmp/wl/zetac_head`）编译同一文件同样失败且更差（`_get_universe` 也缺）；
+同一文件 3 次编译失败点完全一致 ⇒ 不是本批关心的随机性。**也不是解析截断**
+（h9 的编译日志里没有任何 W1002，`data_cleaning.py` 全文解析通过）。
+探针实测到的形状：该函数的 `__ret_tuple` 全局常量**已生成**（并触发
+`重名全局常量：_validate_and_repair_stock_ohlcv__ret_tuple_2207，后者被跳过`），
+但 `final_mirs` 里没有它的函数块；同时 `_M` 里该模块的拼写是
+**`backend.datasrc_data_cleaning`（末段分隔符是点）**，而调用点查的是全下划线形式
+⇒ 归因为**模块名 mangling 不一致**，与 `resolve_symbol` 的
+`module_mangle`（`resolver.rs:1085`，`replace('.', "_")`）不同源。
+留给主线批次 301（任务 #7），本批只登记不修。
 
 **下一步**：refactor §9 立即档 ③ —— G.8a 假值桩标记 + `--report-stubs`
 （registry 条目加 `stub=` 标记，编译期列出本次实际调用到的桩；零行为变更、冷文件）。
+
+---
+
+## 批次 303（refactor 立即档 ②+③ —— G.7a 盘点清单 + G.8a `--report-stubs`）
+
+两件事同属"零行为变更的响亮化"：编译器已经会告警，缺的是**把告警变成可规划的
+输入**。一个是截断告警要逐个编译才看得见，一个是假值桩只说"存在"不说"我这次
+用上了"。
+
+### G.7a 收尾：`tools/truncation_inventory.sh`（新）
+`ensure_fully_parsed` 早已打 `[W1002] <N> line(s) at the end of the input were
+NOT parsed …`，但 G.7a 验收要求的是**盘点清单**（受影响文件 + 被丢内容），
+一次一个文件的告警给不了。脚本按 `--dump-mir` 跑一遍官方套件 + 语料（发现口径
+与 `tools/corpus_baseline.py` / `mir_diff.sh` 一致），逐行提取
+`计数 / 文件 / 断点位置 / 首段被丢文本`，按丢弃行数从大到小排。
+只读报告：**永远 exit 0**，门禁仍是 `run_all.sh`。
+
+实测（237 文件 = 官方目录递归 198 `.z`（门禁集是顶层 194，另有 `simd/`+`const/` 4 个）
++ 语料 39 `.py`）：**12 个文件命中，共 1805 行被丢，语料 0 命中**。前三名
+`minimal_compiler.z` 757、`benchmark_simd_vs_scalar.z` 357、`selfhost.z` 158。ARCHITECTURE-REVIEW §P0#3 记的是"11 文件"，按现测为 12。
+⇒ G.7b（顶层同步恢复）的范围从此可逐文件核对，而不是估。
+
+踩坑记录（同类脚本会再踩）：macOS 的 BSD sed **不支持 BRE 量词 `\+`**，
+`s/…\([0-9]\+\) line/…/` 静默不匹配、字段落 `?`；写 `[0-9][0-9]*`。
+
+### G.8a：`--report-stubs` —— 本次编译真正踩到的假值桩
+**标记侧（已有）**：`--list-stubs` 给 18 个（registry 1 + pylib `# stub:` 17），
+即 §4.4 清单。**缺的是接线**：清单说"存在"，没说"你这个程序踩了几个"。
+
+- **`src/middle/pylib.rs`**：新增 `StubSite{marker, exact, member}` 与
+  `stub_call_shape / dispatched_member / stub_sites / stub_call_match`。
+  marker→MIR 调用目标三种形状（`numpy.vstack`→`numpy__vstack`、
+  `pandas.DataFrame.dropna`→`DataFrame::dropna`、单段名即自身，`soft:` 前缀先剥）；
+  接收者静态类型未知时按**成员名**命中，并撤销 codegen 的消歧后缀
+  （`[dynamic]str::isin`、`isin_inst_i64`、`isin__2` → `isin`）。
+  宁多报不漏报：成员名命中单独标注 `name-dispatched, may over-report`。
+  一处真 bug 在测试里抓到：`isin__2` 的前缀切完还剩尾分隔符 ⇒ `trim_end_matches('_')`。
+- **`src/main.rs`**：`report_stub_calls(&all_mirs)` 递归 `If/For/While`（含
+  `pre_cond`、`else_body`）收集 `Call/VoidCall` 的 `func`，在
+  `refine_param_types` 之后调用；**只写 stderr**（stdout 归 `--dump-mir`），
+  命中为空时一行都不打。
+
+验收实测（三向）：
+- 不调桩 ⇒ 零输出：`tests/python_style/t302_nested_def_in_closure.z`；
+- 精确命中：`t210_df_tail_dropna.z` → `soft:pandas.DataFrame.dropna  x1  soft: fake value  as \`DataFrame::dropna\``；
+- 真实语料：`l1_fixed_pool_momentum.py` → `numpy.log x1 (aborts at run time)` +
+  `soft:pandas.DataFrame.dropna x2`，名字与 §4.4 清单逐字一致。
+
+### 验证（串行门禁）
+- `cargo build --release -p zetac` 干净；`cargo test --release --lib pylib` →
+  **8 passed**（4 个 G.8a 新测：形状映射、消歧后缀还原、exact/name 分类、
+  "每个已登记 marker 都有可命中形状"）
+- `./tools/run_all.sh` → official **194/194** · python_style **284 passed,
+  2 failed**（仍只有存量红 t231/t233）· 语料 **39/39** ⇒ 三基线数字与批次 302
+  逐项相同，"零行为变更"成立（`--report-stubs` 默认关，报告只写 stderr）
+
+**下一步**：立即档 ④（§5.2 known-fail 包：机制已在，用例待补）。
