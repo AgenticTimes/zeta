@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/run_all.sh — Q4 (advice.md): one command → three baseline numbers as JSON.
-# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python]
+# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit]
 # Exit 0 if all enabled suites pass their green criteria; else 1.
 set -euo pipefail
 
@@ -13,6 +13,7 @@ JSON_ONLY=0
 SKIP_CORPUS=0
 SKIP_OFFICIAL=0
 SKIP_PYTHON=0
+SKIP_JIT=0
 
 for a in "$@"; do
   case "$a" in
@@ -20,6 +21,7 @@ for a in "$@"; do
     --skip-corpus) SKIP_CORPUS=1 ;;
     --skip-official) SKIP_OFFICIAL=1 ;;
     --skip-python) SKIP_PYTHON=1 ;;
+    --skip-jit) SKIP_JIT=1 ;;
     -h|--help)
       sed -n '2,6p' "$0"
       exit 0
@@ -107,6 +109,29 @@ if [[ $SKIP_CORPUS -eq 0 ]]; then
   rm -f "$corp_log"
 fi
 
+# ── 4) JIT（无 -o）静默崩溃门禁（批次 315 / 任务 #26）──
+# 上面三套全走 `-o`（AOT），JIT 路径一行都没覆盖 —— `zetac f.z` 曾经当场 SIGSEGV、
+# 零诊断，而三套基线全绿。此步把"JIT 不许静默崩溃、跑通数不许回退"变成判据。
+# 缺 coreutils `timeout` 时**喊话跳过**，不静默跳过（静默跳过就是批次 314 记的幽灵门禁）。
+jit_rc=0; jit_ok=0; jit_segv=0; jit_total=0; jit_skipped=0
+if [[ $SKIP_JIT -eq 0 ]]; then
+  jit_log=$(mktemp)
+  set +e
+  "$ROOT/tools/jit_sweep.sh" >"$jit_log" 2>&1
+  jit_rc=$?
+  set -e
+  if [[ $jit_rc -eq 2 ]]; then
+    jit_skipped=1
+    echo "SKIP jit: tools/jit_sweep.sh 需要 coreutils timeout" >&2
+  fi
+  line=$(grep '^jit sweep:' "$jit_log" | tail -1 || true)
+  jit_ok=$(echo "$line" | sed -nE 's/.*ok=([0-9]+).*/\1/p'); jit_ok=${jit_ok:-0}
+  jit_segv=$(echo "$line" | sed -nE 's/.*segv=([0-9]+).*/\1/p'); jit_segv=${jit_segv:-0}
+  jit_total=$(echo "$line" | sed -nE 's/.*total ([0-9]+).*/\1/p'); jit_total=${jit_total:-0}
+  [[ $JSON_ONLY -eq 0 ]] && cat "$jit_log"
+  rm -f "$jit_log"
+fi
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -119,6 +144,8 @@ doc = {
     "known_fail": $py_known, "xpass": $py_xpass,
   },
   "corpus": {"parse_ok": $corpus_ok, "total": $corpus_total},
+  "jit": {"ok": $jit_ok, "segv": $jit_segv, "total": $jit_total,
+          "skipped": $jit_skipped},
 }
 path = "$OUT_JSON"
 with open(path, "w") as f:
@@ -134,4 +161,6 @@ if [[ $SKIP_OFFICIAL -eq 0 && $official_pass -ne $official_total ]]; then rc=1; 
 if [[ $SKIP_PYTHON -eq 0 && $py_fail -ne 0 ]]; then rc=1; fi
 # corpus: parse_ok should equal total when suite is healthy; warn-only if skipped dirs empty
 if [[ $SKIP_CORPUS -eq 0 && $corpus_total -gt 0 && $corpus_ok -ne $corpus_total ]]; then rc=1; fi
+# jit: 判据在 tools/jit_sweep.sh 内部（segv==0 且 ok>=基线），这里只认它的退出码
+if [[ $SKIP_JIT -eq 0 && $jit_skipped -eq 0 && $jit_rc -ne 0 ]]; then rc=1; fi
 exit $rc

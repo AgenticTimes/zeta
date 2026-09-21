@@ -1204,6 +1204,22 @@ impl ErrorCodeRegistry {
         );
 
         codes.insert(
+            "E4016".to_string(),
+            ErrorCode {
+                code: "E4016".to_string(),
+                category: ErrorCategory::Codegen,
+                description: "JIT cannot resolve a runtime symbol".to_string(),
+                example: None,
+                suggestion: Some(
+                    "Compile with -o <path> and run the binary: JIT mode can only bind the host \
+                     functions listed in pylib/jit_mappings.txt plus the symbols zetac itself \
+                     already exports, and the runtime/*.c definitions are not linked into it."
+                        .to_string(),
+                ),
+            },
+        );
+
+        codes.insert(
             "E5001".to_string(),
             ErrorCode {
                 code: "E5001".to_string(),

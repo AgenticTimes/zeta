@@ -226,18 +226,25 @@ def emit_jit_rs(mappings: list[tuple[str, str]]) -> str:
         "use inkwell::execution_engine::ExecutionEngine;",
         "use inkwell::module::Module;",
         "",
-        "/// Register static LLVM-name → Rust-host mappings for JIT mode.",
-        "pub fn register_jit_mappings<'ctx>(module: &Module<'ctx>, ee: &ExecutionEngine<'ctx>) {",
-        "    let mappings: &[(&str, usize)] = &[",
+        "/// Every LLVM name that JIT mode resolves to a Rust host function.",
+        "///",
+        "/// This is also the *authority* for the `--jit` preflight diagnostic: outside of",
+        "/// these names and the `vec_*` monomorphs, an external only resolves if the",
+        "/// compiler process itself already exports it — see `jit.rs::jit_symbol_resolvable`.",
+        "///",
+        "/// Host entries stay `*const ()`: a pointer has no integer value in const eval, so",
+        "/// the cast to the address `add_global_mapping` wants happens at run time.",
+        "pub const JIT_MAPPINGS: &[(&str, *const ())] = &[",
     ]
     for llvm_name, rust_path in mappings:
-        lines.append(
-            f'        ("{llvm_name}", {rust_path} as *const () as usize),'
-        )
-    lines.append("    ];")
-    lines.append("    for (name, ptr) in mappings {")
+        lines.append(f'    ("{llvm_name}", {rust_path} as *const ()),')
+    lines.append("];")
+    lines.append("")
+    lines.append("/// Register static LLVM-name → Rust-host mappings for JIT mode.")
+    lines.append("pub fn register_jit_mappings<'ctx>(module: &Module<'ctx>, ee: &ExecutionEngine<'ctx>) {")
+    lines.append("    for (name, ptr) in JIT_MAPPINGS {")
     lines.append("        if let Some(f) = module.get_function(name) {")
-    lines.append("            ee.add_global_mapping(&f, *ptr);")
+    lines.append("            ee.add_global_mapping(&f, *ptr as usize);")
     lines.append("        }")
     lines.append("    }")
     lines.append("}")
