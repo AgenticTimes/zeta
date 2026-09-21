@@ -25,6 +25,78 @@ pub struct Mir {
     pub is_extern: bool,
 }
 
+impl Mir {
+    /// T0 (refactor.md B.5): byte-stable text form for `--dump-mir` and
+    /// `tools/mir_diff.sh`. The four arenas are `HashMap`s, so derived `Debug`
+    /// reorders most of its output between two compiles of the SAME input
+    /// (measured on `jq_wufu.py`: 284 of 299 function blocks differed), which
+    /// would flag every pure code motion as a semantic change. Sorting every
+    /// iteration by key is what makes "MIR diff is empty" a machine proof that
+    /// a refactor only moved code.
+    pub fn dump_canonical(&self) -> String {
+        fn render_entries<'a, K, V>(out: &mut String, header: &str, entries: Vec<(K, &'a V)>)
+        where
+            K: Ord + std::fmt::Display,
+            V: std::fmt::Debug + 'a,
+        {
+            out.push_str(header);
+            let mut entries = entries;
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            for (k, v) in entries {
+                out.push_str(&format!("{}: ", k));
+                for (i, line) in format!("{:#?}", v).lines().enumerate() {
+                    if i > 0 {
+                        out.push_str("    ");
+                    }
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+        }
+
+        let mut out = String::new();
+        out.push_str(&format!(
+            "== MIR {} ==\n",
+            self.name.as_deref().unwrap_or("anon")
+        ));
+        out.push_str(&format!("param_indices: {:?}\n", self.param_indices));
+        out.push_str(&format!("properties: {:?}\n", self.properties));
+        out.push_str(&format!("generic_params: {:?}\n", self.generic_params));
+        out.push_str(&format!("is_extern: {:?}\n", self.is_extern));
+        out.push_str("stmts:\n");
+        for s in &self.stmts {
+            for (i, line) in format!("{:#?}", s).lines().enumerate() {
+                if i > 0 {
+                    out.push_str("  ");
+                }
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        render_entries(
+            &mut out,
+            "exprs:\n",
+            self.exprs.iter().map(|(k, v)| (*k, v)).collect(),
+        );
+        render_entries(
+            &mut out,
+            "type_map:\n",
+            self.type_map.iter().map(|(k, v)| (*k, v)).collect(),
+        );
+        render_entries(
+            &mut out,
+            "ctfe_consts:\n",
+            self.ctfe_consts.iter().map(|(k, v)| (*k, v)).collect(),
+        );
+        render_entries(
+            &mut out,
+            "global_consts:\n",
+            self.global_consts.iter().map(|(k, v)| (k.clone(), v)).collect(),
+        );
+        out
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum MirStmt {
     Assign {

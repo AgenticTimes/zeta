@@ -158,6 +158,15 @@ pub struct MirGen {
     /// Lowering depth: 0 at top level, >0 inside a function body — used to
     /// skip nested defs (their inline Return would corrupt the enclosing stream).
     fn_depth: u32,
+    /// T0 (refactor.md B.5): stable namespace for synthetic closure symbols —
+    /// the enclosing function's DECLARED name, and for a closure body its own
+    /// generated symbol. Replaces the process-global `AtomicU32` counter, which
+    /// made a closure's name depend on the ORDER the compiler happened to lower
+    /// functions (HashMap iteration), so two compiles of one input disagreed on
+    /// which body `__closure_0` was.
+    closure_ns: String,
+    /// Per-scope ordinal of the closures lowered so far, in source order.
+    closure_seq: usize,
     /// Nested defs hoisted to standalone functions (user name → closure fn).
     hoisted_names: std::collections::HashMap<String, String>,
     /// PY-A V3: program-wide `nonlocal` names — reads/writes route through
@@ -254,6 +263,8 @@ impl MirGen {
             last_loop_result: None,
             generated_mirs: vec![],
             fn_depth: 0,
+            closure_ns: String::new(),
+            closure_seq: 0,
             hoisted_names: std::collections::HashMap::new(),
             nonlocal_names: std::collections::HashSet::new(),
             module_globals: std::collections::HashSet::new(),
@@ -845,6 +856,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         self.type_decls
             .extend(self.shared_type_decls.iter().map(|(k, v)| (k.clone(), v.clone())));
         self.next_id = 1;
+        // T0 (refactor.md B.5): this scope's closure-symbol namespace, consumed
+        // by `lower_closure`. Declared name for a function, module name for a
+        // non-FuncDef item (module bodies, hoisted items).
+        self.closure_ns = match ast {
+            AstNode::FuncDef { name, .. } | AstNode::ExternFunc { name, .. } => name.clone(),
+            _ => self.current_module.clone(),
+        };
+        self.closure_seq = 0;
 
         // Check if this is an extern/FFI function declaration.
         // Only AstNode::ExternFunc is truly extern. FuncDef with empty
@@ -13107,13 +13126,72 @@ call, no NULL-handle dereference).",
     }
 
     fn lower_closure(&mut self, params: &[String], body: &AstNode) -> String {
-        // Globally unique across functions — per-MirGen counters made two
-        // different closures share "__closure_0" (first definition won, other
-        // call sites silently called the wrong body).
-        static CLOSURE_SEQ: std::sync::atomic::AtomicU32 =
-            std::sync::atomic::AtomicU32::new(0);
-        let n = CLOSURE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as usize;
-        let closure_name = format!("__closure_{}", n);
+        // T0 (refactor.md B.5): the symbol is derived from the ENCLOSING
+        // scope's declared name plus this closure's ordinal in source order.
+        // It used to come from a process-global `AtomicU32`, so a closure's name
+        // depended on the order the compiler happened to visit functions — and
+        // that order is HashMap-random (measured on jq_wufu.py: `__closure_0`
+        // was the `code` lambda in one compile and the `codes` lambda in the
+        // next). Cross-scope uniqueness now rests on function-name uniqueness,
+        // the same assumption `final_mirs` (keyed by name) already makes; the
+        // guard below makes a collision loud instead of silent.
+        let n = self.closure_seq;
+        self.closure_seq += 1;
+        // The readable part is the parent's BARE name; the hash keeps parents
+        // that share a bare name (same class/method in two modules) apart. Two
+        // shape constraints come from codegen's symbol waterfall:
+        //  - no interior `__` and no leading-`_` ambiguity: a name that looks
+        //    module-mangled is resolved as `module__fn` and its definition was
+        //    dropped (measured: `___closure__backend_datasrc_split_factors__
+        //    load_split_factors__0` undefined at link on the local wufu driver);
+        //  - the LAST segment must not be all digits, or the waterfall's arity
+        //    stripping (codegen.rs:2675/2689/2708/2731) renames the reference
+        //    but not the definition. Hence ordinal first, `_c<hash>` last.
+        let bare0 = self.closure_ns.rsplit("::").next().unwrap_or("");
+        let bare0 = bare0.rsplit_once("__").map(|(_, t)| t).unwrap_or(bare0);
+        let mut bare = String::new();
+        for c in bare0.chars() {
+            if c == '_' {
+                if !bare.ends_with('_') {
+                    bare.push('_');
+                }
+            } else if c.is_ascii_alphanumeric() {
+                bare.push(c);
+            } else {
+                bare.push('_');
+            }
+        }
+        let bare = if bare.is_empty() { "anon".to_string() } else { bare };
+        let mut ns_hash: u64 = 0xcbf29ce484222325;
+        for b in self.closure_ns.as_bytes() {
+            ns_hash ^= *b as u64;
+            ns_hash = ns_hash.wrapping_mul(0x100000001b3);
+        }
+        let closure_name = format!(
+            "__closure_{}_{}_c{:08x}",
+            n,
+            bare,
+            (ns_hash & 0xffff_ffff) as u32
+        );
+        {
+            thread_local! {
+                static MINTED: std::cell::RefCell<std::collections::HashMap<String, String>> =
+                    std::cell::RefCell::new(std::collections::HashMap::new());
+            }
+            MINTED.with(|m| {
+                let mut m = m.borrow_mut();
+                match m.get(&closure_name) {
+                    Some(prev) if *prev != self.closure_ns => eprintln!(
+                        "warning: [W2001] closure symbol {} minted by two scopes ({} and {})",
+                        closure_name, prev, self.closure_ns
+                    ),
+                    Some(_) => {}
+                    None => {
+                        m.insert(closure_name.clone(), self.closure_ns.clone());
+                    }
+                }
+            });
+        }
 
         // PY-A V2: free variables of the body (against params + currently
         // bound names) are captured THROUGH the env runtime — each read is
@@ -13169,6 +13247,8 @@ call, no NULL-handle dereference).",
         child.hoisted_names = self.hoisted_names.clone();
         child.current_class = self.current_class.clone();
         child.current_module = self.current_module.clone();
+        child.closure_ns = closure_name.clone();
+        child.closure_seq = 0;
         child.re_repl_param = self.re_repl_param;
         child.fn_depth = self.fn_depth + 1;
         let param_hint = self.pending_closure_param_types.take();
@@ -13284,6 +13364,13 @@ call, no NULL-handle dereference).",
             .map(|(i, p)| (p.clone(), i as u32 + 1))
             .collect();
         self.generated_mirs.push(mir);
+        // Closures nested INSIDE this closure were lowered by the child and
+        // published into the child's own list; `build_mir` does not move it, so
+        // drain it here. Without this the nested `FuncAddr` reference survives
+        // while its definition is dropped (undefined symbol at link).
+        for g in std::mem::take(&mut child.generated_mirs) {
+            self.generated_mirs.push(g);
+        }
         closure_name
     }
 

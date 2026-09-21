@@ -1,0 +1,19 @@
+// T0 (refactor.md B.5): 闭包里再定义函数 —— 孙层的 MIR 必须被发布出去。
+//   `lower_closure` 用一个新的 child MirGen 编译闭包体，child 自己的
+//   `generated_mirs`（闭包体内再 lowering 出来的合成函数）过去**从不并回**
+//   父层：`build_mir` 只搬 stmts/exprs/type_map，不搬这个 Vec。
+//   于是引用侧的 `FuncAddr(合成名)` 存在、定义侧被丢弃 ——
+//   修复前（批次 300 二进制）本文件编译"成功"但运行到
+//   `PY-A: '___closure' is NOT implemented in this build` 并 abort；
+//   本地 wufu 驱动上表现为链接期 undefined symbol
+//   `_closure_0_closure_0_load_split_factors_...`（引用自 `___closure_0_load_split_factors_...`）。
+// expect: 11
+def outer():
+    def a(x):
+        def b(y):
+            return y * 2
+        return b(x) + 1
+    return a(5)
+
+
+print(outer())

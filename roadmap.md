@@ -8837,3 +8837,108 @@ Python 的「没有注解」在这个 parser 里写成 `ret == "()"`（不是空
 2. `[PARITY]` 行的 date/target/holdings 全部打指针
    （`4395333088`、`target=4374146667` 且不同日期共享同一个字），即 f-string/`%s`
    的字符串来历仍未接上；它同时挡住验收用的 `json.dumps` 输出。
+
+---
+
+## 批次 302（refactor 立即档 ①／T0）—— `--dump-mir` 变成可字节比对的重构安全网
+
+> 编号说明：301 号由主线预占（批次 300 文末「下一步」），本节点走 refactor 轨
+> （`refactor.md` §9 立即档第一波 ①），直接取 302 避免撞号。
+
+### 为什么这是第一刀
+`refactor.md` B.5 把 T0 排在一切 MIR 工作之前：**没有"变没变"的判据，任何 MIR 层
+重构都无法自证是纯搬运**。而实测表明此前的 `--dump-mir` 完全不能当判据用 ——
+同一份输入编译两次，jq_wufu.py 的 dump 差 **161324 行**、299 个函数块里 **284 个不同**。
+
+### 三处不确定性（各自独立，缺一即全抖）
+1. **四个 HashMap arena 的 Debug 顺序**（`exprs`/`type_map`/`ctfe_consts`/
+   `global_consts`）—— 主体噪声，占 161324 行的绝大多数；
+2. **函数输出顺序** —— `all_mirs` 取自 `final_mirs.values()`（HashMap），
+   此前 dump 打在 `sort_by(name)` **之前**；
+3. **合成闭包符号名** —— 来自进程全局 `static AtomicU32`，取值取决于函数被
+   遍历的顺序（HashMap 随机）。实测同一文件里 `__closure_0` 一次是 `code`
+   lambda、下一次是 `codes` lambda。
+
+### 改动
+**`src/middle/mir/mir.rs`** —— 新增 `Mir::dump_canonical()`：函数头 +
+`param_indices/properties/generic_params/is_extern` + `stmts:` + 四个 arena
+经内部 `render_entries` **按 key 排序**逐条 `{:#?}`（续行缩进 4）。
+泛型约束写作 `K: Ord + Display`（第一版用 `DisplayKey<K>` 适配器和
+`impl Display for DisplayKey<'_, String>`/`<'_, u32>`，K 未受约束编译不过 —— 删）。
+
+**`src/main.rs`** —— 删除 `sort_by` 之前那段 `eprintln!("== MIR {} == …{:#?}")`；
+改到 `all_mirs.sort_by(...)` **之后**、走 **stdout**（告警仍留 stderr），
+`dump_mir` 分支只剩 `for m in &all_mirs { print!("{}", m.dump_canonical()); }`。
+
+**`src/middle/mir/gen.rs`** —— 闭包命名换成「所属作用域名 + 序号 + 命名空间哈希」：
+- 新增字段 `closure_ns: String` / `closure_seq: usize`（`new()` 里零值初始化；
+  `lower_to_mir` 入口把 `closure_ns` 设为该 `FuncDef`/`ExternFunc` 的名字，
+  模块级则退回 `current_module`；每函数进入时 `closure_seq = 0`）；
+- `lower_closure` 的 `closure_name = __closure_{n}_{bare}_c{hash8}`。形状的两条硬约束
+  都来自 codegen 的符号瀑布（`codegen.rs:2675/2689/2708/2731`）：**不能含内部
+  `__`**（会被当 `module__fn` 解析，定义侧被丢 ⇒ 第 1 次尝试
+  `___closure__backend_datasrc_split_factors__load_split_factors__0` 链接失败），
+  **末段不能全数字**（arity 剥离会重命名引用而不重命名定义 ⇒ 第 2 次尝试
+  `___closure_closure_load_split_factors_cf3b8248_0_37b76d63` 链接失败）；
+  故序号在前、`_c<哈希>` 收尾，裸名相同但模块不同的父作用域靠 fnv 哈希区分；
+- 撞名不再静默：`thread_local MINTED` 登记表，同名被两个作用域铸出时打
+  `warning: [W2001] … minted by two scopes`；
+- 子 MirGen 继承 `closure_ns = 本闭包名`、`closure_seq = 0`。
+
+### 顺带修掉的真 bug（不只是改名）
+`lower_closure` 结尾只 `self.generated_mirs.push(mir)`，而 `build_mir` 搬走的是
+stmts/exprs/type_map —— **child 自己的 `generated_mirs` 从不并回**。闭包体内再
+lowering 出来的合成函数因此只有引用没有定义。补 `std::mem::take(&mut child.generated_mirs)`
+并入。行为差异实测（`/tmp/wl/z302/nd.py`，嵌套 `def` 三层）：
+批次 300 二进制「编译成功」但运行到 `PY-A: '___closure' is NOT implemented in this
+build` 后 abort；现在打印 `11`，与 CPython 一致。已固化为
+`tests/python_style/t302_nested_def_in_closure.z`（`// expect: 11`）。
+本地 wufu 驱动上同一缺陷表现为链接期
+`Undefined symbols: ___closure_0_closure_0_load_split_factors_… referenced from
+___closure_0_load_split_factors_…`。
+
+### 新工具 `tools/mir_diff.sh`
+`snapshot [dir]` / `diff [dir]`，`--file <path>`（可重复）、`--runs N`、
+`MIR_CORPUS`、`MIR_DIFF_DIR`（默认 `/tmp/zeta_mir_baseline`）、`MIR_DIFF_SHOW=1`。
+语料发现口径与 `tools/corpus_baseline.py` 一致。snapshot **连跑 N 次**，任一次
+不一致即标 `UNSTABLE` —— 这是设计要点：不稳定文件必须自己现形，否则一次抖动就能
+把「纯搬运」的结论伪装成真的。diff 只在 `changed>0` 时退 1；新增/删除文件与
+UNSTABLE 只报告不退 1（主线会把驱动换进换出语料）。bash 3.2 兼容
+（无 `mapfile`）、`timeout` 可选、`set -e` 下不用 `[[ … ]] && cmd` 短路。
+正反两向实测：干净快照 `same=2 changed=0 rc=0`；把 `m1.py` 的 `return a+b` 改成
+`return a+b+3` 后 `changed=1 rc=1` + `CHANGED: m1.py`。
+
+### 验证（串行门禁）
+- `cargo build --release -p zetac` 干净；`./tools/build_runtime.sh` ok
+- `./tools/run_all.sh` → official **194/194** · python_style **284 passed,
+  2 failed**（新增 t302 通过；仍只有存量红 t231/t233）· 语料 **39/39**
+- 本地驱动 `ZETA_NO_OPT=1 REPLAYQUANT_LOCAL=1 zetac …/\_zeta_local_drv.py -o /tmp/wl/drv310`
+  → `Compiled to /tmp/wl/drv310`，rc=0（闭包改名期间曾链接失败，现已恢复）
+- **稳定性度量**：`MIR_SNAPSHOT_RUNS=3 ./tools/mir_diff.sh snapshot` →
+  `total=39 stable=34 unstable=5`。5 个不稳定文件（`_zeta_local_drv` /
+  `jq_wufu_local` / `wufu_bt` / `wufu_v1` / `wufu_v2`）**每个只剩 2 行翻转**，
+  且是同一个根因（下节）；此前是 161324 行。
+
+### 残余不确定性的定位（下一个节点，不进本批）
+`class BaoStockSource` 在 `backend/datasrc/market_data_sources.py:56` 与
+`backend/datasrc/sources.py:99` 各定义一次 ⇒ 两个模块限定名都是合法值，`self`
+槽类型取自一张**按裸名全程序建键**的映射（`Resolver::py_member_aliases`，
+resolver.rs:67），其构建遍历 HashMap ⇒ 后写者胜、谁后写随机。
+判别依据：翻转出现在 `--dump-mir` 中，而 dump 早于 `refine_param_types`
+（main.rs:660 vs :668）⇒ 随机源在 resolver 侧而非类型细化侧。
+这不是"dump 还不够好看"，而是**生成的程序自身可能拿错 `self` 类型**
+⇒ 修法 = 撞名响亮告警（W2002）+ 键带模块限定，独立成批。
+
+### 附记：主线自检 h9 链接失败的归因（不改主线代码）
+`/tmp/wl/h9.py` 链接期缺 `_validate_and_repair_stock_ohlcv`。**非本批引入**：
+批次 300 之前的二进制（`/tmp/wl/zetac_head`）编译同一文件同样失败且更差
+（`_get_universe` 也缺）。真因是本批之前就已存在的**解析截断**：
+`data_cleaning.py` 第 98 行的 `@classmethod`（类体成员装饰器，
+`top_level.rs:775` 只认 `staticmethod`）使 many0 在此停止，W1002 实测报出
+「177 行未被解析，起始文本 `@classmethod … class IndicatorCache:`」，
+而被丢区间正好覆盖 169 行的 `validate_and_repair_stock_ohlcv`
+⇒ 引用有、定义无 ⇒ 链接失败。属于 `refactor.md` **G.7b**（顶层同步恢复，
+行为变更、需协调）的范围，也是 G.7b 收益的直接证据。
+
+**下一步**：refactor §9 立即档 ③ —— G.8a 假值桩标记 + `--report-stubs`
+（registry 条目加 `stub=` 标记，编译期列出本次实际调用到的桩；零行为变更、冷文件）。

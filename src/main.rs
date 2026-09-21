@@ -642,17 +642,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     final_mirs.insert(name, mir.clone());
                 }
                 let mut all_mirs: Vec<Mir> = final_mirs.values().cloned().collect();
-                // C1/批次144: wire the previously dead `--dump-mir` flag —
-                // print each function's MIR (Debug) to stderr before codegen.
-                if dump_mir {
-                    for m in &all_mirs {
-                        eprintln!(
-                            "== MIR {} ==\n{:#?}",
-                            m.name.as_deref().unwrap_or("anon"),
-                            m
-                        );
-                    }
-                }
                 // Deterministic emission order: HashMap iteration order is
                 // random per process, which made LLVM's print.N collision
                 // renames (and the runtime .set alias table) flip between
@@ -663,6 +652,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap_or("~anon")
                         .cmp(b.name.as_deref().unwrap_or("~anon"))
                 });
+                // C1/批次144 wired the flag; T0 (refactor.md B.5) made it a
+                // usable baseline: the dump is the CANONICAL text form (every
+                // HashMap arena sorted by key) and goes to STDOUT, after the
+                // emission sort, so `tools/mir_diff.sh` can compare two
+                // compiles byte for byte while warnings stay on stderr.
+                if dump_mir {
+                    for m in &all_mirs {
+                        print!("{}", m.dump_canonical());
+                    }
+                }
 
                 // BATCH-295: refine unannotated PARAM types from call-site
                 // argument types (see `refine_param_types`).
