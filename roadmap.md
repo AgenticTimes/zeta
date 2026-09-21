@@ -9576,3 +9576,64 @@ consciousness/reality 四个（440+413+405+51=1,309，逐目录 `wc -l` 已复�
   既有判据（`run_all.sh:134` 要 `py_fail==0`）。三项 official **194/194** ·
   python_style **285 passed, 2 failed, 4 known-fail, 0 xpass** · 语料 **39/39 = 100%**
   —— 与批次 310/311 逐项相同 ⇒ 零基线位移。
+
+## 批次 313（refactor 立即档 ⑪ —— 性能基线：先把"能不能判"这件事量清楚）
+
+### 为什么不是 CI
+批次 312 已证 `.github/workflows/benchmarks.yml` 是幽灵作业（`benches/` 与
+`src/bin/regression_test.rs` 都不存在，`Cargo.toml:94` 付了 criterion 却没有 `[[bench]]`），
+而补 `[[bench]]` 要改正被并发工作流持有的 `Cargo.toml` ⇒ ⑪ 走仓内脚本
+`tools/perf_baseline.py`（294 行，新增）。
+
+### 口径设计（三处判据都是**量出来的**，不是设计时拍的）
+1. **成功判据必须分阶段**：照抄 `corpus_baseline.py` 的"`Compiled to`/`Linking failed`
+   都算走完"在 `--emit-llvm` 这条路径上直接失效 —— 首版因此报 `failed_runs: 12/12`，
+   数字全不可信。现按阶段判：`aot` 认 `Compiled to`(ok) / `Linking failed`(link-fail，
+   编译阶段走完、链接是本机环境问题)；`ir` 用"LLVM AssemblyWriter 一定以
+   `attributes #N = {…}` 收尾"作为**IR 打印已完成**的证据（`_ir_printed()`）。
+   min 只在可信托里取；提前报错退出的轮次剔除并计入 `bad_runs`([W3001])，
+   link-fail / 打印后才崩 计入 `noted_runs`([N3001])。
+2. **暖机**：未暖机时"冷态首采基线"与"随后的稳态测量"差 +38%（同一份二进制，
+   aot total 27,689 → 36,320 ms），`--diff` 会稳定报假回退 ⇒ 每次调用先丢弃一轮
+   每文件每阶段各一次（`PERF_WARMUP=0` 仅供调试）。
+3. **判定统计量**：同一份二进制暖机后做 5 次独立调用，三种口径的复现性是
+   `ir total` 41,655/41,016/42,288/42,460/41,132 ms ⇒ 散布 **3.5%**（可判）；
+   `ir 逐文件中位` +0.6/+7.9/+8.1% ⇒ 12 个样本的中位数被个别长尾单次抖动（最大 +24%）
+   推动，比 total 更抖（弃用为判据）；`aot total` 30,186/36,421/32,451/33,206/33,067 ms
+   ⇒ 跨调用漂 **20.7%**（含 clang 链接）⇒ 只打印作参考。
+   ⇒ 默认 `PERF_GATE_STAGES=ir` + 阈值 10%；aot 侧要变可判需 A/B 交错（任务 #27）。
+   另外 `--diff` 在暖机**之前**先校验 `corpus/n_files/repeat/阶段` 与基线一致，
+   不一致直接 `[E3001]` 退出 —— 否则"文件数变少 ⇒ total 变小"会被读成通过。
+
+### 基线数值（2026-09-21T20:14Z 采，`/tmp/zeta_perf_baseline.json`）
+- 语料 `~/source/quant/REasyQuant/strategies` 取 sorted 前 12 个 `.py`
+  （排除 `.venv` 与我方临时 `_zeta_local*` driver），`PERF_REPEAT=3` 取 min。
+- `aot` total **30,185.8 ms**，逐文件 min 的中位数 419.5 ms；
+  `ir` total **41,654.7 ms**，中位数 627.5 ms。
+- 体量集中度：`ir` 前三 `wufu_bt.py` 11,782.8 / `wufu_v1.py` 11,637.0 /
+  `jq_wufu_local.py` 11,212.8 ms = **83.1%**（`aot` 同口径 84.3%）
+  ⇒ 轴 C 的"编译最慢的东西"就是这三棵，优化收益评估按 total 加权即按它们加权。
+
+### 顺手撞出的真缺陷（→ 任务 #26）
+`--emit-llvm` **每次**都在打印完 IR 之后 SIGSEGV（rc=139；本轮 36/36 次 `ir` 测量全崩，
+连 2 行最小程序 `x = 1` 也崩）。lldb：`EXC_BAD_ACCESS (address=0x0)`、`frame #0: 0x0`
+（跳到空函数指针），崩溃在 `src/main.rs:816 codegen.module.print_to_stderr()` 之后的退出
+路径；对照同文件走 `-o`（aot）不崩 ⇒ 只在这条 dump 且跳过 `finalize_and_aot` 的路径上。
+该 flag 自 batch 13x 的 `3b79889f` 就存在（未做历史复跑验证），非本批次引入。
+影响面：任何用 `--emit-llvm` 做门禁/CI 的脚本都会被非 0 退出码误导。
+
+### 验证
+- 工具自证：`--diff`（未改任何编译器代码，同一份二进制）在 ir 判据上给出
+  -1.3%~+1.9%，5 次全部 rc=0 ⇒ 判据不会自己造回退；口径不一致/缺基线/未知模式
+  三类误用均 `[E3001]` rc=2（已实测触发）。
+- 代码零改动 ⇒ `./tools/run_all.sh > /tmp/gate_313.txt 2>&1`（2026-09-21T20:32:36Z→
+  20:35:37Z）直读退出码 rc=1 = 既有判据（`run_all.sh:134` 要 `py_fail==0`）。三项
+  official **194/194** · python_style **285 passed, 2 failed, 4 known-fail, 0 xpass** ·
+  语料 **39/39 = 100%** ⇒ 与批次 310/311/312 逐项相同，零基线位移。
+
+### OPEN
+- 任务 #27：`aot` 阶段跨调用漂 20.7%，性能门禁目前**只能判 ir 口径**；解法首推
+  基线二进制/候选二进制同轮 A/B 交错（把漂移抵消给两边）。
+- 任务 #26：`--emit-llvm` 退出路径空指针。
+- 任务 #15：基线只能躺在 `/tmp`（仓内 `.gitignore` 的 `run_*` 会吞掉这类文件），
+  机器负载一变就失效 ⇒ 与本项同因，先修 #15 才能把 perf/dc 基线入库。
