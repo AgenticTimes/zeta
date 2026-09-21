@@ -8538,3 +8538,80 @@ ZT-WARN host_str_concat bad arg a=0x103026e07[0] b=0xdb6d000102ffcbcc[?]
 
 **下一步**：批次 296 —— 打待办 1（分组键列丢失）：它同时解释「0 只标的」和
 final_value=0，是当前唯一阻塞数值验收（994575.84 / -0.5424）的项。
+
+## 批次 296（2026-09-21）：动态值的运行时分发 + json.items() 推导键内容哈希 —— **行情链路首次全缓存命中**
+
+### 起点（批次 295 待办 1）
+`合计 12375 行，0 只标的` / `Loaded 12375 records for 0 stocks`：行数对、按 code 分组后为 0。
+
+### 破案：不是「分组键列丢失」，是**读不懂动态值**
+三条独立证据把根因从 DataFrame 分组挪到了类型系统：
+1. `_build_stock_arrays` 的返回值存在 `dict[str, Any]` 里，取出后编译器只能给 **I64** 槽。
+   在此槽上 `len(e)` 走 `array_len` ⇒ 读前一个 GC 块头 ⇒ 返回 **0**（`codes=0`，实测真值 91）。
+2. `"x" in e` 在 I64 接收者上根本不识别，编译期只留一句 warning，运行期恒 **False**。
+3. 真正的「0 只」来自上游：`etf_listing._listing_dates_cached()` 的
+   `{str(k): str(v) for k, v in data.items()}` —— **推导式里 pair 的两个槽都按整对
+   (`DynamicArray(Named("PyJson"))`) 定型**，槽 0 不是 `Str` ⇒ `__pack_pair__` 的
+   `Type::Str` 判据永不成立 ⇒ 不发 `map_str_key` ⇒ 字典按指针建键。
+   1724 条上市日塌成 1 条 ⇒ 上市日过滤不生效 ⇒ 119 只全请求 ⇒ 28 只走网络（离线）失败
+   ⇒ 只剩 91 只。
+
+### 修复
+**runtime（`runtime/py_additions.c`，仍保持本 TU 末尾）**
+- `zt_dyn_is_map` / `zt_dyn_vec_hdr`：只用 GC 几何判形状（`GC_base` 必须是块首、
+  Map 的 `cap` 是 ≥16 的 2 的幂且 `GC_size ≥ 16+cap*24`；Vec 的 `base-16` 处 `[cap|len]`
+  且 `GC_size ≥ 16+cap*8`）。Map 的负 `cap` 是扩容转发指针，按 `w[1]` 目标再判。
+- `zeta_dyn_len`：map → `zeta_map_len`，vec → 头里的 `len`，**最后**才试文本
+  （`zt_c_readable` 用 `vm_read_overwrite` 探首字节 + `strnlen` 限长）。
+  第一版直接落到 `strlen` 上，非句柄的 I64 值 ⇒ SIGSEGV（`main+680`）；
+  改用「先判 GC 块」后又发现**字符串字面量在 .rodata、不在 GC 堆**（`str len 0`），
+  最终定为可读性探测。
+- `zeta_dyn_contains`：map 用内容哈希 `map_get`，vec 用 `py_list_contains`，
+  否则 `strstr` 子串（并保住 Python 的 `"" in text == True`）。
+
+**mir（`src/middle/mir/gen.rs`）**
+- `len(x)`：`None | I64 | PyDynamic` 槽改发 `zeta_dyn_len`（原先的 `array_len` 回退是错的）。
+- `k in c`：同一批槽型改发 `zeta_dyn_contains`，把编译期 warning 变成运行期真判。
+- json.items() 的 pair：for 循环解构路径把槽 0 定型 `Str`（`zt_key_display` 还回文本键）；
+  推导式路径的闭包参数提示改成 `DynamicArray(Tuple([Str, PyJson]))`，并在
+  `stack_array_get` 槽读处**按下标取元组分型**。
+  坑：下标只能从 **AST 字面量**拿，`self.exprs[lowered_id]` 已是 `Var`（首版按 `IntLit`
+  匹配 ⇒ 恒落 I64，实测 `to_string_i64(指针)`）。
+- `series.map(fn)` 在列向量上预分派 `[dynamic]str__map`，返回类型取
+  `closure_ret_tys`（此前定型 I64 ⇒ `s2[0]` 打印堆指针、`nunique()` 落回 Series 桩读坏头）。
+- `df["col"].nunique()`（列即 vec）走 `zeta_vec_nunique`（此前 `Series::nunique` 把
+  vec 头当 `self.data`，2 元素 str 列上 SIGBUS `nunique+72`）。
+- `str(<已经是 str>)` 改发 `zeta_identity`：原先只登记 `Var(arg)` 别名、没有产出语句，
+  模块级 `x = str("ab")` 从**未写过的 alloca** 取值 ⇒ `puts(0)` SEGFAULT。
+
+### 效果（drv39，`ZETA_NO_OPT=1 REPLAYQUANT_LOCAL=1`，rc=0）
+- `上市日过滤: 119 → 107 只`（跳过项带真实上市日，如 `588170.XSHG：上市日 2025-04-08`）
+- `缓存命中 107 只；待拉取 0 只` → `合计 13402 行，107 只标的` → `Loaded 13402 records for 107 stocks`
+- `本地数据注入完成: … 13402 107 119`：**网络拉取路径彻底消失**，全离线跑通
+- 回测 37 日全程 rc=0
+
+### 验证（串行门禁）
+- `./tools/build_runtime.sh` → `ok: tokio_runtime.o (624 T) + zeta_runtime_c.o`
+- `./tools/run_all.sh` → official **194/194** · python_style **278 passed, 2 failed**
+  （仅存量红 t231/t233）· 语料 **39/39**（驱动在位；移出则 38/38）
+- 新增回归 `tests/python_style/t291_dyn_len_contains_json_comp.z`（dyn `len`/`in` +
+  json.items() 推导键 lookup，断言与 items() 迭代顺序无关）→ 套件 **279 passed, 2 failed**
+- handoff §9 自检 harness 逐字对上：
+  `universe 119 sz.159985 sh.512070` / `cached 892 9 2022-05-05 2025-12-31` / `clean 892 9 892`
+
+### 仍挡验收的待办（排序即下一步顺序）
+1. **`ranked=-` 每日为空**：`_parity_snapshot` 的
+   `getattr(g, "ranked_etfs_result", [])` 是三参 + 字面量名形态，编译器只报
+   `not implemented in this form` 后落到默认值 ⇒ 快照读到空。需先分辨
+   「选股真为空」与「只是 getattr 读丢」：把三参 getattr 实现为
+   `属性存在则取值、否则取 default`，再看 ranked/target。
+2. **`%`-格式串未替换实参**：`本地数据注入完成: market=%d rows, codes=%d, trading_days=%d 13402 107 119`。
+3. **句柄代替字符串/对象打印**：`开始回测: 4365142248 ~ 4365142259`、
+   `target=4368798336`、`holdings=4368801056` —— f-string/`str()` 对 Str 值仍打指针。
+4. `回测完成: 1000000 -> 0 (-100.00%)`：final_value 归零（持仓估值或市值链未通）。
+5. bool 打印成 `1/0`、`交易成本: 佣金万0 | 滑点0.00%`（`CostModel.from_jq` 读成 0）、
+   `os.chdir` 空操作、`open(path, encoding=…)` 把 kwarg 错映射成 mode ⇒ `Invalid argument`、
+   动态值上的 `.keys()` 链到未定义 `_keys`、`.items()` 迭代顺序与插入序相反。
+
+**下一步**：批次 297 —— 打待办 1（三参 `getattr`）+ 待办 3（Str 值在 f-string 里打指针）。
+这两条决定 `ranked`/`target` 能否还原成可读文本，是从「日志能看」走到「数值能核」的最短路径。

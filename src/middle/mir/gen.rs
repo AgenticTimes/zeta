@@ -2253,15 +2253,24 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                         },
                                         _ => None,
                                     };
-                                    // Batch 288: a json.items() pair — the key
-                                    // half is the hashed i64, the value half a
-                                    // PyJson handle (the array element type is
-                                    // plain i64, see py_json_items_ids at the
-                                    // `.items()` lowering).
+                                    // Batch 288: a json.items() pair — the value
+                                    // half is a PyJson handle (the array element
+                                    // type is plain i64, see py_json_items_ids at
+                                    // the `.items()` lowering). BATCH-296: the
+                                    // KEY half is text — `py_map_items` hands
+                                    // back `zt_key_display(key)`, and a JSON
+                                    // object's keys are always strings. Typed as
+                                    // i64 it defeated content hashing on insert
+                                    // (`{k: v for k, v in d.items()}` stored raw
+                                    // pointers → every later `"512050.XSHG" in m`
+                                    // missed) and `str(k)` stringified the
+                                    // POINTER: the ETF listing cache came back as
+                                    // 1 entry, the 上市日 filter dropped nothing
+                                    // and 28 codes fell to the network.
                                     let pair_tys = pair_tys.or_else(|| {
                                         if self.py_json_items_ids.contains(&raw_id) {
                                             Some(vec![
-                                                Type::I64,
+                                                Type::Str,
                                                 Type::Named("PyJson".to_string(), vec![]),
                                             ])
                                         } else {
@@ -6280,6 +6289,20 @@ call, no NULL-handle dereference).",
                                 type_args: vec![],
                             });
                         }
+                        // BATCH-296: a value the compiler could not type (the
+                        // element of a `dict[str, Any]`, a dyn parameter). The
+                        // old `array_len` fallback read the PRECEDING GC block
+                        // and answered 0 — `codes=0` in the local backtest while
+                        // `_build_stock_arrays` really returned 91 entries. Let
+                        // the runtime tell map / vec / text apart by geometry.
+                        None | Some(Type::I64) | Some(Type::PyDynamic) => {
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_dyn_len".to_string(),
+                                args: vec![arg_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                        }
                         _ => {
                             self.stmts.push(MirStmt::Call {
                                 func: "array_len".to_string(),
@@ -7536,7 +7559,27 @@ call, no NULL-handle dereference).",
                         self.type_map.insert(id, Type::Str);
                         return id;
                     }
-                    let nid = self.lower_to_string(arg_id);
+                    // BATCH-296: `str(<already a str>)` is the identity, but the
+                    // identity was lowered as a bare ALIAS (`Var(arg)`) with no
+                    // defining stmt — at module level nothing ever stored the
+                    // dest slot, so `x = str("ab")` printed from an uninitialized
+                    // alloca and `puts(0)` SEGFAULTed (measured: IR had
+                    // `%13 = load i64, ptr %0` with no preceding store). Route
+                    // through the identity helper so the slot is really written.
+                    let nid = if matches!(self.type_map.get(&arg_id), Some(Type::Str)) {
+                        let sid = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_identity".to_string(),
+                            args: vec![arg_id],
+                            dest: sid,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(sid, MirExpr::Var(sid));
+                        self.type_map.insert(sid, Type::Str);
+                        sid
+                    } else {
+                        self.lower_to_string(arg_id)
+                    };
                     // `str(<PyPath>)` yields a STRING: the handle IS the path, so
                     // `lower_to_string` passes it through unchanged. Only the
                     // RESULT id is retyped — retyping the source id would make the
@@ -8092,7 +8135,9 @@ call, no NULL-handle dereference).",
                     // string element is an i64 and every string operation inside
                     // the comprehension (`s.upper()`, a dict key `f`) silently
                     // works on a pointer.
-                    if matches!(method.as_str(), "__collect__" | "__collect_dict__") {
+                    // BATCH-296: `.map(lambda …)` on a column vector is the same
+                    // situation — the lambda's parameter is the vec's element.
+                    if matches!(method.as_str(), "__collect__" | "__collect_dict__" | "map") {
                         if let AstNode::Closure { .. } = a {
                             if let Some(recv_id) = arg_ids.first() {
                                 if method == "__collect_dict__"
@@ -8109,10 +8154,10 @@ call, no NULL-handle dereference).",
                                     // loses the PyJson tag and degrades to the
                                     // bare `get` ghost (runtime abort).
                                     self.pending_closure_param_types = Some(vec![
-                                        Type::DynamicArray(Box::new(Type::Named(
-                                            "PyJson".to_string(),
-                                            vec![],
-                                        ))),
+                                        Type::DynamicArray(Box::new(Type::Tuple(vec![
+                                            Type::Str,
+                                            Type::Named("PyJson".to_string(), vec![]),
+                                        ]))),
                                     ]);
                                 } else {
                                     let elem = match self.type_map.get(recv_id).cloned() {
@@ -8527,6 +8572,42 @@ call, no NULL-handle dereference).",
                         .insert(id, Type::DynamicArray(Box::new(Type::Str)));
                     return id;
                 }
+                // BATCH-296: `series.map(fn)` on a COLUMN vector. The runtime
+                // helper (`_[dynamic]str__map`) already applies `fn` elementwise,
+                // but the call was typed I64, so `s2[0]` printed a heap pointer
+                // and `s2.nunique()` skipped the vec table and landed on the
+                // shim's `Series.nunique` with a raw vec handle — it read the
+                // header as `self.data` and reported 0 unique
+                // (measured: `result["stock_code"].map(...)` → `0 只标的`).
+                // Element type: the closure's recorded return type when known,
+                // else the receiver's own element type.
+                if method == "map"
+                    && arg_ids.len() == 2
+                    && matches!(receiver_ty.as_ref(), Some(Type::DynamicArray(_)))
+                {
+                    let elem = match receiver_ty.as_ref().unwrap() {
+                        Type::DynamicArray(e) => (**e).clone(),
+                        _ => Type::I64,
+                    };
+                    let res_elem = match self.exprs.get(&arg_ids[1]) {
+                        Some(MirExpr::FuncAddr(n)) => self
+                            .closure_ret_tys
+                            .get(n)
+                            .cloned()
+                            .unwrap_or(elem.clone()),
+                        _ => elem.clone(),
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: "[dynamic]str__map".to_string(),
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(res_elem)));
+                    return id;
+                }
                 // `pd.to_datetime(vecstr).normalize()` — our shim represents dates
                 // as "YYYY-MM-DD" strings, so `.normalize()` (drop the time part)
                 // is the identity. Without this the call resolved to the ghost
@@ -8746,6 +8827,37 @@ call, no NULL-handle dereference).",
                             self.type_map.insert(id, Type::Bool);
                             return id;
                         }
+                    }
+                    // BATCH-296: `k in c` where `c` is a value the compiler
+                    // could not type (element of a `dict[str, Any]`, dyn param).
+                    // Everything above missed, and the old answer was a silent
+                    // constant 0 plus a warning — i.e. membership against a
+                    // real dict or list reported False. `zeta_dyn_contains`
+                    // tells map / vec / text apart at runtime by GC geometry;
+                    // the two key forms are what the typed branches pass
+                    // (content hash for the dict, raw handle for the list).
+                    if arg_ids.len() == 2
+                        && matches!(
+                            receiver_ty.as_ref(),
+                            None | Some(Type::I64) | Some(Type::PyDynamic)
+                        )
+                    {
+                        let key_id = arg_ids[1];
+                        let key_is_str =
+                            matches!(self.type_map.get(&key_id), Some(Type::Str)) as i64;
+                        let flag = self.next_id();
+                        self.exprs.insert(flag, MirExpr::IntLit(key_is_str));
+                        self.type_map.insert(flag, Type::I64);
+                        let hkey = self.lower_map_key(key_id);
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_dyn_contains".to_string(),
+                            args: vec![arg_ids[0], key_id, hkey, flag],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Bool);
+                        return id;
                     }
                     eprintln!(
                         "warning: `in` membership is only supported for strings/dicts in V1 (container type: {:?})",
@@ -9154,6 +9266,28 @@ call, no NULL-handle dereference).",
                         _ => None,
                     };
                     if let Some(elem_ty) = elem_ty {
+                        // A PAIR element (`Type::Tuple`) carries per-slot types:
+                        // taking the whole tuple for slot 0 left the key typed
+                        // as a handle, so `__pack_pair__` never content-hashed
+                        // it and `{k: v for k, v in d.items()}` was keyed by
+                        // pointer (`"512050.XSHG" in m` → False). The index
+                        // literal must come from the AST — the lowered slot id
+                        // is a Var, not an IntLit.
+                        let slot_ty = match &elem_ty {
+                            Type::Tuple(ts) => {
+                                let idx = args.get(1).and_then(|a| match a {
+                                    AstNode::Lit(i) => Some(*i),
+                                    _ => None,
+                                });
+                                match idx {
+                                    Some(i) if i >= 0 => {
+                                        ts.get(i as usize).cloned().unwrap_or(Type::I64)
+                                    }
+                                    _ => Type::I64,
+                                }
+                            }
+                            other => other.clone(),
+                        };
                         self.stmts.push(MirStmt::Call {
                             func: "stack_array_get".to_string(),
                             args: arg_ids.clone(),
@@ -9161,7 +9295,7 @@ call, no NULL-handle dereference).",
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, elem_ty);
+                        self.type_map.insert(id, slot_ty);
                         return id;
                     }
                 }
@@ -9858,6 +9992,13 @@ call, no NULL-handle dereference).",
                             "len" => ("array_len".to_string(), true, false),
                             // 批次145 重放: order-preserving dedup / sum on vecs
                             "unique" => ("zeta_vec_unique".to_string(), false, false),
+                            // BATCH-296: `df["col"].nunique()` — the column IS a
+                            // vec, so the qualified-name fallback reached
+                            // `Series::nunique`, which read the vec header as
+                            // `self.data` and ran the loop off the end
+                            // (measured: SIGBUS at `nunique+72` from a 2-element
+                            // str column).
+                            "nunique" => ("zeta_vec_nunique".to_string(), false, false),
                             "sum" => ("zeta_sum_vec".to_string(), false, false),
                             // BATCH-291: elementwise date format (see fallback table).
                             "strftime" => ("zeta_vec_strftime".to_string(), false, false),

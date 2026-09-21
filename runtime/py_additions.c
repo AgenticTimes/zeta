@@ -3444,3 +3444,71 @@ int64_t zeta_dyn_getitem(int64_t base, int64_t key) {
     }
     return map_get(base, key);
 }
+
+// BATCH-296: geometry-based kind test for a handle whose STATIC type is unknown
+// (`d = {}; d["x"] = {...}` types the value I64, and `dict[str, Any]` from the
+// corpus does too). Such a value reached `array_len`, which read the PRECEDING
+// GC block and answered 0 — that is the `codes=0` line of the local backtest,
+// where `_build_stock_arrays` really returns 91 entries (measured with the §9
+// harness: `arrays 91`). Two shapes are distinguished by their GC block:
+//   Map    the handle IS the block start; word0 = capacity (power of two >= 16,
+//          negative for a growth forwarder) and the block covers 16 + cap*24.
+//   Vec    the handle points at the data; its [cap|len] header at base-16 is a
+//          block of its own, sized 16 + cap*8.
+// The size check is what makes this safe: a mimic needs a real block of the
+// exact right size, not just plausible words. Anything left over is text.
+// Order matters — a Vec's first element can itself look like a capacity, but a
+// Vec handle is never its own block start, so the map test rejects it first.
+int64_t zeta_map_len(int64_t);
+int64_t str_len(int64_t);
+
+static int zt_dyn_is_map(int64_t h) {
+    if (h <= 0x1000) return 0;
+    if (GC_base((void*)h) != (void*)h) return 0;
+    int64_t* w = (int64_t*)h;
+    int64_t cap = w[0];
+    if (cap < 0) return w[1] > 0x1000;      // growth forwarder → the target
+    if (cap < 16 || cap > (1LL << 28) || (cap & (cap - 1)) != 0) return 0;
+    int64_t used = w[1];
+    if (used < 0 || used > cap) return 0;
+    return (int64_t)GC_size((void*)w) >= 16 + cap * 24;
+}
+
+static int64_t* zt_dyn_vec_hdr(int64_t h) {
+    if (h <= 0x1000) return NULL;
+    int64_t* hdr = (int64_t*)(h - 16);
+    if (GC_base((void*)hdr) != (void*)hdr) return NULL;
+    int64_t cap = hdr[0], len = hdr[1];
+    if (cap < 8 || cap > (1LL << 28) || len < 0 || len > cap) return NULL;
+    if ((int64_t)GC_size((void*)hdr) < 16 + cap * 8) return NULL;
+    return hdr;
+}
+
+int64_t zeta_dyn_len(int64_t h) {
+    if (!h) return 0;
+    if (zt_dyn_is_map(h)) return zeta_map_len(h);
+    int64_t* hdr = zt_dyn_vec_hdr(h);
+    if (hdr) return hdr[1];
+    // Text is the LAST reading: an untagged value (a count, a small struct id)
+    // must not be dereferenced — measured SIGSEGV when `len()` reached `strlen`
+    // on one — while string literals live in .rodata, OUTSIDE the GC heap, so
+    // a GC-block test alone would answer 0 for them. `zt_c_readable` fault-
+    // checks the first byte and strnlen bounds the scan.
+    if (zt_c_readable(h)) return (int64_t)strnlen((const char*)h, 1 << 20);
+    return 0;
+}
+
+// `k in c` on an unknown container. `hkey` is the map-normalised key (string
+// content hash) and `key_is_str` selects content equality for the list scan —
+// both are what the TYPED paths already pass, so a dynamic value behaves like
+// whichever container it actually is.
+int64_t zeta_dyn_contains(int64_t c, int64_t key, int64_t hkey, int64_t key_is_str) {
+    if (!c) return 0;
+    if (zt_dyn_is_map(c)) return map_get(c, hkey) != 0;
+    if (zt_dyn_vec_hdr(c)) return py_list_contains(c, key, key_is_str);
+    if (!zt_c_readable(c) || !zt_c_readable(key)) return 0;
+    size_t cl = strnlen((const char*)c, 1 << 16);
+    size_t kl = strnlen((const char*)key, 1 << 16);
+    if (!cl || !kl) return kl ? 0 : 1;   // Python: `"" in text` is True
+    return strstr((char*)c, (char*)key) != NULL;
+}

@@ -1,0 +1,33 @@
+// PY-A: 批次 296 —— 动态值（json 对象的 dict/list/str 值）上的 len/in，以及
+//   json.items() 对做字典推导时的键内容哈希。
+//   修复前：(1) `len(v)` 在 I64 槽上返回 0、`"x" in v` 编译成常量 0（驱动里
+//   `codes=0`）；(2) 推导键被当指针存 ⇒ `{"aa": ...}` 只有 1 项且 `"aa" in m`
+//   恒 False ⇒ ETF 上市日表 1724 条塌成 1 条 ⇒ 上市日过滤不生效 ⇒ 28 只标的
+//   走网络拉取失败 ⇒ 行情缺数据、回测 0 交易。
+//   items() 的迭代顺序与插入序相反，因此全部断言与顺序无关。
+// expect: 9
+// expect: 1
+// expect: 3
+// expect: 3
+// expect: 3
+import json
+d = json.loads("{\"aa\": [1, 2, 3], \"bb\": {\"x\": 1}, \"cc\": \"hello\"}")
+tot = 0
+for k, v in d.items():
+    tot = tot + len(v)
+print(tot)
+hits = 0
+for k, v in d.items():
+    hits = hits + ("aa" in k) + ("zz" in k)
+print(hits)
+m = {str(k): k for k, v in d.items()}
+print(len(m))
+found = 0
+for probe in ["aa", "bb", "cc", "dd"]:
+    found = found + (probe in m)
+print(found)
+m2 = {k: v for k, v in d.items()}
+found2 = 0
+for probe in ["aa", "bb", "cc", "dd"]:
+    found2 = found2 + (probe in m2)
+print(found2)
