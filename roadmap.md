@@ -9330,3 +9330,51 @@ consciousness/reality 四个（440+413+405+51=1,309，逐目录 `wc -l` 已复�
 **下一块**（按"不碰脏文件"排序）：`new_resolver` 双轨死管道 3,115 行
 （`new_resolver.rs` 2,199 + `typecheck_new.rs` 690 + `type_cache.rs` 226，
 只需改 `src/middle/resolver/mod.rs:5` 一行，该文件当前 clean）。
+
+---
+
+## 批次 309（refactor 立即档 ⑧ 续 —— 轴 A 第二块用"可编译性反证"验，结果推翻了一半的表）
+
+**方法改变**：§1 表里的证据都是 grep 式的（"仅 `resolver/mod.rs:5` 一行声明"）。grep 只能
+证明"没人这么写"，不能证明"删了还能编"。本批改用**反证**：真删 + `cargo check`，
+让编译器来当引用检查器。代价极低（三文件在 HEAD 干净，`git checkout --` 即回滚）。
+
+### 结果 1：`new_resolver` + `typecheck_new` **不是死码**，表的"待删 3,115 行"作废
+删掉 `new_resolver.rs`(2,199) + `typecheck_new.rs`(690) 并去掉两行 `pub mod` 后
+`cargo check -p zetac` **失败**，错误分三类：
+* `error[E0432]: unresolved import super::typecheck_new` × 4 与
+  `unresolved import crate::middle::resolver::typecheck_new` × 1 —— 引用者是
+  `src/middle/resolver/unified_typecheck.rs`（:87、:112、:269、:289 四处
+  `use super::typecheck_new::NewTypeCheck`），而 `unified_typecheck` 又被
+  `src/middle/resolver/typecheck.rs:8` 引进来 ⇒ **在编译图的活路径上**。
+* `error[E0599]: no method named string_to_generic_type found for &mut Resolver` × 2
+  与 `error[E0624]: method string_to_type is private` × 4 —— 说明 `Resolver` 的这两个
+  方法实现就在 `new_resolver.rs` 里，被外部（含 `src/middle/types/mod.rs`）调用。
+⇒ 已**完整回滚**（`git status --short src/middle/resolver/` 为空、`cargo check` rc=0）。
+⇒ §1 表这一行从"待删 3,115"改成"前提被否"；真要减这块，得先做**调用点手术**
+（把 `unified_typecheck` 的双轨分支收敛到单轨），那是重构不是删除。
+
+### 结果 2：`type_cache.rs`（226 行）**确为死码，已删**
+同样反证：删文件 + 去掉 `resolver/mod.rs` 的 `pub mod type_cache;` ⇒
+`cargo check -p zetac` **rc=0、零 error**（全仓引用侧也只有它自己文件头那行注释）。
+`git status` 显示改动面 = `M src/middle/resolver/mod.rs` + `D src/middle/resolver/type_cache.rs`，
+不含并发工作流的 `src/lib.rs`。
+
+### 顺带把口径钉牢：为什么"pub 不等于活"这句这次不成立
+`type_cache` 是 `pub`，lib crate 的 `pub` 项理论上可被集成测试用（`zetac::...`），
+`cargo check` 只编 lib 不编 tests ⇒ 单看 rc=0 不够。补了两道：
+`grep -rn 'type_cache' src/ tests/ tools/` 除自身文件外**零命中**；三基线复跑数字不变。
+
+### 验证
+- `cargo check -p zetac` rc=0（删 type_cache 后）。
+- `./tools/run_all.sh > /tmp/gate_309.txt 2>&1`（2026-09-21T18:34:38Z）**直读退出码**：
+  rc=1 —— 原因是批次 308 记过的既有判据（`run_all.sh:134` 要求 `py_fail==0`，而
+  t231/t233 存量红一直在），非本批回归。三项数字 official **194/194** ·
+  python_style **285 passed, 2 failed, 4 known-fail, 0 xpass** · 语料 **39/39 = 100%**
+  —— 与批次 306/307/308 逐项相同。
+
+**轴 A 剩余**：`crate::ml` + `crate::distributed`（6,226 行，表里证据是 grep 式，
+**同样需要用本批的反证法重验**，且删它要动正被并发工作流改的 `src/lib.rs` ⇒ 阻塞）。
+新增一条更值得做的候选：`new_resolver.rs` 里只有 `string_to_type` /
+`string_to_generic_type` / `InferContext` 等少数项被外部引用 ⇒ **文件内**的
+未引用部分是真正的低垂果实（但需要逐项反证，不是一次删除）。
