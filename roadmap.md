@@ -9206,3 +9206,63 @@ UNSTABLE = `_zeta_local_drv.py`（主线驱动本身）、`jq_wufu_local.py`、`
 - `src/main.rs` 改于门禁开始前（01:23 本地），门禁覆盖的就是本批要提交的代码。
 
 **下一步**：立即档 ⑦ G.1（-O3 诊断，只读）。G.2b（canary）作为独立批次排在其后。
+
+---
+
+## 批次 307（refactor 立即档 ⑦ —— G.1 诊断档：优化级别对照矩阵）
+
+**本批性质**：只读诊断 + 一个新工具。**未动** `src/`、`runtime/`、`tests/`。
+G.1 的修复档（单变量旋钮、t06/t31 两根因）留给与主线协调的时点，不在诊断批里做。
+
+### 结论先说
+**"-O3 误编译"这个前提，方向要反过来。** 今天语料里没有任何"−O3 把对的编错"的现行；
+有的是 2 例**只有 -O3 才正确**的用例，也就是 **`-O3` 正在掩盖生成 IR 自身的不自洽**：
+
+| 用例 | -O3 | ZETA_NO_OPT=1 | 机制（实测） |
+|---|---|---|---|
+| `t06_struct_enum` | PASS | FAIL：Linking failed | 模块只有 1 个 `define`（main）；`@Color__Green` 是 `declare i64 @Color__Green()`（IR:1169）**从无定义**，却被 `store i64 ptrtoint (ptr @Color__Green to i64), ptr %6, align 4`（IR:1095）取地址当值存（枚举变体=函数指针）。-O3 DCE 掉这条死存储才链接得过 ⇒ 真实符号缺失 `_Color__Green` |
+| `t31_builtins2` | PASS | FAIL：立即崩 | rc=138（SIGBUS），10/10 复现、stdout 零字节、无 stderr；链接通过 ⇒ 崩在生成代码本身，机制未定 |
+| `t231`/`t233` | FAIL | FAIL | 存量红，与优化级别无关 |
+
+### 优化开关的真实拓扑（这是"为什么矩阵只有两级"的答案）
+* 唯一开关 `ZETA_NO_OPT`（存在即生效）**双联动**：jit.rs:24-26 跳过 `default<O3>` IR
+  管线（管线字符串在 :29）+ jit.rs:168-172 把 TargetMachine 降到 `None`。
+  ⇒ 用它无法二分到"IR pass"还是"后端 ISel"。
+* JIT 路径另有硬编码 `OptimizationLevel::Aggressive`（jit.rs:70、:88）。
+* **`-O0/-O1/-O2/-O3` 命令行是死码**：`compiler_config.rs` 解析（:121-124）写进
+  `config.opt_level`（:22），全仓无人读；`CompilerConfig` 只出现在自身文件与
+  lib.rs:52 ⇒ 整个文件不可达。真实 argv 循环 main.rs:587 白名单里没有 `-O*`，
+  落到 `_ => input = Some(...)`（:614）被当输入文件 ⇒
+  `zetac x.z -O0` 实测 `Error: Os { code: 2, kind: NotFound }`（:624，错误不提文件名）。
+* **顺带量到同一循环的静默行为**：第二个位置参数**覆盖** `input` ⇒
+  `zetac a.z b.z` 只编 b.z 且不提示。属 G.7"静默吃输入"家族，本批只登记。
+* **MIR 层优化器也未接线**：`middle::optimization::optimize(mir, level)`
+  （optimization.rs:490）零调用点 ⇒ 还债③"删 599 行"的前提成立，它本来就没在跑。
+
+### 假设核对
+* **假设 2（noundef/nonnull/noalias 声明不符、persistent TBAA 写错）→ 静态否证**：
+  `src/` 全仓 `tbaa|noalias|noundef|nonnull` 零命中；t228 样本的实际 IR（6109 行）里
+  这四个各 0 次。对齐只有 `align 4`(1919) 与 `align 8`(1179) 两档，无超额声明
+  （超额才是危险方向）。**但 README.md:19 的 "persistent TBAA metadata" 宣称的实现不存在**
+  ⇒ 文档-实现不符，要么删要么按 G.5 的"现状/愿望"分栏改写。
+* **假设 1（未初始化槽读）→ 未否证，且新增了可查的形态**：t06 证明存在"依赖 -O3 DCE
+  才合法的存储"；t31 的 -O0 立即 SIGBUS 是同一类嫌疑的更强信号。
+* **轴 B 量化**（同一 6109 行样本）：`inttoptr` 110、`ptrtoint` 63、`alloca i64` 1172、
+  `alloca double` 3 ⇒ "指针/i64 混用"有数了，这也是 G.2 生成码侧插桩做不了的原因。
+
+### 工具：`tools/opt_matrix.sh`
+两级各跑一遍 `tests/python_style/run.sh`，把 verdict 归一化成"用例→判定"后对比，
+**exit 码 = 翻转数**。`--levels "O3 NO_OPT"` 可改级别集。脚本头部把上面的拓扑与
+"为什么只有两级"逐条锚定，避免下一个人以为 `-O3` 矩阵已经能做。
+验收口径据此修正为：**翻转数 = 0** 进 CI（不是"两级各自三基线绿"——-O0 侧今天就红）。
+
+### 验证
+- 矩阵：`O3: verdicts=287`、`NO_OPT: verdicts=287`，`flips=4`（=2 例 × 两行 diff）。
+- `./tools/run_all.sh`（2026-09-21T18:19:45Z）：official **194/194** ·
+  python_style **285 passed, 2 failed, 4 known-fail, 0 xpass** · 语料 **39/39 = 100%**
+  —— 与批次 306 三项数字逐项相同（本批未动 `src/`，这是预期的复证而非巧合）。
+- 矩阵跑在门禁**之前**，两者未并发（矩阵会调 291 次 zetac，与 run_all 的语料阶段互斥）。
+
+**下一步**：⑧ 轴 A 死代码（`compiler_config.rs` 整文件、`middle::optimization::optimize`
+及其 pass 群正是轴 A 的现成条目）；G.1 修复档三件（单变量旋钮 / t06 枚举变体定义 /
+t31 -O0 SIGBUS 根因）作为独立批次，需与主线协调动 codegen 的时点。
