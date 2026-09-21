@@ -1078,7 +1078,22 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
             if let AstNode::FieldAccess { base, field } = &**lhs {
                 if let AstNode::Var(v) = &**base {
                     if v == "self" {
-                        let ty = match &**rhs {
+                        // `self._cost = cost or CostModel()` — a defaulting `or`
+                        // evaluates to its LEFT operand whenever that is present,
+                        // so the field's type is the left operand's. Typing it
+                        // from the whole expression fell to i64, and every read
+                        // through the field lost the class: `l._cost.commission`
+                        // printed the raw 8-byte slot (4557750909289998844 for
+                        // 0.0005) and `l._cost.fee(...)` mis-dispatched.
+                        let mut rhs_eff: &AstNode = rhs;
+                        while let AstNode::BinaryOp { op, left, .. } = rhs_eff {
+                            if matches!(op.as_str(), "or" | "||" | "and" | "&&") {
+                                rhs_eff = left;
+                            } else {
+                                break;
+                            }
+                        }
+                        let ty = match rhs_eff {
                             AstNode::Lit(_) => "i64".to_string(),
                             AstNode::Bool(_) => "bool".to_string(),
                             // `self.x = {}` — a dict literal field. Without this arm
@@ -1179,6 +1194,31 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                                     }
                                 }
                                 ty
+                            }
+                            // BATCH-298: `self._cash = float(initial_cash)` — the
+                            // builtin conversions have a known result type. Left at
+                            // i64 the field is arithmetic-typed as an integer, but
+                            // an 8-byte slot holds a double's BIT PATTERN (see
+                            // `StructFieldStore`), so `self._cash -= total` became
+                            // `sub i64` on those bits: the ledger's cash never
+                            // moved and the local backtest valued the portfolio at
+                            // 0 (`final_value = portfolio.available_cash`).
+                            AstNode::Call {
+                                receiver: None,
+                                method,
+                                ..
+                            } if matches!(
+                                method.as_str(),
+                                "float" | "int" | "str" | "bool"
+                            ) =>
+                            {
+                                match method.as_str() {
+                                    "float" => "f64",
+                                    "str" => "str",
+                                    "bool" => "bool",
+                                    _ => "i64",
+                                }
+                                .to_string()
                             }
                             _ => "i64".to_string(),
                         };

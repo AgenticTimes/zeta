@@ -8679,3 +8679,93 @@ final_value=0，是当前唯一阻塞数值验收（994575.84 / -0.5424）的项
 **下一步**：批次 298 —— 收掉这个 packed-string 崩点（`code.strip()` 前把 packed 槽
 还原成真 `char*`，或在 `str_trim` 一侧判形），它同时是「25% 概率崩」和
 `target=/holdings=/ranked=` 打指针（同一批短码字符串）的近邻。
+
+## 批次 298 —— 未标注字段的静态类型 + 赋值侧的 int↔float 槽位一致
+
+acceptance 的最后一环是期末估值 `final_value += pos.total_amount * price`，
+这条链上两处静态类型是错的：
+
+### 崩点与根因
+1. **未标注的 `self.x = <expr>` 没有类型**。`parse_class` 只采信显式注解，
+   于是 `self._cash = 500.0` 的字段在 `type_decls` 里是 `i64`，
+   读出来是**double 的位模式**（`500.0` → `4619567317775286272`）。
+2. **赋值侧不做 int→float 的槽位一致**。float 字段/float 容器槽按约定存**位模式**
+   （`f64_as_i64`），但 `MirStmt::Assign` 与 `BinaryOp` 提升把 i64 值直接写进去，
+   读侧再 `bitcast` 就成了天文数字。
+
+### 改动
+**parser（`src/frontend/parser/top_level.rs`）**
+- 无注解的 `self.x = <expr>` 按表达式推字段类型：`Lit(Float)` / `float(...)` /
+  `self.x = <float 字段>` 推 `f64`；`self.x = v or Default()` 穿透到 `v`。
+
+**codegen（`src/backend/codegen/codegen.rs`）**
+- `MirStmt::Assign`：目标是 float 槽而值是整数时发 `sitofp`（写入侧与读取侧对齐）。
+- `SemiringFold`：累加器与操作数都改走 `slot_or_sitofp`（`sef_acc_sitofp` /
+  `sef_val_sitofp`），并把 `values[i]` 的 expr id 传进 `gen_expr`，
+  否则 `FieldAccess` 操作数拿不到自己的静态类型 ——
+  `self._cash = self._cash + total` 曾编译成 `sitofp(4619567317775286272) + total`。
+
+### 验证
+- official 194/194 · python_style 281 passed, 2 failed（存量红 t231/t233）· 语料 38/38
+- 新增回归 `tests/python_style/t298_field_float_infer.z`（`// expect: 63`）：
+  未标注 float 字段的读回、`cash -= p.avg_cost` 的减法、`total += p.x * 2.0` 的累加。
+
+## 批次 299 —— 字典推导的键类型 + 容器槽 float 的来历判定
+
+### 崩点
+`LocalBackend.positions` → `PositionLedger.positions` 是一个带过滤条件的字典推导：
+```python
+{c: Position(...) for c, p in self._positions.items() if p["amount"] > 0}
+```
+推导产物的**键**静态类型是 `i64`（`self._p = {}` 无注解 ⇒ `map[PyDynamic, I64]`），
+于是 `d["AAA"]` 拿 packed 短码当整数哈希去查 ⇒ SEGV；同一条链上
+`p.total_amount == 2000.0` 恒假（float 字段读出来是位模式，比较前没 bitcast）。
+
+### 改动
+**mir（`src/middle/mir/gen.rs`）**
+- `items/keys/values/most_common` 的视图元素类型：`Type::Named` 的实参缺省或是
+  `PyDynamic` 时**当作未标注**，键回落到 `Str`、值回落到 `I64`，
+  这样推导侧能对字面量键做内容哈希。
+- `stack_array_get` 的槽类型判定同时接受**裸 `Tuple(..)` 参数**（推导的元组目标
+  在 hint 里存的是元素类型整体，不是 `DynamicArray(elem)`）。
+- `struct_field_ty`：`type_decls` 的键是**模块 mangle 过的**
+  （`backend_strategy_wufu_backend__Position`），而部分路径用裸名 ——
+  补上「裸名 → mangled」的正向候选并 `sort()` 保证确定性。
+
+**codegen（`src/backend/codegen/codegen.rs`）**
+- 新增 `pub slot_read_ids: HashSet<u32>` + `collect_slot_reads`：
+  在 `emit_function` 里扫出「从容器槽读出来的值」的 expr id
+  （`map_get / dict_get / array_get / vec_get / stack_array_get / zeta_dyn_getitem /
+  map_get_default / map_get_or`），穿过 `Assign` 做不动点扩张。
+- `fn slot_or_sitofp(v, id, name)`：**来历决定 bitcast 还是 sitofp** ——
+  容器槽读出来的整数是位模式（bitcast），算术产生的整数是数值（sitofp）。
+- `coerce_call_args` 增加 `arg_ids`，`(IntValue, FloatType)` 这条边按同一规则选
+  `arg_slot_bits` / `arg_sitofp`。
+- `BinaryOp` 的混合精度提升走 `slot_or_sitofp`，并且**操作数必须带自己的 expr id**
+  （此前 `gen_expr(.., None)` 让 `FieldAccess` 丢掉了静态类型）。
+
+### 验证
+- official **194/194** · python_style **282 passed, 2 failed**（只有存量红 t231/t233）
+  · 语料 **38/38**（驱动移开）· handoff §9 harness 逐字：
+  `universe 119 sz.159985 sh.512070` / `cached 892 9 2022-05-05 2025-12-31` / `clean 892 9 892`
+- 新增回归 `tests/python_style/t299_dictcomp_key_float_slot.z`（`// expect: 1023`）：
+  无注解 dict 字段上做推导（含过滤式）、`d["AAA"]` 按键取回、`len(d.values())`、
+  `p.total_amount * 2.0` 累加、`cash -= p.avg_cost`、过滤推导的 `len`/取值、
+  成员判定、`int(p.total_amount)` 求和；O0/O2/NO_OPT 三档结果一致。
+- 真实模块的估值链：drv62 打印
+  `P code 510880.XSHG amt 1000.000000 cost 1.500000` /
+  `P code 159509.XSHE amt 2000.000000 cost 1.250000`
+  （批次前是 `P code 4302104953 amt 4652007308841189376`）。
+
+### 尝试后回退的部分
+`runtime/py_additions.c` 里 `zeta_collect_dict` 的 `GC_base((void*)k) == k` 重哈希
+**没有生效**（字符串句柄不是自己的 GC base），且对 struct 键是隐患 —— 已回退。
+
+**下一步**：批次 300 —— acceptance 仍然打印 `回测完成: 1000000 -> 0 (-100.00%)` /
+`AZ JSON <pointer>`。三个待打的点按优先级：
+1. `run_backtest` 内部 0 笔成交、`available_cash` 读到 0、`final_holdings` 为空 ——
+   新线索是**对「函数返回的对象」再调方法会静默崩溃**（`/tmp/wl/drv_L4crash.py`）。
+2. f-string 与 `%s` 的字符串参数来历（打指针、不同短串塌成同一个字），
+   它同时挡住 `_parity_snapshot` 的可观测性与 `json.dumps` 的验收输出。
+3. universe 分歧：zeta `119 → 107` vs CPython `115 → 103`，伴随
+   `load_metadata failed … : 1` 的 parquet 回退。

@@ -2665,6 +2665,76 @@ impl Resolver {
         })
     }
 
+    /// Batch 299: a `-> dict` annotation carries NO key/value type (`map` with
+    /// zero type arguments), so EVERY consumer of the result lost it:
+    /// `for pos in portfolio.positions.values()` read struct fields off a raw
+    /// handle (the end-of-period valuation printed integers) and `d[k]`
+    /// SEGVFAULTED on the miss (`PositionLedger.positions`,
+    /// `jq_wufu_local.py:97-147`). When the body returns a dict comprehension,
+    /// recover the pair types from the desugared AST
+    /// (`{k: V for ...}` → `__collect_dict__(λ. __pack_pair__(k, V))`).
+    fn dict_comprehension_ret(body: &[AstNode]) -> Option<Type> {
+        fn pair_from(node: &AstNode) -> Option<Type> {
+            let args = match node {
+                AstNode::Call {
+                    receiver: Some(_),
+                    method,
+                    args,
+                    ..
+                } if method == "__collect_dict__" && args.len() == 1 => args,
+                _ => return None,
+            };
+            let inner = match &args[0] {
+                AstNode::Closure { body, .. } => body,
+                _ => return None,
+            };
+            // The filtered form is `if cond { pack(k, v) } else { -1 }`.
+            let pair = match &**inner {
+                AstNode::Call { .. } => &**inner,
+                AstNode::If { then, .. } => match then.first() {
+                    Some(AstNode::ExprStmt { expr }) => &**expr,
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            let args = match pair {
+                AstNode::Call {
+                    receiver: None,
+                    method,
+                    args,
+                    ..
+                } if method == "__pack_pair__" && args.len() == 2 => args,
+                _ => return None,
+            };
+            let key = match &args[0] {
+                AstNode::StringLit(_) | AstNode::FString { .. } => Type::Str,
+                _ => Type::I64,
+            };
+            // Only a type the AST states outright — anything looser would
+            // mis-type every caller, so those keep the old (untyped) behavior.
+            let val = match &args[1] {
+                AstNode::Call {
+                    receiver: None,
+                    method,
+                    ..
+                } if method.chars().next().map_or(false, |c| c.is_uppercase()) => {
+                    Type::Named(method.clone(), vec![])
+                }
+                AstNode::StringLit(_) => Type::Str,
+                AstNode::FloatLit(_) => Type::F64,
+                _ => return None,
+            };
+            Some(Type::Named("map".to_string(), vec![key, val]))
+        }
+        body.iter().find_map(|st| match st {
+            AstNode::Return(e) => pair_from(e),
+            AstNode::Block { body } => Self::dict_comprehension_ret(body),
+            AstNode::If { then, else_, .. } => Self::dict_comprehension_ret(then)
+                .or_else(|| Self::dict_comprehension_ret(else_)),
+            _ => None,
+        })
+    }
+
 /// `pd.DataFrame` → `DataFrame` (shim struct) anywhere inside a type,
 /// including nested type arguments (`tuple[pd.DataFrame, int]`, `[pd.DataFrame]`).
 fn shim_class_normalize(t: &Type) -> Type {
@@ -2742,6 +2812,32 @@ fn shim_class_normalize(t: &Type) -> Type {
                     {
                         if Self::returns_json_loads(body) {
                             return (name.clone(), Type::Named("PyJson".to_string(), vec![]));
+                        }
+                        // Batch 299: recover the key/value types of a returned
+                        // dict comprehension (see `dict_comprehension_ret`).
+                        if let Some(t) = Self::dict_comprehension_ret(body) {
+                            return (name.clone(), t);
+                        }
+                    }
+                    // A METHOD is registered under its qualified key
+                    // (`Ledg::build`) while the definitions carry the bare name
+                    // (`build`), so the lookup above misses. Retry by tail —
+                    // but only when exactly one definition has that method name,
+                    // so two classes sharing `positions` cannot cross-contaminate
+                    // each other's value type.
+                    let tail = name.rsplit("::").next().unwrap_or(name.as_str());
+                    let hits: Vec<&AstNode> = defs_snapshot
+                        .iter()
+                        .filter(|d| {
+                            matches!(d, AstNode::FuncDef { name: n, .. }
+                                if n.rsplit("::").next().unwrap_or("") == tail)
+                        })
+                        .collect();
+                    if hits.len() == 1 {
+                        if let Some(AstNode::FuncDef { body, .. }) = hits.first() {
+                            if let Some(t) = Self::dict_comprehension_ret(body) {
+                                return (name.clone(), t);
+                            }
                         }
                     }
                 }

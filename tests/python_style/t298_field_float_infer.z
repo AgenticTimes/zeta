@@ -1,0 +1,48 @@
+// PY-A: 批次 298 —— 未标注字段的类型推断。`self._cash = float(x)` / `self._cash = 0.25`
+//   这类无注解赋值以前把字段记成 i64，于是 `self._cash -= total` 编译成
+//   `sub i64` —— 而 8 字节槽里存的是 double 的**位模式**（StructFieldStore 有意
+//   bitcast）。结果现金账本"减 100"只动了尾数的几个 bit，读回来还是 500：
+//   回测期末 `final_value = portfolio.available_cash` 永远算错（ drv: 1000000 -> 0）。
+//   现在字段类型从赋值右侧的静态类型推断（float 字面量 / float(...) / 浮点表达式），
+//   int/bool/str 字段的既有行为不变（末行断言）。
+// expect: 63
+class Ledger:
+    def __init__(self, initial_cash):
+        self._cash = float(initial_cash)
+        self._rate = 0.25
+        self.n = 3
+
+    @property
+    def cash(self) -> float:
+        return self._cash
+
+    def spend(self, total):
+        self._cash -= total
+
+    def earn(self, total):
+        self._cash = self._cash + total
+
+    def bump(self, k):
+        self._cash += k * self._rate
+
+
+l = Ledger(500.0)
+m = 0
+if l.cash == 500.0:
+    m = m + 1
+l.spend(100.0)
+if l.cash == 400.0:
+    m = m + 2
+l.earn(50.0)
+if l.cash == 450.0:
+    m = m + 4
+l.bump(2.0)
+if l.cash == 450.5:
+    m = m + 8
+if l.n == 3:
+    m = m + 16
+q = Ledger(10.0)
+q.spend(1.0)
+if q.cash == 9.0 and l.cash == 450.5:
+    m = m + 32
+print(m)

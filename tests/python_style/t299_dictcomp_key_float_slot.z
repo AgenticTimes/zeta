@@ -1,0 +1,85 @@
+// PY-A: 批次 299 —— 字典推导键的内容哈希 + 容器槽位的 double 位模式来历。
+//   修复前两处独立崩点：
+//   (1) `for c, v in self._p.items()` 里 `c` 是静态 I64（未标注 / `dict[str,_]`
+//       字段在 MIR 里是 `map[PyDynamic, I64]`），`__pack_pair__` 因此不做内容哈希
+//       ⇒ map 按字符串**地址**建键 ⇒ `d["AAA"]` 取不到（返回 0），紧接着对空
+//       Position 读字段直接 SEGV（exit 139，实测 /tmp/wl/q310/d3.py）。
+//       同时推导元组目标的 `stack_array_get(对, 0)` 也没走按槽取类型。
+//   (2) `map_get` / `stack_array_get` 出来的字是 double 的**位模式**，而调用 ABI
+//       与算术里的 i64→f64 强制转换按数值做 ⇒ `Pos(total_amount=…)` 存成
+//       4652007308841189376，期末估值 1000 股 × 价格恒为 0。
+//       现在 codegen 先收集"槽位读取"来历（collect_slot_reads），命中的走
+//       bit_cast，其余仍走 sitofp（int 字段/计数字段的既有行为不变，末段断言）。
+//   (3) 二元运算的操作数以 `gen_expr(.., None)` 下探，FieldAccess 拿不到自己的
+//       静态类型 ⇒ 浮点字段的位模式没被 bitcast 回来，反而在 int/float 混算提升
+//       里被 sitofp ⇒ `p.total_amount == 1000.0` 恒 False（阈值/过滤判断全哑）。
+//       操作数现在带上自身 id，提升走同一来历判定。
+//   items() 顺序与插入序无关，所有断言不依赖顺序。
+// expect: 1023
+class Pos:
+    code: str
+    total_amount: float = 0.0
+    avg_cost: float = 0.0
+
+    def __init__(self, code: str, total_amount: float, avg_cost: float):
+        self.code = code
+        self.total_amount = total_amount
+        self.avg_cost = avg_cost
+
+
+class Ledg:
+    def __init__(self):
+        self._p = {}
+
+    def add(self, code: str, amt: float, cost: float) -> None:
+        self._p[code] = {"amount": amt, "avg_cost": cost}
+
+    def build(self) -> dict:
+        return {c: Pos(code=c, total_amount=v["amount"], avg_cost=v["avg_cost"]) for c, v in self._p.items()}
+
+    def live(self) -> dict:
+        return {c: Pos(code=c, total_amount=v["amount"], avg_cost=v["avg_cost"]) for c, v in self._p.items() if v["amount"] > 0}
+
+
+l = Ledg()
+l.add("AAA", 1000.0, 1.5)
+l.add("BBB", 2000.0, 1.25)
+l.add("CCC", 0.0, 9.0)
+d = l.build()
+m = 0
+q = d["AAA"]
+if q.code == "AAA":
+    m = m + 1
+if q.total_amount == 1000.0:
+    m = m + 2
+if q.avg_cost == 1.5:
+    m = m + 4
+if len(d.values()) == 3:
+    m = m + 8
+total = 0.0
+for p in d.values():
+    total += p.total_amount * 2.0
+if total == 6000.0:
+    m = m + 16
+cash = 500.0
+for p in d.values():
+    cash -= p.avg_cost
+if cash == 488.25:
+    m = m + 32
+lv = l.live()
+if len(lv.values()) == 2:
+    m = m + 64
+if lv["BBB"].total_amount == 2000.0:
+    m = m + 128
+hits = 0
+for probe in ["AAA", "BBB", "CCC", "ZZZ"]:
+    if probe in lv:
+        hits = hits + 1
+if hits == 2:
+    m = m + 256
+ints = 0
+for p in d.values():
+    ints = ints + int(p.total_amount)
+if ints == 3000:
+    m = m + 512
+print(m)

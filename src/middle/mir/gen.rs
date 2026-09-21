@@ -142,6 +142,13 @@ pub struct MirGen {
     /// PY-A: value type of the most recently lowered closure body, so a
     /// comprehension's result can carry a real element type instead of i64.
     last_closure_ret_ty: Option<Type>,
+    /// Batch 299: key/value types of the most recently lowered
+    /// `__pack_pair__` (a dict comprehension's lambda). `zeta_collect_dict`
+    /// filled a map with NO type arguments, so `d.values()` fell back to i64
+    /// elements and `portfolio.positions.values()` read struct fields off a
+    /// pointer (`PositionLedger.positions` — the whole end-of-period
+    /// valuation came out as garbage integers).
+    last_dict_pair_ty: Option<(Type, Type)>,
     /// Stack of loop result slots for `loop { break EXPR; }` value semantics.
     loop_value_stack: Vec<u32>,
     /// Result slot of the most recently lowered loop (for implicit ret_val).
@@ -242,6 +249,7 @@ impl MirGen {
             pending_closure_param_types: None,
             py_json_items_ids: std::collections::HashSet::new(),
             last_closure_ret_ty: None,
+            last_dict_pair_ty: None,
             loop_value_stack: Vec::new(),
             last_loop_result: None,
             generated_mirs: vec![],
@@ -1069,6 +1077,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
             self.stmts.push(MirStmt::Return { val: ret_val });
         }
 
+        // Batch 299: a bare `-> dict` / `-> list` annotation carries NO element
+        // type (`map` with zero type arguments), so every consumer of the call
+        // result degraded to i64. The RESOLVER refines such an annotation with
+        // the container type the body actually returns (`MirGen` is rebuilt per
+        // top-level item, so a refinement made here never reaches a call site).
         Mir {
             name: match ast {
                 AstNode::FuncDef { name, .. } | AstNode::ExternFunc { name, .. } => {
@@ -1431,6 +1444,42 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         // the expression path) — a param-typed key used to be
                         // pointer-hashed and never matched.
                         let key_id = self.lower_map_key_typed(index_id, Some(&base_ty));
+                        // Batch 299: `m = {}` binds map[i64, i64], so every later
+                        // `m[k] = obj` left the map's VALUE type i64 — `m.values()`
+                        // then handed out i64 elements and `p.code` read struct
+                        // fields off the handle (`PositionLedger.positions`).
+                        // Inserting a value refines the declared type, exactly like
+                        // the first entry of a dict literal.
+                        let val_ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
+                        let key_ty = self
+                            .type_map
+                            .get(&index_id)
+                            .cloned()
+                            .unwrap_or(Type::I64);
+                        if let Type::Named(_, targs) = &base_ty {
+                            let old_key = targs.first().cloned().unwrap_or(Type::I64);
+                            let old_val = targs.get(1).cloned().unwrap_or(Type::I64);
+                            let new_key = if matches!(old_key, Type::I64)
+                                && matches!(key_ty, Type::Str)
+                            {
+                                Type::Str
+                            } else {
+                                old_key.clone()
+                            };
+                            let new_val = if matches!(old_val, Type::I64)
+                                && !matches!(val_ty, Type::I64)
+                            {
+                                val_ty.clone()
+                            } else {
+                                old_val.clone()
+                            };
+                            if new_key != old_key || new_val != old_val {
+                                self.type_map.insert(
+                                    base_id,
+                                    Type::Named("map".to_string(), vec![new_key, new_val]),
+                                );
+                            }
+                        }
                         self.stmts.push(MirStmt::DictInsert {
                             map_id: base_id,
                             key_id,
@@ -2007,7 +2056,19 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     });
                     // Store the temp ID for implicit return to find
                     self.exprs.insert(temp_id, MirExpr::Var(temp_id));
-                    self.type_map.insert(temp_id, Type::I64);
+                    // The temp must CARRY the expression's type. Typing it I64
+                    // unconditionally erased F64 from every expression-statement
+                    // arm of a ternary: `return p*(1+self.s) if c else ...`
+                    // (`CostModel.fill_price`) then inferred an i64 signature, so
+                    // the early `return price` compiled to `fptosi double->i64`
+                    // and the caller's bitcast produced 2.5e-323 — i.e. the whole
+                    // local backtest had `total = 0` and `final_value -> 0`.
+                    let temp_ty = self
+                        .type_map
+                        .get(&expr_id)
+                        .cloned()
+                        .unwrap_or(Type::I64);
+                    self.type_map.insert(temp_id, temp_ty);
                 }
             }
             AstNode::For {
@@ -3303,9 +3364,26 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // length, anything else → `!= 0`), so an int answers the
                     // same as before. Floats keep their own rule (bits != 0).
                     let left_ty = self.type_map.get(&left_id).cloned();
-                    let truth_id = if matches!(left_ty, Some(Type::F64) | Some(Type::Bool)) {
-                        left_id
-                    } else {
+                    // A USER-CLASS instance is always truthy in Python (our
+                    // dataclasses define no `__bool__`/`__len__`) and it lives in
+                    // an i64 slot as a heap pointer, so `!= 0` is the whole
+                    // question. `zeta_dyn_truth` instead probes the object's first
+                    // word as a length: `self._cost = cost or CostModel()` read
+                    // `slippage` (0.0 bits) as "empty", silently swapped in a
+                    // default model, and every `fee()` became 0 — the ledger's
+                    // cash barely moved.
+                    let is_object = matches!(
+                        &left_ty,
+                        Some(Type::Named(n, _))
+                            if !matches!(
+                                n.as_str(),
+                                "map" | "dict" | "set" | "frozenset" | "PyJson" | "str"
+                            )
+                    );
+                    let truth_id =
+                        if matches!(left_ty, Some(Type::F64) | Some(Type::Bool)) || is_object {
+                            left_id
+                        } else {
                         // A JSON cell needs its own reader (tag + payload), the
                         // geometry probes cannot see through the tag word.
                         let func = if matches!(&left_ty, Some(Type::Named(n, _)) if n == "PyJson") {
@@ -4252,7 +4330,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     })
                 };
                 if let Some(ty) = branch_ty(&then_stmts).or_else(|| branch_ty(&else_stmts)) {
-                    if !matches!(ty, Type::I64)
+                        if !matches!(ty, Type::I64)
                         || branch_ty(&else_stmts).map_or(true, |t| matches!(t, Type::I64))
                     {
                         self.type_map.insert(dest_id, ty);
@@ -8983,24 +9061,48 @@ call, no NULL-handle dereference).",
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
-                        // Key kind comes from the map type's args: a string-keyed
-                        // map yields Vec<str> for keys() and Vec<(str, i64)> for
-                        // most_common.
+                        // A map's VALUE type must reach the elements: the local
+                        // backtest reads `for pos in portfolio.positions.values()`
+                        // and then `pos.total_amount`. Typed I64 (the old default,
+                        // borrowed from the KEY kind), the field read fell through
+                        // to the raw-slot path and printed the handle — every
+                        // holding valued at ~0, so `final_value` stayed at the
+                        // cash balance.
+                        // Batch 299: an UNTYPED map keys by `str`. The key type
+                        // is what decides content-hashing, and a static I64 left
+                        // a comprehension key as the string's ADDRESS: `d["AAA"]`
+                        // missed, returned 0, and the field read on the null
+                        // Position SEGFAULTED (measured on the positions map).
+                        // `map_str_key` is identity for a non-pointer word, so a
+                        // genuinely integer key still round-trips unchanged.
+                        // A `PyDynamic` key carries no information either — same
+                        // treatment (measured: a declared `dict[str, float]`
+                        // field reaches MIR as `map[PyDynamic, I64]`).
                         let key_ty = match receiver_ty.as_ref() {
-                            Some(Type::Named(_, args))
-                                if matches!(args.first(), Some(Type::Str)) =>
-                            {
-                                Type::Str
+                            Some(Type::Named(_, args)) => match args.first().cloned() {
+                                None | Some(Type::PyDynamic) => Type::Str,
+                                Some(t) => t,
+                            },
+                            _ => Type::Str,
+                        };
+                        let val_ty = match receiver_ty.as_ref() {
+                            Some(Type::Named(_, args)) => {
+                                args.get(1).cloned().unwrap_or(Type::I64)
                             }
                             _ => Type::I64,
+                        };
+                        let elem_ty = if method == "values" {
+                            val_ty.clone()
+                        } else {
+                            key_ty.clone()
                         };
                         let out_ty = if method == "most_common" || method == "items" {
                             Type::DynamicArray(Box::new(Type::Tuple(vec![
                                 key_ty,
-                                Type::I64,
+                                val_ty,
                             ])))
                         } else {
-                            Type::DynamicArray(Box::new(key_ty))
+                            Type::DynamicArray(Box::new(elem_ty))
                         };
                         self.type_map.insert(id, out_ty);
                         return id;
@@ -9293,6 +9395,13 @@ call, no NULL-handle dereference).",
                 if method == "stack_array_get" && receiver.is_none() && arg_ids.len() == 2 {
                     let elem_ty = match self.type_map.get(&arg_ids[0]).cloned() {
                         Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => Some(*e),
+                        // Batch 299: the generic comprehension hint (gen.rs
+                        // `__collect_dict__`) stores the ELEMENT type on the
+                        // lambda param, not `DynamicArray(element)` like the
+                        // json.items() branch — so a tuple target's param is
+                        // already `Tuple[k, v]`. Without this the per-slot
+                        // lookup below never ran and a str key stayed I64.
+                        Some(t @ Type::Tuple(_)) => Some(t),
                         _ => None,
                     };
                     if let Some(elem_ty) = elem_ty {
@@ -9511,8 +9620,22 @@ call, no NULL-handle dereference).",
                         type_args: vec![],
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map
-                        .insert(id, Type::Named("map".to_string(), vec![]));
+                    let pair_ty = self.last_dict_pair_ty.take();
+                    let map_ty = match pair_ty {
+                        Some((k, v)) => Type::Named(
+                            "map".to_string(),
+                            vec![
+                                if matches!(k, Type::Str) {
+                                    Type::Str
+                                } else {
+                                    Type::I64
+                                },
+                                v,
+                            ],
+                        ),
+                        None => Type::Named("map".to_string(), vec![]),
+                    };
+                    self.type_map.insert(id, map_ty);
                     return id;
                 }
                 // __pack_pair__(k, v) — the runtime keeps the pair as a 2-slot
@@ -9523,6 +9646,8 @@ call, no NULL-handle dereference).",
                 // silently stored as a pointer-to-i64.
                 if method == "__pack_pair__" && arg_ids.len() == 2 {
                     let k_ty = self.type_map.get(&arg_ids[0]).cloned().unwrap_or(Type::I64);
+                    let v_ty = self.type_map.get(&arg_ids[1]).cloned().unwrap_or(Type::I64);
+                    self.last_dict_pair_ty = Some((k_ty.clone(), v_ty.clone()));
                     if matches!(k_ty, Type::Str) {
                         let hashed = self.next_id();
                         self.stmts.push(MirStmt::Call {
@@ -11224,6 +11349,24 @@ call, no NULL-handle dereference).",
                     if let Some((_, tail)) = tn.rsplit_once("__") {
                         cands.push(tail.to_string());
                     }
+                    // Batch 299: the OTHER mangling direction. A cross-module
+                    // read sees the BARE class name (`p.code` in the driver,
+                    // `Position` from `wufu_backend`) while `type_decls` keys
+                    // it as `backend_strategy_wufu_backend__Position`, so every
+                    // field fell back to I64: `total_amount` printed the raw
+                    // double bits (4652007308841189376) and `code` printed the
+                    // string handle — the closing valuation came out at 0.
+                    let suffix = format!("__{}", tn);
+                    let mut module_qualified: Vec<String> = decls
+                        .iter()
+                        .filter(|(k, _)| k.ends_with(&suffix))
+                        .map(|(k, _)| k.clone())
+                        .collect();
+                    // Deterministic order: two modules may each declare a class
+                    // of this name, and `HashMap` iteration would otherwise pick
+                    // a different field type per compile.
+                    module_qualified.sort();
+                    cands.extend(module_qualified);
                     cands.iter().find_map(|t| match decls.get(t) {
                         Some(TypeDecl::Struct { fields, .. }) => fields
                             .iter()
@@ -13113,6 +13256,13 @@ call, no NULL-handle dereference).",
         // Remember the body's value type for the enclosing comprehension (the
         // child MirGen owns that type map, so read it here).
         self.last_closure_ret_ty = child.type_map.get(&body_val).cloned();
+        // Batch 299: a DICT comprehension's lambda records its key/value types
+        // on the child (`__pack_pair__`), so the collected map can be typed
+        // `map[k, v]` instead of the untyped `map` that made `.values()`
+        // elements i64.
+        if child.last_dict_pair_ty.is_some() {
+            self.last_dict_pair_ty = child.last_dict_pair_ty.clone();
+        }
         // Ensure the closure returns its body value.
         if std::env::var("ZETA_PROBE").is_ok() {
             eprintln!("PROBE closure {} final stmts={}", closure_name, child.stmts.len());
@@ -13340,3 +13490,4 @@ fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)
         _ => None,
     }
 }
+

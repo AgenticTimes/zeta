@@ -49,6 +49,15 @@ pub struct LLVMCodegen<'ctx> {
 
     // Current type map for the function being compiled
     pub current_type_map: Option<std::collections::HashMap<u32, crate::middle::types::Type>>,
+    /// Batch 299: temps whose value was read OUT OF A CONTAINER SLOT
+    /// (`map_get` / `array_get` / `stack_array_get` / `DictGet` …). Such a word
+    /// holds the raw 64 bits the writer stored — for a `float` it is the
+    /// double's BIT PATTERN (`dict_f64_bits`), never a numeric i64. Passing one
+    /// to a `double` parameter therefore has to bitcast; the numeric `sitofp`
+    /// the ABI coercion used to emit turned `1000.0` into
+    /// 4652007308841189376.0 (measured on the `positions` comprehension's
+    /// `Pos(total_amount=p["amount"])`).
+    pub slot_read_ids: std::collections::HashSet<u32>,
     /// Struct type definitions: maps type name to list of field names
     /// Populated from all MIRs during gen_mirs preprocessing.
     pub struct_defs: std::collections::HashMap<String, Vec<String>>,
@@ -1311,6 +1320,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
             loop_stack: Vec::new(),
 
             current_type_map: None,
+            slot_read_ids: std::collections::HashSet::new(),
             struct_defs: std::collections::HashMap::new(),
             spawn_counter: 0,
             strict_abi: std::env::var("ZETA_STRICT_ABI").is_ok(),
@@ -1561,6 +1571,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
         self.builder.position_at_end(entry);
         self.locals.clear();
         self.current_type_map = Some(mir.type_map.clone());
+        self.slot_read_ids = Self::collect_slot_reads(&mir.stmts);
         let all_ids = self.collect_all_local_ids(mir);
         for &id in &all_ids {
             let alloca = match self.current_type_map.as_ref().and_then(|tm| tm.get(&id)) {
@@ -1597,6 +1608,93 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 .build_return(Some(&zero))
                 .unwrap();
         }
+    }
+
+    /// Temps produced by a raw container-slot read (see `slot_read_ids`).
+    fn collect_slot_reads(
+        stmts: &[crate::middle::mir::mir::MirStmt],
+    ) -> std::collections::HashSet<u32> {
+        use crate::middle::mir::mir::MirStmt as S;
+        const READS: &[&str] = &[
+            "map_get",
+            "dict_get",
+            "array_get",
+            "vec_get",
+            "stack_array_get",
+            "zeta_dyn_getitem",
+            "map_get_default",
+            "map_get_or",
+        ];
+        let mut ids = std::collections::HashSet::new();
+        for stmt in stmts {
+            match stmt {
+                S::Call { func, dest, .. } => {
+                    let base = func.rsplit("::").next().unwrap_or(func.as_str());
+                    // Codegen suffixes specialized runtimes (`stack_array_get_2`,
+                    // `map_get_1`), so a trailing `_<digits>` is not part of the
+                    // callee's identity.
+                    let stem = match base.rsplit_once('_') {
+                        Some((head, tail))
+                            if !head.is_empty()
+                                && tail.chars().all(|c| c.is_ascii_digit()) =>
+                        {
+                            head
+                        }
+                        _ => base,
+                    };
+                    if READS.contains(&stem) {
+                        ids.insert(*dest);
+                    }
+                }
+                S::DictGet { dest, .. } => {
+                    ids.insert(*dest);
+                }
+                S::If { then, else_, .. } => {
+                    ids.extend(Self::collect_slot_reads(then));
+                    ids.extend(Self::collect_slot_reads(else_));
+                }
+                S::For { body, else_body, .. } | S::While { body, else_body, .. } => {
+                    ids.extend(Self::collect_slot_reads(body));
+                    ids.extend(Self::collect_slot_reads(else_body));
+                }
+                _ => {}
+            }
+        }
+        // A slot word copied through a binding (`for c, v in d.items()` lowers
+        // the pair read and then `Assign`s it to the loop name) is still a slot
+        // word, so widen the set until it stops growing.
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for stmt in stmts {
+                if let S::Assign { lhs, rhs } = stmt {
+                    if ids.contains(rhs) && ids.insert(*lhs) {
+                        grew = true;
+                    }
+                }
+            }
+        }
+        ids
+    }
+
+    /// int→double for a word that came straight out of a container slot is a
+    /// REINTERPRETATION (the writer bit-cast the double), not a numeric
+    /// conversion — see `slot_read_ids`.
+    fn slot_or_sitofp(
+        &mut self,
+        v: inkwell::values::IntValue<'ctx>,
+        id: u32,
+        name: &str,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        if self.slot_read_ids.contains(&id) {
+            self.builder
+                .build_bit_cast(v, self.f64_type, name)
+                .map(|bv| bv.into_float_value())
+        } else {
+            self.builder
+                .build_signed_int_to_float(v, self.f64_type, name)
+        }
+        .unwrap()
     }
 
     fn collect_all_local_ids(&self, mir: &Mir) -> std::collections::HashSet<u32> {
@@ -3176,6 +3274,29 @@ impl<'ctx> LLVMCodegen<'ctx> {
             MirStmt::Assign { lhs, rhs } => {
                 let val = self.gen_expr_safe(rhs, exprs);
                 let alloca = *self.locals.get(lhs).unwrap();
+                // An INT value stored into a FLOAT slot must be value-converted
+                // (`sitofp`), not stored raw: the raw store left the integer's
+                // bits in the double, so `amount = int(amount // 100) * 100`
+                // inside `PositionLedger::buy` read back as 4.94e-322 and every
+                // buy deducted only the fee (`final_value` never moved).
+                // Same convention as the call-arg `arg_sitofp` coercion.
+                let slot_float = match self
+                    .current_type_map
+                    .as_ref()
+                    .and_then(|tm| tm.get(lhs))
+                {
+                    Some(Type::F32) => Some(self.context.f32_type()),
+                    Some(Type::F64) => Some(self.f64_type),
+                    _ => None,
+                };
+                let val = match (slot_float, val.get_type()) {
+                    (Some(ft), inkwell::types::BasicTypeEnum::IntType(_)) => self
+                        .builder
+                        .build_signed_int_to_float(val.into_int_value(), ft, "slot_sitofp")
+                        .unwrap()
+                        .into(),
+                    _ => val,
+                };
                 self.builder.build_store(alloca, val).unwrap();
             }
             MirStmt::Call {
@@ -3642,7 +3763,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                                 _ => {
                                     let callee = self.get_or_declare_function(func, type_args, args.len());
                                     let arg_vals: Vec<BasicMetadataValueEnum> = args.iter().map(|&id| self.gen_expr_safe(&id, exprs).into()).collect();
-                                    let coerced = self.coerce_call_args(callee, arg_vals);
+                                    let coerced = self.coerce_call_args(callee, arg_vals, args);
                                     let call = self.builder.build_call(callee, &coerced, "").unwrap();
                                     Self::call_site_to_basic_value(call).unwrap_or(self.i64_type.const_zero().into())
                                 }
@@ -3658,7 +3779,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                             .iter()
                             .map(|&id| self.gen_expr_safe(&id, exprs).into())
                             .collect();
-                        let coerced = self.coerce_call_args(callee, arg_vals);
+                        let coerced = self.coerce_call_args(callee, arg_vals, args);
                         let call = self.builder.build_call(callee, &coerced, "").unwrap();
                         if let Some(val) = Self::call_site_to_basic_value(call) {
                             let alloca = *self.locals.get(dest).unwrap();
@@ -4193,7 +4314,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                             }
                         })
                         .collect();
-                    let coerced = self.coerce_call_args(callee, arg_vals);
+                    let coerced = self.coerce_call_args(callee, arg_vals, args);
                     let call = self.builder.build_call(callee, &coerced, "").unwrap();
                     if let Some(val) = Self::call_site_to_basic_value(call) {
                         // If function returns a pointer, convert it to i64
@@ -4350,7 +4471,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     .iter()
                     .map(|&id| self.gen_expr_safe(&id, exprs).into())
                     .collect();
-                let coerced = self.coerce_call_args(callee, arg_vals);
+                let coerced = self.coerce_call_args(callee, arg_vals, args);
                 let _ = self
                     .builder
                     .build_call(callee, &coerced, "void_call")
@@ -4438,7 +4559,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         let val_f = if matches!(val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_)) {
                             val.into_float_value()
                         } else {
-                            self.builder.build_signed_int_to_float(val.into_int_value(), self.f64_type, "val_sitofp").unwrap()
+                            self.slot_or_sitofp(val.into_int_value(), val_id, "val_sitofp")
                         };
                         acc = match op {
                             SemiringOp::Add => self
@@ -4571,7 +4692,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     }
                 }
                 let map_insert_fn = self.get_function("map_insert");
-                let coerced = self.coerce_call_args(map_insert_fn, vec![map_ptr.into(), key_val.into(), val_val.into()]);
+                let coerced = self.coerce_call_args(
+                    map_insert_fn,
+                    vec![map_ptr.into(), key_val.into(), val_val.into()],
+                    &[],
+                );
                 let _ = self.builder.build_call(map_insert_fn, &coerced, "dict_insert");
 
                 // Record this value's static type for the dict value side
@@ -5595,7 +5720,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // having already stored to an alloca. This is essential for
                 // while-loop conditions where the SemiringFold statement is
                 // in the loop body but the condition check happens before it.
-                let left = self.gen_expr(&exprs[&values[0]], exprs, None);
+                // BATCH-298: pass the value's own id as `expr_id`. Without it a
+                // `FieldAccess` operand cannot look up its static type, so a float
+                // field skipped the bitcast-back and the fold ran on the raw BIT
+                // PATTERN: `self._cash = self._cash + total` became
+                // `sitofp(4619567317775286272) + total` (500.0 + 50 → 4.6e18).
+                let left = self.gen_expr(&exprs[&values[0]], exprs, Some(values[0]));
                 let is_float = self.current_type_map.as_ref().map_or(false, |tm| {
                     values.iter().any(|&vid| matches!(tm.get(&vid), Some(Type::F32 | Type::F64)))
                 });
@@ -5603,7 +5733,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     let left = if matches!(left.get_type(), inkwell::types::BasicTypeEnum::FloatType(_)) {
                         left.into_float_value()
                     } else {
-                        self.builder.build_signed_int_to_float(left.into_int_value(), self.f64_type, "sef_acc_sitofp").unwrap()
+                        self.slot_or_sitofp(
+                            left.into_int_value(),
+                            values[0],
+                            "sef_acc_sitofp",
+                        )
                     };
                     if values.len() == 1 {
                         match op {
@@ -5611,11 +5745,15 @@ impl<'ctx> LLVMCodegen<'ctx> {
                             | crate::middle::mir::mir::SemiringOp::Add => left.into(),
                         }
                     } else {
-                        let right = self.gen_expr(&exprs[&values[1]], exprs, None);
+                        let right = self.gen_expr(&exprs[&values[1]], exprs, Some(values[1]));
                         let right = if matches!(right.get_type(), inkwell::types::BasicTypeEnum::FloatType(_)) {
                             right.into_float_value()
                         } else {
-                            self.builder.build_signed_int_to_float(right.into_int_value(), self.f64_type, "sef_val_sitofp").unwrap()
+                            self.slot_or_sitofp(
+                                right.into_int_value(),
+                                values[1],
+                                "sef_val_sitofp",
+                            )
                         };
                         match op {
                             crate::middle::mir::mir::SemiringOp::Add => {
@@ -5737,8 +5875,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         }
                     }
                 }
-                let left_val = self.gen_expr(&exprs[left], exprs, None);
-                let right_val = self.gen_expr(&exprs[right], exprs, None);
+                // BATCH-299: pass each operand's own id — a `FieldAccess`
+                // operand can only bit-cast its float slot back when codegen
+                // knows the expression's static type. Without it the raw BIT
+                // PATTERN reached the promotion below and `sitofp` turned
+                // `p.total_amount == 1000.0` into `1000 == 4652007308841189376`
+                // (always False), so every float threshold test silently failed.
+                let left_val = self.gen_expr(&exprs[left], exprs, Some(*left));
+                let right_val = self.gen_expr(&exprs[right], exprs, Some(*right));
                 // Coerce mixed int/float: struct fields store f64 as i64 bit
                 // patterns (extractvalue yields i64), so promote the int side
                 // to float when the other side is a float.
@@ -5747,12 +5891,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 let l_is_f = matches!(lv, inkwell::types::BasicTypeEnum::FloatType(_));
                 let r_is_f = matches!(rv, inkwell::types::BasicTypeEnum::FloatType(_));
                 let (left_val, right_val) = if l_is_f && !r_is_f {
-                    let promoted = self.builder.build_signed_int_to_float(
-                        right_val.into_int_value(), self.f64_type, "binop_promote_r").unwrap();
+                    let promoted =
+                        self.slot_or_sitofp(right_val.into_int_value(), *right, "binop_promote_r");
                     (left_val, promoted.into())
                 } else if !l_is_f && r_is_f {
-                    let promoted = self.builder.build_signed_int_to_float(
-                        left_val.into_int_value(), self.f64_type, "binop_promote_l").unwrap();
+                    let promoted =
+                        self.slot_or_sitofp(left_val.into_int_value(), *left, "binop_promote_l");
                     (promoted.into(), right_val)
                 } else {
                     (left_val, right_val)
@@ -6647,6 +6791,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
         &mut self,
         callee: inkwell::values::FunctionValue<'ctx>,
         args: Vec<BasicMetadataValueEnum<'ctx>>,
+        arg_ids: &[u32],
     ) -> Vec<BasicMetadataValueEnum<'ctx>> {
         let callee_name = callee
             .get_name()
@@ -6702,7 +6847,22 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     }
                 }
                 (BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::FloatType(ft)) => {
-                    match self.builder.build_signed_int_to_float(iv, ft, "arg_sitofp") {
+                    // Batch 299: a raw container-slot word is a BIT PATTERN, so
+                    // reinterpret it — `sitofp` would convert the bits of
+                    // `1000.0` into 4652007308841189376.0.
+                    let from_slot = arg_ids
+                        .get(i)
+                        .is_some_and(|id| self.slot_read_ids.contains(id));
+                    let built = if from_slot {
+                        self.builder
+                            .build_bit_cast(iv, ft, "arg_slot_bits")
+                            .map(|v| BasicValueEnum::from(v))
+                    } else {
+                        self.builder
+                            .build_signed_int_to_float(iv, ft, "arg_sitofp")
+                            .map(|v| BasicValueEnum::from(v))
+                    };
+                    match built {
                         Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
                         Err(_) => result.push(BasicMetadataValueEnum::IntValue(iv)),
                     }
