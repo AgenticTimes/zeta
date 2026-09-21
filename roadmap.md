@@ -9378,3 +9378,66 @@ consciousness/reality 四个（440+413+405+51=1,309，逐目录 `wc -l` 已复�
 新增一条更值得做的候选：`new_resolver.rs` 里只有 `string_to_type` /
 `string_to_generic_type` / `InferContext` 等少数项被外部引用 ⇒ **文件内**的
 未引用部分是真正的低垂果实（但需要逐项反证，不是一次删除）。
+
+---
+
+## 批次 310（refactor 立即档 ⑧ 续 —— 轴 A 第三块：给"死代码"装上机器判据，顺手清掉 new_resolver 的假 API）
+
+### 先说本批真正的产出：一条被掩掉的整类缺陷
+`src/lib.rs:7` 与 `src/main.rs:7` 各有一行 **`#![allow(dead_code)]`**。
+⇒ 全仓 dead_code 告警平时**一条都不输出**，"cargo check 干净"在这仓里**不等于**"没有死代码"。
+这也解释了批次 308/309 为什么要靠 grep 猜、为什么 §1 表的行数敢写"1.6 万"——判据本身是关的。
+
+绕开它不需要改 `src/lib.rs`（正被并发工作流持有，本批一行未动）：
+`RUSTFLAGS="--force-warn dead_code"` 在命令行上强制打开该 lint，优先级高于源码里的 allow。
+
+### 新增判据工具：`tools/dc_audit.sh`（可重复、带基线）
+- 默认：打印本仓 `src/` + `tests/` 的命中清单（`file:line<TAB>消息`）与总数、按文件排行。
+- `--snapshot` / `--diff`：基线快照与"只允许减少、新增即 rc=1"。
+- 当前基线：**116 条**（`/tmp/zeta_dc_baseline.txt`）。
+
+### 两次踩坑（都已写进脚本注释，避免下一批复发）
+1. **缓存会伪造"零死代码"**：cargo 命中缓存的那次运行不重发 warning ⇒ 看着像 0 命中。
+   脚本里 `touch src/lib.rs`（只改 mtime，不碰内容）强制重编 zetac 一个 crate，
+   再加自检：输出里没有 `Checking zetac` 就 `[E2002]` 直接 rc=3，不产出清单。
+2. **`= note: requested on the command line with --force-warn dead-code` 不能当过滤器**：
+   实测 116 条里只有 **23** 条带这条 note，用它过滤会静默丢掉 80%。改成"消息措辞"过滤
+   （`(is|are) never (used|read|constructed|called)`），并与每条 warning 的**第一个** `-->` 配对。
+   （另外：路径判据必须 `^(src|tests)/`，因为依赖 crate 的绝对路径里也含 `/src/`，
+   第一版因此把 110 这个噪声数当成了基线。）
+
+### 用新判据清掉的第一块：`new_resolver.rs` 的 pub 面
+文件 2,199 行，但外部真正引用它的只有 `typecheck_new.rs:48/61/69/84/440` 五处 ⇒
+活的 API 只有 `InferContext::{new, add_function, infer, take_substitution, solve}`。
+做法（批次 309 的"可编译性反证" + 本批的强制 lint）：先把候选 pub 项临时降为私有，
+`--force-warn dead_code` 立刻点名 4 个真死项，删之；再把"确认无外部引用"的项**留在私有**：
+
+| 项 | 处置 | 判据 |
+|---|---|---|
+| `enum Constraint::Bound`（:15）+ `solve()` 里的 Bound 分支（原 :1730-1734） | **删** | "variant `Bound` is never constructed" ⇒ 该分支不可达，`satisfies_bound` 那段是死路径 |
+| `InferContext::substitution()`（原 :1710） | **删** | method never used（`take_substitution` 才是外部用的那个） |
+| `InferContext::final_type()`（原 :1915） | **删** | method never used |
+| `fn type_check()` 自由函数（原 :1937） | **删** | function never used —— 注意：§1 表说的"入口函数"其实是它，入口从未接线 |
+| `Constraint` / `lookup` / `declare` / `constrain` / `enter_generic_scope` / `exit_generic_scope` / `infer_generic_call` / `register_builtin_generics` | **降为私有**（保留实现） | 文件内有用到（不报死），但 `grep -rn 'new_resolver::'` 证明外部零引用 ⇒ 不是 API |
+
+净变化：`new_resolver.rs` **-39 行**（`git diff --stat`：8 insertions / 47 deletions），
+文件内 pub 项从 16 个降到 6 个（1 个结构体 + 5 个方法）。
+
+### 为什么"降私有"算架构收益而不是顺手美化
+`pub` 在这个 crate 里 = "对外可达"，编译器据此永不判死 ⇒ 只要 API 面虚胖，轴 A 的
+可审计性就是零。降私有之后这些项**永久纳入 dead_code 判据**，下一批能自动发现它们变死。
+
+### 下一批的现成靶子（都是编译器点名的私有死项，位置精确）
+`src/middle/ctfe/evaluator.rs:991`、`src/middle/mir/gen.rs:214`（5 个 async 相关字段）、
+`src/middle/resolver/resolver.rs:115`、`src/middle/resolver/typecheck.rs:559`、
+`src/middle/types/mod.rs:1372`；按文件量最大的是 `src/bin/zorb.rs`(12)、`src/main.rs`(9)、
+`src/lsp/protocol.rs`(7)、`src/ml/` 目录 17。
+
+### 验证
+- `cargo check -p zetac --tests` rc=0；`cargo test -p zetac --lib new_resolver` **7 passed / 0 failed**
+  （文件内 `mod tests` 用私有项仍可访问，子模块能看父模块私有项，故未受可见性收紧影响）。
+- `./tools/run_all.sh > /tmp/gate_310.txt 2>&1`（2026-09-21T18:50:38Z）**直读退出码**：
+  rc=1 = 批次 308 记过的既有判据（`run_all.sh:134` 要 `py_fail==0`，t231/t233 存量红）。
+  三项数字 official **194/194** · python_style **285 passed, 2 failed, 4 known-fail, 0 xpass** ·
+  语料 **39/39 = 100%** —— 与批次 307/308/309 逐项相同 ⇒ 零基线位移。
+- `./tools/dc_audit.sh --diff` → "无新增命中"，且 `src/middle/resolver/new_resolver.rs` 命中数归零。

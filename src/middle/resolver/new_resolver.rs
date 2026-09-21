@@ -10,9 +10,8 @@ use std::collections::HashMap;
 
 /// Type inference constraint
 #[derive(Debug, Clone)]
-pub enum Constraint {
+enum Constraint {
     Equality(Type, Type),
-    Bound(Type, TraitBound),
 }
 
 /// Type inference context
@@ -64,7 +63,7 @@ impl InferContext {
     }
 
     /// Look up variable type
-    pub fn lookup(&self, name: &str) -> Option<Type> {
+    fn lookup(&self, name: &str) -> Option<Type> {
         self.variables
             .get(name)
             .cloned()
@@ -72,7 +71,7 @@ impl InferContext {
     }
 
     /// Declare variable with type
-    pub fn declare(&mut self, name: String, ty: Type) {
+    fn declare(&mut self, name: String, ty: Type) {
         self.variables.insert(name, ty);
     }
 
@@ -82,7 +81,7 @@ impl InferContext {
     }
 
     /// Add type constraint
-    pub fn constrain(&mut self, constraint: Constraint) {
+    fn constrain(&mut self, constraint: Constraint) {
         self.constraints.push(constraint);
     }
 
@@ -1706,11 +1705,6 @@ impl InferContext {
         Ok(result_ty)
     }
 
-    /// Get the current substitution
-    pub fn substitution(&self) -> &Substitution {
-        &self.substitution
-    }
-
     /// Take the substitution (consumes self)
     pub fn take_substitution(self) -> Substitution {
         self.substitution
@@ -1727,11 +1721,6 @@ impl InferContext {
                         errors.push(e);
                     }
                 }
-                Constraint::Bound(ty, bound) => {
-                    if !self.substitution.satisfies_bound(&ty, &bound) {
-                        errors.push(UnifyError::MissingBound(ty, bound));
-                    }
-                }
             }
         }
 
@@ -1743,7 +1732,7 @@ impl InferContext {
     }
 
     /// Enter a new generic context
-    pub fn enter_generic_scope(&mut self, type_params: Vec<TypeParam>) {
+    fn enter_generic_scope(&mut self, type_params: Vec<TypeParam>) {
         let new_context = GenericContext {
             type_params,
             parent: Some(Box::new(self.generic_context.clone())),
@@ -1752,14 +1741,14 @@ impl InferContext {
     }
 
     /// Exit current generic context
-    pub fn exit_generic_scope(&mut self) {
+    fn exit_generic_scope(&mut self) {
         if let Some(parent) = self.generic_context.parent.take() {
             self.generic_context = *parent;
         }
     }
 
     /// Infer type for generic function call
-    pub fn infer_generic_call(
+    fn infer_generic_call(
         &mut self,
         name: &str,
         type_args: &[Type],
@@ -1884,7 +1873,7 @@ impl InferContext {
     }
 
     /// Register built-in generic types (Vec, Option, Result)
-    pub fn register_builtin_generics(&mut self) {
+    fn register_builtin_generics(&mut self) {
         // Vec<T> - generic type with one type parameter
         let t_var = Type::Variable(TypeVar::fresh());
         let vec_ty = Type::Named("Vec".to_string(), vec![t_var.clone()]);
@@ -1911,12 +1900,6 @@ impl InferContext {
         self.types.insert("Result".to_string(), result_ty);
     }
 
-    /// Get final type of expression after solving constraints
-    pub fn final_type(&self, node: &AstNode) -> Option<Type> {
-        // Re-infer with current substitution applied
-        let mut temp = self.clone();
-        temp.infer(node).ok().map(|ty| self.substitution.apply(&ty))
-    }
 }
 
 impl Clone for InferContext {
@@ -1929,28 +1912,6 @@ impl Clone for InferContext {
             constraints: self.constraints.clone(),
             generic_context: self.generic_context.clone(),
             last_type: self.last_type.clone(),
-        }
-    }
-}
-
-/// Type checking entry point
-pub fn type_check(ast: &[AstNode]) -> Result<(), String> {
-    let mut context = InferContext::new();
-
-    // First pass: infer types and collect constraints
-    for node in ast {
-        if let Err(e) = context.infer(node) {
-            return Err(format!("Type inference error: {}", e));
-        }
-    }
-
-    // Second pass: solve constraints
-    match context.solve() {
-        Ok(()) => Ok(()),
-        Err(errors) => {
-            let error_msgs: Vec<String> =
-                errors.iter().map(|e: &UnifyError| e.to_string()).collect();
-            Err(format!("Type errors:\n{}", error_msgs.join("\n")))
         }
     }
 }
