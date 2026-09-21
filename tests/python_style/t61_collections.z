@@ -5,8 +5,8 @@
 // expect: 2
 // expect: 1
 // expect: 3
-// expect: 1
-// expect: 0
+// expect: True
+// expect: False
 // expect: 5
 // expect: 1
 // expect: 7

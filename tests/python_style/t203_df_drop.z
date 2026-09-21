@@ -2,12 +2,12 @@
 // 位置 `drop(["x"])`；单参方法下 kwargs 值绑到 labels，故 `columns=["x"]` 也通。
 // 方法多参 kwargs 名匹配仍静默错（延后）。df.values 嵌套矩阵本批不做。
 // expect: 1
-// expect: 0
-// expect: 1
+// expect: False
+// expect: True
 // expect: a
 // expect: 2
 // expect: 1
-// expect: 0
+// expect: False
 // expect: 2
 // expect: 0
 // expect: 1

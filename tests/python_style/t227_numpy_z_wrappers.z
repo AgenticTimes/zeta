@@ -7,7 +7,7 @@
 // expect: 0
 // expect: 0
 // expect: 2
-// expect: 1
+// expect: True
 import numpy as np
 
 def main() -> i64:

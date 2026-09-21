@@ -2,11 +2,11 @@
 // 形参须 lt(map, str, str)：未注解时 kwargs dict 静默空。
 // 单参方法下 kwargs 值绑到 columns，故 columns= 拼写可用。
 // expect: 2
-// expect: 0
-// expect: 1
+// expect: False
+// expect: True
 // expect: 1
 // expect: a
-// expect: 1
+// expect: True
 // expect: 1
 // expect: 2
 from pandas import DataFrame

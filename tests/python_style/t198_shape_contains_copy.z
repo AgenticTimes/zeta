@@ -2,8 +2,8 @@
 //   in DataFrame 曾静默 false；copy 方法曾链接失败。
 // expect: 2
 // expect: 2
-// expect: 1
-// expect: 0
+// expect: True
+// expect: False
 // expect: 2
 // expect: y
 from pandas import DataFrame

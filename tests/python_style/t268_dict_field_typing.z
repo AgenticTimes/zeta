@@ -7,8 +7,8 @@
 // REasyQuant 的 PositionLedger（`self._positions` / `self._today_buys`）就在 local 路径上。
 // expect: 5
 // expect: 0
-// expect: 1
-// expect: 0
+// expect: True
+// expect: False
 // expect: 2
 class C:
     def __init__(self):

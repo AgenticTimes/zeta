@@ -1,9 +1,9 @@
 // PY-A: sys.argv —— 进程启动时捕获（生成的 main 自身不收参数）
 //   根因：模块**属性读取**的 ret= 映射缺 `vecstr` → 该属性被标成 i64，
 //   于是下标/for-in 丢元素类型（拿到句柄与 0）。补上后一并解决。
-// expect: 1
-// expect: 1
-// expect: 1
+// expect: True
+// expect: True
+// expect: True
 import sys
 
 print(len(sys.argv) >= 1)

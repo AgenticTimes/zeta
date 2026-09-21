@@ -5,9 +5,9 @@
 // expect: "hi"
 // expect: 2.5
 // expect: {"only": 1}
-// expect: 1
+// expect: True
 // expect: 3
-// expect: 1
+// expect: True
 // expect: done
 import sys
 import json

@@ -3,11 +3,11 @@
 //   于是 `w = 5.0 > 1.0` 把 w 当 f64：比较真值 1 以整数写进 double 槽，
 //   读回来是 ~5e-324，`print(w)` 打 0.000000，`if w` 也走错分支。
 //   修法：比较/逻辑算子（== != < > <= >= && || in not in）在浮点分支里仍返回 Bool。
-// expect: 1
-// expect: 0
-// expect: 1
-// expect: 0
-// expect: 1
+// expect: True
+// expect: False
+// expect: True
+// expect: False
+// expect: True
 // expect: 11
 // expect: 2
 // expect: 3.000000

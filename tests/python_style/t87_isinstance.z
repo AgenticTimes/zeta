@@ -1,10 +1,10 @@
 // PY-A: isinstance(x, T) —— 按静态类型判定（内置类型名 + 类名），此前是裸 extern 链接失败
 // expect: 1
-// expect: 1
-// expect: 1
-// expect: 0
-// expect: 1
-// expect: 1
+// expect: True
+// expect: True
+// expect: False
+// expect: True
+// expect: True
 def f(x) -> i64:
     if isinstance(x, int):
         return 1

@@ -1,8 +1,8 @@
 // PY-A: os.listdir 的返回类型必须是 vecstr
 //   此前注册表声明 ret=i64 → 元素类型丢失，成员判断/迭代比较只能"碰巧"成立
 //   用例自造一个临时文件再删掉，避免依赖当前目录的具体内容
-// expect: 1
-// expect: 1
+// expect: True
+// expect: True
 import os
 
 f = open("zeta_listdir_probe.tmp", "w")

@@ -1,14 +1,14 @@
 // PY-A: `x in list`（字符串元素按内容比较）+ bool(x) 真值
 //   此前数组的 `in` 静默返回 0；bool 是裸 extern 链接失败
-// expect: 1
-// expect: 0
-// expect: 1
-// expect: 0
-// expect: 1
-// expect: 0
-// expect: 1
-// expect: 0
-// expect: 1
+// expect: True
+// expect: False
+// expect: True
+// expect: False
+// expect: True
+// expect: False
+// expect: True
+// expect: False
+// expect: True
 print("x" in ["x", "y"])
 print("z" in ["x", "y"])
 print(2 in [1, 2, 3])

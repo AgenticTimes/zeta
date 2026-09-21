@@ -8,7 +8,7 @@
 //        子上下文的修改回不来；
 //     ② 字段读按 `type_decls` 的声明类型落表（原来无条件 i64）。
 // expect: hi
-// expect: 1
+// expect: True
 // expect: 42
 class A:
     def __init__(self, s):

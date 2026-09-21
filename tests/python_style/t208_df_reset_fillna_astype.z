@@ -3,14 +3,14 @@
 // zeta_identity → 结果标 i64，len(columns) 静默 0。groupby 从 identity 移除后
 // 链接失败（响亮），本用例不覆盖。
 // expect: 2
-// expect: 1
-// expect: 1
+// expect: True
+// expect: True
 // expect: 2
 // expect: a
 // expect: 1
 // expect: 2
-// expect: 1
-// expect: 1
+// expect: True
+// expect: True
 // expect: 2
 // expect: a
 from pandas import DataFrame

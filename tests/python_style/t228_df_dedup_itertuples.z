@@ -5,7 +5,7 @@
 // expect: a
 // expect: 3
 // expect: 3
-// expect: 1
+// expect: True
 // expect: a
 from pandas import DataFrame
 

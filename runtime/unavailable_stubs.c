@@ -38,7 +38,10 @@ static int64_t zt_unavailable_soft(const char* what);
 // `_baostock_login`. A weak definition here shadows that: the platform source is
 // unavailable in the local path, and the caller's try/except takes the fallback.
 int64_t login(void) { return zt_unavailable_soft("baostock.login"); }
-__attribute__((weak)) int64_t logout(void) { return zt_unavailable_soft("baostock.logout"); }
+// `logout` needs the SAME strong definition: as a weak symbol the dynamic
+// linker preferred libsystem_c's `logout(3)` — measured: drvX4 SIGSEGV in
+// `_platform_strnlen` via libc `logout` from `_baostock_logout`.
+int64_t logout(void) { return zt_unavailable_soft("baostock.logout"); }
 
 static int64_t zt_unavailable_soft(const char* what) {
     // The dedup suppresses only the MESSAGE — the RAISE must happen on EVERY call.

@@ -10,7 +10,7 @@
 // expect: 10
 // expect: 3
 // expect: {"name":"zeta","ratio":0.75,"ver":2,"nested":{"a":10},"tags":[1,2,3]}
-// expect: 1
+// expect: True
 // expect: 1
 import json
 

@@ -6050,21 +6050,43 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         // that did not contain the field, built a 0-field struct
                         // type and panicked with `ExtractOutOfRange`.)
                         let want = field.to_string();
+                        // Keys are `struct_{variant}_{count}`. A CROSS-MODULE
+                        // declared name is module-mangled (`libg4___G` for class
+                        // `_G` in `libg4`), so the old `struct_{cand}_` prefix
+                        // match missed and `g.c` clamped to the `("", 2)`
+                        // stand-in — every field at index >= 2 read offset 0
+                        // (`len(g.c)` returned `len(g.a)`, measured in the
+                        // local wufu driver: pool writes were then concat'd
+                        // from stale operands). Accept a key whose variant is a
+                        // `_`-suffix of the declared name, and return the REAL
+                        // variant so the per-variant index lookup hits.
                         cands.into_iter().find_map(|cand| {
-                            let pfx = format!("struct_{}_", cand);
-                            self.struct_defs
-                                .iter()
-                                .filter(|(k, fields)| {
-                                    k.starts_with(&pfx) && fields.iter().any(|f| *f == want)
-                                })
-                                .map(|(k, fields)| {
-                                    let cnt = k
-                                        .strip_prefix(&pfx)
-                                        .and_then(|c| c.parse::<usize>().ok())
-                                        .unwrap_or(fields.len());
-                                    (cand.clone(), fields.len().max(cnt).max(1))
-                                })
-                                .max_by_key(|(_, c)| *c)
+                            struct Hit(String, usize);
+                            let mut best: Option<Hit> = None;
+                            for (k, fields) in self.struct_defs.iter() {
+                                let inner = match k.strip_prefix("struct_") {
+                                    Some(i) => i,
+                                    None => continue,
+                                };
+                                let cnt_s = match inner.rsplit_once('_') {
+                                    Some((_, c)) => c,
+                                    None => continue,
+                                };
+                                let cnt = match cnt_s.parse::<usize>() {
+                                    Ok(c) => c,
+                                    Err(_) => continue,
+                                };
+                                let v = &inner[..inner.len() - cnt_s.len() - 1];
+                                let matched =
+                                    v == cand || cand.ends_with(&format!("_{}", v));
+                                if matched && fields.iter().any(|f| *f == want) {
+                                    let total = fields.len().max(cnt).max(1);
+                                    if best.as_ref().map_or(true, |b| total > b.1) {
+                                        best = Some(Hit(v.to_string(), total));
+                                    }
+                                }
+                            }
+                            best.map(|Hit(v, total)| (v, total))
                         })
                     }) {
                         Some(vc) => vc,
@@ -6072,6 +6094,21 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     }
                 };
 
+                let dbg_decl = self
+                    .current_type_map
+                    .as_ref()
+                    .and_then(|tm| tm.get(base))
+                    .cloned();
+                if std::env::var("ZETA_DBG_FA").is_ok() {
+                    eprintln!(
+                        "ZETA-DBG FA read field={} variant={:?} field_count={} base_ty={:?} keys={:?}",
+                        field,
+                        variant,
+                        field_count,
+                        dbg_decl,
+                        self.struct_defs.keys().collect::<Vec<_>>()
+                    );
+                }
                 // Use same type key format as the Struct handler: "{variant}_fields_{count}"
                 let type_key = if variant.is_empty() {
                     format!("struct_fields_{}", field_count)
@@ -6105,10 +6142,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 };
                 // If still out of range, fall back to numeric parse
                 let field_index = if field_index >= field_count as u32 {
-                    field.parse::<u32>().unwrap_or(0)
+                    let fb = field.parse::<u32>().unwrap_or(0);
+                    if std::env::var("ZETA_DBG_FA").is_ok() {
+                        eprintln!("ZETA-DBG   idx {} >= count {} -> fallback {}", field_index, field_count, fb);
+                    }
+                    fb
                 } else {
                     field_index
                 };
+                if std::env::var("ZETA_DBG_FA").is_ok() {
+                    eprintln!("ZETA-DBG   final idx={}", field_index);
+                }
 
                 // Extract value from struct
                 let extracted = self

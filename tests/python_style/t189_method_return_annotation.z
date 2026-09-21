@@ -6,7 +6,7 @@
 //   本用例覆盖 ①：`label(self) -> str` 返回字段（方法体不是字符串字面量 ⇒ 启发式会判 i64 ⇒
 //   打印指针 ✗）。
 // expect: hi
-// expect: 1
+// expect: True
 class C:
     def __init__(self, s: str):
         self.s = s

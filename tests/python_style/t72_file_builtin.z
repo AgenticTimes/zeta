@@ -1,8 +1,8 @@
 // PY-A: __file__ —— 编译期已知的源文件路径（配合 os.path 使用）
 //   绝对路径因机器而异，故只断言由它派生的事实
-// expect: 1
-// expect: 1
-// expect: 1
+// expect: True
+// expect: True
+// expect: True
 import os
 
 print(len(__file__) > 0)

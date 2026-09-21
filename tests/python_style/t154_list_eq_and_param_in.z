@@ -5,16 +5,16 @@
 //   ② 列表 `==` 恒为 0：`a == b` 编译成两个**句柄**的整数比较 ⇒ 内容相同的列表永远不等。
 //      修法：新增运行时 `py_list_eq(a, b, elem_is_str)`（按内容逐元素比较，字符串用 strcmp），
 //      gen.rs 对数组操作数分派到它（`!=` 取反）。
+// expect: True
+// expect: False
+// expect: True
+// expect: True
 // expect: 1
 // expect: 0
 // expect: 1
-// expect: 1
-// expect: 1
-// expect: 0
-// expect: 1
-// expect: 1
-// expect: 0
-// expect: 1
+// expect: True
+// expect: False
+// expect: True
 def has(xs: [i64], v: i64) -> i64:
     if v in xs:
         return 1

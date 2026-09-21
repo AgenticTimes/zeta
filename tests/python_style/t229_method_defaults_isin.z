@@ -1,12 +1,14 @@
 // PY-A: Named 方法默认注入 + isin/nunique/iterrows + Series 最小面。
 // 此前：`reset_index()` 无参时 drop 落到 0（=False）；列级 isin/nunique 裸链。
-// Series.nunique：str 列 map 成员偶发按指针，["a","a","b"] 可能计 3（文档化）。
+// Series.nunique：batch 291 修正为按内容去重（CPython 语义）——
+// ["a","a","b"] 的唯一值是 2；旧期望写 3 是当时「str 成员按指针」
+// bug 的行为快照，随修复一并更新。
 // expect: 2
 // expect: 3
-// expect: 1
+// expect: True
 // expect: 2
 // expect: 2
-// expect: 3
+// expect: 2
 // expect: 3
 // expect: a
 from pandas import DataFrame, Series

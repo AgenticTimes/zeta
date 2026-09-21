@@ -1,8 +1,8 @@
 // PY-A: DataFrame.empty / .columns 属性 —— 缺字段曾 FieldAccess 读垃圾指针，
 //   `not df.empty` 恒假（静默错控制流）；零参方法作属性分派 + 库端实现。
-// expect: 0
+// expect: False
 // expect: ok
-// expect: 1
+// expect: True
 // expect: empty
 // expect: 1
 // expect: code

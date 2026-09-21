@@ -1,8 +1,8 @@
 // PY-A: 模块常量 —— sys.platform / os.sep / os.linesep
 //   此前三者都只发 warn 然后**当 0 用**（静默错值）；断言用派生事实保持平台无关
-// expect: 1
-// expect: 1
-// expect: 1
+// expect: True
+// expect: True
+// expect: True
 import sys
 import os
 

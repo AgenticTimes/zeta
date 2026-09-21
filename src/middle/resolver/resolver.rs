@@ -1225,6 +1225,38 @@ impl Resolver {
                 }
             }
         }
+        // Batch 291: names that receive a DICT literal anywhere in the body
+        // (`names = {} ; ... ; return names`). Used to infer a `-> dict`
+        // return type for unannotated helpers like `_load_etf_names` — without
+        // it the caller typed the result I64 and `len(d)` became `array_len`
+        // on a map handle (dict1.z printed 0 for a 3-entry dict).
+        fn collect_map_locals(body: &[AstNode], out: &mut std::collections::HashSet<String>) {
+            for s in body {
+                match s {
+                    AstNode::Assign(lhs, rhs) => {
+                        if let (AstNode::Var(n), AstNode::DictLit { .. }) = (&**lhs, &**rhs) {
+                            out.insert(n.clone());
+                        }
+                    }
+                    AstNode::Let { pattern, expr, .. } => {
+                        if let (AstNode::Var(n), AstNode::DictLit { .. }) =
+                            (&**pattern, &**expr)
+                        {
+                            out.insert(n.clone());
+                        }
+                    }
+                    AstNode::If { then, else_, .. } => {
+                        collect_map_locals(then, out);
+                        collect_map_locals(else_, out);
+                    }
+                    AstNode::While { body, .. } | AstNode::For { body, .. } => {
+                        collect_map_locals(body, out);
+                    }
+                    AstNode::Block { body } => collect_map_locals(body, out),
+                    _ => {}
+                }
+            }
+        }
         // Evidence enum: 1 = str, 2 = f64, 3 = i64, 0 = unknown.
         fn classify(
             e: &AstNode,
@@ -1392,14 +1424,23 @@ impl Resolver {
                 let infer_return = (ret.is_empty() || ret == "()")
                     && self.funcs.contains_key(name);
                 let mut rets: Vec<AstNode> = Vec::new();
+                let mut map_locals: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
                 if infer_return {
                     collect_returns(body, &mut rets);
+                    collect_map_locals(body, &mut map_locals);
                 }
                 let mut saw_str = false;
                 let mut saw_f64 = false;
                 let mut saw_i64 = false;
+                let mut saw_map = false;
                 let aliases = self.py_module_aliases.borrow().clone();
                 for r in &rets {
+                    if matches!(r, AstNode::DictLit { .. })
+                        || matches!(r, AstNode::Var(v) if map_locals.contains(v.as_str()))
+                    {
+                        saw_map = true;
+                    }
                     let cur_params: Vec<(String, Type)> = self
                         .funcs
                         .get(name)
@@ -1412,7 +1453,9 @@ impl Resolver {
                         _ => {}
                     }
                 }
-                let new_ret = if saw_str && !saw_i64 && !saw_f64 {
+                let new_ret = if saw_map && !saw_str && !saw_i64 && !saw_f64 {
+                    Some(Type::Named("map".to_string(), vec![]))
+                } else if saw_str && !saw_i64 && !saw_f64 {
                     Some(Type::Str)
                 } else if saw_f64 && !saw_i64 && !saw_str {
                     Some(Type::F64)
@@ -1631,6 +1674,7 @@ impl Resolver {
         aliases: &HashMap<String, String>,
         member_aliases: &HashMap<String, (String, String)>,
         fn_rets: &HashMap<String, Type>,
+        classes: &[String],
     ) -> Option<Type> {
         use crate::middle::pylib;
         match n {
@@ -1642,9 +1686,9 @@ impl Resolver {
                 "map".to_string(),
                 match entries.first() {
                     Some((k, v)) => vec![
-                        infer_global_ty(k, seen, aliases, member_aliases, fn_rets)
+                        infer_global_ty(k, seen, aliases, member_aliases, fn_rets, classes)
                             .unwrap_or(Type::Str),
-                        infer_global_ty(v, seen, aliases, member_aliases, fn_rets)
+                        infer_global_ty(v, seen, aliases, member_aliases, fn_rets, classes)
                             .unwrap_or(Type::I64),
                     ],
                     None => vec![],
@@ -1659,7 +1703,7 @@ impl Resolver {
                 // `wufu_constants`' universe registration.
                 let elem = items
                     .first()
-                    .and_then(|e| infer_global_ty(e, seen, aliases, member_aliases, fn_rets))
+                    .and_then(|e| infer_global_ty(e, seen, aliases, member_aliases, fn_rets, classes))
                     .unwrap_or(Type::I64);
                 Some(Type::DynamicArray(Box::new(elem)))
             }
@@ -1671,10 +1715,10 @@ impl Resolver {
             AstNode::Var(v) => seen.get(v).cloned(),
             // `A / B` — pathlib join (and, later, other handle operators).
             AstNode::BinaryOp { op, left, right } => {
-                let lt = infer_global_ty(left, seen, aliases, member_aliases, fn_rets)?;
+                let lt = infer_global_ty(left, seen, aliases, member_aliases, fn_rets, classes)?;
                 let rt = match &**right {
                     AstNode::StringLit(_) => Type::Str,
-                    other => infer_global_ty(other, seen, aliases, member_aliases, fn_rets)?,
+                    other => infer_global_ty(other, seen, aliases, member_aliases, fn_rets, classes)?,
                 };
                 let (lname, rname) = match (&lt, &rt) {
                     (Type::Named(l, _), Type::Named(r, _)) => (l.clone(), r.clone()),
@@ -1690,14 +1734,14 @@ impl Resolver {
                 })
             }
             // `p.parents[2]` — index into a Vec-returning attribute.
-            AstNode::Subscript { base, .. } => match infer_global_ty(base, seen, aliases, member_aliases, fn_rets)? {
+            AstNode::Subscript { base, .. } => match infer_global_ty(base, seen, aliases, member_aliases, fn_rets, classes)? {
                 Type::DynamicArray(e) => Some(*e),
                 Type::Tuple(ts) => ts.first().cloned(),
                 _ => None,
             },
             // `handle.attr` — a W-table method used as a property (Path.parents).
             AstNode::FieldAccess { base, field } => {
-                let b = infer_global_ty(base, seen, aliases, member_aliases, fn_rets)?;
+                let b = infer_global_ty(base, seen, aliases, member_aliases, fn_rets, classes)?;
                 match b {
                     Type::Named(tag, _) => method_result_ty(&tag, field),
                     _ => None,
@@ -1725,6 +1769,7 @@ impl Resolver {
                             aliases,
                             member_aliases,
                             fn_rets,
+                            classes,
                         ),
                         other => infer_global_ty(
                             other,
@@ -1732,9 +1777,10 @@ impl Resolver {
                             aliases,
                             member_aliases,
                             fn_rets,
+                            classes,
                         ),
                     })
-                    .or_else(|| infer_global_ty(recv, seen, aliases, member_aliases, fn_rets))
+                    .or_else(|| infer_global_ty(recv, seen, aliases, member_aliases, fn_rets, classes))
                     .unwrap_or(Type::I64);
                 Some(Type::DynamicArray(Box::new(elem)))
             }
@@ -1742,6 +1788,32 @@ impl Resolver {
             AstNode::Call {
                 receiver, method, ..
             } => {
+                // Batch 291: `g = _G()` — a global built from a USER CLASS ctor
+                // must keep the class type. With no entry here, every
+                // cross-module `g.<field>` read fell back to I64, so
+                // `g.fixed_etf_pool + [x]` compiled to a pointer ADD and the
+                // garbage handle crashed `array_len` in `jq_wufu___load_etf_names`.
+                // The program-wide decl table is keyed by the MANGLED name
+                // (`jq_shim___G`), so also accept a unique `<mangling>__<Class>`
+                // suffix match. Checked BEFORE the fn_rets lookup: the synthesized
+                // ctor may be registered as a function returning I64, and a
+                // `__<Class>` suffix hit would shadow the real struct type.
+                if receiver.is_none() {
+                    let hit = classes.iter().find(|c| *c == method).or_else(|| {
+                        let suffix = format!("__{}", method);
+                        let mut hits =
+                            classes.iter().filter(|c| c.ends_with(suffix.as_str()));
+                        let first = hits.next()?;
+                        if hits.next().is_some() {
+                            None
+                        } else {
+                            Some(first)
+                        }
+                    });
+                    if let Some(c) = hit {
+                        return Some(Type::Named(c.clone(), vec![]));
+                    }
+                }
                 // A user function called by its BARE name: its declared return
                 // type. `from ..datasrc.code_conv import jq_to_bs` may carry a
                 // RELATIVE spec in `member_aliases`, so the `<module>__<member>`
@@ -1767,7 +1839,7 @@ impl Resolver {
                     }
                 }
                 if let Some(recv) = receiver {
-                    if let Some(Type::Named(tag, _)) = infer_global_ty(recv, seen, aliases, member_aliases, fn_rets) {
+                    if let Some(Type::Named(tag, _)) = infer_global_ty(recv, seen, aliases, member_aliases, fn_rets, classes) {
                         if let Some(t) = method_result_ty(&tag, method) {
                             return Some(t);
                         }
@@ -1920,6 +1992,7 @@ impl Resolver {
                 aliases: &HashMap<String, String>,
                 member_aliases: &HashMap<String, (String, String)>,
                 fn_rets: &HashMap<String, Type>,
+                classes: &[String],
                 module_prefix: Option<&str>,
                 out: &mut HashMap<String, Type>) {
             for s in stmts {
@@ -1933,7 +2006,7 @@ impl Resolver {
                         _ => continue,
                     },
                     AstNode::Block { body } => {
-                        walk(body, globals, bare_globals, aliases, member_aliases, fn_rets, module_prefix, out);
+                        walk(body, globals, bare_globals, aliases, member_aliases, fn_rets, classes, module_prefix, out);
                         continue;
                     }
                     _ => continue,
@@ -1961,7 +2034,7 @@ impl Resolver {
                 // (`_exists` 7 / `_read_text` 6 reference sites in the REasyQuant
                 // local backtest).
                 let ty = rhs.and_then(|r| {
-                    infer_global_ty(r, &out, &aliases, &member_aliases, fn_rets)
+                    infer_global_ty(r, &out, &aliases, &member_aliases, fn_rets, classes)
                 });
                 if name.contains("WUFU") && std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
                     eprintln!("INFER {}: {:?}", name, ty);
@@ -1992,6 +2065,11 @@ impl Resolver {
             .iter()
             .map(|(n, (_, r, _))| (n.clone(), r.clone()))
             .collect();
+        // Batch 291: user-class names (see the ctor case in `infer_global_ty`).
+        // Sorted for deterministic iteration; the suffix match requires a UNIQUE
+        // hit, ambiguous names simply stay untyped.
+        let mut classes: Vec<String> = self.type_decls.keys().cloned().collect();
+        classes.sort();
         for d in &defs {
             if let AstNode::FuncDef { name, body, .. } = d {
                 // A module body is registered as `<module with _ for .>__init`;
@@ -2007,6 +2085,7 @@ impl Resolver {
                     &aliases,
                     &member_aliases,
                     &fn_rets,
+                    &classes,
                     prefix.as_deref(),
                     &mut out,
                 );

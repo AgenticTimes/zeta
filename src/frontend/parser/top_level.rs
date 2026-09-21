@@ -916,8 +916,20 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                     // "Self": with "Self" the field read inside a method could
                     // not find the struct at all, so every `self.<field>` was
                     // typed i64 (a `map` field's `.keys()` -> undefined `_keys`).
-                    let mut new_params: Vec<(String, String)> =
-                        vec![("&mut self".to_string(), name.clone())];
+                    // Batch 291: a @classmethod's first parameter is `cls`,
+                    // not `self`. Forcing `&mut self` prepended a receiver slot
+                    // no call site fills (`CM.from_jq(cfg)` bound cfg into the
+                    // cls slot and left `config` 0 — every `cfg.get(...)` then
+                    // returned the default, silently). Keep `cls` as a plain
+                    // parameter: the dotted call passes its real args first,
+                    // and MIR rewrites `cls(...)` to the class constructor.
+                    let is_classmethod =
+                        params.first().map(|(n, _)| n == "cls").unwrap_or(false);
+                    let mut new_params: Vec<(String, String)> = if is_classmethod {
+                        Vec::new()
+                    } else {
+                        vec![("&mut self".to_string(), name.clone())]
+                    };
                     for (pn, pt) in &params {
                         if pn != "self" && pn != "&self" && pn != "&mut self" {
                             new_params.push((pn.clone(), pt.clone()));
@@ -1036,7 +1048,14 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
             match def {
                 Some(d) => {
                     let d = &norm_default(d);
-                    field_inits.push((n.clone(), d.clone()));
+                    // Batch 291: the struct literal must read the PARAMETER,
+                    // not the default expression. `CM(2.5)` with
+                    // `slippage: float = 1.5` returned 1.5 — every explicit
+                    // constructor argument was silently dropped (measured).
+                    // Omitted arguments are filled from the marker below by
+                    // the Resolver at the CALL site, exactly like
+                    // `def f(a, b=1)`.
+                    field_inits.push((n.clone(), AstNode::Var(n.clone())));
                     dataclass_defaults.push(AstNode::ExprStmt {
                         expr: Box::new(AstNode::Call {
                             receiver: None,

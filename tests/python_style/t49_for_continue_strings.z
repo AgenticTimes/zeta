@@ -6,8 +6,8 @@
 // expect: Q
 // expect: a-b
 // expect: 00042
-// expect: 1
-// expect: 0
+// expect: True
+// expect: False
 def count_odd():
     let n = 0
     for i in range(6):

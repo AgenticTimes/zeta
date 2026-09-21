@@ -28,6 +28,9 @@ int64_t map_str_key(int64_t);
 int64_t py_map_contains(int64_t, int64_t);
 #include <dlfcn.h>
 #include <execinfo.h>
+#include <unistd.h>   // sysconf(_SC_PAGESIZE)
+#include <sys/mman.h> // msync page-mappedness probe
+#include <mach/mach.h> // vm_read_overwrite readability probe
 
 int64_t vec_push(int64_t, int64_t);
 int64_t zeta_dynarray_new(int64_t cap);
@@ -101,6 +104,30 @@ static int64_t g_keystr_ptr[ZT_KEYSTR_CAP];
 
 int64_t map_str_key(int64_t handle) {
     if (!handle) return 0;
+    // Batch 291: vec<str> slots can hold small strings PACKED into the 8-byte
+    // word ("43601853" = 0x3335383130363334) — measured: SEGV at that fault
+    // address inside inlined `map_str_key` from `Series.nunique`'s `x in seen`.
+    // The guard lives HERE (not at each caller) because both compiler-lowered
+    // `map<str,_>` accesses and C shim sites funnel through this one symbol.
+    // A non-readable value becomes an opaque identity key — equal values stay
+    // equal, which is all dedup and membership need.
+    if ((int64_t)GC_base((void*)handle) != 0) goto hash_content;
+    {
+        uint64_t u = (uint64_t)handle;
+        // macOS arm64: __PAGEZERO is unmapped below 4 GiB and images start just
+        // above it; values outside the canonical 48-bit window are packed
+        // strings, not pointers.
+        if (u < (1ULL << 32) || u >= (1ULL << 48)) return handle;
+        // `vm_read_overwrite` faults-checks the read on our own task (msync only
+        // proves MAPPING — a packed value can hit a PROT_NONE page).
+        char probe;
+        vm_size_t got = 0;
+        if (vm_read_overwrite(mach_task_self(), (vm_address_t)u, 1,
+                              (vm_address_t)&probe, &got) != KERN_SUCCESS)
+            return handle;
+        if (!probe) return handle;
+    }
+hash_content:;
     const unsigned char* p = (const unsigned char*)handle;
     uint64_t h = 1469598103934665603ULL;
     while (*p) { h ^= (uint64_t)*p++; h *= 1099511628211ULL; }
@@ -1174,11 +1201,24 @@ int zt_map_or_vec_truthy(int64_t v);
 // a slice/absent key (`df.iloc[0:0]` arrives as 0).
 // Python `not x` — falsy for 0, NULL, an EMPTY string, an EMPTY list/map.
 // (`!` cannot be reused: for an array it means `~mask`.)
+static int zt_c_readable(int64_t a) {
+    char p; vm_size_t g;
+    return vm_read_overwrite(mach_task_self(), (vm_address_t)a, 1,
+                             (vm_address_t)&p, &g) == KERN_SUCCESS;
+}
 int64_t py_not(int64_t x) {
     if (!x) return 1;
-    if (zt_maybe_vec(x)) return zt_vec_len(x) == 0 ? 1 : 0;
-    if (zt_maybe_map(x)) return zt_vec_len(map_keys(x)) == 0 ? 1 : 0;
-    if (x > 0x100000000LL && x < 0x7fffffffffffLL) {
+    // Batch 291: the vec/map heuristics peek at x-16. For a value that IS a
+    // GC block base (imported-module global `HAS_BAOSTOCK` measured holding
+    // 0x15_0000_0000 = a block start), that read lands in unmapped guard
+    // space — measured SIGBUS at 0x14fffffff0 in `_baostock_login`. Only
+    // probe what is actually readable; a block-base value is an object
+    // pointer, truthy iff its first byte is non-zero.
+    if ((int64_t)GC_base((void*)x) != x && zt_c_readable(x - 16)) {
+        if (zt_maybe_vec(x)) return zt_vec_len(x) == 0 ? 1 : 0;
+        if (zt_maybe_map(x)) return zt_vec_len(map_keys(x)) == 0 ? 1 : 0;
+    }
+    if (x > 0x100000000LL && x < 0x7fffffffffffLL && zt_c_readable(x)) {
         const char* s = (const char*)x;
         return s[0] == 0 ? 1 : 0;
     }
@@ -1193,13 +1233,11 @@ int64_t py_is_vec(int64_t v) { return zt_maybe_vec(v) ? 1 : 0; }
 // inside inlined `map_str_key` from `py_df_groupby`. Non-pointer values hash
 // as opaque integers, which keeps equal values equal.
 int64_t zt_safe_str_key(int64_t v) {
-    // A range heuristic is NOT enough: packed small strings and stale pointers
-    // can land inside the plausible window, and `map_str_key` dereferences its
-    // argument (`ldrb [x19]`) — measured as a SEGV in inlined `map_str_key` from
-    // `py_df_groupby + 716`. Our strings are GC allocations, so ask the collector:
-    // only a real GC block base is safe to hand to `map_str_key`.
-    if (v && (int64_t)GC_base((void*)v) == v) return map_str_key(v);
-    return v;
+    // Batch 291: the packed-small-string guard moved INTO `map_str_key` itself
+    // (single definition — see comment there), so every caller — compiler-
+    // lowered `map<str,_>` access and C shim alike — is covered. This alias is
+    // kept for the groupby sites that were written against it.
+    return map_str_key(v);
 }
 
 // A frame with the SAME columns and zero rows (`df.iloc[0:0]`). Previously the
@@ -1367,6 +1405,12 @@ int64_t py_df_groupby(int64_t frame, int64_t key) {
         // a real pointer: `map_str_key` read `[x20]` on a packed value and SEGV'd.
         int64_t hk = zt_safe_str_key(kraw);
         int64_t idx = map_get(seen, hk);
+        if (getenv("ZT_PROBE_LOC")) {
+            fprintf(stderr, "[probe] grp row %lld kraw=%lld hk=%lld idx=%lld gcbase=%lld txt=%s\n",
+                    (long long)i, (long long)kraw, (long long)hk, (long long)idx,
+                    (long long)(int64_t)GC_base((void*)kraw),
+                    (kraw && (int64_t)GC_base((void*)kraw) == kraw) ? (const char*)kraw : "?");
+        }
         int64_t pair = 0;
         if (idx) {
             pair = ((int64_t*)pairs)[idx - 1];
@@ -1548,6 +1592,42 @@ int64_t py_vec_isna(int64_t vec) {
     return out;
 }
 
+// Content equality between two `str` values that may individually be a
+// readable C string OR a small string PACKED into the 8-byte slot (batch 291
+// — same packed-value hazard `map_str_key` now guards). Pointer-vs-pointer
+// uses strcmp; packed-vs-packed needs equality (different values can never be
+// equal text); mixed packs the pointer's bytes and compares words.
+static int zt_is_cstr_ptr(int64_t v) {
+    if (!v) return 0;
+    if ((int64_t)GC_base((void*)v) != 0) return 1;
+    uint64_t u = (uint64_t)v;
+    if (u < (1ULL << 32) || u >= (1ULL << 48)) return 0;
+    char probe;
+    vm_size_t got;
+    return vm_read_overwrite(mach_task_self(), (vm_address_t)u, 1,
+                             (vm_address_t)&probe, &got) == KERN_SUCCESS &&
+           probe != 0;
+}
+static int zt_packed_cstr_eq(int64_t packed, const char* s) {
+    size_t n = strlen(s);
+    if (n > 7) return 0;
+    const unsigned char* p = (const unsigned char*)&packed;
+    for (size_t i = 0; i < n; i++)
+        if (p[i] != (unsigned char)s[i]) return 0;
+    for (size_t i = n; i < 8; i++)
+        if (p[i] != 0) return 0;
+    return 1;
+}
+static int zt_str_content_eq(int64_t a, int64_t b) {
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+    int ra = zt_is_cstr_ptr(a), rb = zt_is_cstr_ptr(b);
+    if (ra && rb) return strcmp((const char*)a, (const char*)b) == 0;
+    if (!ra && !rb) return 0;
+    if (ra) return zt_packed_cstr_eq(b, (const char*)a);
+    return zt_packed_cstr_eq(a, (const char*)b);
+}
+
 int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
     int64_t n = zt_vec_len(vec);
     if (getenv("ZT_DEBUG_CONTAINS")) fprintf(stderr, "CONTAINS vec=%p n=%lld x=%p str=%lld\n", (void*)vec, (long long)n, (void*)x, (long long)elem_is_str);
@@ -1555,7 +1635,12 @@ int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
         int64_t v = ((int64_t*)vec)[i];
         if (v == x && v != 0) return 1;
         if (elem_is_str) {
-            if (v && x && strcmp((const char*)v, (const char*)x) == 0) return 1;
+            if (getenv("ZT_DEBUG_CONTAINS")) fprintf(stderr, "CONTAINS str i=%lld/%lld v=%p x=%p\n", (long long)i, (long long)n, (void*)v, (void*)x);
+            // Batch 291: vec<str> slots can hold small strings PACKED into the
+            // 8-byte word — measured SIGSEGV in `strcmp` from `py_list_contains`
+            // ← `_build_stock_arrays`. Content equality must not dereference a
+            // packed value.
+            if (v && x && zt_str_content_eq(v, x)) return 1;
         } else if (v && x && zt_ptr_is_gc_object(v) && zt_ptr_is_gc_object(x)) {
             if (getenv("ZT_DEBUG_CONTAINS")) fprintf(stderr, "CONTAINS cmp '%s' vs '%s'\n", (const char*)v, (const char*)x);
             if (strcmp((const char*)v, (const char*)x) == 0) return 1;
@@ -2266,6 +2351,17 @@ static int64_t zt_vec_len(int64_t v) {
 }
 
 int64_t py_array_concat(int64_t a, int64_t b) {
+    if (getenv("ZT_PROBE_CONCAT") &&
+        ((uint64_t)a < 0x10000 || (uint64_t)b < 0x10000)) {
+        // TEMP diagnostic (batch 291): drvX3 SIGSEGV inside concat from
+        // jq_wufu__initialize. One operand's header read faulted at -7
+        // (=> that operand == 1). Print both handles + a short backtrace.
+        void* bt[12];
+        int n = backtrace(bt, 12);
+        fprintf(stderr, "[ZT_PROBE_CONCAT] a=%ld b=%ld\n", (long)a, (long)b);
+        backtrace_symbols_fd(bt, n > 6 ? 6 : n, 2);
+        abort();
+    }
     int64_t na = zt_vec_len(a), nb = zt_vec_len(b);
     int64_t n = na + nb;
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
@@ -3178,3 +3274,27 @@ int64_t isna(int64_t v) { return zt_bare_mask(v, 0); }
 int64_t isna_1(int64_t v) { return zt_bare_mask(v, 0); }
 int64_t notna(int64_t v) { return zt_bare_mask(v, 1); }
 int64_t notna_1(int64_t v) { return zt_bare_mask(v, 1); }
+
+// BATCH-291: `series.dt.strftime(fmt)` — the `.dt` accessor lowers to the
+// array handle itself (gen.rs passthrough); this maps each PyDate element
+// through py_dt_strftime into a fresh string vector. Without it the chain
+// reached LIBC `strftime` with a garbage fmt pointer (SIGSEGV in `_st_fmt`,
+// jq_wufu_local.py:81). DELIBERATELY LAST in this TU: inserting it earlier
+// shifted every following function and flipped a latent layout-sensitive
+// defect in the driver build (cache path / strnlen crash) — keep the HEAD
+// code layout byte-identical ahead of this point.
+extern int64_t py_dt_strftime(int64_t h, int64_t fmt);
+int64_t zeta_vec_strftime(int64_t data, int64_t fmt) {
+    if (!data) return 0;
+    int64_t n = 0;
+    if (!zt_vec_header_ok(data, &n)) return 0;
+    int64_t cap = n < 8 ? 8 : n;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
+    base[0] = cap;
+    base[1] = n;
+    int64_t out = (int64_t)(base + 2);
+    for (int64_t i = 0; i < n; i++) {
+        ((int64_t*)out)[i] = py_dt_strftime(((int64_t*)data)[i], fmt);
+    }
+    return out;
+}

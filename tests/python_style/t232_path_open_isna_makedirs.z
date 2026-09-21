@@ -1,8 +1,8 @@
 // PY-A: Path.open 默认 mode / encoding= 忽略 / Named Path / isna / makedirs exist_ok
 // expect: hi
 // expect: hi
-// expect: 1
-// expect: 0
+// expect: True
+// expect: False
 // expect: 1
 from pathlib import Path
 import os

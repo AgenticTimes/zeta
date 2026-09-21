@@ -6,7 +6,7 @@
 // expect: y
 // expect: 1
 // expect: 1
-// expect: 0
+// expect: False
 def member(m: lt(map, str, str), k: str) -> i64:
     if k in m:
         return 1

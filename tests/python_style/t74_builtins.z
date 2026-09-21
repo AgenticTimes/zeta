@@ -1,8 +1,8 @@
 // PY-A: 常用内建 —— any/all 真值，以及 `for i, v in enumerate(xs)` 解糖为索引循环
 //   （此前 any/all 链接失败；`for i, v in enumerate(..)` 整条语句被静默丢弃）
-// expect: 1
-// expect: 0
-// expect: 1
+// expect: True
+// expect: False
+// expect: True
 // expect: 1
 // expect: 3
 // expect: 5

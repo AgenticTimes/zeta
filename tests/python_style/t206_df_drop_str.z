@@ -1,13 +1,13 @@
 // PY-A: DataFrame.drop("v") — bare str must delete one column, not for-in chars.
 // List form and columns= kwargs must keep working (MIR wraps Type::Str → [str]).
 // expect: 1
-// expect: 0
+// expect: False
+// expect: True
 // expect: 1
+// expect: False
+// expect: True
 // expect: 1
-// expect: 0
-// expect: 1
-// expect: 1
-// expect: 0
+// expect: False
 from pandas import DataFrame
 
 a = DataFrame({"code": ["a", "b"], "v": ["1", "2"]})

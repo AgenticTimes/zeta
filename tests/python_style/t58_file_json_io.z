@@ -4,7 +4,7 @@
 // expect: 2.5
 // expect: x
 // expect: 3
-// expect: 1
+// expect: True
 // expect: 1
 import json
 

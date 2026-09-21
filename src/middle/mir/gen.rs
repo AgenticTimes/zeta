@@ -633,6 +633,19 @@ impl MirGen {
             if self.func_ret_types.contains_key(&cand) {
                 return Some(cand);
             }
+            // Batch 291: the class name ITSELF starts with an underscore
+            // (`log = _LogAdapter()` in jq_shim, used from jq_wufu). The
+            // mangled receiver is `jq_shim___LogAdapter`, and `rsplit_once("__")`
+            // swallows the class's own leading underscore — the definitions are
+            // keyed bare (`_LogAdapter::info`), so every `log.info(...)` fell
+            // through to a generic `jq_shim___LogAdapter__info` reference with
+            // NO definition (link error). Re-prepend 1-2 underscores.
+            for k in 1..=2 {
+                let cand = format!("{}{}::{}", "_".repeat(k), tail, method);
+                if self.func_ret_types.contains_key(&cand) {
+                    return Some(cand);
+                }
+            }
         }
         // A DOTTED type name (`pd.DataFrame`, from a `-> pd.DataFrame | None`
         // annotation) must still find the class's methods: without this
@@ -937,10 +950,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     if matches!(self.type_map.get(&id), Some(Type::I64) | Some(Type::PyDynamic))
                         && crate::middle::pylib::handle_tag(param_type.trim()).is_some()
                     {
-                        self.type_map.insert(
-                            id,
-                            Type::Named(param_type.trim().to_string(), vec![]),
-                        );
+                        // Batch 291: store the CANONICAL TAG, not the spelling.
+                        // `d: datetime` used to stay `Named("datetime")`, which
+                        // blocked the struct-annotation mapper below (it only
+                        // fires on I64/PyDynamic) — so `handle_op` never saw
+                        // PyDate, `d - pd.Timedelta(days=1)` degraded to a
+                        // DynamicArray, and `.strftime` dispatched to
+                        // `zeta_vec_strftime` on a scalar handle (SIGSEGV in
+                        // `new_context`, jq_shim.py:644).
+                        let tag = crate::middle::pylib::handle_tag(param_type.trim())
+                            .unwrap_or(param_type.trim());
+                        self.type_map.insert(id, Type::Named(tag.to_string(), vec![]));
                     }
                     // `lt(map, K, V)` / `lt(vec, T)`: the ANNOTATION is the only
                     // place a parameter's element/value type exists. Leaving the
@@ -3903,6 +3923,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 Type::F64
                             }
                         }
+                        // Batch 291: an INTEGER comparison is still a Bool.
+                        // `1 == 1` / `i < n` fell to the I64 fallback, so
+                        // `print(1 == 1)` printed `1` and any `x = (a == b)`
+                        // slot was an i64 — print/println dispatch never
+                        // reached print_bool. Python: every comparison yields
+                        // a bool; the runtime rep is i64 either way, only the
+                        // inferred TYPE drives printing and later `type()`.
+                        // NB: `&&`/`||` are NOT refinement targets here — they are
+                        // value-selecting in Python and get their own op_type pass
+                        // right below; typing them Bool here broke 38 tests.
+                        _ if is_cmp && !matches!(op.as_str(), "||" | "&&") => Type::Bool,
                         _ => Type::I64,
                     };
                     // Python `and`/`or` are VALUE-selecting, not boolean:
@@ -4284,6 +4315,22 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 type_args,
                 ..
             } => {
+                // PY-A batch 291: `cls(...)` inside a @classmethod body. The
+                // class desugar keeps classmethods as plain functions named
+                // `Class::method` with `cls` as a first parameter that no
+                // call site binds — the free call slipped past every function
+                // lookup and was emitted as the bare symbol `cls` (died in the
+                // loud stub). The constructor is desugared under the CLASS
+                // name, so rewrite the callee to the enclosing class.
+                let cls_ctor: Option<String> = if receiver.is_none()
+                    && method.as_str() == "cls"
+                    && !self.func_ret_types.contains_key("cls")
+                {
+                    self.current_class.clone()
+                } else {
+                    None
+                };
+                let method: &String = cls_ctor.as_ref().unwrap_or(method);
                 // PY-A: `from <user module> import member` — the module's file
                 // is loaded and lowered into THIS binary under
                 // `<module>__<name>` symbols, so a free call to an imported
@@ -7624,6 +7671,12 @@ call, no NULL-handle dereference).",
                             Some(Type::F64) | Some(Type::F32) => {
                                 if is_last { "println_f64" } else { "print_f64" }
                             }
+                            // Batch 291: bool must print Python-style (True/False),
+                            // not as the i64 fallback (1/0). print_bool exists in the
+                            // runtime since the beginning but was never selected —
+                            // `print(1 == 1)` printed `1`. No println_bool: the newline
+                            // comes from the `print_str("\n")` emitted below for is_last.
+                            Some(Type::Bool) => "print_bool",
                             _ => {
                                 if is_last { "println_i64" } else { "print_i64" }
                             }
@@ -7632,6 +7685,15 @@ call, no NULL-handle dereference).",
                             func: func.to_string(),
                             args: vec![printed_id],
                         });
+                        if matches!(self.type_map.get(&printed_id), Some(Type::Bool)) && is_last {
+                            let nl = self.next_id();
+                            self.exprs.insert(nl, MirExpr::StringLit("\n".to_string()));
+                            self.type_map.insert(nl, Type::Str);
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: "print_str".to_string(),
+                                args: vec![nl],
+                            });
+                        }
                     }
                     // `print(..., end=X)` — emit the terminator ourselves.
                     if let Some(e) = end_id {
@@ -8948,14 +9010,18 @@ call, no NULL-handle dereference).",
                 ) {
                     let elem = vec_elem.unwrap_or(Type::Str);
                     let vfunc = match (method.as_str(), arg_ids.len()) {
-                        ("sum", 1) => Some("zeta_sum_vec"),
-                        ("unique", 1) => Some("zeta_vec_unique"),
+                        ("sum", 1) => Some(("zeta_sum_vec", 1)),
+                        ("unique", 1) => Some(("zeta_vec_unique", 1)),
+                        // BATCH-291: `series.dt.strftime(fmt)` — `.dt` passed
+                        // the array through; elementwise date format yields a
+                        // Str vector (which `unique`/`sorted` then keep as str).
+                        ("strftime", 2) => Some(("zeta_vec_strftime", 2)),
                         _ => None,
                     };
-                    if let Some(fname) = vfunc {
+                    if let Some((fname, nargs)) = vfunc {
                         self.stmts.push(MirStmt::Call {
                             func: fname.to_string(),
-                            args: vec![arg_ids[0]],
+                            args: arg_ids[..nargs].to_vec(),
                             dest: id,
                             type_args: vec![],
                         });
@@ -8964,6 +9030,7 @@ call, no NULL-handle dereference).",
                             id,
                             match method.as_str() {
                                 "unique" => Type::DynamicArray(Box::new(elem)),
+                                "strftime" => Type::DynamicArray(Box::new(Type::Str)),
                                 _ => Type::I64,
                             },
                         );
@@ -9285,7 +9352,22 @@ call, no NULL-handle dereference).",
                         type_args: vec![],
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, map_value_ty);
+                    // Batch 291: a bare `dict` annotation erases the value type
+                    // to I64 (lt_annotation_type), so `config.get("slippage",
+                    // 0.0)` on a dict PARAMETER read back the stored double
+                    // BITS as an integer — `4562254508917369340` instead of
+                    // `0.001` (measured). The default argument carries the
+                    // expected value type; use it to re-tag when the map's own
+                    // value type is the erased I64 default.
+                    let vty = match (
+                        &map_value_ty,
+                        self.type_map.get(&arg_ids[2]).cloned(),
+                    ) {
+                        (Type::I64, Some(Type::F64)) => Type::F64,
+                        (Type::I64, Some(Type::Str)) => Type::Str,
+                        _ => map_value_ty.clone(),
+                    };
+                    self.type_map.insert(id, vty);
                     return id;
                 }
 
@@ -9629,6 +9711,8 @@ call, no NULL-handle dereference).",
                             // 批次145 重放: order-preserving dedup / sum on vecs
                             "unique" => ("zeta_vec_unique".to_string(), false, false),
                             "sum" => ("zeta_sum_vec".to_string(), false, false),
+                            // BATCH-291: elementwise date format (see fallback table).
+                            "strftime" => ("zeta_vec_strftime".to_string(), false, false),
                             _ => {
                                 // For other methods, use qualified name: Type::method
                                 let rty_name = rty.display_name();
@@ -10433,8 +10517,59 @@ call, no NULL-handle dereference).",
                 // the kind recorded at `add_argument` (a static method table
                 // cannot enumerate dynamic field names). An undeclared flag is
                 // reported and lowered to 0 rather than silently defaulting.
+                // Batch 291: `timezone.utc` — an attribute on an IMPORTED
+                // stdlib member. Stdlib members have no runtime value (the
+                // generic path read an uninitialized local slot and
+                // dereferenced it: varying SIGSEGV faults inside
+                // `_now_iso`). If the registry carries the dotted member
+                // (`datetime` → `timezone.utc`) as a zero-arg shim, call it.
+                if let AstNode::Var(vname) = &**base {
+                    if let Some((module, member)) =
+                        self.py_member_aliases.get(vname.as_str()).cloned()
+                    {
+                        let dotted = format!("{}.{}", member, field);
+                        if let Some(entry) =
+                            crate::middle::pylib::find_member(&module, &dotted)
+                        {
+                            if entry.args.is_empty() {
+                                self.stmts.push(MirStmt::Call {
+                                    func: entry.symbol.clone(),
+                                    args: vec![],
+                                    dest: id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(id, MirExpr::Var(id));
+                                let ty = match entry.handle.as_deref() {
+                                    Some(h) => Type::Named(h.to_string(), vec![]),
+                                    None => match entry.ret.as_str() {
+                                        "f64" => Type::F64,
+                                        "str" => Type::Str,
+                                        _ => Type::I64,
+                                    },
+                                };
+                                self.type_map.insert(id, ty);
+                                return id;
+                            }
+                        }
+                    }
+                }
                 {
                     let probe_id = self.lower_expr(base);
+                    // BATCH-291: `series.dt` (pandas datetime accessor) has no
+                    // runtime property object — pass the array handle through so
+                    // the accessor METHODS (`strftime` etc.) dispatch on the
+                    // vector itself (`zeta_vec_strftime`). Measured: `df[col]
+                    // .dt.strftime("%Y-%m-%d")` reached LIBC `strftime` with a
+                    // garbage fmt pointer (jq_wufu_local.py:81, SIGSEGV).
+                    if field == "dt" {
+                        if let Some(t) = self.type_map.get(&probe_id).cloned() {
+                            if matches!(t, Type::DynamicArray(_) | Type::Array(_, _)) {
+                                self.exprs.insert(id, MirExpr::Var(probe_id));
+                                self.type_map.insert(id, t);
+                                return id;
+                            }
+                        }
+                    }
                     // A struct FIELD read keeps its DECLARED type. Without this every
                     // `self.cache_dir` / `f.cache_dir` came back I64: `len(field)` was
                     // 0 and `str(field)` printed the handle as digits (measured on
@@ -10755,7 +10890,15 @@ call, no NULL-handle dereference).",
                         Some(TypeDecl::Struct { fields, .. }) => fields
                             .iter()
                             .find(|(x, _)| x == f)
-                            .map(|(_, ft)| Type::from_string(ft)),
+                            // Batch 291: annotate-path first — `list[str]`
+                            // must reach DynamicArray(Str); `from_string`
+                            // alone left the field I64-typed, so
+                            // `g.pool + [x]` added two HANDLES (len 14)
+                            // instead of concatenating.
+                            .map(|(_, ft)| {
+                                lt_annotation_type(ft)
+                                    .unwrap_or_else(|| Type::from_string(ft))
+                            }),
                         _ => None,
                     })
                 };

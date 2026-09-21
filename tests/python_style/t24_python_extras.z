@@ -1,8 +1,8 @@
 // PY-A: 字符串方法 / in·not in / 负索引 / 元组并行赋值 / 链式比较
 // expect: HELLO WORLD
 // expect: hello world
-// expect: 1
-// expect: 1
+// expect: True
+// expect: True
 // expect: Hello Zeta
 // expect: 11
 // expect: 40

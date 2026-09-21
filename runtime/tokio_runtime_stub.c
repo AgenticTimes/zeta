@@ -16,6 +16,8 @@
 #include <glob.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/mman.h>  // msync readability probe (host_str_concat diagnostic)
+#include <mach/mach.h> // vm_read_overwrite readability probe
 
 static pthread_mutex_t zt_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -33,7 +35,7 @@ void println_i64(int64_t v) { printf("%lld\n", (long long)v); }
 void print_i64(int64_t v) { printf("%lld", (long long)v); }
 void println_f64(double v) { printf("%.6f\n", v); }
 void print_f64(double v) { printf("%.6f", v); }
-void print_bool(int64_t v) { printf("%s", v ? "true" : "false"); }
+void print_bool(int64_t v) { printf("%s", v ? "True" : "False"); }
 void print_str(int64_t v) { printf("%s", zt_str_or_null(v)); }
 void println_str(int64_t v) { printf("%s\n", zt_str_or_null(v)); }
 void print(int64_t v) { fputs(zt_str_or_null(v), stdout); }
@@ -106,7 +108,29 @@ int64_t str_replace(int64_t s, int64_t old_s, int64_t new_s) {
 
 // host_str_* aliases (codegen maps str_.method() to host_str_*)
 int64_t host_str_len(int64_t s) { return str_len(s); }
-int64_t host_str_concat(int64_t a, int64_t b) { return str_concat(a, b); }
+// TEMP DIAGNOSTIC (batch 291, remove before commit): catch wild string pointers
+// (unmapped page) instead of dying inside strlen, and dump the caller chain.
+int64_t zt_concat_probe(int64_t a, int64_t b);
+static int zt_c_str_readable(int64_t v) {
+    // A concat argument must be a NUL-terminated char*: either a GC block
+    // (base or interior) or a readable page. `msync` only proves a MAPPING
+    // (PROT_NONE regions pass), so fault-check one byte with
+    // vm_read_overwrite (measured: strlen died at 0x15_00000000 inside
+    // host_str_concat from _load_cache).
+    if (!v) return 1;
+    if ((int64_t)GC_base((void*)v) != 0) return 1;
+    uint64_t u = (uint64_t)v;
+    if (u < (1ULL << 32) || u >= (1ULL << 48)) return 0;
+    char probe;
+    vm_size_t got = 0;
+    return vm_read_overwrite(mach_task_self(), (vm_address_t)u, 1,
+                             (vm_address_t)&probe, &got) == KERN_SUCCESS;
+}
+int64_t host_str_concat(int64_t a, int64_t b) {
+    if (!zt_c_str_readable(a) || !zt_c_str_readable(b)) zt_concat_probe(a, b);
+    return str_concat(a, b);
+}
+// Defined at the very END of this file to keep following functions' layout.
 int64_t host_str_to_uppercase(int64_t s) { return str_to_uppercase(s); }
 int64_t host_str_to_lowercase(int64_t s) { return str_to_lowercase(s); }
 int64_t host_str_trim(int64_t s) { return str_trim(s); }
@@ -151,10 +175,16 @@ int zt_map_is_json_handle(int64_t h) {
     // word" is the first ELEMENT, so `[1, 0, 1]` looked exactly like a JSON tag
     // (measured: `df.loc([1,0,1])` aborted inside `loc`). Exclude plausible vectors
     // first; only then treat a small first word as a JSON tag.
+    // The h-16 read must NEVER touch memory outside h's own GC block: a map
+    // handle IS its block base, and blocks that start at a page edge make
+    // h-16 a guard page (measured: SIGBUS in `map_insert+88`, driver batch 291).
     if (h > 0x1000) {
-        int64_t cap = ((int64_t*)(h - 16))[0];
-        int64_t len = ((int64_t*)(h - 16))[1];
-        if (cap >= 0 && cap <= (1LL << 30) && len >= 0 && len <= cap) return 0;
+        void* blk = GC_base((void*)h);
+        if (blk && (char*)h >= (char*)blk + 16) {
+            int64_t cap = ((int64_t*)(h - 16))[0];
+            int64_t len = ((int64_t*)(h - 16))[1];
+            if (cap >= 0 && cap <= (1LL << 30) && len >= 0 && len <= cap) return 0;
+        }
     }
     int64_t w0 = *(int64_t*)h;
     return (w0 >= 1 && w0 <= 8);
@@ -1188,6 +1218,16 @@ int64_t py_dt_now(void) {
 int64_t py_dt_now_1(int64_t receiver) {
     (void)receiver;
     return py_dt_now();
+}
+/* `timezone.utc` — batch 291: only consumer is `datetime.now(timezone.utc)`
+ * in data_ops_log._now_iso, and py_dt_now_1 ignores the argument. Returned as
+ * a real PyDate block so any stray dereference reads memory, not a bad pointer. */
+int64_t py_dt_tz_utc(void) { return py_dt_now(); }
+/* The `timezone` CLASS object itself (attribute base). Static block: any
+ * stray field-read on it dereferences mapped memory instead of crashing. */
+int64_t py_dt_timezone(void) {
+    static int64_t blk[2] = {0, 0};
+    return (int64_t)blk;
 }
 int64_t py_dt_year(int64_t h) {
     int64_t y, m, d;
@@ -3548,4 +3588,29 @@ if (!m) return 0;
         if (*(int64_t*)e == k) return 1;
         idx = (idx + 1) & (cap - 1);
     }
+}
+
+// TEMP DIAGNOSTIC (batch 291): defined at EOF so the probe insertion above
+// shifts nothing else. Prints the wild concat args + native backtrace, aborts.
+#include <execinfo.h>
+int64_t zt_concat_probe(int64_t a, int64_t b) {
+    void* bt[24];
+    int n = backtrace(bt, 24);
+    fprintf(stderr, "ZT-DIAG host_str_concat a=%p[%s] b=%p[%s]\n", (void*)a,
+            zt_c_str_readable(a) && a ? (const char*)a : "?", (void*)b,
+            zt_c_str_readable(b) && b ? (const char*)b : "?");
+    // dladdr resolution: backtrace_symbols uses the NEAREST preceding
+    // symbol, which tail calls make lie (batch 291 repeatedly misattributed
+    // frames this way). Print `sym+off` from dlinfo directly.
+    for (int i = 0; i < n && i < 12; i++) {
+        Dl_info di;
+        if (dladdr(bt[i], &di) && di.dli_sname)
+            fprintf(stderr, "  #%d %s+0x%lx (%p)\n", i, di.dli_sname,
+                    (unsigned long)((char*)bt[i] - (char*)di.dli_saddr), bt[i]);
+        else
+            fprintf(stderr, "  #%d %p\n", i, bt[i]);
+    }
+    fflush(stderr);
+    abort();
+    return 0;
 }

@@ -275,6 +275,12 @@ F datetime strptime py_dt_strptime args=i64,i64 ret=i64 handle=PyDate
 F datetime datetime.strptime py_dt_strptime args=i64,i64 ret=i64 handle=PyDate
 F datetime datetime.now py_dt_now args= ret=i64 handle=PyDate
 F datetime date.today py_dt_now args= ret=i64 handle=PyDate
+# Batch 291: `timezone.utc` (data_ops_log._now_iso) — UNREGISTERED it lowered
+# as a field-deref of the uninitialized import slot (SEGV at fault 0x1).
+# The value is only ever passed to datetime.now(tz), which ignores it.
+F datetime timezone py_dt_timezone args= ret=i64 handle=PyTZ
+W PyTZ utc py_dt_identity args=1 ret_handle=PyTZ
+F datetime timezone.utc py_dt_tz_utc args= ret=i64
 W PyDate strftime py_dt_strftime args=2 ret=str
 W PyDate date py_dt_identity args=1 ret_handle=PyDate
 W PyDate replace py_dt_replace args=4 ret_handle=PyDate
@@ -479,6 +485,7 @@ X zeta_arange args=i64 ret=vec
 X zeta_identity args=i64 ret=i64
 X zeta_identity2 args=i64,i64 ret=i64
 X zeta_vec_unique args=i64 ret=vec
+X zeta_vec_strftime args=i64,i64 ret=vec
 X zeta_vec_nunique args=i64 ret=i64
 X zeta_np_where1 args=i64 ret=vec
 X zeta_np_where3 args=i64,i64,i64 ret=i64

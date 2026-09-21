@@ -8302,3 +8302,86 @@ fetch_stocks 的缓存门（market_data_fetcher.py:552-578）`cached is not None
 
 **下一步**：批次 291 —— Series `.dt.strftime` 访问器链（`df[col].dt.strftime(fmt).unique()`），
 随后处理「合计 12375 行，0 只标的」的计数疑点与 LocalBackend 主循环。
+
+## 环境观测（2026-09-21 12:24，非批次记录）：进程卡死导致 agent 静默 3 小时
+
+**触发**：用户反馈「qoder 推进 roadmap 好像没在动」——最后提交 09-21 05:56（批次 290），
+未提交文件 mtime 停在 09:08，之后 3 小时零写入、零编译进程。
+
+**发现**：`/tmp/dg2`（zetac 编译产物，Mach-O arm64，字符串含 `ZETA_PROBE`、
+`zeta_matmul is an i64 mul stub` 警告）**单核 100% CPU 空转 25 小时 20 分**：
+
+- 启动 09-20 约 11:00（PPID=1，已脱离父进程），累积 CPU 时间 1497 分钟
+- RSS 仅 3 MB —— **纯空转，不是在计算**（正常编译器测试不会 25 小时只占 3MB）
+- 挂在 tty s007，cwd `/private/tmp`
+- 占用整机 load 的 1/3（load avg 3.4 / 10 核）
+
+**处理**：`kill 97330`（SIGTERM 即退出，验证确为挂起而非长任务）。处置后 CPU 峰值进程
+从 100% 降至 25%（仅剩 Qoder 界面与 WindowServer）。
+
+**教训（对后续批次）**：
+1. `/tmp` 下的 zeta 测试二进制若卡死不会自己退出，且脱离父进程后无人回收 →
+   **长跑探针必须带超时**（`timeout 300 /tmp/xxx`），禁止裸跑无超时二进制。
+2. 判断 agent 是否在工作：看**提交时间 + 未提交文件 mtime + 是否有编译进程**，
+   而不是只看 App 是否开着（Qoder 窗口开着 ≠ agent 在干活；其子进程只有
+   Electron 标准组件时说明没有 worker 在跑）。
+3. 无进展时的第一检查项：`ps -Ao pid,%cpu,etime,comm -r | head`，
+   找 `etime` 很长且 `%cpu` 高的孤儿进程。
+
+**批次 291 起点不受影响**：series `.dt.strftime` 访问器链（`df[col].dt.strftime(fmt).unique()`）
+仍是下一步，本次仅环境清理，无代码改动。
+
+## 批次 291（2026-09-21，**接管自 Qoder 的未提交工作**）：bool 打印语义 + `.dt.strftime` 突破
+
+### 起点
+Qoder 于 09-21 05:56 提交批次 290 后继续工作到 09:08（8 个文件、~500 行未提交改动），
+随后进程静默（见文末「环境观测」：`/tmp/dg2` 卡死 25 小时）。本批接管这批工作，
+先判定其状态再决定去留。
+
+**盘点结果**：改动方向正确（`.dt.strftime` 访问器链 + `timezone.utc` 注册 +
+`@classmethod` cls 形参 + 构造器实参传递），但**引入 1 个回归**：
+`t229_method_defaults_isin` 由绿转红（干净基线 278/2 → 带改动 277/3）。
+
+### 本批修复（两处，均为 print 的类型分派缺口）
+
+1. **`print(bool)` 走 i64 回退**（`src/middle/mir/gen.rs` 分派表）
+   - 现象：`print(1 == 1)` 输出 `1`、`print(True)` 输出 `true`，CPython 应为 `True`/`False`。
+   - 根因 A：分派表只有 Str/F64/PyPath，缺 `Type::Bool`，bool 落进 `_ => println_i64`。
+   - 根因 B：BinOp 的 `op_type` 兜底是 `Type::I64`——**整型比较**（`1 == 1`、`i < n`）
+     结果被标成 I64；只有浮点比较分支才修正为 Bool。于是即使补了分派表，
+     比较表达式仍然拿不到 Bool 类型。
+   - 修法：① 整型比较的结果类型改判 `Type::Bool`；② 分派表加 `Type::Bool => "print_bool"`。
+     **注意排除 `&&`/`||`**——它们在 Python 里是取值语义，有独立的 op_type 重算段，
+     误纳入会让 38 个用例转红（实测）。
+2. **`print_bool` 输出小写**（`runtime/tokio_runtime_stub.c`）
+   - `printf("%s", v ? "true" : "false")` → `"True" : "False"`（Python repr）。
+   - 改 C 源码后**必须重跑 `./tools/build_runtime.sh`**，否则 `.o` 不更新、改动不生效
+     （本批踩过：改了 C 没重建 runtime，一度以为修复无效）。
+
+### 测试期望同步（35 个用例）
+`print(bool)` 由 1/0 变为 True/False 后，35 个用例的 expect 行是**旧 bug 的行为快照**，
+按 CPython 语义更新（`1→True`、`0→False`）。其中两处需人工判断：
+
+- `t229`：`Series(["a","a","b"]).nunique()` 期望 `3` → **`2`**。
+  注释原文「str 列 map 成员偶发按指针，可能计 3」= 当初把 bug 固化成期望值；
+  CPython pandas 实测为 2（唯一值数），Qoder 的改动恰好修好了它。
+- `t114_argparse_argv`：期望 `1` → `True`（`store_true` 的存在性判定）。
+
+### 效果
+- **三基线全绿**：官方 194/194；python_style **278/2**（仅存量红 t231/t233）；语料 **39/39=100%**。
+- **批次 290 卡点突破**：drvSF 不再崩在 `jq_wufu_local.py:81` 的
+  `market_df["trade_date"].dt.strftime(...)`（`.dt` 访问器链已通）。
+- 崩点推进到：`MarketDataFetcher::_load_cache` 的 `host_str_concat`
+  （`ZT-DIAG host_str_concat a=0x102c4e9a7[0] b=0x18[?]`，
+   `b=0x18` 不是合法字符串句柄 ⇒ 拼接参数里有一个未初始化/被截断的值）。
+  发生在 baostock 批量拉取之后、缓存写入路径上。
+
+### 验证
+- `./tools/run_all.sh --json-only` → 194/194 · 278/2 · 39/39。
+- bool 打印探针：`print(True)`/`print(1==1)`/`print(1<2)`/`print("x" in "abc")`
+  输出与 CPython 逐行一致。
+- drvSF：编译通过 → 运行到 `_load_cache` 字符串拼接崩（`Abort trap: 6`），
+  崩溃栈 `#2 MarketDataFetcher::_load_cache+0x24c`。
+
+**下一步**：批次 292 —— `_load_cache` 的 `host_str_concat` 参数 `b=0x18` 来源
+（疑似小字符串打包槽 / 未初始化句柄，参见 handoff.md §7.6）。
