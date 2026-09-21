@@ -9705,3 +9705,122 @@ NUL 计数改前改后都是 7。
 - `ci.yml:61` 的假绿冒烟步骤（本批记录，未修）⇒ 修法是接到 `tests/unit-tests/` 真实语料，
   而不是新建那三个文件。
 - 任务 #26 / #27 / #22 / #24 不变。
+
+> **补录说明（批次 317 时自查）**：下面 315/316/317 三条是**先提交、后补日志**。
+> 批次 314 之后我把"批次记录"写进了未跟踪的 `refactor.md`（G.5 各章落地明细），
+> 忘了这份跟踪在库的 `roadmap.md` 才是批次流水账 ⇒ 本仓库的权威批次日志出现了
+> 三批空洞。这属批次 314 刚记的"判据不在库里 = 假绿"的同类：**记录不在权威位置，
+> 等于没记**。以后每批以 `roadmap.md` 为准（`refactor.md` 只放计划与审计表）。
+
+## 批次 315（任务 #26 —— JIT 静默跳空指针：根因纠正 + 未绑符号就地填桩）
+
+### 先纠正批次 313 的根因判断
+313 记的是"`--emit-llvm` 退出路径 SIGSEGV"。实测根因**与 `--emit-llvm` 无关**：
+CLI 无 `-o` 时一律走 `finalize_and_jit` 并在编译器进程内 `main.call()`，
+`--emit-llvm` 只是顺带打印 IR。真正的洞是仓里没有 `build.rs` ⇒ `runtime/*.c`
+从不在 zetac 镜像里（`nm` 反查 `zeta_env_set`/`println_str` 均 0 命中），而 JIT 只绑
+`pylib/jit_mappings.txt`(131 条) + `vec_*` ⇒ Python 式模块级绑定所调用的
+`zeta_env_get`/`zeta_nonlocal_decl` 等**无地址**，调用即跳到 0（rc=139、零诊断）。
+**三套基线全走 `-o`（AOT），JIT 路径一行都没覆盖过** —— 这才是它能静默到今天的理由。
+
+### 三个非显然的决定（每条都被实测推翻过首版）
+1. **填桩而非拒编译**：`jit.rs::trap_unresolved_symbols` 给"被引用 + 非 `llvm.*` +
+   绑不到"的声明填 `zeta_jit_missing_symbol(name)` → `error[E4016]` + `exit(1)`，
+   必须在 `create_jit_execution_engine`（该处拷贝 module）之前。A/B 全跑 485 文件抓到
+   "静态拒绝编译"版**误杀 3 个今天能跑通的文件**（`-O3` 后仍留在 IR 里的调用可能是
+   动态死代码）⇒ 判"能不能跑"不能只看 IR 里有没有这条 call。
+2. **只预测、不探测**：探针 `ee.get_function_address()` 自己在
+   `MCJIT::finalizeLoadedModules → RuntimeDyldImpl::resolveRelocations` 里踩空
+   （lldb：`EXC_BAD_ACCESS at 0xb0`）⇒ 不许问引擎要地址；"绑了什么"与"能否绑"收敛到
+   同一张表（`JIT_MAPPINGS` 提为 `pub const`、`vec_*` 前缀表化 `JIT_VEC_BINDINGS`）。
+3. **`dlopen(NULL)+dlsym` 而非 `RTLD_DEFAULT`**：后者是宏、无可移植拼写，且**错句柄
+   不报错、只是什么都找不到** ⇒ 静默退化成"全都绑不到"的假阳工厂。换后本机同数。
+
+### 实测（判据：`segv==0` 且 `ok>=163`）
+- 新增 `tools/jit_sweep.sh` 并接进 `run_all.sh` 第 4 步（`--skip-jit` 可关；缺 coreutils
+  `timeout` 时**喊话跳过**，不做批次 314 刚记的那种幽灵门禁）。
+- 159 ok / 326 SIGSEGV → **163 ok / 322 精确报错 / 0 SIGSEGV**；`comm` 证 ok 集合
+  **零回退**（4 个原 SIGSEGV 反转为跑通，崩点在装载期重定位）。E4016 入注册表。
+- 四步门禁：194/194 · 285 passed/2 failed/4 known-fail/0 xpass · 39/39 · jit GREEN；
+  `dc_audit --diff` 仍 101 条无新增。
+
+### OPEN
+- 任务 #28：`--emit-llvm` 不带 `-o` 时仍会**执行**被编译的程序（CLI 语义缺陷，本批未动）。
+- 任务 #29：`ci.yml:61` 的"JIT 冒烟"引用 3 个不存在的 `tests/test_*.z` + `if [ -f ]`
+  ⇒ 静默空转还打 verified（假绿）。应改接 `tools/jit_sweep.sh`，并在 Linux 上实测 ok 基线。
+
+## 批次 316（refactor ⑨ 第一段 / G.5b —— `docs/ABI.md` §3 调用约定成文）
+
+- §3.1–§3.5：规则 **C1–C12** + `coerce_call_args` **实参强转全表**（10 档，逐档标
+  丢值/告警/判定）+ §3.5 四个**实测**探针 M1–M4。纯文档，编译器代码零改动。
+- **了结 capybara COMPILER_BUGS #4**（"struct 返回垃圾字段"）：其"返回局部指针"
+  根因假设被 M1/M4 **证伪** —— 写侧本就 heap 分配，现行实现是 heap 句柄（§3.1 C1）；
+  M4 直接复现原 bug 用例，今天 `42 / 99` rc=0。残余风险改记为**字段数解析失败时的
+  `("", 2)` 二字段兜底**（gen.rs:6336-6345、:6380）。
+- 强转表给出"保留 / 白名单 / 删除候选"三档判定，**改动本身留给 G.5d**
+  （#2/#6/#7/#8/#9/#10 纳入 `abi_note`）。
+- M2 是唯一实测到"静默有损"的一条：`-> i64` 而首返 `2.5` ⇒ 得 `2`、零告警
+  ⇒ **声明类型赢**，但裁决层未定位 ⇒ 附 B#4 立项。
+
+## 批次 317（refactor ⑨ 第二段 / G.5c —— §4 名字修饰 + §5 类型布局 + §6 跨边界假设）
+
+### 写了什么（`docs/ABI.md`，纯文档，编译器代码零改动）
+- **§4 名字修饰 N1–N11**：先分三轴（源级名→LLVM 符号名 / LLVM→链接符号 / 注册名→C 实现），
+  混谈是这类 bug 的共同形状。写侧四种拼写**没有一种可逆**（`<mod>__<member>`、
+  `_inst_`、`_<arity>`、`host_str_*`）；读侧逐档数出 `get_or_declare_function` 的
+  **18 档 / 313 行**瀑布（codegen.rs:2575-2887）。**N6 是本批最重要的结论**：
+  瀑布最后一档不是报错，是就地声明 `i64(i64×实参数)` 的 extern（:2883-2886）
+  ⇒ 名字没对上时编译器不会说话，ARCHITECTURE-REVIEW:104 的"静默错值链"上游在此。
+  §4.5 把"新增一个运行期函数要改几处"做成表，结论：**"单一生成器"只完成了两条，
+  生成物那份声明从未接管手写那份**。
+- **§5 类型布局 L1–L9**：§1 表 #6/#7/#8 的几何常量升格为明文合同（vec = 数据指针 +
+  `base-16` 的 `[cap|len]` 头 + 短 vec 紧块判据；map = 块首 + 24 字节桶 + `MAP_MOVED`
+  forwarder；PyJson = 16 字节 `[tag,payload]`），每条给写侧/读侧双锚点。
+- **§6 跨边界假设 6.1–6.6**：一份 registry 两个解析器；类型 token 只有 `f64`/`void`
+  有法律效力（其余一律 i64）；校验**只核符号存在、从不核签名**；打包/拆包责任逐入口
+  写死；"什么能被 JIT 绑定"有**三份互不校验**的名单；旋钮清单里有一个假旋钮。
+- 附 A 恢复并标明覆盖范围；附 B 增 **#5** 编码不可逆、**#5′** 跨模块裸名回退
+  （与任务 #9 同根，不另立）、**#6** `ZETA_STRICT_STUBS` 只读不用（py_additions.c:3314
+  `(void)getenv(...)`，注释自述 "env is documentary"）、**#7**。
+
+### 写合同的过程本身就是审计（三处计划前提被实测推翻）
+① "瀑布八级"不成立 → 18 档，且真正的靶心是"消灭猜签名"而非"消灭瀑布"；
+② 66 条 `.set` 已在**生成物** `runtime/aliases.inc.c`（旧锚 stub:228-294 过期），
+   而幽灵符号 `py_asdict_unexpanded` 已闭链接期缺口（registry.txt:219 →
+   响亮桩 tokio_runtime_stub.c:1278-1282）；
+③ "四处手工同步"里声明那一份其实有**两份**：`runtime_decls_registry.rs`(294 处
+   `add_function`) + `runtime_decls_core.rs`(61 处) 的入口函数从未被调用，现役仍是
+   手写 255 处 —— 两条 `never used` 早就躺在 `tools/baselines/dc_default.txt:2-3`。
+
+### 附 B#7 = 本批唯一的实测新缺陷（→ 任务 #32，优先级高于其余 G.5d 项）
+`zeta_dyn_getitem`（py_additions.c:3427）的 vec 判据仍写 `cap >= 8`（:3432），
+而批次 301 只把 `zt_dyn_vec_hdr` 那份改成了 `cap >= 1` + 紧块（:3474、:3488）
+⇒ **同一判据的第二份副本**。复现：`def get1(d): return d[1]` + `xs: list = [1,2] + [3,4,5]`
+⇒ 进程**挂死**，`sample` 1,719/1,719 栈样本全在 `map_get+256`。机制与 §1 行 #8 记的
+Json/map 撞车**完全同形**：cap=5 走不进 vec 臂 ⇒ 落到 `map_get` 的开放寻址环，
+`idx = hash & (cap-1)` 在 cap=5 上不是掩码 ⇒ `while(1)` 永不停止。
+**我自己初稿判错过一次**：先写"今天不可观测为 bug"，依据是 3 例探针全对 ——
+但那 3 例都走 `zeta_dynarray_new`（:2579 `if (cap < 8) cap = 8`），旧判据被生产者的
+下限**掩盖**；换 `base[0] = n ? n : 1` 的生产者（`py_array_concat` :2392、
+`py_sorted_key` :1717、`py_builtin_map` :2084、`py_builtin_filter` :2094、
+`py_zip` :645、`zt_map_most_common` :294）即暴露。对照组：同一段用字面量
+`[1,2,3]` 正常（`lit[1] = 2`）、不走动态路径也正常（`len = 5 / idx = 2`）⇒ 定位到
+"动态下标 + 短 vec"这一交叉点。探针留在 `/tmp/abi5/`（`p4/p5/p6/p7` + `p6.sample`），
+**故意不进 `tests/`**：那 3 例依赖"参数未标注"这一非合同行为，固化前先由任务 #32
+定判据（G.5d 再决定固化到哪一段，不动 285 的计数口径）。
+
+### 验证
+- 编译器代码零改动 ⇒ 未复跑三套基线（纯文档口径同批次 316；313 那次跑了，因为它新增了
+  工具脚本）。**本批另有一条不跑的理由，写清楚**：当前工作树被并发工作流改动
+  （`src/blockchain/*` 删除、`src/lib.rs`、`Cargo.toml`、`runtime/py_additions.c`），
+  此刻复跑会把别人的中间态算进我的基线位移，读数不可归因。
+- 结构自检：`grep -n '^#' docs/ABI.md` 六章 + 两附录在位、编号连续；附 B 引用
+  （#2/#4/#5/#5′/#6/#7）全部有对应条目；G.5 审计表 §4–§6 三行 ❌/⚠️→✅，
+  完备性快照的"§4–§6 缺口判断仍然有效"一句已随之改写。
+
+### OPEN
+- 任务 #32（本批新增，见上）。
+- 附 B#4（返回类型最终裁决层）、附 B#6（假旋钮）留在 G.5d。
+- 轴 A 关联：`runtime_decls_*.rs` 的 355 处未接线声明 ⇒ 要么接线要么删，
+  归 **G.5e 第一个动作**（已写进 refactor.md 的 G.5e 条目）。
+
