@@ -9002,3 +9002,49 @@ NOT parsed …`，但 G.7a 验收要求的是**盘点清单**（受影响文件 
   逐项相同，"零行为变更"成立（`--report-stubs` 默认关，报告只写 stderr）
 
 **下一步**：立即档 ④（§5.2 known-fail 包：机制已在，用例待补）。
+
+---
+
+## 批次 304（refactor 立即档 ④ —— §5.2 known-fail 包）
+
+### 为什么先改机制，再补用例
+§5.2 说"known-fail 机制已在、用例为零"。**机制其实半只脚是错的**：旧路径只做
+"编译 rc==0 ⇒ XPASS（可摘除标记）"。而 §5.2 点名的坏形态（元组 `in`、`%s`、
+`df[掩码]`）**全都编译通过** —— 它们错在值上。也就是说：一旦给它们登记
+known-fail，套件立刻告诉你"标记可以摘了"，等于用门禁把已知错值伪装成待清理。
+所以本批先把判定改成**按 expect 的值判定**，再登记用例。
+
+### `tests/python_style/run.sh`
+- 新增 `verdict ok|bad <name> <detail>`：四个出口（expect-error / 编译失败 /
+  expect-abort / 值比对）统一走它，known≠0 时分别落到
+  `XPASS / KNOWN-FAIL`，否则仍是 `PASS / FAIL`；普通用例的逐字输出格式不变。
+- known-fail 用例**忽略** `expect-error` 与 `expect-abort`：拒编和 abort 就是缺口
+  本身，不是契约。
+- 语义：值与 expect 逐字相同才 XPASS（= 真的修好了、标记该摘）；其余一律
+  KNOWN-FAIL，单列不计通过率、不影响 `run.sh` 退出码（不破门禁）。
+
+### 5 条用例（t4xx 段，§5.2 指定）
+| 文件 | 现状（实测） | 参照 |
+|---|---|---|
+| `t401_percent_s_from_dict.z` | `"f=%s" % d["name"]` 打 **13**（句柄整数），同行 f-string 正确 | CPython `f=abc` |
+| `t402_tuple_variable_membership.z` | `2 in t`（元组变量）恒 False，编译期有 W 告警但值照旧错 | CPython `True` |
+| `t403_floor_div_inside_call.z` | `print(x // y)` ⇒ `[W1002] … 1 line(s) NOT parsed`，整个 print 被丢，程序**不打字仍 rc=0** | CPython `3` |
+| `t404_df_row_index_via_var.z` | `idx=[0,2]; len(df[idx])` → **1**，而字面量 `len(df[[1,3]])` → 2（批次 284 的判据在经变量时不成立） | 方言意图（真 pandas 此处 KeyError） |
+| `t405_hard_stub_aborts_loudly.z` | **正向**：`pd.date_range` → `zeta: stub not implemented`，rc=134 | G.8 响亮侧 |
+
+t403 是 G.7b 的头号靶子，也是本批唯一的新增语言缺口发现：`//` 在**括号内**（调用
+参数、元组、列表同理）截断解析，写成 `z = x // y` 则正常；`.py` 与 `.z` 同表现
+（不是方言差异）。语料现有 3 处 `//` 全在赋值 RHS ⇒ 与"G.7a 盘点：语料 0 命中"
+一致，主线暂不受影响。
+
+### 验证
+- 新语义正反两向：4 条 known-fail 全部 `KNOWN-FAIL`（带原因），临时探针
+  `t406_xpass_probe`（把已修好的 t302 标上 known-fail）→ `XPASS … 可摘除标记`，
+  随后删除探针。
+- `./tools/run_all.sh`：official 194/194 · python_style **285 passed, 2 failed,
+  4 known-fail, 0 xpass**（存量红仍只有 t231/t233；+1 pass 即 t405）· 语料 39/39
+- **口径提醒**：`run.sh` 必须从仓库根跑。从 `tests/python_style/` 里跑，31 个
+  pandas/numpy 用例因 cwd 找不到 `pylib/*.z` 而红（实测 254 passed / 33 failed）
+  —— 与本批改动无关，是既有前提。
+
+**下一步**：立即档 ⑤ —— G.5a 槽位值表示表（`docs/ABI.md`，文件尚不存在）。

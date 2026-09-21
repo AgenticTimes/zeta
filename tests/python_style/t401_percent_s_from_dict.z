@@ -1,0 +1,11 @@
+// §5.2 known-fail 包（refactor.md）：`%s` 的字符串来历没接上。
+//   实测：`"f=%s" % d["name"]` 编译通过、退出 0，打出 **13**（句柄整数）而不是
+//   `abc`；同一数据用 f-string 是对的 ⇒ 缺口在 `%` 格式化的 str 参数侧。
+//   主线批次 300 记录的 `[PARITY]` 行打 `4390899200` 是同一个坑。
+//   expect 取 CPython 的输出（本包一律以 CPython 为参照，见 t404 的例外说明）。
+// expect: f=abc
+// expect: g=abc
+// known-fail: %s 读到的是句柄整数；同位置 f-string 正确
+d = {"name": "abc", "n": 3}
+print("f=%s" % d["name"])
+print(f"g={d['name']}")

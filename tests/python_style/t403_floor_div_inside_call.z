@@ -1,0 +1,11 @@
+// §5.2 known-fail 包：`//` 出现在调用括号内 ⇒ 解析**在此截断**。
+//   实测（tools/truncation_inventory.sh 同一条告警）：
+//   `[W1002] …:3: 1 line(s) at the end of the input were NOT parsed …
+//    First unparsed text: '(x // y)'` —— `print(x` 之后的内容全丢，
+//   程序"编译成功"却一个字都不打。同一表达式写成 `z = x // y; print(z)` 是对的
+//   ⇒ 缺口只在括号内的续行扫描。G.7b（顶层同步恢复）的首选靶子。
+// expect: 3
+// known-fail: 括号内 `//` 让解析截断（W1002），整个 print 被丢弃
+x = 7
+y = 2
+print(x // y)

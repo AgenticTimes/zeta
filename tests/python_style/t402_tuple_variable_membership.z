@@ -1,0 +1,10 @@
+// §5.2 known-fail 包：元组变量上的 `in`。
+//   编译期告警在位（`in` membership is only supported for strings/dicts in V1
+//   (container type: Some(Tuple([I64, I64, I64])))），但**结果仍是 False 而不是
+//   报错** ⇒ 程序静默拿到错值。钉住"命中即 False"这条，修复后应转 True。
+// expect: True
+// expect: False
+// known-fail: 元组容器未实现，`in` 恒 False（告警响亮但值仍错）
+t = (1, 2, 3)
+print(2 in t)
+print(9 in t)

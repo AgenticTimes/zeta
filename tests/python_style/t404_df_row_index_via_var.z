@@ -1,0 +1,14 @@
+// §5.2 known-fail 包：批次 284 的 `df[<int 向量>]` 行过滤**零覆盖**（原话见
+//   refactor.md §5.2），且两种写法结果不一致：
+//     print(len(df[[1, 3]]))  → 2（对）
+//     idx = [0, 2]; len(df[idx]) → 1（错）
+//   ⇒ 判据 `DynamicArray(I64)` 在"经变量传递"时没成立，行过滤退化成列取。
+//   注意本包唯一的非 CPython 参照：真 pandas 对 `df[[0, 2]]` 是 KeyError
+//   （整数列表按列名解释），这里的 expect 来自本方言自身的意图（批次 284）。
+// expect: 2
+// known-fail: 行下标向量经变量传入时丢失类型，只筛出 1 行（字面量形式为 2）
+import pandas as pd
+
+df = pd.DataFrame({"a": [10, 20, 30, 40]})
+idx = [0, 2]
+print(len(df[idx]))

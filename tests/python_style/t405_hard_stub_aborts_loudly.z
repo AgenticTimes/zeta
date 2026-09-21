@@ -1,0 +1,10 @@
+// G.8 的正向覆盖（与批次 303 的 `--report-stubs` 配成一对）：
+//   报告说"你踩了哪个桩"，本用例钉住另一半 —— **非 soft 桩必须在运行期响亮
+//   abort**，而不是回 0/空值。实测 stderr `zeta: stub not implemented:
+//   pandas.date_range`，退出码 134（SIGABRT）。
+//   G.8b 逐桩评估时，这一条是"已经响亮"的那一类的样板。
+// expect-abort: stub not implemented: pandas.date_range
+import pandas as pd
+
+d = pd.date_range("2024-01-01", periods=3)
+print(len(d))

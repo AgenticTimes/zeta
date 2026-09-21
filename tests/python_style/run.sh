@@ -4,7 +4,9 @@
 #           `// expect-abort: <stderr 子串>`（编译成功、运行必须非 0 且 stderr 含该串）
 #           `// args: <argv...>`（可选，运行程序时传入的命令行参数）
 #           `// env: K=V`（可选，编译/运行该用例时的环境变量）
-#           `// known-fail: <原因>`（已知缺口，单列不计入通过率）
+#           `// known-fail: <原因>`（已知缺口：照常编译+运行并比对 expect，
+#           值不符/编译失败/abort 记 KNOWN-FAIL 不计通过率；打印与 expect
+#           逐字相同才记 XPASS，即"标记可摘除"）
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -18,6 +20,30 @@ if [ ! -x "$ZETAC" ]; then
 fi
 
 pass=0; fail=0; knownfail=0; xpass=0; failed_files=""
+
+# §5.2 (refactor.md): one verdict per case, routed through `known` so that
+# `// known-fail:` means "this VALUE is known-wrong", not merely "it compiles".
+# The old known-fail path only ran the compile step, so every compile-but-print-
+# garbage gap reported XPASS and its marker was one "cleanup" away from being
+# deleted off a case that is still broken. Reads `known`/`f` from the loop.
+verdict() { # $1 = ok|bad, $2 = name, $3 = detail
+    if [ "$known" != "0" ]; then
+        if [ "$1" = ok ]; then
+            echo "XPASS      $2 (known-fail 已达成预期，可摘除标记)"
+            xpass=$((xpass + 1))
+        else
+            rsn=$(grep '^// known-fail:' "$f" | head -1 | sed 's|^// known-fail: ||')
+            echo "KNOWN-FAIL $2 (${rsn}${3:+; $3})"
+            knownfail=$((knownfail + 1))
+        fi
+    elif [ "$1" = ok ]; then
+        echo "PASS       $2"
+        pass=$((pass + 1))
+    else
+        echo "FAIL       $2${3:+ ($3)}"
+        fail=$((fail + 1)); failed_files="$failed_files $2"
+    fi
+}
 
 for f in "$ROOT"/tests/python_style/t*.z; do
     name="$(basename "$f" .z)"
@@ -49,35 +75,25 @@ for f in "$ROOT"/tests/python_style/t*.z; do
     known=$(grep -c '^// known-fail:' "$f" || true)
     want_error=$(grep -c '^// expect-error' "$f" || true)
     want_abort=$(grep '^// expect-abort:' "$f" | head -1 | sed 's|^// expect-abort: ||' || true)
-
-    # known-fail: 单列；若意外通过则报 XPASS
     if [ "$known" != "0" ]; then
-        "${ZC[@]}" "$f" -o "$OUTDIR/$name" >/dev/null 2>&1
-        if [ $? -eq 0 ] && [ "$want_error" = "0" ]; then
-            echo "XPASS      $name (known-fail 但已能编译，可摘除标记)"
-            xpass=$((xpass+1))
-        else
-            echo "KNOWN-FAIL $name ($(grep '^// known-fail:' "$f" | head -1 | sed 's|^// known-fail: ||'))"
-            knownfail=$((knownfail+1))
-        fi
-        continue
+        # A known-fail case is judged by its expected OUTPUT only: "refuses to
+        # compile" and "aborts" are the gap, not the contract.
+        want_error=0
+        want_abort=""
     fi
 
     # 负面用例：编译必须失败
     if [ "$want_error" != "0" ]; then
         if "${ZC[@]}" "$f" -o "$OUTDIR/$name" >/dev/null 2>&1; then
-            echo "FAIL       $name (期望编译报错，却编译成功)"
-            fail=$((fail+1)); failed_files="$failed_files $name"
+            verdict bad "$name" "期望编译报错，却编译成功"
         else
-            echo "PASS       $name"
-            pass=$((pass+1))
+            verdict ok "$name" ""
         fi
         continue
     fi
 
     if ! "${ZC[@]}" "$f" -o "$OUTDIR/$name" >"$OUTDIR/$name.cc" 2>&1; then
-        echo "FAIL       $name (编译失败: $(tail -1 "$OUTDIR/$name.cc"))"
-        fail=$((fail+1)); failed_files="$failed_files $name"
+        verdict bad "$name" "编译失败: $(tail -1 "$OUTDIR/$name.cc")"
         continue
     fi
 
@@ -93,15 +109,12 @@ for f in "$ROOT"/tests/python_style/t*.z; do
         fi
         set -u
         if [ "$rc" -eq 0 ]; then
-            echo "FAIL       $name (期望 abort，却退出 0)"
-            fail=$((fail+1)); failed_files="$failed_files $name"
+            verdict bad "$name" "期望 abort，却退出 0"
         elif printf '%s' "$err" | grep -qF "$want_abort"; then
-            echo "PASS       $name"
-            pass=$((pass+1))
+            verdict ok "$name" ""
         else
-            echo "FAIL       $name (stderr 未含: $want_abort)"
+            verdict bad "$name" "stderr 未含: $want_abort"
             echo "  stderr: $(printf '%s' "$err" | tr '\n' ' ' | head -c 200)"
-            fail=$((fail+1)); failed_files="$failed_files $name"
         fi
         continue
     fi
@@ -122,14 +135,15 @@ for f in "$ROOT"/tests/python_style/t*.z; do
     # 逐行比对（尾随空行归一化）
     expected="$(printf '%s\n' "${expects[@]:-}" | sed -e ':a' -e '/^[[:space:]]*$/{$d;N;ba' -e '}')"
     actual_n="$(printf '%s\n' "$actual" | sed -e ':a' -e '/^[[:space:]]*$/{$d;N;ba' -e '}')"
-    if [ "$expected" = "$actual_n" ] && [ ${#expects[@]} -gt 0 ]; then
-        echo "PASS       $name"
-        pass=$((pass+1))
+    if [ ${#expects[@]} -gt 0 ] && [ "$expected" = "$actual_n" ]; then
+        verdict ok "$name" ""
+    elif [ ${#expects[@]} -eq 0 ] && [ "$known" != "0" ]; then
+        # no value assertion to judge by: compile+link is the whole claim
+        verdict ok "$name" ""
     else
-        echo "FAIL       $name"
+        verdict bad "$name" ""
         echo "  expected: $(printf '%s | ' "${expects[@]:-}")"
         echo "  actual:   $(printf '%s | ' "$actual")"
-        fail=$((fail+1)); failed_files="$failed_files $name"
     fi
 done
 
