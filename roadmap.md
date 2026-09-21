@@ -9266,3 +9266,67 @@ G.1 的修复档（单变量旋钮、t06/t31 两根因）留给与主线协调�
 **下一步**：⑧ 轴 A 死代码（`compiler_config.rs` 整文件、`middle::optimization::optimize`
 及其 pass 群正是轴 A 的现成条目）；G.1 修复档三件（单变量旋钮 / t06 枚举变体定义 /
 t31 -O0 SIGBUS 根因）作为独立批次，需与主线协调动 codegen 的时点。
+
+---
+
+## 批次 308（refactor 立即档 ⑧ —— 轴 A 死代码第一块：从未参与编译的孤儿簇）
+
+**删了什么**（8 个 git 跟踪文件，全部 clean，工作区无并发编辑）：
+
+| 目录 | 行数 | 文件 |
+|---|---|---|
+| `src/paradigm/` | 274 | mod.rs |
+| `src/holographic/` | 440 | mod.rs |
+| `src/temporal/` | 413 | mod.rs |
+| `src/consciousness/` | 405 | mod.rs + types.rs |
+| `src/reality/` | 51 | mod.rs + physics_engine.rs |
+| `src/meta/` | 41 | mod.rs |
+| **合计** | **1,632**（见下） | 8 |
+
+> 口径说明：`git diff --cached --stat` 报 **1,632 行删除**，而我逐目录
+> `find … | xargs cat | wc -l` 得 1,624，差 **8 = 每个文件 1 行**——这 8 个文件都
+> 没有行尾换行，`cat` 拼接时每个文件的最后一行与下一个文件的首行合并成一行。
+> **以 git 的 1,632 为准**；下面的"删除前后行数"同用 `cat` 口径，故差值也是 1,624。
+
+**为什么这是轴 A 最干净的第一块**：这六个目录**从未被 `pub mod` 声明过**
+（lib.rs 无、`src/**/mod.rs` 无、全仓 `^\s*(pub )?mod (holographic|temporal|consciousness|
+reality|meta|paradigm)\s*;` **零命中**）⇒ 它们根本不进编译单元。因此删除
+**不需要动 `src/lib.rs`** —— 而 lib.rs 此刻正被并发工作流改着（`M src/lib.rs`），
+凡是"要删 lib.rs 里一行声明"的块（`crate::ml` + `crate::distributed` 6,226 行）
+本批都做不了，只能等它干净。
+
+**引用复核（按 §1 的口径含 bin/、tests/、examples/、.github/）**：
+`tests/` `examples/` `benches/` 对 `holographic|temporal::|consciousness|crate::reality|
+crate::meta|crate::paradigm` **零命中**；`Cargo.toml` 的 `[[test]]/[[bin]]/path=` 无一指向
+这些目录；`src/paradigm/mod.rs:12-15` 里那些 `crate::holographic::init()` 只是**同簇的
+死文本**（它自己也没被声明）。活跃侧只有 `src/paradigm_simple.rs`（lib.rs:70 声明、
+`tests/unit/test_paradigm.rs:8` 调 `run_demo()`）——它带的是**自己内联的同名模块**
+（`paradigm_simple.rs:7/41/80/143`），与磁盘上的死目录是两份拷贝，不受影响。
+
+### 一处口径纠正
+refactor.md §1 表里这块写的是 **1,309 行**——那只数了 holographic/temporal/
+consciousness/reality 四个（440+413+405+51=1,309，逐目录 `wc -l` 已复算）。
+同簇的 `src/paradigm/`（274）与 `src/meta/`（41）同样未声明、同样零风险，
+本批**一并删除**，实际 **-1,632 行**（git 口径；`cat` 口径 1,624，差异见上表下的说明）。
+
+### 顺带钉住一个我自己的度量卫生缺陷（重要）
+本批第一次**不带管道**地跑 `./tools/run_all.sh`，拿到 **rc=1**；而此前几批的记录里
+写的是"exit code 0"。真相：门禁的绿色判据是 `run_all.sh:134` 的 `py_fail -ne 0 ⇒ rc=1`，
+而 t231/t233 两级都红的存量红**一直在** ⇒ **run_all.sh 从批次 302 起每次都是 1**，
+之前那次"0"来自 `./tools/run_all.sh | tail -25` —— 管道的退出码是 `tail` 的。
+⇒ 后果不严重（我记录的是 JSON 里的三项数字，它们是真的），但**"门禁绿了"这句话
+在此前几批里不成立**。以后：门禁一律 `>文件 2>&1; rc=$?` 直读退出码，
+并把它与 JSON 三项一起记。**这不是本批引入的回归**（本批三项数字与批次 307 逐项相同）。
+
+### 验证
+- 删除前后 `find src -name '*.rs' | xargs cat | wc -l`：92,219 → **90,595**
+  （差 1,624 = `cat` 口径；git 报 1,632，说明见上）。
+- `cargo build --release -p zetac -q` rc=0、无新告警。
+- `./tools/run_all.sh > /tmp/gate_308.txt 2>&1`（2026-09-21T18:27:00Z）：official
+  **194/194** · python_style **285 passed, 2 failed, 4 known-fail, 0 xpass**（红的仍是
+  t231/t233）· 语料 **39/39 = 100%** —— 与批次 306/307 三项逐项相同；
+  脚本 rc=1 的原因见上节（存量红触发的既有判据，非本批回归）。
+
+**下一块**（按"不碰脏文件"排序）：`new_resolver` 双轨死管道 3,115 行
+（`new_resolver.rs` 2,199 + `typecheck_new.rs` 690 + `type_cache.rs` 226，
+只需改 `src/middle/resolver/mod.rs:5` 一行，该文件当前 clean）。
