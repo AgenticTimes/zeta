@@ -8769,3 +8769,71 @@ acceptance 的最后一环是期末估值 `final_value += pos.total_amount * pri
    它同时挡住 `_parity_snapshot` 的可观测性与 `json.dumps` 的验收输出。
 3. universe 分歧：zeta `119 → 107` vs CPython `115 → 103`，伴随
    `load_metadata failed … : 1` 的 parquet 回退。
+
+---
+
+## 批次 300 —— 未标注 `def` 的返回类型（函数返回值上的方法调用链）
+
+### 崩点
+`/tmp/wl/drv_L4crash.py` 在 L4 一行之前还先崩在
+`PY-A: '_values' is NOT implemented in this build`；即使跳过那一行，
+`pf.available_cash` 读到的是垃圾。最小复现 `/tmp/wl/z300/b4.z`：
+函数返回一个类实例，模块级 `pf = make(1000.0)`，然后 `pf.available_cash` /
+`pf.positions.values()` —— 前者打 0、后者链接到 `_values` 幽灵符号。
+
+### 根因
+**未标注返回值的 `def` 在签名表里注册成 `Type::Tuple(vec![])`，也就是 unit。**
+Python 的「没有注解」在这个 parser 里写成 `ret == "()"`（不是空串 —— 用
+`ZETA_PROBE300` 实测出来的，第一次修复因为守卫条件写成 `!ret.trim().is_empty()`
+而完全没生效）。unit 顺着调用点传下去后：
+
+- `pf.<attr>` 的字段读编译成 `extractvalue {i64,i64}, 0`，即**读一个空 variant 的
+  第 0 个字段** —— 静态类型是 unit 时每一个属性读都静默拿到垃圾；
+- `pf.positions.values()` 因为接收者不是已知 struct，退化成**按方法名命名的自由调用**
+  `@values`，链接到 `runtime/unavailable_stubs.c:190` 的弱桩并 abort。
+
+### 改动
+**`src/middle/resolver/resolver.rs`**
+- 新增关联函数 `unannotated_return_ty(defs, name, classes, fn_rets) -> Option<Type>`：
+  只有当签名为 unit 时介入，扫描该 `def` **自己 body 里的 `return`**，
+  要求所有候选类型存在、彼此相等且非 unit 才返回（不一致就保持原样，宁缺毋滥）。
+  内部 `infer` 覆盖：`Var`（局部赋值表）/ `StringLit|FString → Str` /
+  `FloatLit → F64` / `Lit → I64` / `BoolLit → Bool` /
+  `StructLit{variant} → class_ty` / `DictLit → Named("map",[k,v])` /
+  `ArrayLit → DynamicArray(elem)` / `Call{receiver:None,method} →` 先按**构造调用**
+  查类名（批次 291 的既有优先级：ctor 压在函数返回类型之前），再查 `fn_rets`。
+  `walk` 递归 `Block / If(then,else_) / For / While`，收集 `Assign(Var, _)` 到局部表，
+  并识别 `zeta_py_from(module, member, alias)` 形式的 import 别名，
+  这样 `return` 一个从别的模块改 named 的类也能解析。
+  两个名字查找（def 与 class）都带**唯一后缀兜底**：`type_decls` 的键是模块 mangle 过的
+  （`backend_strategy_wufu_backend__Position`），而调用点用裸名；兜底只在候选唯一时命中，
+  并且先把候选 `sort()` —— HashMap 顺序不确定，不能靠遍历顺序做决定。
+- 两处接入点：`lower_to_mir`（约 2990 行，先算好 `class_names`（排序）与 `decl_rets`
+  再进 `map` 闭包），和 `module_global_types`（约 2063 行，`classes.sort()` 之后
+  拿 `declared` 快照覆盖 `fn_rets`）。模块级变量的类型来自后者，缺了它 `pf` 仍是 unit。
+
+### 验证（串行门禁）
+- `cargo build --release` 干净；`./tools/run_all.sh` → official **194/194** ·
+  python_style **283 passed, 2 failed**（仍只有存量红 t231/t233）· 语料 **38/38**
+- handoff §9 自检逐字对上：`universe 119 sz.159985 sh.512070` /
+  `cached 892 9 2022-05-05 2025-12-31` / `clean 892 9 892`
+- 最小复现 `/tmp/wl/z300/b4.z`：修复前 `cash 0.000000` + 链接失败，修复后
+  `cash 1000.000000` / `n 1`
+- 新增回归 `tests/python_style/t300_unannotated_func_ret.z`（`// expect: 15`）：
+  未标注 `def make(...)` 返回 struct、`@property` 上的过滤字典推导、
+  `len(pf.positions.values())`、`"AAA" in pf.positions`、`pf.positions["AAA"] == 1.0`
+  —— 与 CPython 输出逐字相同（15）。
+- 真实模块：drv303 打印 `L4 after trade 121956.000000 1`
+  （批次前在 `_values` 桩上 abort），`execute_trade` / `available_cash` /
+  `positions.values()` 三条链同时恢复。
+
+**下一步**：批次 301 —— acceptance 依旧 `回测完成: 1000000 -> 0 (-100.00%)`，
+末行打 `4390899200`（指针）而不是 JSON。已确认的两条：
+1. **`getattr` 有编译期 `error:`**：acceptance 编译过程中
+   `error: builtin \`getattr\` is not implemented in this form (it would link against an
+   undefined symbol named \`getattr\`)` 出现十几次，而 `error` 并没有终止编译 ⇒
+   这些调用点返回垃圾/0，`x or []` 于是恒为 `[]`。`_parity_snapshot` 的
+   `getattr(g, "target_etfs_list", [])` 正落在这条路上，是 0 笔成交的头号嫌疑。
+2. `[PARITY]` 行的 date/target/holdings 全部打指针
+   （`4395333088`、`target=4374146667` 且不同日期共享同一个字），即 f-string/`%s`
+   的字符串来历仍未接上；它同时挡住验收用的 `json.dumps` 输出。

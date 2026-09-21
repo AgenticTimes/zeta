@@ -2060,7 +2060,7 @@ impl Resolver {
         // `WUFU_BS_CODES + WUFU_INDEX_BS_CODES` compiled as a NUMERIC add — the
         // garbage handle then went to `dict.fromkeys` and `py_map_fromkeys`
         // dereferenced it (50% SIGSEGV per run, 100% with MallocScribble=1).
-        let fn_rets: HashMap<String, Type> = self
+        let mut fn_rets: HashMap<String, Type> = self
             .funcs
             .iter()
             .map(|(n, (_, r, _))| (n.clone(), r.clone()))
@@ -2070,6 +2070,21 @@ impl Resolver {
         // hit, ambiguous names simply stay untyped.
         let mut classes: Vec<String> = self.type_decls.keys().cloned().collect();
         classes.sort();
+        // Batch 300: same recovery as `lower_to_mir` does for MIR's signature
+        // table — a module-level global assigned from an UNANNOTATED function
+        // (`pf = make(…)`) otherwise carries UNIT, and every `pf.<attr>` read then
+        // indexes an empty struct variant (field 0) instead of the class.
+        {
+            let declared = fn_rets.clone();
+            for (fname, fty) in fn_rets.iter_mut() {
+                if !matches!(fty, Type::Tuple(inner) if inner.is_empty()) {
+                    continue;
+                }
+                if let Some(t) = Self::unannotated_return_ty(&defs, fname, &classes, &declared) {
+                    *fty = t;
+                }
+            }
+        }
         for d in &defs {
             if let AstNode::FuncDef { name, body, .. } = d {
                 // A module body is registered as `<module with _ for .>__init`;
@@ -2665,8 +2680,237 @@ impl Resolver {
         })
     }
 
+    /// Batch 300: the return type of an UNANNOTATED `def`, recovered from its own
+    /// `return` statements. With no `-> …` the signature registers as UNIT, and
+    /// that unit flows into the caller: `pf = make(1000.0)` leaves `pf` with no
+    /// struct to index, so every later `pf.<attr>` silently reads field 0 of an
+    /// empty variant and `pf.positions.values()` links to the `_values` stub
+    /// (measured: /tmp/wl/z300/b4.z printed `cash 4652007308841189376` — the bit
+    /// pattern of 1000.0 — then aborted).
+    /// Only syntactic shapes are recovered, and only when EVERY `return` in the
+    /// body agrees; anything uncertain keeps the previous answer.
+    fn unannotated_return_ty(
+        defs: &[AstNode],
+        name: &str,
+        classes: &[String],
+        fn_rets: &HashMap<String, Type>,
+    ) -> Option<Type> {
+        fn is_unit(t: &Type) -> bool {
+            matches!(t, Type::Tuple(inner) if inner.is_empty())
+        }
+
+        /// A class named as written in source: bare, or module-mangled
+        /// (`LocalBackend` → `backend_strategy_wufu_backend__LocalBackend`).
+        /// An ambiguous suffix is NO type rather than a guess.
+        fn class_ty(named: &str, classes: &[String]) -> Option<Type> {
+            if classes.iter().any(|c| c == named) {
+                return Some(Type::Named(named.to_string(), vec![]));
+            }
+            let suffix = format!("__{}", named);
+            let mut hits = classes.iter().filter(|c| c.ends_with(&suffix));
+            let first = hits.next()?.clone();
+            if hits.next().is_some() {
+                return None;
+            }
+            Some(Type::Named(first, vec![]))
+        }
+
+        /// `from <module> import <member> as <alias>` desugars to
+        /// `zeta_py_from(module, member, alias)` string literals.
+        fn import_alias(n: &AstNode) -> Option<(String, String)> {
+            match n {
+                AstNode::Call {
+                    receiver: None,
+                    method,
+                    args,
+                    ..
+                } if method == "zeta_py_from" => {
+                    let s: Vec<String> = args
+                        .iter()
+                        .filter_map(|a| match a {
+                            AstNode::StringLit(x) => Some(x.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    if s.len() >= 3 && !s[2].is_empty() {
+                        Some((s[2].clone(), s[1].clone()))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+
+        fn infer(
+            n: &AstNode,
+            seen: &HashMap<String, Type>,
+            aliases: &HashMap<String, String>,
+            classes: &[String],
+            fn_rets: &HashMap<String, Type>,
+        ) -> Option<Type> {
+            match n {
+                AstNode::Var(v) => seen.get(v).cloned(),
+                AstNode::StringLit(_) | AstNode::FString(_) => Some(Type::Str),
+                AstNode::FloatLit(_) => Some(Type::F64),
+                AstNode::Lit(_) => Some(Type::I64),
+                AstNode::Bool(_) => Some(Type::Bool),
+                AstNode::StructLit { variant, .. } => class_ty(variant, classes),
+                AstNode::DictLit { entries } => Some(Type::Named(
+                    "map".to_string(),
+                    match entries.first() {
+                        Some((k, v)) => vec![
+                            infer(k, seen, aliases, classes, fn_rets).unwrap_or(Type::Str),
+                            infer(v, seen, aliases, classes, fn_rets).unwrap_or(Type::I64),
+                        ],
+                        None => vec![],
+                    },
+                )),
+                AstNode::ArrayLit(items) => Some(Type::DynamicArray(Box::new(
+                    items
+                        .first()
+                        .and_then(|e| infer(e, seen, aliases, classes, fn_rets))
+                        .unwrap_or(Type::I64),
+                ))),
+                AstNode::Call {
+                    receiver: None,
+                    method,
+                    ..
+                } => {
+                    let named = aliases
+                        .get(method)
+                        .cloned()
+                        .unwrap_or_else(|| method.clone());
+                    // The ctor wins over the function table: a synthesized ctor is
+                    // registered as a function returning I64, which would shadow
+                    // the real struct type (same ordering reason as batch 291).
+                    if let Some(t) = class_ty(&named, classes) {
+                        return Some(t);
+                    }
+                    match fn_rets.get(&named) {
+                        Some(t) if !is_unit(t) => Some(t.clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        }
+
+        /// Sequential scan: assignments build the local scope, `return`s
+        /// contribute candidates. `None` in `cands` records an un-inferable
+        /// `return`, which vetoes the whole function.
+        fn walk(
+            body: &[AstNode],
+            seen: &mut HashMap<String, Type>,
+            aliases: &mut HashMap<String, String>,
+            cands: &mut Vec<Option<Type>>,
+            classes: &[String],
+            fn_rets: &HashMap<String, Type>,
+        ) {
+            for st in body {
+                match st {
+                    AstNode::Assign(lhs, rhs) => {
+                        if let AstNode::Var(v) = &**lhs {
+                            if let Some(t) = infer(rhs, seen, aliases, classes, fn_rets) {
+                                seen.insert(v.clone(), t);
+                            }
+                        }
+                    }
+                    AstNode::Return(e) => {
+                        cands.push(infer(e, seen, aliases, classes, fn_rets));
+                    }
+                    AstNode::Block { body } => {
+                        walk(body, seen, aliases, cands, classes, fn_rets)
+                    }
+                    AstNode::If { then, else_, .. } => {
+                        walk(then, seen, aliases, cands, classes, fn_rets);
+                        walk(else_, seen, aliases, cands, classes, fn_rets);
+                    }
+                    AstNode::For { body, .. } | AstNode::While { body, .. } => {
+                        walk(body, seen, aliases, cands, classes, fn_rets)
+                    }
+                    other => {
+                        if let Some((alias, member)) = import_alias(other) {
+                            aliases.insert(alias, member);
+                        } else if let AstNode::ExprStmt { expr } = other {
+                            if let Some((alias, member)) = import_alias(expr) {
+                                aliases.insert(alias, member);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let tail = name.rsplit("::").next().unwrap_or(name);
+        let exact = defs.iter().find(|d| {
+            matches!(d, AstNode::FuncDef { name: n, .. } if n == name)
+        });
+        let def = match exact {
+            Some(d) => Some(d),
+            // A method is keyed `Type::method` while the definition carries the
+            // bare name — accept it only when exactly one definition matches, so
+            // two classes sharing a method name cannot cross-contaminate.
+            None => {
+                let hits: Vec<&AstNode> = defs
+                    .iter()
+                    .filter(|d| {
+                        matches!(d, AstNode::FuncDef { name: n, .. }
+                            if n.rsplit("::").next().unwrap_or("") == tail)
+                    })
+                    .collect();
+                if hits.len() == 1 {
+                    Some(hits[0])
+                } else {
+                    None
+                }
+            }
+        }?;
+        let (params, body, ret_expr) = match def {
+            AstNode::FuncDef {
+                params,
+                ret,
+                body,
+                ret_expr,
+                ..
+            } => {
+                // The Python parser spells "no annotation" `()` (and the Zeta one
+                // leaves it empty); anything else is a declared type to respect.
+                let unannotated = matches!(ret.trim(), "" | "()");
+                if !unannotated {
+                    return None;
+                }
+                (params, body, ret_expr)
+            }
+            _ => return None,
+        };
+        let mut seen: HashMap<String, Type> = HashMap::new();
+        for (pn, pt) in params {
+            if pn == "self" {
+                continue;
+            }
+            let t = Type::from_string(pt);
+            if !is_unit(&t) {
+                seen.insert(pn.clone(), t);
+            }
+        }
+        let mut aliases: HashMap<String, String> = HashMap::new();
+        let mut cands: Vec<Option<Type>> = Vec::new();
+        walk(body, &mut seen, &mut aliases, &mut cands, classes, fn_rets);
+        if let Some(e) = ret_expr {
+            cands.push(infer(e, &seen, &aliases, classes, fn_rets));
+        }
+        let mut it = cands.iter();
+        let first = it.next()?.as_ref()?;
+        if is_unit(first) || !it.all(|c| c.as_ref() == Some(first)) {
+            return None;
+        }
+        Some(first.clone())
+    }
+
     /// Batch 299: a `-> dict` annotation carries NO key/value type (`map` with
     /// zero type arguments), so EVERY consumer of the result lost it:
+
     /// `for pos in portfolio.positions.values()` read struct fields off a raw
     /// handle (the end-of-period valuation printed integers) and `d[k]`
     /// SEGVFAULTED on the miss (`PositionLedger.positions`,
@@ -2763,6 +3007,15 @@ fn shim_class_normalize(t: &Type) -> Type {
 
     pub fn lower_to_mir(&self, ast: &AstNode) -> Mir {
         let defs_snapshot = self.registered_func_defs.borrow().clone();
+        // Batch 300 inputs for `unannotated_return_ty`. The decl table is keyed by
+        // the MANGLED class name, and iteration order must not matter.
+        let mut class_names: Vec<String> = self.type_decls.keys().cloned().collect();
+        class_names.sort();
+        let decl_rets: HashMap<String, Type> = self
+            .get_all_func_signatures()
+            .iter()
+            .map(|(n, (_, r, _))| (n.clone(), r.clone()))
+            .collect();
         let ret_types: HashMap<String, Type> = self
             .get_all_func_signatures()
             .iter()
@@ -2795,6 +3048,17 @@ fn shim_class_normalize(t: &Type) -> Type {
                         None => Self::shim_class_normalize(&Type::Named(n.clone(), args.clone())),
                     },
                     other => other.clone(),
+                };
+                // Batch 300: an UNANNOTATED `def` registers as UNIT, and that unit
+                // propagated into the caller (`pf = make(…)` → `pf.<attr>` read
+                // field 0 of an empty struct variant, `pf.positions.values()`
+                // linked to the `_values` stub). Recover the type from the body's
+                // own `return` statements when they agree.
+                let ret = if matches!(ret, Type::Tuple(ref inner) if inner.is_empty()) {
+                    Self::unannotated_return_ty(&defs_snapshot, name, &class_names, &decl_rets)
+                        .unwrap_or(ret)
+                } else {
+                    ret
                 };
                 // `-> dict[...]` on a function whose body returns `json.loads(...)`:
                 // the declared type says map while the VALUE is a PyJson cell, so

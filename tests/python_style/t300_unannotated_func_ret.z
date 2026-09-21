@@ -1,0 +1,43 @@
+// PY-A: 批次 300 —— 未标注 `def` 的返回类型从自身的 `return` 语句恢复。
+//   `def make(cash): … return l` 没有 `-> …`，注册表里记成 UNIT（Python 解析器写作
+//   `()`）；这个 unit 顺着调用流进模块级变量 `pf = make(1000.0)`，于是 `pf` 没有
+//   可比照的 struct ⇒ 每次 `pf.<attr>` 都读成空 variant 的 0 号字段，
+//   `pf.positions.values()` 链接到 `_values` 桩并 abort（实测 /tmp/wl/z300/b4.z：
+//   `cash 4652007308841189376` —— 1000.0 的位模式 —— 然后 exit 134）。
+//   REasyQuant 的对应链路：本地驱动里 `def f(cash): … return p`（未标注）⇒
+//   `pf = f(123456.0)` 是 unit ⇒ `pf.execute_trade(...)` 之后再读 `pf.positions`
+//   打到 `_values` 桩（实测 /tmp/wl/drv_L4crash.py 崩、修复后打印
+//   `L4 after trade 121956.000000 1`）。
+//   现在只有当**每个** `return` 都能静态判定且结论一致时才覆盖，判不出来保留 unit。
+// expect: 15
+class Ledg:
+    def __init__(self, cash: float):
+        self.available_cash = cash
+        self._p = {}
+
+    def add(self, code: str, amt: float) -> None:
+        self._p[code] = amt
+
+    @property
+    def positions(self) -> dict:
+        return {c: v for c, v in self._p.items() if v > 0}
+
+
+def make(cash: float):
+    l = Ledg(cash)
+    l.add("AAA", 1.0)
+    l.add("BBB", 0.0)
+    return l
+
+
+pf = make(1000.0)
+m = 0
+if pf.available_cash == 1000.0:
+    m = m + 1
+if len(pf.positions.values()) == 1:
+    m = m + 2
+if "AAA" in pf.positions:
+    m = m + 4
+if pf.positions["AAA"] == 1.0:
+    m = m + 8
+print(m)
