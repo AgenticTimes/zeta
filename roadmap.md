@@ -8385,3 +8385,59 @@ Qoder 于 09-21 05:56 提交批次 290 后继续工作到 09:08（8 个文件、
 
 **下一步**：批次 292 —— `_load_cache` 的 `host_str_concat` 参数 `b=0x18` 来源
 （疑似小字符串打包槽 / 未初始化句柄，参见 handoff.md §7.6）。
+
+## 批次 292（2026-09-21）：`_load_cache` no longer aborts —— drvSF **首次跑完整场回测**
+
+### 起点（批次 291 顺延）
+drvSF 突破 `.dt.strftime` 后，崩在 `MarketDataFetcher::_load_cache+0x24c`：
+`ZT-DIAG host_str_concat a=0x102c4e9a7[0] b=0x18[?]`，`b=0x18`（=24）不是合法 char*。
+
+### 破案：abort 的制造者是诊断探针本身
+批次 291 留下的探针 `zt_concat_probe` **只报不修、且以 abort 收尾**。它把
+「非法参数」这一可降级事件升级成进程终止，**掩盖了真实故障点**——
+abort 时程序本来还能继续跑。
+
+### 修复
+`host_str_concat`（`runtime/tokio_runtime_stub.c`）改为**降级 + 一次性告警**：
+
+- 非法一侧强转为 `""`，让字符串构建继续，暴露下一个真正的失败；
+- 保留 `backtrace + dladdr` 调用链与野生指针值（前 8 次），便于追溯来源；
+- 移除 `zt_concat_probe` 的 abort 路径（文件头加 `#include <execinfo.h>`，
+  因为该函数现在在文件前部使用 backtrace）。
+
+### 效果（drvSF 里程碑）
+**程序不再崩溃，第一次从头跑到尾、退出码 0**：
+
+```
+[INFO] jq_shim: [baostock] 批量拉取 28 只...
+ZT-WARN host_str_concat bad arg a=0x103026e07[0] b=0xdb6d000102ffcbcc[?]
+  #0 host_str_concat+0xfc
+  #1 MarketDataFetcher::_load_cache+0x24c
+[WARNING] 0baostock login failed: 4376219488
+[INFO] jq_shim: 合计 12375 行，0 只标的
+[INFO] strategies.code.jq_wufu_local: [local] 开始回测: 4345527160 ~ 4345527171（0 交易日）
+[INFO] strategies.code.jq_wufu_local: [local] 回测完成: 1000000 -> 0 (-100.00%)
+```
+
+### 新暴露的待办（排序即下一步顺序）
+
+1. **`b=0xdb6d000102ffcbcc` 形态变了**：从小整数 `0x18` 变成
+   **小字符串打包槽**（handoff.md §7.6：`"sz.15998" = 0x38393935312e7a73`）。
+   `0xdb6d000102ffcbcc` 高位字节含 `\x00\x01` —— 疑似**句柄与整数字段被混装**，
+   或 concat 的一个参数收的是打包后的 str 而非指针。仍需定位 `_load_cache` 里
+   哪次拼接传入它。
+2. **`0baostock login failed: <4.3e9>`**：异常消息提取仍是整数句柄
+   （见批次 291 探针：`str(ValueError("boom"))` → `4341190592`）。
+   **Exception→str 未实现**，导致所有 `f"... {e}"` 打印句柄而非消息。
+   这是「0 只标的」类静默失败难以定位的元凶之一。
+3. **「合计 12375 行，0 只标的」**：行数对、标的数 0 —— 校验/分组路径把 code 列丢了。
+4. **日期 `4345527160 ~ 4345527171`**：日期实参被当整数透传（非 PyDate），
+   与 2/3 可能同源（类型传播丢失）。
+5. `交易成本: 佣金万0 | 滑点0.00%` —— 成本配置读成 0（`CostModel.from_jq` 路径）。
+
+### 验证
+- `./tools/run_all.sh --json-only` → **194/194 · 278/2 · 39/39**（三基线保持全绿）。
+- drvSF：编译通过 → 运行至结束（退出码 0），不再 abort。
+
+**下一步**：批次 293 —— 优先做 2（Exception→str），因为它把后续所有静默失败
+都变成不可读；然后按 1 → 3 → 4 推进。

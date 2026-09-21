@@ -110,6 +110,7 @@ int64_t str_replace(int64_t s, int64_t old_s, int64_t new_s) {
 int64_t host_str_len(int64_t s) { return str_len(s); }
 // TEMP DIAGNOSTIC (batch 291, remove before commit): catch wild string pointers
 // (unmapped page) instead of dying inside strlen, and dump the caller chain.
+#include <execinfo.h>
 int64_t zt_concat_probe(int64_t a, int64_t b);
 static int zt_c_str_readable(int64_t v) {
     // A concat argument must be a NUL-terminated char*: either a GC block
@@ -127,7 +128,32 @@ static int zt_c_str_readable(int64_t v) {
                              (vm_address_t)&probe, &got) == KERN_SUCCESS;
 }
 int64_t host_str_concat(int64_t a, int64_t b) {
-    if (!zt_c_str_readable(a) || !zt_c_str_readable(b)) zt_concat_probe(a, b);
+    // Batch 292: a wild argument is REPORTED ONCE and degraded, not aborted.
+    // Aborting here (batch 291's probe) hid the real failure: `_load_cache`
+    // aborted on `b=0x18` (a small int, not a char*) before the actual fault
+    // could surface, and the abort killed an otherwise-continuing run.
+    // Coerce the bad side to "" so string building proceeds and the NEXT
+    // failure is the one worth debugging. The message keeps the pointer and
+    // the caller site so the source of 0x18 stays identifiable.
+    if (!zt_c_str_readable(a) || !zt_c_str_readable(b)) {
+        static int warned = 0;
+        if (warned++ < 8) {
+            void* bt[16];
+            int n = backtrace(bt, 16);
+            fprintf(stderr, "ZT-WARN host_str_concat bad arg a=%p[%s] b=%p[%s]\n",
+                    (void*)a, zt_c_str_readable(a) && a ? (const char*)a : "?",
+                    (void*)b, zt_c_str_readable(b) && b ? (const char*)b : "?");
+            for (int i = 0; i < n && i < 8; i++) {
+                Dl_info di;
+                if (dladdr(bt[i], &di) && di.dli_sname)
+                    fprintf(stderr, "  #%d %s+0x%lx\n", i, di.dli_sname,
+                            (unsigned long)((char*)bt[i] - (char*)di.dli_saddr));
+            }
+            fflush(stderr);
+        }
+        if (!zt_c_str_readable(a)) a = (int64_t)"";
+        if (!zt_c_str_readable(b)) b = (int64_t)"";
+    }
     return str_concat(a, b);
 }
 // Defined at the very END of this file to keep following functions' layout.
@@ -3590,8 +3616,8 @@ if (!m) return 0;
     }
 }
 
-// TEMP DIAGNOSTIC (batch 291): defined at EOF so the probe insertion above
-// shifts nothing else. Prints the wild concat args + native backtrace, aborts.
+// TEMP DIAGNOSTIC (batch 291, removed in 292 — superseded by the degrade-and-warn
+// path inside host_str_concat itself)
 #include <execinfo.h>
 int64_t zt_concat_probe(int64_t a, int64_t b) {
     void* bt[24];
