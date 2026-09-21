@@ -8615,3 +8615,67 @@ final_value=0，是当前唯一阻塞数值验收（994575.84 / -0.5424）的项
 
 **下一步**：批次 297 —— 打待办 1（三参 `getattr`）+ 待办 3（Str 值在 f-string 里打指针）。
 这两条决定 `ranked`/`target` 能否还原成可读文本，是从「日志能看」走到「数值能核」的最短路径。
+
+---
+
+## 批次 297 —— 分支条件的 Python 真值（`if x` / `not x` / `x or y` / `x and y`）
+
+### 症状
+`jq_wufu_local` 里所有「空容器」判定都是错的：`if not g.merged_etf_pool:` 永不短路、
+`ranked = getattr(g, "ranked_etfs_result", []) or []` 恒取空的一侧、
+`if pool:` 在空列表上为真。日志上表现为 `ranked=-`（空）而数据链路已通。
+
+### 根因
+容器在 i64 槽里是**句柄**，句柄恒非零 ⇒ 编译器把条件降成 `icmp ne 0` 就等于
+「只要有地址就为真」。空 list/dict/str 的地址照样非零。
+静态类型又帮不上忙：`dict[str, Any]` 的元素、动态参数、json 取值都落在
+`I64`/`PyDynamic`/无类型 槽里，编译器只看到「整数」。
+
+### 修复
+**runtime（`runtime/py_additions.c`，仍在 TU 末尾）**
+- 新增 `zeta_dyn_truth(h)`：**单一**的「未知值 Python 真值」定义 ——
+  map 形状 → 计数、vec 形状 → 头里的 `len`、否则可读性探测后的首字节、再否则 `!= 0`。
+  `py_not` 改为 `zeta_dyn_truth(x) ? 0 : 1`，于是 `not x`、`if x:`、`while x:` 共用同一套语义。
+- 新增 `py_json_truth(j)`：`json.loads` 的值是**打 tag 的单元**
+  （`word0=ZJ_*`、`word1=载荷`，见 stub 里的 `zj_make`），几何探针读不出长度
+  （首词是 4 ⇒ 被当成非空字符串）。按 kind 分派：null→假、int/bool/float→值、
+  str/list/dict→`py_json_len`。
+
+**codegen（`src/backend/codegen/codegen.rs::container_cond_i1`）**
+- 判定表从「只有 `DynamicArray`/`map`」扩到 `Array`/`Str`/`I64`/`PyDynamic`/无类型
+  （都发 `py_not`，比较 `== 0`）；`map|dict|set|frozenset` 同路；
+  `Named("PyJson")` 单列，发 `py_json_truth` 并比较 `!= 0`（helper 答的是「真」不是「空」）。
+- `Bool`/`F64` 保持原样（浮点在 `cond_i1_from` 里已有自己的位比较路径）。
+
+**mir（`src/middle/mir/gen.rs`）**
+- `or`/`and`：左操作数先过 `zeta_dyn_truth`（`PyJson` 走 `py_json_truth`），
+  再用结果 `!= 0` 决定取哪一侧；`Bool`/`F64` 直连，不付这次调用。
+- `not x`：操作数是 `PyJson` 时先发 `py_json_truth` 再 `py_not`（`py_not(0/1)` 恰好是逻辑取反）。
+
+### 验证（串行门禁）
+- `./tools/build_runtime.sh` → `ok: tokio_runtime.o (624 T) + zeta_runtime_c.o`；`cargo build --release` → 17.47s
+- `./tools/run_all.sh` → official **194/194** · python_style **280 passed, 2 failed**
+  （仍只有存量红 t231/t233）· 语料 **39/39**（驱动在位、探针已删）
+- 新增回归 `tests/python_style/t292_container_truth.z`：字面量空 list/dict/str 的
+  `if`/`not`、`x or y` 与 `x and y` 的**取值**语义、json 值的
+  `0/false/""/[]/{}` 判定、以及整数 `or/and` 不受影响 ——
+  五行断言与 CPython 逐字相同（`469 / 7 / 5 / 10 / 3`）。
+- handoff §9 自检 harness 逐字对上（批次 297 之后仍然成立）：
+  `universe 119 sz.159985 sh.512070` / `cached 892 9 2022-05-05 2025-12-31` / `clean 892 9 892`
+- 驱动 drv43 与 drv39 输出逐行等价（数据链路未变），`ranked=-` 依旧 ⇒ **不是**真值判定问题。
+
+### 过程中钉死的两件事（写下来，别再花 turn 找）
+1. **`zetac` 的工作目录必须是 `zeta-src`**（`pylib/*.z` 相对 cwd 解析）。
+   在项目目录里编译会看到 `warning: PY-A: unknown member DataFrame in Python module pandas`
+   和一堆 `_DataFrame`/`_load_cache`/`_get_universe` 链接失败 —— 那**不是**编译器退化，
+   是 shim 没加载。主文件放在项目内（`strategies/code/…`）解析模块，cwd 仍在 zeta-src。
+2. **驱动有约 25% 概率崩在 `str_trim`**（`~/Library/Logs/DiagnosticReports/drvN37-…1618.ips`
+   早于本批次，故为**存量**崩点，非 297 引入）：
+   `str_trim+24 ← backend_datasrc_code_conv__normalize_to_jq+16 ← MarketDataFetcher::fetch_stocks+5336`，
+   崩时的实参是 0x3932 / 0x3132 / 0x3633392e30 —— 小端 ASCII 分别是 `29`、`12`、`0.936`，
+   即**短字符串被打进 8 字节槽里（packed）当指针传给了 `str.strip()`**。
+   `lldb` 下 6 次不崩（堆布局变了），别把它当偶发。
+
+**下一步**：批次 298 —— 收掉这个 packed-string 崩点（`code.strip()` 前把 packed 槽
+还原成真 `char*`，或在 `str_trim` 一侧判形），它同时是「25% 概率崩」和
+`target=/holdings=/ranked=` 打指针（同一批短码字符串）的近邻。

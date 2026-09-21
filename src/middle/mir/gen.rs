@@ -3294,11 +3294,41 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     let dest = self.next_id();
                     let zero_id = self.next_id_with_lit(0);
                     let cond_id = self.next_id();
+                    // BATCH-297: WHICH side to take is a truthiness question,
+                    // and `!= 0` is not the same answer for a container: an
+                    // empty list/dict/string handle is non-zero, so
+                    // `ranked = getattr(g, "ranked_etfs_result", []) or []`
+                    // kept the empty side and `pool or fixed_pool` never fell
+                    // through. `zeta_dyn_truth` asks the value (GC geometry →
+                    // length, anything else → `!= 0`), so an int answers the
+                    // same as before. Floats keep their own rule (bits != 0).
+                    let left_ty = self.type_map.get(&left_id).cloned();
+                    let truth_id = if matches!(left_ty, Some(Type::F64) | Some(Type::Bool)) {
+                        left_id
+                    } else {
+                        // A JSON cell needs its own reader (tag + payload), the
+                        // geometry probes cannot see through the tag word.
+                        let func = if matches!(&left_ty, Some(Type::Named(n, _)) if n == "PyJson") {
+                            "py_json_truth"
+                        } else {
+                            "zeta_dyn_truth"
+                        };
+                        let tid = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: func.to_string(),
+                            args: vec![left_id],
+                            dest: tid,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(tid, MirExpr::Var(tid));
+                        self.type_map.insert(tid, Type::I64);
+                        tid
+                    };
                     self.exprs.insert(
                         cond_id,
                         MirExpr::BinaryOp {
                             op: "!=".to_string(),
-                            left: left_id,
+                            left: truth_id,
                             right: zero_id,
                         },
                     );
@@ -12214,9 +12244,29 @@ call, no NULL-handle dereference).",
                 // Lower it to the runtime helper instead (falsy = 0 / empty array).
                 if op == "not" {
                     let expr_id = self.lower_expr(expr);
+                    // BATCH-297: a parsed-JSON value is a TAGGED cell, so the
+                    // geometry reader in `py_not` cannot tell `[]` from `[1]` —
+                    // ask the JSON accessor first (it answers 0/1, which the
+                    // regular `py_not` negates unchanged).
+                    let subject =
+                        if matches!(self.type_map.get(&expr_id), Some(Type::Named(n, _)) if n == "PyJson")
+                        {
+                            let tj = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_json_truth".to_string(),
+                                args: vec![expr_id],
+                                dest: tj,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(tj, MirExpr::Var(tj));
+                            self.type_map.insert(tj, Type::I64);
+                            tj
+                        } else {
+                            expr_id
+                        };
                     self.stmts.push(MirStmt::Call {
                         func: "py_not".to_string(),
-                        args: vec![expr_id],
+                        args: vec![subject],
                         dest: id,
                         type_args: vec![],
                     });

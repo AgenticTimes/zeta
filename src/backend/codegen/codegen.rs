@@ -5399,32 +5399,57 @@ impl<'ctx> LLVMCodegen<'ctx> {
         name: &str,
     ) -> Option<inkwell::values::IntValue<'ctx>> {
         use crate::middle::types::Type;
-        let is_container = match self.current_type_map.as_ref().and_then(|tm| tm.get(&cond)) {
-            Some(Type::DynamicArray(_)) => true,
-            Some(Type::Named(n, _)) => n == "map",
-            _ => false,
+        // `(helper, helper_answers_truthiness)` — `py_not` answers "is it EMPTY"
+        // while `py_json_truth` answers "is it non-empty"; both replace the raw
+        // `!= 0`, which is never the right question for a container handle.
+        let dispatch: Option<(&'static str, bool)> =
+            match self.current_type_map.as_ref().and_then(|tm| tm.get(&cond)) {
+                Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)) | Some(Type::Str) => {
+                    Some(("py_not", false))
+                }
+                // BATCH-297: `dict[str, Any]` elements and dynamic parameters land
+                // in an I64/untyped slot, so the STATIC type says "int" while the
+                // VALUE is a container handle — `!= 0` then calls an empty pool
+                // truthy (`if not g.merged_etf_pool` never short-circuits,
+                // `ranked = getattr(g, …, []) or []` picks the wrong side).
+                // `zeta_dyn_truth` falls back to `!= 0` for a real integer, so this
+                // costs one call and cannot change an int's answer.
+                Some(Type::I64) | Some(Type::PyDynamic) | None => Some(("py_not", false)),
+                // A parsed-JSON value is a TAGGED cell (kind word + payload), so
+                // neither its address nor its first byte says anything about
+                // emptiness — `py_json_len`-style accessors are the only readers.
+                Some(Type::Named(n, _)) if n == "PyJson" => Some(("py_json_truth", true)),
+                Some(Type::Named(n, _)) if matches!(n.as_str(), "map" | "dict" | "set" | "frozenset") => {
+                    Some(("py_not", false))
+                }
+                _ => None,
+            };
+        let (helper_name, truthy) = match dispatch {
+            Some(d) => d,
+            None => return None,
         };
-        if !is_container {
-            return None;
-        }
-        let py_not = match self.module.get_function("py_not") {
+        let helper = match self.module.get_function(helper_name) {
             Some(f) if f.get_type().get_return_type().is_some() => f,
             Some(_) => return None,
             None => self.module.add_function(
-                "py_not",
+                helper_name,
                 self.i64_type.fn_type(&[self.i64_type.into()], false),
                 Some(Linkage::External),
             ),
         };
         let call = self
             .builder
-            .build_call(py_not, &[cond_i64.into()], "py_notv")
+            .build_call(helper, &[cond_i64.into()], "py_notv")
             .unwrap();
         let notv = Self::call_site_to_basic_value(call)?.into_int_value();
         Some(
             self.builder
                 .build_int_compare(
-                    IntPredicate::EQ,
+                    if truthy {
+                        IntPredicate::NE
+                    } else {
+                        IntPredicate::EQ
+                    },
                     notv,
                     self.i64_type.const_zero(),
                     name,

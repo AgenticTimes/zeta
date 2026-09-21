@@ -1,0 +1,69 @@
+// PY-A: 批次 297 —— 容器真值。空 list/dict/str 在 i64 槽里是**非零句柄**，
+//   `!= 0` 判定会把它们当 truthy，于是 `if not g.merged_etf_pool:` 永不短路、
+//   `ranked = getattr(g, "ranked_etfs_result", []) or []` 选了空的那一侧。
+//   分支条件现在走 `py_not`/`zeta_dyn_truth`（GC 几何 → 长度，其余仍按 `!= 0`），
+//   整数与浮点的老规则不变（末行断言）。
+//   json.loads 的值是**打 tag 的单元**（word0=类型、word1=载荷），几何探针读不出
+//   长度，因此静态类型为 PyJson 的条件改走 `py_json_truth`（null/0/false/""/[]/{}
+//   为假，其余按值或长度）。
+// expect: 469
+// expect: 7
+// expect: 5
+// expect: 10
+// expect: 3
+import json
+empty_list = []
+full_list = [1, 2, 3]
+empty_map = {}
+full_map = {"k": 1}
+empty_str = ""
+full_str = "xyz"
+
+n1 = 0
+if not empty_list:
+    n1 = n1 + 1
+if empty_list:
+    n1 = n1 + 2
+if not empty_map:
+    n1 = n1 + 4
+if empty_map:
+    n1 = n1 + 8
+if not empty_str:
+    n1 = n1 + 16
+if empty_str:
+    n1 = n1 + 32
+if full_list:
+    n1 = n1 + 64
+if full_map:
+    n1 = n1 + 128
+if full_str:
+    n1 = n1 + 256
+print(n1)
+
+n2 = len(empty_list or full_list)
+n2 = n2 + len(empty_map or full_map)
+n2 = n2 + len(empty_str or full_str)
+n2 = n2 + len(full_list and empty_list)
+n2 = n2 + len(full_str and empty_str)
+print(n2)
+
+d = json.loads("{\"pool\": [], \"fixed\": [7, 8]}")
+p = d["pool"]
+q = d["fixed"]
+n3 = len(p or q)
+if not p:
+    n3 = n3 + 1
+if q:
+    n3 = n3 + 2
+print(n3)
+
+n4 = (0 or 7) + (5 and 3)
+print(n4)
+
+d2 = json.loads("{\"zero\": 0, \"one\": 1, \"t\": true, \"f\": false, \"s\": \"\", \"o\": {\"k\": 1}}")
+n5 = 0
+for key in ["zero", "one", "t", "f", "s", "o"]:
+    v = d2[key]
+    if v:
+        n5 = n5 + 1
+print(n5)

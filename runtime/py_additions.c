@@ -1206,23 +1206,15 @@ static int zt_c_readable(int64_t a) {
     return vm_read_overwrite(mach_task_self(), (vm_address_t)a, 1,
                              (vm_address_t)&p, &g) == KERN_SUCCESS;
 }
+int64_t zeta_dyn_truth(int64_t h);
 int64_t py_not(int64_t x) {
-    if (!x) return 1;
-    // Batch 291: the vec/map heuristics peek at x-16. For a value that IS a
-    // GC block base (imported-module global `HAS_BAOSTOCK` measured holding
-    // 0x15_0000_0000 = a block start), that read lands in unmapped guard
-    // space — measured SIGBUS at 0x14fffffff0 in `_baostock_login`. Only
-    // probe what is actually readable; a block-base value is an object
-    // pointer, truthy iff its first byte is non-zero.
-    if ((int64_t)GC_base((void*)x) != x && zt_c_readable(x - 16)) {
-        if (zt_maybe_vec(x)) return zt_vec_len(x) == 0 ? 1 : 0;
-        if (zt_maybe_map(x)) return zt_vec_len(map_keys(x)) == 0 ? 1 : 0;
-    }
-    if (x > 0x100000000LL && x < 0x7fffffffffffLL && zt_c_readable(x)) {
-        const char* s = (const char*)x;
-        return s[0] == 0 ? 1 : 0;
-    }
-    return 0;
+    // BATCH-297: this used to probe vec/map only when `GC_base(x) != x`, which
+    // is exactly FALSE for a map handle (the handle IS the block base) — so
+    // `not {}` read the map header's first byte as text and answered False.
+    // Batch 296's geometry predicates (`zt_dyn_is_map` / `zt_dyn_vec_hdr`)
+    // accept block bases and verify the slot count against `GC_size`, so the
+    // guard-space SIGBUS batch 291 fixed stays fixed.
+    return zeta_dyn_truth(x) ? 0 : 1;
 }
 
 int64_t py_is_vec(int64_t v) { return zt_maybe_vec(v) ? 1 : 0; }
@@ -3511,4 +3503,47 @@ int64_t zeta_dyn_contains(int64_t c, int64_t key, int64_t hkey, int64_t key_is_s
     size_t kl = strnlen((const char*)key, 1 << 16);
     if (!cl || !kl) return kl ? 0 : 1;   // Python: `"" in text` is True
     return strstr((char*)c, (char*)key) != NULL;
+}
+
+// Python truthiness of an UNKNOWN value — the single definition `py_not` and
+// every branch condition now share.
+//
+// Why a third helper next to `zt_dyn_len`: `if x:` / `x or y` / `not x` all
+// tested the raw i64 slot for `!= 0`, and a container handle is ALWAYS
+// non-zero, so an empty list/dict/string was truthy. The compiler cannot type
+// those operands (an element of a `dict[str, Any]`, a dynamic parameter), so
+// the answer has to come from the value's geometry at run time:
+//   map  → used-slot count   vec → header len   text → first byte
+//   anything else            → the plain `!= 0` rule (0/NULL falsy, ints and
+//                              handles truthy)
+// A small int (say 5) never reaches the container probes: `GC_base` answers 0
+// for non-heap addresses, so it fails the block-shape tests and falls through.
+int64_t zeta_dyn_truth(int64_t h) {
+    if (!h) return 0;
+    if (zt_dyn_is_map(h)) return zeta_map_len(h) > 0;
+    int64_t* hdr = zt_dyn_vec_hdr(h);
+    if (hdr) return hdr[1] > 0;
+    if (h > 0x100000000LL && zt_c_readable(h)) return *(const char*)h != 0;
+    return 1;
+}
+
+// BATCH-297: Python truthiness of a PARSED JSON value.
+// `json.loads` values are tagged cells (`word0 = kind, word1 = payload`, see
+// the ZJ_* block in the stub), so `zeta_dyn_truth`'s GC-geometry probes cannot
+// read them: the cell is its own block base and word0 is a small tag, which the
+// text fallback mistook for a non-empty string — `if not json_obj["pool"]:`
+// stayed false for an empty array. The JSON accessors are the only correct
+// readers, so the compiler routes statically-known `PyJson` conditions here:
+//   null → falsy    int/bool/float → value    str/list/dict → length
+int64_t py_json_kind(int64_t);
+int64_t py_json_len(int64_t);
+int64_t py_json_as_i64(int64_t);
+double py_json_as_f64(int64_t);
+
+int64_t py_json_truth(int64_t j) {
+    if (!j) return 0;
+    int64_t k = py_json_kind(j);
+    if (k == 1 || k == 6) return py_json_as_i64(j) != 0;
+    if (k == 2) return py_json_as_f64(j) != 0.0;
+    return py_json_len(j) > 0;
 }
