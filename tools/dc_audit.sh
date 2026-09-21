@@ -22,6 +22,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 BASE="${ZETA_DC_BASELINE:-/tmp/zeta_dc_baseline.txt}"
+# ⚠️ 基线落在 /tmp ⇒ 重启即失，`--diff` 会退回"无基线"。固化到仓内需先定 run_all.sh 的
+#    入库口径（.gitignore 的 `run_*` 会吞掉 tools/ 下的门禁产物，见任务 #15）。
 OUT=/tmp/zeta_dc_audit.raw
 HITS=/tmp/zeta_dc_hits.txt
 
