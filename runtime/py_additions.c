@@ -1628,6 +1628,38 @@ static int zt_str_content_eq(int64_t a, int64_t b) {
     return zt_packed_cstr_eq(a, (const char*)b);
 }
 
+// Batch 292: ORDERING (`<` `>` `<=` `>=`) on str operands. Codegen used to
+// fall through to integer `icmp` on the raw slot — a POINTER comparison, so
+// `a >= c` with equal content answered False and the trading-day filter
+// `d >= start_date and d <= end_date` dropped every day (backtest ran 0
+// days). Normalize packed slots to a byte view, then strcmp.
+static const char* zt_str_view(int64_t v, char* buf) {
+    if (!v) return "";
+    if (zt_is_cstr_ptr(v)) return (const char*)v;
+    uint64_t u = (uint64_t)v;
+    for (int i = 0; i < 8; i++) {
+        char c = (char)((u >> (8 * i)) & 0xff);
+        if (!c || (unsigned char)c < 0x20 || (unsigned char)c >= 0x7f) {
+            buf[i] = 0;
+            return buf;
+        }
+        buf[i] = c;
+    }
+    buf[8] = 0;
+    return buf;
+}
+int64_t host_str_cmp(int64_t a, int64_t b, int64_t kind) {
+    char ba[9], bb[9];
+    int r = strcmp(zt_str_view(a, ba), zt_str_view(b, bb));
+    switch (kind) {
+        case 0: return r < 0;
+        case 1: return r > 0;
+        case 2: return r <= 0;
+        case 3: return r >= 0;
+        default: return 0;
+    }
+}
+
 int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
     int64_t n = zt_vec_len(vec);
     if (getenv("ZT_DEBUG_CONTAINS")) fprintf(stderr, "CONTAINS vec=%p n=%lld x=%p str=%lld\n", (void*)vec, (long long)n, (void*)x, (long long)elem_is_str);
@@ -2807,6 +2839,32 @@ int64_t zeta_sorted_vec_len(int64_t data, int64_t len) {
     }
     return (int64_t)(nb + 2);
 }
+
+// sorted(x) on an ARRAY OF STRINGS. The generic path above orders i64 slots
+// numerically — for str elements that sorts POINTER values, so the result
+// looked unsorted (trading-day lists). Content order via the same packed-
+// pointer-safe view the comparisons use (batch 293).
+int64_t zeta_sorted_vec_len_str(int64_t data, int64_t len) {
+    if (!data) return 0;
+    if (len < 0) len = ((int64_t*)(data - 16))[1];
+    if (len < 0) len = 0;
+    int64_t* nb = (int64_t*)GC_malloc(16 + (size_t)(len ? len : 8) * 8);
+    nb[0] = len ? len : 8; nb[1] = len;
+    for (int64_t i = 0; i < len; i++) nb[2 + i] = ((int64_t*)data)[i];
+    for (int64_t i = 1; i < len; i++) {
+        int64_t k = nb[2 + i];
+        char ka[9];
+        const char* ks = zt_str_view(k, ka);
+        int64_t j = i - 1;
+        while (j >= 0) {
+            char ja[9];
+            if (strcmp(zt_str_view(nb[2 + j], ja), ks) > 0) { nb[2 + j + 1] = nb[2 + j]; j--; }
+            else break;
+        }
+        nb[2 + j + 1] = k;
+    }
+    return (int64_t)(nb + 2);
+}
 // numpy subset: arange(n) / linspace(a, b, n)
 int64_t zeta_arange(int64_t n) {
     int64_t cap = n < 8 ? 8 : n;
@@ -3284,6 +3342,36 @@ int64_t notna_1(int64_t v) { return zt_bare_mask(v, 1); }
 // defect in the driver build (cache path / strnlen crash) — keep the HEAD
 // code layout byte-identical ahead of this point.
 extern int64_t py_dt_strftime(int64_t h, int64_t fmt);
+// A date given as TEXT ("2023-08-07", what our market rows carry in
+// `trade_date`) must be REFORMATTED, not fed to `py_dt_strftime`: that helper
+// reads `((int64_t*)h)[0]` as a day count, so a string element produced
+// garbage like `8921216181287397-01-07` and `.dt.strftime("%Y-%m-%d")` turned
+// 119 real trading days into 7 unmatchable strings → the driver's date window
+// kept 0 days (batch 293). Same minimal format subset as py_dt_strftime.
+static int64_t zt_text_date_strftime(const char* s, const char* f) {
+    long long y = 0, mo = 0, d = 0, hh = 0, mi = 0, se = 0;
+    int used = 0;
+    if (sscanf(s, "%lld-%lld-%lld%n", &y, &mo, &d, &used) < 3) return -1;
+    if (s[used] == ' ') sscanf(s + used, " %lld:%lld:%lld", &hh, &mi, &se);
+    char buf[256];
+    char* o = buf;
+    for (const char* p = f; *p && (o - buf) < 200; p++) {
+        if (*p != '%') { *o++ = *p; continue; }
+        p++;
+        switch (*p) {
+            case 'Y': o += sprintf(o, "%04lld", y); break;
+            case 'm': o += sprintf(o, "%02lld", mo); break;
+            case 'd': o += sprintf(o, "%02lld", d); break;
+            case 'H': o += sprintf(o, "%02lld", hh); break;
+            case 'M': o += sprintf(o, "%02lld", mi); break;
+            case 'S': o += sprintf(o, "%02lld", se); break;
+            case '%': *o++ = '%'; break;
+            default: if (*p) *o++ = *p; break;
+        }
+    }
+    *o = 0;
+    return (int64_t)GC_strdup(buf);
+}
 int64_t zeta_vec_strftime(int64_t data, int64_t fmt) {
     if (!data) return 0;
     int64_t n = 0;
@@ -3293,8 +3381,66 @@ int64_t zeta_vec_strftime(int64_t data, int64_t fmt) {
     base[0] = cap;
     base[1] = n;
     int64_t out = (int64_t)(base + 2);
+    const char* f = fmt ? (const char*)fmt : "%Y-%m-%d";
     for (int64_t i = 0; i < n; i++) {
-        ((int64_t*)out)[i] = py_dt_strftime(((int64_t*)data)[i], fmt);
+        int64_t v = ((int64_t*)data)[i];
+        char vb[16];
+        const char* s = v ? zt_str_view(v, vb) : "";
+        // A PyDate handle's first 8 bytes are a day count, which can also
+        // parse as digits — require the exact ISO shape to call it text.
+        long long ty, tm, td;
+        int is_text = s && sscanf(s, "%lld-%lld-%lld", &ty, &tm, &td) == 3 &&
+                      ty >= 1000 && ty <= 9999 && tm >= 1 && tm <= 12 &&
+                      td >= 1 && td <= 31;
+        int64_t r = is_text ? zt_text_date_strftime(s, f) : -1;
+        ((int64_t*)out)[i] = r >= 0 ? r : py_dt_strftime(v, fmt);
     }
     return out;
+}
+
+// BATCH-294: `set.clear()` on the list-backed set (see gen.rs dispatch).
+// In-place length reset — the handle stays the same, so call sites that keep
+// the old handle (a struct field) still observe an empty set. Deliberately
+// LAST in this TU, same layout rule as zeta_vec_strftime above.
+int64_t zeta_vec_clear(int64_t data) {
+    if (!data) return 0;
+    int64_t n = 0;
+    if (!zt_vec_header_ok(data, &n)) return data;
+    ((int64_t*)(data - 16))[1] = 0;
+    return data;
+}
+
+// BATCH-294: indirect-call trampoline for call-through-a-value (see gen.rs
+// zeta_call1 dispatch). Function addresses arrive as the i64 of a FuncAddr.
+// Deliberately LAST in this TU (layout rule above).
+int64_t zeta_call1(int64_t fptr, int64_t a) {
+    if (!fptr) return 0;
+    typedef int64_t (*zt_fn1)(int64_t);
+    return ((zt_fn1)(void*)fptr)(a);
+}
+
+// BATCH-294: `<opaque>.date()` — Zeta's datetime handle is a PyDate whose
+// first field is the day count; the date projection is the handle itself.
+int64_t zeta_dt_date(int64_t h) { return h; }
+
+// BATCH-295: subscript on a value whose static type is unknown (dyn param).
+// The compiler previously always emitted `map_get`, so `d[i]` on a LIST handle
+// walked a fake bucket chain and SIGSEGVED (measured: `enumerate(
+// trading_days_filtered)` in `_run_local` desugars to `t[i]`, crashed at
+// `map_get+256` right after the "[local] 开始回测" log). Discriminate at
+// runtime: a Vec handle's [cap|len] header is its OWN GC block's start
+// (base-16); a map handle IS its block start, so base-16 is some other
+// block — and even when a neighbouring block mimics a sane header, we only
+// commit if the index is in range, otherwise the map lookup still runs.
+int64_t zeta_dyn_getitem(int64_t base, int64_t key) {
+    if (!base) return 0;
+    int64_t* h = (int64_t*)(base - 16);
+    if (base > 0x1000 && GC_base((void*)h) == (void*)h) {
+        int64_t cap = h[0], len = h[1];
+        if (cap >= 8 && cap <= (1LL << 28) && len >= 0 && len <= cap) {
+            int64_t i = key < 0 ? key + len : key;
+            if (i >= 0 && i < len) return h[2 + i];
+        }
+    }
+    return map_get(base, key);
 }

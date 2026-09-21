@@ -61,6 +61,231 @@ use zetac::middle::specialization::{
 };
 use zetac::runtime::actor::scheduler;
 
+/// BATCH-295: propagate call-site argument types into unannotated callee
+/// PARAMETERS. Without this, a `def f(context):` receiver has no type in the
+/// MIR type_map, and codegen's FieldAccess falls back to a GLOBAL scan over
+/// every struct with that field name (codegen.rs `resolve_struct_field_index`)
+/// — measured: `context.portfolio` in `_parity_snapshot` matched
+/// `StrategyRuntime.portfolio` (index 0) instead of `_LocalContext` (index 2)
+/// and loaded `current_dt`'s day count (19724) into `py_map_items` → SIGSEGV.
+/// Rules: only handle-ish types (Str/Named/vec) are propagated, only over a
+/// missing/I64 parameter entry, and only when ALL call sites agree.
+fn plain_name(name: &str) -> String {
+    match name.rsplit_once("__") {
+        Some((_, tail)) if !tail.is_empty() => tail.to_string(),
+        _ => name.to_string(),
+    }
+}
+
+fn refine_param_types(mirs: &mut [zetac::middle::mir::mir::Mir]) {
+    use zetac::middle::mir::mir::MirStmt;
+    use zetac::middle::types::Type;
+
+    fn collect_calls<'a>(stmts: &'a [MirStmt], out: &mut Vec<&'a MirStmt>) {
+        for st in stmts {
+            match st {
+                MirStmt::Call { .. } | MirStmt::VoidCall { .. } => out.push(st),
+                MirStmt::If { then, else_, .. } => {
+                    collect_calls(then, out);
+                    collect_calls(else_, out);
+                }
+                MirStmt::For { body, else_body, .. } => {
+                    collect_calls(body, out);
+                    collect_calls(else_body, out);
+                }
+                MirStmt::While { body, else_body, .. } => {
+                    collect_calls(body, out);
+                    collect_calls(else_body, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // BATCH-295b: a `class X(Protocol)` body is every method written as `...`,
+    // so ALL of its method MIRs are empty (no call, no assignment) and calling
+    // one yields 0 — `ExecutionBackend::positions` compiled to `ret i64 0`, so
+    // any dispatch chosen by its annotation silently empties the holdings. Such
+    // a name is an interface, not a declaration: treat entries typed with one
+    // as untyped, exactly like `dyn`.
+    fn is_interface_method(m: &zetac::middle::mir::mir::Mir) -> bool {
+        !m.stmts.iter().any(|s| {
+            matches!(
+                s,
+                MirStmt::Call { .. }
+                    | MirStmt::VoidCall { .. }
+                    | MirStmt::If { .. }
+                    | MirStmt::For { .. }
+                    | MirStmt::While { .. }
+                    | MirStmt::DictInsert { .. }
+            )
+        })
+    }
+    let protocols: std::collections::HashSet<String> = {
+        let mut cls: std::collections::HashMap<String, (usize, usize)> =
+            std::collections::HashMap::new();
+        for m in mirs.iter() {
+            if let Some(n) = m.name.as_deref() {
+                if let Some((c, _)) = n.split_once("::") {
+                    let e = cls
+                        .entry(plain_name(c))
+                        .or_insert((0usize, 0usize));
+                    e.0 += 1;
+                    if is_interface_method(m) {
+                        e.1 += 1;
+                    }
+                }
+            }
+        }
+        cls.into_iter()
+            .filter(|(_, (t, s))| *t >= 2 && s == t)
+            .map(|(c, _)| c)
+            .collect()
+    };
+    let overridable = |ty: Option<&Type>| -> bool {
+        match ty {
+            None => true,
+            Some(Type::I64) | Some(Type::PyDynamic) | Some(Type::Variable(_)) => true,
+            Some(Type::Named(n, _)) => protocols.contains(&plain_name(n)),
+            _ => false,
+        }
+    };
+    let worth = |ty: &Type| -> bool {
+        match ty {
+            Type::Str | Type::DynamicArray(..) | Type::Array(..) => true,
+            // A value of INTERFACE type is really some concrete object; the
+            // annotation says nothing about which, so it must not be allowed to
+            // win (or veto) a consensus — `context.portfolio` typed
+            // `ExecutionBackend` would dispatch to the empty Protocol body
+            // (`ret i64 0`) and silently empty the holdings.
+            Type::Named(n, _) => !protocols.contains(&plain_name(n)),
+            _ => false,
+        }
+    };
+
+    // Params and fields feed each other (`portfolio` param → the
+    // `_LocalContext.portfolio` field → the receiver of `.positions`), so the
+    // two phases run to a fixed point.
+    for _round in 0..3 {
+        let mut changed = false;
+        // ── phase 1: call-site argument types onto callee parameters ──
+        let mut proposals: std::collections::HashMap<(usize, u32), Vec<Type>> =
+            std::collections::HashMap::new();
+        for (ci, m) in mirs.iter().enumerate() {
+            let mut calls = Vec::new();
+            collect_calls(&m.stmts, &mut calls);
+            for st in calls {
+                let (func, args) = match st {
+                    MirStmt::Call { func, args, .. } => (func, args),
+                    MirStmt::VoidCall { func, args } => (func, args),
+                    _ => continue,
+                };
+                let Some(ti) = mirs.iter().position(|c| {
+                    c.name.as_deref() == Some(func.as_str())
+                        || (c.name.as_deref() != Some(func.as_str())
+                            && c.name
+                                .as_deref()
+                                .is_some_and(|n| n.ends_with(&format!("__{}", func))))
+                }) else {
+                    continue;
+                };
+                if ti == ci {
+                    continue;
+                }
+                // A bound method (`Class::m`) passes the receiver as arg 0.
+                let offset = if func.contains("::") { 1 } else { 0 };
+                for (k, &aid) in args.iter().enumerate().skip(offset) {
+                    let Some(ty) = m.type_map.get(&aid) else { continue };
+                    if !worth(ty) {
+                        continue;
+                    }
+                    if let Some((_, pid)) = mirs[ti].param_indices.get(k) {
+                        proposals.entry((ti, *pid)).or_default().push(ty.clone());
+                    }
+                }
+            }
+        }
+        for ((ti, pid), tys) in proposals {
+            let cur = mirs[ti].type_map.get(&pid).cloned();
+            // B3: an unannotated param is typed `PyDynamic` ("dyn"), not I64 —
+            // both (plus Variable/absent/interface) mean "nothing declared".
+            // BATCH-295: disagreement between real classes withholds the type;
+            // `dyn` proposals are filtered out at collection time and so do
+            // not veto (`jq_wufu__buy_routine` passes a dyn context next to
+            // `run_local`'s Named("_LocalContext")).
+            if !overridable(cur.as_ref()) {
+                continue;
+            }
+            if let Some(first) = tys.first() {
+                if tys.iter().all(|t| t == first) {
+                    if Some(first) != cur.as_ref() {
+                        mirs[ti].type_map.insert(pid, first.clone());
+                        changed = true;
+                    }
+                }
+            }
+        }
+        // ── phase 2: constructor-field values onto that field's reads ──
+        // `new_context` builds `Struct(_LocalContext){portfolio: <param>}`; the
+        // read `context.portfolio` was typed by the (interface) annotation or
+        // not at all, which made `.positions` a raw slot load.
+        let mut field_ty: std::collections::HashMap<(String, String), Vec<Type>> =
+            std::collections::HashMap::new();
+        for m in mirs.iter() {
+            for (_, e) in m.exprs.iter() {
+                if let zetac::middle::mir::mir::MirExpr::Struct { variant, fields } = e {
+                    for (fname, fid) in fields {
+                        if let Some(ty) = m.type_map.get(fid) {
+                            if worth(ty) {
+                                field_ty
+                                    .entry((plain_name(variant), fname.clone()))
+                                    .or_default()
+                                    .push(ty.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let field_ty: std::collections::HashMap<(String, String), Type> = field_ty
+            .into_iter()
+            .filter_map(|(k, tys)| {
+                let first = tys[0].clone();
+                tys.iter().all(|t| *t == first).then_some((k, first))
+            })
+            .collect();
+        for m in mirs.iter_mut() {
+            let sites: Vec<(u32, u32, String)> = m
+                .exprs
+                .iter()
+                .filter_map(|(eid, e)| match e {
+                    zetac::middle::mir::mir::MirExpr::FieldAccess { base, field } => {
+                        Some((*eid, *base, field.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            for (eid, base, field) in sites {
+                let Some(Type::Named(v, _)) = m.type_map.get(&base) else {
+                    continue;
+                };
+                let key = (plain_name(v), field.clone());
+                let Some(ty) = field_ty.get(&key) else {
+                    continue;
+                };
+                let cur = m.type_map.get(&eid).cloned();
+                if overridable(cur.as_ref()) && cur.as_ref() != Some(ty) {
+                    m.type_map.insert(eid, ty.clone());
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
 /// PY-A: `parse_zeta` is built on nom's `many0`, which STOPS at the first
 /// top-level item it cannot parse and returns the prefix it managed to parse.
 /// A caller that ignores the leftover (as the CLI used to) silently compiles a
@@ -438,6 +663,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap_or("~anon")
                         .cmp(b.name.as_deref().unwrap_or("~anon"))
                 });
+
+                // BATCH-295: refine unannotated PARAM types from call-site
+                // argument types (see `refine_param_types`).
+                refine_param_types(&mut all_mirs);
 
                 let context = Context::create();
                 let mut codegen = LLVMCodegen::new(&context, "module");

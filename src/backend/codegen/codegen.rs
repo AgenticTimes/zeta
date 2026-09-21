@@ -580,6 +580,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some(Linkage::External),
         );
         module.add_function(
+            "host_str_cmp",
+            i64_type.fn_type(
+                &[i64_type.into(), i64_type.into(), i64_type.into()],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+        module.add_function(
             "host_str_to_lowercase",
             i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
@@ -1040,6 +1048,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
         module.add_function("zeta_round_f64", i64_type.fn_type(&[f64_type.into(), i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_floor_f64", f64_type.fn_type(&[f64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_sorted_vec_len", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_sorted_vec_len_str", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_vec_clear", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_call1", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_dt_date", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_dyn_getitem", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_arange", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_linspace_i64", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_diff_n", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
@@ -5673,6 +5686,31 @@ impl<'ctx> LLVMCodegen<'ctx> {
                             return res;
                         }
                     }
+                    // Batch 292: str ORDERING must compare by content. The int
+                    // fallthrough was `icmp` on raw char* slots — a POINTER
+                    // compare (`a >= c` False for equal text; the trading-day
+                    // window filter then dropped every day → 0 交易日).
+                    if l_str && r_str
+                        && matches!(op.as_str(), "<" | ">" | "<=" | ">=")
+                    {
+                        let kind: i64 = match op.as_str() {
+                            "<" => 0,
+                            ">" => 1,
+                            "<=" => 2,
+                            _ => 3,
+                        };
+                        let lv = self.gen_expr(&exprs[left], exprs, None);
+                        let rv = self.gen_expr(&exprs[right], exprs, None);
+                        if let Some(f) = self.module.get_function("host_str_cmp") {
+                            let kv = self.i64_type.const_int(kind as u64, false);
+                            let call = self.builder
+                                .build_call(f, &[lv.into(), rv.into(), kv.into()], "strord")
+                                .unwrap();
+                            if let Some(v) = Self::call_site_to_basic_value(call) {
+                                return v;
+                            }
+                        }
+                    }
                 }
                 let left_val = self.gen_expr(&exprs[left], exprs, None);
                 let right_val = self.gen_expr(&exprs[right], exprs, None);
@@ -5974,6 +6012,86 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 heap_ptr_val.into()
             }
             MirExpr::FieldAccess { base, field } => {
+                // BATCH-295: a field read whose receiver class has a
+                // zero-arg method of the field's name is a @property read
+                // and must CALL the method. The MIR generator cannot do it
+                // there — its types precede `refine_param_types` (measured:
+                // `context.portfolio.positions.items()` in
+                // `_parity_snapshot` raw-read LocalBackend word0 `_ledger`
+                // and walked it as a map → SIGSEGV in py_map_items).
+                // Receiver class: the base's DECLARED type; for a chained
+                // read (X.f.g) the parent's resolved variant also counts —
+                // `portfolio` lives in `_LocalContext`, whose field holds a
+                // backend, so `_LocalContext` is the one struct-defining
+                // candidate with a `positions` method.
+                let mut recv_classes: Vec<String> = Vec::new();
+                if let Some(tm) = self.current_type_map.as_ref() {
+                    if let Some(Type::Named(tn, _)) = tm.get(base) {
+                        recv_classes.push(tn.clone());
+                    }
+                }
+                if let Some(crate::middle::mir::mir::MirExpr::FieldAccess {
+                    base: pbase,
+                    field: pfield,
+                }) = exprs.get(base)
+                {
+                    let mut cur: u32 = *pbase;
+                    for _ in 0..6 {
+                        match exprs.get(&cur) {
+                            Some(crate::middle::mir::mir::MirExpr::Var(v)) => cur = *v,
+                            Some(crate::middle::mir::mir::MirExpr::FieldAccess {
+                                base: b2,
+                                ..
+                            }) => cur = *b2,
+                            _ => break,
+                        }
+                    }
+                    if let Some(Some(Type::Named(tn, _))) =
+                        self.current_type_map.as_ref().map(|tm| tm.get(&cur))
+                    {
+                        // The parent handle's class, if it really declares the
+                        // intermediate field (guards the hash-order scans).
+                        let key_like = format!("struct_{}_", tn);
+                        if self
+                            .struct_defs
+                            .iter()
+                            .any(|(k, fs)| k.starts_with(&key_like) && fs.iter().any(|f| f == pfield))
+                        {
+                            recv_classes.push(tn.clone());
+                        }
+                    }
+                }
+                for rc in &recv_classes {
+                    let plains: Vec<String> = if rc.contains("__") {
+                        vec![
+                            rc.clone(),
+                            rc.rsplit("__").next().unwrap_or(rc).to_string(),
+                        ]
+                    } else {
+                        vec![rc.clone()]
+                    };
+                    let mut hit = None;
+                    for p in &plains {
+                        let q = format!("{}::{}", p, field);
+                        if let Some(f) = self.module.get_function(&q) {
+                            hit = Some(f);
+                            break;
+                        }
+                    }
+                    if let Some(f) = hit {
+                        let base_val = self.gen_expr(&exprs[base], exprs, None);
+                        if let BasicValueEnum::IntValue(iv) = base_val {
+                            let call = self
+                                .builder
+                                .build_call(f, &[iv.into()], "prop_read")
+                                .unwrap();
+                            if let Some(v) = Self::call_site_to_basic_value(call) {
+                                return v;
+                            }
+                            return self.i64_type.const_int(0, true).into();
+                        }
+                    }
+                }
                 // Handle field access for structs
                 let base_val = self.gen_expr(&exprs[base], exprs, None);
 

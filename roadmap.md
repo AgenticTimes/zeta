@@ -8441,3 +8441,100 @@ ZT-WARN host_str_concat bad arg a=0x103026e07[0] b=0xdb6d000102ffcbcc[?]
 
 **下一步**：批次 293 —— 优先做 2（Exception→str），因为它把后续所有静默失败
 都变成不可读；然后按 1 → 3 → 4 推进。
+
+## 批次 293（2026-09-21）：推导式/三元表达式的**元素类型**不再塌成 I64
+
+### 起点
+批次 292 待办 4：`[local] 开始回测: 4345527160 ~ 4345527171（0 交易日）`。
+日期是整数句柄、交易日 0 —— 都指向「str 值落进 I64 槽」。
+
+### 三处类型丢失（`src/middle/mir/gen.rs`）
+1. **表达式型 `If` 的 dest**：以 I64 起型，str 分支写进来后槽仍是 I64。
+   `[d for d in days if cond]` 脱糖成 `if cond { d } else { -1 }` →
+   `trading_days_filtered` 是 `DynamicArray(I64)`，日期比较退化成指针比较，
+   窗口匹配 **0 天**。修法：dest 按携带元素的那条分支重定型（`-1` 哨兵无需类型）。
+2. **三元臂的类型**：`tail_of` 只认字面量；臂尾是 `Var` 时用 `name_to_id` +
+   `type_map` 解析。混合臂（`元素` vs `-1` 哨兵）不再被 I64 拖走。
+3. **`sorted()` 的元素类型**：原先硬编码 `DynamicArray(I64)`，现从源数组元素
+   类型推导；元素是 `str` 时改调 `zeta_sorted_vec_len_str`
+   （`runtime/py_additions.c`，按字符串比较排序）。
+
+### 效果
+`[local] 开始回测: … ~ …（**37 交易日**）` —— 与 CPython 的 trading_days 一致；
+`行情请求 4 只，区间 2023-08-05 ~ 2024-02-29` 日期以字符串正确打印（批次 292 是句柄）。
+
+## 批次 294（2026-09-21）：三个弱符号桩被真实实现顶掉 + 构造器字段定型
+
+- `x.clear()`（list 承载的 set）→ `zeta_vec_clear`（原地 len=0，句柄保持有效；
+  此前落到 `_clear` abort 桩，`PositionLedger._today_buys.clear()` 直接终止进程）。
+- `<opaque>.date()` → `zeta_dt_date`（Zeta 的 datetime 句柄就是 PyDate，
+  `.strftime`/比较读同一 shape，投影即句柄本身）。
+- **按值调用**：`for routine in [morning_routine, …]: routine(context)` —— 被调
+  名是持有函数地址的局部变量，静态符号会链到 `_routine` abort 桩；改走 C 跳板
+  `zeta_call1`（仅在无同名全局函数、且不是闭包时）。
+- `parse_class`（`src/frontend/parser/top_level.rs`）把 `self.field = 首字母大写(...)`
+  定为 `Named(cls)`，构造出来的字段不再匿名。
+
+## 批次 295（2026-09-21）：`context.portfolio.positions` 读通 —— 全 37 日回测跑完不崩
+
+### 起点
+`_parity_snapshot+452` SIGSEGV（rc=139）：`[s for s, p in context.portfolio.positions.items()]`。
+
+### 根因链（三层，逐层实测）
+1. **管线顺序**：whole-program refine 在 per-function MIR 之后，`.positions` 在
+   lowering 期被当成普通字段读，类型 I64。
+2. **属性 vs 字段**：`positions` 是 `@property`，运行时值要靠方法调用产生；
+   字段读回落到 2 字段 stand-in → 把 `LocalBackend` 句柄当 map 用。
+3. **Protocol 桩**：`ExecutionBackend.positions` 的体是 `...` → `ret i64 0`，
+   即使调对了也返回 0。
+
+### 修复
+- `refine_param_types`（`src/main.rs`）重写为 3 轮不动点：
+  - `is_interface_method`：无 Call/VoidCall/If/For/While/DictInsert 的体即桩
+    （**`Assign` 必须排除**：Protocol 体会 lower 成 `ParamInit + Assign + Return`，
+    误判会让 `ExecutionBackend total=6 stubs=0`）；`total>=2 && stubs==total` 的类 = Protocol。
+  - `overridable`：`None | I64 | PyDynamic | Variable | Named(∈protocols)` 可被覆盖；
+    `worth`：接口类型的实参**不得**参与共识（接口只说明「是某个具体对象」，不说明是哪个）。
+  - Phase 1 调用点→形参；**Phase 2（新）**构造器 `MirExpr::Struct{variant,fields}`
+    的字段类型共识 → 覆盖 `FieldAccess` 节点类型（`self.portfolio = LocalBackend(...)`
+    这类字段由此获得具体类型）。
+- `gen_expr` 的 `MirExpr::FieldAccess`（codegen）：接收者类若有一个**零参同名方法**，
+  这是 `@property` 读，必须 `build_call`（`prop_read`），而不是按 struct 字段读；
+  接收者类沿 `Var`/`FieldAccess` 链上溯 6 层并用 `struct_{variant}_` 前缀校验中间字段真实存在。
+- `.items()` 在未知接收者上不再 identity 链式传递：`("items", 1) => ("py_map_items", "vec")`
+  （identity 会让推导式收集器把 MAP 句柄当 Vec 头读，`zeta_collect_vec_n+40` 崩溃）。
+- 修饰名属性回退：`struct_backend…__LocalBackend` 找不到时重试 `LocalBackend::positions`。
+- `zeta_dyn_getitem(base, key)`（`runtime/py_additions.c`）：按 GC 头区分 Vec/Map，
+  兜底 `map_get`，替代 enumerate 路径上的 `map_get` 误用。
+
+### 本批收尾的**回归修复**（python_style 278/2 → 277/3 → 278/2）
+`t129_lambda_binding` 的 `f = lambda s: s.upper()` 打印堆指针。
+定位：批次 294 的 `zeta_call1` 守卫抢先吃掉了 `f("ab")`（`f` 是持有闭包地址的
+局部槽 → `is_value_slot` 成立 → 返回类型写死 I64），而 `closure_vars` 路径
+（`closure_ret_tys` 记录 lambda 体真实类型）在它之后。
+修法：`zeta_call1` 路径加 `&& !self.closure_vars.contains_key(method)`；
+按值调用（`routine(context)`）保持，闭包返回类型恢复。
+**排除项（实测）**：`refine_param_types` 关掉（临时注释 + 重建）t129 仍红 → 非 refine 所致；
+`git show HEAD:gen.rs` 覆盖后 t129 绿 → 回归在工作树 gen.rs 内。
+
+### 验证（串行门禁）
+- `./tools/build_runtime.sh` → `ok: tokio_runtime.o (624 T) + zeta_runtime_c.o`
+- `./tools/run_all.sh` → official **194/194** · python_style **278 passed, 2 failed**
+  （仅存量红 t231/t233）· 语料 **38/38**（口径：驱动移出 `strategies/code`；在位时 39/39）
+- handoff §9 自检 harness 逐字对上：
+  `universe 119 sz.159985 sh.512070` / `cached 892 9 2022-05-05 2025-12-31` / `clean 892 9 892`
+- 驱动 `drvN36`：`ZETA_NO_OPT=1 REPLAYQUANT_LOCAL=1` 编译 → 37 日回测全程 **rc=0**
+
+### 仍挡验收的待办（按可操作性排序）
+1. **`合计 12375 行，0 只标的` / `Loaded 12375 records for 0 stocks`**：行数对、
+   按 code 分组后为 0 → 分组键列丢失；这直接导致 final_value=0。
+2. **`%d rows, codes=%d, trading_days=%d 12375 0 119`**：`%`-格式串未替换实参，
+   实参被追加到尾部（str-format 未实现，非 f-string）。
+3. **`[PARITY] 4397413760 | target=… | holdings=… | ranked=-`**：句柄代替字符串/对象
+   打印（与 Exception→str 同源）。
+4. `load_metadata failed for …parquet: 1` ×N（尾部数字疑似错误码未转消息）。
+5. `交易成本: 佣金万0 | 滑点0.00%` —— `CostModel.from_jq` 读成 0。
+6. `getattr ... is not implemented in this form` ×13，全部走默认值。
+
+**下一步**：批次 296 —— 打待办 1（分组键列丢失）：它同时解释「0 只标的」和
+final_value=0，是当前唯一阻塞数值验收（994575.84 / -0.5424）的项。

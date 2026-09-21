@@ -1112,6 +1112,22 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                                     .filter(|ty| !ty.is_empty() && ty != "dyn")
                                     .unwrap_or_else(|| "i64".to_string())
                             }
+                            // `self._ledger = PositionLedger(...)` — a field
+                            // holding an instance of a user class. With the old
+                            // i64 default the inner calls (`self._ledger
+                            // .clear_today_buys()`) fell to the bare-name
+                            // dispatch, and two classes sharing the method name
+                            // made codegen emit a self-recursive duplicate —
+                            // infinite recursion (batch 294). Capitalized
+                            // callee ⇒ remember the class name; MIR gen types
+                            // the field `Named(cls)` and dispatches qualified.
+                            AstNode::Call {
+                                receiver: None,
+                                method,
+                                ..
+                            } if method.chars().next().map_or(false, |c| c.is_uppercase()) => {
+                                method.clone()
+                            }
                             // A field whose initializer is a CALL keeps the
                             // callee's declared result type when the registry
                             // knows it (`self.cache_dir = os.path.join(...)` is a

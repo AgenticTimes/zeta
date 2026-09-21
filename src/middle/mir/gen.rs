@@ -1962,6 +1962,28 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // Expressions are already in self.exprs (generated inline)
                 // No need to merge or update next_id
 
+                // An expression-if's dest starts I64; a str-valued branch then
+                // leaks a pointer-typed slot (batch 293: `[d for d in days if
+                // cond]` desugars to `if cond { d } else { -1 }`, the dest
+                // stayed I64, so `trading_days_filtered` was DynamicArray(I64)
+                // and the driver's date filter pointer-compared to 0 days).
+                // Trust the branch that carries the comprehension element; the
+                // -1 skip sentinel needs no type.
+                if let Some(dest) = dest_id {
+                    let branch_val = |stmts: &Vec<MirStmt>| -> Option<u32> {
+                        stmts.last().and_then(|s| match s {
+                            MirStmt::Assign { lhs, rhs } if *lhs == dest => Some(*rhs),
+                            _ => None,
+                        })
+                    };
+                    let refined = branch_val(&then_stmts)
+                        .or_else(|| branch_val(&else_stmts))
+                        .and_then(|v| self.type_map.get(&v).cloned());
+                    if let Some(t) = refined {
+                        self.type_map.insert(dest, t);
+                    }
+                }
+
                 self.stmts.push(MirStmt::If {
                     cond: cond_id,
                     then: then_stmts,
@@ -4016,6 +4038,25 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // as `4296191491.513180`. That is why `get_universe("wufu")`
                 // returned junk codes and `_load_cache` failed for all of them.
                 let ast_branch_ty: Option<Type> = {
+                    let ast_ty = |n: &AstNode| -> Option<Type> {
+                        match n {
+                            AstNode::StringLit(_) | AstNode::FString { .. } => Some(Type::Str),
+                            AstNode::FloatLit(_) => Some(Type::F64),
+                            AstNode::Bool(_) => Some(Type::Bool),
+                            AstNode::Lit(_) => Some(Type::I64),
+                            // A comprehension that keeps its element as-is
+                            // (`[d for d in days if cond]`) has a VAR tail —
+                            // resolve it from the enclosing type map (batch
+                            // 293: the trading-day filter typed I64, so the
+                            // driver's date window matched 0 days).
+                            AstNode::Var(name) => self
+                                .name_to_id
+                                .get(name.as_str())
+                                .and_then(|i| self.type_map.get(i))
+                                .cloned(),
+                            _ => None,
+                        }
+                    };
                     let tail_of = |blk: &[AstNode]| -> Option<Type> {
                         // The ternary's arms arrive as BLOCKS (`Block { body }`),
                         // so unwrap down to the last real statement.
@@ -4023,31 +4064,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         while let Some(AstNode::Block { body }) = tail {
                             tail = body.last();
                         }
-                        let blk: &[AstNode] = match tail {
-                            Some(t) => std::slice::from_ref(t),
-                            None => &[],
-                        };
-                        match blk.last() {
+                        match tail {
                             Some(AstNode::ExprStmt { expr }) | Some(AstNode::Return(expr)) => {
-                                match &**expr {
-                                    AstNode::StringLit(_) | AstNode::FString { .. } => {
-                                        Some(Type::Str)
-                                    }
-                                    AstNode::FloatLit(_) => Some(Type::F64),
-                                    AstNode::Bool(_) => Some(Type::Bool),
-                                    AstNode::Lit(_) => Some(Type::I64),
-                                    _ => None,
-                                }
+                                ast_ty(expr)
                             }
-                            Some(AstNode::Assign(_, rhs)) => match &**rhs {
-                                AstNode::StringLit(_) | AstNode::FString { .. } => {
-                                    Some(Type::Str)
-                                }
-                                AstNode::FloatLit(_) => Some(Type::F64),
-                                AstNode::Bool(_) => Some(Type::Bool),
-                                AstNode::Lit(_) => Some(Type::I64),
-                                _ => None,
-                            },
+                            Some(AstNode::Assign(_, rhs)) => ast_ty(rhs),
                             _ => None,
                         }
                     };
@@ -4055,6 +4076,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     let e = tail_of(else_);
                     match (t, e) {
                         (Some(a), Some(b)) if a == b => Some(a),
+                        // Mixed arms: a filtered comprehension is
+                        // `if cond { ELEMENT } else { -1 }` — the i64 sentinel
+                        // must not drag the result type to I64 (batch 293:
+                        // this made every str comprehension a DynamicArray
+                        // (I64), and the driver's trading-day filter then
+                        // pointer-compared to 0 days).
+                        (Some(Type::I64), Some(b)) => Some(b),
+                        (Some(a), Some(Type::I64)) => Some(a),
                         (Some(a), None) => Some(a),
                         (None, Some(b)) => Some(b),
                         _ => None,
@@ -7292,11 +7321,14 @@ call, no NULL-handle dereference).",
                                     type_args: vec![],
                                 });
                                 self.exprs.insert(nid, MirExpr::Var(nid));
-                                self.type_map
-                                    .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
+                                let sorted_ty = match self.type_map.get(&xs).cloned() {
+                                    Some(Type::DynamicArray(e)) => Type::DynamicArray(e),
+                                    Some(Type::Array(e, _)) => Type::DynamicArray(e),
+                                    _ => Type::DynamicArray(Box::new(Type::I64)),
+                                };
+                                self.type_map.insert(nid, sorted_ty.clone());
                                 self.exprs.insert(id, MirExpr::Var(nid));
-                                self.type_map
-                                    .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                                self.type_map.insert(id, sorted_ty);
                                 return id;
                             } else if rev.is_some() {
                                 let a = self.lower_expr(&args[0]);
@@ -7323,11 +7355,14 @@ call, no NULL-handle dereference).",
                                     type_args: vec![],
                                 });
                                 self.exprs.insert(nid, MirExpr::Var(nid));
-                                self.type_map
-                                    .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
+                                let sorted_ty = match self.type_map.get(&a).cloned() {
+                                    Some(Type::DynamicArray(e)) => Type::DynamicArray(e),
+                                    Some(Type::Array(e, _)) => Type::DynamicArray(e),
+                                    _ => Type::DynamicArray(Box::new(Type::I64)),
+                                };
+                                self.type_map.insert(nid, sorted_ty.clone());
                                 self.exprs.insert(id, MirExpr::Var(nid));
-                                self.type_map
-                                    .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                                self.type_map.insert(id, sorted_ty);
                                 return id;
                             } else {
                                 None
@@ -7438,7 +7473,17 @@ call, no NULL-handle dereference).",
                             }
                             return id;
                         }
+                        let src_id = call_args[0];
+                        // Str elements need CONTENT order: the generic helper
+                        // compares i64 slots numerically, which for str arrays
+                        // sorted heap pointers (batch 293 — `sorted(dates)`
+                        // came back in insertion order).
+                        let src_elem_str = matches!(
+                            self.type_map.get(&src_id),
+                            Some(Type::DynamicArray(e)) if **e == Type::Str
+                        );
                         let func = match method.as_str() {
+                            "sorted" if src_elem_str => "zeta_sorted_vec_len_str",
                             "sorted" => "zeta_sorted_vec_len",
                             _ => "zeta_int_i64",
                         };
@@ -7449,10 +7494,20 @@ call, no NULL-handle dereference).",
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
+                        // `sorted(x)` keeps x's element type. Hardcoding I64
+                        // made `sorted(str_list)` an array of bare ints, so
+                        // downstream `d >= start_date` skipped the string
+                        // compare and pointer-compared instead → the trading-
+                        // day filter in jq_wufu_local kept 0 days.
+                        let sorted_ty = match self.type_map.get(&src_id).cloned() {
+                            Some(Type::DynamicArray(e)) => Type::DynamicArray(e),
+                            Some(Type::Array(e, _)) => Type::DynamicArray(e),
+                            _ => Type::DynamicArray(Box::new(Type::I64)),
+                        };
                         self.type_map.insert(
                             id,
                             match method.as_str() {
-                                "sorted" => Type::DynamicArray(Box::new(Type::I64)),
+                                "sorted" => sorted_ty,
                                 _ => Type::I64,
                             },
                         );
@@ -8279,6 +8334,56 @@ call, no NULL-handle dereference).",
                         self.type_map.insert(id, receiver_ty.clone().unwrap());
                         return id;
                     }
+                }
+                // `s.clear()` on a list-backed set (batch 294:
+                // `PositionLedger._today_buys.clear()` hit the weak `_clear`
+                // abort stub). In-place len=0 — the handle stays valid, so no
+                // write-back is needed at the call site. The map receiver is
+                // NOT matched here (zeta_map_clear owns it below); a `str`
+                // receiver has no clear.
+                if method == "clear"
+                    && arg_ids.len() == 1
+                    && receiver.is_some()
+                    && receiver_ty.as_ref().map_or(false, |t| {
+                        matches!(t, Type::DynamicArray(_) | Type::Array(_, _))
+                            || matches!(t, Type::Named(n, _) if n == "set" || n == "frozenset")
+                            || matches!(t, Type::I64 | Type::PyDynamic)
+                    })
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_vec_clear".to_string(),
+                        args: vec![arg_ids[0]],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, receiver_ty.unwrap_or(Type::I64));
+                    return id;
+                }
+                // BATCH-294: `<opaque>.date()` (e.g. `context.current_dt.date()`
+                // where the context factory erased the field type) reached the
+                // weak `_date` abort stub. Zeta's datetime handle IS a PyDate
+                // (day-count first field — same shape `.strftime`/comparisons
+                // read), so the projection is the handle itself.
+                if method == "date"
+                    && arg_ids.len() == 1
+                    && receiver.is_some()
+                    && matches!(
+                        receiver_ty.as_ref(),
+                        None | Some(Type::I64) | Some(Type::PyDynamic)
+                    )
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_dt_date".to_string(),
+                        args: vec![arg_ids[0]],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::Named("PyDate".to_string(), vec![]));
+                    return id;
                 }
                 // `df[<boolean mask>]` — the shim's `__getitem__` assumes a
                 // COLUMN NAME (`self.data[map_str_key(key)]`), so a row mask went
@@ -9124,9 +9229,18 @@ call, no NULL-handle dereference).",
                         ("fillna", _) | ("astype", _) | ("shift", _) | ("groupby", _)
                         | ("transform", _) | ("rank", _) | ("sort_values", _)
                         | ("rolling", _) | ("mean", _) | ("to_period", _)
-                        | ("set_index", _) | ("items", _) => {
+                        | ("set_index", _) => {
                             Some(("zeta_identity", "i64"))
                         }
+                        // BATCH-295: `.items()` on an unknown receiver must NOT
+                        // chain by identity — the comprehension collector then
+                        // reads the MAP handle as a Vec header and SEGFAULTS
+                        // (measured: `[s for s, p in
+                        // context.portfolio.positions.items()]` in
+                        // `_parity_snapshot`, crash at `zeta_collect_vec_n+40`).
+                        // In this codebase a `.items()` receiver is a dict;
+                        // py_map_items yields the pair-vec the loops expect.
+                        ("items", 1) => Some(("py_map_items", "vec")),
                         // Unknown method on an untyped receiver: string runtime
                         // (carrying the method's result kind, so `.capitalize()`
                         // stays a string and `.split()` stays a list).
@@ -9701,6 +9815,40 @@ call, no NULL-handle dereference).",
                 }
 
                 // Check if this is a method call on a dynamic array
+                // BATCH-294: call-through-a-value. `for routine in [morning_
+                // routine, …]: routine(context)` — the callee NAME is bound to
+                // a local variable holding a function address (FuncAddr lowers
+                // to its i64 pointer), so a static symbol would link against
+                // the weak `_routine` abort stub. Dispatch via the C
+                // trampoline instead. Only when no global function of that
+                // name exists (those keep priority). A `lambda` bound to a name
+                // lives in `closure_vars` and keeps its recorded return type
+                // through the closure path below — the trampoline would erase it
+                // (t129: `f = lambda s: s.upper()` printed a heap pointer).
+                if receiver.is_none()
+                    && arg_ids.len() == 1
+                    && !self.func_ret_types.contains_key(method.as_str())
+                    && !self.closure_vars.contains_key(method.as_str())
+                {
+                    if let Some(&vid) = self.name_to_id.get(method.as_str()) {
+                        let is_value_slot = matches!(
+                            self.exprs.get(&vid),
+                            Some(MirExpr::Var(_)) | Some(MirExpr::FuncAddr(_))
+                        );
+                        if is_value_slot {
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_call1".to_string(),
+                                args: vec![vid, arg_ids[0]],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(id, Type::I64);
+                            return id;
+                        }
+                    }
+                }
+
                 let (func, is_array_len, is_array_push) = if let Some(ref rty) = receiver_ty {
                     // Check if receiver is a dynamic array type
                     if let Type::DynamicArray(_) = rty {
@@ -10836,6 +10984,25 @@ call, no NULL-handle dereference).",
                 // `len(df.columns)` did array_len on a map → printed 0.
                 if let Some(Type::Named(tn, _)) = self.type_map.get(&base_id).cloned() {
                     let qualified = format!("{}::{}", tn, field);
+                    // A MODULE-MANGLED receiver name
+                    // (`backend_strategy_wufu_backend__LocalBackend`) missed the
+                    // plain-keyed `func_ret_types` table, so its @property read
+                    // degraded to a RAW FIELD LOAD and the next map walk SEGFAULTED
+                    // (measured in `_parity_snapshot` after context.portfolio got
+                    // refined to Named). Retry with the trailing class name.
+                    let qualified = if self.func_ret_types.contains_key(&qualified)
+                        || !tn.contains("__")
+                    {
+                        qualified
+                    } else {
+                        let plain = tn.rsplit("__").next().unwrap_or(&tn);
+                        let q2 = format!("{}::{}", plain, field);
+                        if self.func_ret_types.contains_key(&q2) {
+                            q2
+                        } else {
+                            qualified
+                        }
+                    };
                     if let Some(ret_ty) = self.func_ret_types.get(&qualified).cloned() {
                         self.stmts.push(MirStmt::Call {
                             func: qualified,
@@ -11785,6 +11952,21 @@ call, no NULL-handle dereference).",
                     // Param is an array type even if type_map doesn't know it yet
                     self.stmts.push(MirStmt::Call {
                         func: "array_get".to_string(),
+                        args: vec![bid, iid],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                } else if matches!(base_ty, Type::I64 | Type::PyDynamic)
+                    && source_ty != "map"
+                    && !matches!(self.type_map.get(&iid), Some(Type::Str))
+                {
+                    // BATCH-295: an UNKNOWN receiver with a non-string key. The
+                    // old fall-through always emitted `map_get`, so `t[i]` on a
+                    // dyn-typed LIST handle walked a fake bucket chain and
+                    // SEGFAULTED (measured in `_run_local`'s enumerate loop). Let
+                    // the runtime discriminate Vec-vs-map by the GC header.
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_dyn_getitem".to_string(),
                         args: vec![bid, iid],
                         dest: id,
                         type_args: vec![],
