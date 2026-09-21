@@ -9888,3 +9888,90 @@ consulted"）。`m3.z` 实测：合成的 `Return{val: 7}` + `7: F64` ⇒ `defin
   从"看不见"变成"看得见"）⇒ 必须跑全部门禁后再落，且要与 285 计数口径对账。
 - 探针仍留 `/tmp/abi5`、`/tmp/abi8`，**故意不进 `tests/`**（固化判据等 G.5d；
   动 `tests/` 会移 285 的口径）。
+
+## 批次 319（refactor ⑨′ 第一段 / G.5d ① —— R7 返回侧诊断落地：把批次 318 写的合同变成会出声的检查）
+
+### 选型理由
+G.5d 的四个候选里只有任务 #33 ① 在脏工作树下可做：#32（`zeta_dyn_getitem` 短
+vec 挂死）与附 B#6（假旋钮 `ZETA_STRICT_STUBS`）都要改 `runtime/py_additions.c`
+（并发工作流持有），而 ① 只落在 `codegen.rs` 这个干净文件里。且它是 G.5d 后续
+所有工作的**前置** —— 没有诊断，"改签名来源会不会移行为"这个问题无法度量。
+
+### 落点与附 B#8 原计划不同（本批 P1）
+原计划 ① 是"定义期比对声明 vs 推断"⇒ 要先把声明类型送进定义侧，而 `struct Mir`
+没有 `return_type` 字段（批次 318 已 grep 定案）⇒ 得动 MIR gen。实际改在**调用点**
+（`codegen.rs:3327` `MirStmt::Call` 分支首句）比"被调方 LLVM 返回型 vs dest 槽型"：
+零 MIR 结构改动，且告警恰好落在真正会出错的那条调用上（一个定义可能对应多条
+类型不同的调用，逐条报比在定义处报一次更有用）。实现 `:6960` `note_return_slot_mismatch`。
+
+### 三条诚实的覆盖边界（写进 R7 正文，不是脚注）
+1. **只对 Zeta 定义的函数生效** —— C 运行时符号的签名就是唯一真相，那边 float/int
+   不一致不是本缺陷，故新增 `zeta_fn_names` 集合在预声明处登记（`:1481`）。
+2. **只覆盖 float↔int** —— M7 那类"签名与槽一致、但嵌套 return 走 `fptosi`"不在
+   范围内（§3.2 表 #6/#7 那一档），诊断不会假装看见它。
+3. **泛型未覆盖** —— 单特化的 `specialized_fns` 没登记进 `zeta_fn_names`。
+
+计数用独立的 `abi_ret_warn_count`（不复用 `abi_note` 的那个）：两条规则两个边界，
+合并后看不出各自的触发率。
+
+### 调用点名字的坑（本批真实踩坑）
+第一次不落：调用侧 `func` 带 MIR 的 arity 后缀（`f` 被调成 `f_0`），而 `fns` 的
+key 是预声明用的 `actual_name`（`f`）。改成候选拼写表（精确名 → `::` 基名 →
+`base_N` → 剥尾部 `_数字`），**精确匹配优先**，避免把 `f_1` 这种合法函数名抢走。
+
+### 实测曝光面（口径见下一节，别复用批次 318 的"零"）
+- `tests/unit-tests` **0/194**、`tests/python_style` 顶层 12 文件 **0/12**
+- 真实语料 **6/38 文件命中** —— 这才是非零的真实暴露面。已分诊两类：
+  - (A) `ExecutionAdapter::nav_value/equity_value/available_cash`：`-> float` 但函数体
+    只有 docstring ⇒ 合成 `i64` 零值被当 double 读 = `0.0`。数值上无害，**真问题是
+    dispatch 绑到了抽象桩**，那是语义/绑定问题不是 ABI 问题，另立。
+  - (B) `get_volume_ratio_4`、`MOM_1`、`__closure_0_extract_metrics_from_analyzer_cfb9e263a`：
+    float 返回落进 int 槽 ⇒ **M5 型真垃圾**，与本诊断同源。
+- `strict_abi` 本批**故意不把它升成 fatal**：新告警 + 语料 6 处命中，先把判断数据攒够。
+
+### 行为保持 + 零基线位移
+输出逐字节未变（`4612811918334230528` / `0.000000` / `r = 2` / `2.500000 3.500000`
+四例对拍）。门禁在最终二进制上复跑（`/tmp/gate_319.txt`，rc=1 为既有口径）：
+official **194/194** · python_style **285 passed / 2 failed / 4 known-fail / 0 xpass**
+（failed 仍是 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`，与本批无关）
+· corpus **39/39** ⇒ 三项读数与批次 318 完全一致，零位移。
+未复跑：`perf_baseline --diff`（改动 = 每条 Call 语句 6 次哈希查表，远在 10% 阈下）、
+`jit_sweep` —— 被问到时要按"未测"回答，不要当"已测通过"。
+
+### 两个工具/文档缺陷（一个是本批自己撞出来的）
+1. **`dc_audit.sh --diff` 按 `file:line:col` 比对 ⇒ 幽灵命中**。本批误报
+   `codegen.rs:2482` 为新增，实为既有基线命中 `get_function_with_types`(`:2463`)
+   被 +19 行漂移推过去的。改成按 **文件+消息** 比对（`dc_key()`）。双向验证：
+   当前树 101 命中 / rc=0 / 无幽灵；篡改基线（`ZETA_DC_BASELINE` 去掉 codegen 若干行）
+   仍能报出新增项 ⇒ 检测能力没被改坏。另确认 `dc_audit`/`perf_baseline` 不在
+   `run_all.sh` 与 `.github/workflows` 的调用链里 ⇒ 改它不可能污染已记录的门禁读数。
+2. **新增附 B#9：编译期诊断在门禁里读不到**。我一开始报"全量套件零命中"，随后发现
+   日志里**一条 `warning:` 都没有** —— 因为压根没收。逐条核实口径：
+   `tools/run_all.sh:67` 编译 official 时 `>/dev/null 2>&1`（stderr 全丢）；
+   `tests/python_style/run.sh:95` 把正例编译输出写进逐文件 `.cc`（保留但不聚合，
+   只在编译失败时 `tail -1`）、`:87` 负例同样丢弃；判定比的是**运行期 stdout**
+   （`:127-133`）⇒ **编译期告警不影响判定结果**（这条对后续诊断工作是护栏，
+   也是"改诊断安全"的依据）。测量本身已用重跑 `a.z` 复现来验证捕获方法有效，
+   不是拿旧日志充数。立为任务 #34。
+
+### 文档侧：锚点整体重映射（并把它变成立刻生效的规矩）
+`codegen.rs` 插入 74 行 ⇒ ABI.md 里 19 个 `codegen.rs:` 锚点全部失效，按插入点
+（+7/+9/+17/+19/+20/+74）机械重映射，29 个数字 token 改动、前缀计数仍是 19。
+逐条抽查落点：1595/1599 alloca 类型规则、3293 `MirStmt::Assign`、6177 struct 字段
+bitcast 注释、1702 `slot_or_sitofp`、3748/3756 比较、5667 `StringLit`、6810
+`coerce_call_args`、1069 `zeta_call1`、2594 `get_or_declare_function`、6426 struct
+type、1333 `strict_abi`。头部新增 ⚠️：**任何往该文件插代码的批次必须在同批重算锚点**
+（任务 #35）—— 合同文档的引用一旦漂移就没人再抽查，等于把 §1–§6 全部退回"愿望清单"。
+另把 R7/C2/M2/M5 里"零诊断/零告警"的措辞改成"当时成立 / 319 起出声"（批次 318 的
+结论不能被本批的改动静默改写）。附 B#8 的 ① 就地标注已落地并说明落点差异。
+
+### 中途回退一次（记录方法，避免下次靠运气）
+第一版重映射脚本在设置文件上下文的分支里只吐出 `:NNNN`，**把 `codegen.rs` 前缀删了**
+（`grep -c 'codegen.rs:'` 返回 0 才发现）。处置：坏文件留在 `/tmp/abi_319_broken.md`
+备查 → `git checkout HEAD -- docs/ABI.md`（HEAD=批次 318，锚点完好）→ 修正脚本
+（保留 `pre = m.group(1)+':'`）重跑 → 再在新行距上重贴批次 319 的正文，
+这样新引的 `:3327`/`:6960` 不会被二次平移。
+
+### 提交
+`8ea470de`（`codegen.rs` +74 纯插入 / `docs/ABI.md` / `tools/dc_audit.sh`，
+未 push：批次 315 起未获推送授权）。
