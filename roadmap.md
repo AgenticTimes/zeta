@@ -9099,3 +9099,110 @@ G.5a 的要求是**只写现行实现、每条锚定 `file:line`** —— 不是
   ⇒ "零行为变更"由基线数字复证，而非仅由改动面推断。
 
 **下一步**：立即档 ⑥ G.2（sanitizer 化：ASan/MSan 下的可复现崩溃现场）。
+
+---
+
+## 批次 306（refactor 立即档 ⑥ —— G.2 sanitizer 常态化 + 还债① t228）
+
+**本批性质**：只读工具 + 链接器入口的**加法**，不动 `runtime/`、不动 `src/middle`、
+`src/backend`。落 G.2 之前先量它到底能覆盖什么，结果比原设想小，所以本批的交付
+一半是工具、一半是**把覆盖边界写成可复现的口径**（免得下一个"零命中"被读成"没有内存错误"）。
+
+### 交付物
+1. **`tools/asan_run.sh`（新，只读）**：把 `runtime/*.c` 编成 ASan 插桩目标文件放进
+   `/tmp/zeta_asan_rt`，用 `ZETA_RUNTIME_DIR` + `ZETA_EXTRA_LDFLAGS=-fsanitize=address`
+   让 zetac 链接插桩版，逐用例编译并运行 `tests/python_style/t*.z`，输出命中清单。
+   - 仓库根的 `zeta_runtime_c.o` / `tokio_runtime.o` 是 **git 跟踪产物**：本脚本只往
+     `/tmp` 写，绝不覆盖它们。
+   - **插桩目标文件必须与链接器同一个 driver 产出**。实测：Homebrew clang 的 .o +
+     `/usr/bin/gcc`（=Apple clang 17）链接 → `Undefined symbols:
+     ___asan_version_mismatch_check_v8`。所以 `ASANC="${ZETA_ASAN_CC:-gcc}"`。
+   - `ASAN_OPTIONS=detect_leaks=0` 必带：GC 保留的块会被泄漏检查全部误报。
+   - `--selftest`：阳性对照 + **盲区对照**写进脚本（见下），`--strict` 供 nightly 用。
+2. **`src/main.rs` 三处加法**：`extra_ld_flags()`（:496，读 `ZETA_EXTRA_LDFLAGS`；
+   **未设置时链接命令与历史逐字相同**）、两处链接点注入（:903 / :1109）、
+   `find_runtime_obj` 的 **[W2002]**（:458 —— cwd 副本压过 `ZETA_RUNTIME_DIR` 时告警，
+   `ZETA_STRICT_RUNTIME_DIR=1` 时改为要求覆盖版，:463）。
+3. **`tools/run_all.sh` [W2003]**（:38-49）：跑基线前比对 `.o` 与 `runtime/*.c` 的
+   mtime。原因：`run_all.sh` 只做 `cargo build -p zetac`，**从不重编 C 运行期**，
+   改了 `.c` 忘了 `build_runtime.sh` 时，三条绿色数字描述的是旧运行期。
+   ⚠️ **这条改动目前只在我本机生效**：`.gitignore:124` 的 `run_*` 是无锚定模式（本意
+   挡仓库根的 `murphy_*/zeta_*/test_*/build_*` 之类脚本），把 `tools/run_all.sh` 一起
+   挡住了 ⇒ 该文件从未入库（`git ls-files tools/run_all.sh` 空）。
+   **连带后果（本批发现，未处理）**：`.github/workflows/ci.yml:106` 的 baselines job
+   直接 `./tools/run_all.sh` —— 干净 checkout 上该文件不存在。self-hosted 常驻 runner
+   留着未跟踪的本地副本，所以这个失败在 CI 上是隐形的。
+   修法是一行 `git add -f tools/run_all.sh`，但**不擅自做**：常驻 runner 的工作区里
+   有一份同名未跟踪文件，检出新增同名文件会以 "untracked working tree file would be
+   overwritten" 直接失败，需要先确认 runner 侧怎么处置。⇒ 登记为 OPEN，见下。
+4. **`tools/mir_diff.sh`**（:58）：`find … || true`。
+
+### 实测数字（可复跑）
+- **语料级 ASan 扫描**：`asan sweep: 291 program(s)  0 ASan-hit  2 crash  287 ok
+  2 exit!=0  0 compile-fail`（两次独立复跑同数）。2 crash = 存量红 t231/t233；
+  2 exit!=0 = t209 rc=1、t48 rc=5 —— **zetac 生成的 main 直接拿表达式值当退出码**，
+  非零退出不是崩溃信号，故单列 EXIT 桶而不计入 CRASH。
+- **阳性/盲区对照**（`tools/asan_run.sh --selftest`）：
+  `malloc-overflow=detected (rc=134)  GC-overflow=silent (rc=0)` ——
+  同样写 `p[72]`/`q[72]` 越界，`malloc(64)` 上 ASan 报 heap-buffer-overflow，
+  `GC_malloc(64)` 上**完全静默且退出 0**。Boehm GC 只向系统要大块、块内相邻分配
+  之间没有 redzone ⇒ **vec/map/struct 的内部越界本工具看不见**。
+- **t228 非确定性专项**：`/tmp/t228chk/t228` 连跑 **200 次，全部 rc=0，输出 200 次
+  同一指纹**（`shasum` 前 8 位 `3ba82abe`），且输出与 7 条 `// expect` 逐行相同；
+  `MIR_SNAPSHOT_RUNS=20` 下 t228 单独 snapshot 给出
+  `mir_diff snapshot: total=1 stable=1 unstable=0`（20 次 `--dump-mir` 字节一致，
+  命令：`MIR_CORPUS=/tmp/zeta_empty_corpus MIR_SNAPSHOT_RUNS=20 ./tools/mir_diff.sh
+  snapshot --file tests/python_style/t228_df_dedup_itertuples.z /tmp/zeta_t228_only`）；
+  ASan 下另跑 20 轮编译+执行无命中。**⇒ 今天复现不出该用例的非确定性。**
+
+### 顺手量出来的一个发现：语料层 MIR **不是** 20 次稳定
+同一把命令放宽到整个语料（39 文件 + t228）时：
+`mir_diff snapshot: total=40 stable=35 unstable=5` ——
+UNSTABLE = `_zeta_local_drv.py`（主线驱动本身）、`jq_wufu_local.py`、`wufu_bt.py`、
+`wufu_v1.py`、`wufu_v2.py`。口径要说清：T0（批次 302）用默认 `MIR_SNAPSHOT_RUNS=2`，
+本批用 20，捕获概率差一个量级 ⇒ 这**不一定是 302 之后引入的回归**，更可能是
+2 次抽样漏掉的既有抖动。影响：`mir_diff` 作为"纯代码移动"的保险绳，在这 5 个文件上
+**只有 2 次抽样级别的可信度**。这正是任务 #9（跨模块同名裸名别名表歧义）的形态，
+`wufu_*` 就是它的样本 ⇒ 记为 #9 的输入，不在本批追。
+
+### 三个"静默缺陷"是本批用起来才暴露的
+1. `mir_diff.sh` 在 `set -e` 下被 `find` 的失败中止了整个分组管道 ⇒ `--file` 传入的
+   文件**无声消失**，脚本转而报 "no input files"。这个工具的存在意义就是"给一个文件
+   也能 diff"，此前从没这么用过。
+2. `run_all.sh` 从不重编 C 运行期（[W2003] 的来源）。
+3. `find_runtime_obj` 先看 cwd 再看 `ZETA_RUNTIME_DIR` ⇒ 从仓库根跑 ASan 扫描时，
+   **插桩版会被仓库根的未插桩 .o 悄悄顶掉**，而"0 命中"看起来完全正常。
+   修法不是改优先级（那会破坏既有工作目录假设），而是加 [W2002] + strict 开关。
+
+### 自我纠正（过程中写下又推翻的）
+- 曾从"`malloc(8)` 越界在 -O1 下 ASan 静默"推出"本机 ASan 不工作"。错：那是死存储
+  消除，-O0 有报告。结论已在写进任何文档前改掉，`--selftest` 固定用 `-O0`。
+- 曾把 macOS 的 `Abort trap: 6` 归因于"`timeout` 给自己重发信号"。实测：子进程被信号
+  杀死时 **bash 自己**打这一行，`timeout --foreground`、子 shell、`2>/dev/null` 都躲不掉；
+  最终做法是把脚本自身 stderr 收进 `notices` 文件、结束后只回显非作业提示行
+  （主循环 `done 2>"$LOG/notices.log"`；`--selftest` 分支同样处理，否则它自己漏一行）。
+- 首轮 t228 连跑打印 "200 1" 是假的：`/tmp/t228x` 不存在，200 次重定向全部失败 ⇒
+   rc=1 全进"失败"桶。`mkdir -p` 后才是上面的 200/200。
+
+### 覆盖范围（诚实口径，写进脚本头部）
+插桩的只有 **C 运行期**；`zetac` 生成的目标代码**不**插桩（需要 LLVM 的 ASan pass，
+且前提是 IR 里指针/i64 不混用 —— 那是轴 B/F 的活）。看得见：运行期 C 的栈/全局越界、
+非 GC 堆（malloc/strdup）的 overflow 与 use-after-free、把整数当指针解引用
+（正好是批次 291/297 那一类）。看不见：GC 块内部越界（实测见上）。
+⇒ **要覆盖后者需要 G.2b**：给 vec/map/struct 分配加自带 canary（`ZT_CONTAINER_GUARDS`），
+在 push/insert/grow 处检查；本仓 libgc 无 `GC_first_obj`/`GC_next_obj`，堆遍历这条路不通，
+`-DGC_DEBUG` 只是廉价近似。
+
+### t228 结论：从"还债首位"降级
+不是"查完了没问题"，而是**"现有工具查不动它"**：唯一残留的嫌疑（GC 块内越界 /
+未初始化读）恰好落在实测盲区里。⇒ 排到 **G.2b 落地后再判**；§8 表①、§9 表 G.2 行、
+立即档 ⑥ 均已按此改口径。
+
+### 验证
+- `./tools/run_all.sh`（2026-09-21T17:50:18Z）：official **194/194** ·
+  python_style **285 passed, 2 failed, 4 known-fail, 0 xpass**（存量红仍只有
+  t231/t233）· 语料 **39/39 = 100%** —— 与批次 305 三项数字逐项相同。
+- [W2003] 本次未触发（`zeta_runtime_c.o`/`tokio_runtime.o` 23:51 均新于四个 `runtime/*.c`）。
+- `src/main.rs` 改于门禁开始前（01:23 本地），门禁覆盖的就是本批要提交的代码。
+
+**下一步**：立即档 ⑦ G.1（-O3 诊断，只读）。G.2b（canary）作为独立批次排在其后。

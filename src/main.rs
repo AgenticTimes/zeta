@@ -438,11 +438,36 @@ fn ensure_fully_parsed(
 /// file anywhere else silently dropped the whole runtime and the link failed
 /// with every core symbol (`map_get`, `vec_push`, …) reported undefined.
 fn find_runtime_obj(name: &str) -> Option<std::path::PathBuf> {
+    let override_dir = std::env::var("ZETA_RUNTIME_DIR").ok();
     let direct = std::path::Path::new(name);
     if direct.exists() {
+        // G.2: `tools/asan_run.sh` points ZETA_RUNTIME_DIR at ASan-instrumented
+        // copies of these objects. If a same-named object also sits in the cwd —
+        // which it does when compiling from the repo root — the silent win for the
+        // cwd copy would link the *uninstrumented* runtime and report "no hits".
+        // Same batch-238 rule: ambiguity is announced, never resolved quietly.
+        if let Some(dir) = &override_dir {
+            let picked = std::path::Path::new(dir).join(name);
+            let differ = match (std::fs::canonicalize(direct), std::fs::canonicalize(&picked)) {
+                (Ok(a), Ok(b)) => a != b,
+                (_, Ok(_)) => true,
+                _ => false,
+            };
+            if differ {
+                eprintln!(
+                    "[W2002] runtime object '{}' resolved to cwd copy {}; ZETA_RUNTIME_DIR={} holds a different one — set ZETA_STRICT_RUNTIME_DIR=1 to require the override",
+                    name,
+                    std::fs::canonicalize(direct).map(|p| p.display().to_string()).unwrap_or_default(),
+                    dir
+                );
+                if std::env::var("ZETA_STRICT_RUNTIME_DIR").is_ok() {
+                    return Some(picked);
+                }
+            }
+        }
         return Some(direct.to_path_buf());
     }
-    if let Ok(dir) = std::env::var("ZETA_RUNTIME_DIR") {
+    if let Some(dir) = override_dir {
         let p = std::path::Path::new(&dir).join(name);
         if p.exists() {
             return Some(p);
@@ -464,6 +489,14 @@ fn find_runtime_obj(name: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+/// G.2 (`tools/asan_run.sh`): extra flags for the final link. Unset by default,
+/// so a normal compile links exactly the command it always linked.
+fn extra_ld_flags() -> Vec<String> {
+    std::env::var("ZETA_EXTRA_LDFLAGS")
+        .map(|s| s.split_whitespace().map(String::from).collect())
+        .unwrap_or_default()
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -867,6 +900,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             cmd.arg(p);
                         }
 
+                        for f in extra_ld_flags() {
+                            cmd.arg(f);
+                        }
+
                         let status = cmd.status()?;
 
                         if !status.success() {
@@ -1068,6 +1105,9 @@ fn bootstrap_zeta(output: &Option<String>, target: &str) -> Result<(), Box<dyn s
         }
         if let Some(tr) = find_runtime_obj("tokio_runtime.o") {
             cmd.arg(tr);
+        }
+        for f in extra_ld_flags() {
+            cmd.arg(f);
         }
         if !cmd.status()?.success() {
             return Err("Linking failed".into());

@@ -52,7 +52,10 @@ CORPUS_ROOT="${MIR_CORPUS:-$HOME/source/quant/REasyQuant/strategies}"
 FILES=()
 while IFS= read -r line; do FILES+=("$line"); done < <(
   {
-    find "$CORPUS_ROOT" -name '*.py' -not -path '*/.venv/*' 2>/dev/null
+    # `|| true`: under `set -e` a missing CORPUS_ROOT made find abort the whole
+    # grouping, so `--file` inputs vanished silently and the run reported
+    # "no input files" instead of scanning what it was given.
+    find "$CORPUS_ROOT" -name '*.py' -not -path '*/.venv/*' 2>/dev/null || true
     for f in ${EXTRA_FILES[@]+"${EXTRA_FILES[@]}"}; do echo "$f"; done
   } | sort
 )
