@@ -1,0 +1,101 @@
+src/backend/codegen/codegen.rs:2463:8	methods `get_function_with_types`, `type_size_from_name`, and `type_align_from_name` are never used
+src/backend/codegen/runtime_decls_core.rs:10:8	function `declare_core_runtime_fns` is never used
+src/backend/codegen/runtime_decls_registry.rs:10:8	function `declare_registry_runtime_fns` is never used
+src/bin/indent_dump.rs:3:4	function `main` is never used
+src/bin/pipeline_dump.rs:7:4	function `main` is never used
+src/bin/zeta-lsp.rs:9:4	function `main` is never used
+src/bin/zorb.rs:143:4	function `install_from` is never used
+src/bin/zorb.rs:218:4	function `single_module_in` is never used
+src/bin/zorb.rs:250:4	function `copy_dir` is never used
+src/bin/zorb.rs:265:4	function `list` is never used
+src/bin/zorb.rs:290:4	function `remove` is never used
+src/bin/zorb.rs:29:4	function `packages_dir` is never used
+src/bin/zorb.rs:39:4	function `die` is never used
+src/bin/zorb.rs:44:4	function `main` is never used
+src/bin/zorb.rs:70:4	function `usage` is never used
+src/bin/zorb.rs:87:4	function `is_url` is never used
+src/bin/zorb.rs:91:4	function `is_git_url` is never used
+src/bin/zorb.rs:95:4	function `install` is never used
+src/distributed/actor.rs:121:5	field `receiver` is never read
+src/distributed/actor.rs:156:14	method `handle_message` is never used
+src/distributed/actor.rs:279:5	field `actor` is never read
+src/distributed/cluster.rs:105:5	field `event_receiver` is never read
+src/distributed/cluster.rs:608:5	field `check_interval` is never read
+src/distributed/transaction.rs:353:5	field `saga_id` is never read
+src/distributed/transport.rs:149:14	associated function `receive_message` is never used
+src/distributed/transport.rs:254:5	field `listener` is never read
+src/distributed/transport.rs:304:14	method `handle_connection` is never used
+src/distributed/transport.rs:52:5	variants `Connecting` and `Closing` are never constructed
+src/distributed/transport.rs:68:5	field `remote_addr` is never read
+src/frontend/identity_ownership.rs:118:5	field `lifetime_context` is never read
+src/frontend/macro_expand_advanced.rs:83:5	field `compile_time_info` is never read
+src/frontend/parser/expr.rs:1830:4	function `parse_walrus_prefix` is never used
+src/frontend/parser/parser.rs:1026:4	function `parse_angle_bracketed_content_inner` is never used
+src/frontend/parser/parser.rs:1057:4	function `split_top_level_commas` is never used
+src/frontend/parser/parser.rs:994:4	function `parse_angle_bracketed_content` is never used
+src/frontend/parser/stmt.rs:1531:4	function `parse_full_expr_as_target` is never used
+src/frontend/parser/top_level.rs:488:4	function `parse_associated_type` is never used
+src/lsp/protocol.rs:107:12	struct `Range` is never constructed
+src/lsp/protocol.rs:116:12	struct `Location` is never constructed
+src/lsp/protocol.rs:172:12	struct `Hover` is never constructed
+src/lsp/protocol.rs:183:10	enum `HoverContents` is never used
+src/lsp/protocol.rs:190:12	struct `MarkupContent` is never constructed
+src/lsp/protocol.rs:199:10	enum `MarkupKind` is never used
+src/lsp/protocol.rs:98:12	struct `Position` is never constructed
+src/lsp/server.rs:18:9	fields `capabilities` and `root_path` are never read
+src/main.rs:1007:4	function `bootstrap_zeta` is never used
+src/main.rs:1134:4	function `repl` is never used
+src/main.rs:300:4	function `report_stub_calls` is never used
+src/main.rs:391:4	function `ensure_fully_parsed` is never used
+src/main.rs:440:4	function `find_runtime_obj` is never used
+src/main.rs:496:4	function `extra_ld_flags` is never used
+src/main.rs:502:4	function `main` is never used
+src/main.rs:73:4	function `plain_name` is never used
+src/main.rs:80:4	function `refine_param_types` is never used
+src/middle/resolver/typecheck.rs:559:8	methods `infer_identity_type` and `get_required_capabilities` are never used
+src/middle/types/mod.rs:1372:8	method `unify_array_size` is never used
+src/ml/data.rs:237:5	field `feature_range` is never read
+src/ml/data.rs:447:5	fields `feature_names` and `label_name` are never read
+src/ml/inference.rs:189:5	field `per_channel` is never read
+src/ml/models.rs:106:5	fields `input_channels`, `conv_channels`, `fc_sizes`, `output_size`, `dropout_rate`, and `use_batch_norm` are never read
+src/ml/models.rs:18:5	fields `input_size`, `hidden_sizes`, `output_size`, `dropout_rate`, and `use_batch_norm` are never read
+src/ml/models.rs:249:5	fields `input_size`, `hidden_size`, `num_layers`, `output_size`, `bidirectional`, and `dropout_rate` are never read
+src/ml/models.rs:373:5	fields `latent_dim` and `input_size` are never read
+src/ml/models.rs:471:5	fields `latent_dim` and `output_size` are never read
+src/ml/models.rs:579:5	fields `d_model`, `nhead`, `num_layers`, `dim_feedforward`, and `dropout` are never read
+src/ml/nn.rs:241:5	fields `running_mean`, `running_var`, `eps`, and `momentum` are never read
+src/ml/nn.rs:358:5	fields `num_layers` and `nonlinearity` are never read
+src/ml/nn.rs:421:5	field `num_layers` is never read
+src/ml/optim.rs:129:5	fields `betas`, `eps`, and `weight_decay` are never read
+src/ml/optim.rs:220:5	fields `alpha`, `eps`, and `weight_decay` are never read
+src/ml/optim.rs:314:5	fields `lr_decay`, `weight_decay`, and `eps` are never read
+src/ml/optim.rs:380:5	fields `rho`, `eps`, and `weight_decay` are never read
+src/ml/optim.rs:38:5	field `dampening` is never read
+src/runtime/actor/advanced.rs:43:5	field `sender` is never read
+src/runtime/actor/channel.rs:50:14	method `get_inner` is never used
+src/runtime/async_advanced.rs:108:5	field `id` is never read
+src/runtime/async_advanced.rs:149:8	methods `len` and `is_empty` are never used
+src/runtime/async_advanced.rs:214:5	field `global_queue` is never read
+src/runtime/async_advanced.rs:337:9	fields `future` and `mapper` are never read
+src/runtime/async_advanced.rs:356:9	fields `future` and `transformer` are never read
+src/runtime/async_advanced.rs:376:9	fields `future1`, `future2`, `completed1`, `completed2`, `result1`, and `result2` are never read
+src/runtime/async_advanced.rs:47:5	field `priority` is never read
+src/runtime/async_advanced.rs:94:8	method `is_completed` is never used
+src/runtime/channel_advanced.rs:36:5	field `receiver` is never read
+src/runtime/channel_advanced.rs:379:5	field `id` is never read
+src/runtime/duration.rs:6:4	function `to_dur` is never used
+src/runtime/identity/integration.rs:319:4	function `create_c_string` is never used
+src/runtime/memory.rs:17:7	constant `UNINIT_PATTERN` is never used
+src/runtime/memory.rs:29:8	static `ALLOCATION_COUNTER` is never used
+src/runtime/memory_bulletproof.rs:24:7	constant `GUARD_PAGE_SIZE` is never used
+src/runtime/memory_bulletproof.rs:52:5	field `timestamp` is never read
+src/runtime/reactor.rs:191:9	field `fd` is never read
+src/runtime/reactor.rs:548:5	field `threads` is never read
+src/runtime/std.rs:25:8	function `GC_free` is never used
+src/std/collections/mod.rs:46:5	field `data` is never read
+tests/memory-management/borrowing_tests.rs:196:4	function `main` is never used
+tests/memory-management/integration_test.rs:266:4	function `main` is never used
+tests/memory-management/lifetime_tests.rs:212:4	function `main` is never used
+tests/memory-management/memory_safety_tests.rs:273:4	function `main` is never used
+tests/memory-management/ownership_tests.rs:108:4	function `main` is never used
+tests/stdlib-foundation/test_runner.rs:6:4	function `main` is never used

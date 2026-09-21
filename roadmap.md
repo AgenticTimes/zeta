@@ -9637,3 +9637,71 @@ consciousness/reality 四个（440+413+405+51=1,309，逐目录 `wc -l` 已复�
 - 任务 #26：`--emit-llvm` 退出路径空指针。
 - 任务 #15：基线只能躺在 `/tmp`（仓内 `.gitignore` 的 `run_*` 会吞掉这类文件），
   机器负载一变就失效 ⇒ 与本项同因，先修 #15 才能把 perf/dc 基线入库。
+  （**批次 314 已修**：dc 基线入库 `tools/baselines/`；perf 基线仍留 `/tmp`，原因改为本机路径依赖，见批次 314）
+
+## 批次 314（任务 #15 —— 第二个幽灵门禁：CI 跑的 `tools/run_all.sh` 从来没被跟踪过）
+
+### 为什么这比"少一个文件"严重
+批次 313 查出 `benchmarks.yml` 引用不存在的 bench（幽灵门禁）。本批是同一缺陷类的**第二例，
+而且更隐蔽**：文件**存在、能跑、每天本地都在跑**，只是 git 里没有它。
+`.github/workflows/ci.yml:106` 在 `baselines` job 里执行 `./tools/run_all.sh`，但
+`.gitignore:124` 是 `run_*`（CRLF 行），它同时匹配仓库根和任意子目录 ⇒
+`git add tools/run_all.sh` 会被静默忽略，`checkout@v4` 出来的工作树里根本没有这个文件。
+⇒ **三套基线（官方 194 / python_style / 语料 39）在 CI 上从未真正跑过**，
+那个 job 只能以"找不到文件"失败。`git ls-files --error-unmatch tools/run_all.sh` →
+"路径规格未匹配任何 git 已知文件"（本批实测），而它调用的
+`tools/build_runtime.sh` / `tests/python_style/run.sh` / `tools/corpus_baseline.py`
+（run_all.sh:43/:76/:98）**都已跟踪** ⇒ 唯一缺的就是入口本身。
+
+### 修法：定向反包含，不放宽 `run_*`
+`run_*` 在根目录挡的是 mypy/scratch 类临时脚本，删掉它会放开一大片。所以只在它后面插一行
+`!tools/run_all.sh`（4 行：3 行说明 + 1 行规则），并逐条验证判据没有连带变化：
+
+| 判据 | 期望 | 实测 |
+|---|---|---|
+| `git check-ignore -v tools/run_all.sh` | 命中 `!tools/run_all.sh` | `.gitignore:128:!tools/run_all.sh` ✅ |
+| `run_scratch.sh` / `tools/run_scratch.sh` | 仍被 `run_*` 挡 | `:124` ✅ |
+| `zeta_probe.o` | 仍被 `*.o:145` 挡 | ✅ |
+| 与 HEAD 逐行 diff | **纯插入 4 行，零改动** | `@@ -124,0 +125,4 @@` 只有 `+` ✅ |
+
+⚠️ 本仓 `.gitignore` 是 **CRLF 且含 7 个 NUL 字节**（`file` 报 data、`grep` 报 Binary）
+⇒ 只能按字节读写编辑，插入行也补成 CRLF 与全文件一致；用文本模式重写会破坏内容。
+NUL 计数改前改后都是 7。
+
+### 顺带把 dc 基线入库（"只许减少"的判据要能持久）
+批次 310 的 `tools/dc_audit.sh` 基线默认在 `/tmp/zeta_dc_baseline.txt`，注释里当时写着
+"基线落 /tmp 是因为 #15 未修"。#15 一修，这个借口就没了 ⇒
+- 新建 `tools/baselines/dc_default.txt`（**101 条**命中，默认特性口径）；
+- `dc_audit.sh` 的 `BASE` 默认值改为仓内路径，注释同步（`--all-features` 仍指到
+  `tools/baselines/dc_allfeat.txt`，换特性配置=换基线文件这条不变）。
+- 理由：dc 命中清单只由**源码树**决定，不含机器路径 ⇒ 可入库、跨机可比。
+  perf 基线**相反**，JSON 里写着 `corpus=~/source/quant/...` 与本机文件数 ⇒ 仍留 `/tmp`，
+  `tools/perf_baseline.py` 文档串已改成这个新理由（原文错误地归因给 #15）。
+- ⚠️ 入库基线必须回答"你是在脏工作树上采的吧"：是，工作树带着并发工作流**未提交**的
+  `src/blockchain/**` 删除。核对结论是**不影响**——HEAD 的 `src/lib.rs:52` 是
+  `#[cfg(feature = "blockchain")]` + `Cargo.toml` `default = []` ⇒ 该模块在 HEAD 的默认特性
+  编译图里同样不存在；实测基线清单里 blockchain 命中 **0 条**（`grep -c blockchain` = 0）。
+  ⇒ 这份 101 条在干净 HEAD 上成立，没把别人的未提交状态烤进仓内文件。
+
+### 同型问题顺手记录（本批**不改**，避免替 CI 编造测试内容）
+`ci.yml:61` 的 "Run known-good tests" 步骤引用 `tests/test_hello.z` / `test_values.z` /
+`test_basic.z` —— 三个文件在 `tests/` 下**不存在也不曾被跟踪**（`ls tests/*.z` 无匹配）。
+它外面套着 `if [ -f "$f" ]`（:62），所以这一步不是失败而是**静默空转**：日志里会打
+"Self-host compilation verified"，看起来像跑过 JIT 冒烟测试，实际一个用例都没执行。
+这比 313 那类"引用不存在 ⇒ 直接红"更糟，因为它产出的是**假绿**。
+真实冒烟语料在 `tests/unit-tests/`（194 个 `.z`）与 `tests/smoke/`。
+
+### 验证
+- 代码零改动 ⇒ `./tools/run_all.sh > /tmp/gate_314.txt 2>&1` 直读退出码
+  （2026-09-21T20:55:39Z→20:58:35Z）rc=1 = 既有判据（`run_all.sh:134` 要 `py_fail==0`）。
+  三项 official **194/194** · python_style **285 passed, 2 failed, 4 known-fail, 0 xpass**
+  · 语料 **39/39 = 100%** ⇒ 与批次 310~313 逐项相同，零基线位移。
+- `./tools/dc_audit.sh --diff` rc=0："无新增命中（基线 tools/baselines/dc_default.txt：101 条）"
+  ⇒ 入库基线可用，且缓存自检（`Checking zetac`）通过。
+- `bash -n tools/dc_audit.sh` 通过；`tools/run_all.sh` 模式 755（CI 用 `./` 直接执行）。
+
+### OPEN
+- 幽灵门禁还剩第三例未处理：`benchmarks.yml` 的 5 处引用（批次 313 已记录，未修）。
+- `ci.yml:61` 的假绿冒烟步骤（本批记录，未修）⇒ 修法是接到 `tests/unit-tests/` 真实语料，
+  而不是新建那三个文件。
+- 任务 #26 / #27 / #22 / #24 不变。

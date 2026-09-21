@@ -16,14 +16,20 @@
 #
 # 用法：
 #   ./tools/dc_audit.sh                 # 打印当前命中清单 + 计数
-#   ./tools/dc_audit.sh --snapshot      # 另存基线到 /tmp/zeta_dc_baseline.txt
+#   ./tools/dc_audit.sh --snapshot      # 另存基线（默认 tools/baselines/dc_default.txt）
 #   ./tools/dc_audit.sh --diff          # 与基线比对；有**新增**命中则 rc=1
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-BASE="${ZETA_DC_BASELINE:-/tmp/zeta_dc_baseline.txt}"
-# ⚠️ 基线落在 /tmp ⇒ 重启即失，`--diff` 会退回"无基线"。固化到仓内需先定 run_all.sh 的
-#    入库口径（.gitignore 的 `run_*` 会吞掉 tools/ 下的门禁产物，见任务 #15）。
+BASE="${ZETA_DC_BASELINE:-tools/baselines/dc_default.txt}"
+# 基线**入库**（批次 314）：101 条命中 / 44 个文件，是"下界"清单，随源码树而定、与机器无关，
+# 所以 `--diff` 的"只许减少"判据在任何人、任何时刻都成立。
+# 可移植性核对：采基线的工作树带着并发工作流**未提交**的 `src/blockchain/**` 删除，
+# 但 HEAD 的 `lib.rs:52` 是 `#[cfg(feature = "blockchain")]` 且 `default = []`
+# ⇒ 该模块在 HEAD 的默认特性编译图里本来就不存在，基线清单里 blockchain 命中 **0 条**
+# ⇒ 这份基线在干净 HEAD 上同样成立，不是把别人的未提交状态烤进了仓内文件。
+# 注：`tools/run_all.sh` 与这份基线过去都被 .gitignore 的 `run_*` 顺手吞掉（任务 #15），
+#     现已用 `!tools/run_all.sh` 精确豁免；换特性配置仍要用 ZETA_DC_BASELINE 指向别的文件。
 OUT=/tmp/zeta_dc_audit.raw
 HITS=/tmp/zeta_dc_hits.txt
 
@@ -35,7 +41,7 @@ HITS=/tmp/zeta_dc_hits.txt
 # 多出的在 `src/integration/`，只有开 `integration` 特性才进编译图）。
 # 该测量本身还踩过一次坑：第一次跑 --all-features 报 52 条，其实是**缓存运行**——
 # 正下面那行 `Checking zetac` 自检就是为此存在。
-# ⇒ 换特性配置要换基线文件名（`ZETA_DC_BASELINE=/tmp/zeta_dc_baseline_allfeat.txt`）。
+# ⇒ 换特性配置要换基线文件名（`ZETA_DC_BASELINE=tools/baselines/dc_allfeat.txt`）。
 FEATS=()
 [ -n "${ZETA_DC_FEATS:-}" ] && FEATS=(${ZETA_DC_FEATS})
 touch src/lib.rs

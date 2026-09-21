@@ -42,8 +42,10 @@
   PERF_CORPUS=<dir> PERF_FILES=16 PERF_STAGES=ir PERF_GATE_STAGES=ir,\\
   PERF_REPEAT=5 PERF_WARMUP=0 python3 tools/perf_baseline.py
 
-基线默认落在 /tmp 而不是仓内：仓根 `.gitignore` 的 `run_*` 等规则会把这类文件吞掉
-（同一根因见任务 #15：tools/run_all.sh 也未被跟踪）。要长期留存需先修那条忽略规则。
+基线默认落在 /tmp 而不是仓内：这条与任务 #15 无关（#15 的 `run_*` 忽略规则已在批次 314
+修掉，`tools/baselines/` 可入库）。不入库的原因是**这台机器的绝对路径**写进了 JSON
+（corpus=~/source/quant/...、n_files 随本机语料数变化），换台机器的 total 不可比。
+要在别处留存：先 `PERF_CORPUS=<dir> ... --snapshot` 在目标机上重取基线。
 """
 import glob
 import json
