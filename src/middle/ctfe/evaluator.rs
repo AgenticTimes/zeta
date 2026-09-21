@@ -987,46 +987,6 @@ impl ConstEvaluator {
         Ok(ConstValue::Array(const_elements))
     }
 
-    /// Evaluate an if expression
-    fn eval_if_expr(
-        &mut self,
-        cond: &AstNode,
-        then_branch: &[AstNode],
-        else_branch: Option<&AstNode>,
-    ) -> CtfeResult<ConstValue> {
-        let cond_val = self.eval_const_expr(cond)?;
-        // Accept either Bool or Int (non-zero = true)
-        let cond_bool = match cond_val {
-            ConstValue::Bool(b) => b,
-            ConstValue::Int(i) => i != 0,
-            _ => {
-                return Err(CtfeError::TypeMismatch {
-                    expected: "bool or int".to_string(),
-                    found: cond_val.type_name().to_string(),
-                });
-            }
-        };
-
-        if cond_bool {
-            let then_needs_scope = Self::body_has_let_decls(then_branch);
-            if then_needs_scope {
-                let _ = self.context.enter_scope(false);
-            }
-            let result = self.eval_block(then_branch);
-            if then_needs_scope {
-                self.context.exit_scope()?;
-            }
-            result
-        } else if let Some(else_expr) = else_branch {
-            // else branch is a single expression, not a block — it can't have let declarations
-            // so we always skip scope management for it
-
-            self.eval_const_expr(else_expr)
-        } else {
-            Ok(ConstValue::Unit)
-        }
-    }
-
     /// Evaluate an if expression with the full else block (vector of statements).
     /// This properly handles else branches that contain multiple statements
     /// (wrapped in ExprStmt or other statement types).

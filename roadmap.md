@@ -9441,3 +9441,70 @@ consciousness/reality 四个（440+413+405+51=1,309，逐目录 `wc -l` 已复�
   三项数字 official **194/194** · python_style **285 passed, 2 failed, 4 known-fail, 0 xpass** ·
   语料 **39/39 = 100%** —— 与批次 307/308/309 逐项相同 ⇒ 零基线位移。
 - `./tools/dc_audit.sh --diff` → "无新增命中"，且 `src/middle/resolver/new_resolver.rs` 命中数归零。
+
+---
+
+## 批次 311（refactor 立即档 ⑧ 续 —— 轴 A 第四块：判据说"死"，还要判"该不该删"）
+
+批次 310 的判据只回答"有没有引用"，不回答"删了是不是在掩盖缺陷"。本批把 `src/middle/`
+的 5 条命中逐条读实现后分成两类，**只删 (a) 类**：
+
+- **(a) 被近亲取代 / 重复挂载** ⇒ 删，无信息损失；
+- **(b) 已实现但从未接线的能力** ⇒ **不删**，它记录的是一个真实缺口，删掉就等于把缺陷埋了。
+
+### (a) 类：删了 48 行
+1. `src/middle/ctfe/evaluator.rs` 原 990-1029 的 `eval_if_expr`（**40 行**）。
+   判据：同文件 `:1033` 的 `eval_if_expr_with_else` 才是活路径 —— `:610` 的
+   `AstNode::If { cond, then, else_ } => self.eval_if_expr_with_else(...)` 用的是后者。
+   前者签名带 `else_branch: Option<&AstNode>`，是被"else 是多语句块"这一版取代的旧形状。
+2. `src/middle/resolver/resolver.rs` 的 `identity_inference` + `capability_inferencer`
+   两个字段 + `Resolver::new()` 里两处初始化（**8 行**）。
+   判据："fields ... are never read"（只构造于原 :136-137 / :157-158，全仓无读取点）；
+   **真正在用**的那份在 `src/middle/passes/identity_verification.rs:13`（`:275` 有调用）。
+   ⇒ 这是同一能力的**重复挂载**，不是未接线能力。
+   疑点排除：`identity` 特性（`Cargo.toml` 里是空 flag，`identity = []`）不会让它变活 ——
+   `ZETA_DC_FEATS=--all-features` 下这两项**同样**判死（见下）。
+
+### (b) 类：3 条命中判"不删"，其中一条是缺陷证据
+- **`src/middle/types/mod.rs:1372 unify_array_size`（49 行）—— 本批最有价值的发现。**
+  活路径 `unify` 的 Array 分支在 `:1569` 内联实现，语义**比死掉的这个更弱**：
+  * 内联版：`size1 != size2 && !(size 是 Literal(0)) ⇒ Err`，且注释自己承认
+    "Allow size 0 as a wildcard (for type inference) — This is a hack to support array subscripting"；
+  * 死版：`ConstParam` 同名才统一、`ConstParam` 与 `Literal` 互容、`Expr` 同名才统一。
+  ⇒ 内联版对 `[T; N]`（N 为 const 参数）与 `Literal` 的组合会**误判不可统一**。
+  删掉 `unify_array_size` = 把这条已知的 const-generics 缺口一起销毁。改为登记任务，
+  与轴 B / 任务 #22 的双轨收敛合并处理（同一个"两套实现、活的那套更弱"的模式）。
+- `src/middle/mir/gen.rs:214` 的 `async_state_ptr` / `async_segment_count` / `is_async_fn` /
+  `async_saved_vars` + `closure_counter`（5 个 never-read 字段）：删字段要连带删**写入侧**，
+  而 `closure_counter` 属 PY-A 闭包命名链路、`async_*` 属被放弃的 async 状态机 lowering 路线
+  —— 归入批次 312 单独判（且 `gen.rs` 是主线最热文件，改动面要最小）。
+- `src/middle/resolver/typecheck.rs:559` 的 `infer_identity_type` / `get_required_capabilities`：
+  旧 track 里的 identity 能力推断未接线，与 `unify_array_size` 同属"保留哪一轨"的决断 ⇒ 并入 #22。
+
+### 判据本身升级：dead_code 是按 cfg 配置算的
+`tools/dc_audit.sh` 加 `ZETA_DC_FEATS`（如 `--all-features`）。实测：
+
+| 配置 | 命中数（本批删除后） | 差异 |
+|---|---|---|
+| 默认特性 | **114** | — |
+| `--all-features` | 116 | 恒多 2 条，都在 `src/integration/`（`coordination.rs:86` field `callbacks`、`type_context.rs:78` fields `stack`/`context`），只有开 `integration` 特性才进编译图 |
+
+⇒ **基线必须按 cfg 配置分别存**（`ZETA_DC_BASELINE=...`）。另记一次误读：第一次量
+`--all-features` 得到 52 条，是**缓存运行**（cargo 不重发 warning），脚本里的
+`Checking zetac` 自检就是为拦这个。
+
+### 顺带撞出来的门禁盲区（登记为任务 #23）
+三套基线从不跑 `cargo test`，Rust 侧单测无人监管。实测 `cargo test -p zetac --lib`：
+并行跑 **SIGABRT**（signal 6，报不出失败用例）；`--test-threads=1` → **135 passed / 1 failed**，
+失败点 `src/frontend/indent.rs:944`（`header_colon_stripped_with_trailing_comment`）。
+该文件相对 HEAD **零改动**（本批 `git diff --name-only` 只有 3 个文件），且是纯函数测试
+⇒ 属 HEAD 上的存量失败，非本批引入。
+
+### 验证
+- `cargo check -p zetac --tests` rc=0，零 `error`。
+- `./tools/dc_audit.sh --diff` → **无新增命中**，总数 116 → **114**（本批删的正好 2 条）；
+  `src/middle/ctfe/evaluator.rs`、`src/middle/resolver/resolver.rs` 命中归零。
+- `./tools/run_all.sh > /tmp/gate_311.txt 2>&1`（2026-09-21T19:00:29Z）直读退出码：rc=1 =
+  既有判据（`run_all.sh:134` 要 `py_fail==0`，t231/t233 存量红）。三项数字
+  official **194/194** · python_style **285 passed, 2 failed, 4 known-fail, 0 xpass** ·
+  语料 **39/39 = 100%** —— 与批次 309/310 逐项相同 ⇒ 零基线位移。

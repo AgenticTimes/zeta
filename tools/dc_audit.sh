@@ -27,8 +27,17 @@ HITS=/tmp/zeta_dc_hits.txt
 
 # cargo 会缓存告警：命中缓存的那次运行**一条 warning 都不输出**，会被误读成
 # "0 处死代码"。所以这里只碰 src/lib.rs 的 mtime（不改内容）强制重编 zetac 一个 crate。
+#
+# 特性口径：dead_code 是**按 cfg 配置**算的。批次 310 实测：默认特性 116 条（删掉 ctfe/
+# resolver 两项后 114），`ZETA_DC_FEATS=--all-features` 118 条（同样 −2 ⇒ 恒比默认多 2 条，
+# 多出的在 `src/integration/`，只有开 `integration` 特性才进编译图）。
+# 该测量本身还踩过一次坑：第一次跑 --all-features 报 52 条，其实是**缓存运行**——
+# 正下面那行 `Checking zetac` 自检就是为此存在。
+# ⇒ 换特性配置要换基线文件名（`ZETA_DC_BASELINE=/tmp/zeta_dc_baseline_allfeat.txt`）。
+FEATS=()
+[ -n "${ZETA_DC_FEATS:-}" ] && FEATS=(${ZETA_DC_FEATS})
 touch src/lib.rs
-RUSTFLAGS="--force-warn dead_code" cargo check -p zetac --tests >"$OUT" 2>&1
+RUSTFLAGS="--force-warn dead_code" cargo check -p zetac --tests ${FEATS[@]+"${FEATS[@]}"} >"$OUT" 2>&1
 crc=$?
 if [ $crc -ne 0 ]; then
     echo "[E2001] cargo check 失败（rc=$crc），不产出命中清单："

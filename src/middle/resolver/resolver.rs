@@ -111,10 +111,6 @@ pub struct Resolver {
     /// PY-A: every registered function definition (including ones loaded from
     /// imported modules) — return-type inference must cover all of them.
     registered_func_defs: RefCell<Vec<AstNode>>,
-    /// Identity inference context for capability-based type inference
-    identity_inference: crate::middle::types::identity::inference::IdentityInferenceContext,
-    /// Capability inferencer for identity-aware type inference
-    capability_inferencer: crate::middle::types::identity::inference::CapabilityInferencer,
 }
 
 // Learning: Complex type factored into type definition per clippy suggestion
@@ -133,8 +129,6 @@ impl Resolver {
             registered_funcs: HashMap::new(),
             module_resolver: ModuleResolver::new("."),
             macro_expander: MacroExpander::new(),
-            identity_inference:
-                crate::middle::types::identity::inference::IdentityInferenceContext::new(),
             type_decls: HashMap::new(),
             generated_closures: RefCell::new(HashMap::new()),
             nonlocal_names: RefCell::new(std::collections::HashSet::new()),
@@ -154,8 +148,6 @@ impl Resolver {
             py_module_pkg: RefCell::new(std::collections::HashMap::new()),
             py_current_module: RefCell::new(None),
             registered_func_defs: RefCell::new(Vec::new()),
-            capability_inferencer:
-                crate::middle::types::identity::inference::CapabilityInferencer::new(),
         };
 
         // Register built-in runtime functions
