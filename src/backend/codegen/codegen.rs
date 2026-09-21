@@ -67,6 +67,13 @@ pub struct LLVMCodegen<'ctx> {
     pub strict_abi: bool,
     pub abi_warn_count: u32,
     pub abi_fatal: Option<String>,
+    /// docs/ABI.md §2 R7: return-slot type puns (see `note_return_slot_mismatch`).
+    pub abi_ret_warn_count: u32,
+    /// Keys of `fns` whose LLVM signature was built by `infer_fn_return_type`
+    /// (i.e. Zeta-defined functions). The return-slot check only applies to
+    /// these: for C runtime symbols the signature is the ground truth, so a
+    /// float/int dest-slot disagreement is not the two-source defect.
+    pub zeta_fn_names: std::collections::HashSet<String>,
 }
 
 impl<'ctx> LLVMCodegen<'ctx> {
@@ -1326,6 +1333,8 @@ impl<'ctx> LLVMCodegen<'ctx> {
             strict_abi: std::env::var("ZETA_STRICT_ABI").is_ok(),
             abi_warn_count: 0,
             abi_fatal: None,
+            abi_ret_warn_count: 0,
+            zeta_fn_names: std::collections::HashSet::new(),
         }
     }
 
@@ -1336,6 +1345,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 "warning: ABI coerce: {} non-allowlisted cast(s) \
                  (narrow/fptosi/float↔ptr); set ZETA_STRICT_ABI=1 to fail",
                 self.abi_warn_count
+            );
+        }
+        if self.abi_ret_warn_count > 0 {
+            eprintln!(
+                "warning: ABI return: {} call(s) whose LLVM return type disagrees \
+                 with the caller's dest slot (docs/ABI.md §2 R7) — the value is \
+                 bit-reinterpreted, not converted",
+                self.abi_ret_warn_count
             );
         }
     }
@@ -1463,6 +1480,8 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     };
                     let fn_val = self.module.add_function(&actual_name, fn_type, None);
                     self.fns.insert(actual_name.clone(), fn_val);
+                    self.zeta_fn_names.insert(actual_name);
+                    self.zeta_fn_names.insert(fn_name.clone());
                 }
             }
         }
@@ -3305,6 +3324,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 dest,
                 type_args,
             } => {
+                self.note_return_slot_mismatch(func, dest, args.len());
                 // PY-A: try/except — `_setjmp` called directly with
                 // returns_twice so longjmp lands back INSIDE this function
                 // and the following branch re-evaluates.
@@ -6927,6 +6947,60 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 "strict-abi: forbidden coerce in `{}` arg[{}]: {}",
                 callee, arg_i, kind
             ));
+        }
+    }
+
+    /// docs/ABI.md §2 R7 / §3 C2: a Zeta-defined callee's LLVM return type comes
+    /// from `infer_fn_return_type` (the first *top-level* MIR return), while the
+    /// caller's dest slot comes from the declared `-> T`. Nothing reconciles the
+    /// two, and with opaque pointers LLVM accepts `store double` into an `i64`
+    /// alloca — so a disagreement silently reinterprets the bit pattern instead
+    /// of converting (measured: `def f() -> i64: return 2.5` prints
+    /// 4612811918334230528). Diagnostic only; emits no IR.
+    fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
+        // Call sites carry the MIR-side spelling, which is already arity-suffixed
+        // (`f` is called as `f_0`), while `fns` keys are the pre-declaration's
+        // `actual_name`. Try the spellings in order, exact match first.
+        fn strip_arity(s: &str) -> Option<&str> {
+            let pos = s.rfind('_')?;
+            let tail = &s[pos + 1..];
+            if !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) {
+                Some(&s[..pos])
+            } else {
+                None
+            }
+        }
+        let base = func.rsplit("::").next().unwrap_or(func);
+        let arity = format!("{}_{}", base, nargs);
+        let mut candidates: Vec<&str> = vec![func, base, arity.as_str()];
+        candidates.extend([strip_arity(func), strip_arity(base)].into_iter().flatten());
+        let Some(callee) = candidates
+            .into_iter()
+            .find(|n| self.zeta_fn_names.contains(*n))
+            .and_then(|n| self.fns.get(n))
+            .copied()
+        else {
+            return;
+        };
+        let Some(ret) = callee.get_type().get_return_type() else {
+            return;
+        };
+        let dest_is_float = matches!(
+            self.current_type_map.as_ref().and_then(|tm| tm.get(dest)),
+            Some(Type::F32) | Some(Type::F64)
+        );
+        let kind = match (ret, dest_is_float) {
+            (inkwell::types::BasicTypeEnum::FloatType(_), false) => {
+                "callee returns float, caller's dest slot is int"
+            }
+            (inkwell::types::BasicTypeEnum::IntType(_), true) => {
+                "callee returns int, caller's dest slot is float"
+            }
+            _ => return,
+        };
+        self.abi_ret_warn_count = self.abi_ret_warn_count.saturating_add(1);
+        if self.abi_ret_warn_count <= 8 {
+            eprintln!("warning: ABI return in call to `{}`: {}", func, kind);
         }
     }
 

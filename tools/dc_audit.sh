@@ -78,13 +78,20 @@ case "${1:-}" in
   --snapshot) cp "$HITS" "$BASE"; echo "基线已写入 $BASE（$n 条）"; exit 0 ;;
   --diff)
     [ -f "$BASE" ] || { echo "[E2002] 无基线 $BASE，先 --snapshot"; exit 2; }
-    new=$(comm -13 <(cut -f1 "$BASE" | sort -u) <(cut -f1 "$HITS" | sort -u))
+    # 比对键 = **文件 + 告警消息**，不含行号。
+    # 为什么不能按行比（批次 319 实测）：往任何有命中的文件里插代码就会挪行号——
+    # 本批给 codegen.rs 加诊断插了 74 行，`get_function_with_types` 这条老命中
+    # 从 :2463 漂到 :2482，被读成"新增 1 条 + 消失 1 条"的双向假信号；
+    # 反向亦然（真新增的死代码若恰好落在老命中漂走的行上会被抵消成"无新增"）。
+    # 消息本身带符号名（`methods \`a\`, \`b\` ... are never used`），足以唯一定位。
+    dc_key() { awk -F'\t' '{split($1, a, ":"); print a[1] "\t" $2}' "$1" | sort -u; }
+    new=$(comm -13 <(dc_key "$BASE") <(dc_key "$HITS"))
     if [ -n "$new" ]; then
-        echo "新增命中（相对 $BASE）："
+        echo "新增命中（相对 $BASE，按 文件+消息 比对）："
         echo "$new" | sed 's/^/  /'
         exit 1
     fi
-    echo "无新增命中（基线 $BASE：$(wc -l < "$BASE" | tr -d ' ') 条）"
+    echo "无新增命中（基线 $BASE：$(wc -l < "$BASE" | tr -d ' ') 条，按 文件+消息 比对）"
     exit 0 ;;
   *) cat "$HITS"; exit 0 ;;
 esac
