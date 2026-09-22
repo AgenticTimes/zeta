@@ -1,0 +1,15 @@
+# @cat: control
+# @note: 随机生成器 seed=20260922 的 6 条 `runtime exit 112`（第 6/27/30/31/32/44 条）归约出的新族：
+#   **最后一条语句是求值表达式时，它的值被当成进程退出码** —— 输出逐字正确、退出码非 0。
+#   `sum(l)` 尾档 → rc=15（就是它的值）；`len(l)` 尾档 → rc=3；`l.append(12)` 尾档 → rc=112。
+#   这类只在比退出码时才看得见：只比 stdout 的检查会全绿。roadmap 9143 行曾顺手记过一次
+#   （t209 rc=1 / t48 rc=5），当时没立任务，所以这次正式登记 #55。
+#   对照：把尾表达式换成 `print(...)` 则 rc=0（见 control_for_var_after_loop 等绿档）。
+#@@ python
+l = [3, 5, 7]
+print(len(l))
+sum(l)
+#@@ zeta
+l = [3, 5, 7]
+print(len(l))
+sum(l)

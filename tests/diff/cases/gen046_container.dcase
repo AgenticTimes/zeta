@@ -1,0 +1,30 @@
+# @cat: container
+# @note: 随机生成 seed=20260922 #46（受限语法：无 / // 浮点，值域有界，必停机）
+#@@ python
+def inc(x) -> int:
+    return x + 1
+
+l = [3, 5, 7]
+s = "ab"
+d = {"a": 1, "b": 2}
+l.append(1)
+vi2 = (5 if 3 <= 7 else 12) % 3 ** 1
+print((0 - vi2) == vi2 * 0)
+print((max(inc(vi2), 2) + (vi2 % 2 + vi2)))
+print("z" in d)
+l.append(inc(vi2 * 1))
+print(not ((2 >= vi2 or 3 >= vi2)))
+#@@ zeta
+def inc(x) -> int:
+    return x + 1
+
+l = [3, 5, 7]
+s = "ab"
+d = {"a": 1, "b": 2}
+l.append(1)
+vi2 = (5 if 3 <= 7 else 12) % 3 ** 1
+print((0 - vi2) == vi2 * 0)
+print((max(inc(vi2), 2) + (vi2 % 2 + vi2)))
+print("z" in d)
+l.append(inc(vi2 * 1))
+print(not ((2 >= vi2 or 3 >= vi2)))

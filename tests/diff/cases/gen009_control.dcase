@@ -1,0 +1,40 @@
+# @cat: control
+# @note: 随机生成 seed=20260922 #9（受限语法：无 / // 浮点，值域有界，必停机）
+#@@ python
+def inc(x) -> int:
+    return x + 1
+
+l = [3, 5, 7]
+s = "ab"
+d = {"a": 1, "b": 2}
+i = 0
+while i < 3:
+    print(i * 2)
+    i = i + 1
+l.append((i + i) % 6)
+vb3 = not (i <= i)
+print((-2 - l[1]) % (0 - 8))
+vb4 = -12 <= 3 ** 0
+if sum(l) > inc(12):
+    print(sum(l))
+else:
+    print(l[0 - 2])
+#@@ zeta
+def inc(x) -> int:
+    return x + 1
+
+l = [3, 5, 7]
+s = "ab"
+d = {"a": 1, "b": 2}
+i = 0
+while i < 3:
+    print(i * 2)
+    i = i + 1
+l.append((i + i) % 6)
+vb3 = not (i <= i)
+print((-2 - l[1]) % (0 - 8))
+vb4 = -12 <= 3 ** 0
+if sum(l) > inc(12):
+    print(sum(l))
+else:
+    print(l[0 - 2])

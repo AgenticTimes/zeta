@@ -1,0 +1,24 @@
+# @cat: str
+# @note: 随机生成 seed=20260922 #22（受限语法：无 / // 浮点，值域有界，必停机）
+#@@ python
+def inc(x) -> int:
+    return x + 1
+
+l = [3, 5, 7]
+s = "ab"
+d = {"a": 1, "b": 2}
+print(s + s)
+print("ab")
+print("a" in d)
+print(d["b"])
+#@@ zeta
+def inc(x) -> int:
+    return x + 1
+
+l = [3, 5, 7]
+s = "ab"
+d = {"a": 1, "b": 2}
+print(s + s)
+print("ab")
+print("a" in d)
+print(d["b"])

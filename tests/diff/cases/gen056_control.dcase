@@ -1,0 +1,48 @@
+# @cat: control
+# @note: 随机生成 seed=20260922 #56（受限语法：无 / // 浮点，值域有界，必停机）
+#@@ python
+def inc(x) -> int:
+    return x + 1
+
+l = [3, 5, 7]
+s = "ab"
+d = {"a": 1, "b": 2}
+print(s + "zeta" + s + "zeta")
+if not ((7 < 12 or 12 > 7)):
+    print(min(0 % (0 - 6), 5))
+else:
+    print(12 * (2 if 2 < 2 else 7))
+print("z" in d)
+vb2 = (2 if 1 < 5 else 1) in l
+vb3 = vb2
+if -2 >= (7 if vb2 else 12):
+    print(sum(l))
+else:
+    print(inc(len(l)))
+if abs(0 - 0) <= (1 - 7):
+    print(((0 + 5) - 2 % (0 - 8)))
+else:
+    print(5 ** 3)
+#@@ zeta
+def inc(x) -> int:
+    return x + 1
+
+l = [3, 5, 7]
+s = "ab"
+d = {"a": 1, "b": 2}
+print(s + "zeta" + s + "zeta")
+if not ((7 < 12 or 12 > 7)):
+    print(min(0 % (0 - 6), 5))
+else:
+    print(12 * (2 if 2 < 2 else 7))
+print("z" in d)
+vb2 = (2 if 1 < 5 else 1) in l
+vb3 = vb2
+if -2 >= (7 if vb2 else 12):
+    print(sum(l))
+else:
+    print(inc(len(l)))
+if abs(0 - 0) <= (1 - 7):
+    print(((0 + 5) - 2 % (0 - 8)))
+else:
+    print(5 ** 3)

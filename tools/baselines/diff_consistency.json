@@ -1,12 +1,13 @@
 {
-  "total": 111,
-  "judged": 111,
-  "match": 99,
-  "rate_pct": 89.2,
-  "match_min": 99,
+  "total": 123,
+  "judged": 123,
+  "match": 107,
+  "rate_pct": 87.0,
+  "match_min": 107,
   "by_verdict": {
-    "match": 99,
-    "mismatch": 11,
+    "match": 107,
+    "mismatch": 13,
+    "runtime": 2,
     "compile": 1
   },
   "per_cat": {
@@ -15,20 +16,20 @@
       "judged": 23
     },
     "str": {
-      "match": 19,
-      "judged": 22
+      "match": 20,
+      "judged": 23
     },
     "container": {
-      "match": 20,
-      "judged": 20
+      "match": 24,
+      "judged": 26
     },
     "numeric": {
       "match": 18,
       "judged": 26
     },
     "control": {
-      "match": 20,
-      "judged": 20
+      "match": 23,
+      "judged": 25
     }
   },
   "cases": {
@@ -88,9 +89,17 @@
       "cat": "container",
       "verdict": "match"
     },
+    "container_neg_dyn_index": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
     "container_neg_index": {
       "cat": "container",
       "verdict": "match"
+    },
+    "container_neg_index_chain_crash": {
+      "cat": "container",
+      "verdict": "runtime"
     },
     "container_nested_index": {
       "cat": "container",
@@ -135,6 +144,10 @@
     "control_for_range": {
       "cat": "control",
       "verdict": "match"
+    },
+    "control_for_var_after_loop": {
+      "cat": "control",
+      "verdict": "mismatch"
     },
     "control_if_elif": {
       "cat": "control",
@@ -184,12 +197,48 @@
       "cat": "control",
       "verdict": "match"
     },
+    "control_tail_value_exit_code": {
+      "cat": "control",
+      "verdict": "runtime"
+    },
     "control_ternary_nested": {
       "cat": "control",
       "verdict": "match"
     },
     "control_while": {
       "cat": "control",
+      "verdict": "match"
+    },
+    "gen009_control": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen016_container": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen019_container": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen022_str": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen043_control": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen046_container": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen056_control": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen058_container": {
+      "cat": "container",
       "verdict": "match"
     },
     "numeric_abs": {

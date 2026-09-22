@@ -1,0 +1,21 @@
+# @cat: control
+# @note: 随机生成器 seed=20260922 第 1/14/34 条约出的新族：`for` 的循环变量在循环结束后
+#   留在**尾值**（range(3) 跑完 k==3），Python 留的是最后一次迭代值 2。
+#   对照档：同程序里的 `while` 计数器结束值 2 与 Python 一致 —— 也就是这个族只在 range 路径。
+#   已知红：#54。
+#@@ python
+for k in range(3):
+    print(k)
+print(k)
+m = 0
+while m < 2:
+    m = m + 1
+print(m)
+#@@ zeta
+for k in range(3):
+    print(k)
+print(k)
+m = 0
+while m < 2:
+    m = m + 1
+print(m)

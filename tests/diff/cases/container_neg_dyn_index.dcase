@@ -1,0 +1,28 @@
+# @cat: container
+# @note: 随机生成器 seed=20260922 第 28 条约出的新族：list 的**动态负下标**不做 len+n 修正。
+#   判据挂在 AST 形状上（gen.rs:12082 只匹配 `UnaryOp{-, Lit}`），所以字面量 `l[-1]` 正确，
+#   而折叠成负字面量的 `l[0 - 1]` 与变量 `l[k]` 都走原始负下标读越界。
+#   已知红：#53。实测（seed=20260922 那批约出，本机复测）：期望 7/7/7/7/7/5，
+#   实得 7/3/3/3/7/8 —— 前两档读成首元素，末档 `l[0 - 2]` 是越界垃圾值。
+#@@ python
+l = [3, 5, 7]
+print(l[-1])
+print(l[0 - 1])
+k = 0 - 1
+print(l[k])
+i = 1
+print(l[0 - i])
+print(l[len(l) - 1])
+i2 = 2
+print(l[0 - i2])
+#@@ zeta
+l = [3, 5, 7]
+print(l[-1])
+print(l[0 - 1])
+k = 0 - 1
+print(l[k])
+i = 1
+print(l[0 - i])
+print(l[len(l) - 1])
+i2 = 2
+print(l[0 - i2])

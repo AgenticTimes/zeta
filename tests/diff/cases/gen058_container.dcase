@@ -1,0 +1,36 @@
+# @cat: container
+# @note: 随机生成 seed=20260922 #58（受限语法：无 / // 浮点，值域有界，必停机）
+#@@ python
+def inc(x) -> int:
+    return x + 1
+
+l = [3, 5, 7]
+s = "ab"
+d = {"a": 1, "b": 2}
+vi2 = ((min(12, 12) if 7 in l else -7) + abs(0 - 12 * 7))
+i = 0
+while i < 4:
+    print(i * 2)
+    i = i + 1
+l.append(inc(12 % 2))
+vi4 = inc(min(5, 12) ** 1)
+print(d["b"])
+print(inc(0) in l)
+vi5 = max(inc(vi2 * vi4), sum(l))
+#@@ zeta
+def inc(x) -> int:
+    return x + 1
+
+l = [3, 5, 7]
+s = "ab"
+d = {"a": 1, "b": 2}
+vi2 = ((min(12, 12) if 7 in l else -7) + abs(0 - 12 * 7))
+i = 0
+while i < 4:
+    print(i * 2)
+    i = i + 1
+l.append(inc(12 % 2))
+vi4 = inc(min(5, 12) ** 1)
+print(d["b"])
+print(inc(0) in l)
+vi5 = max(inc(vi2 * vi4), sum(l))
