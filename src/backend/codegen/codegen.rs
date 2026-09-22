@@ -3591,6 +3591,35 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     return;
                 }
 
+                // PY-A (任务 #53): `norm_index(len, idx)` — Python subscript
+                // normalization for an index whose sign is only known at runtime.
+                // Inlined as a select here (not a runtime symbol) so the AOT binary
+                // and the in-process JIT share one implementation and nothing new
+                // has to be added to `pylib/jit_mappings.txt`.
+                if func == "norm_index" && args.len() == 2 {
+                    let len_v = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                    let idx_v = self.gen_expr_safe(&args[1], exprs).into_int_value();
+                    let zero = self.i64_type.const_zero();
+                    let is_neg = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::SLT,
+                            idx_v,
+                            zero,
+                            "normidx_lt",
+                        )
+                        .unwrap();
+                    let fixed = self.builder.build_int_add(len_v, idx_v, "normidx_add").unwrap();
+                    let result: inkwell::values::BasicValueEnum<'ctx> = self
+                        .builder
+                        .build_select(is_neg, fixed, idx_v, "normidx")
+                        .unwrap()
+                        .into();
+                    let dest_alloca = *self.locals.get(dest).unwrap();
+                    self.builder.build_store(dest_alloca, result).unwrap();
+                    return;
+                }
+
                 // Handle array_get and stack_array_get specially for inline memory access
                 // (avoids function call overhead — 10x speedup for pure Zeta array operations)
                 if (func == "array_get" || func == "stack_array_get") && args.len() == 2 {

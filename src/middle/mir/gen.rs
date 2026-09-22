@@ -1423,6 +1423,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     let source_ty = self.source_types.get(&base_id).cloned().unwrap_or_default();
                     let is_array_param =
                         source_ty.starts_with("[") || source_ty.starts_with("*mut [");
+                    // PY-A (任务 #53, 写侧): an unnormalized negative index reached
+                    // `array_set` too — measured `l = [3,5,7]; l[0-1] = 9` wrote a
+                    // slot past the end and grew the list to
+                    // `[3, 5, 7, 0, 0, 0, 0, 0, 0]` instead of `[3, 5, 9]`.
+                    let index_id =
+                        self.normalize_subscript_index(base_id, &base_ty, index, index_id);
                     // 批次146 重放: subscript ASSIGN on a KNOWN struct with
                     // `__setitem__` (`f["a"] = 1`, `df["col"] = [...]`) must
                     // dispatch the qualified method — previously it fell to
@@ -3026,6 +3032,62 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         self.exprs.insert(and_id, MirExpr::Var(and_id));
         self.type_map.insert(and_id, Type::Bool);
         and_id
+    }
+
+    /// PY-A: `dest = norm_index(len, idx)` — Python subscript normalization for
+    /// an index whose sign is only known at runtime (`idx < 0 ? len + idx : idx`).
+    /// Codegen inlines it as a select, so there is no runtime symbol to bind and
+    /// the AOT and in-process JIT paths share one implementation.
+    fn emit_norm_index(&mut self, len_id: u32, idx_id: u32) -> u32 {
+        let dest = self.next_id();
+        self.stmts.push(MirStmt::Call {
+            func: "norm_index".to_string(),
+            args: vec![len_id, idx_id],
+            dest,
+            type_args: vec![],
+        });
+        self.exprs.insert(dest, MirExpr::Var(dest));
+        self.type_map.insert(dest, Type::I64);
+        dest
+    }
+
+    /// PY-A (任务 #53): the read and write lowering of a subscript share this, so
+    /// one fix closes both sides. Returns the index id to use — unchanged when the
+    /// index is a statically non-negative literal or the base is not an array,
+    /// otherwise `norm_index(len, idx)` with `len` from `vec_len` (dynamic array)
+    /// or the literal size (fixed array).
+    fn normalize_subscript_index(
+        &mut self,
+        base_id: u32,
+        base_ty: &Type,
+        index: &AstNode,
+        idx_id: u32,
+    ) -> u32 {
+        if matches!(index, AstNode::Lit(k) if *k >= 0) {
+            return idx_id;
+        }
+        let len_id = match base_ty {
+            Type::DynamicArray(_) => {
+                let len_id = self.next_id();
+                self.stmts.push(MirStmt::Call {
+                    func: "vec_len".to_string(),
+                    args: vec![base_id],
+                    dest: len_id,
+                    type_args: vec![],
+                });
+                self.exprs.insert(len_id, MirExpr::Var(len_id));
+                self.type_map.insert(len_id, Type::I64);
+                len_id
+            }
+            Type::Array(_, ArraySize::Literal(n)) => {
+                let len_id = self.next_id();
+                self.exprs.insert(len_id, MirExpr::IntLit(*n as i64));
+                self.type_map.insert(len_id, Type::I64);
+                len_id
+            }
+            _ => return idx_id,
+        };
+        self.emit_norm_index(len_id, idx_id)
     }
 
     fn lower_expr(&mut self, expr: &AstNode) -> u32 {
@@ -12136,6 +12198,17 @@ call, no NULL-handle dereference).",
                 let iid = match negative_dyn_index {
                     Some(pre) => pre,
                     None => self.lower_expr(&index),
+                };
+                // PY-A (任务 #53): the arms above match the index by **AST shape**
+                // (`UnaryOp{-, Lit}`), so they only catch a literal minus. `l[0 - 1]`
+                // is a runtime `-` in MIR (CTFE does not fold it) and `l[k]` is a
+                // Var, so both reached `array_get` with a signed index and read
+                // before the array header — wrong value, or SIGSEGV when the
+                // element is itself a container handle. Close the rest by **value**.
+                let iid = if negative_dyn_index.is_some() {
+                    iid
+                } else {
+                    self.normalize_subscript_index(bid, &base_ty_pre, &index, iid)
                 };
 
                 // `t[i]` on a TUPLE (a StackArray literal): index the stack array.
