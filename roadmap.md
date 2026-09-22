@@ -12050,8 +12050,13 @@ ts `2026-09-22T14:03:29Z`）⇒ **rc=1**，唯一原因仍是既有判据 `tools
 | 状态 | `cargo check` | `python_style` 读数 |
 |---|---|---|
 | 干净 checkout（= 本批之前任何人 / CI 拿到的仓库） | **rc=101**，首错 `/tmp/wt340b_check.log:240`：`error: couldn't read src/middle/../../pylib/numpy.z`: No such file or directory --> `src/middle/pylib.rs:536:13` | **287 passed / 5 failed**（`t212` `t227` `t230` + 存量 `t231` `t233`），`tests/python_style` 里根本没有 t124 |
-| 同一检出 + 本批 4 个文件的内容 | **rc=0**（`Finished dev profile in 4.31s`） | **291 passed / 2 failed**（只剩存量 `t231` `t233`） |
+| 同一检出 + 本批 4 个文件的内容（先把文件拷进去量的，为的是在提交前就知道数字） | **rc=0**（`Finished dev profile in 4.31s`） | **291 passed / 2 failed**（只剩存量 `t231` `t233`） |
+| **真·干净检出 `801fc78a`**（提交后另开 `/Users/meetai/wt340c`） | **rc=0**（`Finished … in 4.39s`，`/tmp/wt340c_check.log`） | **291 passed / 2 failed**（`/tmp/wt340c_py.log`，failed 名单同上） |
 | 作者机器（改动前后都是这份） | rc=0 | 291 passed / 2 failed |
+
+第二行与第三行互相核对过：那 4 个文件在模拟检出里的 blob 哈希与提交里逐字节相同
+（`git hash-object` 对 `git rev-parse 801fc78a:<path>` → `1343daca` / `dfb6d0cf` / `0af325a6` /
+`718e77da`），所以后读数既属于那份模拟，也属于真克隆。
 
 三条 E0282（`pylib.rs:539` / `:540` / `:541`）是同一个错的类型推断级联（`include_str!` 失败后
 `src` 无类型），不是第二个缺陷。CI 侧同一件事：`.github/workflows/ci.yml:33` 的第一步是
@@ -12152,7 +12157,9 @@ ANCESTORS … Depth is capped so a plain name can never match `/a.py`"）。而 
    对锚点核对器、对 code review 全部不可见。修它要重写这 3 行，且文件是 CRLF，单独一批做。
 4. **CI 到底有没有在干净 clone 上跑过？** `ci.yml:33` 第一步就该红（实测 `cargo check` rc=101）。
    要么这些 job 没接/没跑，要么 runner 复用了带这些文件的目录。本批看不到运行记录，不猜结论。
-   可验收动作：把"干净检出 + `cargo check`"变成门禁的一步（见下一批候选）。
+   可验收动作：把"干净检出 + `cargo check`"变成门禁的一步（见下一批候选）。配方本批已经在手：
+   `git worktree add --detach <路径，且**不能放在 /tmp**> <commit>` + 符号链接 `zetac` +
+   `ZETA_RUNTIME_DIR` 指回构建产物所在目录 —— 不重建 LLVM 依赖，4 秒量完。
 5. `tests/unit/test_float_e2e.z` 入库 ≠ 进门禁：没有任何工具引用 `tests/unit/`（run_all 读的是
    `tests/unit-tests/`，`tools/run_all.sh:83`）。它只是 41 个同类里的第 41 个，随规则放开一起回来。
 6. 承接未动的：#61（占位/签名声明，`fn proto();` 盘据已量好）、#65（`LAST_PP` 串号）、
