@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/run_all.sh — Q4 (advice.md): one command → three baseline numbers as JSON.
-# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow]
+# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import]
 # Exit 0 if all enabled suites pass their green criteria; else 1.
 set -euo pipefail
 
@@ -17,6 +17,7 @@ SKIP_JIT=0
 SKIP_DIFF=0
 SKIP_KNOB=0
 SKIP_SWALLOW=0
+SKIP_IMPORT=0
 
 for a in "$@"; do
   case "$a" in
@@ -28,6 +29,7 @@ for a in "$@"; do
     --skip-diff) SKIP_DIFF=1 ;;
     --skip-knob) SKIP_KNOB=1 ;;
     --skip-swallow) SKIP_SWALLOW=1 ;;
+    --skip-import) SKIP_IMPORT=1 ;;
     -h|--help)
       sed -n '2,6p' "$0"
       exit 0
@@ -259,6 +261,28 @@ if [[ $SKIP_SWALLOW -eq 0 ]]; then
   rm -f "$swallow_log"
 fi
 
+# ── 8) `import` 的形状值域（批次 338）──
+# `import` 与 `use` 共用同一份 `::` 文法，且结尾 `;` 不改变形状。两翼各锁一条：
+# 等值翼（每种 :: 形状的 MIR 必须与 use 逐字节相同）+ 中立翼（带不带分号必须相同、
+# 不许截断文件）。这一步跑的是断言，不是抽样。
+import_rc=0; import_failed=0; import_checked=0
+if [[ $SKIP_IMPORT -eq 0 ]]; then
+  import_log=$(mktemp)
+  set +e
+  ZETAC="$ZETAC" "$ROOT/tools/import_form_inventory.sh" >"$import_log" 2>&1
+  import_rc=$?
+  set -e
+  import_failed=$(grep -c '  FAIL ' "$import_log" || true); import_failed=${import_failed:-0}
+  import_checked=$(grep -cE '  (ok|FAIL) ' "$import_log" || true); import_checked=${import_checked:-0}
+  if [[ $JSON_ONLY -eq 0 ]]; then
+    echo "import: ${import_checked} 条断言，FAIL ${import_failed}（rc=$import_rc）"
+  fi
+  if [[ $import_rc -ne 0 ]]; then
+    tail -30 "$import_log" >&2
+  fi
+  rm -f "$import_log"
+fi
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -279,6 +303,8 @@ doc = {
            "skipped": $SKIP_KNOB},
   "swallow": {"checked": $swallow_checked, "failed": $swallow_failed,
               "skipped": $SKIP_SWALLOW},
+  "import_form": {"checked": $import_checked, "failed": $import_failed,
+                  "skipped": $SKIP_IMPORT},
   # 只出声、不参与退出码（附 B#9 的护栏：判定看运行期 stdout，告警不改判定）
   "compile_diagnostics": {
     "official_files_with_warnings": $official_diag_files,
@@ -316,6 +342,7 @@ if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 1 ]]; then rc=1; fi
 if [[ $SKIP_KNOB -eq 0 && $knob_rc -ne 0 ]]; then rc=1; fi
 # swallow: 判据同上，跑的是 tools/junk_swallow_inventory.sh 的夹具段（不含全语料计数）。
 if [[ $SKIP_SWALLOW -eq 0 && $swallow_rc -ne 0 ]]; then rc=1; fi
+if [[ $SKIP_IMPORT -eq 0 && $import_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 2 ]]; then
   echo "[G.3] 差分有 $diff_bad 条坏用例（参考侧跑不出真值）——不参与判定，但必须修用例" >&2
 fi

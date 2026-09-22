@@ -3,10 +3,11 @@
 
 use super::expr::{parse_condition, parse_full_expr, parse_match_expr};
 use super::parser::{
-    kw_boundary, parse_ident, parse_type, skip_ws_and_comments, skip_ws_and_comments0, ws,
+    kw_boundary, parse_ident, parse_path, parse_type, skip_ws_and_comments, skip_ws_and_comments0,
+    ws,
 };
 use super::pattern::parse_pattern;
-use super::top_level::{parse_class, parse_const, parse_func, parse_type_alias};
+use super::top_level::{parse_class, parse_const, parse_func, parse_type_alias, parse_use_targets};
 use crate::frontend::ast::AstNode;
 use nom::IResult;
 use nom::Parser;
@@ -905,6 +906,43 @@ fn parse_python_import(input: &str) -> IResult<&str, AstNode> {
     // `a.b.c [as d] [, e.f ...]`
     let mut cur = input;
     loop {
+        // A `::` target is the Rust spelling and means what `use` means: the
+        // LAST segment is what gets bound (`import std::memory;` gives
+        // `memory`). Before this branch existed the parser stopped after `std`,
+        // so the head was imported and the tail became a no-effect statement.
+        if let Ok((after_path, path)) = ws(parse_path).parse(cur) {
+            if path.len() > 1 {
+                // Commit only when `use`'s tail grammar can't be the wrong read of
+                // this text. The reject list is measured shape by shape (see the
+                // tail-family probe in roadmap 批次 338): `as` is the one shape the
+                // shared grammar has no rule for (an alias needs a field
+                // `AstNode::Use` does not have) and `=`/`;` are continuations that
+                // the top-level loop cannot start an item with. Committing any of
+                // them strands the tail, and a top-level item no rule accepts stops
+                // the caller's `many0` — so the REST OF THE FILE is dropped.
+                // Measured on `import std::memory as m;`: 0 diagnostics and 171
+                // lines of MIR before this branch (mis-bound to `std`, but the file
+                // survived) vs W1002 and 39 lines when the `as` was committed.
+                // Falling back keeps those shapes exactly where batch 337 left them.
+                if let Ok((rest, nodes)) = parse_use_targets(path, after_path) {
+                    let tail = rest.trim_start_matches([' ', '\t', '\r']);
+                    let rejected = kw_boundary(tail, "as").is_some()
+                        || tail.starts_with('=')
+                        || tail.starts_with(';');
+                    if !rejected {
+                        out.extend(nodes);
+                        match tail.strip_prefix(',') {
+                            Some(t) => cur = t,
+                            None => {
+                                cur = tail;
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+        }
         let (after_name, module) = match ws(parse_dotted_name).parse(cur) {
             Ok(v) => v,
             Err(_) => break,
@@ -946,6 +984,12 @@ fn parse_python_import(input: &str) -> IResult<&str, AstNode> {
             break;
         }
     }
+    // The `;` belongs to THIS statement. Left in the input it becomes the next
+    // top-level item, and since nothing parses a bare `;` the caller's `many0`
+    // stops there and drops the rest of the file — measured on
+    // `import distributed;` in integration_test_program.z: 19 lines, all of
+    // `fn main`, went missing while the file still counted as compiled.
+    let (cur, _) = opt(ws(tag(";"))).parse(cur)?;
     Ok((cur, AstNode::Block { body: out }))
 }
 

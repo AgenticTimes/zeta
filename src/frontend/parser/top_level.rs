@@ -132,6 +132,13 @@ fn parse_kw_param_name(input: &str) -> IResult<&str, String> {
 fn parse_use_statement(input: &str) -> IResult<&str, Vec<AstNode>> {
     let (input, _) = ws(tag("use")).parse(input)?;
     let (input, path) = ws(parse_path).parse(input)?;
+    parse_use_targets(path, input)
+}
+
+/// The tail of a `::` import path: an optional `::{a, b}` group and an optional
+/// `;`. `import` shares this (see `stmt::parse_python_import`) so the two
+/// spellings of a `::` path cannot drift apart.
+pub(crate) fn parse_use_targets(path: Vec<String>, input: &str) -> IResult<&str, Vec<AstNode>> {
     let (input, group_opt) = opt(preceded(
         ws(tag("::")),
         delimited(
