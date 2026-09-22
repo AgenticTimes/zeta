@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/run_all.sh — Q4 (advice.md): one command → three baseline numbers as JSON.
-# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import] [--skip-empty]
+# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import] [--skip-empty] [--skip-clean]
 # Exit 0 if all enabled suites pass their green criteria; else 1.
 set -euo pipefail
 
@@ -19,6 +19,7 @@ SKIP_KNOB=0
 SKIP_SWALLOW=0
 SKIP_IMPORT=0
 SKIP_EMPTY=0
+SKIP_CLEAN=0
 
 for a in "$@"; do
   case "$a" in
@@ -32,6 +33,7 @@ for a in "$@"; do
     --skip-swallow) SKIP_SWALLOW=1 ;;
     --skip-import) SKIP_IMPORT=1 ;;
     --skip-empty) SKIP_EMPTY=1 ;;
+    --skip-clean) SKIP_CLEAN=1 ;;
     -h|--help)
       sed -n '2,6p' "$0"
       exit 0
@@ -308,6 +310,73 @@ if [[ $SKIP_EMPTY -eq 0 ]]; then
   rm -f "$empty_log"
 fi
 
+# ── 10) 干净检出可编译（批次 342）──
+# 判的是"克隆 HEAD 就能编"，不是"我这台机器能编"：批次 340 的 `include_str!` 指向未入库
+# 文件时，主树（带着那个未跟踪文件）前九步全绿，而干净检出 rc=101 —— 主树永远看不见。
+# 用 detached worktree、不用临时目录：主树常有未提交改动，本步骤必须一个字都不碰它。
+# target 共享主树（实测冷 4 s / 热 1 s；主树缓存没被改脏，改前改后 check 都是 0.1 s 级）。
+# 选址必须在仓库外：PY-A 从被编译文件往上找 6 级祖先（340 OPEN 2），放在 $ROOT 之下会让
+# "干净检出"借到主树的 .z，读数就不再是干净检出。
+# 破坏性命令为零：只 checkout，不 clean；同名但未登记的目录不删、不改、也不测。
+clean_rc=0; clean_secs=0; clean_rev=""
+if [[ $SKIP_CLEAN -eq 0 ]]; then
+  WT="${ZETA_CLEAN_WT:-$HOME/zeta-clean-checkout}"
+  CT="${ZETA_CLEAN_TARGET:-$ROOT/target}"
+  REF="${ZETA_CLEAN_REF:-HEAD}"
+  clean_log=$(mktemp)
+  case "$WT" in
+    /*) ;;
+    *) echo "clean_checkout: ZETA_CLEAN_WT 必须是绝对路径（当前：$WT）" >&2; clean_rc=99 ;;
+  esac
+  if [[ $clean_rc -eq 0 ]]; then
+    case "$WT/" in
+      "$ROOT"/*) echo "clean_checkout: $WT 在仓库内，检出读数会借用主树文件" >&2; clean_rc=98 ;;
+    esac
+  fi
+  # 提交必须在**主树**里解析：`git -C "$WT" checkout HEAD` 解的是工作树自己的 HEAD，
+  # 复用时它会原地不动，于是"干净检出"永远在重复测上一次那个提交（实测判绿而 rev 陈旧）。
+  if [[ $clean_rc -eq 0 ]]; then
+    clean_rev=$(git -C "$ROOT" rev-parse --verify --quiet "${REF}^{commit}") || clean_rev=""
+    if [[ -z "$clean_rev" ]]; then
+      echo "clean_checkout: $REF 在 $ROOT 里解不出提交，读数无效" >&2; clean_rc=93
+    fi
+  fi
+  if [[ $clean_rc -eq 0 && ! -e "$WT" ]]; then
+    git worktree add --detach "$WT" "$clean_rev" >"$clean_log" 2>&1 || clean_rc=97
+  fi
+  # 复用的前提：路径登记在本仓的 worktree 表里（git 自己说的算）。
+  if [[ $clean_rc -eq 0 ]] && ! git worktree list --porcelain | grep -qx "worktree $WT"; then
+    echo "clean_checkout: $WT 存在但未登记为本仓 worktree —— 拒绝复用（换 ZETA_CLEAN_WT 或 --skip-clean）" >&2
+    clean_rc=96
+  fi
+  if [[ $clean_rc -eq 0 ]]; then
+    git -C "$WT" checkout --detach "$clean_rev" >"$clean_log" 2>&1 || clean_rc=95
+  fi
+  if [[ $clean_rc -eq 0 && -n "$(git -C "$WT" status --porcelain)" ]]; then
+    echo "clean_checkout: $WT 检出 ${clean_rev:0:8} 后仍不干净，读数无效（本步骤只 checkout，不 clean）" >&2
+    clean_rc=94
+  fi
+  if [[ $clean_rc -eq 0 ]]; then
+    t0=$(date +%s)
+    set +e
+    ( cd "$WT" && CARGO_TARGET_DIR="$CT" cargo check --offline --locked -q ) >"$clean_log" 2>&1
+    clean_rc=$?
+    set -e
+    clean_secs=$(( $(date +%s) - t0 ))
+  fi
+  if [[ $JSON_ONLY -eq 0 ]]; then
+    echo "clean_checkout: rc=$clean_rc（${clean_secs}s，rev=${clean_rev:0:8}，worktree=$WT）"
+  fi
+  if [[ $clean_rc -ne 0 ]]; then
+    # cargo 的根因在**开头**（后面全是它引发的 E0282 级联），所以这里先头后尾，不像
+    # 其它步骤只 tail：实测只 tail 时看得见 4 条 type annotations needed、看不见那句
+    # 真正没读到的文件。
+    head -20 "$clean_log" >&2
+    tail -5 "$clean_log" >&2
+  fi
+  rm -f "$clean_log"
+fi
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -332,6 +401,8 @@ doc = {
                   "skipped": $SKIP_IMPORT},
   "empty_stmt": {"checked": $empty_checked, "failed": $empty_failed,
                  "skipped": $SKIP_EMPTY},
+  "clean_checkout": {"rc": $clean_rc, "secs": $clean_secs, "rev": "${clean_rev:0:8}",
+                     "skipped": $SKIP_CLEAN},
   # 只出声、不参与退出码（附 B#9 的护栏：判定看运行期 stdout，告警不改判定）
   "compile_diagnostics": {
     "official_files_with_warnings": $official_diag_files,
@@ -372,6 +443,9 @@ if [[ $SKIP_SWALLOW -eq 0 && $swallow_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_IMPORT -eq 0 && $import_rc -ne 0 ]]; then rc=1; fi
 # empty_stmt: 判据在 tools/empty_stmt_inventory.sh 内部（四翼断言），这里只认退出码。
 if [[ $SKIP_EMPTY -eq 0 && $empty_rc -ne 0 ]]; then rc=1; fi
+# clean_checkout: 判据在步骤 10 内部（rc=0 才算"检出即可编译"）；93~99 是选址/登记/提交解析
+# 本身不合法，同样判红——静默跳过等于这一步不存在。
+if [[ $SKIP_CLEAN -eq 0 && $clean_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 2 ]]; then
   echo "[G.3] 差分有 $diff_bad 条坏用例（参考侧跑不出真值）——不参与判定，但必须修用例" >&2
 fi

@@ -12345,4 +12345,170 @@ JSON `ts=2026-09-22T15:14:30Z` —— 这个时间戳同时证明第一次那条
   仍然取决于有人记得跑它。
 - **#61 占位/签名声明**：`fn proto();` 的可验收盘据在 339 OPEN 1。
 
+---
+
+## 批次 342（#71 落地：门禁加第 10 步"干净检出可编译"，并第一次把重绑交给 `--rebind`）
+
+### 选题盘据
+
+1. **340 OPEN 4 的那笔债有一整个批次的暴露史**：`pylib/numpy.z` 被 `include_str!` 引用却
+   从未入库（`src/middle/pylib.rs:536`），前九步全绿了不知多少批，直到人偶然在别的目录里
+   编译才撞上 `rc=101`。九步里没有一步会读 HEAD 的检出——它读的都是**带未提交改动的工作树**。
+2. 代价先量再做（不是猜）：`git worktree add --detach` 一份 30 M 检出 + `cargo check`
+   共享主树 `target/` ⇒ 本批选题阶段在一个临时工作树（`wt342`，量完已 `git worktree remove`）
+   上实测 **冷 4.34 s / 热 0.9 s**，而主树
+   `cargo check --offline` 之后仍是 0 s 级（共享没把主树缓存改脏）。给干净检出配**独立**
+   target 则是先重建 7.0 G 依赖树 —— 那是"永远跑不进门禁"的形状，所以选址与 target 策略
+   是这道题的两个真问题，本批两个都按实测定。
+3. 341 的 `--rebind` 只在自己的反证矩阵里跑过。改 `tools/run_all.sh` 会让锚点池子里
+   4 条中的 3 条必漂 ⇒ 这是它能拿到的第一次**生产**验收，不接受"看起来能用"。
+
+### 改动
+
+| 位置 | 内容 |
+|---|---|
+| `tools/run_all.sh:3` | usage 行加 `[--skip-clean]` |
+| `:22`、`:36` | `SKIP_CLEAN=0` + flag 解析 |
+| `:313-378` | 第 10 步：选址校验 → 在主树里解析提交 → `worktree add`/`checkout --detach` → 干净性断言 → `CARGO_TARGET_DIR=$ROOT/target cargo check --offline --locked -q` |
+| `:323-325` | 三个 env 覆盖口：`ZETA_CLEAN_WT`（默认 `$HOME/zeta-clean-checkout`）、`ZETA_CLEAN_TARGET`（默认主树 `target`）、`ZETA_CLEAN_REF`（默认 `HEAD`） |
+| `:374-375` | 失败输出：`head -20` + `tail -5`（不是别处的 `tail -30`，理由见"反证抓到的缺陷"） |
+| `:404-405` | JSON 新键 `clean_checkout`：`rc` / `secs` / `rev` / `skipped` |
+| `:448` | 判据：`SKIP_CLEAN=0 && clean_rc != 0 ⇒ rc=1`（93~99 这类"没测成"同样判红） |
+
+净账：`tools/run_all.sh` **+75 / −1**，编译器、运行时、语料一行未动。
+
+### 实测①：这一步的耗时形状（同一台机器、共享 target）
+
+| 场景 | 读数 |
+|---|---|
+| 首次（target 里还没有该路径的指纹；本批选题阶段的临时工作树） | 检出 30 M + `cargo check` **4.34 s**，rc=0 |
+| 复用一个已登记的工作树（本批常态） | 整步 **≤1 s**，`secs` 记 0 |
+| `git worktree remove` 后让步骤自己重建 | 整步 **1 s**，rc=0，工作树 30 M，`status --porcelain` 0 行 |
+| 同一天主树 `cargo check --offline -q`（第 10 步刚跑完） | rc=0，**0 s**（连测两次） ⇒ 共享没把主树缓存挤脏 |
+
+### 实测②：反证矩阵（每一步都只跑第 10 步，判据行 `:448`）
+
+| # | 构造 | 期望 | 实测 |
+|---|---|---|---|
+| N1 | `ZETA_CLEAN_REF=36533049`（批次 339 的**真实历史 HEAD**：`pylib/numpy.z` 当时根本不在树里） | 判红，且根因是"文件没读到" | `clean_checkout: rc=101（1s，rev=36533049）`，首行 `error: couldn't read \`src/middle/../../pylib/numpy.z\`` → `src/middle/pylib.rs:536:13`，gate rc=1 |
+| N2 | `ZETA_CLEAN_WT=relative/wt` | 拒 | `rc=99`（必须绝对路径） |
+| N3 | `ZETA_CLEAN_WT=$ROOT/inner-wt` | 拒 | `rc=98`（在仓库内会借用主树文件） |
+| N4 | 先 `mkdir /Users/meetai/not-a-worktree-342` 并放 `sentinel.txt`，再指过去 | 拒，且**不碰**别人的目录 | `rc=96`，事后哨兵文件内容 `KEEPME` 原样、目录只多回它自己 |
+| N5 | `ZETA_CLEAN_REF=no-such-ref-342` | 拒 | `rc=93`（在主树里解不出提交） |
+| N6 | 在已登记的工作树里放一个未跟踪文件 `zz_probe_342.md` | 拒绝给读数 | `rc=94`（"检出 f4e6c7ba 后仍不干净，本步骤只 checkout，不 clean"） |
+| N7 | `--skip-clean` | 静默跳过、不参与判定 | 无步骤行输出，JSON `{"rc":0,"secs":0,"rev":"","skipped":1}`，gate rc=0 |
+| N8 | `CARGO_HOME=/tmp/emptych342`（干净 runner 的模拟） | 必须**响亮**地红在环境上 | `rc=101`：`error: no matching package named \`argon2\` found … you're using offline mode (--offline)` |
+| 复位 | 默认参数 | 绿 | `rc=0` |
+
+N1 是本批要的那一颗子弹：它不靠我改任何东西，直接把"检出不可编译"的历史事故重放进门禁。
+其余七颗是护栏本身——它们若判绿，第 10 步就成了一个假的安全感来源。
+
+### 反证抓到的缺陷（写在前，因为它是"实现先错了一版"的实录）
+
+1. **陈旧检出假绿（真缺陷，已修）**。第一版复用路径写的是 `git -C "$WT" checkout --detach HEAD`，
+   而 `HEAD` 在工作树里解的是**工作树自己的** HEAD。实测：先把工作树手动 detach 到
+   `a4c25a22`（只改 roadmap 的祖先提交，能编）再跑步骤 ⇒ 它报 `rc=0（0s）` 判绿，而工作树
+   仍停在 `a4c25a22`、主树 HEAD 是 `f4e6c7ba`。也就是说门禁会**无限重复测上一次那个提交**。
+   修法：提交一律在主树里解析（`:339` `git -C "$ROOT" rev-parse --verify --quiet "${REF}^{commit}"`），
+   `worktree add` 与 `checkout` 都用这个 sha，并把 `rev` 打进读数和 JSON（`:368`、`:404`），
+   让"测的是哪个提交"变成可抽查的字段。复测：同一陈旧状态下改后 → `rev=f4e6c7ba`、工作树被
+   移回、rc=0。
+2. **失败输出把根因挤出了窗口**。沿用别处的 `tail -30` 时，N1 的 30 行里只有 4 条
+   `error[E0282]: type annotations needed`，`grep -c "couldn't read"` = **0** —— 恰恰看不见
+   真正那句。cargo 的根因在**开头**（级联在后），所以这里改成 `head -20` + `tail -5`
+   （`:374-375`）；N1 复测首行即 `couldn't read … pylib/numpy.z`。
+
+### 锚点：`--rebind` 的第一次生产使用（341 的实战验收）
+
+改 `tools/run_all.sh` 后：`tools/run_all.sh:10` **没漂**（新增行在它下面），其余 3 条全漂 ——
+这正是"搬家"的形状。
+
+```
+$ python3 tools/check_abi_anchors.py --rebind --dry
+rebind：漂移 3 条 → 判定搬家 3 条 / 拒改 0 条
+  [搬家] tools/run_all.sh:91 → :93   [搬家] :186 → :188   [搬家] :359 → :430
+```
+
+落笔前先把三个目标行逐字读出来核对（`sed -n '93p;188p;430p'`，三行与基线文本一一对上），
+再 `--rebind`：改写 `docs/ABI.md` 3 行 / 3 个数字，基线随之刷新，复跑纯核对
+`漂移 0 / 新 0 / 消失 0`，rc=0。339 起连续四批、共 13 次的手工重绑，本批第一次交给工具；
+341 的"能判定搬家"这句话至此有了非自造样本的证据。
+
+### 操作自伤记录（读数差点用错，两条）
+
+1. **zsh 不分词**：`S="--skip-corpus --skip-official …"; bash tools/run_all.sh $S` 在 zsh 下把
+   整串当**一个**参数，九个 `--skip-*` 全部失效 ⇒ 我以为是"只跑第 10 步"的 N1、N1b 实际各跑了
+   一遍**全门禁**（约 7 分钟）。识别证据：JSON 里 `official_not_measured=0`、`import_form
+   checked=22`。后果是 N1 那条 `gate rc=1` 的读数含义被我说过头（它是"全门禁 + 第 10 步红"，
+   不是"只第 10 步红"）；本批结论已改用重跑后的那条（同节 N1 行）。往后凡"把一个变量里的多个
+   flag 传进命令"，一律 `bash -c '…'` 包一层。
+2. **管道尾 rc**：一次 `… | head -2; echo rc=$?` 读到的是 `head` 的 rc。这条纪律 341 刚写过，
+   本批又踩了一次；所幸那次读数（stale demo）只用来判定"有没有动工作树"，没进任何结论。
+
+### 边界（它不承诺什么）
+
+1. 只判 `cargo check`（Rust 侧编译），不判链接、不判运行、不判 `.z` 语料能否解析。它的靶心是
+   "文件没入库"这一类；`#42` 那 12 个缺运行时绑定的东西它看不见——那归 official 步（判据在 `:430`）。
+2. **快是借来的**：共享主树 `target/` + 本机 `~/.cargo` 缓存。N8 实测干净环境会红在依赖解析上
+   ⇒ 要接 CI（#37）必须先给 runner 缓存或去掉 `--offline`，否则红的是环境不是代码。
+3. 与主树并发构建会争 cargo 的 target 文件锁（串行等待，本批未测时长）。
+4. 它测 **HEAD**，未提交改动永不参与 —— 这是用途不是缺陷，但"我本地能编"仍要看前九步。
+5. 工作树常驻 `$HOME/zeta-clean-checkout`（30 M），会被本步骤自己 `checkout --detach` 移动，
+   不要在里面干活。选址必须在仓库外：`#70` 那条 PY-A 往上 6 级祖先搜索会让放在 `$ROOT` 之下的
+   检出"借到"主树的 `.z`（`:318-319` 记了这条约束的来源）。
+6. 零删除命令：全过程只用 `git worktree add` / `git checkout`，没有 `git clean`、没有 `rm -rf`
+   指向任何非本脚本创建的路径；同名但未登记的目录直接拒（N4）。
+
+### 门禁读数
+
+`bash tools/run_all.sh > /tmp/batch342_gate.log 2>&1`（**直读退出码**，日志末行 `GATE_RC=1`），
+JSON `ts=2026-09-22T15:43:26Z` ⇒ **rc=1**，唯一原因仍是既有判据 `tools/run_all.sh:431`
+（`py_fail != 0`）：`t231_dict_set_cast_fromkeys` / `t233_listcomp_condition_capture`。
+
+| 步 | 读数 | 与批次 341 |
+|---|---|---|
+| official | compile 194/194，compile+link 191/194 | 相同 |
+| python_style | pass 291 / fail 2 / known-fail 4 / xpass 0 | 相同 |
+| corpus | 解析通过 39/39 | 相同 |
+| jit sweep | ok=170 trap=321 fail=0 timeout=0 segv=0（总 491） | 相同 |
+| diff | match=120 judged=130 92.3% 坏用例 0 | 相同 |
+| knob | 23 断言 / FAIL 0 | 相同 |
+| swallow | 4 断言 / FAIL 0 | 相同 |
+| import_form | 22 断言 / FAIL 0 | 相同 |
+| empty_stmt | 68 断言 / FAIL 0 | 相同 |
+| **clean_checkout（新增）** | **rc=0，secs=0，rev=f4e6c7ba，skipped=0** | 本批新增 |
+| 诊断 official / python_style | 9 文件 15 行 ／ 81 文件 190 行 | 相同 |
+| 锚点核对 | rc=0，243 条 / 漂移 0 / 93 待归属 / 14 仓外 | 相同（重绑后） |
+
+前九步全同是本批应有的形状：动的只有 `tools/run_all.sh` 与由它引起的 3 个锚点数字。
+
+### OPEN（本批新增／推进）
+
+1. **只读锚点核对仍未接进门禁**（341 OPEN 1 / #37）——本批**评估后仍不做**，理由是可验收的：
+   门禁任何一次给 `run_all.sh` 加行都会让锚点先漂后修，把核对放进去会让门禁红在本批自己
+   身上（顺序死结）；而 `--rebind` 已把"修"降到 2 个命令。真正缺的是 CI 侧那一步只读核对，
+   它必须先解决 N8 的环境依赖。
+2. **`secs` 是整秒**，热路径读数就是 `0`，与"没跑"同形。目前靠 `rev` 非空 + `rc` 区分
+   （唯一"没跑"形态是 N7 的 `skipped=1`）。要不要换毫秒，本批未定。
+3. **N1 型事故只能事后拦**：本步骤判"HEAD 可编译"，但 HEAD 是**提交后**才形成的——门禁跑在
+   提交前时，它测到的是上一个提交。真正的防线是提交后再跑一次（本批纪律里已有"门禁复跑后
+   才提交"，但没有任何东西强制它）。
+4. 继承未动：#70（PY-A 祖先 6 层搜索让读数随位置变化）、#72（裸 `*.z` 仍吞 `src/`、`tools/`、
+   `docs/examples/`；`.gitignore` 的 7 个 NUL 使它不可 review）、#61、#65、#60、#63、
+   #52 尾巴（93 条待归属 / 84 种）、#42（12 个 link-only std 绑定）、`mod` 作用域函数调用打地址、
+   `import x as y;`。
+
+### 下一批默认候选
+
+- **#70 祖先 6 层搜索**：本批给它添了新场景——干净检出常驻 `$HOME`，哪天想在那里面跑语料
+  （不只是 `cargo check`），位置敏感性立刻生效；先量"搜索路径命中顺序"再定判据。
+- **#72 `.gitignore` 收窄的后半**：`*.z` 仍吞 `src/`、`tools/`、`docs/examples/` 下的手写源，
+  且那 7 个 NUL 使它无法 review（CRLF 文件，只能字节级改）。
+- **#61 占位/签名声明**：`fn proto();` 的可验收盘据在 339 OPEN 1。
+
+一句话：**门禁从九步变十步，"作者机器绿、克隆下来红"这一类第一次有了自动读数；而这一步
+自己在反证下先暴露出"会重复测上一个提交"的假绿，修完才让 `rev` 成为可抽查字段 ——
+341 的 `--rebind` 也在本批完成了第一次生产使用（3 条漂移、2 命令收口）。**
+
+
 
