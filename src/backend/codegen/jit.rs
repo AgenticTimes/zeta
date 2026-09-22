@@ -75,7 +75,7 @@ fn optimize_module<'ctx>(module: &inkwell::module::Module<'ctx>, target_machine:
     // MISCOMPILE (the -O3 pipeline turns valid IR into something that traps)
     // apart from bad generated IR. Never use it for releases — the object is
     // ~5x bigger and slower.
-    if std::env::var("ZETA_NO_OPT").is_ok() {
+    if crate::diagnostics::env_flag("ZETA_NO_OPT") {
         return;
     }
     // Run the full -O3 pipeline on the module via LLVM's new PM pass builder
@@ -301,7 +301,7 @@ pub fn finalize_and_aot<'ctx>(
     // assembly disagree with it (measured: `call i64 @"DataFrame::copy"(i64 %250)`
     // in the IR vs. a `bl DataFrame::copy` with NO argument load in the object).
     // Keep the debug switch honest end-to-end.
-    let opt_level = if std::env::var("ZETA_NO_OPT").is_ok() {
+    let opt_level = if crate::diagnostics::env_flag("ZETA_NO_OPT") {
         OptimizationLevel::None
     } else {
         OptimizationLevel::Aggressive

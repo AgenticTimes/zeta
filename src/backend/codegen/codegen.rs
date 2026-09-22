@@ -1330,7 +1330,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
             slot_read_ids: std::collections::HashSet::new(),
             struct_defs: std::collections::HashMap::new(),
             spawn_counter: 0,
-            strict_abi: std::env::var("ZETA_STRICT_ABI").is_ok(),
+            strict_abi: crate::diagnostics::env_flag("ZETA_STRICT_ABI"),
             abi_warn_count: 0,
             abi_fatal: None,
             abi_ret_warn_count: 0,
@@ -1433,7 +1433,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
             if is_generic {
                 // Store generic definition for later instantiation
-                if std::env::var("ZETA_PROBE").is_ok() {
+                if crate::diagnostics::env_flag("ZETA_PROBE") {
                     eprintln!("PROBE generic_defs: {}", fn_name);
                 }
                 self.generic_defs.insert(fn_name.clone(), mir.clone());
@@ -6481,7 +6481,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     .as_ref()
                     .and_then(|tm| tm.get(base))
                     .cloned();
-                if std::env::var("ZETA_DBG_FA").is_ok() {
+                if crate::diagnostics::env_flag("ZETA_DBG_FA") {
                     eprintln!(
                         "ZETA-DBG FA read field={} variant={:?} field_count={} base_ty={:?} keys={:?}",
                         field,
@@ -6525,14 +6525,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // If still out of range, fall back to numeric parse
                 let field_index = if field_index >= field_count as u32 {
                     let fb = field.parse::<u32>().unwrap_or(0);
-                    if std::env::var("ZETA_DBG_FA").is_ok() {
+                    if crate::diagnostics::env_flag("ZETA_DBG_FA") {
                         eprintln!("ZETA-DBG   idx {} >= count {} -> fallback {}", field_index, field_count, fb);
                     }
                     fb
                 } else {
                     field_index
                 };
-                if std::env::var("ZETA_DBG_FA").is_ok() {
+                if crate::diagnostics::env_flag("ZETA_DBG_FA") {
                     eprintln!("ZETA-DBG   final idx={}", field_index);
                 }
 

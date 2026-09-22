@@ -506,3 +506,18 @@ thread_local! {
 pub fn emit(diagnostic: Diagnostic) {
     TL_REPORTER.with(|r| r.borrow_mut().report(diagnostic));
 }
+
+/// Boolean compiler knob ("set and not spelled off").
+///
+/// Every knob used to be read as `env::var(..).is_ok()`, which makes `FOO=0`
+/// mean ON — so `FOO=0` could not disable a knob, only the absence of `FOO`
+/// could. Off-values are the usual spellings; anything else that is set means ON.
+pub fn env_flag(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        ),
+        Err(_) => false,
+    }
+}

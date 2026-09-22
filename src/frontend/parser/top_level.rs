@@ -1927,7 +1927,7 @@ fn parse_zeta_impl(input: &str) -> IResult<&str, Vec<AstNode>> {
     // C2 recovery is opt-in (`ZETA_PARSE_RECOVER=1`). Default keeps historical
     // `many0` stop-at-first-error behaviour so official/corpus floors stay green
     // while C1 line maps still apply to the leftover tail (W1002).
-    if std::env::var("ZETA_PARSE_RECOVER").is_ok() {
+    if crate::diagnostics::env_flag("ZETA_PARSE_RECOVER") {
         return parse_zeta_impl_recover(input);
     }
 
@@ -2008,7 +2008,7 @@ fn parse_zeta_impl_recover(input: &str) -> IResult<&str, Vec<AstNode>> {
                      syncing to next def/class/import/…. Near: '{}'",
                     snippet.replace('\n', "\\n")
                 );
-                if std::env::var("ZETA_STRICT_PARSE").is_ok() {
+                if crate::diagnostics::env_flag("ZETA_STRICT_PARSE") {
                     return Err(nom::Err::Failure(nom::error::Error::new(
                         input,
                         nom::error::ErrorKind::Tag,

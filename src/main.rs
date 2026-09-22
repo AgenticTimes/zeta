@@ -421,7 +421,7 @@ fn ensure_fully_parsed(
     // fail and break the 194/194 regression floor. Warning keeps the floor
     // while ending the silence. `ZETA_STRICT_PARSE=1` makes it fatal — use it
     // when measuring how much of a program actually compiles.
-    if std::env::var("ZETA_STRICT_PARSE").is_ok() {
+    if zetac::diagnostics::env_flag("ZETA_STRICT_PARSE") {
         eprintln!("error[E1002]: {msg}");
         return Err("Parse failed: unparsed input at end of file".into());
     }
@@ -460,7 +460,7 @@ fn find_runtime_obj(name: &str) -> Option<std::path::PathBuf> {
                     std::fs::canonicalize(direct).map(|p| p.display().to_string()).unwrap_or_default(),
                     dir
                 );
-                if std::env::var("ZETA_STRICT_RUNTIME_DIR").is_ok() {
+                if zetac::diagnostics::env_flag("ZETA_STRICT_RUNTIME_DIR") {
                     return Some(picked);
                 }
             }
@@ -506,7 +506,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dump_mir = args.iter().any(|a| a == "--dump-mir");
     // Q1 (advice.md): IR dump only when requested — default compiles stay quiet.
     let dump_ir = args.iter().any(|a| a == "--emit-llvm")
-        || std::env::var("ZETA_DUMP_IR").is_ok();
+        || zetac::diagnostics::env_flag("ZETA_DUMP_IR");
 
     // D3/D4: stub inventory = registry stub=1 ∪ pylib `# stub:` markers.
     if args.iter().any(|a| a == "--list-stubs") {
@@ -527,7 +527,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // B1: strict ABI matrix — also accepted as env ZETA_STRICT_ABI=1.
     let strict_abi = args.iter().any(|a| a == "--strict-abi")
-        || std::env::var("ZETA_STRICT_ABI").is_ok();
+        || zetac::diagnostics::env_flag("ZETA_STRICT_ABI");
     // B3: print unannotated (dyn) params after register.
     let report_untyped = args.iter().any(|a| a == "--report-untyped");
     // G.8a (refactor.md): print the fake-value stubs THIS program calls.

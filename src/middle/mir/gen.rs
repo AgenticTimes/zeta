@@ -318,7 +318,7 @@ impl MirGen {
 
     /// PY-A V3: names declared `nonlocal` (reads/writes route through env).
     pub fn with_nonlocal_names(mut self, names: std::collections::HashSet<String>) -> Self {
-        if std::env::var("ZETA_PROBE").is_ok() {
+        if crate::diagnostics::env_flag("ZETA_PROBE") {
             eprintln!("PROBE with_nonlocal_names: {:?}", names);
         }
         self.nonlocal_names = names;
@@ -5111,7 +5111,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         let has_init = self
                             .func_ret_types
                             .contains_key(&format!("{}__init", module.replace('.', "_")));
-                        if std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+                        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
                             eprintln!(
                                 "IMPORT lowering `{}`: user={} has_init={} user_mods={} cur={:?}",
                                 module,
@@ -5744,7 +5744,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         .map(|e| (e.symbol.as_str(), e.handle.as_deref(), e.ret.as_str()))
                 });
                 if let Some((symbol, handle, ret)) = member_call {
-                    if std::env::var("ZETA_PROBE_CALL").is_ok() {
+                    if crate::diagnostics::env_flag("ZETA_PROBE_CALL") {
                         eprintln!("PROBE hit symbol={} handle={:?} ret={}", symbol, handle, ret);
                     }
                     let mut lowered = Vec::with_capacity(args.len());
@@ -5998,7 +5998,7 @@ call, no NULL-handle dereference).",
                                 self.type_map.insert(t, Type::I64);
                                 lowered.push(t);
                             }
-                            if std::env::var("ZETA_PROBE_W").is_ok() {
+                            if crate::diagnostics::env_flag("ZETA_PROBE_W") {
                                 eprintln!(
                                     "PROBE siteA tag={} method={} ret_handle={:?} ret={:?}",
                                     tag, method, ret_handle,
@@ -6782,7 +6782,7 @@ call, no NULL-handle dereference).",
                     }
                     return id;
                 }
-                if method == "sum" && std::env::var("ZETA_PROBE").is_ok() {
+                if method == "sum" && crate::diagnostics::env_flag("ZETA_PROBE") {
                     eprintln!("PROBE sum seen, receiver_none={} args={}", receiver.is_none(), args.len());
                 }
                 if receiver.is_none() && method == "sum" && args.len() == 1 {
@@ -8573,7 +8573,7 @@ call, no NULL-handle dereference).",
                 // alias + parts names a real user module, call its function.
                 if let Some(recv) = receiver {
                     if let Some((root, parts)) = Self::flatten_module_receiver(recv) {
-                        if std::env::var("ZETA_PROBE_CALL").is_ok() {
+                        if crate::diagnostics::env_flag("ZETA_PROBE_CALL") {
                             eprintln!(
                                 "MODCALL probe: root={:?} parts={:?} method={} aliases_has_root={} user_mods={}",
                                 root,
@@ -13407,7 +13407,7 @@ call, no NULL-handle dereference).",
         let mut bound: std::collections::HashSet<String> = params.iter().cloned().collect();
         let mut free: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         Self::collect_free_vars(body, &mut bound, &mut free);
-        if std::env::var("ZETA_PROBE").is_ok() {
+        if crate::diagnostics::env_flag("ZETA_PROBE") {
             eprintln!("PROBE child nonlocal={:?} free={:?}", self.nonlocal_names, free);
         }
 
@@ -13516,7 +13516,7 @@ call, no NULL-handle dereference).",
             child.name_to_id.insert(name.clone(), slot_id);
             child.captured_vars.insert(name.clone(), name_id);
         }
-        if std::env::var("ZETA_PROBE").is_ok() {
+        if crate::diagnostics::env_flag("ZETA_PROBE") {
             eprintln!("PROBE closure {} body stmts={}", closure_name,
                 match body { AstNode::Block { body } => body.len(), _ => 1 });
         }
@@ -13549,7 +13549,7 @@ call, no NULL-handle dereference).",
             self.last_dict_pair_ty = child.last_dict_pair_ty.clone();
         }
         // Ensure the closure returns its body value.
-        if std::env::var("ZETA_PROBE").is_ok() {
+        if crate::diagnostics::env_flag("ZETA_PROBE") {
             eprintln!("PROBE closure {} final stmts={}", closure_name, child.stmts.len());
         }
         if !child

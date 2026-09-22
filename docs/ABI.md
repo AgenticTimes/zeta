@@ -615,6 +615,7 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
 
 | 旋钮 | 生效点 | 语义 |
 |---|---|---|
+| **Rust 侧全部布尔旋钮**（批次 336） | diagnostics.rs:515 `env_flag`，27 个读点收敛于此后 | 值为 `0` / `false` / `no` / `off` / 空 ⇒ **关**；其余非空值 ⇒ 开；未设置 ⇒ 关。此前 27 点全是 `env::var(… ).is_ok()`＝**存在即开**，写 `=0` 得到的是"开" |
 | `ZETA_STRICT_ABI` / `--strict-abi` | codegen.rs:1333 读入 → 字段 `strict_abi`，6976-6981 用 | §3.2 的 `abi_note` 从告警变致命（CLI 侧 main.rs:529） |
 | `ZETA_LENIENT_STUBS` | py_additions.c:3307（`py_stub_abort` 内） | 桩从 abort 退化成返回 0 |
 | `ZETA_STRICT_STUBS` | py_additions.c:3314 | ⚠️ **假旋钮**：`(void)getenv(…)`，注释自述 "env is documentary"——读了但什么都不改变 |
@@ -623,6 +624,13 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
 
 ⇒ 合同推论：**环境变量要么有行为，要么删掉。** `ZETA_STRICT_STUBS` 属"看起来存在
 开关"，下一个人设 `=1` 期望严格化时会被静默骗过（登记附 B#6）。
+
+**收敛半径的边界（批次 336 实测）**：`env_flag` 只管得到 Rust 侧。C 运行时仍有 4 个
+`getenv` 站点——py_additions.c:2937（`ZETA_PROBE`）、py_additions.c:3307 与
+unavailable_stubs.c:83（`ZETA_LENIENT_STUBS`）、py_additions.c:3314（假旋钮）——它们仍是
+"非空即开"。⇒ 同一个 `ZETA_LENIENT_STUBS=0` 在 Rust 侧读作关、在 C 侧读作开；两侧语义
+不一致这件事本身比单个错值更坏，修法是在 runtime 侧加一个与 `env_flag` 同表意的
+`zt_env_flag()`（或公共头），而不是在文档里写"注意 C 侧不一样"。已登记为 OPEN。
 
 ### 6.7 进程入口的返回值就是退出码：两种方言在这里相反
 
@@ -795,7 +803,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      12×numpy 双份 shim 提示）。
    - ⚠️ 这份读数额外撞出一个**独立缺陷**，已另登记为 **附 B#10**（不是 ABI 问题，
      但只有把 stderr 收回来才看得见 —— 这就是本项非做不可的证明）。
-   - **批次 322 顺带修掉本项自己的一个取证缺陷**（`tools/run_all.sh:178`）：写进
+   - **批次 322 顺带修掉本项自己的一个取证缺陷**（`tools/run_all.sh:180`）：写进
      `zeta_baseline.json` 的 `jit.ok` 一直**不是测量值**。提取式
      `sed -E 's/.*ok=([0-9]+).*/\1/'` 的前缀 `.*` 是贪婪的，而 sweep 那行末尾还带
      阈值（`…，最小 ok=163`）⇒ 它跳过真读数、抓到阈值。实测同一行：贪婪式给 163、
@@ -940,11 +948,11 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
    一个还没绑定的方法，就报成"编译器不支持这段语法"，而这批语料（self-host 编译器）离可运行
    还差整个 std 表面。⇒ 门禁改为分两段量：
    - `src/main.rs:535` + `:824` 新增 `--no-link`（出 `.o` 即止）；
-   - `tools/run_all.sh:83` 只在"整链失败"时补跑一次 `--no-link` 做归因，
+   - `tools/run_all.sh:85` 只在"整链失败"时补跑一次 `--no-link` 做归因，
      日志两行：`official: compile N/194, compile+link M/194` 与逐文件的
      `### <name> — 缺运行时绑定: <符号名…>`（明细 `$OFFICIAL_LINK_DIAG`，默认
      `/tmp/zeta_official_link.txt`）；JSON 加 `official.compile` 字段。
-   - **判据（`tools/run_all.sh:252`）从 `pass==total` 改为 `compile==total`**，
+   - **判据（`tools/run_all.sh:279`）从 `pass==total` 改为 `compile==total`**，
      compile+link 与缺绑定清单照样打印 ⇒ 不是"把门禁绿过去"：该缺口从"一个红色计数"
      变成"指名到符号的登记表"，且真实编译失败仍然致命。本批读数：**compile 194/194、
      compile+link 193/194**。

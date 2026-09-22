@@ -181,7 +181,7 @@ impl Resolver {
     }
 
     pub fn register(&mut self, ast: AstNode) {
-        if std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
             eprintln!(
                 "REGISTER: defs={} globals={} loaded_mods={}",
                 self.registered_func_defs.borrow().len(),
@@ -1976,7 +1976,7 @@ impl Resolver {
             })
             .collect();
         let mut out: HashMap<String, Type> = HashMap::new();
-        if std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
             eprintln!("GLOBALS probe: globals={} prefixes={:?}", globals.len(), prefixes);
         }
         fn walk(stmts: &[AstNode], globals: &std::collections::HashSet<String>,
@@ -2003,7 +2003,7 @@ impl Resolver {
                     }
                     _ => continue,
                 };
-                if name.contains("WUFU") && std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+                if name.contains("WUFU") && crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
                     if let Some(r) = rhs {
                         let d = format!("{:?}", r);
                         let head: String = d.chars().take(320).collect();
@@ -2028,7 +2028,7 @@ impl Resolver {
                 let ty = rhs.and_then(|r| {
                     infer_global_ty(r, &out, &aliases, &member_aliases, fn_rets, classes)
                 });
-                if name.contains("WUFU") && std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+                if name.contains("WUFU") && crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
                     eprintln!("INFER {}: {:?}", name, ty);
                 }
                 if let Some(t) = ty {
@@ -2098,7 +2098,7 @@ impl Resolver {
                 );
             }
         }
-        if std::env::var("ZETA_PROBE_GLOBALS").is_ok() {
+        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
             let mut keys: Vec<String> = out.keys().cloned().collect();
             keys.sort();
             eprintln!("GLOBALS out: n={} keys={:?}", out.len(), keys);

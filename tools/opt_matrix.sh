@@ -6,7 +6,8 @@
 #   tools/opt_matrix.sh                 跑 O3 与 NO_OPT 两级
 #
 # 为什么只有这两级（优化开关的真实拓扑，逐条锚定）：
-#   * 唯一的运行期开关是 `ZETA_NO_OPT`（存在性检查，值无所谓）：
+#   * 唯一的运行期开关是 `ZETA_NO_OPT`（批次 336 起：**假值拼写 `0/false/no/off/空` 视为关**，
+#     其余任何非空值仍视为开；此前是"存在即开"，`ZETA_NO_OPT=0` 反倒是不优化）：
 #       - jit.rs:24-26  —— 有值就 **跳过 `default<O3>` IR 管线**；
 #       - jit.rs:168-172 —— 同时把 TargetMachine 的代码生成级别降到 None。
 #     ⇒ 它一次动**两半**（IR 优化 + 后端 ISel），所以"NO_OPT 下对、O3 下错"只说明

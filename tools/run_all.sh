@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/run_all.sh — Q4 (advice.md): one command → three baseline numbers as JSON.
-# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff]
+# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob]
 # Exit 0 if all enabled suites pass their green criteria; else 1.
 set -euo pipefail
 
@@ -15,6 +15,7 @@ SKIP_OFFICIAL=0
 SKIP_PYTHON=0
 SKIP_JIT=0
 SKIP_DIFF=0
+SKIP_KNOB=0
 
 for a in "$@"; do
   case "$a" in
@@ -24,6 +25,7 @@ for a in "$@"; do
     --skip-python) SKIP_PYTHON=1 ;;
     --skip-jit) SKIP_JIT=1 ;;
     --skip-diff) SKIP_DIFF=1 ;;
+    --skip-knob) SKIP_KNOB=1 ;;
     -h|--help)
       sed -n '2,6p' "$0"
       exit 0
@@ -209,6 +211,29 @@ if [[ $SKIP_DIFF -eq 0 ]]; then
   rm -f "$diff_log"
 fi
 
+# ── 6) 布尔旋钮的值域断言（批次 336）──
+# 27 个 Rust 侧旋钮以前全是 `env::var(…).is_ok()`＝"存在即开"，于是 `ZETA_NO_OPT=0`、
+# `ZETA_STRICT_PARSE=0` 这类"关"的写法得到的都是"开"。判据不是"某条命令恰好没用到它"，
+# 而是**每个受影响旋钮 × 整个假值域**都要测——所以这一步跑的是断言，不是抽样。
+# 只跑 A 段（`--assert-only`，秒级）；B 段是全语料读数，不参与判定。
+knob_rc=0; knob_failed=0; knob_checked=0
+if [[ $SKIP_KNOB -eq 0 ]]; then
+  knob_log=$(mktemp)
+  set +e
+  ZETAC="$ZETAC" "$ROOT/tools/knob_probe.sh" --assert-only >"$knob_log" 2>&1
+  knob_rc=$?
+  set -e
+  knob_failed=$(grep -c '  FAIL ' "$knob_log" || true); knob_failed=${knob_failed:-0}
+  knob_checked=$(grep -cE '  (ok|FAIL|skip) ' "$knob_log" || true); knob_checked=${knob_checked:-0}
+  if [[ $JSON_ONLY -eq 0 ]]; then
+    echo "knob: ${knob_checked} 条断言，FAIL ${knob_failed}（rc=$knob_rc）"
+  fi
+  if [[ $knob_rc -ne 0 ]]; then
+    tail -30 "$knob_log" >&2
+  fi
+  rm -f "$knob_log"
+fi
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -225,6 +250,8 @@ doc = {
           "skipped": $jit_skipped},
   "diff": {"match": $diff_match, "judged": $diff_judged, "rate_pct": $diff_rate,
            "bad_case": $diff_bad, "skipped": $SKIP_DIFF},
+  "knob": {"checked": $knob_checked, "failed": $knob_failed,
+           "skipped": $SKIP_KNOB},
   # 只出声、不参与退出码（附 B#9 的护栏：判定看运行期 stdout，告警不改判定）
   "compile_diagnostics": {
     "official_files_with_warnings": $official_diag_files,
@@ -257,6 +284,9 @@ if [[ $SKIP_CORPUS -eq 0 && $corpus_total -gt 0 && $corpus_ok -ne $corpus_total 
 if [[ $SKIP_JIT -eq 0 && $jit_skipped -eq 0 && $jit_rc -ne 0 ]]; then rc=1; fi
 # diff: rc=1=一致用例回归/match 数回退（判红）；rc=2=坏用例（只喊话，见步骤 5 注释）
 if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 1 ]]; then rc=1; fi
+# knob: 判据在 tools/knob_probe.sh 的 A 段内部（假值拼写必须关、留白名单站点必须还在），
+# 这里只认它的退出码。
+if [[ $SKIP_KNOB -eq 0 && $knob_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 2 ]]; then
   echo "[G.3] 差分有 $diff_bad 条坏用例（参考侧跑不出真值）——不参与判定，但必须修用例" >&2
 fi

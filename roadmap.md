@@ -11330,7 +11330,8 @@ git show HEAD:docs/ABI.md > /tmp/abi_head.md   # HEAD=批次 334
 
 `./tools/run_all.sh > /tmp/b335/gate.log 2>&1; echo "run_all rc=$?"`（ts
 `2026-09-22T11:07:50Z`）**直读退出码 ⇒ rc=1**，唯一原因是既有判据
-`tools/run_all.sh:253`（`py_fail != 0` ⇒ rc=1）：2 条失败仍是批次 326 以来的
+`tools/run_all.sh:253`（`py_fail != 0` ⇒ rc=1；批次 336 加第 6 步后该判据移到 `:280`）：
+2 条失败仍是批次 326 以来的
 `t231_dict_set_cast_fromkeys` / `t233_listcomp_condition_capture`，**不是本批新增**。
 
 | 步 | 读数 | vs 批次 334 |
@@ -11363,4 +11364,173 @@ git show HEAD:docs/ABI.md > /tmp/abi_head.md   # HEAD=批次 334
   批次 333 那五项、#56 故意留红、批次 331 两档未实测项）。
 - 下一批默认候选：**§5 类型布局的 38 处待归属**（同一把尺子往下推，做完 ABI.md 才是整篇可核）；
   或 **#32**（短 vec 动态下标死循环的 `cap>=8` 旧判据副本）。
+
+## 批次 336（G.7b 从"有实现"推到"有读数"，并把 27 个反了的布尔旋钮收进一个实现点）
+
+### 选题过程：两个测量把"修一个形状"换成了"回答一个问题"
+
+1. 起点是 #36 / G.7 的截断清点。`tools/truncation_inventory.sh`（official 递归 198 + corpus 39 = 237 档）
+   按丢行数排序 ⇒ 9 档共 **1,019 行**没进 AST（按档分布见下一节的表）。对最大那档做逐行二分，崩点打到
+   函数体里的 `static mut counter: i64 = 0`。
+2. **在修这个形状之前先量这个形状属于谁**：`static` 在 zeta 里**根本不是关键字**——
+   `parse_stmt`（`src/frontend/parser/stmt.rs:1590`）的 21 臂 `alt` 里没有 `static`，
+   `parse_type_path`/`parse_var_type` 也没有 `"static"` 这个 `tag`；而 `name: ty = expr;`
+   本身是合法声明 ⇒ `static counter: i64 = 0` 被读成"声明叫 `static` 的东西"，
+   `static` 被丢弃、`counter` 静默绑定，**不报错也不进 AST**。`static mut …` 则因"名字前有两个
+   标识符"而整条失败。⇒ 结论：给 `static`/`static mut` 补特例只是"补一个形状"，闭合不了值域；
+   真正的缺口是**方言关键字表**没有一处声明谁是关键字（登记为 OPEN，见下）。
+
+### 读数：解析恢复能不能默认打开——现在不能，代价是量出来的
+
+G.7b 的跳过-重同步（`parse_zeta_impl_recover`，`src/frontend/parser/top_level.rs:1958`，
+由 `:1930` 的 `ZETA_PARSE_RECOVER` 选路）**代码早就在，但从没人测过它值不值默认**。
+`./tools/knob_probe.sh` 的 B 段（official 194 档逐个编译，直读退出码）：
+
+| 口径 | 关态（默认） | 开态（`ZETA_PARSE_RECOVER=1`） |
+|---|---|---|
+| rc 分布 | **191 × rc=0 / 3 × rc=1** | **185 × rc=0 / 9 × rc=1** |
+| 丢进行 AST 的行 | 1,019 行 / 9 档 | 0 档报 W1002 |
+| 0→非0（恢复引入的失败） | — | **6** |
+| 非0→0（恢复修好的） | — | **0** |
+
+那 6 档：`benchmark_simd_vs_scalar`、`integration_all_features`、`primezeta_usize_test`、
+`quantum_basic`、`selfhost`、`test_const_expression`。另 3 档双态皆红 = 既有的 link-only
+（缺运行时绑定，附 B#10 口径）。
+
+被丢的 1,019 行按档分布（`./tools/truncation_inventory.sh` 直读，W1002 的 `<file>:<line>` 是
+**截断点**不是文件末尾；最后一列只抄清点器给的那一行的原文，**除两档外未逐档定位崩点**——
+崩点归因是下一批的活，这里不装成已做过）：
+
+| 丢行数 | 档 | 截断点 | 该行原文（inventory 输出） |
+|---|---|---|---|
+| 357 | `benchmark_simd_vs_scalar.z` | `:9` | `fn get_time() -> u64 {` —— 本批唯一做过逐行二分的档，崩点是体内 `static mut counter` |
+| 230 | `minimal_compiler.z` | `:572` | `fn main() -> i64 {`（该档双态皆红 ⇒ 恢复收益不体现在 rc 上） |
+| 158 | `selfhost.z` | `:22` | `impl Parser for ZetaParser {` |
+| 85 | `quantum_basic.z` | `:73` | `fn test_shors_algorithm() -> i32 {` |
+| 62 | `advanced_patterns_test.z` | `:40` | `fn test_multiple_patterns() {` —— 崩点已在批次 326 定为 or 模式里的构造子模式（任务 #43） |
+| 58 | `integration_all_features.z` | `:46` | `fn distributed_test() {` |
+| 36 | `primezeta_usize_test.z` | `:29` | `fn test_for_loop() -> i64 {` |
+| 19 | `integration_test_program.z` | `:5` | `;`（上一行以裸分号结尾） |
+| 14 | `test_const_expression.z` | `:4` | `fn test_array() -> usize {` |
+
+**判读**：恢复把 1,019 行全部收了回来，然后把它们引用的符号变成"引用了但没定义"——6 档的失败
+形态全是链接期 `Undefined symbols`（不是编译错误）。**取证卫生**：首版我用 `grep '^error'`
+数差异，报出"0 差异"，因为这 6 档的报错行首字母是大写 `E`（`Error: "Linking failed"`）⇒
+判据错了会得出反向结论；改直读退出码后才看见 6 档回归。另：`truncation_inventory.sh` 只过滤
+W1002，所以"开态 0 处 W1002"不等于"开态没问题"，它只是 W1003 换了个名字。
+
+### 结论（G.7b-2）：默认打开的前置条件是一件事，不是六个补丁
+
+被跳过的项目现在**在 AST 里不存在** ⇒ 下游引用它的文件必然链接失败。要"默认开"，先让跳过
+不改变链接结果：**给被跳过的顶层项产出占位/签名声明**（只声明、不定义，或定义成 `--report-stubs`
+能看见的假值桩）。这条前置满足前，默认保持关，`ZETA_PARSE_RECOVER` 作为诊断用旋钮。
+本次不动代码去凑这个数——那会把"恢复"变成"造出六个更假的符号"。
+
+### 一个反了的旋钮 = 27 个：`env_flag` 闭合布尔值域
+
+顺带从 `ZETA_PARSE_RECOVER` 查它的读法，读到的是**全仓一致的语义倒置**：
+27 处旋钮读点全是 `std::env::var("ZETA_X").is_ok()` = **存在即开** ⇒ 写 `ZETA_X=0` 的人
+得到的是"开"。三条实测反例（批次改前）：
+
+| 旋钮 | 写法 | 改前实际 | 改后 |
+|---|---|---|---|
+| `ZETA_PARSE_RECOVER` | `=0` | 打出 W1003（恢复被启用） | 关（W1002） |
+| `ZETA_STRICT_PARSE` | `=0` | E1002 致命 rc=1 | rc=0 |
+| `ZETA_STRICT_ABI` | `=0` | ABI 强转升级为失败 rc=1 | rc=0 |
+
+修法是一个实现点 + 27 处原地替换（**行号不变**，`git diff --numstat` 六档全是 N/N 对称）：
+
+| 文件 | 站点 |
+|---|---|
+| `src/middle/mir/gen.rs` | 9（`:321 :5114 :5747 :6001 :6785 :8576 :13410 :13519 :13552`） |
+| `src/backend/codegen/codegen.rs` | 5（`:1333 :1436 :6484 :6528 :6535`） |
+| `src/middle/resolver/resolver.rs` | 5（`:184 :1979 :2006 :2031 :2101`） |
+| `src/main.rs` | 4（`:424 :463 :509 :530`） |
+| `src/backend/codegen/jit.rs` | 2（`:78 :304`） |
+| `src/frontend/parser/top_level.rs` | 2（`:1930 :2011`） |
+
+实现点 `src/diagnostics.rs:515`：假值拼写 = `"" / "0" / "false" / "no" / "off"`（先 `trim`
+再小写），其余非空值为开，未设置为关。**两处故意不改**（A4 点名，防止"全仓已收敛"的误读）：
+`src/diagnostics.rs:225` 的 `NO_COLOR`（外部约定就是"存在即生效"）、`src/std/env/mod.rs:104`
+的 `env::var(name).is_ok()`（那是**被编译语言**的"变量是否存在" API，不是编译器旋钮）。
+字符串旋钮（`ZETA_PACKAGES_DIR`/`ZETA_PYLIB`/`ZETA_RUNTIME_DIR`/`ZETA_EXTRA_LDFLAGS`/
+`ZETA_DUMP_PP`）与 CTFE 里的 `getenv`（`gen.rs:43`）不在值域问题里，未动。
+
+### 工具项：把"我测过一次"变成"门禁每周测"
+
+| 点 | 位置 | 内容 |
+|---|---|---|
+| 新工具 | `tools/knob_probe.sh` | **A 段 23 条断言**：假值全拼写（`0/off/OFF/" false "/no/NO/空/两空格`）+ 未设置 ⇒ 必须关，真值（`1/true/on/2`）⇒ 必须开；`ZETA_STRICT_PARSE`、`ZETA_STRICT_ABI` 各测 `=0/=1/未设置` 三档 rc；A3 夹具若造不出 coerce 告警就**显式 skip 并说明"别当已覆盖"**，不许静默通过。B 段 = 上面那张 194 档对照表，只读数不判定 |
+| 门禁第 6 步 | `tools/run_all.sh:214-235`（`--skip-knob`、JSON `knob` 键、判据 `:289`） | 只跑 A 段（秒级）。放门禁的理由：断言测的是**值域**，抽样测不出"下一个旋钮又用 `is_ok`" |
+| 负向自检 | `ZETAC=/bin/true ./tools/run_all.sh --skip-其余五步` | ⇒ `knob: 13 条断言，FAIL 10（rc=1）`，整门禁 rc=1 ⇒ 这一步**抓得住**，不是恒真判据 |
+| 契约修正 | `tools/opt_matrix.sh:9` | 原文写"唯一的运行期开关是 `ZETA_NO_OPT`（存在性检查，**值无所谓**）"——"值无所谓"正是本批修掉的缺陷 ⇒ 改为"假值拼写视为关" |
+| 文档 | `docs/ABI.md §6.6` | 表首加一行"Rust 侧全部布尔旋钮 ⇒ `diagnostics.rs:515`"；表后记下**收敛半径的边界**（见 OPEN 第 1 条） |
+
+**自伤记录（锚点核对器当场抓到）**：往 `run_all.sh` 插 31 行 ⇒ `docs/ABI.md` 的 3 个
+`run_all.sh` 锚点全部漂移，`./tools/check_abi_anchors.py` 逐条报出行号与新旧内容：
+`:83→:85`、`:178→:180`、`:252→:279`。改文档重绑后再 `--bless`。这条正是这个工具存在的理由——
+**在别的批次里，这类漂移是静默的。**
+
+### 门禁读数
+
+`./tools/run_all.sh > /tmp/b336/gate_final.log 2>&1; echo "run_all rc=$?"`（**直读退出码，不经
+管道**；ts `2026-09-22T11:46:47Z`）⇒ **rc=1**，唯一原因仍是既有判据 `tools/run_all.sh:280`
+（`py_fail != 0`）：那 2 条还是批次 326 以来的 `t231_dict_set_cast_fromkeys` /
+`t233_listcomp_condition_capture`。
+
+| 步 | 读数 | vs 批次 335 |
+|---|---|---|
+| official | compile **194/194**，compile+link 191/194（3 条 link-only：缺运行时绑定） | 相同 |
+| python_style | 290 passed / **2 failed** / 4 known-fail / 0 xpass | 相同 |
+| corpus | 39/39 | 相同 |
+| jit sweep | ok=169 trap=321 fail=0 timeout=0 segv=0（total 490，门槛 ok≥163） | 相同 |
+| diff | match=120 judged=130 rate=**92.3%** bad_case=0 | 相同 |
+| **knob（本批新增）** | **23 条断言 / FAIL 0** | 无上一格 |
+| 诊断 | official 10 文件 / 15 行；python_style 81 文件 / 190 行 | 相同 |
+
+**与批次 335 的"全同"不同义**：335 只动文档，全同是预期的负向自检；本批**动了二进制**
+（`cargo build --release` 于 19:28:53，晚于所有 `src/*.rs` 的 mtime ⇒ 门禁跑的就是本批产物），
+所以这份"五步全同"是**行为中立的证据**：27 处改读法没有改变任何一档在默认旋钮下的编译/运行/
+差分结果 —— 与"值域只在写 `=0` 时才可观测"这一判断一致。
+`./tools/check_abi_anchors.py` ⇒ **rc=0**，`漂移 0 / 新 0 / 消失 0 / 定位失败 0`；
+基线 `tools/baselines/abi_anchors.tsv` = 324 → **327 行**（锚点 240 → 243，84 种待归属不变）。
+`--numstat` 的 **7 增 4 删**逐项对得上：7 = §6.6 三个新锚（`diagnostics.rs:515`、
+`py_additions.c:2937`、`unavailable_stubs.c:83`）+ `codegen.rs:1333` 改内容 + `run_all.sh`
+三个移位重绑（`:85`/`:180`/`:279`）；4 = `codegen.rs:1333` 旧内容 + `run_all.sh` 三个旧行号。
+
+### OPEN（本批欠的、和量出来的）
+
+1. **C 侧 4 个 `getenv` 站点没收敛**：`runtime/py_additions.c:2937`（`ZETA_PROBE`）、
+   `:3307` 与 `runtime/unavailable_stubs.c:83`（`ZETA_LENIENT_STUBS`）、`py_additions.c:3314`
+   （假旋钮）仍是"非空即开"⇒ 同一个 `ZETA_LENIENT_STUBS=0` 在 Rust 侧读作关、在 C 侧读作开。
+   修法是 runtime 侧一个与 `env_flag` 同表意的 `zt_env_flag()`，不是写文档提醒。
+   本批不动的**具体**理由：`py_additions.c` 正被并发工作流改（`git status` 显示 `M`，按约只引用不改），
+   而单独改 `unavailable_stubs.c` 会让 `zeta_runtime_c.o` 变陈旧 ⇒ 门禁 `[W2003]` 喊话、
+   整批读数换成旧运行期。已写进 `docs/ABI.md §6.6`。
+2. **`static` 不是关键字 ≠ "缺 static 支持"，是"未知修饰符被静默吃掉"这一族**：
+   `static counter: i64 = 0` 不报错、不进 AST、还绑定了 `counter`。要按值域闭合，需要
+   一条"声明形态里出现非白名单修饰词 ⇒ 出声"的判据（候选实现点：`parse_let` /
+   `parse_assign` 之前），而不是给 `static` 加一个臂。#36 的姊妹项。
+3. **G.7b-2**：被跳过项的占位/签名声明（本批的落地结论，见上）。做完它，"恢复默认开"才
+   从"6 档回归"变成可评估项，#36 那 1,019 行也才有出口。
+4. **`[W1003]` 不带文件名**：`top_level.rs:2006-2009` 打的是 `warning: [W1003] :{line}: …`
+   （冒号前该是路径的位置是空的）⇒ 多文件程序里跳过了哪一档无从定位；对照 W1002 是
+   `main.rs` 的 `ensure_fully_parsed` 打的，那里手上有文件名。缺的是**管道**不是信息：
+   行号已经走 `indent.rs:33` 的 `LAST_PP` 线程局部（`set_last_preprocess` 在 `:38`）传到解析器，
+   把当前文件路径并进去（换元组第三元，或平行一个 `LAST_PP_PATH`）即可，
+   写入点与 `set_last_preprocess` 同一处。
+5. **"实现点收敛"不等于"判据收敛"**：27 个站点走同一个 `env_flag`，所以假值语义由实现点统一保证；
+   但 A 段只对**外显行为可测的 3 个旋钮**（`PARSE_RECOVER`/`STRICT_PARSE`/`STRICT_ABI`）逐值域断言，
+   其余 24 站点（`ZETA_PROBE` 6 处、`ZETA_DBG_FA` 3 处、`ZETA_NO_OPT` 2 处…）没有逐个的对外断言。
+   下一个"对外可测"的旋钮出现时应补进 A 段，别把这次的 23 条读成"27 个都测了"。
+6. 批次 335 的 OPEN 全部继承（§5+ 的 93 处待归属、隐形引用对账判据 `:\d{3,4}`、锚点核对接 CI=#37、
+   `/tmp` 下三个一次性脚本未进 `tools/`）；更早的继承项（深度 0 平铺整除 `t406`、批次 333 那五项、
+   #56 故意留红、批次 331 两档未实测）不变。
+
+### 下一批默认候选
+
+- **G.7b-2 的占位声明**（OPEN 3）：修掉 6 档回归 ⇒ 恢复可默认开 ⇒ 直接接 #36 的 1,019 行，
+  是本批读数唯一指向的那一步。
+- 或 **§5 类型布局的 38 处待归属**（批次 335 队列，纯文档、可与代码批次并行）。
+- 或 **OPEN 2 的"未知修饰符出声"**：它同时是 `static`、`thread_local`、`extern` 一类方言词的入口。
 
