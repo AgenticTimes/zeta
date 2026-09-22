@@ -10224,8 +10224,8 @@ corpus 解析通过 **39/39** · jit sweep **ok=170 trap=316 fail=0 timeout=0 se
 按 321 立的规矩干活：先最小对照用例锁死判据，再动解析器。
 
 ### 改动一：解析器认 `s[a..]` / `s[..b]` / `s[..]`
-`src/frontend/parser/expr.rs:2239` 新增 `slice_sep`（`:` 与 `..` 二选一，并拒绝
-`...` 的前两字符），`src/frontend/parser/expr.rs:2257` 的起始界分支改为
+`src/frontend/parser/expr.rs:2265` 新增 `slice_sep`（`:` 与 `..` 二选一，并拒绝
+`...` 的前两字符），`src/frontend/parser/expr.rs:2283` 的起始界分支改为
 "先探分隔符：是分隔符 ⇒ 起始界缺省；否则解析起始界再要求分隔符"。
 **为什么不能在 `parse_expr` 那一侧修**：优先级链
 `parse_additive → parse_shift → parse_range → parse_unary` 里 range 比加法**更紧**，
@@ -10289,7 +10289,7 @@ corpus 解析通过 **39/39** · jit sweep **ok=170 trap=317 fail=0 timeout=0 se
 那 5 条旧行号 + 1 条历史行号改写为散文、以免留下指向别处的假锚点）。
 bless 前逐条核对了 16 条"新锚点"的文本列，确认每一行都是其正文声称的那条代码，
 复跑 rc=0（`漂移 0 / 新 0 / 消失 0`）。
-未测：`tools/perf_baseline.py --diff`（连续**五**批未跑）。
+性能基线：**本批 §OPEN 记的五批欠账已在批次 324 补跑**（补跑读数见批次 324，非本批读数）。
 
 ### OPEN
 - 任务 #36 余 11 文件 / **1,222 行**：benchmark_simd_vs_scalar 357、minimal_compiler 230、
@@ -10300,5 +10300,58 @@ bless 前逐条核对了 16 条"新锚点"的文本列，确认每一行都是�
   恢复前先跑一次 `--no-link` 看它掉进哪一类，能省一批无效改动。
 - 任务 #41（`T::static_method` + `codegen.rs:6176` 缺表达式条目时应当报错而不是崩）。
 - 任务 #38（match 结果槽恒 I64）、#40（裸 `*.z` 吞新用例）、#37、#33。
-- 性能基线已连续 319/320/321/322/323 五批未跑。
+- 性能基线已连续 319/320/321/322/323 五批未跑 → **批次 324 已补跑**（读数在那一批登记）。
+
+## 批次 324（任务 #36 第四族 —— `r#"…"#` 原始字符串：185 行，外加一次"ok 虚高"更正）
+
+### 先还的账：性能基线（连续五批未跑）
+`python3 tools/perf_baseline.py --diff`：**ir total 41,655→39,721 ms（−4.6%，逐文件中位 −14.1%）、
+aot 30,186→29,212 ms（−3.2%）**，未过 10% 回退阈值 ⇒ 批次 321~323 的解析器/MIR 改动没有
+把编译拖慢。顺带量到两件事实：该 harness 的 36 个语料文件里 **30 个在 aot 阶段 link-fail**
+（与 附 B#11 同一族缺绑定，不是性能问题），且 `ir:fail:rc1 × 36` 被 W3001 排除在 min 之外。
+
+### 选型理由
+按批次 323 立的顺序规则（动一族之前先判断它掉在"解析"还是"运行时"），选 **185 行的原始字符串族**：
+`test_suite.z` 127 + `bootstrap_validation_test.z` 58，两处的形状完全同类 ——
+**把一整段被测程序嵌进一个多行字面量**做自举测试，正是哈希形存在的理由；
+而它只要求字面量能力，不牵连缺绑定的方法面。
+
+### 改动
+`src/frontend/parser/expr.rs:364` `parse_raw_string_lit`：旧版第一行是
+`alt((tag("r\""), tag("r'")))`，遇 `r#` 直接失败 ⇒ 整条 `fn` 连文件余部被 W1002 丢掉。
+改成先吃 `r`、再数 `#` 的个数：0 个 ⇒ 走旧形（`r"…"` / `r'…'`，行为一字未动）；
+≥1 个 ⇒ 要求 `"`，结束符为"一个 `"` 后跟与开头等量的 `#`"，内部不做转义（原始串的语义）。
+
+### 回归面（三条，都进用例）
+① 旧形 `r"no\esc"` / `r'sq'` 不变；② 字面量内的 `"` 不得提前结束（`r#"x"y"#` → `x"y`）；
+③ **以 `r` 开头的标识符不许被这个分支吃掉**（`rate = 5` 仍正常）—— 这是重写入口判定最容易踩的坑。
+用例 `tests/python_style/t305_raw_string_hash.z`（7 条 expect，含 `m.len()==5` 断言多行内容
+真的带换行进来了）。
+
+### 读数里的一处"过去虚高"（必须这样记，否则下批会当成回退）
+- official **compile 194/194**（硬判据不动）；`compile+link` **193→191**：新恢复的两个文件
+  进了 link-only 名单（`test_suite` 缺 `_to_string`、`bootstrap_validation_test` 缺
+  `_to_string`+`_unwrap_or_else`）。`_to_string` 在 3 个 link-only 文件里**全部出现** ⇒ 任务 #42
+  的补齐顺序上它是第一优先。
+- **jit ok 170→168**，逐文件可归因（`tools/jit_sweep.sh -v`）：掉的正是这两个文件，而它们
+  过去"JIT 跑通"的原因是 `fn main` 压根在被截断的尾巴里（`test_suite.z:128`、
+  `bootstrap_validation_test.z:59`，截断点分别是 `:4`、`:18`）⇒ 过去跑的是一段空程序。
+  现在 main 真存在、真执行，撞 `to_string` 无 JIT 绑定 ⇒ 计 trap。
+  即：**这两个数过去虚高，不是编译器回退**；trap 317→320 的另一个 +1 是新用例 t305
+  （模块级 `let` ⇒ `zeta_module_decl`/`zeta_env_set` 无 JIT 绑定，与 t304 同族）。
+- compile-diagnostics official 12→**10 文件 / 15 行**（两条 W1002 消失）·
+  corpus 39/39 · python_style **287→288** · jit total 487→488。
+- 丢行：**1,222→1,037**、截断文件 **11→9**（`tools/truncation_inventory.sh` 逐行核对）。
+- 锚点 114→**115**：`expr.rs:2239/2257` 因本次插行漂到 `:2265/:2283`（重 cite，净条数不变），
+  本批正文新增 `expr.rs:364` 一条；bless 前核对新锚点文本列，复跑 rc=0。
+
+### OPEN
+- 任务 #36 余 9 文件 / 1,037 行：benchmark_simd_vs_scalar 357（`static mut` 局部）、
+  minimal_compiler 230、selfhost 158（仍未定位）、quantum_basic 85（函数体内 `use`）、
+  advanced_patterns_test 80（`'a'..='z'` 字符范围模式）、integration_all_features 58
+  （块体闭包实参）、primezeta_usize 36（带类型标注的循环变量）、
+  integration_test_program 19（单段 `import`）、test_const_expression 14（常量表达式数组）。
+- 下一族建议按"缺绑定半径"排序再选：`static mut` 那 357 行若引用 `get_time` 一类未绑定符号，
+  恢复后只会进 link-only 名单；`'a'..='z'`（80 行）是纯解析 ⇒ 半径最小。
+- 任务 #42（12+2 个 std 方法绑定）、#41、#38、#40、#37、#33。
 

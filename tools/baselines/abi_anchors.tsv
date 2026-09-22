@@ -51,8 +51,9 @@ src/backend/codegen/codegen.rs	6960	fn note_return_slot_mismatch(&mut self, func
 src/backend/codegen/mod.rs	7	mod runtime_decls_registry;
 src/backend/codegen/mod.rs	9	mod runtime_decls_core;
 src/backend/codegen/runtime_decls_registry.rs	18	module.add_function("py_argparse_add", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
-src/frontend/parser/expr.rs	2239	fn slice_sep(input: &str) -> IResult<&str, ()> {
-src/frontend/parser/expr.rs	2257	let (input, start) = if let Ok((rest, _)) = slice_sep(input) {
+src/frontend/parser/expr.rs	364	fn parse_raw_string_lit(input: &str) -> IResult<&str, AstNode> {
+src/frontend/parser/expr.rs	2265	fn slice_sep(input: &str) -> IResult<&str, ()> {
+src/frontend/parser/expr.rs	2283	let (input, start) = if let Ok((rest, _)) = slice_sep(input) {
 src/frontend/parser/pattern.rs	22	let (input, pattern) = alt((
 src/frontend/parser/pattern.rs	46	parse_bind_pattern,
 src/frontend/parser/pattern.rs	48	parse_struct_pattern,

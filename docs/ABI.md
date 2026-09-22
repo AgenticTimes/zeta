@@ -725,6 +725,8 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
    / 该 11 文件合计 1,992 行 ⇒ 仍 88%**；`test_advanced_patterns.z` 全文 49 行现已全部进 AST。
    **批次 323 又修掉一族**（`s[i..]` 开区段下标，见下）⇒ 丢行 **1,749→1,222**、
    仍是 11 文件（minimal_compiler 单文件 757→230，截断点 `:45`→`:572`）。
+   **批次 324 再修一族**（`r#"…"#` 原始字符串，见下）⇒ 丢行 **1,222→1,037**、文件 **11→9**
+   （test_suite 127 与 bootstrap_validation_test 58 两处截断点整体消失）。
    **后果**：① 官方基线对这批文件只覆盖了程序前缀，"194/194"不能读成
    "194 个程序全部编译通过"；② 任何"某语法已支持"的结论若来自这批文件，证据无效。
    - ⚠️ **批次 320 的措辞有一处错，此处更正**：当时写"首条未解析文本集中在
@@ -739,7 +741,7 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
      |---|---|---|---|
      | `s[i..]` **开区段下标**（双边 `s[i..j]` 可解析） | ~~757~~ → **230**（批次 323 已修，见下） | minimal_compiler:401 `self.input[self.pos..].starts_with(pattern)` | 批次 322 三条最小对照用例：`s[i..j].starts_with(…)` W1002=0 ／ `s[i..].starts_with(…)` W1002=1 ／ `s[i..].len()` W1002=1。⚠️ 本行原标"`match` 作表达式"，批次 321 探针已否证（`match` 作语句同样失败），322 重隔离 ⇒ 登记为任务 #39 |
      | `static mut` 局部声明 | 357 | benchmark_simd_vs_scalar:11 | `unsafe {}` 单独喂可解析 |
-     | `r#"…"#` 原始字符串 | 127+58 | test_suite:6、bootstrap_validation_test:18 | 单喂 `let s = r#"…"#;` 触发 |
+     | ~~`r#"…"#` 原始字符串~~ | ~~127+58~~ → **0**（批次 324 已修，见下） | test_suite:6、bootstrap_validation_test:18 | 单喂 `let s = r#"…"#;` 触发 |
      | `'a'..='z'` 字符范围模式 | 80 | advanced_patterns_test:32 | 整型范围模式可解析 ⇒ 差在字符字面量 |
      | `use a::b::C;` 在函数体内 | 85 | quantum_basic:75 | 单喂触发 |
      | 带块体的闭包实参 `f(\|\| { … })` | 58 | integration_all_features:48 | 单喂触发 |
@@ -781,8 +783,8 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
      计为 trap。总观测：total 485→486、ok 仍 170、trap 315→316、segv=0，
      且 E4016 有指名诊断（非静默）⇒ 属 G.5e"JIT 绑定三张表归一"的输入项。
    - **批次 323 关掉第三族：`s[i..]` 开区段下标**（任务 #39）。两层：
-     ① 解析：`src/frontend/parser/expr.rs:2239` 新增 `slice_sep`（`:` 与 `..` 二选一，
-     且拒绝 `...` 的前两字符），`src/frontend/parser/expr.rs:2257` 的起始界分支改走它。
+     ① 解析：`src/frontend/parser/expr.rs:2265` 新增 `slice_sep`（`:` 与 `..` 二选一，
+     且拒绝 `...` 的前两字符），`src/frontend/parser/expr.rs:2283` 的起始界分支改走它。
      **为何不在 `parse_expr` 里修**：优先级链是
      `parse_additive → parse_shift → parse_range → parse_unary`，range 比加法**更紧**，
      所以 `parse_expr` 无法在 `..` 前停下 ⇒ 双边 `s[i..j]` 早已被 range 分支吃掉，
@@ -797,6 +799,15 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
      回归用例 `tests/python_style/t304_open_ended_slice.z`（5 条 expect，含 `Box::new` 作字段值）。
      恢复量：official 丢行 **1,749→1,222**（单文件 757→230）。python_style **286→287**，
      jit total 486→487 / trap 316→317（t304 用 `str_slice`，JIT 侧无绑定，同 t303 那族）、ok 仍 170。
+   - **批次 324 关掉第四族：`r#"…"#` 原始字符串**。`parse_raw_string_lit`
+     （`src/frontend/parser/expr.rs:364`）旧版只认 `r"…"` / `r'…'`：`alt((tag("r\""), tag("r'")))`
+     在 `r#` 处直接失败 ⇒ 整条 `fn` 连同文件余部被 W1002 丢掉。这一族的共同形状是
+     **把一整段被测程序嵌进一个多行字面量**（test_suite.z:6 与 bootstrap_validation_test.z:18
+     都是 bootstrap 自举用例），哈希形存在的理由就是这个多行场景。
+     规则按 Rust 语义实现：结束符 = 一个 `"` 后跟与开头**等量**的 `#`，内部不做转义。
+     回归面三条已进用例（`tests/python_style/t305_raw_string_hash.z`）：旧形 `r"…"`/`r'…'`
+     不变、字面里的 `"` 不误结束、以 `r` 开头的标识符（`rate = 5`）不被该分支吃掉。
+     恢复量：丢行 **1,222→1,037**、截断文件 **11→9**；python_style **287→288**。
 11. **`official` 那一个数把"编译器接不接受这段源码"和"程序能否链上完整运行时"混成了同一件事**
    （批次 323 撞出，口径变更就地登记）：修完 `s[i..]` 后 minimal_compiler 多解析 527 行，
    official 从 194/194 掉到 **193/194** —— 但 `zetac` 本身没有报错，失败在 gcc 链接：
@@ -818,4 +829,13 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
    都指向 **`target/release/zetac`**。改了编译器而没 `cargo build --release`，门禁与 bisect
    量的就是旧二进制 —— 本批因此得到一次假"无变化"读数（bisect 仍报 45/757，直接跑新编译器已 572/230）。
    两次矛盾读数出现时，先怀疑测量（批次 321 立的规矩，此处第三次应验）。
+   - **批次 324 用同一个口径量到这一族的可预测代价，读数以"能归因"为准**：修完原始字符串后
+     `compile+link` 从 193/194 掉到 **191/194**（新登记的 `test_suite` 缺 `_to_string`、
+     `bootstrap_validation_test` 缺 `_to_string`+`_unwrap_or_else`；`_to_string` 在 3 个
+     link-only 文件里**全部出现** ⇒ 它是补齐顺序上的第一优先）。同批
+     **jit ok 170→168**，逐文件可归因（`tools/jit_sweep.sh -v`）：这两个文件此前"JIT 跑通"
+     是因为 `main` 整个被截断掉、它其实什么都没跑；现在真去执行恢复的代码 ⇒ 撞
+     `to_string` 无 JIT 绑定 ⇒ 计 trap。也就是说 ok 的下降不是回退，而是**这两个数过去虚高**；
+     trap 317→320 里剩的 +1 是新用例 t305（模块级 `let` ⇒ `zeta_module_decl`/`zeta_env_set`
+     无 JIT 绑定，与 t304 同族）。硬判据 `compile==total` 仍 194/194，`ok>=163` 仍绿。
 
