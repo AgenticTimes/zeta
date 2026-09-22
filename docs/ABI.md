@@ -62,9 +62,10 @@
 ⚠️ 该断言的适用范围 = **赋值路径**。批次 318 实测：返回路径上确有"浮点写入、整数读出"
 的同槽混型（M5 打印 `4612811918334230528`），另立新规则 **R7** 覆盖，不改动本条。
 
+> 锚点源码：src/backend/codegen/codegen.rs
 **R2 裸容器字里的 f64 出槽 = `bitcast` 回读。**
 锚点 `slot_or_sitofp`（codegen.rs:1702-1717）——同一个 helper 二选一，判据是
-`slot_read_ids`（声明 :60，`collect_slot_reads` 填充 :1574，语义注释 :1613/:1682）。
+`slot_read_ids`（声明 :60，填充 :1593，消费 :1708，语义注释 :1699-1701/:1632）。
 > **代偿标注**：`slot_read_ids` 是 F 轴（类型检查独立 pass）落地前的补丁；
 > F 落地后本条回到"按静态类型判"，该字段与其收集函数一并删除。
 
@@ -124,24 +125,26 @@ slot is int`（锚点 codegen.rs:3371 调用点、:7035 实现），并在 `repo
 
 ### 3.1 zeta→zeta：签名字母表只有三个类型
 
+> 锚点源码：src/backend/codegen/codegen.rs
 **C1 参数与返回的 LLVM 类型只能是 `i64` / `f32` / `f64`。**
 锚点：参数映射 codegen.rs:1467-1474（`Some(Type::F32)`→`f32`、`Some(Type::F64)`→`f64`、
-`_`→`i64`）；返回映射 :1458-1463 + `infer_fn_return_type` :1375-1390（同样只在
+`_`→`i64`）；返回映射 :1476-1480 + `infer_fn_return_type` :1392-1405（同样只在
 f32/f64/i64 中选）。
 推论（合同级）：**struct、元组、串、容器、枚举一律以 i64 句柄/裸字传递与返回**；
 LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命中 0。
 写侧照此：struct 字面量 `runtime_malloc(fields*8)` + 字段各占 8 字节
-（:6116 注释原文 "Allocate struct on HEAP to prevent dangling pointers"、:6117、
-:6180-6181）；元组走 `StackArray` 的 `[cap|len|elems…]`、句柄 = `buf+16`（:6630-6690，
-与 §1#6 同一几何）。读侧：字段访问 = `int_to_ptr` + **整块 load**
-`struct_type(&[i64; N], false)`（:6406-6413，非 packed）+ `extract_value`（:6445 起）；
-字段写 = 地址算术 `base + idx*8` 后 `store`（:5391-5408）。
-⚠️ **另一套通用映射器不参与签名**：`type_to_llvm_type`（:7269）会把 `Type::Tuple`
-映成真 LLVM struct（:7375-7381）。改签名时只认 :1450/:1458，认它就等着 ABI 不一致。
+（:6211 注释原文 "Allocate struct on HEAP to prevent dangling pointers"、:6212-6215、
+:6275-6276）；元组走 `StackArray` 的 `[cap|len|elems…]`、句柄 = `buf+16`（:6740-6745、
+:6810-6811，与 §1#6 同一几何）。读侧：字段访问 = `int_to_ptr` + **整块 load**
+`struct_type(&[i64; N], false)`（:6501-6509，非 packed）+ `extract_value`（:6540-6543）；
+字段写 = 地址算术 `base + idx*8` 后 `store`（:5485-5506）。
+⚠️ **另一套通用映射器不参与签名**：`type_to_llvm_type`（:7418）会把 `Type::Tuple`
+映成真 LLVM struct（:7524-7530）。改签名时只认 :1467-1480，认它就等着 ABI 不一致。
 
+> 锚点源码：src/backend/codegen/codegen.rs
 **C2 返回类型有两个各自独立的来源，谁也不覆盖谁**（裁决层已于批次 318 定位，附 B#4 关闭）：
-- **定义侧**（LLVM 签名）= `infer_fn_return_type`（:1376-1388）扫 `mir.stmts`，取
-  **首条顶层 `Return`** 值在 `type_map` 里的类型，扫不到默认 `i64`（:1389）。
+- **定义侧**（LLVM 签名）= `infer_fn_return_type`（:1392-1405）扫 `mir.stmts`，取
+  **首条顶层 `Return`** 值在 `type_map` 里的类型，扫不到默认 `i64`（:1404）。
   声明的 `-> T` **完全不参与**——`Mir` 结构里根本没有 return_type 字段
   （`src/middle/mir/mod.rs`、`src/middle/mir/gen.rs` grep `return_type` **0 命中**）。
   ⚠️ **MIR 并非全平铺**：`If { then:[Return…] }` 是**嵌套 stmt，扫不到**。分支函数今天
@@ -150,10 +153,11 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
   `If{…, dest: Some(7)}` + 顶层 `Return{val:7}` + `7: F64` ⇒ `define double @h`，
   `2.5/3.5` 全对）。**`dest: None` 时没有这条合成**（`m2b.z`：`If{dest:None}` 里的
   `return x`(F64) 被跳过，签名由顶层 `return 7`(I64) 定 ⇒ `define i64 @f`）
-  ——这才是 :4520 注释"nested ones are never consulted"的确切适用面。
+  ——这才是 :4613-4614 注释"nested ones are never consulted"的确切适用面。
 - **调用侧**（怎么读返回值）= MIR 生成期写进 **call dest 槽** 的 `type_map` 条目，
   它来自 resolver 的声明。实测（`/tmp/abi8/a.z --dump-mir`）：`-> i64` ⇒ main 里
   dest 槽是 `4: I64`，而被调函数自己的 MIR 里返回值是 `1: F64` —— **两份真相同时存在**。
+> 锚点源码：外部转储（/tmp 下 `--emit-llvm` 落盘的 .ir，非仓内文件，不入锚点核对）
 ⇒ 两者**没有一致性检查**。冲突时的形状**不是截断，是同槽混型的按位重解读**：
   - `-> i64` + 无条件 `return 2.5` ⇒ `define double @f()`（`a.ir`:1068、`ret double`:1071），
     调用点 `store double %12` 后 `load i64`（`a.ir`:1091-1092）⇒ 打印
@@ -168,9 +172,10 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
   `fptosi` ⇒ `2`。据此写的"声明类型赢"是**误判**，本批更正：赢的是"首条顶层 Return 的
   推断"，与声明一致纯属巧合。
 
-**C3 补偿发生在返回语句处：`ret_sitofp` / `ret_fptosi`（:4488-4530）。**
+> 锚点源码：src/backend/codegen/codegen.rs
+**C3 补偿发生在返回语句处：`ret_sitofp` / `ret_fptosi`（:4591-4625）。**
 读的是**当前正在生成的函数自身**的 LLVM 签名
-（:4488-4497 `builder.get_insert_block().get_parent()` → `get_return_type()`），
+（:4581-4590 `builder.get_insert_block().get_parent()` → `get_return_type()`），
 **不是**"从被调方签名反查"（此处为批次 318 的更正；原表述会让人以为调用侧也走同一条链）。
 **补偿是有损的且不告警**；`abi_note` 只服务实参侧（§3.2），返回侧今天无任何诊断。
 ⇒ **G.5d 的修复靶心已明确**：让定义侧也服从声明（MIR 携带 return_type 到定义侧，
@@ -180,28 +185,30 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 
 ### 3.2 实参强转全表（`coerce_call_args`）
 
-锚点 codegen.rs:6885-7010；告警器 `abi_note` 6968-6982（stderr 最多 8 条，
-`strict_abi` 时首条即致命）。调用点：:3766、:3782（运算符名兜底）、:4317（常规调用）、
-:4474（void 调用兜底）、:4695（`DictInsert`→`map_insert`，传空 `arg_ids`）。
+> 锚点源码：src/backend/codegen/codegen.rs
+锚点 codegen.rs:6885-7010；告警器 `abi_note` :7012-7026（stderr 最多 8 条，
+`strict_abi` 时首条即致命）。调用点：:3859、:3875（运算符名兜底）、:4410（常规调用）、
+:4567（void 调用兜底）、:4788（`DictInsert`→`map_insert`，传空 `arg_ids`）。
 
+> 锚点源码：src/backend/codegen/codegen.rs
 | # | 实参 → 形参 | 发出的指令 | 丢值？ | 告警 | 判定 |
 |---|---|---|---|---|---|
-| 1 | `i<n>` → `i<m>`，n<m | `arg_zext`（:6826-6830） | 否 | 无 | **保留** |
-| 2 | `i<n>` → `i<m>`，n>m | `arg_trunc`（:6841-6844） | **是**（丢高位） | `narrow iA→iB`（:6832-6839） | **删除候选**（改诊断） |
-| 3 | 同宽整数 | 原样（:6845-6846） | 否 | 无 | 保留 |
-| 4 | int → float，且该实参来自容器裸槽 | `arg_slot_bits` **bitcast**（:6848-6862） | 否 | 无 | **保留**（与 §2 R2 对称，批次 299；判据 `slot_read_ids`） |
-| 5 | int → float，其他来源 | `arg_sitofp`（:6863-6865） | 否 | 无 | 保留，但**应告警化**（值对、静默错） |
-| 6 | float → int | `arg_fptosi`（:6875-6878） | **是**（小数；负数/OOB 为 LLVM poison） | `fptosi → iN`（:6871-6874） | **删除候选** |
-| 7 | float ↔ ptr | **不转换**，原值照推（:6881-6885） | 值不匹配照样进 `build_call` | `float↔ptr (forbidden)` | **必改**：写着 forbidden 却不拒绝 |
-| 8 | 其余一切（**含 ptr ↔ i64**） | 原样（:6886 `_ => push`） | 未知 | 无 | **删除候选**（今天的默认＝硬塞） |
-| 9 | 实参少于形参 | 补 null/零常量（:6889-6910） | 静默补空 | 无 | **删除候选**（Python 侧应报错） |
-| 10 | 实参多于形参 | `result.truncate(n_params)`（:6911-6913） | **静默丢实参** | 无 | **删除候选** |
+| 1 | `i<n>` → `i<m>`，n<m | `arg_zext`（:6919-6926） | 否 | 无 | **保留** |
+| 2 | `i<n>` → `i<m>`，n>m | `arg_trunc`（:6936-6939） | **是**（丢高位） | `narrow iA→iB`（:6927-6935） | **删除候选**（改诊断） |
+| 3 | 同宽整数 | 原样（:6940-6942） | 否 | 无 | 保留 |
+| 4 | int → float，且该实参来自容器裸槽 | `arg_slot_bits` **bitcast**（:6944-6955） | 否 | 无 | **保留**（与 §2 R2 对称，批次 299；判据 `slot_read_ids`） |
+| 5 | int → float，其他来源 | `arg_sitofp`（:6956-6959） | 否 | 无 | 保留，但**应告警化**（值对、静默错） |
+| 6 | float → int | `arg_fptosi`（:6971-6974） | **是**（小数；负数/OOB 为 LLVM poison） | `fptosi → iN`（:6965-6970） | **删除候选** |
+| 7 | float ↔ ptr | **不转换**，原值照推（:6976-6980） | 值不匹配照样进 `build_call` | `float↔ptr (forbidden)` | **必改**：写着 forbidden 却不拒绝 |
+| 8 | 其余一切（**含 ptr ↔ i64**） | 原样（:6981 `_ => push`） | 未知 | 无 | **删除候选**（今天的默认＝硬塞） |
+| 9 | 实参少于形参 | 补 null/零常量（:6984-7005） | 静默补空 | 无 | **删除候选**（Python 侧应报错） |
+| 10 | 实参多于形参 | `result.truncate(n_params)`（:7006-7007） | **静默丢实参** | 无 | **删除候选** |
 
 **判定口径**：保留＝无损且语义正确；删除候选＝G.5d 收敛时改为诊断报错。
 按"报告先行原则"（refactor.md §G 前言），**#2/#6/#7/#8/#9/#10 全部纳入 `abi_note`
 是下一步，本批零行为变更**；#4/#5 需要的是让静默的 #5 也开口，而不是删掉它。
-现行外部批评已登记在册：ARCHITECTURE-REVIEW-2026-09.md:104（"静默错值链"）、
-:149（P0#2 要求收敛强转白名单）、validate.md:149（extern 声明写 i64 而收 f64 →
+现行外部批评已登记在册：ARCHITECTURE-REVIEW-2026-09.md:104（"静默错值链"）、ARCHITECTURE-REVIEW-2026-09.md:149
+（P0#2 要求收敛强转白名单）、validate.md:151（extern 声明写 i64 而收 f64 →
 `fptosi` 截断，即 `abs(-2.5)`→nan 根因，复现 `tests/python_style/t27_builtins_fmt.z:18`）。
 
 ### 3.3 zeta→C 运行期
@@ -209,6 +216,7 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 **C4 一律默认 C 调用约定**：`set_cc` / `CallConvention` / `byval` 在 codegen.rs 命中 0，
 所以跨边界的一切都必须塞进 §3.1 的三类型字母表。
 
+> 锚点源码：runtime/py_additions.c
 **C5 registry 生成的 extern 里句柄/串/容器参数一律声明为 `i64`**，只有真收
 `double` 的才写 `f64`（@generated 产物 runtime_decls_registry.rs:18-24 起，
 源头 pylib/registry.txt；C 侧对应 `int64_t`，例 py_additions.c:1785-1819 的
@@ -216,20 +224,23 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 ⇒ **打包/拆包责任**：调用方只保证"把值塞进一个 i64"，**类型解释全在被调方**。
 每个 `W`/`F` 条目实际假设哪种表示（§1 的哪一行）由 §6（G.5c）逐条登记成表。
 
-**C6 唯一的例外是 11 个手写 runtime 函数**（`option_*` / `host_result_*`）：它们以真
-`ptr` 进出，故调用点前对**第 0 个实参**插 `inttoptr`（:4283-4291 名单 + :4303-4314），
-调用后对返回插 `ptrtoint`（:4321-4326）。
-⚠️ 两个事实要记住：`i == 0` 的限定意味着**第 2 个及以后的 ptr 形参不会被转换**，
+> 锚点源码：src/backend/codegen/codegen.rs
+**C6 唯一的例外是 10 个手写 runtime 函数**（`option_*` / `host_result_*`）：它们以真
+`ptr` 进出，故调用点前对**第 0 个实参**插 `inttoptr`（:4377-4388 名单 + :4396-4404），
+调用后对返回插 `ptrtoint`（:4414-4422）。
+⚠️ 两个事实要记住：`i == 0` 的限定意味着**第 2 个及以后的 ptr 形参不会被转换**（:4396），
 以及 —— 新增 ptr 形参的 runtime 函数请走 C5 的 i64 约定，**不要扩这份名单**。
 
-**C7 LLVM 层只有 3 处变参**：`zeta_collect_literals`（:1071-1073，注释说明"按 8 个固定
+> 锚点源码：src/backend/codegen/codegen.rs
+**C7 LLVM 层只有 3 处变参**：`zeta_collect_literals`（:1078-1080，注释说明"按 8 个固定
 形参声明，多余交给 `coerce_call_args` 补/裁" ⇒ 实际受 §3.2#9/#10 支配）、
-`printf`（:1099）、`::` 限定名 extern 兜底桩（:2492）。
+`printf`（:1106-1107）、`::` 限定名 extern 兜底桩（:2902-2906）。
 
 ### 3.4 间接调用与 Python 式形参折叠
 
 **C8 闭包 V1 不捕获环境**：合成具名函数 `__closure_N` 直调，无环境结构体
-（gen.rs:10498-10508 注释、:13150-13155）。"闭包值"就是函数地址（:13001）。
+（gen.rs:10498-10508 注释、:13150-13155 "The closure value is then the function address
+(i64)"）。
 
 **C9 `zeta_call1(fptr, a)` 恰好一个 i64 实参**：声明 codegen.rs:1069，定义
 py_additions.c:3408（把 `fptr` 强转成 `int64_t(*)(int64_t)`；**NULL → 返回 0**）。
@@ -241,12 +252,14 @@ py_additions.c:3408（把 `fptr` 强转成 `int64_t(*)(int64_t)`；**NULL → �
 
 **C10 默认值 / kwarg 在 MIR 期折叠成定长位置实参**，运行期不参与：
 注入标记 `zeta_param_default(index, value)`（parser/top_level.rs:334-355）→
-Resolver 收集 `param_defaults`（resolver.rs:613-637，kind 不匹配时 :629-636 告警）→
-gen.rs `fill` 按**声明顺序**落槽：位置实参（:8043-8049）→ 关键字（:8050-8055）→
-`**` 映射填未绑定槽（:8057-8068）→ 默认值（:8069-8078）。
+Resolver 收集 `param_defaults`（resolver.rs:613-637，kind 不匹配时 :627-634 告警）→
+> 锚点源码：src/middle/mir/gen.rs
+gen.rs `fill` 按**声明顺序**落槽：位置实参（:8231-8237）→ 关键字（:8238-8243）→
+`**` 映射填未绑定槽（:8244-8256）→ 默认值（:8257-8266）。
 C 侧 `zeta_param_default` 是**恒等 no-op**（py_additions.c:2666），存在只为让标记不成未定义符号。
-现状记录（不是愿望）：**重复绑定静默后者覆盖**（:8052 `slots[i] = Some(v)` 无检查）、
-**未知关键字变成多余位置实参**（:8053 `slots.push`）→ 再由 §3.2#10 静默裁掉；
+> 锚点源码：src/middle/mir/gen.rs
+现状记录（不是愿望）：**重复绑定静默后者覆盖**（:8240 `slots[i] = Some(v)` 无检查）、
+**未知关键字变成多余位置实参**（:8241 `slots.push`）→ 再由 §3.2#10 静默裁掉；
 只有"缺失绑定"会响（`warn_unbound` gen.rs:789-804，文案 "read 0 (Python would raise TypeError)"）。
 Python 会抛 `TypeError` 的两件事，zeta 现在都不说话 ⇒ §3.2#9/#10 的删除候选就是为它们预备的。
 
@@ -270,6 +283,7 @@ MIR 打类型 `Type::Named("PyArgNS")`（gen.rs:5488-5500）、消费端按字�
 M1–M4 在 `/tmp/abi3_*`（批次 316），M5–M7 在 `/tmp/abi8/`（批次 318，
 同目录另有 `--emit-llvm` 落盘的 `a.ir`/`b.ir`/`m2b.ir`，本表引用的 IR 行号即出自它们）。
 
+> 锚点源码：外部转储（/tmp 下 --emit-llvm 落盘的 .ir，非仓内文件，不入锚点核对）
 | # | 探针 | 结果 | 结论 |
 |---|---|---|---|
 | M1 | `struct Pair{a,b}` + `fn make_pair(x,y) -> Pair` + `fn take(p: Pair)` + 交错构造两个 Pair 后回读 | `42 / 99 / 4299 / 7 / 8 / 42` 全对 | struct 返回 = i64 句柄、**无别名污染**，C1 成立 |
@@ -278,7 +292,7 @@ M1–M4 在 `/tmp/abi3_*`（批次 316），M5–M7 在 `/tmp/abi8/`（批次 31
 | M5 | `-> i64`，函数体**只有一条** `return 2.5`（`/tmp/abi8/a.z`） | 打印 **`4612811918334230528`**，rc=0，零诊断（319 起出声） | **两源冲突的真实形状 = 按位重解读，不是截断**：定义侧 `define double @f()`（`a.ir`:1068、`ret double 2.5`:1071），调用侧按声明读同一槽（`store double %12`:1091 → `load i64`:1092 → `println_i64`:1099）。那个整数就是 2.5 的 IEEE-754 位模式。⇒ 违 **§2 R7**（并暴露 R1"反向不存在"的断言对返回路径不成立） |
 | M6 | `-> f64`，函数体只有一条 `return 7`（`/tmp/abi8/b.z`） | 打印 `0.000000` | M5 的对称方向：`define i64 @g()`（`b.ir`:1070）而调用点 `load double`（:1092-1094）⇒ 整数 7 的位模式是非规格化 double。**这是 R1 的直接违例**（整数入浮点槽必须 `sitofp`，此处按位保留）；M5/M6 合起来 ⇒ 声明与实现不一致时**两个方向都静默** |
 | M7 | `-> i64`，`if x > 2.0: return x`（**无 else**）后接顶层 `return 7`（`/tmp/abi8/m2b.z`） | `r = 2`；IR 里是 `define i64 @f()` + `%ret_fptosi = fptosi double %6 to i64`（`m2b.ir`:1066、:1082-1083） | **这才是 M2 当年看到的"截断"**：`If{dest:None}` 里的 F64 返回对扫描不可见，签名由顶层 `return 7` 定成 i64，嵌套返回被 C3 补偿掉。与 M5 对照即可证明**"声明"从未参与定签名** |
-| M4 | capybara COMPILER_BUGS #4 的复现：`fn get_pair() -> (i64, i64): return (42, 99)` + `let (a, b) = get_pair()` | `42 / 99`，rc=0 | **该 bug 今天不再复现**；其"返回局部指针"根因假设（COMPILER_BUGS.md:39、NOTES.md:25-28）被 M1/M4 证伪 —— 写侧本就 heap 分配（:6116、RELEASE_NOTES_v1.0.19.zeta:19）。"garbage fields"的**现行**来源是字段数解析失败时的 `("", 2)` 二字段兜底（:6336-6345 注释即记此事、:6380） |
+| M4 | capybara COMPILER_BUGS #4 的复现：`fn get_pair() -> (i64, i64): return (42, 99)` + `let (a, b) = get_pair()` | `42 / 99`，rc=0 | **该 bug 今天不再复现**；其"返回局部指针"根因假设（COMPILER_BUGS.md:39、NOTES.md:25-28）被 M1/M4 证伪 —— 写侧本就 heap 分配（codegen.rs:6211、RELEASE_NOTES_v1.0.19.zeta:19）。"garbage fields"的**现行**来源是字段数解析失败时的 `("", 2)` 二字段兜底（codegen.rs:6399-6404 注释即记此事、兜底点在 codegen.rs:6473-6476） |
 
 ⇒ **COMPILER_BUGS #4 应按"已不复现 + 残留风险另在"处理**，而不是继续按
 "struct/元组返回是坏的"理解这套 ABI。
@@ -296,16 +310,23 @@ M1–M4 在 `/tmp/abi3_*`（批次 316），M5–M7 在 `/tmp/abi8/`（批次 31
 锚点 resolver.rs:1887、:2639；mir/gen.rs:392、:431、:543、:550、:3308。
 构造就是两次 `replace`，**没有转义**：`__` 既是分隔符又可能出现在 member 里，
 点号也会把 `a.b` 和 `a__b` 映到同一串。判"这是不是模块限定名"目前只有
-`actual_name.contains("__")`（codegen.rs:2931）。⇒ 合同推论：**member 名含 `__`
+`actual_name.contains("__")`（codegen.rs:2931，与同一行的
+`actual_name.starts_with("zeta_")` 共用一个分支——"运行期分派名"和"模块限定名"在一条判据里混为一谈）。
+⇒ 合同推论：**member 名含 `__`
 即破坏可逆性**（无防护，登记附 B#5）。
 
-**N2 泛型单态化形是 `<base>_inst_<T1_T2…>`**：specialization.rs:27
-（`format!("{}_inst_{}", func_name, type_args.join("_"))`）+ codegen.rs
-`mangle_function_name` :1346-1356。与 N1 共用 `_` 作类型名内部字符和分隔符，同样不可逆。
+**N2 泛型单态化形是 `<base>_inst_<T1_T2…>`**：src/middle/specialization.rs:27
+（`format!("{}_inst_{}", func_name, type_args.join("_"))`）+ `mangle_function_name`
+src/backend/codegen/codegen.rs:1363-1381（`_inst` 后逐个拼 `_` 加类型短名）。
+与 N1 共用 `_` 作类型名内部字符和分隔符，同样不可逆。
 
 **N3 重载消歧形是 `<name>_<实参数>`，由 MIR 生成侧加**：gen.rs:10573、:11893
-（`format!("{}_{}", func, arg_ids.len())`，注释 :10360-10366 自述"后缀只为区分重载，
-因此读取侧必须能剥掉它"）。**读侧要靠剥后缀还原** ⇒ N3 的代价全在 §4.2 的瀑布里。
+（`format!("{}_{}", func, arg_ids.len())`）。同处注释分三段：
+加后缀的理由（src/middle/mir/gen.rs:10548-10550）、三类**不加**后缀的名字
+（`zeta_*`、含 `__`、含 `::`，src/middle/mir/gen.rs:10551-10561）、以及"读侧剥后缀会误伤
+名字自带的下划线"的现场记录（src/middle/mir/gen.rs:10562-10568：`DataFrame::reset_index`
+被剥成 `DataFrame::reset`，返回类型查不到 ⇒ 结果 typed I64 ⇒ `b.columns` 成了一次假字段读）。
+**读侧要靠剥后缀还原** ⇒ N3 的代价全在 §4.2 的瀑布里。
 
 **N4 `str_*` 方法在符号层重写成 `host_str_*`**：codegen.rs:2645-2651
 （前缀判定 + `resolve_string_method`）。这是一条**隐式命名改写**：源里写 `str_trim`，
@@ -317,63 +338,73 @@ M1–M4 在 `/tmp/abi3_*`（批次 316），M5–M7 在 `/tmp/abi8/`（批次 31
 锚点 codegen.rs:2636-2948（函数体 313 行）。ARCHITECTURE-REVIEW-2026-09.md:102
 记为"8 级"，本批逐档数出 **18 档**：
 
+> 锚点源码：src/backend/codegen/codegen.rs
 | 档 | 前提 | 尝试的名字 | 锚点 | 判性 |
 |---|---|---|---|---|
-| 1 | 名含 `::` | 精确限定名原样 | :2594-2602 | **承重墙**：注释原文要求"先试精确形，**不要**退回 mangle/裸方法名"——退回过，`a.column("code")[1]` 把一个 Vec 当 map 索引，SEGV（:2595-2599） |
-| 2 | 名含 `::` | `::`→`__` | :2603-2609 | 承重墙（N6 的双态） |
-| 3 | 名含 `::` | 裸方法名 + 实参数校验 | :2612-2618 | 事故现场：跨模块同名方法可被匹配（附 B#5′） |
-| 4 | 名含 `::` | 裸方法名 + `_N` | :2620-2623 | 同 3 |
-| 5 | — | `host_*` | :2626-2634 | N4 |
-| 6 | — | 裸名 + 实参数校验 | :2636-2647 | 承重墙 |
-| 7 | — | `name_N` | :2648-2656 | N3 的反向 |
-| 8 | `type_args` 空 | 泛型默认实例化（参数全按 i64） | :2657-2664 | 承重墙 |
-| 9 | `type_args` 非空 | `_inst_` mangle | :2665-2669 | N2 |
-| 10 | 同上 | 剥 `_<数字>` 后 monomorphize | :2671-2683 | N3 反向 |
-| 11 | 同上 | 剥尾缀再 `_inst_` | :2684-2696 | 注释点名 `oneshot::channel_0` |
-| 12 | 同上 | 只用方法名 mangle（含再剥尾缀） | :2697-2716 | 事故现场 |
-| 13 | 同上 | 限定路径 mangle + `::`→`__`（含再剥尾缀） | :2717-2741 | 事故现场 |
-| 14 | 同上 | `host_*` / 裸名 | :2742-2751 | — |
-| 15 | 汇流 | `name.<N>`（LLVM 改名） | :2753-2758 | 轴二，见 N8 |
-| 16 | 汇流 | `name_N` 再试 | :2759-2766 | — |
-| 17 | 汇流 | 剥尾缀 `_N` 试基名（**必须全数字**） | :2768-2792 | 承重墙：护栏注释原文——没有它 `to_string_f64` 曾被当成 `to_string`+后缀而静默改名（:2774-2777） |
-| 18 | 全部落空 | **就地声明 extern** | :2796-2887 | 见 N6 |
+| 1 | 名含 `::` | 精确限定名原样 | :2655-2663 | **承重墙**：注释原文要求"先试精确形，**不要**退回 mangle/裸方法名"——退回过，`a.column("code")[1]` 把一个 Vec 当 map 索引，SEGV（:2656-2660） |
+| 2 | 名含 `::` | `::`→`__` | :2664-2670 | 承重墙（N6 的双态） |
+| 3 | 名含 `::` | 裸方法名 + 实参数校验 | :2671-2679 | 事故现场：跨模块同名方法可被匹配（附 B#5′） |
+| 4 | 名含 `::` | 裸方法名 + `_N` | :2680-2685 | 同 3 |
+| 5 | — | `host_*` | :2687-2695 | N4 |
+| 6 | — | 裸名 + 实参数校验 | :2696-2708 | 承重墙 |
+| 7 | — | `name_N` | :2709-2717 | N3 的反向 |
+| 8 | `type_args` 空 | 泛型默认实例化（参数全按 i64） | :2718-2725 | 承重墙 |
+| 9 | `type_args` 非空 | `_inst_` mangle | :2727-2730 | N2 |
+| 10 | 同上 | 剥 `_<数字>` 后 monomorphize | :2731-2744 | N3 反向 |
+| 11 | 同上 | 剥尾缀再 `_inst_` | :2745-2757 | 注释点名 `oneshot::channel_0` |
+| 12 | 同上 | 只用方法名 mangle（含再剥尾缀） | :2758-2777 | 事故现场 |
+| 13 | 同上 | 限定路径 mangle + `::`→`__`（含再剥尾缀） | :2778-2802 | 事故现场 |
+| 14 | 同上 | `host_*` / 裸名 | :2803-2812 | — |
+| 15 | 汇流 | `name.<N>`（LLVM 改名） | :2814-2819 | 轴二，见 N8 |
+| 16 | 汇流 | `name_N` 再试 | :2820-2827 | — |
+| 17 | 汇流 | 剥尾缀 `_N` 试基名（**必须全数字**） | :2829-2855 | 承重墙：护栏注释原文——没有它 `to_string_f64` 曾被当成 `to_string`+后缀而静默改名（:2835-2837） |
+| 18 | 全部落空 | **就地声明 extern** | :2857-2947 | 见 N6 |
+
+**档位漂移实测（批次 335）**：这 18 行的旧锚点全部来自批次 317，实测整体偏移
+**+59…+62 行**（非恒定 ⇒ 加一个常数修不了，只能逐档重数），且档位 1-5 的旧锚点落在
+`get_or_declare_function` **函数体之外**（函数定义从 codegen.rs:2636 才开始）。
 
 **N6 瀑布的最后一档不是报错，是"猜一个签名出来"。**
-锚点 :2883-2886 —— 兜底 extern 的签名一律是 `i64(i64, i64, …)`（参数个数 = 本调用点
+锚点 codegen.rs:2944-2947 —— 兜底 extern 的签名一律是 `i64(i64, i64, …)`（参数个数 = 本调用点
 实参数，变参位 `false`）。⇒ 合同级推论：**名字没对上时编译器不会说话**，它会发出一个
 签名可能与定义不符的调用，错值再被 §3.2 的强转表静默"修好"。这就是
-ARCHITECTURE-REVIEW:104 那条"静默错值链"的上游。
+docs/ARCHITECTURE-REVIEW-2026-09.md:104 那条"静默错值链"的上游。
 推论（收敛方向）：新增解析档位＝扩大错配面积；**响亮化（G.5d）优先于新增档位**。
 
+> 锚点源码：src/backend/codegen/codegen.rs
 **N7 `::` 与 `__` 双态是并存的事实，不是待修的笔误。**
-存储侧写 `__`、调用点引用带 `::`（:2581-2582 注释原文），全仓有 4 处
-`name.replace("::", "__")`：:2217、:2440、:2489（注释）、:2724。
+存储侧写 `__`、调用点引用带 `::`（:2642-2643 注释原文）。`name.replace("::", "__")` 实测有
+**9 处**（旧文档记"4 处"是错的，且它列的第 4 个锚点其实是一行注释）：
+读侧查表 :2278、:2501、:2536、:2552、:2664，mangle 之后再拼 :2785、:2795，
+extern 声明 :2870、:2873——**9 处全部落在 codegen.rs 这一份文件里**（全仓 grep 无第 10 处）。
 但 capybara 的 bug 记录说的是**相反**的存储形：
 "gen_mirs stores functions with `::` separator"（COMPILER_BUGS.md:31），且它观察到的
-现象确实依赖顺序（:29、:33）。⇒ 本批判定：**两态都由 N5 的瀑布吸收**，
+现象确实依赖顺序（COMPILER_BUGS.md:29、COMPILER_BUGS.md:33）。⇒ 本批判定：**两态都由 N5 的瀑布吸收**，
 即"谁先被声明谁定形"；这条不是文档能修的，登记为 **G.5e 的靶心**
 （收敛成"符号名一次定型，读侧只查表"）。
 
 ### 4.3 轴二：LLVM 的 `.N` 改名与 `.set` 别名表
 
 **N8 LLVM 在同名冲突时把定义改名成 `name.N`，运行期靠 C 侧 `.set` 别名追认。**
-读侧档位 :2753-2758；别名表 runtime/aliases.inc.c —— **恰好 66 条 `.set`**
+读侧档位 codegen.rs:2814-2819；别名表 runtime/aliases.inc.c —— **恰好 66 条 `.set`**
 （本批实测计数；行 4-69），形如
 `".globl _print.13\n\t.set _print.13, _print2\n"`（aliases.inc.c:12），
-由 tools/gen_from_registry.py:290 从 pylib/runtime_aliases.txt（69 行）生成，
+由 `emit_aliases_inc`（tools/gen_from_registry.py:288-292）从 pylib/runtime_aliases.txt（69 行）生成，
 经 tokio_runtime_stub.c:356-358 `#include "aliases.inc.c"` 进入编译单元。
 
+> 锚点源码：src/main.rs
 **N9 `.N` 里的 N 不是 ABI，是"LLVM 在本 module 内第几次改名"的偶然计数。**
 ⇒ 别名表与**IR 发射顺序**是一对锁死件：src/main.rs:778-781 的注释原文——
 HashMap 迭代顺序随机 ⇒ `print.N` 冲突改名和运行期别名表"从一次运行到下一次
-在能用与不能用之间翻转"，:780 的 `all_mirs.sort_by(...)` 就是这把锁的钥匙。
+在能用与不能用之间翻转"，:782 的 `all_mirs.sort_by(...)` 就是这把锁的钥匙。
 **合同级：确定性发射序是 ABI 的一部分，不是代码风格。**
-（stub:339、:343-344 的注释是这条的现场记录：`array_new_1` → `array_new.10`、
+（runtime/tokio_runtime_stub.c:339 与 :343-344 的注释是这条的现场记录：`array_new_1` → `array_new.10`、
 `print` → `print.N` 且 N 随 arity 1-6 变动。）
 
+> 锚点源码：src/backend/codegen/codegen.rs
 **N10 两类名字豁免于 `.N` 改名路径**：`zeta_*` 运行期分派名与含 `__` 的模块限定名
-（:2861-2872 命中即直接复用已有声明）。注释列了豁免前真实产生的 4 个不可满足符号
-（`__get_price_3`/`__get_price_7`/`__get_trade_days_2`/`__OrderCost_6`）——
+（:2915-2933 命中即直接复用已有声明；豁免判据在 :2931）。注释列了豁免前真实产生的 4 个不可满足符号
+（`__get_price_3`/`__get_price_7`/`__get_trade_days_2`/`__OrderCost_6`，:2928-2930）——
 默认参数让调用点实参数与声明实参数长期不一致，arity 后缀因此是**错的**。
 
 ### 4.4 轴三：非法标识符的 `__asm__` 魔法名
@@ -384,23 +415,25 @@ HashMap 迭代顺序随机 ⇒ `print.N` 冲突改名和运行期别名表"从�
 `dispatched_member("[dynamic]str::isin")`），落到 MIR 时是 `__` 形
 （gen.rs:8901 `func: "[dynamic]str__map"`）；C 侧的实现叫 `zt_dyn_str_map`，
 靠 `__asm__("_\\[dynamic\\]str__map")` 顶这个名字（py_additions.c:967）。
-⇒ **每个动态方法都要人肉注册一个魔法名**（refactor.md:130 已把它列为承重墙），
-且已经有只造了名、没注册实现的变体（gen.rs:8797/:8647/:8666/:12315 注释里的
-`[dynamic]str__max/isna/pct_change`——链接期报 undefined 才算发现）。
+⇒ **每个动态方法都要人肉注册一个魔法名**（refactor.md 的"承重墙清单"第 130 行已把它列为承重墙；
+该文件是仓库根的活文档、未入库，因此不进锚点核对），
+且已经有只造了名、没注册实现的变体（gen.rs:8797、:8816、:8835、:8854、:8914、:12535 注释里的
+`[dynamic]str__max`、`[dynamic]i64__all`、`str__isna`、`str__pct_change`、`str__normalize`
+——链接期报 undefined 才算发现）。
 **G.5e 目标**：把"方法名 → 符号"从字符串拼接换成注册表查表，未注册即编译期报错。
 
 ### 4.5 "新增一个运行期函数要改几处"：现状仍是手工同步，且有一份生成物从未接线
 
-ARCHITECTURE-REVIEW:103 记的是"四份符号表手工同步"（①codegen 声明 ②gen.rs 分发
+docs/ARCHITECTURE-REVIEW-2026-09.md:103 记的是"四份符号表手工同步"（①codegen 声明 ②gen.rs 分发
 ③C 实现 ④`.set` 别名，另加 JIT 的 `add_global_mapping`）。本批核对现状：
 
 | 处 | 现状 | 锚点 |
 |---|---|---|
-| ① LLVM 声明 | **仍是手写**：codegen.rs 内 255 处 `add_function`（实测计数） | 例 codegen.rs:1069、1071、1078 |
+| ① LLVM 声明 | **仍是手写**：codegen.rs 内 255 处 `add_function`（实测计数） | 例 codegen.rs:1069、:1071、:1080 |
 | ①′ 生成物 | `runtime_decls_registry.rs`（294 处 `add_function`）+ `runtime_decls_core.rs`（61 处）由 `--emit`/`--emit-core` 生成，**两个入口函数从未被调用** | codegen/mod.rs:7、:9 只声明模块；`declare_registry_runtime_fns`/`declare_core_runtime_fns` callers **图内无边**（codegraph）+ grep 全仓仅定义处与一处注释（pylib.rs:685） |
 | ② gen.rs 分发 | 手工 | 例 gen.rs:8901、:9153 |
 | ③ C 实现 | 手工 | 例 py_additions.c:967、:3408 |
-| ④ `.set` 别名 | 已生成（数据 `pylib/runtime_aliases.txt`，其 :1 注释自述"Generated/**edited by hand**"） | aliases.inc.c:1-2 |
+| ④ `.set` 别名 | 已生成（数据 pylib/runtime_aliases.txt:1 的注释自述"Generated/**edited by hand**"，即"生成物同时被人手改"） | aliases.inc.c:1-2 |
 | ⑤ JIT 绑定表 | 已生成**且已接线**（批次 315 用的就是它） | jit_mappings_gen.rs + jit.rs |
 
 ⇒ 结论（推翻 review 的一半）：**"单一生成器"只完成了 ④⑤ 两条，①′ 是并行的第二份
@@ -410,12 +443,15 @@ ARCHITECTURE-REVIEW:103 记的是"四份符号表手工同步"（①codegen 声�
 **G.5e 决策项**：要么接线（①′ 取代 ①），要么删除生成物并承认声明是手写的——
 现状是最坏的一种：两份表并存、只有一份生效、且看起来已经收敛了。
 
-**幽灵符号案例更新**：review:115 举的 `py_asdict_unexpanded`（原锚 registry.txt:208）
-现已不是幽灵——条目在 :219（带 `stub=1`），C 侧有定义且**响亮失败**
+**幽灵符号案例更新**：docs/ARCHITECTURE-REVIEW-2026-09.md:115 举的 `py_asdict_unexpanded`
+原锚在 pylib/registry.txt 第 208 行——该号现已被另一条目（`filterwarnings`）占用，
+即条目向下漂了 11 行；它现在在 registry.txt:219（带 `stub=1`），所以**已不是幽灵**：
+C 侧有定义且**响亮失败**
 （`py_stub_abort`，tokio_runtime_stub.c:1278-1282）。
 但"**registry 是纯字符串、无校验**"这条仍然成立，逐条见 §6（本批下一段）。
 
 
+> 锚点源码：runtime/py_additions.c
 | 探针 / 判形点 | 它假设的表示 | 表中行 |
 |---|---|---|
 | `map_str_key`（py_additions.c:105） | str ∈ {指针, packed}，且 packed 不可解引用 | #4 #5 |
@@ -423,7 +459,7 @@ ARCHITECTURE-REVIEW:103 记的是"四份符号表手工同步"（①codegen 声�
 | `zt_dyn_vec_hdr`（:3469） | vec = 数据指针 + `base-16` 头 + 紧块判据 | #6 |
 | `zt_packed_cstr_eq`（:1603） | packed 的小端字节序 | #5 |
 | `zeta_dyn_len`（:3492） | map → vec → 文本 的读序（无标签字的最后手段） | #6 #7 #4 |
-| `zj_make` / `ZJ_*`（tokio_runtime_stub.c:2550,2560） | 16 字节 `[tag,payload]` 单元 | #8 |
+| `zj_make` / `ZJ_*`（tokio_runtime_stub.c:2560、:2550） | 16 字节 `[tag,payload]` 单元 | #8 |
 | `ZT_PROBE_LOC` 系列以 `%lld` 打句柄 | 句柄就是可原样搬运的 i64 字 | #4 #6 #7 |
 
 结论：**没有探针假设了表外的表示**；表中每一行都有至少一个探针或写侧锚点。
@@ -650,7 +686,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
 | `zt_dyn_vec_hdr`（:3469） | vec = 数据指针 + `base-16` 头 + 紧块判据 | #6 |
 | `zt_packed_cstr_eq`（:1603） | packed 的小端字节序 | #5 |
 | `zeta_dyn_len`（:3492） | map → vec → 文本 的读序（无标签字的最后手段） | #6 #7 #4 |
-| `zj_make` / `ZJ_*`（tokio_runtime_stub.c:2550,2560） | 16 字节 `[tag,payload]` 单元 | #8 |
+| `zj_make` / `ZJ_*`（tokio_runtime_stub.c:2560、:2550） | 16 字节 `[tag,payload]` 单元 | #8 |
 | `ZT_PROBE_LOC` 系列以 `%lld` 打句柄 | 句柄就是可原样搬运的 i64 字 | #4 #6 #7 |
 
 结论：**没有探针假设了表外的表示**；表中每一行都有至少一个探针或写侧锚点。
