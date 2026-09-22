@@ -9975,3 +9975,93 @@ type、1333 `strict_abi`。头部新增 ⚠️：**任何往该文件插代码�
 ### 提交
 `8ea470de`（`codegen.rs` +74 纯插入 / `docs/ABI.md` / `tools/dc_audit.sh`，
 未 push：批次 315 起未获推送授权）。
+
+## 批次 320（refactor ⑨′ 第二段 / G.5d ⑦⑧ —— 把"诊断"变成门禁读得到的东西：任务 #34 + #35）
+
+### 选型理由
+批次 319 落地的 R7 诊断有一个尴尬事实：**它进了门禁就没人能看见**。G.5d 剩下的候选里，
+①（强转 6 档补诊断）和 ⑤（探针固化进 tests/）都要以"能测量告警触发面"为前提，
+而 #32/假旋钮两项仍阻塞在并发持有的 `runtime/py_additions.c`。所以本批做**测量本身**：
+先把诊断收进来，后面每一批诊断改动才有读数。这正是批次 319 自己踩的坑
+（第一版"全量零命中"是在空集上测的，见附 B#9）。
+
+### 改动一：门禁聚合编译期诊断（任务 #34 / 关闭附 B#9）
+- `tools/run_all.sh`：official 段由 `>/dev/null 2>&1` 改成 **stderr 逐文件落盘**
+  （`/tmp/zt_out/$n.diag`）→ 带告警的文件汇总进 `$OFFICIAL_DIAG`
+  （默认 `/tmp/zeta_official_diag.txt`），并打印 `compile-diagnostics: official 13/194 …`。
+- `tests/python_style/run.sh`：聚合**必须写在 run.sh 内部、EXIT trap 之前** ——
+  `$OUTDIR` 是 `mktemp -d` 且 `run.sh:15` 有 `trap 'rm -rf'`，外部永远捞不回来。
+  这里更正批次 319 附 B#9 的一条判断：当时写"per-file `.cc` 事后翻得到"是**错的**，
+  真实情况是跑完即删，所以"不聚合"比"聚合不全"更严重。
+- 两份计数同时进 `/tmp/zeta_baseline.json` 的 `compile_diagnostics` 字段 ⇒ CI 的
+  artifact 里也拿得到（ci.yml 的 baselines job 本来就把这份 JSON 上传）。
+- **口径**：只数 `warning:` 与 `PY-A:`，**排除 `clang: warning:`**（链接器抱怨 `-no-pie`，
+  实测 194/194 全有；不排除，聚合结果 194/194 命中、真信号全被埋）。
+- **不参与退出码**：判据仍是"编译成功数 / 运行期 stdout 比对"，护栏与批次 319 记的一致
+  ⇒ 加诊断天然不动 194 与 285 的口径。
+- 输出重复问题顺手处理：python_style 失败时 `tail -20 "$py_log"` 已经会带出聚合块，
+  故 run_all 只在它通过时自己打印（两处都印是纯噪声）。
+
+### 第一份读数（此前完全不可见）
+- official：**13/194 文件、18 行** = 12×`[W1002]` + 2×`ABI coerce` + 1×其汇总
+  + 2×`PY-A: imported module` + 1×`PY-A: unknown Python module`。
+  `ABI return`（批次 319 的新诊断）**0 行** ⇒ 319 报的 0/194 这次是在**有捕获的前提下**复现的，
+  不再是空集测量。
+- python_style：**82 文件、191 行**。大头依次：31×"`errors` 的默认值 kind 装不进
+  `dyn` 参数型 ⇒ 被强转"、14×`ABI coerce in call to zeta_env_set … fptosi`、
+  33+12× pandas/numpy 双份 shim 提示、12×`ABI coerce:` 汇总。
+  ⇒ 这份清单就是 G.5d ① 的输入：**§3.2 标"删除候选"的 6 档里，今天真在响的只有
+  `ABI coerce` 那一族**，其余的候选诊断该按这个顺序补。
+
+### 改动二：锚点自动核对（任务 #35）
+`tools/check_abi_anchors.py` —— 解析 `docs/ABI.md` 里全部 `file:line`，判据三层：
+①可定位（裸名按 `git ls-files` 后缀唯一匹配；多候选时用**车轮判据**：只有
+"行数 ≥ 锚点行号"的候选算数，仍多解则报歧义并要求文档改写路径）②未越界
+③**未漂移**（锚点所指那一行的文本与 `tools/baselines/abi_anchors.tsv` 逐字比）。
+第三层才是批次 319 那类事故的直接解药：往 codegen.rs 插 74 行，锚点当场指向别的句子，
+人肉抽查才有救——脚本一跑就报"漂移 N 处 + 新 + 消失"，rc=1。
+- 支持同行续写形态（`resolver.rs:1887、:2639`）：裸 `:行号` 继承**本行**最近的路径，
+  不跨行继承（否则 IR 转储里的 `:1068` 会被绑到上一段的真路径上）。95 个锚点里
+  14 个来自续写形态，逐条人工核过绑定正确。
+- 本批顺带把文档里唯一有歧义的锚点写死：`mod.rs:7` → `codegen/mod.rs:7`
+  （38 个 `mod.rs` 候选里只有这一个能唯一判定）。
+- 负向对照（改坏基线再看能不能抓到）：把 codegen.rs:1595 的快照文本篡改成一行假话
+  + 塞一条不存在的 `src/main.rs:999` ⇒ 报 `[漂移] 1 / [消失] 1`、rc=1 ✓；
+  正常树 ⇒ 95 个可解析 / 0 定位失败 / 漂移 0，rc=0。
+- ⚠️ **未接进 CI，理由要说清**：95 个锚点里有 **23 处**落在并发工作流持有的
+  `runtime/py_additions.c`（16）与 `runtime/tokio_runtime_stub.c`（7），硬门禁会把别人的
+  批次卡成"文档问题"。接线的前提是先给脚本加"只核我持有的文件为硬判据、C 侧降级为报告项"
+  的作用域开关 —— 已登记为**任务 #37**，不在本批偷偷上一条会误伤的判据。
+- 已知边界（写进脚本头部，别当"已覆盖"）：它只回答"锚点还指着当初那行吗"，
+  不回答"那行是否仍是该规则的实现点"；符号整段搬走且原位置留同样文本的情况测不出。
+
+### 本批最大的收获是它撞出来的缺陷（附 B#10 / 任务 #36）
+`official: 194/194` 里有 **12 个用例编译成功但程序被解析器就地截断**：
+每个都带 `[W1002] … N line(s) … NOT parsed … DROPPED from the program`
+——解析器遇到第一个不认识的顶层条目就停，后面整段不进 AST。
+丢弃量合计 **1,805 行 / 这 12 个文件共 2,041 行 ⇒ 88% 的内容从未被编译**。
+最差：`minimal_compiler` 800 丢 757、`benchmark_simd_vs_scalar` 364 丢 357、
+`test_suite` 129 丢 127、`advanced_patterns_test` 100 丢 98、`selfhost` 179 丢 158。
+未解析文本集中在 `fn test_at_patterns()`（`@` 模式）、`impl X for Y`、`match` 体几族。
+⇒ ①"194/194"不能读成"194 个程序全部编译通过"；②凡以这批文件为"某语法已支持"证据的
+结论一律无效。**这就是本批非做不可的证明**：诊断看不见时，连"基线在测什么"都会读错。
+
+### 验证
+- 门禁四项在最终状态复跑（`/tmp/gate_320b.txt`，**rc=1** 为既有口径：`run_all.sh` 的绿判据
+  要求 `py_fail==0`）：official **194/194** · python_style **285 passed / 2 failed /
+  4 known-fail / 0 xpass**（failed 仍是 `t231_dict_set_cast_fromkeys`、
+  `t233_listcomp_condition_capture`）· corpus **解析通过 39/39 = 100%** ·
+  `jit sweep: ok=163 trap=322 fail=0 timeout=0 segv=0 (total 485)`
+  ⇒ 与批次 318/319 的读数逐位一致，**零基线位移**（本批不动编译器代码，改的是 harness 与工具）。
+- `tools/dc_audit.sh --diff`：101 条，无新增命中 ✓。
+- 新文件 `tools/check_abi_anchors.py`、`tools/baselines/abi_anchors.tsv` 已核
+  **不被 .gitignore 吞掉**（批次 314 的 `run_*` 教训：入库前先 `git check-ignore -v`）。
+- 结构自检：`bash -n tools/run_all.sh`、`bash -n tests/python_style/run.sh` 均通过；
+  `run.sh` 的最后一句仍是 `[ "$fail" -eq 0 ]` ⇒ 退出码语义未动。
+
+### OPEN
+- 附 B#9 关闭、#34/#35 关闭（#35 的 CI 接线留作用域开关做完再接）。
+- 新增 **任务 #36（附 B#10）**：12 个官方用例的解析器截断 —— 要么把这些构造接进 parser，
+  要么按现状拆分并在 known-fail 段立住；**不许静默删用例**（那会把缺口藏得更深）。
+- G.5d 剩余：① 强转 6 档补诊断（现在有了读数顺序）、② #33(b) 单一真源（⚠️ 改 M7 行为）、
+  ③ #32 挂死 + ④ 假旋钮（均阻塞在并发文件）、⑤ M1–M7 探针固化 t4xx、⑥ registry 核签名。
