@@ -59,6 +59,20 @@ zeta_sieve_new  crate::runtime::zeta_runtime::zeta_sieve_new
 zeta_print_i64  crate::runtime::zeta_runtime::zeta_print_i64
 zeta_println_i64  crate::runtime::zeta_runtime::zeta_println_i64
 println_i64  crate::runtime::zeta_runtime::zeta_println_i64
+# src/runtime/io.rs 里的 print 家族此前只有 println_i64 一个别名进了表，
+# `print(x)`/`println!("{}", s)` 在 MIR 里发的是 print_str / println_str / print_bool
+# （gen.rs:7810 起、:7932），JIT 一律绑不到 ⇒ E4016 填桩。批次 321 实测：修掉解析器
+# `x @ 1..=10` 的截断后，`test_advanced_patterns.z` 第一次真正执行到这些调用，
+# jit ok 从 163 掉到 162 —— 掉的那一个不是回归，是**被暴露**的缺口。
+# println_f64 / print_f64 故意不在此列：它们只有 C 侧实现，而仓里没有 build.rs
+# （批次 315 根因），Rust 侧无符号可指。
+print_i64  crate::runtime::io::print_i64
+print_bool  crate::runtime::io::print_bool
+print_str  crate::runtime::io::print_str
+println  crate::runtime::io::println
+println_bool  crate::runtime::io::println_bool
+println_str  crate::runtime::io::println_str
+flush  crate::runtime::io::flush
 vec_new  crate::runtime::vec::zeta_vec_new
 vec_push  crate::runtime::vec::zeta_vec_push
 vec_pop  crate::runtime::vec::zeta_vec_pop
