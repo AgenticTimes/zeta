@@ -1,0 +1,14 @@
+# @cat: numeric
+# @note: 取模的**动态**路径（操作数是变量，不经常量折叠）
+#@@ python
+a = 7
+b = 2
+print(a % -b)
+print((0 - 9) % 4)
+print((0 - a) % b)
+#@@ zeta
+a = 7
+b = 2
+print(a % -b)
+print((0 - 9) % 4)
+print((0 - a) % b)

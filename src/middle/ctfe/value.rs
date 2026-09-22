@@ -287,7 +287,16 @@ impl ConstValue {
                 if right == 0 {
                     Err(CtfeError::DivisionByZero)
                 } else {
-                    Ok(left % right)
+                    // Python's `%` takes the DIVISOR's sign (`-7 % 3 == 2`);
+                    // Rust's is the truncated remainder (`-1`). Must stay in
+                    // lock-step with `build_floormod_int` in codegen.rs —
+                    // literal operands land here, everything else lands there.
+                    let r = left % right;
+                    Ok(if r != 0 && ((r < 0) != (right < 0)) {
+                        r + right
+                    } else {
+                        r
+                    })
                 }
             }
             // PY-A: floor division — Python rounds toward negative infinity,

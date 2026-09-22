@@ -35,26 +35,26 @@ src/backend/codegen/codegen.rs	1333	strict_abi: std::env::var("ZETA_STRICT_ABI")
 src/backend/codegen/codegen.rs	1467	.param_indices .iter() .map(|(_, pid)| match mir.type_map.get(pid) { Some(Type::F32) => self.context.f32_type().into(), Some(Type::F64) => self.f64_type.into(),
 src/backend/codegen/codegen.rs	1595	for &id in &all_ids { let alloca = match self.current_type_map.as_ref().and_then(|tm| tm.get(&id)) { Some(Type::F32) => self.builder.build_alloca(self.context.f
 src/backend/codegen/codegen.rs	1702	fn slot_or_sitofp( &mut self, v: inkwell::values::IntValue<'ctx>, id: u32, name: &str, ) -> inkwell::values::FloatValue<'ctx> { if self.slot_read_ids.contains(&
-src/backend/codegen/codegen.rs	2594	fn get_or_declare_function( &mut self, name: &str, type_args: &[crate::middle::types::Type], args_count: usize, ) -> FunctionValue<'ctx> { // Try existing looku
-src/backend/codegen/codegen.rs	2603	let host_mapped_name = if name.starts_with("str_") { format!("host_{}", name) } else if let Some(resolved) = Self::resolve_string_method(name) { format!("host_{
-src/backend/codegen/codegen.rs	2889	if actual_name.starts_with("zeta_") || actual_name.contains("__") {
-src/backend/codegen/codegen.rs	3293	MirStmt::Assign { lhs, rhs } => { let val = self.gen_expr_safe(rhs, exprs); let alloca = *self.locals.get(lhs).unwrap(); // An INT value stored into a FLOAT slo
-src/backend/codegen/codegen.rs	3327	self.note_return_slot_mismatch(func, dest, args.len());
-src/backend/codegen/codegen.rs	3748	let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, l, r, "eq").unwrap(); self.builder.build_int_z_extend(cmp, self.i64_type, "eq_ext").unwrap()
-src/backend/codegen/codegen.rs	5606	fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
-src/backend/codegen/codegen.rs	5667	MirExpr::StringLit(s) => { let global = self.module.add_global( self.context.i8_type().array_type(s.len() as u32 + 1), None, "str_lit", ); global.set_linkage(in
-src/backend/codegen/codegen.rs	5855	if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
-src/backend/codegen/codegen.rs	6176	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
-src/backend/codegen/codegen.rs	6177	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
-src/backend/codegen/codegen.rs	6426	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> = (0..field_count).map(|_| self.i64_type.into()
-src/backend/codegen/codegen.rs	6810	fn coerce_call_args( &mut self, callee: inkwell::values::FunctionValue<'ctx>, args: Vec<BasicMetadataValueEnum<'ctx>>, arg_ids: &[u32], ) -> Vec<BasicMetadataVa
-src/backend/codegen/codegen.rs	6960	fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
+src/backend/codegen/codegen.rs	2629	fn get_or_declare_function( &mut self, name: &str, type_args: &[crate::middle::types::Type], args_count: usize, ) -> FunctionValue<'ctx> { // Try existing looku
+src/backend/codegen/codegen.rs	2638	let host_mapped_name = if name.starts_with("str_") { format!("host_{}", name) } else if let Some(resolved) = Self::resolve_string_method(name) { format!("host_{
+src/backend/codegen/codegen.rs	2924	if actual_name.starts_with("zeta_") || actual_name.contains("__") {
+src/backend/codegen/codegen.rs	3328	MirStmt::Assign { lhs, rhs } => { let val = self.gen_expr_safe(rhs, exprs); let alloca = *self.locals.get(lhs).unwrap(); // An INT value stored into a FLOAT slo
+src/backend/codegen/codegen.rs	3362	self.note_return_slot_mismatch(func, dest, args.len());
+src/backend/codegen/codegen.rs	3783	let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, l, r, "eq").unwrap(); self.builder.build_int_z_extend(cmp, self.i64_type, "eq_ext").unwrap()
+src/backend/codegen/codegen.rs	5641	fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
+src/backend/codegen/codegen.rs	5702	MirExpr::StringLit(s) => { let global = self.module.add_global( self.context.i8_type().array_type(s.len() as u32 + 1), None, "str_lit", ); global.set_linkage(in
+src/backend/codegen/codegen.rs	5890	if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
+src/backend/codegen/codegen.rs	6207	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
+src/backend/codegen/codegen.rs	6208	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
+src/backend/codegen/codegen.rs	6457	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> = (0..field_count).map(|_| self.i64_type.into()
+src/backend/codegen/codegen.rs	6841	fn coerce_call_args( &mut self, callee: inkwell::values::FunctionValue<'ctx>, args: Vec<BasicMetadataValueEnum<'ctx>>, arg_ids: &[u32], ) -> Vec<BasicMetadataVa
+src/backend/codegen/codegen.rs	6991	fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
 src/backend/codegen/mod.rs	7	mod runtime_decls_registry;
 src/backend/codegen/mod.rs	9	mod runtime_decls_core;
 src/backend/codegen/runtime_decls_registry.rs	18	module.add_function("py_argparse_add", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
 src/frontend/parser/expr.rs	364	fn parse_raw_string_lit(input: &str) -> IResult<&str, AstNode> {
-src/frontend/parser/expr.rs	2265	fn slice_sep(input: &str) -> IResult<&str, ()> {
-src/frontend/parser/expr.rs	2283	let (input, start) = if let Ok((rest, _)) = slice_sep(input) {
+src/frontend/parser/expr.rs	2292	fn slice_sep(input: &str) -> IResult<&str, ()> {
+src/frontend/parser/expr.rs	2310	let (input, start) = if let Ok((rest, _)) = slice_sep(input) {
 src/frontend/parser/pattern.rs	22	let (input, pattern) = alt((
 src/frontend/parser/pattern.rs	46	parse_bind_pattern,
 src/frontend/parser/pattern.rs	48	parse_struct_pattern,

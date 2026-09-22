@@ -1,0 +1,26 @@
+# @cat: numeric
+# @note: `**` 有自己的优先级层（紧于 `* / %`、松于一元负号）；含调用/下标作底数，以及共享 `**` 词元的字典展开
+#@@ python
+a = 2
+lst = [1, 2, 3]
+d1 = {"a": 1}
+print(a * 3 ** 2)
+print(2 ** 3 % 5)
+print(17 % 2 ** 3)
+print(-2 % (0 - 3) ** 2)
+print(lst[1] ** 2)
+print(len(d1) ** 3)
+d2 = {**d1, "b": 2}
+print(len(d2))
+#@@ zeta
+a = 2
+lst = [1, 2, 3]
+d1 = {"a": 1}
+print(a * 3 ** 2)
+print(2 ** 3 % 5)
+print(17 % 2 ** 3)
+print(-2 % (0 - 3) ** 2)
+print(lst[1] ** 2)
+print(len(d1) ** 3)
+d2 = {**d1, "b": 2}
+print(len(d2))

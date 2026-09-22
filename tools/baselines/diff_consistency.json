@@ -1,12 +1,12 @@
 {
-  "total": 107,
-  "judged": 107,
-  "match": 92,
-  "rate_pct": 86.0,
-  "match_min": 92,
+  "total": 111,
+  "judged": 111,
+  "match": 99,
+  "rate_pct": 89.2,
+  "match_min": 99,
   "by_verdict": {
-    "match": 92,
-    "mismatch": 14,
+    "match": 99,
+    "mismatch": 11,
     "compile": 1
   },
   "per_cat": {
@@ -23,8 +23,8 @@
       "judged": 20
     },
     "numeric": {
-      "match": 11,
-      "judged": 22
+      "match": 18,
+      "judged": 26
     },
     "control": {
       "match": 20,
@@ -236,17 +236,21 @@
       "cat": "numeric",
       "verdict": "match"
     },
+    "numeric_mod_dyn_neg": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
     "numeric_mod_float": {
       "cat": "numeric",
       "verdict": "mismatch"
     },
     "numeric_mod_neg": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "numeric_mod_neg2": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "numeric_mul_neg": {
       "cat": "numeric",
@@ -264,9 +268,21 @@
       "cat": "numeric",
       "verdict": "match"
     },
+    "numeric_pow_dyn_prec": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_pow_mixed_tier": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_pow_paren_base": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
     "numeric_pow_prec": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "numeric_pow_zero": {
       "cat": "numeric",

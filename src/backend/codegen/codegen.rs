@@ -2034,6 +2034,41 @@ impl<'ctx> LLVMCodegen<'ctx> {
             .into()
     }
 
+    /// PY-A: Python's `%` takes the **divisor's** sign (`-7 % 3 == 2`,
+    /// `7 % -2 == -1`), while `srem` follows the dividend. Same fix-up shape as
+    /// [`Self::build_floordiv_int`]: add the divisor back when the truncated
+    /// remainder is non-zero and the two signs differ. The literal-operand case
+    /// never reaches here — `ConstValue::binary_op_int`'s `"%"` arm mirrors it.
+    fn build_floormod_int(
+        &self,
+        l: inkwell::values::IntValue<'ctx>,
+        r: inkwell::values::IntValue<'ctx>,
+    ) -> inkwell::values::BasicValueEnum<'ctx> {
+        let zero = l.get_type().const_zero();
+        let rem = self
+            .builder
+            .build_int_signed_rem(l, r, "floormod_r")
+            .unwrap();
+        let nonzero = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, rem, zero, "floormod_nz")
+            .unwrap();
+        let sign_mix = self.builder.build_xor(rem, r, "floormod_xor").unwrap();
+        let differ = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, sign_mix, zero, "floormod_sd")
+            .unwrap();
+        let adjust = self
+            .builder
+            .build_and(nonzero, differ, "floormod_adj")
+            .unwrap();
+        let fixed = self.builder.build_int_add(rem, r, "floormod_fix").unwrap();
+        self.builder
+            .build_select(adjust, fixed, rem, "floormod")
+            .unwrap()
+            .into()
+    }
+
     /// PY-A: float floor division — divide, then floor through the host math
     /// helper that `math.floor` already uses.
     fn build_floordiv_float(
@@ -3738,7 +3773,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                                 "*" | "mul" | "mul_i64" => self.builder.build_int_mul(l, r, "mul").unwrap().into(),
                                 "/" | "div" | "div_i64" => self.builder.build_int_signed_div(l, r, "div").unwrap().into(),
                                 "floordiv" => self.build_floordiv_int(l, r),
-                                "%" | "mod" | "mod_i64" => self.builder.build_int_signed_rem(l, r, "mod").unwrap().into(),
+                                "%" | "mod" | "mod_i64" => self.build_floormod_int(l, r),
                                 "<<" | "shl" | "shl_i64" => self.builder.build_left_shift(l, r, "shl").unwrap().into(),
                                 ">>" | "shr" | "shr_i64" => self.builder.build_right_shift(l, r, false, "shr").unwrap().into(),
                                 "&" | "bitand" | "and_i64" => self.builder.build_and(l, r, "bitand").unwrap().into(),
@@ -6053,11 +6088,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .unwrap()
                         .into(),
                     "floordiv" => self.build_floordiv_int(left_val, right_val),
-                    "%" => self
-                        .builder
-                        .build_int_signed_rem(left_val, right_val, "mod")
-                        .unwrap()
-                        .into(),
+                    "%" => self.build_floormod_int(left_val, right_val),
                     "&" => self
                         .builder
                         .build_and(left_val, right_val, "bitand")

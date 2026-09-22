@@ -1242,7 +1242,7 @@ pub(crate) fn parse_unary(input: &str) -> IResult<&str, AstNode> {
     let (input, expr) = if op_opt.is_some() {
         ws(parse_unary).parse(input)?
     } else {
-        ws(parse_postfix).parse(input)?
+        ws(parse_power).parse(input)?
     };
     if let Some(op) = op_opt {
         Ok((
@@ -1255,6 +1255,33 @@ pub(crate) fn parse_unary(input: &str) -> IResult<&str, AstNode> {
     } else {
         Ok((input, expr))
     }
+}
+
+/// PY-A: `**` gets its own precedence tier, TIGHTER than `* / % @` and LOOSER
+/// than a leading unary minus (so `parse_unary` reaches it as its operand and
+/// `-2 ** 2` is `-(2 ** 2)`). `parse_multiplicative` used to carry `**` in its
+/// own operator list, which made it left-associative with the rest of the
+/// tier: `2 * 3 ** 2` folded as `(2*3)**2` = 36 and `2 ** 3 % 5` swallowed the
+/// `%` into the exponent = 8. The exponent re-enters `parse_unary`, so
+/// `2 ** -3` and the right-associative `2 ** 3 ** 2` fall out for free.
+fn parse_power(input: &str) -> IResult<&str, AstNode> {
+    let (input, base) = parse_postfix(input)?;
+    let after = match skip_ws_and_comments0(input) {
+        Ok((i, _)) => i,
+        Err(_) => input,
+    };
+    let Some(rhs) = after.strip_prefix("**") else {
+        return Ok((input, base));
+    };
+    let (rest, exp) = ws(parse_unary).parse(rhs)?;
+    Ok((
+        rest,
+        AstNode::BinaryOp {
+            op: "**".to_string(),
+            left: Box::new(base),
+            right: Box::new(exp),
+        },
+    ))
 }
 
 fn parse_simple_ident(input: &str) -> IResult<&str, AstNode> {
@@ -2704,13 +2731,17 @@ fn parse_multiplicative(input: &str) -> IResult<&str, AstNode> {
         let mut found_op = None;
         let mut remaining_input = input;
 
-        // `**` must come before `*`, or the prefix match eats it as a bare
-        // multiply and the leftover `* x` parses as a pointer dereference
-        // (`2 ** 10` became `2 * (*10)` and crashed on the load).
+        // `**` is deliberately NOT in this list: it has its own tier
+        // (`parse_power`, tighter than this one and looser than unary minus).
+        // Carrying it here made the loop fold powers left-to-right through the
+        // `*`-level operators — `2 * 3 ** 2` became `(2*3)**2` and `2 ** 3 % 5`
+        // became `2 ** (3 % 5)`. The old note's hazard (a `*` prefix match eating
+        // half of `**`, leaving `* x` to parse as a pointer dereference) cannot
+        // recur: `parse_power` consumes the whole power before this loop runs.
         // PY-A: `@` is Python matmul (same precedence as `*`/`/`/`%`).
         // Without it, `I @ corr` aborts the enclosing `def` and silently drops
         // the rest of the file (ETF动量EPO: 77 unparsed lines).
-        let multiplicative_ops = ["**", "*", "/", "%", "@"];
+        let multiplicative_ops = ["*", "/", "%", "@"];
 
         // PY-A: `floordiv` is the word operator the indent preprocessor emits
         // for Python's `//` (which the parser would otherwise swallow as a line
@@ -2766,12 +2797,9 @@ fn parse_multiplicative(input: &str) -> IResult<&str, AstNode> {
                 Ok((j, _)) => j,
                 Err(_) => remaining_input,
             };
-            // `**` is right-associative (2 ** 3 ** 2 == 2 ** 9).
-            let (j, right) = if op == "**" {
-                parse_multiplicative(j)?
-            } else {
-                parse_shift(j)?
-            };
+            // `**` is right-associative, but that is now `parse_power`'s
+            // business; every operator left here is left-associative.
+            let (j, right) = parse_shift(j)?;
 
             term = AstNode::BinaryOp {
                 op: op.to_string(),

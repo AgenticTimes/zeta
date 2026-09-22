@@ -1,0 +1,12 @@
+# @cat: numeric
+# @note: 括号里的负数底数仍按 (-2)**2 走，不被弱优先级一元负号吞掉
+#@@ python
+print((-2) ** 2)
+print(-(-3) ** 2)
+print(2 * -3 ** 2)
+print(- 2 ** 2)
+#@@ zeta
+print((-2) ** 2)
+print(-(-3) ** 2)
+print(2 * -3 ** 2)
+print(- 2 ** 2)

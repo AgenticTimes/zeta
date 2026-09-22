@@ -1,0 +1,16 @@
+# @cat: numeric
+# @note: 幂右结合 + 一元负号弱于 `**`，操作数为变量（动态路径）
+#@@ python
+e = 2
+f = 3
+print((-e) ** f)
+print(-e ** f)
+print(-e ** f ** 2)
+print(2 * -e ** f)
+#@@ zeta
+e = 2
+f = 3
+print((-e) ** f)
+print(-e ** f)
+print(-e ** f ** 2)
+print(2 * -e ** f)
