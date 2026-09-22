@@ -11638,6 +11638,22 @@ call, no NULL-handle dereference).",
                     return id;
                 }
 
+                // `Box::new(v)` is an IDENTITY: a `Box<T>` slot is the same
+                // 64-bit handle as the value inside it. Before this arm the call
+                // lowered to NOTHING (no statement, no `exprs` entry), so the
+                // phantom id read back as garbage through a `let` and crashed the
+                // backend where struct literals index `exprs[field_id]`
+                // (codegen.rs:6176, hit via minimal_compiler.z:129).
+                if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
+                    return self.lower_expr(&args[0]);
+                }
+                // `String::new()` — same transparency, same phantom-id hole.
+                if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
+                    self.exprs.insert(id, MirExpr::StringLit(String::new()));
+                    self.type_map.insert(id, Type::Str);
+                    return id;
+                }
+
                 // PY-A: `Vec::new()` → runtime vec_new with initial capacity
                 // (vec_push growth doubles from cap, so cap must be > 0).
                 if path.len() == 1 && path[0] == "Vec" && method == "new" && args.is_empty() {

@@ -1,0 +1,38 @@
+// T39 (docs/ABI.md 附 B#10): 开区段下标 `x[a..]` / `x[..b]` / `x[..]`。
+//   `parse_range`（src/frontend/parser/expr.rs）的 `..` 分支无条件要一个右
+//   操作数（`parse_unary(j)?`），所以 `s[i..]` 让整条 `parse_expr` 失败 ⇒
+//   通用下标分支（`delimited([, parse_expr, ])`）在 `..]` 处失手 ⇒ 只剩
+//   `parse_subscript_slice`，而它旧版只认**冒号** ⇒ 整条 `fn` 连文件余部被
+//   [W1002] 丢弃（退出码仍为 0）。official 语料里这是最大的一族：
+//   minimal_compiler.z 757 行（`self.input[self.pos..]` 402/408/414 三处）。
+//   修法：把切片分隔符抽成 `slice_sep`（`:` 或 `..`，并排除 `...` 省略号），
+//   开区间沿用冒号形已有的 `__slice__` 下形与它的 `i64::MIN`“到尾”哨兵 ⇒
+//   双边点号形仍走原来的 `parse_expr` 路径（`s[1..3]` 行为一字未动）。
+//   第二层是这次解析通了才**暴露**出来的：`Box::new(v)` 作为结构体字段值时，
+//   MIR 的 `PathCall` 分支既不发声明也不写 `exprs`，留下一个幽灵 id，而后端
+//   取字段用的是 `exprs[field_id]` 索引 ⇒ 编译器 panic（codegen.rs:6176）。
+//   补的是 `Box::new`/`String::new` 的透明下形（前者恒等，后者空串）——
+//   `let b = Box::new(x)` 旧版本来就按恒等运转（不发任何语句），所以这一层
+//   不改既有语义，只把幽灵 id 消掉。`T::new`/`T::static_method` 的**已定义
+//   静态方法**路由仍是坏的，独立登记为任务 #41（三种形状的证据在那条里）。
+// expect: ello world
+// expect: hello
+// expect: hello world
+// expect: world
+// expect: 7
+s = "hello world"
+i = 1
+println(s[i..]);
+println(s[..5]);
+println(s[..]);
+println(s[6..]);
+
+struct Wrap {
+    v: i64,
+}
+
+fn wrap(x: i64) -> Wrap {
+    return Wrap { v: Box::new(x) };
+}
+
+println(wrap(7).v);

@@ -2225,6 +2225,28 @@ fn take_ident(input: &str) -> Option<(&str, &str)> {
     Some((&input[..i], &input[i..]))
 }
 
+/// PY-A: the separator between two slice bounds — either `:` (the historical
+/// form) or `..` (`s[1..]`, `s[..2]`, `s[..]`).
+///
+/// The dot form is only reachable here when a bound is MISSING: `s[1..2]` has
+/// both sides, so `parse_expr`'s range already consumes it in the generic
+/// subscript branch above. `s[1..]` does not — `parse_range` requires a right
+/// operand (`parse_unary(j)?`), so the whole `parse_expr` fails, the generic
+/// branch fails on the leftover `..]`, and the enclosing item was dropped
+/// (W1002; 附 B#10's 757-line family).
+///
+/// `...` (Ellipsis) starts with `..` but is not a separator.
+fn slice_sep(input: &str) -> IResult<&str, ()> {
+    let (rest, sep) = ws(alt((tag(":"), tag("..")))).parse(input)?;
+    if sep == ".." && rest.starts_with('.') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    Ok((rest, ()))
+}
+
 /// PY-A: `[start:end]` slice subscript — returns (start, Some(end)); end
 /// may be omitted (`[start:]` → None) and start may be omitted (`[:end]` → 0).
 fn parse_subscript_slice(
@@ -2232,11 +2254,17 @@ fn parse_subscript_slice(
 ) -> IResult<&str, (Option<AstNode>, Option<AstNode>, Option<AstNode>)> {
     let (input, _) = ws(tag("[")).parse(input)?;
     // optional start
-    let (input, start) = if let Ok((rest, _)) = ws(tag(":")).parse(input) {
+    let (input, start) = if let Ok((rest, _)) = slice_sep(input) {
         (rest, None)
     } else {
-        let (rest, e) = ws(parse_expr).parse(input)?;
-        let (rest, _colon) = ws(tag(":")).parse(rest)?;
+        // The bound is parsed at the range's own operand level (`parse_unary`),
+        // NOT `parse_expr`: with a dot separator the expression parser would
+        // swallow `..` and then fail looking for the right bound, so `s[a..]`
+        // could not be distinguished from `s[a..b]`. Consequence, inherited
+        // from that precedence (range binds tighter than additive): the dot
+        // form's start takes a unary/postfix operand, not `a[i+1..]`.
+        let (rest, e) = ws(alt((parse_expr, parse_unary))).parse(input)?;
+        let (rest, _sep) = slice_sep(rest)?;
         (rest, Some(e))
     };
     // optional end
