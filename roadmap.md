@@ -10535,3 +10535,81 @@ G.3 换的是期望值的**来源**（参考实现现场产出），不是再加
   还得问"这一族的语义有没有被断言过"）。本批的差分库对这条有直接帮助：
   `//` 那一例说明差分库能替 #36 预先回答"解析通了以后语义对不对"。
 
+
+---
+
+## 批次 327（任务 #45 闭包 —— 比较结果的 `1/0` 不在下型层，在**常量折叠**层）
+
+### 先记一次判断失误（这条比修复本身值钱）
+批次 326 立 #45 时我把根因写成"比较运算产物的 type_map 是 I64 而不是 Bool ⇒ print 选到
+`println_i64`"。**错的**，而且错法是这批反复出现的那一种：从"差分读数 + print 分发的代码形状"
+倒推，没有先看 MIR。实际探针 `/tmp/g3/cmp1.z`：`print(a == b)`（变量）、`c = (3 == 4); print(c)`、
+`e = 1 != 2; print(e)` **早就打 True/False** —— `src/middle/mir/gen.rs:4129`（批次 291）
+`_ if is_cmp && !matches!(op.as_str(), "||" | "&&") => Type::Bool` 一直在正常工作。
+补一条规则：**差分库回答"哪里不一致"，不回答"哪里错"**；定位仍须 `--dump-mir` 看产物形状。
+
+### 一条 MIR 就够的证据
+`print(3 == 4)`（`--dump-mir`）：`stmts: VoidCall{ "println_i64", [2] }`、`exprs: 2: IntLit(0)`、
+`type_map: 2: I64` —— **整条 MIR 里没有 BinaryOp**。⇒ 常量折叠在 MIR 之前就把比较吃成了整数
+字面量，`gen.rs` 的下型与 print 分发根本没被走到。同一份 MIR 里 `print(a == b)` 则有
+`type_map: 17: Bool`（走 print_bool）。两条路的分岔点不在这个文件里。
+
+### 改动：`src/middle/ctfe/value.rs`（+39 / −14）
+`ConstValue::binary_op` 的 Int/Int、UInt/UInt 两臂把算术器结果**无条件** `.map(ConstValue::Int)`，
+而算术器 `binary_op_int` 里兼任了 `== != < <= > >=` 六臂、返回 `(left == right) as i64`
+（原 :284-289）—— 折叠层把比较**定型**成了整数。
+现在：新增 `compare_int`（:248）/`compare_uint`（:261），只在比较算子上返回 `Option<bool>`；
+两臂先问比较器（:179、:185）⇒ 产物是 `ConstValue::Bool`；算术器里那六臂删掉
+（一份语义只留一个实现点，避免"改了一处另一处还折成 Int"）。
+**下游一行没改**：`transform_expr` 早就写着 `Ok(ConstValue::Bool(result)) => AstNode::Bool(result)`
+（`src/middle/ctfe/evaluator.rs:262、:287`），`AstNode::Bool` 下型为 Bool，print 分发
+`gen.rs:7939` 命中 `print_bool` —— 折叠层一直有能力产出布尔，只是没人产。
+
+### 副作用面：这次改的是"什么被折、什么不折"，不只是值
+- `(Bool, Int)` 混合算术在 CTFE 里不再是 Int/Int ⇒ 折叠失败，`transform_expr` 的 `_ =>` 分支
+  **保留 BinaryOp 走动态路径**（`_ =>` 也吞掉 Err，所以这不是硬错误、编译器不会因此报错）。
+  实测 `(3 == 4) + 1` → 1、`(2 < 5) * 10` → 10、`not (1 == 2)` → True、
+  `(1 == 1) and (2 == 2)` → True，与 CPython 逐字相同 ⇒ 新用例 `truth_fold_arith`、
+  `truth_fold_logic` 专门锁这条"折叠退出后落到动态路径"的新通路。
+- 链式比较 `1 < 2 < 3`：内层折成 `Bool(true)`，外层 `(Bool, Lit)` 不再折叠 ⇒ 动态路径打 True。
+  此前是"折两次得 Int(1)"，值也恰好对（Python `True < 3` 为 True）—— 那是运气，现在走的是
+  与 Python 同构的那条。
+- 布尔当下标 `a[1 == 1]`：折叠不再产出 Int ⇒ 动态路径，实测 8 / 7 与 CPython 同（`/tmp/g3/edge.z`）。
+- `ConstValue::as_int()` 对 Bool 返回 None，消费者三处（求下标 :669、:1109、重复计数 :696 与
+  切分 :1228/:1232）此前能吃到折叠后的 0/1，现在只能让折叠退出。**没为这条写用例**（构造不出
+  真实语料里出现的形态），记在此以免被当成已覆盖。
+
+### 验证
+- 门禁五步（前台）：`official compile 194/194`、`compile+link 191/194`（link-only 三条明细同批次
+  325/326）、`python_style: 289 passed, 2 failed, 4 known-fail, 0 xpass`（失败仍是存量的
+  `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`，非本批引入）、
+  `corpus 39/39`、`jit sweep ok=169 segv=0（total 489）`、
+  **`diff test: match=92 judged=107 rate=86.0% bad_case=0`**（批次 326：85/104=81.7%）。
+  编译诊断 official 10 文件/15 行、python_style 82 文件/191 行 —— 与批次 326 逐数字相同。
+  ⇒ **前四步零位移，本批的位移只在 diff 一步**，这正是批次 326 建这一步想要的读法。
+- 分类读数：truth 15/20 → **22/23**、str 19/22、container 20/20、numeric 11/22、control 20/20。
+- 基线 `tools/baselines/diff_consistency.json` 复 bless：total 104→107、match_min 85→92、
+  `bad_case=0`。三条新用例都是**加**进来的（含一条故意留红，见 OPEN），
+  满足 #36/#39 那条"不许用静默删用例关闭任务"。
+- 锚点：120 个可解析 / 漂移 0 / 新 0 / 消失 0（`value.rs` 不是 ABI.md 的引用点，本批也没动门禁脚本）。
+- `cargo test --release --lib`：只有存量那条 `frontend::indent::tests::header_colon_stripped_with_trailing_comment`
+  （任务 #23），`middle::ctfe` / `const_eval` 无失败。
+- 性能 `python3 tools/perf_baseline.py --diff` 一共三次读数：改后 **ir total +6.2%**、复跑 **+9.1%**
+  （aot +29.8% / +33.6%）。因为两次都在朝阈值走，做了**同负载手工对照**：把 `value.rs` 退回
+  `HEAD` 重新构建再测 ⇒ **未改动的代码 ir total +11.8%、aot +39.4%**（当时 `load averages 4.6`，
+  10 核）。结论两条：① 本批的位移不可归因（它是编译期多一个分支，IR 形状无变化，且对照读数
+  比它更差）；② **更要紧**：未改动代码在当前负载下已经越过 `PERF_REGRESS_PCT=10` ⇒ 这个阈值低于
+  本机噪声地板，门禁会假红（见 OPEN）。
+
+### OPEN
+- 新立 **#50**：`m = min(1 == 2, 3 == 4); print(m)` → zeta `0`，Python `False`（`max(True, False)` 同族）。
+  这是**内建函数返回值下型**，与折叠是两条路。差分用例 `truth_builtin_min.dcase` 已入库并
+  **留在 mismatch** —— 判据看的是 match 绝对数 + 逐用例回归，不是比率，所以登记一条已知红的
+  用例不污染门禁，反而把它变成可回归的读数。同时记下 min/max 在 `gen.rs` 有四处分发
+  （:6573、:6801、:6842、:8661），修之前先按轴 A 的口径确认哪几处是活的，别给死副本补类型。
+- perf 阈值从"以后再说"升级成"已经会咬人"：要么按 `tools/perf_baseline.py --calibrate` 量一次
+  本机地板再定 `PERF_REGRESS_PCT`，要么把判定改成"同负载对照"（本批用的就是那个手工做法，
+  但它应该是脚本能力而不是每次人肉复现）。与 #27（aot 跨调用漂移 20%）同源，建议并到 #27。
+- 差分库剩 15 条不一致按族：numeric 11（#46 除法族 / #48 方言裁决）、str 3（#47 + `host_str_find`
+  缺绑定归 #42）、truth 1（#50）。numeric 是唯一还成族的，下一批优先它。
+- 任务 #36 余 9 文件 / 1,019 行不变；⑩ 仍 🟡（G.3 起步档在，随机生成档与"一致率进 CI 读数序列"未完）。
