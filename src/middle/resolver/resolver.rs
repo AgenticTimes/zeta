@@ -2223,8 +2223,25 @@ impl Resolver {
     }
 
     fn find_py_module_file(&self, module: &str) -> Option<(std::path::PathBuf, bool)> {
+        self.find_py_module_file_ranked(module)
+            .map(|(p, is_py, _)| (p, is_py))
+    }
+
+    /// Same search, plus the ancestor rank it matched on: 0 is the directory of
+    /// the file being compiled, 1..=5 its ancestors, `None` an explicitly
+    /// configured base. Silent by design — the probe sites that only ask
+    /// "does this resolve" share this function, so warning here would turn one
+    /// import into two identical lines (measured). Only
+    /// [`Self::load_user_python_module`] speaks.
+    fn find_py_module_file_ranked(
+        &self,
+        module: &str,
+    ) -> Option<(std::path::PathBuf, bool, Option<usize>)> {
         let rel: std::path::PathBuf = module.split('.').collect();
-        let mut bases: Vec<std::path::PathBuf> = Vec::new();
+        // (base, ancestor rank). Rank 0 is the directory of the file being
+        // compiled; 1..=5 are its ancestors. `None` marks an explicitly
+        // configured base.
+        let mut bases: Vec<(std::path::PathBuf, Option<usize>)> = Vec::new();
         // The file being compiled wins, then explicitly configured paths, then
         // installed packages, then the bundled shim sources.
         if let Some(d) = self.py_source_dir.borrow().clone() {
@@ -2233,11 +2250,17 @@ impl Resolver {
             // import …` compiled from strategies/code/jq_wufu.py) resolves
             // against the repo root, not against the file's own directory.
             // Depth is capped so a plain name can never match `/a.py`.
+            //
+            // The same cap that makes that import work also lets a file in
+            // `$HOME` outrank `pylib`, and it makes the reading depend on how
+            // deep the checkout sits — same content, one directory deeper, and a
+            // module silently stops resolving. Ancestors >0 therefore speak
+            // (W1005): the resolution itself stays unchanged.
             let mut cur = Some(d.as_path());
-            for _ in 0..6 {
+            for rank in 0..6 {
                 match cur {
                     Some(p) => {
-                        bases.push(p.to_path_buf());
+                        bases.push((p.to_path_buf(), Some(rank)));
                         cur = p.parent();
                     }
                     None => break,
@@ -2245,26 +2268,30 @@ impl Resolver {
             }
         }
         if let Ok(p) = std::env::var("ZETA_PYLIB") {
-            bases.push(std::path::PathBuf::from(p));
+            bases.push((std::path::PathBuf::from(p), None));
         }
-        bases.push(crate::middle::pylib::packages_dir());
-        bases.push(std::path::PathBuf::from("pylib"));
-        bases.push(std::path::PathBuf::from("build/stubs"));
-        for base in &bases {
-            // Single-file module: X.py / X.z
-            for (ext, is_py) in [("py", true), ("z", false)] {
-                let mut p = base.join(&rel);
-                p.set_extension(ext);
-                if p.is_file() {
-                    return Some((p, is_py));
+        bases.push((crate::middle::pylib::packages_dir(), None));
+        bases.push((std::path::PathBuf::from("pylib"), None));
+        bases.push((std::path::PathBuf::from("build/stubs"), None));
+        for (base, rank) in &bases {
+            let pkg = base.join(&rel);
+            let mut single_py = pkg.clone();
+            single_py.set_extension("py");
+            let mut single_z = pkg.clone();
+            single_z.set_extension("z");
+            let init_py = pkg.join("__init__.py");
+            let init_z = pkg.join("__init__.z");
+            // Single-file module X.{py,z}, then directory package X/__init__.{py,z}.
+            for (p, is_py) in [
+                (single_py.as_path(), true),
+                (single_z.as_path(), false),
+                (init_py.as_path(), true),
+                (init_z.as_path(), false),
+            ] {
+                if !p.is_file() {
+                    continue;
                 }
-            }
-            // Directory package: X/__init__.py / X/__init__.z
-            for (name, is_py) in [("__init__.py", true), ("__init__.z", false)] {
-                let p = base.join(&rel).join(name);
-                if p.is_file() {
-                    return Some((p, is_py));
-                }
+                return Some((p.to_path_buf(), is_py, *rank));
             }
         }
         None
@@ -2274,8 +2301,23 @@ impl Resolver {
         if !self.py_loaded_modules.borrow_mut().insert(module.to_string()) {
             return true; // already loaded (or currently loading)
         }
-        let (path, is_py) = match self.find_py_module_file(module) {
-            Some(v) => v,
+        let (path, is_py) = match self.find_py_module_file_ranked(module) {
+            Some((p, is_py, Some(rank))) if rank > 0 => {
+                let origin = self
+                    .py_source_dir
+                    .borrow()
+                    .as_ref()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_default();
+                eprintln!(
+                    "warning: [W1005] PY-A: module `{module}` resolved by walking {rank} \
+                     level(s) up from {origin} to {} — an ancestor directory outranks \
+                     `pylib`, so this import is location-sensitive",
+                    p.display()
+                );
+                (p, is_py)
+            }
+            Some((p, is_py, _)) => (p, is_py),
             None => {
                 // The bare spelling of an ALREADY-LOADED module (`from jq_shim
                 // import X` while the file was loaded as

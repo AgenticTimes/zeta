@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/run_all.sh — Q4 (advice.md): one command → three baseline numbers as JSON.
-# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import] [--skip-empty] [--skip-clean]
+# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import] [--skip-empty] [--skip-clean] [--skip-pysrc]
 # Exit 0 if all enabled suites pass their green criteria; else 1.
 set -euo pipefail
 
@@ -20,6 +20,7 @@ SKIP_SWALLOW=0
 SKIP_IMPORT=0
 SKIP_EMPTY=0
 SKIP_CLEAN=0
+SKIP_PYSRC=0
 
 for a in "$@"; do
   case "$a" in
@@ -34,6 +35,7 @@ for a in "$@"; do
     --skip-import) SKIP_IMPORT=1 ;;
     --skip-empty) SKIP_EMPTY=1 ;;
     --skip-clean) SKIP_CLEAN=1 ;;
+    --skip-pysrc) SKIP_PYSRC=1 ;;
     -h|--help)
       sed -n '2,6p' "$0"
       exit 0
@@ -377,6 +379,28 @@ if [[ $SKIP_CLEAN -eq 0 ]]; then
   rm -f "$clean_log"
 fi
 
+# ── 11) PY-A 模块解析的落点（批次 343）──
+# 被编译文件所在目录**往上 5 级**都在搜索基里，所以门禁读数会随检出位置变化：家目录躺
+# 一个同名 .z 就能压过 pylib。本步骤钉的是"越界必须出声（W1005）、就地/注册表/相对基不
+# 许出声、越界与否给出的 MIR 逐字节相同"——六翼，判据在脚本内部，这里只认退出码。
+pysrc_rc=0; pysrc_failed=0; pysrc_checked=0
+if [[ $SKIP_PYSRC -eq 0 ]]; then
+  pysrc_log=$(mktemp)
+  set +e
+  ZETAC="$ZETAC" "$ROOT/tools/py_module_search_inventory.sh" >"$pysrc_log" 2>&1
+  pysrc_rc=$?
+  set -e
+  pysrc_failed=$(grep -c '  FAIL ' "$pysrc_log" || true); pysrc_failed=${pysrc_failed:-0}
+  pysrc_checked=$(grep -cE '  (ok|FAIL) ' "$pysrc_log" || true); pysrc_checked=${pysrc_checked:-0}
+  if [[ $JSON_ONLY -eq 0 ]]; then
+    echo "pysrc: ${pysrc_checked} 条断言，FAIL ${pysrc_failed}（rc=$pysrc_rc）"
+  fi
+  if [[ $pysrc_rc -ne 0 ]]; then
+    tail -30 "$pysrc_log" >&2
+  fi
+  rm -f "$pysrc_log"
+fi
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -401,6 +425,8 @@ doc = {
                   "skipped": $SKIP_IMPORT},
   "empty_stmt": {"checked": $empty_checked, "failed": $empty_failed,
                  "skipped": $SKIP_EMPTY},
+  "pysrc": {"checked": $pysrc_checked, "failed": $pysrc_failed,
+            "rc": $pysrc_rc, "skipped": $SKIP_PYSRC},
   "clean_checkout": {"rc": $clean_rc, "secs": $clean_secs, "rev": "${clean_rev:0:8}",
                      "skipped": $SKIP_CLEAN},
   # 只出声、不参与退出码（附 B#9 的护栏：判定看运行期 stdout，告警不改判定）
@@ -443,6 +469,8 @@ if [[ $SKIP_SWALLOW -eq 0 && $swallow_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_IMPORT -eq 0 && $import_rc -ne 0 ]]; then rc=1; fi
 # empty_stmt: 判据在 tools/empty_stmt_inventory.sh 内部（四翼断言），这里只认退出码。
 if [[ $SKIP_EMPTY -eq 0 && $empty_rc -ne 0 ]]; then rc=1; fi
+# pysrc: 判据在 tools/py_module_search_inventory.sh 内部（五翼），这里只认退出码。
+if [[ $SKIP_PYSRC -eq 0 && $pysrc_rc -ne 0 ]]; then rc=1; fi
 # clean_checkout: 判据在步骤 10 内部（rc=0 才算"检出即可编译"）；93~99 是选址/登记/提交解析
 # 本身不合法，同样判红——静默跳过等于这一步不存在。
 if [[ $SKIP_CLEAN -eq 0 && $clean_rc -ne 0 ]]; then rc=1; fi

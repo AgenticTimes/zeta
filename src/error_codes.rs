@@ -2167,6 +2167,11 @@ pub mod common {
     pub const PARSE_TRUNCATED_INPUT: &str = "W1002";
     pub const PARSE_RECOVERY_SKIP: &str = "W1003";
     pub const PARSE_SWALLOWED_WORD: &str = "W1004";
+    // Emitted as a literal in `middle/resolver/resolver.rs::load_user_python_module`
+    // (the search itself lives in `find_py_module_file_ranked`): a PY-A import
+    // that resolved by walking up out of the compiled file's own directory.
+    // Reading-only — the resolution itself is unchanged.
+    pub const PY_MODULE_ANCESTOR_RESOLUTION: &str = "W1005";
     pub const TYPE_COULD_BE_INFERRED: &str = "W2001";
     pub const REDUNDANT_TYPE_CAST: &str = "W2002";
     pub const UNUSED_VARIABLE: &str = "W3001";
