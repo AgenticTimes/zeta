@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/run_all.sh — Q4 (advice.md): one command → three baseline numbers as JSON.
-# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import]
+# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import] [--skip-empty]
 # Exit 0 if all enabled suites pass their green criteria; else 1.
 set -euo pipefail
 
@@ -18,6 +18,7 @@ SKIP_DIFF=0
 SKIP_KNOB=0
 SKIP_SWALLOW=0
 SKIP_IMPORT=0
+SKIP_EMPTY=0
 
 for a in "$@"; do
   case "$a" in
@@ -30,6 +31,7 @@ for a in "$@"; do
     --skip-knob) SKIP_KNOB=1 ;;
     --skip-swallow) SKIP_SWALLOW=1 ;;
     --skip-import) SKIP_IMPORT=1 ;;
+    --skip-empty) SKIP_EMPTY=1 ;;
     -h|--help)
       sed -n '2,6p' "$0"
       exit 0
@@ -283,6 +285,29 @@ if [[ $SKIP_IMPORT -eq 0 ]]; then
   rm -f "$import_log"
 fi
 
+# ── 9) 裸 `;` 的形状值域（批次 339）──
+# 顶层循环是 many0(顶层项)，规则不认的形状不是"报错"而是"文件余部整段丢弃"。
+# `;` 是**顶层空项**：与块内空语句同一语义，实现只有一处（parse_top_level_entry）。
+# 四翼：加不加 ; 逐字节同一份 MIR（中立）+ 尾巴必须还在（截断）+ 默认路径与
+# ZETA_PARSE_RECOVER=1 同音同调（两路）+ 吞词判据不许被顺手放宽（负控制）。
+empty_rc=0; empty_failed=0; empty_checked=0
+if [[ $SKIP_EMPTY -eq 0 ]]; then
+  empty_log=$(mktemp)
+  set +e
+  ZETAC="$ZETAC" "$ROOT/tools/empty_stmt_inventory.sh" >"$empty_log" 2>&1
+  empty_rc=$?
+  set -e
+  empty_failed=$(grep -c '  FAIL ' "$empty_log" || true); empty_failed=${empty_failed:-0}
+  empty_checked=$(grep -cE '  (ok|FAIL) ' "$empty_log" || true); empty_checked=${empty_checked:-0}
+  if [[ $JSON_ONLY -eq 0 ]]; then
+    echo "empty_stmt: ${empty_checked} 条断言，FAIL ${empty_failed}（rc=$empty_rc）"
+  fi
+  if [[ $empty_rc -ne 0 ]]; then
+    tail -30 "$empty_log" >&2
+  fi
+  rm -f "$empty_log"
+fi
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -305,6 +330,8 @@ doc = {
               "skipped": $SKIP_SWALLOW},
   "import_form": {"checked": $import_checked, "failed": $import_failed,
                   "skipped": $SKIP_IMPORT},
+  "empty_stmt": {"checked": $empty_checked, "failed": $empty_failed,
+                 "skipped": $SKIP_EMPTY},
   # 只出声、不参与退出码（附 B#9 的护栏：判定看运行期 stdout，告警不改判定）
   "compile_diagnostics": {
     "official_files_with_warnings": $official_diag_files,
@@ -343,6 +370,8 @@ if [[ $SKIP_KNOB -eq 0 && $knob_rc -ne 0 ]]; then rc=1; fi
 # swallow: 判据同上，跑的是 tools/junk_swallow_inventory.sh 的夹具段（不含全语料计数）。
 if [[ $SKIP_SWALLOW -eq 0 && $swallow_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_IMPORT -eq 0 && $import_rc -ne 0 ]]; then rc=1; fi
+# empty_stmt: 判据在 tools/empty_stmt_inventory.sh 内部（四翼断言），这里只认退出码。
+if [[ $SKIP_EMPTY -eq 0 && $empty_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 2 ]]; then
   echo "[G.3] 差分有 $diff_bad 条坏用例（参考侧跑不出真值）——不参与判定，但必须修用例" >&2
 fi

@@ -984,12 +984,12 @@ fn parse_python_import(input: &str) -> IResult<&str, AstNode> {
             break;
         }
     }
-    // The `;` belongs to THIS statement. Left in the input it becomes the next
-    // top-level item, and since nothing parses a bare `;` the caller's `many0`
-    // stops there and drops the rest of the file — measured on
-    // `import distributed;` in integration_test_program.z: 19 lines, all of
-    // `fn main`, went missing while the file still counted as compiled.
-    let (cur, _) = opt(ws(tag(";"))).parse(cur)?;
+    // No trailing-`;` consumption here on purpose: a bare `;` is a top-level
+    // EMPTY statement (top_level::parse_top_level_entry, batch 339), so this
+    // rule does not have to eat its own terminator to keep the caller's `many0`
+    // from stopping. Batch 338 added that eaten `;` as the only defence against
+    // dropping the rest of the file; keeping it would put the same rule in two
+    // places.
     Ok((cur, AstNode::Block { body: out }))
 }
 

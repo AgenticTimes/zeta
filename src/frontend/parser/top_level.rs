@@ -1444,10 +1444,7 @@ fn parse_mod(input: &str) -> IResult<&str, AstNode> {
         let (input, _) = alt((
             delimited(
                 ws(tag("{")),
-                many0(ws(alt((
-                    parse_use_statement,
-                    map(parse_top_level_item, |node| vec![node]),
-                )))),
+                many0(ws(parse_top_level_entry)),
                 ws(tag("}")),
             ),
             map(ws(tag(";")), |_| vec![]),
@@ -1461,10 +1458,7 @@ fn parse_mod(input: &str) -> IResult<&str, AstNode> {
         // Inline module: mod Name { ... }
         delimited(
             ws(tag("{")),
-            many0(ws(alt((
-                parse_use_statement,
-                map(parse_top_level_item, |node| vec![node]),
-            )))),
+            many0(ws(parse_top_level_entry)),
             ws(tag("}")),
         ),
         // Forward declaration: mod Name;
@@ -1592,6 +1586,32 @@ fn parse_top_level_item(input: &str) -> IResult<&str, AstNode> {
             crate::frontend::parser::stmt::parse_stmt(input)
         }
     }
+}
+
+/// One top-level entry: a `use`, an item, or an EMPTY statement (`;`).
+///
+/// The `;` arm exists because a bare semicolon is otherwise unparseable, and at
+/// this level "unparseable" is fatal rather than cosmetic: `many0` stops at the
+/// first failing entry, so the whole rest of the file is dropped (W1002).
+/// Measured before this arm existed (against the pre-fix binary, `tools/
+/// empty_stmt_inventory.sh` A wing): 12 of 13 top-level positions truncate — as
+/// the first entry (one, two and three `;`), indented, and after a comment, an
+/// expression statement, a `fn`/`def` definition, `use`, `import`, inside a
+/// `mod { … }` body, at end of file. The two that did NOT are the ones that
+/// prove the inconsistency rather than the fix: right after an assignment the
+/// same `;` is invisible (the assignment eats it), and inside a block it was
+/// already an empty statement. Whether one stray character deletes the program
+/// must not depend on which rule happened to run before it.
+///
+/// Shared by the file loop and both `mod { … }` bodies (and the opt-in recovery
+/// loop) so those paths cannot disagree about the same input.
+fn parse_top_level_entry(input: &str) -> IResult<&str, Vec<AstNode>> {
+    alt((
+        parse_use_statement,
+        map(parse_top_level_item, |node| vec![node]),
+        value(vec![], tag(";")),
+    ))
+    .parse(input)
 }
 
 pub fn parse_zeta(input: &str) -> IResult<&str, Vec<AstNode>> {
@@ -1940,11 +1960,7 @@ fn parse_zeta_impl(input: &str) -> IResult<&str, Vec<AstNode>> {
 
     let (input, _) = skip_ws_and_comments(input)?;
 
-    let parse_result = many0(ws(alt((
-        parse_use_statement,
-        map(parse_top_level_item, |node| vec![node]),
-    ))))
-    .parse(input);
+    let parse_result = many0(ws(parse_top_level_entry)).parse(input);
 
     let (input, vec_vec) = match parse_result {
         Ok((i, v)) => (i, v),
@@ -1978,7 +1994,9 @@ fn parse_zeta_impl_recover(input: &str) -> IResult<&str, Vec<AstNode>> {
 
         let before_len = input.len();
 
-        match parse_use_statement(input) {
+        // Same entry grammar as the default path (including the empty `;`), so a
+        // shape cannot be fatal under `many0` and merely skipped under recovery.
+        match parse_top_level_entry(input) {
             Ok((rest, nodes)) => {
                 if rest.len() == before_len {
                     break;
@@ -1987,20 +2005,6 @@ fn parse_zeta_impl_recover(input: &str) -> IResult<&str, Vec<AstNode>> {
                     if !matches!(n, AstNode::Skip) {
                         asts.push(n);
                     }
-                }
-                input = rest;
-                continue;
-            }
-            Err(_) => {}
-        }
-
-        match parse_top_level_item(input) {
-            Ok((rest, node)) => {
-                if rest.len() == before_len {
-                    break;
-                }
-                if !matches!(node, AstNode::Skip) {
-                    asts.push(node);
                 }
                 input = rest;
                 continue;

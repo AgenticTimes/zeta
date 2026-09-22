@@ -803,7 +803,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      12×numpy 双份 shim 提示）。
    - ⚠️ 这份读数额外撞出一个**独立缺陷**，已另登记为 **附 B#10**（不是 ABI 问题，
      但只有把 stderr 收回来才看得见 —— 这就是本项非做不可的证明）。
-   - **批次 322 顺带修掉本项自己的一个取证缺陷**（`tools/run_all.sh:184`）：写进
+   - **批次 322 顺带修掉本项自己的一个取证缺陷**（`tools/run_all.sh:186`）：写进
      `zeta_baseline.json` 的 `jit.ok` 一直**不是测量值**。提取式
      `sed -E 's/.*ok=([0-9]+).*/\1/'` 的前缀 `.*` 是贪婪的，而 sweep 那行末尾还带
      阈值（`…，最小 ok=163`）⇒ 它跳过真读数、抓到阈值。实测同一行：贪婪式给 163、
@@ -948,11 +948,11 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
    一个还没绑定的方法，就报成"编译器不支持这段语法"，而这批语料（self-host 编译器）离可运行
    还差整个 std 表面。⇒ 门禁改为分两段量：
    - `src/main.rs:535` + `:824` 新增 `--no-link`（出 `.o` 即止）；
-   - `tools/run_all.sh:89` 只在"整链失败"时补跑一次 `--no-link` 做归因，
+   - `tools/run_all.sh:91` 只在"整链失败"时补跑一次 `--no-link` 做归因，
      日志两行：`official: compile N/194, compile+link M/194` 与逐文件的
      `### <name> — 缺运行时绑定: <符号名…>`（明细 `$OFFICIAL_LINK_DIAG`，默认
      `/tmp/zeta_official_link.txt`）；JSON 加 `official.compile` 字段。
-   - **判据（`tools/run_all.sh:332`）从 `pass==total` 改为 `compile==total`**，
+   - **判据（`tools/run_all.sh:359`）从 `pass==total` 改为 `compile==total`**，
      compile+link 与缺绑定清单照样打印 ⇒ 不是"把门禁绿过去"：该缺口从"一个红色计数"
      变成"指名到符号的登记表"，且真实编译失败仍然致命。本批读数：**compile 194/194、
      compile+link 193/194**。
