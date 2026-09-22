@@ -350,18 +350,44 @@ pub fn parse_string_lit(input: &str) -> IResult<&str, AstNode> {
     )))
 }
 
-/// Parse a raw string literal: `r"..."` / `r'...'` (no escape processing).
+/// Parse a raw string literal: `r"..."` / `r'...'` / `r#"..."#` (no escape processing).
 ///
 /// The single-quoted form was missing, and the failure was *silent* in
 /// assignment position: `x = r'2|3|4|5'` parsed as `x = r` plus a stray string
 /// statement, while the same literal as a call argument
 /// (`df['t'].str.contains(r'2|3|4|5')`) broke the call outright — five corpus
 /// strategies' `filter_audit`.
+///
+/// The hash form exists for multi-line source snippets (test_suite.z embeds a
+/// whole program in one); it ends at the first `"` followed by exactly as many
+/// `#` as opened it.
 fn parse_raw_string_lit(input: &str) -> IResult<&str, AstNode> {
-    let (input, quote) = alt((tag("r\""), tag("r'"))).parse(input)?;
+    let (after_r, _) = tag::<_, _, nom::error::Error<_>>("r").parse(input)?;
+    let hashes = &after_r[..after_r.bytes().take_while(|b| *b == b'#').count()];
+    let after_hashes = &after_r[hashes.len()..];
+
+    if !hashes.is_empty() {
+        let (body, _) = tag::<_, _, nom::error::Error<_>>("\"").parse(after_hashes)?;
+        let close = format!("\"{}", hashes);
+        let end = match body.find(&close) {
+            Some(i) => i,
+            None => {
+                return Err(nom::Err::Error(NomError::new(
+                    input,
+                    nom::error::ErrorKind::Tag,
+                )))
+            }
+        };
+        return Ok((
+            &body[end + close.len()..],
+            AstNode::StringLit(body[..end].to_string()),
+        ));
+    }
+
+    let (input, quote) = alt((tag("\""), tag("'"))).parse(after_hashes)?;
     // In a raw string a backslash does NOT escape the quote, so the literal
     // ends at the first occurrence of the opening quote character.
-    let q = quote.as_bytes()[1] as char;
+    let q = quote.as_bytes()[0] as char;
     let mut content = String::new();
     let mut pos = 0;
 

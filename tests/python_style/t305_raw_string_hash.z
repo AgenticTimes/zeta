@@ -1,0 +1,28 @@
+// 任务 #36 第四族（docs/ABI.md 附 B#10）：`r#"…"#` 原始字符串。
+//   旧版 `parse_raw_string_lit`（src/frontend/parser/expr.rs）只认 `r"…"` / `r'…'`，
+//   碰到 `r#` 直接失败 ⇒ 整条 `fn` 连文件余部被 [W1002] 丢弃（退出码仍为 0）。
+//   official 语料里它吃掉 test_suite.z 127 行 + bootstrap_validation_test.z 58 行
+//   —— 两处的共同点是把**一整段被测程序**嵌进一个多行字面量，正是哈希形存在的理由。
+//   规则：结束符是"一个 `"` 后跟与开头等量的 `#`"；内部**不做转义处理**。
+//   同时回归保护两个旧形（`r"…"` / `r'…'`）与一个易误伤面：以 `r` 开头的标识符
+//   （`rate = 5`）不能被这个分支吃掉。
+
+// expect: x"y
+// expect: no\esc
+// expect: sq
+// expect: l1
+// expect: l2
+// expect: 5
+// expect: 5
+a = r#"x"y"#
+b = r"no\esc"
+c = r'sq'
+m = r#"l1
+l2"#
+println(a);
+println(b);
+println(c);
+println(m);
+println(m.len());
+rate = 5
+println(rate);
