@@ -11,15 +11,24 @@
 > §3 调用约定与 struct/元组返回 = G.5b（批次 316；**批次 318 更正 M2/M3 两行并关闭附 B#4**）；
 > §4 名字修饰、§5 类型布局、§6 跨边界假设 = G.5c（批次 317）——
 > §1 表 #6/#7/#8 的几何常量已升格为明文的布局合同（§5 L1–L9）；
-> 附录 audit 表 + "先改本文再改实现"的流程规则 = G.5d（批次 319 起了头：诊断侧）；
+> 附录 audit 表 + "先改本文再改实现"的流程规则 = G.5d（批次 319 起了头：诊断侧；
+> **批次 320 补齐可核对性：附 B#9 关闭 + 锚点判据自动化**）；
 > 符号注册表 = G.5e。
 > 验收反查与未决项放在 **附 A / 附 B**，不占用正式编号；附 A 覆盖 §1（§5 是其展开版），
 > §3 的对应验收物是 §3.5 的 M1–M7（批次 318 由 4 条扩到 7 条）；
-> §4–§6 的未决项已登记为附 B#5/#5′/#6/#7，#8/#9 来自批次 318/319。
+> §4–§6 的未决项已登记为附 B#5/#5′/#6/#7，#8/#9 来自批次 318/319（**#9 已由批次 320 关闭**），
+> 附 B 现有 10 条，第 10 条是批次 320 收门禁 stderr 后才看得见的解析器截断。
 >
 > ⚠️ **锚点会随 `codegen.rs` 的行数移动**（批次 319 实测：本文件往 codegen 里插
 > 74 行，全文 19 处 `codegen.rs:` 锚点一次性错位，需按插入点重映射后逐条复核）。
 > 往该文件插代码的批次，**必须同批重生成这些锚点**，否则合同里的 `file:line` 变成假证据。
+> 判据已自动化（批次 320 / 任务 #35）：`./tools/check_abi_anchors.py` 解析本文全部
+> `file:line`（含同行续写形态：一个带路径的锚点后跟裸 `:行号`，继承本行最近的路径），
+> 核对可定位 / 未越界 / 未漂移三层，基线在 `tools/baselines/abi_anchors.tsv`；
+> 改完代码跑一次，重映射后 `--bless`。**目前仍是本地一条命令，未进 CI**（任务 #37：
+> 95 个锚点里 23 处落在下面那两个并发持有的 C 文件，先加作用域开关再挂硬门禁）⇒
+> "同批改锚点"今天靠人，不靠门禁。
+> 它**不**回答"这行是否仍是该规则的实现点"（见脚本头部的已知边界）。
 >
 > ⚠️ `runtime/py_additions.c` 与 `runtime/tokio_runtime_stub.c` 由并发工作流持有：
 > 本文**只引用，不修改**。
@@ -388,7 +397,7 @@ ARCHITECTURE-REVIEW:103 记的是"四份符号表手工同步"（①codegen 声�
 | 处 | 现状 | 锚点 |
 |---|---|---|
 | ① LLVM 声明 | **仍是手写**：codegen.rs 内 255 处 `add_function`（实测计数） | 例 codegen.rs:1069、1071、1078 |
-| ①′ 生成物 | `runtime_decls_registry.rs`（294 处 `add_function`）+ `runtime_decls_core.rs`（61 处）由 `--emit`/`--emit-core` 生成，**两个入口函数从未被调用** | mod.rs:7、:9 只声明模块；`declare_registry_runtime_fns`/`declare_core_runtime_fns` callers **图内无边**（codegraph）+ grep 全仓仅定义处与一处注释（pylib.rs:685） |
+| ①′ 生成物 | `runtime_decls_registry.rs`（294 处 `add_function`）+ `runtime_decls_core.rs`（61 处）由 `--emit`/`--emit-core` 生成，**两个入口函数从未被调用** | codegen/mod.rs:7、:9 只声明模块；`declare_registry_runtime_fns`/`declare_core_runtime_fns` callers **图内无边**（codegraph）+ grep 全仓仅定义处与一处注释（pylib.rs:685） |
 | ② gen.rs 分发 | 手工 | 例 gen.rs:8713、:8965 |
 | ③ C 实现 | 手工 | 例 py_additions.c:967、:3408 |
 | ④ `.set` 别名 | 已生成（数据 `pylib/runtime_aliases.txt`，其 :1 注释自述"Generated/**edited by hand**"） | aliases.inc.c:1-2 |
@@ -674,16 +683,42 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
    且补偿不再静默）。⚠️ 改签名来源会改变 `If{dest: None}` 那类程序的行为
    （M7 实测：签名被顶层 `return 7` 定成 i64、分支里的 F64 返回被 `fptosi`）
    ⇒ 必须全量门禁 + 把 M5/M6/M7 固化进 `tests/` 后再动。
-9. **编译期诊断在门禁里读不出来**（批次 319 撞出，逐条实测两条 harness 路径）：
-   - official：`tools/run_all.sh:67` 是 `… -o out >/dev/null 2>&1` ⇒ 编译期 stderr
-     **整个丢掉**，连落盘都没有。
-   - python_style：正面用例 `tests/python_style/run.sh:95` 把编译输出重定向到
-     per-file 的 `$OUTDIR/$name.cc` ⇒ 事后翻得到，但**不聚合、不打印**，只有编译
-     失败时才 `tail -1` 一行；负面用例 :87 同样是 `>/dev/null 2>&1`。
-   ⇒ §3.2 的 `ABI coerce`、本批的 `ABI return`、批次 315 的 `[W3001]/[E4016]`
-   这类诊断，在门禁汇总里一条都看不见。本批要拿"0/194、6/38"这两个数，只能另写
-   逐文件捕获 stderr 的扫描（`/tmp/abi319/`）。
-   **顺带一条好消息，它同时是给诊断改动的护栏**：`run.sh:127-133` 比对的是运行期
-   **stdout**（`2>/dev/null`），编译期告警不参与判定 ⇒ 加告警天然不动 285 的计数口径。
-   G.5d 动作项：门禁保留一份"编译期诊断"聚合输出（含命中文件名与计数），
-   否则诊断做得再多也是往看不见的水里扔。
+9. ✅ **编译期诊断在门禁里读不出来**（批次 319 撞出 → **批次 320 关闭**）：
+   - official 侧原状：`tools/run_all.sh` 编译时 `… -o out >/dev/null 2>&1` ⇒ 编译期
+     stderr **整个丢掉**，连落盘都没有（批次 319 记的锚点 `run_all.sh:67` 已随本批
+     改动漂到 **:76**——正是这个工具存在的理由）。
+   - python_style 侧原状（**本批更正批次 319 的一处判断**）：正面用例
+     `tests/python_style/run.sh:95` 把编译输出重定向到 per-file 的 `$OUTDIR/$name.cc`，
+     319 据此写的是"事后翻得到"——**错**。`run.sh:15` 有 `trap 'rm -rf "$OUTDIR"' EXIT`，
+     `OUTDIR` 是 `mktemp -d` ⇒ 跑完即整目录删除，外部永远捞不回来。聚合**必须**发生在
+     run.sh 内部、trap 之前，这也是本批改动落点选择的直接原因。
+   ⇒ 现况：两套 harness 各出一行 `compile-diagnostics:`（official 逐文件留档到
+   `$OFFICIAL_DIAG`，默认 `/tmp/zeta_official_diag.txt`；python_style 在删目录前聚合
+   并打印去重后的 top 10），数字同时进 `/tmp/zeta_baseline.json` 的
+   `compile_diagnostics` 字段 ⇒ CI artifact 里也拿得到。
+   **口径**：只统计 `warning:` / `PY-A:`，排除 `clang: warning:`（链接器抱怨 `-no-pie`，
+   实测 194/194 全有 —— 不排除的话真信号会被同名噪声埋掉）。**不参与退出码**：
+   护栏仍然是 `run.sh:127-133` 比对运行期 stdout ⇒ 诊断再多也不动 285/194 的计数口径。
+   - **第一份读数（批次 320，此前不可见）**：official **13/194 文件、18 行**
+     （= 12×`[W1002]` + 2×`ABI coerce` + 1×其汇总 + 2×`PY-A: imported` + 1×`PY-A: unknown`；
+     `ABI return` **0 行** ⇒ 批次 319 报的 0/194 这次是**在有捕获的前提下**复现的）；
+     python_style **82 文件、191 行**（大头：31×"defaults `errors` 的 kind 装不进 `dyn`
+     参数型 ⇒ 被强转"、14×`ABI coerce in call to zeta_env_set … fptosi`、
+     12×numpy 双份 shim 提示）。
+   - ⚠️ 这份读数额外撞出一个**独立缺陷**，已另登记为 **附 B#10**（不是 ABI 问题，
+     但只有把 stderr 收回来才看得见 —— 这就是本项非做不可的证明）。
+10. **`official: 194/194` 里有 12 个用例的程序被解析器就地截断**（批次 320 收门禁
+   stderr 时撞出，任务 #36；**不是 ABI 缺陷**，登记在此只因为它是"诊断看不见"的直接代价）：
+   这 12 个文件编译成功、也被计入 194/194，但每个都带一条
+   `[W1002] … N line(s) at the end of the input were NOT parsed … DROPPED from the program`
+   —— 解析器遇到第一个不认识的顶层条目就停下，**后面的整段程序不进 AST**。
+   实测丢弃量：合计 **1,805 行 / 这 12 个文件总行数 2,041 ⇒ 88% 的内容从未被编译**。
+   最差几个：`minimal_compiler` 800 行丢 757、`benchmark_simd_vs_scalar` 364 丢 357、
+   `test_suite` 129 丢 127、`advanced_patterns_test` 100 丢 98、`selfhost` 179 丢 158、
+   `bootstrap_validation_test` 60 丢 58。首条未解析文本的形态集中在
+   `fn test_at_patterns()`（`@` 模式）、`impl Parser for ZetaParser`、`match` 体这几族。
+   **后果**：① 官方基线对这批文件只覆盖了程序前缀，"194/194"不能读成
+   "194 个程序全部编译通过"；② 任何"某语法已支持"的结论若来自这批文件，证据无效。
+   下一步的判据本批已备好（`/tmp/zeta_official_diag.txt` 逐文件列名），修法是 G.1/G.3
+   的事，不在本批范围：要么把这些构造接进解析器，要么把 12 个文件按现状拆分并在
+   `tests/python_style` 的 known-fail 段立住（勿静默删用例，那会把缺口藏得更深）。
