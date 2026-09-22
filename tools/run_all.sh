@@ -51,24 +51,40 @@ zt_stale_check zeta_runtime_c.o runtime/py_additions.c runtime/parquet_min.c run
 zt_stale_check tokio_runtime.o runtime/tokio_runtime_stub.c runtime/unavailable_stubs.c
 
 ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-official_pass=0; official_total=0
+official_pass=0; official_total=0; official_diag_files=0; official_diag_lines=0
 py_pass=0; py_fail=0; py_known=0; py_xpass=0
 corpus_ok=0; corpus_total=0
+py_diag_lines=0; py_diag_files=0
 
 # ── 1) official (compile-only, top-level *.z; copy to /tmp like validate.md) ──
+# 任务 #34（docs/ABI.md 附 B#9）：此前编译 stderr 被 `>/dev/null 2>&1` 全丢 ⇒ 门禁日志里
+# 一条编译期告警都收不到，任何"零告警"结论都是在空集上测的（批次 319 就这么错过一次）。
+# 现在逐文件留档再聚合。**判定不变**：本步的口径仍是"编译成功数"，告警只出声不改 pass/fail。
+# 聚合时排除 `clang: warning:`（链接器抱怨 `-no-pie`，实测 194/194 全有）——不排除的话，
+# 真信号会被 194 条同名工具链噪声埋掉，聚合结果等于没聚合。
+OFFICIAL_DIAG="${OFFICIAL_DIAG:-/tmp/zeta_official_diag.txt}"
 if [[ $SKIP_OFFICIAL -eq 0 ]]; then
   rm -rf /tmp/zeta_tests /tmp/zt_out
   mkdir -p /tmp/zeta_tests /tmp/zt_out
+  : > "$OFFICIAL_DIAG"
   # shellcheck disable=SC2086
   cp $ROOT/tests/unit-tests/*.z /tmp/zeta_tests/ 2>/dev/null || true
   while IFS= read -r -d '' z; do
     official_total=$((official_total + 1))
     n=$(basename "$z" .z)
-    if "$ZETAC" "$z" -o "/tmp/zt_out/$n" >/dev/null 2>&1; then
+    d="/tmp/zt_out/$n.diag"
+    if "$ZETAC" "$z" -o "/tmp/zt_out/$n" >/dev/null 2>"$d"; then
       official_pass=$((official_pass + 1))
     fi
+    if grep -v '^clang: warning' "$d" 2>/dev/null | grep -q 'warning:\|PY-A:'; then
+      official_diag_files=$((official_diag_files + 1))
+      { printf '### %s\n' "$n"; grep -v '^clang: warning' "$d"; } >> "$OFFICIAL_DIAG"
+    fi
   done < <(find /tmp/zeta_tests -maxdepth 1 -name '*.z' -print0 | sort -z)
+  official_diag_lines=$(grep -c 'warning:\|PY-A:' "$OFFICIAL_DIAG" || true)
+  official_diag_lines=${official_diag_lines:-0}
   [[ $JSON_ONLY -eq 0 ]] && echo "official: ${official_pass}/${official_total}"
+  echo "compile-diagnostics: official ${official_diag_files}/${official_total} file(s) with compiler warnings, ${official_diag_lines} line(s) — 明细 $OFFICIAL_DIAG"
 fi
 
 # ── 2) python_style ──
@@ -85,6 +101,18 @@ if [[ $SKIP_PYTHON -eq 0 ]]; then
     py_fail=$(echo "$summary" | sed -E 's/.*passed, ([0-9]+) failed.*/\1/')
     py_known=$(echo "$summary" | sed -E 's/.*failed, ([0-9]+) known-fail.*/\1/')
     py_xpass=$(echo "$summary" | sed -E 's/.*known-fail, ([0-9]+) xpass.*/\1/')
+  fi
+  # 任务 #34：python_style 的编译告警由 run.sh 自己聚合（它的 OUTDIR 在 EXIT trap
+  # 里就被删掉，外部再也捞不回来），这里只把它的计数行转成 JSON 字段。
+  diagline=$(grep '^compile-diagnostics:' "$py_log" | tail -1 || true)
+  if [[ -n "$diagline" ]]; then
+    py_diag_lines=$(echo "$diagline" | sed -E 's/.*python_style ([0-9]+).*/\1/')
+    py_diag_files=$(echo "$diagline" | sed -E 's/.*in ([0-9]+) file.*/\1/')
+    # 只在 python_style **通过**时自己打印：它失败时下面那条 `tail -20 "$py_log"`
+    # 本来就会把同一份聚合块吐出来（聚合块是 run.sh 的最后若干行），两处都印是纯噪声。
+    if [[ $JSON_ONLY -eq 0 && $py_rc -eq 0 ]]; then
+      awk '/^compile-diagnostics:/{p=1} p && c++<11' "$py_log"
+    fi
   fi
   if [[ $JSON_ONLY -eq 0 ]]; then
     echo "$summary"
@@ -146,6 +174,14 @@ doc = {
   "corpus": {"parse_ok": $corpus_ok, "total": $corpus_total},
   "jit": {"ok": $jit_ok, "segv": $jit_segv, "total": $jit_total,
           "skipped": $jit_skipped},
+  # 只出声、不参与退出码（附 B#9 的护栏：判定看运行期 stdout，告警不改判定）
+  "compile_diagnostics": {
+    "official_files_with_warnings": $official_diag_files,
+    "official_warning_lines": $official_diag_lines,
+    "official_not_measured": $SKIP_OFFICIAL,
+    "python_style_files_with_warnings": $py_diag_files,
+    "python_style_warning_lines": $py_diag_lines
+  },
 }
 path = "$OUT_JSON"
 with open(path, "w") as f:

@@ -150,4 +150,24 @@ done
 echo "----------------------------------------"
 echo "python_style: $pass passed, $fail failed, $knownfail known-fail, $xpass xpass"
 [ -n "$failed_files" ] && echo "failed:$failed_files"
+
+# 任务 #34 (docs/ABI.md 附 B#9)：编译期告警此前写进 $OUTDIR/$name.cc 就再没人读，
+# 而 $OUTDIR 在 EXIT trap 里被整目录删掉 ⇒ 门禁日志收不到任何告警，"零告警"是在
+# 空集上测的。必须在删目录**之前**聚合。判定不受影响：上面的比对读的是运行期
+# stdout，这里只是把编译期 stderr 变成可见的数字 + 去重后的头部若干条。
+# 排除 `clang: warning:`（链接器抱怨 -no-pie，工具链噪声，不排除会埋掉真信号）。
+diag_py=$(grep -hv '^clang: warning' "$OUTDIR"/*.cc 2>/dev/null | grep -c 'warning:\|PY-A:' || true)
+diag_py=${diag_py:-0}
+diag_py_files=0
+for c in "$OUTDIR"/*.cc; do
+    if grep -v '^clang: warning' "$c" 2>/dev/null | grep -q 'warning:\|PY-A:'; then
+        diag_py_files=$((diag_py_files + 1))
+    fi
+done
+echo "compile-diagnostics: python_style ${diag_py} warning line(s) in ${diag_py_files} file(s)"
+if [ "$diag_py" != "0" ]; then
+    grep -hv '^clang: warning' "$OUTDIR"/*.cc 2>/dev/null | grep 'warning:\|PY-A:' \
+        | sed -E 's/[0-9]+/N/g' | sort | uniq -c | sort -rn | head -10
+fi
+
 [ "$fail" -eq 0 ]
