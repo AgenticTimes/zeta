@@ -533,6 +533,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // G.8a (refactor.md): print the fake-value stubs THIS program calls.
     let report_stubs = args.iter().any(|a| a == "--report-stubs");
     let no_link = args.iter().any(|a| a == "--no-link");
+    // Asking for a dump is not asking to run. Until batch 344 the only thing
+    // that decided "execute the program" was whether `-o` was given (see the
+    // `if let Some(out) = output` below), so `zetac --dump-mir x.z` ran x.
+    let probe_only = dump_mir || dump_ir || report_untyped || report_stubs;
 
     // Handle --explain flag: print error code explanation
     if let Some(pos) = args.iter().position(|a| a == "--explain") {
@@ -917,7 +921,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         println!("Compiled to {}", out);
                     }
-                } else {
+                } else if !probe_only {
                     let ee = codegen.finalize_and_jit(&target)?;
                     type MainFn = unsafe extern "C" fn() -> i64;
                     unsafe {

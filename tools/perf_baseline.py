@@ -10,10 +10,16 @@
 
 测什么（两个阶段，口径不同，别混着看）：
   aot = `zetac <f> -o probe`   走完 前端→MIR→LLVM -O3→.o→gcc 链接（端到端用户视角）
-  ir  = `zetac <f> --emit-llvm`（module 打到 **stderr**，见 main.rs:816 print_to_stderr）
+  ir  = `zetac <f> --emit-llvm`（module 打到 **stderr**，见 main.rs:822 print_to_stderr）
                               只到**未优化** IR 打印（批次 307：--emit-llvm 打的是
                               优化前的 module）⇒ 轴 B/C 改 IR 体量时看这条最灵敏。
-                              批次 313 实测：打印完成后进程在退出路径 SIGSEGV(rc=139)。
+                              ⚠️ 批次 344 换过口径：此前"无 -o 一律执行被编译的程序"
+                              （`--emit-llvm` 顺带 JIT + 跑 main），此后只打印。
+                              同一份二进制、同 3 文件实测 597.5 → 388.6 ms（**-35%**），
+                              且修复前 9/9 轮都是 fail:rc1（执行程序撞 E4016 桩 exit(1)）
+                              ⇒ 批次 313 那份 41,655 ms/12 文件**不可与今天直比**。
+                              脚本不靠人记这事：`ir_executes_program` 标签从**被测二进制**
+                              现场探（见 probe_executes），口径不同 `--diff` 直接 die。
 
 统计口径（三条都是批次 313 在本机量出来的，不是设计时假设）：
   1. 每个 (阶段, 文件) 取 **min**（`PERF_REPEAT`，默认 3）。min 而不是 mean：
@@ -40,7 +46,7 @@
   python3 tools/perf_baseline.py --diff              # 与基线比对，回退超阈值则 rc=1
   python3 tools/perf_baseline.py --calibrate         # 同码连测 N 轮，量噪声地板
   PERF_CORPUS=<dir> PERF_FILES=16 PERF_STAGES=ir PERF_GATE_STAGES=ir,\\
-  PERF_REPEAT=5 PERF_WARMUP=0 python3 tools/perf_baseline.py
+  PERF_REPEAT=5 PERF_WARMUP=0 PERF_FIXTURE=<f.z> python3 tools/perf_baseline.py
 
 基线默认落在 /tmp 而不是仓内：这条与任务 #15 无关（#15 的 `run_*` 忽略规则已在批次 314
 修掉，`tools/baselines/` 可入库）。不入库的原因是**这台机器的绝对路径**写进了 JSON
@@ -60,6 +66,8 @@ WORKDIR = "/tmp/zeta_perf_probe"
 BASELINE = os.environ.get("ZETA_PERF_BASELINE", "/tmp/zeta_perf_baseline.json")
 CORPUS = os.environ.get("PERF_CORPUS", os.path.expanduser("~/source/quant/REasyQuant/strategies"))
 N_FILES = int(os.environ.get("PERF_FILES", "12"))
+# 口径探针夹具（与 ZETAC 一样是相对路径 ⇒ 本脚本从仓库根跑）
+FIXTURE = os.environ.get("PERF_FIXTURE", "tests/unit-tests/test_minimal.z")
 STAGES = (os.environ.get("PERF_STAGES", "aot,ir")).split(",")
 # 判定只压在主阶段上；批次 313 用实测噪声地板定的这个默认值见 --calibrate 说明。
 GATE_STAGES = os.environ.get("PERF_GATE_STAGES", "ir").split(",")
@@ -90,13 +98,31 @@ def _ir_printed(r):
     return tail.endswith("}") and "\nattributes #" in tail[-4000:]
 
 
+def ir_executes_program():
+    """从**被测二进制**现场探它属于哪个 ir 口径，而不是让人记住。
+    批次 344 起 `--dump-mir x` 不再在编译器进程里执行 x；此前会 ⇒ 同一份语料的
+    ir total 差 35%（3 文件实测 597.5 → 388.6 ms）。判据只用运行路径自己打的
+    `^Result: `（main.rs:930）——转储文本里也含程序自己的字，grep stdout 会误判。
+    探不到夹具时直接 die：缺夹具不等于'不执行'。"""
+    if not os.path.isfile(FIXTURE):
+        die(f"口径探针夹具 {FIXTURE} 不存在（PERF_FIXTURE 可指定；缺它就无法判断"
+            f"这份二进制是'只 dump'还是'dump 完还执行程序'，不能默认任一口径）")
+    try:
+        r = subprocess.run([ZETAC, FIXTURE, "--dump-mir"],
+                           capture_output=True, text=True, timeout=TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        die(f"口径探针跑不动：{e}")
+    return any(l.startswith("Result: ") for l in (r.stdout or "").splitlines())
+
+
 def run_once(stage, src, out):
     """返回 (耗时 ms, 状态)。状态是分阶段的，混用会得出错误结论：
       aot 走真链接，本机环境链接失败是常态；'Linking failed' 说明**编译阶段本身走完**
           ⇒ 记 link-fail（可信），不是提前退出。
-      ir  的 --emit-llvm 在批次 313 实测：**每次**都在打印完 IR 之后于进程退出路径
-          SIGSEGV（rc=139，lldb: frame#0 = 0x0 空指针调用，发生在 main 返回之后）。
-          IR 已完整 ⇒ 计时有效，单独记 torn:*-crash-after-dump（另立缺陷任务）。
+      ir  的 --emit-llvm 在批次 313 实测：每次都在打印完 IR 之后 SIGSEGV(rc=139)。
+          批次 315 给未解析符号填桩后变成 rc=1（执行程序撞 E4016 桩 exit(1)），
+          批次 344 起不再执行 ⇒ rc=0、状态 ok。IR 完整即计时有效；仍保留
+          torn:*-crash-after-dump 这一档，用于"打印完又崩"回归时能读出来。
     """
     if stage == "aot":
         cmd = [ZETAC, src, "-o", out]
@@ -190,6 +216,7 @@ def main():
         die(f"{ZETAC} 不存在——先 cargo build --release（测的不是缓存里的旧二进制）")
     files = collect_files()
     base = None
+    cur_exe = ir_executes_program()
     if mode == "--diff":
         # 口径不一致的比对没有意义，而且"文件数变少 ⇒ total 变小"会被读成"没有回退"
         # ⇒ 必须在暖机（花掉真金白银的编译时间）**之前**判掉
@@ -198,6 +225,11 @@ def main():
             if base.get(k) != want:
                 die(f"基线的 {k}={base.get(k)!r} 与本次 {want!r} 不一致"
                     f"（口径不同的 total 不可比，不能当作通过）")
+        # 这一条不靠人记：批次 344 之前 ir 口径里含"在编译器进程里执行被编译的程序"，
+        # 换二进制 total 会掉 35%，读成"优化见效"就是假读数。缺标签的老基线同样拦下。
+        if base.get("ir_executes_program") != cur_exe:
+            die(f"基线的 ir 口径（无 -o 时是否执行程序）={base.get('ir_executes_program')!r}"
+                f"，本次二进制={cur_exe!r} —— total 不可比（实测差 35%），重取基线")
         for s in STAGES:
             if s not in base.get("stages", {}):
                 die(f"基线里没有阶段 {s}（本次 PERF_STAGES={STAGES}）——换口径请重取基线")
@@ -271,6 +303,7 @@ def main():
 
     cur, bad, noted = measure(files, repeat)
     doc = {"corpus": CORPUS, "n_files": len(files), "repeat": repeat,
+           "ir_executes_program": cur_exe,
            "stages": cur, "bad_runs": bad, "noted_runs": noted}
     print(json.dumps(doc, indent=2, ensure_ascii=False))
     report(bad, noted)

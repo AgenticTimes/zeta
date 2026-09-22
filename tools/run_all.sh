@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/run_all.sh — Q4 (advice.md): one command → three baseline numbers as JSON.
-# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import] [--skip-empty] [--skip-clean] [--skip-pysrc]
+# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import] [--skip-empty] [--skip-clean] [--skip-pysrc] [--skip-sem]
 # Exit 0 if all enabled suites pass their green criteria; else 1.
 set -euo pipefail
 
@@ -21,6 +21,7 @@ SKIP_IMPORT=0
 SKIP_EMPTY=0
 SKIP_CLEAN=0
 SKIP_PYSRC=0
+SKIP_SEM=0
 
 for a in "$@"; do
   case "$a" in
@@ -36,6 +37,7 @@ for a in "$@"; do
     --skip-empty) SKIP_EMPTY=1 ;;
     --skip-clean) SKIP_CLEAN=1 ;;
     --skip-pysrc) SKIP_PYSRC=1 ;;
+    --skip-sem) SKIP_SEM=1 ;;
     -h|--help)
       sed -n '2,6p' "$0"
       exit 0
@@ -401,6 +403,29 @@ if [[ $SKIP_PYSRC -eq 0 ]]; then
   rm -f "$pysrc_log"
 fi
 
+# ── 12) 只读入口不许执行程序（批次 344）──
+# 修复前"要不要执行被编译的程序"只看有没有 `-o` ⇒ --dump-mir / --emit-llvm /
+# --report-stubs / --report-untyped / ZETA_DUMP_IR=1 全都边 dump 边跑 main。
+# 本步骤钉三翼：裸跑必须执行（探测器阳性对照）、五个只读入口必须不执行且 rc=0、
+# `-o` 那条路逐字不变。判据在 tools/cli_semantics_check.sh 内部，这里只认退出码。
+sem_rc=0; sem_failed=0; sem_checked=0
+if [[ $SKIP_SEM -eq 0 ]]; then
+  sem_log=$(mktemp)
+  set +e
+  ZETAC="$ZETAC" "$ROOT/tools/cli_semantics_check.sh" >"$sem_log" 2>&1
+  sem_rc=$?
+  set -e
+  sem_failed=$(grep -c '  FAIL ' "$sem_log" || true); sem_failed=${sem_failed:-0}
+  sem_checked=$(grep -cE '  (ok|FAIL) ' "$sem_log" || true); sem_checked=${sem_checked:-0}
+  if [[ $JSON_ONLY -eq 0 ]]; then
+    echo "cli_semantics: ${sem_checked} 条断言，FAIL ${sem_failed}（rc=$sem_rc）"
+  fi
+  if [[ $sem_rc -ne 0 ]]; then
+    tail -30 "$sem_log" >&2
+  fi
+  rm -f "$sem_log"
+fi
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -427,6 +452,8 @@ doc = {
                  "skipped": $SKIP_EMPTY},
   "pysrc": {"checked": $pysrc_checked, "failed": $pysrc_failed,
             "rc": $pysrc_rc, "skipped": $SKIP_PYSRC},
+  "cli_semantics": {"checked": $sem_checked, "failed": $sem_failed,
+                    "rc": $sem_rc, "skipped": $SKIP_SEM},
   "clean_checkout": {"rc": $clean_rc, "secs": $clean_secs, "rev": "${clean_rev:0:8}",
                      "skipped": $SKIP_CLEAN},
   # 只出声、不参与退出码（附 B#9 的护栏：判定看运行期 stdout，告警不改判定）
@@ -469,8 +496,11 @@ if [[ $SKIP_SWALLOW -eq 0 && $swallow_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_IMPORT -eq 0 && $import_rc -ne 0 ]]; then rc=1; fi
 # empty_stmt: 判据在 tools/empty_stmt_inventory.sh 内部（四翼断言），这里只认退出码。
 if [[ $SKIP_EMPTY -eq 0 && $empty_rc -ne 0 ]]; then rc=1; fi
-# pysrc: 判据在 tools/py_module_search_inventory.sh 内部（五翼），这里只认退出码。
+# pysrc: 判据在 tools/py_module_search_inventory.sh 内部（六翼——批次 343 补的 A2 翼，
+# 这行当时漏改，批次 344 顺手更正），这里只认退出码。
 if [[ $SKIP_PYSRC -eq 0 && $pysrc_rc -ne 0 ]]; then rc=1; fi
+# cli_semantics: 判据在 tools/cli_semantics_check.sh 内部（三翼），这里只认退出码。
+if [[ $SKIP_SEM -eq 0 && $sem_rc -ne 0 ]]; then rc=1; fi
 # clean_checkout: 判据在步骤 10 内部（rc=0 才算"检出即可编译"）；93~99 是选址/登记/提交解析
 # 本身不合法，同样判红——静默跳过等于这一步不存在。
 if [[ $SKIP_CLEAN -eq 0 && $clean_rc -ne 0 ]]; then rc=1; fi
