@@ -1,0 +1,62 @@
+// 任务 #36 第五族（docs/ABI.md 附 B#10）：**范围模式整族**（`1..=10`、`'a'..='z'`、
+// `x @ 1..=10`）。两层缺陷叠在一起，所以"能解析"离"能对"只差一行读数、却最难查：
+//   ① 解析：`parse_range_pattern` 的两端只吃 `parse_lit` ⇒ 字符字面量 `'a'..='z'`
+//      直接解析失败，整条 `fn` 连文件余部被 [W1002] 丢弃（退出码仍为 0）。
+//      现补 `parse_char_lit`（模式位的 `'x'` 是**码点整数**，不是字符串：单引号在
+//      本语言里也是普通字符串定界符，`s.split(',')` 依赖这一点，故只在模式位改语义）。
+//   ② 下型：`>=` / `<=` 的 `MirStmt::Call` dest **从没进过 `exprs`**，而
+//      `gen_expr_safe` 对缺失 id 静默回 `i64 0`（src/backend/codegen/codegen.rs）
+//      ⇒ `&&` 永远看到 `0 && 0` ⇒ **任何范围臂都不可能命中**，全部落到 `_ =>`，
+//      零诊断。`x @ 1..=10` 另有一处同族：条件被 `Var(inner_cond_id)` 多包了一层，
+//      那一格从无写入，`-O` 把"读未初始化 alloca"降成 `brk #0x1` ⇒ SIGTRAP。
+// 修复前三层都"看着正常"：解析通过、编译 0 诊断、只有跑起来才暴露。所以本用例
+// 断言的是**臂选择**（含 `..` 与 `..=` 的边界差），不是"能编译"。
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: 0
+// expect: 111
+// expect: 222
+// expect: -1
+// expect: 111
+// expect: -1
+// expect: 7
+// expect: -1
+fn classify(c: i64) -> i64 {
+    match c {
+        'a'..='z' => return 1,
+        'A'..='Z' => return 2,
+        '0'..='9' => return 3,
+        _ => return 0
+    }
+}
+fn first_hit(x: i64) -> i64 {
+    match x {
+        1..=10 => 111,
+        10..20 => 222,
+        _ => -1
+    }
+}
+fn exclusive(x: i64) -> i64 {
+    match x {
+        1..10 => 111,
+        _ => -1
+    }
+}
+fn bound(x: i64) -> i64 {
+    match x {
+        q @ 1..=10 => q,
+        _ => -1
+    }
+}
+println(classify(97));
+println(classify(68));
+println(classify(55));
+println(classify(43));
+println(first_hit(5));
+println(first_hit(15));
+println(first_hit(99));
+println(exclusive(9));
+println(exclusive(10));
+println(bound(7));
+println(bound(70));

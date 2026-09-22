@@ -191,12 +191,55 @@ fn parse_field_pattern(input: &str) -> IResult<&str, (String, AstNode)> {
     Ok((input, (name, pat)))
 }
 
+/// Char literal in pattern position: `'a'` / `'\n'` → its codepoint.
+///
+/// Single quotes are also ordinary string delimiters in this language
+/// (`s.split(',')`), so outside a pattern `'x'` stays a 1-char string. In a
+/// pattern it has to be an integer, because that is what a char is in a slot —
+/// and `parse_range_pattern`'s endpoints used to be `parse_lit` only, which is
+/// what dropped `advanced_patterns_test.z`'s `'a'..='z'` arms whole (W1002).
+fn parse_char_lit(input: &str) -> IResult<&str, AstNode> {
+    fn fail<'i>(input: &'i str) -> nom::Err<nom::error::Error<&'i str>> {
+        nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Char))
+    }
+
+    let rest = match input.strip_prefix('\'') {
+        Some(r) => r,
+        None => return Err(fail(input)),
+    };
+    let (ch, rest) = match rest.chars().next() {
+        Some(c) => (c, &rest[c.len_utf8()..]),
+        None => return Err(fail(input)),
+    };
+    let (code, rest) = if ch != '\\' {
+        (ch as i64, rest)
+    } else {
+        let e = match rest.chars().next() {
+            Some(c) => c,
+            None => return Err(fail(input)),
+        };
+        let code = match e {
+            'n' => 10,
+            'r' => 13,
+            't' => 9,
+            '0' => 0,
+            c @ ('\\' | '\'' | '"') => c as i64,
+            _ => return Err(fail(input)),
+        };
+        (code, &rest[e.len_utf8()..])
+    };
+    match rest.strip_prefix('\'') {
+        Some(r) => Ok((r, AstNode::Lit(code))),
+        None => Err(fail(input)),
+    }
+}
+
 /// Parse a range pattern: `start..end` or `start..=end`
 fn parse_range_pattern(input: &str) -> IResult<&str, AstNode> {
-    let (input, start) = parse_lit(input)?;
+    let (input, start) = alt((parse_char_lit, parse_lit)).parse(input)?;
     let (input, _) = ws(tag("..")).parse(input)?;
     let (input, inclusive): (_, Option<&str>) = opt(ws(tag("="))).parse(input)?;
-    let (input, end) = parse_lit(input)?;
+    let (input, end) = alt((parse_char_lit, parse_lit)).parse(input)?;
 
     Ok((
         input,
@@ -249,6 +292,7 @@ fn parse_simple_pattern(input: &str) -> IResult<&str, AstNode> {
         parse_struct_pattern,
         parse_range_pattern,
         parse_lit,
+        parse_char_lit,
         parse_string_lit,
         parse_ident.map(AstNode::Var),
     ))

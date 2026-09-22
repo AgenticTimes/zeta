@@ -2978,6 +2978,56 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         }
     }
 
+    /// Lower a range pattern as a match guard on `scrutinee_id`, returning a Bool
+    /// condition id: `scrutinee >= start && scrutinee (<= | <) end`.
+    ///
+    /// Every intermediate id must be registered in `exprs`, not merely used as a
+    /// `Call` dest — `gen_expr_safe` answers an unregistered id with `i64 0`
+    /// (`codegen.rs:5606`), so the conjunction read `0 && 0` and no range arm
+    /// could ever match: `match 5 { 1..=10 => 111, _ => 222 }` yielded 222 with
+    /// zero diagnostics.
+    fn lower_range_guard(
+        &mut self,
+        scrutinee_id: u32,
+        start: &AstNode,
+        end: &AstNode,
+        inclusive: bool,
+    ) -> u32 {
+        let ge_id = self.next_id();
+        let le_id = self.next_id();
+        let start_id = self.lower_expr(start);
+        let end_id = self.lower_expr(end);
+
+        self.stmts.push(MirStmt::Call {
+            func: ">=".to_string(),
+            args: vec![scrutinee_id, start_id],
+            dest: ge_id,
+            type_args: vec![],
+        });
+        self.exprs.insert(ge_id, MirExpr::Var(ge_id));
+        self.type_map.insert(ge_id, Type::Bool);
+
+        self.stmts.push(MirStmt::Call {
+            func: if inclusive { "<=" } else { "<" }.to_string(),
+            args: vec![scrutinee_id, end_id],
+            dest: le_id,
+            type_args: vec![],
+        });
+        self.exprs.insert(le_id, MirExpr::Var(le_id));
+        self.type_map.insert(le_id, Type::Bool);
+
+        let and_id = self.next_id();
+        self.stmts.push(MirStmt::Call {
+            func: "&&".to_string(),
+            args: vec![ge_id, le_id],
+            dest: and_id,
+            type_args: vec![],
+        });
+        self.exprs.insert(and_id, MirExpr::Var(and_id));
+        self.type_map.insert(and_id, Type::Bool);
+        and_id
+    }
+
     fn lower_expr(&mut self, expr: &AstNode) -> u32 {
         let id = self.next_id();
         match expr {
@@ -10822,39 +10872,18 @@ call, no NULL-handle dereference).",
                             self.name_to_id.insert(name.clone(), scrutinee_id);
                             // Check the inner pattern
                             let inner_cond_id = self.next_id();
-                            match &**inner {
+                            let cond_val = match &**inner {
                                 AstNode::RangePattern {
                                     start,
                                     end,
-                                    inclusive: _,
+                                    inclusive,
                                 } => {
-                                    // x @ start..=end: check x >= start && x <= end
-                                    let ge_id = self.next_id();
-                                    let le_id = self.next_id();
-                                    let start_id = self.lower_expr(start);
-                                    let end_id = self.lower_expr(end);
-                                    self.stmts.push(MirStmt::Call {
-                                        func: ">=".to_string(),
-                                        args: vec![scrutinee_id, start_id],
-                                        dest: ge_id,
-                                        type_args: vec![],
-                                    });
-                                    self.stmts.push(MirStmt::Call {
-                                        func: "<=".to_string(),
-                                        args: vec![scrutinee_id, end_id],
-                                        dest: le_id,
-                                        type_args: vec![],
-                                    });
-                                    // AND them
-                                    let and_id = self.next_id();
-                                    self.stmts.push(MirStmt::Call {
-                                        func: "&&".to_string(),
-                                        args: vec![ge_id, le_id],
-                                        dest: and_id,
-                                        type_args: vec![],
-                                    });
-                                    self.exprs.insert(inner_cond_id, MirExpr::Var(and_id));
-                                    self.type_map.insert(inner_cond_id, Type::Bool);
+                                    // x @ start..end: bind, then guard the range. The
+                                    // guard ends in a stored `Call` dest and has to be
+                                    // read through THAT id — an extra `Var(inner_cond_id)`
+                                    // hop read an alloca nothing ever wrote, and `-O`
+                                    // lowers that load to `brk #0x1` (SIGTRAP).
+                                    self.lower_range_guard(scrutinee_id, start, end, *inclusive)
                                 }
                                 _ => {
                                     // Other inner patterns: match by lowering.
@@ -10865,43 +10894,21 @@ call, no NULL-handle dereference).",
                                         dest: inner_cond_id,
                                         type_args: vec![],
                                     });
-                                    self.exprs
-                                        .insert(inner_cond_id, MirExpr::Var(inner_cond_id));
-                                    self.type_map.insert(inner_cond_id, Type::Bool);
+                                    inner_cond_id
                                 }
-                            }
-                            self.exprs.insert(cond_id, MirExpr::Var(inner_cond_id));
+                            };
+                            self.exprs.insert(cond_val, MirExpr::Var(cond_val));
+                            self.type_map.insert(cond_val, Type::Bool);
+                            self.exprs.insert(cond_id, MirExpr::Var(cond_val));
                             self.type_map.insert(cond_id, Type::Bool);
                         }
                         AstNode::RangePattern {
                             start,
                             end,
-                            inclusive: _,
+                            inclusive,
                         } => {
-                            // Range pattern: scrutinee >= start && scrutinee <= end
-                            let ge_id = self.next_id();
-                            let le_id = self.next_id();
-                            let start_id = self.lower_expr(start);
-                            let end_id = self.lower_expr(end);
-                            self.stmts.push(MirStmt::Call {
-                                func: ">=".to_string(),
-                                args: vec![scrutinee_id, start_id],
-                                dest: ge_id,
-                                type_args: vec![],
-                            });
-                            self.stmts.push(MirStmt::Call {
-                                func: "<=".to_string(),
-                                args: vec![scrutinee_id, end_id],
-                                dest: le_id,
-                                type_args: vec![],
-                            });
-                            let and_id = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "&&".to_string(),
-                                args: vec![ge_id, le_id],
-                                dest: and_id,
-                                type_args: vec![],
-                            });
+                            let and_id =
+                                self.lower_range_guard(scrutinee_id, start, end, *inclusive);
                             self.exprs.insert(cond_id, MirExpr::Var(and_id));
                             self.type_map.insert(cond_id, Type::Bool);
                         }
