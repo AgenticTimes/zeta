@@ -1,0 +1,33 @@
+// T36 (docs/ABI.md 附 B#10): 字符串字面量作 match 模式。
+//   此前 `parse_lit`（src/frontend/parser/expr.rs）只吃数字，模式里遇到
+//   `"+"` 就停在引号处 ⇒ `parse_match_arm` 拿不到 `=>` ⇒ 整条 `fn` 连文件
+//   余部被 [W1002] 丢弃（编译退出码仍是 0）。
+//   接线时踩到的第二层坑，才是本用例存在的理由：整型臂用的是
+//   `MirStmt::Call{func:"=="}`，而 `==` 在 IR 里被声明为
+//   External `i64(i64,i64)`（src/backend/codegen/codegen.rs 的算子声明段）
+//   ⇒ 两个 `Str` 操作数走这条路比较的是**指针**，永远为假。
+//   修复前本文件解析通过、编译通过、五条 expect 全部落到 `_ =>` 分支，
+//   零诊断。所以字符串臂必须下成 `MirExpr::BinaryOp`（和 `op == "+"` 同形，
+//   后端有 str 比较分支），不能复用整型臂的 Call 形。
+//   ⚠️ 本用例写成带返回类型的 `fn` 是有意的：py 风格 `def` + 臂内 `return`
+//   会打印地址（match 结果槽在 gen.rs 的 `Match` 分支末尾被无条件标
+//   `Type::I64`，与 附 B#8 / 任务 #33 同族，见任务 #38 的最小 repro）。
+// expect: plus
+// expect: minus
+// expect: ab-or-cd
+// expect: ab-or-cd
+// expect: other
+fn classify(op: str) -> str {
+    match op {
+        "+" => "plus",
+        "-" => "minus",
+        "ab" | "cd" => "ab-or-cd",
+        _ => "other"
+    }
+}
+
+println(classify("+"));
+println(classify("-"));
+println(classify("ab"));
+println(classify("cd"));
+println(classify("zz"));

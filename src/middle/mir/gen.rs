@@ -10508,6 +10508,30 @@ call, no NULL-handle dereference).",
                             self.exprs.insert(cond_id, MirExpr::Var(cond_id));
                             self.type_map.insert(cond_id, Type::Bool);
                         }
+                        AstNode::StringLit(pattern_value) => {
+                            // String-literal pattern. Deliberately **not** the
+                            // `MirStmt::Call{func:"=="}` shape the integer arm
+                            // above uses: the `==` operator is declared
+                            // External as `i64(i64,i64)`, so calling it on two
+                            // `Str` operands compares their *addresses* — always
+                            // false, and every arm silently fell through to `_`.
+                            // `BinaryOp` is what `op == "+"` lowers to, and the
+                            // backend routes it to the str-compare branch.
+                            let pattern_id = self.next_id();
+                            self.exprs
+                                .insert(pattern_id, MirExpr::StringLit(pattern_value.clone()));
+                            self.type_map.insert(pattern_id, Type::Str);
+
+                            self.exprs.insert(
+                                cond_id,
+                                MirExpr::BinaryOp {
+                                    op: "==".to_string(),
+                                    left: scrutinee_id,
+                                    right: pattern_id,
+                                },
+                            );
+                            self.type_map.insert(cond_id, Type::Bool);
+                        }
                         AstNode::Var(var_name) if var_name == "_" => {
                             // Wildcard pattern - always true
                             self.exprs.insert(cond_id, MirExpr::IntLit(1));
@@ -10727,6 +10751,22 @@ call, no NULL-handle dereference).",
                                             type_args: vec![],
                                         });
                                     }
+                                    AstNode::StringLit(val) => {
+                                        // Same reason as the top-level string
+                                        // arm: `Call "=="` has an i64 signature
+                                        // and would compare pointers.
+                                        self.exprs
+                                            .insert(sub_lit_id, MirExpr::StringLit(val.clone()));
+                                        self.type_map.insert(sub_lit_id, Type::Str);
+                                        self.exprs.insert(
+                                            sub_pat_id,
+                                            MirExpr::BinaryOp {
+                                                op: "==".to_string(),
+                                                left: scrutinee_id,
+                                                right: sub_lit_id,
+                                            },
+                                        );
+                                    }
                                     AstNode::Var(name) if name == "_" => {
                                         // Wildcard always matches
                                         self.exprs.insert(sub_pat_id, MirExpr::IntLit(1));
@@ -10738,7 +10778,15 @@ call, no NULL-handle dereference).",
                                         self.type_map.insert(sub_pat_id, Type::Bool);
                                     }
                                 }
-                                self.exprs.insert(sub_pat_id, MirExpr::Var(sub_pat_id));
+                                // The arms above that lower through a
+                                // `MirStmt::Call` leave `sub_pat_id` as a
+                                // register to load; the string arm already wrote
+                                // an inline condition expr there, which this
+                                // must not clobber.
+                                if !matches!(self.exprs.get(&sub_pat_id), Some(MirExpr::BinaryOp { .. }))
+                                {
+                                    self.exprs.insert(sub_pat_id, MirExpr::Var(sub_pat_id));
+                                }
                                 self.type_map.insert(sub_pat_id, Type::Bool);
 
                                 if let Some(prev) = or_cond {

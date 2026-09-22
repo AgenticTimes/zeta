@@ -229,7 +229,7 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 ### 3.4 间接调用与 Python 式形参折叠
 
 **C8 闭包 V1 不捕获环境**：合成具名函数 `__closure_N` 直调，无环境结构体
-（gen.rs:10310-10320 注释、:12930-12935）。"闭包值"就是函数地址（:12930）。
+（gen.rs:10310-10320 注释、:12978-12983）。"闭包值"就是函数地址（:12978）。
 
 **C9 `zeta_call1(fptr, a)` 恰好一个 i64 实参**：声明 codegen.rs:1069，定义
 py_additions.c:3408（把 `fptr` 强转成 `int64_t(*)(int64_t)`；**NULL → 返回 0**）。
@@ -260,7 +260,7 @@ Python 会抛 `TypeError` 的两件事，zeta 现在都不说话 ⇒ §3.2#9/#10
 **C12 `PyArgNS` 是句柄类型，不是结构体**：registry.txt:440
 （`W PyArgParser parse_args py_argparse_parse args=1 ret_handle=PyArgNS`）、
 MIR 打类型 `Type::Named("PyArgNS")`（gen.rs:5300-5312）、消费端按字段访问分派到
-`py_argparse_get_{i64,f64,bool,str}`（gen.rs:11062-11095）。
+`py_argparse_get_{i64,f64,bool,str}`（gen.rs:11110-11143）。
 生命周期：GC 堆、进程级、无人释放（py_additions.c:1785-1819，值经 `GC_strdup` :1797）。
 
 ### 3.5 实测核对（G.5b 验收）
@@ -303,7 +303,7 @@ M1–M4 在 `/tmp/abi3_*`（批次 316），M5–M7 在 `/tmp/abi8/`（批次 31
 （`format!("{}_inst_{}", func_name, type_args.join("_"))`）+ codegen.rs
 `mangle_function_name` :1346-1356。与 N1 共用 `_` 作类型名内部字符和分隔符，同样不可逆。
 
-**N3 重载消歧形是 `<name>_<实参数>`，由 MIR 生成侧加**：gen.rs:10385、:11684
+**N3 重载消歧形是 `<name>_<实参数>`，由 MIR 生成侧加**：gen.rs:10385、:11732
 （`format!("{}_{}", func, arg_ids.len())`，注释 :10360-10366 自述"后缀只为区分重载，
 因此读取侧必须能剥掉它"）。**读侧要靠剥后缀还原** ⇒ N3 的代价全在 §4.2 的瀑布里。
 
@@ -555,7 +555,7 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
 | 入口 | C 签名锚点 | 它假设收到什么 | MIR 调用点 |
 |---|---|---|---|
 | `zeta_dynarray_new` | :2578 | 字面量 cap（真整数）—— ⚠️ 它内部 `if (cap < 8) cap = 8`（:2579），**所以字面量建出的 vec 永远 ≥8**，掩盖了下一行的判据缺陷 | 注册在 `pylib/runtime_core.txt:36`（`args=i64 ret=i64`） |
-| `zeta_dyn_getitem` | :3427 | `base` 是 **L2 数据指针**或 **L3 map 句柄**；`key` 是索引，**负数按 `+len` 回卷**（:3433）；其 vec 判据写作 `cap >= 8`（:3432）⚠️ **与 L2 的 `cap >= 1`（:3474）不一致，且本批实测这是一个可观测的死循环**（`[1,2]+[3,4,5]` 的 cap=5 走不进 vec 臂 ⇒ 落到 `map_get` 的开放寻址环，`&(cap-1)` 在 cap=5 上不是掩码 ⇒ 永不停止；详见附 B#7） | gen.rs:12287；**手写**声明 codegen.rs:1071（2 参） |
+| `zeta_dyn_getitem` | :3427 | `base` 是 **L2 数据指针**或 **L3 map 句柄**；`key` 是索引，**负数按 `+len` 回卷**（:3433）；其 vec 判据写作 `cap >= 8`（:3432）⚠️ **与 L2 的 `cap >= 1`（:3474）不一致，且本批实测这是一个可观测的死循环**（`[1,2]+[3,4,5]` 的 cap=5 走不进 vec 臂 ⇒ 落到 `map_get` 的开放寻址环，`&(cap-1)` 在 cap=5 上不是掩码 ⇒ 永不停止；详见附 B#7） | gen.rs:12335；**手写**声明 codegen.rs:1071（2 参） |
 | `zeta_dyn_len` | :3492 | 句柄**或**文本指针，**无标签**；读序 map→vec→文本（R4） | gen.rs:6412 |
 | `zeta_dyn_contains` | :3510 | 4 元：容器 + 原键 + **map 归一键**（`map_str_key` 之值）+ `key_is_str` 选内容相等（:3506 原文） | gen.rs:8965 |
 | `zeta_dyn_truth` | :3534 | map→已用槽数、vec→头长度、文本→首字节（:3529 原文）；文本分支先过 L7 的地址闸门（:3539） | gen.rs:3396 |
@@ -707,6 +707,15 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
      12×numpy 双份 shim 提示）。
    - ⚠️ 这份读数额外撞出一个**独立缺陷**，已另登记为 **附 B#10**（不是 ABI 问题，
      但只有把 stderr 收回来才看得见 —— 这就是本项非做不可的证明）。
+   - **批次 322 顺带修掉本项自己的一个取证缺陷**（`tools/run_all.sh:162`）：写进
+     `zeta_baseline.json` 的 `jit.ok` 一直**不是测量值**。提取式
+     `sed -E 's/.*ok=([0-9]+).*/\1/'` 的前缀 `.*` 是贪婪的，而 sweep 那行末尾还带
+     阈值（`…，最小 ok=163`）⇒ 它跳过真读数、抓到阈值。实测同一行：贪婪式给 163、
+     锚定式给 **170**。后果：JSON 里的 `jit.ok` 恒等于 `MIN_OK`，任何跨批次比对这个
+     字段的动作都**结构上不可能**发现回退（批次 321 把 ok 从 163 推到 170，
+     JSON 里却看不到）。已改为 `s/^jit sweep: ok=([0-9]+) .*/` 并复验
+     （`{“ok”: 170}`）。CI 只把该 JSON 当 artifact 上传、没有断言读它
+     （`.github/workflows/ci.yml:103-113`）⇒ 判据没被污染，被污染的是留存的证据。
 10. **`official: 194/194` 里的用例程序被解析器就地截断**（批次 320 收门禁 stderr 时
    撞出，任务 #36；**不是 ABI 缺陷**，登记在此只因为它是"诊断看不见"的直接代价）：
    这些文件编译成功、也被计入 194/194，但每个都带一条
@@ -727,7 +736,7 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
 
      | 构造 | 丢行 | 文件 | 判据 |
      |---|---|---|---|
-     | `let x = match {…};` / `func: match {…}`（match 作**表达式**；作语句则 OK） | 757 | minimal_compiler:319 | 最小用例 `let node = match op {…};` 触发 W1002 |
+     | `s[i..]` **开区段下标**（双边 `s[i..j]` 可解析） | 757 | minimal_compiler:401 `self.input[self.pos..].starts_with(pattern)` | 批次 322 三条最小对照用例：`s[i..j].starts_with(…)` W1002=0 ／ `s[i..].starts_with(…)` W1002=1 ／ `s[i..].len()` W1002=1。⚠️ 本行原标"`match` 作表达式"，批次 321 探针已否证（`match` 作语句同样失败），322 重隔离 ⇒ 登记为任务 #39 |
      | `static mut` 局部声明 | 357 | benchmark_simd_vs_scalar:11 | `unsafe {}` 单独喂可解析 |
      | `r#"…"#` 原始字符串 | 127+58 | test_suite:6、bootstrap_validation_test:18 | 单喂 `let s = r#"…"#;` 触发 |
      | `'a'..='z'` 字符范围模式 | 80 | advanced_patterns_test:32 | 整型范围模式可解析 ⇒ 差在字符字面量 |
@@ -740,11 +749,34 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
    - **修法归属**：G.1/G.3（解析器 + 用例重构），不在 ABI 范围；优先级按上表丢行量。
      已关闭的一族：`x @ 1..=10` —— `src/frontend/parser/pattern.rs:22` 的 `alt()` 里
      `parse_struct_pattern`（`src/frontend/parser/pattern.rs:48`，对裸路径**故意**
-     返回 `Ok(Var)`，见 `src/frontend/parser/pattern.rs:115`）排在
+     返回 `Ok(Var)`，见 `src/frontend/parser/pattern.rs:121`）排在
      `parse_bind_pattern`（`src/frontend/parser/pattern.rs:46`）之前，于是 `@` 右侧永不消费 ⇒ 整条 `fn` 连文件余部被丢。
      绑定模式前判后，截断文件 12→11、丢行 1,805→1,749，四套基线不动
      （official 194/194、python_style 285/2/4/0、corpus 39/39、jit segv=0）。
      该族修复顺带**暴露**了第二个缺口：`print(x)` 在 MIR 里发 `println_str`
      （`src/middle/mir/gen.rs:7932`），而 JIT 表里只有 `println_i64` ⇒ 新解析出的代码
      一执行就 E4016 填桩；补 `pylib/jit_mappings.txt` 七条后 jit ok **163→170**。
+   - **批次 322 关掉第二族：字符串字面量作 match 模式**（`parse_lit` 只吃数字，
+     模式里 `"+"` 停在引号处 ⇒ 臂拿不到 `=>`）。接线时有**两层**缺陷，第二层是
+     批次 321 那张表教出来的"补完语法还得核语义"才抓到的：
+     ① `src/frontend/parser/pattern.rs` 的 `alt()` 加 `parse_string_lit`
+     （`:60`，`parse_lit` 之后；`parse_simple_pattern` 的 `alt()` 同步加，否则
+     or 模式 `"a" | "b"` 内的子模式仍不消费）；
+     ② 字符串臂若照抄整型臂的 `MirStmt::Call{func:"=="}` ⇒ 编译 0 诊断、
+     **五条 expect 全部落到 `_ =>`**。原因：`==` 在 IR 里被声明为
+     External `i64(i64,i64)`（`src/backend/codegen/codegen.rs:1157`），两个
+     `Str` 操作数走这条路比的是**指针**。必须下成 `MirExpr::BinaryOp`
+     （与 `op == "+"` 同形，后端 `codegen.rs:5855` 有 str 比较分支）。
+     同形修正也 applied 到 or 模式子臂（`src/middle/mir/gen.rs` 的
+     `AstNode::OrPattern` 分支）。
+     **本族在 11 文件 / 1,749 行里恢复了 0 行** —— 上表把 minimal_compiler 的
+     757 行标成"match 作表达式"是错的，其真因是 `s[i..]`（任务 #39）；
+     字符串模式族此前根本不在这张表里，因为官方 194 个文件没有一个用得上它。
+     收益是能力面 + 一条断言正确臂选择的回归用例
+     （`tests/python_style/t303_match_string_pattern.z`，python_style **285→286**）。
+     口径变化：`str ==` 依赖 `host_str_eq`，它定义在并发持有的
+     `runtime/py_additions.c:43`（⚠️ 只引用，不改），而 `runtime/*.c` 从不进
+     zetac 镜像（无 `build.rs`，见批次 315）⇒ JIT 侧无绑定 ⇒ t303 在 sweep 里
+     计为 trap。总观测：total 485→486、ok 仍 170、trap 315→316、segv=0，
+     且 E4016 有指名诊断（非静默）⇒ 属 G.5e"JIT 绑定三张表归一"的输入项。
 

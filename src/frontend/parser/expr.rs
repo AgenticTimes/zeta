@@ -290,7 +290,7 @@ fn parse_triple_quoted_string(input: &str) -> IResult<&str, AstNode> {
     )))
 }
 
-fn parse_string_lit(input: &str) -> IResult<&str, AstNode> {
+pub fn parse_string_lit(input: &str) -> IResult<&str, AstNode> {
     // Support both single-quoted and double-quoted strings
     let quote = if let Ok((i, _)) = tag::<_, _, nom::error::Error<_>>("\"").parse(input) {
         (i, '"')

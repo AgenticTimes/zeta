@@ -1,7 +1,7 @@
 // src/frontend/parser/pattern.rs
 //! Module for parsing patterns in the Zeta language.
 
-use super::expr::parse_lit;
+use super::expr::{parse_lit, parse_string_lit};
 use super::parser::{parse_ident, parse_path, skip_ws_and_comments, ws};
 use crate::frontend::ast::AstNode;
 use nom::IResult;
@@ -50,8 +50,14 @@ pub fn parse_pattern(input: &str) -> IResult<&str, AstNode> {
         parse_range_pattern,
         // Or pattern: `pattern | pattern | ...`
         parse_or_pattern,
-        // Literal pattern
+        // Literal pattern — numeric only (`parse_lit` has no string branch).
         parse_lit,
+        // String-literal pattern: `"+" => …`, `"a" | "b" => …`. Before this arm
+        // existed, a string in any match arm left `"+" => …` unconsumed,
+        // `parse_match_arm` never reached its `=>`, and the whole enclosing
+        // `fn` — plus the rest of the file — was dropped (W1002, 附 B#10:
+        // 757 of the 1,749 lines).
+        parse_string_lit,
         // Boolean pattern (for match arms like `true => ...`)
         tag("true").map(|_| AstNode::Bool(true)),
         tag("false").map(|_| AstNode::Bool(false)),
@@ -243,6 +249,7 @@ fn parse_simple_pattern(input: &str) -> IResult<&str, AstNode> {
         parse_struct_pattern,
         parse_range_pattern,
         parse_lit,
+        parse_string_lit,
         parse_ident.map(AstNode::Var),
     ))
     .parse(input)
