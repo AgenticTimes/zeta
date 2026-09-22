@@ -20,6 +20,13 @@
   ./tools/check_abi_anchors.py --bless     # 采集/刷新 tools/baselines/abi_anchors.tsv
   ./tools/check_abi_anchors.py             # 核对；漂移/待归属增加 rc=1，歧义/越界 rc=2
   ./tools/check_abi_anchors.py --list      # 打印"每个锚点现在指着哪句代码"（归属自查）
+  ./tools/check_abi_anchors.py --rebind    # 把"搬家"型漂移自动改回文档（--dry 只看不动）
+
+`--rebind` 治的是这一件事：往 `tools/run_all.sh` 之类被引用的文件里插行，锚点行的**内容
+一字未动、行号全漂**。批次 336/337/338/339 连续四批都是这个形状，每批手工重绑 3~4 条。
+判据是**唯一命中**：拿基线里那段内容在目标文件里逐行搜（同 `normalize`、同区间长度），
+命中一处才改文档，零命中（内容被就地改写过）与多命中一律拒改并原样报出来——
+宁可让人再来一遍，也不猜。详见 `rebind()` 的 docstring。
 
 归属的两种来源（第 4 层）：
   a) **同行最近路径**——`codegen.rs:6885-7010；:3766、:4317` 里的续写绑到 codegen.rs。
@@ -169,6 +176,10 @@ def strip_exempt(line: str) -> str:
 
 
 Row = tuple[int, str, str, int, int, str]  # 文档行 / 声明的归属 / 解析到的文件 / 起 / 止 / 文本
+# 位置信息：文档行号 + 解析到的文件 + 起止行 + 两组数字在**原始文档行**里的列区间。
+# 列区间来自正则的 group span，`strip_exempt` 抹豁免片段时抹的是等长空格，
+# 所以列号与原文一一对得上——改写时按列区间切片替换，不用再做一次文本匹配。
+Pos = tuple[int, str, int, int, tuple[int, int], tuple[int, int] | None]
 
 
 def collect(
@@ -180,11 +191,13 @@ def collect(
     list[Row],
     int,
     list[tuple[int, str, str]],
+    list[Pos],
 ]:
     snapshot: dict[tuple[str, int], str] = {}
     problems: list[str] = []
     pending: Counter[str] = Counter()
     rows: list[Row] = []
+    positions: list[Pos] = []
     pending_locs: list[tuple[int, str, str]] = []
     external_n = 0
     scope: str | None = None  # 已解析的显式作用域路径；None=无，EXTERNAL=声明为仓外
@@ -218,6 +231,7 @@ def collect(
             cited = m.group("path")
             if cited is None:
                 a, b = m.group("c"), m.group("d")
+                span_a, span_b = m.span("c"), (m.span("d") if b else None)
                 text = m.group(0)
                 owner = last_cited or scope
                 if owner is None:
@@ -231,6 +245,7 @@ def collect(
                 end = int(b) if b else start
             else:
                 a, b = m.group("a"), m.group("b")
+                span_a, span_b = m.span("a"), (m.span("b") if b else None)
                 start = int(a)
                 end = int(b) if b else start
                 if cited.startswith(SKIP_PREFIXES):
@@ -264,11 +279,159 @@ def collect(
                 continue
             snapshot[(rel, start)] = snippet
             rows.append((docno, cited, rel, start, end, snippet))
+            positions.append((docno, rel, start, end, span_a, span_b))
         # 裸区间：同行有路径也不绑（见模块 docstring 第 4 层）
         for m in BARE_RANGE_RE.finditer(line):
             pending[m.group(0)] += 1
             pending_locs.append((docno, m.group(0), raw.strip()[:66]))
-    return sorted(snapshot.items()), problems, pending, rows, external_n, pending_locs
+    return (
+        sorted(snapshot.items()),
+        problems,
+        pending,
+        rows,
+        external_n,
+        pending_locs,
+        positions,
+    )
+
+
+def find_snippet_lines(body: list[str], snippet: str, span: int) -> list[int]:
+    """在文件里按**整段内容**找锚点现在的位置（1 起，可能多个）。
+
+    判据与 `collect` 完全同源（同一个 `normalize`、同样按 span 行长取段），所以
+    "命中"的含义就是"这一行的内容一字未变"——搬家可以自动改，就地改写不行。
+    """
+    hits: list[int] = []
+    for p in range(1, max(1, len(body) - span + 2)):
+        if normalize(" ".join(body[p - 1 : p - 1 + span])) == snippet:
+            hits.append(p)
+    return hits
+
+
+def rebind(
+    doc: Path,
+    idx: Index,
+    old: dict[tuple[str, int], str],
+    new: dict[tuple[str, int], str],
+    positions: list[Pos],
+    base: Path,
+    dry: bool,
+) -> int:
+    """把"内容一字未变、只是行号搬家"的锚点改回文档。
+
+    存在的理由：批次 336/337/338/339 **连续四批**都是同一个形状——往 `tools/run_all.sh`
+    插一段，`docs/ABI.md` 里 3~4 条锚点当场漂，每次都靠人读核对器打印的"基线内容 vs
+    现在内容"再手工改行号。既然核对器已经打出了那段内容，"这只是搬家"就是**可判定**的，
+    不必也不可能靠记性。
+
+    唯一性硬要求：那段内容在目标文件里**恰好命中一处**才改；零命中（内容被就地改写过）
+    和多命中（同形文本不止一处）一律拒改并原样报出来——宁可让人再来一遍，也不猜。
+
+    拒改的条目在刷新基线时**原样保留**（批次 341 反证控制 B 逼出来的规则）：第一版无条件
+    重采，于是"文档里的 :15 已经指向别的行"这件事被 --rebind 自己洗成了"锚点全部对上"——
+    rc 从 1 变 0，而那条合同引用比之前更坏（它现在带着一条逐字核对过的假证据）。
+    现在搬家过的重采，拒改的留在原地继续报错，直到有人真的重读它。
+    """
+    drifted = [k for k in sorted(new) if k in old and new[k] != old[k]]
+    gone = [k for k in sorted(old) if k not in new]
+    edits: list[tuple[int, int, int, str]] = []  # 文档行 / 列起 / 列止 / 新文本
+    moved: list[tuple[str, int, int, int]] = []  # 文件 / 旧行 / 新行 / 段长
+    refused: list[str] = []
+    refused_keys: list[tuple[str, int]] = []
+
+    def refuse(key: tuple[str, int], msg: str) -> None:
+        # 键也要记下来：刷新基线时原样保留，见函数末尾那段。
+        refused_keys.append(key)
+        refused.append(msg)
+
+    for rel, line in drifted:
+        refs = [p for p in positions if p[1] == rel and p[2] == line]
+        if not refs:
+            refuse((rel, line), f"{rel}:{line} → 文档里已找不到这条引用（或它已解析失败）")
+            continue
+        span = refs[0][3] - line + 1
+        if any(r[3] - r[2] + 1 != span for r in refs):
+            refuse(
+                (rel, line),
+                f"{rel}:{line} → 同一 (文件,行号) 在文档里有**不同长度**的区间引用，"
+                f"不自动改（改了会让另一条继续漂）"
+            )
+            continue
+        hits = find_snippet_lines(idx.lines(rel), old[(rel, line)], span)
+        if not hits:
+            refuse(
+                (rel, line),
+                f"{rel}:{line} → 零命中：那段内容已不在 {rel} 里（就地改写？必须人工重读合同）"
+            )
+            continue
+        if len(hits) > 1:
+            refuse(
+                (rel, line),
+                f"{rel}:{line} → {len(hits)} 处命中（{', '.join(map(str, hits[:5]))}"
+                f"{'…' if len(hits) > 5 else ''}）：唯一性不成立，不猜"
+            )
+            continue
+        dst = hits[0]
+        if dst == line:
+            refuse((rel, line), f"{rel}:{line} → 内容命中自身所在行，判据自相矛盾（工具缺陷）")
+            continue
+        moved.append((rel, line, dst, span))
+        for docno, _, _, _, span_a, span_b in refs:
+            edits.append((docno, span_a[0], span_a[1], str(dst)))
+            if span_b is not None:
+                edits.append((docno, span_b[0], span_b[1], str(dst + span - 1)))
+
+    for key in gone:
+        refuse(key, f"{key[0]}:{key[1]} → 文档不再产生这条锚点（消失），rebind 不处理")
+
+    print(f"rebind：漂移 {len(drifted)} 条 → 判定搬家 {len(moved)} 条 / 拒改 {len(refused)} 条")
+    for rel, line, dst, span in moved:
+        rng = f"-{dst + span - 1}" if span > 1 else ""
+        old_rng = f"-{line + span - 1}" if span > 1 else ""
+        print(f"  [搬家] {rel}:{line}{old_rng} → :{dst}{rng}"
+              f"（{span} 行内容逐字相同，全文件唯一命中）")
+    for r in refused:
+        print(f"  [拒改] {r}")
+
+    if dry or not edits:
+        if edits:
+            print("  （--dry：文档未改动）")
+        return 1 if refused else 0
+
+    raw_lines = doc.read_text(encoding="utf-8").splitlines()
+    by_doc: dict[int, list[tuple[int, int, int, str]]] = defaultdict(list)
+    for e in edits:
+        by_doc[e[0]].append(e)
+    for docno, group in by_doc.items():
+        text = raw_lines[docno - 1]
+        # 同一行内从右往左替换，前面的列号才不会被后面的改写顶掉。
+        for _, c0, c1, new_text in sorted(group, key=lambda e: -e[1]):
+            text = text[:c0] + new_text + text[c1:]
+        raw_lines[docno - 1] = text
+    doc.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
+    print(f"  已改写 {doc}（{len(by_doc)} 行 / {len(edits)} 个数字）")
+
+    # 文档一动，基线里那批"旧行号"就成了假漂移；立刻重采，让"搬家"是一次动作而不是两次。
+    # 但**只重采被改过的那部分**：拒改的条目原样留着，核对器会继续报它漂/消失。
+    snap2, problems2, pending2, _, _, _, _ = collect(doc, idx)
+    merged = dict(snap2)
+    kept = 0
+    for key in refused_keys:
+        if key in old and merged.get(key) != old[key]:
+            merged[key] = old[key]
+            kept += 1
+    base.parent.mkdir(parents=True, exist_ok=True)
+    with base.open("w", encoding="utf-8") as f:
+        for (rel, line), text in sorted(merged.items()):
+            f.write(f"{rel}\t{line}\t{text}\n")
+        for text, n in sorted(pending2.items()):
+            f.write(f"{PENDING}\t{n}\t{text}\n")
+    print(
+        f"  基线已随之刷新 {base}（{len(merged)} 个锚点；定位失败 {len(problems2)} 条"
+        + (f"；拒改的 {kept} 条原样保留 → 核对器会继续报错" if kept else "")
+        + "）"
+    )
+    return 1 if (refused or problems2) else 0
 
 
 def main() -> int:
@@ -278,12 +441,22 @@ def main() -> int:
     ap.add_argument("--bless", action="store_true", help="采集/刷新基线快照")
     ap.add_argument("--list", action="store_true", help="打印每个锚点当前指向的代码行")
     ap.add_argument("--pending", action="store_true", help="打印待归属引用的文档行号")
+    ap.add_argument(
+        "--rebind",
+        action="store_true",
+        help="把“内容逐字未变、只是行号搬家”的锚点自动改回文档（唯一命中才改）",
+    )
+    ap.add_argument("--dry", action="store_true", help="与 --rebind 同用：只打印判定，不动文件")
     args = ap.parse_args()
+    if args.dry and not args.rebind:
+        # 单挂一个不生效的开关 = 任务 #63 那一类缺陷（参数收下即弃）。当场拒收，不静默。
+        print("[E1002] --dry 只对 --rebind 有意义，单独使用什么都不做 ⇒ 拒收")
+        return 2
 
     doc = Path(args.doc)
     base = Path(args.baseline)
     idx = Index(tracked_files())
-    snap, problems, pending, rows, external_n, pending_locs = collect(doc, idx)
+    snap, problems, pending, rows, external_n, pending_locs, positions = collect(doc, idx)
 
     for p in problems:
         print(f"  [定位失败] {p}")
@@ -329,6 +502,9 @@ def main() -> int:
         else:
             old[(parts[0], int(parts[1]))] = parts[2]
     new = dict(snap)
+
+    if args.rebind:
+        return rebind(doc, idx, old, new, positions, base, args.dry)
 
     drifted = [k for k in new if k in old and new[k] != old[k]]
     added = [k for k in new if k not in old]
