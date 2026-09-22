@@ -47,6 +47,10 @@ src/backend/codegen/codegen.rs	6960	fn note_return_slot_mismatch(&mut self, func
 src/backend/codegen/mod.rs	7	mod runtime_decls_registry;
 src/backend/codegen/mod.rs	9	mod runtime_decls_core;
 src/backend/codegen/runtime_decls_registry.rs	18	module.add_function("py_argparse_add", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+src/frontend/parser/pattern.rs	22	let (input, pattern) = alt((
+src/frontend/parser/pattern.rs	46	parse_bind_pattern,
+src/frontend/parser/pattern.rs	48	parse_struct_pattern,
+src/frontend/parser/pattern.rs	115	Ok((input, AstNode::Var(variant)))
 src/frontend/parser/top_level.rs	71	// PY-A: `*args` / `**kwargs` star-params — consumed as a single opaque // i64 param (V1: call sites with extra args coerce; real variadics need // arg-tuple su
 src/frontend/parser/top_level.rs	334	// PY-A: Python default argument values. The AST's `params` only carries // (name, type), so defaults travel as a body-prologue marker // `zeta_param_default(in
 src/main.rs	529	let strict_abi = args.iter().any(|a| a == "--strict-abi")
@@ -61,6 +65,7 @@ src/middle/mir/gen.rs	3396	"zeta_dyn_truth"
 src/middle/mir/gen.rs	5300	if method == "parse_args" && receiver.is_some() { let recv = self.lower_expr(receiver.as_ref().unwrap()); self.stmts.push(MirStmt::Call { func: "py_argparse_par
 src/middle/mir/gen.rs	5677	// `log.info(fmt, *args)` — a varargs HANDLE has no // static length, and lowering the starred operand // emitted a raw Deref that codegen compiled into // `ldr
 src/middle/mir/gen.rs	6412	func: "zeta_dyn_len".to_string(),
+src/middle/mir/gen.rs	7932	Some(Type::Str) => "println_str",
 src/middle/mir/gen.rs	8207	// PY-A: starred args `f(*arr)` expand to per-element args // (V1: static-size arrays compile-time unrolled). for a in &ordered_args { if let AstNode::UnaryOp {
 src/middle/mir/gen.rs	8609	// (`[dynamic]str__max`), reached once annotated params keep their
 src/middle/mir/gen.rs	8713	func: "[dynamic]str__map".to_string(),

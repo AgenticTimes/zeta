@@ -38,10 +38,11 @@ pub fn parse_pattern(input: &str) -> IResult<&str, AstNode> {
         parse_tuple_pattern,
         // Bind pattern: `ident @ pattern` — **must** precede the struct/variable
         // pattern below. `parse_struct_pattern` deliberately succeeds on a bare
-        // path (line 109: `Ok((input, AstNode::Var(variant)))`), so for
-        // `x @ 1..=10` it consumed `x`, returned `Var("x")` and left `@ …`
-        // behind; the arm then had no `=>` and the whole enclosing `fn` — plus
-        // the rest of the file — was dropped (W1002, docs/ABI.md 附 B#10).
+        // path (its `Ok((input, AstNode::Var(variant)))` fallback at the end of
+        // that fn), so for `x @ 1..=10` it consumed `x`, returned `Var("x")` and
+        // left `@ …` behind; the arm then had no `=>` and the whole enclosing
+        // `fn` — plus the rest of the file — was dropped (W1002, 附 B#10).
+        // 故意不写行号：本批插了 7 行注释，注释里的行号当场就漂了。
         parse_bind_pattern,
         // Struct pattern: `Path { field: pattern, ... }` or `Path(pattern, ...)`
         parse_struct_pattern,

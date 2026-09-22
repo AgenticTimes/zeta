@@ -707,18 +707,44 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
      12×numpy 双份 shim 提示）。
    - ⚠️ 这份读数额外撞出一个**独立缺陷**，已另登记为 **附 B#10**（不是 ABI 问题，
      但只有把 stderr 收回来才看得见 —— 这就是本项非做不可的证明）。
-10. **`official: 194/194` 里有 12 个用例的程序被解析器就地截断**（批次 320 收门禁
-   stderr 时撞出，任务 #36；**不是 ABI 缺陷**，登记在此只因为它是"诊断看不见"的直接代价）：
-   这 12 个文件编译成功、也被计入 194/194，但每个都带一条
+10. **`official: 194/194` 里的用例程序被解析器就地截断**（批次 320 收门禁 stderr 时
+   撞出，任务 #36；**不是 ABI 缺陷**，登记在此只因为它是"诊断看不见"的直接代价）：
+   这些文件编译成功、也被计入 194/194，但每个都带一条
    `[W1002] … N line(s) at the end of the input were NOT parsed … DROPPED from the program`
    —— 解析器遇到第一个不认识的顶层条目就停下，**后面的整段程序不进 AST**。
-   实测丢弃量：合计 **1,805 行 / 这 12 个文件总行数 2,041 ⇒ 88% 的内容从未被编译**。
-   最差几个：`minimal_compiler` 800 行丢 757、`benchmark_simd_vs_scalar` 364 丢 357、
-   `test_suite` 129 丢 127、`advanced_patterns_test` 100 丢 98、`selfhost` 179 丢 158、
-   `bootstrap_validation_test` 60 丢 58。首条未解析文本的形态集中在
-   `fn test_at_patterns()`（`@` 模式）、`impl Parser for ZetaParser`、`match` 体这几族。
+   批次 320 首测：12 文件 / 丢 **1,805 行**（占该 12 文件 2,041 行的 **88%**）。
+   **批次 321 已修掉其中一族**（`x @ 1..=10` 绑定模式，见下），现余 **11 文件 / 1,749 行
+   / 该 11 文件合计 1,992 行 ⇒ 仍 88%**；`test_advanced_patterns.z` 全文 49 行现已全部进 AST。
    **后果**：① 官方基线对这批文件只覆盖了程序前缀，"194/194"不能读成
    "194 个程序全部编译通过"；② 任何"某语法已支持"的结论若来自这批文件，证据无效。
-   下一步的判据本批已备好（`/tmp/zeta_official_diag.txt` 逐文件列名），修法是 G.1/G.3
-   的事，不在本批范围：要么把这些构造接进解析器，要么把 12 个文件按现状拆分并在
-   `tests/python_style` 的 known-fail 段立住（勿静默删用例，那会把缺口藏得更深）。
+   - ⚠️ **批次 320 的措辞有一处错，此处更正**：当时写"首条未解析文本集中在
+     `@` 模式、`impl`、`match` 体这几族"——`impl P {}`、`impl P for Q {}`、
+     `1 | 2 | 3` 或模式、`unsafe {}`、`if let Some((p, q))`、嵌套 `} else if` 链
+     **单独喂全都解析**（批次 321 逐个最小用例实测）。W1002 报的是**顶层条目首行**，
+     病因在条目内部，按首行措辞归类必然归错。为此新增 `tools/parse_bisect.py`：
+     从截断行起按语句边界逐前缀回喂编译器，第一个重新触发 W1002 的行即病因行。
+   - **分类表（11 文件，逐行 = 最小用例正测 + `parse_bisect.py` 定位）**：
+
+     | 构造 | 丢行 | 文件 | 判据 |
+     |---|---|---|---|
+     | `let x = match {…};` / `func: match {…}`（match 作**表达式**；作语句则 OK） | 757 | minimal_compiler:319 | 最小用例 `let node = match op {…};` 触发 W1002 |
+     | `static mut` 局部声明 | 357 | benchmark_simd_vs_scalar:11 | `unsafe {}` 单独喂可解析 |
+     | `r#"…"#` 原始字符串 | 127+58 | test_suite:6、bootstrap_validation_test:18 | 单喂 `let s = r#"…"#;` 触发 |
+     | `'a'..='z'` 字符范围模式 | 80 | advanced_patterns_test:32 | 整型范围模式可解析 ⇒ 差在字符字面量 |
+     | `use a::b::C;` 在函数体内 | 85 | quantum_basic:75 | 单喂触发 |
+     | 带块体的闭包实参 `f(\|\| { … })` | 58 | integration_all_features:48 | 单喂触发 |
+     | `for i: usize in 0..10`（带类型标注的循环变量） | 36 | primezeta_usize_test:31 | 单喂触发 |
+     | `import pkg;`（单段、无 `::`） | 19 | integration_test_program:5 | 单喂触发 |
+     | `[usize; MAX + 1]` / `[0; MAX + 1]`（常量表达式数组） | 14 | test_const_expression:6 | 单喂触发 |
+     | 未定位 | 158 | selfhost:57 | bisect 落在 `} else if ch.is_digit(10) {` 分支首条语句，但嵌套 else-if 最小用例通过 ⇒ **OPEN** |
+   - **修法归属**：G.1/G.3（解析器 + 用例重构），不在 ABI 范围；优先级按上表丢行量。
+     已关闭的一族：`x @ 1..=10` —— `src/frontend/parser/pattern.rs:22` 的 `alt()` 里
+     `parse_struct_pattern`（`src/frontend/parser/pattern.rs:48`，对裸路径**故意**
+     返回 `Ok(Var)`，见 `src/frontend/parser/pattern.rs:115`）排在
+     `parse_bind_pattern`（`src/frontend/parser/pattern.rs:46`）之前，于是 `@` 右侧永不消费 ⇒ 整条 `fn` 连文件余部被丢。
+     绑定模式前判后，截断文件 12→11、丢行 1,805→1,749，四套基线不动
+     （official 194/194、python_style 285/2/4/0、corpus 39/39、jit segv=0）。
+     该族修复顺带**暴露**了第二个缺口：`print(x)` 在 MIR 里发 `println_str`
+     （`src/middle/mir/gen.rs:7932`），而 JIT 表里只有 `println_i64` ⇒ 新解析出的代码
+     一执行就 E4016 填桩；补 `pylib/jit_mappings.txt` 七条后 jit ok **163→170**。
+

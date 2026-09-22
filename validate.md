@@ -46,6 +46,7 @@ git push agentic bootstrap                  # origin 是 https 无凭据，用 a
 | `tools/check_registry_symbols.sh` | registry F/W/X ↔ runtime .o | `./tools/check_registry_symbols.sh` |
 | `tools/run_all.sh` | 三套基线 → JSON（含 `compile_diagnostics` 字段；编译期告警明细落 `/tmp/zeta_official_diag.txt`） | `./tools/run_all.sh`（写 `/tmp/zeta_baseline.json`） |
 | `tools/check_abi_anchors.py` | `docs/ABI.md` 的 `file:line` 锚点是否还可定位/未越界/未漂移 | `./tools/check_abi_anchors.py`（改完锚点 `--bless` 重采基线） |
+| `tools/parse_bisect.py` | `[W1002]` 截断的**病因行**（W1002 只报顶层条目首行，病因在条目内部） | `./tools/parse_bisect.py 文件.z` / `--all`（逐语句前缀回喂，需已 build 的 `target/release/zetac`） |
 | `lldb` | 运行期崩溃定位 | `lldb -b -o run -o "bt 3" ./x` |
 
 ### 常用诊断模式
