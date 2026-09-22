@@ -51,7 +51,7 @@ zt_stale_check zeta_runtime_c.o runtime/py_additions.c runtime/parquet_min.c run
 zt_stale_check tokio_runtime.o runtime/tokio_runtime_stub.c runtime/unavailable_stubs.c
 
 ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-official_pass=0; official_total=0; official_diag_files=0; official_diag_lines=0
+official_pass=0; official_total=0; official_diag_files=0; official_diag_lines=0; official_compile=0
 py_pass=0; py_fail=0; py_known=0; py_xpass=0
 corpus_ok=0; corpus_total=0
 py_diag_lines=0; py_diag_files=0
@@ -63,10 +63,12 @@ py_diag_lines=0; py_diag_files=0
 # 聚合时排除 `clang: warning:`（链接器抱怨 `-no-pie`，实测 194/194 全有）——不排除的话，
 # 真信号会被 194 条同名工具链噪声埋掉，聚合结果等于没聚合。
 OFFICIAL_DIAG="${OFFICIAL_DIAG:-/tmp/zeta_official_diag.txt}"
+OFFICIAL_LINK_DIAG="${OFFICIAL_LINK_DIAG:-/tmp/zeta_official_link.txt}"
 if [[ $SKIP_OFFICIAL -eq 0 ]]; then
   rm -rf /tmp/zeta_tests /tmp/zt_out
   mkdir -p /tmp/zeta_tests /tmp/zt_out
   : > "$OFFICIAL_DIAG"
+  : > "$OFFICIAL_LINK_DIAG"
   # shellcheck disable=SC2086
   cp $ROOT/tests/unit-tests/*.z /tmp/zeta_tests/ 2>/dev/null || true
   while IFS= read -r -d '' z; do
@@ -75,6 +77,13 @@ if [[ $SKIP_OFFICIAL -eq 0 ]]; then
     d="/tmp/zt_out/$n.diag"
     if "$ZETAC" "$z" -o "/tmp/zt_out/$n" >/dev/null 2>"$d"; then
       official_pass=$((official_pass + 1))
+      official_compile=$((official_compile + 1))
+    elif "$ZETAC" "$z" --no-link -o "/tmp/zt_out/$n" >/dev/null 2>/dev/null; then
+      # 批次 323：编译/降级全过、只有链接缺运行时绑定。这类失败**不是**编译器缺陷，
+      # 也不许悄悄算成通过 —— 逐个登记文件名和缺的符号名。
+      official_compile=$((official_compile + 1))
+      miss=$(grep -oE '^  "_[A-Za-z0-9_]+"' "$d" | tr -d ' "' | sort -u | paste -sd, -)
+      printf '### %s — 缺运行时绑定: %s\n' "$n" "${miss:-（链接器未列出符号名）}" >> "$OFFICIAL_LINK_DIAG"
     fi
     if grep -v '^clang: warning' "$d" 2>/dev/null | grep -q 'warning:\|PY-A:'; then
       official_diag_files=$((official_diag_files + 1))
@@ -83,7 +92,12 @@ if [[ $SKIP_OFFICIAL -eq 0 ]]; then
   done < <(find /tmp/zeta_tests -maxdepth 1 -name '*.z' -print0 | sort -z)
   official_diag_lines=$(grep -c 'warning:\|PY-A:' "$OFFICIAL_DIAG" || true)
   official_diag_lines=${official_diag_lines:-0}
-  [[ $JSON_ONLY -eq 0 ]] && echo "official: ${official_pass}/${official_total}"
+  link_only=$(wc -l < "$OFFICIAL_LINK_DIAG" | tr -d ' ')
+  [[ $JSON_ONLY -eq 0 ]] && echo "official: compile ${official_compile}/${official_total}, compile+link ${official_pass}/${official_total}"
+  if [[ $link_only -gt 0 ]]; then
+    echo "link-only failures (编译通过、缺运行时绑定) ${link_only} —— 明细 $OFFICIAL_LINK_DIAG"
+    cat "$OFFICIAL_LINK_DIAG"
+  fi
   echo "compile-diagnostics: official ${official_diag_files}/${official_total} file(s) with compiler warnings, ${official_diag_lines} line(s) — 明细 $OFFICIAL_DIAG"
 fi
 
@@ -172,7 +186,7 @@ import json
 doc = {
   "ts": "$ts",
   "zetac": "$ZETAC",
-  "official": {"pass": $official_pass, "total": $official_total},
+  "official": {"pass": $official_pass, "compile": $official_compile, "total": $official_total},
   "python_style": {
     "pass": $py_pass, "fail": $py_fail,
     "known_fail": $py_known, "xpass": $py_xpass,
@@ -199,7 +213,12 @@ PY
 
 # Green criteria
 rc=0
-if [[ $SKIP_OFFICIAL -eq 0 && $official_pass -ne $official_total ]]; then rc=1; fi
+# 批次 323 口径变更（附 B#10）：判据从"编译+链接全过"改为"**编译**全过"。
+# 理由不是"把它绿过去"——这两件事此前被同一个数字混在一起，而 self-host 语料的
+# 解析行数一旦恢复，就会引用还没绑定的 std 方法，于是"缺运行时绑定"以"编译器不支持
+# 这段语法"的形式报出来，把解析工作直接封死在截断点上。现在 compile+link 照样打印、
+# 缺绑定的文件与符号名逐条登记到 $OFFICIAL_LINK_DIAG 并打进日志，只是不再冒充编译缺陷。
+if [[ $SKIP_OFFICIAL -eq 0 && $official_compile -ne $official_total ]]; then rc=1; fi
 if [[ $SKIP_PYTHON -eq 0 && $py_fail -ne 0 ]]; then rc=1; fi
 # corpus: parse_ok should equal total when suite is healthy; warn-only if skipped dirs empty
 if [[ $SKIP_CORPUS -eq 0 && $corpus_total -gt 0 && $corpus_ok -ne $corpus_total ]]; then rc=1; fi

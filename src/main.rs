@@ -532,6 +532,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let report_untyped = args.iter().any(|a| a == "--report-untyped");
     // G.8a (refactor.md): print the fake-value stubs THIS program calls.
     let report_stubs = args.iter().any(|a| a == "--report-stubs");
+    let no_link = args.iter().any(|a| a == "--no-link");
 
     // Handle --explain flag: print error code explanation
     if let Some(pos) = args.iter().position(|a| a == "--explain") {
@@ -599,6 +600,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--strict-abi" => {} // handled early; keep from becoming "input"
             "--report-untyped" => {} // handled via flag; keep from becoming "input"
             "--report-stubs" => {} // handled via flag; keep from becoming "input"
+            "--no-link" => {} // handled via flag; keep from becoming "input"
             "--features" => {
                 i += 1;
                 if i < args.len() {
@@ -819,6 +821,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(out) = output {
                     let obj_path = format!("{}.o", out);
                     finalize_and_aot(&codegen, Path::new(&obj_path), &target)?;
+                    if no_link {
+                        println!("Compiled to {}", obj_path);
+                        return Ok(());
+                    }
 
                     // Platform-specific linking
                     if target == "wasm32" || target == "wasm32-wasi" {
