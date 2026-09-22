@@ -12018,3 +12018,152 @@ ts `2026-09-22T14:03:29Z`）⇒ **rc=1**，唯一原因仍是既有判据 `tools
 - **锚点核对器加 `--rebind`**：把"连续四批自伤"从抄写变成做掉；顺带能覆盖 #52 的裸行号盲区。
 - **#40 `.gitignore` 裸 `*.z` 收窄**：一行，且门禁计数的可复现性押在它上面（本批差点踩空）。
 - **#61 占位/签名声明**：OPEN 1 已经把它的第一个可验收盘据量好了（`fn proto();`）。
+
+---
+
+## 批次 340（#40 落地：`.gitignore` 的裸 `*.z` / `*.c` / `test_*` 吃掉的是**手写的源文件**，本批把它改成可复现）
+
+### 选题：339 的 OPEN 2 说"一行改动，且它是门禁可复现性的前提"——实测前提比这更硬
+
+批次 339 建 `tests/python_style/t407_empty_stmt.z` 时，`git status` 完全不显示新建的用例，
+根因是 `.gitignore:114` 的裸 `*.z`（#40，批次 322 发现）。当时只 `git add -f` 把文件捞回来，
+债留给下一批。开工前先把值域量全 —— **哪些手写文件因为这几条规则从未进过仓库**：
+
+| 文件 | 盘上 | HEAD 树里 | `git log --all -- <该文件>` | 谁依赖它 |
+|---|---|---|---|---|
+| `pylib/numpy.z` | 95 行 / 2,807 B | **不在** | 空（从未提交过） | `src/middle/pylib.rs:536` 的 `include_str!`（**编译期**）＋ `import numpy` 的 PY-A 运行时加载 |
+| `tests/python_style/t124_ternary.z` | 1,080 B | **不在** | 空 | `tests/python_style/run.sh` 的用例计数（PY-A 三元式） |
+| `tests/unit/test_float_e2e.z` | 328 B | **不在** | 空 | 无工具引用 `tests/unit/`（门禁只读 `tests/unit-tests/`，见 `tools/run_all.sh:83`） |
+
+计数侧证据（一律对 **HEAD 树**比，不对索引比 —— 索引里已经有本批暂存的文件）：
+`git ls-tree -r HEAD --name-only pylib` 里 `.z` 只有 1 个（`pandas.z`），盘上 2 个；
+`tests/unit` 是 40 对 41；`tests/python_style` 在干净检出里 296 个 `.z`，在作者机器上 297 个。
+
+### 实测：干净 checkout **连编译都过不了**，不止"计数少 4 个"
+
+上一轮我只做了"把两个文件移开再跑一次"（→ 287 passed / 5 failed）。那量到的是**运行期**那条
+机制；`include_str!` 是**编译期**的，移文件不影响已建好的二进制，所以那次读数低估了灾情。
+本批改用真检出：`git worktree add --detach /Users/meetai/wt340b HEAD`（HEAD = 36533049，
+即批次 339 的提交），只把 `zetac` 用符号链接指过来、`ZETA_RUNTIME_DIR` 指回主目录 —— 也就是
+**把工具链钉死，只让"入库与否"这一个变量动**：
+
+| 状态 | `cargo check` | `python_style` 读数 |
+|---|---|---|
+| 干净 checkout（= 本批之前任何人 / CI 拿到的仓库） | **rc=101**，首错 `/tmp/wt340b_check.log:240`：`error: couldn't read src/middle/../../pylib/numpy.z`: No such file or directory --> `src/middle/pylib.rs:536:13` | **287 passed / 5 failed**（`t212` `t227` `t230` + 存量 `t231` `t233`），`tests/python_style` 里根本没有 t124 |
+| 同一检出 + 本批 4 个文件的内容 | **rc=0**（`Finished dev profile in 4.31s`） | **291 passed / 2 failed**（只剩存量 `t231` `t233`） |
+| 作者机器（改动前后都是这份） | rc=0 | 291 passed / 2 failed |
+
+三条 E0282（`pylib.rs:539` / `:540` / `:541`）是同一个错的类型推断级联（`include_str!` 失败后
+`src` 无类型），不是第二个缺陷。CI 侧同一件事：`.github/workflows/ci.yml:33` 的第一步是
+`cargo test --workspace`、`:35` 是 `cargo build --release`，两者都撞这条 —— 见 OPEN 4。
+`include_str!` 缺文件是硬错误不是警告，这一点另用一行程序独立复现（`/tmp/isl/main.rs` →
+`error: couldn't read /tmp/isl/./nope.z`），免得有人以为它会退化成空串。
+`numpy.z` 的两条依赖机制也分别钉住：编译期 `pylib.rs:536`，运行期 `resolver.rs:2251`
+把 `pylib` 放进 PY-A 搜索路径。
+
+**交叉验证**：真检出的 287/5 与上一轮"移开两个文件"的 287/5 是同一份 failed 名单，逐字相同 ——
+两条独立路径给出同一个数，说明这 4 个用例的差额全部归因 `.gitignore`，不来自 worktree 环境。
+
+### 改动
+
+| 文件 | 改了什么 |
+|---|---|
+| `.gitignore:116-123` | `*.c`(:115) 后加 `!*.c` + `runtime/aliases.inc.c`，即把"按扩展名忽略"收窄成"按名字忽略那一个再生文件" |
+| `.gitignore:131-139` | `test_*`(:130) 后加 `!pylib/*.z` + `!tests/**/*.z`，只对手写源所在的两棵树开负例 |
+| `pylib/numpy.z`、`tests/python_style/t124_ternary.z`、`tests/unit/test_float_e2e.z` | 首次入库（三者 `git log --all` 原本为空） |
+| `roadmap.md` | 本节 |
+
+净账：`.gitignore` 2,994 → 4,154 字节、**+17 行 / −0 行**（hunk 头 `@@ -115,2 +115,10 @@` 与
+`@@ -122,2 +130,11 @@`；内容是注释 13 行（6 + 7）加 4 条规则），其余文件逐字节不动。
+**NUL 字节改前改后都是 7 个**（本批没引入损坏，也没修，见 OPEN 3）。
+
+### 反证 / 边界：放开的是手写源，产物一个没漏出来
+
+- `find . -name '*.c'`（排除 `target/`、`.git/`）共 11 个，其中未跟踪的**只有** `runtime/aliases.inc.c`
+  一个，改后仍被忽略（`git check-ignore -v` → `.gitignore:123` 命中它自己的名字）；另外 10 个
+  早已跟踪，而 ignore 规则对已跟踪文件无效 —— 所以 `!*.c` 带来的 `git status` 噪声 = **0**。
+  它挡住的是"以后往 `runtime/` 放手写 .c"这一整类，而不是今天某个具体文件。
+- `aliases.inc.c` 该不该入库：不该。它是 `@generated`，`tools/build_runtime.sh:15`（`--gen` →
+  `gen_from_registry.py --emit-aliases`）能再生 —— 保持忽略是对的，本批只是给它换了条不牵连全仓的规则。
+- 产物侧一个都没放开：`find … -name '*.z' | git check-ignore --stdin` 在改动后仍被忽略的只剩
+  `build/stubs/**`，加上根级三个陈旧 scratch（`test_neg.z` 83 B、`test_match_simple.z` 178 B、
+  `test_match.z` 530 B，mtime 09-07/09-08，且 `tests/unit-tests/` 下有同名跟踪版本）—— 三者按
+  scratch 处理，故意不动。
+- 改后 `tests/` 与 `pylib/` 两棵树里**已无任何"被忽略且未跟踪"的 `.z`/`.py`**（同一条 sweep 为空）。
+- 新建用例从此免 `-f`：`git check-ignore -v tests/python_style/t999_probe.z` → `!tests/**/*.z`（:139）。
+- 反向边界（本批**没**收干净的部分）：裸 `*.z`(:114) 还在，`src/probe.z`、`tools/probe.z`、
+  `docs/examples/probe.z`、`examples/probe.z` 四个探针实测全部仍命中 `:114` —— 见 OPEN 1。
+- 门禁 9 步读数逐项不变（下表），因为它测的是作者机器上一直在跑的这份工作树；本批动的是
+  "别人克隆下来会看到什么"。
+
+### 门禁读数（`./tools/run_all.sh`，直接读退出码：`run_all rc=1`）
+
+| 步 | 读数 |
+|---|---|
+| official | compile **194/194**，compile+link **191/194**（3 条 link-only = #42） |
+| corpus（self-host） | parse_ok **39/39** |
+| python_style | **291 passed / 2 failed**，4 known-fail，0 xpass |
+| jit sweep | ok=170 trap=321 fail=0 timeout=0 segv=0（total 491，最小 ok=163） |
+| diff | match=120 judged=130 rate=92.3% bad_case=0 |
+| knob / swallow / import / empty_stmt | 23/0、4/0、22/0、**68/0** |
+| 编译期诊断 | official 9 文件 / 15 行；python_style 81 文件 / 190 行 |
+| 锚点 | 243 条可解析 / 定位失败 0 / **漂移 0**（基线 243 条），待归属 93 条 |
+
+`rc=1` 的唯一来源仍是存量 `py_fail=2`（判据 `tools/run_all.sh:360`，`t231` / `t233`）。
+
+**连续四批的锚点自伤在本批断了**，但别把它读成"我变小心了"：本批一行都没碰 `run_all.sh` 和
+`docs/ABI.md`，插入点不在任何锚点的下游，所以漂移为 0 是**运气不是纪律**。`--rebind` 仍然排
+下一批默认候选第一位。
+
+### 意外收获：同一份代码，仅仅检出位置不同，门禁读数就差 3 个用例
+
+第一次我把 worktree 放在 `/tmp/wt340b`，`python_style` 读到 **284 passed / 8 failed** —— 多出的
+三条正是 `t75_re_flags` / `t76_re_pattern` / `t90_re_escape`，日志 `/tmp/wt340b_py.log:347-348`
+当场给出原因：`PY-A: imported module re from /tmp/re.z`。机制在 `resolver.rs:2236-2245`：
+被编译文件所在目录**连同最多 6 层祖先**都在 PY-A 的搜索路径里（注释自陈 "and so do its
+ANCESTORS … Depth is capped so a plain name can never match `/a.py`"）。而 `/tmp` 根上躺着
+**328 个**陈旧 `.z` 探针（`ls /tmp/*.z | wc -l`），其中 `/tmp/re.z` 是个 pandas 探针，与 `re`
+毫无关系，却把内置 shim 盖掉了。把 worktree 挪到 `/Users/meetai/wt340b`（祖先目录里 `.z` 计数
+为 0）之后才拿到上表那两份 287/5 与 291/2。
+
+这条不是本批引入的，但它让"我机器上门禁是绿的"这句话又弱了一截：**读数对目录布局敏感**，
+且盖掉时只有 `warning:` 一级出声。登记为 OPEN 2。
+
+### 复核本批的一处自我更正
+
+`.gitignore` 在 git 眼里是**二进制**（就是那 7 个 NUL），`git diff --numstat` 对它输出
+`-	-	.gitignore`，所以本批这 17 行在常规 diff 里读不出内容。上面"改动"表里的行号与文本，
+证据来自 `python difflib` 对 `git show HEAD:.gitignore` 与盘上文件的逐行比对（两段 hunk：
+`@@ -115,2 +115,10 @@` 与 `@@ -122,2 +130,11 @@`）。写这一句是因为：**如果没人记下，
+"改动无法被 review"这件事本身就成了造假的温床。**
+
+### OPEN
+
+1. **裸 `*.z`(:114) 仍在**，本批只在 `tests/`、`pylib/` 两处开负例。`src/`、`tools/`、
+   `docs/examples/`、`examples/` 下新手写 `.z` 依旧静默消失（四个探针实测）。正解是把那一段
+   （注释自称 "Competition binary…"）改成带前缀的产物模式再删裸规则，前提是先清点的确哪些
+   产物靠它 —— 今天的答案是"只有 `build/stubs/**` 和根级 scratch"，但那是**当前**盘上的读数。
+2. **PY-A 祖先搜索（`resolver.rs:2236-2245`）让门禁读数随检出位置变化**：本批实测差 3 个用例
+   （284/8 vs 287/5）。修法二选一 —— 祖先搜索在越过仓库根时**出声**（现在只有一条 `warning:`，
+   而且这次是打在聚合诊断里、没人逐条读），或者干脆不越出根。顺带：`tools/` 的临时探针不该往
+   `/tmp` 根上扔（328 个存量）。
+3. **`.gitignore` 里那 7 个 NUL**（`:153-155`，`PERFORMANCE_*.md` 那行尾部混进一段 UTF-16 编码的
+   `zeta/`）：HEAD 版本同样 7 个，**前置于本批**。后果见上一节 —— 这个文件的所有改动对 git、
+   对锚点核对器、对 code review 全部不可见。修它要重写这 3 行，且文件是 CRLF，单独一批做。
+4. **CI 到底有没有在干净 clone 上跑过？** `ci.yml:33` 第一步就该红（实测 `cargo check` rc=101）。
+   要么这些 job 没接/没跑，要么 runner 复用了带这些文件的目录。本批看不到运行记录，不猜结论。
+   可验收动作：把"干净检出 + `cargo check`"变成门禁的一步（见下一批候选）。
+5. `tests/unit/test_float_e2e.z` 入库 ≠ 进门禁：没有任何工具引用 `tests/unit/`（run_all 读的是
+   `tests/unit-tests/`，`tools/run_all.sh:83`）。它只是 41 个同类里的第 41 个，随规则放开一起回来。
+6. 承接未动的：#61（占位/签名声明，`fn proto();` 盘据已量好）、#65（`LAST_PP` 串号）、
+   #60（`zt_env_flag`）、#63（`--repl` 的 `_dump_mir`）、#52 尾巴（93 条待归属 / 裸行号）、
+   `mod` 作用域函数调用打地址（339 OPEN 3）、`import x as y;`（339 OPEN 4）。
+
+### 下一批默认候选
+
+- **锚点核对器加 `--rebind`**（339 就登记了，本批仍然没做）：连续四批自伤被第五批的"没碰文件"
+  掩盖，不等于债已还。顺带覆盖 #52 的裸行号盲区。
+- **门禁加一步"干净检出可编译"**：在临时目录 `git worktree add` + `cargo check`，专治本批这类
+  "作者机器绿、克隆下来红"的债；同时能逼 OPEN 2 的选址问题被正式解决。
+- **#61 占位/签名声明**：`fn proto();` 的可验收盘据已经在 339 OPEN 1 里量好。
+

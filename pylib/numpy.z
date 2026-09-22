@@ -1,0 +1,95 @@
+# pylib/numpy.z — Zeta 库面（包装既有 C 原语；registry 只保留无库实现的原语）。
+#
+# 方向：API 用法落在本文件；`zeta_*` / registry `X`/`F` 仅服务原语与 MIR 分派
+#（`np.where` 多参、`np.zeros((r,c))` 元组展开仍由 MIR 拦截）。
+# 已从 registry `F` 撤下的：arange / asarray / where / zeros —— 由本库提供。
+#
+# D4: `# stub: <name>` 标记库层假值桩（`--list-stubs` 会扫）；
+#      soft: 基线依赖假值，暂不 abort；其余走 py_stub_abort。
+
+extern fn zeta_arange(n: i64) -> i64;
+extern fn zeta_identity(x: i64) -> i64;
+extern fn zeta_np_where1(mask: i64) -> i64;
+extern fn zeta_np_zeros(n: i64) -> i64;
+extern fn py_stub_abort(name: i64) -> i64;
+
+# ==================== 核心构造 / 选择 ====================
+
+def arange(n) -> lt(vec, i64):
+    # [0, n)；多参 float 未做（语料多为单参）。
+    return zeta_arange(n)
+
+def asarray(x) -> lt(vec, i64):
+    # 列表已是 Vec 句柄；dtype= 未做。
+    return zeta_identity(x)
+
+def where(mask) -> lt(vec, i64):
+    # 1 参索引形文档桩。`from numpy import where` / 3 参仍走 registry+F + MIR
+    #（registered members win，避免 3 参落到本 1 参函数）。
+    return zeta_np_where1(mask)
+
+def zeros(n) -> lt(vec, i64):
+    # 1-d 长度 n。`zeros((r,c))` 元组形由 MIR → zeta_np_zeros2。
+    return zeta_np_zeros(n)
+
+# ==================== 语料热缺口（最小可用） ====================
+
+def mean(xs) -> i64:
+    # 整数均值（截断）；空 → 0。f64 / axis 未做。
+    n = len(xs)
+    if n == 0:
+        return 0
+    return sum(xs) / n
+
+def any(xs) -> bool:
+    for x in xs:
+        if x:
+            return True
+    return False
+
+# stub: numpy.vstack
+def vstack(arrays):
+    return py_stub_abort("numpy.vstack")
+
+# stub: numpy.log
+def log(x) -> i64:
+    return py_stub_abort("numpy.log")
+
+# stub: numpy.isnan
+def isnan(x) -> bool:
+    return py_stub_abort("numpy.isnan")
+
+def condition(x):
+    # 文档桩：勿与 listcomp 自由变量 `condition(m)` 混淆（批 123 已修捕获）。
+    return x
+
+def append(arr, values):
+    # 1-d：列表拼接；`values` 标量时语料少见，本批要求 list。
+    return arr + values
+
+def clip(x, lo, hi):
+    # 标量夹取；数组 `.clip` 走 opaque identity。语料多为 Series.clip。
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+
+def max(a, b):
+    # 二元 max（非 np.amax 全数组）。与 builtin 同形，供 `from numpy import max`。
+    if a > b:
+        return a
+    return b
+
+def min(a, b):
+    if a < b:
+        return a
+    return b
+
+# stub: numpy.isfinite
+def isfinite(x) -> bool:
+    return py_stub_abort("numpy.isfinite")
+
+# stub: numpy.isinf
+def isinf(x) -> bool:
+    return py_stub_abort("numpy.isinf")

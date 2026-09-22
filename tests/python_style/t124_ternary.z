@@ -1,0 +1,47 @@
+// PY-A: Python 条件表达式 `A if C else B`（ternary）。
+// 此前完全不支持：解析在第一个顶层 if 处停下，其后的整份文件被静默丢弃
+// （REasyQuant 语料解释：jq_wufu_daily/jq_wufu 首个 def 体内
+//  `slip = A if C else B` 正是 top-2 截断文件的根因）。
+//  - 分支值：`x = 10 if a > 3 else 20`
+//  - 右结合嵌套：`1 if n > 0 else (-1 if n < 0 else 0)` / 无括号形式
+//  - 出现在 return / 列表 / 字典 / f-string / 调用实参 / for 体
+def pick(a):
+    return "big" if a > 3 else "small"
+
+print(pick(10))
+print(pick(1))
+
+x = 1
+y = 2
+print(x if x > y else y)
+
+def sign(n):
+    return 1 if n > 0 else -1 if n < 0 else 0
+
+print(sign(5))
+print(sign(-5))
+print(sign(0))
+
+vals = [10 if True else 20, 30]
+print(vals[0])
+
+d = {"k": 7 if 1 < 2 else 8}
+print(d["k"])
+
+print(f"{x if x < y else y}")
+
+total = 0
+for i in range(4):
+    total += i if i % 2 == 0 else 0
+print(total)
+
+// expect: big
+// expect: small
+// expect: 2
+// expect: 1
+// expect: -1
+// expect: 0
+// expect: 10
+// expect: 7
+// expect: 1
+// expect: 2
