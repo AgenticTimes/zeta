@@ -153,7 +153,13 @@ if [[ $SKIP_JIT -eq 0 ]]; then
     echo "SKIP jit: tools/jit_sweep.sh 需要 coreutils timeout" >&2
   fi
   line=$(grep '^jit sweep:' "$jit_log" | tail -1 || true)
-  jit_ok=$(echo "$line" | sed -nE 's/.*ok=([0-9]+).*/\1/p'); jit_ok=${jit_ok:-0}
+  # `ok=` must be anchored to the front of the line: the sweep line ends with
+  # the *threshold* (`…，最小 ok=163`), and a greedy `.*ok=` skips past the
+  # measurement and captures that floor instead. Measured: the unanchored form
+  # returned 163 while the real reading on the same line was 170 — so the
+  # baseline JSON recorded a constant, and any cross-batch diff of it was
+  # structurally incapable of showing a regression.
+  jit_ok=$(echo "$line" | sed -nE 's/^jit sweep: ok=([0-9]+) .*/\1/p'); jit_ok=${jit_ok:-0}
   jit_segv=$(echo "$line" | sed -nE 's/.*segv=([0-9]+).*/\1/p'); jit_segv=${jit_segv:-0}
   jit_total=$(echo "$line" | sed -nE 's/.*total ([0-9]+).*/\1/p'); jit_total=${jit_total:-0}
   [[ $JSON_ONLY -eq 0 ]] && cat "$jit_log"
