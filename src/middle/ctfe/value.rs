@@ -175,10 +175,16 @@ impl ConstValue {
     pub fn binary_op(&self, op: &str, right: &Self) -> CtfeResult<Self> {
         match (self, right) {
             (ConstValue::Int(left_val), ConstValue::Int(right_val)) => {
-                Self::binary_op_int(*left_val, op, *right_val).map(ConstValue::Int)
+                match Self::compare_int(*left_val, op, *right_val) {
+                    Some(cmp) => Ok(ConstValue::Bool(cmp)),
+                    None => Self::binary_op_int(*left_val, op, *right_val).map(ConstValue::Int),
+                }
             }
             (ConstValue::UInt(left_val), ConstValue::UInt(right_val)) => {
-                Self::binary_op_uint(*left_val, op, *right_val).map(ConstValue::UInt)
+                match Self::compare_uint(*left_val, op, *right_val) {
+                    Some(cmp) => Ok(ConstValue::Bool(cmp)),
+                    None => Self::binary_op_uint(*left_val, op, *right_val).map(ConstValue::UInt),
+                }
             }
             (ConstValue::Bool(left_val), ConstValue::Bool(right_val)) => {
                 Self::binary_op_bool(*left_val, op, *right_val).map(ConstValue::Bool)
@@ -233,6 +239,37 @@ impl ConstValue {
         }
     }
 
+    /// A comparison yields a **bool**, not a number — in Python `3 == 4` is
+    /// `False`, and the fold must not decide otherwise: returning `Int(0)` here
+    /// made `print(3 == 4)` print `0`, because the whole `ConstValue::Int` →
+    /// `AstNode::Lit` → `Type::I64` → `println_i64` chain downstream has no way
+    /// left to recover the bool. Returns `None` for non-comparison operators so
+    /// the caller keeps using the arithmetic folder.
+    fn compare_int(left: i64, op: &str, right: i64) -> Option<bool> {
+        match op {
+            "==" => Some(left == right),
+            "!=" => Some(left != right),
+            "<" => Some(left < right),
+            "<=" => Some(left <= right),
+            ">" => Some(left > right),
+            ">=" => Some(left >= right),
+            _ => None,
+        }
+    }
+
+    /// See [`Self::compare_int`].
+    fn compare_uint(left: u64, op: &str, right: u64) -> Option<bool> {
+        match op {
+            "==" => Some(left == right),
+            "!=" => Some(left != right),
+            "<" => Some(left < right),
+            "<=" => Some(left <= right),
+            ">" => Some(left > right),
+            ">=" => Some(left >= right),
+            _ => None,
+        }
+    }
+
     /// Binary operation for signed integers
     fn binary_op_int(left: i64, op: &str, right: i64) -> CtfeResult<i64> {
         match op {
@@ -281,12 +318,6 @@ impl ConstValue {
                     Ok(left.wrapping_shr(right as u32))
                 }
             }
-            "==" => Ok((left == right) as i64),
-            "!=" => Ok((left != right) as i64),
-            "<" => Ok((left < right) as i64),
-            "<=" => Ok((left <= right) as i64),
-            ">" => Ok((left > right) as i64),
-            ">=" => Ok((left >= right) as i64),
             _ => Err(CtfeError::UnsupportedOperation(format!(
                 "binary operator '{}' for integers",
                 op
@@ -328,12 +359,6 @@ impl ConstValue {
             "^" => Ok(left ^ right),
             "<<" => Ok(left.wrapping_shl(right as u32)),
             ">>" => Ok(left.wrapping_shr(right as u32)),
-            "==" => Ok((left == right) as u64),
-            "!=" => Ok((left != right) as u64),
-            "<" => Ok((left < right) as u64),
-            "<=" => Ok((left <= right) as u64),
-            ">" => Ok((left > right) as u64),
-            ">=" => Ok((left >= right) as u64),
             _ => Err(CtfeError::UnsupportedOperation(format!(
                 "binary operator '{}' for unsigned integers",
                 op

@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 内建函数（min/max）将返回值定型为 I64 ⇒ 布尔参数打回 1/0
+#@@ python
+m = min(1 == 2, 3 == 4)
+print(m)
+print(max(True, False))
+#@@ zeta
+m = min(1 == 2, 3 == 4)
+print(m)
+print(max(True, False))

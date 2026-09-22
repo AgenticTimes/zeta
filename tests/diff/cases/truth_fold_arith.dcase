@@ -1,0 +1,8 @@
+# @cat: truth
+# @note: 折叠成布尔的比较结果再参与算术
+#@@ python
+print((3 == 4) + 1)
+print((2 < 5) * 10)
+#@@ zeta
+print((3 == 4) + 1)
+print((2 < 5) * 10)

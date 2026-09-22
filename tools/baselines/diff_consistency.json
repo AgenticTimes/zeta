@@ -1,18 +1,18 @@
 {
-  "total": 104,
-  "judged": 104,
-  "match": 85,
-  "rate_pct": 81.7,
-  "match_min": 85,
+  "total": 107,
+  "judged": 107,
+  "match": 92,
+  "rate_pct": 86.0,
+  "match_min": 92,
   "by_verdict": {
-    "match": 85,
-    "mismatch": 18,
+    "match": 92,
+    "mismatch": 14,
     "compile": 1
   },
   "per_cat": {
     "truth": {
-      "match": 15,
-      "judged": 20
+      "match": 22,
+      "judged": 23
     },
     "str": {
       "match": 19,
@@ -380,9 +380,13 @@
       "cat": "truth",
       "verdict": "match"
     },
-    "truth_cmp_chain": {
+    "truth_builtin_min": {
       "cat": "truth",
       "verdict": "mismatch"
+    },
+    "truth_cmp_chain": {
+      "cat": "truth",
+      "verdict": "match"
     },
     "truth_empty_list": {
       "cat": "truth",
@@ -394,11 +398,19 @@
     },
     "truth_eq": {
       "cat": "truth",
-      "verdict": "mismatch"
+      "verdict": "match"
+    },
+    "truth_fold_arith": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_fold_logic": {
+      "cat": "truth",
+      "verdict": "match"
     },
     "truth_ge_int": {
       "cat": "truth",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "truth_in_str": {
       "cat": "truth",
@@ -406,11 +418,11 @@
     },
     "truth_lt": {
       "cat": "truth",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "truth_neq": {
       "cat": "truth",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "truth_nested_empty": {
       "cat": "truth",
