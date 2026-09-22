@@ -1,0 +1,12 @@
+# @cat: control
+# @note: for-else：未 break 才执行 else
+#@@ python
+for i in range(3):
+    pass
+else:
+    print("no break")
+#@@ zeta
+for i in range(3):
+    pass
+else:
+    print("no break")

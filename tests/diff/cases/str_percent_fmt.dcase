@@ -1,0 +1,6 @@
+# @cat: str
+# @note: % 格式化整数
+#@@ python
+print("n=%d" % 42)
+#@@ zeta
+print("n=%d" % 42)

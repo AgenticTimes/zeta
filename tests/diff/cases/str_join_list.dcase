@@ -1,0 +1,6 @@
+# @cat: str
+# @note: join 用分隔符连接
+#@@ python
+print(",".join(["a", "b"]))
+#@@ zeta
+print(",".join(["a", "b"]))

@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 负数相加
+#@@ python
+print(-5 + 3)
+#@@ zeta
+print(-5 + 3)

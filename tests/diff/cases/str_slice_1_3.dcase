@@ -1,0 +1,6 @@
+# @cat: str
+# @note: 闭开区间切片 [1:3]
+#@@ python
+print("abcdef"[1:3])
+#@@ zeta
+print("abcdef"[1:3])

@@ -1,0 +1,6 @@
+# @cat: str
+# @note: 负下标切片 [-2:]
+#@@ python
+print("abcdef"[-2:])
+#@@ zeta
+print("abcdef"[-2:])

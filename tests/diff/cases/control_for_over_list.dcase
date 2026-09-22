@@ -1,0 +1,12 @@
+# @cat: control
+# @note: for 直接遍历列表
+#@@ python
+t = 0
+for x in [1, 2, 3]:
+    t = t + x
+print(t)
+#@@ zeta
+t = 0
+for x in [1, 2, 3]:
+    t = t + x
+print(t)

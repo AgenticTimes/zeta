@@ -1,0 +1,6 @@
+# @cat: str
+# @note: 长度不同的相等比较
+#@@ python
+print("abc" == "abcd")
+#@@ zeta
+print("abc" == "abcd")

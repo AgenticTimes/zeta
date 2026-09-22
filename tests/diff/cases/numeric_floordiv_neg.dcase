@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 负数整除向下取整
+#@@ python
+print(-7 // 2)
+#@@ zeta
+print(-7 // 2)

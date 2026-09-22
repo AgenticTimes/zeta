@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 正数取模
+#@@ python
+print(7 % 2)
+#@@ zeta
+print(7 % 2)

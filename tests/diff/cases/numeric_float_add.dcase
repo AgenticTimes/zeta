@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 浮点加法表示
+#@@ python
+print(0.1 + 0.2)
+#@@ zeta
+print(0.1 + 0.2)

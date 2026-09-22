@@ -1,0 +1,8 @@
+# @cat: container
+# @note: keys() 可取长度
+#@@ python
+d = {"a": 1, "b": 2}
+print(len(d.keys()))
+#@@ zeta
+d = {"a": 1, "b": 2}
+print(len(d.keys()))

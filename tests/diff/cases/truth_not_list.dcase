@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: not 空容器
+#@@ python
+print(not [])
+#@@ zeta
+print(not [])

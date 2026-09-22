@@ -1,0 +1,8 @@
+# @cat: str
+# @note: f-string 插值
+#@@ python
+x = 7
+print(f"v={x}")
+#@@ zeta
+x = 7
+print(f"v={x}")

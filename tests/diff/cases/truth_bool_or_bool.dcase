@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: 布尔字面量 or
+#@@ python
+print(True or False)
+#@@ zeta
+print(True or False)

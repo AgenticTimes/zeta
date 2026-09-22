@@ -1,0 +1,6 @@
+# @cat: container
+# @note: sum 求和
+#@@ python
+print(sum([1, 2, 3]))
+#@@ zeta
+print(sum([1, 2, 3]))

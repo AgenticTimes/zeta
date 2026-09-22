@@ -1,0 +1,6 @@
+# @cat: str
+# @note: strip 去两端空白
+#@@ python
+print("  x  ".strip())
+#@@ zeta
+print("  x  ".strip())

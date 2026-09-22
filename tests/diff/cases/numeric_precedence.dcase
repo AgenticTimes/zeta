@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 乘加优先级
+#@@ python
+print(2 + 3 * 4)
+#@@ zeta
+print(2 + 3 * 4)

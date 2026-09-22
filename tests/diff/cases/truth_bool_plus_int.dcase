@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: True 参与算术按 1
+#@@ python
+print(True + 1)
+#@@ zeta
+print(True + 1)

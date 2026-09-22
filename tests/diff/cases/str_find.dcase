@@ -1,0 +1,6 @@
+# @cat: str
+# @note: find 返回首下标
+#@@ python
+print("hello".find("ll"))
+#@@ zeta
+print("hello".find("ll"))

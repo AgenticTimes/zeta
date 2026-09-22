@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: float() 提升为浮点
+#@@ python
+print(float(4))
+#@@ zeta
+print(float(4))

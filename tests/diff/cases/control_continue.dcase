@@ -1,0 +1,16 @@
+# @cat: control
+# @note: continue 跳过奇数求和
+#@@ python
+t = 0
+for i in range(6):
+    if i % 2:
+        continue
+    t = t + i
+print(t)
+#@@ zeta
+t = 0
+for i in range(6):
+    if i % 2:
+        continue
+    t = t + i
+print(t)

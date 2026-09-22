@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: 整数 0 按假值
+#@@ python
+print(1 if 0 else 0)
+#@@ zeta
+print(1 if 0 else 0)

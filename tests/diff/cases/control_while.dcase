@@ -1,0 +1,12 @@
+# @cat: control
+# @note: while 循环到界
+#@@ python
+i = 0
+while i < 10:
+    i = i + 2
+print(i)
+#@@ zeta
+i = 0
+while i < 10:
+    i = i + 2
+print(i)

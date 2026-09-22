@@ -1,0 +1,6 @@
+# @cat: str
+# @note: 制表转义
+#@@ python
+print("a\tb")
+#@@ zeta
+print("a\tb")

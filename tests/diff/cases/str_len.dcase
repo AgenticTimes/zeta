@@ -1,0 +1,6 @@
+# @cat: str
+# @note: len 取字符串长度
+#@@ python
+print(len("hello"))
+#@@ zeta
+print(len("hello"))

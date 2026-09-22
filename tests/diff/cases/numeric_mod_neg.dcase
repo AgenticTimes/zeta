@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 负数取模向零下界
+#@@ python
+print(-7 % 3)
+#@@ zeta
+print(-7 % 3)

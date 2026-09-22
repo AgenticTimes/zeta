@@ -1,0 +1,6 @@
+# @cat: str
+# @note: split 后元素个数
+#@@ python
+print(len("a b c".split()))
+#@@ zeta
+print(len("a b c".split()))

@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 真除法 7/2 应为 3.5
+#@@ python
+print(7 / 2)
+#@@ zeta
+print(7 / 2)

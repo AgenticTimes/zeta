@@ -1,0 +1,6 @@
+# @cat: str
+# @note: 字符串相加拼接
+#@@ python
+print("ab" + "c")
+#@@ zeta
+print("ab" + "c")

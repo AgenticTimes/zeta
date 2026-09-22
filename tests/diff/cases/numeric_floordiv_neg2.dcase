@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 正数除负数整除
+#@@ python
+print(7 // -2)
+#@@ zeta
+print(7 // -2)

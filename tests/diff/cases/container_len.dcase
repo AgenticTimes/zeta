@@ -1,0 +1,6 @@
+# @cat: container
+# @note: len 取列表长度
+#@@ python
+print(len([1, 2, 3]))
+#@@ zeta
+print(len([1, 2, 3]))

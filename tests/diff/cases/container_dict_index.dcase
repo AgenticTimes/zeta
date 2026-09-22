@@ -1,0 +1,8 @@
+# @cat: container
+# @note: 字典按键取值
+#@@ python
+d = {"a": 1}
+print(d["a"])
+#@@ zeta
+d = {"a": 1}
+print(d["a"])

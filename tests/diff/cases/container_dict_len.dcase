@@ -1,0 +1,6 @@
+# @cat: container
+# @note: 字典长度=键数
+#@@ python
+print(len({"a": 1, "b": 2}))
+#@@ zeta
+print(len({"a": 1, "b": 2}))

@@ -1,0 +1,6 @@
+# @cat: str
+# @note: replace 替换子串
+#@@ python
+print("a-b-c".replace("-", "+"))
+#@@ zeta
+print("a-b-c".replace("-", "+"))

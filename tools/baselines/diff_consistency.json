@@ -1,0 +1,452 @@
+{
+  "total": 104,
+  "judged": 104,
+  "match": 85,
+  "rate_pct": 81.7,
+  "match_min": 85,
+  "by_verdict": {
+    "match": 85,
+    "mismatch": 18,
+    "compile": 1
+  },
+  "per_cat": {
+    "truth": {
+      "match": 15,
+      "judged": 20
+    },
+    "str": {
+      "match": 19,
+      "judged": 22
+    },
+    "container": {
+      "match": 20,
+      "judged": 20
+    },
+    "numeric": {
+      "match": 11,
+      "judged": 22
+    },
+    "control": {
+      "match": 20,
+      "judged": 20
+    }
+  },
+  "cases": {
+    "container_append": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_assign_elem": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_dict_in": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_dict_index": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_dict_keys_len": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_dict_len": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_dict_list_mixed": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_empty_dict_truth": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_extend": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_in": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_index": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_len": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_max": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_min": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_neg_index": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_nested_index": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_slice_len": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_sum": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_tuple_index": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_tuple_len": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "control_break": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_continue": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_default_arg": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_for_else": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_for_over_list": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_for_range": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_if_elif": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_index_by_range": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_list_comp_sum": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_multi_print": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_nested_break": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_pass": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_print_end": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_print_sep": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_range_start": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_range_step": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_recursion_fib": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_short_circuit": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_ternary_nested": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_while": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "numeric_abs": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_aug_assign": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_big_int": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "numeric_float_add": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "numeric_float_promote": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "numeric_floordiv": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "numeric_floordiv_neg": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "numeric_floordiv_neg2": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "numeric_int_str": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_int_trunc": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_mod": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_mod_float": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "numeric_mod_neg": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "numeric_mod_neg2": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "numeric_mul_neg": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_neg_add": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_paren": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_pow": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_pow_prec": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "numeric_pow_zero": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_precedence": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "numeric_truediv": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "str_cmp_len": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_cmp_lt": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_concat": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_escape_tab": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_find": {
+      "cat": "str",
+      "verdict": "compile"
+    },
+    "str_fstring": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_index_neg": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_join_list": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_len": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_len_empty": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_lower": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_percent_fmt": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "str_repeat": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_repeat_left": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "str_replace": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_slice_1_3": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_slice_neg_tail": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_slice_step2": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_split_len": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_strip": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_upper": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "str_upper_mixed": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "truth_and_returns_operand": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_bool_or_bool": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_bool_plus_int": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_cmp_chain": {
+      "cat": "truth",
+      "verdict": "mismatch"
+    },
+    "truth_empty_list": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_empty_str": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_eq": {
+      "cat": "truth",
+      "verdict": "mismatch"
+    },
+    "truth_ge_int": {
+      "cat": "truth",
+      "verdict": "mismatch"
+    },
+    "truth_in_str": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_lt": {
+      "cat": "truth",
+      "verdict": "mismatch"
+    },
+    "truth_neq": {
+      "cat": "truth",
+      "verdict": "mismatch"
+    },
+    "truth_nested_empty": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_nonempty_list": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_nonzero_int": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_not_in_list": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_not_list": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_not_op": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_or_all_false": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_or_returns_operand": {
+      "cat": "truth",
+      "verdict": "match"
+    },
+    "truth_zero_int": {
+      "cat": "truth",
+      "verdict": "match"
+    }
+  }
+}

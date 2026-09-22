@@ -1,0 +1,10 @@
+# @cat: container
+# @note: extend 追加多元素
+#@@ python
+xs = [1]
+xs.extend([2, 3])
+print(len(xs))
+#@@ zeta
+xs = [1]
+xs.extend([2, 3])
+print(len(xs))

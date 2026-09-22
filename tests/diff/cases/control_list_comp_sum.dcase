@@ -1,0 +1,6 @@
+# @cat: control
+# @note: 列表推导求和
+#@@ python
+print(sum([i * i for i in range(4)]))
+#@@ zeta
+print(sum([i * i for i in range(4)]))

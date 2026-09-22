@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 大整数任意精度
+#@@ python
+print(2 ** 100)
+#@@ zeta
+print(2 ** 100)

@@ -1,0 +1,18 @@
+# @cat: control
+# @note: 双层循环内层 break
+#@@ python
+found = 0
+for i in range(3):
+    for j in range(3):
+        if i * j == 2:
+            found = i + j
+            break
+print(found)
+#@@ zeta
+found = 0
+for i in range(3):
+    for j in range(3):
+        if i * j == 2:
+            found = i + j
+            break
+print(found)

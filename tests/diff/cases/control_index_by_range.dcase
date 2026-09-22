@@ -1,0 +1,10 @@
+# @cat: control
+# @note: range(len(xs)) 遍历下标
+#@@ python
+xs = [5, 6, 7]
+for i in range(len(xs)):
+    print(xs[i])
+#@@ zeta
+xs = [5, 6, 7]
+for i in range(len(xs)):
+    print(xs[i])

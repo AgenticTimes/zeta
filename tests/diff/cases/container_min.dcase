@@ -1,0 +1,6 @@
+# @cat: container
+# @note: min 取最小
+#@@ python
+print(min([3, 9, 2]))
+#@@ zeta
+print(min([3, 9, 2]))

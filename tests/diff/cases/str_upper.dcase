@@ -1,0 +1,6 @@
+# @cat: str
+# @note: upper 全大写
+#@@ python
+print("abc".upper())
+#@@ zeta
+print("abc".upper())

@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: 不等取反
+#@@ python
+print(3 != 4)
+#@@ zeta
+print(3 != 4)

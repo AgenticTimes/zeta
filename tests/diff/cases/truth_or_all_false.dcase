@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: or 全假时返回末值
+#@@ python
+print(0 or "")
+#@@ zeta
+print(0 or "")

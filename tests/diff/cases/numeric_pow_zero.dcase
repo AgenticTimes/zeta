@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 零次幂
+#@@ python
+print(2 ** 0)
+#@@ zeta
+print(2 ** 0)

@@ -1,0 +1,8 @@
+# @cat: control
+# @note: print 自定义 end 不换行
+#@@ python
+print("a", end="")
+print("b")
+#@@ zeta
+print("a", end="")
+print("b")

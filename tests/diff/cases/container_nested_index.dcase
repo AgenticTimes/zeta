@@ -1,0 +1,8 @@
+# @cat: container
+# @note: 嵌套列表二级下标
+#@@ python
+xs = [[1, 2], [3, 4]]
+print(xs[1][0])
+#@@ zeta
+xs = [[1, 2], [3, 4]]
+print(xs[1][0])

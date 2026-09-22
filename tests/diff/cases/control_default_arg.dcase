@@ -1,0 +1,10 @@
+# @cat: control
+# @note: 默认参数值
+#@@ python
+def add(a, b=5):
+    return a + b
+print(add(1))
+#@@ zeta
+def add(a: i64, b: i64 = 5) -> i64:
+    return a + b
+print(add(1))

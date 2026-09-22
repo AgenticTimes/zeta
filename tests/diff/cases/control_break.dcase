@@ -1,0 +1,16 @@
+# @cat: control
+# @note: break 提前退出 while
+#@@ python
+i = 0
+while True:
+    i = i + 1
+    if i > 3:
+        break
+print(i)
+#@@ zeta
+i = 0
+while True:
+    i = i + 1
+    if i > 3:
+        break
+print(i)

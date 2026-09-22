@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: in 判子串
+#@@ python
+print("bc" in "abcd")
+#@@ zeta
+print("bc" in "abcd")

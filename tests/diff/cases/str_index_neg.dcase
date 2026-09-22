@@ -1,0 +1,6 @@
+# @cat: str
+# @note: 负下标取字符
+#@@ python
+print("abc"[-1])
+#@@ zeta
+print("abc"[-1])

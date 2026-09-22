@@ -1,0 +1,6 @@
+# @cat: str
+# @note: 整数乘字符串
+#@@ python
+print(3 * "ab")
+#@@ zeta
+print(3 * "ab")

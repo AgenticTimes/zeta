@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/run_all.sh — Q4 (advice.md): one command → three baseline numbers as JSON.
-# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit]
+# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff]
 # Exit 0 if all enabled suites pass their green criteria; else 1.
 set -euo pipefail
 
@@ -14,6 +14,7 @@ SKIP_CORPUS=0
 SKIP_OFFICIAL=0
 SKIP_PYTHON=0
 SKIP_JIT=0
+SKIP_DIFF=0
 
 for a in "$@"; do
   case "$a" in
@@ -22,6 +23,7 @@ for a in "$@"; do
     --skip-official) SKIP_OFFICIAL=1 ;;
     --skip-python) SKIP_PYTHON=1 ;;
     --skip-jit) SKIP_JIT=1 ;;
+    --skip-diff) SKIP_DIFF=1 ;;
     -h|--help)
       sed -n '2,6p' "$0"
       exit 0
@@ -180,6 +182,33 @@ if [[ $SKIP_JIT -eq 0 ]]; then
   rm -f "$jit_log"
 fi
 
+# ── 5) CPython 差分一致率（refactor.md G.3 起步 / 立即档 ⑩，批次 326）──
+# 前四步全部只测"自洽"：`// expect:` 的期望值是人照着自己对 zeta 的想象手写的，
+# 所以它能量出回归，永远量不出"语义与 Python 不一致"。这一步把期望值交给参考
+# 实现（python3 现场跑同一段语义），首次让"还有多少语义是错的"变成一个数字。
+# 判据在 tools/diff_test.py 内部：基线里 match 的用例不许变差、match 绝对数不许
+# 低于 match_min。rc=2 是"参考侧自己跑不出真值"（坏用例/跨实现差异），
+# **只喊话不判红**——那类失败要修的是用例或环境，不是编译器；静默忽略才是问题。
+diff_rc=0; diff_match=0; diff_judged=0; diff_rate=0; diff_bad=0; diff_skipped=0
+if [[ $SKIP_DIFF -eq 0 ]]; then
+  diff_log=$(mktemp)
+  set +e
+  python3 "$ROOT/tools/diff_test.py" >"$diff_log" 2>&1
+  diff_rc=$?
+  set -e
+  line=$(grep '^diff test:' "$diff_log" | tail -1 || true)
+  diff_match=$(echo "$line" | sed -nE 's/^diff test: match=([0-9]+).*/\1/p'); diff_match=${diff_match:-0}
+  diff_judged=$(echo "$line" | sed -nE 's/.* judged=([0-9]+).*/\1/p'); diff_judged=${diff_judged:-0}
+  diff_rate=$(echo "$line" | sed -nE 's/.* rate=([0-9.]+)%.*/\1/p'); diff_rate=${diff_rate:-0}
+  diff_bad=$(echo "$line" | sed -nE 's/.* bad_case=([0-9]+).*/\1/p'); diff_bad=${diff_bad:-0}
+  [[ $JSON_ONLY -eq 0 ]] && grep -E '^(  [a-z]+ |[a-z]+ +[0-9]+/|diff test:)' "$diff_log" | tail -12
+  if [[ $diff_rc -ne 0 ]]; then
+    # 判定行（回归清单/坏用例）不在上面的抽样里，红的时候必须全文出声
+    tail -40 "$diff_log" >&2
+  fi
+  rm -f "$diff_log"
+fi
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -194,6 +223,8 @@ doc = {
   "corpus": {"parse_ok": $corpus_ok, "total": $corpus_total},
   "jit": {"ok": $jit_ok, "segv": $jit_segv, "total": $jit_total,
           "skipped": $jit_skipped},
+  "diff": {"match": $diff_match, "judged": $diff_judged, "rate_pct": $diff_rate,
+           "bad_case": $diff_bad, "skipped": $SKIP_DIFF},
   # 只出声、不参与退出码（附 B#9 的护栏：判定看运行期 stdout，告警不改判定）
   "compile_diagnostics": {
     "official_files_with_warnings": $official_diag_files,
@@ -224,4 +255,9 @@ if [[ $SKIP_PYTHON -eq 0 && $py_fail -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_CORPUS -eq 0 && $corpus_total -gt 0 && $corpus_ok -ne $corpus_total ]]; then rc=1; fi
 # jit: 判据在 tools/jit_sweep.sh 内部（segv==0 且 ok>=基线），这里只认它的退出码
 if [[ $SKIP_JIT -eq 0 && $jit_skipped -eq 0 && $jit_rc -ne 0 ]]; then rc=1; fi
+# diff: rc=1=一致用例回归/match 数回退（判红）；rc=2=坏用例（只喊话，见步骤 5 注释）
+if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 1 ]]; then rc=1; fi
+if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 2 ]]; then
+  echo "[G.3] 差分有 $diff_bad 条坏用例（参考侧跑不出真值）——不参与判定，但必须修用例" >&2
+fi
 exit $rc

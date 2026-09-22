@@ -1,0 +1,6 @@
+# @cat: str
+# @note: 字符串乘整数重复
+#@@ python
+print("ab" * 3)
+#@@ zeta
+print("ab" * 3)

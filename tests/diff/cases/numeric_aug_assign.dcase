@@ -1,0 +1,10 @@
+# @cat: numeric
+# @note: 增强赋值 +=
+#@@ python
+x = 1
+x += 2
+print(x)
+#@@ zeta
+x = 1
+x += 2
+print(x)

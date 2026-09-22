@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 浮点取模
+#@@ python
+print(7.5 % 2)
+#@@ zeta
+print(7.5 % 2)

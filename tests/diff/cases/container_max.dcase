@@ -1,0 +1,6 @@
+# @cat: container
+# @note: max 取最大
+#@@ python
+print(max([3, 9, 2]))
+#@@ zeta
+print(max([3, 9, 2]))

@@ -1,0 +1,6 @@
+# @cat: control
+# @note: print 自定义 sep
+#@@ python
+print(1, 2, sep="-")
+#@@ zeta
+print(1, 2, sep="-")

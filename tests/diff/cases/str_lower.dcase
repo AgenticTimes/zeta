@@ -1,0 +1,6 @@
+# @cat: str
+# @note: lower 全小写
+#@@ python
+print("ABC".lower())
+#@@ zeta
+print("ABC".lower())

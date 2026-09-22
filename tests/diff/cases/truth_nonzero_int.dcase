@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: 负整数按真值
+#@@ python
+print(1 if -3 else 0)
+#@@ zeta
+print(1 if -3 else 0)

@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 幂优先于一元负
+#@@ python
+print(-2 ** 2)
+#@@ zeta
+print(-2 ** 2)

@@ -1,0 +1,12 @@
+# @cat: control
+# @note: and 短路不求右值
+#@@ python
+def hit():
+    print("side")
+    return 1
+print(0 and hit())
+#@@ zeta
+def hit() -> i64:
+    print("side")
+    return 1
+print(0 and hit())

@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 正乘负
+#@@ python
+print(2 * -3)
+#@@ zeta
+print(2 * -3)

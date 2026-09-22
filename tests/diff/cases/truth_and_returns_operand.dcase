@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: and 返回操作数而非布尔
+#@@ python
+print(1 and 2)
+#@@ zeta
+print(1 and 2)

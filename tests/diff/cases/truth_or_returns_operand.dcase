@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: or 返回首个真值操作数
+#@@ python
+print(0 or 3)
+#@@ zeta
+print(0 or 3)

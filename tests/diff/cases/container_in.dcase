@@ -1,0 +1,6 @@
+# @cat: container
+# @note: in 判成员
+#@@ python
+print(2 in [1, 2, 3])
+#@@ zeta
+print(2 in [1, 2, 3])

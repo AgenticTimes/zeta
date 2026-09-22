@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: == 的结果按布尔打印
+#@@ python
+print(3 == 4)
+#@@ zeta
+print(3 == 4)

@@ -1,0 +1,10 @@
+# @cat: container
+# @note: 下标赋值改元素
+#@@ python
+xs = [1, 2]
+xs[0] = 9
+print(xs[0])
+#@@ zeta
+xs = [1, 2]
+xs[0] = 9
+print(xs[0])

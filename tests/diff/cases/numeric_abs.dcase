@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: abs 取绝对值
+#@@ python
+print(abs(-9))
+#@@ zeta
+print(abs(-9))

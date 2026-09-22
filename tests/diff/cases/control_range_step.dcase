@@ -1,0 +1,8 @@
+# @cat: control
+# @note: range 带步长逐项打印
+#@@ python
+for i in range(0, 10, 3):
+    print(i)
+#@@ zeta
+for i in range(0, 10, 3):
+    print(i)

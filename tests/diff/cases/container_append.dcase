@@ -1,0 +1,10 @@
+# @cat: container
+# @note: append 后长度增长
+#@@ python
+xs = [1]
+xs.append(2)
+print(len(xs))
+#@@ zeta
+xs = [1]
+xs.append(2)
+print(len(xs))

@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 括号先算
+#@@ python
+print((2 + 3) * 4)
+#@@ zeta
+print((2 + 3) * 4)

@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: 小于比较的结果按布尔打印
+#@@ python
+print(2 < 3)
+#@@ zeta
+print(2 < 3)

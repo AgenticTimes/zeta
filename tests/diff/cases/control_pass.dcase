@@ -1,0 +1,10 @@
+# @cat: control
+# @note: pass 空体
+#@@ python
+if 1:
+    pass
+print(1)
+#@@ zeta
+if 1:
+    pass
+print(1)

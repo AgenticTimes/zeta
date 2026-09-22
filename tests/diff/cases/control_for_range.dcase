@@ -1,0 +1,12 @@
+# @cat: control
+# @note: for + range 累加
+#@@ python
+t = 0
+for i in range(5):
+    t = t + i
+print(t)
+#@@ zeta
+t = 0
+for i in range(5):
+    t = t + i
+print(t)

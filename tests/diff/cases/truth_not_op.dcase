@@ -1,0 +1,6 @@
+# @cat: truth
+# @note: not 取假
+#@@ python
+print(not 0)
+#@@ zeta
+print(not 0)

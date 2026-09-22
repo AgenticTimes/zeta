@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 幂运算
+#@@ python
+print(2 ** 10)
+#@@ zeta
+print(2 ** 10)

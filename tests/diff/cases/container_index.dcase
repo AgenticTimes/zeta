@@ -1,0 +1,8 @@
+# @cat: container
+# @note: 正下标取值
+#@@ python
+xs = [10, 20, 30]
+print(xs[1])
+#@@ zeta
+xs = [10, 20, 30]
+print(xs[1])

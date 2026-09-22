@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: int() 截断小数
+#@@ python
+print(int(3.7))
+#@@ zeta
+print(int(3.7))

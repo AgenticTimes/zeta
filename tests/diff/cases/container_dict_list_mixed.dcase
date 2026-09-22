@@ -1,0 +1,8 @@
+# @cat: container
+# @note: 字典套列表再下标
+#@@ python
+d = {"xs": [1, 2]}
+print(d["xs"][1])
+#@@ zeta
+d = {"xs": [1, 2]}
+print(d["xs"][1])

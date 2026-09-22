@@ -1,0 +1,6 @@
+# @cat: container
+# @note: 元组长度
+#@@ python
+print(len((1, 2)))
+#@@ zeta
+print(len((1, 2)))

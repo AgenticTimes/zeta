@@ -1,0 +1,8 @@
+# @cat: container
+# @note: 元组下标
+#@@ python
+t = (1, 2, 3)
+print(t[1])
+#@@ zeta
+t = (1, 2, 3)
+print(t[1])

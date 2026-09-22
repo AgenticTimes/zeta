@@ -1,0 +1,6 @@
+# @cat: container
+# @note: in 判键存在
+#@@ python
+print("a" in {"a": 1})
+#@@ zeta
+print("a" in {"a": 1})

@@ -1,0 +1,6 @@
+# @cat: str
+# @note: 空串长度 0
+#@@ python
+print(len(""))
+#@@ zeta
+print(len(""))

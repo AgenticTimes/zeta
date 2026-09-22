@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: int() 解析字符串
+#@@ python
+print(int("42") + 1)
+#@@ zeta
+print(int("42") + 1)
