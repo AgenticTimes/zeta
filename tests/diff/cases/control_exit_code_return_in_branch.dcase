@@ -1,0 +1,24 @@
+# @cat: control
+# @note: 任务 #55 的**分支路由**：入口函数体里 `if`/`for` 分支内的 `return` 值不是进程退出码。
+#   这类 `Return` 嵌在 `MirStmt::If`/`MirStmt::For` 的语句向量里，尾值合成点看不见它，
+#   逐点打补丁要覆盖 4 条路由（尾值合成、`lower_expr` 的 Return 档、parser 的 `ret_expr` 提升、
+#   `ExprStmt` 包着的 Return），所以判据落在**值域**上：`py_entry` 时递归把入口体内每个 Return
+#   的槽改指同一个 0（副作用保留，只换交回的槽）。
+#   修复前（HEAD 编译器）实测：本档 rc=5，`if` 分支那一版 rc=9，模块级直接 `main()` 的那版 rc=8
+#   ——三条都靠本档这一处递归收平，逐点打补丁则要在 4 个 push 点各判一次。
+#@@ python
+def main():
+    for i in range(3):
+        if i == 1:
+            return 5
+    return 1
+if __name__ == "__main__":
+    main()
+#@@ zeta
+def main():
+    for i in range(3):
+        if i == 1:
+            return 5
+    return 1
+if __name__ == "__main__":
+    main()

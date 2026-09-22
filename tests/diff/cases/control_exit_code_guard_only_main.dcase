@@ -1,0 +1,20 @@
+# @cat: control
+# @note: 任务 #55 的**第二条路由**：模块级唯一内容就是 `if __name__ == "__main__": main()` 时，
+#   guard 的函数体被 `is_bare_main_call` 丢掉，所以"合并进来的语句非空"这条判据看不见它
+#   （q12 实测：`def main(): print(...); 7` + guard → rc=7，输出是对的）。
+#   修复=把"出现过 `__main__` guard"本身当作模块体证据（guard 语法不会出现在花括号方言里，
+#   所以 `fn main() -> i64 { 42 }` 仍返回 42）。
+#   尾值走的是 parser 的 `ret_expr` 提升（top_level.rs:284），绕开 MIR 的尾值合成，
+#   所以 #55 的最终形态是"入口函数的所有 Return 统一改指 0 槽"（gen.rs `force_entry_returns`）。
+#@@ python
+def main():
+    print("in main")
+    7
+if __name__ == "__main__":
+    main()
+#@@ zeta
+def main():
+    print("in main")
+    7
+if __name__ == "__main__":
+    main()

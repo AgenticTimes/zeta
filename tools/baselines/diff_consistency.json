@@ -1,13 +1,12 @@
 {
-  "total": 126,
-  "judged": 126,
-  "match": 112,
-  "rate_pct": 88.9,
-  "match_min": 112,
+  "total": 128,
+  "judged": 128,
+  "match": 115,
+  "rate_pct": 89.8,
+  "match_min": 115,
   "by_verdict": {
-    "match": 112,
+    "match": 115,
     "mismatch": 12,
-    "runtime": 1,
     "compile": 1
   },
   "per_cat": {
@@ -28,8 +27,8 @@
       "judged": 26
     },
     "control": {
-      "match": 25,
-      "judged": 26
+      "match": 28,
+      "judged": 28
     }
   },
   "cases": {
@@ -141,6 +140,14 @@
       "cat": "control",
       "verdict": "match"
     },
+    "control_exit_code_guard_only_main": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_exit_code_return_in_branch": {
+      "cat": "control",
+      "verdict": "match"
+    },
     "control_for_else": {
       "cat": "control",
       "verdict": "match"
@@ -211,7 +218,7 @@
     },
     "control_tail_value_exit_code": {
       "cat": "control",
-      "verdict": "runtime"
+      "verdict": "match"
     },
     "control_ternary_nested": {
       "cat": "control",

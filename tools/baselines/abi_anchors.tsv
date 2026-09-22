@@ -1,4 +1,5 @@
 pylib/registry.txt	208	F warnings filterwarnings py_warnings_noop args=i64 ret=i64
+pylib/registry.txt	294	F sys exit py_sys_exit args=i64 ret=void
 pylib/registry.txt	440	W PyArgParser parse_args py_argparse_parse args=1 ret_handle=PyArgNS
 pylib/registry.txt	510	X zeta_call_fn_arg args=i64,i64 ret=i64
 pylib/runtime_core.txt	36	zeta_dynarray_new args=i64 ret=i64
@@ -66,33 +67,33 @@ src/main.rs	529	let strict_abi = args.iter().any(|a| a == "--strict-abi")
 src/main.rs	535	let no_link = args.iter().any(|a| a == "--no-link");
 src/main.rs	778	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
 src/main.rs	824	if no_link {
-src/middle/mir/gen.rs	388	.map(|m| format!("{}__", m.replace('.', "_")))
-src/middle/mir/gen.rs	427	Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
-src/middle/mir/gen.rs	539	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
-src/middle/mir/gen.rs	546	let prefix = format!("{}__", module.replace('.', "_"));
-src/middle/mir/gen.rs	785	fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) { let missing: Vec<&str> = params .iter() .enumerate() .filter(|(i, _)| slots.get(*i
-src/middle/mir/gen.rs	3022	fn lower_range_guard(
-src/middle/mir/gen.rs	3044	func: if inclusive { "<=" } else { "<" }.to_string(),
-src/middle/mir/gen.rs	3259	format!("{}__{}", module.replace('.', "_"), member);
-src/middle/mir/gen.rs	3535	"zeta_dyn_truth"
-src/middle/mir/gen.rs	5439	if method == "parse_args" && receiver.is_some() { let recv = self.lower_expr(receiver.as_ref().unwrap()); self.stmts.push(MirStmt::Call { func: "py_argparse_par
-src/middle/mir/gen.rs	5816	// `log.info(fmt, *args)` — a varargs HANDLE has no // static length, and lowering the starred operand // emitted a raw Deref that codegen compiled into // `ldr
-src/middle/mir/gen.rs	6551	func: "zeta_dyn_len".to_string(),
-src/middle/mir/gen.rs	8071	Some(Type::Str) => "println_str",
-src/middle/mir/gen.rs	8346	// PY-A: starred args `f(*arr)` expand to per-element args // (V1: static-size arrays compile-time unrolled). for a in &ordered_args { if let AstNode::UnaryOp {
-src/middle/mir/gen.rs	8748	// (`[dynamic]str__max`), reached once annotated params keep their
-src/middle/mir/gen.rs	8852	func: "[dynamic]str__map".to_string(),
-src/middle/mir/gen.rs	9104	func: "zeta_dyn_contains".to_string(),
-src/middle/mir/gen.rs	10260	if receiver.is_none() && arg_ids.len() == 1 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
-src/middle/mir/gen.rs	10449	// PY-A: closure call — if the callee is a var bound to a // lambda/closure value, lower to a direct named call to the // synthetic closure function (f(41) → __
-src/middle/mir/gen.rs	10524	format!("{}_{}", func, arg_ids.len())
-src/middle/mir/gen.rs	10975	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
-src/middle/mir/gen.rs	11206	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
-src/middle/mir/gen.rs	11743	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
-src/middle/mir/gen.rs	11747	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
-src/middle/mir/gen.rs	11844	format!("{}_{}", func_name, arg_ids.len())
-src/middle/mir/gen.rs	12458	func: "zeta_dyn_getitem".to_string(),
-src/middle/mir/gen.rs	13101	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
+src/middle/mir/gen.rs	392	.map(|m| format!("{}__", m.replace('.', "_")))
+src/middle/mir/gen.rs	431	Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
+src/middle/mir/gen.rs	543	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
+src/middle/mir/gen.rs	550	let prefix = format!("{}__", module.replace('.', "_"));
+src/middle/mir/gen.rs	789	fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) { let missing: Vec<&str> = params .iter() .enumerate() .filter(|(i, _)| slots.get(*i
+src/middle/mir/gen.rs	3071	fn lower_range_guard(
+src/middle/mir/gen.rs	3093	func: if inclusive { "<=" } else { "<" }.to_string(),
+src/middle/mir/gen.rs	3308	format!("{}__{}", module.replace('.', "_"), member);
+src/middle/mir/gen.rs	3584	"zeta_dyn_truth"
+src/middle/mir/gen.rs	5488	if method == "parse_args" && receiver.is_some() { let recv = self.lower_expr(receiver.as_ref().unwrap()); self.stmts.push(MirStmt::Call { func: "py_argparse_par
+src/middle/mir/gen.rs	5865	// `log.info(fmt, *args)` — a varargs HANDLE has no // static length, and lowering the starred operand // emitted a raw Deref that codegen compiled into // `ldr
+src/middle/mir/gen.rs	6600	func: "zeta_dyn_len".to_string(),
+src/middle/mir/gen.rs	8120	Some(Type::Str) => "println_str",
+src/middle/mir/gen.rs	8395	// PY-A: starred args `f(*arr)` expand to per-element args // (V1: static-size arrays compile-time unrolled). for a in &ordered_args { if let AstNode::UnaryOp {
+src/middle/mir/gen.rs	8797	// (`[dynamic]str__max`), reached once annotated params keep their
+src/middle/mir/gen.rs	8901	func: "[dynamic]str__map".to_string(),
+src/middle/mir/gen.rs	9153	func: "zeta_dyn_contains".to_string(),
+src/middle/mir/gen.rs	10309	if receiver.is_none() && arg_ids.len() == 1 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
+src/middle/mir/gen.rs	10498	// PY-A: closure call — if the callee is a var bound to a // lambda/closure value, lower to a direct named call to the // synthetic closure function (f(41) → __
+src/middle/mir/gen.rs	10573	format!("{}_{}", func, arg_ids.len())
+src/middle/mir/gen.rs	11024	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
+src/middle/mir/gen.rs	11255	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
+src/middle/mir/gen.rs	11792	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
+src/middle/mir/gen.rs	11796	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
+src/middle/mir/gen.rs	11893	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	12507	func: "zeta_dyn_getitem".to_string(),
+src/middle/mir/gen.rs	13150	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");
 src/middle/pylib.rs	685	/// `declare_registry_runtime_fns` emits after task D.
 src/middle/pylib.rs	806	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");

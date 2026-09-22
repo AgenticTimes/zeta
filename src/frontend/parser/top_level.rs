@@ -1729,12 +1729,30 @@ fn splice_main_guard_body(
     }
 }
 
+/// Marks a `main` that carries a **module body**: the one this function
+/// synthesizes when the source declared no entry function, and the user's
+/// `main` when module statements got prepended into it. `MirGen` otherwise ends
+/// every body with its tail value (`gen.rs:1062`), and for the entry function
+/// that value is the process exit code through clang's crt — so a script ending
+/// in the bare expression `sum(l)` exited 15 (task #55; CPython discards it).
+/// Deliberately NOT derived from "did the indent preprocessor fire": that
+/// predicate is `!changed` (indent.rs:237), so a python file with no indented
+/// block counts as brace-style — the same flaw task #51 records for `//`, and
+/// it would have missed every flat reproducer in this family.
+pub const PY_ENTRY_ATTR: &str = "py_entry";
+
 fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
     let has_main = asts
         .iter()
         .any(|a| matches!(a, AstNode::FuncDef { name, .. } if name == "main"));
     let mut out = Vec::with_capacity(asts.len() + 1);
     let mut main_body: Vec<AstNode> = Vec::new();
+    // PY-A (任务 #55): a `__main__` guard is itself module-body evidence even when
+    // its body is only the bare `main()` self-call that gets dropped (q12:
+    // `def main(): …` + `if __name__ == "__main__": main()` leaves `main_body`
+    // empty, so the length test alone can't see it). Guard syntax does not occur
+    // in a brace-style source, so this cannot mark `fn main() -> i64 { 42 }`.
+    let mut saw_main_guard = false;
     // Definition allowlist: these stay at top level; EVERYTHING else is a
     // module-level statement and becomes the implicit main's body (Python
     // runs top-level statements at import — if/while/for/calls/assignments).
@@ -1778,6 +1796,7 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
                             continue;
                         }
                         if has_main && !module_ctx && is_main_guard(&node) {
+                            saw_main_guard = true;
                             splice_main_guard_body(node, &mut main_body, &mut module_globals);
                             continue;
                         }
@@ -1799,6 +1818,7 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
                     continue;
                 }
                 if has_main && !module_ctx && is_main_guard(&stmt) {
+                    saw_main_guard = true;
                     splice_main_guard_body(stmt, &mut main_body, &mut module_globals);
                     continue;
                 }
@@ -1854,10 +1874,25 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
             return out;
         }
         for node in &mut out {
-            if let AstNode::FuncDef { name, body, .. } = node {
+            if let AstNode::FuncDef {
+                name,
+                body,
+                attrs,
+                ..
+            } = node
+            {
                 if name == "main" {
                     let mut merged = std::mem::take(&mut main_body);
+                    // PY-A (任务 #55): module statements really were merged in —
+                    // this `main` is now entry + module body at once, so it is a
+                    // module body as much as the synthesized one below. A
+                    // brace-style source gets here with an empty `merged`, which
+                    // is what keeps `fn main() -> i64 { 42 }` exiting 42.
+                    let module_body = !merged.is_empty() || saw_main_guard;
                     merged.extend(std::mem::take(body));
+                    if module_body {
+                        attrs.push(PY_ENTRY_ATTR.to_string());
+                    }
                     *body = merged;
                     break;
                 }
@@ -1875,7 +1910,7 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
         params: Vec::new(),
         ret: "i64".to_string(),
         body: main_body,
-        attrs: Vec::new(),
+        attrs: vec![PY_ENTRY_ATTR.to_string()],
         ret_expr: None,
         single_line: false,
         doc: String::new(),

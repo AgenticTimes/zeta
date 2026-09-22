@@ -153,6 +153,9 @@ pub struct MirGen {
     loop_value_stack: Vec<u32>,
     /// Result slot of the most recently lowered loop (for implicit ret_val).
     last_loop_result: Option<u32>,
+    /// PY-A (任务 #55): this is the entry `main` the parser synthesized from a
+    /// module body — every exit path hands back 0, see `PY_ENTRY_ATTR`.
+    py_entry: bool,
     /// Additional MIRs generated during lowering (e.g., async poll functions).
     generated_mirs: Vec<Mir>,
     /// Lowering depth: 0 at top level, >0 inside a function body — used to
@@ -251,6 +254,7 @@ impl MirGen {
             last_dict_pair_ty: None,
             loop_value_stack: Vec::new(),
             last_loop_result: None,
+            py_entry: false,
             generated_mirs: vec![],
             fn_depth: 0,
             closure_ns: String::new(),
@@ -831,6 +835,31 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         self
     }
 
+    /// Point every `Return` in an entry-function body (nested `if`/`for`/`while`
+    /// branches included) at `zero`. See the `py_entry` call site in
+    /// `lower_to_mir` and `PY_ENTRY_ATTR` in the parser.
+    fn force_entry_returns(stmts: &mut [MirStmt], zero: u32) {
+        for stmt in stmts {
+            match stmt {
+                MirStmt::Return { val } => *val = zero,
+                MirStmt::If { then, else_, .. } => {
+                    Self::force_entry_returns(then, zero);
+                    Self::force_entry_returns(else_, zero);
+                }
+                MirStmt::For {
+                    body, else_body, ..
+                }
+                | MirStmt::While {
+                    body, else_body, ..
+                } => {
+                    Self::force_entry_returns(body, zero);
+                    Self::force_entry_returns(else_body, zero);
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub fn lower_to_mir(&mut self, ast: &AstNode) -> Mir {
         self.name_to_id.clear();
         self.stmts.clear();
@@ -849,6 +878,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
             _ => self.current_module.clone(),
         };
         self.closure_seq = 0;
+        // PY-A (任务 #55): see `py_entry` — reset per item, this generator is reused.
+        self.py_entry = matches!(ast, AstNode::FuncDef { attrs, .. }
+            if attrs.iter().any(|a| a.as_str() == crate::frontend::parser::top_level::PY_ENTRY_ATTR));
 
         // Check if this is an extern/FFI function declaration.
         // Only AstNode::ExternFunc is truly extern. FuncDef with empty
@@ -1055,6 +1087,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         } else if self.stmts.is_empty()
             || !matches!(self.stmts.last(), Some(MirStmt::Return { .. }))
         {
+            // PY-A (任务 #55): the entry function's tail value is NOT handed back —
+            // see `force_entry_returns`, the single place that rewrites returns.
             let ret_val = if let Some(last) = self.stmts.last() {
                 match last {
                     MirStmt::Call { dest, .. } => *dest,
@@ -1079,6 +1113,21 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 self.next_id_with_lit(0)
             };
             self.stmts.push(MirStmt::Return { val: ret_val });
+        }
+
+        // PY-A (任务 #55): the process entry handed its tail value back to clang's
+        // crt, which turns it into the EXIT CODE — so `l = [3,5,7]; sum(l)` exited 15
+        // while CPython exits 0 (Python only echoes a REPL result). A return can
+        // reach `main` by four routes (the gate above, `lower_expr`'s Return arm,
+        // the parser's tail-expression promotion into `FuncDef::ret_expr`, and an
+        // `ExprStmt`-wrapped return), so instead of gating each one this rewrites
+        // every `Return` of the entry body — including inside if/for/while branches
+        // — to a single zero slot. Side effects stay: only the handed-back slot
+        // changes. A brace-style `fn main() -> i64 { 42 }` is untouched because the
+        // parser never puts `py_entry` on it (see `PY_ENTRY_ATTR`).
+        if self.py_entry {
+            let zero = self.next_id_with_lit(0);
+            Self::force_entry_returns(&mut self.stmts, zero);
         }
 
         // Batch 299: a bare `-> dict` / `-> list` annotation carries NO element

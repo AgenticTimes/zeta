@@ -668,6 +668,11 @@ pub fn process_attributes(attrs: &[String], node: &AstNode) -> Result<Vec<AstNod
         } else if attr.starts_with("test(") {
             // Handle #[test(name = "test_name")] with arguments
             expansions.push(create_test_function_with_args(attr, node)?);
+        } else if attr == crate::frontend::parser::top_level::PY_ENTRY_ATTR {
+            // Marker the parser puts on the `main` it synthesizes from a module
+            // body (see `synthesize_implicit_main`). Metadata only — like
+            // `#[inline]` above, it must not reach the W5001 unknown-attribute
+            // warning, which is counted in the diagnostics baseline.
         } else if attr == "must_use" {
             // Handle #[must_use] attribute
             // No expansion needed, just metadata for the compiler

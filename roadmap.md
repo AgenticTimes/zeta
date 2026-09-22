@@ -11038,3 +11038,119 @@ p7 单独说明判据边界：空区间时 Python 抛 `NameError`，zeta 留 0�
 - p7 那族（空区间/未绑定变量读取）缺的是**诊断**而不是值修复，与 #36 的"静默截断"同属
   "错得不吭声"一类，需要单独裁决。
 - 批次 331 遗留的两档未实测项（`ArraySize::Param/Const`、`is_array_param` 切片形参）仍然没碰。
+
+---
+
+## 批次 333（#55 落地：带模块体的入口函数不交回尾值，改写点收成一个）
+
+批次 332 把 #55 登记为"下一批默认候选"。本批兑现它，并按批次 331 的教训把判据放在**值域**上
+（"入口体内所有 Return"），而不是按语句形状打第四个特例。
+
+### 改了什么（三个实现点）
+
+| 点 | 位置 | 内容 |
+|---|---|---|
+| parser 判定 | `src/frontend/parser/top_level.rs:1742` `PY_ENTRY_ATTR`；打标两处：`:1913`（合成 main）、`:1891`+`:1894`（用户的 main，判据 `!merged.is_empty() \|\| saw_main_guard`）；guard 证据 `:1755` 声明、`:1799`/`:1821` 两处赋值 | "这个 `main` 带模块体"只有 parser 知道，MIR 侧不再猜 |
+| MIR 消费 | `src/middle/mir/gen.rs:158` 字段、`:257` 字面量初始化、`:881-883` 逐 item 复位并按属性判取、`:1128-1131` 调用点、`:841-861` `force_entry_returns` | 递归改写 `Return` 的槽（含 `If::then/else_`、`For::body/else_body`、`While::body/else_body`），**副作用保留、只换交回的那个槽** |
+| 属性不报警 | `src/frontend/macro_expand.rs:671`（`process_attributes` 的元数据档，照 `inline`/`must_use`） | 否则会掉进 W5001 未知属性告警，那个计数是门禁基线 |
+
+为什么不做成"每个 push 点各判一次"：到达 `Return` 的路由实测有 **4 条** —— 尾值合成
+`gen.rs:1115`、`lower_expr` 的 Return 档 `:1817`、parser 把函数尾表达式提升进
+`FuncDef::ret_expr`（`top_level.rs:284` 提升、`gen.rs:1879-1881` 落地）、`ExprStmt` 包着的
+Return `:2105`。**第三条是这批现场才发现的**：q12 打了标记、`py_entry` 也取到了，退出码仍是 7，
+因为那条 `Return` 根本不经尾值合成。`match` 臂内 `return`（`:11101`）走的是表达式路径，本批
+未实测（登记 OPEN）。
+
+`py_entry` 的判据为什么不能挂在方言谓词上（任务 #51 那条）在本批第二次得到印证：第一版实现就是
+用"缩进预处理器是否触发"当"是不是 python"，结果 **flat 的 q1–q4、q11 全部走花括号分支，整个修复
+是惰性的**。`PY_ENTRY_ATTR` 的注释里写明了这段，避免下一个人再挂回去。
+
+### 值域读数（21 档探针，AOT `-o` 后跑真进程比 rc + stdout）
+
+HEAD 列是**同仓 HEAD 编译器**编出来的二进制实测（临时 `target/release/zetac_head`，量完即删），
+不是推断。期望列：python 档取 CPython 3 实跑，`q6`/`q15` 是花括号方言对照档（无 CPython 对照）。
+
+| 档 | 形状 | 期望 rc | HEAD | 本批 |
+|---|---|---|---|---|
+| q1 `l=…;print(len(l));sum(l)` | 合成 main 尾值 | 0（stdout 3） | 15 | 0 ✅ |
+| q2 尾 `len(l)` | 同上 | 0 | 3 | 0 ✅ |
+| q3 尾 `l.append(12)` | 方法调用尾值 | 0 | 112 | 0 ✅ |
+| q4 `k=9;print(k);k` | 裸变量尾值 | 0（stdout 9） | 0 | 0 ✅（HEAD 已对，登记） |
+| q5 `def main():…return 7` + `main()` | 合并 main 显式 return | 0（stdout 1） | 7 | 0 ✅ |
+| **q6** `fn main() -> i64 { 42 }` | **花括号对照** | 42 | 42 | 42 ✅ 未受影响 |
+| q7 `def f(): 42` + `print(f())` | 非入口函数尾值 | rc 0 | 0（stdout 42） | 0（stdout 42）✅ 保持 |
+| q8 尾值在 `if/else` 分支里 | 尾值合成的 `If{dest}` 档 | 0 | 15 | 0 ✅ |
+| q9 尾值 `i*100`（while 之后） | Assign 档 | 0（stdout 3） | 44 | 0 ✅ |
+| q10 只有 `print("hello")` | 无值尾 | 0 | 0 | 0 ✅（HEAD 已对） |
+| q11 尾值 `d["a"]` | DictGet 档 | 0 | 1 | 0 ✅ |
+| q12 guard-only + main 尾值 | **`ret_expr` 提升路由** | 0（stdout in main） | 7 | 0 ✅ |
+| q13 guard-only + `if` 内 return | 嵌套 `If` 分支 Return | 0 | 9 | 0 ✅ |
+| q14 guard-only + `for` 内 `if` return | 嵌套 `For::body` Return | 0 | 5 | 0 ✅ |
+| **q15** `fn main() { if …{return 7} return 4 }` | **花括号对照（嵌套）** | 7 | 7 | 7 ✅ 未受影响 |
+| q16 模块体 + `main()`，`if` 内 return | 合并 main + 嵌套分支 | 0 | 8 | 0 ✅ |
+| q17 非入口函数 `if/else` 尾值 | 对照：函数尾值仍返回 | rc 0 | 0（stdout 21） | 0（stdout 21）✅ 保持 |
+| q18 `sys.exit(3)` | **主动设退出码的正路** | 3（stdout before） | 未测 | 3 ✅ |
+| q19 裸 `exit(3)` | 同上 | 3 | 未测 | 3 ✅ |
+| q20 `for … else: return 4`（入口内） | `For::else_body` 递归档 | 0 | 未测 | 0 ✅ |
+| q21 `while … else:` + 嵌套 `if` return | `While::else_body` 递归档 | 0（stdout done） | 未测 | 0 ✅ |
+
+`q18`/`q19` 是**否证档**：本批一度据此登记 OPEN 说"修完 #55 后没有任何途径能设非 0 退出码"，
+实测发现结论错了 —— `pylib/registry.txt:294` 早已把 `sys exit` 接到 `py_sys_exit`
+（运行时 `exit(code & 0xff)`），rc=3 与 CPython 一致。见下文"自查 2"。
+
+### 验证
+
+- 差分：**112/126 → 115/128**（88.9% → 89.8%，`match_min` bless 到 115）。新增 2 条 pin
+  （`control_exit_code_guard_only_main`、`control_exit_code_return_in_branch`），另有 1 条**存量红转绿**：
+  `control_tail_value_exit_code`（批次 331 立的那条）。用 HEAD 编译器复跑同一子集做对照：
+  control 类 **25/28 → 28/28**，三条红正是 #55 家族（`exit 7` / `exit 5` / `exit 15`），
+  跑法 `ZETAC=<abs>/target/release/zetac_head python3 tools/diff_test.py --only control`
+  （注意 `ZETAC` 必须是绝对路径，相对路径会让 28 条全被判成"参考侧跑不出真值"的假 bad_case）。
+- 五步门禁（`./tools/run_all.sh`，rc=1 是存量 `py_fail==2` 判据）：official **194/194 编译、
+  191/194 链接**、python_style **289 过 / 2 败 / 4 KNOWN-FAIL / 0 XPASS**（仍是存量的
+  `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）、语料 **39/39**、
+  jit **ok=169 / trap=320 / fail=0 / segv=0**（下限 163）、diff 115/128。**诊断基线一项未变**
+  （official 10 文件/15 行、python_style 82 文件/191 行）⇒ 新属性确实没漏进 W5001。
+- 性能（任务 #27 的成对同负载口径）：`while` 100000 次 `m[n % 8]` + 内层 8 次 dict 写入，
+  新旧两个编译器各编一份，二进制交替各 3 轮：**95/96、93/94、94/93 ms**（10ms 内无可测差），
+  两份输出逐字相同（350000 / 8）。这条不是门禁读数，是"入口只执行一次，改写不落在环里"的事后核对。
+- 锚点：`gen.rs` 净 +49、`top_level.rs` +37/-2、`macro_expand.rs` +5 ⇒ `docs/ABI.md` **29 处**
+  `file:line` 重映射，按 `git diff -U0` 位移算新行号后**逐字比对 48/48 对上**才 bless（120 条，
+  漂移 0 / 新 0 / 消失 0）。**随后只改了文档**（新增 §6.7，带 1 条新锚点 `pylib/registry.txt:294`），
+  代码未再动，所以本批实际有**两次 bless**：第一次是代码位移重映射（120），第二次只把 §6.7 的
+  新锚点收进基线（121）。批次 331 定的"中间不许有第二次 bless"针对的是"bless 完又改代码"，
+  这里没有代码变更 ⇒ 基线与代码是自洽的；把这点写明而不是藏起来。
+
+### 本批的两处自查（都记成规则）
+
+1. **同一条判据的两个调用点，我只补了一个。** `is_main_guard` 在 `synthesize_implicit_main` 里有
+   两处调用（`Block` 展开分支 `:1798`、顶层语句分支 `:1820`）；`saw_main_guard = true` 先只加在
+   前者 ⇒ q12/q13/q14 仍红。定位靠临时 `ZETA_DBG55` 探针（打印"merge: guard=false"，一眼看出
+   谓词没被走到，探针已删）。这是批次 331 那条"补一个特例形状 ≠ 闭合值域"在本批内部的重演，
+   只不过这次漏的是**同一判据的第二个调用点**。
+2. **登记 OPEN 前先跑一条最小探针。** 见 `q18`/`q19`：结论从"通道不存在"改成"通道在注册表里"，
+   只因为最初只 grep 了 MIR 下型点。规则：**"某某没接线"这类负命题，必须至少有一条实测的
+   反向探针撑着**，否则只能写成"未查到接线点"。
+
+### docs/ABI.md §6.7（本批新增，跨边界合同）
+
+`main` 的返回槽即进程退出码 —— 这条边界不在 §3.1 的签名字母表里，此前只被 Rust 式"尾值即返回值"
+建模管着，Python 侧对应规则（模块尾值丢弃）从未接线。§6.7 写清合同三行（判定在 parser、
+消费点唯一、改写递归）+ 三条易踩点（方言谓词、4 条路由、属性须走元数据档），并给出
+`sys.exit` 这条设退出码的正路。**本批有意不加 `file:line` 锚点到那张表**（只在 §6.7 末尾留了
+`pylib/registry.txt:294` 这一条），行号证据集中放在本节，免得文档与代码行号两处同时腐坏。
+
+### OPEN
+
+- `__zeta_module_body__` 载体（被 import 模块的模块体，`top_level.rs:1857-1873`）**故意未打标、也未实测**。
+  它由 resolver 当 import 初始化器执行，"退出码"语义在此不适用，但"该不该打标"没有读数支撑 ——
+  下批要动 `synthesize_implicit_main` 就先补这条的实测。
+- 非入口函数的尾值仍是返回值（`q7` 打 42、`q17` 打 21，CPython 都是 `None`）。这是"尾表达式即返回值"
+  的整体建模，牵一面语料（与 #48 的方言裁决同类），**不在 #55 范围内**，本批只保证它没被改动。
+- `match` 臂内的 `return`（`gen.rs:11101` 那条 `vec![MirStmt::Return{..}]`）**未实测**：
+  它是表达式路径、且 `match` 臂在入口函数里的写法尚未在语料里出现。
+- #56（`and` 条件三元式里的动态负下标）仍**故意留红**；批次 331 的两档未实测项
+  （`ArraySize::Param/Const`、`is_array_param` 切片形参）仍未碰。
+- 下一批默认候选：**#51**（方言判据挂在"有没有缩进"上）—— 本批的 `PY_ENTRY_ATTR` 绕开了它，
+  但 `//` 整除那条路还瞎着，且现在有了第二个实测后果（flat python 文件既用不了 `//`、
+  也曾经让 #55 的第一版修复完全失效）。
