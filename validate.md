@@ -44,7 +44,8 @@ git push agentic bootstrap                  # origin 是 https 无凭据，用 a
 | IR dump | 仅 `--emit-llvm` / `ZETA_DUMP_IR=1` | `ZETA_DUMP_IR=1 ./target/release/zetac x.z -o x 2>&1 \| awk '/define i64 @f/,/^}/'` |
 | `nm` | 符号表（undefined 排查） | `nm binary \| grep xxx` |
 | `tools/check_registry_symbols.sh` | registry F/W/X ↔ runtime .o | `./tools/check_registry_symbols.sh` |
-| `tools/run_all.sh` | 三套基线 → JSON | `./tools/run_all.sh`（写 `/tmp/zeta_baseline.json`） |
+| `tools/run_all.sh` | 三套基线 → JSON（含 `compile_diagnostics` 字段；编译期告警明细落 `/tmp/zeta_official_diag.txt`） | `./tools/run_all.sh`（写 `/tmp/zeta_baseline.json`） |
+| `tools/check_abi_anchors.py` | `docs/ABI.md` 的 `file:line` 锚点是否还可定位/未越界/未漂移 | `./tools/check_abi_anchors.py`（改完锚点 `--bless` 重采基线） |
 | `lldb` | 运行期崩溃定位 | `lldb -b -o run -o "bt 3" ./x` |
 
 ### 常用诊断模式
