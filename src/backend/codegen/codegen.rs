@@ -1849,10 +1849,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
             }
             MirStmt::For {
                 iterator,
+                var_id,
+                counter_id,
                 body,
                 else_body,
                 ..
             } => {
+                // Both slots are dereferenced through `self.locals` by the For
+                // lowering (`unwrap()`), so their allocas must exist even when no
+                // other statement in this function mentions them.
+                ids.insert(*var_id);
+                ids.insert(*counter_id);
                 if let Some(e) = exprs.get(iterator) {
                     self.collect_ids_from_expr_safe(e, ids, exprs);
                 }
@@ -3245,12 +3252,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 iterator,
                 pattern,
                 var_id,
+                counter_id,
                 body,
                 else_body,
             } => MirStmt::For {
                 iterator: *iterator,
                 pattern: pattern.clone(),
                 var_id: *var_id,
+                counter_id: *counter_id,
                 body: body
                     .iter()
                     .map(|s| self.substitute_stmt(s, substitution))
@@ -5301,8 +5310,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
             MirStmt::For {
                 iterator,
-                pattern,
-                var_id,
+                pattern: _,
+                var_id: _,
+                counter_id,
                 body,
                 else_body,
             } => {
@@ -5339,10 +5349,15 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     let end_val = self.gen_expr_safe(end, exprs).into_int_value();
 
                     // Get loop variable pointer from locals map
-                    let loop_var_ptr = *self.locals.get(var_id).unwrap();
+                    // PY-A (任务 #54): the counter slot drives the condition and
+                    // the increment; `var_id` is written only by the bind `Assign`
+                    // that gen.rs prepends to `body`. Keeping the two apart is what
+                    // makes Python's post-loop value (`range(3)` ⇒ last bound 2,
+                    // not 3) fall out of the CFG instead of needing a fix-up store.
+                    let counter_ptr = *self.locals.get(counter_id).unwrap();
 
-                    // Initialize loop variable to start
-                    self.builder.build_store(loop_var_ptr, start_val).unwrap();
+                    // Initialize the counter to start
+                    self.builder.build_store(counter_ptr, start_val).unwrap();
 
                     // Branch to condition block
                     self.builder
@@ -5352,10 +5367,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     // Generate condition block
                     self.builder.position_at_end(loop_cond_bb);
 
-                    // Load current loop variable value
+                    // Load current counter value
                     let current_val = self
                         .builder
-                        .build_load(self.i64_type, loop_var_ptr, "")
+                        .build_load(self.i64_type, counter_ptr, "")
                         .unwrap()
                         .into_int_value();
 
@@ -5404,11 +5419,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
                             .unwrap();
                     }
 
-                    // Increment block: i = i + 1, then back to the condition.
+                    // Increment block: counter += 1, then back to the condition.
                     self.builder.position_at_end(loop_inc_bb);
                     let current_val_after = self
                         .builder
-                        .build_load(self.i64_type, loop_var_ptr, "")
+                        .build_load(self.i64_type, counter_ptr, "")
                         .unwrap()
                         .into_int_value();
 
@@ -5417,7 +5432,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .build_int_add(current_val_after, self.i64_type.const_int(1, false), "")
                         .unwrap();
 
-                    self.builder.build_store(loop_var_ptr, next_val).unwrap();
+                    self.builder.build_store(counter_ptr, next_val).unwrap();
 
                     self.builder
                         .build_unconditional_branch(loop_cond_bb)

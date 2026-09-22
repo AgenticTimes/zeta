@@ -260,7 +260,11 @@ def gen_program(rng: random.Random) -> tuple[str, str]:
             else:
                 body.append(f'print(d[{"\"a\"" if rng.random() < 0.5 else "\"b\""}])')
             kinds.append("container")
-    cat = max(set(kinds), key=kinds.count) if kinds else "numeric"
+    # 平票必须按**首次出现顺序**裁决。这里原来是 `max(set(kinds), …)`，而 set 的迭代顺序
+    # 随 PYTHONHASHSEED 变 ⇒ 同一个 seed 两次跑会给出不同的 `# @cat:` 和文件名
+    # （批次 332 实测：12 条里 4 条换标签，程序正文逐字相同 —— 正文可复现、分类不可复现，
+    # 于是"第 N 条属于哪一族"的跨批次对照读数全都不可复现）。
+    cat = max(dict.fromkeys(kinds), key=kinds.count) if kinds else "numeric"
     return cat, "\n".join(head + body) + "\n"
 
 

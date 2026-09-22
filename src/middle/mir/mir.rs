@@ -163,6 +163,13 @@ pub enum MirStmt {
         iterator: u32,   // Iterator expression
         pattern: String, // Variable name to bind to
         var_id: u32,     // Variable ID for the loop variable
+        /// The induction counter. Distinct from `var_id` because Python keeps
+        /// them apart: `for k in range(3)` leaves `k == 2` (the last value
+        /// *bound*), not 3, and a body that writes `k` neither short-circuits
+        /// the iteration nor changes what the next iteration binds.
+        /// `var_id` is written once per taken iteration (an `Assign` at the top
+        /// of `body`); only `counter_id` drives the condition and increments.
+        counter_id: u32,
         body: Vec<MirStmt>,
         /// PY-A: Python `for … else` — executed only when the loop finished
         /// without `break`. Empty when there is no `else` clause.

@@ -1,0 +1,30 @@
+# @cat: container
+# @note: 随机生成器 seed=20261005 第 1 条约出的新族（批次 332 归族，登记 #56）：
+#   **动态负下标写在三元式的 then 分支里**，且条件是 `and` 形状时，读回 0。
+#   实测四档（同一份二进制、同一程序）：
+#     `print(l[0 - 3])`                                    → 3 ✓
+#     `print(l[0 - 3] if (k <= k and 7 < 3) else (k + 7))`  → **0**，期望 9
+#     `print(l[0 - 3] if False else (k + 7))`                → 9 ✓
+#     `print(l[0 - 3] if (7 < 3) else (k + 7))`              → 9 ✓
+#   也就是"下标本身"和"三元式本身"都对，只有 (动态负下标) × (`and` 条件) 这格是红的。
+#   实得的 0 与 `src/runtime/vec.rs:87` `zeta_vec_get` 对负下标的返回值一致 ——
+#   猜测是这一档的下标读取没走批次 331 的 `norm_index`（`normalize_subscript_index`
+#   的 len 分档只覆盖 `DynamicArray` 与 `Array(_, Literal)`，其余 `_ => ` 原样放行），
+#   但**实现点未定位**，留给 #56，不在这里当结论。
+#   已知红：#56（批次 332 钉，未修）。
+#@@ python
+l = [3, 5, 7]
+k = 2
+print(l[0 - 3])
+print(l[0 - 3] if (k <= k and 7 < 3) else (k + 7))
+print((k <= k and 7 < 3))
+print(l[0 - 3] if False else (k + 7))
+print(l[0 - 3] if (7 < 3) else (k + 7))
+#@@ zeta
+l = [3, 5, 7]
+k = 2
+print(l[0 - 3])
+print(l[0 - 3] if (k <= k and 7 < 3) else (k + 7))
+print((k <= k and 7 < 3))
+print(l[0 - 3] if False else (k + 7))
+print(l[0 - 3] if (7 < 3) else (k + 7))

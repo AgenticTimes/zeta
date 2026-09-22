@@ -112,9 +112,13 @@ pub fn dead_code_elimination(mir: &mut Mir) {
                 pattern: _,
                 body,
                 var_id: _,
+                counter_id,
                 else_body,
             } => {
                 mark_expr_used(*iterator, &mut used, &mir.exprs);
+                // The counter is read/written by the codegen loop machinery, not
+                // by any expression here — keep it alive explicitly.
+                used.insert(*counter_id, true);
                 // Recursively process nested statements in the loop body
                 let mut nested_mir = Mir {
                     stmts: body.clone(),
@@ -443,6 +447,7 @@ pub fn common_subexpression_elimination(mir: &mut Mir) {
                         pattern: _,
                         body: _,
                         var_id: _,
+                        counter_id: _,
                         else_body: _,
                     } if *iterator == *id => {
                         *iterator = existing_id;

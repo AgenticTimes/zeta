@@ -2,7 +2,14 @@
 # @note: 随机生成器 seed=20260922 第 1/14/34 条约出的新族：`for` 的循环变量在循环结束后
 #   留在**尾值**（range(3) 跑完 k==3），Python 留的是最后一次迭代值 2。
 #   对照档：同程序里的 `while` 计数器结束值 2 与 Python 一致 —— 也就是这个族只在 range 路径。
-#   已知红：#54。
+#   批次 329 原为红，**批次 332 转绿**，此后是回归钉。
+#   机制（`--dump-mir` 实测，批次 332）：range 路径的 `MirStmt::For{var_id}` 让**归纳计数器
+#   与用户可见变量共用一个槽**（`gen.rs` 建 `var_id` 后 `codegen.rs` 的 `for.inc` 直接
+#   `store(loop_var_ptr, cur+1)`），于是退出边那次"+1"写进了用户看得见的位置。
+#   修法：MIR 里拆成两个槽（`For::counter_id` 走条件/自增，`var_id` 只在每次迭代开头由
+#   gen.rs 前置的 `Assign` 绑定一次）——尾值是"最后一次绑定"的**结构后果**，不需要补丁式 store。
+#   档位说明：空 range（`for k in range(0)` 后读 k）Python 是 NameError，zeta 留 start（0）——
+#   那是"未绑定读取"这一族（不在本钉范围），本钉只钉**至少跑过一次**的循环。
 #@@ python
 for k in range(3):
     print(k)
@@ -11,6 +18,14 @@ m = 0
 while m < 2:
     m = m + 1
 print(m)
+for j in range(2, 5):
+    print(j)
+print(j)
+for a in range(2):
+    for b in range(3):
+        print(b)
+    print(b)
+print(a)
 #@@ zeta
 for k in range(3):
     print(k)
@@ -19,3 +34,11 @@ m = 0
 while m < 2:
     m = m + 1
 print(m)
+for j in range(2, 5):
+    print(j)
+print(j)
+for a in range(2):
+    for b in range(3):
+        print(b)
+    print(b)
+print(a)

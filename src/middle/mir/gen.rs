@@ -2441,9 +2441,22 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.exprs.insert(var_id, MirExpr::Var(var_id));
                     self.type_map.insert(var_id, Type::I64);
 
+                    // PY-A (任务 #54): the induction counter is a SECOND slot.
+                    // Sharing `var_id` made the loop's bookkeeping observable:
+                    // `for k in range(3)` left k=3 (Python: 2, the last bound
+                    // value), and a body that wrote k advanced from *that* value
+                    // (`for k in range(3): k = 9` ran once and left k=10).
+                    let counter_id = self.next_id();
+                    self.exprs.insert(counter_id, MirExpr::Var(counter_id));
+                    self.type_map.insert(counter_id, Type::I64);
+
                     // Initialize loop variable: let mut i = start
                     self.stmts.push(MirStmt::Assign {
                         lhs: var_id,
+                        rhs: start_id,
+                    });
+                    self.stmts.push(MirStmt::Assign {
+                        lhs: counter_id,
                         rhs: start_id,
                     });
 
@@ -2469,7 +2482,20 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     }
 
                     // Get body statements
-                    let body_stmts = self.stmts.split_off(stmts_before_body);
+                    let mut body_stmts = self.stmts.split_off(stmts_before_body);
+
+                    // PY-A (任务 #54): bind the user-visible name to the counter
+                    // at the TOP of every taken iteration — that is what Python
+                    // does (`for k in range(3)` binds 0, 1, 2 and the iterator
+                    // then stops without binding 3). Prepending after the split
+                    // keeps it invisible to the body's own statement list.
+                    body_stmts.insert(
+                        0,
+                        MirStmt::Assign {
+                            lhs: var_id,
+                            rhs: counter_id,
+                        },
+                    );
 
                     // PY-A: `for … else` — lowered after the split.
                     let else_stmts = self.lower_loop_else(else_body);
@@ -2479,6 +2505,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         iterator: range_id,
                         pattern: var_name.clone(),
                         var_id,
+                        counter_id,
                         body: body_stmts,
                         else_body: else_stmts,
                     });

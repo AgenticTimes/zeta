@@ -1,0 +1,28 @@
+# @cat: control
+# @note: 批次 332（#54 的第二档，与 control_for_var_after_loop.dcase **同批**转绿）：
+#   体内写循环变量。改前 `for k in range(3): k = 9` 实测尾值 **10** —— 归纳计数器与用户
+#   变量共用一个槽时，体内写入的值会被当作计数器再 +1，于是迭代次数也被改写；Python 里
+#   下一轮重新绑定，体内写入只影响本轮。批次 332 拆成两个槽（`For::counter_id` vs `var_id`）
+#   后：打印 0/1/2/3（迭代次数不再被体内写入影响）、尾值 100（最后一轮体内那次写入的结果）。
+#   continue 档一起钉：`continue` 跳到 for.inc，必须仍然自增**计数器**而不是用户槽，
+#   否则就是批次 328 记过的"continue 自旋"族。
+#@@ python
+for k in range(4):
+    print(k)
+    k = 100
+print(k)
+for j in range(4):
+    if j == 1:
+        continue
+    print(j)
+print(j)
+#@@ zeta
+for k in range(4):
+    print(k)
+    k = 100
+print(k)
+for j in range(4):
+    if j == 1:
+        continue
+    print(j)
+print(j)

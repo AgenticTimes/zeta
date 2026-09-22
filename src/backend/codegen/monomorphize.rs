@@ -161,12 +161,14 @@ pub fn substitute_stmt(stmt: &MirStmt, substitution: &Substitution) -> MirStmt {
             iterator,
             pattern,
             var_id,
+            counter_id,
             body,
             else_body,
         } => MirStmt::For {
             iterator: *iterator,
             pattern: pattern.clone(),
             var_id: *var_id,
+            counter_id: *counter_id,
             body: body
                 .iter()
                 .map(|s| substitute_stmt(s, substitution))

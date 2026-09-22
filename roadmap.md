@@ -10861,12 +10861,13 @@ l = [3, 5, 7] 的两种下标写法，MIR 尾部：
 
 | 点 | 位置 | 内容 |
 |---|---|---|
-| MIR 侧 | `src/middle/mir/gen.rs:3041` `emit_norm_index`、`:3059` `normalize_subscript_index` | 新 MIR 词 `norm_index(len, idx)`；读侧调用点 `:12211`、写侧调用点 `:1431` 共用同一个 helper |
+| MIR 侧 | `src/middle/mir/gen.rs:3068` `emit_norm_index`、`:3086` `normalize_subscript_index` | 新 MIR 词 `norm_index(len, idx)`；读侧调用点 `:12238`、写侧调用点 `:1431` 共用同一个 helper |
+| IR 侧 | `src/backend/codegen/codegen.rs:3608` | 把 `norm_index` 内联成 `select(idx<0, len+idx, idx)`，照 `:2074` floormod 的 `build_select` 惯用法 |
 
-批次 329/330 引的那段按形状匹配的档，因本批 102 行插入已整体下移，现在位于
-`gen.rs:12134-12176`（`let index: Box<AstNode> = match (..)`，起点 `:12133` 的
-`negative_dyn_index`）—— 旧编号读起来像失效引用，这里给一次对账。
-| IR 侧 | `src/backend/codegen/codegen.rs:3599` | 把 `norm_index` 内联成 `select(idx<0, len+idx, idx)`，照 `:2067` floormod 的 `build_select` 惯用法 |
+批次 329/330 引的那段按形状匹配的档，因批次 331 的 102 行插入已整体下移，现在位于
+`gen.rs:12161-12203`（`let index: Box<AstNode> = match (..)`，起点 `:12160` 的
+`negative_dyn_index`）—— 旧编号读起来像失效引用，这里给一次对账。上表行号是**当前工作树**的编号
+（批次 332 在 `gen.rs:2449-2508` 净插 27 行，`:3068` 之后所有行号 = 本批原编号 +27；`codegen.rs` 同理 +9）。
 
 为什么放 codegen 而不是运行时（批次 330 三候选里 #1 的理由，落地后复核成立）：
 `MirExpr` 没有 Select/Ternary 变体，值级 select 只能在 IR 构造点做；放这里 AOT 与进程内 JIT
@@ -10917,3 +10918,123 @@ l = [3, 5, 7] 的两种下标写法，MIR 尾部：
 - 区间/切片下标（`l[0-2:]` 一类）在另一条 lowering 路径上，本批没碰。
 - relocate + 逐字校验两个脚本目前还是 `/tmp` 临时件；等 #52（锚点工具看不见裸行号）有结论时
   一起并进 `tools/`，否则同一份 102 行插入下批还要再手抖一次。
+
+---
+
+## 批次 332（#54 落地：`for`/`range` 的归纳计数器从用户变量里分出来）
+
+批次 329 把这条族钉成已知红（#54），当时的读数是"`for k in range(3)` 跑完 `k==3`，而 `while`
+计数器结束值与 Python 一致"。本批不补尾值 store，而是**在 MIR 词表里给归纳计数器一个自己的槽**
+—— 尾值从此是控制流的结构性后果，不是补丁。
+
+### 改了什么（一处词表 + 一处构造 + 四处消费点）
+
+| 层 | 位置 | 内容 |
+|---|---|---|
+| MIR 词表 | `src/middle/mir/mir.rs:172`（`MirStmt::For`） | 新字段 `counter_id: u32`，与 `var_id` 并列；doc-comment 记了两者为何不能共用 |
+| MIR 构造 | `src/middle/mir/gen.rs:2449-2461` | **全仓只有这一个 `range` 版 `For` 构造点**（实测 grep 确认）：新开 `counter_id` 槽、注册 `MirExpr::Var` + `Type::I64`，起始值同时写进两个槽 |
+| MIR 构造 | `src/middle/mir/gen.rs:2492-2497` | 在 body 切分之**后**往头部插 `Assign{lhs: var_id, rhs: counter_id}` —— 每次真正进入迭代才绑定，"跑完不绑定第 n 个值"因此是自然的 |
+| MIR 构造 | `src/middle/mir/gen.rs:2508` | `For` push 带上 `counter_id` |
+| IR 降低 | `src/backend/codegen/codegen.rs:5315`、`:5357`、`:5423-5436` | 解构出 `counter_id`；`for.cond`/`for.inc` 的 load/store 全走 `counter_ptr`，`var_id` 只剩 body 里那条绑定 |
+| IR 槽收集 | `src/backend/codegen/codegen.rs:1853`、`:1862` | `collect_ids_from_stmt_safe` 两个槽都插。**必须**：For 降低用 `self.locals.get(..).unwrap()`，槽没被收集就是编译器 panic |
+| IR 替换 | `src/backend/codegen/codegen.rs:3262` | `substitute_stmt` 原样透传（`Substitution` 是类型变量→类型，id 不该被动） |
+| DCE | `src/middle/optimization.rs:115`、`:121` | `used.insert(*counter_id, true)` —— 计数器的读写方是 codegen 的循环机器，不是这条语句里任何表达式，不显式保活会被判无用 |
+| DCE/CSE | `src/middle/optimization.rs:450` | CSE 的 `For` 臂加 `counter_id: _` |
+| 单态化 | `src/backend/codegen/monomorphize.rs:164`、`:171` | 透传 |
+
+`MirStmt` derive 了 `Debug`，所以 `--dump-mir` 自动带出新字段，无需改格式化代码。
+
+### 读数（AOT `-o` 后与 CPython 逐条对照，12 档）
+
+"修复前"列只填**本批真实回测过**的档；没回测的写"未回测"，不拿推断顶替读数。
+
+| 档 | 程序形状 | 期望 | 修复前 | 修复后 |
+|---|---|---|---|---|
+| p1 | `for k in range(3)` 后读 `k` | 2 | **3** | 2 ✓ |
+| p2 | `for k in range(3): k = 9` 后读 `k` | 9 | **10**（且迭代被改写） | 9 ✓ |
+| p3 | 动态起点 `range(2,5)` 尾值 | 4 | **5** | 4 ✓ |
+| p4 | 嵌套 `range(2)`/`range(3)` 两个尾值 | 2 / 1 | **3 / 2** | 2 / 1 ✓ |
+| p5 | 集合式 `for k in [1,5,7]` 尾值 | 7 | 7（本来就对） | 7 ✓ |
+| p6 | `break` 后读 `k` | 2 | 2（本来就对） | 2 ✓ |
+| p7 | `for k in range(0)` 后读 `k` | NameError | 0 | 0（**不在本批范围**，见下） |
+| p8 | `for k in range(4): print(k); k = 100` | 0..3 然后 100 | 未回测 | 全对 ✓ |
+| p9 | 循环内 `continue` + 尾值 | 0/2/3 然后 3 | 未回测 | 全对 ✓ |
+| p10 | `for … else` 里读 `k` | else tail: 2 | 未回测 | 对 ✓ |
+| p11 | 累加后同时读 `total` 和 `i` | 10 / 4 | 未回测 | 10 / 4 ✓ |
+| p12 | 通配 `for _ in range(3)` | 1/1/1 | 未回测 | 对 ✓ |
+
+p5/p6 的"本来就对"是有原因的，值得记下来免得下批又去"修"它：`for x in <集合>` 在 gen.rs 里
+本来就被下型成带内部索引槽的 `While`（元素在 body 里绑定），所以**这条路径一开始就是对的**，
+本批只动了 `range` 路径 —— 也就正好是批次 329 观测到的"只有 range 族红"。
+
+p7 单独说明判据边界：空区间时 Python 抛 `NameError`，zeta 留 0。这是"未绑定变量读取"一族
+（缺诊断），不是"尾值取错"一族，**本批没有宣称修它，也没有为它改判据**。
+
+### 钉用例
+
+- `tests/diff/cases/control_for_var_after_loop.dcase`（改）：批次 329 的档，note 改成
+  "原为红、批次 332 转绿、此后是回归钉"，body 扩了动态起点档和嵌套档。
+- `tests/diff/cases/control_for_var_written_in_body.dcase`（新）：p8 + p9 两档。按批次 331 的
+  教训（**补一个特例形状 ≠ 闭合值域**），尾值档和"body 内改写循环变量"档必须同批各钉一条 ——
+  后者在旧实现里不只是尾值错，是**迭代本身**被改写（p2 只跑一轮）。
+
+### #53 的闭包复采（同一批顺手做，因为改的就是判据覆盖面）
+
+用随机生成器对两个 seed 各采 60 条回测：
+
+| seed | match | mismatch | runtime |
+|---|---|---|---|
+| 20260922 | 54 | **0** | 6 |
+| 20261005 | 53 | 1 | 6 |
+
+批次 331 的闭包轨迹是 43 → 50 → 54；20260922 上唯一的残留是 6 条 `exit 112`，那全是 #55
+（尾表达式当退出码），与下标无关。**#53 到这里才算按值域闭掉**。
+
+### 顺带查出并修掉的一个方法论 bug：生成器的分类不可复现
+
+跨批次对 seed=20260922 的读数时，同一个 seed 两次跑给出的**文件名和 `# @cat:` 标签不同**
+（实测 12 条里 4 条换标签），而程序正文逐字相同。根因在 `tools/gen_diff_cases.py:263`：
+众数用 `max(set(kinds), key=kinds.count)`，平票时胜出者取决于 `set` 的迭代顺序，而那个顺序随
+`PYTHONHASHSEED` 变。改成 `max(dict.fromkeys(kinds), …)` 按首次出现顺序裁决。
+
+影响范围要说准：**被钉进库里的用例正文一直可复现**，批次 329/331 的族归属结论站得住；
+不可复现的是"随机目录里第 N 条属于哪一族"这个标签，所以那几批按标签做的跨批次对照读数需要
+重新采一次才可比（本批已重采，见上表）。
+
+### 验证
+
+- 差分：**112 / 126、88.9%**（container 27/28、control 25/26，两条 `for` 档全绿；新增 2 条用例
+  把分母从 124 抬到 126）。基线 `--bless` 到 `match_min=112`。
+  注：五步门禁里那次 diff 读数打的是 `112/125`，因为门禁跑在第二条 `.dcase` 落地之前 —— 当前
+  工作树重跑是 `112/126`，两者不是同一个分母，别当成不一致。
+- 五步门禁（`./tools/run_all.sh`，rc=1 是存量 `py_fail==2` 判据）：official **194/194 编译、
+  191/194 链接**、python_style **289/2/4/0**（失败仍是存量的 `t231_dict_set_cast_fromkeys`、
+  `t233_listcomp_condition_capture`）、语料 **39/39**、jit **ok=169 / trap=320 / fail=0 / segv=0**
+  （下限 163）、diff 见上。前四步与批次 331 **逐项相同** —— 改了 `MirStmt::For` 的词表而四个
+  既有基线一位没动，说明新增字段在所有旧 lowering 路径上都是透传。
+- 性能（任务 #27 的成对同负载口径）：300 万次迭代的 `for i in range(3000000): t = t + i`，
+  新旧两个编译器各编一份、二进制交替各 3 轮，**6 次全部 1.25s**（10ms 分辨率下无可测差），
+  即 body 头部那条 `var_id = counter_id` store 被 LLVM 管线吃掉了。
+  **对照档证明这份比较是活的**：语义真有差的那条程序（`d.z`，尾值 3 vs 2）两份二进制
+  `cmp -l` 差 **52 字节**，现在还能在 `/tmp/b332/d_old.bin` / `d_new.bin` 上复核。
+  诚实标注：`perf_for` 那对二进制的"只差 3 字节元数据"读数当时是实测的（`--emit-llvm` 因为 #28
+  产出的是 Mach-O 而非文本 IR，只能走 `cmp -l`），但**那两份二进制已随清理丢失**，此数暂不可复核。
+- 锚点：`gen.rs` 净插 27 行、`codegen.rs` 净插 9 行 ⇒ `docs/ABI.md` **36 处** `file:line` 重映射
+  （共 43 处改写），按 `git diff -U0` 位移算新行号后**逐字比对 48/48 对上**才 bless，
+  最终 120 锚点漂移 0 / 新 0 / 消失 0。**本批只 bless 了一次**（遵守批次 331 定的规则）。
+- 结构核对：`MirStmt::For` 的全部消费点（codegen 降低 + 槽收集 + substitute、optimization DCE + CSE、
+  monomorphize、gen 构造）都在这批的表里，编译器改完能跑通五步门禁本身就说明没有遗漏的解构点
+  —— Rust 的穷尽匹配会拒绝漏臂，这是"改词表"这类重构便宜的地方。
+
+### OPEN
+
+- **#56（本批新查出）**：动态负下标在 `and` 条件的三元式里读回 0 —— `l[0-3] if (k<=k and 7<3)
+  else (k+7)` 期望 7、实得 0，而**同一表达式去掉 `and`**（`l[0-3] if (7<3) else (k+7)`）是对的。
+  已钉成 `tests/diff/cases/container_neg_index_in_and_ternary.dcase`（4 档最小化，**故意留红**）。
+  批次 331 的判据在 `normalize_subscript_index` 里按容器取 `len`，这条路上 `len` 的来源与三元式
+  条件求值顺序的交互**尚未定位到实现点** —— 只登记读数，不写结论。
+- #55（尾表达式 → 退出码）现在是 seed 20260922 上唯一残留的红族（6 条 runtime +
+  `control_tail_value_exit_code.dcase`），下一批的默认候选。
+- p7 那族（空区间/未绑定变量读取）缺的是**诊断**而不是值修复，与 #36 的"静默截断"同属
+  "错得不吭声"一类，需要单独裁决。
+- 批次 331 遗留的两档未实测项（`ArraySize::Param/Const`、`is_array_param` 切片形参）仍然没碰。
