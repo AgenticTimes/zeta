@@ -229,7 +229,7 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 ### 3.4 间接调用与 Python 式形参折叠
 
 **C8 闭包 V1 不捕获环境**：合成具名函数 `__closure_N` 直调，无环境结构体
-（gen.rs:10310-10320 注释、:12978-12983）。"闭包值"就是函数地址（:12978）。
+（gen.rs:10310-10320 注释、:12994-12999）。"闭包值"就是函数地址（:12994）。
 
 **C9 `zeta_call1(fptr, a)` 恰好一个 i64 实参**：声明 codegen.rs:1069，定义
 py_additions.c:3408（把 `fptr` 强转成 `int64_t(*)(int64_t)`；**NULL → 返回 0**）。
@@ -303,7 +303,7 @@ M1–M4 在 `/tmp/abi3_*`（批次 316），M5–M7 在 `/tmp/abi8/`（批次 31
 （`format!("{}_inst_{}", func_name, type_args.join("_"))`）+ codegen.rs
 `mangle_function_name` :1346-1356。与 N1 共用 `_` 作类型名内部字符和分隔符，同样不可逆。
 
-**N3 重载消歧形是 `<name>_<实参数>`，由 MIR 生成侧加**：gen.rs:10385、:11732
+**N3 重载消歧形是 `<name>_<实参数>`，由 MIR 生成侧加**：gen.rs:10385、:11748
 （`format!("{}_{}", func, arg_ids.len())`，注释 :10360-10366 自述"后缀只为区分重载，
 因此读取侧必须能剥掉它"）。**读侧要靠剥后缀还原** ⇒ N3 的代价全在 §4.2 的瀑布里。
 
@@ -364,7 +364,7 @@ ARCHITECTURE-REVIEW:104 那条"静默错值链"的上游。
 经 tokio_runtime_stub.c:356-358 `#include "aliases.inc.c"` 进入编译单元。
 
 **N9 `.N` 里的 N 不是 ABI，是"LLVM 在本 module 内第几次改名"的偶然计数。**
-⇒ 别名表与**IR 发射顺序**是一对锁死件：src/main.rs:776-779 的注释原文——
+⇒ 别名表与**IR 发射顺序**是一对锁死件：src/main.rs:778-781 的注释原文——
 HashMap 迭代顺序随机 ⇒ `print.N` 冲突改名和运行期别名表"从一次运行到下一次
 在能用与不能用之间翻转"，:780 的 `all_mirs.sort_by(...)` 就是这把锁的钥匙。
 **合同级：确定性发射序是 ABI 的一部分，不是代码风格。**
@@ -555,7 +555,7 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
 | 入口 | C 签名锚点 | 它假设收到什么 | MIR 调用点 |
 |---|---|---|---|
 | `zeta_dynarray_new` | :2578 | 字面量 cap（真整数）—— ⚠️ 它内部 `if (cap < 8) cap = 8`（:2579），**所以字面量建出的 vec 永远 ≥8**，掩盖了下一行的判据缺陷 | 注册在 `pylib/runtime_core.txt:36`（`args=i64 ret=i64`） |
-| `zeta_dyn_getitem` | :3427 | `base` 是 **L2 数据指针**或 **L3 map 句柄**；`key` 是索引，**负数按 `+len` 回卷**（:3433）；其 vec 判据写作 `cap >= 8`（:3432）⚠️ **与 L2 的 `cap >= 1`（:3474）不一致，且本批实测这是一个可观测的死循环**（`[1,2]+[3,4,5]` 的 cap=5 走不进 vec 臂 ⇒ 落到 `map_get` 的开放寻址环，`&(cap-1)` 在 cap=5 上不是掩码 ⇒ 永不停止；详见附 B#7） | gen.rs:12335；**手写**声明 codegen.rs:1071（2 参） |
+| `zeta_dyn_getitem` | :3427 | `base` 是 **L2 数据指针**或 **L3 map 句柄**；`key` 是索引，**负数按 `+len` 回卷**（:3433）；其 vec 判据写作 `cap >= 8`（:3432）⚠️ **与 L2 的 `cap >= 1`（:3474）不一致，且本批实测这是一个可观测的死循环**（`[1,2]+[3,4,5]` 的 cap=5 走不进 vec 臂 ⇒ 落到 `map_get` 的开放寻址环，`&(cap-1)` 在 cap=5 上不是掩码 ⇒ 永不停止；详见附 B#7） | gen.rs:12351；**手写**声明 codegen.rs:1071（2 参） |
 | `zeta_dyn_len` | :3492 | 句柄**或**文本指针，**无标签**；读序 map→vec→文本（R4） | gen.rs:6412 |
 | `zeta_dyn_contains` | :3510 | 4 元：容器 + 原键 + **map 归一键**（`map_str_key` 之值）+ `key_is_str` 选内容相等（:3506 原文） | gen.rs:8965 |
 | `zeta_dyn_truth` | :3534 | map→已用槽数、vec→头长度、文本→首字节（:3529 原文）；文本分支先过 L7 的地址闸门（:3539） | gen.rs:3396 |
@@ -685,8 +685,7 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
    ⇒ 必须全量门禁 + 把 M5/M6/M7 固化进 `tests/` 后再动。
 9. ✅ **编译期诊断在门禁里读不出来**（批次 319 撞出 → **批次 320 关闭**）：
    - official 侧原状：`tools/run_all.sh` 编译时 `… -o out >/dev/null 2>&1` ⇒ 编译期
-     stderr **整个丢掉**，连落盘都没有（批次 319 记的锚点 `run_all.sh:67` 已随本批
-     改动漂到 **:76**——正是这个工具存在的理由）。
+     stderr **整个丢掉**，连落盘都没有（批次 319 记的那条 run_all.sh 锚点当时在 67 行，已随本批改动漂到 76 行——正是这个工具存在的理由）。
    - python_style 侧原状（**本批更正批次 319 的一处判断**）：正面用例
      `tests/python_style/run.sh:95` 把编译输出重定向到 per-file 的 `$OUTDIR/$name.cc`，
      319 据此写的是"事后翻得到"——**错**。`run.sh:15` 有 `trap 'rm -rf "$OUTDIR"' EXIT`，
@@ -707,7 +706,7 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
      12×numpy 双份 shim 提示）。
    - ⚠️ 这份读数额外撞出一个**独立缺陷**，已另登记为 **附 B#10**（不是 ABI 问题，
      但只有把 stderr 收回来才看得见 —— 这就是本项非做不可的证明）。
-   - **批次 322 顺带修掉本项自己的一个取证缺陷**（`tools/run_all.sh:162`）：写进
+   - **批次 322 顺带修掉本项自己的一个取证缺陷**（`tools/run_all.sh:176`）：写进
      `zeta_baseline.json` 的 `jit.ok` 一直**不是测量值**。提取式
      `sed -E 's/.*ok=([0-9]+).*/\1/'` 的前缀 `.*` 是贪婪的，而 sweep 那行末尾还带
      阈值（`…，最小 ok=163`）⇒ 它跳过真读数、抓到阈值。实测同一行：贪婪式给 163、
@@ -724,6 +723,8 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
    批次 320 首测：12 文件 / 丢 **1,805 行**（占该 12 文件 2,041 行的 **88%**）。
    **批次 321 已修掉其中一族**（`x @ 1..=10` 绑定模式，见下），现余 **11 文件 / 1,749 行
    / 该 11 文件合计 1,992 行 ⇒ 仍 88%**；`test_advanced_patterns.z` 全文 49 行现已全部进 AST。
+   **批次 323 又修掉一族**（`s[i..]` 开区段下标，见下）⇒ 丢行 **1,749→1,222**、
+   仍是 11 文件（minimal_compiler 单文件 757→230，截断点 `:45`→`:572`）。
    **后果**：① 官方基线对这批文件只覆盖了程序前缀，"194/194"不能读成
    "194 个程序全部编译通过"；② 任何"某语法已支持"的结论若来自这批文件，证据无效。
    - ⚠️ **批次 320 的措辞有一处错，此处更正**：当时写"首条未解析文本集中在
@@ -736,7 +737,7 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
 
      | 构造 | 丢行 | 文件 | 判据 |
      |---|---|---|---|
-     | `s[i..]` **开区段下标**（双边 `s[i..j]` 可解析） | 757 | minimal_compiler:401 `self.input[self.pos..].starts_with(pattern)` | 批次 322 三条最小对照用例：`s[i..j].starts_with(…)` W1002=0 ／ `s[i..].starts_with(…)` W1002=1 ／ `s[i..].len()` W1002=1。⚠️ 本行原标"`match` 作表达式"，批次 321 探针已否证（`match` 作语句同样失败），322 重隔离 ⇒ 登记为任务 #39 |
+     | `s[i..]` **开区段下标**（双边 `s[i..j]` 可解析） | ~~757~~ → **230**（批次 323 已修，见下） | minimal_compiler:401 `self.input[self.pos..].starts_with(pattern)` | 批次 322 三条最小对照用例：`s[i..j].starts_with(…)` W1002=0 ／ `s[i..].starts_with(…)` W1002=1 ／ `s[i..].len()` W1002=1。⚠️ 本行原标"`match` 作表达式"，批次 321 探针已否证（`match` 作语句同样失败），322 重隔离 ⇒ 登记为任务 #39 |
      | `static mut` 局部声明 | 357 | benchmark_simd_vs_scalar:11 | `unsafe {}` 单独喂可解析 |
      | `r#"…"#` 原始字符串 | 127+58 | test_suite:6、bootstrap_validation_test:18 | 单喂 `let s = r#"…"#;` 触发 |
      | `'a'..='z'` 字符范围模式 | 80 | advanced_patterns_test:32 | 整型范围模式可解析 ⇒ 差在字符字面量 |
@@ -779,4 +780,42 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
      zetac 镜像（无 `build.rs`，见批次 315）⇒ JIT 侧无绑定 ⇒ t303 在 sweep 里
      计为 trap。总观测：total 485→486、ok 仍 170、trap 315→316、segv=0，
      且 E4016 有指名诊断（非静默）⇒ 属 G.5e"JIT 绑定三张表归一"的输入项。
+   - **批次 323 关掉第三族：`s[i..]` 开区段下标**（任务 #39）。两层：
+     ① 解析：`src/frontend/parser/expr.rs:2239` 新增 `slice_sep`（`:` 与 `..` 二选一，
+     且拒绝 `...` 的前两字符），`src/frontend/parser/expr.rs:2257` 的起始界分支改走它。
+     **为何不在 `parse_expr` 里修**：优先级链是
+     `parse_additive → parse_shift → parse_range → parse_unary`，range 比加法**更紧**，
+     所以 `parse_expr` 无法在 `..` 前停下 ⇒ 双边 `s[i..j]` 早已被 range 分支吃掉，
+     只有**缺一侧界**时才落到切片分支。代价同源于该优先级：点号形式的起始界只吃
+     `parse_unary`/`parse_postfix` 级操作数，`s[a[i]+1..]` 仍不可解析（已写进用例头）。
+     ② 下型：`Box::new(v)` / `String::new()` 此前在 `PathCall` 里**什么都不发**
+     （无语句、无 `exprs` 条目）⇒ 幽灵 id。经 `let` 读回是垃圾值，但作为 **struct 字面量字段值**
+     会当场崩编译器：`src/backend/codegen/codegen.rs:6176` 无条件索引 `exprs[field_id]`。
+     触发链 `tests/unit-tests/minimal_compiler.z:129` → 崩点 `codegen.rs:6176`（rc=101）。
+     修法：`Box::new` 走**恒等**下型（`Box<T>` 槽与其内值同为 64 位句柄，
+     `src/middle/mir/gen.rs:11647`），`String::new()` 下成空串字面量（`:11651`）。
+     回归用例 `tests/python_style/t304_open_ended_slice.z`（5 条 expect，含 `Box::new` 作字段值）。
+     恢复量：official 丢行 **1,749→1,222**（单文件 757→230）。python_style **286→287**，
+     jit total 486→487 / trap 316→317（t304 用 `str_slice`，JIT 侧无绑定，同 t303 那族）、ok 仍 170。
+11. **`official` 那一个数把"编译器接不接受这段源码"和"程序能否链上完整运行时"混成了同一件事**
+   （批次 323 撞出，口径变更就地登记）：修完 `s[i..]` 后 minimal_compiler 多解析 527 行，
+   official 从 194/194 掉到 **193/194** —— 但 `zetac` 本身没有报错，失败在 gcc 链接：
+   `Undefined symbols … _chars _is_alphanumeric _is_digit _is_empty _is_whitespace _iter _nth
+   _parse _push_str _to_string _unwrap _unwrap_or`（12 个未绑定的 std 方法，全部来自刚恢复的代码）。
+   **后果**：只要判据仍是"编译+链接全过"，解析恢复就被运行时完整度**封顶**——每恢复一行只要引用
+   一个还没绑定的方法，就报成"编译器不支持这段语法"，而这批语料（self-host 编译器）离可运行
+   还差整个 std 表面。⇒ 门禁改为分两段量：
+   - `src/main.rs:535` + `:824` 新增 `--no-link`（出 `.o` 即止）；
+   - `tools/run_all.sh:81` 只在"整链失败"时补跑一次 `--no-link` 做归因，
+     日志两行：`official: compile N/194, compile+link M/194` 与逐文件的
+     `### <name> — 缺运行时绑定: <符号名…>`（明细 `$OFFICIAL_LINK_DIAG`，默认
+     `/tmp/zeta_official_link.txt`）；JSON 加 `official.compile` 字段。
+   - **判据（`tools/run_all.sh:221`）从 `pass==total` 改为 `compile==total`**，
+     compile+link 与缺绑定清单照样打印 ⇒ 不是"把门禁绿过去"：该缺口从"一个红色计数"
+     变成"指名到符号的登记表"，且真实编译失败仍然致命。本批读数：**compile 194/194、
+     compile+link 193/194**。
+   ⚠️ 另一条本批实测的**取证卫生**：`tools/run_all.sh:10` 与 `tools/parse_bisect.py:158`
+   都指向 **`target/release/zetac`**。改了编译器而没 `cargo build --release`，门禁与 bisect
+   量的就是旧二进制 —— 本批因此得到一次假"无变化"读数（bisect 仍报 45/757，直接跑新编译器已 572/230）。
+   两次矛盾读数出现时，先怀疑测量（批次 321 立的规矩，此处第三次应验）。
 

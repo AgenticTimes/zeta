@@ -10215,3 +10215,90 @@ corpus 解析通过 **39/39** · jit sweep **ok=170 trap=316 fail=0 timeout=0 se
   没动 `.gitignore`：加 `!tests/**/*.z` 会让一批历史忽略文件突然出现在别人的
   `git status` 里，属共享配置改动，留给用户定。
 - 性能基线已连续 319/320/321/322 四批未跑。
+
+## 批次 323（任务 #39 —— 最大那一族 `s[i..]`：恢复 527 行，并把"编译"和"链接"分成两个数）
+
+### 选型理由
+批次 322 把判据钉在**开区段下标**上（双边 `s[i..j]` 可解析、`s[i..]` 不可），这是
+`附 B#10` 表里最大的一族（minimal_compiler 757 行 = 全部丢行的 43%）。
+按 321 立的规矩干活：先最小对照用例锁死判据，再动解析器。
+
+### 改动一：解析器认 `s[a..]` / `s[..b]` / `s[..]`
+`src/frontend/parser/expr.rs:2239` 新增 `slice_sep`（`:` 与 `..` 二选一，并拒绝
+`...` 的前两字符），`src/frontend/parser/expr.rs:2257` 的起始界分支改为
+"先探分隔符：是分隔符 ⇒ 起始界缺省；否则解析起始界再要求分隔符"。
+**为什么不能在 `parse_expr` 那一侧修**：优先级链
+`parse_additive → parse_shift → parse_range → parse_unary` 里 range 比加法**更紧**，
+`parse_expr` 遇到 `i+1..` 会一路吃掉 `..` 再回头找右界而失败 ⇒ 它结构上无法
+"停在 `..` 之前"。双边形式因此从来就不经过这里（被通用下标的 range 分支吃掉），
+落到切片分支的**必然**是缺一侧界的点号形式。
+继承的代价一并写明：点号形式的起始界只吃 `parse_unary`/`parse_postfix` 级操作数，
+所以 `s[a[i]+1..]` 仍不可解析（同一优先级所致，非本批遗漏，已写进用例头与附 B#10）。
+
+### 改动二：解析通了才暴露的第二层 —— `Box::new` 把编译器崩掉
+`minimal_compiler.z` 恢复后 `zetac` 以 rc=101 崩在
+`src/backend/codegen/codegen.rs:6176`（`exprs[field_id]` 无条件索引）。
+定位路径（每步都可复跑）：前缀截断 bisect → 逐 `fn` 隔离 → 体内逐行扫 →
+v4/v5/v6/v9/v12~v15 最小矩阵；决定性一次是 MIR dump：
+`Struct{fields:[("a",3)]}` 而 `exprs` 里没有 3 ⇒ `Box::new(expr)` 作 **struct 字段值**
+才触发，作 `let`/实参只读到垃圾值（首批 7 个 repro 全编译通过，方向错过两轮）。
+根因：`PathCall` 里 `Box::new` / `String::new` **一条语句、一个 `exprs` 条目都不发**，
+返回的 id 是幽灵。修法按同族透明处理：`src/middle/mir/gen.rs:11647` 让 `Box::new(v)`
+恒等下型（`Box<T>` 槽与其内值同为 64 位句柄，无需分配/释放），`:11651` 让
+`String::new()` 下成空串字面量。**没有**顺手扩到别的 `T::method`（见下"顺带登记"）。
+
+### 口径变更：`official` 一个数混了两件事，本批拆成 compile / compile+link
+拆完两层，official 从 194/194 掉到 193/194 —— 但编译器没报错，是 **gcc 链接**失败：
+恢复的 527 行引用了 12 个从未绑定的 std 方法
+（`chars nth unwrap unwrap_or to_string push_str is_empty is_digit is_alphanumeric
+is_whitespace iter parse`）。只要判据仍是"编译+链接全过"，解析恢复就被运行时完整度
+**封顶**：每多恢复一行，只要引用一个还没绑定的方法，就报成"编译器不支持这段语法"。
+⇒ `src/main.rs:535`+`:824` 加 `--no-link`（出 `.o` 即止）；
+`tools/run_all.sh:81` 仅在整链失败时补跑一次做归因，日志打
+`official: compile N/194, compile+link M/194` + 逐文件
+`### <name> — 缺运行时绑定: <符号名>`；判据 `tools/run_all.sh:221` 改盯 `compile==total`。
+compile+link 照样打印、缺绑定指名到符号 ⇒ 该缺口从"一个红计数"变成"一张登记表"，
+真实编译失败仍然致命。不是删用例、也不是把门禁绿过去。
+
+### 本批的负结果 + 一次测量陷阱（记下来省下一批）
+1. `parse_bisect.py --all` 在解析器改完后仍报 45/757（"零恢复"），与直接跑新编译器的
+   572/230 矛盾。按 321 的规矩先怀疑测量：`tools/run_all.sh:10` 与
+   `tools/parse_bisect.py:158` 都写死 `target/release/zetac` ⇒ 没 `cargo build --release`
+   就是在量旧编译器。重建后读数一致。**这条对门禁同样成立**，是卫生事实不是偶发。
+2. minimal_compiler 内部还剩两处 W1002 未恢复：`s[pos+1..]`（加法作起始界，见改动一
+   的继承代价）与 `a[...]` 一族（既有缺口，非本批引入）。
+
+### 顺带登记
+任务 **#41**：`T::static_method(...)` 的 `PathCall` 分支同族缺口 —— **已定义**类的静态方法
+实测 `P::new(10)` → `0`（名字小写 `new` 时整条下型消失，幽灵 id）、
+`P::build(10)` / `P::make(10)` → 打印**地址**（路由到 `zeta_platform_obj`）。
+本批只补了 `Box::new`/`String::new` 两个透明构造，没扩这一族：扩了会把"静默丢条目"
+变成"链接期缺符号"，改动半径与判据都要单独立项。
+
+### 验证
+`cargo build --release` 后 `./tools/run_all.sh`（cwd=库根、不接管道）真退出码 1
+（`py_fail==2` 常驻）：**official compile 194/194、compile+link 193/194**（唯一 link-only
+= minimal_compiler，12 个符号已登记）· python_style **287**/2/4/0（286→287 即新增 t304）·
+corpus 解析通过 **39/39** · jit sweep **ok=170 trap=317 fail=0 timeout=0 segv=0**
+（total 486→487 是 t304 进池；ok 不变，trap +1 的原因是 `str_slice` 在 JIT 侧无绑定，
+与 t303 同族）· compile-diagnostics official **12/194 文件、17 行**（与批次 322 末次读数一致）。
+丢行量：`./tools/truncation_inventory.sh` → 11 文件 **1,749→1,222**、237 文件里 11 命中不变。
+回归用例 `tests/python_style/t304_open_ended_slice.z`（5 条 expect：`s[i..]`、`s[..5]`、
+`s[..]`、`s[6..]`、`Box::new` 作 struct 字段值），需 `git add -f`（任务 #40）。
+锚点：104→**114**（净 +10：新增 11 条真新锚点，另 5 条只是因插行重 cite；消失 6 =
+那 5 条旧行号 + 1 条历史行号改写为散文、以免留下指向别处的假锚点）。
+bless 前逐条核对了 16 条"新锚点"的文本列，确认每一行都是其正文声称的那条代码，
+复跑 rc=0（`漂移 0 / 新 0 / 消失 0`）。
+未测：`tools/perf_baseline.py --diff`（连续**五**批未跑）。
+
+### OPEN
+- 任务 #36 余 11 文件 / **1,222 行**：benchmark_simd_vs_scalar 357、minimal_compiler 230、
+  selfhost 158（仍未定位）、test_suite 127、quantum_basic 85、advanced_patterns 80、
+  integration_all_features 58、bootstrap_validation 58、primezeta_usize 36、
+  integration_test_program 19、test_const_expression 14。
+- 下一族的顺序问题：self-host 语料的丢行现在**同时**受解析器和运行时完整度约束，
+  恢复前先跑一次 `--no-link` 看它掉进哪一类，能省一批无效改动。
+- 任务 #41（`T::static_method` + `codegen.rs:6176` 缺表达式条目时应当报错而不是崩）。
+- 任务 #38（match 结果槽恒 I64）、#40（裸 `*.z` 吞新用例）、#37、#33。
+- 性能基线已连续 319/320/321/322/323 五批未跑。
+

@@ -43,6 +43,7 @@ src/backend/codegen/codegen.rs	3327	self.note_return_slot_mismatch(func, dest, a
 src/backend/codegen/codegen.rs	3748	let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, l, r, "eq").unwrap(); self.builder.build_int_z_extend(cmp, self.i64_type, "eq_ext").unwrap()
 src/backend/codegen/codegen.rs	5667	MirExpr::StringLit(s) => { let global = self.module.add_global( self.context.i8_type().array_type(s.len() as u32 + 1), None, "str_lit", ); global.set_linkage(in
 src/backend/codegen/codegen.rs	5855	if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
+src/backend/codegen/codegen.rs	6176	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
 src/backend/codegen/codegen.rs	6177	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
 src/backend/codegen/codegen.rs	6426	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> = (0..field_count).map(|_| self.i64_type.into()
 src/backend/codegen/codegen.rs	6810	fn coerce_call_args( &mut self, callee: inkwell::values::FunctionValue<'ctx>, args: Vec<BasicMetadataValueEnum<'ctx>>, arg_ids: &[u32], ) -> Vec<BasicMetadataVa
@@ -50,6 +51,8 @@ src/backend/codegen/codegen.rs	6960	fn note_return_slot_mismatch(&mut self, func
 src/backend/codegen/mod.rs	7	mod runtime_decls_registry;
 src/backend/codegen/mod.rs	9	mod runtime_decls_core;
 src/backend/codegen/runtime_decls_registry.rs	18	module.add_function("py_argparse_add", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+src/frontend/parser/expr.rs	2239	fn slice_sep(input: &str) -> IResult<&str, ()> {
+src/frontend/parser/expr.rs	2257	let (input, start) = if let Ok((rest, _)) = slice_sep(input) {
 src/frontend/parser/pattern.rs	22	let (input, pattern) = alt((
 src/frontend/parser/pattern.rs	46	parse_bind_pattern,
 src/frontend/parser/pattern.rs	48	parse_struct_pattern,
@@ -57,7 +60,9 @@ src/frontend/parser/pattern.rs	121	Ok((input, AstNode::Var(variant)))
 src/frontend/parser/top_level.rs	71	// PY-A: `*args` / `**kwargs` star-params — consumed as a single opaque // i64 param (V1: call sites with extra args coerce; real variadics need // arg-tuple su
 src/frontend/parser/top_level.rs	334	// PY-A: Python default argument values. The AST's `params` only carries // (name, type), so defaults travel as a body-prologue marker // `zeta_param_default(in
 src/main.rs	529	let strict_abi = args.iter().any(|a| a == "--strict-abi")
-src/main.rs	776	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
+src/main.rs	535	let no_link = args.iter().any(|a| a == "--no-link");
+src/main.rs	778	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
+src/main.rs	824	if no_link {
 src/middle/mir/gen.rs	388	.map(|m| format!("{}__", m.replace('.', "_")))
 src/middle/mir/gen.rs	427	Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
 src/middle/mir/gen.rs	539	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
@@ -77,9 +82,11 @@ src/middle/mir/gen.rs	10121	if receiver.is_none() && arg_ids.len() == 1 && !self
 src/middle/mir/gen.rs	10310	// PY-A: closure call — if the callee is a var bound to a // lambda/closure value, lower to a direct named call to the // synthetic closure function (f(41) → __
 src/middle/mir/gen.rs	10385	format!("{}_{}", func, arg_ids.len())
 src/middle/mir/gen.rs	11110	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
-src/middle/mir/gen.rs	11732	format!("{}_{}", func_name, arg_ids.len())
-src/middle/mir/gen.rs	12335	func: "zeta_dyn_getitem".to_string(),
-src/middle/mir/gen.rs	12978	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
+src/middle/mir/gen.rs	11647	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
+src/middle/mir/gen.rs	11651	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
+src/middle/mir/gen.rs	11748	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	12351	func: "zeta_dyn_getitem".to_string(),
+src/middle/mir/gen.rs	12994	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");
 src/middle/pylib.rs	685	/// `declare_registry_runtime_fns` emits after task D.
 src/middle/pylib.rs	806	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");
@@ -100,5 +107,8 @@ tools/gen_from_registry.py	39	if kind not in ("F", "W", "X"):
 tools/gen_from_registry.py	60	if kind == "F": # F module member symbol ... if len(parts) < 4: continue symbol = parts[3] elif kind == "W": if len(parts) < 4: continue symbol = parts[3] if no
 tools/gen_from_registry.py	116	param_exprs = [] for a in args: if a == "f64": param_exprs.append("f64_type.into()") else: param_exprs.append("i64_type.into()") params = ", ".join(param_exprs)
 tools/gen_from_registry.py	290	"/* @generated by tools/gen_from_registry.py --emit-aliases — DO NOT EDIT */",
-tools/run_all.sh	67	rm -rf /tmp/zeta_tests /tmp/zt_out
-tools/run_all.sh	162	jit_ok=$(echo "$line" | sed -nE 's/^jit sweep: ok=([0-9]+) .*/\1/p'); jit_ok=${jit_ok:-0}
+tools/parse_bisect.py	158	ap.add_argument("--zetac", default=os.path.join(ROOT, "target/release/zetac"))
+tools/run_all.sh	10	ZETAC="${ZETAC:-$ROOT/target/release/zetac}"
+tools/run_all.sh	81	elif "$ZETAC" "$z" --no-link -o "/tmp/zt_out/$n" >/dev/null 2>/dev/null; then
+tools/run_all.sh	176	jit_ok=$(echo "$line" | sed -nE 's/^jit sweep: ok=([0-9]+) .*/\1/p'); jit_ok=${jit_ok:-0}
+tools/run_all.sh	221	if [[ $SKIP_OFFICIAL -eq 0 && $official_compile -ne $official_total ]]; then rc=1; fi
