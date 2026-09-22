@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/run_all.sh — Q4 (advice.md): one command → three baseline numbers as JSON.
-# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob]
+# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow]
 # Exit 0 if all enabled suites pass their green criteria; else 1.
 set -euo pipefail
 
@@ -16,6 +16,7 @@ SKIP_PYTHON=0
 SKIP_JIT=0
 SKIP_DIFF=0
 SKIP_KNOB=0
+SKIP_SWALLOW=0
 
 for a in "$@"; do
   case "$a" in
@@ -26,6 +27,7 @@ for a in "$@"; do
     --skip-jit) SKIP_JIT=1 ;;
     --skip-diff) SKIP_DIFF=1 ;;
     --skip-knob) SKIP_KNOB=1 ;;
+    --skip-swallow) SKIP_SWALLOW=1 ;;
     -h|--help)
       sed -n '2,6p' "$0"
       exit 0
@@ -234,6 +236,29 @@ if [[ $SKIP_KNOB -eq 0 ]]; then
   rm -f "$knob_log"
 fi
 
+# ── 7) 前导词静默吞掉的判据两翼断言（批次 337）──
+# 语句解析的兜底是"一个表达式＝一条语句"，于是解析器不认识的前导词会**无声消失**
+# （`static mut c = 0` 丢 `static`、`import std::memory;` 绑成 `std` 并丢掉 `memory`）。
+# W1004 在吞掉那一刻出声；它的排除项（函数尾隐式返回长得一样）同样必须被测住，
+# 否则这个判据可以在"永远不响"和"到处乱响"之间任意翻车而门禁全绿。
+swallow_rc=0; swallow_failed=0; swallow_checked=0
+if [[ $SKIP_SWALLOW -eq 0 ]]; then
+  swallow_log=$(mktemp)
+  set +e
+  ZETAC="$ZETAC" "$ROOT/tools/junk_swallow_inventory.sh" >"$swallow_log" 2>&1
+  swallow_rc=$?
+  set -e
+  swallow_failed=$(grep -c '  FAIL ' "$swallow_log" || true); swallow_failed=${swallow_failed:-0}
+  swallow_checked=$(grep -cE '  (ok|FAIL) ' "$swallow_log" || true); swallow_checked=${swallow_checked:-0}
+  if [[ $JSON_ONLY -eq 0 ]]; then
+    echo "swallow: ${swallow_checked} 条断言，FAIL ${swallow_failed}（rc=$swallow_rc）"
+  fi
+  if [[ $swallow_rc -ne 0 ]]; then
+    tail -30 "$swallow_log" >&2
+  fi
+  rm -f "$swallow_log"
+fi
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -252,6 +277,8 @@ doc = {
            "bad_case": $diff_bad, "skipped": $SKIP_DIFF},
   "knob": {"checked": $knob_checked, "failed": $knob_failed,
            "skipped": $SKIP_KNOB},
+  "swallow": {"checked": $swallow_checked, "failed": $swallow_failed,
+              "skipped": $SKIP_SWALLOW},
   # 只出声、不参与退出码（附 B#9 的护栏：判定看运行期 stdout，告警不改判定）
   "compile_diagnostics": {
     "official_files_with_warnings": $official_diag_files,
@@ -287,6 +314,8 @@ if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 1 ]]; then rc=1; fi
 # knob: 判据在 tools/knob_probe.sh 的 A 段内部（假值拼写必须关、留白名单站点必须还在），
 # 这里只认它的退出码。
 if [[ $SKIP_KNOB -eq 0 && $knob_rc -ne 0 ]]; then rc=1; fi
+# swallow: 判据同上，跑的是 tools/junk_swallow_inventory.sh 的夹具段（不含全语料计数）。
+if [[ $SKIP_SWALLOW -eq 0 && $swallow_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 2 ]]; then
   echo "[G.3] 差分有 $diff_bad 条坏用例（参考侧跑不出真值）——不参与判定，但必须修用例" >&2
 fi

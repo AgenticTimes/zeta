@@ -55,6 +55,7 @@ pub fn parse_block_body(input: &str) -> IResult<&str, Vec<AstNode>> {
             continue;
         }
         if let Ok((next_expr, expr)) = parse_full_expr(next) {
+            warn_if_swallowed_prefix(&expr, next, next_expr);
             body.push(AstNode::ExprStmt {
                 expr: Box::new(expr),
             });
@@ -676,14 +677,49 @@ fn parse_continue(input: &str) -> IResult<&str, AstNode> {
 }
 
 fn parse_expr_stmt(input: &str) -> IResult<&str, AstNode> {
+    let start = input;
     let (input, expr) = parse_full_expr(input)?;
     let (input, _) = opt(ws(tag(";"))).parse(input)?;
+    warn_if_swallowed_prefix(&expr, start, input);
     Ok((
         input,
         AstNode::ExprStmt {
             expr: Box::new(expr),
         },
     ))
+}
+
+/// A statement that is one bare name or literal does nothing, and the parser
+/// only gets there by *dropping* a word it had no rule for (`static mut c = 0`
+/// loses `static`, `import a::b;` binds `a` and discards `b`). Measured over the
+/// 533-file suite the shape is otherwise rare: a function's implicit return is
+/// the same node, but nothing parseable follows it except the `}`/`} else {` the
+/// indent preprocessor appends — hence the delimiter strip. The text here is
+/// preprocessed, so one of its "lines" can span several source lines.
+/// 4 hits in 533 files, all real mis-parses; see roadmap batch 337.
+fn warn_if_swallowed_prefix(expr: &AstNode, stmt_start: &str, rest: &str) {
+    let word = match expr {
+        AstNode::Var(n) => n.clone(),
+        AstNode::Lit(_) => "literal".to_string(),
+        _ => return,
+    };
+    let head = rest.split('\n').next().unwrap_or("").trim();
+    if head.is_empty() {
+        return;
+    }
+    let stripped: String = head
+        .chars()
+        .filter(|c| !matches!(c, '{' | '}' | '(' | ')' | ',' | ' ' | '\t'))
+        .collect();
+    if stripped.is_empty() || stripped == "else" {
+        return;
+    }
+    let off = crate::frontend::indent::remaining_byte_offset(stmt_start, "");
+    let line = crate::frontend::indent::original_line_at(off, "");
+    eprintln!(
+        "warning: [W1004] :{line}: `{word}` became a stand-alone statement while \
+         '{head}' was parsed as the next one — a word on this line is being ignored"
+    );
 }
 
 /// PY-A: `pass` — no-op statement.

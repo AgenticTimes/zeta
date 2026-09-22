@@ -2161,7 +2161,12 @@ pub mod common {
 
     // Warning codes
     pub const UNUSED_IMPORT: &str = "W1001";
-    pub const UNNECESSARY_PARENTHESES: &str = "W1002";
+    // W1002/W1003 are emitted as literals (main.rs `ensure_fully_parsed`,
+    // top_level.rs recovery), so this list follows the emitter. The previous
+    // W1002 = "unnecessary parentheses" never had an emitter or a reference.
+    pub const PARSE_TRUNCATED_INPUT: &str = "W1002";
+    pub const PARSE_RECOVERY_SKIP: &str = "W1003";
+    pub const PARSE_SWALLOWED_WORD: &str = "W1004";
     pub const TYPE_COULD_BE_INFERRED: &str = "W2001";
     pub const REDUNDANT_TYPE_CAST: &str = "W2002";
     pub const UNUSED_VARIABLE: &str = "W3001";
