@@ -1,0 +1,10 @@
+# @cat: numeric
+# @note: 括号内嵌套的 `//`（批次 334 解锁的形状：调用括号未闭合 ⇒ 行内判据认出运算符）
+#@@ python
+print(max(1, 7 // 2))
+print((7 // 2) * 3)
+print(len("abcd") // 3)
+#@@ zeta
+print(max(1, 7 // 2))
+print((7 // 2) * 3)
+print(len("abcd") // 3)

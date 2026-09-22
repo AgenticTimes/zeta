@@ -1,0 +1,14 @@
+# @cat: numeric
+# @note: 多行调用续行里的 `//`（判据的括号深度跨行携带）
+#@@ python
+x = 15
+print(
+    x // 10)
+print(
+    -9 // 2)
+#@@ zeta
+x = 15
+print(
+    x // 10)
+print(
+    -9 // 2)

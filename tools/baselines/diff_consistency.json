@@ -1,12 +1,12 @@
 {
-  "total": 128,
-  "judged": 128,
-  "match": 115,
-  "rate_pct": 89.8,
-  "match_min": 115,
+  "total": 130,
+  "judged": 130,
+  "match": 120,
+  "rate_pct": 92.3,
+  "match_min": 120,
   "by_verdict": {
-    "match": 115,
-    "mismatch": 12,
+    "match": 120,
+    "mismatch": 9,
     "compile": 1
   },
   "per_cat": {
@@ -23,8 +23,8 @@
       "judged": 28
     },
     "numeric": {
-      "match": 18,
-      "judged": 26
+      "match": 23,
+      "judged": 28
     },
     "control": {
       "match": 28,
@@ -282,15 +282,23 @@
     },
     "numeric_floordiv": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
+    },
+    "numeric_floordiv_multiline_call": {
+      "cat": "numeric",
+      "verdict": "match"
     },
     "numeric_floordiv_neg": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "numeric_floordiv_neg2": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
+    },
+    "numeric_floordiv_nested_call": {
+      "cat": "numeric",
+      "verdict": "match"
     },
     "numeric_int_str": {
       "cat": "numeric",

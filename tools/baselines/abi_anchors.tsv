@@ -53,6 +53,8 @@ src/backend/codegen/codegen.rs	7035	fn note_return_slot_mismatch(&mut self, func
 src/backend/codegen/mod.rs	7	mod runtime_decls_registry;
 src/backend/codegen/mod.rs	9	mod runtime_decls_core;
 src/backend/codegen/runtime_decls_registry.rs	18	module.add_function("py_argparse_add", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+src/frontend/indent.rs	581	fn rewrite_floordiv_lines(lines: &[&str], only_in_brackets: bool) -> Vec<String> {
+src/frontend/indent.rs	644	if only_in_brackets && *depth <= 0 {
 src/frontend/parser/expr.rs	364	fn parse_raw_string_lit(input: &str) -> IResult<&str, AstNode> {
 src/frontend/parser/expr.rs	2292	fn slice_sep(input: &str) -> IResult<&str, ()> {
 src/frontend/parser/expr.rs	2310	let (input, start) = if let Ok((rest, _)) = slice_sep(input) {

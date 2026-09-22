@@ -1,11 +1,13 @@
-// §5.2 known-fail 包：`//` 出现在调用括号内 ⇒ 解析**在此截断**。
-//   实测（tools/truncation_inventory.sh 同一条告警）：
-//   `[W1002] …:3: 1 line(s) at the end of the input were NOT parsed …
-//    First unparsed text: '(x // y)'` —— `print(x` 之后的内容全丢，
-//   程序"编译成功"却一个字都不打。同一表达式写成 `z = x // y; print(z)` 是对的
-//   ⇒ 缺口只在括号内的续行扫描。G.7b（顶层同步恢复）的首选靶子。
+// PY-A（批次 334 摘掉 known-fail 标记）：`//` 出现在调用括号内。
+//   此前 flat（无缩进）文件里预处理器**完全不动** `//` —— 方言判据挂在
+//   「本文件需不需要缩进→大括号改写」上，而 flat python 文件不需要改写，
+//   于是 `print(x` 之后的文本全被当行注释吃掉（W1002 截断），程序"编译成功"
+//   却一个字都不打。现在无缩进文件按**行内**判据逐处决定：该列上 `(`/`[` 仍
+//   未闭合 ⇒ 我们在表达式内部 ⇒ `//` 是运算符，改写为 `floordiv`。
+//   同一判据在花括号写法上是安全的：`return 1  // Success` 这类行尾注释全在
+//   深度 0（official 语料实测 209 处，无一例外），见 indent.rs 的
+//   flat_brace_style_trailing_comment_is_never_the_operator。
 // expect: 3
-// known-fail: 括号内 `//` 让解析截断（W1002），整个 print 被丢弃
 x = 7
 y = 2
 print(x // y)

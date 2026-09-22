@@ -225,8 +225,25 @@ pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
     let lines: Vec<&str> = folded_lines.iter().map(|s| s.as_str()).collect();
     let (out, changed) = normalize_blocks(&lines)?;
     if !changed {
-        // Not python-style. Still hand back the folded text when we folded
-        // something — that is the only edit we made.
+        // PY-A (任务 #55/#51): `changed` means "this file needed an
+        // indentation-to-brace rewrite", NOT "this file is python" — a flat
+        // script needs no rewrite, and so does a brace-style source. Deriving
+        // the dialect from it therefore turns floor division into a comment for
+        // every flat python file (`print(7 // 2)` lost its argument).
+        // Without indentation evidence, decide per occurrence: `//` is the
+        // operator only while a `(`/`[` is still open at that column. Measured
+        // over the official corpus: 209 `//`-after-code occurrences, none of
+        // them inside an open bracket — `return 1  // Success` and friends all
+        // sit at depth 0, so they keep their comment.
+        let rewritten = rewrite_floordiv_lines(&lines, true);
+        if rewritten != lines {
+            let text = rewritten.join("\n");
+            let origins = estimate_line_origins(input, &text);
+            set_last_preprocess(text.clone(), origins);
+            return Ok(Some(text));
+        }
+        // Still hand back the folded text when we folded something — that is
+        // the only edit we made.
         return if folded.is_some() || inline.is_some() {
             let origins = estimate_line_origins(input, &joined_text);
             set_last_preprocess(joined_text.clone(), origins);
@@ -246,13 +263,7 @@ pub fn indent_preprocess(input: &str) -> Result<Option<String>, IndentError> {
     // which poisons the bracket-depth bookkeeping for the rest of the block, so
     // later headers never got their `{` at all and the definition failed with
     // or without the operator.
-    let rewritten: Vec<String> = {
-        let mut in_triple_rw: Option<char> = None;
-        lines
-            .iter()
-            .map(|line| rewrite_floordiv_line(line, &mut in_triple_rw))
-            .collect()
-    };
+    let rewritten = rewrite_floordiv_lines(&lines, false);
     let lines_rw: Vec<&str> = rewritten.iter().map(|s| s.as_str()).collect();
     let (out, _) = normalize_blocks(&lines_rw)?;
     let text = out.join("\n");
@@ -565,12 +576,42 @@ fn normalize_blocks(lines: &[&str]) -> Result<(Vec<String>, bool), IndentError> 
     Ok((out, changed))
 }
 
+/// Run `rewrite_floordiv_line` over a whole file with the string and bracket
+/// state carried from line to line.
+fn rewrite_floordiv_lines(lines: &[&str], only_in_brackets: bool) -> Vec<String> {
+    let mut in_triple: Option<char> = None;
+    let mut depth: i32 = 0;
+    lines
+        .iter()
+        .map(|line| {
+            let out = rewrite_floordiv_line(line, &mut in_triple, &mut depth, only_in_brackets);
+            if depth < 0 {
+                depth = 0;
+            }
+            out
+        })
+        .collect()
+}
+
 /// Rewrite the floor-division operator on one line, leaving strings, `#`
 /// comments and comment-only `//` lines untouched. A `//` preceded by code on
 /// the line is the operator; a `//` that *starts* the line's code stays a
 /// comment (that is how this repo's own python_style `// expect:` headers are
 /// written).
-fn rewrite_floordiv_line(line: &str, in_triple: &mut Option<char>) -> String {
+///
+/// `only_in_brackets` is the fallback for files whose dialect is NOT proven by
+/// indentation: there `//` after code is the operator only while `(`/`[` are
+/// unclosed at that column, i.e. the parser is mid-expression. `{` is
+/// deliberately not part of the depth — a brace-style `if x {  // note` must
+/// keep its comment. `depth` is carried across lines (a continuation line of a
+/// multi-line call is still inside it) and clamped at 0, so a stray `)` cannot
+/// make later lines look "closed".
+fn rewrite_floordiv_line(
+    line: &str,
+    in_triple: &mut Option<char>,
+    depth: &mut i32,
+    only_in_brackets: bool,
+) -> String {
     let b = line.as_bytes();
     let mut out = String::with_capacity(line.len() + 16);
     let mut i = 0usize;
@@ -597,6 +638,13 @@ fn rewrite_floordiv_line(line: &str, in_triple: &mut Option<char>) -> String {
             b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
                 if !seen_code {
                     // Comment-only line: keep the comment verbatim.
+                    out.push_str(&line[i..]);
+                    return out;
+                }
+                if only_in_brackets && *depth <= 0 {
+                    // Dialect unproven and the line is not inside an open
+                    // bracket: keep the comment, which also stops us from
+                    // scanning the comment's own text for brackets and quotes.
                     out.push_str(&line[i..]);
                     return out;
                 }
@@ -639,6 +687,13 @@ fn rewrite_floordiv_line(line: &str, in_triple: &mut Option<char>) -> String {
             _ => {
                 if !c.is_ascii_whitespace() {
                     seen_code = true;
+                }
+                // Only `(` and `[`: `{` would make a brace-style
+                // `if x {  // note` look like the inside of an expression.
+                if c == b'(' || c == b'[' {
+                    *depth += 1;
+                } else if c == b')' || c == b']' {
+                    *depth -= 1;
                 }
                 let len = utf8_len(c);
                 out.push_str(&line[i..(i + len).min(b.len())]);
@@ -920,6 +975,57 @@ mod tests {
     fn passthrough_brace_style() {
         let src = "fn main() -> i64 {\n    return 0\n}\n";
         assert_eq!(indent_preprocess(src), Ok(None));
+    }
+
+    #[test]
+    fn flat_floordiv_inside_a_call_is_the_operator() {
+        // Task #51: a flat python file needs no indentation rewrite, so the
+        // dialect cannot be read off `changed` — the open bracket has to be
+        // enough evidence on its own.
+        let out = indent_preprocess("print(7 // 2)\n")
+            .expect("no indent error")
+            .expect("rewritten");
+        assert!(out.contains("floordiv"), "{out}");
+        assert!(!out.contains("//"), "{out}");
+    }
+
+    #[test]
+    fn flat_floordiv_depth_carries_across_a_multiline_call() {
+        let out = indent_preprocess("print(\n    x // 10)\n")
+            .expect("no indent error")
+            .expect("rewritten");
+        assert!(out.contains("x  floordiv  10"), "{out}");
+    }
+
+    #[test]
+    fn flat_brace_style_trailing_comment_is_never_the_operator() {
+        // The shapes the official corpus actually contains (209 of them, all at
+        // bracket depth 0): none may be rewritten.
+        for src in [
+            "fn main() -> i64 {\n    return 1;  // Success\n}\n",
+            "if x {  // note\n    y = 1\n}\n",
+            "let v = f(a)  // SIMD\n",
+        ] {
+            assert_eq!(indent_preprocess(src), Ok(None), "{src}");
+        }
+    }
+
+    #[test]
+    fn flat_url_in_string_or_hash_comment_survives() {
+        for src in [
+            "print(len(\"https://x//y\"))\n",
+            "# see https://x//y\nprint(1)\n",
+        ] {
+            assert_eq!(indent_preprocess(src), Ok(None), "{src}");
+        }
+    }
+
+    #[test]
+    fn flat_floordiv_at_depth_zero_is_still_a_comment() {
+        // OPEN (batch 334): with no open bracket a flat file has no evidence
+        // left to decide on, and python's `t = a // b` is shaped exactly like
+        // brace-style `return 1  // Success`. Pinned so the hole stays visible.
+        assert_eq!(indent_preprocess("t = 7 // 2\nprint(t)\n"), Ok(None));
     }
 
     #[test]
