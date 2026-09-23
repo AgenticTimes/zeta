@@ -145,26 +145,17 @@ impl MacroExpander {
             return Ok(vec![newline_call]);
         }
 
-        let call = if value_args.len() == 1
-            && matches!(
-                &value_args[0],
-                AstNode::Var(_) | AstNode::Lit(_) | AstNode::Call { .. }
-            ) {
-            AstNode::Call {
-                receiver: None,
-                method: "println_i64".to_string(),
-                args: value_args,
-                type_args: Vec::new(),
-                structural: false,
-            }
-        } else {
-            AstNode::Call {
-                receiver: None,
-                method: "println".to_string(),
-                args: value_args,
-                type_args: Vec::new(),
-                structural: false,
-            }
+        // The printer name is NOT chosen here: the frontend has no type
+        // information, and picking `println_i64` by argument *shape* (a
+        // variable, an int literal, a call) sent every string variable and
+        // every float variable to the integer printer (batch 376). `println`
+        // is dispatched by the argument's static type in MIR lowering.
+        let call = AstNode::Call {
+            receiver: None,
+            method: "println".to_string(),
+            args: value_args,
+            type_args: Vec::new(),
+            structural: false,
         };
 
         Ok(vec![AstNode::ExprStmt {

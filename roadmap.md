@@ -14756,3 +14756,40 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 1. 构造子模式匹配 = #38 的新成员。`/tmp/b375/k1.z`（`match t { T::A(v) => v + 1, _ => 100 }`，`t = T::A(7)`，期望 8）退出码 **1**；`k2.z`（`t = T::B`，期望 100）退出码 **1** ⇒ 第一条臂恒被选中、`v` 没绑上。语句位 `if let` 同形：`s1.z`（期望 100）退出码 1、`s2.z`（期望 8）退出码 **192**。`--dump-mir` 给了正证据：`s1` 的 MIR 只有 3 条 `Assign` + 1 条 `Return`，一个 `If` 都没有（`grep -c` = 0）⇒ then 无条件跑、`else_` 整个丢掉。卡点 `gen.rs:2770` 的兜底臂（"复杂模式：只求值 expr，总是跑 then"），更下面是表示层缺件：带载荷的枚举构造出来是不透明句柄 `zeta_platform_obj`（`runtime/py_additions.c:2790`，存 `[name|a|b|c]`），没有任何取 tag / 取载荷的入口。所以只修解析会把"静默丢 91 行"换成"静默错值"，按 handoff 的排序往后放；批次 374 记的 selfhost 剩 91 行的下游正是这一条。
 2. 函数体里的 `static mut`（#36 的 benchmark 357 行）。`/tmp/b375/sm1.z` 实测：W1004（`static` 被当成独立语句）+ W1002（整条 fn 从 `:1` 起被丢），改后仍如此。一行 `tests/unit-tests/benchmark_simd_vs_scalar.z:11` 的 `static mut counter: u64 = 0` 压着 357 行。文法里没有 `static`、AST 里没有 `AstNode::Static`；"只初始化一次"要么加运行时助手（模块全局走 env 表，`src/backend/codegen/runtime_decls_core.rs:51-52` 只有 `zeta_env_get`/`zeta_env_set`，没有 `zeta_env_has`），要么把初始化提到模块初始化里 ⇒ 跨解析+AST+MIR+运行时四层，不是一个解析批。
 3. `println!("{}", <字符串变量>)` 打句柄（折进 #45 的打印族）。`v2.z` 打 `4343720384`；`v4.z` 一次给出三档——字面量 `lit` 正常、`let a: str = "annot"` 打 `4301908468`、`fn f(x: str)` 的形参打 `4301908474`；`v5.z` 同一函数里 `println!("{}", msg)` 打 `4364921296` 而 `println!("{}", n)` 打 `3` 正常；同一个 `msg` 走 `print(msg)` 打 `hi`（`v6.z`）⇒ 只有格式串那条路过载选错，MIR 里调用名是 `println_i64_1`，而单参直调的分派（`gen.rs:8156` 一带）会按静态类型选 `println_str`。⇒ 批次 376 候选，夹具已在手。
+
+## 批次 376 —— `println!("{}", x)` 的打印器名字不再在展开期写死（收 #45 第三成员）
+
+### 现象与触发点
+上一节那条候选的根子在展开期：`src/frontend/macro_expand.rs` 把只有一个值参、且**形状**是变量 / 整数面量 / 调用结果的 `println!` 直接展开成对 `println_i64` 的调用（`git log -S` 追到 `13697ac8`，v0.7.0 的占位实现，同段注释自陈 "For now, simple expansion to a function call"）。展开期没有类型信息，于是这三类参数无论什么类型都进整数打印器。改前/改后（改前＝批次 375 落地后的 release 构建；浮点与 str 那两条另用仓内 00:42 的 debug 交叉验过——这条路径 374/375 都没碰，两份构建读数同类）：
+
+| 夹具（`/tmp/b376/`） | 形状 | 改前 | 改后 |
+| --- | --- | --- | --- |
+| `w1.z` | `let t = "direct"` → `println!("{}", t)` | 打地址 `4331907520` | 打 `direct` |
+| `w2.z` | `let a: str = "annot"` | 打 `4303383060` | 打 `annot` |
+| `w2.z` | `fn f(x: str)` 里的形参 | 打 `4303383066` | 打 `param` |
+| `w3.z` | 返回 str 的调用 `w4(s)` | 打 `4307216848` | 打 `from-call` |
+| `w2.z` | `let g = 1.75` → `println!("{}", g)` | 打 **`1`**（浮点被当整数截掉） | 打 `1.750000` |
+| `w2.z` | 整数变量 42、整数面量 7、`show(9)` 调用、`3 * 4`、`println!("{}", "lit")`、`println!("{}", 2.5)`、`println!("plain")`、`println!("E=1+1")` | `42`、`7`、`9`、`12`、`lit`、`2.500000`、`plain`、`E=1+1` | 一字未动 |
+| `d1.z` | `println!("{}", <数组>)`、`println!("{}", <字典>)` | 打 `4299902832`、`4299906560` | 仍打地址（`4311977840`、`4311981568`，值随分配变） ⇒ 本批不动，登记在"边界"第 2 条 |
+
+`let g = 1.75` 打 `1` 是这批最坏的一条：它不打地址，看着像一个合理的整数。
+
+### 定位
+`src/frontend/macro_expand.rs` 的 `expand_println`（改前 :148-168）按形状分叉：`AstNode::Var(_) | AstNode::Lit(_) | AstNode::Call { .. }` 单参 → 名字写死 `println_i64`，其余 → 名字 `println`。`AstNode::Lit` 只装整数（`src/frontend/ast.rs:149`，浮点是 `FloatLit`、字符串是 `StringLit`），所以面量走这条叉恰好没错，错的是变量和调用结果。有类型信息的那处分派本来就在：`src/middle/mir/gen.rs:8156-8171`（单参按 `type_map` 选 `println_str`/`println_f64`/`println`）——字面量那条路能正常打，正是因为它的形状不写死，落到了这里。
+
+### 修复
+`src/frontend/macro_expand.rs`：删掉按形状写死名字的那条叉，单值参统一发 `println`，把选名字交给 MIR 生成期（净 -9 行，只留一条注释说明"名字不在展开期定"）。整数落回 `_ => "println"`，由 codegen 侧的 `println → println_i64` 映射接住（`src/backend/codegen/codegen.rs:2357` 一带），所以整数一档不变。
+
+### 验证
+- 新用例 `tests/python_style/t417_println_format_arg_type.z`：字符串变量、浮点变量、整数变量、二元运算、返回 str 的调用、str 形参六条，`// expect` 六行逐字与实跑输出相同（先跑后写期望，不是先写期望）；套件内 `PASS`。
+- 批次 375 的夹具全部复测：`m1` `hello`、`f1` `1.500000`、`v6` `hi`、`m2` 仍打地址（混型臂，上一批登记未修的那条）、`v1`/`v2`/`v4`/`v5` 里原先打地址的四行现在分别是 `direct`/`annot`/`infer`/`hi`（上一批"边界"第 3 条记的四份夹具正是本批收掉的对象）。
+- 丢行（`tools/truncation_inventory.sh`，release）：3 文件 / 533 行，逐文件一字未动（本批在展开期，不碰解析）。
+- official `compile 194/194`、`compile+link 192/194`（两条 link-only 未动）、诊断 `5 文件/29 行` —— 三项与批次 375 一字相同。
+- 锚点：本批动的是 `src/frontend/macro_expand.rs`（745 → 736 行），漂移集仍是 58 条，与批次 375 收尾时逐字相同；`tools/baselines/abi_anchors.tsv` 与 `docs/ABI.md` 里没有 `macro_expand` 锚点（`grep` 空），`src/middle/mir/gen.rs` 本批未动 ⇒ `:11973` 那条仍对上。但 `macro_expand.rs` 里有 6 处**裸行号**被历史记录引用着，本批之后各减 9：`407→398`、`431→422`、`441→432`、`655→646`、`671→662`、`697→688`。旧号不回改（在册的是当时的读数），对照表就在这里；六个号全部用 `git show HEAD:src/frontend/macro_expand.rs` 的同行内容与改后文件逐一比对过，内容一字相同（不是靠位移推的）。这正是 backlog #52 说的"核对器看不见裸行号"，本批只补对照、不扩工具。
+- 整趟门禁（`tools/run_all.sh`，日志 `/tmp/b376/gate.log`，`gate_rc=1`）：语料 `39/39 = 100%`；python_style `301 通过 / 2 失败 / 4 known-fail / 0 xpass`（失败就是老面孔 `t231`、`t233`，rc=1 只由这两条解释；诊断 `193 行 / 82 文件`）；diff test `match=120 judged=130 rate=92.3% bad_case=0`；jit `ok=172 trap=329 fail=0 timeout=0 segv=0 (total 501，最小 ok=163) GREEN`；knob 23 / swallow 4 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 全部 `FAIL 0`；mbvar `19/0`；comment_drift `0`；clean_checkout `rc=0（3s，rev=a563a886）`。与批次 375 相比只有两处动了数：python_style 通过 `300→301`、jit total `500→501`，两处都是新增的 `t417` 一个文件，下一条单独交代。
+- jit 的 `trap 328 → 329`：多的那一条就是新用例 `t417`，既有用例一条 trap 都没多（total 也从 500 到 501，同一个文件），`ok` 仍是 172、未回退。实拍（`ZETA_JIT`，`/tmp/b376/t417.jit.{out,err}`）：rc=1，stdout 只有第一行 `text`，stderr `error[E4016]: println_f64 has no binding in JIT mode`。原因不是本批写错：JIT 只绑 `pylib/jit_mappings.txt` 列的名字，而那个文件 :66-68 早就自陈"`println_f64` / `print_f64` 故意不在此列：它们只有 C 侧实现，而仓里没有 build.rs（批次 315 根因），Rust 侧无符号可指"。本批把浮点变量从错误的整数打印器移到 `println_f64`，于是把这条已登记的缺口在浮点变量这一档暴露出来——与批次 321 记的"被暴露的缺口"同一形。改前的表现更坏：同一个程序在 JIT 里把 `1.75` 打成 `1`（不打地址、看着像合理整数，正是上面那句），静默错值变成显式 traps 是本批想要的方向。缺口的根（C 侧符号进不了 JIT）在批次 315 那层，不在本批这一格。
+
+### 边界（本批没修的，实拍在册）
+1. #45 的第一、二成员未动，而且现在能给出定位级说法：`expand_println` 在 :131 处把格式串整个剥掉、只把值参传下去 ⇒ 字面量前后缀必丢（`/tmp/b376/m1.z` 改后复测：`A={}`→`1`、`{}B`→`2`、`C={}D={}` 两个值→只打 `1`，与批次 368 记的读数一字相同），而多占位符那条走 `println` 多参、运行期只取第一个。真要修得让展开期产出"字面量段 + 值段"的序列，或者换成一个带格式串的运行时打印函数——比本批这一格大，且要为 #45 第二成员新开契约，本批不做。
+2. `println!("{}", <数组/字典>)` 仍打句柄（`d1.z` 改前改后同档）：容器 repr 那条分派（`gen.rs:8020-8070` 的 `py_json_dumps_vec_typed`/`py_json_dumps_map`）在格式串参数循环里，但只在展开器把值参交下来之后；`Var` 一档现在落 `gen.rs:8156` 的单参分派，那里没有容器档 ⇒ 选 `println`（=i64 打印器）。登记，不混进本批。
+3. `#38 ①` 的混型臂（一臂字符串一臂整数）仍打地址；`#45` 第二成员的多参只打第一个仍如此。

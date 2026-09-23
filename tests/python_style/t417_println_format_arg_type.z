@@ -1,0 +1,42 @@
+// 批次 376：`println!("{}", x)` 的打印器名字写死在展开期（#45 第三成员）。
+// 根因：`src/frontend/macro_expand.rs` 在只有一个值参、且它的**形状**是变量 /
+// 整数面量 / 调用结果时，把调用名写成 `println_i64` —— 展开期没有类型信息，
+// 于是这三类参数无论什么类型都走整数打印器。改前实测（改前的 release 构建）：
+//   `let t = "direct"` → 打地址 `4331907520`
+//   `let a: str = "annot"` → 打 `4303383060`；`fn f(x: str)` 里的形参 → `4303383066`
+//   返回 str 的调用 → `4307216848`
+//   `let g = 1.75` → 打 `1`（浮点被当成整数，这条比地址更像"错值"）
+// 当时能打的只有：整数变量、整数面量、返回整数的调用，以及"形状不在那三种里"的
+// `println!("{}", "字面量")`、`println!("{}", 2.5)`、`println!("{}", 3 * 4)`。
+// 改后：名字交给 MIR 生成期按静态类型选（`src/middle/mir/gen.rs:8156` 一带）。
+// 同族仍未修（本文件不锁，实拍在 backlog #45）：格式串的字面量前后缀被整个丢掉
+// ——`println!("A={}", 1)` 打 `1`、`println!("{}B", 2)` 打 `2`；多占位符只打第一个值
+// ——`println!("C={}D={}", 1, 2)` 打 `1`。改后复测这三条读数一字未变。
+// expect: text
+// expect: 1.750000
+// expect: 42
+// expect: 9
+// expect: called
+// expect: param
+
+fn emit(x: str) -> i64 {
+    println!("{}", x)
+    return 0
+}
+
+fn called() -> str {
+    return "called"
+}
+
+fn main() -> i64 {
+    let s = "text"
+    println!("{}", s)
+    let g = 1.75
+    println!("{}", g)
+    let n = 42
+    println!("{}", n)
+    println!("{}", 2 + 7)
+    println!("{}", called())
+    emit("param")
+    return 0
+}
