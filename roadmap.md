@@ -14509,3 +14509,45 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 1. match 臂补臂（`resolver.rs:3544` 同一个兜底，最小改动，卡点已实拍）。
 2. primezeta 复测：类型注解 for 的循环体已随本批恢复，handoff §4 记的"36 行 + 剩 typed 值 = 0"可能一起消掉，先量再说。
 3. 格式化串丢字面量（#45 新成员）——它是打印族里唯一一个"所有调试打印都会踩"的，越晚修、历史读数越可疑。
+
+## 批次 369 —— 撤回 match 的两处试改：368 把"match 臂里的宏"归错了层，真实卡点是另外三条，都不在宏展开那一层
+
+### 现象（先说 368 哪一句写错了）
+批次 368 在 roadmap（"边界"节第 2 条）和 backlog #36 行里各写了同一句：match 臂里的宏"卡在同一个兜底臂 `resolver.rs:3544`，机制与已修的五个臂完全一样，所以下一批先做 match 臂"。本批照这句话动手，加了两处改动、编译通过，实测：**输出一个字都没变**。所以那句归因是错的。本批把两处改动撤回，并把卡点改对。
+
+### 定位（三条，各自独立，全都在宏展开之后）
+1. **语句位置的 `match` 整条进不了 MIR。** `lower_ast_inner`（`src/middle/mir/gen.rs:1206`）的语句分发里没有 `AstNode::Match` 这一臂，语句一路落到 `:2895` 的 `_ => {}` 被丢弃。实拍：`/tmp/b368t/i.z`（`match n { 2 => println!("two"), _ => println!("other") }` 当语句用）只打 `done`；同一份输入在 `ZETA_STRICT_PARSE=1` 下没有 E1002、行行入树 ⇒ 不是解析层丢的。宏展开的兜底臂在这条的下游，所以 368 那句"补臂就能修"碰不到它。
+2. **`match` 的臂体在所有分支上被提前执行。** `src/middle/mir/gen.rs:10687` 的 `for arm in arms.iter().rev()` 里对臂体调 `lower_expr`，产出的语句直接 push 进当前基本块、在 if-else 链之外 ⇒ 选值对、副作用漏。实拍：`/tmp/b368t/p.z`（`let r = match n { 1 => f1(), 2 => f2(), _ => f1() }`，n=2，f1/f2 各自打印一行）打印 `f1`、`f2`、`f1`（三个臂全跑，按倒序），退出码 2（值是对的）。这条跟宏无关，是 `match` 下推本来就有的错，表达式位置的 `match` 一直在受影响，不需要本批改动就测得到。
+3. **`println!` 展开成两个节点，而一个臂体只有一个表达式槽。** `src/frontend/macro_expand.rs:112`-`:126` 返回 `print_str(文本)` 和 `print_str("\n")` 两个 `Call`；`MatchArm.body` 是 `Box<AstNode>`（`src/frontend/ast.rs:18`-`:25`）⇒ 两个节点放不下。所以本批加的 `Match` 展开臂只在"展开结果恰好 1 个节点"时才替换臂体，`println!` 走不进去；没展开的 `MacroCall` 在表达式位置被换成 `IntLit(0)`（`src/middle/mir/gen.rs:3236`）。写成块体的臂也不出声：`/tmp/b368t/n.z`（`2 => { println!("two") }`）的 MIR 里 `"two"` 这个字符串根本没出现（整份 MIR 只有 `done` 和换行两条 StringLit），块体在表达式位置被下推成了 `zeta_dynarray_new`/`vec_push` 那套收集，语句没跑起来。
+
+### 处置：两处试改全部撤回，本批不改源码
+- 撤的内容：`src/middle/resolver/resolver.rs` 的 `Match` 展开臂（+25 行）、`src/middle/mir/gen.rs:2892` 委托臂里补的 `AstNode::Match`。
+- 撤的理由：前者实测零效果（`i.z`、`l.z`、`n.z` 三处输出一字未变），留着就是无人验证的死代码；后者把语句位置 `match` 从"整条不打"变成"每个臂的副作用都打"（`/tmp/b368t/o.z` 实拍：`other`、`two`、`done`）——按定位 2 那条现状看，这不是修好，是把一种错输出换成另一种。两条都不该进基线。
+- 撤回后的状态核对：`git checkout --` 这两个文件，`git status` 只剩并行会话的 `.ouroboros/work.md`（未动、不暂存）；`cargo build` rc=0；在撤回后的二进制上复测 `i.z`（只打 `done`）、`p.z`（`f1`/`f2`/`f1`，rc=2）⇒ 上面三条是**当前基线的现状**，不是试改造成的。
+
+### 真修的形状（登记，本批不动手）
+把臂体当**语句列表**下进各自的 `If` 分支（分支本来就是语句列表），三条一起收：语句位置的 `match` 进得了 MIR（定位 1）、副作用落进分支之内（定位 2）、多节点宏展开有地方放（定位 3）。这是 `gen.rs:10676` 起那一段的重构，#38（match 结果槽恒 I64）也在同一段，分开做要返工。handoff §5 把这一类排在 P1 之后，且主线批次 301 在 P0+P1 未清前冻结 ⇒ 本批只定位、只登记。
+
+### §4 丢行复测（本批实测，`./tools/truncation_inventory.sh`）
+5 个文件命中，合计 676 行：`benchmark_simd_vs_scalar` 357 + `selfhost` 158 + `quantum_basic` 85 + `advanced_patterns_test` 62 + `test_const_expression` 14。工具报"237 file(s)"，是 `tests/unit-tests` 的 198 个 `.z` 加外部语料 39 个 `.py`（`MIR_CORPUS` 默认指向 `~/source/quant/REasyQuant/strategies`），分母会随那个目录变动，命中表本身不受影响。
+- **`primezeta_usize_test` 从表上消失 ⇒ 清零成立。** 正证据：`tests/unit-tests/primezeta_usize_test.z` 文件在、且 `git ls-files --error-unmatch` 通过（不是被删掉才不报的）。
+- 对比 handoff §4 记的 8 文件 / 712 行 → 现在 5 文件 / 676 行，是批次 367（缩进预处理冒号守卫）+ 368（嵌套块宏、带类型循环变量）合起来的效果，本批没改源码。
+- 尺子说明：该工具默认用 `target/release/zetac`（本仓现存 mtime 09-24 00:32，晚于 368 提交 00:29），而本批未动源码 ⇒ 与 368 基线一致。
+
+### 下一批默认候选
+1. §4 第一项 `test_const_expression`（14 行，卡点=数组类型注解，表上最小的一块）。
+2. match 那一族按"真修的形状"做（定位 1+2+3 一起，连带 #38），需要一整趟门禁。
+
+### 补（同一批）：复跑门禁时量到 368 记错的一处读数——"整条 rc=0"那句是错的
+- 本批只动文档（`git diff --numstat` 里 `src/` 与 `tools/` 为空），但为确认三基线没被动，仍整趟复跑：`/tmp/b369_gate.log`，rc 从 `/tmp/b369_gate.rc` 读 = **1**。
+- 拆开读数：official compile **194/194**、compile+link 193/194（link-only 1 条 `_predict,_train`，已在 368"边界"登记，本步判据只看 compile）；python_style **298 通过 / 2 失败（t231、t233）/ 4 known-fail / 0 xpass**；语料 39/39 解析通过；jit sweep ok=171、fail=0、segv=0；diff 120/130=92.3%、bad_case=0；knob 23、swallow 4、import 22、empty_stmt 68、pysrc 42、cli_semantics 73、ignore_rules 19 断言全 FAIL 0；mbvar 19 脚本违规 0；comment_drift 0；clean_checkout rc=0（rev=1e0bd834，3s）。与 368 那趟 `/tmp/b368_gate3.log` 的 JSON 逐字 diff 只差 `ts` 和 `clean_checkout` 的 `rev`/`secs` ⇒ 基线读数未动。
+- **368 的错处**：其"验证"小节写"全量门禁…整条 rc=0"，而同一趟日志第 5 行就写着 `python_style: 298 passed, 2 failed`。`tools/run_all.sh:575` 是无条件的 `py_fail -ne 0 → rc=1`，脚本里没有给这两条存量红留豁免（`grep -rn "t231" tools/` 零命中）。所以那次不可能是 0，那句读数作废。
+- **正证据（不靠读代码下结论）**：对照跑 `./tools/run_all.sh --skip-python` → rc=**0**（`/tmp/b369_gate_skip_py.rc`）⇒ 除 python_style 这一步外其余各步全绿，rc=1 单由 t231/t233 造成。
+- **该说清的约定（后续批次照此写，别再混）**：门禁判据是三组读数（official compile 全过 / python_style 只红 t231、t233 / 语料 39 全解析），在两条存量红被处理之前 `run_all.sh` 的 rc 恒为 1——批次 353、355、356、361 各自记录的 rc=1 就是这个常态。谁写 rc=0，必须先答一句"python_style 那步是不是被跳过了"。368 那段不回改（历史记录），旧结论→新结论：368"整条 rc=0" → 本批复核"rc=1，且 rc=1 是常态；三组读数与 368 逐字相同"。
+
+### 附：§4 第一块的卡点已经量到最小形状（只是定位，没修）
+`tests/unit-tests/test_const_expression.z` 全文件 17 行、W1002 报"第 4 行起 14 行未解析"，未解析的首文本是 `fn test_array() -> usize {`。三个夹具把这一步分开看（`/tmp/b369p1/`，都用 release 二进制实测）：
+- `a.z`（`let arr: [usize; 10] = [0; 10];`）：无 W1002，运行退出码 7（期望 7）⇒ 字面量长度能解析、能跑。
+- `b.z`（`const MAX: usize = 100;` + `[usize; MAX]`）：无 W1002，运行退出码 7 ⇒ 裸标识符长度能解析、能跑。
+- `c.z`（同 `b.z` 但长度写成 `MAX + 1`）：`[W1002] c.z:2: 3 line(s) …` 首文本 `fn f() -> usize { let arr: [usize; MAX + 1] = [0; MAX + 1];` ⇒ **卡点就是数组长度位不接受表达式**，`MAX + 1` 让整个 `fn` 项被拒、其后顶层项全丢。
+⇒ 下一批的最小修法落在"类型注解里数组长度那一位"的解析（文件在 `src/frontend/parser/` 下，具体函数待定位）。
