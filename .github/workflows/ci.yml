@@ -43,29 +43,13 @@ jobs:
       run: |
         cargo build --release
         echo "zetac built successfully"
-    - name: Compile all zeta_src/ files
-      run: |
-        FAILED=0
-        for f in zeta_src/*.z; do
-          if ./target/release/zetac "$f" 2>/dev/null; then
-            echo "  ✅ $f"
-          else
-            echo "  ❌ $f"
-            FAILED=1
-          fi
-        done
-        exit $FAILED
-    - name: Run known-good tests
-      run: |
-        # Run a few simple test programs to verify JIT works
-        for f in tests/test_hello.z tests/test_values.z tests/test_basic.z; do
-          if [ -f "$f" ]; then
-            OUT=$(./target/release/zetac --jit "$f" 2>&1) && \
-              echo "  ✅ $(basename $f): $OUT" || \
-              echo "  ⚠️ $(basename $f): $OUT"
-          fi
-        done
-        echo "Self-host compilation verified: zeta_src/ compiles cleanly"
+    - name: Compile zeta_src/ (全量 51 个文件，判据在 tools/selfhost_compile.sh)
+      # 批次 347 / backlog #29：原步骤用 `for f in zeta_src/*.z`，而 zeta_src 的 51 个
+      # `.z` 里有 46 个在子目录（middle/ frontend/ runtime/ …）——步骤名写 "all"，
+      # 实际只覆盖顶层 5 个。现在覆盖全部，且已知失败的 4 个逐条钉住所因。
+      run: ./tools/selfhost_compile.sh
+      # 注：JIT 路径的回归判据不在这里，在 baselines job 的 run_all.sh 步骤 4
+      #（tools/jit_sweep.sh）——本 job 的编译一律 `--no-link -o`，不执行被编译的程序。
 
   benchmark:
     runs-on: [self-hosted, galaxy, wsl2, x86-64]
