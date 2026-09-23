@@ -821,6 +821,25 @@ fn parse_tuple_or_paren(input: &str) -> IResult<&str, AstNode> {
             }
         }
     }
+    // 无参闭包 `(|| expr)` / `(|| { … })` —— 括号内没有左操作数，`||` 在这里
+    // 只能是无参闭包的参数栏，不可能是逻辑或。此前这种写法整条语句被静默
+    // 丢弃（integration_all_features / integration_test_program 两个官方文件）。
+    {
+        let t = input.trim_start();
+        if t.starts_with("||") && !t[2..].starts_with('|') {
+            let after_bars = &t[2..];
+            let (after, body) =
+                alt((crate::frontend::parser::stmt::parse_stmt, parse_expr)).parse(after_bars)?;
+            let (after, _) = ws(tag(")")).parse(after)?;
+            return Ok((
+                after,
+                AstNode::Closure {
+                    params: vec![],
+                    body: Box::new(body),
+                },
+            ));
+        }
+    }
     let (input, mut items) = separated_list0(ws(tag(",")), ws(parse_expr)).parse(input)?;
     let (input, trailing_comma) = opt(ws(tag(","))).parse(input)?;
     let (input, _) = ws(tag(")")).parse(input)?;

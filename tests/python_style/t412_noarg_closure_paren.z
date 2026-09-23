@@ -1,0 +1,18 @@
+// 批次 366：无参闭包 `(|| expr)` / `(|| { … })` 此前在括号表达式里解析失败，
+// 整条语句被静默丢弃（integration_all_features 丢 58 行、
+// integration_test_program 丢 16 行）。修复：括号内遇到 `||`（无左操作数，
+// 不可能是逻辑或）按无参闭包解析。本测试锁"解析完整"：文件尾部的语句
+// 必须执行到（修复前它们被整段丢弃）。
+// expect: start
+// expect: end
+
+fn main() -> i64 {
+    let f = (|| 42)
+    println!("start")
+    let g = (|| {
+        println!("in closure")
+        7
+    })
+    println!("end")
+    return 0
+}

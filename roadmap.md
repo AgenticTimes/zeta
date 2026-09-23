@@ -14442,3 +14442,29 @@ minimal_compiler 缺的 13 个符号需要字符、迭代器（.iter().enumerate
 
 ### 下一步
 回主线批次 301（0 成交根因 → universe/parquet 分歧 → final_value 对齐），带着新得的字符串/Result 运行时能力。
+
+## 批次 366 —— 无参闭包 `(|| …)` 解析修复：integration 两文件丢行清零；#36 全量复测
+
+### 实测重测（#36 剩余 8 文件，用修复后的解析器）
+minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**清零**（362-365 的修复连带生效），实际只剩 8 个文件 712 行（旧口径 789）。逐文件卡点（ZETA_PARSE_TRACE 探针采集）：
+
+| 文件 | 丢行 | 卡点构造 |
+|---|---|---|
+| benchmark_simd_vs_scalar | 357 | 函数体内 `static mut counter: u64 = 0` |
+| selfhost | 158 | `impl Parser for ZetaParser`（trait impl）+ trait 签名声明 + concept + match 字符模式 |
+| quantum_basic | 85 | `use std::quantum::algorithms::ShorsAlgorithm;` 深路径 use |
+| advanced_patterns_test | 62 | `Some(x @ 1) | Some(x @ 2)` @绑定 + or 模式 |
+| primezeta_usize_test | 36 | 预处理器把 `for i: usize` 的类型注解冒号当块起始，插了错括号 |
+| test_const_expression | 14 | `let arr: [usize; MAX + 1]` 数组类型注解 |
+| integration_all_features / integration_test_program | 58+16 → **0** | 本批修复，见下 |
+
+### 本批修复
+括号表达式解析器（parse_tuple_or_paren）加无参闭包分支：括号内遇到 `||`（没有左操作数，不可能是逻辑或）按无参闭包解析。此前 `(|| 42);` / `(|| { … });` 整条语句被静默丢弃。
+
+### 验证
+- 两个目标文件丢行 58/16 → **0/0**；#36 总量 **1,019+ → 712 行**。
+- python_style **296 passed** / 2 failed（存量）· 语料 39/39。新增回归 t412（锁"文件尾部语句执行到"，防解析截断回潮）。
+- 已知未解（本批不碰）：闭包变量直接调用 `f()` 的运行期行为——闭包作为值的表示未接，归 #42 后续/轴 F。
+
+### 下一步
+#36 剩余按性价比排序：primezeta（36 行，预处理冒号规则加词边界判断）→ test_const_expression（14 行，数组类型注解）→ quantum_basic（85 行，use 深路径）→ benchmark（357 行，static mut 全局语义）→ advanced_patterns（62 行，@模式）→ selfhost（158 行，trait impl + concept，最大也是最靠近自举的）。
