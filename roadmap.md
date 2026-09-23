@@ -14323,3 +14323,24 @@ rc=**1**，ok 33 / FAIL **6**，**6 条全在 G 翼里**（G1 消失、G2 两条
 ### 一句话
 
 授权落地：两个诊断宏各去掉一次偷偷补前缀，19 个发射点（8 个 warning + 11 个 error，**站点普查 19/19 全都自带前缀**）从此发出的码与注册表逐字同形；旧写法 vs 新写法用 `rustc` 实跑对照钉死（`WW0001`→`W0001`、`EE4001`→`E4001`），门禁 15 步读数逐字未变、锚点零漂移 —— 但要说清：这批修的是"一触发必错"，语料里这 19 个点一条都没触发，所以实拍那一格仍欠着；同时量到 `borrow_enhanced` 从未接线（`callers` 无边 + 全仓只有 `pub mod` 一处），E 侧那 2 组名实错位因此要先裁决删还是接。
+
+## 批次 362 —— self 开头的标识符被路径关键字截断（minimal_compiler 丢行的根因）
+
+### 现象
+minimal_compiler.z 仍丢 230 行（解析停在 :572 的 fn main 内部）。15 个可疑构造逐个做最小复现全部能解析，说明不是单个语法缺口。
+
+### 定位
+新增解析器探针（stmt.rs，`ZETA_PARSE_TRACE=1` 时报告块内哪条语句解析失败，环境变量门控、不改行为）。探针指出卡住的语句从 `(self_compile_test);` 开始——前一条 let 的初始化只吃到了 `compile_zeta_to_zeta`，没吃到调用括号。再往下对比：`foo(self_compile_test)` 失败而 `foo(abc_test)`、`foo(s_t)` 都能过。根因：**parser.rs 的 parse_path_segment 里 self/super/crate 三个关键字用裸 tag 匹配、排在 parse_ident 之前、没有词边界检查**——`self_compile_test` 被切成 `self` + `_compile_test`，实参列表解析失败，整个 fn main 及其后内容全部丢弃。
+
+### 修复
+- parser.rs：新增 path_keyword 辅助，tag 匹配后检查下一个字符，是字母/数字/下划线就回退改走 parse_ident。
+- stmt.rs：ZETA_PARSE_TRACE 探针保留（本次定位全靠它，后续排查截断问题复用）。
+- 新增回归 tests/python_style/t408_self_prefix_ident.z（git add -f）。
+
+### 验证
+- minimal_compiler.z：W1002 **0 次**（修复前 230 行）。
+- 三基线：official **194/194**（compile+link 191/194，3 个缺运行时绑定是存量=任务 #42）· python_style **292 passed, 2 failed**（存量 t231/t233，含新增 t408）· 语料 **39/39**。
+- #36 余量：minimal_compiler 清零（-230 行），余 8 文件 / 约 789 行（大头 benchmark_simd_vs_scalar 357 行 `static mut` 局部）。
+
+### 下一步
+#42 std 方法绑定（`_to_string` 第一优先）——它同时是 bootstrap_validation_test / minimal_compiler / test_suite 三个文件现在链接失败的原因；以及 #36 余量的 `static mut`。

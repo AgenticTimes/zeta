@@ -1,0 +1,23 @@
+// 批次 362：self 开头的标识符（如 self_compile_test）在表达式里曾被路径关键字
+// self 无词边界截断——foo(self_compile_test) 整条调用解析失败，其后所有语句
+// 被静默丢弃（W1002；官方 minimal_compiler.z 因此丢 230 行）。
+// 修复：路径关键字 self/super/crate 加词边界检查，self 开头的普通标识符
+// 回落到 parse_ident。
+// expect: 10
+// expect: 14
+// expect: 16
+
+fn make(x: i64) -> i64 {
+    return x * 2
+}
+
+fn main() -> i64 {
+    let self_compile_test = 5
+    let self_compiled = make(self_compile_test)
+    println!("{}", self_compiled)
+    let self_total = self_compiled + 4
+    println!("{}", self_total)
+    let self_msg = "self_compiled_ok"
+    println!("{}", self_msg.len())
+    return 0
+}
