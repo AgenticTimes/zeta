@@ -39,7 +39,7 @@ for a in "$@"; do
     esac
 done
 
-[ -x "$ZETAC" ] || { echo "需要 $ZETAC（先 cargo build --release -p zetac）" >&2; exit 2; }
+[ -x "$ZETAC" ] || { echo "需要 ${ZETAC}（先 cargo build --release -p zetac）" >&2; exit 2; }
 
 INC=(-I/opt/homebrew/include -I"$ROOT/runtime")
 # 必须用**和 zetac 链接器同一个** clang 编译插桩对象：zetac 走 `gcc`（Apple clang 17），

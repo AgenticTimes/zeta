@@ -119,7 +119,7 @@ trunc_line=$(timeout 180 "$ZETAC" --dump-mir "$real" -o "$TMP/r.o" 2>&1 >/dev/nu
 if [[ -z "$trunc_line" ]]; then
   echo "  ok   该档已无 W1002（本批之后又有人修掉了 fn main 的形状）"
 elif [[ "$trunc_line" -ge 8 ]]; then
-  echo "  ok   截断点在 :$trunc_line（≥8：import 那 4 行已被完整认领，剩下的另案）"
+  echo "  ok   截断点在 :${trunc_line}（≥8：import 那 4 行已被完整认领，剩下的另案）"
 else
   echo "  FAIL 截断点退回 :$trunc_line —— import 的尾巴又开始吃文件了"; rc=1
 fi

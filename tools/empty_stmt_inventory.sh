@@ -65,9 +65,9 @@ want() { if [[ "$2" == "$3" ]]; then echo "  ok   $1 → ${3:-（无诊断）}";
 # pair 名字 不加;的源码 加裸;的源码 —— 一次上三条断言（中立 + 两版截断证据）
 pair() {  # $1=说明 $2=不加 ; 的源码 $3=加裸 ; 的源码 $4=夹具名前缀
   fx "${4}_no" "$2"; fx "${4}_yes" "$3"
-  same "中立翼：$1（加/不加逐字节同一份 MIR）" "$TMP/${4}_no.z" "$TMP/${4}_yes.z"
-  kept "截断翼：$1（加了 ; 尾巴仍在）"         "$TMP/${4}_yes.z"
-  kept "截断翼：$1（参照版尾巴也在）"          "$TMP/${4}_no.z"
+  same "中立翼：${1}（加/不加逐字节同一份 MIR）" "$TMP/${4}_no.z" "$TMP/${4}_yes.z"
+  kept "截断翼：${1}（加了 ; 尾巴仍在）"         "$TMP/${4}_yes.z"
+  kept "截断翼：${1}（参照版尾巴也在）"          "$TMP/${4}_no.z"
 }
 
 echo "== A 翼：顶层裸 ; 的 13 个位置 =="
@@ -107,7 +107,7 @@ for n in a_first a_import a_use a_expr a_mod b_head; do
     echo "  FAIL $n —— 两路 MIR 不同：$(diff <(rmir "$f") <(mir "$f") | head -4 | tr '\n' ' ')"; rc=1; continue
   fi
   d="$(ZETA_PARSE_RECOVER=1 "$ZETAC" --dump-mir "$f" -o "$TMP/o.o" 2>&1 >/dev/null | grep -oE 'W100[0-9]' | sort -u | tr '\n' ',')"
-  want "两路同 MIR 且恢复路径不出声（$n）" "" "$d"
+  want "两路同 MIR 且恢复路径不出声（${n}）" "" "$d"
 done
 
 echo "== D 翼：负控制 —— 接受空项不等于放宽吞词判据 =="

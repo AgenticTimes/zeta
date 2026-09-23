@@ -49,7 +49,7 @@ print(f())
 EOF
 
 want() { # $1=描述 $2=期望 $3=实际
-  if [[ "$2" == "$3" ]]; then echo "  ok   $1 → $3"; else echo "  FAIL $1 → 期望 $2，实得 $3"; rc=1; fi
+  if [[ "$2" == "$3" ]]; then echo "  ok   $1 → $3"; else echo "  FAIL $1 → 期望 ${2}，实得 $3"; rc=1; fi
 }
 # sig <env赋值|''> <文件> → 该程序在这组旋钮下的诊断文本
 sig() {
@@ -101,7 +101,7 @@ want 'ZETA_* 旋钮侧残留 is_ok 站点' 0 \
   "$(grep -rn 'env::var("ZETA_[A-Z_]*")\.is_ok()' src/ | wc -l | tr -d ' ')"
 
 if [[ "${1:-}" == --assert-only ]]; then
-  echo "knob_probe: A 段 rc=$rc（B 段未跑）"; exit $rc
+  echo "knob_probe: A 段 rc=${rc}（B 段未跑）"; exit $rc
 fi
 
 # ---- B) 恢复态对 official 的退出码影响 ------------------------------------
@@ -122,5 +122,5 @@ echo "  开态 rc 分布: $(awk '{print $2}' "$TMP/on.txt"  | sort | uniq -c | t
 echo "  0→非0（恢复引入的失败，默认打开前必须逐个消化）: $(awk '$2==0&&$3!=0' "$TMP/j.txt" | wc -l | tr -d ' ')"
 awk '$2==0&&$3!=0 {print "    " $1}' "$TMP/j.txt"
 echo "  非0→0（恢复修好的）: $(awk '$2!=0&&$3==0' "$TMP/j.txt" | wc -l | tr -d ' ')"
-echo "knob_probe: A 段 rc=$rc（B 段只读数，不参与判定）"
+echo "knob_probe: A 段 rc=${rc}（B 段只读数，不参与判定）"
 exit $rc

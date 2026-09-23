@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/run_all.sh — Q4 (advice.md): one command → three baseline numbers as JSON.
-# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import] [--skip-empty] [--skip-clean] [--skip-pysrc] [--skip-sem]
+# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import] [--skip-empty] [--skip-clean] [--skip-pysrc] [--skip-sem] [--skip-ignore] [--skip-mbvar]
 # Exit 0 if all enabled suites pass their green criteria; else 1.
 set -euo pipefail
 
@@ -22,6 +22,8 @@ SKIP_EMPTY=0
 SKIP_CLEAN=0
 SKIP_PYSRC=0
 SKIP_SEM=0
+SKIP_IGNORE=0
+SKIP_MBVAR=0
 
 for a in "$@"; do
   case "$a" in
@@ -38,6 +40,8 @@ for a in "$@"; do
     --skip-clean) SKIP_CLEAN=1 ;;
     --skip-pysrc) SKIP_PYSRC=1 ;;
     --skip-sem) SKIP_SEM=1 ;;
+    --skip-ignore) SKIP_IGNORE=1 ;;
+    --skip-mbvar) SKIP_MBVAR=1 ;;
     -h|--help)
       sed -n '2,6p' "$0"
       exit 0
@@ -238,7 +242,7 @@ if [[ $SKIP_KNOB -eq 0 ]]; then
   knob_failed=$(grep -c '  FAIL ' "$knob_log" || true); knob_failed=${knob_failed:-0}
   knob_checked=$(grep -cE '  (ok|FAIL|skip) ' "$knob_log" || true); knob_checked=${knob_checked:-0}
   if [[ $JSON_ONLY -eq 0 ]]; then
-    echo "knob: ${knob_checked} 条断言，FAIL ${knob_failed}（rc=$knob_rc）"
+    echo "knob: ${knob_checked} 条断言，FAIL ${knob_failed}（rc=${knob_rc}）"
   fi
   if [[ $knob_rc -ne 0 ]]; then
     tail -30 "$knob_log" >&2
@@ -261,7 +265,7 @@ if [[ $SKIP_SWALLOW -eq 0 ]]; then
   swallow_failed=$(grep -c '  FAIL ' "$swallow_log" || true); swallow_failed=${swallow_failed:-0}
   swallow_checked=$(grep -cE '  (ok|FAIL) ' "$swallow_log" || true); swallow_checked=${swallow_checked:-0}
   if [[ $JSON_ONLY -eq 0 ]]; then
-    echo "swallow: ${swallow_checked} 条断言，FAIL ${swallow_failed}（rc=$swallow_rc）"
+    echo "swallow: ${swallow_checked} 条断言，FAIL ${swallow_failed}（rc=${swallow_rc}）"
   fi
   if [[ $swallow_rc -ne 0 ]]; then
     tail -30 "$swallow_log" >&2
@@ -283,7 +287,7 @@ if [[ $SKIP_IMPORT -eq 0 ]]; then
   import_failed=$(grep -c '  FAIL ' "$import_log" || true); import_failed=${import_failed:-0}
   import_checked=$(grep -cE '  (ok|FAIL) ' "$import_log" || true); import_checked=${import_checked:-0}
   if [[ $JSON_ONLY -eq 0 ]]; then
-    echo "import: ${import_checked} 条断言，FAIL ${import_failed}（rc=$import_rc）"
+    echo "import: ${import_checked} 条断言，FAIL ${import_failed}（rc=${import_rc}）"
   fi
   if [[ $import_rc -ne 0 ]]; then
     tail -30 "$import_log" >&2
@@ -306,7 +310,7 @@ if [[ $SKIP_EMPTY -eq 0 ]]; then
   empty_failed=$(grep -c '  FAIL ' "$empty_log" || true); empty_failed=${empty_failed:-0}
   empty_checked=$(grep -cE '  (ok|FAIL) ' "$empty_log" || true); empty_checked=${empty_checked:-0}
   if [[ $JSON_ONLY -eq 0 ]]; then
-    echo "empty_stmt: ${empty_checked} 条断言，FAIL ${empty_failed}（rc=$empty_rc）"
+    echo "empty_stmt: ${empty_checked} 条断言，FAIL ${empty_failed}（rc=${empty_rc}）"
   fi
   if [[ $empty_rc -ne 0 ]]; then
     tail -30 "$empty_log" >&2
@@ -330,7 +334,7 @@ if [[ $SKIP_CLEAN -eq 0 ]]; then
   clean_log=$(mktemp)
   case "$WT" in
     /*) ;;
-    *) echo "clean_checkout: ZETA_CLEAN_WT 必须是绝对路径（当前：$WT）" >&2; clean_rc=99 ;;
+    *) echo "clean_checkout: ZETA_CLEAN_WT 必须是绝对路径（当前：${WT}）" >&2; clean_rc=99 ;;
   esac
   if [[ $clean_rc -eq 0 ]]; then
     case "$WT/" in
@@ -369,7 +373,7 @@ if [[ $SKIP_CLEAN -eq 0 ]]; then
     clean_secs=$(( $(date +%s) - t0 ))
   fi
   if [[ $JSON_ONLY -eq 0 ]]; then
-    echo "clean_checkout: rc=$clean_rc（${clean_secs}s，rev=${clean_rev:0:8}，worktree=$WT）"
+    echo "clean_checkout: rc=${clean_rc}（${clean_secs}s，rev=${clean_rev:0:8}，worktree=${WT}）"
   fi
   if [[ $clean_rc -ne 0 ]]; then
     # cargo 的根因在**开头**（后面全是它引发的 E0282 级联），所以这里先头后尾，不像
@@ -395,7 +399,7 @@ if [[ $SKIP_PYSRC -eq 0 ]]; then
   pysrc_failed=$(grep -c '  FAIL ' "$pysrc_log" || true); pysrc_failed=${pysrc_failed:-0}
   pysrc_checked=$(grep -cE '  (ok|FAIL) ' "$pysrc_log" || true); pysrc_checked=${pysrc_checked:-0}
   if [[ $JSON_ONLY -eq 0 ]]; then
-    echo "pysrc: ${pysrc_checked} 条断言，FAIL ${pysrc_failed}（rc=$pysrc_rc）"
+    echo "pysrc: ${pysrc_checked} 条断言，FAIL ${pysrc_failed}（rc=${pysrc_rc}）"
   fi
   if [[ $pysrc_rc -ne 0 ]]; then
     tail -30 "$pysrc_log" >&2
@@ -418,12 +422,62 @@ if [[ $SKIP_SEM -eq 0 ]]; then
   sem_failed=$(grep -c '  FAIL ' "$sem_log" || true); sem_failed=${sem_failed:-0}
   sem_checked=$(grep -cE '  (ok|FAIL) ' "$sem_log" || true); sem_checked=${sem_checked:-0}
   if [[ $JSON_ONLY -eq 0 ]]; then
-    echo "cli_semantics: ${sem_checked} 条断言，FAIL ${sem_failed}（rc=$sem_rc）"
+    echo "cli_semantics: ${sem_checked} 条断言，FAIL ${sem_failed}（rc=${sem_rc}）"
   fi
   if [[ $sem_rc -ne 0 ]]; then
     tail -30 "$sem_log" >&2
   fi
   rm -f "$sem_log"
+fi
+
+# ── 13) 忽略规则表不许再吞手写源（批次 346）──
+# 批次 345 清了 `.gitignore` 里的 7 个 NUL（含 NUL 的文件被 git 判成二进制 ⇒ 此后每次
+# 规则改动在 review 里都是一行 "Binary files differ"），批次 346 把 10 条裸前缀规则
+# （`test_*` / `zeta_*` / `simple_*` / 裸 `*.z` …—— 不带斜杠的规则连目录名都匹配）
+# 收窄成根锚定或 `/build/**`，于是压在规则底下的已跟踪源文件从 290 个降到 28 个。
+# 本步骤钉四翼：规则表必须是文本、手写源树必须不被正向规则命中、产物与根级 scratch
+# 必须仍被忽略、清单外的已跟踪文件数必须为 0。判据在 tools/ignore_rule_inventory.sh
+# 内部，这里只认退出码。
+ignore_rc=0; ignore_failed=0; ignore_checked=0
+if [[ $SKIP_IGNORE -eq 0 ]]; then
+  ignore_log=$(mktemp)
+  set +e
+  "$ROOT/tools/ignore_rule_inventory.sh" >"$ignore_log" 2>&1
+  ignore_rc=$?
+  set -e
+  ignore_failed=$(grep -c '  FAIL ' "$ignore_log" || true); ignore_failed=${ignore_failed:-0}
+  ignore_checked=$(grep -cE '  (ok|FAIL) ' "$ignore_log" || true); ignore_checked=${ignore_checked:-0}
+  if [[ $JSON_ONLY -eq 0 ]]; then
+    echo "ignore_rules: ${ignore_checked} 条断言，FAIL ${ignore_failed}（rc=${ignore_rc}）"
+  fi
+  if [[ $ignore_rc -ne 0 ]]; then
+    tail -30 "$ignore_log" >&2
+  fi
+  rm -f "$ignore_log"
+fi
+
+# ── 14) 脚本里的 `$VAR` 不许紧跟多字节字符（批次 346）──
+# 实测缺陷：bash 3.2 把 `$p（…` 里多字节字符的首字节并进变量名（实得 `p\xef`），
+# `set -u` 当场报 `line N: p?: unbound variable` 并**杀掉整个脚本**。批次 346 前的
+# 步骤 13 就死在这一行上——"整步崩掉"与"整步通过"在汇总里都只剩一句 rc，看不出来。
+# 全仓实测 40 处、10 个脚本；中文文案 + `set -u` 是本仓默认风格 ⇒ 必然复发。
+# 判据在 tools/mbvar_lint.sh 内部（注释与单引号字面量不算），这里只认退出码。
+mbvar_rc=0; mbvar_failed=0; mbvar_checked=0
+if [[ $SKIP_MBVAR -eq 0 ]]; then
+  mbvar_log=$(mktemp)
+  set +e
+  "$ROOT/tools/mbvar_lint.sh" >"$mbvar_log" 2>&1
+  mbvar_rc=$?
+  set -e
+  mbvar_failed=$(grep -c '  FAIL ' "$mbvar_log" || true); mbvar_failed=${mbvar_failed:-0}
+  mbvar_checked=$(grep -cE '^  (ok|FAIL) ' "$mbvar_log" || true); mbvar_checked=${mbvar_checked:-0}
+  if [[ $JSON_ONLY -eq 0 ]]; then
+    echo "mbvar: ${mbvar_checked} 个脚本，违规 ${mbvar_failed}（rc=${mbvar_rc}）"
+  fi
+  if [[ $mbvar_rc -ne 0 ]]; then
+    tail -30 "$mbvar_log" >&2
+  fi
+  rm -f "$mbvar_log"
 fi
 
 # ── JSON summary (single source of truth) ──
@@ -454,6 +508,10 @@ doc = {
             "rc": $pysrc_rc, "skipped": $SKIP_PYSRC},
   "cli_semantics": {"checked": $sem_checked, "failed": $sem_failed,
                     "rc": $sem_rc, "skipped": $SKIP_SEM},
+  "ignore_rules": {"checked": $ignore_checked, "failed": $ignore_failed,
+                   "rc": $ignore_rc, "skipped": $SKIP_IGNORE},
+  "mbvar": {"checked": $mbvar_checked, "failed": $mbvar_failed,
+            "rc": $mbvar_rc, "skipped": $SKIP_MBVAR},
   "clean_checkout": {"rc": $clean_rc, "secs": $clean_secs, "rev": "${clean_rev:0:8}",
                      "skipped": $SKIP_CLEAN},
   # 只出声、不参与退出码（附 B#9 的护栏：判定看运行期 stdout，告警不改判定）
@@ -501,6 +559,10 @@ if [[ $SKIP_EMPTY -eq 0 && $empty_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_PYSRC -eq 0 && $pysrc_rc -ne 0 ]]; then rc=1; fi
 # cli_semantics: 判据在 tools/cli_semantics_check.sh 内部（三翼），这里只认退出码。
 if [[ $SKIP_SEM -eq 0 && $sem_rc -ne 0 ]]; then rc=1; fi
+# ignore_rules: 判据在 tools/ignore_rule_inventory.sh 内部（四翼），这里只认退出码。
+if [[ $SKIP_IGNORE -eq 0 && $ignore_rc -ne 0 ]]; then rc=1; fi
+# mbvar: 判据在 tools/mbvar_lint.sh 内部（注释与单引号字面量不计），这里只认退出码。
+if [[ $SKIP_MBVAR -eq 0 && $mbvar_rc -ne 0 ]]; then rc=1; fi
 # clean_checkout: 判据在步骤 10 内部（rc=0 才算"检出即可编译"）；93~99 是选址/登记/提交解析
 # 本身不合法，同样判红——静默跳过等于这一步不存在。
 if [[ $SKIP_CLEAN -eq 0 && $clean_rc -ne 0 ]]; then rc=1; fi

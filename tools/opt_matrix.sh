@@ -64,11 +64,11 @@ echo "----------------------------------------"
 for lv in $LEVELS; do
     [ "$lv" = "$first" ] && continue
     if ! cmp -s "$WORK/$first.verdicts" "$WORK/$lv.verdicts"; then
-        echo "差异 $first vs $lv："
+        echo "差异 $first vs ${lv}："
         diff "$WORK/$first.verdicts" "$WORK/$lv.verdicts" | grep -E '^[<>]' | sort -k2
         flips=$((flips + $(diff "$WORK/$first.verdicts" "$WORK/$lv.verdicts" | grep -cE '^[<>]')))
     else
-        echo "$first == $lv（$(wc -l < "$WORK/$lv.verdicts" | tr -d ' ') 个用例判定逐项相同）"
+        echo "$first == ${lv}（$(wc -l < "$WORK/$lv.verdicts" | tr -d ' ') 个用例判定逐项相同）"
     fi
 done
 echo "----------------------------------------"

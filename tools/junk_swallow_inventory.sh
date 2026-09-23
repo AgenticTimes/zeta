@@ -55,7 +55,7 @@ print(f())
 EOF
 
 want() { # $1=描述 $2=期望 $3=实际
-  if [[ "$2" == "$3" ]]; then echo "  ok   $1 → $3"; else echo "  FAIL $1 → 期望 $2，实得 $3"; rc=1; fi
+  if [[ "$2" == "$3" ]]; then echo "  ok   $1 → $3"; else echo "  FAIL $1 → 期望 ${2}，实得 $3"; rc=1; fi
 }
 hits() { "$ZETAC" "$1" -o "$TMP/o.o" 2>&1 | grep -c 'W1004'; }
 
@@ -68,7 +68,7 @@ got=$("$ZETAC" "$TMP/swallow.z" 2>/dev/null | grep -v 'clang:' | head -1)
 want "吞词后语句仍按'剩下部分'执行" 7 "$got"
 
 if [[ "${1:-}" != --full ]]; then
-  echo "junk_swallow: 夹具 rc=$rc（--full 才有全语料计数）"; exit $rc
+  echo "junk_swallow: 夹具 rc=${rc}（--full 才有全语料计数）"; exit $rc
 fi
 
 echo "== 全语料 W1004 计数（读数；已知真阳性见 roadmap 批次 337）"
@@ -85,5 +85,5 @@ while IFS= read -r f; do
   [[ "$n" -gt 0 ]] && printf '  %-52s %s\n' "${f#"$ROOT"/}" "$n"
 done < "$TMP/files.txt"
 echo "  合计 $total 处 / $(wc -l < "$TMP/files.txt" | tr -d ' ') 文件"
-echo "junk_swallow: 夹具 rc=$rc（全语料只读数，不参与判定）"
+echo "junk_swallow: 夹具 rc=${rc}（全语料只读数，不参与判定）"
 exit $rc

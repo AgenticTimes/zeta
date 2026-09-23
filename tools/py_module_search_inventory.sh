@@ -28,7 +28,7 @@
 #           级数与实际一致（喊的是"越了几级"，不是一个布尔）；
 #   A2 翼 —— 边界：5 级是 cap 内最深一档 ⇒ 仍能链接出 `tag`；4 级不喊（B 翼）之外，
 #           本翼只钉"级数最大那档确实解析到了"，防止把 cap 读成"4 级"；
-#   B 翼 —— 不该喊的一个都不喊：同目录（0 级）、子包、$ZETA_PYLIB、仓库 `pylib` 相对基；
+#   B 翼 —— 不该喊的一个都不喊：同目录（0 级）、子包、${ZETA_PYLIB}、仓库 `pylib` 相对基；
 #   C 翼 —— 近优先且**只喊实际用的那个基**：同目录与祖先各一份 ⇒ 取同目录、0 条；
 #           祖先 3 级与 5 级各一份 ⇒ 取 3 级、恰好 1 条且级数是 3；
 #   D 翼 —— 负控制：判据不许被顺手放宽。候选在 cap 之外（6 级）⇒ **不该**喊 W1005
@@ -60,7 +60,7 @@ mkdir -p "$CH"
 # 写入前先建父目录：`> 不存在的路径` 只会留下一条 shell 报错和一个空断言（见文件头坑 1）。
 mkmod()  { mkdir -p "$(dirname "$2")"; printf 'def tag() -> str:\n    return "%s"\n' "$1" > "$2"; }
 mksrc()  { mkdir -p "$(dirname "$2")"; printf '%b' "$3" > "$2"; }
-# 每档一个主文件，import 的模块名 = $1（本档唯一候选所在的名字）。
+# 每档一个主文件，import 的模块名 = ${1}（本档唯一候选所在的名字）。
 mkmain() { mksrc m "$CH/main_$1.z" "from $2 import tag\nprint(tag())\n"; }
 
 # $1=要编译的 .z，$2..=该次编译的 env 赋值（形如 ZETA_PYLIB=...）
@@ -77,7 +77,7 @@ expect() {
   if [[ "$2" != "$n" ]]; then echo "  FAIL $1 —— 期望 $2 条，实得 $n 条"; dump_err; rc=1; return; fi
   if [[ -z "$(resolved)" ]]; then
     echo "  FAIL $1 —— 条数对上了但根本没解析成功（空断言，不是'不该喊'）"; dump_err; rc=1; return; fi
-  echo "  ok   $1（W1005=$n）"
+  echo "  ok   ${1}（W1005=${n}）"
   echo "         $(resolved)"
 }
 # 只用于 D 翼：这次**就是要它解析不到**。$3=解析不到时本该出现的既有诊断。
@@ -87,8 +87,8 @@ expect_noresolution() {
   if grep -q 'imported module' "$TMP/err"; then
     echo "  FAIL $1 —— 它居然解析成功了，这一档没测到 cap 之外"; dump_err; rc=1; return; fi
   if ! grep -q "$3" "$TMP/err"; then
-    echo "  FAIL $1 —— 解析不到时的既有路径（$3）不见了"; dump_err; rc=1; return; fi
-  echo "  ok   $1（W1005=$n，且仍走 $3 退化路径）"
+    echo "  FAIL $1 —— 解析不到时的既有路径（${3}）不见了"; dump_err; rc=1; return; fi
+  echo "  ok   ${1}（W1005=${n}，且仍走 $3 退化路径）"
 }
 # $1=说明 $2=期望级数串（wlevel 输出，含尾逗号）
 want_level() {
@@ -176,7 +176,7 @@ expect "一次编译两条 import ⇒ 只有越界那条喊" 1
   || { echo "  FAIL zzdmix 没被点名"; rc=1; }
 
 echo "== F 翼：危害实锤——祖先那份同名文件压过库面基 =="
-# 盘据 1 的形状：从 tests/python_style/ 出发 rank 4 就是 $HOME，而相对基 `pylib` 排在
+# 盘据 1 的形状：从 tests/python_style/ 出发 rank 4 就是 ${HOME}，而相对基 `pylib` 排在
 # 祖先之后（实测 B 翼：numpy 平时落在 pylib/numpy.z）。⇒ 家目录里一个同名 .z 顶掉库面。
 # 这里在 mktemp 树里复刻"祖先基 vs 库面基"的先后，不把文件往 $HOME 里放。
 mksrc m "$CH/main_shadow.z" 'from numpy import tag\nprint(tag())\n'
@@ -200,7 +200,7 @@ for f in $(grep -lE "^(from|import) [A-Za-z_]" tests/python_style/*.z tests/offi
   files=$((files + 1))
   n=$("$ZETAC" --dump-mir "$f" -o "$TMP/w.o" 2>&1 >/dev/null | grep -c '\[W1005\]' || true)
   total=$((total + ${n:-0}))
-  [[ "${n:-0}" != 0 ]] && echo "  越界：$f（$n 条）"
+  [[ "${n:-0}" != 0 ]] && echo "  越界：${f}（$n 条）"
 done
 echo "  含 import 的语料文件 $files 个，W1005 合计 $total 条"
 if [[ "$total" != 0 ]]; then

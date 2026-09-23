@@ -110,8 +110,8 @@ runtime_lib/
 doc-workspace/
 
 # Competition benchmark files and build artifacts
-*.ps1
-*.z
+/*.ps1
+/build/**/*.z
 *.c
 # batch 340: `*.c` is a bare extension and it sits in a block whose stated intent is
 # "competition benchmark files and build artifacts". Measured: exactly ONE file in the
@@ -124,11 +124,11 @@ runtime/aliases.inc.c
 *.a
 *.lib
 *.exp
-competition_*
-murphy_*
-zeta_*
-test_*
-# batch 340: `*.z` (above) and this `test_*` are a bare extension / a bare prefix, and
+/competition_*
+/murphy_*
+# batch 346: `zeta_*` was deleted from this line -- it swallowed the zeta_src/ self-host
+/test_*
+# batch 340: `*.z` (above -- since 346 it is `/build/**/*.z`) and this `test_*` (since
 # together they swallowed THREE hand-written sources. Measured by moving two of them
 # aside for a single run: python_style went 291 passed / 2 failed -> 287 / 5, because the
 # compiler loads pylib/numpy.z at runtime (t212/t227/t230 turn red) and t124_ternary
@@ -137,14 +137,14 @@ test_*
 # Artifact side untouched: build/stubs/**/*.z and root-level test_*.z stay ignored.
 !pylib/*.z
 !tests/**/*.z
-build_*
-run_*
+/build_*
+/run_*
 # batch 314: ci.yml "baselines" job runs ./tools/run_all.sh (ci.yml:106), but the
 # `run_*` rule above also swallows it -> the file was never tracked, so that CI step
 # could only ever fail. Re-include this one path; keep `run_*` for root scratch.
 !tools/run_all.sh
-simple_*
-final_*
+/simple_*
+/final_*
 competition/**/*.rs
 competition_submission/**/*.rs
 
@@ -165,3 +165,11 @@ target/
 *.o
 
 .trash/
+
+# ── 本地工具状态（批次 346 补：这些是各 agent 工具的会话/草稿目录，不进仓库）──
+/.omo/
+/.opencode/
+/conversations/
+/scratch/
+/b3ir.log
+/.zcodeignore
