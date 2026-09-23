@@ -991,6 +991,19 @@ fn parse_dict_lit(input: &str) -> IResult<&str, AstNode> {
                 }
             }
             let (rest, _) = ws(tag("}")).parse(rest)?;
+            // PY-A: a macro invocation is not a collection element. `parse_expr`
+            // accepts `println!(…)` as an atom, so `{ println!("x") }` looked like
+            // a one-element set here and the macro never reached the expander —
+            // MIR then skipped it silently and `2 => { println!("arm-two") }`
+            // printed nothing. Failing the whole alternative lets the next one in
+            // `parse_primary_atom` (right below: `parse_block`) read the braces as
+            // a block, which is what `{ …; … }` already means. (batch 379, #38 ④)
+            if items.iter().any(|i| matches!(i, AstNode::MacroCall { .. })) {
+                return Err(nom::Err::Error(NomError::new(
+                    input,
+                    nom::error::ErrorKind::Verify,
+                )));
+            }
             return Ok((rest, AstNode::ArrayLit(items)));
         }
     }

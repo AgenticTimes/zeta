@@ -1,0 +1,52 @@
+// 批次 379：`{ … }` 里只有一条宏调用时，整个花括号被读成了"一个元素的集合字面量"，
+// 宏因此从没展开过。
+// 判据点在 `src/frontend/parser/expr.rs` 的 `parse_dict_lit` 集合分支：它先按表达式
+// 解析花括号里的第一项，只要后面不是 `:` 就当集合。而 `parse_expr` 是能把 `println!(…)`
+// 当作一个原子解析掉的，于是 `{ println!("x") }` 走到这里就变成了 `ArrayLit([宏])`——
+// 花括号再没机会被读成语句块。宏调用带着这个外壳到不了展开器，MIR 生成遇到未展开的宏
+// 是"悄悄跳过"（`src/middle/mir/gen.rs:3242`，取值位置还留下一个 `IntLit(0)`），
+// 所以编译成功、退出码 0、语句一条都不执行。
+// 同一条判据也管住了非臂位置：`let x = { println!("in-let") }` 改前同样一声不出。
+// 改前实拍（批次 378 的构建，同一份源）：
+//   - `2 => { println!("arm-two") }` 后跟 `println!("end")` → 只打 `end`；
+//   - `let x = { println!("in-let") }` → 只打后面的 `end`；
+//   - 集合里混进宏（`let z = {1, println!("mixed")}`）→ 打 `z=[1, 0]`，那个 `0` 就是
+//     MIR 留给未展开宏的占位值。
+// 改后逐行如下（先跑程序、按实际输出写期望）：
+//   - 命中臂的单宏块打出了 `arm-two`；未命中的 `skip-one`／`skip-other` 没打——命中臂
+//     确实执行了，说明这条 `match` 的分支真的在下发，不是整块被跳过；
+//   - 取值位的单宏块打出了 `in-let`；
+//   - 三种集合/字典读法原样保留：臂里的字典 `{"a": 1, "b": 2}` 还是 2 项、
+//     臂里的 `{10, 20, 30}` 还是 3 项、`{7}` 还是"一个元素的集合"（打印带方括号）。
+// expect: arm-two
+// expect: in-let
+// expect: dict-len=2
+// expect: set-len=3
+// expect: q=[7]
+// expect: end
+
+fn main() -> i64 {
+    let n = 2
+    match n {
+        1 => { println!("skip-one") }
+        2 => { println!("arm-two") }
+        _ => { println!("skip-other") },
+    }
+    let x = { println!("in-let") }
+    let d = match n {
+        2 => {"a": 1, "b": 2}
+        _ => {}
+    }
+    let dl = len(d)
+    println!("dict-len={}", dl)
+    let s = match n {
+        2 => {10, 20, 30}
+        _ => {1}
+    }
+    let sl = len(s)
+    println!("set-len={}", sl)
+    let q = {7}
+    println!("q={}", q)
+    println!("end")
+    return 0
+}
