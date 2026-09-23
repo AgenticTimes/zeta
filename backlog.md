@@ -41,8 +41,8 @@
 
 | 编号 | 一句话 | 来源 | 粒度 | 状态 |
 |---|---|---|---|---|
-| #36 | 余 9 文件 / 1,019 行：benchmark_simd_vs_scalar 357（`static mut` 局部）、minimal_compiler 230…已清 3 族 | 批次 319→323 | L | 🟡 |
-| #36 附注 | 2026-09-23 晚实测：minimal_compiler 丢行已从 757 降到 **230**（停在 ：572 的 `fn main` 内部）。15 个可疑构造逐个测试**全部能解析**（原始字符串 r#".."#、多行原始字符串、`\|_\|` 闭包、std::fs 路径调用、点号续行、vec! 宏、for 元组解构、if 作参数、emoji 字符串、字符串内花括号、引用切片、区间内调方法）⇒ 剩余丢弃是**上下文组合**触发，单个构造不背锅。下一步：给 parse_program 的顶层循环加位置探针（报告最远解析到哪一行），用仪器定位而不是继续猜 | 第二会话 | M | 🟡 |
+| #36 | ✅ 批次 366 实测收口：11 文件总丢行 1,019+ → **712**；已清零 5 文件（minimal_compiler 230、test_suite 127、bootstrap_validation 58、integration_all_features 58、integration_test_program 16——后两个由批次 366 的无参闭包修复清掉）。剩余 8 文件 / 712 行，逐文件卡点已探针定位（批次 366 记录有全表）：benchmark 357（static mut）、selfhost 158（impl Trait for + concept）、quantum_basic 85（use 深路径）、advanced_patterns_test 62（@绑定 or 模式）、primezeta 36（预处理冒号误判）、test_const_expression 14（数组类型注解）。按性价比逐文件清 | 批次 319→366 | L | 🟡 |
+| #36 附注 | 2026-09-23 晚实测：minimal_compiler 丢行已从 757 降到 **230**（停在 ：572 的 `fn main` 内部）。15 个可疑构造逐个测试**全部能解析**（原始字符串 r#".."#、多行原始字符串、`\|_\|` 闭包、std::fs 路径调用、点号续行、vec! 宏、for 元组解构、if 作参数、emoji 字符串、字符串内花括号、引用切片、区间内调方法）⇒ 剩余丢弃是**上下文组合**触发，单个构造不背锅。下一步：给 parse_program 的顶层循环加位置探针（报告最远解析到哪一行），用仪器定位而不是继续猜 | 第二会话 | M | ✅ 探针已落地（ZETA_PARSE_TRACE，批次 362），本次剩余卡点全部由它采集 |
 | #39 | `s[i..]` 切片——**已验证当前解析器能处理 `..` 区间**（expr.rs:2293 分隔符同时接受 `:` 和 `..`；`&s[0..5]`、区间边界调方法均通过），757 行的真因已随文法修复消解，此条按已关闭处理，如有残留用 W1002 实测说话 | 批次 321 | M | ✅ 本会话核实 |
 | #42 | ✅ 14 个 std 方法绑定全部落地（批次 363-365）：to_string、is_empty、is_whitespace、clone、parse、unwrap、unwrap_or、unwrap_or_else、chars、nth、iter、push_str、is_digit、is_alphanumeric。三个官方文件（bootstrap_validation_test / minimal_compiler / test_suite）从"编译通过、链接失败"恢复为全链接。**契约修订**：Result 用运行时既有的 host_result 三字段单元（364 登记的 0 哨兵被推翻——nth 元素可能是合法 0）；闭包用 FuncAddr + zeta_call1 回调。遗留观察（非本任务）：① minimal_compiler 运行 rc=0 但无输出（内嵌逻辑的运行期行为，下一层）；② unwrap 结果无静态类型，其后 .len() 派发错（归轴 F） | 批次 323→365 | M | ✅ |
 | #38 | match 结果槽恒 I64 | 批次 322 OPEN | M | ⬜ |
