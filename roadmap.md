@@ -14654,3 +14654,13 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 2. selfhost 158 行：`ZETA_PARSE_TRACE` 量停在哪，不造手工夹具。
 3. quantum_basic 85 行：等 quantum 一族绑定（与 #42 同族）有安排时，和 `parse_stmt` 的 `use` 臂一起落地；解析修法已在本批定稿（嵌套 alt + `kw_boundary` 防 `used = 1` 误读）。
 4. match 一族真修（#38 五条 + 结果槽）：P1 清完之后，需整趟门禁。
+
+## 批次 373 —— selfhost 158 行：探针先上（本节只有定位读数，源码未动）
+`ZETA_STRICT_PARSE=1` 实测：`error[E1002] tests/unit-tests/selfhost.z:22: 158 line(s) … NOT parsed`（文件 179 行，:22 是 `impl Parser for ZetaParser {`），与批次 370 记的 158 行一字相同。
+`ZETA_PARSE_TRACE=1` 的四条"语句解析失败"读数（原文照抄，按出现顺序）：
+1. `块内偏移 6，剩余文本开头："fn tokenize(input: Str) -> Vec<Token>;\n}"` —— 这是 :5-8 的 `concept Parser { … }` 体内第二条**只有签名没有体**的方法声明；但文件没在这儿断（丢弃点是 :22），所以这一条是"语句路径失败后被概念自己的规则接住"，不是丢弃原因。
+2. `块内偏移 0，剩余文本开头："match ch {\n ':' => tokens.push(Token::Colon), …"` —— 语句位置的 `match`（#38② 那一族：能解析、不进 MIR）。
+3. `块内偏移 1344，剩余文本开头："else {\n match ch { …"` —— `if` 后面的 `else` 分支没被接住，导致后面整块从 `else` 起读不动。
+4. `块内偏移 56，剩余文本开头："while i < input.len() {\n let ch = input[i]; …"` —— 语句起点直接落在 `while` 上（`parse_while` 明明在 `parse_stmt` 的臂里），所以这一条更像"上一条语句多吃了文本"而不是"`while` 不支持"。
+2-4 全在 :22 那个 impl 体内，与丢弃点一致；1 在 concept 体内、不构成丢弃。
+下一步（同批继续）：把 :27-58 的 `tokenize` 体整段取出做平衡夹具（批次 370 的教训：手工截坏括号的夹具判据无效），逐条试 `if … {} else if … {}` 链与 `match word.as_str() { "字面量" => 方法调用 }` 两种形状，先确定哪一条一拿掉就不丢 158 行。
