@@ -160,9 +160,9 @@ src/frontend/parser/top_level.rs	71	// PY-A: `*args` / `**kwargs` star-params â€
 src/frontend/parser/top_level.rs	341	// PY-A: Python default argument values. The AST's `params` only carries // (name, type), so defaults travel as a body-prologue marker // `zeta_param_default(in
 src/main.rs	531	let strict_abi = args.iter().any(|a| a == "--strict-abi")
 src/main.rs	537	let no_link = args.iter().any(|a| a == "--no-link");
-src/main.rs	784	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
-src/main.rs	788	all_mirs.sort_by(|a, b| {
-src/main.rs	842	if no_link {
+src/main.rs	802	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
+src/main.rs	806	all_mirs.sort_by(|a, b| {
+src/main.rs	860	if no_link {
 src/middle/mir/gen.rs	392	.map(|m| format!("{}__", m.replace('.', "_")))
 src/middle/mir/gen.rs	431	Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
 src/middle/mir/gen.rs	543	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),

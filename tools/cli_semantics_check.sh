@@ -12,7 +12,7 @@
 #   且修复前 9/9 轮都是 fail:rc1（执行程序撞 E4016 桩 → exit(1)），修复后 9/9 轮 ok。
 #   ⇒ 批次 313 那份 `ir` 基线（41,655 ms/12 文件）与本批之后**不同口径**，不可直比。
 #
-# 判据形状（批次 344 的三翼 + 批次 348 的两翼 = 五翼，缺一翼锁不住）：
+# 判据形状（批次 344 的三翼 + 批次 348 的两翼 + 批次 349 的一翼 = 六翼，缺一翼锁不住）：
 #   阳性翼 —— 裸跑必须"被执行"。这一翼是探测器自己的对照：`ran()` 只认运行路径自己打的
 #             `^Result: `（main.rs:930）。不能用"stdout 里有没有程序的输出"——转储文本里
 #             就含源码与函数名，本批第一版因此把 17 行 MIR 读成"执行了 17 次"。
@@ -27,6 +27,9 @@
 #           ZETA_DUMP_IR 明确排除在外：它只多加一份 stderr 转储，不许改 `-o` 的含义。
 #   翼 B —— 无输入时内置演示（CWD 相对的 examples/selfhost.z）**不许多被编译**：只读标志
 #           走的就是这条路（修复前四个只读入口都编译了它）。
+#   翼 C —— `--repl`（批次 349 / backlog #63）：标志要么生效要么**出声拒绝**，且会话
+#           必须自己结束。修复前 `_dump_mir` 收下即弃、三个只读标志静默忽略、
+#           EOF 之后无限打 `> `。这一翼每条断言都过 `head -c` 的保险丝（见翼 C 注释）。
 #
 # 用法：./tools/cli_semantics_check.sh
 set -uo pipefail
@@ -117,7 +120,6 @@ if [[ -x "$MIRF" ]]; then echo "  ok   --dump-mir 与 -o 并存时仍照常链�
 # 即"要个 dump 结果把演示程序编译了"。诊断文本自己含该文件名，所以**不能** grep 文件名，
 # 必须钉 W1002 这条只有解析截断才会打的行（批次 344 同类自伤的复犯预防）。
 echo "== 批次 348 翼 B：无输入 + 只读标志 ⇒ 内置演示一次都不许多编译"
-sig() { "$@" 2>/dev/null 1>/dev/null; }   # 占位：见下方 fb_hit
 fb_hit() { "$@" </dev/null 2>&1 1>/dev/null | grep -c 'W1002\] examples/selfhost.z'; }
 fb_rc() { "$@" </dev/null >/dev/null 2>&1; echo $?; }
 want "无输入裸跑 → 演示真被编译（阳性对照）" 1 "$(fb_hit "$ZETAC")"
@@ -130,6 +132,48 @@ if [[ $("$ZETAC" --dump-mir </dev/null 2>&1 1>/dev/null | grep -c 'no input file
 else
     echo "  FAIL 无输入只读入口没有诊断（静默失败）"; rc=1
 fi
+
+# ── 批次 349 翼 C：`--repl` 的只读标志/旋钮要么生效要么出声，且 EOF 必须结束会话 ──
+# 修复前实测（roadmap 批次 349）：
+#   · `repl(_dump_mir)` 收下即弃 —— `--repl --dump-mir` 一个字节 MIR 都不打；
+#   · `--repl --emit-llvm` / `--report-stubs` / `--report-untyped` 全部静默忽略；
+#   · `--repl` 不在 argv[1] 时它被当成**输入文件名**，只有一行 `Os { code: 2, NotFound }`；
+#   · EOF 之后 `read_line` 返回 0 被 `is_empty` 折成"空行 continue" ⇒ **无限打 `> `**
+#     （实测 2 分钟 173 MB，只有 kill 停得下）。
+# 保险丝：每条 repl 调用都过 `head -c $CAP`，**不依赖外部 timeout**（门禁不能假设
+# 机器上有 coreutils）。取满 CAP 字节 = 会话没结束 = 判红，所以"没结束"本身是一个
+# 可断言的读数，而不是一次挂死。
+echo "== 批次 349 翼 C：--repl 要么说话要么出声（且自己会结束）"
+CAP=4000
+rp() { local in=$1; shift; printf '%s\n' "$in" | "$ZETAC" "$@" 2>&1 | head -c "$CAP"; }
+rp_sig() { local sig=$1 in=$2; shift 2
+    printf '%s\n' "$in" | "$ZETAC" "$@" 2>&1 | head -c "$CAP" | grep -c -- "$sig"; }
+rp_rc() { local in=$1; shift
+    # 保险丝在这里**同样**要有：`>/dev/null` 不是读者，跑飞的 repl 只会一直写。
+    # `| head -c CAP` 取满就退出 ⇒ 写端下一次 flush 拿到 EPIPE，进程自己结束。
+    # 注意：被这样杀掉的 rc 不再代表程序自己的判断（EPIPE→rc1 或 panic→rc101 都可能），
+    # 所以每条 rc 断言都必须与它旁边那条"签名"断言**配对**读，单看 rc 会放过"没拒绝而是在转圈"。
+    printf '%s\n' "$in" | "$ZETAC" "$@" 2>&1 | head -c "$CAP" >/dev/null
+    echo "${PIPESTATUS[1]}"; }
+short() { local label=$1 val=$2; if [[ ${#val} -lt $CAP ]]; then
+        echo "  ok   $label → 会话自己结束（${#val} 字节 < 保险丝 ${CAP}）";
+    else echo "  FAIL $label → 输出截在 $CAP 字节：EOF 之后还在转圈"; rc=1; fi; }
+BARE=$(rp '6*7' --repl)
+short "裸 --repl 会结束" "$BARE"
+want "裸 --repl 仍真求值（6*7 → 42）" 1 "$(printf '%s' "$BARE" | grep -c '42')"
+want "裸 --repl 不打 MIR（下一断言的对照）" 0 "$(printf '%s' "$BARE" | grep -c '== MIR')"
+DUMP=$(rp '6*7' --repl --dump-mir)
+short "--repl --dump-mir 会结束" "$DUMP"
+want "--repl --dump-mir 打出 canonical MIR" 1 "$(printf '%s' "$DUMP" | grep -c '== MIR main ==')"
+want "--repl --dump-mir 之后仍求值" 1 "$(printf '%s' "$DUMP" | grep -c '42')"
+want "ZETA_DUMP_IR=1 --repl 打出 IR" 1 "$(printf '%s\n' '1+1' \
+    | ZETA_DUMP_IR=1 "$ZETAC" --repl 2>&1 | head -c "$CAP" | grep -c "ModuleID = 'repl'")"
+for flag in --emit-llvm --report-stubs --report-untyped; do
+    want "--repl $flag 出声拒绝" 1 "$(rp_sig 'does not honour' '' --repl "$flag")"
+    want "--repl $flag 判错（rc=1）" 1 "$(rp_rc '' --repl "$flag")"
+done
+want "$SRC --repl 位置错出声" 1 "$(rp_sig 'must be the first argument' '' "$SRC" --repl)"
+want "$SRC --repl 位置错判错（rc=1）" 1 "$(rp_rc '' "$SRC" --repl)"
 
 echo "cli_semantics: rc=$rc"
 exit $rc

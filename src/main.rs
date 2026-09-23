@@ -575,7 +575,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if args.len() > 1 && args[1] == "--repl" {
-        return repl(dump_mir);
+        // Batch 349 (#63): `--repl` used to swallow the read-only flags — the value
+        // reached `repl()` as `_dump_mir` and nothing read it. A flag is now either
+        // honoured or refused out loud; and `--repl` is not position-insensitive, it
+        // used to become the "input file" when it wasn't argv[1].
+        let refused: Vec<&str> = ["--emit-llvm", "--report-stubs", "--report-untyped"]
+            .into_iter()
+            .filter(|f| args.iter().any(|a| a == f))
+            .collect();
+        if !refused.is_empty() {
+            return Err(format!(
+                "--repl does not honour {} (--repl honours --dump-mir / ZETA_DUMP_IR)",
+                refused.join(", ")
+            )
+            .into());
+        }
+        return repl(dump_mir, dump_ir);
+    }
+    if args.iter().any(|a| a == "--repl") {
+        return Err("--repl must be the first argument (it takes no input file)".into());
     }
 
     let mut input = None;
@@ -1163,14 +1181,20 @@ fn bootstrap_zeta(output: &Option<String>, target: &str) -> Result<(), Box<dyn s
     Ok(())
 }
 
-fn repl(_dump_mir: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn repl(dump_mir: bool, dump_ir: bool) -> Result<(), Box<dyn std::error::Error>> {
     let stdin = io::stdin();
     let mut stdin_lock = stdin.lock();
     loop {
         print!("> ");
         io::stdout().flush()?;
         let mut line = String::new();
-        stdin_lock.read_line(&mut line)?;
+        // Batch 349 (#63): read_line returns Ok(0) at EOF, which the old `is_empty`
+        // check folded into "blank line" — so a piped session spun forever printing
+        // "> " (measured: 173 MB of prompts in ~2 min, only `kill` ended it).
+        if stdin_lock.read_line(&mut line)? == 0 {
+            println!();
+            return Ok(());
+        }
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -1207,9 +1231,24 @@ fn repl(_dump_mir: bool) -> Result<(), Box<dyn std::error::Error>> {
             })
             .collect();
 
+        if dump_mir {
+            // Same shape as the file-mode dump: canonical text, stdout, ordered by
+            // function name so two sessions are byte-comparable.
+            let mut names: Vec<&String> = mir_map.keys().collect();
+            names.sort();
+            for name in names {
+                print!("{}", mir_map[name].dump_canonical());
+            }
+            io::stdout().flush()?;
+        }
+
         let context = Context::create();
         let mut codegen = LLVMCodegen::new(&context, "repl");
         codegen.gen_mirs(&mir_map.values().cloned().collect::<Vec<_>>());
+        // `--emit-llvm` is refused for --repl upstream, so this is the ZETA_DUMP_IR path.
+        if dump_ir {
+            codegen.module.print_to_stderr();
+        }
 
         let ee = codegen.finalize_and_jit("native")?;
         type ReplFn = unsafe extern "C" fn() -> i64;

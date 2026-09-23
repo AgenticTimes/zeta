@@ -54,7 +54,8 @@
 |---|---|---|---|---|
 | #45 | 比较结果该是 Bool 却打 1/0（5 条） | 批次 326 OPEN | S | ⬜ |
 | #65 | LAST_PP 串号 | 340 承接 | S | ⬜ |
-| #63 | `--repl` 的 `_dump_mir` | 340 承接 | S | ⬜ |
+| #63 | `--repl` 的 `_dump_mir` | 340 承接 | S | ✅ 349（量完发现不止"参数收下即弃"，而是 **REPL 四条静默**：① `--repl --dump-mir` 一个字节 MIR 都不打（修复前后同输入对照，输出前 60 字节逐字相同）；② `ZETA_DUMP_IR=1 --repl` 同样无声；③ `--repl --emit-llvm` / `--report-stubs` / `--report-untyped` 全部静默忽略；④ **EOF 之后无限打 `> `**（`read_line` 返 0 被 `is_empty` 折成"空行 continue"）——实测 2 分钟写 **173 MB** 才由 kill 停止，即 `--repl` 根本无法被脚本驱动。修法：①②接线（canonical MIR → stdout，与文件模式同口径；IR → stderr），③**出声拒绝** `--repl does not honour …`（标志要么生效要么说话），④ `read_line` 返 0 即 `return Ok(())`；另补 `--repl` 不在 argv[1] 时的诊断（此前它被当成输入文件名）。判据 = `cli_semantics_check.sh` 第六翼 15 条断言（33 → 48），每条 repl 调用都过 `head -c 4000` 保险丝；反证 = 修复前二进制跑新脚本 rc=1 / 8 FAIL 全在该翼。**残留（不在本行）**：REPL 仍没有退出命令，EOF 是唯一出口（Ctrl-D / 管道读完）——`exit` 与 `quit` 都被当**表达式**求值成 `1` 并继续，属于下面 #80 的"未知没有一档"族，不在本行修。 |
+| #80 | **"未知"这一档在 CLI/解析层不存在**（三条实测成员，同族不同病灶）：① 参数循环 `src/main.rs:640` 的 `_ => input = Some(args[i].clone())` 把**任何**不认识的字串当输入文件——`zetac --dump-mir2 x.z`、`zetac -x`、`zetac x.z --nopt` 四种写法全部只回一行 `Error: Os { code: 2, kind: NotFound }`（不打**是哪个名字**找不着），且拼错的标志被**静默丢弃**；② `--bootstrap` 在参数循环**之前**就 `return bootstrap_zeta(...)`（`:609-610`），所以 `zetac <某个文件> --bootstrap` **无视**给定的那个文件——实测 `zetac /tmp/tiny.z --bootstrap` 打的仍是 `Lowered 285 functions` 然后堆溢出 rc=134，与不带文件时逐字相同；③ REPL 里 `exit` / `quit` 这类未声明名静默求值成 `1`（同形复现：跨行 `let x = 5` 之后另起一行敲 `x` 也打 `1`，而 `x` 那行本该报"未声明"）。修法方向：参数解析要有"未知标志"分支（带名字出声），`--bootstrap` 要么吃输入要么拒绝，未声明名要落到诊断而不是假值 | 批次 349 盘据（修 #63 时量出来的三条旁支） | ① S / ② S / ③ M | ⬜ | §2-A `#63` 转 ✅ ⇒ OPEN 净增 0（本行 +1 / #63 −1）；`--repl` 已经按这个方向做了（不接受的标志出声拒绝），可作为 ① 的形状参考 |
 | #67 | `;` 家族三残留（`pass;` / `del x;` / `fn…;`，收敛点已指名） | 批次 337 | S | 🟡 |
 | #61 | 占位/签名声明 `fn proto();`（可验收盘据已在 339 OPEN 1 量好） | 批次 339 | M | ⬜ |
 
