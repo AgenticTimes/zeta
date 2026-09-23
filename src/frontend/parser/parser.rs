@@ -279,17 +279,19 @@ pub fn parse_array_type(input: &str) -> IResult<&str, String> {
         let (input, _) = ws(tag("[")).parse(input)?;
         let (input, elem_type) = ws(parse_non_array_type).parse(input)?;
 
-        // Check for optional size
+        // Check for optional size. The size may be a const expression, not
+        // just a literal or a bare name: `[usize; MAX + 1]` used to fail right
+        // here, which failed the enclosing `fn`, and W1002 then dropped the
+        // rest of the file (tests/unit-tests/test_const_expression.z, 14 lines).
         let (input, size_opt) = opt(preceded(
             ws(tag(";")),
-            ws(alt((
-                // Numeric literal
-                nom::character::complete::digit1.map(|s: &str| s.to_string()),
-                // Identifier
-                parse_ident,
-            ))),
+            verify(
+                ws(take_while(|c: char| c != ']')),
+                |s: &str| !s.trim().is_empty(),
+            ),
         ))
         .parse(input)?;
+        let size_opt = size_opt.map(|s: &str| s.trim().to_string());
 
         let (input, _) = ws(tag("]")).parse(input)?;
 

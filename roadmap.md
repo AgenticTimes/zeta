@@ -14551,3 +14551,43 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 - `b.z`（`const MAX: usize = 100;` + `[usize; MAX]`）：无 W1002，运行退出码 7 ⇒ 裸标识符长度能解析、能跑。
 - `c.z`（同 `b.z` 但长度写成 `MAX + 1`）：`[W1002] c.z:2: 3 line(s) …` 首文本 `fn f() -> usize { let arr: [usize; MAX + 1] = [0; MAX + 1];` ⇒ **卡点就是数组长度位不接受表达式**，`MAX + 1` 让整个 `fn` 项被拒、其后顶层项全丢。
 ⇒ 下一批的最小修法落在"类型注解里数组长度那一位"的解析（文件在 `src/frontend/parser/` 下，具体函数待定位）。
+
+---
+
+## 批次 370 —— 数组类型注解的长度位收表达式：`test_const_expression` 的 14 行清零
+
+### 现象与最小复现（沿用批次 369 的夹具）
+`tests/unit-tests/test_const_expression.z` 全文件 17 行，W1002 报"第 4 行起 14 行未解析"，首文本 `fn test_array() -> usize {`。五个夹具在同一二进制上的现状（`/tmp/b369p1/`，`ZETA_NO_OPT=1`，`-o` 出真二进制再跑）：
+- `a.z`（`[usize; 10]`）：修前修后都无 W1002，退出码 7。
+- `b.z`（`[usize; MAX]`，裸标识符）：修前修后都无 W1002，退出码 7。
+- `c.z`（`[usize; MAX + 1]` 与 `[0; MAX + 1]` 各一处）：修前 `[W1002] c.z:2: 3 line(s)`，修后无 W1002，退出码 7。
+- `d.z`（只在重复表达式里写 `MAX + 1`，注解是推断出来的）：修前修后都无 W1002，退出码 7 ⇒ 这一位本来就能吃表达式（`gen.rs:12066` 的 `ArrayRepeat` 认非常量长度），不需要本批改。
+- `e.z`（`let arr: [usize; MAX + 1] = [0; 101]`）：修后无 W1002、退出码 7，但多一声 `error[W0003]: Typecheck failed (non-fatal)` ⇒ 是响的，不是静默错值。类型检查那侧仍把非数字长度折成 `ArraySize::Literal(0)`（`src/middle/types/mod.rs:508-510`），就是 #24 记的"活的这套对 ConstParam 更弱"，本批不动。
+
+### 修法（一处，`src/frontend/parser/parser.rs`）
+`parse_zeta_array` 的长度位原先只接受 `digit1 | parse_ident`（旧 `:283-292`），改成"取到 `]` 之前的非空文本"（`verify(ws(take_while(|c| c != ']')))` + `trim`），交给下游按字符串处理。文件 1125 行 → 1127 行（`git diff --numstat` = 9 删 7 加）。锚点核对不受影响：`tools/baselines/abi_anchors.tsv` 里 `grep -c parser.rs` = 0 ⇒ 无需 `--rebind`；本批实跑核对器报"漂移 58"，落在 `gen.rs`(35)/`py_additions.c`(17)/`expr.rs`(2)/`indent.rs`(2)/`tokio_runtime_stub.c`(2)，全在本批未修改的文件上（`git status` 只有 `parser.rs` 与并行会话的 `.ouroboros/work.md`），不是本批新增。
+
+### 验证（丢行尺子 + 整趟门禁）
+- 丢行：`./tools/truncation_inventory.sh` → **4 文件 / 662 行**（`/tmp/b370_inv.log`：benchmark 357 + selfhost 158 + quantum_basic 85 + advanced_patterns 62），上一批 5 文件 / 676 行 ⇒ 减 1 文件 14 行，减的就是 `test_const_expression`。
+- 门禁：`/tmp/b370_gate.log`，rc 从 `/tmp/b370_gate.rc` 读 = **1**（批次 369 定的约定：两条存量红未处理前恒为 1）。三组读数：official compile **194/194**、compile+link 193/194（link-only 1 条 `_predict,_train`，同 369）；python_style **298 通过 / 2 失败（t231、t233）/ 4 known-fail / 0 xpass**；语料 **39/39 = 100%**。其余各步 jit ok=170、diff 120/130=92.3% bad_case=0、knob 23 / swallow 4 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 / mbvar 19 全 FAIL 0、comment_drift 0、clean_checkout rc=0。
+- 与 369 那趟逐行 diff（`diff /tmp/b369_gate.log /tmp/b370_gate.log`）只有四处：official 诊断 **7 文件/31 行 → 6 文件/30 行**、jit ok 171→170（trap 327→328）、`ts`、clean_checkout 的 `rev`/`secs`。
+  - 诊断那 1 行少在哪：`grep -c test_const_expression /tmp/zeta_official_diag.txt` = **0**，剩下 6 个 `###` 文件是 advanced_patterns、benchmark、integration_all_features、integration_test_program、quantum_basic、selfhost ⇒ official 与丢行尺子量的是同一批 `tests/unit-tests/*.z`（`tools/run_all.sh:94` 的 cp），这条减项由正证据支持。
+  - clean_checkout 那步 rev=1b76b1a2（当时的 HEAD），不含本批未提交的改动 ⇒ 它判的是"上一个提交能干净编译"；本批改动的编译证据是本趟门禁自己用的那个 release 二进制。
+
+### jit ok 171→170 的归因：是本批改动造成的，且不是回退
+1. 先排除抖动：同一二进制连跑 `tools/jit_sweep.sh` 两次，`ok=170 trap=328 fail=0 segv=0` 一字相同（`/tmp/b370_jit_a.txt`、`/tmp/b370_jit_b.txt`）⇒ 不是运行间噪声。
+2. 圈出可能被本批改动的文件：498 个受测文件里含"数组注解且长度不是字面量"的只有一个（`grep -rlnE '\[[^];]+; *[A-Za-z_][A-Za-z0-9_]* *[+*/-]' tests/unit-tests tests/python_style` → `test_const_expression.z`）⇒ 翻转只可能是它。`tools/jit_sweep.sh -v` 逐文件表现在它是 `trap`。
+3. 为什么从 ok 变 trap：修之前该文件第 4 行起 14 行被丢，`fn main`（15-17 行）也在里面，程序没有 main ⇒ JIT 打 `Result: 0`、退出 0，那个 ok 是"空程序"换来的（同形状夹具 `/tmp/b370j/no_main.z` 实测 rc=0）。修后函数体真进编译，用到 `zeta_dyn_getitem`、`zeta_map_set_tag`，JIT 模式没这两个绑定 ⇒ 按设计出声（E4016 指名符号并建议 `-o`）。判据 ok ≥ 163 仍绿，AOT `-o` 跑该文件退出码 0（= `arr[50]`，期望 0）。归到 #26/#42 那族（JIT 绑定面），不是本批新引入的错值。
+
+### §4 剩余 4 文件的卡点（本批夹具实测）
+- **benchmark_simd_vs_scalar 357 行 = 函数体里写 `static mut`。** `h1.z`（带分号）、`h3.z`（原样抄 `get_time`）都丢；`h2.z`（只有 `unsafe { … return … }`）不丢 ⇒ 是 `static mut` 那条，不是 `unsafe` 块。结构证据：`static` 不在语句关键词表里（`parser.rs:82-83` 只到 `unsafe`、`use`，无 `static`）。
+- **quantum_basic 85 行 = 函数体里写 `use` 深路径。** `g1.z`（`fn t(){ use std::quantum::algorithms::ShorsAlgorithm; … }`）单独复现 W1002；同一函数里的 `if let Some((p, q)) = …`（`g2.z`）、`p <= 1 || q <= 1`（`g3.z`）、`ShorsAlgorithm::new(n)`（`g4.z`）都不丢。结构证据：`use` 的解析臂只有一处，在顶层文件里（`top_level.rs:133`）。
+- **advanced_patterns_test 62 行 = or 模式的分支只要不是数字字面量就丢。** **本批改正两句旧话**：#43 写的是"or 模式里的构造子模式"，批次 366 的表写的是"(@绑定 or 模式)"。实测：`Some(x @ 1) => …` 单独作臂头不丢（`f5.z`）、`1 | 2 | 3` 不丢（`f1.z`）、`Color::Red`/`Color::RGB(r,g,b)` 不丢（`f4.z`）、元组带守卫不丢（`f3.z`），而 **`A | B` 两个裸标识符也丢**（`f7.z`）⇒ 与 `@` 绑定无关、与构造子无关。定位：`parse_pattern` 的 alt 里 `parse_struct_pattern`（`src/frontend/parser/pattern.rs:48`）排在 `parse_or_pattern`（`:52`）之前，而它在"路径后面既无 `(` 又无 `{`"时兜底返回 `Var`（`:121`）⇒ 首选项被吃掉、`| B =>` 剩在输入里，臂头永远碰不到 `=>`；`parse_or_pattern` 那一臂对标识符/构造子开头的模式因此不可达。批次 367 前人在 `:39-45` 写的那条注释（bind 必须排在 struct 前）就是同一个兜底臂的另一次绕行。
+- **selfhost 158 行 = 未定位到最小形状。** 表上写的"impl Trait for + concept"本批证不成立：`concept` 声明 + `impl Parser for ZetaParser { fn parse… }`（`k1.z`）、只有 `impl Parser for ZetaParser{…}`（`k3.z`）、`impl ZetaParser{…}`（`k4.z`）三份最小夹具都无 W1002。本批想把真文件的 `tokenize`（29-87 行）单独取出来当夹具，`sed` 截取时括号没配平（`/tmp/b370s/m1.z` 末尾多一个 `}`），那份读数和据它得出的任何结论都**作废**。下一步用现成探针 `ZETA_PARSE_TRACE`（#36 附注记的批次 362 仪器）量它真正停在哪一行，不再靠手工截。
+- 顺手记一条**不是卡点**的事实：顶层 `trait X { … }` 写法确实解析不了（`k2.z`），但 Zeta 的拼写是 `concept`，`trait ` 只出现在恢复跳过表（`top_level.rs:2071`）；四个受测文件没有一处依赖它 ⇒ 不开登记项。
+
+### 下一批默认候选
+1. advanced_patterns 的 or 模式（62 行）：卡点已收到一处（`pattern.rs` 的 alt 顺序 + struct 的裸路径兜底），改动最小。
+2. 函数体里的 `use` 与 `static mut`（85 + 357 = 442 行）：同一族"顶层项写在函数体里"，两处解析臂补齐可能一起收；先各测一遍是否互相挡住。
+3. selfhost（158 行）：先上探针再动手，别再造手工夹具。
+4. match 那一族的真修（369 的三条定位 + #38 结果槽），需要一整趟门禁，排在 P1 清完之后。
