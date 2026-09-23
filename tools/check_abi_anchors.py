@@ -25,10 +25,17 @@
      绑定到一个路径，绑不上的 counted 并棘轮化——一条都不许静默飘过。
 
 第三层必须有基线才可比。基线入库（同 dc_audit.sh 的口径）：
-  ./tools/check_abi_anchors.py --bless     # 采集/刷新 tools/baselines/abi_anchors.tsv
+  ./tools/check_abi_anchors.py --bless     # 全量重采基线；在场"漂移/消失"会先拦一次（见下）
+  ./tools/check_abi_anchors.py --bless-only 路径:行号[,…]  # 只刷点名的几条，其余逐字不动
   ./tools/check_abi_anchors.py             # 核对；漂移/待归属增加 rc=1，歧义/越界 rc=2
   ./tools/check_abi_anchors.py --list      # 打印"每个锚点现在指着哪句代码"（归属自查）
   ./tools/check_abi_anchors.py --rebind    # 自动收尾两类行号错位：搬家（改文档）+ 改号（刷基线）；--dry 只看不动
+
+`--bless` 的护栏（批次 355）：全量重采会覆盖核对器**此刻正判为假**的条目，批次 355 实测
+"装一条改号 + 一条漂移 → --bless → rc=0 且打印'锚点全部对上'"，那条假引用从此带着工具自己
+盖章的证据。所以现在要先拦一次：被抹平的条目逐条点名、整次拒收（rc=2）；确实要覆盖得加
+`--force`（仍打印覆盖清单），只想刷个别几条用 `--bless-only`。纯新增（文档刚加了一批锚点）
+不在射程内——它不覆盖任何东西。
 
 `--rebind` 治的是这一件事：往 `tools/run_all.sh` 之类被引用的文件里插行，锚点行的**内容
 一字未动、行号全漂**。批次 336/337/338/339 连续四批都是这个形状，每批手工重绑 3~4 条。
@@ -509,11 +516,111 @@ def rebind(
     return 1 if (refused or unmatched_added or problems2) else 0
 
 
+def load_base(base: Path) -> tuple[dict[tuple[str, int], str], Counter[str]]:
+    """读基线快照：{(相对路径, 行号): 内容} 与待归属计数。文件不在就是两份空表。"""
+    old: dict[tuple[str, int], str] = {}
+    old_pending: Counter[str] = Counter()
+    if not base.is_file():
+        return old, old_pending
+    for raw in base.read_text(encoding="utf-8").splitlines():
+        parts = raw.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        if parts[0] == PENDING:
+            old_pending[parts[2]] = int(parts[1])
+        else:
+            old[(parts[0], int(parts[1]))] = parts[2]
+    return old, old_pending
+
+
+def write_base(
+    base: Path, items, pending
+) -> None:
+    """按传入顺序写基线（不重排）：重排会让"只刷一条"看起来像整份文件都动了。
+
+    先把整份文本在内存里拼好再落盘 —— 批次 355 的第一版直接 `open("w")` 后逐行写，
+    循环里抛异常就留下一份**截断的基线**（0 行），比不写更坏：核对器从此看谁都像新锚点。
+    """
+    buf = []
+    for (rel, line), text in items:
+        buf.append(f"{rel}\t{line}\t{text}\n")
+    for text, n in sorted(pending.items()):
+        buf.append(f"{PENDING}\t{n}\t{text}\n")
+    base.parent.mkdir(parents=True, exist_ok=True)
+    base.write_text("".join(buf), encoding="utf-8")
+
+
+def bless_only(
+    base: Path, spec: str, snap: dict[tuple[str, int], str], old: dict, old_pending: Counter[str]
+) -> int:
+    """只重采**点名**的锚点，其余基线行逐字不动。
+
+    存在的理由：`--bless` 是全量重采，而它是"改号"这件事在过去唯一的收尾手段
+    （批次 337/338 就这么用）。全量重采会把同一时刻**另一条真问题**的证据一起抹掉
+    ——批次 355 实测：副本上同时装一条改号和一条漂移，`--bless` 之后核对 rc=0、
+    "锚点全部对上"，而那条漂移对应的文档引用从此带着一条工具自己盖章的假证据。
+    点名重采把"我只核了这一条"这件事写进了动作本身。
+    """
+    named: list[tuple[str, int]] = []
+    for chunk in spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        rel, _, num = chunk.rpartition(":")
+        if not rel or not num.isdigit():
+            print(f"[E1003] --bless-only 要的是 `路径:行号`（逗号分隔），收到 {chunk!r} ⇒ 拒收")
+            return 2
+        named.append((rel, int(num)))
+    if not named:
+        print("[E1003] --bless-only 后面一个键都没解析出来 ⇒ 拒收")
+        return 2
+    missing = [k for k in named if k not in snap]
+    if missing:
+        # 点名点不到 = 文档里根本没有这条引用（或路径/行号打错了）。静默跳过就成了
+        # "以为刷了新号、其实基线还是旧的"，比不刷更坏。
+        for rel, line in missing:
+            print(f"  [点名不中] {rel}:{line} — 当前文档里没有这条锚点，什么都没刷")
+        print(f"[E1004] --bless-only 的 {len(missing)}/{len(named)} 条点不到 ⇒ 整次拒收（不部分生效）")
+        return 2
+    # 已有行按基线原顺序逐字沿用（只换被点名那条的内容），新键**按 (路径, 行号) 插进应有的
+    # 位置**。直接 append 实测会把基线排乱（第 158 行起逆序），而下一次全量重采又会把它排回
+    # 去 —— 于是一行真改动穿上一身假 diff，"只刷一条"这件事本身被抹掉了。
+    items = [(k, snap[k] if k in named else v) for k, v in old.items()]
+    fresh = sorted(k for k in named if k not in old)
+    for key in fresh:
+        pos = next((i for i, (k, _) in enumerate(items) if k > key), len(items))
+        items.insert(pos, (key, snap[key]))
+    write_base(base, items, old_pending)
+    print(
+        f"只刷点名的 {len(named)} 条锚点 → {base}（基线共 {len(items)} 条；"
+        f"其中新入表 {len(fresh)} 条）；待归属沿用基线旧值"
+        f"（{sum(old_pending.values())} 条 / {len(old_pending)} 种，本档不动）"
+    )
+    for rel, line in named:
+        mark = "新" if (rel, line) not in old else "刷"
+        print(f"  [{mark}] {rel}:{line} → {snap[(rel, line)][:80]}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--doc", default=str(DEFAULT_DOC))
     ap.add_argument("--baseline", default=str(DEFAULT_BASE))
-    ap.add_argument("--bless", action="store_true", help="采集/刷新基线快照")
+    ap.add_argument(
+        "--bless",
+        action="store_true",
+        help="全量重采基线快照（在场问题会先拦一次；只想刷个别几条用 --bless-only）",
+    )
+    ap.add_argument(
+        "--bless-only",
+        metavar="路径:行号[,路径:行号…]",
+        help="只重采点名的锚点，其余基线行逐字不动",
+    )
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="与 --bless 同用：明知在覆盖被判假的内容仍要全量重采（会打印被覆盖清单）",
+    )
     ap.add_argument("--list", action="store_true", help="打印每个锚点当前指向的代码行")
     ap.add_argument("--pending", action="store_true", help="打印待归属引用的文档行号")
     ap.add_argument(
@@ -526,6 +633,12 @@ def main() -> int:
     if args.dry and not args.rebind:
         # 单挂一个不生效的开关 = 任务 #63 那一类缺陷（参数收下即弃）。当场拒收，不静默。
         print("[E1002] --dry 只对 --rebind 有意义，单独使用什么都不做 ⇒ 拒收")
+        return 2
+    if args.force and not args.bless:
+        print("[E1002] --force 只对 --bless 有意义（--bless-only 本来就只刷点名的那条）⇒ 拒收")
+        return 2
+    if args.bless_only and (args.bless or args.rebind):
+        print("[E1002] --bless-only 是独立动作，不与 --bless/--rebind 同用 ⇒ 拒收")
         return 2
 
     doc = Path(args.doc)
@@ -548,13 +661,38 @@ def main() -> int:
             print(f"{docno:4} {cited}:{span} → {rel}:{span} | {snippet[:96]}")
         print(f"共 {len(rows)} 条；声明为仓外 {external_n} 条；待归属 {sum(pending.values())} 条")
 
+    old, old_pending = load_base(base)
+    new = dict(snap)
+    drifted = [k for k in new if k in old and new[k] != old[k]]
+    added = [k for k in new if k not in old]
+    removed = [k for k in old if k not in new and k[0] != PENDING]
+    pairs, unmatched_gone, unmatched_added = pair_renumber(old, new, removed, added)
+
+    if args.bless_only:
+        if not base.is_file():
+            print(f"[E1001] 无基线 {base} ⇒ --bless-only 不能凭空建表（那样其余锚点会整批消失），先用 --bless")
+            return 2
+        return bless_only(base, args.bless_only, new, old, old_pending)
+
     if args.bless:
-        base.parent.mkdir(parents=True, exist_ok=True)
-        with base.open("w", encoding="utf-8") as f:
-            for (rel, line), text in snap:
-                f.write(f"{rel}\t{line}\t{text}\n")
-            for text, n in sorted(pending.items()):
-                f.write(f"{PENDING}\t{n}\t{text}\n")
+        # 全量重采会**覆盖**核对器此刻判为假的条目。批次 355 实测：副本上装一条改号 +
+        # 一条漂移，`--bless` 之后核对 rc=0、打印"锚点全部对上"——那条被判定"文档引用的
+        # 内容已不是它说的内容"的合同，从此带着一份工具自己盖章的证据。所以先拦一次：
+        # 要覆盖就得点名（--bless-only）或明说（--force）。纯新增不在此列，它不覆盖任何东西。
+        washed = sorted(drifted) + sorted(unmatched_gone)
+        if washed and not args.force:
+            for rel, line in washed:
+                why = "内容已变（漂移）" if (rel, line) in drifted else "文档已不再引用（消失）"
+                print(f"  [会被抹平] {rel}:{line} — {why}")
+            print(
+                f"[E1005] --bless 会把上面 {len(washed)} 条**已被判为假**的引用一并抹平 ⇒ 拒收。"
+                f"搬家/改号用 --rebind，确实只重采个别几条用 --bless-only 点名，"
+                f"都要覆盖才加 --force"
+            )
+            return 2
+        write_base(base, snap, pending)
+        if washed:
+            print(f"  （--force：明知故犯，本次覆盖了 {len(washed)} 条被判为假的引用）")
         print(
             f"基线已写入 {base}（{len(snap)} 个锚点 + "
             f"{sum(pending.values())} 条待归属 / {len(pending)} 种）"
@@ -566,25 +704,9 @@ def main() -> int:
         print(f"[E1001] 无基线 {base}，先跑 --bless")
         return 2 if problems else 1
 
-    old: dict[tuple[str, int], str] = {}
-    old_pending: Counter[str] = Counter()
-    for raw in base.read_text(encoding="utf-8").splitlines():
-        parts = raw.split("\t", 2)
-        if len(parts) != 3:
-            continue
-        if parts[0] == PENDING:
-            old_pending[parts[2]] = int(parts[1])
-        else:
-            old[(parts[0], int(parts[1]))] = parts[2]
-    new = dict(snap)
-
     if args.rebind:
         return rebind(doc, idx, old, new, positions, base, args.dry)
 
-    drifted = [k for k in new if k in old and new[k] != old[k]]
-    added = [k for k in new if k not in old]
-    removed = [k for k in old if k not in new and k[0] != PENDING]
-    pairs, unmatched_gone, unmatched_added = pair_renumber(old, new, removed, added)
     for rel, line in sorted(drifted):
         print(f"  [漂移] {rel}:{line}")
         print(f"     基线: {old[(rel, line)]}")
