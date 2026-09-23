@@ -13743,6 +13743,10 @@ fn lt_annotation_type(s: &str) -> Option<Type> {
 
 fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)> {    match method {
         "upper" => Some(("host_str_to_uppercase", 1, "str")),
+        // `.to_string()` on a string is identity (strings are immutable here);
+        // the same-named C alias `to_string` covers call sites whose receiver
+        // type is unknown and bypasses this table (batch 363, task #42).
+        "to_string" => Some(("host_str_to_string", 1, "str")),
         "lower" => Some(("host_str_to_lowercase", 1, "str")),
         "capitalize" => Some(("host_str_capitalize", 1, "str")),
         "title" => Some(("host_str_title", 1, "str")),

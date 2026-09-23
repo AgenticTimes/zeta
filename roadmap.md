@@ -14344,3 +14344,23 @@ minimal_compiler.z 仍丢 230 行（解析停在 :572 的 fn main 内部）。15
 
 ### 下一步
 #42 std 方法绑定（`_to_string` 第一优先）——它同时是 bootstrap_validation_test / minimal_compiler / test_suite 三个文件现在链接失败的原因；以及 #36 余量的 `static mut`。
+
+## 批次 363 —— 任务 #42 第一刀：`.to_string()` 可链接（test_suite 从链接失败变为可运行）
+
+### 现象
+bootstrap_validation_test / minimal_compiler / test_suite 三个官方文件编译通过但链接失败，缺的都是 `_to_string` 这类符号。原因：`.to_string()` 的接收者无论类型是否已知，方法表 `str_method_symbol`（gen.rs）里都没有这一项，调用点退回裸符号 `to_string`，运行时没有这个函数。
+
+### 修复
+- gen.rs 方法表加一项：`"to_string" => host_str_to_string`（有类型和未知接收者两个调用点都查这张表，一处加全覆盖）。
+- runtime/tokio_runtime_stub.c 加 `host_str_to_string` 和 C 别名 `to_string`：字符串不可变，返回同一句柄就是正确语义（与 zeta_identity 处理 str(字符串) 一致）。改了 C 需要跑 tools/build_runtime.sh。
+
+### 验证
+- 功能：`let s = r#"hello world"#.to_string(); s.len()` → 11，正确。
+- 官方：compile+link **191/194 → 192/194**——test_suite 现在能链接运行；bootstrap_validation_test 还缺 `_unwrap_or_else`，minimal_compiler 还缺 13 个（chars/iter/nth/parse/push_str/unwrap 系），调用点已逐个看清（在 340-480 行一带）。
+- 三基线：official 194/194 · python_style **292 passed** / 2 failed（存量）· 语料 39/39。无回归。新增回归 t409。
+
+### 剩余（#42 后续）
+minimal_compiler 缺的 13 个符号需要字符、迭代器（.iter().enumerate()）、Result（unwrap 系）、字符串修改（push_str）的真实语义。按"宁可响亮失败也不静默桩"的红线，这些不能拿恒等占位糊弄——已把每个符号的调用点位置记下，下一批按语义逐个实现。_unwrap_or_else 需要先定闭包做运行时实参的表示方式。
+
+### 下一步
+#42 续：先做语义明确的字符串判定族（_is_empty / _is_whitespace / _clone），_unwrap_or_else 随闭包实参表示的决策一起做。

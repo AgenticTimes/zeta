@@ -2456,6 +2456,13 @@ int64_t host_str_isalpha(int64_t s) { return str_is_alpha(s); }
 int64_t host_str_isdigit(int64_t s) { return str_is_digit(s); }
 int64_t host_str_isupper(int64_t s) { return str_is_upper(s); }
 int64_t host_str_islower(int64_t s) { return str_is_lower(s); }
+// 批次 363（任务 #42）：`.to_string()` 在字符串上就是恒等——这里的字符串不可变，
+// 返回同一个句柄语义正确（与 zeta_identity 对 str(字符串) 的处理一致）。
+// 两个名字都要给：str_method_symbol 表路由到 host_str_to_string；接收者类型
+// 未知的调用点会退回裸 `to_string` 符号（bootstrap_validation_test /
+// minimal_compiler / test_suite 链接失败缺的就是它）。
+int64_t host_str_to_string(int64_t s) { return s; }
+int64_t to_string(int64_t s) { return s; }
 int64_t host_str_swapcase(int64_t s) { return str_swapcase(s); }
 int64_t host_str_removeprefix(int64_t s, int64_t p) { return str_remove_prefix(s, p); }
 int64_t host_str_removesuffix(int64_t s, int64_t p) { return str_remove_suffix(s, p); }

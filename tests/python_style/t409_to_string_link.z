@@ -1,0 +1,14 @@
+// 批次 363：`.to_string()` 此前没有运行时实现——调用点落到未定义符号
+// `_to_string`，链接失败（官方 test_suite 就是这么挂的）。现在字符串上的
+// to_string 是恒等（字符串不可变，返回同一句柄），未知类型接收者走同名
+// C 兼容符号 to_string。
+// expect: 11
+// expect: 3
+
+fn main() -> i64 {
+    let s = r#"hello world"#.to_string()
+    println!("{}", s.len())
+    let t = "abc".to_string()
+    println!("{}", t.len())
+    return 0
+}
