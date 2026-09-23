@@ -1,355 +1,152 @@
-# Handoff —— 让 REasyQuant 的「本地 wufu 策略」在 zeta 编译器下完整跑通
+# handoff.md — 交接文档（写给下一个接手的 AI：Qwen）
 
-> 写给接手的人。读完这一份应该能在 30 分钟内跑起来、知道现在卡在哪、下一步该做什么。
-> 详细逐批记录在仓库根目录的 `roadmap.md`（已有 121 个批次条目，**每批都有证据**）。
-
----
-
-## 1. 目标与验收标准
-
-**目标**：`~/source/quant/REasyQuant/strategies/code/jq_wufu_local.py --engine local`
-（本地 poly wufu 策略）在 zeta 编译器下**完整编译、运行并产出回测指标**。
-
-**验收基准**（CPython 补注册 `wufu` universe 后同一区间）：
-
-```
-final_value 994575.84 / return -0.5424 / trading_days 37
-```
-
-**当前状态：未达成**（还没产出 metrics）。编译与数据链路已基本打通，卡在「数据源排序」这一步，
-最近一次表现是**挂住（timeout）**而不是崩溃。
+> 交接时间：2026-09-23 深夜。交接人：ZCode 会话（批次 362-367 为其产出，更早记录见 roadmap.md）。
+> 工作方式要求（用户明确指示）：**文档和记录全部用朴实的大白话**，不要发明词、不要比喻、
+> 不要"燃尽 / 翼 / 族 / 在途"这类说法。说"还没做完"就说还没做完。
 
 ---
 
-## 2. 三套基线（必须全绿才允许提交）
+## 0. 一分钟速览
 
-| 口径 | 当前 | 说明 |
-|---|---|---|
-| 官方测试 | **194/194** | `./tools/run_all.sh` |
-| python_style | **274 passed / 2 failed** | 存量失败：`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`（本会话之前就红，非回归） |
-| 语料解析 | **39/39 = 100%** | 扫 `REasyQuant/strategies/**/*.py` |
+- 项目：zeta 编译器（自研语言 + Python 兼容层 → LLVM）。当前唯一大目标：
+  **让量化策略 `jq_wufu_local.py` 在本编译器上算出与 CPython 一致的结果**
+  （final_value 994575.84 / return -0.5424 / 37 个交易日；现在程序能跑完，但算出 0）。
+- 你接手时的进度：解析器静默丢代码的债已从 1,019 行清到 712 行（5 个文件完全恢复）；
+  14 个字符串/Result 标准方法绑定已实现；官方测试历史上第一次 194 个全部编译+链接成功；
+  python_style 296 通过 / 2 个历史遗留失败 / 4 known-fail / 1 xpass（t413，预期内）。
+- **你第一件要做的事：修 for 循环体不执行**（见 §3，这是新发现的比丢代码更严重的缺陷）。
+- 主线批次 301（修 final_value）处于冻结状态，等解析债和 for 循环修完再启动。
 
-一键跑：
-
-```bash
-cd /Users/meetai/source/zeta-src
-./tools/run_all.sh                      # 约 7 分钟，输出三行结论
-bash tests/python_style/run.sh          # 只跑 python_style（快）
-```
-
-**红线**：这三条任一红了就先修再谈别的；编译器**不允许产生非法 IR 或静默错值**，
-宁可响亮 abort 也不要静默桩。
-
----
-
-## 3. 环境与命令速查
-
-### 3.1 编译编译器本身
+## 1. 环境与命令（照抄就能跑）
 
 ```bash
-cd /Users/meetai/source/zeta-src
-cargo build --release            # → target/release/zetac
-./tools/build_runtime.sh         # 改过 runtime/*.c 后必须跑（重建 tokio_runtime.o / zeta_runtime_c.o）
+cd /Users/meetai/source/zeta-src        # 工作目录必须是仓库根，否则链接全挂
+cargo build --release                   # 编译编译器（约 45 秒）
+./tools/build_runtime.sh                # 改过 runtime/*.c 后必跑（重建两个 .o）
+ZETA_NO_OPT=1 ./target/release/zetac 文件.z -o 输出名   # 编译用户程序（一律带 ZETA_NO_OPT=1）
+bash tests/python_style/run.sh          # 快门禁（约 2-4 分钟）
+./tools/run_all.sh                      # 全量门禁（约 7 分钟）
 ```
 
-- `ZETA_NO_OPT=1`：**同时关掉 LLVM -O3**。目前所有调试都用它（-O3 另有误编译，见 §7）。
-- 改了 `pylib/*.z`（pandas/numpy shim）不用单独构建，编译用户程序时生效。
+- 支持的调试环境变量：
+  - `ZETA_PARSE_TRACE=1` —— 解析器在某条语句卡住时打印位置和剩余文本（批次 362 加的，定位丢代码问题全靠它）；
+  - `ZETA_DUMP_PP=路径` —— 把缩进预处理后的文本写到该路径（看预处理改了什么；文件原样透传时不写出）；
+  - `ZETA_STRICT_PARSE=1` —— 丢代码从警告变成致命错误（量"真实编译了多少"时用）。
+- 看崩溃栈：`lldb`。注意输出的退出码含义：139 段错误、134 abort、124 超时。
 
-### 3.2 驱动（临时 harness，不入库）
+## 2. 当前状态（交接时点）
 
-文件：`~/source/quant/REasyQuant/strategies/code/_zeta_local_drv.py`（**未跟踪**，随用随改）
-
-标准形态：
-
-```python
-import os, sys, json
-os.environ.setdefault("REPLAYQUANT_LOCAL", "1")
-import backend.strategy.wufu_constants          # 注册 wufu universe（必须）
-from strategies.code.jq_wufu_local import run_backtest
-r = run_backtest("2024-01-02", "2024-02-29", 1000000.0, engine="local")
-print(json.dumps(r["metrics"], ensure_ascii=False))
-```
-
-编译 + 运行：
-
-```bash
-cd /Users/meetai/source/zeta-src
-ZETA_NO_OPT=1 REPLAYQUANT_LOCAL=1 ./target/release/zetac \
-  ~/source/quant/REasyQuant/strategies/code/_zeta_local_drv.py -o /tmp/wl/drvN
-cd /tmp/wl && timeout 900 env REPLAYQUANT_LOCAL=1 ./drvN
-```
-
-- `QUANTGPT_CACHE_ONLY=1`：跳过联网拉取，只用本地缓存（调试时常开）。
-- 退出码：`139`=段错误、`138`=总线错误、`134`=abort（含我们自己加的响亮护栏）、
-  `124`=**timeout（挂住）**、`192/184/60`=zeta 程序的返回码异常（另有问题，见 §7）。
-
-### 3.3 看崩溃栈
-
-```bash
-cd /tmp/wl
-printf 'run\nbt 8\nquit\n' > c.txt && timeout 300 lldb -s c.txt ./drvN 2>&1 | grep -E 'frame #[0-9]'
-```
-
-条件断点（非常好用，例：抓 `py_df_loc` 收到 0 掩码那次）：
-
-```bash
-printf 'breakpoint set -n py_df_loc\nbreakpoint modify -c "$x1 == 0" 1\nrun\nbt 14\nquit\n' > c2.txt
-```
-
-### 3.4 运行期探针（env 门控，已内置）
-
-```bash
-ZT_PROBE_LOC=1 ./drvN          # vec_cmp / vec_not / df_loc / groupby / empty-like，带调用方符号
-ZT_DEBUG_PQ=1  ./drvN          # parquet 列读取
-```
-
-`py_df_loc` / `py_df_empty_like` 的护栏还会打 `__builtin_return_address` + `dladdr` 调用方符号，
-以及 `GC_base` 风格的句柄校验信息。
-
----
-
-## 4. 当前卡点（接手点）
-
-### 4.1 现象
-
-最新 harness（`_ranked_fetch_sources`）**挂住**：
-
-```python
-from backend.datasrc.sources_selector import _ranked_fetch_sources
-r = _ranked_fetch_sources("sh.159985")
-print("ranked", len(r))
-# → rc=124（timeout），没有输出
-```
-
-### 4.2 已知事实
-
-1. 函数体尾部的排序是元凶候选：
-
-   ```python
-   return sorted(candidates, key=lambda s: (s != "tushare", -_source_score(s, bs_code)))
-   ```
-
-2. 隔离验证**都通过**（所以不是这些语义本身坏了）：
-   - `_is_likely_index` 核心逻辑：`num 000300 XSHG 6 isdigit 1 / startswith 1 / a 1`
-   - `lambda` 捕获形参 + `sorted(key=…)` + 元组键 + 闭包内调模块函数：`f 2` rc=0
-   - `skip: frozenset[str] = frozenset()` 默认值 + `in skip`：`f 2` rc=0
-3. 之前（批次 285）这条链是**崩溃**（`_is_likely_index + 136`），现在变成**挂住** ——
-   说明最近两批（284 `df[掩码]`、286 私有名修饰）改变了路径。
-
-### 4.3 本批已提交的改动（**未解决目标问题，但确有进展**）
-
-批次 286 给「**闭包内调用模块私有函数**」加了兜底（`src/middle/mir/gen.rs`，23 行）：
-
-- 改前：`_ranked_fetch_sources` 的 `lambda` 里调 `_source_score` ⇒ **链接失败**
-  （`Undefined symbols: __source_score`；正确符号应是
-  `backend_datasrc_sources_selector___source_score`）。
-- 改后：**能链接**（`Compiled to …`），但 `_ranked_fetch_sources("sh.159985")` 仍然超时（rc=124）。
-- 三套基线在该改动下仍全绿（见 §2）。
-
-⇒ 说明「私有名修饰」只是这条链上的一个障碍，**根因还在更里面**。若判断该兜底是错的，
-直接 `git checkout e04c5d9e -- src/middle/mir/gen.rs` 回退，不会影响别处。
-
-`src/middle/mir/gen.rs` 里给「**闭包内调用模块私有函数**」加了兜底：
-
-- 现象：`_ranked_fetch_sources` 的 `lambda` 里调 `_source_score` 时，链接报
-  `Undefined symbols: __source_score`（而正确符号是
-  `backend_datasrc_sources_selector___source_score`）。
-- 兜底逻辑：裸调用 + 名字以 `_` 开头且 `current_module` 非空 ⇒
-  拼 `format!("{}__{}", module.replace('.', "_"), method)` 再降级一次。
-- 状态：**能编译通过**，但 `_ranked_fetch_sources` 仍然挂住 ⇒ 需要确认兜底是否生效、
-  以及挂住点到底在 `sorted` 还是 `_source_score` 内部的 `_DEFAULT_SOURCE_SCORE[asset].get(...)`。
-
-**下一步建议**（按顺序）：
-
-1. 用 `ZETA_PROBE=1` 看闭包子 MirGen 的 `free` 与 `symbol_renames`，确认私有名替换是否命中；
-2. 在 harness 里逐行复刻 `_source_score` 的体（`stats.get` / `_DEFAULT_SOURCE_SCORE[asset].get`），
-   定位是字典访问、还是 `sorted` 的 key 调用循环；
-3. 若挂住出现在 `sorted`：检查 `py_sorted_key` 的调用约定（闭包返回值是元组 ⇒ 元组比较的
-   递归比较函数是否可能自旋）。
-
----
-
-## 5. 本会话修复清单（232–286，全部已提交并 push）
-
-> 每一条都在 `roadmap.md` 有 pre/post 证据；这里只列**根因级**的。
-
-### 5.1 类型传播（都是"值对、类型丢"⇒ 静默错值）
-
-| 批次 | 缺陷 | 症状 |
-|---|---|---|
-| 237 | 函数返回注解 `-> pd.DataFrame` 退化成 `map` | 帧列数恒 0 |
-| 238 | `-> tuple[pd.DataFrame, int]` 元素类型丢失 | 解构出的帧被当整数 |
-| 258/259 | `f64` 结构体字段存位模式、读回未 bitcast | `0.5` → `4.6e18` |
-| **278** | **三元表达式的类型被后一处 I64 判断覆盖** | **wufu universe 全是 `4296191491.513180`** |
-| 282 | 字符串向量比较走数值路径（`strtod`） | 日期区间恒空 ⇒ 缓存覆盖判断永远失败 |
-
-### 5.2 语义（Python 语义错 ⇒ 静默错值）
-
-| 批次 | 缺陷 | 症状 |
-|---|---|---|
-| **266** | **`not` 被当成 `~`**（`not parts` 变列表 ⇒ 恒真） | 清洗走错分支、结果变空 |
-| **279** | **`x in (元组)` 恒为假**（元组是 `StackArray`，成员测试按动态数组读） | `normalize_to_jq` 失效 ⇒ 119 只全部取不到缓存 |
-| 284 | `df[布尔掩码]` 被当列名 | 掩码下标崩溃 |
-| 257 | `@dataclass` 字段默认值完全没生效 | `min_price 0 / drop_extreme False` |
-| 267 | 方法调用带 kwargs 时**按位置追加** | 参数整体错位 |
-| 243/245 | `column > 标量` 类型错、浮点字面量实参被读成 0 | 掩码全真/全假 |
-| 249 | `mask_a \| mask_b` 变成**拼接** | 掩码 2N 长 |
-
-### 5.3 运行期实现（缺实现/写坏）
-
-| 批次 | 项 |
+| 项 | 数字/状态 |
 |---|---|
-| 232 | `py_vec_clip`、`clip` 裸符号回退 |
-| 233 | `df["col"] = 标量` 广播；`itertuples`/`iterrows` 行即 map |
-| 240/241 | `py_vec_mul`（向量逐元素乘）、`py_vec_pct_change`、`py_vec_abs`、`[dynamic]str__*` 真符号 |
-| 244 | **`groupby` 真分组**（`py_df_groupby` + `py_groupby_pairs` + MIR for 降级） |
-| 247 | `df.iloc[0:0]` 空切片；`pd.concat` 缺返回注解 |
-| 248 | `[dynamic]str__map`（`series.map(lambda)`） |
-| 251/274 | **`vec_push` 返回值未回写**（多处，含 `if`/`for` 形式）⇒ 堆破坏/非确定性 |
-| 255 | `return (a, b)` 改**堆数组**（原来返回栈 alloca ⇒ 悬垂） |
-| 273 | **parquet 时间戳按数量级归一化**（微秒文件被当纳秒 ⇒ `1970-01-20`，892 行塌成 2 行） |
-| 274 | 字符串键用 `GC_base` 证明（不再靠指针区间猜） |
-| 282 | `py_vec_cmp_str`（字符串向量按 `strcmp` 比较，日期天然按时间序） |
+| 已提交批次 | 367 第一部分（62f65255）；此前 362-366 全部已提交 |
+| 官方测试 | 194/194 编译，**194/194 链接**（批次 365 起首次全链接） |
+| python_style | 296 通过 / 2 失败（t231、t233，历史遗留）/ 4 known-fail / 1 xpass（t413，预期内） |
+| 语料 | 39/39 解析通过 |
+| 工作区 | 干净（只剩 .ouroboros/work.md 属另一会话） |
+| 主线批次 301 | 冻结中（final_value 修复未开始） |
 
----
+## 3. P0：for 循环体不执行（你第一件要做的事）
 
-## 6. 崩点演进（一眼看清走了多远）
+**复现**：
 
-```
-get_universe → fetch_stocks → MarketDataFetcher.__init__ → _cache_path 垃圾
-→ etf_listing 缓存丢弃 → DataFrame::copy(self==0)
-→ 清洗函数内部（+2020 itertuples / +2472 clip / +2944 reset_index / +2884 len(out)）
-→ 清洗函数整段跑完并返回
-→ _load_cache / fetch_stocks 的 len(cached)（帧指针为 NULL / 缓存不覆盖）
-→ 缓存链路打通（universe 119 只代码正确、loaded 118 of 119）
-→ 数据源排序 _ranked_fetch_sources 的闭包键（批次 285–286，当前）
+```zeta
+fn main() -> i64 {
+    for i in 0..3 {
+        println!("x")
+    }
+    return 0
+}
 ```
 
----
+编译链接全部成功、退出码 0，但**一行 x 都不打**——循环体根本没执行。
+对照：带类型注解的版本（`for i: usize in 0..5`）同样只算出 0
+（回归测试 t413 以 known-fail 状态锁着这个错误值）。
 
-## 7. 踩坑清单（照做能省很多时间）
+**为什么排最前**：循环是最基础的控制流。任何依赖循环的程序（包括目标策略程序）
+都会静默算错。它不属于丢代码问题——这个文件解析是完整的，错在运行期。
 
-1. **`W1002` 是静默截断**：harness 行为反常时（尤其"无输出 + rc=0"）**先 grep `W1002`**。
-   解析器遇到顶层不能处理的项会**丢弃其后所有内容**——我就差点把"被丢弃的复刻版"当成"通过"。
-   ```bash
-   ZETA_NO_OPT=1 .../zetac x.py -o /tmp/x 2>&1 | grep -i W1002
-   ```
-2. **`-O3` 会误编译**：IR 正确、汇编缺实参。**一律用 `ZETA_NO_OPT=1`**；
-   收尾时才回 `-O3` 复核。
-3. **`vec_push` 扩容会返回新指针**，忽略返回值 ⇒ 旧句柄写空/写坏；全仓已排过两轮，
-   新增 C 助手时务必 `x = vec_push(x, v);`。
-4. **`map_get` 按 intern 句柄索引**（不是内容）：改列名查询时别"直接用显示字符串"，
-   会静默丢列（实测 `group a 0 0`）；必须 `map_str_key(display)` 或已有的
-   `zt_safe_str_key`（后者用 `GC_base` 证明可安全解引用）。
-5. **`StackArray` 是 alloca**：任何"跨函数返回"都不要让它逃逸。
-6. **小字符串会打包进 64 位槽**（如 `sz.15998` = `0x38393935312e7a73`）：
-   把它当地址解引用会 SEGV。
-7. **不要改 REasyQuant 项目代码**：所有诊断用 harness + 运行期探针 + lldb。
-8. **每批必须 commit + push**：`git push agentic bootstrap`（`origin` 是 https，会失败）。
-9. **新增测试文件要 `git add -f`**（`*.z` 被 gitignore）；`runtime/*.o` 也要 `-f`。
-10. **私有名的修饰只在“定义它的那个模块”内完成**：从别的模块调 `obj._private()` /
-    `module._private` 会链接失败（`__private` 未定义）或拿到垃圾。探针里优先用公共 API。
-11. **桩的规矩**：默认 `__attribute__((weak))`；与 libc 同名（如 `login`）必须强定义；
-    去重**只能压消息不能压 raise**（否则第二次调用吞异常 ⇒ 返回 0 ⇒ 调用方解引用空对象）。
+**嫌疑**：批次 332 改过 for/range 的归纳计数器（"独立成槽"）。先 `git show` 那一批，
+再用最小文件 + `--dump-mir` 对比循环体是否在 MIR 里、是否被生成。
 
----
+**验收**：`for i in 0..3 { println!("x") }` 打印 3 行；t413 的 known-fail 标记摘掉、
+期望值改回 10；三基线不红。
+
+## 4. P1：解析器丢代码剩余 712 行（8 个文件，卡点已全部探针定位）
+
+| 文件 | 丢行 | 卡点（已探针确认） |
+|---|---|---|
+| benchmark_simd_vs_scalar | 357 | 函数体内 `static mut counter: u64 = 0`（需全局可变存储语义） |
+| selfhost | 158 | `impl Parser for ZetaParser`（trait impl）+ trait 签名声明 + `concept` + match 字符模式 |
+| quantum_basic | 85 | `use std::quantum::algorithms::ShorsAlgorithm;` 深路径 use |
+| advanced_patterns_test | 62 | `Some(x @ 1) \| Some(x @ 2)` —— @绑定 + or 模式 |
+| primezeta_usize_test | 36 | 解析已通（批次 367）；剩 typed 循环变量值 = 0，随 §3 P0 一并 |
+| test_const_expression | 14 | `let arr: [usize; MAX + 1]` 数组类型注解（parse_type 不认识 `[T; N]`） |
+
+按性价比从小到大做：test_const_expression → primezeta 剩余（随 P0）→ advanced_patterns →
+quantum_basic → selfhost → benchmark。每个做完跑快门禁 + 语料。
+
+## 5. 其他未完事项（P2，不着急）
+
+- **#38**：match 表达式的结果槽恒为 I64（类型问题，归轴 F 最小版）。
+- **unwrap 结果无静态类型**：`cs.nth(0).unwrap().len()` 派发错（t411 已用 is_empty 绕开）——根治归轴 F。
+- **G.5d 尾部**：强转 6 档补诊断、registry 核签名等（见 backlog）。
+- **主线批次 301**（P0+P1 的 S/M 项清零后启动）：0 成交根因 → universe/parquet 分歧
+  （119→107 vs CPython 115→103，这是数值对齐的硬前提）→ final_value 对齐。
+- **#42 已收口**（14/14 绑定落地，批次 363-365）；遗留观察：minimal_compiler 运行 rc=0
+  但无输出（内嵌逻辑的运行期行为，下一层问题）。
+
+## 6. 工作规则（用户明确要求 + 项目红线）
+
+1. **文字用大白话**。不用黑话、不发明词、不打比喻。
+2. **任务只登记进 backlog.md**；roadmap.md 只写执行记录（每批一段：现象/定位/修复/验证）。
+3. **每批的固定流程**：最小复现 → 修 → 跑门禁 → 提交 → 更新 backlog。
+4. **三基线是红线**：官方 194/194、python_style 只有 t231/t233 两个存量红、语料 39/39。
+   变红先修再提交。
+5. **提交前 `git status` 核对**，`git add` 写明确的文件清单
+   （教训：批次 362 漏 add 了源码，靠补交 8aa318d8 才救回来）。
+6. **批次号撞号**：可能有另一个会话在并行工作（365 就被两个会话同时用了）。
+   开工前先 `git log --oneline -5` 看最新批次号，发现撞号就顺延。
+7. 新测试文件要 `git add -f`（.gitignore 曾吞 `.z` 文件，批次 340/346 刚治理过）。
+8. **backlog.md 是唯一任务登记表**（有界：新任务入表必须关闭一项旧任务）。
+
+## 7. 老坑（照做能省很多时间）
+
+- **一律 `ZETA_NO_OPT=1`**。批次 307 曾怀疑 -O3 前提反了，但结论未完全复核——
+  在 G.1 修复档落地前不要开 -O3 当默认。
+- **长跑一律 `timeout` 包裹**。
+- **静默错值是最恶劣的失败类别**：编译成功、运行不崩、结果错——本项目历史上大部分
+  批次修的都是它。宁可让程序响亮 abort，也不要给一个可能错的值。
+- 改 C 运行时后必须 `./tools/build_runtime.sh`，并且把重建的两个 .o 一起提交
+  （仓库跟踪它们）。
+- 排查"丢代码"类问题：先 `ZETA_PARSE_TRACE=1` 看卡在哪条语句，
+  再 `ZETA_DUMP_PP` 看预处理改了什么——两个仪器已经够用，不要回到逐个猜语法的老路。
+- 定契约前先查运行时已有的机制（批次 364 定的"0 哨兵"Result 就因没查
+  host_result_* 而被批次 365 推翻）。
 
 ## 8. 关键文件地图
 
-| 位置 | 作用 |
+| 文件 | 内容 |
 |---|---|
-| `src/middle/mir/gen.rs` | MIR 降级主战场（三元类型、tuple 返回、`|`/`>` 分派、闭包、`for` 降级、方法调用实参绑定） |
-| `src/middle/resolver/{resolver.rs,new_resolver.rs}` | 类型/注解归一化（`shim_class_normalize`）、模块全局类型、符号修饰 |
-| `src/middle/types/mod.rs` | `Type::from_string`（`float`→F64 等） |
-| `src/frontend/parser/{expr.rs,stmt.rs,top_level.rs}` | `not`/`in` 算子、dataclass 字段默认值、三元 |
-| `src/backend/codegen/codegen.rs` | 结构体字段存取（f64 bitcast）、字段索引解析 |
-| `runtime/py_additions.c` | **本会话改动最多**：`py_df_*`、`py_vec_*`、`py_not`、`zt_safe_str_key` |
-| `runtime/tokio_runtime_stub.c` | 数组/map 原语（`vec_push` 护栏、`map_resolve` 链） |
-| `runtime/parquet_min.c` | 自包含 parquet 读取（thrift/snappy/RLE/时间戳单位归一化） |
-| `pylib/pandas.z` | pandas shim（DataFrame / loc / iloc / concat / groupby / 空帧规范化） |
-| `tests/python_style/` | 回归用例（t2xx） |
-| `roadmap.md` | **逐批记录 + 证据**（接手必读，尤其最近 30 批） |
+| `roadmap.md` | 执行日志（每批一段：现象/定位/修复/验证），14,000+ 行，只追加 |
+| `backlog.md` | **唯一任务登记表**（有界：新任务入表必须关闭一项旧任务） |
+| `refactor.md` | 重构主计划（轴 A-G + 排程；最小架构弧已获用户批准） |
+| `pyramid.md` | 编译器设计原则审计清单（树状，含 2026 前沿注解） |
+| `docs/ABI.md` | 二进制接口合同（972 行，锚点核对器盯着它） |
+| `docs/architecture_optimization_analysis.md` | 架构分析（2026-09-20） |
+| `src/middle/mir/gen.rs` | MIR 生成（13.7k 行，最大单体，改动最频繁） |
+| `src/backend/codegen/codegen.rs` | LLVM 代码生成（7.6k 行） |
+| `src/frontend/parser/` | 解析器（parser.rs / expr.rs / stmt.rs / top_level.rs / pattern.rs） |
+| `src/frontend/indent.rs` | 缩进预处理（PY-1） |
+| `runtime/py_additions.c`、`runtime/tokio_runtime_stub.c` | C 运行时（方法绑定、判形、Result 单元） |
+| `pylib/registry.txt` | Python 库绑定登记表（数据驱动的方法分发） |
+| `tools/run_all.sh`、`tools/build_runtime.sh` | 门禁与运行时构建 |
 
----
+## 9. 最后交代
 
-## 9. 复现「已验证可用」的一串（自检环境是否正常）
-
-把下面整段写进 harness 后编译运行；**输出必须和注释一致**（这是本会话验证过的基线状态）：
-
-```python
-import os, sys, json
-os.environ.setdefault("REPLAYQUANT_LOCAL", "1")
-import backend.strategy.wufu_constants                      # 必须先注册 universe
-from backend.datasrc.market_data import MarketDataFetcher, get_universe
-from backend.datasrc.data_cleaning import validate_and_repair_stock_ohlcv, MarketCleanConfig
-
-codes = get_universe("wufu", date="2024-01-02")
-print("universe", len(codes), codes[0], codes[1])
-flush()
-
-f = MarketDataFetcher()
-c = f._load_cache("515170.XSHG")
-print("cached", len(c), len(c.columns), c["trade_date"][0], c["trade_date"][891])
-flush()
-
-o, rep = validate_and_repair_stock_ohlcv(c, "515170.XSHG", MarketCleanConfig())
-print("clean", len(o), len(o.columns), rep.output_rows)
-flush()
-```
-
-实测输出（2026-xx 最新工作区）：
-
-```
-universe 119 sz.159985 sh.512070
-cached 892 9 2022-05-05 2025-12-31
-clean 892 9 892
-```
-
-> 说明：最后一步的 `clean 892 9 892` 是本会话的重要里程碑（曾经是 `clean 2 9 2`）。
-> 打印日期那行能同时验证 parquet 时间戳单位（批次 273）与字符串比较（批次 282）。
->
-> 退出码有时是 `184/192/60` 之类的怪值（zeta 程序返回值另有问题，不影响输出内容）。
-
-### 9.1 探针写不出链的坑
-
-从**自己的**模块里调另一个模块的**私有**方法/属性（`obj._cache_path(...)`、`MDS._parquet_cache`）
-目前会**链接失败或拿到垃圾** —— 因为私有名的修饰（`模块__名字`）只在**那一个模块自己编译**时完成。
-经验规则：
-
-- 用**公共** API（`fetch_stocks` / `get_universe` / `validate_and_repair_stock_ohlcv`）；
-- 项目自己要调用的私有名（`_load_cache`）在探针里**能用**（符号已由项目代码引入）；
-- 不满足上述两条时，用 runtime 探针（`ZT_PROBE_LOC=1`）或 lldb 代替。
-
----
-
-## 10. 提交与分支
-
-- 远端：`git push agentic bootstrap`（分支 `bootstrap`；`origin` 是 https，会失败，别用）
-- 最新提交：见 `git log --oneline -1`（本 handoff = 批次 286 提交之后的那一笔）
-- 工作区干净（除 `.DS_Store` 与若干未跟踪目录 `.omo/`、`.ouroboros/`、`conversations/` 等，均无关）：
-  批次 286 的闭包私有名兜底已随本 handoff 一起提交（见 §4.3）。
-
-```bash
-git log --oneline -10              # 看最近批次
-git status --short                 # 看未提交内容
-git diff src/middle/mir/gen.rs     # 看批次 286 兜底全文
-```
-
-## 11. 临时 harness 的当前内容
-
-`~/source/quant/REasyQuant/strategies/code/_zeta_local_drv.py`（**未跟踪**，随用随改）当前装的是
-**§9 的自检片段**（universe + 缓存 + 清洗三步，实测输出见 §9）。
-
-两种常用替换：
-
-```python
-# A) 最小复现当前卡点（超时 rc=124）
-from backend.datasrc.sources_selector import _ranked_fetch_sources
-r = _ranked_fetch_sources("sh.159985")
-print("ranked", len(r))
-
-# B) 跑整个策略（真正目标）—— 见 §3.2
-```
-
-> 注意：这个文件在 `strategies/code/` 下，**会被语料基线扫到**（`corpus_baseline.py` 递归
-> `strategies/**/*.py`）。要跑语料口径时把它移走（`mv` 到 `/tmp`），否则统计数会多一个文件。
+- 你的前任（本会话）在批次 362-367 期间验证过的工作方式：
+  最小复现 → 探针定位 → 最小修复 → 快门禁 → 提交 → 记录。
+  这套节奏一天能推进 5-10 批，且不产生静默回归。
+- 主线冻结是**用户决策**（先清债后修主线）。P0（for 循环）修完、
+  §4 的 712 行清完，就按 §5 顺序恢复主线批次 301。
+- 有拿不准的决策（比如闭包的运行时表示、Result 的表示），
+  先查 backlog 和 roadmap 里已登记的契约；确实没有先例的，写清方案再动手。
