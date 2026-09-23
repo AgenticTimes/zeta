@@ -14719,3 +14719,40 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 - #38 的 ①（match 结果槽恒 I64）未动。
 - selfhost 剩的 91 行换了一形，最小复现已闭：`let x = if let … { } else { }`（`if let` 当表达式用）。`/tmp/b374/d1.z` 报 NOT parsed，对照组 `/tmp/b374/d2.z`（同位置换成普通 `if`）不报；parse-trace 指的正是 `= if let Token::Ident(n) = tokens[i].clone() { … }`。⇒ 批次 375 候选。
 - `benchmark_simd_vs_scalar` 357 行（函数体里的 `static mut`）、`quantum_basic` 85 行（缺 `std::quantum` 绑定）按批次 372 的结论各在别的层，本批未碰。
+
+## 批次 375 —— match 结果槽按臂型统一（收 #38 的 ①）+ 三条实测登记（源码未动）
+
+### 现象与触发点
+改前读数取两份构建：批次 374 落地后的 release（构建于本批改动之前），和仓内 `target/debug/zetac`（00:42 构建，早于 374/375 两批；本批这几条不碰 374 改的路径，`m1` 两份都给出地址，值本身就是每次运行不同的地址）。
+
+| 夹具 | 形状 | 改前 | 改后 |
+| --- | --- | --- | --- |
+| `/tmp/b375/m1.z` | `let s = match 1 { 1 => "hello", _ => "world" }` 再 `print(s)` | 打 `4370672064`（release 改前）/ `4309133760`（debug 改前） | 打 `hello` |
+| `/tmp/b375/f1.z` | 臂是浮点：`match 1 { 1 => 1.5, _ => 2.25 }` | 打 `4609434218613702656` | 打 `1.500000` |
+| `/tmp/b375/m3.z` | 臂是整数：`match 2 { 1 => 11, 2 => 22, _ => 33 }` | 退出码 22 | 退出码 22（未动） |
+| `/tmp/b375/m4.z` | 臂里 `return 5` | 退出码 5 | 退出码 5（未动） |
+| `/tmp/b375/m2.z` | 一臂字符串、一臂整数（混型，无统一答案） | 打 `4308838848` | 仍打地址（本批再跑是 `4329925056`，两次不同 ⇒ 是地址不是值） |
+
+`f1` 是这批最干净的一条：槽里写的本来就是 double 的位模式，类型标成 I64 后 `print` 按整数读回来，得到 `4609434218613702656`。程序照跑、退出码照给、一声不出。
+
+### 定位
+`src/middle/mir/gen.rs` 的 match 降型在倒序建完 if-else 链之后，把结果槽类型无条件写死：改前 `:11185` 的 `self.type_map.insert(id, Type::I64);`。链本身按臂返回，类型这一路没跟着走。
+
+### 修复（三处，全在同一段里）
+1. `gen.rs:10721` 建链前开一个 `arm_value_tys` 收集器。
+2. `gen.rs:11158`、`:11164` 两条臂体下推路径（`Return` 臂取返回值类型、其余臂取结果 id 的类型）各记一次类型。
+3. `gen.rs:11200-11209` 链末统一：每条臂都有类型且彼此相同才用那个类型，否则保留改前的 `I64`。有 `return` 臂的槽没人写、混型臂没有单一答案，这两种都落回旧行为，不猜。
+
+### 验证
+- 新用例 `tests/python_style/t416_match_result_slot_type.z`：三条臂型一致的 match（两条字符串、一条整数）用 `print` 锁，`PASS`。期望行第一次写歪过一次——那版用的是 `println!("{}", s)`，实测打 `4378339792` ⇒ 期望改成实测的形状，同时把这条独立缺口登记进 #45（见"边界"第 3 条）。
+- 丢行（`tools/truncation_inventory.sh`，release）：**3 文件 / 533 行，逐文件一字未动**（`benchmark_simd_vs_scalar 357`、`selfhost 91`、`quantum_basic 85`）——本批在值表示层，不碰解析，这条是断言不是收益。
+- 单跑 `tests/python_style/run.sh`（`/tmp/b375/ps2.log`）：**300 通过 / 2 失败 / 4 known-fail / 0 xpass**，两条红仍是 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`；改前同一条命令是 299/3，多出的红就是刚建好、期望行写歪的 t416（`expected: hello | world | 22`、`actual` 里夹着两个空行 —— 中间那两次 `println("")` 各出一个空行，套件是逐行比对）。
+- 锚点：本批在 `gen.rs` 里加了 24 行，把批次 374 抬到 `:11949` 的那条 `format!("{}_{}", func_name, arg_ids.len())` 又顶到 `:11973` ⇒ 等长改号两处（`docs/ABI.md:323`、`tools/baselines/abi_anchors.tsv` 第 203 行），没跑 `--rebind`（会把别的会话那 58 处漂移一起改写）。两个被改文件行数未变（`docs/ABI.md` 972、tsv 327）。改后漂移集与 HEAD 快照逐字相同：各 58 条，`comm -3` 差集 0 条。对照方法同批次 374（`git archive HEAD` 解到 `/tmp/zh375` 起隔离仓跑核对器，跑完 `rm -rf`）。一条方法学读数差记下，别当成不一致：隔离仓 `[消失]` 10 条、本仓 1 条，多的 9 条全在 HEAD 未跟踪的文件里（`runtime/aliases.inc.c` 2、`validate.md` 2、`zetas/capybara/COMPILER_BUGS.md` 4、`NOTES.md` 1），那是 `git archive` 的覆盖面，不是新增漂移；两边 `[漂移]` 集合相同这一点已由差集为 0 证明。
+- 整趟门禁（`tools/run_all.sh`，日志 `/tmp/b375/gate.log`，`gate_rc=1`）：official `compile 194/194`、`compile+link 192/194`（两条 link-only 未动：`integration_all_features` 缺 `_predict,_train`、`selfhost` 缺 `_as_str,_build_ast,_is_alphabetic,_push`，与批次 374 同读数、归 #42 那族）、official 诊断 `5 文件/29 行`、python_style `300 通过/2 失败/4 known-fail/0 xpass`（编译期诊断 `193 行/82 文件`）、语料 `39/39 = 100%`、jit `ok=172 trap=328 fail=0 timeout=0 segv=0（total 500，最小 ok=163）GREEN`、`diff test match=120 judged=130 rate=92.3% bad_case=0`（分族 truth 22/23、str 20/23、container 27/28、numeric 23/28、control 28/28，与批次 374 一字相同）、knob 23 / swallow 4 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 各 `FAIL 0`、mbvar 19 脚本违规 0、`comment_drift: 0 处复述`、`clean_checkout: rc=0（5s，rev=67dc6232）`。
+- `gate_rc=1` 只由 python_style 那两条红解释（`failed: t231_dict_set_cast_fromkeys t233_listcomp_condition_capture`）——与批次 356/374 同一对红，本批没有新增红。
+- 两处计数变化都是本批新用例 `t416` 造成的，逐项对上：jit `total 499 → 500`、`ok 171 → 172`（trap 328 未动、fail/timeout/segv 全 0 ⇒ 多出来的那一个文件落在 ok 档），python_style `299 → 300`（同一条用例在门禁里就是绿的：门禁起跑于期望行修正之后）。
+
+### 边界（本批没修的，实拍在册，三条都折进已有登记项）
+1. 构造子模式匹配 = #38 的新成员。`/tmp/b375/k1.z`（`match t { T::A(v) => v + 1, _ => 100 }`，`t = T::A(7)`，期望 8）退出码 **1**；`k2.z`（`t = T::B`，期望 100）退出码 **1** ⇒ 第一条臂恒被选中、`v` 没绑上。语句位 `if let` 同形：`s1.z`（期望 100）退出码 1、`s2.z`（期望 8）退出码 **192**。`--dump-mir` 给了正证据：`s1` 的 MIR 只有 3 条 `Assign` + 1 条 `Return`，一个 `If` 都没有（`grep -c` = 0）⇒ then 无条件跑、`else_` 整个丢掉。卡点 `gen.rs:2770` 的兜底臂（"复杂模式：只求值 expr，总是跑 then"），更下面是表示层缺件：带载荷的枚举构造出来是不透明句柄 `zeta_platform_obj`（`runtime/py_additions.c:2790`，存 `[name|a|b|c]`），没有任何取 tag / 取载荷的入口。所以只修解析会把"静默丢 91 行"换成"静默错值"，按 handoff 的排序往后放；批次 374 记的 selfhost 剩 91 行的下游正是这一条。
+2. 函数体里的 `static mut`（#36 的 benchmark 357 行）。`/tmp/b375/sm1.z` 实测：W1004（`static` 被当成独立语句）+ W1002（整条 fn 从 `:1` 起被丢），改后仍如此。一行 `tests/unit-tests/benchmark_simd_vs_scalar.z:11` 的 `static mut counter: u64 = 0` 压着 357 行。文法里没有 `static`、AST 里没有 `AstNode::Static`；"只初始化一次"要么加运行时助手（模块全局走 env 表，`src/backend/codegen/runtime_decls_core.rs:51-52` 只有 `zeta_env_get`/`zeta_env_set`，没有 `zeta_env_has`），要么把初始化提到模块初始化里 ⇒ 跨解析+AST+MIR+运行时四层，不是一个解析批。
+3. `println!("{}", <字符串变量>)` 打句柄（折进 #45 的打印族）。`v2.z` 打 `4343720384`；`v4.z` 一次给出三档——字面量 `lit` 正常、`let a: str = "annot"` 打 `4301908468`、`fn f(x: str)` 的形参打 `4301908474`；`v5.z` 同一函数里 `println!("{}", msg)` 打 `4364921296` 而 `println!("{}", n)` 打 `3` 正常；同一个 `msg` 走 `print(msg)` 打 `hi`（`v6.z`）⇒ 只有格式串那条路过载选错，MIR 里调用名是 `println_i64_1`，而单参直调的分派（`gen.rs:8156` 一带）会按静态类型选 `println_str`。⇒ 批次 376 候选，夹具已在手。

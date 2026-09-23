@@ -200,7 +200,7 @@ src/middle/mir/gen.rs	11024	self.lower_range_guard(scrutinee_id, start, end, *in
 src/middle/mir/gen.rs	11255	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
 src/middle/mir/gen.rs	11792	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
 src/middle/mir/gen.rs	11796	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
-src/middle/mir/gen.rs	11949	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	11973	format!("{}_{}", func_name, arg_ids.len())
 src/middle/mir/gen.rs	12507	func: "zeta_dyn_getitem".to_string(),
 src/middle/mir/gen.rs	12535	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
 src/middle/mir/gen.rs	13150	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos

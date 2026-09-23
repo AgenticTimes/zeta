@@ -10713,6 +10713,12 @@ call, no NULL-handle dereference).",
 
                 // Generate if-else chain for match arms
                 let result_id = id;
+                // PY-A (#38 ①): the result slot used to be typed `I64` no matter
+                // what the arms returned, so `let s = match 1 { 1 => "hello", _ =>
+                // "world" }; print(s)` printed the string handle as a number
+                // (measured: `4370672064`). Collect each arm's type instead; see
+                // the unification below the chain.
+                let mut arm_value_tys: Vec<Type> = Vec::new();
 
                 // We'll build the match as a series of if-else statements
                 // Start from the last arm and work backwards
@@ -11148,9 +11154,15 @@ call, no NULL-handle dereference).",
                     let arm_body_start = self.stmts.len();
                     let mut then_branch = if let AstNode::Return(inner) = &*arm.body {
                         let ret_val = self.lower_expr(inner);
+                        if let Some(ty) = self.type_map.get(&ret_val).cloned() {
+                            arm_value_tys.push(ty);
+                        }
                         vec![MirStmt::Return { val: ret_val }]
                     } else {
                         let arm_body_id = self.lower_expr(&arm.body);
+                        if let Some(ty) = self.type_map.get(&arm_body_id).cloned() {
+                            arm_value_tys.push(ty);
+                        }
                         vec![MirStmt::Assign {
                             lhs: result_id,
                             rhs: arm_body_id,
@@ -11182,7 +11194,19 @@ call, no NULL-handle dereference).",
                 }
 
                 self.exprs.insert(id, MirExpr::Var(id));
-                self.type_map.insert(id, Type::I64);
+                // Unify: every arm has to store a value of the same type. A
+                // `return` arm leaves the slot unwritten, and mixed types have no
+                // single answer, so both cases keep the old `I64`.
+                let all_same = arm_value_tys.len() == arms.len()
+                    && arm_value_tys.first().map_or(false, |first| {
+                        arm_value_tys.iter().all(|t| t == first)
+                    });
+                let result_ty = if all_same {
+                    arm_value_tys[0].clone()
+                } else {
+                    Type::I64
+                };
+                self.type_map.insert(id, result_ty);
             }
             AstNode::FieldAccess { base, field } => {
                 // `self.<field>` where `self` is NOT bound (a synthesized
