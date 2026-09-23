@@ -3471,8 +3471,21 @@ static int64_t* zt_dyn_vec_hdr(int64_t h) {
     int64_t* hdr = (int64_t*)(h - 16);
     if (GC_base((void*)hdr) != (void*)hdr) return NULL;
     int64_t cap = hdr[0], len = hdr[1];
-    if (cap < 8 || cap > (1LL << 28) || len < 0 || len > cap) return NULL;
-    if ((int64_t)GC_size((void*)hdr) < 16 + cap * 8) return NULL;
+    if (cap < 1 || cap > (1LL << 28) || len < 0 || len > cap) return NULL;
+    int64_t need = 16 + cap * 8;
+    int64_t have = (int64_t)GC_size((void*)hdr);
+    if (have < need) return NULL;
+    // BATCH-301: `cap >= 8` used to be the whole anti-mimic story, but most
+    // producers size their block to the element count (`base[0] = n ? n : 1`
+    // in zeta_collect_vec_n / str_split / the df column builders), so a
+    // 1..7-element list was rejected here and `zeta_dyn_len` fell through to
+    // `strnlen` on the data words — measured as `len(final_holdings) == 0` for
+    // a 3-element list, and 5 / 0 / 8 for 1 / 4 / 8 elements. A short vec is
+    // now accepted only when the block is TIGHT: GC rounds a request up by a
+    // spare of exactly 8 or 16 (measured for cap 1..20: GC_size(16+cap*8) -
+    // (16+cap*8) ∈ {8, 16}), so anything wider is a different allocation that
+    // merely starts with two small ints. Long vecs keep the `>=` rule as is.
+    if (cap < 8 && have > need + 16) return NULL;
     return hdr;
 }
 
