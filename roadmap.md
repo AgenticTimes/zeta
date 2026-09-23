@@ -14642,6 +14642,10 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 - 内容侧：`ShorsAlgorithm`/`GroversAlgorithm` 只在 Rust 侧 std 里（`src/std/quantum/mod.rs:638`、`:756`；extern "C" 出口 `:1225`、`:1246`），`build/stubs/std/` 下没有 quantum 一条 ⇒ `use std::quantum::algorithms::…` 载不到东西；而顶层写法的 `/tmp/b372/t1.z`（同样的 `use` + `ShorsAlgorithm::new(15)`）编译 rc=**0**、零诊断 ⇒ 幽灵调用不出声，属 #41 那一族。
 所以这一条的实际读数是：单落地解析修复，official 侧 `compile 194/194` 不动、`compile+link 193→192`，jit `ok 170→169`（且是出声的 trap），丢行 600→515（3 文件/600 → 2 文件/515，剩下 benchmark 357 + selfhost 158）。方向上"静默丢代码换成一串出声报错"是对的，但它把 quantum 一族缺绑定这件事从藏处翻到明处，需要和 #42（12 个 std 方法运行时绑定）同族的活儿一起排，不是一行解析能收口的。
 
+### 追加实测（同批，改判第一位候选的成色）
+`benchmark_simd_vs_scalar.z` 的 357 行（P1 下一批第一位）比 quantum_basic 大一层：`ZETA_STRICT_PARSE=1` 实测两条同时出现（`/tmp/b373/strict.log`，文件 364 行）——`warning: [W1004] :11: 'static' became a stand-alone statement while 'mut counter: u64 = 0' was parsed as the next one` 加 `error[E1002] :9: 357 line(s) … NOT parsed` ⇒ 触发点是 `fn get_time()` 里的 `static mut counter: u64 = 0`（:11，紧接 `unsafe { counter += 1; return counter }`）。
+不是解析层单独能收的证据：全仓 AST 没有 static 这一项（`src/frontend/ast.rs` 里 `static` 只出现在两条注释：:10 的 `'static` 生命周期、:139 的静态/关联函数说明，无 `AstNode::Static`）。⇒ 语句位置的 `static mut` 要么给它一个真形态（按"函数名+局部名"落到模块级槽，跨调用保存储），要么就只能当普通局部变量下（`get_time` 的计数器每次调用归零 ⇒ 正是最坏那一档：静默错值）。本批按规矩不动源码，把这一条判据留在这里给下一批用。
+
 ### 未实测的疑点（写下来免得下批重新猜）
 语句位置的 `AstNode::Use` 会不会真起作用：`resolver.rs:782` 的 `Use` 处理在 `register()`（:183）里，本批只静态看到它往 impl 体递归（:95、:209 一带），函数体内的语句列走不走得到没量过——因为本批没装修复，所以没有这条读数。下批若要落地，先答这一条。
 
