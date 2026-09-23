@@ -14628,3 +14628,25 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 2. benchmark_simd_vs_scalar 357 行：函数体里写 `static mut`（`h1.z`/`h3.z`）。与上一条同族（顶层项写进函数体），可能一起收 442 行；先各测一遍是否互相挡住。
 3. selfhost 158 行：卡点未定位（370 已证"impl Trait for + concept"那句不成立）。先上 `ZETA_PARSE_TRACE` 量停在哪，不再造手工夹具。
 4. match 一族真修（369 三条 + #38）：排在 P1 清完之后。
+
+## 批次 372 —— quantum_basic 的 85 行：解析层修得了触发点，收不掉内容（本批只量，源码未动）
+
+### 现象与触发点
+`ZETA_STRICT_PARSE=1` 跑 `tests/unit-tests/quantum_basic.z`：`error[E1002] … :73: 85 line(s) at the end of the input were NOT parsed`，第一个未解析文本就是 `fn test_shors_algorithm()`（`/tmp/b372/strict.log`）。丢的 85 行里含 `fn main`（:119），所以现在的"编译通过"是拿整个 `main` 换的。触发点是函数体里的 `use`：`parse_stmt`（`src/frontend/parser/stmt.rs:1679`-`:1708`）没有 `use` 臂，而 `use` 只有顶层规则认（`src/frontend/parser/top_level.rs:132`）。单独复现仍在 `/tmp/b370q/g1.z`（批次 370 造的夹具，函数体只有一行 `use` 也丢）。
+顺带一句实现约束：`parse_stmt` 那个 `alt` 已经放满 21 个臂（:1698-1699 的注释就是在说 nom 的元数上限），再加臂必须走嵌套 alt，不能直接追加。
+
+### 为什么本批没落地这个解析修复
+把 :75、:98 两行 `use` 删掉（其余一字不动）得到副本 `/tmp/b372/qb_nouse.z`（154 行），也就是"解析修好之后那 85 行第一次参与编译"的等价物，实测：
+- AOT：`zetac qb_nouse.z -o qb_nouse.bin` rc=**1**，`Undefined symbols`：`_factor`、`_optimal_iterations`、`_success_probability`、`_test_fn`、`_[dynamic](i64, i64)__iter`（`/tmp/b372/nouse.log`）⇒ 链接失败。
+- JIT：`zetac qb_nouse.z` rc=**1**，出声 `warning[E4016] … 13 runtime symbol(s)` + `error[E4016] zeta_dynarray_new has no binding`（`/tmp/b372/jit_nouse.log`）⇒ **trap 路径，不是段错误**。
+- 内容侧：`ShorsAlgorithm`/`GroversAlgorithm` 只在 Rust 侧 std 里（`src/std/quantum/mod.rs:638`、`:756`；extern "C" 出口 `:1225`、`:1246`），`build/stubs/std/` 下没有 quantum 一条 ⇒ `use std::quantum::algorithms::…` 载不到东西；而顶层写法的 `/tmp/b372/t1.z`（同样的 `use` + `ShorsAlgorithm::new(15)`）编译 rc=**0**、零诊断 ⇒ 幽灵调用不出声，属 #41 那一族。
+所以这一条的实际读数是：单落地解析修复，official 侧 `compile 194/194` 不动、`compile+link 193→192`，jit `ok 170→169`（且是出声的 trap），丢行 600→515（3 文件/600 → 2 文件/515，剩下 benchmark 357 + selfhost 158）。方向上"静默丢代码换成一串出声报错"是对的，但它把 quantum 一族缺绑定这件事从藏处翻到明处，需要和 #42（12 个 std 方法运行时绑定）同族的活儿一起排，不是一行解析能收口的。
+
+### 未实测的疑点（写下来免得下批重新猜）
+语句位置的 `AstNode::Use` 会不会真起作用：`resolver.rs:782` 的 `Use` 处理在 `register()`（:183）里，本批只静态看到它往 impl 体递归（:95、:209 一带），函数体内的语句列走不走得到没量过——因为本批没装修复，所以没有这条读数。下批若要落地，先答这一条。
+
+### 下一批默认候选（P1 顺序改判）
+1. benchmark_simd_vs_scalar 357 行：函数体里 `static mut`（`/tmp/b370b/h1.z`/`h3.z`）。**改判到第一位**：它是 §4 剩余里唯一还有希望一收成一块的（357 行，占剩余 515 的 69%）。
+2. selfhost 158 行：`ZETA_PARSE_TRACE` 量停在哪，不造手工夹具。
+3. quantum_basic 85 行：等 quantum 一族绑定（与 #42 同族）有安排时，和 `parse_stmt` 的 `use` 臂一起落地；解析修法已在本批定稿（嵌套 alt + `kw_boundary` 防 `used = 1` 误读）。
+4. match 一族真修（#38 五条 + 结果槽）：P1 清完之后，需整趟门禁。
