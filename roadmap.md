@@ -14973,3 +14973,36 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 1. #38 ⑦（构造子模式 / `if let`：selfhost 剩的 91 行下游是它；表示层缺"取 tag/取载荷"的入口，不是半修得了的）。
 2. §4 的 `benchmark_simd_vs_scalar` 357 行（`static mut`，跨解析+AST+MIR+运行时四层）。
 3. "一个臂都不匹配 ⇒ 读未写槽"这一档的判据（上面"边界"第 1 条，最小复现 `/tmp/b380/c1.z` 已就位）——需要先定策略：编译期要求穷尽，还是运行期出声。
+
+## 批次 381（只有定位，零代码改动）—— `quantum_basic` 那 85 行压的是"函数体里的 `use`"这一种拼法；单独把它修通会让 official 的 compile+link 掉一格
+
+### 现象（现值全部在批次 380 的构建上实拍，`/tmp/b381/`）
+| 文件 | W1002 落点 | 首块未解析文本 | 丢的行数 |
+|---|---|---|---|
+| `tests/unit-tests/quantum_basic.z` | `:73` | `fn test_shors_algorithm() -> i32 {\n // Test Shor's algori` | 85 |
+| `tests/stdlib-foundation/fmt_time_env_test.z` | `:113` | `fn test_datetime_formatting() {\n use std::time::{SystemTi` | 47 |
+| `tests/zeta/test_pub_use.z` | `:3` | `mod my_module {\n pub use super::other_module::MyType;\n}\n\n` | 15 |
+| `/tmp/b381/g1.z`（最小复现） | `:1` | `fn a() -> i32 {\n use std::quantum::algorithms::ShorsAlgor` | 5（整个文件） |
+
+后三条的首块文本里就摆着 `use` / `pub use`，第一条（`quantum_basic`）的卡点在 `:75` 那一行 `use std::quantum::algorithms::ShorsAlgorithm;`——W1002 只报整条 `fn`，不报具体哪一行，所以这一条是下面第 1 项量出来的。
+
+### 定位（四条，全部有实拍）
+1. **缺的是"`use` 这一种拼法的语句规则"，不是深路径本身**。`/tmp/b381/g1.z`（体里一条 `use std::quantum::algorithms::ShorsAlgorithm;`，后面再跟一条 `fn b`）→ W1002 落在 `:1`，整个文件 5 行全丢；同一位置换成 `import std.quantum`（`h1.z`）或 `from std.quantum.algorithms import ShorsAlgorithm`（`h2.z`）一声不出。语句规则里 Python 两种拼法都有（`src/frontend/parser/stmt.rs:896` 的 `parse_python_import`），`use` 只挂在顶层分支（`src/frontend/parser/top_level.rs:132` 的 `parse_use_statement`）⇒ 深路径 `a::b::c` 不是问题，出现在语句位才是问题。`#36` 行里"quantum_basic 85（use 深路径）"这一句按此改判。
+2. **`mod { }` 里也是同一条规则缺**：`test_pub_use.z:3` 的 `pub use super::other_module::MyType;` 在模块块里，块语句列表同样没有 `use` 分支。
+3. **单独把解析修通会把"静默丢 85 行"换成"链接失败"，动的是 official 的红线**。做法是把 `quantum_basic.z:75` 那一行删掉再编译（`/tmp/b381/qb_nouse.z`，等价于"这条 `use` 已经过"之后的下游）：shors 那条 `fn` 进了程序，`shor.factor()` 在接收者类型未知的情况下按裸名下发 ⇒ `Undefined symbols: "_factor"`、`Linking failed`（现在这个文件是能链接的，`compile+link` 计在 192/194 里）。也就是说这一族要连着"quantum 方法的真符号"一起收，否则门禁从 `192/194` 变 `191/194`。顺带显形的第二个卡点：`test_grovers_algorithm`（`:95` 起再丢 62 行，首条语句还是体里 `use`，在 `:98`）。
+4. **真符号在哪**：`src/std/quantum/mod.rs:1225`、`:1231` 有 `shors_algorithm_new` / `shors_algorithm_factor` 两个 Rust 侧 `extern "C"`；`.z` 程序链接的是 C 运行时那套符号（`runtime/py_additions.c` 里有 `zeta_qc_new`，没有 quantum 算法族的方法）。本会话不动 `runtime/py_additions.c`（并行工作流的路径），所以本批不碰这一族。
+
+### 修法（写清楚但没有执行）
+`stmt.rs` 的语句分支加一条 `use` 拼法，直接复用 `parse_use_targets`（已是 `pub(crate)`，`stmt.rs:935` 的 `import a::b;` 就是走它，两条拼法不会各写一份尾缀规则）；下游不用动——MIR 语句位对 `AstNode::Use` 已经是无操作（`gen.rs:2796`，语义处理归解析后的 `resolver.rs:782`）。半径：`quantum_basic` 的 85 行里前 22 行归它（shors 那条 `fn` 占 `:73`-`:94`，行数按这个区间实数得出；W1002 的 85 与"文件末行 − 73 + 1 = 84"差 1，是本行不解释的口径差，两处照各自原样记），其后 grovers 的 62 行同因；`fmt_time_env_test` 的 47 行、`test_pub_use` 的 15 行也归它。**但必须先有第 3、4 项的符号，否则 official 掉一格。**
+
+### 验证（本批零代码改动 ⇒ 不重跑门禁）
+上面四条读数都取自批次 380 的构建，本批没有源码改动，所以门禁与丢行尺子沿用批次 380 的在册值（`rc=1` 仍只由 t231/t233 解释；`3 文件 / 533 行`）。新增的三条夹具（`g1.z`、`h1.z`、`h2.z`）与一份改过的副本（`qb_nouse.z`）在 `/tmp/b381/`；`practical_programming_test.z`（`:5` 起丢 245 行，首块是 `// Sorting\n let mut numbers = `）与 `test_high_assurance.z`（`:96` 起丢 411 行，首块 `fn new() -> VerifiedVector<T`）也在同一趟扫描里显形，但它们不是 `use` 这一族，本批没跟进。
+
+### 边界（本批没说到的）
+1. **`use` 在体里到底该绑什么**没裁决：顶层 `use` 走 `resolver.rs:782`，函数体内的作用域语义（只对这条 `fn` 有效，还是和顶层一样全局）没有在册判据；本批只量到"能不能解析"，没量"解析后绑成什么"。
+2. **第 3 项的"191/194"是推断＋一条直接证据**（直接证据是 `_factor` 未定义导致链接失败这一条实拍；"official 会掉一格"是把它放进 official 集合后的口径），没有真的改解析器跑一遍门禁。要落成读数，得等符号那半边一起做。
+
+### 下一批默认候选
+1. #38 ⑦（构造子模式 / `if let`，selfhost 剩的 91 行；本批顺带量到 `if let Some((p, q)) = …` 带 `else` 在解析层是过的（`/tmp/b381/g2.z` 无 W1002）⇒ 91 行的卡点要重新找，不能照旧账推）。
+2. §4 的 `benchmark_simd_vs_scalar` 357 行（`static mut`，四层）。
+3. 批次 380 的"边界"第 1 条：一个臂都不匹配时读未写槽，判据待定。
