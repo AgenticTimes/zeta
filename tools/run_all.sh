@@ -389,7 +389,7 @@ fi
 # 被编译文件所在目录**往上 5 级**都在搜索基里，所以门禁读数会随检出位置变化：家目录躺
 # 一个同名 .z 就能压过 pylib；而 `pylib` 那一档此前是裸相对路径 ⇒ 换个 CWD 整个库面消失
 # （修前实测 rc=1、`_arange` undefined）。本步骤钉七翼："越界必须出声（W1005）、就地/
-# 注册表/库面基不许出声、越界与否 MIR 逐字节相同、库面基跟着可执行文件走（W1006）"。
+# 注册表/库面基不许出声、越界与否 MIR 逐字节相同、库面基跟着可执行文件走（W1006）"；E 段语料 352 起逐目录自证非空。
 pysrc_rc=0; pysrc_failed=0; pysrc_checked=0
 if [[ $SKIP_PYSRC -eq 0 ]]; then
   pysrc_log=$(mktemp)
@@ -556,8 +556,8 @@ if [[ $SKIP_SWALLOW -eq 0 && $swallow_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_IMPORT -eq 0 && $import_rc -ne 0 ]]; then rc=1; fi
 # empty_stmt: 判据在 tools/empty_stmt_inventory.sh 内部（四翼断言），这里只认退出码。
 if [[ $SKIP_EMPTY -eq 0 && $empty_rc -ne 0 ]]; then rc=1; fi
-# pysrc: 判据在 tools/py_module_search_inventory.sh 内部（六翼——批次 343 补的 A2 翼，
-# 这行当时漏改，批次 344 顺手更正），这里只认退出码。
+# pysrc: 判据在 tools/py_module_search_inventory.sh 内部（批次 343 补 A2 翼、351 补 G 翼
+# ⇒ 七翼 + E 段；"六翼"这行 343 漏改、344 更正、351 又过时、352 再更正——注释追不上判据，下批起改口径为"数翼以脚本头部清单为准"），这里只认退出码。
 if [[ $SKIP_PYSRC -eq 0 && $pysrc_rc -ne 0 ]]; then rc=1; fi
 # cli_semantics: 判据在 tools/cli_semantics_check.sh 内部（七翼），这里只认退出码。翼 C 的 --repl 判据自带 `head -c` 保险丝，跑飞也不会把门禁挂住。
 if [[ $SKIP_SEM -eq 0 && $sem_rc -ne 0 ]]; then rc=1; fi

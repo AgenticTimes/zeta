@@ -46,7 +46,10 @@
 #           `pylib` ⇒ 喊 1 条 W1006 且**两个基都搜**（cwd 优先次序不变）；G3 负控制 ——
 #           把编译器拷进一棵没有 `pylib` 的裸树 ⇒ 必须退回修前的样子并出声。G3 存在的
 #           理由：它钉住"库面确实解析到了"，否则 G1 的"两次逐字相同"可以靠两份残骸蒙过。
-#   E 段 —— 全语料 W1005 计数，期望 0；同一趟编译顺带数 W1006，也期望 0。
+#   E 段 —— 全语料 W1005 计数，期望 0；同一趟编译顺带数 W1006，也期望 0。批次 352 补
+#           了口径自证：语料是数组，每个目录先自证"顶层有 .z 且含 import"，再要两个下限
+#           （文件数 ≥50、真解析到模块的文件数 ≥20）——此前 `tests/official/*.z` 匹配
+#           0 个文件而报错被 `2>/dev/null` 吞掉，"全语料"三批以来只有 python_style 一档。
 #
 # 用法：./tools/py_module_search_inventory.sh
 set -uo pipefail
@@ -297,18 +300,63 @@ fi
 echo "== E：全语料越界/库面基计数（读数，W1005 与 W1006 都期望 0）=="
 # 同一趟编译同时数两个码 ⇒ 不为 W1006 再跑一遍全语料。W1006 在仓库根的语料上必须
 # 是 0：既没有"两个 pylib 打架"（歧义），也没有"哪儿都找不到"（失踪）。
-total=0; w6_total=0; files=0
-for f in $(grep -lE "^(from|import) [A-Za-z_]" tests/python_style/*.z tests/official/*.z 2>/dev/null); do
+#
+# 语料是**数组**，每个目录先自证非空再进循环。343 起的写法是一行
+# `grep -lE "^(from|import) …" tests/python_style/*.z tests/official/*.z 2>/dev/null`，
+# 而 `tests/official/` **从来没存在过**（official 语料的真路径是 `tests/unit-tests/`，
+# 194 个 = 门禁第 1 步那个 194）⇒ 那条 glob 匹配 0 个文件、`No such file or directory`
+# 被 `2>/dev/null` 吃掉，于是三批以来"全语料"实际只有 python_style 一档（117 个）。
+# 接进 unit-tests 后是 119 个，但新增的 2 个含 import 的文件走的是 `import std::memory;`
+# 这种 Rust 拼法，**一条 PY-A 解析都不产生** —— 接它的价值不在信号，在"清单不再靠一条
+# 没人核对的 glob"。
+CORPUS_DIRS=(tests/python_style tests/unit-tests)
+# 两条下限：语料文件数、以及"真的走到 PY-A 模块解析"的文件数（实测 119 / 55）。下限取
+# 实测的一半再低一档，目的是抓住"glob 又空了 / 编译集体失败"，不是钉死精确数。
+IMPORT_RE='^[[:space:]]*(from|import) [A-Za-z_]'
+corpus=()
+for d in "${CORPUS_DIRS[@]}"; do
+  dz=$(find "$d" -maxdepth 1 -name '*.z' 2>/dev/null | grep -c . ); dz=${dz:-0}
+  if [[ "$dz" == 0 ]]; then
+    echo "  FAIL 语料目录 $d 顶层没有 .z —— 这一档匹配 0 个文件，'全语料'是空的（343 的 tests/official 就是这么静默的）"
+    rc=1; continue
+  fi
+  hits=()
+  while IFS= read -r hf; do hits+=("$hf"); done < <(grep -lE "$IMPORT_RE" "$d"/*.z 2>/dev/null)
+  if [[ ${#hits[@]} -eq 0 ]]; then
+    echo "  FAIL 语料目录 $d 有 $dz 个 .z，却没有一个含 import/from —— 它给 E 段贡献 0 信号：要么接错语料，要么把它从清单里删掉"
+    rc=1; continue
+  fi
+  echo "  ok   语料目录 $d 自证非空（顶层 .z=${dz}，含 import=${#hits[@]}）"
+  corpus+=("${hits[@]}")
+done
+if [[ ${#corpus[@]} -ge 50 ]]; then
+  echo "  ok   语料合计 ${#corpus[@]} 个文件（下限 50；343~351 实际只有 117 个，因为那条空 glob 的报错被吞了）"
+else
+  echo "  FAIL 语料合计只有 ${#corpus[@]} 个（下限 50）—— 有语料目录又空了，下面的 0 是空断言"
+  rc=1
+fi
+total=0; w6_total=0; files=0; res_hit=0
+# `${corpus[@]+…}`：本脚本开了 `set -u`，bash 3.2 下空数组展开成 `"${corpus[@]}"` 会直接
+# 报 unbound variable 而**崩在判据之前**——那时脚本非 0，但打不出"哪条红了"。
+for f in ${corpus[@]+"${corpus[@]}"}; do
   files=$((files + 1))
   "$ZETAC" --dump-mir "$f" -o "$TMP/w.o" >/dev/null 2>"$TMP/w.err"
   n=$(grep -c '\[W1005\]' "$TMP/w.err" || true)
   m=$(grep -c '\[W1006\]' "$TMP/w.err" || true)
+  r=$(grep -c 'PY-A: imported module' "$TMP/w.err" || true)
   total=$((total + ${n:-0}))
   w6_total=$((w6_total + ${m:-0}))
+  [[ "${r:-0}" != 0 ]] && res_hit=$((res_hit + 1))
   [[ "${n:-0}" != 0 ]] && echo "  越界：${f}（$n 条）"
   [[ "${m:-0}" != 0 ]] && echo "  库面基：${f}（$m 条）"
 done
-echo "  含 import 的语料文件 $files 个，W1005 合计 $total 条，W1006 合计 $w6_total 条"
+echo "  含 import 的语料文件 $files 个（其中 $res_hit 个解析到模块），W1005 合计 $total 条，W1006 合计 $w6_total 条"
+if [[ $res_hit -ge 20 ]]; then
+  echo "  ok   语料里 $res_hit 个文件真的走到 PY-A 模块解析（下限 20）—— 上面那个 0 是'搜遍了没越界'，不是'根本没在搜'"
+else
+  echo "  FAIL 只有 $res_hit 个文件解析到模块（下限 20）—— 编译侧坏了或语料被换掉了，W1005=0 是空断言"
+  rc=1
+fi
 if [[ "$total" != 0 ]]; then
   echo "  FAIL 语料里出现了新的越界解析 —— 要么把夹具挪进源目录，要么把这条登记成已知并写进 roadmap"
   rc=1
