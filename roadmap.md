@@ -14382,3 +14382,37 @@ minimal_compiler 缺的 13 个符号需要字符、迭代器（.iter().enumerate
 
 ### 下一步
 #42 剩余：按上面的决策实现 _unwrap / _unwrap_or / _unwrap_or_else + _parse（0 哨兵）+ _chars/_nth/_push_str/_iter（字符用单字符字符串表示，与 s[i] 一致）——bootstrap_validation_test 与 minimal_compiler 的链接就齐了。
+
+## 批次 365 —— 交付物：模块/架构/类设计分析（docs/module-class-analysis.md），非代码批次
+
+### 盘据
+用户指令：「@pyramid.md 分析当前的模块、架构设计、类设计，生成模块关系图、类图、类依赖、类功能函数列表」+「使用 codegraph 分析」。
+四路只读子代理已回收（前端/中端/后端+运行时/横切+孤儿），本批做结构复核并落单一文件。
+
+### 改动
+- 新增 `docs/module-class-analysis.md`（未动 `docs/architecture_optimization_analysis.md`、`classdesign.md`、`refactor.md`、`pyramid.md`）。八节：口径 / 模块关系图 / 类图 / 类依赖矩阵 / 类功能函数列表 / 架构级发现 / 未接线清单 / 七问落点。
+- 零代码改动。
+
+### 判据（本次实测，非引用）
+- `codegraph status` = 378 文件 / 7,246 节点 / 30,035 边（查询前置健康检查）。
+- `find src -name '*.rs'` = 172 文件 / 90,571 行；行首 `struct` 333 / `enum` 109 / `trait` 27 / `impl` 343 / `fn` 2,241。
+- `codegraph callers`：`EnhancedBorrowChecker`/`IdentityAwareBorrowChecker`/`AdvancedMacroExpander`/`UnifiedTypeChecker`/`optimize` = 0；`InferContext` = 2（均自身文件 :48/:1906）；`TypeCheckMigrator` = 1（`typecheck_new.rs:406`，`#[cfg(test)]`）；`compile_with_diagnostics` = 5 全在 `tests/integration/integration_error_handling.rs`。
+- 跨层违规 7 处，最硬一条 `parser/top_level.rs:1188 → middle::pylib::find_member`；反向 `use crate::backend` 于 frontend/middle = 0 命中。
+- `Type` 变体 34（awk 与 codegraph 双法一致，非子代理报的 33）；`AstNode` 变体 64、`impl AstNode` 出现次数 = 0（grep 累合）。
+- 陪跑合计改为逐行相加：59 文件 / 23,041 行 = 25.4% 行 / 34.3% 文件（上一轮估算 65/16,272 漏了 proc_macro 845、new_resolver 2,160、typecheck_new 690，已在文内写明差异来源）。
+
+### 自伤
+- 初稿把 `types/identity/` 的活路径写成 `mod.rs:913`，`sed -n '911,915p'` 打出来是 `mangled_name` 内部 ⇒ 假引用，已改为目录级实测（5 文件 / 1,643 行）；`BorrowChecker` 的 `resolver.rs:39` 从「构造」改为「字段 `RefCell<BorrowChecker>`」。
+- `lsp` 的「0 调用者」按 skill 规则先写「图内无边」再 grep 复核，确认 `src/bin/zeta-lsp.rs:7` 是真实消费者，从陪跑表剔除（-5 文件 / -719 行）。
+
+### 回归
+无代码改动，未跑门禁（跑门禁是并行会话本轮的现场，`gen.rs`/`runtime/*.c` 有其 5 行未提交新增在 `:13757`，落在本文引用行号之后，已在文内注明）。
+
+### 边界与未修
+- 只覆盖 `src/`；`runtime/*.c` 内部结构、`pylib/*.z` 库面未画。
+- codegraph 节点口径（362 struct）与 grep 行首口径（333）并存，文内标注不互换。
+
+### 下一批默认候选
+1. `emit()` 读取端接进 `main.rs`（§5.5 的黑洞），承接 #86/#87。
+2. 裁决 `optimization.rs`（603 行 / 零调用者，pyramid §3.3 判据到期）。
+3. `MirGen` 拆分第一刀的前置：§4.2 列的 8 个旁路字段。
