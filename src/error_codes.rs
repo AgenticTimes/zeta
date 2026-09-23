@@ -2160,6 +2160,9 @@ pub mod common {
     pub const FILE_NOT_FOUND: &str = "E9002";
 
     // Warning codes
+    // W000x = non-fatal pipeline-stage readings, all emitted as literals;
+    // W0001-W0003 are still unregistered.
+    pub const MACRO_PARSE_FAILED: &str = "W0004";
     pub const UNUSED_IMPORT: &str = "W1001";
     // W1002/W1003 are emitted as literals (main.rs `ensure_fully_parsed`,
     // top_level.rs recovery), so this list follows the emitter. The previous
@@ -2177,8 +2180,14 @@ pub mod common {
     // neither. Reading-only — which directory a module resolves to never changes
     // because of it.
     pub const PY_BUNDLED_LIBRARY_BASE: &str = "W1006";
+    // Emitted as a literal in `middle/resolver/resolver.rs`: a `use` item that
+    // failed to process. Moved off W2002, which three sites claimed at once.
+    pub const USE_STATEMENT_PROCESSING_FAILED: &str = "W1007";
     pub const TYPE_COULD_BE_INFERRED: &str = "W2001";
-    pub const REDUNDANT_TYPE_CAST: &str = "W2002";
+    // Emitted as a literal in `main.rs`: the runtime object resolved to a copy in
+    // the current directory while `ZETA_RUNTIME_DIR` holds a different one. The
+    // previous W2002 = "redundant type cast" never had an emitter or a reference.
+    pub const RUNTIME_OBJECT_CWD_SHADOW: &str = "W2002";
     pub const UNUSED_VARIABLE: &str = "W3001";
     pub const UNUSED_PARAMETER: &str = "W3002";
     pub const DEAD_CODE: &str = "W3003";

@@ -924,7 +924,7 @@ impl Resolver {
                     }
                     Err(e) => {
                         crate::diag_warning!(
-                            "W2002",
+                            "W1007",
                             "Failed to process use statement {}: {}",
                             path.join("::"),
                             e
@@ -1145,7 +1145,7 @@ impl Resolver {
                             .register_declarative_macro(name.clone(), macro_def);
                     }
                     Err(e) => {
-                        crate::diag_warning!("W2003", "Failed to parse macro {}: {}", name, e);
+                        crate::diag_warning!("W0004", "Failed to parse macro {}: {}", name, e);
                     }
                 }
             }
