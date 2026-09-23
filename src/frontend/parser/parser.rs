@@ -167,11 +167,30 @@ fn parse_path_segment(input: &str) -> IResult<&str, String> {
     }
 
     // Also allow "super" and "crate" as path components (keywords valid in use paths).
+    // Word boundary matters: `tag("self")` alone matches the front of
+    // `self_compile_test`, so a call argument `foo(self_compile_test)` parsed
+    // as the path `self` followed by a stranded `_compile_test` — the whole
+    // call failed and every statement after it was silently dropped (measured:
+    // tests/unit-tests/minimal_compiler.z lost 230 lines to exactly this).
+    // The peek rejects a match whose next char continues an identifier.
+    fn path_keyword(word: &'static str) -> impl Fn(&str) -> IResult<&str, String> {
+        move |input: &str| {
+            let (rest, _) = ws(tag(word)).parse(input)?;
+            if rest.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Tag,
+                )));
+            }
+            Ok((rest, word.to_string()))
+        }
+    }
+
     ws(alt((
         parse_scoped_package,
-        value("super".to_string(), tag("super")),
-        value("crate".to_string(), tag("crate")),
-        value("self".to_string(), tag("self")),
+        path_keyword("super"),
+        path_keyword("crate"),
+        path_keyword("self"),
         parse_ident,
     )))
     .parse(input)

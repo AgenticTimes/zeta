@@ -64,6 +64,14 @@ pub fn parse_block_body(input: &str) -> IResult<&str, Vec<AstNode>> {
             continue;
         }
 
+        // Env-gated trace (`ZETA_PARSE_TRACE=1`): report exactly where the
+        // block loop choked. This is how multi-line truncation causes get
+        // found — by instrument, not by guessing constructs one at a time.
+        if std::env::var("ZETA_PARSE_TRACE").is_ok() {
+            let consumed = input.len() - next.len();
+            let preview: String = next.chars().take(80).collect();
+            eprintln!("[parse-trace] 语句解析失败：块内偏移 {consumed}，剩余文本开头：{preview:?}");
+        }
         return Err(nom::Err::Error(NomError::new(
             next,
             nom::error::ErrorKind::Many0,
