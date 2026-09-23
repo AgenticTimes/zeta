@@ -85,15 +85,13 @@ integration = []  # Enable integration bridge module
 identity = []  # Enable identity-aware string operations
 
 # Development dependencies for testing
+# 批次 347（轴 A）：四条声明全部**零引用**（grep 实证：proptest!/prop_assert/TempDir/
+# tempdir/fuzz_target/libfuzzer/criterion_* 在 src/ 与 tests/ 下命中数均为 0）。
+# 其中 criterion 是 benchmarks.yml 幽灵作业的唯一动机，而该作业引用的
+# `--bench compiler_bench|runtime_bench` 与 `--bin regression_test` 自 v0.10.0
+# 删掉 benches/ 起就不存在，同批删除；真实性能基线由 tools/perf_baseline.py 承担。
+# 需要哪一条时再加回来，并同时补上真正的 bench/fuzz/test 目标。
 [dev-dependencies]
-# Property-based testing framework
-proptest = "1.5.0"
-# Fuzz testing
-libfuzzer-sys = "0.4.10"
-# Benchmarking framework.
-criterion = { version = "0.8.1", features = ["html_reports"] }
-# Temporary directory creation for tests
-tempfile = "3.10.0"
 
 # Test configurations
 [[test]]
