@@ -13783,3 +13783,73 @@ python_style / corpus / jit 四步合计要跑上千次 `zetac` 调用 —— �
 本批不删死簇，只把真话立起来：`-h`/`--help` 接上新写的 `usage_text()`，未知选项点名，
 多输入点名两个，掉尾缺值说清缺的是谁；判据加第七翼 25 条，其中一条**漂移闸**让"帮助说谎"
 这件事从今往后自动变红，反证里它的假绿也被自己的前提断言抓住了。
+
+---
+
+## 批次 351（#76 ②：`pylib` 那一档不再向当前目录要许可 —— 库面跟着编译器走）
+
+### 盘据（全部实测，2026-09-23）
+
+| # | 事实 | 怎么量的 |
+|---|---|---|
+| 1 | **同一个二进制、同一个绝对路径源文件，换个目录就是两个世界**：CWD=仓库根 rc=0 / MIR 1045 行 / 落点 `pylib/numpy.z`；CWD=`/tmp` rc=**1** / MIR **158 行** / `unknown member arange` → 链接 `Undefined symbols: _arange` | `/tmp/zetac_pre351 --dump-mir /tmp/b351/rep.z`（HEAD 064ca26f 的构建，批量 350 已在、351 未在内），两次跑分别存 `/tmp/b351/{a,b}.{mir,err}` |
+| 2 | 这不是"少一条告警"，是**少一份实现**：`pylib/numpy.z` 文件头明写"已从 registry `F` 撤下的：arange / asarray / where / zeros —— 由本库提供"。撤下来的一撤，补上去的只在相对基里 | `sed -n 1,12p pylib/numpy.z` + `grep -n "M pandas" pylib/registry.txt` |
+| 3 | 唯一当场说话的那条诊断**指错了方向**：`unknown member … will be resolved by name at link time` 把编译器没找着目录说成了用户写了个不存在的成员 | 同 1 的 `/tmp` 档 stderr |
+| 4 | **病同一个先例早已治过**：`find_runtime_obj`（src/main.rs:440）的注释原文就是"These used to be looked up with a bare relative path, so the compiler only linked correctly when it happened to be run from the repo root"。它的形状：cwd 直查 → env 覆盖 → 从 `current_exe()` 往上 **4 级**；两侧都有且不同 ⇒ 喊 W2002，不静默择优 | 读 src/main.rs:433-490 |
+| 5 | 搜索基里另外两档不用改：`packages_dir()`（pylib.rs:373）本来就是 `$ZETA_PACKAGES_DIR`/`$HOME` 基；`build/stubs` 仍是裸相对，但**全语料经它解析 0 次**（门禁日志里 `imported module … from` 的落点 2/2 都在 `pylib`）⇒ 本批不动，登记 | `grep -o "imported module .* from [^ ]*" /tmp/b350_gate.log` |
+| 6 | 顺带量到一处既有缺陷：`[W2002]` 有两个语义不同的发射点（src/middle/resolver/resolver.rs:927 的"多余类型转换" vs src/main.rs:458 的"运行时对象两侧都有"），而 error_codes.rs:2176 只登记了前者 | `grep -rn 'W2002' src/` |
+
+### 四处改动
+
+1. **`src/middle/pylib.rs:385-475`（新增 93 行）**：`bundled_pylib_dirs()`（:402）用 `OnceLock` 记忆化 ⇒ 判决每进程做一次、告警每进程至多一条；`locate_bundled_pylib_dirs()`（:407）cwd 拼法仍然第一（仓库根的读数因此逐字不变），其后才是可执行文件自己那棵树；`pylib_next_to_exe()`（:443）4 级上限与 `find_runtime_obj` 同宽；`same_dir()`（:457）按 `canonicalize` 判同，任一失败退字面比较；`abspath()`（:464）给"找不着"那条基用 `current_dir()` 拼出绝对路径 —— 否则告警会把裸拼法 `pylib` 原样吐回去，正是它该回答的问题。
+2. **`src/middle/resolver/resolver.rs:2276-2278`**：`bases.push(PathBuf::from("pylib"))` 一行换成展开 `bundled_pylib_dirs()`。同处 :2152-2163 的次序文档改成实测次序 —— 原文把 `pylib` 记在 `$ZETA_PYLIB` **之前**，本来就是错的（真实次序：源目录+祖先 → `ZETA_PYLIB` → packages → 库面基 → build/stubs）。
+3. **`src/error_codes.rs:2175-2179`**：`PY_BUNDLED_LIBRARY_BASE = "W1006"`，注释指发射点，走 W1005 同一条"字面量发射 + 常量登记"的路子。
+4. **判据 `tools/py_module_search_inventory.sh`（323 行，+119/-9）**：G 翼三档 + E 段顺带数 W1006 + 文件头改七翼；`tools/run_all.sh:388-392` 第 11 步注释（+4/-3，净 1 行 ⇒ 锚点 :542 随之漂移）。
+
+### 判据（G 翼 9 条，全部门禁内）
+
+- **G1 主断言**：同一份绝对路径源文件，仓库根 vs 一个没有 `pylib` 的裸目录 ⇒ 两侧都出现 `imported module \`numpy\``、都 rc=0、**MIR 逐字节相同**（两边 `-o` 用同一个路径，所以比的真是产物）。
+  - 前提断言（防空断言）：参照侧先自证干净（0 条 W1006 且有落点行），且参照产物 **>500 行**——否则 G1 比的是两份 158 行残骸也能"相同"。
+- **G2 歧义**：cwd 里放一个同名 `pylib/`（内含 `zzd_decoy.z`）⇒ 恰好 **1 条** W1006（不是 0 条静默择优，也不是每个 import 一条）；cwd 那份仍然优先（`from pylib/zzd_decoy.z` 逐字未变）；**且 `numpy` 仍然解析得到**（两个基都搜，不是"择其一"）。
+- **G3 负控制（这一翼的承重墙）**：把编译器**拷进一棵没有 `pylib` 的裸树**、cwd 也在树里 ⇒ 必须退回修前的样子：1 条 W1006、旧 `unknown member` 仍在、且**不许**出现 `imported module`。它钉住"库面确实解析到了"，G1 的"相同"才不是两份噪声。
+  - P0 断言：告警里必须出现裸树路径（尾段 `solo/bin/zetac`，不匹配全路径 —— `current_exe` 可能把 `/var` 写成 `/private/var`，全路径匹配会假红）。
+- **E 段**：全语料一次编译同时数 W1005 与 W1006，两者期望 0（实测 117 文件 / W1005 **0** / W1006 **0**）。
+- 合计 `pysrc.checked` **29 → 38**。
+
+### N1 反证（`ZETAC=/tmp/zetac_pre351`）
+
+rc=**1**，ok 33 / FAIL **6**，**6 条全在 G 翼里**（G1 消失、G2 两条、G3 P0+计数、G2 numpy）；A/A2/B/C/D/F/E 一律不变 ⇒ 新翼真的只钉这一件事，343 的语义一条没被顺手改。G2 的失败转储正好是修前危害原文：`unknown member \`arange\` … resolved by name at link time` → `Undefined symbols … _arange`。
+
+两处"在修前二进制上会假绿"，写下来免得下次当成证据：G3 最后那条"没把仓库那份混进来"（没有告警 ⇒ grep 无命中即绿）、E 段 W1006=0（修前根本发不出 W1006）。承重的是 G1 的逐字比对与 G3 的 P0+计数，它们都红了。
+
+### 自伤 2 处（都被判据抓住，不是复盘时补的）
+
+1. **G3 第一版调的是 `$ZETAC`（仓库那个二进制），不是刚拷出去的裸树副本** ⇒ 它顺着自己的树找到了 `pylib`，库面照样解析到、W1006 一条没有 —— 三条 FAIL 全建在错误的对象上。修：改调 `$TMP/solo/bin/zetac`，并**因此**加 P0 断言要求告警里出现裸树路径。这条判据比原来的档位值钱：它把"跑错二进制"变成不可能静默。
+2. **`cargo build -q \| tail` 之后 `echo $?` 读到的是 `tail` 的 0** ⇒ 一次**编译失败**的构建被当成成功，随后那趟 pysrc 跑的是**上一个**二进制。正是门禁反复讲的"rc 必须从文件里读"，我在同一个坑里又踩了一次。修：`cargo build >log 2>&1; echo $? >rc`，实得 rc=101 与 E0593（`current_dir()` 是 `Result`，`unwrap_or_else` 的闭包要 1 个参数），改成 `|_|` 后 rc=0。
+
+### 回归
+
+- **仓库根 pre/post 逐字相同 12/12**（12 个含 `import` 的 python_style 文件，比 MIR + stderr（去 clang 噪声）+ rc）。
+- **整份门禁日志与批次 350 逐字 diff，只有两处不同**：`ts` 与 `pysrc.checked 29→38`（另 `clean_checkout.rev` 随提交前进）。official compile 194/194、link 191/194（3 个 link-only 同旧）、python_style 291/2/4/0、jit ok=170 trap=321 fail=0、diff 120/130=92.3%、knob 23、swallow 4、import 22、empty_stmt 68、cli_semantics 73、ignore_rules 19、mbvar 19 脚本/0 违规、official_not_measured 0 —— 全持平；门禁 rc=1 仍只由 `py_fail=2`（t231/t233）解释。
+- **改完 `run_all.sh` 注释后整趟重跑**（`/tmp/b351_gate3.log`，rc 从文件读）：与先前那趟只有 `ts` 和 `clean_checkout.secs`（1s→0s）两处不同，14 步计数逐字相同 ⇒ 注释改动没有碰到任何读数。上面的门禁证据以这一趟为准。
+- **locale**：`LC_ALL=C` 与 `en_US.UTF-8` 两跑 rc 均 0，38 行断言输出（脱去 mktemp 路径后）逐字相同。
+- **锚点**：`--rebind` 判搬家 3 条并改 `docs/ABI.md` + `tools/baselines/abi_anchors.tsv`（pylib.rs:685→:778、:806→:899、resolver.rs:2681→:2685）；复核对 rc=0（243 可解析 / 0 定位失败 / 漂移 0 / 新 0 / 消失 0 / 拒改 0）。**第二次 `--rebind` 是本批自己欠的**：改动 4 里那句预测成真 —— 事后改 `tools/run_all.sh` 的注释（净 +1 行）让 `:542` 漂到 `:543`，复核对同样 rc=0（漂移 1 / 搬家 1 / 拒改 0 → 复核 0/0/0）。批次 336 就记过这条教训（"改 `run_all.sh` 之前先算它下游有几条锚点"），本批的差别只是这次是注释、搬家判定能自动对上。改完 `run_all.sh` 后整趟门禁重跑过一次，证据以最后一趟为准。
+- **结构（codegraph，sync 05:09）**：`bundled_pylib_dirs` callers=1（`find_py_module_file_ranked`，resolver.rs:2238）；`locate_bundled_pylib_dirs` / `pylib_next_to_exe` / `same_dir` 各 callers=1 ⇒ 没有一件是写完就死的。`abspath` **图内无边** —— 它的 3 个调用点（pylib.rs:424/433/434）都在 `eprintln!` 实参里，宏实参不成边；grep 复核 + 编译器无 `dead_code` 警告两条佐证。
+
+### 边界与未修
+
+- `build/stubs` 那一档仍是裸相对路径（盘据 5 给了它"全语料 0 次"的读数，故不顺手改）。
+- 祖先链压过库面 = #70 ① 的判据收紧，未动。
+- `[W2002]` 一码两义（盘据 6）未动。
+- E 段"全语料"其实只覆盖 `tests/python_style`：那句 glob 里的 `tests/official/*.z` 在仓内**不存在**，被 `2>/dev/null` 静默吃掉 ⇒ 117 这个数全来自 python_style。既有判据的口径问题，登记在 #70/#77 行内。
+
+### 下一批默认候选
+
+1. **门禁口径**：给 E 段这类 glob 加一条"每个语料 glob 至少匹配 1 个文件"的断言（本批实测到 `tests/official/*.z` 匹配 0 个），顺带把 official 语料的真路径接进 W1005/W1006 计数。S。
+2. **#52 第 3 层**：锚点核对器把"消失 + 新"成对自动配对（本批 3 条搬家靠 `--rebind` 判定，成对项仍要人看）。M。
+3. **#80 ②**：`--bootstrap` 吃不吃给定的输入文件 —— 仍排在 #78 ① 的 285 函数堆溢出（rc=134）后面。
+4. **#80 ④**：删 `compiler_config` 死簇（轴 A 打法：删了还能编译才算证死）。**卡点**：它唯一的外引是 `src/lib.rs:52` 的 `pub mod compiler_config;`，而 `src/lib.rs` 在禁改清单上 ⇒ 需要用户开这条路径。
+
+### 一句话
+
+`pylib` 这一档此前向当前目录要许可，于是"库面在不在"是一件由**你在哪儿敲命令**决定的事：仓库根 1045 行 MIR，`/tmp` 158 行然后 `_arange` undefined，而唯一说话的那条诊断把责任推给了源码作者。修法没有发明任何东西 —— 仓内 `find_runtime_obj` 三年前就给运行时 `.o` 治过同一个病，本批把它的形状搬过来（cwd 仍然第一，所以仓库根的读数 12/12 逐字不变），并把"要么生效要么出声"补成 W1006：两个基打架喊一条，一个都没有也喊一条。判据里最值钱的不是 G1 的逐字比对，而是 G3 —— 它把编译器拷进裸树，要求它**必须**退回修前的样子；这个档位第一版自己就是错的（跑成了仓库那个二进制），于是现在有一条 P0 断言专门钉"告警里得出现裸树路径"。

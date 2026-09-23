@@ -205,12 +205,12 @@ src/middle/mir/gen.rs	12507	func: "zeta_dyn_getitem".to_string(),
 src/middle/mir/gen.rs	12535	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
 src/middle/mir/gen.rs	13150	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");
-src/middle/pylib.rs	685	/// `declare_registry_runtime_fns` emits after task D.
-src/middle/pylib.rs	806	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");
+src/middle/pylib.rs	778	/// `declare_registry_runtime_fns` emits after task D.
+src/middle/pylib.rs	899	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");
 src/middle/resolver/resolver.rs	613	if method == "zeta_param_default" && args.len() == 2 { if let AstNode::Lit(i) = &args[0] { if (*i as usize) < defaults.len() { // Fail-loud when the default's l
 src/middle/resolver/resolver.rs	627	if mismatch { eprintln!( "warning: PY-A: the default for `{}` has a kind that \ parameter type `{}` cannot hold — it is coerced \ (annotate the parameter, or ch
 src/middle/resolver/resolver.rs	1887	let mangled = format!("{}__{}", module.replace('.', "_"), member);
-src/middle/resolver/resolver.rs	2681	let mangled = format!("{}__{}", canon.replace('.', "_"), src_mem);
+src/middle/resolver/resolver.rs	2685	let mangled = format!("{}__{}", canon.replace('.', "_"), src_mem);
 src/middle/specialization.rs	27	format!("{}_inst_{}", self.func_name, self.type_args.join("_"))
 src/middle/types/mod.rs	768	Type::DynamicArray(inner) => format!("[dynamic]{}", inner.display_name()),
 tests/python_style/run.sh	15	trap 'rm -rf "$OUTDIR"' EXIT
@@ -233,7 +233,7 @@ tools/parse_bisect.py	158	ap.add_argument("--zetac", default=os.path.join(ROOT, 
 tools/run_all.sh	10	ZETAC="${ZETAC:-$ROOT/target/release/zetac}"
 tools/run_all.sh	101	elif "$ZETAC" "$z" --no-link -o "/tmp/zt_out/$n" >/dev/null 2>/dev/null; then
 tools/run_all.sh	196	jit_ok=$(echo "$line" | sed -nE 's/^jit sweep: ok=([0-9]+) .*/\1/p'); jit_ok=${jit_ok:-0}
-tools/run_all.sh	542	if [[ $SKIP_OFFICIAL -eq 0 && $official_compile -ne $official_total ]]; then rc=1; fi
+tools/run_all.sh	543	if [[ $SKIP_OFFICIAL -eq 0 && $official_compile -ne $official_total ]]; then rc=1; fi
 validate.md	46	| `tools/check_registry_symbols.sh` | registry F/W/X ↔ runtime .o | `./tools/check_registry_symbols.sh` |
 validate.md	151	- f64 参数的 extern 声明若写 i64 → fptosi 截断（abs(-2.5)→nan 的根因）
 zetas/capybara/COMPILER_BUGS.md	29	**Symptom:** Functions stored in LLVM module as `storage::store_open` but called as `storage__store_open` when call site precedes definition.

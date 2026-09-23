@@ -2172,6 +2172,11 @@ pub mod common {
     // that resolved by walking up out of the compiled file's own directory.
     // Reading-only — the resolution itself is unchanged.
     pub const PY_MODULE_ANCESTOR_RESOLUTION: &str = "W1005";
+    // Emitted as a literal in `middle/pylib.rs::locate_bundled_pylib_dirs`: the
+    // bundled `pylib` library base was found in two different places, or in
+    // neither. Reading-only — which directory a module resolves to never changes
+    // because of it.
+    pub const PY_BUNDLED_LIBRARY_BASE: &str = "W1006";
     pub const TYPE_COULD_BE_INFERRED: &str = "W2001";
     pub const REDUNDANT_TYPE_CAST: &str = "W2002";
     pub const UNUSED_VARIABLE: &str = "W3001";

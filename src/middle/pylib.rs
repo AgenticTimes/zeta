@@ -380,6 +380,99 @@ pub fn packages_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(home).join(".zeta/packages")
 }
 
+/// The bundled library directories (`pylib/`), located without asking the
+/// current working directory for permission.
+///
+/// `find_py_module_file_ranked` used to push the bare relative spelling, so the
+/// whole library surface existed only while the compiler happened to run from the
+/// repo root. Measured before this existed: one binary, one absolute source path,
+/// two working directories — repo root compiled `import numpy` to 1045 lines of
+/// MIR and linked; from `/tmp` it produced 158 lines and died in the linker with
+/// `_arange` undefined, while the only diagnostic that fired ("unknown member …
+/// resolved by name at link time") blamed the caller for a file the compiler had
+/// just failed to find.
+///
+/// Shape copied from `find_runtime_obj` (src/main.rs), which fixed the identical
+/// defect for the runtime objects: the cwd spelling stays first, so a repo-root
+/// compile keeps resolving the exact paths it always did, and the executable's
+/// own tree is searched after it. Both bases are kept — a stray `pylib` in the
+/// cwd must not cost the library members that only the shipped tree has — and
+/// every non-quiet outcome (two different directories, or none at all) speaks as
+/// W1006.
+pub fn bundled_pylib_dirs() -> Vec<std::path::PathBuf> {
+    static BASES: OnceLock<Vec<std::path::PathBuf>> = OnceLock::new();
+    BASES.get_or_init(locate_bundled_pylib_dirs).clone()
+}
+
+fn locate_bundled_pylib_dirs() -> Vec<std::path::PathBuf> {
+    let cwd_dir = std::path::PathBuf::from("pylib");
+    let exe_dir = pylib_next_to_exe();
+    let mut bases: Vec<std::path::PathBuf> = Vec::new();
+    if cwd_dir.is_dir() {
+        bases.push(cwd_dir.clone());
+    }
+    if let Some(e) = &exe_dir {
+        if !bases.iter().any(|b| same_dir(b, e)) {
+            bases.push(e.clone());
+        }
+    }
+    if bases.is_empty() {
+        eprintln!(
+            "warning: [W1006] PY-A: no bundled library base `pylib` (looked in {} \
+             and walking up from {}) — library members will not resolve; point \
+             ZETA_PYLIB at a source tree to restore them",
+            abspath(&cwd_dir),
+            std::env::current_exe()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "<unknown exe>".to_string()),
+        );
+    } else if bases.len() > 1 {
+        eprintln!(
+            "warning: [W1006] PY-A: two bundled library bases — {} (working directory) \
+             and {} (the compiler's own tree); both are searched, in that order",
+            abspath(&bases[0]),
+            abspath(&bases[1]),
+        );
+    }
+    bases
+}
+
+/// `pylib/` found by walking up from this executable. Four levels covers the
+/// cargo layout (`target/release/zetac` → `target/release` → `target` → tree
+/// root) and is the same cap `find_runtime_obj` uses.
+fn pylib_next_to_exe() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let mut cur = exe.parent();
+    for _ in 0..4 {
+        let dir = cur?;
+        let candidate = dir.join("pylib");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
+fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+fn abspath(p: &std::path::Path) -> String {
+    match std::fs::canonicalize(p) {
+        Ok(c) => c.display().to_string(),
+        // A base that does not exist is exactly the case the message exists to
+        // report, and `canonicalize` fails on it — so say where it was looked
+        // for instead of echoing the bare relative spelling back.
+        Err(_) => std::env::current_dir()
+            .map(|d| d.join(p).display().to_string())
+            .unwrap_or_else(|_| p.display().to_string()),
+    }
+}
+
 /// Is this a no-op module (`N` directive)? Its members are never validated
 /// and never bound; the import is simply accepted.
 pub fn is_noop_module(module: &str) -> bool {

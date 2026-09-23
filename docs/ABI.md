@@ -307,7 +307,7 @@ M1–M4 在 `/tmp/abi3_*`（批次 316），M5–M7 在 `/tmp/abi8/`（批次 31
 ### 4.1 轴一的写侧：四种拼写，没有一种可逆
 
 **N1 模块限定的规范形是 `<module 的点换成下划线>__<member>`。**
-锚点 resolver.rs:1887、:2681；mir/gen.rs:392、:431、:543、:550、:3308。
+锚点 resolver.rs:1887、:2685；mir/gen.rs:392、:431、:543、:550、:3308。
 构造就是两次 `replace`，**没有转义**：`__` 既是分隔符又可能出现在 member 里，
 点号也会把 `a.b` 和 `a__b` 映到同一串。判"这是不是模块限定名"目前只有
 `actual_name.contains("__")`（codegen.rs:2931，与同一行的
@@ -411,7 +411,7 @@ HashMap 迭代顺序随机 ⇒ `print.N` 冲突改名和运行期别名表"从�
 
 **N11 `[dynamic]<T>__<method>` 是类型打印器造出来的"符号名"，C 侧只能起别名接住。**
 `Type::DynamicArray(inner)` 的 `display_name()` 就是 `[dynamic]{inner}`
-（types/mod.rs:768）；分派侧用 `::` 形（pylib.rs:806
+（types/mod.rs:768）；分派侧用 `::` 形（pylib.rs:899
 `dispatched_member("[dynamic]str::isin")`），落到 MIR 时是 `__` 形
 （gen.rs:8901 `func: "[dynamic]str__map"`）；C 侧的实现叫 `zt_dyn_str_map`，
 靠 `__asm__("_\\[dynamic\\]str__map")` 顶这个名字（py_additions.c:967）。
@@ -430,7 +430,7 @@ docs/ARCHITECTURE-REVIEW-2026-09.md:103 记的是"四份符号表手工同步"�
 | 处 | 现状 | 锚点 |
 |---|---|---|
 | ① LLVM 声明 | **仍是手写**：codegen.rs 内 255 处 `add_function`（实测计数） | 例 codegen.rs:1069、:1071、:1080 |
-| ①′ 生成物 | `runtime_decls_registry.rs`（294 处 `add_function`）+ `runtime_decls_core.rs`（61 处）由 `--emit`/`--emit-core` 生成，**两个入口函数从未被调用** | codegen/mod.rs:7、:9 只声明模块；`declare_registry_runtime_fns`/`declare_core_runtime_fns` callers **图内无边**（codegraph）+ grep 全仓仅定义处与一处注释（pylib.rs:685） |
+| ①′ 生成物 | `runtime_decls_registry.rs`（294 处 `add_function`）+ `runtime_decls_core.rs`（61 处）由 `--emit`/`--emit-core` 生成，**两个入口函数从未被调用** | codegen/mod.rs:7、:9 只声明模块；`declare_registry_runtime_fns`/`declare_core_runtime_fns` callers **图内无边**（codegraph）+ grep 全仓仅定义处与一处注释（pylib.rs:778） |
 | ② gen.rs 分发 | 手工 | 例 gen.rs:8901、:9153 |
 | ③ C 实现 | 手工 | 例 py_additions.c:967、:3408 |
 | ④ `.set` 别名 | 已生成（数据 pylib/runtime_aliases.txt:1 的注释自述"Generated/**edited by hand**"，即"生成物同时被人手改"） | aliases.inc.c:1-2 |
@@ -952,7 +952,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      日志两行：`official: compile N/194, compile+link M/194` 与逐文件的
      `### <name> — 缺运行时绑定: <符号名…>`（明细 `$OFFICIAL_LINK_DIAG`，默认
      `/tmp/zeta_official_link.txt`）；JSON 加 `official.compile` 字段。
-   - **判据（`tools/run_all.sh:542`）从 `pass==total` 改为 `compile==total`**，
+   - **判据（`tools/run_all.sh:543`）从 `pass==total` 改为 `compile==total`**，
      compile+link 与缺绑定清单照样打印 ⇒ 不是"把门禁绿过去"：该缺口从"一个红色计数"
      变成"指名到符号的登记表"，且真实编译失败仍然致命。本批读数：**compile 194/194、
      compile+link 193/194**。

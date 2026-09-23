@@ -2151,14 +2151,16 @@ impl Resolver {
 
     /// PY-A: load a Python module from disk so `import X` works for the user's
     /// own files, not just the built-in registry. Search order:
-    ///   <dir of the file being compiled>/X.{py,z}, pylib/X.{py,z},
-    ///   $ZETA_PYLIB/X.{py,z}, build/stubs/X.{py,z}
+    ///   <dir of the file being compiled> and its ancestors, $ZETA_PYLIB,
+    ///   ~/.zeta/packages, the bundled `pylib`, build/stubs — each for
+    ///   X.{py,z} or X/__init__.{py,z}
     /// Every top-level definition is prefixed `X__` so two modules (or a module
     /// and the main program) may both define `helper`. Returns false when no
     /// file is found.
     /// PY-A: locate a Python module file on disk: (path, is_python_source).
-    /// Order: the directory of the file being compiled, `pylib`, `$ZETA_PYLIB`,
-    /// then `build/stubs`.
+    /// Order as above; the bundled `pylib` comes from
+    /// [`crate::middle::pylib::bundled_pylib_dirs`], not from the working
+    /// directory, so the library surface is the same wherever zetac is run.
     /// PY-A: resolve a possibly-relative module specifier against the module
     /// currently being loaded. `.` is the current package, `..` its parent,
     /// etc. Absolute names pass through unchanged. A relative import with no
@@ -2271,7 +2273,9 @@ impl Resolver {
             bases.push((std::path::PathBuf::from(p), None));
         }
         bases.push((crate::middle::pylib::packages_dir(), None));
-        bases.push((std::path::PathBuf::from("pylib"), None));
+        for d in crate::middle::pylib::bundled_pylib_dirs() {
+            bases.push((d, None));
+        }
         bases.push((std::path::PathBuf::from("build/stubs"), None));
         for (base, rank) in &bases {
             let pkg = base.join(&rel);

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # tools/py_module_search_inventory.sh —— PY-A 模块解析的"越界"值域（批次 343，任务 #70）
+#   ＋ 库面基的位置独立性（批次 351，任务 #76 ② = 本文件 G 翼）
 #
-# 为什么需要它：`find_py_module_file`（src/middle/resolver/resolver.rs:2225）把**被编
+# 为什么需要它：`find_py_module_file_ranked`（src/middle/resolver/resolver.rs:2238）把**被编
 # 译文件所在目录往上 5 级**连同它自己一起列进搜索基（顺序：source dir=0 → 祖先 1..5 →
-# $ZETA_PYLIB → ~/.zeta/packages → 相对路径 pylib → build/stubs）。祖先链是为"工程根
+# $ZETA_PYLIB → ~/.zeta/packages → 库面基 pylib → build/stubs）。祖先链是为"工程根
 # 相对的点号导入"留的（`from strategies.code.jq_shim import …` 从 strategies/code/ 里
 # 编），但它同时意味着两件事：
 #   1) 家目录里一个同名 `.z` 会**压过** `pylib` 的库面 —— 同一份编译器 + 同一份源码，
@@ -23,12 +24,12 @@
 #      成功"的断言全建成了一句空话。现在每档各有一个 `main_<档>.z`，只 import 本档
 #      那一个模块。
 #
-# 六翼：
+# 七翼：
 #   A 翼 —— 越界必喊：候选分别在越出 1 / 3 / 5 级的基上，各恰好 1 条 W1005，且报出的
 #           级数与实际一致（喊的是"越了几级"，不是一个布尔）；
 #   A2 翼 —— 边界：5 级是 cap 内最深一档 ⇒ 仍能链接出 `tag`；4 级不喊（B 翼）之外，
 #           本翼只钉"级数最大那档确实解析到了"，防止把 cap 读成"4 级"；
-#   B 翼 —— 不该喊的一个都不喊：同目录（0 级）、子包、${ZETA_PYLIB}、仓库 `pylib` 相对基；
+#   B 翼 —— 不该喊的一个都不喊：同目录（0 级）、子包、${ZETA_PYLIB}、仓库 `pylib`（cwd 拼法）；
 #   C 翼 —— 近优先且**只喊实际用的那个基**：同目录与祖先各一份 ⇒ 取同目录、0 条；
 #           祖先 3 级与 5 级各一份 ⇒ 取 3 级、恰好 1 条且级数是 3；
 #   D 翼 —— 负控制：判据不许被顺手放宽。候选在 cap 之外（6 级）⇒ **不该**喊 W1005
@@ -39,7 +40,13 @@
 #           库面"不再是推论。（发射点因此只能有一处：`find_py_module_file` 被"探测"
 #           与"真加载"两类调用点共用，第一版把告警写在搜索里，numpy 这种注册表+本地
 #           库双身份的门 ⇒ 一次导入喊**两条**。F 翼是本批唯一直接测到这一条的档位。）
-#   E 段 —— 全语料 W1005 计数，期望 0。
+#   G 翼 —— 批次 351（#76 ②）：库面基 `pylib` 不再随 CWD 消失。修前实测：同一份编译器
+#           + 同一份绝对路径源码，仓库根 rc=0 / 1045 行 MIR，`/tmp` 下 rc=1、
+#           `_arange` undefined / 158 行。三档：G1 两个 CWD 同一份产物；G2 cwd 里有同名
+#           `pylib` ⇒ 喊 1 条 W1006 且**两个基都搜**（cwd 优先次序不变）；G3 负控制 ——
+#           把编译器拷进一棵没有 `pylib` 的裸树 ⇒ 必须退回修前的样子并出声。G3 存在的
+#           理由：它钉住"库面确实解析到了"，否则 G1 的"两次逐字相同"可以靠两份残骸蒙过。
+#   E 段 —— 全语料 W1005 计数，期望 0；同一趟编译顺带数 W1006，也期望 0。
 #
 # 用法：./tools/py_module_search_inventory.sh
 set -uo pipefail
@@ -194,17 +201,120 @@ want_level "且级数是 3" "3,"
   || { echo "  FAIL 祖先那份没顶掉库面：$(resolved)"; rc=1; }
 rm -f "$TMP/a/L1/L2/L3/L4/numpy.z"
 
-echo "== E：全语料 W1005 计数（读数，期望 0）=="
-total=0; files=0
+echo "== G 翼：库面基不随 CWD 消失（批次 351，#76 ②）=="
+# 盘据形状（351 修之前实测）：同一份编译器 + 同一份**绝对路径**源码，仓库根 rc=0 /
+# MIR 1045 行，`/tmp` 下 rc=1、`_arange` undefined、MIR 158 行 —— 因为搜索基里那条
+# `pylib` 是**裸相对路径**（修前 resolver.rs:2274 那条 `bases.push(PathBuf::from("pylib"))`），
+# 库面在不在取决于在哪儿起编译器。
+# 修法是照抄 src/main.rs:440 `find_runtime_obj`（它早就为运行时 .o 治过同一个病）：
+# cwd 写法仍然第一（所以仓库根的读数逐字不变），其后追加从可执行文件往上 4 级的基。
+#
+# 这一翼自带的负控制是 G3 档：把编译器拷进一棵没有 `pylib` 的光树 ⇒ 同一个源文件
+# 立刻退回"库面消失"那副样子。⇒ G1 的"两次输出逐字相同"不可能靠"本来就没有库面"
+# 蒙过去：那样两档比的是两份不同的产物，而这里要求的是一份完整的。
+G_SRC="$TMP/g/rep.z"
+mkdir -p "$TMP/g" "$TMP/elsewhere"
+mksrc g "$G_SRC" 'import numpy as np\nxs = np.arange(5)\nprint(len(xs))\n'
+# $1=起编译的目录，$2=源文件（绝对路径）
+gm() { ( cd "$1" && "$ZETAC" --dump-mir "$2" -o "$TMP/g.o" ) >"$TMP/g.out" 2>"$TMP/g.err"; }
+gres() { grep -oE "imported module \`numpy\` from .*" "$TMP/g.err" | tail -1; }
+g1006() { grep -c '\[W1006\]' "$TMP/g.err" || true; }
+
+echo "-- G1：仓库根 vs 一个没有 pylib 的目录 ⇒ 同一份产物"
+gm "$ROOT" "$G_SRC"
+if [[ "$(g1006)" != 0 ]] || [[ -z "$(gres)" ]]; then
+  echo "  FAIL 仓库根参照档本身就不干净（W1006=$(g1006) 条，落点=${gres:-（无）}）—— 下面比的是噪声"; rc=1
+fi
+cp "$TMP/g.out" "$TMP/g.mir.root"
+LINES=$(grep -c . "$TMP/g.mir.root")
+if [[ "$LINES" -gt 500 ]]; then
+  echo "  ok   参照产物完整（$LINES 行 MIR；修前在别的 CWD 只编得出 158 行残骸）"
+else
+  echo "  FAIL 参照产物只有 $LINES 行 —— 两档都在比残骸，G1 是空断言"; rc=1
+fi
+gm "$TMP/elsewhere" "$G_SRC"
+if [[ "$(g1006)" != 0 ]]; then echo "  FAIL 换个 CWD 不该多出告警（W1006=$(g1006)）"; rc=1; fi
+if ! grep -q 'imported module `numpy`' "$TMP/g.err"; then
+  echo "  FAIL 换 CWD 后库面仍然消失了（stderr 里没有 imported module 行）"; rc=1
+elif diff -q "$TMP/g.mir.root" "$TMP/g.out" >/dev/null && [[ -s "$TMP/g.out" ]]; then
+  echo "  ok   仓库根 vs 裸目录 → 同一份 MIR、同样 rc=0（落点：$(gres)）"
+else
+  echo "  FAIL 同一个源文件在两个 CWD 下产物不一致 —— 库面仍随 CWD 变化"
+  diff "$TMP/g.mir.root" "$TMP/g.out" | head -5 | sed -n 's/^/         /p'; rc=1
+fi
+
+echo "-- G2：cwd 里有一个同名 \`pylib\` ⇒ 歧义出声（W1006），两个基都搜"
+mkdir -p "$TMP/decoy/pylib"
+mkmod HELLO "$TMP/decoy/pylib/zzd_decoy.z"
+mksrc d "$TMP/decoy/main.z" 'from zzd_decoy import tag\nimport numpy as np\nprint(tag())\nprint(len(np.arange(3)))\n'
+( cd "$TMP/decoy" && "$ZETAC" --dump-mir main.z -o "$TMP/g2.o" ) >"$TMP/g2.out" 2>"$TMP/g2.err"
+d1006=$(grep -c '\[W1006\]' "$TMP/g2.err" || true)
+if [[ "$d1006" == 1 ]]; then
+  echo "  ok   两个不同的 pylib ⇒ 恰好 1 条 W1006（不是 0 条静默择优）"
+else
+  echo "  FAIL 歧义档 W1006=$d1006 条，期望 1 条"; sed -n '1,4p' "$TMP/g2.err" | sed -n 's/^/         /p'; rc=1
+fi
+grep -q 'imported module `zzd_decoy` from pylib/zzd_decoy.z' "$TMP/g2.err" \
+  && echo "  ok   cwd 那份仍然优先（相对落点逐字未变）" \
+  || { echo "  FAIL cwd 基的优先次序变了"; sed -n 's/^/         /p' "$TMP/g2.err" | head -4; rc=1; }
+if grep -q 'imported module `numpy`' "$TMP/g2.err"; then
+  echo "  ok   库面没被 cwd 那份顶掉：$(grep -oE 'imported module `numpy` from .*' "$TMP/g2.err" | tail -1)"
+else
+  echo "  FAIL 只搜了 cwd 的 pylib ⇒ 两个基都搜没成立"; rc=1
+fi
+
+echo "-- G3 负控制：可执行文件旁边也没有 pylib ⇒ 必须出声，旧退化路径仍在"
+mkdir -p "$TMP/solo/bin" "$TMP/solo/work"
+cp "$ZETAC" "$TMP/solo/bin/zetac"
+mksrc s "$TMP/solo/work/s.z" 'import numpy as np\nfrom zzd_alpha import a\nprint(1)\n'
+# 必须调**拷贝出来的那一个**：第一版在这里写了 "$ZETAC"，于是档位跑的是仓库编译器，
+# 它顺着自己的树找到了 pylib ⇒ 库面照样解析到、W1006 一条没有 —— 三条 FAIL 全建在
+# 错误的二进制上。P0 那条断言钉的就是这一点：告警里得出现这棵裸树的路径。
+# 匹配尾段 `solo/bin/zetac` 而不是全路径 —— 仓库二进制里没有这一段，而 current_exe
+# 可能把 $TMP 的 /var 前缀写成 /private/var，全路径匹配会假红。
+( cd "$TMP/solo/work" && ZETA_PYLIB= "$TMP/solo/bin/zetac" --dump-mir s.z ) >"$TMP/g3.out" 2>"$TMP/g3.err"
+n1006=$(grep -c '\[W1006\]' "$TMP/g3.err" || true)
+grep -q "solo/bin/zetac" "$TMP/g3.err" \
+  && echo "  ok   P0 喊的是这棵裸树里的编译器自己（告警里有 solo/bin/zetac ⇒ 档位没跑回仓库二进制）" \
+  || { echo "  FAIL P0 告警里没有裸树路径 —— 这一档跑的不是拷贝的编译器，下面三条断言全部无效"; rc=1; }
+if [[ "$n1006" == 1 ]]; then
+  echo "  ok   哪儿都没有 pylib ⇒ 喊 1 条（一次编译两条 import 也只一条：每进程一次，不是每 import 一次）"
+else
+  echo "  FAIL 皆无档 W1006=$n1006 条，期望 1 条"; sed -n '1,6p' "$TMP/g3.err" | sed -n 's/^/         /p'; rc=1
+fi
+grep -q 'unknown member' "$TMP/g3.err" \
+  && echo "  ok   既有的退化诊断仍在（新告警是补充，不是替换）" \
+  || { echo "  FAIL 既有的 unknown member 路径不见了"; rc=1; }
+if grep -q 'imported module' "$TMP/g3.err"; then
+  echo "  FAIL 裸树里它居然解析到了库面 —— G1 的「相同」就是两份噪声"; sed -n 's/^/         /p' "$TMP/g3.err" | head -4; rc=1
+fi
+if grep -q "$ROOT/pylib" "$TMP/g3.err"; then
+  echo "  FAIL 皆无档报出的路径里出现了仓库 pylib —— 搜索基没跟着可执行文件走"; rc=1
+else
+  echo "  ok   告警报的是「找过了哪儿」（裸树里那两个落点），没把仓库那份混进来"
+fi
+[[ -s "$TMP/solo/bin/zetac" ]] || { echo "  FAIL 拷贝出来的编译器是空的"; rc=1; }
+echo "== E：全语料越界/库面基计数（读数，W1005 与 W1006 都期望 0）=="
+# 同一趟编译同时数两个码 ⇒ 不为 W1006 再跑一遍全语料。W1006 在仓库根的语料上必须
+# 是 0：既没有"两个 pylib 打架"（歧义），也没有"哪儿都找不到"（失踪）。
+total=0; w6_total=0; files=0
 for f in $(grep -lE "^(from|import) [A-Za-z_]" tests/python_style/*.z tests/official/*.z 2>/dev/null); do
   files=$((files + 1))
-  n=$("$ZETAC" --dump-mir "$f" -o "$TMP/w.o" 2>&1 >/dev/null | grep -c '\[W1005\]' || true)
+  "$ZETAC" --dump-mir "$f" -o "$TMP/w.o" >/dev/null 2>"$TMP/w.err"
+  n=$(grep -c '\[W1005\]' "$TMP/w.err" || true)
+  m=$(grep -c '\[W1006\]' "$TMP/w.err" || true)
   total=$((total + ${n:-0}))
+  w6_total=$((w6_total + ${m:-0}))
   [[ "${n:-0}" != 0 ]] && echo "  越界：${f}（$n 条）"
+  [[ "${m:-0}" != 0 ]] && echo "  库面基：${f}（$m 条）"
 done
-echo "  含 import 的语料文件 $files 个，W1005 合计 $total 条"
+echo "  含 import 的语料文件 $files 个，W1005 合计 $total 条，W1006 合计 $w6_total 条"
 if [[ "$total" != 0 ]]; then
   echo "  FAIL 语料里出现了新的越界解析 —— 要么把夹具挪进源目录，要么把这条登记成已知并写进 roadmap"
+  rc=1
+fi
+if [[ "$w6_total" != 0 ]]; then
+  echo "  FAIL 语料里出现了 W1006 —— 门禁在仓库根跑，歧义和失踪都说明搜索基被写坏了"
   rc=1
 fi
 
