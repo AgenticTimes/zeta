@@ -1,35 +1,40 @@
-# Goal: 占位符符号 py_asdict_unexpanded 改为响亮失败
+# Goal: 接管 refactor 七轴推进（batch 346+）
 
 Goal Status: assumed
 Workflow: complex
 
 ## Objective
 
-继续推进 roadmap：收拾「占位符符号」这一类最小项 —— `pylib/registry.txt:208` 把 `dataclasses.asdict` 指向 `py_asdict_unexpanded`，这个符号在 C 与 src 里都不存在（注释说明 asdict 本应在编译期重写；重写不适用时就会发一个幽灵符号去链接期爆）。把它改成**响亮失败**：C 侧实现该符号，打印明确原因并 abort（像 zeta_assert_fail 那样），使同一文件的其他代码仍可编译链接，而真正走到未展开路径时立刻得到可读的失败信息 —— 不是返回假值。顺带核对 `range`(3)/`getattr`(2)/`dict`(2)/`object`(2) 这几个内建面符号的来源，能顺手收的一并处理，不能的记入 roadmap。
+接管 zeta-src 的 refactor 推进（原由 Qoder 执行，已停约 2 小时）。按 refactor.md 七轴计划（A 死代码减法 / B 类型标签 / C 编译性能 / D 层次可维护 / E 测试架构 / F 类型检查器独立 / G 正确性工程）持续推进，每批次 commit + push 到 agentic/bootstrap。现状：Qoder 已完成到 batch 345，工作区留有 64 项未提交改动（含 src/blockchain/* 36 个删除 + docs/ABI.md + tools/run_all.sh，diff 合计 -15066 行）。
 
 ## Routing Decision
 
 - Operation: New Ouroboros Work
 - Workflow: complex
 - Rationale:
-  - 用户「继续推进 roadmap」；上一轮我把「py_asdict_unexpanded 占位符应改响亮报错」列为剩余小项之一，它是本轮预算内最小可验证的一项
-  - 选它的理由：单点、纯 C 侧、无 Rust 关键路径改动、可用「未定义符号数 + 三套基线」验证，符合「不静默错值」的红线
-  - complex：跨 registry/C/runtime 对象重建，且要守 194/194 与逐文件不回归
+  - 用户明确要求接管并持续推进 refactor.md 的七轴计划
+  - refactor.md 已有完整排程（§9 总排程与依赖）+ 完成判据（§10），目标清晰
+  - 当前有明确的接手点：Qoder 未提交的轴 A 减法工作 + backlog.md 登记项
 
 ## Intent Stages
 
-- [ ] implement — C 侧实现 py_asdict_unexpanded（打印原因 + abort），重建对应 runtime 对象；顺带核对 range/getattr/dict/object 的来源
-- [ ] validate — 实测（未定义符号数下降 / 走到该路径时信息可读）+ 三套基线（官方 194/194、python_style 全绿、语料逐文件对拉无回退）+ roadmap + commit + push
+- [ ] understand — 接手盘点：读 refactor.md §9 排程 + backlog.md 登记项，验证当前工作区可编译与三基线状态，确定 Qoder 未提交改动的完整性与归属
+- [ ] implement — 按 refactor 轴推进：每批次一个 commit（代码/文档分开），修复 + 新增回归用例 + 跑门禁
+- [ ] validate — 每批三基线全绿 + MIR diff 不变性（重构类改动）+ roadmap/backlog 证据登记，push 到 agentic/bootstrap
 
 ## Success Criteria
 
 ### User-Specific
-- [ ] `py_asdict_unexpanded` 不再是未定义符号，且被走到时打印可读原因并中止（非静默返回）
-- [ ] 未定义符号去重数低于 85
-- [ ] 官方 194/194；python_style 不新增失败；语料解析 37/38 不回退
-- [ ] roadmap 回填 + commit + push
+- [ ] 每批次 commit + push 成功（代码/文档分开提交）
+- [ ] 三基线持续全绿：官方 194 + python_style 278/2 + 语料 100%
+- [ ] Qoder 未提交的 64 项改动得到妥善处置（验证后提交或保留说明）
+- [ ] refactor.md 的轴按排程推进，每步独立提交独立回滚
+- [ ] 每批有证据登记（roadmap.md 或 backlog.md）
 
 ### Stage-Derived
+- [ ] Relevant code/docs were read and important claims are backed by evidence
+- [ ] Explanation identifies responsibilities, call paths, and key risks
+- [ ] Key dependencies and caller/callee relationships are documented
 - [ ] Requested behavior works as described
 - [ ] Relevant checks/tests pass or limitations are documented
 - [ ] Scenario results are recorded with evidence
@@ -38,16 +43,20 @@ Workflow: complex
 
 ## Constraints
 
-- 不得降低官方 194/194 退出码口径
-- python_style 不得新增失败（当前 158/158）
-- 只做「响亮失败」类改动，不引入静默错值（不返回假值假装成功）
-- 改 runtime/*.c 后必须重建 gitignored 的 zeta_runtime_c.o 或 tracked 的 tokio_runtime.o（对应文件）
+- 每批次 commit + push（git push agentic bootstrap）
+- 三基线红线：官方 194 + python_style 存量 2 红 + 语料 100%
+- 全程 ZETA_NO_OPT=1；长跑 timeout 包裹
+- 禁 rm 删除代码，用 mv → .trash/
+- 禁止代码与文档混合提交（refactor 原则 2）
+- 接手前先保住 Qoder 的未提交工作，不得丢弃
+- Do not ask the user questions that can be answered from code or docs
+- Record important evidence and decisions in work.md
 - Follow existing project patterns
 - Do not refactor unrelated code
-- Record important evidence and decisions in work.md
 - Default to read-only validation; do not fix issues unless an implement stage exists
 
 ## Out of Scope
 
-- 注册表多签名（_N 第二成因）—— 数据模型扩展，另批
-- 参数类型推断、pandas/numpy 面、平台 shim、跨文件链接、运行时对象构建跟踪
+- 推翻 Qoder 已完成的批次
+- 未经验证就丢弃其未提交工作
+- 修改 classdesign.md（我的分析文档）
