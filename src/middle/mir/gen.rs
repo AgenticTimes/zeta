@@ -2477,6 +2477,16 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 let range_var: Option<String> = match &**pattern {
                     AstNode::Var(n) => Some(n.clone()),
                     AstNode::Ignore => Some("__wildcard".to_string()),
+                    // `for i: usize in …` carries the annotation as a wrapper
+                    // around the name. Unwrapping it here keeps the range path;
+                    // previously the wrapper missed all three arms, the loop
+                    // fell through to the COLLECTION path, and a Range iterated
+                    // as an empty collection — body ran zero times, silently.
+                    AstNode::TypeAnnotatedPattern { pattern: inner, .. } => match &**inner {
+                        AstNode::Var(n) => Some(n.clone()),
+                        AstNode::Ignore => Some("__wildcard".to_string()),
+                        _ => None,
+                    },
                     _ => None,
                 };
                 if let Some(var_name) = &range_var {

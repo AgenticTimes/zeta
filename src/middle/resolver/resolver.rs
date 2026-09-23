@@ -3510,11 +3510,51 @@ fn shim_class_normalize(t: &Type) -> Type {
                 }
                 Ok(vec![AstNode::Program(expanded_nodes)])
             }
+            // PY-A: macro calls nested in a statement list were never visited.
+            // The catch-all below returned them untouched, and MIR lowering
+            // silently skips a MacroCall statement (`gen.rs`), so a
+            // `for … { println!(…) }` / `if … { println!(…) }` body produced no
+            // code at all — the loop itself ran, only its output vanished.
+            AstNode::For { pattern, expr, body, else_body } => {
+                Ok(vec![AstNode::For {
+                    pattern: pattern.clone(),
+                    expr: expr.clone(),
+                    body: self.expand_stmts(body)?,
+                    else_body: self.expand_stmts(else_body)?,
+                }])
+            }
+            AstNode::While { cond, body, else_body } => {
+                Ok(vec![AstNode::While {
+                    cond: cond.clone(),
+                    body: self.expand_stmts(body)?,
+                    else_body: self.expand_stmts(else_body)?,
+                }])
+            }
+            AstNode::If { cond, then, else_ } => Ok(vec![AstNode::If {
+                cond: cond.clone(),
+                then: self.expand_stmts(then)?,
+                else_: self.expand_stmts(else_)?,
+            }]),
+            AstNode::Loop { body } => {
+                Ok(vec![AstNode::Loop { body: self.expand_stmts(body)? }])
+            }
+            AstNode::Block { body } => {
+                Ok(vec![AstNode::Block { body: self.expand_stmts(body)? }])
+            }
             _ => {
                 // For other nodes, just return them as-is
                 Ok(vec![node.clone()])
             }
         }
+    }
+
+    /// Expand macros across a nested statement list (see the container arms above).
+    fn expand_stmts(&mut self, stmts: &[AstNode]) -> Result<Vec<AstNode>, String> {
+        let mut expanded = Vec::new();
+        for stmt in stmts {
+            expanded.extend(self.expand_macros_in_node(stmt)?);
+        }
+        Ok(expanded)
     }
 
     /// Get all registered function ASTs

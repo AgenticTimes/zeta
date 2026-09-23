@@ -14468,3 +14468,44 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 
 ### 下一步
 #36 剩余按性价比排序：primezeta（36 行，预处理冒号规则加词边界判断）→ test_const_expression（14 行，数组类型注解）→ quantum_basic（85 行，use 深路径）→ benchmark（357 行，static mut 全局语义）→ advanced_patterns（62 行，@模式）→ selfhost（158 行，trait impl + concept，最大也是最靠近自举的）。
+
+## 批次 368 —— 交接文档的 P0 收口：真正丢的不是"for 循环体"，是**嵌在语句块里的宏调用**；带类型的循环变量让整条 for 消失
+
+（批次号说明：开工时 `git log --oneline -5` 看到最新是 367（62f65255），所以本批取 368。roadmap 里 365 被两个会话同时用过，已存不追改。）
+
+### 现象（先记下交接文档说错了什么）
+- handoff §3 的原话是"for 循环体不执行"。实测**循环体是执行的**：`for i in 0..3 { n = n + 1 }` 退出码 3（`/tmp/p0/d.z`），计数器照加，一行都没少跑。
+- 真正丢掉的是**循环体里的 `println!`**——编译成功、退出码 0、什么都不打。
+- 同一形状的 `if` 也丢（`/tmp/p0/g.z`）⇒ 所以这不是 for 的毛病，是"宏调用嵌在语句块里"的毛病，for 只是它最显眼的受害者。
+- handoff §3 给的嫌疑（批次 332 把 for/range 归纳计数器独立成槽）与本批根因无关，本批一行没碰那个机制。
+
+### 定位（两处，互相独立，各自都能单独造成"什么都不打"）
+1. `src/middle/resolver/resolver.rs` 的 `expand_macros_in_node` 只递归两处：`Program` 和函数体。`For` / `While` / `If` / `Loop` / `Block` 的语句列表从来没被访问过，全部走到兜底臂（现 `:3544`）的 `node.clone()` 原样返回 ⇒ 块里的 `println!(…)` 一直是**未展开的 MacroCall**；而 MIR 降低碰到未展开的 MacroCall 是**静默跳过**（语句位 `src/middle/mir/gen.rs:2888`，注释自己写着 "Silently skip"）⇒ 循环跑了，输出没了。
+2. `src/middle/mir/gen.rs:2476` 取循环变量名的匹配只有 `Var` 和 `Ignore` 两臂。`for i: usize in 0..5` 的名字外面多包了一层 `TypeAnnotatedPattern`（定义 `src/frontend/ast.rs:344`）⇒ 两臂都不命中、`range_var` 得 `None`，这条 for 从"按区间循环"掉进"按集合循环"的分支，Range 被当成空集合迭代 ⇒ 循环体一次都不跑，`sum` 保持初始的 0。t413 锁的就是这个错值。
+
+### 修复（三处，前两处只加行不改既有行）
+- `resolver.rs`：兜底臂之前补 5 个容器臂（For/While/If/Loop/Block），另加助手 `expand_stmts`（`:3551`）把语句列表逐条展开。`git diff --numstat` = 40/0。
+- `gen.rs`：`range_var` 加一臂——碰到 `TypeAnnotatedPattern` 就剥一层再认 `Var`/`Ignore`（`:2485`）。10/0。
+- `src/frontend/parser/stmt.rs:69`：`std::env::var("ZETA_PARSE_TRACE").is_ok()` 换成 `crate::diagnostics::env_flag("ZETA_PARSE_TRACE")`。**这条不是本批的功能**：门禁第 6 步 knob 的判据（`tools/knob_probe.sh:100`）要求"ZETA_* 旋钮侧不许再有 is_ok 站点"，而这个站点是批次 362 补交（8aa318d8）带进来的 ⇒ 上一轮门禁 knob FAIL 1（rc=1）就是它。改成 `env_flag` 同时把语义纠正成文档宣传的"`=1` 才开"（旧写法是"存在即开"，`ZETA_PARSE_TRACE=0` 也算开）。改后 knob FAIL 0。
+
+### 验证
+- 最小复现逐条对过 CPython/Rust 语义：`for i in 0..3 { println!("x") }` → 打 3 行 x；`for i: usize in 0..5 { sum = sum + i }` → 10；`if` 体里的宏 → 打；`for i in 0..3 { n = n + 1 }` → 3。
+- t413：known-fail 标记摘掉、期望值 0 改回 10，实测输出 `10` + `done`（交接文档 §3 验收的两条都满足）。
+- 新增 `tests/python_style/t414_macro_in_nested_block.z`：同时锁 for 体 3 行 + if 体 1 行（防"只修了循环"）。
+- 全量门禁（基线尺子：不设 `ZETA_NO_OPT`）**整条 rc=0**：official compile **194/194**、compile+link **193/194**（明细见下"边界"）；python_style **298 通过 / 2 失败（只有存量 t231、t233）/ 4 known-fail / 0 xpass**（上一轮基线读数 296/2/4/1 xpass，+2 就是 t413 转绿 + t414 新增）；语料 39 文件；knob 23 断言 FAIL 0；swallow 4/import 22/empty_stmt 68/pysrc 42/cli_semantics 73/ignore_rules 19 断言全 FAIL 0；clean_checkout rc=0；mbvar 19 脚本违规 0。
+- 结构读数对照（与上一轮门禁 `/tmp/b361_gate.log` 比，中间隔着批次 362-367，所以**不把这些差值记在本批头上**，只登记）：jit sweep `ok 170→171 / trap 321→327 / total 491→498`，`fail`、`timeout`、`segv` 两跑都是 0；diff test `120/130 = 92.3%` 未变。
+- **同一把尺子的问题**：按 handoff §7"一律 ZETA_NO_OPT=1"跑一遍，python_style 变成 4 失败——多出 t06_struct_enum、t31_builtins2。两条都是存量（见"边界"），但它们证明**既有基线读数是在不设 ZETA_NO_OPT 下得到的**，"一律带 ZETA_NO_OPT=1"这条规矩和"只有 t231/t233 红"这条红线目前不能同时成立 ⇒ 已登记进 backlog #36 附注，等裁决，不在本批擅改尺子。
+
+### 边界（本批没修的，全部实拍过，不在暗处）
+- **闭包体里的宏仍不展开**：`/tmp/b368t/h.z`（`(|| { println!("in closure") 7 })` 调用后）什么都不打。
+- **match 臂里的宏仍不展开**：`/tmp/b368t/i.z`（`2 => println!("two")`）什么都不打，只有其后的 `println!("done")` 出来。
+  ⇒ 这两条卡在同一个兜底臂 `resolver.rs:3544`，机制与已修的五个臂完全一样；闭包那半还叠着批次 366 登记的"闭包当值未接"，所以下一批先做 match 臂。
+- **`integration_all_features` 从"能链接"变成"链接缺符号"**：缺 `_predict`、`_train`，来自 `tests/unit-tests/integration_all_features.z:71`（`model.train(&data, 1000);`）和 `:74`（`model.predict(&[1.0, 0.0])`）；`ml::neural::Network` 在仓库里没有定义（`grep -rn 'neural' pylib/ src/` 只命中无关的 Rust `distributed/transport.rs`）⇒ 这两个调用走 codegen 的猜函数瀑布，符号 declare 出来却从无 define，与 #17 的 t06 `_Color__Green` 同形。**归因写清楚是断言还是实拍**：这两行是 `ml_test` 函数体的顶层语句、且不是宏调用，本批五个新臂只在嵌套块里生效，所以本批改动碰不到它们（静态排除）；而批次 366 的提交信息正是"integration 两文件丢行清零"（roadmap 批次 366 表：integration_all_features 58 → 0），丢行清零后这两条调用第一次真的参与编译。**同尺子的重建对照没做**（要隔离仓重编一次才拿得到），所以这一条按"机制断言 + 邻批记录"记，不写成实拍。另：本步判据只看 compile（`run_all.sh:574`），link-only 不改门禁颜色，所以三基线没有因此变红。
+- **t06_struct_enum 在 `ZETA_NO_OPT=1` 下必然链接失败**（`Undefined symbols: _Color__Green`），不开时靠 -O3 DCE 掉那条死存储才链接过——这条批次 307 已经量到并写在 roadmap:9223，属 #17 存量，本批不碰。
+- **t31_builtins2 不确定**：同一个二进制、同一份输入，两次跑一次退出码 139（段错误）一次 0 且输出正常 ⇒ 属 #18 存量（-O0 下崩溃根因未查）。
+- **格式化串丢字面量（新量到，与本批无关，已登记 #45）**：`println!("A={}", 1)` 打 `1`、`println!("{}B", 2)` 打 `2`、`println!("C={}D={}", 3, 4)` 只打 `3`（前缀、后缀、第二个参数全丢），而 `println!("plain")` 正常。输入是函数体顶层语句、不含嵌套块 ⇒ 本批改动不可能参与（静态排除）。两套用例里这类写法**零覆盖**：`tests/python_style` 带占位符的 `println!` 只有 `println!("{}", …)` 一种形状（15 处），`tests/unit-tests` 里带字面前缀的零处。主线批次 301 要打印 `final_value=…` 会直接踩上。
+
+### 下一批默认候选
+1. match 臂补臂（`resolver.rs:3544` 同一个兜底，最小改动，卡点已实拍）。
+2. primezeta 复测：类型注解 for 的循环体已随本批恢复，handoff §4 记的"36 行 + 剩 typed 值 = 0"可能一起消掉，先量再说。
+3. 格式化串丢字面量（#45 新成员）——它是打印族里唯一一个"所有调试打印都会踩"的，越晚修、历史读数越可疑。

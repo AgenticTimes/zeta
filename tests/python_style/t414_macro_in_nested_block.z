@@ -1,0 +1,24 @@
+// 批次 368：宏调用嵌在语句块里时会被整块丢掉。
+// 展开宏的那段递归只走了 Program 和函数体，for / while / if / loop / 花括号块
+// 里的语句从没被访问过，于是 `for i in 0..3 { println!("x") }` 里的 println!
+// 保持 MacroCall 原样，MIR 下游又静默跳过 MacroCall —— 循环跑了，一行都不打。
+// 本文件锁两件事：循环体里的宏要打满 3 行，if 体里的宏也要打（说明不只修了循环）。
+// expect: x
+// expect: x
+// expect: x
+// expect: in-if
+// expect: done
+
+fn main() -> i64 {
+    for i in 0..3 {
+        println!("x")
+    }
+
+    let n = 5
+    if n > 1 {
+        println!("in-if")
+    }
+
+    println!("done")
+    return 0
+}
