@@ -2892,6 +2892,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
             AstNode::If { .. } | AstNode::Call { .. } | AstNode::PathCall { .. } => {
                 self.lower_expr(ast);
             }
+            AstNode::Match { .. } => {
+                // Statement-position `match`: the arms are lowered by the
+                // expression path (its branch statements are already hoisted
+                // into the arm branches), and the match's value slot is unused.
+                self.lower_expr(ast);
+            }
             _ => {}
         }
     }
@@ -3246,21 +3252,49 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // expression value is the assigned value.
                 if let AstNode::Var(name) = &**lhs {
                     let rhs_id = self.lower_expr(rhs);
-                    if !self.name_to_id.contains_key(name) {
-                        let new_id = self.next_id();
-                        self.exprs.insert(new_id, MirExpr::Var(new_id));
-                        let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
-                        self.type_map.insert(new_id, ty);
-                        self.name_to_id.insert(name.clone(), new_id);
-                        self.stmts.push(MirStmt::Assign {
-                            lhs: new_id,
-                            rhs: rhs_id,
-                        });
-                    }
-                    return rhs_id;
+                    let dest = match self.name_to_id.get(name).copied() {
+                        None => {
+                            let new_id = self.next_id();
+                            self.exprs.insert(new_id, MirExpr::Var(new_id));
+                            let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
+                            self.type_map.insert(new_id, ty);
+                            self.name_to_id.insert(name.clone(), new_id);
+                            self.stmts.push(MirStmt::Assign {
+                                lhs: new_id,
+                                rhs: rhs_id,
+                            });
+                            new_id
+                        }
+                        // PY-A: the name is already bound — the store was simply
+                        // missing, so rebinding (`i := i + 1`, and now an
+                        // assignment arm `_ => i = 5`) left the slot untouched and
+                        // read back its old value. Measured: `match 1 { _ =>
+                        // (i := i + 1) }` exited 0 with `i` still 0.
+                        Some(slot) => {
+                            self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
+                            slot
+                        }
+                    };
+                    // The value is the SLOT, not `rhs_id`: an expression id can be
+                    // consumed more than once downstream, and re-emitting it re-runs
+                    // its computation — `d = (m := m + 3)` with `m = 4` stored 7 into
+                    // `m` and then read 10 into `d`.
+                    return dest;
                 }
                 // Non-var lhs: statement assign with a 0-value expression
                 self.lower_ast(&AstNode::Assign(lhs.clone(), rhs.clone()));
+                let z = self.next_id();
+                self.exprs.insert(z, MirExpr::IntLit(0));
+                self.type_map.insert(z, Type::I64);
+                return z;
+            }
+            AstNode::AssignOp { .. } => {
+                // PY-A: `i += 1` in expression position (an assignment match
+                // arm). Run it through the statement side, which owns the full
+                // semantics (slot type refresh, field/subscript targets); the
+                // expression itself has no value, so it reads back 0 like a
+                // block that ends in an assignment.
+                self.lower_ast(expr);
                 let z = self.next_id();
                 self.exprs.insert(z, MirExpr::IntLit(0));
                 self.type_map.insert(z, Type::I64);
@@ -11106,7 +11140,13 @@ call, no NULL-handle dereference).",
                     // Now lower the arm body (after establishing pattern bindings)
                     // If the arm body is a `return` statement, emit a Return
                     // (lower_expr has no Return arm and would fabricate 0).
-                    let then_branch = if let AstNode::Return(inner) = &*arm.body {
+                    // PY-A: anything this lowering pushes into `self.stmts` belongs
+                    // to THIS arm — before the drain below it was left in the
+                    // enclosing function, so every arm's side effects ran instead of
+                    // only the matched one. Measured on `match 2 { 1 => n+=1,
+                    // 2 => n+=10, _ => n+=100 }`:改前退出码 111（三条都跑），改后 10。
+                    let arm_body_start = self.stmts.len();
+                    let mut then_branch = if let AstNode::Return(inner) = &*arm.body {
                         let ret_val = self.lower_expr(inner);
                         vec![MirStmt::Return { val: ret_val }]
                     } else {
@@ -11116,6 +11156,12 @@ call, no NULL-handle dereference).",
                             rhs: arm_body_id,
                         }]
                     };
+                    let arm_body_end = self.stmts.len();
+                    if arm_body_end > arm_body_start {
+                        let mut arm_stmts = self.stmts.split_off(arm_body_start);
+                        arm_stmts.append(&mut then_branch);
+                        then_branch = arm_stmts;
+                    }
 
                     let if_stmt = MirStmt::If {
                         cond: final_cond_id,

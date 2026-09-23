@@ -4,7 +4,7 @@ use super::parser::{
 };
 
 use super::pattern::parse_pattern;
-use super::stmt::{parse_block_body, parse_loop, parse_return, parse_return_single};
+use super::stmt::{parse_assign, parse_block_body, parse_loop, parse_return, parse_return_single};
 use crate::frontend::ast::{AstNode, MatchArm};
 use nom::IResult;
 use nom::Parser;
@@ -3184,7 +3184,12 @@ fn parse_match_arm(input: &str) -> IResult<&str, MatchArm> {
     // Parse body: allow `return` statements as well as plain expressions
     // PY-A: single-value return form — the comma here separates arms, so a
     // tuple return inside an arm needs parentheses.
-    let (input, body) = alt((parse_return_single, parse_expr)).parse(input)?;
+    // PY-A: an arm body may also be an assignment (`_ => i += 1`). `parse_expr`
+    // has no assignment form, so before this the whole `match` failed to parse
+    // and every item after it in the file was dropped (W1002). `parse_assign`
+    // is tried first and only consumes the text when a real `=`/`+=` follows a
+    // lhs AND the rhs parses, so `x == 1` still falls through to `parse_expr`.
+    let (input, body) = alt((parse_return_single, parse_assign, parse_expr)).parse(input)?;
 
     Ok((
         input,

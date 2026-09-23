@@ -370,7 +370,7 @@ fn parse_if_tail(input: &str) -> IResult<&str, AstNode> {
     ))
 }
 
-fn parse_assign(input: &str) -> IResult<&str, AstNode> {
+pub(crate) fn parse_assign(input: &str) -> IResult<&str, AstNode> {
     use super::expr::parse_unary;
 
     // PY-A: annotated assignment / annotation-only statement —

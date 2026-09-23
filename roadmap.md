@@ -14672,3 +14672,50 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 - 对照组 `m9.z`：`_ => { i += 1; 0 }`（同一句包成块）→ **不截断**；`m12.z`：把 `i += 1;` 挪到 match 之后当普通语句 → **不截断**。
 ⇒ 卡点在臂体用的是表达式规则，赋值不在其中（与 #38 那条"臂体槽只有一个表达式"是同一处地形的解析层一侧）。`selfhost.z:80` 的 `_ => i += 1,` 就是这一形。
 修法待定的一问：臂体放开赋值之后，`match` 当表达式用时其值怎么取（`m5` 里 `let t = match …` 的 `t`），以及下推层认不认这个臂体形状——所以这一步不能只改解析就交，需要连着 #38 的"臂体按语句列表下进各自分支"一起量。下一批默认候选：按 `m5` 为最小复现，做"臂体=语句列表"的解析＋下推一对改动，同时收 #38 的 ②③④。
+
+## 批次 374 —— match 一族四处真修：语句位 match 进 MIR、臂体副作用进各自分支、臂体裸赋值（收 #38 的 ②③⑥，④ 未动）
+
+### 现象与触发点
+四条都是不出声的错值（改前对照用仓内 `target/debug/zetac`，构建时刻 00:42 早于本批任何改动；它在 `m5.z` 上仍报 1 条 W1002、在 `p.z` 上仍打三行，与批次 369/373 记的改前读数一字相同 ⇒ 这份对照就是改前的程序）：
+
+| 夹具 | 形状 | 改前 | 改后 |
+| --- | --- | --- | --- |
+| `/tmp/b374/c4.z` | 语句位 `match`，臂体是块（解析本来就过，无 W1002） | 退出码 0：整条 match 不在程序里 | 退出码 1 |
+| `/tmp/b374/c2.z` | `match 2 { 1 => n+=1, 2 => n+=10, _ => n+=100 }` | 退出码 **111**：三条臂的副作用全跑 | 退出码 **10**：只有命中臂跑 |
+| `/tmp/b374/c1.z` | 臂体裸 `i += 1` | W1002 + 退出码 0 | W1002 0 条 + 退出码 1 |
+| `/tmp/b374/c3.z` | 语句位 match + 臂体裸 `i = 7` | W1002 + 退出码 0 | W1002 0 条 + 退出码 7 |
+| `/tmp/b373/b3.z` | `_ => (i := i + 1)`（walrus 重绑定） | 退出码 0：store 从来没发 | 退出码 1 |
+| `/tmp/b368t/p.z` | 三个调用臂 `1 => f1(), 2 => f2(), _ => f1()` | 打 `f1/f2/f1` | 只打 `f2` |
+
+`c2` 是这批里最坏的一条：程序照跑、退出码照给，值却是三条臂叠出来的，一声不出。
+
+### 定位
+- 语句位 match：`src/middle/mir/gen.rs` 的语句分发（`lower_ast_inner`，现 :2892-2898）委托组里只有 `If / Call / PathCall`，`Match` 落到后面的空臂 ⇒ 整条不进 MIR。
+- 臂体副作用不分分支：`gen.rs` 的 match 降型（现 :11134 一带）在倒序建 if-else 链的循环里直接 `lower_expr(&arm.body)`，臂体推出来的语句留在外层函数里，链最后才 append ⇒ 所有臂的副作用都在分支之外、无条件执行。
+- 臂体裸赋值：`src/frontend/parser/expr.rs:3187` 的臂体规则是 `alt((parse_return_single, parse_expr))`，赋值不在 `parse_expr` 里（批次 373 的最小形状）。
+- walrus 重绑定不存：`gen.rs` 的 `lower_expr` 里 `AstNode::Assign` 只在名字**没绑过**时发 store，已绑定时直接返回 rhs —— 第一次落地这条修复后暴露出下一节的读数问题。
+
+### 修复（四处，全在上面四个定位点）
+1. `src/middle/mir/gen.rs:2892` 委托组加 `AstNode::Match { .. }` 臂，走表达式路径下推（值槽不用）。
+2. `src/middle/mir/gen.rs:11134` 一带：下推臂体前记 `self.stmts.len()`，下推后把这段 `split_off` 出来接到该臂 `then` 分支前面 —— 分支本来就是语句列表，臂体的语句就此留在自己分支里。
+3. `src/frontend/parser/expr.rs:3187` 臂体 alt 增 `parse_assign`（`src/frontend/parser/stmt.rs:373` 提成 `pub(crate)`）：`_ => i += 1`、`_ => i = 7` 现在进 AST。放在 `parse_expr` 之前而不误吃 `x == 1`，靠的是 `parse_assign` 要"lhs 后跟着 `=`/`+=` 且 rhs 也解析得动"才算成功，`==` 的情况下 rhs 解析失败会回退。
+4. `src/middle/mir/gen.rs:3249` 的 `AstNode::Assign`：已绑定名字补 store；`lower_expr` 新增 `AstNode::AssignOp` 臂，把 `i += 1` 交给语句侧（那边有槽位类型刷新和字段/下标目标的处理）。
+
+### 改前看不见、改后第一次暴露的一处机制（本批内已修掉读数列）
+第一版四处落地后，python_style 从 298 通过/2 失败变成 297/3，新红是 `tests/python_style/t33_starred_walrus.z`：`m = 4` 之后 `d = (m := m + 3)` 打出 **10**（应为 7），`print(m)` 打 7。`--dump-mir` 看得很清楚：fold 的结果 id 14 被消费两次（`Assign 8←14` 和 `Assign 15←14`），而发射层对 fold 是**每个用处重发一次求值**，第一次 store 之后 `m` 已经是 7，第二次读回 10。改法：赋值表达式的"值"取**槽位**而不是 rhs 的 id，只消费一次（`gen.rs:3249-3280`）。改后 `t33` 输出 `6|3|7`，`/tmp/b374/w1.z`、`w2.z`（`let` 形与 py 形）都是 `7|7`。
+登记一条未修的：任何被消费两次以上的表达式 id 都会重跑它的求值，本批只是不再让赋值路径踩到它，发射层"每用一次重发一次"没有动。
+
+### 验证
+- 丢行（`tools/truncation_inventory.sh`，release 二进制）：**3 文件/600 行 → 3 文件/533 行**，逐文件 `benchmark_simd_vs_scalar 357`、`selfhost 158 → 91`、`quantum_basic 85`。
+- official 诊断 5 文件/29 行 —— 与批次 371/373 同读数未动。
+- official `compile+link 193 → 192/194`：selfhost 新增 4 个 declare 无 define 的符号（`_as_str`、`_build_ast`、`_is_alphabetic`、`_push`，明细 `/tmp/zeta_official_link.txt`）。原因是 `build_ast` 这一带第一次真进编译 ⇒ 与批次 366/368/372 同形：静默丢代码换成一串出声报错，归 #42 那族（缺运行时绑定），不是本批改坏。
+- 锚点：本批新增漂移只有 1 条，`gen.rs:11893 → :11949`（`format!("{}_{}", func_name, arg_ids.len())`），等长改号（`docs/ABI.md:323` 与 `tools/baselines/abi_anchors.tsv` 第 203 行），没跑 `--rebind`；改后漂移集与 HEAD 快照逐字相同（都是 58 条，`comm` 差集 0）。对照方法：`git archive HEAD` 解到 `/tmp` 造隔离仓跑核对器，取两份 `[漂移] 文件:行号` 集合做差集，跑完 `rm -rf`。两个被改文件行数未变（`docs/ABI.md` 972、tsv 327）。
+- 整趟门禁（`tools/run_all.sh`，日志 `/tmp/b374/gate2.log`，rc=1）：official `compile 194/194`、`compile+link 192/194`（两条 link-only：`integration_all_features`、`selfhost`，见上一节）、诊断 `5 文件/29 行`、python_style `298 通过/2 失败/4 known-fail/0 xpass`、语料 `39/39`、jit `ok=171 trap=328 fail=0 timeout=0 segv=0（total 499，最小 ok=163）GREEN`、`diff test match=120 judged=130 rate=92.3% bad_case=0`、knob 23/swallow 4/import 22/empty_stmt 68/pysrc 42/cli_semantics 73/ignore_rules 19 各 FAIL 0、mbvar 19 脚本违规 0、`comment_drift: 0 处复述`、`clean_checkout: rc=0（rev=99225685）`。
+- rc=1 只由 `py_fail=2`（`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）解释 —— 与批次 356 的口径相同（那次也是 rc=1，同一对红），本批没有新增红。
+- 一处时间先后的读数差，别当成不一致：`t415` 文件建于 `02:31:00`，门禁第 2 步 python_style 在 `02:26:46` 起跑时它还不存在 ⇒ 门禁里是 298/304 个用例；单独复跑 `tests/python_style/run.sh`（日志 `/tmp/b374/ps.log`，`02:37`）得 **299 通过/2 失败/4 known-fail/0 xpass**，且 `PASS t415_match_arm_effect_and_assign`。jit 那一步在 `02:31` 之后才跑 ⇒ `total 499`（比 498 多 1）与 `ok 170 → 171` 多的就是 `t415`，已在 JIT 下实拍通过。
+
+### 边界（本批没修的，实拍在册）
+- #38 的 ④（臂里的宏）：`/tmp/b368t/i.z`、`n.z` 改后仍只打 `done`，`println!` 停在未展开的 MacroCall ⇒ 卡点还在 `src/middle/resolver/resolver.rs` 的宏递归没覆盖 Match 臂，加上"一次展开两个节点、臂体槽只有一个表达式"那一问。
+- #38 的 ①（match 结果槽恒 I64）未动。
+- selfhost 剩的 91 行换了一形，最小复现已闭：`let x = if let … { } else { }`（`if let` 当表达式用）。`/tmp/b374/d1.z` 报 NOT parsed，对照组 `/tmp/b374/d2.z`（同位置换成普通 `if`）不报；parse-trace 指的正是 `= if let Token::Ident(n) = tokens[i].clone() { … }`。⇒ 批次 375 候选。
+- `benchmark_simd_vs_scalar` 357 行（函数体里的 `static mut`）、`quantum_basic` 85 行（缺 `std::quantum` 绑定）按批次 372 的结论各在别的层，本批未碰。
