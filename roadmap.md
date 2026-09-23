@@ -13137,7 +13137,7 @@ JSON `ts=2026-09-22T17:31:14Z`。
 | `git ls-files -o -i --exclude-standard` 全集 | 71,572 | 71,571 | −1，就是上面那个文件离开被忽略集合 |
 | `.gitignore` 行数 | 167 | 167 | 原地改，`:148` 以下一个字节没动 |
 
-放出的 262 个已跟踪文件按目录：`tests/` 136 · `zeta_src/` 51 · `src/` 39 · `zetas/` 17 · `.github/` 13 · `examples/` 5 · `tools/` 1；按扩展名：`.z` 153 · `.rs` 92 · `.ps1` 13 · `.sh` 3 · `.md` 1。**它不是"只放出了 `.z`"** —— 这批规则里 92 个 `.rs` 长期被前缀规则压着，其中 `src/tests/` 一家 80 个。
+放出的 262 个已跟踪文件按目录：`tests/` 136 · `zeta_src/` 51 · `src/` 39 · `zetas/` 17 · `.github/` 13 · `examples/` 5 · `tools/` 1；按扩展名：`.z` 153 · `.rs` 92 · `.ps1` 13 · `.sh` 3 · `.md` 1。**它不是"只放出了 `.z`"** —— 92 个 `.rs` 长期被前缀规则压着，最大一家是 `tests/unit/` 的 52 个（`murphy_*` / `simple_*`），`src/tests/` 那 9 个已跟踪文件里 7 个被 `test_*` 压住（这 7 个的命中规则实测全是 `.gitignore:130:test_*`）。
 
 ### 残差 28 个：逐条有归属，不是漏网
 
@@ -13196,7 +13196,7 @@ JSON `ts=2026-09-22T17:31:14Z`。
 | 步骤 | 本批 | 批次 345 | 判读 |
 |---|---|---|---|
 | official | compile **194/194**，compile+link 191/194 | 同 | 不变 |
-| python_style | **291 passed / 2 failed / 4 known-fail / 0 xpass** | 同 | 不变 —— 这条最要紧：放出来的 153 个 `.z` 一个都没混进用例集合（门禁按目录显式取文件，不看 `.gitignore`） |
+| python_style | **291 passed / 2 failed / 4 known-fail / 0 xpass** | 同 | 不变 —— 这条最要紧：放出来的 153 个 `.z` 一个都没混进用例集合。机制已核对：`tests/python_style/run.sh:48` 用 shell glob `"$ROOT"/tests/python_style/t*.z` 取文件，`run_all.sh:110` 用 `find`，全部门禁都不经 `git ls-files` ⇒ 规则表动了也不碰计数（旁证：本批前后 11 行步骤文本逐字相同） |
 | corpus | 39/39 parse_ok | 同 | 不变 |
 | jit_sweep | ok=170 trap=321 fail=0 segv=0（total 491，下限 163） | 同 | 不变 |
 | diff | match=120 judged=130 92.3% bad_case=0 | 同 | 不变 |
@@ -13238,4 +13238,81 @@ JSON `ts=2026-09-22T17:31:14Z`。
 - **#70/#77 ②**（相对 `pylib` 基让库面随 CWD 消失）：#70 已落"越界出声"半步，②未动。
 - **#52 第 3 层**（"消失 + 新"成对自动配对）：本批又攒了 4 种新证据。
 
-一句话：backlog #40 那行写的是"裸 `*.z` 吞新建用例"，量完才发现真正的数是 **290 个已跟踪文件长期压在 10 条不带斜杠的规则底下**（含 `src/tests/` 一家 80 个 `.rs`、整个 `zeta_src/` self-host 树、13 个 `.github/automation/*.ps1`）；本批按 gitignore 语义把它们一次性放出来（`zeta_*` 因为吞的是仓库根目录本身、根锚定无效，只能删，这一点有最小仓三条路径的对照表为证），并且给规则表装上第 13 步 —— 四个反证里有两个是门禁级的，所以"第 13 步只打印不判红"这种假交付当场测得出来。
+一句话：backlog #40 那行写的是"裸 `*.z` 吞新建用例"，量完才发现真正的数是 **290 个已跟踪文件长期压在 10 条不带斜杠的规则底下**（含 `tests/unit/` 一家 52 个 `.rs`、整个 `zeta_src/` self-host 树、13 个 `.github/automation/*.ps1`）；本批按 gitignore 语义把它们一次性放出来（`zeta_*` 因为吞的是仓库根目录本身、根锚定无效，只能删，这一点有最小仓三条路径的对照表为证），并且给规则表装上第 13 步 —— 四个反证里有两个是门禁级的，所以"第 13 步只打印不判红"这种假交付当场测得出来。
+
+---
+
+## 批次 347（接管批次：门禁可信度族的两个说谎步骤 + bash 3.2 多字节变量名根治）
+
+### 起点：接手一个**崩死的门禁步骤**
+
+交接时工作区有 64 项未提交改动（Qoder 09-23 08:36 后停手）。首个读数就是问题本身：
+门禁第 13 步 `ignore_rules` **rc=1 且不是判红而是整步崩掉**——
+
+```
+./tools/ignore_rule_inventory.sh: line 68: p?: unbound variable
+```
+
+根因：macOS 自带 **bash 3.2** 解析 `$p（…` 时把多字节字符（0xEF…）的**首字节并进了
+变量名**（实得变量名 `p\xef`），`set -u` 当场中止脚本。危害不在这一行，在于
+**崩掉的步骤与通过的步骤在汇总里都只剩一句 rc**——这是"幽灵门禁"的第三种形态
+（前两种：被 `.gitignore` 吞掉的、把 `--no-opt` 当默认的）。
+
+### 本批四件事
+
+**① 根治 + 防复发（工具类）**
+- 修：全仓同类写法 **40 处 / 10 个脚本**，一律加花括号 `${VAR}`（语义等价，只消除歧义）；
+  含位置参数形态（`$1（…`）。修完第 13 步 rc=1 → **rc=0，19 断言 0 FAIL**。
+- 防：新增 `tools/mbvar_lint.sh` + 门禁**第 14 步**（`--skip-mbvar` 可关）。
+  判据 = `$NAME`/`$N` 紧跟字节 ≥ 0x80；注释与单引号字面量不计。
+  负对照三例实测：双引号内违规被抓、注释内放过、单引号内放过。
+  护栏自身踩过两个 bash 3.2 坑并已规避：`mapfile` 不存在；`chr().isalnum()` 是
+  **Unicode 感知**的（把 0xEF 当字母吞进变量名再 decode 失败）。
+  反身验证：它当场抓出本批新写的 `tools/selfhost_compile.sh:33` 一处 —— 按判据修掉。
+
+**② backlog #29：ci.yml 两个说谎的步骤（A 族）**
+- `Run known-good tests`：引用 `tests/test_hello.z` / `test_values.z` / `test_basic.z`
+  ——**三个文件都不存在**；命令用 `--jit`，而 `main.rs` 里**没有这个标志**；
+  外套 `if [ -f "$f" ]` ⇒ 循环体一次都不执行、静默跳过，末行却**无条件**打印
+  `Self-host compilation verified: zeta_src/ compiles cleanly`。已删除该步骤
+  （JIT 覆盖在 baselines job 的 `run_all.sh` 步骤 4 `jit_sweep.sh`）。
+- 同 job 的 `Compile all zeta_src/ files`：用 `zeta_src/*.z`，而 51 个 `.z` 里
+  **46 个在子目录**——步骤名写 "all"，实际只盖住**顶层 5 个**。
+
+**③ 全量实测撞出新缺口（登记为 #79）**
+`tools/selfhost_compile.sh`（新判据，覆盖全 51 个、`--no-link -o` 只编译不执行）第一份读数：
+**通过 47 / 编译不过 4**——
+`runtime/array.z`（W1002 截断 18 行，截断族 #36）·
+`runtime/xai.z`（W1004 字面量独立语句，`;` 家族 #67）·
+`runtime/actor/map.z` + `runtime/actor/result.z`（LLVM verifier 返回类型不匹配 `ret i64` vs `ptr`，
+**新形态**，返回侧混型族 #33 的表亲）。
+判据设计成**清单只能缩**：新失败判红，钉住项变通过**也判红**（否则清单会烂成永久豁免）。
+
+**④ benchmarks.yml 幽灵 + 死依赖（轴 A）**
+实测是 **8 处**幽灵引用（backlog 记的是 5 处）：`--bench compiler_bench` ×2、
+`--bench runtime_bench` ×2、`--bin regression_test` ×4。根因是 `benches/` 自
+**v0.10.0 housekeeping**（175f4cd3）就被删了，该工作流从此是死的。
+处置：删工作流 + 清理 **4 条零引用 dev-dependency**（`proptest` / `libfuzzer-sys` /
+`criterion` / `tempfile`；grep 实证 `proptest!`/`prop_assert`/`TempDir`/`tempdir`/
+`fuzz_target`/`libfuzzer`/`criterion_*` 在 `src/` 与 `tests/` 命中均为 **0**）
+⇒ `Cargo.lock` **−550 行 / 56 个 crate（0 新增）**。
+
+### 验证（门禁 14 步全跑）
+
+| 步骤 | 读数 |
+|---|---|
+| official | compile **194/194**（link-only 3 条 = 已知 #42，非缺陷） |
+| python_style | **291 passed / 2 failed（存量）+ 4 known_fail** |
+| corpus | **39/39** |
+| jit | **ok=170 / segv=0**（491 总） |
+| knob / swallow / import_form / empty_stmt | 23 / 4 / 22 / 68 断言，**FAIL 0** |
+| pysrc / cli_semantics / ignore_rules / **mbvar（新）** | **FAIL 0**（mbvar：19 脚本 0 违规） |
+| clean_checkout | rc=0 |
+
+另：`cargo build --release --all-targets` 通过（删依赖后复验）。
+
+### 边界与未修
+
+- **4 个自举文件仍编译不过**（#79）——本批只把判据装上、把它们钉在案，未修。
+- `zeta_src/` 是否进三基线的"语料"口径未定（与 #42 同族，先测"喂进去会怎样"）。
+- `#78` 的三条 CLI 旁路（`--bootstrap` / 无输入 fallback / `--emit-llvm -o`）未动。

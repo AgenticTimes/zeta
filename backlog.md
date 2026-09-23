@@ -31,11 +31,11 @@
 |---|---|---|---|---|
 | #26 | `--emit-llvm` 退出路径空指针 | 批次 313 OPEN | S | ✅ 315（未绑符号就地填自报名桩） |
 | #28 | `--emit-llvm` 不带 `-o` 会**执行**被编译的程序（CLI 语义缺陷） | 批次 314 OPEN | S | ✅ 344（`main.rs:536-539` `probe_only` + `:924` 收窄 else；门禁第 12 步 `cli_semantics` 18 断言，负对照喂旧二进制只红"收窄翼"6 条。顺带纠正两处旧认知：缺陷**不止** `--emit-llvm`（`--dump-mir`/`--report-*`/`ZETA_DUMP_IR` 同病），且 `ir` 口径含执行程序 ⇒ 3 文件实测 597.5 → 388.6 ms（−35%），批次 313 基线由 `ir_executes_program` 标签自动拦下不可直比） |
-| #29 | ci.yml:61 JIT 冒烟引用 3 个不存在的文件 + `if [ -f ]` 假绿 | 批次 314 OPEN | S | ⬜ |
-| — | benchmarks.yml 5 处幽灵引用 | 批次 313 OPEN | S | ⬜ |
+| #29 | ci.yml:61 JIT 冒烟引用 3 个不存在的文件 + `if [ -f ]` 假绿 | 批次 314 OPEN | S | ✅ 347（两处说谎的步骤都换成真判据：① `Run known-good tests` 引用 `tests/test_hello.z`/`test_values.z`/`test_basic.z`——**三个文件都不存在**，命令还用 `--jit`，而 `main.rs` 里根本没有这个标志；外套 `if [ -f ]` ⇒ 循环体一次不执行、静默跳过，末行却无条件打印 "Self-host compilation verified"。已删除该步骤（JIT 覆盖在 baselines job 的 `run_all.sh` 步骤 4 `jit_sweep.sh`）。② 同 job 的 `Compile all zeta_src/ files` 用 `zeta_src/*.z`，只覆盖顶层 **5/51**——改名 + 改判据（见 #79）。同批清 benchmarks.yml（见下行）） |
+| — | benchmarks.yml 5 处幽灵引用 | 批次 313 OPEN | S | ✅ 347（实测是 **8 处**不是 5 处：`--bench compiler_bench` ×2 / `--bench runtime_bench` ×2 / `--bin regression_test` ×4。根：`benches/` 自 **v0.10.0 housekeeping**（175f4cd3）就被删了，该工作流从此是死的，而 `Cargo.toml:94` 的 criterion 依赖还在为它守着。处置按轴 A：删工作流 + 清理 4 条零引用 dev-dependency（proptest/libfuzzer-sys/criterion/tempfile，grep 实证 `proptest!`/`prop_assert`/`TempDir`/`tempdir`/`fuzz_target`/`libfuzzer`/`criterion_*` 在 src/ 与 tests/ 下命中均为 0）⇒ `Cargo.lock` **−550 行 / 56 个 crate（0 新增）**；`cargo build --release --all-targets` 通过。真实性能基线由 `tools/perf_baseline.py` 承担（其文档串早已记录这个幽灵）） |
 | #71 | 干净检出 + `cargo check` 进门禁（配方已在手：worktree + 符号链接 zetac，4 秒量完） | 340 OPEN 4 | S | ✅ 342（门禁第 10 步 `clean_checkout`；`rev`/`secs`/`rc` 进 JSON。收割时漏更新，本表 343 补记） |
 | — | `.gitignore` 7 个 NUL 字节 + CRLF（改动对 review 全不可见的根） | 340 OPEN 3 | S | ✅ 345（NUL 7→0、CR 行 154→0；"根"实证：`git show --numstat 801fc78a`/`6fe84c69` 对它都是 `- -` ⇒ 314/340 两批的规则改动在常规 diff 里就是一行 `Binary files differ`。净账用全集比对：被忽略路径 71,572 行逐行 diff 输出 0 行。`zeta/` **带证据不复活**——`tests/zeta/` 有 10 个已跟踪手写 `.z`，且该规则位置晚于 `!tests/**/*.z`。防回潮断言按宪法并入 #72 的 ①，未新开登记行）|
-| #40 | 裸 `*.z` 吞新建用例——340 只在 tests/、pylib/ 开负例，src/tools/docs/examples 仍吞 | 批次 322 | M | 🟡 |
+| #40 | 裸 `*.z` 吞新建用例——340 只在 tests/、pylib/ 开负例，src/tools/docs/examples 仍吞 | 批次 322 | M | ✅ 346（量完才发现 `*.z` 只是同根因的第一个受害者：**10 条不带斜杠的规则**长期压住 **290 个已跟踪文件**（`tests/` 136 · `zeta_src/` 51 · `src/` 39 · `zetas/` 17 · `.github/` 13 · `examples/` 5 · `tools/` 1；`.rs` 就有 92 个，其中 `tests/unit/` 52）。按 gitignore 语义收窄成根锚定 ⇒ 290→28，残差 28 逐条有归属（`/build/**` 24 · `*.o` 2 · `*.backup` 1 · `.codegraph` 1）；`zeta_*` **例外**：它吞的 `zeta_src/` 本身在仓库根 ⇒ 根锚定无效，只能删，最小仓三条路径对照为证。反方向读数 0 条（无物变被忽略），可见未跟踪只多 1 个用户文件 `zeta_src/qwenadvice.md`。防回潮 = 门禁第 13 步 `ignore_rules` 19 断言四翼，4 个反证里 2 个是门禁级（N3 证明它进退出码、N4 证明 `--skip-ignore` 如实登记）。OPEN 折进本行不新开：残差 2 个根级已提交 `.o` 的正解是 `git rm --cached`（改规则只是换个地方继续）、`zeta_src/` 51 个 `.z` 是否进门禁语料（与 #42 同族，先测"喂进去会怎样"） |
 
 ### B. 解析器截断族（#36 = 官方 12 用例 1,805 行被静默丢弃的余量）
 
@@ -92,6 +92,7 @@ B 是最大的单块已知债务（1,019 行）；C 是 S 粒度扫尾；D 需�
 |---|---|---|---|---|---|
 | #70/#77 | PY-A 模块搜索的**位置敏感性**一族：① 祖先 6 层基 ⇒ 家目录一个同名 `.z` 压过 `pylib`，判据收紧（裸名不跨祖先、点号名保留）未做；② 相对 `pylib` 基 ⇒ 换 CWD 时库面**消失且一声不出**（343 新量：仓库根 `import pandas` 有 `PY-A: imported module`，`/tmp` 下 rc=0 零输出） | 批次 340 OPEN 2（收割时漏了 ①）＋ 批次 343 新量 ② | M | 🟡 ① 已落"越界出声 W1005"读数半步（343），②未动 | §2-A 的"干净检出"行转 ✅ 342（342 已交付、表未跟上）⇒ 本行是**补记 lost item**，OPEN 净增 0 |
 | #78 | CLI **只读标志的覆盖面**一族（344 收主路，剩三条旁路）：① `--bootstrap` 连标志都收不到（`main.rs:589-590` 只传 `output`/`target`），其 `else`（`:1127-1130`）无条件 JIT + `main.call()`——是否真执行**没能实测**，因这条路今天 rc=134 堆溢出（两版二进制同）；② 无输入 fallback 打印 `Zeta self-hosted result:`（`:1006-1011`）；③ `--emit-llvm <f> -o g` **忽略** `--emit-llvm`，`g` 是链接好的可执行文件（实测 `Mach-O 64-bit executable arm64` 237,848 B，对照无 `-o` 的文本 IR 23,040 B） | 批次 344 盘据 | ①② S / ③ 判据待定 | ⬜ | §2-A `#28` 转 ✅ 344 ⇒ OPEN 净增 −1（本行 +1） |
+| #79 | **zeta_src/ 全量编译的真面貌**：51 个 `.z` 里 **4 个编译不过**，而原 CI 的 `zeta_src/*.z` glob 只盖住顶层 5 个、步骤名却写 "all" ⇒ 这 4 个从没进过任何门禁。失败形态逐条：`runtime/array.z` = W1002 解析截断（末尾 18 行丢弃，截断族 #36）；`runtime/xai.z` = W1004 字面量成为独立语句（`;` 家族 #67）；`runtime/actor/map.z` 与 `runtime/actor/result.z` = LLVM verifier 返回类型不匹配（`ret i64` vs `ptr`，另加 `host_result_free_1` 调用参数不匹配）——后两者是**新形态**（返回侧混型族 #33 / 附 B#8 的表亲）。判据已落地：`tools/selfhost_compile.sh` 覆盖全 51 个，4 个逐条钉住原因，**新失败即红、钉住项变通过也红**（清单只能缩）；ci.yml 同名步骤改为调它。剩余活 = 把 4 条从钉住清单里逐条打掉 | 批次 347 盘据（全量实测） | M | 🟡 判据已落地，4 条未修 | §2-A `#29` 转 ✅ 347 ⇒ OPEN 净增 0（本行 +1 / #29 −1） |
 
 ### 4.1 已登记项的落地进度（只追加，不重开）
 
@@ -101,6 +102,11 @@ B 是最大的单块已知债务（1,019 行）；C 是 S 粒度扫尾；D 需�
   #40/① 的收窄，与本表 §2-A "根"无关了 —— 下次燃 #72 时按"裸规则判据"单件事做。
   345 同时给出该活的两个前置读数：规则表现在可 review（`2 0` + 正文可读，实测于提交后），
   以及"防回潮断言"该跟它一起做（345 边界 2 说明了为什么单独加一步不划算）。
+- **#40 已闭（批次 346）**：上面那条"剩下的只是 #40/①"由 346 交付，且**剩下的比预想的多**——
+  10 条裸规则一起收窄、290→28，防回潮断言按 345 的承诺搭同一批的门禁行号成本一起付掉
+  （第 13 步 19 断言 + 4 个反证，锚点 `--rebind` 搬家 3 条）。本表 §2-A 的 #40 行转 ✅，
+  OPEN 计数 −1；本批新量出的两个残差（根级已提交 `.o` 的 `git rm --cached`、`zeta_src/` 是否
+  进语料）折在该行 ✅ 说明里，不新开登记行（宪法规则 2）。
 - **#52 / §2-D "锚点裸行号归属"**：批次 343 又撞出**同族的新形态**——`roadmap.md` 正文里
   的"行号 + 同行反引号片段"引用完全不进核对器（它只扫 `docs/ABI.md`）。实测该形态在
   roadmap 里有 **16 处**：8 处引用带文件名、8 处是裸 `:NNN`（无文件名 ⇒ 核对器连"比哪个

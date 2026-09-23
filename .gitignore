@@ -176,3 +176,4 @@ target/
 
 # macOS 目录元数据（此前被误跟踪；用 git rm --cached 停止跟踪，磁盘文件保留）
 .DS_Store
+/.ouroboros/artifacts/
