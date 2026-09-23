@@ -1,0 +1,65 @@
+// 批次 378：`match` 的臂体、以及放在取值位置的 `match`，里面的 `println!` 从来没被
+// 展开过。`src/middle/resolver/resolver.rs` 的宏递归只走到函数体的语句列表：
+//   - 它没有 `match` 这一支，所以臂体里的宏调用原样传给 MIR 生成；
+//   - 语句被 `{ … }` 包起来时，里面的宏调用带着 `ExprStmt` 外壳，而递归的外壳分支
+//     缺 `ExprStmt`，同样原样放行；
+//   - `let x = match …` 和 `x = match …` 的初值也没有分支，整棵子树没被走到。
+// MIR 生成碰到没展开的宏调用是"悄悄跳过"（`src/middle/mir/gen.rs:2888`、`:3242`），
+// 于是编译成功、退出码 0、臂里的语句一条都不执行。
+// 改前实拍（批次 377 的构建，同一份源）：
+//   - `2 => println!("two")` 后跟 `println!("done")` → 只打 `done`；
+//   - 臂体是块 `{ println!("…"); hits = 5 }` → 只打外面的 `hits=5`，块里那条没有；
+//   - 块里两条 `println!` → 两条都没有，只剩块外面的 `after`；
+//   - `let a = match n { 2 => { println!("let-side"); 7 } }` → 只打 `a=7`。
+//   （`x = match …` 这一形态是在只补了 `match` 分支的中间构建上实拍的：只打 `x=7`，
+//   `side-assign` 没有；它和 `let` 走的是同一个缺失分支。）
+// 改后逐行如下（先跑程序、按实际输出写期望）：
+//   - 单条宏臂、块臂、`let` 位、`=` 位四种形态的臂副作用都执行；
+//   - 块里既有打印又有赋值时，两者都执行（`block-arm` 与 `hits=5`）；
+//   - 块的值仍是最后一条表达式，赋给 `let`／`=` 的目标（`a=7`、`x=9`）；
+//   - 未命中的臂不打：上面 `2` 那条命中臂的打印确实出来了，说明这条 `match` 的臂
+//     分支真的在下发，`skip-me`／`skip-other` 因此是"该跑的路跑了、没命中的不跑"。
+// expect: two
+// expect: block-arm
+// expect: hits=5
+// expect: let-side
+// expect: a=7
+// expect: assign-side
+// expect: x=9
+
+fn main() -> i64 {
+    let n = 2
+    let mut hits = 0
+    let mut x = 0
+    match n {
+        1 => println!("one"),
+        2 => println!("two"),
+        _ => println!("other"),
+    }
+    match n {
+        1 => println!("skip-me"),
+        2 => {
+            println!("block-arm")
+            hits = 5
+        }
+        _ => println!("skip-other"),
+    }
+    println!("hits={}", hits)
+    let a = match n {
+        2 => {
+            println!("let-side")
+            7
+        }
+        _ => 0,
+    }
+    println!("a={}", a)
+    x = match n {
+        2 => {
+            println!("assign-side")
+            9
+        }
+        _ => 0,
+    }
+    println!("x={}", x)
+    return 0
+}

@@ -3541,6 +3541,52 @@ fn shim_class_normalize(t: &Type) -> Type {
             AstNode::Block { body } => {
                 Ok(vec![AstNode::Block { body: self.expand_stmts(body)? }])
             }
+            // PY-A: a macro call that arrives in statement position wrapped in
+            // `ExprStmt` (that is how a block-shaped statement list stores it)
+            // used to fall through to the catch-all below and be cloned
+            // untouched, so the unexpanded MacroCall reached MIR lowering —
+            // which skips it silently — and `2 => { println!("in-block") }`
+            // printed nothing (batch 378, backlog #38 ④).
+            AstNode::ExprStmt { expr } => {
+                if let AstNode::MacroCall { name, args } = &**expr {
+                    self.macro_expander.expand_macro_call(name, args)
+                } else {
+                    Ok(vec![node.clone()])
+                }
+            }
+            // PY-A: `match` was missing from this recursion altogether, so every
+            // arm body reached MIR lowering unexpanded — and MIR skips a
+            // MacroCall silently, so `2 => println!("two")` printed nothing
+            // (batch 378, backlog #38 ④).
+            AstNode::Match { scrutinee, arms } => {
+                let mut expanded_arms = Vec::with_capacity(arms.len());
+                for arm in arms {
+                    let body = self.expand_expr_node(&arm.body)?;
+                    expanded_arms.push(crate::frontend::ast::MatchArm {
+                        pattern: arm.pattern.clone(),
+                        guard: arm.guard.clone(),
+                        body,
+                    });
+                }
+                Ok(vec![AstNode::Match {
+                    scrutinee: scrutinee.clone(),
+                    arms: expanded_arms,
+                }])
+            }
+            // PY-A: a `match` sitting in expression position was never reached
+            // either, because `let` and `=` are not in this recursion: the value
+            // arrived but the arm's side effects did not —
+            // `let x = match n { 2 => { println!("side"); 7 } _ => 0 }` printed
+            // only `x=7` (batch 378, backlog #38 ④).
+            AstNode::Let { mut_, pattern, ty, expr } => Ok(vec![AstNode::Let {
+                mut_: *mut_,
+                pattern: pattern.clone(),
+                ty: ty.clone(),
+                expr: self.expand_expr_node(expr)?,
+            }]),
+            AstNode::Assign(lhs, rhs) => {
+                Ok(vec![AstNode::Assign(lhs.clone(), self.expand_expr_node(rhs)?)])
+            }
             _ => {
                 // For other nodes, just return them as-is
                 Ok(vec![node.clone()])
@@ -3555,6 +3601,21 @@ fn shim_class_normalize(t: &Type) -> Type {
             expanded.extend(self.expand_macros_in_node(stmt)?);
         }
         Ok(expanded)
+    }
+
+    /// Expand a node that has to stay a single node (a `match` arm body, a `let`
+    /// or `=` value). When the macro turns it into several statements they are
+    /// wrapped in a block, whose value is its last statement.
+    fn expand_expr_node(&mut self, node: &AstNode) -> Result<Box<AstNode>, String> {
+        let nodes = self.expand_macros_in_node(node)?;
+        Ok(match nodes.len() {
+            0 => Box::new(node.clone()),
+            1 => match &nodes[0] {
+                AstNode::ExprStmt { expr } => expr.clone(),
+                other => Box::new(other.clone()),
+            },
+            _ => Box::new(AstNode::Block { body: nodes }),
+        })
     }
 
     /// Get all registered function ASTs

@@ -14831,3 +14831,51 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 2. 带格式说明符的占位符仍不收：`println!("{:.2}", x)` 在展开期的元数检查里按 `{}` 计数（`macro_expand.rs` 的 `format_str.matches("{}").count()`），说明符形态直接报 `println! format string expects 0 arguments, got 1`。本批未动这条检查，改前改后同形。
 3. 转义花括号 `{{`/`}}` 无处安放：全仓 `.z` 里 `println!("…{{…")` 命中 0 处（正证据＝同一把尺子、同一作用域下 `println!("…{` 命中 308 处/58 文件，说明模式真在跑、不是写错），所以本批按"分隔符就是 `{}`"实现，没为 `{{` 加规则；加了会在有人用时变成错的行为，届时要连元数检查一起改。
 4. 函数尾位置上的宏仍不带值：`fn tail() -> i64 { println!("t={}", 3) }` 被调用时值槽读出 `1`（`/tmp/b377/f3.z`），但这与本批无关——同一份构建下换成完全不含宏的 `fn noMacro() -> i64 { print_str("x") }` 读出同样是 `1`（`/tmp/b377/f4.z`），而 `fn empty() -> i64 { let z = 9 }` 读出 `9` ⇒ 是"函数体没有 ret_expr 时值槽填什么"那一层（#55 一族），不是展开期多节点造成的新形态。
+
+---
+
+## 批次 378 —— `match` 臂里的宏终于展开了（#38 ④ 收三形）：差别在"多个节点要有地方放"，批次 369 那次零效果的原因就在这里
+
+### 现象（改前实拍在批次 377 的构建上，同一份源；改后是本批构建）
+| 夹具 | 写法 | 改前打出 | 改后打出 |
+|---|---|---|---|
+| `/tmp/b377/i.z` | 臂体直接是宏：`2 => println!("two")`，块外再 `println!("done")` | 只有 `done` | `two`、`done` |
+| `/tmp/b377/i2.z` | 臂体是块，块里一条带占位符的宏 + 一条赋值 | 只有块外的 `hits=5` | `two with prefix=2`、`hits=5` |
+| `/tmp/b377/i3.z` | 臂体是块，块里两条宏 | 只有块外的 `after` | `in-block`、`second`、`after` |
+| `/tmp/b377/i4.z` | `match` 放在 `let` 的初值位，命中臂是块（一条宏 + 一个整数） | 只有 `x=7` | `side`、`x=7` |
+| `/tmp/b378/e2.z` | 同 `i2.z` 但块里先赋值后打印 | 只有 `hits=5`（中间构建实拍，见"定位"第 2 条） | `in-block`、`hits=5` |
+| `/tmp/b378/i5.z` | `match` 放在 `x = …` 的右值位，命中臂是块 | 只有 `x=7`（同上，中间构建实拍） | `side-assign`、`x=7` |
+
+六处都是编译成功、退出码 0、一声不出——丢的是臂里的副作用，不是报错。
+
+### 定位（三条，各自独立；都是宏展开这一层的"没人递归到"）
+1. **`src/middle/resolver/resolver.rs` 的 `expand_macros_in_node` 没有 `Match` 臂**（当时兜底臂在 `:3544`，本批之后在 `:3590`）。臂里的 `println!` 保持未展开的 `MacroCall`，MIR 生成对未展开宏是"悄悄跳过"（`src/middle/mir/gen.rs:2888` 语句位、`:3242` 表达式位换成 `IntLit(0)`）⇒ 只收 1 个节点的槽连宏本身都没了。
+2. **臂体写成块时，块里那条宏带着 `ExprStmt` 外壳，而递归没有 `ExprStmt` 臂。** 这条是本批用临时探针实拍的（在臂体分支打一行 `eprintln!`，量完已撤）：`arm body: Block(2 stmts: [Discriminant(16), ExprStmt(MacroCall(println))])`。对照组同一次构建：函数体里的普通块 `{ println!("plain-block-says-hi"); let q = 1 }` 一直是打的（`/tmp/b378/e1.z`），因为函数体语句列表里那条宏是裸 `MacroCall`，正好被现有的语句递归接住。所以"块臂不出声"不是 `ExprStmt` 之外另有原因。
+3. **`match` 放在取值位置时整棵子树没人走**：`Let`（初值）和 `Assign`（右值）都不在容器臂里，所以里面的 `match` 连第 1 条都碰不到——值本身照样算对（`x=7`），只是臂的副作用没了。
+4. **对账批次 369 那句"加了 `Match` 展开臂、实测三处输出一字未变"**（roadmap 批次 369"处置"节）：369 的实现只在"展开结果恰好 1 个节点"时才替换臂体，而 `println!` 展开是 2 个节点 ⇒ 条件永远不成立，所以那一次确实零效果。本批的 `expand_expr_node`（`:3609`）在多节点时把列表包成一个 `AstNode::Block`——臂体槽"只能放一个节点"这个限制由块自己满足，MIR 侧 `gen.rs:3188` 的 `Block` 分支本来就是"前面的语句按语句下、最后一条当值"的读法。两批的差别只在这一处，不冲突。
+
+### 修复（一个文件、纯插入 61 行：`src/middle/resolver/resolver.rs`，4791 → 4852 行）
+- `AstNode::ExprStmt`（`:3550`）：外壳里是宏调用就展开成语句列表，其余原样。
+- `AstNode::Match`（`:3561`）：逐条臂递归，臂体经 `expand_expr_node` 保持单节点。
+- `AstNode::Let`（`:3581`）、`AstNode::Assign`（`:3587`）：初值/右值经 `expand_expr_node`。
+- 新helper `expand_expr_node`（`:3609`）：0 节点→原节点；1 节点→拆掉 `ExprStmt` 外壳；多节点→包 `AstNode::Block`。
+没新增运行时函数、没动 C 侧、没动 `src/lib.rs` ⇒ 不需要 `tools/build_runtime.sh`，也没有 `.o` 要同步。
+
+### 验证
+- 新用例 `tests/python_style/t419_match_arm_macros.z`（7 条 `// expect`，先跑后写）：单宏臂、块臂（宏 + 赋值）、`let` 位、`x =` 位四形一起钉住；未命中的臂不出声（正证据是同一条 `match` 的命中臂打了 `block-arm`，说明这条链真的下发了；不是"没打到所以看不见"）。JIT 与 AOT（`-o` 后跑二进制）7 行逐字相同。
+- 臂之间不串味复测：`/tmp/b378/i7.z`（三条块臂，`n=2`）→ 只打 `twenty`、`k=22`（另两条臂的打印一条没出，值取命中臂块尾）；`/tmp/b378/i8.z`（块臂返回字符串）→ `side`、`s=abc`，JIT/AOT 同读。
+- 整趟门禁（`tools/run_all.sh`，日志 `/tmp/b378/gate.log`，`gate_rc=1`）：`rc=1` 只由 python_style 那两条存量红解释（批次 369 已把这条约定写清）。official `compile 194/194`、`compile+link 192/194`（两条 link-only 明细与 377 一字相同：`integration_all_features` 缺 `_predict`/`_train`、`selfhost` 缺 `_as_str`/`_build_ast`/`_is_alphabetic`/`_push` ⇒ 不是本批新增）、official 诊断 `5 文件/29 行`；python_style `303 通过 / 2 失败（t231、t233）/ 4 known-fail / 0 xpass`，`302 → 303` 全部归到新用例 `t419` 一个文件，诊断 `193 行 / 82 文件` 未动（含那 3 条"`literal` 成了独立语句"警告，逐字与 377 相同 ⇒ 本批没改变任何诊断面）；语料 `39/39 = 100%`；diff test `match=120 judged=130 rate=92.3% bad_case=0`（与 377 一字相同）；jit `ok=173 trap=330 fail=0 timeout=0 segv=0 (total 503，最小 ok=163) GREEN`——`ok 172 → 173`、`total 502 → 503`，多的那一条就是 `t419`（JIT 下实拍通过），既有 trap 一条没多；knob 23 / swallow 4 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 全部 `FAIL 0`；mbvar `19/0`；comment_drift `0`；clean_checkout `rc=0（3s，rev=1e59c852）`。
+- 丢行尺子（`tools/truncation_inventory.sh`，release，日志 `/tmp/b378/inv.log`）：3 文件 / 533 行（357 + 91 + 85），逐文件与批次 377 一字相同 ⇒ 本批在副作用层、不碰解析，#36 那行没有可收的格。
+- 锚点核对（`tools/check_abi_anchors.py`，日志 `/tmp/b378/anchors.log`）：`漂移 58 / 新 0 / 消失 1（改号配对 0）`，待归属 93 条 / 84 种 ⇒ 与批次 377 逐字相同；`grep -c resolver.rs` 在两份日志里都是 0 ⇒ 本批改的文件不在锚点集内，无需 `--rebind`。
+- 承重裸行号（本批 +61 行、两处纯插入：旧 `:3544` 起 +46、旧 `:3560` 起 +61）：`resolver.rs:3552`（`expand_stmts`，批次 377 记录"边界/验证"里那处活引用）→ 现 `3598`；`resolver.rs:3544`（兜底臂，368/369 三段历史记录引用）→ 现 `3590`。两个新号都是实读核对（`grep -n "fn expand_stmts"` = 3598、`_ =>` = 3590），历史原文不回改，旧号→新号对照记在本节。
+
+### 边界（本批没修的，实拍在册）
+1. **臂体写成"只有一条表达式的块"仍不出声**：`/tmp/b378/i6.z`（`2 => { println!("arm-two") }`）AOT 只打 `end`、退出码 0、一声不出；`--dump-mir` 正证据是该臂的 `then` 里只有 `zeta_dynarray_new` + `vec_push`，整份 MIR 没有一条打印调用 ⇒ `=>` 后面的 `{ … }` 在一条表达式时被读成集合字面量（一个装宏结果的数组），不是语句块。这条与批次 369 定位 3 末句（`/tmp/b368t/n.z`）同形，本批未收：卡点在解析/表达式规则那一层，不在宏递归这一层。JIT 下它倒是出声（E4016 缺 `zeta_dynarray_new` 绑定），AOT 下静默——同一份源码两种模式表现不同，已各自实拍。逗号分隔的同一形态（`/tmp/b378/i6b.z`）读数一字相同，所以不是臂间逗号造成的。
+2. **递归还是"一类容器补一臂"，不是全树遍历**：本批只收实拍的四种容器（语句位宏、`match` 臂、`let` 初值、`=` 右值）。兜底臂覆盖到的一切仍可能漏，已知未测的有闭包体里的宏（批次 368 记的 `/tmp/b368t/h.z`）和 `Return` 的表达式位——没有实拍读数就不写"已修"或"修不了"。
+3. **`if let` 的臂体（#38 ⑦）没碰**：构造子模式那一族仍按批次 375 的改判排在前面（selfhost 剩的 91 行下游是它，不是本批）。
+4. **展开失败现在开始出声，且范围比改前大**：`let`/`=` 的初值位以前根本不进展开器，所以那里写错宏名不会报错；本批之后未注册宏名在初值位会沿 `?` 冒成编译错误。三组读数（official 诊断 5/29、python_style 诊断 193/82、语料 39/39）逐字未动 ⇒ 现状没有任何文件踩到这条；真踩到时是报错而不是静默少打一行。
+
+### 下一批默认候选
+1. #38 ④ 的残余一形：`=>` 后单条语句被读成集合字面量（上面"边界"第 1 条，最小复现 `/tmp/b378/i6.z` 已就位）。
+2. #38 ⑤（`q @ _` 绑定丢成 0）或 ⑦（构造子模式，selfhost 91 行的下游）。
+3. §4 的 `benchmark_simd_vs_scalar` 357 行（`static mut`，跨解析+AST+MIR+运行时四层）。
