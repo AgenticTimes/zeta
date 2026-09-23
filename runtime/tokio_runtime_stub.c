@@ -2463,6 +2463,33 @@ int64_t host_str_islower(int64_t s) { return str_is_lower(s); }
 // minimal_compiler / test_suite 链接失败缺的就是它）。
 int64_t host_str_to_string(int64_t s) { return s; }
 int64_t to_string(int64_t s) { return s; }
+// 批次 364（任务 #42）：字符串判定族。is_whitespace 跟 Rust 的"全字符都是空白
+// 才算"语义（空串为真）；非 ASCII 码点保守按非空白处理（当前语料只做 ASCII 判定）。
+// clone 是恒等——字符串不可变。
+int64_t host_str_is_empty(int64_t s) {
+    if (!s) return 1;
+    return strnlen((const char*)s, 1 << 20) == 0 ? 1 : 0;
+}
+int64_t host_str_is_whitespace(int64_t s) {
+    if (!s) return 1;
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) {
+        if (*p < 0x80) {
+            char c = (char)*p;
+            if (!(c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'))
+                return 0;
+            p++;
+        } else {
+            return 0;
+        }
+    }
+    return 1;
+}
+int64_t host_str_clone(int64_t s) { return s; }
+// 裸别名只给未知类型接收者的回退路径用。clone 故意不给裸别名——
+// Linux 上会与 glibc 的 clone 同名冲突，类型已知时走 host_str_clone。
+int64_t is_empty(int64_t s) { return host_str_is_empty(s); }
+int64_t is_whitespace(int64_t s) { return host_str_is_whitespace(s); }
 int64_t host_str_swapcase(int64_t s) { return str_swapcase(s); }
 int64_t host_str_removeprefix(int64_t s, int64_t p) { return str_remove_prefix(s, p); }
 int64_t host_str_removesuffix(int64_t s, int64_t p) { return str_remove_suffix(s, p); }

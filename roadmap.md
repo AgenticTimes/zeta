@@ -14364,3 +14364,21 @@ minimal_compiler 缺的 13 个符号需要字符、迭代器（.iter().enumerate
 
 ### 下一步
 #42 续：先做语义明确的字符串判定族（_is_empty / _is_whitespace / _clone），_unwrap_or_else 随闭包实参表示的决策一起做。
+
+## 批次 364 —— 任务 #42 第二刀：字符串判定族（is_empty / is_whitespace / clone）+ 闭包实参决策
+
+### 内容
+- gen.rs 方法表加三项：`is_empty` → host_str_is_empty（bool）、`is_whitespace` → host_str_is_whitespace（bool）、`clone` → host_str_clone（str）。
+- runtime/tokio_runtime_stub.c 实现这三个函数 + 裸别名 is_empty / is_whitespace（给未知类型接收者的回退路径）。语义跟 Rust：is_whitespace 全字符空白才为真（空串为真），非 ASCII 码点保守按非空白处理；clone 是恒等（字符串不可变）。clone 故意不给裸别名——Linux 上会与 glibc 的 clone 同名。
+
+### 闭包实参表示决策（_unwrap_or_else 的前置，已写入 backlog）
+- 闭包沿用现有 FuncAddr 约定（i64 函数地址，zeta_call1 调用路径）。
+- Result 表示：当前值模型没有标签，定为"0 哨兵"——成功值本身、失败为 0。因此 _unwrap / _unwrap_or 是恒等；_unwrap_or_else(res, f) = res != 0 ? res : zeta_call1(f, 0)。
+- 代价：失败与合法的 0 不可区分。minimal_compiler 的玩具用法可接受；轴 B 标签单元落地后迁移。
+
+### 验证
+- 功能：is_empty("hello")=0、clone().len()=5、is_whitespace("  ")=1、is_empty("")=1——与 Rust 一致。
+- 三基线：official 194/194（compile+link 192/194，bootstrap_validation_test 仍缺 _unwrap_or_else）· python_style **294 passed** / 2 failed（存量，含新增 t410）· 语料 39/39。
+
+### 下一步
+#42 剩余：按上面的决策实现 _unwrap / _unwrap_or / _unwrap_or_else + _parse（0 哨兵）+ _chars/_nth/_push_str/_iter（字符用单字符字符串表示，与 s[i] 一致）——bootstrap_validation_test 与 minimal_compiler 的链接就齐了。

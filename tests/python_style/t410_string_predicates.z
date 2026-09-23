@@ -1,0 +1,21 @@
+// 批次 364：字符串判定族此前没有运行时实现，调用点落到未定义符号
+// （_is_empty/_is_whitespace/_clone）。语义跟 Rust：is_whitespace 全字符
+// 空白才为真（空串为真），clone 恒等（字符串不可变）。
+// expect: 0
+// expect: 5
+// expect: 1
+// expect: 1
+// expect: 0
+
+fn main() -> i64 {
+    let s = "hello"
+    println!("{}", s.is_empty())
+    println!("{}", s.clone().len())
+    let w = "  "
+    println!("{}", w.is_whitespace())
+    let e = ""
+    println!("{}", e.is_empty())
+    let d = "42".clone()
+    println!("{}", d.is_whitespace())
+    return 0
+}

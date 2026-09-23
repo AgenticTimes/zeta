@@ -13747,6 +13747,13 @@ fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)
         // the same-named C alias `to_string` covers call sites whose receiver
         // type is unknown and bypasses this table (batch 363, task #42).
         "to_string" => Some(("host_str_to_string", 1, "str")),
+        // Batch 364 (task #42): the string predicate family. `is_whitespace`
+        // follows Rust's all-chars rule; `clone` is identity for the same
+        // immutability reason as `to_string`. Bare C aliases for the untyped
+        // fallback path are in tokio_runtime_stub.c.
+        "is_empty" => Some(("host_str_is_empty", 1, "bool")),
+        "is_whitespace" => Some(("host_str_is_whitespace", 1, "bool")),
+        "clone" => Some(("host_str_clone", 1, "str")),
         "lower" => Some(("host_str_to_lowercase", 1, "str")),
         "capitalize" => Some(("host_str_capitalize", 1, "str")),
         "title" => Some(("host_str_title", 1, "str")),
