@@ -786,7 +786,7 @@ macro_rules! diag_error {
         use $crate::diagnostics::{Diagnostic, Severity};
         let diag = Diagnostic {
             severity: Severity::Error,
-            code: Some(format!("E{}", $code)),
+            code: Some(($code).to_string()),
             message: format!($($arg)*),
             span: None,
             context: None,
@@ -804,7 +804,7 @@ macro_rules! diag_warning {
         use $crate::diagnostics::{Diagnostic, Severity};
         let diag = Diagnostic {
             severity: Severity::Warning,
-            code: Some(format!("W{}", $code)),
+            code: Some(($code).to_string()),
             message: format!($($arg)*),
             span: None,
             context: None,
