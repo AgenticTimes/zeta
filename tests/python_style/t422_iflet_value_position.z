@@ -1,0 +1,102 @@
+// 批次 382：`if let` 写在**取值的位置**上（`let x = if let … else …`、实参、返回值）
+// 以前整条解析不了。语句位的 `if let` 有专门的解析器（`src/frontend/parser/stmt.rs`），
+// 表达式位那条（`src/frontend/parser/expr.rs` 的 `parse_if`）只认 `if 条件`，撞上
+// `let` 就整体失败 ⇒ 一个顶层项失败，同文件它之后的每一项都被丢掉（W1002）。
+// `tests/unit-tests/selfhost.z:89` 起的 91 行就是这么掉的（那 3 处 `if let` 里
+// 的模式是构造子，本批仍不收，原因见下）。
+// 修法：值位 `if let 模式 = 被匹配值 { 块 } else { 块 }` 脱糖成 `match`。走 `match`
+// 而不是走语句位那个 `AstNode::IfLet` 节点，是因为只有 match 的结果槽能把臂体的值
+// 带出来 —— 语句位 `IfLet` 没有结果 id，而且它的 `else_` 从来没被下过型（实拍：
+// `if let Option::Some(n) = v { print(n) } else { print(0) }` 对 `None` 也进 then，
+// 且打出的不是存进去的 5 而是 10）。
+// 构造子模式（`Token::Ident(n)`、`Option::Some(n)`）和元组模式在本批**明确不收**：
+// 同一份表示在值位 match 上实拍是 SIGSEGV（`let x = match v { Option::Some(n) => n,
+// _ => 0 };` 无输出、rc=139），放行只会把这条崩溃搬进更多文件；不收的文件仍停在
+// W1002 那一声上（`/tmp/b382/c.z` 改后仍报 5 行全丢）。
+// 改前实拍（批次 381 的构建 `9d013e50`，同一份源）：
+//   `warning: [W1002] tests/python_style/t422_iflet_value_position.z:29: 69 line(s)
+//   at the end of the input were NOT parsed … First unparsed text: 'fn lit(t: i64)
+//   -> i64 {\n    let x = if let 5 = t {\n        1'`，跑起来一行输出都没有（rc=0）。
+//   掉到 :29 是因为前面 28 行全是注释；解析器一问 `if let` 就放弃整个顶层项。
+// 改后逐行如下（先跑程序、按实际输出写期望）：
+// expect: lit5=1
+// expect: lit6=0
+// expect: bind=5
+// expect: or1=10
+// expect: or3=20
+// expect: rng2=5
+// expect: rng9=6
+// expect: multi=6
+// expect: tail=7
+
+fn lit(t: i64) -> i64 {
+    let x = if let 5 = t {
+        1
+    } else {
+        0
+    }
+    x
+}
+
+fn bind(t: i64) -> i64 {
+    let x = if let n = t {
+        n + 1
+    } else {
+        0
+    }
+    x
+}
+
+fn orm(t: i64) -> i64 {
+    let x = if let 1 | 2 = t {
+        10
+    } else {
+        20
+    }
+    x
+}
+
+fn rng(t: i64) -> i64 {
+    let x = if let 1..=3 = t {
+        5
+    } else {
+        6
+    }
+    x
+}
+
+// 臂体是多条语句时，末表达式的值要能进结果槽（`y` 的副作用也得看得见）。
+fn multi(t: i64) -> i64 {
+    let mut y = 0
+    let x = if let n = t {
+        y = 1
+        n + y
+    } else {
+        0
+    }
+    x + y
+}
+
+// 对照组：语句位 `if let` 走的是另一条下型路径，本批一字未动（它的 `else` 仍被丢、
+// 模式仍恒判通过）。它顺带给出 W1004 的归因证据：本文件编译时那两声 `W1004 :87`
+// 全部来自下面 `tail` 里那一行的**单行**写法（`if let 5 = t { 1 } else { 0 };`）。
+// 批次 337 的判据在 `} else { 块里有东西 }` 这种形上有盲区（`else` 后面跟了内容就不再
+// 被当成"没有东西可解析"）。值位的单行写法响同样两声（`/tmp/b382/s1.z`），本 test 的
+// 值位写法全部展开成多行，一声不出。诊断层的这条判据另案，不在本批。
+fn tail(t: i64) -> i64 {
+    if let 5 = t { 1 } else { 0 };
+    7
+}
+
+fn main() -> i64 {
+    println!("lit5={}", lit(5))
+    println!("lit6={}", lit(6))
+    println!("bind={}", bind(4))
+    println!("or1={}", orm(1))
+    println!("or3={}", orm(3))
+    println!("rng2={}", rng(2))
+    println!("rng9={}", rng(9))
+    println!("multi={}", multi(4))
+    println!("tail={}", tail(5))
+    return 0
+}

@@ -15006,3 +15006,50 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 1. #38 ⑦（构造子模式 / `if let`，selfhost 剩的 91 行；本批顺带量到 `if let Some((p, q)) = …` 带 `else` 在解析层是过的（`/tmp/b381/g2.z` 无 W1002）⇒ 91 行的卡点要重新找，不能照旧账推）。
 2. §4 的 `benchmark_simd_vs_scalar` 357 行（`static mut`，四层）。
 3. 批次 380 的"边界"第 1 条：一个臂都不匹配时读未写槽，判据待定。
+
+## 批次 382 —— 值位的 `if let`（`let x = if let 5 = t {…} else {…}`）从来没有解析规则；接上之后，`selfhost` 那 91 行的卡点确认在"值怎么表示"这一层，不在解析层
+
+### 现象（改前读数取自上一版构建 `/tmp/b382/zetac_pre`，同一份源）
+| 写法 | 夹具 | 改前实拍 | 改后实拍 |
+|---|---|---|---|
+| `let x = if let 5 = t { 1 } else { 0 };`（字面量模式） | `/tmp/b382/s1.z`、`e3.z` | `W1002 s1.z:1: 5 line(s) … NOT parsed`，首块 `fn f(t: i64) -> i64 {\n    let x = if let 5 = t { 1 } else { ` ⇒ 整个文件 5 行全丢，程序无输出 | `1 0 0`（`f(5)/f(6)/f(0)`），无 W1002 |
+| `let x = if let n = t { n + 1 } else { 0 };`（绑定模式） | `s2.z`、`e4.z` | 同上，`:1` 丢 5 行 | `6`、`-2` |
+| `let x = if let 1 \| 2 = t { 10 } else { 20 };`（or 模式） | `s3.z` | 同上，`:1` 丢 5 行 | `10`、`20` |
+| 区间模式 `if let 1..=3 = t` | `t422` 的 `rng` | 同 `:1` 全丢 | `5`、`6` |
+| 构造子模式 `if let Token::Ident(n) = t` | `/tmp/b382/c.z`、`tests/unit-tests/selfhost.z:97`/`:106`/`:111` | `selfhost.z:89` 起丢 91 行 | 仍丢 91 行（守卫主动挡住，见"定位 3"） |
+| 表达式位的裸 `match`（对照：这条路批次 375 已通） | `/tmp/b382/a.z` | `10` 正常 | 一字未变 |
+
+一句话：`if let` 只有"作为一条语句"的写法有规则（`src/frontend/parser/stmt.rs:289`），"作为一个值"的写法没有规则 —— 而 `selfhost` 的三条恰恰是后一种。
+
+### 定位（三条）
+1. **卡点在表达式位，不在模式语言**。表达式位的 `if` 进 `parse_if`，它以前无条件往"条件表达式"那条路走，`if` 后面跟 `let` 就解析失败；失败发生在一条顶层 `fn` 内部，顶层项整个被放弃 ⇒ W1002 把这条 `fn` 之后的全文丢掉。同一个模式（`5`、`n`、`1 | 2`、`1..=3`）放在语句位一声不出 —— 说明缺的是那条规则本身。
+2. **为什么不新增"值位 IfLet"节点，而是展开成 `match`**：`AstNode::IfLet` 在 MIR 里只有语句位的下型（`src/middle/mir/gen.rs:2735`），它没有结果 id，`else_` 那半边从来没被下型；值取不出来，接不了"作为一个值"的写法。而 `match` 的结果槽（批次 375 收的 #38 ①）是现成的、唯一能把臂体末尾表达式的值带出来的机器，所以展开成两臂：`模式 ⇒ then 块` + `_ ⇒ else 块`。零 MIR 改动、零 codegen 改动。
+3. **构造子模式（`Token::Ident(n)`、`Some(x)`、`(a, b)`）在值位接不了，卡在"值怎么表示"，不是解析层半修得了的**。三处代码加两条实拍：
+   - `gen.rs:10856` 起只对 `Option::`/`Result::` 这两个变体名有专门的判据，`gen.rs:10936` 对其它构造子模式的注释就是"treat as always matching for now"，字段绑成占位值；
+   - `src/backend/codegen/codegen.rs:6210-6211` 下发 `MirExpr::Struct` 时按字段数分配堆格子，并且**把 `variant`（是哪个变体）丢掉**；单元变体在下型时是裸整数（`gen.rs:3068` 查表、`:3434` 折成 `IntLit(tag)`）⇒ 同一个 enum 里"不带数据的变体"是整数、"带数据的变体"是没有 tag 的堆格子，两种表示互不认得，模式侧没有"取 tag / 取载荷"的入口；
+   - 实拍（本批，现构建）：值位 `match` 用 `Option::Some(n)` 臂 ⇒ 无输出、rc=139（SIGSEGV）；`/tmp/b382/f2.z`（值位 `match t { Token::Lit(n) => n, _ => -5 }`，`t=7`）⇒ 打 `0`：既不是 7 也不是 -5，静默错值；`/tmp/b382/f1.z`（语句位 `if let Token::Ident(n) = t { r = 1 } else { r = 2 }`，`t=7` 不该匹配）⇒ 打 `1`，即"不匹配也进 then"，载荷读回另一个数（同一形制更早的实拍是"存 5 打 10"）。
+   所以本批的守卫（`pattern_has_matcher`，`src/frontend/parser/expr.rs:787`）把 `StructPattern` 和 `Tuple` 一律退回原路径：宁可继续 W1002（丢行、出声），不要一个看着能跑的静默错值。
+
+### 修法（`src/frontend/parser/expr.rs`，+96 行、0 删，只在 `parse_if` 一处插入）
+- `parse_if`（`:749`）：`if` 之后先看是不是 `let`（`let_keyword`，`:762`，带词边界，免得把 `lettuce` 当关键字），是则走 `parse_if_let_expr`，失败就整体退回 `parse_if_tail`（现 `:852`），行为与改前一字不差；
+- `parse_if_let_expr`（`:806`）：`let` + 模式 + `=` + 被匹配表达式 + then 块 + `else` 块，产出上面的两臂 `match`；没有 `else` 就退回原路径（值位必须有 else，否则没有"另一条路的值"可给）；
+- `pattern_has_matcher`（`:787`）：递归判"匹配机器到底能不能测这个模式"，构造子/tuple 为否，`BindPattern`/`TypeAnnotatedPattern`/`OrPattern` 看内层。
+
+### 验证（门禁 `rc=1`，只由 t231/t233 解释；红线全部保持）
+- official：compile `194/194`、compile+link `192/194`（两条 link-only 失败不变）；python_style：`306 passed, 2 failed, 4 known-fail, 0 xpass`（passed 比批次 381 多 1 = 新用例 `t422`），失败仍是 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`；corpus `39/39`；jit `ok=175 trap=331 fail=0 timeout=0 segv=0`（总数 506，比上版 +1、ok +1、trap 不变）；diff `match=120 judged=130 rate=92.3% bad_case=0`；knob/swallow/import/empty_stmt/pysrc/cli_semantics/ignore_rules/mbvar 各步 FAIL 0。
+- 丢行尺子：`3 文件 / 533 行`（`benchmark_simd_vs_scalar` 357、`selfhost` 91、`quantum_basic` 85）—— 与批次 381 在册值一字未变。`selfhost` 的三条都是构造子模式，被守卫按第 3 项主动挡住，所以**这 91 行本批没有收回**；`test_pub_use`/`fmt_time_env_test` 不在这把 237 文件尺子口径内。
+- 新用例 `tests/python_style/t422_iflet_value_position.z`（9 个 `// expect:`，与实跑逐字一致）：`lit5=1 lit6=0 bind=5 or1=10 or3=20 rng2=5 rng9=6 multi=6 tail=7`。其中 `multi` 是"臂体多条语句"的形（`y = 1; n + y`，回来还要用 `y`），`tail` 是语句位对照组。
+- W1004 全语料 `24 → 26`：多的 2 声全部落在 `t422:87` 那一行（`tail` 的**语句位**单行写法）。同形的值位单行写法（`/tmp/b382/s1.z`）也是同样 2 声，展开成多行则一声不出 ⇒ 这是批次 337 那条判据在 `} else { 块里有东西 }` 上的既有盲区，不是本批引入的判据；4 个老文件的计数一字未变。判据本身另案（下面候选 4）。
+- 锚点 A/B（把工作副本 `expr.rs` 与改前副本互换后各跑一次 `check_abi_anchors.py`）：漂移 `59 → 58`、消失 `1 → 2`、待归属 `93/84` 不变。本批只在 `:749` 插入 96 行 ⇒ `fn slice_sep` 从 2324 移到 2420、使用点从 2342 移到 2438，基线里的 `expr.rs:2292` 那一行变成"消失"（`docs/ABI.md:885/:886` 仍写这两个旧号）。按前例**没有**跑 `--rebind`，欠账在册。
+
+### 边界（本批没说到的）
+1. **语句位 `if let` 一字未动**：`else_` 仍不被下型、构造子模式仍恒判通过（`gen.rs:2735`、`:10936`），实拍见"定位 3"的 `f1.z`。值位通了不代表语句位通了，两条路现在是两套代码。
+2. **单行 `match` 臂 `{ 1 }` 返回地址**：`/tmp/b382/o11.z`（`let x = match t { 5 => { 1 }, _ => { 0 } };`）现构建实拍 `4376678256`、`4376678160`，静默。这是 #38 ④ 的残留（批次 378/379 同族），与本批共用结果槽，但本批没碰它；`t422` 因此把值位写法全部展开成多行。
+3. **模块级 `let` 在函数里看不见**（`/tmp/b382/o5.z` 与 `o6.z` 的差）：改前就有，不算本批的账。
+4. **构造子模式在值位要不要"先给个能跑的假象"**：本批选择拒绝（守卫退回原路径）。如果哪天决定给，前提是先有 enum 的 tag 表示，见候选 1。
+
+### 下一批默认候选
+1. #38 ⑦ 的真身：给带数据的 enum 变体加 tag（`MirExpr::Struct` 现在把 `variant` 丢了，`codegen.rs:6210-6211`）。这一改动会换掉所有 struct 的内存布局，属 ABI 半径，动之前要先过 `docs/ABI.md` §5 与锚点 `--rebind`。
+2. §4 的 `benchmark_simd_vs_scalar` 357 行（`static mut`，跨解析+AST+MIR+运行时四层）。
+3. 批次 380 的"一个臂都不匹配 ⇒ 读未写槽"判据（`/tmp/b380/c1.z`）；现在又多一条同族实拍：本批边界第 2 条的 `o11.z`。
+4. W1004 判据在 `} else { 有内容 }` 上的盲区（批次 337 血统，`src/frontend/parser/stmt.rs:709-731`）：本批量到值位/语句位单行写法各响 2 声，多行写法不响。

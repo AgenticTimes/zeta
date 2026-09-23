@@ -747,8 +747,104 @@ pub fn parse_condition(input: &str) -> IResult<&str, AstNode> {
 }
 
 fn parse_if(input: &str) -> IResult<&str, AstNode> {
+    let saved = input;
     let (input, _) = ws(tag("if")).parse(input)?;
+    if let_keyword(input).is_ok() {
+        return parse_if_let_expr(input).map_err(|_| {
+            nom::Err::Error(NomError::new(saved, nom::error::ErrorKind::Tag))
+        });
+    }
     parse_if_tail(input)
+}
+
+/// The keyword `let`, with a word-boundary guard so an identifier that merely
+/// starts with it (`letter`, `let_x`) is not read as an if-let.
+fn let_keyword(input: &str) -> IResult<&str, &str> {
+    let (i, _) = skip_ws_and_comments0(input)?;
+    let (i, kw) = tag("let").parse(i)?;
+    if i.chars()
+        .next()
+        .map_or(false, |c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(nom::Err::Error(NomError::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    Ok((i, kw))
+}
+
+/// Can the match machinery actually TEST this pattern, or would it take the arm
+/// unconditionally and hand the bindings a placeholder? The second kind would
+/// make an arm that LOOKS conditional silently return the wrong branch's value.
+///
+/// Measured, not inferred: a constructor pattern in a VALUE-position `match`
+/// (`let x = match v { Option::Some(n) => n, _ => 0 };`) produces no output and
+/// dies on SIGSEGV, and in a statement-position `if let` the `then` branch runs
+/// for a value that does not match, with the payload reading back another
+/// number (5 stored, 10 printed). Both spellings are rejected here, so such a
+/// file keeps failing the way it does today.
+fn pattern_has_matcher(pattern: &AstNode) -> bool {
+    match pattern {
+        AstNode::StructPattern { .. } => false,
+        AstNode::Tuple(_) => false,
+        AstNode::BindPattern { pattern, .. } => pattern_has_matcher(pattern),
+        AstNode::TypeAnnotatedPattern { pattern, .. } => pattern_has_matcher(pattern),
+        AstNode::OrPattern(ps) => ps.iter().all(pattern_has_matcher),
+        _ => true,
+    }
+}
+
+/// PY-A: `if let PAT = EXPR { … } else { … }` in VALUE position (a `let`
+/// right-hand side, an argument, a return). Statement position has always had
+/// its own parser; here the same spelling was unparsable, and one failed
+/// top-level item costs the rest of the file (W1002).
+///
+/// Desugared to a `match` because the match result slot is the only existing
+/// machinery that carries a value out of an arm body — the statement-position
+/// `IfLet` node has no result id, and its `else_` is never lowered.
+fn parse_if_let_expr(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = let_keyword(input)?;
+    let (input, pattern) = ws(parse_pattern).parse(input)?;
+    if !pattern_has_matcher(&pattern) {
+        return Err(nom::Err::Error(NomError::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    let (input, _) = ws(tag("=")).parse(input)?;
+    let (input, scrutinee) = ws(parse_full_expr).parse(input)?;
+    let (input, then) = parse_block(input)?;
+    let (input, else_body) = opt(preceded(ws(tag("else")), parse_block)).parse(input)?;
+    // A value-producing if-let without `else` has no defined value for the
+    // non-matching case, so it is not desugared: the file keeps failing here.
+    let else_body = match else_body {
+        Some(b) => b,
+        None => {
+            return Err(nom::Err::Error(NomError::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )))
+        }
+    };
+    Ok((
+        input,
+        AstNode::Match {
+            scrutinee: Box::new(scrutinee),
+            arms: vec![
+                MatchArm {
+                    pattern: Box::new(pattern),
+                    guard: None,
+                    body: Box::new(then),
+                },
+                MatchArm {
+                    pattern: Box::new(AstNode::Ignore),
+                    guard: None,
+                    body: Box::new(else_body),
+                },
+            ],
+        },
+    ))
 }
 
 /// Condition + then-block + else chain; the leading `if` keyword must already
