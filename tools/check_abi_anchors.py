@@ -13,6 +13,14 @@
   2) **未越界**：目标文件行数 ≥ 锚点行号。
   3) **未漂移**：锚点所指那一行（区间则整段）的文本与基线快照逐字一致。
      代码被就地改写也算漂移——合同引用重读一遍是应有成本。
+     这一层有两种"对不上"，形状不同、修法也不同：
+       · **搬家**＝代码插了行、文档还没跟着改号 ⇒ 基线里的 (文件,行号) 还在文档里，
+         只是那一行的内容换了 ⇒ `--rebind` 按"内容逐字相同 + 全文件唯一命中"自动改文档。
+       · **改号**＝人已经把文档里的号改对了、基线还是旧号 ⇒ 同一文件里出现一对
+         `[消失] :旧` + `[新锚点] :新`，而两者内容逐字相同。此前这两笔各说各话，
+         唯一的关闭手段 `--bless` 会**无条件重采全部锚点**（把别处刚漂的、刚被改写的
+         一起洗成"对上"）。批次 354 起 `pair_renumber()` 把这种成对形态判出来：
+         互为唯一候选才配，报告里点名，`--rebind` 只刷基线、不动文档。
   4) **可归属**（任务 #52 / 批次 335）：文档里每个 `:NNNN` 形态的行号引用都必须
      绑定到一个路径，绑不上的 counted 并棘轮化——一条都不许静默飘过。
 
@@ -20,7 +28,7 @@
   ./tools/check_abi_anchors.py --bless     # 采集/刷新 tools/baselines/abi_anchors.tsv
   ./tools/check_abi_anchors.py             # 核对；漂移/待归属增加 rc=1，歧义/越界 rc=2
   ./tools/check_abi_anchors.py --list      # 打印"每个锚点现在指着哪句代码"（归属自查）
-  ./tools/check_abi_anchors.py --rebind    # 把"搬家"型漂移自动改回文档（--dry 只看不动）
+  ./tools/check_abi_anchors.py --rebind    # 自动收尾两类行号错位：搬家（改文档）+ 改号（刷基线）；--dry 只看不动
 
 `--rebind` 治的是这一件事：往 `tools/run_all.sh` 之类被引用的文件里插行，锚点行的**内容
 一字未动、行号全漂**。批次 336/337/338/339 连续四批都是这个形状，每批手工重绑 3~4 条。
@@ -308,6 +316,47 @@ def find_snippet_lines(body: list[str], snippet: str, span: int) -> list[int]:
     return hits
 
 
+def pair_renumber(
+    old: dict[tuple[str, int], str],
+    new: dict[tuple[str, int], str],
+    gone: list[tuple[str, int]],
+    added: list[tuple[str, int]],
+) -> tuple[list[tuple[str, int, int]], list[tuple[str, int]], list[tuple[str, int]]]:
+    """把"消失 + 新"配成一次改号，返回 (配对, 落单消失, 落单新)。
+
+    存在的理由（任务 #52 第 3 层 / 批次 354）：文档里手工把 `:543` 改成 `:574` 时，核对器
+    看到的是**两笔互不相干的账**——`[消失] f:543` 加 `[新锚点] f:574`，rc=1。当时唯一的
+    关闭手段是 `--bless`，而它无条件重采**全部**锚点：为了收掉这一对，会把同一时刻真实
+    存在的其它问题（别处刚漂、刚被就地改写）一起洗成"对上"。也就是说，这条路径要求人
+    用一个破坏性的动作去修一个机械可判的动作。
+
+    配对判据与 `--rebind` 的"搬家"同源，同样不猜：
+      1) 同一目标文件；
+      2) 内容**逐字相同**（同一个 `normalize`、同一段长度，因为基线存的就是那段文本）；
+      3) **两边都只有这一个候选**——一条消失对应多条新（或反之）时全部拒配。
+         第 3 条是本函数存在的全部意义：配对错了，等于给一条合同引用换了一条
+         逐字核对过的假证据（批次 341 反证 B 逼出来的同一条教训）。
+    """
+    added_by: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for rel, line in added:
+        added_by[(rel, new[(rel, line)])].append(line)
+    gone_by: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for rel, line in gone:
+        gone_by[(rel, old[(rel, line)])].append(line)
+
+    pairs: list[tuple[str, int, int]] = []
+    unmatched_gone: list[tuple[str, int]] = []
+    for key, glines in sorted(gone_by.items()):
+        alines = added_by.get(key, [])
+        if len(glines) == 1 and len(alines) == 1:
+            pairs.append((key[0], glines[0], alines[0]))
+        else:
+            unmatched_gone += [(key[0], g) for g in glines]
+    paired_new = {(rel, n) for rel, _, n in pairs}
+    unmatched_added = [k for k in sorted(added) if k not in paired_new]
+    return pairs, sorted(unmatched_gone), unmatched_added
+
+
 def rebind(
     doc: Path,
     idx: Index,
@@ -331,9 +380,15 @@ def rebind(
     重采，于是"文档里的 :15 已经指向别的行"这件事被 --rebind 自己洗成了"锚点全部对上"——
     rc 从 1 变 0，而那条合同引用比之前更坏（它现在带着一条逐字核对过的假证据）。
     现在搬家过的重采，拒改的留在原地继续报错，直到有人真的重读它。
+
+    批次 354 把同一条纪律延伸到另外两类：改号配对只刷基线、不动文档（文档写的已经是对的），
+    而**落单的新锚点一律不写入基线**——它没有配对的消失项，等于一条没被任何人对过的引用，
+    收进去就是上面那个事故的另一种犯法方式。
     """
     drifted = [k for k in sorted(new) if k in old and new[k] != old[k]]
     gone = [k for k in sorted(old) if k not in new]
+    added_keys = [k for k in sorted(new) if k not in old]
+    pairs, unmatched_gone, unmatched_added = pair_renumber(old, new, gone, added_keys)
     edits: list[tuple[int, int, int, str]] = []  # 文档行 / 列起 / 列止 / 新文本
     moved: list[tuple[str, int, int, int]] = []  # 文件 / 旧行 / 新行 / 段长
     refused: list[str] = []
@@ -381,35 +436,50 @@ def rebind(
             if span_b is not None:
                 edits.append((docno, span_b[0], span_b[1], str(dst + span - 1)))
 
-    for key in gone:
-        refuse(key, f"{key[0]}:{key[1]} → 文档不再产生这条锚点（消失），rebind 不处理")
+    for key in unmatched_gone:
+        refuse(
+            key,
+            f"{key[0]}:{key[1]} → 文档不再产生这条锚点（消失），且**没有唯一配对的新锚点**，"
+            f"不自动改（这条合同引用现在是悬空的）",
+        )
 
-    print(f"rebind：漂移 {len(drifted)} 条 → 判定搬家 {len(moved)} 条 / 拒改 {len(refused)} 条")
+    print(
+        f"rebind：漂移 {len(drifted)} 条 → 判定搬家 {len(moved)} 条 / 拒改 {len(refused)} 条"
+        f"；改号配对 {len(pairs)} 对 / 落单消失 {len(unmatched_gone)} 条"
+        f" / 落单新锚点 {len(unmatched_added)} 条"
+    )
     for rel, line, dst, span in moved:
         rng = f"-{dst + span - 1}" if span > 1 else ""
         old_rng = f"-{line + span - 1}" if span > 1 else ""
         print(f"  [搬家] {rel}:{line}{old_rng} → :{dst}{rng}"
               f"（{span} 行内容逐字相同，全文件唯一命中）")
+    for rel, line, dst in pairs:
+        print(f"  [改号] {rel}:{line} → :{dst}"
+              f"（文档写的已是新号；两边内容逐字相同、互为唯一候选 ⇒ 只需刷新基线）")
+    for rel, line in unmatched_added:
+        print(f"  [不纳新] {rel}:{line} → 落单的新锚点**不写进基线**"
+              f"（它没有配对的消失项，等于一条没人核过的引用；要收它得由人显式 --bless）")
     for r in refused:
         print(f"  [拒改] {r}")
 
-    if dry or not edits:
+    if dry:
         if edits:
             print("  （--dry：文档未改动）")
-        return 1 if refused else 0
+        return 1 if (refused or unmatched_added) else 0
 
-    raw_lines = doc.read_text(encoding="utf-8").splitlines()
-    by_doc: dict[int, list[tuple[int, int, int, str]]] = defaultdict(list)
-    for e in edits:
-        by_doc[e[0]].append(e)
-    for docno, group in by_doc.items():
-        text = raw_lines[docno - 1]
-        # 同一行内从右往左替换，前面的列号才不会被后面的改写顶掉。
-        for _, c0, c1, new_text in sorted(group, key=lambda e: -e[1]):
-            text = text[:c0] + new_text + text[c1:]
-        raw_lines[docno - 1] = text
-    doc.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
-    print(f"  已改写 {doc}（{len(by_doc)} 行 / {len(edits)} 个数字）")
+    if edits:
+        raw_lines = doc.read_text(encoding="utf-8").splitlines()
+        by_doc: dict[int, list[tuple[int, int, int, str]]] = defaultdict(list)
+        for e in edits:
+            by_doc[e[0]].append(e)
+        for docno, group in by_doc.items():
+            text = raw_lines[docno - 1]
+            # 同一行内从右往左替换，前面的列号才不会被后面的改写顶掉。
+            for _, c0, c1, new_text in sorted(group, key=lambda e: -e[1]):
+                text = text[:c0] + new_text + text[c1:]
+            raw_lines[docno - 1] = text
+        doc.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
+        print(f"  已改写 {doc}（{len(by_doc)} 行 / {len(edits)} 个数字）")
 
     # 文档一动，基线里那批"旧行号"就成了假漂移；立刻重采，让"搬家"是一次动作而不是两次。
     # 但**只重采被改过的那部分**：拒改的条目原样留着，核对器会继续报它漂/消失。
@@ -420,6 +490,10 @@ def rebind(
         if key in old and merged.get(key) != old[key]:
             merged[key] = old[key]
             kept += 1
+    dropped = 0
+    for key in unmatched_added:
+        if merged.pop(key, None) is not None:
+            dropped += 1
     base.parent.mkdir(parents=True, exist_ok=True)
     with base.open("w", encoding="utf-8") as f:
         for (rel, line), text in sorted(merged.items()):
@@ -429,9 +503,10 @@ def rebind(
     print(
         f"  基线已随之刷新 {base}（{len(merged)} 个锚点；定位失败 {len(problems2)} 条"
         + (f"；拒改的 {kept} 条原样保留 → 核对器会继续报错" if kept else "")
+        + (f"；落单新锚点 {dropped} 条未写入 → 核对器会继续报错" if dropped else "")
         + "）"
     )
-    return 1 if (refused or problems2) else 0
+    return 1 if (refused or unmatched_added or problems2) else 0
 
 
 def main() -> int:
@@ -509,14 +584,19 @@ def main() -> int:
     drifted = [k for k in new if k in old and new[k] != old[k]]
     added = [k for k in new if k not in old]
     removed = [k for k in old if k not in new and k[0] != PENDING]
+    pairs, unmatched_gone, unmatched_added = pair_renumber(old, new, removed, added)
     for rel, line in sorted(drifted):
         print(f"  [漂移] {rel}:{line}")
         print(f"     基线: {old[(rel, line)]}")
         print(f"     现在: {new[(rel, line)]}")
-    for rel, line in sorted(added):
-        print(f"  [新锚点] {rel}:{line} — {new[(rel, line)]}")
-    for rel, line in sorted(removed):
-        print(f"  [消失] {rel}:{line} — 文档已不再引用，或行号已变")
+    for rel, line, dst in pairs:
+        print(f"  [改号] {rel}:{line} → :{dst} — 内容逐字相同、互为唯一候选"
+              f"（文档已是新号，只差刷新基线；./tools/check_abi_anchors.py --rebind 可机械关闭）")
+    for rel, line in sorted(unmatched_added):
+        print(f"  [新锚点] {rel}:{line} — {new[(rel, line)]}"
+              f"（文档新增了一条基线里没有的引用；--rebind 不会替你收它）")
+    for rel, line in sorted(unmatched_gone):
+        print(f"  [消失] {rel}:{line} — 文档已不再引用（且无唯一配对的新锚点）")
 
     # 待归属棘轮：只许缩不许涨（新增形态 = 又留了一个核不到的引用）
     grew = {t: n for t, n in pending.items() if n > old_pending.get(t, 0)}
@@ -529,6 +609,7 @@ def main() -> int:
     print(
         f"漂移 {len(drifted)} / 新 {len(added)} / 消失 {len(removed)}"
         f"（基线 {len(old)} 条，按 文件+行号 比对）"
+        f"；其中改号配对 {len(pairs)} 对 ⇒ 落单新 {len(unmatched_added)} / 落单消失 {len(unmatched_gone)}"
         f"；待归属 {sum(pending.values())} 条 / {len(pending)} 种"
         f"（基线 {sum(old_pending.values())} 条），声明为仓外 {external_n} 条"
     )
