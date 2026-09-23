@@ -250,7 +250,7 @@ if [[ $SKIP_KNOB -eq 0 ]]; then
   rm -f "$knob_log"
 fi
 
-# ── 7) 前导词静默吞掉的判据两翼断言（批次 337）──
+# ── 7) 前导词静默吞掉的判据断言（批次 337，清单在 tools/junk_swallow_inventory.sh 头部）──
 # 语句解析的兜底是"一个表达式＝一条语句"，于是解析器不认识的前导词会**无声消失**
 # （`static mut c = 0` 丢 `static`、`import std::memory;` 绑成 `std` 并丢掉 `memory`）。
 # W1004 在吞掉那一刻出声；它的排除项（函数尾隐式返回长得一样）同样必须被测住，
@@ -274,7 +274,7 @@ if [[ $SKIP_SWALLOW -eq 0 ]]; then
 fi
 
 # ── 8) `import` 的形状值域（批次 338）──
-# `import` 与 `use` 共用同一份 `::` 文法，且结尾 `;` 不改变形状。两翼各锁一条：
+# `import` 与 `use` 共用同一份 `::` 文法，且结尾 `;` 不改变形状。两个方向各锁一条：
 # 等值翼（每种 :: 形状的 MIR 必须与 use 逐字节相同）+ 中立翼（带不带分号必须相同、
 # 不许截断文件）。这一步跑的是断言，不是抽样。
 import_rc=0; import_failed=0; import_checked=0
@@ -298,7 +298,7 @@ fi
 # ── 9) 裸 `;` 的形状值域（批次 339）──
 # 顶层循环是 many0(顶层项)，规则不认的形状不是"报错"而是"文件余部整段丢弃"。
 # `;` 是**顶层空项**：与块内空语句同一语义，实现只有一处（parse_top_level_entry）。
-# 四翼：加不加 ; 逐字节同一份 MIR（中立）+ 尾巴必须还在（截断）+ 默认路径与
+# 逐条锁：加不加 ; 逐字节同一份 MIR（中立）+ 尾巴必须还在（截断）+ 默认路径与
 # ZETA_PARSE_RECOVER=1 同音同调（两路）+ 吞词判据不许被顺手放宽（负控制）。
 empty_rc=0; empty_failed=0; empty_checked=0
 if [[ $SKIP_EMPTY -eq 0 ]]; then
@@ -388,7 +388,7 @@ fi
 # ── 11) PY-A 模块解析的落点（批次 343，批次 351 补 G 翼）──
 # 被编译文件所在目录**往上 5 级**都在搜索基里，所以门禁读数会随检出位置变化：家目录躺
 # 一个同名 .z 就能压过 pylib；而 `pylib` 那一档此前是裸相对路径 ⇒ 换个 CWD 整个库面消失
-# （修前实测 rc=1、`_arange` undefined）。本步骤钉七翼："越界必须出声（W1005）、就地/
+# （修前实测 rc=1、`_arange` undefined）。本步骤钉的是："越界必须出声（W1005）、就地/
 # 注册表/库面基不许出声、越界与否 MIR 逐字节相同、库面基跟着可执行文件走（W1006）"；E 段语料 352 起逐目录自证非空。
 pysrc_rc=0; pysrc_failed=0; pysrc_checked=0
 if [[ $SKIP_PYSRC -eq 0 ]]; then
@@ -411,7 +411,7 @@ fi
 # ── 12) 只读入口不许执行程序（批次 344）──
 # 修复前"要不要执行被编译的程序"只看有没有 `-o` ⇒ --dump-mir / --emit-llvm /
 # --report-stubs / --report-untyped / ZETA_DUMP_IR=1 全都边 dump 边跑 main。
-# 本步骤钉七翼（344 三翼 + 348 两翼 + 349 一翼 + 350 一翼）：裸跑必须执行（探测器阳性对照）、五个只读入口必须不执行且 rc=0、
+# 本步骤钉的是（344 主路 + 348 两条旁路 + 349 REPL + 350 未知选项）：裸跑必须执行（探测器阳性对照）、五个只读入口必须不执行且 rc=0、
 # `-o` 那条路逐字不变；翼 D 钉"未知选项点名 / 多输入点名两个 / 掉尾缺值出声 / --help 不说谎"。
 # 判据在 tools/cli_semantics_check.sh 内部，这里只认退出码。
 sem_rc=0; sem_failed=0; sem_checked=0
@@ -437,7 +437,7 @@ fi
 # 规则改动在 review 里都是一行 "Binary files differ"），批次 346 把 10 条裸前缀规则
 # （`test_*` / `zeta_*` / `simple_*` / 裸 `*.z` …—— 不带斜杠的规则连目录名都匹配）
 # 收窄成根锚定或 `/build/**`，于是压在规则底下的已跟踪源文件从 290 个降到 28 个。
-# 本步骤钉四翼：规则表必须是文本、手写源树必须不被正向规则命中、产物与根级 scratch
+# 本步骤钉的是：规则表必须是文本、手写源树必须不被正向规则命中、产物与根级 scratch
 # 必须仍被忽略、清单外的已跟踪文件数必须为 0。判据在 tools/ignore_rule_inventory.sh
 # 内部，这里只认退出码。
 ignore_rc=0; ignore_failed=0; ignore_checked=0
@@ -482,6 +482,36 @@ if [[ $SKIP_MBVAR -eq 0 ]]; then
   rm -f "$mbvar_log"
 fi
 
+# ── 15) 本文件的注释不许复述判据的"几翼"（批次 353）──
+# 为什么这是一条判据而不是一次清理：同一件事（某个判据有几翼）在此前写着两处——这里的
+# 注释、和判据脚本自己的文件头。前者在 343/351/352 三批里各错过一次（全是当场手工发现），
+# 而 `cli_semantics` 那处至今**无从核对**：注释写 7，脚本自己只标 A~D 四条加四段无标号
+# 小节，两边数法不同。⇒ 复述本身就是缺陷，不是"复述错了才修"。
+# 判据：本文件里出现"<中文数字>+翼"即判红（权威清单只留在判据脚本的文件头一处）。
+# 用 python3 而不是 grep：`grep -E` 在 LC_ALL=C 下把字符集按**字节**解释，全角分号
+# `；`(EF BC 9B) 的尾字节 0x9B 正落在 四/九 的字节集合里 ⇒ 第一版就在 :415 报了一条
+# **假阳**（本仓 locale 坑族的又一成员）。python3 按 UTF-8 解码，两 locale 同解。
+# 没有 --skip 开关：这是一次纯文本扫描，比它守卫的那条注释还便宜。
+restated_out=$(python3 - "$ROOT/tools/run_all.sh" <<'PY'
+import re, sys
+pat = re.compile('[一二三四五六七八九十两]+\u7ffc')
+hits = [(i, ln.rstrip()) for i, ln in enumerate(open(sys.argv[1], encoding='utf-8'), 1)
+        if pat.search(ln)]
+for i, ln in hits:
+    print('  FAIL :%d  %s' % (i, ln[:100]))
+print('__N__ %d' % len(hits))
+PY
+)
+restated_n=$(printf '%s\n' "$restated_out" | sed -n 's/^__N__ \([0-9]*\)$/\1/p'); restated_n=${restated_n:-0}
+restated_rc=0
+if [[ "$restated_n" != 0 ]]; then
+  restated_rc=1
+  echo "comment_drift: 本文件的注释里有 ${restated_n} 处在复述判据的条数 —— 改成\"清单见其文件头\"：" >&2
+  printf '%s\n' "$restated_out" | grep -v '^__N__' >&2
+elif [[ $JSON_ONLY -eq 0 ]]; then
+  echo "comment_drift: 0 处复述（期望 0；判据数法只在各判据脚本文件头写一次）"
+fi
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -514,6 +544,7 @@ doc = {
                    "rc": $ignore_rc, "skipped": $SKIP_IGNORE},
   "mbvar": {"checked": $mbvar_checked, "failed": $mbvar_failed,
             "rc": $mbvar_rc, "skipped": $SKIP_MBVAR},
+  "comment_drift": {"restated": $restated_n, "rc": $restated_rc},
   "clean_checkout": {"rc": $clean_rc, "secs": $clean_secs, "rev": "${clean_rev:0:8}",
                      "skipped": $SKIP_CLEAN},
   # 只出声、不参与退出码（附 B#9 的护栏：判定看运行期 stdout，告警不改判定）
@@ -554,20 +585,22 @@ if [[ $SKIP_KNOB -eq 0 && $knob_rc -ne 0 ]]; then rc=1; fi
 # swallow: 判据同上，跑的是 tools/junk_swallow_inventory.sh 的夹具段（不含全语料计数）。
 if [[ $SKIP_SWALLOW -eq 0 && $swallow_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_IMPORT -eq 0 && $import_rc -ne 0 ]]; then rc=1; fi
-# empty_stmt: 判据在 tools/empty_stmt_inventory.sh 内部（四翼断言），这里只认退出码。
+# empty_stmt: 判据在 tools/empty_stmt_inventory.sh 内部（断言清单见其文件头），这里只认退出码。
 if [[ $SKIP_EMPTY -eq 0 && $empty_rc -ne 0 ]]; then rc=1; fi
-# pysrc: 判据在 tools/py_module_search_inventory.sh 内部（批次 343 补 A2 翼、351 补 G 翼
-# ⇒ 七翼 + E 段；"六翼"这行 343 漏改、344 更正、351 又过时、352 再更正——注释追不上判据，下批起改口径为"数翼以脚本头部清单为准"），这里只认退出码。
+# pysrc: 判据在 tools/py_module_search_inventory.sh 内部（清单见其文件头）。这一行注释在 343/351/352 三批里各追不上一次判据，批次 353 起改为**不复述计数**，由第 15 步自查。这里只认退出码。
 if [[ $SKIP_PYSRC -eq 0 && $pysrc_rc -ne 0 ]]; then rc=1; fi
-# cli_semantics: 判据在 tools/cli_semantics_check.sh 内部（七翼），这里只认退出码。翼 C 的 --repl 判据自带 `head -c` 保险丝，跑飞也不会把门禁挂住。
+# cli_semantics: 判据在 tools/cli_semantics_check.sh 内部（清单见其文件头），这里只认退出码。翼 C 的 --repl 判据自带 `head -c` 保险丝，跑飞也不会把门禁挂住。
 if [[ $SKIP_SEM -eq 0 && $sem_rc -ne 0 ]]; then rc=1; fi
-# ignore_rules: 判据在 tools/ignore_rule_inventory.sh 内部（四翼），这里只认退出码。
+# ignore_rules: 判据在 tools/ignore_rule_inventory.sh 内部（清单见其文件头），这里只认退出码。
 if [[ $SKIP_IGNORE -eq 0 && $ignore_rc -ne 0 ]]; then rc=1; fi
 # mbvar: 判据在 tools/mbvar_lint.sh 内部（注释与单引号字面量不计），这里只认退出码。
 if [[ $SKIP_MBVAR -eq 0 && $mbvar_rc -ne 0 ]]; then rc=1; fi
 # clean_checkout: 判据在步骤 10 内部（rc=0 才算"检出即可编译"）；93~99 是选址/登记/提交解析
 # 本身不合法，同样判红——静默跳过等于这一步不存在。
 if [[ $SKIP_CLEAN -eq 0 && $clean_rc -ne 0 ]]; then rc=1; fi
+# comment_drift: 第 15 步扫的是**本文件自己的注释**，与任何被测对象无关，所以没有 --skip
+# 开关可给它——跳过等于这一步不存在，而这一步防的正是"注释与判据各说各话"。
+if [[ $restated_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 2 ]]; then
   echo "[G.3] 差分有 $diff_bad 条坏用例（参考侧跑不出真值）——不参与判定，但必须修用例" >&2
 fi
