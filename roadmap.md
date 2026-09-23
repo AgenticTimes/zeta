@@ -14591,3 +14591,40 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 2. 函数体里的 `use` 与 `static mut`（85 + 357 = 442 行）：同一族"顶层项写在函数体里"，两处解析臂补齐可能一起收；先各测一遍是否互相挡住。
 3. selfhost（158 行）：先上探针再动手，别再造手工夹具。
 4. match 那一族的真修（369 的三条定位 + #38 结果槽），需要一整趟门禁，排在 P1 清完之后。
+
+---
+
+## 批次 371 —— or 模式收成一条链：`advanced_patterns_test` 的 62 行清零
+
+### 现象
+`tests/unit-tests/advanced_patterns_test.z`（100 行）W1002 从第 40 行起丢 62 行，首文本 `fn test_multiple_patterns() {`。批次 370 已把它的原因改成"or 模式的分支只要不是数字字面量就丢"，本批照那条修。
+
+### 最小复现（`/tmp/b370ap/`，同一 release 二进制）
+- 修前丢、修后不丢：`f7.z`（`A | B =>`，两个裸标识符）、`f6.z`（`Some(1) | Some(2) =>`）、`f2.z`（`Some(x @ 1) | Some(x @ 2) =>`，即真文件里那条）。
+- 修前就不丢（用来排除"是构造子/是 @ 绑定"这两种说法）：`f5.z`（`Some(x @ 1) =>` 单独作臂头）、`f1.z`（`1 | 2 | 3 =>`）、`f4.z`（`Color::Red`、`Color::RGB(r,g,b)`）、`f3.z`（元组 + 守卫）。
+
+### 修法（一处，`src/frontend/parser/pattern.rs`，+14 行、0 删）
+`parse_pattern` 的 alt 里 `parse_struct_pattern`（`:48`）排在 `parse_or_pattern`（`:52`）之前，而前者在"路径后既无 `(` 又无 `{`"时兜底返回 `Var`（`:135`）⇒ `A`、`Some(1)` 这类首选项被吃掉，`| B =>` 剩在输入里，or 那一臂对这些开头不可达。改法：alt 之后就地收 `|` 链（`many0(preceded(ws(tag("|")), ws(parse_pattern)))`），非空时包成 `AstNode::OrPattern`。递归用 `parse_pattern` 而不是 `parse_or_pattern` 内部那个 `parse_simple_pattern`，是为了让 `_` 的边界判断（`:23-33`）在后续分支里同样生效。
+
+### 语义验证（不止"解析过了"）
+`/tmp/b370ap/v1.z` 在表达式位置取 `match n { 2 | 3 => 7, _ => 9 }` 与 `match n { ONE | TWO => 7, _ => 9 }`（`const ONE: i32 = 2; const TWO: i32 = 3;`），`n=3` ⇒ 两条都该选中**第二个**分支。实跑退出码 7（两条都是；若第二条不匹配会返回 `100+7`）⇒ or 链的匹配语义真的通了，不是只把文本收进 AST。`tests/unit-tests/advanced_patterns_test.z` 全文编译无 error、无 W1002/W1004；该文件本身没有 `fn main`，所以它没有可判的运行值。
+
+### 锚点搬家（本批改了行数，必须一起做的两件事）
+`pattern.rs` +14 行 ⇒ `docs/ABI.md:854` 的 `pattern.rs:121` 和 `:913` 的 `pattern.rs:201` 指偏（核对器报 `[定位失败] … 该行内容为空`）。两处文档引用与 `tools/baselines/abi_anchors.tsv` 里对应的两条一起改成 **121→135、201→215**（改的都是同行内的数字，两边行数不变）。改后 `python3 tools/check_abi_anchors.py`：`pattern.rs` 命中 0 条、`新 0`、`消失 2`（与批次 370 同），漂移仍 **58**，逐条落在 `gen.rs`(35)/`py_additions.c`(17)/`expr.rs`(2)/`indent.rs`(2)/`tokio_runtime_stub.c`(2) —— 全是本批未修改的文件 ⇒ 不是本批新增。**旧号→新号对照（批次 370 记录不回改）**：那里写的 `src/frontend/parser/pattern.rs:121` 现在应读作 `:135`；`parse_or_pattern` 的函数体从 `:270` 起变为 `:284` 起。
+- 没有跑 `--rebind`：那会把上面 58 条别的会话留下的漂移一起重绑进本批提交，越界。
+
+### 验证（丢行尺子 + 整趟门禁）
+- 丢行：`./tools/truncation_inventory.sh` → **3 文件 / 600 行**（`/tmp/b371_inv.log`：benchmark 357 + selfhost 158 + quantum_basic 85），批次 370 是 4 文件 / 662 行 ⇒ 减 1 文件 62 行。
+- 门禁：`/tmp/b371_gate.log`，rc 从 `/tmp/b371_gate.rc` 读 = **1**（约定，见批次 369）。三组读数与 370 逐字相同：official compile **194/194** / compile+link 193/194、python_style **298 通过 / 2 失败（只有 t231、t233）/ 4 known-fail / 0 xpass**、语料 **39/39**。
+- 与 370 那趟日志逐行 diff 只有三处：official 诊断 **6 文件/30 行 → 5 文件/29 行**、`ts`、clean_checkout 的 `rev`(ceb704c9)/`secs`。正证据：明细里 `grep -c advanced_patterns` = **0**，剩下 5 个 `###` 是 benchmark、integration_all_features、integration_test_program、quantum_basic、selfhost。
+- jit 读数 ok=170 / trap=328 与 370 一字相同 ⇒ 本批没有把任何"跑通"的程序变成出声或崩溃（370 那次是 171→170，已单独归因并解释过）。
+
+### 顺手量到的一条静默错值（并入 #38 当第五个实测成员，本批没修）
+`q @ _ => q + 1` 这条臂：`/tmp/b370ap/r1.z`（`pick(4)`）退出码 **1**，期望 5，且**没有任何诊断**（JIT 跑同一份打 `Result: 1`，rc=0）。同一份文件只改这一行成 `q => q + 1`（`r2.z`）退出码 **5** ⇒ 差在 `@ _`（绑定套通配符）那一步，不是 `main` 退出码约定、也不是表达式位置 `match` 的管道。#44 的现状由"仍判不匹配"改对为"匹配判过了但绑定值丢成 0（所以 `q + 1` 得 1），且不出声"。定位没做，本批只登记读数。
+读数更正：本节先前写的 0 来自 01:39 那次编译的产物（`r1bin.o` 888 字节），刚才用同一个 `target/release/zetac`（01:29 构建）重编两次都是 1，正文按 1 记。这三份产物字节互不相同（`cmp r1bin2 r1bin3` 在第 1529 字符处分叉）——这条不在本批解释，只登记。
+
+### §4 剩余 3 文件与下一批默认候选
+1. quantum_basic 85 行：函数体里写 `use`（`g1.z` 单独复现）。
+2. benchmark_simd_vs_scalar 357 行：函数体里写 `static mut`（`h1.z`/`h3.z`）。与上一条同族（顶层项写进函数体），可能一起收 442 行；先各测一遍是否互相挡住。
+3. selfhost 158 行：卡点未定位（370 已证"impl Trait for + concept"那句不成立）。先上 `ZETA_PARSE_TRACE` 量停在哪，不再造手工夹具。
+4. match 一族真修（369 三条 + #38）：排在 P1 清完之后。

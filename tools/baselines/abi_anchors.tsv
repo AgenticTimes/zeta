@@ -154,8 +154,8 @@ src/frontend/parser/expr.rs	2310	let (input, start) = if let Ok((rest, _)) = sli
 src/frontend/parser/pattern.rs	22	let (input, pattern) = alt((
 src/frontend/parser/pattern.rs	46	parse_bind_pattern,
 src/frontend/parser/pattern.rs	48	parse_struct_pattern,
-src/frontend/parser/pattern.rs	121	Ok((input, AstNode::Var(variant)))
-src/frontend/parser/pattern.rs	201	fn parse_char_lit(input: &str) -> IResult<&str, AstNode> {
+src/frontend/parser/pattern.rs	135	Ok((input, AstNode::Var(variant)))
+src/frontend/parser/pattern.rs	215	fn parse_char_lit(input: &str) -> IResult<&str, AstNode> {
 src/frontend/parser/top_level.rs	71	// PY-A: `*args` / `**kwargs` star-params — consumed as a single opaque // i64 param (V1: call sites with extra args coerce; real variadics need // arg-tuple su
 src/frontend/parser/top_level.rs	341	// PY-A: Python default argument values. The AST's `params` only carries // (name, type), so defaults travel as a body-prologue marker // `zeta_param_default(in
 src/main.rs	568	let strict_abi = args.iter().any(|a| a == "--strict-abi")

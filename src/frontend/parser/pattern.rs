@@ -66,6 +66,20 @@ pub fn parse_pattern(input: &str) -> IResult<&str, AstNode> {
     ))
     .parse(input)?;
 
+    // Collect an or-pattern chain here rather than relying on the `parse_or_pattern`
+    // arm above: `parse_struct_pattern` succeeds on a bare path (`A`, `Some(1)`), so
+    // for anything but a literal-led arm head it returns after the first
+    // alternative and the `| …` text never reaches that arm.
+    let (input, tail) =
+        nom::multi::many0(preceded(ws(tag("|")), ws(parse_pattern))).parse(input)?;
+    let pattern = if tail.is_empty() {
+        pattern
+    } else {
+        let mut all = vec![pattern];
+        all.extend(tail);
+        AstNode::OrPattern(all)
+    };
+
     // Then check for type annotation
     let (input, ty_opt) = opt(preceded(
         ws(tag(":")),

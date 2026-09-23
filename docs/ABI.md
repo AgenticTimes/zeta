@@ -851,7 +851,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
    - **修法归属**：G.1/G.3（解析器 + 用例重构），不在 ABI 范围；优先级按上表丢行量。
      已关闭的一族：`x @ 1..=10` —— `src/frontend/parser/pattern.rs:22` 的 `alt()` 里
      `parse_struct_pattern`（`src/frontend/parser/pattern.rs:48`，对裸路径**故意**
-     返回 `Ok(Var)`，见 `src/frontend/parser/pattern.rs:121`）排在
+     返回 `Ok(Var)`，见 `src/frontend/parser/pattern.rs:135`）排在
      `parse_bind_pattern`（`src/frontend/parser/pattern.rs:46`）之前，于是 `@` 右侧永不消费 ⇒ 整条 `fn` 连文件余部被丢。
      绑定模式前判后，截断文件 12→11、丢行 1,805→1,749，四套基线不动
      （official 194/194、python_style 285/2/4/0、corpus 39/39、jit segv=0）。
@@ -910,7 +910,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      恢复量：丢行 **1,222→1,037**、截断文件 **11→9**；python_style **287→288**。
    - **批次 325 推进第五族：范围模式（`'a'..='z'` / `1..=10` / `x @ 1..=10`）——
      解析只是一半，另一半是"这一族此前从未活着过"**。
-     ① 解析：`src/frontend/parser/pattern.rs:201` 新增 `parse_char_lit`，接进
+     ① 解析：`src/frontend/parser/pattern.rs:215` 新增 `parse_char_lit`，接进
      `parse_range_pattern` 的两端（`:239`、`:242`）与 `parse_simple_pattern` 的
      `alt()`（`:295`）。**刻意的不对称**：单引号在本语言里也是普通字符串定界符
      （`s.split(',')` 依赖它），所以 `'x'` 只在**模式位**解释为码点整数——槽位里
