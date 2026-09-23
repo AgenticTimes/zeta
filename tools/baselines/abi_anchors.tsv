@@ -158,11 +158,11 @@ src/frontend/parser/pattern.rs	121	Ok((input, AstNode::Var(variant)))
 src/frontend/parser/pattern.rs	201	fn parse_char_lit(input: &str) -> IResult<&str, AstNode> {
 src/frontend/parser/top_level.rs	71	// PY-A: `*args` / `**kwargs` star-params — consumed as a single opaque // i64 param (V1: call sites with extra args coerce; real variadics need // arg-tuple su
 src/frontend/parser/top_level.rs	341	// PY-A: Python default argument values. The AST's `params` only carries // (name, type), so defaults travel as a body-prologue marker // `zeta_param_default(in
-src/main.rs	529	let strict_abi = args.iter().any(|a| a == "--strict-abi")
-src/main.rs	535	let no_link = args.iter().any(|a| a == "--no-link");
-src/main.rs	782	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
-src/main.rs	786	all_mirs.sort_by(|a, b| {
-src/main.rs	828	if no_link {
+src/main.rs	531	let strict_abi = args.iter().any(|a| a == "--strict-abi")
+src/main.rs	537	let no_link = args.iter().any(|a| a == "--no-link");
+src/main.rs	784	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
+src/main.rs	788	all_mirs.sort_by(|a, b| {
+src/main.rs	842	if no_link {
 src/middle/mir/gen.rs	392	.map(|m| format!("{}__", m.replace('.', "_")))
 src/middle/mir/gen.rs	431	Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
 src/middle/mir/gen.rs	543	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),

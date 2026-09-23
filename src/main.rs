@@ -505,8 +505,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let dump_mir = args.iter().any(|a| a == "--dump-mir");
     // Q1 (advice.md): IR dump only when requested — default compiles stay quiet.
-    let dump_ir = args.iter().any(|a| a == "--emit-llvm")
-        || zetac::diagnostics::env_flag("ZETA_DUMP_IR");
+    // Batch 348: the flag is tracked apart from ZETA_DUMP_IR because only an explicit
+    // `--emit-llvm` may redirect what `-o` produces (an env knob must not do that).
+    let emit_llvm = args.iter().any(|a| a == "--emit-llvm");
+    let dump_ir = emit_llvm || zetac::diagnostics::env_flag("ZETA_DUMP_IR");
 
     // D3/D4: stub inventory = registry stub=1 ∪ pylib `# stub:` markers.
     if args.iter().any(|a| a == "--list-stubs") {
@@ -818,11 +820,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(msg) = codegen.abi_fatal.take() {
                     return Err(msg.into());
                 }
-                if dump_ir {
+                // Batch 348 (#78 ③): `--emit-llvm f -o g` used to ignore the flag and
+                // link an executable to g — the IR only ever went to stderr. The flag now
+                // wins: g is the IR text, no object file, no link step.
+                let ir_to_file = emit_llvm && output.is_some();
+                if dump_ir && !ir_to_file {
                     codegen.module.print_to_stderr();
                 }
 
                 if let Some(out) = output {
+                    if ir_to_file {
+                        codegen
+                            .module
+                            .print_to_file(Path::new(&out))
+                            .map_err(|e| format!("Failed to write IR to {out}: {e}"))?;
+                        println!("Wrote LLVM IR to {}", out);
+                        return Ok(());
+                    }
                     let obj_path = format!("{}.o", out);
                     finalize_and_aot(&codegen, Path::new(&obj_path), &target)?;
                     if no_link {
@@ -951,6 +965,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err("Parse failed".into())
             }
         }
+    } else if probe_only {
+        // Batch 348 (#78 ②): with no input file this branch compiles AND RUNS
+        // examples/selfhost.z looked up relative to CWD — the only other place that calls
+        // `main.call()` inside the compiler process. Asking for a dump is not asking for that.
+        Err("no input file: a read-only flag dumps the given input, and there is none \
+            (running without input would compile and execute examples/selfhost.z from the \
+            current directory)"
+            .into())
     } else {
         // Fallback self-host example
         let code = fs::read_to_string("examples/selfhost.z")?;

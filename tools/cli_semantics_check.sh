@@ -12,7 +12,7 @@
 #   且修复前 9/9 轮都是 fail:rc1（执行程序撞 E4016 桩 → exit(1)），修复后 9/9 轮 ok。
 #   ⇒ 批次 313 那份 `ir` 基线（41,655 ms/12 文件）与本批之后**不同口径**，不可直比。
 #
-# 判据形状（三翼，缺一翼锁不住）：
+# 判据形状（批次 344 的三翼 + 批次 348 的两翼 = 五翼，缺一翼锁不住）：
 #   阳性翼 —— 裸跑必须"被执行"。这一翼是探测器自己的对照：`ran()` 只认运行路径自己打的
 #             `^Result: `（main.rs:930）。不能用"stdout 里有没有程序的输出"——转储文本里
 #             就含源码与函数名，本批第一版因此把 17 行 MIR 读成"执行了 17 次"。
@@ -21,8 +21,12 @@
 #   不变翼 —— `-o` 那条路逐字不变：不执行、有产物；`--dump-mir` 的转储与 `-o` 无关
 #             （本批只收窄 else 分支，不许动转储本身）。
 #
-# 期望值全部来自修复后实测，不是推测。顺带如实记录一条**本批不修**的 CLI 事实：
-# `--emit-llvm x -o y` 会忽略 --emit-llvm，y 是链接好的可执行文件（不是 IR），见脚本尾。
+# 期望值全部来自修复后实测，不是推测。批次 348 又把本文件的"三翼"扩到**五翼**：
+#   翼 A —— `--emit-llvm f -o g` 从此**由标志决定产物**（g 是 IR 文本，不是链接好的可执行
+#           文件；修复前实测 g = Mach-O 238,440 B 且 IR 只打到 stderr）。env 旋钮
+#           ZETA_DUMP_IR 明确排除在外：它只多加一份 stderr 转储，不许改 `-o` 的含义。
+#   翼 B —— 无输入时内置演示（CWD 相对的 examples/selfhost.z）**不许多被编译**：只读标志
+#           走的就是这条路（修复前四个只读入口都编译了它）。
 #
 # 用法：./tools/cli_semantics_check.sh
 set -uo pipefail
@@ -79,8 +83,53 @@ else
     rc=1
 fi
 
-echo "  注   --emit-llvm <f> -o g 今天会忽略 --emit-llvm：g 是链接好的可执行文件而非 IR"
-echo "       （$(file -b "$TMP/c.out" 2>/dev/null | head -c 40)）—— 另案，本批不修"
+# ── 批次 348 翼 A：`--emit-llvm` 与 `-o` 同在场时，`-o` 的产物就是 IR 文本 ──
+# 修复前实测（roadmap 批次 348）：`--emit-llvm f -o g` 会**忽略** --emit-llvm —— IR 照样打
+# 到 stderr，g 是链接好的 `Mach-O 64-bit executable`（238,440 B）。现在标志说话算数。
+# 作用域只到显式标志：env 旋钮 ZETA_DUMP_IR 不许偷偷改变 `-o` 的含义（下面的对照翼钉这条）。
+echo "== 批次 348 翼 A：--emit-llvm + -o ⇒ 产物是 IR 文本（env 旋钮除外）"
+IRF="$TMP/ir.ll"
+"$ZETAC" --emit-llvm "$SRC" -o "$IRF" >/dev/null 2>&1
+# 这里一律不用 `grep -q`：本文件开着 pipefail，-q 命中就退 ⇒ 生产者吃到 SIGPIPE（rc=141），
+# 判据会把"其实对"读成 FAIL（本批实测一次：rcC=1，两 locale 逐字相同的假红）。
+if [[ $(head -n1 "$IRF" 2>/dev/null | grep -c '^; ModuleID') -ge 1 ]]; then
+    echo "  ok   --emit-llvm -o 的产物首行是 IR 标记（$(wc -c < "$IRF" | tr -d ' ') 字节文本）"
+else
+    echo "  FAIL --emit-llvm -o 的产物不是 IR 文本：$(file -b "$IRF" 2>/dev/null | head -c 40)"
+    rc=1
+fi
+want "--emit-llvm -o 不执行（IR 分支也不许跑）" 0 "$(ran "$ZETAC" --emit-llvm "$SRC" -o "$TMP/ir2")"
+if [[ -e "$IRF.o" ]]; then echo "  FAIL 走 IR 分支却留下了 $IRF.o（说明还是跑了 AOT）"; rc=1; else
+    echo "  ok   无 .o 残留（AOT/链接确实被跳过）"; fi
+ENVF="$TMP/ir_env"
+ZETA_DUMP_IR=1 "$ZETAC" "$SRC" -o "$ENVF" >/dev/null 2>&1
+if [[ -x "$ENVF" ]]; then echo "  ok   ZETA_DUMP_IR=1 时 -o 仍是可执行文件（旋钮不改产物）"; else
+    echo "  FAIL env 旋钮把 -o 的产物也改了 —— 越界"; rc=1; fi
+MIRF="$TMP/mir_o"
+"$ZETAC" --dump-mir "$SRC" -o "$MIRF" >/dev/null 2>&1
+if [[ -x "$MIRF" ]]; then echo "  ok   --dump-mir 与 -o 并存时仍照常链接"; else
+    echo "  FAIL --dump-mir -o 没产物（收窄过头）"; rc=1; fi
+
+# ── 批次 348 翼 B：无输入时，只读标志不许触发内置演示 ──
+# `zetac` 不带文件会读 **CWD 相对** 的 examples/selfhost.z，编译并在编译器进程里跑它
+# （main.rs 里除 `-o` 之外第二处 `main.call()`）。探测器只认解析器自己打的
+# `warning: [W1002] examples/selfhost.z:NN:` —— 修复前它在这四个入口都出现，
+# 即"要个 dump 结果把演示程序编译了"。诊断文本自己含该文件名，所以**不能** grep 文件名，
+# 必须钉 W1002 这条只有解析截断才会打的行（批次 344 同类自伤的复犯预防）。
+echo "== 批次 348 翼 B：无输入 + 只读标志 ⇒ 内置演示一次都不许多编译"
+sig() { "$@" 2>/dev/null 1>/dev/null; }   # 占位：见下方 fb_hit
+fb_hit() { "$@" </dev/null 2>&1 1>/dev/null | grep -c 'W1002\] examples/selfhost.z'; }
+fb_rc() { "$@" </dev/null >/dev/null 2>&1; echo $?; }
+want "无输入裸跑 → 演示真被编译（阳性对照）" 1 "$(fb_hit "$ZETAC")"
+for flag in --dump-mir --emit-llvm --report-stubs --report-untyped; do
+    want "无输入 $flag → 演示没被编译" 0 "$(fb_hit "$ZETAC" "$flag")"
+    want "无输入 $flag 仍出声（rc=1）" 1 "$(fb_rc "$ZETAC" "$flag")"
+done
+if [[ $("$ZETAC" --dump-mir </dev/null 2>&1 1>/dev/null | grep -c 'no input file') -ge 1 ]]; then
+    echo "  ok   无输入的诊断说清了为什么判错"
+else
+    echo "  FAIL 无输入只读入口没有诊断（静默失败）"; rc=1
+fi
 
 echo "cli_semantics: rc=$rc"
 exit $rc

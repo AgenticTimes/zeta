@@ -13333,3 +13333,153 @@ JSON `ts=2026-09-22T17:31:14Z`。
 - **4 个自举文件仍编译不过**（#79）——本批只把判据装上、把它们钉在案，未修。
 - `zeta_src/` 是否进三基线的"语料"口径未定（与 #42 同族，先测"喂进去会怎样"）。
 - `#78` 的三条 CLI 旁路（`--bootstrap` / 无输入 fallback / `--emit-llvm -o`）未动。
+
+---
+
+## 批次 348（#78 的 ②③ 落地：让 `--emit-llvm -o` 的产物由标志说话，并关掉"无输入 + 只读标志 ⇒ 编译内置演示"这条路）
+
+### 选题盘据：三条旁路**先各自量一遍**，再决定本批做哪两条
+
+#78 登记时只写了"剩三条旁路"，没量过这三条今天各自的真面貌。本批第一步是把它们
+全部测一遍，结果直接改变了批次范围：
+
+| 成员 | 修复前实测（同一夹具 `tests/unit-tests/test_minimal.z`，两版二进制对照） | 本批是否可修 |
+|---|---|---|
+| ③ `--emit-llvm f -o g` | `g` = **Mach-O 64-bit executable arm64 / 238,440 B**，并留下 `g.o`（368 B），IR 只打到 **stderr**（`stderr` 里 `^; ModuleID` 命中 1 行）——即 `--emit-llvm` 被完全忽略 | ✅ 可修，且判据明确 |
+| ② 无输入 + 只读标志 | `zetac`、`zetac --dump-mir`、`--emit-llvm`、`--report-stubs`、`--report-untyped` **五个入口 W1002 签名全部 = 1**（即都把 CWD 相对的 `examples/selfhost.z` 编译了一遍），四个只读入口的 rc 都是 1 | ✅ 可修 |
+| ① `--bootstrap` 收不到只读标志 | `--bootstrap` 与 `--bootstrap -o out` **都**在 `Lowered 285 functions to MIR` 之后 `thread 'main' has overflowed its stack` ⇒ rc=**134**，从未走到 `bootstrap_zeta` 里那段 `else { finalize_and_jit + main.call() }` | ❌ 本批不可达，无法证伪也无法证实 |
+
+①"不可达"不是推测，是量出来的两条附加事实：`ulimit -s unlimited` 在本机**不生效**
+（查询后仍是 8,176 KB），所以没有"把栈开大绕过去"的测量手段；而 347 的 #79 判据
+（`tools/selfhost_compile.sh`，只编译不链接）覆盖的是 51 个 `.z` 的**单文件**编译，
+跟 `--bootstrap` 的 285 函数全量 codegen 不是同一条路。⇒ ① 留在 #78 未闭，并把上面
+这组读数写回该行（它现在记的是"没能实测"，本批把它升级成"实测不可达 + 崩点位置"）。
+
+### 三处改动（`src/main.rs`，行号为本批最终态）
+
+1. **标志与旋钮分开**（`:510-511`）：
+   `let emit_llvm = args.iter().any(|a| a == "--emit-llvm");` +
+   `let dump_ir = emit_llvm || env_flag("ZETA_DUMP_IR")`。
+   这条拆分是**作用域阀门**：只有显式标志有权改变 `-o` 的产物，env 旋钮
+   `ZETA_DUMP_IR` 只多加一份 stderr 转储——它不许悄悄把"给我可执行文件"变成"给我 IR"。
+2. **`-o` 分支内部先问标志**（`:826-838`）：`ir_to_file = emit_llvm && output.is_some()`；
+   成立时 `print_to_file` + 打印一行确认 + **`return Ok(())`**，AOT/链接整段被跳过。
+   转储本身未动（无 `-o` 时仍 `print_to_stderr`，`:827`）。
+3. **无输入 fallback 加只读闸门**（`:968-974`）：在 `probe_only` 为真时不再落入
+   "编译并运行 `examples/selfhost.z`"，而是 `Err("no input file: …")`。
+   `probe_only` 本身在 `:541`，与批次 344 用的是同一个条件——本批只是把它接到
+   main.rs 里**第二处** `main.call()`（344 收了第一处）。
+
+### 修复后读数（与上表逐项同夹具对照）
+
+| 项 | 修复前 | 修复后 |
+|---|---|---|
+| `--emit-llvm f -o g` 的 `g` | Mach-O executable **238,440 B** | **ASCII text 20,691 B**，首行 `; ModuleID = 'module'`（全文件该标记恰好 1 行） |
+| 同时留下的 `g.o` | 368 B（说明跑了 AOT） | **不存在** |
+| IR 打到 stderr | 是（1 个模块头） | **stderr 0 字节** |
+| `ZETA_DUMP_IR=1 f -o g` | Mach-O + `g.o` | **仍是 Mach-O 可执行文件**（旋钮不越界，本批的边界翼） |
+| `--dump-mir f -o g` | Mach-O | 照常链接（收窄没有过头） |
+| 无输入裸跑 | W1002 签名 1 / rc=1 | 签名 **1** / rc=1（阳性对照：这条路本来就该编译演示） |
+| 无输入 + `--dump-mir`/`--emit-llvm`/`--report-stubs`/`--report-untyped` | 签名 **1** ×4 | 签名 **0** ×4，且各自 rc=1 + 一行 `no input file` 诊断 |
+
+### 判据：`tools/cli_semantics_check.sh` 从三翼扩到**五翼**（87 → 135 行）
+
+新增两翼各自带自己的阳性对照，缺任何一翼都锁不住本批：
+- **翼 A**（`:86-111`）：`--emit-llvm -o` 产物首行必须是 `^; ModuleID`；不许留 `.o`；
+  外加两条**反向**断言——`ZETA_DUMP_IR=1 -o` 仍是可执行文件、`--dump-mir -o` 仍照常链接
+  （没有这两条，"把 IR 分支写宽"或"写窄过头"都测不出来）。
+- **翼 B**（`:113-133`）：探测器只认解析器自己打的 `W1002] examples/selfhost.z`，
+  断言"无输入裸跑 = 1"（阳性对照）与"四个只读入口 = 0"，并要求每个入口 rc=1 出声。
+
+门禁接线（行号按最终态；`tools/run_all.sh` 本批只改两处**注释**，572 行未变 ⇒ 无锚点漂移）：
+步骤 12 的说明 `tools/run_all.sh:413`（"本步骤钉五翼"）、汇总判据 `:560`。
+
+### 反证（N1）：拿**修复前**的二进制跑同一份五翼脚本
+
+`ZETAC=/tmp/zetac_pre348 ./tools/cli_semantics_check.sh` ⇒ **rc=1，ok=26 / FAIL=7**，
+且 7 条 FAIL **全部落在本批新增的两翼内**（三翼一条没红，说明旧判据没被本批改坏）：
+
+| # | FAIL 断言 | 落在 |
+|---|---|---|
+| 1 | `--emit-llvm -o 的产物不是 IR 文本：Mach-O 64-bit executable arm64` | 翼 A |
+| 2 | `走 IR 分支却留下了 …/ir.ll.o（说明还是跑了 AOT）` | 翼 A |
+| 3–6 | `无输入 --dump-mir / --emit-llvm / --report-stubs / --report-untyped → 演示没被编译 → 期望 0，实得 1` | 翼 B |
+| 7 | `无输入只读入口没有诊断（静默失败）` | 翼 B |
+
+修复后本地单跑：**rc=0 / 33 断言 / FAIL 0**（门禁里 `cli_semantics.checked`
+批次 346/347 = **18** → 本批 = **33**，+15 条正是两翼），且
+`LC_ALL=C` 与 UTF-8 两遍输出**逐字节相同**（批次 346 自伤 3 的复犯预防）。
+`ok=26` 里除 18 条旧断言外还有 7 条新断言在修复前就成立（`ZETA_DUMP_IR -o` 仍是可执行
+文件、`--dump-mir -o` 仍链接、无输入裸跑仍编译演示、四个入口仍 rc=1 出声）——
+它们不是冗余：**是"不许改坏"的那一半**。
+
+### 自伤（两条，都记成规则）
+
+1. **探测器被自己的诊断污染**：第一版翼 B 在 stderr 里 grep `examples/selfhost.z`
+   来判"演示有没有被编译"，而我新加的 `Err` 文案里**恰好含这个文件名** ⇒ 四个只读
+   入口全被判红。换成解析器专属签名 `W1002] examples/selfhost.z` 后阳性对照立刻对上
+   （裸跑 1 / 只读 0）。规则：**判据的探针必须是"只有被测行为才会打的那一行"**，
+   不能用"输出里出现了那个文件名"。
+2. **`grep -q` 在 `set -o pipefail` 下产假红**：`"$ZETAC" … | grep -q 'no input file'`
+   明明匹配（`grep -c` 实得 1）却判 FAIL。根因是 `-q` 匹配即退出，生产端吃 SIGPIPE
+   返 141，管道状态非零 ⇒ 门禁的"只读标志不许静默失败"这条断言自己静默说谎。
+   已改为 `grep -c … -ge 1`（两处），并在脚本注释里写明；先在隔离 `bash -c` 里复现
+   再修，没让"改到不红为止"。
+
+### 锚点重绑（动了 `main.rs` 的行号，`docs/ABI.md` 有 5 个引用它）
+
+`python3 tools/check_abi_anchors.py --rebind` 一次判定 **4 条搬家 / 1 条拒改**：
+
+| 锚点 | 搬到 | 依据 |
+|---|---|---|
+| `src/main.rs:535` | `:537` | 1 行逐字相同、全文件唯一命中 |
+| `src/main.rs:782-785` | `:784-787` | 4 行同上 |
+| `src/main.rs:786` | `:788` | 1 行同上 |
+| `src/main.rs:828` | `:842` | 1 行同上 |
+| `src/main.rs:529` | **拒改** | 新位置是空行，rebind 只处理"漂移对" |
+
+`:529` 那条是 `docs/ABI.md:619` 正文里的裸引用（`（CLI 侧 main.rs:529）`），
+`--rebind` 结构上看不见它，手工一次改 ABI.md + `tools/baselines/abi_anchors.tsv`
+第 161 行为 `:531`。复验：`锚点：243 个可解析 / 0 个定位失败 … 漂移 0 / 新 0 / 消失 0 …
+锚点全部对上`，rc=**0**。
+
+### 门禁（14 步全跑，`/tmp/b348_gate.log`，ts=2026-09-23T03:54:15Z）
+
+rc=**1**，唯一来源 `py_fail=2`（`t231_dict_set_cast_fromkeys`、
+`t233_listcomp_condition_capture`，存量），其余逐步与批次 346/347 那份读数**逐项相同**：
+
+| 步骤 | 读数 |
+|---|---|
+| official | compile **194/194**，compile+link **191/194**（link-only 3 条 = 已知 #42） |
+| python_style | **291 passed / 2 failed（存量）/ 4 known-fail / 0 xpass** |
+| corpus | **39/39 = 100%** |
+| jit | **ok=170 / trap=321 / segv=0**（491 总，最小 ok=163）GREEN |
+| diff | match=**120** / judged=130 / 92.3% / bad_case=0 |
+| knob / swallow / import_form / empty_stmt | **23 / 4 / 22 / 68** 断言，FAIL 0 |
+| clean_checkout | rc=0（rev `0954117d`） |
+| pysrc / cli_semantics / ignore_rules / mbvar | **29 / 33 / 19 / 19**，FAIL 0 |
+| compile-diagnostics | official 15 行（9 文件）／ python_style 190 行（81 文件） |
+
+`cli_semantics` 的 checked 从 26 → **33** 是本批唯一的判据数量变化。
+
+### 边界与未修
+
+- **env 旋钮明确排除在 `-o` 语义之外**：`ZETA_DUMP_IR` 只加 stderr 转储。翼 A 里那条
+  反向断言就是钉这一点的——"隐藏旋钮偷偷改变命令行产物的含义"比原缺陷更难查。
+- **`--emit-llvm -o` 这个组用在仓内没有既有消费者**：`grep -rn -- "--emit-llvm" tools/ .github/`
+  的实命中只有两类——本判据自身，和 `tools/perf_baseline.py:130` 的
+  `[ZETAC, src, "--emit-llvm"]`（**无 `-o`**，且每次都显式给输入文件）。那条走的是
+  `print_to_stderr` 分支，本批未动，且三翼里 `--emit-llvm 有 IR`
+  （`tools/cli_semantics_check.sh:67`）正是钉它仍有 `; ModuleID` 的断言 ⇒ 本批两个改动
+  **不改变任何现有门禁/基线脚本的口径**。
+- **① `--bootstrap` 仍未闭**（#78 内保留）：需要的是先让 285 函数的全量 codegen 不炸栈，
+  那是 #79 / 自举编译族的活，不是 CLI 判据的活。
+- 未闭的姊妹项（本批未动）：#63（`fn repl(_dump_mir: bool)` 收下即弃）、
+  #70/#76 ②（相对 `pylib` 基随 CWD 消失）、#52 第 3 层（"消失 + 新"成对自动配对）。
+
+一句话：#78 登记时是"三条旁路"，量完才发现其中**一条今天根本走不到**（崩在 285 函数
+codegen 的栈上，`ulimit` 也抬不动），而另外两条的"错"是同一个形状——**标志说了话但
+没人听**：`--emit-llvm` 在场时 `-o` 仍产出可执行文件、只读标志在场时无输入仍去编译
+CWD 相对的演示程序。本批把"听"补上（`:510` 拆标志 / `:826` 先问标志 / `:968` 只读闸门），
+并把 `cli_semantics_check.sh` 从三翼扩到五翼：反证用修复前的二进制打回 **26 ok / 7 FAIL**，
+7 条全部落在新翼，旧翼一条没红。

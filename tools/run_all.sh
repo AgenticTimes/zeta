@@ -410,7 +410,7 @@ fi
 # ── 12) 只读入口不许执行程序（批次 344）──
 # 修复前"要不要执行被编译的程序"只看有没有 `-o` ⇒ --dump-mir / --emit-llvm /
 # --report-stubs / --report-untyped / ZETA_DUMP_IR=1 全都边 dump 边跑 main。
-# 本步骤钉三翼：裸跑必须执行（探测器阳性对照）、五个只读入口必须不执行且 rc=0、
+# 本步骤钉五翼（344 三翼 + 348 两翼）：裸跑必须执行（探测器阳性对照）、五个只读入口必须不执行且 rc=0、
 # `-o` 那条路逐字不变。判据在 tools/cli_semantics_check.sh 内部，这里只认退出码。
 sem_rc=0; sem_failed=0; sem_checked=0
 if [[ $SKIP_SEM -eq 0 ]]; then
@@ -557,7 +557,7 @@ if [[ $SKIP_EMPTY -eq 0 && $empty_rc -ne 0 ]]; then rc=1; fi
 # pysrc: 判据在 tools/py_module_search_inventory.sh 内部（六翼——批次 343 补的 A2 翼，
 # 这行当时漏改，批次 344 顺手更正），这里只认退出码。
 if [[ $SKIP_PYSRC -eq 0 && $pysrc_rc -ne 0 ]]; then rc=1; fi
-# cli_semantics: 判据在 tools/cli_semantics_check.sh 内部（三翼），这里只认退出码。
+# cli_semantics: 判据在 tools/cli_semantics_check.sh 内部（五翼），这里只认退出码。
 if [[ $SKIP_SEM -eq 0 && $sem_rc -ne 0 ]]; then rc=1; fi
 # ignore_rules: 判据在 tools/ignore_rule_inventory.sh 内部（四翼），这里只认退出码。
 if [[ $SKIP_IGNORE -eq 0 && $ignore_rc -ne 0 ]]; then rc=1; fi

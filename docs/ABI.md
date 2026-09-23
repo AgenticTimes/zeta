@@ -394,9 +394,9 @@ extern 声明 :2870、:2873——**9 处全部落在 codegen.rs 这一份文件�
 
 > 锚点源码：src/main.rs
 **N9 `.N` 里的 N 不是 ABI，是"LLVM 在本 module 内第几次改名"的偶然计数。**
-⇒ 别名表与**IR 发射顺序**是一对锁死件：src/main.rs:782-785 的注释原文——
+⇒ 别名表与**IR 发射顺序**是一对锁死件：src/main.rs:784-787 的注释原文——
 HashMap 迭代顺序随机 ⇒ `print.N` 冲突改名和运行期别名表"从一次运行到下一次
-在能用与不能用之间翻转"，:786 的 `all_mirs.sort_by(...)` 就是这把锁的钥匙。
+在能用与不能用之间翻转"，:788 的 `all_mirs.sort_by(...)` 就是这把锁的钥匙。
 **合同级：确定性发射序是 ABI 的一部分，不是代码风格。**
 （runtime/tokio_runtime_stub.c:339 与 :343-344 的注释是这条的现场记录：`array_new_1` → `array_new.10`、
 `print` → `print.N` 且 N 随 arity 1-6 变动。）
@@ -616,7 +616,7 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
 | 旋钮 | 生效点 | 语义 |
 |---|---|---|
 | **Rust 侧全部布尔旋钮**（批次 336） | diagnostics.rs:515 `env_flag`，27 个读点收敛于此后 | 值为 `0` / `false` / `no` / `off` / 空 ⇒ **关**；其余非空值 ⇒ 开；未设置 ⇒ 关。此前 27 点全是 `env::var(… ).is_ok()`＝**存在即开**，写 `=0` 得到的是"开" |
-| `ZETA_STRICT_ABI` / `--strict-abi` | codegen.rs:1333 读入 → 字段 `strict_abi`，6976-6981 用 | §3.2 的 `abi_note` 从告警变致命（CLI 侧 main.rs:529） |
+| `ZETA_STRICT_ABI` / `--strict-abi` | codegen.rs:1333 读入 → 字段 `strict_abi`，6976-6981 用 | §3.2 的 `abi_note` 从告警变致命（CLI 侧 main.rs:531） |
 | `ZETA_LENIENT_STUBS` | py_additions.c:3307（`py_stub_abort` 内） | 桩从 abort 退化成返回 0 |
 | `ZETA_STRICT_STUBS` | py_additions.c:3314 | ⚠️ **假旋钮**：`(void)getenv(…)`，注释自述 "env is documentary"——读了但什么都不改变 |
 | `ZETA_NO_OPT` | jit.rs `optimize_module` | 跳过 -O3 管线（仅诊断用） |
@@ -947,7 +947,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
    **后果**：只要判据仍是"编译+链接全过"，解析恢复就被运行时完整度**封顶**——每恢复一行只要引用
    一个还没绑定的方法，就报成"编译器不支持这段语法"，而这批语料（self-host 编译器）离可运行
    还差整个 std 表面。⇒ 门禁改为分两段量：
-   - `src/main.rs:535` + `:828` 新增 `--no-link`（出 `.o` 即止）；
+   - `src/main.rs:537` + `:842` 新增 `--no-link`（出 `.o` 即止）；
    - `tools/run_all.sh:101` 只在"整链失败"时补跑一次 `--no-link` 做归因，
      日志两行：`official: compile N/194, compile+link M/194` 与逐文件的
      `### <name> — 缺运行时绑定: <符号名…>`（明细 `$OFFICIAL_LINK_DIAG`，默认
