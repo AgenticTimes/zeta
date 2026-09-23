@@ -1,11 +1,16 @@
 // 批次 364：字符串判定族此前没有运行时实现，调用点落到未定义符号
 // （_is_empty/_is_whitespace/_clone）。语义跟 Rust：is_whitespace 全字符
 // 空白才为真（空串为真），clone 恒等（字符串不可变）。
-// expect: 0
+// 批次 377 改的是打印档：bool 走 `println!("{}", b)` 此前打 `1`/`0`，现在打
+// `True`/`False`。这不是本文件新引入的行为，是批次 291 在 `gen.rs` 里写明的
+// 契约（"bool must print Python-style (True/False), not as the i64 fallback
+// (1/0)"）——当时只修了 `print`，格式串那条路没走到位选分派，本批改位后走通了。
+// 改前/改后逐行：`0 5 1 1 0` → `False 5 True True False`（五条都是 Python 侧读法）。
+// expect: False
 // expect: 5
-// expect: 1
-// expect: 1
-// expect: 0
+// expect: True
+// expect: True
+// expect: False
 
 fn main() -> i64 {
     let s = "hello"

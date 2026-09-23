@@ -14793,3 +14793,41 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 1. #45 的第一、二成员未动，而且现在能给出定位级说法：`expand_println` 在 :131 处把格式串整个剥掉、只把值参传下去 ⇒ 字面量前后缀必丢（`/tmp/b376/m1.z` 改后复测：`A={}`→`1`、`{}B`→`2`、`C={}D={}` 两个值→只打 `1`，与批次 368 记的读数一字相同），而多占位符那条走 `println` 多参、运行期只取第一个。真要修得让展开期产出"字面量段 + 值段"的序列，或者换成一个带格式串的运行时打印函数——比本批这一格大，且要为 #45 第二成员新开契约，本批不做。
 2. `println!("{}", <数组/字典>)` 仍打句柄（`d1.z` 改前改后同档）：容器 repr 那条分派（`gen.rs:8020-8070` 的 `py_json_dumps_vec_typed`/`py_json_dumps_map`）在格式串参数循环里，但只在展开器把值参交下来之后；`Var` 一档现在落 `gen.rs:8156` 的单参分派，那里没有容器档 ⇒ 选 `println`（=i64 打印器）。登记，不混进本批。
 3. `#38 ①` 的混型臂（一臂字符串一臂整数）仍打地址；`#45` 第二成员的多参只打第一个仍如此。
+
+## 批次 377 —— `println!("…{}…")` 在展开期分成"字面量段 + 值段"（收 #45 第一、第二成员，顺带收第四成员）
+
+### 现象与触发点
+上一批的"边界"第 1 条就是本批的对象：展开器把格式串整个交出去，字面量段与第二个以后的值参全丢。改前读数（批次 376 的构建，夹具 `/tmp/b376/m1.z`，roadmap 批次 376 已实拍在册）与改后（`/tmp/b377/m1.z` 同一份源）：
+
+| 源 | 改前 | 改后 |
+| --- | --- | --- |
+| `println!("A={}", a)`（a=1） | `1` | `A=1` |
+| `println!("{}B", b)`（b=2） | `2` | `2B` |
+| `println!("C={}D={}", a, b)` | 只打 `1` | `C=1D=2` |
+| `println!("plain")`、`println!("E=1+1")` | `plain`、`E=1+1` | 一字未动 |
+| `println!("{}", v)`（v=`[1, 2, 3]`） | 打句柄 `4311977840` | 打 `[1, 2, 3]` |
+| `println!("{}", d)`（d=`{"k": 1}`） | 打句柄 `4311981568` | 打 `{"k": 1}` |
+| `println!("{}", 1 == 1)` | 打 `1` | 打 `True` |
+
+最后三行不在上一批的登记里，是本批实测新撞出来的：容器与 bool 走格式串这条路此前也打错（容器打句柄、bool 打 1/0），值现在改走 `print` 分派后被那边的档位接住了。
+
+### 定位
+两处都在 `src/frontend/macro_expand.rs`：改前 :130-135 把 `args[0]` 的格式串**整个剥掉**、只把值参传下去 ⇒ 字面量段必丢（第一成员）；多值则合并成一次 `println` 调用，而 `println` 在 MIR 里只有单参分派（`src/middle/mir/gen.rs:8156-8171`：`arg_ids.len() == 1` 才按类型选名字，否则原样发 `println`），codegen 侧 `println` 又映射到 `println_i64`（`src/backend/codegen/codegen.rs:2357` 一带），运行时那个函数只吃一个参数 ⇒ 第二个以后的值参被丢掉（第二成员）。容器与 bool 同因：`gen.rs` 的容器 repr / dict / PyJson 档位与 `print_bool` 都挂在 `method == "print"` 那条分派里（:7954 起），`println` 单参分派（:8156）没有这两档。
+
+### 修复
+`expand_println`：首参是字符串面量时，按 `{}` 把串切成段，逐段发语句——字面量段 → `print_str(段)`（空段跳过），值段 → `print(值, end="")`，全部发完补一条 `print_str("\n")`。用 `print` 而不是 `println` 是因为 `print` 那条分派已经带"按静态类型选名字 + 容器 repr + bool 打 True/False"，而 `end=""` 让它在中间不换行（`gen.rs:8004` 定 `has_end`、`:8013` 的 `is_last = !has_end && …`），所以本批没有新增任何运行时函数或契约。每个值单独一次 `print` ⇒ 多占位符全部打出来，也不吃 `sep` 的空格。节点形状统一包 `ExprStmt`（与上一批的值参路径一致，落在语句列表里由 `resolver.rs:3552` 的 `expand_stmts` 展开拼接）。净 +16 行（+55/-39，`macro_expand.rs` 736 → 752）。首参不是字符串面量的 `println!(x)` 一条不动，仍走 `println` 单参分派。
+
+### 验证
+- 新用例 `tests/python_style/t418_println_format_segments.z`：七条（前缀、后缀、双占位符、四种类型混排、容器、纯字面量、单占位符），`// expect` 七行按实跑输出逐字写（先跑后写）。套件内 `PASS`。
+- 套件里两条改档：`t410_string_predicates`、`t411_parse_unwrap_chars` 的 bool 期望行从 `1`/`0` 改成 `True`/`False`。这两条的旧期望是批次 364/365 按当时的实际输出钉的，而"bool 该打 True/False"是批次 291 写在 `gen.rs` 注释里的契约（当时只修了 `print`，格式串这条路没走到）；本批改位后格式串这条路也走到位选分派，输出变成 Python 侧读法。套件跑出的前后对照：`0 5 1 1 0` → `False 5 True True False`、`42 0 0 0` → `42 0 False 0`（整数行未动）。改档写在两个文件的文件头里，旧读数不回改。
+- 非套件夹具：`/tmp/b377/f2.z`（`for`/`if` 体内的多占位符、辅助函数里的带前缀打印）与 `f1.z`（混合类型、容器、bool、尾随逗号 `println!("tail", )`）逐行输出正确，退出码 `5`/`0` 未变。
+- 丢行（`tools/truncation_inventory.sh`，release）：3 文件 / 533 行，逐文件一字未动（357 + 91 + 85；本批在展开期，不碰解析）。
+- 锚点：漂移集仍是 58 条，与批次 375/376 收尾时相同；`macro_expand.rs` 无 tsv/ABI.md 锚点（`grep` 空）。本批之后 `macro_expand.rs` 里六处被历史记录引用的裸行号各 +16：`407→423`、`431→447`、`441→457`、`655→671`、`671→687`、`697→713`，六个号全部用 `git show HEAD:src/frontend/macro_expand.rs` 的同行内容与改后文件比对过，内容一字相同（不是靠位移推的）。另外两处指向 `macro_expand.rs:131`（"把格式串整个剥掉"）的历史引用（roadmap 批次 376 边界第 1 条、backlog #45 行内）按"旧号不回改"留着：那一行在本批之后落在合成的 `__kwarg__` 节点里，它描述的代码已经不存在，对照就记在本节"定位"。
+- 整趟门禁（`tools/run_all.sh`，日志 `/tmp/b377/gate.log`，`gate_rc=1`）：official `compile 194/194`、`compile+link 192/194`（两条 link-only 明细未动：`integration_all_features` 缺 `_predict`/`_train`、`selfhost` 缺 `_as_str`/`_build_ast`/`_is_alphabetic`/`_push`）、official 诊断 `5 文件/29 行` —— 三项与批次 376 一字相同；python_style `302 通过 / 2 失败 / 4 known-fail / 0 xpass`（失败仍只有 t231/t233，`gate_rc=1` 只由这两条解释；诊断 `193 行 / 82 文件` 未动）；语料 `39/39 = 100%`；diff test `match=120 judged=130 rate=92.3% bad_case=0`（与批次 376 一字相同——bool/容器改档没有把与 CPython 的一致率拉下去）；jit `ok=172 trap=330 fail=0 timeout=0 segv=0 (total 502，最小 ok=163) GREEN`；knob 23 / swallow 4 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 全部 `FAIL 0`；mbvar `19/0`；comment_drift `0`；clean_checkout `rc=0（5s，rev=795409a9）`。
+- jit 的 `trap 329 → 330`、`total 501 → 502`：多的那一条就是新用例 `t418`（串里有一条 `1.750000` 的浮点值 ⇒ `print_f64`，与批次 376 的 `println_f64` 同一条已登记缺口：`pylib/jit_mappings.txt:66-68` 自陈 print_f64/println_f64 只有 C 侧实现、JIT 无符号可指）。既有用例一条 trap 都没多，`ok` 仍 172 未回退。python_style 通过数 `301 → 302` 也全部归到新用例 `t418` 一个文件。
+
+### 边界（本批没修的，实拍在册）
+1. `format!("value={}", n)` 是**桩**：`macro_expand.rs` 的 `expand_format` 不看参数，整个宏返回一个固定的字符串面量（源码上写死 `"formatted string"`），实测 `let s = format!("value={}", 42); println!("got=[{}]", s)` 打 `got=[0]`（`/tmp/b377/f5.z`）——既不是 `"value=42"` 也不是 `"formatted string"`，编译成功、退出码 0、一声不出。与本批同一族但要有"返回一个拼好的串"的表示（新的运行时助手或展开成串接链），另计，登记在 backlog #45。
+2. 带格式说明符的占位符仍不收：`println!("{:.2}", x)` 在展开期的元数检查里按 `{}` 计数（`macro_expand.rs` 的 `format_str.matches("{}").count()`），说明符形态直接报 `println! format string expects 0 arguments, got 1`。本批未动这条检查，改前改后同形。
+3. 转义花括号 `{{`/`}}` 无处安放：全仓 `.z` 里 `println!("…{{…")` 命中 0 处（正证据＝同一把尺子、同一作用域下 `println!("…{` 命中 308 处/58 文件，说明模式真在跑、不是写错），所以本批按"分隔符就是 `{}`"实现，没为 `{{` 加规则；加了会在有人用时变成错的行为，届时要连元数检查一起改。
+4. 函数尾位置上的宏仍不带值：`fn tail() -> i64 { println!("t={}", 3) }` 被调用时值槽读出 `1`（`/tmp/b377/f3.z`），但这与本批无关——同一份构建下换成完全不含宏的 `fn noMacro() -> i64 { print_str("x") }` 读出同样是 `1`（`/tmp/b377/f4.z`），而 `fn empty() -> i64 { let z = 9 }` 读出 `9` ⇒ 是"函数体没有 ret_expr 时值槽填什么"那一层（#55 一族），不是展开期多节点造成的新形态。

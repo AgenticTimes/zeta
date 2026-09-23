@@ -3,9 +3,12 @@
 // （nth 的元素可能是合法的 0，哨兵会误判）。
 // 注意：unwrap 的结果当前无静态类型，其后接 .len() 会派发错——断言用
 // is_empty（裸符号回退，语义可靠）；"结果带类型"归入轴 F。
+// 批次 377 改的是第三条的打印档：`is_empty()` 是 bool，走 `println!("{}", b)`
+// 此前打 `0`，现在按批次 291 在 `gen.rs` 里写明的契约打 `False`（Python 侧读法）。
+// 改前/改后逐行：`42 0 0 0` → `42 0 False 0`（另外三条是整数，未动）。
 // expect: 42
 // expect: 0
-// expect: 0
+// expect: False
 // expect: 0
 
 fn main() -> i64 {

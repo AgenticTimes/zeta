@@ -103,53 +103,57 @@ impl MacroExpander {
             }
         }
 
-        // For now, simple expansion to a function call
-        // In a full implementation, this would handle format strings
-        // Handle simple case: only a format string with no placeholders
-        // e.g. println!("hello") -> print_str("hello"); print_str("\n")
+        // A format string is a sequence of literal segments around `{}`. The
+        // segments used to be thrown away here (batch 377), so `println!("A={}", 1)`
+        // printed just `1`, and only the first value survived a multi-`{}` string.
         if let Some(AstNode::StringLit(format_str)) = args.first() {
-            if args.len() == 1 {
-                let print_call = AstNode::Call {
-                    receiver: None,
-                    method: "print_str".to_string(),
-                    args: vec![AstNode::StringLit(format_str.clone())],
-                    type_args: Vec::new(),
-                    structural: false,
-                };
-                let newline_call = AstNode::Call {
-                    receiver: None,
-                    method: "print_str".to_string(),
-                    args: vec![AstNode::StringLit("\n".to_string())],
-                    type_args: Vec::new(),
-                    structural: false,
-                };
-                return Ok(vec![print_call, newline_call]);
+            let mut out: Vec<AstNode> = Vec::new();
+            let values = &args[1..];
+            for (i, segment) in format_str.split("{}").enumerate() {
+                if !segment.is_empty() {
+                    out.push(self.print_str_stmt(segment));
+                }
+                if let Some(value) = values.get(i) {
+                    // `print(v, end="")` is the type-dispatched, newline-free
+                    // printer: MIR lowering picks print_str / print_i64 /
+                    // print_f64 / print_bool from the argument's static type,
+                    // and the explicit `end` keeps it from appending a newline.
+                    out.push(AstNode::ExprStmt {
+                        expr: Box::new(AstNode::Call {
+                            receiver: None,
+                            method: "print".to_string(),
+                            args: vec![
+                                value.clone(),
+                                AstNode::Call {
+                                    receiver: None,
+                                    method: "__kwarg__".to_string(),
+                                    args: vec![
+                                        AstNode::StringLit("end".to_string()),
+                                        AstNode::StringLit(String::new()),
+                                    ],
+                                    type_args: Vec::new(),
+                                    structural: false,
+                                },
+                            ],
+                            type_args: Vec::new(),
+                            structural: false,
+                        }),
+                    });
+                }
             }
+            out.push(self.print_str_stmt("\n"));
+            return Ok(out);
         }
 
-        // Strip the format string and pass only the value arguments
-        let value_args: Vec<AstNode> = if let Some(AstNode::StringLit(_)) = args.first() {
-            args[1..].to_vec()
-        } else {
-            args.to_vec()
-        };
+        // No format string: `println!(x)` passes the value straight to `println`,
+        // which MIR lowering dispatches by the argument's static type
+        // (`src/middle/mir/gen.rs`, the single-arg `println` branch).
+        let value_args: Vec<AstNode> = args.to_vec();
 
         if value_args.is_empty() {
-            let newline_call = AstNode::Call {
-                receiver: None,
-                method: "print_str".to_string(),
-                args: vec![AstNode::StringLit("\n".to_string())],
-                type_args: Vec::new(),
-                structural: false,
-            };
-            return Ok(vec![newline_call]);
+            return Ok(vec![self.print_str_stmt("\n")]);
         }
 
-        // The printer name is NOT chosen here: the frontend has no type
-        // information, and picking `println_i64` by argument *shape* (a
-        // variable, an int literal, a call) sent every string variable and
-        // every float variable to the integer printer (batch 376). `println`
-        // is dispatched by the argument's static type in MIR lowering.
         let call = AstNode::Call {
             receiver: None,
             method: "println".to_string(),
@@ -161,6 +165,18 @@ impl MacroExpander {
         Ok(vec![AstNode::ExprStmt {
             expr: Box::new(call),
         }])
+    }
+
+    fn print_str_stmt(&self, s: &str) -> AstNode {
+        AstNode::ExprStmt {
+            expr: Box::new(AstNode::Call {
+                receiver: None,
+                method: "print_str".to_string(),
+                args: vec![AstNode::StringLit(s.to_string())],
+                type_args: Vec::new(),
+                structural: false,
+            }),
+        }
     }
 
     /// Expand vec! macro
