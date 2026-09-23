@@ -12,11 +12,11 @@ rust-version = "1.92.0"
 # License type.
 license = "MIT"
 # Brief description.
-description = "The final systems language with blockchain support"
+description = "The final systems language"
 # Repository URL.
 repository = "https://github.com/murphsicles/zeta"
 # Search keywords.
-keywords = ["programming", "language", "code", "compiler", "lang", "blockchain", "bitcoin", "solana"]
+keywords = ["programming", "language", "code", "compiler", "lang"]
 # Categories for classification.
 categories = ["compilers", "development-tools", "cryptography"]
 # README file.
@@ -78,33 +78,11 @@ chalk-ir = "0.104.0"
 chalk-solve = "0.104.0"
 chalk-recursive = "0.104.0"
 
-# Blockchain-specific dependencies
-# nour = { path = "nour" }  # Father's Bitcoin SV library - TEMPORARILY DISABLED FOR TESTING
-solana-sdk = { version = "2.0.0", optional = true }
-solana-client = { version = "2.0.0", optional = true }
-solana-program = { version = "2.0.0", optional = true }
-bs58 = "0.5.0"  # Base58 encoding
-sha2 = "0.10.8"  # SHA256 hashing
-secp256k1 = { version = "0.28", features = ["serde", "rand-std"] }  # secp256k1 cryptography
-hmac = "0.12"  # HMAC for BIP-32
-pbkdf2 = "0.12"  # PBKDF2 for key derivation
-bitcoin_hashes = "0.13"  # Bitcoin-specific hashes
-hex = "0.4"  # Hex encoding/decoding
-ripemd160 = "0.10.0"  # RIPEMD160 hashing
-ed25519-dalek = { version = "2.1.1", features = ["serde"] }  # Ed25519 for Solana
-bip39 = { version = "1.1.0", features = ["chinese-simplified", "chinese-traditional", "french", "italian", "japanese", "korean", "spanish", "rand"] }  # BIP-39 mnemonics
-aes-gcm = "0.10.3"  # Encryption for wallet storage
-argon2 = "0.5.3"  # Password hashing
-thiserror = "1.0.69"  # Error handling
-base64 = "0.22.1"  # Base64 encoding for HTTP auth
-
 # Features
 [features]
 default = []
 integration = []  # Enable integration bridge module
 identity = []  # Enable identity-aware string operations
-blockchain = ["solana-sdk", "solana-client", "solana-program"]  # Enable blockchain features
-solana = ["solana-sdk", "solana-client", "solana-program"]  # Enable Solana specifically
 
 # Development dependencies for testing
 [dev-dependencies]

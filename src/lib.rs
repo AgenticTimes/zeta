@@ -49,8 +49,6 @@
 //! Every line is optimized for speed, simplicity, and clarity.
 
 pub mod backend;
-#[cfg(feature = "blockchain")]
-pub mod blockchain; // Enabled for Teranode integration
 pub mod compiler_config;
 pub mod debugger;
 pub mod diagnostics;
