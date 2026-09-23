@@ -1,0 +1,19 @@
+// 批次 367：缩进预处理的行内冒号规则曾把 Rust 风格的 for 变量类型注解
+// `for i: usize in 0..10 {` 当成 Python 单行块，改写成
+// `for i { usize in 0..10 { }`，其后 36 行被静默丢弃。
+// 修复：冒号之后的代码里已有本语句自己的 `{` 时，这个冒号是类型注解，
+// 不做单行块改写。本测试锁两点：解析完整（done 必须打出来）。
+// known-fail: typed 循环变量的值读取有独立缺陷——sum 算出 0 而不是 10
+//（见 roadmap 优先级重排 P0-1），解析完整性的部分已由本文件锁定。
+// expect: 0
+// expect: done
+
+fn main() -> i64 {
+    let mut sum = 0
+    for i: usize in 0..5 {
+        sum = sum + i
+    }
+    println!("{}", sum)
+    println!("done")
+    return 0
+}

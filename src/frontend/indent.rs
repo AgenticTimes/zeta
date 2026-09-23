@@ -429,6 +429,15 @@ fn find_inline_colon(line: &str) -> Option<(usize, usize)> {
                 let next = b.get(i + 1).copied();
                 let prev = i.checked_sub(1).and_then(|p| b.get(p)).copied();
                 if next != Some(b':') && next != Some(b'=') && prev != Some(b':') {
+                    // 冒号之后的代码里如果已经有本语句自己的 `{`（Rust 风格行尾
+                    // 开块），这个冒号就是类型注解而不是 Python 单行块的起始：
+                    // `for i: usize in 0..10 {` 不能被改写成
+                    // `for i { usize in 0..10 { }`。实测（primezeta_usize_test）
+                    // 丢 36 行的根因。
+                    let code = &line[i + 1..find_code_end(line)];
+                    if code.contains('{') {
+                        return None;
+                    }
                     return Some((i, find_code_end(line)));
                 }
                 i += 1;
