@@ -13754,6 +13754,11 @@ fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)
         "is_empty" => Some(("host_str_is_empty", 1, "bool")),
         "is_whitespace" => Some(("host_str_is_whitespace", 1, "bool")),
         "clone" => Some(("host_str_clone", 1, "str")),
+        // push_str 返回新串（纯函数）；不进表的话结果被定型 I64，
+        // 后续 .len() 派发就错了（批次 365 实测）。
+        "push_str" => Some(("host_str_push_str", 2, "str")),
+        // chars 返回单字符字符串的 vec（"split" = vec<str> 返回种类）。
+        "chars" => Some(("host_str_chars", 1, "split")),
         "lower" => Some(("host_str_to_lowercase", 1, "str")),
         "capitalize" => Some(("host_str_capitalize", 1, "str")),
         "title" => Some(("host_str_title", 1, "str")),

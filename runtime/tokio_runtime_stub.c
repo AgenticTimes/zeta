@@ -2490,6 +2490,109 @@ int64_t host_str_clone(int64_t s) { return s; }
 // Linux 上会与 glibc 的 clone 同名冲突，类型已知时走 host_str_clone。
 int64_t is_empty(int64_t s) { return host_str_is_empty(s); }
 int64_t is_whitespace(int64_t s) { return host_str_is_whitespace(s); }
+
+// —— 批次 365（任务 #42）：parse / unwrap 系 / chars / nth / iter / push_str ——
+// 契约（修订批次 364 的登记）：Result 用本文件既有的 host_result_* 三字段单元
+// （tag 1=ok→data，2=err→err），不用 0 哨兵——nth 的元素可能是合法的 0，哨兵会误判。
+// 闭包沿用 FuncAddr 约定，经 zeta_call1 回调进生成代码。
+int64_t zeta_call1(int64_t fptr, int64_t a);
+
+// 整串转 i64：前后空白允许；整串必须是整数，否则 make_err。
+int64_t parse(int64_t s) {
+    if (!s) return host_result_make_err(0);
+    const char* p = (const char*)s;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    if (*p == '\0') return host_result_make_err(0);
+    char* end = NULL;
+    long long v = strtoll(p, &end, 10);
+    if (end == p) return host_result_make_err(0);
+    while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
+    if (*end != '\0') return host_result_make_err(0);
+    return host_result_make_ok((int64_t)v);
+}
+
+// unwrap：ok → data；err → 响亮失败（Rust 语义就是 panic，项目红线也要求不静默）
+int64_t unwrap(int64_t res) {
+    if (!res) {
+        fprintf(stderr, "PY-A: unwrap on an empty Result handle\n");
+        abort();
+    }
+    if (host_result_is_ok(res)) return host_result_get_data(res);
+    fprintf(stderr, "PY-A: called unwrap on an err Result\n");
+    abort();
+}
+
+// unwrap_or：err → 默认值
+int64_t unwrap_or(int64_t res, int64_t d) {
+    if (!res) return d;
+    return host_result_is_ok(res) ? host_result_get_data(res) : d;
+}
+
+// unwrap_or_else：err → 用 FuncAddr 回调闭包（闭包收到 err 载荷）
+int64_t unwrap_or_else(int64_t res, int64_t f) {
+    if (!res) return zeta_call1(f, 0);
+    if (host_result_is_ok(res)) return host_result_get_data(res);
+    int64_t* p = (int64_t*)res;
+    return zeta_call1(f, p[2]);
+}
+
+// chars：字符串 → 单字符字符串的 vec（与 s[i] 的单字符表示一致）
+int64_t chars(int64_t s) {
+    if (!s) return vec_new(4);
+    int64_t out = vec_new(8);
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) {
+        int len = 1;
+        if (*p >= 0xF0) len = 4;
+        else if (*p >= 0xE0) len = 3;
+        else if (*p >= 0xC0) len = 2;
+        char buf[5];
+        for (int i = 0; i < len && *p; i++) buf[i] = (char)*p++;
+        buf[len] = '\0';
+        out = vec_push(out, (int64_t)zt_strdup(buf));
+    }
+    return out;
+}
+
+// iter：vec 本身就按可迭代用（真迭代器对象按需再引入）
+int64_t iter(int64_t x) { return x; }
+
+// nth：vec 取元素，越界 make_err（.unwrap() 会响亮失败）
+int64_t nth(int64_t vec, int64_t i) {
+    if (!vec) return host_result_make_err(0);
+    int64_t* h = (int64_t*)(vec - 16);
+    if (vec <= 0x1000 || GC_base((void*)h) != (void*)h)
+        return host_result_make_err(0);
+    int64_t cap = h[0], len = h[1];
+    if (cap < 0 || cap > (1LL << 28) || len < 0 || len > cap)
+        return host_result_make_err(0);
+    int64_t idx = i < 0 ? i + len : i;
+    if (idx < 0 || idx >= len) return host_result_make_err(0);
+    return host_result_make_ok(h[2 + idx]);
+}
+
+// push_str：拼接并返回新串（纯函数）。注意：`self.output.push_str(..)` 的字段
+// 回写是否生效另行验证——若不生效，新串没有存回字段，那是独立待办，不能靠
+// 本函数糊弄。
+int64_t host_str_push_str(int64_t dst, int64_t src) {
+    if (!src) return dst;
+    if (!dst) return src;
+    size_t a = strlen((const char*)dst);
+    size_t b = strlen((const char*)src);
+    char* r = (char*)GC_malloc(a + b + 1);
+    memcpy(r, (const void*)dst, a);
+    memcpy(r + a, (const void*)src, b + 1);
+    if (getenv("ZETA_PARSE_TRACE"))
+        fprintf(stderr, "[push_str] dst=%p (len %zu, '%.20s') src=%p (len %zu, '%.20s') → '%.20s'\n",
+                (void*)dst, a, (const char*)dst, (void*)src, b, (const char*)src, (const char*)r);
+    return (int64_t)r;
+}
+int64_t push_str(int64_t dst, int64_t src) { return host_str_push_str(dst, src); }
+int64_t host_str_chars(int64_t s) { return chars(s); }
+
+// 判定族裸别名补齐（peek() 返回的单字符字符串上调用；与 libc 无同名冲突）
+int64_t is_digit(int64_t s) { return str_is_digit(s); }
+int64_t is_alphanumeric(int64_t s) { return str_is_alnum(s); }
 int64_t host_str_swapcase(int64_t s) { return str_swapcase(s); }
 int64_t host_str_removeprefix(int64_t s, int64_t p) { return str_remove_prefix(s, p); }
 int64_t host_str_removesuffix(int64_t s, int64_t p) { return str_remove_suffix(s, p); }

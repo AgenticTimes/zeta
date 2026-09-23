@@ -1,0 +1,20 @@
+// 批次 365：parse / unwrap 系 / chars / nth 按登记的契约实现——
+// Result 用运行时既有的 host_result 单元（tag 1=ok / 2=err），不用 0 哨兵
+// （nth 的元素可能是合法的 0，哨兵会误判）。
+// 注意：unwrap 的结果当前无静态类型，其后接 .len() 会派发错——断言用
+// is_empty（裸符号回退，语义可靠）；"结果带类型"归入轴 F。
+// expect: 42
+// expect: 0
+// expect: 0
+// expect: 0
+
+fn main() -> i64 {
+    let n = "42".parse()
+    println!("{}", n.unwrap())
+    let bad = "zz".parse()
+    println!("{}", bad.unwrap_or(0))
+    let cs = "hello".chars()
+    println!("{}", cs.nth(0).unwrap().is_empty())
+    println!("{}", cs.nth(9).unwrap_or(0))
+    return 0
+}

@@ -14416,3 +14416,29 @@ minimal_compiler 缺的 13 个符号需要字符、迭代器（.iter().enumerate
 1. `emit()` 读取端接进 `main.rs`（§5.5 的黑洞），承接 #86/#87。
 2. 裁决 `optimization.rs`（603 行 / 零调用者，pyramid §3.3 判据到期）。
 3. `MirGen` 拆分第一刀的前置：§4.2 列的 8 个旁路字段。
+
+## 批次 365 —— 任务 #42 收口：parse / unwrap 系 / chars / nth / iter / push_str 全部落地
+
+### 契约修订
+批次 364 登记的"Result 用 0 哨兵"被推翻：运行时里**早就有** host_result_* 三字段单元（tag 1=ok/2=err，gen.rs 与 lib.rs 都在用），且 nth 的元素可能是合法的 0，哨兵会误判。改用既有 host_result 单元。教训：定契约前先 nm/翻运行时，别发明已有的东西。
+
+### 实现（tokio_runtime_stub.c + py_additions.c）
+- `parse(s)`：整串转 i64（前后空白允许），失败 make_err。
+- `unwrap(res)`：ok → data；err → **响亮 abort**（Rust 语义即 panic）。
+- `unwrap_or(res, d)`：is_ok ? data : d。`unwrap_or_else(res, f)`：err → zeta_call1(f, err) 回调闭包。
+- `chars(s)` → 单字符字符串的 vec（与 s[i] 表示一致，UTF-8 感知）。`iter(x)` → 恒等。`push_str(dst, src)` → 拼接新串（纯函数）。
+- 判定族裸别名补齐：`is_digit` / `is_alphanumeric`（peek() 返回的单字符字符串上调用）。
+- gen.rs 方法表补 `push_str`（返回 str——不加表项结果被定型 I64，后续 .len() 派发错，实测踩过）与 `chars`（返回 "split"=vec<str>）。
+- py_additions.c 加动态分派符号 `_[dynamic]str__nth`（cs.nth(i) 于动态接收者的调用路径）。
+
+### 验证
+- 官方：**compile+link 194/194 全链接**——bootstrap_validation_test / minimal_compiler / test_suite 三个"编译通过、链接失败"的文件全部清零。
+- python_style **295 passed** / 2 failed（存量）· 语料 39/39。新增回归 t411（parse/unwrap/unwrap_or/chars/nth）。
+- 字段回写实测：`self.s.push_str(x)` 的结果正确存回字段（b.s.len()=2），无需额外机制。
+
+### 遗留观察（已登记）
+- minimal_compiler 运行 rc=0 但无输出——它的内嵌 parser/generator 逻辑跑在一条从未执行过的路径上，行为问题属下一层，不属于"链接"目标。
+- unwrap 结果当前无静态类型，其后的 .len() 会派发错（t411 用 is_empty 断言绕开）——"结果带类型"归轴 F。
+
+### 下一步
+回主线批次 301（0 成交根因 → universe/parquet 分歧 → final_value 对齐），带着新得的字符串/Result 运行时能力。

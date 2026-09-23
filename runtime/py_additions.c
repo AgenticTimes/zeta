@@ -988,6 +988,12 @@ int64_t zt_dyn_str_pct_change(int64_t v) { return py_vec_pct_change(v); }
 int64_t zt_dyn_str_abs(int64_t v) __asm__("_[dynamic]str__abs");
 int64_t zt_dyn_str_abs(int64_t v) { return py_vec_abs(v); }
 
+// 批次 365（任务 #42）：`.nth(i)` 于动态接收者——minimal_compiler 的
+// `self.input.chars().nth(pos)` 走这里；实现（vec 取元素，越界 make_err）在 tokio_runtime_stub.c，跨 .o 链接解析。
+int64_t nth(int64_t vec, int64_t i);
+int64_t zt_dyn_str_nth(int64_t vec, int64_t i) __asm__("_[dynamic]str__nth");
+int64_t zt_dyn_str_nth(int64_t vec, int64_t i) { return nth(vec, i); }
+
 __attribute__((weak)) int64_t pct_change(int64_t v) {
     return zt_maybe_vec_arity1(v) ? py_vec_pct_change(v) : v;
 }
