@@ -499,10 +499,47 @@ fn extra_ld_flags() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The option surface `main` actually parses. Batch 350 (#80 ①) exists because the
+/// previous `--help` was dead code in `compiler_config.rs` advertising 16 options the
+/// parser swallowed as input filenames; wing D of `cli_semantics_check.sh` asserts every
+/// `--flag` named here is honoured, so this text and the loop below cannot drift apart.
+fn usage_text() -> String {
+    r#"zetac — Zeta compiler
+
+Usage: zetac [OPTIONS] <input-file>
+       zetac --repl [--dump-mir]        (--repl must be the first argument)
+       zetac --explain [CODE]
+       zetac --list-stubs
+
+Options:
+  -o <file>             write output to <file>; without it the program is executed
+  --dump-mir            print canonical MIR instead of building
+  --emit-llvm           print LLVM IR instead of building (with -o: write IR there)
+  --report-untyped      list unannotated (dyn) params instead of building
+  --report-stubs        list the fake-value stubs this program calls
+  --no-link             with -o: stop after the object file, do not link
+  --strict-abi          fail on non-allowlisted ABI casts
+  --target <triple>     `wasm32` / `wasm32-wasi` link via wasm-ld; anything else is native
+  --features <list>     cfg feature set for this compilation
+  --bootstrap           compile the bundled self-host corpus
+  -h, --help            print this text
+
+Environment knobs: ZETA_DUMP_IR, ZETA_STRICT_ABI, ZETA_STRICT_PARSE,
+ZETA_STRICT_RUNTIME_DIR, ZETA_RUNTIME_DIR, ZETA_EXTRA_LDFLAGS
+"#
+    .to_string()
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     scheduler::init_runtime();
 
     let args: Vec<String> = std::env::args().collect();
+    // Checked before every early return so no flag combination can hide it: `--help`
+    // used to fall through to the input-filename arm and compile+run the argument file.
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("{}", usage_text());
+        return Ok(());
+    }
     let dump_mir = args.iter().any(|a| a == "--dump-mir");
     // Q1 (advice.md): IR dump only when requested — default compiles stay quiet.
     // Batch 348: the flag is tracked apart from ZETA_DUMP_IR because only an explicit
@@ -597,6 +634,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut input = None;
+    // `--bootstrap` returns before the loop below, so `-o` has to already be resolved
+    // here; the loop re-reads it identically, which keeps the two paths agreeing.
     let mut output = args
         .iter()
         .position(|a| a == "-o")
@@ -614,9 +653,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match args[i].as_str() {
             "-o" => {
                 i += 1;
-                if i < args.len() {
-                    output = Some(args[i].clone());
-                }
+                let v = args
+                    .get(i)
+                    .cloned()
+                    .ok_or("option `-o` expects a value (it was the last argument)")?;
+                output = Some(v);
             }
             "--dump-mir" => {}
             "--emit-llvm" => {} // handled via dump_ir; keep arg from becoming "input"
@@ -627,17 +668,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--no-link" => {} // handled via flag; keep from becoming "input"
             "--features" => {
                 i += 1;
-                if i < args.len() {
-                    features = args[i].clone();
-                }
+                features = args
+                    .get(i)
+                    .cloned()
+                    .ok_or("option `--features` expects a value")?;
             }
             "--target" => {
                 i += 1;
-                if i < args.len() {
-                    target = args[i].clone();
-                }
+                target = args
+                    .get(i)
+                    .cloned()
+                    .ok_or("option `--target` expects a value")?;
             }
-            _ => input = Some(args[i].clone()),
+            _ => {
+                // Batch 350 (#80 ①): the old arm was `input = Some(args[i])`, so every
+                // unrecognised word — including all 16 options the dead `--help` listed —
+                // became an input filename. With a real file also on the command line the
+                // typo won the slot and then lost it (last wins): silent, rc=0, program ran.
+                let a = args[i].clone();
+                if a.starts_with('-') {
+                    return Err(format!("unrecognized option `{}` (see `zetac --help`)", a)
+                        .into());
+                }
+                if let Some(prev) = &input {
+                    return Err(format!(
+                        "multiple input files: `{}` and `{}` (zetac takes one)",
+                        prev, a
+                    )
+                    .into());
+                }
+                input = Some(a);
+            }
         }
         i += 1;
     }

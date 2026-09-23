@@ -12,7 +12,7 @@
 #   且修复前 9/9 轮都是 fail:rc1（执行程序撞 E4016 桩 → exit(1)），修复后 9/9 轮 ok。
 #   ⇒ 批次 313 那份 `ir` 基线（41,655 ms/12 文件）与本批之后**不同口径**，不可直比。
 #
-# 判据形状（批次 344 的三翼 + 批次 348 的两翼 + 批次 349 的一翼 = 六翼，缺一翼锁不住）：
+# 判据形状（批次 344 的三翼 + 348 的两翼 + 349 的一翼 + 350 的一翼 = 七翼，缺一翼锁不住）：
 #   阳性翼 —— 裸跑必须"被执行"。这一翼是探测器自己的对照：`ran()` 只认运行路径自己打的
 #             `^Result: `（main.rs:930）。不能用"stdout 里有没有程序的输出"——转储文本里
 #             就含源码与函数名，本批第一版因此把 17 行 MIR 读成"执行了 17 次"。
@@ -30,6 +30,9 @@
 #   翼 C —— `--repl`（批次 349 / backlog #63）：标志要么生效要么**出声拒绝**，且会话
 #           必须自己结束。修复前 `_dump_mir` 收下即弃、三个只读标志静默忽略、
 #           EOF 之后无限打 `> `。这一翼每条断言都过 `head -c` 的保险丝（见翼 C 注释）。
+#   翼 D —— 选项**词汇表**（批次 350 / backlog #80 ①）：解析器不认的选项必须点名，
+#           多输入必须把两个都念出来，`-o`/`--target`/`--features` 掉尾缺值要说清缺的是谁，
+#           而 `--help` 只许说真话 —— 它宣传的每个长选项都得真的被解析（漂移闸）。
 #
 # 用法：./tools/cli_semantics_check.sh
 set -uo pipefail
@@ -174,6 +177,50 @@ for flag in --emit-llvm --report-stubs --report-untyped; do
 done
 want "$SRC --repl 位置错出声" 1 "$(rp_sig 'must be the first argument' '' "$SRC" --repl)"
 want "$SRC --repl 位置错判错（rc=1）" 1 "$(rp_rc '' "$SRC" --repl)"
+
+# ── 批次 350 翼 D：选项词汇表 ──
+# 修复前实测（`_ => input = Some(args[i])` 把任何字串当输入文件名）：
+#   ① `zetac --dump-mir2 f.z` 拼错的标志被后一个位置参数盖掉 ⇒ rc=0、程序照跑、一声不出；
+#   ② 唯一那份 `--help` 在 `compiler_config.rs:234`，其调用者 `from_args`（:107）在图内
+#      零调用者 ⇒ 它宣传的 16 个选项实测 16 个全被静默吞掉（含 `-h`/`--help` 自己）；
+#   ③ 两个输入文件时前一个被静默丢弃；④ `-o`/`--target`/`--features` 掉尾无值被忽略。
+# 口径承接批次 349：**拒绝类判据只钉文本**，rc 不给拒绝作证；每条"没执行"都要有
+# `ran` 的正探针压着（同文件裸跑真执行），否则"没执行"可能只是提前报错。
+echo "== 批次 350 翼 D：未知选项点名，且被吞的标志不再执行"
+D="$TMP/d.out"
+for flag in --dump-mir2 --emit-asm --incremental --verbose --report-stubs2; do
+    "$ZETAC" "$flag" "$SRC" >"$D" 2>&1; d_rc=$?
+    want "$flag 被点名（错误里有它自己）" 1 "$(grep -c "unrecognized option \`$flag\`" "$D")"
+    want "$flag 在场时被编译的程序没执行" 0 "$(grep -c '^Result: ' "$D")"
+    want "$flag 判错（rc=1）" 1 "$d_rc"
+done
+# 掉尾无值（此前静默走到"无输入"那条演示回退）
+for flag in -o --target --features; do
+    "$ZETAC" "$flag" </dev/null >"$D" 2>&1
+    want "$flag 掉尾要说清缺值" 1 "$(grep -c 'expects a value' "$D")"
+done
+# 多输入文件：此前后一个静默盖掉前一个
+"$ZETAC" "$SRC" "$SRC" >"$D" 2>&1
+want "两个输入文件要点名两个" 1 "$(grep -c 'multiple input files' "$D")"
+want "多输入时不执行" 0 "$(ran "$ZETAC" "$SRC" "$SRC")"
+# --help 必须真出声，且位置无关（修复前 `--help` 自己也被当输入文件名）
+want "--help 打出 Usage 行" 1 "$("$ZETAC" --help 2>&1 | grep -c '^Usage: zetac')"
+want "文件 + --help 仍然只打帮助（放后面也管用）" 1 \
+    "$("$ZETAC" "$SRC" --help 2>&1 | grep -c '^Usage: zetac')"
+want "--repl --help 只打帮助（早于 --repl 的分支）" 1 \
+    "$("$ZETAC" --repl --help </dev/null 2>&1 | grep -c '^Usage: zetac')"
+# 漂移闸：帮助里宣传的每个长选项，解析器必须真的认得（在 main.rs 里以字面量出现）。
+# 计数断言是这条闸自己的阳性对照 —— 抓不到选项就说明 --help 没出声，闸就成了空的。
+HELP=$( "$ZETAC" --help 2>&1 | grep -oE '\-\-[a-z][a-z0-9-]*' | sort -u )
+NH=$(printf '%s\n' "$HELP" | grep -c . )
+want "--help 至少宣传 10 个长选项（漂移闸的前提）" 1 \
+    "$( [ "$NH" -ge 10 ] && echo 1 || echo 0 )"
+LIE=""
+for o in $HELP; do
+    grep -q -- "\"$o\"" src/main.rs || LIE="$LIE $o"
+done
+want "宣传的长选项没有一个是解析器不认的（帮助不说谎）" 0 "$( [ -z "$LIE" ] && echo 0 || echo 1 )"
+if [[ -n "$LIE" ]]; then echo "       谎报项：$LIE"; fi
 
 echo "cli_semantics: rc=$rc"
 exit $rc
