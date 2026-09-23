@@ -44,7 +44,7 @@
 | #36 | 余 9 文件 / 1,019 行：benchmark_simd_vs_scalar 357（`static mut` 局部）、minimal_compiler 230…已清 3 族 | 批次 319→323 | L | 🟡 |
 | #36 附注 | 2026-09-23 晚实测：minimal_compiler 丢行已从 757 降到 **230**（停在 ：572 的 `fn main` 内部）。15 个可疑构造逐个测试**全部能解析**（原始字符串 r#".."#、多行原始字符串、`\|_\|` 闭包、std::fs 路径调用、点号续行、vec! 宏、for 元组解构、if 作参数、emoji 字符串、字符串内花括号、引用切片、区间内调方法）⇒ 剩余丢弃是**上下文组合**触发，单个构造不背锅。下一步：给 parse_program 的顶层循环加位置探针（报告最远解析到哪一行），用仪器定位而不是继续猜 | 第二会话 | M | 🟡 |
 | #39 | `s[i..]` 切片——**已验证当前解析器能处理 `..` 区间**（expr.rs:2293 分隔符同时接受 `:` 和 `..`；`&s[0..5]`、区间边界调方法均通过），757 行的真因已随文法修复消解，此条按已关闭处理，如有残留用 W1002 实测说话 | 批次 321 | M | ✅ 本会话核实 |
-| #42 | 14 个 std 方法绑定。✅ `_to_string` 已落地（批次 363，test_suite 恢复链接运行；回归 t409）。余 13 个：minimal_compiler 的 chars/iter/nth/parse/push_str/unwrap 系（调用点在 340-480 行一带已看清）+ bootstrap_validation_test 的 `_unwrap_or_else`（需先定闭包实参表示）。先做语义明确的字符串判定族（_is_empty/_is_whitespace/_clone） | 批次 323 OPEN | M | 🟡 |
+| #42 | 14 个 std 方法绑定。✅ 已落地 4 个：`_to_string`（363）、`_is_empty`/`_is_whitespace`/`_clone`（364，回归 t410）。**闭包实参决策已定（2026-09-23）**：闭包用现有 FuncAddr 约定（i64 函数地址），C 侧经 zeta_call1 回调；Result 表示用 0 哨兵（成功值本身、失败为 0），因此 _unwrap/_unwrap_or 是恒等，_unwrap_or_else(res,f) = res!=0 ? res : zeta_call1(f,0)——失败与合法 0 不可区分，minimal_compiler 玩具用法可接受，轴 B 标签单元落地后迁移。余 8 个符号按上述决策实现：_parse（strtol 全串，失败 0）、_unwrap/_unwrap_or/_unwrap_or_else、_chars（拆成单字符字符串数组，与 s[i] 表示一致）、_nth（取元素，越界 0）、_push_str（拼接返回新串；字段回写是否生效需先验证）、_iter（与 _chars 同形） | 批次 323 OPEN | M | 🟡 |
 | #38 | match 结果槽恒 I64 | 批次 322 OPEN | M | ⬜ |
 | #41 | `T::static_method` + codegen.rs:6176 缺表达式条目应报错而非崩 | 批次 323 OPEN | S | ⬜ |
 | #37 | （v1 收割未见定义体——燃到时回批次 322 记录核对） | 批次 322 OPEN | S | ❓ |
