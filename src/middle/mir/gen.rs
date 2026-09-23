@@ -11055,6 +11055,23 @@ call, no NULL-handle dereference).",
                         AstNode::BindPattern {
                             name,
                             pattern: inner,
+                        } if matches!(&**inner, AstNode::Ignore) => {
+                            // PY-A: `q @ _` — the inner pattern is the wildcard, so
+                            // the arm matches everything and the binding is the
+                            // whole point. Without this case the fallback below
+                            // lowered `_` as a *value*, and `lower_expr` gives a
+                            // wildcard `IntLit(0)`; the arm became
+                            // `scrutinee == 0`, so `match 4 { q @ _ => q + 1 }`
+                            // caught nothing and returned the match result slot
+                            // nothing ever wrote. The `=> true` reading is the one
+                            // the bare-`_` arm above already uses (#38 ⑤).
+                            self.name_to_id.insert(name.clone(), scrutinee_id);
+                            self.exprs.insert(cond_id, MirExpr::IntLit(1));
+                            self.type_map.insert(cond_id, Type::Bool);
+                        }
+                        AstNode::BindPattern {
+                            name,
+                            pattern: inner,
                         } => {
                             // x @ pattern: bind name to scrutinee, then match inner pattern.
                             self.name_to_id.insert(name.clone(), scrutinee_id);

@@ -14926,3 +14926,50 @@ minimal_compiler / test_suite / bootstrap_validation_test 三个文件已经**�
 1. #38 ⑦（构造子模式 / `if let`：批次 375 已改判排在 ⑤ 前，selfhost 剩 91 行的下游；表示层缺"取 tag/取载荷"的入口，不是半修得了的）。
 2. #38 ⑤（`q @ _` 绑定丢成 0，退出码 1 期望 5，读数在册）。
 3. §4 的 `benchmark_simd_vs_scalar` 357 行（`static mut`，跨解析+AST+MIR+运行时四层）。
+
+## 批次 380 —— `q @ _` 这条臂从来没匹配上过：内层的 `_` 被当成"一个值"去和被匹配的值比相等（#38 ⑤ 收口，并把 ⑤ 的成因改判）
+
+### 现象（改前读数用批次 379 的构建实拍，同一份源；日志 `/tmp/b380/pre.log`、`/tmp/b380/post.log`）
+| 夹具 | 写法 | 改前打出 | 改后打出 |
+|---|---|---|---|
+| `/tmp/b380/a1.z` | `fn pick(x) { match x { q @ _ => q + 1 } }`，`pick(4)` | `v=1` | `v=5` |
+| `/tmp/b380/b8.z` | 同一条 `pick`，四个输入 0/4/7/-3 | `a=1 b=1 c=1 d=1` | `a=1 b=5 c=8 d=-2` |
+| `/tmp/b380/b5.z` | 两条臂 `q @ _ => q + 1, _ => 100` | `v=100 w=100`（第一条从没进） | `v=5 w=-2` |
+| `/tmp/b380/c3.z` | 三条臂 `1 => 100, q @ _ => q + 1` | `a=1 b=100` | `a=5 b=100` |
+| `/tmp/b380/b7.z` | 语句位 `match n { q @ _ => { acc = q + 1 } }` | `acc=0`（块没进） | `acc=5` |
+| `/tmp/b380/b9.z` | 块臂里带打印 `{ println!("inside q={}", q); q + 1 }` | 只有 `ret=1`，块里一声不出 | `ret=` 之后先出 `inside q=4`、再出 `5`（拆段打印的交错见"边界"第 3 条） |
+| `/tmp/b380/d1.z` | 绑定臂带条件 `q @ _ if q > 0 => q + 1` | `a=100 b=100`（条件恒假） | `a=5 b=100` |
+| `/tmp/b380/e1.z` | `q @ 5 => q * 10, q @ _ => q + 1`，输入 5 和 7 | `lit5=50 lit7=1 g11=0` | `lit5=50 lit7=8 g11=11` |
+| `/tmp/b380/d2.z` | 被匹配值是字符串、臂返回它自己：`match s { "fixed" => "other", q @ _ => q }` | `n=<null>` | `n=hello` |
+| `/tmp/b370ap/r1.z` | 登记的原始读数（`pick(4)` 当退出码） | 退出码 1 | 退出码 5 |
+
+对照组（改前改后一字未动，证明本批没碰别的路）：`a2.z` 的裸绑定 `q => q + 1` 一直是 `v=5`；`a3.z` 的 `let w = match n { q @ _ => q + 1 }` 改前也是 `w=8`——但那是"没进臂、读到一个恰好等于 8 的旧值"（见"定位"第 3 条），所以它不能当"改前是好的"的证据；`b6.z`（`q if q > 0`，不带 `@`）一直 `v=5`。
+
+### 定位（三条，全部静态可查＋有实拍）
+1. **解析侧没有责任**：`parse_pattern` 对裸 `_` 给 `AstNode::Ignore`（`src/frontend/parser/pattern.rs:28`-`:36`），`parse_bind_pattern` 原样把它装进 `BindPattern { name, pattern: Ignore }`（`:269`-`:281`）⇒ 结构是对的，丢在下一层。
+2. **`src/middle/mir/gen.rs` 的 `BindPattern` 分支只给"内层是区间"开了特例，其余内层一律"当成一个值下型、再和被匹配值比 `==`"**（回落 `_ =>` 在 `:11093`，`lower_expr(inner)` 在 `:11095`）。内层是 `Ignore` 时，`lower_expr` 的 `AstNode::Ignore` 臂给 `IntLit(0)`（`:12925`-`:12929`）⇒ 臂条件成了 `被匹配值 == 0`。正证据是 `--emit-llvm`：`%8 = load i64, ptr %3` 之后紧跟 `%eq = icmp eq i64 %8, 0`，整条臂被这个 `icmp` 守着。带条件的 `q @ _ if q > 0` 更硬：条件是 `x == 0 && x > 0`，恒假（`d1.z` 改前两个输入都走 `_` 臂）。
+   这条与登记时的说法不同：`backlog.md:48` 的 ⑤ 写"匹配判过了但绑定值丢成 0"。实拍结论是反的——臂从没判过匹配，看到的 0 是被下型成值的 `_`，不是丢了载荷的绑定。原句不回改，改判记在这里＋本行末尾的新增段。
+3. **一个臂都不匹配时，返回的是没被写过的结果槽**：MIR 里 `match` 的结果槽只在各臂的 `then` 里被 `Assign` 写（`--dump-mir` 的 `exprs: 2: Var(2)`，之前没有任何语句写它），LLVM 侧就是 `then` 里一条 `store` + `merge` 处一条 `load`，`else` 支空转 ⇒ 读到什么算什么。实拍：`/tmp/b380/c1.z`（`match x { 1 => 5 }`，`f(2)`）稳定打 `5`（连跑 10 次同值），`a1.z` 稳定打 `1`——两个都不是源码规定的值，是栈上残留恰好等于臂自己的常量。所以"退出码 1"（登记读数）与"打 1"是同一件事的两种表现，`r1.z` 的 1 与 `main` 的返回值取自最后一条表达式（#55 那一族）叠在一起。本批不收这一档（见"边界"第 1 条）。
+
+### 修复（一个文件、纯插入 17 行：`src/middle/mir/gen.rs`，13881 → 13898 行）
+在 `:11055`-`:11071` 加一条带守卫的臂 `AstNode::BindPattern { name, pattern: inner } if matches!(&**inner, AstNode::Ignore)`：把名字绑到被匹配值的槽（`name_to_id.insert(name, scrutinee_id)`，与原分支同一句），条件直接给 `MirExpr::IntLit(1)`。"恒真"这个读法不是新造的——同一处 `match` 的裸 `_` 臂（`:10778`-`:10782`）一直是这么写的，本批只是让 `@` 右边的 `_` 走同一条规则。没新增运行时函数、没动 C 侧、没动 `src/lib.rs`、没动解析器 ⇒ 不需要 `tools/build_runtime.sh`，也没有 `.o` 要同步。
+
+### 验证
+- 新用例 `tests/python_style/t421_bind_wildcard_arm.z`（9 条 `// expect`，先跑后写）：返回值位、四个输入、字面量臂抢在绑定臂之前、语句位块臂、以及裸绑定对照（`plain=7` 改前后同值）一次钉住。JIT 与 AOT 的 9 行逐字相同（JIT 多打一行 `Result: 0`）。10 次跑同值核对做在改前二进制上（`v/a/b/c/d/lit/bind/acc/plain` 八行次次一样），所以"改前恒 1"不是抖动。
+- 额外的形态复测（都在批次 379 与 380 两个二进制上各跑一遍）：`d1.z` 带条件、`d2.z` 字符串载荷、`e1.z` 的字面量内层（`q @ 5` 改前后都是 `lit5=50`，本批没动它）、`c3.z` 的臂序（`b=100` 说明字面量臂仍然先抢）。
+- 整趟门禁（`tools/run_all.sh`，日志 `/tmp/b380/gate.log`，`gate_rc=1`）：`rc=1` 仍只由 python_style 那两条存量红解释（t231、t233）。official `compile 194/194`、`compile+link 192/194`（两条 link-only 明细与 379 一字相同：`integration_all_features` 缺 `_predict`/`_train`、`selfhost` 缺 `_as_str`/`_build_ast`/`_is_alphabetic`/`_push` ⇒ 不是本批新增）、official 诊断 `5 文件/29 行`；python_style `304 → 305 通过 / 2 失败 / 4 known-fail / 0 xpass`，多的那一条全部记到 `t421`，诊断 `193 行 / 82 文件` 逐字未动（含那 3 条"`literal` 成了独立语句"警告）；语料 `39/39 = 100%`；diff test `match=120 judged=130 rate=92.3% bad_case=0`（与 379 一字相同）；jit `ok=174 trap=331 fail=0 timeout=0 segv=0 (total 505，最小 ok=163) GREEN`——`ok 173 → 174`、`total 504 → 505`、`trap 331 → 331`：多的那条 `t421` 在 JIT 下是过而不是卡，所以只进 `ok` 不进 `trap`（与 379 的 t420 正好相反，那一条停在 `map_str_key` 的 E4016 上）；knob 23 / swallow 4 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 全部 `FAIL 0`；mbvar `19/0`；comment_drift `0`；clean_checkout `rc=0（2s，rev=a7c670ae）`。
+- 丢行尺子（`tools/truncation_inventory.sh`，release，日志 `/tmp/b380/inv.log`）：3 文件 / 533 行（357 + 91 + 85），逐文件与批次 379 一字相同 ⇒ 本批在下型层、不碰解析，#36 那行没有可收的格。
+- 锚点核对（`tools/check_abi_anchors.py`，日志 `/tmp/b380/anchors.log`）：`漂移 58 → 59 / 新 0 / 消失 1（改号配对 0）`，待归属 93 条 / 84 种未动。两份日志 `diff` 只多出一条表头：`src/middle/mir/gen.rs:11973`（`docs/ABI.md:323` 那条"重载消歧后缀"的引用），内容 `format!("{}_{}", func_name, arg_ids.len())` 被本批的 17 行推到 `:11990`（新号实读核对）。插入点之下的另外 6 条 `gen.rs` 锚点（`:11255`、`:11792`、`:11796`、`:12507`、`:12535`、`:13150`）在批次 379 的日志里就已算漂移（逐条 `grep` 命中数 1），本批没让它们多计一次。不跑 `--rebind`：干跑一次会连别人的存量搬家一起改（379 已定这一条留给锚点专项，任务 #52/#35/#37 那条线）。
+- 改前二进制怎么来的：把 `target/release/zetac` 复制成同目录的 `zetac_b380prefix`（运行时查找按二进制所在目录，复制到 `/tmp` 会链接失败——批次 379 已记），量完删除，本批提交里不留临时件。
+
+### 边界（本批没修的，实拍在册）
+1. **一个臂都不匹配时仍读没被写过的结果槽**：`/tmp/b380/c1.z` 改前改后都打 `5`（`match x { 1 => 5 }`，`x=2`），值稳定但不由源码规定。要么该在编译期要求穷尽、要么在运行期出声，这是判据选择不是漏一行，本批不动；登记表在 `backlog.md:48` 的 ⑤ 新增段末尾。
+2. **绑定臂的内层只收了"区间"和"通配"两种**：`q @ 5`（字面量）走原来的相等下型，实测改前后都对（`lit5=50`）；`q @ (a, b)`、`q @ Some(x)`、`q @ _: i64`（带类型注解的内层）没实拍，本批不写读数。带类型的模式在语句位另有展开路径（`:2485` 的 `TypeAnnotatedPattern`），绑定臂这一支没走它。
+3. **`println!` 的"字面量段 + 值段"拆分会和臂里的打印交错**：`b9.z` 改后是 `ret=` → `inside q=4` → `5`，而不是 `inside q=4` → `ret=5`。原因是批次 377 之后一条 `println!` 拆成多条输出，参数表达式在两段之间求值。与本批无关，只是这条实拍要留字。
+4. **`Array<i64>` 参数里的下标读数与本批无关**：`fn t5(xs: Array<i64>) { xs[0] + 1 }` 在两个二进制上都打 `1`，同一个 `a[0]` 在 `main` 里是 `3`（`/tmp/b380/d5.z`）；把 `q @ _` 换成裸 `q =>`、或者先 `let y = xs[0]` 再 `match y`，读数一模一样（`/tmp/b380/d4.z` 的 `t1`/`t3`）⇒ 责任不在匹配这一族，`match` 里放常量臂（`t4` → `7`）说明臂本身在跑。这条不进 #38（不是 match 的事），暂也不另立行（会净增 OPEN），读数留在本节等下一次梳理时并族。
+5. **承重裸行号**（本批一处 +17 行插入，落在 `:11054` 之后；旧号取自 `git show HEAD:src/middle/mir/gen.rs`，新号取自工作副本，两边都是实读）：`BindPattern` 那条臂旧 `:11055` → 现 `:11072`（新加的带守卫臂占了 `:11055`-`:11071`）；其回落 `_ =>` 里的注释"Other inner patterns"旧 `:11077` → 现 `:11094`、`lower_expr(inner)` 旧 `:11078` → 现 `:11095`；`lower_expr` 的 `AstNode::Ignore` 臂（注释"Wildcard / ignore expression"）旧 `:12909` → 现 `:12926`；`lower_expr` 里另一条 `AstNode::BindPattern { name, pattern }` 旧 `:12913` → 现 `:12930`（表达式位的绑定，本批没测、也没碰）。`backlog.md:48` 的 ④ 那句"`gen.rs:3236`/`:3242` 的未展开宏换成 `IntLit(0)`"在插入点之上，不受本批影响（真实位置仍是 `:3242`，批次 378/379 已核对）。
+
+### 下一批默认候选
+1. #38 ⑦（构造子模式 / `if let`：selfhost 剩的 91 行下游是它；表示层缺"取 tag/取载荷"的入口，不是半修得了的）。
+2. §4 的 `benchmark_simd_vs_scalar` 357 行（`static mut`，跨解析+AST+MIR+运行时四层）。
+3. "一个臂都不匹配 ⇒ 读未写槽"这一档的判据（上面"边界"第 1 条，最小复现 `/tmp/b380/c1.z` 已就位）——需要先定策略：编译期要求穷尽，还是运行期出声。

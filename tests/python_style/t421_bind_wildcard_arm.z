@@ -1,0 +1,68 @@
+// 批次 380：`q @ _`（绑定套通配符）这条臂从来没匹配上过。
+// `src/middle/mir/gen.rs` 的 `BindPattern` 分支只给"内层是区间"开了特例，其余内层
+// 一律走"把内层当值下型、再和被匹配值比 `==`"的回落；而内层 `_` 是 `AstNode::Ignore`，
+// 它在表达式位就是 `IntLit(0)`（`lower_expr` 的 Ignore 臂）⇒ 臂条件成了 `被匹配值 == 0`。
+// 改前实拍（批次 379 的构建，同一份源）：
+//   - `fn pick(x) { match x { q @ _ => q + 1 } }`，`pick(4)` → 打 `v=1`（应为 5）；
+//     `pick(0)/pick(4)/pick(7)/pick(-3)` 四个输入全部返回 1；
+//   - 语句位 `match n { q @ _ => { acc = q + 1 } }` → `acc=0`（块根本没进）；
+//   - 块臂里带打印时正证据最硬：`{ println!("inside q={}", q); q + 1 }` 一声不出；
+//   - 三条臂 `1 => 100, q @ _ => q + 1`：`pick(1)` 走字面量臂对，`pick(4)` 打 1。
+//   （`let w = match n { q @ _ => … }` 在 main 里改前后都是 8 —— 臂没进、读的是没被
+//   写过的结果槽，那一版栈上恰好留着 8。所以这条不能作为"改前坏"的证据，见下。）
+// 改前实拍（批次 379 的构建，同一份源，逐行）：
+//   v=1 / a=1 / b=1 / c=1 / d=1 / lit=100 / bind=1 / acc=0 / plain=7
+//   - `pick` 四个输入返回同一个 1：臂条件成了 `x == 0`，只有 `pick(0)` 真进臂，
+//     其余三次读的是从没写过的结果槽（值恒 1，10 次跑不动）——`a=1` 看着对，是碰巧，
+//     所以它不能单独当"改前坏"的证据，证据是 b/c/d 三行；
+//   - `bind=` 与 `acc=` 是同一条链的第二、第三形（返回值位、语句位的块臂）；
+//   - `plain=`（裸 `q => q + 1`）和 `lit=`（字面量臂抢在绑定臂之前）改前后一字未变，
+//     这两行是本批改动的对照组：它们本来就走对的路，本批没碰。
+// 改后逐行如下（先跑程序、按实际输出写期望）：
+// expect: v=5
+// expect: a=1
+// expect: b=5
+// expect: c=8
+// expect: d=-2
+// expect: lit=100
+// expect: bind=5
+// expect: acc=5
+// expect: plain=7
+
+fn pick(x: i64) -> i64 {
+    match x {
+        q @ _ => q + 1,
+    }
+}
+
+fn pick_mixed(x: i64) -> i64 {
+    match x {
+        1 => 100,
+        q @ _ => q + 1,
+    }
+}
+
+fn plain(q: i64) -> i64 {
+    match q {
+        q => q + 1,
+    }
+}
+
+fn main() -> i64 {
+    println!("v={}", pick(4))
+    println!("a={}", pick(0))
+    println!("b={}", pick(4))
+    println!("c={}", pick(7))
+    println!("d={}", pick(-3))
+    println!("lit={}", pick_mixed(1))
+    println!("bind={}", pick_mixed(4))
+    let mut acc = 0
+    match 4 {
+        q @ _ => {
+            acc = q + 1
+        }
+    }
+    println!("acc={}", acc)
+    println!("plain={}", plain(6))
+    return 0
+}
