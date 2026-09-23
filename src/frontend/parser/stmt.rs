@@ -705,7 +705,8 @@ fn parse_expr_stmt(input: &str) -> IResult<&str, AstNode> {
 /// the same node, but nothing parseable follows it except the `}`/`} else {` the
 /// indent preprocessor appends — hence the delimiter strip. The text here is
 /// preprocessed, so one of its "lines" can span several source lines.
-/// 4 hits in 533 files, all real mis-parses; see roadmap batch 337.
+/// Batch 337 found 4 hits, all real mis-parses; batch 338 closed 3 of them. The
+/// 23 that have appeared since then are all one shape — see the closer test below.
 fn warn_if_swallowed_prefix(expr: &AstNode, stmt_start: &str, rest: &str) {
     let word = match expr {
         AstNode::Var(n) => n.clone(),
@@ -714,6 +715,13 @@ fn warn_if_swallowed_prefix(expr: &AstNode, stmt_start: &str, rest: &str) {
     };
     let head = rest.split('\n').next().unwrap_or("").trim();
     if head.is_empty() {
+        return;
+    }
+    // A leftover that opens with a closer is the parser leaving a bracket it opened
+    // earlier on this line, so the words after that closer belong to the enclosing
+    // construct, not to a dropped word (`spawn(|| {\n …\n 42\n });`,
+    // `match 1 { 1 => { …; 7 }, _ => 0 }`, `if let 5 = t { 1 } else { 0 };`).
+    if matches!(head.as_bytes()[0], b'}' | b')' | b']') {
         return;
     }
     let stripped: String = head
