@@ -6974,46 +6974,6 @@ call, no NULL-handle dereference).",
                         .insert(id, Type::DynamicArray(Box::new(Type::I64)));
                     return id;
                 }
-                // Unimplemented builtins that would otherwise emit a FREE CALL
-                // named after themselves (an undefined symbol at link time, with
-                // zero information about the cause). Ring the bell at COMPILE
-                // time instead; the symbol is still emitted so behaviour is
-                // unchanged, but the message names the culprit.
-                if receiver.is_none()
-                    && ((method == "getattr" && !args.is_empty())
-                        || (method == "range" && !args.is_empty()))
-                {
-                    // PY-A (batch 288): the statement path reaches this guard
-                    // for dynamic-name getattr (`getattr(import_module(src),
-                    // name)` in market_data's PEP 562 facade, and
-                    // `getattr(bs, MAP[api])` in fundamental_data). The lower_expr
-                    // route already maps those to py_getattr_dynamic; here the
-                    // bare `getattr` free call leaked an undefined symbol and
-                    // killed LINKING for the whole program. Route it the same
-                    // way. Literal names keep the ghost path (t225 expects the
-                    // link failure).
-                    if method == "getattr"
-                        && args.len() >= 2
-                        && !matches!(args[1], AstNode::StringLit(_))
-                    {
-                        let a0 = self.lower_expr(&args[0]);
-                        let a1 = self.lower_expr(&args[1]);
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_getattr_dynamic".to_string(),
-                            args: vec![a0, a1],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::I64);
-                        return id;
-                    }
-                    eprintln!(
-                        "error: builtin `{}` is not implemented in this form (it would link \
-                         against an undefined symbol named `{}`)",
-                        method, method
-                    );
-                }
                 if method == "len" && receiver.is_none() && args.len() == 1 {
                     let arg_id = self.lower_expr(&args[0]);
                     let arg_ty = self.type_map.get(&arg_id).cloned();
@@ -7410,6 +7370,50 @@ call, no NULL-handle dereference).",
                         self.type_map.insert(id, Type::I64);
                         return id;
                     }
+                }
+                // Batch 405: this guard used to sit ABOVE the `getattr` arms, so
+                // it rang for forms those arms then implemented — 5 of the 6
+                // corpus lines were false alarms (compile rc=0, no undefined
+                // `getattr` in the binary). It now runs only on the ghost path.
+                // Unimplemented builtins that would otherwise emit a FREE CALL
+                // named after themselves (an undefined symbol at link time, with
+                // zero information about the cause). Ring the bell at COMPILE
+                // time instead; the symbol is still emitted so behaviour is
+                // unchanged, but the message names the culprit.
+                if receiver.is_none()
+                    && ((method == "getattr" && !args.is_empty())
+                        || (method == "range" && !args.is_empty()))
+                {
+                    // PY-A (batch 288): the statement path reaches this guard
+                    // for dynamic-name getattr (`getattr(import_module(src),
+                    // name)` in market_data's PEP 562 facade, and
+                    // `getattr(bs, MAP[api])` in fundamental_data). The lower_expr
+                    // route already maps those to py_getattr_dynamic; here the
+                    // bare `getattr` free call leaked an undefined symbol and
+                    // killed LINKING for the whole program. Route it the same
+                    // way. Literal names keep the ghost path (t225 expects the
+                    // link failure).
+                    if method == "getattr"
+                        && args.len() >= 2
+                        && !matches!(args[1], AstNode::StringLit(_))
+                    {
+                        let a0 = self.lower_expr(&args[0]);
+                        let a1 = self.lower_expr(&args[1]);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_getattr_dynamic".to_string(),
+                            args: vec![a0, a1],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::I64);
+                        return id;
+                    }
+                    eprintln!(
+                        "error: builtin `{}` is not implemented in this form (it would link \
+                         against an undefined symbol named `{}`)",
+                        method, method
+                    );
                 }
                 // 批次145 重放(批次123): builtin next(it[, default]) + opaque .next().
                 if receiver.is_none() && method == "next" && !args.is_empty() {

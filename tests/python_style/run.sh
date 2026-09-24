@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # tests/python_style/run.sh — Python 风格测试套件
 # 用例格式：`// expect: <一行输出>`（按序）；`// expect-error`（编译必须失败）；
+#           `// expect-no-compile: <子串>`（编译必须成功，且 stderr 不含该串 —— 锁误报）；
 #           `// expect-abort: <stderr 子串>`（编译成功、运行必须非 0 且 stderr 含该串）
 #           `// args: <argv...>`（可选，运行程序时传入的命令行参数）
 #           `// env: K=V`（可选，编译/运行该用例时的环境变量）
@@ -94,6 +95,14 @@ for f in "$ROOT"/tests/python_style/t*.z; do
 
     if ! "${ZC[@]}" "$f" -o "$OUTDIR/$name" >"$OUTDIR/$name.cc" 2>&1; then
         verdict bad "$name" "编译失败: $(tail -1 "$OUTDIR/$name.cc")"
+        continue
+    fi
+
+    # 批次405：`// expect-no-compile: <子串>` —— 编译 stderr 不得含该串。
+    # 编译成功 + 输出正确都不等于诊断没撒谎，误报只能这样锁。
+    want_no=$(grep '^// expect-no-compile:' "$f" | head -1 | sed 's|^// expect-no-compile: ||' || true)
+    if [ -n "$want_no" ] && grep -qF "$want_no" "$OUTDIR/$name.cc"; then
+        verdict bad "$name" "编译 stderr 含不该出现的: $want_no"
         continue
     fi
 

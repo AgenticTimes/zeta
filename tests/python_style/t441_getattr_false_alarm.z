@@ -1,0 +1,58 @@
+// 批次 405（主线批次 301 的第 0 步：那条把 triage 带偏的诊断）：`getattr` 的
+// "not implemented" 报错打在**已经实现**的形上。
+//
+// 病因（改前实拍，不是推断）：`gen.rs` 里 `lower_expr` 的调用分派是**一条长臂链**，
+// 而"未实现内置函数"的告警块（原 `:6977`）排在实现它的两条 `getattr` 臂（原 `:6862`
+// 已知 struct / 原 `:7341` 未跟接收者 + default）**之前** —— 于是它对 2~3 元的字面量名
+// 一律先喊 `error: builtin \`getattr\` is not implemented in this form (it would link
+// against an undefined symbol named \`getattr\`)`，再往下走、被那两条臂接住并正常返回。
+// 喊完之后编译成功、值也对、二进制里根本没有未定义的 `getattr` 符号。
+//
+// 改后：把那个告警块移到两条 `getattr` 臂**之后**（`range` 的三条臂本来就在它上面，
+// 逐字不变）。它现在只在真正会漏出幽灵符号的形上出声。零新增逻辑：一次搬家。
+//
+// 本批的语料读数（`tests/python_style` + `tests/unit-tests` + `pylib` + `examples` 全扫）：
+// 该 error 共 6 行、4 个文件；其中 5 行是误报（编译 rc=0、`nm -u` 无 `_getattr`），
+// 1 行是真的（t225 的 2 元无 default —— 批次 123 的故意幽灵，rc=1）。
+//
+// 为什么值得单独一批：批次 301 的笔记把"acceptance 编译里这声 error 出现十几次"
+// 记成 0 笔成交的**头号嫌疑**（roadmap `:8833`），而它其实是一条假线索 —— getattr
+// 在那里返回的 default 正是 Python 的正解。误报的代价不是噪音，是把 triage 带走。
+//
+// 已知未收（roadmap 批次 405 §五，三条）：
+// ① 2 元 + 已知 struct + 字段不存在 → `:7341` 仍改写成 FieldAccess 去读一个没有的字段
+//   （本批没动它，改前改后逐字相同）；
+// ② 1 元 / 4 元以上的 `getattr` 保持幽灵（rc=1 + 这声 error），本批实拍确认未变；
+// ③ 动态名 `getattr(obj, name)` 由 `:7341` 的 else 分支接住（改前由搬家前的块接住），
+//   两边都映到 `py_getattr_dynamic`，rc=0 逐字相同。
+//
+// 逐行期望按实际输出写（改前改后**逐字相同**；本批改的是诊断，不是值）：
+// expect: 3
+// expect: 9
+// expect: 7
+// expect: 7
+// expect: 0
+// 诊断契约（本批真正锁的东西）：上面这些形都不该再被报成"未实现"。
+// expect-no-compile: not implemented in this form
+class Point:
+    def __init__(self, x: i64, y: i64):
+        self.x = x
+        self.y = y
+
+class Wrap:
+    def __init__(self, p: Point):
+        self.p = p
+
+def pick(obj):
+    return getattr(obj, "slip", 0)
+
+def main() -> i64:
+    print(getattr(Point(3, 4), "x"))
+    w = Wrap(Point(7, 8))
+    print(getattr(w.p, "missing", 9))
+    print(getattr(w.p, "x"))
+    print(getattr(w, "p").x)
+    print(pick(1))
+    return 0
+
+main()
