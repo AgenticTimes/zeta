@@ -1,0 +1,64 @@
+// 批次 403（任务 #119，裁定表第 2 项 #38 未收的那半）：具名字段变体的**写侧**不带标签。
+//
+// 病因（改前实拍，不是推断）：带载荷的用户枚举变体，其值就是堆块 `[tag, p0, …]`，
+// 判据读 slot 0（见 `enum_is_boxed`）。元组形（`Shape::Square(5)`）自批次 396 起
+// 走 `gen.rs` 的 PathCall 支、按 `enum_variant_of` 写上 `__tag`；而**具名字段形**
+// （`Shape::Rect { w: 3, h: 4 }`）走的是 `AstNode::StructLit` 支（`gen.rs:12291`），
+// 那条支只把字面量自带的字段名抄进 `MirExpr::Struct`，从不写标签 ⇒ 块里 slot 0
+// 是 `w` 的值，判据拿它去比 tag，恒不等 ⇒ 这一臂永远落不到，值一路掉到通配臂。
+// 改前 `/tmp/b403/v3.z` 实拍：`match v { Shape::Rect{w,h} => 1, Shape::Square(a) =>
+// 2+a, Shape::Point => 3, _ => 99 }` 打 `a=7 / b=3 / c=99`（c 应为 1）。
+//
+// 改后：`AstNode::StructLit` 在写 `MirExpr::Struct` 前过一遍 `with_enum_tag`，
+// 与元组形同源。slot 1/2 逐槽读出（`edges`）是为了证明**绑定**也落对了位置，
+// 不只是"臂靠常量碰对"。`Pair { x, y }`（裸名类字面量、无 `::`）是同一条支的
+// 另一个用户，本批必须一声不出 ⇒ 一起测。
+//
+// 已知未收（roadmap 批次 403 §五）：`Rect { h: 4, w: 3 }` 打 403 而非 304 ——
+// 块布局取字面量的书写序，读侧取声明序，而 `TypeDecl::Enum` 只存载荷的**类型串**
+// （`gen.rs:91-94`），字段名在登记前就丢了，写侧无从按名重排。
+//
+// 逐行期望按实际输出写：
+// expect: area=12
+// expect: edges=304
+// expect: sq=25
+// expect: pt=0
+// expect: direct=42
+// expect: pair=30
+// expect: pairfield=1020
+enum Shape { Rect { w: i64, h: i64 }, Square(i64), Point }
+
+struct Pair { x: i64, y: i64 }
+
+fn area(v: Shape) -> i64 {
+    match v {
+        Shape::Rect { w, h } => w * h,
+        Shape::Square(a) => a * a,
+        Shape::Point => 0,
+        _ => -1,
+    }
+}
+
+fn edges(v: Shape) -> i64 {
+    match v {
+        Shape::Rect { w, h } => 100 * w + h,
+        _ => -2,
+    }
+}
+
+fn pair_sum(p: Pair) -> i64 {
+    return p.x + p.y;
+}
+
+fn main() -> i64 {
+    let r = Shape::Rect { w: 3, h: 4 };
+    println!("area={}", area(r));
+    println!("edges={}", edges(r));
+    println!("sq={}", area(Shape::Square(5)));
+    println!("pt={}", area(Shape::Point));
+    println!("direct={}", area(Shape::Rect { w: 6, h: 7 }));
+    let p = Pair { x: 10, y: 20 };
+    println!("pair={}", pair_sum(p));
+    println!("pairfield={}", p.x * 100 + p.y);
+    return 0;
+}

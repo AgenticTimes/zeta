@@ -3307,6 +3307,34 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         }
     }
 
+    /// Prepend the `__tag` slot to a boxed enum variant's field list.
+    ///
+    /// A value of a payload-carrying variant is the heap block `[tag, p0, …]`
+    /// that the arm test reads (see `enum_is_boxed`), and codegen stores the
+    /// vector in order, so the tag only has to be *first* in the list. A zero
+    /// payload count, a length that disagrees with the declaration, and a bare
+    /// class name (no `::`) all leave the list untouched — a class literal has
+    /// no tag and an all-unit enum is a bare discriminant.
+    ///
+    /// This is the same rule the tuple-ctor route applies at its own site.
+    fn with_enum_tag(
+        &mut self,
+        variant: &str,
+        mut fields: Vec<(String, u32)>,
+    ) -> Vec<(String, u32)> {
+        let tag = match self.enum_variant_of(variant) {
+            Some((_, tag, payload_n)) if payload_n > 0 && payload_n == fields.len() => Some(tag),
+            _ => None,
+        };
+        if let Some(tag) = tag {
+            let tag_id = self.next_id();
+            self.exprs.insert(tag_id, MirExpr::IntLit(tag));
+            self.type_map.insert(tag_id, Type::I64);
+            fields.insert(0, ("__tag".to_string(), tag_id));
+        }
+        fields
+    }
+
     /// Does an enum's value representation have to be a heap block?
     ///
     /// A variant with payload needs `[tag, p0, …]`, so *every* variant of that
@@ -12316,12 +12344,20 @@ call, no NULL-handle dereference).",
                     field_ids.push((field_name.clone(), field_id));
                 }
                 self.self_field_aliases.truncate(alias_mark);
-                // Create Struct expression
+                // Create Struct expression.
+                //
+                // `with_enum_tag` is load-bearing for the named-field form of a
+                // variant ctor (`Shape::Rect { w: 3, h: 4 }`): this used to copy
+                // the literal's own field list straight through, so the block
+                // had no slot 0 tag and the arm test — which reads slot 0 —
+                // never matched one. `match v { Shape::Rect { w, h } => 1, … }`
+                // fell to the wildcard and printed 99 (measured).
+                let struct_fields = self.with_enum_tag(variant, field_ids);
                 self.exprs.insert(
                     id,
                     MirExpr::Struct {
                         variant: variant.clone(),
-                        fields: field_ids,
+                        fields: struct_fields,
                     },
                 );
                 // For now, assume struct type is a generic type
