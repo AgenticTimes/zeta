@@ -1,0 +1,49 @@
+// 批次 407（主线 301 的打印族）：f-string 插值里的调用点**不产生参数类型证据**。
+//
+// 判据点：`resolver.rs:1494 collect_calls` —— 它是"哪个实参证明哪个形参是什么"
+// 的唯一取证据处（批次 399/400 的钉型与冲突回退都吃它的输出）。它的 match 有
+// If/While/For/Block/ExprStmt/Return/Let/Assign/BinaryOp 九个下钻臂，**没有 FString
+// 臂**；而同一个文件里 FString 在其它三处（`:1788`、`infer` 的 `:2931`、AST 文本读点）
+// 都是"当叶子直接答 Str"。⇒ 一个函数只要**唯一**的调用点写在 f-string 里，
+// 它的未注解形参就停在 `dyn`，返回值恢复（`unannotated_return_ty`）跟着拿到
+// PyDynamic，`gen.rs:11193` 的兜底把调用结果打成 I64，`lower_to_string`（`:3265`）
+// 于是发 `to_string_i64` —— **堆指针被当十进制整数打印**。
+//
+// 改前实拍（`/tmp/b407/p1.py`，`def rp(s): return s` + `print(f"p={rp('direct')}")`）：
+//   zeta:  p=4300204608      CPython: p=direct
+//   MIR :  rp 体内 type_map: 1: PyDynamic；main 内 to_string_i64 作用于调用结果
+// 同函数加一条"非插值"使用即可救活，证明堵点在取证据而不在打印：
+//   p8（先 `v = rp('x')`）→ 正确；p10（`print(rp('x'))`）→ 正确；
+//   p9（两处**都**写在插值里）→ 两列地址 4296813152|4296813154。
+//
+// 修法（一条臂，零新逻辑）：`collect_calls` 补 `AstNode::FString(parts) => collect_calls(parts, out)`，
+// 与 `:1531` 那条"return 里也常有调用点"同族。跨族冲突仍由批次 400 的回退管：
+// 这条臂只是让 f-string 里的实参**参与**判据，不改变任何已钉型的优先级。
+//
+// 本用例自身的改前实拍（`zetac_b407_pre`，同一份源、同一台机）：
+//   a=4373834464   b=4373834469|c=4373834471   d=Q   20
+// 那三个数字是**堆地址**，随 ASLR 每次变（同一次检出连跑两次分别得 4378372832 /
+// 4332055264）；能复现的是"它是地址、不是文本"这件事。第四条最要紧：地址串被喂进
+// `len`，**错值参与了算术**（实测三次都是 20，期望 4）—— 不只是打印难看。
+// `d` 改前就正确 —— `s.upper()` 的成员下型不看参数证据，留作对照臂。
+// expect: a=x
+// expect: b=y|c=z
+// expect: d=Q
+// expect: 4
+def wrap(s):
+    return s
+
+def shout(s):
+    return s.upper()
+
+def main() -> i64:
+    print(f"a={wrap('x')}")
+    print(f"b={wrap('y')}|c={wrap('z')}")
+    print(f"d={shout('q')}")
+    n = 0
+    for i in range(2):
+        n = n + len(f"{wrap('tt')}")
+    print(n)
+    return 0
+
+main()
