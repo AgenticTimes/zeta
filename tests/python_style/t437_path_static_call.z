@@ -1,0 +1,88 @@
+// 批次 401（backlog #41，自批次 323 起 ⬜ 未动）：`类型::小写方法(…)` 的路径调用
+// 被"名字首字母大小写"这条 PY-A 方言启发式吞掉。
+//
+// 病因（改前实拍，不是推断）：`src/middle/mir/gen.rs` 的 `AstNode::PathCall`
+// 一路按形状猜，从不问"这个名字有没有定义"——
+// ① `path.len()==1 && method != "new"` 的平台类兜底（旧 `:12464`）先把
+//    `P::one(3)` 整个吃成 `zeta_platform_obj("one", 3)` ⇒ 打的是堆地址
+//    （`/tmp/b401/s9.z` 实拍 `4347367360`/`4344130231`，编译过、退出码 0、一声不出）。
+// ② 名字恰好是 `new` 时兜底不放行，落到链末那条 `is_upper`（旧 `:12345`，
+//    "方法名首字母大写才算普通调用"）——`new` 是小写 ⇒ **一条语句都不发**：
+//    MIR 里 `Assign{lhs:2, rhs:1}` 而 exprs 表根本没有 id 1（`--dump-mir` 实拍），
+//    codegen 的 `gen_expr_safe` 对缺条目回 `const_zero` ⇒ 槽里是 0 ⇒
+//    接收者是空指针 ⇒ `Parser::parse_program+28` SIGSEGV。
+//    这就是 `tests/unit-tests/minimal_compiler.z`（761 行自举编译器）**零输出
+//    rc=139** 的直接病因；官方套件那一步只做 compile+link、从不执行二进制
+//    （`tools/run_all.sh:93-105`），所以它一直记成 PASS。
+//
+// 改后：PathCall 先查函数表（`func_ret_types` 以限定名 `Type::method` 为键），
+// 注册过的名字一律按真实调用下发（裸限定名、不带 arity 后缀，与 `p.method()`
+// 方法语法同形）。大小写启发式只在"这个名字没有定义"时才起作用。
+//
+// 逐行期望按实际输出写：
+// expect: probe=10
+// expect: one=4
+// expect: make=17
+// expect: direct=10
+// expect: variant=6
+// expect: unit=200
+struct P {
+    a: i64,
+    b: i64,
+}
+
+impl P {
+    fn new(a: i64) -> P {
+        P { a: a, b: 7 }
+    }
+
+    fn mk(a: i64) -> P {
+        P { a: a, b: 7 }
+    }
+
+    fn one(a: i64) -> i64 {
+        a + 1
+    }
+
+    fn probe(self) -> i64 {
+        self.a + self.b
+    }
+}
+
+enum Shape {
+    Circle(i64),
+    Rect(i64),
+    Point,
+}
+
+fn boxed(v: i64) -> i64 {
+    match v {
+        Shape::Circle(r) => r * 3,
+        Shape::Rect(w) => w + 5,
+        Shape::Point => 5,
+        _ => 99,
+    }
+}
+
+fn main() -> i64 {
+    // ② 的那一形：`new` 曾经整条调用不发出去。
+    let p = P::new(3);
+    println!("probe={}", p.probe());
+    // ① 的那一形：小写静态成员曾经被改写成平台句柄。
+    println!("one={}", P::one(3));
+    let q = P::mk(10);
+    println!("make={}", q.probe());
+    // 对照：同一个结构体在原地构造（不经路径调用）一直是好的。
+    let r = P { a: 4, b: 6 };
+    println!("direct={}", r.probe());
+    // 对照：具载荷枚举变体仍走批次 396 那条路（插在它后面，不能反过来吃它）。
+    println!("variant={}", boxed(Shape::Rect(1)));
+    println!("unit={}", match Color::Green { Color::Red => 100, Color::Green => 200, _ => 300 });
+    return 0
+}
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}

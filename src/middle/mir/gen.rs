@@ -12457,6 +12457,39 @@ call, no NULL-handle dereference).",
                     }
                 }
 
+                // A qualified name the Resolver has a signature for IS a call —
+                // regardless of the case of its last segment. Everything below
+                // this point is a PY-A dialect heuristic ("a capitalized bare
+                // name is a handle constructor"), and those heuristics used to
+                // run first: `Parser::new(src)` never reached a call site at all
+                // (the `new`-excluded catch-all fell through the capitalised-only
+                // general route, leaving a dangling expr id whose slot stayed 0 ⇒
+                // null `self` ⇒ SIGSEGV), while `Parser::tokenize(src)` was
+                // rewritten into `zeta_platform_obj("tokenize", …)` and printed a
+                // heap address. Ask the table before the guess.
+                if !path.is_empty() && type_args.is_empty()
+                    && self.func_ret_types.contains_key(&func_name)
+                {
+                    let mut arg_ids = Vec::with_capacity(args.len());
+                    for a in args {
+                        arg_ids.push(self.lower_expr(a));
+                    }
+                    let ret_ty = self
+                        .func_ret_types
+                        .get(&func_name)
+                        .cloned()
+                        .unwrap_or(Type::I64);
+                    self.stmts.push(MirStmt::Call {
+                        func: func_name.clone(),
+                        args: arg_ids,
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, ret_ty);
+                    return id;
+                }
+
                 // PY-A: platform class constructors (FixedSlippage(0.001),
                 // OrderCost(...), MarketOrderStyle(...), etc.) → opaque handle.
                 // method=="new" excluded — Vec::new()/DynArray::new() have
