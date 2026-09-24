@@ -16052,6 +16052,70 @@ official compile **194/194**（唯一硬断言 `run_all.sh:575`）、compile+lin
 
 回主线前的两件挡路事，都在 `gen.rs` 同一段、一起改：**#38** match 语句不进中间代码（7 个确认错例，398 之后剩哪些形需复扫）与 **#45** 格式化输出丢字（`println!("A={}", 1)` 只打 `1`）——批次 301 恢复主线后打印 `final_value` 会直接踩上 #45。另需用户一句话的是 **#112**（`zt_vec_cmp` 在"永不触手"的 `runtime/py_additions.c`）。
 
+## 批次 401（交付）—— 3.2 Lowering：`T::小写方法(...)` 在两条形状启发式之后才问函数表，于是从来没有调用点 ⇒ 槽位 0 ⇒ null `self` 当场 SIGSEGV
+
+候选来源：本批**不按"下一批默认候选"链走**（记忆规矩：开批前按已实测损害量排候选表）。裁定表第 2 项（#38 未收的半 + #45）的 20 个具名字段变体站点实测**排在一条崩溃后面**：`minimal_compiler` 在到达它们之前就 rc=139 零输出，而 `backlog.md` 的 **#41 自批次 323 起一直是 ⬜**、且它就是这条崩溃的本体 ⇒ 改判 #41。归位：刀口在 **3.2 Lowering 的 `AstNode::PathCall` 臂序**，症状读在 **4.3.b**（接收槽恒 0）与门禁可见性（官方套件从不运行二进制）。
+
+### 一、根因一句话 + 一处改动（`src/middle/mir/gen.rs` +33，纯插入）
+
+`PathCall` 的下型是一串**只看形状、从不查函数表**的 PY-A 方言启发式：`is_upper`（`gen.rs:12345`，判据是 `method` 首字母大写） gate 住"这是一次普通调用"的通用臂（`:12579`），平台类兜底臂（`:12497`，`path.len()==1 && args.len()<=8 && method != "new"`）把 `Type::anything(...)` 一律改写成 `zeta_platform_obj("<method>", …)`。于是同一个语法两种死法：`Parser::new(src)` **两条臂都不接**（`new` 被兜底臂排除、`is_upper` 又因 method 小写不成立）⇒ 调用从未生成、dest 槽停在 `store i64 0` ⇒ `self` 为空指针 ⇒ 崩在被调函数第一条解引用上（实拍 `Parser::parse_program+28`）；`Parser::tokenize(src)` **被兜底臂吞掉** ⇒ 打出来是堆地址。修法一句话：**先问表，再猜方言**——限定名在 `func_ret_types`（`gen.rs:217`，Resolver 在 `resolver.rs:3361` 注入、键是**限定名**）里就是调用。新臂 `:12460-12491` 放在批次 396 的枚举变体臂（`:12434-12458`）**之后**、平台类兜底臂**之前**，396 的行为靠顺序原样保住；`ret_ty` 从同一张表取，写进 `type_map`（不再恒 I64）。
+
+### 二、为什么这套判据此前不可能被发现
+
+`tools/run_all.sh:93-105` 对官方语料只做 compile（link 失败就 `--no-link` 记成 link-only），**从不执行二进制** ⇒ `minimal_compiler` 崩在运行时却计 PASS，全语料的"假绿"由此而来。本批新建尺子 **`tools/official_run_sweep.sh`**（官方 194 文件 compile + link + **真运行**，`-P 8`、`timeout 5`、在输出目录内跑以躲开运行时 `.o` 查找 ⇒ 落 `table.tsv`：`name\tOK|LINK-FAIL|COMPILE-FAIL\trc\t输出行数`）。**首版读数（修前）**：191 可运行 / 3 link-fail，其中 **2 崩溃**（`minimal_compiler` 139、`test_array_comparison` 133）、57 个 rc=0（**其中 48 个零输出**——抽样 4 个确认是"断言式、本就不打印"，未当作损害上报）、134 个非零退出。另建 `tools/warn_sweep.sh`（全语料 805 文件 stderr 逐模式计数）用于 §五的告警洪水定位。
+
+### 三、门禁读数（`bash tools/run_all.sh`，日志 `/tmp/b401/gate_post.txt`，ts `2026-09-24T19:11Z`，跑在代码提交前、内容与 `bbfa2299` 一致）
+
+official compile **194/194**（硬断言 `run_all.sh:575`）、compile+link **191/194**（三条 link-only 明细与批次 400 一字相同：`integration_all_features` `_predict,_train`；`quantum_basic` `_factor,_optimal_iterations,_success_probability`；`selfhost` `_as_str,_into_iter,_is_alphabetic,_push` ⇒ **本批不认领、也不会移动这个读数**）；python_style **320 passed / 2 failed / 5 known-fail / 0 xpass**（319 + 本批 t437；两红仍是存量 t231/t233）；语料 39/39；diff `match=120 judged=130 rate=92.3% bad_case=0`；knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 / mbvar 19 全 FAIL 0；comment_drift 0；clean_checkout rc=0（secs 3，rev `8fd1c90c`）；诊断 official **2 文件 / 5 行**、python_style **95 文件 / 200 行**（两条与批次 400 逐字相同 ⇒ 本批没改变任何诊断面）。**jit ok=174 / trap=346 / fail 0 / timeout 0 / segv 0→1 / total 520→521 ⇒ 这一步本批转 RED**，红在 `run_all.sh:580`（`jit_rc != 0 ⇒ rc=1`），明细 `segv: tests/unit-tests/selfhost.z`——归因见 §五②，**不是本批引起的缺陷，但由本批的可达性变化第一次暴露**。整体 **GATE_RC=1** 实拍，来源**两条**：`run_all.sh:576` 的 `py_fail != 0`（存量）＋ `:580` 的 jit（本批新出现的第二因）。
+
+### 四、行为定价：官方 194 真运行逐文件对比，只有 1 行变化
+
+| 尺子 | 读数 |
+|---|---|
+| `tools/official_run_sweep.sh` PRE(`/tmp/b401/run_post/table.tsv`) vs POST(`/tmp/b401/run_final/table.tsv`)，194 行逐字 diff | **1 行不同**：`minimal_compiler` `OK 139 0行` → `OK 134 21行`（main 第一次跑完，停在 `_min` 桩的**出声** abort：`PY-A: \`_min\` is NOT implemented in this build`）；191/191 可运行、57 rc=0/48 零输出、134 非零退出**三档一字未动** |
+| 全语料 `--dump-mir` 哈希 A/B（806 个 `.z`，`/tmp/b401/mir_ab.tsv`，两份二进制同在 `target/release/`） | **17 个 DIFF** ＝ 本批新用例 t437 ＋ 16 个存量文件（`selfhost` 的两份拷贝 `tests/unit-tests/` + `examples/` 各算一次） |
+| 那 16 个逐文件 compile rc + **真运行** stdout 对比 | compile rc 两侧逐个相同（`selfhost` 1＝link 失败、`test_v0_5_0_snippet` 101＝存量 panic）；**stdout 15 个逐字相同**（这 15 个两侧都是零输出），唯一 `OUTDIFF` 是 `minimal_compiler`；7 个文件退出码换了值（192→3、208→35、144→30、139→201、0→30…），两版都是"零输出＋非零退出"——退出码取自末表达式的值（#55 家族），值本来就在变，不构成行为损害 |
+| `zeta_platform_obj` 站点计数（同一批文件，`--dump-mir` grep） | **20 处被改成真调用**（`selfhost` 13×2、`test_module_comprehensive` 3、`main_module` 2、`test_module_simple` 1、`test_visibility` 1）；其余 9 个 DIFF 文件该计数 0→0（它们的 MIR 变化来自通用臂那侧，不来自兜底臂） |
+| 语料面（`grep -rE '\b[A-Z]\w*::[a-z_]\w*\('`，`tests` + `examples` + `pylib`） | **264 处 / 50 文件**；本批只收 7 个文件 ⇒ 其余站点的限定名**不在签名表里**（`Box::new` 59、`Vec::new` 32、`QuantumCircuit::new` 16、`String::new` 9、`Sieve::new` 6、`File::open` 6、`HashMap::new` 5 等：要么被更早的专用臂接走，要么全仓无定义） |
+
+用例 `tests/python_style/t437_path_static_call.z`（88 行，新，6 条 expect 全部实拍：`probe=10 / one=4 / make=17 / direct=10 / variant=6 / unit=200`）把三种形状一次锁死：impl 静态方法（`P::new`、`P::one`、`P::mk`）、结构体字面量直构（`P { a: 4, b: 6 }`）、以及**必须不被本批抢走的两位邻居**——批次 396 的带载荷变体（`Shape::Rect(1)`）和无载荷变体在 `match` 里的取值（`Color::Green`）。
+
+### 五、本批刻意**没有**交付的第二半，以及它的水位
+
+#41 原话有两句："`T::static_method` + codegen.rs:6176 **缺表达式条目应报错而非崩**"。第二半我实现过、量过、然后**撤了**：
+
+① 改法是在 `codegen.rs:5689 gen_expr_safe` 的"表里查不到 id"分支上 `eprintln!` 一条具名告警（而非静默 `store i64 0`）。为把它和 §一 的修复分离，专门构了一版**只含告警**的二进制（`target/release/zetac_b401_guardonly`：§一 的臂改成 `if false && …`）。正证到手：探针 `/tmp/b401/s2.z` 在该版下打出 `warning: MIR expression id 1 is referenced but was never lowered; the slot is filled with 0`——这一类**确实**是它要出声的那一类。
+② 但全语料一开（`tools/warn_sweep.sh`，805 文件）＝ **3,000,044 行 / 19 文件**（三个 43 行的筛法基准各 ~1,000,00x 行），且**带上与不带 §一 的修复计数相同**（`minimal_compiler` 的 5 处引用里本批收掉 2 处）⇒ 洪水是存量，不是本批引入。门禁的 diagnostics 步按 `warning:` grep 计数（`run_all.sh:107-111`），直接进门禁会把 official 诊断从"2 文件/5 行"打成七位数、并让后面每一批的诊断面读数失去可比性。
+⇒ 第二半**降级为已定价的登记**：告警本身设计未定（去重口径、逐 id 还是逐函数报、是否只在 `--report-*` 下开），水位数字已在册。`codegen.rs` 已逐字节还原（`git diff --stat` 只列 `gen.rs`），还原后重新构建、复跑全套，读数即 §三。
+
+### 六、jit segv 0→1 的归因（探针在 HEAD 二进制上同样崩 ⇒ 不由本批引起）
+
+`selfhost` 的 `main` 改前在第一条 `zeta_platform_obj` 上就撞 JIT 的具名 trap（`error[E4016]: \`zeta_platform_obj\` has no binding in JIT mode` ⇒ rc=1 出声）；本批把 13 处平台调用改成真调用后，程序**第一次真的走进 `tokenize`**，撞上另一个存量缺陷：
+
+- 最小复现 `/tmp/b401/j4.z`（有效代码 1 行）：`fn f(s: Str) -> i64 { return s[0]; }` ⇒ **JIT rc=139 零输出**，且在 `zetac_b401_guardonly`（＝HEAD 行为）上**同样 rc=139**；AOT 侧 `f("ab")` 打 `c=0`（应为 97）——**同一条静默错值**。
+- 机制静态可断：`--dump-mir` 显示这条下标下成的是 `DictGet { map_id: 1 }`，而 `type_map` 写着 `1: Named("Str")`；`codegen.rs:4838-4846` 把 `map_id` 的值 `int_to_ptr` 后喂给 `map_get` ⇒ `src/runtime/actor/map.rs:40 host_map_get` 解引用文本句柄（lldb 实拍：`EXC_BAD_ACCESS (code=1, address=0x709b7593288e876e)`，frame #0 `host_map_get+80`）。
+⇒ 这是 **Str 上的下标被下成 map 取元**，属 #32/#53/#301 那条"动态下标判形"线，与本批的臂序无关；本批只是让 `selfhost` 走到它。登记进 §七③，折进既有行不新开。
+
+### 七、边界与残口（OPEN 净增 0：全部折进 #41/#42/#45/#47 既有行 + 任务行，不新开 backlog 行）
+
+① `minimal_compiler` 的 21 行输出里仍有 #45/#47 家族：`println!("{}", <String>)` 打 `0`、计算得来的字符串打**堆地址**；再往后是 `_min` 桩（`100.min(x.len())`）的出声 abort——这三条就是它到不了 #119 那 17 个具名字段变体站点的原因，**#119 因此继续排在主线之后、而非"下一批默认"**。
+② `selfhost` 的 4 条 link-only 缺符号（#42：`_as_str/_into_iter/_is_alphabetic/_push`）一字未动 ⇒ 本批对"selfhost 91 行"零推进，只把它的 JIT 死法从"trap"换成"崩"。
+③ **Str 下标被下成 `DictGet`**（§六）：AOT 静默错值、JIT 静默崩溃，探针 1 行、HEAD 可复现。
+④ `gen_expr_safe` 的"缺条目"告警水位已量（§五），未接线。
+⑤ 具名限定名在表里但没有对应符号定义（trait 默认实现、跨模块裸别名）时，本批的臂会生成 declare 无 define 的调用 ⇒ 与 #17 同形；语料成员未测到（§四 compile rc 两侧逐个相同 ⇒ 本批没有新增链接失败）。
+
+### 八、锚点读数
+
+`gen.rs` 14,559 → **14,592**（+33，插入点 `:12459` ⇒ 其后所有行号位移 33）。HEAD（`8fd1c90c`，隔离 worktree `/tmp/b401/wt` 实拍）核对器读数 **30 漂移 / 11 新 / 5 消失**；本批改动后 `--rebind` 接受 `docs/ABI.md` **5 行 / 6 个数字** + `tools/baselines/abi_anchors.tsv`（`[拒改]` 34 → 33、定位失败 3 → 2），复扫 **30 / 11 / 4**；`[拒改]` 里那条"`:12518`"是**裸行号**（同括号内跟着 `gen.rs:12514` 那种全形才会自动改号），核对器不猜，手工等长改成 `:12551`（`String::new` 那条臂的 `if` 行，实测现位于 `gen.rs:12551`）⇒ 终态 **30 漂移 / 11 新 / 3 消失**，即**消失比 HEAD 少 2 条、漂移与新增一条没多**。存量 30 条按文件分组仍是 `codegen.rs` 22 / `mir/gen.rs` 4 / `runtime/` 4（批次 397-400 记录的同一批），清理仍是 #52 的活、核对器仍不在门禁里 #37。
+
+### 九、提交与推送
+
+代码批 **`bbfa2299`**（6 文件 / +175 / −11）：`src/middle/mir/gen.rs` +33（纯插入）、`tests/python_style/t437_path_static_call.z`(88, 新)、`tools/official_run_sweep.sh`(26, 新)、`tools/warn_sweep.sh`(17, 新)、`docs/ABI.md` 5/5、`tools/baselines/abi_anchors.tsv` 6/6。`src/backend/codegen/codegen.rs` 未进本批（§五）。
+
+### 十、下一批默认候选
+
+裁定表第 2 项仍未做：**#38** match 剩余形 + **#45** 格式化输出丢字（同在 `gen.rs` 一段）。但本批新出一条**比它更便宜且已定位**的候选：§六的 Str 下标（1 行探针、AOT 静默错值 + JIT 静默崩、且它是 `selfhost` 在 JIT 侧唯一挡路石）；另需用户一句话的是 **#112**（`zt_vec_cmp` 在"永不触手"的 `runtime/py_additions.c`）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
