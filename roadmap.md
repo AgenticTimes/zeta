@@ -16282,6 +16282,93 @@ official compile **194/194**（硬断言 `run_all.sh:575`）、compile+link **19
 
 裁定表第 2 项已交完（#38 剩形＝批次 403，#45 的 `format!` 桩＝本批），下一格按表是**第 3 项主线批次 301**（动态值的短 Vec 几何判形）。同层两个便宜的次位：**(a)** #42 的 JIT 绑定表——`runtime_malloc`、`str_get` 都在里面，本批 t440 又添一条同名 trap，补表比再猜一条方言便宜；**(b)** `&expr` 借用的实参族（§五④），收它同时解锁 `minimal_compiler` 的 5 处 `format!` 与 #47 那一族，是这条链上目前**唯一被量到过零推进的堵点**。仍需用户一句话的是 **#112**（`zt_vec_cmp` 在"永不触手"的 `runtime/py_additions.c`）。
 
+## 批次 405（交付）—— 主线 301 的第 0 步：`getattr` 那声 "not implemented" 是**误报**，而它把 301 的 triage 带走了
+
+> 裁定表第 3 项（恢复主线批次 301：先查 0 笔成交的原因）落下的第一格。本批不碰生成代码，
+> 只把一条**说谎的诊断**放回它该站的位置。编号说明：301 号仍由主线预占，本节点走 refactor 轨。
+
+### 一、病因（改前实拍，不是推断）
+
+`lower_expr` 是一条长臂链，而"未实现内置函数"的告警块排在**实现它的那两条 `getattr` 臂之前**：
+
+| 落点 | 改前 | 改后 | 管什么 |
+|---|---|---|---|
+| 字面量名 getattr（已知 struct / 注册句柄） | `gen.rs:6862` | `:6862`（未动） | 命中就改写成 `FieldAccess`，缺字段有 default 就发 default |
+| 字面量名 getattr（`class_of` 能恢复类名，含构造调用） | `gen.rs:7341` | `:7301`（整体上移 39 行） | 同上，外加"未跟接收者 + 有 default ⇒ 用 default" |
+| 动态名 getattr | `:7396`（块内） | 两条路都在：`:7301` 的 else 先接住 2~3 元，块只兜 4 元以上 | 都映到 `py_getattr_dynamic` |
+| **"未实现"告警块** | **`:6977`** | **`:7374-7412`（搬到两条臂之后）** | 本批唯一的改动＝搬家，零新增逻辑 |
+
+于是对 2~3 元的字面量名，它一律先喊
+
+```
+error: builtin `getattr` is not implemented in this form (it would link against an undefined symbol named `getattr`)
+```
+
+**再往下走、被那两条臂正常接住**。实测（改前二进制 `target/release/zetac_b405_pre`，sha 前缀 `74d0abca`）：`getattr(obj,"slip",0)` 喊完照样编译 rc=0、照样打正确的 `0`。
+
+### 二、"误报"二字的正证据（不只"没报错就算对"）
+
+按 `feedback-negative-assertion-needs-positive-proof`：这句话断言的是"会链到未定义符号 `getattr`"，
+那就去二进制里找那个符号，而不是只看退出码。
+
+| 用例 | 该 error 行数 改前→改后 | 编译 rc | `nm -u` 里 `_getattr` | 程序输出 改前→改后 |
+|---|---|---|---|---|
+| `t215_getattr_ctor_field` | 3 → **0** | 0 | **无** | `3 7 9` → 同 |
+| `t219_getattr_loud` | 1 → **0** | 0 | **无** | `0` → 同 |
+| `t222_getattr_default` | 1 → **0** | 0 | **无** | `99` → 同 |
+| `t225_getattr_no_default` | 1 → **1（保留）** | **1** | 链接失败，二进制没生成 | — |
+| `t441_getattr_false_alarm`（新增，58 行） | 4 → **0** | 0 | 无 | `3 9 7 7 0` → 同（逐字） |
+
+仓内 `getattr` 出现于 **10 个 `.z`**（`grep -rl 'getattr' --include='*.z' .`），改前打这条 error 的只有上表 4 个文件、共 **6 行**：**5 行误报、1 行是真的**（t225 的 2 元无 default ＝ 批次 123 故意留的幽灵，红线不碰）。
+⇒ roadmap `:8833-8836` 记的"acceptance 编译里这声 error 出现十几次"发生在**仓外那份 acceptance 语料**上（模块多、`getattr(g,…)` 密），仓内这一族只有 6 行。
+
+边界四条（双二进制实拍，改前改后逐字相同）：**1 元** `getattr(obj)` ⇒ 仍喊 + 链接失败 rc=1；**动态名 2 元** `getattr(obj,name)` ⇒ 两侧都不喊、rc=0（改前由搬家前的 `:7396` 接，改后由 `:7301` 的 else 接，同一个 `py_getattr_dynamic`、同样的两个实参顺序）；**t225** ⇒ 喊 + rc=1 保留；**已知 struct 缺字段 + default** ⇒ 改前改后都发 default。
+
+**结构验收**：10 个含 `getattr` 的文件 `--dump-mir` 双二进制逐字相同（`same`×10）⇒ 本批一行生成代码都没改，改的只是"关于代码的说法"。
+
+### 三、为什么值得单独一批（损害量，不是"清噪音"）
+
+误报的代价不是噪音，是**把 triage 带走**：批次 301 的笔记把这声 error 记成 0 笔成交的"头号嫌疑"（roadmap `:8833-8836`："这些调用点返回垃圾/0，`x or []` 于是恒为 `[]`"），而 getattr 在 3 元字面量名这一形上返回的 default **正是 Python 的正解**（属性不存在 ⇒ 给默认值）——这一格在仓内实拍成立（t222 的 `getattr(obj,"missing",99)` → `99`、t441 的 `getattr(w.p,"missing",9)` → `9`），**推广到 acceptance 那一格是推断**（`getattr(g,"target_etfs_list",[])` 同形，但夹具不在仓里，无法端到端复现，见 §五③）。这条嫌疑从今天起可以划掉；照笔记往下查会一直查一只没病的器官。
+
+同时它污染的是批次 320 立起来的那条"编译期诊断可见"通道（docs/ABI.md 附 B#9）：一条会说谎的 `error:` 让"喊了的就不必再看"这个默认信任失效。
+
+**新增的锁**：`tests/python_style/run.sh:101-107` 加一条断言 `// expect-no-compile: <子串>`（编译必须成功 **且** stderr 不含该串）。取锁的正证据＝拿**改前**二进制跑套件：`FAIL t441_getattr_false_alarm (编译 stderr 含不该出现的: not implemented in this form)`，`323 passed, 3 failed`；换回改后 ⇒ `324 passed, 2 failed`。这条枪不是空枪。
+
+### 四、门禁（`bash tools/run_all.sh`，GATE_RC=1）
+
+| 项 | 改前（批次 404 收尾） | 改后 | 归因 |
+|---|---|---|---|
+| official compile | 194/194 | **194/194** | 未动 |
+| official compile+link / link-only | 191/194 · 3 | **191/194 · 3** | 未动 |
+| python_style | 323 passed / 2 failed | **324 / 2** | +1＝t441；红的仍只有 t231/t233（`run_all.sh:576`，GATE_RC=1 的唯一来源） |
+| 语料 | 39/39 | **39/39** | 未动 |
+| jit sweep | ok=174 trap=350 total=524 | **ok=174 trap=351 total=525** | 多的那一条＝t441 自己（`Counter`-式结构体字面量 → `runtime_malloc`，还是 #42 那张绑定表）；`fail=0 timeout=0 segv=0`，判据 GREEN |
+| 诊断 official | 2 文件 / 5 行 | **2 / 5** | 未动（该口径只数 `warning:`/`PY-A:`，误报的 `error:` 本来不在读数里——这也是它能长期在场的原因） |
+| 诊断 python_style | 97 文件 / 202 行 | **98 / 203** | t441 自己那一条 `getattr on untyped receiver uses the default` |
+| diff / mbvar / comment_drift / clean_checkout | — | 全 rc=0 | 未动 |
+
+### 五、未收（三条，全部本批实拍或静态定位，OPEN 净增 0）
+
+1. **已知 struct + 字段不存在 + 无 default** ⇒ `:7301` 仍把它改写成 `FieldAccess` 去读一个**没有的字段**（`field_exists.is_some() || args.len() == 2` 那半句）。改前改后逐字相同，本批没动——它是"静默读垃圾"，比 t225 那条响亮幽灵更坏，但收它要一并裁决 t225 的红线，另计一格。
+2. **1 元 / 4 元以上 `getattr`** 保持幽灵（rc=1 + 这声 error）。本批实拍确认未变，不是缺口。
+3. **主线 301 的三条原读数仍未结**，本批只划掉其中一条嫌疑。两条新量到的约束：**(a)** acceptance 夹具**不在仓里**——`/tmp/wl/drv_accept.py` 引 `backend.strategy.wufu_constants` 与 `strategies.code.jq_wufu_local`，全盘 `find` 无此项目（`jq_wufu_local*`、`wufu*` 目录各 0 命中），`grep -rln 'run_backtest' --include='*.z' .` **零命中**（rc=1；仓里唯一的这个名字是 `src/middle/mir/gen.rs:3660` 的一句注释）⇒ 301 的端到端复现今天跑不起来，要恢复得先把夹具落进仓；**(b)** 已定位的短 Vec 几何判形落在 **`runtime/py_additions.c:3475 zt_dyn_vec_hdr`**，那是"永不触手"清单上的一条 ⇒ 需要用户一句话。（`#32` 那半已在 `6ea8f063` 收过：`1..7` 元素列表不再误拒。）
+
+### 六、锚点（`tools/check_abi_anchors.py`）
+
+本批动的是 `gen.rs` 里一次 39 行的整体搬家 ⇒ 该区之后的文档引用全漂：**改前读数 漂移 61 / 新 11 / 消失 4**（批次 404 收尾是 30/11/3）。其中 `消失` 多出的那条是 `tests/python_style/run.sh:95`——我自己给 runner 加 8 行 ＋ 文件头 1 行把它推到 96，工具按"无唯一配对"拒改，故手工把 docs/ABI.md 的两条引用改到 `run.sh:96` 与 `run.sh:136-142`（＋9）。
+随后 `--rebind`：**改写 22 行 / 43 个数字**，基线随之刷新 251 个锚点。**复核读数：漂移 30 / 新 11 / 消失 3 ⇒ 与批次 404 收尾逐字相同**，剩下的 3 条消失（`py_additions.c:2650`、`gen.rs:3472`、`gen.rs:10309`）是存量、非本批制造。
+`docs/ABI.md` 与 `tools/baselines/abi_anchors.tsv` 均 **24/24、32/32 等行替换**（`git diff --numstat`）⇒ 行数不变。
+
+**取数过程中的一个坑（复现了 `feedback-shell-measurement-traps` 第 15 条）**：第一版 MIR A/B 写成 `files=$(grep -rl …)` ＋ `for f in $files`，在 zsh 下变量**不按空白分词** ⇒ 整串当一个词，读数打成 `files=1 mir_changed=0`，看着像"全绿"其实是空壳。改成 `… | while IFS= read -r f` 后才是真正的 10 个文件、10 个 same。
+
+### 七、提交与推送
+
+代码批 **`f4793586`**（5 文件 / +167 / −96）：`src/middle/mir/gen.rs` +44/−40（14633→14637）、`tests/python_style/run.sh` +9、`tests/python_style/t441_getattr_false_alarm.z`（新，58 行）、`docs/ABI.md` 24/24、`tools/baselines/abi_anchors.tsv` 32/32。已推 `agentic`：`84cbae38..f4793586`，`git rev-list --count agentic/bootstrap..HEAD` = **0**。双二进制留在 `target/release/`：`zetac_b405_pre`（`74d0abca…`）/ `zetac_b405_post`。
+
+### 八、下一批默认候选
+
+301 剩下的两格（选股数量不一致、`final_value`）都被 §五 那两条约束挡住：一条要**用户一句话**（`zt_dyn_vec_hdr` 在永不触手的 C 文件里），一条要**把 acceptance 夹具落进仓**。所以按 ROI 排，同层还能自己走的是批次 404 §八 那两条：**(a)** #42 的 JIT 绑定表（本批 jit `trap 350→351` 又是它，`runtime_malloc` 一条就能把 t441 从 trap 变 ok）；**(b)** `&expr` 借用的实参族（#47/#42），它是 `minimal_compiler` 那 5 处 `format!` 目前唯一被量到的堵点。次位：§五①（已知 struct 缺字段读垃圾）——它和 t225 的红线是同一件事的两面，要一起裁。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
