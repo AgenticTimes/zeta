@@ -1,0 +1,52 @@
+// 批次 399（4.3.b / 类型基础②）：调用点的接收槽必须与被调方自己的签名同源。
+//
+// 病因（实测，PRE 编译器）：`def scale(v): return v * 1.0` 的被调方已经是
+// `define double @scale(double)`，而调用点那个空槽的类型来自 resolver 的声明表 ——
+// 未标注 `def` 在那张表里是 `Tuple([])`（unit），于是 double 被写进 int 槽、按位
+// 重读成 `4602678819172646912`（0.5 的 IEEE-754 位型，docs/ABI.md §2 R7 数的就是这类）。
+//
+// 本批把两处都接进同一张表：
+//   1. 体的算术形状（`v * 1.0`）与
+//   2. 纯转发（`return v`、`return v + v`）里参数的**调用点证据类型**，
+//      —— 参数在 AST 里恒为 `"dyn"`，而 `funcs` 表已经把它按实参证成 `F64`。
+// 三条读数与 `python3` 同形状程序逐字相同（浮点 repr 仍按 `%f` 六位，见 docs/ABI.md R8/#48）。
+//
+// 未收窄、未越界的两格保持原样，故不入本例：声明与实现不一致（`-> i64` 却 `return 2.7`）
+// 仍按位重读，那是任务 #33；只有整数证据的 `/ % //` 仍按整数走（`tdiv(3, 2)`→`1`），
+// 那是 numeric 方言族 #46/#48/#51。
+// expect: scale=0.500000
+// expect: copied=0.500000
+// expect: twice=0.500000
+// expect: forward=1.250000
+// expect: count=3
+// expect: decl_i64=3
+// expect: decl_f64=3.000000
+def scale(v):
+    return v * 1.0
+
+def twice(v):
+    return v + v
+
+def forward(v):
+    return v
+
+def count(v):
+    return v + 1
+
+def decl_i64(v: i64) -> i64:
+    return v + 1
+
+def decl_f64(v: f64) -> f64:
+    return v + 1.0
+
+fn main() -> i64 {
+    println!("scale={}", scale(0.5))
+    copied = scale(0.5)
+    println!("copied={}", copied)
+    println!("twice={}", twice(0.25))
+    println!("forward={}", forward(1.25))
+    println!("count={}", count(2))
+    println!("decl_i64={}", decl_i64(2))
+    println!("decl_f64={}", decl_f64(2))
+    return 0
+}

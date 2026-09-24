@@ -26,6 +26,37 @@ pub struct Mir {
 }
 
 impl Mir {
+    /// 批次 399 (类型基础②): the ONE entry saying what this function's `ret`
+    /// carries, so the callee's LLVM signature and the caller's destination slot
+    /// stop being decided by two different rules.
+    ///
+    /// Before this batch the signature came from a private copy of this rule
+    /// inside codegen (`infer_fn_return_type`) while the caller's slot came from
+    /// the resolver's declaration table (`func_ret_types`) — which cannot see
+    /// what the body turned out to be. Measured on `def scale(v): return v * 1.0`:
+    /// the callee emitted `define double @scale(double)`, the caller's slot stayed
+    /// int, and `println!("{}", scale(0.5))` printed 4602678819172646912 — the
+    /// IEEE-754 bit pattern of 0.5 read as an integer.
+    ///
+    /// The rule is codegen's existing one, unchanged: the FIRST top-level
+    /// `return` whose value carries a type decides it, float kinds are kept,
+    /// anything else travels in the i64 word. Nested `return`s are still not
+    /// consulted (codegen's return-site converter covers them).
+    pub fn signature_ret_ty(&self) -> Option<Type> {
+        for stmt in &self.stmts {
+            if let MirStmt::Return { val } = stmt {
+                if let Some(ty) = self.type_map.get(val) {
+                    return Some(match ty {
+                        Type::F32 => Type::F32,
+                        Type::F64 => Type::F64,
+                        _ => Type::I64,
+                    });
+                }
+            }
+        }
+        None
+    }
+
     /// T0 (refactor.md B.5): byte-stable text form for `--dump-mir` and
     /// `tools/mir_diff.sh`. The four arenas are `HashMap`s, so derived `Debug`
     /// reorders most of its output between two compiles of the SAME input

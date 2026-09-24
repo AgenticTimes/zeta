@@ -1398,18 +1398,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
     }
 
     fn infer_fn_return_type(&self, mir: &Mir) -> inkwell::types::BasicTypeEnum<'ctx> {
-        for stmt in &mir.stmts {
-            if let MirStmt::Return { val } = stmt {
-                if let Some(ty) = mir.type_map.get(val) {
-                    return match ty {
-                        Type::F32 => self.context.f32_type().into(),
-                        Type::F64 => self.f64_type.into(),
-                        _ => self.i64_type.into(),
-                    };
-                }
-            }
+        // 批次 399: the answer comes from `Mir::signature_ret_ty`, the same entry
+        // the caller-side slot pass reads, so the two halves of a call cannot
+        // drift apart again. The mapping below is this function's old rule.
+        match mir.signature_ret_ty() {
+            Some(Type::F32) => self.context.f32_type().into(),
+            Some(Type::F64) => self.f64_type.into(),
+            _ => self.i64_type.into(),
         }
-        self.i64_type.into()
     }
 
     pub fn gen_mirs(&mut self, mirs: &[Mir]) {

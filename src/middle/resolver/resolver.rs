@@ -2062,6 +2062,7 @@ impl Resolver {
         // hit, ambiguous names simply stay untyped.
         let mut classes: Vec<String> = self.type_decls.keys().cloned().collect();
         classes.sort();
+        let sig_params = self.sig_params_snapshot();
         // Batch 300: same recovery as `lower_to_mir` does for MIR's signature
         // table — a module-level global assigned from an UNANNOTATED function
         // (`pf = make(…)`) otherwise carries UNIT, and every `pf.<attr>` read then
@@ -2072,7 +2073,9 @@ impl Resolver {
                 if !matches!(fty, Type::Tuple(inner) if inner.is_empty()) {
                     continue;
                 }
-                if let Some(t) = Self::unannotated_return_ty(&defs, fname, &classes, &declared) {
+                if let Some(t) =
+                    Self::unannotated_return_ty(&defs, fname, &classes, &declared, &sig_params)
+                {
                     *fty = t;
                 }
             }
@@ -2718,6 +2721,18 @@ impl Resolver {
         })
     }
 
+    /// Batch 399: parameter types as the SIGNATURE TABLE holds them, which is what
+    /// the call-site refinement (see the `registered_funcs` rewrite) updates. The
+    /// AST copies in `registered_func_defs` keep their original `()` annotations,
+    /// so anything that infers from a body must read the table to see the same
+    /// parameters the callee is compiled with.
+    fn sig_params_snapshot(&self) -> HashMap<String, Vec<(String, Type)>> {
+        self.funcs
+            .iter()
+            .map(|(n, (params, _, _))| (n.clone(), params.clone()))
+            .collect()
+    }
+
     /// Batch 300: the return type of an UNANNOTATED `def`, recovered from its own
     /// `return` statements. With no `-> …` the signature registers as UNIT, and
     /// that unit flows into the caller: `pf = make(1000.0)` leaves `pf` with no
@@ -2727,11 +2742,20 @@ impl Resolver {
     /// pattern of 1000.0 — then aborted).
     /// Only syntactic shapes are recovered, and only when EVERY `return` in the
     /// body agrees; anything uncertain keeps the previous answer.
+    /// Batch 399 (类型基础②): `sig_params` is the resolver's OWN signature table
+    /// (`funcs`), whose parameter types include the call-site refinement that
+    /// rewrites the AST string in `registered_funcs` — but NOT the parallel
+    /// `registered_func_defs` copy this recovery reads. Without the overlay, a
+    /// function that merely forwards a float it received
+    /// (`def forward(v): return v`, called as `forward(1.25)`) recovered no type
+    /// here, so the caller's slot stayed i64 while the callee's signature was
+    /// already `double` (measured: `h=4608308318706860032`, 1.25's bit pattern).
     fn unannotated_return_ty(
         defs: &[AstNode],
         name: &str,
         classes: &[String],
         fn_rets: &HashMap<String, Type>,
+        sig_params: &HashMap<String, Vec<(String, Type)>>,
     ) -> Option<Type> {
         fn is_unit(t: &Type) -> bool {
             matches!(t, Type::Tuple(inner) if inner.is_empty())
@@ -2793,6 +2817,32 @@ impl Resolver {
                 AstNode::FloatLit(_) => Some(Type::F64),
                 AstNode::Lit(_) => Some(Type::I64),
                 AstNode::Bool(_) => Some(Type::Bool),
+                // Batch 399: arithmetic that the lowering will type FLOAT. The rule is
+                // `gen.rs`'s own (its numeric arms, e.g. gen.rs:4323-4330): any float
+                // operand on `+ - * / // % **` makes the result F64. `//` is spelled
+                // `floordiv` by the time it reaches the AST (indent.rs rewrites it into
+                // a WORD so the two dialects stay distinguishable), so both spellings
+                // count. NOTHING is claimed for int-only operands — measured on the PRE
+                // compiler `tdiv(3, 2)` → `1`, `fdiv(7, 2)` → `3`, `mdiv(7, 2)` → `7`,
+                // i.e. `/` and `%` disagree with CPython on their own; that is the
+                // numeric-dialect family (#46/#48), not this batch's business.
+                // Comparison and `and`/`or` are deliberately NOT inferred either: this
+                // batch only ever fills a blank slot, and a Bool/PyDynamic guess has no
+                // measured member today.
+                AstNode::BinaryOp { op, left, right } => {
+                    let l = infer(left, seen, aliases, classes, fn_rets);
+                    let r = infer(right, seen, aliases, classes, fn_rets);
+                    let is_f = |t: Option<&Type>| matches!(t, Some(Type::F32) | Some(Type::F64));
+                    if matches!(
+                        op.as_str(),
+                        "+" | "-" | "*" | "/" | "//" | "floordiv" | "%" | "**"
+                    ) && (is_f(l.as_ref()) || is_f(r.as_ref()))
+                    {
+                        Some(Type::F64)
+                    } else {
+                        None
+                    }
+                }
                 AstNode::StructLit { variant, .. } => class_ty(variant, classes),
                 AstNode::DictLit { entries } => Some(Type::Named(
                     "map".to_string(),
@@ -2932,6 +2982,30 @@ impl Resolver {
                 seen.insert(pn.clone(), t);
             }
         }
+        // Batch 399: the signature table is where a parameter's type actually lives.
+        // An un-annotated Python parameter is spelled `"dyn"` in the AST, which seeds
+        // as PyDynamic — "nothing known yet" — while the SAME parameter carries a
+        // refined type in `funcs` as soon as a call site proves one (the call-site
+        // rewrite at the `registered_funcs` update). Measured on the PRE compiler,
+        // `def forward(v): return v` reached this point with `seen={"v": PyDynamic}`
+        // and `sig=[("v", F64)]`, so the caller's slot stayed int while the callee
+        // was already compiled `double` → `h=4608308318706860032`, 1.25's bit pattern.
+        // A real declaration always wins; PyDynamic/Variable is the table's own
+        // spelling of "still unknown" and never becomes a claimed type.
+        if let Some(sig) = sig_params.get(name) {
+            for (pn, pt) in sig {
+                if pn == "self" || matches!(pt, Type::PyDynamic | Type::Variable(_)) {
+                    continue;
+                }
+                let blank = matches!(
+                    seen.get(pn),
+                    None | Some(Type::PyDynamic) | Some(Type::Variable(_))
+                );
+                if blank {
+                    seen.insert(pn.clone(), pt.clone());
+                }
+            }
+        }
         let mut aliases: HashMap<String, String> = HashMap::new();
         let mut cands: Vec<Option<Type>> = Vec::new();
         walk(body, &mut seen, &mut aliases, &mut cands, classes, fn_rets);
@@ -3054,6 +3128,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             .iter()
             .map(|(n, (_, r, _))| (n.clone(), r.clone()))
             .collect();
+        let sig_params = self.sig_params_snapshot();
         let ret_types: HashMap<String, Type> = self
             .get_all_func_signatures()
             .iter()
@@ -3093,8 +3168,14 @@ fn shim_class_normalize(t: &Type) -> Type {
                 // linked to the `_values` stub). Recover the type from the body's
                 // own `return` statements when they agree.
                 let ret = if matches!(ret, Type::Tuple(ref inner) if inner.is_empty()) {
-                    Self::unannotated_return_ty(&defs_snapshot, name, &class_names, &decl_rets)
-                        .unwrap_or(ret)
+                    Self::unannotated_return_ty(
+                        &defs_snapshot,
+                        name,
+                        &class_names,
+                        &decl_rets,
+                        &sig_params,
+                    )
+                    .unwrap_or(ret)
                 } else {
                     ret
                 };
