@@ -15276,3 +15276,50 @@ W1004 那句话是"这一行有个词被忽略了"。前四行共 25 处的共�
 2. 边界 3：`x: float` 全局被整数字面量赋值时两头约定（写侧 `sitofp` 后存位模式，或读侧不做位重解读）。
 3. 边界 2：给 env 带类型（轴 B/F），收掉余下 3 条 `fptosi`。
 4. handoff §4 的 P1 丢行：`selfhost` 91（表示层，`codegen.rs:6210-6211` 丢 `variant`）、`quantum_basic` 85（要动 `runtime/py_additions.c`，本会话不动该文件）。
+
+---
+
+## 批次 388 —— 一次读路径改动的去留判定（回退，零代码入库）+ `selfhost` 91 行丢码定位到两个解析成员
+
+pyramid 位置：这批改的是 **2.3 名称解析**（模块全局有两份真相）撞在 **4.3.b 值表示**（同一格 64 位、读侧决定怎么解释）上；定位出来的那 91 行属于 **2.2 语法分析**（顶层项读不下就截断）。
+
+### 一、去留判定（axis G 的 t425 那一格）
+
+做法：模块体 `let` 绑定的模块全局，建槽后镜像进 env（`gen.rs` 两处 `let` 各加一次 `env_store`），读侧把这类槽改成落穿到 env 读。
+
+| 读数 | 改前（HEAD=`682c949b`） | 改后 |
+|---|---|---|
+| `python_style` | 310 passed, 2 failed, 5 known-fail, 0 xpass | 278 passed, 34 failed, 3 known-fail, 2 xpass |
+| `t425_module_body_stale_read` | KNOWN-FAIL | XPASS（目标确实被这条路径打到） |
+| `t402_tuple_variable_membership` | known-fail | XPASS |
+| `t183_dict_copy` | PASS（`/tmp/b388/ps_revert.log:100`） | FAIL，`expected: 1 \| 2 \| 99 \|` / `actual: \| `（`/tmp/b388/ps.log:111-113`） |
+
+回退理由：34 例回归（`t127/t155/t183/t190/t191/t193/t194/t198/t200/t201/t202/t203/t204/t206/t207/t208/t210/t211/t226/t229/t231/t233/t25/t262/t274/t292/t299/t31/t40/t423/t86/t88/t91/t92`），几乎全是容器/pandas 句柄族。
+
+**归因未完成**：只测到"把模块体读改走 env 会塌容器族"，没测到是哪一步塌的。`env_store` 的位模式分支要求声明类型是 `F32/F64` 且值真是浮点，容器句柄走的是原样存的那支，所以"按 f64 位模式重新取出"这个猜测**不成立**；剩下的候选是"换读路径后，读回值的静态类型来源从槽（含标注精化）换成 `global_ty_of`（从字面量粗推）"——这条也还没测。补丁留在 `/tmp/b388/b388-attempt1.patch`（86 行），要接着查就从它起。
+
+回退后复测：`python_style: 310 passed, 2 failed, 5 known-fail, 0 xpass`，红名仍是 t231/t233，与红线一致；`gen.rs` 工作区干净。
+
+### 二、`selfhost` 91 行丢码定位（零代码改动）
+
+实拍（`./tools/truncation_inventory.sh`，与 `zetac --dump-mir tests/unit-tests/selfhost.z` 一致）：
+
+- `warning: [W1002] tests/unit-tests/selfhost.z:89: 91 line(s) at the end of the input were NOT parsed`，文件共 179 行 ⇒ 后半截全丢，首个未解析文本是 `fn build_ast(tokens: Vec<Token>) -> Ast {`。
+
+分成员实测（每份单独编译，数 W1002 命中，`/tmp/b388/`）：
+
+| 夹具 | 内容 | W1002 |
+|---|---|---|
+| `f_fn.z`（89..126 行原样） | 整个 `build_ast` | 1 |
+| `f_iflet.z` | `let name = if let Token::Ident(n) = t { 1 } else { 0 };` | 1 |
+| `f_matches.z` | `while !matches!(t, Token::BraceClose) { }` | 1 |
+| `f_ctor.z` | `fn f(t: Token) -> Ast { Ast::Lit(0) }` | 0（对照，证明夹具本身不误伤） |
+| `a_min/b_min/c_min` | `fn build_ast(tokens: Vec<Token>) -> Ast {..}` 及 `Vec<i64>`/裸 `Token` 两个变体 | 0 ⇒ **签名不是原因**，旧台账里"`codegen.rs:6210-6211` 丢 `variant`"这条对不上本次读数 |
+
+结论：这 91 行不是一个 bug，至少两个独立成员（`let` 值位 `if let`；条件位 `matches!`），且丢掉的区间里还有 `impl`/`enum`/`r#"..."#`，收完这两个大概会继续露下一层——所以它不是一批的活，得按成员逐批收。批次 382 收过"值位 `if let`"，但 `let name = if let ... {} else {}` 这种**带块体 + 绑定模式在 `let` 初值位**的写法仍未收下（本次实测，孤例级，两输入复现待下批补）。
+
+### 下一批默认候选
+
+1. 2.2：`let` 初值位的 `if let`（块体两臂）——先补两输入复现，再定最小修法。
+2. 2.2：`matches!` 作为 `while` 条件。
+3. 4.3.b/2.3：t425 那格要先做归因（类型来源换了还是别的），不许直接再上读路径。
