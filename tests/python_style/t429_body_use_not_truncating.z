@@ -1,0 +1,96 @@
+// 批次 393：函数体里的 `use 路径;` 整项解析不了。语句分发器（`src/frontend/parser/stmt.rs`
+// 的 `parse_stmt`）此前没有 `use` 臂，`use` 只在顶层项列表里有规则 ⇒ 体内 `use`
+// 让 `parse_block_body` 失败 ⇒ 它所在的**整个顶层项**被丢掉 ⇒ 该行之后的每一项都不进程序
+// （W1002）。路径深度、`{A, B}` 列表写法都一样：单段、多段、带大括号三种拼法在本批之前同
+// 一个病因（三形分离实测见下）。
+// 修法三段，都复用已经在跑的机器，没有新增运行时概念：
+//   1) `stmt.rs` 的分发器把 `parse_use_stmt` 挂进 pass/del/assert 那一格（nom 的 21 臂上限，
+//      只能嵌套 `alt`），复用顶层 `use` 已有的 `parse_path` + `parse_use_targets`；
+//   2) `top_level.rs` 的 `hoist_statics_from::from_block` 顺手把体内 `AstNode::Use` 提升到模块
+//      级、原地留一个 `AstNode::Ignore`。提升不是锦上添花：`Resolver::register` 只遍历顶层项
+//      （`src/middle/resolver/resolver.rs:782`），留在体里的 `use` 到不了加载模块的那一步。
+//      同一路径只提一份（`pulled.contains`）—— 提两份也只是把同一批声明重注册一遍。
+//   3) 提升按 `in_body` 收窄：`AstNode::Block` 既是从函数体走到的列表，也是顶层
+//      `import a::b;` 在 `parse_python_import` 里 lowers 成的那个项。对后者动手会把一条
+//      本来就地生效的导入搬到模块级 + 留个 `Ignore`，实测撞掉批次 337 的 `import` ≡ `use`
+//      MIR 等值红线（门禁 `import_form` 4 条 FAIL，`Return val` 4 → 5）。分开两半实测：
+//      只改 1) 不改 2) ⇒ `import_form` rc=0；1)+2) 不带 `in_body` ⇒ rc=1 且 4 条 FAIL；
+//      1)+2)+3) ⇒ rc=0，`truncation_inventory` 的 85 行仍然回来。
+// 提升真到达解析器（正证据，不是"不报警"）：`tests/stdlib-foundation/fmt_time_env_test.z`
+// 前 110 行在改前/改后解析完全一致，唯一变量是那条被提升上来的
+// `use std::time::{SystemTime, UNIX_EPOCH};` —— 缺它时链接期符号是裸名
+// `_as_secs` / `_as_millis` / `_as_micros` / `_elapsed`（接收者类型未知），有它时是
+// `_duration_as_secs` / `_duration_as_millis` / `_instant_elapsed` / `_instant_now`
+// （模块已加载、方法按类型限定）。同一条 `use` 在体里、模块没加载时，这 47 行也是掉的。
+// 实拍（本批之前的构建）：
+//   `tests/unit-tests/quantum_basic.z` —— `warning: [W1002] …:73: 85 line(s) … NOT parsed`，
+//     病因行 75 `use std::quantum::algorithms::ShorsAlgorithm;`；本批之后不再报 W1002，
+//     `--dump-mir` 从 758 行变 1675 行，`test_shors_algorithm` / `test_grovers_algorithm` 出现。
+//   `tests/stdlib-foundation/fmt_time_env_test.z` —— 同一条 W1002 报 `:113 之后 47 行`，
+//     病因行 114；本批之后不再报。合计 132 行回到程序里。
+// 边界（本批不收，实测登记）：
+//   - `use 路径::名字;` 之后**裸用**那个名字仍然不绑定（`_answer` 未定义），与本表无关，
+//     已在 backlog #64 那族里；本文件因此只 `use` 不出在调用路径上的名字。
+//   - 提上来的 `use` 若指向不存在的模块，加载器会造一个空桩且**一声不出**（本文件四条
+//     `nonexistent::*` 全无 W1007），那是 backlog #86。
+// 期望值按本批之后的实际输出写。
+// expect: b=2
+// expect: l=3
+// expect: d=6
+// expect: d0=0
+// expect: t=4
+// expect: dup=3
+
+fn head() -> i64 { 1 }
+
+// 单段路径。改前：本项整条丢掉，连同后面每一项。
+fn brace_form() -> i64 {
+    use nonexistent::mylib;
+    return head() + 1
+}
+
+// `{A, B}` 列表写法，走的也是 `parse_use_targets`。
+fn list_form() -> i64 {
+    use nonexistent::other::{A, B};
+    return head() + 2
+}
+
+// 嵌套块里的 `use` 也要能提升（遍历器按语句列表形状递归）。
+fn deep(n: i64) -> i64 {
+    if n > 0 {
+        use nonexistent::inner;
+        return head() + n
+    }
+    return 0
+}
+
+fn tail(n: i64) -> i64 {
+    use nonexistent::last;
+    if n > 10 {
+        return 100
+    }
+    return head() + n
+}
+
+// 顶层已经有一条同路径的 `use`：体内两份重复声明各自只提一份，不产生第二个格子。
+use nonexistent::shared;
+
+fn dup_one() -> i64 {
+    use nonexistent::shared;
+    return 1
+}
+
+fn dup_two() -> i64 {
+    use nonexistent::shared;
+    return 2
+}
+
+fn main() -> i64 {
+    println!("b={}", brace_form())
+    println!("l={}", list_form())
+    println!("d={}", deep(5))
+    println!("d0={}", deep(0))
+    println!("t={}", tail(3))
+    println!("dup={}", dup_one() + dup_two())
+    return 0
+}

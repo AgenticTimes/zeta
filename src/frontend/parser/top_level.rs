@@ -1793,7 +1793,7 @@ fn hoist_statics(items: Vec<AstNode>) -> Vec<AstNode> {
             out.push(AstNode::Assign(Box::new(AstNode::Var(name)), expr));
             continue;
         }
-        hoist_statics_from(&mut item, &mut out, &mut claimed);
+        hoist_statics_from(&mut item, &mut out, &mut claimed, false);
         out.push(item);
     }
     out
@@ -1842,15 +1842,21 @@ fn lift_one(
 
 /// Recurse through the statement lists of one node, lifting the `static`s found
 /// in them up to module level.
+///
+/// `in_body` says whether the lists below were reached through a body — i.e.
+/// whether `Resolver::register` would miss a `use` sitting in them (see
+/// `from_block`).
 fn hoist_statics_from(
     node: &mut AstNode,
     pulled: &mut Vec<AstNode>,
     claimed: &mut std::collections::HashSet<String>,
+    in_body: bool,
 ) {
     fn from_block(
         stmts: &mut Vec<AstNode>,
         pulled: &mut Vec<AstNode>,
         claimed: &mut std::collections::HashSet<String>,
+        in_body: bool,
     ) {
         for stmt in stmts.iter_mut() {
             if let AstNode::Static {
@@ -1860,26 +1866,53 @@ fn hoist_statics_from(
                 *hoisted = lift_one(name, expr, claimed, pulled);
                 continue;
             }
-            hoist_statics_from(stmt, pulled, claimed);
+            // 批次 393: a `use` inside a function body is a no-op where it stands —
+            // the module load happens in `Resolver::register`, which walks item
+            // lists but never a function body. So there the import moves up and the
+            // statement keeps a placeholder. One copy per path: the same module
+            // loaded twice would just re-register the same declarations.
+            //
+            // `in_body` is what keeps this off text that is NOT a body: a top-level
+            // `import a::b;` is lowered by `parse_python_import` into a
+            // `Block` item that already holds an `AstNode::Use`, and lifting that
+            // would rewrite a working in-place import into a module-level one plus
+            // an `Ignore` — measured to break batch 337's `import` ≡ `use` MIR
+            // equality (`Return val` 4 → 5). Only lists reached through a body are
+            // lifted, so the flag propagates instead of being re-decided per node.
+            if in_body {
+                if let AstNode::Use { path } = stmt {
+                    let lifted = AstNode::Use { path: path.clone() };
+                    if !pulled.contains(&lifted) {
+                        pulled.push(lifted);
+                    }
+                    *stmt = AstNode::Ignore;
+                    continue;
+                }
+            }
+            hoist_statics_from(stmt, pulled, claimed, in_body);
         }
     }
     match node {
-        AstNode::Program(items) => from_block(items, pulled, claimed),
-        AstNode::ModDef { items, .. } => from_block(items, pulled, claimed),
+        // A `Block` carries no verdict of its own: the same node is the shape a
+        // top-level `import` lowers to AND the shape of any nested body, so it
+        // inherits the answer instead of deciding.
+        AstNode::Block { body } => from_block(body, pulled, claimed, in_body),
+        AstNode::Program(items) | AstNode::ModDef { items, .. } => {
+            from_block(items, pulled, claimed, in_body)
+        }
         AstNode::FuncDef { body, .. }
         | AstNode::ImplBlock { body, .. }
-        | AstNode::Block { body }
         | AstNode::Loop { body }
         | AstNode::Unsafe { body }
-        | AstNode::ComptimeBlock { body } => from_block(body, pulled, claimed),
+        | AstNode::ComptimeBlock { body } => from_block(body, pulled, claimed, true),
         AstNode::Method { body, .. } => {
             if let Some(body) = body {
-                from_block(body, pulled, claimed);
+                from_block(body, pulled, claimed, true);
             }
         }
         AstNode::If { then, else_, .. } | AstNode::IfLet { then, else_, .. } => {
-            from_block(then, pulled, claimed);
-            from_block(else_, pulled, claimed);
+            from_block(then, pulled, claimed, true);
+            from_block(else_, pulled, claimed, true);
         }
         AstNode::For {
             body, else_body, ..
@@ -1887,17 +1920,17 @@ fn hoist_statics_from(
         | AstNode::While {
             body, else_body, ..
         } => {
-            from_block(body, pulled, claimed);
-            from_block(else_body, pulled, claimed);
+            from_block(body, pulled, claimed, true);
+            from_block(else_body, pulled, claimed, true);
         }
-        AstNode::ConceptDef { methods, .. } => from_block(methods, pulled, claimed),
+        AstNode::ConceptDef { methods, .. } => from_block(methods, pulled, claimed, true),
         AstNode::Match { arms, .. } => {
             for arm in arms.iter_mut() {
-                hoist_statics_from(&mut arm.body, pulled, claimed);
+                hoist_statics_from(&mut arm.body, pulled, claimed, true);
             }
         }
         AstNode::Closure { body, .. } | AstNode::ExprStmt { expr: body } => {
-            hoist_statics_from(body, pulled, claimed)
+            hoist_statics_from(body, pulled, claimed, in_body)
         }
         _ => {}
     }

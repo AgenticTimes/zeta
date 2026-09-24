@@ -1748,8 +1748,51 @@ pub fn parse_stmt(input: &str) -> IResult<&str, AstNode> {
         parse_try_stmt,
         parse_raise,
         // PY-A: pass/del/assert/ellipsis nest under one alt arm (nom 21-arm limit).
-        alt((parse_pass, parse_ellipsis_stmt, parse_del, parse_assert)),
+        // PY-A (批次 393): `use` rides this nested arm, and its partner in
+        // `top_level::hoist_statics_from` decides whether the node is a no-op or a
+        // lifted import — see `parse_use_stmt`.
+        alt((
+            parse_pass,
+            parse_ellipsis_stmt,
+            parse_del,
+            parse_assert,
+            parse_use_stmt,
+        )),
         parse_expr_stmt,
     ))
     .parse(input)
+}
+
+/// PY-A (批次 393): `use` in statement position.
+///
+/// `use` was only wired into the top-level item list, so a body-local
+/// `use std::quantum::algorithms::ShorsAlgorithm;` matched no statement rule and
+/// failed the enclosing `parse_block_body` — and because a top-level item no rule
+/// accepts stops the caller's loop, the REST OF THE FILE was dropped (measured on
+/// `tests/unit-tests/quantum_basic.z`: 85 lines unresolved, cause line 75). Path
+/// depth is irrelevant: `use std::quantum;` inside a body drops the whole `fn`
+/// just the same.
+///
+/// The node is real (`AstNode::Use`), not a no-op, and `hoist_statics` lifts it out
+/// of the body: `Resolver::register` — the thing that actually loads the module —
+/// only walks top-level items, never function bodies. A `use` that is already in
+/// an item list stays where it is (`top_level::hoist_statics_from`'s `in_body`).
+fn parse_use_stmt(input: &str) -> IResult<&str, AstNode> {
+    let after_kw = match kw_boundary(input, "use") {
+        Some(rest) => rest,
+        None => {
+            return Err(nom::Err::Error(NomError::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+    };
+    let (input, path) = ws(parse_path).parse(after_kw)?;
+    let (input, nodes) = parse_use_targets(path, input)?;
+    let node = if nodes.len() == 1 {
+        nodes.into_iter().next().unwrap()
+    } else {
+        AstNode::Block { body: nodes }
+    };
+    Ok((input, node))
 }
