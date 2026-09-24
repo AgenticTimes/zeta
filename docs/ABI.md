@@ -257,6 +257,14 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 （P0#2 要求收敛强转白名单）、validate.md:151（extern 声明写 i64 而收 f64 →
 `fptosi` 截断，即 `abs(-2.5)`→nan 根因，复现 `tests/python_style/t27_builtins_fmt.z:18`）。
 
+**#6 的一档已在源头消失（批次 397）**：浮点接收者的方法调用（`x.sqrt()` 一类）不再下成裸名让
+未知 extern 兜底声明成 `i64(i64, …)`，而是按 `pylib` 注册表（`pylib::find_member`）取符号与声明
+签名，路由后实参本来就是 `double(double)` ⇒ 不进 `fptosi` 档、也不发 `abi_note`。
+**这不等于 #6 收敛**：仓内声明成 i64 形参的被调者（如 `zeta_qc_new`）照旧截小数，official 集内
+仍有实例；而 `abs` / `round` 这类**表里没有同名成员**的写法仍走整数路径（`(-4.5).abs()` 打 `4`，
+改前改后逐字同值）⇒ 上面那条 `abs(-2.5)` 的旧账**本批未清**。整数接收者与"形参落定 i64 的仓内
+函数"两档的正解都在 refactor 类型基础那一格（跨函数可查的参数/返回类型表），不在本表内解决。
+
 ### 3.3 zeta→C 运行期
 
 **C4 一律默认 C 调用约定**：`set_cc` / `CallConvention` / `byval` 在 codegen.rs 命中 0，

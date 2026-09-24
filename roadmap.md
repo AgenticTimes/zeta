@@ -15739,6 +15739,111 @@ official compile **194/194**（唯一硬断言，`run_all.sh:575`）；compile+l
 
 ① #86"空桩静默生效 / W1007 一声不出"——它决定 §五那三条 link-only 明细里几行是真绿（`_predict/_train`、`_factor/_optimal_iterations/_success_probability` 两族）；② 2.2 剩余截断（official 3 文件 / 9 行诊断仍在，逐文件卡点未取）；③ 具名字段变体构造（§六①，语料 20 处 / 2 文件，是 #11 行没写完的那半）；④ #42 那 4 个 selfhost 绑定（`_as_str/_into_iter/_is_alphabetic/_push`）——它们现在是 selfhost 唯一还能动的分支；⑤ 4.3.b / M3 定价（#105）。
 
+## 批次 397（交付）—— 3.2 Lowering / 4.3.b 值表示 ↔ ABI：浮点接收者的方法在 C 边界被 `fptosi` 削成整数
+
+候选 A（ROI 表交用户裁决）。归位：刀口在 **3.2 Lowering**（MIR 把方法名下成裸 `sqrt`+arity 后缀），症状读在 **ABI**（`coerce_call_args` 第 6 档 `fptosi`，`docs/ABI.md` §3.2 表里那条"删除候选"），与 4.3.b 的关系是"同一个 double 在整数寄存器里过边界"。
+
+### 一、A/B 取证：15 行同族探针 + 语料拼法
+
+改前二进制编出的程序留档（`/tmp/b397/fam2_pre`、`corpus1_pre`），改后在**同一目录**复跑（那条"A/B 二进制须同目录跑"的坑）。判据 = 与 CPython 逐字一致（参照值同轮用 `python3 -c` 现算，未凭记忆）。
+
+`/tmp/b397/fam2.z` 15 行：
+
+| 探针 | 改前 | 改后 | CPython | 判定 |
+|---|---|---|---|---|
+| `9.0.sqrt()` | `9` | `3.000000` | 3.0 | **转对** |
+| `1.0.exp()` | `-1` | `2.718282` | 2.7182818 | **转对** |
+| `2.718….log()` | `-70362147107897345` | `1.000000` | 1.0 | **转对** |
+| `1000.0.log10()` | `-1` | `3.000000` | 3.0 | **转对** |
+| `0.0.cos()` | `0` | `1.000000` | 1.0 | **转对** |
+| `2.1.ceil()` | `2` | `3` | 3 | **转对** |
+| `(-3.5).fabs()` | `-3` | `3.500000` | 3.5 | **转对** |
+| `2.0.pow(10.0)` | `-1` | `1024.000000` | 1024.0 | **转对** |
+| `1.0.atan2(1.0)` | `1` | `0.785398` | 0.785398 | **转对** |
+| `0.0.sin()` | `0.000000` | `0.000000` | 0.0 | 两侧都对 |
+| `2.9.floor()` | `2` | `2` | 2 | 两侧都对 |
+| `(-2.9).trunc()` | `-2` | `-2` | -2 | 两侧都对 |
+| `(-4.5).abs()` | `4` | `4` | 4.5 | **未动**（§五①） |
+| `2.5.round()` | `2` | `2` | 2 | 未动（真值恰好也是 2：CPython 走银行家舍入 ⇒ 截断在这里看不出来） |
+| `9.sqrt()`（整数接收者） | `9` | `9` | 3.0 | **未动**（§五②） |
+
+⇒ **9 行由错转对 / 3 行"整数化恰好等于真值" / 3 行未动**。那 3 行"两侧都对"是这一族最该记的读数：`floor`/`trunc`/`sin 0` 的正确答案整数化后不变，所以静默截断在语料里从来不会自己报警。
+另：开批时记的"12/15 行改正"**复跑更正为 9/15**（那个 12 的取数过程已不可复核——不猜它混进了什么，只认本轮"同一二进制同目录复跑"这一组）。
+
+语料拼法（`corpus1.z` = official `tests/unit-tests/benchmark_simd_vs_scalar.z:38` 的原文 `(limit as f64).sqrt()`）：
+
+| 量 | 改前 | 改后 | 真值 |
+|---|---|---|---|
+| `limit=100` 的 `sqrt_limit` | `100` | `10.000000` | 10.0 |
+| 同式 `as i64` | `100` | `10` | 10 |
+| `while p <= (…sqrt() as i64)` 外层轮次 | **99** | **9** | 9 |
+| `limit=10000` 三行 | `10000 / 10000 / 9999` | `100.000000 / 100 / 99` | 100 / 100 / 99 |
+| 该文件编译期诊断 | 4 行 ABI coerce | 0 行 | — |
+
+⇒ 这一族在真实语料里的损害形是**筛法只筛到 100 而不是 10**：整除性被破坏，程序照跑、结果照打、一声不出。
+
+### 二、根因一句话 + 三处写侧（全在 `gen.rs`，codegen 一行未改）
+
+浮点接收者走 `receiver_ty` 链的终端 `else` ⇒ MIR 里 `func` 就是裸方法名，加 arity 后缀成 `sqrt_1` ⇒ codegen 的未知 extern 兜底按"每个实参都 i64"声明（`codegen.rs:2910-2911`）⇒ `coerce_call_args` 对浮点实参发 `arg_fptosi`（`codegen.rs:6979`）并 `abi_note`（`:7023-7024`）。库里那一侧一直是对的：`pylib/registry.txt` 有 **49 行** `F math …`（逐成员写着 `args=` / `ret=`），`runtime_decls_registry.rs:190` 早就声明了 `py_math_sqrt(double)->double`，`py_math_*` 在 `runtime/py_additions.c` 里全有定义 —— 缺的只是**接上**（`a ** b` 路由到 `py_math_pow` 是同一件事的既有先例，本批只是把方法调用形也接过来）。
+
+1. `gen.rs:10826-10844` 新分支。判据六条：接收者 `Type::F64|F32` ∧ `crate::middle::pylib::find_member("math", method)`（`src/middle/pylib.rs:285`）命中 ∧ `entry.args.len() == arg_ids.len()` ∧ 参数全为 `f64` ∧ `!entry.stub` ∧ `ret ∈ {f64, i64}` ⇒ `func = entry.symbol`。**位置在 `cands.len() == 1` 之后** ⇒ 注册类型里真有 `X::sqrt` 时用户名字优先（第一版放在之前，会抢掉用户方法，已挪）。表内 49 个成员中命中判据的 **33 个**（其余是 `args=i64`、混形或桩）。
+2. `gen.rs:11022-11025` 抑制 `_<argc>` 后缀：注册表符号是定名 extern，加后缀即查无此人。
+3. `gen.rs:11050-11058` 目的槽按声明返回定（新增的 `float_math_ret` 携带）：`f64` ⇒ `Type::F64`，否则 `I64`；未命中注册表时仍走 `func_ret_types` ⇒ **没有新增返回类型源**（对 #33 的说法见 §五④）。
+
+### 三、门禁读数（`bash tools/run_all.sh` 两连跑，逐字段实拍）
+
+**第一跑**（`/tmp/b397/gate.log`，源码已改、knob 夹具未换）：official compile **194/194**、compile+link **191/194**、python_style 315/2/5/0、**knob 20 条 / FAIL 1**，末行 `knob_probe: A 段 rc=1（B 段未跑）` ⇒ 20 与 23 的差是 B 段 3 条没跑，不是断言被删。FAIL 原文：`FAIL 夹具产出 coerce 告警 → 期望 yes，实得 no（判据无法测，别当已覆盖）`（§六）。
+
+**第二跑**（夹具换线后，`/tmp/b397/gate2.log`，ts `2026-09-24T14:57:23Z`）：official **194/194**（唯一硬断言 `run_all.sh:575`）与 **191/194**（三条 link-only 明细一字未动：`integration_all_features` `_predict,_train`；`quantum_basic` `_factor,_optimal_iterations,_success_probability`；`selfhost` `_as_str,_into_iter,_is_alphabetic,_push`）；python_style **315 passed / 2 failed / 5 known-fail / 0 xpass**（+1 来自新用例 t432；failed 仍是存量 `t231_dict_set_cast_fromkeys` `t233_listcomp_condition_capture`）；语料 **39/39**；jit ok **173** / total **516** / segv **0**；diff 120/130 = 92.3%、坏用例 0；**knob 23/0**、swallow 6/0、import_form 22/0、empty_stmt 68/0、pysrc 42/rc0、cli_semantics 73/0、ignore_rules 19/0、mbvar 19/0、comment_drift 0、clean_checkout rc=0（secs 4 然后 0，rev `8a5c5bd4`）；python_style 诊断 76 文件 / 176 行不变；`official_not_measured` **0**。整体 **GATE_RC=1** 实拍，来源仍是 `run_all.sh:576` 的 `py_fail != 0`。
+
+**official 诊断 3 文件/9 行 → 2 文件/5 行**（批次 396 记录里的 9 行是基线）：少的 4 行全部来自 `benchmark_simd_vs_scalar.z` —— 双二进制单独编该文件实拍：改前 4 行 `ABI coerce`、改后 **0 行**（复算：`ABI coerce` 0 条、`PY-A:` 0 条，日志里唯一含 `warning:` 的一行是 clang 的 `-no-pie` 噪声，不属本仓诊断）。剩余 5 行 = `integration_test_program` 2 行（`unknown Python module 'distributed' / 'ml'`）+ `quantum_basic` 3 行（2 条 `ABI coerce in call to zeta_qc_new arg[0]: fptosi → i64` + 1 条汇总）⇒ 那 2 条是**同族的另一条形**：被调者是仓内符号、不在注册表里，本批判据不认领（§五③）。
+
+### 四、语料定价：浮点接收者方法 **19 处 / 9 文件**（不含本批 t432）
+
+尺子（成员名逐字取自注册表，不靠手工名单）：`names=$(awk '/^F math /{print $3}' pylib/registry.txt | sort -u | paste -sd'|' -); grep -rnE "[A-Za-z0-9_)]+\.($names)\(" --include='*.z' .` 再剔除 `math.` 一类模块限定接收者。
+
+| 文件 | 处数 | 门禁归属 |
+|---|---|---|
+| `tests/performance/phase1_sieve_implementation.z` | 5 | 门禁不编 |
+| `tests/unit-tests/benchmark_simd_vs_scalar.z` | 3 | **official**（§三那 4 行诊断就是它） |
+| `tests/unit/phase1_zeta_implementation.z` | 2 | 门禁不编 |
+| `tests/primezeta/prime_final_no_bom_fixed.z` | 2 | 门禁不编 |
+| `zeta_src/runtime/tensor.z` | 2 | 不编（rust 方言残档） |
+| `zeta_src/runtime/ml.z` | 2 | 不编 |
+| `zeta_src/tests/parser_impl_blocks.z` | 1 | 不编 |
+| `zeta_src/tests/parser_inherent_impl.z` | 1 | 不编 |
+| `examples/distributed_murphy_sieve.z` | 1 | 不编 |
+
+形态构成：19 处里 **13 处**是同一条 `(limit as f64).sqrt()`（筛法），4 处在 `zeta_src/**` 的 `(expr).exp()/.sqrt()`，2 处是算术表达式直接收 `.sqrt()`。**⇒ 门禁集内的成员只有 official 那 3 处**：本批在门禁上的可见收益就是 python_style +1（新用例）与 official 诊断 -4 行；把 5 处筛法接进 official 集属 #36 那族，不在本批。
+
+### 五、边界与残口（OPEN 净增 0，三条全部折进 #110 / #109 既有行）
+
+① `abs` / `round` **不是注册表成员名**（表里是 `fabs`；`round` 无 f64 形）⇒ `(-4.5).abs()` 仍打 `4`、`2.5.round()` 仍打 `2`，改前改后逐字同值。② **整数接收者不路由**：判据要求 `F64|F32`，`9.sqrt()` 仍 `9`。这是有意的——接收者静态是 i64 时"该补 `sitofp` 还是该报错"属用户 2026-09-24 裁定的类型基础②，不在本批。③ **仓内声明的 i64 形参仍走 `fptosi`**：`zeta_qc_new` 那 2 行诊断留在 official 集内（§三），注册表里没有它 ⇒ 判据无从认领。④ **没有新增返回类型源**：`float_math_ret` 只在命中注册表时短路 `func_ret_types`，未命中路径一字未动 ⇒ #33"两源并行无检查"这一格本批既没收敛也没加重，按读数登记、不当进展报。⑤ **模块限定形 `math.sqrt(3.9)` 不属本族**（走 `import` 后的名字解析，另一条路）；t432 里 `qualified_control=1.974842` 那条 expect 是**哨兵**，钉的是"改接收者路径不许动它"。⑥ **表里有名字、但参数落定成 `i64` 的成员不被认领**（`isqrt` 在表里是 `args=i64 ret=i64`，C 侧 `py_additions.c:1886` 真有 `py_math_isqrt(int64_t)`）⇒ 本批"参数全 `f64`"那条判据不收它 ⇒ 仍下成裸名 ⇒ **链接期** `Undefined symbols "_isqrt"`（本轮复测 rc=1；开批时同款探针报的是 `isqrt_1`，两条都响亮、不静默，差异未复核）。它的正解是"实参该补 `sitofp` 还是该判错"，属类型基础②，与 §五② 同格。
+
+### 六、尺子换线：`tools/knob_probe.sh` A3 的夹具被本批吃掉
+
+A3 钉 `ZETA_STRICT_ABI`，旧夹具是 `let y = x.sqrt() as u64` —— 本批把这条路改成了正当调用（`double(double)`），于是恒 0 告警 ⇒ 探针自己的 skip 守卫出声（"别当已覆盖"那条规则第一次真用到）。换线后的夹具与本批修法无关：用户函数 `fn g(v: i64)` 收 `f64` 实参 —— 正是 `ZETA_STRICT_ABI` 该拦的那一档。实测：新夹具 1 条 coerce 告警、`ZETA_STRICT_ABI=1` rc=1、A 段 **23/0** 且 B 段跟上。副作用：`ZETA_* 旋钮侧残留 is_ok 站点` 那条断言在脚本里 `:103 → :109`（历史引用 `roadmap:14489` 写的是 `:100`，已漂 9 行；按规矩不回改历史，只在此记对照）。
+
+### 七、锚点读数
+
+`gen.rs` +27 行（14394 → 14421）⇒ 漂移 **28 → 40**；`--rebind` 接受 **`docs/ABI.md` 10 行 / 17 个数字**（全是整段位移，如 `:13742-13747→:13769-13774`、`11004→11027`、`12492→12519`）与 `tools/baselines/abi_anchors.tsv` 12 行 ⇒ 复核回到 **28**。基线仍 **251** 条、落单 **新 11 / 消失 5**、待归属 100 条 / 91 种、声明为仓外 14 条、`[拒改]` 33 条 —— **这五项与批次 396 记录逐字相同** ⇒ 本批没新增引用（那 11 条落单新全是 396 留下的 `gen.rs:3313/3371/3500/3730/7008` 一类），也没清掉存量 ⇒ 清理仍 #52。核对器仍不在门禁里（#37）。**另**：`docs/ABI.md` §3.2 判定口径段末尾补了一段"#6 的一档已在源头消失"（写明 official 集内仍有 `zeta_qc_new` 那条形、`abs`/`round` 旧账未清）；这段**刻意不写行号**，只写符号名 ⇒ 补完后核对器读数与补前逐字相同（28 / 新 11 / 消失 5），已实拍。
+
+### 八、自我核对：三处第一版写法被推翻 + 三个取证坑
+
+① "12/15 行改正"复跑更正为 **9/15**（§一）；② 语料"18 处/9 文件"的手工名单复算为 **19 处/9 文件**（尺子换成从 `registry.txt` 生成成员名并剔除模块限定形，逐条已列 §四）；③ 新分支第一版在 `cands.len() == 1` **之前** ⇒ 会抢用户自己的 `X::sqrt`，挪到之后。弃用探针：`s1.z`/`s2.z` 改后仍打 `0.000000`，一度被读成"新路由没生效"，用 `cast2.z`（零方法调用）隔离出真身是另一条独立缺陷 `f64 as f64` → `0.0`（#109）⇒ 两者不计入本批结论。
+坑（复用的三条照记，新增一条）：**数诊断行数不能 `grep -c warning`** —— 单编一个文件时 clang 的 `-no-pie` 噪声里就含 `warning:`，会把"0 行"读成"1 行"；要点名 `ABI coerce` / `PY-A:`。另两条沿用批次 396 的：门禁 rc 不能被管道作证（本轮用 `{ bash …; echo GATE_RC=$?; }` 才拿到 1）、A/B 程序须在 `/tmp/b397` 原地复跑。
+
+### 九、提交与推送（用户裁定 2026-09-24：「执行一批，提交和推送一批」）
+
+批次级"不 push"作废，改为**每批推**。本批通路实拍（三条，全部本轮实测）：
+① `origin` = `https://github.com/murphsicles/zeta.git`，而 `~/.gitconfig` 写了 `http.proxy`/`https.proxy = http://127.0.0.1:7890`，该端口**无监听**（ClashX Pro 未运行）⇒ 走代理必失败；把代理临时置空直连则 `ls-remote` **rc=124（超时）**，且 keychain 里没有 github 的 HTTPS 凭据 ⇒ 这条路要代理活着才通。远端 `bootstrap` 顶点 `12cf972c` 是本地祖先，本地领先 **768** 个提交。
+② 同一仓的 SSH 形 `ssh://git@github.com/murphsicles/zeta.git` **可读**（`ls-remote --heads` rc=0）但写被拒：`ERROR: Permission to murphsicles/zeta.git denied to AgenticTimes.` —— 本机那把 key 属 AgenticTimes。
+③ 第二个 remote `agentic` = `git@github.com:AgenticTimes/zeta.git`，顶点 `8a379b79`（批次 361 那条 backlog 记录）正是**历史上最后一次推送落点** ⇒ 快进 57 个提交推上去：`8a379b79..2ee715a9  bootstrap -> bootstrap`，rc=0，无 `--force`、未动 `git config`。
+
+### 十、下一批默认候选（按用户 2026-09-24 裁定的排序走，不再顺"语法缺口"链）
+
+本批属"老办法还能修的那一档"，做完即让位。下一批按裁定表：① **类型基础①**——for 循环条件里真假值掩码取得自己的类型（约 1 天）；② **类型基础②**——每个函数的参数/返回类型统一进一张表、函数之间查得到（约 1-2 天；§五④与 #33 那一格是它的直接上游读数）；③ **#86 空桩出声**——它决定 §三那三条 link-only 明细里有几行是真绿（`_predict/_train`、`_factor/_optimal_iterations/_success_probability` 两族）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
