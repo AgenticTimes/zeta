@@ -15456,3 +15456,56 @@ A = `60eb2caa^` 的隔离 worktree 构建（`git worktree add --detach /tmp/b391
 ### 一次性方法事实（补进"取读数的坑"）
 
 A/B 时 A 的编译器**必须在主仓目录下运行**：`cd /tmp/b391 && /tmp/b391/A-target/release/zetac -o p3.A.bin p3.z` 链接直接失败（`_zeta_env_set`、`_zeta_module_decl` 等 undefined），换成 `cd /Users/meetai/source/zeta-src && <A编译器> -o /tmp/b391/p3.A.bin /tmp/b391/p3.z` 就通过 —— runtime `.o` 的查找是 **CWD 相对**，不是编译器 exe 相对。隔离 worktree 里没有 `.o`（`/tmp/b391/A/runtime/*.o` 零命中），所以"用 A 的 worktree 当 CWD"也不行。产物二进制在哪个目录跑无所谓，链接那一刻才要 `.o`。
+
+---
+
+## 批次 392（定位，代码零留存）—— 4.3.b / M3："按项过滤镜像"这条路判死，刀口在名字绑定层
+
+上一批把 M3 挂在下一批默认候选第 1 格，并且留了一个可执行的探针计划：在后置遍里加 `if self.fn_depth > 0 { return; }`，用"套件 delta 有几例"给 M3 定价。**两个探针都没按原样跑成，而这两个"没跑成"本身就是本批的产出**，所以逐条记下。
+
+### 一、登记的探针在开跑前就是死的（读码判死，未建二进制）
+
+`fn_depth` 的加减只裹在 `lower_ast` 的函数体那圈（`gen.rs:1406` 的 `+= 1`、`:1410` 的 `-= 1`），而后置遍的装配点在 `self.lower_ast(ast)`（`:1284`）**之后**（`:1339`）。⇒ 一个顶层 `def`/`fn` 项跑到镜像遍时 `fn_depth` 已经被折回 **0**，和模块体项一模一样。这个探针真正会跳过的只有合成闭包（`child.fn_depth = self.fn_depth + 1`，`:13763`，走 `build_mir` 的 `:13891`）——测的是"推导式/lambda 写穿 env"，不是"函数体写穿 env"。**照原样跑必然得到 delta=0，而 delta=0 会被误读成"M3 没有套件依赖"**，所以换判据。
+
+### 二、换 `py_entry` 当"模块体"标记：机制确实生效（正证据）
+
+`py_entry`（`gen.rs:1086`）来自 parser 的 `PY_ENTRY_ATTR`（`top_level.rs:1769`，打标两处：`:2057` 用户的 main 且真的合并进模块语句、`:2076` 合成 main）。探针 = 在 `mirror_module_global_writes` 开头 `if !self.py_entry { return; }`，其余一字未动。
+
+| 输入 | 改前（`/tmp/b392/zetac.pre-probe`） | 探针（`/tmp/b392/zetac.probe`） | 判读 |
+|---|---|---|---|
+| `p2.z` 三行：`f()` / `g()` / `print(total)` | `6 / 6 / 100` | `6 / 100 / 100` | **M3 的那一格不再被函数体写穿**，g() 读回模块初值 |
+| `p3.z`（批次 391 的 `xs.remove`） | `2` / `[1, 2]` | 同 | 不回归 |
+| `t428_rebind_env_mirror` 五行 | `2/10/1/[7]/[1, 2]` | 逐字同 | 不回归 |
+
+MIR 级证据（`--dump-mir` 两份相减，`/tmp/b392/p2.pre.mir` vs `/tmp/b392/p2.probe.mir`）：差异全在 `== MIR f ==` 段内，探针删掉的正是**两条**镜像 —— `zeta_env_set(args:[8,2])` 与 `zeta_env_set(args:[9,2])`，其中 `8`/`9` 是 `StringLit("total")`、`2` 是 `f` 体内那个**局部槽**。g() 之所以从 6 变 100，就是这两条没了。
+
+### 三、套件读数：delta 恰好 4 例，而 4 例没有一例是 M3
+
+`bash tools/run_all.sh`（`/tmp/b392/gate.probe.log`）：python_style **311 → 307 passed，2 → 6 failed**（known-fail 5、xpass 0 不变），新增 4 例 = `t46_module_semantics` `t273_import_variable` `t423_static_mut_persistent` `t424_module_global_addop`；official compile **194/194**、link **192/194**、语料 **39/39**、jit ok **174** —— 四处与基线逐字相同。4 例逐个 A/B 过（两份编译器同一份源，`/tmp/b392/*.pre.bin` / `*.probe.bin`）：
+
+1. `t46`（`5/5/6` → `0/0/1`）与 `t273`（`1/2/2` → `0/0/0`）——两个用例的 fixture 是 `.py` 模块（`tests/python_style/pyfixturemod.py`、`pyvarfixture.py`），它们的**模块体在 MIR 里是一项 `X__init`**（`== MIR pyvarfixture__init ==`），parser 不给它打 `PY_ENTRY_ATTR` ⇒ 它明明是模块体，却被探针按"函数项"跳过了。这条不是推断：`t273` 的 MIR 差异只有一处 —— `pyvarfixture__init` 里的 `zeta_env_set(args:[27,26])`（`:443`，27 = `StringLit("pyvarfixture__D")`）被删，于是 `D` 从没进过 env，`len(D)` 打 0。**⇒ 结论：`py_entry` ≠ "模块体"，它只标根模块的那一个 `main`。**
+2. `t424`（`a2 10→5`、`a3 17→7`、`peek 17→0`、`twice 20→3`、`peek2 20→0`、`acc 7→0`）与 `t423` 的 `a2`（`10→5`）——括号式 `fn` 程序，`fn add(n) { total += n }` 往模块全局上写**本来就该落 env**（批次 385 立下的合同，docs/ABI.md R8"模块全局只有一份存储"）。这类程序里 `fn main() -> i64` 也拿不到 attr（`top_level.rs:2054` 要求 `merged` 非空），所以探针把整份程序的镜像全关了。⇒ 也不支持 M3。
+
+**净结论：4 例依赖里 0 例是"该局部却被并格"，2 例是"被导入模块的体项没有模块体标记"（探针自己的漏），2 例是"括号式共享格"（现行合同）。** M3 至今仍只有 `p2.z` 一例实测损害，套件里没有任何用例锁着它 —— 上一批那句"一个函数都没有的用例一炸，说明读写对称那条规则根本不对"到此有个具体落点：漏的不是镜像的**形状**，而是"这个名字在这个作用域到底该不该是全局"这一格判定。
+
+### 四、为什么后置遍修不了它（判词，未实现）
+
+`p2.z` 的 `def f(): total = 5`（该漏）与 `t424` 的 `fn add: total += n`（该写穿）在代码里是**同一条形**：`self.module_globals` 是程序范围的名字集，而槽是项内新建的（`name_to_id[name]`），后置遍只看"`Assign{lhs}` 是不是这个槽"，看不见绑定作用域。任何按项（`fn_depth`/`py_entry`/`X__init`）的过滤都只是在"该漏"与"该合同"之间错切一刀。所以 M3 的修法落在 **2.3 名称绑定**，方向（未测）：py 模式 `def` 体内被裸赋值的名字绑为局部（CPython 的 UnboundLocal 那一侧）；`D[k] = v`、`D.append(x)` 这类**变异**不改名字，仍从 env 读句柄；括号式 `fn` 与显式 `global`/被抬升的 `static` 保留共享格。开这一格之前要先有"py 模式 `def` 体内改名"在语料里的真实数量 —— 目前实测样本量 = 1。
+
+### 五、回退与复原
+
+探针删净后重编：`target/release/zetac` 与探针前的 `zetac.pre-probe` **逐字节相同**（`cmp` 无输出），`git diff --stat` 只剩从不入仓的 `.ouroboros/work.md`。复跑门禁（`/tmp/b392/gate.revert.log`）：python_style **311/2/5/0**、official **194/194** + link **192/194**、语料 **39/39** —— 与批次 391 基线全部一致。本批不留代码，只留读数与判词。
+
+### 六、下一批默认候选（按已实测损害量重排）
+
+M3 由"下一批默认候选第 1 格"降到第 3：单点修的收益是 1 例实测损害，代价是踩 `t424`/`t423` 那 2 例已锁定的合同，而判据（py 模式改名该不该绑局部）还没有语料数量支撑。排在前面的是：① 2.2 `quantum_basic` 85 行拆三格 + compile-only 假绿裁决（已实测：85 行一行没跑，`/tmp/b390/qb_orig.bin` 零输出 rc=0）；② 3.2 带载荷枚举变体可测（selfhost 成员 1 的前置）；③ 4.3.b M3（先取"py 模式 `def` 体内裸赋值撞模块全局名"的语料计数，再谈改）。
+
+### 一次性方法事实（补进"取读数的坑"）
+
+**按项过滤的探针，先证明目标项真的带着那个标记。** 本批的 `py_entry` 探针在 `p2.z` 上是干净的（模块体有 attr、写漏在 `def f`），但同一把刀落到"根程序没有 attr 的括号式 `fn` 文件"和"体项叫 `X__init` 的被导入模块"上，delta 涨的是**探针自己的漏**，不是被测机制的依赖。所以这类探针的 4 例 delta 必须逐个 A/B + MIR 归因；只报"311→307"会把 3 例误记成 M3 的定价。
+
+### 七、控制测量（顺手取，归 #52）
+
+本批动过 `src/middle/mir/gen.rs`（虽然是零留存），所以手动跑一次 ABI 锚点核对器（`tools/check_abi_anchors.py`，**它不在门禁里** —— 门禁 `grep check_abi_anchors` 零命中，任务 #37 仍未接）。工作树读数：**漂移 68 / 新 7 / 消失 4**，改号配对 0 对 ⇒ 落单新 7 / 落单消失 4；待归属 **100** 条 / 91 种（基线 93 条），声明为仓外 14 条。
+
+我第一版把它记成"批次 391 移动代码留下的"——**这句是猜的，做了对照就推翻**：同一份核对器在 `60eb2caa^`（批次 391 的代码之前）的隔离 worktree 里读 **漂移 68 / 新 7 / 消失 6**（改号配对 1 对 ⇒ 落单新 6 / 落单消失 5），待归属同样是 100 条 / 91 种。⇒ 那 68 条漂移与 7 条新锚点是**批次 391 之前就在的存量**，批次 391 只让"消失"从 6 条变 4 条；本批零代码留存，读数与工作树同（改的都是 `roadmap.md`/`backlog.md`，核对器只扫 `docs/ABI.md`）。存量清理是 #52 的活，另开。
