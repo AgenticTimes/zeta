@@ -15222,3 +15222,57 @@ W1004 那句话是"这一行有个词被忽略了"。前四行共 25 处的共�
 3. §4 剩下的两格：`selfhost` 91（表示层）、`quantum_basic` 85（卡在 C 符号 + `py_additions.c`）。
 4. 带数据的 enum 变体加 tag（`codegen.rs:6210-6211`）。
 5. 一次误报响 N 声的去重（批次 384 候选 4）。
+
+## 批次 387 —— f64 过环境表闭合：写侧改存位模式，四条硬写 `Type::I64` 的读点改用同一个判据
+
+### 现象（改前读数在批次 386；本批改后当场重测，输入文件都还在 `/tmp/b386/`、`/tmp/b387/`）
+
+| 探针 | 形状 | 改前 | 改后 |
+|---|---|---|---|
+| `/tmp/b386/q1.z`（＝ `t426`） | 顶层 `ratio = 2.5`，别的函数 `return ratio` | `outer=2.500000`、`inner=0.000000` | `outer=2.500000`、`inner=2.500000` |
+| `/tmp/b386/q2.z` | 函数里 `global ratio` 后 `ratio = ratio + 1.0` | `outer=3`、`peek=0.000000` | `outer=3.500000`、`peek=3.500000` |
+| `/tmp/b386/q3.z` | 同上但删掉 `global` 那一行 | `outer=2.500000`、`peek=0.000000` | `outer=2.500000`（＝ `t425` 那一格）、`peek=3.500000` |
+| `/tmp/b387/r5.z` | `acc: float = 0.0`，`add()` 里 `acc += 2.5` 调两次（批次 385 边界 2 的连带） | 不累积（`p5/p6` 的 `b1=b2`） | `peek=5.000000`；`main=0.000000`（同一格 `t425`） |
+| `/tmp/b387/t427.z`（新用例的原始形状） | `global` 写 + `+=` 写，各读一次 | — | `after_global=3.500000`、`after_addop=3.750000`、`main_read=3.750000`，与 `python3` 同形状程序逐字相同 |
+| `/tmp/b386/pA.z`（闭包 `nonlocal` f64，无声明类型） | 应保持原样 | `read= 2`、`outer= 7`，2 条 fptosi | 逐字未变（`read= 2`、`outer= 7`，2 条 fptosi 仍在） |
+
+### 定位（承批次 386 的两端读数）
+
+- 格子本身只有一个裸词：`zeta_env_set(i64, i64)` / `zeta_env_get(i64)->i64`，声明在 `src/backend/codegen/runtime_decls_core.rs:51-52`。
+- 读侧早已"按声明类型给槽"（`global_ty_of`）＝ 按位重解读；写侧却把 f64 实参交给调用约定 `fptosi` ⇒ 存进去的是截断整数，读回来是那个整数的位模式。
+- 八条 `zeta_env_set` 写点各自手拼 key + `VoidCall`，四条 `zeta_env_get` 读点把槽硬写成 `Type::I64` —— 这条规则原本只做了一半（另三处读点早已按 `global_ty_of`）。
+
+### 修法（全部在 `src/middle/mir/gen.rs`，不动 C 运行时、不动 codegen）
+
+1. 新增 `env_store(name, value)`（`:428` 起）：唯一一条 env 写路径。对**声明类型是 `F32`/`F64`** 且**值也是浮点**的名字，把值先落进一个槽（传进来的不是 `Var` 时新建），再 `AddrOf` + `Deref{pointee_width: 8}` 从那个 `double` 的地址读出裸 64 位词传给 `zeta_env_set`；其余名字按原样传值。返回 key 的 id，供紧跟着的 `zeta_env_get` 复用。
+2. 新增 `env_slot_ty(name)`（`:485` 起）：`global_ty_of(name).unwrap_or(I64)` —— 读侧给槽的类型与写侧判据同源，两头不可能再各走各的。
+3. 八条写点全部改走 `env_store`：`:1317`（`Let` 的 `nonlocal` 定义赋值）、`:1718`（`=` 的 `nonlocal` 写）、`:1738`（`=` 的模块全局镜像，传 `existing`）、`:1742`（`=` 的 `nonlocal` 先写后绑）、`:1793`（新绑定处的模块全局镜像，传 `new_id`）、`:1824`（`AssignOp` 的 `nonlocal` 分支）、`:1857`（`AssignOp` 的模块全局镜像，传 `slot_id`）、`:13108`（闭包自由变量快照）。批次 385 的"镜像刚写过的那个槽、不是原表达式"这条规则原样保留。
+4. 四条硬写 `Type::I64` 的读点改用 `env_slot_ty`：`:1326`、`:1753`、`:3476`、`:3518`。另三处（`:3500`、`:11554` 段、`:13705` 段）本来就在按 `global_ty_of` 给槽，未动。
+
+### 验证
+
+- `cargo build --release` 通过；上表六个探针用同一个 `target/release/zetac` 当场重跑（A/B 同目录，承测量备忘第 17 条）。
+- 批次 386 登记的风险（`Deref{pointee_width: 8}` 走到 `build_int_z_extend(i64→i64)`，`src/backend/codegen/codegen.rs:6858`）实测未发生：三个探针都能编译、能跑、退出码 0。
+- `tests/python_style/run.sh`（本批单独跑一次 + 门禁里再跑一次，同一判据）：`310 passed, 2 failed, 5 known-fail, 0 xpass` —— 失败仍只有 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`（红线内的既有两红）。`t426_f64_env_roundtrip` 由 KNOWN-FAIL→XPASS→**摘掉标记转正式通过**；新增 `tests/python_style/t427_f64_env_write_paths.z` 钉 `global` 写与 `+=` 写两形。
+- 告警计数（同一作用域：`python_style` 全量日志）：`zeta_env_set` 的 `fptosi` 告警 **17 → 3**，余 3 条全是"没有声明类型"那一族（闭包 `nonlocal`），按设计保留；用户函数 f64→i64 实参那一族（`Ledger::spend`）仍 2 条，未被波及。
+- 门禁 `tools/run_all.sh` 在 `f4be7500` 上跑完整一趟（跑过两次，两次读数一字相同）：official `compile 194/194`、`compile+link 192/194`（两条 link-only 仍是 `integration_all_features` 缺 `_predict/_train`、`selfhost` 缺 `_as_str/_build_ast/_is_alphabetic/_push`，与本批无关）、诊断 `4 文件 / 11 行`；`python_style 310 passed, 2 failed, 5 known-fail, 0 xpass`（两红＝ t231/t233）；语料 `39/39`；jit `ok=174 trap=337 fail=0 segv=0 (total 511)`；diff `match=120 judged=130 rate=92.3% bad_case=0`；八步判据脚本 knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 / mbvar 19 全部 `FAIL 0`；`clean_checkout rc=0`；`comment_drift 0 处复述`；门禁整体 `rc=1`（既有正常态）。丢行尺子 `tools/truncation_inventory.sh`：**2 文件 / 176 行**（`selfhost` 91 + `quantum_basic` 85）未变。
+
+### 边界
+
+1. **主程序/模块体自己读回旧值**没解决（`r5` 的 `main=0.000000`、`q3` 的 `outer=2.500000`），仍是 `t425_module_body_stale_read.z`（批次 385 边界 1）。
+2. **没有声明类型的那一族继续截断**：闭包 `nonlocal` 的 f64（`pA` 的 `read= 2`）。它的读侧按整数走，写侧存位模式会打成十几亿量级的垃圾 —— 那不是修复。这一格属于"让 env 带上类型"（轴 B/F）。
+3. **本批未覆盖的一形**：`x: float` 的模块全局被**整数字面量**赋值时，值不是浮点 ⇒ 仍走整数存储 + 读侧按 `F64` 重解读。未改、未测，已写进 `docs/ABI.md` R8 待裁决。
+4. `env_store` 在"值不是 `Var`"时会多一条 `Assign`（为了有个地址可取词）；MIR 体积对浮点全局写略有增长，本批未做体积读数。
+5. `/tmp/b387/r1.z`/`r2.z`/`r3.z` 三条"主程序直接打印"的读数停在 `0.000000`/`7`/`7` —— 是边界 1 那一格，不是本批引入：同形状的 `t424`（函数侧读写）本批仍 PASS。
+
+### 锚点记账（不 `--rebind`，理由同批次 386：会把别的会话那 57 处漂移一起改写）
+
+- 本批在 `gen.rs` 前部插入两个入口函数，其后行号整体前移；`docs/ABI.md` R8 里批次 385 写的段号**不回改**，在该节就地加了一句"旧段号 → 批次 387 新号"的对照（① `:1738`/`:1793`、② `:1718`/`:1824`、③ `:1857`）。
+- `python3 tools/check_abi_anchors.py --rebind --dry`：可解析锚点 `252 → 255`，定位失败仍是 3 条（`py_additions.c:2650`、`gen.rs:543`、`expr.rs:2292`，批次 386 在册的同名三条，非本批新增）；`--rebind` 对批次 385 那六个 `gen.rs` 旧号一律"4 处命中/唯一性不成立 ⇒ 拒改"，对批次 387 的新号判"落单的新锚点不纳新"（要收得由人显式 `--bless`）。本批按规矩不 `--bless`。
+
+### 下一批默认候选
+
+1. `t425` / 边界 1：模块体与主程序的读改走 env —— 这条在 axis G 上是同一族的最后一格。
+2. 边界 3：`x: float` 全局被整数字面量赋值时两头约定（写侧 `sitofp` 后存位模式，或读侧不做位重解读）。
+3. 边界 2：给 env 带类型（轴 B/F），收掉余下 3 条 `fptosi`。
+4. handoff §4 的 P1 丢行：`selfhost` 91（表示层，`codegen.rs:6210-6211` 丢 `variant`）、`quantum_basic` 85（要动 `runtime/py_additions.c`，本会话不动该文件）。
