@@ -1,0 +1,79 @@
+// 批次 404（任务 #45 第六成员，裁定表第 2 项的后半）：`format!` 是桩 —— 整宏返回一个写死的串。
+//
+// 病因（改前实拍，不是推断）：`expand_format`（`src/frontend/macro_expand.rs:191`）不看参数、
+// 无条件返回 `AstNode::StringLit("formatted string")` ⇒ `format!("value={}", 42)` 得到那个常数；
+// `.z` 语料里 **29 个文件 / 121 处**调用（`grep -rno 'format!(' --include='*.z'`，不含本用例）全打在
+// 同一个串上（含 `minimal_compiler.z` 代码生成器里的 5 处 `push_str(&format!(...))`），
+// 编译成功、退出码 0、一声不出。
+//
+// 改后（三处，缺一处就有成员落不回）：
+// ① `expand_format` 按 `{}` 切段，值段走 `__fmtspec__(v, "")` —— f-string 早有的逐静态类型派发
+//   （`gen.rs:7994` ⇒ `py_fmt_{i64,f64,str}`，空 spec 就是 `{}` 的语义），再与字面量段用 `+` 串接；
+// ② `resolver.rs` 的宏递归补下进 `Return` / `UnaryOp` / `BinaryOp` / `Call` 的实参，并把宏调用点的
+//   **实参先展开**再交给被调宏（`expand_macro_site`）—— 只改 ① 时 8 行里 5 行打 `[0]`/`[<null>]`，
+//   因为 `println!("{}", format!(…))` 的内层宏是作为 MacroCall 实参送进去的；
+// ③ `ImplBlock` 从「只 clone + 处理属性」的那一支拆出来，方法体走 `expand_stmts`（属性语义保持）。
+// 本批没有新增运行时函数、没改契约，也没动 `expand_println`（批次 377 的那套）。
+//
+// 已知未收（roadmap 批次 404 §五，六条都是本批实拍，不再往里塞推断）：
+// ① 带 spec 的占位符（`{:04}` `{:#x}` `{:.2}`）不被认成占位符，本批按字面量段处理 ——
+//   实拍 `format!("z={:04}", 7)` 打 `z={:04}7`、`format!("p={:.2}", 1.75)` 打 `p={:.2}1.750000`；
+//   运行时其实支持（`py_fmt_i64` 的 zero/x/o 分支），缺的是宏侧的切段；
+// ② `format!("{}", true)` 打 `b=1` 而不是 `True`（`__fmtspec__` 的派发没有 Bool 一档）；
+// ③ 模板不是字面量时仍是那个写死串（`format!(t, 1)` 打 `formatted string`；语料里 0 成员这样写）；
+// ④ `push_str(&format!(…))`：`&expr` 作实参本身 rc=139（改前改后同一份崩），所以 `minimal_compiler.z`
+//   的 5 处调用点本批仍然不动 —— 收它在 #47/#42 族；
+// ⑤ impl 方法**返回** Str 交给打印占位符打的是地址（`println!("[impl={}]", c.label())` 实拍
+//   `[impl=4374191776]`，每次跑不同）；方法体内自打自印是对的（本用例 `shown=` 那行）。
+//   这是 impl 方法返回类型/槽类型的一族，不在本批半径；
+// ⑥ `x.to_string()` 在 i64/f64/bool 接收者上 rc=139（伴随 `warning: ABI coerce in call to
+//   host_str_to_string arg[0]: fptosi`）—— 本批考虑过用它做值段派发，因为这个崩点改走 `__fmtspec__`。
+//
+// 逐行期望按实际输出写：
+// expect: [value=42]
+// expect: [ab]
+// expect: [hello!!!]
+// expect: [1.750000|42|str|end]
+// expect: [k=42][k=42]
+// expect: [Shape#3]
+// expect: [p=42q=42]
+// expect: shout=42
+// expect: [shown=Counter(42)]
+// expect: A=1
+fn tag(name: Str, v: i64) -> Str {
+    return format!("{}#{}", name, v);
+}
+
+struct Counter { n: i64 }
+
+impl Counter {
+    // `impl` 的方法体过去整块只被 clone（`resolver.rs` 把 ImplBlock 和 StructDef/EnumDef
+    // 归在同一支），体里的宏从不展开 ⇒ 这三行一声不出，方法却照跑。
+    fn shout(self) -> i64 {
+        println!("shout={}", self.n);
+        return self.n;
+    }
+    fn show(self) -> i64 {
+        println!("[shown={}]", format!("Counter({})", self.n));
+        return 0;
+    }
+}
+
+fn main() -> i64 {
+    let n = 42;
+    println!("[{}]", format!("value={}", n));
+    println!("[{}]", format!("ab"));
+    println!("[{}]", format!("{}!!!", "hello"));
+    println!("[{}]", format!("{}|{}|{}|end", 1.75, n, "str"));
+    let s = format!("k={}", n);
+    println!("[{}][{}]", s, s);
+    println!("[{}]", tag("Shape", 3));
+    let chain = format!("p={}", n) + format!("q={}", n);
+    println!("[{}]", chain);
+    let c = Counter { n: n };
+    c.shout();
+    c.show();
+    // 回归对照：批次 377 收掉的 println 字面量段，本批必须一字不变。
+    println!("A={}", 1);
+    return 0;
+}

@@ -3614,10 +3614,7 @@ fn shim_class_normalize(t: &Type) -> Type {
     /// Expand macros in a single AST node
     fn expand_macros_in_node(&mut self, node: &AstNode) -> Result<Vec<AstNode>, String> {
         match node {
-            AstNode::MacroCall { name, args } => {
-                // Expand macro call
-                self.macro_expander.expand_macro_call(name, args)
-            }
+            AstNode::MacroCall { name, args } => self.expand_macro_site(name, args),
             AstNode::FuncDef {
                 attrs,
                 name,
@@ -3688,12 +3685,42 @@ fn shim_class_normalize(t: &Type) -> Type {
             }
             AstNode::StructDef { attrs, .. }
             | AstNode::EnumDef { attrs, .. }
-            | AstNode::ConceptDef { attrs, .. }
-            | AstNode::ImplBlock { attrs, .. } => {
+            | AstNode::ConceptDef { attrs, .. } => {
                 // Process attributes
                 let mut nodes = vec![node.clone()];
                 let attr_expansions =
                     crate::frontend::macro_expand::process_attributes(attrs, node)?;
+                nodes.extend(attr_expansions);
+                Ok(nodes)
+            }
+            // PY-A: an `impl` method body is a statement list like a function
+            // body, but it was grouped with the declaration-only arms below and
+            // only cloned. The body still runs (the methods are registered), so
+            // every macro call inside it reached MIR lowering unexpanded and
+            // produced nothing — no output, no diagnostic.
+            AstNode::ImplBlock {
+                concept,
+                generics,
+                lifetimes,
+                ty,
+                body,
+                attrs,
+                doc,
+                where_clauses,
+            } => {
+                let expanded = AstNode::ImplBlock {
+                    concept: concept.clone(),
+                    generics: generics.clone(),
+                    lifetimes: lifetimes.clone(),
+                    ty: ty.clone(),
+                    body: self.expand_stmts(body)?,
+                    attrs: attrs.clone(),
+                    doc: doc.clone(),
+                    where_clauses: where_clauses.clone(),
+                };
+                let attr_expansions =
+                    crate::frontend::macro_expand::process_attributes(attrs, &expanded)?;
+                let mut nodes = vec![expanded];
                 nodes.extend(attr_expansions);
                 Ok(nodes)
             }
@@ -3745,7 +3772,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             // printed nothing (batch 378, backlog #38 ④).
             AstNode::ExprStmt { expr } => {
                 if let AstNode::MacroCall { name, args } = &**expr {
-                    self.macro_expander.expand_macro_call(name, args)
+                    self.expand_macro_site(name, args)
                 } else {
                     Ok(vec![node.clone()])
                 }
@@ -3783,11 +3810,57 @@ fn shim_class_normalize(t: &Type) -> Type {
             AstNode::Assign(lhs, rhs) => {
                 Ok(vec![AstNode::Assign(lhs.clone(), self.expand_expr_node(rhs)?)])
             }
+            // PY-A: `return` and the operand shapes a formatted string is built
+            // out of (`&format!(…)` inside a call, `format!(…) + format!(…)`) were
+            // not in this recursion, so their MacroCall reached MIR lowering
+            // unexpanded — the value came out 0/null with no diagnostic.
+            AstNode::Return(expr) => Ok(vec![AstNode::Return(self.expand_expr_node(expr)?)]),
+            AstNode::UnaryOp { op, expr } => Ok(vec![AstNode::UnaryOp {
+                op: op.clone(),
+                expr: self.expand_expr_node(expr)?,
+            }]),
+            AstNode::BinaryOp { op, left, right } => Ok(vec![AstNode::BinaryOp {
+                op: op.clone(),
+                left: self.expand_expr_node(left)?,
+                right: self.expand_expr_node(right)?,
+            }]),
+            AstNode::Call { receiver, method, args, type_args, structural } => {
+                Ok(vec![AstNode::Call {
+                    receiver: match receiver {
+                        Some(r) => Some(self.expand_expr_node(r)?),
+                        None => None,
+                    },
+                    method: method.clone(),
+                    args: self.expand_expr_list(args)?,
+                    type_args: type_args.clone(),
+                    structural: *structural,
+                }])
+            }
             _ => {
                 // For other nodes, just return them as-is
                 Ok(vec![node.clone()])
             }
         }
+    }
+
+    /// Expand a macro call site — arguments first, then the callee.
+    ///
+    /// The arguments used to reach `expand_macro_call` unexpanded, so a macro
+    /// nested in an argument (`println!("{}", format!(…))`) was handed to the
+    /// expander as a MacroCall and came out as a call to a function that does
+    /// not exist — the value printed 0 while the outer template survived.
+    fn expand_macro_site(&mut self, name: &str, args: &[AstNode]) -> Result<Vec<AstNode>, String> {
+        let expanded = self.expand_expr_list(args)?;
+        self.macro_expander.expand_macro_call(name, &expanded)
+    }
+
+    /// Expand each node of an expression list, keeping the list shape.
+    fn expand_expr_list(&mut self, nodes: &[AstNode]) -> Result<Vec<AstNode>, String> {
+        let mut expanded = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            expanded.push(*self.expand_expr_node(node)?);
+        }
+        Ok(expanded)
     }
 
     /// Expand macros across a nested statement list (see the container arms above).

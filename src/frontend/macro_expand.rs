@@ -193,10 +193,47 @@ impl MacroExpander {
             return Err("format! requires at least a format string".to_string());
         }
 
-        // Simple expansion: format!("Hello {}", name) -> String concatenation
-        // For now, just create a string literal with placeholder
+        // This used to return one hard-coded literal for every call, so
+        // `format!("fn {}(", name)` produced "formatted string" and the five
+        // sites in `minimal_compiler.z` built their output text out of it.
+        // `{}` splits the template into literal segments; each value goes
+        // through `__fmtspec__(v, "")`, which MIR lowering already dispatches
+        // per static type to `py_fmt_{i64,f64,str}` (empty spec == `{}`).
+        if let Some(AstNode::StringLit(format_str)) = args.first() {
+            let mut segments = format_str.split("{}");
+            let first = segments.next().unwrap_or_default();
+            let mut expr = AstNode::StringLit(first.to_string());
+            for value in &args[1..] {
+                expr = AstNode::BinaryOp {
+                    op: "+".to_string(),
+                    left: Box::new(expr),
+                    right: Box::new(self.fmtspec_expr(value)),
+                };
+                if let Some(segment) = segments.next() {
+                    expr = AstNode::BinaryOp {
+                        op: "+".to_string(),
+                        left: Box::new(expr),
+                        right: Box::new(AstNode::StringLit(segment.to_string())),
+                    };
+                }
+            }
+            return Ok(vec![expr]);
+        }
+
+        // A non-literal template has nothing to substitute into; `format!` in
+        // the corpus never writes one, so this stays the old stub.
         let result = AstNode::StringLit("formatted string".to_string());
         Ok(vec![result])
+    }
+
+    fn fmtspec_expr(&self, value: &AstNode) -> AstNode {
+        AstNode::Call {
+            receiver: None,
+            method: "__fmtspec__".to_string(),
+            args: vec![value.clone(), AstNode::StringLit(String::new())],
+            type_args: Vec::new(),
+            structural: false,
+        }
     }
 
     /// Expand assert_eq! macro
