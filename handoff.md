@@ -129,7 +129,7 @@ quantum_basic → selfhost → benchmark。每个做完跑快门禁 + 语料。
 |---|---|
 | `roadmap.md` | 执行日志（每批一段：现象/定位/修复/验证），14,000+ 行，只追加 |
 | `backlog.md` | **唯一任务登记表**（有界：新任务入表必须关闭一项旧任务） |
-| `refactor.md` | 重构主计划（轴 A-G + 排程；最小架构弧已获用户批准） |
+| `refactor.md` | 重构主计划（轴 A-G + 排程；"先补类型基础再回主线"的顺序已获用户批准） |
 | `pyramid.md` | 编译器设计原则审计清单（树状，含 2026 前沿注解） |
 | `docs/ABI.md` | 二进制接口合同（972 行，锚点核对器盯着它） |
 | `docs/architecture_optimization_analysis.md` | 架构分析（2026-09-20） |
