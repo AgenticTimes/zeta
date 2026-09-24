@@ -111,6 +111,11 @@ pub struct Resolver {
     /// PY-A: every registered function definition (including ones loaded from
     /// imported modules) — return-type inference must cover all of them.
     registered_func_defs: RefCell<Vec<AstNode>>,
+    /// 批次 400（类型基础③）：`"函数.参数"` → 该参数在各调用点看到的实参类形
+    /// （如 `str≠i64`）。只有**证据不一致**的参数才会进这张表，它们是"因为冲突
+    /// 而保持动态"的位置，`--report-untyped` 把它们和"从来没有任何证据"的动态
+    /// 参数分开出声。
+    ambiguous_dyn_params: RefCell<std::collections::HashMap<String, String>>,
 }
 
 // Learning: Complex type factored into type definition per clippy suggestion
@@ -148,6 +153,7 @@ impl Resolver {
             py_module_pkg: RefCell::new(std::collections::HashMap::new()),
             py_current_module: RefCell::new(None),
             registered_func_defs: RefCell::new(Vec::new()),
+            ambiguous_dyn_params: RefCell::new(std::collections::HashMap::new()),
         };
 
         // Register built-in runtime functions
@@ -1186,6 +1192,13 @@ impl Resolver {
         out
     }
 
+    /// 批次 400（类型基础③）：`"函数.参数"` → 该参数在各调用点看到的**互相矛盾**的
+    /// 实参类形。这些位置现在（正确地）保持动态，报告要把它们和"从来没遇到过任何
+    /// 证据"的动态位置区分开 —— 前者才是"最小类型检查"该出声的地方。
+    pub fn ambiguous_dyn_params(&self) -> std::collections::HashMap<String, String> {
+        self.ambiguous_dyn_params.borrow().clone()
+    }
+
     /// PY-A: infer the return type of untyped Python-style functions.
     ///
     /// `def f(s): return s.capitalize()` is declared i64 by the parser, so a
@@ -1397,6 +1410,13 @@ impl Resolver {
         }
         // Each pass propagates evidence one call level deeper (main ->
         // snakecase -> lowercase -> ...), so give the chain room.
+        // 批次 400（类型基础③）：一条参数只有在**所有**调用点类形一致时才钉。
+        // `pinned` = 本函数自己钉过的下标（冲突时只回退这些，用户手写的注解不动）；
+        // `conflicts` 一旦记入就永久拒绝再钉，否则下一个 pass 会把它钉回去。
+        let mut pinned: std::collections::HashSet<(String, usize)> =
+            std::collections::HashSet::new();
+        let mut conflicts: std::collections::HashSet<(String, usize)> =
+            std::collections::HashSet::new();
         for _ in 0..6 {
             for ast in &asts {
                 let AstNode::FuncDef { name, body, ret, .. } = ast else {
@@ -1563,11 +1583,7 @@ impl Resolver {
                     let mut changed: Vec<(usize, Type)> = Vec::new();
                     let member_aliases = self.py_member_aliases.borrow().clone();
                     for (i, a) in pargs.iter().enumerate() {
-                        // B3: unannotated params are PyDynamic (was I64). Both
-                        // remain upgradeable from call-site evidence.
-                        if i >= param_types.len()
-                            || !matches!(param_types[i], Type::I64 | Type::PyDynamic)
-                        {
+                        if i >= param_types.len() {
                             continue;
                         }
                         let cur_params2: Vec<(String, Type)> = self
@@ -1575,17 +1591,30 @@ impl Resolver {
                             .get(name)
                             .map(|(p, _, _)| p.clone())
                             .unwrap_or_default();
-                        match classify(a, &self.funcs, prefix.as_deref(), &aliases2, &cur_params2) {
-                            1 => changed.push((i, Type::Str)),
-                            2 => changed.push((i, Type::F64)),
-                            _ => {}
-                        }
+                        // 批次 400（类型基础③）：实参类形要在"这条参数还钉不钉得动"
+                        // 那道闸门**之前**取。上一个 pass 已把它钉成 str 时旧代码直接
+                        // 跳过整条实参，另一个调用点的 i64 证据就永远看不见 —— 于是
+                        // 一处调用点单方面决定了全体调用点的接收槽（c3.z：`show(3)` 的
+                        // dest 槽 type_map 判为 Str、走 `println_str` ⇒ SIGSEGV）。
+                        let mut kind = match classify(
+                            a,
+                            &self.funcs,
+                            prefix.as_deref(),
+                            &aliases2,
+                            &cur_params2,
+                        ) {
+                            1 => "str",
+                            2 => "f64",
+                            3 => "i64",
+                            _ => "",
+                        };
                         // PY-A: a param that receives a library HANDLE value
                         // (`f(datetime.date(2020,1,1))`, or `f(date(…))` after
                         // `from datetime import date`) must be typed as that
                         // handle, or every attribute/method inside the callee
                         // degrades. Both call shapes count: dotted
                         // `Root.member(…)` and a bare from-imported `member(…)`.
+                        let mut handle: Option<String> = None;
                         if let AstNode::Call { receiver, method: m, .. } = a {
                             let target = match receiver {
                                 None => member_aliases.get(m).cloned(),
@@ -1605,13 +1634,99 @@ impl Resolver {
                                     crate::middle::pylib::find_member(&module, &member)
                                         .and_then(|e| e.handle.clone())
                                 {
-                                    changed.push((i, Type::Named(tag, vec![])));
+                                    handle = Some(tag);
                                 }
                             }
+                        }
+                        // 句柄之间不算冲突（同一条参数可以收 `date(...)` 也可以收
+                        // `timedelta(...)`，钉住任一都比退化成动态强）；句柄与非句柄
+                        // 实参并存才算。
+                        if handle.is_some() {
+                            kind = "handle";
+                        }
+                        // B3: unannotated params are PyDynamic (was I64). Both
+                        // remain upgradeable from call-site evidence.
+                        if !matches!(param_types[i], Type::I64 | Type::PyDynamic) {
+                            let pinned_kind = match param_types[i] {
+                                Type::Str => "str",
+                                Type::F64 => "f64",
+                                Type::Named(..) => "handle",
+                                _ => "",
+                            };
+                            // i64 与 f64 算**同族**：钉 f64 后整数实参在调用点做
+                            // sitofp，两个调用点的值都正确（实测：`twice(3)`/`twice(1.5)`
+                            // 走 f64 钉时输出 6.000000/3.000000）。跨族（str×数值、
+                            // 句柄×其余）才是真冲突 —— 值身上没有类型标记，一种签名
+                            // 不可能同时正确服务两类实参。
+                            let numeric = |k: &str| k == "i64" || k == "f64";
+                            let clash = !pinned_kind.is_empty()
+                                && !kind.is_empty()
+                                && !(numeric(pinned_kind) && numeric(kind));
+                            if clash
+                                && pinned_kind != kind
+                                && pinned.contains(&(callee.clone(), i))
+                            {
+                                let pname = self
+                                    .funcs
+                                    .get(&callee)
+                                    .and_then(|(p, _, _)| p.get(i))
+                                    .map(|(n, _)| n.clone())
+                                    .unwrap_or_default();
+                                let first = self
+                                    .ambiguous_dyn_params
+                                    .borrow_mut()
+                                    .insert(
+                                        format!("{}.{}", callee, pname),
+                                        format!("{}≠{}", pinned_kind, kind),
+                                    )
+                                    .is_none();
+                                if first {
+                                    // 6 个 pass、多个调用点都会重复撞上同一处，只在
+                                    // 第一次出声。
+                                    eprintln!(
+                                        "warning: PY-A: parameter `{}.{}` receives \
+                                         incompatible argument kinds at different call \
+                                         sites ({} vs {}) — kept dynamic: one LLVM \
+                                         signature cannot serve both, so the value of \
+                                         the other kind travels through the integer slot. \
+                                         Annotate the parameter to settle it.",
+                                        callee, pname, pinned_kind, kind
+                                    );
+                                }
+                                conflicts.insert((callee.clone(), i));
+                                pinned.remove(&(callee.clone(), i));
+                                if let Some(entry) = self.funcs.get_mut(&callee) {
+                                    if i < entry.0.len() {
+                                        entry.0[i].1 = Type::PyDynamic;
+                                    }
+                                }
+                                // MIR 从 AST 文本读参数类型，所以两边都要回退。
+                                if let Some(AstNode::FuncDef { params, .. }) =
+                                    self.registered_funcs.get_mut(&callee)
+                                {
+                                    if i < params.len() {
+                                        params[i].1 = "dyn".to_string();
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        if !kind.is_empty() && conflicts.contains(&(callee.clone(), i)) {
+                            continue;
+                        }
+                        match kind {
+                            "str" => changed.push((i, Type::Str)),
+                            "f64" => changed.push((i, Type::F64)),
+                            _ => {}
+                        }
+                        if let Some(tag) = handle {
+                            changed.push((i, Type::Named(tag, vec![])));
                         }
                     }
                     for (i, t) in &changed {
                         param_types[*i] = t.clone();
+                        // 本函数钉的下标 —— 回退只针对这些，用户注解过的不动。
+                        pinned.insert((callee.clone(), *i));
                     }
                     let changed_pairs = changed.clone();
                     let changed = !changed.is_empty();

@@ -769,9 +769,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if report_untyped {
                     let list = resolver.report_untyped_params();
+                    // 批次 400：冲突而保持动态的位置单独标出来（类型基础③的"记录"半边）。
+                    let amb = resolver.ambiguous_dyn_params();
                     println!("untyped params ({}):", list.len());
                     for (f, p) in &list {
-                        println!("  {}.{}", f, p);
+                        match amb.get(&format!("{}.{}", f, p)) {
+                            Some(kinds) => println!("  {}.{}  ← 实参类形冲突: {}", f, p, kinds),
+                            None => println!("  {}.{}", f, p),
+                        }
                     }
                 }
 

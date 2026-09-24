@@ -312,7 +312,7 @@ codegen.rs:1074-1077，定义 tokio_runtime_stub.c:3792/3798/3804/3810。五者�
 
 **C10 默认值 / kwarg 在 MIR 期折叠成定长位置实参**，运行期不参与：
 注入标记 `zeta_param_default(index, value)`（parser/top_level.rs:341-362）→
-Resolver 收集 `param_defaults`（resolver.rs:613-637，kind 不匹配时 :627-634 告警）→
+Resolver 收集 `param_defaults`（resolver.rs:619-643，kind 不匹配时 :633-640 告警）→
 > 锚点源码：src/middle/mir/gen.rs
 gen.rs `fill` 按**声明顺序**落槽：位置实参（:8714-8720）→ 关键字（:8721-8726）→
 `**` 映射填未绑定槽（:8727-8739）→ 默认值（:8740-8749）。
@@ -367,7 +367,7 @@ M1–M4 在 `/tmp/abi3_*`（批次 316），M5–M7 在 `/tmp/abi8/`（批次 31
 ### 4.1 轴一的写侧：四种拼写，没有一种可逆
 
 **N1 模块限定的规范形是 `<module 的点换成下划线>__<member>`。**
-锚点 resolver.rs:1887、:2688；mir/gen.rs:392、:635、:747、:754、:3661。
+锚点 resolver.rs:2002、:2803；mir/gen.rs:392、:635、:747、:754、:3661。
 构造就是两次 `replace`，**没有转义**：`__` 既是分隔符又可能出现在 member 里，
 点号也会把 `a.b` 和 `a__b` 映到同一串。判"这是不是模块限定名"目前只有
 `actual_name.contains("__")`（codegen.rs:2935，与同一行的
@@ -454,9 +454,9 @@ extern 声明 :2874、:2877——**9 处全部落在 codegen.rs 这一份文件�
 
 > 锚点源码：src/main.rs
 **N9 `.N` 里的 N 不是 ABI，是"LLVM 在本 module 内第几次改名"的偶然计数。**
-⇒ 别名表与**IR 发射顺序**是一对锁死件：src/main.rs:863-866 的注释原文——
+⇒ 别名表与**IR 发射顺序**是一对锁死件：src/main.rs:868-871 的注释原文——
 HashMap 迭代顺序随机 ⇒ `print.N` 冲突改名和运行期别名表"从一次运行到下一次
-在能用与不能用之间翻转"，:867 的 `all_mirs.sort_by(...)` 就是这把锁的钥匙。
+在能用与不能用之间翻转"，:872 的 `all_mirs.sort_by(...)` 就是这把锁的钥匙。
 **合同级：确定性发射序是 ABI 的一部分，不是代码风格。**
 （runtime/tokio_runtime_stub.c:339 与 :343-344 的注释是这条的现场记录：`array_new_1` → `array_new.10`、
 `print` → `print.N` 且 N 随 arity 1-6 变动。）
@@ -1007,7 +1007,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
    **后果**：只要判据仍是"编译+链接全过"，解析恢复就被运行时完整度**封顶**——每恢复一行只要引用
    一个还没绑定的方法，就报成"编译器不支持这段语法"，而这批语料（self-host 编译器）离可运行
    还差整个 std 表面。⇒ 门禁改为分两段量：
-   - `src/main.rs:574` + `:921` 新增 `--no-link`（出 `.o` 即止）；
+   - `src/main.rs:574` + `:926` 新增 `--no-link`（出 `.o` 即止）；
    - `tools/run_all.sh:101` 只在"整链失败"时补跑一次 `--no-link` 做归因，
      日志两行：`official: compile N/194, compile+link M/194` 与逐文件的
      `### <name> — 缺运行时绑定: <符号名…>`（明细 `$OFFICIAL_LINK_DIAG`，默认

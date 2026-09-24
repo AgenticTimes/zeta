@@ -1,0 +1,24 @@
+// 批次 400（4.3.b / 类型基础③）：一条未标注参数在两个调用点收到**不同类形**的实参。
+//
+// 病因（改前实拍）：`show("hi")` 那条调用点的证据把参数 `v` 全局钉成 str，于是
+// `show(3)` 的接收槽也判为 Str、走 `println_str` ⇒ 把整数 3 当 `char*` 解引用
+// ⇒ SIGSEGV（rc=139，整个程序连一行都没输出）。图证：`--dump-mir` 里
+// `type_map: 2: Str` 配 `VoidCall { func: "println_str", args: [2] }`。
+//
+// 改后：i64 与 f64 算同族（钉 f64，整数实参在调用点加宽，两侧的值都对）；跨族
+// （str×数值、句柄×其余）不可合并 ⇒ 参数保持动态，编译期出声一次
+// `warning: PY-A: parameter ...incompatible argument kinds...`。
+//
+// 残口（登记，故本例不回显 str 侧的值）：动态接收槽身上没有类型标记，str 值仍打
+// 指针地址 —— 正解是裁定里排在后面的"给值加类型标记"。
+// expect: 3
+// expect: 14
+def show(v):
+    return v
+
+def main() -> i64:
+    show("hi")
+    n = show(3)
+    print(n)
+    print(n + 11)
+    return 0

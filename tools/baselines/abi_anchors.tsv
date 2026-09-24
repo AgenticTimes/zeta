@@ -162,9 +162,9 @@ src/frontend/parser/top_level.rs	71	// PY-A: `*args` / `**kwargs` star-params �
 src/frontend/parser/top_level.rs	341	// PY-A: Python default argument values. The AST's `params` only carries // (name, type), so defaults travel as a body-prologue marker // `zeta_param_default(in
 src/main.rs	568	let strict_abi = args.iter().any(|a| a == "--strict-abi")
 src/main.rs	574	let no_link = args.iter().any(|a| a == "--no-link");
-src/main.rs	863	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
-src/main.rs	867	all_mirs.sort_by(|a, b| {
-src/main.rs	921	if no_link {
+src/main.rs	868	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
+src/main.rs	872	all_mirs.sort_by(|a, b| {
+src/main.rs	926	if no_link {
 src/middle/mir/gen.rs	392	.map(|m| format!("{}__", m.replace('.', "_")))
 src/middle/mir/gen.rs	635	Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
 src/middle/mir/gen.rs	747	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
@@ -215,10 +215,10 @@ src/middle/mir/gen.rs	13907	/// return its name. The closure value is then the f
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");
 src/middle/pylib.rs	778	/// `declare_registry_runtime_fns` emits after task D.
 src/middle/pylib.rs	899	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");
-src/middle/resolver/resolver.rs	613	if method == "zeta_param_default" && args.len() == 2 { if let AstNode::Lit(i) = &args[0] { if (*i as usize) < defaults.len() { // Fail-loud when the default's l
-src/middle/resolver/resolver.rs	627	if mismatch { eprintln!( "warning: PY-A: the default for `{}` has a kind that \ parameter type `{}` cannot hold — it is coerced \ (annotate the parameter, or ch
-src/middle/resolver/resolver.rs	1887	let mangled = format!("{}__{}", module.replace('.', "_"), member);
-src/middle/resolver/resolver.rs	2688	let mangled = format!("{}__{}", canon.replace('.', "_"), src_mem);
+src/middle/resolver/resolver.rs	619	if method == "zeta_param_default" && args.len() == 2 { if let AstNode::Lit(i) = &args[0] { if (*i as usize) < defaults.len() { // Fail-loud when the default's l
+src/middle/resolver/resolver.rs	633	if mismatch { eprintln!( "warning: PY-A: the default for `{}` has a kind that \ parameter type `{}` cannot hold — it is coerced \ (annotate the parameter, or ch
+src/middle/resolver/resolver.rs	2002	let mangled = format!("{}__{}", module.replace('.', "_"), member);
+src/middle/resolver/resolver.rs	2803	let mangled = format!("{}__{}", canon.replace('.', "_"), src_mem);
 src/middle/specialization.rs	27	format!("{}_inst_{}", self.func_name, self.type_args.join("_"))
 src/middle/types/mod.rs	768	Type::DynamicArray(inner) => format!("[dynamic]{}", inner.display_name()),
 tests/python_style/run.sh	15	trap 'rm -rf "$OUTDIR"' EXIT
