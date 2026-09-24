@@ -16116,6 +16116,57 @@ official compile **194/194**（硬断言 `run_all.sh:575`）、compile+link **19
 
 裁定表第 2 项仍未做：**#38** match 剩余形 + **#45** 格式化输出丢字（同在 `gen.rs` 一段）。但本批新出一条**比它更便宜且已定位**的候选：§六的 Str 下标（1 行探针、AOT 静默错值 + JIT 静默崩、且它是 `selfhost` 在 JIT 侧唯一挡路石）；另需用户一句话的是 **#112**（`zt_vec_cmp` 在"永不触手"的 `runtime/py_additions.c`）。
 
+## 批次 402（交付）—— 2.2 拼写表：`Str` 从没被登记进"拼写→Type"表 ⇒ 假类 `Named("Str")`，字符串下标一路掉进 DictGet 兜底（AOT 打 0、JIT 当场崩），返回值被调用点按 i64 读（打地址）
+
+候选来源：任务 #121 ＝ 批次 401 §六顺手扫出的那条（1 行探针、AOT 静默错值、JIT 静默崩，且是 `selfhost` 在 JIT 侧唯一的挡路石）。裁定表第 1 项（类型基础①②③ ＝ 批次 398/399/400）已按序交完，第 2 项（#38＋#45）仍在后面；本批走的是 401 §六自己登记的那条更便宜、已定位的候选，不是插队。归位：刀口在 **2.2 的"拼写→Type"表**（一个名字一行），症状读在 **3.2 的下标臂序**（`Type::Str` 打不中就一路掉到文件末尾兜底）与 **4.3.b 的槽位类型**。
+
+### 一、根因一句话 + 两处一行臂（`gen.rs` +6/−1、`typecheck_new.rs` +6）
+
+`Str` 是 Zeta 自己的字符串类型名，而表里只写了 python 侧的小写 `str`；表里没有的名字一律落回 `Type::Named(名字, [])`——**一个假类**，此后每一处"按类型派发"都不认它。`tests/unit-tests/selfhost.z:29` 的 `fn tokenize(input: Str)` 配 `:33` 的 `let ch = input[i];` 就是这条路的语料成员。两半各修一处、各自承重（§二分开量过）：
+① `typecheck_new.rs:123` 补 `"Str" => return Type::Str` —— 签名表。缺它则调用点把 `-> Str` 的返回值 typed 成 i64，打印出 `char*` 的数值。
+② `gen.rs:1142` 参数臂 `"str"` → `"str" || "Str"` —— 形参槽。缺它则 type_map 停在 `Named("Str")`（实拍 `--dump-mir`：改前 `selfhost` 的 `1: Named("Str", [])` → 改后 `1: Str`，那一格就是 `tokenize` 的形参），于是下标臂 `gen.rs:13115` 的 `if let Type::Str = base_ty` 打不中 ⇒ 一路掉到 `gen.rs:13308` 的 DictGet 兜底 ⇒ **对一个 `char*` 走哈希表取值**。
+
+### 二、两处各自承重（三份二进制同在 `target/release/`：`zetac_b402_pre` / 专构 `zetac_b402_no1`（只补②）/ 全含 `zetac`）
+
+| 档 | `q1.z`（`fn f(s: Str) -> Str { return s[0]; }` ＋ 局部 `let t: Str`） | `x1.z`（＝ t438 体） | `selfhost` MIR |
+|---|---|---|---|
+| PRE（两处都缺） | `c=0 d=y` | **零输出 rc=139** | `DictGet 16 / str_get 0` |
+| 只补 ②（撤掉①再构一版） | `c=4374384624 d=y` | `a=4302360560 b=4302360544 c=3 d=y e=4302360432`（跑通了，三个 str 值全打地址） | `DictGet 4 / str_get 12` ← 与全含档一字相同 |
+| POST（两处都补） | `c=a d=y` | `a=a b=c c=3 d=y e=x` rc=0 | 同上 |
+
+⇒ ② 收的是"下标派发＋崩溃"，① 收的是"调用点把返回值读成整数 ⇒ 打印地址"，两半不是冗余。`d=y` 三档都对，因为**局部变量的注解**走的是另一张已经认 `Str` 的表——坏的只有"形参"这一路，这也解释了套件 320 例全绿却看不见它。同族对照探针：`p2.z`（小写 `str` 形参、`-> i64`）PRE 打 `c=4336816112`，`p1.z`（大写 `Str`、函数体一字不差）PRE 打 `c=0` ⇒ 唯一差别就是拼写。`p3.z`（`String`）改前改后都 `c=0`，见 §五②。
+
+### 三、门禁读数（`bash tools/run_all.sh`，日志 `/tmp/b402/gate.log`，ts `2026-09-24T19:44:51Z`，跑在代码提交前、内容与 `34bd4324` 一致）
+
+official compile **194/194**（硬断言 `run_all.sh:575`）、compile+link **191/194**（三条 link-only 明细与批次 401 逐字相同：`integration_all_features`、`quantum_basic`、`selfhost` 的缺符号名一字未动 ⇒ 本批不认领、也不会移动这个读数）；python_style **321 passed / 2 failed / 5 known-fail / 0 xpass**（320 ＋ 本批 t438，两红仍是存量 t231/t233）；语料 39/39；**jit `ok=174 trap=348 fail=0 timeout=0 segv=0`（total 521→522）⇒ 批次 401 转红的那一步（`run_all.sh:580`）本批转绿**：segv 1→0，trap ＋2 逐条可归（新用例 t438 自身一条 ＋ `selfhost` 从 segv 档换进 trap 档一条）；diff `match=120 judged=130 rate=92.3% bad_case=0`；knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 各 FAIL 0，mbvar 21 脚本违规 0；comment_drift 0；clean_checkout rc=0（3s，rev `c73f392e`）；诊断 official **2 文件 / 5 行**未动，python_style **95→96 文件 / 200→201 行**——**这一格是本批动的**：t438 里 `println!("{}", first(s))`（str）与 `println!("{}", letters(s))`（i64）同指一个 `print.value`，撞上批次 400 那条"参数保持动态"告警一行（实拍：t438 编译 stderr 逐字只有这一行业具名诊断；五条期望值仍按实测全对）。整体 **GATE_RC=1** 实拍，来源回到**唯一一条**存量 `run_all.sh:576`（`py_fail=2`）。
+
+### 四、语料定价：806 文件 `--dump-mir` 三值 A/B，只有 2 个文件变
+
+`/tmp/b402/mir3.tsv`（三份二进制：PRE / 只补② / 全含；806 行 × 4 列）：**DIFF 2 个文件** ＝ `selfhost` 的两份拷贝（`tests/unit-tests/` ＋ `examples/`），逐文件明细即 §二末列（`DictGet 16→4`、`str_get 0→12`）；其余 804 个文件三份哈希逐字相同。另两点必须写清：
+① 我最初把**第三处**改动（`Type::from_string`，`src/middle/types/mod.rs:283`）一起构进去量过——它在 806 文件上**贡献 0 行 MIR 变化**（"只补②"与"全含"两档逐文件哈希相同），因此 `git checkout --` 还原、不随本批出门（它有没有活读者未测 ⇒ 登记 §五③）。
+② AOT 真运行这一栏本批是空的：`selfhost` 仍是 link-only（缺 `_as_str/_into_iter/_is_alphabetic/_push`）⇒ 没有二进制可跑，运行期证据只能来自 t438（PRE 整文件零输出 rc=139 → POST 五行全对 rc=0）。
+③ 语料面 `: Str` 拼写共 **21 处 / 6 文件**（`selfhost` 两份各 6、本批用例 6、`t436`/`t206` 各 1、`pylib/pandas.z` 1）——除 selfhost 外那些位置的接收者没有下标/派发需求，所以 MIR 一字不变。
+
+### 五、边界与残口（OPEN 净增 0：全部折进 #41/#42/#22/#33/#117 既有行 ＋ 任务行）
+
+① **一条开工前的预设被实测推翻**（更正落在任务行 #121 的验收口径，不回改批次 401 正文）：原以为"把这条下标改道 `str_get`"就两边都修好。AOT 侧确实修好了（§二），JIT 侧没有——`str_get` 在 JIT 同样无绑定（`pylib/jit_mappings.txt` 149 行里 grep `str_get` **0 命中**，C 侧实现在 `runtime/tokio_runtime_stub.c:2634`、LLVM 声明在 `codegen.rs:957`）。全含档下 `selfhost` 的 JIT 从 rc=139 变成 rc=1 ＋ 一条具名 `E4016`，未绑定符号集**逐字 diff ＝ 只多一条 `str_get`**（16→17），程序仍一行都不打印。它仍是 #42 那一族：不是本批的成就，也不是本批引入的缺陷。
+② `String` 拼写**故意不收**：`build/stubs/std/string.z:4` 真的 `pub struct String`，那是实名而非 `str` 的别名，并进 `Type::Str` 会砸掉整套桩。探针 `p3.z` 改前改后都 `c=0`（下标仍走 DictGet）——这条静默错值留在册上。
+③ 三张并行的"拼写→Type"表（`types/mod.rs:283` 的 `from_string`、`typecheck_new.rs:98-133`、`new_resolver::parse_type_string`）本批只补了其中一张。一个名字要写三遍、写漏一处就得到一个"只有部分路径认得"的类型——正是 #22 双轨收敛要收的东西，本批给它添了第三个成员。顺带一条对 #21/#22 有用的实测：撤掉 `typecheck_new.rs:123` 会让 `q1.z` 从 `c=a` 退回打地址 ⇒ **typecheck_new 这条轨是活的**，不是并行的死表。
+④ `-> i64` 的函数返回 `s[0]` 时打地址（`p1.z` 全含档 `c=4377317360`）：属"声明与实现按位重解读"（#33）那一档，不是下标派发；本批让它从"打 0"变成"打地址"，两个都不对 ⇒ **不认领为改进**。
+⑤ `selfhost` 剩余 4 处 `DictGet`（`--dump-mir` 行 3245/3359/3548/3683）未追——它们是否真是 map 访问、还是下一个假类，本批未测。
+
+### 六、锚点读数
+
+`gen.rs` 14,592 → **14,597**（净 ＋5，插入点 `:1142` ⇒ 其后行号整体 ＋5）。`--rebind` 收 `docs/ABI.md` 66 行、`tools/baselines/abi_anchors.tsv` 72 行；改后只读复扫 **漂移 30 / 新 11 / 消失 3**（基线 251 条、改号配对 0 对、待归属 100 条 / 91 种、声明仓外 14 条）——三个数与批次 401 终态**一字相同** ⇒ 本批没新增漂移。存量 30 条清理仍是 #52，核对器仍不在门禁 #37。用例文件头里那条 `gen.rs:13115` 是本批改后的号（改前 `:13110`），两个号都写在行内以免读者对不上。
+
+### 七、提交与推送
+
+代码批 **`34bd4324`**（5 文件 / +137 / −70）：`src/middle/mir/gen.rs` +6/−1、`src/middle/resolver/typecheck_new.rs` +6、`tests/python_style/t438_str_param_subscript.z`（新，56 行）、`docs/ABI.md` ＋ `tools/baselines/abi_anchors.tsv`（rebind）。记录批紧随其后，两笔一起推 `agentic`。
+
+### 八、下一批默认候选
+
+裁定表第 2 项：**#38** match 剩余形 ＋ **#45** 格式化输出丢字（同在 `gen.rs`）。次位：#42 的 JIT 绑定表——`str_get` 现在是 `selfhost` 在 JIT 侧唯一新增的那一条（量在 §五①），补它比再猜一条方言便宜。仍需用户一句话的是 **#112**（`zt_vec_cmp` 在"永不触手"的 `runtime/py_additions.c`）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。

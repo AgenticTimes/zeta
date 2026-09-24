@@ -7,7 +7,8 @@
 //    通用名分支，回来是 `Named("Str")` —— 一个**假类**。调用点据此把返回值 typed
 //    i64 ⇒ `println!("{}", first(s))` 打的是 `char*` 的数值。
 // ② `src/middle/mir/gen.rs:1142` 的参数臂同理只认 `"str"` ⇒ 形参槽在 type_map
-//    里是 `Named("Str")`，于是 `gen.rs:13110` 那条 `Type::Str` 下标臂打不中，
+//    里是 `Named("Str")`，于是 `gen.rs:13115` 那条 `Type::Str` 下标臂打不中
+//    （号为本批改后；改前 `:13110`，本批在此文件前部 +5 行），
 //    一路掉到文件末尾的 DictGet 兜底（`s[i]` 下成 `map_get`）——对一个 `char*`
 //    走哈希表：AOT 侧读到 0（`/tmp/b402/p1.z` 实拍 `c=0`，rc=0、一声不出），
 //    JIT 侧 rc=139 SIGSEGV（`tests/unit-tests/selfhost.z` 实拍）。
