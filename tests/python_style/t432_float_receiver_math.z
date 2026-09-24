@@ -1,0 +1,96 @@
+// 批次 397：浮点接收者的 math 方法族第一次真的算对（值走对寄存器、返回类型对）。
+//
+// 病因链（实拍）：`x.sqrt()` 里 x 的类型是 F64 ⇒ 下型走到 receiver_ty 链的末端
+// else（`gen.rs:10824` 的 `(method.clone(), …)`），MIR 里落成 `Call{func:"sqrt_1"}`；
+// 这个名字后端查不到定义，`get_or_declare_function` 的兜底按 `i64(i64,…)` 声明
+// extern（`codegen.rs:2910`），于是 `coerce_call_args` 给实参发 `arg_fptosi`
+// （`codegen.rs:6977`）—— double 被截成整数塞进整数寄存器，返回值再按 i64 读回。
+// 结果：`9.0.sqrt()` 打 9、`1.0.exp()` 打 -1、`2.71828.log()` 打 -70362147107897345。
+// 而同一张注册表（`pylib/registry.txt`）早就写着 `F math sqrt py_math_sqrt
+// args=f64 ret=f64`，`runtime_decls_registry.rs:190` 也已经把它声明成
+// `double(double)` —— 模块限定写法 `math.sqrt(3.9)` 一直是对的（本用例最后一行），
+// 缺的只是"浮点接收者的裸方法名"这一条路由。
+//
+// 修法：末端 else 里，在"唯一 X::method 候选"那条之后加一条注册表路由 ——
+// 接收者是 F64/F32、`math` 表里有同名成员、元参数量对得上、声明实参全是 f64、
+// 不是桩，就按 entry.symbol 调用并按 entry.ret 给目的槽类型；同时关掉这条调用的
+// `_<argc>` 消歧后缀（否则符号名变成 `py_math_sqrt_1`）。判据形状抄 `a ** b`
+// → `py_math_pow` 的既有先例（`gen.rs:4304`）。零新符号、零运行时改动、零 ABI 表改动。
+//
+// 改前/改后（同一探针、同一目录实拍）：
+//   sqrt 9→3.000000  exp -1→2.718282  log -70362147107897345→1.000000
+//   log10 -1→3.000000  cos 0→1.000000  sin 0→0.000000  ceil 2→3
+//   pow -1→1024.000000  atan2 1→0.785398  fabs -3→3.500000
+//   （floor/trunc 的改前读数恰好与正解同值，不列入证据）
+//   语料形 `(limit as f64).sqrt()`，limit=100：改前 100 / 改后 10.000000；
+//   据此驱动的筛法外圈 trip 数 改前 99 → 改后 9。
+//   语料成员：tests/performance/phase1_sieve_implementation.z:32/118/249/299/358、
+//   tests/unit/phase1_zeta_implementation.z:65/127、tests/primezeta/prime_final_no_bom_fixed.z:82/115、
+//   examples/distributed_murphy_sieve.z:85、tests/unit-tests/benchmark_simd_vs_scalar.z:38/86/169。
+//   `ABI coerce … fptosi → i64` 告警数：fam 探针 8 → 2（余下两条是 `abs`/`round`，
+//   `math` 表里没有这两个成员名 ⇒ 仍走老路）；语料形 3 → 0。
+//
+// 仍未收的同族成员（登记，不在本用例里 blessing 错值）：整数接收者的 `.sqrt()`
+// （`9.sqrt()` 打 9）、float 接收者调 `math` 表里声明为 i64 实参的成员
+// （`9.0.isqrt()`、`1.0.isfinite()` ⇒ 链接期 `_isfinite`/`isqrt_1` 未定义，一声不出到链接才炸）。
+//
+// 逐行期望按实际输出写（每行都已与 CPython 对数）：
+// expect: sqrt=3.000000
+// expect: exp=2.718282
+// expect: log=1.000000
+// expect: log10=3.000000
+// expect: cos=1.000000
+// expect: sin=0.000000
+// expect: floor=2
+// expect: ceil=3
+// expect: trunc=-2
+// expect: fabs=3.500000
+// expect: pow=1024.000000
+// expect: atan2=0.785398
+// expect: log2=3.000000
+// expect: fmod=1.000000
+// expect: hypot=5.000000
+// expect: cbrt=3.000000
+// expect: degrees=180.000000
+// expect: copysign=-3.500000
+// expect: corpus_sqrt=10.000000
+// expect: corpus_as_int=10
+// expect: corpus_trips=9
+// expect: qualified_control=1.974842
+
+fn f() -> i64 {
+    let v = 9.0
+    let w = 2.0
+    println!("sqrt={}", v.sqrt());
+    println!("exp={}", 1.0.exp());
+    println!("log={}", 2.718281828459045.log());
+    println!("log10={}", 1000.0.log10());
+    println!("cos={}", 0.0.cos());
+    println!("sin={}", 0.0.sin());
+    println!("floor={}", 2.9.floor());
+    println!("ceil={}", 2.1.ceil());
+    println!("trunc={}", (-2.9).trunc());
+    println!("fabs={}", (-3.5).fabs());
+    println!("pow={}", w.pow(10.0));
+    println!("atan2={}", 1.0.atan2(1.0));
+    println!("log2={}", 8.0.log2());
+    println!("fmod={}", 7.0.fmod(2.0));
+    println!("hypot={}", 3.0.hypot(4.0));
+    println!("cbrt={}", 27.0.cbrt());
+    println!("degrees={}", 3.141592653589793.degrees());
+    println!("copysign={}", 3.5.copysign(-1.0));
+    let lim = 100
+    println!("corpus_sqrt={}", (lim as f64).sqrt());
+    println!("corpus_as_int={}", (lim as f64).sqrt() as i64);
+    let mut trips = 0
+    let mut p = 2
+    while p <= ((lim as f64).sqrt() as i64) {
+        trips += 1
+        p += 1
+    }
+    println!("corpus_trips={}", trips);
+    println!("qualified_control={}", math.sqrt(3.9));
+    return 0
+}
+
+f();

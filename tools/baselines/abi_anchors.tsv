@@ -200,18 +200,18 @@ src/middle/mir/gen.rs	9574	func: "zeta_dyn_contains".to_string(),
 src/middle/mir/gen.rs	10309	if receiver.is_none() && arg_ids.len() == 1 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
 src/middle/mir/gen.rs	10498	// PY-A: closure call — if the callee is a var bound to a // lambda/closure value, lower to a direct named call to the // synthetic closure function (f(41) → __
 src/middle/mir/gen.rs	10738	if receiver.is_none() && arg_ids.len() <= 4 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
-src/middle/mir/gen.rs	10979	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
-src/middle/mir/gen.rs	10982	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
-src/middle/mir/gen.rs	10993	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
-src/middle/mir/gen.rs	11004	format!("{}_{}", func, arg_ids.len())
-src/middle/mir/gen.rs	11559	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
-src/middle/mir/gen.rs	11820	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
-src/middle/mir/gen.rs	12391	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
-src/middle/mir/gen.rs	12395	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
-src/middle/mir/gen.rs	12492	format!("{}_{}", func_name, arg_ids.len())
-src/middle/mir/gen.rs	13106	func: "zeta_dyn_getitem".to_string(),
-src/middle/mir/gen.rs	13134	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
-src/middle/mir/gen.rs	13742	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
+src/middle/mir/gen.rs	11001	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
+src/middle/mir/gen.rs	11004	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
+src/middle/mir/gen.rs	11015	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
+src/middle/mir/gen.rs	11027	format!("{}_{}", func, arg_ids.len())
+src/middle/mir/gen.rs	11586	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
+src/middle/mir/gen.rs	11847	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
+src/middle/mir/gen.rs	12418	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
+src/middle/mir/gen.rs	12422	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
+src/middle/mir/gen.rs	12519	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	13133	func: "zeta_dyn_getitem".to_string(),
+src/middle/mir/gen.rs	13161	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
+src/middle/mir/gen.rs	13769	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");
 src/middle/pylib.rs	778	/// `declare_registry_runtime_fns` emits after task D.
 src/middle/pylib.rs	899	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");

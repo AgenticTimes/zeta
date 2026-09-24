@@ -41,12 +41,18 @@ fn f() -> i64 {
 }
 print(f())
 EOF
-# 夹具：`.sqrt()` 的实参是 f64、形参落定成 i64 ⇒ 真的走 fptosi ⇒ coerce 告警 + 汇总行。
+# 夹具：把一个 f64 实参交给形参落定成 i64 的函数 ⇒ 真的走 fptosi ⇒ coerce 告警 + 汇总行。
+# 批次 397 换的夹具：原来是 `x.sqrt()`（浮点接收者的方法按 i64(i64,…) 兜底声明 ⇒ 实参被 fptosi），
+# 那条已经按注册表路由成 `double(double)` 的正当调用，**不再是 ABI 越界样本** ⇒ 旧夹具恒 0 告警，
+# 把"旋钮失灵"和"语料里再没有 coerce"读成同一件事。新夹具钉的是这一族最朴素的形：
+# 用户函数形参 i64、实参 f64 —— 与本批修法无关，ZETA_STRICT_ABI 拦的就是它。
 cat > "$TMP/abi.z" <<'EOF'
+fn g(v: i64) -> i64 {
+    return v
+}
 fn f() -> i64 {
     let x: f64 = 4.0
-    let y = x.sqrt() as u64
-    return y as i64
+    return g(x)
 }
 print(f())
 EOF

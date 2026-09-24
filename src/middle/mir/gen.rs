@@ -10761,6 +10761,10 @@ call, no NULL-handle dereference).",
                     }
                 }
 
+                // Batch 397: set when a float-receiver method is bound to a
+                // `py_math_*` registry symbol; carries that symbol's declared
+                // return so the dest slot is not the i64 default.
+                let mut float_math_ret: Option<&'static str> = None;
                 let (func, is_array_len, is_array_push) = if let Some(ref rty) = receiver_ty {
                     // Check if receiver is a dynamic array type
                     if let Type::DynamicArray(_) = rty {
@@ -10819,6 +10823,24 @@ call, no NULL-handle dereference).",
                         cands.dedup();
                         if cands.len() == 1 {
                             (cands.remove(0), false, false)
+                        } else if matches!(*rty, Type::F64 | Type::F32)
+                            && let Some(entry) =
+                                crate::middle::pylib::find_member("math", method)
+                            && entry.args.len() == arg_ids.len()
+                            && entry.args.iter().all(|t| t == "f64")
+                            && !entry.stub
+                            && (entry.ret == "f64" || entry.ret == "i64")
+                        {
+                            // Batch 397: `x.sqrt()` on a float receiver used to
+                            // lower to the bare method name, which codegen then
+                            // declared as `i64(i64, …)` — the double travelled
+                            // in an integer register after an `fptosi`, so the
+                            // result was garbage (`9.0.sqrt()` → 9). The
+                            // `math` table already holds the right symbol,
+                            // argument types and return; route onto it, exactly
+                            // as `a ** b` routes to `py_math_pow`.
+                            float_math_ret = Some(entry.ret.as_str());
+                            (entry.symbol.clone(), false, false)
                         } else {
                             // For inherent methods, use plain method name.
                             (method.clone(), false, false)
@@ -10999,7 +11021,8 @@ call, no NULL-handle dereference).",
                 // `DataFrame::columns` (batch 99 fixed this in codegen only).
                 let suffixed = !(func.starts_with("zeta_")
                     || func.contains("__")
-                    || func.contains("::"));
+                    || func.contains("::"))
+                    && float_math_ret.is_none();
                 let func_name = if suffixed {
                     format!("{}_{}", func, arg_ids.len())
                 } else {
@@ -11024,11 +11047,15 @@ call, no NULL-handle dereference).",
                     // Look up the callee's known return type (name may carry an
                     // "_argc" disambiguation suffix added above).
                     let base = base_name.as_deref().unwrap_or(func.as_str());
-                    let ret_ty = self
-                        .func_ret_types
-                        .get(base)
-                        .cloned()
-                        .unwrap_or(Type::I64);
+                    let ret_ty = match float_math_ret {
+                        Some("f64") => Type::F64,
+                        Some(_) => Type::I64,
+                        None => self
+                            .func_ret_types
+                            .get(base)
+                            .cloned()
+                            .unwrap_or(Type::I64),
+                    };
                     // PY: generic callee — substitute concrete type args into
                     // the declared return type so the dest slot matches the
                     // monomorphized instance (fn f[T](..) -> T with T=f64 must
