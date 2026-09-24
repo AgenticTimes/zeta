@@ -16660,6 +16660,206 @@ match 分支，属"指向的代码大致对但号不准"，按只认 `file:line`
 **(b)** 406 §十(b) 仍未回：要不要把 C 运行时接进 JIT（动 `py_additions.c` 侧构建）；
 **(c)** 406 §十(c) 的 acceptance 非确定性崩溃，先要"至少跑 N 次"的判据。
 
+## 批次 408（主线 301 打印族第二格：嵌套 `def` 的提升臂没记返回类型表）
+
+判据来源是批次 407 §十一(a) 预写的那句："下一批 = 闭包那一格，修完的判据是 `jq_wufu.mir` 里
+`to_string_i64(args=[88])`/`args=[92]` 两处变化可量"。本批那条判据**命中**（§六）。代码一笔
+`eabd17ab`，`resolver.rs` 零改动 —— 因为 407 给这一格猜的成因是错的（§三）。
+
+### 一、实拍与差分矩阵（四支探针，改前后各一次）
+
+同一台机、同一份源；改前二进制 `target/release/zetac_b408_pre`、改后 `zetac`，同目录跑
+（批次 385 之后记的运行时 `.o` 查找坑）。四支里的 `_fmt` 都是同一个
+`def _fmt(codes): return ";".join(codes) if codes else "-"`：
+
+| 探针 | 与 p13 的唯一差别 | 改前 | 改后 | CPython |
+|---|---|---|---|---|
+| p13 | 基准形：`v = _fmt(xs)` 之后 `print(f"t={_fmt(xs)}")` | `t=4374486864` | `t=a;b` | `t=a;b` |
+| p14 | 打印换成拼接形 `print("t=" + v)` | **`t=a;b`（本来就是对的）** | `t=a;b` | `t=a;b` |
+| t444.py | 插值 + 两条 `len` 累加 | `t=4308475808` / 3 / 6 | `t=a;b` / 3 / 6 | 同右 |
+| t444 套件用例 | 两处插值 + 一条返回 i64 的嵌套 `def` | `t=4312309664` / `e=4309068594` / 7 | `t=a;b` / `e=-` / 7 | 同右 |
+
+三行读数各自的分工：
+
+- **p14 改前就是对的**，而它和 p13 的 callee 写法、实参、`_fmt` 定义完全相同 —— 这是本批否掉
+  407 候选解释的那次差分（§三）。
+- `len` 那两条改前后都是 3 / 6 ⇒ 受害面只在"按静态槽型选名字的打印路径"。`len` 走动态分发、
+  读 `char*`，没被这一格污染。也正因如此，这一格在 407 之前从没被**算术**暴露出来（对比 407 §一
+  的 p 系：那里地址串是喂进 `len` 参与运算的）。
+- 最后一列的 `7`（`num(3)` 返回 i64）改前后都对，它是"修法没有顺手扩大"的哨兵：返回 i64 的
+  嵌套 `def` 本来就落在 I64 兜底上，两条改动都没碰它。
+- 地址随 ASLR 变（407 §一 记过同形两次 4378372832 / 4332055264；本批写记录这次是
+  4312309664，与 t444 头部所记 4313653152 不同次）。可复现的是"它是地址、不是文本"。
+
+用例自身的坑（不是代码问题，但要记）：新用例在套件里首跑 FAIL，原因是我把断言写成了
+`# expect:`。套件只认 `// expect:`（`run.sh` 的 `case` 分支），`#` 那条形不成任何断言 ⇒
+零断言用例走 `verdict bad`，报的是 `expected:  | actual: t=a;b…` —— 判据是**响亮失败**、
+不是静默通过，所以这套约定本身不需要加固（327 个文件用 `//`，只有我这 1 个用 `#`）。
+改成 `//` 后同一套件 326 passed → 327 passed。
+
+### 二、定位：两处各丢一半 —— 缺的是"记"，不是"取"
+
+改前 p14 的 MIR（`/tmp/b408/p14.mir`）把两个函数块并排摆着，同一件事给出两个矛盾的型：
+
+- `__closure_0_outer_c8f5e1bd4` 块的 `type_map` 有 `4: Str`（`:62`），`Return { val: 4 }` 就在
+  它上面（`:38-40`）—— **闭包体自己知道自己返回 Str**；
+- 同一文件 `outer` 块里，`Call { func: "__closure_0_outer_c8f5e1bd4", dest: 2 }`（`:178-185`）
+  之后，`type_map` 写 `2: I64`、`4: I64`（`:228-229`），而拼接结果 `9: Str`（`:231`）。
+
+⇒ 类型是在"登记"这一步丢的，两半各缺一处：
+
+1. `gen.rs:14380` 起，体是**语句列表**时走 `AstNode::Block` 臂，`body_val` 是该臂自造的哑
+   `IntLit(0)`（就是 p14.mir `:57` 的 `9: IntLit(0)`、`type_map: 9: I64`）。紧跟的
+   `self.last_closure_ret_ty = child.type_map.get(&body_val)` 于是对**任何**语句列表体都记 I64。
+2. `fn_depth > 1` 的嵌套 `def` 提升臂（`gen.rs:2089`）只 insert `closure_vars` + `hoisted_names`，
+   **从来没有**写 `closure_ret_tys`；lambda 那条 `AstNode::Closure` 表达式臂有这条
+   （`gen.rs:13762-13765`）。所以"lambda 打印对、嵌套 `def` 打印错"能长期共存而没人追问。
+
+调用点读 `closure_ret_tys.get(&closure_fn).unwrap_or(Type::I64)`，插值在槽型不是 Str 时经
+`lower_to_string`（`gen.rs:3255`，默认臂 `:3268`）发 `to_string_i64`。改后的正向证明：
+`p13.mir`（改前）`:199` 有 `func: "to_string_i64"`，改后同一探针的 MIR 里 `to_string` **零次命中**；
+p14 改后是 `2: Str`、`4: Str`。
+
+### 三、批次 407 §七 的候选解释判死（另起一节，不回改 407 正文）
+
+407 §七 当时写的是"这一格出在 `resolver.rs:1558-1570` 的三形 callee 解析、加第四形"，并按纪律
+标了"静态推断、未单独定位"。p13/p14 把它否了，三条独立证据：
+
+- 两支的 callee 写法、实参、`_fmt` 定义**完全相同**，只有打印形不同。若病因是"取证据那一步缺臂"，
+  两支都该错；实测 p14 改前就对。
+- 改前的 `outer` 块里那条 `Call` 已经解析到提升名 `__closure_0_outer_c8f5e1bd4`（p14.mir `:179`）
+  —— 名字解析这一步没丢东西，`resolver` 侧无事可做。
+- 落点反证：两条改动都在 `gen.rs`，`resolver.rs` 本批一行未动，而 p12/p13 从改前错变成改后对。
+
+所以 407 那句"闭包/提升名的调用点不产生签名证据"作为**现象**成立，作为**成因**不成立：证据在
+闭包体自己身上是齐的（`4: Str`），是**提升臂没把它登记到调用点查的那张表**。407 正文按纪律保留。
+
+### 四、修法：两条，23 行插入 / 1 行改写
+
+`gen.rs:2090-2096`（提升臂补上那条 insert）：
+
+    if let Some(t) = self.last_closure_ret_ty.clone() {
+        self.closure_ret_tys.insert(hoisted.clone(), t);
+    }
+
+`gen.rs:14398-14407`（语句列表体改从体自身的 `Return` 取型）：
+
+    self.last_closure_ret_ty = match body {
+        AstNode::Block { .. } => child
+            .stmts
+            .iter()
+            .find_map(|s| match s {
+                MirStmt::Return { val } => child.type_map.get(val).cloned(),
+                _ => None,
+            }),
+        _ => child.type_map.get(&body_val).cloned(),
+    };
+
+保留的两处克制：单表达式体（lambda）走原来那条 `child.type_map.get(&body_val)`，一个字没改；
+Block 体里找不到顶层 `MirStmt::Return` 时是 `None`，与"lambda 没有返回类型"同义 —— 不臆造
+Unit，也不回落到 I64。
+
+### 五、定价：套件 5 例 / 语料 4 文件，以及"没测的那一半"
+
+尺子：先剥掉以 `//` 开头的行再 `ast.parse`（Rust 形态的 `.z` 天生解析不了：套件 334 个文件里
+261 个可解析、73 个不可 ⇒ 这把尺子覆盖 78%）。判据是"函数体里还有 `def`"：
+
+- 套件成员 **5** 个文件：`t180_nested_class`（`make/__init__`、`make2/__init__`）、
+  `t288_nested_def_json_items_get`（`outer/_add`、`outer/_scale`）、`t302_nested_def_in_closure`
+  （`outer/a`、`outer/b`、`a/b`）、`t30_nonlocal`（`make_counter/inc`、`accumulate/add`）、
+  本批新建的 `t444_nested_def_closure_ret_ty`（`outer/_fmt`、`outer/num`）。
+- 语料（`~/source/quant/REasyQuant/strategies/**/*.py`，39 文件）里有嵌套 `def` 的 **4** 个文件。
+- 存量 4 例：改前二进制 vs 改后二进制，**输出逐字相同、rc 相同**（同一条命令里对比）。这既是本批
+  的零回归面，也是"这一格从来没被套件命中过"的正证据 —— 407 那轮门禁失败名单只有
+  `t231/t233`，本批同样只有 `t231/t233`（§八），所以套件里没有任何一例因这一格而错。
+  **这一格的成员只存在于语料侧**（`jq_wufu.py` 的 `_fmt`），这也是主线 301 才把它逼出来的原因。
+- 没测的那一半：语料另外 3 个嵌套 `def` 文件的**输出**没逐例比过，本批只比了夹具 `jq_wufu`
+  的 MIR 计数（§六）。不把"零回归面"外推到未测成员。
+
+### 六、夹具移动量与 407 §十一 预写判据的闭合
+
+`jq_wufu.py --dump-mir`（同一份源、同机；改前用 407 留下的基线 `jqwufu_b407.mir`）：
+
+| 读数 | 改前 | 改后 |
+|---|---|---|
+| MIR 行数 | 85,066 | 85,042 |
+| `to_string_i64` 次数 | 26 | 24 |
+| `_parity_snapshot` 内该转换的实参 | `args=[81]`、`[88]`、`[92]` | 只剩 `[81]` |
+
+`to_string` 的差集正好两条 ⇒ 407 §十一(a) 的判据命中：`args=[88]`/`[92]` 两处消失，对应源码
+`jq_wufu.py:366-367` 的 `target={_fmt(target)}` 与 `holdings={_fmt(sorted(holdings))}`。
+这是 `[PARITY]` 那条阻塞上**第一次有真实移动量**（405/406/407 三批对该夹具的 MIR 逐字节不动，
+407 §六 记过那次"零移动"）。
+
+### 七、PARITY 那一行还剩第三格，而且这一格在 C 侧
+
+没被本批动掉的 `args=[81]`，上游是 `Call { func: "zeta_dt_date", args: [82], dest: 81 }`
+（改后夹具里 `_parity_snapshot` 块内），对应源码 `jq_wufu.py:366` 的 `{context.current_dt.date()}`。
+而 `runtime/py_additions.c:3422` 是
+
+    int64_t zeta_dt_date(int64_t h) { return h; }
+
+声明侧 `codegen.rs:1078` 也是 `i64(i64)` ⇒ `.date()` 从来没产生过字符串，`to_string_i64` 打的是
+句柄本身。这一格**不是类型登记问题**：类型侧现在全对也拿不到可读的值，需要一个真实现，而
+`runtime/py_additions.c` 在"等用户一句话"的清单上（与 406 §十(b)"C 运行时接不接进 JIT"同一扇门）。
+⇒ 主线 301 的 `[PARITY]` 读数由此分成两半：两个 `_fmt` 字段本批已经能读，日期字段仍要 C 侧点头。
+它和 407 §八 记的 p2（dict 值那族）不是同一格：那格的型来自容器元素，这格来自一个恒等桩。
+登记在 backlog #33 行内。
+
+### 八、门禁（提交后的树上重跑，`clean_checkout rev=eabd17ab`）
+
+`bash tools/run_all.sh` 15 步全跑（`/tmp/b408/gate408b.log`）：
+
+- official：编译 **194/194**、编译+链接 **191/194**（3 例 link-only：`integration_all_features`、
+  `quantum_basic`、`selfhost`，缺的运行时绑定名与 407 同名单）；
+- python_style：**327 passed / 2 failed / 5 known-fail / 0 xpass**，失败名单
+  `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` —— 与 407 逐字相同，
+  passed 从 326 → 327 就是本批新增的那 1 例；
+- 语料：**39/39 = 100%**；编译期诊断 official 5 行 / 2 文件、python_style 203 行 / 98 文件（同 407）；
+- jit_sweep：`ok=175 trap=353 fail=0 timeout=0 segv=0`（total 528，最小 ok=163）⇒ `ok` 未回退、
+  无静默崩溃。新增的 t444 落在 trap 一档：实测它的 `E4016` 名单是
+  `[zeta_dynarray_new, py_not]`，即 #42/批次 315 那个"JIT 不链 `runtime/*.c`"的既有族，
+  不是本批带来的新口径；
+- diff test：`match=120 judged=130 rate=92.3% bad_case=0`（与 407 同）；
+- 专项断言：knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 /
+  ignore_rules 19 / mbvar 21（checked 21, failed 0）/ comment_drift restated 0 —— 全部 FAIL 0；
+- `gate_rc=1`，唯一红灯仍是 `run_all.sh:576` 的 `py_fail != 0`（那 2 例存量），水位线与 407 一致。
+
+### 九、锚点：+8/+18 的位移让读数从 66 回到 30，与 407 的水位线只差一格
+
+本批在 `gen.rs:2090` 前插 8 行、`:14391` 前插 18 行 ⇒ `docs/ABI.md` 里所有指向 gen.rs
+后文的行号整体位移。`python3 tools/check_abi_anchors.py` 首跑读数：**漂移 66 / 新 11 / 消失 3**
+（407 记录时是 30/11/4）；`--rebind` 改写 33 行 / 57 个数字并刷新基线后：**漂移 30 / 新 11 / 消失 3**。
+其中：
+
+- 漂移 30 与 407 的残留**同数**，且都是核对器自己列出的"唯一性不成立，不猜"那批
+  （如 `gen.rs:1781 → 4 处命中`、`:3452 → 2 处命中`）—— 水位线没被本批推高；
+- 消失 3 比 407 的 4 少 1：有一条"消失 + 新"配成了对，被 `--rebind`（批次 354 的那条判据）收掉；
+- 本批新增的三处引用（`gen.rs:14380`、`:14398`、`:2096`）写在 t444 头部，是**裸行号**，
+  核对器看不见（#52 那格）；三处已用 `sed -n '${L}p'` 逐条实读核过：`:2089` 是
+  `self.closure_vars.insert(...)`、`:2096` 是新加的 `closure_ret_tys.insert(...)`、
+  `:14380` 是 `AstNode::Block { body: stmts } => {`、`:14398` 是 `self.last_closure_ret_ty = match body {`。
+
+### 十、提交
+
+- `eabd17ab` —— `fix(mir): 批次 408 …`：`src/middle/mir/gen.rs`（+23/-1）、
+  `tests/python_style/t444_nested_def_closure_ret_ty.z`（新建 40 行）、`docs/ABI.md` +
+  `tools/baselines/abi_anchors.tsv`（rebind，66/72 行改号）。已推 `agentic`，`unpushed=0`。
+- 本记录批：`roadmap.md` + `backlog.md`（#7、#33 两行折行，OPEN 净增 0）。
+
+### 十一、下一批候选（按本批新读到的实测损害量排）
+
+**(a) 主线 301 的 acceptance 读数**：`_fmt` 两格已经能读，日期那格要 §七 的 C 侧点头 ⇒
+`[PARITY]` 那一行现在**部分**可读。驱动 `/tmp/b406/_drv_accept_406.py` 要放回
+`strategies/code/` 才能链接（批次 406 记过），跑它会扰动语料分母 ⇒ 必须等门禁不在跑时做。
+判据：`[PARITY] target=… | holdings=…` 两字段是文本而不是地址，且成交笔数不再是 0。
+**(b) 闭包的参数侧**（本批新读到，未修）：p14.mir 的闭包块 `type_map: 1: I64` 是形参
+`codes` —— 返回侧本批通了，参数侧的型仍然记成 I64。它与 407 的 `collect_calls` 那臂不同源：
+嵌套 `def` 根本不在 `resolver.rs:941-971` 注册的 `funcs` 表里（那里只登记顶层项），所以
+"实参证明形参"这条链对它整体不通。定价：套件 5 例 / 语料 4 文件里凡嵌套 `def` 收容器都吃这一格。
+**(c)** 407 §八 的 p2（dict 值那族）：`d=4377586386` 未动，型来自容器元素而非参数证据。
+**(d)** 406 §十(b) 仍是未回的一句话（C 运行时接不接进 JIT，同时挡 §七 与 (a)）；
+406 §十(c) 的 acceptance 非确定性判据仍未立。
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
