@@ -15361,3 +15361,46 @@ pyramid 位置：2.2 语法分析（顶层项读不下 ⇒ W1002 截断），成
 1. 3.2：让带载荷的枚举变体在 match 里可测（打开 `pattern_has_matcher` 的前置），做完 `selfhost` 91 行的成员 1 才有解，成员 2 跟着复测。
 2. 6.1 / G.6：MIR verifier —— 上面这类"看起来条件其实无条件"的坑正是 verifier 该抓的。
 3. 4.3.b / 2.3：t425 的归因（34 例回归还没归因，不许直接再上读路径）。
+
+---
+
+## 批次 390（只有定位，零代码改动）—— 4.3.b：34 例回归不是"写点没镜像够"，是环境格这份**第二副本**装不下类型和作用域两样信息
+
+pyramid 位置：4.3.b 值表示（环境格 `zeta_env_get`/`zeta_env_set`）；成员 M3 落在 2.3 名称解析（跨作用域同名并格）。本批同时取回 2.2 的 W1002 剩余读数。
+
+### 做法
+
+批次 388 的补丁原样打回（`git apply --check /tmp/b388/b388-attempt1.patch` 通过，`git apply` 后 `gen.rs` +32 行），`cargo build --release`（15.95s）当作 B，HEAD 构建当作 A，逐条取读数；测完 `git checkout -- src/middle/mir/gen.rs` 回退并重建。
+
+### 三条机制，各自的最小夹具在 2–3 行上复现（`/tmp/b390/`）
+
+| 机制 | 夹具 / 套件用例 | A（HEAD） | B（打补丁） |
+|---|---|---|---|
+| M1 副本落后于槽：不在镜像写集里的修改看不见 | `/tmp/b390/m1.z`（`xs = [3, 1, 2]` / `xs.remove(3)` / `print(xs)`）；`t91_list_methods` 末行；`t292_container_truth` 第 3 行 | `[1, 2]` / `[1]` / `5` | `[3, 1, 2]` / `[3, 1]` / `3` |
+| M2 格子里只有一个裸 64 位字，元素类型与 bool/float 的表示传不过来 | `/tmp/b390/m2.z`（`parts = "a,b,c".split(",")` / `print(parts[1])`）；`t190_pandas_column` 第 2/3 行；`t155_float_comparison_type` 前四行与末行 | `b` / `x`,`y` / `True,False,True,False` + `3.000000` | `4370309088`（地址）/ `4369222504`,`4369222506` / `1,0,1,0` + `3` |
+| M2 的下游：无类型的字选不到方法表 | `t183_dict_copy` | 通过 | rc=134 响亮 abort：`PY-A: \`_get\` is NOT implemented in this build`（读回来的字丢了类型 ⇒ 分派落到桩） |
+| M3 格子按**裸名字**索引，跨作用域同名并成同一格 | `t423_static_mut_persistent`（函数里的 `static mut` 与模块全局同名）——11 行期望里只差这一行 | `top=0` | `top=10` |
+
+逐行差异存在 `/tmp/b390/t155.d`、`t190.d`、`t292.d`、`t423_static_mut_persistent.out`（`diff` 计数 14/6/4/1 行）。
+
+**反证一条（我自己的假设先死）**：批次 389 留下来的解释是"`append` 重绑句柄、环境格里留着旧指针"。`/tmp/b390/g1.z`（模块体 `xs = []` + 三次 `append` + 函数里 `len(xs)`）A、B 两版都给 `3` 和 `[1, 2, 3]` ⇒ 这个形上没有失效，那条解释不成立。同份 MIR（`/tmp/b390/g1_B.mir`）里 `zeta_env_get` 5 处对 `zeta_env_set` 1 处，说明读侧确实改打了环境格（正向证据，不是"路径没打到所以看着没错"）。
+
+### 判据结论
+
+"每个写点补一次镜像"这条追不完：M1 的 `xs.remove(3)` 就是一条不经过 `gen.rs` 那 8 处 `env_store` 的写路径。但补得再全也解决不了另外两条——M2 缺的是**类型与元素信息**（一格只有 64 位裸字），M3 缺的是**作用域区分**（格按裸名字索引）。所以 4.3.b 这条规则要从"写读对称（两份存储互相同步）"改成"模块全局只有一个存放点"（槽直接落在环境表里，或格内存的是槽地址、类型随行），与 `pyramid.md:96`「类型随 IR 携带…不许靠旁路哈希表」是同一件事。上一轮那句"一个函数都没有的用例一炸，说明读写对称那条规则根本不对"在本次读数下成立，但成立的原因不是漏了镜像写点，而是这份副本装不下类型与作用域两样信息。
+
+### 顺带：2.2 的 W1002 只剩 2 处，两处的下游都不是解析
+
+- `tools/truncation_inventory.sh`：237 文件、2 命中、91 + 85 行（`/tmp/b390/trunc.log`）。
+- `quantum_basic.z` 85 行的唯因是**函数体里的 `use`**：`/tmp/b390/f2.z` 一条即炸；把原文件那两行 `use` 删掉后 155/155 行全解析（`/tmp/b390/qb_nouse.*`）。但解析放开后仍缺 5 个符号（`factor`、`optimal_iterations`、`success_probability`、`test_fn`、`[dynamic](i64, i64)__iter`，`/tmp/b390/qb_build.log`）⇒ 还要 `std::quantum` 模块和"元组解绑出来的值当函数调"。官方基线是 compile-only（`tools/run_all.sh:79`、`:93` 只拷 `tests/unit-tests/*.z`），所以这个文件今天是**假绿**：`/tmp/b390/qb_orig.bin` 零输出、rc=0，85 行测试代码一行没跑。`use` 只有顶层规则（`top_level.rs:133`），语句表里没有（`stmt.rs:1735` 的 alt 只有 `parse_static`/`parse_let`），而解析器认得 `use` 是关键字（`parser.rs:83`）。
+- `tools/parse_bisect.py` 对 `selfhost` 报的病因行 `:96`（`i += 1; // Skip 'fn'`）**被独立夹具证伪**：`/tmp/b390/f1.z` 同形单喂 rc=0、无 W1002 ⇒ 病因在 match 臂的上下文里，bisect 这一条不能自证，仍以批次 389 的夹具表为准。
+
+### 门禁
+
+回退后 `bash tests/python_style/run.sh` rc=1，`/tmp/b390/ps_revert.log` = 310 passed / 2 failed / 5 known-fail / 0 xpass，红线仍只有 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`（与批次 387 交付时一字未变）。本批零代码改动 ⇒ 无代码提交。
+
+### 下一批默认候选
+
+1. 4.3.b：模块全局"单一存放点"的设计批——先只写清槽落点与类型随行，别一次性换读侧（本批三条机制就是换读侧的代价读数）。
+2. 2.2：`quantum_basic` 85 行拆成三个成员分别开批（函数体 `use` 解析 / `std::quantum` 模块 / 元组解绑值的调用），第一格还要顺带回答"假绿要不要进 known-fail"。
+3. 3.2：带载荷枚举变体（selfhost 成员 1 前置，批次 389 的表仍在）。
