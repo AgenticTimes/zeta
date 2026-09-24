@@ -1,0 +1,34 @@
+// 批次 387：f64 过环境表的另外两条写路径 —— `global` 声明后的 `=` 与 `+=`。
+// `t426` 只钉了"写一次、别处读一次"；本用例钉两条：
+//   1. 函数里 `global ratio` 再 `ratio = ratio + 1.0`（`env_store` 里"值不是 `Var` ⇒ 先落一个
+//      新槽再取址"那一支）；
+//   2. 函数里 `ratio += 0.25`（批次 385 的 `+=` 镜像传的是**刚写过的槽**，浮点因此走位模式）。
+// 三条读数与 `python3` 同形状程序逐字相同。
+// 主程序自己读回旧值是另一格（`t425_module_body_stale_read.z`）；没有声明类型的闭包
+// `nonlocal` 浮点仍按整数截断，见 `docs/ABI.md` R8。
+// expect: after_global=3.500000
+// expect: after_addop=3.750000
+// expect: main_read=3.750000
+ratio: float = 2.5
+
+fn bump_global() {
+    global ratio
+    ratio = ratio + 1.0
+}
+
+fn bump_addop() {
+    ratio += 0.25
+}
+
+fn peek() -> float {
+    return ratio
+}
+
+fn main() -> i64 {
+    bump_global()
+    println!("after_global={}", peek())
+    bump_addop()
+    println!("after_addop={}", peek())
+    println!("main_read={}", ratio)
+    return 0
+}

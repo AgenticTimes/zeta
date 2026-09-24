@@ -413,6 +413,79 @@ impl MirGen {
         None
     }
 
+    /// Store `value` into the env cell called `name` and return the key's id,
+    /// which callers reuse for the matching `zeta_env_get`.
+    ///
+    /// The cell is one raw 64-bit word (`zeta_env_set(i64, i64)`), and a reader
+    /// hands it back typed by the name's declared type (`global_ty_of`) — so a
+    /// float cell is REINTERPRETED, not converted. A float going into such a
+    /// cell therefore has to go in as its BIT PATTERN: the call-argument
+    /// coercion used to `fptosi` it, which dropped the fraction (measured:
+    /// module global `ratio = 2.5`, read in another function as `0.000000`).
+    /// Names with no declared type keep the truncating store on purpose — their
+    /// readers type the cell `I64`, and bits would come out as a huge integer
+    /// instead of today's truncated one (closure `nonlocal` floats).
+    fn env_store(&mut self, name: &str, value: u32) -> u32 {
+        let key_id = self.next_id();
+        self.exprs
+            .insert(key_id, MirExpr::StringLit(name.to_string()));
+        self.type_map.insert(key_id, Type::Str);
+        let declared_float = matches!(self.global_ty_of(name), Some(Type::F32) | Some(Type::F64));
+        let value_float = matches!(
+            self.type_map.get(&value),
+            Some(Type::F32) | Some(Type::F64)
+        );
+        let stored = if declared_float && value_float {
+            // Read the word back out of the slot's own address: `load i64` from
+            // the `double` alloca is the same reinterpretation the read side
+            // does. A bare expression is put through a slot first, both to have
+            // an address to read and because codegen re-evaluates expressions at
+            // each use (see the `=`/`+=` mirror sites).
+            let slot = match self.exprs.get(&value) {
+                Some(MirExpr::Var(_)) => value,
+                _ => {
+                    let fresh = self.next_id();
+                    self.exprs.insert(fresh, MirExpr::Var(fresh));
+                    self.type_map
+                        .insert(fresh, self.type_map.get(&value).cloned().unwrap_or(Type::F64));
+                    self.stmts.push(MirStmt::Assign {
+                        lhs: fresh,
+                        rhs: value,
+                    });
+                    fresh
+                }
+            };
+            let addr_id = self.next_id();
+            self.exprs
+                .insert(addr_id, MirExpr::AddrOf { alloca_id: slot });
+            self.type_map.insert(addr_id, Type::I64);
+            let bits_id = self.next_id();
+            self.exprs.insert(
+                bits_id,
+                MirExpr::Deref {
+                    addr_id,
+                    pointee_width: 8,
+                },
+            );
+            self.type_map.insert(bits_id, Type::I64);
+            bits_id
+        } else {
+            value
+        };
+        self.stmts.push(MirStmt::VoidCall {
+            func: "zeta_env_set".to_string(),
+            args: vec![key_id, stored],
+        });
+        key_id
+    }
+
+    /// The type to give a slot that just read `name` out of the env cell: the
+    /// name's declared type when it has one (the cell holds that value's word),
+    /// `I64` otherwise. See `env_store` — write and read have to agree.
+    fn env_slot_ty(&self, name: &str) -> Type {
+        self.global_ty_of(name).unwrap_or(Type::I64)
+    }
+
     /// Key for a module-level global read: `Var(n)` -> n, and a module member
     /// (`mod.NAME`) -> `<module with . as _>__NAME` (plus the bare spelling,
     /// which `global_ty_of` also accepts).
@@ -1241,14 +1314,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         // PY-A V3: nonlocal name — defining assignment stores
                         // through env; bind local slot to an env load.
                         let rhs_id = self.lower_expr(expr);
-                        let key_id = self.next_id();
-                        self.exprs
-                            .insert(key_id, MirExpr::StringLit(name.clone()));
-                        self.type_map.insert(key_id, Type::Str);
-                        self.stmts.push(MirStmt::VoidCall {
-                            func: "zeta_env_set".to_string(),
-                            args: vec![key_id, rhs_id],
-                        });
+                        let key_id = self.env_store(name, rhs_id);
                         let slot_id = self.next_id();
                         self.stmts.push(MirStmt::Call {
                             func: "zeta_env_get".to_string(),
@@ -1257,7 +1323,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             type_args: vec![],
                         });
                         self.exprs.insert(slot_id, MirExpr::Var(slot_id));
-                        self.type_map.insert(slot_id, Type::I64);
+                        let ty = self.env_slot_ty(name);
+                        self.type_map.insert(slot_id, ty);
                         self.name_to_id.insert(name.clone(), slot_id);
                     }
                     AstNode::Var(name) => {
@@ -1648,14 +1715,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     if let Some(&existing) = self.name_to_id.get(name) {
                         if self.nonlocal_names.contains(name) {
                             // PY-A V3: nonlocal write → env store
-                            let key_id = self.next_id();
-                            self.exprs
-                                .insert(key_id, MirExpr::StringLit(name.clone()));
-                            self.type_map.insert(key_id, Type::Str);
-                            self.stmts.push(MirStmt::VoidCall {
-                                func: "zeta_env_set".to_string(),
-                                args: vec![key_id, rhs_id],
-                            });
+                            self.env_store(name, rhs_id);
                             let unit_id = self.next_id();
                             self.exprs.insert(unit_id, MirExpr::IntLit(0));
                             self.type_map.insert(unit_id, Type::Tuple(vec![]));
@@ -1675,25 +1735,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             // function), codegen re-evaluates that expression at
                             // the use site and the second `+=`/`=` was counted
                             // twice (measured: function returned 7, env held 11).
-                            let key_id = self.next_id();
-                            self.exprs
-                                .insert(key_id, MirExpr::StringLit(name.clone()));
-                            self.type_map.insert(key_id, Type::Str);
-                            self.stmts.push(MirStmt::VoidCall {
-                                func: "zeta_env_set".to_string(),
-                                args: vec![key_id, existing],
-                            });
+                            self.env_store(name, existing);
                         }
                     } else if self.nonlocal_names.contains(name) {
                         // PY-A V3: inner-scope write before any local bind
-                        let key_id = self.next_id();
-                        self.exprs
-                            .insert(key_id, MirExpr::StringLit(name.clone()));
-                        self.type_map.insert(key_id, Type::Str);
-                        self.stmts.push(MirStmt::VoidCall {
-                            func: "zeta_env_set".to_string(),
-                            args: vec![key_id, rhs_id],
-                        });
+                        let key_id = self.env_store(name, rhs_id);
                         // rebind the local alias to an env load so later reads
                         // see the fresh value
                         let slot_id = self.next_id();
@@ -1704,7 +1750,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             type_args: vec![],
                         });
                         self.exprs.insert(slot_id, MirExpr::Var(slot_id));
-                        self.type_map.insert(slot_id, Type::I64);
+                        let ty = self.env_slot_ty(name);
+                        self.type_map.insert(slot_id, ty);
                         self.name_to_id.insert(name.clone(), slot_id);
                         let unit_id = self.next_id();
                         self.exprs.insert(unit_id, MirExpr::IntLit(0));
@@ -1740,16 +1787,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         });
                         if self.module_globals.contains(name) {
                             // mirror into env so cross-function reads work —
-                            // through the slot just written, see :1668 for why
-                            // the rhs expression is not safe to hand over twice
-                            let key_id = self.next_id();
-                            self.exprs
-                                .insert(key_id, MirExpr::StringLit(name.clone()));
-                            self.type_map.insert(key_id, Type::Str);
-                            self.stmts.push(MirStmt::VoidCall {
-                                func: "zeta_env_set".to_string(),
-                                args: vec![key_id, new_id],
-                            });
+                            // through the slot just written, see the
+                            // `existing` mirror above for why the rhs
+                            // expression is not safe to hand over twice
+                            self.env_store(name, new_id);
                         }
                     }
                 } else {
@@ -1780,14 +1821,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // path, which always goes to the env, printed that value back.
                     if self.nonlocal_names.contains(name) {
                         let rhs_id = self.lower_expr(&new_rhs);
-                        let key_id = self.next_id();
-                        self.exprs
-                            .insert(key_id, MirExpr::StringLit(name.clone()));
-                        self.type_map.insert(key_id, Type::Str);
-                        self.stmts.push(MirStmt::VoidCall {
-                            func: "zeta_env_set".to_string(),
-                            args: vec![key_id, rhs_id],
-                        });
+                        self.env_store(name, rhs_id);
                         return;
                     }
                     let rhs_id = self.lower_expr(&new_rhs);
@@ -1820,14 +1854,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     // use — so passing `rhs_id` after the `Assign` added twice
                     // (`total += 1; total += 2` returned 20 while env held 22).
                     if self.module_globals.contains(name) {
-                        let key_id = self.next_id();
-                        self.exprs
-                            .insert(key_id, MirExpr::StringLit(name.clone()));
-                        self.type_map.insert(key_id, Type::Str);
-                        self.stmts.push(MirStmt::VoidCall {
-                            func: "zeta_env_set".to_string(),
-                            args: vec![key_id, slot_id],
-                        });
+                        self.env_store(name, slot_id);
                     }
                     return;
                 }
@@ -3446,7 +3473,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         type_args: vec![],
                     });
                     self.exprs.insert(slot_id, MirExpr::Var(slot_id));
-                    self.type_map.insert(slot_id, Type::I64);
+                    let ty = self.env_slot_ty(name);
+                    self.type_map.insert(slot_id, ty);
                     return slot_id;
                 }
                 if let Some(&existing) = self.name_to_id.get(name) {
@@ -3487,7 +3515,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         type_args: vec![],
                     });
                     self.exprs.insert(slot_id, MirExpr::Var(slot_id));
-                    self.type_map.insert(slot_id, Type::I64);
+                    let ty = self.env_slot_ty(name);
+                    self.type_map.insert(slot_id, ty);
                     return slot_id;
                 }
 
@@ -13076,14 +13105,7 @@ call, no NULL-handle dereference).",
                     Self::collect_free_vars(body, &mut bound, &mut free);
                     for name in free.iter() {
                         if let Some(&cur_id) = self.name_to_id.get(name) {
-                            let key_id = self.next_id();
-                            self.exprs
-                                .insert(key_id, MirExpr::StringLit(name.clone()));
-                            self.type_map.insert(key_id, Type::Str);
-                            self.stmts.push(MirStmt::VoidCall {
-                                func: "zeta_env_set".to_string(),
-                                args: vec![key_id, cur_id],
-                            });
+                            self.env_store(name, cur_id);
                         }
                     }
                 }
