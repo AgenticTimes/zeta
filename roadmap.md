@@ -15182,3 +15182,43 @@ W1004 那句话是"这一行有个词被忽略了"。前四行共 25 处的共�
 3. §4 剩下的两格：`selfhost` 91（卡在表示层，批次 382 已改判）、`quantum_basic` 85（函数体里的 `use`，卡在 C 符号 + `py_additions.c` 解锁）。
 4. 批次 382 候选 1：给带数据的 enum 变体加 tag（`codegen.rs:6210-6211` 丢 `variant`），ABI 半径。
 5. 一次误报响 N 声的去重（批次 384 候选 4）。
+
+## 批次 386（只有定位，零代码改动）—— f64 过环境表：读侧已经"按声明类型取位模式"，写侧还在 `fptosi` 截小数；而"按声明类型给槽"这条规则在七个 `zeta_env_get` 读点里只做了一半
+
+### 现象（同一份存储上的两格，形状不同）
+批次 385 的 `t426` 只钉了一格（顶层 f64 在别的函数里读回 `0.000000`）。本批把同一格周围的三种写法各测一遍（`target/release/zetac -o`，AOT）：
+- `/tmp/b386/q1.z`（`t426` 同形：顶层 `ratio = 2.5`，另一个函数 `return ratio`）：`outer=2.500000`、`inner=0.000000`，2 条 fptosi 告警。
+- `/tmp/b386/q2.z`（同全局，另一个函数里写 `global ratio` 再 `ratio = ratio + 1.0`，然后主程序和函数各读一次）：`outer=3`、`peek=0.000000`，3 条 fptosi ⇒ 主程序拿到的是**整数 3**：小数没了、声明类型也没了（正解 3.5）。
+- `/tmp/b386/q3.z`（把 `global` 那一行删掉，函数里只写 `ratio = ratio + 1.0`）：`outer=2.500000`、`peek=0.000000`，3 条 fptosi ⇒ 主程序走的是自己那条 `=` 留下的旧槽，与批次 385 边界 1 一致。
+- `/tmp/b386/pA.z`（闭包里的 `nonlocal` f64，这个名字根本不是模块全局）：`read= 2`、`outer= 7`，3 条 fptosi ⇒ 截断成整数；另外 `x = 7.25` 之后紧挨着的那条 `print` 一个字没打（见"边界"第 4 条）。
+
+### 定位（`--emit-llvm` 三份产物，不靠推断）
+1. **写侧丢小数**：`/tmp/b386/f1.ll:1122-1123` —— `store double 2.5` → `load double` → `%arg_fptosi = fptosi double %35 to i64` → `call void @zeta_env_set(i64 …, i64 %arg_fptosi)`。`zeta_env_set` 的声明在 `src/backend/codegen/runtime_decls_core.rs:52`，两个实参都是裸的 `i64`，返回 `void`；`zeta_env_get`（`:51`）返回 `i64`。⇒ 这个格子按定义就是"一个 64 位裸词"。
+2. **读侧（声明类型在场时）已经在取位模式**：`f1.ll:1075` 所在的 `inner_ratio` 体是 `%2 = call i64 @zeta_env_get(…)` → `store i64 %2, ptr %0` → `load double, ptr %0` → `ret double`，而 `%0` 是同一个函数 `:1071` 处的 `alloca double`。整数 2 被当 IEEE-754 位模式 ⇒ 打成 `0.000000`。⇒ 读侧选的语义是"位模式"，不是"数值"。
+3. **读侧（声明类型缺席时）改按整数读**：`/tmp/b386/q2.ll:1163-1166`（主程序）`env_get` → `store i64` → `load i64` → `call void @print_i64`；`q2.ll:1093-1097`（`bump` 体内）`env_get` → `load i64` → `%acc_sitofp = sitofp i64 … to double` → `fadd double …, 1.0`。同一份存储在这一形下两头都按整数走，于是链条是 `fptosi(2.5)=2` → `sitofp=2.0` → `+1.0=3.0` → `fptosi=3`，两次截断。
+
+### 规则只做了一半（`src/middle/mir/gen.rs` 的七个 `zeta_env_get` 读点）
+按声明类型给槽的三处：`:3464` 那条（给槽用 `global_ty_of(name).unwrap_or(I64)`，在 `:3472`）、`:11525` 段（同一条规则，代码里的注释写明"硬写 I64 让 `import a; a.C.exists()` 丢了句柄 tag ⇒ 链接报裸名"）、`:13671` 段（取父作用域那个槽的真实类型，注释写明"每个捕获都当 i64 ⇒ `if f in d` 把每一项都筛掉"）。
+硬写 `Type::I64` 的四处：`:1260`（闭包里 `nonlocal` 的首次绑定）、`:1707`（`=` 走"只写 env"那条之后的重新绑定）、`:3449` 与 `:3490`（两条 `nonlocal_names` 读）。⇒ 同一个 env 读，走哪个臂决定它有没有声明类型；q2 的 `outer=3` 就是走到硬写 I64 的臂上。
+
+### 结论与下一步的修法（本批不动源码，先把判据定下来）
+1. 一份存储只能有一种语义：要么两头都位模式，要么两头都数值。读侧在 `:3472` 这条规则下已经是位模式，所以该改的是**写侧** —— 声明类型是 f64 的名字，`zeta_env_set` 的第二个实参要带位模式（`fptosi` → `bitcast`）。这与容器写侧同形：`codegen.rs:4782`（`dict_f64_bits`）、`:6792`（`elem_bits`）、`:5503`（`field_fbits`）都是就地 `build_bit_cast` 成 i64，**不需要新的 C 运行时符号**（`runtime/py_additions.c` 常驻不动）。
+2. 判据不能只挂在被调符号上。`tests/python_style` 全部 316 个文件实测 22 条 `ABI coerce`：17 条是 `zeta_env_set arg[1]`（要位模式），另外 5 条是用户函数把 f64 传给声明为 i64 的形参 —— `Ledger::spend` 2 条、`Ledger::earn`、`Ledger::bump`、`take_i` 各 1 条，那 5 条要的是**数值截断**，在 codegen 的 `coerce_call_args` 里全局改位模式会把它们改坏。⇒ 决定权要在 gen.rs（它知道名字和 `global_ty_of`），不能下沉成"看被调符号名"。
+3. 让 gen.rs 自己决定、且 MIR 不加新变体的办法（下一步实测）：声明类型是 f64 的 env 写点，把要存的槽用现成的 `MirExpr::AddrOf{alloca_id}` + `MirExpr::Deref{pointee_width: 8}`（`src/middle/mir/mir.rs:260-265`）读一次 —— 就是"从 double 槽里 load 一个 i64"，与读侧 IR 是同一个手法。
+4. 另一半必须同批一起做：四处硬写 I64 的读点（`:1260`/`:1707`/`:3449`/`:3490`）改用 `global_ty_of(name)`。否则 q2 这一形（函数里 `global` 过一次、名字有声明类型）在写侧改成位模式之后，会读成大整数 —— 比现在的 `3` 更坏。
+5. 没有声明类型的那一族（pA 的闭包 `nonlocal`，`global_ty_of` 落空）**保持现状**：继续 `fptosi` 截断。本批实测它现在打 `read= 2`，改成裸位模式就是十几亿量级的整数垃圾，那不是修复。这一格留给"让 env 带上类型"（轴 B/F）。
+6. 收完的判据（下一批要当场取的数）：`t426` 从 known-fail 转通过（`2.500000`/`2.500000`）、q2 三处都读回 3.5、批次 385 边界 2 的连带表现（`acc += 2.5` 两次不累积）转对、python_style 那 17 条 `zeta_env_set` fptosi 告警归零且另外 5 条仍在。
+
+### 边界（本批不收）
+1. 零源码改动，也零文档改动（`docs/ABI.md` 的 R8 现文仍如实：f64 过 env 两头都坏）。三套基线、丢行尺子、锚点读数沿用批次 385 的在册值，本批未重跑。
+2. 探针留在 `/tmp/b386/`：`q1.z`/`q2.z`/`q3.z`/`pA.z` + `f1.ll`/`q2.ll`。
+3. **一批读数作废**：本批早些时候还测过 `pB.z`/`pC.z`/`pD.z` 三个形状，其中 `pD.z` 现在在 `/tmp/b386/` 里已不存在（`ls` 只剩 `f1.z`、`pA.z`、`pB.z`、`pC.z`），当时那次 `./pD` 打的 `outer= 3` 无法复核 ⇒ 不进证据链，同一形状已由 `q2.z` 重测并取到同形读数（`outer=3`）。教训按"取读数前先在同一条命令里确认输入文件在"补进测量备忘。
+4. pA 里 `x = 7.25` 之后紧挨着的 `print` 一个字没打 ⇒ 闭包里"写之后接着读"的控制流另有问题，本批没定位，不在 env 类型这条规则里。
+5. 顺带确认一条 CLI 行为：`--dump-mir` 遇到不存在的输入文件是响亮出声（`Error: Os { code: 2, kind: NotFound }`、rc=1），不是空输出 —— 批次 350 那条规矩在。
+
+### 下一批默认候选
+1. **批次 386 的修法落地**（上面结论 1~6，半径：`src/middle/mir/gen.rs` 三处写点 + 四处读点，或 `codegen.rs` 的一处判据）—— 判据已定，最小复现和 IR 证据在手边。
+2. 批次 385 边界 1（模块体旧槽，`t425` 钉着）。它与本批第 4 点耦合：先统一"env 读按声明类型"，再谈"模块体该走槽还是走 env"。
+3. §4 剩下的两格：`selfhost` 91（表示层）、`quantum_basic` 85（卡在 C 符号 + `py_additions.c`）。
+4. 带数据的 enum 变体加 tag（`codegen.rs:6210-6211`）。
+5. 一次误报响 N 声的去重（批次 384 候选 4）。
