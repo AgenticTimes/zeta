@@ -15661,3 +15661,80 @@ official compile **194/194**（唯一的硬断言，`run_all.sh:575`）；compil
 ### 十一、下一批默认候选（按已实测损害量）
 
 ① 2.2 最大的一块：selfhost 91 行（`impl Trait for` + concept 两格，#89 已定位到 `selfhost.z:89`）；② #86 那条"空桩静默生效 / W1007 一声不出"——它决定批次 393 收回来的 132 行里有几行是真绿，且是 §八第 4 条那族的判定入口；③ 3.2 带载荷枚举变体（可测）；④ 4.3.b / M3 定价（#105，先取语料计数）；⑤ 本批 §八第 5 条：动态数组 `.iter()` 无绑定 —— 它是 `quantum_basic` 现在唯一还能动的分支。
+
+---
+
+## 批次 396（交付）—— 3.2 Lowering（4.3.b 值表示交叉）→ 2.2 语法分析：带载荷枚举变体没有标签字，"可测的模式"因此既判错形又吃掉下游 91 行
+
+候选 B（用户裁决），但**归位不是 2.2**：刀口在 3.2 的值表示，2.2 那 91 行是它的下游后果。记录按 `3.2 → 2.2` 写。
+
+### 一、A/B 取证路径：门禁的 clean_checkout 不产二进制，改前读数只能自己搭
+
+`tools/run_all.sh:370` 那一步跑的是 `cargo check`（不产出 `zetac`），所以"改前"没有现成二进制。本批用**门禁自己的干净检出 worktree** 做对照：`~/zeta-clean-checkout`（detached @ `05fe911c`，`status --porcelain` 0 行）→ `find src -name '*.rs' -exec touch {} +` 强制失效指纹 → `CARGO_TARGET_DIR=$ROOT/target cargo build --release`（34.54 s）→ 取改前读数 → 回主树 `touch` 本批改过的两个源文件重编（31.70 s）→ 改后读数复跑一致。**两次都在同一个二进制路径上跑**（内存里那条"A/B 二进制须同目录跑"的坑靠这个方式绕开：不是拷走，而是原地换）。
+
+| 写法（探针） | 改前（HEAD 二进制） | 改后（本批二进制） |
+|---|---|---|
+| `let t = Token::Ident(5); match t { Token::Ident(n) => n + 1, _ => 900 }`（`/tmp/b396/e4.z`） | `d=1`（臂恒匹配 + 载荷绑 0） | `d=6` ✔ |
+| `match o { Some(n) => n + 100, None => 500 }`，`o = Some(7)`（`e5.z`） | `some=100 none=100`（两臂都进第一条，`None` 分支也打 100） | `some=107 none=500` ✔ |
+| `m3.z` / `m4.z`（结构模式绑定 / 兜底臂） | `m3=0` / **无输出** | `m3=7` / `m4=6` ✔ |
+| 只有元组变体的枚举过函数边界（`nf3.z`） | 返回 `0` | 返回 `9` ✔ |
+| `tests/unit-tests/selfhost.z` | W1002 **1 条**，钉在 `:89`，文案 `"91 line(s) … NOT parsed"`，首段未解析文本 = `fn build_ast(tokens: Vec<Token>) -> Ast {` | W1002 **0 条**（文件 179 行 ⇒ 179-89+1=91 行回到程序） |
+| 同上的 Undefined 明细 | `_as_str _build_ast _is_alphabetic _push`（4 条） | `_as_str _into_iter _is_alphabetic _push`（4 条）⇒ **条数不变，成员换了一个** |
+| `tests/python_style/t431_…` 自身 | 也在 `:62` 截断，丢 44 行（首段未解析文本 = `fn boxed_iflet` 里的 `let x = if let Shape::Re…`），编译"成功"但输出为空 | 12 条 expect 全中 |
+
+### 二、口径更正：本批推翻了自己开批时的定价（也推翻批次 395 §十一① 那条）
+
+批次 395 §十一① 写的是"selfhost 91 行（`impl Trait for` + concept 两格，#89 已定位到 `selfhost.z:89`）"。**归因错了**：W1002 原文点名的首段未解析文本是 `fn build_ast(tokens: Vec<Token>) -> Ast`，卡点是值位置的 `if let Token::Ident(n) = …`（构造子模式被 `pattern_has_matcher` 判"不可测"⇒ 解析器拒绝该顶层项 ⇒ 整项及其后全丢），与 `impl Trait for` / `concept` 无关。
+
+第二条更正：**91 不是"纯解析收益"，而是"诊断行数 1 / 丢行数 91"**，且 selfhost 改前改后都停在 compile+link 那一档（缺 std 绑定），official 的 194/194 与 191/194 **一个字都没动**。真正进计化的只有 python_style 的 +1（t431）。⇒ 记一条判据：**丢行数不能当门禁收益报**，它落在哪个门禁桶必须实测。
+
+### 三、根因一句话 + 三处写侧（都是"标签字没落地"，读侧因此无从判形）
+
+`docs/ABI.md` 值表示表新增 **#11 行**：只要枚举里有一个变体带载荷，**整个枚举**按 `[tag, p0, …]` GC 块存（`enum_is_boxed` `src/middle/mir/gen.rs:3313`）；全单元枚举保持裸判别值（所以 `== Color::Red` 这一档完全没碰）。写侧三处漏标签：
+
+1. **单元形写在裸名路径后面** —— `Color::Green` 当值用时先命中 `FuncAddr` 分支 ⇒ 发出只有声明没有定义的 `_Color__Green`（任务 #17 那格的真身）。修法：把注册枚举的单元变体分支提到 `FuncAddr` 路由之前（`gen.rs:3730` 起）。
+2. **载荷形被平台类构造子兜底吞掉** —— `Token::Ident(5)` 先命中 `path.len() == 1 && args.len() <= 8 && method != "new"` 的兜底臂，下成 `zeta_platform_obj("Ident", 5)`：标签字从不写、块里只有载荷 ⇒ 任何臂都无法把它和别的值区分。修法：新增枚举构造分支并**放在该兜底之前**（`gen.rs:12313`，实测挪之前 `e4` 不走这条路）。
+3. **`Some(v)`/`Ok(v)`/`Err(v)` 只写 1 个字的块** —— 运行时 `option_is_some` 读 `p[0]`，于是拿载荷 `7` 和 `1` 比 ⇒ `Some(7)` 被判成 `None`。修法（`gen.rs:7008`）：按各自布局补齐（Option `[tag|data]`、Result `[tag|ok|err]`，未用槽写 0），读侧沿用既有 runtime 访问器，**不新增运行时概念**。
+
+读侧配套：`boxed_tag_guard`（`gen.rs:3371`）→ `Deref{pointee_width:8}` 读 slot 0 比 tag，载荷绑定读 slot 1+k（`deref_slot` `:3333`、`int_slot` `:3323`）；结构模式的"构造子名没注册"分支从"恒匹配 + 绑占位值"改成 **fail closed**（`MirExpr::IntLit(0)`）—— 改前实拍：`match 5 { Foo(n) => n, _ => 7 }` 打 `0`，改后 `unreg=7`。解析器侧 `src/frontend/parser/expr.rs::pattern_has_matcher` 相应放行构造子模式，元组形仍拒（理由写在函数注释：没有任何表示把一个元组的元数与元素存成可测标签）。
+
+### 四、语料定价（official 尺子 = `tests/unit-tests/*.z` 194 文件）
+
+- 声明 `enum` 的文件 **4 个**：`advanced_patterns_test`、`final_demo`、`minimal_compiler`、`selfhost`。
+- 文本形 `X::Y(` 命中 89 处，但按"注册过的用户枚举变体"归因后真实成员 **29 处 / 3 文件**：`selfhost` 的 `Token::` 7 + `Ast::` 10、`minimal_compiler` 的 `AstNode::` 11、`advanced_patterns_test` 的 `Color::RGB(` 1；其余 60 处是 `Box::new(`/`Vec::new(`/`fs::read_to_string(` 一类关联函数或模块函数，不属本族。
+- 具名字段形 `X::Y {` **20 处 / 2 文件**（`minimal_compiler`、`selfhost`）⇒ 本批不收（§六①）。
+- 参与性正证据：`ls tests/python_style/*.z | wc -l` = **321** = 314+2+5，而 `git ls-tree -r HEAD~1 --name-only tests/python_style/ | grep -c '\.z$'` = **320** ⇒ 多出的正是提交前的 t431，它在那一轮里真跑了。
+
+### 五、门禁读数（`bash tools/run_all.sh` 连跑两次，逐字段相同）
+
+official compile **194/194**（唯一硬断言，`run_all.sh:575`）；compile+link **191/194**（`/tmp/zeta_official_link.txt` 三条明细：`integration_all_features` `_predict,_train`；`quantum_basic` `_factor,_optimal_iterations,_success_probability`；`selfhost` `_as_str,_into_iter,_is_alphabetic,_push`）；python_style **314 passed / 2 failed / 5 known-fail / 0 xpass**（`failed: t231_dict_set_cast_fromkeys t233_listcomp_condition_capture` 存量）；语料 39/39；jit ok **173** / total 515 / segv **0**（GREEN）；diff 120/130 = 92.3%、坏用例 0；knob 23/0、swallow 6/0、import_form 22/0、empty_stmt 68/0、pysrc 42/rc0、**cli_semantics 73 / failed 0**（批次 395 起 FAIL 1 的那条已闭，见 §七）、ignore_rules 19/rc0、mbvar 19/rc0、comment_drift 0、clean_checkout rc=0（rev `05fe911c`）；诊断 official 3 文件/9 行 + python_style 76 文件/176 行、`not_measured` 0。**整体 rc=1 实拍**（`/tmp/b396/gate3.log` 末行 `GATE_RC=1`），来源仍是 `run_all.sh:576` 的 `py_fail != 0`。
+
+### 六、边界：本批不收、已实测登记（OPEN 净增 0，全部折进 backlog 既有行）
+
+1. **具名字段变体构造** `Shape::Rect { w: 3, h: 4 }`（语料 20 处 / 2 文件）——写侧仍不带标签 ⇒ 恒不匹配。实拍：`nf.z` 的 `area(r)` 走 `_ => -1`。这是**从"静默绑 0"升级成"响亮失败前的一格"**，不算修好，但语义方向对了。
+2. **裸名 `Some`/`Ok`/`Err` 模式**靠名字归一化映射到 `Option::`/`Result::`（`AstNode::Var` 与 `AstNode::StructPattern` 两臂各写一次）；`t431` 的 `opt_some=107 / opt_none=500` 是它在本族的正证据，非 Option 接收者仍属 #38 那族。
+3. **跨类型匹配仍崩**：`match 5 { Option::Some(n) => … }`（`m1.z`）实拍 **rc=139（SIGSEGV）**，与批次 382 登记时同值 ⇒ 本批没碰这一形（登记状态：**存量、未变**）。
+4. **语句位 `if let Option::Some(n) = v`（v 是裸 i64）两个分支都不出声**：`m2.z` 实拍 rc=0 且 stdout 为空。**这是对 #38 行里批次 382 那一形（当时"不匹配也进 then"）的复测更新**——现状既不进 then 也不进 else，本批未测改前、只登记现状。
+5. **非宏 `print` 不做占位符替换**：`print("a={}\n", a)` 打 `a={}` 再把值另起一行，`%d` 打 `0`。A/B 实测**改前改后逐字同形**（`pf.z`、`nf3.z` 两侧）⇒ 与枚举无关，是 #45 族的新成员（`println!` 宏形在批次 376/377 已修，`print` 这条路没人管）。
+6. **枚举程序普遍 `error[W0003] Typecheck failed (non-fatal)`**：发射点在 `src/main.rs:784` 的 AST 级 `resolver.typecheck`，它跑在 `lower_to_mir` **之前** ⇒ 本批 `gen.rs` 改动不可能造成它（这条是静态归因：读代码顺序得出，未做 A/B；且门禁诊断聚合只认 `warning:\|PY-A:`，W0003 不进 3 文件/9 行那个读数）。
+7. **#38 第 ⑦ 条由本批关闭**（backlog #38 行原文："`codegen.rs:6210-6211` 丢掉 `variant` ⇒ 带数据的 enum 变体没有 tag，模式侧无法判'是哪个变体 / 怎么取载荷'"）。修法不在 codegen，而在 **MIR 侧把 tag 写成字段**（`MirExpr::Struct{variant, fields:["__tag",…]}`，#11 行），codegen 的 `Struct` 发射路径本来就按字段顺序分配槽位 ⇒ 一行 codegen 没改。382 当年登记的三形里，两形（值位构造子 `match` 静默打 0 / 载荷臂恒匹配）已由本批收掉并 A/B 实拍，剩下 m1、m2 两形按 §六③④ 复测更新。
+
+### 七、门禁尺子换线（不是删断言）：`tools/cli_semantics_check.sh` 翼 B 的阳性对照
+
+批次 348 那条阳性对照钉的是 `W1002] examples/selfhost.z:NN:` —— 语义是"不带文件裸跑时，内置演示**确实**被编译了（截断过）"。本批让 selfhost 不再截断 ⇒ 这条 W1002 **永远不会出现** ⇒ 对照恒 0，把"演示没被编译"和"演示被编译了但没截断"读成同一件事。gate #1 的 `cli_semantics FAIL 1` 全部来自这里。改法：钉标换成 CTFE 的 `FunctionNotFound`（演示真在编译器进程里跑起来才会有的声音），脚本里 4 行注释写明"尺子换了 + 为什么换"，断言条数 73 不变。
+
+### 八、结构证据与锚点读数
+
+`codegraph sync` 后：`callers enum_is_boxed` / `callers enum_variant_of` / `callers boxed_tag_guard` **各 1**，都指向 `lower_expr`。注意引用口径：图给的是**外层方法的定义行 `gen.rs:3494`**，不是调用行 ⇒ 不能当调用点用。真实调用点 grep 实拍 8 处（`3372`、`3751-3752`、`11224-11229`、`11249`、`11255`、`11367`、`11380-11386`、`12313`）⇒ **整个家族封闭在 `lower_expr` 内部，无跨函数复用**（这也是 #17①/② 那类"helper 该不该提出来"的前置事实）。
+
+`docs/ABI.md` 加 #11 行（写侧 4 处 + 读侧判据 + 本批混淆史），其 4 条 gen.rs 引用实拍对位：`:3730` 单元形注释、`:3313` `enum_is_boxed`、`:7008` Option/Result 自由调用形、`:3371` `boxed_tag_guard`。锚点核对器（仍不在门禁里，#37）：本批 +341 行造成漂移 **66** → `--rebind` 接受 **35 行 / 59 个数字** → **28**；基线仍 **251** 条（`--rebind` 不纳新）。落单 **新 11 / 消失 5**，其中核对器点名的 5 条 `[不纳新]` 全是本批新引用（`gen.rs:3313/3371/3500/3730/7008`）⇒ 另 6 条落单新与 5 条消失是存量（`ABI.md:103/269/430` 三条"定位失败：该行内容为空"也在其中）。待归属 100 条 / 91 种、声明为仓外 14 条 ⇒ 存量清理仍 #52。`--rebind` 的 `[拒改]` 33 条原样保留（唯一性不成立 / 区间长度冲突 / 悬空消失项），未猜号。
+
+### 九、自我核对：本批有三处第一版写法被自己推翻，另有两个取证坑
+
+① 开批定价（"2.2 selfhost 91 行 = 纯解析收益"、"`impl Trait for` + concept 两格"）被 §二推翻；② 会话早期记的 `e4` 改前读数 `d=900` 与本批 A/B 的 `d=1` **不同基线**（前者取于探针被改写之前，具体差异未复核）⇒ 上表只认"HEAD 二进制 vs 本批二进制同轮 A/B"这一组；③ 构造分支第一版放在 `gen.rs:12303` 之后（平台类兜底**之下**），跑了三轮不生效才发现是兜底先吞 —— 定位手段是"把块挪到兜底之前，`e4` 立刻从 900/1 变成 6"。两个弃用探针（`fn_full.z`/`fn_nofilet.z`/`u5.z`/`min.z`）建立在"大括号产物"的误读上，不计入本批任何结论。
+
+坑（新增，两条）：**zsh 里 `"$var[A-Za-z]…"` 会被当数组下标展开**（即使在双引号内），于是那条语料 grep 在 `for` 循环里报 `grep: repetition-operator operand invalid` 后输出 0 行 —— 同一条正则单引号直写就有命中；**门禁退出码不能被管道作证**，`bash tools/run_all.sh | tail -60` 让 harness 看到 `exit code 0`，真 rc=1 只有 `{ bash …; echo GATE_RC=$?; }` 这种写法能拿到。
+
+### 十、下一批默认候选（按已实测损害量）
+
+① #86"空桩静默生效 / W1007 一声不出"——它决定 §五那三条 link-only 明细里几行是真绿（`_predict/_train`、`_factor/_optimal_iterations/_success_probability` 两族）；② 2.2 剩余截断（official 3 文件 / 9 行诊断仍在，逐文件卡点未取）；③ 具名字段变体构造（§六①，语料 20 处 / 2 文件，是 #11 行没写完的那半）；④ #42 那 4 个 selfhost 绑定（`_as_str/_into_iter/_is_alphabetic/_push`）——它们现在是 selfhost 唯一还能动的分支；⑤ 4.3.b / M3 定价（#105）。
