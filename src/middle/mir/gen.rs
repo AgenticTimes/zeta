@@ -1139,9 +1139,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         self.type_map.insert(id, Type::F64);
                     } else if pt_str == "bool" {
                         self.type_map.insert(id, Type::Bool);
-                    } else if pt_str == "str" {
+                    } else if pt_str == "str" || pt_str == "Str" {
                         // Inferred string parameter (Python functions carry no
                         // annotations): string ops on it must dispatch as str.
+                        // `Str` is the same type under its Zeta spelling — the
+                        // self-host corpus declares `fn tokenize(input: Str)`,
+                        // which used to reach the class arm below as
+                        // `Named("Str")` (a fake class) and so lost every str
+                        // dispatch: `input[i]` became a DictGet over a `char*`.
                         self.type_map.insert(id, Type::Str);
                     } else if let Some(gidx) =
                         generic_names.iter().position(|g| g.as_str() == pt_str)

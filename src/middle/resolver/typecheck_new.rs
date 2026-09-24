@@ -115,6 +115,12 @@ impl NewTypeCheck for Resolver {
             "bool" => return Type::Bool,
             "str" => return Type::Str,
             "string" => return Type::Str,
+            // `Str` is the Zeta spelling of the same type (`fn f(s: Str)`, used by
+            // the self-host corpus). It matched no arm here and fell through to the
+            // generic-name path as `Named("Str")` — a fake class — so the CALLER
+            // typed the result i64: `println!("{}", first(s))` printed the `char*`
+            // instead of the string, and a `Str` param lost every str dispatch.
+            "Str" => return Type::Str,
             "String" => return Type::Named("String".to_string(), Vec::new()),
             "i8" => return Type::I8,
             "i16" => return Type::I16,

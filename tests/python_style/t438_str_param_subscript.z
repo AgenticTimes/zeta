@@ -1,0 +1,56 @@
+// 批次 402（任务 #121，批次 401 顺手扫出）：`Str` 这个拼写从来不是字符串类型。
+//
+// 病因（改前实拍，不是推断）：`Str` 是 Zeta 自己的字符串类型名（`tests/unit-tests/`
+// `selfhost.z:23/29/148` 的 `fn parse(input: Str)` 用的就是它），但三张"拼写→Type"
+// 表里只写了 python 侧的小写 `str`：
+// ① `src/middle/resolver/typecheck_new.rs:116` 的签名表没有 `Str` 条目 ⇒ 落到
+//    通用名分支，回来是 `Named("Str")` —— 一个**假类**。调用点据此把返回值 typed
+//    i64 ⇒ `println!("{}", first(s))` 打的是 `char*` 的数值。
+// ② `src/middle/mir/gen.rs:1142` 的参数臂同理只认 `"str"` ⇒ 形参槽在 type_map
+//    里是 `Named("Str")`，于是 `gen.rs:13110` 那条 `Type::Str` 下标臂打不中，
+//    一路掉到文件末尾的 DictGet 兜底（`s[i]` 下成 `map_get`）——对一个 `char*`
+//    走哈希表：AOT 侧读到 0（`/tmp/b402/p1.z` 实拍 `c=0`，rc=0、一声不出），
+//    JIT 侧 rc=139 SIGSEGV（`tests/unit-tests/selfhost.z` 实拍）。
+// 本文件那 5 条期望在改前是**整个文件零输出 rc=139**（`/tmp/b402/x1_pre`）。
+//
+// 改后：`Str` 在这两处与 `str` 同源。`String` 拼写**故意不收**——std 桩里真的
+// `pub struct String`（`build/stubs/std/string.z:4`），那是个实名而非别名，
+// 已登记为残口（roadmap 批次 402 §六）。
+//
+// 逐行期望按实际输出写：
+// expect: a=a
+// expect: b=c
+// expect: c=3
+// expect: d=y
+// expect: e=x
+fn first(s: Str) -> Str {
+    return s[0];
+}
+
+fn last(s: Str) -> Str {
+    return s[s.len() - 1];
+}
+
+// `selfhost.z` 的 tokenize 形：`while i < input.len()` + `input[i]` + 与字面量比较。
+fn letters(s: Str) -> i64 {
+    let mut n = 0;
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i];
+        if c != " " {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    return n;
+}
+
+fn main() -> i64 {
+    println!("a={}", first("abc"));
+    println!("b={}", last("abc"));
+    println!("c={}", letters("a b c"));
+    let t: Str = "xyz";
+    println!("d={}", t[1]);
+    println!("e={}", first(t));
+    return 0;
+}
