@@ -1,0 +1,68 @@
+// 批次 385：模块全局在运行期只有一份存储 —— C 运行时 env 表里按名字存的那个值；别的函数
+// 读它走的正是这一格，所以只写函数体局部槽的写路径等于把这次赋值丢掉（docs/ABI.md R8）。
+// 本批之前：`add(5)` 连调两次打回 `5 / 5`，第二次看到的还是初值。定位不靠猜 —— 把 `add`
+// 的 MIR 打出来逐字比，整条 `+=` 路径只有一个 `zeta_env_get` 和一个写局部槽的 `Assign`，
+// 没有任何 `zeta_env_set`（而同文件里 `=` 那条路径有，gen.rs:1668 起）。
+// 修法一：`AssignOp` 的 `Var` 支路在写完局部槽之后补一次 env 镜像（gen.rs:1822 起），三条
+// 写路径从此对称：`=` 写槽 + 镜像 env、`global`/被抬升的 `static` 只写 env（这些名字本来
+// 就没有槽，gen.rs:1649 与 :1781）、`+=` 与 `=` 同形。
+// 修法二（同一个函数里连着两次写才露出来）：镜像要传**刚写过的那个槽**，不能传原表达式。
+// `total += 1; total += 2` 折叠出来的加法表达式里就带着 `total` 这个槽，codegen 在每个使用
+// 点重新求值该表达式 ⇒ 第二次 `+=` 被算了两遍：函数自己返回 20，env 里却是 22（`=` 那条
+// 支路同形：`acc = acc + 3; acc = acc + 4` 返回 7、env 里 11）。改成传槽后两栏一致。
+// 这条测试不带 `static`（那半边在批次 384 的 `t423_static_mut_persistent.z`，它现在的
+// `a2=10` 就是本批改过来的）。主程序自己读回旧值是另一格，见
+// `t425_module_body_stale_read.z`。
+// 逐行如下（先跑程序、按实际输出写期望）：
+// expect: a1=5
+// expect: a2=10
+// expect: a3=17
+// expect: peek=17
+// expect: twice=20
+// expect: peek2=20
+// expect: eq=7
+// expect: acc=7
+total: i64 = 0
+acc: i64 = 0
+
+// 同一个函数里连调三次：每次的累加要留在 env 里，否则下一次读回的还是初值。
+fn add(n: i64) -> i64 {
+    total += n
+    return total
+}
+
+// 一个函数体里两次 `+=`：读第二遍时用的是第一次留下的槽（不是 env），所以这两条
+// 恰好把"传表达式"那个坑照出来。
+fn add_twice() -> i64 {
+    total += 1
+    total += 2
+    return total
+}
+
+// 换个函数读：它的函数体里从来没有过 `total` 的槽，只能从 env 取。
+fn peek() -> i64 {
+    return total
+}
+
+// `=` 那条支路的同形用例（两处写都在同一个函数里）。
+fn eq_twice() -> i64 {
+    acc = acc + 3
+    acc = acc + 4
+    return acc
+}
+
+fn peek_acc() -> i64 {
+    return acc
+}
+
+fn main() -> i64 {
+    println!("a1={}", add(5))
+    println!("a2={}", add(5))
+    println!("a3={}", add(7))
+    println!("peek={}", peek())
+    println!("twice={}", add_twice())
+    println!("peek2={}", peek())
+    println!("eq={}", eq_twice())
+    println!("acc={}", peek_acc())
+    return 0
+}

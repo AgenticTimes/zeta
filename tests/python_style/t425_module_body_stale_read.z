@@ -1,0 +1,33 @@
+// 批次 385 留下的那一格（实测、未修）：模块体自己（合成出来的 `main`）读它声明过的模块
+// 全局，用的是那条 `=` 在声明时留下的局部槽，不会从 env 刷新 —— 读侧先查这个函数已有的槽
+// （gen.rs:3452），命中就直接返回，压根走不到 :3457 的 env 读。
+// 于是别的函数写过之后，主程序里读回的还是声明时的值。同一条程序里 `peek()` 走 env，
+// 读到的是新值 10，`main` 自己读到 0 —— 同一个名字在同一个程序里有两份答案，属静默错值。
+// 修复方向不在本批：要么模块体的读也按"这个名是模块全局"改走 env（那会让所有局部别名
+// 失去优先级，半径覆盖整条 :3452 判据），要么声明时不建槽。先把读数钉住。
+// expect 取语义正确值（跨函数写过的值在主程序里也该看得见），实测见 known-fail 行。
+// expect: a1=5
+// expect: a2=10
+// expect: peek=10
+// expect: top=10
+// expect: top2=10
+// known-fail: 主程序读回的是声明时的 0（`peek()` 那一行是对的 10）—— 模块体走局部槽，不从 env 刷新
+total: i64 = 0
+
+fn add(n: i64) -> i64 {
+    total += n
+    return total
+}
+
+fn peek() -> i64 {
+    return total
+}
+
+fn main() -> i64 {
+    println!("a1={}", add(5))
+    println!("a2={}", add(5))
+    println!("peek={}", peek())
+    println!("top={}", total)
+    println!("top2={}", total)
+    return 0
+}

@@ -1,0 +1,26 @@
+// 批次 385 留下的另一格（实测、未修）：f64 的模块全局过不了 env —— env 一个格子只装一个
+// 64 位整数，两头各坏一次：
+//   写侧：`zeta_env_set` 的实参是 f64 ⇒ `fptosi` 丢掉小数（有告警：
+//         `warning: ABI coerce in call to 'zeta_env_set' arg[1]: fptosi → i64`）；
+//   读侧：读回时按声明类型给槽（`global_ty_of`，gen.rs:3472），而声明是 F64 ⇒ 那个整数被
+//         当成 IEEE-754 位模式重解读。2.5 存成 2，2 的位模式是 1e-323，打成 0.000000。
+// 所以 `inner` 既不是 2.5 也不是 2.0 —— 与 docs/ABI.md §1 表 #2 批次 298 记的"裸存 →
+// 位模式"同形。整数（`t424_module_global_addop.z`）和容器句柄（`p7`：顶层 list 的 `len`
+// 在别的函数里也是 3）过 env 都是对的，只有 f64 这一档坏。
+// 本批没有引入它（`=` 路径一直如此），批次 385 只是让 `+=` 落到同一处境。
+// 修法要么让 env 带类型（轴 B/F），要么让 f64 的模块全局根本不走 env —— 都不在本批。
+// expect 取 CPython 的输出。
+// expect: outer=2.500000
+// expect: inner=2.500000
+// known-fail: inner 打成 0.000000（写侧 fptosi + 读侧按 F64 位模式重解读，env 一格只有一个整数）
+ratio = 2.5
+
+fn inner_ratio() -> float {
+    return ratio
+}
+
+fn main() -> i64 {
+    println!("outer={}", ratio)
+    println!("inner={}", inner_ratio())
+    return 0
+}

@@ -1669,13 +1669,19 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             // module-global update: keep the local slot (with
                             // its real type) AND mirror the value into the env
                             // so other functions read the fresh value.
+                            // The mirror reads the SLOT it just wrote, not
+                            // `rhs_id`: when the right-hand side mentions this
+                            // same name (`total = total + 3` twice in one
+                            // function), codegen re-evaluates that expression at
+                            // the use site and the second `+=`/`=` was counted
+                            // twice (measured: function returned 7, env held 11).
                             let key_id = self.next_id();
                             self.exprs
                                 .insert(key_id, MirExpr::StringLit(name.clone()));
                             self.type_map.insert(key_id, Type::Str);
                             self.stmts.push(MirStmt::VoidCall {
                                 func: "zeta_env_set".to_string(),
-                                args: vec![key_id, rhs_id],
+                                args: vec![key_id, existing],
                             });
                         }
                     } else if self.nonlocal_names.contains(name) {
@@ -1733,14 +1739,16 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             rhs: rhs_id,
                         });
                         if self.module_globals.contains(name) {
-                            // mirror into env so cross-function reads work
+                            // mirror into env so cross-function reads work —
+                            // through the slot just written, see :1668 for why
+                            // the rhs expression is not safe to hand over twice
                             let key_id = self.next_id();
                             self.exprs
                                 .insert(key_id, MirExpr::StringLit(name.clone()));
                             self.type_map.insert(key_id, Type::Str);
                             self.stmts.push(MirStmt::VoidCall {
                                 func: "zeta_env_set".to_string(),
-                                args: vec![key_id, rhs_id],
+                                args: vec![key_id, new_id],
                             });
                         }
                     }
@@ -1784,12 +1792,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     }
                     let rhs_id = self.lower_expr(&new_rhs);
                     let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
-                    match self.name_to_id.get(name).copied() {
+                    let slot_id = match self.name_to_id.get(name).copied() {
                         Some(slot) => {
                             self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
                             if !matches!(ty, Type::I64 | Type::PyDynamic) {
                                 self.type_map.insert(slot, ty);
                             }
+                            slot
                         }
                         None => {
                             let slot = self.next_id();
@@ -1797,7 +1806,28 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             self.type_map.insert(slot, ty);
                             self.name_to_id.insert(name.clone(), slot);
                             self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
+                            slot
                         }
+                    };
+                    // The env cell is the one other functions read (they have no
+                    // slot for this name), so a `+=` that stops at the slot is
+                    // discarded on the next call — `total += 5` twice printed `5`
+                    // both times. `=` already mirrors here; `+=` must not be the
+                    // one write path that leaves the shared cell behind.
+                    // Mirror the SLOT, not `rhs_id`: the folded operand list
+                    // contains this very slot (`total += 2` reads what the previous
+                    // `+=` wrote), and codegen re-evaluates that expression at each
+                    // use — so passing `rhs_id` after the `Assign` added twice
+                    // (`total += 1; total += 2` returned 20 while env held 22).
+                    if self.module_globals.contains(name) {
+                        let key_id = self.next_id();
+                        self.exprs
+                            .insert(key_id, MirExpr::StringLit(name.clone()));
+                        self.type_map.insert(key_id, Type::Str);
+                        self.stmts.push(MirStmt::VoidCall {
+                            func: "zeta_env_set".to_string(),
+                            args: vec![key_id, slot_id],
+                        });
                     }
                     return;
                 }

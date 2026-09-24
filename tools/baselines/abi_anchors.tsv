@@ -144,6 +144,7 @@ src/backend/codegen/codegen.rs	7418	pub fn type_to_llvm_type(&self, ty: &Type) -
 src/backend/codegen/codegen.rs	7524	Type::Tuple(element_types) => { let llvm_element_types: Vec<inkwell::types::BasicTypeEnum> = element_types .iter() .map(|t| self.type_to_llvm_type(t)) .collect(
 src/backend/codegen/mod.rs	7	mod runtime_decls_registry;
 src/backend/codegen/mod.rs	9	mod runtime_decls_core;
+src/backend/codegen/runtime_decls_core.rs	51	module.add_function("zeta_env_get", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External)); module.add_function("zeta_env_set", void_type.fn_type
 src/backend/codegen/runtime_decls_registry.rs	18	module.add_function("py_argparse_add", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
 src/diagnostics.rs	515	pub fn env_flag(name: &str) -> bool {
 src/frontend/indent.rs	581	fn rewrite_floordiv_lines(lines: &[&str], only_in_brackets: bool) -> Vec<String> {
@@ -168,9 +169,17 @@ src/middle/mir/gen.rs	431	Some(format!("{}__{}", module.replace('.', "_"), parts
 src/middle/mir/gen.rs	543	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
 src/middle/mir/gen.rs	550	let prefix = format!("{}__", module.replace('.', "_"));
 src/middle/mir/gen.rs	789	fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) { let missing: Vec<&str> = params .iter() .enumerate() .filter(|(i, _)| slots.get(*i
+src/middle/mir/gen.rs	1649	if self.nonlocal_names.contains(name) {
+src/middle/mir/gen.rs	1668	if self.module_globals.contains(name) {
+src/middle/mir/gen.rs	1741	if self.module_globals.contains(name) {
+src/middle/mir/gen.rs	1781	if self.nonlocal_names.contains(name) {
+src/middle/mir/gen.rs	1822	if self.module_globals.contains(name) {
 src/middle/mir/gen.rs	3071	fn lower_range_guard(
 src/middle/mir/gen.rs	3093	func: if inclusive { "<=" } else { "<" }.to_string(),
 src/middle/mir/gen.rs	3308	format!("{}__{}", module.replace('.', "_"), member);
+src/middle/mir/gen.rs	3452	if let Some(&existing) = self.name_to_id.get(name) {
+src/middle/mir/gen.rs	3457	if self.module_globals.contains(name) {
+src/middle/mir/gen.rs	3472	let ty = self.global_ty_of(name).unwrap_or(Type::I64);
 src/middle/mir/gen.rs	3584	"zeta_dyn_truth"
 src/middle/mir/gen.rs	5488	if method == "parse_args" && receiver.is_some() { let recv = self.lower_expr(receiver.as_ref().unwrap()); self.stmts.push(MirStmt::Call { func: "py_argparse_par
 src/middle/mir/gen.rs	5865	// `log.info(fmt, *args)` — a varargs HANDLE has no // static length, and lowering the starred operand // emitted a raw Deref that codegen compiled into // `ldr
