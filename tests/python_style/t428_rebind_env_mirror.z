@@ -1,0 +1,53 @@
+// 批次 391（4.3.b 值表示）：模块全局被**容器方法重绑**后，环境表里那份副本也要跟着换
+// 改前实拍（`/tmp/b390/m1b.z`，批次 390 的构建）：
+//   `print(peek())` 打 3，同一程序里 `print(xs)` 打 [1, 2] —— 一个名字两份答案，一声不出。
+// 原因：模块全局有两份存放（编译期槽 + 环境表 `zeta_env_set` 的格子），`=` / `+=` 各配过
+// 一次镜像（批次 385），而**容器方法的重绑写在 `lower_expr` 里**（`push` / `append` /
+// `add` / `insert`/`remove`/`sort`/`reverse`/`extend` / `discard` 共 6 个 `Assign` 点），
+// 挂在语句种类上的镜像永远看不见它们。
+// 修法：镜像不再按语句种类散布，改成一个降低后置遍
+// `MirGen::mirror_module_global_writes`（`src/middle/mir/gen.rs`）—— 体内每条
+// `Assign{lhs}` 只要 lhs 是模块全局的槽，就在它后面补一条 `zeta_env_set`，嵌套的
+// if/for/while 块递归同样处理（下面 `ys` 那一组就是块内的重绑）。
+// 读侧本批一字未动：模块体仍读自己的槽（批次 388 让模块体读环境表，34 例回归后回退，
+// 见 t425）。本批只保证**写**这一份副本不再漏。
+// 读数（改前 = 本会话批次 390 的构建，同一份源 `/tmp/b390/m1b.z` 只有 `xs` 这一组）：
+//   改前 `print(peek())` → 3，改后 → 2。
+//   `total`（`+=`）在批次 385 已配过镜像、改前就是 10，本批是**不回归**的对照；
+//   `ys`（if 块里的 `insert` 重绑）是本批新加的覆盖，改前读数未取。
+// expect: 2
+// expect: 10
+// expect: 2
+// expect: [8, 7]
+// expect: [1, 2]
+
+xs = [3, 1, 2]
+xs.remove(3)
+
+total = 0
+total += 5
+total += 5
+
+ys = []
+if len([0, 0]) == 2:
+    ys.insert(0, 7)
+    ys.insert(0, 8)
+
+
+def peek() -> i64:
+    return len(xs)
+
+
+def sum_all() -> i64:
+    return total
+
+
+def count() -> i64:
+    return len(ys)
+
+
+print(peek())
+print(sum_all())
+print(count())
+print(ys)
+print(xs)

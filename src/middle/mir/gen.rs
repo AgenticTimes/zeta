@@ -426,6 +426,16 @@ impl MirGen {
     /// readers type the cell `I64`, and bits would come out as a huge integer
     /// instead of today's truncated one (closure `nonlocal` floats).
     fn env_store(&mut self, name: &str, value: u32) -> u32 {
+        let (stmts, key_id) = self.env_mirror(name, value);
+        self.stmts.extend(stmts);
+        key_id
+    }
+
+    /// BUILD (do not emit) the statements of `env_store`, plus the key id they
+    /// use. Split out so `splice_env_mirrors` can insert a mirror into the
+    /// middle of an already-lowered statement list.
+    fn env_mirror(&mut self, name: &str, value: u32) -> (Vec<MirStmt>, u32) {
+        let mut out: Vec<MirStmt> = Vec::new();
         let key_id = self.next_id();
         self.exprs
             .insert(key_id, MirExpr::StringLit(name.to_string()));
@@ -448,7 +458,7 @@ impl MirGen {
                     self.exprs.insert(fresh, MirExpr::Var(fresh));
                     self.type_map
                         .insert(fresh, self.type_map.get(&value).cloned().unwrap_or(Type::F64));
-                    self.stmts.push(MirStmt::Assign {
+                    out.push(MirStmt::Assign {
                         lhs: fresh,
                         rhs: value,
                     });
@@ -472,11 +482,11 @@ impl MirGen {
         } else {
             value
         };
-        self.stmts.push(MirStmt::VoidCall {
+        out.push(MirStmt::VoidCall {
             func: "zeta_env_set".to_string(),
             args: vec![key_id, stored],
         });
-        key_id
+        (out, key_id)
     }
 
     /// The type to give a slot that just read `name` out of the env cell: the
@@ -484,6 +494,127 @@ impl MirGen {
     /// `I64` otherwise. See `env_store` — write and read have to agree.
     fn env_slot_ty(&self, name: &str) -> Type {
         self.global_ty_of(name).unwrap_or(Type::I64)
+    }
+
+    /// PY-A: THE module-global write rule, in one place: every write to a
+    /// module global's own slot refreshes the env cell that the other top-level
+    /// items read. Runs after a body is lowered, over the whole statement list
+    /// including nested blocks.
+    ///
+    /// This replaces the mirrors that used to sit beside individual STATEMENT
+    /// kinds (`=` at the bind, `=` at the rebind, `+=`). Those could never cover
+    /// the writes made from inside `lower_expr`: a container method rebinds its
+    /// receiver slot at 6 separate sites (`push`, `append`, `add`,
+    /// `insert`/`remove`/`sort`/`reverse`/`extend`, `discard`, `set.add`) —
+    /// measured before this pass (`/tmp/b390/m1b.z`):
+    /// `xs = [3,1,2]; xs.remove(3)` then `def peek() -> i64 { return len(xs) }`
+    /// printed `3` while the module body's own `print(xs)` printed `[1, 2]`.
+    /// One name, two answers, no diagnostic.
+    ///
+    /// The slot set is derived, not registered: within one item's lowering, a
+    /// module-global name's slot IS `name_to_id[name]` — every writer takes its
+    /// lhs from that same lookup, so no bind site has to remember to declare it.
+    ///
+    /// The mirror reads the SLOT it follows, never the `rhs` id: codegen
+    /// re-evaluates an expression at each use, so handing over the right-hand
+    /// side a second time counted it twice (`total = total + 3` in one function
+    /// returned 7 while the cell held 11; `total += 1; total += 2` returned 20
+    /// while the cell held 22 — batches 385/386).
+    fn mirror_module_global_writes(&mut self) {
+        let slots: Vec<(u32, String)> = self
+            .name_to_id
+            .iter()
+            .filter(|(name, _)| self.module_globals.contains(*name))
+            .map(|(name, &slot)| (slot, name.clone()))
+            .collect();
+        if slots.is_empty() {
+            return;
+        }
+        let src = std::mem::take(&mut self.stmts);
+        let mut out: Vec<MirStmt> = Vec::with_capacity(src.len());
+        self.splice_env_mirrors(src, &slots, &mut out);
+        self.stmts = out;
+    }
+
+    /// Copy `src` into `out`, inserting an env mirror after every `Assign` whose
+    /// lhs is one of `slots`. `env_mirror` only allocates fresh ids, so splicing
+    /// mid-list cannot alias a slot already lowered.
+    fn splice_env_mirrors(
+        &mut self,
+        src: Vec<MirStmt>,
+        slots: &[(u32, String)],
+        out: &mut Vec<MirStmt>,
+    ) {
+        for st in src {
+            match st {
+                MirStmt::Assign { lhs, rhs } => {
+                    out.push(MirStmt::Assign { lhs, rhs });
+                    for &(slot, ref name) in slots {
+                        if slot == lhs {
+                            let (mirror, _key) = self.env_mirror(name, lhs);
+                            out.extend(mirror);
+                        }
+                    }
+                }
+                MirStmt::If {
+                    cond,
+                    then,
+                    else_,
+                    dest,
+                } => {
+                    let (t, e) = (self.sub_splice(then, slots), self.sub_splice(else_, slots));
+                    out.push(MirStmt::If {
+                        cond,
+                        then: t,
+                        else_: e,
+                        dest,
+                    });
+                }
+                MirStmt::For {
+                    iterator,
+                    pattern,
+                    var_id,
+                    counter_id,
+                    body,
+                    else_body,
+                } => {
+                    let (b, e) = (self.sub_splice(body, slots), self.sub_splice(else_body, slots));
+                    out.push(MirStmt::For {
+                        iterator,
+                        pattern,
+                        var_id,
+                        counter_id,
+                        body: b,
+                        else_body: e,
+                    });
+                }
+                MirStmt::While {
+                    cond,
+                    pre_cond,
+                    body,
+                    else_body,
+                } => {
+                    let (p, b, e) = (
+                        self.sub_splice(pre_cond, slots),
+                        self.sub_splice(body, slots),
+                        self.sub_splice(else_body, slots),
+                    );
+                    out.push(MirStmt::While {
+                        cond,
+                        pre_cond: p,
+                        body: b,
+                        else_body: e,
+                    });
+                }
+                other => out.push(other),
+            }
+        }
+    }
+
+    fn sub_splice(&mut self, src: Vec<MirStmt>, slots: &[(u32, String)]) -> Vec<MirStmt> {
+        let mut out = Vec::with_capacity(src.len());
+        self.splice_env_mirrors(src, slots, &mut out);
+        out
     }
 
     /// Key for a module-level global read: `Var(n)` -> n, and a module member
@@ -1203,6 +1334,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
             Self::force_entry_returns(&mut self.stmts, zero);
         }
 
+        // PY-A (任务 #102 / 批次 391): the module-global env mirror, once, over
+        // the finished body — see `mirror_module_global_writes`.
+        self.mirror_module_global_writes();
+
         // Batch 299: a bare `-> dict` / `-> list` annotation carries NO element
         // type (`map` with zero type arguments), so every consumer of the call
         // result degraded to i64. The RESOLVER refines such an annotation with
@@ -1725,18 +1860,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             lhs: existing,
                             rhs: rhs_id,
                         });
-                        if self.module_globals.contains(name) {
-                            // module-global update: keep the local slot (with
-                            // its real type) AND mirror the value into the env
-                            // so other functions read the fresh value.
-                            // The mirror reads the SLOT it just wrote, not
-                            // `rhs_id`: when the right-hand side mentions this
-                            // same name (`total = total + 3` twice in one
-                            // function), codegen re-evaluates that expression at
-                            // the use site and the second `+=`/`=` was counted
-                            // twice (measured: function returned 7, env held 11).
-                            self.env_store(name, existing);
-                        }
+                        // The env mirror for a module-global write is emitted by
+                        // `mirror_module_global_writes`, once, over the finished
+                        // body (batch 391).
                     } else if self.nonlocal_names.contains(name) {
                         // PY-A V3: inner-scope write before any local bind
                         let key_id = self.env_store(name, rhs_id);
@@ -1785,13 +1911,6 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             lhs: new_id,
                             rhs: rhs_id,
                         });
-                        if self.module_globals.contains(name) {
-                            // mirror into env so cross-function reads work —
-                            // through the slot just written, see the
-                            // `existing` mirror above for why the rhs
-                            // expression is not safe to hand over twice
-                            self.env_store(name, new_id);
-                        }
                     }
                 } else {
                     let lhs_id = self.lower_expr(lhs);
@@ -1826,13 +1945,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     }
                     let rhs_id = self.lower_expr(&new_rhs);
                     let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
-                    let slot_id = match self.name_to_id.get(name).copied() {
+                    match self.name_to_id.get(name).copied() {
                         Some(slot) => {
                             self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
                             if !matches!(ty, Type::I64 | Type::PyDynamic) {
                                 self.type_map.insert(slot, ty);
                             }
-                            slot
                         }
                         None => {
                             let slot = self.next_id();
@@ -1840,22 +1958,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             self.type_map.insert(slot, ty);
                             self.name_to_id.insert(name.clone(), slot);
                             self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
-                            slot
                         }
-                    };
+                    }
                     // The env cell is the one other functions read (they have no
                     // slot for this name), so a `+=` that stops at the slot is
                     // discarded on the next call — `total += 5` twice printed `5`
-                    // both times. `=` already mirrors here; `+=` must not be the
-                    // one write path that leaves the shared cell behind.
-                    // Mirror the SLOT, not `rhs_id`: the folded operand list
-                    // contains this very slot (`total += 2` reads what the previous
-                    // `+=` wrote), and codegen re-evaluates that expression at each
-                    // use — so passing `rhs_id` after the `Assign` added twice
-                    // (`total += 1; total += 2` returned 20 while env held 22).
-                    if self.module_globals.contains(name) {
-                        self.env_store(name, slot_id);
-                    }
+                    // both times (batch 385). `mirror_module_global_writes` now
+                    // emits that mirror for every write to the slot, `=` and `+=`
+                    // alike, so the rule has one home instead of one per
+                    // statement kind.
                     return;
                 }
                 let assign = AstNode::Assign(target.clone(), new_rhs);
@@ -13777,6 +13888,7 @@ call, no NULL-handle dereference).",
     /// `lower_to_mir` (top-level items) and `lower_closure` (synthetic
     /// closure functions).
     fn build_mir(&mut self, params: &[String]) -> Mir {
+        self.mirror_module_global_writes();
         Mir {
             name: None,
             generic_params: vec![],
