@@ -15578,3 +15578,86 @@ official compile **194/194**（唯一的硬断言，`run_all.sh:575`）；compil
 ### 十、下一批默认候选（按已实测损害量）
 
 ① 2.2 剩余截断族里最大的一块：selfhost 91 行（`selfhost.z:89` 的 `build_ast`，`impl Trait for` + concept 两格）；② 2.2 新登记里最便宜的：#86 那条"空桩静默生效"——它决定本批收回来的 132 行有多少其实是假绿；③ 3.2 带载荷枚举变体可测；④ 4.3.b / M3 定价（#105，先取语料计数）。
+
+## 批次 395（交付）—— 3.2 Lowering：把函数存在值里再调用，此前"恰好 1 个实参"是唯一能走通的一档
+
+**pyramid 层**：3.2 Lowering（`gen.rs` 的调用派发判据）+ 后端 External 声明（`codegen.rs`）+ 运行时跳板（C 侧）。
+**开批依据**：批次 393 §六 里那条"另登记"的成员（`_test_fn`）；用户在候选表里点名这一条，不是 §十 队列的头名 ⇒ 定价先于动工，见第二节。
+
+### 一、病因：BATCH-294 只配了一个跳板，派发点又把 arity 写死成 1
+
+MIR 没有间接调用表示（`MirStmt::Call { func: String }` 只能挂名字），所以" callee 是一个装着函数地址的槽位"这件事在 BATCH-294 里是靠一个 C 跳板解决的：`MirStmt::Call{func:"zeta_call1", args:[槽位 id, 实参…]}`，第 0 个参数就是地址。问题是**这一族只配了一个 arity**：`runtime/py_additions.c:3414` 只有 `zeta_call1(fptr, a)`，而派发点的守卫写着 `arg_ids.len() == 1`（`src/middle/mir/gen.rs:10568`，改前）。不满足就整条落回普通符号路径 ⇒ 被调用的**局部变量名**被当成全局函数名发出去 ⇒ 链接期 `Undefined symbols "_f"`，而 `f` 只是 `let f = add2;`。
+
+改前构建的四档实拍（同一份最小复现，`/tmp/b395/`）：
+
+| 写法 | 实参数 | 改前 |
+|---|---|---|
+| `let f = head; f()` | 0 | `Undefined symbols "_f"` |
+| `let f = add2; f(3, 4)` | 2 | `Undefined symbols "_f"` |
+| `let f = add3; f(1, 2, 3)` | 3 | `Undefined symbols "_f"` |
+| `let g = pick(1); g()`（g 运行期算出） | 0 | `Undefined symbols "_g"` |
+| `let g = pick(1); g(5)`（**同一行只差实参个数**） | 1 | 通过，`v=1005` |
+
+最后一行是"arity 是唯一分界线"的正证据：槽位来源、函数体、`pick` 全都相同，改的只有实参个数。0 个实参不是边角料 —— 元组里解出一等函数值再调用（`for (name, test_fn) in tests.iter()` ⇒ `test_fn()`）天然就是 0 arity。
+
+### 二、语料定价：这一族在尺子上只有 1 个成员，本批按"小批"记账
+
+`/tmp/b395/pricing.sh`（237 文件 official 尺子，逐文件链接取 `Undefined symbols` 里的裸名，再判该名字是否同时是本文件的 `let`/`for` 绑定名）：
+
+```
+files scanned: 237
+   1 /Users/.../tests/unit-tests/quantum_basic.z	test_fn
+total rows: 1 / distinct files: 1
+```
+
+同一次取数里 Undefined 总表 295 行，其余 294 行属于"缺运行时绑定"和"平台 API"两族（#42/#86 那条链），不是本批 ⇒ **这一族语料可见损害 = 1 文件 / 1 符号**。值做的理由不是量，是：① 修完 `quantum_basic` 的 Undefined 从 5 条变 4 条，那条静默不链接的成员收掉一个；② arity 0/2/3/4 是这条路径的完整合同，缺三档是留在派发判据里的地雷（新代码随时会踩），而它的地雷面比定价数字大得多。不夸大本批收益。
+
+### 三、修法三段：沿用既有形状，不新增运行时概念
+
+1. `runtime/tokio_runtime_stub.c:3792/3798/3804/3810` 补 `zeta_call0/2/3/4` —— 与 `zeta_call1` 同形：arg0 是地址，实参与返回一律 `int64_t`，地址为 0 时返回 0 而不跳过去。**必须逐 arity 各写一个**：C 侧没法把动态实参表转发给任意函数指针（对照 `zeta_collect_literals` 那种"定参+变参"声明，它做的是"收"不是"转发"）。放在这个 TU 而不是 `zeta_call1` 旁边，是因为 `py_additions.c` 在本批的永不出手清单里；文件末尾追加（该 TU 的布局惯例），3,779 行以下没有锚点引用。
+2. `src/backend/codegen/codegen.rs:1074-1077` 补四条 `Linkage::External` 声明（形参个数 = arity + 1），紧挨 `:1069` 的 `zeta_call1`。
+3. `src/middle/mir/gen.rs:10576-10600` 判据 `arg_ids.len() == 1` → `<= 4`，派发名取 `format!("zeta_call{}", arg_ids.len())`（`:10590`），槽位 id 放实参表最前。
+
+运行时对象跟着重建：`tools/build_runtime.sh` 重编 `tokio_runtime.o`（门禁 `tools/run_all.sh:71` 的 `zt_stale_check` 盯这个新旧关系，不重编会在门禁里直接红）。
+
+### 四、三条原有判据一条没动，但只有两条有可观测成员
+
+`receiver.is_none()`（带接收者的方法调用不抢）、`!self.func_ret_types.contains_key(name)`（同名全局函数优先、直调不打折回跳板）、`!self.closure_vars.contains_key(name)`（`lambda` 绑名字走闭包路径，保住记录返回类型 —— 批次 295 的 t129 教训：走跳板会把字符串打成堆指针）。本批用例里 **`closure_vars` 有成员**（`clo=12`，`let clo = lambda x: x * 3`），**`func_ret_types` 没有可观测成员**：`t430` 里那条 `direct=add3(1,2,3)` 没有同名局部槽位，判据根本不参与、走哪条路都得 6 ⇒ 它只是不回归冒烟，测试文件头已按这个措辞降级，不当作判据的正证据。
+
+### 五、实拍读数（`t430_call_through_value_any_arity.z`，八档全命中）
+
+```
+z0=7  z1=1005  two=7  three=6  four=10  alias=7  clo=12  direct=6
+```
+
+`z0`/`z1` 两档的 callee 都是运行期 `pick(1)`/`picked1(1)` 算出来的槽位 ⇒ 0 arity 走通与 1 arity 走通是同一条路径。`tests/python_style/t430_call_through_value_any_arity.z` 共 108 行（病因 + 四档改前实拍 + 正证据 + 定价 + 修法三段 + 未动的三条判据 + 五条边界 + 改后实拍），期望值按改后实际输出写。
+
+参与性正证据（不用"绿了"当证据）：门禁报 `python_style: 313 passed`，而 `ls tests/python_style/*.z | wc -l` = **320** = 313+2+5，`git ls-files tests/python_style/*.z | wc -l` = **319** ⇒ 多出的那一个正是当时尚未提交的 t430，它确实在跑的那一批里。
+
+### 六、门禁读数（`bash tools/run_all.sh`，`/tmp/b395/gate.log`）
+
+official compile **194/194**（唯一的硬断言，`run_all.sh:575`）；compile+link **191/194**（与批次 393 记录同读数 ⇒ 本批零回退）；link-only 明细 3 个文件（`integration_all_features` 2 条、`quantum_basic` 3 条、`selfhost` 4 条）；python_style **313 passed / 2 failed / 5 known-fail / 0 xpass**（+1 = t430；`failed: t231_dict_set_cast_fromkeys t233_listcomp_condition_capture` 存量）；语料 39/39；jit sweep ok **174** / trap 340 / fail 0 / segv 0（total 513→**514**，多的那 1 例就是 t430 在 JIT 侧新占的位置，见 §八第 3 条）；diff 120/130 = 92.3%、坏用例 0；knob 23/0、swallow 6/0、import_form 22/0、empty_stmt 68/0、pysrc 42/rc0、cli_semantics 73/rc0、ignore_rules 19/rc0、mbvar 19 违规 0、comment_drift 0、clean_checkout rc=0（rev `c95156c1`）。**整体 rc=1，来源仍是 `run_all.sh:576` 的 `py_fail != 0`**（t231/t233 存量，与批次 392/393 同因），报 rc 时必须连着报是哪一条断言。
+
+### 七、compile+link 为什么纹丝不动：一条静默错误换了个形态
+
+门禁对 `quantum_basic` 的明细行现在列 `_factor,_optimal_iterations,_success_probability` —— `_test_fn` 不再出现（改前是 5 条 Undefined，现在 4 条）。但文件仍然不链接，剩下的 4 条属于另外两族（空桩模块 + 动态数组 `.iter()`，见 §八第 4 条），所以 compile+link 的 191/194 不变。这正是第二节那个"1 文件 / 1 符号"定价的口径后果：**收掉该文件唯一的这一族成员，不翻动任何门禁计数** —— 变化只在明细行里（5→4 条，消失的是 `_test_fn` referenced from `_main`），其余三档（2/3/4 arity）该文件本来就没有成员，t430 才有。
+
+### 八、边界：本批不收、已实测登记的五条
+
+1. **arity ≥ 5 仍落回符号路径**（跳板只配到 4）。实拍：`let f = add5; f(1,2,3,4,5)` → `Undefined symbols "_f"`；改前改后同值 ⇒ 本批不改变它，t430 因此不出 5 实参的例子。
+2. **跳板返回值恒为 I64**（ABI 的 C9 合同）：被调函数返回字符串/浮点时，经值调用拿到的仍是位模式。批次 294 起就如此，本批未扩表，只在 C9 里把这条从"1 arity 的注意"升成"整族的注意"。
+3. **JIT（无 `-o`）打不到这一族**：实测 `error[E4016]: 'zeta_call0' has no binding in JIT mode`，且程序继续跑到打印、`v=` 打成空。不是本批引入的错位 —— `zeta_call1` 从来也不在 `pylib/jit_mappings.txt` 里（该文件 grep `call` **0 命中**），整族跳板只在 AOT 可用 ⇒ 归 backlog 上"JIT env-symbol bindings"那一条，现在这一族又多 4 个成员。
+4. **`quantum_basic` 剩 4 条 Undefined 分属两族**：`_factor`/`_optimal_iterations`/`_success_probability` 是空桩模块（`build/stubs/std/quantum/algorithms.z` 内容只有 `pub struct Stub;`，#42/#86 族）；`_[dynamic](i64, i64)__iter` 是元组数组的 `.iter()`（下节新成员）。
+5. **新查到的独立成员（本批只登记不修）**：**动态**数组的 `.iter()` 没有绑定 —— 收尾时重新实拍的最小复现（`/tmp/b395/it2.z`：`let a = [1,2,3]; for x in a.iter() {…}`）`nm -u` 打出 `_[dynamic]i64__iter`，元组数组是 `_[dynamic](i64, i64)__iter`，`pylib/registry.txt` 里 grep 无此号。注意措辞边界：同名方法在**静态已知类型**接收者上是有的（#42 批次 363-365 落地的 `iter`，`tests/unit-tests/minimal_compiler.z` 两处 `.iter()` 能全链接 ⇒ 缺的确实只是 `[dynamic]` 这一档修饰名，不是"iter 没实现"）。⇒ 全语料（official 那 237 文件尺子）里 `.z` 源中写 `.iter()` 的只有 2 个文件：`tests/unit-tests/minimal_compiler.z`（2 处）、`tests/unit-tests/quantum_basic.z`（1 处）（`.rs` 文件不算，它们不进 zetac）。本批定价口径下这是 1 文件 1 符号的下一层。它同时是 `for (name, test_fn) in tests.iter()` 那条 0-arity 调用能编出来的真正上游 ⇒ 已折进 backlog #42 行（OPEN 净增 0）。
+
+### 九、结构证据与锚点读数
+
+`codegraph sync` 后：`query zeta_call` ⇒ 五个跳板全部在图里（`zeta_call0` `tokio_runtime_stub.c:3792`、`zeta_call1` `py_additions.c:3414`、`zeta_call2/3/4` `:3798/:3804/:3810`）—— 定义侧存在性有图证据。调用侧：`callers zeta_call1` = 1（`unwrap_or_else` `tokio_runtime_stub.c:2532`，C 侧真实文本边 `:2533/:2536`），`callers zeta_call0` ⇒ **No callers found**，四个新跳板同形 —— 这符合预期：它们的唯一调用者是 LLVM 里生成的 External 调用，源头是 `gen.rs:10590` 的 `format!("zeta_call{}", …)`。文本侧对账（`src/**` 里 grep `zeta_call`）：字面量只有 5 条 External 声明（`codegen.rs:1069/1074/1075/1076/1077`）+ 1 条名称构造点（`gen.rs:10590`），其余命中是注释 2 条和 `zeta_call_fn_arg`（`src/runtime/thread_.rs:14`，另一个符号，NULL→abort 那族）⇒ **派发名构造封闭在一处**；C 侧 `runtime/**` 的命中 likewise 只有 5 个定义 + `tokio_runtime_stub.c:2498` 的 extern 声明与 `unwrap_or_else` 的 2 处使用（`:2533/:2536`）+ 注释。ABI 文档 C9 从"恰好一个 i64 实参"改写成逐 arity 合同（含 ≥5 边界、恒 I64 返回、`zeta_call_fn_arg` 的 NULL→abort 与 `zeta_call*` 的 NULL→0 不对称、JIT E4016）。锚点核对器（仍不在门禁里，#37）：我自己的 +8/+11 行为先造成漂移 **68 → 164**（归因：`codegen.rs` 有 98 条引用在 `:1069` 之后、`gen.rs` 有 8 条在 `:10579` 之后 ⇒ 位移 106 条），`--rebind` 后 **→ 28**，再 `--bless-only` 点名入表本批新写的 3 条 ⇒ 基线 **248 → 251 条**。当前读数：漂移 28 / 新 7 / 消失 7（改号配对 0 对 ⇒ 落单新 7 / 落单消失 7），待归属 100 条 / 91 种，声明为仓外 14 条 —— 落单的 7 条是核对器拒绝改写歧义/零匹配位置的存量（`gen.rs:10309`、`gen.rs:11973`、`py_additions.c:2650`、`codegen.rs:2278`、`codegen.rs:7035`、`expr.rs:2292`、`gen.rs:3472`），故意留白不猜号 ⇒ 存量清理仍是 #52。
+
+### 十、自我核对：本批有三处第一版写法被自己降格或推翻
+
+① 测试头最初把 `direct=6` 写成"`func_ret_types` 优先"这条判据的正证据 —— 实测该用例里没有同名局部槽，判据根本没参与，那句话已改成"不回归冒烟"并说明缺的是可观测成员；② 最初写"三条未动的判据本文件都有成员"，实际只有 `closure_vars`（`clo=12`）有 ⇒ 已改成点名式；③ 最初把 `expect: alias=42` 凭直觉写进新用例，跑出 7 才回去看代码（`alias = zero`，`zero()` 返回 7）—— 期望值改成实测值，不按"应该是多少"写。另外两个取证坑照旧复现：`for s in $syms` 在 zsh 里不分词，导致 quantum_basic 那轮定价第一次报"0 命中"的假负（改 `printf '%s\n' … | while IFS= read -r` 才有 1 命中）；`$TMPDIR` 与 `/tmp/b395` 是两个目录，`tail $TMPDIR/b395/gate.log` 空输出被误读成"日志没写"（真实文件在 `/tmp/b395/gate.log`）。
+
+### 十一、下一批默认候选（按已实测损害量）
+
+① 2.2 最大的一块：selfhost 91 行（`impl Trait for` + concept 两格，#89 已定位到 `selfhost.z:89`）；② #86 那条"空桩静默生效 / W1007 一声不出"——它决定批次 393 收回来的 132 行里有几行是真绿，且是 §八第 4 条那族的判定入口；③ 3.2 带载荷枚举变体（可测）；④ 4.3.b / M3 定价（#105，先取语料计数）；⑤ 本批 §八第 5 条：动态数组 `.iter()` 无绑定 —— 它是 `quantum_basic` 现在唯一还能动的分支。
