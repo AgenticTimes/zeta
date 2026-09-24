@@ -778,15 +778,17 @@ fn let_keyword(input: &str) -> IResult<&str, &str> {
 /// unconditionally and hand the bindings a placeholder? The second kind would
 /// make an arm that LOOKS conditional silently return the wrong branch's value.
 ///
-/// Measured, not inferred: a constructor pattern in a VALUE-position `match`
-/// (`let x = match v { Option::Some(n) => n, _ => 0 };`) produces no output and
-/// dies on SIGSEGV, and in a statement-position `if let` the `then` branch runs
-/// for a value that does not match, with the payload reading back another
-/// number (5 stored, 10 printed). Both spellings are rejected here, so such a
-/// file keeps failing the way it does today.
+/// Constructor patterns (`Token::Ident(n)`, `Option::Some(n)`) are accepted
+/// since batch 396: a variant of a registered enum now carries a `[tag, p0, …]`
+/// block, and both the tag test and the payload bindings read that block
+/// (measured — `match t { Token::Ident(n) => n + 1, _ => 900 }` printed 1 for
+/// every value before, and 6 for `Token::Ident(5)` / 900 for `Token::Eof` now).
+///
+/// Tuples are still refused: no representation stores a tuple's arity or
+/// elements as a testable tag, so such an arm would still be the
+/// always-matches kind this guard exists to keep out.
 fn pattern_has_matcher(pattern: &AstNode) -> bool {
     match pattern {
-        AstNode::StructPattern { .. } => false,
         AstNode::Tuple(_) => false,
         AstNode::BindPattern { pattern, .. } => pattern_has_matcher(pattern),
         AstNode::TypeAnnotatedPattern { pattern, .. } => pattern_has_matcher(pattern),

@@ -1,0 +1,105 @@
+// 批次 396：带载荷的枚举变体在**取值位置**上第一次可判。
+//
+// 病因链（实拍，不是推断）：
+// 1) `Color::Green`（无载荷）写在取值位上被下成 `FuncAddr("Color::Green")` ——
+//    解析器给每个变体都注册了构造子签名，于是"裸函数名当值"这条路径先命中。
+//    那个函数只有声明、没有定义：`let c = Color::Green;` 真被用到时链接报
+//    `Undefined symbols "_Color__Green"`；被 DCE 掉时槽里是垃圾，整个 match
+//    全部掉到 `_` 臂（`match c { Red => 100, Green => 200, _ => 300 }` 打 300）。
+// 2) `Token::Ident(5)`（带载荷）走的是平台对象路由（`zeta_platform_obj("Ident", 5)`），
+//    标签从未写进值里 ⇒ 臂无从判起；而臂侧对未注册的构造子模式写的是"恒匹配 +
+//    字段绑 0"，于是 `match t { Token::Ident(n) => n + 1, _ => 900 }` 对任何值都
+//    进第一条臂、打 1。
+// 3) `Some(7)` 写的是 1 字块 `[7]`，读侧 `option_is_some` 取的是 slot 0 并和 1 比
+//    ⇒ 存的值被当成标签用：只有载荷恰好等于 1 时才算"Some"。
+//
+// 修法：带载荷变体所在的枚举整体换成 `[tag, p0, …]` 堆块（与 Option 运行时
+// `[tag|data]` 同形，复用 MirExpr::Struct + Deref，不新增运行时符号、不动 ABI 表）；
+// 全单元枚举仍保持裸判别值（`== Color::Red` 那条路径一字未动）；写侧补齐标签字，
+// 读侧（构造子模式、裸单元臂、`if let` 脱糖出的 match）统一按块解码；
+// 未注册的构造子模式从"恒匹配"改成"恒不匹配"（判不了就不认领这个值）。
+//
+// 下游：`tests/unit-tests/selfhost.z` 的 `fn build_ast` 三处
+// `let name = if let Token::Ident(n) = tokens[i].clone() { … } else { … };`
+// 从此可解析 ⇒ 该文件末尾 91 行 W1002 截断归零（改前实拍：`91 line(s) at the end
+// of the input were NOT parsed`；改后一声不出）。它现在只剩运行时绑定缺口
+// （`_as_str` / `_into_iter` / `_is_alphabetic` / `_push`，backlog #42 一族），
+// 且 `_build_ast` 已从缺符号表里消失 —— 它的函数体这次真的进了目标文件。
+//
+// 逐行期望按实际输出写：
+// expect: boxed_rect=15
+// expect: boxed_circle=6
+// expect: boxed_unit=5
+// expect: boxed_arg=12
+// expect: boxed_iflet_hit=6
+// expect: boxed_iflet_miss=-1
+// expect: unit=200
+// expect: opt_some=107
+// expect: opt_none=500
+// expect: res_ok=8
+// expect: res_err=9
+// expect: unreg=7
+
+enum Shape { Circle(i64), Rect(i64), Point }
+
+enum Color { Red, Green, Blue }
+
+fn boxed(v: i64) -> i64 {
+    match v {
+        Shape::Circle(r) => r * 3,
+        Shape::Rect(w) => w + 5,
+        Shape::Point => 5,
+        _ => 99,
+    }
+}
+
+// 构造子跨参数边界传递：句柄就是一个 i64 指针，臂侧按块解码。
+fn boxed_arg(w: i64) -> i64 {
+    let s = Shape::Rect(w);
+    boxed(s)
+}
+
+fn boxed_iflet(v: i64) -> i64 {
+    let x = if let Shape::Rect(w) = v { w + 1 } else { -1 }
+    x
+}
+
+fn opt(o: i64) -> i64 {
+    match o {
+        Some(n) => n + 100,
+        None => 500,
+        _ => 999,
+    }
+}
+
+fn res(r: i64) -> i64 {
+    match r {
+        Ok(v) => v,
+        Err(e) => e + 1,
+        _ => 0,
+    }
+}
+
+// 未注册的构造子名：没有任何标签可比 ⇒ 这条臂不许认领任何值（改前打 0）。
+fn unreg(v: i64) -> i64 {
+    match v {
+        NotAnEnum(x) => x,
+        _ => 7,
+    }
+}
+
+fn main() -> i64 {
+    println!("boxed_rect={}", boxed(Shape::Rect(10)));
+    println!("boxed_circle={}", boxed(Shape::Circle(2)));
+    println!("boxed_unit={}", boxed(Shape::Point));
+    println!("boxed_arg={}", boxed_arg(7));
+    println!("boxed_iflet_hit={}", boxed_iflet(Shape::Rect(5)));
+    println!("boxed_iflet_miss={}", boxed_iflet(Shape::Point));
+    println!("unit={}", match Color::Green { Color::Red => 100, Color::Green => 200, _ => 300 });
+    println!("opt_some={}", opt(Some(7)));
+    println!("opt_none={}", opt(None));
+    println!("res_ok={}", res(Ok(8)));
+    println!("res_err={}", res(Err(8)));
+    println!("unreg={}", unreg(5));
+    return 0;
+}

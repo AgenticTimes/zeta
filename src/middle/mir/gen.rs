@@ -3289,6 +3289,102 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
         }
     }
 
+    /// `(enum_name, tag, payload_count)` of a registered user-enum variant path
+    /// (`Token::Ident` → `("Token", 0, 1)`).
+    fn enum_variant_of(&self, name: &str) -> Option<(String, i64, usize)> {
+        let (enum_name, variant) = name.rsplit_once("::")?;
+        match self.type_decls.get(enum_name)? {
+            TypeDecl::Enum { variants, .. } => variants
+                .iter()
+                .position(|(v, _)| v == variant)
+                .map(|i| (enum_name.to_string(), i as i64, variants[i].1.len())),
+            _ => None,
+        }
+    }
+
+    /// Does an enum's value representation have to be a heap block?
+    ///
+    /// A variant with payload needs `[tag, p0, …]`, so *every* variant of that
+    /// enum is boxed — a mixed representation would make the arm test have to
+    /// tell a discriminant integer from a heap address at run time, which is
+    /// exactly the read-the-wrong-thing crash this family keeps producing.
+    /// All-unit enums keep the bare integer discriminant, so `== Color::Red`
+    /// and every existing match on such an enum is untouched.
+    fn enum_is_boxed(&self, enum_name: &str) -> bool {
+        match self.type_decls.get(enum_name) {
+            Some(TypeDecl::Enum { variants, .. }) => {
+                variants.iter().any(|(_, params)| !params.is_empty())
+            }
+            _ => false,
+        }
+    }
+
+    /// A standalone integer literal, already registered in `exprs`/`type_map`.
+    fn int_slot(&mut self, value: i64) -> u32 {
+        let id = self.next_id();
+        self.exprs.insert(id, MirExpr::IntLit(value));
+        self.type_map.insert(id, Type::I64);
+        id
+    }
+
+    /// `dest = deref(addr_id)` — one i64 loaded through a heap block pointer.
+    /// Materialized into a slot (not left as a bare expr) because arm bindings
+    /// and `==` operands are read back as variables.
+    fn deref_slot(&mut self, addr_id: u32, byte_offset: i64) -> u32 {
+        let addr_expr_id = self.next_id();
+        if byte_offset == 0 {
+            self.exprs.insert(addr_expr_id, MirExpr::Var(addr_id));
+        } else {
+            let off_id = self.next_id();
+            self.exprs.insert(off_id, MirExpr::IntLit(byte_offset));
+            self.type_map.insert(off_id, Type::I64);
+            self.exprs.insert(
+                addr_expr_id,
+                MirExpr::BinaryOp {
+                    op: "+".to_string(),
+                    left: addr_id,
+                    right: off_id,
+                },
+            );
+        }
+        self.type_map.insert(addr_expr_id, Type::I64);
+        let deref_id = self.next_id();
+        self.exprs.insert(
+            deref_id,
+            MirExpr::Deref {
+                addr_id: addr_expr_id,
+                pointee_width: 8,
+            },
+        );
+        self.type_map.insert(deref_id, Type::I64);
+        let slot = self.next_id();
+        self.stmts.push(MirStmt::Assign {
+            lhs: slot,
+            rhs: deref_id,
+        });
+        self.exprs.insert(slot, MirExpr::Var(slot));
+        self.type_map.insert(slot, Type::I64);
+        slot
+    }
+
+    /// `cond = (tag of a boxed enum value) == expected_tag`.
+    fn boxed_tag_guard(&mut self, scrutinee_id: u32, tag: i64) -> u32 {
+        let tag_slot = self.deref_slot(scrutinee_id, 0);
+        let expect_id = self.next_id();
+        self.exprs.insert(expect_id, MirExpr::IntLit(tag));
+        self.type_map.insert(expect_id, Type::I64);
+        let cond_id = self.next_id();
+        self.stmts.push(MirStmt::Call {
+            func: "==".to_string(),
+            args: vec![tag_slot, expect_id],
+            dest: cond_id,
+            type_args: vec![],
+        });
+        self.exprs.insert(cond_id, MirExpr::Var(cond_id));
+        self.type_map.insert(cond_id, Type::Bool);
+        cond_id
+    }
+
     /// Lower a range pattern as a match guard on `scrutinee_id`, returning a Bool
     /// condition id: `scrutinee >= start && scrutinee (<= | <) end`.
     ///
@@ -3631,6 +3727,49 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     return slot_id;
                 }
 
+                // Unit-variant path of a registered enum (e.g. `Color::Green`)
+                // lowers to its variant tag (integer discriminant).
+                //
+                // This must be checked BEFORE the "bare function name as value"
+                // path below: the resolver registers every enum variant as a
+                // constructor signature, so `func_ret_types` contains
+                // `Color::Green` and the name was lowered to
+                // `FuncAddr("Color::Green")` — the address of a function that is
+                // declared but never defined. Measured on `let c = Color::Green;`
+                // used as a value: link fails with `Undefined symbols
+                // "_Color__Green"`; when the slot is dead-code-eliminated the
+                // scrutinee holds garbage and every `match` arm falls through to
+                // `_` (`match c { Color::Red => 100, Color::Green => 200, _ => 300 }`
+                // printed 300).
+                if name.contains("::") {
+                    if let Some(tag) = self.enum_unit_variant_index(name) {
+                        // An enum that has ANY payload-carrying variant is boxed
+                        // as a whole, so this unit variant's value has to be a
+                        // `[tag]` block too — a bare integer discriminant could
+                        // not be told apart from a block pointer by the arm test.
+                        let boxed = self
+                            .enum_variant_of(name)
+                            .map(|(enum_name, _, _)| self.enum_is_boxed(&enum_name))
+                            .unwrap_or(false);
+                        if boxed {
+                            let tag_id = self.next_id();
+                            self.exprs.insert(tag_id, MirExpr::IntLit(tag));
+                            self.type_map.insert(tag_id, Type::I64);
+                            self.exprs.insert(
+                                id,
+                                MirExpr::Struct {
+                                    variant: name.clone(),
+                                    fields: vec![("__tag".to_string(), tag_id)],
+                                },
+                            );
+                        } else {
+                            self.exprs.insert(id, MirExpr::IntLit(tag));
+                        }
+                        self.type_map.insert(id, Type::I64);
+                        return id;
+                    }
+                }
+
                 // PY-A: a bare known function name used as a value (e.g.
                 // `threading.Thread(work)`) becomes its address. Constants
                 // share the signature table, so exclude them — they lower to
@@ -3641,16 +3780,6 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     self.exprs.insert(id, MirExpr::FuncAddr(name.clone()));
                     self.type_map.insert(id, Type::I64);
                     return id;
-                }
-
-                // Unit-variant path of a registered enum (e.g. `Color::Green`)
-                // lowers to its variant tag (integer discriminant).
-                if name.contains("::") {
-                    if let Some(tag) = self.enum_unit_variant_index(name) {
-                        self.exprs.insert(id, MirExpr::IntLit(tag));
-                        self.type_map.insert(id, Type::I64);
-                        return id;
-                    }
                 }
 
                 // Check if this is a global constant
@@ -6877,18 +7006,51 @@ call, no NULL-handle dereference).",
                 }
 
                 // PY-A: `Some(v)` / `Ok(v)` / `Err(e)` free-call form —
-                // enum variant constructors without a path. Lower as Struct
-                // with the value in field f0 (Option/Result runtime shape).
+                // enum variant constructors without a path.
+                //
+                // The block written here MUST be the block the runtime readers
+                // decode: `option_is_some` tests slot 0 and `option_get_data`
+                // reads slot 1 (tokio_runtime_stub.c), i.e. `[tag | data]`.
+                // Emitting only the payload used to make every `Some(7)` read
+                // back as "not some" (`7 == 1` is false) and, worse, as
+                // "some" whenever the payload happened to be 1 —
+                // `match Some(7) { Some(n) => n + 100, … }` took the wildcard.
                 if receiver.is_none()
                     && matches!(method.as_str(), "Some" | "Ok" | "Err")
                     && args.len() == 1
                 {
                     let val_id = self.lower_expr(&args[0]);
+                    let (variant, tag_val) = match method.as_str() {
+                        "Some" => ("Option::Some", 1),
+                        "Ok" => ("Result::Ok", 1),
+                        _ => ("Result::Err", 0),
+                    };
+                    // `Option` is `[tag | data]`, `Result` is `[tag | ok | err]`
+                    // (the layouts `option_get_data` / `host_result_get_data`
+                    // decode), so an unused payload slot is written as 0.
+                    let tag_id = self.int_slot(tag_val);
+                    let z = self.int_slot(0);
+                    let fields = match variant {
+                        "Option::Some" => vec![
+                            ("__tag".to_string(), tag_id),
+                            ("f0".to_string(), val_id),
+                        ],
+                        "Result::Ok" => vec![
+                            ("__tag".to_string(), tag_id),
+                            ("f0".to_string(), val_id),
+                            ("f1".to_string(), z),
+                        ],
+                        _ => vec![
+                            ("__tag".to_string(), tag_id),
+                            ("f0".to_string(), z),
+                            ("f1".to_string(), val_id),
+                        ],
+                    };
                     self.exprs.insert(
                         id,
                         MirExpr::Struct {
-                            variant: method.clone(),
-                            fields: vec![("f0".to_string(), val_id)],
+                            variant: variant.to_string(),
+                            fields,
                         },
                     );
                     self.type_map.insert(id, Type::I64);
@@ -11006,6 +11168,16 @@ call, no NULL-handle dereference).",
                             self.type_map.insert(cond_id, Type::Bool);
                         }
                         AstNode::Var(var_name) => {
+                            // `None` / `Err` written bare are the same arm as
+                            // `Option::None` / `Result::Err`; the checks below
+                            // key on the qualified spelling. Left bare, a `None`
+                            // arm fell through to "capture variable, always
+                            // matches" and swallowed every value.
+                            let var_name: &str = match var_name.as_str() {
+                                "None" => "Option::None",
+                                "Err" => "Result::Err",
+                                other => other,
+                            };
                             // Check if this is an enum variant name like Option::None
                             if var_name == "Option::None" || var_name == "Result::Err" {
                                 // For enum variant without data, check if it matches
@@ -11046,18 +11218,42 @@ call, no NULL-handle dereference).",
                                 self.exprs.insert(cond_id, MirExpr::Var(inverted_id));
                                 self.type_map.insert(cond_id, Type::Bool);
                             } else if let Some(tag) = self.enum_unit_variant_index(var_name) {
-                                // User-defined enum unit-variant path pattern
-                                // (e.g. `Color::Red`): equality against the tag.
-                                let pattern_id = self.next_id();
-                                self.exprs.insert(pattern_id, MirExpr::IntLit(tag));
-                                self.type_map.insert(pattern_id, Type::I64);
-                                self.stmts.push(MirStmt::Call {
-                                    func: "==".to_string(),
-                                    args: vec![scrutinee_id, pattern_id],
-                                    dest: cond_id,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(cond_id, MirExpr::Var(cond_id));
+                                // Unit-variant pattern of a registered enum
+                                // (e.g. `Color::Red`).
+                                let boxed = self
+                                    .enum_variant_of(var_name)
+                                    .map(|(enum_name, _, _)| self.enum_is_boxed(&enum_name))
+                                    .unwrap_or(false);
+                                let cond = if boxed {
+                                    // The value is a `[tag, …]` block: read the tag.
+                                    self.boxed_tag_guard(scrutinee_id, tag)
+                                } else {
+                                    // All-unit enum: the value IS the discriminant,
+                                    // so a bare `scrutinee == tag` stays correct.
+                                    let cond = self.next_id();
+                                    let pattern_id = self.next_id();
+                                    self.exprs.insert(pattern_id, MirExpr::IntLit(tag));
+                                    self.type_map.insert(pattern_id, Type::I64);
+                                    self.stmts.push(MirStmt::Call {
+                                        func: "==".to_string(),
+                                        args: vec![scrutinee_id, pattern_id],
+                                        dest: cond,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs.insert(cond, MirExpr::Var(cond));
+                                    self.type_map.insert(cond, Type::Bool);
+                                    cond
+                                };
+                                self.exprs.insert(cond_id, MirExpr::Var(cond));
+                                self.type_map.insert(cond_id, Type::Bool);
+                            } else if let Some((_, tag, _)) = self.enum_variant_of(var_name) {
+                                // Same spelling without a payload list
+                                // (`Token::Eof | Token::BraceClose` as a pattern,
+                                // or a unit arm of an enum the parser wrote as a
+                                // bare path) for a *boxed* enum whose value block
+                                // carries the tag in slot 0.
+                                let cond = self.boxed_tag_guard(scrutinee_id, tag);
+                                self.exprs.insert(cond_id, MirExpr::Var(cond));
                                 self.type_map.insert(cond_id, Type::Bool);
                             } else if var_name == "_" {
                                 // Wildcard pattern - always true
@@ -11066,7 +11262,7 @@ call, no NULL-handle dereference).",
                             } else {
                                 // Regular variable binding pattern - always matches
                                 // Add binding to name_to_id so the arm body can reference it
-                                self.name_to_id.insert(var_name.clone(), scrutinee_id);
+                                self.name_to_id.insert(var_name.to_string(), scrutinee_id);
                                 self.exprs.insert(cond_id, MirExpr::IntLit(1));
                                 self.type_map.insert(cond_id, Type::Bool);
                             }
@@ -11076,6 +11272,17 @@ call, no NULL-handle dereference).",
                             fields,
                             rest: _,
                         } => {
+                            // The bare Python-style spelling of a builtin
+                            // constructor means the same arm (`Some(n)` ==
+                            // `Option::Some(n)`), and the tests below key on the
+                            // qualified name.
+                            let variant: &str = match variant.as_str() {
+                                "Some" => "Option::Some",
+                                "None" => "Option::None",
+                                "Ok" => "Result::Ok",
+                                "Err" => "Result::Err",
+                                other => other,
+                            };
                             // Handle enum variant patterns like Option::Some(x) or Result::Ok(val)
                             // Check if this is an enum variant pattern
                             if variant.starts_with("Option::") || variant.starts_with("Result::") {
@@ -11157,19 +11364,55 @@ call, no NULL-handle dereference).",
 
                                 self.exprs.insert(cond_id, MirExpr::Var(final_check_id));
                                 self.type_map.insert(cond_id, Type::Bool);
+                            } else if let Some((_, tag, _)) = self.enum_variant_of(variant) {
+                                // A payload-carrying variant of a registered
+                                // user enum (`Token::Ident(n)`, `Ast::Lit(n)`).
+                                //
+                                // This used to be the `else` branch below, which
+                                // bound every field name to a literal `0` and
+                                // set the condition to "always true" — so
+                                // `match t { Token::Ident(n) => n + 1, _ => 900 }`
+                                // took the first arm for ANY value and printed 1
+                                // (measured). The block that such a variant now
+                                // builds is `[tag, p0, …]` (see `enum_is_boxed`),
+                                // so the test reads slot 0 and each binding reads
+                                // slot 1+k.
+                                let cond = self.boxed_tag_guard(scrutinee_id, tag);
+                                for (k, (_field_name, field_pattern)) in
+                                    fields.iter().enumerate()
+                                {
+                                    if let AstNode::Var(var_name) = field_pattern {
+                                        let slot =
+                                            self.deref_slot(scrutinee_id, 8 * (k as i64 + 1));
+                                        self.name_to_id.insert(var_name.clone(), slot);
+                                    }
+                                }
+                                self.exprs.insert(cond_id, MirExpr::Var(cond));
+                                self.type_map.insert(cond_id, Type::Bool);
                             } else {
-                                // For regular struct patterns, treat as always matching for now
-                                // Set up bindings for the field patterns
+                                // Nothing registered this variant name, so there is
+                                // no tag to compare against and no slot to read the
+                                // payload from: the arm CANNOT be tested.
+                                //
+                                // This used to set the condition to "always true"
+                                // and bind every field to `0`, which made an
+                                // untestable arm claim a match on any value —
+                                // `match 5 { Foo(n) => n, _ => 7 }` printed 0
+                                // (measured) instead of falling through. Fail
+                                // closed instead: the arm never matches, so the
+                                // value goes to the arms that CAN answer, and the
+                                // wildcard or a later arm decides.
                                 for (_field_name, field_pattern) in fields {
                                     if let AstNode::Var(var_name) = field_pattern {
-                                        // Create a placeholder ID for the field value
+                                        // Register the names so the arm body still
+                                        // resolves; it is unreachable either way.
                                         let field_id = self.next_id();
                                         self.name_to_id.insert(var_name.clone(), field_id);
-                                        self.exprs.insert(field_id, MirExpr::IntLit(0)); // Placeholder
+                                        self.exprs.insert(field_id, MirExpr::IntLit(0));
                                         self.type_map.insert(field_id, Type::I64);
                                     }
                                 }
-                                self.exprs.insert(cond_id, MirExpr::IntLit(1));
+                                self.exprs.insert(cond_id, MirExpr::IntLit(0));
                                 self.type_map.insert(cond_id, Type::Bool);
                             }
                         }
@@ -12055,6 +12298,40 @@ call, no NULL-handle dereference).",
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, Type::I64);
                     return id;
+                }
+
+                // A payload-carrying variant of a registered user enum
+                // (`Token::Ident(5)`, `Ast::Lit(0)`) constructs the value block
+                // `[tag, p0, …]` that the arm test reads (see `enum_is_boxed`).
+                //
+                // This must come before every capitalized-name route below: the
+                // platform-class catch-all swallowed `Enum::Variant(args)` first
+                // and emitted `zeta_platform_obj("Ident", 5)`, so the tag was
+                // never written and no arm could tell the value from any other.
+                if path.len() == 1 && type_args.is_empty() {
+                    let qualified = format!("{}::{}", path[0], method);
+                    if let Some((_, tag, payload_n)) = self.enum_variant_of(&qualified) {
+                        if payload_n == args.len() {
+                            let tag_id = self.next_id();
+                            self.exprs.insert(tag_id, MirExpr::IntLit(tag));
+                            self.type_map.insert(tag_id, Type::I64);
+                            let mut fields: Vec<(String, u32)> =
+                                vec![("__tag".to_string(), tag_id)];
+                            for a in args {
+                                let arg_id = self.lower_expr(a);
+                                fields.push((format!("f{}", fields.len() - 1), arg_id));
+                            }
+                            self.exprs.insert(
+                                id,
+                                MirExpr::Struct {
+                                    variant: qualified,
+                                    fields,
+                                },
+                            );
+                            self.type_map.insert(id, Type::I64);
+                            return id;
+                        }
+                    }
                 }
 
                 // PY-A: platform class constructors (FixedSlippage(0.001),

@@ -118,12 +118,15 @@ if [[ -x "$MIRF" ]]; then echo "  ok   --dump-mir 与 -o 并存时仍照常链�
 
 # ── 批次 348 翼 B：无输入时，只读标志不许触发内置演示 ──
 # `zetac` 不带文件会读 **CWD 相对** 的 examples/selfhost.z，编译并在编译器进程里跑它
-# （main.rs 里除 `-o` 之外第二处 `main.call()`）。探测器只认解析器自己打的
-# `warning: [W1002] examples/selfhost.z:NN:` —— 修复前它在这四个入口都出现，
-# 即"要个 dump 结果把演示程序编译了"。诊断文本自己含该文件名，所以**不能** grep 文件名，
-# 必须钉 W1002 这条只有解析截断才会打的行（批次 344 同类自伤的复犯预防）。
+# （main.rs 里除 `-o` 之外第二处 `main.call()`）。探测器只认演示程序自己被编译时才会
+# 出现的那一声。诊断文本自己含该文件名，所以**不能** grep 文件名，必须钉一条只有
+# "真的编译了演示程序"才会打的行（批次 344 同类自伤的复犯预防）。
+# 批次 396 换过标尺：原来钉的是 `warning: [W1002] examples/selfhost.z:NN:`（解析截断
+# 才打的那行），而 selfhost 末尾 91 行的截断已经修掉 ⇒ 阳性对照期望 1、实得 0。
+# 现在的标尺是 CTFE 的 `FunctionNotFound`：演示程序编译到常数折叠阶段撞上找不到定义
+# 的被调函数才打这一声，只读入口（拒绝编译演示）不会有它。
 echo "== 批次 348 翼 B：无输入 + 只读标志 ⇒ 内置演示一次都不许多编译"
-fb_hit() { "$@" </dev/null 2>&1 1>/dev/null | grep -c 'W1002\] examples/selfhost.z'; }
+fb_hit() { "$@" </dev/null 2>&1 1>/dev/null | grep -c 'FunctionNotFound'; }
 fb_rc() { "$@" </dev/null >/dev/null 2>&1; echo $?; }
 want "无输入裸跑 → 演示真被编译（阳性对照）" 1 "$(fb_hit "$ZETAC")"
 for flag in --dump-mir --emit-llvm --report-stubs --report-untyped; do
