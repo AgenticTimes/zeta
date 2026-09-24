@@ -1,5 +1,96 @@
-<mxfile host="app.diagrams.net" modified="2026-09-24T00:00:00.000Z" agent="zeta-docs" version="21.0.0"><diagram id="zeta-0-84971" name="调用链"><mxGraphModel dx="1000" dy="800" grid="1" gridSize="10" page="1" pageWidth="1100" pageHeight="1400" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="a1" value="main.rs::run" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="40" y="20" width="420" height="44" as="geometry"/></mxCell><mxCell id="a2" value="indent::indent_preprocess" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1"><mxGeometry x="40" y="82" width="420" height="44" as="geometry"/></mxCell><mxCell id="a3" value="parse_zeta → parse_top_level_entry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="40" y="144" width="420" height="44" as="geometry"/></mxCell><mxCell id="a4" value="parse_block_body → parse_stmt / parse_full_expr" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="40" y="206" width="420" height="44" as="geometry"/></mxCell><mxCell id="a5" value="Resolver::register" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="40" y="268" width="420" height="44" as="geometry"/></mxCell><mxCell id="a6" value="MirGen::lower_to_mir" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="40" y="330" width="420" height="44" as="geometry"/></mxCell><mxCell id="a7" value="LLVMCodegen::gen_mirs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="40" y="392" width="420" height="44" as="geometry"/></mxCell><mxCell id="a8" value="inkwell → verify → TargetMachine → .o" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="40" y="454" width="420" height="44" as="geometry"/></mxCell><mxCell id="a9" value="gcc 链接（+ 两个运行时 .o）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1"><mxGeometry x="40" y="516" width="420" height="44" as="geometry"/></mxCell><mxCell id="c3-a1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="a1" target="a2"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3-a2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="a2" target="a3"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3-a3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="a3" target="a4"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3-a4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="a4" target="a5"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3-a5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="a5" target="a6"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3-a6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="a6" target="a7"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3-a7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="a7" target="a8"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3-a8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="a8" target="a9"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3t" value="编译期主调用链（真实函数名，codegraph 核对）" style="text;html=1;fontStyle=1;fontSize=13;" vertex="1" parent="1"><mxGeometry x="40" y="0" width="460" height="20" as="geometry"/></mxCell><mxCell id="b0" value="运行期示例：s.to_string() 的完整旅程（批次 363 修复）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="1"><mxGeometry x="560" y="20" width="440" height="52" as="geometry"/></mxCell><mxCell id="b1" value="用户代码：let t = s.to_string()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="560" y="86" width="440" height="52" as="geometry"/></mxCell><mxCell id="b2" value="解析：方法调用 → AstNode::Call{method:to_string}" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="560" y="152" width="440" height="52" as="geometry"/></mxCell><mxCell id="b3" value="MIR：查方法表 str_method_symbol →
-Call{func: host_str_to_string}，结果定型为 Str" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="560" y="218" width="440" height="52" as="geometry"/></mxCell><mxCell id="b4" value="codegen：get_function 声明外部符号 → LLVM call" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="560" y="284" width="440" height="52" as="geometry"/></mxCell><mxCell id="b5" value="链接：tokio_runtime.o 提供 host_str_to_string
-（恒等：字符串不可变，返回同一句柄）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1"><mxGeometry x="560" y="350" width="440" height="52" as="geometry"/></mxCell><mxCell id="c3b-b0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b0" target="b1"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3b-b1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b1" target="b2"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3b-b2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b2" target="b3"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3b-b3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b3" target="b4"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="c3b-b4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b4" target="b5"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="b6" value="对照：s.parse().unwrap_or(0) → parse 返回 host_result 单元
-（tag 1=成功/2=失败）→ unwrap_or 用 host_result_is_ok 取值或默认。
-失败路径的 unwrap() 会响亮 abort（批次 365）。" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;" vertex="1" parent="1"><mxGeometry x="560" y="426" width="440" height="90" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" version="26.0.0">
+  <diagram name="zeta">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1150" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="b-main" value="main.rs::run" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="440" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="b-indent" value="indent::indent_preprocess" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="100" width="440" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="b-parse" value="parse_zeta → parse_top_level_entry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="160" width="440" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="b-block" value="parse_block_body → parse_stmt / parse_full_expr" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="220" width="440" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="b-reg" value="Resolver::register" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="280" width="440" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="b-mirgen" value="MirGen::lower_to_mir" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="340" width="440" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="b-llvm" value="LLVMCodegen::gen_mirs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="400" width="440" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="b-o" value="inkwell → verify → TargetMachine → .o" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="460" width="440" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="b-gcc" value="gcc 链接（+ 两个运行时 .o）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="520" width="440" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="be0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b-main" target="b-indent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b-indent" target="b-parse">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b-parse" target="b-block">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b-block" target="b-reg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b-reg" target="b-mirgen">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b-mirgen" target="b-llvm">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b-llvm" target="b-o">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="b-o" target="b-gcc">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="btitle" value="运行期示例：s.to_string() 的完整旅程（批次 363 修复的链接路径）" style="text;html=1;fontStyle=1;fontSize=13;align=left;" vertex="1" parent="1">
+          <mxGeometry x="540" y="40" width="440" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="c1" value="用户代码：let t = s.to_string()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="540" y="80" width="440" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="c2" value="解析：方法调用 → AstNode::Call{method: to_string}" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="540" y="144" width="440" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="c3" value="MIR：查方法表 str_method_symbol → Call{func: host_str_to_string}，结果定型为 Str" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="540" y="208" width="440" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="c4" value="codegen：get_function 声明外部符号 → LLVM call" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="540" y="272" width="440" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="c5" value="链接：tokio_runtime.o 提供 host_str_to_string（恒等：字符串不可变，返回同一句柄）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="540" y="336" width="440" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="ce0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="c1" target="c2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="c2" target="c3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="c3" target="c4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="c4" target="c5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="bnote" value="对照：s.parse().unwrap_or(0) → parse 返回 host_result 单元（tag 1=成功 / 2=失败）→ unwrap_or 用 host_result_is_ok 取值或默认。失败路径的 unwrap() 会响亮 abort（批次 365）。" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;" vertex="1" parent="1">
+          <mxGeometry x="540" y="406" width="440" height="90" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
