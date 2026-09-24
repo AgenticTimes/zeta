@@ -15404,3 +15404,55 @@ pyramid 位置：4.3.b 值表示（环境格 `zeta_env_get`/`zeta_env_set`）；
 1. 4.3.b：模块全局"单一存放点"的设计批——先只写清槽落点与类型随行，别一次性换读侧（本批三条机制就是换读侧的代价读数）。
 2. 2.2：`quantum_basic` 85 行拆成三个成员分别开批（函数体 `use` 解析 / `std::quantum` 模块 / 元组解绑值的调用），第一格还要顺带回答"假绿要不要进 known-fail"。
 3. 3.2：带载荷枚举变体（selfhost 成员 1 前置，批次 389 的表仍在）。
+
+## 批次 391（交付）—— 4.3.b：模块全局的环境表镜像从"按语句种类补"改成一个降低后置遍（容器方法重绑不再漏写）
+
+pyramid 位置：4.3.b 值表示（模块全局的两份存放：编译期槽 + 环境格 `zeta_env_get`/`zeta_env_set`）。本批只动**写**侧，读侧一字未动 ⇒ M2、M3 原样留着。
+
+代码提交：`60eb2caa`（`src/middle/mir/gen.rs` +148/-36、新用例 `t428`）；用例修订：`c6a42a99`。未 push。
+
+### 最小复现与 A/B（`/tmp/b391/`，两份构建跑同一份源）
+
+A = `60eb2caa^` 的隔离 worktree 构建（`git worktree add --detach /tmp/b391/A 60eb2caa^` + `CARGO_TARGET_DIR=/tmp/b391/A-target`），B = 本批构建。两边链接的都是主仓 `runtime/` 那批 `.o`（见"做法"里的 CWD 坑）。
+
+| 夹具 | A（改前） | B（改后） |
+|---|---|---|
+| `p3.z` = `xs = [3,1,2]` / `xs.remove(3)` / `def peek(){return len(xs)}` / `print(peek())` / `print(xs)` | `3` / `[1, 2]` | `2` / `[1, 2]` |
+| `p4.z` = 同上，但 `xs.remove(3)` 写在 `if len(xs) == 3:` 块里 | `3` / `[1, 2]` | `2` / `[1, 2]` |
+| `p2.z` = 模块全局 `total = 100`，函数里同名局部 `total = 5; total += 1` | `6` / `6` / `100` | `6` / `6` / `100` |
+
+- `p3`/`p4` 是本批战果：同一个名字在同一程序里两份答案，且一声不出（§7 最差那一类）。顶层与嵌套块各一条 ⇒ 后置遍的递归是真在做事，不是"看着没错"。
+- `p2` 是**未放大**的对照：M3（格按裸名字索引，函数里的同名局部写穿了模块全局那格）改前后逐字相同，本批没有让它变坏 —— 但也没修，`g()` 读回 6、模块体读回 100 这一对仍是错的（属"单一存放点"那一格，未动）。
+- `tests/python_style/t428_rebind_env_mirror.z` 的 A/B 五行：A `3/10/2/[7]/[1,2]`，B `2/10/1/[7]/[1,2]`。第 2 行 `total`（`+=`）在 A 上已经是 10，它是批次 385 的不回归对照，不是本批战果 —— 这一点在用例注释里写明，别把旧账记到新批上。
+
+### 做法
+
+1. `env_store` 拆成 `env_mirror`（`gen.rs:437`，**构造**并返回镜像语句 + key id）+ `env_store`（`:428`，把返回值 push 进 `self.stmts`）。float 走位模式那套逻辑原样搬过去，行为不变；拆开是为了让后置遍能把镜像**插进已降低完的语句表中间**。
+2. 新增 `mirror_module_global_writes`（`:523`）+ `splice_env_mirrors`（`:542`）+ `sub_splice`（`:614`）：槽集从 `name_to_id ∩ module_globals` 现推（不注册、不要求任何绑定点登记），体内每条 `Assign{lhs}` 命中就把 `env_mirror(name, lhs)` 的结果接在其后；`If`/`For`/`While` 的 `then`/`else_`/`body`/`pre_cond`/`else_body` 递归同样处理。两处装配点各调一次：顶层项 `:1339`、合成闭包 `:13891`（`build_mir`）。
+3. 删掉散布在语句种类上的三处模块全局镜像（原 `:1738` 的 `=` 重绑、`:1793` 的 `=` 新建、`:1857` 的 `+=`）。批次 385 留在原地的两条实测理由（"镜像读刚才写的那个槽，不读 `rhs_id`，因为 codegen 在每个使用点重算表达式"）搬进后置遍的文档注释，没丢。
+
+### 自我核对：上一批那句"8 处镜像"口径是错的
+
+批次 390 的记录写的是"8 处按语句种类散布的 `env_store`"，本批动手前逐点看过：那 8 处里**只有 3 处**是"模块全局槽 → 环境格副本"的镜像（上面删掉的那三处）。另外 5 处（`:1452`、`:1853`、`:1868`、`:1943` 是 `nonlocal`，`:13219` 是闭包自由变量快照）里环境格**就是存放点**，不是第二份副本，后置遍管不着也不该管。所以本批真实的收敛是 **3 处 → 1 处**，不是 8 → 1；"8"这个数在批次 390 的记录里已经落地，按规矩不回改，只在此处给旧号→新号：旧"8 处写镜像"= 现"3 处模块全局镜像 + 5 处 nonlocal/闭包存放点"。
+
+改完的读数（正向证据，不是"没报错"）：`env_store(` 的调用点从 8 处剩 5 处（`grep -n` 全在 `gen.rs`），全为 nonlocal/闭包 ⇒ 模块全局这一族的写规则确实只剩后置遍一处。
+
+### 门禁
+
+`bash tools/run_all.sh` rc=1（2 个红线失败在，正常）：official compile **194/194**、compile+link **192/194**；python_style **311 passed / 2 failed / 5 known-fail / 0 xpass**（`/tmp/b391/gate.log:6`）—— 310 → 311 的增量就是新用例，红线仍只有 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`；self-host 语料解析 **39/39 = 100%**（同一行 28）；`t425_module_body_stale_read` 仍在 5 个 known-fail 里（读侧未动，符合预期）。本批未取 A 侧的 compile_diagnostics 读数 ⇒ 只报 B 侧：official 11 行 / 4 文件，python_style 176 行 / 76 文件（加 t428 前后都是 176/76，新用例不出警告）。
+
+### 结构验收（codegraph，`sync` 后查询）
+
+- `codegraph callers mirror_module_global_writes` → 2 个：`lower_to_mir`（`gen.rs:1067`）、`build_mir`（`:13890`）—— 图报的是**宿主方法定义行**；两处的实际调用行是 `grep` 出来的 `:1339` 与 `:13891`。
+- `codegraph callers env_mirror` → 2 个：`env_store`（`:428`）、`splice_env_mirrors`（`:542`）⇒ 镜像语句的构造只有这一个入口，`env_store` 只是"就地发射"的薄封装。
+- 图证据之外仍要三套基线：本批门禁读数在下一节，结构验收只是补充，不替代它。
+
+### 下一批默认候选（按已实测损害量）
+
+1. 4.3.b：**单一存放点**设计批 —— M2（一格只有裸 64 位字，元素类型/bool/float 传不过去）与 M3（按裸名字并格）都不是补镜像能收的，`p2.z` 那对 `6 / 100` 就是 M3 的现行读数。这一格要动的是读侧与存放形状，代价参考批次 388 的 34 例回归。
+2. 2.2：`quantum_basic` 85 行拆三格（函数体 `use` 解析 / `std::quantum` 模块 / 元组解绑值的调用），第一格顺带裁决"compile-only 假绿要不要进 known-fail 包"。
+3. 3.2：带载荷枚举变体可测（selfhost 成员 1 的前置）。
+
+### 一次性方法事实（补进"取读数的坑"）
+
+A/B 时 A 的编译器**必须在主仓目录下运行**：`cd /tmp/b391 && /tmp/b391/A-target/release/zetac -o p3.A.bin p3.z` 链接直接失败（`_zeta_env_set`、`_zeta_module_decl` 等 undefined），换成 `cd /Users/meetai/source/zeta-src && <A编译器> -o /tmp/b391/p3.A.bin /tmp/b391/p3.z` 就通过 —— runtime `.o` 的查找是 **CWD 相对**，不是编译器 exe 相对。隔离 worktree 里没有 `.o`（`/tmp/b391/A/runtime/*.o` 零命中），所以"用 A 的 worktree 当 CWD"也不行。产物二进制在哪个目录跑无所谓，链接那一刻才要 `.o`。
