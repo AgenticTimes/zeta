@@ -16222,6 +16222,66 @@ official compile **194/194**（硬断言 `run_all.sh:575`）、compile+link **19
 
 裁定表第 2 项的后半：**#45 格式化输出丢字**（同在 `gen.rs`，剩余成员＝`format!` 桩与"非宏 `print` 占位符"两条）。次位：#42 的 JIT 绑定表——现在 `runtime_malloc` 与 `str_get` 都在里面，`selfhost` 在 JIT 侧的石头从"崩"变成"具名 trap"，补表比再猜一条方言便宜。仍需用户一句话的是 **#112**（`zt_vec_cmp` 在"永不触手"的 `runtime/py_additions.c`）。
 
+## 批次 404（交付）—— 2.2 展开期：`format!` 是一只不看参数的桩（整个宏返回同一个写死的串），且宏递归不下进「实参 / `return` / `impl` 方法体」
+
+候选来源：裁定表第 2 项的后半（#45 格式化输出丢字），成员就是批次 377 登记在册的**第六成员**——`expand_format` 是桩。归位：**展开期**（症状读在 4.3.b 的输出面上，病灶全在 `src/frontend/macro_expand.rs` ＋ `src/middle/resolver/resolver.rs`）。本批没动 `gen.rs`、没动 `codegen.rs`、没动运行时 C，也没新增运行时函数或改契约。
+
+### 一、根因一句话 ＋ 三处改动（`macro_expand.rs` 752→789、`resolver.rs` 5048→5121，合计 +119/−9）
+
+`expand_format`（`macro_expand.rs:191`）不看参数、无条件返回 `AstNode::StringLit("formatted string")` ⇒ 语料里 **29 个文件 / 121 处** `format!(` 调用（`grep -rno 'format!(' --include='*.z'`，不含本批新用例）全打在同一个串上，编译成功、退出码 0、一声不出。
+
+改后三处，**缺一处就有成员落不回**：
+
+1. **切段**（`macro_expand.rs:191-227` ＋ 新助手 `fmtspec_expr` `:229`）：首参是字面量时按 `{}` 切段，值段发 `__fmtspec__(v, "")`，与字面量段用 `+` 串接。`__fmtspec__` 的下型早已有逐静态类型派发（`gen.rs:7994` ⇒ `py_fmt_{i64,f64,str}`，空 spec 即 `{}` 的语义），所以本批复用的就是 f-string 那条路，没有另开一台格式化机器。模板不是字面量时仍退回那个写死串（语料 0 成员这样写，见 §五③）。
+2. **递归下进表达式位**（`resolver.rs` 新臂：`Return` `:3817`、`UnaryOp` `:3818`、`BinaryOp` `:3822`、`Call` 的接收者与实参 `:3827`）**并把宏调用点的实参先展开**（`expand_macro_site` `:3852`，内部走 `expand_expr_list` `:3858`；两个 MacroCall 站点 `:3617`、`:3775` 都改走它）。
+3. **`impl` 方法体**（`resolver.rs:3701` 新臂）：`ImplBlock` 过去和 `StructDef | EnumDef | ConceptDef` 同在一个「只 clone ＋ 处理属性」的支里，方法体整块不进递归；现在体走 `expand_stmts`（`:3721`），再把重建出的节点交给 `process_attributes`（`:3727`）⇒ 属性语义一字保持。
+
+只补 ①（还没补 ②）时 `t440` 八行里 **5 行仍是 `[0]`/`[<null>]`**、`return format!(…)` 与 `println!("{}", format!(…))` 两形都不落地——因为内层宏是作为 **MacroCall 实参**送进展开器的，`return` 则根本不在递归里（这条中间态实拍当时取于 `/tmp/b404/`，中间态二进制未保留，不可复现；§二表里的读数全部用 HEAD 与最终树两个二进制复跑，可复现）。补 ② 收这批，补 ③ 才让 `impl` 里的打印出声（`ip3` 在 HEAD 下是**零输出**）。
+
+### 二、探针读数（`target/release/zetac_b404_pre`＝HEAD，`zetac_b404_impl`＝最终树，同目录跑）
+
+| 输入 | PRE（HEAD 二进制） | POST |
+|---|---|---|
+| `t440_format_bang_expansion.z`（十条 expect 全按 POST 实拍写） | `[0] [0] [0] [0] [formatted string][formatted string] [<null>] [0] A=1`（8 行，impl 那两行**根本不存在**） | 十条全中 |
+| `ip2.z`（`impl` 体里 `println!` ＋ `return`） | `get=5` / `shoutret=7`——方法真跑了（返回 7），体里的打印一声不出 | `get=5` / `shoutret=shout=5` / `7` |
+| `ip3.z`（`impl` 体里 `println!("{}", format!(…))` 两形） | **零输出**（rc=0） | `[shown=Counter(7)]` `[t=k=7]` |
+| `claim.z`（spec 占位符 / bool / 非字面量模板，全是未收成员的定价） | 五行 `[0]` | `[b=1]` `[z={:04}7]` `[h={:#x}255]` `[p={:.2}1.750000]` `[formatted string]` |
+
+`ip3` 的 PRE 是**零输出**而不是崩——展开没进去、`gen.rs` 又静默跳过 MacroCall 语句，这是本项目定为最恶劣的那一类（静默无输出）。`ip2` 的 `shoutret=7` 是正证据：方法体确实在跑，缺的只是打印。
+
+### 三、门禁读数（`bash tools/run_all.sh`，日志 `/tmp/b404/gate.log`，跑在代码提交 `c443c34a` 之后的同一份树）
+
+official compile **194/194**（硬断言 `run_all.sh:575`）、compile+link **191/194**（三条 link-only 明细逐字未动：`integration_all_features`、`quantum_basic`、`selfhost`）；python_style **323 passed / 2 failed / 5 known-fail / 0 xpass**（322 ＋ 本批 t440；两红逐条点名仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）；语料 39/39；**jit `ok=174 trap=350 fail=0 timeout=0 segv=0`（total 523→524）**——`ok` 未动、`trap` ＋1 是本批新用例自己（`Counter { n: n }` 走 `runtime_malloc`，JIT 无绑定，属 #42 那一族而非本批引入）；diff `match=120 judged=130 rate=92.3% bad_case=0` 一字未动；knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 各 FAIL 0，mbvar 21 脚本违规 0，comment_drift 0；clean_checkout rc=0（rev `1f17799f`，即记录批之前的 HEAD）；诊断 official **2 文件 / 5 行**未动、python_style **96 文件 / 201 行 → 97 / 202**——多的那一条就是 t440 自己的 `warning: PY-A: parameter print.value receives incompatible argument kinds (str vs i64)`（用例里 `print` 同时收到串和整数，属批次 400 那张动态槽表的既有口径，不是新病灶）。整体 **GATE_RC=1** 实拍，来源仍是唯一一条存量 `run_all.sh:576`（`py_fail=2`）。
+
+### 四、语料定价：840 文件 `--dump-mir` 双值 A/B 变 7 个；15 个 `format!` 文件的行为 A/B **零推进**
+
+`find tests examples pylib build -name '*.z'` 取表时 840 条（现数 841，多的正是尚未算进去的 t440），两侧各跑一遍、逐文件 `cmp`（`/tmp/b404/one3.sh`，正证据 `_ran`=840）：**变 7 个**＝`examples/selfhost.z` 与 `tests/unit-tests/selfhost.z`（同一份语料两份拷贝，MIR **8095 → 8255**，＋160 行）、`tests/stdlib-foundation/collections_test.z`（**3028 → 3190**，那是 #45 之外的老成员：`vec!` 在 Assign 右值里现在能下去了）、`tests/traits-advanced/` 四个文件（`test_basic_concepts` 372→676、`test_comprehensive_simple` 674→978、`test_default_methods` 129→205、`test_trait_object_simple` 168→244）。打点位也在动：这四个文件的 `py_fmt*/print_str/print_i64` 计数 **0 → 10 / 10 / 2 / 2**。另有 1 个文件两侧 `--dump-mir` 都失败（`tests/zeta/test_v0_5_0_snippet.z`，存量、与本批无关）。
+
+**行为面本批零推进，如实记账**（这是本批最重要的一格）：15 个含 `format!` 的文件双二进制跑（`/tmp/b404/fmtab2.sh`）——12 个 SAME（两侧 stdout 都是 0 行、rc=0）、4 个两侧同点位编译失败（`fmt_time_env_test`、`test_basic_concepts`、`test_comprehensive_simple`、`test_default_methods`）、`minimal_compiler` 唯一 DIFFER 只是两行堆地址数字（21 行输出、rc=134 两侧同），其余就是本批自己的 t440。7 个 MIR 变了的文件里唯一有二进制可跑的是 `test_trait_object_simple`：**PRE rc=0 零输出 → POST rc=192 零输出**——它 `fn main() -> String` 且最后一条语句是求值表达式 ⇒ 退出码取那个字符串句柄的低字节（#55 那一族，见 §五⑦）。`minimal_compiler` 的 5 处 `format!` 不动的根因也量到了：五处全是 `push_str(&format!(…))`，而 **`&expr` 作实参本身就 rc=139（改前改后同一份崩）、`push_str` 是空操作**（`a.push_str("n=7")` 打 `[x]`）⇒ 卡在 #47/#42 那一族上，不在展开期。
+
+### 五、边界与残口（OPEN 净增 0：八条全部折进既有任务行 #45，另两处归属 #55/#47）
+
+① **带 spec 的占位符不切段**：`{:04}`/`{:#x}`/`{:.2}` 不被认成占位符，整串按字面量段照打、值照转（`z={:04}7`、`h={:#x}255`、`p={:.2}1.750000`）——运行时其实支持这些 spec（`py_additions.c` 的 `py_fmt_i64` zero/x/o 分支），缺的是宏侧切段。
+② **bool 档缺失**：`format!("{}", true)` 打 `b=1` 而不是 `True`（`__fmtspec__` 的派发只有 f64/str/i64 三档）。批次 291 写在 `gen.rs` 的契约（"bool must print Python-style"）在这一格仍未成立。
+③ **非字面量模板**仍是那个写死串（`format!(t, 1)` 打 `formatted string`）；语料里 0 成员这样写，本批按桩保留。
+④ **`&expr` 作实参 rc=139 ＋ `push_str` 空操作**：这是 `minimal_compiler` 5 处调用点仍不动的直接原因，归 #47/#42 族，本批不认领也不修。
+⑤ **impl 方法返回 Str 交给打印占位符打句柄**：`println!("[impl={}]", c.label())` 实拍 `[impl=4374191776]`（每次跑不同）；同一个方法体内自打自印是对的（`shown=` 那行）⇒ 缺口在 impl 方法的返回类型/结果槽那一层（与 #33「返回类型两源并行无检查」、#38①「match 结果槽恒 I64」同族），另计。
+⑥ **`x.to_string()` 在非 str 接收者上 rc=139**（伴随 `warning: ABI coerce in call to host_str_to_string arg[0]: fptosi → i64`）——本批考虑过用它做值段派发，因为这个崩点改走 `__fmtspec__`。
+⑦ `test_trait_object_simple` 的 **退出码 0 → 192**：负断言的反面证据——值现在真算出来了，只是被当退出码用（#55 的第三档），属 #55 不归 #45。
+⑧ **第七成员（非宏 `print` 不做占位符替换）本批未动**：`print("a={}\n", a)` 仍打 `a={}` 后把值另起一行（批次 396 A/B 实测与本批无关那条），仍在 #45 行上。
+
+### 六、锚点读数
+
+本批两个改动文件都不是 `docs/ABI.md` 的锚点目标（`macro_expand.rs` 752→789、`resolver.rs` 5048→5121；锚点集落在 `gen.rs`/`codegen.rs`/`py_additions.c`）⇒ **没跑 `--rebind`**，只跑只读复扫：**漂移 30 / 新 11 / 消失 3**（基线 251 条、改号配对 0 对、待归属 100 条 / 91 种、声明仓外 14 条），三个数与批次 403 终态**一字相同** ⇒ 本批没新增漂移。存量 30 条清理仍是 #52，核对器仍不在门禁 #37。
+
+### 七、提交与推送
+
+代码批 **`c443c34a`**（3 文件 / +198 / −9）：`src/frontend/macro_expand.rs` +39/−2（文件 752→789）、`src/middle/resolver/resolver.rs` +80/−7（5048→5121）、`tests/python_style/t440_format_bang_expansion.z`（新，79 行，十条 expect 逐字实拍 ＋ 六条未收成员写在文件头）。记录批紧随其后，两笔一起推 `agentic`。
+
+### 八、下一批默认候选
+
+裁定表第 2 项已交完（#38 剩形＝批次 403，#45 的 `format!` 桩＝本批），下一格按表是**第 3 项主线批次 301**（动态值的短 Vec 几何判形）。同层两个便宜的次位：**(a)** #42 的 JIT 绑定表——`runtime_malloc`、`str_get` 都在里面，本批 t440 又添一条同名 trap，补表比再猜一条方言便宜；**(b)** `&expr` 借用的实参族（§五④），收它同时解锁 `minimal_compiler` 的 5 处 `format!` 与 #47 那一族，是这条链上目前**唯一被量到过零推进的堵点**。仍需用户一句话的是 **#112**（`zt_vec_cmp` 在"永不触手"的 `runtime/py_additions.c`）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
