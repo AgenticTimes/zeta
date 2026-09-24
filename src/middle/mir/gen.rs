@@ -2087,6 +2087,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     let hoisted = self.lower_closure(&param_names, &body_node);
                     // bind user name → synthetic fn so `inc()` calls dispatch
                     self.closure_vars.insert(fn_name.clone(), hoisted.clone());
+                    // The call site reads the return type off `closure_ret_tys`
+                    // (and falls back to I64, which for a string means "print the
+                    // heap address"). The Closure-expression arm records it; the
+                    // hoisted-def arm had no equivalent line, so every nested
+                    // `def` was called through an I64-typed destination.
+                    if let Some(t) = self.last_closure_ret_ty.clone() {
+                        self.closure_ret_tys.insert(hoisted.clone(), t);
+                    }
                     // Publish under the user-visible name too (alias map)
                     self.hoisted_names.insert(fn_name.clone(), hoisted);
                     return;
@@ -14382,7 +14390,21 @@ call, no NULL-handle dereference).",
         };
         // Remember the body's value type for the enclosing comprehension (the
         // child MirGen owns that type map, so read it here).
-        self.last_closure_ret_ty = child.type_map.get(&body_val).cloned();
+        // A STATEMENT-LIST body has no body value at all — `body_val` there is
+        // the dummy 0 literal above, so reading its type recorded I64 for a
+        // hoisted nested `def` that returns a string. Take the type off the
+        // body's own `Return` instead; no top-level `Return` keeps the old
+        // (none) behaviour rather than inventing one.
+        self.last_closure_ret_ty = match body {
+            AstNode::Block { .. } => child
+                .stmts
+                .iter()
+                .find_map(|s| match s {
+                    MirStmt::Return { val } => child.type_map.get(val).cloned(),
+                    _ => None,
+                }),
+            _ => child.type_map.get(&body_val).cloned(),
+        };
         // Batch 299: a DICT comprehension's lambda records its key/value types
         // on the child (`__pack_pair__`), so the collected map can be typed
         // `map[k, v]` instead of the untyped `map` that made `.values()`

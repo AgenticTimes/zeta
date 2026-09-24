@@ -1,0 +1,40 @@
+# 批次 408（主线 301 打印族第二格）：**嵌套 def（提升为闭包）的调用点没有返回类型**。
+#
+# 判据点：嵌套 `def` 的函数体是**语句列表**，`lower_closure` 走 Block 那条臂
+# （`gen.rs:14380`），而那条臂的 `body_val` 是它自己造的哑元 `IntLit(0)`、类型写死
+# I64；改前紧接着的一行是 `self.last_closure_ret_ty = child.type_map.get(&body_val)`
+# —— 把**这个 I64 当成闭包的返回类型**记了下来。提升路径（`fn_depth > 1` 的 FuncDef
+# 臂）又没有 lambda 那条 `closure_ret_tys.insert`（只有 `AstNode::Closure` 表达式臂
+# 有），于是调用点查 `closure_ret_tys` 落空、`.unwrap_or(Type::I64)` 兜底 —— 字符串槽
+# 按整数打印，出来是堆地址。修法两行：Block 臂改从本体的 `Return` 取类型（`gen.rs:14398`
+# 那个 match），提升臂补上 `closure_ret_tys.insert`（`gen.rs:2096`）。
+#
+# 与批次 407 的分工（两格判据不同，别再并成一条）：407 修的是"实参证据没被取到"
+# （resolver 的 `collect_calls` 缺 FString 臂），那一格只对**顶层 def** 生效；
+# 本批这一格在 **lowering 侧**，跟证据链无关。差分证据：407 之后仍然错的 p12/p13
+# （`t=4302102352`，`/tmp/b407/p12.py`、`/tmp/b408/p13.py`），以及一条**同病但不发作**的
+# 形态 —— 把插值换成 `v = _fmt(xs)` + `print("t=" + v)`（`/tmp/b408/p14.py`）打印是**对的**，
+# 而它的 MIR 里 `2: I64`、`4: I64`（调用结果与 `v` 都记成整数），只有拼接结果 `9: Str`。
+# 也就是"错类型一直在，发作与否取决于读它的那条路径"：`len(v)` 也一样，改前改后都答 3，
+# 因为 `len` 走动态分发把 char* 当字符串读。
+#
+# 改前实拍（`target/release/zetac_b408_pre`，就是本文件的源、同一台机）：
+#   t=4313653152   e=4310412082   7      （CPython / 改后：t=a;b / e=- / 7）
+# 前两个数字是**堆地址**，随 ASLR 每次变。第三条 `num(3)` 改前就正确 —— 返回整数的
+# 嵌套 def 本来就落在 I64 兜底上，它是"这一格的修法没有顺手扩大"的哨兵。
+// expect: t=a;b
+// expect: e=-
+// expect: 7
+def outer(xs):
+    def _fmt(codes):
+        return ";".join(codes) if codes else "-"
+
+    def num(k):
+        return k * 2 + 1
+
+    print(f"t={_fmt(xs)}")
+    print(f"e={_fmt([])}")
+    print(num(3))
+    return 0
+
+outer(["a", "b"])
