@@ -1,0 +1,84 @@
+// 批次 398（refactor T1 / 类型基础①）：真假值掩码取得自己的类型。
+//
+// 病因（实拍）：`column OP scalar` 的元素级比较早就有一条专用下型（`gen.rs:4440`
+// 的 `is_arr(left) ^ is_arr(right)` 卫哨 → `py_vec_{gt,lt,ge,le,eq,ne}` /
+// `py_vec_cmp_str`），但**目的槽类型一律硬写成 `DynamicArray(I64)`**。而
+// `DynamicArray(I64)` 在这个编译器里同时是"元素类型未知"的记号（`gen.rs:10180`
+// 一带的原话：空字面量把元素定成 I64，那是 "unknown" 而非 "numeric"）—— 于是
+// `df[m]` 拿到掩码时分不清"布尔掩码"和"整数下标列表"，两条分派只能靠猜；掩码
+// 过 `&`/`|`/`~` 之后也没有身份。全仓 `DynamicArray(Bool)` 此前**出现 0 次**。
+//
+// 修法（三处读元素类型 + 一处收口）：
+// ① 元素级比较的三个出口（PyDate→strftime、`elem_is_str`、数值 `_bits`/裸/`_i`）
+//    的 dest 类型改成 `DynamicArray(Bool)`；`py_vec_{isna,notna}` 同。
+// ② `&`/`|` 掩码合并、`!`/`~` 取反按操作数元素类型传播（boolish→Bool；只以
+//    `lt(vec, i64)` 形态到场的旧掩码保留 I64）。
+// ③ `df[...]` 的两条分派（方法路径 `gen.rs:9192`、Index 路径 `gen.rs:13040`）
+//    改读**实参的元素类型**：`Bool|I64` → 掩码（`DataFrame::loc`），`Str` →
+//    列子集（本批新增桩 `DataFrame::select_columns`，见 t434）。
+// ④ `==`/`!=` 的"列表按内容相等"卫哨原为 `||`，把 `column == scalar` 一起吞了
+//    （`py_list_eq` 对字符串标量跑 `zt_vec_len` ⇒ 返回 Bool 而非掩码，
+//    `len(df[e])` 打 0）；改成 `&&`，只留"两边都是列表"。
+// ⑤ `container_cond_i1`（`codegen.rs:5627`）本就类型驱动、`DynamicArray(_)`
+//    通配已覆盖 Bool —— 已核对，**零改动**（登记，不是漏做）。
+// ⑥ 元素级比较的卫哨加一条"同一性哨位"排除：`x is None` 到这一层已经是
+//    `x == 0`（解析器把 `is`/`is not` 抹成 `==`/`!=`，`parser/expr.rs:2491-2495`；
+//    把 `None` 抹成 `Lit(0)`，`:1467`），列表值上的同一性测试与 `column == 0`
+//    在下游不可区分。④ 之后 t150 的 `if types is None` 被元素级路径接管、打出 `2`
+//    （掩码句柄非空即真）。现在只把"`==`/`!=` 对零字面量"这一形排掉（`>`/`<`
+//    不可能是同一性测试），它落回通用的句柄比较＝正确答案。根因（`is` 该是自己的
+//    op）另批登记。
+//
+// 改前/改后（同一探针实拍）：`m[0]` 打 `0` → `False`；`len(df[df["code"]=="d"])`
+// 打 `0` → `1`；`df[["code"]]` rc=139 → `3`（t434）。
+//
+// 逐行期望（每行都与 pandas 3.0.5 对过数）：
+// expect: len(m)=3
+// expect: m[0]=False
+// expect: m[1]=True
+// expect: sum(m)=2
+// expect: len(df[m])=2
+// expect: len(df[m].code)=2
+// expect: m[]=False|True|True
+// expect: len(n)=3
+// expect: len(df[n])=1
+// expect: len(df[~m])=1
+// expect: len(df[e])=1
+// expect: len(df[q])=2
+// expect: len(isna)=3
+// expect: mask-truthy=nonempty
+//
+// pandas 对照：`if m:` 在真 pandas 里抛 `ValueError: The truth value of a Series
+// is ambiguous`。Zeta 沿用既有容器真值约定（`container_cond_i1`：非空即真），
+// 末一行锁定的是这个约定，不是与 pandas 对齐。
+//
+// 同族登记（不在本用例里 blessing 错值）：整型列表的元素级比较 `a = [1,2,3,4];
+// m = a >= 2` 仍 SIGSEGV（rc=139）—— C 侧 `zt_vec_cmp`（`py_additions.c:1013`）
+// 把每个元素按 `const char*` 读再 `strtod`，而该约定下元素是裸 i64。修它要动
+// `runtime/py_additions.c`（永不触手路径），落点待用户裁定。④ 之后 `[1,2,3] == 2`
+// 这一形也从"偶然正确的 `False`"（走 `py_list_eq`）换成同一条 rc=139 —— 同一根因、
+// 从静默变响亮，家族仍一条（CPython 该式答案为 `False`；正解是元素路径 + 数值元素
+// 读法，不是退回 `py_list_eq`）。
+
+from pandas import DataFrame
+
+df = DataFrame({"code": ["a", "c", "d"]})
+m = df["code"] >= "c"
+println!("len(m)={}", len(m))
+println!("m[0]={}", m[0])
+println!("m[1]={}", m[1])
+println!("sum(m)={}", sum(m))
+println!("len(df[m])={}", len(df[m]))
+println!("len(df[m].code)={}", len(df[m]["code"]))
+println!("m[]={}|{}|{}", m[0], m[1], m[2])
+n = (df["code"] >= "b") & (df["code"] <= "c")
+println!("len(n)={}", len(n))
+println!("len(df[n])={}", len(df[n]))
+println!("len(df[~m])={}", len(df[~m]))
+e = df["code"] == "d"
+println!("len(df[e])={}", len(df[e]))
+q = df["code"] != "c"
+println!("len(df[q])={}", len(df[q]))
+println!("len(isna)={}", len(df["code"].isna()))
+if m:
+    println!("mask-truthy=nonempty")

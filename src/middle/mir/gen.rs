@@ -4097,12 +4097,21 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     );
                     self.type_map.insert(dest, Type::Range);
                 } else if (op == "==" || op == "!=")
-                    && (self.is_array_like(&left_id) || self.is_array_like(&right_id))
+                    && self.is_array_like(&left_id)
+                    && self.is_array_like(&right_id)
                 {
                     // PY-A: list equality. `a == b` on two lists used to compile
                     // to a plain integer compare of the two HANDLES, so two
                     // equal-content lists always compared 0 — a silent wrong
                     // answer in every `if a == b` guard.
+                    // Batch 398: the guard used to be `||`, which also swallowed
+                    // `column == scalar` — exactly the shape the element-wise
+                    // mask path below exists for. Measured: `e = df["code"] ==
+                    // "d"; len(df[e])` printed 0 where pandas gives 1, because
+                    // `py_list_eq` compared a vector against a bare string
+                    // pointer (`zt_vec_len` on the scalar) and handed back a
+                    // Bool, not a mask. List-vs-list stays here; vector-vs-
+                    // scalar falls through to `py_vec_cmp_str`/`py_vec_*`.
                     let elem_is_str = self
                         .array_elem_is_str(&left_id)
                         || self.array_elem_is_str(&right_id);
@@ -4215,6 +4224,18 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         matches!(t, Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)))
                     };
                     let boolish = |t: Option<Type>| matches!(t, Some(Type::Bool));
+                    // Batch 398: a mask keeps its Bool element through `|`. The
+                    // `I64` element is this compiler's "unknown element" marker
+                    // (see the `vec_push` refinement below `lower_call`), so an
+                    // `I64` result here was indistinguishable from an index list
+                    // at `df[...]`.
+                    let maskish = |t: Option<Type>| match t {
+                        Some(Type::Bool) => true,
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
+                            matches!(*e, Type::Bool)
+                        }
+                        _ => false,
+                    };
                     if vecish(self.type_map.get(&left_id).cloned())
                         || vecish(self.type_map.get(&right_id).cloned())
                         || boolish(self.type_map.get(&left_id).cloned())
@@ -4227,8 +4248,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                             type_args: vec![],
                         });
                         self.exprs.insert(dest, MirExpr::Var(dest));
+                        let elem = if maskish(self.type_map.get(&left_id).cloned())
+                            || maskish(self.type_map.get(&right_id).cloned())
+                        {
+                            Type::Bool
+                        } else {
+                            Type::I64
+                        };
                         self.type_map
-                            .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                            .insert(dest, Type::DynamicArray(Box::new(elem)));
                         return dest;
                     }
                     let elem = match (
@@ -4422,8 +4450,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     let is_arr = |t: Option<Type>| {
                         matches!(t, Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)))
                     };
-                    is_arr(self.type_map.get(&left_id).cloned())
-                        ^ is_arr(self.type_map.get(&right_id).cloned())
+                    // Batch 398: `x is None` arrives here as `x == 0` — the parser
+                    // erases `is`/`is not` into `==`/`!=` (`parser/expr.rs:2491-2495`)
+                    // and `None` into `Lit(0)` (`:1467`), so an IDENTITY test on a
+                    // list-typed value is textually indistinguishable from
+                    // `column == 0`. Measured: t150's `if types is None` took the
+                    // mask path (a non-empty handle is truthy) and printed `2`.
+                    // Only `==`/`!=` against a zero literal is excluded — `>`/`<`
+                    // can never be an identity test. The excluded shape falls to the
+                    // generic `==` below, which compares the two HANDLES, i.e. the
+                    // identity answer. Root fix (keep `is` as its own op) registered.
+                    let identity_sentinel = matches!(op.as_str(), "==" | "!=")
+                        && [left_id, right_id]
+                            .iter()
+                            .any(|id| matches!(self.exprs.get(id), Some(MirExpr::IntLit(0))));
+                    !identity_sentinel
+                        && (is_arr(self.type_map.get(&left_id).cloned())
+                            ^ is_arr(self.type_map.get(&right_id).cloned()))
                 } {
                     // `column > scalar` — ELEMENT-WISE comparison producing a 0/1
                     // mask. Without this the result was typed Bool, so the mask
@@ -4524,7 +4567,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         });
                         self.exprs.insert(dest, MirExpr::Var(dest));
                         self.type_map
-                            .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                            .insert(dest, Type::DynamicArray(Box::new(Type::Bool)));
                         return dest;
                     }
                     let func = if elem_is_str {
@@ -4538,7 +4581,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         });
                         self.exprs.insert(dest, MirExpr::Var(dest));
                         self.type_map
-                            .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                            .insert(dest, Type::DynamicArray(Box::new(Type::Bool)));
                         let _ = kid2;
                         return dest;
                     } else if lit_bits.is_some() {
@@ -4556,7 +4599,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                     });
                     self.exprs.insert(dest, MirExpr::Var(dest));
                     self.type_map
-                        .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                        .insert(dest, Type::DynamicArray(Box::new(Type::Bool)));
                 } else if matches!(op.as_str(), "&" | "|") && {
                     let is_arr_mask = |t: Option<Type>| {
                         matches!(t, Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)))
@@ -4577,8 +4620,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         type_args: vec![],
                     });
                     self.exprs.insert(dest, MirExpr::Var(dest));
+                    // Batch 398: the mask element survives the AND/OR — a
+                    // `DynamicArray(Bool)` is what `df[...]` reads to tell a row
+                    // filter from an index list. An operand that only arrived as
+                    // `lt(vec, i64)` (the shim's `loc`/`iloc` annotation) keeps the
+                    // legacy element.
+                    let maskish = |t: Option<Type>| match t {
+                        Some(Type::Bool) => true,
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
+                            matches!(*e, Type::Bool)
+                        }
+                        _ => false,
+                    };
+                    let elem = if maskish(self.type_map.get(&left_id).cloned())
+                        || maskish(self.type_map.get(&right_id).cloned())
+                    {
+                        Type::Bool
+                    } else {
+                        Type::I64
+                    };
                     self.type_map
-                        .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                        .insert(dest, Type::DynamicArray(Box::new(elem)));
                 } else {
                     // For comparison operators used in loop conditions, create BinaryOp expression
                     // instead of caching the result in a variable
@@ -9156,7 +9218,11 @@ call, no NULL-handle dereference).",
                 // into the map lookup and crashed inside `map_str_key`
                 // (measured: `fetch_stocks`'s
                 // `cached[(cached["trade_date"] >= eff_start) & (… <= req_end)]`).
-                // A `DynamicArray(I64)` argument is a mask ⇒ row filtering.
+                // Batch 398 reads the ELEMENT type: `DynamicArray(Bool)` is a mask,
+                // `DynamicArray(I64)` is either a positional index list or a mask
+                // that entered through the shim's `lt(vec, i64)` annotation — the
+                // two are still indistinguishable for those, so the I64 arm keeps
+                // routing to `loc` (see the roadmap residual).
                 if (method == "__getitem__" || method == "column")
                     && receiver_ty.as_ref().map_or(false, |t| match t {
                         Type::Named(n, _) => {
@@ -9169,11 +9235,11 @@ call, no NULL-handle dereference).",
                         Some(Type::DynamicArray(_))
                     )
                 {
-                    let is_int_vec = matches!(
-                        arg_ids.get(1).and_then(|a| self.type_map.get(a)),
-                        Some(Type::DynamicArray(e)) if matches!(**e, Type::I64)
-                    );
-                    if is_int_vec {
+                    let elem = match arg_ids.get(1).and_then(|a| self.type_map.get(a)) {
+                        Some(Type::DynamicArray(e)) => (**e).clone(),
+                        _ => Type::PyDynamic,
+                    };
+                    if matches!(elem, Type::Bool | Type::I64) {
                         self.stmts.push(MirStmt::Call {
                             func: "DataFrame::loc".to_string(),
                             args: vec![arg_ids[0], arg_ids[1]],
@@ -9183,6 +9249,36 @@ call, no NULL-handle dereference).",
                         self.exprs.insert(id, MirExpr::Var(id));
                         self.type_map
                             .insert(id, Type::Named("DataFrame".to_string(), vec![]));
+                        return id;
+                    }
+                    if matches!(elem, Type::Str) {
+                        // `df[["a", "b"]]` — pandas reads a LIST-LIKE key as a
+                        // COLUMN SUBSET (verified against pandas 3.0.5:
+                        // `df[["code"]]` keeps every row of that column). The
+                        // vector handle used to go into
+                        // `self.data[map_str_key(key)]` as if it were a column
+                        // NAME (measured: `df[["code"]]` SIGSEGV, rc=139).
+                        let tn = match receiver_ty.as_ref() {
+                            Some(Type::Named(n, _)) => n.clone(),
+                            _ => String::new(),
+                        };
+                        let target = self
+                            .qualified_method_candidate(&tn, "select_columns")
+                            .unwrap_or_else(|| "DataFrame::select_columns".to_string());
+                        let ret_ty = self.func_ret_types.get(&target).cloned();
+                        self.stmts.push(MirStmt::Call {
+                            func: target,
+                            args: vec![arg_ids[0], arg_ids[1]],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(
+                            id,
+                            ret_ty.unwrap_or_else(|| {
+                                Type::Named("DataFrame".to_string(), vec![])
+                            }),
+                        );
                         return id;
                     }
                 }
@@ -9268,7 +9364,7 @@ call, no NULL-handle dereference).",
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map
-                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                        .insert(id, Type::DynamicArray(Box::new(Type::Bool)));
                     return id;
                 }
                 // `series.pct_change()` / `series.abs()` on a COLUMN (a string
@@ -13003,14 +13099,46 @@ call, no NULL-handle dereference).",
                     // `0 0`, and `fetch_stocks`'s
                     // `cached[(cached["trade_date"] >= eff_start) & (…)]` crashed
                     // inside `map_str_key`).
+                    // Batch 398: `DynamicArray(Bool)` IS the mask. The I64 arm is
+                    // the legacy fallback for masks that crossed a
+                    // `lt(vec, i64)`-annotated boundary.
                     let mask_like = matches!(
                         self.type_map.get(&iid),
-                        Some(Type::DynamicArray(e)) if matches!(**e, Type::I64)
+                        Some(Type::DynamicArray(e))
+                            if matches!(**e, Type::Bool | Type::I64)
                     );
                     if mask_like && tn.contains("DataFrame") {
                         let target = self
                             .qualified_method_candidate(tn, "loc")
                             .unwrap_or_else(|| "DataFrame::loc".to_string());
+                        let ret_ty = self.func_ret_types.get(&target).cloned();
+                        self.stmts.push(MirStmt::Call {
+                            func: target,
+                            args: vec![bid, iid],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(
+                            id,
+                            ret_ty.unwrap_or_else(|| {
+                                Type::Named("DataFrame".to_string(), vec![])
+                            }),
+                        );
+                        return id;
+                    }
+                    // `df[["a", "b"]]` — LIST-LIKE key = COLUMN SUBSET (same
+                    // element-type reading as the `__getitem__` dispatch site;
+                    // batch 398).
+                    if tn.contains("DataFrame")
+                        && matches!(
+                            self.type_map.get(&iid),
+                            Some(Type::DynamicArray(e)) if matches!(**e, Type::Str)
+                        )
+                    {
+                        let target = self
+                            .qualified_method_candidate(tn, "select_columns")
+                            .unwrap_or_else(|| "DataFrame::select_columns".to_string());
                         let ret_ty = self.func_ret_types.get(&target).cloned();
                         self.stmts.push(MirStmt::Call {
                             func: target,
@@ -13311,8 +13439,14 @@ call, no NULL-handle dereference).",
                             dest,
                             type_args: vec![],
                         });
+                        // Batch 398: `~` keeps the operand's element — a Bool mask
+                        // stays a Bool mask, an index list stays an index list.
+                        let elem = match self.type_map.get(&expr_id) {
+                            Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => (**e).clone(),
+                            _ => Type::I64,
+                        };
                         self.type_map
-                            .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                            .insert(dest, Type::DynamicArray(Box::new(elem)));
                     } else {
                         // Logical NOT operator
                         let stmt = MirStmt::Call {
@@ -13352,8 +13486,12 @@ call, no NULL-handle dereference).",
                         dest,
                         type_args: vec![],
                     });
+                    let elem = match self.type_map.get(&expr_id) {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => (**e).clone(),
+                        _ => Type::I64,
+                    };
                     self.type_map
-                        .insert(dest, Type::DynamicArray(Box::new(Type::I64)));
+                        .insert(dest, Type::DynamicArray(Box::new(elem)));
                 } else if op == "-" {
                     // PY-A fix: floating-point operands must NOT go through
                     // the i64 unary_minus runtime (bit-pattern negation →

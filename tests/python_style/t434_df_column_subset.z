@@ -1,0 +1,44 @@
+// 批次 398（与 t433 同批）：`df[["col", …]]` 是**按列名取子集**，不是掩码。
+//
+// 病因：`df[...]` 的下标分派只看整张下标的类型是不是 `DynamicArray(_)`，而
+// `DynamicArray(I64)` 在这个编译器里兼任"元素类型未知"（见 t433 头注），所以
+// 字符串列表被一路送进掩码/列名两条路的其中一条：`df[["code"]]` 走的是
+// `DataFrame.__getitem__` → `map_str_key(key)`，把一个向量句柄当列名键 →
+// SIGSEGV（rc=139，实测）。
+//
+// 对照 pandas 3.0.5（实拍，本用例逐行期望的出处）：`df[["code"]]` 保留全部行
+// （len=3）；`df[[0, 2]]` 抛 **KeyError**（list-like 键按列选择，整数被当成
+// 列标签）。⇒ 前一批记录里"`df[[0,2]]` 的 pandas 真值是 2 行"这句是错的，
+// 本批更正：整数列表在 pandas 里根本不是合法下标，Zeta 这里把它当掩码走 `loc`
+// 是既有的 legacy 兜底（本批未改其取值，只登记）。
+//
+// 修法：分派改读**实参的元素类型**（`Str` → 列子集），并补一个桩
+// `DataFrame::select_columns`（`pylib/pandas.z`，按列名从 `self.data` 里挑）。
+// 两条分派点都补：方法路径 `gen.rs:9192`、Index 路径 `gen.rs:13040`。
+//
+// 顺带锁定（同一条下型链上的邻居，本批未改行为）：`Series` 的长度与标量下标
+// —— `len(df["code"])`、`sr[0]`、`sr[2]`。
+//
+// 逐行期望（每行都与 pandas 3.0.5 对过数）：
+// expect: df[[code]].len=3
+// expect: subset.code.len=3
+// expect: df[cols].len=3
+// expect: subset2.v.len=3
+// expect: series.len=3
+// expect: sr[0]=a
+// expect: sr[2]=d
+
+from pandas import DataFrame
+
+df = DataFrame({"code": ["a", "c", "d"], "v": ["1", "2", "3"]})
+s = df[["code"]]
+println!("df[[code]].len={}", len(s))
+println!("subset.code.len={}", len(s["code"]))
+cols = ["code", "v"]
+s2 = df[cols]
+println!("df[cols].len={}", len(s2))
+println!("subset2.v.len={}", len(s2["v"]))
+sr = df["code"]
+println!("series.len={}", len(sr))
+println!("sr[0]={}", sr[0])
+println!("sr[2]={}", sr[2])

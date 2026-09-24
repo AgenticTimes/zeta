@@ -36,6 +36,16 @@ class DataFrame:
         # 与 column 同语义；下标 `df["col"]` 分派到这里（批次九十九）。
         return self.data[key]
 
+    def select_columns(self, cols: lt(vec, str)) -> DataFrame:
+        # 批次 398：`df[["a", "b"]]` 在 pandas 里是**按列名取子集**（list-like 键 =
+        # 列选择；实测 pandas 3.0.5 `df[["code"]]` 保留全部行）。此前向量句柄被当成
+        # 列名进 `self.data[map_str_key(key)]` ⇒ `map_str_key` 段错误。
+        # 编译器按**实参的元素类型**分派到这里（gen.rs 的 `df[...]` 三分派）。
+        out: lt(map, str, vecstr) = {}
+        for c in cols:
+            out[c] = self.data[c]
+        return DataFrame(out)
+
     def __setitem__(self, key, val):
         # 列赋值：`df["col"] = [...]` 存向量；**标量按 pandas 语义广播成整列**。
         # 直接把标量（如 `df["stock_code"] = norm` 的字符串句柄）塞进列映射，
