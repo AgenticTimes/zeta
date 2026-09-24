@@ -1546,7 +1546,7 @@ impl Resolver {
                                 collect_calls(std::slice::from_ref(right.as_ref()), out);
                             }
                             // Batch 407: an f-string is a LEAF everywhere else in
-                            // this file (`:1788`, `infer` at `:2931` and the AST-text
+                            // this file (`:1794`, `infer` at `:2937` and the AST-text
                             // reader all answer `Type::Str` without descending), so a
                             // call site that only ever appears inside an
                             // interpolation contributed NO parameter evidence.

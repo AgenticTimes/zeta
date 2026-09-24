@@ -1,9 +1,9 @@
 // 批次 407（主线 301 的打印族）：f-string 插值里的调用点**不产生参数类型证据**。
 //
 // 判据点：`resolver.rs:1494 collect_calls` —— 它是"哪个实参证明哪个形参是什么"
-// 的唯一取证据处（批次 399/400 的钉型与冲突回退都吃它的输出）。它的 match 有
+// 的唯一取证据处（批次 399/400 的钉型与冲突回退都吃它的输出）。它的 match 原本有
 // If/While/For/Block/ExprStmt/Return/Let/Assign/BinaryOp 九个下钻臂，**没有 FString
-// 臂**；而同一个文件里 FString 在其它三处（`:1788`、`infer` 的 `:2931`、AST 文本读点）
+// 臂**；而同一个文件里 FString 在其它三处（`:1794`、`infer` 的 `:2937`、AST 文本读点）
 // 都是"当叶子直接答 Str"。⇒ 一个函数只要**唯一**的调用点写在 f-string 里，
 // 它的未注解形参就停在 `dyn`，返回值恢复（`unannotated_return_ty`）跟着拿到
 // PyDynamic，`gen.rs:11193` 的兜底把调用结果打成 I64，`lower_to_string`（`:3265`）
