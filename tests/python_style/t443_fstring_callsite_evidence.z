@@ -6,8 +6,8 @@
 // 臂**；而同一个文件里 FString 在其它三处（`:1794`、`infer` 的 `:2937`、AST 文本读点）
 // 都是"当叶子直接答 Str"。⇒ 一个函数只要**唯一**的调用点写在 f-string 里，
 // 它的未注解形参就停在 `dyn`，返回值恢复（`unannotated_return_ty`）跟着拿到
-// PyDynamic，`gen.rs:11193` 的兜底把调用结果打成 I64，`lower_to_string`（`:3265`）
-// 于是发 `to_string_i64` —— **堆指针被当十进制整数打印**。
+// PyDynamic，`gen.rs:11196` 的兜底把调用结果打成 I64，`lower_to_string`（`:3255`，
+// 默认臂 `:3268`）于是发 `to_string_i64` —— **堆指针被当十进制整数打印**。
 //
 // 改前实拍（`/tmp/b407/p1.py`，`def rp(s): return s` + `print(f"p={rp('direct')}")`）：
 //   zeta:  p=4300204608      CPython: p=direct

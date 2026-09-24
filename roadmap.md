@@ -16501,6 +16501,165 @@ HEAD **漂移 30 / 新 11 / 消失 3**；插入后 `--rebind` 前 **漂移 61 / 
 要不要把 C 运行时接进 JIT（动 `py_additions.c` 侧构建）；**(c)** acceptance 的
 非确定性崩溃（§五①）与批次 306 的 t228 是同族，先要一个"至少跑 N 次"的判据才谈修。
 
+## 批次 407（主线 301 打印族：f-string 插值里的调用点**不产生参数类型证据**）
+
+### 一、现象与差分矩阵（六个变量把堵点框死）
+
+批次 406 §十(a) 只读到"`[PARITY]` 全行是指针"。本批把同一族压到最小输入上，用六个
+探针区分"打印错了"和"证据没取到"（`/tmp/b407/`；改前二进制 `target/release/zetac_b407_pre`、
+改后 `zetac_b407_post`，二者同目录跑，避免批次 385 之后记的运行时 `.o` 查找坑）：
+
+| 探针 | 源（都是 `def rp(s): return s`） | 改前 | 改后 |
+|---|---|---|---|
+| p1 | 唯一调用点在插值里：`print(f"p={rp('direct')}")` | `p=4367215168` | `p=direct` |
+| p8 | 多一条非插值使用：`v = rp('x')` 后同样打印 | `p=direct` | `p=direct` |
+| p10 | 唯一调用点在顶层 print 实参位：`print(rp('x'))` | `x` | `x` |
+| p11 | 两形并存：`print(f"{rp('a')}", rp('b'))` | `a b` | `a b` |
+| p9 | 两处都在**同一条**插值里：`print(f"{rp('a')}|{rp('b')}")` | `4340656736|4340656738` | `a|b` |
+| p12 | 调用点在插值里、且 `rp` 是**嵌套 def** | （见 §七，改后仍错）`t=4303314848` | 同左 |
+
+⇒ 结论是**判据点级别**的：只要函数有一次非插值使用（p8/p11），同一条打印路径就是对的；
+唯一调用点写在插值里（p1/p9）才打地址。所以石头在"哪个实参证明哪个形参是什么"这一步，
+不在 `print`/`lower_to_string` 那一步。地址随 ASLR 变（p1 同一二进制两次得 4367215168 /
+4300204608），可复现的是"它是地址、不是文本"。
+
+p1 改前的 MIR 正证据：`rp` 体内 `type_map: 1: PyDynamic`，`main` 里作用于调用结果的
+是 `to_string_i64`。
+
+### 二、定位：`collect_calls` 的 match 少一条臂，而 FString 在同文件另外三处都是叶子
+
+判据点 `src/middle/resolver/resolver.rs:1494 fn collect_calls` —— 它是调用点证据的唯一
+取处（批次 399 的 `sig_params` 覆盖、批次 400 的冲突回退都吃它的输出，经
+`resolver.rs:1704-1759` 的钉型/改名段进 `ret_types`）。它的 `match` 原本有九条下钻臂
+（`Call{receiver:None}` 且递归进实参、`If`、`While`、`For`、`Block`、`ExprStmt`、
+`Return`、`Let`、`Assign`、`BinaryOp`），**没有 `FString` 臂** ⇒ 落 `_ => {}`，插值里的
+调用整个不见。
+
+同文件的自相矛盾是判据，不是猜测：`FString` 在 `:1794`（`AstNode::StringLit(_) |
+AstNode::FString { .. } => Some(Type::Str)`）、`infer` 的 `:2937`、`:3187` 三处都是
+"当叶子直接答 `Str`、不下钻"。⇒ 一个未注解形参的唯一调用点在插值里时，它停在 `"dyn"`
+→ `unannotated_return_ty` 拿到 `PyDynamic` → `gen.rs:11196` 的 `.unwrap_or(Type::I64)`
+把调用结果的槽定成 I64 → `lower_to_string`（`gen.rs:3255`，默认臂 `:3268`）发
+`to_string_i64` → **堆指针被当十进制打印**。
+
+对照：print 自己的路径不缺这条判据（`gen.rs:8589-8608` 按 `type_map` 派发
+`println_str`/`print_str`/`println_f64`/`print_bool`，兜底 `println_i64`），所以 p10 对、
+p1 错 —— 差的不是派发而是槽上有没有类型。
+
+### 三、修（一条臂，零新增逻辑）
+
+`resolver.rs:1553`：`AstNode::FString(parts) => collect_calls(parts, out),`
+与 `:1531` 那条注释（"The call site is very often inside a `return`"）同族——那批臂是
+"证据常写在 return/赋值右边"，本条是"证据常写在插值里"。不改变任何已钉型的优先级，
+跨族冲突仍由批次 400 的回退管。
+
+### 四、验证与门禁
+
+`tests/python_style/t443_fstring_callsite_evidence.z`（新，49 行）四条期望：
+`a=x` / `b=y|c=z` / `d=Q` / `4`。同一份源在两个二进制下实拍：
+- 改前：`a=4332890848`、`b=4332890853|c=4332890855`、`d=Q`、`20`
+- 改后：`a=x`、`b=y|c=z`、`d=Q`、`4`
+
+第四条最要紧：`n = n + len(f"{wrap('tt')}")` 把**地址串喂进 `len`**，错值参与了算术
+（10+10=20 vs 期望 2+2=4），不只是打印难看。`d` 改前就正确 —— `s.upper()` 的成员下型
+不看参数证据，留作对照臂。
+
+门禁（最终树跑两次，读数逐字相同）：official `compile 194/194`、`compile+link 191/194`
+（3 条 link-only，未变）；python_style **326 passed / 2 failed / 5 known-fail / 0 xpass**
+（失败仍 t231、t233）；语料 `39/39 = 100%`；jit `ok=175 trap=352 fail=0 timeout=0 segv=0
+（total 527，最小 ok=163）`；diff `match=120 judged=130 rate=92.3% bad_case=0`；
+knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 /
+ignore_rules 19 / mbvar 21 全部 FAIL 0；`clean_checkout rc=0（rev=650bc37a）`；
+`gate_rc=1` 仍只来自 `py_fail != 0`（`run_all.sh:576` 的存量红）。
+
+### 五、定价：套件 0 → 1
+
+- 套件里受影响成员：改前 0 条 → 改后 1 条（t443 自身，它把这条判据钉住）。
+- `grep -lE 'f"[^"]*\{[a-z_][a-z0-9_]*\(' tests/python_style/*.z` → **1**（只有新用例）。
+- 语料（`~/source/quant/REasyQuant/strategies/**/*.py`，39 文件）里"插值内带调用"共 5 处，
+  其中**用户函数**调用 2 处（`code/jq_wufu.py:366`、`code/jq_wufu_daily.py:366`，都是
+  `_fmt(...)`），内置 3 处（`code/jq_wufu_local.py:105`、`:124`、
+  `code/l1_fixed_pool_momentum.py:62`）⇒ 本臂的语料面就是 2 个文件，而这 2 处都是闭包，
+  见 §六。
+
+### 六、acceptance 夹具：本批**零位移**（逐字节相同的 MIR，不是"位移小"）
+
+`jq_wufu.py --dump-mir` 改前/改后两份 **85,066 行逐字节相同**（`cmp` 无输出），
+`to_string_i64` 两侧都是 26 处。`_parity_snapshot` 内两条 `_fmt` 结果仍被 `to_string_i64`
+包住：闭包调用 `dest: 88`（`jqwufu_post.mir:18664-18668`）→ `to_string_i64(args=[88]) →
+dest 90`（`:18672`）、`dest: 92`（`:18689-18693`）→ `to_string_i64(args=[92])`（`:18697`）。
+⇒ 301 的 `[PARITY]` 读数一格没动。这不是修坏了，是夹具里的 `_fmt` 走的是**另一条**不
+产生证据的路径 —— 下一节把它量出来。
+
+### 七、p12 探针：把"闭包/提升名调用点"从候选解释升级为套件级可复现缺陷
+
+§六 的成因在写记录时还只是候选解释；本批用一个 8 行探针把它变成可复现实拍（`/tmp/b407/p12.py`，
+**改后**二进制）：
+
+```python
+def outer(xs):
+    def _fmt(codes):
+        return ";".join(codes) if codes else "-"
+    print(f"t={_fmt(xs)}")
+    return 0
+outer(["a", "b"])
+```
+
+- zeta（改后）：`t=4303314848`；CPython：`t=a;b`
+- MIR：`p12.mir:1` 是 `== MIR __closure_0_outer_c8f5e1bd4 ==`（嵌套 def 被提升为闭包名），
+  `:179` 调用点用的就是这个提升名，`:187` 是 `to_string_i64`。
+
+⇒ 同一条"唯一调用点在插值里"的病因，在**顶层 def** 上本批已修（t443/p1），在**嵌套 def**
+上仍未修。结构性原因（静态推断，未单独定位）：`collect_calls` 收集的是**源码里的名字**
+`_fmt`，而证据消费端（`resolver.rs:1558-1570`）只试三种解释——裸注册名 /
+`from X import f` 别名 / 模块前缀名，闭包提升名 `__closure_0_<enclosing>_<hash>` 不在其中，
+所以那条臂即使下钻到 `_fmt(xs)` 也挂不到 `_fmt` 的形参上。夹具 `jq_wufu.py` 正是这一形
+（`_fmt` 住在 `_parity_snapshot` 里，MIR 名 `__closure_0__parity_snapshot_cc4d40894`）。
+
+### 八、锚点与本批留下的记账
+
+`cargo build --release` 后 `resolver.rs` 被盯的两条引用推了 +6：`docs/ABI.md` 一处两数字
+（`:2002`、`:2803` → `:2008`、`:2809`），用 `check_abi_anchors.py --rebind` 机械改，
+`tools/baselines/abi_anchors.tsv` 2 行同步 ⇒ 漂移读数回到 **30 / 11 / 4**（与批次 406 同）。
+
+新用例头部两处引用**改准**（记录批内、等行替换）：`gen.rs:11193` → `:11196`
+（`.unwrap_or(Type::I64)` 的真位置，11193 是 `None => self` 那行的起始），
+`lower_to_string（:3265）` → `（:3255，默认臂 :3268）`。原写法指向了函数体内相邻的
+match 分支，属"指向的代码大致对但号不准"，按只认 `file:line` 的口径改准。
+
+登记（不新开 backlog 行，按 399/400 先例折字）：
+- **p2 族**（dict 字面量的值下型）改后仍打地址：`d=4377586386`（`def rd(d): return d["k"]`，
+  调用点 `rd({'k':'v'})` 已在非插值位）。这是**另一族**——值类型来自容器元素而非参数证据，
+  归 #33 / 批次 299 那条线，本批未动、留为 OPEN 残留。
+
+### 九、提交与推送
+
+代码批 **`7a6a8512`**（4 文件 / +58 / −3）：`src/middle/resolver/resolver.rs` +6/−0、
+`tests/python_style/t443_fstring_callsite_evidence.z`（新 49 行）、`docs/ABI.md` 1 行、
+`tools/baselines/abi_anchors.tsv` 2 行。自指行号改准批 **`130fab71`**（2 文件 / +3 / −3，
+等行替换）。已推 `agentic`：`650bc37a..7a6a8512..130fab71`。记录批（本节 + 用例头两处
+引用改准 + backlog 折行）随后另推。
+
+### 十、承接批次 406 §十(a) 与本批的分工
+
+406 §十(a) 说"打印族（动态接收槽没有类型标记）是 301 现在唯一实测挡路的一条"——这句
+**仍然成立**，但本批把它分成两格：
+1. **调用点证据取不到**（`collect_calls` 缺臂）：顶层 def 那一格本批已修（t443 锁），
+   闭包/提升名那一格**没修**，且它才是夹具里的那一格（§七）。
+2. **槽身上真没有类型标记**（#117/#38/#45，裁定项 4）：修不了的那格。批次 400 的冲突回退
+   故意让位置保持动态，动态槽无法在运行期 stringify（全仓只有一个带类型的
+   `to_string_f64`，`runtime/py_additions.c:46`；`to_string_str`/`to_string_i64` 在
+   `src/runtime/host.rs:386`/`:429` 都是单向转换），所以"证据齐了但值仍是动态"依旧打地址。
+
+### 十一、下一批默认候选
+
+按已实测损害量：**(a)** 批次 408 = §七 那条：闭包/提升名的调用点不产生签名证据
+（`resolver.rs:1558-1570` 的三形解释加第四形）。它是现在**唯一实测挡在 `[PARITY]` 读数前**
+的一条，且已有 8 行套件级复现（p12），修完的判据是 t443 加一条嵌套形 +
+`jq_wufu.mir` 里 `to_string_i64(args=[88])`/`args=[92]` 两处变化可量；
+**(b)** 406 §十(b) 仍未回：要不要把 C 运行时接进 JIT（动 `py_additions.c` 侧构建）；
+**(c)** 406 §十(c) 的 acceptance 非确定性崩溃，先要"至少跑 N 次"的判据。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
