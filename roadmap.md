@@ -15323,3 +15323,41 @@ pyramid 位置：这批改的是 **2.3 名称解析**（模块全局有两份真
 1. 2.2：`let` 初值位的 `if let`（块体两臂）——先补两输入复现，再定最小修法。
 2. 2.2：`matches!` 作为 `while` 条件。
 3. 4.3.b/2.3：t425 那格要先做归因（类型来源换了还是别的），不许直接再上读路径。
+
+---
+
+## 批次 389（只有定位，零代码改动）—— `selfhost` 91 行的两个成员各是谁：一个卡在主动拒绝的判据上，一个连展开点都没有
+
+pyramid 位置：2.2 语法分析（顶层项读不下 ⇒ W1002 截断），成员 1 的真身不在 2.2 而在 3.2 Lowering（match 测不了构造子模式）。
+
+### 成员 1：值位 `if let` 带绑定的变体模式 —— 不是"没规则"，是被 `pattern_has_matcher` 判死
+
+夹具实测（每份单独 `zetac --dump-mir`，数 `[W1002]` 命中；`/tmp/b388/`）：
+
+| 夹具 | 写法 | W1002 |
+|---|---|---|
+| `m1_bind_block` | `let a = if let Token::Ident(n) = t { 1 } else { 0 };` | 1 |
+| `m3_plainif` | `let a = if t == Token::BraceClose { 1 } else { 0 };` | 0 |
+| `m4_match` | `let a: i64 = match t { Token::Ident(n) => 1, _ => 0 };` | 0 |
+| `m5_stmt_iflet` | 语句位 `if let Token::Ident(n) = t { .. }` | 0 |
+| `f_fn` | `selfhost.z` 第 89..126 行原样 | 1 |
+
+定位到点：`src/frontend/parser/expr.rs:806` 的 `parse_if_let_expr` 在 `:809` 调 `pattern_has_matcher`（`:787`），后者对 `StructPattern`/`Tuple` 及套在里面的 `BindPattern`/`OrPattern` 一律返回 `false` ⇒ 解析直接失败 ⇒ 一个顶层项读不下，整个文件后半截丢掉。**这不是缺规则，是批次 382 有意的拒绝**：拒绝理由就写在 `:777-786` 的注释里——构造子模式在值位 `match` 里无输出并 SIGSEGV，在语句位 `if let` 里对不匹配的值照样走进 `then` 且载荷读回另一个数（存 5 打 10）。批次 382 的"值位 `if let` 已修"只覆盖 `pattern_has_matcher` 为真的形态（字面量/裸绑定/or/区间），`Token::Ident(n)` 这种**变体带载荷**不在其中。
+
+所以收这 91 行的真正前置是让 match 能测带载荷的枚举变体（3.2/4.3.b 的活），不是给解析器补一条产生式。范围比批次 388 记的"两个解析成员"大，要单开一批。
+
+### 成员 2：`matches!(t, Token::BraceClose)` 在条件位 —— 图与文本都找不到展开点
+
+`f_matches.z` 单独触发 W1002=1（`while !matches!(t, Token::BraceClose) { }`）。文本核对：全 `src` 里 `matches` 只出现在 `parser/identity_type.rs:68`（作为 tag）、`middle/types/identity/string_ops.rs:393`、`runtime/identity/mod.rs:48`、`runtime/identity/bridge.rs:52`（后三者是 `str::matches` 字符串方法），`macro_expand.rs:60` / `macro_expand_advanced.rs:286` / `resolver.rs:3407` 三个宏展开入口里都没有 `matches!` 的分支 ⇒ 这个宏没有展开实现。按规矩这只能说"文本与注册表里都没有"，绝对结论要再加一次实跑（下批做）。
+
+**成员 1 与 2 的先后未测**：把 `matches!(e, PAT)` 展开成两臂 `match` 这条路能不能走通，取决于成员 1 的判据是否放开——这条是推断，没有夹具。
+
+### 台账纠正（不回改批次 388 的原文）
+
+批次 388 记的"旧台账 `codegen.rs:6210-6211` 丢 `variant` 对不上本次读数"成立且加强：`selfhost` 的 91 行丢在解析层的主动拒绝，不在表示层。旧号 → 新号：成员 1 = `expr.rs:787`/`:806`/`:809`，成员 2 = 三个宏展开入口无分支。
+
+### 下一批默认候选
+
+1. 3.2：让带载荷的枚举变体在 match 里可测（打开 `pattern_has_matcher` 的前置），做完 `selfhost` 91 行的成员 1 才有解，成员 2 跟着复测。
+2. 6.1 / G.6：MIR verifier —— 上面这类"看起来条件其实无条件"的坑正是 verifier 该抓的。
+3. 4.3.b / 2.3：t425 的归因（34 例回归还没归因，不许直接再上读路径）。
