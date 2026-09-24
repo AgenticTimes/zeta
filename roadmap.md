@@ -16167,6 +16167,61 @@ official compile **194/194**（硬断言 `run_all.sh:575`）、compile+link **19
 
 裁定表第 2 项：**#38** match 剩余形 ＋ **#45** 格式化输出丢字（同在 `gen.rs`）。次位：#42 的 JIT 绑定表——`str_get` 现在是 `selfhost` 在 JIT 侧唯一新增的那一条（量在 §五①），补它比再猜一条方言便宜。仍需用户一句话的是 **#112**（`zt_vec_cmp` 在"永不触手"的 `runtime/py_additions.c`）。
 
+## 批次 403（交付）—— 3.2 写侧对称：具名字段变体的构造从不写 `__tag` ⇒ 判据读 slot 0 恒不等，这一臂永远让位给通配臂
+
+候选来源：裁定表第 2 项的前半（#38 match 剩余形），成员就是任务 #119（批次 401 定位、当时定价为"排在主线之后"，因为它前面还压着 `minimal_compiler` 的 #45/#47 打印族）。本批不动那条运行期链，只把**写侧**补齐——它是一处纯 lowering 对称性缺口，改完即可用探针逐槽验证，不需要先修打印。归位：**3.2 Lowering 的"写读同源"**（`docs/ABI.md` 的对称规则），症状读在 **4.3.b 的块布局**。
+
+### 一、根因一句话 + 一处改动（`gen.rs` +38/−2，净 +36 行）
+
+带载荷的用户枚举变体，它的值就是堆块 `[tag, p0, …]`，判据读 slot 0（`enum_is_boxed`，`gen.rs:3346`）。同一个构造有两种写法，走两条完全不同的支：
+
+- 元组形 `Shape::Square(5)` → `AstNode::PathCall` 支（`gen.rs:12475-12499`），自批次 396 起按 `enum_variant_of`（`:3299`）写上 `("__tag", tag)`；
+- **具名字段形 `Shape::Rect { w: 3, h: 4 }` → `AstNode::StructLit` 支（`:12319`）**，这条支只把字面量自带的字段名抄进 `MirExpr::Struct`，**从不写标签** ⇒ 块里 slot 0 是 `w` 的值，判据拿它比 tag 恒不等 ⇒ 这一臂不可达，值掉到通配臂。
+
+改后：写 `MirExpr::Struct` 前过一遍新增成员 `with_enum_tag`（`gen.rs:3320`，调用点 `:12355`）——命中"注册过的用户枚举 ＋ 载荷数与字段数相符"时在字段表最前插入 `__tag` 槽。载荷数为 0（全单位枚举仍是裸判别值）、字段数与声明不符、以及**裸名类字面量**（`enum_variant_of` 要 `::`，`Pair { x, y }` 这类一律原样过去）三条都不受影响。codegen 侧按向量顺序落块（`src/backend/codegen/codegen.rs:6243` 起 `for (i, (field_name, field_id)) in fields.iter().enumerate()`，字段名只进 `struct_defs` 名字表、不参与布局），所以"标签在向量第一位"就够了。
+
+### 二、探针读数（`target/release/zetac_b403pre` / `zetac_b403post`，同目录跑，避免 `find_runtime_obj` 换祖先）
+
+| 文件 | 期望 | PRE | POST |
+|---|---|---|---|
+| `v3.z`（臂体是常量，只验"臂能不能落到"） | `a=7 b=3 c=1` | `a=7 b=3 c=99` | 三条全中 |
+| `v4.z`（臂体读载荷 ⇒ 验**绑定位置**；同文件带裸名类字面量作对照） | `area=12 edges=304 sq=25 pt=0 direct=42 pair=30 pairfield=1020` | `area=-1 edges=-2 sq=25 pt=0 direct=-1 pair=30 pairfield=1020` | 七条全中 |
+| `v5.z`（书写序 vs 声明序、以及字段数不符） | — | `inorder=-2 outoforder=-2 partial=-2` | `inorder=304 outoforder=403 partial=-2` |
+| `t5.z`（`enum Token { Ident(Str), … }` ＋ 元组形构造 ＋ `-> Str`） | `k=abc` | `k=abc` | `k=abc` ← **改前就通，本批不认领** |
+
+`edges=304` 这条是承重证据：`Shape::Rect { w, h } => 100*w + h` 打 304 才说明 slot 1=`w`、slot 2=`h`，而不是"臂靠常量碰对"（负断言要配正证据）。`v4` 的 `pair=30 / pairfield=1020` 两栏 PRE/POST 一字相同 ⇒ 同一条支的另一个用户没被动。`v5` 的 `outoforder=403` 是本批新暴露的一格，见 §五①。
+
+### 三、门禁读数（`bash tools/run_all.sh`，日志 `/tmp/b403/gate2.log`，ts `2026-09-24T20:25:37Z`，跑在代码提交 `503751fd` 之后、内容与树一致）
+
+official compile **194/194**（硬断言 `run_all.sh:575`）、compile+link **191/194**（三条 link-only 明细逐字未动：`integration_all_features`、`quantum_basic`、`selfhost`）；python_style **322 passed / 2 failed / 5 known-fail / 0 xpass**（321 ＋ 本批 t439；两红逐条点名仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`，实拍于 `tests/python_style/run.sh` 直跑）；语料 39/39；**jit `ok=174 trap=349 fail=0 timeout=0 segv=0`（total 522→523）**——`ok` 一格未动、`trap` ＋1 是本批新用例自己：它在 JIT 下 rc=1，具名诊断逐字为 `runtime_malloc has no binding in JIT mode`（`pylib/jit_mappings.txt` 里没有这条），属 #42 那一族而不是本批引入的缺陷（§五③）；diff `match=120 judged=130 rate=92.3% bad_case=0`；knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 各 FAIL 0，mbvar 21 脚本违规 0，comment_drift 0；clean_checkout rc=0（3s，rev `503751fd`）；诊断 official **2 文件 / 5 行**、python_style **96 文件 / 201 行**两格均未动 ⇒ t439 一声新告警都没添。整体 **GATE_RC=1** 实拍，来源仍是唯一一条存量 `run_all.sh:576`（`py_fail=2`）。
+
+### 四、语料定价：808 文件 `--dump-mir` 双值 A/B，只有 4 个文件的 MIR 变
+
+`find tests examples pylib -name '*.z'` = 808 条，两侧各跑一遍、逐文件 `cmp`（`/tmp/b403/one.sh`，正证据 `_ran`=808）：**变 4 个** ＝ `examples/selfhost.z`、`tests/unit-tests/selfhost.z`（同一份语料的两份拷贝，`"__tag"` 行 **58 → 61**）、`tests/unit-tests/minimal_compiler.z`（**15 → 37**）、本批自己的 `t439`。另有 1 个文件两侧都 `--dump-mir` 失败（`tests/zeta/test_v0_5_0_snippet.z`，存量、与本批无关）。
+
+`minimal_compiler` 的 40 条 `MirExpr::Struct` 分布（POST）：`AstNode::` 前缀 37 条全部带 tag，`CodeGen`(2) 与 `Parser`(1) 三条**不带**——正好是"注册枚举 vs 裸名类"的分界。批次 401 当时数的书写站点是 17 处（`grep -oE '[A-Z]\w*::[A-Z]\w*\s*\{'` 现数出 17 行，逐字一致），而新增 tag 是 22 处 ⇒ 差额 5 说明同一书写站点会被下出多个 `Struct`（未追，§五②）。
+
+**行为面本批零推进，如实记账**：`minimal_compiler` PRE/POST 都是 rc=134、28 行 stdout，唯一差别是两行堆地址数字（`4307289628` → `4368238348`），stderr 逐字相同——它仍卡在批次 401 §五①那三件事（#45/#47 打印族 ＋ `_min` 桩 abort）上；`selfhost` 两份仍是 link-only（缺 `_as_str/_into_iter/_is_alphabetic/_push`）⇒ 没有二进制可跑。所以本批的证据只有探针 ＋ t439，语料侧只是"写侧现在到位了"。
+
+### 五、边界与残口（OPEN 净增 0：三条全部折进既有任务行 #119/#42 ＋ 新任务行 #122）
+
+① **乱序具名字段仍是错值**：`Shape::Rect { h: 4, w: 3 }` POST 打 `403`（应 `304`）。块布局取字面量的书写序，读侧 `gen.rs:11542` 的 `deref_slot(scrutinee_id, 8*(k+1))` 取声明序 ⇒ 两者只在书写序＝声明序时重合。要真修得让写侧按名重排，而 `TypeDecl::Enum` 的载荷只存 `Vec<String>` 类型串（`gen.rs:90-94`），字段名在登记（`resolver.rs:771-777` / `gen.rs:2909-2915`）之前就丢了 ⇒ 改点跨 AST/解析/登记三层，不在"最小修"里。新任务行 #122。
+② `minimal_compiler` 的"站点 17 / 新增 tag 22"差额未追（同一书写站点被下出多个 `Struct` 的具体路径未定位）。
+③ `runtime_malloc` 在 JIT 无绑定：`tests/python_style/t439_*` 在 JIT 下 rc=1（诊断具名、不崩），任何走具名字段变体构造的程序在 JIT 侧都过不去 ⇒ 并入 #42 那条绑定表清单（`selfhost` 现在多这一条）。
+④ 规则现在有两处：元组形在 `gen.rs:12475-12499` 内联写 tag，具名形走 `with_enum_tag`。两者判据同为 `enum_variant_of` ＋ `payload_n == 字段数`，但没有收敛成一个调用点——元组那条支要在众多路由前做早退判定，用它拿不到同一形状，本批保留两处、把口径写进注释。**这是下一次动这条支时的债。**
+
+### 六、锚点读数
+
+`gen.rs` 14,597 → **14,633**（净 ＋36；插入点 `:3310` 的 `with_enum_tag` 与其后的调用点 ⇒ 两处之后的行号整体位移）。`--rebind` 收 `docs/ABI.md` 33 行 / 57 个数字 ＋ `tools/baselines/abi_anchors.tsv` 36/36 行，改后只读复扫 **漂移 30 / 新 11 / 消失 3**（基线 251 条、改号配对 0 对、待归属 100 条 / 91 种、声明仓外 14 条）——三个数与批次 402 终态**一字相同** ⇒ 本批没新增漂移。`[拒改]` 33 条、定位失败 2 条均为存量口径（唯一性不成立、区间引用不猜）。存量 30 条清理仍是 #52，核对器仍不在门禁 #37。用例头里那条 `gen.rs:12291` 是改前的号（改后 `:12319`），两个号都写在行内。
+
+### 七、提交与推送
+
+代码批 **`503751fd`**（4 文件 / +171 / −71）：`src/middle/mir/gen.rs` +38/−2、`tests/python_style/t439_named_field_variant_tag.z`（新，64 行）、`docs/ABI.md` 33/33、`tools/baselines/abi_anchors.tsv` 36/36。注释单行等长改写过一次（`with_enum_tag` 文件头那句），行数未变 ⇒ 重编后复跑 `v4.z` 七条读数一字不动，门禁按最终树重跑（本节即那次读数）。记录批紧随其后，两笔一起推 `agentic`。
+
+### 八、下一批默认候选
+
+裁定表第 2 项的后半：**#45 格式化输出丢字**（同在 `gen.rs`，剩余成员＝`format!` 桩与"非宏 `print` 占位符"两条）。次位：#42 的 JIT 绑定表——现在 `runtime_malloc` 与 `str_get` 都在里面，`selfhost` 在 JIT 侧的石头从"崩"变成"具名 trap"，补表比再猜一条方言便宜。仍需用户一句话的是 **#112**（`zt_vec_cmp` 在"永不触手"的 `runtime/py_additions.c`）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
