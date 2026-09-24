@@ -10565,8 +10565,16 @@ call, no NULL-handle dereference).",
                 // lives in `closure_vars` and keeps its recorded return type
                 // through the closure path below — the trampoline would erase it
                 // (t129: `f = lambda s: s.upper()` printed a heap pointer).
+                //
+                // 批次 395: BATCH-294 shipped exactly one trampoline, so this
+                // arm only had one arity. `routine()` and `routine(a, b)` fell
+                // straight through to the symbol path and died at link time
+                // with the LOCAL variable's name (`let f = add2; f(3, 4)` ->
+                // Undefined symbols "_f"; tests/unit-tests/quantum_basic.z:136
+                // `test_fn()` -> "_test_fn"). Arity 0..4 now dispatch through
+                // `zeta_call<argc>`; 5 and up still take the symbol path.
                 if receiver.is_none()
-                    && arg_ids.len() == 1
+                    && arg_ids.len() <= 4
                     && !self.func_ret_types.contains_key(method.as_str())
                     && !self.closure_vars.contains_key(method.as_str())
                 {
@@ -10576,9 +10584,11 @@ call, no NULL-handle dereference).",
                             Some(MirExpr::Var(_)) | Some(MirExpr::FuncAddr(_))
                         );
                         if is_value_slot {
+                            let mut call_args = vec![vid];
+                            call_args.extend_from_slice(&arg_ids);
                             self.stmts.push(MirStmt::Call {
-                                func: "zeta_call1".to_string(),
-                                args: vec![vid, arg_ids[0]],
+                                func: format!("zeta_call{}", arg_ids.len()),
+                                args: call_args,
                                 dest: id,
                                 type_args: vec![],
                             });

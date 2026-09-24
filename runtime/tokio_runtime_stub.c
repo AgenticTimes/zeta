@@ -3777,3 +3777,38 @@ int64_t zt_concat_probe(int64_t a, int64_t b) {
     abort();
     return 0;
 }
+
+// 批次 395: call-through-a-value at every arity. BATCH-294 gave this family one
+// trampoline, `zeta_call1` (defined in py_additions.c), so `routine(ctx)` worked
+// while `routine()`, `routine(a, b)` and `routine(a, b, c)` were lowered to a
+// bare symbol named after the LOCAL variable and died at link time (measured:
+// `let f = add2; f(3, 4)` -> Undefined symbols "_f"; tests/unit-tests/
+// quantum_basic.z:136 `test_fn()` -> "_test_fn"). These are the missing
+// siblings. Deliberately here rather than next to zeta_call1: that TU is not
+// edited by this batch, and the shape is identical.
+// Same contract as C9 in docs/ABI.md: a function address arrives as the i64 of a
+// `FuncAddr`, every argument and the result are i64, and a null address yields
+// 0 rather than jumping to it.
+int64_t zeta_call0(int64_t fptr) {
+    if (!fptr) return 0;
+    typedef int64_t (*zt_fn0)(void);
+    return ((zt_fn0)(void*)fptr)();
+}
+
+int64_t zeta_call2(int64_t fptr, int64_t a, int64_t b) {
+    if (!fptr) return 0;
+    typedef int64_t (*zt_fn2)(int64_t, int64_t);
+    return ((zt_fn2)(void*)fptr)(a, b);
+}
+
+int64_t zeta_call3(int64_t fptr, int64_t a, int64_t b, int64_t c) {
+    if (!fptr) return 0;
+    typedef int64_t (*zt_fn3)(int64_t, int64_t, int64_t);
+    return ((zt_fn3)(void*)fptr)(a, b, c);
+}
+
+int64_t zeta_call4(int64_t fptr, int64_t a, int64_t b, int64_t c, int64_t d) {
+    if (!fptr) return 0;
+    typedef int64_t (*zt_fn4)(int64_t, int64_t, int64_t, int64_t);
+    return ((zt_fn4)(void*)fptr)(a, b, c, d);
+}

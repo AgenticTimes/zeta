@@ -1,0 +1,108 @@
+// 批次 395：3.2 Lowering —— 把函数存在值里再调用（call-through-a-value），此前只有
+// 「恰好一个实参」这一档能走通。批次 294 给这一族只配了一个跳板 `zeta_call1`（定义在
+// runtime/py_additions.c:3414，声明在 codegen.rs:1069），而派发点把条件写死成
+// `arg_ids.len() == 1`（同批 gen.rs:10568）—— 于是 0 个、2 个、3 个、4 个实参的调用全部
+// 落回普通符号路径，被下成**局部变量的名字**：链接期报 `Undefined symbols "_f"`，而
+// `f` 只是个 `let f = add2;`。四档实拍（本批之前的构建）：
+//   `let f = head; f()`                     → _f
+//   `let f = add2; f(3, 4)`                 → _f
+//   `let f = add3; f(1, 2, 3)`              → _f
+//   `let g = pick(1); g()`（g 由运行期算出）→ _g
+// 同一条 `let g = pick(1); g(5)` 因为正好 1 个实参，改前就能跑（v=1005）—— 两行只差实参
+// 个数，这就是"arity 是唯一的分界线"的正证据，不是猜的归因。
+// 语料里这一族只有一个成员：`tests/unit-tests/quantum_basic.z:136` 的 `test_fn()`
+// （0 个实参，`test_fn` 由 `for (name, test_fn) in tests.iter()` 解出来）。237 文件尺子
+// 逐文件取数：链接期 Undefined symbols 里"裸名同时是本文件 let/for 绑定名"的，全语料
+// 1 行 1 文件；同尺子上 295 行 Undefined 里另外 294 行属于缺绑定/平台 API 那两族（不是
+// 本批）。本批之后那一条不再出现（下面"实拍"栏）。
+// 修法三处，没有新增运行时概念，全部沿用它已有的形状：
+//   1) runtime/tokio_runtime_stub.c 末尾补 `zeta_call0/2/3/4` —— 与 `zeta_call1` 同形：
+//      第 0 个参数是函数地址（FuncAddr 落成的 i64），实参与返回值一律 i64，地址为 0 时
+//      返回 0 而不跳过去。C 侧必须逐 arity 各写一个：变参 C 函数无法把动态实参表转发给
+//      任意函数指针（对照 zeta_collect_literals 那种"6 定参 + 变参"的声明，codegen.rs:1078
+//      附近，它做的是收，不是转发）。
+//   2) codegen.rs 在 `zeta_call1` 声明旁边补四条 External 声明（形参个数 = arity + 1）。
+//   3) gen.rs 的派发判据从 `arg_ids.len() == 1` 换成 `<= 4`，函数名取
+//      `zeta_call{argc}`，实参表把槽位 id 放在最前。
+// 三条原有判据一条没动（`closure_vars` 那条本文件有可观测成员 `clo=`；`func_ret_types`
+// 那条本文件没有可观测成员，见 `direct=` 上方说明）：`receiver.is_none()`（带接收者的
+// 方法调用不抢）、`!func_ret_types.contains_key(name)`（同名全局函数优先，直调不打折回
+// 跳板）、`!closure_vars.contains_key(name)`（`lambda` 绑名字走闭包路径，保住记录的返回
+// 类型；批次 295 的 t129 教训：走跳板会把字符串打成堆指针）。
+// 边界（本批不收，实测登记）：
+//   - arity >= 5 仍然落回符号路径（跳板只配到 4）。实拍：`let f = add5; f(1,2,3,4,5)`
+//     → `Undefined symbols "_f"`。未改前同样如此，本批不改变它，所以本文件不出 5 个
+//     实参的例子。
+//   - 跳板返回值恒为 I64（ABI 文档的 C9 合同）：被调函数返回字符串/浮点时，经值调用拿
+//     到的仍是位模式。这与本批无关，批次 294 起就如此，未扩表。
+//   - `tests/unit-tests/quantum_basic.z` 本批之后仍不链接：剩下 4 条 Undefined 分属
+//     两族 —— `_[dynamic](i64, i64)__iter`（动态数组的 `.iter()`，连 `[1,2,3].iter()`
+//     都打不出符号，本批另立成员）与 `_factor`/`_optimal_iterations`/
+//     `_success_probability`（空桩模块，backlog #42/#86 那族）。
+//   - JIT（无 -o）路径打不到这几个跳板：实测 `error[E4016]: 'zeta_call0' has no binding
+//     in JIT mode`（且程序继续跑到打印，`v=` 打成空）。这不是本批引入的错位 ——
+//     `zeta_call1` 从来也不在 pylib/jit_mappings.txt 里（grep 'call' 0 命中），整族跳板
+//     都只在 AOT 可用。归 backlog 上"JIT env-symbol bindings"那一条。
+// 实拍（本批之后的构建）：
+//   `tests/unit-tests/quantum_basic.z` 的 Undefined symbols 从 5 条变 4 条，消失的那条
+//   正是 `_test_fn`（referenced from `_main`）—— 这一族的语料成员本批收掉。
+// 期望值按本批之后的实际输出写。
+// expect: z0=7
+// expect: z1=1005
+// expect: two=7
+// expect: three=6
+// expect: four=10
+// expect: alias=7
+// expect: clo=12
+// expect: direct=6
+
+fn zero() -> i64 { 7 }
+
+fn one(a: i64) -> i64 { a + 1000 }
+
+fn add2(a: i64, b: i64) -> i64 { a + b }
+
+fn add3(a: i64, b: i64, c: i64) -> i64 { a + b + c }
+
+fn add4(a: i64, b: i64, c: i64, d: i64) -> i64 { a + b + c + d }
+
+// 运行期才算得出的函数值：批次 294 的 `zeta_call1` 一直支持这种槽位，本批把它扩到
+// 0 个实参。
+fn pick(n: i64) -> i64 {
+    if n > 0 { return zero }
+    return zero
+}
+
+fn picked1(n: i64) -> i64 {
+    if n > 0 { return one }
+    return one
+}
+
+fn main() -> i64 {
+    let g0 = pick(1);
+    println!("z0={}", g0())
+
+    let g1 = picked1(1);
+    println!("z1={}", g1(5))
+
+    let f2 = add2;
+    println!("two={}", f2(3, 4))
+
+    let f3 = add3;
+    println!("three={}", f3(1, 2, 3))
+
+    let f4 = add4;
+    println!("four={}", f4(1, 2, 3, 4))
+
+    let alias = zero;
+    println!("alias={}", alias())
+
+    let clo = lambda x: x * 3;
+    println!("clo={}", clo(4))
+
+    // 全局函数按名字直调（3 个实参）。这条**不是**"`func_ret_types` 优先"那条判据的
+    // 正证据：这里没有同名局部槽位，判据根本没参与，走哪条路都得到 6。它只是一条不回归
+    // 的冒烟。那条判据的可观测成员是非 i64 返回值（跳板恒返回 I64），已在上面边界栏登记。
+    println!("direct={}", add3(1, 2, 3))
+    return 0
+}

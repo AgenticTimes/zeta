@@ -1067,6 +1067,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
         module.add_function("zeta_sorted_vec_len_str", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_vec_clear", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_call1", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        // 批次 395: the other arities of the call-through-a-value trampoline
+        // (see `zeta_call1` in runtime/py_additions.c; siblings in
+        // runtime/tokio_runtime_stub.c). One per arity up to 4 — a C shim cannot
+        // forward a dynamic argument list to an arbitrary function pointer.
+        module.add_function("zeta_call0", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_call2", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_call3", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+        module.add_function("zeta_call4", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_dt_date", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_dyn_getitem", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
         module.add_function("zeta_arange", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
