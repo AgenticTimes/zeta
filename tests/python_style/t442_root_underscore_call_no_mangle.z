@@ -1,0 +1,50 @@
+// 批次 406（主线批次 301 路径上的编译缺陷）：根文件里以单下划线开头的函数，
+// 定义侧是**裸名**（`_join` → C 符号 `__join`），而调用侧被批次 288 的"同模块改名"
+// 分支重写为 `{current_module}__{method}` = `__main____join` —— 一个没有任何定义
+// 的幽灵名。整个程序**链接失败**，不是错值。
+//
+// 改前实拍（17 行最小复现 `drv_f.py`，`nm drv_f.bin.o`）：
+//   U ___main_____fmt     ← 调用点（A、C 两条 `_fmt` 调用）
+//   T __fmt               ← 定义点
+//   T _fmt_plain          ← 不带下划线的同形对照，链接正常
+// clang: `Undefined symbols for architecture arm64: "___main_____fmt", referenced from: _shapes`
+// ld: symbol(s) not found → Error: "Linking failed"（rc=1）
+//
+// 为什么 guard 3 救不了：它的兜底判据是"键集里有且仅有一个 `ends_with(\"__{method}\")`"，
+// 而根文件的键就是裸名 `_fmt` —— `__fmt` 这个后缀在裸名上不存在（裸名以 `_` 开头，
+// 不是以 `__` 开头），所以唯一后缀命中不成立，幽灵名原样发出去。
+//
+// 修法（零新增逻辑，加一条守卫）：`gen.rs:5670` 之后补
+// `&& !self.func_ret_types.contains_key(method.as_str())`
+// —— 裸名本身就是已定义函数时不改名。批次 288 的四条守卫（导入别名 / 模块全局 /
+// 闭包与提升名 / 类名）都是"这个名字有别的解释"，本条是第五种解释：它就是本文件
+// 里那个函数。跨模块的 `_x`（键为 `module___x`，裸名不在键集里）不受影响，
+// 仍然照 288 的语义改名。
+//
+// 对照成员说明：`_join` 直调 / `join_plain` 不带下划线 / `_join` 作为返回值再调
+// 三条路径都要走到同一个定义，改前 A、C 两条打死链接，改后四条逐字一致。
+// expect: a;b
+// expect: a;b
+// expect: a;b
+// expect: a;b
+def _join(xs):
+    return ";".join(xs)
+
+def join_plain(xs):
+    return ";".join(xs)
+
+def via_value(vals):
+    return _join(vals)
+
+def main() -> i64:
+    xs = ["a", "b"]
+    print(_join(xs))
+    print(join_plain(xs))
+    print(via_value(xs))
+    n = 0
+    for i in range(2):
+        n = n + len(_join(xs))
+    print(_join(["a;b"]) if n == 6 else "mismatch")
+    return 0
+
+main()

@@ -5668,6 +5668,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         // (t137 `_Frame(v=7)`) — the constructor is emitted
                         // under its bare name; mangling breaks the link.
                         && !self.type_decls.contains_key(method.as_str())
+                        // Batch 406 guard 5: a ROOT-file (`__main__`) `_x` def is keyed and
+                        // emitted BARE (`_fmt` → C `__fmt`), so mangling its call site to
+                        // `__main____fmt` aims at a ghost no definition satisfies — and guard 3
+                        // cannot rescue it, since the `__<method>` suffix it matches never appears
+                        // on a bare key. Measured pre-fix: `nm` `U ___main_____fmt` vs `T __fmt`
+                        // ⇒ whole-program link failure (rc=1), not a wrong value.
+                        && !self.func_ret_types.contains_key(method.as_str())
                     {
                         if !self.current_module.is_empty() {
                             let m = self.current_module.clone();
