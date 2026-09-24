@@ -2183,6 +2183,16 @@ pub mod common {
     // Emitted as a literal in `middle/resolver/resolver.rs`: a `use` item that
     // failed to process. Moved off W2002, which three sites claimed at once.
     pub const USE_STATEMENT_PROCESSING_FAILED: &str = "W1007";
+    // Emitted in `middle/mir/gen.rs`: a `static` declaration the parse-time
+    // hoist could not lift out of a function body (it sits in a macro body,
+    // which is expanded later), so it behaves as a local that resets on every
+    // call. Without this line the value is wrong and nothing says so.
+    pub const STATIC_NOT_HOISTED: &str = "W1008";
+    // Emitted as a literal in `frontend/parser/top_level.rs::lift_one`: a second
+    // `static` declaration of a name the rewrite has already claimed. Zeta can
+    // only lift one, so this one is refused (and becomes W1008) instead of two
+    // declarations sharing one cell.
+    pub const STATIC_NAME_ALREADY_CLAIMED: &str = "W1009";
     pub const TYPE_COULD_BE_INFERRED: &str = "W2001";
     // Emitted as a literal in `main.rs`: the runtime object resolved to a copy in
     // the current directory while `ZETA_RUNTIME_DIR` holds a different one. The

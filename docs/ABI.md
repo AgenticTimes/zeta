@@ -952,7 +952,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      日志两行：`official: compile N/194, compile+link M/194` 与逐文件的
      `### <name> — 缺运行时绑定: <符号名…>`（明细 `$OFFICIAL_LINK_DIAG`，默认
      `/tmp/zeta_official_link.txt`）；JSON 加 `official.compile` 字段。
-   - **判据（`tools/run_all.sh:574`）从 `pass==total` 改为 `compile==total`**，
+   - **判据（`tools/run_all.sh:575`）从 `pass==total` 改为 `compile==total`**，
      compile+link 与缺绑定清单照样打印 ⇒ 不是"把门禁绿过去"：该缺口从"一个红色计数"
      变成"指名到符号的登记表"，且真实编译失败仍然致命。本批读数：**compile 194/194、
      compile+link 193/194**。

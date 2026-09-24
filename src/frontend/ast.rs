@@ -252,6 +252,28 @@ pub enum AstNode {
         ty: Option<String>,
         expr: Box<AstNode>,
     },
+    /// `static [mut] NAME[: TY] = INIT` — storage that outlives the block it is
+    /// written in. Zeta had no spelling for this at all, so the leading word was
+    /// dropped and the rest of the line had no rule either: the whole enclosing
+    /// function failed to parse and the rest of the file went with it (roadmap
+    /// batch 384, 357 lines in one corpus file).
+    ///
+    /// `hoist_statics` lifts the declaration to a module-level assignment (one
+    /// cell, initialized once at program start — Zeta has no per-function static
+    /// storage) and leaves the node in place as the marker that binds this
+    /// function's name to that cell. A marker whose lift was refused — two
+    /// declarations of one name, or a macro body, which is expanded after that
+    /// pass — is reported by `MirGen` as W1008 instead of quietly resetting.
+    Static {
+        mut_: bool,
+        name: String,
+        ty: Option<String>,
+        expr: Box<AstNode>,
+        /// Set by the pass that lifted this declaration to module level. It is
+        /// the only thing that tells `MirGen` the cell exists — the name alone
+        /// cannot, because another declaration may have lifted the same name.
+        hoisted: bool,
+    },
     /// For loop statement.
     For {
         pattern: Box<AstNode>,

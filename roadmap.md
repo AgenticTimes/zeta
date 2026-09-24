@@ -15096,3 +15096,52 @@ W1004 那句话是"这一行有个词被忽略了"。前四行共 25 处的共�
 2. §4 的 `benchmark_simd_vs_scalar` 357 行（`static mut`）——全语料唯一剩下的 W1004 就是它，隔噪声定位的阶段结束了。
 3. 批次 382 候选 1：给带数据的 enum 变体加 tag（`codegen.rs:6210-6211` 丢 `variant`），ABI 半径。
 4. 一次误报响 N 声的去重（上面"边界"第 2 条），做在诊断发射层还是解析重试层要先量。
+
+
+## 批次 384 —— 函数体里的 `static mut`：一条解析规则 + 一次"搬到模块作用域"的抬升，把 §4 那 357 行的文件接住了（同批实测出模块全局 `+=` 不写回环境表）
+
+### 现象（改前，构建 = 批次 383 的工作副本）
+`tests/unit-tests/benchmark_simd_vs_scalar.z:11` 的 `static mut ACCUM: f64 = 0.0;` 前导词 `static` 没有解析规则 ⇒ 被吞掉，剩下 `mut ACCUM: f64 = 0.0` 是一条 `mut` 开头语句；语句兜底"一个表达式就是一条语句"接住它，`mut` 又当裸名解析失败 ⇒ W1002 截断。该文件实测丢 357 行（`tools/truncation_inventory.sh` 那把尺子上最大的一格），同时是全语料唯一剩下的 W1004（批次 383 记录）。全语料 `static` 共 8 处 / 7 个 `.z` 文件。
+
+### 定位（探针在 `/tmp/b384/`，四条）
+1. `s1.z`（函数体 `static mut` + `+=`，改前）：打 `0`/`0` ⇒ 值不持久。
+2. `s6.z`（模块级全局 + `+=`，**与本批无关的相邻缺陷，先记下**）：打 `7`/`7`/`0` ⇒ 读走环境表、`+=` 写本地槽。改前两处都是"静默错值"。
+3. `s5.z`（模块级全局，`= 1` 与 `+= 1` 各测）：`= 1` 能持久，`+= 1` 不能 ⇒ 卡点精确落在 `AstNode::AssignOp` 没有环境表镜像（`=` 分支有：`src/middle/mir/gen.rs:1681`）。
+4. `s3.z`（函数体裸写 `mut counter: i64 = 0`）：改前改后都响 W1002 ⇒ 本批只接住带 `static` 前导的写法，没放宽裸 `mut`（全语料裸 `mut` 声明 0 处，补不了——语义没说清"持久"从哪来）。
+
+### 修法（四层，`src` 合计 +253 行）
+1. **解析层** `src/frontend/parser/stmt.rs:118-144` 新增 `parse_static`：`kw_boundary(input,"static")` 走词边界（`static_assert` 这类标识符不会被误吃），`mut` 显式可选，名字 + 可选 `: 类型` + **必需** `= 初值`（没有初值的 `static` 不参与持久性，没有真实用例，故不预留静默档位）；接在 `:1735` 的 `alt((parse_static, parse_let))`（nom 元组有 21 翼上限，与 `let` 同槽）。
+2. **AST 层** `src/frontend/ast.rs:267` 新增 `Static { mut_, name, ty, expr, hoisted }`；`hoisted` 记"这一条已经被搬到模块作用域"，没搬的要出声。
+3. **抬升层** `src/frontend/parser/top_level.rs:1784` `hoist_statics`（在 `synthesize_implicit_main` 的 `:1907` 作为第一行调用）：`:1845` 走语句列表（函数体、顶层、嵌套块），把 `static` 从函数体里摘出来搬到模块作用域、改名，`:1803` `module_bound_name` 收集"模块作用域已经占住的名字"（含库注入名），撞名或同名两处声明 ⇒ `lift_one` 在 `:1830` 出声 W1009 并拒搬。抬升而不是新造一套持久存储：模块全局那条机器（`collect_module_global` + `zeta_module_decl`）本来就在程序启动时跑一次。
+4. **下型层** `src/middle/mir/gen.rs:1214`：`hoisted: true` ⇒ 把名字加进 `nonlocal_names`，读（`:3406`/`:3447`）与写（`:1649`/`:1681`）全走环境表（`zeta_env_get`/`zeta_env_set`，C 侧按名字查表，`src/backend/codegen/runtime_decls_core.rs:51-52`），闭包继承（`:13541`）；`:1225` 抬升没到的 ⇒ 先响 W1008 再按局部下型。`hoisted` 标志是必需的：`nonlocal_names` 是**每个函数**一次 MirGen 构造时的路由集合（gen.rs 按函数各构造一次），光看名字无法区分"这是持久格子"和"这只是同名局部"。
+   **本批第二处改动**（`:1768-1785`）：`AssignOp` 的 `Var` 目标分支补上"命中 `nonlocal_names` ⇒ 直接 `zeta_env_set` 返回"。改前 `+=` 只写本地槽（`:1668` 注释里那句"模块全局必须镜像环境表"只做到了 `=` 这一侧），于是持久性看着成立、读回来的还是初值 —— 静默错值。
+
+### 验证
+- 探针复测：`s1` 打 `1`/`2`（改前 `0`/`0`）；`s5` `5`/`5`；`s6` `8`/`9`/`0`（改前 `7`/`7`/`0`）；`s4`（同名两处）W1009 + W1008 之后打 `1`/`101`/`2`/`101` —— 拒搬的那份留在原地当局部，且自己说了它在干什么。
+- 丢行尺子：`3 文件 / 533 行 → 2 文件 / 176 行`（`benchmark_simd_vs_scalar` 357 归零；剩 `selfhost` 91、`quantum_basic` 85，与 handoff §4 一致）。
+- 全语料 W1004：`1 → 0`（549 文件）—— 这条判据在册的真阳性清零。
+- official `compile 194/194`、`compile+link 192/194`（两条 link-only 不变）；python_style `307 passed, 2 failed, 4 known-fail, 0 xpass`（新增 `tests/python_style/t423_static_mut_persistent.z` 通过，总数 306→307）；corpus `39/39`；diff `match=120 judged=130`（92.3%）、`bad_case=0`。
+- 各判据步 FAIL 0：knob 23、swallow 6、import 22、empty_stmt 68、pysrc 42、cli_semantics 73、ignore_rules 19、mbvar 违规 0；comment_drift 复述 0；clean_checkout `rc=0`。
+- 诊断计数：official `4 文件 / 11 行`。这个文件的 2 行 W1002 没了，换成 3 行 `sqrt` 的 fptosi 强制转换告警 + 1 行 ABI 汇总 —— **第一次能对这些行说话**（改前整段代码不存在，没有可诊断的东西）。
+- 锚点：漂移 58 / 新 0 / 消失 2 / 待归属 93 条·84 种 —— 与批次 383 逐字相同。`abi_anchors.tsv` 里没有 `parser/stmt.rs`、`ast.rs`、`mir/gen.rs` 的行 ⇒ 本批无需 `--rebind`；唯一受影响的是 `run_all.sh:574`（本批在那行之上加了 1 行注释）⇒ 按批次 371 先例做**等长改号** `574 → 575`，同步 `docs/ABI.md:955` 与 tsv 第 236 行两处，不跑 `--rebind`（它会顺手扫过另外 58 条别人在册的漂移）。
+- JIT 读数 `ok 175 → 174`、`trap 331 → 333`（总 506→507）。用同深度基线仓做 A/B（`/Users/meetai/source/zeta-baseline-871ac1d9`，`git worktree add … 871ac1d9` 后自建 `zetac`）逐文件比：只有 `benchmark_simd_vs_scalar.z` 从 ok 变 trap，加新增的 `t423` —— 前者原来那个 "ok" 是**空程序**的 ok（357 行全丢光，一行都不剩）；现在它真的编译，而 JIT 侧没有 `zeta_module_decl`/`zeta_env_get`/`zeta_env_set` 的绑定 ⇒ 装载期响亮 `error[E4016]`，AOT 正常。其余 505 文件逐字相同。segv 仍 0。
+
+### 工具契约（四处，都是判据语义搬家，不是加断言数）
+- `tools/empty_stmt_inventory.sh`：顶层 `static mut` 的 D 翼断言从"响 W1002/W1004"翻成实测 `""`（一声不出），标题改成"顶层 static mut 已被接住，一声不出（批 384 前响 W1002+W1004）"——留作回归锁；头里"负控制"的归因改指 `!!!`/`q;` 两条。
+- `tools/knob_probe.sh`：`recover.z` 夹具的函数体从 `static mut` 换成裸 `mut counter: i64 = 0`，实测 W1002 off / W1003 on / `STRICT_PARSE=1` rc=1 不变，注释写明换它是为了锁"批 384 只接住 `static`，没有顺手放宽裸 `mut`"。
+- `tools/junk_swallow_inventory.sh`：头部历史重写（两条真阳性分别由批次 338/384 收掉；实测 合计 0 处 / 549 文件 —— 这个读数是本批 `--full` 跑出来的，改之前那句"当前测得 0 处"未经验证，已改对），并删掉一段重复残留文字。
+- `tools/run_all.sh`：第 7 步注释的例子换成仍在册的形状（`apple banana …`、`import …`），`static mut` 标为"批 384 已闭"。这就是 `:574 → :575` 的来源。
+
+### 边界（本批没说到的）
+1. **模块全局的 `+=` 只修了"这个名字被持久性路由"的那一类**：`nonlocal_names` 与 `module_globals` 是两个集合，纯模块全局（`global x` / 模块级赋值那种）走 `=` 有镜像、走 `+=` 仍写本地槽 ⇒ 静默错值仍在。`t423` 文档头的 `a1`/`a2`/`top` 三行就是这个的实拍。真修需要"写本地槽 + 镜像环境表"两条一起（不是本批的"命中即返回"），是另一条规则 —— 已登记，见下一批候选 1。
+2. **抬升只到语句列表**：闭包体、match 臂里的 `static` 不进 `hoist_statics_from` ⇒ 落 W1008。这条路径**只用"同名两处"实拍过**（`s4`），宏体那条没测到：`tests/unit-tests/macro_hygiene.z` 改前改后的编译日志逐字相同且不含 W1008 ⇒ "宏体里的 static 会走 W1008"目前只是静态断言，不是实拍。
+3. **JIT 没有这三个运行时符号的绑定**（`pylib/jit_mappings.txt`）：受影响的是"真的编译出模块全局"的程序。它是响亮 trap 不是静默崩溃，但 `tools/jit_sweep.sh` 的 `ok` 基线（默认 163）本批之后要按实测 174 重定 —— 现有 `MIN_OK` 判定仍绿。归在 #26 那一族。
+4. **裸 `mut` 声明没有规则可补**（`s3`）：语义未定，全语料 0 处。
+5. **C 运行时未动**：`runtime/py_additions.c` 是常驻不动清单，本批只 declare `zeta_env_get/set`（已存在），不需要新导出。"首次到达时只跑一次"这条路是走不通的 —— 没有 `zeta_env_has` 导出可问"这个键存不存在"。
+6. 承重引用对照（历史不回改）：`tools/run_all.sh:574` 的引用在本文件 `:14503` 与 `backlog.md` 保持原样（改前位置）；`roadmap.md:14544` 与 `backlog.md:291` 已在本批前一步改成 `:575`（它们说的是"当前判据在哪一行"），现在那一行是 `:576`。批次 383 的 `stmt.rs:710-741`（`warn_if_swallowed_prefix`）⇒ 本批在它之上插入 ⇒ 现 `:747` 起，函数体未改。
+
+### 下一批默认候选
+1. **模块全局 `+=` 的环境表镜像**（上面边界第 1 条）：本批实测发现、边界写清、最小复现已经有了（`t423` 的 `a1`/`a2`/`top` 与 `/tmp/b384/s5.z`、`s6.z`），半径只在 `gen.rs` 的 `AssignOp`/`Var` 分支。
+2. §4 剩下的两格：`selfhost` 91（卡在表示层，批次 382 已改判）、`quantum_basic` 85（函数体里的 `use`，卡在 C 符号 + `py_additions.c` 解锁）。
+3. 闭包体 / match 臂里的 `static`（W1008 那半边）：要先实拍"宏体那条到底响不响"。
+4. 批次 382 候选 1：给带数据的 enum 变体加 tag（`codegen.rs:6210-6211` 丢 `variant`），ABI 半径。

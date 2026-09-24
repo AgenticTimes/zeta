@@ -183,6 +183,7 @@ impl ConstEvaluator {
             | AstNode::If { .. }
             | AstNode::Block { .. }
             | AstNode::Let { .. }
+            | AstNode::Static { .. }
             | AstNode::Return(_)
             | AstNode::ExprStmt { .. }
             | AstNode::Cast { .. }

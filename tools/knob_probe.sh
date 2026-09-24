@@ -30,10 +30,13 @@ trap 'rm -rf "$TMP"' EXIT
 rc=0
 
 # ---- A) 值域断言 ----------------------------------------------------------
-# 夹具：体内 `static mut` 解析不了 ⇒ 关态丢尾(W1002)、开态跳过(W1003)。
+# 夹具：体内裸 `mut counter: i64 = 0` 解析不了 ⇒ 关态丢尾(W1002)、开态跳过(W1003)。
+# 批次 384 之前这里放的是 `static mut counter: i64 = 0`；那条现在能解析了（parse_static
+# + 提升到模块级），留在原地会让 A1/A2 十四断言全部空转。换成它的邻居拼法——同一个
+# 位置、同样整项解析失败，且正好锁住"批 384 只接住 `static`，没有顺手放宽裸 `mut`"。
 cat > "$TMP/recover.z" <<'EOF'
 fn f() -> i64 {
-    static mut counter: i64 = 0
+    mut counter: i64 = 0
     return counter
 }
 print(f())

@@ -252,7 +252,8 @@ fi
 
 # ── 7) 前导词静默吞掉的判据断言（批次 337，清单在 tools/junk_swallow_inventory.sh 头部）──
 # 语句解析的兜底是"一个表达式＝一条语句"，于是解析器不认识的前导词会**无声消失**
-# （`static mut c = 0` 丢 `static`、`import std::memory;` 绑成 `std` 并丢掉 `memory`）。
+# （`apple banana target = 7` 丢掉前两个词、`import std::memory;` 绑成 `std` 并丢掉
+# `memory`；`static mut c = 0` 那型已由批次 384 补规则收掉）。
 # W1004 在吞掉那一刻出声；它的排除项（函数尾隐式返回长得一样）同样必须被测住，
 # 否则这个判据可以在"永远不响"和"到处乱响"之间任意翻车而门禁全绿。
 swallow_rc=0; swallow_failed=0; swallow_checked=0

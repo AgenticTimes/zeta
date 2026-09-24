@@ -1768,7 +1768,143 @@ fn splice_main_guard_body(
 /// it would have missed every flat reproducer in this family.
 pub const PY_ENTRY_ATTR: &str = "py_entry";
 
+/// Lift every `static` declaration out of the statement lists it can reach and
+/// put it at module level, immediately before the item that contained it, as an
+/// ordinary module assignment — the form the module-global machinery already
+/// runs once at program start (`collect_module_global` + the `zeta_module_decl`
+/// markers below, then the env read/write paths in `gen.rs`). Zeta has no
+/// per-function static storage, and what Rust guarantees for
+/// `static mut counter: u64 = 0` is exactly "one cell, initialized before anyone
+/// can read it, alive for the whole run". The declaration stays in the body as a
+/// marker so the function that wrote it binds its name to that cell.
+///
+/// Keyed on the statement-list shapes only, so a `Static` inside a
+/// `macro_rules!` body (expanded after this pass) keeps `hoisted: false` and
+/// `MirGen` reports W1008 rather than resetting the cell on every call.
+fn hoist_statics(items: Vec<AstNode>) -> Vec<AstNode> {
+    // Names the module binds at top level: lifting a `static` under one of those
+    // would overwrite the module's own cell before `main` runs.
+    let mut claimed: std::collections::HashSet<String> =
+        items.iter().filter_map(module_bound_name).collect();
+    let mut out = Vec::with_capacity(items.len());
+    for mut item in items {
+        if let AstNode::Static { name, expr, .. } = item {
+            claimed.insert(name.clone());
+            out.push(AstNode::Assign(Box::new(AstNode::Var(name)), expr));
+            continue;
+        }
+        hoist_statics_from(&mut item, &mut out, &mut claimed);
+        out.push(item);
+    }
+    out
+}
+
+/// The name one module-level item binds, if it binds a bare one.
+fn module_bound_name(item: &AstNode) -> Option<String> {
+    match item {
+        AstNode::Assign(lhs, _) | AstNode::AssignOp { target: lhs, .. } => match &**lhs {
+            AstNode::Var(n) => Some(n.clone()),
+            _ => None,
+        },
+        AstNode::Let { pattern, .. } => match &**pattern {
+            AstNode::Var(n) => Some(n.clone()),
+            _ => None,
+        },
+        AstNode::ConstDef { name, .. } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// Lift one body-local `static`, and report whether it happened. Two
+/// declarations of one name need two cells and this rewrite can only spell one,
+/// so the second is left unlifted (`MirGen` calls it a local, out loud) rather
+/// than sharing a cell in silence.
+fn lift_one(
+    name: &str,
+    expr: &AstNode,
+    claimed: &mut std::collections::HashSet<String>,
+    pulled: &mut Vec<AstNode>,
+) -> bool {
+    if !claimed.insert(name.to_string()) {
+        eprintln!(
+            "warning: [W1009] `{name}` is declared `static` in more than one place (or under a \
+             name the module already binds) — each would need its own cell and this rewrite can \
+             only lift one, so this declaration was left alone"
+        );
+        return false;
+    }
+    pulled.push(AstNode::Assign(
+        Box::new(AstNode::Var(name.to_string())),
+        Box::new(expr.clone()),
+    ));
+    true
+}
+
+/// Recurse through the statement lists of one node, lifting the `static`s found
+/// in them up to module level.
+fn hoist_statics_from(
+    node: &mut AstNode,
+    pulled: &mut Vec<AstNode>,
+    claimed: &mut std::collections::HashSet<String>,
+) {
+    fn from_block(
+        stmts: &mut Vec<AstNode>,
+        pulled: &mut Vec<AstNode>,
+        claimed: &mut std::collections::HashSet<String>,
+    ) {
+        for stmt in stmts.iter_mut() {
+            if let AstNode::Static {
+                name, expr, hoisted, ..
+            } = stmt
+            {
+                *hoisted = lift_one(name, expr, claimed, pulled);
+                continue;
+            }
+            hoist_statics_from(stmt, pulled, claimed);
+        }
+    }
+    match node {
+        AstNode::Program(items) => from_block(items, pulled, claimed),
+        AstNode::ModDef { items, .. } => from_block(items, pulled, claimed),
+        AstNode::FuncDef { body, .. }
+        | AstNode::ImplBlock { body, .. }
+        | AstNode::Block { body }
+        | AstNode::Loop { body }
+        | AstNode::Unsafe { body }
+        | AstNode::ComptimeBlock { body } => from_block(body, pulled, claimed),
+        AstNode::Method { body, .. } => {
+            if let Some(body) = body {
+                from_block(body, pulled, claimed);
+            }
+        }
+        AstNode::If { then, else_, .. } | AstNode::IfLet { then, else_, .. } => {
+            from_block(then, pulled, claimed);
+            from_block(else_, pulled, claimed);
+        }
+        AstNode::For {
+            body, else_body, ..
+        }
+        | AstNode::While {
+            body, else_body, ..
+        } => {
+            from_block(body, pulled, claimed);
+            from_block(else_body, pulled, claimed);
+        }
+        AstNode::ConceptDef { methods, .. } => from_block(methods, pulled, claimed),
+        AstNode::Match { arms, .. } => {
+            for arm in arms.iter_mut() {
+                hoist_statics_from(&mut arm.body, pulled, claimed);
+            }
+        }
+        AstNode::Closure { body, .. } | AstNode::ExprStmt { expr: body } => {
+            hoist_statics_from(body, pulled, claimed)
+        }
+        _ => {}
+    }
+}
+
 fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
+    let asts = hoist_statics(asts);
     let has_main = asts
         .iter()
         .any(|a| matches!(a, AstNode::FuncDef { name, .. } if name == "main"));

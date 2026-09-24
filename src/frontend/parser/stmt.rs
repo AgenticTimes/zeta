@@ -106,6 +106,43 @@ fn parse_let(input: &str) -> IResult<&str, AstNode> {
     ))
 }
 
+/// `static [mut] NAME[: TY] = INIT` — one persistent variable (Rust's spelling).
+/// The word is not in the keyword list, so until now `static` parsed as a
+/// stand-alone expression statement and the text after it (`mut counter: u64 = 0`)
+/// had no rule either — the whole enclosing function failed and the rest of the
+/// file was dropped (`benchmark_simd_vs_scalar.z`, 357 lines, roadmap batch 384).
+///
+/// The initializer is required: `static X: i32;` declares nothing we can store,
+/// and inventing an uninitialized static is a worse guess than leaving that
+/// spelling to the error it gets today.
+fn parse_static(input: &str) -> IResult<&str, AstNode> {
+    let Some(input) = kw_boundary(input, "static") else {
+        return Err(nom::Err::Error(NomError::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    };
+    let (input, _) = skip_ws_and_comments0(input)?;
+    let (input, mut_) = match kw_boundary(input, "mut") {
+        Some(rest) => (rest, true),
+        None => (input, false),
+    };
+    let (input, name) = ws(parse_ident).parse(input)?;
+    let (input, ty) = opt(preceded(ws(tag(":")), ws(parse_type))).parse(input)?;
+    let (input, expr) = preceded(ws(tag("=")), ws(parse_full_expr)).parse(input)?;
+    let (input, _) = opt(ws(tag(";"))).parse(input)?;
+    Ok((
+        input,
+        AstNode::Static {
+            mut_,
+            name,
+            ty,
+            expr: Box::new(expr),
+            hoisted: false,
+        },
+    ))
+}
+
 fn parse_for(input: &str) -> IResult<&str, AstNode> {
     let (input, _) = ws(tag("for")).parse(input)?;
     let (rest, first) = ws(parse_pattern).parse(input)?;
@@ -1695,7 +1732,7 @@ pub fn parse_stmt(input: &str) -> IResult<&str, AstNode> {
         parse_while,
         parse_unsafe,
         parse_match_expr,
-        parse_let,
+        alt((parse_static, parse_let)),
         parse_assign,
         parse_type_alias,
         parse_const,

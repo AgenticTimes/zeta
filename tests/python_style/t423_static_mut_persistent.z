@@ -1,0 +1,89 @@
+// 批次 384：函数体里的 `static mut NAME = INIT` 整项解析不了（357 行在一个语料文件上
+// 就是这么掉的，见下"实拍"）。这条拼法在 Zeta 里此前没有任何规则：`static` 被语句兜底
+// 当裸名表达式吞掉（W1004），剩下的 `mut counter: u64 = 0` 又没有规则 ⇒ 整个顶层项失败
+// ⇒ 它之后的每一项都被丢掉（W1002）。
+// 修法分三段，都在"已经有机器跑过"的地方，没有新增运行时概念：
+//   1) `src/frontend/parser/stmt.rs` 的 `parse_static` 接住 `static [mut] NAME[: TY] = INIT`；
+//   2) `src/frontend/parser/top_level.rs` 的 `hoist_statics` 把声明提升到模块级，成为一条
+//      普通的模块赋值（`collect_module_global` + `zeta_module_decl` 那套机器在程序启动时
+//      只跑一次），函数体里留下一个 `AstNode::Static` 标记；
+//   3) `src/middle/mir/gen.rs` 见到 `hoisted` 的标记就把这个名字放进该函数的
+//      `nonlocal_names` —— 读和写都走 env 全局表，不建局部槽；MirGen 按函数构造，所以
+//      这份绑定只属于这一个函数。
+// Zeta 没有"每个函数一份 static 存储"这种东西，所以这里取的是 Rust 那条声明的语义：
+// 一格、程序启动时初始化一次、活到进程结束。提升到模块级就是这句话的机器形式。
+// 提不动的情况不出静默值：同一个名字有两处声明 ⇒ W1009 并放弃提升；标记还留在函数体里
+// （`macro_rules!` 体在提升之后才展开，这条遍历器到不了）⇒ W1008，并按局部变量下型。
+// 顺带补的一处下型：`counter += 1` 走 `AstNode::AssignOp` 的 `Var` 支路，它原来只看
+// `name_to_id`，非局部名没有局部槽 ⇒ 落进"新建局部槽"分支，写进局部、env 那格永远停在
+// 初值，而读侧固定走 env ⇒ 打回初值（实拍：`s1.z` 打 `1 / 1`、`s6.z` 打 `8 / 8 / 0`）。
+// 现在这条支路对非局部名一律 `zeta_env_set`，和 `=` 那两条写路径同一个动作。
+// 实拍（本批之前的构建，`tests/unit-tests/benchmark_simd_vs_scalar.z`）：
+//   `warning: [W1002] …:11: 357 line(s) at the end of the input were NOT parsed` —— 该文件
+//   364 行里 357 行没进程序，跑起来零输出。本批之后同一份源不再报 W1002，`tools/
+//   truncation_inventory.sh` 的读数是 3 文件 533 行 → 2 文件 176 行。
+// 边界（本批不收，实测登记）：最后三行 `a1/a2/top` 是**另一个缺陷**，与 `static` 无关 ——
+// 顶层裸赋值 `total = 0` 造的模块全局，在函数体里 `total += n` 不写回 env 那格
+// （`AssignOp` 的 `Var` 支路只认局部槽；`=` 那条支路在 gen.rs:1668 有 env 镜像，`+=` 没有）。
+// 所以 `add(5)` 两次都是 5、`main` 读 `total` 是 0。改成"镜像"不是两行：同一函数里模块全局
+// 的**读**走的是已有局部槽（gen.rs:3406 在 3427 之前），所以 `+=` 要"写局部槽 + 镜像 env"
+// 两条都发，和本批非局部名的"只发 env"不是一条规则。留作下一批。
+// 改后逐行如下（先跑程序、按实际输出写期望）：
+// expect: t1=1
+// expect: t2=2
+// expect: t3=3
+// expect: l1=1
+// expect: l2=1
+// expect: h1=8
+// expect: h2=9
+// expect: h0=0
+// expect: a1=5
+// expect: a2=5
+// expect: top=0
+
+// 每次调用递增同一格：跨调用持久。
+fn tick() -> i64 {
+    static mut counter: i64 = 0
+    counter += 1
+    return counter
+}
+
+// 对照组：普通局部 `let mut` 每次调用都重新初始化。本批没有把局部变成共享格。
+fn local_only() -> i64 {
+    let mut c: i64 = 0
+    c += 1
+    return c
+}
+
+// 声明嵌在 `if` 块里也要能提升（遍历器按语句列表形状递归）。
+fn hit_once(n: i64) -> i64 {
+    if n > 0 {
+        static mut hits: i64 = 7
+        hits += 1
+        return hits
+    }
+    return 0
+}
+
+// 顶层 `static` 就是一条模块赋值，和裸赋值同一条路。
+static mut total: i64 = 0
+
+fn add(n: i64) -> i64 {
+    total += n
+    return total
+}
+
+fn main() -> i64 {
+    println!("t1={}", tick())
+    println!("t2={}", tick())
+    println!("t3={}", tick())
+    println!("l1={}", local_only())
+    println!("l2={}", local_only())
+    println!("h1={}", hit_once(1))
+    println!("h2={}", hit_once(1))
+    println!("h0={}", hit_once(0))
+    println!("a1={}", add(5))
+    println!("a2={}", add(5))
+    println!("top={}", total)
+    return 0
+}

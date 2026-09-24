@@ -1205,6 +1205,35 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
 
     fn lower_ast_inner(&mut self, ast: &AstNode) {
         match ast {
+            // The declaration itself was lifted to a module-level assignment by
+            // `hoist_statics`, which runs once at program start, so this node is
+            // only the marker saying "in this function, the name is that cell".
+            // `nonlocal_names` is exactly that routing (reads and writes go to the
+            // env global, no local slot), and it is per-function here because a
+            // MirGen is built per function.
+            AstNode::Static {
+                name,
+                hoisted: true,
+                ..
+            } => {
+                self.nonlocal_names.insert(name.clone());
+            }
+            // Not lifted — it sits where the pass cannot reach (a `macro_rules!`
+            // body is expanded afterwards) or its name was already taken. Lowering
+            // it as a plain local resets the value on every call and prints a
+            // plausible wrong number in silence, so it says which one it did.
+            AstNode::Static { name, expr, .. } => {
+                eprintln!(
+                    "warning: [W1008] `{name}` is still inside a function body, so it is a \
+                     local that resets on every call rather than one persistent cell"
+                );
+                self.lower_ast_inner(&AstNode::Let {
+                    mut_: true,
+                    pattern: Box::new(AstNode::Var(name.clone())),
+                    ty: None,
+                    expr: expr.clone(),
+                });
+            }
             AstNode::Let { pattern, expr, .. } => {
                 // Handle different pattern types
                 match &**pattern {
@@ -1737,6 +1766,22 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                 // compared HANDLES — every string counted as absent (measured in
                 // `fetch_stocks`'s `fetched_codes`).
                 if let AstNode::Var(name) = &**target {
+                    // A name routed through the env global (module global, `global`,
+                    // or a lifted `static`) has no local slot to refresh — writing
+                    // one here left the cell at its initial value while the read
+                    // path, which always goes to the env, printed that value back.
+                    if self.nonlocal_names.contains(name) {
+                        let rhs_id = self.lower_expr(&new_rhs);
+                        let key_id = self.next_id();
+                        self.exprs
+                            .insert(key_id, MirExpr::StringLit(name.clone()));
+                        self.type_map.insert(key_id, Type::Str);
+                        self.stmts.push(MirStmt::VoidCall {
+                            func: "zeta_env_set".to_string(),
+                            args: vec![key_id, rhs_id],
+                        });
+                        return;
+                    }
                     let rhs_id = self.lower_expr(&new_rhs);
                     let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
                     match self.name_to_id.get(name).copied() {
