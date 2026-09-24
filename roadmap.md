@@ -16369,6 +16369,138 @@ error: builtin `getattr` is not implemented in this form (it would link against 
 
 301 剩下的两格（选股数量不一致、`final_value`）都被 §五 那两条约束挡住：一条要**用户一句话**（`zt_dyn_vec_hdr` 在永不触手的 C 文件里），一条要**把 acceptance 夹具落进仓**。所以按 ROI 排，同层还能自己走的是批次 404 §八 那两条：**(a)** #42 的 JIT 绑定表（本批 jit `trap 350→351` 又是它，`runtime_malloc` 一条就能把 t441 从 trap 变 ok）；**(b)** `&expr` 借用的实参族（#47/#42），它是 `minimal_compiler` 那 5 处 `format!` 目前唯一被量到的堵点。次位：§五①（已知 struct 缺字段读垃圾）——它和 t225 的红线是同一件事的两面，要一起裁。
 
+## 批次 406（主线 301 第 1 步：挡在 acceptance 路上的一个硬链接失败）
+
+按 2026-09-24 裁定项 3 走：「先查 0 笔成交 → 再查选股数量不一致 → 最后对 final_value」。
+本批交付的是这条路上**实测到的一处编译缺陷**，加上批次 405 §八 挂着的 #42 聚合读数，
+外加对批次 405 §五 一条错误结论的更正（新开一节，不回改旧批）。
+
+### 一、现象（最小复现，17 行）
+
+`/tmp/b406/drv_f.py`：同一个 `_fmt`，一次被裸调、一次被当实参调；对照组 `fmt_plain`
+只是名字不带前导下划线。改前 `rc=1`：
+
+```
+Undefined symbols for architecture arm64:
+  "___main_____fmt", referenced from:
+      _shapes in drv_f.bin.o
+```
+
+`nm drv_f.bin.o`：`U ___main_____fmt` ＋ `T __fmt` ＋ `T _fmt_plain`。
+定义侧发裸名（`_fmt` → C 符号 `__fmt`），调用侧却要求 `__main____fmt` —— 一个
+**没有任何定义的幽灵名**。`--dump-mir` 同：`:153`/`:189` 是 `func: "__main_____fmt"`，
+`:175`/`:215` 是 `func: "fmt_plain_1"`。不是错值，是整程序链接失败。
+
+### 二、定位
+
+`src/middle/mir/gen.rs:5661-5706` 是批次 288 的"同模块改名"分支：裸调一个
+`_` 开头、且不落在四条守卫（导入别名 / 模块全局 / 闭包与提升名 / 类名）里的名字时，
+按 `{current_module}__{method}` 重写。**根文件的定义是裸名键**（`current_module` 取
+`__main__`，`resolver.rs:3348-3361`：`py_mangled_to_module` 命中不了就是 `__main__`），
+于是重写必然指向幽灵。guard 3 的兜底判据是"键集中**有且仅有一个** `ends_with(\"__{method}\")`"
+（`:5686-5696`），而裸名键 `_fmt` 以单下划线开头、不含 `__fmt` 后缀 ⇒ 兜底结构上打不到，
+幽灵名原样发出。已定义裸名的判据先例就在同文件 `:9059`
+（`func_ret_types.contains_key(&method.clone())`）。
+
+### 三、修复（一条守卫，零新增逻辑）
+
+`gen.rs:5670` 之后加 `&& !self.func_ret_types.contains_key(method.as_str())` ——
+"这个名字本身就是本文件已定义的函数"是第五种不该改名的解释。
+**跨模块的 `_x` 不受影响**：它的键是 `module___x`，裸名不在键集里 ⇒ 仍按 288 的语义改名
+（288 当初要的 `_source_score` 场景逐字保持）。+7 行，注释写明实测幽灵名。
+
+### 四、验证
+
+改前正证据（把 t442 喂给 HEAD 的编译器，非推断）：`rc=1`，
+`"___main_____join", referenced from: _main in t442_prefix.bin.o`。
+改后：`tests/python_style/t442_root_underscore_call_no_mangle.z`（新，50 行，4 条 expect）
+四条路径（裸调 / 不带下划线对照 / 经函数值间接调 / 循环体内调）全部 `a;b`，
+与 CPython 逐字相同；`drv_f.py` 的 A/B/C/D 四行同样逐字相同。
+
+门禁 `bash tools/run_all.sh`（最终态复跑）：official compile **194/194**、compile+link
+**191/194**（link-only 3：`integration_all_features` / `quantum_basic` / `selfhost`，与基线同）；
+python_style **325 passed, 2 failed, 5 known-fail, 0 xpass**（324→325 ＝ 本批新用例；
+2 failed 是存量 t231/t233）；语料 **40 文件 / 解析 40/40 = 100%**；
+jit sweep **ok=174 trap=352 fail=0 timeout=0 segv=0 (total 526)** ⇒ GREEN（total/trap 各 +1
+是本批新用例进了扫描集，ok 未动）；`clean_checkout rc=0`；门禁 rc=1 的唯一红仍是 `py_fail != 0`。
+
+### 五、acceptance 定价：本批对 301 的 `-100.00%` 改善量 = 0（实测，不是"应该有帮助"）
+
+`_drv_accept_406.py`（`strategies/code/`，绝对路径调用 ⇒ 能链接）改后重跑：
+`回测完成: 1000000 -> 0 (-100.00%)`，`[PARITY]` 37 行仍是指针形
+（首行 `4322263264 | target=4300830238 | holdings=4300830238 | ranked=-`）。
+原因清楚：acceptance 里 `_fmt` 住在**被导入的模块**，`current_module` 非 `__main__`，
+本批这条路径压根没走到。所以 301 的下一格仍押在打印族（#45/#38/#117 那一条：
+动态 str 槽没有类型标记 ⇒ 插值打成地址），不在改名分支上。
+
+顺带两条实拍（登记，不在本批修）：
+① **同一次调用里旧二进制 rc=139（SIGSEGV）、新二进制 rc=0** —— acceptance 这条路有
+**跨运行的非确定性**，与批次 306 记的 t228 同类；这意味着"改前/改后各跑一次"在这条路上
+**不足以**区分回归与噪声，A/B 结论要么多次跑要么别下。
+② 同一个夹具、同一个编译器，**相对路径 + `cd strategies/code` 调用** ⇒ `rc=1`
+`U _run_backtest`；**绝对路径 + 项目根 cwd 调用** ⇒ `rc=0`。两个变量（cwd 与路径形态）
+同时变了，**归因未做**，只登记"调用形态会改变符号发射"这条现象。
+
+### 六、#42 聚合读数（批次 405 §八 候选 (a) 的定价，改判：不是"加表行"能收的）
+
+`tools/jit_sweep.sh` 只分类不报符号，故另跑聚合：扫 351 个 trap 文件（`scanned=351
+nolist=0 firsthit=351`），从**纯文本的 `warning[E4016]` 括号列表**取符号名
+（`error[E4016]` 那行带 ANSI 色，`grep -F 'error[E4016]'` 永不命中 —— 上一会话把落空
+归因给反引号，那个诊断是错的，记在这里以免下次再猜），得 **403 个不同符号 / 2,742 次出现**。
+首命中榜：`zeta_module_decl 93`、`runtime_malloc 86`、`zeta_dynarray_new 44`、
+`println_f64 19`、`zeta_py_import 12`、`host_str_eq 10`、`zeta_py_from 9`、`to_string_i64 9`。
+按文件并集：`zeta_env_set 192`、`zeta_module_decl 173`、`zeta_dynarray_new 142`、
+`zeta_map_set_tag 90`、`runtime_malloc 88`、`map_str_key 86`、`zeta_env_get 75`。
+**可绑性核对（这是定价的关键）**：这 403 个里只有 `runtime_malloc`
+（`src/runtime/host.rs:17`、`src/runtime/memory.rs:40`）和 `to_string_str`
+（`src/runtime/host.rs:386`）有 Rust 侧 `fn` 可指进 `pylib/jit_mappings.txt`；
+三个最大族全在 C 侧 —— `zeta_dynarray_new`（`runtime/py_additions.c:36`）、
+`zeta_env_get`（`:2656`）、`zeta_env_set`（`:2659`）、`zeta_module_decl`（`:2668`）、
+`py_math_sqrt`（`runtime/tokio_runtime_stub.c:854`）、`host_str_to_string`（`:2464`）。
+⇒ 加表行最多翻几个文件（`runtime_malloc` 一条翻 t441），大头要的是**新机制**
+（JIT 模式下把 C 运行时 build/dlopen 进来，批次 315 的根因），而那要动 `py_additions.c`
+一侧的构建、属**要用户裁决**的设计决定，不是我能顺手做的。据此把 #42 从"下一批默认候选"
+降为"登记 + 需要裁决"，同层的下一格改押打印族。
+
+### 七、更正批次 405 §五 的一条错误结论（新开一节，旧文不回改）
+
+批次 405 §五断言 acceptance 夹具"不在盘上"，依据是一次 `find` 零命中。**该结论错**：
+`/Users/meetai/source/quant/REasyQuant/strategies/code/jq_wufu_local.py`、
+`backend/strategy/wufu_constants.py` 都在，且整条 acceptance 能跑 ——
+CPython 侧 `1000000 -> 994576 (-0.54%)`，Zeta 侧 `1000000 -> 0 (-100.00%)`（本批 §五 的
+读数就是它给出的）。那次 `find` 的作用域取错了（`-maxdepth` 与起始路径不匹配），零命中
+被当成了"不存在"。按 `feedback-negative-assertion-needs-positive-proof`，这是一次
+"用落空的搜索给负断言作证"的典型：**搜索没命中 ≠ 不存在**，负断言要有"我确认过搜索本身
+覆盖得到目标"的正证据。旧批文本保留，本节为准。
+
+### 八、锚点（`tools/check_abi_anchors.py`）
+
+`gen.rs` +7 行 ⇒ 该区之后的文档引用整体后移。三段读数（都是当场跑的）：
+HEAD **漂移 30 / 新 11 / 消失 3**；插入后 `--rebind` 前 **漂移 61 / 新 11 / 消失 3**；
+`--rebind` 后 **漂移 30 / 新 11 / 消失 4**。
+`--rebind` 判定搬家 30 条全部是 `gen.rs:5971` 之后的引用、全部 **+7**，
+`--dry` 先看过再落地；随后用脚本逐对核对 `docs/ABI.md` 的 23 行改动：**非纯 +7 改号 = 0**
+（即没有任何文字被工具改写）。34 条拒改（`codegen.rs` 为主）与 11 条落单新锚点是存量、
+原样保留。多出来的第 4 条"消失"＝ `gen.rs:12592`：核对器说基线有这条锚点而文档不再引用它，
+但同一条 `docs/ABI.md:957` 的两个数字**指向的代码是对的**（`sed -n '12592p'` ＝ `Box::new`
+那行，`:12603` ＝ `String::new` 那行），⇒ 判它是"该锚点不再被盯"的记账损失，
+不是错的合同引用；成因未定位，登记。
+
+### 九、提交与推送
+
+代码批 **`94007ada`**（4 文件 / +110 / −53）：`src/middle/mir/gen.rs` +7/−0、
+`tests/python_style/t442_root_underscore_call_no_mangle.z`（新，50 行）、
+`docs/ABI.md` 23/23、`tools/baselines/abi_anchors.tsv` 30/30（后两者等行替换 ⇒ 行数不变）。
+已推 `agentic`：`11d54204..94007ada`。记录批随后另推。
+
+### 十、下一批默认候选
+
+按已实测损害量：**(a)** 打印族——动态接收槽身上没有类型标记（#117/#38/#45 同一件事），
+它是 301 现在**唯一实测挡路**的一条（`[PARITY]` 全行是指针 ⇒ 选股数量读不出来），
+也与裁定项 4 的"给值加类型标记"直接同轴；**(b)** §六 的结论要求用户一句话：
+要不要把 C 运行时接进 JIT（动 `py_additions.c` 侧构建）；**(c)** acceptance 的
+非确定性崩溃（§五①）与批次 306 的 t228 是同族，先要一个"至少跑 N 次"的判据才谈修。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
