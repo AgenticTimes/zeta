@@ -15509,3 +15509,72 @@ M3 由"下一批默认候选第 1 格"降到第 3：单点修的收益是 1 例�
 本批动过 `src/middle/mir/gen.rs`（虽然是零留存），所以手动跑一次 ABI 锚点核对器（`tools/check_abi_anchors.py`，**它不在门禁里** —— 门禁 `grep check_abi_anchors` 零命中，任务 #37 仍未接）。工作树读数：**漂移 68 / 新 7 / 消失 4**，改号配对 0 对 ⇒ 落单新 7 / 落单消失 4；待归属 **100** 条 / 91 种（基线 93 条），声明为仓外 14 条。
 
 我第一版把它记成"批次 391 移动代码留下的"——**这句是猜的，做了对照就推翻**：同一份核对器在 `60eb2caa^`（批次 391 的代码之前）的隔离 worktree 里读 **漂移 68 / 新 7 / 消失 6**（改号配对 1 对 ⇒ 落单新 6 / 落单消失 5），待归属同样是 100 条 / 91 种。⇒ 那 68 条漂移与 7 条新锚点是**批次 391 之前就在的存量**，批次 391 只让"消失"从 6 条变 4 条；本批零代码留存，读数与工作树同（改的都是 `roadmap.md`/`backlog.md`，核对器只扫 `docs/ABI.md`）。存量清理是 #52 的活，另开。
+
+## 批次 393（交付）—— 2.2 语法分析：函数体里的 `use` 一条语句带走整个顶层项，132 行静默丢掉
+
+**pyramid 层**：2.2 语法分析（`parse_stmt` 分发器）+ 顶层遍历（`hoist_statics_from`）。
+**开批依据**：批次 392 结尾按已实测损害量重排，2.2 的 `quantum_basic` 85 行排第 1（那 85 行一行没跑：`/tmp/b390/qb_orig.bin` 零输出 rc=0）。
+
+### 一、病因：`use` 只有顶层项规则，落到体里就是一条没人认的顶层项
+
+`use 路径;` 的规则只接在顶层项列表上；`pub fn parse_stmt`（`src/frontend/parser/stmt.rs:1723`）的 `alt` 没有这一臂。于是体内的 `use` 让 `parse_block_body` 失败 ⇒ **它所在的整个顶层项**被丢掉 ⇒ 该项之后每一项都不进程序（W1002）。路径深度、`{A, B}` 列表写法都同一个病因：改前二进制 `target/release/zetac.pre393` 对同一份新用例 `t429` 报 `:47: 50 line(s) … NOT parsed`、编出来的程序**一行输出都没有**；改后同一份文件六行期望值逐字命中（`b=2 l=3 d=6 d0=0 t=4 dup=3`）。
+
+### 二、修法三段，第三段是被红线逼出来的
+
+1. `stmt.rs:1759` 把 `parse_use_stmt`（`:1780`）挂进 pass/del/assert 那格嵌套 `alt`（nom 的 21 臂上限），复用顶层 `use` 已有的 `parse_path` + `parse_use_targets`；
+2. `top_level.rs` 的 `from_block`（`:1855`）把体内 `AstNode::Use` 提到模块级、原地留 `AstNode::Ignore`。**这不是锦上添花**：真正加载模块的是 `Resolver::register`，它对 `AstNode::Use` 的处理在 `src/middle/resolver/resolver.rs:782`，而它只遍历顶层项列表、从不进函数体 ⇒ 留在体里的 `use` 到不了那一步；
+3. `if in_body`（`top_level.rs:1882`）把 2) 收窄到"从函数体走到的列表"。`AstNode::Block` 现在**继承**这个判定而不是自己表态：同一个节点既是从体里走到的块，也是顶层 `import a::b;` 在 `parse_python_import` 里 lowers 成的那个项 —— 对后者动手等于把一条本来就地生效的导入搬走 + 留个 `Ignore`。
+
+**分段实测（这是本批唯一让 3) 站得住的证据）**：
+
+| 改动组合 | `tools/import_form_inventory.sh` | `truncation_inventory` 的 quantum_basic 85 行 |
+|---|---|---|
+| 只改 1)（`git checkout --` 掉 `top_level.rs`） | rc=0 | 未测（提升没接线，必然仍丢） |
+| 改 1)+2)，无 `in_body` | **rc=1，4 条 FAIL**（`Return val` 4 → 5，多出一条 `IntLit(0)`） | 回来 |
+| 改 1)+2)+3) | rc=0（22 条断言 FAIL 0） | 回来 |
+
+### 三、提升"真到达解析器"的正证据（不是"不报警"）
+
+`tests/stdlib-foundation/fmt_time_env_test.z` 前 110 行改前/改后解析完全一致，唯一变量是那条被提升的 `use std::time::{SystemTime, UNIX_EPOCH};`：缺它时链接期符号是裸名 `_as_secs`/`_as_millis`/`_as_micros`/`_elapsed`（接收者类型未知），有它时是类型限定的 `_duration_as_secs`/`_duration_as_millis`/`_instant_elapsed`/`_instant_now`。
+
+### 四、实拍读数（同一对二进制、同一把尺子）
+
+| 尺子 | 改前 `zetac.pre393` | 改后 `target/release/zetac` |
+|---|---|---|
+| `tools/truncation_inventory.sh`（237 文件） | **2 处 / 176 行**（selfhost 91 + quantum_basic 85） | **1 处 / 91 行**（只剩 selfhost，行号 89） |
+| W1002 逐文件 | quantum_basic `:73 之后 85 行`（病因行 75 `use std::quantum::algorithms::ShorsAlgorithm;`）；fmt_time_env_test `:113 之后 47 行` | 两处均不再报 ⇒ 合计 **132 行**回到程序里 |
+| `--dump-mir` 行数 | quantum_basic 759；fmt_time_env_test 2001 | quantum_basic **1675**；fmt_time_env_test **2876** |
+
+`--dump-mir` 的增量是"整项回来了"的量纲证据；`test_shors_algorithm`/`test_grovers_algorithm` 两个函数出现在 MIR 里。
+
+### 五、门禁读数（`bash tools/run_all.sh`，`/tmp/b393/gate2.log`）
+
+official compile **194/194**（唯一的硬断言，`run_all.sh:575`）；compile+link **191/194**（基线 192/194，见下节归因）；link-only 明细 3 个文件；python_style **312 passed / 2 failed / 5 known-fail / 0 xpass**（+1 = 新用例 t429；那 2 例是 t231/t233 存量）；语料 39/39；jit ok **174**/513、segv 0；diff 120/130 = 92.3%、坏用例 0；knob 23/0、swallow 6/0、import_form 22/**0**、empty_stmt 68/0、pysrc 42/rc0、cli_semantics 73/rc0、ignore_rules 19/rc0、mbvar 19 违规 0、comment_drift 0、clean_checkout rc=0（rev `7c5717a6`）。**整体 rc=1，来源是 `py_fail=2` 这条断言（`run_all.sh:576`），即 t231/t233 存量（批次 392 记录同为 311/2/5/0），不是本批引入** —— 报"rc=1"时必须连着报它是哪一条。
+
+### 六、compile+link 192→191：一条账务变化，两个新登记
+
+同目录 A/B（`tests/unit-tests/quantum_basic.z` 同一份源）：改前二进制 **link OK**（因为尾部 85 行被丢掉、`main` 都不在），改后 **link FAIL**，缺 `_factor` `_optimal_iterations` `_success_probability` `_test_fn`。归因分两条，都不是本批的修复坏了什么：
+- 前三个：`std::quantum::algorithms` 全仓没有定义，只有 `build/stubs/std/quantum/algorithms.z`（内容是 `//! Stub for std::std::quantum::algorithms` + `pub struct Stub;`）⇒ 方法调用 declare 无 define，**#42 族**成员；
+- `_test_fn` 来自 `tests/unit-tests/quantum_basic.z:136` 的 `let result = test_fn();`（元组里的一等函数值被下成裸符号调用，而非间接调用）——本批让这一行**第一次参与编译**才暴露，另登记。
+
+### 七、边界：本批不收、已实测登记的六条（全部折进 backlog #36 同一行，OPEN 净增 0）
+
+1. 顶层 `mod NAME { … }` 解析不了：整份 30 行探针文件被丢，`test_pub_use.z` 丢 15 行；
+2. `use 路径::名字;` 之后**裸用**那个名字不绑定（`_answer` 未定义）—— #64 族第二个成员；
+3. `mod::方法(...)` 调用返回地址（探针实测 `u=4379267008`，改前二进制同样出垃圾）—— #41 族第二个成员；
+4. std::time 缺 7 个运行时绑定：`_duration_as_secs` `_duration_as_millis` `_duration_from_secs` `_duration_from_millis` `_duration_from_nanos` `_instant_now` `_instant_elapsed` —— #42 族；
+5. 提上来的 `use` 指向不存在的模块时空桩静默生效、**一声不出**（`t429` 里四条 `nonexistent::*` 全无 W1007）—— #86 成员；
+6. `if … { 表达式 } else { 表达式 }` 当块值取回 0（探针 `t=0`，改前后同值）。
+顺手取到、未折进本批修复的截断点：`practical_programming_test.z` 245 行（`.collect();` 续行）、`test_high_assurance.z` 411 行（`);`）、`examples/quantum.z` 280 行（病因未定位）。
+
+### 八、结构证据与锚点读数
+
+`codegraph sync` 后：`callers parse_use_stmt` ⇒ **No callers found**（函数项作为 `alt` 元组成员不构成调用边，图内无边）；接线以文本证据为准 —— 全仓只有 `stmt.rs:1759` 一处引用 + `:1780` 定义。`callers hoist_statics_from` = 2（`hoist_statics` `top_level.rs:1784`、`from_block` `:1855`），与改前同形。ABI 锚点核对器（不在门禁里，#37）：漂移 **68** / 新 **7** / 消失 **4**，改号配对 0 对 ⇒ 落单新 7 / 落单消失 4；待归属 **100** 条 / 91 种，声明为仓外 14 条 —— 与批次 392 的工作树读数逐字相同 ⇒ 本批**零新增漂移**（存量清理仍是 #52）。
+
+### 九、自我核对：本批有两处第一版结论被实测推翻
+
+① 我先把 `import_form` 的 4 条 FAIL 记成"提升臂跳到了 py 模块体上"，加了 `lift_use` 开关后读数一字未动 ⇒ 该归因作废（真因是分发器臂 + `Block` 无条件表态的组合）；② 我又把失败归因写成"`parse_use_stmt` 挂在哪一格有关系"，把臂从 `parse_try_stmt` 那格挪到 pass/del/assert 那格后仍是 4 条 FAIL ⇒ 位置无关，那句已注释现在也已从代码里删掉。两条都在本节留旧→新对照，正文不回改。另外记一个取证坑：第一次"改前 vs 改后"的 `parse_bisect` 表两列完全相同，是因为脚本默认打 `target/release/zetac`（`tools/parse_bisect.py:158`）——A/B 必须显式给 `--zetac`，那张旧表作废重测。
+
+### 十、下一批默认候选（按已实测损害量）
+
+① 2.2 剩余截断族里最大的一块：selfhost 91 行（`selfhost.z:89` 的 `build_ast`，`impl Trait for` + concept 两格）；② 2.2 新登记里最便宜的：#86 那条"空桩静默生效"——它决定本批收回来的 132 行有多少其实是假绿；③ 3.2 带载荷枚举变体可测；④ 4.3.b / M3 定价（#105，先取语料计数）。
