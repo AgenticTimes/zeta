@@ -19298,6 +19298,98 @@ $ ZETA_DBG_FA=1 zetac_pre427 同一夹具                                # 改�
 4. **按名字归类要先认"强符号手写那两条"**：`login`/`logout` 不按登记表写法出现，脚本会把它们算成"未归类"。把未归类名单打出来看一遍，比只报一个总数可靠。
 5. **不可复现的读数要么补测要么点名**：`129 站点` 与 `lldb 帧链` 都因探针/日志没落盘而不可复现 ⇒ 本批结论（"守卫会打死真调用"）改用两条可复现证据（`clip` 的定义集 + A/B 运行 rc 与 stderr 行数）重做，旧的两句只作背景、各自标注不可复现，不改写历史。
 
+## 批次 432（3.2 Lowering → 链接层／431 归因表最后一桶）：降级成裸符号之前先问 W 注册表
+
+代码提交 `0cafbf52`（fix）＋锚点重绑 `a7904b48`（docs）。任务 #160。
+
+### 一、层级坐标与病因（pyramid 层：3.2 Lowering 出口 → 链接层）
+
+- 病症：成员调用在"接收者类型给不出唯一方法"时**降级成裸符号** `member` —— `src/middle/mir/gen.rs:11330`（接收者有类型那条）与 `:11335`（接收者无类型那条）；随后 `:11512` 给名字追加 `_argc` 后缀，出码侧最后一路退到 `add_function(&name, …, Some(Linkage::External))`（`src/backend/codegen/codegen.rs:3151`）。**编译期一声不出，选定目标的是链接器。**
+- 431 的归因表里最狠的一桶是 6 个"三个链接对象里都没有定义"的名字（`abs alarm close mkstemp signal strftime`），它们由 **libSystem** 满足：`.strftime(...)` 绑到 libc 的 `size_t strftime(char*, size_t, const tm*, …)` —— **第一个参数被当成输出缓冲区**（我们传的是 Zeta 字符串句柄）⇒ 直接踩内存。
+- 本批把"降级"从无条件改成**有条件**：`if let Some(ref rty) = receiver_ty`（`gen.rs:11244`）里、在降级注之前插一路**注册表臂**（`gen.rs:11320-11327`）。
+
+### 二、改前基线与读数口径（`--report-stubs` 的 bare-member 段）
+
+- 判据行逐字（改后，`/tmp/b432/report_post.stderr:262`）：
+  `bare-member report: 66 member call(s) degraded to a bare symbol, bound only at link time (0 of them also spelled as a plain call)`
+- **68 名 → 66 名**。`diff names_pre names_post` 只掉两行：`setdefault`（第 58 行）、`strftime`（第 62 行）。口径＝语料 40 文件一次编译（`~/source/quant/REasyQuant/strategies`，仓外只读），按**成员名去重**计数，不是调用点数（调用点数见 §五）。
+- W 表侧的分布（`pylib/registry.txt` 按**方法名**列聚合）：63 名 0 条 / 4 名 1 条 / 1 名 2 条（`close`：`PyPool`＋`PyFile`）。⇒ 唯一性判据能命中的天花板就是"1 条"那 4 个名，本批收掉 2 个（`strftime`/`setdefault`），`date` 见 §六，`values` 被名单挡住。
+
+### 三、夹具形状对照：9 对 pre/post IR **逐字节相同** ⇒ 小夹具打不到新臂
+
+| 夹具 | pre/post IR | 结果 |
+|---|---|---|
+| g1_bind / g4_arity / c5_kw / c6_hasattr / c7 / c8_named / c9_i64var / d1_strptime / p2_setdefault_only | 各自一对 `.ll` | **9/9 字节相同**（21,680 / 21,936 / 22,261 / 22,837 / 22,288 / 22,057 / 21,777 / 22,561 / 23,075 B） |
+
+- 这不是"改动没生效"，而是**这些夹具根本走不到新臂**：它们的接收者是 `[dynamic]`，早被 429 的 B4 路线（`method_by_unique_name`，`pylib.rs:338`）在**上游**接走了。g1 改前改后都是 `call i64 @py_dt_strftime(`，g4 两侧都是 `@py_dt_strftime_3(`。
+- **顺带纠正一处差点写错的读数**：`grep 'call i64 @py_dt_strftime'` 会把 `py_dt_strftime_3` 也匹配上，看上去像"本批把 arity 不合的那条也绑了 ⇒ arity 判据无效"。加上 `(` 后 arity 判据在 site A 上确认生效；IR 判据一律带左括号（入 §十.2）。
+- **g4 暴露的是 B4 侧的洞，不是本批的**：`py_dt_strftime_3` 是"arity=3 的调用绑到 args=2 的实现"，B4 路线**不查 arity**（本批的 `unique_method_for_bare_call` 查）。B4 侧未动 ⇒ 登记进 §六，不在本批修。
+- 真正打到新臂的夹具是 t467（接收者类型已知、候选集不是单一方法那一路）与语料本体。
+
+### 四、改动形状（三处，全部在授权范围内）
+
+- `src/middle/pylib.rs` +71/−7：`NAME_ROUTE_DENYLIST`（`:312`）成为**唯一一份**名单，B4 与本批共用；`method_by_unique_name`（`:338`）改为薄封装 `unique_w_entry`（`:352`）；新增谓词 `unique_method_for_bare_call(method, argc_with_receiver)`（`:375`）＝**四条判据全过才返回**：拼写在句柄间唯一 → 非桩 → `arity == argc`（`arity` 含接收者，`arg_ids[0]` 就是接收者）→ 不在 denylist。
+- `src/middle/mir/gen.rs` +64/−50（净 +14）：`bare_registry` 声明 `:11243`、新臂 `:11320-11327`；`suffixed` 判据加 `&& bare_registry.is_none()`（注册表命中不再叠 `_argc`）；`ret_ty` 先看 `bare_registry`；新增 `registry_ret_type(ret_handle, ret)` `:14972` —— 返回类型取表项而不是猜 I64。
+- `tests/python_style/t467_bare_member_registry_bind.z`（新，43 行）：四行 expect（`s: 2024-03-15` / `k: 1` / `v: 1` / `e: ["2024-03-15", "2024-01-02"]`）。`e:` 那格是**反向对照**：列表接收者的 `strftime` 早在批次 145 就落到逐元素表 `zeta_vec_strftime`（`gen.rs:11262`，在 `:11320` **之前**），本批不能把它抢走 —— 实测改后仍发 `%165 = call i64 @zeta_vec_strftime(...)`。
+- 门禁 `tools/cli_semantics_check.sh` +33/−5，7 条新断言（t467 不再出降级注 / `.nonesuch(` 对照仍出声 / IR 阳性 `call i64 @py_dt_strftime(` / `call i64 @strftime(` 必须为 0 / `close` 同名多主仍降级 / `values` 在名单内仍降级 / `^W .*stub=1` 计数 0）。翼数 **80 → 87**（80 是 431 入册读数；87 是本批门禁 JSON `cli_semantics: checked=87, failed=0, rc=0` 实测）。
+- 复现证据（同目录两颗二进制）：`t467_pre.bin` 编译 rc=0、**运行 rc=139、stdout 0 B、stderr 空**；`t467.bin` 运行 rc=0 并打出上述四行。
+
+### 五、语料侧实测收益：7 个调用点改绑 + 2 处比较升级（`/tmp/b432/ir432.diff`，1290 行）
+
+判据＝`--emit-llvm` 出码文本对照（430 已证机器码 md5 不可用：第 1609 字符起分叉）。
+
+- **7 处按名降级 → 真实现**，两个名字：
+  - `strftime` 5 处 → `@py_dt_strftime`：`market_data_refresh._refresh_all_cached_stocks_impl` 2 处（IR 48272/48289）、`refresh_all_stocks_rqdatac_incremental` 2 处（50483/50500）、`jq_wufu.check_a_share_weak_period` 1 处（93810）；
+  - `setdefault` 2 处 → `@py_map_setdefault`：`data_ops.log._detail_by_source`（38713/39102）。
+  - 复核：`grep -c 'call [a-z0-9]* @strftime(' corpus_pre432.ll` = **5**、`@setdefault(` = **2** ⇒ post 侧两个都 = **0**。
+- **2 处 `icmp slt` → `host_str_cmp`**（不是 1 处，本批改正 t467 头注释的口径，见 §十.5）：`_refresh_all_cached_stocks_impl` 的 `%434,%435` 与 `rqdatac_incremental` 的 `%361,%362`，都在各自改绑那对 `strftime` 之后 —— 因为返回类型现在按表项定为 Str，字符串大小比较从"比指针"升级成"比内容"。同批 diff 里另有 6 对 `icmp slt` 逐操作数出现在两侧，只是 SSA 编号抖动，**不算收益**。
+- 改前的绑定目标（本批实拍，不是推断）：`_strftime` 在链接产物里是 `(undefined) external _strftime (from libSystem)`，而 `_py_dt_strftime` 就躺在同产物 0x100014db4 处**无人调用**；`_setdefault` 走的是 `runtime/unavailable_stubs.c:213` 的按名抛异常桩。
+
+### 六、没收的、没修的（逐条给判据）
+
+1. **libSystem 桶 6 → 5**：只剩 `abs alarm close mkstemp signal`。本批当场查表给出归因 —— `abs/alarm/mkstemp/signal` 在 `pylib/registry.txt` 里 **0 条 W 行**（唯一性判据第一步就落空，缺的是 runtime 实现而不是编译器 bug）；`close` 有 **2 条**（`W PyPool close py_mp_pool_close` `:56`、`W PyFile close py_file_close` `:376`）⇒ 被"拼写唯一"挡住，按 §四 的设计**故意不猜**。
+2. **`date` 四判据看着全过却仍降级 2 个体**：`W PyDate date py_dt_identity args=1 ret_handle=PyDate`（registry `:285`）唯一、非桩、arity=1、不在 denylist（本批读过 `pylib.rs:312-329` 全文，`date` 不在其中）⇒ 病因只可能是"这 2 个体根本不在 site A"（更可能走 `:11335` 的无接收者类型那条，本批**没**给它加注册表臂）或实参数与 args=1 不合 —— **两种都未实测**，登记为 #161／下一批头名。
+3. **B4 路线不查 arity**（g4 的 `py_dt_strftime_3` 为证）：本批只把名单合并成一份，没给 B4 加 arity 判据。
+4. **`:11335` 外层臂未动**（无接收者类型那条仍无条件降级）。
+5. **桩不是终点**：`unique_w_entry` 命中但 `stub=1` 时保持降级（门禁第 7 条断言锁住），因为"绑到假值桩"只是把静默换了一种。
+6. **主线 301 未位移**（见 §七）。
+7. **残留锚点债 24 漂移 / 11 新 / 10 消失未清**：426–431 一直在册，本批只重绑自己被动的坐标（见 §九）。
+
+### 七、对主线 301 的位移：**0**（两栏分开报）
+
+- "修好了"这栏：t467/p1 那颗崩溃格确实修了 —— p1（只含 `strftime`）改前 **rc=139 / stdout 0 B / stderr 0 B** → 改后 **rc=0 / stdout 13 B（`s: 2024-03-15`）**；p2（只含 `setdefault`）与 p3（列表对照）两侧逐字节相同（9 B / 31 B，rc=0）。
+- "推进了主线"这栏：**语料全跑 6+6 次**，stdout 两侧都是 **11 字节的一行堆地址**（pre `4327892736/4316768000/4355834752/4354655104/4344991232/（第 6 次 0 B）`，post `4321646336/4415313664/4355065152/4384404800/4346210048/4358473472`）—— 地址逐次变是 431 已入册的事实（最后一条求值表达式的值被当退出码，任务 #55 族）。**主线读数一字未进：仍是打印地址而不是 final_value。**
+- 崩溃偶发格：**pre 6 次里 1 次**（`r_pre_6`：stdout 0 B、stderr 14,957 B / 119 行，停在"缓存命中 103 只；待拉取 0 只"）、post 6 次 0 次。⇒ 431 被判"不可复现"的那个 139/14,957 B 读数**本批真的又打到了一次**，所以它不是编的；但 n=6 里 1 例**不足以归因给本批**（429 入册的同族崩溃双侧都可能出现）。重新归类为"**真实但偶发、成因同族**"，不计入本批收益（判据见 §十.3）。
+- 两把尺子当场作废：① 机器码 md5（430 已证）；② **语料 stderr 内容 diff** —— 地址归一化后仍有 321 行里 154 行不同（`/tmp/b432/x` vs `y`），全是 ASLR 残影 + `rows` 抖动（12854–12858，429 入册）⇒ 语料侧只能看 rc / stdout 字节数 / stderr 字节数 / 末行四项。
+
+### 八、门禁读数（全量 `tools/run_all.sh`，`/tmp/b432/gate432.log` 155 行，末行 **`GATE_RC=1`**）
+
+- official：compile **194/194**、compile+link **191/194**（3 条 link-only 失败＝缺运行时绑定，明细 `/tmp/zeta_official_link.txt`，存量）。
+- python_style：**349 passed / 2 failed / 6 known-fail / 0 xpass**（349+2+6=357；`ls tests/python_style/*.z` = 360 ⇒ 3 个文件不在本次计入口径，未追）。t467 在 passed 侧。
+- 语料解析 40/40 = 100%（分母是仓外 `~/source/quant/REasyQuant/strategies`）。
+- jit sweep：ok=176 trap=378 fail=0 timeout=0 **segv=0**（total 554）GREEN。
+- diff：match=120 judged=130 = **92.3%** bad_case=0；分轴 truth 22/23、str 20/23、container 27/28、numeric 23/28、control 28/28。
+- 各翼 rc=0 全绿：knob 23、swallow 6、import 22、empty_stmt 68、pysrc 42、**cli_semantics 87**、ignore_rules 19、mbvar 23、emit_stable 2、dyn_binding 4、comment_drift 复述 0。
+- clean_checkout：**rc=0**（2s，rev=`2bdd01c0`）—— 口径点名：它检的是**本批代码提交之前**的 HEAD 2bdd01c0，`--rebind` 的 `a7904b48` 与门禁 JSON 里的 `target/release/zetac` 不同源。
+- 编译诊断：official 2/194 文件 6 行；python_style 111 文件 **237** 行。
+- `md5 target/release/zetac` = `7694c742af6598c3cbc63feec94c5b3c`（门禁 JSON 内的 zetac 路径同一颗）。
+- **`GATE_RC=1` 由何而来**：official 3 条 link-only（存量）＋ 锚点核对非零（§九），两者都不是本批新增。
+
+### 九、锚点（`docs/ABI.md`）
+
+- 本批代码让 gen.rs 净 +14 行、pylib.rs 净 +64 行 ⇒ `a7904b48` 用 `--rebind` 搬 **13 条文档引用（21 个数字）**，tsv 同步，**未 `--bless`**（不抹平在场问题）。ABI.md 仍 1032 行。
+- 重绑后终态（本批收尾再跑一次，`/tmp/b432/anchor_after_rebind.txt`）：**258 个可解析 / 0 个定位失败 / 漂移 24 / 新 11 / 消失 10，rc=1** —— 与 431 入册的终态**逐项相同** ⇒ 对 HEAD 净中性（没新增漂移，也没越界顺带修存量）。
+- 隔离对照（detached-HEAD worktree `/tmp/b432/iso432`）读 **256 / 2 / 24 / 11 / 12、rc=2**；两处差异都是**工具产物**，不是文档问题：`runtime/aliases.inc.c` 是构建时生成的，干净检出里没有 ⇒ 基线里指向它的 2 条引用在隔离侧"定位失败"、并在消失侧多计 2 条（`:1` 与 `:12`）。⇒ 该 worktree 用毕已 `git worktree remove`。
+
+### 十、工具坑与自我核对（本批当场抓到）
+
+1. **A/B 两颗二进制必须同源同目录**：本批差点把"pre 二进制跑 post 夹具"的读数写进结论 ⇒ 所有 p1/p2/p3/t467 的复测都当场重跑并记 rc + 字节数。
+2. **IR 判据必须带左括号**：`grep 'call i64 @py_dt_strftime'` 会命中 `py_dt_strftime_3`，把"arity 判据生效"读成"失效"（§三）。
+3. **"不可复现"和"未复现（样本不足）"是两句话**：431 把 139/14,957 B 判成不可复现，本批 n=6 里它自己出现了 1 次 ⇒ 正确措辞是"真实但偶发、样本不足以归因"，别写成"假"。（本条同时修正 431 §十.5 的措辞，历史正文不回改。）
+4. **`set -- $pair` 在 zsh 里不分词**：循环体里 `"$1"` 拿到整个字符串 ⇒ 9 对夹具第一次全被判成 DIFF（假阳性）。改用 python 逐对比特，才拿到"9/9 相同"。（这条已在册，本批又踩了一次 ⇒ 循环比对一律走 python。）
+5. **自己写的注释也要被实测覆盖**：t467 头注释把 `host_str_cmp` 升级写成"一处"，diff 实测是**两处**（每函数一处）⇒ 记录批随本条一起改正该注释。
+6. **管道末端的 `$?` 不是核对器的 rc**：`python3 check_abi_anchors.py | tail -4` 报 `ANCHOR_RC=0` 是 `tail` 的；重定向到文件后 `echo $?` 才是真值 **1**。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 

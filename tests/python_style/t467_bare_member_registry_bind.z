@@ -18,7 +18,8 @@
 // 的 `_refresh_all_cached_stocks_impl`×2 与 `refresh_all_stocks_rqdatac_incremental`×2、
 // `jq_wufu.py::check_a_share_weak_period`×1）与 `setdefault` 2 处
 // （`data_ops.py::log::_detail_by_source`）；`--report-stubs` 的 bare-member 段从
-// **68 名降到 66 名**，其中一处还连带把 `icmp slt` 升级成 `host_str_cmp` 内容比较
+// **68 名降到 66 名**，其中 `_refresh_all_cached_stocks_impl` 与 `refresh_all_stocks_rqdatac_incremental`
+// **各一处**（共 2 处）连带把 `icmp slt` 升级成 `host_str_cmp` 内容比较
 // （返回值按表项定为 Str）。
 // `e:` 那一格是**反向对照**：列表接收者的 `strftime` 早在批次 145 就落到逐元素表
 // （`zeta_vec_strftime`，`gen.rs:11262`），本批的改动在它**之后**，不能把它抢走 ——
