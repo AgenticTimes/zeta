@@ -205,22 +205,22 @@ src/middle/mir/gen.rs	9746	// `[dynamic]str__normalize` and the link failed.
 src/middle/mir/gen.rs	9985	func: "zeta_dyn_contains".to_string(),
 src/middle/mir/gen.rs	10309	if receiver.is_none() && arg_ids.len() == 1 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
 src/middle/mir/gen.rs	10498	// PY-A: closure call — if the callee is a var bound to a // lambda/closure value, lower to a direct named call to the // synthetic closure function (f(41) → __
-src/middle/mir/gen.rs	11236	if receiver.is_none() && arg_ids.len() <= 4 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
-src/middle/mir/gen.rs	11501	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
-src/middle/mir/gen.rs	11504	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
-src/middle/mir/gen.rs	11515	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
-src/middle/mir/gen.rs	11527	format!("{}_{}", func, arg_ids.len())
-src/middle/mir/gen.rs	12086	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
-src/middle/mir/gen.rs	12347	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
-src/middle/mir/gen.rs	12987	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
-src/middle/mir/gen.rs	12991	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
-src/middle/mir/gen.rs	13088	format!("{}_{}", func_name, arg_ids.len())
-src/middle/mir/gen.rs	13734	func: "zeta_dyn_getitem".to_string(),
-src/middle/mir/gen.rs	13762	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
-src/middle/mir/gen.rs	14380	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
+src/middle/mir/gen.rs	11208	if receiver.is_none() && arg_ids.len() <= 4 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
+src/middle/mir/gen.rs	11487	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
+src/middle/mir/gen.rs	11490	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
+src/middle/mir/gen.rs	11501	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
+src/middle/mir/gen.rs	11514	format!("{}_{}", func, arg_ids.len())
+src/middle/mir/gen.rs	12076	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
+src/middle/mir/gen.rs	12337	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
+src/middle/mir/gen.rs	12977	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
+src/middle/mir/gen.rs	12981	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
+src/middle/mir/gen.rs	13078	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	13724	func: "zeta_dyn_getitem".to_string(),
+src/middle/mir/gen.rs	13752	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
+src/middle/mir/gen.rs	14370	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");
-src/middle/pylib.rs	778	/// `declare_registry_runtime_fns` emits after task D.
-src/middle/pylib.rs	899	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");
+src/middle/pylib.rs	842	/// `declare_registry_runtime_fns` emits after task D.
+src/middle/pylib.rs	963	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");
 src/middle/resolver/resolver.rs	622	if method == "zeta_param_default" && args.len() == 2 { if let AstNode::Lit(i) = &args[0] { if (*i as usize) < defaults.len() { // Fail-loud when the default's l
 src/middle/resolver/resolver.rs	636	if mismatch { eprintln!( "warning: PY-A: the default for `{}` has a kind that \ parameter type `{}` cannot hold — it is coerced \ (annotate the parameter, or ch
 src/middle/resolver/resolver.rs	2011	let mangled = format!("{}__{}", module.replace('.', "_"), member);
