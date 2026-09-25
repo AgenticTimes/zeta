@@ -1,0 +1,34 @@
+// PY-A: 被导入模块的 `def` 当**值**读 —— 修前读到 0，调用静默不发生。
+// 语料形：`jq_wufu_local.py:41-45` 把 `_strategy.morning_routine` 绑成模块级别名，
+// `:111-112` 再 `for routine in [morning_routine, …]: routine(context)`。
+// 修前这些别名持有 0（模块的 `def` 从不写进环境表，读侧却走 `zeta_env_get`），
+// 而 `zeta_call1(0, x)` 按合同返回 0 而不跳 —— 于是 37 个交易日一次调用都没发生：
+// acceptance 0 笔成交、`1000000 -> 0 (-100.00%)`（CPython 同夹具 `-0.54%`）。
+// 具名直调（MARK-A）修前就是对的，留在这里做对照：同一夹具里只有走**值**的两条形变了。
+// known-fail: 下型成 `FuncAddr` 的修法**已实测到但没上门**——它让这四条形通了（晨间
+// 日志 0→1、本用例四条全出），却同时把同一次 acceptance 跑的别的读数抹成 0：
+// codes 107→0、trading_days 136→0、`交易成本` 万1/0.10%/true→万0/0.00%/false、注入行
+// 丢了 `jq_shim: ` 前缀、并新增 SIGSEGV(rc=139)。交错对照里旧二进制两次都还是 107/136，
+// 所以退化确定来自这次下型，不是语料状态。MIR 键集差分显示只有 7 个名（22 处读）翻了，
+// 且翻的都是**不产生语句**的读点（`FuncAddr` 不发 stmt，环境读发 2 条），下一批按这条查。
+// expect: MARK-A
+// expect: FNREF morning
+// expect: MARK-B
+// expect: FNREF morning
+// expect: MARK-C
+// expect: FNREF morning
+// expect: FNREF buy
+import fnref_fixture as fx
+
+ROUTES = [fx.morning, fx.buy]
+
+print("MARK-A")
+fx.morning("ctx")
+
+print("MARK-B")
+mr = fx.morning
+mr("ctx")
+
+print("MARK-C")
+for r in ROUTES:
+    r("ctx")
