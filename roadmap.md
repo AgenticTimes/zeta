@@ -18031,6 +18031,77 @@ OPEN 净增 0：416 折进 backlog `#7`  mega 行与 roadmap 批次 415 §七（
 4. `fns[0]("x")` ⇒ `_call` NOT implemented（rc=134）、`load_metadata failed … parquet` 告警、
    同二进制崩点非确定 —— 均已登记未定价。
 
+## 批次 417（主线 301 第 3 步续）：按 416 §六 判据把 `FuncAddr` 值读上门；但对照实测把"下型会抹平三格读数"这条**判死**——塌与不塌是出码轮次掷的硬币
+
+### 一、本批的入口判据与它的下场
+
+批次 416 §六 登记的判据是：**site2 处保留那两条哑语句（`StringLit` + `zeta_env_get`）再叠 `FuncAddr`，看 107/136 是否回来**。
+执行结果分两段：
+
+1. 按判据做的探针版（`/tmp/b417/acc8.bin`，编译器 md5 `507880dca5ce95dde824caf24b66cce9`）5 跑里 4 次读到 `12858 107 136` + `保守模式=true` ⇒ 判据"通过"，本批据此上门；
+2. 上门后为核对读数所做的 **HEAD 对照**把这条判据本身推翻了：**未改动的编译器出的新码，三格读数照样是 `0 0` + `false`**（§三）。
+
+⇒ 416 §五 的"语句/槽号不对称 ⇒ 三格塌"不成立；本批按证据把改动落地，并在用例头与源码注释里就地更正（416 原文不回改）。
+
+### 二、落地（编译器 +23 行，两处点位）
+
+| 点位 | 行号（本批后） | 形状 |
+|---|---|---|
+| 裸名模块全局读（`AstNode::Var` 的 `module_globals` 臂） | `src/middle/mir/gen.rs:3890` 臂，改动体 `:3907-3918` | 命中 `func_ret_types ∧ ¬global_consts ∧ ¬type_decls` ⇒ 槽值覆盖成 `MirExpr::FuncAddr(name)`、`type_map` 记 `I64` |
+| 模块限定值读（`flatten_module_receiver` × `py_user_modules` × 单段名） | `gen.rs:12290` 臂，改动体 `:12302-12313` | 同上，键是刚拼出来的 `mod__name` |
+
+两处都**只覆盖槽里的值**，原本那两条环境读语句照旧发 ⇒ 语句数与槽号分配与修前逐字一致，改动唯一的可观察面是"槽里放地址还是放环境读数"。
+动因不变（416 §一 已证）：模块的 plain `def` 从不写进环境表，读回 0，而 `zeta_call1(0, x)` 按合同返回 0 不跳（`runtime/py_additions.c:3414`、docs/ABI.md C9）。
+用例 `tests/python_style/t454_imported_fn_as_value.z` 摘掉 `known-fail`，`PASS t454_imported_fn_as_value`（7 条 `// expect:` 全出：MARK-A/B/C + `FNREF morning`×3 + `FNREF buy`）。
+
+### 三、决定性对照——`codes`/`trading_days`/`交易成本` 三格塌在 HEAD 上照样发生
+
+尺子：acceptance 驱动从 `REasyQuant` 仓根构建、`REPLAYQUANT_LOCAL=1` 跑，看注入行 `本地数据注入完成: … trading_days=%d <market> <codes> <trading_days>` 与 `交易成本: … 保守模式=<bool>`。
+
+| 二进制 | 编译器 | 跑次 | 完整跑通的那些 | 提前崩 |
+|---|---|---|---|---|
+| `/tmp/b416/acc.bin`（416 记的改前控制，14:24 出码） | `43f32ec…` | 3 | 2×171 行 rc=0：`12858 107 136` + `true`，晨=0 | 1×119 行 rc=139 |
+| 本批 HEAD 重编（`cp` 出 `git show HEAD:…gen.rs`，md5 **与 416 的 prefix_md5 逐字相同** = `43f32ec718f60f14a277c67a469ab874`）出码 4 版 `accH_1..4` | `43f32ec…` | 4（每版 1 跑） | 3×171 行 rc=0：`12858 0 0` / `12857 0 0` / `12858 0 0` + `false`，晨=0 | 1×119 行 rc=139 |
+| 本批改动版 3 出码 `acc9` / `acc10_a` / `acc10_b` | `552e335ccd7c97ffa3e4dc148e29e0c3` | 11 | 9×134 行 rc=139：`12857/12856/12858 0 0` + `false`，**晨=1** | 2×119 行 rc=139（晨=0） |
+
+⇒ 三格读数的塌与不塌**在同一份未改动的源码上就会翻**（1 个旧二进制稳定读到 107/136，4 个新二进制冷启动里 3 个读到 0），416 把它归给"省掉两条语句"是误归因。
+
+### 四、机制边界（实拍到哪一层，未定位的部分标出来）
+
+- **出码层非确定**：同一编译器（`552e335`）+ 同一输入连编两次 ⇒ `acc10_a.bin.o` 756,432 B 与 `acc10_b.bin.o` 756,344 B，md5 不同。
+- **不在 MIR 层**：`--dump-mir` 两次输出 md5 相同（`0415c5f2d281ac4bc856e2d7f38c1fe2`）⇒ 批次 T0 的 MIR 规范化仍然成立，抖动在它**之后**。
+- **发射阶段的样子**：`--emit-llvm`（走 stderr）两次各 113,079 行、`diff` 15,825 hunk，样本 `store i64 %0, ptr %15` ↔ `store i64 %0, ptr %5`（行数同、寄存器/临时槽编号整体错位），同时诊断 warning 的**出现顺序**也在变。⇒ 具体容器本批未定位（`grep` codegen.rs 没有裸的 `for … in map.iter()`，线索留在 §七 1）。
+- **运行时另有一层**：同一个二进制自己也会在 119 行处提前 rc=139（改前控制 3 跑 1 遇、HEAD 新出码 4 版 1 遇、改动版 11 跑 2 遇）⇒ 与 410/413 记的跨跑翻同族。
+- **台账缺口（不引用作证据）**：探针编译器 `507880…` 与本批 `552e335…` 之间只差注释——而"注释不改二进制 md5"是量出来的（改注释前后都是 `552e335`）⇒ 两版之间必有当时未落账的真实代码差，acc8 那 4/5 的复原读数**不可复现**，本批不拿它支持任何因果结论。
+
+### 五、本批改动的可归因位移（一条正、一条挡路）
+
+- **正**：`[INFO] jq_shim: [晨间] 计算流动性阈值` 只在改动版二进制里出现（9/11 跑，晨=1），改前两侧 7 跑（b416 控制 3 + HEAD 新出码 4）晨全为 0 ⇒ 每日例程**第一次真的被派发**（416 §一 病情的直接反证）。
+- **挡路**：走到这一行的 9/9 跑随后 SIGSEGV（`rc=139`，止于 134 行；改前跑完是 171 行）⇒ 主线第 3 步（0 笔成交 / `1000000 -> 0`）的堵点从"例程没跑"换成"例程体一跑就崩"。崩点归因本批未做（先要 §七 1 的稳定出码，否则 A/B 判不出来）。
+
+### 六、门禁与锚点
+
+| 项 | 读数 |
+|---|---|
+| `bash tools/run_all.sh` | **rc=1**（`/tmp/b417/gate417b.log:142` 落盘；唯一红仍是 `run_all.sh:576` 的存量 `py_fail != 0`） |
+| python_style | **336 passed, 2 failed, 6 known-fail, 0 xpass**（known-fail 7→6＝摘掉 t454）；failed 两条同形：`t231_dict_set_cast_fromkeys` `t233_listcomp_condition_capture` |
+| official | compile 194/194，compile+link 191/194（3 条 link-only：integration_all_features / quantum_basic / selfhost） |
+| 语料 | 40 文件；jit sweep ok=176 trap=365 total=541 segv=0；diff match=120 judged=130 rate=92.3% bad_case=0 |
+| clean_checkout | rc=0（rev=`5ce9503e`） |
+| diagnostics | official 2 文件/5 行；python_style 106 文件/221 行；断言族（knob/swallow/import/empty_stmt/pysrc/cli_semantics/ignore_rules/mbvar）全 FAIL 0 |
+| ABI 锚点 | gen.rs +23 行动了锚 ⇒ `--rebind`（改写 docs/ABI.md 48 行 / tsv 64 行）后回到常驻 **漂移 32 / 新 11 / 消失 3（基线 250）**，rc=0 |
+
+二进制口径：门禁与套件读数都在 `552e335ccd7c97ffa3e4dc148e29e0c3` 上取；本批改完那 5 行注释后重编（`Compiling zetac … Finished in 17.31s`）**md5 未变** ⇒ 注释不参与出码，读数不需要复跑。
+
+OPEN 净增 0：417 折进 backlog `#7` mega 行与本节。#141 结案（判据批 → 修法上门 + 判据判死），#142（类构造器过判据）保持未定价。
+
+### 七、下一批候选（按已实测损害量）
+
+1. **418＝出码非确定性定位批**（第一候选）：损害量是本批实拍的两态——同一份未改动源码，三格读数在 `107/136 + 万1/true` 与 `0/0 + 万0/false` 之间按轮次翻，直接挡 主线 301 的"选股数量不一致"与 final_value；且它是 §五 那条崩点能被 A/B 的**前置**。判据：先固定发射阶段的迭代序（Rust 侧 `HashMap` 默认 `RandomState` 每进程重掷 ⇒ 可用 `--emit-llvm` 两次是否字节相同来判定命中/未命中），再看 `0 0` 是否消失。
+2. **晨间例程体崩点**：改动版 9/9 稳定（134 行后 rc=139），依赖候选 1 才有可信对照。
+3. **#142**：类构造器过 `func_ret_types − global_consts` 判据 ⇒ 被当函数发 `FuncAddr`（本批落地的两处已带 `!type_decls` 守卫，套件外那处 `gen.rs:3987` 同判据的读点未守卫、未定价）。
+4. `codes` 唯一标的数跨跑抖（107/156/232）、`load_metadata failed … parquet` 告警、`fns[0]("x")` ⇒ `_call` NOT implemented —— 均已登记未定价。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
