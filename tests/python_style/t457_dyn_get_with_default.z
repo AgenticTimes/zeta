@@ -1,0 +1,48 @@
+// 批次 421：动态接收者上的 `.get(key, default)` 三参形式。
+// 名表没有 `("get", 3)` 臂，这条调用一路落到裸 extern `get` ——
+// 那是 `runtime/unavailable_stubs.c:145` 的 weak 桩，一被调用就
+// `zt_unavailable("_get")` abort。改前实拍（同一份用例体，改前的
+// target/release/zetac_b421_pre，cwd＝仓根）：
+//   compile=0 / run=134 (SIGABRT)、stdout 空、
+//   stderr 首行 `PY-A: `_get` is NOT implemented in this build`
+// 改后：发与静态 map 路径（gen.rs 下方 `map_get_default` 那条臂）
+// 同一个调用，default 只在缺键时用。MIR 侧同一份用例体：
+//   改前 4 条 `func: "get_3"`（codegen 去掉 `_<数字>` 尾巴后链到 weak 桩）
+//   ⇒ map_get_default 0 条；改后 ⇒ map_get_default 4 条、`get_3` 0 条。
+// 判据收窄（两条负对照，各用独立夹具当场实拍）：
+//   1) 键必须是静态已知 str。`def pick(dd, k): return dd.get(k, "fb")`
+//      的键槽位是动态的 ⇒ `lower_map_key` 不做内容哈希、把句柄当键
+//      ⇒ 恒缺键。放开这条时实测：改后 rc=0 但打印 `fb`（键 "x" 明明
+//      在场）—— 静默错值；收窄后回到改前的 rc=134 响失败。
+//   2) 整型键不进本臂。`xs = [7,8,9]; xs.get(1, 99)` 改前是链接期
+//      `Undefined symbols: _[dynamic]i64__get`（compile=1）；放开这条
+//      时改后 compile=0 且打印 99（列表本没有 .get）。收窄后 compile=1
+//      原样保留。
+// 边界登记（当场实拍，两份二进制对照）：default 是 f64 时，动态侧
+// `def f(pm): return pm.get("a", 1.5)` 配 `{"a": 2.5}` 打印
+// **4612811918334230528**（2.5 的位模式），而同一形状的静态 map 路径
+// `d.get("a", 1.5)` 在改前/改后都打印 `2.500000`（逐字相同、本批没动
+// 那条臂）⇒ 病因是动态槽身上没有类型标记（#117）与返回类型两源（#33）
+// 那一族，不算本批的账；所以这里只断言 str / list default 两形。
+def pick(dd):
+    return len(dd.get("x", "fallback"))
+
+def absent(dd):
+    return len(dd.get("nope", "fallback"))
+
+def rows_or_empty(dd):
+    return len(dd.get("nums", []))
+
+def rows(dd):
+    return len(dd.get("nums2", []))
+
+d = {"x": "abcd", "nums2": [1.0, 2.0, 3.0]}
+print("A", pick(d))
+print("B", absent(d))
+print("C", rows_or_empty(d))
+print("D", rows(d))
+
+// expect: A 4
+// expect: B 8
+// expect: C 0
+// expect: D 3

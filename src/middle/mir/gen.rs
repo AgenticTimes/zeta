@@ -10444,6 +10444,45 @@ call, no NULL-handle dereference).",
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
+                // 批次 421: the 3-arg spelling `dd.get(k, default)`. The name
+                // table has no `("get", 3)` arm, so this fell all the way
+                // through to the bare extern `get` — a weak stub that aborts
+                // with "PY-A: `_get` is NOT implemented" (measured pre-fix:
+                // rc=134, empty stdout). Emit the same `map_get_default` call
+                // the statically-typed map path uses further below.
+                //
+                // The key must be statically known to be a string: `lower_map_key`
+                // only folds it through `map_str_key` (the content hash the map was
+                // built with) in that case, so an untyped key would be hashed as a
+                // raw handle — a guaranteed miss that returns the default. Measured:
+                // `def pick(dd, k): return dd.get(k, "fb")` with k="x" present
+                // printed `fb` (rc=0). A silent wrong value is worse than the abort,
+                // so untyped keys keep the previous behaviour.
+                if !struct_has_method
+                    && method == "get"
+                    && arg_ids.len() == 3
+                    && matches!(self.type_map.get(&arg_ids[1]), Some(Type::Str))
+                    && !matches!(receiver_ty.as_ref(), Some(Type::Named(n, _)) if n == "map")
+                {
+                    let key_id = self.lower_map_key(arg_ids[1]);
+                    self.stmts.push(MirStmt::Call {
+                        func: "map_get_default".to_string(),
+                        args: vec![arg_ids[0], key_id, arg_ids[2]],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    // Same re-tagging rule as the typed path (batch 291): the
+                    // default argument is the caller's evidence of the value
+                    // type; a dynamic receiver carries none of its own.
+                    let vty = match self.type_map.get(&arg_ids[2]).cloned() {
+                        Some(Type::F64) => Type::F64,
+                        Some(Type::Str) => Type::Str,
+                        _ => Type::I64,
+                    };
+                    self.type_map.insert(id, vty);
+                    return id;
+                }
                 let opaque_fallback: Option<(&str, &str)> = if receiver.is_some()
                     && !struct_has_method
                     && receiver_ty.as_ref().map_or(true, |t| {
