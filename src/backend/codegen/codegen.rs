@@ -77,6 +77,16 @@ pub struct LLVMCodegen<'ctx> {
     /// these: for C runtime symbols the signature is the ground truth, so a
     /// float/int dest-slot disagreement is not the two-source defect.
     pub zeta_fn_names: std::collections::HashSet<String>,
+    /// PY-A: distinct `[dynamic]<ty>::member` ghosts that had no definition, so
+    /// the call site was bound to a raising thunk (batch 419). Reported once per
+    /// name at the end of the compile.
+    pub dyn_member_gaps: std::collections::BTreeSet<String>,
+    /// Trailing segments of every `Class::method` this program defines, i.e. the
+    /// bare names that `resolver.rs:1023-1026` also registers as an alias. Used
+    /// to tell those aliases apart from a runtime symbol that happens to share
+    /// the member name (batch 419, see `dyn_member_is_class_alias`). Collected
+    /// from the MIR list, so it is complete before any body is emitted.
+    pub class_method_members: std::collections::BTreeSet<String>,
 }
 
 impl<'ctx> LLVMCodegen<'ctx> {
@@ -1346,6 +1356,8 @@ impl<'ctx> LLVMCodegen<'ctx> {
             abi_fatal: None,
             abi_ret_warn_count: 0,
             zeta_fn_names: std::collections::HashSet::new(),
+            dyn_member_gaps: std::collections::BTreeSet::new(),
+            class_method_members: std::collections::BTreeSet::new(),
         }
     }
 
@@ -1364,6 +1376,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                  with the caller's dest slot (docs/ABI.md §2 R7) — the value is \
                  bit-reinterpreted, not converted",
                 self.abi_ret_warn_count
+            );
+        }
+        for ghost in &self.dyn_member_gaps {
+            eprintln!(
+                "warning: PY-A: 动态接收者成员 `{}` 无定义 ⇒ 该调用点改为抛异常",
+                ghost
             );
         }
     }
@@ -1434,6 +1452,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
         // First pass: collect all functions
         for mir in mirs {
             let fn_name = mir.name.as_ref().cloned().unwrap_or("anon".to_string());
+
+            if let Some((_, member)) = fn_name.rsplit_once("::") {
+                if !member.is_empty() {
+                    self.class_method_members.insert(member.to_string());
+                }
+            }
 
             // Check if this is a generic function
             let is_generic = self.is_generic_function(mir);
@@ -2680,6 +2704,45 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 if let Some(&f) = self.fns.get(&mangled) {
                     return f;
                 }
+                // PY-A (batch 419): a `[dynamic]<ty>::member` ghost means the
+                // receiver's static type is unknown (e.g. `df["col"]` yields a
+                // vec handle). Two candidates then look up the same bare name,
+                // and only one of them is safe:
+                //  - `resolver.rs:1023-1026` registers every `Class::method` a
+                //    second time under the BARE name, so binding it runs a
+                //    struct-typed body on a vec header —
+                //    `df["display_name"].to_dict()` landed in `DataFrame::to_dict`
+                //    and SIGSEGVed (measured rc=138/139 on a 3-line repro). CPython
+                //    answers that with AttributeError, so raise instead: an
+                //    enclosing `except` takes its fallback rather than the process.
+                //  - a runtime binding is only ever *declared* here, e.g.
+                //    `chars().nth(i)` links to `_[dynamic]str__nth`
+                //    (`runtime/py_additions.c:994`) — that one must keep working
+                //    (it is `t411_parse_unwrap_chars`'s contract).
+                // PY-A (batch 419): a `[dynamic]<ty>::member` ghost means the
+                // receiver's static type is unknown (e.g. `df["col"]` yields a
+                // vec handle). Two candidates then look up the same bare name,
+                // and only one of them is safe:
+                //  - `resolver.rs:1023-1026` registers every `Class::method` a
+                //    second time under the BARE name, so binding it runs a
+                //    struct-typed body on a vec header —
+                //    `df["display_name"].to_dict()` landed in `DataFrame::to_dict`
+                //    and SIGSEGVed (measured rc=138/139 on a 3-line repro). CPython
+                //    answers that with AttributeError, so raise instead: an
+                //    enclosing `except` takes its fallback rather than the process.
+                //  - a runtime binding is only ever *declared* here, e.g.
+                //    `chars().nth(i)` links to `_[dynamic]str__nth`
+                //    (`runtime/py_additions.c:994`) — that one must keep working
+                //    (it is `t411_parse_unwrap_chars`'s contract).
+                // The discriminator is which of the two the bare name belongs to,
+                // asked of the MIR rather than of the module: at this point the
+                // alias may still be a body-less declaration (`count_basic_blocks`
+                // measured 0 on the crash), so only the program's own function
+                // names separate the two without depending on emission order.
+                if name.starts_with("[dynamic]") && self.dyn_member_is_class_alias(name) {
+                    self.dyn_member_gaps.insert(name.to_string());
+                    return self.dyn_member_missing_thunk(args_count);
+                }
                 // Also try the method name directly (Self::new → new)
                 // with param count validation and suffix search.
                 if let Some(method) = name.split("::").last() {
@@ -2894,6 +2957,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
             } else {
                 self.mangle_function_name(bare_method, type_args)
             };
+            // PY-A (batch 419): the same guard as the bare arm in the
+            // `type_args.is_empty()` pass — a `[dynamic]` ghost must not bind a
+            // class method's bare alias. This pass is reached when the call site
+            // carries type arguments, where that first arm is skipped entirely.
+            if name.starts_with("[dynamic]") && self.dyn_member_is_class_alias(name) {
+                self.dyn_member_gaps.insert(name.to_string());
+                return self.dyn_member_missing_thunk(args_count);
+            }
             if let Some(f) = self.module.get_function(&bare_actual) {
                 // Only return the bare function if its param count matches the call site.
                 // Otherwise qualify the name to avoid collisions between different
@@ -2957,6 +3028,65 @@ impl<'ctx> LLVMCodegen<'ctx> {
         let fn_type = self.i64_type.fn_type(&param_types, false);
         self.module
             .add_function(&actual_name, fn_type, Some(Linkage::External))
+    }
+
+    /// PY-A (batch 419): does the trailing member of a `[dynamic]<ty>::member`
+    /// ghost name a class method this program defines? `resolver.rs:1023-1026`
+    /// registers every `Class::method` under its bare name as well, so the bare
+    /// symbol a ghost would fall back to is a struct-typed body whose first
+    /// parameter is read as `self` — which a dynamic receiver (a `df["col"]` vec
+    /// handle, a scalar) is not.
+    ///
+    /// Asked of the MIR list, not of the module: at this point in the compile the
+    /// alias may still be a body-less declaration (measured
+    /// `count_basic_blocks() == 0` on the `to_dict` crash), so "has a body" would
+    /// depend on emission order — and a runtime binding such as
+    /// `_[dynamic]str__nth` (`runtime/py_additions.c:994`) has no MIR at all,
+    /// which is the case that must keep falling through to the extern declare.
+    fn dyn_member_is_class_alias(&self, name: &str) -> bool {
+        match name.rsplit_once("::") {
+            Some((_, member)) => self.class_method_members.contains(member),
+            None => false,
+        }
+    }
+
+    /// PY-A (batch 419): the raising thunk a `[dynamic]<ty>::member` ghost binds
+    /// to. One thunk per call-site arity (`zeta_dyn_member_missing_<N>`), because
+    /// the thunk is called with the receiver plus the member's arguments.
+    fn dyn_member_missing_thunk(&mut self, args_count: usize) -> FunctionValue<'ctx> {
+        let name = format!("zeta_dyn_member_missing_{}", args_count);
+        let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect();
+        let fn_type = self.i64_type.fn_type(&param_types, false);
+        if let Some(f) = self.module.get_function(&name) {
+            return f;
+        }
+        let raise = match self.module.get_function("zeta_raise") {
+            Some(f) => f,
+            None => self.module.add_function(
+                "zeta_raise",
+                self.i64_type.fn_type(&[self.i64_type.into()], false),
+                Some(Linkage::External),
+            ),
+        };
+        let thunk = self.module.add_function(&name, fn_type, None);
+        let saved_block = self.builder.get_insert_block();
+
+        let entry = self.context.append_basic_block(thunk, "entry");
+        self.builder.position_at_end(entry);
+        // Exception code 1: `zeta_raise` longjmps to the innermost try frame and
+        // never returns, so the following `ret` is only there for the verifier.
+        let one = self.i64_type.const_int(1, false);
+        self.builder
+            .build_call(raise, &[one.into()], "dyn_raise")
+            .unwrap();
+        self.builder
+            .build_return(Some(&self.i64_type.const_zero()))
+            .unwrap();
+
+        if let Some(b) = saved_block {
+            self.builder.position_at_end(b);
+        }
+        thunk
     }
 
     /// Return the byte size of a type from its monomorphized name suffix.

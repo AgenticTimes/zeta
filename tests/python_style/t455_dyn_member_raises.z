@@ -1,0 +1,28 @@
+// 批次 419：动态接收者上的未知成员不得绑到同名类方法。
+// `df["col"]` 的下标结果是 vec 句柄，它的成员在编译期只有幽灵名
+// `[dynamic]str::to_dict`；改前 codegen 的裸成员名回退把它绑到
+// `DataFrame::to_dict`，在 vec 头上按 map 读 ⇒ 进程直接没掉。
+// 改前实拍（同一份用例体，改前的 target/release/zetac）：
+//   compile=0 · run=138 (SIGBUS) · stdout 为空
+// 现在的合同：该调用点抛异常，外层 `except Exception` 接得住。
+import pandas as pd
+
+df = pd.DataFrame({"display_name": ["ETF-1"], "code": ["510300.XSHG"]})
+try:
+    m = df["display_name"].to_dict()
+    print("A no-raise")
+except Exception as e:
+    print("A caught")
+
+xs = [1, 2]
+try:
+    q = xs.to_dict()
+    print("B no-raise")
+except Exception as e:
+    print("B caught")
+
+print("C ok")
+
+// expect: A caught
+// expect: B caught
+// expect: C ok
