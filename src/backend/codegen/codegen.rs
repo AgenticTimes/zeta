@@ -6695,9 +6695,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         // scanned to idx 3 and idx 2, both clamped to 0, and the
                         // program died with rc=139 before printing anything).
                         // 28 such clamps are live in the corpus (`portfolio`,
-                        // `trading_dates`, `avg_cost`, `paused`, …); 17 of them
-                        // name exactly one layout, the other 11 name two
-                        // classes that disagree and keep the old behaviour.
+                        // `trading_dates`, `avg_cost`, `paused`, …); 17 name one
+                        // layout. The other 11 return None, which is itself
+                        // structural: >=2 structs declare the name and disagree.
                         None => self
                             .resolve_struct_layout_by_field(field)
                             .unwrap_or((String::new(), 2)),
