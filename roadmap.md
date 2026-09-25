@@ -18686,7 +18686,105 @@ A、B 两段共用同一个 `0x4d0c` ⇒ **一行点名、两次抛掷、两行 
 6. **`worktree.md` 双写**：本批中途发现工作副本里 §1 被整体重排、**423 的台账行被删**、并在 §4 表格后补了个 `## 5. Agent-2 旁路台账` 标题（那一条是对 HEAD 里一张无名表格的合法修复，保留）。台账行按 `git checkout HEAD -- worktree.md` 复原后再合并；并发编辑这件事本身入册。
 7. **BSD `awk` 不认 `exit !found`**（上一轮的对照脚本因此静默通过）；`${PIPESTATUS[0]}` 在 zsh 里是空的（`$pipestatus`），rc 一律先重定向落盘再读。
 
+## 批次 425（3.2 Lowering／`("", 2)` 兜底 + 索引夹回 0）：读侧不再掷硬币 —— 按**字段名**反查 struct 布局；语料夹回 28→11、PY-A 点名 38→2（晨间链路第二次真位移）
+
+代码提交两笔。`7dcae28f`（4 文件 **+151/−49**：`src/backend/codegen/codegen.rs` **+55/−1**、新用例 `tests/python_style/t462_field_name_layout_recovery.z` 48 行、`docs/ABI.md` 24 行、`tools/baselines/abi_anchors.tsv` 24 行）+ `0d5b52e0`（同一注释的措辞**等行**改 3/3 ⇒ `md5 target/release/zetac` 逐字节不变 `d33dc1ece06bcacd75b919f87e9e8837`，门禁与 A/B 读数仍对应入库源码）。记录批随后。已推送 `agentic/bootstrap`（`git rev-list --count agentic/bootstrap..HEAD` = 0）。
+
+### 一、这一格在链上的位置（＝424 §八.1 交出来的头名）
+
+424 把四跳链追到跳 3/4：接收者的**声明类型**路线拿不到布局 ⇒ 退成 `("", 2)`（加载宽度写死 2 个 word），而索引来自 `resolve_struct_field_index`（`codegen.rs:5872`）的**全量 `struct_defs` 扫描**，命中的是别的类别的声明序 ⇒ `:6754-6757` 的区间检查把 `field_index >= field_count` 夹回 `field.parse::<u32>().unwrap_or(0)` ＝ **0** ⇒ 读到接收者自己的第 0 个字段，下一跳把那个整数当句柄解引用。424 §八.1 给了两个方向：(a) 缺证据时**出声**；(b) 真修＝按名字补 variant 判据。**本批做 (b)，(a) 没做**（残留见 §六.3）。
+
+### 二、改动（一个新函数 + `None` 分支多问一次）
+
+`resolve_struct_layout_by_field`（`codegen.rs:5918`）在 declared-type 路线返回 `None` 时按**字段名**扫一遍 `struct_defs`；采纳条件＝所有声明这个字段名的类别在 **(variant, 宽度, 索引)** 三元组上完全一致。调用点 `codegen.rs:6701-6704`（`None => self.resolve_struct_layout_by_field(field).unwrap_or((String::new(), 2))`）。
+
+三条边界：
+
+1. **判据为什么正当**：三元组一致 ⇒ 无论那个句柄实际是哪个对象，读的**是同一个 word**；一旦分歧就返回 `None`、退回旧兜底 —— 宁可不猜。
+2. **不引入新的掷硬币**：`struct_defs` 是 `BTreeMap`（418 改的，`:66`）、键恒为 `struct_{variant}_{fds.len()}`（收集点 `:1435-1450`）⇒ 迭代序确定、键宽恒等于字段名表长；本批判据的输入没有哈希序参与。
+3. **不动已有绑定**：新判据只排在 declared-type 路线**落空**之后（`match … { Some(vc) => vc, None => … }`），该路线命中时新代码一行都不跑。同一条 declared-type 路线里"多个候选取宽度最大者"（`:6679`）是另一处掷硬币，**本批未碰**（已入队，§七.2）。
+
+### 三、夹具定价：`t462` 两跑同值、与 CPython 逐字相同，改前 0 行 stdout
+
+形状＝语料那一形压小：`go(show, k)` 把 `Ctx` 交进 `show(t)`，`t` 没有注解 ⇒ 形参恒 dyn；`show` 体里 `print("gamma", t.leaf.gamma)` 是**两跳都夹回**的现场。当场复测（`target/release/` 同目录，两侧只差本批的 `codegen.rs`；留盘 `/tmp/b425/t462_zetac_{pre,post}425_{1,2}.{out,err}`）：
+
+| 二进制 | compile | run | stdout |
+|---|---|---|---|
+| `zetac_pre425` | 0 | **139** | **0 行**（两跑都是 0 行，stderr 也 0 行） |
+| `zetac_post425` | 0 | 0 | 三行 `gamma 300 / x 11 / done`，两跑 `cmp` 逐字节相同 |
+| 门禁重建后的 `zetac`（`md5 d33dc1ec…`） | 0 | 0 | 同三行（`/tmp/b425/t462_gate.out`） |
+| `python3`（同形状的注释剥离版） | — | 0 | 与改后 stdout `diff` 零差异（`/tmp/b425/t462_ref.out`） |
+
+`ZETA_DBG_FA=1` 的原图（最小复现 `/tmp/b425/f1.z`，`f1.clog` vs `f1_post.clog`）：改前两跳都在 —— `field=leaf variant="" field_count=2 base_ty=Some(PyDynamic)` + `idx 3 >= count 2 -> fallback 0`，随后 `field=gamma … idx 2 >= count 2 -> fallback 0`；改后 `field=leaf variant="Ctx" field_count=4 … final idx=3`、`field=gamma variant="Leaf" field_count=3 … final idx=2`。夹具里 `print("x", t.x)` 是**对照行**：索引本来就是 0，改前改后都必须读对 ⇒ 证明句柄确实是那个对象，错的只是被夹回的索引。
+
+### 四、语料定价：夹回 28→11，收回的 17 处各自落到了哪个布局
+
+`ZETA_DBG_FA=1` 编 acceptance 驱动（529 条 FieldAccess 读，两侧同数）：
+
+| 字段名 | 改前夹回 | 改后夹回 | 改后该名字用的布局 |
+|---|---|---|---|
+| `portfolio` | 8 | 0 | `_LocalContext` count=3 |
+| `avg_cost` | 5 | 0 | `Position` count=4 |
+| `context` | 2 | 0 | `NautilusBackend` count=11 |
+| `closeable_amount` | 2 | 0 | `Position` count=4 |
+| `paused` | 3 | 3 | 仍 `""` count=2 |
+| `trading_dates` | 2 | 2 | 仍 `""` count=2 |
+| `routines` | 2 | 2 | 仍 `""` count=2 |
+| `low_limit` | 2 | 2 | 仍 `""` count=2 |
+| `bar_types` | 2 | 2 | 仍 `""` count=2 |
+
+合计 **28 → 11**（`grep -c fallback` 在 `dbg_corpus_zetac_{pre,post}425.fa.txt` 上实测）。收回的 17 处＝8+5+2+2，每处都命中了**唯一的**声明者（表中"改后布局"那一列就是它反查到的 variant）；残 11 处的"两类别分歧"是**结构可证的**：`resolve_struct_layout_by_field` 返回 `None` 的唯一路径是"第二个声明者与前一个不一致" ⇒ 至少两个类别声明同名且不一致（语料侧抽样：`low_limit` 在 `wufu_backend.py:28` 与 `jq_shim.py:95` 两个 dataclass 各声明一次；`trading_dates` 在 `nautilus_backend.py:41`/`wufu_nautilus.py:67`/`wufu_backtrader.py:91` 三处；`bar_types`、`routines` 在 `nautilus_backend.py` 与 `scripts/poc_nautilus_rotation.py` 两形）。**未证的一格**：这 11 处各自的分歧对具体是哪两个 variant —— 判据只报"不一致"，没打印是谁（要做 §六.3 的"出声"才会带出来）。
+
+### 五、主线位移（有正证据，四个读数都换过）
+
+A/B（`/tmp/b425/ab25.sh`，`cwd=REasyQuant`、`REPLAYQUANT_LOCAL=1`、驱动 `_drv_accept_409.py`，两侧各 4 跑，留盘 `ab25_zetac_{pre,post}425_{1..4}`）：
+
+| 读数 | 改前 | 改后 |
+|---|---|---|
+| PY-A 点名 | **38**（`py_map_items` 37 + `map_get` 1） | **2**（`py_map_items` 1 + `map_get` 1） |
+| stderr 行数 | 357（完成的 3 跑）／120（崩溃那跑） | **321 ×4/4 跑** |
+| 段错误 | **1/4 跑**（run3 `Segmentation fault: 11`，0 行 stdout） | **0/4 跑** |
+| stdout | 1 行、地址样整数（4358269120 等） | 1 行、地址样整数（4320225024 等） |
+| `[PARITY] target=- \| holdings=- \| ranked=-` | 74 | **74（未动）** |
+| `回测完成: 1000000 -> 0 (-100.00%)` | 是 | **是（未动）** |
+
+这是 423 之后晨间链路的**第二次有实质位移**。归因是 A/B 给的：两侧二进制只差本批这一处，`py_map_items` 点名 37→1、段错误 1/4→0/4。**仍未证的一格**：424 §六.2 那个"28 处夹回里哪一处 emit 了这 37 次点名"的逐点映射 —— 本批只拿到总量级的对应（消掉的 17 处夹回 ↔ 少掉的 36 条点名），逐点仍要点名句带上用户函数名才能对上（423 §八.2 的前置工作，未做）。机制说法保留到读数级：接收者类型未知时读回自己的第 0 个字段（一个整数），它被当哈希表句柄送进 `py_map_items`，423 的守卫就点名。
+
+### 六、没有修掉什么（本批的残留，逐条点名）
+
+1. **0 笔成交未闭**（2026-09-24 裁定的主线第 1 步）：`[PARITY] target=- | holdings=- | ranked=-` 74 条一字未变、`1000000 -> 0 (-100.00%)` 未变 ⇒ 症状还在。
+2. **stdout 仍是一个地址样整数**（两侧都是）＝#117/#145 打印族，与本批判据无关。
+3. **`base_ty=Some(I64)` 那一形没有被禁止**：改后第二跳仍是 `field=gamma … base_ty=Some(I64)` —— 类型层仍允许"从整数身上读字段"，本批只保证读到的 word 是对的。424 §八.1 的 (a)「缺证据时出声」仍未做，所以残 11 处继续**静默**读错字段（这正是 §七.2 的入队理由）。
+4. **残 11 处的上游根因不是本批的判据**：接收者类型之所以未知＝424 §八.2（回调/`FuncAddr` 注册的例程永远拿不到调用点证据：55 个宿主 / 106 个被取地址目标 / 103 个从不出现在调用点的 `func:` 里）。
+5. `map_get` 那条点名仍在（首字 `7291950344491445812` ＝ packed ASCII）＝#145 的账，未动。
+
+### 七、头名换格（正向队列）
+
+1. **头名＝回调／函数值实参的参数证据**（424 §八.2 原文，census 现成：628 条目／625 个不同调用目标名／55 宿主发 `FuncAddr`／106 个被取地址目标／103 个从不出现在调用点，其中 97 个 `__closure_N_*` ＋ 6 个具名日程例程）。判据要新立：从注册点（`run_daily(<fn>, time=…)`）的实参反推被注册函数的形参类型。这一格修好会同时消掉本批残 11 处的"未知接收者"。
+2. **第 2 格＝declared-type 路线"多候选取宽度最大者"**（`codegen.rs:6679`）：与本批同族的另一处掷硬币，语料成员数**未定价** ⇒ 先出定价批（尺子＝同一份 `ZETA_DBG_FA` 日志里 `variant!="" && 候选>1` 的读点），再动判据。
+3. **第 3 格起照旧**：`str_trim + 24` 读 `0x3532`（#145 生产者，真修要动 `runtime/py_additions.c` ⇒ **等授权**）、#134 `GroupBy.__len__` 恒 0、#117 动态键 `.get(k, default)`、#142、`rows` 跨跑抖、#9 别名序。等授权项一条未变：`runtime/py_additions.c`（#112/#145）、#42 JIT 运行时绑定、`benchmarks.yml`／任务 #29/#74、423 守卫上界 `1<<30` 与 `docs/ABI.md` 附 A #7 的 `2^28` 不一致。
+
+### 八、门禁与读数（`/tmp/b425/gate.txt` 148 行 + `gate.rc`）
+
+- **`GATE_RC=1`**，唯一红源仍是 `run_all.sh:605` 的存量 `py_fail=2`（`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）。
+- python_style **344/2/6/0**，与 `ls tests/python_style/t*.z` 数到 **352** 逐字对上（对 424 净增 1＝t462，**零回归**）；known-fail 6 未动。
+- official **194/194 compile**（191/194 link，3 条 link-only 同 422/423/424 逐字未动）；语料 **40/40**；jit **ok=176 / trap=373 / total=549 / segv=0**（+1 total＝新用例进 sweep，ok 未回退）；diff **120/130 92.3% bad_case=0**；comment_drift 0；emit_stable 2 夹具/违规 0；knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 / mbvar 22 全 0 违规；clean_checkout rc=0 rev=`6f780352`（＝门禁起跑时的 HEAD，两笔代码提交在其后）。
+- 诊断面 official 2 文件/5 行、python_style **231 行/108 文件 ＝ 与 422/423/424 逐字相同**。
+- **ABI**：`--rebind` 跑了两趟（首趟改写 `docs/ABI.md` **23 行/42 个数**，随后一次注释措辞改动又抬出漂移 ⇒ 末趟 **16 行/33 个数**才回常驻读数）；**1 条被拒改后手工成对搬**（`codegen.rs:6647` 的引用文本被就地改写 ⇒ 无唯一配对，`--rebind` 按设计不收；文档 M4 行与 tsv 第 133 行同时改成 `6701`，再用 `--bless-only` 点名刷新）。终态 **漂移 28 / 新 11 / 消失 10 / 定位失败 0，rc=1**，且 `comm -13` 对"改前 HEAD 的漂移清单"与"本批终态漂移清单"**空差集** ⇒ 本批没留下新的漂移（隔离 worktree 自基线那份是 28/11/**12** rc=2，差的 2 条＝生成文件 `runtime/aliases.inc.c` 不在裸检出里，非回归）。ABI.md 仍 **1032 行**。
+- disclosure：门禁首行**没有** W2003（`tokio_runtime.o` 不比 `.c` 新）；`md5 target/release/zetac` ＝ `d33dc1ec…`，与末趟注释改动后重建的逐字节相同 ⇒ 三套基线链的就是入库源码那颗编译器。
+
+### 九、工具坑与自我核对（本批当场抓到）
+
+1. **改注释会二次搅动锚点**：先 `--rebind`、后又改两行注释 ⇒ 漂移 28→46，重新 rebind 才回 28。与既有记忆"收尾再核对"同型，只是这次插步的是自己 —— 顺序应是**最后一次源码改动之后**才跑 rebind。等行（行数不变）的注释改动可免 rebind，前提是被引行本身没动（`0d5b52e0` 实测：行号不变、`md5` 不变）。
+2. **推翻自己注释里的印象**：原写"残 11 处分歧来自两个类别"，那是语料 grep 的印象、不是判据能证的量 ⇒ 单独一笔把措辞换成结构下界（`None` ⇒ ≥2 声明且分歧），并注明"具体哪两个 variant 未证"。**印象级数字不进注释。**
+3. **丢掉改前编译器**：A/B 之前先把 `zetac` 直接编覆盖了 ⇒ 只能用 `git show HEAD:src/…` 回填重编来重建 pre 侧（回填前先把改后文件与二进制各存一份，复原后 `md5` 能逐字节复现改后那颗 ⇒ 工作树未被污染）。**教训：A/B 之前先 cp 一颗改名。**
+4. **zsh 两处**：`"$b_$i"` 被当参数名展开（`(eval):5: b_: parameter not set`）⇒ 先组 `tag="${b}_${i}"`；`grep --include=*.py` 未加引号被 glob 吞（`no matches found`）⇒ 用 Grep 工具或加引号。
+5. **`echo "rc=$?"` 放在管道尾＝给 `tail`/`wc` 记状态**：本批一次核对因此报了假的 `rc=0`，核对器真值 1 来自"先重定向落盘再读"的那次（沿用既有坑 6）。
+6. **`wc -l` 数不出"字段名分布"**：`awk '{match($0,/field=[a-z_]+/)}'` 对带 `__`/大写的名字切出空串 ⇒ 28 条挤成一组假数；改成逐字段 `for(i=1;i<=NF;i++) if ($i ~ /^field=/)` 才拿到 9 个名字的分布。**分组计数恰好等于总数时，先怀疑分类键没提出来。**
+7. **记录批自己造成的三处文档机制损伤（都当场抓回、并留了正证据）**：① 用 Edit 往 `roadmap.md` 尾部插节时，`old_string` 取了 `## 优先级调整（2026-09-24，用户裁定）` 这一行 ⇒ 替换后**标题没了、正文还在**（那是用户裁定，必须在最后且带题）；靠"最后一个 `## ` 标题是谁"这条断言抓回并复原，终态 `git diff --stat roadmap.md` ＝ **97 insertions / 0 deletions**（正文一字未损的证据）。② `worktree.md` §4 台账行的 `old_string` 尾带了一行 `## 5. Agent-2 旁路台账…` ⇒ 同样把别人的节标题吞了；复原后 `git diff worktree.md` 里 `旁路台账` 零命中＝净零改动。③ 表格里 `[PARITY] target=- \| holdings=…` 的转义竖线在写入时丢了反斜杠 ⇒ 行内分隔数从 6 变 8（与表头不符）。**教训：表格行的验收判据是"分隔符数＝表头分隔符数"，用 `python3` 数（`awk` 的 `/\|/` 在本机 BSD awk 上直接语法错，坑 4 的同类）。**
+
 ## 优先级调整（2026-09-24，用户裁定）
+
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
 
