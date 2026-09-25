@@ -18102,6 +18102,79 @@ OPEN 净增 0：417 折进 backlog `#7` mega 行与本节。#141 结案（判据
 3. **#142**：类构造器过 `func_ret_types − global_consts` 判据 ⇒ 被当函数发 `FuncAddr`（本批落地的两处已带 `!type_decls` 守卫，套件外那处 `gen.rs:3987` 同判据的读点未守卫、未定价）。
 4. `codes` 唯一标的数跨跑抖（107/156/232）、`load_metadata failed … parquet` 告警、`fns[0]("x")` ⇒ `_call` NOT implemented —— 均已登记未定价。
 
+## 批次 418（主线 301 头名候选）：发射阶段跟着两处集合序掷硬币 —— alloca 序排序、struct 定义表改有序
+
+代码批 `0f5bec05`（7 文件 +291/−161，其中 `src/backend/codegen/codegen.rs` 净 +11/−3）。
+
+### 一、入口判据（417 §七 候选 1 逐字）与命中
+
+> 判据：先固定发射阶段的迭代序（Rust 侧 `HashMap` 默认 `RandomState` 每进程重掷 ⇒ 可用 `--emit-llvm` 两次是否字节相同来判定命中/未命中），再看 `0 0` 是否消失。
+
+判定器照这条跑，命中：提交前（父提交编译器）同一份未改动源码 `--emit-llvm -o` 两连编给出两份字节不同的 IR，`.o` 三连编给出三个不同尺寸。提交后同判定器：4 连编一份字节、`.o` 3 连编一份字节。"再看 `0 0` 是否消失"这半**未达成**（§五）。
+
+### 二、两处迭代序落地表
+
+| 源 | 结构事实 | 症状 | 落地 |
+|---|---|---|---|
+| A 函数序言 | `collect_all_local_ids` 返回 `HashSet<u32>`（codegen.rs:1731），唯一调用点 :1601 直接迭代，循环体每个 id 发一条 `alloca` | 整函数寄存器编号随进程翻；结构体无关（`s2.z` 无 struct 也翻） | :1601 收进 `Vec` 后 `sort_unstable()`（:1606） |
+| B struct 定义表 | `struct_defs`（:66）是 `HashMap<String, Vec<String>>`，四处按名字/值扫描取第一或平票命中：:5505 `values().find_map`（`StructFieldStore`）、:5717 `resolve_struct_field_index` 的 `iter()`、:6460 候选名匹配 + `total > b.1` 平票、:6503 debug `keys()` | 换中的 struct 不同 ⇒ `field_slot` 立即数不同（`add i64 %790, 56` vs `24`）＝换的是机器码，不只是编号 | :66 改 `BTreeMap`，:1342 初始化同步 |
+
+`MirStmt::StructFieldStore{base_id, field, val_id}` 不带变体 ⇒ 今天这套按名字的全局扫描是**结构性必需**；变体感知的 `resolve_struct_field_index_for_variant`（:5731）只在 variant 非空时被调（:6533，否则 :6535）。
+
+### 三、决定性对照表（同源码 × 同编译器 n 连编）
+
+| 变体 | 编译器 | 输入 | 连编 | sha256 / 尺寸读数 |
+|---|---|---|---|---|
+| 提交前（父提交） | `552e335ccd7c97ffa3e4dc148e29e0c3` | 验收驱动 | 2 | `173595a6…`(4385832) / `b03a1f93…`(4386221)，只差 12 行编号 |
+| 提交前 | 同上 | 验收 `.o` | 3 | 756328 / 756296 / 756336 ＝**3 种** |
+| 只落源 A（B 退回 HashMap） | — | 验收驱动 | 3 | `94b5e52b…` / `fb948f9a…` / `bc514f83…` ＝**3 种** ⇒ 源 B 独立必要 |
+| A+B（＝已提交） | `6d3c4325a37993289d655d4ff9eda568` | 验收驱动 | 4 | 全部 `fb948f9a…` ＝ 1 种 |
+| A+B | 同上 | 验收 `.o` | 3 | 756384 ×3、md5 `69676bf85732e319acc9879ed50a69a7` |
+| 夹具 ×2 | 同上 | `tests/determinism/*.z` | 3 | 改前各 3 种字节 / 改后各 1 种（门禁第 16 步违规 0） |
+
+注：只落源 A 的三签里有一签与钉死后的字节相同 ⇒ 翻动换的是"扫表选中哪个 struct"，不是"输出坏掉"；这正是 `field_slot` 偏移级差异的形态。
+
+### 四、归因边界与口径披露（四条，前两条会改变结论强度）
+
+1. **两个夹具证明的是源 A，不是源 B**。把 `BTreeMap` 退回 `HashMap`、只留排序后重跑 `tools/emit_stable.sh`：**两个夹具全过、rc=0**（实拍 16:32）——`shared_field_names.z` 的 `a.kind = b.name` 在 variant 非空时走变体感知解析器（:6533），根本没进按名字的全局扫描。源 B 的必要性只落在 §三 第 3/4 行那组驱动语料对照上。⇒ 已改 `tools/emit_stable.sh` 文件头（它原先声称第二个夹具盯住名字扫描那条），并登记待补夹具（§七 候选 3）。
+2. **跨窗口 IR 体积异常未解释**：16:11–16:13 窗口 4414539 字节 / `@str_lit` 10912 行，16:30 窗口 4384395 / 10738，两次都是"已修"编译器。已排除的一条：函数签名集合逐字相同（628 vs 628，`comm` 双向 0 差）⇒ 差异只在字符串常量。未测的成因假设：pylib 库面在场与否（第 3 条实拍过换目录会换库面）。⇒ 本批确定性结论**一律只用同窗口对照**，不引用绝对体积。
+3. **假链接失败的来源**：把父提交编译器拷到 `/tmp/b418/` 后，`pylib` 是顺着 zetac 自身路径往上找的 ⇒ 丢 `pandas`/`numpy` 面（W1006 出声），表现为 `_zeta_vec_unique`/`_zip` 未定义 + 717 KB `.o`。正确做法是把对照二进制放回同目录（`target/release/zetac_pre418`）再测。此坑已写进 `tools/emit_stable.sh` 头与 run_all.sh 第 16 步注释。
+4. **更正一条本批小结里的错报**：我先前报"ABI 核对 32/11/3 **rc=0**"。实读 **rc=2**，计数 32/11/3 不变。rc=2 由两个"定位失败"项造成：`docs/ABI.md:277` → `runtime/py_additions.c:2650`、`docs/ABI.md:438` → `codegen.rs:2664`，两处都是**裸行号**引用（任务 #52 的盲区），核对器 `normalize` 后判定"该行内容为空"（`tools/check_abi_anchors.py:293`，追加进 `problems` ⇒ 返回 `2 if problems`，:700/:705）。两项在本批之前即存在：`runtime/py_additions.c` 不在本批 7 个文件内（内容未变、行仍为空），`codegen.rs:2664` 在父提交处是一行注释（`// Vec as a map and SEGFAULTED.`）⇒ 同样 normalize 为空。
+
+### 五、可归因位移（对主线 301）
+
+- **崩点变成可 A/B**：改动版 5/5 在 134 行后 rc=139，末行都是 `[晨间] 计算流动性阈值`。417 的"两态翻转"不再是观测障碍——这是本批存在的理由，也是 419 头名候选的前置。
+- **三格读数钉死**：`codes=0` / `trading_days=0` / `佣金万0 滑点0.00% 保守模式=false`。这是钉在 417 HEAD 四掷的**多数支**（`107/136 + true` 1/4、`0 0 + false` 3/4）⇒ 修复没有把读数换坏，只是停止掷硬币；判据"再看 `0 0` 是否消失"这半未达成，`codes=0` 仍归第 1 步（413 已定上游）。
+- **未收的一格**：`rows` 在**同一份二进制**上跨跑抖（5 跑 4 值：12855 / 12858 / 12858 / 12856 / 12854）⇒ 不在 codegen，在运行期/库面侧；它是"选股数量不一致"目前最近的一格。同一行还挂着 `开始回测: 4330216440 ~ 4330216451（37 交易日）` 这种量级异常读数（未定价）。
+
+### 六、门禁与锚点表
+
+| 项 | 读数 |
+|---|---|
+| `bash tools/run_all.sh` 16 步 | **gate rc=1**（`/tmp/b418/gate418.log`）；唯一红源＝常驻 `run_all.sh:605 py_fail != 0`（`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`） |
+| 第 16 步 `emit_stable`（本批新增） | 2 夹具 / 违规 0 / rc=0；`--skip-emit-stable` 与 JSON 键 `emit_stable` 就位 |
+| official | compile 194/194（判据），compile+link 191/194，link-only 3 条已登记 |
+| python_style | 336 passed / 2 failed / 6 known-fail / 0 xpass |
+| diff | match 120 / judged 130 = 92.3% / bad_case 0 |
+| jit sweep | ok 176 / segv 0 / total 541（基线 163） |
+| clean_checkout | rc=0（2s，rev=`738618b8`） |
+| knob / swallow / import / empty_stmt / pysrc / cli_semantics / ignore_rules | 23·6·22·68·42·73·19 条断言，FAIL 全 0 |
+| comment_drift（第 15 步） | restated 0 / rc=0 |
+| ABI 核对（门禁外，手动） | 漂移 32 / 新 11 / 消失 3（基线 250），**rc=2** ⇒ §四 第 4 条 |
+| `--rebind` | `docs/ABI.md` 77/77 行 ×2、`tools/baselines/abi_anchors.tsv` 80/80 ×2；第二次专为一处裸 `:7039` 改写成 `codegen.rs:7047`（还掉 #52 一格） |
+| 构建 | `cargo build --release` 17.73s；恢复提交态后编译器 md5 复现为 `6d3c4325…`、emit_stable 复跑 rc=0 |
+
+OPEN 净增 0：#143 结案（定位 + 落地 + 门禁化），新增登记折进 backlog `#7` mega 行（夹具覆盖面缺口、名字扫描选错 struct、`rows` 跨跑抖）。
+
+### 七、下一批候选（按已实测损害量）
+
+1. **419＝晨间例程体崩点 A/B**（头名）：前置已具备——出码钉死 + 崩点 5/5（134 行后 rc=139）。损害量：它挡在 主线 301 第 3 步"0 笔成交 / final_value"的正前方。
+2. **`rows` 同二进制跨跑抖**（12854–12858，5 跑 4 值）：运行期/库面侧，非 codegen；是"选股数量不一致"最近的一格。判据：同二进制 n 跑取值分布，再定位是不是 `load_metadata`/parquet 扫描侧的集合序或缓存。
+3. **名字→字段全局扫描会选错 struct**（:5505 / :5717 / :6460）：`BTreeMap` 让它稳定、不让它正确；`src/main.rs:60-70`（BATCH-295）记着同一条路径的错配 SIGSEGV 前科。先补一条真打进 `:6535`（variant 为空）的夹具，再谈修法。
+4. **#142**：类构造器过 `func_ret_types − global_consts` 判据 ⇒ 被当函数发 `FuncAddr`（套件外那处 `gen.rs:3987` 读点未守卫、未定价）。
+5. **#134**：`GroupBy.__len__` 恒读 0（迭代正确、len 为空）。
+6. **#52 实测账**：裸行号引用现有两处在核对器里表现为 rc=2 的"定位失败"（§四 第 4 条），点名修一次是分钟级动作。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。

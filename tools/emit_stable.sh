@@ -5,8 +5,10 @@
 #   1. tests/determinism/ 下每个夹具必须存在且非空——glob 落空不等于通过。
 #   2. 每个夹具用同一个 zetac 连编 EMIT_STABLE_RUNS 次（默认 3），
 #      `--emit-llvm` 的 IR 必须逐字节相同；出现第 2 种字节即 FAIL。
-# 两处被测的迭代序各由一个夹具盯住：fn_body_slots.z 盯函数序言里"每个局部槽一个
-# alloca"的发射序，shared_field_names.z 盯按名字扫 struct 定义表得到的字段偏移。
+# 两处迭代序各有夹具盯一处，但覆盖面不等：fn_body_slots.z 盯函数序言里"每个局部槽
+# 一个 alloca"的发射序（源 A）；shared_field_names.z 盯 field_slot 偏移，但它走的仍是
+# 变体感知解析器（codegen.rs:6533），按名字的全局扫描（:6535，variant 为空时）无夹具——
+# 批次 418 实测：只把源 A 落地、源 B 退回 HashMap，两个夹具照样全过。
 # 必须在 $ROOT 下跑：pylib 库面是顺着 zetac 自身路径往上找的，换目录编译等于换输入
 # （批次 418 实拍：把编译器拷去 /tmp 后连 `pandas` 都解析不到，虚报成"链接缺符号"）。
 set -euo pipefail
