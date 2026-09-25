@@ -18432,6 +18432,87 @@ IR 函数净增 14 个 `map_get` 调用点 —— +14 是 **IR 调用点**计数
 
 **读数可复现性两条 disclosure**：① 门禁首行喊 `[W2003] runtime/tokio_runtime_stub.c 比 tokio_runtime.o 新`，工作树里 `tokio_runtime.o` 是 ` M`（不是本批产物、未暂存）⇒ 本次 official/语料/jit 栏链接的是**改前那个运行期目标文件**，与 419/420 的读数同条件可比，但不是 HEAD 的运行期。② 注释订正（"4 个站点"→"2 live + 2 dead"）后重跑 `cargo build --release`，`target/release/zetac` md5 与门禁所用二进制**逐字节相同**（`b5f1abc6d0c9c983a5d3dea9fc8cdab0`）⇒ 上表读数对应的就是 `1bea38b9` 这笔源码。
 
+## 批次 422（2.3 可观测性／PY-A 幽灵名族）：动态成员桩改为逐名点名 —— 拿到 6 个桩点的真身份，该族对主线 301 **位移 0（有正证据）**，419/420 的"头名＝`copy`×4"作废
+
+代码提交一笔 `8c5b9f79`（6 文件 **+192/−85**：`runtime/unavailable_stubs.c` +27 / `src/backend/codegen/codegen.rs` +58−16 / 新用例 `t459_dyn_ghost_raises_every_call.z` 48 行 / `tokio_runtime.o` 重建 161,860→162,772 B / `docs/ABI.md` 与基线 tsv 各 36 行重绑）。记录批随后。
+
+### 一、这批买的到底是什么（改前答不出、改后当场能答的问题）
+
+本仓**每一次抛掷都带 code 1**（`runtime/py_additions.c:2528` `zeta_raise(int64_t)` 只接一个数，全仓 419/415/… 的抛点都写死 `1`）。后果：`except ... as e` 打回来的永远是同一个 `1` —— 实测一次语料跑有 **107 行** `... : 1`，全是 `ModuleNotFoundError` 兜底，无法分辨哪一行是哪一次抛掷。上一轮的"这个桩点到底抛没抛"只能靠读 IR 回答（本批定价就是这么做的，成本高、且只对已知的 6 个站点成立）。
+
+419 的桩又是**按 argc 共享**的：`zeta_dyn_member_missing_1` / `_2` 两个符号服务全部幽灵名 —— 改前的语料 IR 里就只剩这两行（`:35026 call @zeta_dyn_member_missing_2`、`:35033/35053/69124/69332/104598 …_1`），**成员名在代码生成时就丢了**。本批把它接回来：每个幽灵一个具名桩，运行时把名字喊到 stderr。
+
+### 二、改动（两处，抛掷契约一字未改）
+
+- `codegen.rs:3064` `dyn_member_missing_thunk(ghost, args_count)`：桩名 `zeta_dyn_missing_<名字把非字母数字换成 `_'>_<argc>`，为每个 ghost 建一条 `Private`、`constant` 的 `[N x i8]` 全局字符串，桩体只发一句 `call i64 @zt_dyn_member_missing(ptr @msg)` 再 `ret 0`。两个调用点签名同步：`:2744`（裸名兜底臂）与 `:2966`（`type_args` 臂），守卫仍是 `name.starts_with("[dynamic]") && self.dyn_member_is_class_alias(name)`，编译期那条 419 告警逐字未动。
+- `runtime/unavailable_stubs.c:81` `zt_dyn_member_missing(const char* what)`：**点名一次、每次调用都抛** —— 指针身份去重只吞 `fprintf`，吞不掉 `zeta_raise(1)`（与 `zt_unavailable_soft` 同法，那里注释记着"把抛掷也去重 ⇒ 第二次调用返回 0 ⇒ 调用方解引用空表 SEGV"）。**不 abort** ⇒ 419 的"外层 except 仍走本地兜底"这条契约保持。
+
+### 三、语料侧定价：6 个桩点全在晨间崩点之后或死代码里 ⇒ 位移 0
+
+点名后重跑语料 IR（`ZETA_NO_OPT=1 --emit-llvm`，`cwd=REasyQuant` 根，rc=0，4,422,323 B），6 个 `call @zeta_dyn_missing_*` 全部自报身份：
+
+| IR 行 | 幽灵名（argc） | 宿主函数 | 源坐标 | 执行序判据 |
+|---|---|---|---|---|
+| 35032 | `[dynamic]str::isin`（2） | `backend_datasrc_data_cleaning__clean_market_ohlcv` | `backend/datasrc/data_cleaning.py:302` | 宿主全 IR **calls=0** ⇒ 死代码 |
+| 35039 | `[dynamic]str::copy`（1） | 同上 | `data_cleaning.py:302`（同行 `df[掩码].copy()`） | 同上 |
+| 35059 | `[dynamic]i64::copy`（1） | 同上 | `data_cleaning.py:304`（`df.iloc[0:0].copy()`） | 同上 |
+| 69130 | `[dynamic]str::dropna`（1） | `backend_engines_bt_helpers___add_pandas_data` | `backend/engines/bt_helpers.py:62` | 唯一调用点来自 `strategies_code_jq_wufu_local___run_backtrader`，而 `backtrader_engine.py` 进闭包的 define 数 **=0** ⇒ 本地回测不走这条 |
+| 69338 | `[dynamic]str::ffill`（1） | 同上 | `bt_helpers.py:77` | 同上 |
+| 104604 | `[dynamic]str::to_dict`（1） | `jq_wufu__update_sector_pool` | `strategies/code/jq_wufu.py:455` | 2 个调用点全在 `jq_wufu__midday_routine`（IR :102540）＝**午间**，崩点在晨间 ⇒ 之后 |
+
+运行侧正证据：本批二进制两次语料跑 `compile=0 run=139 errlines=135`（末条日志 `[INFO] jq_shim: [晨间] 计算流动性阈值`），stderr 里 `PY-A: dynamic receiver has no member` 点名行 **0** ⇒ 崩点之前没有一个桩真抛过。⇒ **该族对主线 301 位移＝0**，不是头名。
+
+### 四、订正三批的旧账（点名前后结论不同，历史记录不回改，只在此对照）
+
+1. **419/420 记的"头名＝`copy`×4 幽灵名，全在 `jq_wufu_local.py:166/190/248/301`"作废**：那 4 个 `.copy()` 的接收者是静态已知的 `DataFrame`，绑的是 pylib 真定义 —— 语料 IR 里 `call @"DataFrame::copy"` 有 **37** 个站点（`@copy` 那条裸名 define 则 **0** 个调用点）。真幽灵里 `copy` 只有 **2 个**，都在 `data_cleaning.py`。
+2. **worktree.md §1 那句"`ffill` / `isin` 实测归零"不准**：各 1 个动态成员幽灵（`bt_helpers.py:77`、`data_cleaning.py:302`）。同表 `dropna`×15 是**另一码事**（那是 `DataFrame::dropna` 的静态绑定语料数，不是幽灵数；本批实测 `call @"DataFrame::dropna"`=1、`::ffill`=1、`::isin`=0、`::to_dict`=0）。
+3. **上一轮自己写下的"bt_helpers.py:67 那个 `.copy()` 是幽灵"也订正**：`:67` 的 `copy` 静态绑真定义；该函数里的两个幽灵是 `:62` 的 `dropna` 与 `:77` 的 `ffill`。
+4. **方法坑一条**：带 `::` 的 LLVM 符号在 IR 里被引号包住（`@"DataFrame::copy"`），用 `@[A-Za-z0-9_:]*copy` 找族名会**零命中 ⇒ 假负**（本批差点据此写下"语料里根本没有 copy 绑定"）。族名计数要带引号形一起搜。
+
+### 五、真修不在这批，且不在语法面上（等授权）
+
+6 个幽灵里 **5 个**同因：`df[布尔掩码]` / `df[<str 列>]` 的接收者静态类型是 `DynamicArray(<元素>)`，成员查表落到裸名别名（`resolver.rs:1023-1026`：每个 `Class::method` 除具名键外**还按裸名再登记一次**）⇒ 要么绑错结构体函数体（419 修掉的那次 SIGSEGV），要么抛。正解是**掩码族**：元素级比较 `zt_vec_cmp`（`runtime/py_additions.c:1013`，任务 #112）+ `DataFrame.__getitem__` 的形参分派 + 行过滤运行时 —— 三条都在永不顺手改的 `runtime/py_additions.c` 里。⇒ 登记为拦路，**不用逐名补语法**（用户裁定 2026-09-24：「一个一个修语法缺口的办法已经到头」）。
+
+### 六、夹具侧读数（合同钉子；红先证据在 stderr 那一栏，不在 rc）
+
+`tests/python_style/t459_dyn_ghost_raises_every_call.z`：3× `df["display_name"].to_dict()`（try/except 打 `A caught`）+ 2× `xs.to_dict()`（打 `B caught`）+ `print("C ok")`。钉的是**"去重只吞消息、不吞抛掷"**。
+
+| 面 | 改前（`b5f1abc6d0c9c983a5d3dea9fc8cdab0`＝421 的 post4） | 改后（`1aa05f8f9f7585e04e1450d94b0a8f98`） |
+|---|---|---|
+| t455（419 夹具，28 行） | compile=0 / run=0 / stdout `A caught`+`B caught`+`C ok` / 点名 **0** | compile=0 / run=0 / stdout **逐字节相同** / 点名 **2**（两条幽灵名各一次） |
+| t459（新，48 行） | compile=0 / run=0 / stdout 与改后逐字相同 / 点名 **0** | compile=0 / run=0，rc=0；点名 **2** 行、distinct **2**；stdout `A caught`×3 + `B caught`×2 + `C ok` |
+
+实拍（HEAD 二进制当场跑）：stderr 两行 `PY-A: dynamic receiver has no member \`[dynamic]str::to_dict\` — raising` 与 `…\`[dynamic]i64::to_dict\`…` ⇒ **5 次抛掷、2 行点名**，五行 `caught` 全在 ⇒ 抛掷没被去重吞掉。编译器侧同一进程仍逐名报出两条 419 告警。t459 的 `--emit-llvm`：`call i64 @zeta_dyn_missing__dynamic_str__to_dict_1`、`…__dynamic_i64__to_dict_1`、`declare i64 @zt_dyn_member_missing(ptr)`、两条 define 在 :6129/:6139。
+
+**本批不是"红先钉"而是"合同钉"**：改前 rc 也一样是 0 —— 位移量在 rc 上读不出来，读得出来的是 stderr 那一栏（0→2）与 IR 里的符号名。这是 422 的定价办法本身的一部分：**位移 0 的批次也要留下能答"它跑没跑"的抓手**。
+
+### 七、门禁（`bash tools/run_all.sh` 全量，rc 落盘 `/tmp/b422/gate_guard.txt:149`）
+
+`GATE_RC=1`。**唯一红源＝`tools/run_all.sh:605`（`py_fail != 0`）＝存量两例 `t231_dict_set_cast_fromkeys t233_listcomp_condition_capture`**（419/420/421 同格）；`:604`/`:607`/`:609`/`:611` 本次都没响。
+
+| 步骤 | 读数 |
+|---|---|
+| official | compile **194/194**、compile+link 191/194；3 条 link-only 点名同 421 逐字未动（`_predict,_train` / `_factor,_optimal_iterations,_success_probability` / `_as_str,_into_iter,_is_alphabetic,_push`） |
+| python_style | **341 passed / 2 failed / 6 known-fail / 0 xpass ＝ 349**，与 `ls tests/python_style/t*.z` 的 349 对上（421＝348，净增 1＝t459，**零回归**） |
+| 语料 | 解析 40/40 = 100% |
+| jit sweep | ok=**176**（未回退） trap=**370** fail=0 timeout=0 **segv=0**，total **546**（421＝545/369 ⇒ +1/+1，落档的就是新用例）。实拍归因：`zetac t459.z`（无 `-o`）rc=1，首个硬缺绑是 `zeta_module_decl`（**E4016**，与本批新符号无关），未绑清单 36 个符号里含 `zt_dyn_member_missing` —— 与 419 夹具 t455 的 JIT 读数**同一份 36** ⇒ 属 #42「JIT 不绑 runtime/*.c」那一族的既有成员，不是本批引入的新失败形态 |
+| diff | match=120 judged=130 rate=92.3% bad_case=0（逐字同 421） |
+| 断言步 | knob 23/0 · swallow 6/0 · import 22/0 · empty_stmt 68/0 · pysrc 42/0 · cli_semantics 73/0 · ignore_rules 19/0 · mbvar 22 脚本/0 |
+| 稳定性 | comment_drift **0** 处复述 · emit_stable 2 夹具/违规 0 · clean_checkout rc=0（3s，rev=`610ad28d`＝421 记录批，本批提交在门禁之后） |
+| 诊断 | official 2/194 文件 / 5 行；python_style **231** 告警行 / **108** 文件（421＝226/107；+1 文件＝t459 自身，其内两条逐名 419 告警） |
+| ABI 锚点（门禁外的只读核对） | 改前对照在隔离 worktree 取 HEAD 自基线：**漂移 23 / 新 11 / 消失 12、rc=2**（那 2 条"消失"是 `aliases.inc.c:1` 与 `:12` 的定位失败——生成文件不在裸检出里 ⇒ **HEAD 裸检出的既有红，与本批无关**）。主树本批：`--rebind` 判搬家 36 / 拒改 38，改写 ABI.md **36 行/68 个数** 与 tsv **258 锚点**；终态 **漂移 28 / 新 11 / 消失 10 / 定位失败 0，rc=1**；分文件漂移 `codegen.rs 13→18`（+5＝同形多命中，`--rebind` 按判据拒猜）、`gen.rs 6`、`py_additions.c 3`、`tokio_runtime_stub.c 1` 后三者本批没碰 ⇒ 逐字未动；docs/ABI.md 仍 **1032 行** |
+
+**读数可复现性 disclosure**：① 本次门禁首行**没有** 421 那条 `[W2003] …stub.c 比 tokio_runtime.o 新` ⇒ 三套基线链接的就是本批重建后的 `tokio_runtime.o`（`nm` 里 `T _zt_dyn_member_missing` + 两条 `b` 状态变量，共 3 个符号）。② 门禁后 `md5 target/release/zetac` ＝ `1aa05f8f9f7585e04e1450d94b0a8f98`，与 `zetac_b422`（夹具与语料 A/B 所用）**逐字节相同** ⇒ 上表读数对应的就是 `8c5b9f79` 这笔源码。③ 夹具 A/B 两侧二进制同放 `target/release/`（改前那份是 421 的 post4，不是 HEAD）。
+
+### 八、头名换格（正向队列）
+
+本批把"幽灵名族"从头名摘掉（位移 0 + 六桩身份入册）。下一格按**已实测损害量**排，三条可动手、两条等授权：
+
+1. **晨间链路少了哪些模块**（本批新事实，未定价）：`backend/datasrc/market_panel.py` 与 `backend/engines/backtrader_engine.py` 在语料 IR 里 define 数 **=0** —— 前者正是 `clean_market_ohlcv`（3 个幽灵）的唯一调用方。少进来是"没 import"还是"import 了但被跳过"未查 ⇒ **建议下一批定价**（判据现成：`grep -c '^define.*<module>' ` 对 `--emit-llvm` 输出，配 `--dump-mir` 的项数对照）。
+2. #134 `GroupBy.__len__` 恒读 0；#117 动态键 `.get(k, default)` 语料 7 形仍落 `_get` —— 都不等授权。
+3. **等用户授权才动的两格**：#145 `str_trim + 24` 的 packed 生产者、#112 `zt_vec_cmp` 元素级比较（＝本批 §五 那条掩码族拦路），两处都在 `runtime/py_additions.c`。
+4. `rows` 同二进制跨跑抖（12854–12858）与 #142 仍按原序候在队列里。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
