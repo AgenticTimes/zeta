@@ -177,3 +177,6 @@ target/
 # macOS 目录元数据（此前被误跟踪；用 git rm --cached 停止跟踪，磁盘文件保留）
 .DS_Store
 /.ouroboros/artifacts/
+
+# 双 agent 协作（worktree.md 协议）：AGENTS.md 是两班工人的开工须知，需要入库（2026-09-25 定向豁免，参照批次 314 先例）
+!AGENTS.md
