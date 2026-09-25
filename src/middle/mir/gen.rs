@@ -10420,6 +10420,28 @@ call, no NULL-handle dereference).",
                     }
                     _ => false,
                 };
+                // A receiver whose static TYPE already names a callable route
+                // must not be captured by the two arms below: `struct_has_method`
+                // only asks for the literal `T::m` / bare `m` keys, while the
+                // generic dispatch further down normalizes mangled and dotted
+                // spellings (`pandas__DataFrame`, `pd.DataFrame` → `DataFrame::get`,
+                // batch 147/291) and siteB dispatches pylib handle tags
+                // (`PyJson` → `py_json_get_default`, batch 288). Measured with
+                // only `struct_has_method` as a guard: 2 live
+                // `py_json_get_default` sites became `map_get_default` on a JSON
+                // arena index, plus 2 dead `DataFrame::get` fallback sites.
+                let receiver_has_typed_route = match receiver_ty.as_ref() {
+                    Some(Type::Named(tn, _)) => {
+                        self.qualified_method_candidate(tn, method).is_some()
+                            || {
+                                let tag = crate::middle::pylib::handle_tag(tn)
+                                    .map(|h| h.to_string())
+                                    .unwrap_or_else(|| tn.clone());
+                                crate::middle::pylib::method_symbol(&tag, method).is_some()
+                            }
+                    }
+                    _ => false,
+                };
                 // 批次 420: `.get(<str key>)` on a receiver we cannot statically
                 // type is a DICT lookup, but the name table below maps
                 // `("get", 2)` to `array_get`, whose load is `base + key*8` —
@@ -10429,6 +10451,7 @@ call, no NULL-handle dereference).",
                 // `MirStmt::DictGet` the typed path uses, so one representation
                 // and one ABI survive (`map_get` takes `ptr`, not `i64`).
                 if !struct_has_method
+                    && !receiver_has_typed_route
                     && method == "get"
                     && arg_ids.len() == 2
                     && matches!(self.type_map.get(&arg_ids[1]), Some(Type::Str))
@@ -10459,6 +10482,7 @@ call, no NULL-handle dereference).",
                 // printed `fb` (rc=0). A silent wrong value is worse than the abort,
                 // so untyped keys keep the previous behaviour.
                 if !struct_has_method
+                    && !receiver_has_typed_route
                     && method == "get"
                     && arg_ids.len() == 3
                     && matches!(self.type_map.get(&arg_ids[1]), Some(Type::Str))

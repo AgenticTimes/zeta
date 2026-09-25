@@ -1,0 +1,24 @@
+// 批次 421 的第二半：守住 batch 288 的 PyJson 路由。
+// `v` 来自 `raw.items()` 的键值对槽，它的类型标记是 PyJson，不是 hash 表。
+// 本批新增的 `.get(k, default)` 早返如果只看 `struct_has_method`，就会把
+// 这个调用抢走、发成 `map_get_default` —— 运行时形状守卫
+// （`runtime/tokio_runtime_stub.c:220` 那条 "called on a JSON value"）会立即
+// abort，所以不是静默错值，但语料侧 2 个 PyJson 活调用点（`py_json_get_default`
+// 4→2）会从"能跑"变成"必崩"。
+// 三进制的实拍（同一份用例体，cwd＝仓根）：
+//   target/release/zetac_b421_pre（批次 420 的编译器）  compile=0 run=0  `S 16 / N 2`
+//   target/release/zetac_b421_post2（本批第一版，无判据） compile=0 run=134
+//     stderr 首行 `PY-A: `map_get_default` was called on a JSON value
+//     (handle=0x104f66f80, first word=5) — a `-> dict` annotation …`
+//   target/release/zetac_b421_post4（加 receiver_has_typed_route 后） compile=0 run=0  `S 16 / N 2`
+// 判据用两处现成的路由表：`qualified_method_candidate`（含 mangled／dotted
+// 名归一）与 pylib 的 `handle_tag` + `method_symbol`。
+import json
+
+raw = json.loads('{"x": {"ok": 7}, "y": {"ok": 9}}')
+counts = {str(k): int(v.get("ok", 0)) for k, v in raw.items()}
+print("S", counts["x"] + counts["y"])
+print("N", len(counts))
+
+// expect: S 16
+// expect: N 2
