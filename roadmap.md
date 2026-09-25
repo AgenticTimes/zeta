@@ -18596,6 +18596,96 @@ A、B 两段共用同一个 `0x4d0c` ⇒ **一行点名、两次抛掷、两行 
 3. 仍等授权的：`runtime/py_additions.c`（#112 掩码族、#145 生产者）、#42 JIT 运行时绑定、`zt_dyn_is_map` 与本守卫的上界不一致（那边 `2^28`、这边 `1<<30`，本轮取"宁松勿误伤"，收紧要连 #6 的 vec 判形一起裁）。
 4. #134 `GroupBy.__len__` 恒 0、#117 动态键 `.get(k, default)` 语料 7 形、#142 类构造器被判据当函数 —— 都不等授权，按损害量排在 1/2 之后。
 
+## 批次 424（2.2 签名表＝调用点证据的绑定点）：`.items()` 的接收者为什么是一个日期整数 —— 词干兜底收掉一条真丢证据的族；语料位移 0（三层正证据）；头名换成 `("", 2)` 兜底本身
+
+代码提交一笔 `06c67cda`（4 文件 **+74/−9**：`src/main.rs` +19 / 新用例 `tests/python_style/t461_arity_suffix_binding_chain.z` 46 行 / `docs/ABI.md` 4 行改 8 处 / `tools/baselines/abi_anchors.tsv` 5 条 main.rs 锚点随之搬）。记录批随后。已推送 `agentic/bootstrap`（`git rev-list --count agentic/bootstrap..HEAD` = 0）。
+
+### 一、改前答不出、改后当场能答的问题
+
+423 把头名交给了一句"接收者是当天日期"，但那是**读源码猜的**（`jq_wufu.py:710` 有个 `today = context.current_dt.date()`）。本批要答的是机制问题：**一个写得很正常的 `context.portfolio.positions.items()`，怎么就会把"日期"当成 dict 句柄送进 `py_map_items`？**
+
+答案是一条四跳的链，前两跳在编译器、后两跳在运行期：
+
+1. `src/middle/mir/gen.rs:11461` 的 `suffixed` 判据（`!(func.starts_with("zeta_") || func.contains("__") || func.contains("::"))`）对**每一条裸名调用**都成立，于是调用点的目标名被写成 `函数名_实参个数`（`daily_stop_loss` → `daily_stop_loss_1`），而被调项的名字没有这个后缀；
+2. `refine_param_types`（`src/main.rs:80`）拿这个带后缀的名字去 `mirs` 里找被调项，两条形条件都不中 ⇒ `continue` ⇒ **这个调用点的实参类型证据整族作废**。未注解形参保持 `dyn`；
+3. codegen 的 FieldAccess 臂（`src/backend/codegen/codegen.rs:6452` 起）在接收者类型不确定时落进文档化的兜底 `("", 2)` —— 按"两字段的 `{i64,i64}`"读；
+4. 同一臂 `:6700-6708` 的 `if field_index >= field_count` 把越界索引**夹回 `field.parse::<u64>().unwrap_or(0)` ＝ 0** ⇒ 三字段结构体的第 3 个字段读成了第 1 个。于是 `c.portfolio` 读回 word0（一个整数），下一跳 `.positions` 就从整数身上按指针读 ⇒ SIGSEGV。
+
+跳 3/4 是当场量出来的（`ZETA_DBG_FA` 旋钮在 `codegen.rs:6658`）：夹具改前编译日志两行 —— `FA read field=portfolio variant="" field_count=2 base_ty=Some(PyDynamic)` + `idx 2 >= count 2 -> fallback 0` + `final idx=0`；第二跳 `field=positions base_ty=Some(I64)`。**`base_ty` 是 `Some(I64)` 这一行就是"从整数身上读字段"的编译期原图。**
+
+### 二、改动（一个文件，+19 行；只在"没有精确条目"时多问一次词干）
+
+`src/main.rs:183-207`：在 `refine_param_types` 取被调项的 `position()` 里补第三条判据 —— 把目标名尾部的**纯数字段**剥掉（`rsplit_once('_')` + `all(is_ascii_digit)` + 词干非空），词干若正好等于某个条目名就用它。
+
+三条边界都写在注释里：
+
+- **兜底顺序**：新判据排在"精确名"和"`模块__名`"之后，只在前两条都落空时才走 ⇒ 重载集（同一个 `show` 有 `show_1`/`show_2` 两个条目）仍然绑到自己那一个，本批没有改变任何已有绑定的选择；
+- **只认裸条目名**：词干是某个**限定条目尾**的那一族不绑（判据写成 `c.name == stem`，不是 `ends_with`），因为多个模块可以有同名成员，猜了就是串号 —— 语料里这一族有 6 个目标，本批**故意留在门外**（见 §六.3）；
+- Rust 侧只改证据，不改语句数、不改槽号 ⇒ 与 417 那次"下型改动抹掉三格读数"的教训相反，这次是**纯增量**。
+
+### 三、夹具定价：21 行形状压出整条四跳，stdout 与 CPython 逐字相同
+
+`t461_arity_suffix_binding_chain.z`（46 行含注释）把语料的形状原样压小：`Leaf{tag, positions}`、`Ctx{current_dt, previous_date, portfolio}`，`def show(c)` 的 `c` **不写注解**（唯一证据来自调用点 `show(k)`），函数体第一条就是 `for name, pos in c.portfolio.positions.items()`。
+
+当场复测（两跑同值，`target/release/` 同目录，只差本批 `src/main.rs`）：
+
+| 二进制 | compile | run | stdout |
+|---|---|---|---|
+| `zetac_pre424`（HEAD~ 那颗） | 0 | **139** | **0 行**（四条 expect 一条都落不了地） |
+| 改后 `zetac` | 0 | 0 | 四行 `total 3 / tag 7 / dt 19724 / done` |
+
+真值来源：把夹具 `grep -v '^//'` 喂 `python3` 当场对数 ⇒ 与改后 stdout `diff` **零差异**（参照物 `/tmp/b424/t461_ref.py`）。夹具里 `dt 19724` 不是随手取的数 —— 它就是把 423 语料点名的第一个句柄 `0x4d0c` 换写成十进制（§五.4），所以"错的那一格"在夹具里也是按语料的形状建的。
+
+一条**已知残留没有写进 expect**（在夹具头部注释里记名）：`.items()` 的键打印成堆句柄（`item 4333694482 2`）且顺序是 zeta 的哈希序 ⇒ 既不等 CPython 也不跨跑稳定，钉不住；这格属 #117 打印族，不在本批判据内。
+
+### 四、家族定价（两把尺子，都当场跑）
+
+**A. 单文件当根模块（＝`jq_wufu.py` 单独编译，语料里它不是根）**：`--dump-mir` 301 个条目、2,518 条 `func:` 调用行。其中"带 `_N` 后缀且没有同名条目"的 44 个不同目标 / 82 个调用点；剥词干后命中**裸条目名**的 **32 个不同目标 / 46 个调用点，分布在 24 个宿主函数**（名单在场：`check_a_share_weak_period_1`、`daily_stop_loss_1`、`execute_trade_4`、`_parity_snapshot_1`、`weighted_slope_r2_2` …，四条判据齐：32/32 实参数一致、0 个冲突），命中**限定条目尾**的 1 个／1 站点。
+
+**B. 语料当整体（驱动为根，628 条目）**：带 `_N` 后缀的目标 **87 个不同名**，其中"有精确同名条目"的 **0 个** —— 也就是说这一族在语料里**从来没有过任何一条被调方证据**；词干 == 裸条目名的 **5 个**（`execute_trade_4`、`final_value_2`、`iterrows_1`、`on_trading_day_2`、`to_dict_2`）＝本批真正新绑的；词干落在限定条目尾的 6 个（`clip_2`、`condition_1`、`get_all_securities_2`、`get_price_7`、`get_price_9`、`init_3`）**按边界不绑**；剩下 76 个连词干都查无条目（内置/外部库名，本来就不该由这张表回答）。
+
+### 五、语料位移 0，且三层都是正证据（这次不比行数）
+
+1. **LLVM 层**：`cwd=REasyQuant`、`REPLAYQUANT_LOCAL=1`、两侧同一颗 `tokio_runtime.o`、只差 `src/main.rs` —— `--emit-llvm` 两侧 **md5 逐字节相同** `2997d4f5212568acccf6dcb72fb4abfd`，各 113,722 行，`diff` 0 行；
+2. **MIR 层**（423 立的判据：不许只比"看起来相同"）：`--dump-mir` 改前/改后唯一的 1 个 hunk 是 `BaoStockSource` 的模块前缀在 `backend_datasrc_sources` ↔ `backend_datasrc_market_data_sources` 之间翻 —— 这不是本批的效应：**同侧两跑（`pre1` vs `pre2`）也翻，而且是 2 个 hunk** ⇒ 它是 #9 那条别名序掷硬币（413 已记名）的噪声底，本批可归因位移＝0；
+3. **运行期层**：改前/改后二进制各两跑，四个读数逐字相同 —— `errlines=357`、`PY-A` 点名 38 条（37 个 `py_map_items` + 1 个 `map_get`）、`[ERROR] … 失败: 1` 74 条中的 `WARNING` 107、`[晨间]` 37＝逐日。把日志里 4 位以上数字归一为 `N` 后，改前 vs 改后**只差 1 行**，差的是 `map_get` 那条点名的 handle 与首字（`0x10378e0c0`/`7292230741481696820` ↔ `0x101452510`/`7293078443421543988`，ASLR 与 packed ASCII，本就逐跑变）。
+
+**为什么位移是 0（这是本批最有用的负结果）**：语料里 `jq_wufu` 不是根模块，它的调用点全是限定名（`jq_wufu__check_a_share_weak_period`），限定名**从不带后缀** ⇒ §四.A 那 32/46 的形状在语料侧只对应 5 个目标；而 423 点名的 `check_a_share_weak_period` 的 `context` 形参之所以还是 `dyn`，是因为它的证据要来自**唯一的调用方** `check_weak_period_daily`，而后者根本没有调用点（§六.2）。也就是说：**A 尺量到的是真丢证据，但语料那一格的丢点在更上游，本批没够着。**
+
+### 六、语料侧这一族的实测规模（`ZETA_DBG_FA` 全量编译实拍）
+
+1. **跳 3/4 的兜底在语料里不是孤例**：`ZETA_DBG_FA=1` 编整个 acceptance 驱动，529 条 FieldAccess 读里 **28 条走了 `idx >= count 2 -> fallback 0`**。按字段名分布：`portfolio`×8（`base_ty=Some(PyDynamic)` —— 就是"动态 context"那一形）、`avg_cost`×5、`paused`×3（`base_ty=Tuple([])`）、`trading_dates`×2、`routines`×2、`context`×2、`low_limit`×2、`closeable_amount`×2、`bar_types`×2。`positions` 另出现 7 条，全部 `base_ty=Some(I64) final idx=0` —— **第二跳踩在整数身上**的静态实拍。
+2. **和 423 那 37 条点名对得上，但同一性只到"形状对得上"为止**：37 条 `py_map_items` 的句柄是 37 个**互不相同的连续整数** `0x4d0c…0x4d46`，中间正好跳过 `0x4d10/11`、`0x4d17/18` 这些周末 ⇒ 逐日 +1 的交易日序数，与"读了 context 的某个日期字段"一致（`0x4d0c`＝19724＝夹具里那个 `dt`）。**但"28 处 clamp 里的哪一处 emit 了这 37 次点名"未证** —— 点名句仍只有原语名和 `dladdr` 的返回地址，没有用户函数名（423 §八.2 那条前置工作本批没做）。
+3. **6 个 qualified-tail 目标**（`get_price_7`/`get_price_9` 等）留在门外是判据选择，不是遗漏；要收它们得先回答"同名词干跨模块怎么消歧"，与 #9 同一扇门。
+
+### 七、订正 423 §八.1 的归因
+
+原文写的是"强烈指向**槽位复用/串号**（#130/#131/#142 同族），不是缺语法"。前半**判死**：本批实拍到的机制是"形参拿不到调用点证据 ⇒ 接收者类型未知 ⇒ 字段索引被夹到 0"，全程没有槽位复用参与（证据：§一 那两行 `ZETA-DBG`，以及 §五.1 的 IR 逐字节相同 —— 改的只有类型证据通道）。"当天日期"这半保留为读数（§六.2），但它的成因从"串号"改记为"读错字段"。同批 424 也**没有**让语料那一格变好（§五），所以这条不是"已修"，是"机制换对了"。
+
+### 八、头名换格（正向队列）
+
+1. **头名＝`("", 2)` 兜底 + 索引夹回 0 这两处静默**（`codegen.rs:6452` 起、`:6700-6708`）：语料 28 处成员已定价，且它是把"缺类型证据"放大成"内存不安全"的那一级。两个方向：(a) 缺证据时**出声**（沿用 423 的思路：判形 → 点名 → `zeta_raise`，把静默读错字段换成可诊断；423  precedent 是这一招直接换来 rc 139→0＋38 条名字）；(b) 真修＝"名字→字段"的全局扫描补 variant 判据（队列里那格，夹具前置条件＝一条 variant 为空、真能打进这条路的用例 —— 本批 t461 就是它的第一个成员）。
+2. **第 2 格＝回调／函数值实参的参数证据**（这是 1 的上游根因）：语料 MIR census —— 628 条目、625 个不同调用目标名；**55 个宿主发 `FuncAddr`**，被取地址的目标 **106 个**，其中 **103 个从不出现在任何调用点的 `func:` 里** ＝ 97 个 `__closure_N_*` + **6 个具名日程例程**（`jq_wufu__morning_routine` / `afternoon_routine` / `buy_routine` / `sell_routine` / `reset_daily_flags` / `check_weak_period_daily`）。这 6 个正是 `run_daily(<fn>, time=…)` 注册进去的那批 ⇒ **被调度执行的函数，形参永远拿不到调用点证据**，`context` 因此恒 `dyn`。尺子现成、判据要新立（从注册点的实参反推形参类型）。
+3. **第 3 格起照旧**：`str_trim + 24` 读 `0x3532`（#145 生产者，真修要动 `runtime/py_additions.c` ⇒ 等授权）、#134 `GroupBy.__len__` 恒 0、#117 动态键 `.get(k, default)` 语料 7 形、#142、`rows` 跨跑抖（运行期侧）、6 个 qualified-tail（§六.3）。等授权项一条未变：`runtime/py_additions.c`（#112/#145）、#42 JIT 运行时绑定、`benchmarks.yml`/任务 #29/#74、423 守卫上界 `1<<30` 与 `docs/ABI.md` 附 A #7 的 `2^28` 不一致。
+
+### 九、门禁与读数（`/tmp/b424/gate.txt` + `/tmp/b424/gate.rc`）
+
+- **`GATE_RC=1`**，唯一红源仍是 `run_all.sh:605` 的存量 `py_fail=2`（`t231/t233`）。
+- python_style **343/2/6/0**，与 `ls tests/python_style/t*.z` 数到 **351** 逐字对上（对 423 净增 1＝t461，**零回归**）；known-fail 6 未动。
+- official **194/194 compile**（191/194 link，3 条 link-only 同 422/423 逐字未动）；语料 **40/40**；jit **ok=176 / trap=372 / total=548 / segv=0**（+1 total＝新用例进 sweep，与 414/415 同机制，ok 未回退）；diff **120/130 92.3% bad_case=0**；comment_drift 0；emit_stable 2 夹具/违规 0；clean_checkout rc=0（rev=`ff5514e4`，即门禁起跑时的 HEAD，代码提交在其后）。
+- 诊断面 official 2 文件/5 行、python_style **231 行/108 文件 ＝ 与 422/423 逐字相同**。
+- **ABI**：`--rebind` 改写 3 行 / 5 个数（`main.rs` 五条锚点集体 +19：568→587、574→593、868→887、872→891、926→945），**另 1 条被拒改后手工成对搬**（文档里 `main.rs:568` 是表格内的裸引用 ⇒ 无唯一配对，`--rebind` 按设计不收；`docs/ABI.md:679` 与 tsv 第 171 行同时改，ABI.md 仍 **1032 行**）。终态 **漂移 28 / 新 11 / 消失 10 / 定位失败 0，rc=1**（与 422/423 的常驻 28/11/10 逐字相同）。
+
+### 十、工具坑与自我核对（本批当场抓到的，全部入册）
+
+1. **`--dump-mir` 永远看不见本批改的东西**：打印在 `src/main.rs:897`，`refine_param_types` 调用在 `:905` —— 打印在前、精化在后。本批所有 pre/post 判据因此改用 `--emit-llvm -o`，MIR 只用来测噪声底。（上一轮我曾用 `--dump-mir` 说"语料形参类型 0 行变化"，**那条读数作废**：尺子根本照不到这条路。）
+2. **自毁型探针**：`pt.py` 那版脚本一边遍历一边改写自己读的 `type_map` ⇒ 输出恒 0。凡是"计数恰好是 0"的结果，先问一遍"尺子是不是自己把被测对象擦了"。
+3. **两条空壳正则**（都是假 0）：`\s*FuncAddr\($` 漏掉 `477: FuncAddr(` 这种带语句号的行；`FuncAddr\("([^"]*)"` 也匹配不上，因为 MIR 把实参打在第 2 行（`13: FuncAddr(` ⇝ `    "__closure_0__fetch_remote_jq_c5f5cbd2a",`）—— 第二条直接把 census 打成 0 目标，改完才有 55/106/103。
+4. **emit-llvm 的 md5 基线必须在同 cwd 同环境取**：有一次从 `/tmp/b424` 跑（没带 `REPLAYQUANT_LOCAL`）得到另一颗 md5，看起来像"出码非确定"，实际是数据分支不同（415 那条 `__file__` 深度巧合的变体）。重做后同侧可复现 `2997d4f5…`。
+5. **MIR 的"跨模块同名类别名序掷硬币"（#9）现在有量了**：同侧两跑差 2 个 hunk、改前 vs 改后差 1 个 ⇒ 以后引用"`--dump-mir` 相同"当证据之前，必须先测同侧噪声底（423 立的规矩，这次是它救了一次归因）。
+6. **`worktree.md` 双写**：本批中途发现工作副本里 §1 被整体重排、**423 的台账行被删**、并在 §4 表格后补了个 `## 5. Agent-2 旁路台账` 标题（那一条是对 HEAD 里一张无名表格的合法修复，保留）。台账行按 `git checkout HEAD -- worktree.md` 复原后再合并；并发编辑这件事本身入册。
+7. **BSD `awk` 不认 `exit !found`**（上一轮的对照脚本因此静默通过）；`${PIPESTATUS[0]}` 在 zsh 里是空的（`$pipestatus`），rc 一律先重定向落盘再读。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
