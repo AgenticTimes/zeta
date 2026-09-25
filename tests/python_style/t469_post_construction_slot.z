@@ -1,0 +1,49 @@
+// 批次 434（3.2 Lowering／字段布局的**收集面**）：只在构造之后出现的属性根本没有槽位，读写双双落到索引 0。
+// `struct_defs` 只看得见构造器下成的那条 `MirExpr::Struct` 名单（`gen_mirs` 的前置遍），所以
+// `i.extra = 99`／`self.late = v` 这类名字在布局里没有格子：两条布局路（跟着构造表达式走、退到声明类型）
+// 都要求"这条布局真的声明了它"，于是双双放手 ⇒ 剩下的替身 `("", 2)` 把索引夹到 0/1，
+// 而那两块是真有布局的对象——写就把接收者**自己声明的第一格**踩掉，读就读回那一格。
+// 批次 427 已经量过读侧这一格：152 处替身读里 146 处的字段名无人声明，`declarers=0`，
+// 全局扫描恒给索引 0，**连范围检查都不触发**（本批夹具改前 `b1.kind` 读出 5 就是这个形状）。
+// 改法：出码前再扫一遍 MIR，把"只出现在构造之后的属性名"按类别记成**追加槽**
+// （`struct_ext_layouts`），两条分配点（`MirStmt::StructNew`、`MirExpr::Struct`）按
+// `declared + 追加数` 开块并把追加格零初始化，`resolve_field_slot` 在夹回之前先问这张表 ⇒
+// 名字有自己的字，声明格不再被踩。判据里两处保守：类别的构造宽度必须唯一（否则
+// `declared + 位置` 两处算出不同的字），类别名拼写只接受**无歧义**命中（`Bar`/`_Bar` 同尾不算）。
+// expect 取 CPython 3.14.5 语义正确值（`/tmp/b434/cp/t469.py` 同会话实拍）：
+// `b1 7 8 99 5 / b2 7 8 100 / empty 3 4`。
+// 同一夹具在改前二进制上三行全错：`b1 5 8 5 5`（`kind` 先被 99 后被 5 踩掉，`extra`/`late` 与它同格）、
+// `b2 100 8 100`、`empty 4 4`（两个属性挤同一格，后写覆盖先写）。
+// 语料侧（`_drv_accept_409.py` 的 628 个 MIR 项）本批实际追加的是 11 个名字／6 条布局：
+// `_G` 41→48（7 个策略参数名）、`_Impl` 0→2（`_backend`/`_last_date`）、
+// `PositionLedger` 4→5（`cost`）、`ValueRecorder` 0→1（`history`），
+// 另两条加宽（`DataFrame` 1→2、`MarketDataFetcher` 2→3）由夹具里同名类别的构造器带出来。
+// 语料里 26 条 `StructFieldStore` 有 17 条能归到已知类别（本批收），余下 9 条接收者是裸 i64 句柄
+// （6 个 `SomeClass.CONST =` 形式、1 个 `Any`），没有类别可归，本批不收。
+class Box:
+    def __init__(self):
+        self.kind = 7
+        self.n = 8
+
+    def stamp(self, v):
+        self.late = v
+
+b1 = Box()
+b2 = Box()
+b1.extra = 99
+b2.extra = 100
+b1.stamp(5)
+print("b1", b1.kind, b1.n, b1.extra, b1.late)
+print("b2", b2.kind, b2.n, b2.extra)
+
+class Empty:
+    pass
+
+e = Empty()
+e.first = 3
+e.second = 4
+print("empty", e.first, e.second)
+
+// expect: b1 7 8 99 5
+// expect: b2 7 8 100
+// expect: empty 3 4

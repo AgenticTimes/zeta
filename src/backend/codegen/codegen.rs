@@ -105,6 +105,23 @@ pub struct LLVMCodegen<'ctx> {
     /// the member name (batch 419, see `dyn_member_is_class_alias`). Collected
     /// from the MIR list, so it is complete before any body is emitted.
     pub class_method_members: std::collections::BTreeSet<String>,
+    /// BATCH-434: attribute names that are only ever assigned to an object
+    /// AFTER construction (a `self.X` store in another method, or a store
+    /// through a receiver whose declared type names the class). Such a name has
+    /// no slot in the class layout, so the read and the write both fell back to
+    /// index 0 and clobbered the receiver's first declared field. Each variant
+    /// gets these names appended to its own layout (see `ext_slot`).
+    pub struct_ext_layouts:
+        std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// BATCH-434: the field widths every `MirExpr::Struct` of each variant
+    /// declares. An extension index is `declared + position`, so it is only safe
+    /// where every construction site of the variant agrees on `declared`.
+    pub struct_variant_widths:
+        std::collections::BTreeMap<String, std::collections::BTreeSet<usize>>,
+    /// BATCH-434: every name the variant declares in ANY of its layouts, so a
+    /// declared field is never given a second, extension, slot.
+    pub struct_declared_fields:
+        std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
 }
 
 impl<'ctx> LLVMCodegen<'ctx> {
@@ -1379,6 +1396,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
             zeta_fn_names: std::collections::HashSet::new(),
             dyn_member_gaps: std::collections::BTreeSet::new(),
             class_method_members: std::collections::BTreeSet::new(),
+            struct_ext_layouts: std::collections::BTreeMap::new(),
+            struct_variant_widths: std::collections::BTreeMap::new(),
+            struct_declared_fields: std::collections::BTreeMap::new(),
         }
     }
 
@@ -1456,6 +1476,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
         self.struct_defs.clear();
         self.struct_ctor_layouts.clear();
         self.struct_variant_collisions.clear();
+        self.struct_ext_layouts.clear();
+        self.struct_variant_widths.clear();
+        self.struct_declared_fields.clear();
         for mir in mirs {
             let owner = mir.name.clone().unwrap_or_default();
             for (_, expr) in mir.exprs.iter() {
@@ -1466,6 +1489,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 {
                     let type_key = format!("struct_{}_{}", v, fds.len());
                     let field_names: Vec<String> = fds.iter().map(|(n, _)| n.clone()).collect();
+                    // BATCH-434: what the variant declares, and how wide its
+                    // constructors say it is. Both decide whether an extension
+                    // slot may be handed to a name that only appears later.
+                    self.struct_variant_widths
+                        .entry(v.clone())
+                        .or_default()
+                        .insert(fds.len());
+                    self.struct_declared_fields
+                        .entry(v.clone())
+                        .or_default()
+                        .extend(field_names.iter().cloned());
                     // First writer wins for a key, so two same-named classes of
                     // the same width but a DIFFERENT field order silently keep one
                     // layout. BATCH-427: make that collision audible under the
@@ -1496,6 +1530,70 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .entry(ctor_key)
                         .or_insert_with(|| field_names.clone());
                 }
+            }
+        }
+
+        // BATCH-434: a class attribute that is first assigned AFTER the
+        // constructor has no slot at all — `struct_defs` only ever sees the
+        // literal `Struct` expression the constructor lowers to. Read and write
+        // then agreed on the same wrong answer: the name is missing from the
+        // layout, the index fell out of range, and the range check clamped it to
+        // the receiver's OWN first word (measured on `i.extra = 99` in a 2-field
+        // `Impl`: `self.kind` read back 99, CPython reads 7). Widen the layout
+        // with those names instead of letting them steal a declared slot. The
+        // scan is over the MIR list, so it is complete before any body is
+        // emitted — both the allocator and the index lookup use the same table.
+        for mir in mirs {
+            let self_ids: Vec<u32> = mir
+                .param_indices
+                .iter()
+                .filter(|(n, _)| n.ends_with("self"))
+                .map(|(_, i)| *i)
+                .collect();
+            let owner_variant = match mir.name.as_deref() {
+                Some(n) => match n.split_once("::") {
+                    Some((cls, _)) => self.bare_variant_of(cls),
+                    None => None,
+                },
+                None => None,
+            };
+            for stmt in &mir.stmts {
+                let (base_id, field) = match stmt {
+                    MirStmt::StructFieldStore { base_id, field, .. } => (*base_id, field),
+                    _ => continue,
+                };
+                // `self.X = ...` inside `Cls::method` knows its class from the
+                // item name; anything else only through the receiver's declared
+                // type. A receiver with neither (a bare i64 handle) stays out.
+                let variant = if self_ids.iter().any(|s| self.traces_to_expr(base_id, *s, mir)) {
+                    owner_variant.clone()
+                } else {
+                    match mir.type_map.get(&base_id) {
+                        Some(Type::Named(n, _)) => self.bare_variant_of(n),
+                        _ => None,
+                    }
+                };
+                let variant = match variant {
+                    Some(v) => v,
+                    None => continue,
+                };
+                if self
+                    .struct_declared_fields
+                    .get(&variant)
+                    .map_or(true, |d| d.contains(field))
+                {
+                    continue;
+                }
+                if crate::diagnostics::env_flag("ZETA_DBG_FA") {
+                    eprintln!(
+                        "ZETA-DBG FA ext+ variant={:?} field={:?} via={:?}",
+                        variant, field, mir.name
+                    );
+                }
+                self.struct_ext_layouts
+                    .entry(variant)
+                    .or_default()
+                    .insert(field.clone());
             }
         }
 
@@ -5848,8 +5946,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 dest,
             } => {
                 // Allocate struct on HEAP to prevent dangling pointers
+                // BATCH-434: `words` also covers the attribute slots that first
+                // appear after construction (zero-filled below), so a store to
+                // one of them gets its own word instead of a declared field's.
+                let words = self.struct_alloc_words(variant, fields.len());
                 let total_bytes = self.i64_type.const_int(
-                    (fields.len() as u64) * 8,
+                    (words as u64) * 8,
                     false,
                 );
                 let malloc_fn = self
@@ -5891,6 +5993,21 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .gen_expr_safe(field_id, exprs)
                         .into_int_value();
                     self.builder.build_store(field_ptr, field_val).unwrap();
+                }
+                for i in fields.len()..words {
+                    let ext_ptr = unsafe {
+                        self.builder
+                            .build_gep(
+                                self.i64_type,
+                                struct_base,
+                                &[self.i64_type.const_int(i as u64, false)],
+                                "ext_ptr",
+                            )
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_store(ext_ptr, self.i64_type.const_zero())
+                        .unwrap();
                 }
                 let dest_alloca = *self.locals.get(dest).unwrap();
                 self.builder
@@ -6089,6 +6206,124 @@ impl<'ctx> LLVMCodegen<'ctx> {
             decl.push((variant.to_string(), fields.len(), idx));
         }
         decl
+    }
+
+    /// Map a class SPELLING onto the bare variant the layout tables are keyed
+    /// by. Two spellings reach the backend: the `Cls::method` prefix of a MIR
+    /// item, and a receiver's declared `Named(...)` type — which is
+    /// module-mangled (`jq_shim___G` for class `_G`). Only an UNAMBIGUOUS answer
+    /// is accepted: several variants may share one suffix (`Bar` and `_Bar`),
+    /// and guessing would hand a class another class's extension slots. Zero or
+    /// several matches means no extension at all (BATCH-434).
+    fn bare_variant_of(&self, class_str: &str) -> Option<String> {
+        let mut cands: Vec<String> = vec![class_str.to_string()];
+        for f in [
+            class_str.rsplit("__").next(),
+            class_str.rsplit('.').next(),
+        ] {
+            if let Some(x) = f {
+                if !cands.iter().any(|c| c == x) {
+                    cands.push(x.to_string());
+                }
+            }
+        }
+        let exact: Vec<&String> = self
+            .struct_variant_widths
+            .keys()
+            .filter(|v| cands.iter().any(|c| c == *v))
+            .collect();
+        if exact.len() == 1 {
+            return Some(exact[0].clone());
+        }
+        let suf: Vec<&String> = self
+            .struct_variant_widths
+            .keys()
+            .filter(|v| {
+                !exact.contains(v) && cands.iter().any(|c| c.ends_with(&format!("_{}", v)))
+            })
+            .collect();
+        if suf.len() == 1 {
+            return Some(suf[0].clone());
+        }
+        None
+    }
+
+    /// Does the value behind `id` come out of expression `target` through `Var`
+    /// links alone? (The same walk the read side takes to find its base.)
+    fn traces_to_expr(&self, id: u32, target: u32, mir: &Mir) -> bool {
+        let mut cur = id;
+        for _ in 0..10 {
+            if cur == target {
+                return true;
+            }
+            match mir.exprs.get(&cur) {
+                Some(MirExpr::Var(next)) => cur = *next,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// Words a block of `variant` with `declared` declared fields occupies:
+    /// the declared ones plus the extension slots BATCH-434 collects. Both
+    /// allocators and `ext_slot` go through here, so an index can never point
+    /// past the allocation the way a stand-in write used to.
+    fn struct_alloc_words(&self, variant: &str, declared: usize) -> usize {
+        self.ext_width_delta(variant, declared) + declared
+    }
+
+    /// How many extension slots `variant` gets. Zero unless every constructor of
+    /// the variant agrees on the declared width — the extension index is
+    /// `declared + position`, so two widths would compute different words for
+    /// the same attribute (BATCH-434).
+    fn ext_width_delta(&self, variant: &str, declared: usize) -> usize {
+        if variant.is_empty() {
+            return 0;
+        }
+        match self.struct_variant_widths.get(variant) {
+            Some(w) if w.len() == 1 && w.contains(&declared) => self
+                .struct_ext_layouts
+                .get(variant)
+                .map_or(0, |e| e.len()),
+            _ => 0,
+        }
+    }
+
+    /// The appended slot of a name that only ever appears after construction:
+    /// the variant, the receiver's EFFECTIVE width (the caller's range check and
+    /// the read's struct-load type both have to grow to it) and the index.
+    fn ext_slot(&self, variant: &str, declared: usize, field: &str) -> Option<(String, usize, u32)> {
+        let delta = self.ext_width_delta(variant, declared);
+        if delta == 0 {
+            return None;
+        }
+        let pos = self
+            .struct_ext_layouts
+            .get(variant)?
+            .iter()
+            .position(|n| n == field)? as u32;
+        Some((variant.to_string(), declared + delta, declared as u32 + pos))
+    }
+
+    /// BATCH-434: which class a receiver belongs to when the layout routes gave
+    /// up (they only accept a name the layout DECLARES), read off the receiver's
+    /// declared type. A variant with more than one width is refused: the
+    /// extension index is `declared + position`, so the answer must be single.
+    fn ext_class_of_declared_base(&self, base: u32) -> Option<(String, usize)> {
+        let n = self
+            .current_type_map
+            .as_ref()
+            .and_then(|tm| tm.get(&base))
+            .and_then(|t| match t {
+                Type::Named(n, _) => Some(n.clone()),
+                _ => None,
+            })?;
+        let v = self.bare_variant_of(&n)?;
+        let w = self.struct_variant_widths.get(&v)?;
+        if w.len() != 1 {
+            return None;
+        }
+        Some((v, *w.iter().next()?))
     }
 
     /// Recover a struct layout from the FIELD NAME alone, for a receiver whose
@@ -6328,15 +6563,50 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     }
                     None => self.resolve_struct_field_index(&base, field, exprs),
                 };
-                // If still out of range, fall back to numeric parse
-                let field_index = if field_index >= field_count as u32 {
-                    let fb = field.parse::<u32>().unwrap_or(0);
-                    if crate::diagnostics::env_flag("ZETA_DBG_FA") {
-                        eprintln!("ZETA-DBG   idx {} >= count {} -> fallback {}", field_index, field_count, fb);
-                    }
-                    fb
+                // If still out of range, the name has no slot in this layout.
+                // BATCH-434: an attribute that only ever appears after
+                // construction has its own APPENDED word — take that, and carry
+                // the effective width along, because the read builds its load
+                // type from it. Two shapes get here: the index the routes found
+                // is past the layout (the old numeric fallback then put the
+                // access at index 0 of a real layout, which is what silently
+                // overwrote a declared field), or the routes gave up and left the
+                // stand-in — where BATCH-427 measured that a name nobody declares
+                // reads word 0 without ever tripping the range check.
+                let ext = if field_index >= field_count as u32 || variant.is_empty() {
+                    self.ext_slot(&variant, field_count, field).or_else(|| {
+                        // Both layout routes insist the layout DECLARES the name,
+                        // so for a never-declared one they hand back an empty
+                        // variant (`extra` on `Impl`: `declarers=0`). The
+                        // receiver's declared type still says which class the
+                        // handle points at.
+                        if !variant.is_empty() {
+                            return None;
+                        }
+                        self.ext_class_of_declared_base(base)
+                            .and_then(|(v, d)| self.ext_slot(&v, d, field))
+                    })
                 } else {
-                    field_index
+                    None
+                };
+                let (variant, field_count, field_index) = match ext {
+                    Some((v, cnt, idx)) => {
+                        if crate::diagnostics::env_flag("ZETA_DBG_FA") {
+                            eprintln!(
+                                "ZETA-DBG   idx {} >= count {} variant={:?} -> ext slot {} of {}",
+                                field_index, field_count, v, idx, cnt
+                            );
+                        }
+                        (v, cnt, idx)
+                    }
+                    None if field_index >= field_count as u32 => {
+                        let fb = field.parse::<u32>().unwrap_or(0);
+                        if crate::diagnostics::env_flag("ZETA_DBG_FA") {
+                            eprintln!("ZETA-DBG   idx {} >= count {} -> fallback {}", field_index, field_count, fb);
+                        }
+                        (variant, field_count, fb)
+                    }
+                    None => (variant, field_count, field_index),
                 };
                 if crate::diagnostics::env_flag("ZETA_DBG_FA") {
                     eprintln!("ZETA-DBG   final idx={}", field_index);
@@ -6821,8 +7091,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
             }
             MirExpr::Struct { variant, fields } => {
                 // Allocate struct on HEAP to prevent dangling pointers
+                // BATCH-434: `words` also covers the attribute slots that first
+                // appear after construction (zero-filled below), so a store to
+                // one of them gets its own word instead of a declared field's.
+                let words = self.struct_alloc_words(variant, fields.len());
                 let total_bytes = self.i64_type.const_int(
-                    (fields.len() as u64) * 8,
+                    (words as u64) * 8,
                     false,
                 );
                 let malloc_fn = self
@@ -6882,6 +7156,21 @@ impl<'ctx> LLVMCodegen<'ctx> {
                             _ => field_val,
                         };
                     self.builder.build_store(field_ptr, stored).unwrap();
+                }
+                for i in fields.len()..words {
+                    let ext_ptr = unsafe {
+                        self.builder
+                            .build_gep(
+                                self.i64_type,
+                                struct_base,
+                                &[self.i64_type.const_int(i as u64, false)],
+                                "ext_ptr",
+                            )
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_store(ext_ptr, self.i64_type.const_zero())
+                        .unwrap();
                 }
 
                 // Return heap pointer as i64 (caller reads from valid heap memory)
