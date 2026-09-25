@@ -10420,6 +10420,30 @@ call, no NULL-handle dereference).",
                     }
                     _ => false,
                 };
+                // 批次 420: `.get(<str key>)` on a receiver we cannot statically
+                // type is a DICT lookup, but the name table below maps
+                // `("get", 2)` to `array_get`, whose load is `base + key*8` —
+                // with a string key that uses the key's ADDRESS as an element
+                // index (measured pre-fix: `def g(dd): return dd.get("x")` plus
+                // one call → rc=139, `ldr x19, [x19, x8, lsl #3]`). Emit the same
+                // `MirStmt::DictGet` the typed path uses, so one representation
+                // and one ABI survive (`map_get` takes `ptr`, not `i64`).
+                if !struct_has_method
+                    && method == "get"
+                    && arg_ids.len() == 2
+                    && matches!(self.type_map.get(&arg_ids[1]), Some(Type::Str))
+                    && !matches!(receiver_ty.as_ref(), Some(Type::Named(n, _)) if n == "map")
+                {
+                    let key_id = self.lower_map_key(arg_ids[1]);
+                    self.stmts.push(MirStmt::DictGet {
+                        map_id: arg_ids[0],
+                        key_id,
+                        dest: id,
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
                 let opaque_fallback: Option<(&str, &str)> = if receiver.is_some()
                     && !struct_has_method
                     && receiver_ty.as_ref().map_or(true, |t| {

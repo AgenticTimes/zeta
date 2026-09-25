@@ -1,0 +1,29 @@
+// 批次 420：动态接收者上的 `.get(<str 键>)` 不得下到 array_get。
+// `opaque_fallback` 名表把 `("get", 2)` 一律映射到 `array_get`，其
+// 载入是 `base + key*8`；键是字符串时这个 index 是键的**地址**，
+// 读出的地址 ×8 越界 ⇒ 进程直接没掉。改前实拍（同一份用例体，
+// 改前的 target/release/zetac，ZETA_RUNTIME_DIR 指仓根）：
+//   A=run 139 (SIGSEGV, stdout 空) · B=139 · C=0 打 "C 8"
+// 改后：A/B 走 `map_str_key` + `map_get(ptr, i64)`，与静态 map 路径
+// 同一条语句（MirStmt::DictGet）；C 是负对照 —— 整型键仍留在
+// array_get 语义上（本批没动它，列表 `.get` 的 Python 合同另案）。
+// 边界登记：A 打印 `g(d)` 本身仍打堆句柄（动态槽无类型标记，
+// #117），所以这里断言的是消费侧（`.strip()`、`len`）。
+def getv(dd):
+    return dd.get("x")
+
+def money_len(dd):
+    return len(dd.get("money"))
+
+def at1(arr):
+    return arr.get(1)
+
+d = {"x": " 25 ", "money": [1.0, 2.0]}
+print("A", getv(d).strip())
+print("B", money_len(d))
+xs = [7, 8, 9]
+print("C", at1(xs))
+
+// expect: A 25
+// expect: B 2
+// expect: C 8
