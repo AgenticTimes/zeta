@@ -540,6 +540,29 @@ if [[ $SKIP_EMIT_STABLE -eq 0 ]]; then
   rm -f "$emit_log"
 fi
 
+# ── 17) `[dynamic]` 运行期绑定两侧一致（批次 428）──
+# 实测缺陷：ghost 判据（不在例外表就抛异常）依赖 `codegen.rs::dyn_runtime_bound` 的
+# 字符串常量表与 `runtime/*.c` 里的 `__asm__("_[dynamic]…")` 标签**同一套事实**，
+# 而这两者之间没有类型、没有引用、没有任何编译期关系——表腐烂时一条测试都不会变红：
+# 漏登记会把能用的绑定判成"成员缺失"（当场回归），多登记会让那条 ghost 继续走到
+# extern declare、在链接期把整份二进制拖没（正是 428 要治的病）。
+# 判据在 tools/dyn_binding_lint.sh 内部（C 侧口径含"排除弱桩台账"的理由见其文件头），
+# 这里只认退出码。没有 --skip 开关：两次文本扫描，比它守卫的判据还便宜。
+dyn_log=$(mktemp)
+set +e
+"$ROOT/tools/dyn_binding_lint.sh" >"$dyn_log" 2>&1
+dyn_rc=$?
+set -e
+dyn_failed=$(grep -c '^  FAIL ' "$dyn_log" || true); dyn_failed=${dyn_failed:-0}
+dyn_checked=$(grep -cE '^  (ok|FAIL) ' "$dyn_log" || true); dyn_checked=${dyn_checked:-0}
+if [[ $JSON_ONLY -eq 0 ]]; then
+  echo "dyn_binding: ${dyn_checked} 条断言，不一致 ${dyn_failed}（rc=${dyn_rc}）"
+fi
+if [[ $dyn_rc -ne 0 ]]; then
+  tail -30 "$dyn_log" >&2
+fi
+rm -f "$dyn_log"
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -574,6 +597,7 @@ doc = {
             "rc": $mbvar_rc, "skipped": $SKIP_MBVAR},
   "emit_stable": {"checked": $emit_checked, "failed": $emit_failed,
                   "rc": $emit_rc, "skipped": $SKIP_EMIT_STABLE},
+  "dyn_binding": {"checked": $dyn_checked, "failed": $dyn_failed, "rc": $dyn_rc},
   "comment_drift": {"restated": $restated_n, "rc": $restated_rc},
   "clean_checkout": {"rc": $clean_rc, "secs": $clean_secs, "rev": "${clean_rev:0:8}",
                      "skipped": $SKIP_CLEAN},
@@ -627,6 +651,8 @@ if [[ $SKIP_IGNORE -eq 0 && $ignore_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_MBVAR -eq 0 && $mbvar_rc -ne 0 ]]; then rc=1; fi
 # emit_stable: 判据在 tools/emit_stable.sh 内部（夹具清单见其文件头），这里只认退出码。
 if [[ $SKIP_EMIT_STABLE -eq 0 && $emit_rc -ne 0 ]]; then rc=1; fi
+# dyn_binding: 判据在 tools/dyn_binding_lint.sh 内部（两侧口径与"排除弱桩"的理由见其文件头），这里只认退出码。
+if [[ $dyn_rc -ne 0 ]]; then rc=1; fi
 # clean_checkout: 判据在步骤 10 内部（rc=0 才算"检出即可编译"）；93~99 是选址/登记/提交解析
 # 本身不合法，同样判红——静默跳过等于这一步不存在。
 if [[ $SKIP_CLEAN -eq 0 && $clean_rc -ne 0 ]]; then rc=1; fi

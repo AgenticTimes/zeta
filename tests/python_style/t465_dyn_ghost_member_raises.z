@@ -1,0 +1,50 @@
+// 批次 428（3.2 Lowering → 链接层／一个成员名拖垮整份二进制）：
+// 接收者的静态类型是 `[dynamic]T`（向量）而成员谁都没定义时，下型器造出幽灵调用名
+// `[dynamic]T::<成员>`（`mir/gen.rs` 的动态派发）。`codegen.rs` 的 `resolve_function` 里
+// 419 的 raise thunk 只管"**成员名恰好是某类别方法的裸别名**"这一子集
+// （`dyn_member_is_class_alias`），其余一路走到最后的 `add_function(.., External)` ——
+// 这个名字是下型器凭空造的，链接器只可能 miss ⇒ `Error: "Linking failed"`，
+// **一个不存在的成员名让整份二进制出不来**（不是这一格错，是全程序没了）。
+//
+// 本批把判据补全：走到"连声明都没有"这一步的 `[dynamic]` 幽灵，一律绑到 419/422 那条
+// 按名抛异常的 thunk（`dyn_member_missing_thunk`），让**调用点**在运行期出声，
+// 外层 `except` 能接 —— 即 CPython 对不存在成员回 AttributeError 的形状。
+//
+// 改前实拍（`target/release/zetac_pre428` 编本夹具）：rc=1、不出二进制，
+// stderr 末三行 `Undefined symbols for architecture arm64:` /
+// `  "_[dynamic]str__nonesuch", referenced from:` / `Error: "Linking failed"`。
+// 改后：rc=0，运行期 stderr 一行
+// `PY-A: dynamic receiver has no member `[dynamic]str::nonesuch` — raising`，
+// stdout `caught`（＝异常真被接住，这条路径真跑了）。
+//
+// 例外表 `dyn_runtime_bound`（4 条）＝C 侧**真有实现**的幽灵，标签见
+// `runtime/py_additions.c:967-994`；漏放任何一条都会把可用绑定变成假"成员缺失"。
+// 该表的活性证据是套件里的 t411_parse_unwrap_chars（其 `chars().nth(0)` 走
+// `[dynamic]str::nth`）：把 `nth` 从表里删掉后 t411 立即 FAIL（实拍：输出停在第一行 `42`）。
+// 表与 C 标签的一致性由 `tools/run_all.sh` 第 17 步核对。
+//
+// 语料位移 0（`_drv_accept_409.py`，同目录两进制 A/B）：编译 rc 0/0、运行 rc 0/0、
+// out 1/1 行、err 321/321 行、PY-A 幽灵告警 6/6 逐字相同 —— 语料里现存能链接的幽灵
+// 都有 C 侧定义或裸别名，本批收的是"要到链接期才出声"的这一格。
+//
+// 同族登记（**不在本批**）：接收者完全无类型（未标注形参）时成员调用走**裸名**，
+// 一个不存在的成员名同样把整份二进制拖没。实测来自另一支探针
+// （/tmp/b429/probe465.z：`def probe(v): v.nonesuch(0)`，形参无标注）——
+// stderr 报 `"_nonesuch", referenced from: _probe` 后 `Error: "Linking failed"`。
+// 裸名族的判据要另批定（裸名同时是运行时普通函数的调用方式，收口范围需另测）。
+
+def cols() -> lt(vec, str):
+    return ["a", "b"]
+
+try:
+    w = cols().nonesuch(0)
+    print("no-raise", w)
+except:
+    print("caught")
+
+print("len", len(cols()))
+print("done")
+
+// expect: caught
+// expect: len 2
+// expect: done

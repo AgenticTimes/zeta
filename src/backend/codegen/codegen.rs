@@ -2990,6 +2990,28 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     return f;
                 }
             }
+            // BATCH-428: reaching here means NOTHING defines this call target —
+            // not the program, not an earlier name variant, not even a runtime
+            // declaration. The declare below is then a symbol the linker can only
+            // miss, so the price of one lost member is the whole binary
+            // (measured: `Undefined symbols … _[dynamic]str__get_level_values`
+            // ⇒ `Error: "Linking failed"`, i.e. a 3-line typo of a member name
+            // takes down a 20-module compile). A ghost is by construction a name
+            // the LOWERER invented (`[dynamic]<receiver type>::<member>`), so
+            // this is exactly the "receiver's member is not implemented" case
+            // batch 419 already decided the answer to: raise by name at the call
+            // site, let an enclosing `except` take its fallback.
+            //
+            // Deliberately NOT applied to the `__`-spelled forms: those are
+            // emitted verbatim by lowering rules that know a runtime symbol
+            // implements them (`[dynamic]str__map` → `runtime/py_additions.c:967`).
+            if name.starts_with("[dynamic]")
+                && !Self::dyn_runtime_bound(name)
+                && self.module.get_function(&qualified_actual).is_none()
+            {
+                self.dyn_member_gaps.insert(name.to_string());
+                return self.dyn_member_missing_thunk(name, args_count);
+            }
             // Use qualified name for extern declaration to avoid collisions between
             // path-qualified names with the same bare method name but different param counts
             // (e.g., String::new() vs LLVMCodegen::new("bench")).
@@ -3059,6 +3081,31 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some((_, member)) => self.class_method_members.contains(member),
             None => false,
         }
+    }
+
+    /// Batch 428: the handful of `[dynamic]<receiver>::<member>` call targets the
+    /// C runtime really implements. A ghost is a name the LOWERER invented, so the
+    /// only way it can link at all is a C definition carrying the mangled spelling
+    /// as an `__asm__` label — today those are `runtime/py_additions.c:967-994`
+    /// (`map`, `pct_change`, `abs`, `nth`). `dyn_member_never_links` below must not
+    /// raise on them, or a working binding becomes a phantom "member missing".
+    ///
+    /// The list and the C labels share no type, no reference and no compile-time
+    /// relation, so drift is silent in both directions: a missing entry turns a
+    /// working binding into a raise, a stale one keeps the "whole binary fails to
+    /// link" bug alive. Gate step 17 (`tools/dyn_binding_lint.sh`, batch 428)
+    /// re-reads both sides and compares the two sets.
+    fn dyn_runtime_bound(name: &str) -> bool {
+        const DYN_RUNTIME_BINDINGS: &[&str] = &[
+            "[dynamic]str::map",
+            "[dynamic]str::pct_change",
+            "[dynamic]str::abs",
+            "[dynamic]str::nth",
+        ];
+        // The lowerer emits both spellings (`::` from auto-dispatch, `__` from the
+        // explicit vec rewrites in `mir/gen.rs`), and the C label is always `__`.
+        let qualified = name.replacen("__", "::", 1);
+        DYN_RUNTIME_BINDINGS.contains(&qualified.as_str())
     }
 
     /// PY-A (batch 419): the raising thunk a `[dynamic]<ty>::member` ghost binds
