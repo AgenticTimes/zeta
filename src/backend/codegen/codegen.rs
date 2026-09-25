@@ -2996,8 +2996,8 @@ impl<'ctx> LLVMCodegen<'ctx> {
             // miss, so the price of one lost member is the whole binary
             // (measured: `Undefined symbols … _[dynamic]str__get_level_values`
             // ⇒ `Error: "Linking failed"`, i.e. a 3-line typo of a member name
-            // takes down a 20-module compile). A ghost is by construction a name
-            // the LOWERER invented (`[dynamic]<receiver type>::<member>`), so
+            // takes down the whole 28-module acceptance compile). A ghost is a
+            // name the LOWERER invented (`[dynamic]<receiver type>::<member>`), so
             // this is exactly the "receiver's member is not implemented" case
             // batch 419 already decided the answer to: raise by name at the call
             // site, let an enclosing `except` take its fallback.

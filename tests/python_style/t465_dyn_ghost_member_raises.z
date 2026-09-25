@@ -1,6 +1,7 @@
 // 批次 428（3.2 Lowering → 链接层／一个成员名拖垮整份二进制）：
 // 接收者的静态类型是 `[dynamic]T`（向量）而成员谁都没定义时，下型器造出幽灵调用名
-// `[dynamic]T::<成员>`（`mir/gen.rs` 的动态派发）。`codegen.rs` 的 `resolve_function` 里
+// `[dynamic]T::<成员>`（`mir/gen.rs` 的动态派发）。`codegen.rs` 的
+// `get_or_declare_function`（:2683）里
 // 419 的 raise thunk 只管"**成员名恰好是某类别方法的裸别名**"这一子集
 // （`dyn_member_is_class_alias`），其余一路走到最后的 `add_function(.., External)` ——
 // 这个名字是下型器凭空造的，链接器只可能 miss ⇒ `Error: "Linking failed"`，
@@ -19,12 +20,18 @@
 //
 // 例外表 `dyn_runtime_bound`（4 条）＝C 侧**真有实现**的幽灵，标签见
 // `runtime/py_additions.c:967-994`；漏放任何一条都会把可用绑定变成假"成员缺失"。
-// 该表的活性证据是套件里的 t411_parse_unwrap_chars（其 `chars().nth(0)` 走
-// `[dynamic]str::nth`）：把 `nth` 从表里删掉后 t411 立即 FAIL（实拍：输出停在第一行 `42`）。
+// 该表的活性证据是套件里的 t411_parse_unwrap_chars：它的 `chars().nth(0)` 发的正是
+// `[dynamic]str__nth`（`--emit-llvm` 里 2 个 call 站点 + 1 条 declare，`t411.ll:1181/1201/1228`）。
+// 把 `nth` 从表里删掉、重编译（增量 16.89s）后 t411 当场变红 —— 实拍：stdout 只到 `42`、`0`
+// 两行，第三行 `False` 未出，stderr `dynamic receiver has no member `[dynamic]str::nth` — raising`、
+// run rc=1。源码恢复重编后 `zetac` md5 回到同一颗（`5ef81704…`），t411/t465 双双 rc=0。
 // 表与 C 标签的一致性由 `tools/run_all.sh` 第 17 步核对。
 //
 // 语料位移 0（`_drv_accept_409.py`，同目录两进制 A/B）：编译 rc 0/0、运行 rc 0/0、
-// out 1/1 行、err 321/321 行、PY-A 幽灵告警 6/6 逐字相同 —— 语料里现存能链接的幽灵
+// stdout 1/1 行、stderr 321/321 行；**编译期**点名的"动态接收者成员…无定义"6/6 条逐字
+// 相同（`i64::copy`、`str::copy`/`dropna`/`ffill`/`isin`/`to_dict` 各 1），PY-A 告警多重集
+// 两侧差 0；**运行期** stderr 的 ghost raise 0/0（语料那 6 个点名的调用点没被跑到）。
+// 即：语料里现存能链接的幽灵
 // 都有 C 侧定义或裸别名，本批收的是"要到链接期才出声"的这一格。
 //
 // 同族登记（**不在本批**）：接收者完全无类型（未标注形参）时成员调用走**裸名**，

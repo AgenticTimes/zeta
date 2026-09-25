@@ -18986,6 +18986,92 @@ $ ZETA_DBG_FA=1 zetac_pre427 同一夹具                                # 改�
 6. **A/B 两颗二进制必须同目录**：本批把 `zetac` 与 `zetac_pre427` 都留在 `target/release/` 下复跑夹具，否则不同目录的 `pylib` 解析基会让"改前改后"跑的其实是两份代码（记忆坑同型）。
 7. **426 §九.7① 那条坑当场再犯一次，而且这次真造成损伤**：插 427 节时 `old_string` 仍取了 `## 优先级调整（2026-09-24，用户裁定）` 整行 —— 第一次被"命中 2 处"挡住（另一处＝426 §九.7 正文里对同一串的引用），换长锚点后替换成功，但 `new_string` 末尾**忘了把标题写回去** ⇒ 标题消失、正文还在。是落盘后的例行断言（"最后一个 `## ` 标题必须＝用户裁定" + `git diff --numstat roadmap.md` 出现 **1  deletions**）当场抓回并复原；终态 `git diff --numstat roadmap.md` ＝ **113 insertions / 0 deletions**，最后一个 `## ` 标题＝`优先级调整（2026-09-24，用户裁定）`（`grep -c` ＝ 1）。**教训不是"要用长锚点"（那条已记过），是"替换尾部节时，`new_string` 必须原样带上被 `old_string` 吃掉的每一个标题"** —— 只增不删的断言才是这一节的守门人。
 
+## 批次 428（3.2 Lowering → 链接层／一个成员名拖垮整份二进制）：走到"连声明都没有"那一步的 `[dynamic]` 幽灵，一律绑到 419/422 那条按名抛异常的桩 —— 语料位移 0（三层正证据）；例外表两侧一致性交门禁第 17 步当场核对（两条 FAIL 分支均实拍）
+
+代码提交一笔 `01edfb53`（6 文件 **+293/−82**：`src/backend/codegen/codegen.rs` **+47/−0**、`tools/dyn_binding_lint.sh` 88 行新增、`tools/run_all.sh` +26/−0、新用例 `tests/python_style/t465_dyn_ghost_member_raises.z` 50 行、`docs/ABI.md` +41/−41、`tools/baselines/abi_anchors.tsv` +41/−41）。`md5 target/release/zetac` = `5ef817044489f9c64f203f98036dd6eb`，改前那颗留盘为 `target/release/zetac_pre428`（`8a8e64483f7fe446c96ed0f47ca5ffde`＝427 的产物），两颗同在 `target/release/` 下。记录批另改两处**注释**（都不动判据、不动行数）：`t465` 头注释的三处读数/坐标按收尾实拍订正（函数名、t411 停在哪一行、6/6 是编译期还是运行期），以及 `codegen.rs:2999` 那句"拖没几个模块"从印象值 `20-module` 改成实数 **28**（＝语料 `PY-A: imported module` 计数）—— 该处重编后 `zetac` md5 **一字未变**（`5ef817…`），是"注释不参与出码"的最强证据。
+
+### 一、这一格在链上的位置（＝把 419/422 那条判据补全，不是第四根桩）
+
+419 立了"动态接收者的成员没定义 ⇒ 该调用点改成抛异常"，422 把它做成逐名点名；但判据只覆盖一个子集 —— **成员名恰好是某个类别方法的裸别名**（`dyn_member_is_class_alias`，`codegen.rs:3079`）。不在这个子集里的 `[dynamic]` 幽灵继续往下走，一路落到 `get_or_declare_function`（`:2683`）末尾那句 `add_function(.., External)`：这个名字是下型器凭空造的（`[dynamic]<接收者静态类型>::<成员>`），链接器只可能 miss ⇒ `Error: "Linking failed"`。**损害量不是"这一格读错"，是"全程序出不来"**：acceptance 那份编译一次要过 **28 个 `PY-A: imported module`** 的模块面（`/tmp/b428/ghost_A.txt` 计数），一个拼错的成员名就让整份二进制出不来。
+
+按 2026-09-24 裁定「一个一个修语法缺口的办法已经到头」：本批**不新增 C 桩、不逐成员补名字**，改的是那条兜路线的归向（declare ⇒ 运行期按名出声）。
+
+编号换位交代：427 §四把"收集点键冲突"登记为"428"，本批占用了 428 ⇒ 该缺陷改号 **430**（任务 #155 的标题已同步），内容一字未改。
+
+### 二、改动（一支判据 + 一张例外表 + 一步门禁）
+
+1. **判据（`codegen.rs:2993-3014`，注释在 2993-3007）**：末尾 extern declare 之前插一条 —— `name` 以 `[dynamic]` 开头、且不在例外表、且 `self.module.get_function(&qualified_actual).is_none()` ⇒ `dyn_member_gaps.insert(name)` ＋ `return self.dyn_member_missing_thunk(name, args_count)`（thunk＝419/422 那条，按幽灵**自己的拼写**抛，外层 `except` 能接）。**刻意不作用于 `__` 拼写的那批**：它们是下型器明知有 C 实现才原样发出的（`[dynamic]str__map` → `runtime/py_additions.c:967`）。
+2. **例外表 `dyn_runtime_bound`（`:3098`，表体 4 条）**＝ `[dynamic]str::{map, pct_change, abs, nth}`。判据按**第一个** `__` 归一（接收者类型名里没有 `__`，成员名可能有 dunder）。这张表是判据的另一半：漏放一条就把可用绑定改成假"成员缺失"。
+3. **门禁第 17 步 `tools/dyn_binding_lint.sh`（88 行；`run_all.sh:543-560` 接步、`:600` JSON 字段、`:654` 判据注释）**：C 侧扫 `runtime/*.c` 里的 `__asm__("_[dynamic]<接收者>__<成员>")` 标签并**排除** `unavailable_stubs.c`（批次 156 那 124 条弱桩是"为了让二进制能链接"，不是"运行期真实现了这个成员"），Rust 侧解析那张常量表，判**集合相等**。没有 `--skip` 开关：两次文本扫描比它守卫的判据还便宜。
+
+### 三、改前实拍＝两条独立夹具、两个不同的幽灵名（收尾全部重跑，不靠会话记忆）
+
+| 夹具 | 改前（`zetac_pre428`） | 改后（`zetac`） |
+|---|---|---|
+| `t465_dyn_ghost_member_raises.z`（`cols().nonesuch(0)`，外层 `try/except`） | compile **rc=1**、二进制不产出；stderr：`Undefined symbols for architecture arm64:` / `  "_[dynamic]str__nonesuch", referenced from:      _main in pre_t465.bin.o` / `ld: symbol(s) not found for architecture arm64` / `Error: "Linking failed"` | compile rc=0 ＋ 编译期点名一行；run **rc=0**、stdout `caught`/`len 2`/`done`、stderr `PY-A: dynamic receiver has no member …nonesuch — raising` ⇒ **异常真被外层接住**（这条路径的负断言配了正证据） |
+| 5 行探针 `/tmp/b428/probe_glz.z`（`cols().get_level_values(0)`，无 `except`） | compile **rc=1**、`_[dynamic]str__get_level_values` 未定义 ⇒ 同一病、另一个成员名 | compile rc=0；run **rc=1**、stderr 同一拼写的 raise 行 ＋ `Unhandled exception: code=1` ⇒ 出声的是**调用点**，不再是链接期 |
+
+第二行是故意留的"没有 except"的形状：它证明本批没把失败藏起来，只是把"全程序没了"降级成"这一格报 AttributeError 形状的错"。
+
+### 四、例外表两侧一致＝可判定（第 17 步的两条 FAIL 分支当场各拍一次）
+
+门禁正读数：`dyn_binding: 4 条断言，不一致 0（rc=0）`（ok 行逐条给出 `C py_additions.c:967/986/988/994 ⇔ Rust 表`）。负分支实拍（改源码 → 跑 lint → 恢复）：
+
+| 扰动 | lint 输出 | rc |
+|---|---|---|
+| 从 Rust 表删掉 `nth` | `FAIL [dynamic]str::nth 由 C 实现（py_additions.c:994）但 Rust 例外表没登记 ⇒ 会被判成"成员缺失"抛异常`（C 侧 4 / Rust 表 3） | 1 |
+| 往 Rust 表加一条运行期没有的 `"[dynamic]str::nonesuch"` | `FAIL [dynamic]str::nonesuch 在 Rust 例外表里但没有对应的 __asm__ 标签 ⇒ 仍会走到 extern declare 并拖没链接`（C 侧 4 / Rust 表 5） | 1 |
+
+**表项活性（删 `nth` 之后重编译，增量 16.89s）**：套件里的 `t411_parse_unwrap_chars` 当场变红 —— compile rc=0、run **rc=1**，stdout 只出 `42`、`0` 两行（第三行 `False` 没出），stderr `PY-A: dynamic receiver has no member [dynamic]str::nth — raising`。它正常情况下的形状也正面量过：`--emit-llvm` 里 `@"[dynamic]str__nth"` 有 **2 个 call 站点 + 1 条 declare**（`/tmp/b428/t411.ll:1181/1201/1228`）。⇒ 这条表项不是摆设。
+
+三次扰动测完全部恢复：`codegen.rs` md5 回到 `6910d0633ec8f7d04f29720b3db91a25`、`git status` 该文件干净、重编后 `zetac` md5 回到 `5ef817044489f9c64f203f98036dd6eb`（与跑门禁那颗逐字节相同），t411/t465 双双 rc=0。
+
+### 五、位移判定＝0，正证据三层（`/tmp/b428`，驱动 `one28b.sh`）
+
+1. **编译诊断层**：语料 PY-A 告警**多重集**改前/改后 `diff` 三三 0 行（`ghost_A/B/B2.txt` 各 157 行）；"动态接收者成员…无定义"点名 **6/6 条逐字相同**，名字＝`[dynamic]i64::copy`、`[dynamic]str::{copy, dropna, ffill, isin, to_dict}` 各 1。
+2. **链接／运行层**：两侧 compile rc **0/0**、二进制都产出、run rc **0/0**（收尾复跑取）、stdout 1/1 行、stderr 321/321 行、其中 PY-A 2/2 行、运行期 ghost raise **0/0**（语料那 6 个点名调用点没被跑到）。
+3. **噪声底**：改后同侧再编一遍（`cor_B2`）与 `cor_B` 在上述每一项上逐项相同 ⇒ 第 1、2 层的"相同"不是判据宽容。
+
+位移为 0 的**机理**（可复述、不是"没测到"）：语料里现存能链接的 `[dynamic]` 幽灵，要么有 C 侧定义（走例外表）、要么名字恰好是裸类别方法别名（走 419 那条）；本批收的正是"要到链接期才出声"那一格 —— 而**语料一旦有这种成员，改前就是硬链接失败、根本出不了二进制**，"改前能跑完"本身就是这一格成员数为 0 的正证据。
+
+### 六、没有修掉什么（逐条点名）
+
+1. **裸名族的同病未收（登记，不占本批号）**：接收者**完全无类型**（未标注形参）时成员调用发的是**裸名**，一个不存在的成员名同样把整份二进制拖没 —— `/tmp/b429/probe465.z`（`def probe(v): v.nonesuch(0)`，形参无标注）实拍：stderr `"_nonesuch", referenced from: _probe` 后 `Error: "Linking failed"`。**判据不能照搬本批**：裸名同时是运行时普通函数的调用方式，收口范围要另测（见 §七.3）。
+2. **抛异常 ≠ 修好语义**：`copy`/`dropna`/`ffill`/`isin`/`to_dict` 这 5 个语料名仍是"运行期出声"，正解在掩码族与库侧（#112 `zt_vec_cmp` 等，动 `runtime/py_additions.c` ⇒ **等授权**）。
+3. **例外表仍是字符串表**：第 17 步只判两侧集合相等，不校验 C 侧那份实现的行为是否正确。
+4. **弱桩台账仍在"能链接"一侧**：`unavailable_stubs.c` 按设计排除在本判据外 ⇒ 真·缺失成员若撞上弱桩名，仍是运行期 abort 自己的名字，而不是按名抛异常。
+5. **主线 301 第 1 步（0 笔成交）未闭**：`TRADE=0`、`1000000 -> 0 (-100.00%)`、`[PARITY] target=- \| holdings=- \| ranked=-` 本批一字未动；#145 packed str 生产者、#134 `GroupBy.__len__`、#117 动态键 `.get(k, default)` 照原账。
+
+### 七、头名换格（正向队列）
+
+1. **头名＝429 `[dynamic]` 接收者的属性读（无括号成员名）**：备料已在盘 —— `/tmp/b429/gen_property.rs`（md5 `4db6f50d55eae353682d507a414a5363`，目标 `src/middle/mir/gen.rs`，HEAD 那颗 `33ef7fad8aafbd8b3170af865d1a1aca`）＋ 待重新入库的夹具 `t466_dyn_receiver_property.z`。**上一段会话预跑过一版读数（FA decls 152→125、`columns` 12→0、`empty` 5→0、`index` 16→6），但本批未复核 ⇒ 429 开工时按本批口径当场重测**，不进本批结论。
+2. **第 2 格＝430（收集点键冲突，任务 #155）**：`t464` 红着当验收，第一格仍是"读侧的接收者身份从哪来"。
+3. **第 3 格＝裸名族（本批 §六.1）**：已实拍、损害量＝整份二进制；先量"裸名幽灵在语料里有多少真成员"再决定收口形状。
+4. **第 4 格起照旧**：#156（`declarers=0` 那 146 条按名归因）→ #142 → #134 → #117/#118 打印族 → #136 漏点族定价。等授权项一条未变：`runtime/py_additions.c`（#112/#145）、#42 JIT 运行时绑定、`benchmarks.yml`／任务 #29/#74、423 守卫上界与 `docs/ABI.md` 附 A #7 不一致。
+
+### 八、门禁与读数（`/tmp/b428/gate.log` 154 行 + `gate.rc`＝`gate_rc=1`）
+
+- **`GATE_RC=1`**，唯一红源仍是存量 `py_fail=2`（`failed: t231_dict_set_cast_fromkeys t233_listcomp_condition_capture`）。
+- python_style **346 passed / 2 failed / 7 known-fail / 0 xpass**，与 `ls tests/python_style/t*.z` 数到 **355** 对上（对 427 的 354 净增 1＝t465；known-fail 未增、`xpass=0` ⇒ 没有"改后意外变绿"）。
+- 诊断面 python_style **234 warning 行 / 110 文件**（427 为 233 / 109）：+1 行 +1 文件归因 t465 自己那一条"动态接收者成员…无定义"；official 侧 2 文件 / 6 行未动。
+- official **194/194 compile**、**191/194 compile+link**（3 条 link-only 明细未动：`integration_all_features`、`quantum_basic`、`selfhost`）；语料 **40/40 解析通过 100%**；jit **ok=176 / trap=376 / fail=0 / timeout=0 / segv=0（total 552，最小 ok=163）** —— 对 427 的 trap 375 / total 551 各 **+1**＝新用例进 sweep，ok 未回退（GREEN）；diff **match=120 / judged=130 / 92.3% / bad_case=0**；真值面 truth 22/23、str 20/23、container 27/28、numeric 23/28、control 28/28。
+- knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 / **mbvar 23 个脚本**（427 为 22 ⇒ 本批新脚本进扫描面，违规 0）/ emit_stable 2 夹具 / comment_drift 0 处复述 —— 全 0 违规。
+- **dyn_binding（本批新增第 17 步）：4 条断言、不一致 0、rc=0**；`tools/run_all.sh` 随之 **639 → 665 行**、门禁从 16 步到 **17 步**。
+- clean_checkout `rc=0 rev=e79fd478` —— 这是**代码批之前**那条记录 commit：门禁跑在 `01edfb53` 落盘前，它验的是"干净检出能编译"，不含本批改动（写在下一批读账时别误当"门禁没跑到本批代码"的疑点）。
+- **ABI 锚点**：`codegen.rs` 净 +47 行 ⇒ `--rebind` 重绑 `docs/ABI.md` **+41/−41**、`abi_anchors.tsv` **+41/−41**。按 diff 里的 56 个行号引用 token 逐项分类：**+47 位移 38 条**（在第二条插入点之后）、**+22 位移 7 条**（两条插入点之间）、未动 10 条、另 1 条 `:604` 不是 `codegen.rs` 的行号（同句里对别处的引用）。**一处手工改号**：`docs/ABI.md:187` 的 `type_to_llvm_type（:7687）` —— 位移后的目标行内容为空 ⇒ `--rebind` 判"定位失败"且配不出唯一候选，手改成 `:7734` 后重跑，它按「改号配对 ⇒ 只刷新基线」收编。终态只读核对 **rc=1：漂移 28 / 新 11 / 消失 10 / 定位失败 0**、改号配对 0 对、待归属 100 条 / 91 种、声明为仓外 14 条 —— **与 427 记录的常驻读数逐项相同**＝本批锚点侧净位移 0。隔离 HEAD worktree（`/tmp/b428_head`，`e79fd478`）同口径读 **消失 12**：差的 2 条来自未跟踪生成物 `runtime/aliases.inc.c`（427 §九.5 同型，第二次遇到）。
+- disclosure：门禁首行**没有** W2003；收尾三次重编（§四的两条负分支＋一次注释改动）后 `zetac` md5 仍是 `5ef81704…`，与跑门禁那颗逐字节相同 ⇒ 无"改后二进制"风险（记忆坑 6）。
+
+### 九、工具坑与自我核对（本批当场抓到）
+
+1. **A/B 二进制复制到仓外＝整套运行时消失的假链接失败**：`src/main.rs:452-509` 的 `find_runtime_obj` 先按 cwd 相对找，再退到**可执行文件往上 4 级祖先**找仓根的 `zeta_runtime_c.o`。把 `zetac` 拷到 `/tmp` 后编译夹具／语料，报的是 `_zeta_vec_unique`、`_zip`、`_zeta_try_*`、`_zt_dyn_member_missing`、`_zeta_dynarray_new` 全未定义 —— 长得像"本批改坏了链接"，其实一个运行时符号都没带上。真·改前失败只有那一条幽灵名。**修法：两颗二进制都留在 `target/release/` 下跑**（`one28b.sh` 头两行注释已记）。
+2. **同一原因的第二副脸：从非仓根 cwd 编译** ⇒ 症状一模一样。归因顺序要先排 cwd／二进制位置，再谈判据。
+3. **`printf` 拼多列读数＝字段错位**：我第一次报语料读数时把"stdout 行数"打在了 `run_rc=` 标签下（那行的真值是"1 行"），差点把"run rc 没量到"写成"run rc=1"。按列拼读数前，先保证每一列都有落盘的来源，或一列一行 `echo`。
+4. **负分支实拍要看"输出变了没"，不是看"脚本跑完没"**：第一次拍第二条 FAIL 分支时把哨兵字符串插到了常量块外面（`let qualified` 之前），lint 输出**一字未变**、rc 还是上一条的 1 —— 插进块内重做才拿到 §四 表里第二行那条文案。
+5. **引用函数名前先确认它存在**：夹具头注释初稿写"`codegen.rs` 的 `resolve_function`"—— 仓内**没有**这个函数（真名 `get_or_declare_function`，`:2683`）。按 `grep '^    fn '` 上下界重钉后订正。
+6. **临时改码测负分支，恢复是三步不是两步**：备份＋改测 → `git checkout --` → **复 md5 ＋ `git status` 该文件干净**，随后必须重编回原状（本批重编后 `zetac` md5 与门禁那颗相同，才继续写记录）。
+7. **`nm -u` 看不见已解析的绑定**：判"`nth` 这条幽灵真的发到符号"用的是 `--emit-llvm` 的 call 站点／declare，不是 `nm -u`（链接成功的二进制上它是空的）。
+8. **427 §九.1 那条坑当场复发，而且这次已经落进仓库**：`codegen.rs:2997-2999` 的注释写着"拖没 a 20-module compile"，`20` 是写注释时的印象值、从没量过；本批要写"损害量"时才去数语料的 `PY-A: imported module` ⇒ **28**。**订正注释＝一次独立改动**：为守住"不动行数"（41 条 ABI 引用刚按 +47 重绑，再位移一行就要重来一遍），改成等行替换并复跑锚点（仍是 28/11/10/0）。**规矩补一句：印象值不许进注释，已进去的要在本批复核时抓出来订正。**
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
