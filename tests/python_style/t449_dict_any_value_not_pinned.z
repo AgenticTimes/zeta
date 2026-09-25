@@ -1,0 +1,38 @@
+// 批次 413：`dict[str, Any]` 的值类型被**第一次写入**单侧钉死。
+// 此前：解析层把容器注解 `dict[str, Any]` 丢掉（只有"类形状"注解才保留），MIR 只看到
+// `{}` 推出来的 `map<i64, i64>`；批次 299 那条"首次写入细化 V"的规则于是把整个 map 的
+// 值类型钉成第一笔写入的形状。之后读**任何**值都按那个类静态分发 —— acceptance 里
+// `c["df"] = market_df` 先写，`len(c["trading_days"])` 就在列表 handle 上跑
+// `DataFrame::__len__`，把 vec 头当哈希表桶链走，`map_resolve(0x1)` 段错误（rc=139，
+// stdout 空）。
+// 修法：容器注解是"值可以是任意类型"唯一的落笔处，让它进 MIR 并把 V 定为动态；
+// 批次 299 的细化只在 V 仍是 i64 占位时生效，动态 V 不再被写穿。
+// 未列入本用例的一翼：`len(c["df"])`（类实例经动态槽读出 5，非 2）—— 动态槽身上没有
+// 类型标记，几何判形认不出结构体；另立 t450 known-fail。
+// expect: w1 3
+// expect: w2 4
+// expect: w3 42
+// expect: w4 1
+// expect: w5 5
+// expect: w6 yes
+// expect: w7 2 3
+from typing import Any
+from pandas import DataFrame
+
+c: dict[str, Any] = {}
+c["df"] = DataFrame({"code": ["a", "b"], "x": ["1", "2"]})
+c["lst"] = [1, 2, 3]
+c["txt"] = "abcd"
+c["num"] = 42
+c["sub"] = {"k": 1}
+print("w1", len(c["lst"]))
+print("w2", len(c["txt"]))
+print("w3", c["num"])
+print("w4", len(c["sub"]))
+print("w5", len(c))
+if "lst" in c:
+    print("w6 yes")
+d = {}
+d["p"] = [1, 2]
+d["q"] = [3, 4, 5]
+print("w7", len(d["p"]), len(d["q"]))

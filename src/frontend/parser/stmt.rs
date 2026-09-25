@@ -443,7 +443,23 @@ pub(crate) fn parse_assign(input: &str) -> IResult<&str, AstNode> {
                                             .map(|t| t.starts_with(char::is_uppercase))
                                             .unwrap_or(false)
                                     });
-                                let lhs = if class_like && matches!(&lhs, AstNode::Var(_)) {
+                                // BATCH-413: a container annotation is the only
+                                // record of a map's declared VALUE type (`{}`
+                                // cannot say it). Dropping it here left MIR with
+                                // `map<i64, i64>`, whose first write pinned V —
+                                // `c["df"] = df` then made `len(c["lst"])` dispatch
+                                // `DataFrame::__len__` on a list handle (SIGSEGV).
+                                // `parse_type` has already normalized
+                                // `dict[str, Any]` to `map<str, Any>`.
+                                let dict_like = ty
+                                    .trim()
+                                    .trim_start_matches("typing.")
+                                    .split_once('<')
+                                    .map(|(h, _)| matches!(h.trim(), "map" | "dict" | "Dict"))
+                                    .unwrap_or(false);
+                                let lhs = if (class_like || dict_like)
+                                    && matches!(&lhs, AstNode::Var(_))
+                                {
                                     Box::new(AstNode::TypeAnnotatedPattern {
                                         pattern: Box::new(lhs),
                                         ty,

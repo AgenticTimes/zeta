@@ -1660,22 +1660,22 @@ fn collect_module_global(stmt: &AstNode, out: &mut Vec<String>) {
             if matches!(&**rhs, AstNode::Closure { .. }) {
                 return;
             }
-            match &**lhs {
-                AstNode::Var(n) => Some(n.clone()),
-                _ => return,
+            match bare_bound_name(lhs) {
+                Some(n) => Some(n),
+                None => return,
             }
         }
-        AstNode::AssignOp { target, .. } => match &**target {
-            AstNode::Var(n) => Some(n.clone()),
-            _ => return,
+        AstNode::AssignOp { target, .. } => match bare_bound_name(target) {
+            Some(n) => Some(n),
+            None => return,
         },
         AstNode::Let { pattern, expr, .. } => {
             if matches!(&**expr, AstNode::Closure { .. }) {
                 return;
             }
-            match &**pattern {
-                AstNode::Var(n) => Some(n.clone()),
-                _ => return,
+            match bare_bound_name(pattern) {
+                Some(n) => Some(n),
+                None => return,
             }
         }
         _ => return,
@@ -1684,6 +1684,24 @@ fn collect_module_global(stmt: &AstNode, out: &mut Vec<String>) {
         if !out.contains(&n) {
             out.push(n);
         }
+    }
+}
+
+/// A binding target that names exactly one slot: `x`, or an annotated form of
+/// it (`x: dict[str, Any] = {}` parses to `TypeAnnotatedPattern { Var("x") }`).
+/// Batch 413: skipping the annotated wrapper left the name out of
+/// `module_globals`, so no `zeta_module_decl` was emitted and every other
+/// function's read of that module global fell back to an unregistered env slot
+/// (measured: a module-level `dict[str, str]` read back as empty, then a
+/// SIGSEGV in `map_insert` on the real corpus).
+fn bare_bound_name(target: &AstNode) -> Option<String> {
+    match target {
+        AstNode::Var(n) => Some(n.clone()),
+        AstNode::TypeAnnotatedPattern { pattern, .. } => match &**pattern {
+            AstNode::Var(n) => Some(n.clone()),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

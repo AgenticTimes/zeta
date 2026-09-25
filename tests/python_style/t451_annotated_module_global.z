@@ -1,0 +1,20 @@
+// 批次 413：带 `dict[...]` 注解的模块全局。解析器保留注解后，绑定名变成
+// `TypeAnnotatedPattern { Var }` 而不是裸 `Var`；任何只认裸 `Var` 的模块级扫描
+// 都会把它漏掉。实测两处漏点各有一翼盯住（把对应一处改回裸 Var 后重跑本用例）：
+// - `module_level_bindings`：名字没进 module_globals ⇒ 本用例编译通过但输出
+//   `a 0 0 / b 0 False / c 0 False`（语料上是 `len(UNIVERSES)` 恒 0 后
+//   `map_insert + 48` SIGSEGV）。
+// - `module_global_types`：类型丢了 ⇒ d 行的 `UA.keys()` 降成裸符号 `_keys`，
+//   链接失败（`Undefined symbols: _keys`）。
+// expect: a 1 1
+// expect: b 2 True
+// expect: c 2 True
+// expect: d 2
+from dictmod_b413 import reg, touch, UA, UL
+
+print("a", len(UA), len(UL))
+reg("z", "q")
+print("b", len(UA), "z" in UA)
+touch("y")
+print("c", len(UL), "y" in UL)
+print("d", len(UA.keys()))

@@ -1,0 +1,14 @@
+// 批次 413 的夹具：一个带 `dict[...]` 注解的模块全局映射，加上写它的函数。
+// 注解让解析器把绑定名裹进 TypeAnnotatedPattern；任何只认裸 `Var` 的模块级
+// 扫描漏掉它，这个全局就不进 module_globals，别的模块 / 同模块函数里的读
+// 会落成一个未初始化槽。
+UA: dict[str, str] = {"k": "v"}
+UL: dict[str, list[str]] = {"k": ["a", "b"]}
+
+
+def reg(n: str, s: str) -> None:
+    UA[n] = s
+
+
+def touch(n: str) -> None:
+    UL[n] = [n]

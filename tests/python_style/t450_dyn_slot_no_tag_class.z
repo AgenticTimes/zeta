@@ -1,0 +1,14 @@
+// 批次 413 残口（承接批次 400 登记①）：`dict[str, Any]` 里存的**类实例**从动态槽读出来
+// 只剩一个 i64 handle，槽身上没有类型标记 ⇒ `zeta_dyn_len` 只能按几何判形
+// （map 桶数 / vec 头 / 文本首字节），结构体三条都不匹配，最后落到 strnlen 上。
+// 实测：DataFrame（2 行）从 `c["df"]` 读出 5，三次构建+运行一致；CPython 参照 2。
+// 摘标条件：动态槽带值标签（refactor 项「给值加类型标记」），或 pylib DataFrame 的
+// handle 本身就是可判形的容器。
+// known-fail: 动态槽无类型标记 ⇒ 类实例经 dict[str, Any] 读出的是几何判形结果
+// expect: w8 2
+from typing import Any
+from pandas import DataFrame
+
+c: dict[str, Any] = {}
+c["df"] = DataFrame({"code": ["a", "b"], "x": ["1", "2"]})
+print("w8", len(c["df"]))

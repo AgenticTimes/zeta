@@ -2110,13 +2110,13 @@ impl Resolver {
                 out: &mut HashMap<String, Type>) {
             for s in stmts {
                 let (name, rhs) = match s {
-                    AstNode::Assign(lhs, rhs) => match &**lhs {
-                        AstNode::Var(n) => (n.clone(), Some(&**rhs)),
-                        _ => continue,
+                    AstNode::Assign(lhs, rhs) => match bound_var(lhs) {
+                        Some(n) => (n, Some(&**rhs)),
+                        None => continue,
                     },
-                    AstNode::Let { pattern, expr, .. } => match &**pattern {
-                        AstNode::Var(n) => (n.clone(), Some(&**expr)),
-                        _ => continue,
+                    AstNode::Let { pattern, expr, .. } => match bound_var(pattern) {
+                        Some(n) => (n, Some(&**expr)),
+                        None => continue,
                     },
                     AstNode::Block { body } => {
                         walk(body, globals, bare_globals, aliases, member_aliases, fn_rets, classes, module_prefix, out);
@@ -3019,9 +3019,26 @@ impl Resolver {
             for st in body {
                 match st {
                     AstNode::Assign(lhs, rhs) => {
-                        if let AstNode::Var(v) = &**lhs {
+                        // `m: dict[str, str] = {}` parses with the name wrapped in
+                        // a `TypeAnnotatedPattern`, so unwrapping it here is what
+                        // keeps `m` in scope for the `return m` below. Missing it
+                        // vetoed the whole function back to UNIT (batch 413:
+                        // `p = probe()` then typed the call dest `Tuple([])`, and
+                        // `len(p)` dispatched `array_len` — read 0, and on the real
+                        // corpus a SIGSEGV in `map_insert`).
+                        let var = match &**lhs {
+                            AstNode::Var(v) => Some(v.clone()),
+                            AstNode::TypeAnnotatedPattern { pattern, .. } => {
+                                match &**pattern {
+                                    AstNode::Var(v) => Some(v.clone()),
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        };
+                        if let Some(v) = var {
                             if let Some(t) = infer(rhs, seen, aliases, classes, fn_rets) {
-                                seen.insert(v.clone(), t);
+                                seen.insert(v, t);
                             }
                         }
                     }
@@ -4946,18 +4963,40 @@ fn rename_definition(a: AstNode, prefix: &str) -> AstNode {
     }
 }
 
+/// A binding target that names exactly one slot: `x`, or `x: T` — which parses
+/// to `TypeAnnotatedPattern { Var("x") }` and is otherwise invisible to every
+/// walker that matches a bare `Var` on an assignment target. Two module-level
+/// walks need it (batch 413, both measured):
+/// - `module_level_bindings`: a module-level `UA: dict[str, str] = {…}` dropped
+///   out of `own`, its mangled name never reached `module_globals`, and the
+///   module's own functions lowered `UA` as an uninitialized slot — `DictInsert`
+///   with a fresh empty `map_id` → SIGSEGV in `map_insert`.
+/// - `module_global_types`: the same name missing there leaves the global
+///   untyped for readers in other functions — `U.keys()` emitted the bare symbol
+///   `_keys` instead of `map_keys` (link failure).
+fn bound_var(target: &AstNode) -> Option<String> {
+    match target {
+        AstNode::Var(n) => Some(n.clone()),
+        AstNode::TypeAnnotatedPattern { pattern, .. } => match &**pattern {
+            AstNode::Var(n) => Some(n.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// PY-A: bare names a module-level statement binds (`LIMIT = 5`, `let x = …`).
 fn module_level_bindings(stmt: &AstNode) -> Vec<String> {
     let mut out = Vec::new();
     match stmt {
         AstNode::Assign(lhs, _) => {
-            if let AstNode::Var(n) = &**lhs {
-                out.push(n.clone());
+            if let Some(n) = bound_var(lhs) {
+                out.push(n);
             }
         }
         AstNode::Let { pattern, .. } => {
-            if let AstNode::Var(n) = &**pattern {
-                out.push(n.clone());
+            if let Some(n) = bound_var(pattern) {
+                out.push(n);
             }
         }
         AstNode::Block { body } => {
