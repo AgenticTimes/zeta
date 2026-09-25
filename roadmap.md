@@ -18175,6 +18175,73 @@ OPEN 净增 0：#143 结案（定位 + 落地 + 门禁化），新增登记折�
 5. **#134**：`GroupBy.__len__` 恒读 0（迭代正确、len 为空）。
 6. **#52 实测账**：裸行号引用现有两处在核对器里表现为 rc=2 的"定位失败"（§四 第 4 条），点名修一次是分钟级动作。
 
+## 批次 419（主线 301 第 3 步）：动态接收者的裸成员名兜底 —— 崩点从"绑错函数体"改成"抛异常"，位移 134→135 行
+
+代码提交 `92e05c11`（4 文件 / +321 −155）：`src/backend/codegen/codegen.rs`（+130 行）+ 新用例
+`tests/python_style/t455_dyn_member_raises.z` + `docs/ABI.md` / `tools/baselines/abi_anchors.tsv`（随 +130 行重绑）。
+
+### 一、病因链（三格，逐格有落点）
+
+1. PY-A 分发在**动态接收者**上出幽灵名 `[dynamic]<ty>::<member>`（`df["display_name"].to_dict()` ⇒ `[dynamic]str::to_dict`）。
+2. `src/middle/resolver/resolver.rs:1014-1026` 把每个 `Class::method` 既按限定名注册（:1021），**又按裸成员名再注册一份**（:1026 `self.register(b)`，注释原文 "Also register with simple name for backwards compat"）。
+3. `get_or_declare_function` 的裸名兜底因此命中该类别名，把 struct 类型的函数体绑到 vec/字符串句柄上 ⇒ 运行期 SIGSEGV/SIGBUS（rc=138/139）。
+
+正解形状：CPython 在这种情况下抛 AttributeError ⇒ 语料自己的 `try/except Exception` 走兜底分支。运行时真符号（`_[dynamic]str__nth`，`runtime/py_additions.c:994`）必须继续走 extern 声明趟。
+
+### 二、判据是怎么试错的（两条负结果，都实拍过）
+
+| 候选判据 | 读数 | 判定 |
+|---|---|---|
+| `starts_with("[dynamic]")` 一律抛 | t411_parse_unwrap_chars 回归（`chars().nth(i)` 合法绑 `_[dynamic]str__nth`）；门禁 `336 passed / 3 failed` | 弃 |
+| 参数个数 + `f.count_basic_blocks() > 0`（"有体才绑"） | 插桩实拍 `DBG419 name=[dynamic]str::to_dict argc=1 bare_blocks=0` ⇒ 查幽灵名那一刻裸别名还是**无体声明**；且只守 `type_args.is_empty()` 那一趟时 `@to_dict` 照绑，`v_e_p2.ll` 与改前**逐字节相同** | 弃 |
+| **问 MIR 清单**（装配前就完整）：裸成员名若被某个 `Class::method` 定义 ⇒ 它是别名 | 落地判据 | 采用 |
+
+### 三、改动（`src/backend/codegen/codegen.rs`，+130 行）
+
+- `dyn_member_gaps: BTreeSet<String>` —— 记名，编译末尾随 `report_abi_coercions` 逐条出声：`warning: PY-A: 动态接收者成员 \`{}\` 无定义 ⇒ 该调用点改为抛异常`。
+- `class_method_members: BTreeSet<String>` —— `gen_mirs` 第一趟按 `fn_name.rsplit_once("::")` 收全部成员尾段。
+- `dyn_member_is_class_alias(name)` —— 查上面那张表。
+- **两处**裸名兜底各加同一守卫（`type_args.is_empty()` 趟 + extern 声明趟；带实参类型时第一趟整条跳过，只守前者等于没守）。
+- `dyn_member_missing_thunk(args_count)` —— `zeta_raise(1)` 的按元数跳板；`get_insert_block()` 存/取按 `Option` 处理（有调用点当时未定位）。
+
+### 四、读数
+
+| 面 | 读数 |
+|---|---|
+| 新用例 t455（改前二进制实拍） | 改前：compile=0 / **run=138** / stdout 空 ⇒ 回归判据成立；改后：`A caught / B caught / C ok`、run=0，两条 warning 逐字打出 |
+| 未回归面 | t411_parse_unwrap_chars `42 / 0 / False / 0`、run=0（门禁与本批复跑各一次同值）；`h1/h2`（成员名根本不存在）仍 compile=1 `Undefined symbols _[dynamic]i64__to_dict` / `_…totally_missing` ⇒ 编译期出声这条界没动 |
+| 3 行复现 v_e/v_f/v_g | 改后 run=1 + `Unhandled exception: code=1`（异常码 1＝本批跳板） |
+| **语料 A/B（主线位移）** | 两侧二进制同在 `target/release/`（`zetac_b419_pre` / 改后 `zetac`），**cwd 都是 `REasyQuant` 根**、`REPLAYQUANT_LOCAL=1`：head 134 行 rc=139 → **fix 135 行 rc=139**；唯一新增行＝语料自己的 `[WARNING] jq_shim: 动态池更新失败: 1` ⇒ 崩点越过了那处 `try/except` |
+| 新崩点（lldb，改后二进制） | `EXC_BAD_ACCESS (code=1, address=0x3532)`，`frame #0: str_trim + 24`，指令 `ldrb w0, [x0]`，`x0 = 0x3532` ⇒ 小整数被当 `char*`（把指针当字符串那一族，#117 近邻） |
+| 噪声披露 | `rows` 12857（head 12855）＝同二进制跨跑抖（418 §五 已登记，不在本批面）；`开始回测: <ptr> ~ <ptr+11>` 是地址、随 ASLR 变 |
+| 门禁 `bash tools/run_all.sh` 16 步 | **gate rc=1**（`/tmp/b419g/gate419.log`）；唯一红源＝常驻 `run_all.sh:605 py_fail != 0`（`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`，同 418） |
+| python_style | **337 passed / 2 failed / 6 known-fail / 0 xpass** = 345 = `ls tests/python_style/t*.z \| wc -l`（348 个 `.z` 里 3 个是 `bsmod_/dictmod_/kwmod_` 夹具，harness 循环 `run.sh:49` 只吃 `t*.z`）⇒ 对 418 的 336/2/6/0 **净增 1＝t455，无回归** |
+| official / diff / jit | compile 194/194、compile+link 191/194（link-only 3 已登记）；diff 120/130=92.3% bad_case 0；jit ok=176 / segv 0 / total **542**（基线 163） |
+| 其余步骤 | knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 / mbvar 22 条断言 FAIL 全 0；comment_drift restated 0；emit_stable 2 夹具违规 0；clean_checkout rc=0（rev `969f8ec5`）；语料 40/40 解析通过 |
+| ABI 锚点（门禁外，手动） | HEAD 自测基线：漂移 32 / 新 11 / 消失 5 / **rc=2**（定位失败 2）→ 本批 `--rebind`（`docs/ABI.md` 74 行 147 个数字、tsv 249 条）后：漂移 29 / 新 11 / 消失 6。手改 9 条锚点（`codegen.rs:2278→2314`、`2501→2537`、`2536→2572`、`2552→2588`、`2664→2700`、`3859→4001`、`3875→4017`、`4410→4552`、`4567→4709`，每条都用 `grep -n` 按内容对过）+ `--bless-only` 点名入表 ⇒ 终态 **漂移 23 / 新 11 / 消失 10 / rc=1、定位失败 0** |
+| 锚点口径披露 | 消失从 5→10 的构成：3 条被 rebind 收掉（`aliases.inc.c:1/:12`、`py_additions.c:2650`→已改指 2656），8 条＝我手改后基线里留下的旧号。核对器按设计（批次 354/355）不自动删未配对消失项，清它只有 `--bless --force` 全量重采 ⇒ 会同时抹平此刻在场的 23 条漂移，**不做** |
+| 构建 | `cargo build --release` 17.59s；工作树 codegen.rs md5 `4aa822cde49efe1f26e62a43a6b12120` |
+
+### 五、更正批次 418 §四 第 2 条（另起一批，不回改旧文）
+
+418 写的是"跨窗口 IR 体积异常**未解释**"。本批取到第三个窗口：`/tmp/b419/acc.ll` = **4414539 字节**、`@str_lit` **10912** 行（sha256 前缀 `fb948f9a`），与 16:11–16:13 那组逐字同量级、与 16:30 那组（4384395 / 10738）不同 ⇒ 同一份"已修"编译器在**不同输入侧条件**下重复出同一个大值，异常属于**输入侧**（语料缓存/库面在场），不是出码非确定性没修干净。418 的"只用同窗口对照"这条纪律继续有效，但它的归因强度从"未解释"降为"已排除在 codegen 侧"。
+
+### 六、OPEN 净增账
+
+#144 结案（定位 + 落地 + 门禁化 + 崩点位移实测）。新增折进 backlog `#7` mega 行：新崩点 `str_trim+24` / `x0=0x3532`、`[dynamic]` 幽灵集合的真实 pandas 对齐缺口、`get_function` 同形兜底未守。OPEN 净增 **0**。
+
+**本批加行的散文引用位移（只加对照表，不回改旧批次正文）**：`codegen.rs` +130 行 ⇒ 418 §七 候选 3 的"名字→字段全局扫描 `:6535`"（variant 为空那一支的 `resolve_struct_field_index`）现落在 **:6665**；`worktree.md` §1 队列已按新号改写并就地注明旧号。ABI.md/基线里的锚点另走 `--rebind` + `--bless-only`（见 §四）。
+
+**代码内注释订正（随本记录批提交，行数不变 7788）**：本批新写的 4 处注释把裸名别名的注册点写成 `resolver.rs:1023-1026`，实为 `src/middle/resolver/resolver.rs:1014-1026`（限定名 `insert` 在 :1021、裸名 `self.register(b)` 在 :1026），已改成后者；改后 `python3 tools/check_abi_anchors.py` 读数与改前逐字相同（漂移 23 / 新 11 / 消失 10，基线 258 条）⇒ 没碰到任何锚点。
+
+### 七、下一批候选（按已实测损害量）
+
+1. **420＝`str_trim + 24` 读 `0x3532`**（头名）：语料现在跑到 135 行崩在这里，是"0 笔成交 / final_value"正前方唯一一格。损害量已实测：崩点行号 134→135、末行从"计算流动性阈值"变为越过 try/except 之后。
+2. **`[dynamic]` 幽灵名族在语料里还剩 5 个成员**（`copy`×2 / `dropna` / `ffill` / `isin`）：本批让它们从"绑错函数体"变成"抛异常走兜底"，但真对齐要 Series + `DataFrame.index`——是"选股数量对不对"的上游，未定价。
+3. **`get_function` 的第三档裸成员名兜底同形未守**（`codegen.rs:2307` 定义，:2323-2327 `name.split("::").last()` → `self.fns.get(method_name)`，而类别名就装在 `self.fns` 里）：与本批守掉的两处同形状。**可达性未证**——本批没测出任何 `[dynamic]` 幽灵名经 `get_function` 进来的实例（幽灵名走 `get_or_declare_function`）⇒ 只登记形状，不定价。
+4. **`rows` 同二进制跨跑抖**（12854–12858）：418 候选 2 未动，本批又一次读数（12855/12857）。
+5. **#142 / #134 / #52**：类构造器被当函数发 `FuncAddr`、`GroupBy.__len__` 恒 0、锚点核对器看不见裸行号（本批已把手改的 9 条入表，判据盲区本身还在）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。

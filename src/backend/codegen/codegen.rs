@@ -82,7 +82,7 @@ pub struct LLVMCodegen<'ctx> {
     /// name at the end of the compile.
     pub dyn_member_gaps: std::collections::BTreeSet<String>,
     /// Trailing segments of every `Class::method` this program defines, i.e. the
-    /// bare names that `resolver.rs:1023-1026` also registers as an alias. Used
+    /// bare names that `resolver.rs:1014-1026` also registers as an alias. Used
     /// to tell those aliases apart from a runtime symbol that happens to share
     /// the member name (batch 419, see `dyn_member_is_class_alias`). Collected
     /// from the MIR list, so it is complete before any body is emitted.
@@ -2708,7 +2708,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // receiver's static type is unknown (e.g. `df["col"]` yields a
                 // vec handle). Two candidates then look up the same bare name,
                 // and only one of them is safe:
-                //  - `resolver.rs:1023-1026` registers every `Class::method` a
+                //  - `resolver.rs:1014-1026` registers every `Class::method` a
                 //    second time under the BARE name, so binding it runs a
                 //    struct-typed body on a vec header —
                 //    `df["display_name"].to_dict()` landed in `DataFrame::to_dict`
@@ -2723,7 +2723,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // receiver's static type is unknown (e.g. `df["col"]` yields a
                 // vec handle). Two candidates then look up the same bare name,
                 // and only one of them is safe:
-                //  - `resolver.rs:1023-1026` registers every `Class::method` a
+                //  - `resolver.rs:1014-1026` registers every `Class::method` a
                 //    second time under the BARE name, so binding it runs a
                 //    struct-typed body on a vec header —
                 //    `df["display_name"].to_dict()` landed in `DataFrame::to_dict`
@@ -3031,7 +3031,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
     }
 
     /// PY-A (batch 419): does the trailing member of a `[dynamic]<ty>::member`
-    /// ghost name a class method this program defines? `resolver.rs:1023-1026`
+    /// ghost name a class method this program defines? `resolver.rs:1014-1026`
     /// registers every `Class::method` under its bare name as well, so the bare
     /// symbol a ghost would fall back to is a struct-typed body whose first
     /// parameter is read as `self` — which a dynamic receiver (a `df["col"]` vec
