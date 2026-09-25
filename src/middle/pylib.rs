@@ -302,20 +302,84 @@ pub fn method_symbol(handle: &str, method: &str) -> Option<(&'static str, Option
         .map(|m| (m.symbol.as_str(), m.ret_handle.as_deref()))
 }
 
+/// Names a **name-only** registry route must never steal: they are already
+/// dispatched by receiver-kind tables (map / list / the dunder protocols), so
+/// matching them on the bare spelling would re-bind a correct call to whatever
+/// handle the W table happens to use that name for.
+///
+/// Single source of truth — B4 (`gen.rs`, dyn receiver) and the bare-member
+/// route (batch 432, degraded calls) both consult it.
+pub const NAME_ROUTE_DENYLIST: &[&str] = &[
+    "get",
+    "set",
+    "keys",
+    "values",
+    "items",
+    "clear",
+    "pop",
+    "update",
+    "append",
+    "push",
+    "len",
+    "tolist",
+    "__contains__",
+    "__getitem__",
+    "__setitem__",
+    "__delitem__",
+    "__len__",
+    "__iter__",
+    "__enter__",
+    "__exit__",
+];
+
 /// B4: when the receiver is `dyn` / untyped, look up a W-table method by name
 /// alone — only if the name is unique across handles (otherwise keep guessing).
+/// The caller applies [`NAME_ROUTE_DENYLIST`].
 pub fn method_by_unique_name(
     method: &str,
 ) -> Option<(&'static str, &'static str, Option<&'static str>, &'static str)> {
-    let hits: Vec<&PyMethod> = registry()
-        .methods
-        .iter()
-        .filter(|m| m.method == method)
-        .collect();
-    if hits.len() != 1 {
+    unique_w_entry(method).map(|m| {
+        (
+            m.handle.as_str(),
+            m.symbol.as_str(),
+            m.ret_handle.as_deref(),
+            m.ret.as_str(),
+        )
+    })
+}
+
+/// The one `W` entry spelled `method`, or `None` when the name is ambiguous.
+fn unique_w_entry(method: &str) -> Option<&'static PyMethod> {
+    let mut hits = registry().methods.iter().filter(|m| m.method == method);
+    let m = hits.next()?;
+    if hits.next().is_some() {
         return None;
     }
-    let m = hits[0];
+    Some(m)
+}
+
+/// Batch 432: a member call that is about to degrade to a **bare symbol** hands
+/// the choice of implementation to the linker — for the names measured in batch
+/// 431 nothing in the link universe defines them at all, so the call silently
+/// bound to libSystem (`strftime`, `abs`, `close`, …) and crashed or read
+/// garbage. Route onto the W table instead, and only on evidence that cannot
+/// be a guess:
+/// * the spelling names exactly one `W` entry (across all handles);
+/// * that entry is implemented (`!stub`) — a stub would swap one silent
+///   fallback for another;
+/// * its arity counts the receiver, so it must equal the lowered argument
+///   count (`arg_ids[0]` IS the receiver on this path);
+/// * the name is not [`NAME_ROUTE_DENYLIST`].
+///
+/// Returns `(handle, symbol, ret_handle, ret)`.
+pub fn unique_method_for_bare_call(
+    method: &str,
+    argc_with_receiver: usize,
+) -> Option<(&'static str, &'static str, Option<&'static str>, &'static str)> {
+    let m = unique_w_entry(method)?;
+    if m.stub || m.arity != argc_with_receiver || NAME_ROUTE_DENYLIST.contains(&method) {
+        return None;
+    }
     Some((
         m.handle.as_str(),
         m.symbol.as_str(),

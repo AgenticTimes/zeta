@@ -227,11 +227,16 @@ if [[ -n "$LIE" ]]; then echo "       谎报项：$LIE"; fi
 
 # ── 批次 431 翼：`--report-stubs` 的 bare-member 段 ──
 # 下型把 `recv.member(...)` 在接收者类型给不出唯一方法时降级成**裸名调用**，于是这条
-# 调用的绑定对象由链接器决定，编译器看不见（实测 40 模块 acceptance 语料：129 个降级
-# 调用点 / 68 个名字，其中 8 个绑到 zeta_runtime_c.o 的真实现、23 个绑到 libSystem 的
-# 同名函数）。本段只出声、不改出码 —— 同一批评测里试过在 codegen 里把这些名字改判成
-# 抛异常的桩，acceptance 运行在第一个 df.clip(...) 处死掉（clip 恰好绑的是真实现），
-# 该尝试已回退，负结果记在 roadmap 批次 431。
+# 调用的绑定对象由链接器决定，编译器看不见（431 的实测口径：acceptance 语料 68 个降级名、
+# Σ(名字×函数体) 106；四桶归因＝5 个类别方法体／3 个运行时真实现／54 个批次 156 桩／
+# 6 个链接宇宙里根本没有定义、由 libSystem 满足）。431 本批只出声、不改出码 ——
+# 同一批评测里试过在 codegen 里把这些名字改判成抛异常的桩，acceptance 运行在第一个
+# df.clip(...) 处死掉（clip 恰好绑的是真实现），该尝试已回退，负结果记在 roadmap 批次 431。
+# 批次 432 收掉的是最后一桶（libSystem 那 6 个）：**降级之前**先问 `W` 注册表，四条判据
+# （名字唯一／不是桩／arity 含接收者且与实参数相等／不在按名抢走的名单里）全过才改绑，
+# 缺一条仍走旧的降级。语料侧新增绑定＝strftime 5 个调用点＋setdefault 2 个（其中一处
+# 因返回值被判成 Str 而把 icmp slt 升级成 host_str_cmp 内容比较），段里 68 名降到 66 名。
+# 432 自己的断言在下面单独一段（正向半钉在 t467 夹具上，反向半钉两条判据）。
 echo "== 批次 431：降级成裸名的成员调用要点名（绑定权在链接器，不在编译器）"
 BM="$TMP/bm_member.z"; printf 'def f(v):\n    return v.nonesuch(3)\n\nprint(f(1))\n' > "$BM"
 BMB="$TMP/bm_both.z";  printf 'def f(v):\n    return v.nonesuch(3)\n\ndef g():\n    return nonesuch(4)\n\nprint(f(1), g())\n' > "$BMB"
@@ -245,6 +250,29 @@ want "普通调用数进计数行" 1 "$("$BMH" --report-stubs "$BMB" 2>&1 | grep
 want "无降级成员时不出声" 0 "$("$BMH" --report-stubs "$BM0" 2>&1 | grep -c 'bare-member report')"
 want "沉默夹具的对照：下型真跑了（MIR 有体）" 1 "$("$BMH" --dump-mir "$BM0" 2>/dev/null | grep -c '^== MIR ' | sed 's/^[1-9].*/1/')"
 want "沉默夹具的对照：rc=0" 0 "$(rc0 "$BMH" --report-stubs "$BM0")"
+
+# ── 批次 432 翼：降级前先问 W 注册表，四条判据缺一仍降级 ──
+# 正向半（改绑）钉在 t467 夹具上：同一份文件里 strftime 既不该再出现在降级段，IR 里
+# 也必须是注册表符号而不是裸名。单有"沉默"不算证据 —— 所以同形对照走一遍：把
+# strftime 逐字换成无表项的名字，降级段必须在**同一形状**上出声；否则"沉默"可能只是
+# 根本没到这一臂。反向半钉两条最便宜的判据：close（两条 W 表项 ⇒ 名字不唯一）、
+# values（在按名抢走的名单里）。二者改前改后都在段里，锁的是"432 不许把它们抢走"。
+# 「不是桩」这条目前守 0 个成员（注册表 93 条 W 行无一带 stub=1），下面按事实断言，
+# 不假装它被夹具覆盖；「arity 与实参相等」这条门禁里同样无夹具（小的 i64 接收者形状
+# 会先被批次 395 的 vec 臂接走，四种小形状实测见 roadmap 批次 432），只有语料侧读数。
+T467="$ROOT/tests/python_style/t467_bare_member_registry_bind.z"
+CTL="$TMP/bm_432_ctl.z"
+sed 's/\.strftime(/.nonesuch(/g' "$T467" > "$CTL"
+BMC="$TMP/bm_432_close.z"; printf 'def f(v):\n    return v.close()\n\nprint(f(1))\n' > "$BMC"
+BMD="$TMP/bm_432_deny.z";  printf 'def f(v):\n    return v.values()\n\nprint(f(1))\n' > "$BMD"
+"$BMH" --emit-llvm "$T467" -o "$TMP/bm_432.ll" >/dev/null 2>&1
+want "432：t467 上 strftime 不再进降级段" 0 "$("$BMH" --report-stubs "$T467" 2>&1 | grep -c 'strftime')"
+want "432：同形对照——换成无表项的名字，降级段在同一份夹具上出声" 1 "$("$BMH" --report-stubs "$CTL" 2>&1 | grep -c '^  nonesuch .*member-only$')"
+want "432：正证据——IR 发的是注册表符号" 1 "$(<"$TMP/bm_432.ll" grep -c 'call i64 @py_dt_strftime(')"
+want "432：IR 里不再有裸 strftime 调用（旧绑定形状）" 0 "$(<"$TMP/bm_432.ll" grep -c 'call i64 @strftime(')"
+want "432：名字不唯一（close 两条 W 表项）⇒ 仍降级" 1 "$("$BMH" --report-stubs "$BMC" 2>&1 | grep -c '^  close .*member-only$')"
+want "432：名字在按名抢走的名单里（values）⇒ 仍降级" 1 "$("$BMH" --report-stubs "$BMD" 2>&1 | grep -c '^  values .*member-only$')"
+want "432：「不是桩」这条当前守 0 个成员（W 行无 stub=1）" 0 "$(grep -c '^W .*stub=1' "$ROOT/pylib/registry.txt")"
 
 echo "cli_semantics: rc=$rc"
 exit $rc

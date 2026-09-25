@@ -10315,48 +10315,20 @@ call, no NULL-handle dereference).",
                 // Also allow I64 leftovers (pre-B3 default) with the same SKIP
                 // denylist — unique names like `get`/`keys` must not steal.
                 if matches!(receiver_ty.as_ref(), Some(Type::PyDynamic)) {
-                    const SKIP: &[&str] = &[
-                        "get", "set", "keys", "values", "items", "clear", "pop",
-                        "update", "append", "push", "len", "tolist",
-                        "__contains__", "__getitem__", "__setitem__", "__delitem__",
-                        "__len__", "__iter__", "__enter__", "__exit__",
-                    ];
-                    if !SKIP.contains(&method.as_str()) {
-                        if let Some((_handle, symbol, ret_handle, ret)) =
+                    if !crate::middle::pylib::NAME_ROUTE_DENYLIST.contains(&method.as_str())
+                        && let Some((_handle, symbol, ret_handle, ret)) =
                             crate::middle::pylib::method_by_unique_name(method)
-                        {
-                            self.stmts.push(MirStmt::Call {
-                                func: symbol.to_string(),
-                                args: arg_ids.clone(),
-                                dest: id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(id, MirExpr::Var(id));
-                            self.type_map.insert(
-                                id,
-                                match ret_handle {
-                                    Some(h) => Type::Named(h.to_string(), vec![]),
-                                    None => match ret {
-                                        "str" => Type::Str,
-                                        "f64" => Type::F64,
-                                        "vecstr" => {
-                                            Type::DynamicArray(Box::new(Type::Str))
-                                        }
-                                        "vecpath" => Type::DynamicArray(Box::new(
-                                            Type::Named("PyPath".to_string(), vec![]),
-                                        )),
-                                        "vecjson" => Type::DynamicArray(Box::new(
-                                            Type::Named("PyJson".to_string(), vec![]),
-                                        )),
-                                        "vecmatch" => Type::DynamicArray(Box::new(
-                                            Type::Named("PyMatch".to_string(), vec![]),
-                                        )),
-                                        _ => Type::I64,
-                                    },
-                                },
-                            );
-                            return id;
-                        }
+                    {
+                        self.stmts.push(MirStmt::Call {
+                            func: symbol.to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map
+                            .insert(id, registry_ret_type(ret_handle, ret));
+                        return id;
                     }
                 }
 
@@ -11263,6 +11235,12 @@ call, no NULL-handle dereference).",
                 // `py_math_*` registry symbol; carries that symbol's declared
                 // return so the dest slot is not the i64 default.
                 let mut float_math_ret: Option<&'static str> = None;
+                // Batch 432: set when a call that would degrade to a BARE symbol
+                // resolves to exactly one implemented `W` entry of matching
+                // arity. Carries the entry's slot type. Also keeps the call out of
+                // the `_<argc>` disambiguation below: the registry symbol is the
+                // runtime C name, which carries no suffix.
+                let mut bare_registry: Option<Type> = None;
                 let (func, is_array_len, is_array_push) = if let Some(ref rty) = receiver_ty {
                     // Check if receiver is a dynamic array type
                     if let Type::DynamicArray(_) = rty {
@@ -11339,6 +11317,14 @@ call, no NULL-handle dereference).",
                             // as `a ** b` routes to `py_math_pow`.
                             float_math_ret = Some(entry.ret.as_str());
                             (entry.symbol.clone(), false, false)
+                        } else if let Some((_h, symbol, ret_handle, ret)) =
+                            crate::middle::pylib::unique_method_for_bare_call(
+                                method,
+                                arg_ids.len(),
+                            )
+                        {
+                            bare_registry = Some(registry_ret_type(ret_handle, ret));
+                            (symbol.to_string(), false, false)
                         } else {
                             // For inherent methods, use plain method name.
                             self.note_member_bare(method, receiver.is_some());
@@ -11522,7 +11508,8 @@ call, no NULL-handle dereference).",
                 let suffixed = !(func.starts_with("zeta_")
                     || func.contains("__")
                     || func.contains("::"))
-                    && float_math_ret.is_none();
+                    && float_math_ret.is_none()
+                    && bare_registry.is_none();
                 let func_name = if suffixed {
                     format!("{}_{}", func, arg_ids.len())
                 } else {
@@ -11547,14 +11534,17 @@ call, no NULL-handle dereference).",
                     // Look up the callee's known return type (name may carry an
                     // "_argc" disambiguation suffix added above).
                     let base = base_name.as_deref().unwrap_or(func.as_str());
-                    let ret_ty = match float_math_ret {
-                        Some("f64") => Type::F64,
-                        Some(_) => Type::I64,
-                        None => self
-                            .func_ret_types
-                            .get(base)
-                            .cloned()
-                            .unwrap_or(Type::I64),
+                    let ret_ty = match bare_registry {
+                        Some(t) => t,
+                        None => match float_math_ret {
+                            Some("f64") => Type::F64,
+                            Some(_) => Type::I64,
+                            None => self
+                                .func_ret_types
+                                .get(base)
+                                .cloned()
+                                .unwrap_or(Type::I64),
+                        },
                     };
                     // PY: generic callee — substitute concrete type args into
                     // the declared return type so the dest slot matches the
@@ -14974,6 +14964,30 @@ fn format_template_parts(
         parts.push(AstNode::StringLit(lit));
     }
     Some(parts)
+}
+
+/// MIR slot type for a `W` registry return, shared by the B4 dyn route and the
+/// batch-432 bare-member route: the handle tag wins (dispatch on it is exact),
+/// otherwise the declared scalar / vector kind decides.
+fn registry_ret_type(ret_handle: Option<&str>, ret: &str) -> Type {
+    match ret_handle {
+        Some(h) => Type::Named(h.to_string(), vec![]),
+        None => match ret {
+            "str" => Type::Str,
+            "f64" => Type::F64,
+            "vecstr" => Type::DynamicArray(Box::new(Type::Str)),
+            "vecpath" => Type::DynamicArray(Box::new(Type::Named("PyPath".to_string(), vec![]))),
+            "vecjson" => Type::DynamicArray(Box::new(Type::Named(
+                "PyJson".to_string(),
+                vec![],
+            ))),
+            "vecmatch" => Type::DynamicArray(Box::new(Type::Named(
+                "PyMatch".to_string(),
+                vec![],
+            ))),
+            _ => Type::I64,
+        },
+    }
 }
 
 /// Runtime suffix selecting the element-type-aware list-method variant:

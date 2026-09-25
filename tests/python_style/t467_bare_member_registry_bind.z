@@ -1,0 +1,43 @@
+// 批次 432（3.2 Lowering → 链接层／431 归因表的最后一桶）：接收者类型已知但候选集
+// 不是单一方法、或类型给不出方法时，成员调用**降级成裸符号** `member`
+// （`gen.rs:11330`；接收者无类型那条在 `:11335`），再被 `gen.rs:11512` 追加 `_argc`；
+// 出码侧最后一路退到 `add_function(&arity_name, …, Linkage::External)`
+// （`codegen.rs:3151`）⇒ 编译期一声不出，**选定目标的是链接器**。431 的归因表里最狠的
+// 一桶是 6 个"三个链接对象里都没有定义"的名字（`abs alarm close mkstemp signal strftime`），
+// 它们由 libSystem 满足：`strftime` 绑到 libc 的 `size_t strftime(char*, size_t, const tm*, …)`，
+// 第一参数被当输出缓冲区 ⇒ **改前实拍（同目录同环境跑 HEAD 431 的二进制）：编译 rc=0，
+// 运行 rc=139（SIGSEGV），stdout 0 字节、stderr 空**。
+// 修法＝`pylib::unique_method_for_bare_call(method, argc)`（`pylib.rs:375`，调用点
+// `gen.rs:11320`）：降级臂在**降级之前**先问注册表，只在"这个名字在 `W` 表里**唯一**、
+// 且**不是桩**、且 arity（含接收者）与实参数**相等**、且不在 `NAME_ROUTE_DENYLIST`
+// （`pylib.rs:312`）"时改绑那条真实现，返回类型取表项（`registry_ret_type`，`gen.rs:14972`）。
+// 四条判据缺一条就保持旧行为 —— 同名多主（语料里的 `close`：`PyFile`＋`PyPool`）不猜，
+// 桩换了也只是另一种静默，arity 不合是签名合约对不上，`get/keys/values/len/…` 由接收者
+// 种类表分派、不能被名字抢走（名单与 429 的 B4 路线合并成同一份，`pylib.rs`）。
+// 语料侧新增绑定＝7 个调用点／2 个名字：`strftime` 5 处（`market_data_refresh.py`
+// 的 `_refresh_all_cached_stocks_impl`×2 与 `refresh_all_stocks_rqdatac_incremental`×2、
+// `jq_wufu.py::check_a_share_weak_period`×1）与 `setdefault` 2 处
+// （`data_ops.py::log::_detail_by_source`）；`--report-stubs` 的 bare-member 段从
+// **68 名降到 66 名**，其中一处还连带把 `icmp slt` 升级成 `host_str_cmp` 内容比较
+// （返回值按表项定为 Str）。
+// `e:` 那一格是**反向对照**：列表接收者的 `strftime` 早在批次 145 就落到逐元素表
+// （`zeta_vec_strftime`，`gen.rs:11262`），本批的改动在它**之后**，不能把它抢走 ——
+// 改前改后两颗二进制这一行逐字相同。
+// expect ＝ CPython 当场对数（`python3 3.14.5` + `pandas 3.0.5`；`e:` 一行只差本仓
+// vec-of-str 的双引号方言）；改后逐字见下。
+// expect: s: 2024-03-15
+// expect: k: 1
+// expect: v: 1
+// expect: e: ["2024-03-15", "2024-01-02"]
+from pandas import DataFrame
+from datetime import date
+import os
+
+df = DataFrame({"d": [date(2024, 3, 15), date(2024, 1, 2)]})
+m = df["d"].max()
+print("s:", m.strftime("%Y-%m-%d"))
+os.environ.setdefault("T467_KEY", "1")
+print("k:", os.environ.get("T467_KEY"))
+print("v:", os.environ.setdefault("T467_KEY", "9"))
+xs = [date(2024, 3, 15), date(2024, 1, 2)]
+print("e:", xs.strftime("%Y-%m-%d"))
