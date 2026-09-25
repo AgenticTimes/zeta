@@ -17156,6 +17156,174 @@ fail 2 条 = t231/t233 常驻，无新增。
   未定义、acceptance 非确定性（4 次里 2 次 rc=139）。
 
 
+## 批次 411（主线 301 第 2 步第三格：闭包捕获自由变量时不查名字表，跨模块导入的全局名读了一个没人写过的槽）
+
+### 一、症状（最小复现）
+
+语料侧的读数是一条过滤计数不一致：`backend.market_data` 的"上市日过滤"在 Zeta 下打
+`119 → 107 只`，CPython 打 `115 → 103 只` —— 起点相同、终点各差 4 与 6，且 103 那个数是
+CPython 侧唯一的正确值。形状是 `[c for c in codes if c not in BS]`，`BS` 来自
+`from backend.market_data import BS`。
+
+套件侧最小复现 = `tests/python_style/t447_closure_capture_imported_global.z`
+（辅助模块 `bsmod_b447.z`，故意不取 `t*` 名所以 glob 不抓它）+ `LOOKUP` 字典翼。
+**改前读数用 HEAD~1 的编译器实拍**（`git worktree add --detach /tmp/b411/pre HEAD~1`、
+`cargo build --release`，改前源码里 `grep -c capture_env_key` = 0）：
+
+```
+notin 4
+in 0
+dict-in 0
+local-alias 2
+dict-keys 0
+```
+
+CPython / 期望：`notin 2 / in 2 / dict-in 1 / local-alias 2 / dict-keys 1`。
+五翼里四翼红，`local-alias` 那翼改前改后都是 2 —— 它是"没越界"的哨位。
+三条红读数都是**静默错值**：rc=0、一声不出。
+
+### 二、定位（探针 + `--emit-llvm` 字符串表）
+
+同形四翼探针 `/tmp/b411/n2/_drv_n4.py`（改前二进制 `n2/n4.bin` 仍在盘上，可复跑）：
+
+| 翼 | 形状 | 改前 | 改后 |
+|---|---|---|---|
+| G | 推导式里内联字面量列表 | 2 | 2 |
+| H | 局部别名 `bs = BS` 后用 | 3 | 3 |
+| I | `not in` + 跨模块导入名 | **5** | 2 |
+| J | `in` + 跨模块导入名 | **0** | 3 |
+
+⇒ 分界不在"推导式"、不在"成员运算"，在**那个名字是跨模块导入来的**。
+`n2/n5.bin` 的第二组（J 0 / H 2 / K 0）把 H 的对照身份钉在同一模块里。
+
+写读两侧不同源，`--emit-llvm`（`n2/n5.ll`）的字符串表直接看到：
+
+- `@str_lit` = `c"BS\00"`（:4），用在 `:1113` 的 `call i64 @zeta_env_get(...@str_lit...)` ← **读侧**
+- `@str_lit.49` = `c"lib_c__BS\00"`（:16），用在 `:1326` 的 `call void @zeta_env_set(...@str_lit.49...)` ← **写侧**
+
+模块全局住在**进程级**环境表里，键是模块限定名 `<module>__<member>`
+（`runtime/py_additions.c:2656 zeta_env_get` → `map_get(env_map(), map_str_key(h))`）。
+捕获发的是裸别名 ⇒ `map_get` miss ⇒ 返回默认 0 ⇒ 成员运算恒判不匹配。
+
+代码位点（行号为记录批当前读数）：普通 Var 读**早就**做了这次改名 ——
+`gen.rs:3738-3771`（`:3739-3741` 走 `symbol_renames`，`:3764-3766` 用
+`py_member_aliases` 拼 `format!("{}__{}", module.replace('.', "_"), member)` 并回查
+`module_globals`），裸模块全局的 env 读在 `gen.rs:3796`。而闭包自由变量的预绑定
+（`lower_closure` 内，现 `gen.rs:14451-14457`）直接
+`MirExpr::StringLit(name.clone())` —— **同一张表，这条路一次都没查**。
+
+### 三、修复（最小修，一处新增 + 两处接线）
+
+`gen.rs:14268-14291` 新增 `Self::capture_env_key`，逐段镜像 `:3738-3771` 的三段判据
+（`module_globals` 裸名命中即原样 ⇒ `symbol_renames` ⇒ `py_member_aliases` 拼 `<mod>__<member>`
+且要求 `py_user_modules` 与 `module_globals` 双确认），任一不成立则退回裸名 —— **不猜**。
+接线两处：预绑定的 `StringLit` 改用 `key`（`:14452`），捕获槽类型回退补
+`.or_else(|| self.global_ty_of(&key))`（`:14475`，此前硬 `Type::I64`，列表/字典捕获会被截成整数）。
+闭包体内仍按裸别名索引（`child.name_to_id.insert(name, slot_id)` 不变）⇒ 改名只发生在"去表里取哪个键"。
+`+33 -1`，净 +30；`gen.rs` 14,748 → 14,778 行。
+
+### 四、判据（新增用例）
+
+`t447` 五翼：A `not in` / B `in`（列表）、C 字典 `in`（`LOOKUP`，同一条链的另一侧）、
+D `local-alias`（正对照，改前改后逐字相同）、E `dict-keys`（`for k in d.keys()` 形状）。
+五条 `// expect:` 全部取自 CPython 实测，非"编译器当时打了什么"。
+`tests/python_style/run.sh` 里 `PASS t447_closure_capture_imported_global`（日志 :300）。
+
+### 五、同批判死的候选（负断言配正证据）
+
+`/tmp/b411` 下 6 组隔离探针各自转绿即排除，排除的是**假设**不是"看起来不像"：
+`.get()` 与下标两种读形（h3/h4）、关键字实参与缺省值（h4）、`from __future__` 与 `or []`
+（h4）、下划线开头的名字（h3）、进程级 env 键跨模块撞名（全语料 `_local_cache` 定义只有 1 处）、
+被导入模块的模块体没跑（h6 打 `MODULE-BODY-RAN 5`）、两处闭包的 codegen 分叉
+（LLVM 逐段 diff 结构相同）。
+
+### 六、还没收的那格（同一条 acceptance 链上）
+
+`codes=0 / trading_days=0`（#131）**一格未动**：`fix_run1.out:130` 仍是
+`本地数据注入完成: market=%d rows, codes=%d, trading_days=%d 12856 0 0`。
+`jq_shim.py` 里 `_local_cache` 的读写全在同模块内（写 `:58-63`，读用 `.get(...)`
+共 7 处、`.setdefault` 1 处），env 路由、别名表、模块体执行三条都已在 §五 里验过健康 ⇒
+本批的病因**不覆盖**它，最小复现仍未取到。
+另记：`market=` 那格两次读数彼此不同（改前 13401 / 改后 12856），**未归因**，
+且 `%d` 惰性格式串本身是 #45/#110 族。
+
+### 七、acceptance 移动量（`REasyQuant`，从仓根构建）
+
+驱动必须从**仓根**建（`cd REasyQuant && zetac strategies/code/_drv_accept_409.py -o …`）；
+在 `strategies/code` 里建只会出 `_main`（`.o` 2,624 字节）、链接期缺 `_run_backtest` —— 这条
+是响的，不是静默的，与 PY-A 祖先搜索残口同族，低 ROI 未立案。
+
+| 读数 | 改前 | 改后 | CPython 参照 |
+|---|---|---|---|
+| `上市日过滤` | `119 → 107 只` | **`115 → 103 只`** | `115 → 103 只`（逐字相等） |
+| `codes=%d / trading_days=%d` | `0 0` | `0 0` | — |
+| `[PARITY]` 37 行 | 全部 `target=- \| holdings=- \| ranked=-` | 37 行全部相同 | — |
+| `回测完成` | `1000000 -> 0 (-100.00%)` | `1000000 -> 0 (-100.00%)` | `1000000 -> 994576 (-0.54%)` |
+
+主线 301 的第 3 步（`final_value`）仍是 `0` vs `994575.8405772317`；CPython 参照在本机上
+之后会 `raise RuntimeError: 未获取到行情数据`（`cpy_ref.out`），所以只有前半段可比。
+非确定性照旧：改后三跑 run1 rc=0 / run2 rc=139 / run3 rc=0（两次成功的日志 172 行、
+崩溃那次 119 行 ⇒ "缺 `回测完成` 行"是崩溃不是回归）。
+
+### 八、门禁（`bash tools/run_all.sh`，`/tmp/b411/gate411.log`）
+
+`gate rc=1`（日志 :142）—— 唯一红仍是 `run_all.sh:576` 的 `py_fail != 0` 常驻红。分表：
+
+| 项 | 读数 |
+|---|---|
+| official | compile 194/194，compile+link 191/194 |
+| link-only | 3 条：`integration_all_features`、`quantum_basic`、`selfhost`（缺运行时绑定，常驻） |
+| 语料 | 40 文件，解析通过 40/40 = 100% |
+| jit sweep | ok=176 trap=357 fail=0 timeout=0 segv=0（total 533，最小 ok=163）GREEN |
+| 断言族 | knob 23/0、swallow 6/0、import 22/0、empty_stmt 68/0、pysrc 42/0、cli_semantics 73/0、ignore_rules 19/0 |
+| compile-diagnostics | official 2 文件 / 5 行；python_style 99 文件 / 204 行 |
+
+**口径注明**：这次 `run_all.sh` 起在 `t447` 落盘**之前**，日志里的
+`python_style: 329 passed, 2 failed, 5 known-fail` 不含本批用例。补跑一次
+`tests/python_style/run.sh`（`/tmp/b411/py_style_after.log`）：**330 passed / 2 failed /
+5 known-fail / 0 xpass**，`PASS t447_closure_capture_imported_global`，
+fail 仍是 t231/t233 两条常驻、名字未变。
+jit total 533（410 是 531）、语料 40 文件（410 是 39）——两处都是并行工作流带来的计数变化，非本批。
+
+### 九、ABI 锚点
+
+**本批不需要 `--rebind`，且这是量出来的**：`gen.rs` 内被引用的 46 个锚点里，
+行号 > 14263（本次插入点）的有 **0 条** ⇒ 插入不移动任何被引用的行。
+`python3 tools/check_abi_anchors.py` 读数 = **漂移 30 / 新 11 / 消失 3**（基线 250），
+与常驻值逐字相同；`tools/baselines/abi_anchors.tsv` `git status` 干净。
+3 条消失无唯一配对（`runtime/py_additions.c:2650`、`gen.rs:3472`、`gen.rs:10309`）
++ 2 条定位失败（ABI.md:277、:425）仍是 410 §九 那批待收。
+
+### 十、提交
+
+- 代码批 `b4d31eb0 fix(mir): 批次 411 —— 闭包捕获按裸别名读环境表，跨模块导入的全局名读空槽`
+  （`src/middle/mir/gen.rs` +33 -1、`tests/python_style/t447_closure_capture_imported_global.z` +22、
+  `tests/python_style/bsmod_b447.z` +2），已推 `agentic/bootstrap`（`5b36a80e..b4d31eb0`）。
+- 记录批：本文件（roadmap 本节）+ backlog `| #7 |` 折行，同样推 `agentic/bootstrap`。
+- 取改前读数时借用的临时手法登记一条工具陷阱：`git worktree` + **共享** `CARGO_TARGET_DIR`
+  会把主工作树的 `target/release/zetac` 覆盖成旧二进制，而 `cargo build` 因 mtime 未变答
+  "Finished" 不重编 ⇒ 必须 `touch` 源文件并比对 `md5` 才算恢复。（本批已核对：恢复后
+  `11a328776ae5d2f6be3bf430e5cfe2ec` 与备份逐字相同，`t447` 复跑五翼仍为改后读数。）
+
+### 十一、下一批候选（按已实测损害量）
+
+- **#131 / 主线 301**：`codes=0 / trading_days=0` —— 本批把"跨模块全局名"这条假设收成病因
+  但对它无效，需要新假设；可先量"注入那三个实参在调用点上到底是什么值"（不依赖 `%d` 格式串，
+  直接在被调侧 `print(len(...))`）把 0 出现的位置往上游挪一格。
+- **#7 第 3 步**：`final_value` `0` vs `994575.8405772317` —— 押在 0 成交上，而 0 成交押在 #131。
+- **#130**：词首 `var` 前缀吞调用语句 / `var*` 赋值读回恒 1（410 §五 实测，语料 3 处方差、
+  以 `var*` 开头的调用语句 0 处 ⇒ 不在 0 成交路上）。
+- **#32/#117**：动态槽无类型标记（v5 列表侧 `len 1`、v9 字符串值打地址）＝用户裁定 item 4
+  的"给值加类型标记"。
+- 常驻未收：closure **参数**侧（`resolver.rs:941-971` 只覆盖顶层）、`zeta_dt_date` C 身份桩
+  （`runtime/py_additions.c:3422`，需用户一句话）、p2 dict-value 族（#33/299）、405 §五①、
+  #47/#42 `&expr`、#122、#41 第二半、#117、#118、#115、#113、#110、#109、#105、#55、#38、
+  `String` 拼写、#22、selfhost 剩余 4 条 DictGet、`gen_expr_safe` 水位线、跨模块 `_` 前缀导入
+  幽灵符号、barrel 重导出 `_fetch_stocks`/`_warmup_start_of` 未定义、`log.info` 惰性 `%d`、
+  日期参数打成地址、`PY-A: '_get' is NOT implemented` rc=134、未知 kwargs 无诊断（409 §十一(e)）、
+  acceptance 非确定性（3 跑 1 次 rc=139）、2 条悬空 ABI 锚点 + 2 条定位失败。
+
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
