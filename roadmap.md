@@ -18513,6 +18513,89 @@ IR 函数净增 14 个 `map_get` 调用点 —— +14 是 **IR 调用点**计数
 3. **等用户授权才动的两格**：#145 `str_trim + 24` 的 packed 生产者、#112 `zt_vec_cmp` 元素级比较（＝本批 §五 那条掩码族拦路），两处都在 `runtime/py_additions.c`。
 4. `rows` 同二进制跨跑抖（12854–12858）与 #142 仍按原序候在队列里。
 
+## 批次 423（G.5d／ABI 表 #7 的读侧落地）：dict 原语先把句柄**判形**再用 —— 晨间链路 20 批来第一次位移（语料 rc 139→0、崩点换成 38 条点名）
+
+代码提交一笔 `9c192241`（5 文件 **+135/−30**：`runtime/tokio_runtime_stub.c` +63−11 / `tokio_runtime.o` 重建 162,772→163,748 B / 新用例 `t460_map_handle_shape_guard.z` 53 行 / `docs/ABI.md` 附 A #7 行 + 锚点重绑 9 行 16 数 / `tools/baselines/abi_anchors.tsv` 258 锚点随之刷新）。记录批随后。
+
+### 一、改前答不出、改后当场能答的问题
+
+`docs/ABI.md` 附 A 的 #7 行早就写明："一个 dict 句柄就是 `[cap|len|entries…]` 块的**基址**，`w[0]=cap` 是 2 的幂、≥16"。但这句话只写在文档里，**读侧一个字节都没守**：`map_resolve` 的第一条指令就是 `ldr x9, [x0]`（`tokio_runtime_stub.c:264` 改前形态，实测反汇编在案），把收到的字直接当指针解引用。后果：只要有任何一条路把"从来不是 dict 的值"送进 `map_get` / `map_get_default` / `py_map_items`，整条 run 停在 SIGSEGV 上，**不报任何名字**——这正是主线 301 从 405 到 422 一直撞的那堵墙（每批都只能回答"崩在第几条日志之后"）。
+
+### 二、改动（一个文件，63+/11−；抛掷契约沿用 422）
+
+`runtime/tokio_runtime_stub.c`：
+
+- `:115` `zt_c_str_readable` → **`zt_ptr_readable`**（9 处调用点同步改名）。它本来就是"能不能在 v 处安全 load 一个字节"的通用探针（291 为 `char*` 实参写的），本轮 dict 句柄走同一把尺子；注释里两件事都记名。
+- `:229-262` 新增三件：`extern zeta_raise`（`runtime/py_additions.c:2528`，只声明不改那个文件）、`zt_map_cap_ok(cap)`＝`cap∈[16,1<<30] ∧ 2 的幂`、`zt_map_not_a_map(fn, handle, word)`。后者**按 (调用者名, 句柄) 去重只吞消息**，吞不掉 `zeta_raise(1)` —— 与 422 给幽灵名钉下的同一条合同（去重抛掷 ⇒ 第二次调用返回 0 ⇒ 调用方带着假值往前走）。
+- `:264-288` `map_resolve` 从"一行转发链跟进"改成**走完链 + 出口判形**：不可读 ⇒ 点名抛；首字 ≥0（非转发器）时，先让 `zt_map_is_json_handle` 认领 `[tag,payload]` 那一形（它在调用点有更响的专属诊断，句柄原样交回），否则首字形状不对 ⇒ 点名抛。全部 map 原语都从这一个漏斗过，所以点名一次覆盖 `map_get` / `map_get_default` / `py_map_items` / `map_insert` / `map_contains` …；调用者名用 `dladdr(__builtin_return_address(0))` 取，不是手写清单。
+- `tokio_runtime.o` 重建：162,772 → **163,748 B**（md5 `045b9afbda803cd65c18096530a73b09`；HEAD 那份 `50b0f6ba7f9c5893b4d1e2f9ee05154b`）。守卫版另存 `/tmp/b423/tokio_runtime.post.o`。
+
+**Rust 侧一行未改** —— 这是 20 批来第一个纯运行时的批次，也因此 `--dump-mir` / IR 两侧逐字节相同，位移只可能来自运行期。
+
+### 三、语料定价：rc 139 → 0，且第一次拿到"是谁"
+
+两侧同一颗 `zetac`（无 Rust 改动），只差 `tokio_runtime.o`；`cwd=REasyQuant`、`REPLAYQUANT_LOCAL=1`、驱动 `strategies/code/_drv_accept_409.py`。
+
+| 面 | 改前（422 的二进制，md5 `dc1d2e90b28bff151d48137ec11771a4`，`strings` 无守卫文案） | 改后（md5 `3fe2b2704756c3339278221bda6f0f18`） |
+|---|---|---|
+| 进程 | `compile=0 run=139`（`ab.sh` 记 `Segmentation fault: 11`），**两跑一致** | `compile=0 run=0` ×2 跑，rc 一致 |
+| stderr | 135 行，末条 `[INFO] jq_shim: [晨间] 计算流动性阈值` ⇒ 首日晨间即止 | **357 行** = 135 行旧内容 + 38 条点名 + 74 条 `[ERROR] … 失败: 1` + 跑完的回测尾部 |
+| lldb 崩点 | `map_get + 256`（`ldrb w13,[x12,#0x10]`＝读表项 `used` 字节），fault `0x64e4800131cc9b78`，链 `jq_wufu__check_a_share_weak_period+476` ← `check_weak_period_daily+16` ← `__run_local+964` ← `main` | **无崩点**：`Process exited with status = 0` |
+| 日志推进 | 停在第 1 个交易日 | 走完 `[local] 回测完成`，`[晨间]` **37** 条＝逐日 |
+
+38 条点名的身份（两跑逐字同数）：
+
+- **37 条 `py_map_items`**，句柄 `0x4d0c…0x4d46`（19724…19782）里缺 22 个的连续整数。按"距 1970-01-01 的天数"解出来＝**2024-01-02 ~ 2024-02-29 的每一个交易日**：缺的 22 天＝16 个周六/周日 ＋ 2024-02-09 与 02-12…02-16 共 6 个工作日（春节休市）。条数与语料自己那行"（37 交易日）"逐字对上 ⇒ **接收者是日期整数，一天一次**，不是随机垃圾。
+- **1 条 `map_get`**，句柄是真指针、首字 8 字节 ASCII：两跑分别解作 `4.32064e` 与 `4.33309e` ⇒ 是被当 dict 用的**浮点科学计数法文本**；它每次抛（37 次）但地址与首字逐跑变 ⇒ 去重后只留 1 行。
+- 合计 **74 次抛掷 / 38 行消息**：`[ERROR] … 失败: 1` 恰好 74＝2×37 ⇒ 去重吞消息没吞抛掷，422 那份合同在语料规模上第二次成立。
+
+### 四、订正两条旧账（历史记录不回改，只在此对照）
+
+1. **421 记的"主线位移 0（有正证据）"里，那件"正证据"不够格**：它比的是 `errlines=135` 逐字相同。本轮实测：同一族缺陷的崩点可以是 `map_get+256`、`map_resolve+8`、`str_trim+24` 中的任一个（#145 早记过"位置非确定 135/135/119/135"），**行数相同时崩点完全可以搬家** ⇒ 位移判据要换成 `符号+偏移` 与 rc，`errlines` 只能当辅助。
+2. **本批上一轮我自己写下的一句"崩点已从 `map_resolve+8` 位移到 `map_get+256`"作废**：那次 lldb 实拍（`/tmp/b423/bt_ab4_zetac_b423_1.bin.txt`，21:06）打在同名二进制的**前一代**上——该 `.bin` 21:11 被守卫版覆盖（现 md5 `3fe2b270…`，`strings` 有守卫文案）。当场复测两代干净读数：422 那份（`dc1d2e90`）崩在 `map_get+256`，守卫版 lldb 下 `status = 0` ⇒ **不存在"两批之间崩点搬家"，只存在"同一份代码里两处未判形的解引用"**。方法坑一条：**lldb 实拍文件必须与二进制同批产出并在记录里带 md5**，否则同名重编会把旧崩溃现场挂到新代码头上。
+
+### 五、rc=0 ≠ 修好（这批买的只是"能开口"）
+
+跑完的回测仍旧是 `[local] 回测完成: 1000000 -> 0 (-100.00%)`、`[PARITY] … target=- | holdings=- | ranked=-` 74 行 —— 38 个点名只是把"崩"换成"抛"，用户代码的 `except` 把它们全吞了。同跑另两条独立读数入册（本批没动）：`本地数据注入完成: market=%d rows, codes=%d, trading_days=%d 12858 107 136`（`%` 格式化没被替换、实参跟在后面）与 `[PARITY] 4321969632` 这类"该打日期的位置打了个整数"。
+
+### 六、夹具（红先证据齐）
+
+`tests/python_style/t460_map_handle_shape_guard.z`（50 行）：`pick(m: dict)` 里 `m.get("k",0)` 拿 `xs=19724` 调（`A caught`）、`pick_dyn(x)` 同形（`B caught`）、`d={"k":5}` 负对照（`C 5 42 1`）、`D ok`。
+
+| 面 | 改前二进制（`d127fa2c9780fddf47ae9a75927f8a48`） | 改后（`7b75c947244a22f6be62c47e38a390b9`） |
+|---|---|---|
+| rc | **139**（stdout **0 行**：四条 expect 一条都落不了地） | **0**，stdout 四行逐字如 expect |
+| stderr | 0 行 | 1 行 `` PY-A: `map_get_default` was called on a value that is not a dict (handle=0x4d0c, first word=0) … `` |
+
+A、B 两段共用同一个 `0x4d0c` ⇒ **一行点名、两次抛掷、两行 caught 都在**（合同复述）；C 段证明 argc=2/argc=3 两条真 dict 路都没被形状判据误伤。stdout 与 **CPython 当场对数逐字相同**（`python3` 跑同体 → `A caught / B caught / C 5 42 1 / D ok`，diff 空）。
+
+### 七、门禁（`bash tools/run_all.sh` 全量，rc 落盘 `/tmp/b423/gate.rc`、日志 `/tmp/b423/gate.txt`（148 行））
+
+`GATE_RC=1`。**唯一红源＝存量两例 `t231_dict_set_cast_fromkeys t233_listcomp_condition_capture`**（`gate.txt:16` 逐字点名，419/420/421/422 同格 ⇒ 本批零新增红）。
+
+| 步骤 | 读数 |
+|---|---|
+| official | compile **194/194**、compile+link 191/194（3 条 link-only 点名逐字未动） |
+| python_style | **342 passed / 2 failed / 6 known-fail / 0 xpass ＝ 350**（422＝349 ⇒ 净增 1＝t460，**零回归**；2 失败仍是存量 `t231/t233`） |
+| 语料 | 解析 40/40 = 100% |
+| jit sweep | ok=**176** trap=**371** fail=0 timeout=0 segv=0，total **547**（422＝546/370 ⇒ +1/+1，落档的是新用例；仍是 #42 那一族的既有形态） |
+| diff | match=120 judged=130 rate=92.3% bad_case=0（逐字同 421/422） |
+| 断言步 | knob **23/0** · swallow **6/0** · import **22/0** · empty_stmt **68/0** · pysrc **42/0** · cli_semantics **73/0** · ignore_rules **19/0** · mbvar **22 脚本/0** —— 八项逐字同 422 |
+| 稳定性 | comment_drift **0** 处复述 · emit_stable **2 夹具/违规 0** · clean_checkout **rc=0**（5s，rev=`300d9e2e`＝422 记录批；本批提交在门禁之后） |
+| 诊断 | official 2/194 文件 / 5 行；python_style **231** 告警行 / **108** 文件 —— **与 422 逐字相同**：t460 的点名是**运行期** stderr，不产生编译期告警（422 那 +1 文件是 t459 自带两条 419 告警） |
+| ABI 锚点（门禁外只读核对） | `--rebind` 判搬家 **38** 项 / 改写 `docs/ABI.md` **9 行 16 个数** 与 `tools/baselines/abi_anchors.tsv` **258 锚点**；终态 **漂移 28 / 新 11 / 消失 10 / 定位失败 0，rc=1**（改前对照：漂移 37 / 新 11 / 消失 10）；分文件漂移 `codegen.rs 18`、`gen.rs 6`、`py_additions.c 3`、`tokio_runtime_stub.c 1` —— 前三者本批没碰，那 1 条是 `:2550` 被"同一行号不同长度区间引用"拒改。手工补正一处：C9 行的 `zeta_call0/2/3/4` 只被搬了首项 ⇒ 手改成 `3844/3850/3856/3862`（`grep -n "^int64_t zeta_call"` 逐条实读），裸斜杠后三数不在锚点集内（`grep -c "tokio_runtime_stub.c:38" 基线` = 0）故不动基线。 |
+
+**读数可复现性 disclosure**：① 门禁首行**没有** `[W2003] …stub.c 比 tokio_runtime.o 新` ⇒ 三套基线链接的就是本批重建的那份 `.o`。② 门禁后 `md5 target/release/zetac` ＝ `1aa05f8f9f7585e04e1450d94b0a8f98` —— **与 422 记录批逐字节相同**（本批 Rust 侧一行未改）⇒ 上表与 §三 的全部位移只能来自运行期，不可能来自出码。③ §三 那两个语料二进制与 §六 那两个夹具二进制都是**当场重新产出并当场 `strings`/`md5` 自证**的（422 的 `dc1d2e90…` 无守卫文案、守卫版 `3fe2b270…` 有）；同名重编会覆盖现场 ⇒ 见 §四.2 那条方法坑。④ `ab.sh` 两侧编译器同放 `target/release/`（A/B 二进制必须同目录，否则 `_load_cache` 相对路径分支不同＝读数作废）。
+
+### 八、头名换格（正向队列）
+
+本批把"晨间链路"从"崩"推进到"开口"，头名换成点名直接给出的两条：
+
+1. **`jq_wufu.py:702` 的 `for _name, code in indexes.items()` 收到的接收者是**当天日期**（`indexes` 是 :695-699 的字典字面量，同函数 :710 有 `today = context.current_dt.date()`）** —— 37 天每天一次 ⇒ 强烈指向**槽位复用/串号**（与 #130/#131/#142 同族），不是缺语法。IR 侧现成判据：`py_map_items` 在语料 IR 里 25 个调用点分布在 23 个宿主函数、`check_a_share_weak_period` 内恰好 1 个。**下一批定价**。
+2. `map_get` 收**浮点文本字符串**那一条：改前 lldb 的那次崩点在 `check_a_share_weak_period+476`（`map_get` 里读表项 `used` 字节），改后同一原语被点名成 `map_get` —— **"崩的那处＝点名的这处"目前只是同名推断，未证**（点名句里带的是 map 原语名与 `dladdr` 的返回位置，没有用户函数名）。字符串内容两跑解作 `4.32064e` / `4.33309e`，与本跑 `[PARITY] 4321969632` 那一族整数量级相同 ⇒ 指向 #145/#117 的 packed str 家族，但**同源同样未证**。下一批第一个判据：把 `dladdr` 的 `dli_sname` 旁边再挂一层返回地址符号化（`backtrace_symbols` 已在 291 用过），让点名句直接带用户函数名。
+3. 仍等授权的：`runtime/py_additions.c`（#112 掩码族、#145 生产者）、#42 JIT 运行时绑定、`zt_dyn_is_map` 与本守卫的上界不一致（那边 `2^28`、这边 `1<<30`，本轮取"宁松勿误伤"，收紧要连 #6 的 vec 判形一起裁）。
+4. #134 `GroupBy.__len__` 恒 0、#117 动态键 `.get(k, default)` 语料 7 形、#142 类构造器被判据当函数 —— 都不等授权，按损害量排在 1/2 之后。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
