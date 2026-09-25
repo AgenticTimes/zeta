@@ -3904,6 +3904,18 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     // `q.put(x)` a bare call, because the handle tag was lost.
                     let ty = self.global_ty_of(name).unwrap_or(Type::I64);
                     self.type_map.insert(slot_id, ty);
+                    // A module's plain `def` never reaches the env, so a bare read
+                    // of one holds 0 and `zeta_call1(0, x)` no-ops by contract. Take
+                    // the symbol address instead, and leave the env read above alone:
+                    // that keeps statement and slot allocation identical to before, so
+                    // the only observable delta here is what the slot ends up holding.
+                    if self.func_ret_types.contains_key(name)
+                        && !self.global_consts.contains_key(name)
+                        && !self.type_decls.contains_key(name)
+                    {
+                        self.exprs.insert(slot_id, MirExpr::FuncAddr(name.clone()));
+                        self.type_map.insert(slot_id, Type::I64);
+                    }
                     return slot_id;
                 }
                 // PY-A V3: nonlocal name not bound locally — env read.
@@ -12287,6 +12299,17 @@ call, no NULL-handle dereference).",
                                 dest: id,
                                 type_args: vec![],
                             });
+                            if self.func_ret_types.contains_key(&key)
+                                && !self.global_consts.contains_key(&key)
+                                && !self.type_decls.contains_key(&key)
+                            {
+                                // `mod.fn` as a value: same reason as the `Var` arm
+                                // above — the def is not in the env, so read the
+                                // symbol's address, and leave the env read in place.
+                                self.exprs.insert(id, MirExpr::FuncAddr(key));
+                                self.type_map.insert(id, Type::I64);
+                                return id;
+                            }
                             self.exprs.insert(id, MirExpr::Var(id));
                             // Keep the global's static type. Hardcoding I64 made
                             // `import a; a.C.exists()` a call on an untyped value:
