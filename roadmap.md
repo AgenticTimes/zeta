@@ -19214,6 +19214,90 @@ $ ZETA_DBG_FA=1 zetac_pre427 同一夹具                                # 改�
 5. **继承的猜测必须实测才能入册**：`RandomState` 那一句从未实拍，本批 5/5 推翻它（§三）。同一条规矩也用于 §八：429 的"定位失败 0"看起来与 HEAD 的 2 冲突，查到底才发现是口径不同、不是记错。
 6. **语料 stderr 逐字节比是假尺**：同侧方差 122–126 行 ≥ 跨侧变化（§四.3）。以后凡是"语料位移 0"的断言，尺只能是计数探针 + LLVM md5，别再写"stderr 完全一致"。
 
+## 批次 431（3.2 Lowering → 链接层／头名）：降级成裸名的成员调用**不在出码处改绑** —— 先量清 68 个名字各自的归宿，本批落地为只读上报
+
+### 一、层位与病因（3.2 Lowering＝`pyramid.md:102`；下游是"修饰规则即链接与动态分派机制"`pyramid.md:160`）
+
+`recv.member(...)` 在两种情况下降级成**裸符号** `member`：站点 A＝接收者类型已知但候选集不是单一方法（且不走 397 的 math 路线，`gen.rs:11333-11337`）、站点 B＝接收者根本没有类型（`:11339-11341`）。之后 `gen.rs:11492-11529` 给目标串追加 `_argc`（`zeta_` 前缀／含 `__`／含 `::` 的除外），出码侧剥掉 `_N` 后最后一路退到 `add_function(&actual_name, …, External)`（`codegen.rs:3151`/`:3157`）⇒ **编译期一条诊断都不出，链接成功也不代表绑对了实现：真正选定目标是链接器决定的**。这正是 430 结案点名的"裸名幽灵同族"：428 的判据（守 `[dynamic]` 前缀）在这一格守不住，因为降级后的串与普通函数调用逐字节同形。
+
+### 二、开工第一步＝先量成员数（430 立的规矩：别先写判据）
+
+- **句子层（站点级）＝129 成员降级 vs 1667 普通调用**：这是判"能不能按名字收口"的依据 —— 同一名字同时有两种写法时，任何按名的动作都会连带改到普通调用点。**这条读数点名作废**：它来自当时的临时探针，探针随守卫回退一起删了，现无可复现路径；能复现的是"两种写法在目标串上同形"这一定性事实（`note_member_bare` 只收 `receiver.is_some()`，`gen.rs`）。
+- **名字层（可复现）**：语料 acceptance 驱动 `--report-stubs` 的 stderr（`/tmp/b431/report_corpus.stderr:262`）= **68 个降级名**、Σ(名字×函数体) = **106**、其中**同时也被当普通函数调用的名字 0 个**（计数行逐字：`0 of them also spelled as a plain call`）。⇒ 原判据里"名字冲突"那一档在语料成员 0，收窄动作没有对象（见 §六.2）。
+
+### 三、试过并推翻的收口形状：出码阶段的改绑守卫（补丁留存 `/tmp/b431/attempt431_rebind_guard.patch`，175 行）
+
+形状＝在 `codegen.rs` 最后那条 `External` 兜底之前查 `member_bare_names`，命中就改绑到 422 的按名抛异常桩。**它把一条真调用打成了异常**，被实测推翻：
+
+1. **静态可断**：`clip` 既在 68 名单里（`report_corpus.stderr:277`），又有真实现 —— `zeta_runtime_c.o` 里 1 处定义（`/tmp/b431/rt_def.txt`），链接后落在 `00000001000335a0 (__TEXT,__text) external _clip`。守卫一上，这条现在能跑通的调用必抛。
+2. **运行期实拍**（同目录两颗二进制，`/tmp/b431/rerun.txt`）：改前 `corpus_b431.bin` **rc=0**、stderr 321 行、stdout 11 B（`[local] 回测完成: 1000000 -> 0 (-100.00%)`）；守卫版 `corpus_post431.bin` **rc=1**、stderr **903** 行、stdout **0 B**、末行 `Unhandled exception: code=…`。
+3. **那条 raise 的 code 槽根本没写**：三次跑的 code 分别是 `4383748960`／`4343144096`／`4374991712`（全是指针形状、互不相同）⇒ 守卫不仅改绑，还留下一条未初始化就上报的异常。
+4. 当时 lldb 报"第一处命中是 `clip`，帧链 `backend_datasrc_data_cleaning__validate_and_repair_stock_ohlcv` ← `MarketDataFetcher::_load_cache`" —— **该读数日志未落盘、不可复现**，本批结论不依赖它（依赖的是上面 1–3）。
+
+⇒ 守卫回退（`codegen.rs` 工作区已回到 HEAD），本批改成**只读上报**。判据本身也记在 `report_bare_member_calls` 的文档注释里，防止下一批重走。
+
+### 四、落地形状（三支；代码批 `9f400338`，`git show --numstat` ＝ 6 文件 +199/−73）
+
+1. **MIR 带事实**（`mir.rs` +16/0、`gen.rs` +31/0）：`Mir.member_bare_calls` / `Mir.plain_call_names` 两个 `BTreeSet<String>`，由 `note_member_bare(method, has_receiver)`（`gen.rs`，紧邻 `lower_expr`）在两个降级臂各记一次，再随 `lower_to_mir`／`build_mir` 两处 `Mir { … }` 字面量交出。**为什么必须在 lowering 记**：到出码时降级串与普通调用串是同一个字符串，"这行原本写成成员访问"这一事实不出 MIR 就永久丢失。
+2. **`--report-stubs` 增段**（`main.rs` +59/−1）：`report_bare_member_calls` 紧跟 `report_stub_calls` 之后、同一开关下；逐名给"出现在几个函数体里"和 `member-only`／`also-called-plain` 标签；空集即整段沉默（沿用 419/428 的"沉默即验收"口径）；`--help` 文案同步。只读、不链、不执行。
+3. **门禁断言**（`tools/cli_semantics_check.sh` +21/0）：7 条＝出声／`member-only`／`also-called-plain`／计数行／不该出声时沉默，外加**沉默翼两条正证据**（同一夹具 `--dump-mir` 有体、rc=0 —— 证明沉默是判据落空，不是编译本身挂了）。三份 TMP 夹具在 `/tmp/b431/t431_*.z`。
+
+**本批不新增 `tests/python_style/t4xx`**：面上是 CLI 只读报告，不是语言语义 ⇒ 号段 t45x–t49x 本批未动用，覆盖面由上面 7 条断言承担（申报，不留"应该有测试"的空位）。
+
+### 五、68 个名字各自的归宿（归因表；`/tmp/b431/attribution.txt`、`hardsoft.txt`、`libsystem.txt`）
+
+| 归宿 | 数 | 成员（全列） | 后果 |
+|---|---|---|---|
+| 类别方法体（程序 `.o` 里有定义） | **5** | `execute_trade` `final_value` `iterrows` `on_trading_day` `to_dict` | 绑到真方法；签名是否合约定**未证** |
+| 运行时真实现（`zeta_runtime_c.o`） | **3** | `clip` `get_all_securities` `get_price` | 今天这条调用是**能跑通的** —— 守卫就是死在这里 |
+| 批次 156 桩登记表（`unavailable_stubs.c`，合进 `tokio_runtime.o`） | **54** | — | 其中 **32 个 `zt_unavailable(`＝打印后 abort**、**22 个 `zt_unavailable_soft(`＝按名 raise 让外层 except 兜**（22 里 `login`/`logout` 是 `:40`/`:44` 手写的**强**符号，其余 20 个走登记表宏） |
+| 三个链接对象里**都没有定义** | **6** | `abs` `alarm` `close` `mkstemp` `signal` `strftime` | 由 libSystem 满足：`nm -m` 逐个显示 `(undefined) external _X (from libSystem)` ⇒ **签名与成员调用约定不符的静默误绑** |
+
+- 5+3+54+6 = 68；54 的 32/22 划分是对 `runtime/unavailable_stubs.c` 逐名匹配函数体取到的（`login`/`logout` 因写法不同需要单独认出，脚本先落"未归类 2"，人读源码后归入 soft —— 这一步不是工具判的，在此点名）。
+- **与既有 16 条 `# stub:` 报告的边际价值**：两集合按子串口径只重叠 **2** 个（`date`、`init`）⇒ 新段给出的是旧段看不见的 66 个名字。
+
+### 六、没有修掉什么（逐条点名）
+
+1. **降级本身没收**：这 68 个名字仍然在链接期才定目标。本批只让它**可查**，主线 301 那三格（0 笔成交／选股数量／`final_value`）一格的病因都不在这里 —— `pre` 侧 stdout 仍是那句 `1000000 -> 0 (-100.00%)`。
+2. **`plain_call_names` 的收窄在语料成员 0**：减法本身实现且可用（夹具 `bm_both` 打出 `also-called-plain`、命中 1/1），但语料侧没有可收窄的名字 ⇒ 这条**不是被实测选中的形状**，只是把"按名≡按站点"这个假设落成逐名声明，交给读报告的人。
+3. **5 个"类别方法体"的签名合约没查**：绑上了 ≠ 绑对（参数个数／返回槽仍靠调用点约定）。
+4. **6 个 libSystem 误绑没动**：它们是四桶里唯一"链接宇宙里没有定义"的一格，也是 428 那条"绑一个按名抛异常的桩"判据能干净成立的唯一一格 ⇒ 列为下一批头名（见 §八）。
+5. **报告是编译期静态可见性，不是运行期证据**：某名字今天没被链接器选中错值，不代表跑到那条语句时值对。
+
+### 七、位移判定：编译侧 0、主线 301 位移 0
+
+- **LLVM 面**：语料 acceptance 驱动 `--emit-llvm` 产物 md5 **`5f83d776ee40b9db0f4e371871f5fe14`、113,704 行** —— 与 430 入册的标尺逐字节相同（`/tmp/b431/corpus_b431_report.ll`）。同 IR ⇒ 同机器码 ⇒ 编译侧位移 0。
+- **运行面**：本批没碰任何出码判据（守卫已回退），运行期读数与改前同一颗；`pre` 侧 rc=0/stdout 11 B/stderr 321 行照旧 ⇒ **主线 301 位移 0**。两栏分开报：本批既没"修好"什么，也没推进主线，交付物是可见性 + 一张归因表 + 一条被推翻的形状。
+- 语料 stderr 逐字节比**不用**（430 §四.3 已判假尺：同侧方差 122–126 行）。
+
+### 八、门禁与读数（`/tmp/b431/gate431.log` 155 行，末行 `GATE_RC=1`）
+
+- **`GATE_RC=1`**，唯一红源仍是存量 `py_fail=2`（`gate431.log:16` `failed: t231_dict_set_cast_fromkeys t233_listcomp_condition_capture`，419–430 同格）⇒ 本批零新增红。
+- python_style **348 passed / 2 failed / 6 known-fail / 0 xpass** ＝ `ls tests/python_style/t*.z` 数到 **356** 逐项对上；**用例文件总数未增**（本批不新增夹具）、`xpass=0`。
+- 诊断面 python_style **234 warning 行 / 110 文件**、official **2 文件 / 6 行** —— 与 430 逐项相同（新报告不在这两栏出声：它挂在 `--report-stubs` 显式开关下）。
+- official **194/194 编译**、**191/194 编译+链接**（3 条 link-only 明细逐字未动：`integration_all_features`、`quantum_basic`、`selfhost`）；语料 **40/40 解析 100%**；jit **ok=176 / trap=377 / fail=0 / timeout=0 / segv=0（total 553，最小 ok=163）**；diff **match=120 / judged=130 / 92.3% / bad_case=0**；真值面 truth 22/23、str 20/23、container 27/28、numeric 23/28、control 28/28 —— 全部与 430 逐项相同。
+- 分步：knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / **cli_semantics 80（对 430 的 73 ＝本批 +7）** / ignore_rules 19 / mbvar 23 / comment_drift 0 / emit_stable 2 夹具 / dyn_binding 4 条不一致 0 —— 各步 FAIL/违规 0。
+- **clean_checkout `rc=0 rev=798f4ccf`** —— 口径点名：这颗是本批**代码提交之前**那条 430 记录 commit（门禁 03:47 结束、代码批 03:55 落 commit），该步验的是"干净检出能编译"，不含 431 改动；430 那步跑在含改动的 HEAD 上，两次不同。
+- **门禁那颗＝提交那颗**：`md5 target/release/zetac` = **`cf8c2e88f8144051aa04f6e0b47176c7`**；收尾当场 `touch src/main.rs src/middle/mir/gen.rs src/middle/mir/mir.rs && cargo build --release`（rc=0，`/tmp/b431/rebuild_final.log`）后 md5 **逐字节不变** ⇒ 跑门禁的二进制由已提交源码复现。
+- **队列换头**：431 结案 ⇒ 头名＝**那 6 个只在 libSystem 里找到满足的降级名**（`abs`/`alarm`/`close`/`mkstemp`/`signal`/`strftime`；四桶里唯一"链接宇宙无定义"的一格，428 的按名抛异常判据在这里没有"打死真实现"的反例）；第 2 格＝#156（`declarers=0` 那 146 条按名归因）；第 3 格起照旧 #142→#134→#117/#118→#136；#145（`str_trim+24`，要动 `runtime/py_additions.c`）仍在等授权；主线 301 第 1 步（0 笔成交）仍 OPEN。
+
+### 九、ABI 锚点（`gen.rs` 净 +31、`main.rs` 净 +58 ⇒ 本批真动了行号；含一条本批自己漏搬的现场）
+
+- 隔离 worktree（`/tmp/b431/iso431`＝`798f4ccf` 检出 + 把本批三份源拷进去）读**改后代码 × 改前基线**＝**漂移 66 / 新 11 / 消失 11、定位失败 1**、rc=2（`/tmp/b431/iso_drift.txt`）。
+- `--rebind` 搬家后：`docs/ABI.md` **30/30**（等行替换，文件仍 **1032 行**）、`abi_anchors.tsv` **42/42** ⇒ 剩 **漂移 24 / 新 11 / 消失 11、定位失败 1**（`anchors_committed.txt`）。
+- **那 1 条定位失败是本批代码批留下的假引用**：`ABI.md:957` 的 `gen.rs:12958` 没被 `--rebind` 搬走（同段兄弟引用 `:12962→:12991` 搬了），改号后 `:12958` 落在空行上。按 355/430 的规矩手移 + 点名重采：先 `Read` 目标行核实内容（`gen.rs:12987` ＝ `if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {`，全文件 `grep -n` 1 处匹配）⇒ `:12958→:12987`（commit `cd4becab`，`ABI.md` 1/1、`tsv` 1/1）；再 `--bless-only src/middle/mir/gen.rs:12987` 重采该行，并把孤立的那条旧基线行**按 tab 字段单独删掉**（**不跑全量 `--bless`**：它会顺手抹平在场的 24 条存量漂移）。
+  - 一次踩坑：`--bless-only` 的点名参数**是源文件的 `路径:行号`，不是文档行号** —— 用 `docs/ABI.md:957` 报 `[点名不中] … 整次拒收（不部分生效）`（这正是 355 设计的拒收翼，实测到一次）。
+- 终态只读核对（`/tmp/b431/anchors_final2.txt`）：**258 个可解析 / 0 个定位失败 / 漂移 24 / 新 11 / 消失 10**、rc=1。**对 HEAD 净中性**：同一隔离 worktree 里把三份源还原成 `798f4ccf` 自基线读 **24 / 11 / 10、定位失败 0、rc=1**（`/tmp/b431/iso_head.txt`）—— 逐项相同 ⇒ 本批没新增漂移，也没越界顺带修（与 430 的"净修 4 条"不同）。残留 24/11/10 是 426/427/428/429/430 一直在册的存量债，本批不动。
+- 收尾 `git worktree remove /tmp/b431/iso431`，`git worktree list` 回到三条预期项。
+
+### 十、工具坑与自我核对（本批当场抓到）
+
+1. **后台任务的退出码不等于门禁的退出码**：包装成 `{ ./tools/run_all.sh > log 2>&1; echo GATE_RC=$? >> log; }` 时，通知里的 "exit code 0" 是那条 `echo` 的，门禁真值是日志末行 **`GATE_RC=1`**。以后凡后台跑门禁，汇报前必须先读日志末行，别拿通知的 rc 当结论。
+2. **`--rebind` 会把"内容不唯一的那一条"悄悄留在原位**：同段两条引用一条搬了、一条没搬，工具不当失败。⇒ 加了一条自查动作：**改完号要把文档里每条引用对着 `grep -n` 打一遍目标行内容**（本批就是这样抓到 `:12958`），别只看"漂移数降下来"。
+3. **BSD `grep` 无 `-P`**：核对 tsv 用 `\t` 字段的匹配改用 python 或 `grep -n "数字"` 反查，别拿 GNU 习惯的 `-P` 写判据。
+4. **按名字归类要先认"强符号手写那两条"**：`login`/`logout` 不按登记表写法出现，脚本会把它们算成"未归类"。把未归类名单打出来看一遍，比只报一个总数可靠。
+5. **不可复现的读数要么补测要么点名**：`129 站点` 与 `lldb 帧链` 都因探针/日志没落盘而不可复现 ⇒ 本批结论（"守卫会打死真调用"）改用两条可复现证据（`clip` 的定义集 + A/B 运行 rc 与 stderr 行数）重做，旧的两句只作背景、各自标注不可复现，不改写历史。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
