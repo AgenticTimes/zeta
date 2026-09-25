@@ -14,10 +14,11 @@
 
 ## 1. 两条工作队列（正着 / 倒着）
 
-- **正向队列（Agent-1）**：roadmap2.md §2 主链的「下一批候选」，按实测损害量序。当前（批次 419 后）：
-  **420＝语料新崩点 `str_trim + 24` 读 `x0=0x3532`**（小整数当 `char*`，#117 那一族；崩点已从 134 行推到 135 行，是"0 笔成交 / final_value"正前方唯一一格）
-  → **`[dynamic]` 幽灵名族在语料里剩 5 个成员**（`copy`×2 / `dropna` / `ffill` / `isin`，现已抛异常走兜底，真对齐要 Series + `DataFrame.index`，未定价）
-  → **`rows` 同二进制跨跑抖**（5 跑 4 值 12854–12858，本批又取一格 12855/12857；运行期/库面侧非 codegen）
+- **正向队列（Agent-1）**：roadmap2.md §2 主链的「下一批候选」，按实测损害量序。当前（批次 420 后）：
+  **421＝`d.get(key, default)` 三参形式**（名表零臂 ⇒ 幽灵名；语料 17 处已逐行号实测，含驱动直接 import 的 `jq_wufu_local.py:198/284/288/309`；修法＝在 420 的早返上放开 `arg_ids.len()==3`，default 交给 `map_get` 的缺失返回）**与第 2 格并列，先测哪格有位移**
+  → **第 2 格＝`str_trim + 24` 读 `x0=0x3532`**（419 的崩点，本批 A/B 复测仍在 135 行、**位移 0 有正证据**：改前二进制仍死在 `fetch_stocks`。生产者三条负结果入册，真修大概率要动 `runtime/py_additions.c` ⇒ **等用户授权**，未获授权前不作为头名）
+  → **`[dynamic]` 幽灵名族（订正：成员 2 个，不是 419 写的 5 个）**：`copy`×4（全在 acceptance 那个模块内，未定价）/ `dropna`×15（全在另外 13 个策略文件，`jq_wufu_local.py` 内 0）；`ffill` / `isin` 实测归零。真对齐要 Series + `DataFrame.index`，未定价
+  → **`rows` 同二进制跨跑抖**（5 跑 4 值 12854–12858，420 又一次读数 119/135 位置的抖；运行期/库面侧非 codegen）
   → 名字→字段全局扫描选错 struct（先补一条 variant 为空、真打进 `codegen.rs:6665` 的夹具；418 记的 `:6535` 已因 418/419 两次加行移到这一格）→ #142（`gen.rs:3987` 读点未守卫）
   → #134（`GroupBy.__len__` 恒 0）→ #117/#118 打印族 → #136 漏点族定价。
 - **反向队列（Agent-2）**：从债务尾巴向回收，队列固定，两条子队列依次：
@@ -54,7 +55,8 @@
 | 416 | bootstrap | 主线 301 第 3 步定位：0 成交病因＝模块 `def` 不进环境表、当值读回 0（修法当时判死回退，登记 known-fail） | 194/194 · 335/2/**7** · 40/40 · diff 92.3% | MERGED（已推送 `72462832`+`66d61724`） |
 | 417 | bootstrap | `FuncAddr` 值读上门（`gen.rs:3890`/`:12290`，+23）+ **更正 416 的退化归因**：三格塌＝出码轮次（HEAD 重编照样塌），抖动在 MIR 之后的发射阶段 | **rc=1**（`gate417b.log:142`）· 336/2/6 · 194/194+191 · 40/40 · jit 176/365/541 · diff 92.3% · ABI 32/11/3（`--rebind`） | MERGED（已推送 `9b7246c7`+`7c0f16cb`） |
 | 418 | bootstrap | 出码非确定性两处落地：`codegen.rs:1606` alloca 序排序 + `:66` `struct_defs`→`BTreeMap`（代码批 `0f5bec05`，7 文件 +291/−161）；门禁第 16 步 `tools/emit_stable.sh` 上门；**两条负结果入册**：两个夹具盯不住源 B（把 BTreeMap 退回 HashMap 照样全过）、先前口误的 ABI 读数实为 **rc=2**（裸行号＝#52 的账） | **rc=1**（`/tmp/b418/gate418.log`，唯一红移到 `run_all.sh:605` 存量 `py_fail=2`）· emit_stable 2 夹具/违规 0 · 336/2/6/0 · 194/194+191 · 40/40 · jit 176/541 segv=0 · diff 120/130 92.3% bad 0 · clean_checkout rc=0 rev=`738618b8` · ABI 32/11/3（`--rebind` 77/77×2） | 代码批已提交 `0f5bec05`；记录批已推送 `969f8ec5` |
-| 419 | bootstrap | 动态接收者的裸成员名兜底绑到类别名 ⇒ struct 体套在 vec 句柄上崩（`resolver.rs:1014-1026` 双注册 × `get_or_declare_function` 两处裸名兜底）。判据换成问 MIR 清单（`class_method_members`）：是别名就改绑 `zeta_raise(1)` 跳板；**两条负结果入册**（一律抛 ⇒ t411 回归；`count_basic_blocks()>0` ⇒ 查幽灵名那刻别名还是 0 块声明，且只守一趟输出逐字节不变）。代码批 `92e05c11`（4 文件 +321/−155） | **rc=1**（`/tmp/b419g/gate419.log`，唯一红源仍是 `run_all.sh:605 py_fail=2`）· 337/2/6/0 ＝ `ls t*.z` 345 逐字对上 · 194/194+191 · 40/40 · jit 176/**542** segv=0 · diff 120/130 92.3% · clean_checkout rc=0 rev=`969f8ec5` · ABI 定位失败 4→**0**、漂移 32→**23**（`--rebind` 74 行/147 数 + `--bless-only` 点名 9 条；终态 23/11/10 rc=1）· **主线位移：语料 134→135 行 rc=139→139，新增行＝越过 try/except 的 `[WARNING] jq_shim: 动态池更新失败: 1`；新崩点 `str_trim+24` / `x0=0x3532`** | 代码批已提交 `92e05c11`；记录批随后推送 |
+| 419 | bootstrap | 动态接收者的裸成员名兜底绑到类别名 ⇒ struct 体套在 vec 句柄上崩（`resolver.rs:1014-1026` 双注册 × `get_or_declare_function` 两处裸名兜底）。判据换成问 MIR 清单（`class_method_members`）：是别名就改绑 `zeta_raise(1)` 跳板；**两条负结果入册**（一律抛 ⇒ t411 回归；`count_basic_blocks()>0` ⇒ 查幽灵名那刻别名还是 0 块声明，且只守一趟输出逐字节不变）。代码批 `92e05c11`（4 文件 +321/−155） | **rc=1**（`/tmp/b419g/gate419.log`，唯一红源仍是 `run_all.sh:605 py_fail=2`）· 337/2/6/0 ＝ `ls t*.z` 345 逐字对上 · 194/194+191 · 40/40 · jit 176/**542** segv=0 · diff 120/130 92.3% · clean_checkout rc=0 rev=`969f8ec5` · ABI 定位失败 4→**0**、漂移 32→**23**（`--rebind` 74 行/147 数 + `--bless-only` 点名 9 条；终态 23/11/10 rc=1）· **主线位移：语料 134→135 行 rc=139→139，新增行＝越过 try/except 的 `[WARNING] jq_shim: 动态池更新失败: 1`；新崩点 `str_trim+24` / `x0=0x3532`** | 代码批已提交 `92e05c11`；记录批已推送 `92e05c11`+`26504a95` |
+| 420 | bootstrap | 动态接收者的 `.get(<str 键>)` 下到 `array_get`（load＝`base + key*8`，字符串键＝拿键地址当元素下标 ⇒ 确定性内存不安全，改前 rc=139 实拍）；改为复用静态路径的 `MirStmt::DictGet`（`gen.rs:10423-10446` +24 行，负对照整型键逐字节未变）。新用例 t456。**一条弯路负结果**：直接换名表符号 ⇒ LLVM verifier 拒 `map_get` 的 `i64(ptr,i64)`（只有 DictGet 那条发射路插 `build_int_to_ptr`）。代码批 `24514e84`（4 文件 +77 −24） | **rc=1**（`/tmp/b420/gate.txt`，唯一红源仍是 `run_all.sh:605 py_fail=2`）· 338/2/6/0 ＝ `ls t*.z` 346 逐字对上（净增 1＝t456 无回归）· 194/194+191 · 40/40 · jit 176/**543** segv=0 · diff 120/130 92.3% · clean_checkout rc=0 rev=`26504a95` · ABI 终态 23/11/10 rc=1 定位失败 0（`--rebind` 各 13 条，与 419 终态逐字相同、ABI.md 1032 行不变）· **主线位移 0（有正证据）**：改前二进制仍死在 `fetch_stocks`（`str_trim+24`），在本批改到的 6 个 IR 函数上游；语料 IR `@map_get` 225→239＝14 个调用点换写法 | 代码批已提交并推送 `24514e84`；记录批随后 |
 | （续） | | | | |
 
 ## 5. Agent-2 旁路台账（ZCode 维护；cleanup）

@@ -18242,6 +18242,122 @@ OPEN 净增 0：#143 结案（定位 + 落地 + 门禁化），新增登记折�
 4. **`rows` 同二进制跨跑抖**（12854–12858）：418 候选 2 未动，本批又一次读数（12855/12857）。
 5. **#142 / #134 / #52**：类构造器被当函数发 `FuncAddr`、`GroupBy.__len__` 恒 0、锚点核对器看不见裸行号（本批已把手改的 9 条入表，判据盲区本身还在）。
 
+## 批次 420（主线 301 头名换格）：动态接收者的 `.get(<str 键>)` 下到 DictGet —— 语料 IR 里 14 个调用点换写法（落在 6 个函数），主线位移 0（有正证据）
+
+代码提交 `24514e84`（4 文件 / +77 −24）：`src/middle/mir/gen.rs`（+24 行，14914→14938）+ 新用例
+`tests/python_style/t456_dyn_str_key_get.z`（29 行）+ `docs/ABI.md` / `tools/baselines/abi_anchors.tsv`
+（随 +24 行 `--rebind` 各 13 条）。记录批随后。
+
+### 一、病因（一处机制的第二半，注释里早就写着）
+
+`src/middle/mir/gen.rs:10407-10414` 的存量注释点名过这条机制：`("get", 2) => array_get` 把键当**元素偏移**，
+`c.get("a")` 因此"read the struct as an ARRAY（the key became an element offset → SEGFAULT）"。
+当年只把**已知 struct** 那一半守住了（`struct_has_method`，:10415-10422）；**接收者静态未知**时同一臂照旧命中。
+名表现位 `:10447-10513`，那一臂在 `:10461`。
+
+崩形：`array_get` 的载入是 `base + key*8`，键是字符串时 index＝键的堆地址 ⇒ 地址×8 越界。
+改前实拍 IR（`/tmp/b420/g1.pre.ll`）：`%array_ptr = inttoptr i64 %5 to ptr` + `%elem_ptr = getelementptr i64, ptr %array_ptr, i64 %6`；
+崩溃指令 `ldr x19, [x19, x8, lsl #3]`。
+
+### 二、改动（`gen.rs:10423-10446`，+24 行，名表之前早返）
+
+判据四条：`!struct_has_method` ∧ `method == "get"` ∧ `arg_ids.len() == 2` ∧ 键的静态类型是 `Type::Str`
+∧ 接收者不是静态 `map` ⇒ 发 **`MirStmt::DictGet`**（与静态类型路径同一条语句、同一个 `map_str_key` + `map_get(ptr, i64)` ABI），
+不再另造第二条并行调用路。改后 IR（`g1.post.ll`）：`%7 = call i64 @map_str_key(i64 %6)` + `%9 = call i64 @map_get(ptr %map_ptr, i64 %9)`。
+
+**踩到的一条弯路（负结果）**：先试直接把名表符号换成 `map_get` ⇒ LLVM verifier 立即拒绝
+`Call parameter type does not match function signature!`，因为 `map_get` 声明是 `i64(ptr, i64)`
+（`codegen.rs:235-236`），而**只有** `MirStmt::DictGet` 那条发射路会插 `build_int_to_ptr`（`codegen.rs:4963-4990`）。
+
+### 三、读数（夹具侧，两侧二进制同目录 `/tmp/b420`）
+
+| 夹具 | 形状 | 改前 | 改后 |
+|---|---|---|---|
+| g1 | `def g(dd): return dd.get("x")`，只 print | compile=0 / **run=139** / stdout 空 | rc=0，`G1 4335594214`（堆句柄，见 §五边界） |
+| g2 | 同上 + `.strip()` | **run=139** | rc=0，`G2 25` ⇒ 值正确 |
+| h1 | `def pick(row): return row.get("k")`，只 print | **run=139** | rc=0（句柄 `4369656582`，随 ASLR 变） |
+| h2 | 同上 + `.strip()` | **run=139** | rc=0，`H2 0.936abc` |
+| p8 | `len(dd.get("money"))` | **run=139** | rc=0，`P8 2` |
+| **g3（负对照）** | 整型键 `arr.get(1)` | rc=0，`G3 8` | rc=0，`G3 8` ⇒ array 语义没被抢 |
+| v1 | `normalize(code: str)` 收 int 实参 | rc=139 | **仍 rc=139** ⇒ 那是 str_trim 那一格，本批没碰 |
+
+回归用例 t456（A/B/C 三段）：改前二进制实拍 **compile=0 / run=139 / stdout 空**，改后 rc=0 且
+`A 25 / B 2 / C 8` 三条 expect 逐字命中。语料侧 str 键 `.get` 的源码站点（当场 grep `\.get\(["']` 于 `strategies/code/`，共 28 行；
+含 `jq_shim.py:137/239/282/294/348/377/414`、`jq_wufu_daily.py:403/438/489` 等）。**本批未判定这 28 行里哪几行进本轮驱动
+`_drv_accept_409.py` 的编译闭包**（IR 函数名带模块前缀，按 `@jq_shim__` 这类模式 grep 会假阴）；已测到的是 §四 表里那 6 个
+IR 函数净增 14 个 `map_get` 调用点 —— +14 是 **IR 调用点**计数，不是源码行数计数，两者别混。
+
+### 四、主线位移＝0，且配了正证据
+
+| 面 | 读数 |
+|---|---|
+| 语料 A/B（两侧二进制同放 `target/release/`，**cwd＝`REasyQuant` 根**、`REPLAYQUANT_LOCAL=1`，各 4 跑） | pre **135/135/135/135** 行 rc=139 → post **135/119/135/135** 行 rc=139 ⇒ 崩点位置**一格没动**，119 那次＝419 已登记的同二进制跨跑抖 |
+| 为什么没动（改前二进制的崩点帧，lldb `-k`） | `EXC_BAD_ACCESS (address=0x3532)`，`frame #0 str_trim + 24` ← `#1 backend_datasrc_code_conv__normalize_to_jq + 16` ← `#2 [dynamic]str__map + 100` ← `#3 MarketDataFetcher::fetch_stocks + 3080` ⇒ 崩在 `fetch_stocks` 里，**早于**本批改到的那 6 个函数 |
+| 语料 IR 归位（同窗口、逐函数计数） | `@map_get(` 站点 **225→239（+14）**、`@map_str_key(` **814→828（+14）**、`@array_get(` 1→1 不变；`define` 630→630、`@str_lit` 10738→10738（输入侧条件同）。落到函数：`backend_datasrc_data_ops_log__summarize_day` 7→16、`jq_shim__attribute_history` 4→5、`jq_shim__get_hist_arrays` 4→5、`jq_shim__get_price` 4→5、`MarketDataFetcher::_load_tushare_reference` 0→1、`_load_tushare_reference` 0→1 |
+| 噪声底（判 IR 差异前必取） | 同一份 pre 二进制两次 `--emit-llvm` 逐字相同（`diff` **0 行**）⇒ 上面那 5180 行 diff 全是真改动，不是抖动 |
+
+**定价结论**：本批对主线 301 位移 **0**，但它把语料 IR 里那 14 个 `.get(<str 键>)` 调用点的确定性内存不安全出码换掉了 ——
+那 14 个点一旦跑到就是 rc=139（夹具侧 5 形逐条实拍）。"跑到没跑到"本批只证到 `fetch_stocks` 之前，`summarize_day` 等是否在执行序上**未证**。
+
+### 五、边界登记（三条，都是本批故意留的）
+
+1. `DictGet` 的 dest 仍打 `Type::I64`（沿用旧臂）⇒ 动态接收者上取到的 str 值**直接 print 打堆句柄**（g1/h1 读数）。
+   改成 `Str` 就是把另一种猜测定死（值也可能是 f64 位模式）；正解是动态槽自带标记 ⇒ #117。仓内**不存在**运行时动态打印机
+   （`grep -rn "dyn_print\|print_dyn" src/backend src/runtime runtime/` 零命中）⇒ 要动 `runtime/py_additions.c`，**未获授权，未动**。
+2. 整型键照旧走 `("get", 2) => array_get`（g3 负对照）。注意 Python 的 `list` 根本没有 `.get` ⇒ 这一形的语义另案，本批不改判据外的东西。
+3. `d.get(key, default)` 是 argc=3，名表里**没有任何臂**接它（`str_method_symbol("get")` 为 `None`）⇒ 落到幽灵名。
+   语料站点当场 grep 实测 **17 处**（四个策略文件内）：字面量键 12 处（`jq_shim.py:412/441/486/487`、
+   `jq_wufu_local.py:198/284/288/309`、`jq_wufu.py:776`、`jq_wufu_daily.py:507/508/828`）+ 键为变量的 5 处
+   （`jq_shim.py:272`、`jq_wufu.py:465/492`、`jq_wufu_daily.py:473/515`）；另有 `l2_data_layer_probe.py:91/99` 两处，
+   该文件在不在编译闭包**未判**。`jq_wufu_local.py` 是驱动 `_drv_accept_409.py:4` 直接 `from … import run_backtest` 的模块。
+   登记不修（＝421 头名候选）。
+
+### 六、门禁与锚点
+
+| 面 | 读数 |
+|---|---|
+| `bash tools/run_all.sh` 16 步 | **rc=1**（`/tmp/b420/gate.txt`）；唯一红源仍是常驻 `run_all.sh:605 py_fail != 0`（`failed: t231_dict_set_cast_fromkeys t233_listcomp_condition_capture`，同 418/419） |
+| python_style | **338 passed / 2 failed / 6 known-fail / 0 xpass** = 346 = `ls tests/python_style/t*.z \| wc -l` 逐字对上（349 个 `.z` 里 3 个是 `bsmod_/dictmod_/kwmod_` 夹具，`run.sh:49` 只吃 `t*.z`）⇒ 对 419 的 337/2/6/0 **净增 1＝t456，无回归** |
+| official / diff / jit | compile 194/194、compile+link 191/194（link-only 3 已登记）；diff 120/130=92.3% bad_case 0；jit ok=**176** / segv=0 / total **543**（419 是 542 ⇒ +1＝新用例进 sweep） |
+| 其余步骤 | knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 / mbvar 22 条断言 FAIL 全 0；comment_drift restated 0；emit_stable 2 夹具/违规 0；clean_checkout rc=0（rev `26504a95`）；语料 40/40 解析通过 |
+| 门禁开场披露 | 第 1 行有 `[W2003] runtime/tokio_runtime_stub.c 比 tokio_runtime.o 新`，且 `tokio_runtime.o` 在工作树里是 **` M`**（本批未碰 `runtime/**`；`git status` 里 runtime/ 干净）⇒ 门禁跑的运行期对象不是 HEAD 的。两侧 A/B 链的是同一份 .o，本批 A/B 不因此失真；这条脏状态是存量，登记 |
+| ABI 锚点（门禁外，手动） | HEAD 自测基线（隔离 worktree 检出 `26504a95`，跑完即 `git worktree remove`）：**23 / 新 11 / 消失 12**、定位失败 2（`aliases.inc.c` 只在主树在场）→ 主树带改动：**36 / 11 / 10**（净增 13 条＝我插的 24 行）→ `--rebind` 判定搬家 13 条 / 拒改 33 条 → 终态 **23 / 新 11 / 消失 10、定位失败 0、rc=1**，与批次 419 终态逐字相同（`docs/ABI.md` 与 tsv 各改 13 行、ABI.md 行数 1032→1032 不变） |
+| 构建 | `cargo build --release` 50.08s；`target/release/zetac` md5 `278e26e5…` 与 `/tmp/b420/zetac_b420_post` 逐字相同；pre 侧 md5 `e88e398a…` |
+
+### 七、头名换回 `str_trim`：三条负结果入册（#145 重开为 OPEN）
+
+本批是从头名换格里掉下来的：`str_trim + 24` 读 `0x3532` 才是语料当前唯一拦路格，而它的**生产者 123 批没定位**
+（批次 297 `roadmap.md:8672-8680` 记的就是同一帧链、298 的"下一步"就是要收它）。本轮实测：
+
+1. **parquet 读侧不是生产者** —— `runtime/parquet_min.c:402-415`（字典页）、`:458-467`（PLAIN BYTE_ARRAY）、
+   `:476-488`（RLE_DICTIONARY）三条路都 `malloc` 出真正的 NUL 结尾 `char*`。
+2. **崩点位置非确定** —— 同一二进制、同 cwd 四跑分别落在 135/135/119/135 行 ⇒ 纯静态误下型解释不了全部，
+   与批次 297 的"约 25% 概率崩"对得上。
+3. **假设 H 被自己的探针否掉** —— 预测"误下型 `.get` 读出 ASCII（packed）喂给 `str_trim`"；`h1.z` 只 print 不消费也崩
+   ⇒ 读的那一瞬间就越界，H 不成立。（这条正是本批真修的由来：H 错了，但 H 的载体 `.get` 确实是个独立缺陷。）
+
+### 八、OPEN 净增账
+
+新增折进 backlog `#7` mega 行：`.get(k, default)` argc=3 无名表臂（语料 17 处，§五 第 3 条逐行号）、动态接收者 str 值打印成句柄
+（#117 近邻，需运行时标记）、`("set", 3) => array_set` 同形状兄弟臂未守（写侧越界，语料站点 0）、
+`[dynamic]` 幽灵 `copy`/`dropna`/`ffill`/`isin` 的真运行时符号在 `runtime/*.c` 里**逐条 grep 确认不存在**。
+#145 由"定位与修法"改判为 **OPEN：packed str 生产者未定位**。OPEN 净增 **0**。
+
+### 九、下一批候选（按已实测损害量）
+
+1. **421＝`d.get(key, default)` 三参形式**（头名候选）：名表零臂 ⇒ 幽灵名；**语料 17 处已实测**（§五 第 3 条，逐行号列出），
+   与本批同族、同一处判据可扩，修法是在本批早返上放开 `arg_ids.len() == 3` 并把 default 交给 `map_get` 的缺失返回。
+   定价未做（要先测这 17 处里进本轮执行序的有几处——本批只测到驱动直接 import 的 `jq_wufu_local.py` 有 4 处）。
+2. **`str_trim` packed 生产者**（换回第 2 格）：真修大概率要动 `runtime/py_additions.c`（判形或生产侧收口）⇒ **等用户授权**。
+3. **`[dynamic]` 幽灵 `copy`×4 / `dropna`×15**（口径先说清：都是 `strategies/code/` 内的 grep 实测，`ffill`/`isin` 同面 **0**；
+   把整个 `strategies/` 都算上则 `dropna` 29，另 14 处在 `descriptions/*.txt` 的说明文本里、不是代码站点）：
+   `copy` 4 处全在 `jq_wufu_local.py:166/190/248/301`（`market_df[mask].copy()`，**在**本轮 acceptance 闭包的那个模块里）；
+   `dropna` 15 处分布在**另外 13 个策略文件**（`ETF动量EPO.py:2`、`Gyro小市值因子匹配.py:2`、`l1_fixed_pool_momentum.py:68` 等），
+   `jq_wufu_local.py` 内 **0** ⇒ 对当前主线 301 语料 `dropna` 暂不构成拦路格，它是"跑别的策略文件"那一批的损害量。
+   `_[dynamic]str__copy` / `__dropna` 在 `runtime/*.c` 里逐条 grep 确认**不存在** ⇒ 队列里"还剩 5 个成员"那句订正成 2 个（`copy`/`dropna`）。
+4. **`("set", 3) => array_set` 同形兄弟**（`gen.rs:10462`）：写侧越界，语料站点 0 ⇒ 只作加固，不定价。
+5. **`rows` 同二进制跨跑抖**（12854–12858）＋ **#142 / #134 / #52** 长尾；`get_function:2323-2327` 同形兜底可达性仍未证。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
