@@ -17775,6 +17775,133 @@ S1 119 / S2 115 / S3 2023-08-05 / S4 12858 / S5 12858 / S6 136 / S7 103。
 4. **打印族 #117/#118**（用户裁定第 4 条第一格）＝动态槽类型标记：`[PARITY]` 37 行全是指针形、
    `code=<addr>`、`%s` 不插值，三处症状同一根源。
 
+## 批次 415（主线 301 第 2 步收口：`__file__` 全程序只有一份 ⇒ 模块里的 `Path(__file__).parent…` 算的是入口的祖先，parquet 缓存整面墙看不见）
+
+代码提交 `6b0dc13a`（`fix(mir): 批次 415 —— __file__ 按模块归位`），本批**不 push** 的裁决继续被
+"执行一批、提交并推送一批"的绑定裁决覆盖：已推 `agentic/bootstrap`，`rev-list --count` 收尾 0。
+
+### 一、症状（最小复现）
+
+**语料侧**：acceptance 驱动 `REasyQuant/strategies/code/_drv_accept_409.py`（从仓根构建）改前是
+414 留下的那声 `Unhandled exception: code=…` + rc=1，更早是 rc=124 死锁；**改后 rc=0 跑完 37 个交易日**。
+
+**探针五格** `REasyQuant/_drv_probe415e.py`（直调 `MarketDataFetcher()` + `_parquet_cache.load`）：
+
+| 格 | 改前（Zeta） | 改后（Zeta） | CPython 参照 |
+|---|---|---|---|
+| X1 `stock_cache_dir` | `/Users/meetai/source/data/stocks` | `…/REasyQuant/data/stocks` | `…/REasyQuant/data/stocks` |
+| X2 `_cache_path` | `…/source/data/stocks/000300_XSHG.parquet` | `…/REasyQuant/…` | `…/REasyQuant/…` |
+| X3 `_normalize_stock_code` | `000300.XSHG` | 同 | 同 |
+| X4 `int(df is None)` | **1**（缓存读不到） | **0**（读到了） | 0 |
+| X5 `getcwd` | 同 | 同 | 同 |
+
+**套件侧最小复现** `/tmp/b415/ff/e2.py`（入口）+ `/tmp/b415/ff/sub/mod_a.py`（模块顶层 print）：
+Zeta 改前 `MOD top sub.mod_a e2.py`（读到**入口**名）vs CPython `MOD top sub.mod_a /private/tmp/b415/ff/sub/mod_a.py`。
+
+### 二、定位（一份 `source_file` 喂全部模块，模块→文件那张表根本不存在）
+
+- 写侧只有一处：`resolver.rs:2266-2274 set_source_dir` —— `source_file` = **命令行给的那个路径**，全程序一份；
+- 传：`resolver.rs:3395` `.with_source_file(self.source_file.borrow().clone())`，对每个 def 都是同一份；
+- 读：`gen.rs:3792` 的 `AstNode::Var("__file__")` → `StringLit(source_file)`；
+- 模块解析本来就走带 `path` 的那条路（`find_py_module_file_ranked` → `load_user_python_module`），
+  但这个 `path` 只用来打 `PY-A: imported module … from <path>` 那一声，**没落表** ——
+  仓内只有 `py_user_modules: RefCell<HashSet<String>>`（`resolver.rs:69`，只有名字、没有路径）。
+- 语料后果链（逐格读过源码）：`market_data_sources.py:146 _PROJECT_ROOT` →
+  `market_data_fetcher.py:80-95 stock_cache_dir` → `:97-114 _load_cache` 每只都 None →
+  `:540-580` `待拉取` 满 → `:643-658` baostock 分支 → `market_data_sources.py:615` 抛
+  `RuntimeError("baostock is not installed")`（Zeta 导不了 baostock ⇒ `HAS_BAOSTOCK` False）→
+  414 的 with-handler `zeta_raise` → `exit(1)`。
+- **为什么 acceptance 三批"未动"也没红在这一格上**：acceptance 的入口住在 `strategies/code/`，
+  正好两级深 ⇒ 三级 `parent` 算术**凑**对了 `_PROJECT_ROOT`；探针入口在仓根，同一份模块代码立即错位。
+  也就是说，"缓存命中"这条路此前依赖的是**路径深度巧合**，不是行为正确 —— 411/412/413 拿它当基线，
+  读的其实是巧合成立时的那一份。
+
+### 三、修复（最小修：记一张 `模块名 → 来源文件`，读点先查表再兜入口）
+
+- `resolver.rs:71` 新字段 `py_module_paths: RefCell<HashMap<String, String>>`（`:146` 初始化）；
+- 写点两处：`resolver.rs:2491`（`load_user_python_module` 里紧挨既有的 `py_user_modules.insert`，
+  在递归注册**之前**）与 `:2707`（同一函数尾部的第二处 insert）。`path` 已在作用域，原样存 ——
+  不绝对化、不 `canonicalize`（`:2495` 那次 canonicalize 是"同文件双名"的别名键，两条用途不混）；
+- `resolver.rs:3407` `.with_py_module_paths(...)`；`gen.rs:189` 字段 / `:271` 默认 / `:356` builder；
+  `gen.rs:14511` 子 gen（闭包·嵌套 def）带上同一张表，其 `current_module` 在 `:14522` 已经是本模块；
+- 读点 `gen.rs:3799-3813`：`py_module_paths.get(&self.current_module)`，查不到再
+  `.or_else(|| self.source_file.clone())` ⇒ `__main__` 那格逐字未动
+  （入口侧对照 `/tmp/b415/ff/one.py`：改前改后都是 `E1 file one.py` + `E2 abs /private/tmp/b415/ff/one.py`）；
+- 一处未收的口径差：CPython 给 `__main__` 的是**绝对**路径、Zeta 仍是"命令行那份"（`one.py` vs
+  `/private/tmp/b415/ff/one.py`）。本批不动它 —— 那是另一个判据。三条既有用例逐条看过，都不吃这一格：
+  `t72` 断言 `len(__file__) > 0` / `basename.endswith(".z")` / `dirname != ""`；`t270` 断言
+  `x.json`、`0`、`0`；`t73` 的 `Path(__file__).resolve()` 只被取 basename 段（`zeta_pathlib_probe.txt` 等），
+  绝对路径那几条 expect 是固定的 `/tmp/zeta_pathlib_probe.txt` 探针、与 `__file__` 无关（转候选，不属 #139）。
+
+### 四、判据（一条新用例，改前实拍在案）
+
+`t453_file_per_module.z` + 新夹具 `pyfilepath_fixture.py`（夹具在被导入时 print 自己那份
+`basename(__file__)` 与 `basename(dirname(__file__))`；两条 `// expect:`：
+`FIXTURE pyfilepath_fixture.py python_style` / `ENTRY t453_file_per_module.z python_style`）。
+
+**改前实拍**（本批用第二条路子，写明方法差异）：把改前内容 `cp -p` 到 `/tmp/b415/prefix_bak/` 并
+`md5` 对回，然后**只** `git checkout HEAD -- src/middle/mir/gen.rs src/middle/resolver/resolver.rs`
+退回这两个文件、`cargo build --release`（18.32 s）重编，同一份源码编译运行 ⇒
+
+```
+FIXTURE t453_file_per_module.z python_style     ← 第 1 条判据红：模块读到入口的 .z
+ENTRY   t453_file_per_module.z python_style
+```
+
+改后两行与 expect 逐字相等。没用 414 那套隔离 worktree，也**没碰 `git stash`**（共享工作树里裸 stash
+是禁的）：这条路子的代价是"改前臂"与主树共用 `target/`，所以两次重编都 `md5` 复核过恢复。
+
+### 五、门禁（`bash tools/run_all.sh` → `/tmp/b415/gate415.log`）
+
+| 步 | 读数 | 批前基线（批次 414） |
+|---|---|---|
+| official | compile **194/194**、compile+link **191/194**、link-only 3（同一名单） | 未动 |
+| diagnostics official | 2 文件 / 5 行 | 未动 |
+| python_style | **335 passed / 2 failed / 6 known-fail / 0 xpass** | 334/2/6/0（+1＝t453；failed 仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`） |
+| diagnostics python_style | **105 文件 / 220 行** | 104/219（+1 文件 +1 行＝t453 自己那条 `PY-A: imported module \`pyfilepath_fixture\` from …`） |
+| 语料 | 40/40 = 100% | 未动 |
+| jit sweep | ok=176 trap=**364** total=**540** GREEN | 176/363/539（+1 total/+1 trap＝新用例进了 sweep，与 414 的 t452 同一机制；ok 未回退） |
+| diff | match=120 judged=130 92.3% bad_case=0 | 未动 |
+| 断言族 | knob 23/0、swallow 6/0、import 22/0、empty_stmt 68/0、pysrc 42/0、cli_semantics 73/0、ignore_rules 19/0 | 全 FAIL 0 |
+| clean_checkout | rc=0（2 s，rev=b9e3c9df） | 同形 |
+
+**`gate rc=1`**（实拍 `/tmp/…/tasks/b2wn657fh.output:1` = `gate rc=1`）：唯一红是 `run_all.sh:576`
+`py_fail != 0` 那两条存量失败。**口径不一致先记下来、不回改**：413/411 记的都是"2 failed ⇒ rc=1"，
+而 414 §五 记"套件 334/2/6/0"同时记"门禁 rc=0" —— 两读必有一处口径不同，本批未查证 ⇒ 不解释、不改旧文。
+
+**ABI 锚点**：改后不带 `--rebind` 先跑了一次核对 = **漂移 74 / 新 11 / 消失 3**（本批 +37 行确实动了锚：
+`gen.rs` 三处插入点下游全部引用、`resolver.rs` 同理）；`--rebind` 改写 27 行 / 59 个数字
+（基线仍 250 条；拒改 35 条、落单新 11、消失 3 按工具规则原样保留）→ 读数回到常驻 **32 / 11 / 3**，
+与 413/414 逐字相同。
+
+### 六、语料位移（主线 301）
+
+- 探针五格与 CPython **逐字对齐**（§一 表）—— 301 主线自 411 的"上市日过滤 `115 → 103 只`"之后第二次有对齐读数。
+- acceptance **第一次跑完**：rc=0、37 个 `[PARITY]` 日、`缓存命中 103 只；待拉取 0 只`（指数侧另 4 只）、
+  `上市日过滤: 115 → 103 只` 两态保持、`market=12858 rows, codes=…, trading_days=136`。
+- 三格读数变成两格：**`codes=0` 那格收掉了**（现在是 107/232 而非 0），但**改成抖**：同一个二进制
+  三跑 `107 / 232 / 107`，同源日志 `合计 12858 行，103 只标的` ↔ `228 只标的`（行数、136 日两格恒稳）
+  ⇒ 唯一标的数跨跑不稳，落在 `_build_stock_arrays` 的 `groupby("stock_code")` 那一格（#134 邻族，#139④）。
+- **0 笔成交、`1000000 -> 0 (-100.00%)`** 两格未动（CPython `994575.8405772317 / -0.542%`），
+  `[PARITY]` 第一格仍是把日期串打成地址 ⇒ 301 第 3 步（final_value）现在才是链上的第一格（#139③）。
+
+### 七、登记（#139，四条）
+
+① `def f(): return __file__` ⇒ 调用点 `println_i64` 打地址 `4342540912`（函数体 MIR 里明明是
+  `StringLit("e4.py")`+`type_map: Str`；同形 `return "abc"` 正常 ⇒ **编译期常量字符串作返回值时调用点拿不到类型证据**，#33/#114/#117 同族）；
+② 导入模块的**函数**里读 `__file__`（`/tmp/b415/ff/e3.py`）⇒ rc=133 SIGTRAP、零输出，lldb 停在
+  `main + 176` 的 `brk #0x1`（修前修后同形都崩 —— 本批只收了模块顶层那条）；
+③ acceptance 的 0 成交 + `final_value` 归 0（§六）；④ `codes`/唯一标的数跨跑非确定（§六，第 4 例成员）。
+OPEN 净增 0：415 折进本行、backlog `#7` 与 `#131`（已闭）同批归位。
+
+### 八、下一批候选（按已实测损害量）
+
+1. **#139④ `codes` 唯一数跨跑抖（107/232）** —— 这是"选股数量不一致"当前唯一还在动的读数，
+   且 `groupby` 那格与 #134 `GroupBy.__len__` 恒 0 大概率同一处；先取三跑以上读数的最小复现再定位。
+2. **#139③ 0 笔成交 / `final_value` 归 0** —— 主线第 3 步，现在才到得了这一格。
+3. **#139①②** 两格 `__file__` 相邻的独立缺陷（返回常量 str 丢类型证据 / 模块函数内读 `__file__` 崩）。
+4. **#137①** `def loop():` 静默截断整个文件（丢代码族唯一有新成员形状的，先取语料计数再定价）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
