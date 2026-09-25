@@ -18873,6 +18873,119 @@ A/B（`/tmp/b426/ab26.sh`，`cwd=REasyQuant`、`REPLAYQUANT_LOCAL=1`、驱动 `_
 4. **覆盖了自己正在分析的留盘产物**：把 2 跑扩到 5 跑时复用了同一组 `ab26_${b}_${i}` 文件名，run1 的 `outlines=1` 与磁盘上 0 字节的文件从此对不上。**跑集文件名要带跑集规模**（`.rc` 名字带了、产物文件没带）。加上 §五：2 跑样本给出的"改前必崩"是噪声底 —— 语料 A/B 的**最小样本数应先由同侧两跑的方差定**（与既有记忆"大夹具 dump 有噪声底"同型，这次错在运行期 rc 上）。
 5. **zsh 未加引号的 `--include=*.py`** 被 glob 吞（`no matches found`）⇒ 加引号或用 Grep 工具（既有坑，本批再犯一次）。
 
+## 批次 427（3.2 Lowering／取证批，＝424 §八.1(a) 那把欠了三批的尺子）：反查落空要出声 —— 语料 529 次读里 **152 次走进占位版式、且 152 次全部解到索引 0**（425/426 的 clamp 计数低估 25 倍）；收集点冲突探针语料 **0 命中**（正证据＝本批新夹具），但同批把它抓出的**跨模块同名类别互换字段**登记为 428
+
+代码提交一笔 `7c3ffa23`（6 文件 **+234/−159**：`src/backend/codegen/codegen.rs` **+61/−20**、`docs/ABI.md` +66/−66、`tools/baselines/abi_anchors.tsv` +72/−73、新用例 `tests/python_style/t464_field_order_key_collision_swap.z` 27 行、`tests/python_style/pyswap_a.py` / `pyswap_b.py` 各 4 行）。`md5 target/release/zetac` = `8a8e64483f7fe446c96ed0f47ca5ffde`，改前那颗留盘为 `target/release/zetac_pre427`（`3f2dd9f5d5f5094f6009aa3e7b654cd2`），两颗同在 `target/release/` 下（A/B 同目录那条坑）。本批**不改任何判据**：新增的全是 `ZETA_DBG_FA` 门后的输出，判据一字未动 —— 位移判定见 §五，为 **0**（有正证据）。
+
+### 一、这一格在链上的位置（＝426 §七.1 的头名，源头在 424）
+
+424 §八.1 立的 (a)「缺证据时出声」欠了三批（425/426 都只在"能修"上使劲），426 §六 把三条"未证"明写着"拿不到逐键读数"：判据只知道**不一致**，不知道**跟谁不一致**。本批补的就是这一条输出，范围全在 `src/backend/codegen/`、不等授权。
+
+它同时是 426 §六.6 那条隐患（`struct_defs` 首写者胜）唯一的量尺子 —— 没有 dump 布局表**值**的旋钮之前，"语料里有没有同键异序"只能靠"冲突即出声"来判有无成员。
+
+### 二、改动（三支输出 + 一次不动判据的抽取）
+
+1. **`struct_field_decls`（`codegen.rs:5910` 起，新函数）**：把"扫 `struct_defs` 收集某个字段名的所有声明者"从 `resolve_struct_layout_by_field` 里抽出来单独成函数，返回 `Vec<(variant, 宽度, 索引)>`，序＝`BTreeMap` 键序（418 之后是确定的）。原 resolver 改成吃它的结果，**采纳条件与宽度选择规则一字未动**（索引全体一致 ⇒ 采纳；宽度取最小声明者）。抽取的理由：失败路径需要同一份事实做诊断，而 resolver 返回 `Option`，落空时信息就丢了。
+2. **读侧出声（`codegen.rs:6722-6743`）**：`("", 2)` 占位版式落地前，若名字反查也 `None`，打一行
+   `ZETA-DBG FA decls field=<名> declarers=<N> decls=[(variant, 宽度, 索引), …]`。
+3. **收集侧出声（`gen_mirs` 里 `codegen.rs:1443` 那段）**：`entry(k).or_insert(..)` 之前先 `get`，同键已存在且字段序不同 ⇒ 打一行
+   `ZETA-DBG struct_defs conflict key="struct_Pair_2" kept=["a", "b"] dropped=["b", "a"]`。
+   首写者胜的行为**没改**（改了就是行为变更，得另开一批定价），本批只让它可见。
+
+三支都挂在既有的 `crate::diagnostics::env_flag("ZETA_DBG_FA")` 上，**没有新增旋钮、没有新增诊断码号段**（不占 W 码，避开 356 的号段纪律）。
+
+### 三、语料读数：兜底族比 clamp 计数大 25 倍
+
+`ZETA_DBG_FA=1` 编 acceptance 驱动（`/tmp/b427/fa427.sh`，`cwd=/Users/meetai/source/quant/REasyQuant`、`REPLAYQUANT_LOCAL=1`、`strategies/code/_drv_accept_409.py`），改前改后各一次，日志留盘 `dbg_corpus_zetac_pre427.fa.txt` 1,335 行 / `dbg_corpus_zetac.fa.txt` 1,487 行（多的 152 行＝新打印，逐条对上）：
+
+| 读数 | 改前 | 改后 | 判法 |
+|---|---|---|---|
+| `ZETA-DBG FA read` 总条数 | **529** | **529** | `grep -c`，未动（本批不改变到达） |
+| `ZETA-DBG   idx N >= count M` 夹回条数 | **6** | **6** | 同上，判据未动 ⇒ 逐字相同 |
+| `ZETA-DBG FA decls`（两路都落空、走进占位版式） | 无此输出 | **152** | 新增 |
+| ├ 其中 `declarers=0`（这个字段名**没有任何已收集 struct 声明**） | — | **146** | 45 个不同字段名 |
+| └ 其中 `declarers=2`（有声明者但索引分歧 ⇒ 判据拒绝） | — | **6** | 3 个名字 ×2 个读点 |
+| 这 152 条随后的 `final idx=` | — | **152 条全为 0** | 逐行配对 `FA decls` → 下一条 `final idx=` |
+
+**这张表是本批的主结论**：425/426 一直用"夹回条数"当这一族的损害量尺子（28→11→6），而夹回只在 `field_index >= field_count` 时才响。`declarers=0` 的 146 条读的是索引 0 —— 0 < 2 ⇒ **范围检查永远不触发**，出码安静地"读接收者的第一个词"，下一跳常常从那个整数身上再读字段（`base_ty=Some(I64)` 那一形）。**clamp 计数把这一族低估了 25 倍（152 vs 6）**，之前所有"残口只剩 6 处"的说法在"落空族"口径下不成立。
+
+`declarers=2` 那 6 条的分歧对（426 §六.3 要的逐键读数，本批拿到）：
+
+| 字段名 | 两个声明者 | 各自索引 | 夹回行 |
+|---|---|---|---|
+| `trading_dates` | `NautilusBackend`（宽 11）↔ `NautilusJqStrategy`（宽 9） | 8 ↔ 3 | `idx 8 >= count 2 -> fallback 0` |
+| `routines` | 同上 | 7 ↔ 2 | `idx 7 >= count 2 -> fallback 0` |
+| `bar_types` | 同上 | 9 ↔ 4 | `idx 9 >= count 2 -> fallback 0` |
+
+三个名字成对出现在同两个类别之间 ⇒ 这不再是"某些字段恰好重名"，而是**同一个接收者的两条候选版式在争**（`NautilusBackend` 与 `NautilusJqStrategy`）；判据继续拒绝是对的，但"该按哪个身份分派"已经从字段级问题升成接收者级问题 —— 记在 §七.2。
+
+`declarers=0` 那 45 个名字的构成也是证据：`index` / `columns` / `error_code` / `schema` / `metadata` / `positions` / `value` / `values` / `attrs` / `empty` / `close` / `high` / `low` / `day` / `datetime` / `__dict__` / `__name__`……**绝大多数是外部对象（CPython、pandas、backtrader）身上的属性**，不是仓内类别的字段 —— 这一族本来就不该靠 `struct_defs` 反查，它的正解在动态槽的属性读路径上。这个判断是**读数形状给出的指向，不是本批实测的因果**（未证，入 §六.3）。
+
+### 四、收集点探针：语料 0 命中（负断言）＋ t464 正证据 ＋ 顺手抓出一个真缺陷
+
+`ZETA-DBG struct_defs conflict` 在全语料编译里 **0 次命中** ⇒ 426 §六.6 的隐患在语料里**当前无成员**。负断言按规矩配正证据：同一支探针在 `t464` 上打一行，pre427 同夹具 0 行（那支探针在改前不存在）——
+
+```
+$ ZETA_DBG_FA=1 zetac t464_field_order_key_collision_swap.z          # 改后
+ZETA-DBG struct_defs conflict key="struct_Pair_2" kept=["a", "b"] dropped=["b", "a"]
+$ ZETA_DBG_FA=1 zetac_pre427 同一夹具                                # 改前
+（无 conflict 行）
+```
+
+而 `t464` 的**运行结果是错的，且错在改前改后一模一样**：
+
+| 侧 | compile | run | stdout |
+|---|---|---|---|
+| `zetac`（本批） | 0 | 0 | `x 1 2` / **`y 3 4`** / `done` |
+| `zetac_pre427` | 0 | 0 | `x 1 2` / **`y 3 4`** / `done` |
+| `python3`（同两份夹具源码，只把两个 `Pair` 改名避开遮蔽） | — | 0 | `x 1 2` / **`y 4 3`** / `done` |
+
+形状＝两个模块各定义一个 `class Pair`、同宽 2、字段序互为颠倒（`pyswap_a`：`a=1;b=2`；`pyswap_b`：`b=3;a=4`）。`struct_defs` 的键是 `struct_{裸类别名}_{字段数}`，`variant` **不含模块前缀** ⇒ 两个 `Pair` 争同一个键 `struct_Pair_2`，首写者（a）胜，b 那份字段序整条丢弃 ⇒ 读 `y.a` 按 a 的名单解到索引 0，拿回 `3`。写侧不受影响（各自按自己构造表达式的顺序落槽），所以症状只在读侧，且是**静默错值**（rc=0、无诊断、无夹回）。⇒ 这是**本批之前就有**的缺陷，登记为 428（任务 #155），夹具按 known-fail 入库、expect 写语义正解。
+
+**为什么修复不是"把键改一下"**：读侧到达这里时接收者的 `base_ty` 只有 `Named("Pair")` 一形（不带模块），键加前缀必须有地方把模块身份传下来 —— 428 的第一格是"身份从哪来"，不是"键怎么写"。
+
+### 五、位移判定＝0，正证据是三层的
+
+1. **出码层（决定性）**：语料 `--emit-llvm` 文本改前改后**逐字节相同** —— `corpus_pre.ll` / `corpus_post.ll` / `corpus_post2.ll`（改后跑两遍自比）各 **113,722 行 / 4,423,353 字节**，`cmp` 两两 `IDENTICAL`。判据一字未动 ⇒ 出码不该变，实测也没变。
+   - 顺带钉一条方法论：**机器码不能当等价尺**。`bin_post.bin` 与 `bin_post2.bin`（**同一颗编译器**两次编译同一夹具，都 `compile=0`）大小都是 603,280 字节却 `cmp` 在 **char 1609** 就 differ（Mach-O linkedit/UUID），而 `bin_pre.bin`（603,272）与 `bin_post.bin` differ 在 char 1409 —— "二进制不同"这个读数**零信息**，本批改用它。
+2. **诊断层**：`FA read` 529 = 529、`idx … fallback` 6 = 6（§三表）。
+3. **夹具层**：门禁 python_style **345 passed / 2 failed / 7 known-fail / 0 xpass** 与 `ls tests/python_style/t*.z` 数到 **354** 逐字对上（对 426 的 353 净增 1＝t464），known-fail 6→7 全部归因于 t464 自己，`xpass=0` ⇒ 没有任何"改后就绿了"的意外；两条红仍是存量的 `t231_dict_set_cast_fromkeys` / `t233_listcomp_condition_capture`。
+
+### 六、没有修掉什么（逐条点名）
+
+1. **`("", 2)` 占位版式还在**：本批只是让它出声。146 条 `declarers=0` 的读仍按 2 词布局解索引 0。
+2. **426 §六.6 的键冲突没修**：`or_insert_with` 的首写者胜一字未动，只加了一行打印；`t464` 仍是红的（known-fail）。
+3. **`declarers=0` 族的正解路径未定位**：§三末尾那句"多数是外部对象属性"是形状判断，**没有做生产者归因**（要另批：对这 45 个名字逐个查 `self.X =` 声明点在仓内还是仓外）。
+4. **分歧对的接收者身份仍未解**：`NautilusBackend`(11) ↔ `NautilusJqStrategy`(9) 说明真正缺的是"这个动态槽在这一点上是哪个类"，不是"字段名对应哪个索引" —— 判据继续拒是对的，但这条路到头了（再放宽＝猜布局）。
+5. **0 笔成交未闭**（2026-09-24 裁定主线第 1 步）：`TRADE=0`、`回测完成: 1000000 -> 0 (-100.00%)`、`[PARITY] target=- \| holdings=- \| ranked=-` 本批未触碰。
+6. **四处实测到、未修的独立缺陷仍在原账上**：#145 打印族（真修要动 `runtime/py_additions.c` ⇒ **等授权**）、#134 `GroupBy.__len__` 恒 0、#117 动态键 `.get(k, default)`、#42 self-host 运行时绑定。
+
+### 七、头名换格（正向队列，定价先于动手）
+
+1. **头名＝428 收集点键冲突（任务 #155）**：损害量是**已实拍的静默错值**（`y 3 4` vs `y 4 3`、rc=0 无诊断），夹具已在套件里（红着，修好即转绿＝天然验收）。第一格是"读侧的接收者身份从哪来"（`base_ty` 现在只带裸名），不是"键怎么写"。
+2. **第 2 格＝`declarers=0` 那 146 条的归因批（任务 #156）**：尺子本批已交付（`FA decls` 一行给到 `declarers` 与逐条三元组），只差按名字查生产者。它决定这一族要不要第二条反查路径（属性表？外部对象的动态槽？）。
+3. **从头名摘掉、已定价的**：426 §七.1（＝本批，已完成）；426 §七.2（＝本批 §四，冲突成员数在语料里实测为 0，升级成 428 的真缺陷在夹具里）。
+4. **第 3 格起照旧**：#142（`gen.rs:3987` 读点无守卫）→ #134 → #117/#118 打印族 → #136 漏点族定价。等授权项一条未变：`runtime/py_additions.c`（#112/#145）、#42 JIT 运行时绑定、`benchmarks.yml`／任务 #29/#74、423 守卫上界 `1<<30` 与 `docs/ABI.md` 附 A #7 的 `2^28` 不一致。
+
+### 八、门禁与读数（`/tmp/b427/gate.txt` 148 行 + `gate.rc`＝`GATE_RC=1`）
+
+- **`GATE_RC=1`**，唯一红源仍是存量 `py_fail=2`（`failed: t231_dict_set_cast_fromkeys t233_listcomp_condition_capture`）。
+- python_style **345/2/7/0**（known-fail 6→7＝t464 入册，`xpass=0`）；official **194/194 compile**、191/194 link（3 条 link-only 明细未动：`integration_all_features`、`quantum_basic`、`selfhost`）；语料 **40/40 解析通过 100%**；jit **ok=176 / trap=375 / fail=0 / timeout=0 / segv=0（total 551，最小 ok=163）** —— 对 426 的 `trap=374 / total=550` 各 **+1**，ok 未回退（新用例进 sweep，与 §五.3 同源）；diff **120/130 92.3% bad_case=0**；真值面 truth 22/23、str 20/23、container 27/28、numeric 23/28、control 28/28；knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 / mbvar 22 / emit_stable 2 全 0 违规；comment_drift 0；clean_checkout `rc=0 rev=d61008ef`。
+- 诊断面 python_style **233 warning 行 / 109 文件**（426 为 231 / 108）：增量归因到 t464 的两条 `PY-A: imported module … `（`pyswap_a` / `pyswap_b`）与由它带入的文件计数，official 侧 2 文件 / 5 行未动。
+- **ABI 锚点：本批是真的动了行号**（`codegen.rs` 净 +41 行 ⇒ tsv 里 72 行改号，分三段：收集点前 **+11**、读侧 arm 前 **+21**、arm 之后 **+41**）。终态只读核对 `rc=1`：**漂移 28 / 新 11 / 消失 10 / 定位失败 0**、改号配对 0 对、待归属 100 条 / 91 种、声明为仓外 14 条 —— 三个计数与 426 记录的常驻读数逐项相同。人读改了两处：M4 行的兜底点从 `codegen.rs:6701-6704` 改指 **`6722-6743`**，并把 426/427 两批的真判据与分歧对补进文案；N7 行手移 `:2325、:2548、:2583、:2599、:2711`（五条同文本 `let mangled = name.replace("::", "__");`，`--rebind` 按设计拒改）。`--bless-only` 点名重采了被本批真改写的那条 arm（`6701 → 6722`）。
+- **一处锚点覆盖变窄，点名**：`基线 257 条`（426 记录为 **258**），`abi_anchors.tsv` 349 行 → **348 行**。少掉的那条是 `codegen.rs:7113` 上的 `fn coerce_call_args(` 定义行 —— §3.2 的范围锚 `7113-7238` 经 `--rebind` 算术位移成 `7154-7279`，起点与同句 `abi_note` 的 `:7154` 撞成同一个「文件+行号」槽位，于是这一条定义行不再单独有锚。这是重绑的**副作用**、不是本批想做的事；`coerce_call_args` 的其余锚点（`let coerced = self.coerce_call_args(…)` 各调用点）仍在。
+- disclosure：门禁首行**没有** W2003；`md5 target/release/zetac` = `8a8e64483f7fe446c96ed0f47ca5ffde` 与三套基线链跑的那颗一致（收尾复跑 A/B 时未重编 ⇒ 无"改后二进制"风险，见坑 6）。
+
+### 九、工具坑与自我核对（本批当场抓到）
+
+1. **印象级数字写进代码注释＝当场造假**：注释初稿写着"`decls` 在这里必非空（空列表＝没人声明这个字段名，那是另一种沉默）"—— 这句在**写的时候还没测**。实测打脸：152 条里 **146 条 `declarers=0`**，即"另一种沉默"才是主population。改成带读数的版本后才入库。**规矩：数字没量过就不许进注释/文档。**
+2. **机器码当等价尺＝假阳性**（§五.1）：同一颗编译器两跑产物 `cmp` 不同（char 1609）。等价判据换成 `--emit-llvm` 文本。
+3. **`sed`+`awk` 提字段名产出一条假分组**（`152 ZETA-DBG FA`）：先用 `head` 看真实行、再用 `${l##*field=}` 参数展开提字段，分组数才与 `grep -c` 对得上。
+4. **名字数靠眼数会少数**：`declarers=0` 的不同字段名我数成 37，机器 `sort -u | wc -l` 是 **45**；且 `cut -c1-600` 会把这份名单截断显示 —— 引用"全部名字"前要确认没被自己裁掉。
+5. **ABI 漂移读数骤涨（28→101→34）是假警报**：对照必须在**隔离 worktree 检 HEAD** 上取（`git worktree add /tmp/b427/headwt HEAD`），主树里 `runtime/aliases.inc.c` 是生成物，两边的"新/消失"集合不同 —— 这条已经是第二次犯（记忆里"锚点核对：对照要在隔离 worktree 取 HEAD 自基线"）。收尾已 `git worktree remove /tmp/b427/headwt`。
+6. **A/B 两颗二进制必须同目录**：本批把 `zetac` 与 `zetac_pre427` 都留在 `target/release/` 下复跑夹具，否则不同目录的 `pylib` 解析基会让"改前改后"跑的其实是两份代码（记忆坑同型）。
+7. **426 §九.7① 那条坑当场再犯一次，而且这次真造成损伤**：插 427 节时 `old_string` 仍取了 `## 优先级调整（2026-09-24，用户裁定）` 整行 —— 第一次被"命中 2 处"挡住（另一处＝426 §九.7 正文里对同一串的引用），换长锚点后替换成功，但 `new_string` 末尾**忘了把标题写回去** ⇒ 标题消失、正文还在。是落盘后的例行断言（"最后一个 `## ` 标题必须＝用户裁定" + `git diff --numstat roadmap.md` 出现 **1  deletions**）当场抓回并复原；终态 `git diff --numstat roadmap.md` ＝ **113 insertions / 0 deletions**，最后一个 `## ` 标题＝`优先级调整（2026-09-24，用户裁定）`（`grep -c` ＝ 1）。**教训不是"要用长锚点"（那条已记过），是"替换尾部节时，`new_string` 必须原样带上被 `old_string` 吃掉的每一个标题"** —— 只增不删的断言才是这一节的守门人。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
