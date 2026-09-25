@@ -180,12 +180,31 @@ fn refine_param_types(mirs: &mut [zetac::middle::mir::mir::Mir]) {
                     MirStmt::VoidCall { func, args } => (func, args),
                     _ => continue,
                 };
+                // BATCH-424: the target may carry gen.rs's `_<argc>`
+                // disambiguation suffix (`suffixed` at gen.rs:11461 — appended to
+                // EVERY bare-name call, not just to overloads), while the item
+                // name carries none. Measured: item `daily_stop_loss` vs call
+                // `daily_stop_loss_1`, so no candidate was ever found and the
+                // unannotated `context` param stayed `dyn`. Counted on
+                // `jq_wufu.py` compiled as the ROOT module (301 items, 2518
+                // call lines): 32 callees / 46 call sites lost their
+                // argument-type evidence this way. In the corpus the same
+                // file is a non-root module, so its calls are qualified (never
+                // suffixed) and the newly-bound families are 5 bare-stem + 6
+                // qualified-tail targets. Only reached when no exact item
+                // exists, so an overload set (`show_1`, `show_2`) still binds
+                // to its own item.
+                let stem = func.rsplit_once('_').map(|(s, n)| {
+                    (s, n.bytes().all(|b| b.is_ascii_digit()) && !s.is_empty())
+                });
                 let Some(ti) = mirs.iter().position(|c| {
                     c.name.as_deref() == Some(func.as_str())
                         || (c.name.as_deref() != Some(func.as_str())
                             && c.name
                                 .as_deref()
                                 .is_some_and(|n| n.ends_with(&format!("__{}", func))))
+                        || (stem.map_or(false, |(s, ok)| ok
+                            && c.name.as_deref() == Some(s)))
                 }) else {
                     continue;
                 };
