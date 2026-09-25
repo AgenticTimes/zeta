@@ -18358,6 +18358,80 @@ IR 函数净增 14 个 `map_get` 调用点 —— +14 是 **IR 调用点**计数
 4. **`("set", 3) => array_set` 同形兄弟**（`gen.rs:10462`）：写侧越界，语料站点 0 ⇒ 只作加固，不定价。
 5. **`rows` 同二进制跨跑抖**（12854–12858）＋ **#142 / #134 / #52** 长尾；`get_function:2323-2327` 同形兜底可达性仍未证。
 
+## 批次 421（3.2 Lowering／名表 argc=3）：动态接收者的 `.get(k, default)` 换写法 —— 语料 34 个活调用点离开 weak 桩 `_get`，主线位移 0（有正证据）；同批收掉自己引入的抢占回归
+
+代码提交两笔（各自可回滚）：`04a6aeeb`（`gen.rs` +39 行 / 新用例 t457 48 行 / ABI.md 11 行 + tsv 13 行重绑，4 文件 +111/−24）与 `1bea38b9`（`gen.rs` +24 行的 `receiver_has_typed_route` 判据 / 新用例 t458 24 行 / ABI.md 11 行 + tsv 13 行，4 文件 **+72/−24**）。记录批随后。
+
+### 一、病因（420 §五 第 3 条的登记面，实测比登记更具体）
+
+420 记的是"落到幽灵名"。逐二进制实测后订正成两形：
+
+1. **动态接收者**（Python 函数形参那一族）：MIR 名带 arity 后缀 `get_3`，codegen 剥掉尾部 `_<数字>` ⇒ 链接到 `runtime/unavailable_stubs.c:145` 的 weak 桩 `get` ⇒ 一被调用就 `zt_unavailable("_get")` **abort，rc=134**、stdout 空。夹具侧实拍（`/tmp/b421/e2.z`，`def pick(dd): return dd.get(k, "fb")`）：改前 compile=0 / run=134 / stderr 首行 `PY-A: `_get` is NOT implemented in this build`。
+2. **静态已知容器**：链接期就出声 —— `Undefined symbols: _[dynamic]i64__get`，compile=1（`e1.z`：`xs.get(1, 99)`，`xs` 是已知 list）。
+
+名表 `match (method.as_str(), arg_ids.len())`（`gen.rs:10523`）里 `("get", 2) => array_get` 有臂（`:10524`）、`("get", 3)` **零臂**，`str_method_symbol`（`:14944`）亦无 `get` —— 两形都没人接。
+
+### 二、改动（`gen.rs:10470-10509`，argc=3 早返，紧跟 420 那条 DictGet 臂）
+
+判据六条，全部落在"接收者确实没有别的可信路由"这一格：`!struct_has_method` ∧ `!receiver_has_typed_route` ∧ `method == "get"` ∧ `arg_ids.len() == 3` ∧ 键的静态类型是 `Type::Str` ∧ 接收者不是静态 `map` ⇒ 发 **`map_get_default(ptr, key, default)`**，与静态类型路径（`gen.rs:10804` 那条臂）同一个符号、同一条 ABI，不另造第二条并行调用路。返回类型沿用 batch 291 的重打标签规则：**default 实参就是调用方对手上值类型的唯一证据**（`F64`/`Str` 认，其余打 `I64`）—— 动态接收者本身不带证据。
+
+### 三、判据收窄两处（各配一条负对照实拍，都是本轮自己踩的）
+
+**① 键必须静态可知是 str。** `lower_map_key`（`gen.rs:3259`）只在 `type_map[键] == Type::Str` 时才把键折进 `map_str_key`（建表时用的那个内容哈希）；键是动态槽时它按**裸句柄**哈希 ⇒ 恒缺键 ⇒ 静默回 default。实拍：`def pick(dd, k): return dd.get(k, "fb")`，`k="x"` 且 `"x"` 在表里 —— 加判据前**静默打 `fb`**，加判据后回到 rc=134 的响亮 abort（`e2.z`）。判据取舍：宁可留 abort，不制造静默错值。语料侧因此仍有 **7 个调用形状**留在 `_get`（见 §六第 1 条）。
+
+**② 有静态路由的接收者不得抢（这条是本批第一版的回归，自查语料 IR 时抓到）。** 只守 `struct_has_method` 时，本批的臂在 `gen.rs:10471` 早返，抢在 siteA（`:6593`）／siteB（`:11071`，batch 288 的 PyJson 补参镜像在 `:11084`）之前。语料侧一共抢走 4 个站点：**2 个 PyJson**（`py_json_get_default` 4→2，全在 `__closure_0_read_source_stats_unlocked_cd3b69040`，该函数内 2→0）+ **2 个 `DataFrame::get`** 兜底点。修法是把两处现成的路由表问一遍：`qualified_method_candidate`（比 `struct_has_method` 强，它做 mangled／dotted 名归一 —— `pandas__DataFrame`、`pd.DataFrame` → `DataFrame::get`，批次 147／291）∨ pylib 的 `handle_tag` + `method_symbol`。新用例 **t458** 三进制实拍：`zetac_b421_pre`（420 编译器）`S 16 / N 2` → `zetac_b421_post2`（本批第一版）**rc=134**，stderr 是运行期形状守卫 `runtime/tokio_runtime_stub.c:220` 那句 ``map_get_default` was called on a JSON value`…` → `zetac_b421_post4`（加判据后）`S 16 / N 2`。守卫在场 ⇒ 抢占是响亮 abort，不是静默错值（登记，不当成本批的额外损害）。
+
+**顺带订正 420 §五 第 3 条的另一半**：那 2 个 `DataFrame::get` 站点改前也**不是能跑的路由** —— `pylib/pandas.z` 里没有 `def get`（当场 grep 零命中），最终二进制里**没有** `_DataFrame::get` 符号（`nm -a /tmp/b421/ab_pre_1.bin` 只有 `_DataFrame::__getitem__`），MIR 名 `DataFrame::get` 在 codegen 落到**同一个** bare `@get` weak 桩（改前 .ll 里 `backend_datasrc_market_data_sources___fetch_yfinance` 内 2 条 `call.*@get(`）。所以这 2 点是"必 abort → map 查表"，不是回归；但它是不是 pandas 语义的正解（列标签查找）未判 ⇒ 边界 §六第 2 条。
+
+### 四、夹具侧读数（`target/release/zetac`＝改后，两侧二进制同目录 `/tmp/b421`）
+
+| 夹具 | 形状 | 改前（`zetac_b421_pre`） | 改后（`post4`） |
+|---|---|---|---|
+| **t457**（新） | `len(dd.get("x","fallback"))` / 缺键 / `len(dd.get("nums",[]))` × 2 | compile=0 / **run=134** / stdout 空（MIR 里 4×`get_3`） | rc=0，`A 4 / B 8 / C 0 / D 3` 四条 expect 逐字命中（MIR 4×`map_get_default`） |
+| **t458**（新） | `int(v.get("ok",0))` over `raw.items()` 推导式 | rc=0，`S 16 / N 2` | rc=0，`S 16 / N 2`（本批第一版 post2 在此红：rc=134） |
+| e1 | `xs.get(1, 99)`，`xs` 静态已知 list | compile=1（`Undefined symbols: _[dynamic]i64__get`） | compile=1 逐字同 ⇒ 整型键没被抢 |
+| e2 | 动态键 `dd.get(k, "fb")` | run=134 | run=134 ⇒ 判据①守住 |
+| f1 | 动态键第二形 | run=134 | run=134 |
+| g1 | `pm.get("a", 1.5)` 收 f64 default | rc=0 打 `4612811918334230528`（＝2.5 的位模式） | 同读数 ⇒ #117/#33 那一格，本批不改判据外的东西 |
+| h1 | 静态标注 dict 同形 | rc=0，`M 2.500000` | 逐字相同 ⇒ 静态路没被改到 |
+| t456（420） | `.get(<str 键>)` 二参 | rc=0，`A 25 / B 2 / C 8` | 逐字相同 ⇒ 判据②没削掉 420 的那 14 个点 |
+
+### 五、主线位移＝0，正证据在语料 IR 与语料 LLVM 两层
+
+| 面 | 读数 |
+|---|---|
+| 语料 A/B（两侧二进制同放 `target/release/`，**cwd＝`REasyQuant` 根**、`REPLAYQUANT_LOCAL=1`，各 4 跑） | pre **135/135/120/135** 行 rc=139 → post4 **135/135/120/135** 行 rc=139 ⇒ 崩点位置一格没动，两侧第 3 跑同时落到 120（418/419 已登记的同二进制跨跑抖），末条日志都是 `[INFO] jq_shim: [晨间] 计算流动性阈值` ⇒ 仍卡在 `str_trim` 那一格（#145） |
+| 语料 IR（`--dump-mir`，`== MIR item ==` 归位，628 项） | `"get_3"` 站点 **32→0**；`map_get_default` **27→61（+34）**；`py_json_get_default` **4→4**（判据②在场；本批第一版是 4→2）；`"map_str_key"` **813→861**（含 420 的 +14 与本批 +34 两族）；`"array_get"` 181→167（420 的量，本批没动）；`DictGet` 224→238（同上） |
+| 语料 LLVM（`--emit-llvm`，只看活代码） | bare `call.*@get(` **34→0** —— 32 个动态 `.get(k, default)` + 2 个 `DataFrame::get` 兜底点全在此列（分布见 §一）；`@map_get_default` **27→61**；`@py_json_get_default` **4→4** |
+| 落点函数（bare `@get` 的宿主，改前计数） | `backend_engines_nautilus_engine___wufu_extract_result` 11、`__extract_result` 11、`strategies_code_jq_wufu_local___run_nautilus` 2、`backend_engines_bt_helpers___build_trades_from_analyzer` 2、`backend_datasrc_market_data_sources___fetch_yfinance` 2、`jq_shim__get_price`／`calibrate`／`__closure_1_run_nautilus_cb0ed55dc`／`__closure_1_run_backtrader_c3c4a4d7a`／`__closure_0_load_jqdata_etf_universe_c5914bbe6`／`PositionLedger::sell` 各 1 |
+| 噪声底（判差异前必取） | 同一份改后二进制两次 `--dump-mir` 只差 **4 行**（`backend_datasrc_sources__BaoStockSource` ↔ `backend_datasrc_market_data_sources__BaoStockSource`，同名 struct 的别名表二选一，＝#130／418 已登记那格）⇒ 上面 +34/−32 远超该底，是真改动 |
+| 未证的一栏 | 与 420 同：只证到 `fetch_stocks`／晨间那一格之前，`extract_result` 那 22 个点在执行序上跑不跑**未证**（它们改前一跑就是 rc=134） |
+
+### 六、边界登记（四条）
+
+1. 动态键的 `.get(k, default)` 语料仍有 **7 个调用形状**留在 `_get` abort：`jq_shim.py:272`（`field_map.get(f, f)`）、`jq_wufu_local.py:198/309`（外层 `_price_map.get(code, {})`）、`jq_wufu.py:465/492`、`jq_wufu_daily.py:473/515`。正解要的是"动态槽自带标记"⇒ #117，不是把判据放开。
+2. `Type::Named` 但**注册表里没有 `get`** 的接收者（`DataFrame`）现在走 `map_get_default`。对 pandas 而言 `.get(col)` 的语义是列标签查找，这条路由对不对**未判**；改前是同一个 `get` 桩的 abort，所以本批只是"响亮失败 → 语义可疑"，登记不修。
+3. f64 default 的返回值仍打位模式（g1 读数）⇒ 折进 #117／#33 那一族。
+4. `("set", 3) => array_set`（`gen.rs:10525`）的同形兄弟臂仍未守（写侧越界，语料站点 0）—— 420 §八已登记，本批没动。**旧号→新号对照**：420 记的 `gen.rs:10462`（名表那格）与 `:10423-10446`（DictGet 臂）因本批两次插行（+39、+24）现分别移到 **`:10525`** 与 **`:10445-10469`**；历史记录不回改，只在此加对照。
+
+### 七、门禁（`bash tools/run_all.sh` 全量，rc 落盘 `/tmp/b421/gate_guard.txt:150`）
+
+`GATE_RC=1`。**唯一红源逐条排查后＝`tools/run_all.sh:605`（`py_fail != 0`）＝存量两例 `t231_dict_set_cast_fromkeys t233_listcomp_condition_capture`**（419/420 同格）；同段的 `:604`（official compile）、`:607`（语料）、`:609`（jit rc）、`:611`（diff rc=1）本次都没响 —— 见下表逐栏。
+
+| 步骤 | 读数 |
+|---|---|
+| official | compile **194/194**、compile+link 191/194；3 条 link-only 点名入册（`integration_all_features` `_predict,_train` / `quantum_basic` `_factor,_optimal_iterations,_success_probability` / `selfhost` `_as_str,_into_iter,_is_alphabetic,_push`） |
+| python_style | **340 passed / 2 failed / 6 known-fail / 0 xpass ＝ 348**，与 `ls tests/python_style/t*.z` 的 **348** 逐字对上（净增 2＝t457+t458，**零回归**） |
+| 语料 | 解析 40/40 = 100% |
+| jit sweep | ok=176 trap=369 fail=0 timeout=0 **segv=0**（total **545**，比 420 的 543 净增 2＝两条新用例；最小 ok 163） |
+| diff | match=120 judged=130 rate=92.3% bad_case=0 |
+| 断言步 | knob 23/0 · swallow 6/0 · import 22/0 · empty_stmt 68/0 · pysrc 42/0 · cli_semantics 73/0 · ignore_rules 19/0 · mbvar 22 脚本/0 |
+| 稳定性 | comment_drift **0** 处复述 · emit_stable 2 夹具/违规 0 · clean_checkout rc=0（4s，rev=`04a6aeeb` —— 门禁跑在第二笔之前，故 rev 是第一笔） |
+| 诊断 | official 2/194 文件有告警共 5 行；python_style 226 告警行 / 107 文件（`with` 无上下文协议 6 条＝416/417 那族，未变） |
+| ABI 锚点（门禁外的只读核对） | 终态 **漂移 23 / 新 11 / 消失 10 / 定位失败 0，rc=1** —— 与 419/420 终态逐字相同；本批两次 `--rebind` 各改写 ABI.md 11 行/19 数与 tsv 13 行，拒改 33 条原样保留；docs/ABI.md 仍 **1032 行**（行数没变 ⇒ 锚点漂移只在列内改号） |
+
+**读数可复现性两条 disclosure**：① 门禁首行喊 `[W2003] runtime/tokio_runtime_stub.c 比 tokio_runtime.o 新`，工作树里 `tokio_runtime.o` 是 ` M`（不是本批产物、未暂存）⇒ 本次 official/语料/jit 栏链接的是**改前那个运行期目标文件**，与 419/420 的读数同条件可比，但不是 HEAD 的运行期。② 注释订正（"4 个站点"→"2 live + 2 dead"）后重跑 `cargo build --release`，`target/release/zetac` md5 与门禁所用二进制**逐字节相同**（`b5f1abc6d0c9c983a5d3dea9fc8cdab0`）⇒ 上表读数对应的就是 `1bea38b9` 这笔源码。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
