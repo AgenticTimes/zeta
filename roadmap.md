@@ -17492,6 +17492,149 @@ PY-A 诊断混流）：283,467 → 283,493 行（+26），180 个 hunk 全落在
   5 条定位失败、门禁语料步 30 s 超时不耐并行负载。
 
 
+## 批次 413（主线 301 第 1 步：`dict[...]` 注解在解析期就被丢掉 ⇒ map 的值类型只能由第一次写入钉死）
+
+### 一、症状（最小复现）
+
+语料崩点：acceptance 夹具 `_drv_accept_409.py` SIGSEGV 在 `map_insert + 48`，lldb 上一格是
+`backend_datasrc_market_data_universe__get_universe + 248` 把一个 NULL 接收者送进 `map_keys`；
+同一条路探针 `probe413j` 改前读 `len(UNIVERSES) = 0 / keys = [] / reg 之后仍 0`，
+HEAD 读 `2 / ["wufu", "small_scale"] / 3 / get_universe = 119`。
+
+单文件复现不出来（`/tmp/b413/r_two.py` 在坏编译器上照样过）—— 病因只在**跨模块**读一个
+带注解的模块全局时露头。20 行两模块夹具 `/tmp/b413/wm/{wlib,wdrv}.py` 是检测器：
+
+```python
+# wlib.py                                  # wdrv.py
+UA: dict[str, str] = {"k": "v"}            import wm.wlib as w
+UL: dict[str, list[str]] = {"k": ["a"]}    print("d1 UA =", len(w.UA), ...)
+def reg(n: str, s: str) -> None:           w.reg("z", "q")
+    UA[n] = s                              print("d2 UA =", len(w.UA), ...)
+```
+
+改前 rc=139（`map_insert + 48`）；改后 `d1 UA = 1 UL = 1 / d2 UA = 2 UL = 2 / d3 z in UA? True`，
+与 HEAD 逐字相同（`UL` 单独拆出的第三个变体同）。
+
+### 二、定位（一条根 + 同一形态的四处失明）
+
+**根**：`src/frontend/parser/stmt.rs:446` 的 `parse_assign` 只在"类形状"（大写开头）注解时
+把绑定名包进 `TypeAnnotatedPattern`，`UA: dict[str, Any] = {}` 的注解在这里被丢掉 ⇒ MIR 只看见
+`{}` ⇒ `map<i64, i64>` ⇒ 批次 299 的写侧精化把 V 钉死在**第一次写入**的类型上：
+`c["df"] = df` 之后 `len(c["lst"])` 会对 list 句柄分发 `DataFrame::__len__`，
+`map_resolve(0x1)` 崩（这一格由 `t449` 锁）。
+
+**代价**：注解一旦保留，绑定目标从 `AstNode::Var` 变成 `TypeAnnotatedPattern { Var }`，
+而每个扫描器都手写 `match &**lhs { AstNode::Var(n) => … }`。四处失明，各自单独复现、单独修：
+
+| 漏点 | 症状（实测，非推断） | 修法 |
+|---|---|---|
+| `top_level.rs:1660-1707` `collect_module_global` | 注解全局不发 `zeta_module_decl`，名字不进路由 | 三条臂改走新 `bare_bound_name`（`:1697`） |
+| `resolver.rs:2110-2119` `module_global_types` 的 `walk` | 读侧丢类型 ⇒ `U.keys()` 降成裸符号 `_keys`（链接期 `Undefined symbols: _keys`）、`n in U` 落回 `zeta_dyn_contains` | `match bound_var(lhs)` |
+| `resolver.rs:3029` 函数体内心智推断 | `m: dict[str,str] = {}` 后的 `return m` 看不见 `m` ⇒ 整函数被否决成 UNIT，调用目的槽 `Tuple([])`、`len(p)` 走 `array_len` 读 0 | 就地解包一层 |
+| `resolver.rs:4989` `module_level_bindings` | 名字不进 `own` ⇒ 没进 `module_globals` ⇒ 定义方自己的 `UA[n] = s` 打在从未初始化的槽上（`map_insert` SIGSEGV） | `if let Some(n) = bound_var(lhs)`（helper 在 `:4977`） |
+
+MIR 侧的正证据：`wlib__init` 的 `zeta_env_set` 计数改前 3 条、改后 4 条（缺的那条就是 `UA`），
+且 `reg` 里那条语句从 `DictInsert { map_id: 4 }`（没人写过的槽）变成 HEAD 同点位的
+`zeta_env_get("wm_wlib2__UA")`。
+
+### 三、修复（最小修：保留注解 + 四处解包 + 两条保守判据）
+
+- `stmt.rs:454`：新增 `dict_like`（注解头 ∈ `map`/`dict`/`Dict`），包装条件从 `class_like` 变
+  `class_like || dict_like`。`parse_type` 已把 `dict[str, Any]` 归一成 `map<str, Any>`。`+17 -1`
+- `top_level.rs:1697`（`+27 -9`）、`resolver.rs:2110/3029/4977-4989`（`+51 -12`）
+- `gen.rs:3299 annotation_dict_kv` + `:3332 apply_dict_annotation`，接在带注解的 `Let`（`:1611`）
+  与 `Assign`（`:1682`）两处。两条判据：**K、V 两个名字都认识才应用**（半应用
+  `dict[str, pd.DataFrame]` 等于断言 `map<str, i64>`，比它顶掉的 `i64` 占位更糟），
+  **只有从未被写过的 `I64` 占位让路**（已精化过的类型不回退）。`+67 -2`，gen.rs 14,805 → 14,870 行
+
+头集裁决：`map|dict|Dict` 与 `dict|Dict` 两臂本批各跑过一次套件，读数逐字相同
+（332 passed / 2 failed / 6 known-fail / 0 xpass，均在 `t451` 落地之前），保留 `map` 是因为
+丢掉它会让 zeta 自己的拼法仍然不带注解 —— 一条实测上等价、语义上更完整的写法。
+
+### 四、判据（三条新用例 + 一条夹具）
+
+- `t449_dict_any_value_not_pinned.z`（PASS）：`dict[str, Any]` 的值不被第一次写入钉死
+- `t450_dyn_slot_no_tag_class.z`（KNOWN-FAIL，expect `w8 2`、实测 5）：动态槽身上没有类型标记 ⇒
+  类实例经 `dict[str, Any]` 读出来的是几何判形的结果 ＝ #117 那一格
+- `t451_annotated_module_global.z` + 夹具 `dictmod_b413.z`：两翼各盯一处漏点，**改前会红是拿
+  改回裸 Var 的二进制实拍出来的**，不是推断 —— 回退 `module_level_bindings` ⇒ 编译通过、
+  输出 `a 0 0 / b 0 False / c 0 False`（静默错值）；回退 `module_global_types` ⇒
+  `Undefined symbols: _keys`，编译 rc=1
+
+### 五、门禁（`bash tools/run_all.sh` rc=0，`/tmp/b413/run_all_413.log`）
+
+| 项 | 读数 | 412 |
+|---|---|---|
+| official | compile 194/194，compile+link 191/194，link-only 3 条同名 | 相同 |
+| python_style | **333 passed / 2 failed / 6 known-fail / 0 xpass**（+t449 +t451 通过、+t450 known-fail），failed 仍是 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` | 331/2/5/0 |
+| compile-diagnostics | official 2 文件 / 5 行；python_style **104 文件 / 217 行** | 101 / 208 |
+| 语料 | 40/40 = 100%（本批无超时） | 40/40 |
+| jit sweep | ok=176 trap=**362** total=**538** 最小 ok=163 GREEN | 176/358/534 |
+| diff | match=120 judged=130 rate=92.3% bad_case=0（truth 22/23、str 20/23、container 27/28、numeric 23/28、control 28/28） | 相同 |
+| 断言族 | knob 23/0、swallow 6/0、import 22/0、empty_stmt 68/0、pysrc 42/0、cli_semantics 73/0、ignore_rules 19/0、mbvar 21 脚本/违规 0 | 相同 |
+| clean_checkout | rc=0（3 s，rev=2d549c83）；comment_drift 0 处 | 相同 |
+
+jit total 534 → 538 的 4 格来自 `tools/jit_sweep.sh:33` 的 glob 是 `tests/python_style/*.z`
+（不是 `t*.z`）：t449/t450/t451 加夹具 `dictmod_b413.z` 一起进了枚举。
+
+### 六、主线位移量（用户裁定第 3 条：主线 301 第 1 步）
+
+- **第 1 步本身有答案了**：抓回来的 `market_df` 是 12,855 行 × 10 列，**里面就有 `stock_code` 列**
+  （探针 `probe413i` 在 HEAD 上读 `i7 cols = 10 [...]` 含 `stock_code`）⇒ `codes=0` 不是缺列，
+  是上游路由/读回，本批收掉的正是这一格。
+- acceptance 从崩到跑完：本批后 5 次跑 **4 次 rc=0**（`[local] 开始回测: …（37 交易日）` →
+  `回测完成`），1 次 rc=139。**残余的那次崩不是本批引入**：同点位 HEAD 自己 5 次里 2 次 rc=139，
+  两侧都停在 `backend.market_data: 缓存命中 103 只；待拉取 0 只` 之后、`本地数据注入完成` 之前，
+  与本批修的 `map_insert` 点位不同名。
+- 三格读数与 HEAD 逐字相同、本批未动：`12858 0 0`（codes/trading_days）、`[PARITY]` 37 行全是指针形、
+  `1000000 -> 0 (-100.00%)`。
+- 另记：`len(market_df)` 逐次抖动 12853/12854/12855/12858（HEAD 侧也抖）⇒ 语料非确定，本批不判。
+
+### 七、ABI 锚点
+
+`python3 tools/check_abi_anchors.py --rebind` 改 `docs/ABI.md` 26 行 / 49 个数字，基线随之刷新
+（250 个锚点）。改后只读核对：**漂移 32 / 新 11 / 消失 3**；同一把尺子在隔离 worktree
+（`/tmp/b413/headwt`，rev `2d549c83`＝批前 HEAD）读 **32 / 10 / 6** ⇒ 漂移不变、消失 -3、新 +1。
+拒改 35 条（唯一性不成立/区间长度冲突）与定位失败 2 条是存量。
+
+### 八、同批判死的候选与新增残口（负断言配正证据）
+
+- **判死**：本批四处全在 AST 侧，与批次 388 判死的"模块体读走 env"无关；`zeta_env_set`
+  计数 3 → 4 就是这条路径真的在跑的正证据（不是"没报错所以假设它跑了"）。
+- **登记①**（同类漏点族，**只有位置证据、没有实测损害**）：`resolver.rs:5051`
+  `walk_module_member_assigns` 的 `if let AstNode::Var(local) = &**lhs`、`gen.rs:2017` 的
+  AssignOp 目标（`x: T += 1` 写不出来，疑不可达，待反证）。已确认安全的一处：
+  `gen.rs:1668-1686` 的注解分支在同一条 if/else 链里先 `return`，`:1923` 的裸 Var 分支只吃未注解形。
+  ⇒ 任务 #136，每一点要先拿读数才立修复批。
+- **登记②**：`--dump-mir` 对跨模块同名类的裸名别名仍是掷硬币
+  （`backend_datasrc_market_data_sources__BaoStockSource` vs `backend_datasrc_sources__BaoStockSource`，
+  同一份源码连跑两遍在这一行自差）＝任务 #9；本批给它补了机制归因 —— acceptance 长期挂着的
+  "非确定性 / SIGSEGV"读数里有一部分就是这个别名序，而不是编译器随机发疯。
+- **登记③**：从动态 map 里读出的 str 直接 print 打的是地址（`pm 1 4310822185`），
+  mine 与 HEAD 两侧同形 ⇒ #117 未动。
+- **登记④**（两条测量坑，本机）：包夹具的编译根是**源路径形式** —— `cd wm && zetac wdrv.py`
+  会报 `unknown Python module wm.wlib` 并给出假链接失败（`_reg` 未定义），
+  从包根 `zetac wm/wdrv.py` 才解析得到；语料探针只定义 `run()` 时编译探针本身会得到
+  rc=0 + stdout/stderr 全 0 字节 ⇒ 编 `_drv_*` 那个。
+
+### 九、提交
+
+`0a5b7949`，10 文件 `+308 -84`：`src/` 4 文件 `+162 -24`（`stmt.rs +17 -1`、
+`top_level.rs +27 -9`、`resolver.rs +51 -12`、`gen.rs +67 -2`），新用例/夹具 4 文件 `+86`，
+ABI 两文件等量重绑（`docs/ABI.md 26/26`、`abi_anchors.tsv 34/34`）。
+推送 `agentic/bootstrap`：`2d549c83..0a5b7949`，`git rev-list --count agentic/bootstrap..HEAD` = 0。
+
+### 十、下一批候选（按已实测损害量）
+
+1. **#131** `codes=0 / trading_days=0`：0 的落点已收到语句级 —— `jq_shim.py:60-62` 读
+   `_local_cache["stock_arrays"]` 与 `_local_cache["trading_days"]`，而这两格在**同一个函数体内、
+   三行之前**才写入（`_local_cache: dict[str, Any] = {}` 是模块全局）。两翼候选：dyn-map 往返
+   （批次 410 同族）vs `_build_stock_arrays` 自身返回就读 0（#134 groupby 同族）。
+2. **#134** `GroupBy.__len__` 恒 0：413 之后必须复测，它就在上一条那条链上。
+3. **打印族 #117/#118**（动态槽无类型标记）＝用户裁定第 4 条"给值加类型标记"的第一格：
+   `[PARITY]` 37 行全是指针形、`_fmt` 那族地址插值。
+4. **#136** 漏点族逐个定价（每点一个最小夹具 + HEAD 对照）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
