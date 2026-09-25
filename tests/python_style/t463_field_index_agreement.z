@@ -1,0 +1,66 @@
+// 批次 426（3.2 Lowering／读侧取证的判据放宽）：多个类别**同名同索引、不同宽度**时，仍然读得到真字段。
+// 批次 425 按**字段名**反查布局（`codegen.rs` 的 `resolve_struct_layout_by_field`），但把采纳条件写死了
+// 三样全一致：variant、宽度、索引。太严 —— 读哪一格只由**索引**决定，`variant`/宽度在这里只影响
+// 加载宽度这个上界。于是本批判据换成：所有声明该字段名的类别给出**同一个索引**就采纳，宽度取这些
+// 声明者里**最小**的那个（真实对象只会比它更宽 ⇒ 加载不会读出自己的分配；且索引 < 每个声明者的宽度
+// ⇒ 索引 < 采纳宽度，越界夹回不可能发生）。`struct_defs` 是 BTreeMap、键恒为 `struct_{variant}_{len}`
+// ⇒ 扫描序与 tie-break 都确定。索引不一致仍返回 None：仍不许在两个布局之间猜。
+// 本夹具把两种形态压在一起：
+//   `Ctx{x,y,leaf}` 与 `Wide{a,b,leaf,q}` —— `leaf` 都在 idx 2，宽度 3 vs 4 ⇒ 425 判 None、426 判采纳
+//   `show_c`/`show_w` 的形参 `t` 只有一条证据来源：`for routine in [show_c, show_w]` 的**间接调用**，
+//   而间接调用的实参类型在 `refine_param_types` 里没有通道 ⇒ `t` 恒 dyn ⇒ 只能走取名反查这条路。
+// 三颗二进制实拍（同目录 `target/release/`，只差本批的 `src/backend/codegen/codegen.rs`）：
+//   `zetac_pre425`（425 之前，无名字反查）  compile=0 run=**139** stdout **0 行**
+//   `zetac_pre426`（＝425 终态，三样全一致） compile=0 run=**139** stdout **0 行**
+//     —— `ZETA_DBG_FA` 两行原图：`field=leaf variant="" field_count=2 base_ty=Some(PyDynamic)`
+//        + `idx 2 >= count 2 -> fallback 0`，下一跳 `field=gamma base_ty=Some(I64)`（从整数身上读字段）
+//   `zetac_post426`（本批）                 compile=0 run=0 stdout 五行如 expect，两跑逐字节相同
+// stdout 与 CPython 3.12 当场对数逐字相同（`python3` 直接跑本文件去掉空行的版本）。
+// `w` 那两行是对照：`alpha` 在 `Leaf` 里索引本来就是 0，改前改后都必须读对 —— 它证明句柄确实是那个
+// 对象，425 时代错的只有被夹回的索引。
+class Leaf:
+    def __init__(self):
+        self.alpha = 1
+        self.beta = 2
+        self.gamma = 300
+
+
+class Ctx:
+    def __init__(self, x: int, y: int, leaf: Leaf):
+        self.x = x
+        self.y = y
+        self.leaf = leaf
+
+
+class Wide:
+    def __init__(self, a: int, b: int, leaf: Leaf, q: int):
+        self.a = a
+        self.b = b
+        self.leaf = leaf
+        self.q = q
+
+
+def show_c(t):
+    print("c", t.leaf.gamma)
+
+
+def show_w(t):
+    print("w", t.leaf.alpha)
+
+
+def dispatch(context):
+    for routine in [show_c, show_w]:
+        routine(context)
+
+
+narrow = Ctx(x=11, y=22, leaf=Leaf())
+broad = Wide(a=33, b=44, leaf=Leaf(), q=55)
+dispatch(narrow)
+dispatch(broad)
+print("done")
+
+// expect: c 300
+// expect: w 1
+// expect: c 300
+// expect: w 1
+// expect: done

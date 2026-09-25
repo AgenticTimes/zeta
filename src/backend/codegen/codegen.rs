@@ -5909,15 +5909,19 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
     /// Recover a struct layout from the FIELD NAME alone, for a receiver whose
     /// declared type is unknown. Accepted only when EVERY struct that declares
-    /// the field agrees on the same variant, width and index — the exact
-    /// condition under which the word being read is the same word whichever
-    /// object the handle turns out to be. `struct_defs` is a BTreeMap and keys
-    /// are always `struct_{variant}_{fields.len()}` (see the collector), so the
-    /// scan is deterministic. Disagreement returns `None`: the caller keeps the
-    /// stand-in rather than guessing between two layouts.
+    /// the field puts it at the SAME INDEX — that is the exact condition under
+    /// which the word being read is the same word whichever object the handle
+    /// turns out to be, so two classes may share a field name (and BATCH-425's
+    /// stricter "same variant and width too" withheld layouts that were safe).
+    /// The adopted WIDTH is the smallest declaring width: the load then cannot
+    /// reach past the narrowest candidate, and the agreed index is below it
+    /// because `index < fields.len()` holds in every declarer. `struct_defs` is
+    /// a BTreeMap with keys always `struct_{variant}_{fields.len()}` (collector
+    /// at :1443), so the scan and the tie-break are deterministic. Any index
+    /// disagreement returns `None`: the caller keeps the stand-in rather than
+    /// guessing between two layouts.
     fn resolve_struct_layout_by_field(&self, field_name: &str) -> Option<(String, usize)> {
-        struct Agree(String, usize, usize);
-        let mut agreed: Option<Agree> = None;
+        let mut decl: Vec<(String, usize, usize)> = Vec::new();
         for (key, fields) in self.struct_defs.iter() {
             let inner = match key.strip_prefix("struct_") {
                 Some(i) => i,
@@ -5934,16 +5938,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 Some(i) => i,
                 None => continue,
             };
-            match &agreed {
-                Some(a) => {
-                    if a.0 != variant || a.1 != fields.len() || a.2 != idx {
-                        return None;
-                    }
-                }
-                None => agreed = Some(Agree(variant.to_string(), fields.len(), idx)),
-            }
+            decl.push((variant.to_string(), fields.len(), idx));
         }
-        agreed.map(|Agree(v, c, _)| (v, c))
+        let first = decl.first()?;
+        decl.iter()
+            .all(|d| d.2 == first.2)
+            .then(|| decl.iter().min_by_key(|d| d.1).map(|d| (d.0.clone(), d.1)))?
     }
 
     fn gen_expr(
@@ -6685,19 +6685,19 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         })
                     }) {
                         Some(vc) => vc,
-                        // BATCH-425: before falling back to the 2-word stand-in,
-                        // ask the field NAME which layout it belongs to. The
-                        // stand-in loaded 2 words while the index came from a
-                        // global scan of every struct, so any field at index >= 2
-                        // was clamped to 0 by the range check below — the read
-                        // returned the receiver's OWN first field and the next
-                        // hop dereferenced that integer (measured: `t.leaf.gamma`
-                        // scanned to idx 3 and idx 2, both clamped to 0, and the
-                        // program died with rc=139 before printing anything).
-                        // 28 such clamps are live in the corpus (`portfolio`,
-                        // `trading_dates`, `avg_cost`, `paused`, …); 17 name one
-                        // layout. The other 11 return None, which is itself
-                        // structural: >=2 structs declare the name and disagree.
+                        // BATCH-425/426: before falling back to the 2-word
+                        // stand-in, ask the field NAME which layout it belongs
+                        // to. The stand-in loaded 2 words while the index came
+                        // from a global scan of every struct, so any field at
+                        // index >= 2 was clamped to 0 by the range check below —
+                        // the read returned the receiver's OWN first field and
+                        // the next hop dereferenced that integer (measured:
+                        // `t.leaf.gamma` scanned to idx 3 and idx 2, both
+                        // clamped, rc=139 before printing anything). 28 clamps
+                        // were live in the corpus: 425's same-variant-and-width
+                        // rule took 17, 426's index-agreement rule takes 5 more
+                        // (`paused` x3, `low_limit` x2 — now Bar w4, idx 3 and
+                        // 2). The 6 left are 3 names x2: their index disagrees.
                         None => self
                             .resolve_struct_layout_by_field(field)
                             .unwrap_or((String::new(), 2)),
