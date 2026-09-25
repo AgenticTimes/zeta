@@ -1,0 +1,25 @@
+// 批次 410：未标注类型的 dict 参数上 `d[k] = v` 写值丢失（静默错值）。
+// 此前：写侧走 gen.rs 下标赋值的兜底分支（接收者类型不是 `map<…>` 时），key 直接
+// 进 DictInsert，从不做 `map_str_key` 内容哈希；而读侧的同一条兜底分支却一直哈希。
+// 写指针、读哈希 ⇒ 每次取值都是 miss：key 数在涨（len(d) 变大），值读回 0，一声不出。
+// 覆盖四种值形：列表字面值、覆盖写、标量、字符串（值形不是判据，接收者才是）。
+// 模块全局 dict 接收者本来就对（走 `map` 分支已哈希），不列入本用例。
+// expect: inside 3
+// expect: ovr 2
+// expect: scalar 42
+// expect: strs 3
+// expect: root 2 2
+def put(d):
+    d["k"] = [1, 2, 3]
+    print("inside", len(d["k"]))
+    d["k"] = [7, 8]
+    print("ovr", len(d["k"]))
+    d["n"] = 42
+    print("scalar", d["n"])
+    d["s"] = "abc"
+    print("strs", len(d["s"]))
+
+c = {}
+c["z"] = [7, 8]
+put(c)
+print("root", len(c["k"]), len(c["z"]))

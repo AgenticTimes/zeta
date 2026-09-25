@@ -1868,9 +1868,16 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                         });
                     } else {
                         // Use DictInsert for other types (maps/dicts)
+                        // 批次410: the dynamic-receiver write never hashed its key
+                        // while the read (`lower_map_key` in the matching DictGet
+                        // fall-through below) always did, so `d[k]=v` through an
+                        // unannotated parameter inserted under the string HANDLE and
+                        // every lookup missed — `len(d)` grew (the key landed), the
+                        // value read back 0 silently.
+                        let key_id = self.lower_map_key(index_id);
                         self.stmts.push(MirStmt::DictInsert {
                             map_id: base_id,
-                            key_id: index_id,
+                            key_id,
                             val_id: rhs_id,
                         });
                     }
