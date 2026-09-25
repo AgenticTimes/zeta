@@ -19072,6 +19072,77 @@ $ ZETA_DBG_FA=1 zetac_pre427 同一夹具                                # 改�
 7. **`nm -u` 看不见已解析的绑定**：判"`nth` 这条幽灵真的发到符号"用的是 `--emit-llvm` 的 call 站点／declare，不是 `nm -u`（链接成功的二进制上它是空的）。
 8. **427 §九.1 那条坑当场复发，而且这次已经落进仓库**：`codegen.rs:2997-2999` 的注释写着"拖没 a 20-module compile"，`20` 是写注释时的印象值、从没量过；本批要写"损害量"时才去数语料的 `PY-A: imported module` ⇒ **28**。**订正注释＝一次独立改动**：为守住"不动行数"（41 条 ABI 引用刚按 +47 重绑，再位移一行就要重来一遍），改成等行替换并复跑锚点（仍是 28/11/10/0）。**规矩补一句：印象值不许进注释，已进去的要在本批复核时抓出来订正。**
 
+## 批次 429（3.2 Lowering／2.2 签名表的下游）：接收者身上**没有类标签**时的零参成员名不再读句柄第 0 个字 —— 语料两路反查落空的读 152→**125**（`columns`/`empty` 整族归零）；主线 301 运行期位移 **0**（两侧各 11 跑）
+
+代码提交一笔 `0923c676`（4 文件 **+163/−60**：`src/middle/mir/gen.rs` **+49/−0**、新用例 `tests/python_style/t466_dyn_receiver_property.z` 54 行、`docs/ABI.md` +26/−26、`tools/baselines/abi_anchors.tsv` +34/−34）。`md5 target/release/zetac` = `1a6ca4ed7267bb54e16968c8c84b0ea0`；改前那颗留盘为 `target/release/zetac_pre429`（`5ef817044489f9c64f203f98036dd6eb`＝428 的产物），两颗同在 `target/release/` 下跑（428 §九.1 的坑）。
+
+### 一、这一格在链上的位置（＝425/426/427 那条"占位版式"的读侧再上一格）
+
+`gen.rs:12552` 的 Named 路线要求 `type_map[base]` 是 `Type::Named(类名)`；句柄躺在 i64／动态槽里（列表元素、字典值、shim 返回值）时这条形状整条形同虚设，往后还有 vec 身份几支 arm 先返回 ⇒ 落到 `MirExpr::FieldAccess`，再被后端按 `("", 2)` 占位版式读**句柄第 0 个字**（427 量到的 152 条落空读就是这一族）。库侧早就记过同一症状：`pylib/pandas.z:270`「fillna→zeta_identity 把结果标成 i64，随后 `.columns` 静默变 0」；本仓方言把 property 建模成**零参 def ＋ FieldAccess 分派**（`pylib/pandas.z:57`「零参方法由 FieldAccess 分派（批次一百）」）。
+
+按 2026-09-24 裁定「一个一个修语法缺口的办法已经到头」：本批不给 `columns`/`empty`/`index` 逐名加桩，改的是**下型归向** —— 无标签接收者上的裸成员名，若名字在声明表里唯一且零实参，就发调用而不是发一次字段加载。
+
+### 二、改动（一支判据 + 一个守卫，共 49 行）
+
+1. **`unique_zero_arg_property(&self, name) -> Option<(String, Type)>`（`gen.rs:898`）**：在 `func_ret_types` 的键里找以 `::<name>` 结尾的项，**恰好一条**才继续；再看 `func_param_names` 里它的参数是否全为 `self`／`&self`／`&mut self`。一名多主、参数表缺失、带实参 ⇒ `None`。
+2. **调用点（`gen.rs:12610`）与守卫**：紧接 Named/vec 那几支 arm 之后、`FieldAccess` 构造之前，`!matches!(type_map[base], Some(Type::Named(_,_)))` 且判据给出符号 ⇒ 发 `MirStmt::Call { args: vec![base_id], dest: id }`，并把返回类型写回 `type_map[id]`。**守卫是必需的**：加了它，`t466` 的 `len(xs[i].columns)` 那一形（接收者已精化成 Named）行为不变（§三边界行实拍）。
+3. **落空仍由 427 的尺子出声**：判据返回 `None` 时旧路径一字未改 ⇒ `FA decls` 探针继续点名。唯一性判据不是本批新发明的松紧度 —— 沿用动态接收者**调用**那一路已有的裁决（`pylib::method_by_unique_name`，`gen.rs:10299` 处调用）。
+
+### 三、夹具、边界与实拍（`/tmp/b429`，两颗二进制同目录同环境）
+
+| 项 | 改前（`zetac_pre429`） | 改后（`zetac`） | CPython |
+|---|---|---|---|
+| `t466`（`key in xs[i].columns`／`key in m[k].columns`／反向对照 `zzz`）——**编辑后的文件重拍** | compile rc=0、run rc=0、**stderr 0 行**、stdout `V missing a / M missing b / M missing zzz / done` ⇒ 前两行**静默错值** | `V has a / M has b / M missing zzz / done` | 逐字相同（`python3 3.14.5`＋`pandas 3.0.5`，只补 `@property` 装饰器，其余一字未改） |
+| 边界：同一 property 换成 `len(xs[i].columns)` 形状（`t466b_len_shape.z`） | run rc=0、`N 2` | rc=0、`N 2` | `N 2` ⇒ 该形状两侧都读对，**不在本批评据里**（守卫挡住） |
+| 反向对照（第三行键真不在列表里） | `M missing zzz` | `M missing zzz` | 相同 ⇒ 本批不是把这条读一律判成命中 |
+
+**语料探针主读数**（`ZETA_DBG_FA=1` 编 `strategies/code/_drv_accept_409.py`，cwd＝`REasyQuant`、`REPLAYQUANT_LOCAL=1`）：日志 1487→**1407** 行，`FA decls`（两路反查都落空）**152→125**、`FA read` **529→502**、出现的字段名 48→46 种；逐名 `columns` **12→0**、`empty` **5→0**、`index` **16→6**。残 6 条 `index` 的探针行都是 `base_ty=Some(Named("Series"))`——接收者**有**类标签、只是 `Series` 里没有这个字段，被本批守卫按设计挡在外面（那是"具名接收者读错名字"另一族，未收）。
+
+### 四、位移判定：编译侧真位移 27 处、逐名对得上；运行侧位移 0
+
+1. **IR 层**：`--emit-llvm` 语料产物 113,722→113,704 行；`@"DataFrame::columns"` 调用点 **48→60**、`@"DataFrame::empty"` **24→29**、`@"DataFrame::index"` **9→19**，合计 **+27**＝§三 落空读减少的 27，逐名一一对应（`columns` +12、`empty` +5、`index` +10）。
+2. **噪声底 0**：同一颗 `zetac_pre429` 连编两遍，`--emit-llvm` 产物 **md5 逐字节相同**（`f4dd7bd45132326d9ac0b11dcc664277`）⇒ 两侧 `diff` 的 3303 个 hunk 全是真差异。但其中"213 个函数变化"是**假扩散**：`@str_lit.N` 是全局编号，任何一处表达式计数变化都会把后面的字面量整体改名（§九.2）。判语义位移要按**符号 call 计数**，不能数 hunk。
+3. **运行层位移 0**：两侧 compile rc **0/0**、二进制都产出、run rc **0/0**、stdout 1/1 行（那行是一个句柄整数，逐次变）、stderr **321/321** 行、`[PARITY] target=- \| holdings=- \| ranked=-` **74/74**、`回测完成: 1000000 -> 0 (-100.00%)` 各 1 行、`TRADE` 行 **0/0**（＝0 笔成交）。⇒ 主线 301 第 1 步（0 笔成交）与第 2 步读数**一字未动**。
+4. **两侧各自的方差（不许当位移读）**：每侧 11 跑。stderr 停在 **119 行**的早期崩（rc=139）改前 **1/11**、改后 **2/11**；改后另有 1 次 rc=134 停在 **135** 行、末行 `zeta: stub not implemented: numpy.vstack`。两个形态都是 420 台账里"位置非确定 119/135"那一族（#145 的账），n=11 不足以判涨跌（426 的坑第三次遇到）。`合计 12857/12858 行` 在**同一颗二进制**上就会翻（pre A=12857、B/C=12858；post A=12858、B=12857）⇒ 不是本批读数。
+
+### 五、没有修掉什么（逐条点名）
+
+1. **"名字唯一"仍是按名猜接收者**：本批把"读句柄第 0 个字"换成"调那个唯一声明者的实现"。语料那 27 个站点的接收者真身**没有被证明**就是 `DataFrame` —— 唯一旁证是运行期读数逐项未位移（§四.3），而读数位移 0 本身也可能是这条读的结果从没被消费到关键分支。这比旧的"必读 0"更接近真值，但不是类型证据。
+2. **外部对象句柄读不到真属性**：`backend/datasrc/market_data_sources.py:316/317` 的 `raw.columns`（MultiIndex）与 `raw.columns.get_level_values(0)` 属于跨语言句柄，本仓声明表里没有 `columns` 的零参声明时判据给 `None` ⇒ 仍走旧路径；真修需要外部对象的属性表（另一格）。
+3. **具名接收者读错名字那一族未收**：残 6 条 `Named("Series")` 上的 `index`（§三），以及 427 数的 `declarers=0` 那 **146** 条（45 个名字，任务 #156）—— 本批只把"本仓 pylib 有唯一定义"的那三个名字收掉。
+4. **t464 仍红**（跨模块同名同宽类别共用一条 struct 布局 ⇒ 字段互换，＝430／任务 #155）；known-fail 计数没动（7 条）。
+5. **主线 301 的账一条未消**：0 笔成交、`final_value` 归 0、#145 packed str 生产者、#134 `GroupBy.__len__`、#117 动态键 `.get(k, default)` 照原账。
+
+### 六、头名换格（正向队列）
+
+1. **头名＝430（收集点键冲突，任务 #155）**：`struct_defs` 的键从裸类别名换成带模块身份的名字，收掉 `t464` 那一形；验收现成（t464 红着），第一格仍是"读侧到达时接收者身份从哪来"。
+2. **第 2 格＝裸名幽灵同族（428 §六.1）**：`/tmp/b429/probe465.z` 实拍 `"_nonesuch", referenced from: _probe` + `Error: "Linking failed"`；判据不能照搬 428（裸名同时是普通函数调用方式），先量语料里真成员数。
+3. **第 3 格＝#156**（`declarers=0` 那 146 条按名归因）—— 它决定要不要第二条反查路径；若多数是外部对象属性，继续放宽 `struct_defs` 判据就是走错方向。
+4. **第 4 格起照旧**：#142 → #134 → #117/#118 打印族 → #136 漏点族定价。等授权项一条未变：`runtime/py_additions.c`（#112/#145）、#42 JIT 运行时绑定、`benchmarks.yml`／任务 #29/#74。
+
+### 七、门禁与读数（`/tmp/b429/gate429.log` 155 行，末行 `GATE_RC=1`）
+
+- **`GATE_RC=1`**，唯一红源是存量 `py_fail=2`（`gate429.log:16` `failed: t231_dict_set_cast_fromkeys t233_listcomp_condition_capture`；置 rc 的那句现在在 **`tools/run_all.sh:629`**，428 台账写的 `:605` 已被那批插入的 26 行推走）。
+- python_style **347 passed / 2 failed / 7 known-fail / 0 xpass**，与 `ls tests/python_style/t*.z` 数到 **356** 逐项对上（347+2+7）；对 428 的 346/2/7（355 个文件）**净增 1 个绿＝t466**，`xpass=0` ⇒ 没有"改后意外变绿"。
+- 诊断面 python_style **234 warning 行 / 110 文件**、official **2 文件 / 6 行**——**与 428 逐项相同**：新增夹具一条告警都没带来，这正是"无标签属性读在改前静默"的旁证。
+- official **194/194 compile**、**191/194 compile+link**（3 条 link-only 明细未动）；语料 **40/40 解析 100%**；jit **ok=176 / trap=377 / fail=0 / timeout=0 / segv=0（total 553，最小 ok=163）**，对 428 的 trap 376 / total 552 各 **+1**＝新用例进 sweep，ok 未回退（GREEN）；diff **match=120 / judged=130 / 92.3% / bad_case=0**；真值面 truth 22/23、str 20/23、container 27/28、numeric 23/28、control 28/28。
+- knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19 / mbvar 23 / comment_drift 0 / emit_stable 2 夹具 / **dyn_binding 4 条、不一致 0** —— 全 0 违规。
+- clean_checkout `rc=0 rev=27d3f8a0`：这是**本批代码提交之前**那条记录 commit，该步验的是"干净检出能编译"，不含本批改动（其余各步都跑在工作树的补丁上：t466 在 python_style 里就是绿的）。
+- **ABI 锚点**：`gen.rs` 净 +49 行 ⇒ `--rebind` 重绑 `docs/ABI.md` **26 行 / 49 个数字**、`abi_anchors.tsv` **34/34**；ABI.md 仍 **1032 行**。逐条分类 26 对行：**+32 位移 42 个引用**（落在第一处插入之后、第二处之前）、**+49 位移 7 个引用**（两处之后）—— 与两处插入 32 + 17 行吻合，无人工改号、无拒改新增。**净位移 0 的证据**：改后代码 × HEAD 基线读 **漂移 62** / 新 11 / 消失 10，rebind 后回到 **28 / 11 / 10 / 定位失败 0（258 个可解析）、rc=1** ＝ 426/427/428 记录的常驻读数逐项相同。对照在隔离 worktree 取 HEAD 自基线（427 §九.5 的规矩）：`/tmp/b429/isohead` 裸检出读 **28 / 11 / 12**，把未跟踪生成物 `runtime/aliases.inc.c` 补进去后读 **28 / 11 / 10** —— 与主树逐项相同（第三次遇到同一差异）。
+- disclosure（记录批收尾时补测，已闭）：本批最后一次源码改动是 §八 那处 `:10267→:10299` 的**注释**订正 —— 等行、行数不变 ⇒ 依据 428 §九.8 的规矩免 rebind。收尾当场 `touch src/middle/mir/gen.rs && cargo build --release`（rc=0，日志 `/tmp/b429/rebuild_final.log`）⇒ `md5 target/release/zetac` 仍是 **`1a6ca4ed7267bb54e16968c8c84b0ea0`**、与跑门禁那颗**逐字节相同**（同 428 §九.8：注释不参与出码）。⇒ "门禁那颗＝提交那颗"这一条本批是量过的，不留未测声明。
+
+### 八、上一段会话的预跑读数复核结果（三条引用当场订正）
+
+428 §七.1 明写"预跑读数未复核 ⇒ 不进结论"。本批全部重测：**152→125、`columns` 12→0、`empty` 5→0、`index` 16→6 四项逐项复现**（§三），夹具改前红、改后与 CPython 一致也复现。三处**引用**是错的，已改：① 站点路径 `backend/strategy/derivations.py` → 实际 `backend/datasrc/derivations.py`，行号表从印象值 `65/71/75/84` 改成 `grep -n` 实拍的 `61/65/71/75/81/84/91`；② `method_by_unique_name` 被写成 `gen.rs` 自己的方法、坐标 `:10255`/`:10267` —— 真身是 `crate::middle::pylib::method_by_unique_name`，调用点实测 **`:10299`**；③ Named 路线坐标 `:12551` → 实测 **`:12552`**。另 `pylib/pandas.z:57`／`:270` 两处引用以 `grep -n` 复核为**正确**（第一次用 `sed -n` 目测怀疑 `:57` 差一行，`grep -n` 才是准）。
+
+### 九、工具坑与自我核对（本批当场抓到）
+
+1. **继承的补丁注释不许直接信**：§八 那三处引用错误全部来自上一段会话留下的补丁与夹具头注释——数字复现了、引用没复核。凡是"继承来的注释"，落码前把每个 `file:line` 用 `grep -n` 打一遍。
+2. **IR 文本 diff 的 hunk 数不能当语义尺**：`@str_lit.N` 是全局计数器，一处新增调用让后面所有字面量改名 ⇒ 3303 hunk／213 个"变化函数"里绝大多数与判据无关。真尺是**按符号数 call 站点**（§四.1）。
+3. **`sed -n 'a,bp'` 目测行号会差一行**：`grep -n '锚文本'` 才对。这次差点把 `pylib/pandas.z:57` 改错。
+4. **管道末端的 `$?` 不是脚本 rc**：`python3 tools/check_abi_anchors.py | tail -1; echo $?` 给出的是 `tail` 的 0，差点记成"锚点核对转绿"。改成先重定向到文件、单独取 rc（这次真值 **rc=1**，常驻读数）。
+5. **同侧方差要在报告里分开写**：§四.4 那三条（119 行崩、135 行 vstack abort、`rows` 12857/12858）都是"同一颗二进制自己就会变"的形态；把它们记成改前改后的对比就是造假位移。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
