@@ -1,0 +1,22 @@
+// 批次 411：闭包（列表推导式）捕获**跨模块导入的模块全局**时，env 键要用定义方
+// 写入的那个名字。此前 `lower_closure` 的自由变量预绑定一律用**裸别名** `BS`，
+// 而 `from bsmod_b447 import BS` 的定义方把值存在 `bsmod_b447__BS` 下 ⇒ 捕获读到
+// 一个从没人写过的槽（返回 0），`c in BS` 恒 false、`c not in BS` 恒 true：
+// 语料上表现为 `[c for c in codes if c not in WUFU_INDEX_BS_CODES]` 一个都不剔除
+// （实测 119 → 119，CPython 119 里剔除 4 个得 115）。
+// A/B 段是本批收的两翼（list 的 not in / in），C 段是同族的 dict 侧，
+// D/E 段是正对照——先把导入名赋给本模块全局再捕获，改前改后都该对。
+// expect: notin 2
+// expect: in 2
+// expect: dict-in 1
+// expect: local-alias 2
+// expect: dict-keys 1
+from bsmod_b447 import BS, LOOKUP
+
+codes = ["a1", "b2", "d4", "e5"]
+print("notin", len([c for c in codes if c not in BS]))
+print("in", len([c for c in codes if c in BS]))
+print("dict-in", len([c for c in codes if c in LOOKUP]))
+alias = BS
+print("local-alias", len([c for c in codes if c not in alias]))
+print("dict-keys", len([k for k in ["a1", "zz"] if k in LOOKUP]))

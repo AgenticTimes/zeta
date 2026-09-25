@@ -14260,6 +14260,36 @@ call, no NULL-handle dereference).",
         }
     }
 
+    /// Env key a closure must use to read `name`. A `from <mod> import <VAR>`
+    /// name is bound in the DEFINING module under `<mod>__<name>`, so capturing
+    /// it by its bare alias reads a slot nobody ever wrote (batch 411: the
+    /// capture returned 0 and `[c for c in codes if c not in BS]` filtered
+    /// nothing). Mirrors the rewrite the ordinary Var read applies.
+    fn capture_env_key(&self, name: &str) -> String {
+        if self.module_globals.contains(name) {
+            return name.to_string();
+        }
+        if let Some(mangled) = self.symbol_renames.get(name) {
+            if mangled != name && self.module_globals.contains(mangled) {
+                return mangled.clone();
+            }
+        }
+        if let Some((module, member)) = self.py_member_aliases.get(name) {
+            let module = self
+                .py_module_aliases
+                .get(module)
+                .cloned()
+                .unwrap_or_else(|| module.clone());
+            if self.py_user_modules.contains(&module) {
+                let mangled = format!("{}__{}", module.replace('.', "_"), member);
+                if self.module_globals.contains(&mangled) {
+                    return mangled;
+                }
+            }
+        }
+        name.to_string()
+    }
+
     fn lower_closure(&mut self, params: &[String], body: &AstNode) -> String {
         // T0 (refactor.md B.5): the symbol is derived from the ENCLOSING
         // scope's declared name plus this closure's ordinal in source order.
@@ -14419,10 +14449,11 @@ call, no NULL-handle dereference).",
         // Free vars: pre-bind each name to an env-load id (must come AFTER
         // the ParamInit seed above — that assignment replaces child.stmts).
         for name in &free {
+            let key = self.capture_env_key(name);
             let name_id = child.next_id();
             child
                 .exprs
-                .insert(name_id, MirExpr::StringLit(name.clone()));
+                .insert(name_id, MirExpr::StringLit(key.clone()));
             child.type_map.insert(name_id, Type::Str);
             let slot_id = child.next_id();
             child.stmts.push(MirStmt::Call {
@@ -14441,6 +14472,7 @@ call, no NULL-handle dereference).",
                 .get(name)
                 .and_then(|pid| self.type_map.get(pid))
                 .cloned()
+                .or_else(|| self.global_ty_of(&key))
                 .unwrap_or(Type::I64);
             child.type_map.insert(slot_id, cap_ty);
             child.name_to_id.insert(name.clone(), slot_id);
