@@ -184,6 +184,9 @@ pub struct MirGen {
     py_member_aliases: HashMap<String, (String, String)>,
     /// PY-A: Python modules loaded from disk (mangled `mod__name` symbols).
     py_user_modules: std::collections::HashSet<String>,
+    /// PY-A: module name → the file it was loaded from. `__file__` is per
+    /// module, so a module's own path has to be reachable from its functions.
+    py_module_paths: std::collections::HashMap<String, String>,
     /// PY-A: bare module-internal name → mangled symbol, for the function
     /// currently being lowered.
     symbol_renames: HashMap<String, String>,
@@ -265,6 +268,7 @@ impl MirGen {
             py_module_aliases: HashMap::new(),
             py_member_aliases: HashMap::new(),
             py_user_modules: std::collections::HashSet::new(),
+            py_module_paths: std::collections::HashMap::new(),
             symbol_renames: HashMap::new(),
             module_global_types: HashMap::new(),
             re_repl_param: false,
@@ -345,6 +349,12 @@ impl MirGen {
     /// PY-A: modules loaded from disk register under a `mod__name` prefix.
     pub fn with_py_user_modules(mut self, mods: std::collections::HashSet<String>) -> Self {
         self.py_user_modules = mods;
+        self
+    }
+
+    /// PY-A: module name → source file, the per-module value of `__file__`.
+    pub fn with_py_module_paths(mut self, paths: HashMap<String, String>) -> Self {
+        self.py_module_paths = paths;
         self
     }
 
@@ -3789,8 +3799,18 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             }
             AstNode::Var(name) => {
                 // PY-A: `__file__` — the source path, known at compile time.
+                // It is PER MODULE: reading the program-wide entry path made
+                // `Path(__file__).parent…` arithmetic in an imported module
+                // point at the ENTRY's ancestors (REasyQuant
+                // `market_data_sources._PROJECT_ROOT` landed on
+                // `/Users/meetai/source`, so every parquet cache miss).
                 if name == "__file__" && !self.name_to_id.contains_key(name.as_str()) {
-                    if let Some(f) = self.source_file.clone() {
+                    let own = self
+                        .py_module_paths
+                        .get(&self.current_module)
+                        .cloned()
+                        .or_else(|| self.source_file.clone());
+                    if let Some(f) = own {
                         self.exprs.insert(id, MirExpr::StringLit(f));
                         self.type_map.insert(id, Type::Str);
                         return id;
@@ -14488,6 +14508,7 @@ call, no NULL-handle dereference).",
                 self.py_member_aliases.clone(),
             )
             .with_py_user_modules(self.py_user_modules.clone())
+            .with_py_module_paths(self.py_module_paths.clone())
             .with_module_global_types(self.module_global_types.clone())
             .with_func_param_names(self.func_param_names.clone())
             .with_argparse_kinds(self.argparse_kinds.clone())

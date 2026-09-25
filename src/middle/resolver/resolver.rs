@@ -67,6 +67,8 @@ pub struct Resolver {
     py_member_aliases: RefCell<std::collections::HashMap<String, (String, String)>>,
     /// PY-A: Python modules loaded from disk (not registry shims).
     py_user_modules: RefCell<std::collections::HashSet<String>>,
+    /// PY-A: module name → the file it was loaded from (per-module `__file__`).
+    py_module_paths: RefCell<std::collections::HashMap<String, String>>,
     /// PY-A: per-module top-level definition names (rename map source).
     py_module_own_names:
         RefCell<std::collections::HashMap<String, std::collections::HashSet<String>>>,
@@ -141,6 +143,7 @@ impl Resolver {
             py_module_aliases: RefCell::new(std::collections::HashMap::new()),
             py_member_aliases: RefCell::new(std::collections::HashMap::new()),
             py_user_modules: RefCell::new(std::collections::HashSet::new()),
+            py_module_paths: RefCell::new(std::collections::HashMap::new()),
             py_module_own_names: RefCell::new(std::collections::HashMap::new()),
             py_module_reexports: RefCell::new(std::collections::HashMap::new()),
             py_mangled_to_module: RefCell::new(std::collections::HashMap::new()),
@@ -2483,6 +2486,11 @@ impl Resolver {
         // "unknown member — external shim" ⇒ bare symbols (261 such warnings in
         // the REasyQuant local-backtest compile, e.g. `get_cost_config`).
         self.py_user_modules.borrow_mut().insert(module.to_string());
+        // `__file__` is per module: record which file this module came from so
+        // its own defs read their own path (see `MirGen::with_py_module_paths`).
+        self.py_module_paths
+            .borrow_mut()
+            .insert(module.to_string(), path.to_string_lossy().to_string());
         // Same FILE under another name? Alias onto the already-loaded module so
         // both spellings share one prefix (`<canonical>__member`). Without this
         // the second spelling defined/emit lookups under a DIFFERENT prefix and
@@ -2694,6 +2702,11 @@ impl Resolver {
             .borrow_mut()
             .insert(module.to_string(), own);
         self.py_user_modules.borrow_mut().insert(module.to_string());
+        // `__file__` is per module: record which file this module came from so
+        // its own defs read their own path (see `MirGen::with_py_module_paths`).
+        self.py_module_paths
+            .borrow_mut()
+            .insert(module.to_string(), path.to_string_lossy().to_string());
         self.py_current_module.replace(saved_ctx);
         eprintln!("PY-A: imported module `{}` from {}", module, path.display());
         true
@@ -3391,6 +3404,7 @@ fn shim_class_normalize(t: &Type) -> Type {
                 self.py_member_aliases.borrow().clone(),
             )
             .with_py_user_modules(self.py_user_modules.borrow().clone())
+            .with_py_module_paths(self.py_module_paths.borrow().clone())
             .with_module_global_types(self.module_global_types())
             .with_source_file(self.source_file.borrow().clone())
             .with_argparse_kinds(self.argparse_kinds.borrow().clone())

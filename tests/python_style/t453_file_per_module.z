@@ -1,0 +1,11 @@
+// PY-A: `__file__` 是**每个模块自己的**路径，不是全程序一份入口路径。
+// 语料形：`market_data_sources.py:146` 的
+//   `_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent`
+// —— 修前模块体读到入口 `.z` 的路径，三级 parent 落到仓的祖先目录，
+// 缓存目录 `data/stocks` 因此指向不存在的位置，parquet 缓存全部看不见。
+// expect: FIXTURE pyfilepath_fixture.py python_style
+// expect: ENTRY t453_file_per_module.z python_style
+import os
+import pyfilepath_fixture
+
+print("ENTRY", os.path.basename(__file__), os.path.basename(os.path.dirname(__file__)))
