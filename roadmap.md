@@ -17324,6 +17324,174 @@ jit total 533（410 是 531）、语料 40 文件（410 是 39）——两处都
   acceptance 非确定性（3 跑 1 次 rc=139）、2 条悬空 ABI 锚点 + 2 条定位失败。
 
 
+## 批次 412（关键字实参绑定：`flatten()` 把空槽删掉 ⇒ 缺的那一格后面每个实参都左移进错参数位）
+
+### 一、症状（最小复现）
+
+`/tmp/b412/ks1.py`：`def f(a, b=10)` 下 `print("F", a, b)`，四条调用同文件。
+**改前/改后两个二进制同目录跑**（`target/release/zetac_b412_pre` md5
+`11a328776ae5d2f6be3bf430e5cfe2ec`、`_post` md5 `24a2a22c7d3c32fc31f67b160b48c6e6`）：
+
+| 调用 | CPython | 改前 | 改后 |
+|---|---|---|---|
+| `f(zz=7, b=3)` | `TypeError: unexpected keyword 'zz'` | `F 3 7` | `F 0 3` |
+| `f(b=3)` | `TypeError: missing 1 required positional argument: 'a'` | `F 3 0` | `F 0 3` |
+| `f(zz=7)` | `TypeError` | `F 10 7` | `F 0 10` |
+| `f(1, zz=9)` | `TypeError` | `F 1 10` | `F 1 10`（正对照，改前改后逐字相同） |
+| `m.m(zz=7, b=3)`（方法翼） | `TypeError` | `F 3 7` | `F 0 3` |
+
+三条红读数全是**静默错值**：rc=0、一声不出，而且方向与既有 `warn_unbound` 的承诺相反
+—— 该读 0 的是**缺**的那一格，实测是缺格**后面**的实参全体左移、把值喂给了前面的参数。
+
+语料成员：`backend/datasrc/market_data_fetcher.py:252` 的 `rq_df.groupby(level=0)`
+（`pylib/pandas.z:293` 声明 `def groupby(self, by, sort=True)`，没有 `level`；
+  293 是本批改完 `drop` 之后的读数，批前是 288）
+⇒ 改前 `by` 收到的是 `sort` 的默认值。
+
+### 二、定位
+
+`ordered_args`（`gen.rs:8809` 起）把解析器的 `__kwarg__(name, value)` 拆成
+`pos`/`kw`/`spread` 后，用闭包 `fill`（`:8850`）往 `slots: Vec<Option<AstNode>>`
+按**声明序**铺槽；未知关键字名走 `slots.push(Some(v))`（`:8865`）留在尾部，由被调方
+按元数忽略 —— 这一段是对的。错在最后一步：六条分发臂全部走
+`slots.into_iter().flatten().collect()`，`flatten` 把 `None` 洞**删掉**，
+稠密槽瞬间变稀疏，洞后面的实参全体左移一格。
+
+另一处不对称记在案（本批未改）：`callee_defaults` 只在 `receiver.is_none()` 时是
+`Some`（`:8844`），方法默认值由另外两条臂单独铺（`:8953` 起）；两臂的守卫是
+"被调方声明过默认值"，否则整个 `match` 落到 `_ => args.clone()`（`:8967`）——
+那条臂上既没有铺槽也没有出声，缺格全靠 codegen 末尾补 0。本批把刚补的
+`warn_unbound` 接到这条臂（`:8964`），它从此有声。
+
+### 三、修复（最小修：把洞填成洞自己的值）
+
+`warn_unbound`（`gen.rs:1053`）改签名收 `&mut Vec<Option<AstNode>>`：先按声明位点名
+缺的参数（文案逐字未动），再给剩下的每个空槽写入**自己那一格**的
+`AstNode::Lit(0)`（`:1068-1072`）⇒ 槽稠密，`flatten` 不再删洞、也就不再左移。
+接线四改一增：`:8906`、`:8934`、`:8975`、`:9009` 三处传 `&mut`，`:8964` 是新增的
+方法臂出声点。`+36 -9`，`gen.rs` 14,778 → 14,805 行。
+
+### 四、判据（新增用例）
+
+`t448_kwarg_slot_no_shift.z` 八条 `// expect:`：前三翼（`k-order`/`k-both`/`k-pos`）
+是合法 Python，读数与 CPython 逐字相同；后五翼是 CPython 会 `TypeError` 的非法实参形，
+合同写成"缺的那一格读 0、后面的实参不许左移"（编译器不能因此 fail build —— 平台 shim
+合法地不同）。三个合法翼的被调方分别是 `f1`/`f2`/`f3`：`run.sh` 比对的是**整段输出序列**，
+同一被调方打印同一标签会让"左移"在期望里被自己盖掉，换标签不是自欺而是让每翼可指认。
+
+### 五、同批必须一起改的两个伴生成员（既有依赖方走的是这条巧合）
+
+- `pylib/pandas.z:134` `drop` 原来只声明 `labels`，语料 14 处写 `drop(columns=["x"])`
+  靠的正是"关键字名不匹配 ⇒ 实参左移进 `labels`"。左移一修，`t203` 立刻红
+  （`gate412.log`，门禁 rc 未变但套件 fail 名单多一条）⇒ 库改成显式声明
+  `columns: lt(vec, str) = []` 并**按名字**绑（`ks = labels; if len(columns) > 0: ks = columns`），
+  `t203` 的 10 条 `// expect:` 一个字未改回绿。
+- `gen.rs:9124` 批次 111 的"单 str 包成一元列表"取的是实参向量**尾格**
+  （`arg_ids[arg_ids.len() - 1]`）。库多声明一个 `columns` 之后，尾格不再是 `labels`
+  而是它的默认值 ⇒ `t206` 红成 rc=138 无输出。**归因是库不是编译器**：
+  `_pre`、`_post` 两个二进制配上新库**都**红（正证据，见 memory 的负断言规则），
+  配旧库都不红。MIR 证据 `/tmp/b412/w1.mir`：
+  `Call { func: "DataFrame::drop", args: [35, 39: Str, 40: DynamicArray(I64 默认值)] }`
+  —— 包的是 40，`labels`(39) 还是裸 `Str`，进到库里 `for k in labels` 就走了字符。
+  修法是按声明名定位槽（`:9131` `position(|n| n == "labels")`，写回 `:9147`），
+  签名不认识时退回旧尾格行为。`func_param_names` 的 `self` 在 0 号、分发点又把接收者
+  prepend 回去 ⇒ 声明序 N 与 `arg_ids` 下标 N 对齐，无需 +1。
+
+### 六、门禁（`bash tools/run_all.sh`，`/tmp/b412/gate412c.log`）
+
+`gate rc=1`（:164）—— 唯一红仍是 `run_all.sh:576` 的 `py_fail != 0` 常驻红。
+
+| 项 | 读数 | 411 |
+|---|---|---|
+| official | compile 194/194，compile+link 191/194，link-only 3 条同名 | 相同 |
+| python_style | **331 passed / 2 failed / 5 known-fail / 0 xpass**（=338，+t448），failed 仍是 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` | 330/2/5/0 |
+| compile-diagnostics | official 2 文件 / 5 行；python_style **101 文件 / 208 行** | 99 / 204 |
+| 语料 | 门禁里 **0/0**（`corpus_baseline.py` 单文件 30 s 超时撞上 `jq_wufu_local.py`）⇒ 静置重跑 **40/40 = 100%** | 40/40 |
+| jit sweep | ok=176 trap=**358** total=**534** 最小 ok=163 GREEN | 176/357/533 |
+| diff | match=120 judged=130 rate=92.3% bad_case=0 | 相同 |
+| 断言族 | knob 23/0、swallow 6/0、import 22/0、empty_stmt 68/0、pysrc 42/0、cli_semantics 73/0、ignore_rules 19/0、mbvar 21 脚本/违规 0 | 相同 |
+| clean_checkout | rc=0（rev=8f130c6c）；comment_drift 0 处 | 相同 |
+
+**语料 0/0 已归因，不是本批**：同一份 `jq_wufu_local.py` 静置计时 改前 7.20 s /
+改后 7.24 s（`/tmp/b412/jwl_*.time`），门禁那一步起在 676 次编译的并行扫描中间 ⇒
+是"30 s 硬超时不容受并行负载"的门禁工具缺陷，登记为新残口。
+
+**diagnostics +2 文件 / +4 行已逐条归因**（411 的 99/204 是 `t447` 落盘**前**测的，
+见 411 §八 口径注明）：`t447` +1 文件 +1 条、`t448` +1 文件 +4 条、
+`t203` 因库显式声明 `columns` 少 1 条 ⇒ 文件 +2、行 +4，与观测相等。
+尺子用 `run.sh:168` 的口径（滤 `clang: warning`）在 8 个用 `drop` 的套件文件上
+按 {新旧库}×{pre,post} 四组合实拍：除 `t203` 外全等。
+
+jit total +1、trap +1 = `t448` 进扫描，JIT 缺 `zeta_module_decl`（已登记族）。
+
+### 七、主线位移量（用户裁定的第 3 步：0 成交 / 选股数 / final_value）
+
+**零位移，四跑实拍**：`_drv_accept_409.py` 用 pre/post 各建一次、各跑两次
+（`/tmp/b412/acc_{pre,post}_run{1,2}.{out,err}`），三格逐字相同 ——
+`上市日过滤: 115 → 103 只`、`本地数据注入完成 … 12858 0 0`、
+`回测完成: 1000000 -> 0 (-100.00%)`。`acc_pre_run1` 是 rc=139 那次崩溃
+（119 行日志 vs 成功 171 行），崩溃前的过滤行同样是 `115 → 103` ⇒ 非确定性照旧、
+与本批无关。`market=` 那格两次都是 12858，而 411 记的是 13401/12856 —— 仍未归因。
+
+MIR 面位移量（同一夹具，628 个 MIR 成员，stdout 单独取，避免 `--dump-mir` 与
+PY-A 诊断混流）：283,467 → 283,493 行（+26），180 个 hunk 全落在 3 个成员 ——
+`MarketDataFetcher::_fetch_remote_rq` 90、模块体 `_fetch_remote_rq` 89、
+`BaoStockSource::fetch_benchmark` 1；**同侧噪声底** 12 行 / 3 hunk
+（`miro_post` vs `miro_post2`）。位移集中在**远端取数路径**，本地引擎路径零 hunk ⇒
+与"三格读数不动"自洽。语料里 `groupby(level=0)` 那格改前喂给 `by` 的是 `sort` 的
+默认 True，但 `jq_shim.inject_local_data` 走的是本地 df，不在这条路上。
+
+### 八、ABI 锚点
+
+`--rebind` 前工作树读数 **漂移 65 / 新 10 / 消失 4**；同一把尺子在 HEAD 上量到
+**30 / 11 / 5** ⇒ 本批把 **35** 条锚点行号推移（插入点在 `gen.rs:1045`/`9113` 之后
+的全部引用）。改写 `docs/ABI.md` 26 行 / 48 个数字、刷新基线 33 条，
+`--rebind` 后 **漂移 32 / 新 10 / 消失 4**。4 条消失（`py_additions.c:2650`、
+`gen.rs:3472`、`:10309`、`:11255`）+ 5 条定位失败仍是 410 §九 那批待收，本批未动。
+
+### 九、同批判死的候选与新增残口（负断言配正证据）
+
+`/tmp/b412` 下探针逐形与 CPython 相等，排除的是**假设**：
+`p131a.py` 模块全局 dict 装 vec/map/int 三种值再 round-trip（`td 3 / sa 1 / plain 7`）、
+`p131c/d.py` list-of-tuples 循环 + `if x is None: continue`（整数与 DataFrame 两种元素）、
+`vd/vd2/vd3.py` 自由函数与方法上的列表/vec 默认值（`la 2 lb 1` 全等）。
+⇒ #131 的 `codes=0` 不在这几形上，`_build_stock_arrays`（`jq_shim.py:59`）里
+`for code, grp in df.groupby("stock_code")` 拿到空组是下一条待证线索。
+
+新登记残口四条：`GroupBy.__len__` 读 0（`p131b.py` 组数正确但 `glen 0`）；
+方法默认值只在两条守卫臂里铺、`_ => args.clone()`（`gen.rs:8967`）仍靠 codegen 补；
+`:8953`/`:9000` 两处默认值填充循环重复；`callee_defaults` 的 receiver 不对称（`:8844`）。
+另登记一条工具陷阱：门禁的语料步单文件 30 s 硬超时，在并行编译负载下会把
+40/40 读成 0/0（本批实测 7.2 s/文件），跑门禁时并行任务要么先停要么事后静置复核。
+
+### 十、提交
+
+- 代码批 `fbc289b1 fix(mir): 批次 412 —— kwargs 绑定的 flatten 把空槽删掉，后面的实参整体左移进错参数位`
+  （`src/middle/mir/gen.rs` +36 -9、`pylib/pandas.z` +9 -4、`t203_df_drop.z` 注释 +3 -2、
+  新用例 `t448_kwarg_slot_no_shift.z` +85、`docs/ABI.md` 26 行、
+  `tools/baselines/abi_anchors.tsv` 33 行），已推 `agentic/bootstrap`（`8f130c6c..fbc289b1`）。
+- 记录批：本文件 + backlog `| #7 |` 折行。
+
+### 十一、下一批候选（按已实测损害量）
+
+- **#131 / 主线 301 第 3 步**：`回测完成 1000000 -> 0` vs CPython `994576`。本批把
+  kwargs 绑定与库面依赖都归位后**三格读数一格未动**，下一手是把
+  `len(_local_cache["stock_arrays"]) == 0` 往上游挪 —— 直接问"真实 `market_df`
+  身上有没有 `stock_code` 这一列"，而不是再猜形状；顺带必须先确定 acceptance 的
+  权威命令（CPython 侧自己会 `RuntimeError: 未获取到行情数据`，参照只有前半段可比）。
+- **#130**：词首 `var` 前缀吞调用语句 / `var*` 赋值读回恒 1。
+- **`_ => args.clone()` 臂（`gen.rs:8967`）**：方法调用没声明默认值时仍无声，
+  本批只给声明了默认值的那半接上出声。
+- **#32/#117**：动态槽无类型标记（用户裁定 item 4）。
+- 常驻未收：closure **参数**侧（`resolver.rs:941-971`）、`zeta_dt_date` C 身份桩
+  （`runtime/py_additions.c:3422`，需用户一句话）、p2 dict-value 族（#33/299）、
+  405 §五①、#47/#42 `&expr`、#122、#41 第二半、#117、#118、#115、#113、#110、#109、
+  #105、#55、#38、`String` 拼写、#22、selfhost 剩余 4 条 DictGet、`gen_expr_safe` 水位线、
+  跨模块 `_` 前缀导入幽灵符号、barrel 重导出、`log.info` 惰性 `%d`、日期参数打成地址、
+  `PY-A: '_get' is NOT implemented` rc=134、acceptance 非确定性、2 条悬空 ABI 锚点 +
+  5 条定位失败、门禁语料步 30 s 超时不耐并行负载。
+
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。

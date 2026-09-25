@@ -9,7 +9,8 @@
 // 而同一批 `warn_unbound` 承诺的"那些参数读 0"方向是反的：真正读 0 的该是**缺**
 // 的那一格，实测缺格后面的实参全被左移。
 // 语料成员：`backend/datasrc/market_data_fetcher.py:252` `rq_df.groupby(level=0)`
-// （pylib `pandas.z:288` 声明 `def groupby(self, by, sort=True)`，不声明 `level`）
+// （pylib `pandas.z:293` 声明 `def groupby(self, by, sort=True)`，不声明 `level`；
+// 293 是批次 412 改完 pandas.z 之后的读数，批前是 288）
 // ⇒ 改前 `by` 收到的是 `sort` 的默认 True。
 // 修法：`warn_unbound` 先按声明位点名，再给剩下的空槽填**自己那一格**的
 // `AstNode::Lit(0)`（稠密化），flatten 不再删洞。未知关键字名仍作为多余槽留在
