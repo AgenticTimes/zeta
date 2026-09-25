@@ -1,0 +1,49 @@
+// 批次 414：`with` 体抛出异常时 __exit__ 必须照跑，锁不能被扣住。
+// 症状是死锁不是错值：异常 longjmp 出 with 体 ⇒ 收尾的 `zeta_with_exit` 从不执行
+// ⇒ `threading.Lock` 一直被持有 ⇒ 下一次 acquire 永久阻塞。判据就落在最后那句
+// `with L:` —— 拿不到锁就没有任何输出（改前实拍：本用例 rc=124 超时、零输出）。
+// 四条出口各自盯一格，异常这条不得把传播也一起吞掉（`R` 里有 4 才算传到外层 except）：
+// - fall-through（append 1）
+// - `return` 出 with（解析器的 terminator 改写，本批不得改成双释放）
+// - `break` 出 with（同上）
+// - 异常抛出 with（本批新增：try 帧的两个分支都跑 exit，handler 分支再 raise）
+// expect: t452 [1, 4, 5]
+import threading
+
+L = threading.Lock()
+R = []
+
+
+def fall():
+    with L:
+        R.append(1)
+
+
+def ret():
+    with L:
+        return 2
+
+
+def spin():
+    for i in range(2):
+        with L:
+            if i == 0:
+                break
+            R.append(3)
+
+
+def raise_out():
+    with L:
+        raise ValueError("boom")
+
+
+fall()
+ret()
+spin()
+try:
+    raise_out()
+except Exception as e:
+    R.append(4)
+with L:
+    R.append(5)
+print("t452", R)

@@ -1275,6 +1275,19 @@ fn zeta_with_exit_stmt(ctx: &str) -> AstNode {
     }
 }
 
+/// PY-A: bare `zeta_try_end()` call statement (pop the try frame).
+fn zeta_try_end_stmt() -> AstNode {
+    AstNode::ExprStmt {
+        expr: Box::new(AstNode::Call {
+            receiver: None,
+            method: "zeta_try_end".to_string(),
+            args: vec![],
+            type_args: vec![],
+            structural: false,
+        }),
+    }
+}
+
 /// PY-A: rewrite terminators inside a `with` body so __exit__ runs before
 /// the block is left. `return v` (always leaves the with) becomes
 /// `{ __with_ret_N = v; exit(); return __with_ret_N }` — in-place insertion
@@ -1282,6 +1295,10 @@ fn zeta_with_exit_stmt(ctx: &str) -> AstNode {
 /// with when they bind to a loop OUTSIDE it, so `at_loop_depth` (true while
 /// the nearest enclosing loop is still the with's own block) gates whether
 /// an exit is prepended; descending into a loop body clears the flag.
+/// BATCH-414: the body now runs inside a try frame, and these three edges
+/// jump out of it without passing its `zeta_try_end` (measured: `finally`
+/// does not run for return/break/continue) — so each one pops the frame too,
+/// otherwise the stale frame is what the NEXT `raise` longjmps into.
 fn rewrite_with_exits(body: Vec<AstNode>, ctx: &str, seq: usize, at_loop_depth: bool) -> Vec<AstNode> {
     let mut out: Vec<AstNode> = Vec::with_capacity(body.len());
     for stmt in body {
@@ -1292,14 +1309,17 @@ fn rewrite_with_exits(body: Vec<AstNode>, ctx: &str, seq: usize, at_loop_depth: 
                     Box::new(AstNode::Var(ret_var.clone())),
                     v,
                 ));
+                out.push(zeta_try_end_stmt());
                 out.push(zeta_with_exit_stmt(ctx));
                 out.push(AstNode::Return(Box::new(AstNode::Var(ret_var))));
             }
             AstNode::Break(opt) if at_loop_depth => {
+                out.push(zeta_try_end_stmt());
                 out.push(zeta_with_exit_stmt(ctx));
                 out.push(AstNode::Break(opt));
             }
             AstNode::Continue(opt) if at_loop_depth => {
+                out.push(zeta_try_end_stmt());
                 out.push(zeta_with_exit_stmt(ctx));
                 out.push(AstNode::Continue(opt));
             }
@@ -1335,6 +1355,42 @@ fn rewrite_with_exits(body: Vec<AstNode>, ctx: &str, seq: usize, at_loop_depth: 
         }
     }
     out
+}
+
+/// PY-A: the shared setjmp try-frame skeleton — `zeta_try_enter()` then
+/// `if (zeta_try_setjmp() == 0) { then_tail } else { else_tail }`.
+/// Callers own everything inside the two branches (including `zeta_try_end`,
+/// which each pops at its own point); the longjmp from `raise` lands back in
+/// `zeta_try_setjmp`, so any cleanup that must survive an exception has to
+/// live inside `else_tail` — appending it after the `if` only covers the
+/// fall-through path.
+fn zeta_try_frame(then_tail: Vec<AstNode>, else_tail: Vec<AstNode>) -> Vec<AstNode> {
+    vec![
+        AstNode::ExprStmt {
+            expr: Box::new(AstNode::Call {
+                receiver: None,
+                method: "zeta_try_enter".to_string(),
+                args: vec![],
+                type_args: vec![],
+                structural: false,
+            }),
+        },
+        AstNode::If {
+            cond: Box::new(AstNode::BinaryOp {
+                op: "==".to_string(),
+                left: Box::new(AstNode::Call {
+                    receiver: None,
+                    method: "zeta_try_setjmp".to_string(),
+                    args: vec![],
+                    type_args: vec![],
+                    structural: false,
+                }),
+                right: Box::new(AstNode::Lit(0)),
+            }),
+            then: then_tail,
+            else_: else_tail,
+        },
+    ]
 }
 
 ///   if zeta_try_setjmp() == 0 { body; zeta_try_end() }
@@ -1467,21 +1523,12 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
     };
 
     // setjmp form: `raise` longjmps IMMEDIATELY (real exception semantics)
-    let mut out = vec![mk_call("zeta_try_enter")];
-    let setjmp_call = AstNode::Call {
-        receiver: None,
-        method: "zeta_try_setjmp".to_string(),
-        args: vec![],
-        type_args: vec![],
-        structural: false,
-    };
-    // ALWAYS pop the try frame:
-    //  - in the HANDLER branch it must happen FIRST (the longjmp already restored
-    //    the stack; the frame's job is done), otherwise `except ...: return {}`
-    //    leaked the frame — `ParquetCache.load_metadata` did exactly that and the
-    //    NEXT `raise` longjmped into a stale frame, so the caller continued into
-    //    `t.schema.metadata` with t == 0 (SEGV at load_metadata + 184).
-    //  - at the end of the body branch (fall-through).
+    // BOTH branches pop the frame: in the handler branch first (the longjmp
+    // already restored the stack, the frame's job is done) — leaving it pushed
+    // made `except ...: return {}` leak the frame, so the NEXT `raise` longjmped
+    // into a stale frame and `ParquetCache.load_metadata`'s caller continued with
+    // t == 0 (SEGV at load_metadata + 184); in the body branch at the end
+    // (fall-through only — see the terminator rule below).
     let mut then_branch = body;
     // Only when the body FALLS THROUGH: appending a call after a `raise`/`return`
     // puts a terminator in the middle of a basic block (the backend rejects it).
@@ -1507,15 +1554,7 @@ fn parse_try_stmt(input: &str) -> IResult<&str, AstNode> {
     // longjmped into a dead frame (SEGV in load_metadata).
     else_branch.push(mk_call("zeta_try_end"));
     else_branch.extend(handler);
-    out.push(AstNode::If {
-        cond: Box::new(AstNode::BinaryOp {
-            op: "==".to_string(),
-            left: Box::new(setjmp_call),
-            right: Box::new(AstNode::Lit(0)),
-        }),
-        then: then_branch,
-        else_: else_branch,
-    });
+    let mut out = zeta_try_frame(then_branch, else_branch);
     out.extend(finally_body);
     Ok((cur, AstNode::Block { body: out }))
 }
@@ -1664,10 +1703,47 @@ fn parse_with(input: &str) -> IResult<&str, AstNode> {
             // that flag resets once we descend into a loop body).
             let falls = branch_falls_through(&body);
             let body = rewrite_with_exits(body, &ctx, seq, true);
-            stmts.extend(body);
+            // BATCH-414: the fourth way out of a body is an ESCAPING EXCEPTION,
+            // which longjmps past every block boundary — no terminator rewrite can
+            // catch it, so `exit` after the block never ran and the mutex stayed
+            // held: `with _bs_lock:` around a raising call left the next acquirer
+            // blocked forever (measured: `MarketDataFetcher.fetch_stocks` hung in
+            // py_threading_lock_acquire, rc=124 under `timeout 70`; the same driver
+            // finishes in 1.1 s under CPython). Run `exit` inside BOTH branches of
+            // a try frame, and re-raise from the handler branch so propagation is
+            // unchanged. `return`/`break`/`continue` skip the try frame entirely
+            // (measured: finally does not run for them), so the rewrites above
+            // still own those edges and no edge exits twice.
+            let err = format!("__with_err_{}", seq);
+            let mut then_branch = body;
             if falls {
-                stmts.push(exit);
+                then_branch.push(zeta_try_end_stmt());
+                then_branch.push(exit.clone());
             }
+            let else_branch = vec![
+                AstNode::Assign(
+                    Box::new(AstNode::Var(err.clone())),
+                    Box::new(AstNode::Call {
+                        receiver: None,
+                        method: "zeta_last_error".to_string(),
+                        args: vec![],
+                        type_args: vec![],
+                        structural: false,
+                    }),
+                ),
+                zeta_try_end_stmt(),
+                exit,
+                AstNode::ExprStmt {
+                    expr: Box::new(AstNode::Call {
+                        receiver: None,
+                        method: "zeta_raise".to_string(),
+                        args: vec![AstNode::Var(err)],
+                        type_args: vec![],
+                        structural: false,
+                    }),
+                },
+            ];
+            stmts.extend(zeta_try_frame(then_branch, else_branch));
             Ok((input, AstNode::Block { body: stmts }))
         }
         _ => Err(nom::Err::Error(nom::error::Error::new(
