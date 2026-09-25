@@ -1,0 +1,85 @@
+// 批次 412：关键字实参绑定把"没有实参的声明位"从实参向量里**删掉**了。
+// `ordered_args` 用 `slots: Vec<Option<AstNode>>` 按声明序铺槽，收集时走
+// `slots.into_iter().flatten()` —— 空槽被 flatten 删除，于是它后面的每一个实参
+// 都左移一格进错参数位。实测（改前 /tmp/b412/ks1.py，同一份源、同一目录的两个
+// 二进制 target/release/zetac_b412_{pre,post}）：
+//   f(a, b=10) 下  f(zz=7, b=3) → 改前 `F 3 7`（b 的值进 a，zz 落进 b）
+//                      f(b=3)   → 改前 `F 3 0`（b 的值进 a，b 读 0）
+//                      f(zz=7)  → 改前 `F 10 7`（b 的默认值进 a，zz 落进 b）
+// 而同一批 `warn_unbound` 承诺的"那些参数读 0"方向是反的：真正读 0 的该是**缺**
+// 的那一格，实测缺格后面的实参全被左移。
+// 语料成员：`backend/datasrc/market_data_fetcher.py:252` `rq_df.groupby(level=0)`
+// （pylib `pandas.z:288` 声明 `def groupby(self, by, sort=True)`，不声明 `level`）
+// ⇒ 改前 `by` 收到的是 `sort` 的默认 True。
+// 修法：`warn_unbound` 先按声明位点名，再给剩下的空槽填**自己那一格**的
+// `AstNode::Lit(0)`（稠密化），flatten 不再删洞。未知关键字名仍作为多余槽留在
+// 尾部、被被调方按元数忽略 —— 与 `f(1, zz=9)` 这条改前改后都是 `F 1 10` 的正
+// 对照组同形。本批同时把这条出声接到"方法调用 + 被调方声明了默认值"那条此前
+// 无声的 flatten 路径上（`m.m(zz=7, b=3)` 翼）。
+// CPython 侧：zz=7 这两翼是 `TypeError: got an unexpected keyword argument`，
+// `g(b=3)` 是 `TypeError: missing 1 required positional argument: 'a'` —— 编译器
+// 不能因此 fail build（平台 shim 合法地不同），合同是"缺的那一格读 0、后面的
+// 实参不许左移"。前三翼（k-order/k-both/k-pos）是合法 Python，与 CPython 逐字相同。
+// 每一翼自带一个被调方：run.sh 比对的是**整段输出序列**（按序逐字相等），三个
+// 合法调用若共用一个 `f` 就打印三行同样的 "k-order"， expect 里换个标签是自欺。
+// 本批的连带成员：`pylib/pandas.z` 的 `drop` 此前**依赖**这条左移才让
+// `drop(columns=["x"])` 通（t203 的 expect 就是它，改后立刻红）—— 左移一修，
+// 巧合没了。所以 `drop` 现在自己声明 `columns` 形参并按名字收，t203 逐字不变地
+// 回到绿色：同一个值现在是**按名字绑进去的**，不是被左移顶进去的。
+// 而库面一改，`t206_df_drop_str` 又红（rc=138，两个二进制都红 ⇒ 库面成员，与本批
+// gen.rs 改动无关，A/B 已分离）：批次 111 的"裸 str 包成一元列表"取的是实参向量的
+// **最后一格**，多声明一个形参后最后一格变成了绑定好的 `columns` 默认值，包形没打中
+// `labels`，str 直接进 `for k in labels` 走成按字符迭代。现在按**声明位名字**定位。
+// expect: k-order 1 3
+// expect: k-both 1 3
+// expect: k-pos 1 10
+// expect: unknown-mixed 0 3
+// expect: hole-before-kw 0 3
+// expect: unknown-only 0 10
+// expect: method-hole 0 3
+// expect: method-kw-order 5 7
+def f1(a, b=10):
+    print("k-order", a, b)
+
+
+def f2(a, b=10):
+    print("k-both", a, b)
+
+
+def f3(a, b=10):
+    print("k-pos", a, b)
+
+
+f1(1, b=3)
+f2(a=1, b=3)
+f3(1)
+
+
+def u(a, b=10):
+    print("unknown-mixed", a, b)
+
+
+def h(a, b=10):
+    print("hole-before-kw", a, b)
+
+
+def z(a, b=10):
+    print("unknown-only", a, b)
+
+
+u(zz=7, b=3)
+h(b=3)
+z(zz=7)
+
+
+class M:
+    def m(self, a, b=10):
+        print("method-hole", a, b)
+
+    def n(self, x, y=1):
+        print("method-kw-order", x, y)
+
+
+m = M()
+m.m(zz=7, b=3)
+m.n(x=5, y=7)

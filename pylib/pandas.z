@@ -131,14 +131,19 @@ class DataFrame:
         # 真 NaN / axis / how / subset —— 响亮未做（列映射表达不了行级 mask）。
         return self.copy()
 
-    def drop(self, labels: lt(vec, str)) -> DataFrame:
+    def drop(self, labels: lt(vec, str) = [], columns: lt(vec, str) = []) -> DataFrame:
         # 按列名删除：copy + del。必须 -> DataFrame（与 copy 同理）。
-        # 位置 `df.drop(["x"])`；单参方法下任意 kwargs 值绑到 labels，
-        # 故探针/语料拼写 `drop(columns=["x"])` 也通（多参 kwargs 名匹配仍静默，延后）。
+        # 位置 `df.drop(["x"])`；`columns=` 拼写按**名字**绑到 columns（语料 14 处
+        # 这么写：backend/datasrc/*.py、backend/strategy/wufu_market.py:193,652）。
+        # 批次 412 之前它靠"关键字名不匹配 ⇒ 实参整体左移进 labels"的巧合才通，
+        # 那条左移已修掉（未知名不再顶替声明位），所以这里必须自己声明 `columns`。
         # 单 str `drop("x")`：MIR 在调用点把 Type::Str 包成一元列表（批次一百一十一）；
         # 库内 isinstance 分支不可行（未注解形参恒 i64；注解 vec 则 isinstance 看声明类型）。
         out = self.copy()
-        for k in labels:
+        ks = labels
+        if len(columns) > 0:
+            ks = columns
+        for k in ks:
             del out[k]
         return out
 

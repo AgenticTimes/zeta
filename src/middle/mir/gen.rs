@@ -1045,8 +1045,12 @@ impl MirGen {
 /// default for the rest is a Python `TypeError`. We cannot fail the build here
 /// (platform shims legitimately differ), but staying silent would repeat the
 /// exact failure mode this work removes — a wrong value with no diagnostic —
-/// so name the unbound parameters.
-fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
+/// so name the unbound parameters, then give each of them an explicit 0 in
+/// ITS OWN slot. The dispatch sites collect with `flatten()`, which used to
+/// delete the hole and shift every later argument one parameter to the left, so
+/// `f(b = 3)` handed b's value to `a` (batch 412: measured `F 3 0` where Python
+/// raises `TypeError: f() missing 1 required positional argument: 'a'`).
+fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>>) {
     let missing: Vec<&str> = params
         .iter()
         .enumerate()
@@ -1060,6 +1064,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
             callee,
             missing.join(", ")
         );
+    }
+    for slot in slots.iter_mut() {
+        if slot.is_none() {
+            *slot = Some(AstNode::Lit(0));
+        }
     }
 }
 
@@ -8894,7 +8903,7 @@ call, no NULL-handle dereference).",
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
                                 fill(&mut slots, &params, pos, kw, &spread);
-                                Self::warn_unbound(&callee_name, &params, &slots);
+                                Self::warn_unbound(&callee_name, &params, &mut slots);
                                 slots.into_iter().flatten().collect()
                             }
                             None => {
@@ -8922,7 +8931,7 @@ call, no NULL-handle dereference).",
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
                                 fill(&mut slots, &params, pos, kw, &[]);
-                                Self::warn_unbound(&callee_name, &params, &slots);
+                                Self::warn_unbound(&callee_name, &params, &mut slots);
                                 slots.into_iter().flatten().collect()
                             }
                             // Method call whose callee DECLARES defaults.
@@ -8952,6 +8961,7 @@ call, no NULL-handle dereference).",
                                         }
                                     }
                                 }
+                                Self::warn_unbound(&callee_name, &params, &mut slots);
                                 slots.into_iter().flatten().collect()
                             }
                             _ => args.clone(),
@@ -8962,7 +8972,7 @@ call, no NULL-handle dereference).",
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
                                 fill(&mut slots, &params, pos, kw, &[]);
-                                Self::warn_unbound(&callee_name, &params, &slots);
+                                Self::warn_unbound(&callee_name, &params, &mut slots);
                                 slots.into_iter().flatten().collect()
                             }
                             None => kw.into_iter().map(|(_, v)| v).chain(pos).collect(),
@@ -8996,7 +9006,7 @@ call, no NULL-handle dereference).",
                                         }
                                     }
                                 }
-                                Self::warn_unbound(&callee_name, &params, &slots);
+                                Self::warn_unbound(&callee_name, &params, &mut slots);
                                 slots.into_iter().flatten().collect()
                             }
                             _ => {
@@ -9103,8 +9113,26 @@ call, no NULL-handle dereference).",
 
                 // Batch 111: `df.drop("col")` — library expects lt(vec,str).
                 // Wrap a lone Str arg into a 1-element StackArray.
+                // Batch 412: this used to take the TAIL of the argument vector, which
+                // stopped being `labels` the moment the callee declared another
+                // parameter — `drop(self, labels=[], columns=[])` puts the bound
+                // default after it, so the wrap missed and `labels` arrived as a raw
+                // Str (t206: `for k in labels` walked the characters and aborted).
+                // Bind to the DECLARED slot instead; `func_param_names` indexes `self`
+                // at 0 and the dispatch site prepends the receiver, so the two
+                // indices line up. Unknown signature keeps the old tail behaviour.
                 if method == "drop" && arg_ids.len() >= 2 {
-                    let lab = arg_ids[arg_ids.len() - 1];
+                    let last = arg_ids.len() - 1;
+                    let idx = self
+                        .func_param_names
+                        .get(method.as_str())
+                        .and_then(|p| {
+                            p.iter()
+                                .position(|n| n == "labels")
+                                .filter(|i| *i < arg_ids.len())
+                        })
+                        .unwrap_or(last);
+                    let lab = arg_ids[idx];
                     if matches!(self.type_map.get(&lab), Some(Type::Str)) {
                         let arr = self.next_id();
                         self.exprs.insert(
@@ -9116,8 +9144,7 @@ call, no NULL-handle dereference).",
                         );
                         self.type_map
                             .insert(arr, Type::DynamicArray(Box::new(Type::Str)));
-                        let last = arg_ids.len() - 1;
-                        arg_ids[last] = arr;
+                        arg_ids[idx] = arr;
                     }
                 }
 
