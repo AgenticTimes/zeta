@@ -2741,7 +2741,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // names separate the two without depending on emission order.
                 if name.starts_with("[dynamic]") && self.dyn_member_is_class_alias(name) {
                     self.dyn_member_gaps.insert(name.to_string());
-                    return self.dyn_member_missing_thunk(args_count);
+                    return self.dyn_member_missing_thunk(name, args_count);
                 }
                 // Also try the method name directly (Self::new → new)
                 // with param count validation and suffix search.
@@ -2963,7 +2963,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
             // carries type arguments, where that first arm is skipped entirely.
             if name.starts_with("[dynamic]") && self.dyn_member_is_class_alias(name) {
                 self.dyn_member_gaps.insert(name.to_string());
-                return self.dyn_member_missing_thunk(args_count);
+                return self.dyn_member_missing_thunk(name, args_count);
             }
             if let Some(f) = self.module.get_function(&bare_actual) {
                 // Only return the bare function if its param count matches the call site.
@@ -3051,33 +3051,65 @@ impl<'ctx> LLVMCodegen<'ctx> {
     }
 
     /// PY-A (batch 419): the raising thunk a `[dynamic]<ty>::member` ghost binds
-    /// to. One thunk per call-site arity (`zeta_dyn_member_missing_<N>`), because
-    /// the thunk is called with the receiver plus the member's arguments.
-    fn dyn_member_missing_thunk(&mut self, args_count: usize) -> FunctionValue<'ctx> {
-        let name = format!("zeta_dyn_member_missing_{}", args_count);
+    /// to. Batch 422 made it one thunk PER GHOST instead of one per arity,
+    /// because the ghost needs a NAME at run time: every raise in this build
+    /// carries code 1, so an enclosing `except ... as e` prints an
+    /// indistinguishable `1` and a run cannot say which member was lost
+    /// (measured: 107 `: 1` lines in one corpus run, all of them
+    /// `ModuleNotFoundError` fallbacks — batch 422's pricing had to fall back to
+    /// reading IR to answer "did this site fire?"). The thunk hands the ghost's
+    /// own spelling to `zt_dyn_member_missing` (`runtime/unavailable_stubs.c`),
+    /// which notes it once and keeps the raise; 419's contract (raise, never
+    /// abort) is unchanged.
+    fn dyn_member_missing_thunk(
+        &mut self,
+        ghost: &str,
+        args_count: usize,
+    ) -> FunctionValue<'ctx> {
+        let mangled: String = ghost
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let name = format!("zeta_dyn_missing_{}_{}", mangled, args_count);
         let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect();
         let fn_type = self.i64_type.fn_type(&param_types, false);
         if let Some(f) = self.module.get_function(&name) {
             return f;
         }
-        let raise = match self.module.get_function("zeta_raise") {
+        let note = match self.module.get_function("zt_dyn_member_missing") {
             Some(f) => f,
             None => self.module.add_function(
-                "zeta_raise",
-                self.i64_type.fn_type(&[self.i64_type.into()], false),
+                "zt_dyn_member_missing",
+                self.i64_type
+                    .fn_type(&[self.context.ptr_type(AddressSpace::default()).into()], false),
                 Some(Linkage::External),
             ),
         };
+        let msg = self.module.add_global(
+            self.context.i8_type().array_type(ghost.len() as u32 + 1),
+            None,
+            "dyn_ghost_msg",
+        );
+        msg.set_linkage(inkwell::module::Linkage::Private);
+        msg.set_constant(true);
+        let mut bytes = ghost.as_bytes().to_vec();
+        bytes.push(0);
+        let values: Vec<_> = bytes
+            .iter()
+            .map(|&b| self.context.i8_type().const_int(b as u64, false))
+            .collect();
+        msg.set_initializer(&self.context.i8_type().const_array(&values));
+
         let thunk = self.module.add_function(&name, fn_type, None);
         let saved_block = self.builder.get_insert_block();
 
         let entry = self.context.append_basic_block(thunk, "entry");
         self.builder.position_at_end(entry);
-        // Exception code 1: `zeta_raise` longjmps to the innermost try frame and
-        // never returns, so the following `ret` is only there for the verifier.
-        let one = self.i64_type.const_int(1, false);
+        // `zt_dyn_member_missing` longjmps to the innermost try frame (or exits
+        // with "Unhandled exception") and never returns, so the following `ret`
+        // is only there for the verifier.
         self.builder
-            .build_call(raise, &[one.into()], "dyn_raise")
+            .build_call(note, &[msg.as_pointer_value().into()], "dyn_ghost")
             .unwrap();
         self.builder
             .build_return(Some(&self.i64_type.const_zero()))

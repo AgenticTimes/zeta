@@ -1,0 +1,48 @@
+// 批次 422：幽灵桩必须"每次调用都抛"，只是"每个成员只说一次名字"。
+// 419 把 `[dynamic]<ty>::member` 绑到一个抛异常的桩上；本批给它加了运行期点名
+// （`zt_dyn_member_missing`，`runtime/unavailable_stubs.c`），点名用了去重表。
+// 去重只能吞消息，不能吞抛掷 —— 这正是 `zt_unavailable_soft` 上面那段注释记的
+// 老坑：第二次的返回值 0 会伪装成"成功"，调用方带着空句柄往下走再段错误。
+// 所以这里的合同是：同一个循环里三次命中同一个幽灵 ⇒ 三行都要落 except。
+// 实拍（cwd＝仓根；两侧编译器同在 `target/release/`，改前的 md5
+// `b5f1abc6…` ＝批次 421 的 post4，改后 `1aa05f8f…`）：
+//   改前 `zetac_b422_pre`：compile=0 run=0，stdout 六行如 expect，
+//     stderr `dynamic receiver has no member` **0 行**
+//   改后 `zetac_b422`：compile=0 run=0，stdout 与改前**逐字相同**（diff 空），
+//     stderr 2 行：
+//       `PY-A: dynamic receiver has no member `[dynamic]str::to_dict` — raising`
+//       `PY-A: dynamic receiver has no member `[dynamic]i64::to_dict` — raising`
+// 也就是说：5 次抛掷（3× `[dynamic]str::to_dict` + 2× `[dynamic]i64::to_dict`）
+// 只点名 2 次（每个幽灵一次），而五行 `caught` 全在 ⇒ 去重吞掉的只有消息，
+// 没有抛掷。
+// IR 侧同一件事（`ZETA_NO_OPT=1 --emit-llvm`）：桩体不再是按 arity 复用的
+// `zeta_dyn_member_missing_1`，而是逐幽灵一个：
+//   :4604 `call i64 @zeta_dyn_missing__dynamic_str__to_dict_1(i64 %182)`
+//   :4665 `call i64 @zeta_dyn_missing__dynamic_i64__to_dict_1(i64 %197)`
+//   :6127 `declare i64 @zt_dyn_member_missing(ptr)`
+import pandas as pd
+
+df = pd.DataFrame({"display_name": ["ETF-1"], "code": ["510300.XSHG"]})
+for k in [0, 1, 2]:
+    try:
+        m = df["display_name"].to_dict()
+        print("A no-raise")
+    except Exception as e:
+        print("A caught")
+
+xs = [1, 2]
+for k in [0, 1]:
+    try:
+        q = xs.to_dict()
+        print("B no-raise")
+    except Exception as e:
+        print("B caught")
+
+print("C ok")
+
+// expect: A caught
+// expect: A caught
+// expect: A caught
+// expect: B caught
+// expect: B caught
+// expect: C ok

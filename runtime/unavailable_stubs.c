@@ -69,6 +69,33 @@ static int64_t zt_unavailable_soft(const char* what) {
     return 0;
 }
 
+// PY-A (batch 422): the runtime half of batch 419's ghost guard. 419 turned a
+// `[dynamic]<ty>::member` binding into a raise, but EVERY raise in this build
+// carries code 1 — a corpus `except Exception as e: log(f"...: {e}")` therefore
+// prints the same `1` for a missing module (107 such lines in one measured run)
+// as for a lost dynamic member, and "did this call site actually fire before the
+// crash?" cannot be answered from a run at all (batches 421 and 422 both had to
+// fall back to reading IR). This names the member once on stderr and keeps 419's
+// contract intact: raise, do not abort, so an enclosing except still takes its
+// fallback.
+int64_t zt_dyn_member_missing(const char* what) {
+    // Same pointer-identity dedup as zt_unavailable_soft: the message is once
+    // per ghost, the RAISE happens on every call (see the note there).
+    static const char* noted[64];
+    static int n = 0;
+    int seen = 0;
+    for (int i = 0; i < n; i++) {
+        if (noted[i] == what) { seen = 1; break; }
+    }
+    if (!seen) {
+        if (n < 64) noted[n++] = what;
+        fprintf(stderr, "PY-A: dynamic receiver has no member `%s` — raising\n", what);
+        fflush(stderr);
+    }
+    zeta_raise(1);
+    return 0;
+}
+
 static int64_t zt_unavailable(const char* what) {
     fprintf(stderr,
             "PY-A: `%s` is NOT implemented in this build — the local backtest "
