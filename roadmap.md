@@ -19390,6 +19390,85 @@ $ ZETA_DBG_FA=1 zetac_pre427 同一夹具                                # 改�
 5. **自己写的注释也要被实测覆盖**：t467 头注释把 `host_str_cmp` 升级写成"一处"，diff 实测是**两处**（每函数一处）⇒ 记录批随本条一起改正该注释。
 6. **管道末端的 `$?` 不是核对器的 rc**：`python3 check_abi_anchors.py | tail -4` 报 `ANCHOR_RC=0` 是 `tail` 的；重定向到文件后 `echo $?` 才是真值 **1**。
 
+---
+
+## 批次 433（3.2 Lowering／字段读写的名→槽对称）：写侧不再自己扫一遍布局，改问读侧要答案 —— t468 由红转绿、语料 2 条写语句改槽（其中一条是越界堆写），主线位移 0
+
+层号：**3.2 Lowering／出码期的字段布局判定**（`base.field` 的读侧与写侧必须是同一条名→槽映射）。代码提交 `d5b95c26`（244 增 / 213 删，`src/backend/codegen/codegen.rs` 净 +31 行；新夹具 47 行），锚点重绑 `86970a98`。
+
+### 一、复现与真值
+
+- 夹具 `tests/python_style/t468_field_store_write_slot.z`：`Alpha` 声明 `p,q,shared`（`shared` 在索引 2），`Zeta` 声明 `shared,other`（`shared` 在索引 0）；`Alpha` 按字母序在前 ⇒ 写侧那一趟扫描先命中 `Alpha` 的布局。
+- 构造后赋值 `z.shared = 99`：改前打印 `z 10 20`（写丢失），改后 `z 99 20`；`a`/`b` 两个未参与赋值的接收者读数不变（`1 2 3`）。
+- 真值来源：本机 CPython 3.14.5 当场跑同形程序得 `z 99 20`（`/tmp/b433/cp/g2.py` → `cp_ground2.txt`），不是推的。
+- 为什么"只写不读"的 `__init__` 夹具打不到这一路：构造期的 `self.x = v` 下成 `MirStmt::StructNew`（按书写序自己落块），**只有构造之后的属性赋值**才发 `StructFieldStore` —— 夹具必须把赋值写在 `__init__` 外面。
+
+### 二、定位（两套实现，各自掷硬币）
+
+- 改前写侧（HEAD 行号 `codegen.rs:5811-5834`）自己跑一趟 `struct_defs.values().find_map(…)`：**取第一个提到该字段名的布局**，① 不看接收者是谁、② 不比对声明宽度、③ 失败 `unwrap_or(0)`、④ 没有 `field_count` 上界夹回。
+- 读侧（批次 425/426/430 一路收口的那条判定）是另一套：base 链回溯 → `MirExpr::Struct{variant,…}` → 候选声明名 → 按字段名反查布局（撞车时取最宽）→ `ctor_hit`（430 的碰撞集守卫）→ 索引越界夹回。
+- 后果形状：`Zeta` 只有 2 个字段（16 字节块），写侧按 `Alpha` 的布局取到索引 2 ⇒ `store` 落到偏移 **16**：这一笔写既丢了（读回 10）又**越出分配**。两侧对同一个名字给出不同槽位，是这一批的病根。
+
+### 三、修法（最小）
+
+- 把读侧那整段判定原样搬进 `resolve_field_slot(&self, base, field, exprs, role) -> (String, usize, u32)`（文档注释 `codegen.rs:6115`、签名 `:6126`、`role` 形参 `:6131`、返回 `:6344`），返回前**已经做完上界夹回**，所以两侧不可能对同一个名字给出不同槽位；`role` 只用于给探针贴标签。
+- 读侧调用点 `:6992`（`role="read"`），写侧调用点 `:5826`（`role="write"`），写侧只剩"取索引 → `base+offset` → `inttoptr` → 存（float 先 bitcast 成 i64 槽）"。
+- 探针现在是 `ZETA-DBG FA read|write field=… variant=… field_count=… base_ty=… keys=[…]` —— 读/写各自的判定结果可在同一趟编译里对齐，不再靠猜。
+
+### 四、编译侧位移（套件）
+
+- 判据：`--emit-llvm` 的 IR 文本逐字节比，两颗二进制同在 `target/release/`（同源同目录，432 §十.1 那条坑），套件 360 个 `.z` 各出一份 `.ll`（`/tmp/b433/pre_ir/` 与 `post_ir/`）。
+- 结果：**唯一差异文件是 t23**，且它是发射序非确定性的既有成员（同二进制连跑 3 遍就有 2 个 md5，批次 418 在册）⇒ 套件位移 **0**。
+- 针对性核对：套件里 38 条 struct 字段 `store` 指令，**偏移改动 0 处** —— 形状本身在套件里无成员（t468 是本批新造的这一形状的第一个成员，它落在 passed 侧）。
+
+### 五、语料位移（真目标）
+
+- 语料 IR 逐条指令对齐后差异恰好 **3 条指令 / 2 条源语句**：
+  1. `backend/strategy/nautilus_backend.py:113` `self._current_date = str(trading_date)` —— 写偏移 16 → **32**；
+  2. `strategies/jq_wufu_local.py:336` `impl._backend = backend` —— 写偏移 72 → **0**，改前那一笔在块外（记录为 56 字节越界堆写）。
+- 语料里其余 struct 字段写：偏移不变（同一趟 diff 的 3 条指令之外没有落点变化）。⇒ 本批是 434 段以来第一条**在语料上真改到落点**的批。
+
+### 六、主线位移量：**0**（且是"读数落在方差内"的 0，不是"没跑"的 0）
+
+- 口径照 roadmap:18214 那套：cwd＝REasyQuant 根、`REPLAYQUANT_LOCAL=1`、驱动 `strategies/code/_drv_accept_409.py`、两侧各 n=6、两颗二进制同目录（`/tmp/b433/acc_pre.bin` md5 `7694c742…`＝HEAD 建、`acc_post.bin` md5 `d7d44a9a…`＝改后建）。
+- 主道两侧一致：**rc=0 / stdout 1 行 / stderr 321 行 / 末行 `[local] 回测完成: 1000000 ->`**（pre 5/6 次、post 4/6 次）。
+- 偶发道：`rc=134 … stub not implemented: numpy.vstack` 两侧都出现（pre run5、post run5）；`rc=139 / stderr 119 行`（末行 `backend.market_data: 缓存命中 103 只`）**只在 post 出现 1 次** ⇒ 按 432 §十.3 的措辞记为"真实但偶发、样本不足以归因"的本侧方差，**不记作位移**。
+- 结论栏与"修好了"栏分开：这一路的静默错值/越界写在夹具与语料上都已收口，主线 301 的三格（0 笔成交 → 选股数量 → final_value）**没有因本批移动**。
+
+### 七、门禁（`/tmp/b433/gate433b.log`，`GATE_RC=1`）
+
+- official：compile **194/194**、compile+link **191/194**（3 条 link-only 存量：`integration_all_features`、`quantum_basic`、`selfhost`）。
+- python_style：**350 passed / 2 failed / 6 known-fail / 0 xpass**（349→350 的增量＝t468 落在 passed 侧；failed 仍是 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）。
+- 语料解析 **40/40 = 100%**（分母是仓外 `~/source/quant/REasyQuant/strategies`）。
+- jit sweep：ok=176 trap=379 fail=0 timeout=0 segv=0（total **555**）GREEN —— 与 432 的 176/378/554 差 1 个成员，来自本批新增夹具（trap +1），ok 未动。
+- diff：match=120 judged=130 = **92.3%** bad_case=0。
+- 各翼 rc=0：knob 23、swallow 6、import 22、empty_stmt 68、pysrc 42、cli_semantics 87、ignore_rules 19、mbvar 23、emit_stable 2、dyn_binding 4、comment_drift 复述 0。
+- clean_checkout：**rc=0**（0s，rev=`65ca4430`）—— 口径点名：它检的是**本批代码提交之前**的 HEAD（432 的记录批），`d5b95c26` 不在其覆盖内。
+- 编译诊断：official 2/194 文件 6 行；python_style 111 文件 237 行。
+- **`GATE_RC=1` 由何而来**：日志内可见的非绿项只有 official 3 条 link-only ＋ python_style 2 failed ＋ 6 known-fail，组成与 432 **逐条相同** ⇒ 本批没有新增失败步骤。锚点核对不是 `run_all.sh` 的一步（#37 仍 OPEN），其 rc 单独在 §八 报。
+
+### 八、锚点（`docs/ABI.md`）
+
+- 归属实验（同一条命令、只换 `codegen.rs`）：改前（HEAD 文件）**258 个可解析 / 0 个定位失败 / 漂移 24 / 新 11 / 消失 10、rc=1**；换上本批改动 ⇒ **漂移 48**，新增的 **24 条全部落在 `src/backend/codegen/codegen.rs:6011` 之后** ⇒ 与本批 +31 行的位移同源（不是文档写错，也不是存量漂移被本批"顺带修掉"）。
+- `--rebind`（**未 `--bless`**）改写 `docs/ABI.md` 24 行 / 43 个数字，基线 `tools/baselines/abi_anchors.tsv` 同步 24 行，报 **257 个锚点 / 定位失败 0 / 拒改 34 条原样保留 / 落单新 11 条未写入**；`ABI.md` 仍 1032 行。
+- 重绑后终态 **258 可解析 / 0 定位失败 / 漂移 24 / 新 11 / 消失 10，rc=1** —— 与 432 入册的终态**逐项相同**，且残差漂移集合与改前**逐字相同**（`diff` 判 IDENTICAL）⇒ 对 HEAD 净中性。
+- 抽查（`sed -n` 逐条看落点内容）：`6864`＝"Struct fields are stored as 64-bit slots; bitcast float to i64"（§1#2 存侧）、`6358`＝`MirExpr::StringLit(s) =>`（§1#4）、`7513`＝`fn note_return_slot_mismatch(`（§3 实现）—— 与文档措辞逐条对得上。
+
+### 九、残口登记（本批不收，避免攒批）
+
+1. 往 `@property` 名字上写：读侧有 property 前奏，**写侧仍没有对应路由**（写进去会当成字段槽落块）。
+2. 仍**没有按对象的名字键属性表**：`setattr` 是 `runtime/unavailable_stubs.c` 一侧的 no-op 桩，真实现要在授权门后的 `runtime/py_additions.c`（#112/#145 同一道授权）。
+3. 写侧现在继承了读侧的兜底语义：`(variant, field_count, field_index)` 里 `("", 2)` stand-in 命中时，写会落进 2 槽块的索引 0 —— 与读侧对称了，但两边一起错；这一格的量数是批次 427 在册的 152 处 stand-in 读（其中 146 处字段名无人声明）。
+
+### 十、工具坑与自我核对（本批当场抓到）
+
+1. **`xargs -P 8 -I{} sh -c '…'` 会因命令板过长直接失败**，且只留下 1 个产物文件、其余静默不跑 ⇒ 360 份 IR 的扫描改用 `for` + `&`/`wait` 分批调 `one.sh`。**产物数要先等于分母，再谈差异。**
+2. **`awk '$2!=$3{…}'` 的双引号字段会被 shell 吃掉**（读到 `$2\ !=$3`）⇒ 报 awk 语法错 + 一次假的"differing: 0"；改用 `diff` + `comm` 比排序后的 md5 清单才拿到真差异集。**"0 处不同"必须换一种数法复现一次。**
+3. **`cargo build` 在 `/tmp/b433/pre_ir` 里跑** ⇒ "could not find Cargo.toml"，但文件替换已经发生 ⇒ 差点把 pre/post 二进制身份写反。回到仓根重编并用 `md5 -q` 两颗对齐后才继续（432 §十.1 的同一条，本批是"cwd 残留"这个新入口）。
+4. **语料 IR 尺寸差 4668400 vs 4665399 不是代码改动**：两次"改后"编译的差值来自**绝对 vs 相对源路径**（模块搜索路径会进 IR 里的字符串），A/B 两侧必须都从 REasyQuant 根用相对路径跑。
+5. **`git status --short --cached` 没有这个选项**（rc=129）⇒ `&&` 链当场断，`git commit` **没有发生**。正证据：随后 `git log -1` 打出的还是上一批的 hash。改用 `git diff --cached --name-only`。
+6. **zsh 没有 `$PIPESTATUS`** ⇒ 锚点核对那一步第一次报的是 `ANCHOR_RC=n/a`（不是 rc）。与 §七 末条同类：管道/复合命令的 rc 要单独落盘再读。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
