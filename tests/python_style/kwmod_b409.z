@@ -1,0 +1,7 @@
+def inject(market, index, nav=None, days=None, uni=None):
+    print("m", len(market))
+    print("i", len(index))
+    print("n", len(nav) if nav is not None else -1)
+    print("d", len(days) if days is not None else -1)
+    print("u", len(uni) if uni is not None else -1)
+    return 0

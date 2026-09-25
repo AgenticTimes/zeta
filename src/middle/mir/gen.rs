@@ -985,6 +985,62 @@ impl MirGen {
         }
     }
 
+    /// PY-A (batch 409): lay a call's arguments out in the callee's declared
+    /// parameter order. The parser wraps `name=value` as `__kwarg__(name, value)`.
+    /// `None` means "not statically bindable" — no markers at all, a `**`
+    /// unpacking, a name the callee does not declare, a parameter given twice, or
+    /// a parameter that receives neither an argument nor a default — and the
+    /// caller then keeps its existing positional list rather than a guess.
+    fn bind_kwarg_markers(
+        args: &[AstNode],
+        params: &[String],
+        defaults: Option<&[Option<AstNode>]>,
+    ) -> Option<Vec<AstNode>> {
+        let mut pos: Vec<&AstNode> = Vec::new();
+        let mut kw: Vec<(&str, &AstNode)> = Vec::new();
+        for a in args {
+            match a {
+                AstNode::Call {
+                    receiver: None,
+                    method,
+                    args: ka,
+                    ..
+                } if method == "__kwarg__" && ka.len() == 2 => match &ka[0] {
+                    AstNode::StringLit(n) => kw.push((n.as_str(), &ka[1])),
+                    _ => return None,
+                },
+                AstNode::Call {
+                    receiver: None,
+                    method,
+                    ..
+                } if method == "zeta_kwargs_unpack" => return None,
+                other => pos.push(other),
+            }
+        }
+        if kw.is_empty() {
+            return None;
+        }
+        let mut slots: Vec<Option<AstNode>> = params.iter().map(|_| None).collect();
+        for (i, a) in pos.into_iter().enumerate() {
+            let slot = slots.get_mut(i)?;
+            *slot = Some(a.clone());
+        }
+        for (name, value) in kw {
+            let i = params.iter().position(|p| p == name)?;
+            let slot = &mut slots[i];
+            if slot.is_some() {
+                return None;
+            }
+            *slot = Some(value.clone());
+        }
+        for (i, slot) in slots.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = defaults?.get(i)?.clone();
+            }
+        }
+        Some(slots.into_iter().flatten().collect())
+    }
+
 /// PY-A: a call that binds fewer arguments than the callee declares and has no
 /// default for the rest is a Python `TypeError`. We cannot fail the build here
 /// (platform shims legitimately differ), but staying silent would repeat the
@@ -5200,6 +5256,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &[Option<AstNode>]) {
                                 .get(&qualified)
                                 .or_else(|| self.param_defaults.get(member.as_str()))
                                 .cloned();
+                            // Batch 409: `name=value` arrives as `__kwarg__` markers
+                            // and nothing here read the names — the values were
+                            // appended in WRITTEN order, so skipping a defaulted
+                            // middle parameter bound every later argument one slot
+                            // early. This path, not the generic one that does bind
+                            // by name, lowers every callee imported from another
+                            // module (`from callee import inject`).
+                            let names = self
+                                .func_param_names
+                                .get(&qualified)
+                                .or_else(|| self.func_param_names.get(member.as_str()))
+                                .cloned();
+                            if let Some(ordered) = names.as_deref().and_then(|n| {
+                                Self::bind_kwarg_markers(&call_args, n, defaults.as_deref())
+                            }) {
+                                call_args = ordered;
+                            }
                             if let Some(defaults) = defaults {
                                 for (i, d) in defaults.iter().enumerate() {
                                     if i >= call_args.len() {

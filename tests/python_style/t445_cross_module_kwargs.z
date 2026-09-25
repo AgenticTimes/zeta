@@ -1,0 +1,36 @@
+// 批次 409：跨模块（`from 模块 import 函数`）调用的关键字实参按声明名落槽。
+// 此前：这类调用走 py_member_aliases 分支，从不读 `__kwarg__` 里的名字，只把值
+// 按书写序接在位置实参后面。跳过中间那个带缺省值的参数时，之后每一位都早一格：
+// `inject(market=…, index=…, days=…, uni=…)` 把 days 交给了 nav、uni 交给了 days。
+// A 段是位置实参基准，B 段按声明序给关键字，C 段乱序且跳过 nav。
+// expect: A
+// expect: m 10
+// expect: i 4
+// expect: n -1
+// expect: d 6
+// expect: u 8
+// expect: B
+// expect: m 10
+// expect: i 4
+// expect: n -1
+// expect: d 6
+// expect: u 8
+// expect: C
+// expect: m 10
+// expect: i 4
+// expect: n -1
+// expect: d 6
+// expect: u 8
+from kwmod_b409 import inject
+
+market = [1] * 10
+index = [2] * 4
+days = [3] * 6
+uni = [4] * 8
+
+print("A")
+inject(market, index, None, days, uni)
+print("B")
+inject(market=market, index=index, days=days, uni=uni)
+print("C")
+inject(uni=uni, market=market, index=index, days=days)
