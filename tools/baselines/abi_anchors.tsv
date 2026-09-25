@@ -120,36 +120,36 @@ src/backend/codegen/codegen.rs	4917	let ret_val = if want_float && !matches!( re
 src/backend/codegen/codegen.rs	4939	// linker at all. `infer_fn_return_type` only scans top-level // returns, so nested ones are never consulted.
 src/backend/codegen/codegen.rs	5114	let coerced = self.coerce_call_args(
 src/backend/codegen/codegen.rs	5811	MirStmt::StructFieldStore { base_id, field, val_id, } => { // base.field = val — store through the heap struct pointer. // Fields are 8-byte slots at offset ind
-src/backend/codegen/codegen.rs	6011	fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
-src/backend/codegen/codegen.rs	6121	MirExpr::StringLit(s) => { let global = self.module.add_global( self.context.i8_type().array_type(s.len() as u32 + 1), None, "str_lit", ); global.set_linkage(in
+src/backend/codegen/codegen.rs	6015	fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
 src/backend/codegen/codegen.rs	6211	// Allocate struct on HEAP to prevent dangling pointers
 src/backend/codegen/codegen.rs	6212	let total_bytes = self.i64_type.const_int( (fields.len() as u64) * 8, false, );
-src/backend/codegen/codegen.rs	6309	if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
+src/backend/codegen/codegen.rs	6242	None => { let recovered = self.resolve_struct_layout_by_field(field); // BATCH-427: when BOTH routes decline, the read goes // on silently against the stand-in,
+src/backend/codegen/codegen.rs	6358	MirExpr::StringLit(s) => { let global = self.module.add_global( self.context.i8_type().array_type(s.len() as u32 + 1), None, "str_lit", ); global.set_linkage(in
 src/backend/codegen/codegen.rs	6399	// Determine struct type from the Struct expression; when the base // is not a literal Struct (a function PARAMETER or a call result) // fall back to the base's
 src/backend/codegen/codegen.rs	6501	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> = (0..field_count).map(|_| self.i64_type.into()
-src/backend/codegen/codegen.rs	6626	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
-src/backend/codegen/codegen.rs	6627	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
-src/backend/codegen/codegen.rs	6650	// Return heap pointer as i64 (caller reads from valid heap memory) heap_ptr_val.into()
+src/backend/codegen/codegen.rs	6546	if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
 src/backend/codegen/codegen.rs	6740	// PY-A layout unification: allocate [cap | len | elem0 .. elemN-1] // and hand out a pointer to elem0 (buf + 16), matching the Vec / // DynamicArray runtime la
-src/backend/codegen/codegen.rs	6863	None => { let recovered = self.resolve_struct_layout_by_field(field); // BATCH-427: when BOTH routes decline, the read goes // on silently against the stand-in,
-src/backend/codegen/codegen.rs	6987	let extracted = self .builder .build_extract_value(loaded_struct.into_struct_value(), field_index, "") .unwrap();
+src/backend/codegen/codegen.rs	6863	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
+src/backend/codegen/codegen.rs	6864	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
+src/backend/codegen/codegen.rs	6887	// Return heap pointer as i64 (caller reads from valid heap memory) heap_ptr_val.into()
+src/backend/codegen/codegen.rs	7018	let extracted = self .builder .build_extract_value(loaded_struct.into_struct_value(), field_index, "") .unwrap();
 src/backend/codegen/codegen.rs	7154	fn abi_note(&mut self, callee: &str, arg_i: usize, kind: &str) { self.abi_warn_count = self.abi_warn_count.saturating_add(1); if self.abi_warn_count <= 8 { epri
-src/backend/codegen/codegen.rs	7257	// Return pointer to elem0 (buf + 16) as i64 let data_ptr = unsafe {
-src/backend/codegen/codegen.rs	7366	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::IntType(pt)) => { let arg_ty = iv.get_type(); if arg_ty.get_bit_width() < pt.get_bit_width
-src/backend/codegen/codegen.rs	7374	self.abi_note( &callee_name, i, &format!( "narrow i{}→i{}", arg_ty.get_bit_width(), pt.get_bit_width() ), );
-src/backend/codegen/codegen.rs	7383	match self.builder.build_int_truncate(iv, pt, "arg_trunc") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum
-src/backend/codegen/codegen.rs	7387	} else { result.push(BasicMetadataValueEnum::IntValue(iv)); }
-src/backend/codegen/codegen.rs	7391	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::FloatType(ft)) => { // Batch 299: a raw container-slot word is a BIT PATTERN, so // reinte
-src/backend/codegen/codegen.rs	7403	self.builder .build_signed_int_to_float(iv, ft, "arg_sitofp") .map(|v| BasicValueEnum::from(v)) };
-src/backend/codegen/codegen.rs	7412	(BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => { self.abi_note( &callee_name, i, &format!("fptosi → i{}", pt.get_bit_wi
-src/backend/codegen/codegen.rs	7418	match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataV
-src/backend/codegen/codegen.rs	7423	(BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_)) | (BasicMetadataValueEnum::PointerValue(_), inkwell::types::BasicTypeEnum
-src/backend/codegen/codegen.rs	7428	_ => result.push(arg),
-src/backend/codegen/codegen.rs	7431	if result.len() < n_params { for i in result.len()..n_params { let pt_meta = fn_type.get_param_types()[i]; let zero: BasicMetadataValueEnum<'ctx> = match pt_met
-src/backend/codegen/codegen.rs	7453	} else if result.len() > n_params { result.truncate(n_params);
-src/backend/codegen/codegen.rs	7482	fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
-src/backend/codegen/codegen.rs	7865	pub fn type_to_llvm_type(&self, ty: &Type) -> inkwell::types::BasicTypeEnum<'ctx> {
-src/backend/codegen/codegen.rs	7971	Type::Tuple(element_types) => { let llvm_element_types: Vec<inkwell::types::BasicTypeEnum> = element_types .iter() .map(|t| self.type_to_llvm_type(t)) .collect(
+src/backend/codegen/codegen.rs	7288	// Return pointer to elem0 (buf + 16) as i64 let data_ptr = unsafe {
+src/backend/codegen/codegen.rs	7397	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::IntType(pt)) => { let arg_ty = iv.get_type(); if arg_ty.get_bit_width() < pt.get_bit_width
+src/backend/codegen/codegen.rs	7405	self.abi_note( &callee_name, i, &format!( "narrow i{}→i{}", arg_ty.get_bit_width(), pt.get_bit_width() ), );
+src/backend/codegen/codegen.rs	7414	match self.builder.build_int_truncate(iv, pt, "arg_trunc") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum
+src/backend/codegen/codegen.rs	7418	} else { result.push(BasicMetadataValueEnum::IntValue(iv)); }
+src/backend/codegen/codegen.rs	7422	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::FloatType(ft)) => { // Batch 299: a raw container-slot word is a BIT PATTERN, so // reinte
+src/backend/codegen/codegen.rs	7434	self.builder .build_signed_int_to_float(iv, ft, "arg_sitofp") .map(|v| BasicValueEnum::from(v)) };
+src/backend/codegen/codegen.rs	7443	(BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => { self.abi_note( &callee_name, i, &format!("fptosi → i{}", pt.get_bit_wi
+src/backend/codegen/codegen.rs	7449	match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataV
+src/backend/codegen/codegen.rs	7454	(BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_)) | (BasicMetadataValueEnum::PointerValue(_), inkwell::types::BasicTypeEnum
+src/backend/codegen/codegen.rs	7459	_ => result.push(arg),
+src/backend/codegen/codegen.rs	7462	if result.len() < n_params { for i in result.len()..n_params { let pt_meta = fn_type.get_param_types()[i]; let zero: BasicMetadataValueEnum<'ctx> = match pt_met
+src/backend/codegen/codegen.rs	7484	} else if result.len() > n_params { result.truncate(n_params);
+src/backend/codegen/codegen.rs	7513	fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
+src/backend/codegen/codegen.rs	7896	pub fn type_to_llvm_type(&self, ty: &Type) -> inkwell::types::BasicTypeEnum<'ctx> {
+src/backend/codegen/codegen.rs	8002	Type::Tuple(element_types) => { let llvm_element_types: Vec<inkwell::types::BasicTypeEnum> = element_types .iter() .map(|t| self.type_to_llvm_type(t)) .collect(
 src/backend/codegen/mod.rs	7	mod runtime_decls_registry;
 src/backend/codegen/mod.rs	9	mod runtime_decls_core;
 src/backend/codegen/runtime_decls_core.rs	51	module.add_function("zeta_env_get", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External)); module.add_function("zeta_env_set", void_type.fn_type
