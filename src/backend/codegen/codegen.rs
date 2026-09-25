@@ -1442,9 +1442,20 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 {
                     let type_key = format!("struct_{}_{}", v, fds.len());
                     let field_names: Vec<String> = fds.iter().map(|(n, _)| n.clone()).collect();
-                    self.struct_defs
-                        .entry(type_key)
-                        .or_insert_with(|| field_names);
+                    // First writer wins for a key, so two same-named classes of
+                    // the same width but a DIFFERENT field order silently keep one
+                    // layout. BATCH-427: make that collision audible under the
+                    // same knob the read side uses (nothing else prints it).
+                    if let Some(kept) = self.struct_defs.get(&type_key) {
+                        if crate::diagnostics::env_flag("ZETA_DBG_FA") && kept != &field_names {
+                            eprintln!(
+                                "ZETA-DBG struct_defs conflict key={:?} kept={:?} dropped={:?}",
+                                type_key, kept, field_names
+                            );
+                        }
+                    } else {
+                        self.struct_defs.insert(type_key, field_names);
+                    }
                 }
             }
         }
@@ -5907,20 +5918,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
         0
     }
 
-    /// Recover a struct layout from the FIELD NAME alone, for a receiver whose
-    /// declared type is unknown. Accepted only when EVERY struct that declares
-    /// the field puts it at the SAME INDEX — that is the exact condition under
-    /// which the word being read is the same word whichever object the handle
-    /// turns out to be, so two classes may share a field name (and BATCH-425's
-    /// stricter "same variant and width too" withheld layouts that were safe).
-    /// The adopted WIDTH is the smallest declaring width: the load then cannot
-    /// reach past the narrowest candidate, and the agreed index is below it
-    /// because `index < fields.len()` holds in every declarer. `struct_defs` is
-    /// a BTreeMap with keys always `struct_{variant}_{fields.len()}` (collector
-    /// at :1443), so the scan and the tie-break are deterministic. Any index
-    /// disagreement returns `None`: the caller keeps the stand-in rather than
-    /// guessing between two layouts.
-    fn resolve_struct_layout_by_field(&self, field_name: &str) -> Option<(String, usize)> {
+    /// Every `struct_defs` entry that declares `field_name`, as
+    /// `(variant, width, index)`, in BTreeMap key order (so the list is
+    /// deterministic). Exposed separately from the resolver because BATCH-427
+    /// needs the same facts on the failure path: when the resolver declines, the
+    /// conflicting declarers are the diagnosis.
+    fn struct_field_decls(&self, field_name: &str) -> Vec<(String, usize, usize)> {
         let mut decl: Vec<(String, usize, usize)> = Vec::new();
         for (key, fields) in self.struct_defs.iter() {
             let inner = match key.strip_prefix("struct_") {
@@ -5940,6 +5943,24 @@ impl<'ctx> LLVMCodegen<'ctx> {
             };
             decl.push((variant.to_string(), fields.len(), idx));
         }
+        decl
+    }
+
+    /// Recover a struct layout from the FIELD NAME alone, for a receiver whose
+    /// declared type is unknown. Accepted only when EVERY struct that declares
+    /// the field puts it at the SAME INDEX — that is the exact condition under
+    /// which the word being read is the same word whichever object the handle
+    /// turns out to be, so two classes may share a field name (and BATCH-425's
+    /// stricter "same variant and width too" withheld layouts that were safe).
+    /// The adopted WIDTH is the smallest declaring width: the load then cannot
+    /// reach past the narrowest candidate, and the agreed index is below it
+    /// because `index < fields.len()` holds in every declarer. `struct_defs` is
+    /// a BTreeMap with keys always `struct_{variant}_{fields.len()}` (collector
+    /// at :1443), so the scan and the tie-break are deterministic. Any index
+    /// disagreement returns `None`: the caller keeps the stand-in rather than
+    /// guessing between two layouts.
+    fn resolve_struct_layout_by_field(&self, field_name: &str) -> Option<(String, usize)> {
+        let decl = self.struct_field_decls(field_name);
         let first = decl.first()?;
         decl.iter()
             .all(|d| d.2 == first.2)
@@ -6698,9 +6719,29 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         // rule took 17, 426's index-agreement rule takes 5 more
                         // (`paused` x3, `low_limit` x2 — now Bar w4, idx 3 and
                         // 2). The 6 left are 3 names x2: their index disagrees.
-                        None => self
-                            .resolve_struct_layout_by_field(field)
-                            .unwrap_or((String::new(), 2)),
+                        None => {
+                            let recovered = self.resolve_struct_layout_by_field(field);
+                            // BATCH-427: when BOTH routes decline, the read goes
+                            // on silently against the stand-in, so say who
+                            // disagrees. Measured on the corpus: 152 of 529 reads
+                            // get here, and only 6 of them print a clamp — the
+                            // other 146 name a field NO collected struct declares
+                            // (`declarers=0`, e.g. `columns`, `positions`,
+                            // `error_code`), so the global scan lands on index 0
+                            // and the read silently returns the receiver's first
+                            // word without ever tripping the range check. The
+                            // clamp count under-reported this population by 25x.
+                            if recovered.is_none() && crate::diagnostics::env_flag("ZETA_DBG_FA") {
+                                let decls = self.struct_field_decls(field);
+                                eprintln!(
+                                    "ZETA-DBG FA decls field={} declarers={} decls={:?}",
+                                    field,
+                                    decls.len(),
+                                    decls
+                                );
+                            }
+                            recovered.unwrap_or((String::new(), 2))
+                        }
                     }
                 };
 

@@ -1,0 +1,27 @@
+// 批次 427（3.2 Lowering／取证批抓出的新格）：两个模块里**同名同宽度**的类别共用一条 struct 布局，
+// 后到的那份字段序被丢掉 ⇒ 字段互换（静默错值）。
+// 收集点 `codegen.rs` 的 `gen_mirs` 用键 `struct_{variant}_{字段数}` 建 `struct_defs`，而 `variant`
+// 只是类别的**裸名**（不含模块前缀）。`entry(k).or_insert(..)`＝**首写者胜**：`pyswap_a.Pair`
+// 先入表为 `["a","b"]`，`pyswap_b.Pair` 的 `["b","a"]` 整条被丢。读侧随后按**留下的那份**名单
+// 解索引 ⇒ `y.a` 读到 `Pair.__init__` 里先写的那一格（3），`y.b` 读到后写的那格（4）——
+// 与 CPython 恰好互换。写侧不受影响（各自按自己构造表达式的顺序落槽），所以症状只在读侧。
+// 本批给这条路加了两支 `ZETA_DBG_FA` 探针（`struct_defs conflict` / `FA decls`），本夹具就是
+// `conflict` 探针的**正证据**：改前该形状一声不出，改后 stderr 一行
+// `ZETA-DBG struct_defs conflict key="struct_Pair_2" kept=["a", "b"] dropped=["b", "a"]`。
+// 语料侧同一探针 **0 次命中**（`dbg_corpus_zetac.fa.txt` 实测）⇒ 语料里没有这条的成员；
+// "语料 0" 是负断言，其"探针不是死代码"由本夹具正面供证。
+// expect 取 CPython 3.12 语义正确值：把上面两个夹具文件的源码当场 `exec` 给 `python3`（只把类名
+// 改成 PairA/PairB 以避开同名遮蔽，字段序一字未动）⇒ `x 1 2 / y 4 3 / done`。
+// known-fail: 键为裸类别名 ⇒ 跨模块同名类别互换字段（真修方向＝按带模块的全名分键，见 427 记录头名）
+from pyswap_a import Pair as QA
+from pyswap_b import Pair as QB
+
+x = QA()
+y = QB()
+print("x", x.a, x.b)
+print("y", y.a, y.b)
+print("done")
+
+// expect: x 1 2
+// expect: y 4 3
+// expect: done
