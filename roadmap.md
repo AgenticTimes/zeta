@@ -16970,6 +16970,192 @@ acceptance 非确定性判据仍未立（同一个二进制：market 行数读�
 **(f)** 门禁整体退出码口径：`run_all.sh:576` 在 `py_fail=2` 下应给 1，后台包装器回了 0——两读未对齐，
      直跑 `bash tools/run_all.sh; echo $?` 补一次实拍（不引任何一方当绿灯）。
 
+## 批次 410（主线 301 第 2 步第二格：dict 参数上的写侧从不哈希 key，读侧一直哈希）
+
+### 一、症状（最小复现）
+
+`tests/python_style/t446_dyn_dict_param_store.z`（本批新增，8 行函数体）：一个**没有类型标注**
+的 dict 形参 `d`，函数体里 `d[k] = v`，随后在函数内、函数外分别读回。改前读数（同一二进制两次
+运行逐字一致）：
+
+```
+inside 0
+ovr 0
+scalar 0
+strs 0
+root 0 2
+```
+
+CPython 参照：`inside 3 / ovr 2 / scalar 42 / strs 3 / root 2 2`。
+关键形状是 **key 进去了、值没进去**：`len(c)` 从 1 涨到 2（`root 0 2` 里那个 `2` 是 `c["z"]`，
+它在模块级写；`inside`/`ovr` 全是 0），也就是说插入改变了表的规模，读回却恒为默认值 0。
+值形不是判据：列表字面值（inside/ovr）、标量 `42`（scalar）、字符串 `"abc"`（strs）三条一起红，
+`type` 只影响打印形状。
+
+### 二、定位（`--dump-mir` 对照，同一文件内自带正对照）
+
+`min1.py`（= t446 的前四行 + 模块级写）里两处 `DictInsert` 的 key 操作数不同源：
+
+- 模块级（本批之前就正确，作为对照）：
+  `Call { func: "map_str_key", args: [14], dest: 15 }` → `DictInsert { map_id: 5, key_id: 15, val_id: 6 }`
+- 函数体内（红的那条）：`DictInsert { map_id: 1, key_id: 12, val_id: 2 }`，而 exprs 段
+  `12: StringLit("k")`、`type_map: 12: Str` —— **没有任何 map_str_key 调用**，key 直接把字符串句柄当数写进去。
+- 同一个函数体里的读：`Call { func: "map_str_key", args: [18], dest: 19 }` → `DictGet { map_id: 1, key_id: 19 }`。
+
+⇒ 写侧落指针、读侧落 FNV 内容哈希（`gen.rs:3195` 的注释就是这条规则：同一字面量会分到不同句柄，
+运行期按数值比 key）。miss 不是崩溃，是静默返回默认值 —— 所以只表现为"值丢了"。
+
+结构定位（写点/读点对齐，行号为记录批当前读数）：
+
+| 位点 | 位置 | 是否哈希 |
+|---|---|---|
+| dict 字面量 | `gen.rs:5159` | 哈希（`lower_map_key`） |
+| 接收者类型已知为 `map<…>` 的下标赋值 | `gen.rs:1797` | 哈希（`lower_map_key_typed`，批次 146 收的）；判据在 `:1793` 的 `matches!(&base_ty, Type::Named(n,_) if n=="map")` |
+| 下标赋值兜底分支（接收者类型未知 = 未标注形参） | `gen.rs:1869-1878`，key 行 `:1877` | **改前不哈希** ← 本批 |
+| 下标读兜底分支（同一条兜底） | `gen.rs:13442` | 哈希 |
+
+`min1` 里形参 `d` 的 `type_map` 是 `PyDynamic`，所以按 `map` 分支判据不成立，落兜底 —— 这就是
+"模块全局 dict 对、传进函数的 dict 错"的分界。
+
+### 三、修复（最小修，一处）
+
+`gen.rs:1869-1878` 的兜底分支写点补上读侧已有的那一步：
+
+```rust
+let key_id = self.lower_map_key(index_id);
+```
+
+`lower_map_key` 只在 key 自身类型为 `Str` 时插哈希，非字符串 key 原样透传 —— 所以本修不动
+int-key、list 下标等任何既有形状。改动 8 加 / 1 删（净 +7），无新符号。
+
+### 四、判据（新增用例 + 隔离探针）
+
+`t446_dyn_dict_param_store.z`：5 条 `// expect:`（inside 3 / ovr 2 / scalar 42 / strs 3 / root 2 2），
+改前 5 条全红、改后与 CPython 逐字相同（`grep -v '^//'` 出正文喂 python3 对照）。
+
+隔离探针集 `/tmp/b410/`（逐成员单跑，改前后各一次）：
+
+| 探针 | 形状 | 改前 zeta | 改后 zeta | CPython |
+|---|---|---|---|---|
+| v1(f1) | 跨模块 dict 形参 + 列表字面值 | `0 \| root 0` | `3 \| root 3` | 3 / 3 |
+| v2(f2) | 同上，值来自形参 | `0 \| root 0` | `3 \| root 3` | 3 / 3 |
+| v6(f7) | 写入前先读（`in` 判据） | `dict-len 1 / value-len 0` | `1 / 3` | 1 / 3 |
+| v7(f8) | 覆盖已有 key | `1 / 1 / 1` | `1 / 2 / 2` | 1 / 2 / 2 |
+| v9(f9) | 标量 + 字符串 | `0 / 0 0` | `42 / <addr> 3` | 42 / abc 3 |
+| v10(f10) | 同 key 连写两次 | `0 / 0 / 0 0` | `3 / 5 / 5 5` | 3 / 5 / 5 5 |
+| same1 | 同模块函数，dict 里预先有 key | `dict 2 / value 0` | `dict 2 / value 3` | 2 / 3 |
+| v3(f4) | **正对照**：被调方自己的模块全局 dict | `3` | `3` | 3 |
+| v5(f6) | **对照组（本批不收）**：保留动态的列表槽 | `len 1 / or-len 1` | `len 1 / or-len 1`（未动） | 3 / 3 |
+
+v3 改前后都正确 ⇒ 修复半径确实只在"接收者类型未知的下标赋值"；v9 的字符串值仍打地址 =
+#117（动态槽上没有类型标记）原样保留，本批只把长度读对（`3`）；v5 与 410 无关，留在 #117/#32。
+
+### 五、顺带定位到一条**独立**缺陷（另开 #130，本批未动）
+
+为 t446 加"变量 key"翼时撞见：`def varkey(d, kk): print("enter"); d[kk] = 1` + 模块级
+`varkey(u, "q")` ⇒ zeta 输出 `size 0`，CPython `enter|size 1` —— **函数体一次都没执行**。
+`--dump-mir` 里 `== MIR varkey ==` 函数体完整、`nm` 里 `_varkey` 是 `T`（已 define），但 main 的
+stmts 里没有任何对 varkey 的 Call（grep 该段 = No matches found）⇒ 语句在 lowering 阶段整条被吞。
+只改函数名的最小对照（其余逐字相同）：`varkey/varx/varkey2/var` 丢调用，`vkey/xvar/storevar/VARKEY`
+正常 —— 判据是**词首 `var` 前缀**。同族第三条读数：`variable = 5` 读回 1、`var_x = 7` 读回 1、
+`var = 9` 读回 9。语料定价（`strategies --include='*.py'`）：`\bvar[A-Za-z_0-9]*` 13 处
+（var_x 6 / var 5 / variance 2，落在 jq_wufu.py:521、jq_wufu_daily.py:583、蛇皮走位小市值.py:38
+的 `var_x = np.sum(...)` 一类赋值），以 var* 开头的**调用**语句 0 处 ⇒ 不在 0 成交路径上，
+但那两个文件的方差计算读成 1 是实测静默错值。改前改后这几条读数逐字不变（本修不涉及该路径）。
+
+### 六、已排除的假设
+
+1. **"值操作数在写侧被丢掉"**：MIR 里 `val_id: 2` 就是那个 `DynamicArray(I64)` 槽，值操作数完整，
+   丢的是 key 的可寻址性。判据：`len(d)` 涨了。
+2. **"接收者句柄在跨参数边界时拷坏了"**：同一函数里读预先存在的 key（same1 的 `c["n"]`）改前
+   就正确（`inside scalar 42` 那格改前红是因为它由本函数刚写入；改前 `c["z"]` 的模块级写在 root 读
+   仍为 2）。句柄没问题，只有写入的 key 与读取的 key 不同源。
+3. **"这是 400/407/408 那族参数类型没传过来的下游"**：`d` 保持 PyDynamic 是那条链的结论，但本红的
+   判据是**写点没走 `lower_map_key`**，与参数类型推断无关 —— 兜底分支的读侧（`gen.rs:13442`）本来就
+   对。（"标注成 `map` 会改走 `gen.rs:1797` 那条已哈希分支"是按 `:1793` 的 `matches!` 判据读码得到的
+   静态结论，本批未跑该形状实拍。）
+
+### 七、acceptance（主线 301 第 2 步）读数 —— 一格未动
+
+同一驱动（`strategies/code/` 临时放回 acceptance 文件，跑完移除，语料回到 38 份）连跑 4 次，
+二进制 `target/release/zetac` 为改后：
+
+| 跑 | rc | 行数 | PARITY 条数 |
+|---|---|---|---|
+| run1 | 139（SIGSEGV） | 123 | 0 |
+| run2 | 139（SIGSEGV） | 123 | 0 |
+| run3 | 0 | 176 | 37 |
+| run4 | 0 | 176 | 37 |
+
+run3 与 run4 归一化（把 6 位以上连续数字替成 `ADDR`）后 `diff` = 0 行；run3 与批次 409 的成功
+日志同一归一化后 `diff` 也是 0 行。三次关键读数逐字保持：
+
+```
+[INFO] 本地数据注入完成: market=%d rows, codes=%d, trading_days=%d 13401 0 0
+[INFO] jq_shim: [PARITY] <addr> | target=- | holdings=- | ranked=-
+成交条数：0（grep -c '成交' = 0；买入/卖出/下单 = No matches found）
+```
+
+⇒ 本批收的是"dict 形参写侧不哈希"这条**静默错值**，它确实存在、也确实红了五条，但 0 成交的
+病因不在这格：`codes=0 / trading_days=0 / 0 笔成交` 与 `[PARITY] target=- | holdings=- | ranked=-`
+的形状一格未变。#7 的"值到了、读成空"仍是未完成的那一格，本批既没推翻它也没推进它。
+（另记：`market=%d` 的惰性格式串仍未收 —— 那是 #45/#110 族；rc 在 4 次里 2 次 139 的非确定性
+也仍是老读数，不是本批引入。）
+
+### 八、门禁（`bash tools/run_all.sh`，`/tmp/b410/gate410.log`）
+
+`gate rc=1` —— 唯一红仍是 `run_all.sh:576` 的 `py_fail != 0` 那条常驻红。分表读数：
+
+| 项 | 读数 |
+|---|---|
+| official | compile 194/194，compile+link 191/194 |
+| python_style | pass 329 / fail 2 / known-fail 5（glob 336 = 329+2+5）；`PASS t446_dyn_dict_param_store` 在日志 :299 |
+| 语料 | 解析通过 39/39 = 100% |
+| jit sweep | ok=176 trap=355 fail=0 timeout=0 segv=0（total 531，最小 ok=163） |
+| diff test | match=120 judged=130 rate=92.3% bad_case=0 |
+| 断言族 | 全部 FAIL 0（含 mbvar 21/0、comment_drift restated 0） |
+| clean_checkout | rc=0（rev 53f2f5bf，改前 HEAD） |
+| compile-diagnostics | official 2 文件 / 5 行；python_style 99 文件 / 204 行 |
+
+fail 2 条 = t231/t233 常驻，无新增。
+记录批（只动 roadmap/backlog/ABI.md/锚点基线）重跑一次同一门禁 `/tmp/b410/gate_record.log`：
+上表八项读数逐字相同，`clean_checkout` 的 rev 从 53f2f5bf 变成 fb019702、仍 rc=0，
+`comment_drift` restated 0，`gate rc=1` 不变。
+
+### 九、ABI 锚点
+
+`python3 tools/check_abi_anchors.py` 在 fb019702 里读到的仍是 **漂移 66 / 新 11 / 消失 3**（基线 251）——
+因为提交前的那次 `--rebind` 跑在 gen.rs 最后一次改动（把注释里的硬行号 `:13435` 换成不带行号的措辞）
+**之前**，那一次改动把后续行号又挪了。本记录批重跑一次 `--rebind`：改写 ABI.md 33 行 / 57 个数字，
+基线刷到 **250** 个锚点（`runtime/py_additions.c:2650`、`gen.rs:3472`、`gen.rs:10309` 三条消失且无唯一
+配对，核对器拒改并保持悬空），读数回到常驻 **30 / 11 / 3**。另 2 条定位失败（ABI.md:277、:425 指向的行
+内容为空）同属"消失无配对"族，留作待收。
+
+### 十、提交
+
+- 代码批 `fb019702 fix(mir): 批次 410 —— 动态 dict 接收者的写侧从不哈希 key，读侧一直哈希`
+  （`src/middle/mir/gen.rs` +8 -1、`tests/python_style/t446_dyn_dict_param_store.z` +25、
+  `docs/ABI.md` / `tools/baselines/abi_anchors.tsv` 的 rebind 快照），已推 `agentic/bootstrap`。
+- 记录批：本文件（roadmap 本节）+ backlog `| #7 |` 折行 + 锚点 `--rebind` 二次快照
+  （`docs/ABI.md` / `tools/baselines/abi_anchors.tsv`），同样推 `agentic/bootstrap`。
+
+### 十一、下一批候选（按已实测损害量）
+
+- **#130**（本批 §五）：词首 `var` 前缀的调用语句整条丢失 / `var*` 赋值读回恒 1 —— 语料里
+  `var_x = np.sum(...)` 型赋值实测 3 个文件命中，静默错值；下一步 grep 语句分类器里的
+  `starts_with("var")` 启发式 + `ZETA_PARSE_TRACE` 实拍。
+- **#7 / 主线 301 第 2 步剩余格**："值到了、读成空"（`codes=0`、`target=-`）—— 本批证明它不是
+  dict key 哈希，需换假设；候选是 `log.info` 惰性 `%d`（数据注入那三条读数是不是真传进去了）
+  与 universe 过滤 119→107 vs 115→103 那条不一致。
+- **#32/#117**：v5 探针（保留动态的列表槽读成 `len 1`）与 v9 字符串值打地址 —— 同一条"动态槽
+  没有类型标记"链，用户裁定里 item 4 的"给值加类型标记"。
+- 常驻未收：`zeta_dt_date` C 身份桩（`runtime/py_additions.c:3422`，需用户一句话）、
+  #47/#42 `&expr`、#122、#41 第二半、#115、#113、#110、#109、#105、#55、#38、`String` 拼写、#22、
+  selfhost 剩余 4 条 DictGet、`gen_expr_safe` 水位线、`run_all.sh` 被 `run_*` gitignore 吞、
+  `impl MirGen` 成员缩进、跨模块 `_` 前缀导入幽灵符号、barrel 重导出 `_fetch_stocks`/`_warmup_start_of`
+  未定义、acceptance 非确定性（4 次里 2 次 rc=139）。
+
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
