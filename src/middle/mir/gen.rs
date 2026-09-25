@@ -883,6 +883,38 @@ impl MirGen {
         None
     }
 
+    /// BATCH-429: a property read (`df.columns`, no parens) whose receiver has
+    /// NO static class tag. The arm above needs `Type::Named`, so without a tag
+    /// the read degraded to a raw field load and returned the handle's first
+    /// word (corpus, `ZETA_DBG_FA` on the pre-429 binary: 33 of the 152 reads
+    /// that fell through both look-ups are `index` 16 / `columns` 12 /
+    /// `empty` 5; the library itself records the symptom at
+    /// `pylib/pandas.z:270`). Dispatch on the NAME alone only when it identifies
+    /// exactly ONE declared method and that method takes nothing but `self` —
+    /// the same uniqueness rule the dynamic-receiver CALL path already uses
+    /// (`pylib::method_by_unique_name`, reached at :10299). Ambiguity, a missing
+    /// parameter list or a non-zero arity returns `None` and the caller keeps
+    /// the old behaviour, which BATCH-427's `FA decls` probe makes audible.
+    fn unique_zero_arg_property(&self, name: &str) -> Option<(String, Type)> {
+        let suffix = format!("::{}", name);
+        let mut hits = self
+            .func_ret_types
+            .keys()
+            .filter(|k| k.ends_with(suffix.as_str()));
+        let key = hits.next()?.to_string();
+        if hits.next().is_some() {
+            return None;
+        }
+        let params = self.func_param_names.get(&key)?;
+        let no_args = params
+            .iter()
+            .all(|p| matches!(p.as_str(), "self" | "&self" | "&mut self"));
+        if !no_args {
+            return None;
+        }
+        Some((key.clone(), self.func_ret_types.get(&key)?.clone()))
+    }
+
     fn py_handle_of(&self, recv: &AstNode) -> Option<String> {
         // A chained call whose callee is a registry member that declares a
         // handle (e.g. `hashlib.md5("x").hexdigest()`): the result's tag is
@@ -12569,6 +12601,23 @@ call, no NULL-handle dereference).",
                         return id;
                     }
                     _ => {}
+                }
+                // BATCH-429: the arms above took Named / vec-shaped receivers, so
+                // what is left has no class tag at all (i64 / dynamic slot) —
+                // a unique zero-arg member of that name is a property, so call it
+                // instead of loading a field off an untagged handle.
+                if !matches!(self.type_map.get(&base_id), Some(Type::Named(_, _)))
+                    && let Some((symbol, ret_ty)) = self.unique_zero_arg_property(field)
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: symbol,
+                        args: vec![base_id],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, ret_ty);
+                    return id;
                 }
                 // 2. Create FieldAccess expression
                 self.exprs.insert(

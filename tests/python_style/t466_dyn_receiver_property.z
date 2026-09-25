@@ -1,0 +1,54 @@
+// 批次 429（3.2 Lowering／2.2 签名表的下游）：**接收者身上没有类标签**时的零参成员读
+// （Python property）以前没有这条路。`gen.rs:12552` 的 Named 路线要求
+// `type_map[base]` 是 `Type::Named(类名)`；句柄躺在 i64／动态槽里（列表元素、字典值、
+// shim 返回值）时该路线整条形同虚设 ⇒ 落到 `MirExpr::FieldAccess`，再被后端按 `("", 2)`
+// 占位版式读**句柄第 0 个字**。**改前实拍（本批当场，`ZETA_DBG_FA` 编语料，`target/release/zetac_pre429`）
+// ＝ 152 条"两路反查都落空"的读里 33 条是这三个名字：`index` 16／`columns` 12／`empty` 5**
+// （站点 `strategies/code/jq_wufu_local.py:129`、`backend/datasrc/market_data_sources.py:249/251`、
+// `backend/datasrc/derivations.py:61/65/71/75/81/84/91`，全在列门控与真值判断上）。
+// 库侧早就记过同一症状：`pylib/pandas.z:270`「fillna→zeta_identity 把结果标成 i64，
+// 随后 `.columns` 静默变 0」；本仓方言把 property 建模成**零参 def ＋ FieldAccess 分派**
+// （`pylib/pandas.z:57`「零参方法由 FieldAccess 分派（批次一百）」），故真值取 property 语义。
+// 修法＝`unique_zero_arg_property`（`gen.rs:898`，调用点 `:12610`）：名字在声明表里
+// **唯一**、且除 `self` 外**零实参**才发调用；一名多主／参数表缺失／带参 ⇒ 保持旧行为
+// （那种落空由 427 的 `FA decls` 探针出声）。唯一性判据沿用动态接收者**调用**那一路
+// 已有的裁决（`pylib::method_by_unique_name`，`gen.rs:10299` 处调用），不是本批新发明的松紧度。
+// 本夹具两格都取"真退化"的形状（`key in xs[i].columns` / `key in m[k].columns`）；同一
+// property 换成 `len(xs[i].columns)` 形状时接收者已被精化成 `Named("Frame")`、改前改后两颗
+// 二进制都读对 2 ⇒ 那种形状不在本批评据里。
+// 第三行是**反向对照**：键真不在列表里时仍须 `missing`，证明本批不是把这条读一律判成命中。
+// 改前实拍（同目录同环境跑 `zetac_pre429`）：编译 rc=0、运行 rc=0、stderr 空、
+// stdout `V missing a / M missing b / M missing zzz / done` —— 前两行是**静默错值**（该 has 却 missing）。
+// expect ＝ CPython 当场对数（`python3 3.14.5`，把 property 补上 `@property` 装饰器，其余一字未改）：
+// `V has a / M has b / M missing zzz / done`。改后逐字相同。
+class Frame:
+    def __init__(self, data):
+        self.data = data
+
+    def columns(self):
+        return ["a", "b"]
+
+
+def from_vec(xs, i, key):
+    if key in xs[i].columns:
+        print("V has", key)
+    else:
+        print("V missing", key)
+
+
+def from_map(m, k, key):
+    if key in m[k].columns:
+        print("M has", key)
+    else:
+        print("M missing", key)
+
+
+from_vec([Frame([1, 2])], 0, "a")
+from_map({"z": Frame([3])}, "z", "b")
+from_map({"z": Frame([3])}, "z", "zzz")
+print("done")
+
+// expect: V has a
+// expect: M has b
+// expect: M missing zzz
+// expect: done
