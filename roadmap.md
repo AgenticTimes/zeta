@@ -17902,6 +17902,135 @@ OPEN 净增 0：415 折进本行、backlog `#7` 与 `#131`（已闭）同批归�
 3. **#139①②** 两格 `__file__` 相邻的独立缺陷（返回常量 str 丢类型证据 / 模块函数内读 `__file__` 崩）。
 4. **#137①** `def loop():` 静默截断整个文件（丢代码族唯一有新成员形状的，先取语料计数再定价）。
 
+---
+
+## 批次 416（主线 301 第 3 步）：0 笔成交的病因**已证**；修法实测到但会抹平别的读数 ⇒ 判死回退、登记 known-fail
+
+**开批口径**：走 415 §八 候选 2（0 笔成交 / `final_value`），而不是候选 1（`codes` 跨跑抖）——
+用户裁定 item 3 的顺序是「先查 0 笔成交 → 再查选股数量不一致 → 最后对 final_value」，
+0 成交在链首，故本批优先于 415 自己排的候选序。
+
+### 一、病因（这一格从"猜测"变成"已证"）
+
+PY-A 模块加载下，一个模块的**普通 `def` 从不进环境表**（只有模块级**绑定**会被镜像进
+`zeta_env_get`/`zeta_env_set`；`runtime/py_additions.c:2656`），但 MIR 侧把它当值读的两个点位
+仍然下型成环境读：
+
+- 裸名读：`src/middle/mir/gen.rs:3890`（`module_globals.contains(name)` ⇒ 发 `StringLit` + `zeta_env_get`）
+- 模块限定读：`src/middle/mir/gen.rs:12278`（`mod.CONST` 形状，`parts.len()==1`，键 `<module>__<name>`，同样发环境读）
+
+于是 `jq_wufu_local.py:41-45` 的 `morning_routine = _strategy.morning_routine` 一类别名拿到 0；
+调用点是 `zeta_call1(0, ctx)`，而 **空地址按合同静默返回 0**（`runtime/py_additions.c:3414`、
+`runtime/tokio_runtime_stub.c:3792-3815`，docs/ABI.md C9）⇒ 五个每日例程一条都不跑 ⇒
+`0 笔成交` / `1000000 -> 0 (-100.00%)`（CPython `-0.54%`）。
+**"静默"不是运行时缺日志，是 ABI 合同本身允许空地址返回 0** —— 这一格解释了 301 第 3 步为什么整条链一声不出。
+
+### 二、修到那格的读数（改前二进制 md5 `43f32ec718f60f14a277c67a469ab874`，`/tmp/b416/prefix_md5.txt`）
+
+把两个点位按 gen.rs:3978 那条既有 bare-fn 判据（`func_ret_types` 命中且不在 `global_consts`）
+改下型成 `MirExpr::FuncAddr`：
+
+- acceptance 日志里 `[晨间] 计算流动性阈值` **0 次 → 1 次**（`grep -c` 实拍：`/tmp/b416/ctl_acc.bin.err:0` ↔ `/tmp/b416/run10.err:1`）；
+- 新回归用例 `tests/python_style/t454_imported_fn_as_value.z` 四条形状（MARK-A 直接调 / MARK-B 局部别名后调 / MARK-C 字面量表里取元素调 / MARK-D `fx.fn` 模块限定）**修前全红、修后全出**。
+
+### 三、同一把改动把别的读数抹成 0（交错对照，排除语料状态）
+
+| 读数 | 改前（`acc.bin`） | 改后（`acc2/acc3`） |
+|---|---|---|
+| `本地数据注入完成: market/codes/trading_days` | `12858 107 136`（`run1.err`、`run2.err`、`run5.err`、`run8.err`） | `12858 0 0`（`run6.err`、`run7.err`、`run10.err`；`run9.err` 是只开 site2 的 `acc4.bin`，见 §四 表） |
+| `交易成本: 佣金万1 \| 滑点0.10% \| 保守模式=true`（`run8.err:132`） | 有 | `万0 \| 0.00% \| false`（`run10.err:132`） |
+| 注入行的 logger 前缀 `[INFO] jq_shim: ` | 在 | **丢**（同一条行只剩 `[INFO] 本地数据注入完成…`） |
+| 进程退出码 | `acc.bin rc=0`（跑完，末行 `回测完成: 1000000 -> 0 (-100.00%)`，`ctl_acc.bin.err` 尾） | `acc4.bin`（只 site2）**rc=0 却同样 0/0**；`acc5.bin`（只 site1）**rc=139**，stdout 0 字节 |
+
+交错对照：`acc.bin`（改前）两次 107/136（`ctl_acc.bin.err`），与改后二进制**相隔数秒**的 0/0 交替出现
+⇒ 退化确定来自这次下型，不是语料/缓存状态。**受损的全是"模块初始化期"的读**，
+且它们都在那 7 个翻转名执行**之前**发生。
+
+**崩溃那一格撤回（我自己的过度归因，记录批自纠）**：写代码提交 `72462832` 时我在 t454 头注释里写了
+"并新增 SIGSEGV(rc=139)"。核对后：acceptance 的 rc=0/139 **跨跑翻是存量非确定**（批次 410 已记 2/4），
+且本批唯一实拍到 rc=139 的是 `acc5.bin`（单点位 site1），`acc4.bin`（单点位 site2）rc=0 却照样 0/0
+⇒ 崩点不能算本批新增，四格**读数**退化仍然成立。头注释已同批改正（不回改历史，只在注释里标"更正"）。
+
+### 四、三次归因落空（含我自己写错的两次，逐条记）
+
+1. **类构造器**：先断"翻转名里混进类名（`func_ret_types` 含 mangled 类构造器）是病因"，
+   还把这结论写进了代码注释。加 `!type_decls.contains_key(..)`（gen.rs:118 的 mangled 类名表，
+   判据权威在 `resolver.rs:3273-3311` 注释）后，MIR 差分里 15 处类名站点全消，
+   `12858 0 0` **依旧** ⇒ 结论作废、注释撤回。**但这条守卫本身是真发现**：
+   既有判据 `func_ret_types − global_consts` 确实会把类构造器当函数发 `FuncAddr`（独立缺陷，另批登记）。
+2. **上市日路径**（`etf_listing.py:67-70` 的 `@lru_cache` / `:129-130` 的 `cache_clear()`）：
+   归一化日志差分显示 12 条 `跳过 …上市日…` 行改前改后**逐字一致** ⇒ 排除。
+3. **语料状态**：由 §三 的交错对照排除。
+4. 附带一个不可判定的对照：在两个 `FuncAddr` 分支里补 `next_id()` 让 id 数与改前对齐
+   （`acc6.bin`），结果**崩得更早、零日志** ⇒ 这个控制组无效（padding 是反向挪编号，不是复刻改前编号）。
+
+单点位二分 + 分形对照（每张 = 一份 stderr，逐格 `grep -c` / `grep -o` 实拍）：
+
+| 二进制 | 点位 | `[晨间]` 次数 | 注入行 | `回测完成` | bytes |
+|---|---|---|---|---|---|
+| `acc.bin`（改前，`run1..5,run8`） | 无 | 0 | `12858/12856 107 136` 带 `jq_shim: ` | 在（1 次） | 18925 |
+| `acc4.bin`（**只 site2** `gen.rs:12278`，`run9`、`ctl_acc4.bin.err`） | 模块限定读 | **0** | `12858 0 0` **前缀丢** | 在、rc=0 | 18913 |
+| `acc5.bin`（**只 site1** `gen.rs:3890`，`run11`、`ctl_acc5.bin.err`） | 裸名读 | — | **整条注入行没有**（崩在注入之前） | 无、rc=139 | 14957 |
+| `acc2/acc3.bin`（两点位全开，`run6,run7,run10`） | 两形都改 | **1** | `12858 0 0` 前缀丢 | 无（未到该格） | 16249 |
+
+⇒ 二分**推翻了我上一版的结论**（原写"两把都复现 0/0 ⇒ 点位选择不是判据"）：
+退化两格（`0/0` + logger 前缀丢）**只开 site2 就复现**，且此时 `[晨间]` 仍是 0 ⇒ 退化与"修到的那格"
+**不同源**，是 site2（模块限定值读）自己那条路径带出来的；site1 单开则在注入行之前就 rc=139，
+无读数可判。这条把 §五 的候选面从"语句数不对称"收窄到 **`gen.rs:12278` 一处**。
+§三 表里的第三格 `交易成本` 万1/0.10%/true → 万0/0.00%/false **同样在只开 site2 时复现**
+（`ctl_acc4.bin.err:132`）⇒ 受损的是"模块初始化期读环境表"的三格，**为何同步塌本批未测**
+（#133 的"flatten 丢空槽 ⇒ 后续实参整体左移"只是候选，不是结论）。
+（另：site2 单独是 t454 MARK-D 必需 —— 禁用它 ⇒ t454 FAIL、套件 335/3。）
+
+### 五、MIR 定量边界 ⇒ 下一批的判据
+
+`--dump-mir` 差分（`/tmp/b416/mir_pre.txt` ↔ `mir_g.txt`）：`zeta_env_get` **790 → 768**、
+`FuncAddr` **97 → 119**、`env_set` **185 恒**；键集差分只有 **7 个名 / 22 处读**翻形。
+计数本身自洽（一处读发一条 `zeta_env_get` ⇒ −22 对 22 处翻形），**不对称在语句数**：这 22 处每处原本在
+MIR 里是 **2 条语句**（`StringLit` 键 + `zeta_env_get`）、占 2 个 id，翻成 `FuncAddr` 后是
+**0 条语句、0 个 id**（两种下型在 gen.rs 里逐字对读所得）⇒ 模块体少发约 44 条语句、少占约 44 个 id。
+"翻转名的执行点晚于受损读数点"这一条**本批未逐一验证时序**，不作判据用。
+**下一批判据**（承接 §四 收窄到 `gen.rs:12278`）：在 site2 处**保留改前那两条哑语句**
+（键 `StringLit` + 一次 `zeta_env_get` 到弃用 dest）再叠 `FuncAddr` 值，看 `107/136` 是否回来 ——
+回来即锁定"少发语句/少占 id"这一处，不回来则 §四 的收窄要再打折。
+语料侧可疑形状：`jq_wufu_local.py:202-203`、`:313-314` 的 `routines=[…]` 关键字实参列表，
+以及退化落点本身 `jq_shim.py:46-63` 那条 4 实参日志行。
+（教训同 §四 4：只 `next_id()` 补号不补语句的 `acc6.bin` 是**无效控制组**，别照抄。）
+
+### 六、落地决定与门禁
+
+编译器改动**全量回退**（`git checkout -- src/middle/mir/gen.rs`，`git diff HEAD -- src/middle/mir/gen.rs` 空），
+只上门禁登记：`tests/python_style/fnref_fixture.py`（+12）与 `t454_imported_fn_as_value.z`（+34）以
+**known-fail** 形态登记（§一~§五 读数与判据写进用例行头注释），代码提交 `72462832`。
+
+| 项 | 读数 | 对比常驻 |
+|---|---|---|
+| python_style | **335 passed / 2 failed / 7 known-fail / 0 xpass**（`gate416.log:7`），failed 仍是 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` | 335/2/**6**/0（+1 known-fail＝t454） |
+| diagnostics python_style | **106 文件 / 221 行** | 105/220（+1 文件 +1 行＝t454 的 `PY-A: imported module \`fnref_fixture\``） |
+| official | 194/194 编译 + 191 链接（缺绑定 3 条：`integration_all_features`、`quantum_basic`、`selfhost`） | 未动 |
+| 语料 | 40/40 = 100% | 未动 |
+| jit sweep | ok=176 trap=**365** total=**541** segv=0（最小 ok=163） | 176/364/540（+1 total/+1 trap＝t454 进 sweep，与 414/415 新用例同机制；ok 未回退） |
+| diff | match=120 judged=130 92.3% bad_case=0 | 未动 |
+| 断言族 | knob 23/0、swallow 6/0、import 22/0、empty_stmt 68/0、pysrc 42/0、cli_semantics 73/0、ignore_rules 19/0、mbvar 21/0 | 全 FAIL 0 |
+| clean_checkout | rc=0（2 s，rev=`7967ed00`） | 同形 |
+
+**口径披露**：本批 `gate rc` 那一行没有落盘（`gate416.log` 只 tee 了 stdout，rc 在后台任务输出里）
+⇒ 这里不写 rc 数字，只记套件 2 failed 与 `run_all.sh:576`（`py_fail != 0`）常驻红同形。
+
+**ABI 锚点**：`python3 tools/check_abi_anchors.py` = **漂移 32 / 新 11 / 消失 3（基线 250 条）rc=0**，
+与 413/414/415 逐字相同 ⇒ **不带 `--rebind`**（gen.rs 行号已回到 HEAD，本批没动任何被锚文件）。
+OPEN 净增 0：416 折进 backlog `#7`  mega 行与 roadmap 批次 415 §七（#139③ 由"未定位"升为"病因已证、修法被第二缺陷挡住"）。
+
+### 七、下一批候选（按已实测损害量）
+
+1. **§五 判据批**：`FuncAddr` 不发语句 × 实参/关键字展平（#133 族）—— 修通则 416 的下型可上门、
+   0 笔成交与 final_value 两格一起动；损害量是本批实拍的四格读数（`codes`/`trading_days`/`交易成本`/
+   logger 前缀），崩点不算在内（§三 更正）。
+2. **#139④ / #134 `codes` 唯一数跨跑抖（107/232）** —— 本批照旧看到（`12857/12856/12858` 三值行数同现）。
+3. **类构造器过 `func_ret_types − global_consts` 判据**（§四 1 的副产品，独立缺陷、未定价）。
+4. `fns[0]("x")` ⇒ `_call` NOT implemented（rc=134）、`load_metadata failed … parquet` 告警、
+   同二进制崩点非确定 —— 均已登记未定价。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
