@@ -64,6 +64,24 @@ pub struct LLVMCodegen<'ctx> {
     /// first/tied hit, so the default randomly-seeded order makes field offsets —
     /// i.e. emitted machine code, not just register numbering — vary per process.
     pub struct_defs: std::collections::BTreeMap<String, Vec<String>>,
+    /// BATCH-430: the same layouts recorded under the DEFINING MIR item instead
+    /// of the bare variant name. `struct_defs`' key is `struct_{variant}_{width}`
+    /// and `variant` carries no module identity, so `pyswap_a.Pair` and
+    /// `pyswap_b.Pair` land on ONE entry and first-writer-wins silently drops the
+    /// other field order (`y.a` read 3, `y.b` read 4 — CPython says 4 and 3).
+    /// The MIR item name is module-qualified (`pyswap_b__Pair`), so keyed by
+    /// `(item, variant, width)` the two orders coexist.
+    pub struct_ctor_layouts:
+        std::collections::BTreeMap<(String, String, usize), Vec<String>>,
+    /// Bare variants for which the collected layouts DISAGREE — the only
+    /// receivers whose per-name index map is ambiguous, and the only ones the
+    /// constructor route below is allowed to serve. Everything else keeps the
+    /// `struct_defs` answer byte-for-byte (the corpus has 0 members here;
+    /// measured by BATCH-427's `struct_defs conflict` probe).
+    pub struct_variant_collisions: std::collections::BTreeSet<String>,
+    /// Which MIR item constructed each expression id of the function being
+    /// compiled, used to pick a `struct_ctor_layouts` entry.
+    pub current_ctor_symbol: HashMap<u32, String>,
     /// Monotonic counter for unique spawn thunk wrapper names
     pub spawn_counter: u32,
     /// B1: `--strict-abi` / `ZETA_STRICT_ABI=1`
@@ -1350,6 +1368,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
             current_type_map: None,
             slot_read_ids: std::collections::HashSet::new(),
             struct_defs: std::collections::BTreeMap::new(),
+            struct_ctor_layouts: std::collections::BTreeMap::new(),
+            struct_variant_collisions: std::collections::BTreeSet::new(),
+            current_ctor_symbol: HashMap::new(),
             spawn_counter: 0,
             strict_abi: crate::diagnostics::env_flag("ZETA_STRICT_ABI"),
             abi_warn_count: 0,
@@ -1433,7 +1454,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
         // Preprocess: collect struct field definitions from all MIR expressions.
         // Store field name -> index mappings for later use in FieldAccess resolution.
         self.struct_defs.clear();
+        self.struct_ctor_layouts.clear();
+        self.struct_variant_collisions.clear();
         for mir in mirs {
+            let owner = mir.name.clone().unwrap_or_default();
             for (_, expr) in mir.exprs.iter() {
                 if let MirExpr::Struct {
                     variant: v,
@@ -1447,15 +1471,30 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     // layout. BATCH-427: make that collision audible under the
                     // same knob the read side uses (nothing else prints it).
                     if let Some(kept) = self.struct_defs.get(&type_key) {
-                        if crate::diagnostics::env_flag("ZETA_DBG_FA") && kept != &field_names {
-                            eprintln!(
-                                "ZETA-DBG struct_defs conflict key={:?} kept={:?} dropped={:?}",
-                                type_key, kept, field_names
-                            );
+                        if kept != &field_names {
+                            // BATCH-430: name the collision so the read side knows
+                            // this bare key carries NO usable answer. Only these
+                            // variants may take the constructor route below.
+                            self.struct_variant_collisions.insert(v.clone());
+                            if crate::diagnostics::env_flag("ZETA_DBG_FA") {
+                                eprintln!(
+                                    "ZETA-DBG struct_defs conflict key={:?} kept={:?} dropped={:?}",
+                                    type_key, kept, field_names
+                                );
+                            }
                         }
                     } else {
-                        self.struct_defs.insert(type_key, field_names);
+                        self.struct_defs.insert(type_key, field_names.clone());
                     }
+                    // BATCH-430: the same layout under the identity that does
+                    // distinguish them — the MIR item that built it, which is
+                    // module-qualified (`pyswap_b__Pair`) where `variant` is bare
+                    // (`Pair`). Recorded for every struct, collided or not; only
+                    // the collided variants are ever looked up here.
+                    let ctor_key = (owner.clone(), v.clone(), fds.len());
+                    self.struct_ctor_layouts
+                        .entry(ctor_key)
+                        .or_insert_with(|| field_names.clone());
                 }
             }
         }
@@ -1633,6 +1672,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
         self.locals.clear();
         self.current_type_map = Some(mir.type_map.clone());
         self.slot_read_ids = Self::collect_slot_reads(&mir.stmts);
+        self.current_ctor_symbol = Self::collect_ctor_symbols(&mir.stmts);
         let mut all_ids: Vec<u32> = self.collect_all_local_ids(mir).into_iter().collect();
         // Sorted: `HashSet` order is per-process (Rust's default hasher is randomly
         // seeded), and the loop below emits one alloca per id, so an unordered set
@@ -1674,6 +1714,60 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 .build_return(Some(&zero))
                 .unwrap();
         }
+    }
+
+    /// BATCH-430: which call produced each expression id of this function, so a
+    /// receiver whose bare class name is shared by two disagreeing layouts can be
+    /// asked WHO BUILT it (`Call.func` is the module-qualified MIR item name).
+    /// `Assign` copies the answer along, which is what `y = QB()` needs: the read
+    /// site holds the lhs id, the call recorded the rhs one.
+    fn collect_ctor_symbols(
+        stmts: &[crate::middle::mir::mir::MirStmt],
+    ) -> HashMap<u32, String> {
+        use crate::middle::mir::mir::MirStmt as S;
+        fn walk(stmts: &[S], out: &mut HashMap<u32, String>) {
+            for stmt in stmts {
+                match stmt {
+                    S::Call { func, dest, .. } => {
+                        out.insert(*dest, func.clone());
+                    }
+                    S::Assign { lhs, rhs } => {
+                        if let Some(f) = out.get(rhs) {
+                            let f = f.clone();
+                            out.insert(*lhs, f);
+                        }
+                    }
+                    S::If { then, else_, .. } => {
+                        walk(then, out);
+                        walk(else_, out);
+                    }
+                    S::For {
+                        body, else_body, ..
+                    } => {
+                        walk(body, out);
+                        walk(else_body, out);
+                    }
+                    S::While {
+                        pre_cond,
+                        body,
+                        else_body,
+                        ..
+                    } => {
+                        walk(pre_cond, out);
+                        walk(body, out);
+                        walk(else_body, out);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut out = HashMap::new();
+        // Three sweeps: an `Assign` can only copy an answer already recorded, and
+        // a source statement may sit BELOW its use (loop bodies, `If` arms).
+        for _ in 0..3 {
+            walk(stmts, &mut out);
+        }
+        out
     }
 
     /// Temps produced by a raw container-slot read (see `slot_read_ids`).
@@ -6833,10 +6927,47 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // Walk the expression chain to find the Struct definition
                 // and look up the field index by name
                 // Try variant-specific lookup first, then fall back to global search
-                let field_index = if !variant.is_empty() {
-                    self.resolve_struct_field_index_for_variant(&variant, field_count, field)
+                // BATCH-430: a BARE variant name is not an identity. When two
+                // modules both define `Pair` with the same width but a different
+                // field order, `struct_defs` keeps ONE list under `struct_Pair_2`
+                // and the per-name index map below answers for both — CPython
+                // disagrees (`y.a` read 3 / `y.b` read 4 instead of 4 / 3). Ask
+                // WHO BUILT this receiver instead, keyed by the module-qualified
+                // MIR item name. Guarded by the collision set: a variant with no
+                // disagreement has exactly one layout, so every other read keeps
+                // the `struct_defs` answer unchanged.
+                let ctor_hit: Option<(String, u32)> = if variant.is_empty()
+                    || !self.struct_variant_collisions.contains(&variant)
+                {
+                    None
                 } else {
-                    self.resolve_struct_field_index(base, field, exprs)
+                    self.current_ctor_symbol
+                        .get(base)
+                        .and_then(|sym| {
+                            self.struct_ctor_layouts
+                                .get(&(sym.clone(), variant.clone(), field_count))
+                                .and_then(|fields| {
+                                    fields
+                                        .iter()
+                                        .position(|n| n == field)
+                                        .map(|i| (sym.clone(), i as u32))
+                                })
+                        })
+                };
+                if let Some((sym, idx)) = &ctor_hit {
+                    if crate::diagnostics::env_flag("ZETA_DBG_FA") {
+                        eprintln!(
+                            "ZETA-DBG FA ctor-route base={} variant={:?} via={:?} idx={}",
+                            base, variant, sym, idx
+                        );
+                    }
+                }
+                let field_index = match ctor_hit {
+                    Some((_, idx)) => idx,
+                    None if !variant.is_empty() => {
+                        self.resolve_struct_field_index_for_variant(&variant, field_count, field)
+                    }
+                    None => self.resolve_struct_field_index(base, field, exprs),
                 };
                 // If still out of range, fall back to numeric parse
                 let field_index = if field_index >= field_count as u32 {

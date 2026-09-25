@@ -12,7 +12,13 @@
 // "语料 0" 是负断言，其"探针不是死代码"由本夹具正面供证。
 // expect 取 CPython 3.12 语义正确值：把上面两个夹具文件的源码当场 `exec` 给 `python3`（只把类名
 // 改成 PairA/PairB 以避开同名遮蔽，字段序一字未动）⇒ `x 1 2 / y 4 3 / done`。
-// known-fail: 键为裸类别名 ⇒ 跨模块同名类别互换字段（真修方向＝按带模块的全名分键，见 427 记录头名）
+// 批次 430（真修）：读侧不再问"这个裸类别名对应哪份字段序"——撞车时**没有正确答案可问**。
+// 收集点同时按**构造方**（带模块的 MIR 条目名 `pyswap_b__Pair`）记一份布局，并记下哪些裸名
+// 的几份布局互相不一致；只有落在不一致集合里的类别，读侧才改问"这个值是哪个构造调用造出来的"
+// （`MirStmt::Call.func` ＋ `Assign` 传递），按那份布局解索引。没有撞车的类别一条指令都没重排：
+// 语料侧 `ZETA-DBG FA ctor-route` **0 次**、`--emit-llvm` 两侧 md5 逐字节相同（430 记录）。
+// 本夹具的实拍：`FA ctor-route base=24 variant="Pair" via="pyswap_a__Pair" idx=0/1`、
+// `base=26 … via="pyswap_b__Pair" idx=1/0`，运行输出与 CPython 一致。
 from pyswap_a import Pair as QA
 from pyswap_b import Pair as QB
 
