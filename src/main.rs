@@ -400,6 +400,62 @@ fn report_stub_calls(mirs: &[Mir]) {
     }
 }
 
+/// Batch 431: the other half of `--report-stubs` — the call targets that
+/// lowering INVENTED by degrading `receiver.member(...)` into a bare symbol,
+/// i.e. the sites whose binding is decided by the linker, not by this compiler.
+///
+/// Read-only for a measured reason: the first attempt at closing this family
+/// rebound those names to a raise inside codegen, and the acceptance corpus died
+/// at its first `df.clip(...)` — `clip` is a degraded member spelling that
+/// resolves to a REAL implementation in `zeta_runtime_c.o` (verified with `nm`,
+/// and the abort was caught live under lldb at
+/// `backend_datasrc_data_cleaning__validate_and_repair_stock_ohlcv`). Codegen
+/// cannot see the linked objects' symbol sets, so it cannot tell "binds a real
+/// runtime implementation" from "binds libSystem with the wrong signature"
+/// (measured: 8 and 23 of the 129 corpus sites respectively) and any rebind
+/// there destroys working calls. This report states the exposure instead of
+/// acting on it.
+///
+/// Counts are per MIR BODY, not per call site — `Mir::member_bare_calls` is a
+/// set, so a name used twice in one body reads once. `also-called-plain` marks
+/// the names that the SAME string reaches through an ordinary `name(...)` call:
+/// per-name judgements on those would sweep up the ordinary spelling too.
+fn report_bare_member_calls(mirs: &[Mir]) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut bodies: BTreeMap<String, usize> = BTreeMap::new();
+    let mut plain: BTreeSet<&str> = BTreeSet::new();
+    for m in mirs {
+        for n in &m.member_bare_calls {
+            *bodies.entry(n.clone()).or_insert(0) += 1;
+        }
+        for n in &m.plain_call_names {
+            plain.insert(n);
+        }
+    }
+    if bodies.is_empty() {
+        return;
+    }
+    let both: usize = bodies.keys().filter(|n| plain.contains(&n[..])).count();
+    eprintln!(
+        "bare-member report: {} member call(s) degraded to a bare symbol, bound only at link time ({} of them also spelled as a plain call)",
+        bodies.len(),
+        both
+    );
+    for (name, n) in &bodies {
+        eprintln!(
+            "  {:<44} in {:<3} body(s) {}",
+            name,
+            n,
+            if plain.contains(&name[..]) {
+                "also-called-plain"
+            } else {
+                "member-only"
+            }
+        );
+    }
+}
+
 /// PY-A: `parse_zeta` is built on nom's `many0`, which STOPS at the first
 /// top-level item it cannot parse and returns the prefix it managed to parse.
 /// A caller that ignores the leftover (as the CLI used to) silently compiles a
@@ -535,7 +591,8 @@ Options:
   --dump-mir            print canonical MIR instead of building
   --emit-llvm           print LLVM IR instead of building (with -o: write IR there)
   --report-untyped      list unannotated (dyn) params instead of building
-  --report-stubs        list the fake-value stubs this program calls
+  --report-stubs        list the fake-value stubs this program calls,
+                      and the member calls lowered to a bare symbol
   --no-link             with -o: stop after the object file, do not link
   --strict-abi          fail on non-allowlisted ABI casts
   --target <triple>     `wasm32` / `wasm32-wasi` link via wasm-ld; anything else is native
@@ -911,6 +968,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if report_stubs {
                     report_stub_calls(&all_mirs);
+                    report_bare_member_calls(&all_mirs);
                 }
 
                 let context = Context::create();

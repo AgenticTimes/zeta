@@ -225,5 +225,26 @@ done
 want "宣传的长选项没有一个是解析器不认的（帮助不说谎）" 0 "$( [ -z "$LIE" ] && echo 0 || echo 1 )"
 if [[ -n "$LIE" ]]; then echo "       谎报项：$LIE"; fi
 
+# ── 批次 431 翼：`--report-stubs` 的 bare-member 段 ──
+# 下型把 `recv.member(...)` 在接收者类型给不出唯一方法时降级成**裸名调用**，于是这条
+# 调用的绑定对象由链接器决定，编译器看不见（实测 40 模块 acceptance 语料：129 个降级
+# 调用点 / 68 个名字，其中 8 个绑到 zeta_runtime_c.o 的真实现、23 个绑到 libSystem 的
+# 同名函数）。本段只出声、不改出码 —— 同一批评测里试过在 codegen 里把这些名字改判成
+# 抛异常的桩，acceptance 运行在第一个 df.clip(...) 处死掉（clip 恰好绑的是真实现），
+# 该尝试已回退，负结果记在 roadmap 批次 431。
+echo "== 批次 431：降级成裸名的成员调用要点名（绑定权在链接器，不在编译器）"
+BM="$TMP/bm_member.z"; printf 'def f(v):\n    return v.nonesuch(3)\n\nprint(f(1))\n' > "$BM"
+BMB="$TMP/bm_both.z";  printf 'def f(v):\n    return v.nonesuch(3)\n\ndef g():\n    return nonesuch(4)\n\nprint(f(1), g())\n' > "$BMB"
+BM0="$TMP/bm_none.z";  printf 'def f(v):\n    return v + 1\n\nprint(f(1))\n' > "$BM0"
+BMH="$ZETAC"
+want "裸名降级段出声" 1 "$("$BMH" --report-stubs "$BM" 2>&1 | grep -c '^bare-member report: 1 member call')"
+want "降级成员名被点名（member-only）" 1 "$("$BMH" --report-stubs "$BM" 2>&1 | grep -c '^  nonesuch .*member-only$')"
+want "同名另有普通调用时要标 also-called-plain" 1 "$("$BMH" --report-stubs "$BMB" 2>&1 | grep -c '^  nonesuch .*also-called-plain$')"
+want "普通调用数进计数行" 1 "$("$BMH" --report-stubs "$BMB" 2>&1 | grep -c '1 of them also spelled as a plain call')"
+# 沉默翼的正证据：同一份夹具的 MIR 转储确实有体（0 不是因为提前失败或根本没下型）
+want "无降级成员时不出声" 0 "$("$BMH" --report-stubs "$BM0" 2>&1 | grep -c 'bare-member report')"
+want "沉默夹具的对照：下型真跑了（MIR 有体）" 1 "$("$BMH" --dump-mir "$BM0" 2>/dev/null | grep -c '^== MIR ' | sed 's/^[1-9].*/1/')"
+want "沉默夹具的对照：rc=0" 0 "$(rc0 "$BMH" --report-stubs "$BM0")"
+
 echo "cli_semantics: rc=$rc"
 exit $rc

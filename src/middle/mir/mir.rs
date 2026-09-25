@@ -23,6 +23,22 @@ pub struct Mir {
     /// True if this is an extern/FFI declaration (empty body + no ret expr).
     /// Distinguishes extern fns from user-defined empty functions.
     pub is_extern: bool,
+    /// Batch 431: the member names that lowering degraded to a BARE call target
+    /// because no unique method matched the receiver (`recv.member(...)` where
+    /// the receiver type is known but its candidate set is not a single method,
+    /// or the receiver has no type at all). Lowering is the only place that knows
+    /// the call was written as a member access — at codegen the degraded target
+    /// is byte-for-byte the same string an ordinary `name(...)` call uses
+    /// (measured: 129 member-degraded rows vs 1667 ordinary-call rows in one
+    /// corpus compile), so the fact has to travel in the MIR or it cannot be
+    /// recovered. `--report-stubs` reads it; see `report_bare_member_calls`.
+    pub member_bare_calls: std::collections::BTreeSet<String>,
+    /// Batch 431: names this body calls as a plain function (`foo(...)`, written
+    /// with no receiver). A name in BOTH sets has two spellings that lower to the
+    /// same string, so any per-name judgement on `member_bare_calls` would sweep
+    /// up the ordinary call site too — the report says so per name instead of
+    /// letting a reader assume per-name == per-site.
+    pub plain_call_names: std::collections::BTreeSet<String>,
 }
 
 impl Mir {

@@ -114,6 +114,14 @@ pub struct MirGen {
     /// Tracks pointee element width (in bytes) for pointer-typed expression IDs.
     /// Populated by the offset/add handler, used when generating Store/Deref.
     pointee_widths: HashMap<u32, u8>,
+    /// Batch 431: bare call targets this body produced by degrading a
+    /// `receiver.member(...)` (see `note_member_bare`). Moved into
+    /// `Mir::member_bare_calls` so a later layer can tell a degraded member from
+    /// an ordinary call to a same-spelled function.
+    member_bare_calls: std::collections::BTreeSet<String>,
+    /// Batch 431: bare call targets this body reached as an ordinary call
+    /// (`foo(...)` with no receiver). Moved into `Mir::plain_call_names`.
+    plain_call_names: std::collections::BTreeSet<String>,
     /// Type declarations seen during lowering (structs, enums, aliases).
     type_decls: HashMap<String, TypeDecl>,
     /// Type declarations collected by the Resolver across the whole program
@@ -259,6 +267,8 @@ impl MirGen {
             last_loop_result: None,
             py_entry: false,
             generated_mirs: vec![],
+            member_bare_calls: std::collections::BTreeSet::new(),
+            plain_call_names: std::collections::BTreeSet::new(),
             fn_depth: 0,
             closure_ns: String::new(),
             closure_seq: 0,
@@ -1509,6 +1519,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             ctfe_consts: std::mem::take(&mut self.ctfe_consts),
             type_map: std::mem::take(&mut self.type_map),
             global_consts: std::mem::take(&mut self.global_consts),
+            member_bare_calls: std::mem::take(&mut self.member_bare_calls),
+            plain_call_names: std::mem::take(&mut self.plain_call_names),
         }
     }
 
@@ -3709,6 +3721,21 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             _ => return idx_id,
         };
         self.emit_norm_index(len_id, idx_id)
+    }
+
+    /// Batch 431: remember that a `receiver.member(...)` call degraded to the
+    /// bare symbol `member`. Lowering is the only layer that knows the call was
+    /// written as a member access — by codegen the target string is identical to
+    /// what an ordinary `member(...)` call emits, so the fact must be recorded
+    /// here or it is gone. A call with no receiver is the ordinary spelling of
+    /// the same string, recorded in `plain_call_names` so a per-name judgement
+    /// can say which names have both.
+    fn note_member_bare(&mut self, method: &str, has_receiver: bool) {
+        if has_receiver {
+            self.member_bare_calls.insert(method.to_string());
+        } else {
+            self.plain_call_names.insert(method.to_string());
+        }
     }
 
     fn lower_expr(&mut self, expr: &AstNode) -> u32 {
@@ -11314,10 +11341,12 @@ call, no NULL-handle dereference).",
                             (entry.symbol.clone(), false, false)
                         } else {
                             // For inherent methods, use plain method name.
+                            self.note_member_bare(method, receiver.is_some());
                             (method.clone(), false, false)
                         }
                     }
                 } else {
+                    self.note_member_bare(method, receiver.is_some());
                     (method.clone(), false, false)
                 };
 
@@ -14847,6 +14876,8 @@ call, no NULL-handle dereference).",
             ctfe_consts: std::mem::take(&mut self.ctfe_consts),
             type_map: std::mem::take(&mut self.type_map),
             global_consts: std::mem::take(&mut self.global_consts),
+            member_bare_calls: std::mem::take(&mut self.member_bare_calls),
+            plain_call_names: std::mem::take(&mut self.plain_call_names),
         }
     }
 
