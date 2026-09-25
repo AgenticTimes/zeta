@@ -1,0 +1,48 @@
+// 批次 425（3.2 Lowering／("", 2) 兜底 + 索引夹回 0）：接收者声明类型未知时，字段读用**字段名**反查布局。
+// `codegen.rs` 的 FieldAccess 臂在拿不到接收者类型时退成 `(variant="", field_count=2)`：加载宽度写死 2 个
+// word，而索引来自 `resolve_struct_field_index`（全量扫 `struct_defs`，命中的是**别的**类别的声明序）。
+// 于是索引 >= 2 的字段被 `:6700` 的区间检查夹回 0 ⇒ 读到接收者自己的第一个字段，下一跳把那个整数当句柄
+// 解引用 ⇒ 段错误。语料 28 处夹回成员（`portfolio`/`trading_dates`/`avg_cost`/`paused`/`low_limit`/
+// `context`/`routines`/`bar_types`/`closeable_amount`），base 声明类型读数是 I64／Tuple([])／PyDynamic。
+// 缺类型证据的那条路（回调注册的例程拿不到调用点证据）＝ 424 §八 第 2 格，本批不绕过去修它，
+// 而是在**读侧**不再掷硬币：只有当所有声明了这个字段名的 struct 在 (variant, 宽度, 索引) 上完全一致时
+// 才采纳该布局；一旦有分歧就退回旧行为（不猜）。`struct_defs` 是 BTreeMap ⇒ 扫描序确定。
+// 本夹具把语料形状压成 `go(show, k)`（`show` 的形参 `t` 因此恒 dyn）：`t.leaf` 扫到 idx 3、
+// `t.leaf.gamma` 扫到 idx 2，两处都被夹回 0。
+// 改前/改后二进制（同目录 `target/release/`，只差本批的 `src/backend/codegen/codegen.rs`）实拍：
+//   改前 compile=0 run=**139**，stdout **0 行**（三条 expect 一条都落不了地）
+//   改后 compile=0 run=0，stdout 三行如 expect，两跑逐字节相同
+// stdout 与 CPython 3.12 当场对数逐字相同（`python3` 直接跑本文件的去掉注释版）。
+// `print("x", t.x)` 是对照行：索引本来就是 0，改前改后都必须读对 —— 它证明句柄确实是那个对象，
+// 错的只是被夹回的索引。
+class Leaf:
+    def __init__(self):
+        self.alpha = 1
+        self.beta = 2
+        self.gamma = 300
+
+
+class Ctx:
+    def __init__(self, x: int, y: int, z: int, leaf: Leaf):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.leaf = leaf
+
+
+def show(t):
+    print("gamma", t.leaf.gamma)
+    print("x", t.x)
+
+
+def go(f, arg):
+    f(arg)
+
+
+k = Ctx(x=11, y=22, z=33, leaf=Leaf())
+go(show, k)
+print("done")
+
+// expect: gamma 300
+// expect: x 11
+// expect: done

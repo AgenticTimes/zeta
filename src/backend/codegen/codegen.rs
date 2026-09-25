@@ -5907,6 +5907,45 @@ impl<'ctx> LLVMCodegen<'ctx> {
         0
     }
 
+    /// Recover a struct layout from the FIELD NAME alone, for a receiver whose
+    /// declared type is unknown. Accepted only when EVERY struct that declares
+    /// the field agrees on the same variant, width and index — the exact
+    /// condition under which the word being read is the same word whichever
+    /// object the handle turns out to be. `struct_defs` is a BTreeMap and keys
+    /// are always `struct_{variant}_{fields.len()}` (see the collector), so the
+    /// scan is deterministic. Disagreement returns `None`: the caller keeps the
+    /// stand-in rather than guessing between two layouts.
+    fn resolve_struct_layout_by_field(&self, field_name: &str) -> Option<(String, usize)> {
+        struct Agree(String, usize, usize);
+        let mut agreed: Option<Agree> = None;
+        for (key, fields) in self.struct_defs.iter() {
+            let inner = match key.strip_prefix("struct_") {
+                Some(i) => i,
+                None => continue,
+            };
+            let (variant, cnt_s) = match inner.rsplit_once('_') {
+                Some(t) => t,
+                None => continue,
+            };
+            if variant.is_empty() || cnt_s.parse::<usize>().is_err() {
+                continue;
+            }
+            let idx = match fields.iter().position(|f| f == field_name) {
+                Some(i) => i,
+                None => continue,
+            };
+            match &agreed {
+                Some(a) => {
+                    if a.0 != variant || a.1 != fields.len() || a.2 != idx {
+                        return None;
+                    }
+                }
+                None => agreed = Some(Agree(variant.to_string(), fields.len(), idx)),
+            }
+        }
+        agreed.map(|Agree(v, c, _)| (v, c))
+    }
+
     fn gen_expr(
         &mut self,
         expr: &MirExpr,
@@ -6646,7 +6685,22 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         })
                     }) {
                         Some(vc) => vc,
-                        None => (String::new(), 2),
+                        // BATCH-425: before falling back to the 2-word stand-in,
+                        // ask the field NAME which layout it belongs to. The
+                        // stand-in loaded 2 words while the index came from a
+                        // global scan of every struct, so any field at index >= 2
+                        // was clamped to 0 by the range check below — the read
+                        // returned the receiver's OWN first field and the next
+                        // hop dereferenced that integer (measured: `t.leaf.gamma`
+                        // scanned to idx 3 and idx 2, both clamped to 0, and the
+                        // program died with rc=139 before printing anything).
+                        // 28 such clamps are live in the corpus (`portfolio`,
+                        // `trading_dates`, `avg_cost`, `paused`, …); 17 of them
+                        // name exactly one layout, the other 11 name two
+                        // classes that disagree and keep the old behaviour.
+                        None => self
+                            .resolve_struct_layout_by_field(field)
+                            .unwrap_or((String::new(), 2)),
                     }
                 };
 
