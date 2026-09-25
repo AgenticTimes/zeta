@@ -1,0 +1,47 @@
+// 批次 433（3.2 Lowering／字段**写**侧）：构造之后的 `obj.field = v` 落在哪一格，写侧和读侧各问各的。
+// 读侧（`MirExpr::FieldAccess`）从批次 425/426/430 起有一条完整的布局判定链（跟着接收者的构造表达
+// 式走 → 退到声明类型 → 再退到"按字段名反查布局"→ 最后才是 `("", 2)` 替身 + 索引夹回）；
+// 写侧（`MirStmt::StructFieldStore`，`codegen.rs` 出码臂）却另跑一条 `struct_defs.values().find_map(..)`
+// 的**首个命中**扫描，`unwrap_or(0)`，且从不检查接收者有几格。两套实现点对同一张"名字→槽位"表
+// 给两个答案 ⇒ 写在读侧看不到的格子里：值丢了，还越出接收者的堆块。
+// 本夹具正是这个形状：`shared` 同时被 `Alpha`（3 格，索引 2）和 `Zeta`（2 格，索引 0）声明。
+// `Zeta()` 的接收者只有 16 字节，改前扫描先撞上 `Alpha` 那条名单 ⇒ `z.shared = 99` 写到偏移 16，
+// 既没进 `z` 的槽（读回 10），又写到那块堆内存之外（越界写）。改后写侧改用同一条判定
+// （`resolve_field_slot`，`codegen.rs:6111`），索引 0 ⇒ 与 CPython 一致。
+// 注意症状只在**构造之后**的属性赋值：`__init__` 里的 `self.x = ..` 走 `MirStmt::StructNew`，
+// 用的是构造表达式自己的顺序，不受这条扫描影响（批次 433 定位时先写的夹具把赋值全放在
+// `__init__` 里，改前改后输出一样，红不出来）。
+// expect 取 CPython 3.14.5 语义正确值（`/tmp/b433/cp/g2.py` 同会话实拍）：
+// `z 99 20 / a 1 2 3 / b 1 2 3 / done`。
+// 语料侧（`~/source/quant/REasyQuant/strategies/code/jq_wufu_local.py`，258 条 field_slot 指令／
+// 129 条写语句）本批实测改到 2 条语句 3 条指令：`self._current_date = str(trading_date)`
+// （`backend/strategy/nautilus_backend.py:113`）偏移 16→32，`impl._backend = backend`
+// （`jq_wufu_local.py:336`）偏移 72→0；其余 255 条指令逐字节不变。
+// 套件侧 `tests/python_style/*.z` 360 个输入共 38 条 field_slot 指令，本批 **0** 条改槽位
+// ——本夹具是套件里第一个成员；唯一 IR 差异出现在 `t23_generic_instantiation.ll` 的函数**排放次序**
+// （`@id` 换了位置），已量到噪声底：同一个改后二进制对该输入三遍跑出两种 md5
+// （r1=r2=e5b4f1…、r3=55d883…＝改前那份），故不计入本批位移。
+class Alpha:
+    def __init__(self):
+        self.p = 1
+        self.q = 2
+        self.shared = 3
+
+class Zeta:
+    def __init__(self):
+        self.shared = 10
+        self.other = 20
+
+a = Alpha()
+z = Zeta()
+b = Alpha()
+z.shared = 99
+print("z", z.shared, z.other)
+print("a", a.p, a.q, a.shared)
+print("b", b.p, b.q, b.shared)
+print("done")
+
+// expect: z 99 20
+// expect: a 1 2 3
+// expect: b 1 2 3
+// expect: done

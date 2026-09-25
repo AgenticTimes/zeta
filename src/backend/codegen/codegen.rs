@@ -5816,11 +5816,15 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // base.field = val — store through the heap struct pointer.
                 // Fields are 8-byte slots at offset index*8 (matches StructNew).
                 let base_i64 = self.gen_expr_safe(base_id, exprs).into_int_value();
-                let field_index = self.struct_defs.values().find_map(|fields| {
-                    fields.iter().position(|n| n == field).map(|i| i as u64)
-                });
-                let idx = field_index.unwrap_or(0);
-                let offset = self.i64_type.const_int(idx * 8, false);
+                // BATCH-433: the store asked its OWN question before — a first-match
+                // scan over `struct_defs` with no width check and `unwrap_or(0)`. On a
+                // 2-field receiver whose field name is also declared at index 2 by an
+                // alphabetically earlier class, `self.shared = 99` landed on offset 16
+                // of a 16-byte block: the write was lost AND it overran the allocation,
+                // while reading `self.shared` answered index 0. Read and write must not
+                // be two implementations of one name→slot map; use the read's answer.
+                let (_, _, idx) = self.resolve_field_slot(*base_id, field, exprs, "write");
+                let offset = self.i64_type.const_int(idx as u64 * 8, false);
                 let slot = self.builder.build_int_add(base_i64, offset, "field_slot").unwrap();
                 let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
                 let ptr = self.builder.build_int_to_ptr(slot, ptr_type, "field_ptr").unwrap();
@@ -6107,6 +6111,239 @@ impl<'ctx> LLVMCodegen<'ctx> {
             .all(|d| d.2 == first.2)
             .then(|| decl.iter().min_by_key(|d| d.1).map(|d| (d.0.clone(), d.1)))?
     }
+
+    /// BATCH-433: the one layout+index answer for `base.field`, shared by the
+    /// READ (`MirExpr::FieldAccess`) and the WRITE (`MirStmt::StructFieldStore`).
+    /// The write used to run its own scan of `struct_defs` and take the FIRST layout
+    /// that mentions the name, with no width check — on a 2-field receiver whose
+    /// field name is also declared at index 2 by an alphabetically earlier class the
+    /// store went to offset 16 of a 16-byte block (the write was LOST and it overran
+    /// the allocation) while reading the same field answered index 0.
+    ///
+    /// Returns `(variant, field_count, field_index)`; the index comes back already
+    /// clamped the way the read clamps it, so the two sides cannot disagree about
+    /// which slot a name lives in. `role` only labels the ZETA_DBG_FA probe.
+    fn resolve_field_slot(
+        &self,
+        base: u32,
+        field: &str,
+        exprs: &HashMap<u32, MirExpr>,
+        role: &str,
+    ) -> (String, usize, u32) {
+                // Trace through Var chain to find the original Struct expression
+                let mut base_expr = &exprs[&base];
+                for _ in 0..10 {
+                    match base_expr {
+                        MirExpr::Var(v) => {
+                            base_expr = match exprs.get(v) {
+                                Some(e) => e,
+                                None => break,
+                            };
+                        }
+                        MirExpr::FieldAccess { base: inner, .. } => {
+                            base_expr = match exprs.get(inner) {
+                                Some(e) => e,
+                                None => break,
+                            };
+                        }
+                        _ => break,
+                    }
+                }
+
+                // Determine struct type from the Struct expression; when the base
+                // is not a literal Struct (a function PARAMETER or a call result)
+                // fall back to the base's DECLARED type name — the old `("", 2)`
+                // fallback made the field index a nondeterministic global scan and
+                // the loaded struct a 2-field stand-in (measured: `df.copy()`'s
+                // `self.data` read crashed in DataFrame::copy).
+                let (variant, field_count) = if let MirExpr::Struct { variant, fields } = base_expr
+                {
+                    (variant.clone(), fields.len())
+                } else {
+                    let declared = self
+                        .current_type_map
+                        .as_ref()
+                        .and_then(|tm| tm.get(&base))
+                        .and_then(|t| match t {
+                            Type::Named(n, _) => Some(n.clone()),
+                            _ => None,
+                        });
+                    let declared_dbg = declared.clone();
+                    match declared.and_then(|n| {
+                        // `pandas__DataFrame` / `pandas.DataFrame` -> `DataFrame`
+                        let plain = n.rsplit("__").next().unwrap_or(&n).to_string();
+                        let last = n.rsplit('.').next().unwrap_or(&n).to_string();
+                        let mut cands = vec![n.clone()];
+                        if plain != n {
+                            cands.push(plain);
+                        }
+                        if last != n && !cands.contains(&last) {
+                            cands.push(last);
+                        }
+                        // Only trust the declared type when the matched struct
+                        // ACTUALLY has this field: otherwise keep the old
+                        // `("", 2)` behaviour. (A first attempt returned a struct
+                        // that did not contain the field, built a 0-field struct
+                        // type and panicked with `ExtractOutOfRange`.)
+                        let want = field.to_string();
+                        // Keys are `struct_{variant}_{count}`. A CROSS-MODULE
+                        // declared name is module-mangled (`libg4___G` for class
+                        // `_G` in `libg4`), so the old `struct_{cand}_` prefix
+                        // match missed and `g.c` clamped to the `("", 2)`
+                        // stand-in — every field at index >= 2 read offset 0
+                        // (`len(g.c)` returned `len(g.a)`, measured in the
+                        // local wufu driver: pool writes were then concat'd
+                        // from stale operands). Accept a key whose variant is a
+                        // `_`-suffix of the declared name, and return the REAL
+                        // variant so the per-variant index lookup hits.
+                        cands.into_iter().find_map(|cand| {
+                            struct Hit(String, usize);
+                            let mut best: Option<Hit> = None;
+                            for (k, fields) in self.struct_defs.iter() {
+                                let inner = match k.strip_prefix("struct_") {
+                                    Some(i) => i,
+                                    None => continue,
+                                };
+                                let cnt_s = match inner.rsplit_once('_') {
+                                    Some((_, c)) => c,
+                                    None => continue,
+                                };
+                                let cnt = match cnt_s.parse::<usize>() {
+                                    Ok(c) => c,
+                                    Err(_) => continue,
+                                };
+                                let v = &inner[..inner.len() - cnt_s.len() - 1];
+                                let matched =
+                                    v == cand || cand.ends_with(&format!("_{}", v));
+                                if matched && fields.iter().any(|f| *f == want) {
+                                    let total = fields.len().max(cnt).max(1);
+                                    if best.as_ref().map_or(true, |b| total > b.1) {
+                                        best = Some(Hit(v.to_string(), total));
+                                    }
+                                }
+                            }
+                            best.map(|Hit(v, total)| (v, total))
+                        })
+                    }) {
+                        Some(vc) => vc,
+                        // BATCH-425/426: before falling back to the 2-word
+                        // stand-in, ask the field NAME which layout it belongs
+                        // to. The stand-in loaded 2 words while the index came
+                        // from a global scan of every struct, so any field at
+                        // index >= 2 was clamped to 0 by the range check below —
+                        // the read returned the receiver's OWN first field and
+                        // the next hop dereferenced that integer (measured:
+                        // `t.leaf.gamma` scanned to idx 3 and idx 2, both
+                        // clamped, rc=139 before printing anything). 28 clamps
+                        // were live in the corpus: 425's same-variant-and-width
+                        // rule took 17, 426's index-agreement rule takes 5 more
+                        // (`paused` x3, `low_limit` x2 — now Bar w4, idx 3 and
+                        // 2). The 6 left are 3 names x2: their index disagrees.
+                        None => {
+                            let recovered = self.resolve_struct_layout_by_field(field);
+                            // BATCH-427: when BOTH routes decline, the read goes
+                            // on silently against the stand-in, so say who
+                            // disagrees. Measured on the corpus: 152 of 529 reads
+                            // get here, and only 6 of them print a clamp — the
+                            // other 146 name a field NO collected struct declares
+                            // (`declarers=0`, e.g. `columns`, `positions`,
+                            // `error_code`), so the global scan lands on index 0
+                            // and the read silently returns the receiver's first
+                            // word without ever tripping the range check. The
+                            // clamp count under-reported this population by 25x.
+                            if recovered.is_none() && crate::diagnostics::env_flag("ZETA_DBG_FA") {
+                                let decls = self.struct_field_decls(field);
+                                eprintln!(
+                                    "ZETA-DBG FA decls field={} declarers={} decls={:?}",
+                                    field,
+                                    decls.len(),
+                                    decls
+                                );
+                            }
+                            recovered.unwrap_or((String::new(), 2))
+                        }
+                    }
+                };
+
+                let dbg_decl = self
+                    .current_type_map
+                    .as_ref()
+                    .and_then(|tm| tm.get(&base))
+                    .cloned();
+                if crate::diagnostics::env_flag("ZETA_DBG_FA") {
+                    eprintln!(
+                        "ZETA-DBG FA {} field={} variant={:?} field_count={} base_ty={:?} keys={:?}",
+                        role,
+                        field,
+                        variant,
+                        field_count,
+                        dbg_decl,
+                        self.struct_defs.keys().collect::<Vec<_>>()
+                    );
+                }
+
+                // Extract field based on name
+                // Walk the expression chain to find the Struct definition
+                // and look up the field index by name
+                // Try variant-specific lookup first, then fall back to global search
+                // BATCH-430: a BARE variant name is not an identity. When two
+                // modules both define `Pair` with the same width but a different
+                // field order, `struct_defs` keeps ONE list under `struct_Pair_2`
+                // and the per-name index map below answers for both — CPython
+                // disagrees (`y.a` read 3 / `y.b` read 4 instead of 4 / 3). Ask
+                // WHO BUILT this receiver instead, keyed by the module-qualified
+                // MIR item name. Guarded by the collision set: a variant with no
+                // disagreement has exactly one layout, so every other read keeps
+                // the `struct_defs` answer unchanged.
+                let ctor_hit: Option<(String, u32)> = if variant.is_empty()
+                    || !self.struct_variant_collisions.contains(&variant)
+                {
+                    None
+                } else {
+                    self.current_ctor_symbol
+                        .get(&base)
+                        .and_then(|sym| {
+                            self.struct_ctor_layouts
+                                .get(&(sym.clone(), variant.clone(), field_count))
+                                .and_then(|fields| {
+                                    fields
+                                        .iter()
+                                        .position(|n| n == field)
+                                        .map(|i| (sym.clone(), i as u32))
+                                })
+                        })
+                };
+                if let Some((sym, idx)) = &ctor_hit {
+                    if crate::diagnostics::env_flag("ZETA_DBG_FA") {
+                        eprintln!(
+                            "ZETA-DBG FA ctor-route base={} variant={:?} via={:?} idx={}",
+                            base, variant, sym, idx
+                        );
+                    }
+                }
+                let field_index = match ctor_hit {
+                    Some((_, idx)) => idx,
+                    None if !variant.is_empty() => {
+                        self.resolve_struct_field_index_for_variant(&variant, field_count, field)
+                    }
+                    None => self.resolve_struct_field_index(&base, field, exprs),
+                };
+                // If still out of range, fall back to numeric parse
+                let field_index = if field_index >= field_count as u32 {
+                    let fb = field.parse::<u32>().unwrap_or(0);
+                    if crate::diagnostics::env_flag("ZETA_DBG_FA") {
+                        eprintln!("ZETA-DBG   idx {} >= count {} -> fallback {}", field_index, field_count, fb);
+                    }
+                    fb
+                } else {
+                    field_index
+                };
+                if crate::diagnostics::env_flag("ZETA_DBG_FA") {
+                    eprintln!("ZETA-DBG   final idx={}", field_index);
+                }
+        (variant, field_count, field_index)
+    }
+
 
     fn gen_expr(
         &mut self,
@@ -6751,156 +6988,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     return self.i64_type.const_int(0, true).into();
                 };
 
-                // Trace through Var chain to find the original Struct expression
-                let mut base_expr = &exprs[base];
-                for _ in 0..10 {
-                    match base_expr {
-                        MirExpr::Var(v) => {
-                            base_expr = match exprs.get(v) {
-                                Some(e) => e,
-                                None => break,
-                            };
-                        }
-                        MirExpr::FieldAccess { base: inner, .. } => {
-                            base_expr = match exprs.get(inner) {
-                                Some(e) => e,
-                                None => break,
-                            };
-                        }
-                        _ => break,
-                    }
-                }
+                let (variant, field_count, field_index) =
+                    self.resolve_field_slot(*base, field, exprs, "read");
 
-                // Determine struct type from the Struct expression; when the base
-                // is not a literal Struct (a function PARAMETER or a call result)
-                // fall back to the base's DECLARED type name — the old `("", 2)`
-                // fallback made the field index a nondeterministic global scan and
-                // the loaded struct a 2-field stand-in (measured: `df.copy()`'s
-                // `self.data` read crashed in DataFrame::copy).
-                let (variant, field_count) = if let MirExpr::Struct { variant, fields } = base_expr
-                {
-                    (variant.clone(), fields.len())
-                } else {
-                    let declared = self
-                        .current_type_map
-                        .as_ref()
-                        .and_then(|tm| tm.get(base))
-                        .and_then(|t| match t {
-                            Type::Named(n, _) => Some(n.clone()),
-                            _ => None,
-                        });
-                    let declared_dbg = declared.clone();
-                    match declared.and_then(|n| {
-                        // `pandas__DataFrame` / `pandas.DataFrame` -> `DataFrame`
-                        let plain = n.rsplit("__").next().unwrap_or(&n).to_string();
-                        let last = n.rsplit('.').next().unwrap_or(&n).to_string();
-                        let mut cands = vec![n.clone()];
-                        if plain != n {
-                            cands.push(plain);
-                        }
-                        if last != n && !cands.contains(&last) {
-                            cands.push(last);
-                        }
-                        // Only trust the declared type when the matched struct
-                        // ACTUALLY has this field: otherwise keep the old
-                        // `("", 2)` behaviour. (A first attempt returned a struct
-                        // that did not contain the field, built a 0-field struct
-                        // type and panicked with `ExtractOutOfRange`.)
-                        let want = field.to_string();
-                        // Keys are `struct_{variant}_{count}`. A CROSS-MODULE
-                        // declared name is module-mangled (`libg4___G` for class
-                        // `_G` in `libg4`), so the old `struct_{cand}_` prefix
-                        // match missed and `g.c` clamped to the `("", 2)`
-                        // stand-in — every field at index >= 2 read offset 0
-                        // (`len(g.c)` returned `len(g.a)`, measured in the
-                        // local wufu driver: pool writes were then concat'd
-                        // from stale operands). Accept a key whose variant is a
-                        // `_`-suffix of the declared name, and return the REAL
-                        // variant so the per-variant index lookup hits.
-                        cands.into_iter().find_map(|cand| {
-                            struct Hit(String, usize);
-                            let mut best: Option<Hit> = None;
-                            for (k, fields) in self.struct_defs.iter() {
-                                let inner = match k.strip_prefix("struct_") {
-                                    Some(i) => i,
-                                    None => continue,
-                                };
-                                let cnt_s = match inner.rsplit_once('_') {
-                                    Some((_, c)) => c,
-                                    None => continue,
-                                };
-                                let cnt = match cnt_s.parse::<usize>() {
-                                    Ok(c) => c,
-                                    Err(_) => continue,
-                                };
-                                let v = &inner[..inner.len() - cnt_s.len() - 1];
-                                let matched =
-                                    v == cand || cand.ends_with(&format!("_{}", v));
-                                if matched && fields.iter().any(|f| *f == want) {
-                                    let total = fields.len().max(cnt).max(1);
-                                    if best.as_ref().map_or(true, |b| total > b.1) {
-                                        best = Some(Hit(v.to_string(), total));
-                                    }
-                                }
-                            }
-                            best.map(|Hit(v, total)| (v, total))
-                        })
-                    }) {
-                        Some(vc) => vc,
-                        // BATCH-425/426: before falling back to the 2-word
-                        // stand-in, ask the field NAME which layout it belongs
-                        // to. The stand-in loaded 2 words while the index came
-                        // from a global scan of every struct, so any field at
-                        // index >= 2 was clamped to 0 by the range check below —
-                        // the read returned the receiver's OWN first field and
-                        // the next hop dereferenced that integer (measured:
-                        // `t.leaf.gamma` scanned to idx 3 and idx 2, both
-                        // clamped, rc=139 before printing anything). 28 clamps
-                        // were live in the corpus: 425's same-variant-and-width
-                        // rule took 17, 426's index-agreement rule takes 5 more
-                        // (`paused` x3, `low_limit` x2 — now Bar w4, idx 3 and
-                        // 2). The 6 left are 3 names x2: their index disagrees.
-                        None => {
-                            let recovered = self.resolve_struct_layout_by_field(field);
-                            // BATCH-427: when BOTH routes decline, the read goes
-                            // on silently against the stand-in, so say who
-                            // disagrees. Measured on the corpus: 152 of 529 reads
-                            // get here, and only 6 of them print a clamp — the
-                            // other 146 name a field NO collected struct declares
-                            // (`declarers=0`, e.g. `columns`, `positions`,
-                            // `error_code`), so the global scan lands on index 0
-                            // and the read silently returns the receiver's first
-                            // word without ever tripping the range check. The
-                            // clamp count under-reported this population by 25x.
-                            if recovered.is_none() && crate::diagnostics::env_flag("ZETA_DBG_FA") {
-                                let decls = self.struct_field_decls(field);
-                                eprintln!(
-                                    "ZETA-DBG FA decls field={} declarers={} decls={:?}",
-                                    field,
-                                    decls.len(),
-                                    decls
-                                );
-                            }
-                            recovered.unwrap_or((String::new(), 2))
-                        }
-                    }
-                };
-
-                let dbg_decl = self
-                    .current_type_map
-                    .as_ref()
-                    .and_then(|tm| tm.get(base))
-                    .cloned();
-                if crate::diagnostics::env_flag("ZETA_DBG_FA") {
-                    eprintln!(
-                        "ZETA-DBG FA read field={} variant={:?} field_count={} base_ty={:?} keys={:?}",
-                        field,
-                        variant,
-                        field_count,
-                        dbg_decl,
-                        self.struct_defs.keys().collect::<Vec<_>>()
-                    );
-                }
                 // Use same type key format as the Struct handler: "{variant}_fields_{count}"
                 let type_key = if variant.is_empty() {
                     format!("struct_fields_{}", field_count)
@@ -6923,65 +7013,6 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     .build_load(struct_type, ptr, "load_struct")
                     .unwrap();
 
-                // Extract field based on name
-                // Walk the expression chain to find the Struct definition
-                // and look up the field index by name
-                // Try variant-specific lookup first, then fall back to global search
-                // BATCH-430: a BARE variant name is not an identity. When two
-                // modules both define `Pair` with the same width but a different
-                // field order, `struct_defs` keeps ONE list under `struct_Pair_2`
-                // and the per-name index map below answers for both — CPython
-                // disagrees (`y.a` read 3 / `y.b` read 4 instead of 4 / 3). Ask
-                // WHO BUILT this receiver instead, keyed by the module-qualified
-                // MIR item name. Guarded by the collision set: a variant with no
-                // disagreement has exactly one layout, so every other read keeps
-                // the `struct_defs` answer unchanged.
-                let ctor_hit: Option<(String, u32)> = if variant.is_empty()
-                    || !self.struct_variant_collisions.contains(&variant)
-                {
-                    None
-                } else {
-                    self.current_ctor_symbol
-                        .get(base)
-                        .and_then(|sym| {
-                            self.struct_ctor_layouts
-                                .get(&(sym.clone(), variant.clone(), field_count))
-                                .and_then(|fields| {
-                                    fields
-                                        .iter()
-                                        .position(|n| n == field)
-                                        .map(|i| (sym.clone(), i as u32))
-                                })
-                        })
-                };
-                if let Some((sym, idx)) = &ctor_hit {
-                    if crate::diagnostics::env_flag("ZETA_DBG_FA") {
-                        eprintln!(
-                            "ZETA-DBG FA ctor-route base={} variant={:?} via={:?} idx={}",
-                            base, variant, sym, idx
-                        );
-                    }
-                }
-                let field_index = match ctor_hit {
-                    Some((_, idx)) => idx,
-                    None if !variant.is_empty() => {
-                        self.resolve_struct_field_index_for_variant(&variant, field_count, field)
-                    }
-                    None => self.resolve_struct_field_index(base, field, exprs),
-                };
-                // If still out of range, fall back to numeric parse
-                let field_index = if field_index >= field_count as u32 {
-                    let fb = field.parse::<u32>().unwrap_or(0);
-                    if crate::diagnostics::env_flag("ZETA_DBG_FA") {
-                        eprintln!("ZETA-DBG   idx {} >= count {} -> fallback {}", field_index, field_count, fb);
-                    }
-                    fb
-                } else {
-                    field_index
-                };
-                if crate::diagnostics::env_flag("ZETA_DBG_FA") {
-                    eprintln!("ZETA-DBG   final idx={}", field_index);
-                }
 
                 // Extract value from struct
                 let extracted = self
