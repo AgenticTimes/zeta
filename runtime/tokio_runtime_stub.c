@@ -112,9 +112,10 @@ int64_t host_str_len(int64_t s) { return str_len(s); }
 // (unmapped page) instead of dying inside strlen, and dump the caller chain.
 #include <execinfo.h>
 int64_t zt_concat_probe(int64_t a, int64_t b);
-static int zt_c_str_readable(int64_t v) {
-    // A concat argument must be a NUL-terminated char*: either a GC block
-    // (base or interior) or a readable page. `msync` only proves a MAPPING
+static int zt_ptr_readable(int64_t v) {
+    // Generic "may we load one byte at v" probe (batch 291 for char* concat
+    // args, batch 423 for dict handles). Either a GC block (base or interior)
+    // or a readable page. `msync` only proves a MAPPING
     // (PROT_NONE regions pass), so fault-check one byte with
     // vm_read_overwrite (measured: strlen died at 0x15_00000000 inside
     // host_str_concat from _load_cache).
@@ -135,14 +136,14 @@ int64_t host_str_concat(int64_t a, int64_t b) {
     // Coerce the bad side to "" so string building proceeds and the NEXT
     // failure is the one worth debugging. The message keeps the pointer and
     // the caller site so the source of 0x18 stays identifiable.
-    if (!zt_c_str_readable(a) || !zt_c_str_readable(b)) {
+    if (!zt_ptr_readable(a) || !zt_ptr_readable(b)) {
         static int warned = 0;
         if (warned++ < 8) {
             void* bt[16];
             int n = backtrace(bt, 16);
             fprintf(stderr, "ZT-WARN host_str_concat bad arg a=%p[%s] b=%p[%s]\n",
-                    (void*)a, zt_c_str_readable(a) && a ? (const char*)a : "?",
-                    (void*)b, zt_c_str_readable(b) && b ? (const char*)b : "?");
+                    (void*)a, zt_ptr_readable(a) && a ? (const char*)a : "?",
+                    (void*)b, zt_ptr_readable(b) && b ? (const char*)b : "?");
             for (int i = 0; i < n && i < 8; i++) {
                 Dl_info di;
                 if (dladdr(bt[i], &di) && di.dli_sname)
@@ -151,8 +152,8 @@ int64_t host_str_concat(int64_t a, int64_t b) {
             }
             fflush(stderr);
         }
-        if (!zt_c_str_readable(a)) a = (int64_t)"";
-        if (!zt_c_str_readable(b)) b = (int64_t)"";
+        if (!zt_ptr_readable(a)) a = (int64_t)"";
+        if (!zt_ptr_readable(b)) b = (int64_t)"";
     }
     return str_concat(a, b);
 }
@@ -226,13 +227,64 @@ void zt_map_json_mismatch(const char* fn, int64_t handle) {
 }
 
 #define MAP_MOVED (-1)
+int64_t zeta_raise(int64_t code);   // runtime/py_additions.c — longjmp to the innermost try
+
+// A live dict handle IS the base of a [cap|len|entries…] block, and `map_new`
+// starts at cap=16 with `map_insert` only ever doubling it — so word0 of a real
+// map is always a power of two in [16, 1<<30]. Batch 423 measured the other
+// case: a `.get()` whose receiver was not a map at all (corpus and
+// t460-p1/p2: `map_resolve+8` dying on `ldr x9, [x0]` with x0 = 0x4d0c, i.e.
+// the small integer 19724 used as a pointer). Nothing named the site, so the
+// run stopped there with 135 stderr lines and no lead.
+// `zt_map_json_mismatch` above already refuses the JSON-tag shape; this covers
+// the rest of the shape space, INCLUDING a handle that is not mapped memory.
+static int zt_map_cap_ok(int64_t cap) {
+    return cap >= 16 && cap <= (1LL << 30) && (cap & (cap - 1)) == 0;
+}
+static void zt_map_not_a_map(const char* fn, int64_t handle, int64_t word) {
+    // Dedup the MESSAGE, never the raise (see zt_unavailable_soft, and the
+    // contract batch 422 pinned): a `.get()` that returns 0 here would look
+    // like a cache miss and the caller would walk on with a fake value.
+    static struct { const char* fn; int64_t h; } noted[64];
+    static int n = 0;
+    int seen = 0;
+    for (int i = 0; i < n; i++)
+        if (noted[i].fn == fn && noted[i].h == handle) { seen = 1; break; }
+    if (!seen) {
+        if (n < 64) { noted[n].fn = fn; noted[n].h = handle; n++; }
+        fprintf(stderr,
+                "PY-A: `%s` was called on a value that is not a dict "
+                "(handle=%p, first word=%lld) — raising instead of "
+                "dereferencing it as a hash table.\n",
+                fn, (void*)handle, (long long)word);
+        fflush(stderr);
+    }
+    zeta_raise(1);
+}
 int64_t map_resolve(int64_t map) {
     // Follow the WHOLE forward chain: a block that was moved twice is itself a
     // forwarder. Resolving only one hop left `map_insert` on a block whose cap is
     // MAP_MOVED, so `idx = hash & (cap-1)` went wildly out of bounds and wrote
     // over the GC heap ("Failed to expand heap by 18014398509481968 KiB").
+    // Every map primitive funnels through here, so this is the one place that
+    // can say "that handle was never a dict" before the first load.
+    Dl_info di;
+    const char* fn = (dladdr(__builtin_return_address(0), &di) && di.dli_sname)
+                         ? di.dli_sname : "map_?";
     int guard = 0;
-    while (map && ((int64_t*)map)[0] < 0 && guard++ < 64) map = ((int64_t*)map)[1];
+    while (map) {
+        if (!zt_ptr_readable(map)) { zt_map_not_a_map(fn, map, 0); return 0; }
+        int64_t w0 = ((int64_t*)map)[0];
+        if (w0 >= 0) {
+            // A JSON cell [tag, payload] is a known shape with its own louder
+            // diagnostic at the call sites — hand it back untouched.
+            if (!zt_map_is_json_handle(map) && !zt_map_cap_ok(w0))
+                zt_map_not_a_map(fn, map, w0);
+            return map;
+        }
+        if (guard++ >= 64) break;
+        map = ((int64_t*)map)[1];
+    }
     return map;
 }
 void map_insert(int64_t map0, int64_t key, int64_t val) {
@@ -3760,8 +3812,8 @@ int64_t zt_concat_probe(int64_t a, int64_t b) {
     void* bt[24];
     int n = backtrace(bt, 24);
     fprintf(stderr, "ZT-DIAG host_str_concat a=%p[%s] b=%p[%s]\n", (void*)a,
-            zt_c_str_readable(a) && a ? (const char*)a : "?", (void*)b,
-            zt_c_str_readable(b) && b ? (const char*)b : "?");
+            zt_ptr_readable(a) && a ? (const char*)a : "?", (void*)b,
+            zt_ptr_readable(b) && b ? (const char*)b : "?");
     // dladdr resolution: backtrace_symbols uses the NEAREST preceding
     // symbol, which tail calls make lie (batch 291 repeatedly misattributed
     // frames this way). Print `sym+off` from dlinfo directly.

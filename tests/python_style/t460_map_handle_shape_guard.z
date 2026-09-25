@@ -1,0 +1,53 @@
+// 批次 423（G.5d／dict 句柄判形）：`.get()` 的接收者不是 dict 时，运行期不再解引用它。
+// 一个 dict 句柄就是 [cap|len|entries…] 块的基址，`map_new` 从 cap=16 起、
+// `map_insert` 只会翻倍 ⇒ 真句柄的首字必定是 [16, 1<<30] 内的 2 的幂。首字不是这个
+// 形状的，就是"根本没人在那里放过一张表"。旧代码不看形状：`map_resolve` 第一行
+// `ldr x9, [x0]` 直接把句柄当指针，于是整条 run 停在段错误上、不报任何名字。
+// 语料实拍（主线 301 第 3 步，20 批来第一次位移）：
+//   改前 rc=139 / stderr 135 行 / lldb 崩点 `map_get+256`（`ldrb w13,[x12,#0x10]`＝读表项
+//     的 used 字节），fault addr 0x64e4_800131cc9b78 ＝ 按假容量算出来的桶地址；调用链
+//     `check_a_share_weak_period+476` ← `check_weak_period_daily+16` ← `__run_local+964`
+//   改后 rc=0   / stderr 357 行 / 38 条点名：37 条 `py_map_items` ＋ 1 条 `map_get`
+// 那 37 个句柄＝ 19724…19782（0x4d0c…0x4d46）里缺 22 个的连续整数；按"距 1970-01-01 的天数"
+// 解出来是 **2024-01-02 ~ 2024-02-29 的每一个交易日**（缺的 22 天＝16 个周六/周日 ＋
+// 2024-02-09 与 02-12…02-16 共 6 个工作日＝春节休市），条数与语料日志"（37 交易日）"对上
+// ⇒ 接收者是**日期整数**，每天一次，不是随机垃圾；第 38 个句柄是个真指针、首字是 8 字节
+// ASCII（＝拿字符串当 dict 用），它那行的地址与首字逐跑变（堆内容 + ASLR）。
+// 这就是下一格的问题。
+// 改前/改后二进制（cwd＝仓根，两侧同一颗 `zetac`，只差 `tokio_runtime.o`；
+// 改前 .o 用 `git restore --source=HEAD` 取回）实拍：
+//   改前：compile=0 run=139，stdout **0 行**（三条 expect 一条都落不了地）
+//   改后：compile=0 run=0，stdout 四行如 expect，stderr 1 行
+//     `PY-A: \`map_get_default\` was called on a value that is not a dict
+//      (handle=0x4d0c, first word=0) — raising instead of dereferencing it as a hash table.`
+// 去重按 (调用点, 句柄) 只吞**消息**、不吞**抛掷**（批次 422 钉下的同一条合同）：
+// A、B 两段共用同一个 0x4d0c ⇒ 一行点名、两次抛掷 ⇒ 两行 caught 都在。
+// C 段是负对照：真 dict 上 argc=2/argc=3 两条路都不许被形状判据误伤。
+// stdout 与 CPython 3.12 逐字相同（当场 `python3` 对数）。
+def pick(m: dict) -> int:
+    return m.get("k", 0)
+
+xs = 19724
+try:
+    a = pick(xs)
+    print("A no-raise", a)
+except Exception as e:
+    print("A caught")
+
+def pick_dyn(x):
+    return x.get("k", 0)
+
+try:
+    b = pick_dyn(19724)
+    print("B no-raise", b)
+except Exception as e:
+    print("B caught")
+
+d = {"k": 5}
+print("C", pick(d), d.get("zz", 42), len(d))
+print("D ok")
+
+// expect: A caught
+// expect: B caught
+// expect: C 5 42 1
+// expect: D ok

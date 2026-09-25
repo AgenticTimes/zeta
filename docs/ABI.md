@@ -49,8 +49,8 @@
 | 4 | `str`（指针形） | `.rodata` 或 GC 块首地址，`ptrtoint` 成 i64 | `MirExpr::StringLit`：私有 global 字节数组 + `ptrtoint`（codegen.rs:5920-5939） | 可直接解引用；`GC_base(h) != 0` ⇒ 堆串 | 与 #5 不可静态区分 ⇒ 见 R3 |
 | 5 | `str`（packed 形） | 短 ASCII **按字节小端打进这 8 个字节本身**（实测样本 `"43601853"` = `0x3335383130363334`） | `vec<str>` 的元素槽（批次 291 实测；写侧仍是隐式决定，见附 B OPEN） | **必须先判形再解引用**；唯一的判形点在 `map_str_key`（py_additions.c:105-129）：`GC_base` 命中→按内容 FNV 哈希；否则 `u < 2^32 \|\| u >= 2^48`→判为 packed、原样当不透明键；再否则 `vm_read_overwrite` 探一页可读性 | 把 packed 当 `char*` 传给 `str_trim` → 约 25% 概率 SEGV（批次 297）；packed 之间比较走 `zt_packed_cstr_eq`（:1609） |
 | 6 | `vec` 句柄 | 指向**数据**；`[cap \| len]` 头在 `base-16`；块 ≥ `16+cap*8` | `zeta_collect_vec_n` / `str_split` / df 列构造器（多数按元素数申请，故 cap 常 < 8） | `zt_dyn_vec_hdr`（py_additions.c:3469-3491）：`cap∈[1,2^28]`、`len ≤ cap`、块够大；**短 vec（cap<8）还必须是"紧块"** —— GC 向上取整的余量恰为 8 或 16，`have > need+16` 即判否 | 批次 301：`cap >= 8` 曾是唯一判据 ⇒ 1..7 元素列表被拒，`len()` 退化成对数据字做 `strnlen`（实测 3 元素报 0；1/4/8 报 5/0/8） |
-| 7 | `map` 句柄 | **块首**；`w[0]=cap`（2 的幂、≥16、≤2^28）、`w[1]=used ≤ cap`；块 ≥ `16+cap*24`；`cap < 0` ⇒ growth forwarder（真表在 `w[1]`） | `MapNew` / `DictInsert` | `zt_dyn_is_map`（py_additions.c:3457-3467）+ `GC_size` 兜底 | 与 #8 撞车：map 把 PyJson 的 tag 当容量（见 #8） |
-| 8 | `PyJson` | 16 字节 `[tag, payload]` **单元指针**；tag = `ZJ_NULL 0 / INT 1 / F64 2 / STR 3 / ARR 4 / OBJ 5 / BOOL 6`（tokio_runtime_stub.c:2550-2556，构造 `zj_make` :2697） | `json.loads` 一族 | 访问器按运行时 tag 分派（sum type；**不是**外层程序的动态分发） | `-> dict` 注解把 Json 当 map ⇒ 首字（tag ≤ 6）被当容量，`idx = hash & (cap-1)` 死循环（tokio_runtime_stub.c:190-196 记录；现行以"map 首字 ≥16、Json 首字 1..8"作值域区分并响亮报告） |
+| 7 | `map` 句柄 | **块首**；`w[0]=cap`（2 的幂、≥16、≤2^28）、`w[1]=used ≤ cap`；块 ≥ `16+cap*24`；`cap < 0` ⇒ growth forwarder（真表在 `w[1]`） | `MapNew` / `DictInsert` | `zt_dyn_is_map`（py_additions.c:3457-3467）+ `GC_size` 兜底；**批次 423 起** `map_resolve` 出口另有一道粗判形（`zt_map_cap_ok`＝2 的幂 ∧ `cap∈[16,2^30]`；上界比本行写的 2^28 故意松一档 ⇒ 宁放行也不误伤既有真表，收紧要与 #6 的 vec 判形一并裁），不合格即 `zt_map_not_a_map` 点名 + `zeta_raise(1)`，**不再解引用** | 与 #8 撞车：map 把 PyJson 的 tag 当容量（见 #8）；423 语料实拍：`py_map_items` 收到的"句柄"是**交易日日期整数** 37 次、`map_get` 收到的是浮点文本字符串 |
+| 8 | `PyJson` | 16 字节 `[tag, payload]` **单元指针**；tag = `ZJ_NULL 0 / INT 1 / F64 2 / STR 3 / ARR 4 / OBJ 5 / BOOL 6`（tokio_runtime_stub.c:2550-2556，构造 `zj_make` :2749） | `json.loads` 一族 | 访问器按运行时 tag 分派（sum type；**不是**外层程序的动态分发） | `-> dict` 注解把 Json 当 map ⇒ 首字（tag ≤ 6）被当容量，`idx = hash & (cap-1)` 死循环（tokio_runtime_stub.c:191-197 记录；现行以"map 首字 ≥16、Json 首字 1..8"作值域区分并响亮报告） |
 | 9 | 用户 `struct` | GC 句柄，字段各占一个 64 位槽 | `StructNew`（#2②） | 字段读 = 槽偏移 + 按字段静态类型还原（f64 见 #2） | 批次 300：未标注返回类型退化成 unit ⇒ 字段读成"空 variant 的第 0 字段"，**每个属性读都静默拿垃圾** |
 | 10 | `PyDynamic`（预留） | boxed tag cell | — | — | B/T3 落地时更新本行。当前 dyn 值就是 #4–#8 那些**无标签字** —— 这正是 #6/#7 必须做几何判形的根本原因 |
 | 11 | 用户 `enum` | **两制**：全单元枚举 = 裸判别值（#1）；只要有一个变体带载荷，整个枚举一律 `[tag, p0, …]` GC 块（与 #8/#9 同形） | ① 载荷形 `Token::Ident(5)`、② 单元形 `Shape::Point`（同枚举内）：`src/middle/mir/gen.rs:3730` 起的变体路径 + `MirExpr::Struct`（`enum_is_boxed` :3313 决定用哪一制）；③ `Some(v)`/`Ok(v)`/`Err(v)` 复用 Option/Result 运行时布局（gen.rs:7008，`option_make_some` 同形） | 判据必须按同一制读：块形读 slot 0 比 tag（`boxed_tag_guard` gen.rs:3371 → `Deref{pointee_width:8}`），全单元形 `== 判别值`；载荷绑定读 slot 1+k。**没注册的构造子名不许当判据** —— 恒不匹配（gen.rs 结构模式 `else` 分支），因为无 tag 可比 | 批次 396：写侧三处都漏了标签字 ⇒ `Some(7)` 被判成"None"（`option_is_some` 拿载荷 7 和 1 比），带载荷臂"恒匹配 + 绑 0"使 `Token::Ident(n)` 对任何值都进第一条臂；单元形写在裸名当值的路径后面 ⇒ 被下成 `FuncAddr`，`_Color__Green` 只有声明没有定义 |
@@ -298,7 +298,7 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 
 **C9 `zeta_call<argc>(fptr, a…)` 逐 arity 一个跳板（0..4）**：`zeta_call1` 声明
 codegen.rs:1082，定义 py_additions.c:3414；`zeta_call0/2/3/4` 声明
-codegen.rs:1087-1090，定义 tokio_runtime_stub.c:3792/3798/3804/3810。五者同一形状：
+codegen.rs:1087-1090，定义 tokio_runtime_stub.c:3844/3850/3856/3862。五者同一形状：
 把 `fptr` 强转成 `int64_t(*)(i64 × argc)`，实参与返回值一律 i64，**NULL → 返回 0**。
 分派守卫 gen.rs:11177-11201：`receiver.is_none()` 且 `arg_ids.len() <= 4` 且名字不是
 全局函数/闭包变量 ⇒ **arity ≥5 的间接调用仍走裸符号路径**（实测
@@ -450,7 +450,7 @@ extern 声明 :2945、:2948——**9 处全部落在 codegen.rs 这一份文件�
 （本批实测计数；行 4-69），形如
 `".globl _print.13\n\t.set _print.13, _print2\n"`（aliases.inc.c:12），
 由 `emit_aliases_inc`（tools/gen_from_registry.py:288-292）从 pylib/runtime_aliases.txt（69 行）生成，
-经 tokio_runtime_stub.c:356-358 `#include "aliases.inc.c"` 进入编译单元。
+经 tokio_runtime_stub.c:408-410 `#include "aliases.inc.c"` 进入编译单元。
 
 > 锚点源码：src/main.rs
 **N9 `.N` 里的 N 不是 ABI，是"LLVM 在本 module 内第几次改名"的偶然计数。**
@@ -458,7 +458,7 @@ extern 声明 :2945、:2948——**9 处全部落在 codegen.rs 这一份文件�
 HashMap 迭代顺序随机 ⇒ `print.N` 冲突改名和运行期别名表"从一次运行到下一次
 在能用与不能用之间翻转"，:872 的 `all_mirs.sort_by(...)` 就是这把锁的钥匙。
 **合同级：确定性发射序是 ABI 的一部分，不是代码风格。**
-（runtime/tokio_runtime_stub.c:339 与 :343-344 的注释是这条的现场记录：`array_new_1` → `array_new.10`、
+（runtime/tokio_runtime_stub.c:391 与 :395-396 的注释是这条的现场记录：`array_new_1` → `array_new.10`、
 `print` → `print.N` 且 N 随 arity 1-6 变动。）
 
 > 锚点源码：src/backend/codegen/codegen.rs
@@ -507,7 +507,7 @@ docs/ARCHITECTURE-REVIEW-2026-09.md:103 记的是"四份符号表手工同步"�
 原锚在 pylib/registry.txt 第 208 行——该号现已被另一条目（`filterwarnings`）占用，
 即条目向下漂了 11 行；它现在在 registry.txt:219（带 `stub=1`），所以**已不是幽灵**：
 C 侧有定义且**响亮失败**
-（`py_stub_abort`，tokio_runtime_stub.c:1278-1282）。
+（`py_stub_abort`，tokio_runtime_stub.c:1330-1334）。
 但"**registry 是纯字符串、无校验**"这条仍然成立，逐条见 §6（本批下一段）。
 
 
@@ -519,7 +519,7 @@ C 侧有定义且**响亮失败**
 | `zt_dyn_vec_hdr`（:3469） | vec = 数据指针 + `base-16` 头 + 紧块判据 | #6 |
 | `zt_packed_cstr_eq`（:1609） | packed 的小端字节序 | #5 |
 | `zeta_dyn_len`（:3492） | map → vec → 文本 的读序（无标签字的最后手段） | #6 #7 #4 |
-| `zj_make` / `ZJ_*`（tokio_runtime_stub.c:2697、:2550） | 16 字节 `[tag,payload]` 单元 | #8 |
+| `zj_make` / `ZJ_*`（tokio_runtime_stub.c:2749、:2550） | 16 字节 `[tag,payload]` 单元 | #8 |
 | `ZT_PROBE_LOC` 系列以 `%lld` 打句柄 | 句柄就是可原样搬运的 i64 字 | #4 #6 #7 |
 
 结论：**没有探针假设了表外的表示**；表中每一行都有至少一个探针或写侧锚点。
@@ -554,7 +554,7 @@ C 侧有定义且**响亮失败**
   块 ≥ `16 + cap*24`（:3466）。
 - 桶 = 3 个字 `[key | value | used]`，**`used` 只占第三个字的低字节**
   （`*(uint8_t*)(e + 16)`，:222-223；同一套地址算术 :3152、:3160）。
-  `#define MAP_ENTRY_SIZE 24`（tokio_runtime_stub.c:169）、
+  `#define MAP_ENTRY_SIZE 24`（tokio_runtime_stub.c:170）、
   分配 `GC_malloc(16 + cap*MAP_ENTRY_SIZE)`（:178）。
 - **扩容转发器**：旧块 `w[0] = MAP_MOVED`（= `-1`，stub:228）、`w[1] = 新块地址`
   （stub:184、:251）。判形侧承认它：`cap < 0` 时改看 `w[1] > 0x1000`（:3462）。
@@ -592,7 +592,7 @@ struct 是 GC 块、字段各占一个 64 位槽，读侧用**非 packed** 的
 **L8 "回看 `h-16`" 本身就是一次越界风险。**
 读 `h-16` 前必须先证 `h ≥ 块首 + 16`：map 句柄**就是**块首，块若正好落在页起点，
 `h-16` 落在 guard page（实测 SIGBUS in `map_insert+88`，driver batch 291）。
-这段因果写在 tokio_runtime_stub.c:204-211，代码先取 `GC_base(h)` 再判偏移。
+这段因果写在 tokio_runtime_stub.c:205-212，代码先取 `GC_base(h)` 再判偏移。
 
 **L9 同尺寸≠同含义：24 字节块有两种互不相干的用途。**
 argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | default]`
@@ -754,7 +754,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
 | `zt_dyn_vec_hdr`（:3469） | vec = 数据指针 + `base-16` 头 + 紧块判据 | #6 |
 | `zt_packed_cstr_eq`（:1603） | packed 的小端字节序 | #5 |
 | `zeta_dyn_len`（:3492） | map → vec → 文本 的读序（无标签字的最后手段） | #6 #7 #4 |
-| `zj_make` / `ZJ_*`（tokio_runtime_stub.c:2697、:2550） | 16 字节 `[tag,payload]` 单元 | #8 |
+| `zj_make` / `ZJ_*`（tokio_runtime_stub.c:2749、:2550） | 16 字节 `[tag,payload]` 单元 | #8 |
 | `ZT_PROBE_LOC` 系列以 `%lld` 打句柄 | 句柄就是可原样搬运的 i64 字 | #4 #6 #7 |
 
 结论：**没有探针假设了表外的表示**；表中每一行都有至少一个探针或写侧锚点。

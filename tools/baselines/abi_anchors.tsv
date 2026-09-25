@@ -32,16 +32,16 @@ runtime/py_additions.c	3465	if (GC_base((void*)h) != (void*)h) return 0;
 runtime/py_additions.c	3469	static int64_t* zt_dyn_vec_hdr(int64_t h) {
 runtime/py_additions.c	3482	int64_t have = (int64_t)GC_size((void*)hdr);
 runtime/py_additions.c	3492	int64_t zeta_dyn_len(int64_t h) {
-runtime/tokio_runtime_stub.c	169	#define MAP_ENTRY_SIZE 24
-runtime/tokio_runtime_stub.c	190	// A `-> dict` annotation on a function whose body returns `json.loads(...)` types // the result `map`, while the VALUE is a PyJson cell [tag, payload] (tag 1..
-runtime/tokio_runtime_stub.c	204	// The h-16 read must NEVER touch memory outside h's own GC block: a map // handle IS its block base, and blocks that start at a page edge make // h-16 a guard 
-runtime/tokio_runtime_stub.c	339	// LLVM renames overloaded array_new_1 to array_new.10 internally
-runtime/tokio_runtime_stub.c	343	// Multi-arg print overloads: LLVM renames print -> print.N per module, and arity // varies (1-6). Provide implementations; the .set aliases below map each prin
-runtime/tokio_runtime_stub.c	356	// LLVM .N rename aliases — data in pylib/runtime_aliases.txt; // regenerate: python3 tools/gen_from_registry.py --emit-aliases #include "aliases.inc.c"
-runtime/tokio_runtime_stub.c	1278	// Registry: stub=1. Loud fail via py_stub_abort (D / advice.md). int64_t py_stub_abort(int64_t name_ptr); int64_t py_asdict_unexpanded(int64_t v) { (void)v; re
+runtime/tokio_runtime_stub.c	170	#define MAP_ENTRY_SIZE 24
+runtime/tokio_runtime_stub.c	191	// A `-> dict` annotation on a function whose body returns `json.loads(...)` types // the result `map`, while the VALUE is a PyJson cell [tag, payload] (tag 1..
+runtime/tokio_runtime_stub.c	205	// The h-16 read must NEVER touch memory outside h's own GC block: a map // handle IS its block base, and blocks that start at a page edge make // h-16 a guard 
+runtime/tokio_runtime_stub.c	391	// LLVM renames overloaded array_new_1 to array_new.10 internally
+runtime/tokio_runtime_stub.c	395	// Multi-arg print overloads: LLVM renames print -> print.N per module, and arity // varies (1-6). Provide implementations; the .set aliases below map each prin
+runtime/tokio_runtime_stub.c	408	// LLVM .N rename aliases — data in pylib/runtime_aliases.txt; // regenerate: python3 tools/gen_from_registry.py --emit-aliases #include "aliases.inc.c"
+runtime/tokio_runtime_stub.c	1330	// Registry: stub=1. Loud fail via py_stub_abort (D / advice.md). int64_t py_stub_abort(int64_t name_ptr); int64_t py_asdict_unexpanded(int64_t v) { (void)v; re
 runtime/tokio_runtime_stub.c	2550	#define ZJ_NULL 0
-runtime/tokio_runtime_stub.c	2697	static int64_t zj_make(int64_t tag, int64_t payload) {
-runtime/tokio_runtime_stub.c	3792	int64_t zeta_call0(int64_t fptr) {
+runtime/tokio_runtime_stub.c	2749	static int64_t zj_make(int64_t tag, int64_t payload) {
+runtime/tokio_runtime_stub.c	3844	int64_t zeta_call0(int64_t fptr) {
 runtime/unavailable_stubs.c	110	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
 src/backend/codegen/codegen.rs	60	pub slot_read_ids: std::collections::HashSet<u32>,
 src/backend/codegen/codegen.rs	1082	module.add_function("zeta_call1", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
