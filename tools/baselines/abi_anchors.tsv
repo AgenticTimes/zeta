@@ -212,7 +212,7 @@ src/middle/mir/gen.rs	11515	// Whether the `_<argc>` disambiguation suffix was a
 src/middle/mir/gen.rs	11527	format!("{}_{}", func, arg_ids.len())
 src/middle/mir/gen.rs	12086	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
 src/middle/mir/gen.rs	12347	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
-src/middle/mir/gen.rs	12958	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
+src/middle/mir/gen.rs	12987	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
 src/middle/mir/gen.rs	12991	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
 src/middle/mir/gen.rs	13088	format!("{}_{}", func_name, arg_ids.len())
 src/middle/mir/gen.rs	13734	func: "zeta_dyn_getitem".to_string(),

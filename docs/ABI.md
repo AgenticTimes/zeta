@@ -954,7 +954,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      会当场崩编译器：`src/backend/codegen/codegen.rs:6626` 无条件索引 `exprs[field_id]`。
      触发链 `tests/unit-tests/minimal_compiler.z:129` → 崩点 `codegen.rs:6626`（rc=101）。
      修法：`Box::new` 走**恒等**下型（`Box<T>` 槽与其内值同为 64 位句柄，
-     `src/middle/mir/gen.rs:12958`），`String::new()` 下成空串字面量（`:12991`；
+     `src/middle/mir/gen.rs:12987`），`String::new()` 下成空串字面量（`:12991`；
      行号随批次 325 的 `lower_range_guard` 插入漂移，已按锚点核对重 cite）。
      回归用例 `tests/python_style/t304_open_ended_slice.z`（5 条 expect，含 `Box::new` 作字段值）。
      恢复量：official 丢行 **1,749→1,222**（单文件 757→230）。python_style **286→287**，
