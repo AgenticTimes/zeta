@@ -16860,6 +16860,116 @@ Unit，也不回落到 I64。
 **(c)** 407 §八 的 p2（dict 值那族）：`d=4377586386` 未动，型来自容器元素而非参数证据。
 **(d)** 406 §十(b) 仍是未回的一句话（C 运行时接不接进 JIT，同时挡 §七 与 (a)）；
 406 §十(c) 的 acceptance 非确定性判据仍未立。
+
+## 批次 409（主线 301 第 2 步第一格：跨模块具名实参从不读名字，整串早落一格）
+
+### 一、这批要解决什么
+用户裁定 item 3 的第 2 格（"再查选股数量不一致"）。开门见山：本批**只闭了这条链上的一格**
+（跨模块 `name=value` 的绑定），`codes=0` / `trading_days=0` / 0 笔成交那三格**读数一格未动**；
+§七 说清为什么"未动"不能反过来当反证，§十一把下一批候选按新实测损害量重排。
+
+### 二、最小复现
+`/tmp/b409/kw/`：`callee.py` 声明 `inject(market_df, index_df, nav_df=None, trading_days=None, etf_universe=None)`
+并把每个形参的 `len()` 逐个打出来；`caller.py` 先按位置调一次、再按**声明序**跳过 `nav_df` 具名调一次；
+`main.py` 根文件 `from caller import go`。同款形状就是语料里的
+`strategies/code/jq_shim.py:46-52` 的 `inject_local_data`，与两个调用点
+`strategies/code/_zeta_local_drv.py:26`、`strategies/code/jq_wufu_local.py:84`——两处都跳中间那个带默认值的 `nav_df`。
+
+套件里落成两份：`tests/python_style/kwmod_b409.z`（7 行，被调方；文件名不以 `t` 开头，所以 `run.sh` 不单独收它）、
+`tests/python_style/t445_cross_module_kwargs.z`（36 行 / 18 条 `// expect:`；A 翼全位置、B 翼跳中间默认参、C 翼乱序）。
+
+### 三、定位：先打了一枪空的（自我揭短）
+第一条修**打错了臂**——功夫下在"裸名别名表"上，并且把方向读反了：`func_param_names` /
+`param_defaults` 的键是**修饰名**（实拍 `B409PRE … tbl=["callee__inject"]`），同模块那条
+`callee3__same_mod` 精确命中、本来就没错。改动全部 `git checkout --` 回退。
+真正判死它的不是再读一遍代码，而是在两条臂上各插一条 `eprintln!`：**目标调用点根本没经过我以为那条**
+⇒ 错的是路径假设，不是实现。
+
+### 四、根因
+`from 模块 import 函数` 的调用点由 `py_member_aliases` 那条臂下沉（本批插入点在 `gen.rs:5259-5275`，
+`qualified` 在 `:5253`）。该臂把实参 `clone` 出来、按**位置**补默认值、按修饰名发 `MirStmt::Call`，
+**从不读解析器为 `name=value` 包上的 `__kwarg__` 名字**；按名字绑的只有同文件调用走的那条通用路径
+（修前 `gen.rs` 内该标记被读 16 处——`grep -n '"__kwarg__"'` 现为 17 处，多出的正是本批那条——
+这条臂一处都没读）。后果：实参按书写序往后贴——凡跳过中间带默认值的
+形参，后面每个实参都早落一格；乱序具名实参按书写序落槽。`--dump-mir` 实拍：`func: "callee__inject"`
+的实参列是 `[9,18,27,36,63]`（位置追加签名，不是声明序签名）。
+
+### 五、修法（+73 行，只动 gen.rs）
+新增成员 `Self::bind_kwarg_markers`（`gen.rs:988-1042`）：把 `__kwarg__` 标记摊回被调方**声明序**。
+返回 `None` ＝ "静态绑不了"——一个标记都没有、`**` 展开、名字不在被调方形参表里、同一名给了两次、
+或某形参既没实参也没默认值——此时调用方**保留原有位置列表**，而不是猜一个。
+调用点插在 `param_defaults` 取到之后、原有按位置补默认值之前。方法调用点、通用 kwargs 路径、
+别名表的其它字段一律没碰。
+
+### 六、判据与实拍（三翼）
+- **A（全位置）**：修前修后逐字相同（`m 10 / i 4 / n -1 / d 6 / u 8`）⇒ 没有越界改到位置调用；
+- **B（跳过中间 `nav`）**：HEAD 打 `n 6 / d 8 / u -1`（每个都早一格），修后 `n -1 / d 6 / u 8`；
+- **C（乱序、同样跳过 `nav`）**：HEAD 打 `m 8 / i 10 / n 4 / d 6`，修后与 A 同。
+t445 的 18 条 `// expect:`：HEAD 全红在 B/C 两翼、修后全绿。
+
+### 七、acceptance 读数：一格未动（并说清为什么这不算反证）
+HEAD 对照（`/tmp/b409/acc409.head.*`，176 行）与修后（`acc409.b3.*`，rc=0 两次）逐格比：
+`本地数据注入完成 … 13401` / `13402` + `0 0`、`[PARITY]` 37 行且 `target=- | holdings=- | ranked=-`
+三格全是 `-`、`[local] 回测完成: 1000000 -> 0 (-100.00%)`、`jq_shim:` 前缀 39 声——两版只差地址抖动。
+**"未动"不构成对本批的反证**：那两个调用点确实跳了中间默认参（本批的修法正中其形状），
+但错位贴进去的 `codes` 与正位的 `trading_days` 长度**都是 0**，`len()` 读数一样，这一格分不出对错。
+
+同批判死两条假线索（负断言配正证据）：
+① "根文件的 `print` 全丢了"——不成立：本批编译的根是 `/tmp/b409/placed/_drv_accept_409.py`
+（三行 `print`），不是带 13 条 `R…` 打印的 `strategies/code/_zeta_local_drv.py`。stdout 实拍只有 1 行
+（`4335132672`，每跑必变）＝那条 `print(json.dumps(r["metrics"]))` 打了地址，属 #117 那一格。
+② "`_local_cache` 这个模块全局 dict 写不进/读不出"——不成立：`/tmp/b410/d1.py`（裸 `cache = {}`）与
+`d2.py`（`cache: dict[str, Any] = {}` 带注解）两种形都实拍与 CPython 逐字相同，跨函数写读没问题。
+
+### 八、门禁（`bash tools/run_all.sh` 15 步全跑，`/tmp/b409/gate409.log`）
+- official：编译 **194/194**、编译+链接 **191/194**（三条 link-only 名单逐字未动：
+  `integration_all_features`、`quantum_basic`、`selfhost`）；
+- python_style：**328 passed / 2 failed / 5 known-fail / 0 xpass**（327 → 328 就是本批 t445；
+  两红仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）；
+- 语料：**39 文件，解析 39/39 = 100%**（本批中途把落在语料目录里的 4 个探针源 `mv` 回
+  `/tmp/b409/placed/`，分母复原；`_zeta_local_drv.py`（9 月 21 日、原本就在 39 里）留在原地）；
+- jit_sweep：**ok=176 trap=354 fail=0 timeout=0 segv=0（total 530，最小 ok=163）**
+  ⇒ `ok` 175→176 未回退、无静默崩溃（total +2 是本批两份新用例都被扫到）；
+- diff：**match=120 / judged=130 / rate=92.3% / bad_case=0** 一字未动；
+  分族 truth 22/23、str 20/23、container 27/28、numeric 23/28、control 28/28；
+- knob 23 / swallow 6 / import 22 / empty_stmt 68 / pysrc 42 / cli_semantics 73 / ignore_rules 19
+  各 FAIL 0；mbvar 21 脚本违规 0；comment_drift 0；clean_checkout rc=0（1s，rev `2ea93a00`＝记录批之前的 HEAD）；
+- 编译期诊断：official 2 文件 / 5 行未动；python_style **98 → 99 文件 / 203 → 204 行**
+  （+1/+1 是本批新用例自己那一声明）；
+- 判据来源仍是唯一存量 `run_all.sh:576` 的 `py_fail != 0`（实拍 `py_fail=2`，同 407/408）。
+  **整体退出码本批没实拍到**：后台包装器回话 "exit code 0"，而按 `:576` 那行代码在 `py_fail=2` 下
+  应置 `rc=1` ⇒ 两者不符，本记录不引它当绿灯，口径待下一批 `echo $?` 直跑核（另立 §十一(f)）。
+- 触达上界（不是损害量）：语料里 `f(kw=…)` 形状 **605 行**（grep，未按 lowering 路径甄别）。
+
+### 九、锚点
+`--rebind` 一次：`docs/ABI.md` 34 行 / 59 个号重写、`tools/baselines/abi_anchors.tsv` 37 增 37 删；
+读数回到存量 **漂移 30 / 新 11 / 消失 3**（基线 251 条、改号配对 0 对 ⇒ 落单新 11 / 落单消失 3、
+待归属 100 条 / 91 种、声明为仓外 14 条）。本批新写的两处行号（`:988`、`:5259`）只落在本记录里，
+没进 ABI.md ⇒ 不需要第二次重绑。
+
+### 十、提交
+- `3eb6ed7a` —— `fix(mir): 批次 409 …`：`src/middle/mir/gen.rs`（+73）、
+  `tests/python_style/t445_cross_module_kwargs.z`（新建 36 行）、`tests/python_style/kwmod_b409.z`
+  （新建 7 行）、`docs/ABI.md` + `tools/baselines/abi_anchors.tsv`（rebind）。已推 `agentic`，`unpushed=0`。
+- 本记录批：`roadmap.md` + `backlog.md`（折行，OPEN 净增 0）。
+
+### 十一、下一批候选（按本批新读到的实测损害量排）
+**(a) 本批新取到两条"确定性、静默、两文件、零抖动"的错值**（`/tmp/b410/m_c.py` + `m_d.py`，逐条与 CPython 对照）：
+① `store(c, [1,2,3])` 里 `len(cache["k"])` 打 **0**（CPython 3）——值进了 dict、读回来长度是 0；
+② 同一形参拿到冲突实参证据（两处 list、一处 str）而保持动态后，`len([1,2,3])` 打 **1**
+（同一次运行里 `len("ab")` 打 2 是正确的）——即 #117 那一格的**列表侧**，同一行 `type(x).__name__`
+打的是地址（`kind 7500915`）。
+①② 互为因果还是同一条链，尚未隔离（下一步：各去掉另一个，单跑）。定价：这正是
+`codes=0` / `trading_days=0` / 0 笔成交的形状——**值到了、读成空**（主线 301 的原始假设，任务 #7）。
+**(b)** 408 §十一(b) 闭包**参数侧**（`type_map: 1: I64` 的 `codes`）仍在；**(c)** 407 §八 p2
+（dict 值那族，`d=4377586386`）仍在——(a)① 很可能就是它的根，先看 (a) 再看它。
+**(d)** 406 §十(b) 仍未回话（C 运行时接不接进 JIT，同时挡 406 §七 与 acceptance 可读性）；
+acceptance 非确定性判据仍未立（同一个二进制：market 行数读出 13401 与 13402 两值、一次 rc=139 两次 rc=0）。
+**(e)** 本批**故意没加**的诊断：被调方签名不在 `func_param_names` 里时，具名实参仍按书写序静默追加
+（`bind_kwarg_markers` 返回 `None` 的分支）——一声不出。要不要出声，等 (a) 定完价再判。
+**(f)** 门禁整体退出码口径：`run_all.sh:576` 在 `py_fail=2` 下应给 1，后台包装器回了 0——两读未对齐，
+     直跑 `bash tools/run_all.sh; echo $?` 补一次实拍（不引任何一方当绿灯）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
