@@ -60,7 +60,10 @@ pub struct LLVMCodegen<'ctx> {
     pub slot_read_ids: std::collections::HashSet<u32>,
     /// Struct type definitions: maps type name to list of field names
     /// Populated from all MIRs during gen_mirs preprocessing.
-    pub struct_defs: std::collections::HashMap<String, Vec<String>>,
+    /// BTreeMap, not HashMap: four call sites scan this map by name and take the
+    /// first/tied hit, so the default randomly-seeded order makes field offsets —
+    /// i.e. emitted machine code, not just register numbering — vary per process.
+    pub struct_defs: std::collections::BTreeMap<String, Vec<String>>,
     /// Monotonic counter for unique spawn thunk wrapper names
     pub spawn_counter: u32,
     /// B1: `--strict-abi` / `ZETA_STRICT_ABI=1`
@@ -1336,7 +1339,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
             current_type_map: None,
             slot_read_ids: std::collections::HashSet::new(),
-            struct_defs: std::collections::HashMap::new(),
+            struct_defs: std::collections::BTreeMap::new(),
             spawn_counter: 0,
             strict_abi: crate::diagnostics::env_flag("ZETA_STRICT_ABI"),
             abi_warn_count: 0,
@@ -1595,7 +1598,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
         self.locals.clear();
         self.current_type_map = Some(mir.type_map.clone());
         self.slot_read_ids = Self::collect_slot_reads(&mir.stmts);
-        let all_ids = self.collect_all_local_ids(mir);
+        let mut all_ids: Vec<u32> = self.collect_all_local_ids(mir).into_iter().collect();
+        // Sorted: `HashSet` order is per-process (Rust's default hasher is randomly
+        // seeded), and the loop below emits one alloca per id, so an unordered set
+        // makes the whole function's register numbering — and thus every build of
+        // the same source — differ.
+        all_ids.sort_unstable();
         for &id in &all_ids {
             let alloca = match self.current_type_map.as_ref().and_then(|tm| tm.get(&id)) {
                 Some(Type::F32) => self.builder.build_alloca(self.context.f32_type(), "").unwrap(),

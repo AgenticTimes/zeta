@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/run_all.sh — Q4 (advice.md): one command → three baseline numbers as JSON.
-# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import] [--skip-empty] [--skip-clean] [--skip-pysrc] [--skip-sem] [--skip-ignore] [--skip-mbvar]
+# Usage: ./tools/run_all.sh [--json-only] [--skip-corpus] [--skip-official] [--skip-python] [--skip-jit] [--skip-diff] [--skip-knob] [--skip-swallow] [--skip-import] [--skip-empty] [--skip-clean] [--skip-pysrc] [--skip-sem] [--skip-ignore] [--skip-mbvar] [--skip-emit-stable]
 # Exit 0 if all enabled suites pass their green criteria; else 1.
 set -euo pipefail
 
@@ -24,6 +24,7 @@ SKIP_PYSRC=0
 SKIP_SEM=0
 SKIP_IGNORE=0
 SKIP_MBVAR=0
+SKIP_EMIT_STABLE=0
 
 for a in "$@"; do
   case "$a" in
@@ -42,6 +43,7 @@ for a in "$@"; do
     --skip-sem) SKIP_SEM=1 ;;
     --skip-ignore) SKIP_IGNORE=1 ;;
     --skip-mbvar) SKIP_MBVAR=1 ;;
+    --skip-emit-stable) SKIP_EMIT_STABLE=1 ;;
     -h|--help)
       sed -n '2,6p' "$0"
       exit 0
@@ -513,6 +515,31 @@ elif [[ $JSON_ONLY -eq 0 ]]; then
   echo "comment_drift: 0 处复述（期望 0；判据数法只在各判据脚本文件头写一次）"
 fi
 
+# ── 16) 同一份源码连编两次，出码必须逐字节相同（批次 418）──
+# 实测缺陷：发射阶段跟着两处集合序走，而 Rust 默认哈希每进程重掷种子 ⇒ 同一编译器
+# + 同一输入的两连编能给出不同的 `.o`。改前实拍：acceptance 驱动连编 3 次得 3 个不同
+# `.o`，且翻的不只是寄存器编号——按名字扫 struct 表那条还会换字段偏移（换的是机器码
+# 里的立即数）。危害是让 主线 301 的 A/B 判不出来：读数在两轮之间翻，分不清是改动
+# 还是掷硬币。判据在 tools/emit_stable.sh 内部（夹具清单与两处迭代序见其文件头），
+# 这里只认退出码。
+emit_rc=0; emit_failed=0; emit_checked=0
+if [[ $SKIP_EMIT_STABLE -eq 0 ]]; then
+  emit_log=$(mktemp)
+  set +e
+  "$ROOT/tools/emit_stable.sh" >"$emit_log" 2>&1
+  emit_rc=$?
+  set -e
+  emit_failed=$(grep -c '  FAIL ' "$emit_log" || true); emit_failed=${emit_failed:-0}
+  emit_checked=$(grep -cE '^  (ok|FAIL) ' "$emit_log" || true); emit_checked=${emit_checked:-0}
+  if [[ $JSON_ONLY -eq 0 ]]; then
+    echo "emit_stable: ${emit_checked} 个夹具，违规 ${emit_failed}（rc=${emit_rc}）"
+  fi
+  if [[ $emit_rc -ne 0 ]]; then
+    tail -30 "$emit_log" >&2
+  fi
+  rm -f "$emit_log"
+fi
+
 # ── JSON summary (single source of truth) ──
 python3 - <<PY
 import json
@@ -545,6 +572,8 @@ doc = {
                    "rc": $ignore_rc, "skipped": $SKIP_IGNORE},
   "mbvar": {"checked": $mbvar_checked, "failed": $mbvar_failed,
             "rc": $mbvar_rc, "skipped": $SKIP_MBVAR},
+  "emit_stable": {"checked": $emit_checked, "failed": $emit_failed,
+                  "rc": $emit_rc, "skipped": $SKIP_EMIT_STABLE},
   "comment_drift": {"restated": $restated_n, "rc": $restated_rc},
   "clean_checkout": {"rc": $clean_rc, "secs": $clean_secs, "rev": "${clean_rev:0:8}",
                      "skipped": $SKIP_CLEAN},
@@ -596,6 +625,8 @@ if [[ $SKIP_SEM -eq 0 && $sem_rc -ne 0 ]]; then rc=1; fi
 if [[ $SKIP_IGNORE -eq 0 && $ignore_rc -ne 0 ]]; then rc=1; fi
 # mbvar: 判据在 tools/mbvar_lint.sh 内部（注释与单引号字面量不计），这里只认退出码。
 if [[ $SKIP_MBVAR -eq 0 && $mbvar_rc -ne 0 ]]; then rc=1; fi
+# emit_stable: 判据在 tools/emit_stable.sh 内部（夹具清单见其文件头），这里只认退出码。
+if [[ $SKIP_EMIT_STABLE -eq 0 && $emit_rc -ne 0 ]]; then rc=1; fi
 # clean_checkout: 判据在步骤 10 内部（rc=0 才算"检出即可编译"）；93~99 是选址/登记/提交解析
 # 本身不合法，同样判红——静默跳过等于这一步不存在。
 if [[ $SKIP_CLEAN -eq 0 && $clean_rc -ne 0 ]]; then rc=1; fi

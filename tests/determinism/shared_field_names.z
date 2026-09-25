@@ -1,0 +1,19 @@
+// 出码稳定性夹具（批次 418）—— 只测"同一份源码连编两次字节相同"，不测运行结果。
+// 这一条盯的是字段下标解析：两个形状不同的结构体共用 `name`/`kind`，读写点位按名字
+// 扫全表取命中项；扫描序不固定 ⇒ 同一个 `b.name` 两次出码能落在不同偏移上（改的是
+// 机器码里的立即数，不只是寄存器编号）。
+
+class Alpha:
+    pass
+
+class Beta:
+    pass
+
+def build(q):
+    a = Alpha(kind=1, tag=2, name=3)
+    b = Beta(name=4, kind=5)
+    a.kind = b.name
+    b.name = a.tag
+    return a.kind + b.name
+
+print(build(0))

@@ -44,105 +44,105 @@ runtime/tokio_runtime_stub.c	2697	static int64_t zj_make(int64_t tag, int64_t pa
 runtime/tokio_runtime_stub.c	3792	int64_t zeta_call0(int64_t fptr) {
 runtime/unavailable_stubs.c	83	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
 src/backend/codegen/codegen.rs	60	pub slot_read_ids: std::collections::HashSet<u32>,
-src/backend/codegen/codegen.rs	1069	module.add_function("zeta_call1", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
-src/backend/codegen/codegen.rs	1074	module.add_function("zeta_call0", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External)); module.add_function("zeta_call2", i64_type.fn_type(&[i6
-src/backend/codegen/codegen.rs	1079	module.add_function("zeta_dyn_getitem", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
-src/backend/codegen/codegen.rs	1086	// variadic: (count, fn_ptr, e1..en) — declared with 6 fixed params // (max unroll width); coerce_call_args pads/truncates the rest module.add_function("zeta_co
-src/backend/codegen/codegen.rs	1088	module.add_function("zeta_collect_literals", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.in
-src/backend/codegen/codegen.rs	1114	let printf_type = context.i32_type().fn_type(&[ptr_type.into()], true); // variadic module.add_function("printf", printf_type, Some(Linkage::External));
-src/backend/codegen/codegen.rs	1165	"==",
-src/backend/codegen/codegen.rs	1341	strict_abi: crate::diagnostics::env_flag("ZETA_STRICT_ABI"),
-src/backend/codegen/codegen.rs	1371	fn mangle_function_name( &self, base_name: &str, type_args: &[crate::middle::types::Type], ) -> String { if type_args.is_empty() { return base_name.to_string();
+src/backend/codegen/codegen.rs	1072	module.add_function("zeta_call1", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+src/backend/codegen/codegen.rs	1077	module.add_function("zeta_call0", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External)); module.add_function("zeta_call2", i64_type.fn_type(&[i6
+src/backend/codegen/codegen.rs	1082	module.add_function("zeta_dyn_getitem", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+src/backend/codegen/codegen.rs	1089	// variadic: (count, fn_ptr, e1..en) — declared with 6 fixed params // (max unroll width); coerce_call_args pads/truncates the rest module.add_function("zeta_co
+src/backend/codegen/codegen.rs	1091	module.add_function("zeta_collect_literals", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.in
+src/backend/codegen/codegen.rs	1117	let printf_type = context.i32_type().fn_type(&[ptr_type.into()], true); // variadic module.add_function("printf", printf_type, Some(Linkage::External));
+src/backend/codegen/codegen.rs	1168	"==",
+src/backend/codegen/codegen.rs	1344	strict_abi: crate::diagnostics::env_flag("ZETA_STRICT_ABI"),
+src/backend/codegen/codegen.rs	1374	fn mangle_function_name( &self, base_name: &str, type_args: &[crate::middle::types::Type], ) -> String { if type_args.is_empty() { return base_name.to_string();
 src/backend/codegen/codegen.rs	1392	fn infer_fn_return_type(&self, mir: &Mir) -> inkwell::types::BasicTypeEnum<'ctx> { for stmt in &mir.stmts { if let MirStmt::Return { val } = stmt { if let Some(
 src/backend/codegen/codegen.rs	1412	self.i64_type.into()
 src/backend/codegen/codegen.rs	1467	.param_indices .iter() .map(|(_, pid)| match mir.type_map.get(pid) { Some(Type::F32) => self.context.f32_type().into(), Some(Type::F64) => self.f64_type.into(),
-src/backend/codegen/codegen.rs	1480	let fn_type = match ret_type { inkwell::types::BasicTypeEnum::IntType(it) => it.fn_type(&param_types, false), inkwell::types::BasicTypeEnum::FloatType(ft) => ft
-src/backend/codegen/codegen.rs	1597	self.slot_read_ids = Self::collect_slot_reads(&mir.stmts);
-src/backend/codegen/codegen.rs	1599	for &id in &all_ids { let alloca = match self.current_type_map.as_ref().and_then(|tm| tm.get(&id)) { Some(Type::F32) => self.builder.build_alloca(self.context.f
-src/backend/codegen/codegen.rs	1703	/// int→double for a word that came straight out of a container slot is a /// REINTERPRETATION (the writer bit-cast the double), not a numeric /// conversion — 
-src/backend/codegen/codegen.rs	1706	fn slot_or_sitofp( &mut self, v: inkwell::values::IntValue<'ctx>, id: u32, name: &str, ) -> inkwell::values::FloatValue<'ctx> { if self.slot_read_ids.contains(&
-src/backend/codegen/codegen.rs	1712	if self.slot_read_ids.contains(&id) {
+src/backend/codegen/codegen.rs	1483	let fn_type = match ret_type { inkwell::types::BasicTypeEnum::IntType(it) => it.fn_type(&param_types, false), inkwell::types::BasicTypeEnum::FloatType(ft) => ft
+src/backend/codegen/codegen.rs	1600	self.slot_read_ids = Self::collect_slot_reads(&mir.stmts);
+src/backend/codegen/codegen.rs	1607	for &id in &all_ids { let alloca = match self.current_type_map.as_ref().and_then(|tm| tm.get(&id)) { Some(Type::F32) => self.builder.build_alloca(self.context.f
+src/backend/codegen/codegen.rs	1711	/// int→double for a word that came straight out of a container slot is a /// REINTERPRETATION (the writer bit-cast the double), not a numeric /// conversion — 
+src/backend/codegen/codegen.rs	1714	fn slot_or_sitofp( &mut self, v: inkwell::values::IntValue<'ctx>, id: u32, name: &str, ) -> inkwell::values::FloatValue<'ctx> { if self.slot_read_ids.contains(&
+src/backend/codegen/codegen.rs	1720	if self.slot_read_ids.contains(&id) {
 src/backend/codegen/codegen.rs	2278	let mangled = name.replace("::", "__");
 src/backend/codegen/codegen.rs	2501	let mangled = name.replace("::", "__");
 src/backend/codegen/codegen.rs	2536	let mangled = name.replace("::", "__");
 src/backend/codegen/codegen.rs	2552	let mangled = name.replace("::", "__");
 src/backend/codegen/codegen.rs	2636	fn get_or_declare_function(
-src/backend/codegen/codegen.rs	2646	// Try existing lookup first — check mangled name (:: → __) BEFORE raw name. // gen_mirs stores functions with __, call sites reference with ::.
-src/backend/codegen/codegen.rs	2649	let host_mapped_name = if name.starts_with("str_") { format!("host_{}", name) } else if let Some(resolved) = Self::resolve_string_method(name) { format!("host_{
-src/backend/codegen/codegen.rs	2659	if name.contains("::") { // The EXACT qualified name first, and if it is not there yet (the // definition may be emitted later in the same module) DECLARE it — 
+src/backend/codegen/codegen.rs	2654	// Try existing lookup first — check mangled name (:: → __) BEFORE raw name. // gen_mirs stores functions with __, call sites reference with ::.
+src/backend/codegen/codegen.rs	2657	let host_mapped_name = if name.starts_with("str_") { format!("host_{}", name) } else if let Some(resolved) = Self::resolve_string_method(name) { format!("host_{
 src/backend/codegen/codegen.rs	2664	let mangled = name.replace("::", "__");
-src/backend/codegen/codegen.rs	2675	// Also try the method name directly (Self::new → new) // with param count validation and suffix search. if let Some(method) = name.split("::").last() { // Try 
-src/backend/codegen/codegen.rs	2684	// Try param-suffixed: new_0, new_1, etc. let suffixed = format!("{}_{}", method, args_count); if let Some(f) = self.module.get_function(&suffixed) { return f; 
-src/backend/codegen/codegen.rs	2691	// Check host-mapped name for str_* functions if !host_mapped_name.is_empty() { if let Some(f) = self.module.get_function(&host_mapped_name) { return f; } if le
-src/backend/codegen/codegen.rs	2700	// Fall through to raw name check. // Only return the function if the param count matches. // If param count differs, try param-suffixed name below. if let Some
-src/backend/codegen/codegen.rs	2713	// Try param-count-suffixed name before extern declaration. // Handles overloaded functions declared as name_N in gen_mirs. let param_suffixed = format!("{}_{}"
-src/backend/codegen/codegen.rs	2722	// PY/泛型: call site with no explicit type arguments to a declared // generic function — instantiate with the default substitution // (params fall back to i64, m
-src/backend/codegen/codegen.rs	2731	let mangled = self.mangle_function_name(name, type_args); if let Some(f) = self.module.get_function(&mangled) { return f; }
-src/backend/codegen/codegen.rs	2735	// PY: declared generic called with (inferred or explicit) type args // — monomorphize. The call name may carry a trailing _argc suffix // (id_1 → id); the gene
-src/backend/codegen/codegen.rs	2749	// Also try stripping trailing _N from the full name before mangling. // MIR gen appends _0 for overload disambiguation (oneshot::channel_0), // but the monomor
-src/backend/codegen/codegen.rs	2762	// For path-qualified names (e.g., "oneshot::channel::channel_0"), also try mangling // just the base method name — monomorphized functions use fully-qualified 
-src/backend/codegen/codegen.rs	2782	// Also try the fully-qualified module path as the function name. // e.g., "oneshot::channel::channel_0" → qualified = "oneshot::channel" // Then mangle: "onesh
-src/backend/codegen/codegen.rs	2789	let qual_stored = qual_mangled.replace("::", "__");
-src/backend/codegen/codegen.rs	2799	let base_qual_stored = base_qual_mangled.replace("::", "__");
-src/backend/codegen/codegen.rs	2807	// Check host-mapped name if !host_mapped_name.is_empty() && let Some(f) = self.module.get_function(&host_mapped_name) { return f; } // Check bare name in case 
-src/backend/codegen/codegen.rs	2818	// Also handle LLVM's internal .N suffix for overloaded functions // (LLVM renames e.g. array_new_1 to array_new.1 when name collision detected) let dot_suffixe
-src/backend/codegen/codegen.rs	2824	// Try param-count-suffixed name before creating extern. let param_suffixed = format!("{}_{}", name, args_count); if let Some(f) = self.module.get_function(&par
+src/backend/codegen/codegen.rs	2667	if name.contains("::") { // The EXACT qualified name first, and if it is not there yet (the // definition may be emitted later in the same module) DECLARE it — 
+src/backend/codegen/codegen.rs	2683	// Also try the method name directly (Self::new → new) // with param count validation and suffix search. if let Some(method) = name.split("::").last() { // Try 
+src/backend/codegen/codegen.rs	2692	// Try param-suffixed: new_0, new_1, etc. let suffixed = format!("{}_{}", method, args_count); if let Some(f) = self.module.get_function(&suffixed) { return f; 
+src/backend/codegen/codegen.rs	2699	// Check host-mapped name for str_* functions if !host_mapped_name.is_empty() { if let Some(f) = self.module.get_function(&host_mapped_name) { return f; } if le
+src/backend/codegen/codegen.rs	2708	// Fall through to raw name check. // Only return the function if the param count matches. // If param count differs, try param-suffixed name below. if let Some
+src/backend/codegen/codegen.rs	2721	// Try param-count-suffixed name before extern declaration. // Handles overloaded functions declared as name_N in gen_mirs. let param_suffixed = format!("{}_{}"
+src/backend/codegen/codegen.rs	2730	// PY/泛型: call site with no explicit type arguments to a declared // generic function — instantiate with the default substitution // (params fall back to i64, m
+src/backend/codegen/codegen.rs	2739	let mangled = self.mangle_function_name(name, type_args); if let Some(f) = self.module.get_function(&mangled) { return f; }
+src/backend/codegen/codegen.rs	2743	// PY: declared generic called with (inferred or explicit) type args // — monomorphize. The call name may carry a trailing _argc suffix // (id_1 → id); the gene
+src/backend/codegen/codegen.rs	2757	// Also try stripping trailing _N from the full name before mangling. // MIR gen appends _0 for overload disambiguation (oneshot::channel_0), // but the monomor
+src/backend/codegen/codegen.rs	2770	// For path-qualified names (e.g., "oneshot::channel::channel_0"), also try mangling // just the base method name — monomorphized functions use fully-qualified 
+src/backend/codegen/codegen.rs	2790	// Also try the fully-qualified module path as the function name. // e.g., "oneshot::channel::channel_0" → qualified = "oneshot::channel" // Then mangle: "onesh
+src/backend/codegen/codegen.rs	2797	let qual_stored = qual_mangled.replace("::", "__");
+src/backend/codegen/codegen.rs	2807	let base_qual_stored = base_qual_mangled.replace("::", "__");
+src/backend/codegen/codegen.rs	2815	// Check host-mapped name if !host_mapped_name.is_empty() && let Some(f) = self.module.get_function(&host_mapped_name) { return f; } // Check bare name in case 
+src/backend/codegen/codegen.rs	2826	// Also handle LLVM's internal .N suffix for overloaded functions // (LLVM renames e.g. array_new_1 to array_new.1 when name collision detected) let dot_suffixe
 src/backend/codegen/codegen.rs	2829	// Strip trailing _N suffix and try base name with param count validation. // (Reverses the MIR gen's name_N disambiguation for runtime/pre-declared fns.) let m
-src/backend/codegen/codegen.rs	2839	// Guard: the suffix must be ALL digits (a real _N disambiguator). // Without this, "to_string_f64" was treated as "to_string" + suffix // ("f64" contains digit
+src/backend/codegen/codegen.rs	2832	// Try param-count-suffixed name before creating extern. let param_suffixed = format!("{}_{}", name, args_count); if let Some(f) = self.module.get_function(&par
+src/backend/codegen/codegen.rs	2847	// Guard: the suffix must be ALL digits (a real _N disambiguator). // Without this, "to_string_f64" was treated as "to_string" + suffix // ("f64" contains digit
 src/backend/codegen/codegen.rs	2857	// Not found — create extern declaration matching the call site's arg count let base_name = if stripped_name.is_empty() { name } else { &stripped_name }; // For
-src/backend/codegen/codegen.rs	2874	base_name.replace("::", "__")
-src/backend/codegen/codegen.rs	2877	.replace("::", "__")
-src/backend/codegen/codegen.rs	2906	let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect(); let fn_type = self.i64_type.fn_type(&param_types, false); return self .module
-src/backend/codegen/codegen.rs	2919	// Dedupe guard: adding a function whose name already exists makes LLVM // auto-rename the duplicate (name.N), producing call sites that point // at symbols wit
-src/backend/codegen/codegen.rs	2932	// linker could never satisfy (4 of them: __get_price_3/__get_price_7/ // __get_trade_days_2/__OrderCost_6). Default arguments make the // call-site arity diffe
-src/backend/codegen/codegen.rs	2935	if actual_name.starts_with("zeta_") || actual_name.contains("__") {
-src/backend/codegen/codegen.rs	2948	let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect(); let fn_type = self.i64_type.fn_type(&param_types, false); self.module .add_fu
-src/backend/codegen/codegen.rs	3341	MirStmt::Assign { lhs, rhs } => { let val = self.gen_expr_safe(rhs, exprs); let alloca = *self.locals.get(lhs).unwrap(); // An INT value stored into a FLOAT slo
-src/backend/codegen/codegen.rs	3375	self.note_return_slot_mismatch(func, dest, args.len());
-src/backend/codegen/codegen.rs	3825	let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, l, r, "eq").unwrap(); self.builder.build_int_z_extend(cmp, self.i64_type, "eq_ext").unwrap()
+src/backend/codegen/codegen.rs	2882	base_name.replace("::", "__")
+src/backend/codegen/codegen.rs	2885	.replace("::", "__")
+src/backend/codegen/codegen.rs	2914	let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect(); let fn_type = self.i64_type.fn_type(&param_types, false); return self .module
+src/backend/codegen/codegen.rs	2927	// Dedupe guard: adding a function whose name already exists makes LLVM // auto-rename the duplicate (name.N), producing call sites that point // at symbols wit
+src/backend/codegen/codegen.rs	2940	// linker could never satisfy (4 of them: __get_price_3/__get_price_7/ // __get_trade_days_2/__OrderCost_6). Default arguments make the // call-site arity diffe
+src/backend/codegen/codegen.rs	2943	if actual_name.starts_with("zeta_") || actual_name.contains("__") {
+src/backend/codegen/codegen.rs	2956	let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect(); let fn_type = self.i64_type.fn_type(&param_types, false); self.module .add_fu
+src/backend/codegen/codegen.rs	3349	MirStmt::Assign { lhs, rhs } => { let val = self.gen_expr_safe(rhs, exprs); let alloca = *self.locals.get(lhs).unwrap(); // An INT value stored into a FLOAT slo
+src/backend/codegen/codegen.rs	3383	self.note_return_slot_mismatch(func, dest, args.len());
+src/backend/codegen/codegen.rs	3833	let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, l, r, "eq").unwrap(); self.builder.build_int_z_extend(cmp, self.i64_type, "eq_ext").unwrap()
 src/backend/codegen/codegen.rs	3859	let coerced = self.coerce_call_args(callee, arg_vals, args);
 src/backend/codegen/codegen.rs	3875	let coerced = self.coerce_call_args(callee, arg_vals, args);
-src/backend/codegen/codegen.rs	4381	let needs_ptr_arg = base_func == "option_is_some" || base_func == "option_get_data" || base_func == "option_free" || base_func == "host_result_is_ok" || base_fu
+src/backend/codegen/codegen.rs	4389	let needs_ptr_arg = base_func == "option_is_some" || base_func == "option_get_data" || base_func == "option_free" || base_func == "host_result_is_ok" || base_fu
 src/backend/codegen/codegen.rs	4396	if needs_ptr_arg && i == 0 {
 src/backend/codegen/codegen.rs	4410	let coerced = self.coerce_call_args(callee, arg_vals, args);
-src/backend/codegen/codegen.rs	4418	let final_val = if returns_ptr { let ptr_val = val.into_pointer_value(); self.builder .build_ptr_to_int(ptr_val, self.i64_type, "ptrtoint") .unwrap() .into() } 
+src/backend/codegen/codegen.rs	4426	let final_val = if returns_ptr { let ptr_val = val.into_pointer_value(); self.builder .build_ptr_to_int(ptr_val, self.i64_type, "ptrtoint") .unwrap() .into() } 
 src/backend/codegen/codegen.rs	4567	let coerced = self.coerce_call_args(callee, arg_vals, args);
-src/backend/codegen/codegen.rs	4585	let want_float = self .builder .get_insert_block() .and_then(|b| b.get_parent()) .map_or(false, |f| { matches!( f.get_type().get_return_type(), Some(inkwell::ty
-src/backend/codegen/codegen.rs	4595	let ret_val = if want_float && !matches!( ret_val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_) ) { self.builder .build_signed_int_to_float(ret_val.in
-src/backend/codegen/codegen.rs	4617	// linker at all. `infer_fn_return_type` only scans top-level // returns, so nested ones are never consulted.
-src/backend/codegen/codegen.rs	4792	let coerced = self.coerce_call_args(
-src/backend/codegen/codegen.rs	5489	MirStmt::StructFieldStore { base_id, field, val_id, } => { // base.field = val — store through the heap struct pointer. // Fields are 8-byte slots at offset ind
-src/backend/codegen/codegen.rs	5689	fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
-src/backend/codegen/codegen.rs	5750	MirExpr::StringLit(s) => { let global = self.module.add_global( self.context.i8_type().array_type(s.len() as u32 + 1), None, "str_lit", ); global.set_linkage(in
-src/backend/codegen/codegen.rs	5938	if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
+src/backend/codegen/codegen.rs	4593	let want_float = self .builder .get_insert_block() .and_then(|b| b.get_parent()) .map_or(false, |f| { matches!( f.get_type().get_return_type(), Some(inkwell::ty
+src/backend/codegen/codegen.rs	4603	let ret_val = if want_float && !matches!( ret_val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_) ) { self.builder .build_signed_int_to_float(ret_val.in
+src/backend/codegen/codegen.rs	4625	// linker at all. `infer_fn_return_type` only scans top-level // returns, so nested ones are never consulted.
+src/backend/codegen/codegen.rs	4800	let coerced = self.coerce_call_args(
+src/backend/codegen/codegen.rs	5497	MirStmt::StructFieldStore { base_id, field, val_id, } => { // base.field = val — store through the heap struct pointer. // Fields are 8-byte slots at offset ind
+src/backend/codegen/codegen.rs	5697	fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
+src/backend/codegen/codegen.rs	5758	MirExpr::StringLit(s) => { let global = self.module.add_global( self.context.i8_type().array_type(s.len() as u32 + 1), None, "str_lit", ); global.set_linkage(in
+src/backend/codegen/codegen.rs	5946	if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
 src/backend/codegen/codegen.rs	6211	// Allocate struct on HEAP to prevent dangling pointers
 src/backend/codegen/codegen.rs	6212	let total_bytes = self.i64_type.const_int( (fields.len() as u64) * 8, false, );
-src/backend/codegen/codegen.rs	6255	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
-src/backend/codegen/codegen.rs	6256	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
-src/backend/codegen/codegen.rs	6279	// Return heap pointer as i64 (caller reads from valid heap memory) heap_ptr_val.into()
+src/backend/codegen/codegen.rs	6263	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
+src/backend/codegen/codegen.rs	6264	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
+src/backend/codegen/codegen.rs	6287	// Return heap pointer as i64 (caller reads from valid heap memory) heap_ptr_val.into()
 src/backend/codegen/codegen.rs	6399	// Determine struct type from the Struct expression; when the base // is not a literal Struct (a function PARAMETER or a call result) // fall back to the base's
-src/backend/codegen/codegen.rs	6477	}) { Some(vc) => vc, None => (String::new(), 2), }
+src/backend/codegen/codegen.rs	6485	}) { Some(vc) => vc, None => (String::new(), 2), }
 src/backend/codegen/codegen.rs	6501	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> = (0..field_count).map(|_| self.i64_type.into()
-src/backend/codegen/codegen.rs	6544	let extracted = self .builder .build_extract_value(loaded_struct.into_struct_value(), field_index, "") .unwrap();
+src/backend/codegen/codegen.rs	6552	let extracted = self .builder .build_extract_value(loaded_struct.into_struct_value(), field_index, "") .unwrap();
 src/backend/codegen/codegen.rs	6740	// PY-A layout unification: allocate [cap | len | elem0 .. elemN-1] // and hand out a pointer to elem0 (buf + 16), matching the Vec / // DynamicArray runtime la
-src/backend/codegen/codegen.rs	6814	// Return pointer to elem0 (buf + 16) as i64 let data_ptr = unsafe {
-src/backend/codegen/codegen.rs	6889	fn coerce_call_args( &mut self, callee: inkwell::values::FunctionValue<'ctx>, args: Vec<BasicMetadataValueEnum<'ctx>>, arg_ids: &[u32], ) -> Vec<BasicMetadataVa
-src/backend/codegen/codegen.rs	6923	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::IntType(pt)) => { let arg_ty = iv.get_type(); if arg_ty.get_bit_width() < pt.get_bit_width
-src/backend/codegen/codegen.rs	6931	self.abi_note( &callee_name, i, &format!( "narrow i{}→i{}", arg_ty.get_bit_width(), pt.get_bit_width() ), );
-src/backend/codegen/codegen.rs	6940	match self.builder.build_int_truncate(iv, pt, "arg_trunc") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum
-src/backend/codegen/codegen.rs	6944	} else { result.push(BasicMetadataValueEnum::IntValue(iv)); }
-src/backend/codegen/codegen.rs	6948	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::FloatType(ft)) => { // Batch 299: a raw container-slot word is a BIT PATTERN, so // reinte
-src/backend/codegen/codegen.rs	6960	self.builder .build_signed_int_to_float(iv, ft, "arg_sitofp") .map(|v| BasicValueEnum::from(v)) };
-src/backend/codegen/codegen.rs	6969	(BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => { self.abi_note( &callee_name, i, &format!("fptosi → i{}", pt.get_bit_wi
-src/backend/codegen/codegen.rs	6975	match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataV
-src/backend/codegen/codegen.rs	6980	(BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_)) | (BasicMetadataValueEnum::PointerValue(_), inkwell::types::BasicTypeEnum
-src/backend/codegen/codegen.rs	6985	_ => result.push(arg),
-src/backend/codegen/codegen.rs	6988	if result.len() < n_params { for i in result.len()..n_params { let pt_meta = fn_type.get_param_types()[i]; let zero: BasicMetadataValueEnum<'ctx> = match pt_met
-src/backend/codegen/codegen.rs	7010	} else if result.len() > n_params { result.truncate(n_params);
+src/backend/codegen/codegen.rs	6822	// Return pointer to elem0 (buf + 16) as i64 let data_ptr = unsafe {
+src/backend/codegen/codegen.rs	6897	fn coerce_call_args( &mut self, callee: inkwell::values::FunctionValue<'ctx>, args: Vec<BasicMetadataValueEnum<'ctx>>, arg_ids: &[u32], ) -> Vec<BasicMetadataVa
+src/backend/codegen/codegen.rs	6931	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::IntType(pt)) => { let arg_ty = iv.get_type(); if arg_ty.get_bit_width() < pt.get_bit_width
+src/backend/codegen/codegen.rs	6939	self.abi_note( &callee_name, i, &format!( "narrow i{}→i{}", arg_ty.get_bit_width(), pt.get_bit_width() ), );
+src/backend/codegen/codegen.rs	6948	match self.builder.build_int_truncate(iv, pt, "arg_trunc") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum
+src/backend/codegen/codegen.rs	6952	} else { result.push(BasicMetadataValueEnum::IntValue(iv)); }
+src/backend/codegen/codegen.rs	6956	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::FloatType(ft)) => { // Batch 299: a raw container-slot word is a BIT PATTERN, so // reinte
+src/backend/codegen/codegen.rs	6968	self.builder .build_signed_int_to_float(iv, ft, "arg_sitofp") .map(|v| BasicValueEnum::from(v)) };
+src/backend/codegen/codegen.rs	6977	(BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => { self.abi_note( &callee_name, i, &format!("fptosi → i{}", pt.get_bit_wi
+src/backend/codegen/codegen.rs	6983	match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataV
+src/backend/codegen/codegen.rs	6988	(BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_)) | (BasicMetadataValueEnum::PointerValue(_), inkwell::types::BasicTypeEnum
+src/backend/codegen/codegen.rs	6993	_ => result.push(arg),
+src/backend/codegen/codegen.rs	6996	if result.len() < n_params { for i in result.len()..n_params { let pt_meta = fn_type.get_param_types()[i]; let zero: BasicMetadataValueEnum<'ctx> = match pt_met
 src/backend/codegen/codegen.rs	7012	fn abi_note(&mut self, callee: &str, arg_i: usize, kind: &str) { self.abi_warn_count = self.abi_warn_count.saturating_add(1); if self.abi_warn_count <= 8 { epri
-src/backend/codegen/codegen.rs	7039	fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
-src/backend/codegen/codegen.rs	7422	pub fn type_to_llvm_type(&self, ty: &Type) -> inkwell::types::BasicTypeEnum<'ctx> {
-src/backend/codegen/codegen.rs	7528	Type::Tuple(element_types) => { let llvm_element_types: Vec<inkwell::types::BasicTypeEnum> = element_types .iter() .map(|t| self.type_to_llvm_type(t)) .collect(
+src/backend/codegen/codegen.rs	7018	} else if result.len() > n_params { result.truncate(n_params);
+src/backend/codegen/codegen.rs	7047	fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
+src/backend/codegen/codegen.rs	7430	pub fn type_to_llvm_type(&self, ty: &Type) -> inkwell::types::BasicTypeEnum<'ctx> {
+src/backend/codegen/codegen.rs	7536	Type::Tuple(element_types) => { let llvm_element_types: Vec<inkwell::types::BasicTypeEnum> = element_types .iter() .map(|t| self.type_to_llvm_type(t)) .collect(
 src/backend/codegen/mod.rs	7	mod runtime_decls_registry;
 src/backend/codegen/mod.rs	9	mod runtime_decls_core;
 src/backend/codegen/runtime_decls_core.rs	51	module.add_function("zeta_env_get", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External)); module.add_function("zeta_env_set", void_type.fn_type
@@ -238,9 +238,9 @@ tools/gen_from_registry.py	116	param_exprs = [] for a in args: if a == "f64": pa
 tools/gen_from_registry.py	288	def emit_aliases_inc(path: Path) -> str: lines = [ "/* @generated by tools/gen_from_registry.py --emit-aliases — DO NOT EDIT */", "/* Source: pylib/runtime_alia
 tools/parse_bisect.py	158	ap.add_argument("--zetac", default=os.path.join(ROOT, "target/release/zetac"))
 tools/run_all.sh	10	ZETAC="${ZETAC:-$ROOT/target/release/zetac}"
-tools/run_all.sh	101	elif "$ZETAC" "$z" --no-link -o "/tmp/zt_out/$n" >/dev/null 2>/dev/null; then
-tools/run_all.sh	196	jit_ok=$(echo "$line" | sed -nE 's/^jit sweep: ok=([0-9]+) .*/\1/p'); jit_ok=${jit_ok:-0}
-tools/run_all.sh	575	if [[ $SKIP_OFFICIAL -eq 0 && $official_compile -ne $official_total ]]; then rc=1; fi
+tools/run_all.sh	103	elif "$ZETAC" "$z" --no-link -o "/tmp/zt_out/$n" >/dev/null 2>/dev/null; then
+tools/run_all.sh	198	jit_ok=$(echo "$line" | sed -nE 's/^jit sweep: ok=([0-9]+) .*/\1/p'); jit_ok=${jit_ok:-0}
+tools/run_all.sh	604	if [[ $SKIP_OFFICIAL -eq 0 && $official_compile -ne $official_total ]]; then rc=1; fi
 validate.md	46	| `tools/check_registry_symbols.sh` | registry F/W/X ↔ runtime .o | `./tools/check_registry_symbols.sh` |
 validate.md	151	- f64 参数的 extern 声明若写 i64 → fptosi 截断（abs(-2.5)→nan 的根因）
 zetas/capybara/COMPILER_BUGS.md	29	**Symptom:** Functions stored in LLVM module as `storage::store_open` but called as `storage__store_open` when call site precedes definition.
