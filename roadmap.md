@@ -17635,6 +17635,146 @@ ABI 两文件等量重绑（`docs/ABI.md 26/26`、`abi_anchors.tsv 34/34`）。
    `[PARITY]` 37 行全是指针形、`_fmt` 那族地址插值。
 4. **#136** 漏点族逐个定价（每点一个最小夹具 + HEAD 对照）。
 
+## 批次 414（主线 301：`with` 体抛异常时 `__exit__` 从不执行 ⇒ 互斥量被永久扣住，语料在 `fetch_stocks` 里死锁）
+
+### 一、症状（最小复现）
+
+**语料侧**：slim 驱动 `REasyQuant/_drv_probe414s.py`（S1–S7 七格，直调
+`MarketDataFetcher.fetch_stocks`）改前 **rc=124**（`timeout 100`，本批复跑实拍），
+`sample` 落在 `_MarketDataFetcher::fetch_stocks → py_threading_lock_acquire →
+__psynch_mutexwait`。同一份驱动 `.venv/bin/python` **1.571 s 跑完**，
+S1 119 / S2 115 / S3 2023-08-05 / S4 12858 / S5 12858 / S6 136 / S7 103。
+
+**套件侧最小复现** `/tmp/b414/sh/c2.z`（9 行）：`with L:` 里 raise，外层 `try/except`
+接住，之后再 `with L:` —— 改前 rc=124、零输出；改后 `c2 caught <addr>` + `c2 reacquired`。
+同形另两例：`f1`（`try/finally` 包 with）rc=124 → `fin-ran|reacquired`。
+
+### 二、定位（第四条出口：异常 longjmp 不经过任何块边界）
+
+`parse_with` 的 desugar 是线性的 `enter; body; exit`。三条"提前离开"的边早由
+`rewrite_with_exits` 各自补了 exit（`return`/`break`/`continue`，按 `at_loop_depth` 门控），
+第四条边补不了 —— `raise` 直接 `_longjmp` 到最近的 try 帧
+（`runtime/py_additions.c:2486-2540`，`zt_jmps2`/`zt_jtop2`），落点是 `zeta_try_setjmp`
+的第二次返回，**根本不回到 with 块的任何后续语句** ⇒ release 从不执行。
+
+本轮实测到的出口语义（15 例最小夹具 `/tmp/b414/sh/{c1..c6,f1..f8,u1}.z`，两侧同形的另标）：
+
+| 出口 | `__exit__`（改前） | `finally`（改前） | 判据夹具 |
+|---|---|---|---|
+| fall-through | 跑 | 跑 | `c1 0\|c1 2\|c1-after`（`continue` 绑到 with **内层**循环 ⇒ 本就不该跑 exit） |
+| `return` | 跑（解析器改写） | **不跑** | `c3 7\|c3 reacquired` |
+| `break` | 跑（解析器改写） | **不跑** | `c4 1\|c4 reacquired` |
+| 抛出异常 | **从不跑** ← 本批 | 跑 | `c2`/`c5`/`f1` 改前 rc=124 |
+
+`finally` 对前三条不跑这条，正是本批必须给那三条边各补一次 `zeta_try_end` 的理由。
+
+### 三、修复（最小修：with 体下进 try 帧 + 三条边各 pop 一次）
+
+- `stmt.rs:1703`（`parse_with`）：`then = body`（+ 末尾 `zeta_try_end(); exit()`，仅当
+  `branch_falls_through`），`else = e = zeta_last_error(); zeta_try_end(); exit(); zeta_raise(e)`
+  —— 收尾照跑再把**原码**抛出去，传播链不变。
+- `stmt.rs:1312/1317/1322`（`rewrite_with_exits`）：三条边各补 `zeta_try_end()`。
+  不做这一步是**反向**的同一个病：帧留在表上，下一次 raise 落进僵尸帧 —— 与
+  `parse_try_stmt` 注释里 `ParquetCache.load_metadata` SEGV（`+184`）同一类病根，
+  那段的"两分支都要 pop"历史注释原样保留。
+- `stmt.rs:1367` 新 `zeta_try_frame(then_tail, else_tail)`，`parse_try_stmt`（`:1526-1560`）
+  的内联骨换成调用它 —— 等义搬行，无行为改动（`+128 -26` 里占 40 行）。
+- `runtime/py_additions.c` 一行未改（只读）。
+- 不做双释放的哨位就是 §一 那张表的夹具：四条边每条只跑一次 exit。
+
+### 四、判据（一条新用例，改前实拍在案）
+
+`t452_with_exception_releases_lock.z` PASS，`// expect: t452 [1, 4, 5]`，四条出口各一格，
+判据落在最后那句 `with L:`（拿不到锁就没有任何输出）＋ `R` 里有 4（异常这条不得把传播吞掉）。
+**改前实拍**：同一份源码用批前 HEAD（`4a364fb8`，隔离 worktree `/tmp/b414/headwt`，
+`CARGO_TARGET_DIR=/tmp/b414/cargo` 编出的 `zetac`）编译 → 运行 = **rc=124、零输出**；
+改后 rc=0、`t452 [1, 4, 5]`。两臂二进制都放在 `/tmp/b414/headwt/` 同一目录运行
+（换目录会换掉运行时 `.o` 与 `pylib` 的查找基，见批次 413 §八 同族坑）。
+`spin` 那一格是判据自身的一部分：`break` 跳出的是**外层 for** ⇒ 循环整个终止 ⇒
+`R` 里没有 3，与 CPython 同形（`/tmp/b414/sh/x6.z` 实拍 `[0, 1]`）。
+
+### 五、门禁（`bash tools/run_all.sh` rc=0，`/tmp/b414/gate414.log`）
+
+| 项 | 读数 | 413 |
+|---|---|---|
+| official | compile 194/194，compile+link 191/194，link-only 3 条同名 | 相同 |
+| python_style | **334 passed / 2 failed / 6 known-fail / 0 xpass**（+t452 通过；failed 仍是 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`） | 333/2/6/0 |
+| compile-diagnostics | official 2 文件 / 5 行；python_style 104 文件 / **219 行** | 104 / 217 |
+| 语料 | 40/40 = 100%（本批无超时） | 相同 |
+| jit sweep | ok=176 trap=**363** total=**539** 最小 ok=163 GREEN | 176/362/538 |
+| diff | match=120 judged=130 rate=92.3% bad_case=0 | 相同 |
+| 断言族 | knob 23/0、swallow 6/0、import 22/0、empty_stmt 68/0、pysrc 42/0、cli_semantics 73/0、ignore_rules 19/0 | 相同 |
+| clean_checkout | rc=0（2 s，rev=4a364fb8） | 相同 |
+
+**diagnostics +2 行归因到了点位**（不是"涨了就算了"）：那条告警在 `gen.rs:5883` 按
+**调用点**计数（`zeta_with_enter`/`zeta_with_exit` 各算一次），本批给每个"接收者无已知协议"
+的 `with` 多下了一处 exit（handler 分支）⇒ 每个这样的 with 涨一行。逐个文件两臂实拍：
+`t242_with_return` 2→3、`t32_with` 2→3，其余 5 个 `with` 族文件不变
+（`t41`/`t287`/`t58` 在 HEAD 臂上各多一条 W1006"找不到 `pylib` 基"，那是隔离仓缺未跟踪
+目录造成的**假告警**，不是本批的负 delta）。`t452` 自身零告警 ⇒ 文件数仍 104。
+**jit total 538→539**：`tools/jit_sweep.sh:33` 的 glob 是 `tests/python_style/*.z`，把 t452
+收进枚举；它落 trap 桶是 #26/#42 那条已知路（JIT 无 `-o` 不链 `runtime/*.c`），实拍 15 个
+未绑符号里 **5 个正是本批新带进来的** `zeta_try_enter/zeta_try_slot/zeta_try_end/zeta_last_error/zeta_raise`
+⇒ 本批把"任何用 `with` 的程序"的 JIT 依赖面变宽 5 个符号，AOT 侧无感（link-only 三条同名未动）。
+
+### 六、ABI 锚点
+
+**不需 `--rebind`，且这是量出来的**：基线 250 条里 `src/frontend/parser/stmt.rs` 出现
+**0 次**（`grep -c "stmt.rs" tools/baselines/abi_anchors.tsv` → 0）。改后只读核对
+**漂移 32 / 新 11 / 消失 3**，与批次 413 §七 的"改后"那一栏逐字相同。
+另记一条隔离仓测量坑：同一把尺子在 `/tmp/b414/headwt` 读 **32 / 11 / 5**，多出的 2 条消失是
+`runtime/aliases.inc.c:1` 与 `:12` —— 那是**未跟踪的生成文件**，worktree 里没有
+⇒ 拿 `git worktree` 做锚点对照，会把"文件不在"读成"文档不再引用"。
+
+### 七、主线位移量（用户裁定第 3 条：主线 301）
+
+- **死锁这一格收了**：slim 探针改前 rc=124 → 改后 rc=1，且 S1/S2/S3 第一次出声：
+  `S1 codes 119`、`S2 codes-filt 115`、`S3 warmup 2023-08-05` —— 与 CPython 参照**逐字相等**
+  （改前三格在改前臂上读不出：stdout 块缓冲 + SIGKILL ⇒ "零输出"不能当"没打印"用）。
+- **卡点移到 S4**（`fetch_stocks` 内部）：`上市日过滤失败（跳过过滤）: %s <addr>`
+  （`market_data_fetcher.py:537` 的 except 确实接住了，`%s` 没插值是存量惰性格式串残口）
+  → `Unhandled exception: code=4335673184`，rc=1。这格**改前不可测**（HEAD 臂到不了这里），
+  所以"被死锁遮住的存量"还是"本批 raise 改道新暴露的传播"两说，**归因未做**（#137④）。
+- **一条重要的路径差别**：本探针走的是**联网批量拉取**（`[source-priority] 批量路径使用
+  baostock：115 只`），而 acceptance 走的是**缓存命中**（`缓存命中 103 只；待拉取 0 只`，
+  且那边 `fetch_stocks` 返回过 12,858 行的 df）⇒ S4 这条出声异常**不在 0 成交链上**，
+  #131 的下一格要拿**缓存命中**形驱动做，不是这把。
+- `codes=0 / trading_days=0` 三格读数本批未动（#131 继续挂）；`[PARITY]` 37 行指针形、
+  `1000000 -> 0 (-100.00%)` 同。
+
+### 八、同批判死的候选与新增登记（负断言配正证据）
+
+- **判死**：#131 的"dyn-map 往返读空"假设在最小探针上不复现 —— 模块全局
+  `dict[str, Any]` 写 list / map / 调用结果 / `x or []` 四种形，改后读回长度逐字正确
+  （`/tmp/b414/p2.out`）。
+- **判死，并作废本批一批读数**：`def loop():` 会让解析器**静默截断整个文件**
+  （W1002 "11 line(s) … NOT parsed"）⇒ 早前 w3/w4/w5 那几条"零输出"是截断造成的，
+  不是行为差异；两臂同形 ⇒ 非本批回归。判据改用 `spin` 后 `x6` 实拍 `[0, 1]`。登记 #137①。
+- 登记 #137 共 5 条：① `loop` 标识符截断；② 用户自定义类的 `with` 不调
+  `__enter__/__exit__`（`gen.rs:5899-5915` 的 `Type::Named` 分支只查 `func_ret_types`，
+  c6 走 identity+warning 那条）；③ `try/finally` 无 `except` 时异常被吞
+  （else 分支只有 `zeta_try_end`，f1/f2 缺 "caught"）；④ S4 那条出声异常的归因（见 §七）；
+  ⑤ JIT 依赖面变宽 5 个符号（见 §五）。
+- 另三条测量坑：探针形参写 `list[str] or None` ⇒ W1002 截断整个文件（联合语法是 `|`）；
+  被编译程序的 stdout 重定向时块缓冲，SIGKILL 后"零输出"≠"没打印"；system `python3`
+  无 pyarrow ⇒ CPython 参照必须走 `.venv/bin/python`（pyarrow 25.0.0 / pandas 3.0.3）。
+
+### 九、提交
+
+`70b46b22`，2 文件 `+151 -26`：`src/frontend/parser/stmt.rs +128 -26`、新用例
+`t452_with_exception_releases_lock.z +49`。仅 AST/解析侧，`runtime/py_additions.c` 只读未改。
+推送 `agentic/bootstrap`：`4a364fb8..70b46b22`，`git rev-list --count agentic/bootstrap..HEAD` = 0。
+
+### 十、下一批候选（按已实测损害量）
+
+1. **#131（换驱动再定位）**：拿**缓存命中**形 acceptance 驱动复跑，看 `codes=0 / trading_days=0`
+   在死锁修好后是否仍为 0 —— 这是 0 成交链上唯一还没复测的读数，且 411/412/413 三批都对它"未动"。
+2. **#134** `GroupBy.__len__` 恒 0：同一条链，413/414 之后必须复测。
+3. **#137①** `def loop():` 静默截断整个文件 —— 丢代码族里唯一有新成员形状的，
+   语料凡用 `loop` 作标识符的都还在丢（先取语料计数再定价）。
+4. **打印族 #117/#118**（用户裁定第 4 条第一格）＝动态槽类型标记：`[PARITY]` 37 行全是指针形、
+   `code=<addr>`、`%s` 不插值，三处症状同一根源。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 一个一个修语法缺口的办法已经到头：最近 5 个批次（375/381/386/390/392）全部只做定位、没改代码，结论都指向同两个根源——**值身上没有类型标记、函数之间查不到类型**。丢代码检查剩 2 个文件 / 176 行，全部卡在这两个根源上；另外又发现 3 个文件也在丢代码（共 936 行），老办法能修但优先级让位。
