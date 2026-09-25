@@ -19469,6 +19469,94 @@ $ ZETA_DBG_FA=1 zetac_pre427 同一夹具                                # 改�
 5. **`git status --short --cached` 没有这个选项**（rc=129）⇒ `&&` 链当场断，`git commit` **没有发生**。正证据：随后 `git log -1` 打出的还是上一批的 hash。改用 `git diff --cached --name-only`。
 6. **zsh 没有 `$PIPESTATUS`** ⇒ 锚点核对那一步第一次报的是 `ANCHOR_RC=n/a`（不是 rc）。与 §七 末条同类：管道/复合命令的 rc 要单独落盘再读。
 
+## 批次 434（3.2 Lowering／字段布局的**收集面**）：只在构造之后出现的属性现在有自己的槽 —— 语料 7 条写从偏移 0 挪到 328~376、5 个分配点加宽，主线位移未判定
+
+层号：**3.2 Lowering／出码期的字段布局判定**（`struct_defs` 的收集面只有构造器名单，构造之后的属性名进不了布局）。代码提交 `a5418a77`（`src/backend/codegen/codegen.rs` 299 增 / 10 删，改后文件 8413 行；新夹具 49 行），锚点重绑 `49a92075`（`docs/ABI.md` 75/75、`tools/baselines/abi_anchors.tsv` 86/85）。
+
+### 一、复现与真值
+
+- 夹具 `tests/python_style/t469_post_construction_slot.z`：`Box` 在 `__init__` 里声明 `kind,n`（2 格），构造之后写 `b1.extra = 99`，并经 `Box::stamp` 写 `self.late`；`Empty` 是 `class Empty: pass`（0 格），构造之后写两个属性。
+- 改后三行 = CPython 3.14.5 同形程序实拍值：`b1 7 8 99 5 / b2 7 8 100 / empty 3 4`；改前三行全错：`b1 5 8 5 5`（`kind` 先被 99 踩掉、再被 5 踩掉）、`b2 100 8 100`、`empty 4 4`（两个属性挤同一格，后写覆盖先写）。
+- 夹具侧追加实拍（`ZETA_DBG_FA=1` 改后编译）：`FA ext+ variant="Box" field="late"/"extra"`、`variant="Empty" field="first"/"second"` ⇒ 2 条布局 / 4 个名字，与语料侧走的是同一张表。
+- 两颗二进制身份当场核对（432 §十.1 / 433 §十.3 那条坑的又一入口）：pre＝`/tmp/b434/zetac_pre434` md5 `d7d44a9a367825b535ea9a39d3520433`（与 433 的"改后建"同一 md5 ⇒ 434 的 pre 就是 433 的 post），在该夹具上 `FA ext+` **0 条**；post＝`target/release/zetac` md5 `e3267a477f32e2b89fdc8549bde00d60`，同一命令 5 条（去重 4 个名字）⇒ 两侧未写反。
+- 这一路在 `__init__` 里打不到（构造期 `self.x = v` 下成 `MirStmt::StructNew`，按书写序自己落块），必须把赋值写在构造之后 —— 433 §一 的同一条边界。
+
+### 二、定位（不是名→槽不对称，是**收集面**缺人）
+
+- `struct_defs` 的键来自 `gen_mirs` 前置遍里那条 `MirExpr::Struct{variant, fields}` 名单（`codegen.rs:1482` 起），**只看得见构造器下成的字段**；构造之后才出现的属性名在任何布局里都没有格子。
+- 读侧两条布局路（跟着构造表达式回溯、退到接收者声明类型）都要求"这条布局真的声明了它"，于是双双放手 ⇒ 落到 425/426 的替身 `("", 2)`，索引被夹到 0/1。
+- 后果：替身命中时读写的接收者**是真有布局的对象**（`base_ty=Some(I64)`、块宽 41/2/…格），写就把该类自己声明的第一格踩掉，读就读回那一格 —— 433 §九.3 登记的正是这一格，本批收掉它。
+- 改前语料侧实测（`_drv_accept_409.py` 全量编译，`ZETA_DBG_FA=1`）：`FA read` 598 行、其中 `variant=""` 替身 **251** 行；`FA write` 126 行、替身 20 行。427 在册的"152 处替身读 / 146 处无人声明"与本读数**口径不同**（那是 `FA decls` 唯一名口径），已在 #156 标注。
+
+### 三、修法（最小：出码前再扫一遍 MIR，把缺的名字记成追加槽）
+
+- 三张新表：`struct_ext_layouts`（类别→追加名，`codegen.rs:114`）、`struct_variant_widths`（类别→构造宽度集合，`:119`）、`struct_declared_fields`（类别→声明名，`:123`），每次 `gen_mirs` 先清空（`:1479-1481`）。
+- 追加遍（`:1546-1597`）：只认 `MirStmt::StructFieldStore`，接收者类别两个来源 —— `Cls::method` 体内沿 `param_indices` 的 `*self` 回溯（`traces_to_expr :6253` + `bare_variant_of :6218`），或 `type_map` 上的 `Type::Named` 声明；两者都没有（裸 i64 句柄）就**不收**。字段名已在声明集里的跳过；探针 `FA ext+ variant= field= via=` 与落表**同一条路径**（`:1587-1593`）。
+- 两处保守判据：① 类别的构造宽度必须唯一（`struct_variant_widths` 长度 >1 即放弃，否则 `declared + 位置` 与"构造时的字"两处算出不同偏移）；② 类别名只接受**无歧义**命中（`Bar` 与 `_Bar` 同尾不算）。
+- 两条分配点（`MirStmt::StructNew :5952`、`MirExpr::Struct :7097`）改按 `struct_alloc_words(:6271)` 开块，并对追加格 `store 0` 零初始化；`resolve_field_slot(:6361)` 在上界夹回**之前**先问 `ext_slot(:6295)`（`:6577`，声明基走 `ext_class_of_declared_base :6312` ⇒ `:6587`）。
+
+### 四、编译侧位移（套件）
+
+- 门禁 python_style：**350→351 passed**（增量 = t469 落在 passed 侧），failed 仍为 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`，known-fail 6 不变。
+- **本批未跑** 360 份套件 IR 的逐文件 A/B（433 跑过、结论"唯一差异文件是 t23"）⇒ 套件侧只报门禁 passed 计数，不报 IR 位移。缺口点名，不留白。
+
+### 五、语料位移（真目标）
+
+- 口径：cwd＝REasyQuant 根、相对源路径、`REPLAYQUANT_LOCAL=1`、驱动 `strategies/code/_drv_accept_409.py`，两颗二进制同在 `target/release/`；`--emit-llvm` 逐字节比 = **151 行差异**（`/tmp/b434/ir_zetac_pre434.ll` 113698 行 vs `ir_final.ll` 113724 行，与 `ir434b.diff` 逐字节相同）。
+- 差异分五类，全部可归到"追加槽"这一条机制：
+  1. **5 处分配加宽**：`@jq_shim___G` 328→384、`@backend_strategy_wufu_backend__PositionLedger` 32→40、`@backend_engines_bt_helpers__ValueRecorder` 0→8、两处 `@__closure_3__make_*` 0→16（同一 `_Impl` 类别的两个闭包实例）。
+  2. **13 个追加格零初始化**（26 行 `ext_ptr`/`store 0`）：`_G` 7 格、两个 `_Impl` 各 2 格、`ValueRecorder` 1 格、`PositionLedger` 1 格。
+  3. **7 条写落点从偏移 0 挪走**（`@jq_wufu__initialize`：`field_slot*` 的 `add i64 %r, 0` → `328/336/344/352/360/368/376`）⇒ 改前这 7 条策略参数写**互相踩、且踩掉 `_G` 声明的第一格**。
+  4. **12 处读宽度改**：`ValueRecorder::{get_analysis,next}`（含两份同名自由函数副本）`{ i64, i64 }`→`{ i64 }` 共 4 处；`@jq_wufu__get_final_ranked_etfs` 内 8 处 `{ i64, i64 }`→48 词 `{ i64 × 48 }`。
+  5. 其余为上述指令的 `extractvalue` 伴生行 ⇒ 除这 5 类外无落点变化。
+- 追加表在语料侧落地量：**15 个 `FA ext+` 站点 / 去重 11 个 (类别,名) / 4 条布局**（`_G` 7 个阈值名、`_Impl` 2、`PositionLedger` 1、`ValueRecorder` 1）。
+- **未复现的两条夹具头注读数**（点名，不回改已提交文本）：头注写的"6 条布局"与"另两条加宽 `DataFrame` 1→2、`MarketDataFetcher` 2→3"在本次终态里查不到 —— `FA ext+` 里两个变体各 0 条（探针与落表同一路径，且同一次运行有 15 条其他变体命中 ⇒ 是"没落表"，不是"没打号"）。已立任务复量或更正头注。
+
+### 六、主线位移量：**未判定**（方向一致、样本不足，不记作位移）
+
+- 干净形状两侧一致：`rc=0 / stdout 1 行 / stderr 321 行 / 末行 [local] 回测完成: 1000000 ->`。
+- 崩族（`rc=139 / stderr 119 行`）：配对样本 n=18 ⇒ pre 4 / post 1；未配对 n=48 ⇒ pre 15 / post 5。两侧同侧方差已知（432 §十.3、433 §六），故按"方向与本批一致、n 不足以归因"记录，**不写位移量、不写"修好"**。
+- 主线 301 的三格（0 笔成交 → 选股数量 → `final_value`）本批**没有实测到移动**。
+- 另有一处**未定位的新读数**（不记作收益）：语料侧替身读减少恰好 **126** 行 —— `columns 60 / empty 30 / index 19 / values 10 / loc 4 / iloc 2 / dt 1`，全部是 pandas 访问器名、**无一条出现在 15 个 `ext+` 归因里**；同期具名命中只多 30 行（`field=data` 命中 `variant="DataFrame"` 22 / `"Series"` 8），另有 96 行改后**不再打任何 `FA read` 探针**。两侧 trace 都跑到编译末尾（各自在场 1 条 `ABI return:` 汇总行）⇒ 不是截断。机制未定位，已立任务。
+
+### 七、门禁（`/tmp/b434/gate434.log`，`GATE_RC=1`，日志 mtime 07:20 晚于二进制 07:05）
+
+- official：compile **194/194**、compile+link **191/194**（3 条 link-only 存量：`integration_all_features`、`quantum_basic`、`selfhost`）。
+- python_style：**351 passed / 2 failed / 6 known-fail / 0 xpass**。
+- 语料解析 **40/40 = 100%**（分母是仓外 `~/source/quant/REasyQuant/strategies`）。
+- jit sweep：ok=176 trap=380 fail=0 timeout=0 segv=0（total **556**）GREEN —— 与 433 的 176/379/555 差 1 个成员，来自本批新增夹具（trap +1），ok 未动。
+- diff：match=120 judged=130 = **92.3%** bad_case=0。
+- 各翼 rc=0：knob 23、swallow 6、import 22、empty_stmt 68、pysrc 42、cli_semantics 87、ignore_rules 19、mbvar 23、emit_stable 2、dyn_binding 4、comment_drift 复述 0。
+- 编译诊断：official 2/194 文件 6 行；python_style **112 文件 238 行**（433 为 111/237）—— 增量是本批夹具里 `class Empty: pass` 触发的一条前端告警 `PY-A: Empty is called without argument(s)`，**属 `src/frontend/**`，不在本 worker 所有权矩阵内** ⇒ 只登记（§九.2）。
+- clean_checkout：**rc=0**（2s，rev=`1e641235`）—— 口径点名：它检的是**本批代码提交之前**的 HEAD（433 的锚点批），`a5418a77` 不在其覆盖内。
+- `GATE_RC=1` 由何而来：非绿项只有 official 3 条 link-only ＋ python_style 2 failed ＋ 6 known-fail，组成与 432/433 **逐条相同** ⇒ 无新增失败步骤。
+
+### 八、锚点（`docs/ABI.md`，仍 1032 行）
+
+- 终态：**259 可解析 / 0 定位失败 / 漂移 23 / 新 11 / 消失 10（基线 258 条），ANCHOR_RC=1**；消失 10 与 433 入册的集合**逐字相同**（codegen.rs 2278/2501/2536/2552/3859/3875/4410/4567、gen.rs 3472/10309）；漂移 23 = 433 的 24 减 `codegen.rs:1392`（`comm` 判定）。⇒ 相对 HEAD **净中性且严格更好**。
+- 手工搬家：`读侧查表` 五处同形的 `let mangled = name.replace("::", "__");`（2419/2642/2677/2693/2805 → **2517/2740/2775/2791/2903**）—— 同形五条 `--rebind` 拒改，改用 `--bless-only` **逐项带全路径**点名重采；另清掉 399 留下的过期共用行号（`infer_fn_return_type` → `:1462-1471`、`mangle_function_name` → `:1433-1451`，两条真身跨度 `sed -n` 逐字核过）。tsv 净 +5/-10/+2/1 重采。
+- **本批抓到的两条核对器缺陷**（进 #52 的族）：
+  1. `--rebind` 会把 `docs/ABI.md:679` 从 1375 改到 1392，**不看 1392 已是另一条锚点的键** ⇒ 两条文档引用塌成同一键（可解析 258→257、基线 257→256），除总数外没有任何计数器报出来。本批靠手工把 679 改回正确落点才发现。
+  2. `find_snippet_lines` 对**行号写错、内容还在同一函数附近**的引用一律宽容 ⇒ 433 自己把 `infer_fn_return_type`/`mangle_function_name` 引在 1392（真身 1442/1413），漂移仍报 0。**"漂移 0"不等于"引用行号对"**。
+
+### 九、残口登记（本批不收，避免攒批）
+
+1. 往 `@property` 名字上写：写侧仍无 setter 路由（= 433 §九.1，#163 在册，本批未动）。
+2. `class Empty: pass` 类别名被当调用 ⇒ 前端 `PY-A` 告警（`src/frontend/**`，越出所有权矩阵，只登记）。
+3. 语料 15 个 `ext+` 站点之外仍有 `FA write` 替身 20 行未动；追加判据要求类别构造宽度唯一 + 类别名无歧义 ⇒ 被保守放手的成员未量名册。
+4. 通过**宿主对象**（如 `Named("DataFrame")`、pylib 侧类别）归因的读写，现在指向外部块的另一字而非索引 0；`malloc(0)` 的类别本批开始真分配（语料 3 处 0→8/16）。方向是"错得更接近真布局"，未验证宿主块的实际宽度 ⇒ 风险留档。
+5. §五 末条（夹具头注两条未复现读数）与 §六 末条（126 行替身读离开路径、96 行不再打探针）各立任务，本批不猜成因。
+6. 433 的自我更正（另起记录、不回改 433 文本）：433 §二 说"这一笔写既丢了又越出分配"，§九.3 又说 stand-in 命中时写落索引 0 —— 两句在同一批里并存；以 434 的实测为准：**越界写落在块外，替身写落在块内第一格**，本批收的是后者。
+
+### 十、工具坑与自我核对（本批当场抓到）
+
+1. **tsv 行是 TAB 分隔**，用 `codegen.rs:2419`（冒号）grep ⇒ "No matches found" 的假零成员；改 `grep -n '<TAB>2419'` / 按键解析才见到真行。
+2. **`--bless-only` 的每一段都要带完整路径**：`路径:2517,2740,…` 被 `[E1003] 收到 '2740' ⇒ 拒收`。
+3. **`--doc` 指旧版文档在新源码上必 rc=2**：核对器从**工作树**解析文件 ⇒ 433 的历史读数无法在新树上复现（`[定位失败] …:4893 内容为空`）。这只能记成"不可复现"，不能记成"复现失败=文档错"。
+4. **数 diff 类别时用了统一 diff 的 `^+`/`^-` 前缀**去匹配 `diff` 普通输出 ⇒ 五类计数全 0；普通 diff 的前缀是 `<`（pre）/`>`（post）。改 `diff -U0` + 按 `@@` 回溯 `define` 归属，才拿到 5/13/7/12 这四组数。
+5. **`python3 tools/check_abi_anchors.py | tail -25; echo $?` 又报了 tail 的 rc**（坑 #14 复发）⇒ 改 `> file 2>&1; echo $?` 才拿到 `ANCHOR_RC=1`。
+6. **两份 trace 比"某族计数变少"之前，先确认两侧都跑到末尾**：本批靠"`ABI return:` 汇总行各在场 1 条"排除了"post 编译早停 ⇒ 探针变少"这一假象；否则 §六 那 126 会被写成收益。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
