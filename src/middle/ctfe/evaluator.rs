@@ -256,6 +256,21 @@ impl ConstEvaluator {
 
                 // Try to evaluate if both sides are now literals
                 match (&transformed_left, &transformed_right) {
+                    (AstNode::Lit(_), AstNode::Lit(_))
+                        // PY-A: `/` on two integers is TRUE division, so its
+                        // result is a float — and `AstNode::Lit` only carries
+                        // i64. Folding `7 / 2` to `Lit(3)` baked the truncated
+                        // quotient into the AST before MIR typing could see the
+                        // expression. Leave the node alone: the lowering emits
+                        // the fdiv and the answer is 3.5.
+                        if op == "/" =>
+                    {
+                        AstNode::BinaryOp {
+                            op: op.clone(),
+                            left: Box::new(transformed_left),
+                            right: Box::new(transformed_right),
+                        }
+                    }
                     (AstNode::Lit(left_val), AstNode::Lit(right_val)) => {
                         // Evaluate the operation
                         match self.eval_binary_op(op, &transformed_left, &transformed_right) {

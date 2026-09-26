@@ -1,0 +1,32 @@
+// 批次 454（backlog #201 / 简报 ①）：整数 `/` 是**真除法**，不是整除。
+// 病因有三格：MIR 算术定型把 `/` 落到 `_ => Type::I64` 兜底（gen.rs）、出码的整型臂
+// 用 `sdiv`（codegen.rs 两处）、以及 CTFE 把字面量 `7 / 2` 折成 `Lit(3)`（AstNode::Lit
+// 只有 i64，折了就再也回不来）。改前 shape＝`round(66 / 10)` 答 6、`a / b > 6.5` 答 False。
+// 期望值取自本机 CPython 3.14.5 当场跑同一程序（/tmp/b454/t487_cpython.out）。
+// 浮点字面量的打印形状（`3.5` vs `3.500000`）是 #48 那一族，本批不牵进来 ——
+// 所以这里每条读数都是整数或布尔，改后必须逐字等于 CPython。
+a = 66
+b = 10
+print(round(a / b))
+print(round(7 / 2))
+print(round(86 / 10))
+print(a / b > 6.5)
+print(a / b == 6.6)
+print(9 // 2)
+print(-7 // 2)
+print(9 % 2)
+print(-7 % 2)
+q, r = divmod(7, 2)
+print(q)
+print(r)
+// expect: 7
+// expect: 4
+// expect: 9
+// expect: True
+// expect: True
+// expect: 4
+// expect: -4
+// expect: 1
+// expect: 1
+// expect: 3
+// expect: 1

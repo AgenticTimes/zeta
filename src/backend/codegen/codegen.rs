@@ -1955,6 +1955,22 @@ impl<'ctx> LLVMCodegen<'ctx> {
         .unwrap()
     }
 
+    /// PY-A (批次 454): the integer `/` promotion may only fire where the value
+    /// the promotion produces is actually read back as a float. Promoting turns
+    /// the quotient into a `double`; if the slot it lands in is an `i64` (a
+    /// handle-shaped temp, or a var MIR pinned to I64), LLVM stores the double
+    /// BIT PATTERN into that i64 and the reader reloads it as an integer
+    /// (docs/ABI.md §2 R7) — the corpus then handed `0x3ff0000005feab11`
+    /// (≈1.0) to `py_df_setitem`, which read it as a handle and dereferenced it
+    /// (SIGSEGV at `py_df_setitem+144`). Keeping the quotient an `sdiv` where the
+    /// slot is int preserves the pre-454 shape.
+    fn slot_is_float(&self, id: u32) -> bool {
+        self.current_type_map
+            .as_ref()
+            .and_then(|tm| tm.get(&id).cloned())
+            .is_some_and(|t| matches!(t, Type::F32 | Type::F64))
+    }
+
     fn collect_all_local_ids(&self, mir: &Mir) -> std::collections::HashSet<u32> {
         let mut ids = std::collections::HashSet::new();
         for (_, id) in &mir.param_indices {
@@ -4233,6 +4249,18 @@ impl<'ctx> LLVMCodegen<'ctx> {
                                 "+" | "add" | "add_i64" => self.builder.build_int_add(l, r, "add").unwrap().into(),
                                 "-" | "sub" | "sub_i64" => self.builder.build_int_sub(l, r, "sub").unwrap().into(),
                                 "*" | "mul" | "mul_i64" => self.builder.build_int_mul(l, r, "mul").unwrap().into(),
+                                // PY-A: `/` on two integers is TRUE division — promote
+                                // both sides and divide as f64. `div_i64` stays an
+                                // integer division (it is the explicit int form).
+                                // The guard is the slot check (see `slot_is_float`):
+                                // an int-shaped destination means the quotient must
+                                // stay an integer, or the double bits are re-read as
+                                // a handle.
+                                "/" | "div" if self.slot_is_float(*dest) => {
+                                    let lf = self.builder.build_signed_int_to_float(l, self.f64_type, "td_l_sitofp").unwrap();
+                                    let rf = self.builder.build_signed_int_to_float(r, self.f64_type, "td_r_sitofp").unwrap();
+                                    self.builder.build_float_div(lf, rf, "div").unwrap().into()
+                                }
                                 "/" | "div" | "div_i64" => self.builder.build_int_signed_div(l, r, "div").unwrap().into(),
                                 "floordiv" => self.build_floordiv_int(l, r),
                                 "%" | "mod" | "mod_i64" => self.build_floormod_int(l, r),
@@ -7043,6 +7071,21 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .build_int_mul(left_val, right_val, "matmul_scalar")
                         .unwrap()
                         .into(),
+                    // PY-A: `/` on two integers is TRUE division — promote both
+                    // sides and divide as f64. `slot_or_sitofp` keeps the
+                    // bit-pattern case correct (a float slot must be bitcast,
+                    // not sitofp'd — see BATCH-299 above).
+                    // The guard asks MIR's own verdict for this node: when the
+                    // quotient's slot is not float the promotion would write
+                    // double bits into an i64 (see `slot_is_float`).
+                    "/" if expr_id.map_or(false, |id| self.slot_is_float(id)) => {
+                        let lf = self.slot_or_sitofp(left_val, *left, "td_l_sitofp");
+                        let rf = self.slot_or_sitofp(right_val, *right, "td_r_sitofp");
+                        self.builder
+                            .build_float_div(lf, rf, "div")
+                            .unwrap()
+                            .into()
+                    }
                     "/" => self
                         .builder
                         .build_int_signed_div(left_val, right_val, "div")

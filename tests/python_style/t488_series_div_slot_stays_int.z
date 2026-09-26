@@ -1,0 +1,29 @@
+// 批次 454（3.2 Lowering／5.4 数值原语 · backlog #203）：句柄形状的 `/` 不许抬成 f64。
+// 病因：本批把整数 `/` 改成真除法时，出码的两处整型臂（`codegen.rs` 的算子内联臂、
+// `MirExpr::BinaryOp` 臂）**无条件** sitofp 后 `fdiv`，而 MIR 的 `/` 定型只在两侧操作数
+// 都是 `Some(I64|Bool)` 时才抬到 F64。于是接收者是句柄（放在 i64 槽里的指针）时：
+// 商是一个 `double`，却被存进那条 `i64` 槽 —— LLVM 15 的裸指针让 `store double, ptr` 通过
+// 校验并按位重解读（docs/ABI.md §2 R7），读侧 `load i64` 拿到的就是双精度位模式，
+// 再交给按形状判句柄的 `py_df_setitem`（`runtime/py_additions.c:1361` 的
+// `zt_maybe_vec_fwd(val)`）就直接解引用垃圾地址。
+// 语料实拍（`market_data_fetcher.py:714` 的 `result["vwap"] = result["amount"] / raw_vol`）：
+// 崩在 `py_df_setitem+144`，`x20=0x3ff0000005feab11`（≈1.0 的 double 位模式）。
+// 本夹具是它的最小形状（两条 Series 相除再写回列）。期望值取自本机 pandas 3.0.5
+// 跑同一程序（`/tmp/b454/t488_cp.out`）：`2 / 2 / 3`。
+// **商的值不断**：Series 逐元素相除在本仓还没有表示（改后这里是两个堆指针的 `sdiv`），
+// 本夹具守的是"不再崩、列还在"这一条。
+// 三颗二进制实拍（同目录 `target/release/`，缺 pylib 就少库面）：
+//   · 改前 454（未加槽型判据）compile_rc=0 **run_rc=139**（`zetac_454ungated`）
+//   · 批次 454 之前（`zetac_pre454`）compile_rc=0 run_rc=0，输出 `2 2 3`
+//   · 加判据后（本批收尾那颗）compile_rc=0 run_rc=0，输出 `2 2 3`
+// 判据：抬 f64 之前先问这条商**落在哪个槽**——算子内联臂问 `dest`，`BinaryOp` 臂问
+// MIR 给这个节点自己的定型；槽不是 float 就保持 `sdiv`（即 454 之前的形状）。
+import pandas as pd
+df = pd.DataFrame({"amount": [1, 2], "volume": [1, 1]})
+df["vwap"] = df["amount"] / df["volume"]
+print(len(df))
+print(len(df["vwap"]))
+print(len(df.columns))
+// expect: 2
+// expect: 2
+// expect: 3

@@ -1622,7 +1622,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         // result degraded to i64. The RESOLVER refines such an annotation with
         // the container type the body actually returns (`MirGen` is rebuilt per
         // top-level item, so a refinement made here never reaches a call site).
-        Mir {
+        let mut mir = Mir {
             name: match ast {
                 AstNode::FuncDef { name, .. } | AstNode::ExternFunc { name, .. } => {
                     Some(name.clone())
@@ -1678,6 +1678,58 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             global_consts: std::mem::take(&mut self.global_consts),
             member_bare_calls: std::mem::take(&mut self.member_bare_calls),
             plain_call_names: std::mem::take(&mut self.plain_call_names),
+        };
+        Self::pin_declared_int_return(&mut mir, ast);
+        mir
+    }
+
+    /// PY-A (批次 454 第五格): `Mir::signature_ret_ty` answers from the BODY (the
+    /// first top-level `return` whose value carries a type), while a call site is
+    /// typed from the DECLARED `-> T` (the resolver's `func_ret_types`). The
+    /// integer-`/` promotion lets those two sources disagree for a function that
+    /// declares an int and does `return a / b`: the callee gets a `double` LLVM
+    /// signature, the caller reads the word as an integer, and R7 reinterprets
+    /// the bits instead of converting (measured on the official corpus:
+    /// `divide(100, 4)` in `test_arithmetic` printed 4627730092099895296 — the
+    /// bits of 25.0 — and `murphy_sieve`'s `return limit / 10` did the same at 5
+    /// call sites). The pin: when the declaration pins an int word AND the slot
+    /// that decides the signature is exactly a promoted integer quotient, that
+    /// quotient keeps `sdiv`. A float that came from anywhere else (`return 2.5`
+    /// in a `-> i64` function) is left alone — that disagreement predates this
+    /// batch and belongs to batch 399 / task #33.
+    fn pin_declared_int_return(mir: &mut Mir, ast: &AstNode) {
+        const INT_SPELLINGS: [&str; 8] =
+            ["i64", "int", "i32", "u64", "u32", "isize", "usize", "bool"];
+        let AstNode::FuncDef { ret, .. } = ast else {
+            return;
+        };
+        if !INT_SPELLINGS.contains(&ret.as_str()) {
+            return;
+        }
+        // Same scan as `signature_ret_ty`: the FIRST top-level return whose value
+        // has a type is what decides the callee's LLVM signature.
+        let Some(val) = mir.stmts.iter().find_map(|s| match s {
+            MirStmt::Return { val } => mir.type_map.get(val).map(|_| *val),
+            _ => None,
+        }) else {
+            return;
+        };
+        if !matches!(mir.type_map.get(&val), Some(Type::F32) | Some(Type::F64)) {
+            return;
+        }
+        let is_promoted_quotient =
+            mir.stmts
+                .iter()
+                .any(|s| matches!(s, MirStmt::Call { func, args, dest, .. }
+                    if func == "/"
+                        && dest == &val
+                        && args.len() == 2
+                        && args.iter().all(|a| matches!(
+                            mir.type_map.get(a),
+                            Some(Type::I64) | Some(Type::Bool)
+                        ))));
+        if is_promoted_quotient {
+            mir.type_map.insert(val, Type::I64);
         }
     }
 
@@ -5251,6 +5303,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         // value-selecting in Python and get their own op_type pass
                         // right below; typing them Bool here broke 38 tests.
                         _ if is_cmp && !matches!(op.as_str(), "||" | "&&") => Type::Bool,
+                        // PY-A: `/` on two integers is TRUE division. The I64
+                        // fallback below typed the quotient as an integer and the
+                        // codegen ran `sdiv`, so `round(66 / 10)` answered 6
+                        // instead of 7. Only both-integral operands are promoted:
+                        // a Str/Named/Dynamic side keeps its previous answer.
+                        // `//` never reaches here (the parser emits "floordiv").
+                        (Some(Type::I64) | Some(Type::Bool), Some(Type::I64) | Some(Type::Bool))
+                            if op == "/" =>
+                        {
+                            Type::F64
+                        }
                         _ => Type::I64,
                     };
                     // Python `and`/`or` are VALUE-selecting, not boolean:
@@ -8422,11 +8485,13 @@ call, no NULL-handle dereference).",
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
-                // divmod(a, b) → (a / b, a % b) as a tuple, so
+                // divmod(a, b) → (a // b, a % b) as a tuple, so
                 // `q, r = divmod(a, b)` unpacks via the call-return path.
+                // PY-A: the quotient must be FLOOR division — with `/` here the
+                // true-division fix would have made `divmod(7, 2)` answer 3.5.
                 if receiver.is_none() && method == "divmod" && args.len() == 2 {
                     let q = AstNode::BinaryOp {
-                        op: "/".to_string(),
+                        op: "floordiv".to_string(),
                         left: Box::new(args[0].clone()),
                         right: Box::new(args[1].clone()),
                     };
