@@ -211,6 +211,70 @@ def gen_slice_case(rng: random.Random) -> str:
     return "\n".join(lines) + "\n"
 
 
+def gen_builtin_case(rng: random.Random) -> str:
+    """内建函数采样：sum/min/max/sorted/abs/round(int)/len 在随机容器与数值上。
+    刻意避开 round(f, n) 的浮点打印呈现族与 str 相加的 repr 差异。"""
+    vals = [rng.randint(-999, 999) for _ in range(rng.randint(2, 6))]
+    lines = [f"v = {vals!r}"]
+    lines.append(f"print(sum({vals!r}))")
+    lines.append(f"print(min({vals!r}))")
+    lines.append(f"print(max({vals!r}))")
+    if rng.random() < 0.6:
+        lines.append(f"print(sorted({vals!r}))")
+    lines.append(f"print(abs({rng.choice(vals)}))")
+    lines.append(f"print(round({rng.randint(-99, 99)} / 10))")
+    lines.append(f"print(len({vals!r}) + sum({vals[:2]!r}))")
+    return "\n".join(lines) + "\n"
+
+
+def gen_control_case(rng: random.Random) -> str:
+    """Python 特有控制流采样：for/while 的 else（无 break 才执行）、break、continue 的随机组合。"""
+    n = rng.randint(3, 8)
+    break_at = rng.randint(-1, n)          # -1 = 无 break
+    use_while = rng.random() < 0.4
+    skip = rng.randint(-1, n)              # -1 = 无 continue
+    lines = ["s = 0"]
+    if use_while:
+        lines += [f"i = 0", f"while i < {n}:"]
+    else:
+        lines += [f"for i in range({n}):"]
+    lines += ["    i2 = i" if False else "    s += i"]
+    if skip >= 0:
+        lines += [f"    if i == {skip}:", "        continue", "    s += 1"]
+    if 0 <= break_at < n:
+        lines += [f"    if i == {break_at}:", "        break", "    s += 2"]
+    else:
+        lines += ["    s += 2"]
+    lines += ["else:", "    s += 100"]
+    lines += ["print(s)"]
+    return "\n".join(lines) + "\n"
+
+
+DKEYS = ["alpha", "beta", "gamma", "dd", "k1", "z9"]
+
+
+def gen_dmethod_case(rng: random.Random) -> str:
+    """字典方法链采样：len / get 带缺省 / 成员测试 / 覆盖写后读——
+    键池刻意小（覆盖写与命中/缺省两路都会被采到）。"""
+    chosen = rng.sample(DKEYS, rng.randint(2, 4))
+    pairs = ", ".join(f'"{k}": {rng.randint(-99, 99)}' for k in chosen)
+    lines = [f"d = {{{pairs}}}"]
+    for _ in range(rng.randint(3, 5)):
+        op = rng.random()
+        k = rng.choice(DKEYS)
+        if op < 0.3:
+            lines.append(f'print(d.get("{k}", {rng.randint(-99, 99)}))')
+        elif op < 0.5:
+            lines.append(f'print("{k}" in d)')
+        elif op < 0.7:
+            v = rng.randint(-99, 99)
+            lines.append(f'd["{k}"] = {v}')
+            lines.append(f'print(d["{k}"])')
+        else:
+            lines.append("print(len(d))")
+    return "\n".join(lines) + "\n"
+
+
 def gen_expr(rng: random.Random, depth: int = 0) -> str:
     if depth >= 3 or rng.random() < 0.3:
         return str(rand_int(rng))
@@ -304,16 +368,32 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
-    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice"), default="numeric")
+    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
     written = 0
     tried = 0
-    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop", "fmt", "slice") else 6)
+    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod") else 6)
     while written < a.count and tried < max_tries:
         tried += 1
+        if a.mode == "builtin":
+            prog = gen_builtin_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_builtin_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: container\n"
+                f"# @note: 随机内建函数（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
         if a.mode == "slice":
             prog = gen_slice_case(rng)
             expected = python_eval_program(prog)
@@ -323,6 +403,38 @@ def main() -> int:
             body = (
                 f"# @cat: str\n"
                 f"# @note: 随机字符串切片（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
+        if a.mode == "dmethod":
+            prog = gen_dmethod_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_dmethod_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: container\n"
+                f"# @note: 随机字典方法链（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
+        if a.mode == "control":
+            prog = gen_control_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_control_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: control\n"
+                f"# @note: 随机控制流（seed={a.seed} #{written}）——else/break/continue 组合\n"
                 f"#@@ python\n{prog}\n"
                 f"#@@ zeta\n{prog}\n"
             )

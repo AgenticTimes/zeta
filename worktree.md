@@ -149,6 +149,11 @@
 | 485 | cleanup | **循环积累模式 20 例全 match**（M08 家族首次采样：for-range/while 五形状——计数器槽、累加类型流）+ rebase 冲突与账目更正（484 的 259 系未提交临时用例抬高，真值 225 与主线一致）。随机库累计 159 例七模式 | diff 245/271 90.4% 无回归 | ✅ 完成 |
 | 486 | cleanup | **f-string 规格采样 fmt 模式**：进制/符号/宽度/补零/对齐/精度随机组合 20 例——15 match + **5 mismatch 新族**：sign 旗标不渲染（{n:+d} 的 + 被吞，宽度/浮点两形）+ 负数进制型（{x:b} 位回绕）——py_format runtime 车道移交。基础 11 探针全对（规格实现主体扎实）。随机库累计 179 例八模式 | diff 254/291 87.3% 无回归 | ✅ 完成 |
 | 487 | cleanup | **切片模式 15 例全 match + None 打印钉子**：正/负/省略/步进切片与切片后 len 全对（323 修的切片族语义扎实）；t507 known-fail 钉 `3 and None` 打 0 而非 None（L09 词法降级 + print 无 None 渲染，#117 近亲）。随机库累计 174 例九模式 | diff 269/306 87.9% 无回归 | ✅ 完成 |
+| 488 | cleanup | **内建函数族采样 15 例**（sum/min/max/sorted/abs/round/len）：11 match + **round 舍入族 ×4**（Python 银行家 half-to-even vs zeta 四舍五入，registry/runtime 车道移交）。**排障记录**：期间误报 str_repeat_left 回归——根因 = rebase 后未重建二进制，重建后 3 * "ab" 正确（444 收尾已修左形式）⇒ 教训：rebase 后必须先重建再取读数。随机库累计 189 例十模式 | diff 276/321 无回归 | ✅ 完成 |
+| 489 | cleanup | **control 模式 20 例全 match**：for/while 的 else（无 break 才执行）/break/continue 随机组合——Python 特有控制流首次系统采样（while+continue 死循环组合被 CPython 先验正确淘汰 10 条）。随机库累计 194 例十一模式。qwen 已落号我方移交（#188/#189）| diff 296/341 86.8% 无回归 | ✅ 完成 |
+| 490 | cleanup | **字典方法链模式 20 例全 match**：小键池的 len/get 带缺省/成员/覆盖写后读随机链——g_keystr 键文本找回表（C12）与 map_get_default 缺省路首次系统采样。随机库累计 194 例十二模式 | diff 316/361 87.5% 无回归 | ✅ 完成 |
+| 492 | cleanup | **#188 两面补钉**：t508 sign 旗标（+ 被吞）+ t509 负数进制（位回绕）——known-fail 11→13。定性澄清：builtin 案例的 round "错值"真凶是 / 真除法缺失（66/10 → 6），round 本身（含银行家舍入）与 CPython 一致，该族已有 numeric_truediv 在案 | py 360/2/13/0 | ✅ 完成 |
+| 491 | cleanup | **普查收敛验证**（seed=60321，80 例临时不进库）：mismatch 10/80 = **12.5%**，与 480 大样本估计（12%）一致 ✓；族分布：numeric 8（溢出+Bool）、stmts 2、str 0——无新族，存量族各有归属（#188/#189 + 溢出族）。G.3 读数进入稳定期：每次门禁自动出数，主线每修一族比率自动上升 | 386/441 87.5%（含临时） | ✅ 度量批 |
 | （续） | | | | |
 
 ## 6. 旁路侧启动清单（一次性 / 每会话）

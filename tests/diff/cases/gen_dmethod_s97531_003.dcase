@@ -1,0 +1,18 @@
+# @cat: container
+# @note: 随机字典方法链（seed=97531 #3）
+#@@ python
+d = {"k1": -54, "gamma": 15}
+print("z9" in d)
+print(d.get("gamma", 77))
+d["z9"] = 18
+print(d["z9"])
+print(len(d))
+
+#@@ zeta
+d = {"k1": -54, "gamma": 15}
+print("z9" in d)
+print(d.get("gamma", 77))
+d["z9"] = 18
+print(d["z9"])
+print(len(d))
+
