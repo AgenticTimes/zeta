@@ -32,6 +32,11 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, "tests", "diff", "cases")
 
+STR_ALPHABET = ["a", "b", "ab", "ba", "abc"]
+STR_METHODS_VAL = ["upper", "lower", "strip"]          # 返回字符串
+STR_METHODS_INT = ["find", "count", "len"]             # 返回整数
+STR_METHODS_BOOL = ["startswith", "endswith"]          # 返回布尔（Bool 性族采样）
+
 BINOPS = ["+", "-", "*", "//", "%", "&", "|", "^"]
 SHIFTS = ["<<", ">>"]
 CMPS = ["==", "!=", "<", "<=", ">", ">="]
@@ -41,6 +46,36 @@ LOGICS = ["and", "or"]
 def rand_int(rng: random.Random) -> int:
     v = rng.randint(0, 2**48 - 1)
     return -v if rng.random() < 0.35 else v
+
+
+def gen_str_expr(rng: random.Random, depth: int = 0) -> str:
+    """字符串表达式：拼接 / 整数重复 / 定长索引 / 比较 / 常用方法。
+    刻意不含 split/sort（列表打印的 repr 差异属呈现层）与越界索引。"""
+    if depth >= 2 or rng.random() < 0.35:
+        q = rng.choice(['"', "'"])
+        return q + rng.choice(STR_ALPHABET) + q
+    kind = rng.random()
+    if kind < 0.3:
+        return f"{gen_str_expr(rng, depth+1)} + {gen_str_expr(rng, depth+1)}"
+    if kind < 0.45:
+        return f"{gen_str_expr(rng, depth+1)} * {rng.randint(1, 4)}"
+    if kind < 0.55:
+        s_var = gen_str_expr(rng, depth + 1)
+        idx = rng.randint(0, 2)
+        return f"({s_var})[{idx}]"
+    if kind < 0.65:
+        a = gen_str_expr(rng, depth + 1)
+        b = gen_str_expr(rng, depth + 1)
+        return f"({a} {rng.choice(['==', '!=', '<'])} {b})"
+    m = rng.choice(STR_METHODS_VAL + STR_METHODS_INT + STR_METHODS_BOOL)
+    if m == "len":
+        return f"len({gen_str_expr(rng, depth+1)})"
+    if m in STR_METHODS_BOOL:
+        return f"{gen_str_expr(rng, depth+1)}.startswith({gen_str_expr(rng, depth+1)})"
+    arg = ""
+    if m == "replace" or m == "find":
+        arg = f', {gen_str_expr(rng, depth+1)}'
+    return f"({gen_str_expr(rng, depth+1)}).{m}({gen_str_expr(rng, depth+1)}{arg})"
 
 
 def gen_expr(rng: random.Random, depth: int = 0) -> str:
@@ -80,6 +115,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
+    ap.add_argument("--mode", choices=("numeric", "str"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
@@ -88,13 +124,13 @@ def main() -> int:
     tried = 0
     while written < a.count and tried < a.count * 6:
         tried += 1
-        expr = gen_expr(rng)
+        expr = gen_str_expr(rng) if a.mode == "str" else gen_expr(rng)
         expected = python_eval(expr)
         if expected is None:
             continue  # CPython 侧报错 = bad_case，不进分母，直接不写
-        name = f"gen_numeric_s{a.seed}_{written:03d}.dcase"
+        name = f"gen_{a.mode}_s{a.seed}_{written:03d}.dcase"
         body = (
-            f"# @cat: numeric\n"
+            f"# @cat: {a.mode}\n"
             f"# @note: 随机生成（seed={a.seed} #{written}）—— CPython 先验通过，"
             f"oracle = 实跑输出\n"
             f"#@@ python\nprint({expr})\n"
