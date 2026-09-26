@@ -19763,6 +19763,60 @@ str_trim+24   ←   backend_datasrc_code_conv__normalize_to_jq+16   ←   Market
 - **已核到的结构事实**（`sed` 当场读，`src/backend/codegen/codegen.rs`）：`struct_field_decls`（`:6188`）的循环只扫 `self.struct_defs`，**没有** 434 追加表那一支；`resolve_field_slot` 却在 `:6285`/`:6301` 两处问 `struct_ext_layouts` ⇒ 读侧的"按名反查布局"与写侧的"追加槽"不对称。
 - **未证的一跳**：`Named("module__Class")` 为什么没被用上（限定名 vs `struct_<裸名>_<宽>` 键的匹配？还是那条路线根本没接 `base_ty`？）——**因果未证，登记任务 #170，下一批先读接线点再动手**，不许把这 10 行直接算成收益或损失。
 
+## 批次 438（3.2 Lowering／函数体里的 `class` 的方法绑定）：幽灵臂补上"循环体也扫"与"问定义不问调用点证据"两处 —— 语料单文件未定义符号 4→2、`_Impl::subscribe_bars` 改由调用点抛异常；主线运行侧不判定
+
+**层归位**：pyramid 3.2（Lowering → 链接层）。
+**代码批** `5e69d584`（5 文件 **+408/−89**：`src/middle/mir/gen.rs` +224/−13、t470 +75、t471 +45、ABI.md/anchors 各 26/38 行重绑）。
+**门禁**：按 2026-09-26 的节奏裁定只跑与改动面相关的快子集（`src/middle/**`）⇒ 唯一红源仍是 `t231/t233` 存量两例，读数见 §五。
+**主线 301 位移：编译侧 +1 条确定性点名（6/6 两侧一致）；运行侧不判定**（两侧都 2/6 崩 `rc=139`，§四）。
+**头名换格说明（本批号为什么不是 #170）**：438 原派给 #170（读侧布局那 10 条 `FA read`），实际被这一格吃掉，判据是损害量而非队列序 —— 嵌套类调用在语料侧造成的是**硬链接失败**（`compile_rc=1`／`Error: "Linking failed"`／单文件 4 个未定义符号），#170 那 10 行是"已有布局不用"的静默降级。**#170 原样留在队列头，一字未动。**
+
+### 一、机制与两处根因
+
+`class` 写在函数体里脱糖成 `[StructDef, ImplBlock{ty}, 合成 ctor]`，方法经 `fn_depth > 1` 的 hoisting 臂下沉成嵌套 `def`，拿到**依赖计数器**的合成名 `__closure_{n}_{fn}_c{hash}`，同时发布一条 `"{ty}::{member}" → 合成名` 别名。`lower_closure` 在 hoisting 臂发布别名**之前**就 clone 了父级 `closure_vars` ⇒ "先写后定义"的兄弟调用（`on_start` 里 `self._jq_bar_types()`，而 `_jq_bar_types` 定义在它后面）在这一趟里永远绑不上 ⇒ 必须由 ImplBlock 收尾（`gen.rs:3247` 记录窗口、`:892` `rewrite_nested_class_calls`）对窗口内的 MIR 项补一趟改写。两处根因是分开撞出来的：
+
+1. **判据问错了表**。`func_ret_types` 是**调用点证据表**——扫描器每见到一个 `recv.member` 就建一个键，未定义成员也在里面 ⇒ "已经有人定义了它"这一问永远为真，幽灵臂永不触发。实拍（`/tmp/b438/so/e.cc`）：`class Inner(Thing)` 的 `on_start` 调 `self.notsdefined(x)` 保留了 `Inner::notsdefined`，出码 `ld: Undefined symbols: _Inner__notsdefined`。判据换成问**定义**：`generated_mirs` 里带 `{ty}::` 前缀的项名集合（`gen.rs:892` 的 `defined`）。
+2. **覆盖不全**。第一版只扫每个 MIR 项的顶层语句 ⇒ 漏掉嵌在循环/分支体里的调用。事实核过：MIR 语句只嵌在**三个**变体里（`grep -n "Vec<MirStmt>" src/middle/mir/mir.rs` → `:9,:180,:181,:220,:223,:230,:231,:233` ＝ `If{then,else_}`、`For{body,else_body}`、`While{pre_cond,body,else_body}`）。实拍：把幽灵调用写进 `for x in self.bar_types(): self.notsdefined(x)`，只扫顶层时一字未改。修＝`rebind_nested_calls`（`:935`）递归三变体，单点判据在 `rebound_nested_target`（`:987`）。
+
+两条各配各的测量，不是一条掩盖另一条：先接走 1 之后 `e.z` 仍失败，才顺出 2。
+
+### 二、政策与三条边界
+
+1. **无定义就出声抛，不发必然 miss 的 extern**：`{ty}::{member}` 查无定义 ⇒ 改写为 `[dynamic]{ty}::{member}`，走 428 的策略在调用点按名 `zeta_raise`（可被 `except` 捕获）—— 428 已裁决过"给链接器留个必然 miss 的 extern"是错法，本批沿用，不去 `runtime/unavailable_stubs.c` 加名（那是 428 拒收的创可贴，且该文件不在本侧所有权内）。
+2. **只改发布了别名的窗口**：顶层 `impl` 保持 438 之前的拼写 ⇒ 语料那对既有未定义符号（`_NautilusBackend___context_factory`／`___price_lookup`）两侧都在，本批既不吞也不修（那是 #155/430 顶层类别那一族）。
+3. **返回值类型跟着别名搬**：命中别名时把 `closure_ret_tys[sym]` 写进 `type_map[dest]`，否则 `n = self.bar_types(3)` 的 `n` 保持动态（t470 的 `r2 100`/`j 9` 两条断言盯的就是这一格）。
+
+### 三、同目录 A/B 实拍（两颗都在 `target/release/`：改后 md5 `504e8e32673fcf47b21f04363ccc8e6c`、改前 `e3267a477f32e2b89fdc8549bde00d60`；435/437 的"同目录"口径照用）
+
+| 形状 | 改前（`zetac_pre438`） | 改后（`zetac`） |
+|---|---|---|
+| **语料单文件** `backend/strategy/nautilus_backend.py`（cwd＝语料根） | `compile_rc=1`，未定义 **4**：`_NautilusBackend___context_factory`、`_NautilusBackend___price_lookup`、`_NautilusJqStrategy___jq_bar_types`、`_NautilusJqStrategy__subscribe_bars`；按名抛异常点名 **0** | `compile_rc=1`，未定义 **2**（只剩既有那一双）；点名 **1**：`warning: PY-A: 动态接收者成员 \`[dynamic]_Impl::subscribe_bars\` 无定义 ⇒ 该调用点改为抛异常` |
+| **t470_nested_class_method_receiver.z**（7 断言） | `compile_rc=1`，未定义 **4**：`_Inner__bump`、`_Inner__on_start`、`_Outer__bar_types`、`_Outer__bump` | `compile_rc=0`、`run_rc=0`，stdout 7 行逐字＝expect（`s 5 / r1 7 / r2 100 / j 9 / i_last 100 / o_last 33 / p0 11`），stderr **0** 行 |
+| **t471_nested_class_ghost_raises.z**（幽灵调用在 `for` 体里） | `compile_rc=1`，未定义 **3**：`_Inner__on_start`、`_Outer__bar_types`、`_Outer__notsdefined` | `compile_rc=0`（带点名 warning）、`run_rc=1`，stderr 首行 `PY-A: dynamic receiver has no member \`[dynamic]Inner::notsdefined\` — raising` |
+
+**订正本批代码批自己的措辞**：`5e69d584` 提交信息里 t470 改前写成"未定义 `_Inner__bump`、`_Inner__on_start`"＝**漏计**，实拍是 **4 个**（另两个 `_Outer__bar_types`、`_Outer__bump`）；t471 改前那格提交信息只提 `_Inner__notsdefined`，实拍该夹具未定义名是 `_Outer__notsdefined`。按规矩只订正不回改提交信息。
+
+### 四、驱动编译位移与运行侧（`_drv_accept_409.py`，n=6/侧交替序，`/tmp/b438/ab2_*`，脚本 `/tmp/b438/run_ab2.sh`）
+
+- compile_rc **0/0**；`无定义` 点名 **7→8**、PY-A 行 **246→247**、cerr **34,423→34,528 B**；新增那一条逐字＝上表语料行的 `_Impl::subscribe_bars`；两侧各 **6/6** 一致（不抖动，可当位移报）。
+- 运行侧：改前/改后各 6 跑，**两侧都 2/6 崩 `rc=139`**、成功跑读数无差 ⇒ **本批不判运行位移**（437 §五 的 n=6 方差海结论照用：1/6 vs 3/6 分不出同侧方差，2/6 vs 2/6 更分不出）。
+- ⇒ 「修好了」栏仍空（三格未动）；「推进了主线」＝编译链接面上语料单文件的未定义符号少 2 个、多 1 条按名点名，运行后果待 #145 那格解开才谈得上。
+
+### 五、门禁（快子集，`/tmp/b438/gate_fast2.log`，起跑前手工确保二进制＝本批源码）
+
+official compile **194/194**、compile+link **191/194**（3 条 link-only：`integration_all_features`＝`_predict,_train`、`quantum_basic`＝`_factor,_optimal_iterations,_success_probability`、`selfhost`＝`_as_str,_into_iter,_is_alphabetic,_push`，与 423/424 逐字相同）· python_style **353 passed / 2 failed / 6 known-fail / 0 xpass**，failed 仍是 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` · compile-diagnostics：official **2 文件/6 行**、python_style **239 行/113 文件** · comment_drift 复述 **0** · dyn_binding **4 条断言、不一致 0**（rc=0）。与上一轮快子集差 **352→353**、**238→239**（＋113 文件未变）＝新夹具 t471 与它那一条 warning，**零回归**。
+锚点：`--rebind` 后 rc=2（漂移 23／新 10／消失 10）；**HEAD 对照 rc=2**（漂移 23／新 11／消失 12，隔离 worktree 取）⇒ 裸检出本来就红（#52 裸行号那一格），非本批损伤。
+
+### 六、登记（四条实测 + 三条未量）
+
+**实测**：
+1. **`try:` 体里的幽灵成员调用＝整个方法体静默丢**（本批把"响"换成"静"换来的新形）。`/tmp/b438/probe438_shapes.z`（`Inner.guard` 里 `try: v = self.nonesuch(1); print("no-raise", v) / except: print("caught")`）改后 `run_rc=0`、stdout 只有 `fwd 4` —— "no-raise" 和 "caught" **一条都没打**、无异常；改前是响的（链接失败点名 `_Inner__guard`、`_Inner__on_start`、`_Outer__bar_types`）。对照形状：同一幽灵调用写在 `for` 体里（t471）改后按名抛异常 ⇒ **只有 try 那一支吞语句**。**语料成员 0**（`_Impl.on_start` 的幽灵调用在 `for` 里、`on_bar` 的 `try` 包里是 `routine(...)` 而非裸成员名），所以这是形状级缺陷、不是本批已造成的语料损失。⇒ 头名候选。
+2. **`%` 格式化在嵌套类方法里丢插值**：`print("inner-n %s" % n)` → 打 `inner-n `（`/tmp/b438/baseclass.z`）；同一夹具换逗号形 `print("inner-n", n)` 改后打全（`inner-start|inner-n 4|fwd 4`，改前仍 `compile_rc=1`、未定义 `_Inner__on_start`/`_Outer__bar_types`）⇒ 归 #45 那族；**"带基类的嵌套类丢 print"这条读数是 `%` 骗出来的**，作废（用例禁用 `%` 的规则对探针夹具同样成立）。
+3. **两个同名嵌套类的串线风险**（代码事实、形状未量）：别名表按窗口 `split_off` 隔离，但 `closure_vars` 的键是**裸成员名** ⇒ 同函数体里两个同名嵌套类（或同名兄弟方法与外层变量重名）可能互相看见。与 #155/430 同族，登记不猜。
+4. **`tools/run_all.sh` 只在 `[[ ! -x "$ZETAC" ]]` 时建 zetac** ⇒ 改完源码不重编就取到旧二进制读数（本批快门禁前手工 `cargo build --release` 过，读数对应 `5e69d584`；与 434 的"门禁改前须 touch"是同一条账的另一半）。
+
+**未量（下批先量再动）**：① `MirExpr::FuncAddr` 上带 `{ty}::method` 拼写的点——本批只改 `Call`/`VoidCall` 两形，取地址那一形有没有同类漏绑；② 普通（非嵌套）路径的 `&mut self` 接收者类型；③ `runtime/unavailable_stubs.c:148-153` 手工注册的两个名（拼写里带 438 之前的**外层类别名**，正是 438 要消掉的静默错值创可贴）现在是否已无人引用 —— 要 `--report-stubs` 点名，且该文件动手前需用户授权。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
