@@ -1,0 +1,29 @@
+// 批次 460（旁路 cleanup，反向队列）：`Some(&value)` 引用模式 —— backlog #79 第 2 条
+// 钉住项的根。模式位置的 `&`/`&mut` 按槽位模型剥掉（i64 word 无移动/借用之分），
+// 直接绑定内层名字。修前：`&value` 模式不被识别 → 整个 `fn` 连同其后文件被丢
+// （W1002），zeta_src/runtime/array.z 的 `array_get` 即此（钉在 tools/selfhost_compile.sh
+// 第 40 行，本批随修复摘除）。
+fn pick(o: Option<i64>) -> i64 {
+    match o {
+        Some(&value) => value,
+        None => 0,
+    }
+}
+fn pick_mut(o: Option<i64>) -> i64 {
+    match o {
+        Some(&mut value) => value,
+        None => 7,
+    }
+}
+fn main() -> i64 {
+    let a = pick(Some(42));
+    print(a);
+    let b = pick(None);
+    print(b);
+    let c = pick_mut(Some(5));
+    print(c);
+    0
+}
+// expect: 42
+// expect: 0
+// expect: 5

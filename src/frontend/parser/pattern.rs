@@ -34,6 +34,12 @@ pub fn parse_pattern(input: &str) -> IResult<&str, AstNode> {
             ),
             |_| AstNode::Ignore,
         ),
+        // Reference pattern: `&pat` / `&mut pat` — Rust 拼法 `Some(&value) => value`
+        // 里的 `&` 只表达"借位解引用"；本语言的槽位模型没有移动/借用之分（一切走
+        // i64 word），所以剥掉 `&` 直接绑定内层模式。没有这条臂时，该 match 臂让
+        // 整个 `fn` —— 连同其后文件 —— 整体被丢（W1002；zeta_src/runtime/array.z
+        // 的 `array_get` 即此，backlog #79 的第 2 条钉住项）。
+        parse_reference_pattern,
         // Tuple pattern: `(pattern, pattern, ...)`
         parse_tuple_pattern,
         // Bind pattern: `ident @ pattern` — **must** precede the struct/variable
@@ -98,6 +104,23 @@ pub fn parse_pattern(input: &str) -> IResult<&str, AstNode> {
     } else {
         Ok((input, pattern))
     }
+}
+
+/// Parse a reference pattern: `&pat` / `&mut pat` → 绑定内层 pat。
+///
+/// `&mutx` 是 `&` + 标识符 `mutx`，只有 `&mut x` 才是可变引用——所以 `mut`
+/// 后面要跟词边界（与通配符 `_` 的边界检查同一招）。内层递归走 `parse_pattern`，
+/// 因此 `&&p`、`&mut (a, b)` 一并成立。
+fn parse_reference_pattern(input: &str) -> IResult<&str, AstNode> {
+    let (input, _) = ws(tag("&")).parse(input)?;
+    let (input, _) = opt(pair(
+        tag("mut"),
+        peek(not(nom::character::complete::satisfy(|c: char| {
+            c.is_ascii_alphanumeric() || c == '_'
+        }))),
+    ))
+    .parse(input)?;
+    ws(parse_pattern).parse(input)
 }
 
 /// Parse a tuple pattern: `(pattern, pattern, ...)`
