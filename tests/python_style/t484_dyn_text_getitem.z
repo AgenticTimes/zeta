@@ -1,0 +1,45 @@
+// 批次 452（3.2／动态下标的第三判形）：动态接收者是 `char*` 时，`x[i]` 被当成字典读 ⇒ PY-A 崩。
+// 根因链（四处实拍，见 roadmap 批次 452）：
+//   ① 崩点**不在**下型／布局层：`/tmp/b452/c511.ll` 里 `@TextStats` 把 words 写在偏移 0、
+//      map 写在偏移 8，`@"TextStats::build"` 读 `[self+8]` 再 `inttoptr` 交给 `map_get` —— IR 与
+//      机器码两侧都正确（`git log` 里 433/434 那条字段族与此无关）。
+//   ② 真正打到的是 `runtime/py_additions.c` 的 `zeta_dyn_getitem`（BATCH-295 那族判形）。
+//      它只有 vec/map 两臂，`k = w[0]` 的接收者 `w` 在**动态槽**里没有类型标记（#117 那一格），
+//      于是 `char*` 走到 `return map_get(base, key)` 的兜底。
+//   ③ 崩溃报告自己指认了形状：`handle` = `__const`+3（`objdump -s` 量到该段字节是
+//      `".t.apple.avocado"` ⇒ 句柄就是 `"apple"`），`first word` = 8530099604827435105
+//      = 0x766100656c707061 = `"apple\0av"` —— 守卫把**字符串自己的内容**当成了桶容量。
+//   ④ 反汇编 `_[dynamic]str__getitem` 的非 vec 路径全部 `b _map_get` 尾调，实参＝接收者＋下标。
+// 修法只落 `zeta_dyn_getitem`：在 vec 臂之后、map 兜底之前加**文本臂**，转调既有的 `str_get`
+// （与 gen.rs:13882 的具名 `Type::Str` 臂一码一义）。vec 臂、map 兜底**一字未动**（不重排、
+// 不改判形 ⇒ 本批的爆炸半径只有"原本会 PY-A 的那条形"）。语料面 40 文件共 **938** 个
+// `zeta_dyn_getitem` 调用点，所以文本判据比 `zeta_dyn_len` 的"可读即 strnlen"更紧：
+// 需要 32 字节内可打印且被 NUL 收尾（原生存整数、指针槽、清零的 struct 头继续撞 PY-A 守卫）。
+// 未收的余量（另起一批，见 backlog #194 余项）：动态槽的下标**结果**仍没有 Str 标记 ⇒
+// `print(w)`/`print(w[0])` 打地址、1 字符键在 map 里不按内容 dedup（实测 3 vs CPython 2）。
+// 期望值当场跑 `python3`（CPython 3.14.5）对数；改前实拍＝两条 expect 全红（rc=1 PY-A）。
+
+class TextStats:
+    def __init__(self, words):
+        self.words = words
+
+    def firsts(self):
+        n = 0
+        for w in self.words:
+            if len(w[0]) == 1:
+                n = n + 1
+        return n
+
+class LocalWords:
+    def firsts(self):
+        n = 0
+        for w in ["apple", "avocado", "banana", "cherry"]:
+            if len(w[0]) == 1:
+                n = n + 1
+        return n
+
+print(TextStats(["apple", "avocado", "banana"]).firsts())
+print(LocalWords().firsts())
+
+// expect: 3
+// expect: 4

@@ -1,0 +1,16 @@
+// 批次 452 的**负对照**（与 t484 同批、锁的是另一半性质）：文本臂必须是"按内容判形"，
+// 不能是 `zeta_dyn_len` 那种"可读即文本"。理由写在 `zt_dyn_is_text` 的注释里：`len` 判错只是
+// 数错一个数，下标判错会返回一个**看不出破绽的 1 字符串**，把该出声的形状悄悄咽下去。
+// 本夹具钉住"原生存整数进不了文本臂"：`v` 是 map 值槽里的 7（编译器给的是 I64/动态槽 ⇒ 走
+// `zeta_dyn_getitem`），vec 臂要 `base>0x1000` 且 base-16 是自己块的起点 ⇒ 拒；文本臂的
+// `vm_read_overwrite(7)` 打到未映射页 ⇒ 拒；于是继续撞 BATCH-423 那道 map 守卫并出声。
+// 改前/改后**逐字相同是本夹具的目的**（它锁"没把守卫放宽"，不是锁"修好了一条"）：
+// 两侧实拍 stderr 首行同为 `PY-A: \`map_get\` was called on a value that is not a dict
+// (handle=0x7, ...)`、rc 同为 1（roadmap 批次 452 记录）。
+
+m = {}
+m["a"] = 7
+v = m["a"]
+print(v[0])
+
+// expect-abort: was called on a value that is not a dict

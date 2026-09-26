@@ -3421,6 +3421,34 @@ int64_t zeta_call1(int64_t fptr, int64_t a) {
 // first field is the day count; the date projection is the handle itself.
 int64_t zeta_dt_date(int64_t h) { return h; }
 
+int64_t str_get(int64_t s, int64_t i);   // tokio_runtime_stub.c:2722 (the typed `Type::Str` subscript route)
+
+// Is this value TEXT? Deliberately TIGHTER than `zeta_dyn_len`'s "readable ⇒
+// strnlen" (family block below): a wrong `len` is a wrong number, while a
+// wrong subscript answers with a plausible 1-char string the caller cannot
+// tell from a real one. So a raw int (unreadable address), a pointer slot
+// whose low bytes contain a control byte, and a zeroed struct head all have to
+// keep falling through to the map guard and raise. Accepted shape: a mapped
+// first byte followed by a run of non-control bytes ended by NUL within 32
+// bytes. Bytes >= 0x80 count as text (UTF-8 lead/continuation), matching
+// `str_is_printable` in tokio_runtime_stub.c.
+// The read stops at the next 4096 boundary so one `vm_read_overwrite` can never
+// touch an unmapped page (macOS pages are >= 4096 and aligned to themselves).
+static int zt_dyn_is_text(int64_t h) {
+    if (h <= 0x1000) return 0;
+    char buf[32];
+    vm_size_t got = 0, room = 4096 - ((vm_address_t)h & 0xfff);
+    if (room > sizeof buf) room = sizeof buf;
+    if (vm_read_overwrite(mach_task_self(), (vm_address_t)h, room,
+                          (vm_address_t)buf, &got) != KERN_SUCCESS) return 0;
+    for (vm_size_t i = 0; i < got; i++) {
+        unsigned char c = (unsigned char)buf[i];
+        if (c == 0) return i > 0;         // NUL ends a printable run
+        if (c < 0x20 || c == 0x7f) return 0;
+    }
+    return 1;                             // 32 printable bytes: longer text
+}
+
 // BATCH-295: subscript on a value whose static type is unknown (dyn param).
 // The compiler previously always emitted `map_get`, so `d[i]` on a LIST handle
 // walked a fake bucket chain and SIGSEGVED (measured: `enumerate(
@@ -3440,6 +3468,18 @@ int64_t zeta_dyn_getitem(int64_t base, int64_t key) {
             if (i >= 0 && i < len) return h[2 + i];
         }
     }
+    // BATCH-452 (backlog #194): TEXT. `for w in self.words: k = w[0]` in a
+    // quant strategy put a `char*` in a dynamically-typed slot, so the subscript
+    // came here with neither a Vec header nor a map and fell through to
+    // `map_get` — measured PY-A with handle = `__const`+3 and first word
+    // 0x766100656c707061 ("apple\0av"), i.e. the guard reading the string's own
+    // bytes as a bucket capacity. The compiler cannot know the receiver is text
+    // (a loop variable over a `dyn` list has no element type; the typed route
+    // would be `str_get`, gen.rs:13882), so the answer has to come from the
+    // value. 938 `zeta_dyn_getitem` call sites exist across the 40-file corpus,
+    // so this arm is reached often — which is why it is gated on content rather
+    // than plain readability (see `zt_dyn_is_text`).
+    if (zt_dyn_is_text(base)) return str_get(base, key);
     return map_get(base, key);
 }
 
