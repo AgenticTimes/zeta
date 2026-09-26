@@ -636,7 +636,7 @@ impl ModuleResolver {
             .map_err(|e| format!("Failed to read module file {}: {}", path.display(), e))?;
 
         crate::frontend::parser::top_level::set_parsing_imported_module(true);
-        let parsed = parse_zeta(&content);
+        let parsed = crate::frontend::indent::parse_zeta_tagged(&path.to_string_lossy(), &content);
         crate::frontend::parser::top_level::set_parsing_imported_module(false);
         let (remaining, asts) =
             parsed.map_err(|e| format!("Failed to parse module {}: {:?}", path.display(), e))?;

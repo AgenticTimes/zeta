@@ -128,6 +128,10 @@
 | 468 | cleanup | **#84 锁步族落差分库**：移位三面——numeric_shift（基础+负数右移，match 121）· numeric_shift_overflow（1<<64 截断错值，已知 mismatch 记账）· t506 known-fail（known-fail 10）。负数 floordiv/mod 已在库 ⇒ #84 闭合（roadmap2 登记 7 转 ✅）；除零族 oracle 自报错不适配 harness 维持登记 | diff 121/132 无回归 · py 355/2/10/0 | ✅ 完成 |
 | 469 | cleanup | **状态补录两处**（roadmap2 登记 8/9）：refactor.md G.5d ②(b) 刷新（399 已交付"无声明半"，剩两形指 backlog #33）+ 轴 A 表补前端死代码四件套与 memory 孤儿文件两行 | 纯文档 | ✅ 完成 |
 | 469b | cleanup | **合并前全量门禁**（462–469 八个批次的保险，分支自跑）：official 194/194（191 link）· python_style **355/2/10/0**（四条新 known-fail 钉子全数入读）· 语料 40/40 · jit **179 ok**/0 segv（t50x 三例进 sweep 且通过）· diff 121/132 91.7% 无回归 · 断言族全 0 违规。**全量 rc=0，cleanup 分支可安全合并** | 全绿 | ✅ 门禁入册 |
+| 470 | cleanup | **轴 A 真删**（refactor §1 判据 (a)/(b)，全仓 grep 复核后删三个零引用死模块）：proc_macro(845)+macro_expand_advanced(617)+identity_ownership(470+tests 170) = **-2,105 行**（含 mod.rs 三行声明）；borrow_enhanced 保留——tests/memory-management 在消费（(b) 实证）。验证：build 绿 · cargo test 141/0（-4=被删内部测试）· dc_audit --diff rc=0 基线净减 · py 356/2/10/0。深化评审 C5 的最大一块落地 | 全绿 | ✅ 完成 |
+| 471 | cleanup | **W1003/W1004 带文件名**（批次 340 承接项；466 栈式行表的延伸）：W1004 在解析期间发射 ⇒ 路径必须随解析传入——新增 parse_zeta_tagged（线程局部传递），4 个有路径的调用点换用；诊断从 ":行号:" 升级 "路径:行号:"。跨文件场景主文件诊断仍带主文件自己的路径（栈式选表）。实测 "e2e.z:6:"；142/0；swallow/empty_stmt/356 全过 | 全绿 | ✅ 完成 |
+| 472 | cleanup | **G.3 进阶档第一块**：随机算术表达式生成器 tools/gen_random_diff.py（固定种子可复现；文法收窄绕呈现层噪声；CPython 先验滤 bad_case）+ 首批 20 例入 diff 库。**首批即量到 6 条真缺口、两个族**：① i64 溢出静默回绕 ×3（t503 的运算期兄弟）② 比较结果经混合运算丢 Bool 性 ×3（打印 0/1 非 False/True，M11 改型链缺口）——随机采样读数首次成立：缺口率 numeric ~24%，移交主线（diff 基线自动盯修复）。另：#81 登记（borrow_enhanced (b) 处置任务，配对 466 闭合盈余） | diff 135/152 91.7% 无回归 | ✅ 完成 |
+| 473 | cleanup | **随机采样扩容**（seed=77102，+20 例，累计 40）：2 条新 mismatch 全落已知族 ⇒ 族谱稳定、普查可信；总 147/172 无回归 | diff 147/172 | ✅ 完成 |
 | （续） | | | | |
 
 ## 6. 旁路侧启动清单（一次性 / 每会话）

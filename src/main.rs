@@ -785,7 +785,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let code = fs::read_to_string(&file)?;
         // Strip UTF-8 BOM if present
         let code = code.trim_start_matches('\u{FEFF}');
-        let result = parse_zeta(code);
+        let result = zetac::frontend::indent::parse_zeta_tagged(&file, code);
         match result {
             Ok((remaining, asts)) => {
                 ensure_fully_parsed(remaining, code, &file)?;
@@ -1135,7 +1135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         // Fallback self-host example
         let code = fs::read_to_string("examples/selfhost.z")?;
-        let (remaining, asts) = parse_zeta(&code)
+        let (remaining, asts) = zetac::frontend::indent::parse_zeta_tagged("examples/selfhost.z", &code)
             .map_err(|e| format!("Parse error: {:?}", e))?;
         ensure_fully_parsed(remaining, &code, "examples/selfhost.z")?;
 
@@ -1220,7 +1220,7 @@ fn bootstrap_zeta(output: &Option<String>, target: &str) -> Result<(), Box<dyn s
     eprintln!("Bootstrap: {} files", zf.len());
     for path in &zf {
         let code = std::fs::read_to_string(path)?;
-        if let Ok((rem, asts)) = parse_zeta(&code) {
+        if let Ok((rem, asts)) = zetac::frontend::indent::parse_zeta_tagged(&path.to_string_lossy(), &code) {
             if !rem.trim().is_empty() && rem.len() < 80 {
                 eprintln!(
                     "  Partial: {} ({:?})",

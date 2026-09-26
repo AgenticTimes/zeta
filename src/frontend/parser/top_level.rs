@@ -2205,10 +2205,13 @@ fn parse_zeta_impl_recover(input: &str) -> IResult<&str, Vec<AstNode>> {
             }
             Err(_) => {
                 let snippet: String = input.chars().take(48).collect();
-                let line = crate::frontend::indent::line_for_stmt_start(input, "")
-                    .unwrap_or(0);
+                let loc = match crate::frontend::indent::line_for_stmt_start(input, "") {
+                    Some((Some(path), line)) => format!("{path}:{line}:"),
+                    Some((None, line)) => format!(":{line}:"),
+                    None => "0:".to_string(),
+                };
                 eprintln!(
-                    "warning: [W1003] :{line}: skipped unparseable top-level item; \
+                    "warning: [W1003] {loc} skipped unparseable top-level item; \
                      syncing to next def/class/import/…. Near: '{}'",
                     snippet.replace('\n', "\\n")
                 );
