@@ -224,8 +224,8 @@ src/middle/pylib.rs	842	/// `declare_registry_runtime_fns` emits after task D.
 src/middle/pylib.rs	963	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");
 src/middle/resolver/resolver.rs	622	if method == "zeta_param_default" && args.len() == 2 { if let AstNode::Lit(i) = &args[0] { if (*i as usize) < defaults.len() { // Fail-loud when the default's l
 src/middle/resolver/resolver.rs	636	if mismatch { eprintln!( "warning: PY-A: the default for `{}` has a kind that \ parameter type `{}` cannot hold — it is coerced \ (annotate the parameter, or ch
-src/middle/resolver/resolver.rs	2011	let mangled = format!("{}__{}", module.replace('.', "_"), member);
-src/middle/resolver/resolver.rs	2822	let mangled = format!("{}__{}", canon.replace('.', "_"), src_mem);
+src/middle/resolver/resolver.rs	2015	let mangled = format!("{}__{}", module.replace('.', "_"), member);
+src/middle/resolver/resolver.rs	2826	let mangled = format!("{}__{}", canon.replace('.', "_"), src_mem);
 src/middle/specialization.rs	27	format!("{}_inst_{}", self.func_name, self.type_args.join("_"))
 src/middle/types/mod.rs	768	Type::DynamicArray(inner) => format!("[dynamic]{}", inner.display_name()),
 tests/python_style/run.sh	16	trap 'rm -rf "$OUTDIR"' EXIT

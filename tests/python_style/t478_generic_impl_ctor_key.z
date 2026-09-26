@@ -1,0 +1,87 @@
+// 批次 447（2.2 模块解析／#182 W1010 B 堆的真实成因）：`impl<K, V> Map<K, V>` 的方法
+// 注册进名表时，键带着 impl 头部的**泛型原文**（`Map<K, V>::new`），而调用点写的是裸
+// 类别名（`Map::new`）⇒ `func_ret_types` 永不命中。两个后果都在这一格里：
+//
+// ① 方法名是 `new` 时，整条 `AstNode::PathCall` 臂没有出口（名表路由 `gen.rs:13222`
+//    不命中、兜底平台类臂 `gen.rs:13269` 明写 `method != "new"`）⇒ 幽灵槽读 0 ＋
+//    W1010。仓内实拍成员：`zeta_src/runtime/actor/map.z:87` 的 `Map::new()`
+//    （类别在 `:63`、impl 在 `:67`、**同文件**），普查 B 堆 28 行里的 1 行。
+// ② 方法名不是 `new` 时，落进"首段大写＝平台类"的兜底 ⇒ 被改写成
+//    `zeta_platform_obj("tagged", …)` —— **一声不出的错值**（返回堆地址）。
+//    这一半比①大：泛型类别的每个非 ctor 方法都是它的成员。
+//
+// 修法只在键的成形处：`impl_key_base`（`resolver.rs:4877`）把 `Map<K, V>` 削成
+// `Map`，`funcs`／`registered_funcs` 的 `Type::method` 键与函数定义名一起改，
+// 所以定义与调用两侧同串（IR 里 `@"Map<K, V>::new"` → `@"Map::new"`）。
+// `self.impls` 仍按头部原拼写存 —— 那是按实例分发的另一张表，本批不动。
+//
+// 非泛型的 `impl Plain` 一直是绑上的（`MapInner`／`Plain::new`、`Plain::plain_method`
+// 两条对照组就是它），所以"泛型"是这格的唯一变量。
+//
+// 改前实拍（`target/release/zetac.pre447`，与改后那颗同目录）：**rc=133（SIGTRAP）、
+// stdout 空**，stderr 一条 W1010 ＝ `` `Box2::new()` has no lowering route ``。
+// 幽灵句柄走到 `self.inner.q` 才撞按名抛异常的桩（428 那一族），所以连对照组那两行
+// 都没来得及冲出来 —— 红色是"崩"，不是"值不对"。改后：五行逐字相符、W1010 0 条。
+struct CtorInner {
+    q: i64,
+}
+
+pub struct Box2<K, V> {
+    k: K,
+    v: V,
+    inner: CtorInner,
+}
+
+impl<K, V> Box2<K, V> {
+    pub fn new() -> Self {
+        Box2 { k: 5, v: 6, inner: CtorInner { q: 7 } }
+    }
+
+    pub fn tagged() -> i64 {
+        let b = Box2 { k: 1, v: 2, inner: CtorInner { q: 3 } };
+        b.inner.q
+    }
+}
+
+pub struct One<T> {
+    x: T,
+}
+
+impl<T> One<T> {
+    pub fn build() -> i64 {
+        11
+    }
+}
+
+struct Plain {
+    p: i64,
+}
+
+impl Plain {
+    pub fn new() -> Self {
+        Plain { p: 13 }
+    }
+
+    pub fn plain_method() -> i64 {
+        17
+    }
+}
+
+fn main() {
+    let n = Plain::new()
+    let pm = Plain::plain_method()
+    println!("plain={}", n.p)
+    println!("plain_method={}", pm)
+    let o = One::build()
+    println!("one_generic={}", o)
+    let t = Box2::tagged()
+    println!("tagged_generic={}", t)
+    let b = Box2::new()
+    println!("box_generic={}", b.inner.q)
+}
+
+// expect: plain=13
+// expect: plain_method=17
+// expect: one_generic=11
+// expect: tagged_generic=3
+// expect: box_generic=7

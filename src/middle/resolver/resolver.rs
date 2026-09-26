@@ -880,6 +880,7 @@ impl Resolver {
                                     // (Type::method) so method calls can be resolved.
                                     self.impls
                                         .insert((concept.clone(), ty.clone()), body.clone());
+                                    let base_ty = impl_key_base(ty.as_str());
                                     for b in body.clone() {
                                         if let AstNode::FuncDef {
                                             name,
@@ -889,7 +890,8 @@ impl Resolver {
                                             ..
                                         } = &b
                                         {
-                                            let qualified_name = format!("{}::{}", ty, name);
+                                            let qualified_name =
+                                                format!("{}::{}", base_ty, name);
                                             let typed_params: Vec<_> = params
                                                 .iter()
                                                 .map(|(n, t)| (n.clone(), self.string_to_type(t)))
@@ -907,7 +909,8 @@ impl Resolver {
                                             );
                                         }
                                         if let AstNode::FuncDef { name: fn_name, .. } = &b {
-                                            let qualified = format!("{}::{}", ty, fn_name);
+                                            let qualified =
+                                                format!("{}::{}", base_ty, fn_name);
                                             let mut qualified_ast = b.clone();
                                             if let AstNode::FuncDef {
                                                 name: ref mut q_name,
@@ -994,13 +997,14 @@ impl Resolver {
             } => {
                 self.impls.insert((concept, ty.clone()), body.clone());
                 // Register functions with qualified names
+                let base_ty = impl_key_base(ty.as_str());
                 for b in body.clone() {
                     if let AstNode::FuncDef {
                         name, params, ret, ..
                     } = &b
                     {
                         // Create qualified name: Type::method
-                        let qualified_name = format!("{}::{}", ty, name);
+                        let qualified_name = format!("{}::{}", base_ty, name);
                         // Convert string types to Type enum
                         let typed_params: Vec<(String, Type)> = params
                             .iter()
@@ -1013,7 +1017,7 @@ impl Resolver {
                     // Register with qualified name (for MIR resolution)
                     // Clone the func and override its name so MIR matches the call site
                     if let AstNode::FuncDef { name: fn_name, .. } = &b {
-                        let qualified = format!("{}::{}", ty, fn_name);
+                        let qualified = format!("{}::{}", base_ty, fn_name);
                         let mut qualified_ast = b.clone();
                         if let AstNode::FuncDef { ref mut name, .. } = qualified_ast {
                             *name = qualified.clone();
@@ -4867,6 +4871,18 @@ impl Default for Resolver {
 impl Drop for Resolver {
     fn drop(&mut self) {
         self.persist_specialization_cache();
+    }
+}
+
+/// `Map<K, V>` → `Map`: the class name an `impl` header declares keeps its
+/// generic spelling, while every call site writes the bare name — so a
+/// `Type::method` key built from the header never matches. `Map::new()` read
+/// slot 0, and a non-`new` method on a generic class fell to the
+/// capitalized-name catch-all and became a `zeta_platform_obj` handle.
+fn impl_key_base(ty: &str) -> String {
+    match ty.find('<') {
+        Some(i) => ty[..i].trim_end().to_string(),
+        None => ty.to_string(),
     }
 }
 
