@@ -1,0 +1,13 @@
+# @cat: str
+# @note: splitlines 和 rsplit 缺 C shim + registry 行（编译期缺绑定）
+#        ——strip/lstrip/rstrip/sort 全对对照。runtime+registry 车道。
+#@@ python
+s = "a\nb\nc"
+print(len(s.splitlines()))
+csv = "a,b,c"
+print(csv.rsplit(",", 1))
+#@@ zeta
+s = "a\nb\nc"
+print(len(s.splitlines()))
+csv = "a,b,c"
+print(csv.rsplit(",", 1))
