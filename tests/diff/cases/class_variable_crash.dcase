@@ -1,0 +1,30 @@
+# @cat: container
+# @note: 类变量自增崩溃——Counter.count += 1 在 map_get_default
+        把 int 0 当字典解引用（rc=1）⇒ 类级属性读写路径未实现
+        （CPython 2/2）。gen.rs+runtime 车道
+#@@ python
+class Counter:
+    count = 0
+    def __init__(self):
+        Counter.count += 1
+    def get(self):
+        return Counter.count
+
+a = Counter()
+b = Counter()
+print(a.get())
+print(Counter.count)
+
+#@@ zeta
+class Counter:
+    count = 0
+    def __init__(self):
+        Counter.count += 1
+    def get(self):
+        return Counter.count
+
+a = Counter()
+b = Counter()
+print(a.get())
+print(Counter.count)
+

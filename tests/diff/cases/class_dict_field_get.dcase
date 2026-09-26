@@ -1,0 +1,36 @@
+# @cat: container
+# @note: 类方法内 self.data.get(key, default) 全打地址
+        （set 写入 ✓ 但 get 读出指针）⇒ 方法上下文 .get() 路由
+        丢类型（⑫ 家族扩展，gen.rs 车道）
+#@@ python
+class Shelve:
+    def __init__(self):
+        self.data = {}
+    def set(self, key, val):
+        self.data[key] = val
+    def get(self, key):
+        return self.data.get(key, "missing")
+
+s = Shelve()
+s.set("x", 10)
+s.set("y", 20)
+print(s.get("x"))
+print(s.get("z"))
+print(s.get("y"))
+
+#@@ zeta
+class Shelve:
+    def __init__(self):
+        self.data = {}
+    def set(self, key, val):
+        self.data[key] = val
+    def get(self, key):
+        return self.data.get(key, "missing")
+
+s = Shelve()
+s.set("x", 10)
+s.set("y", 20)
+print(s.get("x"))
+print(s.get("z"))
+print(s.get("y"))
+
