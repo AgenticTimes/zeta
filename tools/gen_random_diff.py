@@ -78,6 +78,37 @@ def gen_str_expr(rng: random.Random, depth: int = 0) -> str:
     return f"({gen_str_expr(rng, depth+1)}).{m}({gen_str_expr(rng, depth+1)}{arg})"
 
 
+def gen_list_case(rng: random.Random) -> str:
+    """列表采样：字面量 / len / 定长索引 / append 后 len / 成员测试。"""
+    elems = [rng.randint(-1000, 1000) for _ in range(rng.randint(2, 5))]
+    lines = [f"v = {elems!r}"]
+    lines.append("print(len(v))")
+    lines.append(f"print(v[{rng.randrange(len(elems))}])")
+    x = rng.randint(-1000, 1000)
+    lines.append(f"v.append({x})")
+    lines.append("print(len(v))")
+    probe = rng.choice(elems + [x, 99999])
+    lines.append(f"print({probe} in v)")
+    return "\n".join(lines) + "\n"
+
+
+def gen_dict_case(rng: random.Random) -> str:
+    """字典采样：str 键字面量 / len / 键读 / 覆盖写后读 / 成员测试。"""
+    keys = rng.sample(["a", "b", "c", "dd", "key1", "z"], rng.randint(2, 4))
+    d = {k: rng.randint(-500, 500) for k in keys}
+    items = ", ".join(f'"{k}": {v}' for k, v in d.items())
+    lines = [f"d = {{{items}}}"]
+    lines.append("print(len(d))")
+    k0 = rng.choice(keys)
+    lines.append(f'print(d["{k0}"])')
+    k1 = rng.choice(keys)
+    lines.append(f'd["{k1}"] = {rng.randint(-500, 500)}')
+    lines.append(f'print(d["{k1}"])')
+    probe = rng.choice(keys + ["missing"])
+    lines.append(f'print("{probe}" in d)')
+    return "\n".join(lines) + "\n"
+
+
 def gen_expr(rng: random.Random, depth: int = 0) -> str:
     if depth >= 3 or rng.random() < 0.3:
         return str(rand_int(rng))
@@ -171,16 +202,32 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
-    ap.add_argument("--mode", choices=("numeric", "str", "stmts"), default="numeric")
+    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
     written = 0
     tried = 0
-    max_tries = a.count * (30 if a.mode == "stmts" else 6)
+    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict") else 6)
     while written < a.count and tried < max_tries:
         tried += 1
+        if a.mode in ("list", "dict"):
+            prog = gen_list_case(rng) if a.mode == "list" else gen_dict_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_{a.mode}_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: container\n"
+                f"# @note: 随机容器（seed={a.seed} #{written}）—— CPython 先验通过\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
         if a.mode == "stmts":
             written_stmts = write_stmts_case(a, rng, written)
             if written_stmts:
