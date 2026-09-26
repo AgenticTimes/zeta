@@ -19905,6 +19905,76 @@ official compile **194/194**、compile+link **191/194**（3 条 link-only 名单
 - **一条度量完整性新形态**：同一颗 `zetac_pre439`（md5 `bed3540a…`）、同一份驱动，11:36 那趟链接产物 **586,696 B**、11:50 起三趟全为 **603,208 B**（三趟 md5 互不相同、尺寸稳定）⇒ **"产物尺寸变了没"不能当位移判据**；437 入册的"两侧都 586,768 B"一格按此重读。成因**未定位**（嫌疑＝链接期参与的运行期对象集合随门禁重编变化，本批未查）。
 - 新队头＝**#171**（try 包住的幽灵成员调用把整个方法体静默丢掉，438 登记）；字段族内按本批现量排下一格＝§五 那两类的第 2 类（24 行具名类别，先定位再动手）。OPEN 净增 0（#170 结案，两条余项折进 backlog 同一行）。
 
+## 批次 441（3.2 Lowering／嵌套 `def` 的**函数体尾元素**）：提升分支只克隆 `body`、不读 `ret_expr` ⇒ 每个嵌套函数与方法少最后一条语句；主线位移 0
+
+### 一、结论栏（两栏分开）
+
+| 栏 | 读数 |
+|---|---|
+| **对主线 301 位移** | **0**（两颗同目录二进制、n=6/侧，逐轮读数完全相同，见 §五）。 |
+| **"修好了"栏** | 一条**静默丢语句**缺陷收口（任务 #171＝438 登记①"try 包住的幽灵成员调用把整个方法体静默丢掉"），并把 438 那条登记**改判成因**。夹具 `t472` 锁三种尾元素形状。 |
+| 顺带浮出的两格 | ① #172 的"丢插值"那一半原来就是本缺陷（§九）；② 取夹具时实测到一条独立的按名兜底串名 ⇒ 新登记 #178。 |
+
+### 二、pyramid 归位与头名来源
+
+3.2 Lowering（`src/middle/mir/gen.rs` 的 `AstNode::FuncDef` 臂、`fn_depth > 1` 提升分支）。头名＝任务 #171。批号 440→441 的更正见 §六。
+
+### 三、病因链（三处实坐标，缺一不构成解释）
+
+1. **解析层摘尾**：`src/frontend/parser/top_level.rs:297-331` 把函数体 `{ … }` 的尾元素从 `body` 里 `pop()` 出来放进 `FuncDef::ret_expr` —— `ExprStmt` 尾（剥壳取出内层表达式），以及裸 `Block`/`If`/`Call`/`PathCall`/`Match`/`Loop` 尾；`Block` 且其内层末项是 `Return` 时不摘（批次 287 的例外）。`Assign`/`Return`/`While`/`For` 不在清单里 ⇒ 它们的尾元素本来就不会丢。
+2. **顶层消费点**：`gen.rs:2420-2426` 先 `for stmt in body` 再读 `ret_expr` 并包成 `MirStmt::Return` —— 顶层 `def` 不丢。
+3. **提升分支不读**：`fn_depth > 1` 时体被 hoist 成 `__closure_N_<bare>_c<hash>`，改前那一支只 `body.clone()`（现 `gen.rs:2373-2387`），`ret_expr` 从头到尾没被看过 ⇒ **每个嵌套函数、以及函数体里 `class` 的每个方法，都少最后一条语句**，且零诊断。
+
+一句话：**被摘走的不是"含幽灵调用的 try"，是任何尾元素**；438 看到的"整个方法体消失"只是那条方法体恰好只有一条尾 `if`（try 在解析期脱糖成的 `Block` 末项就是 `If`，正落在摘出清单里）。
+
+### 四、最小修法与语义裁决
+
+`src/middle/mir/gen.rs` **+14/−1**：把 `ret_expr` **作为语句**补回提升体（`hoisted_body.push(tail)`），再交给 `lower_closure`。
+
+**为什么不照顶层那样包 `Return`**：Python 在语句位丢弃表达式的值，提升体的返回值应由体内自己的 `return` 决定；照抄顶层会把"尾是表达式"变成"尾是返回值"，那是另一处语义改动，且会牵动构造器/返回类型推导（`func_ret_types` 一族，416/#142 在册）。`lower_closure` 现有的 `last_closure_ret_ty` 取值规则（体内自己的 `MirStmt::Return` 优先）与此裁决一致，未动。
+
+### 五、实拍与损害量
+
+- **夹具** `tests/python_style/t472_nested_def_tail_stmt.z`（59 行，7 条 `// expect:` ＝当场跑 python3 对数的输出）：三形同锁——① 尾是普通调用语句（`print`）⇒ 只丢那一条；② 尾是裸 `if` ⇒ 整条 `if` 被摘走、方法体成空壳；③ 尾是 `return` ⇒ 不摘、不受影响。**改名后重拍**（`zetac_pre441`，与改后那颗同目录）：改前 compile rc=0／stdout **4 行**（`outer 1`/`cls a`/`def a`/`outer 2`，三条尾行一行不出、也没有任何 warning），改后 compile rc=0／stdout **7 行**逐字相符。
+- **#171 那条读数本身当场复拍（同目录两颗，改前/改后各编各跑）**：夹具＝438 留下那份 `/tmp/b438/probe438_shapes.z`（`Inner.guard` 的体只有一条尾 `try: v=self.nonesuch(1); print(...) / except: print("caught")`）——改前 `zetac_pre441`：compile rc=0、stdout **1 行** `fwd 4`；改后当前颗（md5 `a0568bdb…`）：compile rc=0、stdout **2 行** `fwd 4` ＋ `caught`，stderr 一句 `PY-A: dynamic receiver has no member [dynamic]Inner::nonesuch — raising`（428 的按名抛，run_rc=0 因为 except 接住了）。⇒ 这条同时是"改判成因"的正证据：**决定吞不吞的不是 try，是它在不在这条方法体的尾部**。
+- **主线 301 位移 0**：`/tmp/b440/ab440.log`，第 1–4、6 轮两侧同为 `compile_rc=0 run_rc=0 out=1 rerr=321`，第 5 轮两侧同为 `run_rc=139 rerr=119` ⇒ 崩点仍在原地、未推进也未加重。`out=1` 那一行是堆地址、md5 逐次变 ⇒ 不能当尺（437/438 已量过此格，本批复用同一口径）。
+- **门禁语料成员 0（负结果）**：40 个语料文件里 7 处嵌套 `def`，无一处尾元素落在 §三 的摘出清单 ⇒ 本批对门禁语料面的收益为 0，`corpus` 步读数不变（40/40）与此一致。
+- **用户项目侧 37 处**：`~/source/quant/REasyQuant`（剪掉 venv/worktree，308 个源文件）里带可摘尾元素的嵌套 `def` **37 处／19 文件**（`jq_shim.py` 11、`nautilus_engine.py` 6、`data_prefetch.py` 3、`local_strategy_backtest_worker.py` 2，余 15 文件各 1）。**口径点名**＝按 CPython AST 数的，不是逐文件过 zeta 解析器 ⇒ 只能当"值不值得动手"的量级，不能当精确数。
+
+### 六、批号 440→441（冲突更正，不是补号）
+
+`roadmap.md:19820` 那节已把 **440 记为旁路侧度量批**（纯文档），并写明号段调整"440 已被那批度量批用掉"、旁路转 460–489 ⇒ 主线这一格改用 **441**。已同步三处：`gen.rs` 注释 `BATCH-441`、`t472` 头注、改前二进制改名 `target/release/zetac_pre441`（改名前后 md5 `0476469e86990ad6862ce7284ef51306` 逐字节相同）。
+**改名后重编的判据**：`cargo build --release` 后 `target/release/zetac` md5 仍是 `a0568bdb84e0d458413074814cb9d39e`（与门禁那颗同一个）＝"批号写在注释里"这件事零代码位移，这条同时是本批 disclosure 的正证据。
+
+### 七、全量门禁（17 步逐项；这是 441 这格的全量，不是子集）
+
+两趟独立跑：第一趟 `ts=2026-09-26T04:24:44Z`／`real 307.53s`，第二趟（删除临时探针后、树与提交态一致）`ts=04:31:20Z`／`real 211.25s`，两趟 **`GATE_RC=1`**。逐项（第二趟，`/tmp/b440/gate_clean.log`）：
+
+official **194/194** compile、**191/194** compile+link（3 条 link-only＝`integration_all_features`/`quantum_basic`/`selfhost`，与 431/438/439 在册名单逐字相同）· python_style **356 passed／2 failed／6 known-fail／0 xpass**（`ls tests/python_style/t*.z`＝**364**，逐项对上：354→356 那 +2 ＝本批 `t472` ＋旁路 465 的 `t502`，known-fail/xpass 两格未动＝不是判据放松；红源仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ **零新增红**）· 语料 **40/40＝100%** · jit **ok=177 trap=383 fail=1 timeout=0 segv=0**（total 561，最小 ok=163）· 真值面 truth 22/23、str 20/23、container 27/28、numeric 23/28、control 28/28 · diff **120/130＝92.3%**、bad_case=0 · knob 23 · swallow 6 · import 22 · empty_stmt 68 · pysrc 42 · cli_semantics **87** · ignore_rules 19 · mbvar 24 · comment_drift **0 处复述** · emit_stable 2 夹具 · dyn_binding 4 条断言／不一致 **0** · clean_checkout **rc=0**（3s，rev=`5e2c235a`＝本批代码提交）· 诊断面 official 2 文件/6 行、python_style 239 行/113 文件（与 438/439 逐字相同）。
+**两趟唯一差异**＝jit total 562/耗时 63s vs 561/60s、fail 2 vs 1 ⇒ 那 1 条是第一趟时 `tests/python_style/_tmp_probe440.z`（本批取夹具期间的临时探针，已删除、未入库）还在目录里；成因见 §八 第 ③ 条。**耗时读数**：全量 307s／211s 对 AGENTS.md 那格的 666s 基线 ⇒ 旁路 461 的并行化把全量本身也带下来了，"每 10 批一次全量"不再是时间瓶颈。
+
+### 八、锚点与三条度量完整性
+
+**锚点**：`gen.rs` 净 +13 行 ⇒ `--rebind` 收 **33 条**搬家（`docs/ABI.md` 29 行、基线随之 33 条刷新），拒改 42 条（同键多义／多命中／零命中／消失未配对，按 436 的护栏）。其中 **4 条是链式撞键**（`gen.rs:9205→9218`、`9218→9231`、`9927→9940`、`11695→11708`，前一跳的目标键已存在 ⇒ `--rebind` 拒收），按合并协议手改文档后 `--bless-only` **按源坐标点名**重采；另**删 3 条孤立基线行**（`gen.rs:9205/9927/11695`——手移后文档不再引用它们，基线里留着会长期报"消失"）。
+**同文件集对照**（HEAD＝`4e0626ae` 隔离 worktree、**补回未跟踪的 `runtime/aliases.inc.c`** 之后）：漂移 29→**26**、消失 12→**12**、新 10→**11**、定位失败 3→**2**、rc 2→2、tsv 349→**349 行** ⇒ 净中性偏改。那"新 10→11"与"失败 3→2"是**同一行**：`ABI.md:56` 引的 `src/middle/mir/gen.rs:3730` 在 HEAD 上是一行空行（＝本来就是坏引用），本批 +13 位移后它撞到一行真代码 ⇒ 从"空行失败"变"基线缺键"；**本批没有 bless 它**（bless 等于把一条从未核过的引用写成基线），留在 #167 余项。剩余 2 条定位失败＝旁路 461 造成的 `run.sh:96`/`:136` 越界，**本批仍未代做**（那三条手改仍挂在 #167 余项）。
+
+三条度量完整性（并入本行登记，不新开编号）：
+
+1. **隔离 worktree 缺未跟踪生成物 ⇒ 对照侧自己造出假 delta**：`runtime/aliases.inc.c` 未被 git 跟踪（`git ls-files runtime/` 内 `.inc.c` **0 命中**），第一次 HEAD 侧核对报 定位失败 **5**／消失 **14**，把该文件补进 worktree 后变 **3**／**12** ⇒ 用隔离 worktree 取自基线之前，必须先比"未跟踪文件清单"，否则会把"文件不存在"读成"引用失效"。
+2. **jit sweep 的 `fail`/`trap` 分档跨跑法不稳**：同一颗二进制，门禁内＝trap 383/fail 1，独立 `nice` 单跑＝trap 373/fail 11，而 **ok 177／segv 0／total 561 三格逐项相同** ⇒ 该步只有这三格能当判据（`GREEN` 的判据也正是 ok 与 segv）。tools 车道已按 2026-09-26 用户裁定移交旁路侧，本批不改脚本。
+3. **同步内两套 glob 口径**：`python_style` 那步数 `t*.z`，`jit sweep` 那步数 `*.z` ⇒ 同一目录里一份临时探针只出现在后者的分母里（本批实测 562→561）。放临时文件在 `tests/python_style/` 下必须用 `t` 前缀以外的名字并当场删除。
+
+### 九、#172 的形状复核（只复核，不修）
+
+438 登记②"嵌套类方法里 `%` 格式化丢插值"，本批改后复核：同一形状 `print("v=%d" % 7)` 从**整条无声**变成**打 `0`**——这不是新缺陷，而是已登记的 **#47（`str % int` 打非确定值）**浮出水面：同一颗二进制、四种宿主形状（顶层语句／顶层类方法／普通函数／嵌套类方法）分别打 `1`／`6`／`4`／`0`，期望全为 `v=7`。⇒ **#172 的"丢插值"那一半就是本次的尾元素丢失（已闭）**，剩下"值不对"那一格是 #47 的成员；#172 按此收窄，不新开编号、不改 #47 原文。
+
+### 十、新登记与队头
+
+- **#178（新，静默错值）**：嵌套类方法取名 `run` 时，调用点不打到该类的合成符号，而是绑到 std 遗留的 `zeta_sieve_run`。MIR 证据：宿主 `Outer::make` 里是 `Call { func: "zeta_sieve_run", args:[3], dest:4 }`，而定义体 `__closure_0_make_cce9388cf` 里是 `println_str("a1")`；stdout 只剩 `outer 1`/`outer 2`。＝ 428/432 的按名兜底把**另一个名字**当成了满足条件。取 t472 时实测到，与本批缺陷无关（改名 `emit_pair`/`pick_branch` 后夹具才干净）。
+- **#171 结案**（本批）。438 那条登记按"旧结论→新结论"改判、原文不回改：①"try 体里有幽灵成员调用 ⇒ 整个方法体被丢" → ②"**任何**尾元素都被摘走，try 恰好是尾"。
+- **队头**：#177（24 条接收者类别已知的静默替身读，439 现量）→ #176（`src/backend/codegen/codegen.rs:6759` 的 SemiringFold 索引 panic，旁路 460 移交、gen/codegen 车道归主线）→ #178（按名兜底串名）→ #163。#145／语料崩 `str_trim+24` 仍卡在 `runtime/py_additions.c` 的授权上，未动。
+- **OPEN 净增 0**（#171 结案、#178 新登记，一收一发）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
