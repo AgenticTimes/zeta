@@ -1,0 +1,15 @@
+# @cat: control
+# @note: try/except 不捕获 ZeroDivisionError——10/0 得 inf 而非走 except
+#        （CPython y=-1，zeta y=inf）。gen.rs 车道。
+#@@ python
+try:
+    y = 10 / 0
+except:
+    y = -1
+print(y)
+#@@ zeta
+try:
+    y = 10 / 0
+except:
+    y = -1
+print(y)

@@ -1,0 +1,11 @@
+# @cat: container
+# @note: sorted(key=None) 导致排序失败（key=None 应等价于无 key 但被当作
+#        可调用对象调用 ⇒ 静默失败）。不带 key 参数时正常。gen.rs/runtime 车道。
+#@@ python
+v = [3, 1, 2]
+print(sorted(v, key=None, reverse=True))
+print(sorted(v, reverse=True))
+#@@ zeta
+v = [3, 1, 2]
+print(sorted(v, key=None, reverse=True))
+print(sorted(v, reverse=True))

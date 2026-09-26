@@ -1,0 +1,10 @@
+# @cat: numeric
+# @note: pow(2,10) 打 0 而非 1024（pow 内建函数错误）+
+#        divmod(17,5) 打地址而非 (3,2)（元组返回同根 ⑪）。
+#        registry/runtime 车道移交。其余 any/all/max/min/sum/abs 全对。
+#@@ python
+print(pow(2, 10))
+print(divmod(17, 5))
+#@@ zeta
+print(pow(2, 10))
+print(divmod(17, 5))
