@@ -190,7 +190,6 @@ src/middle/mir/gen.rs	6438	if method == "parse_args" && receiver.is_some() { let
 src/middle/mir/gen.rs	6815	// `log.info(fmt, *args)` — a varargs HANDLE has no // static length, and lowering the starred operand // emitted a raw Deref that codegen compiled into // `ldr
 src/middle/mir/gen.rs	7510	func: "zeta_dyn_len".to_string(),
 src/middle/mir/gen.rs	9107	Some(Type::Str) => "println_str",
-src/middle/mir/gen.rs	9205	for (i, a) in pos.into_iter().enumerate() { if i < slots.len() { slots[i] = Some(a); } else { slots.push(Some(a)); } }
 src/middle/mir/gen.rs	9218	for (i, a) in pos.into_iter().enumerate() { if i < slots.len() { slots[i] = Some(a); } else { slots.push(Some(a)); } }
 src/middle/mir/gen.rs	9225	for (n, v) in kw { match params.iter().position(|p| *p == n) { Some(i) => slots[i] = Some(v), None => slots.push(Some(v)), } }
 src/middle/mir/gen.rs	9227	Some(i) => slots[i] = Some(v),
@@ -202,7 +201,6 @@ src/middle/mir/gen.rs	9836	// (`[dynamic]str__max`), reached once annotated para
 src/middle/mir/gen.rs	9855	// same ghost family as `.isna()` (`[dynamic]i64__all`).
 src/middle/mir/gen.rs	9874	// `[dynamic]str__isna` and aborted. Route to the runtime helper.
 src/middle/mir/gen.rs	9893	// vector): compiled to the ghost `[dynamic]str__pct_change`, and
-src/middle/mir/gen.rs	9927	func: "[dynamic]str__map".to_string(),
 src/middle/mir/gen.rs	9940	func: "[dynamic]str__map".to_string(),
 src/middle/mir/gen.rs	9953	// `[dynamic]str__normalize` and the link failed.
 src/middle/mir/gen.rs	10192	func: "zeta_dyn_contains".to_string(),
@@ -210,7 +208,6 @@ src/middle/mir/gen.rs	10309	if receiver.is_none() && arg_ids.len() == 1 && !self
 src/middle/mir/gen.rs	10498	// PY-A: closure call — if the callee is a var bound to a // lambda/closure value, lower to a direct named call to the // synthetic closure function (f(41) → __
 src/middle/mir/gen.rs	11415	if receiver.is_none() && arg_ids.len() <= 4 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
 src/middle/mir/gen.rs	11694	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
-src/middle/mir/gen.rs	11695	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
 src/middle/mir/gen.rs	11697	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
 src/middle/mir/gen.rs	11708	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
 src/middle/mir/gen.rs	11721	format!("{}_{}", func, arg_ids.len())
