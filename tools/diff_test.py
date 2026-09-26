@@ -214,7 +214,13 @@ def main() -> int:
                 rec["verdict"] = "match"
             else:
                 diff = first_diff(ref, got)
-                rec.update(verdict="mismatch", detail=f"首个差异行 #{diff[0]}: 期望 {diff[1]!r} 实得 {diff[2]!r}")
+                # 批次 483：zeta 侧值可能嵌 GC 堆地址（每次编译不同 ⇒ detail
+                # 不可复现，见 482b 的 009/str_repeat_left 取证）。10 位以上
+                # 的纯数字（远超合法业务值范围）统一脱敏为 <N>；期望侧保留
+                # 原值（CPython 确定性强）。
+                exp_s = re.sub(r"\d{10,}", "<N>", str(diff[1]))
+                got_s = re.sub(r"\d{10,}", "<N>", str(diff[2]))
+                rec.update(verdict="mismatch", detail=f"首个差异行 #{diff[0]}: 期望 {exp_s!r} 实得 {got_s!r}")
         except BadCase as e:
             rec.update(verdict="bad_case", detail=str(e))
         except Exception as e:  # harness 自身的洞必须响，不许静默记成缺口
@@ -223,7 +229,8 @@ def main() -> int:
 
     try:
         from concurrent.futures import ThreadPoolExecutor
-        workers = min(8, os.cpu_count() or 4)
+        raw = os.environ.get("DIFF_JOBS", "0") or os.cpu_count() or 4
+        workers = max(1, min(8, int(raw)))
         with ThreadPoolExecutor(max_workers=workers) as ex:
             for name, rec in ex.map(judge, cases):
                 results[name] = rec
