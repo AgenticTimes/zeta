@@ -21395,6 +21395,53 @@ acceptance 语料 40 文件的 f-string 字段共 **101** 个，其中规格可�
 
 下一次全量门禁＝**批次 460**。460 前队头：**#182 余 57 行**（W1010 三堆，A 堆 23→#190）→ **#167 余项**（锚点键结构迁移；本批"定位失败不进 `--list`"是它的新证据）→ **#195/#196** → **#145 `str_trim+24`**（本批三趟 A/B 的崩点全撞在它身上）；另 **#203** 四形等一次同族合并批。
 
+## 批次 455（3.2 Lowering × 4.x 运行期值表示／5.4 数值原语）：整列句柄的四则运算落到运行期逐元素路 —— 两处判据（MIR 守槽型、出码发 `zt_col_arith`）＋ 一条表外新通道
+
+代码提交 **`46010977`**（`fix(codegen)`，5 文件 **+235**：`src/middle/mir/gen.rs` 25/0、`src/backend/codegen/codegen.rs` 113/0、`runtime/py_additions.c` 50/0、新夹具 `t490` 47 行、`zeta_runtime_c.o` 98760→100152 字节）。基面批 **`f43f86b3`**（`docs/ABI.md` 113/87＝1088→**1114** 行、`abi_anchors.tsv` 104/99＝基线 **294→298** 条）。动了 `.rs` 与运行期 ⇒ 重编＋重打 `.o`（`tools/build_runtime.sh`；cargo 不重建跟踪的预编译 `.o`，漏跑就是链接期 `Undefined symbols: "_zt_col_arith"`）：改前 `target/release/zetac_pre455` md5 `72b926746c0302c0dab509fda8443b98`、中途快照（有抬型无判据）`zetac_b455_noguard` `0ae2f82ec547c09f6469c160d1ca3829`、终态 `zetac` **`b9287c6dd268a2fe53f094415db393de`**。pyramid 层＝**3.2 Lowering**（`op_type` 无容器档）×**4.x 运行期值表示**（句柄进了 double 槽／指针做了标量算术）×**5.4 数值原语**（逐元素四则），harness 任务 **#203①②**，本批实收①②、③④留登记。
+
+### 一、根因（两处，缺一侧都修不上；每形都有两颗二进制当场实拍）
+
+| 形 | 改前实拍（`/tmp/b455/ab455.log`、`t490_pre455.*`） | 结论 |
+|---|---|---|
+| `100.0 / df["open"]`（float/col） | compile 0 / run 0，新列读回 **`<null>`**（静默错列） | `gen.rs` 的 `op_type` 匹配没有"容器操作数"这一档 ⇒ 被左边的 F64 抬成 `Type::F64`，**商本身是一个堆句柄**却被写进 double 槽；`DataFrame::__setitem__` 收到 `fptosi(handle)` |
+| `df["close"] / 2`（col/int） | compile 0 / run **139** | 落到 `_ => Type::I64` 兜底 ⇒ 出码对**列句柄**做标量 `sdiv`，半指针交给 `py_df_setitem` 的 `zt_maybe_vec_fwd` 解引用 |
+| `df["close"] - 1`（col/int `-`） | compile 0 / run **139** | 同上，`sub` 臂 |
+| `df["close"] % 3`（col/int `%`） | compile 0 / run 0，输出 **`<null>`** | 同①的静默格：位模式当整数存进列 |
+| `df["close"] / df["open"]`（col/col `len`） | compile 0 / run 0，输出 **`2`** | **假绿**：句柄相除恰好还是个像样指针，`len` 读得出、商值无意义 |
+
+语料崩点即此形：`market_data_fetcher.py:714` `result["vwap"] = result["amount"] / raw_vol`。
+
+### 二、修法（三处实际落点 + 一条新通道）
+
+- `gen.rs` 浮点臂**前**加一条容器守卫：只挡 `/ div floordiv % mod - sub` 且任一操作数是 `DynamicArray`/`Array` ⇒ `op_type` 定 `Type::I64`（句柄就是 i64 字，即值表示表 #4/#6/#7 的"原样搬运"口径）。比较运算不受影响，仍走 Bool。
+- `codegen.rs` 新增 `column_arith_dispatch` + `gen_column_arith`，两处算子臂（算子内联臂与 `MirExpr::BinaryOp`）改走运行期。标量恒以 **double 位模式**跨界（int 字面量先 `sitofp` 再 `bitcast`），列操作数按句柄跨界；`zt_col_arith` 就地声明。收敛前一处兜底加固：目标槽不存在时不再 panic，改静默返回（最终二进制实拍）。
+- `runtime/py_additions.c` 末尾新增 `zt_col_elem_num`/`zt_col_arith`：`kind = op \| 左列 4 \| 右列 8`（op：0=`/` 1=`//` 2=`%` 3=`-`），广播规则（长度不等且都不是 1 ⇒ `zeta_raise(1)`），元素读数走 `zt_dyn_is_text`→`strtod` 否则取整数值，结果按本仓 **`%.10g`** 文本入列。C 侧**不能**自己探哪边是列：`1.0` 的位模式是一个可信的 vec 头地址（454 的 t488 崩点正是这个形状）——这条已升格为 **C13**（`docs/ABI.md` §3.3，含"op 清单必须与出码判据同步"的守账义务）。
+- **有意不收**：`+`/`*`（对真 list 是 CONCAT/REPEAT，两种拼法在这里都是 `DynamicArray` 不可区分，留 #203 的方言判据）；`//` 列臂在 flat 文件里整个到不了出码（#51 的方言判据），夹具不断言。
+
+### 三、夹具 `tests/python_style/t490_column_arith_elementwise.z`（47 行，先证红后证绿）
+
+期望值逐字来自本机 CPython 真值（`10.0/5.0, 20.0/8.0, 20.0/2, 10.0-1, 100.0/5.0, 10.0%3` → `2.0 2.5 10.0 9.0 20.0 1.0`）；pandas 3.0.5 对 str 列做 `/` 直接抛 `TypeError`（`/tmp/b455/truth.py` 实拍），所以**算术真值取 CPython、渲染取本仓 `%.10g` 约定**。终态 `zetac` 上 t490 七项 = `2|2|2.5|10|9|20|1` 全绿；改前二进制上 compile 0 / run **139** / stdout 空（先红后绿成立）。同批邻居零回归：t488 `2|2|3`、t487 11 项、t489 `25|3|3.500000|7|3.500000`。
+
+### 四、门禁与诊断面（终态二进制，`/tmp/b455/gate_final.log`）
+
+快门禁（13 个 `--skip-*` 组合）：**official 194/194・191/194 + 3 条仅链接**、**python_style 377 passed / 2 failed / 12 known-fail / 2 xpass**、`GATE_RC=1`（存量红源不变＝`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）；XPASS 2 条 = t401/t513，归旁路 %-format 面（14 条 known-fail 逐条单跑，改前/终态两颗上同 XPASS，非本批解锁）。诊断面 5 文件/21 行 + 119 文件/252 行，与 `zetac_b455_noguard` 那颗的 summary **逐字节相同**。
+
+### 五、位移 A/B：0（不算收益），且交付了一颗 IR 逐字节相同的终态二进制
+
+语料 12 次编译跑：pre `72b92674` 侧 **3/12 崩**、post 侧 **1/12 崩**；两侧 rc=0 的每一次输出**逐字段相同**（`stderr=321`、`parity=74`、`fail1=74`、`morning=37`）⇒ 位移 0；剩余崩点仍在 `str_trim+24`＝**#145 家族**，不记 credit（崩的跑计数噪声底 454 已实测同颗三趟 6/12、1/12、3/12，大于本批差异，n=12 不足判向）。**关键等价证明**：终态二进制与 noguard 中途快照的 `--emit-llvm` 单模块 IR **4,434,324 字节、md5 `d047a441…` 逐字节相同**，stderr 396 行只差输出文件名一行 ⇒ 454 批在 noguard 形状上量的 n=12 读数直接转移到终态二进制，本批无需重测位移。语料侧新通道实拍：3 个 `zt_col_arith` 调用点（kind 4/12/7），在 `"MarketDataFetcher::fetch_stocks"`、`backend_datasrc_market_data_sources___transform_rq_to_schema`、`jq_wufu__weighted_slope_r2`——**调用点存在≠收益**，只登记为覆盖面。
+
+### 六、锚点（`f43f86b3`；净账与 HEAD 自基线对照）
+
+HEAD 在隔离 worktree 自测：**漂移 8 / 落单新 2 / 落单消失 37 / 改号配对 9 / 定位失败 7 / rc=2**。终态：`--rebind` 98 条 + 手绑 1、`--bless-only` 点名 4 条（全带完整路径）⇒ 基线 **294→298**、`docs/ABI.md` 1088→**1114** 行、终态读数 **漂移 24 / 落单新 2 / 落单消失 35 / 改号配对 9 / 定位失败 9 / rc=2**（`/tmp/b455/anch_head.txt`、`anch_final.txt`）。漂移 24 的来源就是本批在 `gen.rs`/`codegen.rs` 前部插入的行（454 之后行号搬家是常态）；454 段里"255 处 `add_function`"的回望读数**不回改**，只在 §4.5 追加现测 261→262 与"不回改"注记。§4.5 本批新结论：**新增一个运行期函数实际 3 处**（C 源 + codegen 就地声明 + 重打 `.o`）；registry.txt/JIT 表**不需要**改——`check_registry_symbols.sh` 是单向校验且从未接线（图内无边），这点连同"零带外校验"的警告写进了 ABI.md。
+
+### 七、backlog 同步：#203①② 收、③④ 留，新立一条浮点字面量列崩溃
+
+#203 行追加批次 455 读数：①（句柄/容器槽的 `/` 无值表示）②（`Series / 字面量 int` 必崩）两形本批实收（t490 正向断言 + 语料 3 调用点）；③混型陈旧槽、④`const HALF: i64 = 7 / 2` 疑点不动。**本批新落盘的遗留**（写进 #203 括注，OPEN 净增 **0**，靠配对折叠）：`+`/`*` 的容器方言、"静态 I64 而实为句柄"的其余运算面、flat 文件 `//` 到不了出码（#51）。**新登记 harness 任务**：浮点字面量列表 `[10.0, 20.0]` 建列后参与运算，改前/终态**两颗二进制都 rc=139**（`/tmp/b455/`，属既有崩、非本批引入，登记为独立任务而非本批收益的反例）。
+
+### 八、读数存档
+
+`/tmp/b455/`：`ab455.log`（§五 12 次逐行）、`gate_fast.log`/`gate_final.log`（§四）、`anch_head.txt`/`anch_final.txt`（§六，HEAD 侧来自隔离 worktree，用完即删）、`ir_b455_noguard.ll`/`ir_final.ll`（等价证明两份）、`t490_pre455.*`（先红实拍）、`truth.py`（CPython/pandas 真值）。三颗二进制留 `target/release/`（坑 37/68：A/B 必须同目录）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
