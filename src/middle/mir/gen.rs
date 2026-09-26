@@ -5294,6 +5294,19 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         // The op list must stay in sync with
                         // `Codegen::column_arith_dispatch` (codegen.rs): a route that
                         // fires without this arm re-creates exactly this bug.
+                        // Batch 458: the answer's element representation is text, not
+                        // a bare handle word. `zt_col_arith` (py_additions.c:3678)
+                        // unconditionally `snprintf("%.10g")`s each element and pushes
+                        // the `GC_strdup`ed `char*`, so typing this I64 made every
+                        // consumer print the pointer: `h = df["amount"] / 2` then
+                        // `print(h[0])` or `for x in h` answered
+                        // `4347658192／4347658176` (rc=0, silent wrong value). Only the
+                        // `df["r"] = ...` spelling was right, because there the map tag
+                        // side table (456) drives the read boundary instead of this
+                        // type. `DynamicArray(Str)` is the same i64-word representation
+                        // as I64 — the handle still crosses as one word — so 455's
+                        // fptosi problem stays solved: this arm is still ahead of the
+                        // F64 arm.
                         _ if !is_cmp
                             && matches!(
                                 op.as_str(),
@@ -5307,7 +5320,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                                 Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
                             )) =>
                         {
-                            Type::I64
+                            Type::DynamicArray(Box::new(Type::Str))
                         }
                         (Some(Type::F32) | Some(Type::F64), _)
                         | (_, Some(Type::F32) | Some(Type::F64)) => {

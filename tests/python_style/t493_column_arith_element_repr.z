@@ -1,0 +1,89 @@
+// t493 — 容器算术结果的元素表示：MIR 把它定型成 I64，运行期给的却是 vec<str>
+//
+// 病灶（3.2 Lowering × 4.x 运行期值表示；backlog #203①②／任务 #205⑥）：
+// `df["c"] / k` 的结果落进普通局部槽时，读边界拿不到任何元素表示。三跳：
+//   ① `gen.rs:5310` 那条"容器操作数 ⇒ 答案是列"的守卫臂（批次 455 加的）把结果
+//      定型成 `Type::I64`——那是为了躲开 F64 臂把句柄 `fptosi` 掉（455 的 t488），
+//      方向没错，但 I64 只说了"一个 i64 字"，没说"字里装的是什么"。
+//   ② 运行期 `zt_col_arith`（`runtime/py_additions.c:3678`）对每个元素无条件
+//      `snprintf("%.10g")` + `GC_strdup` 再 `vec_push` ⇒ 结果 vec 里**逐个是 char***。
+//   ③ 出码层 `column_arith_dispatch` 只看**操作数**类型选路，**结果**类型只驱动下游
+//      的 print 分派 ⇒ `println_i64` 把那个 `char*` 当整数打。
+// 于是四种拼写全成静默错值（rc=0，比崩更难发现）：`h[0]`／`h[1]`／`for x in h`／
+// `print(h)`。改前实拍（`/tmp/b458/forms_pre.log`）＝ `4347658192｜4347658176` 这类
+// 十进制堆地址。
+//
+// 为什么只有 `df["r"] = df["c"]/k; df["r"][0]` 一条本来就是对的：那条走的是 map 侧表
+// （批次 456 的 `zeta_map_set_tag` + 读边界 `zt_vec_textify`），根本不看这个类型。
+// 修法因此只能落在类型上：`DynamicArray(Str)` ＝ 运行期真实产出 ＝ 库的列约定
+// `map<str, vec<str>>`。i64 字的表示一个没变（句柄仍是一个字过界），455 躲的 fptosi
+// 依旧躲着——这条臂仍然排在 F64 臂之前。
+//
+// 顺带收掉的一个编译期崩溃（改前实拍）：`df["amount"] / 2 / 5` 这种**链式**写法，
+// 内层结果是 I64 ⇒ 外层 `column_arith_dispatch` 认不出列 ⇒ 走标量真除法 ⇒
+// `codegen.rs:5426` panic（`Found FloatValue ... expected the IntValue variant`，
+// 编译 rc=101）。同一条类型改完，链式两格读回 1｜2。
+//
+// 期望值来源：本机 pandas 3.0.5 当场对数（`5.0｜10.0｜8｜16｜1｜2｜2.5｜5.125`），
+// 其中 `5` vs pandas 的 `5.0` 是 **#48 方言**未裁决，本仓按"cell 文本 + `%.10g`"断言
+// （先例 t491/t492）。
+//
+// 两条本批刻意**不**断言的边界（都在改前/改后逐字相同，另在 backlog 挂着）：
+//   `df["amount"] // 4` 两侧都打 `10`（#51：`//` 的方言判据挂在缩进上），
+//   `df["amount"][0] / 2`（元素是文本再参加标量）两侧都打堆地址（#112/#194 家）。
+//
+// 两颗二进制读数（都在 `target/release/` 同目录，坑 37/68；`/tmp/b458/`）：
+//   改前 `zetac_pre458`（md5 16b515252e…，＝批次 457 终态那颗）＝**本夹具 compile_rc=101**，
+//     编译期 panic 在 `codegen.rs:5426`。摘掉链式那三行后（`/tmp/b458/t493_nochain.z`，
+//     14 个 print）才是那条静默路：**run_rc=0、14 行里 12 行是堆地址**，剩下两行对的是
+//     `len(h)` 与走 map 的 `df["r"][0]`。
+//   改后（md5 aca54812f0…）＝compile 0／run 0／17 行与 17 条 expect 逐字相符，地址行 0。
+//   单模块 IR 差分（`p_lit` 的 `@main`，只有两处）：`zeta_dyn_len`→`vec_len`，
+//   `zeta_dyn_getitem`+`println_i64`→`inttoptr`/`getelementptr`/`load`+`println_str`。
+//   负对照 `p_set`（`df["r"] = df["amount"]/2`）：两侧 `@main` 的相关调用序列**逐字相同**，
+//   读数也都是 `2｜5｜10` ⇒ 本批没碰那条本来就对的路。
+
+import pandas as pd
+df = pd.DataFrame({"amount": [10, 20], "volume": [2, 4]})
+h = df["amount"] / 2
+print(len(h))
+print(h[0])
+print(h[1])
+v = df["amount"] / df["volume"]
+print(v[0])
+print(v[1])
+d = df["amount"] - df["volume"]
+print(d[0])
+print(d[1])
+m = df["amount"] % 3
+print(m[0])
+print(m[1])
+z = df["amount"] / 2 / 5
+print(len(z))
+print(z[0])
+print(z[1])
+for x in h:
+    print(x)
+df["r"] = df["amount"] / 2
+print(df["r"][0])
+df2 = pd.DataFrame({"v": [10.0, 20.5]})
+f = df2["v"] / 4
+print(f[0])
+print(f[1])
+// expect: 2
+// expect: 5
+// expect: 10
+// expect: 5
+// expect: 5
+// expect: 8
+// expect: 16
+// expect: 1
+// expect: 2
+// expect: 2
+// expect: 1
+// expect: 2
+// expect: 5
+// expect: 10
+// expect: 5
+// expect: 2.5
+// expect: 5.125
