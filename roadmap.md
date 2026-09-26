@@ -19975,6 +19975,44 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 - **队头**：#177（24 条接收者类别已知的静默替身读，439 现量）→ #176（`src/backend/codegen/codegen.rs:6759` 的 SemiringFold 索引 panic，旁路 460 移交、gen/codegen 车道归主线）→ #178（按名兜底串名）→ #163。#145／语料崩 `str_trim+24` 仍卡在 `runtime/py_additions.c` 的授权上，未动。
 - **OPEN 净增 0**（#171 结案、#178 新登记，一收一发）。
 
+## 旁路并入（2026-09-26，主线侧代录）：批次 462–469 ＋ 441 收尾合并
+
+### 一、这批是谁做的、读数从哪儿来
+
+462–469 八批由**旁路侧（Agent-2，`../zeta-bz`，分支 `cleanup`）**自取，主线侧**未复测**；按合并协议在主线提交完 441 后并入。下面 §二 逐字誊他们的台账（`worktree.md` §5），读数归属照此标注。主线侧唯一自取的读数＝§三那颗合并树快门禁。
+
+### 二、八批一句话（旁路侧读数，主线未复测）
+
+| 批 | 主题 | 旁路侧读数 |
+|---|---|---|
+| 462 | `parse_bisect` 补无分号方言回退（`bisect_line_wise`，#79 家族）：换行分隔写法没有 `;`，原切点判据在长函数体内找不到切点 | 合成用例精确命中病因行 4（`let x: = 3`）；健康文件正确报无截断 |
+| 463 | `cargo test` 存量红灯清零（#23 前置）：monomorphize 测试初始化器补 437 新增的 Mir 两字段（lib 测试此前**编译不过**且无人发现＝#23 盲区现场证据）；`header_colon` 测试改用 `#` 尾注释（python 方言里代码后 `//` 是地板除） | `cargo test --lib -- --test-threads=1` **142 过 / 0 败** |
+| 464 | GC 懒初始化竞态根除：两线程同时首次 `std_malloc` ⇒ 都跑 `GC_init` ⇒ 静态根区间重叠 ⇒ libgc abort（崩溃栈实证）；`src/runtime/std.rs` 用 `std::sync::Once` 显式初始化一次 | 并行 `cargo test --lib` **142/0 × 3 连跑**；**越车道报备**：`src/runtime/std.rs` 5 行不在所有权矩阵内 |
+| 465 | `fn f(...);` 原型声明（#61＋#67 的 `fn…;` 成员）：peek 判定后与 `extern fn` 同路 ⇒ 修前这类声明截断整个文件（顶层与 def 体内同病） | 快门禁 official 194/194 · py 355/2/6/0 · 语料 40/40 · cargo 142/0 |
+| 466 | LAST_PP 串号根除（#65）：行表改栈（上限 64／同文去重）、查询按"remaining 是哪份 pp 的后缀"选表、W1002/W1003/W1004 三处消费点合并、入口不再全清；无匹配时诚实缺省（不再夹假行号） | cargo 并行 145/0 · swallow/empty_stmt 全过 · 快门禁 194/194 · 355/2/6/0 · 语料 40/40 |
+| 467 | 静默偏差钉 known-fail ×3：t503 大字面量溢出静默 0（L06/L07）· t504 `{x:c}` 按十进制（CT33）· t505 `{x:,d}` 无千分位（CT32） | py 355/2/**9**/0；**移交主线一条新缺陷**＝`concurrent.futures` 的 `Executor.submit` 运行期 SIGTRAP rc=133（`done()` 语义钉不了，runtime/pylib 车道）→ 主线侧登记为 **#179** |
+| 468 | #84 锁步族落差分库：`numeric_shift`（基础＋负数右移）· `numeric_shift_overflow`（`1<<64` 截断错值，已知 mismatch 记账）· t506 known-fail | diff 121/132 无回归 · py 355/2/**10**/0；#84 闭合（roadmap2 登记 7 转 ✅） |
+| 469 | 状态补录两处（roadmap2 登记 8/9）：refactor.md G.5d ②(b) 刷新（399 已交付"无声明半"，剩两形指 backlog #33）＋轴 A 表补前端死代码四件套与 memory 孤儿文件两行 | 纯文档 |
+| 469b | 合并前全量门禁（八批的保险，旁路侧自跑） | official 194/194（191 link）· py **355/2/10/0** · 语料 40/40 · jit **179 ok**／segv 0 · diff 121/132＝91.7% · 断言族全 0 违规 ⇒ **rc=0** |
+
+**移交项的去处**：① 460 那条 `codegen.rs:6759` SemiringFold 索引 panic 已在 **#176**（438 收尾代录），仍是 gen/codegen 车道队头第 2 名；② 467 的 `Executor.submit` SIGTRAP → 本批新建 **#179**；③ 464 建议"把 `cargo test` 加进门禁第 18 步"——加步骤要动 `tools/run_all.sh`，按 2026-09-26 用户裁定 tools 车道归旁路侧，主线侧只在锚点搬家时走 #52 流程配合，**不在主线批里代做**。
+
+### 三、441 收尾合并与合并树快门禁（主线侧自取）
+
+- 合并＝`e7298e8e`（`git merge cleanup`，**14 文件 +191/−51**＝`src/frontend/indent.rs` 122/32、`src/frontend/parser/stmt.rs` 5/3、`src/frontend/parser/top_level.rs` 4/4、`src/main.rs` 3/5、`tests/python_style/{t503,t504,t505,t506}.z` 各 4–5、`tests/diff/cases/{numeric_shift,numeric_shift_overflow}.dcase`、`refactor.md` 8/0、`roadmap2.md` 3/3、`backlog.md` 4/4、`worktree.md` 5/0）。**无冲突**，两本台账逐段核实在位（§4 我的 441 行、§5 他们的 460–469b 在 119–129）。
+- **为什么这一格必须复跑**：旁路改的正是 `src/frontend/parser/top_level.rs`，而 441 的修法读的就是它摘出来的 `ret_expr` ⇒ 两侧在同一处接缝上各自动手。
+- **合并树现建二进制** md5 `0c899d98df7e0cacff226cc792327b15`（≠ 441 门禁那颗 `a0568bdb…` ⇒ 旁路的改动真进了这颗）。
+- **t472 在合并树上重拍**：compile rc=0、stdout 7 行逐字相符（`outer 1`/`cls a`/`cls b`/`if taken`/`def a`/`def b`/`outer 2`）；438 那份 `probe438_shapes.z` 同样仍是 `fwd 4`＋`caught` ⇒ **441 的收口没被旁路的解析改动顶掉**。
+- **快门禁（合并树，`/tmp/b441/merge_gate.log`）**：**`GATE_RC=1`／real 110.79s** · official **194/194** compile、**191/194** compile+link（link-only 3 名单未动）· python_style **356 passed／2 failed／10 known-fail／0 xpass**（`ls tests/python_style/t*.z`＝**368**，逐字对上 356+2+10）· 诊断 official 2 文件/6 行、python_style 239 行/113 文件 · comment_drift 0 · dyn_binding 4 条/不一致 0 · 其余 13 步跳过。**读数解读**：passed 对 441 的 356 **一格未动**、xpass 仍 0 ⇒ 旁路四条新钉子全部落在 known-fail（6→10），合并**零新增红**；`GATE_RC=1` 的红源仍是存量 `t231`/`t233`。
+- **未覆盖轴点名**：`corpus`/`jit`/`truth+diff`/`clean_checkout` 在快门禁里跳过 ⇒ 合并树上这几轴目前只有旁路侧 469b 自跑的读数（jit ok 179、diff 121/132、语料 40/40），主线侧到下一次全量（450 那格）才自取。
+- **耗时读数**：快门禁 208s（438 那格）→ **110.79s**（本格）＝旁路 461 的并行化真吃下来一半。
+
+### 四、登记与队头（收尾本格）
+
+- **#179 新登记**（旁路 467 移交）：`concurrent.futures` 的 `Executor.submit` 运行期 SIGTRAP（rc=133）。
+- **OPEN 净增 +1**（#171 结案、#178 新登记＝一收一发；#179 从旁路接过来是净增那 1）。
+- **队头不变**：#177 → **#176**（旁路 460 说 array.z 解析修好后这一层才露出来，合并树里它已在射程内）→ #178 → #163；#145 仍等 `runtime/py_additions.c` 授权。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
