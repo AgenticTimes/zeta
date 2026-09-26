@@ -119,7 +119,10 @@ def norm(out: str) -> list[str]:
     return lines
 
 
-def run_ref(src: str, workdir: Path) -> list[str]:
+def run_ref(src: str, name: str, workdir: Path) -> list[str]:
+    wd = workdir / name
+    wd.mkdir(parents=True, exist_ok=True)
+    workdir = wd
     p = workdir / "ref.py"
     p.write_text(src, encoding="utf-8")
     try:
@@ -137,13 +140,16 @@ def run_ref(src: str, workdir: Path) -> list[str]:
 
 def run_zeta(src: str, name: str, workdir: Path) -> tuple[str, list[str], str]:
     """返回 (verdict, stdout行, 详情)。verdict ∈ matchable 的三态之一。"""
-    z = workdir / f"{name}.z"
+    # 并行安全：每个用例一个子目录（zetac 的中间产物落在 cwd，共享目录会互相踩）
+    wd = workdir / name
+    wd.mkdir(parents=True, exist_ok=True)
+    z = wd / f"{name}.z"
     z.write_text(src, encoding="utf-8")
-    binp = workdir / name
+    binp = wd / name
     try:
         c = subprocess.run(
             [str(ZETAC), str(z), "-o", str(binp)],
-            capture_output=True, text=True, timeout=60, cwd=str(workdir),
+            capture_output=True, text=True, timeout=60, cwd=str(wd),
         )
     except subprocess.TimeoutExpired:
         return "compile", [], "zetac 超时（>60s）"
@@ -194,36 +200,41 @@ def main() -> int:
     results: dict[str, dict] = {}
     per_cat: dict[str, list[int]] = {c: [0, 0] for c in CATEGORIES}  # [match, judged]
     bad = []
+    def judge(path: Path) -> tuple[str, dict]:
+        name = path.stem
+        rec = {"cat": "?", "verdict": "bad_case", "detail": ""}
+        try:
+            case = parse_case(path)
+            rec["cat"] = case["cat"]
+            ref = run_ref(case["python"], name, workdir)
+            verdict, got, detail = run_zeta(case["zeta"], name, workdir)
+            if verdict != "ok":
+                rec.update(verdict=verdict, detail=detail)
+            elif got == ref:
+                rec["verdict"] = "match"
+            else:
+                diff = first_diff(ref, got)
+                rec.update(verdict="mismatch", detail=f"首个差异行 #{diff[0]}: 期望 {diff[1]!r} 实得 {diff[2]!r}")
+        except BadCase as e:
+            rec.update(verdict="bad_case", detail=str(e))
+        except Exception as e:  # harness 自身的洞必须响，不许静默记成缺口
+            rec.update(verdict="bad_case", detail=f"harness 异常: {type(e).__name__}: {e}")
+        return name, rec
+
     try:
-        for path in cases:
-            name = path.stem
-            rec = {"cat": "?", "verdict": "bad_case", "detail": ""}
-            try:
-                case = parse_case(path)
-                rec["cat"] = case["cat"]
-                ref = run_ref(case["python"], workdir)
-                verdict, got, detail = run_zeta(case["zeta"], name, workdir)
-                if verdict != "ok":
-                    rec.update(verdict=verdict, detail=detail)
-                elif got == ref:
-                    rec["verdict"] = "match"
-                else:
-                    diff = first_diff(ref, got)
-                    rec.update(verdict="mismatch", detail=f"首个差异行 #{diff[0]}: 期望 {diff[1]!r} 实得 {diff[2]!r}")
-            except BadCase as e:
-                rec.update(verdict="bad_case", detail=str(e))
-                bad.append(name)
-            except Exception as e:  # harness 自身的洞必须响，不许静默记成缺口
-                rec.update(verdict="bad_case", detail=f"harness 异常: {type(e).__name__}: {e}")
-                bad.append(name)
-            results[name] = rec
-            if rec["verdict"] != "bad_case":
-                slot = per_cat.setdefault(rec["cat"], [0, 0])
-                slot[1] += 1
-                if rec["verdict"] == "match":
-                    slot[0] += 1
+        from concurrent.futures import ThreadPoolExecutor
+        workers = min(8, os.cpu_count() or 4)
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for name, rec in ex.map(judge, cases):
+                results[name] = rec
+                if rec["verdict"] != "bad_case":
+                    slot = per_cat.setdefault(rec["cat"], [0, 0])
+                    slot[1] += 1
+                    if rec["verdict"] == "match":
+                        slot[0] += 1
     finally:
         os.system(f"rm -rf {shlex.quote(str(workdir))}")
+    bad = sorted(n for n, r in results.items() if r["verdict"] == "bad_case")
 
     judged = len(cases) - len(bad)
     match = sum(1 for r in results.values() if r["verdict"] == "match")

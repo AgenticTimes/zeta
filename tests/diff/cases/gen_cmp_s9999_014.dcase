@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=9999 #14）
+#@@ python
+print(80 != -54 > 505)
+print(-25.63 < 66.98)
+print(520 == 653 > 857)
+print(not -15)
+
+#@@ zeta
+print(80 != -54 > 505)
+print(-25.63 < 66.98)
+print(520 == 653 > 857)
+print(not -15)
+

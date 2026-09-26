@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=9999 #0）
+#@@ python
+print(54 < 168 != 298)
+print(19.67 >= 16.98)
+
+#@@ zeta
+print(54 < 168 != 298)
+print(19.67 >= 16.98)
+
