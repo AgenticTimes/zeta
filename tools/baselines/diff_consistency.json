@@ -1,12 +1,12 @@
 {
   "total": 408,
   "judged": 408,
-  "match": 359,
-  "rate_pct": 88.0,
-  "match_min": 359,
+  "match": 361,
+  "rate_pct": 88.5,
+  "match_min": 361,
   "by_verdict": {
-    "match": 359,
-    "mismatch": 48,
+    "match": 361,
+    "mismatch": 46,
     "compile": 1
   },
   "per_cat": {
@@ -19,7 +19,7 @@
       "judged": 79
     },
     "container": {
-      "match": 118,
+      "match": 120,
       "judged": 132
     },
     "numeric": {
@@ -46,7 +46,7 @@
     },
     "container_dict_comp_filter": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "container_dict_comprehension": {
       "cat": "container",
@@ -1662,7 +1662,7 @@
     },
     "tuple_unpack_str_type": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     }
   }
 }

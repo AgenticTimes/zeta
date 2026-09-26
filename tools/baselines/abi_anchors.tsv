@@ -218,7 +218,7 @@ src/middle/mir/gen.rs	13323	if path.len() == 1 && path[0] == "String" && method 
 src/middle/mir/gen.rs	13420	format!("{}_{}", func_name, arg_ids.len())
 src/middle/mir/gen.rs	14066	func: "zeta_dyn_getitem".to_string(),
 src/middle/mir/gen.rs	14094	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
-src/middle/mir/gen.rs	14712	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
+src/middle/mir/gen.rs	14721	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");
 src/middle/pylib.rs	842	/// `declare_registry_runtime_fns` emits after task D.
 src/middle/pylib.rs	963	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");
