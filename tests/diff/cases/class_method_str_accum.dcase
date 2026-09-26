@@ -1,0 +1,38 @@
+# @cat: container
+# @note: 类方法内局部字符串跨循环丢类型——out 打堆地址（应为 a,b,）。
+#        普通函数与模块级同形都正确 ⇒ 缺口特定于类方法上下文的局部变量
+#        类型标记（gen.rs 车道，与 506 元组解包同根邻域）。组合普查 512。
+#@@ python
+class Builder:
+    def __init__(self):
+        self.parts = []
+    def add(self, w):
+        self.parts.append(w)
+    def render(self):
+        out = ""
+        for w in self.parts:
+            out = out + w + ","
+        return out
+
+b = Builder()
+b.add("a")
+b.add("b")
+print(b.render())
+print(len(b.parts))
+#@@ zeta
+class Builder:
+    def __init__(self):
+        self.parts = []
+    def add(self, w):
+        self.parts.append(w)
+    def render(self):
+        out = ""
+        for w in self.parts:
+            out = out + w + ","
+        return out
+
+b = Builder()
+b.add("a")
+b.add("b")
+print(b.render())
+print(len(b.parts))
