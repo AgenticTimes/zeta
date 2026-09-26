@@ -1,0 +1,22 @@
+# @cat: container
+# @note: 跨方法字符串拼接（self.name()）——简报 ⑫ 家族实例（d2 探针）
+#@@ python
+class Greet:
+    def name(self):
+        return "world"
+    def hello(self):
+        return "hello " + self.name()
+
+g = Greet()
+print(g.hello())
+
+#@@ zeta
+class Greet:
+    def name(self):
+        return "world"
+    def hello(self):
+        return "hello " + self.name()
+
+g = Greet()
+print(g.hello())
+

@@ -1,0 +1,38 @@
+# @cat: container
+# @note: 类方法内的列表推导（字符串 len）+ longest 循环——简报 ⑫ 家族实例（d1 探针）
+#@@ python
+class Stats:
+    def __init__(self):
+        self.names = ["x", "yy", "z"]
+    def summary(self):
+        lens = [len(n) for n in self.names]
+        return lens
+    def longest(self):
+        best = ""
+        for n in self.names:
+            if len(n) > len(best):
+                best = n
+        return best
+
+st = Stats()
+print(st.summary())
+print(st.longest())
+
+#@@ zeta
+class Stats:
+    def __init__(self):
+        self.names = ["x", "yy", "z"]
+    def summary(self):
+        lens = [len(n) for n in self.names]
+        return lens
+    def longest(self):
+        best = ""
+        for n in self.names:
+            if len(n) > len(best):
+                best = n
+        return best
+
+st = Stats()
+print(st.summary())
+print(st.longest())
+
