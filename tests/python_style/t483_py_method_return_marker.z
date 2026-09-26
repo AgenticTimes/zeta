@@ -1,0 +1,44 @@
+// 批次 451（3.2 Lowering／返回标记）：py 类方法的返回类型被解析层的 `i64` 默认挡住恢复。
+// 根因链（四处实拍，见 roadmap 批次 451）：
+//   ① 解析层把 `class` 脱糖成 ImplBlock 方法时，无注解方法的 `ret` 被**硬写成 "i64"**
+//      （`src/frontend/parser/top_level.rs:955-965`：只有 `return` 是裸 StringLit 才写 "str"），
+//      而顶层 `def` 无注解时写的是 "()"（`top_level.rs` 的 parse_func 路径）。
+//   ② 中间层唯一的"按体恢复返回类型"＝`unannotated_return_ty`，它的两层守卫都只认 "()"
+//      （外层 `resolver.rs:3339` 问签名表是否 Unit、内层 `:3122` 问 AST `ret` 是否 ""|"()"），
+//      所以方法**永远进不去**；而它有本地作用域表（`seen`），`out = "a"; return out` 判得出 Str。
+//   ③ 解析器自己的推理遍（`resolver.rs:1443`）同样按 `ret == "()"` 开门，实测
+//      `name=r ret="i64" infer_return=false`（方法）/ `ret="()" infer_return=true`（函数）。
+//   ④ 调用点因此把 dest 定成 I64（`gen.rs:11801` 的 `func_ret_types` 查表 + `.unwrap_or(I64)`），
+//      运行期按 i64 打印一个 str 指针 ⇒ 打地址。类内的 `print`/`len` 是对的（值本身是好 str）。
+// 修法落在 `src/middle/resolver/resolver.rs`（本侧所有权内）：两层守卫对"py 脱糖方法 + ret==i64"
+// 打开。判别据＝接收者参数的**类型**：脱糖写类别名（`top_level.rs:944`），手写 `impl` 写 "Self"
+// （`top_level.rs:53`）⇒ 手写 zeta 代码的 `-> i64` 注解不受影响（official 194 例为证）。
+// 正对照：顶层 `def` 同形（`out = "a"; return out`）改前就是对的，本夹具把它一起锁住防回潮。
+// 期望值当场跑 `python3`（CPython 3.14.5）对数；改前实测见 roadmap 批次 451 记录。
+
+class B:
+    def r(self):
+        out = "a"
+        return out
+
+class Builder:
+    def render(self, parts):
+        out = ""
+        for w in parts:
+            out = out + w
+            out = out + ","
+        return out
+
+def plain():
+    out = "a"
+    return out
+
+print(B().r())
+print(len(B().r()))
+print(Builder().render(["x", "y"]))
+print(plain())
+
+// expect: a
+// expect: 1
+// expect: x,y,
+// expect: a

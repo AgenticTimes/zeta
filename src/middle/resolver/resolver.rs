@@ -3120,7 +3120,22 @@ impl Resolver {
                 // The Python parser spells "no annotation" `()` (and the Zeta one
                 // leaves it empty); anything else is a declared type to respect.
                 let unannotated = matches!(ret.trim(), "" | "()");
-                if !unannotated {
+                // Batch 451: a `class` method has NO annotation either, yet the
+                // desugaring hard-writes `i64` (`top_level.rs:955-965` only writes
+                // `str` for a bare StringLit `return`), so the `()` test above never
+                // fires for methods and every caller typed the result as an integer
+                // (measured: `class B: def r(self): out = "a"; return out` printed
+                // `4333154800` — the str pointer — while `len(B().r())` was 1).
+                // The receiver's TYPE separates the parser default from a written
+                // annotation: the desugaring types `self` with the CLASS name
+                // (`top_level.rs:944`) while a hand-written `impl` types it `Self`
+                // (`top_level.rs:53`), so zeta-mode `-> i64` methods stay untouched.
+                let py_method_default_i64 = ret.trim() == "i64"
+                    && matches!(params.first(), Some((pn, pt))
+                        if (pn == "self" || pn == "&self" || pn == "&mut self")
+                            && pt.trim() != "Self"
+                            && class_ty(pt.trim(), classes).is_some());
+                if !unannotated && !py_method_default_i64 {
                     return None;
                 }
                 (params, body, ret_expr)
@@ -3322,7 +3337,13 @@ fn shim_class_normalize(t: &Type) -> Type {
                 // field 0 of an empty struct variant, `pf.positions.values()`
                 // linked to the `_values` stub). Recover the type from the body's
                 // own `return` statements when they agree.
-                let ret = if matches!(ret, Type::Tuple(ref inner) if inner.is_empty()) {
+                // Batch 451: `i64` joins the entry test because a py `class` method
+                // arrives with the desugaring's `i64` default rather than a blank —
+                // `unannotated_return_ty` still vets it (receiver typed with the
+                // class name, and every `return` in the body must agree).
+                let ret = if matches!(ret, Type::Tuple(ref inner) if inner.is_empty())
+                    || matches!(ret, Type::I64)
+                {
                     Self::unannotated_return_ty(
                         &defs_snapshot,
                         name,
