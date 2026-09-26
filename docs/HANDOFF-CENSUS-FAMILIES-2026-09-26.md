@@ -93,6 +93,20 @@ print([3] > [1, 9])       # CPython True     zeta True ✓
 - 疑似位置：gen.rs 比较分派对容器操作数缺元素级字典序路径（py_list_cmp shim 缺或未接）。
 - 闸门：`container_cmp_order` + `list_cmp_order`。
 
+## ⑪ 元组解包的字符串绑定无类型（批次 506 定性，一条修法治三触发）
+
+```python
+pairs = [(1, "a"), (2, "b")]
+for k, v in pairs:
+    print(v)            # CPython a / b     zeta 堆地址
+```
+- 根因：`Assign(Tuple, ·)` 同一条 lowering 路径（for 目标解包、dict 推导、
+  顺序赋值）不给解包出的字符串变量类型标记 ⇒ 打印/取 len 全打地址。
+- 实证矩阵：单目标循环 ✓、int 解包 ✓、**字符串解包 ✗**；505 的过滤 dict 推导、
+  #190 的交换、本例——三种触发同根。
+- 修法：gen.rs 的 Tuple 解包绑定为每个变量写类型标记（一次修，三族全绿）。
+- 闸门：`tuple_unpack_str_type` + `container_dict_comp_filter` + `t510`。
+
 ## ⑨ str.find 两参形式缺 shim（1 例 compile 闸门，#188 余半）
 
 ```python
