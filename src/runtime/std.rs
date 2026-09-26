@@ -24,6 +24,7 @@ unsafe extern "C" {
     fn GC_malloc(size: usize) -> *mut u8;
     fn GC_free(ptr: *mut u8);
     fn GC_realloc(ptr: *mut u8, new_size: usize) -> *mut u8;
+    fn GC_init();
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -32,6 +33,19 @@ unsafe extern "C" {
     fn GC_malloc(size: usize) -> *mut u8;
     fn GC_free(ptr: *mut u8);
     fn GC_realloc(ptr: *mut u8, new_size: usize) -> *mut u8;
+    fn GC_init();
+}
+
+/// Boehm GC 的懒初始化不是线程安全的：两个线程同时第一次分配时都去跑
+/// `GC_init` 并注册静态根区间，macOS 上区间重叠时 libgc 直接 abort
+/// （"Exclusion ranges overlap"，崩溃报告实证于 cargo test 并行场景）。
+/// 在 Rust 侧用 `Once` 抢先显式初始化一次，把并发分配变成"初始化已完成后
+/// 的普通分配"。libgc 文档允许显式调用 `GC_init`，完成后内部幂等。
+static GC_INIT: std::sync::Once = std::sync::Once::new();
+fn gc_ready() {
+    GC_INIT.call_once(|| unsafe {
+        GC_init();
+    });
 }
 
 // SIMD vector types for runtime
@@ -56,6 +70,7 @@ pub unsafe extern "C" fn std_malloc(size: usize) -> i64 {
     if size == 0 {
         return 0;
     }
+    gc_ready();
     unsafe { GC_malloc(size) as i64 }
 }
 
