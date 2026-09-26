@@ -20586,6 +20586,66 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 - 三条"在册不动手"并写进 #182 的下一格注记，不另起号（避免为登记而登记）：① `resolver.rs:898` 的调试打印污染诊断面 stderr；② `self.impls` 写而不读（轴 A 候选）；③ `:1101-1140` 改名遍漏 ImplBlock。⇒ OPEN 账面净增 **0**（#182 不关、#190 不动、#191 收）。
 - **下一批**：队头仍按已实测损害量走 —— **#190 的宿主批**（23 行，要新增运行期符号 ⇒ 跨界面，需 `runtime/*.c` 授权面）vs **#165/#177**（读侧布局 14 条）vs **#183 余格**（`s.find(t,start)` 链接期缺符号）vs **#48**（等用户方言裁决）。按 ROI 表交用户裁定后再开。下一次全量门禁＝**批次 450**。
 
+## 旁路并入（2026-09-26，主线侧代录）：批次 493–496 ＋ 批次 447 收尾合并
+
+合并提交 `af811fd9`（`git merge cleanup`，并 10 颗：`46 files +813/−2`，其中删除那 2 行＝
+`tools/gen_random_diff.py` 的自身改动）。**并入面零编译器改动**：
+`git diff --name-only 41d5c1e6 af811fd9 -- src/ runtime/ docs/ABI.md tools/baselines/` **零命中**
+⇒ 合并树与门禁不同源的风险只在"用例文本＋registry 数据"两类。带入：`tests/diff/cases/**` 新 `.dcase`
+**40 个（全新增）**（`gen_nested_s8642_*` 20＝494／`gen_methods_s4321_*` 20＝495）＋
+`tests/python_style/t510_tuple_swap.z`（known-fail 钉 #190）＋ `t511_str_find.z`（正向钉 496）＋
+`pylib/registry.txt` **+1**（496 的 `W str find host_str_find args=2`）＋ `tools/gen_random_diff.py` ＋
+`worktree.md` +5（旁路自己的台账行，正文未代录）。
+
+### 一、合并树复跑（主线侧当场，`/tmp/b447m/`）
+
+| 步 | 读数 | 对 447 的关系 |
+|---|---|---|
+| 门禁二进制身份 | 合并后 `cargo build --release` **真的重编了**（19.9s 编译 + 链接），md5 由 `5a517173…` 变 `f58b3da0…`；二次 `cargo build` 回 `Finished in 0.09s`、md5 不再动 | 零源码改动下 md5 照样搬家 ⇒ **不能拿"md5 相同/不同"论证二进制同/异**（445 已实测同源码两次构建 md5 不同）。本行能给的结论只有：`src/` 与 `runtime/` 在并入面**零命中** ⇒ 代码面同源；446 §二 记的"rebase 后未重建二进制会误报回归"这条教训继续生效，故门禁跑在合并后重建的这颗上 |
+| official | compile 194/194、compile+link 191/194、link-only 3 | 与 447 逐字相同（缺绑名单 `_predict/_train`、`_factor/_optimal_iterations/_success_probability`、`_as_str/_into_iter/_is_alphabetic/_push` 未动） |
+| official 诊断面 | 5 文件 / 14 行 | 与 446/447 终态逐字相同 |
+| python_style | **363 passed / 2 failed / 14 known-fail / 0 xpass** | `363+2+14=379` 与 `ls tests/python_style/t*.z` **379** 逐项对上；passed **362→363**＝t511 转绿、known-fail **13→14**＝t510 钉子、**红源仍是存量 t231/t233** ⇒ 零新增红（旁路在册的 362/2/14 少一条 passed，主线复跑以本行为准） |
+| python_style 诊断面 | 243 行 / 115 文件 | 与 446/447 终态逐字相同（两条新用例不产生 warning） |
+| registry 符号自检 | `tools/check_registry_symbols.sh` **rc=0** | 496 那条 `W` 行不产生悬空符号（主线侧独立复测旁路读数） |
+| diff 步（单跑，补 `--skip-diff` 的跳过项） | **match=356 / judged=401 / 88.8% / bad_case 0 / rc=0** | judged 361→**401**＝494/495 那 40 例首次进闸且**全 match**（356−316＝40 逐条闭合）；与旁路 495 在册读数 `356/401 88.8%` 逐字相同 ⇒ 升为**主线已复测** |
+| 快门禁 rc | **`GATE_RC=1`**／223s（190s user） | 红源仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ **零新增红**；`comment_drift` 0 处复述 |
+
+### 二、四条旁路批次中与主线记账直接相关的三条
+
+- **#190 的形状被旁路收紧两轮**（493 定性 → 495b 否证）：`a, b = b, a` 打 (2,2) 而 CPython 打 (2,1)，
+  **正解唯一在 `gen.rs` lowering**——解析期脱糖两轮皆负（493 全量触发 → t24 回归；495b 窄触发
+  "仅右值引用左目标" → t24 仍回归，因模块级也存在 swap 形态，Block 化破坏
+  `collect_module_global`/`module_level_bindings` 的全局收集是结构性的）。⇒ 主线侧把"解析器侧不要再试"
+  记成负边界（该否证已由 `1376fcd2` 写进 `backlog.md` 的 #190 行，本处只是代录可见性）。
+- **#188 余半移交主线**：一参 `s.find(t)` 由 496 收（纯数据修复：C shim `host_str_find` 在
+  `tokio_runtime_stub.c:200` 早已存在，registry 缺 `W` 行 ⇒ 派发落空；实测 2/2/-1 与 CPython 一致）；
+  两参 `s.find(t, start)` 仍缺三参 shim `host_str_find3` ⇒ 落 `runtime` 车道（需授权），
+  已由 `gen_str_s314159_003` 钉着，与 **#183**（名表 argc 缺臂 ⇒ 兜底发裸名）同一条路由。
+- **494b 的归族读数与 §三 的改判互相印证**：45 条 mismatch 零孤儿 —— round/truediv 11（同根于
+  "`/` 真除法缺失"）· sign 旗标 4 ＋ 负数进制 7（#188 两面）· Bool 打印 5（#117 近亲）·
+  溢出回绕 ~12 · 浮点 `%.6f` 呈现 3 · `%s` 1 · in-range 赋值链 2–3（#184）。
+  **"负数位运算"单算子不复现**（495b 归约：要多算子链交互才现形）⇒ 一条缩小搜索面的负结果。
+
+### 三、基线追平（#186 那格第二次当场复发，主线侧代录数据）
+
+跑前 `tools/baselines/diff_consistency.json` 是 `total=361 / judged=361 / match=316 / match_min=316`，
+而合并树 `ls tests/diff/cases/*.dcase` 已 **401** ⇒ 494/495 那 40 例**不在红绿闸内**（与 446 §一 记的
+失效形状同型，不是新形态）。**正证据**：本次门禁的 diff 步照样跑 rc=0、并打出
+`judged=401 / match=356 / 88.8% / bad_case 0`——分母已经实跑到 401，闸门 `match_min` 仍停在 316 时代，
+即"多出来的 40 例无论红绿都不算数"（#186 描述的正是这个）。
+`tools/baselines/**` 归主线所有权 ⇒ 本批 `--bless` 追平：json **1480 → 1640 行**（`git diff --numstat`
+＝+168/−8，删除那 8 行全是计数器与比率字段，无案例条目被抹掉），写后 `total=401 / judged=401 /
+match=356 / match_min=356 / 88.8%`；用新基线**复跑判定步**确认 `CONFIRM_RC=0`、读数逐字相同、
+打"差分一致率无回归"（`/tmp/b447m/bless.log`、`diff_confirm.log`）。
+修法本身（"基线 `total` ≠ 实跑 `judged` 时出声"）仍在 tools 车道＝旁路侧。
+
+### 四、OPEN 账务
+
+- 本次合并主线侧 **OPEN 净增 0**：#190/#188/#183/#184/#117 均已在册，旁路未逼出新号；
+  447 那三条"在册不动手"不变。
+- **下一批候选不变**（#190 宿主批／#165·#177 读侧布局／#183 余格／#48 方言裁决），仍按已实测损害量
+  列 ROI 表交用户裁定后开 448。下一次全量门禁＝**批次 450**。
+
 
 
 ## 优先级调整（2026-09-24，用户裁定）

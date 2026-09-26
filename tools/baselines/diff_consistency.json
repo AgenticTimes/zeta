@@ -1,11 +1,11 @@
 {
-  "total": 361,
-  "judged": 361,
-  "match": 316,
-  "rate_pct": 87.5,
-  "match_min": 316,
+  "total": 401,
+  "judged": 401,
+  "match": 356,
+  "rate_pct": 88.8,
+  "match_min": 356,
   "by_verdict": {
-    "match": 316,
+    "match": 356,
     "mismatch": 44,
     "compile": 1
   },
@@ -19,8 +19,8 @@
       "judged": 78
     },
     "container": {
-      "match": 77,
-      "judged": 87
+      "match": 117,
+      "judged": 127
     },
     "numeric": {
       "match": 64,
@@ -814,6 +814,166 @@
     },
     "gen_loop_s7788_019": {
       "cat": "control",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_000": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_001": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_002": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_003": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_004": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_005": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_006": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_007": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_008": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_009": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_010": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_011": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_012": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_013": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_014": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_015": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_016": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_017": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_018": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s4321_019": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_000": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_001": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_002": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_003": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_004": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_005": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_006": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_007": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_008": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_009": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_010": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_011": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_012": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_013": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_014": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_015": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_016": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_017": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_018": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_nested_s8642_019": {
+      "cat": "container",
       "verdict": "match"
     },
     "gen_numeric_s20260926_000": {
