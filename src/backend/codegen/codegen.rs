@@ -5382,6 +5382,20 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         | Type::Usize => 5,
                         _ => 0,
                     },
+                    // 批次 457: a FLOAT list literal keeps the `StackArray` form
+                    // (`gen.rs:13564` — `vec_push` is an i64 channel), but that arm's
+                    // lowering (this file :7722) already allocates
+                    // `[cap | len | elem...]` and stores each `double` as one 8-byte
+                    // word — measured on `pd.DataFrame({"v": [10.0, 20.0]})`: malloc 32,
+                    // word[0]=cap 2, word[1]=len 2, then 0x4024000000000000 and
+                    // 0x4034000000000000, handle = buf+16. That is tag 6's convention
+                    // exactly; the value only lacked the number. With tag 0 the read
+                    // boundary refuses to render it, and `df["v"][0]` handed 10.0's bit
+                    // pattern to `strlen` (rc=139).
+                    // F32 is left out on purpose: the same lowering gives it a 4-byte
+                    // stride, so reading the vec as i64 words would pack two floats per
+                    // cell instead of one value per cell.
+                    Some(Type::Array(el, _)) if matches!(**el, Type::F64) => 6,
                     _ => 0,
                 };
                 if let Some(f) = self.module.get_function("zeta_map_set_tag") {

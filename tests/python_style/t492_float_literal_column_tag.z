@@ -1,0 +1,59 @@
+// 批次 457（4.x 运行期值表示 × 3.2 Lowering）：**浮点字面量列表**建的列，读边界拿不到
+// 元素表示号 —— 456 把 4..7 发给了 `DynamicArray`，但浮点列表根本不是 `DynamicArray`。
+// 病因（两处相遇）：
+//   ① `src/middle/mir/gen.rs:13564` 让浮点字面量列表走 `StackArray` 形（同文件 :13561
+//     的注释：`vec_push` 是 i64 通道，元素会变位模式；"全部动态化"时 t56/t139 变红），
+//     于是类型图里这条值是 `Array(F64, N)` 而不是 `DynamicArray(F64)`。
+//   ② `DictInsert` 的登记（`src/backend/codegen/codegen.rs`）只认 `DynamicArray`，
+//     `Array` 落到 `_ => 0` ⇒ 读边界 `zt_vec_textify` 对 0 号"原样返回、不猜内容"，
+//     于是 `df["v"][0]` 把 **10.0 的位模式**（0x4024000000000000）当 `char*` 交给
+//     `println_str` → `_platform_strlen`（改前实拍 **run_rc=139、stdout 0 字节**；
+//     lldb: `stop reason = EXC_BAD_ACCESS (code=1, address=0x4024000000000000)`）。
+// 为什么只需登记一个号（修法就一行臂）：`StackArray` 的出码（`codegen.rs:7722`，PY-A
+//   布局统一）**已经**是 `[cap | len | elem...]`、每个 `double` 占一个 8 字节字。实拍
+//   `pd.DataFrame({"v":[10.0,20.0]})` 的 IR：`runtime_malloc(32)`、word[0]=2、word[1]=2、
+//   word[2]=4621819117588971520(=10.0)、word[3]=4626322717216342016(=20.0)、句柄=buf+16。
+//   那就是 6 号（`vec<f64 位模式>`）的合同，缺的只是那个数字。
+// F32 故意不发号：同一处出码按元素类型定 stride，f32 是 4 字节 ⇒ 按 i64 字读会把两个
+//   float 挤进一个 cell。py 模式没有 f32 字面量，这条臂打不到成员。
+// 不变面（两处核对）：`zeta_map_value_tag` 的唯一既有消费者是 json dumper
+//   （`runtime/tokio_runtime_stub.c:1960`），它只有 1/2/3 三个显式臂，0 与 6 都落
+//   `default:`（`%lld` 打句柄整数）⇒ 那份读数不因本批搬家。
+// 真值（本机 pandas 3.0.5 当场跑）：`df["v"][0]` = `np.float64(10.0)`（打 `10.0`）、
+//   `df["v"][1]` = `20.0`/`20.5`、`len(df["v"])` = 2、迭代 `10.0 20.5`。
+//   本仓列合同是文本 cell，渲染取 `%.10g` ⇒ 整数值的浮点打 `10` 而非 `10.0`，
+//   非整值 `20.5` 与 pandas 一致。**`10` vs `10.0` 是浮点 repr 方言，归 #48 裁决**，
+//   本夹具按本仓约定断言（同 456 的 t491 头部那条"渲染取本仓约定"）。
+// 一并顶住的相邻两形（同一处登记就够，实拍见下）：`for x in df["v"]`、`len(df["v"])`、
+//   以及把列句柄先存进变量再下标（`d = df["v"]` + `d[0]`）—— 后者是 #203① 的句柄槽一格，
+//   本批只是**顺带不再崩**，槽本身的表示仍未登记（`df["v"]/2` 那形仍归 #205③）。
+// 两颗二进制实拍（同目录 `target/release/`，改前那颗 `zetac_pre457` = 456 收尾的
+//   `a59531df07005a2886cb898bc6db45d2`）：
+//     改前 compile_rc=0、run_rc=139、stdout 0 字节（第一条 print 即崩，后面一条都不出）
+//     改后 compile_rc=0、run_rc=0、stdout 十行即下面十个 expect
+//   对照（防"整族都靠运气"）：整数列单独夹具 `pd.DataFrame({"v":[10,20]})` + `print(df["v"][0])`
+//   在两颗二进制上都是 run_rc=0、stdout `10`（456 已发 5 号，本批不动它）。本夹具里的
+//   `i`/`b`/`s` 三列在改前那颗打不出来 —— 第一条 print 就崩，所以它们只在改后这颗断言。
+import pandas as pd
+df = pd.DataFrame({"v": [10.0, 20.5], "i": [10, 20], "b": [True, False], "s": ["aa", "bb"]})
+print(df["v"][0])
+print(df["v"][1])
+print(len(df["v"]))
+for x in df["v"]:
+    print(x)
+print(df["i"][0])
+print(df["b"][0])
+print(df["s"][0])
+d = df["v"]
+print(d[0])
+print(d[1])
+// expect: 10
+// expect: 20.5
+// expect: 2
+// expect: 10
+// expect: 20.5
+// expect: 10
+// expect: True
+// expect: aa
+// expect: 10
+// expect: 20.5
