@@ -20,6 +20,21 @@
    - 旁路侧：直接看自己工作区副本 + `git log bootstrap --oneline -3`
 3. 只在 `worktree.md` 所有权矩阵授权的范围内动文件。
 
+## 每批收尾时必做（两班都一样）
+
+每完成一个批次、推送之前，执行一次对侧检查：
+
+```bash
+# 主线侧查旁路（cleanup）有没有 READY：
+git show cleanup:worktree.md | grep -A3 'READY'
+# 旁路侧查主线进度：
+git log bootstrap --oneline -3
+```
+
+主线侧看到 `READY(族=…)` 时，在下一批开工前的空窗里执行合并（见 worktree.md §3：
+旁路已自行 rebase，主线侧 `git merge cleanup --ff-only` → 誊记录进 roadmap.md →
+状态改 MERGED → 推送）。合并后旁路侧会通过 rebase 拿到新 HEAD，不需要通知。
+
 ## 铁律（两边的红线）
 
 - `bootstrap` 的 push 权只在主线侧；旁路侧的 rebase 与合并由主线侧在批间窗口执行。
