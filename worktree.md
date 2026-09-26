@@ -185,6 +185,7 @@
 | 524 | cleanup | **稳态值守批**：qwen 未合并 497–523（6 提交差）；XPASS 0（#188/#189/#190 未修）；python_style 370 过/2 红/16 kf 稳定；diff 无回归。**我车道 actionable 清空**——#81 等轴F、#52 用户裁定不改、其余全在主线 | 全绿 | ✅ 稳态批 |
 | 523 | cleanup | **% 格式化操作符修复**（⑭ 普查最高频缺口）：StrLit % expr 改写为 FString AST（复用 __fmtspec__ lowering），单/多 specifier + %% 转义 + 无值兜底。实测 %d/%s/%.2f/%x 四形态与 CPython 一致；t513 XPASS 确认；known-fail 16→14。真除法（truediv）同批发现但不属本批 | cargo 142/0 · py 370/2/14/2xp | ✅ 修复批 |
 | 525 | cleanup | **稳态值守**：qwen 452 收尾簿记中、未开 453；XPASS 0；diff 无回归。我车道 actionable 清空——等主线 453 开工修普查族（简报在手）或合并 497–524 | 全绿 | ✅ 稳态批 |
+| 526 | cleanup | **全量门禁**（497–525 全量确认）：official 194/194 · py **376**/2/12/2xp · 语料 40/40 · jit 180/0 · diff 406/459 88.5% 无回归 · RED 0 | 全绿 | ✅ 门禁入册 |
 | 524 | cleanup | **build_percent_format 多字节 UTF-8 panic 修复**（char 迭代替换字节迭代）——语料 26/40 → **40/40 恢复**（中文模板不再 panic）。% 格式化修复全面验证：t401/t513 XPASS、python_style 376 过/12 kf。 | 语料 40/40 · py 376/2/12/0 | ✅ 修复批 |
 | 526 | cleanup | **两大普查族修复确认 + 基线 bless**：qwen 454 修 `/` 真除法（普查①族）+ 我 523 修 % 格式化（⑭族）→ 4 闸门用例 XPASS/转好（t401/t513/str_percent_fmt/str_percent_format_family）。known-fail 16→14。**bless 锁定：match_min 抬至当前水平**——两族修复从此受闸门保护不可回退。剩余族：溢出、Bool 性、sign/负进制、None 打印、元组交换、容器比较、sorted-reverse-str、字典迭代序 | bless 后全绿 | ✅ 修复确认批 |
 | 527 | cleanup | **组合普查 527 三缺口一对照**：① 类字段列表 in 值错（has_tag("web") 0 而非 True——字段槽位或 in 路由）② tag_str() 地址（⑫ 确认）③ %(key)s=dict 映射垃圾（⑭ 子形态）。对照：链式比较变量版 ✓、name.upper() ✓ | diff 无回归 | ✅ 定性批 |
