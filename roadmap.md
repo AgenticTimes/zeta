@@ -21485,6 +21485,56 @@ HEAD 在隔离 worktree 自测：**漂移 24 / 落单新 2 / 落单消失 37 / �
 
 `/tmp/b456/`：`ab12.log`/`ab12_final.log`（§七 逐行）、`run_ab_456.sh`（带 `swap_pandas()` md5 守卫）、`gate_fast.log`/`gate_final.log`（§六）、`anch_head.txt`/`anch_pre.txt`/`anch_final.txt`/`rebind.txt`/`rebind_dry.txt`（§八）、`corpus_ir/*.ll`（§七 48 调用点）、`t491_pre.bin`/`t491_post.bin`/`t467_*.bin`/`v1_objcol.z`+wide/narrow 两颗（§三 实拍）、`t1_init.z`（§四 探针）、`p2_floatcol.z`+`fc_{elem,read_div,arith}.z`（§七 ⑥ 三形）、`truth456.py`（pandas 3.0.5 真值）、`pandas.z.pre`/`.post`。三颗二进制留 `target/release/`（坑 37/68：A/B 必须同目录）；隔离 worktree `/tmp/b456/head-wt` 已删。下一次全量门禁＝**批次 460**。
 
+## 批次 457（4.x 运行期值表示 × 3.2 Lowering／浮点字面量列的元素表示号）：登记臂缺一行，不是布局缺一段 —— `StackArray` 的出码早就合着 6 号的合同，缺的只是那个数字；主线位移 0（正证据）
+
+代码提交 **`c7158538`**（`fix(codegen)`，2 文件 **+73/−0**：`src/backend/codegen/codegen.rs` 14/0、新夹具 `tests/python_style/t492_float_literal_column_tag.z` 59/0）。基面批 **`364e5943`**（`docs/ABI.md` 27/27＝行 #12 补一格、`abi_anchors.tsv` 31/29＝基线 298→**300**）。只动 `.rs` ⇒ 运行期 `.o`、`pylib/*.z` 两侧同源，无跨界面改动。pyramid 层＝**4.x 运行期值表示**（容器元素的编码要有号可对）×**3.2 Lowering**（`ArrayLit` 的两种形：`StackArray` vs `DynamicArray`），harness 任务 **#205** 的"浮点字面量列"那一格（backlog 折在 **#203** 行内），本批实收"字面量直建浮点列的元素读"这一形，**#205 不结案**。两颗二进制同在 `target/release/`（坑 37/68）：改前 `zetac_pre457` md5 **`a59531df07005a2886cb898bc6db45d2`**（＝456 收尾那颗）、改后 **`16b515252e1132f149ca021d04bc4895`**；收尾把新臂注释里的自引用行号从 `:7708` 改成 `:7722`（见 §六 的自我更正）后重编，md5 **一字未变** ⇒ §五 的门禁读数就是终态读数。
+
+### 一、根因（两处相遇才构成崩：一条"把浮点列表留在 StackArray 形"的臂 × 一张只认 DynamicArray 的登记表）
+
+456 把 `DictInsert` 的元素表示号扩到 4..7，但那张臂的匹配对象是 `Type::DynamicArray(el)`。而 **浮点字面量列表根本不是 `DynamicArray`**：`src/middle/mir/gen.rs:13564` 的 `if size == 0 || !matches!(elem_ty_pre, Type::F32 | Type::F64)` 让非浮点列表走 `zeta_dynarray_new` + `vec_push` 收集（得 `DynamicArray(el)`），**浮点列表保留 `MirExpr::StackArray`**（`gen.rs:13607-13623` 把它定型成 `Type::Array(F64, ArraySize::Literal(N))`）。同文件 `:13561` 的注释写着为什么不能一律动态化：`vec_push` 是 i64 通道，f64 元素会被按位模式重解读，"全部动态化"那次 t56/t139 变红。于是 `codegen.rs` 的登记表对 `Array(F64,N)` 落 `_ => 0`，而 0 号在读边界 `zt_vec_textify` 的合同是"原样返回句柄、不猜内容"（456 §二）⇒ `df["v"][0]` 把 **10.0 的位模式**当 `char*` 交给 `println_str` → `_platform_strlen`：改前二进制 **compile_rc=0 / run_rc=139 / stdout 0 字节**，lldb 实拍 `stop reason = EXC_BAD_ACCESS (code=1, address=0x4024000000000000)`、`frame #0 ... _platform_strlen + 4`（那个地址就是 10.0）。
+
+### 二、修法（一条臂，落点在登记面；不动布局、不动运行期）
+
+`codegen.rs:5385-5398` 加一条 `Some(Type::Array(el, _)) if matches!(**el, Type::F64) => 6`。为什么"只补一个号"就够——**布局本来就对**：`StackArray` 的出码（`codegen.rs:7722`，PY-A 布局统一那一趟）已经是 `runtime_malloc((size+2)*8)`、`word[0]=cap`、`word[1]=len`、每个 `double` 占一个 8 字节字、句柄 = `buf+16`。实拍 `pd.DataFrame({"v":[10.0,20.0]})` 的 IR（`/tmp/b457_f64.ll`，176,976 B，对照的整数那颗 `/tmp/b457_i64.ll` 177,023 B）：`malloc 32`、`word[0]=2`、`word[1]=2`、`word[2]=4621819117588971520`（=10.0）、`word[3]=4626322717216342016`（=20.0）——那就是 6 号（`vec<f64 位模式>`）的合同，**缺的只是那个数字**。
+
+两条边界按实测写进夹具头注与 ABI.md 行 #12：
+
+- **F32 不发号**：同一处出码按元素类型定 stride（`F32`→f32、`F64`→f64、`_`→i64），f32 是 4 字节 ⇒ 按 i64 字读会把两个 float 挤进一个 cell。"这条臂在 py 模式无成员"的正证据＝`F32` 在 `src/frontend/**/*.rs` 出现 **0 次**（`grep -rn F32 src/frontend --include='*.rs' | wc -l`），而 `Type::F32` 的 84 处全在 `src/middle/**`、由类型名字符串构造（`src/middle/types/mod.rs:314` 的 `"f32" => Type::F32`，Rust 模式注解）。Rust 模式的成员数本批未量。
+- **跨界面不变面**：`zeta_map_value_tag` 的唯一既有消费者是 json 转储器（`runtime/tokio_runtime_stub.c:1960-1980`），它只有 `case 1/2/3` 三个显式臂，**0 与 6 同落 `default:` 的 `%lld`** ⇒ 那份读数不因本批搬家（已逐臂核，未跑对照实拍）。
+
+### 三、真值与本仓方言（pandas 3.0.5 当场跑）
+
+`pd.DataFrame({"v":[10.0,20.5]})` 的 `df["v"][0]` 在真值侧是 `np.float64(10.0)`（打 `10.0`）、`len=2`、迭代 `10.0 20.5`、`df["v"]/2` 打 `5.0`、整帧 `print` 显示 `10.0/20.0`。**本仓列合同是文本 cell、渲染走 `%.10g`**（455/456 同一约定）⇒ 整数值的浮点打 `10` 而非 `10.0`，非整值 `20.5` 与 pandas 一致。**`10` vs `10.0` 是浮点 repr 方言，归 #48 裁决**，夹具按本仓约定断言（先例＝456 的 t491 头部"渲染取本仓约定"）。
+
+### 四、夹具 `tests/python_style/t492_float_literal_column_tag.z`（59 行，10 条 expect，先证红后证绿）
+
+`{"v": 浮点, "i": 整数, "b": 布尔, "s": 文本}` 四列并建，断言 `df["v"][0]`、`df["v"][1]`、`len(df["v"])`、`for x in df["v"]` 两项，以及 456 已收的三列各一项（`i`/`b`/`s`）不回归，最后 `d = df["v"]` 存句柄再 `d[0]`/`d[1]`。两颗二进制（`/tmp/t492_{pre,post}.bin`）：**改前 compile 0／run 139／stdout 0 字节**（第一条 print 即崩）→ **改后 run 0／stdout 十行＝十个 expect**。两条对照：① 整数列单独夹具 `pd.DataFrame({"v":[10,20]})` + `print(df["v"][0])` 在**两颗**上都是 run 0 打 `10`（456 已发 5 号，本批不动它，`/tmp/b457_{c,r}_{pre457,post}_{f64,i64}.log`）；② 七条 print 的探针 `df["v"][0] | df["v"][1] | len | 迭代两项 | df["s"][0] | d[0]` 改前 0 字节 → 改后 `10|20.5|2|10|20.5|aa|10`。注：`i`/`b`/`s` 三列在改前那颗**打不出来**（第一条 print 就崩），所以它们只在改后这颗断言——头注已按这个口径写，没留"两颗都该一致"的未测话。
+
+### 五、门禁与诊断面（终态二进制，`/tmp/b457/gate.log`，快门禁＝AGENTS.md 那 13 个 `--skip-*`）
+
+**official 194/194・191/194**（存量 3 条仅链接未动）、**python_style 379 passed / 2 failed / 12 known-fail / 2 xpass**（456＝378 ⇒ **+1 恰为 t492**）、`GATE_RC=1` 存量红源不变＝`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`；XPASS 2 条仍 t401/t513（旁路 %-format 面，非本批解锁）；`dyn_binding: 4 条断言，不一致 0（rc=0）`。诊断面：official **5 文件/21 行（与 456/455 逐字相同）**、python_style **121 文件/258 行** vs 456 的 120/255 ⇒ **+1 文件/+3 行**，其中 t492 自身归因 +1 文件/+2 行，**余 +1 行未逐项归因**（与 456 §六 那条同形残差，登记不记账）。 已记步骤 rc 全 0，未跑步按 skipped 记（`clean_checkout skipped 1`）。
+
+### 六、位移 A/B＝0（正证据 + 一条非确定形的归属对照）；语料覆盖面实测 0 成员
+
+`/tmp/b457/run_ab_457.sh`：两颗同目录、每轮重编＋重跑、pre/post 交替、**n=12/侧**（`/tmp/b457/ab12.log`），驱动 `strategies/code/_drv_accept_409.py`、cwd＝`REasyQuant`、`REPLAYQUANT_LOCAL=1`。本批不换库，但每轮核对 `pylib/pandas.z` 的 md5 恒为 456 终态那颗（`64cebdbe…`，防对侧会话中途改库把读数串了）。
+
+- **正证据**：两侧 rc=0 的那 **15 次**逐字段完全相同（`stderr=321`、`parity=74`、`fail1=74`、`morning=37`、末行 `1000000 -> 0 (-100.00%)`）⇒ 位移 0。
+- **崩点数同形**：`pre 4/12` vs `post 4/12` 全为 `run_rc=139`，且八次的 stderr 行数（119）与末行（`[INFO] backend.market_data: 缓存命中 103 只；待拉取 0 只`）逐次相同＝同一个早停形（存量 **#145** 家族），不是本批新开的崩点。
+- **一条非确定归属的对照**：`post_9` 打出 `run_rc=134 stderr=135 morning=1 last=[zeta: stub not implemented: numpy.vstack]`。同一形在 **456 那次落在 `pre_7`**（`/tmp/b456/ab12_final.log:27`，字段逐项相同）⇒ 它是这条夹具既有的跨运行早停分支（backlog #7 记过"acceptance 跨运行非确定"），**不记为本批回归**；两侧各出现过一次、总数相等。`stdout_l1` 是堆地址，随 ASLR 变（坑 35），不参与判定。
+- **覆盖面**：语料里这个形状的成员＝**0**（`grep -rn 'DataFrame(' strategies/ --include='*.py' | grep -cE '\[[0-9]+\.[0-9]'` → **0**；唯一含浮点列表字面量的文本命中是 `strategies/code/ETF动量EPO.py:111` 那条**被注释掉的** `# a= np.array([0.25,0.25,0.25,0.25])`）⇒ 位移 0 是**预期**，不是"收益未显形"。本批的价值在把 456 那条链上未登记的最后一格浮点 cell 钉住并给夹具，而不是量到的损害。
+
+**自我更正（登记不回改）**：新臂的头注里我先把自引用行号写成 `:7708`（那是 +14 行**之前**的位置），并用 `--bless-only` 把 `codegen.rs:7708` 重采进 tsv——核对器遂把该行内容 `expr_val` 记为锚点（错行）。改法＝把注释与头注统一改成 `:7722`、重采 `:7722`（内容核对为 `MirExpr::StackArray { elements, size } => {`），再删掉我自己那行错键 `src/backend/codegen/codegen.rs\t7708\texpr_val`；删前先确认 **HEAD 基线里 codegen.rs 76xx–77xx 段没有任何键**（避免误删既有锚）。
+
+### 七、锚点（`364e5943`；净账与 HEAD 自基线对照）
+
+HEAD 侧对照在隔离 worktree（`@1c58be72`，457 之前那颗）自测：**漂移 27 / 落单新 6 / 落单消失 38 / 基线 298 / 同键多义 9 组·被顶掉 48 条 / rc=2**（`/tmp/b457/anch_head.txt`）。终态只读复测：**漂移 23 / 落单新 6 / 落单消失 35 / 基线 300 / 同键多义 8 组·被顶掉 48 条 / rc=2**（`/tmp/b457/anch_final.txt`）⇒ 本批净账 **−4 漂移 / −3 消失 / +2 基线**。`--rebind` 改写 `docs/ABI.md` **27 行 / 53 个数字**（全是搬家，0 条改号），新 blessed 两条＝`src/middle/mir/gen.rs:13564`（浮点臂守卫）与 `src/backend/codegen/codegen.rs:7722`（`StackArray` 出码）。"落单新 6"是 456 遗留的 #167 余量，未写入基线（核对器继续报错，与本批无涉）；同键多义 8 组亦＝**#167 余项**面。
+
+### 八、读数存档与本批未收的形
+
+`/tmp/b457/`：`ab12.log`＋`ab/runs/{pre,post}_{1..12}/`（§六 逐行）、`run_ab_457.sh`（带 pandas.z md5 守卫）、`gate.log`（§五）、`anch_head.txt`/`anch_final.txt`（§七）；`/tmp/b457_f64.ll`/`_i64.ll`/`*.mir`（§二 IR 实拍）、`/tmp/b457_elem_{f64,i64}.z`+`/tmp/b457_probe.z`+`/tmp/t492_{pre,post}.bin`（§四）、`b457_{c,r,re}_*_{f64,i64}.log`（§四 对照）。两颗二进制留 `target/release/`（`zetac_pre457`/`zetac`）；隔离 worktree `/tmp/b457/head-wt` 已删（`git worktree list` 无残留）。
+
+**本批未收、继续在 #205/#203 名下跟踪的形**（OPEN 净增 **0**）：② 对象列的元素**字段读**错值（`df["d"][0].year` 打 19797）；③ `df["h"] = df["v"] / 2` 静默垃圾（`py_df_setitem` 没有 tag 通道）＋列算术的**结果列**仍打堆地址；④ 通用 `lt(vec, str)` 的参数/返回边界仍 rc=139（本批只接了 DataFrame 读边界那一格）；⑤ `select_columns` 的子帧按**声明的 map 值类型**登记 4 号；①′ py 模式类 `__init__` 体的**非赋值语句**从不参与编译（语料成员数未量）；⑥ 本批新格：`d = df["v"]` 之后**先存句柄再下标**不再崩，但句柄槽自身的表示仍未登记（`df["v"]/2` 那形归 #203①/#205③）；⑦ `10` vs `10.0` 的浮点 repr 方言等 **#48** 裁决。下一次全量门禁＝**批次 460**。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
