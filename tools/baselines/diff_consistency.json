@@ -1,12 +1,12 @@
 {
-  "total": 251,
-  "judged": 251,
-  "match": 226,
-  "rate_pct": 90.0,
-  "match_min": 226,
+  "total": 306,
+  "judged": 306,
+  "match": 270,
+  "rate_pct": 88.2,
+  "match_min": 270,
   "by_verdict": {
-    "match": 226,
-    "mismatch": 24,
+    "match": 270,
+    "mismatch": 35,
     "compile": 1
   },
   "per_cat": {
@@ -15,8 +15,8 @@
       "judged": 43
     },
     "str": {
-      "match": 41,
-      "judged": 43
+      "match": 65,
+      "judged": 78
     },
     "container": {
       "match": 51,
@@ -27,8 +27,8 @@
       "judged": 85
     },
     "control": {
-      "match": 28,
-      "judged": 28
+      "match": 48,
+      "judged": 48
     }
   },
   "cases": {
@@ -388,6 +388,86 @@
       "cat": "container",
       "verdict": "match"
     },
+    "gen_fmt_s2468_000": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_fmt_s2468_001": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "gen_fmt_s2468_002": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "gen_fmt_s2468_003": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "gen_fmt_s2468_004": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_fmt_s2468_005": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "gen_fmt_s2468_006": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_fmt_s2468_007": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "gen_fmt_s2468_008": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "gen_fmt_s2468_009": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "gen_fmt_s2468_010": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "gen_fmt_s2468_011": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_fmt_s2468_012": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "gen_fmt_s2468_013": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_fmt_s2468_014": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "gen_fmt_s2468_015": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "gen_fmt_s2468_016": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_fmt_s2468_017": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_fmt_s2468_018": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_fmt_s2468_019": {
+      "cat": "str",
+      "verdict": "match"
+    },
     "gen_list_s5150_000": {
       "cat": "container",
       "verdict": "match"
@@ -434,6 +514,86 @@
     },
     "gen_list_s5150_011": {
       "cat": "container",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_000": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_001": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_002": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_003": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_004": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_005": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_006": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_007": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_008": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_009": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_010": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_011": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_012": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_013": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_014": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_015": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_016": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_017": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_018": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s7788_019": {
+      "cat": "control",
       "verdict": "match"
     },
     "gen_numeric_s20260926_000": {
@@ -594,6 +754,66 @@
     },
     "gen_numeric_s77102_019": {
       "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_000": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_001": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_002": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_003": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_004": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_005": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_006": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_007": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_008": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_009": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_010": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_011": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_012": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_013": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s1357_014": {
+      "cat": "str",
       "verdict": "match"
     },
     "gen_stmts_s4711_000": {

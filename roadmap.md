@@ -20362,6 +20362,24 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 | **#185** `index` 的 ValueError 分歧 | 1 条具名形状（444 实拍） | 单点最小修可及 |
 | **#48** 方言裁决（含真除、浮点 repr、bignum） | 差分 numeric **64/85＝21 条红**（本批 bless 实跑读数；444 §八 那格写的是 63/85，不同跑次、未逐案归因） | **等用户一句话**，不是 bug 单 |
 
+## 旁路并入（2026-09-26，主线侧代录）：批次 484–487 ＋ 批次 445 收尾合并
+
+合并提交＝`f9fe9939`（文件面 58 项：**`src/`、`runtime/`、`pylib/` 零改动**——`git diff --numstat 407e7ea2 f9fe9939` 按制表符切列后这三类前缀 0 命中；`tests/diff/cases/**` 新 `.dcase` **55 个**、`tests/python_style/t507_none_logic_print.z` 新 1 个、`tools/gen_random_diff.py` +128/−2、`worktree.md` +4）。编译器**同一颗**：`md5 target/release/zetac` 合并前后均 `722316ea863afe63084831527cdff21c`，无 `.rs` 改动 ⇒ **无锚点重绑、无需重编**。
+
+**读数归属点名**：下面四行逐字誊自旁路台账（`worktree.md` §5），是旁路侧（Agent-2）在自己分支上取的数，**主线侧未复测**。
+
+- **484（普查收敛＋账目更正）**：新种子 90210 采 50 例——6 条 mismatch 全在溢出族，481 之后无新族、in-range 族消失（被优先级修复吸收）；`find` 缺口仍在（444 修的是 print 家族，registry/派发车道待主线）。**自我更正入册**：初版记的 bless 值 259 被 40 个未提交临时用例抬高（`rm` 未生效），合并树重 bless 真值 **match_min=225**（251 例 committed，89.6%），与主线 444 收尾值一致。
+- **485（循环积累模式 20 例全 match）**：M08 家族首次采样——for-range/while 五形状（计数器槽、累加类型流）全部一致；随机库累计 159 例七模式；报 diff 245/271 90.4% 无回归。
+- **486（fmt 模式 20 例：15 match ＋ 5 mismatch 新族）**：f-string 规格随机组合（进制/符号/宽度/补零/对齐/精度），基础 11 探针全对（规格实现主体扎实）。**新族两条**：① sign 旗标不渲染——`{n:+d}` 的 `+` 被吞（宽度、浮点两形）；② 负数进制型——`{x:b}` 位回绕。py_format runtime 车道移交 ⇒ **主线登记 #188**。随机库累计 179 例八模式；报 diff 254/291 87.3% 无回归。
+- **487（切片模式 15 例全 match ＋ None 打印钉子）**：正/负/省略/步进切片与切片后 `len` 全对（323 修的切片族语义扎实）；新夹具 `t507` 以 known-fail 钉住 `3 and None` 打 `0` 而非 `None`（旁路注：L09 词法降级 ＋ print 无 None 渲染、#117 近亲）⇒ **主线登记 #189**。随机库累计 174 例九模式；报 diff 269/306 87.9% 无回归。
+
+**主线侧合并树复跑（当场取数）**：
+- 差分步 `/tmp/b445/diff_merged.log`：**match=270／judged=306／88.2%／bad_case 0、rc=0**（分母 251→306＝55 个新 `.dcase` 全部进账）；旁路 487 在册 269/306，与主线这颗差 1 条，**未逐案归因**（旁路取数在 `9f4c902d…` 那颗上、445 的两臂已在合并树——候选即 `gen_str_s314159_003`／`str_repeat_left` 两支判决转绿，**未证**）。基线按惯例重 bless：**`306/306/270/88.2%/match_min=270`**（`tools/baselines/diff_consistency.json` +231/−11 行）。
+- 快门禁 `/tmp/b445/gate_merged.log`：**`GATE_RC=1`**、红源仍是存量 `t231`/`t233` ⇒ **零新增红**。official 194/194 compile、191/194 link（link-only 3 名单逐字未动）· python_style **360 passed／2 failed／11 known-fail／0 xpass**＝`ls tests/python_style/t*.z` **373** 逐项对上（passed 与 445 终态逐字相同；known-fail 10→11 一格＝旁路带进的 `t507` 钉子，不是判据放松）· 诊断 official 5 文件/15 行、python_style 115 文件/243 行＝与 444/445 终态逐字相同 · comment_drift 0 · dyn_binding 4 条/不一致 0。
+- **跨跑漂移一条**：`str_percent_fmt` 的实得值在 445 §三是 `26`、合并树这趟是 `14` ⇒ 与 #47 在册措辞"打非确定值"一致；这条红的判据只能是期望侧 `n=42`，**实得值不许当指纹**。
+- **未覆盖轴点名**：跳过的 13 步（`corpus`/`jit`/`truth` 等）主线侧未在合并树复现；合并面不含 `src/**`/`runtime/**`，`tests/diff/cases` 与 `t507` 属用例文本——按 AGENTS.md 路由表这些面只需 `python_style`＋diff，两者都已复跑。下一次全量＝**批次 450**。
+
+**OPEN 账务**：#188、#189 因旁路移交新登记 ⇒ **净增 +2**（22 → 24，≤30）。
 
 ## 优先级调整（2026-09-24，用户裁定）
 
