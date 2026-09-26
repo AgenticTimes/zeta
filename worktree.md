@@ -177,6 +177,7 @@
 | 508 | cleanup | **类/字段/方法模式 20 例全 match**（ctor 多字段/方法读写/跨实例运算——446/448 W1010/W1011 修复的普查面首次随机背书）。随机库累计 254 例十五模式。工具侧负结果备案：插入代码的转义层错位弄破 gen_random_diff.py，git 恢复 + chr(10) 重写 | diff 379/428 88.6% 无回归 | ✅ 完成 |
 | 515 | cleanup | **字典方法族扫描**：20+ 方法扫完——13 个全对（rstrip/lstrip/strip/replace-count/center/zfill/split-maxsplit/remove/extend/count/pop/len），**2 缺口钉住**：values() 哈希序非插入序（[2,1]）+ items() 元素打地址（元组解包同根）——简报 ⑬ 移交 gen.rs/派发车道 | diff 无回归 | ✅ 完成 |
 | 511 | cleanup | **组合普查首例崩溃**（class×loop×dict 交互）：类字段 dict + 方法内 for self.words + w[0] + if/else 读改写 = map_get 非字典 rc=1（三连确定复现；单因子最小化均不崩 ⇒ 需完整组合，gen.rs 车道 449 邻域）。组合普查的价值实证：单模式各自全对 ≠ 组合正确 | runtime verdict 钉住 | ✅ 定性批 |
+| 522 | cleanup | **函数返回字符串列表元素丢类型**钉住：.upper() 进 list 返回后元素打地址——非类方法特有（普通函数同病）⇒ gen.rs 车道：返回列表元素类型标记传播缺失。类方法版（512）是同根的类上下文实例 | runtime mismatch 钉住 | ✅ 定性批 |
 | 517 | cleanup | **OOP 组合普查三四例**：① 类变量自增崩溃（Counter.count += 1 把 int 0 当字典解引用 rc=1——类级属性读写未实现）② 类方法内 self.data.get(k, default) 全打地址（set ✓ get ✗——⑫ 家族扩展）。对照组：普通函数 dict.get ✓ | runtime verdict 钉住 | ✅ 定性批 |
 | 518 | cleanup | **稳态确认批**：XPASS 0（#188/#189/#190 未修）、diff 无回归、__pycache__ 清理。qwen 451 已将我方组合崩溃落号 **#194 并列为 452 队头**（复现件 /tmp/b449/c511/），协作闭环运转中。cleanup 领先 16 提交，等主线合并 | 全绿 | ✅ 稳态批 |
 | 519 | cleanup | **新种子收敛验证 + 方法学发现**（60321，60 例临时）：缺口率 **1.7%**（1/60）——远低于深层嵌套样本的 12-24% ⇒ **缺口率与表达式嵌套深度正相关**：浅层 randint 表达式大多正确，深层链才触发族缺口。此发现校准普查方法学：生成器应加深度参数以控制采样深度。旧族确认未修（truediv/Bool/%s 仍红） | 1/60 新例 | ✅ 度量批 |
