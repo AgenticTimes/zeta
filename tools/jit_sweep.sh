@@ -36,7 +36,7 @@ WORK=$(mktemp)
 JOBS="${ZETA_JIT_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
 case "$JOBS" in ''|*[!0-9]*) JOBS=4 ;; esac
 [ "$JOBS" -lt 1 ] && JOBS=1
-[ "$JOBS" -gt 8 ] && JOBS=8
+[ "$JOBS" -gt 24 ] && JOBS=24
 WORKD=$(mktemp -d /tmp/zeta_jitsweep.XXXXXX)
 trap 'rm -rf "$WORK" "$WORKD"' EXIT
 
