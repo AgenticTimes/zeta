@@ -20191,6 +20191,83 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 - **收尾**：`target/release/zetac.pre443` 已删——改前那颗留在构建目录里，下一次 `cargo` 一句"Finished"
   就会被误当成被测对象（在册坑）。下一次全量门禁＝**批次 450** 那格；#145 仍卡在 `runtime/py_additions.c` 的授权上。
 
+## 批次 444（4.x 运行期／3.2 名表的下游：`host_str_*` 有两个宿主、各长一批、谁也不核对谁）：补 AOT 侧四支 str 绑定；差分面 +1 绿；主线位移 0（三层正证据）
+
+**层归位**：pyramid **4.x（运行期／链接面）**，病根在 **3.2 名表**的下游。本批**不改编译器一行 Rust**，只补 `runtime/tokio_runtime_stub.c`。
+**代码提交 `1738c12a`（6 文件）**：`runtime/tokio_runtime_stub.c` +36/−0（纯插入，`git diff -U0` 删除行计数＝**0**）＋ `tokio_runtime.o`（重编，163,748→165,660 B）＋ 新夹具 `tests/python_style/t475_str_host_bindings.z`（50 行、9 条 expect）＋ ABI 两侧（`docs/ABI.md` 10/10 等量、`abi_anchors.tsv` 11/11 等量）＋ `diff_consistency.json`（500/16，追平过期基线，见 §七 #186）。
+**门禁**：快子集 ＋ 为这条改动面单跑的 diff 轴，读数在 §五。**对主线 301 位移＝0**（§四）。
+
+### 一、结论栏（两栏分开）
+
+| 栏 | 读数 |
+|---|---|
+| **修好了** | AOT 侧 `str` 方法的**硬链接失败**：`.count`／`.find`／`.index`／`.lstrip`／`.rstrip` 五写法（四符号）此前一路走到链接才死。t475 锁，**同一颗编译器的 A/B**：`ZETA_RUNTIME_DIR` 指向 HEAD 那颗 `.o` ⇒ 编译 rc=1、缺的正是 `_host_str_{count,find,lstrip,rstrip}`、无产物；指向改后那颗 ⇒ rc=0、9 行 expect 逐字相符。差分轴 `str_find` 由 `compile 缺运行时绑定: host_str_find` **转绿** ⇒ **match 223→224／251、rate 88.8%→89.2%、str 39/43→40/43**。 |
+| **推进了主线** | **0**，带三层正证据（§四）：未定义符号集两侧逐字相同、崩点身份 8/8 份报告三帧相同、走完主道那 5 次的三格计数逐字相同。 |
+
+### 二、病因：两个宿主各长了一批，中间没有核对
+
+- 名表：`gen.rs:15369-15385` 把 `find`/`index` → `host_str_find`（argc=2）、`count` → `host_str_count`、`lstrip`/`rstrip` → `host_str_lstrip`/`_rstrip`（`:15375-15376`）。
+- **JIT 侧**有：`src/runtime/host.rs:252`（find，字节下标／找不到 -1）、`:266`（count，非重叠 `matches().count()`）、`:285`/`:290`（`trim_start`/`trim_end`），经 `pylib/jit_mappings.txt` 接线。
+- **AOT 侧**没有：`runtime/tokio_runtime_stub.c` 的 `host_str_* → str_*` 别名块（`:108` 起）从来没写过这四支，`str_find`/`str_count`/`str_lstrip`/`str_rstrip` 四支实现也不存在 ⇒ `ld: Undefined symbols`。
+- 本批按 JIT 侧那四支的语义在 C 侧补同名实现（含 `count` 空针＝`len+1` 那条 CPython 细节，不补则循环永不前进），**没有**加"名表发射的每个 `host_*` 名在 C 侧有定义"这条核对——它属工具面，落 **#186 旁边那格**（§七）。
+
+### 三、损害量是按探针数的，不是按名字数的（一条口径教训）
+
+首版按名表全名单 `grep` 出 **12 个**"缺绑定"的名字；逐条写成夹具真编译后，**只有 7 个形状真链不上**，其余 5 个名有 argc／类型臂接住。⇒ 修法只落四支。口径入册：**`grep` 数的是名表里提到的名字，不是打得到的形状**（与坑 49"计数先钉口径"同形）。
+
+同族里**没坏**的形状留在 t475 里当负对照：`.strip()`（`host_str_trim` 早就接了）、`.strip("a")`/`.lstrip(" ")`/`.rstrip(" ")`、`.split()` 三形、`.replace(a,b,n)` ⇒ 实测 rc=0，本批一字未动。
+
+### 四、主线 301 位移 A/B（对照只能做在链接产物上）
+
+- **口径**：改动面＝`runtime/*.c` ⇒ IR 不可能变（`src/**` 零改动），所以两侧不是"两颗编译器"，而是**同一颗** `zetac`（md5 `0d8433af59e750201711d5c225cc0611`）× `ZETA_RUNTIME_DIR`＝改前/改后那颗 `.o`，加 `ZETA_STRICT_RUNTIME_DIR=1`（`src/main.rs:513` 的查找：cwd 里有同名 `.o` 才会出 W2002，本次两侧 **0 条**）。两颗产物同放 `/tmp/b444/`（435 那格在册坑：二进制搬家会换 `pylib` 库面）。compile_rc **0/0**，驱动＝`strategies/code/_drv_accept_409.py`、cwd＝REasyQuant 根、`REPLAYQUANT_LOCAL=1`。
+- **改动面非空（不是空 0）**：`tokio_runtime.o` 全局符号 **648→656**，消失集**为空**、新增集**恰好**那 8 个名字（4 支 `str_*` ＋ 4 支别名）；产物里定义符号 **1654→1662**、体积 603,408→603,776 B。
+- **位移必为 0 的正证据**：两颗产物的**未定义符号集 144 条逐字相同、增删 0** ⇒ 这个驱动从来不引用那四个名字。（同一形状在差分库那一例里报的是**裸名** `find`（`gen_str_s314159_003`，§七），属另一条臂。）
+- **n=6/侧交替序**（`/tmp/b444/run_rt_ab.sh`）：pre 崩 3/6、post 崩 4/6 ⇒ Fisher 精确检验**单侧 p=0.50、双侧 p=1.00**（当场 `python3` 算的，不是目测）⇒ 落在 437 在册那条同侧方差海里，**不记位移**。
+- **崩点身份**：8/8 份 `.ips`（含计时跑那一次）三帧逐字相同 —— `str_trim+24 ← backend_datasrc_code_conv__normalize_to_jq+16 ← MarketDataFetcher::fetch_stocks+2924`，连 `imageOffset` 都两侧相同（251428／51404／19740）⇒ 新加进去的 8 个函数没把崩点搬走，也没把它搬到另一条指令。
+- **三格读数**（走完主道的 5 次：pre 3／post 2）：`[PARITY]` **74**、`TRADE` **0**、`失败: 1` **74**、`[晨间]` **37**、`动态池更新失败` **37**、stderr **321** 行、末行 `[local] 回测完成: 1000000 -> 0 (-100.00%)` —— **五次每一条计数逐字相同**；stdout 仍是地址样整数（#117 那一格未动）。
+
+### 五、门禁（快子集，`/tmp/b444/gate_post.log`；改动面＝`runtime/*.c`）
+
+`GATE_RC=1`，红源仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ **零新增红**。
+
+| 步 | 读数 | 判读 |
+|---|---|---|
+| official | compile **194/194**、compile+link **191/194**、link-only 3 条（`_predict,_train`／`_factor,_optimal_iterations,_success_probability`／`_as_str,_into_iter,_is_alphabetic,_push`） | 与 431/438/439/441/442/443 在册名单逐字相同 |
+| python_style | **359 passed／2 failed／10 known-fail／0 xpass**（`ls tests/python_style/t*.z`＝**371**＝359+2+10） | 对 443 在册 358 只 **+1 过**＝本批 t475；known-fail/xpass 两格未动＝判据没放松 |
+| 诊断面 | official **5 文件/15 行**、python_style **115 文件/243 行** | 两格与 443 终态**逐字相同** ⇒ t475 一条 warning 都不产生（它走的是通的路由，不是出声的路由） |
+| comment_drift / dyn_binding | 0 处复述 ／ 4 条断言、不一致 **0** | 不变 |
+| diff 轴（不在快子集，为本批单跑） | `match=224 judged=251 rate=89.2% bad_case=0`（`/tmp/b444/diff_post.log`、`diff_post2.log` **两次同读数**） | 转好 1 条＝`str_find`；两次同数 ⇒ 抬闸门是有证据的 |
+
+### 六、锚点
+
+- `--rebind` 判定 **11 条搬家** ⇒ 改写 `docs/ABI.md` **10 行**、基线 `abi_anchors.tsv` **11 行**；两处都是等量替换（净行数 0 ⇒ 不需要二次重绑）。
+- 其中 **9 条＝本批在 stub.c 插 36 行造成的 +36 搬家**：`:170→:206`、`:191-197→:227-233`、`:205-212→:241-248`、`:391→:427`、`:395-396→:431-432`、`:408-410→:444-446`、`:1330-1334→:1366-1370`、`:2749→:2785`、`:3844→:3880`。**另 2 条不是本批欠下的**：`gen.rs:9836→:9874`、`:9855→:9893`（内容逐字未变的存量搬家，工具在同一次原子判定里一并改回 ⇒ 点名，不混进本批功劳）。
+- 读数：漂移 **28 →（本批 +9）37 → 26**；残余按文件 `codegen.rs` 13／`gen.rs` 6（原 8，即上面那 2 条）／`py_additions.c` 3／`pattern.rs` 2／`run.sh` 1／`tokio_runtime_stub.c` 1。**新 11／消失 12／定位失败 2／rc 2** 与 443 §六 逐项相同。
+- stub.c 那 1 条残余＝`:2550`（`#define ZJ_NULL 0` 实际在 **`:2775`**）＝**同键多义拒改族**的存量（443 在册的同一条），要手绑得走 `--bless-only` 点名，已属 #167 余项那一格。
+
+### 七、未收与登记
+
+- **#183 范围扩一格**（不新开号）：`s.repeat(n)` 与 `s.find(t, start)` 同因——名表没有 argc 匹配的臂 ⇒ 兜底把裸方法名当外发符号（`_find`/`_repeat`）。本批之后差分库 `gen_str_s314159_003` **仍**红在同一句 `缺运行时绑定: find` ⇒ #183 的损害量在改后仍非零（实测在册）。
+- **新登记 #185**：`index` 与 `find` 共用一条路由 ⇒ `"banana".index("q")` 打 **`-1`**，CPython 抛 `ValueError`（t475 第 E 行只断言找得到的形状）。**损害等级变了**：本批之前那一支"链不上"（响亮），本批之后是**静默错值**。
+- **新登记 #186**（工具面，旁路 lane）：差分基线 `tools/baselines/diff_consistency.json` 停在 **total=130／match_min=120** 而实跑 **251 例** ⇒ 门禁那句"差分一致率无回归"跑在**松了 104 例**的基础上（443 收尾那次读到 223 也照样"无回归"）。本批已 `--bless` 抬到 224；**建议门禁在"基线 total ≠ 实跑 judged"时出声**，否则会再次漂掉。
+- **顺手复测、不新开号**：整数真除 `7/2`→`3`、`6/3`→`2`、`-7/2`→`-3`（CPython 3.5／2.0／−3.5）＝已在册 **#48** 那一格（`roadmap:10801` 把 truediv 归给 #48），本批只在当前二进制上补一份实拍。
+- **OPEN 账务**：+2（#185、#186），表内 ⬜+🟡 由 **20 → 22**，仍 ≤ 30；本批**没有可配对关闭的旧项**——缺符号那条 #42 的名单（`_as_str`/`_into_iter`/`_is_alphabetic`/`_push`）与本批四支**不重叠**，实测点名。
+
+### 八、下一批候选（按已实测损害量，交裁决；未选中的不动队序）
+
+| 候选 | 已实测损害量 | 备注 |
+|---|---|---|
+| **#182** W1010 静默读 0 | 全仓 **65 行／25 文件**，其中 official 面 **+9 行／5 文件**（门禁可见） | 修法是逐名裁决，不是补一条臂（443 §五 已定价） |
+| **#183** argc 缺臂 ⇒ 裸名 `_find`/`_repeat` | 差分库 **2 条**在册红（`gen_str_s314159_003` compile、`str_repeat_left` 实得地址 `13104598752`）＋ 探针 2 形 | 与 #47（`int*str` 打地址）在 `str_repeat_left` 那一例上是同一具尸体，先量再分 |
+| **#177** 余 14 条具名类别替身读 | 14 条（`FA read variant=""` 且接收者类别已知） | 这条路"只能出声"（442 收窄结论） |
+| **#185** `index` 的 ValueError 分歧 | 1 条具名形状（本批实拍） | 单点最小修可及 |
+| **#48** 方言裁决（含真除、浮点 repr、bignum） | 差分 numeric **63/85＝22 条红**，其中在册 17/28＝61% 挂在 #48 | **等用户一句话**，不是 bug 单 |
+| str 轴剩 3 红 | `gen_str_s314159_003`／`str_percent_fmt`（期望 `n=42` 实得 `24`，归 #172/#47）／`str_repeat_left` | 三条都有号 |
+
+### 九、收尾
+
+`target/release/zetac.pre444`（本批的改前那颗，md5 与改后那颗**本来就相同**——因为编译器没动）已删：改前对象留在构建目录里会让下一次 `cargo` 一句"Finished"被误当成被测对象（在册坑）。度量产物全在 `/tmp/b444/`（`rt_pre/`、`rt_post/`、`r_*_{out,err}`、8 份 `.ips` 在系统目录）。下一次全量门禁＝**批次 450** 那格；#145 仍卡在 `runtime/py_additions.c` 的授权上。
+
 
 ## 优先级调整（2026-09-24，用户裁定）
 
