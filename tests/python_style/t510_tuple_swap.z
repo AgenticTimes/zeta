@@ -1,0 +1,10 @@
+// known-fail: 元组交换 `a, b = b, a` 顺序腐蚀（批次 493 定性，登记 #190）。
+// Python 语义 = 右侧先整体求值再逐个绑定；zeta 的 Assign(Tuple, Tuple) lowering
+// 顺序赋值 ⇒ 交换被腐蚀成 (2, 2)。修法草图（gen.rs lowering，主线车道）：
+// RHS 元素先各自求值入临时、再从临时绑定；或解析期脱糖 + 全局收集器解包
+// Block（跨两处消费端，493 试过解析器单侧会回归 t24 —— 已撤销）。
+a = 1
+b = 2
+a, b = b, a
+print(a, b)
+// expect: 2 1
