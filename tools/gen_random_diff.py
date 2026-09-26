@@ -351,6 +351,43 @@ def gen_methods_case(rng: random.Random) -> str:
     return "\n".join(lines) + "\n"
 
 
+NL = chr(10)
+
+
+def gen_class_case(rng: random.Random) -> str:
+    """类采样：ctor 多字段 / 字段读 / 方法读字段 / 方法写字段 / 跨实例运算——
+    446/448 的 W1010/W1011 字段槽位修复的普查面。（NL = chr(10) 避开转义层）"""
+    nfields = rng.randint(2, 3)
+    names = ["a", "b", "c"][:nfields]
+    init_vals = [rng.randint(-99, 99) for _ in names]
+    ctor_args = ", ".join(names)
+    init_lines = NL.join(f"        self.{n} = {n}" for n in names)
+    method_read = " + ".join(f"self.{n}" for n in names)
+    other = " + ".join(f"o.{n}" for n in names)
+    new_vals = [rng.randint(-99, 99) for _ in names]
+    setter_lines = NL.join(f"        self.{n} = {v}" for n, v in zip(names, new_vals))
+    body = NL.join([
+        "class P:",
+        f"    def __init__(self, {ctor_args}):",
+        init_lines,
+        "    def total(self):",
+        f"        return {method_read}",
+        "    def setall(self, o):",
+        setter_lines,
+        "    def combined(self, o):",
+        f"        return {method_read} + {other}",
+        "",
+        f"p = P({', '.join(str(v) for v in init_vals)})",
+        f"q = P({', '.join(str(v + 1) for v in init_vals)})",
+        "print(p.total())",
+        "print(q.total())",
+        "p.setall(q)",
+        "print(p.total())",
+        "print(p.combined(q))",
+    ])
+    return body + NL
+
+
 def gen_expr(rng: random.Random, depth: int = 0) -> str:
     if depth >= 3 or rng.random() < 0.3:
         return str(rand_int(rng))
@@ -444,14 +481,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
-    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod", "nested", "methods"), default="numeric")
+    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod", "nested", "methods", "class"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
     written = 0
     tried = 0
-    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod", "nested", "methods") else 6)
+    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod", "nested", "methods", "class") else 6)
     while written < a.count and tried < max_tries:
         tried += 1
         if a.mode == "builtin":
@@ -513,6 +550,22 @@ def main() -> int:
                 f"# @note: 随机容器方法链（seed={a.seed} #{written}）\n"
                 f"#@@ python\n{prog}\n"
                 f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
+        if a.mode == "class":
+            prog = gen_class_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_class_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: container" + NL
+                + f"# @note: 随机类/字段/方法（seed={a.seed} #{written}）——W1010/W1011 修复普查面" + NL
+                + "#@@ python" + NL + prog + NL
+                + "#@@ zeta" + NL + prog
             )
             with open(os.path.join(a.out, name), "w") as f:
                 f.write(body)
