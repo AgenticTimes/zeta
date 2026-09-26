@@ -65,7 +65,7 @@
 | TC-降级-01 | W0003 只有一个含义、一个级别（S2） | typecheck 失败 → 恰一条已注册 W0003 文本 | 设计裁定 | BR-P05、#81② | 🔴（一码三义） |
 | TC-CLI-01 | 未知参数与多输入文件硬拒绝（S2） | `zetac x.z -02` → `unrecognized option` 而非当文件名 | 设计裁定 | BR-P11 | ✅ cli_semantics |
 | TC-CLI-02 | bootstrap 不吞 `--target`（S2） | `--bootstrap --target wasm32` → 告警或生效，非静默 native | 设计裁定 | BR-P12、#82 | 🔴 现红 |
-| TC-截断-01 | 截断清单只许减少（S6） | `truncation_inventory.sh` 总行数 ≤ 基线 1,019（批次 325，ABI.md 附 B#10） | 基线文件 | BR-P01、#36 | ✅ 门禁既有 |
+| TC-截断-01 | 截断清单保持为零（S6） | `truncation_inventory.sh` = 0 hit / 238 文件（批次 437 基线实测，2026-09-26） | 基线文件 | BR-P01、#36 | ✅ 已清零，守卫保持 |
 | TC-锁步-矩阵01 | 语义在优化级别间不翻转（S7） | `opt_matrix.sh` flips = 0（现存 2 例钉住在案） | 自比 | BR — | 🟡 已建，2 例待修 |
 
 ### D 组 · 元测试（验证体系自身可信）
