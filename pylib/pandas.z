@@ -343,6 +343,12 @@ class Series:
     def __init__(self, data: lt(vec, str)):
         self.data = data
 
+    # 批次 442：与 DataFrame.index（本文件 :168）同形的行下标。缺它时 `s.index` 既不在
+    # `struct_Series_1` 布局里、也没有 `Series::index` 可走按名属性读 ⇒ 落 ("",2) 替身，
+    # 读回的是 self.data 的向量句柄（实测 t473：`idx[0]` 打 4365373395 这样的地址）。
+    def index(self) -> lt(vec, i64):
+        return list(range(len(self.data)))
+
     def tolist(self) -> lt(vec, str):
         return self.data
 

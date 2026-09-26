@@ -1,0 +1,18 @@
+// PY-A: 批次 442（#177）。pylib/pandas.z 的 `Series` 没有 `index` 成员 ⇒ 语料
+//   `nav.index` / `before_trough[peak_mask].index[-1]` 这类读在 codegen 里既不进
+//   声明布局（`struct_Series_1` 只有 `data`）、也不进批次 295 的按名属性读（函数
+//   `Series::index` 不存在），于是落到 `("", 2)` 替身：按 2 字宽加载接收者、取
+//   索引 0 ⇒ 读回的就是 `self.data` 那个向量句柄，一声不出。
+//   `DataFrame.index`（pandas.z:168，返回 0..n_rows-1）在册且可用，`Series` 缺同名成员。
+// expect: 3
+// expect: 0
+// expect: 2
+// expect: y
+from pandas import Series
+
+s = Series(["x", "y", "z"])
+idx = s.index
+print(len(idx))
+print(idx[0])
+print(idx[2])
+print(s.tolist()[1])
