@@ -1,0 +1,18 @@
+# @cat: control
+# @note: enumerate 元组解包遍历 + zip 平行遍历
+#@@ python
+v = ["a", "b", "c"]
+for i, x in enumerate(v):
+    print(i, x)
+a = [1, 2]
+b = [3, 4]
+for p, q in zip(a, b):
+    print(p + q)
+#@@ zeta
+v = ["a", "b", "c"]
+for i, x in enumerate(v):
+    print(i, x)
+a = [1, 2]
+b = [3, 4]
+for p, q in zip(a, b):
+    print(p + q)
