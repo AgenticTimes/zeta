@@ -1,14 +1,14 @@
 {
-  "total": 434,
-  "judged": 434,
-  "match": 383,
-  "rate_pct": 88.2,
-  "match_min": 383,
+  "total": 456,
+  "judged": 456,
+  "match": 384,
+  "rate_pct": 84.2,
+  "match_min": 384,
   "by_verdict": {
-    "mismatch": 49,
-    "runtime": 1,
-    "match": 383,
-    "compile": 1
+    "mismatch": 67,
+    "runtime": 3,
+    "match": 384,
+    "compile": 2
   },
   "per_cat": {
     "truth": {
@@ -17,11 +17,11 @@
     },
     "str": {
       "match": 66,
-      "judged": 79
+      "judged": 82
     },
     "container": {
-      "match": 141,
-      "judged": 157
+      "match": 142,
+      "judged": 176
     },
     "numeric": {
       "match": 65,
@@ -37,7 +37,27 @@
       "cat": "container",
       "verdict": "mismatch"
     },
+    "class_cross_ref_silent": {
+      "cat": "container",
+      "verdict": "runtime"
+    },
     "class_dict_composition": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "class_dict_field_get": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "class_inheritance": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "class_inheritance_field": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "class_list_field_method": {
       "cat": "container",
       "verdict": "runtime"
     },
@@ -45,9 +65,21 @@
       "cat": "container",
       "verdict": "match"
     },
+    "class_method_str_concat": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "class_self_chain": {
+      "cat": "container",
+      "verdict": "match"
+    },
     "class_str_comprehension": {
       "cat": "container",
       "verdict": "mismatch"
+    },
+    "class_variable_crash": {
+      "cat": "container",
+      "verdict": "runtime"
     },
     "container_append": {
       "cat": "container",
@@ -108,6 +140,10 @@
     "container_index": {
       "cat": "container",
       "verdict": "match"
+    },
+    "container_intkey_order": {
+      "cat": "container",
+      "verdict": "mismatch"
     },
     "container_len": {
       "cat": "container",
@@ -644,6 +680,46 @@
     "gen_dict_s6060_011": {
       "cat": "container",
       "verdict": "match"
+    },
+    "gen_dmethod2_s246_000": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_dmethod2_s246_001": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_dmethod2_s246_002": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_dmethod2_s246_003": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_dmethod2_s246_004": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_dmethod2_s246_005": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_dmethod2_s246_006": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_dmethod2_s246_007": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_dmethod2_s246_008": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_dmethod2_s246_009": {
+      "cat": "container",
+      "verdict": "mismatch"
     },
     "gen_dmethod_s97531_000": {
       "cat": "container",
@@ -1601,6 +1677,10 @@
       "cat": "str",
       "verdict": "match"
     },
+    "str_format_method": {
+      "cat": "str",
+      "verdict": "compile"
+    },
     "str_fstring": {
       "cat": "str",
       "verdict": "match"
@@ -1626,6 +1706,10 @@
       "verdict": "match"
     },
     "str_percent_fmt": {
+      "cat": "str",
+      "verdict": "mismatch"
+    },
+    "str_percent_format_family": {
       "cat": "str",
       "verdict": "mismatch"
     },
@@ -1656,6 +1740,10 @@
     "str_slice_step2": {
       "cat": "str",
       "verdict": "match"
+    },
+    "str_sorted_reverse": {
+      "cat": "str",
+      "verdict": "mismatch"
     },
     "str_split_len": {
       "cat": "str",
