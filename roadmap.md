@@ -20290,6 +20290,79 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 
 **下一批不变**：队头按 §八 的 ROI 表走（#182 65 行/25 文件 → #183 两条差分红 → #177 14 条 → #185 → #48 等用户方言裁决）；下一次全量门禁＝**批次 450**。
 
+## 批次 445（3.2 Lowering／重复族的两条缺臂：`*` 只认 str 在左、名表没有 `repeat` 一行）：两条臂各 22/3 行，不新增运行期符号；差分面 +1 绿；主线位移 0（正证据）
+
+### 一、批次身份与结论速览
+
+| 项 | 读数 |
+|---|---|
+| 归属层 | **3.2 Lowering**（`src/middle/mir/gen.rs` 的下型臂）；4.x 运行期只作为**边界**出现（本批只调用已有符号，未动任何宿主） |
+| 任务号 | **#183** 收两格中的一格（`s.repeat(n)` 通，`s.find(t,start)` 未通）＋ **#47** 收两格中的一半（`int*str` 通，`str % int` 未通） |
+| 代码提交 | **`2e68b09c`** ＝ `gen.rs` **+25/−0**（两坨：`:4886` 起 22 行镜像臂、`:15405` 一行名表）＋ 夹具 `t476_str_repeat_operand_order.z` **58 行/9 条 expect** ＋ `docs/ABI.md` 23/23 ＋ `abi_anchors.tsv` 31/31 ＋ `diff_consistency.json` 7/7 |
+| 修好了吗 | **AOT 侧修好了**：三条探针（`3*s`／`s.repeat(3)`／控制组 `"ab"*3`）改后全部 `ababab`；夹具改后 PASS、stderr 0 行 |
+| 推进主线了吗 | **主线 301 位移 0**（IR 逐字节相同，见 §四）——收益全在差分面 +1 绿（`str_repeat_left`），不在主线上 |
+| OPEN 账务 | **净增 0**（两行各自收窄，无新号，见 §七） |
+
+### 二、定位（Phase 1，全部在 HEAD 那颗 `9f4c902d…` 上实拍）
+
+病因**不是一条**，是同一族的两个独立缺口——这点是先量形状后才分开的：
+
+1. **`n * s`（整数在左）**：`gen.rs:4872` 那条重复臂的判据是"左 `Type::Str` 且右非 Str"，**没有镜像**。右操作数换到左边就掉进上面的数值乘法臂 ⇒ 对 `char*` 做 i64 乘法。实拍 `/tmp/b445/r_left.z`（`print(3 * "ab")`）：compile rc=0、run rc=0、stdout **`12913397472`** —— **静默错值，一声不出**。＝ 已在册 **#47** 的第一半。
+2. **`s.repeat(n)`**：名表 `str_method_symbol`（`:15374`）**从来没有 `repeat` 这一行** ⇒ 调用点 `:11326` 的 `if let Some((func, argc, ret)) = m` 不成立，控制流**掉出表外**走到兜底臂，把裸方法名当外发符号。实拍 `/tmp/b445/r_meth.z`：compile **rc=1**、`Undefined symbols for architecture arm64: "_repeat", referenced from: _main in r_meth.bin.o` —— **响亮失败**。＝ **#183** 那一族。
+3. 同族第三条 `s.find(t, start)`（argc 3 而表里是 2 ⇒ 同样掉出表外发裸名 `_find`）**本批没修**：它缺的不是"另一条臂"，是一支带 `start` 的运行期函数，而那会同时欠 JIT 与 AOT 两个宿主（444 那一格）。差分库里它就是剩下的唯一一个 `compile` 判决。
+
+**为什么把 1 与 2 捆成一批**：两支收往**同一支已存在、且被控制组证明可用**的符号 `host_str_repeat`（`runtime/py_additions.c:2368`，由 `tools/build_runtime.sh:42` 编进 `zeta_runtime_c.o`）——本批 **0 个新运行期符号**，`tokio_runtime.o` 一字未动（对 444"两个宿主各长一批"那格，本批的做法是**不去长**）。
+
+### 三、先量成员数再定收口形状（在册规矩）
+
+语料面（`~/source/quant/REasyQuant/strategies`，40 个 `.py`）：`.repeat(` **0** · 两参 `.find(t, start)` **0** · `<int> * <str>` **0** · `.index(` 1 条（`干积分-量化框架.py:88`，接收者是列表不是 str ⇒ 不算本族成员）。差分库面：`str` 类 3 红，本批收 1（`str_repeat_left`），剩 `gen_str_s314159_003`（`compile`，§二.3 那条）与 `str_percent_fmt`（期望 `n=42` 实得 `26`，归 #172/#47 另一半）。
+⇒ 这一族的**真成员在差分库与套件，不在语料**，所以收口形状＝夹具＋差分转绿，**不**押主线运行期读数（与 431/433 那条"先量再动"同法）。
+
+### 四、修法与主线位移
+
+- 镜像臂（`:4886-4907`）＝把 str-在左那条臂左右对调，整数侧判据照抄紧随其后的 list×int 臂（`:4908` 起）那六个整型，调 `host_str_repeat(right, left)`，`type_map` 答 `Str`。
+- 名表一行（`:15405`）＝ `"repeat" => Some(("host_str_repeat", 2, "str"))`（argc 2 含接收者，与 `contains`/`count` 同规则）。
+
+**位移读数＝0，是正证据不是空 0**：acceptance 驱动 `strategies/code/_drv_accept_409.py`（cwd＝REasyQuant 根、相对源路径、两颗二进制同在 `target/release/`）`--emit-llvm` 两侧产物 **4,401,701 B / 113,166 行、md5 逐字节相同**（`4c4974216c3737309ac806cd5141a55c`）。改前那颗是**从 HEAD 源码重编出来的**，md5 与 444 终态那颗逐字节相同（`9f4c902dc9ebe882a4f0aca534e294e4`）⇒ 上面所有"改前实拍"打的都是 HEAD 的码，不是一颗手边旧二进制。
+**顺手量到一条同侧噪声底**：改前那颗**自己两跑**的编译 stderr 相差 **145 行**（两侧各 274 行、行数相同而内容错位），IR 却同 md5 ⇒ 这条路上 **stderr 多重集不能当判据，只有 IR 能**（443 那次"两侧各差 1 行"是运气，不是判据成立）。运行侧未取 A/B（同一份 IR ⇒ 无对照可判，口径照 441/442/443）。
+
+### 五、门禁（快子集，`/tmp/b445/gate_final.log`；改动面＝`src/middle/**`）
+
+`GATE_RC=1`，红源仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ **零新增红**。
+
+| 步 | 读数 | 判读 |
+|---|---|---|
+| official | compile **194/194**、compile+link **191/194**、link-only 3 条（`_predict,_train`／`_factor,_optimal_iterations,_success_probability`／`_as_str,_into_iter,_is_alphabetic,_push`） | 与 444 在册名单逐字相同 |
+| python_style | **360 passed／2 failed／10 known-fail／0 xpass**（`ls tests/python_style/t*.z`＝**372**＝360+2+10） | 对 444 在册 359 只 **+1 过**＝本批 t476；known-fail/xpass 两格未动＝判据没放松 |
+| 诊断面 | official **5 文件/15 行**、python_style **115 文件/243 行** | 两格与 444 终态**逐字相同** |
+| comment_drift / dyn_binding | 0 处复述 ／ 4 条断言、不一致 **0** | 不变 |
+| diff 轴（不在快子集，为本批单跑） | `match=226 judged=251 rate=90.0% bad_case=0`（`/tmp/b445/diff_post.log`，随后 `--bless` 抬到 `match_min=226`） | 转好 1 条＝`str_repeat_left`；`by_verdict.compile` 仍＝1 ⇒ 那一格就是 §二.3 |
+
+**一次当场纠出的自错**：夹具第一版把 I 行的 expect 写成 `[abababab]`（实为 `m = 2`、`"ab"*2` ⇒ `[abab]`），**快门禁实跑判 FAIL 才对出来**。改前该夹具的整文件判定是 `FAIL (编译失败: Linking failed)`（`_repeat` 那条），改后 `PASS` ⇒ 锁两侧都在，但 expect 的初稿是我自己脑补的。⇒ 记在夹具头注，别把"跑过一遍输出"当成"逐字比过 expect"。
+
+### 六、JIT 那一侧本批**没有**跟着变好（如实登记）
+
+三形在 JIT（`zetac` 不带 `-o`）改前改后一律 **rc=1**，stderr：`warning[E4016]: JIT mode (no -o) has no binding for 1 runtime symbol(s) this program references: [host_str_repeat]`。`host_str_repeat` 在 `pylib/jit_mappings.txt` 里**没有条目**（`src/runtime/host.rs` 也没有同名实现）——而控制组 `"ab" * 3` 在**改前就是同一个 rc=1** ⇒ 本批没有制造新的静默形状，只是把 A 行从"打地址"换成"报名字"。AOT 有／JIT 无 ＝ 444 那格"两个宿主各长一批"换了个符号，折进 #183 登记（§七）。
+
+### 七、未收与登记（OPEN 净增 0）
+
+- **#183 收两格中的一格**：`s.repeat(n)` 在 AOT 通了。`s.find(t, start)` **仍红**（`gen_str_s314159_003` 是本批之后唯一一个 `compile` 判决），修法需要一支带 `start` 的宿主函数＋两个宿主各接一次；**另加一条同族残口（本批实测）**：`host_str_repeat` 在 JIT 侧无宿主 ⇒ `s.repeat(n)`／`n*s`／`s*n` 三形 JIT 一律 E4016 出声（含**改前就坏**的 `"ab"*3`）。#183 从"argc 缺臂一族"改写成"缺臂已收两条、剩 `find(t,start)` 一臂＋JIT 宿主一格"。
+- **#47 收两格中的一半**：`int*str` 打地址已闭（差分库 `str_repeat_left` 转绿）；`str % int` 那一半（`str_percent_fmt`：期望 `n=42` 实得 `26`）**未动**，仍与 #172 的归因纠缠 ⇒ #47 保持 OPEN、范围减半。
+- **配对关闭一栏：无行可换**——本批只让两行各自变短，没有一条 OPEN 整行闭 ⇒ **净增 0**（既不是置换，也不是新增）。
+- **顺手量到、未修**：`s.repeat(n)` 与 `n * s` 在**语料 40 文件里 0 成员** ⇒ 这条修复的损害面在套件/差分库，不在 acceptance；别再把它押到主线 301 的队序上。
+
+### 八、下一批候选（按已实测损害量，交裁决；未选中的不动队序）
+
+| 候选 | 已实测损害量 | 备注 |
+|---|---|---|
+| **#182** W1010 静默读 0 | 全仓 **65 行／25 文件**，其中 official 面 **+9 行／5 文件**（门禁可见） | 修法是逐名裁决（三堆：构造子／外部库函数／仓内自举 22 条），不是再补一条臂 |
+| **#183 剩格** `find(t, start)` | 差分库**唯一一个** `compile` 判决 | 要新宿主函数 ⇒ 两个宿主各接一次（444 同法）＋ argc 3 一臂 |
+| **JIT 宿主缺口**（本批实测） | `host_str_repeat` 三形 JIT 一律 E4016 rc=1（含改前就坏的 `"ab"*3`） | 与 444"两个宿主各长一批"同形；修法＝`host.rs` 加实现＋`jit_mappings.txt` 接一条 |
+| **#177** 余 14 条具名类别替身读 | 14 条（`FA read variant=""` 且接收者类别已知） | 这条路"只能出声"（442 收窄结论） |
+| **#185** `index` 的 ValueError 分歧 | 1 条具名形状（444 实拍） | 单点最小修可及 |
+| **#48** 方言裁决（含真除、浮点 repr、bignum） | 差分 numeric **64/85＝21 条红**（本批 bless 实跑读数；444 §八 那格写的是 63/85，不同跑次、未逐案归因） | **等用户一句话**，不是 bug 单 |
+
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
