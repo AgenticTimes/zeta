@@ -20148,7 +20148,7 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 - 全仓 `.z` 普查（987 → 988 个文件）：改前幽灵探针 **66 行 / 25 文件**，改后 W1010 **65 行 / 25 文件**；**24 个文件逐项计数逐字相同** ⇒ 这条出口覆盖的是同一集合，不是新增告警。差集两条：改前独有 `zeta_src/runtime/array.z`（本批真修掉）、改后独有 `t474`（本批新夹具）。
 - 门禁面只有 official 那 9 行；仓外语料 **0 条**（40 文件逐个扫，第一次扫描因 `while read` 丢掉末尾无换行那条，补跑 `research/candidate_strategy.py` 后分母 40/40 仍全 0）。
 - 与 #41 旧定价的**口径差**：旧 **3,000,044 行 / 19 文件**（codegen 侧"每次查不到都出声"，含循环与递归内重复）vs 本批 **65 行 / 25 文件**（每个未登记 id 一次）。旧担忧"直接进门禁会把 official 的 2 文件/5 行打成七位数"**实测不成立**：official 只从 6 行到 15 行。
-- **未收（新开 #181）**：这 65 行仍是**静默错值**（幽灵槽读 0），只是不再崩、并且出了声。名单分三堆：① 构造子无路由——`HashMap::new`、`BufStream::new`、`GroversAlgorithm::new`、`ShorsAlgorithm::new`、`quantum::Circuit::new`、`ml::neural::Network::new`；② 外部库函数——`std::fs::read_to_string`；③ 仓内自举源 22 条（`jit.z` 3、`host.z` 2、`main.z` 2、`codegen.z` 2、`zeta_src/tests/parser_let.z` 5、`parser_float.z` 4、`actor/map.z` 2）。本批不动它们：修法要逐名裁决，不是补一条臂。
+- **未收（新开 #182；正文初稿编号 181，登记时该号先占后作废、编号不回收）**：这 65 行仍是**静默错值**（幽灵槽读 0），只是不再崩、并且出了声。名单分三堆：① 构造子无路由——`HashMap::new`、`BufStream::new`、`GroversAlgorithm::new`、`ShorsAlgorithm::new`、`quantum::Circuit::new`、`ml::neural::Network::new`；② 外部库函数——`std::fs::read_to_string`；③ 仓内自举源 22 条（`jit.z` 3、`host.z` 2、`main.z` 2、`codegen.z` 2、`zeta_src/tests/parser_let.z` 5、`parser_float.z` 4、`actor/map.z` 2）。本批不动它们：修法要逐名裁决，不是补一条臂。
 
 ### 六、锚点
 
@@ -20162,6 +20162,34 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 - `tests/python_style/t474_mem_intrinsic_operand.z`（51 行、5 条 expect）：改前实拍 **rc=101**、panic 在 `codegen.rs:6765` `no entry found for key`、stdout **0 字节**（PRE 那颗，同目录）；改后 5 行逐字相符。第 5 条 `ghost = 3` 是②的取值契约（`3 + 幽灵 0`）。
   - 首版把它写成 `ghost = 0`，套件当场判红（`FAIL … expected: ghost = 0 | actual: 3`）⇒ 按实拍改断言。这不是"调成能过"：`3 + 0 = 3` 就是这条契约的全部内容，且这行同时锁住"②之后 abort 不再发生"。
 - 一句话方法论：**判据只能问"登记过没有"，不能问路由种类**——与批次 419 那条"判据只能问 MIR"同形：凡是"某臂走完什么都没发生"的形状，闭合出口比逐臂补判据可靠。
+
+
+## 旁路并入（2026-09-26，主线侧代录）：批次 474–480 ＋ 443 收尾合并
+
+- **合并提交 `44f48a0e`**（取法＝`git rev-list --merges -1 HEAD`）：12 个提交、六批，文件面 **82 个文件**＝
+  `tests/diff/cases/**` 新增 **79 个 `.dcase`**（+1,030/−0）＋ `tools/diff_test.py`、`tools/gen_random_diff.py`
+  （两文件合计 +232/−35）＋ `worktree.md` +6。**`src/**` 一行未动**
+  （`git diff --numstat b6954c1d 44f48a0e -- src/` ＝ **0 行输出**）。
+- **六批要点**（台账行由旁路自己写、随合并进来）：**474** 生成器扩 str 模式＋首批 20 例（19 match ＋ 1 条
+  **compile 能力缺口**：`s.find(t, start)` 两参形式链接期缺符号）· **475**（台账行）合并前全量门禁 rc=0 ·
+  **476** 第三模式"随机赋值链"15 例（13 match ＋ **2 条 in-range 错值**）· **477/478** 容器模式 24 例
+  **全 match** ＋ `diff_test.py` 并行化（按用例子目录隔离 zetac 中间产物，此前共享 cwd 会互踩）·
+  **479** cmp 模式 20 例全 match ＋ **479a 补漏**（生成器本体的 str/stmts/list/dict 模式此前没随用例入库
+  ＝可复现性漏洞）· **480** 大样本普查（seed=888、临时 200 例）＝ mismatch **24/200 ≈ 12%**，
+  把小样本的 24% 修正为高估；committed 库维持 251 例。
+- **合并树读数**：只跑本批唯一受影响的步 —— `python3 tools/diff_test.py`（`/tmp/b443/diff_merged.log`，
+  **74s**）＝ **match 223 / judged 251 / rate 88.8% / bad_case 0、rc 0**，与旁路 479 在册读数**逐字相同**
+  ⇒ 并入零新增红、也零新增绿（被测二进制 md5 `0d8433af59e750201711d5c225cc0611`，跑前跑后同一颗
+  ⇒ 期间没重编）。其余步**没重跑**，理由是**输入面逐字未变**而不是"应该没事"：那 82 个文件里没有一个
+  是 official／python_style／corpus／jit／truth 任一步的输入。锚点核对器是跑了的：合并树
+  **漂移 28／新 11／消失 12／定位失败 2／rc 2**，与批次 443 §六 的终态**逐项相同** ⇒ 旁路六批一条引用都没挪。
+- **移交落号**：**#183**（`s.find(t, start)` 两参缺运行时绑定，自 474）· **#184**（随机差分库量到的
+  **in-range 错值 3 条**＝476 的两条 ＋ 480 的一条微差亚型 `258802802811051` vs CPython
+  `259928218567380`，旁路注"疑似中间取整"）· 本批未收的 W1010 静默 0 值族落 **#182**（正文初稿写 181，
+  该号先占后作废、编号不回收 ⇒ 旧号→新号对照同时留在 backlog 与 §五）。三条的读数口径都是
+  **旁路台账、主线未复测**——#184 尤其：480 那 200 例是临时样本、未入库，主线侧只有 251 例这条能复现的库。
+- **收尾**：`target/release/zetac.pre443` 已删——改前那颗留在构建目录里，下一次 `cargo` 一句"Finished"
+  就会被误当成被测对象（在册坑）。下一次全量门禁＝**批次 450** 那格；#145 仍卡在 `runtime/py_additions.c` 的授权上。
 
 
 ## 优先级调整（2026-09-24，用户裁定）
