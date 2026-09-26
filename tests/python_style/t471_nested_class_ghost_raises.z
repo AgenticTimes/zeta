@@ -1,0 +1,45 @@
+// 批次 438（3.2 Lowering／函数体里写的 class，第二格）：内层类**没有**的成员改由
+// 调用点出声，不再拖垮链接。
+//
+// 语料形状：`backend/strategy/nautilus_backend.py:52` 的 `class _Impl(Strategy)`，
+// `on_start`（:53）在 `for` 体里调 `self.subscribe_bars(bt_type)`（:55）。这个名字
+// `_Impl` 自己没有定义（来自外部基类），下型器却按外层类别拼出 `_Impl::subscribe_bars`，
+// 出码修饰成 `_Impl__subscribe_bars` ⇒ `Undefined symbols … Error: "Linking failed"`。
+// 438 的第二趟把窗口内"查无此名、也没有任何 MIR 项定义它"的成员改写成
+// `[dynamic]_Impl::subscribe_bars`，交给批次 428 的按名抛异常（`dyn_member_missing_thunk`）
+// —— 一个不存在的成员只让**那条调用**在运行期出声，外层 `except` 还能接走它的兜底。
+//
+// 递归进循环体是本格的要点：只扫顶层语句时 `for` 体里的调用点看不见，实测停在
+// `Inner::notsdefined` ⇒ 照样链接失败（判据见 `rebind_nested_calls`）。
+//
+// 改前实拍（`target/release/zetac_pre438` 编本夹具，同目录两颗）：rc=1、不出二进制，
+// stderr `Undefined symbols for architecture arm64:` / `  "_Inner__notsdefined", referenced from:`
+// / `Error: "Linking failed"`。
+// 改后：编译 rc=0，编译期一行 `warning: PY-A: 动态接收者成员 `[dynamic]Inner::notsdefined`
+// 无定义 ⇒ 该调用点改为抛异常`；运行 rc=1，stderr 首行
+// `PY-A: dynamic receiver has no member `[dynamic]Inner::notsdefined` — raising`。
+//
+// 本夹具**不**断言 stdout：带基类的内层类里 `print` 整条不落 MIR（t470 头注①已登记，
+// pre438 与新二进制同样丢），所以 `fwd`/`bad` 两行都不会出现 —— 断言只挂在退出码与
+// stderr 上，这两项两侧都实拍过。
+
+class Outer:
+    def make(self):
+        class Inner(Thing):
+            def on_start(self):
+                for x in self.bar_types():
+                    self.notsdefined(x)
+                return 7
+
+            def bar_types(self):
+                return [1, 2]
+
+        i = Inner()
+        r = i.on_start()
+        print("fwd", r)
+
+o = Outer()
+o.make()
+print("bad")
+
+// expect-abort: dynamic receiver has no member `[dynamic]Inner::notsdefined`

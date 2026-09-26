@@ -1,0 +1,75 @@
+// 批次 438（3.2 Lowering／函数体里写的 class）：`self.<兄弟方法>` 的调度。
+//
+// `class Inner:` 写在方法体内时脱糖成 [StructDef, ImplBlock, 合成构造器]，它的每个
+// 方法都是"嵌套 def"，走 `fn_depth > 1` 的提升分支拿到一个合成符号名。调用点要绑到
+// 那个名字，只有两处知道类别名：`AstNode::ImplBlock` 臂（`current_class`）和提升分支
+// （符号名）。但每个方法的 `lower_closure` 在**发布自己的别名之前**就克隆了父表的
+// `closure_vars`，所以"写在前面、定义在后面"的兄弟方法在**同一次下型中**永远查不到 ——
+// 名字留在 `Inner::bump`，出码阶段修饰成外部符号 `_Inner__bump`，谁都定义不了它。
+//
+// 本批的第二趟（`rewrite_nested_class_calls`）在整个 ImplBlock 窗口下完之后回头改写：
+// 窗口内的 `{类别}::<成员>` 调用点绑到该类自己的合成符号（并把返回类型写进 dest 槽，
+// 否则调用点按 I64 猜），窗口内查无此名、又没有任何 MIR 项定义它的，改写成
+// `[dynamic]{类别}::<成员>` 交给批次 428 的按名抛异常（见 t471）。
+// 改写递归进 `If`/`For`/`While` 的嵌套语句表：只扫顶层的话，循环体里的调用点看不见
+// （实测 `for x in self.bar_types(): self.notsdefined(x)` 停在 `Inner::notsdefined`）。
+// 判"是否已有定义"只能问定义面（`generated_mirs` 的项名），不能问 `func_ret_types` ——
+// 那是调用点**证据**表，未定义的成员名同样在里面。
+//
+// 改前实拍（`target/release/zetac_pre438` 编本夹具）：rc=1、不出二进制，
+// `Undefined symbols for architecture arm64:` 点名 `_Inner__bump`、`_Inner__on_start`。
+// 改后（`target/release/zetac`，md5 504e8e32673fcf47b21f04363ccc8e6c）：编译 rc=0，
+// 下面 7 行 stdout 逐字相符 —— `s 5` 是本批新收的那格（`on_start` 在前、`bar_types`
+// /`bump` 在后），其余 6 行锁住"字段读写按各自的 self 走、外层的 `_last`/`p0` 不被顶掉"。
+//
+// 同族登记（**不在本批**，两处实测到的独立缺口）：
+// ① `class Inner(带基类)` 时方法体里的 `print` 整条不落 MIR（pre438 与新二进制**同样**
+//    丢，非本批引入；探针 /tmp/b438/so/d.z：改后 stdout 只剩 `end`）。
+// ② `try:` 体里含幽灵成员调用时，整个方法体被丢成空壳且不报错（pre438 同形状是链接失败
+//    ⇒ 本批把"响亮失败"换成了"静默丢体"；探针 /tmp/b438/so/g.z：stdout `before`/`after 0`，
+//    既无 `caught` 也无 raise 行）。
+
+class Outer:
+    def __init__(self):
+        self.p0 = 11
+        self._last = 33
+
+    def make(self):
+        class Inner:
+            def on_start(self):
+                n = self.bar_types(3)
+                m = self.bar_types(n)
+                return self.bump(m)
+
+            def bar_types(self, k):
+                return k + 1
+
+            def bump(self, d):
+                self._last = d
+                return self._last
+
+        i = Inner()
+        j = Inner()
+        i._last = 5
+        s = i.on_start()
+        print("s", s)
+        r1 = i.bump(7)
+        r2 = i.bump(100)
+        print("r1", r1)
+        print("r2", r2)
+        print("j", j.bump(9))
+        print("i_last", i._last)
+        print("o_last", self._last)
+        print("p0", self.p0)
+        return 0
+
+o = Outer()
+o.make()
+
+// expect: s 5
+// expect: r1 7
+// expect: r2 100
+// expect: j 9
+// expect: i_last 100
+// expect: o_last 33
+// expect: p0 11

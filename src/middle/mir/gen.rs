@@ -208,6 +208,11 @@ pub struct MirGen {
     /// so `self` binds as Named(class) and `self.<field>` keeps the field's
     /// declared type (map membership in `__contains__` dispatches on it).
     current_class: Option<String>,
+    /// BATCH-438: `Class::method` → synthetic closure symbol, for the methods of
+    /// a `class` written inside a function body. Collected per impl-block window
+    /// and consumed by `rewrite_nested_class_calls` — see there for why the
+    /// parent's `closure_vars` cannot carry this on its own.
+    nested_class_aliases: Vec<(String, String)>,
     /// The module this function belongs to — the value of `__name__`
     /// (`logging.getLogger(__name__)` produced a NULL-ish name and `fprintf`
     /// crashed in `strlen`; a bare `print(__name__)` printed 1).
@@ -283,6 +288,7 @@ impl MirGen {
             module_global_types: HashMap::new(),
             re_repl_param: false,
             current_class: None,
+            nested_class_aliases: Vec::new(),
             current_module: "__main__".to_string(),
             self_field_aliases: Vec::new(),
             tuple_slots: std::collections::HashSet::new(),
@@ -849,6 +855,157 @@ impl MirGen {
                 Some(TypeDecl::Struct { fields, .. }) if fields.iter().any(|(f, _)| f == field)
             )
         })
+    }
+
+    /// BATCH-438: the three spellings a method's receiver parameter arrives in.
+    /// `trim_start_matches('&')` is NOT enough — `&mut self` becomes `mut self`.
+    fn is_receiver_param(name: &str) -> bool {
+        matches!(name, "self" | "&self" | "&mut self")
+    }
+
+    /// BATCH-438: bind the call sites written inside a `class` in a function body
+    /// to that class's own hoisted methods.
+    ///
+    /// Why a pass AFTER the block instead of a table entry during it: every
+    /// method of such a class goes through `lower_closure`, which clones the
+    /// parent's `closure_vars` (see there) before this method's sibling has
+    /// published anything. So `self._jq_bar_types()` inside `on_start`
+    /// (`backend/strategy/nautilus_backend.py:54`) missed the closure dispatch,
+    /// kept its qualified spelling, and codegen turned that into an external
+    /// symbol nothing defines (`ld: Undefined symbols: __Impl___jq_bar_types` ⇒
+    /// `Error: "Linking failed"`). The alias table is complete only once the loop
+    /// is done, so the re-binding has to run over the Mir items the loop emitted.
+    ///
+    /// `{ty}::{member}` with no alias in THIS window is a member the class does
+    /// not define at all (an inherited one: `self.subscribe_bars()` from
+    /// `class _Impl(Strategy)`). Those get the `[dynamic]` spelling so batch 428's
+    /// rule takes them — raise at the call site by name, instead of a declare the
+    /// linker can only miss. Before this batch both spellings resolved against the
+    /// ENCLOSING class and were papered over by two weak stubs in
+    /// `runtime/unavailable_stubs.c:148-153`, which is the silent-wrong-value
+    /// shape batch 438 exists to remove.
+    ///
+    /// Scope: only windows that published aliases are touched, i.e. only a `class`
+    /// written inside a function body. A top-level `impl` keeps its pre-438
+    /// spellings (its methods are ordinary items; its inherited members are still
+    /// resolved downstream), so this pass cannot re-decide those call sites.
+    fn rewrite_nested_class_calls(
+        &mut self,
+        ty: &str,
+        aliases: &[(String, String)],
+        mir_start: usize,
+    ) {
+        if ty.is_empty() || aliases.is_empty() {
+            return;
+        }
+        let prefix = format!("{ty}::");
+        let rets: HashMap<String, Type> = aliases
+            .iter()
+            .filter_map(|(key, sym)| {
+                self.closure_ret_tys
+                    .get(sym)
+                    .map(|t| (key.clone(), t.clone()))
+            })
+            .collect();
+        // "Something already defines it" has to be asked of the DEFINITIONS, not
+        // of the call-site evidence table: `func_ret_types` gets a key for every
+        // `recv.member` the scanner sees, so an undefined member was in it too and
+        // the ghost arm never fired (measured: a nested `class Inner(Thing)` whose
+        // `on_start` calls `self.notsdefined(x)` kept `Inner::notsdefined`, and
+        // codegen emitted `ld: Undefined symbols: _Inner__notsdefined`).
+        let defined: std::collections::HashSet<String> = self
+            .generated_mirs
+            .iter()
+            .filter_map(|m| m.name.clone())
+            .filter(|n| n.starts_with(&prefix))
+            .collect();
+        for mir in &mut self.generated_mirs[mir_start..] {
+            let Mir { stmts, type_map, .. } = mir;
+            Self::rebind_nested_calls(stmts, &prefix, aliases, &defined, &rets, type_map);
+        }
+    }
+
+    /// BATCH-438: sweep a statement list, including the ones nested inside it.
+    /// `mir.rs` nests statements in exactly three variants (`If`, `For`, `While`),
+    /// so this covers the whole set; a top-level-only sweep misses every call
+    /// written in a loop or branch body (measured: `for x in self.bar_types():
+    /// self.notsdefined(x)` kept `Inner::notsdefined` ⇒ `ld: Undefined symbols:
+    /// _Inner__notsdefined`, and in the corpus the same shape left
+    /// `_Impl__subscribe_bars` undefined).
+    fn rebind_nested_calls(
+        stmts: &mut [MirStmt],
+        prefix: &str,
+        aliases: &[(String, String)],
+        defined: &std::collections::HashSet<String>,
+        rets: &HashMap<String, Type>,
+        type_map: &mut HashMap<u32, Type>,
+    ) {
+        for stmt in stmts.iter_mut() {
+            match stmt {
+                MirStmt::Call { func, dest, .. } => {
+                    if let Some(next) =
+                        Self::rebound_nested_target(func, prefix, aliases, defined, rets, Some(*dest), type_map)
+                    {
+                        *func = next;
+                    }
+                }
+                MirStmt::VoidCall { func, .. } => {
+                    if let Some(next) =
+                        Self::rebound_nested_target(func, prefix, aliases, defined, rets, None, type_map)
+                    {
+                        *func = next;
+                    }
+                }
+                MirStmt::If { then, else_, .. } => {
+                    Self::rebind_nested_calls(then, prefix, aliases, defined, rets, type_map);
+                    Self::rebind_nested_calls(else_, prefix, aliases, defined, rets, type_map);
+                }
+                MirStmt::For {
+                    body, else_body, ..
+                } => {
+                    Self::rebind_nested_calls(body, prefix, aliases, defined, rets, type_map);
+                    Self::rebind_nested_calls(else_body, prefix, aliases, defined, rets, type_map);
+                }
+                MirStmt::While {
+                    pre_cond,
+                    body,
+                    else_body,
+                    ..
+                } => {
+                    Self::rebind_nested_calls(pre_cond, prefix, aliases, defined, rets, type_map);
+                    Self::rebind_nested_calls(body, prefix, aliases, defined, rets, type_map);
+                    Self::rebind_nested_calls(else_body, prefix, aliases, defined, rets, type_map);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The decision for one call target: bind to the class's own hoisted method,
+    /// ghost an undefined member so batch 428 raises it, or leave the spelling
+    /// alone (not this class's member, or a name an item really defines).
+    fn rebound_nested_target(
+        func: &str,
+        prefix: &str,
+        aliases: &[(String, String)],
+        defined: &std::collections::HashSet<String>,
+        rets: &HashMap<String, Type>,
+        dest: Option<u32>,
+        type_map: &mut HashMap<u32, Type>,
+    ) -> Option<String> {
+        if !func.starts_with(prefix) {
+            return None;
+        }
+        if let Some((_, sym)) = aliases.iter().find(|(key, _)| key == func) {
+            if let (Some(d), Some(t)) = (dest, rets.get(sym)) {
+                type_map.insert(d, t.clone());
+            }
+            return Some(sym.clone());
+        }
+        if defined.contains(func) {
+            return None;
+        }
+        Some(format!("[dynamic]{func}"))
     }
 
     /// 批次147: qualified-method name with module-mangle candidates.
@@ -2215,6 +2372,24 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         params.iter().map(|(n, _)| n.clone()).collect();
                     let body_node = AstNode::Block { body: body.clone() };
                     let hoisted = self.lower_closure(&param_names, &body_node);
+                    // BATCH-438: a method of a `class` written inside a function
+                    // body is called through its QUALIFIED name — the receiver is
+                    // typed `Named(Inner)`, so the call route asks for
+                    // `Inner::bump`, which no table carried (measured on the pre
+                    // binary: `Undefined symbols for architecture arm64:
+                    // "_Inner__bump"`). Publish that spelling alongside the bare
+                    // one; the definition keeps its unique `__closure_*` symbol,
+                    // so two modules may each own a nested `_Impl::on_start`
+                    // without colliding.
+                    if let Some(cls) = self.current_class.clone()
+                        && param_names.iter().any(|p| Self::is_receiver_param(p))
+                    {
+                        let qualified = format!("{cls}::{fn_name}");
+                        self.closure_vars.insert(qualified.clone(), hoisted.clone());
+                        self.hoisted_names.insert(qualified.clone(), hoisted.clone());
+                        self.nested_class_aliases
+                            .push((qualified, hoisted.clone()));
+                    }
                     // bind user name → synthetic fn so `inc()` calls dispatch
                     self.closure_vars.insert(fn_name.clone(), hoisted.clone());
                     // The call site reads the return type off `closure_ret_tys`
@@ -3052,11 +3227,30 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     },
                 );
             }
-            AstNode::ImplBlock { body, .. } => {
+            AstNode::ImplBlock { ty, body, .. } => {
                 // Lower any items inside the impl block (functions, etc.).
+                // BATCH-438: a `class` written inside a function body desugars
+                // to [StructDef, ImplBlock, ctor] and this arm is the only
+                // place that still holds the class NAME — the methods below are
+                // lowered as plain nested `def`s, so without publishing it here
+                // `Inner::bump`'s `self` was captured from the env and typed as
+                // the ENCLOSING class (its field reads resolved against that
+                // layout, declined, and fell through to the `("", 2)` stand-in).
+                let outer_class = std::mem::replace(
+                    &mut self.current_class,
+                    if ty.is_empty() { None } else { Some(ty.clone()) },
+                );
+                // BATCH-438: everything this block publishes belongs to THIS
+                // window: a second `class _Impl` elsewhere in the program owns a
+                // second window with the same key spelling and different symbols.
+                let mir_start = self.generated_mirs.len();
+                let alias_start = self.nested_class_aliases.len();
                 for item in body {
                     self.lower_ast(item);
                 }
+                let aliases = self.nested_class_aliases.split_off(alias_start);
+                self.rewrite_nested_class_calls(ty, &aliases, mir_start);
+                self.current_class = outer_class;
             }
             AstNode::ConceptDef { methods, .. } => {
                 // Lower any default-method bodies inside the concept.
@@ -14655,6 +14849,13 @@ call, no NULL-handle dereference).",
         // inside the synthetic function, so any other referenced name is a
         // free variable that must go through the env runtime.
         let mut bound: std::collections::HashSet<String> = params.iter().cloned().collect();
+        // BATCH-438: a hoisted nested `class` method spells its receiver
+        // `&mut self`, while the body writes `self`. Without the alias the name
+        // was collected as a FREE variable and read through
+        // `zeta_env_get("self")` — the enclosing object, not the method's own.
+        if params.iter().any(|p| Self::is_receiver_param(p)) {
+            bound.insert("self".to_string());
+        }
         let mut free: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         Self::collect_free_vars(body, &mut bound, &mut free);
         if crate::diagnostics::env_flag("ZETA_PROBE") {
@@ -14711,22 +14912,32 @@ call, no NULL-handle dereference).",
         for (pi, p) in params.iter().enumerate() {
             let id = child.next_id();
             child.name_to_id.insert(p.clone(), id);
+            let is_receiver = Self::is_receiver_param(p);
+            if is_receiver {
+                child.name_to_id.insert("self".to_string(), id);
+            }
             child.exprs.insert(id, MirExpr::Var(id));
             // A `re.sub` replacement closure receives a Match handle.
             let hinted = param_hint.as_ref().and_then(|h| h.get(pi)).cloned();
-            child.type_map.insert(
-                id,
-                match hinted {
-                    Some(t) => t,
-                    None => {
-                        if self.re_repl_param {
-                            Type::Named("PyMatch".to_string(), vec![])
-                        } else {
-                            Type::I64
-                        }
+            let mut ty = match hinted {
+                Some(t) => t,
+                None => {
+                    if self.re_repl_param {
+                        Type::Named("PyMatch".to_string(), vec![])
+                    } else {
+                        Type::I64
                     }
-                },
-            );
+                }
+            };
+            // BATCH-438: same rule the ordinary item path applies at :1393 — the
+            // receiver of a (nested) method is the class its impl block named.
+            if is_receiver
+                && matches!(ty, Type::I64 | Type::PyDynamic)
+                && let Some(cls) = self.current_class.clone()
+            {
+                ty = Type::Named(cls, vec![]);
+            }
+            child.type_map.insert(id, ty);
         }
 
         child.stmts = params
