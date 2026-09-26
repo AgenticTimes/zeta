@@ -223,7 +223,8 @@ def main() -> int:
 
     try:
         from concurrent.futures import ThreadPoolExecutor
-        workers = min(8, os.cpu_count() or 4)
+        raw = os.environ.get("DIFF_JOBS", "0") or os.cpu_count() or 4
+        workers = max(1, min(8, int(raw)))
         with ThreadPoolExecutor(max_workers=workers) as ex:
             for name, rec in ex.map(judge, cases):
                 results[name] = rec
