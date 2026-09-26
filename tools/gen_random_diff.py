@@ -133,6 +133,29 @@ def gen_cmp_case(rng: random.Random) -> str:
     return "\n".join(lines) + "\n"
 
 
+def gen_loop_case(rng: random.Random) -> str:
+    """循环积累采样：for-range/while 的计数器槽、累加变量类型流（M08 家族）。"""
+    n = rng.randint(3, 12)
+    lines = []
+    shape = rng.random()
+    if shape < 0.35:
+        lines += ["s = 0", f"for i in range({n}):", "    s += i", "print(s)"]
+    elif shape < 0.55:
+        lines += ["t = 1", f"for k in range(1, {rng.randint(2, 7)}):", "    t = t * k", "print(t)"]
+    elif shape < 0.75:
+        m = rng.randint(1, 5)
+        lines += ["acc = 0", f"n = {m}", "while n > 0:", "    acc += n", "    n -= 1", "print(acc)"]
+    elif shape < 0.9:
+        vals = [rng.randint(-50, 50) for _ in range(rng.randint(2, 5))]
+        lines += ["tot = 0", f"for x in {vals!r}:", "    tot += x", "print(tot)"]
+    else:
+        start = rng.randint(0, 10)
+        end = start + rng.randint(1, 9)
+        step = rng.randint(1, 3)
+        lines += [f"c = 0", f"for i in range({start}, {end}, {step}):", "    c += i", "print(c)"]
+    return "\n".join(lines) + "\n"
+
+
 def gen_expr(rng: random.Random, depth: int = 0) -> str:
     if depth >= 3 or rng.random() < 0.3:
         return str(rand_int(rng))
@@ -226,16 +249,32 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
-    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp"), default="numeric")
+    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
     written = 0
     tried = 0
-    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp") else 6)
+    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop") else 6)
     while written < a.count and tried < max_tries:
         tried += 1
+        if a.mode == "loop":
+            prog = gen_loop_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_loop_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: control\n"
+                f"# @note: 随机循环积累（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
         if a.mode == "cmp":
             prog = gen_cmp_case(rng)
             expected = python_eval_program(prog)
