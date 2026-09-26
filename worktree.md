@@ -125,6 +125,7 @@
 | 467 | cleanup | **静默偏差钉 known-fail ×3**（反向队列 · BR-C/BR-L 提取收成落测试）：t503 大字面量溢出静默 0（L06/L07）· t504 {x:c} 按十进制（CT33）· t505 {x:,d} 无千分位（CT32）——三条实测稳定、按值判 KNOWN-FAIL（known-fail 6→9，修复即 XPASS 自动转正）。**新发现移交主线**：`concurrent.futures` Executor.submit 运行期 SIGTRAP rc=133（d.z 实测，done() 语义钉不了——runtime/pylib 车道，建议按 423 的"句柄判形再解引用"套路定价） | py 355/2/**9**/0 | ✅ 完成（纯 tests，切片=python_style 本身） |
 | 468 | cleanup | **#84 锁步族落差分库**：移位三面——numeric_shift（基础+负数右移，match 121）· numeric_shift_overflow（1<<64 截断错值，已知 mismatch 记账）· t506 known-fail（known-fail 10）。负数 floordiv/mod 已在库 ⇒ #84 闭合（roadmap2 登记 7 转 ✅）；除零族 oracle 自报错不适配 harness 维持登记 | diff 121/132 无回归 · py 355/2/10/0 | ✅ 完成 |
 | 469 | cleanup | **状态补录两处**（roadmap2 登记 8/9）：refactor.md G.5d ②(b) 刷新（399 已交付"无声明半"，剩两形指 backlog #33）+ 轴 A 表补前端死代码四件套与 memory 孤儿文件两行 | 纯文档 | ✅ 完成 |
+| 469b | cleanup | **合并前全量门禁**（462–469 八个批次的保险，分支自跑）：official 194/194（191 link）· python_style **355/2/10/0**（四条新 known-fail 钉子全数入读）· 语料 40/40 · jit **179 ok**/0 segv（t50x 三例进 sweep 且通过）· diff 121/132 91.7% 无回归 · 断言族全 0 违规。**全量 rc=0，cleanup 分支可安全合并** | 全绿 | ✅ 门禁入册 |
 | （续） | | | | |
 
 ## 6. 旁路侧启动清单（一次性 / 每会话）
