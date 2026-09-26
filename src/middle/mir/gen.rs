@@ -13106,8 +13106,15 @@ call, no NULL-handle dereference).",
                 }
 
                 // PY-A: `std::quantum::*::new` — V1 placeholder platform objects
-                if path.len() >= 2 && path[0] == "std" && path[1] == "quantum"
-                    && method == "new" && args.len() <= 2
+                // (batch 446: the gate asks whether a `quantum` MODULE segment is
+                // in the path, not who spelled its prefix. `path[0] == "std"`
+                // accepted only `std::quantum::Circuit::new(2)` and left the
+                // `import std::quantum;` + `quantum::Circuit::new(2)` spelling
+                // (1 census line) reading the ghost 0. The last segment is the
+                // class, so `quantum` must sit before it — `quantum::new()` keeps
+                // its old answer.)
+                if path.len() >= 2 && method == "new" && args.len() <= 2
+                    && path[..path.len() - 1].iter().any(|s| s == "quantum")
                 {
                     let n_id = if args.is_empty() {
                         let z = self.next_id();
@@ -13127,13 +13134,16 @@ call, no NULL-handle dereference).",
                     self.type_map.insert(id, Type::I64);
                     return id;
                 }
-                // `std::quantum::QubitState::one/zero` etc.
-                if path.len() >= 2 && path[0] == "std" && path[1] == "quantum"
+                // `std::quantum::QubitState::one/zero` etc. (batch 446: same
+                // module-segment gate as the route above, so the `quantum::`
+                // spelling after `import std::quantum;` binds too.)
+                if path.len() >= 2
                     && matches!(
                         method.as_str(),
                         "one" | "zero" | "plus" | "minus" | "conj" | "norm" | "abs"
                     )
                     && args.len() <= 1
+                    && path[..path.len() - 1].iter().any(|s| s == "quantum")
                 {
                     let z = self.next_id();
                     self.exprs.insert(z, MirExpr::IntLit(1));
@@ -13229,6 +13239,26 @@ call, no NULL-handle dereference).",
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, ret_ty);
+                    return id;
+                }
+
+                // BATCH-446: `HashMap::new()` is an EMPTY MAP, not a ghost. The
+                // table route above still wins when the project really defines a
+                // `HashMap`; when nothing does, every consumer read slot 0 —
+                // `zeta_src/runtime/actor/map.z:17` (`inner: HashMap::new()`) and
+                // `tests/stdlib-foundation/collections_test.z:40` among the 5 census
+                // lines in 443's §五 list. `map_new` is a DEFINED C host
+                // (`runtime/tokio_runtime_stub.c:213`, unlike `fs_read_to_string`
+                // which only exists Rust-side and fails to link — measured this
+                // batch), and `MirStmt::MapNew` is the statement the dict literal at
+                // :5540 and `dict(m)` at :8456 already emit, so the handle and the
+                // `map` tag match the shape `map_insert` / `len` / `[]` expect.
+                if args.is_empty() && path.last().map(|s| s.as_str()) == Some("HashMap")
+                {
+                    self.stmts.push(MirStmt::MapNew { dest: id });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::Named("map".to_string(), vec![]));
                     return id;
                 }
 

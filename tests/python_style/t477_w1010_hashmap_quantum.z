@@ -1,0 +1,37 @@
+// 批次 446（3.2 Lowering／#182 W1010 族逐名裁决）：两条**宿主早已存在、只是路由问错
+// 对象**的成员。443 给这一族出了声（W1010）却没让它对，本批按名字逐条接：
+//
+// ① `HashMap::new()` —— 名表（`func_ret_types`）里没有 `HashMap` 这个类别时整条
+//    `AstNode::PathCall` 臂走完不发语句，槽读 0；于是 `m[1] = 7` 写进 0 号句柄、
+//    `len(m)` 与回读都是 0 —— 静默错值（普查 5 行，含 `zeta_src/runtime/actor/map.z:17`
+//    的字段位与 `tests/stdlib-foundation/collections_test.z:40`）。
+//    宿主是真有的：`map_new` 定义在 `runtime/tokio_runtime_stub.c:213`，而
+//    `MirStmt::MapNew` 正是 dict 字面量（`gen.rs:5540`）与 `dict(m)`（`gen.rs:8456`）
+//    已经在发的语句 —— 接线即可，句柄形状与 `map` 类型标记都跟着既有约定。
+//    路由放在名表查询**之后**：项目自己定义了 `HashMap` 时，真定义仍然优先。
+//
+// ② `quantum::` 的短写 —— 同一条路由的判据写的是 `path[0] == "std"`，于是
+//    `std::quantum::Circuit::new(2)` 绑到 `zeta_qc_new`，而 `import std::quantum;`
+//    之后的短写读 0。两条拼写必须给同一个答案，故判据改成问"路径里有没有一个
+//    `quantum` 模块段"（末段是类别名，所以 `quantum` 必须在它之前 —— `quantum::new()`
+//    维持原答案）。这里用 `QubitState::one()` 做判据：它发往
+//    `zeta_qc_is_normalized`（`runtime/py_additions.c:2638`，恒返回 1），是个确定值；
+//    `Circuit::new` 那条返回的是堆句柄地址，同一颗二进制两次跑就变，钉不进 `// expect:`
+//    （它的位移在普查里计数：仓内 65 → 59 行，`quantum::Circuit::new()` 少 1 行）。
+//
+// 改前实拍（`target/release/zetac.pre446`，与改后那颗同目录，走 run_one.sh）：判定 FAIL，
+// 两条 W1010（`HashMap::new()`、`quantum::QubitState::one()`）都在，stdout 是 `len=0` /
+// `get=0` / `norm=0`。改后：PASS，无 W1010，下面三行逐字相符。
+import std::quantum
+fn main() {
+    let mut m: HashMap<i64, i64> = HashMap::new()
+    m[1] = 7
+    println!("len={}", len(m))
+    println!("get={}", m[1])
+    let n = quantum::QubitState::one()
+    println!("norm={}", n)
+}
+
+// expect: len=1
+// expect: get=7
+// expect: norm=1

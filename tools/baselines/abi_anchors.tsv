@@ -213,12 +213,12 @@ src/middle/mir/gen.rs	11768	// Whether the `_<argc>` disambiguation suffix was a
 src/middle/mir/gen.rs	11781	format!("{}_{}", func, arg_ids.len())
 src/middle/mir/gen.rs	12343	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
 src/middle/mir/gen.rs	12604	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
-src/middle/mir/gen.rs	13289	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
-src/middle/mir/gen.rs	13293	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
-src/middle/mir/gen.rs	13390	format!("{}_{}", func_name, arg_ids.len())
-src/middle/mir/gen.rs	14036	func: "zeta_dyn_getitem".to_string(),
-src/middle/mir/gen.rs	14064	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
-src/middle/mir/gen.rs	14682	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
+src/middle/mir/gen.rs	13319	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
+src/middle/mir/gen.rs	13323	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
+src/middle/mir/gen.rs	13420	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	14066	func: "zeta_dyn_getitem".to_string(),
+src/middle/mir/gen.rs	14094	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
+src/middle/mir/gen.rs	14712	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");
 src/middle/pylib.rs	842	/// `declare_registry_runtime_fns` emits after task D.
 src/middle/pylib.rs	963	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");
