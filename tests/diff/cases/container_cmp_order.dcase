@@ -1,0 +1,18 @@
+# @cat: container
+# @note: 容器比较族——list/tuple 的 < <= 错（句柄比较）、dict == 错；> 与 list == 对（批次 500 扩展定性）
+#@@ python
+print([1, 2] < [1, 3])
+print((1, 2) < (1, 3))
+print((1, 2) == (1, 3))
+d1 = {"a": 1}
+d2 = {"a": 1}
+print(d1 == d2)
+print([3] > [1, 9])
+#@@ zeta
+print([1, 2] < [1, 3])
+print((1, 2) < (1, 3))
+print((1, 2) == (1, 3))
+d1 = {"a": 1}
+d2 = {"a": 1}
+print(d1 == d2)
+print([3] > [1, 9])

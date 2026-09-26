@@ -79,6 +79,20 @@ print(4.0)          # CPython 4.0                   zeta 4.000000
 - 位置：py_format 浮点默认 `%.6f`——CPython 用最短往返 repr。修法 = 换 repr 算法（如 Grisu/Ryu 的 C 实现）或接受偏差并文档化。
 - 闸门：`numeric_float_add/promote/mod_float`。
 
+## ⑩ 容器比较族（批次 500 定性，5 例闸门）
+
+```python
+print([1, 2] < [1, 3])    # CPython True     zeta False
+print((1, 2) < (1, 3))    # CPython True     zeta False
+print((1, 2) == (1, 3))   # CPython False    zeta False ✓
+d1 = {"a": 1}; d2 = {"a": 1}
+print(d1 == d2)           # CPython True     zeta False
+print([3] > [1, 9])       # CPython True     zeta True ✓
+```
+- 形状边界：list/tuple 的 `<`/`<=` 错（疑似句柄比较）、dict 的 `==` 错；`>` 与 list `==` 对——不对称。
+- 疑似位置：gen.rs 比较分派对容器操作数缺元素级字典序路径（py_list_cmp shim 缺或未接）。
+- 闸门：`container_cmp_order` + `list_cmp_order`。
+
 ## ⑨ str.find 两参形式缺 shim（1 例 compile 闸门，#188 余半）
 
 ```python
