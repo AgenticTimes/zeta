@@ -47,9 +47,9 @@
 | 2 | `f64` | **IEEE-754 位模式**，不是裸整数 | ① 静态 `double` 槽：`Assign` 时 int 值走 `slot_sitofp`（codegen.rs:3761-3786）；② struct 字段是 64 位槽：存前 bitcast（codegen.rs:7173） | 从**裸容器字**读回必须是 `bitcast`，不能 `sitofp`（`slot_or_sitofp` codegen.rs:1941-1956，判据 `slot_read_ids` 60 / 1593） | 批次 298：裸存 → 读回 4.94e-322；批次 299：缺 `sitofp` → `500.0 + 50` 算成 `4.6e18`（5782 记录） |
 | 3 | `bool` | **i64 的 0/1** | 比较结果立刻 `zext i1→i64`（`eq_ext`/`ne_ext`/…，codegen.rs:4245-4253） | 一律 `!= 0` | `Type::Bool → bool_type`（7388）只在 ABI 边界（参数/返回签名）出现；**i1 从不进槽** |
 | 4 | `str`（指针形） | `.rodata` 或 GC 块首地址，`ptrtoint` 成 i64 | `MirExpr::StringLit`：私有 global 字节数组 + `ptrtoint`（codegen.rs:6663-6682） | 可直接解引用；`GC_base(h) != 0` ⇒ 堆串 | 与 #5 不可静态区分 ⇒ 见 R3 |
-| 5 | `str`（packed 形） | 短 ASCII **按字节小端打进这 8 个字节本身**（实测样本 `"43601853"` = `0x3335383130363334`） | `vec<str>` 的元素槽（批次 291 实测；写侧仍是隐式决定，见附 B OPEN） | **必须先判形再解引用**；唯一的判形点在 `map_str_key`（py_additions.c:105-129）：`GC_base` 命中→按内容 FNV 哈希；否则 `u < 2^32 \|\| u >= 2^48`→判为 packed、原样当不透明键；再否则 `vm_read_overwrite` 探一页可读性 | 把 packed 当 `char*` 传给 `str_trim` → 约 25% 概率 SEGV（批次 297）；packed 之间比较走 `zt_packed_cstr_eq`（:1609） |
-| 6 | `vec` 句柄 | 指向**数据**；`[cap \| len]` 头在 `base-16`；块 ≥ `16+cap*8` | `zeta_collect_vec_n` / `str_split` / df 列构造器（多数按元素数申请，故 cap 常 < 8） | `zt_dyn_vec_hdr`（py_additions.c:3515-3537）：`cap∈[1,2^28]`、`len ≤ cap`、块够大；**短 vec（cap<8）还必须是"紧块"** —— GC 向上取整的余量恰为 8 或 16，`have > need+16` 即判否 | 批次 301：`cap >= 8` 曾是唯一判据 ⇒ 1..7 元素列表被拒，`len()` 退化成对数据字做 `strnlen`（实测 3 元素报 0；1/4/8 报 5/0/8） |
-| 7 | `map` 句柄 | **块首**；`w[0]=cap`（2 的幂、≥16、≤2^28）、`w[1]=used ≤ cap`；块 ≥ `16+cap*24`；`cap < 0` ⇒ growth forwarder（真表在 `w[1]`） | `MapNew` / `DictInsert` | `zt_dyn_is_map`（py_additions.c:3503-3513）+ `GC_size` 兜底；**批次 423 起** `map_resolve` 出口另有一道粗判形（`zt_map_cap_ok`＝2 的幂 ∧ `cap∈[16,2^30]`；上界比本行写的 2^28 故意松一档 ⇒ 宁放行也不误伤既有真表，收紧要与 #6 的 vec 判形一并裁），不合格即 `zt_map_not_a_map` 点名 + `zeta_raise(1)`，**不再解引用** | 与 #8 撞车：map 把 PyJson 的 tag 当容量（见 #8）；423 语料实拍：`py_map_items` 收到的"句柄"是**交易日日期整数** 37 次、`map_get` 收到的是浮点文本字符串 |
+| 5 | `str`（packed 形） | 短 ASCII **按字节小端打进这 8 个字节本身**（实测样本 `"43601853"` = `0x3335383130363334`） | `vec<str>` 的元素槽（批次 291 实测；写侧仍是隐式决定，见附 B OPEN） | **必须先判形再解引用**；唯一的判形点在 `map_str_key`（py_additions.c:105-129）：`GC_base` 命中→按内容 FNV 哈希；否则 `u < 2^32 \|\| u >= 2^48`→判为 packed、原样当不透明键；再否则 `vm_read_overwrite` 探一页可读性 | 把 packed 当 `char*` 传给 `str_trim` → 约 25% 概率 SEGV（批次 297）；packed 之间比较走 `zt_packed_cstr_eq`（:1633） |
+| 6 | `vec` 句柄 | 指向**数据**；`[cap \| len]` 头在 `base-16`；块 ≥ `16+cap*8` | `zeta_collect_vec_n` / `str_split` / df 列构造器（多数按元素数申请，故 cap 常 < 8） | `zt_dyn_vec_hdr`（py_additions.c:3539-3561）：`cap∈[1,2^28]`、`len ≤ cap`、块够大；**短 vec（cap<8）还必须是"紧块"** —— GC 向上取整的余量恰为 8 或 16，`have > need+16` 即判否 | 批次 301：`cap >= 8` 曾是唯一判据 ⇒ 1..7 元素列表被拒，`len()` 退化成对数据字做 `strnlen`（实测 3 元素报 0；1/4/8 报 5/0/8） |
+| 7 | `map` 句柄 | **块首**；`w[0]=cap`（2 的幂、≥16、≤2^28）、`w[1]=used ≤ cap`；块 ≥ `16+cap*24`；`cap < 0` ⇒ growth forwarder（真表在 `w[1]`） | `MapNew` / `DictInsert` | `zt_dyn_is_map`（py_additions.c:3527-3537）+ `GC_size` 兜底；**批次 423 起** `map_resolve` 出口另有一道粗判形（`zt_map_cap_ok`＝2 的幂 ∧ `cap∈[16,2^30]`；上界比本行写的 2^28 故意松一档 ⇒ 宁放行也不误伤既有真表，收紧要与 #6 的 vec 判形一并裁），不合格即 `zt_map_not_a_map` 点名 + `zeta_raise(1)`，**不再解引用** | 与 #8 撞车：map 把 PyJson 的 tag 当容量（见 #8）；423 语料实拍：`py_map_items` 收到的"句柄"是**交易日日期整数** 37 次、`map_get` 收到的是浮点文本字符串 |
 | 8 | `PyJson` | 16 字节 `[tag, payload]` **单元指针**；tag = `ZJ_NULL 0 / INT 1 / F64 2 / STR 3 / ARR 4 / OBJ 5 / BOOL 6`（tokio_runtime_stub.c:2550-2556，构造 `zj_make` :2785） | `json.loads` 一族 | 访问器按运行时 tag 分派（sum type；**不是**外层程序的动态分发） | `-> dict` 注解把 Json 当 map ⇒ 首字（tag ≤ 6）被当容量，`idx = hash & (cap-1)` 死循环（tokio_runtime_stub.c:227-233 记录；现行以"map 首字 ≥16、Json 首字 1..8"作值域区分并响亮报告） |
 | 9 | 用户 `struct` | GC 句柄，字段各占一个 64 位槽 | `StructNew`（#2②） | 字段读 = 槽偏移 + 按字段静态类型还原（f64 见 #2） | 批次 300：未标注返回类型退化成 unit ⇒ 字段读成"空 variant 的第 0 字段"，**每个属性读都静默拿垃圾** |
 | 10 | `PyDynamic`（预留） | boxed tag cell | — | — | B/T3 落地时更新本行。当前 dyn 值就是 #4–#8 那些**无标签字** —— 这正是 #6/#7 必须做几何判形的根本原因 |
@@ -76,9 +76,9 @@
 新增 str 消费点要么经它，要么自己按同一套三段判形做，**不得假设可解引用**。
 
 **R4 句柄与裸整数在槽里不可静态区分 ⇒ 判形只能靠几何不变量。**
-锚点 py_additions.c:3503-3537（#6/#7 的全部常量）。
+锚点 py_additions.c:3527-3561（#6/#7 的全部常量）。
 推论（合同级）：**任何 GC 块布局或对齐的改动都是在改本章**；`len()` 一类必须把
-"当文本读"放在最后（`zeta_dyn_len` py_additions.c:3538-3550 的注释即为此）。
+"当文本读"放在最后（`zeta_dyn_len` py_additions.c:3562-3574 的注释即为此）。
 
 **R5 bool 恒以 i64 的 0/1 参与槽操作。**
 锚点 codegen.rs:4245-4253。容器真值另有一套按长度的判定（批次 297），
@@ -273,8 +273,8 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 > 锚点源码：runtime/py_additions.c
 **C5 registry 生成的 extern 里句柄/串/容器参数一律声明为 `i64`**，只有真收
 `double` 的才写 `f64`（@generated 产物 runtime_decls_registry.rs:18-24 起，
-源头 pylib/registry.txt；C 侧对应 `int64_t`，例 py_additions.c:1791-1825 的
-`py_argparse_*`、:2656 的 `zeta_env_get`）。
+源头 pylib/registry.txt；C 侧对应 `int64_t`，例 py_additions.c:1815-1849 的
+`py_argparse_*`、:2680 的 `zeta_env_get`）。
 ⇒ **打包/拆包责任**：调用方只保证"把值塞进一个 i64"，**类型解释全在被调方**。
 每个 `W`/`F` 条目实际假设哪种表示（§1 的哪一行）由 §6（G.5c）逐条登记成表。
 
@@ -297,7 +297,7 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 (i64)"）。
 
 **C9 `zeta_call<argc>(fptr, a…)` 逐 arity 一个跳板（0..4）**：`zeta_call1` 声明
-codegen.rs:1117，定义 py_additions.c:3414；`zeta_call0/2/3/4` 声明
+codegen.rs:1117，定义 py_additions.c:3438；`zeta_call0/2/3/4` 声明
 codegen.rs:1122-1125，定义 tokio_runtime_stub.c:3880/3850/3856/3862。五者同一形状：
 把 `fptr` 强转成 `int64_t(*)(i64 × argc)`，实参与返回值一律 i64，**NULL → 返回 0**。
 分派守卫 gen.rs:11475-11499：`receiver.is_none()` 且 `arg_ids.len() <= 4` 且名字不是
@@ -306,7 +306,7 @@ codegen.rs:1122-1125，定义 tokio_runtime_stub.c:3880/3850/3856/3862。五者�
 函数不能把动态实参表转发给任意函数指针，所以只能逐 arity 各写一个。
 返回值恒为 I64：被跳板调的那一方若声明返回字符串/浮点，调用方拿到位模式（G.5d 收敛项）。
 姊妹跳板 `zeta_call_fn_arg(i64,i64)`
-（py_additions.c:3186；registry.txt:511 登记签名）对 NULL 是 **abort** —— 同一件事两种
+（py_additions.c:3210；registry.txt:511 登记签名）对 NULL 是 **abort** —— 同一件事两种
 失败方式，属 G.5d 收敛项。JIT（无 -o）绑定不了这族：`pylib/jit_mappings.txt` 里 `call`
 0 命中，实测 `error[E4016]: 'zeta_call0' has no binding in JIT mode`（`zeta_call1` 同）。
 
@@ -316,7 +316,7 @@ Resolver 收集 `param_defaults`（resolver.rs:622-646，kind 不匹配时 :636-
 > 锚点源码：src/middle/mir/gen.rs
 gen.rs `fill` 按**声明顺序**落槽：位置实参（:9278-9284）→ 关键字（:9285-9290）→
 `**` 映射填未绑定槽（:9291-9303）→ 默认值（:9304-9313）。
-C 侧 `zeta_param_default` 是**恒等 no-op**（py_additions.c:2672），存在只为让标记不成未定义符号。
+C 侧 `zeta_param_default` 是**恒等 no-op**（py_additions.c:2696），存在只为让标记不成未定义符号。
 > 锚点源码：src/middle/mir/gen.rs
 现状记录（不是愿望）：**重复绑定静默后者覆盖**（:9287 `slots[i] = Some(v)` 无检查）、
 **未知关键字变成多余位置实参**（:9288 `slots.push`）→ 再由 §3.2#10 静默裁掉；
@@ -334,7 +334,7 @@ Python 会抛 `TypeError` 的两件事，zeta 现在都不说话 ⇒ §3.2#9/#10
 （`W PyArgParser parse_args py_argparse_parse args=1 ret_handle=PyArgNS`）、
 MIR 打类型 `Type::Named("PyArgNS")`（gen.rs:6498-6510）、消费端按字段访问分派到
 `py_argparse_get_{i64,f64,bool,str}`（gen.rs:12604-12637）。
-生命周期：GC 堆、进程级、无人释放（py_additions.c:1791-1825，值经 `GC_strdup` :1803）。
+生命周期：GC 堆、进程级、无人释放（py_additions.c:1815-1849，值经 `GC_strdup` :1827）。
 
 ### 3.5 实测核对（G.5b 验收）
 
@@ -474,7 +474,7 @@ HashMap 迭代顺序随机 ⇒ `print.N` 冲突改名和运行期别名表"从�
 （types/mod.rs:768）；分派侧用 `::` 形（pylib.rs:963
 `dispatched_member("[dynamic]str::isin")`），落到 MIR 时是 `__` 形
 （gen.rs:10000 `func: "[dynamic]str__map"`）；C 侧的实现叫 `zt_dyn_str_map`，
-靠 `__asm__("_\\[dynamic\\]str__map")` 顶这个名字（py_additions.c:967）。
+靠 `__asm__("_\\[dynamic\\]str__map")` 顶这个名字（py_additions.c:991）。
 ⇒ **每个动态方法都要人肉注册一个魔法名**（refactor.md 的"承重墙清单"第 130 行已把它列为承重墙；
 该文件是仓库根的活文档、未入库，因此不进锚点核对），
 且已经有只造了名、没注册实现的变体（gen.rs:9896、:9915、:9934、:9953、:10013、:14094 注释里的
@@ -492,7 +492,7 @@ docs/ARCHITECTURE-REVIEW-2026-09.md:103 记的是"四份符号表手工同步"�
 | ① LLVM 声明 | **仍是手写**：codegen.rs 内 255 处 `add_function`（实测计数） | 例 codegen.rs:1117、:1127、:1136 |
 | ①′ 生成物 | `runtime_decls_registry.rs`（294 处 `add_function`）+ `runtime_decls_core.rs`（61 处）由 `--emit`/`--emit-core` 生成，**两个入口函数从未被调用** | codegen/mod.rs:7、:9 只声明模块；`declare_registry_runtime_fns`/`declare_core_runtime_fns` callers **图内无边**（codegraph）+ grep 全仓仅定义处与一处注释（pylib.rs:842） |
 | ② gen.rs 分发 | 手工 | 例 gen.rs:10000、:10252 |
-| ③ C 实现 | 手工 | 例 py_additions.c:967、:3414 |
+| ③ C 实现 | 手工 | 例 py_additions.c:991、:3438 |
 | ④ `.set` 别名 | 已生成（数据 pylib/runtime_aliases.txt:1 的注释自述"Generated/**edited by hand**"，即"生成物同时被人手改"） | aliases.inc.c:1-2 |
 | ⑤ JIT 绑定表 | 已生成**且已接线**（批次 315 用的就是它） | jit_mappings_gen.rs + jit.rs |
 
@@ -515,10 +515,10 @@ C 侧有定义且**响亮失败**
 | 探针 / 判形点 | 它假设的表示 | 表中行 |
 |---|---|---|
 | `map_str_key`（py_additions.c:105） | str ∈ {指针, packed}，且 packed 不可解引用 | #4 #5 |
-| `zt_dyn_is_map`（:3503） | map = 块首 + 2 的幂容量 + `16+cap*24` 块 + growth forwarder | #7 |
-| `zt_dyn_vec_hdr`（:3515） | vec = 数据指针 + `base-16` 头 + 紧块判据 | #6 |
-| `zt_packed_cstr_eq`（:1609） | packed 的小端字节序 | #5 |
-| `zeta_dyn_len`（:3538） | map → vec → 文本 的读序（无标签字的最后手段） | #6 #7 #4 |
+| `zt_dyn_is_map`（:3527） | map = 块首 + 2 的幂容量 + `16+cap*24` 块 + growth forwarder | #7 |
+| `zt_dyn_vec_hdr`（:3539） | vec = 数据指针 + `base-16` 头 + 紧块判据 | #6 |
+| `zt_packed_cstr_eq`（:1633） | packed 的小端字节序 | #5 |
+| `zeta_dyn_len`（:3562） | map → vec → 文本 的读序（无标签字的最后手段） | #6 #7 #4 |
 | `zj_make` / `ZJ_*`（tokio_runtime_stub.c:2785、:2550） | 16 字节 `[tag,payload]` 单元 | #8 |
 | `ZT_PROBE_LOC` 系列以 `%lld` 打句柄 | 句柄就是可原样搬运的 i64 字 | #4 #6 #7 |
 
@@ -532,8 +532,8 @@ C 侧有定义且**响亮失败**
 
 **L1 唯一可信的边界是 GC 块本身。**
 两个原语：`GC_base(p) == p` 读作"p 是某个块的起点"，`GC_size(p)` 读作"该块的可用字节数"
-（py_additions.c:3505、:3522）。**GC 会把申请量向上取整**，实测余量恰为 8 或 16
-（:3525-3527，cap 1..20 逐个量过）。
+（py_additions.c:3529、:3546）。**GC 会把申请量向上取整**，实测余量恰为 8 或 16
+（:3549-3551，cap 1..20 逐个量过）。
 ⇒ 合同：**任何"块应该多大"的判据必须写成 `size >= need` 或
 `size - need ∈ {8,16}` 这种带余量的形式，不得写等号。**
 
@@ -576,7 +576,7 @@ struct 是 GC 块、字段各占一个 64 位槽，读侧用**非 packed** 的
 元组复用 L2 的 `[cap|len|elems…]`（:6630-6690）。
 
 **L6 packed 短串：ASCII ≤7 字节按字节小端打进这 8 个字节本身，余下为 NUL。**
-`if (n > 7) return 0;` + 逐字节比 `&packed`（py_additions.c:1611-1612）；
+`if (n > 7) return 0;` + 逐字节比 `&packed`（py_additions.c:1635-1636）；
 两形不可区分时先分形再 `strcmp`（:1617）；排序按字节逐个归一，可打印区间
 `0x20..0x7f`（`u >> (8*i)`，:1633-1634）。
 
@@ -596,7 +596,7 @@ struct 是 GC 块、字段各占一个 64 位槽，读侧用**非 packed** 的
 
 **L9 同尺寸≠同含义：24 字节块有两种互不相干的用途。**
 argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | default]`
-（py_additions.c:1766，读回成三个 `char*`：:1795；解析器本体又是一个 cap=8 的 L2 vec：
+（py_additions.c:1790，读回成三个 `char*`：:1819；解析器本体又是一个 cap=8 的 L2 vec：
 :1751），而 L3 的桶也是 24 字节。
 ⇒ 合同推论：**尺寸不是判形依据**；判形只认 L1-L3 的字内容 + 块大小关系。
 新增小对象时不要指望"这个尺寸没人用"。
@@ -652,7 +652,7 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
 |---|---|---|---|
 | `zeta_dynarray_new` | :2578 | 字面量 cap（真整数）—— ⚠️ 它内部 `if (cap < 8) cap = 8`（:2579），**所以字面量建出的 vec 永远 ≥8**，掩盖了下一行的判据缺陷 | 注册在 `pylib/runtime_core.txt:36`（`args=i64 ret=i64`） |
 | `zeta_dyn_getitem` | :3427 | `base` 是 **L2 数据指针**或 **L3 map 句柄**；`key` 是索引，**负数按 `+len` 回卷**（:3433）；其 vec 判据写作 `cap >= 8`（:3432）⚠️ **与 L2 的 `cap >= 1`（:3474）不一致，且本批实测这是一个可观测的死循环**（`[1,2]+[3,4,5]` 的 cap=5 走不进 vec 臂 ⇒ 落到 `map_get` 的开放寻址环，`&(cap-1)` 在 cap=5 上不是掩码 ⇒ 永不停止；详见附 B#7） | gen.rs:14066；**手写**声明 codegen.rs:1127（2 参） |
-| `zeta_dyn_len` | :3492 | 句柄**或**文本指针，**无标签**；读序 map→vec→文本（R4） | gen.rs:7570 |
+| `zeta_dyn_len` | :3562 | 句柄**或**文本指针，**无标签**；读序 map→vec→文本（R4） | gen.rs:7570 |
 | `zeta_dyn_contains` | :3510 | 4 元：容器 + 原键 + **map 归一键**（`map_str_key` 之值）+ `key_is_str` 选内容相等（:3506 原文） | gen.rs:10252 |
 | `zeta_dyn_truth` | :3534 | map→已用槽数、vec→头长度、文本→首字节（:3529 原文）；文本分支先过 L7 的地址闸门（:3539） | gen.rs:4486 |
 
@@ -677,8 +677,8 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
 |---|---|---|
 | **Rust 侧全部布尔旋钮**（批次 336） | diagnostics.rs:515 `env_flag`，27 个读点收敛于此后 | 值为 `0` / `false` / `no` / `off` / 空 ⇒ **关**；其余非空值 ⇒ 开；未设置 ⇒ 关。此前 27 点全是 `env::var(… ).is_ok()`＝**存在即开**，写 `=0` 得到的是"开" |
 | `ZETA_STRICT_ABI` / `--strict-abi` | codegen.rs:1392 读入 → 字段 `strict_abi`，6976-6981 用 | §3.2 的 `abi_note` 从告警变致命（CLI 侧 main.rs:642） |
-| `ZETA_LENIENT_STUBS` | py_additions.c:3313（`py_stub_abort` 内） | 桩从 abort 退化成返回 0 |
-| `ZETA_STRICT_STUBS` | py_additions.c:3320 | ⚠️ **假旋钮**：`(void)getenv(…)`，注释自述 "env is documentary"——读了但什么都不改变 |
+| `ZETA_LENIENT_STUBS` | py_additions.c:3337（`py_stub_abort` 内） | 桩从 abort 退化成返回 0 |
+| `ZETA_STRICT_STUBS` | py_additions.c:3344 | ⚠️ **假旋钮**：`(void)getenv(…)`，注释自述 "env is documentary"——读了但什么都不改变 |
 | `ZETA_NO_OPT` | jit.rs `optimize_module` | 跳过 -O3 管线（仅诊断用） |
 | `ZETA_JIT_MIN_OK` / `ZETA_JIT_TIMEOUT` | tools/jit_sweep.sh | JIT 门禁的跑通数下限 / 单程序超时 |
 
@@ -686,8 +686,8 @@ argparse 的每条实参是裸三元组 `GC_malloc(24)` = `[dest | flag | defaul
 开关"，下一个人设 `=1` 期望严格化时会被静默骗过（登记附 B#6）。
 
 **收敛半径的边界（批次 336 实测）**：`env_flag` 只管得到 Rust 侧。C 运行时仍有 4 个
-`getenv` 站点——py_additions.c:2943（`ZETA_PROBE`）、py_additions.c:3313 与
-unavailable_stubs.c:110（`ZETA_LENIENT_STUBS`）、py_additions.c:3320（假旋钮）——它们仍是
+`getenv` 站点——py_additions.c:2967（`ZETA_PROBE`）、py_additions.c:3337 与
+unavailable_stubs.c:110（`ZETA_LENIENT_STUBS`）、py_additions.c:3344（假旋钮）——它们仍是
 "非空即开"。⇒ 同一个 `ZETA_LENIENT_STUBS=0` 在 Rust 侧读作关、在 C 侧读作开；两侧语义
 不一致这件事本身比单个错值更坏，修法是在 runtime 侧加一个与 `env_flag` 同表意的
 `zt_env_flag()`（或公共头），而不是在文档里写"注意 C 侧不一样"。已登记为 OPEN。
@@ -750,10 +750,10 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
 | 探针 / 判形点 | 它假设的表示 | 表中行 |
 |---|---|---|
 | `map_str_key`（py_additions.c:105） | str ∈ {指针, packed}，且 packed 不可解引用 | #4 #5 |
-| `zt_dyn_is_map`（:3503） | map = 块首 + 2 的幂容量 + `16+cap*24` 块 + growth forwarder | #7 |
-| `zt_dyn_vec_hdr`（:3515） | vec = 数据指针 + `base-16` 头 + 紧块判据 | #6 |
+| `zt_dyn_is_map`（:3527） | map = 块首 + 2 的幂容量 + `16+cap*24` 块 + growth forwarder | #7 |
+| `zt_dyn_vec_hdr`（:3539） | vec = 数据指针 + `base-16` 头 + 紧块判据 | #6 |
 | `zt_packed_cstr_eq`（:1603） | packed 的小端字节序 | #5 |
-| `zeta_dyn_len`（:3538） | map → vec → 文本 的读序（无标签字的最后手段） | #6 #7 #4 |
+| `zeta_dyn_len`（:3562） | map → vec → 文本 的读序（无标签字的最后手段） | #6 #7 #4 |
 | `zj_make` / `ZJ_*`（tokio_runtime_stub.c:2785、:2550） | 16 字节 `[tag,payload]` 单元 | #8 |
 | `ZT_PROBE_LOC` 系列以 `%lld` 打句柄 | 句柄就是可原样搬运的 i64 字 | #4 #6 #7 |
 
@@ -799,7 +799,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
    **裸方法名**，而裸方法名在整个模块里是共享命名空间——命中哪个定义取决于
    谁先被声明。这与任务 #9 记的是同一类缺陷在两侧的投影（#9 记 resolver 侧的
    `py_member_aliases` 全局裸名表；本条记 codegen 侧的读回退）。**同根，不另立任务。**
-6. **假旋钮**：`ZETA_STRICT_STUBS`（py_additions.c:3320 附近）只有注释，
+6. **假旋钮**：`ZETA_STRICT_STUBS`（py_additions.c:3344 附近）只有注释，
    C 侧对该 env 的调用形如 `(void)getenv(...)`，**读了但什么都不改变**
    （对比 `ZETA_LENIENT_STUBS` :3307 确实改变 `py_stub_abort` 行为）。
    ⇒ 它出现在 §6.6 的表里是因为**下一个人会去设它**：设 `=1` 期望桩变严格，
