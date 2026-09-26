@@ -1,0 +1,7 @@
+// known-fail: 逻辑链中比较结果的 Bool 性丢失（随机普查 472 实证，#117 近亲）——
+// `1 and 2 == 3` CPython 打 False（bool），zeta 的 and/or 结果类型采纳
+// 比较的 i64 位型 ⇒ 打 0。gen_numeric_s20260926_008 同根。
+print(1 and 2 == 3)
+print(0 or 5 == 5)
+// expect: False
+// expect: True
