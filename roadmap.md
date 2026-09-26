@@ -21237,6 +21237,87 @@ git log cleanup -S'| 450 | bootstrap |' -- worktree.md → 89a5df8a
 
 ⇒ 本批把这条从"崩"变成"能跑但值错"，而错的那一格正是 **#194 余项**（1 字符键在 map 里不按内容 dedup：`len(counts)` 本仓 **5** vs CPython **3**；第二行 `top()` 两侧与真值相同＝`a`）。差分面上这是**状态推进、不是转绿**，故 `match` 计数不因本批变动。
 
+## 批次 453（5.4 标准库与原语／PY-A 格式族）：`zt_parse_spec` 认出 sign 旗标就把它跳过、b/o/x 三条臂按 C 的 two's-complement 打负数 ⇒ f-string 的 `+`/`-`/`' '` 与负数进制两处静默错值一次收
+
+代码提交 **`2ad57f36`**（`fix(runtime)`，5 文件 **+72/−19**：`runtime/py_additions.c` +37/−13（净 **+24** 行）、`t486_fmt_sign_matrix.z` 新 29 行、`t508_fmt_sign_flag.z` 4/4、`t509_fmt_negative_binary.z` 2/2、`zeta_runtime_c.o` 重编 `260ce015…`→**`27dd319f9c7030da8b11703a853e3ff9`**（98,368→98,760 B））。基面分两颗：**`be93dedf`**（差分基线 17/17）、**`1e6e1e62`**（锚点 `docs/ABI.md` 30/30 ＋ `abi_anchors.tsv` 23/24）。pyramid 层＝**5.4 标准库与原语**（"语言承诺的内置能力——内建类型、内建函数"）里 PY-A 格式族那一格；`target/release/zetac` md5 仍为 `af087b05e2db85998a176a5d9c868199`（自 451 未动）⇒ **零 `.rs` 改动、无需重编**。
+
+### 一、根因（两处，同一条链上）
+
+| 跳 | 结论 | 证据（本批当场跑） |
+|---|---|---|
+| ① | 规格解析器**认出**符号旗标却不存：`zt_parse_spec` 里 `if (*p == '+' \|\| *p == '-' \|\| *p == ' ') p++;` —— 跳过＝丢弃 | `runtime/py_additions.c:525`（改前）；改后 `f->sign = *p; p++;`（`:526`），`zt_fmt_t` 新增 `char sign`（`:508`） |
+| ② | 非十进制三臂把 `int64_t` 直接 `(unsigned long long)` 强转 ⇒ 负数按 64 位回绕打全宽串 | 改前 `{n:b}`（n=−42）打 `111…11010110`（**64 字符、61 个 1**，`int(s,2)-2**64 == -42`）——**不是截断，是补码**；CPython 同规格打 `-101010` |
+| ③ | 两半合成一句话：**这条路径从没有"符号 + 量值"的概念**，只有 C 的"按位打" | 11 规格探针（`/tmp/b453/f1.z`）改前 **11 行全部与 CPython 不符**（`diff` 11 条 `<`/11 条 `>`，**没有一行侥幸对**：带旗标的丢符号，非负带旗标的缺 `+`，负数的进制臂全是回绕串） |
+| ④ | 分发点单一，不需要新增任何跨界面符号 | 类型分发只在 `gen.rs:8528-8533` 选 `py_fmt_i64`/`py_fmt_f64`/`py_fmt_str`，extern 声明在 `runtime_decls_registry.rs:64-66`——**本批一个符号都没动** ⇒ 无需重编 `zetac` |
+
+### 二、修法（只落 `runtime/py_additions.c` 一个文件）
+
+`zt_int_sign_char`（新，`:577`）统一决定前导符号：负数恒 `'-'`，否则取旗标 `+`/`' '`。`py_fmt_i64` 里 b/x/X/o 四路改成**按量值 `mag` 渲染再挂符号**（二进制臂的翻转区间从 `d0` 起，符号位不参与 reverse），d/f/e/g 走 C 的 `'+'` 长度前缀；`py_fmt_f64` 同规则（三处 `cfmt` 组装）。`zt_fmt_pad` 的"fill='0' 且带符号"分支（`:560-566`）本来就在，只是此前拿不到 `f->sign`——**这条既有代码是本次能一次收干净的原因**。
+
+一处自造缺陷当场修掉：d 臂初版把 `"%%%slld"` 和实参塞进同一个 `snprintf`，产出字面 `%lld` 文本并报 `-Wformat-extra-args`；改成两段式（先组格式串、再格式化）。终态 `build_rc=0`、**0 warning**。
+
+### 三、真值与夹具（三条，全部先拿 pre 二进制实拍会红）
+
+| 夹具 | 状态 | 读数 |
+|---|---|---|
+| `t486_fmt_sign_matrix.z`（新，29 行 / 11 规格） | pre **FAIL** → post **PASS** | 11 行期望值逐字来自本机 **CPython 3.14.5** 当场跑（`/tmp/b453/f1_cpython.out`），与 post 输出 `diff` 空、md5 同为 `aaa77a1ff8cad906c8a95406f385aa10` |
+| `t508_fmt_sign_flag.z` | known-fail **摘标** → PASS | 摘标顺带订正原钉子里 `{n:8d}` 少写的一个前导空格（harness 剥 `// expect: ` 只吃一个空格；判据用 `sed 's/ /./g'` 看过字节） |
+| `t509_fmt_negative_binary.z` | known-fail **摘标** → PASS | 同上，`run_one.sh` 逐名实拍 |
+
+三条的逐名判定不靠聚合计数：`/tmp/b453/nv/<名>/verdict` 各一份，均为 `PASS`。
+
+### 四、先量再动：语料成员＝**0**
+
+acceptance 语料 40 文件的 f-string 字段共 **101** 个，其中规格可解析的 **19** 个，**带 sign 旗标或非十进制型的是 0 个**（`string.Formatter().parse()` 逐字段解析后判，不用 grep 猜——第一版正则把字典推导 `{ {c: s for ...} }` 误认成规格，虚报 2 条，已推翻）。⇒ 本批对主线 301 **没有可期望的位移**，下面的 A/B 是去证"确实没有"，不是去捞收益。
+
+### 五、快门禁（`runtime/*.c` 路由＝`python_style` + `official` + 位移 A/B；日志 `/tmp/b453/gate453.log`）
+
+| 步 | 读数 | 对照 |
+|---|---|---|
+| official | compile **194/194**、compile+link **191/194**（link-only 3：`integration_all_features`/`quantum_basic`/`selfhost`） | 与在册逐字相同 |
+| compile-diagnostics | official **5/194 文件 / 21 行**；python_style **116 文件 / 244 行** | 244＝450 时代在册值 ⇒ 无新增诊断面 |
+| python_style（当场 `ls tests/python_style/t*.z`＝**389** 文件） | **373 passed / 2 failed / 14 known-fail / 0 xpass** | 红＝存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` |
+| 其余 | `comment_drift: 0 处复述`、`dyn_binding: 4 条断言，不一致 0` | `GATE_RC=1`（红源＝上面那两条存量） |
+
+**python_style 的桶账（对齐后才敢入账）**：452 在册 370/2/15（桶和 387）→ 本批 373/2/14（桶和 389＝文件数，逐字吻合）。`passed +3` ＝ t486 新增 + t508/t509 摘标转绿。`known-fail` 只 **−1 而不是 −2**：`^// known-fail:` 的文件数在 `HEAD~3` 实测 **16**（t401/t402/t404/t406/t425/t450/t503/t504/t505/t506/t507/t508/t509/t510/t512/t513），而 452 那次读数在册 15 ⇒ 差的 1 条来自**452 读数之后并入的旁路夹具**，本批摘 2 条 ⇒ 16−2＝14 与读数吻合；桶和 +2 同因（1＝t486，1＝那次并入）。**这 1 条不给本批记 credit，也不记 debit。**
+
+### 六、主线 301 位移 A/B＝**0**（带正证据）
+
+`/tmp/b453/run_rt_ab.sh`：同一颗 `zetac` × pre/post 两颗 `.o`（`ZETA_RUNTIME_DIR` + **`ZETA_STRICT_RUNTIME_DIR=1`**），驱动 `strategies/code/_drv_accept_409.py`，cwd＝`/Users/meetai/source/quant/REasyQuant`，`REPLAYQUANT_LOCAL=1`，n=6/侧交替、每轮重编。
+
+- 编译 **12/12 `compile_rc=0`**；
+- 运行期 rc：pre `3×rc=0 / 3×rc=139`，post `3×rc=0 / 3×rc=139`（两侧同分布）；
+- rc=0 的 6 次输出**逐字节同**（`parity=74 fail1=74 morning=37 stderr=321`）；
+- 6 次崩溃首帧同一链：`str_trim+24` ← `backend_datasrc_code_conv__normalize_to_jq+16` ← `MarketDataFetcher::fetch_stocks+2924`（`.ips` 的 `threads[faultingThread].frames[0]` 逐条读，不是猜）。
+
+⇒ **位移 0 是"跑了且逐字节相同"，不是"没跑到"**；语料崩点仍在 `str_trim+24`（#145/#168 那一格，需 `py_additions.c` 的 packed-str 生产者定位，本批未碰）。
+
+**一条测量坑入册**：运行期 `.o` 的 A/B **两侧都必须带 `ZETA_STRICT_RUNTIME_DIR=1`**。仓根常驻一份同名 `zeta_runtime_c.o`（本批的改后件），pre 侧不带 STRICT 时 `find_runtime_obj` 按"cwd 优先"链到改后件（`src/main.rs:529-539`，只报一条 W2002），于是 **pre==post、把红伪装成"无位移"**。本批第一趟就是这么假的——靠两颗 `.o` 的 md5 对照（都是 `27dd319f…`）才发现，重跑后拿到真 11/11 红→绿。
+
+### 七、差分面：384 → **395**（+11，逐条有名字）
+
+`tools/diff_test.py --bless`：`total 456` 不变、`match 384→395`、`match_min 384→395`、`rate_pct 84.2→86.6`、`by_verdict.mismatch 67→56`、`str` 步 `66→77`。转好的 11 例逐条点名＝`gen_fmt_s2468_{001,002,003,005,007,008,009,010,012,014,015}`（旁路 486 那批撒的"f-string 规格随机组合"家族，正是本批改动面），**无越名收益**。抬闸后复跑确认：`CONFIRM_RC=0`、`差分一致率无回归`（`/tmp/b453/diff_confirm.log`）。
+
+### 八、锚点（`1e6e1e62`；终态＝452 在册终态逐字相同）
+
+`--rebind` 两趟 ＋ 手绑，`docs/ABI.md` numstat **30/30**（改写 30 行、等长替换故 1032→1032）、`abi_anchors.tsv` 23/24；按引用重绑 **14 条自动 ＋ 12 处手绑 ＋ 3 处空行脱管 ＋ 1 处 452 漏绑订正**。第一趟自动接走 **14 条**（全部 +24：`:967→:991`、`:1609→:1633`、`:1611-1612→:1635-1636`、`:1766→:1790`、`:1791-1825→:1815-1849`、`:1795→:1819`、`:1803→:1827`、`:2656→:2680`、`:2943→:2967`、`:3186→:3210`、`:3313→:3337`、`:3414→:3438`、`:3505→:3529`、`:3522→:3546`）；手绑 **12 处** 452 同族（`:3503→:3527`、`:3515→:3539`、`:3538→:3562`、`:3525-3527→:3549-3551` 及四个区间形）；第二趟 `--rebind` 判"改号配对 5 对"刷新基线，**漂移 23 / 新 11 / 消失 12（基线 258 条）/ rc=2** ＝ 452 终态逐项相同。待归属 **100 条**守恒、**种** 92→90（两个裸 token 被改到与既有 token 同一种，条数不变）。
+
+**新形态（比 #52 更狠的一格）**：`定位失败` 类锚点 `--rebind` **完全看不见**——`:2672`、`:3320` 在改后落到空行，核对器只报"该行内容为空"，**既不计漂移也不进搬家判定**，等于静默脱管。本批手绑 `:2672→:2696`、`:3320→:3344`（3 处引用），并用 `git show HEAD~3:runtime/py_additions.c | sed -n '2672p'`（＝代码批 `2ad57f36` 的父侧，改前有内容 `int64_t zeta_param_default(…)`）＋ `sed -n '2696p'`（改后同内容）双向证明"是搬家、不是改写"（`:3320`→`:3344` 同法：`(void)getenv("ZETA_STRICT_STUBS");`）。另订正 452 漏绑的一处裸行号：`ABI.md:655` 的 `zeta_dyn_len :3492` → `:3562`（#52 的实拍）。
+
+### 九、#188 收口与余项（`backlog.md` 同步）
+
+#188 登记的两面（sign 旗标、负数进制）**本批双闭**，摘掉两条 known-fail 钉。同批实测到的两条**新边界**不并入、写进余项行：
+- **`'='` 对齐不支持**：`{n:=7d}`（n=−1234）打 `-1234`，CPython 打 `-··1234`；`{p:=7d}` 打 `1234`，CPython 打 `···1234`；
+- **`'#'` 备选形式不支持**：`{p:#010x}` 打 `00000004d2`，CPython 打 `0x000004d2`（`zt_parse_spec` 认出 `#` 后同样丢弃——与①同形，但代价是"补零宽度算错一位"而非丢符号）。
+
+`{n:07x}`→`-0004d2`、`{n:+07d}`→`-001234` 两条**已正确**（实拍列在余项行反面，防止下批重复劳动）。OPEN 28→**27**。
+
+### 十、读数存档与队列
+
+`/tmp/b453/`：`pre/`·`post/`（成对 `.o`，md5 分别 `260ce015…`/`27dd319f…`）、`ab/runs/*` 与 `ab_summary.log`、`f1{.z,.py,_pre.out,_post.out,_cpython.out}`、`f2.z`（`=`/`#` 边界探针）、`gate453.log`、`diff453.log`·`diff_bless.log`·`diff_confirm.log`、`nv/*/verdict`（逐名判定）、`anchor_{pre_rebind,rebind1,rebind2,after_rebind,final}.log`、`ABI.md.pre_rebind`·`abi_anchors.tsv.pre_rebind`（对照用）。注意 `zetac_note.txt` 名字骗人：它是一颗 Mach-O `zetac` 副本，**别拿去编译**（坑 52：仓外二进制＝整套运行时假链接失败）。
+
+下一次全量门禁＝**批次 460**。队列头名不变：**简报①「`/` 真除法」**（446 已把 round 归因改判到这里）→ **#182 余 57 行**（W1010 三堆，A 堆 23→#190）→ **#167 余项**（锚点键结构迁移；本批的"定位失败类不可见"是它的新证据）→ **#195/#196**（`#194` 组合崩溃面）→ **#145**（packed-str 生产者，语料崩点）。#199（tuple 无运行期表示／enumerate 是 identity 桩）留作独立 ABI 设计批。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
