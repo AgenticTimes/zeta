@@ -1,0 +1,35 @@
+# @cat: container
+# @note: 类继承 + 方法覆盖 + 字符串返回——同 ⑫ 家族（继承本身可能无辜，
+#        与 method_str_concat 同根）
+#@@ python
+class Animal:
+    def __init__(self, name):
+        self.name = name
+    def speak(self):
+        return self.name + " makes a sound"
+
+class Dog(Animal):
+    def speak(self):
+        return self.name + " barks"
+
+a = Animal("Generic")
+d = Dog("Rex")
+print(a.speak())
+print(d.speak())
+
+#@@ zeta
+class Animal:
+    def __init__(self, name):
+        self.name = name
+    def speak(self):
+        return self.name + " makes a sound"
+
+class Dog(Animal):
+    def speak(self):
+        return self.name + " barks"
+
+a = Animal("Generic")
+d = Dog("Rex")
+print(a.speak())
+print(d.speak())
+

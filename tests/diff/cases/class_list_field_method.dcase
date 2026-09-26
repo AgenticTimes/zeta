@@ -1,0 +1,32 @@
+# @cat: container
+# @note: 列表字段经方法 append = map_get 非字典 rc=1——字段槽位按方法分配的 OOP 面（515 同根），gen.rs 车道
+#@@ python
+class Bag:
+    def __init__(self):
+        self.items = []
+    def add(self, x):
+        self.items.append(x)
+    def size(self):
+        return len(self.items)
+
+bg = Bag()
+bg.add("a")
+bg.add("b")
+print(bg.size())
+print(bg.items[0])
+
+#@@ zeta
+class Bag:
+    def __init__(self):
+        self.items = []
+    def add(self, x):
+        self.items.append(x)
+    def size(self):
+        return len(self.items)
+
+bg = Bag()
+bg.add("a")
+bg.add("b")
+print(bg.size())
+print(bg.items[0])
+

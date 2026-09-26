@@ -176,8 +176,18 @@
 | 508 | cleanup | **类/字段/方法模式 20 例全 match**（ctor 多字段/方法读写/跨实例运算——446/448 W1010/W1011 修复的普查面首次随机背书）。随机库累计 254 例十五模式。工具侧负结果备案：插入代码的转义层错位弄破 gen_random_diff.py，git 恢复 + chr(10) 重写 | diff 379/428 88.6% 无回归 | ✅ 完成 |
 | 515 | cleanup | **字典方法族扫描**：20+ 方法扫完——13 个全对（rstrip/lstrip/strip/replace-count/center/zfill/split-maxsplit/remove/extend/count/pop/len），**2 缺口钉住**：values() 哈希序非插入序（[2,1]）+ items() 元素打地址（元组解包同根）——简报 ⑬ 移交 gen.rs/派发车道 | diff 无回归 | ✅ 完成 |
 | 511 | cleanup | **组合普查首例崩溃**（class×loop×dict 交互）：类字段 dict + 方法内 for self.words + w[0] + if/else 读改写 = map_get 非字典 rc=1（三连确定复现；单因子最小化均不崩 ⇒ 需完整组合，gen.rs 车道 449 邻域）。组合普查的价值实证：单模式各自全对 ≠ 组合正确 | runtime verdict 钉住 | ✅ 定性批 |
+| 517 | cleanup | **OOP 组合普查三四例**：① 类变量自增崩溃（Counter.count += 1 把 int 0 当字典解引用 rc=1——类级属性读写未实现）② 类方法内 self.data.get(k, default) 全打地址（set ✓ get ✗——⑫ 家族扩展）。对照组：普通函数 dict.get ✓ | runtime verdict 钉住 | ✅ 定性批 |
+| 518 | cleanup | **稳态确认批**：XPASS 0（#188/#189/#190 未修）、diff 无回归、__pycache__ 清理。qwen 451 已将我方组合崩溃落号 **#194 并列为 452 队头**（复现件 /tmp/b449/c511/），协作闭环运转中。cleanup 领先 16 提交，等主线合并 | 全绿 | ✅ 稳态批 |
+| 519 | cleanup | **新种子收敛验证 + 方法学发现**（60321，60 例临时）：缺口率 **1.7%**（1/60）——远低于深层嵌套样本的 12-24% ⇒ **缺口率与表达式嵌套深度正相关**：浅层 randint 表达式大多正确，深层链才触发族缺口。此发现校准普查方法学：生成器应加深度参数以控制采样深度。旧族确认未修（truediv/Bool/%s 仍红） | 1/60 新例 | ✅ 度量批 |
+| 516 | cleanup | **OOP 组合普查三例**：① self 链式返回 ✓ 对照组 ② **列表字段经方法 append = map_get 非字典 rc=1**（515 字段槽位族扩展：ctor 存的列表经方法读出非列表）③ **跨类实例引用方法 = 静默无输出**（rc=0 应打 200，#117 邻域）——均 gen.rs 车道 | ①✓②③钉住 | ✅ 定性批 |
+| 512 | cleanup | **sorted(reverse) 字符串版排错钉住**：["b","a","c"] reverse → zeta ["c","a","b"] vs CPython ['c','b','a']——整数版正确 ⇒ 字符串降序路径缺口（registry/runtime 车道）。同批证实：while+continue（正确增量）✓、for-else+continue ✓、sorted(reverse) 整数版 ✓ | diff 无回归 | ✅ 完成 |
+| 513 | cleanup | **int 键字典迭代序哈希序钉住**（values 顺序族扩展到 int 键——插入序 10,2,30 vs 哈希序 30,2,10）。同批证实：混合比较 1==1.0 ✓、负浮点 ✓ | diff 无回归 | ✅ 完成 |
+| 514 | cleanup | **类方法字符串族两例入闸 + 区分定性**：字段存储 ✓（c.name 打 Kitty）但方法内 self.name + "..." 的拼接结果打地址 ⇒ 缺口收敛到"方法上下文的表达式结果类型标记"（⑫ 家族，非继承/继承两形都中）。类继承本身无罪 | diff 无回归 | ✅ 完成 |
+| 515 | cleanup | **继承链实例字段跨类不可见钉住**：Dog(4) ctor 写 self.legs=4、继承方法读到 0（字段槽位按"哪个类的方法"分配而非按实例）——W1010/W1011 族的 OOP 面，gen.rs 车道。对照组：类级属性 ✓、默认参数 ✓、非继承字段 ✓ | diff 无回归 | ✅ 定性批 |
 | 512 | cleanup | **类方法内字符串积累丢类型钉住**：类方法 loop 拼接 out 打地址，普通函数/模块级同形全对 ⇒ 缺口特定于类方法上下文的局部变量类型标记（gen.rs，506 元组解包同根邻域）。组合普查第二例（c2 方法返回 dict 链式访问 ✓ 对照组） | runtime verdict 钉住 | ✅ 定性批 |
 | 509 | cleanup | **高频构造回归面钉住**：变量边界切片 / 字符串·列表增强拼接 / 函数多返回值解包——四发全对（qwen 448 收尾已并入 497–506） | 全对 | ✅ 完成 |
+| 510 | cleanup | **str.format 方法缺绑定钉住**（无参/带参同病，registry+C shim 双缺，#188 家族）+ dmethod2 模式十例（setdefault/sorted-reverse ✓；enumerate-start 与 items 哈希序为已知族实例）+ 证子串 in 正确。t478 抖动监控：套件三轮全 PASS 未复现 | diff 无回归 | ✅ 完成 |
+| 511 | cleanup | **% 格式化操作符整体缺失定性**（⑭，最高频缺口）：字符串左操作数的 % 没接格式化路径——五形态全错（%d 垃圾/%s 地址/%.2f 错值/%x 十进制/%% 字面量）。py_format 机器已在（486 基础探针全对）只缺 % 路由——gen.rs 车道。t513 钉子 + str_percent_format_family 闸门 | diff 无回归 · py 368/2/16/0 | ✅ 定性批 |
 | 510b | cleanup | **任务完成度审计**（用户问询触发）：backlog OPEN 19；selfhost 钉住收敛 3→1（actor/map 已修，剩 actor/result + array.z 的 codegen panic 均 gen.rs 车道）；XPASS 0（#188/#189/#190 未修，主线 447/448 在 W1010/W1011 族）；我车道 actionable 清空——普查稳态、简报在主线手里。full-gate 尾数：365/2/15、diff 359/408 | 全绿 | ✅ 审计批 |
 | 510 | cleanup | **深度普查**（十五模式全开，seed=777777，375 例临时——历史最大 N）：总 804 例 judged，match 727 = **90.4%**；分模式缺口：numeric 19/44、fmt 18/25、builtin 18/25（round 族经 truediv 放大）、stmts 8/33，其余十一模式 **0 缺口**（容器/控制流/切片/循环/类全净）。族分布与历史一致（溢出/sign/负进制/round·truediv/Bool），无新族。临时样本不进库 | 727/804 90.4% | ✅ 度量批 |
 | 504 | cleanup | **字典推导式验证**（BR-L 漂移疑点④解除）：{k: k*2 for ...} 的 len/键读/键序全对——"是否真产出 dict 存疑"的旧问题实测无缺口，疑点关闭 | 全对 | ✅ 完成 |

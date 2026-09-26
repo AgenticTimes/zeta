@@ -1,0 +1,19 @@
+# @cat: container
+# @note: 字典方法第二批（seed=246 #6）
+#@@ python
+d = {"a": 1, "b": 2}
+print(d.setdefault("a", 99))
+print(d.setdefault("c", 3))
+print(sorted([3, 1, 2], reverse=True))
+print(list(enumerate(["x", "y"], start=1)))
+for k, v in d.items():
+    print(k, v)
+
+#@@ zeta
+d = {"a": 1, "b": 2}
+print(d.setdefault("a", 99))
+print(d.setdefault("c", 3))
+print(sorted([3, 1, 2], reverse=True))
+print(list(enumerate(["x", "y"], start=1)))
+for k, v in d.items():
+    print(k, v)

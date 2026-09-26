@@ -1,0 +1,28 @@
+# @cat: container
+# @note: self 链式返回（inc().inc().val() = 4）——对照组全对
+#@@ python
+class Chain:
+    def __init__(self):
+        self.v = 1
+    def inc(self):
+        self.v += 1
+        return self
+    def val(self):
+        return self.v
+
+c = Chain()
+print(c.inc().inc().inc().val())
+
+#@@ zeta
+class Chain:
+    def __init__(self):
+        self.v = 1
+    def inc(self):
+        self.v += 1
+        return self
+    def val(self):
+        return self.v
+
+c = Chain()
+print(c.inc().inc().inc().val())
+

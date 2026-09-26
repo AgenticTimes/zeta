@@ -1,0 +1,8 @@
+# @cat: str
+# @note: sorted(reverse=True) 对字符串——zeta ["c","a","b"] vs CPython ['c','b','a']
+#        （整数版 reverse 正确 ⇒ 缺口特定于字符串的降序比较/反转路径，
+#        registry/runtime 车道移交。批次 512 定性。）
+#@@ python
+print(sorted(["b", "a", "c"], reverse=True))
+#@@ zeta
+print(sorted(["b", "a", "c"], reverse=True))

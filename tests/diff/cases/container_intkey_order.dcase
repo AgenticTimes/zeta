@@ -1,0 +1,11 @@
+# @cat: container
+# @note: int 键字典迭代序也是哈希序（CPython 插入序 10,2,30 / zeta 30,2,10）
+#        ——values 顺序族（container_dict_methods）的 int 键面
+#@@ python
+d = {10: "a", 2: "b", 30: "c"}
+ks = list(d.keys())
+print(ks[0], ks[1], ks[2])
+#@@ zeta
+d = {10: "a", 2: "b", 30: "c"}
+ks = list(d.keys())
+print(ks[0], ks[1], ks[2])

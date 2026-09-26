@@ -1,0 +1,17 @@
+# @cat: str
+# @note: % 格式化操作符整体缺失（批次 511 定性）——字符串左操作数的 % 
+#        完全没接格式化路径，五种形态全错（%d 垃圾值/%s 地址/%.2f 错值/
+#        %x 十进制/%% 字面量）。printf 风格 = Python 最高频习惯用法之一，
+#        gen.rs/派发车道移交（py_format 机器已在，缺 % 操作符路由）。
+#@@ python
+print("n=%d" % 42)
+print("%s-%s" % ("a", "b"))
+print("v=%.2f" % 3.14159)
+print("x=%x" % 255)
+print("p=%d%%" % 50)
+#@@ zeta
+print("n=%d" % 42)
+print("%s-%s" % ("a", "b"))
+print("v=%.2f" % 3.14159)
+print("x=%x" % 255)
+print("p=%d%%" % 50)

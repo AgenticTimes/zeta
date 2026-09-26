@@ -1,0 +1,28 @@
+# @cat: container
+# @note: 跨类实例引用方法调用 = 静默无输出（rc=0 但应打 200）——静默错值族（#117 邻域），gen.rs 车道
+#@@ python
+class Engine:
+    def __init__(self):
+        self.power = 100
+class Car:
+    def __init__(self):
+        self.engine = Engine()
+    def power(self):
+        return self.engine.power * 2
+
+car = Car()
+print(car.power())
+
+#@@ zeta
+class Engine:
+    def __init__(self):
+        self.power = 100
+class Car:
+    def __init__(self):
+        self.engine = Engine()
+    def power(self):
+        return self.engine.power * 2
+
+car = Car()
+print(car.power())
+

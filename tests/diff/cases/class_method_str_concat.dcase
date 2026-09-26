@@ -1,0 +1,26 @@
+# @cat: container
+# @note: 非继承类——字段存串 ✓（c.name 打 Kitty）但方法内
+#        self.name + " meow" 的拼接结果打地址 ⇒ 缺口在方法上下文的
+#        表达式结果类型标记（⑫ 家族确认，gen.rs 车道）
+#@@ python
+class Cat:
+    def __init__(self, name):
+        self.name = name
+    def speak(self):
+        return self.name + " meow"
+
+c = Cat("Kitty")
+print(c.speak())
+print(c.name)
+
+#@@ zeta
+class Cat:
+    def __init__(self, name):
+        self.name = name
+    def speak(self):
+        return self.name + " meow"
+
+c = Cat("Kitty")
+print(c.speak())
+print(c.name)
+
