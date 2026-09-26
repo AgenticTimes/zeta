@@ -159,6 +159,15 @@
 | 492 | cleanup | **#188 两面补钉**：t508 sign 旗标（+ 被吞）+ t509 负数进制（位回绕）——known-fail 11→13。定性澄清：builtin 案例的 round "错值"真凶是 / 真除法缺失（66/10 → 6），round 本身（含银行家舍入）与 CPython 一致，该族已有 numeric_truediv 在案 | py 360/2/13/0 | ✅ 完成 |
 | 494 | cleanup | **嵌套容器链模式 20 例全 match**（dict[str,list] 读写 / list[list] 双层 / dict[str,dict] 三层——历史 SEGV 族的普查面首次铺开，446 布局裁决见效）。随机库累计 214 例十三模式 | diff 336/381 88.2% 无回归 | ✅ 完成 |
 | 495 | cleanup | **容器方法链模式 20 例全 match**（list sort/reverse/insert/pop/index 随机序列、str split/join、dict keys——12 条错误形态被 CPython 先验淘汰）。随机库累计 234 例十四模式 | diff 356/401 88.8% 无回归 | ✅ 完成 |
+| 498 | cleanup | **普查族移交简报**（docs/HANDOFF-CENSUS-FAMILIES-2026-09-26.md）：九族一屏——最小复现/CPython 期望/zeta 现状/疑似修复位置/闸门用例/优先级建议（①②③ 打印格式化邻域可并批）。主线修复从此机械可执行 | 纯文档 | ✅ 完成 |
+| 499 | cleanup | **列表字典序比较族钉住**：`<`/`<=` 错（句柄比较）而 `>`/`==` 对——不对称形状边界实测四例；list_cmp_order.dcase 钉住，gen.rs/派发车道移交（#190 邻域）。探针同时证实 str 比较、while-else+break 正确 | diff 无回归 | ✅ 完成 |
+| 500 | cleanup | **容器比较族扩展定性**：tuple `<` 同病 + **dict `==` 也错**（两个相同字典得 False）——族从 list 扩到 tuple/dict，形状边界（`>`/list `==` 对）已实测；简报 ⑩ 更新。十模式普查 + 移交简报就位 | diff 无回归 | ✅ 完成 |
+| 501 | cleanup | **边界探针全对 + 重复边界钉住**（零/负次重复 = 空串、int()/str() 转换、负索引求和——CPython 逐项一致）。探针证实 int 键字典、f-string 内表达式、enumerate 亦通 | 全对 | ✅ 完成 |
+| 502 | cleanup | **enumerate/zip 钉住**：元组解包遍历 + 平行遍历全对（控制流 + 解包组合面） | 全对 | ✅ 完成 |
+| 503 | cleanup | **新种子收敛普查**（864213，60 例临时）：mismatch 8/60 ≈ 13%——与 12.5% 稳态一致，无新族（cmp 20 例全 match）。三读数并存：小样本 24%→大样本 12%→本轮 13%，普查进入稳态 | 410/465 | ✅ 度量批 |
+| 504 | cleanup | **字典推导式验证**（BR-L 漂移疑点④解除）：{k: k*2 for ...} 的 len/键读/键序全对——"是否真产出 dict 存疑"的旧问题实测无缺口，疑点关闭 | 全对 | ✅ 完成 |
+| 506 | cleanup | **元组解包字符串无类型——根因定性收束**（三触发同根）：for k,v 解包的字符串变量打地址（最小判据 tuple_unpack_str_type）⇒ 505 过滤 dict 推导、#190 交换全是同一条 Assign(Tuple,·) lowering 的不同触发。修法收敛为一条：gen.rs 解包绑定时写类型标记（一次修三族全绿）。简报 ⑪ 已更新 | 最小判据 mismatch 钉住 | ✅ 定性批 |
+| 505 | cleanup | **带过滤字典推导式值侧地址**钉住：{k: v for ... if k > 1} 的 len 对、d[2] 打印堆地址——无过滤版本全对（504）⇒ 缺口特定于过滤哨兵路径的值类型（#117 新触发形状，gen.rs 车道移交）。同批证实：链式赋值 a = b = 5、带过滤列表推导式全对 | 全对（新缺口已钉） | ✅ 完成 |
 | 496 | cleanup | **str.find 一参接入**（#188 一半，纯数据修复）：C shim host_str_find 早已在（stub:200），registry 缺 W 行 ⇒ 派发落空。补 `W str find host_str_find args=2`：s.find(子串) 实测 2/2/-1 与 CPython 一致；check_registry_symbols rc=0；t511 正向用例。**余半移交**：两参形式需三参 shim host_str_find3（runtime 车道，gen_str_s314159_003 钉着） | registry rc=0 · py 362/2/14/0 | ✅ 完成 |
 | 493 | cleanup | **元组交换顺序腐蚀定性**（#190 新登记）：`a, b = b, a` → (2,2) 而 CPython (2,1)——Assign(Tuple,Tuple) 顺序赋值，右值引用左目标时腐蚀（字面量右值/元组解包正常 ⇒ 缺口特定）。解析期脱糖已试并**主动撤销**：单侧改解析器引发 t24 模块级全局收集漏认回归 ⇒ 正解在 gen.rs lowering 或连带 unwrap 两处消费端（修法草图已写进 #190）。t510 known-fail 钉住。python_style 回到 361/2/14/0 零回归 | 全绿（t510 known-fail 除外，有归属） | ✅ 完成（含一次主动撤销的负结果备案） |
 | 494b | cleanup | **全量 mismatch 归族清点**（45 条逐一归类，零孤儿）：round/truediv 11（`/` 真除法缺失，gen_builtin 与 numeric_truediv 同根）· sign 旗标 4 + 负数进制 7（#188 两面）· Bool 打印 5（#117 近亲）· 溢出回绕 ~12 · 浮点 %.6f 呈现 3 · %s 格式化 1 · in-range 赋值链 2–3（负数位运算单算子**不复现**——归约证实是多算子链交互，案例钉库、机制定位属主线调试）。**45/45 全部有归属** | 分类完备 | ✅ 度量批 |

@@ -1,0 +1,14 @@
+# @cat: str
+# @note: 重复边界——零次/负数次 = 空串（CPython 语义），负索引求和
+#@@ python
+print("ab" * 0)
+print("ab" * -1)
+print(len("ab" * 0))
+v = [10, 20]
+print(v[-1] + v[-2])
+#@@ zeta
+print("ab" * 0)
+print("ab" * -1)
+print(len("ab" * 0))
+v = [10, 20]
+print(v[-1] + v[-2])

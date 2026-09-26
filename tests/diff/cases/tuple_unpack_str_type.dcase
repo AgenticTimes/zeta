@@ -1,0 +1,12 @@
+# @cat: container
+# @note: 最小判据——元组解包的字符串变量无类型标记：for k, v in pairs: print(v)
+#        打堆地址（CPython 打 a）。dict 推导/带过滤推导（505）/交换（#190）
+#        全走同一条 Assign(Tuple, ·) lowering ⇒ 一条修法治三种触发（gen.rs 车道）
+#@@ python
+pairs = [(1, "a"), (2, "b")]
+for k, v in pairs:
+    print(v)
+#@@ zeta
+pairs = [(1, "a"), (2, "b")]
+for k, v in pairs:
+    print(v)
