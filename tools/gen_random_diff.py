@@ -133,6 +133,84 @@ def gen_cmp_case(rng: random.Random) -> str:
     return "\n".join(lines) + "\n"
 
 
+def gen_loop_case(rng: random.Random) -> str:
+    """循环积累采样：for-range/while 的计数器槽、累加变量类型流（M08 家族）。"""
+    n = rng.randint(3, 12)
+    lines = []
+    shape = rng.random()
+    if shape < 0.35:
+        lines += ["s = 0", f"for i in range({n}):", "    s += i", "print(s)"]
+    elif shape < 0.55:
+        lines += ["t = 1", f"for k in range(1, {rng.randint(2, 7)}):", "    t = t * k", "print(t)"]
+    elif shape < 0.75:
+        m = rng.randint(1, 5)
+        lines += ["acc = 0", f"n = {m}", "while n > 0:", "    acc += n", "    n -= 1", "print(acc)"]
+    elif shape < 0.9:
+        vals = [rng.randint(-50, 50) for _ in range(rng.randint(2, 5))]
+        lines += ["tot = 0", f"for x in {vals!r}:", "    tot += x", "print(tot)"]
+    else:
+        start = rng.randint(0, 10)
+        end = start + rng.randint(1, 9)
+        step = rng.randint(1, 3)
+        lines += [f"c = 0", f"for i in range({start}, {end}, {step}):", "    c += i", "print(c)"]
+    return "\n".join(lines) + "\n"
+
+
+FMT_VALS = [("x", "65"), ("n", "-42"), ("w", "123456"), ("f", "2.71828"), ("s", "ab")]
+INT_TYPES = ["d", "x", "o", "b"]
+FLOAT_TYPES = ["f", "e"]
+
+
+def gen_fmt_case(rng: random.Random) -> str:
+    """f-string 规格采样：进制/符号/宽度/补零/对齐填充/精度 的随机合法组合。
+    ','（千分位，t505 钉）与 'c'（t504 钉）刻意排除——已在 known-fail。"""
+    var, val = rng.choice(FMT_VALS)
+    spec = ""
+    is_float = var == "f"
+    is_str = var == "s"
+    if not is_str and rng.random() < 0.35:
+        fill = rng.choice("*<>=^")
+        spec += fill if fill in "<>^" else fill + rng.choice("<>^")
+    elif rng.random() < 0.4:
+        spec += rng.choice("<>^")
+    if not is_str and rng.random() < 0.25:
+        spec += "+" if val.startswith("-") is False else ""
+    if not is_str and rng.random() < 0.3:
+        spec += "0" if not spec.endswith(("<", ">", "^")) else ""
+    if rng.random() < 0.6:
+        spec += str(rng.randint(2, 10))
+    if is_float and rng.random() < 0.5:
+        spec += f".{rng.randint(1, 4)}"
+    if is_str:
+        if rng.random() < 0.4:
+            spec += f".{rng.randint(1, 3)}"
+    else:
+        spec += rng.choice(FLOAT_TYPES if is_float else INT_TYPES)
+    return f'{var} = {val}\nprint(f"{{{var}:{spec}}}")\n'
+
+
+def gen_slice_case(rng: random.Random) -> str:
+    """字符串切片采样：正/负/省略/步进切片 + 切片后取 len。字母表保证全匹配。"""
+    s = "abcdef"
+    lines = []
+    for _ in range(rng.randint(3, 5)):
+        shape = rng.random()
+        if shape < 0.2:
+            a, b = sorted(rng.sample(range(0, 7), 2))
+            lines.append(f'print("{s}"[{a}:{b}])')
+        elif shape < 0.4:
+            lines.append(f'print("{s}"[:{rng.randint(0, 6)}])')
+        elif shape < 0.6:
+            lines.append(f'print("{s}"[{rng.randint(0, 6)}:])')
+        elif shape < 0.8:
+            a = rng.randint(-6, 0)
+            lines.append(f'print("{s}"[{a}:])')
+        else:
+            lines.append(f'print("{s}"[1:6:{rng.choice([1, 2, 3])}])')
+    lines.append(f'print(len("{s}"[1:4]))')
+    return "\n".join(lines) + "\n"
+
+
 def gen_expr(rng: random.Random, depth: int = 0) -> str:
     if depth >= 3 or rng.random() < 0.3:
         return str(rand_int(rng))
@@ -226,16 +304,64 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
-    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp"), default="numeric")
+    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
     written = 0
     tried = 0
-    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp") else 6)
+    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop", "fmt", "slice") else 6)
     while written < a.count and tried < max_tries:
         tried += 1
+        if a.mode == "slice":
+            prog = gen_slice_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_slice_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: str\n"
+                f"# @note: 随机字符串切片（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
+        if a.mode == "fmt":
+            prog = gen_fmt_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_fmt_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: str\n"
+                f"# @note: 随机 f-string 规格（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
+        if a.mode == "loop":
+            prog = gen_loop_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_loop_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: control\n"
+                f"# @note: 随机循环积累（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
         if a.mode == "cmp":
             prog = gen_cmp_case(rng)
             expected = python_eval_program(prog)

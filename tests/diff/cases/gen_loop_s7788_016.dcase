@@ -1,0 +1,14 @@
+# @cat: control
+# @note: 随机循环积累（seed=7788 #16）
+#@@ python
+tot = 0
+for x in [40, -14]:
+    tot += x
+print(tot)
+
+#@@ zeta
+tot = 0
+for x in [40, -14]:
+    tot += x
+print(tot)
+

@@ -1,0 +1,14 @@
+# @cat: control
+# @note: 随机循环积累（seed=7788 #15）
+#@@ python
+c = 0
+for i in range(2, 10, 2):
+    c += i
+print(c)
+
+#@@ zeta
+c = 0
+for i in range(2, 10, 2):
+    c += i
+print(c)
+

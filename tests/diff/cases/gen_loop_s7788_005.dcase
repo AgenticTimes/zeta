@@ -1,0 +1,14 @@
+# @cat: control
+# @note: 随机循环积累（seed=7788 #5）
+#@@ python
+t = 1
+for k in range(1, 2):
+    t = t * k
+print(t)
+
+#@@ zeta
+t = 1
+for k in range(1, 2):
+    t = t * k
+print(t)
+

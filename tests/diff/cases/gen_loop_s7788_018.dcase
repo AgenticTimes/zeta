@@ -1,0 +1,18 @@
+# @cat: control
+# @note: 随机循环积累（seed=7788 #18）
+#@@ python
+acc = 0
+n = 1
+while n > 0:
+    acc += n
+    n -= 1
+print(acc)
+
+#@@ zeta
+acc = 0
+n = 1
+while n > 0:
+    acc += n
+    n -= 1
+print(acc)
+
