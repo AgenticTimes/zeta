@@ -135,6 +135,7 @@
 | 474 | cleanup | **生成器扩 str 模式**（拼接/重复/索引/比较/upper·lower·strip·find·count·startswith；刻意不含 split/sort 列表 repr）+ 首批 20 例：19 match + 1 **compile 能力缺口**——`s.find(t)` 两参形式缺运行时绑定（链接期缺符号 `find`，registry/派发车道移交主线）。str 类采样从 3 人工例扩到 20。总 166/192 86.5% 无回归 | diff 166/192 | ✅ 完成 |
 | 475 | cleanup | **合并前全量门禁**（469b 后 +10 提交，纪律到点）：official 194/194 · py **357**/2/10/0 · 语料 40/40 · jit 179/0 · diff 166/192 86.5% 无回归 · 0 RED。rc=0，cleanup 可安全合并 | 全绿 | ✅ 门禁入册 |
 | 476 | cleanup | **生成器第三模式：随机赋值链**（语句级采样——变量类型流经签名表，单表达式测不到的路径）：15 例，13 match + **2 条 in-range 错值**（新缺口形状：链含负数按位 OR / 大数 floordiv / 求和，同量级但错误——机制定位移交主线，diff 基线自动盯）。溢出主导程序已过滤（|尾部|>=2^62）。修生成器一处：python_eval 包 print 会灭掉多行程序，加 python_eval_program | diff 179/207 | ✅ 完成 |
+| 477+478 | cleanup | **容器采样 + diff 并行化**：容器模式（list/dict：字面量·len·索引·append·覆盖写·成员测试）24 例**全 match**——容器层稳（423 判形 + 430 布局见效）。diff_test.py 并行化（judge 入线程池；run_ref/run_zeta 按用例子目录——zetac 中间产物落 cwd 共享会互踩，实测全表 Linking failed 后修）。累计随机 84 例（数值 40/字串 20/赋值链 15/容器 24） | diff 203/231 87.9% 无回归 | ✅ 完成 |
 | （续） | | | | |
 
 ## 6. 旁路侧启动清单（一次性 / 每会话）
