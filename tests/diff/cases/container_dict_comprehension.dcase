@@ -1,0 +1,15 @@
+# @cat: container
+# @note: 字典推导式——BR-L 漂移疑点④的验证：推导式降标 __collect__ 后
+#        len/键读/键序全部与 CPython 一致（疑点解除，产出语义正确）
+#@@ python
+d = {k: k * 2 for k in range(3)}
+print(len(d))
+print(d[1])
+ks = list(d.keys())
+print(ks[0])
+#@@ zeta
+d = {k: k * 2 for k in range(3)}
+print(len(d))
+print(d[1])
+ks = list(d.keys())
+print(ks[0])
