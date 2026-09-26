@@ -1,0 +1,24 @@
+// 批次 449（3.2 Lowering／简报 ⑪ 的两条触发之一）：元组字面量的元素类型标记。
+// 根因**不在**解包绑定：`gen.rs:14394` 把元组字面量的每个槽硬写成 Type::I64，
+// 于是 [(1, "a"), (2, "b")] 的类型是 DynamicArray(Tuple([I64, I64]))，
+// `for k, v in pairs` 从元素类型取标记（:2912 的 pair_tys）拿到的就是 I64，
+// v 没有标记 ⇒ print(v) 打堆地址（改前实测 4338921574 / 4338921576）。
+// 正对照（改前改后都绿）：纯 int 解包 —— 标记本来就是 I64，写错也看不出来。
+// 期望值来源：CPython 3.14.5 当场跑同一段（str 在首位/末位两种都取）。
+pairs = [(1, "a"), (2, "b")]
+for k, v in pairs:
+    print(k, v)
+
+lead = [("p", 1), ("q", 2)]
+for s, n in lead:
+    print(s, n)
+
+single = [(7, "x")]
+for k, v in single:
+    print(k, v)
+
+// expect: 1 a
+// expect: 2 b
+// expect: p 1
+// expect: q 2
+// expect: 7 x

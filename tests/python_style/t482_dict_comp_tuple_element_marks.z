@@ -1,0 +1,18 @@
+// 批次 449（3.2 Lowering／简报 ⑪ 的第二条触发）：dict 推导式的元组解包绑定。
+// 与 t481 同一个根：`gen.rs:14394` 的元组字面量元素类型硬写 I64，
+// 推导式把 [(1, "a")] 的元素类型带进闭包参数表（MIR 里 __closure_0_main_* 的
+// type_map 整块全是 Tuple([I64, I64]），⇒ {k: v for ...} 的 v 落进无标记槽。
+// 改前实测：print(d[2]) 打 4362269034；改后与 CPython 3.14.5 一致。
+// 带 if 过滤与不带过滤两种形状都取：490 的过滤形是旁路在册成员，非过滤形是正对照。
+src = [(1, "a"), (2, "b"), (3, "c")]
+d = {k: v for k, v in src if k > 1}
+print(len(d))
+print(d[2])
+e = {k: v for k, v in src}
+print(len(e))
+print(e[1], e[3])
+
+// expect: 2
+// expect: b
+// expect: 3
+// expect: a c

@@ -14391,7 +14391,16 @@ call, no NULL-handle dereference).",
                         size,
                     },
                 );
-                self.type_map.insert(id, Type::Tuple(vec![Type::I64; size]));
+                // The element types are markers only — every slot is a raw 64-bit
+                // word — so hard-wiring them to I64 was free to do but not free to
+                // keep: it erased a `Str` member, so unpacking `[(1, "a")]` bound the
+                // loop var with no marker and `print(v)` printed the heap address.
+                // Take each type from the lowered element instead.
+                let tys = element_ids
+                    .iter()
+                    .map(|&eid| self.type_map.get(&eid).cloned().unwrap_or(Type::I64))
+                    .collect();
+                self.type_map.insert(id, Type::Tuple(tys));
                 self.tuple_slots.insert(id);
             }
             AstNode::Ignore => {
