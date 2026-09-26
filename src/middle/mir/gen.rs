@@ -3945,7 +3945,45 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         }
     }
 
+    /// One closed exit for expression lowering. A route that returns `id`
+    /// without registering it in `self.exprs` leaves a phantom slot, and
+    /// codegen indexes `exprs` raw for `*`/`+` operands
+    /// (`MirExpr::SemiringFold` — `codegen.rs:6715`, `:6735`, `:6765`) and for
+    /// struct-literal fields: a phantom is a `no entry found for key` panic
+    /// there, or a silent 0 anywhere else. `lower_expr_node` has dozens of
+    /// exits and the ones that miss are all in the `PathCall` arm, whose routes
+    /// are gated on heuristics about the *method*'s spelling (`is_upper`) and on
+    /// hardcoded paths — so `HashMap::new()` and `std::env::var(..)` reached the
+    /// end of the arm with neither. The invariant is therefore enforced at this
+    /// single point rather than one route at a time.
     fn lower_expr(&mut self, expr: &AstNode) -> u32 {
+        let id = self.lower_expr_node(expr);
+        if !self.exprs.contains_key(&id) {
+            let label = match expr {
+                AstNode::PathCall { path, method, .. } if !path.is_empty() => {
+                    format!("{}::{}()", path.join("::"), method)
+                }
+                AstNode::PathCall { method, .. } => format!("{}()", method),
+                other => {
+                    let d = format!("{:?}", other);
+                    match d.split('(').next().and_then(|h| h.split(' ').next()) {
+                        Some(kind) => format!("{} expression", kind),
+                        None => "expression".to_string(),
+                    }
+                }
+            };
+            eprintln!(
+                "warning: [W1010] `{}` has no lowering route — its slot reads 0, \
+                 and a `*`/`+` operand used to abort codegen here instead.",
+                label
+            );
+            self.exprs.insert(id, MirExpr::IntLit(0));
+            self.type_map.insert(id, Type::I64);
+        }
+        id
+    }
+
+    fn lower_expr_node(&mut self, expr: &AstNode) -> u32 {
         let id = self.next_id();
         match expr {
             AstNode::Block { body } => {
@@ -12985,6 +13023,51 @@ call, no NULL-handle dereference).",
                         .next()
                         .map(|c| c.is_uppercase())
                         .unwrap_or(false);
+                // `std::mem::size_of::<T>()` / `align_of::<T>()` → the bare
+                // intrinsic name the codegen intercept answers
+                // (`codegen.rs:4323`, width from `type_args`). That intercept has
+                // been dead since it was written: every route in this arm is gated
+                // either on `is_upper` — the *method's* first letter, so `size_of`
+                // is lowercase — or on a hardcoded path, and none covered
+                // `std::mem`. The call then fell out of the arm with no statement
+                // and no `exprs` entry: `let n = size_of::<i64>()` printed 0, and
+                // the same phantom id as a `*` operand panicked codegen at
+                // `exprs[&values[1]]`. `zeta_src/runtime/array.z:50` is that second
+                // shape, so every grow was `malloc(0 * count)`.
+                if path_ends_with_mem(path)
+                    && (method == "size_of" || method == "align_of")
+                    && args.is_empty()
+                {
+                    let mut mir_type_args = Vec::new();
+                    // Only the sub-word widths need naming: the intercept's
+                    // fallback arm answers 8, which is also what an unmapped
+                    // (generic `T`) type arg must get.
+                    if let Some(t) = type_args.first().map(|s| s.trim()) {
+                        let w = match t {
+                            "i8" | "int8" => Some(Type::I8),
+                            "u8" | "uint8" | "byte" => Some(Type::U8),
+                            "i16" => Some(Type::I16),
+                            "u16" => Some(Type::U16),
+                            "i32" | "int32" => Some(Type::I32),
+                            "u32" | "uint32" => Some(Type::U32),
+                            "f32" | "float32" => Some(Type::F32),
+                            "char" => Some(Type::Char),
+                            _ => None,
+                        };
+                        if let Some(w) = w {
+                            mir_type_args.push(w);
+                        }
+                    }
+                    self.stmts.push(MirStmt::Call {
+                        func: method.clone(),
+                        args: vec![],
+                        dest: id,
+                        type_args: mir_type_args,
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
                 // PY-A: `std::time::now()` → monotonic_ns runtime
                 if path.len() == 2 && path[0] == "std" && path[1] == "time"
                     && method == "now" && args.is_empty()
@@ -15257,6 +15340,13 @@ fn lt_annotation_type(s: &str) -> Option<Type> {
         }
         _ => None,
     }
+}
+
+/// `std::mem::size_of` is written both fully qualified and after a `use`
+/// (`mem::size_of::<f32>()` in `zeta_src/runtime/tensor.z:37`).
+fn path_ends_with_mem(path: &[String]) -> bool {
+    path.last().map(String::as_str) == Some("mem")
+        && (path.len() == 1 || (path.len() == 2 && path[0].as_str() == "std"))
 }
 
 fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)> {    match method {

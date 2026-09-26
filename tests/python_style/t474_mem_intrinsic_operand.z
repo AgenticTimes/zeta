@@ -1,0 +1,50 @@
+// 批次 443（3.2 Lowering／4.x 发射层的 abort）：路径调用没有落进任何降低路由时，
+// 返回的表达式 id 从没进过 `mir.exprs` —— 那个幽灵槽被 `*`/`+` 的一旁当操作数用时，
+// codegen 在 `MirExpr::SemiringFold` 里裸索引 `exprs[&values[1]]`（`codegen.rs:6765`）
+// 直接 `no entry found for key` 中止；结构体字面量的字段位同一族（`codegen.rs:7143`，
+// `zeta_src/runtime/actor/map.z:17` 的 `inner: HashMap::new(),`）。
+//
+// 根因在 `AstNode::PathCall` 那一臂的路由判据：它们问的是**方法名**首字母大小写
+// （`is_upper`）和一批写死的路径，`size_of`／`align_of` 是小写段，`HashMap::new` 撞在
+// `method != "new"` 的排除上，于是整条臂走完既没 push 语句也没 insert 表达式
+// （`gen.rs` 里那条臂自己的注释就写着"leaving a dangling expr id whose slot stayed 0"）。
+//
+// 本批两处：
+// ① `std::mem::size_of` / `align_of` 补上路由，发往**早就存在却从未被接线**的 codegen
+//    内建截获（`codegen.rs:4323`，宽度按 `type_args` 首项取，缺省 8）。改前 `let s =
+//    size_of::<i64>()` 静默打 0、`a * size_of::<i64>()` 直接 abort；改后是 8 与 24。
+//    字面量类型实参按宽度表给（`f32`⇒4、`u8`⇒1），`<T>` 这类映射不到的走 8 —— 与本仓
+//    64 位槽一致（`docs/ABI.md` 的槽位宽度）。
+// ② 一条闭合出口 `lower_expr`：任何路由把没登记的 id 交回来，就地登记 `IntLit(0)`
+//    并出一声 W1010。值不变（幽灵槽原本就读 0），变的是两件事：abort 不再发生，
+//    并且这一族不再一声不出。
+//
+// 改前实拍（`target/release/zetac.pre443`，与改后那颗同目录）：编译在 `codegen.rs:6765`
+// panic，`no entry found for key`，无 stdout。改后：编译 rc=0，下面 5 行逐字相符。
+// 最后那行 `3` 是②那一族的取值（`3 + 幽灵槽` ＝ `3 + 0`）—— 幽灵那侧的类型确实还没有
+// 路由，W1010 就是这件事的登记；哪天补上路由，这一行会当场变红，提醒把 `// expect:`
+// 改成真值。
+
+fn main() {
+    let s = std::mem::size_of::<i64>()
+    println!("size_of i64 = {}", s)
+
+    let a = 3
+    let n = a * std::mem::size_of::<i64>()
+    println!("three i64 = {}", n)
+
+    let f = std::mem::size_of::<f32>()
+    println!("f32 = {}", f)
+
+    let al = std::mem::align_of::<i64>()
+    println!("align i64 = {}", al)
+
+    let g = a + BufStream::new()
+    println!("ghost = {}", g)
+}
+
+// expect: size_of i64 = 8
+// expect: three i64 = 24
+// expect: f32 = 4
+// expect: align i64 = 8
+// expect: ghost = 3

@@ -2193,6 +2193,12 @@ pub mod common {
     // only lift one, so this one is refused (and becomes W1008) instead of two
     // declarations sharing one cell.
     pub const STATIC_NAME_ALREADY_CLAIMED: &str = "W1009";
+    // Emitted once in `middle/mir/gen.rs::lower_expr`: a lowering route returned
+    // an expression id it never registered in `mir.exprs`, so the slot reads 0 and
+    // codegen — which indexes `exprs` raw for `*`/`+` operands and struct literal
+    // fields — either silently prints 0 or panics with `no entry found for key`.
+    // The name is the source shape that has no route yet.
+    pub const LOWERING_LEFT_UNREGISTERED_ID: &str = "W1010";
     pub const TYPE_COULD_BE_INFERRED: &str = "W2001";
     // Emitted as a literal in `main.rs`: the runtime object resolved to a copy in
     // the current directory while `ZETA_RUNTIME_DIR` holds a different one. The
