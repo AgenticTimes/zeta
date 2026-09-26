@@ -43,6 +43,14 @@
 命中一处才改文档，零命中（内容被就地改写过）与多命中一律拒改并原样报出来——
 宁可让人再来一遍，也不猜。详见 `rebind()` 的 docstring。
 
+第三层还有一个**键结构**造成的盲区（任务 #167，批次 436 起有读数、有 rc）：快照的键是
+`(文件, 行号)`、**不含区间终点**，所以 `f:105` 和 `f:105-129` 是同一条槽位，后写的顶掉先写的。
+实测 `docs/ABI.md` 306 条引用塌成 259 个键（47 条从来没进过比较），其中 8 组键有两种内容。
+现在 `同键多义 N 组 / 被顶掉的引用 M 条` 进汇总行并参与 rc（N>0 ⇒ rc≥1——"锚点全部对上"
+这句原话不许在有未核对引用时打印）；`--rebind` 另加一条硬判据：**算出的落点已经是别的引用的键
+⇒ 拒改**（批次 434 实测它会塌键，除总数外没有任何计数器报出来）。彻底修法是把区间终点放进
+键——那要迁基线格式与 `--bless-only` 的 `路径:行号` 语法，登记在 #167 余项，本批没做。
+
 归属的两种来源（第 4 层）：
   a) **同行最近路径**——`codegen.rs:6885-7010；:3766、:4317` 里的续写绑到 codegen.rs。
      只在同一行内继承，绝不跨行。跨行"就近归属"实测会把 §3.4 的 gen.rs 行号
@@ -323,6 +331,42 @@ def find_snippet_lines(body: list[str], snippet: str, span: int) -> list[int]:
     return hits
 
 
+def key_conflicts(rows: list[Row]) -> dict[tuple[str, int], list[str]]:
+    """找出"同一个 `(文件, 起始行)` 键上有 **>1 种内容**"的锚点。
+
+    存在的理由（任务 #167 / 批次 436）：`collect` 的快照是 `snapshot[(rel, start)] = snippet`
+    ——**键里没有区间终点**，所以 `f:105` 和 `f:105-129` 是同一条槽位，后写的顶掉先写的。
+    第 3 层的承诺是"每条合同引用都逐字核过"，而批次 436 实测 `docs/ABI.md` 有 **306 条引用
+    塌成 259 个键**（47 条从来没进过比较），其中 **8 个键上有两种不同内容** ⇒ 每个这样的键上
+    至少一条引用带着一条**不是它自己内容**的核对结果冒充已核对。这比"没核"更坏，且过去一声不出。
+    （口径：`collect(docs/ABI.md)` 返回的 `rows` 长度与 `snapshot` 键数之比，以及按
+    `(文件,起始行)` 分组后**内容种数 >1** 的组数；不是 `--list` 打印的"共 N 条"——那个数
+    就是 `rows`，它一直比"可解析"大 47，只是过去没人把两个数放在一起看。）
+
+    判据不做猜测也不改键结构（改键要迁基线格式，那是另一批）：只把"同一个键上有几条引用、
+    几种内容"如实列出来，并把**每条引用的文档行号与区间**打出来（两条前 72 字相同、只差在
+    后面的引用，光看内容看不出来谁是谁）。同键同内容（两条规则引同一行代码）不在射程内——
+    那种共用一条基线证据是**成立**的。返回值是 `{键: 该键上的全部引用行}`。
+    """
+    seen: dict[tuple[str, int], list[Row]] = defaultdict(list)
+    for row in rows:
+        seen[(row[2], row[3])].append(row)
+    return {k: v for k, v in seen.items() if len({r[5] for r in v}) > 1}
+
+
+def print_conflicts(conflicts: dict[tuple[str, int], list[Row]]) -> None:
+    for (rel, line), group in sorted(conflicts.items()):
+        kinds = len({r[5] for r in group})
+        print(
+            f"  [同键多义] {rel}:{line} — 文档有 {len(group)} 条引用共用这个 (文件,行号) 键、"
+            f"内容有 {kinds} 种（同一行号被引成了不同长度的区间）：基线只留**最后写入**的那条"
+            f" ⇒ 至少 {kinds - 1} 条引用的核对结果不是它自己的"
+        )
+        for docno, _cited, _rel, start, end, snippet in group:
+            rng = f"{start}-{end}" if end != start else str(start)
+            print(f"     · 文档第 {docno} 行引的是 :{rng} | {snippet[:72]}")
+
+
 def pair_renumber(
     old: dict[tuple[str, int], str],
     new: dict[tuple[str, int], str],
@@ -369,6 +413,7 @@ def rebind(
     idx: Index,
     old: dict[tuple[str, int], str],
     new: dict[tuple[str, int], str],
+    conflicts: dict[tuple[str, int], list[Row]],
     positions: list[Pos],
     base: Path,
     dry: bool,
@@ -391,11 +436,23 @@ def rebind(
     批次 354 把同一条纪律延伸到另外两类：改号配对只刷基线、不动文档（文档写的已经是对的），
     而**落单的新锚点一律不写入基线**——它没有配对的消失项，等于一条没被任何人对过的引用，
     收进去就是上面那个事故的另一种犯法方式。
+
+    批次 436 补第三条：**落点已被别的引用占着 ⇒ 拒改**。批次 434 在册的实测是 `--rebind`
+    把 `docs/ABI.md:679` 从 `codegen.rs:1375` 搬到 `:1392`，而 `:1392` 本身就是另一条锚点的
+    键——快照按 `(文件, 行号)` 收，两条引用塌成一条，可解析 258→257、基线 257→256，
+    **除总数外没有任何计数器报出来**（那批是靠人手工改回 679 才发现的）。反证台 E1（任务 #167）
+    实测未加判据时：改写文档、rc=0、键 2→1，一条错误都不出。现在这种落点进 `[拒改]`，
+    基线原样保留、rc≠0。判据偏保守：撞上的那条即使自己也要搬走，本批也拒——先让人把它改对，
+    下一次就过得去（宁可再跑一遍，也不塌一条证据）。
     """
     drifted = [k for k in sorted(new) if k in old and new[k] != old[k]]
     gone = [k for k in sorted(old) if k not in new]
     added_keys = [k for k in sorted(new) if k not in old]
     pairs, unmatched_gone, unmatched_added = pair_renumber(old, new, gone, added_keys)
+    # 文档**此刻**产生的全部键。落点在这个集合里就意味着"改过去会撞另一条引用"，
+    # 而快照的键没有区间终点（`collect` 是 `snapshot[(rel, start)] = snippet`）⇒ 两条塌成一条。
+    # 判据是保守的：撞上的那条即便自己也要搬走，本批也拒改——人先把它改对、再跑一次就过。
+    occupied = set(new)
     edits: list[tuple[int, int, int, str]] = []  # 文档行 / 列起 / 列止 / 新文本
     moved: list[tuple[str, int, int, int]] = []  # 文件 / 旧行 / 新行 / 段长
     refused: list[str] = []
@@ -437,7 +494,16 @@ def rebind(
         if dst == line:
             refuse((rel, line), f"{rel}:{line} → 内容命中自身所在行，判据自相矛盾（工具缺陷）")
             continue
+        if (rel, dst) in occupied:
+            refuse(
+                (rel, line),
+                f"{rel}:{line} → 落点算出来是 :{dst}，但 **:{dst} 已经是文档里另一条锚点的键**"
+                f"（快照的键是 (文件,行号)、不含区间终点 ⇒ 改过去两条引用塌成一条，"
+                f"基线和'可解析'计数各静默少 1）。不猜：这一条要由人重读后手改"
+            )
+            continue
         moved.append((rel, line, dst, span))
+        occupied.add((rel, dst))
         for docno, _, _, _, span_a, span_b in refs:
             edits.append((docno, span_a[0], span_a[1], str(dst)))
             if span_b is not None:
@@ -453,7 +519,7 @@ def rebind(
     print(
         f"rebind：漂移 {len(drifted)} 条 → 判定搬家 {len(moved)} 条 / 拒改 {len(refused)} 条"
         f"；改号配对 {len(pairs)} 对 / 落单消失 {len(unmatched_gone)} 条"
-        f" / 落单新锚点 {len(unmatched_added)} 条"
+        f" / 落单新锚点 {len(unmatched_added)} 条 / 同键多义 {len(conflicts)} 组"
     )
     for rel, line, dst, span in moved:
         rng = f"-{dst + span - 1}" if span > 1 else ""
@@ -468,11 +534,17 @@ def rebind(
               f"（它没有配对的消失项，等于一条没人核过的引用；要收它得由人显式 --bless）")
     for r in refused:
         print(f"  [拒改] {r}")
+    print_conflicts(conflicts)
+    if conflicts:
+        print(
+            f"  同键多义 {len(conflicts)} 组（这些键上只有一条内容进了基线 ⇒ rc≠0，"
+            f"重做判据要改 `collect` 的键结构，见任务 #167 余项）"
+        )
 
     if dry:
         if edits:
             print("  （--dry：文档未改动）")
-        return 1 if (refused or unmatched_added) else 0
+        return 1 if (refused or unmatched_added or conflicts) else 0
 
     if edits:
         raw_lines = doc.read_text(encoding="utf-8").splitlines()
@@ -513,7 +585,7 @@ def rebind(
         + (f"；落单新锚点 {dropped} 条未写入 → 核对器会继续报错" if dropped else "")
         + "）"
     )
-    return 1 if (refused or unmatched_added or problems2) else 0
+    return 1 if (refused or unmatched_added or problems2 or conflicts) else 0
 
 
 def load_base(base: Path) -> tuple[dict[tuple[str, int], str], Counter[str]]:
@@ -645,6 +717,7 @@ def main() -> int:
     base = Path(args.baseline)
     idx = Index(tracked_files())
     snap, problems, pending, rows, external_n, pending_locs, positions = collect(doc, idx)
+    conflicts = key_conflicts(rows)
 
     for p in problems:
         print(f"  [定位失败] {p}")
@@ -659,7 +732,11 @@ def main() -> int:
         for docno, cited, rel, start, end, snippet in rows:
             span = f"{start}-{end}" if end != start else f"{start}"
             print(f"{docno:4} {cited}:{span} → {rel}:{span} | {snippet[:96]}")
-        print(f"共 {len(rows)} 条；声明为仓外 {external_n} 条；待归属 {sum(pending.values())} 条")
+        print(
+            f"共 {len(rows)} 条引用 → {len(snap)} 个 (文件,行号) 键"
+            f"（同键多义 {len(conflicts)} 组）；声明为仓外 {external_n} 条；"
+            f"待归属 {sum(pending.values())} 条"
+        )
 
     old, old_pending = load_base(base)
     new = dict(snap)
@@ -690,6 +767,12 @@ def main() -> int:
                 f"都要覆盖才加 --force"
             )
             return 2
+        if conflicts:
+            print_conflicts(conflicts)
+            print(
+                f"  （提醒：上面 {len(conflicts)} 组同键多义 —— 全量重采只会把**最后写入**的那条"
+                f"内容盖在两条引用上。--bless 不替你判这件事，按清单改写文档才是修法）"
+            )
         write_base(base, snap, pending)
         if washed:
             print(f"  （--force：明知故犯，本次覆盖了 {len(washed)} 条被判为假的引用）")
@@ -699,13 +782,16 @@ def main() -> int:
         )
         return 2 if problems else 0
 
-    print(f"锚点：{len(snap)} 个可解析 / {len(problems)} 个定位失败（{doc}）")
+    print(
+        f"锚点：{len(snap)} 个可解析（来自 {len(rows)} 条引用）"
+        f" / {len(problems)} 个定位失败（{doc}）"
+    )
     if not base.is_file():
         print(f"[E1001] 无基线 {base}，先跑 --bless")
         return 2 if problems else 1
 
     if args.rebind:
-        return rebind(doc, idx, old, new, positions, base, args.dry)
+        return rebind(doc, idx, old, new, conflicts, positions, base, args.dry)
 
     for rel, line in sorted(drifted):
         print(f"  [漂移] {rel}:{line}")
@@ -719,6 +805,7 @@ def main() -> int:
               f"（文档新增了一条基线里没有的引用；--rebind 不会替你收它）")
     for rel, line in sorted(unmatched_gone):
         print(f"  [消失] {rel}:{line} — 文档已不再引用（且无唯一配对的新锚点）")
+    print_conflicts(conflicts)
 
     # 待归属棘轮：只许缩不许涨（新增形态 = 又留了一个核不到的引用）
     grew = {t: n for t, n in pending.items() if n > old_pending.get(t, 0)}
@@ -734,12 +821,17 @@ def main() -> int:
         f"；其中改号配对 {len(pairs)} 对 ⇒ 落单新 {len(unmatched_added)} / 落单消失 {len(unmatched_gone)}"
         f"；待归属 {sum(pending.values())} 条 / {len(pending)} 种"
         f"（基线 {sum(old_pending.values())} 条），声明为仓外 {external_n} 条"
+        f"；同键多义 {len(conflicts)} 组 / 被顶掉的引用 {len(rows) - len(snap)} 条"
     )
     if problems:
         return 2
     if drifted or added or removed:
         return 1
     if grew:
+        return 1
+    if conflicts:
+        # 「锚点全部对上」这句话在第 3 层的含义是"每条引用都被逐字核过"；同键多义时
+        # 至少一条没核过（批次 436 反证台 E2：未修前这条打印 rc=0 且原话就是"全部对上"）。
         return 1
     print("锚点全部对上")
     return 0
