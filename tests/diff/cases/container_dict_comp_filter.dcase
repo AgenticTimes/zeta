@@ -1,0 +1,12 @@
+# @cat: container
+# @note: 带过滤的字典推导式——值侧类型丢失：len 对、d[2] 打印堆地址
+#        （无过滤版本 container_dict_comprehension 全对 ⇒ 缺口特定于
+#        过滤哨兵路径的值类型，#117 打印指针家族的新触发形状，gen.rs 车道）
+#@@ python
+d = {k: v for k, v in [(1, "a"), (2, "b")] if k > 1}
+print(len(d))
+print(d[2])
+#@@ zeta
+d = {k: v for k, v in [(1, "a"), (2, "b")] if k > 1}
+print(len(d))
+print(d[2])
