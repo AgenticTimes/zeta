@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=9999 #2）
+#@@ python
+print(780 >= 395 > 283)
+print(-95.06 >= -23.44)
+print(not 65)
+
+#@@ zeta
+print(780 >= 395 > 283)
+print(-95.06 >= -23.44)
+print(not 65)
+

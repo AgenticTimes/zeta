@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=9999 #7）
+#@@ python
+print(-(--32) < -19, -32 == -32)
+print(not 95)
+print(87.47 != 46.46)
+
+#@@ zeta
+print(-(--32) < -19, -32 == -32)
+print(not 95)
+print(87.47 != 46.46)
+

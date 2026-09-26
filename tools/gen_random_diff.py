@@ -109,6 +109,30 @@ def gen_dict_case(rng: random.Random) -> str:
     return "\n".join(lines) + "\n"
 
 
+def gen_cmp_case(rng: random.Random) -> str:
+    """比较链采样：Python 链式比较（a<b<c 是 (a<b) and (b<c)）、一元 not、
+    浮点比较（只打印布尔，不打印浮点——呈现层噪声）。"""
+    lines = []
+    for _ in range(rng.randint(2, 4)):
+        shape = rng.random()
+        if shape < 0.4:
+            a, b, c = (rng.randint(-100, 1000) for _ in range(3))
+            o1, o2 = rng.choice(CMPS), rng.choice(CMPS)
+            lines.append(f"print({a} {o1} {b} {o2} {c})")
+        elif shape < 0.65:
+            x = rng.randint(-100, 100)
+            lines.append(f"print(not {x})")
+        elif shape < 0.85:
+            fa = round(rng.uniform(-100, 100), 2)
+            fb = round(rng.uniform(-100, 100), 2)
+            o = rng.choice(CMPS)
+            lines.append(f"print({fa} {o} {fb})")
+        else:
+            a, b = rng.randint(-50, 50), rng.randint(-50, 50)
+            lines.append(f"print(-(-{a}) < {b}, {a} == {a})")
+    return "\n".join(lines) + "\n"
+
+
 def gen_expr(rng: random.Random, depth: int = 0) -> str:
     if depth >= 3 or rng.random() < 0.3:
         return str(rand_int(rng))
@@ -202,16 +226,32 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
-    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict"), default="numeric")
+    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
     written = 0
     tried = 0
-    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict") else 6)
+    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp") else 6)
     while written < a.count and tried < max_tries:
         tried += 1
+        if a.mode == "cmp":
+            prog = gen_cmp_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_cmp_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: truth\n"
+                f"# @note: 随机比较链（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
         if a.mode in ("list", "dict"):
             prog = gen_list_case(rng) if a.mode == "list" else gen_dict_case(rng)
             expected = python_eval_program(prog)
