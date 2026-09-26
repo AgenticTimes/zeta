@@ -1,0 +1,5 @@
+// known-fail: 负数进制型——`{x:b}` 对负数 CPython 打 "-101010"（任意精度，
+// 符号 + 绝对值二进制），zeta 打 64 位补码全幅（位回绕，BR-M03 锁步族 sibling）。
+x = -42
+print(f"{x:b}")
+// expect: -101010

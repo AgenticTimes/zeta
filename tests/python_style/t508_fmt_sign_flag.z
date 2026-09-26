@@ -1,0 +1,8 @@
+// known-fail: f-string 符号旗标不渲染（backlog #188，py_format runtime 车道）——
+// `{n:+d}` 的 + 被解析期跳过但不输出（CT35 的"跳过 sign"实为吞掉）。
+// 随机普查 fmt 模式（486）实证：宽度组合与浮点精度两形同病。
+n = 123456
+print(f"{n:+d}")
+print(f"{n:8d}")
+// expect: +123456
+// expect:  123456
