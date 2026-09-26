@@ -32,16 +32,16 @@ runtime/py_additions.c	3465	if (GC_base((void*)h) != (void*)h) return 0;
 runtime/py_additions.c	3469	static int64_t* zt_dyn_vec_hdr(int64_t h) {
 runtime/py_additions.c	3482	int64_t have = (int64_t)GC_size((void*)hdr);
 runtime/py_additions.c	3492	int64_t zeta_dyn_len(int64_t h) {
-runtime/tokio_runtime_stub.c	170	#define MAP_ENTRY_SIZE 24
-runtime/tokio_runtime_stub.c	191	// A `-> dict` annotation on a function whose body returns `json.loads(...)` types // the result `map`, while the VALUE is a PyJson cell [tag, payload] (tag 1..
-runtime/tokio_runtime_stub.c	205	// The h-16 read must NEVER touch memory outside h's own GC block: a map // handle IS its block base, and blocks that start at a page edge make // h-16 a guard 
-runtime/tokio_runtime_stub.c	391	// LLVM renames overloaded array_new_1 to array_new.10 internally
-runtime/tokio_runtime_stub.c	395	// Multi-arg print overloads: LLVM renames print -> print.N per module, and arity // varies (1-6). Provide implementations; the .set aliases below map each prin
-runtime/tokio_runtime_stub.c	408	// LLVM .N rename aliases — data in pylib/runtime_aliases.txt; // regenerate: python3 tools/gen_from_registry.py --emit-aliases #include "aliases.inc.c"
-runtime/tokio_runtime_stub.c	1330	// Registry: stub=1. Loud fail via py_stub_abort (D / advice.md). int64_t py_stub_abort(int64_t name_ptr); int64_t py_asdict_unexpanded(int64_t v) { (void)v; re
+runtime/tokio_runtime_stub.c	206	#define MAP_ENTRY_SIZE 24
+runtime/tokio_runtime_stub.c	227	// A `-> dict` annotation on a function whose body returns `json.loads(...)` types // the result `map`, while the VALUE is a PyJson cell [tag, payload] (tag 1..
+runtime/tokio_runtime_stub.c	241	// The h-16 read must NEVER touch memory outside h's own GC block: a map // handle IS its block base, and blocks that start at a page edge make // h-16 a guard 
+runtime/tokio_runtime_stub.c	427	// LLVM renames overloaded array_new_1 to array_new.10 internally
+runtime/tokio_runtime_stub.c	431	// Multi-arg print overloads: LLVM renames print -> print.N per module, and arity // varies (1-6). Provide implementations; the .set aliases below map each prin
+runtime/tokio_runtime_stub.c	444	// LLVM .N rename aliases — data in pylib/runtime_aliases.txt; // regenerate: python3 tools/gen_from_registry.py --emit-aliases #include "aliases.inc.c"
+runtime/tokio_runtime_stub.c	1366	// Registry: stub=1. Loud fail via py_stub_abort (D / advice.md). int64_t py_stub_abort(int64_t name_ptr); int64_t py_asdict_unexpanded(int64_t v) { (void)v; re
 runtime/tokio_runtime_stub.c	2550	#define ZJ_NULL 0
-runtime/tokio_runtime_stub.c	2749	static int64_t zj_make(int64_t tag, int64_t payload) {
-runtime/tokio_runtime_stub.c	3844	int64_t zeta_call0(int64_t fptr) {
+runtime/tokio_runtime_stub.c	2785	static int64_t zj_make(int64_t tag, int64_t payload) {
+runtime/tokio_runtime_stub.c	3880	int64_t zeta_call0(int64_t fptr) {
 runtime/unavailable_stubs.c	110	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
 src/backend/codegen/codegen.rs	60	pub slot_read_ids: std::collections::HashSet<u32>,
 src/backend/codegen/codegen.rs	1117	module.add_function("zeta_call1", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
@@ -197,8 +197,8 @@ src/middle/mir/gen.rs	9266	None => slots.push(Some(v)),
 src/middle/mir/gen.rs	9269	// A `**` mapping fills whatever is still unbound. for m in spread { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { *slot = Some(AstNode::S
 src/middle/mir/gen.rs	9282	// Finally, declared defaults. if let Some(defaults) = &callee_defaults { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { if let Some(Some(d
 src/middle/mir/gen.rs	9421	// PY-A: starred args `f(*arr)` expand to per-element args // (V1: static-size arrays compile-time unrolled). for a in &ordered_args { if let AstNode::UnaryOp {
-src/middle/mir/gen.rs	9836	// (`[dynamic]str__max`), reached once annotated params keep their
-src/middle/mir/gen.rs	9855	// same ghost family as `.isna()` (`[dynamic]i64__all`).
+src/middle/mir/gen.rs	9874	// (`[dynamic]str__max`), reached once annotated params keep their
+src/middle/mir/gen.rs	9893	// same ghost family as `.isna()` (`[dynamic]i64__all`).
 src/middle/mir/gen.rs	9912	// `[dynamic]str__isna` and aborted. Route to the runtime helper.
 src/middle/mir/gen.rs	9931	// vector): compiled to the ghost `[dynamic]str__pct_change`, and
 src/middle/mir/gen.rs	9978	func: "[dynamic]str__map".to_string(),

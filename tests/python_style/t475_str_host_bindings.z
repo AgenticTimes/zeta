@@ -1,0 +1,50 @@
+// 批次 444（4.x 运行期／3.2 名表的下游）：`str` 方法的路由发往一个 AOT 侧根本没定义的
+// 符号 —— 编译一路绿灯，死在链接期。
+//
+// `host_str_*` 这套名字有两个宿主：JIT 侧是 `src/runtime/host.rs` 里的 Rust 实现
+// （`host_str_find` 在 `:252`、`host_str_count` 在 `:266`、`host_str_lstrip`/`_rstrip`
+// 在 `:285`/`:290`，经 `pylib/jit_mappings.txt` 接线），AOT 侧是 `runtime/tokio_runtime_stub.c`
+// 里那一串 `host_str_xxx → str_xxx` 别名（`:108` 起）。**两边各自长了一批，谁也不核对谁**：
+// 名表把 `find`/`index`/`count`/`lstrip`/`rstrip` 下成 `host_str_find`/`host_str_count`/
+// `host_str_lstrip`/`host_str_rstrip`（`gen.rs:15375-15385`，`index` 与 `find` 共用一支），
+// 而 C 侧这四个别名从来没写过 ⇒ `ld: Undefined symbols: _host_str_find`、rc=1。
+// 改前实拍（**同一颗** `target/release/zetac`，只用 `ZETA_RUNTIME_DIR` 把链接对象换成
+// `git show HEAD:tokio_runtime.o` 那一颗）：编译 rc=1、缺的正是这四个名字、没有产物；
+// 换回改后那颗 ⇒ rc=0、下面 9 行逐字相符。
+//
+// 一条路由对应一支探针，两种接收者形状（字面量／变量）都实测过，全是 rc=1：
+//   `.count()`→`_host_str_count` · `.find()`→`_host_str_find` · `.index()`→`_host_str_find`
+//   · `.lstrip()`→`_host_str_lstrip` · `.rstrip()`→`_host_str_rstrip`
+// 同族里**没坏**的那几支留在用例里当负对照：`.strip()`（`host_str_trim` 早就接了）、
+// `.strip("a")`/`.lstrip(" ")`/`.rstrip(" ")`/`.split()` 三形/`.replace(a,b,n)` 六支实测 rc=0，
+// 本批一字未动。
+//
+// 取值一律按 CPython 3 实拍（`python3` 同体跑一遍）：`"banana".count("na")`＝2（非重叠）、
+// `find` 给字节下标、找不到给 -1。`index` 找不到时 Python 抛 ValueError，本仓这一支与
+// `find` 共用一条路由 ⇒ 只会打 -1，那条分歧另案登记，本批用例只断言找得到的形状。
+//
+// 边界：`.find(t, start)` 与 `.repeat(n)` 是**另一支病因** —— 名表没有 argc 匹配的臂，
+// 兜底把裸方法名当外发符号（`_find`/`_repeat`）。它们本批仍然链不上，不收进这条锁。
+
+s = "banana"
+print("A", s.count("na"))
+print("B", s.count("an"))
+print("C", s.find("n"))
+print("D", s.find("q"))
+print("E", s.index("n"))
+t = "  hi  "
+print("F", "[" + t.lstrip() + "]")
+print("G", "[" + t.rstrip() + "]")
+print("H", "[" + t.strip() + "]")
+u = "abcabc"
+print("I", u.count("b") + u.find("c"))
+
+// expect: A 2
+// expect: B 2
+// expect: C 2
+// expect: D -1
+// expect: E 2
+// expect: F [hi  ]
+// expect: G [  hi]
+// expect: H [hi]
+// expect: I 4

@@ -104,6 +104,38 @@ int64_t str_replace(int64_t s, int64_t old_s, int64_t new_s) {
     }
     strcpy(o,p); return (int64_t)out;
 }
+int64_t str_find(int64_t hay, int64_t needle) {
+    if (!hay || !needle) return -1;
+    const char* p = strstr((char*)hay, (char*)needle);
+    return p ? (int64_t)(p - (char*)hay) : -1;
+}
+int64_t str_count(int64_t hay, int64_t needle) {
+    if (!hay || !needle) return 0;
+    const char* p = (const char*)hay;
+    size_t plen = strlen((char*)needle);
+    // CPython counts empty needle as len+1; without this the loop below never advances.
+    if (plen == 0) return (int64_t)strlen(p) + 1;
+    int64_t n = 0;
+    while ((p = strstr(p, (char*)needle)) != NULL) { n++; p += plen; }
+    return n;
+}
+int64_t str_lstrip(int64_t s) {
+    if (!s) return 0;
+    char* start = (char*)s;
+    while (*start && isspace((unsigned char)*start)) start++;
+    size_t l = strlen(start);
+    char* out = (char*)GC_malloc(l+1);
+    memcpy(out, start, l); out[l] = 0;
+    return (int64_t)out;
+}
+int64_t str_rstrip(int64_t s) {
+    if (!s) return 0;
+    size_t l = strlen((char*)s);
+    while (l > 0 && isspace((unsigned char)((char*)s)[l-1])) l--;
+    char* out = (char*)GC_malloc(l+1);
+    memcpy(out, (char*)s, l); out[l] = 0;
+    return (int64_t)out;
+}
 
 
 // host_str_* aliases (codegen maps str_.method() to host_str_*)
@@ -165,6 +197,10 @@ int64_t host_str_starts_with(int64_t h, int64_t n) { return str_starts_with(h, n
 int64_t host_str_ends_with(int64_t h, int64_t n) { return str_ends_with(h, n); }
 int64_t host_str_contains(int64_t h, int64_t n) { return str_contains(h, n); }
 int64_t host_str_replace(int64_t s, int64_t o, int64_t n) { return str_replace(s, o, n); }
+int64_t host_str_find(int64_t h, int64_t n) { return str_find(h, n); }
+int64_t host_str_count(int64_t h, int64_t n) { return str_count(h, n); }
+int64_t host_str_lstrip(int64_t s) { return str_lstrip(s); }
+int64_t host_str_rstrip(int64_t s) { return str_rstrip(s); }
 
 // === Map runtime (i64 key/value, open-addressing hash map, GC-allocated) ===
 #define MAP_ENTRY_SIZE 24
