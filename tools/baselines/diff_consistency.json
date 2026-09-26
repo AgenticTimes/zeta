@@ -1,13 +1,13 @@
 {
   "total": 458,
   "judged": 458,
-  "match": 404,
-  "rate_pct": 88.2,
-  "match_min": 404,
+  "match": 406,
+  "rate_pct": 88.6,
+  "match_min": 406,
   "by_verdict": {
-    "mismatch": 48,
+    "mismatch": 46,
     "runtime": 3,
-    "match": 404,
+    "match": 406,
     "compile": 3
   },
   "per_cat": {
@@ -16,7 +16,7 @@
       "judged": 43
     },
     "str": {
-      "match": 77,
+      "match": 79,
       "judged": 83
     },
     "container": {
@@ -1711,11 +1711,11 @@
     },
     "str_percent_fmt": {
       "cat": "str",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "str_percent_format_family": {
       "cat": "str",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "str_repeat": {
       "cat": "str",
