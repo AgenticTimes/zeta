@@ -1,13 +1,13 @@
 {
-  "total": 431,
-  "judged": 431,
+  "total": 434,
+  "judged": 434,
   "match": 383,
-  "rate_pct": 88.9,
+  "rate_pct": 88.2,
   "match_min": 383,
   "by_verdict": {
+    "mismatch": 49,
     "runtime": 1,
     "match": 383,
-    "mismatch": 46,
     "compile": 1
   },
   "per_cat": {
@@ -21,7 +21,7 @@
     },
     "container": {
       "match": 141,
-      "judged": 154
+      "judged": 157
     },
     "numeric": {
       "match": 65,
@@ -33,6 +33,10 @@
     }
   },
   "cases": {
+    "class_cross_method_str": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
     "class_dict_composition": {
       "cat": "container",
       "verdict": "runtime"
@@ -40,6 +44,10 @@
     "class_method_str_accum": {
       "cat": "container",
       "verdict": "match"
+    },
+    "class_str_comprehension": {
+      "cat": "container",
+      "verdict": "mismatch"
     },
     "container_append": {
       "cat": "container",
@@ -80,6 +88,10 @@
     "container_dict_list_mixed": {
       "cat": "container",
       "verdict": "match"
+    },
+    "container_dict_methods": {
+      "cat": "container",
+      "verdict": "mismatch"
     },
     "container_empty_dict_truth": {
       "cat": "container",

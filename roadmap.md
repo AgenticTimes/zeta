@@ -21110,6 +21110,60 @@ pyramid 层＝**4.x 门禁与度量面**（本批不动编译器一行源码）�
 - **队头**（按已实测损害量，交用户裁定后开 452）：① **#194** 组合崩溃定位（类字段 dict × 方法内 for × `w[0]` × if/else 读改写，n=3 确定复现、复现件在 `/tmp/b449/c511/`）；② 简报 ① 真除法（11 例闸门，前置＝"下游有没有依赖 `/` 取整"的排查）；③ **#182 余 57 行**；④ **#167 余项**（键结构迁移）；⑤ **#195**（本批新立，损害只有 1 形且语料成员未量，修法已知＝判据改看"首参是 `cls` 且类表命中"，先量再动）。
 - 下一次全量门禁＝**批次 460**。
 
+## 旁路并入（2026-09-26）：批次 507b/513b/514/515 ＋ 批次 451 收尾合并
+
+### 一、并入面与"零重编"的读法
+
+`git merge cleanup`＝**`2feff1de`**，并 6 颗（`git log bootstrap..cleanup --oneline`＝`376e46bc` 简报 ⑫ 文档、`89a5df8a` 513b 台账、`770d7629` 514 两条 `.dcase`、`75e7d06e` 515 一条 `.dcase`、`eefd7071` 515 台账、`0ae7b4f1` 507b 台账——按 `git rev-list` 时序列出）。合并提交的文件面（`git show --numstat HEAD`）：
+
+| 文件 | numstat |
+|---|---|
+| `docs/HANDOFF-CENSUS-FAMILIES-2026-09-26.md` | 28/0 |
+| `tests/diff/cases/class_cross_method_str.dcase` | 22/0（新） |
+| `tests/diff/cases/class_str_comprehension.dcase` | 38/0（新） |
+| `tests/diff/cases/container_dict_methods.dcase` | 17/0（新） |
+| `worktree.md` | 3/1（冲突解，见 §二） |
+
+**`src/`、`runtime/`、`docs/ABI.md`、`tools/baselines/` 零命中**，也没有新的 `tests/python_style/t*.z` ⇒ `python_style` 分母不动。合并后 `cargo build --release` 当场回 **`Finished in 0.55s`**＝未重编，`md5 target/release/zetac`＝`af087b05e2db85998a176a5d9c868199`（与 451 改后那颗在册哈希逐字相同）。按 447 的教训，这串哈希**只作观察记录、不用它论证二进制同异**——论证用的是"并入面没有一处编译器输入"。
+
+**"并 6 颗"只对本次合并成立**：解完冲突并提交后 `git rev-list --count bootstrap..cleanup` 又回 **2**（`7750e116` 批次 510 的两条 `.dcase`＋`283473fa` 其台账），这两颗**不在**上面的文件面与 diff 读数里、也**不在** `2feff1de` 的祖先集内（`git merge-base --is-ancestor 7750e116 HEAD`＝否）——旁路在主线收尾窗口里继续推进，下一次合并会带走它们（届时差分分母还会再动一次，#186 那一格按同一口径重取）。
+
+### 二、一处冲突，按"两侧都留"解；成因是一条流程危险，立 #196
+
+冲突只在 `worktree.md` §4（主线台账）：HEAD 侧 449／449 收尾／450／451 四行 vs cleanup 侧**空**。解法＝四行主线台账全留、旁路 §5 的 515／507b 两行与 513b 的指针改判全收（终态 `grep -c '^| 4(4[6-9]|50|51) \|'` 逐号＝1）。
+
+成因不是"两班各写同一行"，而是**旁路的纯文档提交 `89a5df8a`（513b 入册）从陈旧快照整文件重写，把 §4 里 449／449 收尾／450 三行主线台账整段删掉了**：
+
+```
+git show cleanup:worktree.md | grep -c '^| 450 |'   → 0
+git show HEAD:worktree.md    | grep -c '^| 450 |'   → 1
+git log cleanup -S'| 450 | bootstrap |' -- worktree.md → 89a5df8a
+```
+
+**这次是被撞上的，不是被发现的**：451 那一行恰好插在同一位置（§4 表尾、`（续）` 占位之前），才让 git 报冲突。若本批没有 §4 新增，这三行会在"自动合并 worktree.md"一声不出地消失。合并协议（`worktree.md` §7）现在只管"批次中间不合并"，不管"合并后主线台账还在不在" ⇒ 立 **#196**（S，主线侧可做）。
+
+### 三、diff 单步读数与 #186 第六次当场复发
+
+并入的三条 `.dcase` 直接进差分分母，故本批收尾只补跑受影响的那一步（`tools/diff_test.py`，同一颗二进制、独占机器、串行）：
+
+| 读数 | 450 全量在册 | 451 改后（基线 431） | 合并树实跑 |
+|---|---|---|---|
+| match | 382 | 383 | **383** |
+| judged／总用例 | 431 | 431 | **434** |
+| rate | 88.6% | 88.9% | **88.2%** |
+| bad_case | 0 | 0 | **0** |
+| rc | 0 | 0（bless 后） | **0**（"差分一致率无回归"） |
+
+跑前基线 `total=431`/`cases=431`，实跑 434 ⇒ **#186 那格第六次当场复发**（446 一次、446 收尾一次、447 收尾一次、448 收尾一次、450 一次、本次一次）。分步计数（`/tmp/b451c/diff_pre.log`）：truth 42/43、str 66/79、**container 141/157**（450 时代 140/154 ⇒ 分母 +3、match +0，三条新例全红＝旁路 514/515 的钉桩按预期红）、numeric 65/86、control 69/69。
+
+主线侧代录 `--bless`（`/tmp/b451c/diff_bless.log`，`BLESS_RC=0`）：json **1761 → 1773 行**（`git diff --numstat`＝**+17/−5**，删的 5 行全是计数字段），`cases` **431 → 434**、`total` 434、`match_min` **保持 383**（新例是红，不抬地板）。逐条核对（`/tmp/b451c/cases_before.json` 与改后 `cases` 的键/判定对比）：**新增恰为那 3 条／消失 0 条／既有条目 verdict 改动 0 条**；`by_verdict` = `{match 383, mismatch 49, compile 1, runtime 1}`（mismatch 46→49＝三条新例）。bless 后复跑判定 **`CONFIRM_RC=0`／"差分一致率无回归"、读数逐字相同**（`/tmp/b451c/diff_confirm.log`）。
+
+未重跑的步骤与口径：`official`／语料／jit／truth 等步的输入（`src/**`、`pylib/**`、用例文本）在并入面零命中 ⇒ 沿用 451 在册读数；锚点无搬家（不动 `docs/ABI.md`、不改 `.rs`）。下一次全量门禁＝**批次 460**。
+
+### 四、产物与账务
+
+产物：`/tmp/b451c/`（`diff_pre.log`/`diff_bless.log`/`diff_confirm.log`/`confirm_merge.json`/`cases_before.json`）。收尾移除 `target/release/zetac_pre451`。**OPEN 净增 +1（27→28，≤30）**：新立 **#196**（合并协议看不见"主线台账行被邻侧整文件重写顶掉"），无可配对关闭。452 队头不变：#194 组合崩溃 → 简报 ① 真除法 → #182 余 57 行 → #167 余项 → #195（先量再动）；#196 是 S 粒度的流程项，可插队也可并批。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
