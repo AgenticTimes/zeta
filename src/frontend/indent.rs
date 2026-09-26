@@ -37,7 +37,8 @@ use std::fmt;
 // （语料实测：128 行的文件报 ：729）。查询按"remaining 是哪份 pp 的后缀"匹配，
 // 与解析顺序无关；上限 64 份（REPL 每行一压也不无界）。
 thread_local! {
-    static LAST_PP: RefCell<Vec<(String, Vec<usize>)>> = const { RefCell::new(Vec::new()) };
+    static LAST_PP: RefCell<Vec<(String, Vec<usize>, Option<String>)>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 const LAST_PP_CAP: usize = 64;
@@ -47,14 +48,34 @@ pub fn set_last_preprocess(text: String, origins: Vec<usize>) {
     LAST_PP.with(|c| {
         let mut stack = c.borrow_mut();
         // 同一份文本重复解析（REPL 逐行重编）只保留一份
-        if stack.last().is_some_and(|(t, _)| *t == text) {
+        if stack.last().is_some_and(|(t, _, _)| *t == text) {
             return;
         }
         if stack.len() >= LAST_PP_CAP {
             stack.remove(0);
         }
-        stack.push((text, origins));
+        let path = CUR_PARSE_PATH.with(|c| c.borrow().clone());
+        stack.push((text, origins, path));
     });
+}
+
+// 批次 471：W1004 在**解析期间**发射，等不到 parse_zeta 返回后再打标——
+// 路径必须随解析传入。`parse_zeta_tagged` 设置线程局部路径，
+// `set_last_preprocess`（parse_zeta 内部）入栈时随身携带。
+thread_local! {
+    static CUR_PARSE_PATH: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// 带路径的 parse_zeta：CLI 文件模式 / bootstrap / 模块加载器用；
+/// 无路径的调用方（REPL 合成、lib API 无路径形态）继续用 parse_zeta。
+pub fn parse_zeta_tagged<'a, 'b>(
+    path: &str,
+    input: &'a str,
+) -> nom::IResult<&'a str, Vec<crate::frontend::ast::AstNode>> {
+    CUR_PARSE_PATH.with(|c| *c.borrow_mut() = Some(path.to_string()));
+    let r = crate::frontend::parser::top_level::parse_zeta(input);
+    CUR_PARSE_PATH.with(|c| *c.borrow_mut() = None);
+    r
 }
 
 pub fn clear_last_preprocess() {
@@ -68,9 +89,9 @@ fn line_for_suffix_impl(
     remaining: &str,
     fallback_source: &str,
     trim_leading: bool,
-) -> Option<usize> {
+) -> Option<(Option<String>, usize)> {
     LAST_PP.with(|c| {
-        for (pp, origins) in c.borrow().iter().rev() {
+        for (pp, origins, path) in c.borrow().iter().rev() {
             if pp.ends_with(remaining) {
                 let off = pp.len() - remaining.len();
                 let trim = if trim_leading {
@@ -80,7 +101,8 @@ fn line_for_suffix_impl(
                 };
                 let byte_off = off + trim;
                 let pp_line = pp[..byte_off.min(pp.len())].bytes().filter(|&b| b == b'\n').count();
-                return Some(origins.get(pp_line).copied().unwrap_or(pp_line + 1));
+                let line = origins.get(pp_line).copied().unwrap_or(pp_line + 1);
+                return Some((path.clone(), line));
             }
         }
         if fallback_source.ends_with(remaining) {
@@ -91,13 +113,12 @@ fn line_for_suffix_impl(
                 0
             };
             let byte_off = off + trim;
-            return Some(
-                fallback_source[..byte_off.min(fallback_source.len())]
-                    .bytes()
-                    .filter(|&b| b == b'\n')
-                    .count()
-                    + 1,
-            );
+            let line = fallback_source[..byte_off.min(fallback_source.len())]
+                .bytes()
+                .filter(|&b| b == b'\n')
+                .count()
+                + 1;
+            return Some((None, line));
         }
         None
     })
@@ -105,11 +126,11 @@ fn line_for_suffix_impl(
 
 /// `ensure_fully_parsed` 用：跳过 remaining 的前导空白后取行（C1 原两步查询的合并）。
 pub fn line_for_remaining(remaining: &str, fallback_source: &str) -> Option<usize> {
-    line_for_suffix_impl(remaining, fallback_source, true)
+    line_for_suffix_impl(remaining, fallback_source, true).map(|(_, line)| line)
 }
 
-/// 吞词/同步点诊断用：remaining 起点即语句位置，不跳空白。
-pub fn line_for_stmt_start(remaining: &str, fallback_source: &str) -> Option<usize> {
+/// 吞词/同步点诊断用：返回 (文件路径[若有], 行号)——批次 471 起诊断带文件名。
+pub fn line_for_stmt_start(remaining: &str, fallback_source: &str) -> Option<(Option<String>, usize)> {
     line_for_suffix_impl(remaining, fallback_source, false)
 }
 
@@ -1201,11 +1222,12 @@ mod last_pp_stack_tests {
         set_last_preprocess(b_text.clone(), b_orig);
         // A 的后缀（从第 8 行起）
         let a_suffix = a_text.split_inclusive('\n').skip(7).collect::<String>();
-        let line = line_for_stmt_start(&a_suffix, "").unwrap_or(0);
+        let (path, line) = line_for_stmt_start(&a_suffix, "").unwrap_or((None, 0));
         assert_eq!(line, 8, "A 的后缀必须查到 A 的行表，而不是栈顶的 B");
+        assert_eq!(path, None, "未打标的行表不带路径");
         // B 的后缀照常
         let b_suffix = b_text.split_inclusive('\n').skip(1).collect::<String>();
-        assert_eq!(line_for_stmt_start(&b_suffix, "").unwrap_or(0), 2);
+        assert_eq!(line_for_stmt_start(&b_suffix, "").unwrap_or((None, 0)).1, 2);
     }
 
     #[test]
@@ -1218,8 +1240,22 @@ mod last_pp_stack_tests {
         let stray = "ZZZ line 1\nZZZ line 2\n";
         assert_eq!(line_for_stmt_start(stray, ""), None);
         assert_eq!(line_for_remaining(stray, ""), None);
-        // fallback_source 匹配时照常给出
-        assert_eq!(line_for_stmt_start(stray, stray), Some(1));
+        // fallback_source 匹配时照常给出（无路径）
+        assert_eq!(line_for_stmt_start(stray, stray), Some((None, 1)));
+        clear_last_preprocess();
+    }
+
+    #[test]
+    fn tagged_path_flows_to_stmt_location() {
+        // 路径经 parse_zeta_tagged 的线程局部传入 set_last_preprocess（471）。
+        CUR_PARSE_PATH.with(|c| *c.borrow_mut() = Some("strat/codes/wufu.py".to_string()));
+        let (a_text, a_orig) = pp(5, "AAA");
+        set_last_preprocess(a_text.clone(), a_orig);
+        CUR_PARSE_PATH.with(|c| *c.borrow_mut() = None);
+        let suffix: String = a_text.split_inclusive('\n').skip(2).collect();
+        let (path, line) = line_for_stmt_start(&suffix, "").unwrap();
+        assert_eq!(path.as_deref(), Some("strat/codes/wufu.py"));
+        assert_eq!(line, 3);
         clear_last_preprocess();
     }
 
@@ -1232,7 +1268,7 @@ mod last_pp_stack_tests {
         let tail: String = a_text.split_inclusive('\n').skip(4).collect();
         let suffix = "\n".to_string() + &tail;
         assert_eq!(line_for_remaining(&suffix, "").unwrap_or(0), 5);
-        assert_eq!(line_for_stmt_start(&suffix, "").unwrap_or(0), 4);
+        assert_eq!(line_for_stmt_start(&suffix, "").unwrap_or((None, 0)).1, 4);
         clear_last_preprocess();
     }
 }

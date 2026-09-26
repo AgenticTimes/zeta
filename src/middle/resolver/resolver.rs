@@ -2554,7 +2554,7 @@ impl Resolver {
             src.clone()
         };
         crate::frontend::parser::top_level::set_parsing_imported_module(true);
-        let asts = match crate::frontend::parser::top_level::parse_zeta(&pre) {
+        let asts = match crate::frontend::indent::parse_zeta_tagged(&path.to_string_lossy(), &pre) {
             Ok((_rem, a)) => a,
             Err(_) => {
                 crate::frontend::parser::top_level::set_parsing_imported_module(false);
