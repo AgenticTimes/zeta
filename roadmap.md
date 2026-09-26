@@ -21164,6 +21164,63 @@ git log cleanup -S'| 450 | bootstrap |' -- worktree.md → 89a5df8a
 
 产物：`/tmp/b451c/`（`diff_pre.log`/`diff_bless.log`/`diff_confirm.log`/`confirm_merge.json`/`cases_before.json`）。收尾移除 `target/release/zetac_pre451`。**OPEN 净增 +1（27→28，≤30）**：新立 **#196**（合并协议看不见"主线台账行被邻侧整文件重写顶掉"），无可配对关闭。452 队头不变：#194 组合崩溃 → 简报 ① 真除法 → #182 余 57 行 → #167 余项 → #195（先量再动）；#196 是 S 粒度的流程项，可插队也可并批。
 
+## 批次 452（4.3.b／动态下标的第三判形）：`zeta_dyn_getitem` 只有 vec/map 两臂 ⇒ 动态槽里的 `char*` 被当字典读，BATCH-423 那道守卫把**字符串自己的内容**当成了桶容量
+
+代码提交 **52027a45**（`fix(runtime): 批次 452 —— 动态下标补上文本臂：char* 不再被当字典读而撞 PY-A 守卫`，4 文件 **+101/−0**：`runtime/py_additions.c` +40/−0、`t484_dyn_text_getitem.z` 45 行、`t485_dyn_getitem_guard_stays_loud.z` 16 行、`zeta_runtime_c.o` 重编）。pyramid 层＝**4.3.b**（值身上没有类型标记）在**运行期判形**这一面的第三个成员（前两个＝`zeta_dyn_len`、`zeta_dyn_contains`）。
+
+### 一、根因链（四跳，逐跳有实拍）
+
+| 跳 | 结论 | 证据（本批当场跑） |
+|---|---|---|
+| ① | 崩点**不在**下型／布局层 —— IR 与机器码两侧都对 | `/tmp/b452/c511.ll`：`@TextStats` 把 `words` 写在偏移 0、`map` 写在偏移 8，`@"TextStats::build"` 读 `[self+8]` 再 `inttoptr` 交给 `map_get` —— 字段族（433/434）那条线与此无关 |
+| ② | 真正打到的是运行期判形：动态槽里的接收者**没有类型标记**（#117 那一格） | `gen.rs:14056-14070`：`base_ty` 是 `I64\|PyDynamic` 且索引非 `Str` ⇒ 发 `zeta_dyn_getitem(bid, iid)` 裸句柄；改前它只有 vec/map 两臂，`char*` 一路走到 `return map_get(base, key)` 兜底 |
+| ③ | 崩溃报告自己指认了形状：守卫把**字符串内容**当桶容量 | `t484_pre.err` 首行＝`PY-A: map_get was called on a value that is not a dict (handle=0x104dfb3e0, first word=8530099604827435105)`；`8530099604827435105 = 0x766100656c707061` ＝小端字节 `"apple\0av"`，`handle` 是 `"apple"` 的句柄本身 |
+| ④ | 下标路由在具名侧本来就有文本臂，动态侧漏了 | `gen.rs:13885`（`Type::Str` ⇒ `str_get`）vs `zeta_dyn_getitem`（改前无文本臂）；反汇编非 vec 路径全部 `b _map_get` 尾调，实参＝接收者＋下标 |
+
+### 二、修法（只落 `zeta_dyn_getitem`，一处）
+
+新增 `zt_dyn_is_text`（`runtime/py_additions.c:3437`）：`h <= 0x1000` 直接拒；否则做**一次**有界 `vm_read_overwrite`（读到下一个 4096 边界为止、最多 32 字节），要求**32 字节内可打印且被 NUL 收尾**；命中则在 vec 臂之后、map 兜底之前转调既有 `str_get`（`:3482`）。
+
+- vec 臂、map 兜底**一字未动**（不重排、不改判形）⇒ 本批爆炸半径只有"原本会 PY-A 的那条形"。
+- 判据比 452 之前的 `zeta_dyn_len` 文本臂（"可读即 `strnlen`"）**更紧**：`len` 判错只是数错一个数，下标判错会返回一个**看不出破绽的 1 字符串**，把该出声的形状悄悄咽下去。语料面口径（本批重跑 `/tmp/b452/ir/*.ll` 40 个文件）：**938 个 `zeta_dyn_getitem` 调用点**＋40 条 `declare`（`grep 'zeta_dyn_getitem' \| grep -c call`＝938），所以文本臂必须让原生存整数、指针槽、清零的 struct 头继续撞 PY-A 守卫。
+
+### 三、两颗夹具的改前/改后实拍（都从**仓根**编，`ZETA_RUNTIME_DIR`＋`ZETA_STRICT_RUNTIME_DIR=1`，各 2 行 W2002 为覆盖生效的证据）
+
+| 夹具 | 改前二进制 | 改后二进制 |
+|---|---|---|
+| `t484_dyn_text_getitem.z`（`TextStats` 字段列表 ＋ `LocalWords` 方法内字面列表，各 `len(w[0]) == 1`） | rc=1、stdout 空、stderr 首行 `handle=0x104dfb3e0, first word=8530099604827435105` | rc=0、stdout `3``4`（期望值当场 `python3`＝CPython 3.14.5 对数） |
+| `t485_dyn_getitem_guard_stays_loud.z`（负对照：map 值槽里的 7 进 `v[0]`） | rc=1、`handle=0x7, first word=0` 撞 map 守卫 | **逐字相同**（rc=1、同一行）＝本夹具的目的，锁"没把守卫放宽" |
+
+### 四、快门禁（`runtime/*.c` 路由＝`python_style` + `official` + 位移 A/B；日志 `/tmp/b452/gate452.log`）
+
+| 步骤 | 读数 | 判定 |
+|---|---|---|
+| official | compile **194/194**、compile+link **191/194**（link-only 3 条存量） | 与在册相同 |
+| compile-diagnostics | official 5 文件 / 21 行；python_style 116 文件 / **244** 行 | 244 ＝ 450 时代在册值，无新增诊断面 |
+| python_style（374 例） | **370 passed / 2 failed / 15 known-fail / 0 xpass** | 红＝存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`；本批两颗新例都在 passed 内 |
+| dyn_binding | 4 条断言、不一致 **0** | 不变 |
+
+**门禁整步 rc 未单独戳记**（`GATE_RC` 这一格本批空缺，如实登记；三条快门禁读数齐全）。
+
+### 五、主线 301 位移 A/B（同颗 `zetac` × pre/post `.o`，n=6/侧交替，产物同目录，每次重编）
+
+- 改前 `.o` md5 `be8f9a9d854c67eb79929626201016a6`（98,056 B）→ 改后 `260ce015b3afded9f6ec6ce8022674fe`（98,368 B）；`tokio_runtime.o` md5 `bc2e0dcf5171bb052ce1f79520e6f424` 未变。
+- `compile_rc` **12/12 = 0**。运行期 rc 分布：pre **6/6 = 0**；post **4/6 = 0、2/6 = 139（SIGSEGV）**（`post_1`、`post_5`）。
+- 两颗崩的崩溃身份逐字相同＝**`str_trim` + 24**（`~/Library/Logs/DiagnosticReports/bin-2026-09-26-{235004,235257}.ips` 的 `faultingThread` 帧 0：`imageOffset=252568, symbolLocation=24`），**堆栈里没有本批新臂的任何帧**（`zt_dyn_*`/`str_get` 命中 0）⇒ 这是 #145 在册的存量崩，不是本批引入的。
+- 判据：Fisher 精确检验（0/6 vs 2/6）**单侧 p=1.0000／双侧 p=0.4545** ⇒ 该差异与"出码非确定性＋同侧方差"不可分。**三格计数器在两侧所有 rc=0 的跑里逐字相同**（`parity=74 / fail1=74 / morning=37`，`stderr=321 行`）。
+- 判定：**主线 301 位移 = 0**（既不计收益、也不计回归）。
+- 在册计数器观察：`动态池更新失败` 两侧**均为 0**（此前在册非 0）。**未归因** ⇒ 不入账为本批收益，折进 **#117** 那一格继续观察。
+
+### 六、锚点重绑（`docs/ABI.md` ＋ `tools/baselines/abi_anchors.tsv`，随记录批提交）
+
+`--rebind` 自动接走 **2 条**（`:3457` 家族里的 `GC_base`/`GC_size` 那一处，docs 第 535 行）；其余 **11 处手绑**（`zt_dyn_is_map :3457→:3503`、`zt_dyn_vec_hdr :3469→:3515`、`zeta_dyn_len :3492→:3538`，及区间 `3457-3467→3503-3513`、`3469-3491→3515-3537`、`3457-3491→3503-3537`、`3492-3500→3538-3550`、`:3485-3487→:3525-3527`；含 514-523 与 753-756 两处重复锚点表）。`--bless-only` 点名 3 个键成功、第 4 个键（`:3525-3527`）**点名不中**——它是**裸行号引用**，核对器看不见（**#52 本批第二次撞实**）；手删 3 条陈旧基线行（3457/3469/3492）后终态读数（`/tmp/b452/anchor_final2.log`）：**漂移 26→23 / 新 11 / 消失 12（改号配对 0 对）/ 基线 258 条 / rc=2（在册终态）**。核对器自身的 7 组"同键多义"（被顶掉引用 47 条）是**存量结构问题**，不算本批 credit、也不算本批回归。
+
+### 七、未收与登记
+
+- **#194 的崩溃半已收**（本批），**余项＝动态槽下标结果仍没有 Str 标记**：实测 `print(w)` 打地址、`print(w[0])` 打 1 字符；1 字符键在 map 里**不按内容 dedup**（本仓 3 vs CPython 2）。已改登到 **#194 余项**（OPEN 净增 **0**）。
+- 刻意不做两件：① 让 vec 臂也改用共享 `zt_dyn_vec_hdr`（**#32**，今日无实测成员）；② 给动态下标结果补类型标记（＝ **#194 余项／#117**，是下型面的活，不运行期打补丁）。
+- 下一次全量门禁＝**批次 460**。460 前队列：简报 ① 真除法 → **#182 余 57 行** → **#167 余项** → **#195/#196** → **#145 `str_trim+24`**（本批 A/B 又两次打在它身上：`symbolLocation=24`，`imageOffset=252568`）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
