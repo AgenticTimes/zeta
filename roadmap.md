@@ -20013,6 +20013,65 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 - **OPEN 净增 +1**（#171 结案、#178 新登记＝一收一发；#179 从旁路接过来是净增那 1）。
 - **队头不变**：#177 → **#176**（旁路 460 说 array.z 解析修好后这一层才露出来，合并树里它已在射程内）→ #178 → #163；#145 仍等 `runtime/py_additions.c` 授权。
 
+## 批次 442（3.2 Lowering／`("", 2)` 替身读的具名类别成员那一格）：pylib 的 `Series` 没有 `index` ⇒ 语料 6 条读拿接收者自己的第一个词当值；主线位移 0
+
+### 一、结论栏（两栏分开）
+
+| 栏 | 读数 |
+|---|---|
+| **对主线 301 位移** | **0**（两颗同目录二进制、n=6/侧，两侧都只落在在册的那两个态；详见 §五）。 |
+| **"修好了"栏** | #177 的 24 条里**收掉 6 条**（`Series.index`），并把余下 18 条**按因分完**——每类都有声明点坐标与"为什么编译器不可能知道"的实证。 |
+| 口径变化 | 同一次语料编译的 `FA read` 探针分母 **502 → 508**（新属性读走进 `Series::index` 体内，多出的 6 条是 `self.data` 的字段读与 `len`）。替身计数只在**同一分母口径内**可比。 |
+
+### 二、pyramid 归位与头名来源
+
+3.2 Lowering／4.3.b 库数据面（`src/backend/codegen/codegen.rs` 的 `resolve_field_slot` 兜底 + `pylib/pandas.z` 的成员表）。头名＝任务 #177（439 登记，本批开工第一步按其原文定位因果，未先写判据）。
+
+### 三、病因链（先把 24 条按名字归位，再逐名找声明点）
+
+改前语料探针（`ZETA_DBG_FA=1`、`_drv_accept_409.py`、**502/502 行成对**）：`variant="" field_count=2` 的读 **107** 条，按接收者 `base_ty` 分组后**类别已知**的正好 **24** 条——与 #177 在册数逐字相同（这条同时是"分组 awk 没漏项"的正证据）：
+
+| 接收者类别 | 成员名 | 条数 | 声明布局 | `FA decls` | 为什么两条路都不认 |
+|---|---|---|---|---|---|
+| `Series` | `index` | 6 | `struct_Series_1`（只有 `data`） | `declarers=0` | **我们自己的库缺成员**：`pylib/pandas.z` 的 `DataFrame` 有 `def index(self)`（:168），`Series` 没有 ⇒ 布局里没有、`Series::index` 函数也不存在 ⇒ 批次 295 的按名属性读（`{Class}::{field}` 查表，`codegen.rs:7230` 那一段）拿不到东西 |
+| `jq_shim___FinanceModule` | `FUND_NET_VALUE` | 5 | `struct__FinanceModule_0`（**零字段**） | `declarers=0` | 名字在**整个编译集里不存在**：`jq_shim.py:562` 的 `class _FinanceModule:` 只有一个 `run_query` 静态方法，`finance = _FinanceModule()`（:568）是"平台模块"的替身对象；`FUND_NET_VALUE` 是平台侧表名，语料只写 `finance.FUND_NET_VALUE`（`jq_wufu.py:624`），源码从不赋值 |
+| `backend_engines_bt_helpers__ValueRecorder` | `strategy` | 4 | `struct_ValueRecorder_0`（**零字段**） | `declarers=0` | 基类注入：`bt_helpers.py:137` `class ValueRecorder(bt.Analyzer)`，体内只赋 `self.history`（在 `start()`，:141）；`self.strategy` 是 backtrader 构造时塞进去的，源码里没有这条赋值 |
+| `DataFrame` | `attrs` | 4 | `struct_DataFrame_1`（只有 `data`） | `declarers=0` | 库缺成员，且补它不是加一行：语料往里装的是**异构值**（`market_panel.py:74` `close.attrs["raw"] = raw_close` 装的是一个 DataFrame；`market_data_fetcher.py:108` 装 str；`wufu_core.py:623` 用 `.get("raw")` 取回） |
+| `backend_datasrc_market_data_fetcher__MarketDataFetcher` | `_calibrator_obj` | 2 | `struct_MarketDataFetcher_2` | `declarers=0` | 名字在整个语料树里 **grep 0 命中**（同 `FUND_NET_VALUE` 类：源码从不声明它） |
+| `OhlcvRepairReport` | `__dict__` | 2 | `struct_OhlcvRepairReport_6` | `declarers=0` | 内建 dunder：任何类布局都不会声明它 |
+| `PyLogger` | `level` | 1 | 注册表句柄型（`pylib/registry.txt:169` `handle=PyLogger`） | `declarers=0` | 该类成员来自注册表条目（:177–180 只有 `debug/info/warning/error`），`level` 不在册 |
+
+**共同落点（这是"静默"的机制，不是猜测）**：24 条的 `FA read final` 行**全部是 `idx=0`** ⇒ 类别布局落空后按名字全局反查（`resolve_struct_layout_by_field`）也落空，`recovered.unwrap_or((String::new(), 2))`（`codegen.rs:6498`）给回 2 字宽 + 索引 0 ⇒ 出码把接收者指针按 `struct_fields_2` 加载、`extractvalue 0`（`codegen.rs:7287-7310`）取回的就是**接收者自己的第一个词**，零诊断。
+
+### 四、最小修法与语义裁决
+
+`pylib/pandas.z` **+6/0**：给 `Series` 补 `def index(self) -> lt(vec, i64): return list(range(len(self.data)))`。
+
+**裁决依据**：这不是发明语义，是把 `DataFrame` 已经在册的那条约定（:168 注释原文"行下标 0..n_rows-1；语料 `df.index`"）补到同族的 `Series` 上——列映射模型里 Series 的行数就是 `len(self.data)`。**没有**顺手补 `attrs`：那张表要装异构值（一个帧 + 若干 str），在 shim 的 `lt(map, str, <固定值类型>)` 里表达不出来，硬补就是往一个在册静默错值上再叠一层假绿——按 §三 的读数它留作 #177 的下一格，backlog 里写清缺的是"map 值类型异构"这一格能力，不是缺一个方法名。
+
+### 五、实拍与损害量
+
+- **夹具** `tests/python_style/t473_series_index.z`（18 行，4 条 `// expect:`＝当场跑 `python3` + pandas **3.0.5** 的对数：`3 / 0 / 2 / y`）。同一颗 `zetac`（md5 `0c899d98df7e0cacff226cc792327b15`，与改前那颗逐字节相同——本批改的是 `.z` 库源不是 Rust）两侧实拍：**改前**（旧 `pandas.z`）compile rc=0／stdout `3 / 4365373395 / 4365373399 / y`——`idx[0]`、`idx[2]` 打的是**地址**，正是 §三 说的"读回接收者自己的第一个词"；`len(idx)` 偶然对（句柄本身是那个 3 元素向量的长度）。**改后** rc=0／`3 / 0 / 2 / y` 逐字相符。
+- **语料探针计数 24 → 18**（同 awk、同驱动；`Series :: index` 那一格从分组里消失，其余六格数值一字未动＝收口是定点的，不是把分母跑换了）。
+- **主线 301 位移 0**：`/tmp/b442/run_{pre,post}_{1..6}`，两侧都只落在在册的两个态上——`rc=139 out=0 rerr=119` 与 `rc=0 out=1 rerr=321`（pre 4×崩/2×过、post 2×崩/4×过）。**这个 4/2 对 2/4 的差别不报成位移**：同侧方差本来就吃不下 n=2（坑 51 在册），两侧各 6 轮里两个态都出现过。崩点结构未动：同态两条 stderr 逐字节比只相差 **12 行** `[INFO] backend.market_data: 跳过 <代码>：上市日 …` 的日志（代码集合随迭代序变＝418 族），`out=1` 那行是堆地址、md5 逐次变 ⇒ 不能当尺（437/438/441 已三次量过）。
+- **用户项目侧**：`.attrs` 在语料树（`backend/` + `strategies/code/`，剪掉 venv/worktree）里 **7 处**——`market_panel.py:74`、`market_data_fetcher.py:105/108/219`、`wufu_momentum_batch.py:104`、`wufu_core.py:270/623`。口径点名＝按文本 grep 数的，不是逐文件过 zeta 解析器。
+
+### 六、快门禁（按 AGENTS.md 的 `src/middle`/`src/backend` 配方逐字复制，13 个 `--skip-*`）
+
+`GATE_RC=1`／`real 2:12.91`（`/tmp/b442/gate.log`）：official **194/194** compile、**191/194** compile+link（link-only 3＝`integration_all_features`(`_predict,_train`)/`quantum_basic`(`_factor,_optimal_iterations,_success_probability`)/`selfhost`(`_as_str,_into_iter,_is_alphabetic,_push`)，与 431/438/439/441 在册名单逐字相同）· python_style **357 passed／2 failed／10 known-fail／0 xpass**（`ls tests/python_style/t*.z`＝**369**；356→357 那 +1＝本批 `t473`，known-fail/xpass 两格未动＝判据没放松；红源仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ **零新增红**）· 跳过步以 JSON 里的零分母作证（`corpus total=0`、`jit total=0`）· 诊断面 official 2 文件/6 行、python_style **114 文件/242 行**（上一格 113/239）。
+**诊断面那 +1 文件/+3 行的归因是半的**：`t473` 自己发 2 条 `warning:`（`pandas` 库面并存、`errors` 默认值 kind 装不下）+ 2 条 `PROBE` 行，够解释那 1 个新文件；**余下的行增量本批未逐项归因**（候选＝某个原先走到 `("", 2)` 替身的夹具现在进了 `Series::index` 真路径），不当成本批的收益。
+
+### 七、锚点
+
+本批未动 `src/**`、`tools/**`、`docs/ABI.md` ⇒ 无行号搬家。核对过：`grep -c "pandas.z" docs/ABI.md` ＝ **0**，所以 `pylib/pandas.z` 内插 6 行不会搬动任何裸行号引用；`docs/ABI.md` 的存量欠账（`run.sh:96`/`:136`/`:16` 三条越界，第四次登记）本批仍未代做。
+
+### 八、新登记与队头
+
+- **#177 未结案**，按本批 §三 收窄：24 → **18**，六类因已定位。余量里的可修格只有 `DataFrame.attrs`（4 条），它的前置能力缺口＝**map 值类型异构**；其余 14 条（`FUND_NET_VALUE` 5、`strategy` 4、`_calibrator_obj` 2、`__dict__` 2、`level` 1）是"名字在整个编译集里从不声明／基类注入／内建 dunder／注册表成员"，编译器不可能凭源码知道——它们的正确处置是**出声**而不是给值（与 #163 写侧同形）。
+- **#180 新登记**（本批 §五 的门禁半归因）：诊断面计数从 113 文件/239 行 走到 114/242，本批只坐实了 +1 文件，+3 行未逐项归因；下一批动诊断面时要把 per-file 明细打出来再判。
+- **队头**：**#163**（写侧 `@property` 无 setter 路由，与 #177 读侧同族、损害已量）→ **#176**（`codegen.rs:6759` SemiringFold 索引 panic）→ **#178**（按名兜底串名）→ **#177 余量**（`attrs` 那 4 条要等"map 值异构"那一格能力）。#145／语料崩 `str_trim+24` 仍卡在 `runtime/py_additions.c` 的授权上。
+- **OPEN 净增 +1**（#180 新登记；#177 未结案只改窄，不动状态）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
