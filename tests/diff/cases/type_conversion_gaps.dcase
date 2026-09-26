@@ -1,0 +1,16 @@
+# @cat: numeric
+# @note: 类型转换缺口四例（批次 524b 定性）：str(True) 小写、str(None)=0、
+#        str(list)=地址、list(str)=空——bool/int/float 转换正确。
+#        gen.rs/runtime 车道。
+#@@ python
+print(str(True))
+print(str(None))
+print(str([1, 2]))
+print(list("abc"))
+print(int("42"))
+#@@ zeta
+print(str(True))
+print(str(None))
+print(str([1, 2]))
+print(list("abc"))
+print(int("42"))

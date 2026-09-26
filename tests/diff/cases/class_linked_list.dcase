@@ -1,0 +1,35 @@
+# @cat: container
+# @note: 链表正向验证——self.next 赋值/链式访问/字段读取全通。
+#        int() 包装隔离 Bool 打印差异（⑫ 已知族）⇒ 专测链表功能。
+#@@ python
+class Node:
+    def __init__(self, val):
+        self.val = val
+        self.next = None
+    def has_next(self):
+        return self.next is not None
+
+a = Node(1)
+b = Node(2)
+a.next = b
+print(int(a.has_next()))
+print(int(b.has_next()))
+print(a.val)
+print(b.val)
+print(a.next.val)
+#@@ zeta
+class Node:
+    def __init__(self, val):
+        self.val = val
+        self.next = None
+    def has_next(self):
+        return self.next is not None
+
+a = Node(1)
+b = Node(2)
+a.next = b
+print(int(a.has_next()))
+print(int(b.has_next()))
+print(a.val)
+print(b.val)
+print(a.next.val)

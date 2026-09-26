@@ -117,10 +117,17 @@ g = Greet()
 print(g.hello())   # CPython "hello world"   zeta 堆地址
 ```
 - 范围比 506 更宽：不止循环积累——**类方法里任何字符串表达式**（列表推导
-  [len(n) for ...]、跨方法拼接 self.name()）都打地址；普通函数/模块级同形
-  全对。int 值正常。
-- 临时探针文件：/tmp/b440/b467/d1.z、d2.z（未入库未钉 known-fail——
-  接手第一件事：按 t510 格式钉住后移交）。
+  [len(n) for ...]、跨方法拼接 self.name()、f-string、join、.upper() 变换
+  结果 append 进 list）都打地址；普通函数/模块级同形全对。int 值正常。
+- **8 个闸门用例**（class_* 系列）全部命中此族——是当前差分库最大单一族。
+- **修法草图**：gen.rs 的方法上下文局部变量类型标记——`self.字段 = 字符串值`
+  在 ctor 中正确存入（`c.name` 直读 ✓），但**方法体内新建的局部字符串变量**
+  （`out = ""` → 循环 `out = out + w`、`result = []` → `result.append(t.upper())`、
+  f-string 结果）在 return 时丢 Str 标记 ⇒ 返回类型被推断为 I64 ⇒ 打地址。
+  修法：MirGen lowering 中，方法体内的局部变量赋值如果 RHS 是字符串表达式
+  （StringLit、__fmtspec__ Call、字符串 BinaryOp），在 type_map 中标记
+  该变量为 Str 而非 I64。或者在 return 语句处检查返回表达式的运行期类型。
+- 闸门：8 个 class_* 用例 + func_return_str_list（普通函数版同病）。
 
 ## ⑬ 字典方法族（批次 515 扫描，2 例闸门）
 

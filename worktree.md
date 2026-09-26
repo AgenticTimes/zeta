@@ -188,6 +188,11 @@
 | 523 | cleanup | **% 格式化操作符修复**（⑭ 普查最高频缺口）：StrLit % expr 改写为 FString AST（复用 __fmtspec__ lowering），单/多 specifier + %% 转义 + 无值兜底。实测 %d/%s/%.2f/%x 四形态与 CPython 一致；t513 XPASS 确认；known-fail 16→14。真除法（truediv）同批发现但不属本批 | cargo 142/0 · py 370/2/14/2xp | ✅ 修复批 |
 | 525 | cleanup | **稳态值守**：qwen 452 收尾簿记中、未开 453；XPASS 0；diff 无回归。我车道 actionable 清空——等主线 453 开工修普查族（简报在手）或合并 497–524 | 全绿 | ✅ 稳态批 |
 | 526 | cleanup | **全量门禁**（497–525 全量确认）：official 194/194 · py **376**/2/12/2xp · 语料 40/40 · jit 180/0 · diff 406/459 88.5% 无回归 · RED 0 | 全绿 | ✅ 门禁入册 |
+| 528b | cleanup | **全族状态重验**（fresh binary）：✅ 已修 = % 格式化(523)、`/` 真除法(454)、for 解包字符串(449)、过滤 dict 推导(449)。❌ 仍破 = sorted-reverse-str(512)、dict.values/items 哈希序(513)、类方法字符串拼接(514)、元组交换(#190)、类变量自增(517)、跨类引用(516)、溢出、Bool 性。type_conversion_gaps.dcase 入闸（str(True) 小写/str(None)=0/str(list) 地址/list(str) 空）| 差分 441 例全量跑 | ✅ 状态确认批 |
+| 529b | cleanup | **全量差分重验 + 两个 OOP 崩溃修复确认**：qwen 449/450 修好了 511 的组合崩溃（rc=1→0）和 517 的类变量自增崩溃——两个 OOP 面的 runtime crash 全清。54 条 mismatch（其中 ⑫ 类方法字符串族 ~15 条为最大残余）。#190 交换仍 2 2 未修。差分 406/460 88.3% 无回归 | 406/460 | ✅ 重验批 |
+| 530 | cleanup | **链表正向验证**（OOP 能力确认）：self.next 赋值 ✓ / 链式访问 a.next.val ✓ / is not None ✓ / 字段读取 ✓。str * int 变量版 ✓。has_next() 返回 1/0 而非 True/False（⑫ Bool 标记，已知）| 全对（Bool 类型除外） | ✅ 定性批 |
+| 529 | cleanup | **组合普查第四波——⑫ 家族普遍性确认**：类方法内 f-string（f"{a} {op} {b} = {r}"）+ "\n".join(self.history) 也打地址——⑫ 不限于循环拼接/元组解包，类方法上下文**任何字符串表达式**都丢类型。前两例只是冰山一角 | 差分无回归 | ✅ 定性批 |
+| 527 | cleanup | **t490 新增失败排查**：qwen 455 的新用例 t490_column_arith_elementwise 在合并树上 rc=0 但输出为空（值错非崩）——455 的逐元素算术修法在合并树上可能需要适配。属 qwen 车道（gen.rs/codegen.rs），台账报备等主线排查 | 编译 ✓ 运行值错 | ✅ 排查批 |
 | 524 | cleanup | **build_percent_format 多字节 UTF-8 panic 修复**（char 迭代替换字节迭代）——语料 26/40 → **40/40 恢复**（中文模板不再 panic）。% 格式化修复全面验证：t401/t513 XPASS、python_style 376 过/12 kf。 | 语料 40/40 · py 376/2/12/0 | ✅ 修复批 |
 | 526 | cleanup | **两大普查族修复确认 + 基线 bless**：qwen 454 修 `/` 真除法（普查①族）+ 我 523 修 % 格式化（⑭族）→ 4 闸门用例 XPASS/转好（t401/t513/str_percent_fmt/str_percent_format_family）。known-fail 16→14。**bless 锁定：match_min 抬至当前水平**——两族修复从此受闸门保护不可回退。剩余族：溢出、Bool 性、sign/负进制、None 打印、元组交换、容器比较、sorted-reverse-str、字典迭代序 | bless 后全绿 | ✅ 修复确认批 |
 | 527 | cleanup | **组合普查 527 三缺口一对照**：① 类字段列表 in 值错（has_tag("web") 0 而非 True——字段槽位或 in 路由）② tag_str() 地址（⑫ 确认）③ %(key)s=dict 映射垃圾（⑭ 子形态）。对照：链式比较变量版 ✓、name.upper() ✓ | diff 无回归 | ✅ 定性批 |
