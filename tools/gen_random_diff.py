@@ -273,6 +273,9 @@ def main() -> int:
             if written_stmts:
                 written += 1
             continue
+        # numeric / str 共用单表达式路径（472/474）
+        expr = gen_str_expr(rng) if a.mode == "str" else gen_expr(rng)
+        expected = python_eval(expr)
         if expected is None:
             continue  # CPython 侧报错 = bad_case，不进分母，直接不写
         name = f"gen_{a.mode}_s{a.seed}_{written:03d}.dcase"
