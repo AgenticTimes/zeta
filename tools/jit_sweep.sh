@@ -28,22 +28,44 @@ VERBOSE=0
 command -v timeout >/dev/null || { echo "need coreutils timeout" >&2; exit 2; }
 
 WORK=$(mktemp)
-trap 'rm -f "$WORK"' EXIT
+
+
+# 批次 461（并行化）：557 个文件逐个串行编译+运行是门禁第二大头（~10-15 分钟）。
+# 文件之间零共享，按 ZETA_JIT_JOBS（默认核数，上限 8）分片成多个子进程并行，
+# 各写各的分片文件避免追加交错；分类规则与串行版逐字相同。
+JOBS="${ZETA_JIT_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
+case "$JOBS" in ''|*[!0-9]*) JOBS=4 ;; esac
+[ "$JOBS" -lt 1 ] && JOBS=1
+[ "$JOBS" -gt 8 ] && JOBS=8
+WORKD=$(mktemp -d /tmp/zeta_jitsweep.XXXXXX)
+trap 'rm -rf "$WORK" "$WORKD"' EXIT
 
 for f in tests/unit-tests/*.z tests/python_style/*.z; do
-  [ -f "$f" ] || continue
-  rc=0
-  msg=$(timeout "$TIMEOUT" "$ZETAC" "$f" 2>&1) || rc=$?
-  # 顺序要紧：填桩后的 error[E4016] 是 rc=1，而"原本就红"的用例也可能是 rc=1，
-  # 所以只有带 E4016 的才算 trap；rc=0 一律 ok（哪怕它打了 warning[E4016]）。
-  case $rc in
-    0) tag=ok ;;
-    139) tag=segv ;;
-    124) tag=timeout ;;
-    *) if printf '%s' "$msg" | grep -q 'E4016'; then tag=trap; else tag=fail; fi ;;
-  esac
-  printf '%-8s %s\n' "$tag" "$f" >>"$WORK"
+  [ -f "$f" ] && echo "$f"
+done | awk -v d="$WORKD" -v j="$JOBS" '{ print > (d "/list_" (NR % j)) }'
+
+w=0
+while [ "$w" -lt "$JOBS" ]; do
+  (
+    [ -f "$WORKD/list_$w" ] || exit 0
+    while IFS= read -r f; do
+      rc=0
+      msg=$(timeout "$TIMEOUT" "$ZETAC" "$f" 2>&1) || rc=$?
+      # 顺序要紧：填桩后的 error[E4016] 是 rc=1，而"原本就红"的用例也可能是 rc=1，
+      # 所以只有带 E4016 的才算 trap；rc=0 一律 ok（哪怕它打了 warning[E4016]）。
+      case $rc in
+        0) tag=ok ;;
+        139) tag=segv ;;
+        124) tag=timeout ;;
+        *) if printf '%s' "$msg" | grep -q 'E4016'; then tag=trap; else tag=fail; fi ;;
+      esac
+      printf '%-8s %s\n' "$tag" "$f" >>"$WORKD/out_$w"
+    done < "$WORKD/list_$w"
+  ) &
+  w=$((w + 1))
 done
+wait
+cat "$WORKD"/out_* >>"$WORK" 2>/dev/null
 
 [ "$VERBOSE" = 1 ] && cat "$WORK"
 
