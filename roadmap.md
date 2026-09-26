@@ -20072,6 +20072,38 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 - **队头**：**#163**（写侧 `@property` 无 setter 路由，与 #177 读侧同族、损害已量）→ **#176**（`codegen.rs:6759` SemiringFold 索引 panic）→ **#178**（按名兜底串名）→ **#177 余量**（`attrs` 那 4 条要等"map 值异构"那一格能力）。#145／语料崩 `str_trim+24` 仍卡在 `runtime/py_additions.c` 的授权上。
 - **OPEN 净增 +1**（#180 新登记；#177 未结案只改窄，不动状态）。
 
+## 旁路并入（2026-09-26，主线侧代录）：批次 470–473 ＋ 442 收尾合并
+
+- **合并提交 `52ade515`**（取法＝`git rev-list --merges -1 HEAD`，不按 `HEAD^1` 的位置猜）：并入旁路
+  `cleanup` 四批＝**470** 轴 A 删零引用死模块 · **471** W1003/W1004 行号诊断带上文件路径 ·
+  **472** `tools/gen_random_diff.py` 随机算术表达式生成器＋首批 20 例 · **473** 第二批 20 例（seed=77102）。
+  四条台账行由旁路自己写、随合并进来（正文未代录）。删除面当场量（`git diff --numstat 74bb2b71 52ade515 -- src/`）
+  ＝**4 个文件 2,102 行归零**：`identity_ownership.rs` 470、`identity_ownership/tests.rs` 170、
+  `macro_expand_advanced.rs` 617、`proc_macro.rs` 845（旁路口径"三个死模块 −2,101"＝按模块数三个、按行数差 1，
+  点名不猜）；另有 `indent.rs` +57/−21、`parser/stmt.rs` +6/−2、`parser/top_level.rs` +6/−3、
+  `main.rs` +3/−3、`middle/resolver/{module_resolver,resolver}.rs` 各 +1/−1（后两个在主线所有权面内，
+  改动量为 2 行、随并入接收并以门禁作证）。
+- **合并树快门禁**（`/tmp/b442/merge_gate.log`；被测二进制 md5 `1d7f12cb7a28f1d4198d94e36b526071`，
+  门禁前后同一颗＝期间没被重编）：**`GATE_RC=1`／real 2:21.70** · official **194/194** compile、
+  **191/194** compile+link（link-only 3 名单未动）· python_style **357/2/10/0**（`ls tests/python_style/t*.z`
+  ＝**369**，逐字对上 357+2+10）· 诊断 official 2 文件/6 行、python_style **114 文件/242 行** ·
+  comment_drift **0** · dyn_binding 4 条/不一致 **0**。**读数与合并前那一趟（§六）逐字相同**
+  ⇒ 旁路四批（含 2,102 行删除）在保留步上**零新增红**。**未覆盖的轴点名**：跳过的 13 步里
+  `diff`／`truth` 正是 472/473 那 40 个 `.dcase` 唯一影响的步，主线侧未跑 ⇒ 距下一次全量（**450 那格**）
+  之前，这批并入只有"保留步逐项一致"这一层证据。
+- **锚点（合并协议：旁路对 `docs/ABI.md`、`tools/baselines/**` 只读，清单在合并时由主线代绑）**：
+  合并后只读核对＝漂移 **33**／新 11／消失 12／定位失败 2／rc **2**。对照在隔离 worktree 取合并前那颗
+  （`74bb2b71`，并按 441 那条形态补回未跟踪的 `runtime/aliases.inc.c`）＝**逐项、逐条相同**
+  ⇒ 那 +7（相对 441 入册的 26）**不是旁路 470–473 带进来的**，是 441 收尾并入 462–469 时
+  `src/frontend/**` 的行号搬家当时未重绑。**这条差值不是本批的修复对象，只是被本批的合并暴露出来。**
+  `--rebind` 判定**搬家 7 条**（唯一命中）／拒改 38 条 ⇒ 改后 **26/11/12**、rc 仍 **2**，回到 441 的终态；
+  提交 `7f4e3a88`（`docs/ABI.md` 6/6、`abi_anchors.tsv` 7/7，等量替换、无行数增减）。
+  **残余欠账不变**："定位失败 2" 的全部来源仍是 `run.sh:96`/`:136` 两条越界（第四次登记，本批仍未手改，
+  它属套件/工具面）。
+- **收尾**：`/tmp/b442/premerge` 那份 detached worktree 用 `git worktree remove` 收掉；
+  `target/release/` 里本批的 A/B 产物（`b442_pre.bin`／`b442_post.bin`／`b442_drv.bin` 及三个 `.o`、
+  `zetac_pre442`）已删——留在构建目录里会让下一次 `cargo` 回答"Finished"而被测的其实是旧那颗（在册坑）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
