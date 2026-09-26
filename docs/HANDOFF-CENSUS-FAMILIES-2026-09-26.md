@@ -107,6 +107,21 @@ for k, v in pairs:
 - 修法：gen.rs 的 Tuple 解包绑定为每个变量写类型标记（一次修，三族全绿）。
 - 闸门：`tuple_unpack_str_type` + `container_dict_comp_filter` + `t510`。
 
+## ⑫ 类方法上下文的字符串全族（批次 513 探针 d1/d2，**未钉——下一手**）
+
+```python
+class Greet:
+    def name(self): return "world"
+    def hello(self): return "hello " + self.name()
+g = Greet()
+print(g.hello())   # CPython "hello world"   zeta 堆地址
+```
+- 范围比 506 更宽：不止循环积累——**类方法里任何字符串表达式**（列表推导
+  [len(n) for ...]、跨方法拼接 self.name()）都打地址；普通函数/模块级同形
+  全对。int 值正常。
+- 临时探针文件：/tmp/b440/b467/d1.z、d2.z（未入库未钉 known-fail——
+  接手第一件事：按 t510 格式钉住后移交）。
+
 ## ⑨ str.find 两参形式缺 shim（1 例 compile 闸门，#188 余半）
 
 ```python
