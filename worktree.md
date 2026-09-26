@@ -128,6 +128,7 @@
 | 469 | cleanup | **状态补录两处**（roadmap2 登记 8/9）：refactor.md G.5d ②(b) 刷新（399 已交付"无声明半"，剩两形指 backlog #33）+ 轴 A 表补前端死代码四件套与 memory 孤儿文件两行 | 纯文档 | ✅ 完成 |
 | 469b | cleanup | **合并前全量门禁**（462–469 八个批次的保险，分支自跑）：official 194/194（191 link）· python_style **355/2/10/0**（四条新 known-fail 钉子全数入读）· 语料 40/40 · jit **179 ok**/0 segv（t50x 三例进 sweep 且通过）· diff 121/132 91.7% 无回归 · 断言族全 0 违规。**全量 rc=0，cleanup 分支可安全合并** | 全绿 | ✅ 门禁入册 |
 | 470 | cleanup | **轴 A 真删**（refactor §1 判据 (a)/(b)，全仓 grep 复核后删三个零引用死模块）：proc_macro(845)+macro_expand_advanced(617)+identity_ownership(470+tests 170) = **-2,105 行**（含 mod.rs 三行声明）；borrow_enhanced 保留——tests/memory-management 在消费（(b) 实证）。验证：build 绿 · cargo test 141/0（-4=被删内部测试）· dc_audit --diff rc=0 基线净减 · py 356/2/10/0。深化评审 C5 的最大一块落地 | 全绿 | ✅ 完成 |
+| 471 | cleanup | **W1003/W1004 带文件名**（批次 340 承接项；466 栈式行表的延伸）：W1004 在解析期间发射 ⇒ 路径必须随解析传入——新增 parse_zeta_tagged（线程局部传递），4 个有路径的调用点换用；诊断从 ":行号:" 升级 "路径:行号:"。跨文件场景主文件诊断仍带主文件自己的路径（栈式选表）。实测 "e2e.z:6:"；142/0；swallow/empty_stmt/356 全过 | 全绿 | ✅ 完成 |
 | （续） | | | | |
 
 ## 6. 旁路侧启动清单（一次性 / 每会话）
