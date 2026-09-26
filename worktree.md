@@ -111,6 +111,7 @@
 |---|---|---|---|---|
 | 440 | cleanup | 度量批：目标族 `static mut` 实测已被 326–437 间批次清零——truncation inventory 在 437 基线报 **0 W1002 / 238 文件**；另发现 `parse_bisect.py` 对无分号方言判据失配（切点要求 `;`，DG06 增补建议）。反向队列第一子队列（截断）随即转入 zeta_src 余量 | 0 hit / 238 files | ✅ 度量完成（纯文档，已含在 460 提交） |
 | 460 | cleanup | **引用模式修复**：`Some(&value)` 的 `&` 模式不被识别 → 整 fn 连同其后文件被丢（zeta_src/runtime/array.z 的 array_get，#79 第 2 条钉住项）。修：pattern.rs 补 `&`/`&mut` 引用模式臂（词边界检查，按槽位模型剥 & 绑定内层，递归支持 `&&p`）。t501 三期望实拍 42/0/5 ✓；array.z 解析 W1002=0；selfhost 判据 48 过/3 登记/0 新失败。**移交主线一项**：array.z 解析修好后暴露下一层 —— codegen.rs:6759 `exprs[&values[1]]` 索引 panic（SemiringFold 操作数 id 未注册 exprs，MIR 实测 12 节点；M06 家族的索引变体），钉住行已更新原因，gen/codegen 车道待主线接 | selfhost 48/3/0；t501 ✓ | ✅ READY —— 全量门禁 rc=0（gate460.log）：official 194/194（191 link）· python_style **352 过**/2/6/0（t501 在内）· 语料 40/40 · jit ok=176/segv=0，全轴与 413 基线一致 |
+| 461 | cleanup | **门禁并行化**（tools 车道，backlog #23 的并行半步 / 架构评审 P2#16）：run.sh 单用例逻辑抽到 run_one.sh（判定逐字保留），按 PY_JOBS 分片派发、按名排序聚合，输出格式字节不变，PY_JOBS=1 可回串行；jit_sweep.sh 同法（ZETA_JIT_JOBS）。实测（437 基线）：python_style **45-60min → 1m59s**、jit sweep **10-15min → 32s**，读数与串行逐项一致（352/2/6/0；176/381/0/0/557）。全量门禁 rc=0，总时长 **1h20m → 7 分 10 秒**（log 时间戳 10:24:13→10:31:23 实测；期间与主线侧门禁并发互不影响——双 worker 隔离的意外验证）。下一步最大头变成 clean_checkout 与 official 步，可再用依赖缓存/分层门禁压缩 | 全轴与基线一致；rc=0 | ✅ READY |
 | （续） | | | | |
 
 ## 6. 旁路侧启动清单（一次性 / 每会话）
