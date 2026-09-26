@@ -1,13 +1,13 @@
 {
-  "total": 430,
-  "judged": 430,
+  "total": 431,
+  "judged": 431,
   "match": 382,
-  "rate_pct": 88.8,
+  "rate_pct": 88.6,
   "match_min": 382,
   "by_verdict": {
     "runtime": 1,
+    "mismatch": 47,
     "match": 382,
-    "mismatch": 46,
     "compile": 1
   },
   "per_cat": {
@@ -21,7 +21,7 @@
     },
     "container": {
       "match": 140,
-      "judged": 153
+      "judged": 154
     },
     "numeric": {
       "match": 65,
@@ -36,6 +36,10 @@
     "class_dict_composition": {
       "cat": "container",
       "verdict": "runtime"
+    },
+    "class_method_str_accum": {
+      "cat": "container",
+      "verdict": "mismatch"
     },
     "container_append": {
       "cat": "container",
