@@ -1,0 +1,10 @@
+# @cat: str
+# @note: 随机 f-string 规格（seed=2468 #13）
+#@@ python
+x = 65
+print(f"{x:=>d}")
+
+#@@ zeta
+x = 65
+print(f"{x:=>d}")
+

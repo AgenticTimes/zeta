@@ -156,6 +156,39 @@ def gen_loop_case(rng: random.Random) -> str:
     return "\n".join(lines) + "\n"
 
 
+FMT_VALS = [("x", "65"), ("n", "-42"), ("w", "123456"), ("f", "2.71828"), ("s", "ab")]
+INT_TYPES = ["d", "x", "o", "b"]
+FLOAT_TYPES = ["f", "e"]
+
+
+def gen_fmt_case(rng: random.Random) -> str:
+    """f-string 规格采样：进制/符号/宽度/补零/对齐填充/精度 的随机合法组合。
+    ','（千分位，t505 钉）与 'c'（t504 钉）刻意排除——已在 known-fail。"""
+    var, val = rng.choice(FMT_VALS)
+    spec = ""
+    is_float = var == "f"
+    is_str = var == "s"
+    if not is_str and rng.random() < 0.35:
+        fill = rng.choice("*<>=^")
+        spec += fill if fill in "<>^" else fill + rng.choice("<>^")
+    elif rng.random() < 0.4:
+        spec += rng.choice("<>^")
+    if not is_str and rng.random() < 0.25:
+        spec += "+" if val.startswith("-") is False else ""
+    if not is_str and rng.random() < 0.3:
+        spec += "0" if not spec.endswith(("<", ">", "^")) else ""
+    if rng.random() < 0.6:
+        spec += str(rng.randint(2, 10))
+    if is_float and rng.random() < 0.5:
+        spec += f".{rng.randint(1, 4)}"
+    if is_str:
+        if rng.random() < 0.4:
+            spec += f".{rng.randint(1, 3)}"
+    else:
+        spec += rng.choice(FLOAT_TYPES if is_float else INT_TYPES)
+    return f'{var} = {val}\nprint(f"{{{var}:{spec}}}")\n'
+
+
 def gen_expr(rng: random.Random, depth: int = 0) -> str:
     if depth >= 3 or rng.random() < 0.3:
         return str(rand_int(rng))
@@ -249,16 +282,32 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
-    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop"), default="numeric")
+    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
     written = 0
     tried = 0
-    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop") else 6)
+    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop", "fmt") else 6)
     while written < a.count and tried < max_tries:
         tried += 1
+        if a.mode == "fmt":
+            prog = gen_fmt_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_fmt_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: str\n"
+                f"# @note: 随机 f-string 规格（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
         if a.mode == "loop":
             prog = gen_loop_case(rng)
             expected = python_eval_program(prog)
