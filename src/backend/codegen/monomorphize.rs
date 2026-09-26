@@ -413,6 +413,8 @@ mod tests {
             properties: vec![],
             generic_params: vec![],
             is_extern: false,
+            member_bare_calls: std::collections::BTreeSet::new(),
+            plain_call_names: std::collections::BTreeSet::new(),
         };
 
         // Add some types with variables
@@ -456,6 +458,8 @@ mod tests {
             properties: vec![],
             generic_params: vec![],
             is_extern: false,
+            member_bare_calls: std::collections::BTreeSet::new(),
+            plain_call_names: std::collections::BTreeSet::new(),
         };
 
         mir.type_map.insert(1, Type::I32);

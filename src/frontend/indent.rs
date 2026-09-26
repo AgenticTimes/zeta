@@ -1055,8 +1055,22 @@ mod tests {
 
     #[test]
     fn header_colon_stripped_with_trailing_comment() {
-        let out = tx("fn f():  // comment: with colon\n    return 1\n");
-        assert!(out.starts_with("fn f() {// comment: with colon\n"));
+        // python 风格文件的行内注释标记是 `#`（PY-A 语义）：`//` 在代码之后
+        // 一律是地板除（t138 三处真用法），这是批次 330 前后就定下的方言规则，
+        // 本测试曾用 `//` 写尾注释、与该规则相抵而长期红着（refactor.md 批次
+        // 311 记的 cargo test 存量 1 failed 就是它）。
+        let out = tx("fn f():  # comment: with colon\n    return 1\n");
+        assert!(out.starts_with("fn f() {# comment: with colon\n"));
+    }
+
+    #[test]
+    fn inline_double_slash_after_code_is_floordiv_in_python_style() {
+        // 方言钉子：python 风格（有缩进改写证据）的文件里，代码后的 `//` 是
+        // 运算符不是注释——改写成 ` floordiv `（与 tests/python_style/t138 的
+        // `return a // b` 同一规则）。注意平铺文件走的是另一条规则（批次 334：
+        // 深度 0 保留注释，t406 known-fail 记录的那个缺口），别用平铺输入测这条。
+        let out = tx("def f(a, b):\n    return a // b\n");
+        assert!(out.contains(" floordiv "));
     }
 
     #[test]
@@ -1082,7 +1096,10 @@ mod tests {
     }
 
     #[test]
-    fn tab_indent_is_error() {
+    fn tab_indent_is_normalized() {
+        // PY-A 归一化（本文件头部）：行首 tab 按 4 列 stop 展开为空格，不再报错。
+        // 旧名 `tab_indent_is_error` 与行为相反——归一化先于一切处理，
+        // `saw_tab` 错误分支在主管线上不可达（pipeline-rules BR-F02）。
         let result = indent_preprocess("fn f():\n\tlet x = 1\n");
         assert!(result.is_ok());
         let out = result.unwrap();
