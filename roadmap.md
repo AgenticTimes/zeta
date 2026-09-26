@@ -20269,6 +20269,27 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 `target/release/zetac.pre444`（本批的改前那颗，md5 与改后那颗**本来就相同**——因为编译器没动）已删：改前对象留在构建目录里会让下一次 `cargo` 一句"Finished"被误当成被测对象（在册坑）。度量产物全在 `/tmp/b444/`（`rt_pre/`、`rt_post/`、`r_*_{out,err}`、8 份 `.ips` 在系统目录）。下一次全量门禁＝**批次 450** 那格；#145 仍卡在 `runtime/py_additions.c` 的授权上。
 
 
+
+## 批次 444 收尾／旁路 481–483 并入（合并提交 `01c19422`）——合并树差分 224→225，基线重 bless
+
+**并入面 3 文件**：`src/frontend/parser/expr.rs` **+17/−10**（旁路 481：位运算/移位优先级按 CPython 重排——比较 → `|` → `^` → `&` → 移位 → 加减 → 乘除 → range → 一元）、`tools/diff_test.py` **+9/−2**（483：mismatch detail 里 10 位以上纯数字归一 `<N>`＝GC 堆地址脱敏）、`worktree.md` §5 三行台账（+3/−0）。主线 444 的文件面（`runtime/**`、`.o`、t475、ABI 两侧）与之**不相交**，`git merge` 自动合并、零冲突。
+
+**为什么合并后要自己取一遍读数**（不是不信旁路）：481 动的是解析（2.x 语义变更），444 动的是运行期对象（跨界面），**这两处从没在同一颗二进制上跑过**。合并树上重编（`cargo build --release` 19.27s，`Finished` 属实：跑门禁前后 md5 逐字相同 ⇒ 没有 #175 那颗旧二进制）后逐项读数：
+
+| 步 | 合并树读数 | 与 444 本批读数的差 |
+|---|---|---|
+| official | compile **194/194** · compile+link **191/194** · link-only 3 | **逐字相同** |
+| python_style | **359 passed／2 failed／10 known-fail／0 xpass** | **逐字相同**（红源仍是存量 t231/t233） |
+| 诊断面 | official 5 文件/15 行 · python_style 115 文件/243 行 | **逐字相同** |
+| comment_drift / dyn_binding | 0 处复述 ／ 4 条断言、不一致 0 | 不变 |
+| diff 轴 | `match=225 judged=251 rate=89.6% bad_case=0`、rc 0（`/tmp/b444/diff_merged.log`） | **+1**＝`gen_numeric_s77102_004` 由 mismatch 转 match（481 的优先级重排所致，旁路在册同一条） |
+
+`GATE_RC=1` 的红源两侧一致＝t231/t233 存量 ⇒ 合并没带进新红。**基线随之追平**：`match_min` 224→**225**（`--bless` 后 `by_verdict` = match 225／mismatch 25／compile 1；这次能安全全量重采，是因为基线每例只存 `cat`+`verdict`、不存 detail ⇒ 483 的脱敏不会把垃圾值焊进库里）。读数日志 `/tmp/b444/gate_merged.log`、`diff_bless_merged.log`。
+
+**#184 的状态：不改，只记一条未核线索**。481 那批把 `&`/`|`/`^`/移位的优先级从 C 式改成 Python 式，而 #184 第一条正是"负数按位 OR／大数 floordiv／求和的组合"——**机制候选对得上，但没测**：#184 那三条读数来自旁路临时样本，480 那 200 例从未入库（`grep -rl 258802802811051 tests/diff/cases/` 命中 **0 文件**，本批实拍），因此"这条已被 481 顺带修掉"既不能证实也不能证伪。旁路自己转绿的那条具名是 `gen_numeric_s77102_004`，与 #184 登记的两条不同名。**#184 保持 OPEN、三条读数照旧标"主线未复测"**。
+
+**下一批不变**：队头按 §八 的 ROI 表走（#182 65 行/25 文件 → #183 两条差分红 → #177 14 条 → #185 → #48 等用户方言裁决）；下一次全量门禁＝**批次 450**。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
