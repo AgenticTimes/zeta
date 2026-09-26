@@ -1,0 +1,22 @@
+// 批次 448（3.2 Lowering／`("", 2)` 替身的**出声**）：接收者布局里没有这个字段名时，
+// 读写两侧共用的那条兜底（`codegen.rs` 的 `recovered.unwrap_or((String::new(), 2))`）
+// 把访问挪到替身的**第 0 词**——读回接收者自己声明的第一格，写则把那一格踩掉。
+// 本批不改值、只加一条正式诊断 W1011（#163 写侧与 #177 读侧同一格，一次收口）。
+//
+// 形状：`Box` 声明了 `kind`/`n`，`nope` 在整个编译集里无人声明 ⇒
+// 跟着构造表达式走的那条路放手、按字段名反查全局布局也放手、追加槽表也查不到它。
+//
+// CPython 3.14 在这条形状上抛 `AttributeError: 'Box' object has no attribute 'nope'`。
+// 本批只加出声，不改值 ⇒ 下面 `ghost=7` 是**现状锁**（读回 `kind` 那一格），
+// 真把它做成抛的那天，这条 expect 要跟着一起改。
+class Box:
+    def __init__(self):
+        self.kind = 7
+        self.n = 8
+
+b = Box()
+print("plain", b.kind, b.n)
+print("ghost", b.nope)
+
+// expect: plain 7 8
+// expect: ghost 7

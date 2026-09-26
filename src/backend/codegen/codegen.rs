@@ -6391,6 +6391,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // fallback made the field index a nondeterministic global scan and
                 // the loaded struct a 2-field stand-in (measured: `df.copy()`'s
                 // `self.data` read crashed in DataFrame::copy).
+                let mut used_stand_in = false;
                 let (variant, field_count) = if let MirExpr::Struct { variant, fields } = base_expr
                 {
                     (variant.clone(), fields.len())
@@ -6495,6 +6496,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                                     decls
                                 );
                             }
+                            used_stand_in = recovered.is_none();
                             recovered.unwrap_or((String::new(), 2))
                         }
                     }
@@ -6611,6 +6613,33 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     }
                     None => (variant, field_count, field_index),
                 };
+                // BATCH-448 (#163 + #177): the stand-in serves BOTH roles, and an
+                // access it still owns goes to word 0 of a 2-word layout — a read
+                // returns the receiver's first field, a write overwrites it. Only
+                // fires when the appended-slot route above did NOT take over: on
+                // that pass `variant` is the real layout name (gating on the flag
+                // alone printed 15 extra lines on one small driver file). Measured
+                // on the 39-file corpus: 3275 stand-in reads and 343 stand-in
+                // writes, all at `idx=0`; the python_style suite (363 例) has 0
+                // members, `tests/unit-tests` has 7 (all reads in `quantum_basic.z`,
+                // on `im` / `re` / `qubits`).
+                if used_stand_in && variant.is_empty() {
+                    let receiver = match &dbg_decl {
+                        Some(Type::Named(n, _)) => format!("the layout of {}", n),
+                        Some(t) => format!("any known layout (receiver typed {:?})", t),
+                        None => "any known layout (no declared type)".to_string(),
+                    };
+                    let harm = if role == "write" {
+                        "the store overwrites the receiver's first field"
+                    } else {
+                        "the read returns the receiver's first field"
+                    };
+                    eprintln!(
+                        "warning: [W1011] field `{}` has no slot in {} ({}) — the access \
+                         goes to word 0 of a 2-word stand-in, so {}",
+                        field, receiver, role, harm
+                    );
+                }
                 if crate::diagnostics::env_flag("ZETA_DBG_FA") {
                     eprintln!(
                         "ZETA-DBG FA {} final field={} variant={:?} field_count={} idx={}",

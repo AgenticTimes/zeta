@@ -1,0 +1,21 @@
+// 批次 448 的反向锁（负断言配正证据）：W1011 只该在访问**最终仍由替身服务**时出声。
+// 构造之后才挂上的属性名走的是批次 434 的追加槽（`struct_ext_layouts`）——布局路由
+// 同样放手，但兜底之后被追加槽接走，读/写各用自己的字 ⇒ **不该**报 W1011。
+// 只在旗标位上出声（改前的第一版形状）会在这条路径上多报：实测语料里旗标比终态多 15 行
+// （一个小驱动文件），所以判据取"最终 variant 仍为空"。
+// 正证据：下面三行输出证明 `extra`/`late` 真走通了各自的槽（值与 CPython 3.14 一致）。
+class Box:
+    def __init__(self):
+        self.kind = 7
+        self.n = 8
+
+    def stamp(self, v):
+        self.late = v
+
+b = Box()
+b.extra = 99
+b.stamp(5)
+print("b", b.kind, b.n, b.extra, b.late)
+
+// expect: b 7 8 99 5
+// expect-no-compile: [W1011]

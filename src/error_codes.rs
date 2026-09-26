@@ -2199,6 +2199,13 @@ pub mod common {
     // fields — either silently prints 0 or panics with `no entry found for key`.
     // The name is the source shape that has no route yet.
     pub const LOWERING_LEFT_UNREGISTERED_ID: &str = "W1010";
+    // Emitted once per access in `backend/codegen/codegen.rs::resolve_field_slot`:
+    // neither the receiver's declared layout nor the by-name reverse lookup found
+    // a struct that DECLARES this field, so the access is served by the `("", 2)`
+    // stand-in and lands on word 0. A read then returns the receiver's first field
+    // and a write overwrites it — both silently before BATCH-448. Both roles share
+    // this one code because they share this one fallback.
+    pub const FIELD_HAS_NO_SLOT_IN_LAYOUT: &str = "W1011";
     pub const TYPE_COULD_BE_INFERRED: &str = "W2001";
     // Emitted as a literal in `main.rs`: the runtime object resolved to a copy in
     // the current directory while `ZETA_RUNTIME_DIR` holds a different one. The
