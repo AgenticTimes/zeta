@@ -1,0 +1,63 @@
+# @cat: container
+# @note: 继承链上实例字段跨类不可见——Dog(4) 的 ctor 写 self.legs=4，
+#        继承方法的 self.legs 读到 0（CPython 4）⇒ 字段槽位按"哪个类的
+#        方法"分配而非按实例统一分配（W1010/W1011 族的 OOP 面）。
+#        类级属性（kind="base"）✓、默认参数 ✓、非继承字段 ✓（对照）。
+#@@ python
+class Animal:
+    def __init__(self, legs):
+        self.legs = legs
+    def legs_count(self):
+        return self.legs
+
+class Dog(Animal):
+    def describe(self):
+        return self.legs_count() * 2
+
+d = Dog(4)
+print(d.legs_count())
+print(d.describe())
+
+class Config:
+    kind = "base"
+    def __init__(self, v):
+        self.v = v
+
+c = Config(7)
+print(c.kind)
+print(c.v)
+
+def greet(name, greeting="Hello"):
+    return greeting + " " + name
+
+print(greet("X"))
+print(greet("X", "Hi"))
+#@@ zeta
+class Animal:
+    def __init__(self, legs):
+        self.legs = legs
+    def legs_count(self):
+        return self.legs
+
+class Dog(Animal):
+    def describe(self):
+        return self.legs_count() * 2
+
+d = Dog(4)
+print(d.legs_count())
+print(d.describe())
+
+class Config:
+    kind = "base"
+    def __init__(self, v):
+        self.v = v
+
+c = Config(7)
+print(c.kind)
+print(c.v)
+
+def greet(name, greeting="Hello"):
+    return greeting + " " + name
+
+print(greet("X"))
+print(greet("X", "Hi"))
