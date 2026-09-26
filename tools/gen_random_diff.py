@@ -227,6 +227,29 @@ def gen_builtin_case(rng: random.Random) -> str:
     return "\n".join(lines) + "\n"
 
 
+def gen_control_case(rng: random.Random) -> str:
+    """Python 特有控制流采样：for/while 的 else（无 break 才执行）、break、continue 的随机组合。"""
+    n = rng.randint(3, 8)
+    break_at = rng.randint(-1, n)          # -1 = 无 break
+    use_while = rng.random() < 0.4
+    skip = rng.randint(-1, n)              # -1 = 无 continue
+    lines = ["s = 0"]
+    if use_while:
+        lines += [f"i = 0", f"while i < {n}:"]
+    else:
+        lines += [f"for i in range({n}):"]
+    lines += ["    i2 = i" if False else "    s += i"]
+    if skip >= 0:
+        lines += [f"    if i == {skip}:", "        continue", "    s += 1"]
+    if 0 <= break_at < n:
+        lines += [f"    if i == {break_at}:", "        break", "    s += 2"]
+    else:
+        lines += ["    s += 2"]
+    lines += ["else:", "    s += 100"]
+    lines += ["print(s)"]
+    return "\n".join(lines) + "\n"
+
+
 def gen_expr(rng: random.Random, depth: int = 0) -> str:
     if depth >= 3 or rng.random() < 0.3:
         return str(rand_int(rng))
@@ -320,14 +343,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
-    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin"), default="numeric")
+    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
     written = 0
     tried = 0
-    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin") else 6)
+    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control") else 6)
     while written < a.count and tried < max_tries:
         tried += 1
         if a.mode == "builtin":
@@ -355,6 +378,22 @@ def main() -> int:
             body = (
                 f"# @cat: str\n"
                 f"# @note: 随机字符串切片（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
+        if a.mode == "control":
+            prog = gen_control_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_control_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: control\n"
+                f"# @note: 随机控制流（seed={a.seed} #{written}）——else/break/continue 组合\n"
                 f"#@@ python\n{prog}\n"
                 f"#@@ zeta\n{prog}\n"
             )
