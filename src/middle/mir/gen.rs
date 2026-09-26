@@ -2370,7 +2370,20 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 if self.fn_depth > 1 {
                     let param_names: Vec<String> =
                         params.iter().map(|(n, _)| n.clone()).collect();
-                    let body_node = AstNode::Block { body: body.clone() };
+                    // BATCH-441: the parser promotes a block body's TAIL element out of
+                    // `body` into `ret_expr` (`top_level.rs:297-331`); the non-nested arm
+                    // below consumes it, this hoisted path cloned only `body` — so every
+                    // nested `def`, and every method of a `class` written inside a
+                    // function body, silently lost its LAST statement (t472; a trailing
+                    // `try:` is a `Block` whose tail is an `If`, which is why batch 438
+                    // registered ② saw a whole method body vanish). Put it back as a
+                    // STATEMENT: Python discards a trailing expression's value, and the
+                    // hoisted copy's return stays whatever its own `return` says.
+                    let mut hoisted_body = body.clone();
+                    if let Some(tail) = ret_expr {
+                        hoisted_body.push(tail.as_ref().clone());
+                    }
+                    let body_node = AstNode::Block { body: hoisted_body };
                     let hoisted = self.lower_closure(&param_names, &body_node);
                     // BATCH-438: a method of a `class` written inside a function
                     // body is called through its QUALIFIED name — the receiver is

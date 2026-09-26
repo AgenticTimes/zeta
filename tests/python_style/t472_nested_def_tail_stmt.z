@@ -1,0 +1,59 @@
+// 批次 441（3.2 Lowering／函数体里写的 def 与 class）：嵌套 def 的**最后一条语句**被丢掉。
+//
+// 解析层把函数体的尾元素从 `body` 摘出来放进 `FuncDef::ret_expr`（`top_level.rs:297-331`：
+// `ExprStmt` 尾，以及裸 `Block`/`If`/`Call`/`PathCall`/`Match`/`Loop` 尾；`Block` 内层末项是
+// `Return` 时不摘 —— 批次 287 的例外）。顶层 `def` 的消费点会读 `ret_expr`
+// （`gen.rs:2420-2426`），而**改前的嵌套 def 提升分支只克隆 `body`**（`gen.rs:2382-2387`），于是每个
+// 嵌套函数、以及函数体里 `class` 的每个方法，都少最后一条语句。
+//
+// 本格同时锁住三种形状：
+// ① 尾是普通调用语句（`print`）⇒ 只丢那一条（`cls b` / `def b`）；
+// ② 尾是裸 `if` ⇒ 整条 `if` 被摘走，方法体变成空壳（`if taken`）——这正是批次 438
+//    登记②"try 体里有幽灵成员调用 ⇒ 整个方法体被丢"的真成因：被丢的不是"含幽灵调用的
+//    try"，而是**任何**尾元素，`try:` 恰好是那条方法体的尾元素（try 在解析期脱糖成的
+//    `Block` 末项是 `If`，正落在摘出清单里）。
+// ③ 尾是 `return` ⇒ 不摘、不受影响（`make` 的 `return 0`，外层两行照常）。
+//
+// 改前实拍（`target/release/zetac_pre441`，与改后那颗同目录）：编译 rc=0，stdout 只有
+// `outer 1` / `cls a` / `def a` / `outer 2` —— 三条尾行一行不出，也没有任何 warning。
+// 改后：编译 rc=0，下面 7 行逐字相符 ＝ 同一份源在 python3 里的输出（当场跑过对数）。
+//
+// 另记（**不在本批**，取本夹具时实测到的独立缺陷）：方法名换成 `run` 时调用点根本不打到
+// 嵌套类自己的合成符号，而是绑到 `zeta_sieve_run`（std 例子遗留的裸名兜底），
+// stdout 只剩 `outer 1` / `outer 2` —— 名字串线，与尾语句丢失无关。
+
+class Outer:
+    def build(self):
+        class Inner:
+            def emit_pair(self):
+                print("cls a")
+                print("cls b")
+
+            def pick_branch(self, k):
+                if k > 0:
+                    print("if taken")
+
+        i = Inner()
+        i.emit_pair()
+        i.pick_branch(3)
+        return 0
+
+def plain_demo():
+    def inner_tail():
+        print("def a")
+        print("def b")
+    inner_tail()
+
+o = Outer()
+print("outer 1")
+o.build()
+plain_demo()
+print("outer 2")
+
+// expect: outer 1
+// expect: cls a
+// expect: cls b
+// expect: if taken
+// expect: def a
+// expect: def b
+// expect: outer 2
