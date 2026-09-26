@@ -388,8 +388,10 @@ def gen_class_case(rng: random.Random) -> str:
     return body + NL
 
 
+MAX_DEPTH = 3
+
 def gen_expr(rng: random.Random, depth: int = 0) -> str:
-    if depth >= 3 or rng.random() < 0.3:
+    if depth >= MAX_DEPTH or rng.random() < 0.3:
         return str(rand_int(rng))
     kind = rng.random()
     if kind < 0.55:
@@ -481,9 +483,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
+    ap.add_argument("--depth", choices=("shallow", "normal", "deep"), default="normal",
+                    help="表达式嵌套深度：shallow=最多1层运算（基础面），normal=默认（2-3层），deep=4-5层（交互面）")
     ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod", "nested", "methods", "class", "dmethod2"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
+    global MAX_DEPTH
+    if a.depth == "shallow":
+        MAX_DEPTH = 1
+    elif a.depth == "deep":
+        MAX_DEPTH = 5
 
     rng = random.Random(a.seed)
     written = 0

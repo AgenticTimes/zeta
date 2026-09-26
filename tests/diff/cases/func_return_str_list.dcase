@@ -1,0 +1,23 @@
+# @cat: container
+# @note: 函数返回的字符串列表——容器 ✓ 但字符串元素打地址。
+#        .upper() 变换结果 append 进 list 后跨函数边界丢 Str 标记。
+#        非类方法特有（普通函数同病）⇒ gen.rs 车道：返回列表的元素
+#        类型标记传播缺失。
+#@@ python
+def up_all(words):
+    result = []
+    for t in words:
+        result.append(t.upper())
+    return result
+r = up_all(["alpha", "beta"])
+print(len(r))
+print(r[0])
+#@@ zeta
+def up_all(words):
+    result = []
+    for t in words:
+        result.append(t.upper())
+    return result
+r = up_all(["alpha", "beta"])
+print(len(r))
+print(r[0])
