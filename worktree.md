@@ -165,6 +165,7 @@
 | 502 | cleanup | **enumerate/zip 钉住**：元组解包遍历 + 平行遍历全对（控制流 + 解包组合面） | 全对 | ✅ 完成 |
 | 503 | cleanup | **新种子收敛普查**（864213，60 例临时）：mismatch 8/60 ≈ 13%——与 12.5% 稳态一致，无新族（cmp 20 例全 match）。三读数并存：小样本 24%→大样本 12%→本轮 13%，普查进入稳态 | 410/465 | ✅ 度量批 |
 | 504 | cleanup | **字典推导式验证**（BR-L 漂移疑点④解除）：{k: k*2 for ...} 的 len/键读/键序全对——"是否真产出 dict 存疑"的旧问题实测无缺口，疑点关闭 | 全对 | ✅ 完成 |
+| 506 | cleanup | **元组解包字符串无类型——根因定性收束**（三触发同根）：for k,v 解包的字符串变量打地址（最小判据 tuple_unpack_str_type）⇒ 505 过滤 dict 推导、#190 交换全是同一条 Assign(Tuple,·) lowering 的不同触发。修法收敛为一条：gen.rs 解包绑定时写类型标记（一次修三族全绿）。简报 ⑪ 已更新 | 最小判据 mismatch 钉住 | ✅ 定性批 |
 | 505 | cleanup | **带过滤字典推导式值侧地址**钉住：{k: v for ... if k > 1} 的 len 对、d[2] 打印堆地址——无过滤版本全对（504）⇒ 缺口特定于过滤哨兵路径的值类型（#117 新触发形状，gen.rs 车道移交）。同批证实：链式赋值 a = b = 5、带过滤列表推导式全对 | 全对（新缺口已钉） | ✅ 完成 |
 | 496 | cleanup | **str.find 一参接入**（#188 一半，纯数据修复）：C shim host_str_find 早已在（stub:200），registry 缺 W 行 ⇒ 派发落空。补 `W str find host_str_find args=2`：s.find(子串) 实测 2/2/-1 与 CPython 一致；check_registry_symbols rc=0；t511 正向用例。**余半移交**：两参形式需三参 shim host_str_find3（runtime 车道，gen_str_s314159_003 钉着） | registry rc=0 · py 362/2/14/0 | ✅ 完成 |
 | 493 | cleanup | **元组交换顺序腐蚀定性**（#190 新登记）：`a, b = b, a` → (2,2) 而 CPython (2,1)——Assign(Tuple,Tuple) 顺序赋值，右值引用左目标时腐蚀（字面量右值/元组解包正常 ⇒ 缺口特定）。解析期脱糖已试并**主动撤销**：单侧改解析器引发 t24 模块级全局收集漏认回归 ⇒ 正解在 gen.rs lowering 或连带 unwrap 两处消费端（修法草图已写进 #190）。t510 known-fail 钉住。python_style 回到 361/2/14/0 零回归 | 全绿（t510 known-fail 除外，有归属） | ✅ 完成（含一次主动撤销的负结果备案） |
