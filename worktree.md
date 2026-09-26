@@ -177,6 +177,7 @@
 | 511 | cleanup | **组合普查首例崩溃**（class×loop×dict 交互）：类字段 dict + 方法内 for self.words + w[0] + if/else 读改写 = map_get 非字典 rc=1（三连确定复现；单因子最小化均不崩 ⇒ 需完整组合，gen.rs 车道 449 邻域）。组合普查的价值实证：单模式各自全对 ≠ 组合正确 | runtime verdict 钉住 | ✅ 定性批 |
 | 512 | cleanup | **sorted(reverse) 字符串版排错钉住**：["b","a","c"] reverse → zeta ["c","a","b"] vs CPython ['c','b','a']——整数版正确 ⇒ 字符串降序路径缺口（registry/runtime 车道）。同批证实：while+continue（正确增量）✓、for-else+continue ✓、sorted(reverse) 整数版 ✓ | diff 无回归 | ✅ 完成 |
 | 513 | cleanup | **int 键字典迭代序哈希序钉住**（values 顺序族扩展到 int 键——插入序 10,2,30 vs 哈希序 30,2,10）。同批证实：混合比较 1==1.0 ✓、负浮点 ✓ | diff 无回归 | ✅ 完成 |
+| 514 | cleanup | **类方法字符串族两例入闸 + 区分定性**：字段存储 ✓（c.name 打 Kitty）但方法内 self.name + "..." 的拼接结果打地址 ⇒ 缺口收敛到"方法上下文的表达式结果类型标记"（⑫ 家族，非继承/继承两形都中）。类继承本身无罪 | diff 无回归 | ✅ 完成 |
 | 512 | cleanup | **类方法内字符串积累丢类型钉住**：类方法 loop 拼接 out 打地址，普通函数/模块级同形全对 ⇒ 缺口特定于类方法上下文的局部变量类型标记（gen.rs，506 元组解包同根邻域）。组合普查第二例（c2 方法返回 dict 链式访问 ✓ 对照组） | runtime verdict 钉住 | ✅ 定性批 |
 | 509 | cleanup | **高频构造回归面钉住**：变量边界切片 / 字符串·列表增强拼接 / 函数多返回值解包——四发全对（qwen 448 收尾已并入 497–506） | 全对 | ✅ 完成 |
 | 510 | cleanup | **str.format 方法缺绑定钉住**（无参/带参同病，registry+C shim 双缺，#188 家族）+ dmethod2 模式十例（setdefault/sorted-reverse ✓；enumerate-start 与 items 哈希序为已知族实例）+ 证子串 in 正确。t478 抖动监控：套件三轮全 PASS 未复现 | diff 无回归 | ✅ 完成 |
