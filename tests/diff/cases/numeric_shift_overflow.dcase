@@ -1,0 +1,7 @@
+# @cat: numeric
+# @note: 移位量上界——CPython 任意精度（1<<64 = 2^64），zeta 移位量截断静默错值
+#        （BR-M03 的 CTFE 侧 0..64 守卫与运行期行为不一致；已知 mismatch，记账用）
+#@@ python
+print(1 << 64)
+#@@ zeta
+print(1 << 64)
