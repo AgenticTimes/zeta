@@ -63,6 +63,9 @@
 | **`--emit-llvm` 打印完成后 SIGSEGV** | — | 批次 313 采基线时发现：`zetac <任意文件> --emit-llvm` **每次都** rc=139（128+11），连 2 行最小程序也崩；lldb 证据 `EXC_BAD_ACCESS (address=0x0)`、`frame #0: 0x0`（跳到空函数指针），崩溃点在 `src/main.rs:816 print_to_stderr()` **之后**的退出路径（stderr 末尾是 AssemblyWriter 最后的 `attributes #N`，IR 完整）。对照：同文件走 `-o`（aot）不崩 ⇒ 只在这条 dump 且跳过 `finalize_and_aot` 的路径上 | ⬜ 待修（任务 #26）：任何拿 `--emit-llvm` 做门禁/CI 的脚本都会被非 0 退出码误导；`--flag` 自 batch 13x 的 `3b79889f` 就在，非本批次引入（未做历史复跑） |
 | **第二个幽灵门禁：CI 调的 `tools/run_all.sh` 从未被 git 跟踪** | — | 与 ⑪ 同型但更隐蔽（文件存在、本地天天跑，只是不在 git 里）。`.gitignore:124` 是无斜杠的 `run_*` ⇒ 匹配任意层级，把 `tools/run_all.sh` 一起吞了；而 `ci.yml:106` 的 `baselines` job 就是 `./tools/run_all.sh` ⇒ `checkout@v4` 出来的工作树里没有这个文件，**三套基线（官方 194 / python_style / 语料 39）在 CI 上从未真正跑过**。实测 `git ls-files --error-unmatch tools/run_all.sh` = 未匹配任何已知文件；而 run_all.sh 依赖的 `tools/build_runtime.sh`(:43)、`tests/python_style/run.sh`(:76)、`tools/corpus_baseline.py`(:98) **都已跟踪** ⇒ 缺的只有入口 | ✅ **批次 314 已修**：`.gitignore` 定向插 `!tools/run_all.sh`（不放宽 `run_*`；该文件是 CRLF + 7 个 NUL 的"data"，按字节改写并核对与 HEAD 之间是**纯插入 4 行**）。四条判据实测无连带变化：check-ignore 命中新豁免行、`run_scratch.sh`（根与 tools/ 下）仍被 :124 挡、`zeta_probe.o` 仍被 :145 挡。同批把 dc 基线入库（101 条，并核对"在脏工作树上采的"这条质疑：HEAD 的 blockchain 是 `#[cfg(feature)]` + `default = []`，基线里 blockchain 命中 0 条 ⇒ 干净 HEAD 同样成立）。⬜ `ci.yml:61` 的 JIT 冒烟步骤引用 3 个**不存在**的 `tests/test_hello.z`/`test_values.z`/`test_basic.z`，外面套 `if [ -f "$f" ]`(:62) ⇒ 不失败而是**静默空转并打出 verified 字样**（假绿，比直接红更糟）；本批只记录未修，修法是指向 `tests/unit-tests/` 真实语料而非凭空造文件 |
 
+| 前端死代码四件套 `proc_macro`(845) / `macro_expand_advanced`(617) / `borrow_enhanced`(611) / `identity_ownership`(~470) | **~2,543** | 四文件仅 `frontend/mod.rs` 声明、全仓零其他引用（2026-09-26 复核）；`tools/baselines/dc_default.txt` 内有大头 | 待过堂：按本表判据 (a)/(b) 逐个判——`borrow_enhanced` 属"(b) 从未接线的能力"（其 lifetime 消费链 `types/lifetime.rs` 本身不在主管线），删前先立任务；其余三个倾向 (a) 直接删（roadmap2 登记 8） |
+| `runtime/memory_old.rs` + `memory_enhanced.rs` 孤儿文件 | 不在构建图 | 不在 `runtime/mod.rs` 模块树、永不编译；`memory.rs` 的 no_mangle 版本被整块注释（解开即与 `host.rs` 撞符号） | 待删（零风险：不参与编译，删前 grep 引用即可） |
+
 **方式**：独立分支（`feat/infra-cleanup`，沿用 `feat/**` CI 约定）执行，等主线干净提交点合并。
 
 **下一批的现成靶子（批次 311 由编译器点名，非 grep 猜测）** —— 判据 `./tools/dc_audit.sh`
@@ -631,6 +634,11 @@ docs/ABI.md §4-6：
      （`If{dest: None}` 下嵌套 return 从"不可见"变"可见"）⇒ 必须跑全部门禁再落，
      并与 285 的计数口径对账。靶心已给：C3 更正后确认补偿点读的是
      **当前正在生成的函数自身**签名（:4488-4497 `get_insert_block().get_parent()`）。
+     🟡 **状态（2026-09-26 刷新，批次 469 旁路补录）**：(b) 的"无声明半"已由批次 399
+     交付（= 类型基础②）：`infer_fn_return_type` 委托 `Mir::signature_ret_ty`
+     （`mir.rs:45-58`），与调用侧 dest 槽同源；全语料 R7 尺子 5 行→1 行。
+     **剩余两形**：① 声明与实现不一致仍按位重读（覆盖层真声明赢）；② 一元负号
+     两源不同源（#115）——状态以 backlog #33 行为唯一登记点，本节不再逐批更新。
   ③ 附 B#7 = **任务 #32（已实测的运行期挂死，优先级最高）**；⚠️ 阻塞：修复点在
      `runtime/py_additions.c:3432`，该文件由并发工作流持有（批次 317 实测发现）。
   ④ 附 B#6 假旋钮 `ZETA_STRICT_STUBS` 二选一（接行为或删注释）；⚠️ 同样落在并发持有文件。
