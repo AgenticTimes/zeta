@@ -122,6 +122,19 @@ print(g.hello())   # CPython "hello world"   zeta 堆地址
 - 临时探针文件：/tmp/b440/b467/d1.z、d2.z（未入库未钉 known-fail——
   接手第一件事：按 t510 格式钉住后移交）。
 
+## ⑬ 字典方法族（批次 515 扫描，2 例闸门）
+
+```python
+d = {"a": 1, "b": 2}
+print(list(d.values()))   # CPython [1, 2]（插入序）   zeta [2, 1]
+print(list(d.items())[0]) # CPython ('a', 1)          zeta 堆地址
+```
+- values() 顺序 = 哈希序非插入序（map 存储未维护插入链）；items() 元素 =
+  元组解包同根（⑪ 家族）。**其余 13 个方法**（rstrip/lstrip/strip(chars)/
+  replace 三参/center/zfill/split-maxsplit/list.remove/extend/count/
+  dict.pop/len）实测全对——方法面覆盖度高。
+- 闸门：`container_dict_methods`。
+
 ## ⑨ str.find 两参形式缺 shim（1 例 compile 闸门，#188 余半）
 
 ```python

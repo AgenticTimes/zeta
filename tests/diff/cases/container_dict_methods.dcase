@@ -1,0 +1,17 @@
+# @cat: container
+# @note: 字典方法族——values() 顺序颠倒（CPython 插入序 [1,2]，zeta [2,1]）+
+#        items() 元素打地址（元组解包同根 #190 邻域）。其余 13 个方法
+#        （rstrip/lstrip/strip/replace-count/center/zfill/split-maxsplit/
+#        remove/extend/count/pop/len）全对（批次 515 扫描）。
+#@@ python
+d = {"a": 1, "b": 2}
+print(list(d.values()))
+print(list(d.items())[0])
+d.pop("a")
+print(len(d))
+#@@ zeta
+d = {"a": 1, "b": 2}
+print(list(d.values()))
+print(list(d.items())[0])
+d.pop("a")
+print(len(d))
