@@ -180,6 +180,7 @@
 | 517 | cleanup | **OOP 组合普查三四例**：① 类变量自增崩溃（Counter.count += 1 把 int 0 当字典解引用 rc=1——类级属性读写未实现）② 类方法内 self.data.get(k, default) 全打地址（set ✓ get ✗——⑫ 家族扩展）。对照组：普通函数 dict.get ✓ | runtime verdict 钉住 | ✅ 定性批 |
 | 518 | cleanup | **稳态确认批**：XPASS 0（#188/#189/#190 未修）、diff 无回归、__pycache__ 清理。qwen 451 已将我方组合崩溃落号 **#194 并列为 452 队头**（复现件 /tmp/b449/c511/），协作闭环运转中。cleanup 领先 16 提交，等主线合并 | 全绿 | ✅ 稳态批 |
 | 519 | cleanup | **新种子收敛验证 + 方法学发现**（60321，60 例临时）：缺口率 **1.7%**（1/60）——远低于深层嵌套样本的 12-24% ⇒ **缺口率与表达式嵌套深度正相关**：浅层 randint 表达式大多正确，深层链才触发族缺口。此发现校准普查方法学：生成器应加深度参数以控制采样深度。旧族确认未修（truediv/Bool/%s 仍红） | 1/60 新例 | ✅ 度量批 |
+| 520 | cleanup | **生成器加 --depth 参数 + 三层对照实验**（shallow/normal/deep × 20 例，同 seed=777111）：shallow **0 缺口**、normal **1**、deep **6** —— **深度-缺口率正相关定量证实**（0% / 5% / 30%）。普查采样面从此可控：浅层验证基础语义面、深层专攻交互缺口。生成器 MAX_DEPTH 由 --depth 控制不再硬编码 | 0/1/6 三层 | ✅ 工具+度量批 |
 | 516 | cleanup | **OOP 组合普查三例**：① self 链式返回 ✓ 对照组 ② **列表字段经方法 append = map_get 非字典 rc=1**（515 字段槽位族扩展：ctor 存的列表经方法读出非列表）③ **跨类实例引用方法 = 静默无输出**（rc=0 应打 200，#117 邻域）——均 gen.rs 车道 | ①✓②③钉住 | ✅ 定性批 |
 | 512 | cleanup | **sorted(reverse) 字符串版排错钉住**：["b","a","c"] reverse → zeta ["c","a","b"] vs CPython ['c','b','a']——整数版正确 ⇒ 字符串降序路径缺口（registry/runtime 车道）。同批证实：while+continue（正确增量）✓、for-else+continue ✓、sorted(reverse) 整数版 ✓ | diff 无回归 | ✅ 完成 |
 | 513 | cleanup | **int 键字典迭代序哈希序钉住**（values 顺序族扩展到 int 键——插入序 10,2,30 vs 哈希序 30,2,10）。同批证实：混合比较 1==1.0 ✓、负浮点 ✓ | diff 无回归 | ✅ 完成 |
