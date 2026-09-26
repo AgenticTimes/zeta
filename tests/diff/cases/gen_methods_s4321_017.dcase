@@ -1,0 +1,22 @@
+# @cat: container
+# @note: 随机容器方法链（seed=4321 #17）
+#@@ python
+v = [-93, 57, 67, 91, 40]
+v.sort()
+print(len(v))
+v.insert(1, -67)
+print(len(v))
+print(v.index(57))
+print(len(v))
+print(v)
+
+#@@ zeta
+v = [-93, 57, 67, 91, 40]
+v.sort()
+print(len(v))
+v.insert(1, -67)
+print(len(v))
+print(v.index(57))
+print(len(v))
+print(v)
+
