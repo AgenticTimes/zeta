@@ -27,11 +27,11 @@ runtime/py_additions.c	3186	int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg
 runtime/py_additions.c	3313	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
 runtime/py_additions.c	3320	(void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
 runtime/py_additions.c	3414	int64_t zeta_call1(int64_t fptr, int64_t a) {
-runtime/py_additions.c	3457	static int zt_dyn_is_map(int64_t h) {
-runtime/py_additions.c	3465	if (GC_base((void*)h) != (void*)h) return 0;
-runtime/py_additions.c	3469	static int64_t* zt_dyn_vec_hdr(int64_t h) {
-runtime/py_additions.c	3482	int64_t have = (int64_t)GC_size((void*)hdr);
-runtime/py_additions.c	3492	int64_t zeta_dyn_len(int64_t h) {
+runtime/py_additions.c	3503	static int zt_dyn_is_map(int64_t h) {
+runtime/py_additions.c	3505	if (GC_base((void*)h) != (void*)h) return 0;
+runtime/py_additions.c	3515	static int64_t* zt_dyn_vec_hdr(int64_t h) {
+runtime/py_additions.c	3522	int64_t have = (int64_t)GC_size((void*)hdr);
+runtime/py_additions.c	3538	int64_t zeta_dyn_len(int64_t h) {
 runtime/tokio_runtime_stub.c	206	#define MAP_ENTRY_SIZE 24
 runtime/tokio_runtime_stub.c	227	// A `-> dict` annotation on a function whose body returns `json.loads(...)` types // the result `map`, while the VALUE is a PyJson cell [tag, payload] (tag 1..
 runtime/tokio_runtime_stub.c	241	// The h-16 read must NEVER touch memory outside h's own GC block: a map // handle IS its block base, and blocks that start at a page edge make // h-16 a guard 
