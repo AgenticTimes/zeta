@@ -81,7 +81,9 @@ bash tools/run_all.sh --skip-corpus --skip-jit --skip-diff --skip-knob \
   --skip-sem --skip-ignore --skip-mbvar --skip-emit-stable
 ```
 
-实测 **208s = 3'28"**（省下 458s），且保留步的读数与全量逐项相同（official 194/194·191/194、python_style 352 passed/2 failed/6 known-fail/0 xpass、238 warning 行/112 文件、dyn_binding 4 条不一致 0）。`GATE_RC=1` 的存量红源两侧相同＝`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`（快门禁不改变 rc）。
+实测 **208s = 3'28"**（省下 458s），且保留步的读数与全量逐项相同（official 194/194·191/194、python_style 353 passed/2 failed/6 known-fail/0 xpass、239 warning 行/113 文件、dyn_binding 4 条不一致 0）。`GATE_RC=1` 的存量红源两侧相同＝`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`（快门禁不改变 rc）。
+
+**口径更新（批次 438 收尾之后，合并树实测）**：`python_style` 与 jit sweep 两步已在批次 461（旁路）并行化，同一条配方在合并树上＝**139s**、python_style **354 passed**/2/6/0（＋1 过＝旁路的 `t501_ref_pattern_match.z`，`ls t*.z` 361→362），其余逐项同上 ⇒ 上面 208s 与表内 `python_style`/`jit sweep` 两格是 461 之前的口径。读数明细见 roadmap.md「旁路并入（2026-09-26）」节末。
 
 批内另外三条省时间的规矩：**先 `--emit-llvm` 单模块比对**再上整程序 A/B（批次 438 实测：一处字段布局的位移在单模块 IR 里两行就看清了，整程序 A/B 一次要 12 对编译）；**某侧确定性失败就别 n≥6**（同一条链接错误重跑六遍只是同一个结论）；`--dump-mir` 的大夹具先测同侧噪声底再按 `== MIR item ==` 归位数真实改动点。
 

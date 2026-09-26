@@ -19817,6 +19817,19 @@ official compile **194/194**、compile+link **191/194**（3 条 link-only：`int
 
 **未量（下批先量再动）**：① `MirExpr::FuncAddr` 上带 `{ty}::method` 拼写的点——本批只改 `Call`/`VoidCall` 两形，取地址那一形有没有同类漏绑；② 普通（非嵌套）路径的 `&mut self` 接收者类型；③ `runtime/unavailable_stubs.c:148-153` 手工注册的两个名（拼写里带 438 之前的**外层类别名**，正是 438 要消掉的静默错值创可贴）现在是否已无人引用 —— 要 `--report-stubs` 点名，且该文件动手前需用户授权。
 
+## 旁路并入（2026-09-26，主线侧代录）：批次 440／460／461 —— 截断债度量清零、`&`/`&mut` 引用模式臂、门禁两步提速
+
+合并提交＝本次 `git merge cleanup`（文件面：`src/frontend/parser/pattern.rs` +23、`tests/python_style/{run.sh,run_one.sh,t501_ref_pattern_match.z}`、`tools/jit_sweep.sh`、`tools/selfhost_compile.sh` ＋协调文档；主线侧 `src/middle/**`、`docs/ABI.md`、`tools/baselines/**` 一字未动）。
+**读数归属点名**：下面三条是旁路侧（Agent-2）在自己分支上取的数，**主线侧未复测**；本批（438）的改后二进制与它们同树跑过一次快子集，读数见本节末"合并后复跑"。
+
+- **440（度量批，纯文档）：反向队列第一子队列（解析器截断十族）实测已被 326–437 之间的批次清零** —— 截断盘点在 437 基线上报 **0 W1002／238 文件**。另发现一条工具判据缺陷：`tools/parse_bisect.py` 对**无分号方言**判据失配（切点要求 `;`）⇒ 归入 DG06 增补建议。反向队列由此转入 `zeta_src` 余量。
+- **460（2.2／解析器）：`Some(&value)` 的 `&` 模式不被识别 ⇒ 整个 fn 连同其后文件一起被丢**（靶＝`zeta_src/runtime/array.z` 的 `array_get`，钉住项 #79 第 2 条）。修法＝`pattern.rs` 补 `&`/`&mut` 引用模式臂（词边界检查、按槽位模型剥 `&` 绑定内层、递归支持 `&&p`）。新用例 `t501_ref_pattern_match.z` 三期望实拍 42/0/5 通过；`array.z` 解析 W1002＝0；selfhost 判据 48 过／3 登记／0 新失败。全量门禁 rc=0（`gate460.log`）：official 194/194（191 link）· python_style **352 过**/2/6/0（含 t501）· 语料 40/40 · jit ok=176/segv=0，全轴与 413 基线一致。**移交主线一项**：`array.z` 解析修好后暴露下一层 —— `codegen.rs:6759` 的 `exprs[&values[1]]` 索引 panic（SemiringFold 操作数 id 未注册进 `exprs`，MIR 实测 12 节点＝M06 家族的索引变体）⇒ gen/codegen 车道归主线，已登记为新任务。
+- **461（tools 车道，backlog #23 的并行半步）：`python_style` 与 jit sweep 两步并行化** —— `run.sh` 的单用例逻辑逐字搬到 `run_one.sh`，按 `PY_JOBS` 分片派发、按名排序聚合，输出格式字节不变、`PY_JOBS=1` 可回串行；`jit_sweep.sh` 同法（`ZETA_JIT_JOBS`）。实测（437 基线）：`python_style` 步 **174–242s → 119s**、jit sweep 步 **60s → 32s**，同树同基线读数逐项一致（352/2/6/0；176/381/0/0/557）；并行上限 8→24（本机 10 核，默认 10 路）。**旁路侧自记一条更正**：本行初版写的"1h20m → 7 分 10 秒"里 1h20m 是轮询被打断造成的墙钟误读、不是门禁真实耗时 —— 全量门禁基线＝**11'06"＝666s**（＝本文件批次 438 §五 与 AGENTS.md 门禁节奏那格的逐项计时），7'10" 只是非独占条件下的参考值。与本线侧的 `--skip-*` 快门禁配方（208s）互补：skip 砍无关步骤，461 把留下的步骤本身提速。
+
+**号段调整（旁路侧提出、主线侧代录）**：旁路批次号段由 440–459 改为 **460–489**（440 已被那批度量批用掉）；测试号段 t50x 起照旧。
+
+**合并后复跑（主线侧当场取数，`/tmp/b439_gate.log`，二进制 md5 `bed3540ad05e5f019dbd990d247e911d`＝合并树 `cargo build --release` 现建）**：快子集（§门禁节奏那张表的 `--skip-*` 配方，13 步跳过）＝ **`GATE_RC=1`、139s**。逐项对 438 §五：official compile **194/194**、compile+link **191/194**（3 条 link-only 名单逐字相同）· python_style **354 passed / 2 failed / 6 known-fail / 0 xpass**，红源仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ **零新增红**；相对 438 的 353 只 **+1 过**＝旁路带进来的 `t501_ref_pattern_match.z`（`ls tests/python_style/t*.z` 361→362，known-fail/xpass 两格未动，不是判据放松）· compile-diagnostics official **2 文件/6 行**、python_style **239 行/113 文件** 与 438 逐字相同 · comment_drift 复述 **0** · dyn_binding **4 条断言、不一致 0**。**本批无 `.rs` 改动 ⇒ 无锚点重绑。** 附带一条计时读数：同一条配方在 438 是 208s、在合并树是 **139s**，差的 69s 正是 461 那两步并行化落在保留步（`python_style`）上的收益 ⇒ AGENTS.md 那格已随行改口径。**未覆盖的轴点名**：本次只跑快子集，被跳过的 13 步里 `corpus`/`jit`/`truth+diff` 是旁路侧在自己树上单独跑过的（460 那次全量 rc=0），主线侧未在合并树上复现 ⇒ 下一次全量（440/450 那格节奏）之前，合并树的全轴一致性只有"保留步逐项一致"这一层证据。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
