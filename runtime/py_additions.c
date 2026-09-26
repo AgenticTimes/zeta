@@ -505,6 +505,7 @@ int64_t zeta_fmt_f64_spec(double v, int64_t spec) {
 typedef struct {
     char fill;
     char align; /* 0 = default */
+    char sign;  /* 0 = none; '+' '-' ' ' — Python's sign flag */
     char type;  /* 0 = none */
     int width;
     int zero;
@@ -514,7 +515,7 @@ typedef struct {
 } zt_fmt_t;
 
 static void zt_parse_spec(const char* s, zt_fmt_t* f) {
-    f->fill = ' '; f->align = 0; f->type = 0; f->width = 0;
+    f->fill = ' '; f->align = 0; f->sign = 0; f->type = 0; f->width = 0;
     f->zero = 0; f->has_precision = 0; f->precision = 0; f->numeric = 0;
     const char* p = s ? s : "";
     if (p[0] && p[1] && (p[1] == '<' || p[1] == '>' || p[1] == '^')) {
@@ -522,7 +523,7 @@ static void zt_parse_spec(const char* s, zt_fmt_t* f) {
     } else if (*p == '<' || *p == '>' || *p == '^') {
         f->align = *p; p++;
     }
-    if (*p == '+' || *p == '-' || *p == ' ') p++;
+    if (*p == '+' || *p == '-' || *p == ' ') { f->sign = *p; p++; }
     if (*p == '#') p++;
     if (*p == '0') { f->zero = 1; p++; }
     while (*p >= '0' && *p <= '9') { f->width = f->width * 10 + (*p - '0'); p++; }
@@ -570,30 +571,50 @@ static int64_t zt_fmt_pad(const char* body, zt_fmt_t* f) {
     return (int64_t)out;
 }
 
+// Python's sign flag applied to an integer whose digits are rendered in a
+// non-decimal base: C's %llx prints a negative as its 64-bit
+// two's-complement, while Python prints sign + magnitude.
+static char zt_int_sign_char(int64_t v, const zt_fmt_t* f) {
+    if (v < 0) return '-';
+    if (f->sign == '+' || f->sign == ' ') return f->sign;
+    return 0;
+}
+
 int64_t py_fmt_i64(int64_t v, int64_t spec) {
     zt_fmt_t f;
     zt_parse_spec(spec ? (const char*)spec : "", &f);
     f.numeric = 1;
     char body[160];
+    char sfl[2];
+    sfl[0] = (f.sign == '+' || f.sign == ' ') ? f.sign : 0;
+    sfl[1] = 0;
+    unsigned long long mag = v < 0 ? 0ULL - (unsigned long long)v : (unsigned long long)v;
     char t = f.type ? f.type : 'd';
     if (t == 'b') {
-        unsigned long long u = (unsigned long long)v;
         char tmp[160];
         int k = 0;
-        if (!u) tmp[k++] = '0';
-        while (u && k < 159) { tmp[k++] = (char)('0' + (u & 1)); u >>= 1; }
-        for (int a = 0, b = k - 1; a < b; a++, b--) { char c = tmp[a]; tmp[a] = tmp[b]; tmp[b] = c; }
+        char sg = zt_int_sign_char(v, &f);
+        if (sg) tmp[k++] = sg;
+        int d0 = k;
+        if (!mag) tmp[k++] = '0';
+        while (mag && k < 159) { tmp[k++] = (char)('0' + (mag & 1)); mag >>= 1; }
+        for (int a = d0, b = k - 1; a < b; a++, b--) { char c = tmp[a]; tmp[a] = tmp[b]; tmp[b] = c; }
         tmp[k] = 0;
         return zt_fmt_pad(tmp, &f);
     } else if (t == 'x' || t == 'X' || t == 'o') {
-        snprintf(body, sizeof body, t == 'x' ? "%llx" : (t == 'X' ? "%llX" : "%llo"),
-                 (unsigned long long)v);
+        char digits[160];
+        snprintf(digits, sizeof digits, t == 'x' ? "%llx" : (t == 'X' ? "%llX" : "%llo"), mag);
+        char sg = zt_int_sign_char(v, &f);
+        if (sg) snprintf(body, sizeof body, "%c%s", sg, digits);
+        else snprintf(body, sizeof body, "%s", digits);
     } else if (t == 'f' || t == 'F' || t == 'e' || t == 'E' || t == 'g' || t == 'G') {
         char cfmt[24];
-        snprintf(cfmt, sizeof cfmt, f.has_precision ? "%%.%d%c" : "%%%c", f.precision, t);
+        snprintf(cfmt, sizeof cfmt, f.has_precision ? "%%%s.%d%c" : "%%%s%c", sfl, f.precision, t);
         snprintf(body, sizeof body, cfmt, (double)v);
     } else {
-        snprintf(body, sizeof body, "%lld", (long long)v);
+        char cfmt[24];
+        snprintf(cfmt, sizeof cfmt, "%%%slld", sfl);
+        snprintf(body, sizeof body, cfmt, (long long)v);
     }
     return zt_fmt_pad(body, &f);
 }
@@ -603,15 +624,18 @@ int64_t py_fmt_f64(double v, int64_t spec) {
     zt_parse_spec(spec ? (const char*)spec : "", &f);
     f.numeric = 1;
     char body[160];
+    char sfl[2];
+    sfl[0] = (f.sign == '+' || f.sign == ' ') ? f.sign : 0;
+    sfl[1] = 0;
     char t = f.type ? f.type : 'f';
     if (t != 'f' && t != 'F' && t != 'e' && t != 'E' && t != 'g' && t != 'G') t = 'f';
     char cfmt[24];
     if (f.has_precision) {
-        snprintf(cfmt, sizeof cfmt, "%%.%d%c", f.precision, t);
+        snprintf(cfmt, sizeof cfmt, "%%%s.%d%c", sfl, f.precision, t);
     } else if (t == 'f' || t == 'F') {
-        snprintf(cfmt, sizeof cfmt, "%%.6%c", t); /* Python's default float repr */
+        snprintf(cfmt, sizeof cfmt, "%%%s.6%c", sfl, t); /* Python's default float repr */
     } else {
-        snprintf(cfmt, sizeof cfmt, "%%%c", t);
+        snprintf(cfmt, sizeof cfmt, "%%%s%c", sfl, t);
     }
     snprintf(body, sizeof body, cfmt, v);
     return zt_fmt_pad(body, &f);

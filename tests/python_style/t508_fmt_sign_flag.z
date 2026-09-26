@@ -1,8 +1,8 @@
-// known-fail: f-string 符号旗标不渲染（backlog #188，py_format runtime 车道）——
-// `{n:+d}` 的 + 被解析期跳过但不输出（CT35 的"跳过 sign"实为吞掉）。
-// 随机普查 fmt 模式（486）实证：宽度组合与浮点精度两形同病。
+// f-string 符号旗标与宽度组合（backlog #188 第一面，py_format runtime 车道）。
+// 批次 453 修好 sign 旗标后摘除 known-fail 标记；期望值本机 CPython 3.14.5 复核
+// （`{n:8d}` 的前导空格是 2 个 —— 原钉子里少写了一个，一并订正）。
 n = 123456
 print(f"{n:+d}")
 print(f"{n:8d}")
 // expect: +123456
-// expect:  123456
+// expect:   123456

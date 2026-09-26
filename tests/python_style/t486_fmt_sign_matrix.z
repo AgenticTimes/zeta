@@ -1,0 +1,29 @@
+// 批次 453：Python 格式规格的 sign 旗标与负数进制（backlog #188 两面）。
+// 期望值取自本机 CPython 3.14.5 当场跑同一程序；改前 11 行全红（t508/t509 只钉了
+// 其中两形，这里补齐宽度/填充/进制与浮点的组合）。
+n = -42
+w = 123456
+x = 65
+fv = 2.71828
+print(f"{n:=^7b}")
+print(f"{w:^+7d}")
+print(f"{n:b}")
+print(f"{x:+5d}")
+print(f"{fv:=^+.3f}")
+print(f"{n:5o}")
+print(f"{w:+o}")
+print(f"{n:08b}")
+print(f"{n:>5o}")
+print(f"{n:>b}")
+print(f"{n:9b}")
+// expect: -101010
+// expect: +123456
+// expect: -101010
+// expect:   +65
+// expect: +2.718
+// expect:   -52
+// expect: +361100
+// expect: -0101010
+// expect:   -52
+// expect: -101010
+// expect:   -101010
