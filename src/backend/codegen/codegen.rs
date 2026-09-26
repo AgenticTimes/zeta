@@ -6500,6 +6500,9 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     }
                 };
 
+                // NB: this line prints the PRE-ext state. `variant=""` here is not
+                // the answer — batch 437 read it as one and registered a false
+                // premise. The resolved tuple is on the `FA {role} final` line below.
                 let dbg_decl = self
                     .current_type_map
                     .as_ref()
@@ -6609,7 +6612,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     None => (variant, field_count, field_index),
                 };
                 if crate::diagnostics::env_flag("ZETA_DBG_FA") {
-                    eprintln!("ZETA-DBG   final idx={}", field_index);
+                    eprintln!(
+                        "ZETA-DBG FA {} final field={} variant={:?} field_count={} idx={}",
+                        role, field, variant, field_count, field_index
+                    );
                 }
         (variant, field_count, field_index)
     }

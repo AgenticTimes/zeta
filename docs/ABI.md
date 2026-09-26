@@ -44,9 +44,9 @@
 | # | 表示 | 槽内编码 | 写侧（产生处） | 读侧要求 | 混淆史（实测） |
 |---|---|---|---|---|---|
 | 1 | `i64` | 裸二补码 | `MirExpr::IntLit` | 原样 | — |
-| 2 | `f64` | **IEEE-754 位模式**，不是裸整数 | ① 静态 `double` 槽：`Assign` 时 int 值走 `slot_sitofp`（codegen.rs:3761-3786）；② struct 字段是 64 位槽：存前 bitcast（codegen.rs:7138） | 从**裸容器字**读回必须是 `bitcast`，不能 `sitofp`（`slot_or_sitofp` codegen.rs:1941-1956，判据 `slot_read_ids` 60 / 1593） | 批次 298：裸存 → 读回 4.94e-322；批次 299：缺 `sitofp` → `500.0 + 50` 算成 `4.6e18`（5782 记录） |
+| 2 | `f64` | **IEEE-754 位模式**，不是裸整数 | ① 静态 `double` 槽：`Assign` 时 int 值走 `slot_sitofp`（codegen.rs:3761-3786）；② struct 字段是 64 位槽：存前 bitcast（codegen.rs:7144） | 从**裸容器字**读回必须是 `bitcast`，不能 `sitofp`（`slot_or_sitofp` codegen.rs:1941-1956，判据 `slot_read_ids` 60 / 1593） | 批次 298：裸存 → 读回 4.94e-322；批次 299：缺 `sitofp` → `500.0 + 50` 算成 `4.6e18`（5782 记录） |
 | 3 | `bool` | **i64 的 0/1** | 比较结果立刻 `zext i1→i64`（`eq_ext`/`ne_ext`/…，codegen.rs:4245-4253） | 一律 `!= 0` | `Type::Bool → bool_type`（7388）只在 ABI 边界（参数/返回签名）出现；**i1 从不进槽** |
-| 4 | `str`（指针形） | `.rodata` 或 GC 块首地址，`ptrtoint` 成 i64 | `MirExpr::StringLit`：私有 global 字节数组 + `ptrtoint`（codegen.rs:6628-6647） | 可直接解引用；`GC_base(h) != 0` ⇒ 堆串 | 与 #5 不可静态区分 ⇒ 见 R3 |
+| 4 | `str`（指针形） | `.rodata` 或 GC 块首地址，`ptrtoint` 成 i64 | `MirExpr::StringLit`：私有 global 字节数组 + `ptrtoint`（codegen.rs:6634-6653） | 可直接解引用；`GC_base(h) != 0` ⇒ 堆串 | 与 #5 不可静态区分 ⇒ 见 R3 |
 | 5 | `str`（packed 形） | 短 ASCII **按字节小端打进这 8 个字节本身**（实测样本 `"43601853"` = `0x3335383130363334`） | `vec<str>` 的元素槽（批次 291 实测；写侧仍是隐式决定，见附 B OPEN） | **必须先判形再解引用**；唯一的判形点在 `map_str_key`（py_additions.c:105-129）：`GC_base` 命中→按内容 FNV 哈希；否则 `u < 2^32 \|\| u >= 2^48`→判为 packed、原样当不透明键；再否则 `vm_read_overwrite` 探一页可读性 | 把 packed 当 `char*` 传给 `str_trim` → 约 25% 概率 SEGV（批次 297）；packed 之间比较走 `zt_packed_cstr_eq`（:1609） |
 | 6 | `vec` 句柄 | 指向**数据**；`[cap \| len]` 头在 `base-16`；块 ≥ `16+cap*8` | `zeta_collect_vec_n` / `str_split` / df 列构造器（多数按元素数申请，故 cap 常 < 8） | `zt_dyn_vec_hdr`（py_additions.c:3469-3491）：`cap∈[1,2^28]`、`len ≤ cap`、块够大；**短 vec（cap<8）还必须是"紧块"** —— GC 向上取整的余量恰为 8 或 16，`have > need+16` 即判否 | 批次 301：`cap >= 8` 曾是唯一判据 ⇒ 1..7 元素列表被拒，`len()` 退化成对数据字做 `strnlen`（实测 3 元素报 0；1/4/8 报 5/0/8） |
 | 7 | `map` 句柄 | **块首**；`w[0]=cap`（2 的幂、≥16、≤2^28）、`w[1]=used ≤ cap`；块 ≥ `16+cap*24`；`cap < 0` ⇒ growth forwarder（真表在 `w[1]`） | `MapNew` / `DictInsert` | `zt_dyn_is_map`（py_additions.c:3457-3467）+ `GC_size` 兜底；**批次 423 起** `map_resolve` 出口另有一道粗判形（`zt_map_cap_ok`＝2 的幂 ∧ `cap∈[16,2^30]`；上界比本行写的 2^28 故意松一档 ⇒ 宁放行也不误伤既有真表，收紧要与 #6 的 vec 判形一并裁），不合格即 `zt_map_not_a_map` 点名 + `zeta_raise(1)`，**不再解引用** | 与 #8 撞车：map 把 PyJson 的 tag 当容量（见 #8）；423 语料实拍：`py_map_items` 收到的"句柄"是**交易日日期整数** 37 次、`map_get` 收到的是浮点文本字符串 |
@@ -85,7 +85,7 @@
 两者不互相转换 —— "非空 dict" 是 `len>0`，不是 `!= 0`。
 
 **R6 struct 字段一律 64 位槽；宽度≠8 的类型进/出槽各 bitcast 一次。**
-锚点 codegen.rs:7138（存侧注释）+ #2 读侧。
+锚点 codegen.rs:7144（存侧注释）+ #2 读侧。
 
 **R7（批次 318 补）返回值也是一次跨槽写入：定义侧 LLVM 签名型 == 调用侧 dest 槽型。**
 这条今天**正被违反**（批次 318 时零诊断，批次 319 起出声 ⇒ 见本节末），
@@ -100,7 +100,7 @@
 **诊断已落地（批次 319，任务 #33 第①步：只出声、不生成任何 IR）**：每个
 `MirStmt::Call` 在 lowering 前先比"被调方 LLVM 返回型 vs 调用方 dest 槽的 MIR 型"，
 不一致即 `warning: ABI return in call to \`f\`: callee returns float, caller's dest
-slot is int`（锚点 codegen.rs:3795 调用点、codegen.rs:7802 实现），并在 `report_abi_coercions`
+slot is int`（锚点 codegen.rs:3795 调用点、codegen.rs:7808 实现），并在 `report_abi_coercions`
 里按**独立计数器**汇总（`abi_ret_warn_count`，与 §3.2 的 `abi_warn_count` 分列——
 两条规则、两个边界，合并会互相掩盖出现率）。覆盖面与边界如实写在这里，不粉饰：
 ① 只对 **Zeta 自定义函数**生效（`zeta_fn_names` 在 §3.1 的预声明环节登记）——C 运行期
@@ -180,12 +180,12 @@ f32/f64/i64 中选）。
 LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命中 0。
 写侧照此：struct 字面量 `runtime_malloc(fields*8)` + 字段各占 8 字节
 （:6211 注释原文 "Allocate struct on HEAP to prevent dangling pointers"、:6212-6215、
-:7176-7177）；元组走 `StackArray` 的 `[cap|len|elems…]`、句柄 = `buf+16`（:6740-6745、
-:7577-7578，与 §1#6 同一几何）。读侧：字段访问 = `int_to_ptr` + **整块 load**
-`struct_type(&[i64; N], false)`（:6501-6509，非 packed）+ `extract_value`（:7307-7310）；
+:7182-7183）；元组走 `StackArray` 的 `[cap|len|elems…]`、句柄 = `buf+16`（:6740-6745、
+:7583-7584，与 §1#6 同一几何）。读侧：字段访问 = `int_to_ptr` + **整块 load**
+`struct_type(&[i64; N], false)`（:6501-6509，非 packed）+ `extract_value`（:7313-7316）；
 字段写 = 地址算术 `base + idx*8` 后 `store`（:5909-5930）。
-⚠️ **另一套通用映射器不参与签名**：`type_to_llvm_type`（:8185）会把 `Type::Tuple`
-映成真 LLVM struct（:8291-8297）。改签名时只认 :1467-1480，认它就等着 ABI 不一致。
+⚠️ **另一套通用映射器不参与签名**：`type_to_llvm_type`（:8191）会把 `Type::Tuple`
+映成真 LLVM struct（:8297-8303）。改签名时只认 :1467-1480，认它就等着 ABI 不一致。
 
 > 锚点源码：src/backend/codegen/codegen.rs
 **C2 返回类型有两个各自独立的来源，谁也不覆盖谁**（裁决层已于批次 318 定位，附 B#4 关闭）：
@@ -239,16 +239,16 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 > 锚点源码：src/backend/codegen/codegen.rs
 | # | 实参 → 形参 | 发出的指令 | 丢值？ | 告警 | 判定 |
 |---|---|---|---|---|---|
-| 1 | `i<n>` → `i<m>`，n<m | `arg_zext`（:7686-7693） | 否 | 无 | **保留** |
-| 2 | `i<n>` → `i<m>`，n>m | `arg_trunc`（:7703-7706） | **是**（丢高位） | `narrow iA→iB`（:7694-7702） | **删除候选**（改诊断） |
-| 3 | 同宽整数 | 原样（:7707-7709） | 否 | 无 | 保留 |
-| 4 | int → float，且该实参来自容器裸槽 | `arg_slot_bits` **bitcast**（:7711-7722） | 否 | 无 | **保留**（与 §2 R2 对称，批次 299；判据 `slot_read_ids`） |
-| 5 | int → float，其他来源 | `arg_sitofp`（:7723-7726） | 否 | 无 | 保留，但**应告警化**（值对、静默错） |
-| 6 | float → int | `arg_fptosi`（:7738-7741） | **是**（小数；负数/OOB 为 LLVM poison） | `fptosi → iN`（:7732-7737） | **删除候选** |
-| 7 | float ↔ ptr | **不转换**，原值照推（:7743-7747） | 值不匹配照样进 `build_call` | `float↔ptr (forbidden)` | **必改**：写着 forbidden 却不拒绝 |
-| 8 | 其余一切（**含 ptr ↔ i64**） | 原样（:7748 `_ => push`） | 未知 | 无 | **删除候选**（今天的默认＝硬塞） |
-| 9 | 实参少于形参 | 补 null/零常量（:7751-7772） | 静默补空 | 无 | **删除候选**（Python 侧应报错） |
-| 10 | 实参多于形参 | `result.truncate(n_params)`（:7773-7774） | **静默丢实参** | 无 | **删除候选** |
+| 1 | `i<n>` → `i<m>`，n<m | `arg_zext`（:7692-7699） | 否 | 无 | **保留** |
+| 2 | `i<n>` → `i<m>`，n>m | `arg_trunc`（:7709-7712） | **是**（丢高位） | `narrow iA→iB`（:7700-7708） | **删除候选**（改诊断） |
+| 3 | 同宽整数 | 原样（:7713-7715） | 否 | 无 | 保留 |
+| 4 | int → float，且该实参来自容器裸槽 | `arg_slot_bits` **bitcast**（:7717-7728） | 否 | 无 | **保留**（与 §2 R2 对称，批次 299；判据 `slot_read_ids`） |
+| 5 | int → float，其他来源 | `arg_sitofp`（:7729-7732） | 否 | 无 | 保留，但**应告警化**（值对、静默错） |
+| 6 | float → int | `arg_fptosi`（:7744-7747） | **是**（小数；负数/OOB 为 LLVM poison） | `fptosi → iN`（:7732-7737） | **删除候选** |
+| 7 | float ↔ ptr | **不转换**，原值照推（:7749-7753） | 值不匹配照样进 `build_call` | `float↔ptr (forbidden)` | **必改**：写着 forbidden 却不拒绝 |
+| 8 | 其余一切（**含 ptr ↔ i64**） | 原样（:7754 `_ => push`） | 未知 | 无 | **删除候选**（今天的默认＝硬塞） |
+| 9 | 实参少于形参 | 补 null/零常量（:7757-7778） | 静默补空 | 无 | **删除候选**（Python 侧应报错） |
+| 10 | 实参多于形参 | `result.truncate(n_params)`（:7779-7780） | **静默丢实参** | 无 | **删除候选** |
 
 **判定口径**：保留＝无损且语义正确；删除候选＝G.5d 收敛时改为诊断报错。
 按"报告先行原则"（refactor.md §G 前言），**#2/#6/#7/#8/#9/#10 全部纳入 `abi_note`
@@ -911,7 +911,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
    - **修法归属**：G.1/G.3（解析器 + 用例重构），不在 ABI 范围；优先级按上表丢行量。
      已关闭的一族：`x @ 1..=10` —— `src/frontend/parser/pattern.rs:22` 的 `alt()` 里
      `parse_struct_pattern`（`src/frontend/parser/pattern.rs:48`，对裸路径**故意**
-     返回 `Ok(Var)`，见 `src/frontend/parser/pattern.rs:135`）排在
+     返回 `Ok(Var)`，见 `src/frontend/parser/pattern.rs:158`）排在
      `parse_bind_pattern`（`src/frontend/parser/pattern.rs:46`）之前，于是 `@` 右侧永不消费 ⇒ 整条 `fn` 连文件余部被丢。
      绑定模式前判后，截断文件 12→11、丢行 1,805→1,749，四套基线不动
      （official 194/194、python_style 285/2/4/0、corpus 39/39、jit segv=0）。
@@ -928,7 +928,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      **五条 expect 全部落到 `_ =>`**。原因：`==` 在 IR 里被声明为
      External `i64(i64,i64)`（`src/backend/codegen/codegen.rs:1213`），两个
      `Str` 操作数走这条路比的是**指针**。必须下成 `MirExpr::BinaryOp`
-     （与 `op == "+"` 同形，后端 `codegen.rs:6816` 有 str 比较分支）。
+     （与 `op == "+"` 同形，后端 `codegen.rs:6822` 有 str 比较分支）。
      同形修正也 applied 到 or 模式子臂（`src/middle/mir/gen.rs` 的
      `AstNode::OrPattern` 分支）。
      **本族在 11 文件 / 1,749 行里恢复了 0 行** —— 上表把 minimal_compiler 的
@@ -951,8 +951,8 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      `parse_unary`/`parse_postfix` 级操作数，`s[a[i]+1..]` 仍不可解析（已写进用例头）。
      ② 下型：`Box::new(v)` / `String::new()` 此前在 `PathCall` 里**什么都不发**
      （无语句、无 `exprs` 条目）⇒ 幽灵 id。经 `let` 读回是垃圾值，但作为 **struct 字面量字段值**
-     会当场崩编译器：`src/backend/codegen/codegen.rs:7137` 无条件索引 `exprs[field_id]`。
-     触发链 `tests/unit-tests/minimal_compiler.z:129` → 崩点 `codegen.rs:7137`（rc=101）。
+     会当场崩编译器：`src/backend/codegen/codegen.rs:7143` 无条件索引 `exprs[field_id]`。
+     触发链 `tests/unit-tests/minimal_compiler.z:129` → 崩点 `codegen.rs:7143`（rc=101）。
      修法：`Box::new` 走**恒等**下型（`Box<T>` 槽与其内值同为 64 位句柄，
      `src/middle/mir/gen.rs:13171`），`String::new()` 下成空串字面量（`:13175`；
      行号随批次 325 的 `lower_range_guard` 插入漂移，已按锚点核对重 cite）。
@@ -970,7 +970,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      恢复量：丢行 **1,222→1,037**、截断文件 **11→9**；python_style **287→288**。
    - **批次 325 推进第五族：范围模式（`'a'..='z'` / `1..=10` / `x @ 1..=10`）——
      解析只是一半，另一半是"这一族此前从未活着过"**。
-     ① 解析：`src/frontend/parser/pattern.rs:215` 新增 `parse_char_lit`，接进
+     ① 解析：`src/frontend/parser/pattern.rs:238` 新增 `parse_char_lit`，接进
      `parse_range_pattern` 的两端（`:239`、`:242`）与 `parse_simple_pattern` 的
      `alt()`（`:295`）。**刻意的不对称**：单引号在本语言里也是普通字符串定界符
      （`s.split(',')` 依赖它），所以 `'x'` 只在**模式位**解释为码点整数——槽位里
