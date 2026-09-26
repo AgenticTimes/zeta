@@ -1,0 +1,47 @@
+# @cat: control
+# @note: 闭包 + nonlocal 完全无输出（make_counter 返回 inc 闭包，CPython 1/2/3，
+#        zeta 空输出）——非局部变量绑定路径缺失。gen.rs 车道。
+#@@ python
+def make_counter():
+    count = 0
+    def inc():
+        nonlocal count
+        count += 1
+        return count
+    return inc
+
+c = make_counter()
+print(c())
+print(c())
+print(c())
+
+class Greeter:
+    def __init__(self, prefix):
+        self.prefix = prefix
+    def greet(self, name):
+        return f"{self.prefix}, {name}!"
+
+g = Greeter("Hello")
+print(g.greet("World"))
+#@@ zeta
+def make_counter():
+    count = 0
+    def inc():
+        nonlocal count
+        count += 1
+        return count
+    return inc
+
+c = make_counter()
+print(c())
+print(c())
+print(c())
+
+class Greeter:
+    def __init__(self, prefix):
+        self.prefix = prefix
+    def greet(self, name):
+        return f"{self.prefix}, {name}!"
+
+g = Greeter("Hello")
+print(g.greet("World"))
