@@ -1,0 +1,16 @@
+# @cat: container
+# @note: 随机嵌套容器链（seed=8642 #12）
+#@@ python
+d = { "row": [-21, 46, 79] }
+print(d["row"][2])
+d["row"][2] = -64
+print(d["row"][2])
+print(len(d["row"]))
+
+#@@ zeta
+d = { "row": [-21, 46, 79] }
+print(d["row"][2])
+d["row"][2] = -64
+print(d["row"][2])
+print(len(d["row"]))
+

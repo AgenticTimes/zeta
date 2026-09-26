@@ -275,6 +275,82 @@ def gen_dmethod_case(rng: random.Random) -> str:
     return "\n".join(lines) + "\n"
 
 
+def gen_nested_case(rng: random.Random) -> str:
+    """嵌套容器访问链采样：dict[str, list] / list[list] / dict[str, dict] 的
+    读、写、再读——历史 SEGV 重灾区（a.column("code")[1] 族）的普查面。"""
+    k = rng.choice(["row", "col", "k1"])
+    lines = []
+    shape = rng.random()
+    if shape < 0.4:
+        vals = [rng.randint(-99, 99) for _ in range(3)]
+        lines += [f'd = {{ "{k}": {vals!r} }}']
+        lines.append(f'print(d["{k}"][{rng.randint(0, 2)}])')
+        i = rng.randint(0, 2)
+        nv = rng.randint(-99, 99)
+        lines.append(f'd["{k}"][{i}] = {nv}')
+        lines.append(f'print(d["{k}"][{i}])')
+        lines.append(f'print(len(d["{k}"]))')
+    elif shape < 0.7:
+        a = [rng.randint(-99, 99) for _ in range(2)]
+        b = [rng.randint(-99, 99) for _ in range(2)]
+        lines += [f"v = [{a!r}, {b!r}]"]
+        lines.append(f"print(v[{rng.randint(0, 1)}][{rng.randint(0, 1)}])")
+        i, j = rng.randint(0, 1), rng.randint(0, 1)
+        nv = rng.randint(-99, 99)
+        lines.append(f"v[{i}][{j}] = {nv}")
+        lines.append(f"print(v[{i}][{j}])")
+        lines.append(f"print(len(v))")
+    else:
+        inner_key = rng.choice(["b", "c"])
+        lines += [f'm = {{ "a": {{ "{inner_key}": {rng.randint(-99, 99)} }} }}']
+        lines.append(f'print(m["a"]["{inner_key}"])')
+        nv = rng.randint(-99, 99)
+        lines.append(f'm["a"]["{inner_key}"] = {nv}')
+        lines.append(f'print(m["a"]["{inner_key}"])')
+        lines.append(f'print(len(m))')
+    return "\n".join(lines) + "\n"
+
+
+def gen_methods_case(rng: random.Random) -> str:
+    """容器方法链采样：list 的 sort/reverse/insert/pop/index、str 的 split/join/
+    dict 的 keys——随机排列的方法序列，每步打印可观察状态。"""
+    lines = []
+    shape = rng.random()
+    if shape < 0.45:
+        vals = [rng.randint(-99, 99) for _ in range(rng.randint(3, 5))]
+        lines += [f"v = {vals!r}"]
+        for _ in range(rng.randint(2, 4)):
+            op = rng.random()
+            if op < 0.3:
+                lines.append("v.sort()")
+            elif op < 0.5:
+                lines.append("v.reverse()")
+            elif op < 0.7:
+                lines.append(f"v.insert({rng.randint(0, 2)}, {rng.randint(-99, 99)})")
+            elif op < 0.85:
+                lines.append("print(v.pop())")
+            else:
+                lines.append(f"print(v.index({rng.choice(vals)}))")
+            lines.append("print(len(v))")
+        lines.append("print(v)")
+    elif shape < 0.75:
+        n = rng.randint(2, 4)
+        parts = [f'"{rng.choice("abcxyz")}{i}"' for i in range(n)]
+        lines += [f's = {", ".join(parts)}']
+        lines.append('parts2 = s.split(",")')
+        lines.append("print(len(parts2))")
+        lines.append('print("-".join(parts2))')
+        lines.append('print(parts2[0])')
+    else:
+        keys = rng.sample(["x", "y", "z", "w"], rng.randint(2, 3))
+        pairs = ", ".join(f'"{k}": {rng.randint(-99, 99)}' for k in keys)
+        lines += [f"d = {{{pairs}}}"]
+        lines.append("ks = d.keys()")
+        lines.append("print(len(ks))")
+        lines.append(f'print(d.get("{keys[0]}"))')
+    return "\n".join(lines) + "\n"
+
+
 def gen_expr(rng: random.Random, depth: int = 0) -> str:
     if depth >= 3 or rng.random() < 0.3:
         return str(rand_int(rng))
@@ -368,14 +444,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
-    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod"), default="numeric")
+    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod", "nested", "methods"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
     written = 0
     tried = 0
-    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod") else 6)
+    max_tries = a.count * (30 if a.mode in ("stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod", "nested", "methods") else 6)
     while written < a.count and tried < max_tries:
         tried += 1
         if a.mode == "builtin":
@@ -403,6 +479,38 @@ def main() -> int:
             body = (
                 f"# @cat: str\n"
                 f"# @note: 随机字符串切片（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
+        if a.mode == "nested":
+            prog = gen_nested_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_nested_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: container\n"
+                f"# @note: 随机嵌套容器链（seed={a.seed} #{written}）\n"
+                f"#@@ python\n{prog}\n"
+                f"#@@ zeta\n{prog}\n"
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
+        if a.mode == "methods":
+            prog = gen_methods_case(rng)
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_methods_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: container\n"
+                f"# @note: 随机容器方法链（seed={a.seed} #{written}）\n"
                 f"#@@ python\n{prog}\n"
                 f"#@@ zeta\n{prog}\n"
             )
