@@ -1,11 +1,12 @@
 {
-  "total": 408,
-  "judged": 408,
-  "match": 361,
-  "rate_pct": 88.5,
-  "match_min": 361,
+  "total": 430,
+  "judged": 430,
+  "match": 382,
+  "rate_pct": 88.8,
+  "match_min": 382,
   "by_verdict": {
-    "match": 361,
+    "runtime": 1,
+    "match": 382,
     "mismatch": 46,
     "compile": 1
   },
@@ -19,12 +20,12 @@
       "judged": 79
     },
     "container": {
-      "match": 120,
-      "judged": 132
+      "match": 140,
+      "judged": 153
     },
     "numeric": {
-      "match": 64,
-      "judged": 85
+      "match": 65,
+      "judged": 86
     },
     "control": {
       "match": 69,
@@ -32,6 +33,10 @@
     }
   },
   "cases": {
+    "class_dict_composition": {
+      "cat": "container",
+      "verdict": "runtime"
+    },
     "container_append": {
       "cat": "container",
       "verdict": "match"
@@ -335,6 +340,86 @@
     "gen_builtin_s24680_014": {
       "cat": "container",
       "verdict": "mismatch"
+    },
+    "gen_class_s31415_000": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_001": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_002": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_003": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_004": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_005": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_006": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_007": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_008": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_009": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_010": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_011": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_012": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_013": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_014": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_015": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_016": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_017": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_018": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s31415_019": {
+      "cat": "container",
+      "verdict": "match"
     },
     "gen_cmp_s9999_000": {
       "cat": "truth",
@@ -1475,6 +1560,10 @@
     "numeric_truediv": {
       "cat": "numeric",
       "verdict": "mismatch"
+    },
+    "stmts_multireturn_aug": {
+      "cat": "numeric",
+      "verdict": "match"
     },
     "str_cmp_len": {
       "cat": "str",
