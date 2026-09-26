@@ -1,0 +1,10 @@
+// known-fail: None 参与逻辑链后的打印——`3 and None` 在 CPython 打 None，
+// zeta 的 None 词法降级为 Lit(0)（BR-L09）且 print 无 None 渲染 ⇒ 打 0。
+// 随机普查 487 批次实证（sl.z 探针）。修法方向 = None 打印渲染（#117 家族近亲）。
+x = None
+print(x == None)
+print(3 and None)
+print(None or 5)
+// expect: True
+// expect: None
+// expect: 5
