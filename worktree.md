@@ -167,11 +167,12 @@
 | 498 | cleanup | **普查族移交简报**（docs/HANDOFF-CENSUS-FAMILIES-2026-09-26.md）：九族一屏——最小复现/CPython 期望/zeta 现状/疑似修复位置/闸门用例/优先级建议（①②③ 打印格式化邻域可并批）。主线修复从此机械可执行 | 纯文档 | ✅ 完成 |
 | 499 | cleanup | **列表字典序比较族钉住**：`<`/`<=` 错（句柄比较）而 `>`/`==` 对——不对称形状边界实测四例；list_cmp_order.dcase 钉住，gen.rs/派发车道移交（#190 邻域）。探针同时证实 str 比较、while-else+break 正确 | diff 无回归 | ✅ 完成 |
 | 500 | cleanup | **容器比较族扩展定性**：tuple `<` 同病 + **dict `==` 也错**（两个相同字典得 False）——族从 list 扩到 tuple/dict，形状边界（`>`/list `==` 对）已实测；简报 ⑩ 更新。十模式普查 + 移交简报就位 | diff 无回归 | ✅ 完成 |
-| 513b | cleanup | **交接包落地**：zcode-handoff.md（主树+cleanup 同步）——目标/资产/纪律/坑/悬而未决，写给下一个 ZCode 会话；简报 ⑫ 更新（d1/d2 探针待钉标注） | 纯文档 | ✅ 完成 |
+| 513b | cleanup | **交接包落地**：zcode-handoff.md 已入 bootstrap（主树推送 1a73b57a），本文件 §6 指向它——下一个 ZCode 会话读 AGENTS.md + zcode-handoff.md 即可自包含接手 | 纯文档 | ✅ 完成 |
 | 501 | cleanup | **边界探针全对 + 重复边界钉住**（零/负次重复 = 空串、int()/str() 转换、负索引求和——CPython 逐项一致）。探针证实 int 键字典、f-string 内表达式、enumerate 亦通 | 全对 | ✅ 完成 |
 | 502 | cleanup | **enumerate/zip 钉住**：元组解包遍历 + 平行遍历全对（控制流 + 解包组合面） | 全对 | ✅ 完成 |
 | 503 | cleanup | **新种子收敛普查**（864213，60 例临时）：mismatch 8/60 ≈ 13%——与 12.5% 稳态一致，无新族（cmp 20 例全 match）。三读数并存：小样本 24%→大样本 12%→本轮 13%，普查进入稳态 | 410/465 | ✅ 度量批 |
 | 508 | cleanup | **类/字段/方法模式 20 例全 match**（ctor 多字段/方法读写/跨实例运算——446/448 W1010/W1011 修复的普查面首次随机背书）。随机库累计 254 例十五模式。工具侧负结果备案：插入代码的转义层错位弄破 gen_random_diff.py，git 恢复 + chr(10) 重写 | diff 379/428 88.6% 无回归 | ✅ 完成 |
+| 515 | cleanup | **字典方法族扫描**：20+ 方法扫完——13 个全对（rstrip/lstrip/strip/replace-count/center/zfill/split-maxsplit/remove/extend/count/pop/len），**2 缺口钉住**：values() 哈希序非插入序（[2,1]）+ items() 元素打地址（元组解包同根）——简报 ⑬ 移交 gen.rs/派发车道 | diff 无回归 | ✅ 完成 |
 | 511 | cleanup | **组合普查首例崩溃**（class×loop×dict 交互）：类字段 dict + 方法内 for self.words + w[0] + if/else 读改写 = map_get 非字典 rc=1（三连确定复现；单因子最小化均不崩 ⇒ 需完整组合，gen.rs 车道 449 邻域）。组合普查的价值实证：单模式各自全对 ≠ 组合正确 | runtime verdict 钉住 | ✅ 定性批 |
 | 512 | cleanup | **类方法内字符串积累丢类型钉住**：类方法 loop 拼接 out 打地址，普通函数/模块级同形全对 ⇒ 缺口特定于类方法上下文的局部变量类型标记（gen.rs，506 元组解包同根邻域）。组合普查第二例（c2 方法返回 dict 链式访问 ✓ 对照组） | runtime verdict 钉住 | ✅ 定性批 |
 | 509 | cleanup | **高频构造回归面钉住**：变量边界切片 / 字符串·列表增强拼接 / 函数多返回值解包——四发全对（qwen 448 收尾已并入 497–506） | 全对 | ✅ 完成 |
@@ -180,6 +181,7 @@
 | 504 | cleanup | **字典推导式验证**（BR-L 漂移疑点④解除）：{k: k*2 for ...} 的 len/键读/键序全对——"是否真产出 dict 存疑"的旧问题实测无缺口，疑点关闭 | 全对 | ✅ 完成 |
 | 507 | cleanup | **全量门禁**（30+ 提交纪律，含 481 优先级与 496 registry 两个编译器面改动）：official 194/194（191 link）· python_style **364+1 抖动**/15 known-fail · 语料 40/40 · jit **180**/0 · diff 359/408 88.0% · RED 0。**一次性抖动备案**：t478 在门禁中 FAIL、手动+三连套件全 PASS（365/2/15）——当时正并发另一 worktree 的全量构建（3m26s），判为资源争抢抖动；若静默门禁复现则升级为真问题。同批确认：#188/#189/#190 未修（主线 447/448 在 W1010 族），497–506 已并入主线 | 全绿（1 抖动备案） | ✅ 门禁入册 |
 | 506 | cleanup | **元组解包字符串无类型——根因定性收束**（三触发同根）：for k,v 解包的字符串变量打地址（最小判据 tuple_unpack_str_type）⇒ 505 过滤 dict 推导、#190 交换全是同一条 Assign(Tuple,·) lowering 的不同触发。修法收敛为一条：gen.rs 解包绑定时写类型标记（一次修三族全绿）。简报 ⑪ 已更新 | 最小判据 mismatch 钉住 | ✅ 定性批 |
+| 507b | cleanup | **陈旧二进制连环剧收场（重建后全量重验）**：505 过滤推导 ✓ b、506 for 解包 ✓ a/b——两缺口**已被 qwen 449 修复**（我当时二进制是 pre-449 陈旧产物，"match_min 违约/回归/不可复现"三连全是假象）；**#190 交换仍 2 2**（449 修槽位标记非顺序赋值，t510 known-fail 正确保持）。**教训二次入账且升级：rebase 拉主线后 cargo 增量检查可能漏重建——用 touch 或 clean 强制**（494b 一次、本次二次） | 重建后 88.2% 全量无回归 | ✅ 重验批 |
 | 505 | cleanup | **带过滤字典推导式值侧地址**钉住：{k: v for ... if k > 1} 的 len 对、d[2] 打印堆地址——无过滤版本全对（504）⇒ 缺口特定于过滤哨兵路径的值类型（#117 新触发形状，gen.rs 车道移交）。同批证实：链式赋值 a = b = 5、带过滤列表推导式全对 | 全对（新缺口已钉） | ✅ 完成 |
 | 496 | cleanup | **str.find 一参接入**（#188 一半，纯数据修复）：C shim host_str_find 早已在（stub:200），registry 缺 W 行 ⇒ 派发落空。补 `W str find host_str_find args=2`：s.find(子串) 实测 2/2/-1 与 CPython 一致；check_registry_symbols rc=0；t511 正向用例。**余半移交**：两参形式需三参 shim host_str_find3（runtime 车道，gen_str_s314159_003 钉着） | registry rc=0 · py 362/2/14/0 | ✅ 完成 |
 | 493 | cleanup | **元组交换顺序腐蚀定性**（#190 新登记）：`a, b = b, a` → (2,2) 而 CPython (2,1)——Assign(Tuple,Tuple) 顺序赋值，右值引用左目标时腐蚀（字面量右值/元组解包正常 ⇒ 缺口特定）。解析期脱糖已试并**主动撤销**：单侧改解析器引发 t24 模块级全局收集漏认回归 ⇒ 正解在 gen.rs lowering 或连带 unwrap 两处消费端（修法草图已写进 #190）。t510 known-fail 钉住。python_style 回到 361/2/14/0 零回归 | 全绿（t510 known-fail 除外，有归属） | ✅ 完成（含一次主动撤销的负结果备案） |
