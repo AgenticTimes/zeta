@@ -27,55 +27,90 @@
 use std::cell::RefCell;
 use std::fmt;
 
-// C1: last indent-preprocess line map (preprocessed line → original 1-based line).
-// Also keeps the preprocessed text so `ensure_fully_parsed` can turn a remaining
-// suffix into a byte offset → source line.
+// C1: indent-preprocess line maps (preprocessed line → original 1-based line),
+// kept per source file so diagnostics can turn a byte offset / remaining suffix
+// back into an original line. Also keeps the preprocessed text so
+// `ensure_fully_parsed` can locate a remaining suffix.
+//
+// 批次 466（#65 LAST_PP 串号）：行表按**栈**保存——同一进程里先编主文件再编
+// 被导入模块时，旧实现只剩最后一份表，主文件的诊断查到模块的行表 ⇒ 行号串号
+// （语料实测：128 行的文件报 ：729）。查询按"remaining 是哪份 pp 的后缀"匹配，
+// 与解析顺序无关；上限 64 份（REPL 每行一压也不无界）。
 thread_local! {
-    static LAST_PP: RefCell<Option<(String, Vec<usize>)>> = const { RefCell::new(None) };
+    static LAST_PP: RefCell<Vec<(String, Vec<usize>)>> = const { RefCell::new(Vec::new()) };
 }
+
+const LAST_PP_CAP: usize = 64;
 
 /// Record preprocess output for C1 line lookup (called from `parse_zeta`).
 pub fn set_last_preprocess(text: String, origins: Vec<usize>) {
-    LAST_PP.with(|c| *c.borrow_mut() = Some((text, origins)));
+    LAST_PP.with(|c| {
+        let mut stack = c.borrow_mut();
+        // 同一份文本重复解析（REPL 逐行重编）只保留一份
+        if stack.last().is_some_and(|(t, _)| *t == text) {
+            return;
+        }
+        if stack.len() >= LAST_PP_CAP {
+            stack.remove(0);
+        }
+        stack.push((text, origins));
+    });
 }
 
 pub fn clear_last_preprocess() {
-    LAST_PP.with(|c| *c.borrow_mut() = None);
+    LAST_PP.with(|c| c.borrow_mut().clear());
 }
 
-/// Map a byte offset into the last preprocessed text to a 1-based **original** line.
-/// Falls back to counting newlines in `fallback_source` when no map is stored.
-pub fn original_line_at(byte_offset: usize, fallback_source: &str) -> usize {
+/// 在栈里找"remaining 是其 pp 文本后缀"的那份行表，返回该后缀起点对应的原始行。
+/// 找不到（表全部不匹配）时退回 `fallback_source` 的后缀；再不行返回 None——
+/// **宁可没有行号，不报别的文件的行号**（#65 的教训）。
+fn line_for_suffix_impl(
+    remaining: &str,
+    fallback_source: &str,
+    trim_leading: bool,
+) -> Option<usize> {
     LAST_PP.with(|c| {
-        if let Some((pp, origins)) = c.borrow().as_ref() {
-            let off = byte_offset.min(pp.len());
-            let pp_line = pp[..off].bytes().filter(|&b| b == b'\n').count();
-            return origins.get(pp_line).copied().unwrap_or(pp_line + 1);
-        }
-        let off = byte_offset.min(fallback_source.len());
-        fallback_source[..off].bytes().filter(|&b| b == b'\n').count() + 1
-    })
-}
-
-/// Resolve the byte offset of `remaining` (a suffix of the parsed text) inside
-/// the last preprocess buffer, or inside `fallback_source` for brace-style.
-pub fn remaining_byte_offset(remaining: &str, fallback_source: &str) -> usize {
-    LAST_PP.with(|c| {
-        if let Some((pp, _)) = c.borrow().as_ref() {
+        for (pp, origins) in c.borrow().iter().rev() {
             if pp.ends_with(remaining) {
-                return pp.len() - remaining.len();
-            }
-            // remaining may be a suffix after nom consumed a different view;
-            // try pointer-free: find remaining as suffix by length clamp.
-            if remaining.len() <= pp.len() && pp[pp.len() - remaining.len()..] == *remaining {
-                return pp.len() - remaining.len();
+                let off = pp.len() - remaining.len();
+                let trim = if trim_leading {
+                    remaining.len() - remaining.trim_start().len()
+                } else {
+                    0
+                };
+                let byte_off = off + trim;
+                let pp_line = pp[..byte_off.min(pp.len())].bytes().filter(|&b| b == b'\n').count();
+                return Some(origins.get(pp_line).copied().unwrap_or(pp_line + 1));
             }
         }
         if fallback_source.ends_with(remaining) {
-            return fallback_source.len() - remaining.len();
+            let off = fallback_source.len() - remaining.len();
+            let trim = if trim_leading {
+                remaining.len() - remaining.trim_start().len()
+            } else {
+                0
+            };
+            let byte_off = off + trim;
+            return Some(
+                fallback_source[..byte_off.min(fallback_source.len())]
+                    .bytes()
+                    .filter(|&b| b == b'\n')
+                    .count()
+                    + 1,
+            );
         }
-        fallback_source.len().saturating_sub(remaining.len())
+        None
     })
+}
+
+/// `ensure_fully_parsed` 用：跳过 remaining 的前导空白后取行（C1 原两步查询的合并）。
+pub fn line_for_remaining(remaining: &str, fallback_source: &str) -> Option<usize> {
+    line_for_suffix_impl(remaining, fallback_source, true)
+}
+
+/// 吞词/同步点诊断用：remaining 起点即语句位置，不跳空白。
+pub fn line_for_stmt_start(remaining: &str, fallback_source: &str) -> Option<usize> {
+    line_for_suffix_impl(remaining, fallback_source, false)
 }
 
 /// Estimate per-preprocessed-line origins by walking the original source.
@@ -1144,5 +1179,60 @@ mod tests {
         let out = tx("fn g(x: i64) -> i64:\n    if x > 0:\n        return 1\n    elif x < 0:\n        return 2\n    else:\n        return 3\n");
         assert!(out.contains("\n    elif x < 0 {"));
         assert!(out.contains("\n    else {"));
+    }
+}
+
+#[cfg(test)]
+mod last_pp_stack_tests {
+    use super::*;
+
+    fn pp(lines: usize, tag: &str) -> (String, Vec<usize>) {
+        let text: String = (1..=lines).map(|i| format!("{tag} line {i}\n")).collect();
+        let origins: Vec<usize> = (1..=lines).collect();
+        (text, origins)
+    }
+
+    #[test]
+    fn suffix_picks_the_matching_map_even_when_older() {
+        // 主文件先入栈，模块后入栈——主文件的后缀仍应查到主文件的行表（#65 串号回归钉）。
+        let (a_text, a_orig) = pp(10, "AAA");
+        set_last_preprocess(a_text.clone(), a_orig);
+        let (b_text, b_orig) = pp(3, "BBB");
+        set_last_preprocess(b_text.clone(), b_orig);
+        // A 的后缀（从第 8 行起）
+        let a_suffix = a_text.split_inclusive('\n').skip(7).collect::<String>();
+        let line = line_for_stmt_start(&a_suffix, "").unwrap_or(0);
+        assert_eq!(line, 8, "A 的后缀必须查到 A 的行表，而不是栈顶的 B");
+        // B 的后缀照常
+        let b_suffix = b_text.split_inclusive('\n').skip(1).collect::<String>();
+        assert_eq!(line_for_stmt_start(&b_suffix, "").unwrap_or(0), 2);
+    }
+
+    #[test]
+    fn no_matching_map_reports_none_not_other_file() {
+        let (a_text, a_orig) = pp(5, "AAA");
+        set_last_preprocess(a_text, a_orig);
+        let (b_text, b_orig) = pp(5, "CCC");
+        set_last_preprocess(b_text, b_orig);
+        // 谁也不是的后缀 → None（诚实缺省），而不是从别的表里夹出一个假行号
+        let stray = "ZZZ line 1\nZZZ line 2\n";
+        assert_eq!(line_for_stmt_start(stray, ""), None);
+        assert_eq!(line_for_remaining(stray, ""), None);
+        // fallback_source 匹配时照常给出
+        assert_eq!(line_for_stmt_start(stray, stray), Some(1));
+        clear_last_preprocess();
+    }
+
+    #[test]
+    fn trim_leading_variant_skips_blank_prefix() {
+        let (a_text, a_orig) = pp(6, "AAA");
+        set_last_preprocess(a_text.clone(), a_orig);
+        // remaining 带前导空白（必须取到文件尾，suffix 关系才成立）：
+        // line_for_remaining 跳过空白落到首个非空白字符所在行；stmt_start 不跳。
+        let tail: String = a_text.split_inclusive('\n').skip(4).collect();
+        let suffix = "\n".to_string() + &tail;
+        assert_eq!(line_for_remaining(&suffix, "").unwrap_or(0), 5);
+        assert_eq!(line_for_stmt_start(&suffix, "").unwrap_or(0), 4);
+        clear_last_preprocess();
     }
 }

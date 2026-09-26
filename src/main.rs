@@ -472,11 +472,9 @@ fn ensure_fully_parsed(
     if leftover.is_empty() {
         return Ok(());
     }
-    // C1: map remaining suffix → original source line via indent preprocess table.
-    let base_off = zetac::frontend::indent::remaining_byte_offset(remaining, source);
-    let trim = remaining.len() - leftover.len();
-    let byte_off = base_off + trim;
-    let line = zetac::frontend::indent::original_line_at(byte_off, source);
+    // C1: map remaining suffix → original source line via indent preprocess table
+    // (批次 466：栈式行表一步查询——选表与算行同一份，防跨文件串号)。
+    let line = zetac::frontend::indent::line_for_remaining(remaining, source).unwrap_or(1);
     let left = leftover.lines().count();
     let snippet: String = leftover.chars().take(60).collect();
     let loc = if path.is_empty() {

@@ -784,10 +784,12 @@ fn warn_if_swallowed_prefix(expr: &AstNode, stmt_start: &str, rest: &str) {
     if stripped.is_empty() || stripped == "else" {
         return;
     }
-    let off = crate::frontend::indent::remaining_byte_offset(stmt_start, "");
-    let line = crate::frontend::indent::original_line_at(off, "");
+    let line = crate::frontend::indent::line_for_stmt_start(stmt_start, "");
+    // 批次 466（#65）：行表不匹配当前文件时不出假行号——旧行为会把上一份
+    // 被导入模块的行号串到这里（实测 128 行的文件报 :729）。
+    let loc = line.map(|l| format!(" :{l}:")).unwrap_or_default();
     eprintln!(
-        "warning: [W1004] :{line}: `{word}` became a stand-alone statement while \
+        "warning: [W1004]{loc} `{word}` became a stand-alone statement while \
          '{head}' was parsed as the next one — a word on this line is being ignored"
     );
 }

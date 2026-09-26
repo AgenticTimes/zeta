@@ -1,0 +1,5 @@
+// known-fail: f-string 规格的 type 字符 'c'（字符型）静默按十进制输出（BR-CT33：
+// py_fmt_i64 分派表里 'c' 落十进制兜底）——CPython 打 'A'。
+x = 65
+print(f"{x:c}")
+// expect: A

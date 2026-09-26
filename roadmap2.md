@@ -82,9 +82,9 @@ G.5e 符号注册表（= C1 SymbolRegistry）
 | 4 | E4001 找不到 main：打完 error 诊断还是 `Ok(())`（退出码 0），三处同病 | `main.rs:1026-1041/:1238-1244/:1324-1328`（BR-P07） | S | pipeline-rules P07 |
 | 5 | CLI 合同五小项：env 清单漏了 `ZETA_NO_OPT`；重复 `-o` 预扫描取第一个 vs 循环取最后一个；bootstrap 吞 `--target`；bootstrap 静默残留 ≥80 字节输出；bootstrap 链接没有 Windows 分派 | `main.rs:527/:637-650/:1148-1155/:1216-1227`（BR-A7/A8/A9/A10/P12） | S×5 | pipeline-rules §1.2/附录A |
 | 6 | ABI.md §3 补记批次 399：`infer_fn_return_type` 已委托给 `Mir::signature_ret_ty`（`mir.rs:45-58`），R7 收敛了「无声明半」（5 行→1 行）；C2/C3/M5–M7 相应收窄（M5 还在：声明与实现不一致时按位重读） | `codegen.rs:1400-1409`；backlog #33 行已记，ABI.md 本体没记 | S | pipeline-rules A14（精确化） |
-| 7 | G.6 的第一条不变量：CTFE 的 floordiv/floormod 语义和 codegen 的 `build_floormod_int/floordiv_int` 必须步调一致——目前纯靠注释人工同步，没有共享代码也没有测试锚点 | `ctfe/value.rs:274-335` vs `codegen.rs:2020-2081`（BR-M04） | S | pipeline-rules M04 |
-| 8 | 轴 A 的表补两行：前端死代码四件套（proc_macro 845 行 / macro_expand_advanced 617 / borrow_enhanced 611 / identity_ownership ~470）；`runtime/memory_old+memory_enhanced` 孤儿文件 | `dc_default.txt` 基线占大头；refactor.md §1 表没点名 | S | 深化评审 C5 |
-| 9 | （排序注记，不是任务）refactor.md §9 ⑨′ 的 G.5d 状态行刷新：②(b) 已由批次 399 交付「无声明半」，指针应指向 backlog #33 | refactor.md ⑨′ vs backlog #68 行 | S | 本文件 §2 |
+| 7 | ✅ **已闭合（批次 468，旁路）**：锁步族由差分库看守（比 verifier 合适——verifier 管单级 IR 结构，管不了跨层语义一致）：负数 floordiv/mod 已在库（floordiv_neg×2 / mod_neg×3）；移位族补齐 numeric_shift（含负数右移，match 121）+ numeric_shift_overflow（1<<64 截断错值，已知 mismatch 记账）+ t506 known-fail。除零族 oracle 自报错 = bad_case 不适配 harness，维持登记 | `ctfe/value.rs:274-335` vs `codegen.rs:2020-2081`（BR-M04）；tests/diff/cases/ | S | ✅ |
+| 8 | 轴 A 的表补两行：前端死代码四件套（proc_macro 845 行 / macro_expand_advanced 617 / borrow_enhanced 611 / identity_ownership ~470）；`runtime/memory_old+memory_enhanced` 孤儿文件 | `dc_default.txt` 基线占大头；refactor.md §1 表没点名 | S | 深化评审 C5。**⇒ 469 已补录**（refactor.md §1 表两行） |
+| 9 | （排序注记，不是任务）refactor.md §9 ⑨′ 的 G.5d 状态行刷新：②(b) 已由批次 399 交付「无声明半」，指针应指向 backlog #33 | refactor.md ⑨′ vs backlog #68 行 | S | 本文件 §2。**⇒ 469 已补录**（refactor.md ⑨′ 状态段追加） |
 
 ## 5. 证据锚点怎么用
 

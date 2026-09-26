@@ -1,0 +1,5 @@
+// known-fail: f-string 规格里 ',' 被吃掉但千分位分组不实现（BR-CT32：py_format 解析器
+// `if (*p == ',') p++;`）——CPython 打 1,234,567，zeta 静默无分组。
+x = 1234567
+print(f"{x:,d}")
+// expect: 1,234,567
