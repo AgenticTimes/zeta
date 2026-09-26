@@ -138,43 +138,44 @@ src/backend/codegen/codegen.rs	5135	let want_float = self .builder .get_insert_b
 src/backend/codegen/codegen.rs	5145	let ret_val = if want_float && !matches!( ret_val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_) ) { self.builder .build_signed_int_to_float(ret_val.in
 src/backend/codegen/codegen.rs	5167	// linker at all. `infer_fn_return_type` only scans top-level // returns, so nested ones are never consulted.
 src/backend/codegen/codegen.rs	5342	let coerced = self.coerce_call_args(
-src/backend/codegen/codegen.rs	6064	MirStmt::StructFieldStore { base_id, field, val_id, } => { // base.field = val — store through the heap struct pointer. // Fields are 8-byte slots at offset ind
+src/backend/codegen/codegen.rs	6078	MirStmt::StructFieldStore { base_id, field, val_id, } => { // base.field = val — store through the heap struct pointer. // Fields are 8-byte slots at offset ind
 src/backend/codegen/codegen.rs	6211	// Allocate struct on HEAP to prevent dangling pointers
 src/backend/codegen/codegen.rs	6212	let total_bytes = self.i64_type.const_int( (fields.len() as u64) * 8, false, );
-src/backend/codegen/codegen.rs	6287	fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
-src/backend/codegen/codegen.rs	6366	/// Map a class SPELLING onto the bare variant the layout tables are keyed
-src/backend/codegen/codegen.rs	6367	/// by. Two spellings reach the backend: the `Cls::method` prefix of a MIR /// item, and a receiver's declared `Named(...)` type — which is /// module-mangled (
+src/backend/codegen/codegen.rs	6301	fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
+src/backend/codegen/codegen.rs	6380	/// Map a class SPELLING onto the bare variant the layout tables are keyed
+src/backend/codegen/codegen.rs	6381	/// by. Two spellings reach the backend: the `Cls::method` prefix of a MIR /// item, and a receiver's declared `Named(...)` type — which is /// module-mangled (
 src/backend/codegen/codegen.rs	6399	// Determine struct type from the Struct expression; when the base // is not a literal Struct (a function PARAMETER or a call result) // fall back to the base's
 src/backend/codegen/codegen.rs	6501	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> = (0..field_count).map(|_| self.i64_type.into()
 src/backend/codegen/codegen.rs	6529	} } }; // NB: this line prints the PRE-ext state. `variant=""` here is not // the answer — batch 437 read it as one and registered a false // premise. The resol
-src/backend/codegen/codegen.rs	6554	let declared = self .current_type_map .as_ref() .and_then(|tm| tm.get(&base)) .and_then(|t| match t { Type::Named(n, _) => Some(n.clone()),
-src/backend/codegen/codegen.rs	6633	None => { let recovered = self.resolve_struct_layout_by_field(field); // BATCH-427: when BOTH routes decline, the read goes // on silently against the stand-in,
+src/backend/codegen/codegen.rs	6568	let declared = self .current_type_map .as_ref() .and_then(|tm| tm.get(&base)) .and_then(|t| match t { Type::Named(n, _) => Some(n.clone()),
+src/backend/codegen/codegen.rs	6647	None => { let recovered = self.resolve_struct_layout_by_field(field); // BATCH-427: when BOTH routes decline, the read goes // on silently against the stand-in,
 src/backend/codegen/codegen.rs	6740	// PY-A layout unification: allocate [cap | len | elem0 .. elemN-1] // and hand out a pointer to elem0 (buf + 16), matching the Vec / // DynamicArray runtime la
-src/backend/codegen/codegen.rs	6818	MirExpr::StringLit(s) => { let global = self.module.add_global( self.context.i8_type().array_type(s.len() as u32 + 1), None, "str_lit", ); global.set_linkage(in
-src/backend/codegen/codegen.rs	6895	// `FieldAccess` operand cannot look up its static type, so a float // field skipped the bitcast-back and the fold ran on the raw BIT // PATTERN: `self._cash = 
-src/backend/codegen/codegen.rs	6981	if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
+src/backend/codegen/codegen.rs	6832	MirExpr::StringLit(s) => { let global = self.module.add_global( self.context.i8_type().array_type(s.len() as u32 + 1), None, "str_lit", ); global.set_linkage(in
+src/backend/codegen/codegen.rs	6909	// `FieldAccess` operand cannot look up its static type, so a float // field skipped the bitcast-back and the fold ran on the raw BIT // PATTERN: `self._cash = 
+src/backend/codegen/codegen.rs	7020	if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
 src/backend/codegen/codegen.rs	7154	fn abi_note(&mut self, callee: &str, arg_i: usize, kind: &str) { self.abi_warn_count = self.abi_warn_count.saturating_add(1); if self.abi_warn_count <= 8 { epri
 src/backend/codegen/codegen.rs	7197	// Convert heap i64 to pointer and store fields let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default()); let struct_base = self .builder .build_i
-src/backend/codegen/codegen.rs	7353	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
-src/backend/codegen/codegen.rs	7354	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
-src/backend/codegen/codegen.rs	7392	// Return heap pointer as i64 (caller reads from valid heap memory) heap_ptr_val.into()
-src/backend/codegen/codegen.rs	7523	let extracted = self .builder .build_extract_value(loaded_struct.into_struct_value(), field_index, "") .unwrap();
-src/backend/codegen/codegen.rs	7793	// Return pointer to elem0 (buf + 16) as i64 let data_ptr = unsafe {
-src/backend/codegen/codegen.rs	7877	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::IntType(pt)) => { let arg_ty = iv.get_type(); if arg_ty.get_bit_width() < pt.get_bit_width
-src/backend/codegen/codegen.rs	7898	} else { result.push(BasicMetadataValueEnum::IntValue(iv)); }
-src/backend/codegen/codegen.rs	7910	self.abi_note( &callee_name, i, &format!( "narrow i{}→i{}", arg_ty.get_bit_width(), pt.get_bit_width() ), );
-src/backend/codegen/codegen.rs	7914	self.builder .build_signed_int_to_float(iv, ft, "arg_sitofp") .map(|v| BasicValueEnum::from(v)) };
-src/backend/codegen/codegen.rs	7919	match self.builder.build_int_truncate(iv, pt, "arg_trunc") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum
-src/backend/codegen/codegen.rs	7927	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::FloatType(ft)) => { // Batch 299: a raw container-slot word is a BIT PATTERN, so // reinte
-src/backend/codegen/codegen.rs	7939	_ => result.push(arg),
-src/backend/codegen/codegen.rs	7948	(BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => { self.abi_note( &callee_name, i, &format!("fptosi → i{}", pt.get_bit_wi
-src/backend/codegen/codegen.rs	7954	match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataV
-src/backend/codegen/codegen.rs	7959	(BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_)) | (BasicMetadataValueEnum::PointerValue(_), inkwell::types::BasicTypeEnum
-src/backend/codegen/codegen.rs	7967	if result.len() < n_params { for i in result.len()..n_params { let pt_meta = fn_type.get_param_types()[i]; let zero: BasicMetadataValueEnum<'ctx> = match pt_met
-src/backend/codegen/codegen.rs	7989	} else if result.len() > n_params { result.truncate(n_params);
-src/backend/codegen/codegen.rs	8018	fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
-src/backend/codegen/codegen.rs	8401	pub fn type_to_llvm_type(&self, ty: &Type) -> inkwell::types::BasicTypeEnum<'ctx> {
-src/backend/codegen/codegen.rs	8507	Type::Tuple(element_types) => { let llvm_element_types: Vec<inkwell::types::BasicTypeEnum> = element_types .iter() .map(|t| self.type_to_llvm_type(t)) .collect(
+src/backend/codegen/codegen.rs	7367	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
+src/backend/codegen/codegen.rs	7368	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
+src/backend/codegen/codegen.rs	7406	// Return heap pointer as i64 (caller reads from valid heap memory) heap_ptr_val.into()
+src/backend/codegen/codegen.rs	7537	let extracted = self .builder .build_extract_value(loaded_struct.into_struct_value(), field_index, "") .unwrap();
+src/backend/codegen/codegen.rs	7722	MirExpr::StackArray { elements, size } => {
+src/backend/codegen/codegen.rs	7807	// Return pointer to elem0 (buf + 16) as i64 let data_ptr = unsafe {
+src/backend/codegen/codegen.rs	7916	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::IntType(pt)) => { let arg_ty = iv.get_type(); if arg_ty.get_bit_width() < pt.get_bit_width
+src/backend/codegen/codegen.rs	7924	self.abi_note( &callee_name, i, &format!( "narrow i{}→i{}", arg_ty.get_bit_width(), pt.get_bit_width() ), );
+src/backend/codegen/codegen.rs	7933	match self.builder.build_int_truncate(iv, pt, "arg_trunc") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum
+src/backend/codegen/codegen.rs	7937	} else { result.push(BasicMetadataValueEnum::IntValue(iv)); }
+src/backend/codegen/codegen.rs	7941	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::FloatType(ft)) => { // Batch 299: a raw container-slot word is a BIT PATTERN, so // reinte
+src/backend/codegen/codegen.rs	7953	self.builder .build_signed_int_to_float(iv, ft, "arg_sitofp") .map(|v| BasicValueEnum::from(v)) };
+src/backend/codegen/codegen.rs	7962	(BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => { self.abi_note( &callee_name, i, &format!("fptosi → i{}", pt.get_bit_wi
+src/backend/codegen/codegen.rs	7968	match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataV
+src/backend/codegen/codegen.rs	7973	(BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_)) | (BasicMetadataValueEnum::PointerValue(_), inkwell::types::BasicTypeEnum
+src/backend/codegen/codegen.rs	7978	_ => result.push(arg),
+src/backend/codegen/codegen.rs	7981	if result.len() < n_params { for i in result.len()..n_params { let pt_meta = fn_type.get_param_types()[i]; let zero: BasicMetadataValueEnum<'ctx> = match pt_met
+src/backend/codegen/codegen.rs	8003	} else if result.len() > n_params { result.truncate(n_params);
+src/backend/codegen/codegen.rs	8032	fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
+src/backend/codegen/codegen.rs	8415	pub fn type_to_llvm_type(&self, ty: &Type) -> inkwell::types::BasicTypeEnum<'ctx> {
+src/backend/codegen/codegen.rs	8521	Type::Tuple(element_types) => { let llvm_element_types: Vec<inkwell::types::BasicTypeEnum> = element_types .iter() .map(|t| self.type_to_llvm_type(t)) .collect(
 src/backend/codegen/mod.rs	7	mod runtime_decls_registry;
 src/backend/codegen/mod.rs	9	mod runtime_decls_core;
 src/backend/codegen/runtime_decls_core.rs	51	module.add_function("zeta_env_get", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External)); module.add_function("zeta_env_set", void_type.fn_type
@@ -254,6 +255,7 @@ src/middle/mir/gen.rs	12694	if matches!( self.type_map.get(&probe_id), Some(Type
 src/middle/mir/gen.rs	13409	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
 src/middle/mir/gen.rs	13413	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
 src/middle/mir/gen.rs	13510	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	13564	if size == 0 || !matches!(elem_ty_pre, Type::F32 | Type::F64) {
 src/middle/mir/gen.rs	14156	func: "zeta_dyn_getitem".to_string(),
 src/middle/mir/gen.rs	14184	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
 src/middle/mir/gen.rs	14811	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
