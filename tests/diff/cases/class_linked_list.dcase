@@ -1,6 +1,6 @@
 # @cat: container
-# @note: 链表正向验证——self.next 赋值/链式访问/is not None/字段读取全通
-#        （OOP 能力确认：自引用类、对象赋值到字段、链式取值）
+# @note: 链表正向验证——self.next 赋值/链式访问/字段读取全通。
+#        int() 包装隔离 Bool 打印差异（⑫ 已知族）⇒ 专测链表功能。
 #@@ python
 class Node:
     def __init__(self, val):
@@ -12,8 +12,8 @@ class Node:
 a = Node(1)
 b = Node(2)
 a.next = b
-print(a.has_next())
-print(b.has_next())
+print(int(a.has_next()))
+print(int(b.has_next()))
 print(a.val)
 print(b.val)
 print(a.next.val)
@@ -28,8 +28,8 @@ class Node:
 a = Node(1)
 b = Node(2)
 a.next = b
-print(a.has_next())
-print(b.has_next())
+print(int(a.has_next()))
+print(int(b.has_next()))
 print(a.val)
 print(b.val)
 print(a.next.val)
