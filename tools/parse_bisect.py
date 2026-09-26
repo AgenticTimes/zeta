@@ -17,6 +17,11 @@
     ./tools/parse_bisect.py tests/unit-tests/selfhost.z
     ./tools/parse_bisect.py --all            # 扫 official 目录，逐文件给病因行
 退出码：0=找到病因行  1=无截断（无需诊断）  2=有截断但扫不出病因（要人工看）
+
+批次 462：补**无分号方言**回退（bisect_line_wise）——zeta_src / selfhost 的换行
+分隔写法没有 `;`，原判据在长函数体内部找不到任何合法切点（实测于
+zeta_src/runtime/array.z 排查，backlog #79）。回退逐行两测 + 向后排除多行语句
+假阳性，代价是最坏 O(行数) 次编译，只作兜底。
 """
 import argparse
 import os
@@ -117,6 +122,50 @@ def bisect(zetac: str, lines: list, start: int, end: int):
     return None
 
 
+def bisect_line_wise(zetac: str, lines: list, start: int, end: int, look: int = 40):
+    """无分号方言（zeta_src / selfhost 的换行分隔写法）的回退定位。
+
+    上述合法切点在换行分隔的写法里几乎不存在（语句以换行收尾，没有 `;`），
+    于是改为**逐行两测**：前缀每吃进一行就编译一次；
+    - 前缀通过 → 该行无辜，继续；
+    - 前缀失败 → 向后再试 `look` 行：若某个更长的前缀重新通过，说明刚才只是
+      把一条多行语句拦腰切断（假阳性），跳过这段继续；
+    - 若直到回退预算耗尽都通不过 → 第一条让前缀失败的行 = 病因行起点。
+
+    代价：最坏 O(条目行数) 次编译（长条目约几分钟），只在前一档无切点可切时
+    由 bisect() 的调用方兜底使用。
+    """
+    item = lines[start - 1 : end]
+    d = 0
+    i = 0
+    while i < len(item):
+        d_after = d + strip_noise(item[i]).count("{") - strip_noise(item[i]).count("}")
+        prefix = "\n".join(item[: i + 1]) + "}" * max(0, d_after) + "\n"
+        if "W1002" not in compile_text(zetac, prefix):
+            d = d_after
+            i += 1
+            continue
+        # 前缀失败：向后排除"多行语句被切断"的假阳性
+        j = i + 1
+        healed = False
+        while j < len(item) and j <= i + look:
+            d_j = d + sum(
+                strip_noise(x).count("{") - strip_noise(x).count("}")
+                for x in item[i : j + 1]
+            )
+            prefix_j = "\n".join(item[: j + 1]) + "}" * max(0, d_j) + "\n"
+            if "W1002" not in compile_text(zetac, prefix_j):
+                healed = True
+                break
+            j += 1
+        if healed:
+            d = d_j
+            i = j + 1
+            continue
+        return start + i, item[i].strip(), i
+    return None
+
+
 def item_end(lines: list, start: int) -> int:
     """返回该顶层条目的结束行（0-based 开区间上界）。"""
     d = 0
@@ -171,7 +220,7 @@ def main() -> int:
         return 1
     start, n = trunc
     end = item_end(lines, start)
-    hit = bisect(a.zetac, lines, start, end)
+    hit = bisect(a.zetac, lines, start, end) or bisect_line_wise(a.zetac, lines, start, end)
     print(f"{a.file}:{start} 之后 {n} 行未解析（条目 = 第 {start}..{end} 行）")
     if hit:
         print(f"病因行 {hit[0]}: {hit[1]}")

@@ -275,7 +275,13 @@ pub(crate) fn parse_func(input: &str) -> IResult<&str, AstNode> {
     // Parse where clause if present
     let (input, where_clauses_opt) = opt(ws(parse_where_clause)).parse(input)?;
     let where_clauses = where_clauses_opt.unwrap_or_default();
-    let (input, (body, ret_expr, single_line)) = if extern_opt.is_some() {
+    // 批次 465（backlog #61/#67 的 `fn…;` 成员）：`fn f(...);`——不带 `extern`
+    // 前缀、以 `;` 收尾的**原型声明**——与 `extern fn f(...);` 走同一条路：
+    // 签名承诺、external linkage、缺实现 = 链接期响亮失败（"宁可报错"红线），
+    // 而不是解析失败把整个文件截断。`extern_opt.is_some()` 直接进；无前缀时
+    // peek 一眼 `;`，是则按原型处理。
+    let is_decl_only = extern_opt.is_some() || peek(ws(tag(";"))).parse(input).is_ok();
+    let (input, (body, ret_expr, single_line)) = if is_decl_only {
         let (input, _) = match ws(tag(";")).parse(input) {
             Ok(r) => r,
             Err(e) => {
@@ -345,7 +351,7 @@ pub(crate) fn parse_func(input: &str) -> IResult<&str, AstNode> {
     // table. Before this, `def add(a, b = 10)` + `add(5)` silently used 0 for
     // `b` — a wrong value with no diagnostic.
     let mut body = body;
-    if !extern_opt.is_some() {
+    if !is_decl_only {
         let mut prologue: Vec<AstNode> = Vec::new();
         for (i, (_n, _t, default)) in params_full.iter().enumerate() {
             if let Some(d) = default {
@@ -371,7 +377,7 @@ pub(crate) fn parse_func(input: &str) -> IResult<&str, AstNode> {
         input
     };
     let ret = ret_opt.unwrap_or_else(|| "()".to_string());
-    let ast = if extern_opt.is_some() {
+    let ast = if is_decl_only {
         AstNode::ExternFunc {
             name,
             generics,
