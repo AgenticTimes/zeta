@@ -111,21 +111,81 @@ def python_eval(expr: str) -> str | None:
     return p.stdout if p.returncode == 0 else None
 
 
+
+
+def gen_stmts_case(rng: random.Random) -> tuple[str, str] | None:
+    """语句模式：3-5 条赋值链 + 汇总 print——让未标注变量的类型流经
+    签名表/调用点证据（单表达式模式测不到的那条路径）。"""
+    n = rng.randint(3, 5)
+    lines = []
+    names = []
+    for i in range(n):
+        rhs = gen_expr(rng, depth=2)
+        name = f"v{i}"
+        lines.append(f"{name} = {rhs}" if i == 0 else f"{name} = {rhs}")
+        names.append(name)
+    tail = " + ".join(names) if rng.random() < 0.5 else " + ".join(reversed(names))
+    prog = "\n".join(lines) + f"\nprint({tail})\n"
+    return prog, prog
+
+
+def python_eval_program(text: str) -> str | None:
+    """多行程序版 oracle：原样执行，不包 print。"""
+    try:
+        p = subprocess.run(
+            [sys.executable, "-c", text],
+            capture_output=True, text=True, timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    return p.stdout if p.returncode == 0 else None
+
+
+def write_stmts_case(a, rng, idx: int) -> bool:
+    prog = gen_stmts_case(rng)
+    if prog is None:
+        return False
+    text, _ = prog
+    expected = python_eval_program(text)
+    if expected is None:
+        return False  # CPython 侧报错，不进分母
+    # 溢出族过滤：链式乘法极易爆 i64（已知独立族），不滤会把其他缺口淹没
+    try:
+        if abs(int(expected.strip())) >= 2**62:
+            return False
+    except ValueError:
+        pass
+    name = f"gen_stmts_s{a.seed}_{idx:03d}.dcase"
+    body = (
+        f"# @cat: numeric\n"
+        f"# @note: 随机赋值链（seed={a.seed} #{idx}）——变量类型流经签名表\n"
+        f"#@@ python\n{text}\n"
+        f"#@@ zeta\n{text}\n"
+    )
+    with open(os.path.join(a.out, name), "w") as f:
+        f.write(body)
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
-    ap.add_argument("--mode", choices=("numeric", "str"), default="numeric")
+    ap.add_argument("--mode", choices=("numeric", "str", "stmts"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
     written = 0
     tried = 0
-    while written < a.count and tried < a.count * 6:
+    max_tries = a.count * (30 if a.mode == "stmts" else 6)
+    while written < a.count and tried < max_tries:
         tried += 1
-        expr = gen_str_expr(rng) if a.mode == "str" else gen_expr(rng)
-        expected = python_eval(expr)
+        if a.mode == "stmts":
+            written_stmts = write_stmts_case(a, rng, written)
+            if written_stmts:
+                written += 1
+            continue
         if expected is None:
             continue  # CPython 侧报错 = bad_case，不进分母，直接不写
         name = f"gen_{a.mode}_s{a.seed}_{written:03d}.dcase"
