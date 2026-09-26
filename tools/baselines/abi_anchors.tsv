@@ -156,8 +156,8 @@ src/backend/codegen/mod.rs	9	mod runtime_decls_core;
 src/backend/codegen/runtime_decls_core.rs	51	module.add_function("zeta_env_get", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External)); module.add_function("zeta_env_set", void_type.fn_type
 src/backend/codegen/runtime_decls_registry.rs	18	module.add_function("py_argparse_add", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
 src/diagnostics.rs	515	pub fn env_flag(name: &str) -> bool {
-src/frontend/indent.rs	590	fn rewrite_floordiv_lines(lines: &[&str], only_in_brackets: bool) -> Vec<String> {
-src/frontend/indent.rs	653	if only_in_brackets && *depth <= 0 {
+src/frontend/indent.rs	646	fn rewrite_floordiv_lines(lines: &[&str], only_in_brackets: bool) -> Vec<String> {
+src/frontend/indent.rs	709	if only_in_brackets && *depth <= 0 {
 src/frontend/parser/expr.rs	364	fn parse_raw_string_lit(input: &str) -> IResult<&str, AstNode> {
 src/frontend/parser/expr.rs	2422	fn slice_sep(input: &str) -> IResult<&str, ()> {
 src/frontend/parser/expr.rs	2440	let (input, start) = if let Ok((rest, _)) = slice_sep(input) {
@@ -168,11 +168,11 @@ src/frontend/parser/pattern.rs	158	Ok((input, AstNode::Var(variant)))
 src/frontend/parser/pattern.rs	238	fn parse_char_lit(input: &str) -> IResult<&str, AstNode> {
 src/frontend/parser/top_level.rs	71	// PY-A: `*args` / `**kwargs` star-params — consumed as a single opaque // i64 param (V1: call sites with extra args coerce; real variadics need // arg-tuple su
 src/frontend/parser/top_level.rs	347	// PY-A: Python default argument values. The AST's `params` only carries // (name, type), so defaults travel as a body-prologue marker // `zeta_param_default(in
-src/main.rs	644	let strict_abi = args.iter().any(|a| a == "--strict-abi")
-src/main.rs	650	let no_link = args.iter().any(|a| a == "--no-link");
-src/main.rs	944	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
-src/main.rs	948	all_mirs.sort_by(|a, b| {
-src/main.rs	1003	if no_link {
+src/main.rs	642	let strict_abi = args.iter().any(|a| a == "--strict-abi")
+src/main.rs	648	let no_link = args.iter().any(|a| a == "--no-link");
+src/main.rs	942	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
+src/main.rs	946	all_mirs.sort_by(|a, b| {
+src/main.rs	1001	if no_link {
 src/middle/mir/gen.rs	418	.map(|m| format!("{}__", m.replace('.', "_")))
 src/middle/mir/gen.rs	661	Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
 src/middle/mir/gen.rs	773	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
