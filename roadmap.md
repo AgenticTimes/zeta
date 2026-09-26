@@ -21442,6 +21442,49 @@ HEAD 在隔离 worktree 自测：**漂移 8 / 落单新 2 / 落单消失 37 / �
 
 `/tmp/b455/`：`ab455.log`（§五 12 次逐行）、`gate_fast.log`/`gate_final.log`（§四）、`anch_head.txt`/`anch_final.txt`（§六，HEAD 侧来自隔离 worktree，用完即删）、`ir_b455_noguard.ll`/`ir_final.ll`（等价证明两份）、`t490_pre455.*`（先红实拍）、`truth.py`（CPython/pandas 真值）。三颗二进制留 `target/release/`（坑 37/68：A/B 必须同目录）。
 
+## 批次 456（4.x 运行期值表示 × 3.2 类型基础）：列的**元素表示**在对读边界上换标签不够 —— 登记扩号 4..7 ＋ 唯一的归位点只能是读边界（构造点从不发射）
+
+代码提交 **`9989df9f`**（`fix(codegen)`，5 文件 **+150/−2**：`src/backend/codegen/codegen.rs` 25/0、`runtime/py_additions.c` 60/0、`pylib/pandas.z` 8/2、新夹具 `t491` 57/0、`zeta_runtime_c.o` 100152→**101104** 字节）。基面批 **`a50f82f0`**（`docs/ABI.md` 37/21＝1114→**1130** 行、`abi_anchors.tsv` 26/24＝基线仍 **298** 条）。动了 `.rs` 与运行期 ⇒ 重编＋重打 `.o`（`tools/build_runtime.sh`）：`zetac` 改前 `zetac_pre456` md5 **`6cb9c6dec077255dab5244fab260eca6`**、中途**错版** `zetac_b456_wide` **`f9447845e77a13173523a0082b233054`**（把 5 号写成兜底臂，见 §三）、终态 **`a59531df07005a2886cb898bc6db45d2`**。`pylib/pandas.z` 两颗 md5：改前 `207ad14387f73b3ff8776a9165cb168e`／改后 **`64cebdbe9c5c3d0203eb5c8d370235e9`**（工作树终态持有改后那颗，A/B 脚本带 md5 守卫）。pyramid 层＝**4.x 运行期值表示**（声明的元素类型 vs 实际元素编码）×**3.2 类型基础/2.2**（`__init__` 体不发射 ⇒ 构造点无责），harness 任务 **#205**，本批实收其"整数/布尔字面量列"这一形，**浮点字面量列三形新读数见 §七**、#205 不结案。
+
+### 一、根因（一句：标签换了，元素没换）
+
+`pd.DataFrame({"v": [10, 20]})` 的字面量把 `10`、`20` 当**裸整数**逐个 `vec_push` 进 `vec<i64>`，而本仓 shim 的列合同是 `map<str, vec<str>>`（cell 是 `char*`，见 ABI.md #4/#6）。`DataFrame::__getitem__ -> lt(vec, str)` 只给**同一个句柄**换标签 ⇒ 元素读被下成 `inttoptr`+`getelementptr i64`+`load`，把整数 `10` 当 `char*` 交给 `println_str` → `_platform_strlen(10)`：改前二进制实拍 **compile_rc=0 / run_rc=139 / stdout 0 字节**（`/tmp/b456/`）。登记通道本来就是现成的（每条 `DictInsert` 都发 `zeta_map_set_tag`），缺的是**容器元素自己的号**和**读边界上按号渲染**。
+
+### 二、修法（两处落点，都在"读"这一侧）
+
+- `codegen.rs:5352-5386` 的 DictInsert 登记**扩号 4..7**：4=`vec<str>`、5=`vec<纯整数>`、6=`vec<f64 位模式>`、7=`vec<bool>`；其余（含 `DynamicArray(Named)`）落 0。唯一既有消费者 json dumper（`tokio_runtime_stub.c:1960`）把新号留在 `default:` 臂 ⇒ 它的读数一字不变（已核）。写读两侧的键必须都用**未解析的那个 map 字**（`zt_tag_slot` stub:3205-3235 的 FNV 是在写侧递过来的字上算的），只在取值时 `map_resolve`（增表转发）。
+- `pylib/pandas.z` 的 `column` 与 `__getitem__` 双双改走 `zt_col_as_text(self.data, key)`（`runtime/py_additions.c` 末尾新增 `zt_word_to_text`/`zt_vec_textify`/`zt_col_as_text` 三个）：按登记决定要不要逐元素渲染成文本，**4/0（已文本、未登记）原样返回句柄**——不复制、不猜内容（C 侧自探形违反 **C13**）。渲染取本仓 `%.10g` + `GC_strdup`，与 455 的 `zt_col_arith` 同一约定。
+
+### 三、本批自己引入并已修掉的回归（门禁抓的，登记在此不回改 §二）
+
+第一版把 5 号写成 `_ => 5` 兜底 ⇒ `DynamicArray(Named)` 的**对象句柄列**也被渲染成十进制数字：`DataFrame({"d": [date(2024, 3, 15)]})` 读回 `11092155912246977-06-04`，**`t467_bare_member_registry_bind` 当场由绿转红**（`gate_fast.log`）。收窄成显式整型臂后重编（终态 `a59531df…`），t467 与 t491 同时回绿（本批收尾又在这颗上复测一次：t491 9 项、t467 4 项，全绿）。错版二进制 `zetac_b456_wide` 留档不删。边界已同时写进夹具头注与 ABI.md 行 #12。
+
+### 四、归位点为什么只能是读边界（本轮实测的解析层事实）
+
+py 模式类的 `__init__` **体**在解析层只被用来挖 `self.<字段> = rhs` 的字段布局（`src/frontend/parser/top_level.rs:912-925` 抓参数与体、`:1089`/`:1257` 两处只挑赋值），**其余语句一条都不发射、`__init__` 本身也不发射**：探针 `/tmp/b456/t1_init.z` 实拍 `def __init__` 里的 `note()` 一声不出，构造点 IR 只有 `runtime_malloc` + 一次字段 store。⇒ 构造点没有可插代码的地方，归位只能落在读边界；顺手把 `pylib/pandas.z:25-26` 那条 `if not data: data = {}` 守卫的**死码身份**登记入册（本批没修它，只删了自己那条同样打不到的归位调用）。此规则升格为 **ABI.md §6.9**。
+
+### 五、夹具 `tests/python_style/t491_column_element_text_at_read_boundary.z`（57 行，9 条 expect，先证红后证绿）
+
+期望值逐字来自本机 pandas 3.0.5（`/tmp/b456/truth456.py`：`df["v"][0]=10`、`len=2`、迭代 `10 20`、`df["b"].tolist()=[True, False]`）；整列 `print` 的**渲染取本仓约定**（列合同是文本 cell ⇒ 打 `["10", "20"]`，pandas 的 Series 换行表形不是本 shim 的表示）。改前二进制 **compile 0／run 139／stdout 0 字节**（先红）→ 终态九项全绿。负控两条防"顺手把所有 vec 都文本化"：普通 dict 的值不经列读边界，`d["v"][0] + 1` 仍是整数算术打 `11`；文本列元素读原样打 `aa`（句柄未被复制）。同批邻居零回归：t467 4 项、t490 七项、t488 `2|2|3`。
+
+### 六、门禁与诊断面（终态二进制，`/tmp/b456/gate_final.log`）
+
+快门禁（13 个 `--skip-*` 组合）：**official 194/194・191/194 + 3 条仅链接**（名单未动）、**python_style 378 passed / 2 failed / 12 known-fail / 2 xpass**（passed 377→378＝新增 t491 一条）、`GATE_RC=1` 存量红源不变＝`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`；XPASS 2 条仍 t401/t513（旁路 %-format 面，非本批解锁）。诊断面：official **5 文件/21 行（与 455 逐字相同）**、python_style **120 文件/255 行**（455＝119/252）⇒ **+1 文件/+3 行**，其中 t491 自身归因 +1 文件/+2 行，**余 +1 行未逐项归因**（登记，见 §七）。
+
+### 七、位移 A/B＝0，加一条正确定性对照；语料覆盖面 48 个调用点
+
+语料 12 次编译跑（`/tmp/b456/ab12_final.log`，两颗同目录、`pandas.z` 按 md5 守卫换装）：**pre 3/12 崩 vs post 4/12 崩**；两侧 rc=0 的每一次输出**逐字段相同**（`stderr=321`、`parity=74`、`fail1=74`、`morning=37`）⇒ **位移 0**，剩余崩点仍在 `str_trim+24`＝**#145 家族**，不记 credit。**正对照（不靠嘴判非确定）**：把 pre 侧同一颗二进制重跑 —— `pre_1`（扫描期崩）重跑 6 趟崩 3、`pre_4`（扫描期崩）重跑 6 趟 **6/6 干净** ⇒ 3 vs 4 之差是运行期非确定性，不是本批造成的回归。语料侧新通道实拍：12 个真用 `DataFrame(` 的 `strategies/code/*.py` 全量 `--emit-llvm`，**每个模块 4 个 `zt_col_as_text` 调用点、12/12 命中＝48 个调用点**（`/tmp/b456/corpus_ir/`）——**调用点存在≠收益**，只登记覆盖面。
+
+**本批新落盘的独立缺陷（六条，登记不捆修）**：① py 模式类 `__init__` 体的**非赋值语句**从不参与编译（本批只证形，语料成员数未量）；② 对象列的元素**字段读**错值：`DataFrame({"d":[date(2024,3,15)]})` 的 `df["d"][0].year` 打 **19797**（真值 2024）；③ `df["h"] = df["v"] / 2` 静默垃圾（`py_df_setitem` 没有 tag 通道）；④ 通用 `lt(vec, str)` 的参数/返回边界仍 rc=139（本批只接了 DataFrame 读边界这一处）；⑤ `select_columns` 的子帧按**声明的 map 值类型**登记 4 号（不是实际元素编码）；⑥ **浮点字面量列三形在终态二进制上的新读数**（推翻 455 §七"两颗都 139"的笼统口径）：`len(df["v"])` **已由本批转绿**（run 0 打 `2`）、`df["v"][0]` **仍 run_rc=139**、`print(df["v"] / 2)` **run 0 但打堆地址** `4373184368`（列算术的结果列没走文本化）。①②③④⑤⑥ 全部写进 harness **#205** 括注，OPEN 净增 **0**（靠 #203/#205 折叠）。
+
+### 八、锚点（`a50f82f0`；净账与 HEAD 自基线对照）
+
+HEAD 在隔离 worktree 自测：**漂移 24 / 落单新 2 / 落单消失 37 / 改号配对 9 / 定位失败 7 / rc=2**。工作树（改完未重绑）：**漂移 51 / 新 6 / 消失 36**。`--rebind`：**24 条搬家 · 0 条改号**，改写 `docs/ABI.md` **21 行 / 45 个数字**，基线仍 **298** 条（定位失败 3、拒改 63 原样保留、**落单新 6 条未写入** ⇒ 核对器继续报错）。终态只读复测：**漂移 27 / 落单新 6 / 落单消失 36 / 待归属 103 条·93 种（基线 103）/ 同键多义 9 组·被顶掉 48 条 / rc=2**（`/tmp/b456/anch_head.txt`、`anch_pre.txt`、`anch_final.txt`、`rebind.txt`）。同键多义 9 组＝**#167 余项**，不在本批面。
+
+### 九、读数存档
+
+`/tmp/b456/`：`ab12.log`/`ab12_final.log`（§七 逐行）、`run_ab_456.sh`（带 `swap_pandas()` md5 守卫）、`gate_fast.log`/`gate_final.log`（§六）、`anch_head.txt`/`anch_pre.txt`/`anch_final.txt`/`rebind.txt`/`rebind_dry.txt`（§八）、`corpus_ir/*.ll`（§七 48 调用点）、`t491_pre.bin`/`t491_post.bin`/`t467_*.bin`/`v1_objcol.z`+wide/narrow 两颗（§三 实拍）、`t1_init.z`（§四 探针）、`p2_floatcol.z`+`fc_{elem,read_div,arith}.z`（§七 ⑥ 三形）、`truth456.py`（pandas 3.0.5 真值）、`pandas.z.pre`/`.post`。三颗二进制留 `target/release/`（坑 37/68：A/B 必须同目录）；隔离 worktree `/tmp/b456/head-wt` 已删。下一次全量门禁＝**批次 460**。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
