@@ -1,0 +1,43 @@
+# @cat: container
+# @note: 随机类/字段/方法（seed=31415 #15）——W1010/W1011 修复普查面
+#@@ python
+class P:
+    def __init__(self, a, b):
+        self.a = a
+        self.b = b
+    def total(self):
+        return self.a + self.b
+    def setall(self, o):
+        self.a = 41
+        self.b = 29
+    def combined(self, o):
+        return self.a + self.b + o.a + o.b
+
+p = P(55, -2)
+q = P(56, -1)
+print(p.total())
+print(q.total())
+p.setall(q)
+print(p.total())
+print(p.combined(q))
+
+#@@ zeta
+class P:
+    def __init__(self, a, b):
+        self.a = a
+        self.b = b
+    def total(self):
+        return self.a + self.b
+    def setall(self, o):
+        self.a = 41
+        self.b = 29
+    def combined(self, o):
+        return self.a + self.b + o.a + o.b
+
+p = P(55, -2)
+q = P(56, -1)
+print(p.total())
+print(q.total())
+p.setall(q)
+print(p.total())
+print(p.combined(q))

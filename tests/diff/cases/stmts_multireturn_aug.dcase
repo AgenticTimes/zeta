@@ -1,0 +1,30 @@
+# @cat: numeric
+# @note: 变量边界切片 / 字符串与列表增强拼接 / 函数多返回值解包——高频构造回归面
+#@@ python
+s = "abcdef"
+a = 1
+b = 4
+print(s[a:b])
+s += "XY"
+print(s)
+v = [1]
+v += [2, 3]
+print(v)
+def two():
+    return 7, 8
+m, n = two()
+print(m, n)
+#@@ zeta
+s = "abcdef"
+a = 1
+b = 4
+print(s[a:b])
+s += "XY"
+print(s)
+v = [1]
+v += [2, 3]
+print(v)
+def two():
+    return 7, 8
+m, n = two()
+print(m, n)

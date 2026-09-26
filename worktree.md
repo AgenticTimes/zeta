@@ -167,7 +167,13 @@
 | 501 | cleanup | **边界探针全对 + 重复边界钉住**（零/负次重复 = 空串、int()/str() 转换、负索引求和——CPython 逐项一致）。探针证实 int 键字典、f-string 内表达式、enumerate 亦通 | 全对 | ✅ 完成 |
 | 502 | cleanup | **enumerate/zip 钉住**：元组解包遍历 + 平行遍历全对（控制流 + 解包组合面） | 全对 | ✅ 完成 |
 | 503 | cleanup | **新种子收敛普查**（864213，60 例临时）：mismatch 8/60 ≈ 13%——与 12.5% 稳态一致，无新族（cmp 20 例全 match）。三读数并存：小样本 24%→大样本 12%→本轮 13%，普查进入稳态 | 410/465 | ✅ 度量批 |
+| 508 | cleanup | **类/字段/方法模式 20 例全 match**（ctor 多字段/方法读写/跨实例运算——446/448 W1010/W1011 修复的普查面首次随机背书）。随机库累计 254 例十五模式。工具侧负结果备案：插入代码的转义层错位弄破 gen_random_diff.py，git 恢复 + chr(10) 重写 | diff 379/428 88.6% 无回归 | ✅ 完成 |
+| 511 | cleanup | **组合普查首例崩溃**（class×loop×dict 交互）：类字段 dict + 方法内 for self.words + w[0] + if/else 读改写 = map_get 非字典 rc=1（三连确定复现；单因子最小化均不崩 ⇒ 需完整组合，gen.rs 车道 449 邻域）。组合普查的价值实证：单模式各自全对 ≠ 组合正确 | runtime verdict 钉住 | ✅ 定性批 |
+| 509 | cleanup | **高频构造回归面钉住**：变量边界切片 / 字符串·列表增强拼接 / 函数多返回值解包——四发全对（qwen 448 收尾已并入 497–506） | 全对 | ✅ 完成 |
+| 510b | cleanup | **任务完成度审计**（用户问询触发）：backlog OPEN 19；selfhost 钉住收敛 3→1（actor/map 已修，剩 actor/result + array.z 的 codegen panic 均 gen.rs 车道）；XPASS 0（#188/#189/#190 未修，主线 447/448 在 W1010/W1011 族）；我车道 actionable 清空——普查稳态、简报在主线手里。full-gate 尾数：365/2/15、diff 359/408 | 全绿 | ✅ 审计批 |
+| 510 | cleanup | **深度普查**（十五模式全开，seed=777777，375 例临时——历史最大 N）：总 804 例 judged，match 727 = **90.4%**；分模式缺口：numeric 19/44、fmt 18/25、builtin 18/25（round 族经 truediv 放大）、stmts 8/33，其余十一模式 **0 缺口**（容器/控制流/切片/循环/类全净）。族分布与历史一致（溢出/sign/负进制/round·truediv/Bool），无新族。临时样本不进库 | 727/804 90.4% | ✅ 度量批 |
 | 504 | cleanup | **字典推导式验证**（BR-L 漂移疑点④解除）：{k: k*2 for ...} 的 len/键读/键序全对——"是否真产出 dict 存疑"的旧问题实测无缺口，疑点关闭 | 全对 | ✅ 完成 |
+| 507 | cleanup | **全量门禁**（30+ 提交纪律，含 481 优先级与 496 registry 两个编译器面改动）：official 194/194（191 link）· python_style **364+1 抖动**/15 known-fail · 语料 40/40 · jit **180**/0 · diff 359/408 88.0% · RED 0。**一次性抖动备案**：t478 在门禁中 FAIL、手动+三连套件全 PASS（365/2/15）——当时正并发另一 worktree 的全量构建（3m26s），判为资源争抢抖动；若静默门禁复现则升级为真问题。同批确认：#188/#189/#190 未修（主线 447/448 在 W1010 族），497–506 已并入主线 | 全绿（1 抖动备案） | ✅ 门禁入册 |
 | 506 | cleanup | **元组解包字符串无类型——根因定性收束**（三触发同根）：for k,v 解包的字符串变量打地址（最小判据 tuple_unpack_str_type）⇒ 505 过滤 dict 推导、#190 交换全是同一条 Assign(Tuple,·) lowering 的不同触发。修法收敛为一条：gen.rs 解包绑定时写类型标记（一次修三族全绿）。简报 ⑪ 已更新 | 最小判据 mismatch 钉住 | ✅ 定性批 |
 | 505 | cleanup | **带过滤字典推导式值侧地址**钉住：{k: v for ... if k > 1} 的 len 对、d[2] 打印堆地址——无过滤版本全对（504）⇒ 缺口特定于过滤哨兵路径的值类型（#117 新触发形状，gen.rs 车道移交）。同批证实：链式赋值 a = b = 5、带过滤列表推导式全对 | 全对（新缺口已钉） | ✅ 完成 |
 | 496 | cleanup | **str.find 一参接入**（#188 一半，纯数据修复）：C shim host_str_find 早已在（stub:200），registry 缺 W 行 ⇒ 派发落空。补 `W str find host_str_find args=2`：s.find(子串) 实测 2/2/-1 与 CPython 一致；check_registry_symbols rc=0；t511 正向用例。**余半移交**：两参形式需三参 shim host_str_find3（runtime 车道，gen_str_s314159_003 钉着） | registry rc=0 · py 362/2/14/0 | ✅ 完成 |

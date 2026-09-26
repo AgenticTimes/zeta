@@ -1,0 +1,55 @@
+# @cat: container
+# @note: 组合普查 511 定性——类字段 dict + 方法内 for 遍历 self.words +
+#        w[0] 索引 + if/else 读改写 = map_get 非字典崩溃（rc=1，三连编译
+#        运行确定复现）。单因子最小化（纯函数 dict / 类字段只读）均不崩
+#        ⇒ 崩需要完整组合，机制定位属 gen.rs 车道（449 邻域）。
+#@@ python
+class TextStats:
+    def __init__(self, words):
+        self.words = words
+        self.counts = {}
+    def build(self):
+        for w in self.words:
+            k = w[0]
+            if k in self.counts:
+                self.counts[k] += 1
+            else:
+                self.counts[k] = 1
+        return len(self.counts)
+    def top(self):
+        best = ""
+        n = 0
+        for k in self.counts:
+            if self.counts[k] > n:
+                n = self.counts[k]
+                best = k
+        return best
+
+t = TextStats(["apple", "avocado", "banana", "blueberry", "cherry"])
+print(t.build())
+print(t.top())
+#@@ zeta
+class TextStats:
+    def __init__(self, words):
+        self.words = words
+        self.counts = {}
+    def build(self):
+        for w in self.words:
+            k = w[0]
+            if k in self.counts:
+                self.counts[k] += 1
+            else:
+                self.counts[k] = 1
+        return len(self.counts)
+    def top(self):
+        best = ""
+        n = 0
+        for k in self.counts:
+            if self.counts[k] > n:
+                n = self.counts[k]
+                best = k
+        return best
+
+t = TextStats(["apple", "avocado", "banana", "blueberry", "cherry"])
+print(t.build())
+print(t.top())
