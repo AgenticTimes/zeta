@@ -1,12 +1,12 @@
 {
-  "total": 401,
-  "judged": 401,
-  "match": 356,
-  "rate_pct": 88.8,
-  "match_min": 356,
+  "total": 408,
+  "judged": 408,
+  "match": 359,
+  "rate_pct": 88.0,
+  "match_min": 359,
   "by_verdict": {
-    "match": 356,
-    "mismatch": 44,
+    "match": 359,
+    "mismatch": 48,
     "compile": 1
   },
   "per_cat": {
@@ -15,20 +15,20 @@
       "judged": 43
     },
     "str": {
-      "match": 65,
-      "judged": 78
+      "match": 66,
+      "judged": 79
     },
     "container": {
-      "match": 117,
-      "judged": 127
+      "match": 118,
+      "judged": 132
     },
     "numeric": {
       "match": 64,
       "judged": 85
     },
     "control": {
-      "match": 68,
-      "judged": 68
+      "match": 69,
+      "judged": 69
     }
   },
   "cases": {
@@ -37,6 +37,18 @@
       "verdict": "match"
     },
     "container_assign_elem": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "container_cmp_order": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "container_dict_comp_filter": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "container_dict_comprehension": {
       "cat": "container",
       "verdict": "match"
     },
@@ -137,6 +149,10 @@
       "verdict": "match"
     },
     "control_default_arg": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "control_enumerate_zip": {
       "cat": "control",
       "verdict": "match"
     },
@@ -1336,6 +1352,10 @@
       "cat": "str",
       "verdict": "match"
     },
+    "list_cmp_order": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
     "numeric_abs": {
       "cat": "numeric",
       "verdict": "match"
@@ -1508,6 +1528,10 @@
       "cat": "str",
       "verdict": "match"
     },
+    "str_repeat_edges": {
+      "cat": "str",
+      "verdict": "match"
+    },
     "str_repeat_left": {
       "cat": "str",
       "verdict": "match"
@@ -1635,6 +1659,10 @@
     "truth_zero_int": {
       "cat": "truth",
       "verdict": "match"
+    },
+    "tuple_unpack_str_type": {
+      "cat": "container",
+      "verdict": "mismatch"
     }
   }
 }
