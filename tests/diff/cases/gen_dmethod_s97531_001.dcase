@@ -1,0 +1,22 @@
+# @cat: container
+# @note: 随机字典方法链（seed=97531 #1）
+#@@ python
+d = {"dd": -3, "z9": 40, "alpha": 61, "k1": -27}
+print(d.get("alpha", 40))
+print("gamma" in d)
+d["dd"] = 22
+print(d["dd"])
+d["z9"] = -45
+print(d["z9"])
+print(len(d))
+
+#@@ zeta
+d = {"dd": -3, "z9": 40, "alpha": 61, "k1": -27}
+print(d.get("alpha", 40))
+print("gamma" in d)
+d["dd"] = 22
+print(d["dd"])
+d["z9"] = -45
+print(d["z9"])
+print(len(d))
+
