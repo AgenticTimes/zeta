@@ -100,3 +100,24 @@ bash tools/run_all.sh --skip-corpus --skip-jit --skip-diff --skip-knob \
 | `CONTEXT.md` | 领域词汇表（测试与文档措辞对齐它） |
 | `docs/business-rules/` | 业务规则与强制点坐标（BR-xxx 可直接引用） |
 | `docs/TEST-DESIGN-2026-09-25.md` | 测试用例设计与 seam 约定 |
+
+## 旁路批次 462–528 经验教训（必读——每条都有事故实证）
+
+| # | 教训 | 事故批次 |
+|---|------|---------|
+| 1 | **rebase 后必须 `cargo build --release` 强制重建**——cargo 增量检查可能漏检 rebase 带来的源文件变更，陈旧二进制会产出假读数（494b 误报回归、507b 三连假象，同一坑踩两次） | 494b/507b |
+| 2 | **共享文件（worktree.md/backlog.md）重排或恢复时必须保留另一班写的段落**——按 HEAD 复原会把对侧行丢掉（424 期实测） | 424 |
+| 3 | **并行套件假红**：重负载下 python_style 单例可能超时假红——复跑三遍再定性，静默复现才升级 | 507 |
+| 4 | **GC 地址熵**：错误值里嵌堆地址的 mismatch detail 天然不可复现（每次编译地址不同）——verdict 稳定即可，detail 已做 `<N>` 脱敏 | 482b |
+| 5 | **往工具插含 `\n` 的代码时注意转义层数**：bash heredoc → python → 目标文件要过两层转义，用 `chr(10)` 避开 | 508 |
+| 6 | **新增模式时生成器与用例同批提交**——只提交用例不提交生成器会造成可复现性漏洞 | 479a |
+| 7 | **跨车道修文件须报备**——496 修 registry.txt（数据行）、464 修 runtime/std.rs（5 行）均提前报备且合并正常；不报备会撞车 | 464/496 |
+| 8 | **rebase 冲突的 --ours/--theirs 方向**：rebase 时 --ours = bootstrap（主线），--theirs = cleanup（旁路）——搞反会取到旧值（484 账目事故） | 484 |
+
+## 差分普查体系（旁路建成，主线可用）
+
+- 生成器：`tools/gen_random_diff.py`（十五模式 × `--depth` shallow/normal/deep × `--seed` 可复现）
+- 判定器：`tools/diff_test.py`（CPython oracle vs zeta，基线闸门 match_min 只升不降，`DIFF_JOBS=1` 串行开关）
+- 方法扫描：`tools/method_sweep.py`（58 方法可用性清单，当前 8 缺 shim）
+- 移交简报：`docs/HANDOFF-CENSUS-FAMILIES-2026-09-26.md`（十三族一屏，含修法草图）
+- known-fail 钉子：`tests/python_style/t501–t513`（修复后自动 XPASS 转绿）
