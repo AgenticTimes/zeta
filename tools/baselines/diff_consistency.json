@@ -1,13 +1,13 @@
 {
   "total": 458,
   "judged": 458,
-  "match": 395,
-  "rate_pct": 86.2,
-  "match_min": 395,
+  "match": 404,
+  "rate_pct": 88.2,
+  "match_min": 404,
   "by_verdict": {
-    "mismatch": 57,
+    "mismatch": 48,
     "runtime": 3,
-    "match": 395,
+    "match": 404,
     "compile": 3
   },
   "per_cat": {
@@ -20,7 +20,7 @@
       "judged": 83
     },
     "container": {
-      "match": 142,
+      "match": 151,
       "judged": 177
     },
     "numeric": {
@@ -339,11 +339,11 @@
     },
     "gen_builtin_s24680_000": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_builtin_s24680_001": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_builtin_s24680_002": {
       "cat": "container",
@@ -359,7 +359,7 @@
     },
     "gen_builtin_s24680_005": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_builtin_s24680_006": {
       "cat": "container",
@@ -367,11 +367,11 @@
     },
     "gen_builtin_s24680_007": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_builtin_s24680_008": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_builtin_s24680_009": {
       "cat": "container",
@@ -379,11 +379,11 @@
     },
     "gen_builtin_s24680_010": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_builtin_s24680_011": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_builtin_s24680_012": {
       "cat": "container",
@@ -391,11 +391,11 @@
     },
     "gen_builtin_s24680_013": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_builtin_s24680_014": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_class_s31415_000": {
       "cat": "container",
