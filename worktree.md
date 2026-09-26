@@ -149,6 +149,7 @@
 | 486 | cleanup | **f-string 规格采样 fmt 模式**：进制/符号/宽度/补零/对齐/精度随机组合 20 例——15 match + **5 mismatch 新族**：sign 旗标不渲染（{n:+d} 的 + 被吞，宽度/浮点两形）+ 负数进制型（{x:b} 位回绕）——py_format runtime 车道移交。基础 11 探针全对（规格实现主体扎实）。随机库累计 179 例八模式 | diff 254/291 87.3% 无回归 | ✅ 完成 |
 | 487 | cleanup | **切片模式 15 例全 match + None 打印钉子**：正/负/省略/步进切片与切片后 len 全对（323 修的切片族语义扎实）；t507 known-fail 钉 `3 and None` 打 0 而非 None（L09 词法降级 + print 无 None 渲染，#117 近亲）。随机库累计 174 例九模式 | diff 269/306 87.9% 无回归 | ✅ 完成 |
 | 488 | cleanup | **内建函数族采样 15 例**（sum/min/max/sorted/abs/round/len）：11 match + **round 舍入族 ×4**（Python 银行家 half-to-even vs zeta 四舍五入，registry/runtime 车道移交）。**排障记录**：期间误报 str_repeat_left 回归——根因 = rebase 后未重建二进制，重建后 3 * "ab" 正确（444 收尾已修左形式）⇒ 教训：rebase 后必须先重建再取读数。随机库累计 189 例十模式 | diff 276/321 无回归 | ✅ 完成 |
+| 489 | cleanup | **control 模式 20 例全 match**：for/while 的 else（无 break 才执行）/break/continue 随机组合——Python 特有控制流首次系统采样（while+continue 死循环组合被 CPython 先验正确淘汰 10 条）。随机库累计 194 例十一模式。qwen 已落号我方移交（#188/#189）| diff 296/341 86.8% 无回归 | ✅ 完成 |
 | （续） | | | | |
 
 ## 6. 旁路侧启动清单（一次性 / 每会话）
