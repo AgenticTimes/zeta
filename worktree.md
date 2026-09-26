@@ -176,6 +176,7 @@
 | 515 | cleanup | **字典方法族扫描**：20+ 方法扫完——13 个全对（rstrip/lstrip/strip/replace-count/center/zfill/split-maxsplit/remove/extend/count/pop/len），**2 缺口钉住**：values() 哈希序非插入序（[2,1]）+ items() 元素打地址（元组解包同根）——简报 ⑬ 移交 gen.rs/派发车道 | diff 无回归 | ✅ 完成 |
 | 511 | cleanup | **组合普查首例崩溃**（class×loop×dict 交互）：类字段 dict + 方法内 for self.words + w[0] + if/else 读改写 = map_get 非字典 rc=1（三连确定复现；单因子最小化均不崩 ⇒ 需完整组合，gen.rs 车道 449 邻域）。组合普查的价值实证：单模式各自全对 ≠ 组合正确 | runtime verdict 钉住 | ✅ 定性批 |
 | 517 | cleanup | **OOP 组合普查三四例**：① 类变量自增崩溃（Counter.count += 1 把 int 0 当字典解引用 rc=1——类级属性读写未实现）② 类方法内 self.data.get(k, default) 全打地址（set ✓ get ✗——⑫ 家族扩展）。对照组：普通函数 dict.get ✓ | runtime verdict 钉住 | ✅ 定性批 |
+| 518 | cleanup | **稳态确认批**：XPASS 0（#188/#189/#190 未修）、diff 无回归、__pycache__ 清理。qwen 451 已将我方组合崩溃落号 **#194 并列为 452 队头**（复现件 /tmp/b449/c511/），协作闭环运转中。cleanup 领先 16 提交，等主线合并 | 全绿 | ✅ 稳态批 |
 | 516 | cleanup | **OOP 组合普查三例**：① self 链式返回 ✓ 对照组 ② **列表字段经方法 append = map_get 非字典 rc=1**（515 字段槽位族扩展：ctor 存的列表经方法读出非列表）③ **跨类实例引用方法 = 静默无输出**（rc=0 应打 200，#117 邻域）——均 gen.rs 车道 | ①✓②③钉住 | ✅ 定性批 |
 | 512 | cleanup | **sorted(reverse) 字符串版排错钉住**：["b","a","c"] reverse → zeta ["c","a","b"] vs CPython ['c','b','a']——整数版正确 ⇒ 字符串降序路径缺口（registry/runtime 车道）。同批证实：while+continue（正确增量）✓、for-else+continue ✓、sorted(reverse) 整数版 ✓ | diff 无回归 | ✅ 完成 |
 | 513 | cleanup | **int 键字典迭代序哈希序钉住**（values 顺序族扩展到 int 键——插入序 10,2,30 vs 哈希序 30,2,10）。同批证实：混合比较 1==1.0 ✓、负浮点 ✓ | diff 无回归 | ✅ 完成 |
