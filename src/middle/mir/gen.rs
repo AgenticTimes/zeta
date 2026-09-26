@@ -4886,6 +4886,28 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 } else if op == "*"
                     && matches!(
                         self.type_map.get(&left_id),
+                        Some(Type::I64)
+                            | Some(Type::I32)
+                            | Some(Type::U32)
+                            | Some(Type::U64)
+                            | Some(Type::Usize)
+                    )
+                    && matches!(self.type_map.get(&right_id), Some(Type::Str))
+                {
+                    // The mirror of the arm above: `40 * "-"`. Python's `*` is
+                    // commutative on `str`, and without this side the numeric
+                    // multiply ran on the pointer and printed an address.
+                    self.stmts.push(MirStmt::Call {
+                        func: "host_str_repeat".to_string(),
+                        args: vec![right_id, left_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map.insert(dest, Type::Str);
+                } else if op == "*"
+                    && matches!(
+                        self.type_map.get(&left_id),
                         Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
                     )
                     && matches!(
@@ -15378,6 +15400,9 @@ fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)
         "startswith" | "starts_with" => Some(("host_str_starts_with", 2, "bool")),
         "endswith" | "ends_with" => Some(("host_str_ends_with", 2, "bool")),
         "replace" => Some(("host_str_replace", 3, "str")),
+        // `s.repeat(n)` is the Rust spelling of `"ab" * 3`: same symbol, and
+        // without this row the fall-through emitted a bare `_repeat` extern.
+        "repeat" => Some(("host_str_repeat", 2, "str")),
         "find" | "index" => Some(("host_str_find", 2, "i64")),
         "rfind" => Some(("host_str_rfind", 2, "i64")),
         "count" => Some(("host_str_count", 2, "i64")),

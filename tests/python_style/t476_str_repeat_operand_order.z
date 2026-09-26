@@ -1,0 +1,58 @@
+// 批次 445（3.2 Lowering／重复族）：字符串重复的三条拼写里两条在 3.2 没有臂。
+//
+// ① `n * s`（整数在左）：`gen.rs:4872` 那条重复臂只认"左操作数是 Str"，右操作数在左
+//    时整条掉回数值乘法 ⇒ 对 `char*` 做 i64 乘法，打出一个地址样整数（静默错值，#47）。
+//    `"ab" * 3` 那条一直在的绿色臂留在用例里当负对照（B/D 行）——本批只补它的镜像。
+// ② `s.repeat(n)`：名表 `str_method_symbol`（`gen.rs:15352` 起）根本没有 `repeat` 这一行
+//    ⇒ `gen.rs:11304` 的 `if let Some(...)` 不成立，控制流掉到兜底臂，把裸方法名当外发
+//    符号 ⇒ `ld: Undefined symbols: "_repeat"`、rc=1（#183 那一族的第二条成员）。
+//    两支都收往**已存在且已被 B 行证明可用**的 `host_str_repeat`（`runtime/py_additions.c:2368`，
+//    由 `tools/build_runtime.sh:42` 编进 `zeta_runtime_c.o`），本批不新增任何运行期符号。
+//
+// 改前实拍（同一颗 `target/release/zetac`，md5 前缀 `9f4c902d`＝444 终态那颗）：
+//   `/tmp/b445/r_left.z` = `print(3 * "ab")` → compile rc=0、run rc=0、stdout `12913397472`
+//   `/tmp/b445/r_meth.z` = `print("ab".repeat(3))` → compile **rc=1**、
+//     `Undefined symbols for architecture arm64: "_repeat", referenced from: _main in r_meth.bin.o`
+//   `/tmp/b445/r_ctrl.z` = `print("ab" * 3)` → `ababab`（绿色负对照，本批一字未动）
+//   本夹具删掉 H 行（那条让整文件链不上）后逐行跑：A `13093737828`、E `17458317276`、
+//   G `26187475986` 三条是地址，I 打 `[]` 且 stderr 多一条 `ZT-WARN host_str_concat bad arg`
+//   —— 即 **A/E/G/I 四行改前红**；B/C/D/F 四行改前就是绿的（C/D 靠 `0 * 指针 == 0` 的
+//   空串巧合，改后走真臂、读数不变）。
+//
+// 取值按 CPython 3 实拍（`python3` 同体跑一遍）：零次与负数次重复都得空串，
+// `host_str_repeat` 里 `if (n < 0) n = 0;` 与之同形。
+//
+// 本夹具作为回归锁的两侧实拍（`tests/python_style/run_one.sh`，两颗二进制同目录）：
+//   改前 `zetac_pre445` ⇒ `FAIL t476… (编译失败: Linking failed)`（H 那条 `_repeat`）
+//   改后 ⇒ `PASS`，9 行逐字相符、stderr 0 行（改前那份 stderr 里还有一条
+//   `ZT-WARN host_str_concat bad arg`，是 I 行把地址当字符串拼接留下的）
+// JIT 侧（`zetac` 不带 `-o`）本批**没有**跟着变好：三形一律 rc=1，stderr 报
+// `E4016: JIT mode has no binding for 1 runtime symbol(s): [host_str_repeat]` ——
+// 这个符号在 `pylib/jit_mappings.txt` 里没有 Rust 宿主（`src/runtime/host.rs` 无同名实现），
+// 而 `"ab" * 3` 那条旧臂在改前就是同一个 rc=1 ⇒ 本批没把静默错值换成静默失败，
+// 只是把 A 行从"打地址"换成"报名字"。JIT 那一侧的宿主另案（444 的"两个宿主各长一批"）。
+
+s = "ab"
+n = 4
+print("A", 3 * s)
+print("B", s * 3)
+e0 = 0 * "-"
+e1 = (-1) * "-"
+print("C", "[" + e0 + "]")
+print("D", "[" + e1 + "]")
+print("E", n * "-")
+print("F", "-" * n)
+print("G", (2 * "x") * 3)
+print("H", s.repeat(3))
+m = 2
+print("I", "[" + (m * "ab") + "]")
+
+// expect: A ababab
+// expect: B ababab
+// expect: C []
+// expect: D []
+// expect: E ----
+// expect: F ----
+// expect: G xxxxxx
+// expect: H ababab
+// expect: I [abab]
