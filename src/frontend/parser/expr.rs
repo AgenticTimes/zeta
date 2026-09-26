@@ -2475,7 +2475,10 @@ fn parse_subscript_slice(
 // Parse comparison (==, !=, <, >, <=, >=, is, in) with Python-style chaining:
 // `a < b < c` folds into `(a < b) && (b < c)`, reusing each boundary operand.
 fn parse_comparison(input: &str) -> IResult<&str, AstNode> {
-    let (mut input, first) = parse_additive(input)?;
+    // PY-A（用户裁定 2026-09-26：python 风格第一优先）：比较层比位运算松——
+    // Python 优先级 | ^ & 比 == != < > 紧、比 + - 松。旧链这里接 parse_additive
+    // ⇒ 比较比加减还松，`a & b - c` 被解析成 `(a & b) - c`（C 式），与 CPython 相悖。
+    let (mut input, first) = parse_bitwise_or(input)?;
     let mut operands: Vec<AstNode> = vec![first];
     let mut ops: Vec<String> = Vec::new();
 
@@ -2529,7 +2532,7 @@ fn parse_comparison(input: &str) -> IResult<&str, AstNode> {
                 let j = skip_ws_and_comments0(remaining_input)
                     .map(|(j, _)| j)
                     .unwrap_or(remaining_input);
-                let (j, right) = parse_additive(j)?;
+                let (j, right) = parse_bitwise_or(j)?;
                 ops.push(op);
                 operands.push(right);
                 input = j;
@@ -2600,7 +2603,8 @@ fn parse_comparison(input: &str) -> IResult<&str, AstNode> {
 
 // Parse bitwise AND (&)
 fn parse_bitwise_and(input: &str) -> IResult<&str, AstNode> {
-    let (mut input, mut term) = parse_multiplicative(input)?;
+    // PY-A：& 比 shift 松（Python 优先级）——操作数从 multiplicative 上移到 shift。
+    let (mut input, mut term) = parse_shift(input)?;
     loop {
         // Try to parse bitwise AND operator
         let mut found_op = None;
@@ -2633,7 +2637,7 @@ fn parse_bitwise_and(input: &str) -> IResult<&str, AstNode> {
                 Ok((j, _)) => j,
                 Err(_) => remaining_input,
             };
-            let (j, right) = parse_multiplicative(j)?;
+            let (j, right) = parse_shift(j)?;
 
             term = AstNode::BinaryOp {
                 op: op.to_string(),
@@ -2743,7 +2747,8 @@ fn parse_bitwise_or(input: &str) -> IResult<&str, AstNode> {
 
 // Parse additive (+, -)
 fn parse_additive(input: &str) -> IResult<&str, AstNode> {
-    let (mut input, mut term) = parse_bitwise_or(input)?;
+    // PY-A：加减比位运算紧（Python 优先级）——操作数不再下探 bitwise_or。
+    let (mut input, mut term) = parse_multiplicative(input)?;
     loop {
         // Try to parse additive operator
         let mut found_op = None;
@@ -2781,7 +2786,7 @@ fn parse_additive(input: &str) -> IResult<&str, AstNode> {
                 Ok((j, _)) => j,
                 Err(_) => remaining_input,
             };
-            let (j, right) = parse_bitwise_or(j)?;
+            let (j, right) = parse_multiplicative(j)?;
 
             term = AstNode::BinaryOp {
                 op: op.to_string(),
@@ -2798,7 +2803,8 @@ fn parse_additive(input: &str) -> IResult<&str, AstNode> {
 
 // Parse bitwise shift (<<, >>)
 fn parse_shift(input: &str) -> IResult<&str, AstNode> {
-    let (mut input, mut term) = parse_range(input)?;
+    // PY-A：shift 比加减松、比 & 紧（Python 优先级）——旧链在乘法内层。
+    let (mut input, mut term) = parse_additive(input)?;
     loop {
         // Try to parse shift operator
         let mut found_op = None;
@@ -2838,7 +2844,7 @@ fn parse_shift(input: &str) -> IResult<&str, AstNode> {
                 Ok((j, _)) => j,
                 Err(_) => remaining_input,
             };
-            let (j, right) = parse_range(j)?;
+            let (j, right) = parse_additive(j)?;
 
             term = AstNode::BinaryOp {
                 op: op.to_string(),
@@ -2855,7 +2861,8 @@ fn parse_shift(input: &str) -> IResult<&str, AstNode> {
 
 // Parse multiplicative (*, /, %)
 fn parse_multiplicative(input: &str) -> IResult<&str, AstNode> {
-    let (mut input, mut term) = parse_shift(input)?;
+    // PY-A：shift 上移到比加减松的层后，乘法层的操作数直接接 range（不再经 shift）。
+    let (mut input, mut term) = parse_range(input)?;
     loop {
         // Try to parse multiplicative operator
         let mut found_op = None;
@@ -2929,7 +2936,7 @@ fn parse_multiplicative(input: &str) -> IResult<&str, AstNode> {
             };
             // `**` is right-associative, but that is now `parse_power`'s
             // business; every operator left here is left-associative.
-            let (j, right) = parse_shift(j)?;
+            let (j, right) = parse_range(j)?;
 
             term = AstNode::BinaryOp {
                 op: op.to_string(),
