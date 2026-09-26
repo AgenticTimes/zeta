@@ -20104,6 +20104,66 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
   `target/release/` 里本批的 A/B 产物（`b442_pre.bin`／`b442_post.bin`／`b442_drv.bin` 及三个 `.o`、
   `zetac_pre442`）已删——留在构建目录里会让下一次 `cargo` 回答"Finished"而被测的其实是旧那颗（在册坑）。
 
+## 批次 443（3.2 Lowering／`AstNode::PathCall` 走完所有臂都没命中 ⇒ 交回一个从没进过 `exprs` 的 id；abort 在 4.x 发射层）：补 `std::mem::size_of` 路由 + 一条闭合出口 W1010；主线位移 0
+
+### 一、结论栏（两栏分开）
+
+| 栏 | 读数 |
+|---|---|
+| **对主线 301 位移** | **0，且是正证据不是空 0**：`_drv_accept_409.py` 的 `--emit-llvm` 两侧**逐字节相同**（4,431,845 B / 113,859 行，md5 `894eb139b569f2a4587c8b810d23a9d9`；改后另跑一遍同 md5）。stderr 多重集两侧各差 **1 行**＝`Wrote LLVM IR to <路径>` 那句回声本身（同侧两跑之间也只差那 1 行）⇒ **语料侧 W1010 为 0 条**。运行侧未取 A/B（同一份 IR ⇒ 无对照可判，口径照 441/442）。 |
+| **"修好了"栏** | ① `std::mem::size_of` / `align_of` 从**静默打 0** 变成真宽度（8 / 4 / 12 三条实测）；② 这一族的 `no entry found for key` **abort 不再发生**（`codegen.rs:6715`、`:6735`、`:6765`、`:7143` 四处裸索引都在这条出口之后）；③ **#41 的第二半**（"缺表达式条目应出声而不是崩"）落地；④ selfhost 台账 `48 通过 / 3 已登记失败` → `50 通过 / 1 已登记失败 / 0 新失败`。 |
+
+### 二、成因与坐标
+
+- 病根一句：`AstNode::PathCall` 那一臂的每条路由都问**方法名**首字母大小写（`is_upper`）或一批写死的 `path`；两者都不命中时整条臂走完**既不 `stmts.push` 也不 `exprs.insert`**，交回来的 id 是幽灵槽。臂自己的注释就写着"leaving a dangling expr id whose slot stayed 0"——值错是已知的，**abort 没人知道**。
+- 消费侧四处裸索引：`MirExpr::SemiringFold` 的整型分支 `codegen.rs:6715`、浮点分支 `:6735`、`:6765`（`values[1]`），以及结构体字面量字段位 `:7143`（`zeta_src/runtime/actor/map.z:17` 的 `inner: HashMap::new(),` 就是这条）。
+- `codegen.rs:4323` 的 `size_of`/`align_of` 内建截获是**孤儿代码**：自写下起没有任何路由会打出这个裸名——本批把它接线。
+- 拼写两形都要接：`std::mem::size_of::<T>()` 与 `use std::mem` 后的 `mem::size_of::<f32>()`（`zeta_src/runtime/tensor.z:37` 是后者），故判据落在 `path_ends_with_mem`（只认 `mem` 与 `std::mem`，`a::b::mem` 不算）。
+
+### 三、修法（一处接线 + 一条闭合出口）
+
+1. **接线**（`gen.rs` PathCall 臂内，紧跟 `is_upper` 绑定）：`std::mem::size_of` / `align_of` ⇒ 发 `MirStmt::Call{func=裸名, args=[], type_args=[宽度]}`，登记 `exprs` 与 `type_map`。宽度表只列**小于 64 位**的那些（`i8/u8/byte/int8`、`i16/u16`、`i32/int32`、`u32`、`f32/float32`、`char`）；映射不到（含泛型 `<T>`）就不发 `type_args`，让截获的兜底臂答 8——与本仓 64 位槽一致（`docs/ABI.md` 槽位值表）。
+2. **闭合出口**：原 `lower_expr` 改名 `lower_expr_node`，新 `lower_expr` 只做一件事——凡交回的 id 不在 `self.exprs` 里，就地登记 `IntLit(0)` 并出 **W1010** 一次（点名 `path::method()` 或表达式种类）。取值不变（幽灵槽原本就读 0），变的是 abort 不再发生、且这一族不再一声不出。
+   - **递归闭包性的正证据**（这条出口不是逐臂补丁）：`self.lower_expr(` 在 `gen.rs` 里 **248 处**、`self.lower_expr_node(` **1 处**（就是包装内部那一处）⇒ 每一条下型递归都必须过这道门。
+   - 为什么不在 `codegen.rs` 的 `gen_expr_safe` 出声：#41 在册的旧定价量到"每次查不到都出声"是洪水（见 §五），而缺陷的产生点是下型侧，登记在产生处才归得清是谁的路由没命中。
+
+### 四、门禁读数（快门禁子集；改动面＝`src/middle`，全量在 450 那格）
+
+两颗二进制同在 `target/release/`：改后 md5 `0d8433af59e750201711d5c225cc0611`（提交后 `touch` 重建于 `eb54000c`）、改前 `zetac.pre443`。
+
+| 步 | 改前 | 改后 | 判读 |
+|---|---|---|---|
+| official | compile 194/194、compile+link 191/194、link-only 3 条 | **逐项相同**（缺的符号名也逐字相同：`_predict,_train`／`_factor,_optimal_iterations,_success_probability`／`_as_str,_into_iter,_is_alphabetic,_push`） | 无编译面回归 |
+| official 诊断面 | 2 文件 / 6 行 | 5 文件 / **15** 行 | **+9 行逐条对上 W1010**（bootstrap_validation_test 1、integration_all_features 1、integration_test_program 2、minimal_compiler 3、quantum_basic 2）；原有 6 行一条不少（明细节 `/tmp/b443/official_pre_diag.txt`） |
+| python_style | 未取到（见下条坑） | 358 passed / 2 failed / 10 known-fail / 0 xpass；诊断面 115 文件 / 243 行 | 红源仍是 t231、t233 两条存量；诊断面与 442 在册终态 114/242 差 **+1 文件 / +1 行**＝本批新夹具 t474 那一条 W1010 |
+| selfhost 台账 | `48 通过 / 3 已登记失败` | `共 51 / 通过 50 / 已登记失败 1 / 新失败 0 / 已修复待摘 0`，rc=0 | 摘掉两条：`array.z` 走①的路由（无 W1010）、`actor/map.z` 走②的守卫（2 条 W1010） |
+| comment_drift / dyn_binding | — | 0 处复述 / 4 条断言不一致 0 | 不变 |
+
+- **诊断面增量不是收益**：official +9 行、python_style +1 行都是新出声通道，按"未归因增量不许当收益"入册。
+- **新测坑（第 69 条候选）**：`ZETAC=` 覆盖在 **python_style 步不生效**——`tests/python_style/run.sh:22` 自己给 `ZETAC` 赋值且不导出，`run_one.sh:18` 只读环境变量 ⇒ 我用 PRE 那颗跑的那一趟"改前"读数（358/2/10、115/243）真身是**改后二进制**（它与改后复跑逐字相同就是这条的证据）。official 步不受影响（`run_all.sh:99` 直接用 `$ZETAC`）。⇒ 改前的 python_style 诊断面**未取到**，本批只有 official 侧有改前对照。工具面归旁路，未动脚本。
+- **归因更正（在册病因是旧账）**：`actor/map.z` 登记的"LLVM verifier：返回类型不匹配（ret i64 vs ptr）"实测**不是**它改前的失败——真失败是②那一族的 `no entry found for key`（`codegen.rs:7143`）；`actor/result.z` 的在册病因逐字成立（改前改后同处失败，本批未影响它）。台账三行随之改写：摘两条、把幸存那条写成自足的。
+
+### 五、W1010 族的定价（本批只让它出声，没让它对）
+
+- 全仓 `.z` 普查（987 → 988 个文件）：改前幽灵探针 **66 行 / 25 文件**，改后 W1010 **65 行 / 25 文件**；**24 个文件逐项计数逐字相同** ⇒ 这条出口覆盖的是同一集合，不是新增告警。差集两条：改前独有 `zeta_src/runtime/array.z`（本批真修掉）、改后独有 `t474`（本批新夹具）。
+- 门禁面只有 official 那 9 行；仓外语料 **0 条**（40 文件逐个扫，第一次扫描因 `while read` 丢掉末尾无换行那条，补跑 `research/candidate_strategy.py` 后分母 40/40 仍全 0）。
+- 与 #41 旧定价的**口径差**：旧 **3,000,044 行 / 19 文件**（codegen 侧"每次查不到都出声"，含循环与递归内重复）vs 本批 **65 行 / 25 文件**（每个未登记 id 一次）。旧担忧"直接进门禁会把 official 的 2 文件/5 行打成七位数"**实测不成立**：official 只从 6 行到 15 行。
+- **未收（新开 #181）**：这 65 行仍是**静默错值**（幽灵槽读 0），只是不再崩、并且出了声。名单分三堆：① 构造子无路由——`HashMap::new`、`BufStream::new`、`GroversAlgorithm::new`、`ShorsAlgorithm::new`、`quantum::Circuit::new`、`ml::neural::Network::new`；② 外部库函数——`std::fs::read_to_string`；③ 仓内自举源 22 条（`jit.z` 3、`host.z` 2、`main.z` 2、`codegen.z` 2、`zeta_src/tests/parser_let.z` 5、`parser_float.z` 4、`actor/map.z` 2）。本批不动它们：修法要逐名裁决，不是补一条臂。
+
+### 六、锚点
+
+- `--rebind` 改写 `docs/ABI.md` **25 行 / 46 个数字**，基线 `abi_anchors.tsv` 刷新 31 行（等量替换，两文件行数不变 ⇒ 无需二次重绑）。只读核对：漂移 **59 → 28**（新 11／消失 12／定位失败 2／rc **2** 不变）。
+- 残余 28 按文件：`codegen.rs` 13、`gen.rs` 8、`py_additions.c` 3、`pattern.rs` 2、`run.sh` 1、`tokio_runtime_stub.c` 1。**本批未手绑**，两条实证说明它不是本批欠下的：gen.rs 那 8 条里 **5 条在我第一处插入点（`:3948`）之上**（`:1049`、`:1649`、`:1781`、`:3452`、`:3796`），物理上不可能被本批挪动；`:10498` 那条内容实际在 **`:11682`**（+1,184 行）远大于本批 90 行 ⇒ 存量。`--rebind` 因"同形多条"拒改它们（记忆在册：手绑要 `--bless-only` 点名，否则"新＋消失"成对报错）。
+- 相对 442 在册终态 26 的 **+2 未归因**（本批没取 HEAD 隔离对照，点名不留白）。`run.sh:96`/`:136` 两条越界仍第三次在册（属套件/工具面）。
+- 改名对文档措辞的影响：`lower_expr` 现在是一对函数（出口 `lower_expr` + 原名体 `lower_expr_node`）。`docs/ABI.md:713` 说的"`lower_expr` 的 Return 档"仍然成立（Return 档在 `lower_expr_node` 内，外部只能经出口进入），文案未改。
+
+### 七、夹具与方法论
+
+- `tests/python_style/t474_mem_intrinsic_operand.z`（51 行、5 条 expect）：改前实拍 **rc=101**、panic 在 `codegen.rs:6765` `no entry found for key`、stdout **0 字节**（PRE 那颗，同目录）；改后 5 行逐字相符。第 5 条 `ghost = 3` 是②的取值契约（`3 + 幽灵 0`）。
+  - 首版把它写成 `ghost = 0`，套件当场判红（`FAIL … expected: ghost = 0 | actual: 3`）⇒ 按实拍改断言。这不是"调成能过"：`3 + 0 = 3` 就是这条契约的全部内容，且这行同时锁住"②之后 abort 不再发生"。
+- 一句话方法论：**判据只能问"登记过没有"，不能问路由种类**——与批次 419 那条"判据只能问 MIR"同形：凡是"某臂走完什么都没发生"的形状，闭合出口比逐臂补判据可靠。
+
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 

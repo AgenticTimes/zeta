@@ -184,41 +184,41 @@ src/middle/mir/gen.rs	3452	if let Some(&existing) = self.name_to_id.get(name) {
 src/middle/mir/gen.rs	3472	let ty = self.global_ty_of(name).unwrap_or(Type::I64);
 src/middle/mir/gen.rs	3796	if self.module_globals.contains(name) {
 src/middle/mir/gen.rs	3857	func: if inclusive { "<=" } else { "<" }.to_string(),
-src/middle/mir/gen.rs	4125	format!("{}__{}", module.replace('.', "_"), member);
-src/middle/mir/gen.rs	4448	"zeta_dyn_truth"
-src/middle/mir/gen.rs	6438	if method == "parse_args" && receiver.is_some() { let recv = self.lower_expr(receiver.as_ref().unwrap()); self.stmts.push(MirStmt::Call { func: "py_argparse_par
-src/middle/mir/gen.rs	6815	// `log.info(fmt, *args)` — a varargs HANDLE has no // static length, and lowering the starred operand // emitted a raw Deref that codegen compiled into // `ldr
-src/middle/mir/gen.rs	7510	func: "zeta_dyn_len".to_string(),
-src/middle/mir/gen.rs	9107	Some(Type::Str) => "println_str",
-src/middle/mir/gen.rs	9218	for (i, a) in pos.into_iter().enumerate() { if i < slots.len() { slots[i] = Some(a); } else { slots.push(Some(a)); } }
-src/middle/mir/gen.rs	9225	for (n, v) in kw { match params.iter().position(|p| *p == n) { Some(i) => slots[i] = Some(v), None => slots.push(Some(v)), } }
-src/middle/mir/gen.rs	9227	Some(i) => slots[i] = Some(v),
-src/middle/mir/gen.rs	9228	None => slots.push(Some(v)),
-src/middle/mir/gen.rs	9231	// A `**` mapping fills whatever is still unbound. for m in spread { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { *slot = Some(AstNode::S
-src/middle/mir/gen.rs	9244	// Finally, declared defaults. if let Some(defaults) = &callee_defaults { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { if let Some(Some(d
-src/middle/mir/gen.rs	9383	// PY-A: starred args `f(*arr)` expand to per-element args // (V1: static-size arrays compile-time unrolled). for a in &ordered_args { if let AstNode::UnaryOp {
+src/middle/mir/gen.rs	4163	format!("{}__{}", module.replace('.', "_"), member);
+src/middle/mir/gen.rs	4486	"zeta_dyn_truth"
+src/middle/mir/gen.rs	6476	if method == "parse_args" && receiver.is_some() { let recv = self.lower_expr(receiver.as_ref().unwrap()); self.stmts.push(MirStmt::Call { func: "py_argparse_par
+src/middle/mir/gen.rs	6853	// `log.info(fmt, *args)` — a varargs HANDLE has no // static length, and lowering the starred operand // emitted a raw Deref that codegen compiled into // `ldr
+src/middle/mir/gen.rs	7548	func: "zeta_dyn_len".to_string(),
+src/middle/mir/gen.rs	9145	Some(Type::Str) => "println_str",
+src/middle/mir/gen.rs	9256	for (i, a) in pos.into_iter().enumerate() { if i < slots.len() { slots[i] = Some(a); } else { slots.push(Some(a)); } }
+src/middle/mir/gen.rs	9263	for (n, v) in kw { match params.iter().position(|p| *p == n) { Some(i) => slots[i] = Some(v), None => slots.push(Some(v)), } }
+src/middle/mir/gen.rs	9265	Some(i) => slots[i] = Some(v),
+src/middle/mir/gen.rs	9266	None => slots.push(Some(v)),
+src/middle/mir/gen.rs	9269	// A `**` mapping fills whatever is still unbound. for m in spread { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { *slot = Some(AstNode::S
+src/middle/mir/gen.rs	9282	// Finally, declared defaults. if let Some(defaults) = &callee_defaults { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { if let Some(Some(d
+src/middle/mir/gen.rs	9421	// PY-A: starred args `f(*arr)` expand to per-element args // (V1: static-size arrays compile-time unrolled). for a in &ordered_args { if let AstNode::UnaryOp {
 src/middle/mir/gen.rs	9836	// (`[dynamic]str__max`), reached once annotated params keep their
 src/middle/mir/gen.rs	9855	// same ghost family as `.isna()` (`[dynamic]i64__all`).
-src/middle/mir/gen.rs	9874	// `[dynamic]str__isna` and aborted. Route to the runtime helper.
-src/middle/mir/gen.rs	9893	// vector): compiled to the ghost `[dynamic]str__pct_change`, and
-src/middle/mir/gen.rs	9940	func: "[dynamic]str__map".to_string(),
-src/middle/mir/gen.rs	9953	// `[dynamic]str__normalize` and the link failed.
-src/middle/mir/gen.rs	10192	func: "zeta_dyn_contains".to_string(),
+src/middle/mir/gen.rs	9912	// `[dynamic]str__isna` and aborted. Route to the runtime helper.
+src/middle/mir/gen.rs	9931	// vector): compiled to the ghost `[dynamic]str__pct_change`, and
+src/middle/mir/gen.rs	9978	func: "[dynamic]str__map".to_string(),
+src/middle/mir/gen.rs	9991	// `[dynamic]str__normalize` and the link failed.
+src/middle/mir/gen.rs	10230	func: "zeta_dyn_contains".to_string(),
 src/middle/mir/gen.rs	10309	if receiver.is_none() && arg_ids.len() == 1 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
 src/middle/mir/gen.rs	10498	// PY-A: closure call — if the callee is a var bound to a // lambda/closure value, lower to a direct named call to the // synthetic closure function (f(41) → __
-src/middle/mir/gen.rs	11415	if receiver.is_none() && arg_ids.len() <= 4 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
-src/middle/mir/gen.rs	11694	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
-src/middle/mir/gen.rs	11697	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
-src/middle/mir/gen.rs	11708	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
-src/middle/mir/gen.rs	11721	format!("{}_{}", func, arg_ids.len())
-src/middle/mir/gen.rs	12283	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
-src/middle/mir/gen.rs	12544	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
-src/middle/mir/gen.rs	13184	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
-src/middle/mir/gen.rs	13188	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
-src/middle/mir/gen.rs	13285	format!("{}_{}", func_name, arg_ids.len())
-src/middle/mir/gen.rs	13931	func: "zeta_dyn_getitem".to_string(),
-src/middle/mir/gen.rs	13959	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
-src/middle/mir/gen.rs	14577	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
+src/middle/mir/gen.rs	11453	if receiver.is_none() && arg_ids.len() <= 4 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
+src/middle/mir/gen.rs	11732	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
+src/middle/mir/gen.rs	11735	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
+src/middle/mir/gen.rs	11746	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
+src/middle/mir/gen.rs	11759	format!("{}_{}", func, arg_ids.len())
+src/middle/mir/gen.rs	12321	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
+src/middle/mir/gen.rs	12582	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
+src/middle/mir/gen.rs	13267	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
+src/middle/mir/gen.rs	13271	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
+src/middle/mir/gen.rs	13368	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	14014	func: "zeta_dyn_getitem".to_string(),
+src/middle/mir/gen.rs	14042	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
+src/middle/mir/gen.rs	14660	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");
 src/middle/pylib.rs	842	/// `declare_registry_runtime_fns` emits after task D.
 src/middle/pylib.rs	963	assert_eq!(dispatched_member("[dynamic]str::isin"), "isin");
