@@ -1,0 +1,48 @@
+# @cat: container
+# @note: 组合普查 527 —— 类字段列表 in 检查值错（has_tag("web") 0 而非 True）+
+#        tag_str() 地址（⑫）+ %(key)s=dict 映射垃圾（⑭ 子形态）+
+#        链式比较变量版 ✓ + name.upper() ✓——三缺口一对照一探针
+#@@ python
+class Tagged:
+    def __init__(self, name, tags):
+        self.name = name
+        self.tags = tags
+    def has_tag(self, t):
+        return t in self.tags
+    def tag_str(self):
+        return ",".join(self.tags)
+
+t = Tagged("srv", ["web", "db"])
+print(t.has_tag("web"))
+print(t.has_tag("cache"))
+print(t.tag_str())
+print(t.name.upper())
+
+x = 10
+y = 20
+z = 30
+print(x < y < z)
+print(z >= y >= x)
+print("%(key)s=%(val)d" % {"key": "test", "val": 42})
+#@@ zeta
+class Tagged:
+    def __init__(self, name, tags):
+        self.name = name
+        self.tags = tags
+    def has_tag(self, t):
+        return t in self.tags
+    def tag_str(self):
+        return ",".join(self.tags)
+
+t = Tagged("srv", ["web", "db"])
+print(t.has_tag("web"))
+print(t.has_tag("cache"))
+print(t.tag_str())
+print(t.name.upper())
+
+x = 10
+y = 20
+z = 30
+print(x < y < z)
+print(z >= y >= x)
+print("%(key)s=%(val)d" % {"key": "test", "val": 42})
