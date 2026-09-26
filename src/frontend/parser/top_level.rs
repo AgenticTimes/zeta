@@ -1625,7 +1625,8 @@ pub fn parse_zeta(input: &str) -> IResult<&str, Vec<AstNode>> {
     // record: docs/python-syntax.md R1). Brace-style sources pass through
     // unchanged (Ok(None) keeps the original &str so `remaining` slices stay
     // valid).
-    crate::frontend::indent::clear_last_preprocess();
+    // 批次 466（#65）：入口不再清空行表——行表按栈保存、查询按后缀匹配，
+    // 主文件与被导入模块的表共存（旧实现每次解析抹掉上一份 ⇒ 串号）。
     match crate::frontend::indent::indent_preprocess(input) {
         Ok(Some(processed)) => {
             if let Ok(path) = std::env::var("ZETA_DUMP_PP") {
@@ -2204,9 +2205,8 @@ fn parse_zeta_impl_recover(input: &str) -> IResult<&str, Vec<AstNode>> {
             }
             Err(_) => {
                 let snippet: String = input.chars().take(48).collect();
-                let base_off =
-                    crate::frontend::indent::remaining_byte_offset(input, "");
-                let line = crate::frontend::indent::original_line_at(base_off, "");
+                let line = crate::frontend::indent::line_for_stmt_start(input, "")
+                    .unwrap_or(0);
                 eprintln!(
                     "warning: [W1003] :{line}: skipped unparseable top-level item; \
                      syncing to next def/class/import/…. Near: '{}'",
