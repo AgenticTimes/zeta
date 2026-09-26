@@ -178,6 +178,7 @@
 | 512 | cleanup | **类方法内字符串积累丢类型钉住**：类方法 loop 拼接 out 打地址，普通函数/模块级同形全对 ⇒ 缺口特定于类方法上下文的局部变量类型标记（gen.rs，506 元组解包同根邻域）。组合普查第二例（c2 方法返回 dict 链式访问 ✓ 对照组） | runtime verdict 钉住 | ✅ 定性批 |
 | 509 | cleanup | **高频构造回归面钉住**：变量边界切片 / 字符串·列表增强拼接 / 函数多返回值解包——四发全对（qwen 448 收尾已并入 497–506） | 全对 | ✅ 完成 |
 | 510 | cleanup | **str.format 方法缺绑定钉住**（无参/带参同病，registry+C shim 双缺，#188 家族）+ dmethod2 模式十例（setdefault/sorted-reverse ✓；enumerate-start 与 items 哈希序为已知族实例）+ 证子串 in 正确。t478 抖动监控：套件三轮全 PASS 未复现 | diff 无回归 | ✅ 完成 |
+| 511 | cleanup | **% 格式化操作符整体缺失定性**（⑭，最高频缺口）：字符串左操作数的 % 没接格式化路径——五形态全错（%d 垃圾/%s 地址/%.2f 错值/%x 十进制/%% 字面量）。py_format 机器已在（486 基础探针全对）只缺 % 路由——gen.rs 车道。t513 钉子 + str_percent_format_family 闸门 | diff 无回归 · py 368/2/16/0 | ✅ 定性批 |
 | 510b | cleanup | **任务完成度审计**（用户问询触发）：backlog OPEN 19；selfhost 钉住收敛 3→1（actor/map 已修，剩 actor/result + array.z 的 codegen panic 均 gen.rs 车道）；XPASS 0（#188/#189/#190 未修，主线 447/448 在 W1010/W1011 族）；我车道 actionable 清空——普查稳态、简报在主线手里。full-gate 尾数：365/2/15、diff 359/408 | 全绿 | ✅ 审计批 |
 | 510 | cleanup | **深度普查**（十五模式全开，seed=777777，375 例临时——历史最大 N）：总 804 例 judged，match 727 = **90.4%**；分模式缺口：numeric 19/44、fmt 18/25、builtin 18/25（round 族经 truediv 放大）、stmts 8/33，其余十一模式 **0 缺口**（容器/控制流/切片/循环/类全净）。族分布与历史一致（溢出/sign/负进制/round·truediv/Bool），无新族。临时样本不进库 | 727/804 90.4% | ✅ 度量批 |
 | 504 | cleanup | **字典推导式验证**（BR-L 漂移疑点④解除）：{k: k*2 for ...} 的 len/键读/键序全对——"是否真产出 dict 存疑"的旧问题实测无缺口，疑点关闭 | 全对 | ✅ 完成 |
