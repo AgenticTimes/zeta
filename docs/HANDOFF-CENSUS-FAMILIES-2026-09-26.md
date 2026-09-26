@@ -135,6 +135,21 @@ print(list(d.items())[0]) # CPython ('a', 1)          zeta 堆地址
   dict.pop/len）实测全对——方法面覆盖度高。
 - 闸门：`container_dict_methods`。
 
+## ⑭ % 格式化操作符整体缺失（批次 511 定性，5 例闸门——最高频缺口）
+
+```python
+print("n=%d" % 42)          # CPython n=42     zeta 18（垃圾）
+print("%s-%s" % ("a", "b")) # CPython a-b      zeta 地址
+print("v=%.2f" % 3.14159)   # CPython v=3.14   zeta 1.507200
+print("x=%x" % 255)         # CPython x=ff     zeta 70
+print("p=%d%%" % 50)        # CPython p=50%    zeta 15
+```
+- 根因：字符串左操作数的 `%` 没接格式化路径——落到通用位运算/哈希分支。
+- 修法建议：gen.rs 比较层 `%` 分派加 str 左操作数臂 → py_format 机器
+  **已在**（f-string 规格实现主体扎实——批次 486 基础 11 探针全对），
+  只缺 `%` 操作符的路由。
+- 闸门：`str_percent_format_family` + `t513_percent_format` + `str_percent_fmt`。
+
 ## ⑨ str.find 两参形式缺 shim（1 例 compile 闸门，#188 余半）
 
 ```python
