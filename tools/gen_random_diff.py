@@ -481,7 +481,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True, help="固定种子保证可复现")
     ap.add_argument("--count", type=int, default=20)
-    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod", "nested", "methods", "class"), default="numeric")
+    ap.add_argument("--mode", choices=("numeric", "str", "stmts", "list", "dict", "cmp", "loop", "fmt", "slice", "builtin", "control", "dmethod", "nested", "methods", "class", "dmethod2"), default="numeric")
     ap.add_argument("--out", default=OUT_DIR)
     a = ap.parse_args()
 
@@ -564,6 +564,31 @@ def main() -> int:
             body = (
                 f"# @cat: container" + NL
                 + f"# @note: 随机类/字段/方法（seed={a.seed} #{written}）——W1010/W1011 修复普查面" + NL
+                + "#@@ python" + NL + prog + NL
+                + "#@@ zeta" + NL + prog
+            )
+            with open(os.path.join(a.out, name), "w") as f:
+                f.write(body)
+            written += 1
+            continue
+        if a.mode == "dmethod2":
+            # 方法面第二批：setdefault / sorted-reverse / enumerate-start /
+            # items-unpack 迭代（顺序族的方法面延伸）。
+            lines = ['d = {"a": 1, "b": 2}']
+            lines.append('print(d.setdefault("a", 99))')
+            lines.append('print(d.setdefault("c", 3))')
+            lines.append('print(sorted([3, 1, 2], reverse=True))')
+            lines.append('print(list(enumerate(["x", "y"], start=1)))')
+            lines.append('for k, v in d.items():')
+            lines.append('    print(k, v)')
+            prog = NL.join(lines) + NL
+            expected = python_eval_program(prog)
+            if expected is None:
+                continue
+            name = f"gen_dmethod2_s{a.seed}_{written:03d}.dcase"
+            body = (
+                f"# @cat: container" + NL
+                + f"# @note: 字典方法第二批（seed={a.seed} #{written}）" + NL
                 + "#@@ python" + NL + prog + NL
                 + "#@@ zeta" + NL + prog
             )

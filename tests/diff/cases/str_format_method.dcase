@@ -1,0 +1,13 @@
+# @cat: str
+# @note: str.format 方法（无参与带参）整体缺绑定——发射裸名 format 链接失败
+#        （批次 510 二分实证；无参形式与带参形式同病，registry/C shim 双缺）
+#@@ python
+s = "{}-{}"
+print(s.format(1, 2))
+t = "x"
+print(t.format())
+#@@ zeta
+s = "{}-{}"
+print(s.format(1, 2))
+t = "x"
+print(t.format())
