@@ -21318,6 +21318,83 @@ acceptance 语料 40 文件的 f-string 字段共 **101** 个，其中规格可�
 
 下一次全量门禁＝**批次 460**。队列头名不变：**简报①「`/` 真除法」**（446 已把 round 归因改判到这里）→ **#182 余 57 行**（W1010 三堆，A 堆 23→#190）→ **#167 余项**（锚点键结构迁移；本批的"定位失败类不可见"是它的新证据）→ **#195/#196**（`#194` 组合崩溃面）→ **#145**（packed-str 生产者，语料崩点）。#199（tuple 无运行期表示／enumerate 是 identity 桩）留作独立 ABI 设计批。
 
+## 批次 454（3.2 Lowering／5.4 数值原语）：整数 `/` 被打成整除 —— 抬型落 MIR、分臂落槽型、钉子落声明，五格同收；代价是第一次量到"本批留下一格回归"
+
+代码提交 **`913e0a01`**（`fix(codegen)`，7 文件 **+260/−5**：`src/middle/mir/gen.rs` 68/3、`src/backend/codegen/codegen.rs` 43/0、`src/middle/ctfe/evaluator.rs` 15/0、`pylib/numpy.z` 5/2、新夹具 `t487` 32 行／`t488` 29 行／`t489` 68 行）。基面批 **`7493b627`**（`docs/ABI.md` 165/109＝1060→**1088** 行、`abi_anchors.tsv` 131/95、`diff_consistency.json` 15/15）。动了 `.rs` ⇒ 必重编：`target/release/zetac` md5 `af087b05…`→**`41dac3128161b6690cd18f523ca3b835`**。pyramid 层＝**3.2 Lowering**（`/` 的下型与槽型）×**5.4 标准库与原语**（数值原语与 `numpy.z` 库面），harness 任务 **#201/#202**，收尾新登记 **#203**。
+
+### 一、根因（一条链五格，逐格都有当场实拍）
+
+| 格 | 结论 | 证据 |
+|---|---|---|
+| ① | `/` 与 `//` 在 MIR 里共臂 ⇒ `op_type` 判成 `Int`，下游全部按整除出码 | `gen.rs:5303-5316`（改后）：两操作数都是 int/bool 时 `op_type` 抬 `Type::F64`；改前 `7 / 2` 打 `3`（`/tmp/b454/t487_pre/verdict`：11 项期望逐字来自本机 CPython 3.14.5，实得首项 `6`≠`7`） |
+| ② | 出码有**两份**整数 `/` 的 `sdiv` 副本，只抬 MIR 不动它们＝把 double 位模式塞进 i64 槽 | `codegen.rs:4249`（`"/" \| "div" if self.slot_is_float(*dest)`）与 `:7071`（表达式位，按 `expr_id` 查槽）；崩溃实证：未加判据的二进制跑语料 **12/12 rc=139**（§五） |
+| ③ | CTFE 对字面量 `/` 照常折叠成 `Int` ⇒ 同一表达式在常量位是 `25`、非常量位是 `25.0` | `evaluator.rs:256-276`：`/` 落在字面量折叠路径上直接返回 `None`（不折），交给运行期；与批次 327（比较折成 Int）同族不同格 |
+| ④ | **签名有两个来源**：被调方 LLVM 签名问函数体（`Mir::signature_ret_ty`），调用方 dest 槽问声明（resolver 的 `func_ret_types`）⇒ 抬型后第一次真分家，走 `docs/ABI.md` §2 R7 的 M5 位重解读 | `gen.rs:1678-1735` 新 `pin_declared_int_return`（在 `lower_to_mir` 末尾 `:1682` 调用）；实拍：`test_arithmetic.z:16` 的 `divide(100, 4)` 在未加钉子的二进制上打 **`4627730092099895296`**（＝25.0 的位模式）、rc 100→75；`murphy_working_final.z:101` 同形 5 个调用点、rc 5→2 |
+| ⑤ | 两个下游依赖方按"整数 `/`"巧合过活：`divmod` 的商、`numpy.z mean()` | `gen.rs:8485-8497`：商改 `"floordiv"`；`pylib/numpy.z:35-45`：`sum(xs) / n` → `// n`——`t227_numpy_z_wrappers` 的 expect **一个字未改**，两颗二进制逐名 `PASS`/`PASS`（`/tmp/b454/t227{pre,post}/verdict`）＝修掉巧合必须同批改依赖方 |
+
+### 二、修法（判据全在"这一格的值会被怎么读回来"，不做全局方言改写）
+
+出码侧新增 `slot_is_float(id)`（`codegen.rs:1955-1971`）：查 `current_type_map` 里该表达式落点的静态型，只有 `F32/F64` 才允许抬成 `fdiv`。这条判据的存在理由写在函数头注释里——**抬型只能发生在"值真会被当 float 读回"的地方**，否则就是 §一④ 那条位重解读。声明侧的钉子 `pin_declared_int_return` 只在两个条件同时成立时收回 `Type::I64`：声明把返回钉成 int **且**决定签名的那条槽恰是整数商（`/` 两侧都是 int/bool）；从别处来的 float（`-> i64` + `return 2.5`）一个字不改——那是 R7 的 M6 既有矛盾，归 #33／批次 399。
+
+### 三、夹具三颗 + 三颗二进制（`pre454` ／ `454ungated`（抬型未加判据）／ `zetac`（终态））
+
+| 夹具 | pre-454 | 未加判据 | 终态 | 这颗锁什么 |
+|---|---|---|---|---|
+| `t487_int_truediv_is_true.z`（32 行／11 项） | **FAIL**（首项 `6`≠`7`） | — | **PASS** | ①：`/` 是真除法 |
+| `t488_series_div_slot_stays_int.z`（29 行） | PASS（`2\|2\|3`） | **rc=139、stdout 空**（当场复跑复核） | PASS（`2\|2\|3`） | ②：句柄槽里的商必须还是 `sdiv`。对 pre-454 是**防回潮**、不是红转绿 |
+| `t489_declared_int_return_keeps_sdiv.z`（68 行） | **FAIL**（`25\|3\|3.500000\|7\|3`） | **FAIL**（`4627730092099895296`、`4615063718147915776`＝位重解读实拍） | **PASS** | ④：钉子专收"声明 `-> int` × 体是整数商" |
+
+逐名判定在 `/tmp/b454/verify/{pre454,ungated,gated}/<名>/verdict` 与 `/tmp/b454/t487_{pre,gate}/verdict`、`/tmp/b454/t488_{pre454,ungated,gated}/verdict`。**t488 的红只对中间态成立**，这一点按"负断言要配正证据"如实写在这里，不冒充 pre-454 红。
+
+### 四、快门禁（`src/middle`+`src/backend` 路由；终态日志 `/tmp/b454/gate_final.log`）
+
+| 步 | 读数 | 对照 |
+|---|---|---|
+| official | compile **194/194**、compile+link **191/194**（link-only 3 名单逐字未动：`integration_all_features`/`quantum_basic`/`selfhost`） | 与 453 在册相同 |
+| compile-diagnostics | official **5/194 文件 / 21 行**；python_style **118 文件 / 249 行** | official 与 453 在册逐字相同；中途一趟 `gate_fast_454.log` 是 **7/29**，那趟跑在 `gen.rs` 最后一次钉子编辑（02:59）之前的二进制上 |
+| python_style（当场 `ls tests/python_style/t*.z`＝**392**） | **376 passed / 2 failed / 14 known-fail / 0 xpass**；桶和 392＝文件数逐字吻合 | 453 在册 373/2/14（389 文件）⇒ **passed +3 恰为本批三颗新钉**，红源仍是存量 `t231`/`t233` ⇒ 零新增红 |
+| 其余 | `comment_drift: 0 处复述`、`dyn_binding: 4 条断言 不一致 0` | `GATE_RC=1`（红源＝上面两条存量） |
+
+**两处诊断面位移都单独取了归因，不靠时序推断**：
+- official **−8 行 / −2 文件**＝`ABI return` 一族：同一对源文件在未加钉子的二进制上编，`test_arithmetic.z` 出 **2** 行（1 条逐调用点 + 1 条汇总）、`murphy_working_final.z` 出 **6** 行（5 + 1），终态两颗文件各 **0** 行（`/tmp/b454/diag_att/*.err`，`grep -c '^warning'` 与 `grep -c 'ABI return'` 两数相等）。⇒ 这 8 行由 §一④ 的钉子静音，是真转好。
+- python_style **+2 文件 / +5 行**里只有 **1 文件 / 2 行**归得上本批＝`t488` 自己 `import pandas` 的两条 PY-A（`/tmp/b454/diag_att/t488_*.err`，`t487`/`t489` 各 0 行）。**余 1 文件 / 3 行未归因**，与 #180 同族口径并列登记，本批不认领为收益。
+
+### 五、主线 301 位移 A/B：**终态相对 pre-454 ＝ 0**（三段，n=12/侧，每轮重编、产物同目录）
+
+驱动 `strategies/code/_drv_accept_409.py`，cwd＝`/Users/meetai/source/quant/REasyQuant`，`REPLAYQUANT_LOCAL=1`。pre 侧一律 `zetac_pre454`，post 侧＝当时那颗 `target/release/zetac`（五趟的 `post` 因此分别是中间态、加判据态、终态）。
+
+| 趟 | post 侧二进制 | pre 侧 rc 组成 | post 侧 rc 组成 | 完成的跑 |
+|---|---|---|---|---|
+| `ab454.log`+`ab454b.log` | **抬型未加判据** | 6×`0` / 6×`139` | **0×`0` / 12×`139`** | post 侧 **0 次**——崩点全在 `缓存命中 103 只` 之后 |
+| `ab_gate.log`+`ab_gate2.log` | 加槽型判据 | 10×`0` / 1×`139` / 1×`134` | 11×`0` / 1×`134` | 21 次，字段全同 |
+| `ab4_pin.log` | **终态（含钉子）** | 8×`0` / 3×`139` / 1×`134` | 8×`0` / 4×`139` | 16 次，字段全同 |
+
+- **未加判据＝净损害，不是"收益打折"**：post 侧 12/12 全崩、pre 侧还能跑完一半 ⇒ 这一趟证的是 §一② 那条判据**必须和抬型同批**，拆开提交会把主线打回零成交。
+- **判据/钉子两趟的位移＝0**：`compile_rc` 全 0；两侧 rc=0 的每一次输出**逐字段相同**（`parity=74`、`fail1=74`、`morning=37`、`stderr=321`、末行 `[local] 回测完成: 1000000 -> 0 (-100.00%)`），`stdout_l1` 是堆地址、随 ASLR 变，不入比较（坑 51/ASLR 在册）。
+- **rc 组成的差异不记账**：同一颗 `zetac_pre454` 在三趟里 `139` 命中率分别 6/12、1/12、3/12 ⇒ 这个计数器本身的噪声底就大于差异；n=12 不足以判"判据把 139 治好了"或"钉子把 139 弄多了"，**两侧都不记 credit/debit**。崩的跑停在 `缓存命中 …` 那条日志之后＝#145 那一格（`str_trim+24`），`134` 是存量 `zeta: stub not implemented: numpy.vstack`。
+
+### 六、这一族的净账与边界（正文在 `docs/ABI.md` §2 R7，此处只留口径）
+
+判形＝单模块 `--emit-llvm` 里"同一条槽既有 `store double` 又有 `load i64`"：**pre-454 19 → 未加判据 23 → 终态 20**。判据接走的 3 条各有 IR 行对（`pinned.ll 17687⇔ungated 17689`、`56723⇔56727`、`103338⇔103343`，全是 `store double %div`→`store i64 %div`）；净增那 1 条是**调用返回**型（`jq_wufu.py` 第 534/538/553 行）——无注解 ⇒ 钉子不适用，⇒ 这是 **#33 的语料成员**，不是本批能收的格。三条有意不收的边界（无静态型形参 ⇒ 不抬、判定跟证据走而非源码形状、三颗二进制的 `ABI return` 条数相同而值不同 ⇒ 条数只当线索）连同实拍都在那一节。
+
+### 七、差分面：395 → **404**（+9，逐条有名字，且是从基线两版直接对出来的）
+
+`tools/diff_test.py --bless` 后 `match_min 395→404`、`judged 458` 不变、`rate_pct 88.2%`、`bad_case 0`；抬闸后复跑 `CONFIRM_RC=0`／"差分一致率无回归"。转好的 9 条**逐条点名**＝`gen_builtin_s24680_{000,001,005,007,008,010,011,013,014}`，全部 `cat=container`、全部 `mismatch→match`，**新增 mismatch 0 条**（对法＝`git show 7493b627~1` 与 `7493b627` 两版 json 逐键比 verdict，不是读聚合计数）。
+
+### 八、锚点（`7493b627`；净改善，且新登记两条盲区）
+
+`--rebind` 两趟 ＋ 手工重绑 ＋ `--bless-only` 点名：基线 **258→294** 条，`docs/ABI.md` 1060→1088 行。终态 **漂移 23→8 / 落单新 2 / 落单消失 35 / 改号配对 0 / 定位失败 4→2 / 可解析 255→261 ⇔ 引用 302→308 / 待归属 100 条守恒 · 90 种 / rc=2**（`/tmp/b454/anch_final.txt`）。11 条多命中一律**拒绝 bless**（bless 会把旧行号冻成工具盖章的证据），只按插入位移量手绑并逐字验证内容。本批新写的两段引用**故意只用 `.ll` 与"第 NNNN 行"两种形**，对 `ANCHOR_RE`/`SRC_EXT` 不可见 ⇒ 零锚点增量，同时把"便利也是失明"记进 #52。三笔已知未清的账（`gen.rs:428`/`:485` 的批次 387 记账错、35 条消失需 `--bless --force` 会顺带抹平 8 条存量漂移、387 段自相矛盾的 1790/1845 vs 3848×3）都在 #52 行里留了原文，没有偷偷 bless 掉。
+
+### 九、backlog 同步：#33 读到"语料成员"、新立 #203 收四形
+
+#33 行追加本批读数（覆盖形状／盖不到的形状／那 1 条语料成员／主动放弃的收益），来源改 `317 → 407 → 408 → 454`；#52 行追加本批复扫与两条新盲区。**新登记 #203**（🟡，四形每形都有三颗二进制的当场实拍，`/tmp/b454/reg203/`）：① 句柄/容器槽里的 `/` 只保证"不崩、列还在"，商值无表示（`g5_element.py` 三颗全 rc=139 ⇒ t488 只断 `len`）；② `Series / 字面量 int` 三颗全崩（`g3_series_lit.py`，属既有崩、是①的必经路径）；③ 混型陈旧槽 `s = 0; s = s + 1 / 2` ⇒ 静默打 `4602678819172646912`（0.5 的位模式），同形写 `t = 0.0` 打对 ⇒ 归"槽型一旦定下不随写更新"，**与 #33 不同源**；④ `const HALF: i64 = 7 / 2;` 三颗都打 `3`（走不到被改的那条臂，**成因未定位**，登记为疑点而非收益）。OPEN 净增 **+1**；配对关闭一栏如实写"无配对关闭：本行为新增登记"。
+
+### 十、读数存档与队列
+
+`/tmp/b454/`：三颗二进制在 `target/release/`（`zetac_pre454`、`zetac_454ungated`、`zetac`）；`verify/{pre454,ungated,gated}/*/verdict`、`t487_{pre,gate}`、`t488_{pre454,ungated,gated}`、`t227{pre,post}`（逐名判定）；`ab{454,454b,gate,gate2,4_pin}.log`（§五表逐行来自此）；`diag_att/*.err`（§四两处归因与 §一④ 的位模式实拍）；`ir/{pre454,ungated,pinned}.{ll,clog,slots}`＋`ir_shape.sh`（§六净账）；`reg203/`（#203 四形探针）、`chk/`（三条边界探针 f1–f4＋`f1_rerun.txt`/`f2_rerun.txt`）、`ret_pin.py`·`ret_indirect.py`（R7 残留格）、`anch_*.txt`＋`anch_before_rebind2.tsv`＋`rebind2.txt`、`dc_old.json`/`dc_new.json`（§七逐键比对用）、`gate454*.log`·`gate_fast_454.log`·`gate_final.log`。隔离 worktree `/tmp/b454/iso` 收尾移除。
+
+下一次全量门禁＝**批次 460**。460 前队头：**#182 余 57 行**（W1010 三堆，A 堆 23→#190）→ **#167 余项**（锚点键结构迁移；本批"定位失败不进 `--list`"是它的新证据）→ **#195/#196** → **#145 `str_trim+24`**（本批三趟 A/B 的崩点全撞在它身上）；另 **#203** 四形等一次同族合并批。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
