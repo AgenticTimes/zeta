@@ -20458,6 +20458,57 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 - **#190 新登记**（A 堆 23 行）：`std::fs`／`std::env`／`std::time`／`std::str`／`std::thread` 在 AOT 侧无 C 宿主；**净增 +1**（24 → 25，≤30）。
 - **下一批**：队头仍按已实测损害量走 —— **#190 的宿主批**（23 行，但要新增运行期符号 ⇒ 属跨界面，需 `runtime/*.c` 授权面）vs **#165/#177**（读侧布局 14 条）vs **#183 余格**（`s.find(t,start)` 链接期缺符号）vs **#48**（等用户方言裁决）。按 ROI 表交用户裁定后再开，不顺着"下一批默认候选"走。下一次全量门禁＝**批次 450**。
 
+## 旁路并入（2026-09-26，主线侧代录）：批次 488–492 ＋ 批次 446 收尾合并
+
+合并提交 `8d311ff6`（`git merge cleanup`，并 9 颗：`59 files +1366/−2`）。**并入面零编译器改动**：
+`git diff --name-only bootstrap...cleanup` 里 `src/`、`runtime/`、`pylib/`、`docs/ABI.md`、
+`tools/baselines/` **逐类零命中** ⇒ 合并树跑的还是同一颗 `zetac`（md5 `2d9c6f7c…`，与 446 门禁那颗
+逐字节相同），无需重编、无锚点重绑。 带入：`tests/diff/cases/**` 新 `.dcase` **55 个（全部为新增，无改动无删除）**
+（`gen_control_s1122_*` 20／`gen_dmethod_s97531_*` 20／`gen_builtin_s24680_*` 15，按前缀计数）＋ `tests/python_style/t508_fmt_sign_flag.z`
+＋ `t509_fmt_negative_binary.z` ＋ `tools/gen_random_diff.py` +116/−2 ＋ `worktree.md` +5。
+
+### 一、合并树读数（主线侧当场复跑，`/tmp/b446m/`）
+
+| 步 | 读数 | 对 446 的关系 |
+|---|---|---|
+| 快门禁（13 个 `--skip-*` 配方逐字） | **`GATE_RC=1`**／123s | 唯一红源仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ **零新增红** |
+| official | compile 194/194、compile+link 191/194、link-only 3 | 逐项相同（缺绑符号名未动） |
+| python_style | **361 passed / 2 failed / 13 known-fail / 0 xpass** | passed **361 未动**；known-fail 11→13＝旁路 t508/t509 两条钉子 ⇒ 不是判据放松。计数 `361+2+13=376` 与 `ls tests/python_style/t*.z` **376** 逐项对上 |
+| 诊断面 | official 5 文件/14 行；python_style 115 文件/243 行 | 与 446 终态逐字相同（两条新钉子不产生 warning） |
+| comment_drift / dyn_binding | 0 处复述 ／ 4 条断言不一致 0 | 不变 |
+| clean_checkout | rc=0（8s，rev=`8d311ff6`） | 覆盖的正是本次合并 |
+| diff 步（单跑，`--skip-diff` 的跳过项补齐） | **match=316 / judged=361 / 87.5% / bad_case 0 / rc=0** | **与旁路 490 在册读数逐字相同** ⇒ 488/489/490 三条差分读数从"旁路侧自取、主线未复测"升为**主线已复测** |
+
+**基线追平（#186 那格当场复发）**：跑前 `tools/baselines/diff_consistency.json` 是
+`total=306 / judged=306 / match=270 / match_min=270`，实跑 judged 已 **361** ⇒ **55 例红绿都不算数**，
+而该步照样打"差分一致率无回归"、rc=0（正是 #186 描述的失效形状，非新形态）。已 `--bless` 到
+`match_min=316`／87.5%（json **+231/−11**），bless 后复跑确认 rc=0（`diff_confirm.log`）。
+修法本身（"基线 `total` ≠ 实跑 `judged` 时出声"）在 tools 车道＝旁路侧，主线只代录数据不代改工具。
+
+### 二、三条旁路读数的定性归位（逐字标注来源）
+
+- **488（内建函数族 15 例）**：11 match ＋ **round 舍入族 ×4**（CPython 银行家 half-to-even vs 本仓四舍五入）。
+  旁路另记一条排障教训：rebase 后未重建二进制 ⇒ 误报 `str_repeat_left` 回归，重建后 `3 * "ab"` 正确。
+  **该教训与 445/446 在册的"门禁二进制身份要先 `md5` 对上"同一格，主线侧认可并沿用。**
+- **489（control 模式 20 例全 match）**：`for`/`while` 的 `else`＋`break`/`continue` 首次系统采样；
+  随机生成器把 10 条 `while`+`continue` 死循环组合**由 CPython 先验淘汰**（不是本仓判的）。
+- **490（字典方法链 20 例全 match）**：小键池 `len`/`get` 带缺省/成员/覆盖写后读随机链 ——
+  `map_get_default` 缺省路首次系统采样（421 那条臂的下游）。
+- **491（普查收敛验证，度量批）**：seed=60321、80 例**临时不进库** ⇒ 主线侧无法复测该读数（口径点名）；
+  mismatch 10/80＝**12.5%**，与 480 大样本估计（12%）一致；族分布 numeric 8／stmts 2／**str 0** ⇒ 无新族。
+- **492（#188 两面钉子）**：t508 sign 旗标（`+` 被吞）＋ t509 负数进制（位回绕）⇒ 已进合并树，
+  本表 known-fail 13 里就含这两条。
+
+### 三、492 的定性澄清改变了 #188/#189 的记账（主线侧改判一处归因）
+
+旁路 492 写明：488 那批 builtin 案例里的 round "错值"**真凶是 `/` 真除法缺失**（`66/10 → 6`），
+`round` 本身（含银行家舍入）与 CPython 一致。**这是旁路侧读数、主线未复测**，但它推翻了我上一格
+代录里"round 舍入族 ×4 ＝ 舍入法差异"的归因 ⇒ 该四条的归属从"round 族"改指 **numeric 真除法**
+（`numeric_truediv` 已在案）。#188 的范围据此**只保留两面**：sign 旗标不渲染、负数进制位回绕
+（t508/t509 已钉）。
+
+
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 

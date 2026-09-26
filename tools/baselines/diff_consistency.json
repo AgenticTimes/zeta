@@ -1,12 +1,12 @@
 {
-  "total": 306,
-  "judged": 306,
-  "match": 270,
-  "rate_pct": 88.2,
-  "match_min": 270,
+  "total": 361,
+  "judged": 361,
+  "match": 316,
+  "rate_pct": 87.5,
+  "match_min": 316,
   "by_verdict": {
-    "match": 270,
-    "mismatch": 35,
+    "match": 316,
+    "mismatch": 44,
     "compile": 1
   },
   "per_cat": {
@@ -19,16 +19,16 @@
       "judged": 78
     },
     "container": {
-      "match": 51,
-      "judged": 52
+      "match": 77,
+      "judged": 87
     },
     "numeric": {
       "match": 64,
       "judged": 85
     },
     "control": {
-      "match": 48,
-      "judged": 48
+      "match": 68,
+      "judged": 68
     }
   },
   "cases": {
@@ -260,6 +260,66 @@
       "cat": "container",
       "verdict": "match"
     },
+    "gen_builtin_s24680_000": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_builtin_s24680_001": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_builtin_s24680_002": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s24680_003": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s24680_004": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s24680_005": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_builtin_s24680_006": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s24680_007": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_builtin_s24680_008": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_builtin_s24680_009": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s24680_010": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_builtin_s24680_011": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_builtin_s24680_012": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s24680_013": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "gen_builtin_s24680_014": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
     "gen_cmp_s9999_000": {
       "cat": "truth",
       "verdict": "match"
@@ -340,6 +400,86 @@
       "cat": "truth",
       "verdict": "match"
     },
+    "gen_control_s1122_000": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_001": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_002": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_003": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_004": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_005": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_006": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_007": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_008": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_009": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_010": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_011": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_012": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_013": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_014": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_015": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_016": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_017": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_018": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s1122_019": {
+      "cat": "control",
+      "verdict": "match"
+    },
     "gen_dict_s6060_000": {
       "cat": "container",
       "verdict": "match"
@@ -385,6 +525,86 @@
       "verdict": "match"
     },
     "gen_dict_s6060_011": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_000": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_001": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_002": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_003": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_004": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_005": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_006": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_007": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_008": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_009": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_010": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_011": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_012": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_013": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_014": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_015": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_016": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_017": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_018": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dmethod_s97531_019": {
       "cat": "container",
       "verdict": "match"
     },
