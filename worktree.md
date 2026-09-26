@@ -69,13 +69,12 @@
 | `backlog.md` 登记行 | 各自只写自己批次产生的行 | 同左 |
 | 推送 `agentic bootstrap` | ✅ 唯一 | 🚫 |
 
-## 3. 合并协议（READY → MERGED）
+## 3. 同步方式（简化版，2026-09-26）
 
-1. 旁路侧每完成 **≥1 族（含该族测试转正 + 自己分支上的全量门禁 rc=0）**：在本文件 §5 台账把状态改为 `READY(族=…, 门禁=…)`，提交到 `cleanup`，然后**自行 rebase**：`git rebase bootstrap`（冲突只可能在自己独占的文件里）。
-2. 主线侧每批开工前：`git show cleanup:worktree.md` 查 READY。两批之间的空窗执行合并：
-   `git merge cleanup --ff-only`（旁路已 rebase ⇒ 保持线性历史）→ 誊记录进 roadmap.md（批次号按 440+ 归位）→ 本文件 §4 合并记录行 + 状态改 `MERGED` → `git push agentic bootstrap`。
-3. 合并后旁路侧：`git rebase bootstrap`（拿到合并后的新 HEAD）继续下一族。
-4. 冲突预期：设计上为零（所有权矩阵）；若出现，停在合并动作、在台账记 `CONFLICT(文件)` 等人裁决。
+- 旁路侧：只管往 `cleanup` 提交自己的批次（fix + docs 双提交照旧）。
+- 主线侧：每批提交完（工作区干净时）`git merge cleanup` + 推送；顺带把旁路台账里的记录誊进 roadmap.md（批次号按时间归位）。
+- 旁路侧在主线合并后 `git rebase bootstrap`，继续下一批。
+- 共享文件（本文件、AGENTS.md）两边都可编辑，但**重排/恢复时必须保留另一班写的段落**——424 前后发生过一次按 HEAD 复原丢掉对侧行的事，别再犯。
 
 ## 4. Agent-1 主线台账（qwen 维护；bootstrap）
 
