@@ -1,0 +1,47 @@
+// 批次 455（3.2 Lowering × 4.x 运行期值表示／5.4 数值原语 · backlog #203①②）：
+// 接收者是**整列句柄**的四则运算必须逐元素算，不许在句柄上做标量运算。
+// 病因（两处，缺一侧都修不上）：
+// ① `src/middle/mir/gen.rs` 的二元 `op_type` 匹配里没有"容器操作数"这一档 ——
+//   `100.0 / df["open"]` 被左边的 F64 抬成 `Type::F64`，于是商（一个堆句柄）被写进
+//   double 槽，`DataFrame::__setitem__` 收到的是 `fptosi(handle)`（改前 IR 实拍），
+//   新列读回 `<null>`；`df["close"] / 2` 则落到 `_ => Type::I64` 兜底。
+// ② 出码层没有列的逐元素路：`/`、`%`、`-` 在 `codegen.rs` 的两处算子臂里都是标量
+//   `sdiv`/`srem`/`sub`，操作数是**列句柄**时就是对指针做算术，商再交给
+//   `py_df_setitem`（`runtime/py_additions.c` 的 `zt_maybe_vec_fwd(val)`）解引用 →
+//   语料崩点 `market_data_fetcher.py:714` `result["vwap"] = result["amount"] / raw_vol`。
+// 修法：`gen.rs` 的浮点臂前加一条容器守卫（只挡 `/ div floordiv % mod - sub`，
+//   比较仍走 Bool）；`codegen.rs` 新增 `column_arith_dispatch` + `gen_column_arith`，
+//   两处算子臂改走运行期 `zt_col_arith(kind, a, b)`（`runtime/py_additions.c` 末尾，
+//   kind = op|左列 4|右列 8，标量恒以 double 位模式跨界，结果按本仓 `%.10g` 文本入列）。
+// 真值：本机 CPython 跑同一批数（`python3 -c 'print(10.0/5.0, 20.0/8.0, 20.0/2,
+//   10.0-1, 100.0/5.0, 10.0%3)'`）= `2.0 2.5 10.0 9.0 20.0 1.0`；pandas 3.0.5 对
+//   str 列的 `/` 直接抛 `TypeError: unsupported operand type(s) for /: 'str' and 'str'`
+//   （`/tmp/b455/truth.py`），所以期望值取算术真值、渲染取本仓 `%.10g` 约定。
+// 两颗二进制实拍（同目录 `target/release/`，改前那颗是 `zetac_pre455`）：
+//   · col/col `len`     改前 run_rc=0 输出 `2`（句柄 sdiv 恰好还是 2 —— 假绿）
+//   · col/int `/`       改前 compile_rc=0 **run_rc=139**
+//   · col/int `-`       改前 compile_rc=0 **run_rc=139**
+//   · float/col `/`     改前 compile_rc=0 run_rc=0 输出 `<null>`（静默错列）
+//   · col/int `%`       改前 compile_rc=0 run_rc=0 输出 `<null>`（静默错列）
+// `//` 不在本夹具断言里：flat 文件里它整个消失（#51 的方言判据），列拿到的是原列。
+import pandas as pd
+df = pd.DataFrame({"close": ["10.0", "20.0"], "open": ["5.0", "8.0"]})
+df["r"] = df["close"] / df["open"]
+print(len(df["r"]))
+print(df["r"][0])
+print(df["r"][1])
+df["half"] = df["close"] / 2
+print(df["half"][1])
+df["adj"] = df["close"] - 1
+print(df["adj"][0])
+df["inv"] = 100.0 / df["open"]
+print(df["inv"][0])
+df["m"] = df["close"] % 3
+print(df["m"][0])
+// expect: 2
+// expect: 2
+// expect: 2.5
+// expect: 10
+// expect: 9
+// expect: 20
+// expect: 1

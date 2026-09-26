@@ -5284,6 +5284,31 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         self.type_map.get(&left_id),
                         self.type_map.get(&right_id),
                     ) {
+                        // BATCH-455 (#203②): a COLUMN operand makes the answer
+                        // another column, never a double. The float arm below typed
+                        // `100.0 / df["open"]` F64, so the runtime handle was stored
+                        // in a double slot and `DataFrame::__setitem__` was called
+                        // with `fptosi(handle)` — the new column read back `<null>`.
+                        // I64 is the handle representation codegen already uses for
+                        // the column-first spelling (`df["close"] / 2`).
+                        // The op list must stay in sync with
+                        // `Codegen::column_arith_dispatch` (codegen.rs): a route that
+                        // fires without this arm re-creates exactly this bug.
+                        _ if !is_cmp
+                            && matches!(
+                                op.as_str(),
+                                "/" | "div" | "floordiv" | "%" | "mod" | "-" | "sub"
+                            )
+                            && (matches!(
+                                self.type_map.get(&left_id),
+                                Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                            ) || matches!(
+                                self.type_map.get(&right_id),
+                                Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                            )) =>
+                        {
+                            Type::I64
+                        }
                         (Some(Type::F32) | Some(Type::F64), _)
                         | (_, Some(Type::F32) | Some(Type::F64)) => {
                             if is_cmp {

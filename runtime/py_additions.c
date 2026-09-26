@@ -3630,3 +3630,53 @@ int64_t py_json_truth(int64_t j) {
     if (k == 2) return py_json_as_f64(j) != 0.0;
     return py_json_len(j) > 0;
 }
+
+// BATCH-455 (#203): element-wise infix arithmetic with a COLUMN operand.
+// Before this, MIR typed `/` `-` `//` `%` by falling through `gen.rs`'s op_type
+// match to `I64` (it has no case for a container operand), so codegen emitted
+// scalar `sdiv`/`sub` on the column HANDLE: `df["close"] / 2` handed
+// `py_df_setitem` a halved heap pointer and `zt_maybe_vec_fwd` dereferenced it
+// (measured rc=139, fixture tests/python_style/t490_column_arith_elementwise.z).
+// `kind` = op in bits 0..1 (0 `/`, 1 `//`, 2 `%`, 3 `-`), bit 2 = `a` is a
+// column handle, bit 3 = `b` is a column handle. The compiler states which side
+// is the column — probing it here is NOT an option: a scalar arrives as the bit
+// pattern of a double, and `0x3ff0000000000000` reads as a plausible vector
+// header address (that exact bit pattern is 454's t488 crash).
+// Scalars therefore always cross as double bits, and an element is read as text
+// when `zt_dyn_is_text` says so, else as the integer it is (a column built from
+// `[1, 2]` holds raw ints while the library annotates columns as vec-of-text).
+// Zero divisors follow IEEE, like pandas: inf/nan in the column, no raise.
+// Appended after the "keep HEAD layout byte-identical" rule (see :3362).
+static double zt_col_elem_num(int64_t e) {
+    if (zt_dyn_is_text(e)) return strtod((const char*)e, NULL);
+    return (double)e;
+}
+
+int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
+    const int op = (int)(kind & 3);
+    const int a_vec = (kind & 4) != 0;
+    const int b_vec = (kind & 8) != 0;
+    if (!a_vec && !b_vec) return 0;
+    int64_t na = a_vec ? zt_vec_len(a) : 1;
+    int64_t nb = b_vec ? zt_vec_len(b) : 1;
+    if (a_vec && b_vec && na != nb && na != 1 && nb != 1) return zeta_raise(1);
+    const int64_t n = a_vec ? na : nb;
+    const double sa = zt_bits_f64(a);
+    const double sb = zt_bits_f64(b);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        const double x = a_vec ? zt_col_elem_num(((int64_t*)a)[i]) : sa;
+        const double y = b_vec ? zt_col_elem_num(((int64_t*)b)[(nb == 1 ? 0 : i)]) : sb;
+        double r;
+        switch (op) {
+        case 0: r = x / y; break;
+        case 1: r = floor(x / y); break;
+        case 2: r = x - floor(x / y) * y; break;
+        default: r = x - y; break;
+        }
+        char buf[64];
+        snprintf(buf, sizeof buf, "%.10g", r);
+        out = vec_push(out, (int64_t)GC_strdup(buf));
+    }
+    return out;
+}

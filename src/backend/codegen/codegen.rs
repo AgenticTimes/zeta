@@ -1971,6 +1971,90 @@ impl<'ctx> LLVMCodegen<'ctx> {
             .is_some_and(|t| matches!(t, Type::F32 | Type::F64))
     }
 
+    /// BATCH-455 (#203): is this operator/column pair one that must be answered
+    /// element-wise? `MIR`'s `op_type` has no case for a container operand, so
+    /// `df["close"] / 2` was typed `I64` and codegen ran scalar `sdiv` on the
+    /// column HANDLE — the halved pointer then reached `py_df_setitem`, whose
+    /// `zt_maybe_vec_fwd` dereferenced it (measured rc=139; see
+    /// `tests/python_style/t490_column_arith_elementwise.z`).
+    ///
+    /// Deliberately NOT `+` or `*`: on a Python list those mean CONCAT and
+    /// REPEAT, so an element-wise answer would be wrong for a real list and the
+    /// two spellings are indistinguishable here (both are `DynamicArray`). They
+    /// stay registered in backlog #203 for the dialect pass.
+    fn column_arith_dispatch(&self, op: &str, left: u32, right: u32) -> Option<i64> {
+        let op_index: i64 = match op {
+            "/" | "div" => 0,
+            "floordiv" => 1,
+            "%" | "mod" => 2,
+            "-" | "sub" => 3,
+            _ => return None,
+        };
+        let is_col = |id: u32| {
+            matches!(
+                self.current_type_map.as_ref().and_then(|tm| tm.get(&id)),
+                Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+            )
+        };
+        if !is_col(left) && !is_col(right) {
+            return None;
+        }
+        // `zt_col_arith` cannot probe which side is the column: a scalar crosses
+        // as the bits of a double, and `1.0`'s bit pattern is a plausible vector
+        // header address (454's t488 crash was exactly that).
+        Some(op_index | if is_col(left) { 4 } else { 0 } | if is_col(right) { 8 } else { 0 })
+    }
+
+    /// Emit `zt_col_arith(kind, a, b)`. A column operand crosses as its handle; a
+    /// scalar ALWAYS crosses as the bit pattern of a double (int literals are
+    /// `sitofp`ed first) so the C side needs no second discriminator.
+    fn gen_column_arith(
+        &mut self,
+        kind: i64,
+        left: BasicValueEnum<'ctx>,
+        right: BasicValueEnum<'ctx>,
+        l_col: bool,
+        r_col: bool,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let mut argv: Vec<BasicMetadataValueEnum<'ctx>> =
+            vec![self.i64_type.const_int(kind as u64, false).into()];
+        for (v, is_col) in [(left, l_col), (right, r_col)] {
+            let word: inkwell::values::IntValue<'ctx> = match v.get_type() {
+                inkwell::types::BasicTypeEnum::IntType(_) => {
+                    if is_col {
+                        v.into_int_value()
+                    } else {
+                        let as_f = self
+                            .builder
+                            .build_signed_int_to_float(v.into_int_value(), self.f64_type, "col_arith_sitofp")
+                            .ok()?;
+                        self.builder
+                            .build_bit_cast(as_f, self.i64_type, "col_arith_bits")
+                            .ok()?
+                            .into_int_value()
+                    }
+                }
+                inkwell::types::BasicTypeEnum::FloatType(_) if !is_col => self
+                    .builder
+                    .build_bit_cast(v.into_float_value(), self.i64_type, "col_arith_bits")
+                    .ok()?
+                    .into_int_value(),
+                _ => return None,
+            };
+            argv.push(word.into());
+        }
+        let callee = match self.module.get_function("zt_col_arith") {
+            Some(f) => f,
+            None => self.module.add_function(
+                "zt_col_arith",
+                self.i64_type.fn_type(&[self.i64_type.into(); 3], false),
+                None,
+            ),
+        };
+        let call = self.builder.build_call(callee, &argv, "colarith").ok()?;
+        Self::call_site_to_basic_value(call)
+    }
+
     fn collect_all_local_ids(&self, mir: &Mir) -> std::collections::HashSet<u32> {
         let mut ids = std::collections::HashSet::new();
         for (_, id) in &mir.param_indices {
@@ -4159,6 +4243,24 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     if args.len() == 2 {
                         let left = self.gen_expr_safe(&args[0], exprs);
                         let right = self.gen_expr_safe(&args[1], exprs);
+                        // BATCH-455 (#203): a column operand takes the
+                        // element-wise route instead of scalar pointer math.
+                        if let Some(kind) = self.column_arith_dispatch(func.as_str(), args[0], args[1]) {
+                            if let Some(v) = self.gen_column_arith(
+                                kind,
+                                left,
+                                right,
+                                kind & 4 != 0,
+                                kind & 8 != 0,
+                            ) {
+                                // A dest with no slot has nowhere to land — fall
+                                // through to the scalar route, don't panic (#176 同族).
+                                if let Some(alloca) = self.locals.get(dest).copied() {
+                                    self.builder.build_store(alloca, v).unwrap();
+                                    return;
+                                }
+                            }
+                        }
                         let is_float = matches!(left.get_type(), inkwell::types::BasicTypeEnum::FloatType(_))
                             || matches!(right.get_type(), inkwell::types::BasicTypeEnum::FloatType(_));
 
@@ -6917,6 +7019,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
                                 return v;
                             }
                         }
+                    }
+                }
+                // BATCH-455 (#203): same element-wise route as the operator
+                // inline arm — see `column_arith_dispatch`.
+                if let Some(kind) = self.column_arith_dispatch(op.as_str(), *left, *right) {
+                    let lv = self.gen_expr(&exprs[left], exprs, Some(*left));
+                    let rv = self.gen_expr(&exprs[right], exprs, Some(*right));
+                    if let Some(v) =
+                        self.gen_column_arith(kind, lv, rv, kind & 4 != 0, kind & 8 != 0)
+                    {
+                        return v;
                     }
                 }
                 // BATCH-299: pass each operand's own id — a `FieldAccess`
