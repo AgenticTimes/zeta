@@ -2859,6 +2859,81 @@ fn parse_shift(input: &str) -> IResult<&str, AstNode> {
     Ok((input, term))
 }
 
+/// PY-A（批次 523）：把 `StrLit % expr` 改写为等价的 FString AST。
+/// 模板中的 % specifier 逐个映射为 __fmtspec__ Call，字面文本保留为
+/// StringLit。%% → 字面量 %。右侧是单表达式或 Tuple 时按序取值。
+/// 仅覆盖单值右操作数的常见场景；Tuple 右操作数的每个元素按序消费。
+fn build_percent_format(template: &str, right: &AstNode) -> AstNode {
+    // 收集右操作数值列表：Tuple → 元素列表，否则单元素
+    let values: Vec<&AstNode> = match right {
+        AstNode::Tuple(items) => items.iter().collect(),
+        other => vec![other],
+    };
+    let mut parts: Vec<AstNode> = Vec::new();
+    let mut lit = String::new();
+    let mut val_idx = 0usize;
+    let b = template.as_bytes();
+    let mut i = 0usize;
+    while i < b.len() {
+        if b[i] == b'%' && i + 1 < b.len() {
+            let next = b[i + 1] as char;
+            if next == '%' {
+                lit.push('%');
+                i += 2;
+                continue;
+            }
+            // 提取 specifier：从 % 到字母（d/s/f/x/X/o/b/e/E/g/G）或结束
+            let spec_start = i + 1;
+            let mut spec_end = spec_start;
+            // 简化处理：跳过可选的 flags/width，到类型字母为止
+            while spec_end < b.len() {
+                let c = b[spec_end] as char;
+                if c.is_ascii_digit() || c == '.' || c == '-' || c == '+'
+                    || c == '#' || c == ' ' || c == ',' {
+                    spec_end += 1;
+                } else {
+                    break;
+                }
+            }
+            let type_char = if spec_end < b.len() { b[spec_end] as char } else { 'd' };
+            let spec_end = if type_char.is_ascii_alphabetic() { spec_end + 1 } else { spec_start };
+            // 把值包进 __fmtspec__ Call
+            if val_idx < values.len() {
+                // flush pending literal
+                if !lit.is_empty() {
+                    parts.push(AstNode::StringLit(std::mem::take(&mut lit)));
+                }
+                let spec_str = &template[spec_start..spec_end];
+                let val = values[val_idx].clone();
+                parts.push(AstNode::Call {
+                    receiver: None,
+                    method: "__fmtspec__".to_string(),
+                    args: vec![val, AstNode::StringLit(spec_str.to_string())],
+                    type_args: vec![],
+                    structural: false,
+                });
+                val_idx += 1;
+                i = spec_end;
+            } else {
+                // 没有更多值了——字面量保留
+                lit.push('%');
+                i += 1;
+            }
+        } else {
+            let end = (i + 1).min(b.len());
+            lit.push_str(&template[i..end]);
+            i = end;
+        }
+    }
+    if !lit.is_empty() {
+        parts.push(AstNode::StringLit(lit));
+    }
+    if parts.is_empty() {
+        parts.push(AstNode::StringLit(String::new()));
+    }
+    AstNode::FString(parts)
+}
+
 // Parse multiplicative (*, /, %)
 fn parse_multiplicative(input: &str) -> IResult<&str, AstNode> {
     // PY-A：shift 上移到比加减松的层后，乘法层的操作数直接接 range（不再经 shift）。
@@ -2937,6 +3012,17 @@ fn parse_multiplicative(input: &str) -> IResult<&str, AstNode> {
             // `**` is right-associative, but that is now `parse_power`'s
             // business; every operator left here is left-associative.
             let (j, right) = parse_range(j)?;
+
+            // PY-A（批次 523）：`StrLit % expr` — Python 的 printf 风格格式化。
+            // 改写为 FString AST 复用已有的 __fmtspec__ lowering，不再落
+            // 整数取模分支产生垃圾值。仅拦截左操作数为字符串字面量的场景。
+            if op == "%" {
+                if let AstNode::StringLit(ref tmpl) = term {
+                    term = build_percent_format(tmpl, &right);
+                    input = j;
+                    continue;
+                }
+            }
 
             term = AstNode::BinaryOp {
                 op: op.to_string(),
