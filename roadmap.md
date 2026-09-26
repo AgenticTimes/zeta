@@ -19830,6 +19830,81 @@ official compile **194/194**、compile+link **191/194**（3 条 link-only：`int
 
 **合并后复跑（主线侧当场取数，`/tmp/b439_gate.log`，二进制 md5 `bed3540ad05e5f019dbd990d247e911d`＝合并树 `cargo build --release` 现建）**：快子集（§门禁节奏那张表的 `--skip-*` 配方，13 步跳过）＝ **`GATE_RC=1`、139s**。逐项对 438 §五：official compile **194/194**、compile+link **191/194**（3 条 link-only 名单逐字相同）· python_style **354 passed / 2 failed / 6 known-fail / 0 xpass**，红源仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ **零新增红**；相对 438 的 353 只 **+1 过**＝旁路带进来的 `t501_ref_pattern_match.z`（`ls tests/python_style/t*.z` 361→362，known-fail/xpass 两格未动，不是判据放松）· compile-diagnostics official **2 文件/6 行**、python_style **239 行/113 文件** 与 438 逐字相同 · comment_drift 复述 **0** · dyn_binding **4 条断言、不一致 0**。**本批无 `.rs` 改动 ⇒ 无锚点重绑。** 附带一条计时读数：同一条配方在 438 是 208s、在合并树是 **139s**，差的 69s 正是 461 那两步并行化落在保留步（`python_style`）上的收益 ⇒ AGENTS.md 那格已随行改口径。**未覆盖的轴点名**：本次只跑快子集，被跳过的 13 步里 `corpus`/`jit`/`truth+diff` 是旁路侧在自己树上单独跑过的（460 那次全量 rc=0），主线侧未在合并树上复现 ⇒ 下一次全量（440/450 那格节奏）之前，合并树的全轴一致性只有"保留步逐项一致"这一层证据。
 
+## 批次 439（3.2／读侧字段布局的**度量口径**）：那把尺打在被解析状态的中途 —— 替身读 125→107，437 的"10 条 declared type 已到手仍回 ("",2)"作废
+
+### 一、结论栏（两栏分开）
+
+| 栏 | 读数 |
+|---|---|
+| **对主线 301 位移** | **0，且是正证据不是空 0**：改前／改后两颗同目录二进制对同一份驱动 `--emit-llvm` 出的 IR **逐字节相同**（4,398,143 B，两侧 md5 `bdbbbe86d273512693d9cefb4d95e00a`）⇒ 本批动的那一行整体在 `env_flag("ZETA_DBG_FA")` 臂内，出码层没有第二格可动。运行侧**未取 A/B**（同一份 IR ⇒ 无对照可判；437 已量过两侧各 2/6 的崩方差，那一格按 437 读）。 |
+| **"修好了"栏** | **空。**本批不修任何一条静默错值，只把量它的尺修对 ⇒ 收益全部落在"下一批改哪个"的判断上。 |
+| 判据层收益 | 437 登记的那条读数作废（下面 §三），替身读的真口径由 **125／145**（中间态）改成 **107**（最终态），且**一行可读**、不再需要配对脚本。 |
+
+### 二、pyramid 归位与头名来源
+
+3.2 Lowering／读侧字段布局（`resolve_field_slot`）。头名＝任务 #170（438 号被嵌套类绑定修吃掉，本项 439 接手）。
+
+### 三、为什么 437 那条读数是假的（实拍，不是推理）
+
+`ZETA-DBG FA read|write` 那行打在 `src/backend/codegen/codegen.rs:6512`，而追加槽（434 的
+`struct_ext_layouts`）那一步在它**之后**（`:6580` 起）⇒ 探针行上的 `variant="" field_count=2` 是**中间态**。
+437 按它登记了"10 条接收者 declared type 已到手却仍回 `("", 2)`"。本批把这 10 条逐条对到收尾：
+
+- `field=_backend` **6 条**在改后二进制上随后解出（`variant="_Impl" -> ext slot 0 of 2`），
+- `field=history` **4 条**在**两颗**二进制上都解出（`ValueRecorder` 的追加格）。
+
+⇒ **那 10 条没有一条是"类型到手却没用上"**，#170 的因果问题本身就是尺读错。顺带量到 **438 未报的一处语料位移**：
+`-> ext slot` 行 **23 → 29**，多出的 6 行全是 `_backend`（接收者类型从 `NautilusJqStrategy` 变 `_Impl` 之后
+追加表才命中）＝438 只报了链接面读数、漏了这 6 行，本行补记（不回改 438 原文）。
+
+配对脚本（`/tmp/b439/pair.awk`，把每条探针行与它后面第一处收尾对上）给出改前／改后：静默替身
+**122 → 116** 行，其中读 **113 → 107**、写 9 → 9。
+
+### 四、改法（一行 + 一条注释，代码批 `19ce411f`）
+
+收尾处（`:6615`）另打一行**最终态**探针，与探针行逐字一条对一条（读 502／写 126 两侧计数相同）：
+
+```
+ZETA-DBG FA {role} final field=… variant=… field_count=… idx=…
+```
+
+旧行原样保留（历史 trace 仍可比），其上方加三行注释点名它是中间态、并写明 437 是怎么读错的。
+`ZETA_DBG_FA` 的引用面本批先查过：`tests/python_style/t463/t464/t466/t469` 四份夹具只在**头注文字**里提到它，
+`tools/`、`docs/`、`src/middle` 里唯一的命中是 `src/middle/mir/gen.rs:1056` 的一句注释 ⇒ **没有任何工具或基线解析这行的格式**，
+加行不碰判据。t469 头注里那两个中间态数（125／145）由本批加四行标注口径，改后单步复跑 `python_style` 读数逐字不变。
+
+### 五、真口径下的现量（这颗二进制，`ZETA_DBG_FA=1`，驱动同目录）
+
+| 项 | 读数 |
+|---|---|
+| `FA read final` | 总 **502** ＝ 替身 **107** ＋ 非替身 **395** |
+| `FA write final` | 总 **126** ＝ 替身 **9** ＋ 非替身 **117** |
+| 替身读 107 的接收者类型 | `Some(I64)` **72** ／ `Named("Any")` **7** ／ 具名类别 **24** ／ `Str` 2 ／ `PyDynamic` 2 |
+| 那 24 行具名类别 | `Series` 6（全 `index`）／`jq_shim___FinanceModule` 5（`FUND_NET_VALUE`）／`…__ValueRecorder` 4（`strategy`）／`DataFrame` 4（`attrs`）／`…MarketDataFetcher` 2 ／`OhlcvRepairReport` 2 ／`PyLogger` 1 |
+| 替身读头名（按名） | `error_code` 11、`schema` 8、`metadata` 8、`positions` 7、`index` 6、`FUND_NET_VALUE` 5、`strategy` 4、`broker` 4、`attrs` 4、`values` 3、`fields` 3、`trading_dates`／`summary`／`stats_returns`／`stats_pnls` 各 2、余 14 名各 1 |
+
+⇒ 下一格的形状已经换掉：437 说的是"类型到手没用上"（假），真形态是**两类各自独立**——**72 行裸 i64 句柄**（没有类别可问，只剩按名反查，而反查只扫 `struct_defs`）与 **24 行类别已知但名字既不在声明格也不在追加表**（`Series.index`/`DataFrame.attrs`/`FinanceModule.FUND_NET_VALUE` 这一族的成因**未测**，与 #163（`@property` 无 setter 路由）同形嫌疑，动手前先定位）。
+
+### 六、门禁（快子集，按 AGENTS.md 门禁节奏那张表的路由）
+
+`bash tools/run_all.sh --skip-corpus --skip-jit --skip-diff --skip-knob --skip-swallow --skip-import --skip-empty --skip-clean --skip-pysrc --skip-sem --skip-ignore --skip-mbvar --skip-emit-stable`
+＝ **`GATE_RC=1`**（`/tmp/b439_gate.log` 134 行），跑在**改后**二进制（md5 `359a22d31e78b943405ce3c2176fb540`）上。
+official compile **194/194**、compile+link **191/194**（3 条 link-only 名单未动）· python_style **354/2/6/0**（红源仍是存量 t231/t233）·
+诊断 official **2 文件/6 行**、python_style **239 行/113 文件** · comment_drift **0** · dyn_binding **4 条/不一致 0** ⇒ **零新增红**。
+夹具头注改动后单独复跑 `python_style`：`/tmp/b439_ps.log` 仍是 **354/2/6/0**、**239 行/113 文件**，逐字不变（改的是注释行）。
+**未覆盖轴点名**：跳过的 13 步未跑（含 `corpus`/`jit`/`truth+diff`），距上次全量＝450 那格之前。
+
+### 七、锚点
+
+本批动 `src/backend/codegen/codegen.rs`（净 +6 行）⇒ `--rebind` 收 **23 条搬家**（`docs/ABI.md` 24 行／40 个数字，基线 `abi_anchors.tsv` 23 行随之刷新）。
+**对照口径**：改前在隔离 worktree 取 HEAD 自基线＝漂移 **28**／新 **10**／消失 **14**／同键多义 **8** 组；本批复核＝漂移 **27**／新 **10**／消失 **12**／同键多义 **7** 组、rc 仍 **1** ⇒ 净中性偏改（那 28 条不是本批造成的：436 入册时是 23 条，旁路 460/461 带进 `pattern.rs`、`run.sh` 的行号搬家后涨到 28）。
+**余量登记**：**39 条**引用按 436 的护栏拒改（同键多义／多命中／零命中／消失未配对），其中 `tests/python_style/run.sh:16`、`:96`、`:136` 三条是旁路侧 461 造成、其分支对 `docs/ABI.md` 只读无权重绑 ⇒ 按合并协议归主线代做，已记入 backlog §4.1，下一起手批手改（**"漂移 27"≠"引用行号对"**，#167 余项那条口径照旧有效）。
+
+### 八、新登记与队头
+
+- **一条度量完整性新形态**：同一颗 `zetac_pre439`（md5 `bed3540a…`）、同一份驱动，11:36 那趟链接产物 **586,696 B**、11:50 起三趟全为 **603,208 B**（三趟 md5 互不相同、尺寸稳定）⇒ **"产物尺寸变了没"不能当位移判据**；437 入册的"两侧都 586,768 B"一格按此重读。成因**未定位**（嫌疑＝链接期参与的运行期对象集合随门禁重编变化，本批未查）。
+- 新队头＝**#171**（try 包住的幽灵成员调用把整个方法体静默丢掉，438 登记）；字段族内按本批现量排下一格＝§五 那两类的第 2 类（24 行具名类别，先定位再动手）。OPEN 净增 0（#170 结案，两条余项折进 backlog 同一行）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
