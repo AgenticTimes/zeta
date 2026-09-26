@@ -3680,3 +3680,63 @@ int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
     }
     return out;
 }
+
+// ============================================================================
+// 批次 456：列的元素表示归位（4.x 值表示 × 3.2 类型基础）
+//
+// `pd.DataFrame({"v": [10, 20]})` 存进 map 的是一个 **vec<i64>**（裸整数逐个
+// `vec_push`），而本仓 shim 的列约定是 `map<str, vec<str>>`：
+// `DataFrame::__getitem__ -> lt(vec, str)` 只给同一个句柄**换标签**，没有任何一处把
+// 元素改写成文本，于是元素读按 `char*` 交给 `println_str` → 对整数 10 做 strlen。
+// 判据不问内容、只问登记：出码层在 `DictInsert` 处本来就把值的静态类型登记进
+// `zeta_map_set_tag` 侧表（批次 456 起 4..7 ＝ vec<str>/vec<i64>/vec<f64>/vec<bool>），
+// 读边界据此把非文本列逐元素渲染成 `%.10g` 文本（与 `zt_col_arith` 同一约定）。
+// 归位只能落在读边界：py 模式类的 `__init__` **体**在解析层只被用来挖字段布局、语句
+// 从不发射（实测：`def __init__` 里的 `note()` 一声不出），构造点没有可插入的代码。
+// 标量列、已文本化的列、未登记的列一律原样返回 —— 不复制、不猜。
+// ============================================================================
+int64_t zeta_map_value_tag(int64_t map, int64_t key);
+
+static int64_t zt_word_to_text(int64_t w, int64_t elem_tag) {
+    char buf[64];
+    switch (elem_tag) {
+    case 6: {
+        double d;
+        memcpy(&d, &w, sizeof d);
+        snprintf(buf, sizeof buf, "%.10g", d);
+        break;
+    }
+    case 7:
+        snprintf(buf, sizeof buf, "%s", w ? "True" : "False");
+        break;
+    default:
+        snprintf(buf, sizeof buf, "%lld", (long long)w);
+        break;
+    }
+    return (int64_t)GC_strdup(buf);
+}
+
+// `elem_tag` is the registered element representation of `vec` (5=i64, 6=f64 bit
+// pattern, 7=bool). 4 (already text) and 0 (unknown) return the handle unchanged
+// — no copy and no guessing at the content.
+int64_t zt_vec_textify(int64_t vec, int64_t elem_tag) {
+    if (!vec || elem_tag == 4 || elem_tag == 0) return vec;
+    const int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) {
+        out = vec_push(out, zt_word_to_text(((int64_t*)vec)[i], elem_tag));
+    }
+    return out;
+}
+
+// One column of a frame, as the library annotates it: `vec` of `char*`.
+// The tag is looked up with the word the WRITE side registered (codegen passes the
+// field's own value, unresolved), so a grown dict still finds its entry; only the
+// value read goes through `map_resolve`.
+int64_t zt_col_as_text(int64_t map, int64_t key) {
+    const int64_t kh = map_str_key(key);
+    const int64_t tag = zeta_map_value_tag(map, kh);
+    int64_t m = map ? map_resolve(map) : 0;
+    if (!m) return 0;
+    return zt_vec_textify(map_get(m, kh), tag);
+}

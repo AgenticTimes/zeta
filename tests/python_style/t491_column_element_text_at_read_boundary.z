@@ -1,0 +1,57 @@
+// 批次 456（4.x 运行期值表示 × 3.2 类型基础）：列的**元素表示**必须在读边界对上
+// shim 声明的 `vec<str>` 合同，不许只换标签不改元素。
+// 病因：`pd.DataFrame({"v": [10, 20]})` 的字面量把 `10`、`20` 当作**裸整数**逐个
+//   `vec_push` 进一个 vec<i64>，而本仓 shim 的列约定是 `map<str, vec<str>>`（cell 是
+//   `char*`）；`DataFrame::__getitem__ -> lt(vec, str)` 只给同一个句柄换标签，于是元素读
+//   编译成 `inttoptr`+`getelementptr i64`+`load` 后把整数 10 当 `char*` 交给 `println_str`
+//   → `_platform_strlen(10)`（改前实拍 **run_rc=139**，stdout 空）。
+// 修法（两处，登记 + 读边界）：
+//   ① `src/backend/codegen/codegen.rs` 的 DictInsert 登记扩号 4..7
+//     （4=vec<str> 5=vec<i64> 6=vec<f64 位模式> 7=vec<bool>）；`tokio_runtime_stub.c:1960`
+//     那个唯一既有消费者把新号留在 `default:` 臂里，它的读数不变。
+//   ② `pylib/pandas.z` 的 `column`/`__getitem__` 改走 `zt_col_as_text(self.data, key)`
+//     （`runtime/py_additions.c` 末尾）：按登记决定要不要逐元素渲染成文本，
+//     4/0（已文本、未登记）原样返回句柄 —— 不复制、不猜内容。
+// 边界（5 号只发给**纯整数元素**，第一版把 `_ => 5` 写成兜底，实测把
+//   `DataFrame({"d": [date(2024, 3, 15), …]})` 的**对象句柄列**也渲染成十进制数字，
+//   `df["d"].max().strftime(...)` 打回 `11092155912246977-06-04` —— 邻居夹具
+//   `t467_bare_member_registry_bind` 当场由绿转红（`s: 2024-03-15` → 上面那行）；
+//   收窄成显式整型臂后两颗夹具同时回绿（本夹具九项 + t467 四项）。
+//   本夹具因此**不**再断言对象列的元素字段读：`df["d"][0].year` 在收窄后的二进制上
+//   打 19797（真值 2024），那是"句柄列的元素读按错字段取"的另一格，独立登记。
+// 归位**只能**落在读边界：py 模式类的 `__init__` **体**在解析层只被用来挖字段布局，
+//   语句一条都不发射（实拍：`def __init__` 里的 `note()` 一声不出，构造点 IR 只有
+//   `runtime_malloc` + 一次字段 store）。所以构造点没有可插代码的地方，本批也顺手把
+//   `if not data: data = {}` 那条守卫的"死码"身份登记进 roadmap（不是本批修的）。
+// 真值：本机 pandas 3.0.5 `pd.DataFrame({"v":[10,20],"b":[True,False],"s":["aa","bb"]})`
+//   → `df["v"][0]=10`、`len(df["v"])=2`、迭代 `10 20`、`df["b"].tolist()=[True, False]`
+//   （`/tmp/b456/truth456.py` 实拍）。整列 `print` 的**渲染取本仓约定**：列合同是文本
+//   cell，故打 `["10", "20"]`（pandas 的 Series 换行表形不是本 shim 的表示）。
+// 负控（防"顺手把所有 vec 都文本化"）：普通 dict 的值 **不**经过列读边界，
+//   `d["v"][0] + 1` 仍是整数算术打 `11`；文本列的元素读原样打 `aa`（句柄未被复制）。
+// 两颗二进制实拍（同目录 `target/release/`，改前那颗是 `zetac_pre456`）：
+//   改前 = 改前编译器 + `git show HEAD:pylib/pandas.z`（`zt_col_as_text` 只在改后那条
+//     合并后的 `.o` 里，改前路径根本不引用它，所以加法运行期不掩住缺陷）：
+//     compile_rc=0、**run_rc=139、stdout 0 字节**
+//   改后 = compile_rc=0、run_rc=0、stdout 九行即下面九个 expect。
+import pandas as pd
+df = pd.DataFrame({"v": [10, 20], "b": [True, False], "s": ["aa", "bb"]})
+print(df["v"][0])
+print(df["v"][1])
+print(len(df["v"]))
+for x in df["v"]:
+    print(x)
+print(df["b"][0])
+print(df["b"][1])
+print(df["s"][0])
+d = {"v": [10, 20]}
+print(d["v"][0] + 1)
+// expect: 10
+// expect: 20
+// expect: 2
+// expect: 10
+// expect: 20
+// expect: True
+// expect: False
+// expect: aa
+// expect: 11

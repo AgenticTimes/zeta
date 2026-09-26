@@ -5349,6 +5349,16 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // Record this value's static type for the dict value side
                 // table: map slots are raw 64-bit, so json.dumps needs it.
                 // 0 = int/unknown, 1 = f64, 2 = str, 3 = bool.
+                // 批次 456: container values got their own numbers (4..7) because a
+                // column map (`pd.DataFrame({...})`) must know whether its values
+                // are TEXT cells or raw words — the shim's `vec<str>` contract is
+                // only honest after the elements have been rendered. The json dumper
+                // (`tokio_runtime_stub.c:1960`) leaves every new number in its
+                // `default:` arm, so its readings are unchanged by this.
+                // 5 is restricted to PLAIN integer elements on purpose: a
+                // `DynamicArray(Named)` holds instance HANDLES, and rendering those
+                // as digits is what made `DataFrame({"d": [date(2024,3,15)]})` read
+                // back year 11092155912246977 (measured on the first 456 binary).
                 let tag: u64 = match self
                     .current_type_map
                     .as_ref()
@@ -5357,6 +5367,21 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     Some(Type::F64) | Some(Type::F32) => 1,
                     Some(Type::Str) => 2,
                     Some(Type::Bool) => 3,
+                    Some(Type::DynamicArray(el)) => match **el {
+                        Type::Str => 4,
+                        Type::F64 | Type::F32 => 6,
+                        Type::Bool => 7,
+                        Type::I8
+                        | Type::I16
+                        | Type::I32
+                        | Type::I64
+                        | Type::U8
+                        | Type::U16
+                        | Type::U32
+                        | Type::U64
+                        | Type::Usize => 5,
+                        _ => 0,
+                    },
                     _ => 0,
                 };
                 if let Some(f) = self.module.get_function("zeta_map_set_tag") {

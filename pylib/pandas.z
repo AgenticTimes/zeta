@@ -30,11 +30,17 @@ class DataFrame:
         # 参数必须叫 key（勿用 name）：批次八十八证实形参名 name 会让方法不生成。
         # 体里也必须用 key —— 改名时漏改引用会静默取错/段错误（批次九十五）。
         # key: str 注解（批次一四四）：map 下标的键哈希由键的静态类型决定。
-        return self.data[key]
+        # 批次 456：本 shim 的列约定是 `map<str, vec<str>>`（cell 是 `char*`），但字面量
+        # `{"v": [10, 20]}` 存进来的列是 vec<i64>（元素是裸整数），`-> lt(vec, str)`
+        # 只给同一个句柄换标签 —— 元素读于是按 `char*` 交给 `println_str`，对整数 10 做
+        # strlen（实测 run_rc=139）。归位在**读边界**：`zt_col_as_text` 按出码层
+        # `zeta_map_set_tag` 的登记决定是否需要把非文本元素逐元素渲染成 `%.10g` 文本
+        # （与 455 的 `zt_col_arith` 同一约定）；文本列/标量列/未登记列原样返回。
+        return zt_col_as_text(self.data, key)
 
     def __getitem__(self, key: str) -> lt(vec, str):
         # 与 column 同语义；下标 `df["col"]` 分派到这里（批次九十九）。
-        return self.data[key]
+        return zt_col_as_text(self.data, key)
 
     def select_columns(self, cols: lt(vec, str)) -> DataFrame:
         # 批次 398：`df[["a", "b"]]` 在 pandas 里是**按列名取子集**（list-like 键 =
