@@ -183,6 +183,7 @@
 | 522 | cleanup | **函数返回字符串列表元素丢类型**钉住：.upper() 进 list 返回后元素打地址——非类方法特有（普通函数同病）⇒ gen.rs 车道：返回列表元素类型标记传播缺失。类方法版（512）是同根的类上下文实例 | runtime mismatch 钉住 | ✅ 定性批 |
 | 523 | cleanup | **splitlines/rsplit 缺 C shim 钉住**：两个方法编译期缺绑定——strip 族/sort 对照全对 ⇒ 方法覆盖面扫描中仅剩的缺口（runtime+registry 车道）。扫描完成度：str 方法 ~30 个中 28 对 | diff 无回归 | ✅ 定性批 |
 | 524 | cleanup | **稳态值守批**：qwen 未合并 497–523（6 提交差）；XPASS 0（#188/#189/#190 未修）；python_style 370 过/2 红/16 kf 稳定；diff 无回归。**我车道 actionable 清空**——#81 等轴F、#52 用户裁定不改、其余全在主线 | 全绿 | ✅ 稳态批 |
+| 523 | cleanup | **% 格式化操作符修复**（⑭ 普查最高频缺口）：StrLit % expr 改写为 FString AST（复用 __fmtspec__ lowering），单/多 specifier + %% 转义 + 无值兜底。实测 %d/%s/%.2f/%x 四形态与 CPython 一致；t513 XPASS 确认；known-fail 16→14。真除法（truediv）同批发现但不属本批 | cargo 142/0 · py 370/2/14/2xp | ✅ 修复批 |
 | 525 | cleanup | **稳态值守**：qwen 452 收尾簿记中、未开 453；XPASS 0；diff 无回归。我车道 actionable 清空——等主线 453 开工修普查族（简报在手）或合并 497–524 | 全绿 | ✅ 稳态批 |
 | 517 | cleanup | **OOP 组合普查三四例**：① 类变量自增崩溃（Counter.count += 1 把 int 0 当字典解引用 rc=1——类级属性读写未实现）② 类方法内 self.data.get(k, default) 全打地址（set ✓ get ✗——⑫ 家族扩展）。对照组：普通函数 dict.get ✓ | runtime verdict 钉住 | ✅ 定性批 |
 | 518 | cleanup | **稳态确认批**：XPASS 0（#188/#189/#190 未修）、diff 无回归、__pycache__ 清理。qwen 451 已将我方组合崩溃落号 **#194 并列为 452 队头**（复现件 /tmp/b449/c511/），协作闭环运转中。cleanup 领先 16 提交，等主线合并 | 全绿 | ✅ 稳态批 |
