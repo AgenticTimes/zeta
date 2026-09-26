@@ -1,0 +1,10 @@
+// 批次 496（旁路）：str.find 一参形式——registry 补一行 W str find host_str_find
+// （C shim 早已存在于 tokio_runtime_stub.c:200，纯数据修复，backlog #188 的一半）。
+// 两参形式（带 start）仍缺三参 shim，移交主线。
+s = "abcd"
+print(s.find("c"))
+print(s.find("cd"))
+print(s.find("z"))
+// expect: 2
+// expect: 2
+// expect: -1

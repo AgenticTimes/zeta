@@ -334,6 +334,7 @@ F re escape py_re_escape args=i64 ret=str
 W PyPattern search py_pattern_search args=2 ret_handle=PyMatch
 W PyPattern match py_pattern_match args=2 ret_handle=PyMatch
 W PyPattern fullmatch py_pattern_fullmatch args=2 ret_handle=PyMatch
+W str find host_str_find args=2
 W PyPattern findall py_pattern_findall args=2 ret=vecstr
 W PyPattern finditer py_re_finditer args=2 ret=vecmatch
 W PyPattern split py_pattern_split args=2 ret=vecstr
