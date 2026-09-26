@@ -20381,6 +20381,83 @@ official **194/194** compile、**191/194** compile+link（3 条 link-only＝`int
 
 **OPEN 账务**：#188、#189 因旁路移交新登记 ⇒ **净增 +2**（22 → 24，≤30）。
 
+## 批次 446（3.2 Lowering／#182 W1010 族"逐名裁决"第一格）：`HashMap::new()` 下成空 map、quantum 短写接上路由；普查 65 → 59 行，一条名字不少地报给对方；主线位移 0（正证据）
+
+### 一、批次身份与结论速览
+
+| 项 | 读数 |
+|---|---|
+| 归属层 | **3.2 Lowering**（`src/middle/mir/gen.rs` 的 `AstNode::PathCall` 臂）。4.x 发射层只是**受益方**：本批不新增任何运行期符号，只调用已有宿主。 |
+| 任务号 | **#182 半收**——65 行里裁掉 6 行；余 59 行按"修法代价"重新分堆（§五），其中 A 堆 23 行转成新号 **#190** |
+| 代码提交 | **`5782dc6a`** ＝ `gen.rs` **+34/−4**（三坨：quantum 两条臂的判据各改形、`HashMap` 一条 20 行新臂）＋ 夹具 `t477_w1010_hashmap_quantum.z` **37 行／3 条值断言** ＋ `docs/ABI.md` 5/5 ＋ `abi_anchors.tsv` 6/6 |
+| 修好了吗 | **这两名修好了**：`HashMap::new()` ⇒ 真 map 句柄（`len=1`、`m[1]=7` 读回 7），`import std::quantum;` 后的 `quantum::QubitState::one()` ⇒ 1。夹具改前实拍 **FAIL**（`len=0`/`get=0`/`norm=0`＋两条 W1010），改后 **PASS**、stderr 0 条 W1010。 |
+| 推进主线了吗 | **主线 301 位移 0**（acceptance IR 逐字节相同，md5 与 444/445 在册值同一个 ⇒ 连续三批 0）。收益在**普查面 −6 行**与 selfhost 的 `actor/map.z` 取值，不在主线上。 |
+| OPEN 账务 | **净增 +1**（24 → 25，≤30）：#182 不关（59 行仍在），拆出 #190 承接"外部库函数宿主"那一堆。 |
+
+### 二、定位（Phase 1，两颗二进制同在 `target/release/`）
+
+改前那颗是**从 HEAD 源码重编出来的**：备份改后 `gen.rs`（md5 `fa6b6eda…`）→ `git checkout HEAD~1 -- src/middle/mir/gen.rs`（`e199254d…`）→ 重编 ⇒ md5 **`722316ea…`**，与本批第一次构造的那颗 pre **逐字节相同**（两次独立构造同哈希＝口径没漂）。改后那颗 md5 `2d9c6f7c…`，**提交后 `touch` 重编仍是同一哈希** ⇒ 门禁跑的是已提交的码。
+
+一条族因、三处独立缺口（都在 `PathCall` 臂内，判据各问各的对象）：
+
+1. **`HashMap::new()`**：`gen.rs` 里那条**名表路由**（`func_ret_types.contains_key(&func_name)`）在名表没有 `HashMap` 时不命中，而它后面的兜底臂带 `method != "new"` 的排除 ⇒ 整条臂走完既不 `stmts.push` 也不 `exprs.insert`，交回幽灵 id。后果不是"打个 0"这么简单：`m[1] = 7` 把 7 写进 **0 号句柄**、`len(m)` 读 0 —— **静默错值**，直到 443 的出口才出声。普查 5 行（`zeta_src/runtime/actor/map.z:17`、`tests/stdlib-foundation/collections_test.z:40` 等）。
+2. **quantum 两条臂的判据问的是前缀拼写**（`path[0]=="std" && path[1]=="quantum"`）⇒ `import std::quantum;` 之后写 `quantum::Circuit::new(2)` 不命中。普查 1 行；官方语料 `integration_test_program.z` 的 W1010 就是这一条（§四里那 −1 行的归因）。
+3. 本批**没动**的两处判据，逐个看过才留下：`std::memory::capability::new`（`:13158` 仍是前缀死路径）——65 行名单里没有它的成员，改了没有实测受益方；`std::time::now`（`:13094`）——同一族因、但它的宿主形状是另一件事，随 #190 走。
+
+### 三、修法（一处接线 + 一处判据换问对象）
+
+1. **`HashMap` 臂**（`gen.rs:13245` 起 20 行，**放在名表路由之后、平台类兜底之前**）：`args.is_empty() && path.last()=="HashMap"` ⇒ 发 `MirStmt::MapNew{dest}`、登记 `exprs` 与 `Type::Named("map", [])`。三条理由都当场核过：
+   - 宿主是真的：`int64_t map_new(void)` **定义**在 `runtime/tokio_runtime_stub.c:213`（不是 declare），对照 `fs_read_to_string` 的链接实拍（§五）。
+   - 语句不是新形状：`MirStmt::MapNew` 就是 dict 字面量（`gen.rs:5540`）与 `dict(m)`（`gen.rs:8456`）已在发的那条，`map_insert`／`len`／`[]` 认的就是这个句柄＋这个标签。
+   - **定义优先**：项目真写了 `fn HashMap::new()` 时，名表那条路由在它上面先命中 ⇒ 本臂只在"没人定义"时兜。
+2. **quantum 判据换问对象**：`path[0]=="std" && path[1]=="quantum"` ⇒ `path[..path.len()-1].iter().any(|s| s=="quantum")`（"末段之前有一个 `quantum` **模块段**"）。末段是类别名，所以 `quantum` 必须在它之前 —— `quantum::new()` 保持原答案，不被这条放宽误伤。两条臂同形改，`QubitState` 那条的 `matches!` 方法集与 `args.len() <= 1` 一个字未动。
+3. **夹具判据的选择理由（不是随手挑的）**：`QubitState::one()` 的宿主 `zeta_qc_is_normalized`（`runtime/py_additions.c:2638`）**恒返回 1** ⇒ 可钉进 `// expect:`；`Circuit::new` 返回堆地址、非确定（418 在册）⇒ 只能进普查计数，不进断言。
+
+### 四、门禁读数（快门禁子集，13 步；改动面＝`src/middle`，全量在 450 那格）
+
+| 步 | 改前 | 改后 | 判读 |
+|---|---|---|---|
+| official | compile 194/194、compile+link 191/194、link-only 3 | **逐项相同**（缺的符号名也逐字相同：`_predict,_train`／`_factor,_optimal_iterations,_success_probability`／`_as_str,_into_iter,_is_alphabetic,_push`） | 无编译面回归 |
+| official 诊断面 | 5 文件 / **15** 行 | 5 文件 / **14** 行 | **−1 行逐项归因**：W1010 标签多重集两侧差集＝`quantum::Circuit::new()` ×1 消失，其余 11 条（`std::fs::read_to_string`×4、`std::env::var`… 见 `/tmp/b446/official_diag_pre.txt`）逐字仍在 ⇒ 是 §二.2 那条修好的，不是丢诊断 |
+| python_style（374 例） | 未取（见下条） | 361 passed / 2 failed / 11 known-fail / 0 xpass；诊断面 115 文件 / 243 行 | 计数 `361+2+11=374`＝`ls tests/python_style/t*.z` **374** 逐项对上；红源仍是存量 t231、t233 两条 ⇒ **零新增红**；passed 360→361 与诊断面 243 行不变，差的一格＝本批新夹具 t477 |
+| 新夹具 t477 | **FAIL**（`expected: len=1 \| get=7 \| norm=1`／`actual: len=0 get=0 norm=0`，stderr 两条 W1010：`HashMap::new()`、`quantum::QubitState::one()`） | **PASS**，stderr W1010 **0** 条 | 改前实拍在 `/tmp/b446/red/wd_pre/verdict`（走 `run_one.sh`，它读环境里的 `ZETAC`） |
+| selfhost 台账 | 共 51／通过 50／已登记失败 1／新失败 0 | **逐项相同**，rc=0 | 无摘行、无新钉（`actor/map.z` 443 已摘；本批改的是它的**取值**，`--no-link` 判据看不见） |
+| 全仓 `.z` 普查（988 个 tracked，`--no-link`） | W1010 **65** 行 | W1010 **59** 行 | 差集**逐字只有 6 条**：`HashMap::new()`×5 + `quantum::Circuit::new()`×1 ⇒ **0 条新告警**（`diff` 只有 `<`、无 `>`，见 `/tmp/b446/{pre,post}.labels`） |
+| 主线 301 位移 A/B | `--emit-llvm` 产物 4,401,701 B / 113,166 行 / md5 `4c4974216c3737309ac806cd5141a55c` | **逐字节相同**（`cmp` 无输出） | **位移 0，正证据**；同一 md5 也是 444/445 的在册值 ⇒ 连续三批不动主线。运行侧未取 A/B（同一份 IR ⇒ 无对照可判，口径照 441/443）。 |
+| comment_drift / dyn_binding | — | 0 处复述 / 4 条断言不一致 0 | 不变 |
+| 锚点核对 | 445 终态：漂移 26 / 新 11 / 消失 12，rc=2 | 改后先读到 **漂移 32**，`--rebind` 后**回到 445 终态逐字相同**（`diff` 空） | +6 全部是 `gen.rs` 的锚点（`:13289→13319`、`:13293→13323`、`:13390→13420`、`:14036→14066`、`:14064→14094`、`:14682→14712`）＝本批 +22 行的**机械搬家**，已重绑（`docs/ABI.md` 5 行、tsv 6 行），不是内容漂移 |
+
+- **改前的 python_style 整趟未取**：443 在册的那条坑仍在（`run.sh:22` 自己给 `ZETAC` 赋值 ⇒ `ZETAC=` 覆盖在这一步不生效），本批按 443 的处置只取 official 侧改前对照 + 单夹具改前实拍（`run_one.sh` 那条路是通的，已复测）。工具面归旁路，未动脚本。
+- **`--dump-mir`/IR 之外的运行侧非确定性**未涉：本批不动发射序。
+
+### 五、#182 剩下的 59 行：按"修一个名字要付什么"重新分堆（口径与 443 §五 不同）
+
+443 的三堆按**名字种类**分（构造子／外部库函数／仓内自举源），那个口径看不出"修一个名字要付什么"——本批正是在这里分岔：`HashMap::new` 与 `std::fs::read_to_string` 按种类各归一堆，实际差别却是**一个有现成 C 宿主、一个链接实拍没有**。新口径按**修法代价**分三堆，每堆给一条实测边界：
+
+| 堆 | 行数 | 名单（逐名计数在 `/tmp/b446/post.labels`） | 修一个名字要付什么 |
+|---|---|---|---|
+| **A 外部库函数：AOT 侧根本没有 C 宿主** | **23** | `std::fs::read_to_string` 4、`std::env::var` 4、`std::fs::remove_file` 2、`std::time::SystemTime::now` 2、`std::time::Instant::now` 2、`Duration::from_secs` 1、`from_millis` 1、`std::thread::sleep` 1、`std::str::from_utf8` 1、`std::env::{temp_dir,set_var,remove_var,current_dir,args}` 各 1 | **要在 `runtime/*.c` 里新写宿主**。实拍：`grep -l read_to_string runtime/*.c` ⇒ **无命中**，只有 `src/runtime/fs.rs`（Rust 侧 `#[no_mangle] extern "C"` ＋ JIT 的 `pylib/jit_mappings.txt` 一行，只服务 `--jit`）；AOT 链接当场证伪 —— `/tmp/b446/host_probe.z` 声明 `extern fn fs_read_to_string` 后编译：**`Undefined symbols for architecture arm64: _fs_read_to_string`**。而且 `fs_read_to_string` 返回的是 NUL 结尾 cstring，不是本仓 str 布局 ⇒ 补了宿主还得改值形状，否则 `.len()`／print 读垃圾。**本批故意不接这一族**：接了就是把"静默 0"换成"整颗二进制链接失败"，正是 #428 那条按名抛异常要避开的事。⇒ **新号 #190**。 |
+| **B 仓内自举源的裸构造子** | **28** | `Parser::new` 9、`Resolver::new` 4、`IRGen::new` 4、`Mir::new` 3、`LLVMCodegen::new` 3、`BufStream::new` 2、`Map::new` 1、`Container::new` 1、`Client::new` 1 | **要 crate/模块树**：这些名字在 `zeta_src/**` 里由 `use` 提升而来，下型侧此刻只有裸方法名＋一条写死前缀的判据，没有"这个裸名属于哪个模块"的信息 ⇒ 逐名补臂只是把 9 条 `Parser::new` 换成 9 条更难查的静默值。**与 #136/#9（跨模块同名成员别名表歧义）同根**，不自本批开新臂。 |
+| **C 全仓没有定义的名字** | **8** | `CString::new` 2、`ml::neural::Network::new` 2、`ShorsAlgorithm::new` 1、`GroversAlgorithm::new` 1、`memory::DynamicArray::new_in_region` 1、`outer::inner::hello` 1 | **要的是裁决不是代码**：C 里 `outer::inner::hello` 与 `new_in_region` 是**测试语料里就写错的名字**（正解可能是"该报错"而非"该返回 0"），`GroversAlgorithm`/`ShorsAlgorithm`/`Network` 是官方夹具里的量子/ML 假平台对象。逐条要么补宿主要么改夹具期望，需一次口径裁决。 |
+
+23 + 28 + 8 = **59，与普查读数逐行闭合**（分堆计数来自 `/tmp/b446/post.labels` 的逐名直方图，其 `awk` 求和＝59＝`grep -c W1010` 的同一颗数）。
+
+- **负证据的边界说明**：A 堆的"没有 C 宿主"是**逐名 grep ＋ 一条链接实拍**，不是推论外推——`env`/`str`/`time` 那 12 行只做了 grep（`runtime/*.c` 无命中），**未逐个做链接实拍**；若有人据此接线，请先补链接探针。
+- **一条量法坑（第 70 条候选）**：W1010 的标签**恒打 `{method}()`、不带实参个数**，所以按字面 `"Parser::new()"` grep 会得 **0 命中**（真身在 `BufStream::new(3)` 这类带实参的调用点上）。按标签计数一律先剥括号或用前缀，否则会把这一族量成假零成员。
+
+### 六、锚点
+
+- 代码：`gen.rs:13108`（quantum ctor 注释）／**`:13117` 判据**、`:13146`（QubitState 同形判据）、`:13245`–`:13264`（`HashMap` 新臂，`if` 在 `:13256`）；消费侧未动：`mir.rs:199`（`MapNew`）、`codegen.rs:5168-5180`（`map_new` + `ptr_to_int`）、`gen.rs:5540`/`:8456`（同语句的既有生产者，两处当场复看）。
+- 夹具：`tests/python_style/t477_w1010_hashmap_quantum.z`（37 行／`len=1`、`get=7`、`norm=1`）。
+- 读数：`/tmp/b446/` —— `c_{pre,post}_nolink.txt`（65／59）、`{pre,post}.labels`、`gate_post.log`、`official_diag_pre.txt`／`/tmp/zeta_official_diag.txt`（15／14）、`ir_zetac{,.pre446}.ll`（md5 同）、`anchor_{post,after_rebind}.txt`、`selfhost_{pre,post}.log`、`red/wd_{pre,post}/verdict`、`host_probe.z`（链接失败实拍）。
+- 在册依据：443 §五（这一族的三条清单与"逐名裁决"要求）、#428（按名抛异常的定价，本批据此**不**接 A 堆）、#136/#9（裸名跨模块归属，B 堆的根）。
+
+### 七、OPEN 账务与下一批
+
+- #182 **不关**（59 行仍是静默错值，只是不再崩、并且出了声）⇒ 措辞按本批改窄：65 → **59 行**，443 的"按名字种类"三堆改判为"按修法代价"三堆（A/B/C，见 §五：种类口径看不出宿主在哪一侧）。
+- **#190 新登记**（A 堆 23 行）：`std::fs`／`std::env`／`std::time`／`std::str`／`std::thread` 在 AOT 侧无 C 宿主；**净增 +1**（24 → 25，≤30）。
+- **下一批**：队头仍按已实测损害量走 —— **#190 的宿主批**（23 行，但要新增运行期符号 ⇒ 属跨界面，需 `runtime/*.c` 授权面）vs **#165/#177**（读侧布局 14 条）vs **#183 余格**（`s.find(t,start)` 链接期缺符号）vs **#48**（等用户方言裁决）。按 ROI 表交用户裁定后再开，不顺着"下一批默认候选"走。下一次全量门禁＝**批次 450**。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
