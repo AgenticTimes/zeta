@@ -20742,6 +20742,72 @@ match=356 / match_min=356 / 88.8%`；用新基线**复跑判定步**确认 `CONF
 - **新登记形态并进 #163/#177 注记，不另起号**：`tests/unit-tests/quantum_basic.z` 的 7 条替身读（`im`/`re`/`qubits`，接收者 typed I64）是**门禁 official 步的首批成员**；它是 compile-only 步骤 ⇒ 不影响 rc，但 official 诊断面从 14 行走成 21 行，下一批动诊断面时先按 per-file 明细判（#180 的债本批已按它的口径打过样）。
 - **队头换格**：本批吃掉的不是数值缺陷而是**出声面**，主线 301 的运行崩点仍卡在 **#145**（`str_trim+24`，需 `runtime/py_additions.c` 授权）；纯编译器侧的下一格按已实测损害量排＝**#182 余 34 行**（C 堆 11 行＋B 堆余量）、**#167 余项**（键结构迁移：把区间终点写进键，本批 §六 那条两趟才收完就是它的直接代价）、**#52**（裸行号引用看不见）。**下一次全量门禁＝批次 450**。
 - **仍未清的欠账**（第八次登记）：`tests/python_style/run.sh:16/:96/:136` 三条越界引用（该文件 93 行）——`run.sh` 属工具面，2026-09-26 裁定归 zcode；本批按裁定**没动**，改判为**移交旁路侧登记**（自 439 起主线已连续四批说"下一批改"，这条不再占主线的账）。
+
+## 旁路并入（2026-09-26，主线侧代录）：批次 497–506 ＋ 批次 448 收尾合并
+
+合并提交 `a3c6abff`（`git merge cleanup`）。**并入面比合并信息里写的宽**：标题写"503–506"，实为
+**19 颗提交 / 批次 497–506 十批**（`git rev-list --count 2539171e..a3c6abff` = 19，首颗 `2325b715`＝497，
+末颗 `474fe2f2`＝506 的台账行）—— 497–502 之前没进过任何合并窗口。提交不回改，本段以提交清单为准。
+并入文件面：`10 files +243/−0`。**并入面零编译器改动**：
+`git diff --name-only 2539171e a3c6abff -- src/ runtime/ docs/ABI.md tools/baselines/` **零命中**
+⇒ 合并树与 448 门禁同一颗 `zetac`（`cargo build --release` 当场回 `Finished in 0.42s`＝未重编）。
+带入清单：
+
+- `tests/diff/cases/**` 新 `.dcase` **7 个（全新增）**，逐条按旁路批号归位：`list_cmp_order`＝499／
+  `container_cmp_order`＝500／`str_repeat_edges`＝501／`control_enumerate_zip`＝502／
+  `container_dict_comprehension`＝504／`container_dict_comp_filter`＝505／`tuple_unpack_str_type`＝506。
+- `tests/python_style/t512_bool_print_in_logic.z`（7 行，known-fail 钉简报 ④＝#117 近亲：
+  `1 and 2 == 3` 打 0 而非 `False`）。
+- `docs/HANDOFF-CENSUS-FAMILIES-2026-09-26.md` **+124**（498 的十一族移交简报：每族一屏——最小复现／
+  CPython 期望／zeta 现状／疑似位置／闸门用例）。
+- `worktree.md` +9（旁路自己的台账行 497–506，正文此前未代录 ⇒ 本节补可见性）。
+
+### 一、合并树复跑（主线侧当场，`/tmp/b448c/`）
+
+| 步 | 读数 | 对 448 的关系 |
+|---|---|---|
+| 快门禁 rc | **`GATE_RC=1`**／166s 墙钟（213.67s user） | 红源仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ **零新增红**；`/tmp/b448c/gate_merged.log` |
+| official | compile 194/194、compile+link 191/194、link-only 3 | 与 448 逐字相同（缺绑名单 `_predict/_train`、`_factor/_optimal_iterations/_success_probability`、`_as_str/_into_iter/_is_alphabetic/_push` 未动） |
+| official 诊断面 | 5 文件 / 21 行 | 与 448 终态逐字相同（并入面不产生 warning） |
+| python_style | **365 passed / 2 failed / 15 known-fail / 0 xpass** | `365+2+15=382` 与 `ls tests/python_style/t*.z` **382** 逐项对上；passed 与红源都不变，**known-fail 14→15 的唯一增量＝t512**；FAIL 两条是当场从日志 `grep` 出来的（`gate_merged.log:153/:157`），不是"应当没变" |
+| python_style 诊断面 | 116 文件 / 244 行 | 与 448 终态逐字相同 |
+| comment_drift / dyn_binding | 0 处复述 ／ 4 条断言、不一致 0 | 与 448 逐字相同 |
+| 只读锚点核对 | **rc=2（存量）**：漂移 26 / 新 11 / 消失 12、同键多义 7 组 / 被顶掉的引用 47 条 | 与 448 重绑后的终态逐字相同（并入面 `docs/ABI.md` 零命中 ⇒ 无新增搬家，此列只作复述） |
+| diff 步（单跑，补快门禁的 `--skip-diff`） | **match=359 / judged=408 / 88.0% / bad_case=0 / rc=0** | judged 401→**408**＝那 7 例首次进闸；match 356→359 ⇒ **3 match ＋ 4 mismatch**（mismatch 恰为 `container_cmp_order`／`list_cmp_order`／`container_dict_comp_filter`／`tuple_unpack_str_type`，与旁路"钉住不修"的意图一致；`/tmp/b448c/diff_merged.log`） |
+
+### 二、基线追平（#186 那格第三次当场复发，主线侧代录数据）
+
+跑前 `tools/baselines/diff_consistency.json` 是 `total=401 / judged=401 / match=356 / match_min=356`，
+而合并树 `ls tests/diff/cases/*.dcase` 已 **408** ⇒ 那 7 例**不在红绿闸内**（与 446 §一、447 §三 同型）。
+`tools/baselines/**` 归主线所有权 ⇒ 本批 `--bless` 追平：json **1640 → 1668 行**（`git diff --numstat`
+＝+41/−13），写后 `total=408 / judged=408 / match=359 / match_min=359 / 88.0%`。**"没抹掉既有用例"的正证据**
+（pre/post 两份 json 的 `cases` 逐项比对，`/tmp/b448c/diff_consistency.pre.json`）：条目 **401 → 408**、
+被删 **0** 条、新增恰为上面那 7 条、**保留条目里 verdict 改动 0 条**。再用新基线**复跑判定步**：
+`CONFIRM_RC=0`、读数逐字相同、打"差分一致率无回归"（`/tmp/b448c/diff_bless.log`、`diff_confirm.log`）。
+修法本身（"基线 `total` ≠ 实跑 `judged` 时出声"）仍在 tools 车道＝旁路侧。
+
+### 三、移交简报十一族里，按车道分的主线可动格
+
+- **一条修法治三族（简报 ⑪，449 头名候选）**：`Assign(Tuple, ·)` 的解包绑定不给解出的变量写类型标记
+  ⇒ for 解包出的 `v` 打堆地址、505 的过滤字典推导值侧打地址、#190 的 `a, b = b, a`
+  腐蚀，全是同一条 lowering 的不同触发。位置 `src/middle/mir/gen.rs`＝**主线车道**；
+  闸门 `tuple_unpack_str_type` + `container_dict_comp_filter` + `t510`（三处已就位，修好自动转绿）。
+- 同属主线车道的另两格：简报 ①（`/` 真除法，11 例闸门；旁路已实测 **round 本身正确**含银行家舍入
+  ⇒ 归因从 #188 收窄到"`/` 单点"）与 ④⑤（and/or 结果的 Bool 性／None 渲染，`t512`＋`t507` 已钉）。
+- **需授权才动**：②③⑧（f-string sign 旗标、负数进制、浮点 `%.6f` 最短 repr）全在 `runtime/py_additions.c`，
+  ⑨（`host_str_find3` 三参 shim）在 `runtime` ＋ registry ⇒ 与 **#145／#190 同一条阻塞**（等用户一句话）。
+- ⑦（溢出回绕，~12 例）两条路线（响亮报错 vs 文档化已知限制）属**用户/主线裁定**，不是 bug 单。
+
+### 四、OPEN 账务与收尾
+
+- 本次合并主线侧 **OPEN 净增 0**：十一族要么已有号（#47/#48/#117/#183/#188/#189/#190），要么由简报承着；
+  旁路未逼出新号。448 的三条在册不变（#145 阻塞、#182 余 34 行、#167 余项／#52）。
+- **448 收尾动作**：`target/release/zetac_pre448` 移除；产物留 `/tmp/b448/`（`ir/` 233 对 IR、
+  `per/` 普查、`shift/` 两侧驱动产物）与 `/tmp/b448c/`（合并树复跑、bless 前后两份基线）。
+- **下一批候选**（按已实测损害量，交用户裁定后开 449）：① 简报 ⑪ 解包类型标记（三族一修、闸门已就位）、
+  ② 简报 ① 真除法（11 例闸门，但有"下游依赖 `/` 取整"的排查前置）、③ #182 余 34 行、
+  ④ #167 余项（键结构迁移）。**下一次全量门禁＝批次 450**。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
