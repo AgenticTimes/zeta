@@ -323,10 +323,12 @@ int64_t map_resolve(int64_t map) {
     }
     return map;
 }
-void map_insert(int64_t map0, int64_t key, int64_t val) {
-    int64_t map = map_resolve(map0);
-    if (!map) return;
-    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("map_insert", map);
+// Batch 558 (dict insertion order): the 24-byte entry only uses byte +16 as
+// the occupied flag — bytes +18..+21 hold a u32 INSERTION SEQUENCE. Growth
+// and rebuilds carry the sequence across, so keys()/items()/iteration can
+// replay Python's insertion order (previously slot order — hash order).
+static uint32_t zt_map_seq = 0;
+static void map_put_seq(int64_t map, int64_t key, int64_t val, uint32_t seq) {
     int64_t* hdr=(int64_t*)map; int64_t cap=hdr[0]; int64_t len=hdr[1];
     if (len*4 >= cap*3) {
         int64_t nc=cap*2;
@@ -334,7 +336,10 @@ void map_insert(int64_t map0, int64_t key, int64_t val) {
         *(int64_t*)nb=nc; *((int64_t*)nb+1)=0;
         for (int64_t i=0;i<cap;i++){
             char* e=(char*)map+16+i*MAP_ENTRY_SIZE;
-            if (*(uint8_t*)(e+16)==1) map_insert((int64_t)nb,*(int64_t*)e,*((int64_t*)e+1));
+            if (*(uint8_t*)(e+16)==1) {
+                uint32_t s; memcpy(&s, e+18, 4);
+                map_put_seq((int64_t)nb,*(int64_t*)e,*((int64_t*)e+1), s);
+            }
         }
         hdr[0]=MAP_MOVED; hdr[1]=(int64_t)nb;   // old handle forwards to the new block
         map=(int64_t)nb; hdr=(int64_t*)map; cap=nc;
@@ -346,12 +351,29 @@ void map_insert(int64_t map0, int64_t key, int64_t val) {
         uint8_t used=*(uint8_t*)(e+16);
         if(!used){
             if(tomb>=0){ idx=tomb; e=(char*)map+16+idx*MAP_ENTRY_SIZE; }
-            *(int64_t*)e=key;*((int64_t*)e+1)=val;*(uint8_t*)(e+16)=1;hdr[1]++;return;
+            *(int64_t*)e=key;*((int64_t*)e+1)=val;*(uint8_t*)(e+16)=1;
+            memcpy(e+18, &seq, 4);
+            hdr[1]++;return;
         }
         if(used==2 && tomb<0) tomb=idx;
-        if(used==1 && *(int64_t*)e==key){*((int64_t*)e+1)=val;return;}
+        if(used==1 && *(int64_t*)e==key){*((int64_t*)e+1)=val;return;}  /* overwrite keeps the ORIGINAL sequence */
         idx=(idx+1)&(cap-1);
     }
+}
+void map_insert(int64_t map0, int64_t key, int64_t val) {
+    int64_t map = map_resolve(map0);
+    if (!map) return;
+    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("map_insert", map);
+    map_put_seq(map, key, val, ++zt_map_seq);
+}
+
+// Batch 558: rebuild paths (pop/popitem) re-insert survivors with their
+// ORIGINAL sequence so insertion order survives deletions.
+void map_insert_seq_ext(int64_t map0, int64_t key, int64_t val, uint32_t seq) {
+    int64_t map = map_resolve(map0);
+    if (!map) return;
+    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("map_insert_seq_ext", map);
+    map_put_seq(map, key, val, seq);
 }
 int64_t map_get(int64_t map0, int64_t key) {
     int64_t map = map_resolve(map0);
