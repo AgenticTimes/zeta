@@ -9195,8 +9195,92 @@ call, no NULL-handle dereference).",
                                     _ => understood = false,
                                 }
                             }
+                            // `key=None` — None lexes to Lit(0); the raw 0
+                            // reached py_sorted_key as a function pointer and
+                            // SEGV'd (batch 560). Treat it as no key.
+                            // `key=abs` — builtins have no function value to
+                            // pass through the fn-pointer sort (raw abs
+                            // lowered to a dead slot -> SEGV); route to the
+                            // abs-key sort runtime.
+                            let none_key = matches!(&keyf, Some(AstNode::Lit(0)));
+                            let abs_key = matches!(&keyf, Some(AstNode::Var(n)) if n == "abs");
+                            if none_key || abs_key {
+                                keyf = None;
+                            }
                             if !understood {
                                 None
+                            } else if abs_key {
+                                let xs = self.lower_expr(&args[0]);
+                                let rev_id = match &rev {
+                                    Some(e) => self.lower_expr(e),
+                                    None => self.next_id_with_lit(0),
+                                };
+                                let nid = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "py_sorted_key_abs".to_string(),
+                                    args: vec![xs, rev_id],
+                                    dest: nid,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(nid, MirExpr::Var(nid));
+                                let sorted_ty = match self.type_map.get(&xs).cloned() {
+                                    Some(Type::DynamicArray(e)) => Type::DynamicArray(e),
+                                    Some(Type::Array(e, _)) => Type::DynamicArray(e),
+                                    _ => Type::DynamicArray(Box::new(Type::I64)),
+                                };
+                                self.type_map.insert(nid, sorted_ty.clone());
+                                self.exprs.insert(id, MirExpr::Var(nid));
+                                self.type_map.insert(id, sorted_ty);
+                                return id;
+                            } else if none_key {
+                                let xs = self.lower_expr(&args[0]);
+                                let rev_id = match &rev {
+                                    Some(e) => self.lower_expr(e),
+                                    None => self.next_id_with_lit(0),
+                                };
+                                let len_id = match self.type_map.get(&xs).cloned() {
+                                    Some(Type::Array(_, ArraySize::Literal(n))) => {
+                                        let nid = self.next_id();
+                                        self.exprs.insert(nid, MirExpr::IntLit(n as i64));
+                                        self.type_map.insert(nid, Type::I64);
+                                        nid
+                                    }
+                                    _ => {
+                                        let nid = self.next_id();
+                                        self.stmts.push(MirStmt::Call {
+                                            func: "vec_len".to_string(),
+                                            args: vec![xs],
+                                            dest: nid,
+                                            type_args: vec![],
+                                        });
+                                        self.exprs.insert(nid, MirExpr::Var(nid));
+                                        self.type_map.insert(nid, Type::I64);
+                                        nid
+                                    }
+                                };
+                                let elem_is_str = matches!(
+                                    self.type_map.get(&xs).cloned(),
+                                    Some(Type::DynamicArray(e)) | Some(Type::Array(e, _))
+                                        if matches!(*e, Type::Str)
+                                ) as i64;
+                                let flag_id = self.next_id_with_lit(elem_is_str);
+                                let nid = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "py_sorted_vec_rev".to_string(),
+                                    args: vec![xs, len_id, rev_id, flag_id],
+                                    dest: nid,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(nid, MirExpr::Var(nid));
+                                let sorted_ty = match self.type_map.get(&xs).cloned() {
+                                    Some(Type::DynamicArray(e)) => Type::DynamicArray(e),
+                                    Some(Type::Array(e, _)) => Type::DynamicArray(e),
+                                    _ => Type::DynamicArray(Box::new(Type::I64)),
+                                };
+                                self.type_map.insert(nid, sorted_ty.clone());
+                                self.exprs.insert(id, MirExpr::Var(nid));
+                                self.type_map.insert(id, sorted_ty);
+                                return id;
                             } else if let Some(k) = keyf {
                                 let xs = self.lower_expr(&args[0]);
                                 let f = self.lower_expr(&k);

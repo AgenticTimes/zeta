@@ -1,0 +1,17 @@
+// 批次 560（旁路 cleanup）：sorted 的 key 形态收口。此前 key=None 把字面
+// 0 当函数指针传 py_sorted_key（SEGV）、key=abs 把裸内建名当下槽（同崩
+// ——内建没有函数值形态）。key=None 回落普通排序；key=abs 走专用
+// abs 键排序（整型向量）。key=用户函数仍走 FuncAddr 既有路径。
+v = [-3, 1, -2]
+print(sorted(v, key=abs))
+print(sorted(v, key=None))
+print(sorted(v))
+print(sorted(v, reverse=True))
+print(sorted(v, key=None, reverse=True))
+print(sorted(v, key=abs, reverse=True))
+// expect: [1, -2, -3]
+// expect: [-3, -2, 1]
+// expect: [-3, -2, 1]
+// expect: [1, -2, -3]
+// expect: [1, -2, -3]
+// expect: [-3, -2, 1]

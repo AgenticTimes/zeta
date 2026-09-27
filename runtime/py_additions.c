@@ -2085,6 +2085,28 @@ static void zt_sort_by_key(int64_t* vals, int64_t n, int64_t keyfn, int reverse)
     for (int64_t i = 0; i < n; i++) out[i] = vals[kv[i].idx];
     for (int64_t i = 0; i < n; i++) vals[i] = out[i];
 }
+// Batch 560: `sorted(v, key=abs)` — builtins have no function VALUE to pass
+// through py_sorted_key's fn pointer (a raw abs lowered to a dead slot ->
+// SEGV), so the abs-key shape gets a dedicated sort. Int vecs only (abs of
+// anything else is a CPython TypeError too).
+int64_t py_sorted_key_abs(int64_t vec, int64_t reverse) {
+    int64_t n = zt_vec_len(vec);
+    zt_kv_t* kv = (zt_kv_t*)GC_malloc(sizeof(zt_kv_t) * (size_t)(n > 0 ? n : 1));
+    for (int64_t i = 0; i < n; i++) {
+        int64_t x = ((int64_t*)vec)[i];
+        kv[i].key = x < 0 ? -x : x;
+        kv[i].idx = i;
+    }
+    qsort(kv, (size_t)n, sizeof(zt_kv_t), reverse ? zt_cmp_kv_desc : zt_cmp_kv_asc);
+    int64_t* out = (int64_t*)GC_malloc((size_t)(n > 0 ? n : 1) * 8);
+    for (int64_t i = 0; i < n; i++) out[i] = ((int64_t*)vec)[kv[i].idx];
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n > 0 ? n : 1) * 8);
+    base[0] = n > 0 ? n : 1;
+    base[1] = n;
+    for (int64_t i = 0; i < n; i++) base[2 + i] = out[i];
+    return (int64_t)(base + 2);
+}
+
 // In-place: xs.sort(key=f[, reverse=...]) — returns the handle.
 int64_t py_list_sort_key(int64_t vec, int64_t keyfn, int64_t reverse) {
     int64_t n = zt_vec_len(vec);
