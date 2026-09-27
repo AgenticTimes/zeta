@@ -366,34 +366,48 @@ int64_t py_map_update(int64_t dst, int64_t src) {
     return 0;
 }
 
-int64_t map_keys(int64_t map) {
-    if (!map) return 0;
+// Batch 558: dict entries carry a u32 INSERTION SEQUENCE at +18 (stamped by
+// the stub's map_put_seq). Iteration collects entries then sorts by that
+// sequence, replaying Python's insertion order instead of hash-slot order.
+typedef struct { int64_t key; int64_t val; uint32_t seq; } zt_map_ent;
+static int zt_ent_cmp(const void* a, const void* b) {
+    uint32_t sa = ((const zt_map_ent*)a)->seq, sb = ((const zt_map_ent*)b)->seq;
+    return (sa > sb) - (sa < sb);
+}
+// Collect the live entries of `map` sorted by insertion sequence; returns the
+// count and points *ents at a GC array.
+static int64_t zt_map_sorted(int64_t map, zt_map_ent** ents) {
     map = map_resolve(map);
     int64_t cap = ((int64_t*)map)[0];
-    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(cap ? cap : 8) * 8);
-    base[0] = cap ? cap : 8; base[1] = 0;
+    zt_map_ent* buf = (zt_map_ent*)GC_malloc((size_t)(cap ? cap : 1) * sizeof(zt_map_ent));
+    int64_t n = 0;
     for (int64_t i = 0; i < cap; i++) {
         char* e = (char*)map + 16 + i * 24;
         if (*(uint8_t*)(e + 16)) {
-            base[2 + base[1]] = zt_key_display(*(int64_t*)e);
-            base[1] += 1;
+            buf[n].key = *(int64_t*)e;
+            buf[n].val = *((int64_t*)e + 1);
+            memcpy(&buf[n].seq, e + 18, 4);
+            n++;
         }
     }
+    qsort(buf, (size_t)n, sizeof(zt_map_ent), zt_ent_cmp);
+    *ents = buf;
+    return n;
+}
+int64_t map_keys(int64_t map) {
+    if (!map) return 0;
+    zt_map_ent* ents; int64_t n = zt_map_sorted(map, &ents);
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 8) * 8);
+    base[0] = n ? n : 8; base[1] = n;
+    for (int64_t i = 0; i < n; i++) base[2 + i] = zt_key_display(ents[i].key);
     return (int64_t)(base + 2);
 }
 int64_t map_values(int64_t map) {
     if (!map) return 0;
-    map = map_resolve(map);
-    int64_t cap = ((int64_t*)map)[0];
-    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(cap ? cap : 8) * 8);
-    base[0] = cap ? cap : 8; base[1] = 0;
-    for (int64_t i = 0; i < cap; i++) {
-        char* e = (char*)map + 16 + i * 24;
-        if (*(uint8_t*)(e + 16)) {
-            base[2 + base[1]] = *((int64_t*)e + 1);
-            base[1] += 1;
-        }
-    }
+    zt_map_ent* ents; int64_t n = zt_map_sorted(map, &ents);
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 8) * 8);
+    base[0] = n ? n : 8; base[1] = n;
+    for (int64_t i = 0; i < n; i++) base[2 + i] = ents[i].val;
     return (int64_t)(base + 2);
 }
 
@@ -945,22 +959,17 @@ int64_t py_map_items(int64_t map) {
     if (!map) return 0;
     map = map_resolve(map);
     if (zt_map_is_json_handle(map)) zt_map_json_mismatch("py_map_items", map);
-    int64_t cap = ((int64_t*)map)[0];
-    if (cap < 0) cap = 0;
-    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(cap ? cap : 1) * 8);
-    base[0] = cap ? cap : 1;
-    base[1] = 0;
-    for (int64_t i = 0; i < cap; i++) {
-        char* e = (char*)map + 16 + i * 24;
-        if (*(uint8_t*)(e + 16)) {
-            int64_t* pair = (int64_t*)GC_malloc(16 + 2 * 8);
-            pair[0] = 2;
-            pair[1] = 2;
-            pair[2] = zt_key_display(*(int64_t*)e);
-            pair[3] = *((int64_t*)e + 1);
-            base[2 + base[1]] = (int64_t)(pair + 2);
-            base[1] += 1;
-        }
+    zt_map_ent* ents; int64_t n = zt_map_sorted(map, &ents);
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
+    base[0] = n ? n : 1;
+    base[1] = n;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t* pair = (int64_t*)GC_malloc(16 + 2 * 8);
+        pair[0] = 2;
+        pair[1] = 2;
+        pair[2] = zt_key_display(ents[i].key);
+        pair[3] = ents[i].val;
+        base[2 + i] = (int64_t)(pair + 2);
     }
     return (int64_t)(base + 2);
 }
@@ -3602,19 +3611,22 @@ int64_t zeta_map_pop_default(int64_t m, int64_t key, int64_t def) {
     if (cap < 0) cap = 0;
     int64_t* ks = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
     int64_t* vs = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
+    uint32_t* sq = (uint32_t*)GC_malloc((size_t)(cap ? cap : 1) * 4);
     int64_t n = 0, found = 0, out = def;
     for (int64_t i = 0; i < cap; i++) {
         char* e = (char*)m + 16 + i * MAP_ENTRY_SIZE;
         if (!*(uint8_t*)(e + 16)) continue;
         int64_t k = *(int64_t*)e, v = *((int64_t*)e + 1);
         if (k == key) { out = v; found = 1; continue; }
-        ks[n] = k; vs[n] = v; n++;
+        ks[n] = k; vs[n] = v; memcpy(&sq[n], e + 18, 4); n++;
     }
     if (!found) return def;
     for (int64_t i = 0; i < cap; i++)
         *(uint8_t*)((char*)m + 16 + i * MAP_ENTRY_SIZE + 16) = 0;
     ((int64_t*)m)[1] = 0;
-    for (int64_t i = 0; i < n; i++) map_insert(m, ks[i], vs[i]);
+    // re-insert carrying each survivor's original sequence (558)
+    extern void map_insert_seq_ext(int64_t, int64_t, int64_t, uint32_t);
+    for (int64_t i = 0; i < n; i++) map_insert_seq_ext(m, ks[i], vs[i], sq[i]);
     return out;
 }
 int64_t zeta_map_pop(int64_t m, int64_t key) { return zeta_map_pop_default(m, key, 0); }
@@ -3646,9 +3658,13 @@ int64_t map__popitem(int64_t m) {
     int64_t cap = ((int64_t*)m)[0];
     if (cap < 0) cap = 0;
     char* last = NULL;
+    uint32_t last_seq = 0;
     for (int64_t i = 0; i < cap; i++) {
         char* e = (char*)m + 16 + i * MAP_ENTRY_SIZE;
-        if (*(uint8_t*)(e + 16)) last = e;
+        if (!*(uint8_t*)(e + 16)) continue;
+        uint32_t s;
+        memcpy(&s, e + 18, 4);
+        if (!last || s > last_seq) { last = e; last_seq = s; }
     }
     if (!last) {
         fprintf(stderr, "PY-A: dict.popitem(): empty dict\n");
@@ -3657,22 +3673,25 @@ int64_t map__popitem(int64_t m) {
     }
     int64_t k = *(int64_t*)last;
     int64_t v = *((int64_t*)last + 1);
-    // No-tombstone removal: rebuild in place without the popped entry
-    // (same idiom as zeta_map_pop_default).
+    // No-tombstone removal: rebuild in place without the popped entry,
+    // carrying every survivor's sequence (558: LIFO across deletions).
     int64_t* ks = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
     int64_t* vs = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
+    uint32_t* sq = (uint32_t*)GC_malloc((size_t)(cap ? cap : 1) * 4);
     int64_t n = 0;
     for (int64_t i = 0; i < cap; i++) {
         char* e = (char*)m + 16 + i * MAP_ENTRY_SIZE;
         if (!*(uint8_t*)(e + 16) || e == last) continue;
         ks[n] = *(int64_t*)e;
         vs[n] = *((int64_t*)e + 1);
+        memcpy(&sq[n], e + 18, 4);
         n++;
     }
     for (int64_t i = 0; i < cap; i++)
         *(uint8_t*)((char*)m + 16 + i * MAP_ENTRY_SIZE + 16) = 0;
     ((int64_t*)m)[1] = 0;
-    for (int64_t i = 0; i < n; i++) map_insert(m, ks[i], vs[i]);
+    extern void map_insert_seq_ext(int64_t, int64_t, int64_t, uint32_t);
+    for (int64_t i = 0; i < n; i++) map_insert_seq_ext(m, ks[i], vs[i], sq[i]);
     int64_t* pair = (int64_t*)GC_malloc(16 + 2 * 8);
     pair[0] = 2;
     pair[1] = 2;
