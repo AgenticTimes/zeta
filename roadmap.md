@@ -21820,6 +21820,26 @@ MIR 是对的（`VoidCall{func: py_df_set_value_tag, args: [23, 34, 35]}`），I
 
 **①**（新，挂 #145）语料那格**全 0 列**的生产者未定位——本批只证明了"补写侧登记不改变该格读路径"；**且"那一格已被登记成 4 号"这一步未单独实拍**（§七 只证了合同），下一批从 `map_insert` 的发布链回溯 `define` 名反查。**②**（新）`gen.rs:2053` 的下标赋值登记判据不限列帧：任何 `Named`＋`__setitem__` 的接收者都会被按列映射帧登记（语料在场成员 0，实测见 §四）。**③**（登记给轴 A / #22 同族）`pylib/runtime_core.txt` → `runtime_decls_core.rs` 整条链是死代码，新增运行期 C 符号必须**同时**手改 `codegen.rs` 的 extern 列表，否则兜底发一参 void 且不报错。**④**（沿用在册）`zt_maybe_vec_fwd`/`zt_maybe_vec` 的几何判形仍可把标量 `char*` 当列转发。**⑤**（沿用在册）`py_df_groupby` 发布全 0 块（cap 16/32/64）。`/tmp/b535/`：`gate.log`、`ab_summary.log`＋`run_ab_535.sh`＋`ab/{pre,post,runs/*}`、`corpus_post.{ll,err}`（§四 的 IR 证据）、`f/{t514,t514pre,t514_recheck}/verdict`、`pair/`、`build_runtime.log`、`head-wt`（收尾 `git worktree remove`）、`{head,mine}_drift*.txt`＋`h.txt`/`m.txt`（§八 两侧对照）。两颗 `zetac_*535` 与两份 `.o` 留 `target/release/`、`/tmp/b535/ab/{pre,post}/`。下一次全量门禁＝**批次 470**。队头：**#145 全 0 列生产者（本批把它的候选面收窄成"发布链"）→ #182 余 57 行 → #167 余项 ①④⑤ → #195/#196 → #203④**。
 
+## 旁路并入（2026-09-27，批次 535 收尾合并：旁路 534b／535／537／538 ＋ #186 第十次复发代录）
+
+**合并面**：`git merge cleanup`＝**`1f8a64d9`**，并 5 颗（`6544ea7d` 534 的 `sorted_key_func.dcase`、`57767295` 旁路 535 台账、`4021da04` 537 的 `method_name_collision.dcase`、`fc2ae8d2`/`5d6e0e75` 537／538 台账），文件面 **3 files +40/−0**＝2 颗 `.dcase` ＋ `worktree.md` 3 行。**并入面对 `src/`、`runtime/`、`docs/ABI.md`、`tools/baselines/` 零命中** ⇒ 批次 535 的快门禁与位移读数不因本次合并失效（不重跑，口径照 451 收尾／452 收尾）；`cargo build --release` 当场回 `Finished`＝未重编，`target/release/zetac` md5 仍 `d9b10409…`（依 447 那条教训只作观察，不用哈希论证二进制同异）。台账行在 `worktree.md` §4「535 收尾」＋ §7 合并日志。
+
+### 一、编号撞车一条如实登记（不回改任何一侧）
+
+旁路也有「批次 535」（`sorted` 键族，`57767295`），与主线本批 535 同号；此前 460 已撞过一次，这是第二次。两侧台账分列 §4／§5，**引用一律以 commit 哈希为身份**（主线 535＝代码 `0cfcfd02` ＋ 锚点 `bd4ddf7e` ＋ 记录 `4e81b8eb`）。主线下一批起跳到旁路水位之上（旁路已到 538 ⇒ 主线取 **539**），以免继续撞号；提交历史不回改。
+
+### 二、差分基线第十次当场复发（#186），主线侧代录追平
+
+并入面只有 `.dcase` ⇒ 唯一受影响的步是 diff。跑前基线 `total=466` 而实跑 **judged=468** ⇒ **#186 第十次当场复发**；读数 **match 407／judged 468／87.0%／bad_case 0／rc 0**，分步 `container` **152/183**（460 时代 152/181 ⇒ 分母 +2、match +0＝两条新例都红，符合旁路钉桩预期）、truth 42/43、str 79/83、numeric 65/88、control 69/71。主线代录 `--bless` **`BLESS_RC=0`**：`tools/baselines/diff_consistency.json` **+14/−6**、`cases` 466→**468**、`match_min` **保持 407**（新例是红、不抬地板），`by_verdict` `{match 407, mismatch 50, runtime 7, compile 4}`（runtime 6→7、compile 3→4）。逐条核对 **新增恰为 `method_name_collision`(compile)、`sorted_key_func`(runtime)／消失 0／既有条目 verdict 改动 0** ⇒ 追的是分母不是判定；追平后复跑判定 **`CONFIRM_RC=0`、"差分一致率无回归"**。
+
+### 三、一条旁路归因不采信、也不入队头
+
+538 报「用户方法名与 C runtime 符号冲突 ⇒ duplicate symbol 链接失败，`gen.rs` 车道需要命名空间隔离」。本次收尾**未复测、未量语料成员** ⇒ 按在册规矩不记成收益、也不占队头名，待主线单批实测损害量再定（它与 #183/#190 的「缺宿主符号」一族方向相反、却指向同一条命名链，两族一起量比单独立一批便宜）。
+
+### 四、OPEN 账务与产物
+
+**本次并入 OPEN 净增 0**（批次 535 的 +1＝#211 已记在该批行内）；全表 `^\| #` 行 42 条、状态格含 ⬜/🟡/🔶/❓ 者 22 条（≤30 上限未触）。产物留 `/tmp/b535/`（本次新增 `diff_postmerge.{json,log}`、`diff_bless.log`、`diff_after_bless.log`、`diff_baseline_before.json`）；隔离 worktree `/tmp/b535/head-wt` 收尾已 `git worktree remove --force` 并 `git worktree prune`（余下 `/tmp/b488wt`、`~/zeta-clean-checkout` 非本批创建，未动）。两颗 `zetac_pre535`/`zetac_post535` 与两份 `.o` 留 `target/release/` 至下一次全量门禁（口径照 457/458）。**下一次全量门禁＝批次 470**；539 队头＝**#211①（＝#145 收窄后的"全 0 列生产者"）→ #182 余 57 行 → #167 余项 ①④⑤ → #195/#196 → #203④**。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
