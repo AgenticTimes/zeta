@@ -196,6 +196,7 @@
 | 531 | cleanup | **sorted(key=None) 排序失败钉住**：key=None 应等价于无 key 但被当作可调用调用 ⇒ 静默失败。不带 key 时正常。gen.rs/runtime 车道。同批证实 isinstance/hasattr/range 步进/元组访问全对 | diff 无回归 | ✅ 定性批 |
 | 532 | cleanup | **splitlines 修复确认**（method_sweep 缺口 8→7）——qwen 某批次修好了 str.splitlines。剩余 7 缺：str rsplit/partition/rpartition/expandtabs + list.copy rc=1 + dict popitem/copy。python_style 379 过/2 红/12 kf/2 xp 稳定 | 7 缺（-1） | ✅ 值守批 |
 | 534 | cleanup | **列表切片赋值崩溃钉住**：v[1:3] = [...] 走 __delitem__ 路径但列表无此 C 函数 ⇒ rc=1。单索引赋值 ✓（对照组）。gen.rs/runtime 车道：需列表切片赋值 shim 或降为逐元素赋值 | runtime crash 钉住 | ✅ 定性批 |
+| 535 | cleanup | **sorted key 参数完全不支持钉住**：key=abs、key=None 都导致排序失败——不带 key 正常。gen.rs/runtime 车道（同 531 同根扩展：key 函数路由未实现）| diff 无回归 | ✅ 定性批 |
 | 533 | cleanup | **pow + divmod 缺口钉住**：pow(2,10) 打 0 而非 1024（pow 内建错误）+ divmod(17,5) 打地址（元组返回 ⑪ 同根）。其余 any/all/max/min/sum/abs 全对（364e5943 基线上实测）。内建函数普查面铺完 | diff 无回归 | ✅ 定性批 |
 | 529b | cleanup | **全量差分重验 + 两个 OOP 崩溃修复确认**：qwen 449/450 修好了 511 的组合崩溃（rc=1→0）和 517 的类变量自增崩溃——两个 OOP 面的 runtime crash 全清。54 条 mismatch（其中 ⑫ 类方法字符串族 ~15 条为最大残余）。#190 交换仍 2 2 未修。差分 406/460 88.3% 无回归 | 406/460 | ✅ 重验批 |
 | 530 | cleanup | **链表正向验证**（OOP 能力确认）：self.next 赋值 ✓ / 链式访问 a.next.val ✓ / is not None ✓ / 字段读取 ✓。str * int 变量版 ✓。has_next() 返回 1/0 而非 True/False（⑫ Bool 标记，已知）| 全对（Bool 类型除外） | ✅ 定性批 |
