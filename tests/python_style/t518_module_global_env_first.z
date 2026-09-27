@@ -1,0 +1,46 @@
+// 批次 545（旁路 cleanup）：模块体 env-first 读的守卫机制钉。
+// ① t425 核心：函数写过 env 后主程序读回新值；
+// ② range 循环变量泄漏（CPython：循环后变量 = 最后绑定值）；
+// ③ 集合循环变量泄漏（镜像臂：拼接镜像只覆盖 Assign，集合形的
+//    元素绑定是 Call，镜像须显式补发）；
+// ④ 循环体内读保留槽优先（每次迭代的值只在槽上）；
+// ⑤ 类型闸：pairs 的槽带 Tuple 元素型，env 单元推断粗（DynamicArray(I64)），
+//    集合读必须留在槽上，解构才不出垃圾（改中实测的回归面）。
+total = 0
+def add(n: i64) -> i64:
+    total += n
+    return total
+add(5)
+add(5)
+print(total)
+x = 0
+for x in range(3):
+    pass
+print(x)
+y = 0
+for y in [7, 8, 9]:
+    pass
+print(y)
+z = 0
+for z in [1, 2, 3]:
+    print(z)
+pairs = [(1, "a"), (2, "b")]
+k2 = 0
+v2 = ""
+for k2, v2 in pairs:
+    print(k2)
+    print(v2)
+print(k2)
+print(v2)
+// expect: 10
+// expect: 2
+// expect: 9
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: 1
+// expect: a
+// expect: 2
+// expect: b
+// expect: 2
+// expect: b

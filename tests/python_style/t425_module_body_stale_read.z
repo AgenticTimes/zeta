@@ -11,7 +11,10 @@
 // expect: peek=10
 // expect: top=10
 // expect: top2=10
-// known-fail: 主程序读回的是声明时的 0（`peek()` 那一行是对的 10）—— 模块体走局部槽，不从 env 刷新
+// 批次 545（旁路 cleanup）摘钉：py_entry 模块体里模块全局读改走 env（gen.rs
+// 读分派加两道闸：循环变量留在槽上；env 单元类型粗于槽绑定时留在槽上——
+// 实测 `for k, v in pairs` 的集合槽带 Tuple 元素型，env 单元的
+// DynamicArray(I64) 推断会把它降级成垃圾）。
 total: i64 = 0
 
 fn add(n: i64) -> i64 {

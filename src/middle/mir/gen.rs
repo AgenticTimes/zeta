@@ -159,6 +159,10 @@ pub struct MirGen {
     last_dict_pair_ty: Option<(Type, Type)>,
     /// Stack of loop result slots for `loop { break EXPR; }` value semantics.
     loop_value_stack: Vec<u32>,
+    /// t425: for-loop variables whose body is currently being lowered. Their
+    /// per-iteration value lives only in the slot, so the py_entry env-first
+    /// module-global read carves them out until their loop is done.
+    loop_var_active: std::collections::HashSet<String>,
     /// Result slot of the most recently lowered loop (for implicit ret_val).
     last_loop_result: Option<u32>,
     /// PY-A (任务 #55): this is the entry `main` the parser synthesized from a
@@ -269,6 +273,7 @@ impl MirGen {
             last_closure_ret_ty: None,
             last_dict_pair_ty: None,
             loop_value_stack: Vec::new(),
+            loop_var_active: std::collections::HashSet::new(),
             last_loop_result: None,
             py_entry: false,
             generated_mirs: vec![],
@@ -3053,6 +3058,41 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                                 _ => {}
                             }
 
+                            // t425: names this loop binds that are also module
+                            // globals. Carved out of the env-first read while
+                            // the body lowers; mirrored back into the env cell
+                            // after the loop (Python leaks the last iterated
+                            // value — the splice cannot cover this shape, the
+                            // item bind is a Call, not an Assign).
+                            let loop_globals: Vec<String> = if self.py_entry {
+                                match &*pattern_clone {
+                                    AstNode::Var(item_name) => {
+                                        if self.module_globals.contains(item_name) {
+                                            vec![item_name.clone()]
+                                        } else {
+                                            vec![]
+                                        }
+                                    }
+                                    AstNode::Tuple(names) => names
+                                        .iter()
+                                        .filter_map(|n| match n {
+                                            AstNode::Var(nm)
+                                                if self.module_globals.contains(nm) =>
+                                            {
+                                                Some(nm.clone())
+                                            }
+                                            _ => None,
+                                        })
+                                        .collect(),
+                                    _ => vec![],
+                                }
+                            } else {
+                                vec![]
+                            };
+                            for n in &loop_globals {
+                                self.loop_var_active.insert(n.clone());
+                            }
+
                             // i = i + 1 — advance BEFORE the user body.
                             //
                             // `continue` lowers to a jump to the loop's
@@ -3096,6 +3136,18 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                                 body: body_stmts,
                                 else_body: else_stmts,
                             });
+                            // t425: env-first reads resume here — hand the
+                            // env cell the loop's last bound value (and clear
+                            // the carve-out). An empty collection leaves the
+                            // item slot uninitialized; mirroring garbage is
+                            // the same wrongness the slot read had before.
+                            for n in &loop_globals {
+                                self.loop_var_active.remove(n);
+                                if let Some(&slot) = self.name_to_id.get(n) {
+                                    let (mirror, _key) = self.env_mirror(n, slot);
+                                    self.stmts.extend(mirror);
+                                }
+                            }
                         }
                         return;
                     }
@@ -3168,6 +3220,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     // Save current statements to restore after loop body
                     let stmts_before_body = self.stmts.len();
 
+                    // t425: the loop var's per-iteration value must win over
+                    // the env-first read while the body lowers (env-first
+                    // reads resume after the For, where the splice mirrors
+                    // have already kept the cell fresh — the per-iteration
+                    // `Assign{var_id, counter}` is mirrored like any assign).
+                    let var_is_global =
+                        self.py_entry && self.module_globals.contains(var_name);
+                    if var_is_global {
+                        self.loop_var_active.insert(var_name.clone());
+                    }
+
                     // Generate loop body
                     for stmt in body {
                         self.lower_ast(stmt);
@@ -3201,6 +3264,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         body: body_stmts,
                         else_body: else_stmts,
                     });
+                    if var_is_global {
+                        self.loop_var_active.remove(var_name);
+                    }
                 }
             }
             AstNode::Loop { body } => {
@@ -4295,7 +4361,39 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     return slot_id;
                 }
                 if let Some(&existing) = self.name_to_id.get(name) {
-                    return existing;
+                    // t425: in a module body (synthesized main or user main
+                    // with module statements merged in — both carry
+                    // PY_ENTRY_ATTR) a module global's own slot holds what
+                    // THIS body last wrote; a function called since may have
+                    // refreshed the env cell behind its back (`add()` mutates
+                    // `total`, batch 385 pinned the two-answers shape), so
+                    // those names read env-first here. Three gates keep the
+                    // slot when the cell cannot faithfully represent the
+                    // value: loop variables (their per-iteration value lives
+                    // only in the slot); class instances (their read side
+                    // needs "which ctor call made me" provenance, which an
+                    // env round-trip loses — measured: t464's two same-named
+                    // classes with swapped field orders both fell back to
+                    // the first-writer layout and the fields transposed); and
+                    // type mismatch — the cell reads back typed from the
+                    // name's declared/inferred type, and where that is
+                    // coarser than the module body's own binding the env
+                    // read would DOWNGRADE it (measured: `for k, v in pairs`
+                    // with pairs a module global — its slot carries
+                    // Tuple element types that the cell's `DynamicArray(I64)`
+                    // inference loses, and the destructure read garbage).
+                    let cell_ty = self.global_ty_of(name).unwrap_or(Type::I64);
+                    let env_first = self.py_entry
+                        && self.module_globals.contains(name)
+                        && !self.loop_var_active.contains(name)
+                        && !matches!(cell_ty, Type::Named(..))
+                        && self
+                            .type_map
+                            .get(&existing)
+                            .map_or(false, |t| *t == cell_ty);
+                    if !env_first {
+                        return existing;
+                    }
                 }
                 // PY-A: module-global name not bound locally — env read
                 // (implicit module global: no global declaration needed).

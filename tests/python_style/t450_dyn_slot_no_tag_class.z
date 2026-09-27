@@ -5,6 +5,10 @@
 // 摘标条件：动态槽带值标签（refactor 项「给值加类型标记」），或 pylib DataFrame 的
 // handle 本身就是可判形的容器。
 // known-fail: 动态槽无类型标记 ⇒ 类实例经 dict[str, Any] 读出的是几何判形结果
+// （批次 545 复钉：env-first 读曾让它转绿——env 读出的 map 类型来自声明注解、
+// 比槽上推断更准；但同一扇门把 t464 的类别读也放进了 env，构造方布局溯源
+// 在无类型的 env 单元上丢失、字段序转置。类别实例（Named）暂不 env-first，
+// 本格等「给值加类型标记」一并解。
 // expect: w8 2
 from typing import Any
 from pandas import DataFrame
