@@ -860,6 +860,10 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
 
     // Collect methods and __init__
     let mut methods: Vec<AstNode> = Vec::new();
+    // Batch 572: class VARIABLES — bare assignments in the class body
+    // (`count = 0`) desugar to module globals `{Class}__{name}`, emitted as
+    // top-level statements so instances share one storage (Python semantics).
+    let mut class_var_inits: Vec<AstNode> = Vec::new();
     let mut init_params: Vec<(String, String)> = Vec::new();
     let mut init_stmts: Vec<AstNode> = Vec::new();
     let mut has_init = false;
@@ -989,6 +993,21 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                 cur = rest;
             }
             Ok((rest, _other)) => {
+                // Batch 572: a class-body bare assignment `count = 0` is a
+                // CLASS VARIABLE (shared across instances) — rewrite it to a
+                // mangled module-level global `{Class}__{name}`; the implicit
+                // main machinery collects it as a module global, and
+                // `Counter.count` reads/writes route there (gen.rs).
+                if let AstNode::Assign(lhs, rhs) = &_other {
+                    if let AstNode::Var(vname) = &**lhs {
+                        class_var_inits.push(AstNode::Assign(
+                            Box::new(AstNode::Var(format!("{}__{}", name, vname))),
+                            rhs.clone(),
+                        ));
+                        cur = rest;
+                        continue;
+                    }
+                }
                 cur = rest;
             }
             Err(e) => {
@@ -1003,6 +1022,21 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                             && fname != "&self"
                             && fname != "&mut self" =>
                     {
+                        // Batch 572: an UNANNOTATED bare assignment `count = 0`
+                        // is a CLASS VARIABLE (shared storage), not an instance
+                        // field default — route to the mangled module global.
+                        // Annotated `x: int = 40` stays the dataclass field
+                        // default below.
+                        if fty.is_empty() || fty == "dyn" {
+                            if let Some(d) = def {
+                                class_var_inits.push(AstNode::Assign(
+                                    Box::new(AstNode::Var(format!("{}__{}", name, fname))),
+                                    Box::new(d),
+                                ));
+                                cur = rest;
+                                continue;
+                            }
+                        }
                         // `x: int = 40` — a dataclass field DEFAULT (parse_param_full
                         // already carries it). Without it the synthesized
                         // constructor had no value for the field and every read
@@ -1281,6 +1315,41 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
             }
         }
     }
+    // Batch 574: whitelist passthrough — the ONLY __init__ statements kept in
+    // the synthesized ctor beyond field inits/defaults are CLASS-VARIABLE
+    // updates (`Counter.count = / += expr`: target = FieldAccess over the
+    // class name whose mangled global was synthesized from the class body).
+    // Everything else keeps the historical behavior (dropped: the corpus's
+    // __init__ statements predate current dialect support and crash when
+    // executed — A/B measured rc=133 with an unfiltered passthrough).
+    {
+        let cv_names: std::collections::HashSet<String> = class_var_inits
+            .iter()
+            .filter_map(|st| match st {
+                AstNode::Assign(lhs, _) => match &**lhs {
+                    AstNode::Var(v) => Some(v.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        for st in &init_stmts {
+            let keep = match st {
+                AstNode::Assign(lhs, _) | AstNode::AssignOp { target: lhs, .. } => {
+                    matches!(
+                        &**lhs,
+                        AstNode::FieldAccess { base, field }
+                            if matches!(&**base, AstNode::Var(v) if *v == name)
+                                && cv_names.contains(&format!("{}__{}", name, field))
+                    )
+                }
+                _ => false,
+            };
+            if keep {
+                ctor_body.push(st.clone());
+            }
+        }
+    }
     ctor_body.push(AstNode::Return(Box::new(AstNode::StructLit {
         variant: name.clone(),
         fields: field_inits
@@ -1329,12 +1398,11 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
         where_clauses: Vec::new(),
     };
     let _ = has_init;
-    Ok((
-        input,
-        AstNode::Block {
-            body: vec![struct_node, impl_node, ctor],
-        },
-    ))
+    let mut body: Vec<AstNode> = vec![struct_node];
+    body.extend(class_var_inits);
+    body.push(impl_node);
+    body.push(ctor);
+    Ok((input, AstNode::Block { body }))
 }
 
 fn parse_struct(input: &str) -> IResult<&str, AstNode> {

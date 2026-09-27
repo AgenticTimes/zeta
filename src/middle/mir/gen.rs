@@ -1930,6 +1930,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 }
             }
             AstNode::Assign(lhs, rhs) => {
+                // Batch 572: `Counter.count = x` — class VARIABLE write rewrites
+                // to the mangled module global (statement position).
+                if let AstNode::FieldAccess { base, field } = &**lhs {
+                    if let AstNode::Var(vname) = &**base {
+                        let gname = format!("{}__{}", vname, field);
+                        if self.type_decls.contains_key(vname.as_str())
+                            && self.module_globals.contains(&gname)
+                        {
+                            let rewritten = AstNode::Assign(
+                                Box::new(AstNode::Var(gname)),
+                                rhs.clone(),
+                            );
+                            self.lower_ast(&rewritten);
+                            return;
+                        }
+                    }
+                }
                 // PY-A: annotated assignment `partial: pd.DataFrame | None = None`
                 // — the parser keeps the class-shaped annotation attached. Lower
                 // the plain assignment first, then (when the slot is still
@@ -2394,6 +2411,25 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 }
             }
             AstNode::AssignOp { op, target, value } => {
+                // Batch 572: `Counter.count += 1` — class VARIABLE compound
+                // assignment rewrites to the mangled module global, whose
+                // Var target below routes reads and writes through the env.
+                if let AstNode::FieldAccess { base, field } = &**target {
+                    if let AstNode::Var(vname) = &**base {
+                        let gname = format!("{}__{}", vname, field);
+                        if self.type_decls.contains_key(vname.as_str())
+                            && self.module_globals.contains(&gname)
+                        {
+                            let rewritten = AstNode::AssignOp {
+                                op: op.clone(),
+                                target: Box::new(AstNode::Var(gname)),
+                                value: value.clone(),
+                            };
+                            self.lower_ast(&rewritten);
+                            return;
+                        }
+                    }
+                }
                 // Desugar: target op= value → target = target op value
                 let new_rhs = Box::new(AstNode::BinaryOp {
                     op: op.clone(),
@@ -4309,6 +4345,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             }
             // Match is handled below with full if-else chain lowering.
             AstNode::Assign(lhs, rhs) => {
+                // Batch 572: `Counter.count = x` — class VARIABLE write
+                // rewrites to the mangled module global.
+                if let AstNode::FieldAccess { base, field } = &**lhs {
+                    if let AstNode::Var(vname) = &**base {
+                        let gname = format!("{}__{}", vname, field);
+                        if self.type_decls.contains_key(vname.as_str())
+                            && self.module_globals.contains(&gname)
+                        {
+                            let rewritten = AstNode::Assign(
+                                Box::new(AstNode::Var(gname)),
+                                rhs.clone(),
+                            );
+                            self.lower_ast(&rewritten);
+                            return self.i64_zero_id();
+                        }
+                    }
+                }
                 // PY-A: walrus `name := expr` in expression position — lower
                 // rhs, bind the name (implicit decl or rebinding), and the
                 // expression value is the assigned value.
@@ -12393,6 +12446,14 @@ call, no NULL-handle dereference).",
                 // the Named branch below emitted `PyDate::strftime`, i.e. an
                 // undefined `_PyDate__strftime` (t220).
                 if let Some(Type::Named(tn, _)) = receiver_ty.as_ref() {
+                    // Batch 573: a USER-CLASS method shadows the W-table
+                    // builtin of the same name (`Counter.get()` must call the
+                    // class's own `get`, not the dict shim this arm would
+                    // emit for the registry's `map` tag).
+                    if self
+                        .qualified_method_candidate(tn, method)
+                        .is_none()
+                    {
                     // The receiver's type may carry the PYTHON class spelling
                     // (`Path`, `Timestamp`) rather than the registry handle tag
                     // (`PyPath`). Resolve it through the same table the parameter
@@ -12476,6 +12537,7 @@ call, no NULL-handle dereference).",
                         };
                         self.type_map.insert(id, ty);
                         return id;
+                    }
                     }
                 }
 
@@ -13504,6 +13566,20 @@ call, no NULL-handle dereference).",
                 self.type_map.insert(id, result_ty);
             }
             AstNode::FieldAccess { base, field } => {
+                // Batch 572: `Counter.count` — a CLASS VARIABLE read. Class
+                // variables live as module globals `{Class}__{name}` (the
+                // parser desugars class-body bare assignments there); route
+                // when the base names a known class and the mangled global
+                // exists. Without this the read lowered to a FieldAccess on
+                // the class's FuncAddr — garbage slot → crash.
+                if let AstNode::Var(vname) = &**base {
+                    let gname = format!("{}__{}", vname, field);
+                    if self.type_decls.contains_key(vname.as_str())
+                        && self.module_globals.contains(&gname)
+                    {
+                        return self.lower_expr(&AstNode::Var(gname));
+                    }
+                }
                 // `self.<field>` where `self` is NOT bound (a synthesized
                 // constructor): the value is the one already computed for that
                 // field — see `self_field_aliases`. Guarded on `self` being
