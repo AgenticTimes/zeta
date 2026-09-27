@@ -1,13 +1,13 @@
 {
-  "total": 507,
-  "judged": 506,
-  "match": 456,
-  "rate_pct": 90.1,
-  "match_min": 456,
+  "total": 527,
+  "judged": 526,
+  "match": 476,
+  "rate_pct": 90.5,
+  "match_min": 476,
   "by_verdict": {
-    "match": 456,
-    "mismatch": 41,
-    "runtime": 5,
+    "match": 476,
+    "mismatch": 42,
+    "runtime": 4,
     "bad_case": 1,
     "compile": 4
   },
@@ -21,8 +21,8 @@
       "judged": 83
     },
     "container": {
-      "match": 168,
-      "judged": 185
+      "match": 188,
+      "judged": 205
     },
     "numeric": {
       "match": 98,
@@ -503,6 +503,46 @@
       "verdict": "match"
     },
     "gen_class_s31415_019": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s561001_000": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s561001_001": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s561001_002": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s561001_003": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s561001_004": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s561001_005": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s561001_006": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s561001_007": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s561001_008": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_class_s561001_009": {
       "cat": "container",
       "verdict": "match"
     },
@@ -1119,6 +1159,46 @@
       "verdict": "match"
     },
     "gen_methods_s4321_019": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s561002_000": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s561002_001": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s561002_002": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s561002_003": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s561002_004": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s561002_005": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s561002_006": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s561002_007": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s561002_008": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_methods_s561002_009": {
       "cat": "container",
       "verdict": "match"
     },
@@ -2060,7 +2140,7 @@
     },
     "type_conversion_gaps": {
       "cat": "numeric",
-      "verdict": "runtime"
+      "verdict": "mismatch"
     }
   }
 }
