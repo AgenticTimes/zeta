@@ -3008,6 +3008,12 @@ impl Resolver {
                         .and_then(|e| infer(e, seen, aliases, classes, fn_rets))
                         .unwrap_or(Type::I64),
                 ))),
+                // Batch 579: `x in y` desugars to `y.__contains__(x)` —
+                // membership is ALWAYS Bool in Python (class_tag_probe:
+                // has_tag returned the un-inferable call and stayed I64).
+                AstNode::Call { method, .. } if method == "__contains__" => {
+                    Some(Type::Bool)
+                }
                 AstNode::Call {
                     receiver: None,
                     method,
@@ -3362,14 +3368,9 @@ fn shim_class_normalize(t: &Type) -> Type {
                 let ret = if matches!(ret, Type::Tuple(ref inner) if inner.is_empty())
                     || matches!(ret, Type::I64)
                 {
-                    Self::unannotated_return_ty(
-                        &defs_snapshot,
-                        name,
-                        &class_names,
-                        &decl_rets,
-                        &sig_params,
-                    )
-                    .unwrap_or(ret)
+                    let recovered =
+                        Self::unannotated_return_ty(&defs_snapshot, name, &class_names, &decl_rets, &sig_params);
+                    recovered.unwrap_or(ret)
                 } else {
                     ret
                 };
