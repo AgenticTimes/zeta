@@ -1,0 +1,23 @@
+# @cat: container
+# @note: 用户方法名与 C runtime 符号冲突——类方法 is_empty() 发射全局符号
+#        _is_empty 与 tokio_runtime.o 的 C 函数撞名 ⇒ 链接失败 duplicate symbol。
+#        gen.rs 车道：方法符号需要命名空间隔离（如类名前缀）或运行时符号
+#        改为 static/local。批次 537 组合普查定性。
+#@@ python
+class Stack:
+    def __init__(self):
+        self.items = []
+    def is_empty(self):
+        return len(self.items) == 0
+
+s = Stack()
+print(s.is_empty())
+#@@ zeta
+class Stack:
+    def __init__(self):
+        self.items = []
+    def is_empty(self):
+        return len(self.items) == 0
+
+s = Stack()
+print(s.is_empty())
