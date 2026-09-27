@@ -1017,6 +1017,52 @@ int64_t py_list_eq(int64_t a, int64_t b, int64_t elem_is_str) {
     return 1;
 }
 
+// Lexicographic ordering of two list/tuple blocks ([cap,len,elems]):
+// element-wise from the left, prefix < longer on a tie — Python's list
+// ordering. Returns -1 / 0 / 1. Container comparison used to fall through
+// to the integer HANDLE compare, so `[1, 2] < [1, 3]` answered False.
+int64_t py_list_cmp(int64_t a, int64_t b, int64_t elem_is_str) {
+    if (a == b) return 0;
+    int64_t na = zt_vec_len(a);
+    int64_t nb = zt_vec_len(b);
+    int64_t n = na < nb ? na : nb;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t x = ((int64_t*)a)[i];
+        int64_t y = ((int64_t*)b)[i];
+        int64_t c;
+        if (elem_is_str) {
+            const char* sx = x ? (const char*)x : "";
+            const char* sy = y ? (const char*)y : "";
+            c = strcmp(sx, sy);
+        } else {
+            c = (x > y) - (x < y);
+        }
+        if (c) return c;
+    }
+    return (na > nb) - (na < nb);
+}
+
+// d1 == d2 — same size and every RAW key of a maps to an equal value in b.
+// Values compare as words: content-equal-but-distinct strings would read
+// unequal (registered corner — value tags are the real fix, #117 family).
+int64_t zeta_map_len(int64_t);
+int64_t map_has(int64_t, int64_t);
+int64_t map_get(int64_t, int64_t);
+int64_t map__eq(int64_t a, int64_t b) {
+    a = map_resolve(a);
+    b = map_resolve(b);
+    if (!a || !b) return a == b;
+    if (zeta_map_len(a) != zeta_map_len(b)) return 0;
+    int64_t cap = ((int64_t*)a)[0];    for (int64_t i = 0; i < cap; i++) {
+        char* e = (char*)a + 16 + i * MAP_ENTRY_SIZE;
+        if (!*(uint8_t*)(e + 16)) continue;
+        int64_t k = *(int64_t*)e;
+        if (!map_has(b, k)) return 0;
+        if (map_get(b, k) != *((int64_t*)e + 1)) return 0;
+    }
+    return 1;
+}
+
 // ponytail: content fallback for an UNKNOWN element type. A caller that cannot
 // prove the element type passes elem_is_str=0 and only handles are compared —
 // so `[c for c in to_fetch if normalize(c) not in fetched_codes]` treated every

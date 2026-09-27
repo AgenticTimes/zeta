@@ -1,0 +1,40 @@
+// 批次 554（旁路 cleanup）：`/` 除零走 zeta_raise 跳板，try/except 接住
+// （此前 inline fdiv 静默得 inf、异常机制完全不经过）。整型真除也提升
+// F64（5526 既有），除数物化避免二次求值。
+// 批次 555 续完同族：'%' 与 '//' 的除零同守卫（srem/sdiv 除零同为
+// LLVM UB）——CPython "integer division or modulo by zero"。
+// 登记余项：handler 里 y = -1 的槽被 try 分支联接成 F64，打
+// -1.000000（#48 print 方言家族），本夹具避开值打印、钉控制流。
+try:
+    x = 10 / 0
+    print("no raise")
+except:
+    print("caught")
+print("after")
+z = 0
+try:
+    w = 5 / z
+    print("no raise 2")
+except:
+    print("caught 2")
+print("done")
+try:
+    a = 7 % 0
+    print("no raise 3")
+except:
+    print("caught mod")
+try:
+    b = 7 // 0
+    print("no raise 4")
+except:
+    print("caught floordiv")
+print(7 % 3)
+print(7 // 2)
+// expect: caught
+// expect: after
+// expect: caught 2
+// expect: done
+// expect: caught mod
+// expect: caught floordiv
+// expect: 1
+// expect: 3
