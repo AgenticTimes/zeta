@@ -1,0 +1,14 @@
+# @cat: container
+# @note: sorted 的 key 参数完全不支持——key=abs 或 key=None 都导致
+#        排序失败（静默崩溃或空输出）。不带 key 时正常。gen.rs/runtime 车道。
+#        与 531 的 sorted(key=None) 同根。
+#@@ python
+v = [-3, 1, -2]
+print(sorted(v, key=abs))
+print(sorted(v, key=None))
+print(sorted(v))
+#@@ zeta
+v = [-3, 1, -2]
+print(sorted(v, key=abs))
+print(sorted(v, key=None))
+print(sorted(v))
