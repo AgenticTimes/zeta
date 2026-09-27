@@ -90,6 +90,145 @@ int64_t host_str_split_3(int64_t s, int64_t sep, int64_t maxsplit) {
     return str_split(s, sep);
 }
 
+// ── PY-A: rsplit / partition / rpartition / expandtabs (批次 549) ──
+// The bare member-call path emits `<method>_<arity>` in MIR and codegen
+// strips the arity for the extern, so these four carry their Python names
+// (none collide with libc). All return the str_split block layout
+// [cap, len, elems...]; the 3-tuple forms return a 3-element block, which
+// both tuple destructuring (`a, b, c = s.partition(t)`) and stack_array_get
+// read through the same handle convention.
+
+// Python's tab expansion: each tab advances to the next multiple of
+// `tabsize` columns; the column counter resets at '\n'. Default 8.
+int64_t expandtabs(int64_t s) {
+    if (!s) return 0;
+    const char* p = (const char*)s;
+    size_t cap = 16;
+    char* out = (char*)GC_malloc(cap);
+    size_t len = 0, col = 0;
+    #define ZT_ET_PUT(c) do { \
+        if (len + 1 >= cap) { cap *= 2; out = (char*)GC_realloc(out, cap); } \
+        out[len++] = (char)(c); \
+    } while (0)
+    for (; *p; p++) {
+        if (*p == '\t') {
+            size_t step = 8 - (col % 8);
+            if (step == 0) step = 8;
+            for (size_t k = 0; k < step; k++) ZT_ET_PUT(' ');
+            col += step;
+        } else {
+            ZT_ET_PUT(*p);
+            if (*p == '\n') col = 0; else col++;
+        }
+    }
+    out[len] = 0;
+    return (int64_t)out;
+    #undef ZT_ET_PUT
+}
+
+// Partition at the FIRST occurrence of sep: (head, sep, tail); no hit →
+// (s, "", "").
+static int64_t zt_partition_impl(int64_t s, int64_t sep, int from_right) {
+    if (!s) return 0;
+    const char* text = (const char*)s;
+    const char* pat = sep ? (const char*)sep : "";
+    size_t plen = strlen(pat);
+    const char* hit = plen ? (from_right ? NULL : strstr(text, pat)) : NULL;
+    if (from_right && plen) {
+        for (const char* p = text; (p = strstr(p, pat)) != NULL; p += 1) hit = p;
+    }
+    size_t tlen = strlen(text);
+    size_t head;
+    const char* mid;
+    const char* tail;
+    if (!plen || !hit) {
+        // No separator present: partition → (s, "", ""), rpartition →
+        // ("", "", s).
+        if (from_right) {
+            head = 0;
+            mid = "";
+            tail = text;
+        } else {
+            head = tlen;
+            mid = "";
+            tail = "";
+        }
+    } else {
+        head = (size_t)(hit - text);
+        mid = pat;
+        tail = hit + plen;
+    }
+    int64_t* base = (int64_t*)GC_malloc(16 + 3 * 8);
+    base[0] = 3;
+    base[1] = 3;
+    char* h = (char*)GC_malloc(head + 1);
+    memcpy(h, text, head);
+    h[head] = 0;
+    base[2] = (int64_t)h;
+    char* m = (char*)GC_malloc(strlen(mid) + 1);
+    strcpy(m, mid);
+    base[3] = (int64_t)m;
+    char* t = (char*)GC_malloc(strlen(tail) + 1);
+    strcpy(t, tail);
+    base[4] = (int64_t)t;
+    return (int64_t)(base + 2);
+}
+
+int64_t partition(int64_t s, int64_t sep) { return zt_partition_impl(s, sep, 0); }
+int64_t rpartition(int64_t s, int64_t sep) { return zt_partition_impl(s, sep, 1); }
+
+// host_str_* wrappers: the gen.rs str-method arms call these typed entry
+// points; the bare names above stay exported for the generic member path.
+int64_t rsplit(int64_t s, int64_t sep, int64_t maxsplit);
+int64_t host_str_rsplit(int64_t s, int64_t sep, int64_t maxsplit) {
+    return rsplit(s, sep, maxsplit);
+}
+int64_t host_str_partition(int64_t s, int64_t sep) { return partition(s, sep); }
+int64_t host_str_rpartition(int64_t s, int64_t sep) { return rpartition(s, sep); }
+int64_t host_str_expandtabs(int64_t s) { return expandtabs(s); }
+
+// Python rsplit: at most `maxsplit` splits counting from the RIGHT
+// (maxsplit < 0 = unlimited, which is plain split). Empty separator
+// follows str_split's V1 stance: the whole string as a one-element list.
+int64_t rsplit(int64_t s, int64_t sep, int64_t maxsplit) {
+    if (!s) return 0;
+    const char* text = (const char*)s;
+    const char* pat = sep ? (const char*)sep : "";
+    size_t plen = strlen(pat);
+    if (plen == 0 || maxsplit < 0) return str_split(s, sep);
+    // Collect all hit positions, then take the last `maxsplit` of them as
+    // split points; the head keeps the remaining separators intact.
+    size_t tlen = strlen(text);
+    size_t hits_cap = 8, hits_n = 0;
+    const char** hits = (const char**)GC_malloc(hits_cap * sizeof(char*));
+    for (const char* p = text; (p = strstr(p, pat)) != NULL; p += plen) {
+        if (hits_n == hits_cap) {
+            hits_cap *= 2;
+            const char** nh = (const char**)GC_malloc(hits_cap * sizeof(char*));
+            memcpy(nh, hits, hits_n * sizeof(char*));
+            hits = nh;
+        }
+        hits[hits_n++] = p;
+    }
+    size_t cut = hits_n > (size_t)maxsplit ? hits_n - (size_t)maxsplit : 0;
+    size_t pieces = (hits_n - cut) + 1;
+    int64_t* base = (int64_t*)GC_malloc(16 + pieces * 8);
+    base[0] = (int64_t)pieces;
+    base[1] = 0;
+    const char* start = text;
+    for (size_t k = cut; k <= hits_n; k++) {
+        const char* stop = (k < hits_n) ? hits[k] : text + tlen;
+        size_t slen = (size_t)(stop - start);
+        char* piece = (char*)GC_malloc(slen + 1);
+        memcpy(piece, start, slen);
+        piece[slen] = 0;
+        base[2 + base[1]] = (int64_t)piece;
+        base[1] += 1;
+        if (k < hits_n) start = hits[k] + plen;
+    }
+    return (int64_t)(base + 2);
+}
+
 // map_str_key — deterministic 64-bit FNV-1a content hash for string dict
 // keys. The open-addressing map hashes/compares keys numerically; string
 // handles differ per literal site, so content-keyed dicts must normalize.

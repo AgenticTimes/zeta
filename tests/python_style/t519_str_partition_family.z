@@ -1,0 +1,43 @@
+// 批次 549（旁路 cleanup）：str.partition / rpartition / rsplit / expandtabs
+// 四方法接入（method_sweep 缺口 7→3）。要点：
+// ① partition 系返回 Named("tuple", [Str×3])——代码库对"调用返回的元组"的
+//    约定拼写；裸 Type::Tuple 会被下标分派当 dict（map_get 响亮 raise）。
+// ② rsplit 从右切 maxsplit 次；负数=不限；空串情形 [s 整体]。
+// ③ expandtabs 默认 tabsize 8，列计数遇 \n 归零。
+// ④ 无分隔符：partition → (s, "", "")，rpartition → ("", "", s)。
+s = "a,b,c"
+a, b, c = s.partition(",")
+print(a)
+print(b)
+print(c)
+a2, b2, c2 = s.rpartition(",")
+print(a2)
+print(b2)
+print(c2)
+parts = s.rsplit(",", 1)
+print(parts[0])
+print(parts[1])
+print(len(s.rsplit(",", 0)))
+print(len("a,b,c,d".rsplit(",", 2)))
+print("a,b,c,d".rsplit(",", 2)[0])
+print("abc".partition("x")[0])
+print("abc".partition("x")[1])
+print("abc".rpartition("x")[2])
+print("x\ty".expandtabs())
+print("ab\tcd".expandtabs())
+// expect: a
+// expect: ,
+// expect: b,c
+// expect: a,b
+// expect: ,
+// expect: c
+// expect: a,b
+// expect: c
+// expect: 1
+// expect: 3
+// expect: a,b
+// expect: abc
+// expect:
+// expect: abc
+// expect: x       y
+// expect: ab      cd

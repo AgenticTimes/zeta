@@ -11545,6 +11545,72 @@ call, no NULL-handle dereference).",
                             .insert(id, Type::DynamicArray(Box::new(Type::Str)));
                         return id;
                     }
+                    // 批次 549: `s.rsplit(sep[, maxsplit])` — split from the
+                    // RIGHT, at most maxsplit pieces (negative = unlimited).
+                    // The bare member path emitted an untyped extern and every
+                    // element read rendered a raw pointer; these arms pin the
+                    // symbol and the result type.
+                    if method == "rsplit" && (arg_ids.len() == 2 || arg_ids.len() == 3) {
+                        let mut args = arg_ids.clone();
+                        if args.len() == 2 {
+                            args.push(self.next_id_with_lit(-1));
+                        }
+                        self.stmts.push(MirStmt::Call {
+                            func: "host_str_rsplit".to_string(),
+                            args,
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map
+                            .insert(id, Type::DynamicArray(Box::new(Type::Str)));
+                        return id;
+                    }
+                    // `s.partition(sep)` / `s.rpartition(sep)` — the
+                    // (head, sep, tail) triple; the per-position types drive
+                    // the destructured names to Str (same source-typing rule
+                    // as the tuple destructure above).
+                    if matches!(method.as_str(), "partition" | "rpartition")
+                        && arg_ids.len() == 2
+                    {
+                        let func = if method == "partition" {
+                            "host_str_partition"
+                        } else {
+                            "host_str_rpartition"
+                        };
+                        self.stmts.push(MirStmt::Call {
+                            func: func.to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        // Named("tuple", …) is the codebase convention for a
+                        // tuple that came from a CALL (the subscript and
+                        // destructure paths both recognize it; a bare
+                        // Type::Tuple from a call is treated as dict-typed and
+                        // `p[0]` compiled into a map_get).
+                        self.type_map.insert(
+                            id,
+                            Type::Named(
+                                "tuple".to_string(),
+                                vec![Type::Str, Type::Str, Type::Str],
+                            ),
+                        );
+                        return id;
+                    }
+                    // `s.expandtabs()` — Python's default tabsize 8 (V1: fixed).
+                    if method == "expandtabs" && arg_ids.len() == 1 {
+                        self.stmts.push(MirStmt::Call {
+                            func: "host_str_expandtabs".to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
                     // ljust/rjust/center take width[, fillchar] — Python's
                     // common form has ONE argument after the receiver, so the
                     // 3-arity table entry alone never matched.
@@ -14139,7 +14205,18 @@ call, no NULL-handle dereference).",
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::I64);
+                        // Element type from the annotation (`partition(...)`
+                        // hands back Named("tuple", [Str, Str, Str]) — typing
+                        // the element I64 made `p[0].startswith(...)`
+                        // dispatch on an integer and print a raw pointer).
+                        let elem = match (&tuple_base, &*index) {
+                            (Some(Type::Named(_, ts)), AstNode::Lit(k)) => ts
+                                .get(*k as usize)
+                                .cloned()
+                                .unwrap_or(Type::I64),
+                            _ => Type::I64,
+                        };
+                        self.type_map.insert(id, elem);
                         return id;
                     }
                     }
