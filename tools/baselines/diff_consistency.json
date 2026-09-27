@@ -1,12 +1,12 @@
 {
-  "total": 557,
-  "judged": 556,
-  "match": 513,
-  "rate_pct": 92.3,
-  "match_min": 513,
+  "total": 581,
+  "judged": 580,
+  "match": 538,
+  "rate_pct": 92.8,
+  "match_min": 538,
   "by_verdict": {
-    "match": 513,
-    "mismatch": 35,
+    "match": 538,
+    "mismatch": 34,
     "runtime": 4,
     "bad_case": 1,
     "compile": 4
@@ -17,12 +17,12 @@
       "judged": 43
     },
     "str": {
-      "match": 90,
-      "judged": 93
+      "match": 102,
+      "judged": 105
     },
     "container": {
-      "match": 199,
-      "judged": 215
+      "match": 212,
+      "judged": 227
     },
     "numeric": {
       "match": 102,
@@ -744,6 +744,54 @@
     },
     "gen_control_s1122_019": {
       "cat": "control",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_000": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_001": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_002": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_003": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_004": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_005": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_006": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_007": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_008": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_009": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_010": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_dict_s570002_011": {
+      "cat": "container",
       "verdict": "match"
     },
     "gen_dict_s6060_000": {
@@ -1906,6 +1954,54 @@
       "cat": "str",
       "verdict": "match"
     },
+    "gen_str_s570001_000": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_str_s570001_001": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_str_s570001_002": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_str_s570001_003": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_str_s570001_004": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_str_s570001_005": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_str_s570001_006": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_str_s570001_007": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_str_s570001_008": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_str_s570001_009": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_str_s570001_010": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_str_s570001_011": {
+      "cat": "str",
+      "verdict": "match"
+    },
     "list_cmp_order": {
       "cat": "container",
       "verdict": "match"
@@ -2040,7 +2136,7 @@
     },
     "setdefault_str_addr": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "sorted_key_func": {
       "cat": "container",
