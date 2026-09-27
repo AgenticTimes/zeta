@@ -203,6 +203,7 @@
 | 533 | cleanup | **稳态值守批**：XPASS ×3 稳定（t401/t510/t513）· python_style 370 过/2 红/12 kf · diff 无回归 · selfhost 1 钉住（correctness.z 回归已上报待 qwen）· qwen 452+ 在 W1010/W1011 族持续修复。我车道 actionable 清空——等主线修剩余族 | 全绿 | ✅ 稳态值守批 |
 | 534 | cleanup | **类字段字典读改写值侧缺口钉住**（⑫ 家族扩展）：类方法上下文 self.stock[k] += qty 写入 ✓ 但 self.stock[k] 读出 0 而非实际值——类字段路径未覆盖（449 修了元组解包）。class_inventory_dict.dcase 钉住，gen.rs 车道 | runtime mismatch 钉住 | ✅ 定性批 |
 | 534b | cleanup | **类字段字典读改写——最小判据收窄**：写侧 `self.stock[k] += qty` ✓（内存写入正确，total=180 对），**读侧 `self.stock[k]` 返回 0**——不是写入丢失而是方法上下文的字典下标读取返回 0。与 506 元组解包同根（Assign(Tuple,·) / FieldAccess 路径的类型标记缺失）| runtime mismatch 钉住 | ✅ 定性精化批 |
+| 535 | cleanup | **稳态值守批**：qwen 455–457 在 W1010/W1011 字段槽位族持续修复。XPASS ×3 稳定（t401/t510/t513）· diff 无回归 · selfhost 1 新钉住（correctness.z 455–458 回归，已上报）· method_sweep 7 缺稳定。我车道 actionable 清空 | 全绿（除已上报回归） | ✅ 稳态值守批 |
 | 534 | cleanup | **列表切片赋值崩溃钉住**：v[1:3] = [...] 走 __delitem__ 路径但列表无此 C 函数 ⇒ rc=1。单索引赋值 ✓（对照组）。gen.rs/runtime 车道：需列表切片赋值 shim 或降为逐元素赋值 | runtime crash 钉住 | ✅ 定性批 |
 | 535 | cleanup | **sorted key 参数完全不支持钉住**：key=abs、key=None 都导致排序失败——不带 key 正常。gen.rs/runtime 车道（同 531 同根扩展：key 函数路由未实现）| diff 无回归 | ✅ 定性批 |
 | 533 | cleanup | **pow + divmod 缺口钉住**：pow(2,10) 打 0 而非 1024（pow 内建错误）+ divmod(17,5) 打地址（元组返回 ⑪ 同根）。其余 any/all/max/min/sum/abs 全对（364e5943 基线上实测）。内建函数普查面铺完 | diff 无回归 | ✅ 定性批 |
