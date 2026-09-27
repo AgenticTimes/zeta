@@ -204,6 +204,7 @@
 | 533 | cleanup | **pow + divmod 缺口钉住**：pow(2,10) 打 0 而非 1024（pow 内建错误）+ divmod(17,5) 打地址（元组返回 ⑪ 同根）。其余 any/all/max/min/sum/abs 全对（364e5943 基线上实测）。内建函数普查面铺完 | diff 无回归 | ✅ 定性批 |
 | 529b | cleanup | **全量差分重验 + 两个 OOP 崩溃修复确认**：qwen 449/450 修好了 511 的组合崩溃（rc=1→0）和 517 的类变量自增崩溃——两个 OOP 面的 runtime crash 全清。54 条 mismatch（其中 ⑫ 类方法字符串族 ~15 条为最大残余）。#190 交换仍 2 2 未修。差分 406/460 88.3% 无回归 | 406/460 | ✅ 重验批 |
 | 530 | cleanup | **链表正向验证**（OOP 能力确认）：self.next 赋值 ✓ / 链式访问 a.next.val ✓ / is not None ✓ / 字段读取 ✓。str * int 变量版 ✓。has_next() 返回 1/0 而非 True/False（⑫ Bool 标记，已知）| 全对（Bool 类型除外） | ✅ 定性批 |
+| 531 | cleanup | **组合普查探针四例**：① del 未定义变量不报 NameError（CPython NameError）② setdefault 新键字符串 default 打地址（CPython "v"）③ sorted(key=None) 排序失败 ④ isinstance/hasattr/range 步进/元组访问 ✓——①②③移交 gen.rs/runtime 车道 | diff 无回归 | ✅ 定性批 |
 | 530b | cleanup | **未知未知搜索**（全十五模式 × 30 例 = 450 例临时，seed=999999）：93% match——**numeric 之外全部零缺口**（str/list/dict/cmp/loop/fmt/slice/builtin/control/dmethod/nested/methods/class 全净）。numeric 10 mismatch 全归已知族（溢出 ×7 + Bool ×3）。**结论：普查确认饱和，不存在未知未知**——剩余缺口全部在已移交的族内，等主线修复即可 | 847/911 93.0% | ✅ 度量批 |
 | 530 | cleanup | **元组赋值 lowering 改用临时变量链**（#190 修复，gen.rs lowering 车道）：Assign(Tuple,Tuple) 逐对 Assign 顺序执行 ⇒ a,b=b,a 腐蚀为 (2,2)。修法：RHS 先赋 __swap_tmp_N 再从临时赋 LHS。三变量轮换 ✓ / t510 XPASS ✓ / cargo 142/0 / diff 无回归。**解析器两轮否证的负结果被证明正确**——解析期改不动（t24 回归），只有 lowering 时机可行 | t510 XPASS · 142/0 | ✅ 修复批 |
 | 529 | cleanup | **组合普查第四波——⑫ 家族普遍性确认**：类方法内 f-string（f"{a} {op} {b} = {r}"）+ "\n".join(self.history) 也打地址——⑫ 不限于循环拼接/元组解包，类方法上下文**任何字符串表达式**都丢类型。前两例只是冰山一角 | 差分无回归 | ✅ 定性批 |
