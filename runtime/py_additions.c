@@ -1675,15 +1675,39 @@ int64_t py_df_loc(int64_t frame, int64_t mask) {
     int64_t keys = map_keys(map);
     int64_t nk = zt_vec_len(keys);
     int64_t mlen = zt_vec_len(mask);
+    // t404 (batch 284 dialect): an INTEGER vector selects rows BY INDEX, a
+    // 0/1 vector is a boolean mask. Our slots are untyped words, so decide
+    // from the values: any element outside {0, 1} cannot be a boolean mask.
+    // (`df[[1, 3]]` used to pass through the boolean filter and keep rows 0
+    // and 1 — the count coincided, the rows did not.)
+    int64_t mask_is_index = 0;
+    for (int64_t i = 0; i < mlen; i++) {
+        int64_t v = ((int64_t*)mask)[i];
+        if (v != 0 && v != 1) { mask_is_index = 1; break; }
+    }
     int64_t out = map_new();
     for (int64_t j = 0; j < nk; j++) {
         int64_t kdisp = ((int64_t*)keys)[j];
         int64_t col = map_get(map, map_str_key(kdisp));
         int64_t n = col ? zt_vec_len(col) : 0;
         int64_t kept = zeta_dynarray_new(n > 0 ? n : 1);
-        for (int64_t i = 0; i < n; i++) {
-            if (i < mlen && zt_map_or_vec_truthy(((int64_t*)mask)[i])) {
-                kept = vec_push(kept, ((int64_t*)col)[i]);
+        if (mask_is_index) {
+            for (int64_t i = 0; i < mlen; i++) {
+                int64_t r = ((int64_t*)mask)[i];
+                if (r < 0 || r >= n) {
+                    fprintf(stderr,
+                            "PY-A: DataFrame.loc: row index %lld out of range for %lld rows\n",
+                            (long long)r, (long long)n);
+                    fflush(stderr);
+                    abort();
+                }
+                kept = vec_push(kept, ((int64_t*)col)[r]);
+            }
+        } else {
+            for (int64_t i = 0; i < n; i++) {
+                if (i < mlen && zt_map_or_vec_truthy(((int64_t*)mask)[i])) {
+                    kept = vec_push(kept, ((int64_t*)col)[i]);
+                }
             }
         }
         map_insert(out, map_str_key(kdisp), kept);
