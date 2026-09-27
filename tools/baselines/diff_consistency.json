@@ -1,13 +1,13 @@
 {
-  "total": 458,
-  "judged": 458,
-  "match": 406,
-  "rate_pct": 88.6,
-  "match_min": 406,
+  "total": 466,
+  "judged": 466,
+  "match": 407,
+  "rate_pct": 87.3,
+  "match_min": 407,
   "by_verdict": {
-    "mismatch": 46,
-    "runtime": 3,
-    "match": 406,
+    "mismatch": 50,
+    "runtime": 6,
+    "match": 407,
     "compile": 3
   },
   "per_cat": {
@@ -20,19 +20,23 @@
       "judged": 83
     },
     "container": {
-      "match": 151,
-      "judged": 177
+      "match": 152,
+      "judged": 181
     },
     "numeric": {
       "match": 65,
-      "judged": 86
+      "judged": 88
     },
     "control": {
       "match": 69,
-      "judged": 69
+      "judged": 71
     }
   },
   "cases": {
+    "builtin_pow_divmod": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
     "class_cross_method_str": {
       "cat": "container",
       "verdict": "mismatch"
@@ -57,6 +61,10 @@
       "cat": "container",
       "verdict": "mismatch"
     },
+    "class_linked_list": {
+      "cat": "container",
+      "verdict": "match"
+    },
     "class_list_field_method": {
       "cat": "container",
       "verdict": "runtime"
@@ -77,8 +85,16 @@
       "cat": "container",
       "verdict": "mismatch"
     },
+    "class_tag_probe": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
     "class_variable_crash": {
       "cat": "container",
+      "verdict": "runtime"
+    },
+    "closure_nonlocal": {
+      "cat": "control",
       "verdict": "runtime"
     },
     "container_append": {
@@ -300,6 +316,10 @@
     "control_while": {
       "cat": "control",
       "verdict": "match"
+    },
+    "except_division_zero": {
+      "cat": "control",
+      "verdict": "mismatch"
     },
     "func_return_str_list": {
       "cat": "container",
@@ -1537,6 +1557,10 @@
       "cat": "container",
       "verdict": "mismatch"
     },
+    "list_slice_assign": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
     "numeric_abs": {
       "cat": "numeric",
       "verdict": "match"
@@ -1656,6 +1680,10 @@
     "numeric_truediv": {
       "cat": "numeric",
       "verdict": "mismatch"
+    },
+    "sorted_key_none": {
+      "cat": "container",
+      "verdict": "runtime"
     },
     "stmts_multireturn_aug": {
       "cat": "numeric",
@@ -1864,6 +1892,10 @@
     "tuple_unpack_str_type": {
       "cat": "container",
       "verdict": "match"
+    },
+    "type_conversion_gaps": {
+      "cat": "numeric",
+      "verdict": "runtime"
     }
   }
 }
