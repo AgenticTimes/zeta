@@ -4792,7 +4792,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 // time — codegen re-evaluates at each use), raise through the
                 // zeta_raise trampoline (bare `except:` catches it; uncaught
                 // → loud exit), then divide.
-                if op == "/" {
+                if op == "/" || op == "%" || op == "floordiv" {
+                    // '%' and 'floordiv' raise on a zero divisor too (CPython:
+                    // "integer division or modulo by zero") — and srem by zero
+                    // is LLVM UB, same as sdiv. Integer ops only: the guard's
+                    // zero literal stays an IntLit.
                     let rslot = match self.exprs.get(&right_id) {
                         Some(MirExpr::Var(_)) => right_id,
                         _ => {
@@ -4808,13 +4812,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             f
                         }
                     };
-                    let float_div = matches!(
-                        self.type_map.get(&rslot),
-                        Some(Type::F32) | Some(Type::F64)
-                    ) || matches!(
-                        self.type_map.get(&left_id),
-                        Some(Type::F32) | Some(Type::F64)
-                    ) || matches!(self.exprs.get(&rslot), Some(MirExpr::FloatLit(_)));
+                    let float_div = op == "/"
+                        && (matches!(
+                            self.type_map.get(&rslot),
+                            Some(Type::F32) | Some(Type::F64)
+                        ) || matches!(
+                            self.type_map.get(&left_id),
+                            Some(Type::F32) | Some(Type::F64)
+                        ) || matches!(self.exprs.get(&rslot), Some(MirExpr::FloatLit(_))));
                     let zero_id = if float_div {
                         let z = self.next_id();
                         self.exprs.insert(z, MirExpr::FloatLit(0.0));
