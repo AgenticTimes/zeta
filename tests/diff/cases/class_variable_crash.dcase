@@ -2,6 +2,14 @@
 # @note: 类变量自增崩溃——Counter.count += 1 在 map_get_default
         把 int 0 当字典解引用（rc=1）⇒ 类级属性读写路径未实现
         （CPython 2/2）。gen.rs+runtime 车道
+# 批次 571 定性（根因定位）：类体裸赋值 `count = 0` 在类脱糖中被整体丢弃
+# （struct Counter 的 fields 为空——dump 实证），而 `Counter.count` 的读
+# 下型为 FieldAccess{base: FuncAddr("Counter"), field: "count"}——在函数
+# 指针上解字段槽落到替身槽，map_get_default 把函数地址当 dict 判形崩溃。
+# 修法设计（中大型，未排期）：类体裸赋值脱糖为模块级全局 `<Class>__<name>`
+# （Python 类属性语义：全体实例共享），`Class.attr` 读/写路由到该全局；
+# `self.attr` 字段未命中时回落全局（Python 查找链）。涉及 parse_class +
+# gen.rs FieldAccess/Assign 联动，约 60-100 行。
 #@@ python
 class Counter:
     count = 0
