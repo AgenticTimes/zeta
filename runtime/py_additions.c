@@ -512,11 +512,50 @@ typedef struct {
     int has_precision;
     int precision;
     int numeric;
+    int group; /* ',' grouping option seen in the spec */
 } zt_fmt_t;
+
+// Insert ',' every three digits counting from the right (Python's ','
+// grouping option). Input must be bare digits; returns GC-fresh memory.
+static char* zt_group_digits(const char* digits) {
+    size_t n = strlen(digits);
+    size_t commas = (n == 0) ? 0 : (n - 1) / 3;
+    char* out = (char*)GC_malloc(n + commas + 1);
+    size_t wi = 0;
+    for (size_t ri = 0; ri < n; ri++) {
+        out[wi++] = digits[ri];
+        if (ri + 1 < n && (n - ri - 1) % 3 == 0) out[wi++] = ',';
+    }
+    out[wi] = 0;
+    return out;
+}
+
+// Group the integer part of an already-rendered numeric string ("sign +
+// digits[.frac]"). Returns GC-fresh memory, or NULL when grouping is a
+// no-op (≤3 integer digits or number too large for the fixed buffer).
+static char* zt_group_float_str(const char* s) {
+    const char* dig = s;
+    while (*dig == '-' || *dig == '+' || *dig == ' ') dig++;
+    const char* dot = strchr(dig, '.');
+    size_t dn = dot ? (size_t)(dot - dig) : strlen(dig);
+    if (dn <= 3 || dn > 159) return NULL;
+    char intpart[160];
+    memcpy(intpart, dig, dn);
+    intpart[dn] = 0;
+    char* g = zt_group_digits(intpart);
+    size_t pre = (size_t)(dig - s);
+    size_t rest = strlen(s) - pre - dn;
+    char* out = (char*)GC_malloc(pre + strlen(g) + rest + 1);
+    memcpy(out, s, pre);
+    memcpy(out + pre, g, strlen(g));
+    memcpy(out + pre + strlen(g), s + pre + dn, rest + 1);
+    return out;
+}
 
 static void zt_parse_spec(const char* s, zt_fmt_t* f) {
     f->fill = ' '; f->align = 0; f->sign = 0; f->type = 0; f->width = 0;
     f->zero = 0; f->has_precision = 0; f->precision = 0; f->numeric = 0;
+    f->group = 0;
     const char* p = s ? s : "";
     if (p[0] && p[1] && (p[1] == '<' || p[1] == '>' || p[1] == '^')) {
         f->fill = p[0]; f->align = p[1]; p += 2;
@@ -527,7 +566,7 @@ static void zt_parse_spec(const char* s, zt_fmt_t* f) {
     if (*p == '#') p++;
     if (*p == '0') { f->zero = 1; p++; }
     while (*p >= '0' && *p <= '9') { f->width = f->width * 10 + (*p - '0'); p++; }
-    if (*p == ',') p++;
+    if (*p == ',') { f->group = 1; p++; }
     if (*p == '.') {
         p++;
         f->has_precision = 1;
@@ -601,6 +640,12 @@ int64_t py_fmt_i64(int64_t v, int64_t spec) {
         for (int a = d0, b = k - 1; a < b; a++, b--) { char c = tmp[a]; tmp[a] = tmp[b]; tmp[b] = c; }
         tmp[k] = 0;
         return zt_fmt_pad(tmp, &f);
+    } else if (t == 'c') {
+        /* Python chr(v): single character; width padding follows string
+           (left-default) rules, not numeric ones */
+        body[0] = (char)v;
+        body[1] = 0;
+        f.numeric = 0;
     } else if (t == 'x' || t == 'X' || t == 'o') {
         char digits[160];
         snprintf(digits, sizeof digits, t == 'x' ? "%llx" : (t == 'X' ? "%llX" : "%llo"), mag);
@@ -611,10 +656,39 @@ int64_t py_fmt_i64(int64_t v, int64_t spec) {
         char cfmt[24];
         snprintf(cfmt, sizeof cfmt, f.has_precision ? "%%%s.%d%c" : "%%%s%c", sfl, f.precision, t);
         snprintf(body, sizeof body, cfmt, (double)v);
+        if (f.group) {
+            char* g = zt_group_float_str(body);
+            if (g) snprintf(body, sizeof body, "%s", g);
+        }
     } else {
-        char cfmt[24];
-        snprintf(cfmt, sizeof cfmt, "%%%slld", sfl);
-        snprintf(body, sizeof body, cfmt, (long long)v);
+        /* decimal ('d' or default) — split the sign so ',' grouping and
+           zero-fill can work on bare digits, like CPython's fill rule
+           (pad digit count so digits + commas + sign reaches the width) */
+        char sg = zt_int_sign_char(v, &f);
+        char digs[32];
+        snprintf(digs, sizeof digs, "%llu", mag);
+        size_t dn = strlen(digs);
+        size_t sl = sg ? 1u : 0u;
+        size_t dlen = dn;
+        if (f.group && f.zero && f.width > 0) {
+            while (dlen + (dlen - 1) / 3 + sl < (size_t)f.width && dlen < 30) dlen++;
+        }
+        char tmp[32];
+        if (dlen > dn) {
+            memset(tmp, '0', dlen - dn);
+            memcpy(tmp + (dlen - dn), digs, dn + 1);
+        } else {
+            memcpy(tmp, digs, dn + 1);
+        }
+        char sc[2];
+        sc[0] = sg;
+        sc[1] = 0;
+        if (f.group) {
+            char* g = zt_group_digits(tmp);
+            snprintf(body, sizeof body, "%s%s", sc, g);
+        } else {
+            snprintf(body, sizeof body, "%s%s", sc, tmp);
+        }
     }
     return zt_fmt_pad(body, &f);
 }
@@ -638,6 +712,10 @@ int64_t py_fmt_f64(double v, int64_t spec) {
         snprintf(cfmt, sizeof cfmt, "%%%s%c", sfl, t);
     }
     snprintf(body, sizeof body, cfmt, v);
+    if (f.group) {
+        char* g = zt_group_float_str(body);
+        if (g) snprintf(body, sizeof body, "%s", g);
+    }
     return zt_fmt_pad(body, &f);
 }
 
