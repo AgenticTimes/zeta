@@ -1,13 +1,13 @@
 {
   "total": 471,
   "judged": 470,
-  "match": 407,
-  "rate_pct": 86.6,
-  "match_min": 407,
+  "match": 410,
+  "rate_pct": 87.2,
+  "match_min": 410,
   "by_verdict": {
-    "mismatch": 52,
+    "mismatch": 49,
     "runtime": 7,
-    "match": 407,
+    "match": 410,
     "bad_case": 1,
     "compile": 4
   },
@@ -25,7 +25,7 @@
       "judged": 185
     },
     "numeric": {
-      "match": 65,
+      "match": 68,
       "judged": 88
     },
     "control": {
@@ -1236,7 +1236,7 @@
     },
     "gen_numeric_s20260926_008": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_numeric_s20260926_009": {
       "cat": "numeric",
@@ -1244,7 +1244,7 @@
     },
     "gen_numeric_s20260926_010": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_numeric_s20260926_011": {
       "cat": "numeric",
@@ -1336,7 +1336,7 @@
     },
     "gen_numeric_s77102_013": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_numeric_s77102_014": {
       "cat": "numeric",
