@@ -9463,7 +9463,41 @@ call, no NULL-handle dereference).",
                                     return nid;
                                 }
                             }
-                            self.exprs.insert(id, MirExpr::Var(src));
+                            // 批次 562: a literal argument ("abc") never gets
+                            // stored into a slot — forcing Var(src) made
+                            // codegen load an UNINITIALIZED alloca and
+                            // println_str strlen(NULL)'d. Mirror pure-value
+                            // expressions instead.
+                            match self.exprs.get(&src).cloned() {
+                                Some(e @ MirExpr::StringLit(_))
+                                | Some(e @ MirExpr::IntLit(_))
+                                | Some(e @ MirExpr::FloatLit(_)) => {
+                                    self.exprs.insert(id, e);
+                                }
+                                _ => {
+                                    self.exprs.insert(id, MirExpr::Var(src));
+                                }
+                            }
+                            // list(str) — CPython splits into 1-char
+                            // strings (a bare passthrough handed the string
+                            // itself back — and before 562 a literal arg
+                            // Var-passthrough read an uninit slot).
+                            if matches!(self.type_map.get(&src).cloned(), Some(Type::Str)) {
+                                let nid = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "py_list_str".to_string(),
+                                    args: vec![src],
+                                    dest: nid,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(nid, MirExpr::Var(nid));
+                                self.type_map
+                                    .insert(nid, Type::DynamicArray(Box::new(Type::Str)));
+                                self.exprs.insert(id, MirExpr::Var(nid));
+                                self.type_map
+                                    .insert(id, Type::DynamicArray(Box::new(Type::Str)));
+                                return nid;
+                            }
                             if let Some(t) = self.type_map.get(&src).cloned() {
                                 self.type_map.insert(id, t);
                             } else {
