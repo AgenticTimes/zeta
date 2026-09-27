@@ -21888,6 +21888,72 @@ vec ABI 是 `[cap @ h-16 | len @ h-8 | data…]`，句柄＝data 指针。判形
 
 **①** `zt_maybe_vec`（`:912`）同一条 `cap >= 0`，四处消费者无各自读数 ⇒ 改前先量。**②** `zt_maybe_vec_fwd` 对标量整数只在 `v < 0x1000` 时短路，更大的标量仍会解引用 `v-16`（`:3655` 那条"半截堆指针"注记同族）。**③** `pandas.z:244` `drop_duplicates` 的 `src[keep[k]]` 缺上界校验（`normidx47` 只折负数）。**④** `py_list_contains` 未接 `not in <set>`（`corpus_post.ll:24969`）、`str(x)` 仍走 `zeta_identity`（`:25008`）、`numpy.vstack` 桩 abort。**⑤** stdout 那一行堆地址样读数的成因（§五）。**⑥**（沿用在册）#48 浮点 repr 方言仍等用户裁决。产物留 `/tmp/b540/`（`pre/`、`post/` 两套对象、`drv/` 两颗驱动＋20 组 stdout/stderr、`gate.log`、`anchor{,_head,_after}.log`、`w_t515/`）；隔离 worktree `/tmp/b540/headwt` 收尾 `git worktree remove` ＋ `prune`。下一次全量门禁＝**批次 470**。队头：**#182 余 57 行 → #167 余项 ①④⑤ → #195/#196 → #203④ → #209②**。
 
+## 批次 541（3.2 Lowering × 门禁面／并入旁路 #190 交换臂后的依赖方回绿与合并面读数）：这一批**没动编译器一行**——量到的是邻侧那条臂的出码足迹：临时槽是真、路由变化只剩一个函数体、主线 301 的运行期读数这次**取不到**（本批不报位移 0）
+
+### 一、结论与归位
+
+**pyramid 层**＝3.2 Lowering（`src/middle/mir/gen.rs` 的 `Assign(Tuple,Tuple)` 臂，代码在旁路）＋ 门禁面（`python_style` 标记、差分基线）。**任务**＝闭 **#190**（元组交换顺序腐蚀）、收 **#209②**（XPASS 标记未摘）、给合并面补 AGENTS 要求的**位移 A/B**，并新增 `t516` 把交换族另两形钉住。提交：夹具 **`606848f7`**（5 files +28/−14）→ 归因修正 **`99a81b6a`**（2 files +2/−2）→ 回归夹具 **`05fe41b7`**（`t516`，20/4）→ 记录批＝本提交。合并在先＝**`1b282239`**。
+
+一句话：**#190 的修复不在主线手里**（旁路 530 `258bc29f` 落在 gen.rs），主线这批的活是三件收尾账——把被静默错值喂绿的既有用例改回真值（t24）、把 XPASS 标记摘掉（#209②）、把差分基线追平（#186 第十一次复发）；顺手量到"这条臂在真夹具上的足迹"，并如实登记**一次取不到的运行期读数**。
+
+**旧号→新号对照（不回改原文）**：#190 行内"已实证＝字面量右值正常、元组变量解包正常 ⇒ 缺口特定于右值引用左目标" → 541 的 `t516` 把**三元轮转**与**表达式右值**两形补成实测（并前红）；批次 540 §八队列尾"#209②" → 本批消费；批次 540 §五"stdout 堆地址样读数成因未定位" → 与本次"运行期读数不可得"合并记在 #213⑤′。
+
+### 二、合并面代录（`1b282239`，14 颗）
+
+`git merge cleanup` 于 `7b971906`（批次 540 收尾）之后，并 **14 颗**（`git log 7b971906..1b282239 --no-merges`）：`258bc29f`（旁路 530＝交换臂修复，#190）、`adef6f4c`（旁路 524＝`signature_ret_ty` 加 `Type::Str` 臂）、`531fbc42`／`86c58e43`（三颗 `.dcase`：`del_undefined_var`、`setdefault_str_addr`、`class_inventory_dict`），余 10 颗是 `worktree.md` 台账。**合并面 6 files +105/−2**，`src/` 只有两处：`gen.rs` **+23/−2**（新臂在 `:1956`，`if let (Tuple, Tuple)` 且等长非空 ⇒ 先把每个 RHS 元素写进 `__swap_tmp_N`，再从临时绑定 LHS）＋ `mir.rs` **+1**（`:68` `Type::Str => Type::Str`）。`runtime/`、`docs/ABI.md`、`tools/baselines/` **零命中**。
+
+**一次归因修正（`99a81b6a`）**：`606848f7` 的两处头注把交换族写成"旁路 531"，实为**旁路 530 `258bc29f`**（531 那批是 `del`／`setdefault` 两颗 `.dcase`）。530／531 相邻、`.dcase` 与臂修复又在同一次合并里进来，是第一眼最容易串的一对 ⇒ 文案改回，代码未动。
+
+### 三、快门禁（并后首跑，`/tmp/b541/gate.log`）
+
+AGENTS 快门的 13 个 `--skip-*` **原样抄用**（坑 69）。逐项读数：`official` 编译 **194/194**、编译+链接 **191/194**、link-only **3**；`python_style` **385 passed / 2 failed / 11 known-fail / 0 xpass**，红源仍是 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` 两条存量 ⇒ **零新增红**；诊断面 `official` **21 行/5 文件**、`python_style` **269 行/124 文件**；`comment_drift` 复述 **0**；`dyn_binding` **4 查 0 失**。后四格与批次 540 入册**逐字相同**。
+
+补 `t516` 之后单步复跑套件（AGENTS：夹具文本＝`python_style` 单步）：**386 passed / 2 failed / 11 known-fail / 0 xpass** ⇒ 与门禁那趟的唯一差别是新增夹具 **+1**，其余三格一字未动。
+
+`python_style` 四格的账要能自己站住（`tests/python_style/run.sh:56-72`：KNOWN-FAIL 与 XPASS **互斥**、按夹具计）：并前 **382/2/12/2**＝**14** 颗带标记（`grep -l '^// known-fail:'` 实测），摘掉 3 颗后 **385/2/11/0**＝**11** 颗带标记（夹具总数两侧同为 **401**）。⇒ passed **+3**、xpass 归 **0**、known-fail **−1** 的"矛盾"是口径：**14 − 12 ＝ 2 就是并前的 xpass**。t24 的 expect 改动不改变分类（它本来就绿）。
+
+**锚点核对**（本批只动三份文档，未碰 `docs/ABI.md`／`src/`）：`tools/check_abi_anchors.py` 当场 **RC=2／漂移 57／新 23／消失 40**（基线 300 条，按 文件+起止行 比对，改号配对 0 对）。为排除"本批文档改动把引用推离锚点"这一可能，把三份文档改动 stash 后在 **HEAD 自基线**上重跑 ⇒ 读数**逐字相同**（同一行串、同一 RC）⇒ **本批不新增漂移**。这条存量与在册 **#167 余项④**（ABI.md 的 `codegen.rs` 引用陈旧）方向一致，但**本批不认领它的归因**（未逐条对过是哪 57 条）。
+
+### 四、依赖方回绿：一条"修好了别人、必须改回真值"的用例 ＋ 一条新夹具
+
+**`t24_python_extras.z`**：`a, b = 1, 2` 之后 `a, b = b, a`，再 `print(a)`／`print(b)`。旧 lowering 打 **`2`/`2`**，CPython 打 **`2`/`1`** ⇒ 该 fixture 的第二条 expect 记的是**腐蚀读数**（#190 未修时它是"真值"）。这正是「修掉巧合会揭出依赖它的绿用例」那条在册债现形：既有绿用例的 expect 是**静默错值的产物**，修复到位后必须在同批改回真值，不许留着旧读数装绿。当场取真：本机 CPython 对这段打 `2`、`1` ⇒ `// expect: 2` → **`1`**（第一格 `2` 本就对，未动）。
+
+**三条 XPASS 摘标记（#209②）**：`t510_tuple_swap`（#190 本尊，绿**归因于该臂**——合并面里唯一碰 `Assign(Tuple,Tuple)` 的就是它）、`t401_percent_s_from_dict`、`t513_percent_format`（`%` 格式化族）。后两条**转绿批次从未二分**（460 起就 XPASS，没人查出是哪一批抬绿的）⇒ 按在册规矩**不记成任何一批的收益**，头注明写"只摘标记、不记收益"。
+
+**新增 `t516_swap_shapes.z`（`05fe41b7`，20 行／4 expect）**：把套件里只有二元交换的覆盖扩到**三元轮转**（`a, b, c = c, a, b`）、**表达式右值**（`u, s = s + u, u`）两形，并留**函数体内二元交换**作负对照。四格期望逐字来自本机 CPython（`3 1 2`／`8`／`cd`／`abcd`）。**改前必红已用并前二进制实拍**（不是推断）：`zetac_pre541` 跑 ⇒ FAIL，实际输出 `3 3 3`／`8`／`abcd`／`abcd`（三格里两格被打坏，第三格是负对照）；`zetac_post541` 跑 ⇒ PASS。⇒ #190 的闭合范围第一次有了仓内锁，而不只是 t510 那一格。
+
+### 五、差分基线追平（#186 第十一次复发）
+
+合并带进 3 颗 `.dcase`，而 `tools/baselines/diff_consistency.json` 停在它们入表前 ⇒ 门禁 diff 步的分母少 3 颗（**#186 的老形状**：基线落后 ⇒ "无回归"跑在松了的闸上）。本批 `--bless` 追平（在 `606848f7` 内）：**total 468 → 471**、**judged 468 → 470**、**match 407 → 407（一字未动）**、rate **87.0 → 86.6**、`container.judged 183 → 185`；`by_verdict`＝`match 407`／`mismatch 50 → 52`／`runtime 7`／`compile 4`／**新增 `bad_case 1`**。**`match_min` 保持 407**（没被顺手抬高——这一格是门禁"match 不许变差"判据的承重点，动它就是把闸松了）。
+
+三条新入表钉桩的读数（当场确认跑，`/tmp/b541/diff_confirm.log:70`）：`diff test: match=407 judged=470 rate=86.6% bad_case=1（总用例 471）`，其中 `class_inventory_dict` **mismatch**、`setdefault_str_addr` **mismatch**、`del_undefined_var` **bad_case**（`:19` `参考侧退出 1: NameError: name 'x' is not defined` ⇒ 参考侧自己抛，属用例形状而非实现差异）。一致率降 **0.4 个百分点**完全来自分母（407/470 vs 407/468），差分的**回归分支一字未响**。
+
+### 六、位移 A/B（IR 侧正证据：出码多了什么、路由变了什么）
+
+按 AGENTS 的"先 `--emit-llvm` 单模块比对，再上整程序"（438 在册）。两颗二进制**同放 `target/release/`**（坑 68：库面随位置变 ⇒ `pre d9b10409…`／`post cffb12b3…`，当前 `zetac` 与 post 同 md5）。
+
+**驱动 `strategies/code/_zeta_local_drv.py`（真 301 夹具）**：IR **100,047 → 100,099 行（+52）**，`define|declare` 两侧同为 **573**，改动体 **7** 个，逐体行数＝`"MarketDataFetcher::fetch_stocks"` +6、`backend_datasrc_code_conv__normalize_to_jq` +6、`backend_datasrc_data_cleaning___fix_ohlc_row` **+16**、`...validate_and_repair_stock_ohlcv` +6、`backend_strategy_code_conv__normalize_to_jq` +6、`jq_wufu__weighted_slope_r2` +6、`strategies_code_jq_shim__get_price` +6。**七个体的 call-site 数一个都没变**（395／39／14／96／39／36／121，两侧逐字相同），变的只有 `alloca`：**870→872、117→119、38→42、257→259、117→119、114→116、281→283**（合计 **+16 个槽**）。⇒ 主线驱动上这条臂的足迹＝**多插临时槽**；逐行 diff 里其它 +6 表现为同一槽位号在 `i64`↔`double` 间来回跳，那是后续槽编号整体后移的**副产品**，不是类型改了。**零路由变化**。
+
+**语料侧 `jq_wufu_daily.py`**：IR **35,499 → 35,536 行（+37）**，`define|declare` **895 → 896**（多出的 1 条是外部声明 `declare i64 @py_vec_le_i(i64, i64)`，`ir_post.ll:35487`），改动体 4 个。三个体同驱动形状（alloca +2、call-site 不变）；唯 **`corr_group_select` 是真路由变化**：call-site **50 → 56**，callee 集合 `pre-only=[zeta_float_f64]`／`post-only=[py_vec_le_i, zeta_dyn_truth, zeta_float_i64]`，体行数 656 → 673。
+
+**一条归因边界（未做单臂剥离）**：合并面 `src/` 有**两颗**臂（`gen.rs:1956` 交换、`mir.rs:68` Str 返回），本批只量到"合并面整体"的足迹 ⇒ `corr_group_select` 那 6 条新调用点的**唯一作者未定**。这不影响"有没有回归"（IR 有足迹、套件零新增红），影响的是"该记在哪一批头上"⇒ 挂 **#213⑦**，不做二分离不开下一次收益归因。
+
+### 七、运行期 A/B：**这次读数取不到**（登记为"不可得"，不是位移 0）
+
+两颗驱动都链接成功（md5 不同 `d8b8f791…`／`929b43f7…`；链接要 `ZETA_STRICT_RUNTIME_DIR=1 ZETA_RUNTIME_DIR=/tmp/b541/rt`，否则仓根的 `.o` 副本抢优先级、两侧读到同一颗）。n=6/侧：**12/12 rc=1**，stderr 各 6 行；按"十六进制 → `0xADDR`、数字 → `N`"归一后**每侧 6 次只有 1 种形状**，且两侧同 md5 `c2c1f04a78ad8e730f591964357b8191`；崩形末行 `Unhandled exception: code=…`，stdout 为空，`grep -c 成交` 两侧皆 **0**。
+
+**决定性对照**：拿批次 540 自己留下的那颗 `bin_post`（当天早些时候**跑完并打过** `[local] 回测完成: 1000000 -> 0 (-100.00%)`）在同一台机器上重跑，现在**同样 rc=1、同样崩在同一处**（`/tmp/b541/drv/ctrl540.stderr`）。⇒ 变的是**它下面的数据/缓存分支**（`backend.market_data` 的 baostock 批量路径与"上市日过滤失败"两行在场），不是二进制。所以本批**不报"位移 0"，报"读数不可得"**：位移的正证据只在 §六 的 IR 侧，运行期这一格空着，与 540 那条"堆地址样 stdout"一起挂在 **#213⑤′**。
+
+两条量法事实（进坑面）：**入口文件认错一次**——`jq_wufu_daily.py` 不是 301 驱动，真驱动是 `strategies/code/_zeta_local_drv.py`（540 的编译日志 import 集是线索）；**文本正则数"哪些语料文件有交换"给出的 5532／3475 命中全是关键字实参的假阳性** ⇒ 那批 grep 证据**作废**，成员定位改用编译器自己的 IR diff（`/tmp/b541/tuple_sites.txt` 只作旁证）。
+
+### 八、本批未收（OPEN 净增 **0**：闭 #190、#209 转 🟡、#213 续写 ⑤′⑦）
+
+**#190 ✅**：闭合范围＝"RHS 先整体入临时再绑定"覆盖的元组赋值形状（二元交换、三元轮转、表达式右值），由 `t510`＋`t516`＋`t24` 三颗钉住；**不含**调用返回值解包与 tuple 的运行期表示（那是 **#199**，原样在册）。**#209 → 🟡**：② ✅ 本批（三条标记摘除、xpass 归 0），① 仍在 tools 车道（`run_all.sh:479-480` 的 mbvar 分母标签，用户裁定不改）。**#213 续写两格**：⑤′＝"主线 301 运行期读数在本次 A/B 不可得，成因＝数据分支而非二进制（540 对照实拍）"；⑦＝"合并面两颗臂未做单臂剥离 ⇒ `corr_group_select` 的 6 条新调用点作者未定"。**原样未动**：①`zt_maybe_vec` 那四处消费者的读数、②`v-16` 解引用、③`drop_duplicates` 上界、④三条动态臂。
+
+**账务（当场实测，不抄旧读数）**：全表 `^| #` 行仍 **43** 条（本批**无新行**），状态格含 ⬜/🟡/🔶/❓ 者 **23 → 22**（#190 转 ✅；#209 ⬜→🟡 仍算 open；#213 仍 ⬜），登记规则 2 的 ≤30 上限未触。
+
+产物留 `/tmp/b541/`（`drv/` 两颗驱动＋12 组 stdout/stderr＋`ctrl540.*`＋四份 IR 与 `ir.diff`、`rt/` 运行期对象、`gate.log`、`ps516.log`、`diff_confirm.log`、`w516_{pre,post}/`、`headwt/` 隔离 worktree）；`target/release/zetac_pre541`／`zetac_post541` 按下一次全量的口径保留到那时再清。隔离 worktree 收尾 `git worktree remove` ＋ `prune`。下一次全量门禁＝**批次 470**。队头：**#182 余 57 行 → #167 余项 ①④⑤ → #195/#196 → #203④ → #213①**（#209② 已被本批消费；⑤′＋⑦ 可合批做"单臂剥离＋读数恢复"）。
+
 ## 旁路并入（2026-09-27，批次 535 收尾合并：旁路 534b／535／537／538 ＋ #186 第十次复发代录）
 
 **合并面**：`git merge cleanup`＝**`1f8a64d9`**，并 5 颗（`6544ea7d` 534 的 `sorted_key_func.dcase`、`57767295` 旁路 535 台账、`4021da04` 537 的 `method_name_collision.dcase`、`fc2ae8d2`/`5d6e0e75` 537／538 台账），文件面 **3 files +40/−0**＝2 颗 `.dcase` ＋ `worktree.md` 3 行。**并入面对 `src/`、`runtime/`、`docs/ABI.md`、`tools/baselines/` 零命中** ⇒ 批次 535 的快门禁与位移读数不因本次合并失效（不重跑，口径照 451 收尾／452 收尾）；`cargo build --release` 当场回 `Finished`＝未重编，`target/release/zetac` md5 仍 `d9b10409…`（依 447 那条教训只作观察，不用哈希论证二进制同异）。台账行在 `worktree.md` §4「535 收尾」＋ §7 合并日志。
