@@ -22134,6 +22134,55 @@ official **194/194**·**191/194**·link-only **3**（`integration_all_features`�
 - 夹具运行与门禁窗口有重叠（夹具编译到 16:38，门禁 JSON ts 16:39:03Z）。这不影响本批读数，理由是**两条当场核过的**：① 零 `src/` 改动 ⇒ 期间重编出的二进制与本批开始时的编译器同内容；② 每条夹具的编译 stderr 都写着 `imported module pandas from /Users/meetai/source/zeta-src/pylib/pandas.z` ⇒ 库面基来自仓内，**坑 68 那个"二进制在仓外＝库面变薄"的成因在本批不存在**（`zetac` 从未离开 `target/release/`）。
 - **#196 硬核对**（口径＝`grep -cE '^\| [0-9]+ \| bootstrap' worktree.md`）：§4 台账行入册前 HEAD **50** ＝ 工作树 **50**，本行入册后 **51**。backlog 侧复算：`^| #` 全表 **43** 条、open **22** 条，两个数都与入册前相同 ⇒ **OPEN 净增 0**。
 
+## 旁路并入（2026-09-27，批次 545 收尾合并 `d64d6bc4`：带入旁路 545 的 env-first 读 ＋ 合并把 gen.rs 锚点面打到 69 漂移、其中 8 条只能人绑）
+
+### 一、带入面与编号撞车（第五次，如实登记、两侧都不回改）
+
+`git log --oneline HEAD^1..HEAD^2`＝**2 颗**：旁路 545 的 `2c88e997`（fix：`py_entry` 模块体对模块全局改 env-first 读，闭 t425）与 `515c78cc`（台账）。`git diff --numstat HEAD^1 HEAD`＝**6 文件 +158/−3**：`src/middle/mir/gen.rs` **99/1**、`t423_static_mut_persistent.z` 4/1、`t425_module_body_stale_read.z` 4/1、`t450_dyn_slot_no_tag_class.z` 4/0、新钉 `t518_module_global_env_first.z` **+46**、`worktree.md` 1/0。`runtime/`、`tools/`、`docs/` 在并入面**零命中**。
+
+**编号撞车（第五次）**：旁路本批也用「545」⇒ 引用一律以 commit 哈希为身份（主线 545＝`cac6f7b9`＋`76cd55cf`；旁路 545＝`2c88e997`＋`515c78cc`）。前四次在册（460／535／537–538 一线／542／544），两侧台账都不回改。**主线下一批取号须越过旁路水位 545 ⇒ 546 起。**
+
+### 二、合并树复跑读数（快门禁，`/tmp/b545/gate_merge.log`，`GATE_RC=1`）
+
+配方逐字取 AGENTS.md §门禁节奏。**先 `cargo build --release` 再跑门禁**（`/tmp/b545/merge_build.log`：18.76s、回 `Compiling zetac v0.11.0`＝真重编，不是 `Finished` 空转）—— 任务 #175 那条"改完源码的门禁可能跑在旧二进制上"在动 `src/middle` 的合并上是必踩的。
+
+| 步 | 合并树读数 | 与主线 545 §七 之比 |
+|---|---|---|
+| official | compile **194/194**、compile+link **191/194**（link-only 3 条存量名单未变） | 相同 |
+| official 诊断 | 5 文件 / 21 行 | 相同 |
+| python_style | **391 passed／2 failed／9 known-fail／0 xpass**；`391+2+9 = 402 = ls tests/python_style/t*.z`（当场 402）；红源仍 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` | passed **+2**、known-fail **−1**、总数 **+1**，failed/xpass 相同 |
+| python_style 诊断 | 272 行 / 125 文件 | 相同 |
+| comment_drift | 0 处复述 | 相同 |
+| dyn_binding | 4 条断言、不一致 0（rc=0） | 相同 |
+| corpus／jit／diff／knob／swallow／import／empty／clean／pysrc／sem／ignore／mbvar／emit-stable | 13 步 skipped | — |
+
+**四处差额逐项归位**（口径＝`git grep -l '^// known-fail:'` 在 `76cd55cf` 与 `HEAD` 两颗上的集合差，`/tmp/b545/kf_pre.txt`／`kf_post.txt`）：known-fail 10→9 的**唯一**成员变化就是 `t425_module_body_stale_read.z` 摘钉；passed 389→391＝该摘钉＋新钉 t518；总数 401→402＝t518 一颗；`t450` 的 +4 行只给既有 `// known-fail:` 追加"复钉理由"（那行本身未动）⇒ 它不出现在集合差里，与读数相合。`xpass 0` ⇒ 没有夹具靠巧合变绿。诊断面 272/125 与 545 逐字相同 ⇒ 新并入的 46 行夹具自身没进诊断面（125 是"有 warning 的文件数"，未 +1）。
+
+### 三、位移 A/B：依据"编译器源码同源"这一实测从旁侧转移，主线侧未重跑
+
+`git diff --numstat 2c88e997 HEAD -- src/ runtime/`＝**空输出**（当场实测）⇒ 合并树的 `src/`＋`runtime/` 与旁路那颗修好后的提交逐字节相同，旁侧那组 A/B 的 post 侧与本树同源。旁侧在册读数（`2c88e997` 提交信息）：真 301 驱动 `_zeta_local_drv.py`、两颗二进制（pre `cffb12b3`＝541 终态／post `771d1b49`）同 pylib（`ZETA_PYLIB` 钉住）同 runtime（`rt545`），**IR 69,112 行逐字节相同**（define 各 385、增删函数 0）、运行 n=3/侧 rc=0、stdout+stderr 归一后 md5 相同 ⇒ 位移 0。
+
+主线侧**未**重跑这组 A/B：依据是同源性而非复测 ⇒ 记为「并入面位移读数取自旁侧、主线未复测」，不写作"主线复测过"，也不写作"位移 0 由本树实测"。
+
+**旁侧那条坑记并入主线台账（与坑 68 同根）**：他们首轮的"位移 +119 函数"是假的——`/tmp` 下的 `zetac` ① 找不到 pylib（W1006）② 找不到 runtime `.o` 时**静默丢整个运行时**。坑 68 在册的是"二进制在仓外＝库面少 3 条布局"，本条给出相反方向的同一个量（库面在＝define 多出 119 个）⇒ 两个方向合起来把坑 68 的修法收紧成一句：**跨树 A/B 必须 `ZETA_PYLIB` 与 `ZETA_RUNTIME_DIR` 都显式钉住**，"两颗放同一目录"不足以保证环境基相同。
+
+### 四、锚点面：漂移 69 → 0，其中 8 条只能人绑（这是 `--rebind` 的设计行为，不是它出错）
+
+gen.rs +99 行让 `docs/ABI.md` 的 gen.rs 引用整体搬家。合并后只读核对当场：漂移 **69**／新 0／消失 0（基线 304 条、342 条引用全可解析、定位失败 0）。
+
+- **一趟 `--rebind`**（先 `--dry` 看清拒改面再实跑）：判定搬家 **61**／**拒改 8**；改写 `docs/ABI.md` 45 行／91 个数字，基线随之刷新为 304 条（拒改的 8 条原样保留 ⇒ 核对器继续报错）。**本批没有 544 那种"第二趟配对"**：8 条拒改在平移后仍不唯一（成因见下条），配对无从发生。
+- **人绑 8 条**（`docs/ABI.md` 内逐条 `assert s.count(a)==1` 后改）：`:1618→:1623`、`:15380→:15478`、`:1770→:1775`、`:1785→:1790`、`:2232→:2237`、`:2234→:2239`、`:2249→:2254`、`:2324→:2329`。人绑后核对器报「漂移 0／新 8／消失 8，其中改号配对 2 对 ⇒ 落单新 6／落单消失 6」。
+- **收尾两步**：`--bless-only` 点名 8 个键（每段带完整路径＝坑 67）⇒ 基线 304→**312**（新入表 8）；`--prune-gone`（#214 那条删除路径）⇒ 删死行 **8**、312→**304**。终态 ANCHOR_RC＝**0**：漂移 0／新 0／消失 0，待归属 98 条·88 种、声明仓外 14 条、共用键 38 条全部不变；`docs/ABI.md` **46 行**改写、仍 **1158** 行，`tools/baselines/abi_anchors.tsv` **69 行**改写、仍 **392** 行（等长改号 ⇒ 按 #52 免重扫其它文档）。
+
+**入册的判据精确化（承 544 §二那条）**：`--rebind` 的"唯一"是**全文件内容唯一**，不是"最邻近命中"。本批 8 条拒改里 7 条的原因是**被引用的那行在 gen.rs 里本来就有 2–4 个同形调用点**——`self.mirror_module_global_writes();` 在 1623 与 15478、`let key_id = self.env_store(name, rhs_id);` 在 1790 与 2254、`self.env_store(name, rhs_id);` 在 2239 与 2329、`if self.nonlocal_names.contains(name) {` 4 处（2237/2327/4346/4432）；第 8 条是 `);` 这种 139 处命中的极端重复。⇒ 只要文档同时引用同一句的多个调用点，纯平移批次里这几条**必然**要人绑：工具手上没有"旧号＋平移量"这条第三方信息。544 记的是"相邻同形"（4/24），本批是"分散同形"（8/69），两批合起来才是这条判据的完整形状；「纯搬家批次默认按两趟规划」维持，但要加一句：**第二趟只对"拒改后互为唯一"的条目有效，同形多点的那类直接进人绑**。
+
+### 五、账务与产物
+
+- **#196 硬核对**（口径＝`grep -cE '^\| [0-9]+ \| bootstrap' worktree.md`）：并入后 §4 仍是 **51** 行（旁路只动 §5 与 §7），本次合并记录不入 §4 ⇒ 无新增行；§7 合并日志 **+2 行**（带入面一行、收尾读数一行），`worktree.md` 290→**292**。backlog 侧：`^| #` 全表 **43** 条、open **22** 条 ⇒ **OPEN 净增 0**。
+- 提交拆分：锚点修复一笔＝`10ae13cf`（`docs/ABI.md`＋`tools/baselines/abi_anchors.tsv`，纯改号）、本记录＋§7 一笔。合并提交本身＝`d64d6bc4`。
+- 产物：`/tmp/b545/`（`anchor_post_merge.txt`、`rebind_dry.txt`、`rebind.txt`、`anchor_after_hand.txt`、`bless8.txt`、`prune.txt`、`anchor3.txt`、`anchor_final.txt`、`merge_build.log`、`gate_merge.log`、`kf_pre.txt`、`kf_post.txt`）。
+- **下一次全量门禁＝批次 550**（AGENTS.md：走到 10 的整数倍那批的收尾）。544 记录里那句"下一次全量＝批次 470"是号段还在 4xx 时写的，历史行不回改，以本行为准（470→550 的映射即号段从 4xx 推进到 5xx）。
+
 ## 旁路并入（2026-09-27，批次 535 收尾合并：旁路 534b／535／537／538 ＋ #186 第十次复发代录）
 
 **合并面**：`git merge cleanup`＝**`1f8a64d9`**，并 5 颗（`6544ea7d` 534 的 `sorted_key_func.dcase`、`57767295` 旁路 535 台账、`4021da04` 537 的 `method_name_collision.dcase`、`fc2ae8d2`/`5d6e0e75` 537／538 台账），文件面 **3 files +40/−0**＝2 颗 `.dcase` ＋ `worktree.md` 3 行。**并入面对 `src/`、`runtime/`、`docs/ABI.md`、`tools/baselines/` 零命中** ⇒ 批次 535 的快门禁与位移读数不因本次合并失效（不重跑，口径照 451 收尾／452 收尾）；`cargo build --release` 当场回 `Finished`＝未重编，`target/release/zetac` md5 仍 `d9b10409…`（依 447 那条教训只作观察，不用哈希论证二进制同异）。台账行在 `worktree.md` §4「535 收尾」＋ §7 合并日志。
