@@ -3481,6 +3481,39 @@ int64_t py_list_str(int64_t s) {
     return (int64_t)(base + 2);
 }
 
+// Batch 564: slice assignment `xs[a:b] = repl` — returns a NEW handle with
+// vec[a:b] replaced by repl's elements (caller rebinds the base slot, the
+// vec_push rebind convention). Negative bounds normalize against the
+// current length; out-of-range bounds clamp.
+int64_t py_list_splice(int64_t vec, int64_t start, int64_t end, int64_t repl) {
+    int64_t n = zt_vec_len(vec);
+    // The omitted-bound sentinels: start == i64::MIN means "from 0",
+    // end == i64::MIN means "to the end" (the parser's spellings).
+    if (start == (-9223372036854775807LL - 1)) start = 0;
+    if (end == (-9223372036854775807LL - 1)) end = n;
+    if (start < 0) start += n;
+    if (end < 0) end += n;
+    if (start < 0) start = 0;
+    if (end > n) end = n;
+    if (start > end) { start = end; }
+    int64_t rn = zt_vec_len(repl);
+    int64_t nn = n - (end - start) + rn;
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(nn > 0 ? nn : 1) * 8);
+    base[0] = nn > 0 ? nn : 1;
+    base[1] = nn;
+    for (int64_t i = 0; i < start; i++) base[2 + i] = ((int64_t*)vec)[i];
+    for (int64_t i = 0; i < rn; i++) base[2 + start + i] = ((int64_t*)repl)[i];
+    for (int64_t i = end; i < n; i++) base[2 + start + rn + (i - end)] = ((int64_t*)vec)[i];
+    return (int64_t)(base + 2);
+}
+
+// Batch 564: `xs[:end] = repl` — open-start splice (the parser's omitted
+// start arrives as start=0; the omitted END arrives as the i64::MIN
+// sentinel, handled here).
+int64_t py_list_splice_open(int64_t vec, int64_t end, int64_t repl) {
+    return py_list_splice(vec, 0, end, repl);
+}
+
 // ── PY-A: Python list methods ────────────────────────────────────────
 // index/count/insert/remove/pop/sort/reverse. Vec layout: the handle points
 // at the data, header [cap|len] at handle-16 (vec_push/vec_len layout).

@@ -2059,7 +2059,90 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 }
                 let rhs_id = self.lower_expr(rhs);
                 self.pending_closure_binding = None;
+                // 批次 564: the parser desugars a slice LHS `xs[a:b] = repl`
+                // into `__slice__(xs, a, b)` CALL — not a Subscript — so the
+                // assignment was dropped silently. Splice via the runtime and
+                // rebind the base slot (the vec_push rebind convention).
+                // The slice LHS parses as Call{receiver: base, method:
+                // "__slice__", args: [start, end]} (2-arg form; the parser
+                // folds omitted bounds into Lit(0) / Lit(i64::MIN) sentinels).
+                if let AstNode::Call {
+                    method,
+                    args: slice_args,
+                    receiver: Some(recv),
+                    ..
+                } = &**lhs
+                {
+                    if method == "__slice__" && slice_args.len() == 2 {
+                        if let AstNode::Var(bname) = &**recv {
+                            if let Some(base_slot) = self.name_to_id.get(bname).copied() {
+                                let xs = self.lower_expr(recv);
+                                let s_id = self.lower_expr(&slice_args[0]);
+                                let e_id = self.lower_expr(&slice_args[1]);
+                                let repl_id = self.lower_expr(rhs);
+                                let nid = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "py_list_splice".to_string(),
+                                    args: vec![xs, s_id, e_id, repl_id],
+                                    dest: nid,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(nid, MirExpr::Var(nid));
+                                self.type_map
+                                    .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
+                                self.stmts.push(MirStmt::Assign {
+                                    lhs: base_slot,
+                                    rhs: nid,
+                                });
+                                return;
+                            }
+                        }
+                    }
+                }
                 if let AstNode::Subscript { base, index } = &**lhs {
+                    // 批次 564: slice assignment `xs[a:b] = repl` — previously
+                    // dropped silently (xs unchanged). Splice via the runtime
+                    // and rebind the base slot to the new handle (the vec_push
+                    // rebind convention — other aliases see stale data, same
+                    // limitation the codebase already documents).
+                    // `1:3` and `1..3` are both valid slice spellings here.
+                    let slice_bounds: Option<(&AstNode, &AstNode)> =
+                        match &**index {
+                            AstNode::Range { start, end, .. } => Some((start, end)),
+                            AstNode::BinaryOp { op, left, right }
+                                if op == ".." =>
+                            {
+                                Some((left, right))
+                            }
+                            _ => None,
+                        };
+                    if let (AstNode::Var(bname), Some((start, end))) =
+                        (&**base, slice_bounds)
+                    {
+                        let base_slot = self.name_to_id.get(bname).copied();
+                        if let Some(base_slot) = base_slot {
+                            let xs = self.lower_expr(base);
+                            let s_id = self.lower_expr(start);
+                            let e_id = self.lower_expr(end);
+                            let repl_id = self.lower_expr(rhs);
+                            let nid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_list_splice".to_string(),
+                                args: vec![xs, s_id, e_id, repl_id],
+                                dest: nid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(nid, MirExpr::Var(nid));
+                            self.type_map
+                                .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
+                            // rebind the base variable to the new handle
+                            self.stmts.push(MirStmt::Assign {
+                                lhs: base_slot,
+                                rhs: nid,
+                            });
+                            return;
+                        }
+                    }
                     let base_id = self.lower_expr(base);
                     let index_id = self.lower_expr(index);
 
@@ -8221,7 +8304,17 @@ call, no NULL-handle dereference).",
                                 type_args: vec![],
                             });
                             self.exprs.insert(dest, MirExpr::Var(dest));
-                            self.type_map.insert(dest, Type::I64);
+                            // Batch 564: min/max over ALL-Bool operands is a
+                            // Bool (`min(1 == 2, 3 == 4)` is False) — typing
+                            // it I64 made print render `0`. A Bool mixed with
+                            // an int keeps I64 (the int result would misrender
+                            // as True/False).
+                            let both_bool = matches!(
+                                self.type_map.get(&acc),
+                                Some(Type::Bool)
+                            ) && matches!(self.type_map.get(&arg), Some(Type::Bool));
+                            self.type_map
+                                .insert(dest, if both_bool { Type::Bool } else { Type::I64 });
                         }
                         acc = dest;
                     }
