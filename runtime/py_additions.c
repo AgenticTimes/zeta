@@ -3451,6 +3451,78 @@ int64_t zeta_map_pop_default(int64_t m, int64_t key, int64_t def) {
     return out;
 }
 int64_t zeta_map_pop(int64_t m, int64_t key) { return zeta_map_pop_default(m, key, 0); }
+
+// ── PY-A: dict.copy / dict.popitem / list.copy (批次 550) ────────────
+// d.copy() — shallow copy. Raw (content-hashed) keys must survive the
+// copy verbatim, or later d["k"] lookups would miss (py_map_update does
+// exactly that; display-text re-insertion would never be found).
+int64_t map__copy(int64_t m) {
+    if (!m) return 0;
+    int64_t out = map_new();
+    py_map_update(out, m);
+    return out;
+}
+
+// d.popitem() — remove and return the LAST (key, value) as a 2-slot
+// [k, v] block (tuple destructuring reads it via stack_array_get). Slot
+// order approximates insertion order — the open-addressing table has no
+// ordering, the same approximation py_map_items makes. Keys come back as
+// DISPLAY text (string keys are stored content-hashed; raw hashes would
+// print as numbers and never re-insert). Empty dict → loud abort.
+int64_t map__popitem(int64_t m) {
+    if (!m) {
+        fprintf(stderr, "PY-A: dict.popitem(): dict is missing\n");
+        fflush(stderr);
+        abort();
+    }
+    m = map_resolve(m);
+    int64_t cap = ((int64_t*)m)[0];
+    if (cap < 0) cap = 0;
+    char* last = NULL;
+    for (int64_t i = 0; i < cap; i++) {
+        char* e = (char*)m + 16 + i * MAP_ENTRY_SIZE;
+        if (*(uint8_t*)(e + 16)) last = e;
+    }
+    if (!last) {
+        fprintf(stderr, "PY-A: dict.popitem(): empty dict\n");
+        fflush(stderr);
+        abort();
+    }
+    int64_t k = *(int64_t*)last;
+    int64_t v = *((int64_t*)last + 1);
+    // No-tombstone removal: rebuild in place without the popped entry
+    // (same idiom as zeta_map_pop_default).
+    int64_t* ks = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
+    int64_t* vs = (int64_t*)GC_malloc((size_t)(cap ? cap : 1) * 8);
+    int64_t n = 0;
+    for (int64_t i = 0; i < cap; i++) {
+        char* e = (char*)m + 16 + i * MAP_ENTRY_SIZE;
+        if (!*(uint8_t*)(e + 16) || e == last) continue;
+        ks[n] = *(int64_t*)e;
+        vs[n] = *((int64_t*)e + 1);
+        n++;
+    }
+    for (int64_t i = 0; i < cap; i++)
+        *(uint8_t*)((char*)m + 16 + i * MAP_ENTRY_SIZE + 16) = 0;
+    ((int64_t*)m)[1] = 0;
+    for (int64_t i = 0; i < n; i++) map_insert(m, ks[i], vs[i]);
+    int64_t* pair = (int64_t*)GC_malloc(16 + 2 * 8);
+    pair[0] = 2;
+    pair[1] = 2;
+    pair[2] = zt_key_display(k);
+    pair[3] = v;
+    return (int64_t)(pair + 2);
+}
+
+// xs.copy() — shallow list copy. The compiler's identity `copy` builtin
+// returned the SAME handle, so appending to a "copy" mutated the source.
+int64_t zeta_vec_copy(int64_t vec) {
+    if (!vec) return 0;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    for (int64_t i = 0; i < n; i++) out = vec_push(out, ((int64_t*)vec)[i]);
+    return out;
+}
 int64_t zeta_map_clear(int64_t m) {
     if (!m) return m;
     m = map_resolve(m);

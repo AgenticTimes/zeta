@@ -11483,6 +11483,66 @@ call, no NULL-handle dereference).",
                     return id;
                 }
 
+                // 批次 550: `d.copy()` / `d.popitem()` on a dict, `xs.copy()`
+                // on a list. The generic member path emitted `map::copy` →
+                // undefined `map__copy` (LINK_FAIL), and a list `.copy()`
+                // fell into the identity builtin and returned the SAME
+                // handle — copies that alias their source.
+                if method == "copy"
+                    && arg_ids.len() == 1
+                    && matches!(
+                        receiver_ty.as_ref(),
+                        Some(Type::Named(n, _)) if n == "map" || n == "dict"
+                    )
+                {
+                    let ret = receiver_ty.as_ref().cloned().unwrap_or(Type::I64);
+                    self.stmts.push(MirStmt::Call {
+                        func: "map__copy".to_string(),
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, ret);
+                    return id;
+                }
+                if method == "popitem"
+                    && arg_ids.len() == 1
+                    && matches!(
+                        receiver_ty.as_ref(),
+                        Some(Type::Named(n, ts)) if (n == "map" || n == "dict") && ts.len() == 2
+                    )
+                {
+                    let (kt, vt) = match receiver_ty.as_ref() {
+                        Some(Type::Named(_, ts)) => (ts[0].clone(), ts[1].clone()),
+                        _ => (Type::Str, Type::I64),
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: "map__popitem".to_string(),
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::Named("tuple".to_string(), vec![kt, vt]));
+                    return id;
+                }
+                if method == "copy"
+                    && arg_ids.len() == 1
+                    && receiver_ty.as_ref().map_or(false, |t| matches!(t, Type::DynamicArray(_)))
+                {
+                    let ret = receiver_ty.as_ref().cloned().unwrap_or(Type::I64);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_vec_copy".to_string(),
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, ret);
+                    return id;
+                }
                 // PY-A: string methods — dispatch to host_str_* runtime by
                 // receiver type (Python s.upper()/s.contains(x)/... )
                 if receiver_ty.as_ref().map_or(false, |t| matches!(t, Type::Str)) {

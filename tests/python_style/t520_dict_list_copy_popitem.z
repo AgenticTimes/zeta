@@ -1,0 +1,34 @@
+// 批次 550（旁路 cleanup）：dict.copy / dict.popitem / list.copy 接入
+// （method_sweep 最后 3 缺）。copy 系要求独立句柄——此前 list.copy 撞上
+// "copy 内建＝恒等"特判返回同一个句柄（append 污染源列表）。
+// 已注册偏离（#48 方言类）：popitem 的"弹哪一对"按开放寻址槽序近似，
+// CPython 是插入序 LIFO——精确序需动表项 24 字节布局（qwen 车道登记），
+// 本夹具只断言对的值语义：对的结构、移除生效、copy 独立。
+d = {"a": 1, "b": 2}
+dc = d.copy()
+dc["c"] = 3
+print(len(d))
+print(len(dc))
+print(dc["c"])
+item = d.popitem()
+k, v = item
+print(v)
+print(len(d))
+print(len(item))
+xs = [1, 2, 3]
+xc = xs.copy()
+xc.append(4)
+print(len(xs))
+print(len(xc))
+print(xc[3])
+print(xc[0])
+// expect: 2
+// expect: 3
+// expect: 3
+// expect: 1
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: 4
+// expect: 4
+// expect: 1
