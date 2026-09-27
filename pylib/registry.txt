@@ -524,3 +524,12 @@ X py_slice_new args=i64,i64,i64 ret=i64
 X py_list_eq args=i64,i64,i64 ret=i64
 X py_getitem2 args=i64,i64,i64 ret=i64
 X py_logger_info_n args=i64,i64,i64,i64,i64,i64,i64 ret=i64
+
+# ---- batch 546: C 侧带 argc 后缀的真符号，必须让编译器认得 ----
+# 接收者类型未知的 `.clip(<kw>)` 按下型层的 argc 命名规则发出 `clip_2`/`clip_3`，
+# 后缀**就是符号名**（`runtime/py_additions.c:1386`、`:1387`）。缺了这两行，
+# `codegen.rs:3221` 那条"还原 name_N 消歧后缀"的兜底会把调用改绑到单参的 `clip`，
+# 下界/上界实参在跨 C 边界时被丢（实测：负数原样穿过，rc=0）。
+# 基名 `clip` 刻意**不**登记：登记了反而让那条兜底在 `:3229` 找到它、照旧截断实参表。
+X clip_2 args=i64,i64 ret=i64
+X clip_3 args=i64,i64,i64 ret=i64

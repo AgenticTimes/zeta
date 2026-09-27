@@ -393,6 +393,17 @@ pub fn known_module_names() -> Vec<&'static str> {
     registry().modules.iter().map(|m| m.name.as_str()).collect()
 }
 
+/// True for symbols whose trailing `_N` is part of the C symbol name rather
+/// than a MIR disambiguator LLVM may later reverse (`clip_2`, `py_map_most_common_2`).
+fn ends_with_argc_suffix(sym: &str) -> bool {
+    match sym.rsplit_once('_') {
+        Some((base, digits)) => {
+            !base.is_empty() && !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+        }
+        None => false,
+    }
+}
+
 /// Every extern the shims need, with its exact signature — codegen declares
 /// these instead of keeping a second hand-written list in sync.
 pub fn all_externs() -> Vec<(&'static str, Vec<&'static str>, &'static str)> {
@@ -415,16 +426,29 @@ pub fn all_externs() -> Vec<(&'static str, Vec<&'static str>, &'static str)> {
         out.entry(m.symbol.as_str())
             .or_insert((params, m.ret.as_str()));
     }
+    let mut argc_spelled: Vec<&'static str> = Vec::new();
     for h in &registry().helpers {
         if !h.decl || h.stub {
             continue;
         }
         let p: Vec<&'static str> = h.args.iter().map(|s| s.as_str()).collect();
-        out.insert(h.symbol.as_str(), (p, h.ret.as_str()));
+        let sym = h.symbol.as_str();
+        if ends_with_argc_suffix(sym) {
+            argc_spelled.push(sym);
+        }
+        out.insert(sym, (p, h.ret.as_str()));
     }
+    // PY-A (batch 546): the `py_` filter keeps the module's extern list to OUR
+    // runtime, but an `X` line IS an explicit declaration by the compiler's own
+    // author — dropping the `clip_2`/`clip_3` family here is what let codegen's
+    // `name_N` reversal (codegen.rs:3221) invent a bare `@clip` instead.
+    // Only digit-suffixed symbols are admitted: the 19 non-`py_` helpers without
+    // a suffix are already hand-declared by codegen, and registering them too
+    // makes LLVM rename a copy (`@zeta_arange` + `@zeta_arange.38`) — one symbol,
+    // two names.
     let mut v: Vec<_> = out
         .into_iter()
-        .filter(|(sym, _)| sym.starts_with("py_"))
+        .filter(|(sym, _)| sym.starts_with("py_") || argc_spelled.contains(sym))
         .map(|(sym, (params, ret))| (sym, params, ret))
         .collect();
     v.sort_by(|a, b| a.0.cmp(b.0));

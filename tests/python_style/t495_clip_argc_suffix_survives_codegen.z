@@ -1,0 +1,44 @@
+// t495 — 出码层把 MIR 的 argc 后缀剥掉 ⇒ `.clip(lower=…)` 绑到 C 的单参 `clip`
+//
+// 病灶（3.2 Lowering → 4.3 出码／名字表；backlog #216，与 #183 名表 argc 缺臂同族）：
+// 下型层**是对的**——接收者类型未知时 `.clip(<kw>)` 走按名兜底，`gen.rs:12032` 拼上
+// argc 后缀，MIR 里就是 `clip_2`／`clip_3`，与 `runtime/py_additions.c:1386`、`:1387`
+// 那两个真符号逐字同名。坏在出码层：`codegen.rs:3221` 那段"还原 MIR 的 name_N 消歧
+// 后缀"的兜底**无条件**剥掉 `_N`，基名在模块里不存在时（`:3242`）直接**按基名造一条
+// extern 声明** ⇒ IR 里出现 `declare i64 @clip(i64, i64)` 并 `call @clip(接收者, lower)`，
+// 链接期绑到真符号 `clip(int64_t v)`（`:1385`，只有一个形参）。C 调用约定下第二个实参
+// 不报错、直接被丢 ⇒ `has_lo=0` ⇒ 走 `py_vec_clip(v, 0, 0, 0, 0)` 的恒等方式：
+// **下界从未生效**，负数原样穿过（compile 0／run 0，静默错值）。
+//
+// 为什么只补"结果写回列、从列读回"这一条断言：clip 的结果槽类型是另一条独立缺陷
+// （下型层把结果定型成 I64／F64，运行期 `py_vec_clip` 给的是 vec<text>），直接
+// `h = ....clip(...)` 再 `print(h[0])` 两侧都打堆地址／`4.4e-323`——那是 #203/#206
+// 的族（批次 455/458 只收了 `/ % -` 三条），本批刻意**不**断言，避免把两个成因捆在
+// 一条判据里。写回列走 map 侧表（`py_df_setitem` ⇒ 读边界 textify，先例 t493），
+// 元素值可读 ⇒ 只剩"有没有夹住"这一个变量。
+//
+// 修法为什么是登记表而不是改判据：语料里 54 个带 `_N` 后缀的 MIR 调用名中，`_N` 大多
+// 真是消歧噪声（基名是程序自己 define 的函数），删掉这条兜底会把静默错值换成链接错误。
+// `get_or_declare_function` 在 `:3088` 先按**原名**查表，命中即返回，根本走不到剥后缀
+// 那一步——所以把真符号补进编译器已有的那张表（`pylib/registry.txt` 的 `X` 行 ⇒
+// `all_externs()` ⇒ 出码前逐条预声明）就是最小修法。`all_externs()` 末尾的
+// `starts_with("py_")` 过滤会把 `clip_*` 挡在外面，故 `X` 行（编译器自用的具名垫片）
+// 改为不受该过滤约束：现有 81 条 `X` 行里 19 条非 `py_` 且**全部**是 `zeta_` 前缀，
+// 对登记表是可证的空操作。
+
+import pandas as pd
+df = pd.DataFrame({"v": [1.0, -2.0, 3.0]})
+df["c"] = df["v"].fillna(0).clip(lower=0)
+print(df["c"][0])
+print(df["c"][1])
+print(df["c"][2])
+df["d"] = df["v"].fillna(0).clip(lower=0, upper=2)
+print(df["d"][0])
+print(df["d"][1])
+print(df["d"][2])
+// expect: 1
+// expect: 0
+// expect: 3
+// expect: 1
+// expect: 0
+// expect: 2
