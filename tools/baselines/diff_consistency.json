@@ -1,14 +1,14 @@
 {
-  "total": 466,
-  "judged": 466,
+  "total": 468,
+  "judged": 468,
   "match": 407,
-  "rate_pct": 87.3,
+  "rate_pct": 87.0,
   "match_min": 407,
   "by_verdict": {
     "mismatch": 50,
-    "runtime": 6,
+    "runtime": 7,
     "match": 407,
-    "compile": 3
+    "compile": 4
   },
   "per_cat": {
     "truth": {
@@ -21,7 +21,7 @@
     },
     "container": {
       "match": 152,
-      "judged": 181
+      "judged": 183
     },
     "numeric": {
       "match": 65,
@@ -1561,6 +1561,10 @@
       "cat": "container",
       "verdict": "mismatch"
     },
+    "method_name_collision": {
+      "cat": "container",
+      "verdict": "compile"
+    },
     "numeric_abs": {
       "cat": "numeric",
       "verdict": "match"
@@ -1680,6 +1684,10 @@
     "numeric_truediv": {
       "cat": "numeric",
       "verdict": "mismatch"
+    },
+    "sorted_key_func": {
+      "cat": "container",
+      "verdict": "runtime"
     },
     "sorted_key_none": {
       "cat": "container",
