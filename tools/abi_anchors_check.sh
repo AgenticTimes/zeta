@@ -46,7 +46,7 @@ PY
 }
 S=$(pick_anchor "$SRC")
 [ -n "$S" ] || { echo "选不出锚点，台无法运行"; exit 2; }
-echo "锚点起点选定 $S（台自算：该行及其后两行非空、且单行内容全文件唯一），三行区间 $S-$((S + 2))"
+echo "锚点起点选定 ${S}（台自算：该行及其后两行非空、且单行内容全文件唯一），三行区间 $S-$((S + 2))"
 E=$((S + 2))
 
 printf '# 台：同一行号被引成两种区间\n- `%s:%s` = 声明 A（单行）\n- `%s:%s-%s` = 声明 B（三行）\n' \
@@ -66,23 +66,23 @@ python3 "$CHK" --doc "$W/doc_b.md" --baseline "$base" >"$W/e2.log" 2>&1; rc=$?
 if [ "$rc" != "0" ] && grep -q '\[消失\]' "$W/e2.log"; then
   ok "rc=$rc 且有 [消失]（旧版 rc=0 并打印\"锚点全部对上\"）"
 else
-  bad "rc=$rc／消失行 $(grep -c '\[消失\]' "$W/e2.log") 条，期望 rc≠0 且有 [消失]"
+  bad "rc=${rc}／消失行 $(grep -c '\[消失\]' "$W/e2.log") 条，期望 rc≠0 且有 [消失]"
 fi
 
 echo "=== E3 B 的区间从 $S-$E 改成 $S-$((S + 1)) ==="
 python3 "$CHK" --doc "$W/doc_short.md" --baseline "$base" >"$W/e3.log" 2>&1; rc=$?
 if [ "$rc" != "0" ] && grep -q '\[新锚点\]' "$W/e3.log" && grep -q '\[消失\]' "$W/e3.log"; then
-  ok "rc=$rc：换区间被当成新锚点 + 消失各一条（旧版两条塌在一起 ⇒ 看不见）"
+  ok "rc=${rc}：换区间被当成新锚点 + 消失各一条（旧版两条塌在一起 ⇒ 看不见）"
 else
-  bad "rc=$rc，期望 rc≠0 且同时有 [新锚点] 与 [消失]"
+  bad "rc=${rc}，期望 rc≠0 且同时有 [新锚点] 与 [消失]"
 fi
 
 echo "=== E4 --bless-only 点名多行锚点 ==="
 python3 "$CHK" --doc "$W/doc_ab.md" --baseline "$base" --bless-only "$SRC:$S-$E" >"$W/e4.log" 2>&1; rc=$?
 if [ "$rc" = "0" ] && grep -q '\[刷\]' "$W/e4.log"; then
-  ok "rc=$rc 且刷到了 $S-$E（旧版只认 \`路径:行号\` ⇒ E1003 拒收）"
+  ok "rc=$rc 且刷到了 $S-${E}（旧版只认 \`路径:行号\` ⇒ E1003 拒收）"
 else
-  bad "rc=$rc，期望 0 —— $(head -2 "$W/e4.log" | tr '\n' ' ')"
+  bad "rc=${rc}，期望 0 —— $(head -2 "$W/e4.log" | tr '\n' ' ')"
 fi
 
 echo "=== E5 行号整体位移 +1 后 --rebind 要把两条都改掉 ==="
@@ -110,7 +110,7 @@ if git worktree add --detach "$WT" HEAD >"$W/wt.log" 2>&1; then
      && grep -q "$BT$SRC:$((S2 + 1))-$((E2 + 1))$BT" "$D5" && [ "$n5" = "2" ]; then
     ok "位移后报 $d 条漂移、基线 $n5 行、rebind rc=0、文档两个号都改写、复跑 rc=0（旧版只报 1 条且 rebind 拒改 rc=1）"
   else
-    bad "漂移 $d 条（期望 2）／基线 $n5 行／rebind rc=$rc／复跑 rc=$rc2 —— $(sed -n '2,4p' "$W/e5c.log" | tr '\n' ' ')"
+    bad "漂移 $d 条（期望 2）／基线 $n5 行／rebind rc=${rc}／复跑 rc=$rc2 —— $(sed -n '2,4p' "$W/e5c.log" | tr '\n' ' ')"
   fi
   git -C "$WT" checkout -- "$SRC" 2>/dev/null
   git worktree remove --force "$WT" >/dev/null 2>&1 || rm -rf "$WT"
