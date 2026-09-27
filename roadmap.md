@@ -21820,6 +21820,74 @@ MIR 是对的（`VoidCall{func: py_df_set_value_tag, args: [23, 34, 35]}`），I
 
 **①**（新，挂 #145）语料那格**全 0 列**的生产者未定位——本批只证明了"补写侧登记不改变该格读路径"；**且"那一格已被登记成 4 号"这一步未单独实拍**（§七 只证了合同），下一批从 `map_insert` 的发布链回溯 `define` 名反查。**②**（新）`gen.rs:2053` 的下标赋值登记判据不限列帧：任何 `Named`＋`__setitem__` 的接收者都会被按列映射帧登记（语料在场成员 0，实测见 §四）。**③**（登记给轴 A / #22 同族）`pylib/runtime_core.txt` → `runtime_decls_core.rs` 整条链是死代码，新增运行期 C 符号必须**同时**手改 `codegen.rs` 的 extern 列表，否则兜底发一参 void 且不报错。**④**（沿用在册）`zt_maybe_vec_fwd`/`zt_maybe_vec` 的几何判形仍可把标量 `char*` 当列转发。**⑤**（沿用在册）`py_df_groupby` 发布全 0 块（cap 16/32/64）。`/tmp/b535/`：`gate.log`、`ab_summary.log`＋`run_ab_535.sh`＋`ab/{pre,post,runs/*}`、`corpus_post.{ll,err}`（§四 的 IR 证据）、`f/{t514,t514pre,t514_recheck}/verdict`、`pair/`、`build_runtime.log`、`head-wt`（收尾 `git worktree remove`）、`{head,mine}_drift*.txt`＋`h.txt`/`m.txt`（§八 两侧对照）。两颗 `zetac_*535` 与两份 `.o` 留 `target/release/`、`/tmp/b535/ab/{pre,post}/`。下一次全量门禁＝**批次 470**。队头：**#145 全 0 列生产者（本批把它的候选面收窄成"发布链"）→ #182 余 57 行 → #167 余项 ①④⑤ → #195/#196 → #203④**。
 
+## 批次 540（3.2 Lowering × 4.x 运行期值表示／**列写侧的判形**·#212＝#211①／#145 头名）：一条 `char*` 的前 16 字节可以正好读成 `cap=0 len=0` 的"空 vec 表头" —— 收掉的是崩溃族与运行非确定性，主线 301 的成交数位移 **0**（正证据）
+
+### 一、结论与归位
+
+**pyramid 层**＝3.2 Lowering × 4.x 运行期值表示（跨 `runtime/`，不在出码层）；**任务**＝#212（#211① 收窄后的"全 0 列生产者"），同时闭 **#145**（批次 420 起挂了四轮的 packed-str 生产者）。代码 **`eb75ab86`**（`runtime/py_additions.c` 3/1 ＋ `zeta_runtime_c.o` ＋ `t515` 39/0），锚点 **`5a6f075e`**（`docs/ABI.md` 22/22 ＋ `tools/baselines/abi_anchors.tsv` 19/19）。
+
+一句话：**`df["col"] = <标量 str>` 被存成裸字符串**，因为写侧判形谓词 `zt_maybe_vec_fwd`（`runtime/py_additions.c:1339`）把句柄前 16 字节当 vec 表头读，旧判据放到 `cap >= 0`。
+
+**旧号→新号对照（不回改原文）**：535 §九④「`zt_maybe_vec_fwd`/`zt_maybe_vec` 的几何判形仍可把标量 `char*` 当列转发」→ 本批把 **`_fwd` 那半**按实测改掉，`zt_maybe_vec`（定义 `:908`、谓词 `:912`）那半未改未量、另挂新行；420 OPEN 的「packed str 生产者未定位」→ 生产者＝`py_df_setitem`，"packed str"＝**同一条字符串自身的 8 字节窗口**（不是任何打包优化）；535 §七"全 0 列 ⇒ 崩"的前提 → 更正为"全 0 表头即裸 `char*` 的头"。
+
+### 二、机制（为什么这条判据必然漏，以及为什么读侧早就知道）
+
+vec ABI 是 `[cap @ h-16 | len @ h-8 | data…]`，句柄＝data 指针。判形谓词只能读那 16 字节猜形状。而运行期**任何一条 vec 的 cap 恒 ≥ 1**（`zeta_dynarray_new` 最少给 1），所以 `cap == 0` 是"这不可能是一条 vec"的**正证据**，旧判据却把它当成合法空 vec 放过。
+
+同文件**读侧**早就写了这条不变式：`zt_dyn_vec_hdr` 的守卫（`:3561`）是 `if (cap < 1 || cap > (1LL << 28) || len < 0 || len > cap) return NULL;` —— 只有写侧这一处放到 `cap >= 0`。两处的分歧本身就是本批的修法依据（不是新增假设）。
+
+下游两条损害：**(a)** `DataFrame.n_rows()`（`pylib/pandas.z:323`）＝ `len(self.data[names[0]])`，首键由 map 序决定（批次 418 已量到的掷硬币面）⇒ 一旦那个键正好是裸字符串列，整框行数读成 0，同一颗二进制可以一次崩一次跑完；**(b)** 任何 `col[i]` 读按 vec 语义 `inttoptr`+`gep i64`+`load i64` 逐字读那条字符串 ⇒ 拿到打包文本 ⇒ 崩 `str_trim+24`（#145 的崩点）。
+
+### 三、定位怎么走到的（539 号探针批读数，未单独入册、随本批入册）
+
+探针面在 `runtime/py_additions.c`（`SETITEM`/`MAPPROBE`）与 `runtime/tokio_runtime_stub.c`（`PACKED`/`SCANVEC`/`PUSHSEQ`）＋ 驱动侧，编在 `/tmp/b539/probe3`（`tokio_runtime.o` 参照读数 **T=656**，与本批 `build_runtime.sh` 现算的 **T=656** 同）：
+
+- 改前（只有探针）：`SETITEM … key='stock_code' … mv=1 cap=0 len=0`，同一句柄随后 `MAPPROBE col key='stock_code' … e0='159980.X' e1=0x454853='SHE.....'` —— `e1` 正是那条字符串第 9 字节起的续字，"打包文本"到这一步才成为**读到的事实**而不是猜测；6 次跑 1–2 次崩，`PACKED`/`SCANVEC`/`PUSHSEQ` 有计数。
+- 改后（`cap >= 1`）：`SETITEM … mv=0`（走广播分支），`PACKED=SCANVEC=PUSHSEQ=0`，6/6 rc=0。
+
+探针批的**归因边界**（照 434 教训写死）：那 6 次里的 rc=138（Bus error）与 run6 的 SIGSEGV 发生在探针自身的槽扫描里，不算语料行为 ⇒ 本批的**唯一正式证据是下面 §五 的无探针 A/B**。
+
+排除面（各自都有反证，登记以免下一批重走）：`zt_parquet_build_map`／parquet 的 `free(body)`+`free(dict)`（悬垂指针假设：那些列串是 `GC_malloc`+`strcpy` 的副本，且 `free` 碰不到它们）、`zeta_dyn_getitem` 的 vec 臂、`map_str_key` 作为"打包者"、`pandas.z:244` 的 `drop_duplicates`（IR 证据：`/tmp/b535/corpus_post.ll:8700-8718` 是**逐字槽复制**，它是导管不是生产者）。
+
+### 四、修法（最小形状与刻意不动的部分）
+
+```c
+-    return cap >= 0 && len >= 0 && len <= cap && cap <= (1LL << 30);
++    return cap >= 1 && len >= 0 && len <= cap && cap <= (1LL << 30);
+```
+
+＋两行 WHY 注释（`runtime/py_additions.c:1339-1345`）。唯一消费者是 `py_df_setitem`（`:1368`）⇒ 收紧只把"标量被误当 vec"的路关掉，广播分支（`zeta_dynarray_new(nrows>0?nrows:1)` ＋ `vec_push` ×nrows）成为标量 str 的唯一去向。
+
+**刻意不动**：`zt_maybe_vec`（`:912`）带同一条 `cap >= 0`，消费者六处：`zt_bare_mask`（`:915`）、`py_is_vec`（`:1250`）、`clip`/`clip_2`/`clip_3`/`clip_4`（`:1307`、`:1308`、`:1310`、`:1314`）、掩码判形（`:1584`）—— 那四处本批**没有各自的 A/B 读数**，同批改属于"未测先动"⇒ 挂 OPEN。
+
+### 五、语料 A/B（正式读数：两颗驱动同目录、只差这一个判据，n=10/侧、**无探针**）
+
+| 侧 | 运行物 | 崩溃（rc=139） | 跑完 | 跑完后的读数 |
+|---|---|---|---|---|
+| 改前 | `/tmp/b540/drv/bin_pre` ← `/tmp/b540/pre/zeta_runtime_c.o`（HEAD 版 `py_additions.c`） | **3/10**（run2、run6、run9） | 7/10 | `回测完成: 1000000 -> 0 (-100.00%)` |
+| 改后 | `/tmp/b540/drv/bin_post` ← `/tmp/b540/post/zeta_runtime_c.o`（＝工作树版，md5 `61c2a040…` 与仓内被跟踪的 `zeta_runtime_c.o` 逐字节相同） | **0/10** | **10/10** | `回测完成: 1000000 -> 0 (-100.00%)` |
+
+- 三次崩溃的 stderr 尾巴逐字相同，都停在 `[INFO] backend.market_data: 缓存命中 103 只；待拉取 0 只` 之后，即 `validate_and_repair_stock_ohlcv` 的列发布段——与 #145 的四轮观测同一格。
+- 两侧"跑完"的读数**逐字相同**：`成交>0` 两侧都是 **0**、`成交=0` 改前 7 次／改后 10 次 ⇒ **主线 301 的 0 笔成交损害量不变**，本批收的是崩溃族＋运行非确定性（未归因增量不当收益记账；成交数一格未动，不冒充收益）。
+- 两侧 `stdout` 都只有一行且是一个 ~4.3e9 的数（看着像堆地址），改前改后同形 ⇒ **非本批 delta**，登记为 #301 线索未追。
+- A/B 同目录（`/tmp/b540/drv`）＋两侧只差 `zeta_runtime_c.o` 一个文件（`tokio_runtime.o` 两侧 md5 相同）。驱动源在仓外（`~/source/quant/REasyQuant`），按 539 的坑 68 备案：该面 pylib 库面少 3 条布局，**两侧对称**故 A/B 成立，绝对计数不可与其他口径比。
+
+### 六、快门禁（`runtime/*.c` 路线＝`official` + `python_style` + 位移 A/B；`tools/run_all.sh` 的 AGENTS 快门禁 13 个 `--skip-*`，独占机器、未并发）
+
+`official` 编译 **194/194**、编译+链接 **191/194**、link-only **3**（`integration_all_features`/`quantum_basic`/`selfhost`，与 #42 在册同一组）—— 与基线逐字相同。`python_style` **382 passed / 2 failed / 12 known-fail / 2 xpass**，红源仍是 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ `GATE_RC=1` 与基线同因。`dyn_binding` 4 查 0 失、`comment_drift` 复述 0。诊断面：`official` 21 行/5 文件，`python_style` **269 行/124 文件** —— 本批贡献 **＋3 行/＋1 文件**（`t515` 自己那三行：两条 `PY-A` 加一条 `pandas` 双注册告警，全是 pandas 夹具的既有种类，实拍在 `/tmp/b540/w_t515/t515_*.cc`）；相对批次 438 记录的 238/112 那部分差额是两次记录之间旁路夹具并入造成的分母搬家，不属本批、不认领（#180 同一口径）。日志 `/tmp/b540/gate.log`。
+
+锚点：本批把 `py_additions.c` 下移 2 行 ⇒ 工作树核对 **漂移 34／新 23／消失 40**，其中 `py_additions.c` 独占 **19** 条；`--rebind` 改写 `docs/ABI.md` 22 行/29 数字后 → **15/23/40**、`py_additions.c` 漂移 **0**。HEAD 侧对照在隔离 worktree `/tmp/b540/headwt` 自基线取 **15/23/42**（存量＝#167 已登记的 codegen.rs/gen.rs/run.sh 陈旧引用；rebind 顺带配掉 2 条消失）⇒ 本批**无新增漂移、无新增消失**。
+
+### 七、`t515` 是防放松锁，不是红锁（止损过程如实入册）
+
+`tests/python_style/t515_df_col_scalar_str_broadcast.z`：标量 str 赋列后必须按框行数广播（`A 3 159980.XSHE 159980.XSHE` / `B 2 600000.XSHG 2`），期望值当场对 **pandas 3.0.5** 逐字一致（不是本仓行为）。
+
+**改前二进制实拍：它不会红。** 试过 **7 形**（字面量、`.strip()`、两段拼接、`.upper()`、切片、六段逐字拼接、同框双列），两颗二进制输出逐字相同 ⇒ 该臂取决于那 16 字节当场是什么，小夹具工程化不了（依「臂不可达时的小夹具止损」在 7 形处收手，不再堆形状）。所以本批**独立缺陷的改前必红由语料 A/B 承担**（§五），`t515` 只锁广播面不被放松。套件里它 `PASS`（`/tmp/b540/w_t515/verdict`）。
+
+### 八、本批未收（OPEN 净增 **1 行＝新登记 #213**；#211①／#145 闭，#212 转已完成）
+
+**①** `zt_maybe_vec`（`:912`）同一条 `cap >= 0`，四处消费者无各自读数 ⇒ 改前先量。**②** `zt_maybe_vec_fwd` 对标量整数只在 `v < 0x1000` 时短路，更大的标量仍会解引用 `v-16`（`:3655` 那条"半截堆指针"注记同族）。**③** `pandas.z:244` `drop_duplicates` 的 `src[keep[k]]` 缺上界校验（`normidx47` 只折负数）。**④** `py_list_contains` 未接 `not in <set>`（`corpus_post.ll:24969`）、`str(x)` 仍走 `zeta_identity`（`:25008`）、`numpy.vstack` 桩 abort。**⑤** stdout 那一行堆地址样读数的成因（§五）。**⑥**（沿用在册）#48 浮点 repr 方言仍等用户裁决。产物留 `/tmp/b540/`（`pre/`、`post/` 两套对象、`drv/` 两颗驱动＋20 组 stdout/stderr、`gate.log`、`anchor{,_head,_after}.log`、`w_t515/`）；隔离 worktree `/tmp/b540/headwt` 收尾 `git worktree remove` ＋ `prune`。下一次全量门禁＝**批次 470**。队头：**#182 余 57 行 → #167 余项 ①④⑤ → #195/#196 → #203④ → #209②**。
+
 ## 旁路并入（2026-09-27，批次 535 收尾合并：旁路 534b／535／537／538 ＋ #186 第十次复发代录）
 
 **合并面**：`git merge cleanup`＝**`1f8a64d9`**，并 5 颗（`6544ea7d` 534 的 `sorted_key_func.dcase`、`57767295` 旁路 535 台账、`4021da04` 537 的 `method_name_collision.dcase`、`fc2ae8d2`/`5d6e0e75` 537／538 台账），文件面 **3 files +40/−0**＝2 颗 `.dcase` ＋ `worktree.md` 3 行。**并入面对 `src/`、`runtime/`、`docs/ABI.md`、`tools/baselines/` 零命中** ⇒ 批次 535 的快门禁与位移读数不因本次合并失效（不重跑，口径照 451 收尾／452 收尾）；`cargo build --release` 当场回 `Finished`＝未重编，`target/release/zetac` md5 仍 `d9b10409…`（依 447 那条教训只作观察，不用哈希论证二进制同异）。台账行在 `worktree.md` §4「535 收尾」＋ §7 合并日志。
