@@ -65,6 +65,7 @@ impl Mir {
                     return Some(match ty {
                         Type::F32 => Type::F32,
                         Type::F64 => Type::F64,
+                        Type::Str => Type::Str,
                         _ => Type::I64,
                     });
                 }

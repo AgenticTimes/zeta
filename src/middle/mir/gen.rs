@@ -1949,10 +1949,29 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 }
                 // PY-A: parallel assignment `a, b = x, y` (tuple unpacking with
                 // tuple rhs; call-return unpacking needs temps — later item)
+                // PY-A (批次 531/#190): Python 语义 = RHS 先**整体求值**再逐个绑定。
+                // 旧的逐对 Assign 顺序执行 ⇒ `a, b = b, a` 腐蚀为 (2,2)。
+                // 修法：先把每个 RHS 元素赋给临时变量（__swap_tmp_N），
+                // 再从临时变量赋给 LHS 目标——打断顺序依赖。
                 if let (AstNode::Tuple(litems), AstNode::Tuple(ritems)) = (&**lhs, &**rhs) {
                     if litems.len() == ritems.len() && !litems.is_empty() {
-                        for (l, r) in litems.iter().zip(ritems.iter()) {
-                            let pair = AstNode::Assign(Box::new(l.clone()), Box::new(r.clone()));
+                        let temp_names: Vec<String> = (0..litems.len())
+                            .map(|i| format!("__swap_tmp_{}", i))
+                            .collect();
+                        // Step 1: RHS → temps
+                        for (i, r) in ritems.iter().enumerate() {
+                            let pair = AstNode::Assign(
+                                Box::new(AstNode::Var(temp_names[i].clone())),
+                                Box::new(r.clone()),
+                            );
+                            self.lower_ast(&pair);
+                        }
+                        // Step 2: temps → LHS targets
+                        for (i, l) in litems.iter().enumerate() {
+                            let pair = AstNode::Assign(
+                                Box::new(l.clone()),
+                                Box::new(AstNode::Var(temp_names[i].clone())),
+                            );
                             self.lower_ast(&pair);
                         }
                         return;
