@@ -1,0 +1,16 @@
+# @cat: str
+# @note: 随机字符串切片（seed=563001 #9）
+#@@ python
+print("abcdef"[1:6:3])
+print("abcdef"[1:6:1])
+print("abcdef"[6:])
+print("abcdef"[:5])
+print(len("abcdef"[1:4]))
+
+#@@ zeta
+print("abcdef"[1:6:3])
+print("abcdef"[1:6:1])
+print("abcdef"[6:])
+print("abcdef"[:5])
+print(len("abcdef"[1:4]))
+
