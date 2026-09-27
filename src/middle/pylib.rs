@@ -441,11 +441,11 @@ pub fn all_externs() -> Vec<(&'static str, Vec<&'static str>, &'static str)> {
     // PY-A (batch 546): the `py_` filter keeps the module's extern list to OUR
     // runtime, but an `X` line IS an explicit declaration by the compiler's own
     // author — dropping the `clip_2`/`clip_3` family here is what let codegen's
-    // `name_N` reversal (codegen.rs:3221) invent a bare `@clip` instead.
-    // Only digit-suffixed symbols are admitted: the 19 non-`py_` helpers without
-    // a suffix are already hand-declared by codegen, and registering them too
-    // makes LLVM rename a copy (`@zeta_arange` + `@zeta_arange.38`) — one symbol,
-    // two names.
+    // `name_N` reversal (codegen.rs:3217-3242; the short-circuits at :3088 and
+    // :3199 win first) invent a bare `@clip` instead.
+    // Only digit-suffixed symbols are admitted: the other 19 non-`py_` helpers add
+    // 15 declares, and 2 of them (`zeta_map_len`, `zeta_arange`) are hand-declared
+    // by codegen too, so LLVM renames a copy — one symbol, two names.
     let mut v: Vec<_> = out
         .into_iter()
         .filter(|(sym, _)| sym.starts_with("py_") || argc_spelled.contains(sym))
