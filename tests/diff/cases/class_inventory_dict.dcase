@@ -1,0 +1,50 @@
+# @cat: container
+# @note: 类字段字典的读改写——add_item 写入 ✓（total=180 对）但 self.stock[k]
+#        读出 0（CPython 50/130）⇒ 类方法上下文的字典下标读丢类型/丢值
+#        （⑫ 家族扩展，gen.rs 车道；449 修了元组解包但类字段路径未覆盖）
+#@@ python
+class Inventory:
+    def __init__(self):
+        self.stock = {}
+    def add_item(self, name, qty):
+        if name in self.stock:
+            self.stock[name] += qty
+        else:
+            self.stock[name] = qty
+    def total(self):
+        return sum(self.stock.values())
+    def report(self):
+        for k in sorted(self.stock.keys()):
+            print(k, self.stock[k])
+        return self.total()
+
+inv = Inventory()
+inv.add_item("wheat", 100)
+inv.add_item("corn", 50)
+inv.add_item("wheat", 30)
+print(inv.total())
+print(inv.report())
+print(inv.stock["wheat"])
+#@@ zeta
+class Inventory:
+    def __init__(self):
+        self.stock = {}
+    def add_item(self, name, qty):
+        if name in self.stock:
+            self.stock[name] += qty
+        else:
+            self.stock[name] = qty
+    def total(self):
+        return sum(self.stock.values())
+    def report(self):
+        for k in sorted(self.stock.keys()):
+            print(k, self.stock[k])
+        return self.total()
+
+inv = Inventory()
+inv.add_item("wheat", 100)
+inv.add_item("corn", 50)
+inv.add_item("wheat", 30)
+print(inv.total())
+print(inv.report())
+print(inv.stock["wheat"])
