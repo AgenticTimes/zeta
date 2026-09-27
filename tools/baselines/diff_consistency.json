@@ -1,13 +1,13 @@
 {
-  "total": 471,
-  "judged": 470,
-  "match": 412,
-  "rate_pct": 87.7,
-  "match_min": 412,
+  "total": 507,
+  "judged": 506,
+  "match": 441,
+  "rate_pct": 87.2,
+  "match_min": 441,
   "by_verdict": {
-    "mismatch": 47,
+    "mismatch": 54,
     "runtime": 7,
-    "match": 412,
+    "match": 441,
     "bad_case": 1,
     "compile": 4
   },
@@ -25,8 +25,8 @@
       "judged": 185
     },
     "numeric": {
-      "match": 68,
-      "judged": 88
+      "match": 97,
+      "judged": 124
     },
     "control": {
       "match": 69,
@@ -1279,6 +1279,150 @@
       "verdict": "match"
     },
     "gen_numeric_s20260926_019": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556001_000": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556001_001": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556001_002": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "gen_numeric_s556001_003": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556001_004": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556001_005": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556001_006": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556001_007": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556001_008": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556001_009": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556001_010": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "gen_numeric_s556001_011": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556002_000": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "gen_numeric_s556002_001": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "gen_numeric_s556002_002": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556002_003": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556002_004": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556002_005": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556002_006": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556002_007": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556002_008": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556002_009": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "gen_numeric_s556002_010": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556002_011": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556003_000": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556003_001": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556003_002": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556003_003": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "gen_numeric_s556003_004": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556003_005": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556003_006": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "gen_numeric_s556003_007": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556003_008": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556003_009": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556003_010": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_numeric_s556003_011": {
       "cat": "numeric",
       "verdict": "match"
     },
