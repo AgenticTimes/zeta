@@ -22203,6 +22203,80 @@ gen.rs +99 行让 `docs/ABI.md` 的 gen.rs 引用整体搬家。合并后只读�
 
 **本次并入 OPEN 净增 0**（批次 535 的 +1＝#211 已记在该批行内）；全表 `^\| #` 行 42 条、状态格含 ⬜/🟡/🔶/❓ 者 22 条（≤30 上限未触）。产物留 `/tmp/b535/`（本次新增 `diff_postmerge.{json,log}`、`diff_bless.log`、`diff_after_bless.log`、`diff_baseline_before.json`）；隔离 worktree `/tmp/b535/head-wt` 收尾已 `git worktree remove --force` 并 `git worktree prune`（余下 `/tmp/b488wt`、`~/zeta-clean-checkout` 非本批创建，未动）。两颗 `zetac_pre535`/`zetac_post535` 与两份 `.o` 留 `target/release/` 至下一次全量门禁（口径照 457/458）。**下一次全量门禁＝批次 470**；539 队头＝**#211①（＝#145 收窄后的"全 0 列生产者"）→ #182 余 57 行 → #167 余项 ①④⑤ → #195/#196 → #203④**。
 
+## 批次 546（3.2 Lowering → **4.3 出码／extern 名表**，任务 **#216**＝#213①′、#183 同族）：`clip` 的 argc 后缀被出码层反演成裸名 ⇒ 上下界静默丢弃 —— **下型层是对的**，坏在 `all_externs()` 的 `py_` 前缀过滤
+
+### 一、前提更正：这批不在 3.2，在 4.3
+
+#216 登记时沿用 #183 的措辞「名表 argc 缺臂 ⇒ 兜底发裸名」，读起来像下型层缺一条路由。实测否掉这个归位：语料 `data_cleaning.py` 的 `--dump-mir` 改前改后**逐字节相同**（25,597 行，md5 `9a5540f1…` 两侧同），而 `gen.rs:12038` 早把实参个数写进了符号名（`format!("{}_{}", func, arg_ids.len())`）⇒ **下型层给出的是 `clip_2`，是出码层又把它反演回 `clip`**。归位因此从 3.2 挪到 4.3（名字表／extern 声明），301 根因链上的编号不变。
+
+顺带更正批次 545 那条静态实证（"clip 的实参在跨界时被丢掉"）：丢的机制不是 `zt_maybe_vec` 的判形，而是**符号名**——`@clip(i64,i64)` 链接到 C 的 `clip(int64_t v)`，第二个实参根本没有对应的形参去读。545 那五条调用点坐标（`py_additions.c:993/:1328/:1385/:1386/:1388/:1392`）照旧有效。
+
+### 二、定位（因果链，逐环给坐标；坐标一律**干净树**＝HEAD 口径）
+
+1. C 侧真符号就叫 `clip_2` / `clip_3`（`runtime/py_additions.c:1386`、`:1387`；`:1390` 还有 `clip_4`）⇒ argc 后缀是 C 符号名的一部分，不是 LLVM 的后缀装饰。
+2. `src/middle/pylib.rs:409` `all_externs()` 的过滤只收 `py_` 前缀 ⇒ `clip_2` 进不了 extern 表；`pylib/registry.txt` 里连一行 `X clip_2` 都没有（改前 83 条 `X` 无一命中）。
+3. `src/backend/codegen/codegen.rs:3217-3242` 那条「Strip trailing _N suffix」臂无条件反演 MIR 的 `name_N`：后缀是纯数字 ⇒ `stripped_name = "clip"`，并就地 `declare i64 @clip(i64, i64)`。
+4. 于是 `@clip(i64,i64)` ↔ C `clip(int64_t v)` ⇒ lower/upper 静默丢弃，rc=0，一条诊断都不出。
+5. 本批修法赖以成立的短路：`codegen.rs:3088-3091`（名字精确命中**且** `f.count_params() == args_count`）与 `:3199`（裸名命中）都排在反转臂之前 ⇒ 只要 `clip_2` 先被声明，反转臂根本走不到。**没有**动 codegen 那三条臂。
+
+### 三、修法（最小：让名表里带 argc 后缀的符号放行进 extern 表）
+
+- `src/middle/pylib.rs`：新增判据 `ends_with_argc_suffix()`（`:398`，只在 `_` 后是**纯数字**且基名非空时为真）；`all_externs()` 收集时记下命中的符号（`:436-438`），过滤式改为 `starts_with("py_") || argc_spelled.contains(sym)`（`:449-453`）。净 **+24 行**（注释更正批 `5d6451dc` 行数不变，二进制 md5 逐字节相同）。
+- `pylib/registry.txt`：526 → **535** 行，追加 7 行说明注释 + `X clip_2 args=i64,i64 ret=i64` + `X clip_3 args=i64,i64,i64 ret=i64`。裸名 `clip` **故意不注册**：注册它＝给"实参个数未知"留一条能命中的路由，正是本批要关的那扇门。
+- **判据为什么只放数字后缀 —— 这条是实测否掉宽判据的结果**：`X` 共 **83** 条，其中 **9** 条以 `_纯数字` 结尾、7 条本身已带 `py_` ⇒ 非 `py_` 且带后缀的恰好只有 `clip_2`/`clip_3` **2** 条。把 21 条非 `py_` 全放行（＝去掉后缀判据）实测语料 IR 的 `declare` 578 → **594**（多 **15** 条），且其中 `zeta_map_len`、`zeta_arange` 与 codegen 手写的 `add_function` 撞名，LLVM 给第二份改名：`@zeta_map_len`:469 + `@zeta_map_len.33`:1091、`@zeta_arange`:1083 + `@zeta_arange.38`:1177（窄判据下都只有一份）＝**一个符号两个名字** ⇒ 弃。
+- 未收的同族：`clip_4`（C 侧 `py_additions.c:1390` 存在、名表未注册）与 #183 余下两形（`s.find(t,start)`、`s.repeat(n)`）同因未收，留在 #183 行内。
+
+### 四、夹具与真值（新钉 t495，pre 侧实拍为红）
+
+- `tests/python_style/t495_clip_argc_suffix_survives_codegen.z`（44 行，6 条 `// expect:` 在 `:39-44` ＝ 1/0/3/1/0/2），期望值当场对 pandas 3.0.5。
+- **pre 二进制实拍为红**：`1 -2 3 1 -2 3`（上下界没生效）；改后 compile_rc=0、run_rc=0、stdout `1 0 3 1 0 2`。
+- 正证据（防"只是没打出来"）：语料 IR 里 `declare i64 @clip(i64, i64)`（`/tmp/b546/ab_ll_pre.ll:11010`）消失，换成 `@clip_2`:489 / `@clip_3`:491；两条调用点 `@clip`:10761/:10825 → `@clip_2`:10765/:10829。
+
+### 五、门禁读数（快门禁，`/tmp/b546/gate_fast.log`，17:35–17:42，`GATE_RC=1`）
+
+| 步骤 | 改后 | 对照（545 收尾并入后的在册读数） |
+|---|---|---|
+| official | 194/194·191/194，link-only 3 条名单逐字相同 | 相同 |
+| official 诊断 | 5 文件 / 21 行 | 相同 |
+| python_style | **392 passed／2 failed／9 known-fail／0 xpass**；`392+2+9 = 403 = ls tests/python_style/t*.z`（当场 403）；红源仍 `t231`/`t233` | passed +1、文件数 +1＝t495 ⇒ **零新增红**；`t494` 仍 KNOWN-FAIL（本批未碰 `runtime/`） |
+| python_style 诊断 | 275 行 / 126 文件 | 272／125 ⇒ +3 行 +1 文件＝t495 自身那三行库面提示（与 545 的 t494 同形） |
+| dyn_binding | 4 条断言、不一致 0（rc=0） | 相同 |
+| comment_drift | 0 处复述 | 相同 |
+| 其余 13 步 | skipped（`corpus` 显示 `{parse_ok:0,total:0}`，其余带 `skipped:1`） | 跳过表示不是读数（545 已在册） |
+
+注释更正批之后（2026-09-27 10:06）用重编的二进制复跑 python_style：**392／2／9／0、t495 PASS 逐字相同**，且 `md5 target/release/zetac` 仍是门禁那颗 `9a9c80da…` ⇒ 注释改动对二进制零字节影响（这条同时给"记录批没换编译器"作证）。
+
+### 六、位移面（动了 `src/middle`＋`pylib/` ⇒ AGENTS 护栏 1 必跑）
+
+- 语料 MIR 两侧逐字节相同（25,597 行）⇒ 下型面零改动，本批的位移全部落在出码面。
+- 语料 IR：368,009 → **368,051** 字节；`declare` **578 → 579**。
+- 整程序 IR（夹具驱动 `_drv_accept_409.py`）：113,388 行（同侧两遍逐字节相同，md5 `a864e474…`）→ 113,390（两遍同，`6bd8b4b6…`）；宿主函数 `@backend_datasrc_data_cleaning__validate_and_repair_stock_ohlcv` 体内 **4** 条 clip 站点 ⇒ 这条路是活的，不是死代码。
+- 运行期 A/B（两颗同在 `target/release/`，pre/post 交替，n=6/侧，`/tmp/b546/ab6.log`）：崩溃比 **1/6 : 1/6**（pre_5 rc=139 SIGSEGV、post_3 rc=138 SIGBUS），归一化后的两份崩溃日志逐字节相同（都停在 `err.log:119 缓存命中 103 只；待拉取 0 只`）；成功侧 321 行、末行同为 `回测完成: 1000000 -> 0 (-100.00%)`。
+- **clip 的数值效果在这条运行期读数上不可观察** ⇒ 位移记为「**0（不可观察）**」，既不记收益也不记无损（口径同 541/545）。
+- **同侧方差当场量化（新增证据，不是附注）**：`合计 N 行` 读数 pre ＝ 12857/12858/12854/12858/—/12858，post ＝ 12858/12858/—/12855/12856/12858 ⇒ 只看 pre_4(12858) vs post_4(12855) 会误报成"改后少 3 行"，同侧对照证明它是数据面的既有抖动。**坑 51/64 的新成员：跨侧单对 diff 不构成位移读数，`合计 N 行` 这一族要先看同侧极差。**
+
+### 七、锚点面与一次外部 `cargo fmt` 事件（交用户裁决，本批不 bless）
+
+- 提交态核对（隔离 worktree @ `5c98799b`）：漂移 **0**／新 **0**／消失 **2**（存量 `runtime/aliases.inc.c:1-2`、`:12`；生成物不在树内 ⇒ "定位失败／消失计数随生成物在场与否变化"第四次遇到）。
+- 主树核对：漂移 **196**，**成因不是本批**。会话开始时工作树里已有一次**全仓 `cargo fmt`**（edition 2024）留下的改动：`git diff HEAD --numstat -- src/` ＝ **25 文件 +5280/−2902**；`pylib.rs` 的工作树版与「rustfmt 直接格式化 HEAD 版」逐字节相同 ⇒ 纯排版、无语义。另一条仓内事实：**HEAD 自身不是 fmt-clean 的**（干净检出上 `cargo fmt --check` 吐 673 KB 差异）。
+- 处置：那 25 个文件的排版**没有**提交，196 条漂移**没有** bless 进 `tools/baselines/abi_anchors.tsv`；本批把自己动过的 `pylib.rs` 重建成「HEAD + 本批改动」（fmt 版备份 `/tmp/b546/pylib_fmt_backup.rs`，md5 `52a0dc8a…`）。**要不要单开一次全仓 fmt 批**（代价：约 196 条锚点搬家 + `docs/ABI.md` 行号引用重绑）交用户裁决；fmt 的发起方**未查明**（无 hooks、门禁无 `cargo fmt` 调用点）。
+- 本批自己的搬家只有 2 条：`pylib.rs:842 → :866`、`:963 → :987`（净增 24 行所致），随 `5c98799b` 入册。
+
+### 八、账务与产物
+
+- **提交四颗**（`不 push`，目标级裁决）：`4943f818`（fix：pylib + registry + t495）、`5c98799b`（锚点重绑 2 条）、`5d6451dc`（注释更正：引用换成干净树坐标、危害换成实测的"+15 declares／2 条撞名被改名"——此前那句"19 条 helper 已由 codegen 手工声明"是未复核的过度断言）、本记录批。
+- backlog：表内**零新增行** —— 本批登记为 **#213 行内续写**（①′＝clip 一族收口 ＋ 归位更正 3.2→4.3）；**#216/#183 是任务号而非表内行**，#183 侧余 `clip_4` 与 `find`/`repeat` 之外的缺臂仍挂 #213 ① 名下。全表 **43** 条、open **22** 条两数不变 ⇒ **OPEN 净增 0**。
+- 台账硬核对（`grep -cE '^\| [0-9]+ \| bootstrap' worktree.md`）：入册前 HEAD **51**，本行入册后 **52**。
+- 产物留 `/tmp/b546/`（`gate_fast.log`、`ab6.log`、`ab/runs/`、`ab_ll_pre.ll`、`v/c_ll_post2.ll`、`v/c_ll_broad.ll`、`drv_pre_1/2.ll`、`drv_post546.ll`、`drv_post_2.ll`、`pylib_committed.rs`、`pylib_fmt_backup.rs`）；两颗二进制 `target/release/zetac_pre546`（`b9fe6408…`）与 `zetac`（`9a9c80da…`）留到下一次全量门禁（批次 550）后再清。隔离 worktree `/tmp/b546/wt_head` 收尾已 `git worktree remove --force` 并 `git worktree prune`。
+
+### 九、下一批候选（按已实测损害量）
+
+1. **t494／#213 残口**（`py_df_loc` 非向量掩码回退路径 raise，rc=133）——真修要动 `runtime/py_additions.c`，**需用户授权**，未授权前只能继续出声。
+2. **#182 余 57 行**（W1010 三堆：A 23→#190、B 23、C 11）。
+3. **#167 余项①④**（`find_snippet_lines` 宽容假行号 + blessed-wrong 类）。
+4. **#213 其余形**（②`v-16` 解引用、③`drop_duplicates` 上界、④三条动态臂、⑤堆地址样 stdout）与 **#203④**、**#195/#196** 的在册余量。
+5. 仍未归因的一条独立读数：**`.fillna(0)` 走成 `zeta_identity` 直通**（#145/#211 链上）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
