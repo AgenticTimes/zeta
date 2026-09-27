@@ -912,10 +912,14 @@ int64_t py_zip(int64_t a, int64_t b) {
     base[0] = n ? n : 1;
     base[1] = n;
     for (int64_t i = 0; i < n; i++) {
-        int64_t* pair = (int64_t*)GC_malloc(16);
-        pair[0] = ((int64_t*)a)[i];
-        pair[1] = ((int64_t*)b)[i];
-        base[2 + i] = (int64_t)pair;
+        // Headered pair ([2,2,k,v], handle = base+2): len() reads the header,
+        // stack_array_get destructuring reads the elements — both work.
+        int64_t* pair = (int64_t*)GC_malloc(16 + 2 * 8);
+        pair[0] = 2;
+        pair[1] = 2;
+        pair[2] = ((int64_t*)a)[i];
+        pair[3] = ((int64_t*)b)[i];
+        base[2 + i] = (int64_t)(pair + 2);
     }
     return (int64_t)(base + 2);
 }
@@ -949,10 +953,12 @@ int64_t py_map_items(int64_t map) {
     for (int64_t i = 0; i < cap; i++) {
         char* e = (char*)map + 16 + i * 24;
         if (*(uint8_t*)(e + 16)) {
-            int64_t* pair = (int64_t*)GC_malloc(16);
-            pair[0] = zt_key_display(*(int64_t*)e);
-            pair[1] = *((int64_t*)e + 1);
-            base[2 + base[1]] = (int64_t)pair;
+            int64_t* pair = (int64_t*)GC_malloc(16 + 2 * 8);
+            pair[0] = 2;
+            pair[1] = 2;
+            pair[2] = zt_key_display(*(int64_t*)e);
+            pair[3] = *((int64_t*)e + 1);
+            base[2 + base[1]] = (int64_t)(pair + 2);
             base[1] += 1;
         }
     }
@@ -3333,6 +3339,95 @@ int64_t zeta_pack_pair(int64_t k, int64_t v) {
     p[0] = k;
     p[1] = v;
     return (int64_t)p;
+}
+
+// ── PY-A: enumerate(xs[, start]) as a VALUE — list of headered [i, x]
+// pairs (batch 557; enumerate previously existed only as a for-loop
+// desugar, so list(enumerate(xs)) built an EMPTY list).
+int64_t py_enumerate(int64_t coll, int64_t start) {
+    if (!coll) return 0;
+    int64_t n = zt_vec_len(coll);
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
+    base[0] = n ? n : 1;
+    base[1] = n;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t* pair = (int64_t*)GC_malloc(16 + 2 * 8);
+        pair[0] = 2;
+        pair[1] = 2;
+        pair[2] = start + i;
+        pair[3] = ((int64_t*)coll)[i];
+        base[2 + i] = (int64_t)(pair + 2);
+    }
+    return (int64_t)(base + 2);
+}
+
+// print(list-of-pairs) — CPython tuple text: [(1, 'x'), (2, 'y')].
+// k_str/v_str come from the static pair element types; a *_str element
+// renders single-quoted, anything else renders as a signed integer
+// (float elements live as raw bits — printing those is a registered
+// corner, not reachable from the typed census shapes).
+int64_t py_print_pairs(int64_t vec, int64_t k_str, int64_t v_str) {
+    if (!vec) return (int64_t)"[]";
+    int64_t n = zt_vec_len(vec);
+    size_t cap = 16 + (size_t)(n > 0 ? n : 1) * 24;
+    char* out = (char*)GC_malloc(cap);
+    size_t len = 0;
+    #define ZT_PP_PUT(c) do { \
+        if (len + 1 >= cap) { cap *= 2; out = (char*)GC_realloc(out, cap); } \
+        out[len++] = (char)(c); \
+    } while (0)
+    #define ZT_PP_PUTS(s) do { const char* _s = (s); while (*_s) ZT_PP_PUT(*_s++); } while (0)
+    ZT_PP_PUT('[');
+    for (int64_t i = 0; i < n; i++) {
+        if (i) ZT_PP_PUTS(", ");
+        int64_t ph = ((int64_t*)vec)[i];          /* vec holds pair HANDLES */
+        ZT_PP_PUT('(');
+        int64_t kv[2] = { ((int64_t*)ph)[0], ((int64_t*)ph)[1] };
+        int64_t ks[2] = { k_str, v_str };
+        for (int side = 0; side < 2; side++) {
+            if (side) ZT_PP_PUTS(", ");
+            if (ks[side]) {
+                ZT_PP_PUT('\'');
+                ZT_PP_PUTS((const char*)kv[side]);
+                ZT_PP_PUT('\'');
+            } else {
+                char num[24];
+                snprintf(num, sizeof num, "%lld", (long long)kv[side]);
+                ZT_PP_PUTS(num);
+            }
+        }
+        ZT_PP_PUT(')');
+    }
+    ZT_PP_PUT(']');
+    out[len] = 0;
+    return (int64_t)out;
+    #undef ZT_PP_PUT
+    #undef ZT_PP_PUTS
+}
+
+// print(one pair) — "(1, 'x')" spelling for a bare pair handle.
+int64_t py_print_pair(int64_t pair, int64_t k_str, int64_t v_str) {
+    // `pair` is the element HANDLE (elements at [0],[1] — the header, if
+    // any, sits behind it).
+    int64_t one[2] = { ((int64_t*)pair)[0], ((int64_t*)pair)[1] };
+    int64_t flags[2] = { k_str, v_str };
+    char* out = (char*)GC_malloc(64);
+    size_t len = 0;
+    out[len++] = '(';
+    for (int side = 0; side < 2; side++) {
+        if (side) out[len++] = ',', out[len++] = ' ';
+        if (flags[side]) {
+            out[len++] = '\'';
+            const char* s = (const char*)one[side];
+            while (*s) out[len++] = *s++;
+            out[len++] = '\'';
+        } else {
+            len += (size_t)snprintf(out + len, 24, "%lld", (long long)one[side]);
+        }
+    }
+    out[len++] = ')';
+    out[len] = 0;
+    return (int64_t)out;
 }
 
 // ── PY-A: Python list methods ────────────────────────────────────────
