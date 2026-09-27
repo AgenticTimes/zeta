@@ -1,0 +1,11 @@
+# @cat: control
+# @note: del 未定义变量不报 NameError——静默通过（CPython NameError）。
+#        gen.rs 车道：del 语句需要运行期检查。
+#@@ python
+x = "hello"
+del x
+print(x)
+#@@ zeta
+x = "hello"
+del x
+print(x)

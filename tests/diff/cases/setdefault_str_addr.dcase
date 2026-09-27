@@ -1,0 +1,12 @@
+# @cat: container
+# @note: setdefault 新键的字符串 default 值打地址——CPython "v"。
+#        set 写入 ✓ 但 get 读出指针 ⇒ 字典 .setdefault 方法上下文
+#        的值类型标记缺失（⑫ 家族方法面实例，gen.rs 车道）。
+#@@ python
+d = {}
+d.setdefault("k", "v")
+print(d["k"])
+#@@ zeta
+d = {}
+d.setdefault("k", "v")
+print(d["k"])
