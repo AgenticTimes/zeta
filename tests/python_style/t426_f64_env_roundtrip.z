@@ -2,7 +2,7 @@
 // （`zeta_env_set(i64, i64)` / `zeta_env_get(i64)->i64`，
 // `src/backend/codegen/runtime_decls_core.rs:51-52`），读侧按名字的声明类型给槽
 // （`global_ty_of`），也就是**按位重解读**；写侧以前交给调用约定去 `fptosi`，小数当场没了。
-// 两头不一致的下场（批次 386 实测）：`ratio = 2.5` 在别的函数里读回 `0.000000` —— 既不是
+// 两头不一致的下场（批次 386 实测）：`ratio = 2.5` 在别的函数里读回 `0.0` —— 既不是
 // 2.5 也不是 2.0，因为存进去的是整数 2，而 2 的 IEEE-754 位模式是 1e-323。
 // 修法：`env_store`（`src/middle/mir/gen.rs:428` 起）对"声明类型是 float"的名字，把值先落进
 // 自己的槽、再从那个地址按 8 字节读一个裸词传给 env —— 与读侧同一个重解读，也与容器写侧
@@ -12,8 +12,8 @@
 // 另两形（`global` 声明的写、`float` 的 `+=` 累积）见 `t427_f64_env_write_paths.z`。
 // 主程序自己读回旧值是另一格，见 `t425_module_body_stale_read.z`。
 // expect 取 CPython 的输出。
-// expect: outer=2.500000
-// expect: inner=2.500000
+// expect: outer=2.5
+// expect: inner=2.5
 ratio = 2.5
 
 fn inner_ratio() -> float {

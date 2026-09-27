@@ -16,6 +16,6 @@ print(args.count)
 print(args.optimistic)
 
 // expect: 2023-01-01
-// expect: 1000000.000000
+// expect: 1000000.0
 // expect: 3
 // expect: False

@@ -3,7 +3,7 @@
 // expect: 1024
 // expect: 1
 // expect: 27
-// expect: 1.414214
+// expect: 1.4142135623730951
 // expect: 512
 print(2 ** 10)
 print(2 ** 0)

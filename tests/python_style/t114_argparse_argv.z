@@ -16,6 +16,6 @@ print(args.count)
 print(args.optimistic)
 
 // expect: 2024-05-05
-// expect: 250.500000
+// expect: 250.5
 // expect: 9
 // expect: True

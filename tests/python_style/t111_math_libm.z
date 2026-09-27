@@ -3,28 +3,28 @@
 //   fmod/remainder/copysign/ldexp/isinf。此前这些成员未入注册表 → 落到
 //   按名解析 → 链接失败（fail-loud，不可用）。libc 无 isinf 符号（宏），
 //   故显式包一层。
-// expect: 3.000000
-// expect: 0.785398
-// expect: 1.500000
-// expect: -3.000000
+// expect: 3.0
+// expect: 0.7853981633974483
+// expect: 1.5
+// expect: -3.0
 // expect: 1
 // expect: 0
-// expect: 24.000000
-// expect: 8.000000
-// expect: 3.000000
-// expect: 0.000000
-// expect: 0.000000
-// expect: 0.000000
-// expect: 0.000000
-// expect: 1.000000
-// expect: 0.000000
-// expect: 1.000000
+// expect: 24.0
+// expect: 8.0
+// expect: 3.0
+// expect: 0.0
+// expect: 0.0
+// expect: 0.0
+// expect: 0.0
+// expect: 1.0
+// expect: 0.0
+// expect: 1.0
 // expect: 0
-// expect: 0.000000
-// expect: 0.000000
-// expect: 0.000000
-// expect: 0.000000
-// expect: 1024.000000
+// expect: 0.0
+// expect: 0.0
+// expect: 0.0
+// expect: 0.0
+// expect: 1024.0
 import math
 print(math.log2(8.0))
 print(math.atan(1.0))

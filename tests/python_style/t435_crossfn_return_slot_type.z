@@ -14,13 +14,13 @@
 // 未收窄、未越界的两格保持原样，故不入本例：声明与实现不一致（`-> i64` 却 `return 2.7`）
 // 仍按位重读，那是任务 #33；只有整数证据的 `/ % //` 仍按整数走（`tdiv(3, 2)`→`1`），
 // 那是 numeric 方言族 #46/#48/#51。
-// expect: scale=0.500000
-// expect: copied=0.500000
-// expect: twice=0.500000
-// expect: forward=1.250000
+// expect: scale=0.5
+// expect: copied=0.5
+// expect: twice=0.5
+// expect: forward=1.25
 // expect: count=3
 // expect: decl_i64=3
-// expect: decl_f64=3.000000
+// expect: decl_f64=3.0
 def scale(v):
     return v * 1.0
 

@@ -16,7 +16,7 @@
 // expect: A=1
 // expect: 2B
 // expect: C=1D=2
-// expect: mixed=[txt] [1.750000] [1] [True]
+// expect: mixed=[txt] [1.75] [1] [True]
 // expect: v=[1, 2, 3]
 // expect: plain
 // expect: 1

@@ -8,8 +8,8 @@
 // expect: -4
 // expect: -4
 // expect: 3
-// expect: 3.000000
-// expect: -4.000000
+// expect: 3.0
+// expect: -4.0
 // expect: 500
 // expect: 1
 def idiv(a: i64, b: i64) -> i64:

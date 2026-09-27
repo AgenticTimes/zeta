@@ -10,5 +10,5 @@ import os.path as p
 print(m.pi)
 print(p.basename("/a/b.txt"))
 
-// expect: 3.141593
+// expect: 3.141592653589793
 // expect: b.txt

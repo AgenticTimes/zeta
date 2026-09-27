@@ -35,28 +35,28 @@
 // （`9.0.isqrt()`、`1.0.isfinite()` ⇒ 链接期 `_isfinite`/`isqrt_1` 未定义，一声不出到链接才炸）。
 //
 // 逐行期望按实际输出写（每行都已与 CPython 对数）：
-// expect: sqrt=3.000000
-// expect: exp=2.718282
-// expect: log=1.000000
-// expect: log10=3.000000
-// expect: cos=1.000000
-// expect: sin=0.000000
+// expect: sqrt=3.0
+// expect: exp=2.718281828459045
+// expect: log=1.0
+// expect: log10=3.0
+// expect: cos=1.0
+// expect: sin=0.0
 // expect: floor=2
 // expect: ceil=3
 // expect: trunc=-2
-// expect: fabs=3.500000
-// expect: pow=1024.000000
-// expect: atan2=0.785398
-// expect: log2=3.000000
-// expect: fmod=1.000000
-// expect: hypot=5.000000
-// expect: cbrt=3.000000
-// expect: degrees=180.000000
-// expect: copysign=-3.500000
-// expect: corpus_sqrt=10.000000
+// expect: fabs=3.5
+// expect: pow=1024.0
+// expect: atan2=0.7853981633974483
+// expect: log2=3.0
+// expect: fmod=1.0
+// expect: hypot=5.0
+// expect: cbrt=3.0
+// expect: degrees=180.0
+// expect: copysign=-3.5
+// expect: corpus_sqrt=10.0
 // expect: corpus_as_int=10
 // expect: corpus_trips=9
-// expect: qualified_control=1.974842
+// expect: qualified_control=1.9748417658131499
 
 fn f() -> i64 {
     let v = 9.0

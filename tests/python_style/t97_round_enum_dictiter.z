@@ -2,7 +2,7 @@
 //   此前：round(x,n) 落到裸 libm round 且浮点实参被强转 i64（2.345→2）；
 //   enumerate 的 start 被当成数组下标 → 循环体从不执行；`for k in d` 静默 0 次
 // expect: 2
-// expect: 2.350000
+// expect: 2.35
 // expect: 5
 // expect: 15
 // expect: 26

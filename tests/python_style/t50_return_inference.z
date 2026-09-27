@@ -2,7 +2,7 @@
 //   导致返回字符串的库函数在调用点被当整数（值对、打印/比较错）。
 // expect: 5
 // expect: HELLO
-// expect: 2.500000
+// expect: 2.5
 def make():
     return "hello"
 

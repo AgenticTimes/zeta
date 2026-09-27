@@ -1,9 +1,9 @@
 // PY-A: 泛型多类型实例化 — 同一泛型函数按调用点参数类型推断实例化
 // （id(3) → i64 实例；id(3.5) → f64 实例，不得截断）
 // expect: 3
-// expect: 3.500000
+// expect: 3.5
 // expect: 7
-// expect: 2.500000
+// expect: 2.5
 fn id<T>(x: T) -> T {
     return x
 }

@@ -13,7 +13,7 @@
 // ——`println!("A={}", 1)` 打 `1`、`println!("{}B", 2)` 打 `2`；多占位符只打第一个值
 // ——`println!("C={}D={}", 1, 2)` 打 `1`。改后复测这三条读数一字未变。
 // expect: text
-// expect: 1.750000
+// expect: 1.75
 // expect: 42
 // expect: 9
 // expect: called

@@ -6,9 +6,9 @@
 // 三条读数与 `python3` 同形状程序逐字相同。
 // 主程序自己读回旧值是另一格（`t425_module_body_stale_read.z`）；没有声明类型的闭包
 // `nonlocal` 浮点仍按整数截断，见 `docs/ABI.md` R8。
-// expect: after_global=3.500000
-// expect: after_addop=3.750000
-// expect: main_read=3.750000
+// expect: after_global=3.5
+// expect: after_addop=3.75
+// expect: main_read=3.75
 ratio: float = 2.5
 
 fn bump_global() {

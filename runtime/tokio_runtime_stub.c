@@ -33,8 +33,52 @@ int64_t vec_push(int64_t data_ptr, int64_t val);
 static const char* zt_str_or_null(int64_t v) { return v ? (const char*)v : "<null>"; }
 void println_i64(int64_t v) { printf("%lld\n", (long long)v); }
 void print_i64(int64_t v) { printf("%lld", (long long)v); }
-void println_f64(double v) { printf("%.6f\n", v); }
-void print_f64(double v) { printf("%.6f", v); }
+// Batch 566: CPython repr spelling — the shortest decimal string that
+// round-trips, always with a visible '.' or exponent so a float never
+// prints as an integer. Computed by trying increasing %g precisions.
+static int zt_repr_g(double v, char* out, size_t cap) {
+    // CPython switches to exponent form outside |v| in [1e-4, 1e16); inside,
+    // fixed notation with trailing zeros trimmed (shortest round-trip).
+    double a = v < 0 ? -v : v;
+    if (v == 0) { snprintf(out, cap, "0.0"); return 0; }
+    if (a >= 1e16 || a < 1e-4) {
+        for (int p = 0; p <= 17; p++) {
+            snprintf(out, cap, "%.*e", p, v);
+            if (strtod(out, NULL) == v) return 0;
+        }
+        snprintf(out, cap, "%.17e", v);
+        return 0;
+    }
+    for (int p = 1; p <= 17; p++) {
+        snprintf(out, cap, "%.*f", p, v);
+        if (strtod(out, NULL) == v) {
+            char* dot = strchr(out, '.');
+            char* end = out + strlen(out) - 1;
+            while (end > dot && *end == '0') *end-- = 0;
+            if (end == dot) *++end = '0';
+            *(end + 1) = 0;
+            return 0;
+        }
+    }
+    snprintf(out, cap, "%.17f", v);
+    return 0;
+}
+static void zt_print_repr_f64(double v, int newline) {
+    char buf[40];
+    if (v != v) { snprintf(buf, sizeof buf, "nan"); }
+    else if (v > 0 ? (v > 1.7976931348623157e308) : 0) { snprintf(buf, sizeof buf, "inf"); }
+    else {
+        zt_repr_g(v, buf, sizeof buf);
+        // CPython keeps a float visibly fractional: 5.0, not 5
+        if (!strchr(buf, '.') && !strchr(buf, 'e') && !strchr(buf, 'n') && !strchr(buf, 'i')) {
+            size_t l = strlen(buf); buf[l] = '.'; buf[l+1] = '0'; buf[l+2] = 0;
+        }
+    }
+    if (newline) fputs(buf, stdout), fputc('\n', stdout);
+    else fputs(buf, stdout);
+}
+void println_f64(double v) { zt_print_repr_f64(v, 1); }
+void print_f64(double v) { zt_print_repr_f64(v, 0); }
 void print_bool(int64_t v) { printf("%s", v ? "True" : "False"); }
 void print_str(int64_t v) { printf("%s", zt_str_or_null(v)); }
 void println_str(int64_t v) { printf("%s\n", zt_str_or_null(v)); }

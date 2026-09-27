@@ -18,4 +18,4 @@ print(floor(2.7))
 print(sq(9.0))
 
 // expect: 2
-// expect: 3.000000
+// expect: 3.0

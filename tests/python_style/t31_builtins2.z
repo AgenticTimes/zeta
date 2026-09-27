@@ -1,5 +1,5 @@
 // PY-A: Python builtins — int/float/sorted/diff/list/arange
-// expect: 9.000000
+// expect: 9.0
 // expect: 7
 // expect: 2
 // expect: 3
