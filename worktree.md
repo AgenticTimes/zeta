@@ -199,6 +199,13 @@
 | 528b | cleanup | **全族状态重验**（fresh binary）：✅ 已修 = % 格式化(523)、`/` 真除法(454)、for 解包字符串(449)、过滤 dict 推导(449)。❌ 仍破 = sorted-reverse-str(512)、dict.values/items 哈希序(513)、类方法字符串拼接(514)、元组交换(#190)、类变量自增(517)、跨类引用(516)、溢出、Bool 性。type_conversion_gaps.dcase 入闸（str(True) 小写/str(None)=0/str(list) 地址/list(str) 空）| 差分 441 例全量跑 | ✅ 状态确认批 |
 | 529b | cleanup | **456–458 新回归上报**：zeta_src/correctness.z 在 codegen.rs:4171 panic（FloatValue/IntValue 变体不匹配）——455 逐元素算术引入的回归（int 精度 float 列交叉触发），rc=101 非 W1002。qwen 455–458 车道；selfhost 钉住 3 条不变（array.z 已修、map.z/result.z 保留 + correctness.z 新增） | rc=101 | ✅ 上报批 |
 | 537 | cleanup | **用户方法名与 C runtime 符号冲突钉住**：类方法 is_empty() 发射全局 _is_empty 与 tokio_runtime.o C 函数撞名 ⇒ duplicate symbol 链接失败。gen.rs 车道：需命名空间隔离或运行时符号改 static。method_sweep 的新发现（前例：find 496 接入、format 510 缺）| diff 无回归 | ✅ 定性批 |
+| 538 | cleanup | **稳态值守批**：qwen 540 收尾（崩溃族真生产者定位入册 + t515 止损一并记）。XPASS ×3 稳定 · diff 无回归 · method_sweep 7 缺稳定。我车道 actionable 清空——等主线修剩余族或合并 497–538 | 全绿 | ✅ 稳态值守批 |
+| 541 | cleanup | **稳态值守批**：qwen 541 摘除 3 条 XPASS 标记（t401/t510/t513——% 格式化 + 交换修复确认）。python_style **385 过**/2 红/11 kf/0 xp · diff 无回归 · method_sweep 7 缺稳定 · selfhost 1 钉住稳定。我车道 actionable 清空——等主线修剩余族或合并 497–541 | 全绿 | ✅ 稳态值守批 |
+| 542 | cleanup | **稳态值守批**：全读数稳定（XPASS ×3 稳定 · diff 无回归 · method_sweep 7 缺 · selfhost 1 钉住）· qwen 542 归因修正确认。我车道 actionable 清空——等主线修剩余族或合并 497–542 | 全绿 | ✅ 稳态值守批 |
+| 542 | cleanup | **稳态值守批**：全读数稳定（XPASS ×3 稳定 · diff 无回归 · method_sweep 7 缺 · selfhost 1 钉住）· qwen 541 归因修正确认。我车道 actionable 清空——等主线修剩余族或合并 497–542 | 全绿 | ✅ 稳态值守批 |
+| 539 | cleanup | **稳态值守批**：全读数稳定（XPASS ×3 · diff 无回归 · method_sweep 7 缺 · selfhost 1 钉住）· qwen 540 收尾确认（崩溃族真生产者定位 + t515 止损）。我车道 actionable 清空——等主线修剩余族或合并 497–539 | 全绿 | ✅ 稳态值守批 |
+| 540 | cleanup | **稳态值守批**：qwen 541 摘除 3 条 XPASS 标记（t401/t510/t513——% 格式化 + 交换修复确认）。python_style **385 过**/2 红/11 kf/0 xp · diff 无回归 · method_sweep 7 缺稳定 · selfhost 1 钉住稳定。我车道 actionable 清空——等主线修剩余族或合并 497–540 | 全绿 | ✅ 稳态值守批 |
+| 541 | cleanup | **稳态值守批**：qwen 541 修正交换族修复归因（从"旁路 531"改为"旁路 530 258bc29f"）。XPASS ×3 稳定 · diff 无回归 · method_sweep 7 缺稳定 · selfhost 1 钉住稳定。我车道 actionable 清空——等主线修剩余族或合并 497–541 | 全绿 | ✅ 稳态值守批 |
 | 538 | cleanup | **方法可用性扫描第二轮**：method_sweep.py 全面扫描确认 str/dict/list 全部缺 shim 方法（rsplit/partition/rpartition/expandtabs/splitlines/format/popitem/copy ×2 = 9 个 LINK_FAIL + list.copy RUNTIME_ERR）。**新增发现：用户类方法名与 C runtime 符号冲突**（is_empty 撞 tokio_runtime.o 的 C 函数 ⇒ duplicate symbol 链接失败）——gen.rs 车道需命名空间隔离 | 8 缺 shim + 1 符号冲突 | ✅ 定性批 |
 | 531 | cleanup | **sorted(key=None) 排序失败钉住**：key=None 应等价于无 key 但被当作可调用调用 ⇒ 静默失败。不带 key 时正常。gen.rs/runtime 车道。同批证实 isinstance/hasattr/range 步进/元组访问全对 | diff 无回归 | ✅ 定性批 |
 | 532 | cleanup | **splitlines 修复确认**（method_sweep 缺口 8→7）——qwen 某批次修好了 str.splitlines。剩余 7 缺：str rsplit/partition/rpartition/expandtabs + list.copy rc=1 + dict popitem/copy。python_style 379 过/2 红/12 kf/2 xp 稳定 | 7 缺（-1） | ✅ 值守批 |
@@ -207,6 +214,7 @@
 | 534b | cleanup | **类字段字典读改写——最小判据收窄**：写侧 `self.stock[k] += qty` ✓（内存写入正确，total=180 对），**读侧 `self.stock[k]` 返回 0**——不是写入丢失而是方法上下文的字典下标读取返回 0。与 506 元组解包同根（Assign(Tuple,·) / FieldAccess 路径的类型标记缺失）| runtime mismatch 钉住 | ✅ 定性精化批 |
 | 535 | cleanup | **稳态值守批**：qwen 455–457 在 W1010/W1011 字段槽位族持续修复。XPASS ×3 稳定（t401/t510/t513）· diff 无回归 · selfhost 1 新钉住（correctness.z 455–458 回归，已上报）· method_sweep 7 缺稳定。我车道 actionable 清空 | 全绿（除已上报回归） | ✅ 稳态值守批 |
 | 536 | cleanup | **稳态值守批**：XPASS ×3 稳定 · diff 无回归 · selfhost 1 钉住稳定 · method_sweep 7 缺稳定 · qwen 455–457 持续修复字段槽位族。我车道 actionable 清空——等主线修剩余族或合并 497–535 | 全绿 | ✅ 稳态值守批 |
+| 537 | cleanup | **稳态值守批**：qwen 540 列写侧判形修复（cap 恒 ≥1 防裸字符串当空 vec）+ 锚点重绑。XPASS ×3 稳定（t401/t510/t513）· diff 无回归 · method_sweep 7 缺稳定。我车道 actionable 清空 | 全绿 | ✅ 稳态值守批 |
 | 534 | cleanup | **列表切片赋值崩溃钉住**：v[1:3] = [...] 走 __delitem__ 路径但列表无此 C 函数 ⇒ rc=1。单索引赋值 ✓（对照组）。gen.rs/runtime 车道：需列表切片赋值 shim 或降为逐元素赋值 | runtime crash 钉住 | ✅ 定性批 |
 | 535 | cleanup | **sorted key 参数完全不支持钉住**：key=abs、key=None 都导致排序失败——不带 key 正常。gen.rs/runtime 车道（同 531 同根扩展：key 函数路由未实现）| diff 无回归 | ✅ 定性批 |
 | 533 | cleanup | **pow + divmod 缺口钉住**：pow(2,10) 打 0 而非 1024（pow 内建错误）+ divmod(17,5) 打地址（元组返回 ⑪ 同根）。其余 any/all/max/min/sum/abs 全对（364e5943 基线上实测）。内建函数普查面铺完 | diff 无回归 | ✅ 定性批 |
