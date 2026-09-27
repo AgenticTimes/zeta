@@ -1,13 +1,13 @@
 {
   "total": 507,
   "judged": 506,
-  "match": 453,
-  "rate_pct": 89.5,
-  "match_min": 453,
+  "match": 456,
+  "rate_pct": 90.1,
+  "match_min": 456,
   "by_verdict": {
-    "mismatch": 42,
-    "runtime": 7,
-    "match": 453,
+    "match": 456,
+    "mismatch": 41,
+    "runtime": 5,
     "bad_case": 1,
     "compile": 4
   },
@@ -21,11 +21,11 @@
       "judged": 83
     },
     "container": {
-      "match": 166,
+      "match": 168,
       "judged": 185
     },
     "numeric": {
-      "match": 97,
+      "match": 98,
       "judged": 124
     },
     "control": {
@@ -36,7 +36,7 @@
   "cases": {
     "builtin_pow_divmod": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "class_cross_method_str": {
       "cat": "container",
@@ -1844,11 +1844,11 @@
     },
     "sorted_key_func": {
       "cat": "container",
-      "verdict": "runtime"
+      "verdict": "match"
     },
     "sorted_key_none": {
       "cat": "container",
-      "verdict": "runtime"
+      "verdict": "match"
     },
     "stmts_multireturn_aug": {
       "cat": "numeric",
