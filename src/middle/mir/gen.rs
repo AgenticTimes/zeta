@@ -11461,12 +11461,23 @@ call, no NULL-handle dereference).",
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
+                        // Batch 568: get/setdefault/pop RETURN the map's
+                        // declared value type — typing them I64 made str
+                        // values print as pointers (setdefault_str_addr).
+                        let val_ty = match (method.as_str(), receiver_ty.as_ref()) {
+                            ("get" | "setdefault" | "pop", Some(Type::Named(_, targs)))
+                                if targs.len() == 2 =>
+                            {
+                                targs[1].clone()
+                            }
+                            _ => Type::I64,
+                        };
                         self.type_map.insert(
                             id,
                             match method.as_str() {
                                 "unique" => Type::DynamicArray(Box::new(elem)),
                                 "strftime" => Type::DynamicArray(Box::new(Type::Str)),
-                                _ => Type::I64,
+                                _ => val_ty,
                             },
                         );
                         return id;
@@ -11954,6 +11965,32 @@ call, no NULL-handle dereference).",
                     .as_ref()
                     .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
                 {
+                    // Batch 568b: `d = {}` then `d.setdefault("k", "v")` — the
+                    // empty literal carries NO value type, so d["k"] rendered
+                    // the raw pointer. Refine d's value type from the
+                    // default's static type at this call.
+                    if method == "setdefault"
+                        && arg_ids.len() == 3
+                        && let Some(Type::Named(n, mut targs)) =
+                            self.type_map.get(&arg_ids[0]).cloned()
+                    {
+                        // Empty literals spell their placeholders as
+                        // [I64, I64]; a CONCRETE non-I64 default widens the
+                        // value type (Str default -> values read as Str).
+                        let vt = self
+                            .type_map
+                            .get(&arg_ids[2])
+                            .cloned()
+                            .unwrap_or(Type::I64);
+                        let concrete_other = !matches!(vt, Type::I64);
+                        while targs.len() < 2 {
+                            targs.push(Type::I64);
+                        }
+                        if concrete_other && targs[1] == Type::I64 {
+                            targs[1] = vt;
+                            self.type_map.insert(arg_ids[0], Type::Named(n, targs));
+                        }
+                    }
                     let dfunc = match (method.as_str(), arg_ids.len()) {
                         ("update", 2) => Some("zeta_map_update"),
                         ("pop", 2) => Some("zeta_map_pop"),
@@ -11994,7 +12031,19 @@ call, no NULL-handle dereference).",
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::I64);
+                        // Batch 568: setdefault returns the inserted-or-existing
+                        // VALUE — type it from the map's declared value type so
+                        // `x = d.setdefault("k", "v")` prints `v`, not the
+                        // pointer.
+                        let ret_ty = match (method.as_str(), receiver_ty.as_ref()) {
+                            ("setdefault", Some(Type::Named(_, targs)))
+                                if targs.len() == 2 =>
+                            {
+                                targs[1].clone()
+                            }
+                            _ => Type::I64,
+                        };
+                        self.type_map.insert(id, ret_ty);
                         return id;
                     }
                 }
