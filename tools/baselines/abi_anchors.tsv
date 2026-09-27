@@ -14,25 +14,25 @@ runtime/aliases.inc.c	12	".globl _print.13\n\t.set _print.13, _print2\n"
 runtime/py_additions.c	43	int64_t host_str_eq(int64_t a, int64_t b) { return str_eq(a, b); }
 runtime/py_additions.c	105	int64_t map_str_key(int64_t handle) {
 runtime/py_additions.c	991	int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
-runtime/py_additions.c	1648	static int zt_packed_cstr_eq(int64_t packed, const char* s) {
-runtime/py_additions.c	1650-1651	if (n > 7) return 0; const unsigned char* p = (const unsigned char*)&packed;
-runtime/py_additions.c	1805	int64_t* pair = (int64_t*)GC_malloc(24);
-runtime/py_additions.c	1830-1864	int64_t py_argparse_parse(int64_t parser) { int64_t ns = map_new(); int64_t n = zt_vec_len(parser); for (int64_t i = 0; i < n; i++) { int64_t* pair = (int64_t*)
-runtime/py_additions.c	1834	int64_t* pair = (int64_t*)((int64_t*)parser)[i];
-runtime/py_additions.c	1842	map_insert(ns, map_str_key((int64_t)dest), (int64_t)GC_strdup(val ? val : ""));
-runtime/py_additions.c	2695	int64_t zeta_env_get(int64_t name_handle) {
-runtime/py_additions.c	2711	int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
-runtime/py_additions.c	2982	if (getenv("ZETA_PROBE")) {
-runtime/py_additions.c	3225	int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
-runtime/py_additions.c	3352	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
-runtime/py_additions.c	3359	(void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
-runtime/py_additions.c	3453	int64_t zeta_call1(int64_t fptr, int64_t a) {
-runtime/py_additions.c	3542	static int zt_dyn_is_map(int64_t h) {
-runtime/py_additions.c	3544	if (GC_base((void*)h) != (void*)h) return 0;
-runtime/py_additions.c	3554	static int64_t* zt_dyn_vec_hdr(int64_t h) {
-runtime/py_additions.c	3561	int64_t have = (int64_t)GC_size((void*)hdr);
-runtime/py_additions.c	3577	int64_t zeta_dyn_len(int64_t h) {
-runtime/py_additions.c	3670	int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
+runtime/py_additions.c	1650	static int zt_packed_cstr_eq(int64_t packed, const char* s) {
+runtime/py_additions.c	1652-1653	if (n > 7) return 0; const unsigned char* p = (const unsigned char*)&packed;
+runtime/py_additions.c	1807	int64_t* pair = (int64_t*)GC_malloc(24);
+runtime/py_additions.c	1832-1866	int64_t py_argparse_parse(int64_t parser) { int64_t ns = map_new(); int64_t n = zt_vec_len(parser); for (int64_t i = 0; i < n; i++) { int64_t* pair = (int64_t*)
+runtime/py_additions.c	1836	int64_t* pair = (int64_t*)((int64_t*)parser)[i];
+runtime/py_additions.c	1844	map_insert(ns, map_str_key((int64_t)dest), (int64_t)GC_strdup(val ? val : ""));
+runtime/py_additions.c	2697	int64_t zeta_env_get(int64_t name_handle) {
+runtime/py_additions.c	2713	int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
+runtime/py_additions.c	2984	if (getenv("ZETA_PROBE")) {
+runtime/py_additions.c	3227	int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
+runtime/py_additions.c	3354	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
+runtime/py_additions.c	3361	(void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
+runtime/py_additions.c	3455	int64_t zeta_call1(int64_t fptr, int64_t a) {
+runtime/py_additions.c	3544	static int zt_dyn_is_map(int64_t h) {
+runtime/py_additions.c	3546	if (GC_base((void*)h) != (void*)h) return 0;
+runtime/py_additions.c	3556	static int64_t* zt_dyn_vec_hdr(int64_t h) {
+runtime/py_additions.c	3563	int64_t have = (int64_t)GC_size((void*)hdr);
+runtime/py_additions.c	3579	int64_t zeta_dyn_len(int64_t h) {
+runtime/py_additions.c	3672	int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
 runtime/tokio_runtime_stub.c	206	#define MAP_ENTRY_SIZE 24
 runtime/tokio_runtime_stub.c	227-233	// A `-> dict` annotation on a function whose body returns `json.loads(...)` types // the result `map`, while the VALUE is a PyJson cell [tag, payload] (tag 1..
 runtime/tokio_runtime_stub.c	241-248	// The h-16 read must NEVER touch memory outside h's own GC block: a map // handle IS its block base, and blocks that start at a page edge make // h-16 a guard 
