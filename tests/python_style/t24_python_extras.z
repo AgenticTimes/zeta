@@ -1,4 +1,6 @@
 // PY-A: 字符串方法 / in·not in / 负索引 / 元组并行赋值 / 链式比较
+// 交换族两格 expect 逐字来自本机 CPython（`2`/`1`）；第二条原本记的是顺序腐蚀读数
+// `2`（#190），随"RHS 先整体入临时再绑定"的修复（旁路 531）改回真值。
 // expect: HELLO WORLD
 // expect: hello world
 // expect: True
@@ -10,7 +12,7 @@
 // expect: found
 // expect: absent
 // expect: 2
-// expect: 2
+// expect: 1
 // expect: chained ok
 // expect: chain else ok
 s = "Hello World"

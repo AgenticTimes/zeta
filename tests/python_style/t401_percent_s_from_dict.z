@@ -3,9 +3,9 @@
 //   `abc`；同一数据用 f-string 是对的 ⇒ 缺口在 `%` 格式化的 str 参数侧。
 //   主线批次 300 记录的 `[PARITY]` 行打 `4390899200` 是同一个坑。
 //   expect 取 CPython 的输出（本包一律以 CPython 为参照，见 t404 的例外说明）。
+//   转绿批次未二分（460 起逐夹具单跑复现 XPASS）⇒ 本行只摘标记、不记成任何一批收益。
 // expect: f=abc
 // expect: g=abc
-// known-fail: %s 读到的是句柄整数；同位置 f-string 正确
 d = {"name": "abc", "n": 3}
 print("f=%s" % d["name"])
 print(f"g={d['name']}")

@@ -1,13 +1,14 @@
 {
-  "total": 468,
-  "judged": 468,
+  "total": 471,
+  "judged": 470,
   "match": 407,
-  "rate_pct": 87.0,
+  "rate_pct": 86.6,
   "match_min": 407,
   "by_verdict": {
-    "mismatch": 50,
+    "mismatch": 52,
     "runtime": 7,
     "match": 407,
+    "bad_case": 1,
     "compile": 4
   },
   "per_cat": {
@@ -21,7 +22,7 @@
     },
     "container": {
       "match": 152,
-      "judged": 183
+      "judged": 185
     },
     "numeric": {
       "match": 65,
@@ -58,6 +59,10 @@
       "verdict": "mismatch"
     },
     "class_inheritance_field": {
+      "cat": "container",
+      "verdict": "mismatch"
+    },
+    "class_inventory_dict": {
       "cat": "container",
       "verdict": "mismatch"
     },
@@ -316,6 +321,10 @@
     "control_while": {
       "cat": "control",
       "verdict": "match"
+    },
+    "del_undefined_var": {
+      "cat": "control",
+      "verdict": "bad_case"
     },
     "except_division_zero": {
       "cat": "control",
@@ -1683,6 +1692,10 @@
     },
     "numeric_truediv": {
       "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "setdefault_str_addr": {
+      "cat": "container",
       "verdict": "mismatch"
     },
     "sorted_key_func": {
