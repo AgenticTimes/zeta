@@ -15,30 +15,30 @@ runtime/aliases.inc.c	12	".globl _print.13\n\t.set _print.13, _print2\n"
 runtime/py_additions.c	43	int64_t host_str_eq(int64_t a, int64_t b) { return str_eq(a, b); }
 runtime/py_additions.c	244	int64_t map_str_key(int64_t handle) {
 runtime/py_additions.c	244-268	int64_t map_str_key(int64_t handle) { if (!handle) return 0; // Batch 291: vec<str> slots can hold small strings PACKED into the 8-byte // word ("43601853" = 0x
-runtime/py_additions.c	1280	int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
-runtime/py_additions.c	1963	static int zt_packed_cstr_eq(int64_t packed, const char* s) {
-runtime/py_additions.c	1965-1966	if (n > 7) return 0; const unsigned char* p = (const unsigned char*)&packed;
-runtime/py_additions.c	2120	int64_t* pair = (int64_t*)GC_malloc(24);
-runtime/py_additions.c	2145-2179	int64_t py_argparse_parse(int64_t parser) { int64_t ns = map_new(); int64_t n = zt_vec_len(parser); for (int64_t i = 0; i < n; i++) { int64_t* pair = (int64_t*)
-runtime/py_additions.c	2149	int64_t* pair = (int64_t*)((int64_t*)parser)[i];
-runtime/py_additions.c	2157	map_insert(ns, map_str_key((int64_t)dest), (int64_t)GC_strdup(val ? val : ""));
-runtime/py_additions.c	3010	int64_t zeta_env_get(int64_t name_handle) {
-runtime/py_additions.c	3026	int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
-runtime/py_additions.c	3297	if (getenv("ZETA_PROBE")) {
-runtime/py_additions.c	3612	int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
-runtime/py_additions.c	3739	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
-runtime/py_additions.c	3746	(void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
-runtime/py_additions.c	3840	int64_t zeta_call1(int64_t fptr, int64_t a) {
-runtime/py_additions.c	3912-3962	// BATCH-296: geometry-based kind test for a handle whose STATIC type is unknown // (`d = {}; d["x"] = {...}` types the value I64, and `dict[str, Any]` from the
-runtime/py_additions.c	3929	static int zt_dyn_is_map(int64_t h) {
-runtime/py_additions.c	3929-3939	static int zt_dyn_is_map(int64_t h) { if (h <= 0x1000) return 0; if (GC_base((void*)h) != (void*)h) return 0; int64_t* w = (int64_t*)h; int64_t cap = w[0]; if (
-runtime/py_additions.c	3931	if (GC_base((void*)h) != (void*)h) return 0;
-runtime/py_additions.c	3941	static int64_t* zt_dyn_vec_hdr(int64_t h) {
-runtime/py_additions.c	3941-3962	static int64_t* zt_dyn_vec_hdr(int64_t h) { if (h <= 0x1000) return NULL; int64_t* hdr = (int64_t*)(h - 16); if (GC_base((void*)hdr) != (void*)hdr) return NULL;
-runtime/py_additions.c	3948	int64_t have = (int64_t)GC_size((void*)hdr);
-runtime/py_additions.c	3964	int64_t zeta_dyn_len(int64_t h) {
-runtime/py_additions.c	3964-3976	int64_t zeta_dyn_len(int64_t h) { if (!h) return 0; if (zt_dyn_is_map(h)) return zeta_map_len(h); int64_t* hdr = zt_dyn_vec_hdr(h); if (hdr) return hdr[1]; // T
-runtime/py_additions.c	4057	int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
+runtime/py_additions.c	1286	int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
+runtime/py_additions.c	1969	static int zt_packed_cstr_eq(int64_t packed, const char* s) {
+runtime/py_additions.c	1971-1972	if (n > 7) return 0; const unsigned char* p = (const unsigned char*)&packed;
+runtime/py_additions.c	2126	int64_t* pair = (int64_t*)GC_malloc(24);
+runtime/py_additions.c	2151-2185	int64_t py_argparse_parse(int64_t parser) { int64_t ns = map_new(); int64_t n = zt_vec_len(parser); for (int64_t i = 0; i < n; i++) { int64_t* pair = (int64_t*)
+runtime/py_additions.c	2155	int64_t* pair = (int64_t*)((int64_t*)parser)[i];
+runtime/py_additions.c	2163	map_insert(ns, map_str_key((int64_t)dest), (int64_t)GC_strdup(val ? val : ""));
+runtime/py_additions.c	3016	int64_t zeta_env_get(int64_t name_handle) {
+runtime/py_additions.c	3032	int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
+runtime/py_additions.c	3303	if (getenv("ZETA_PROBE")) {
+runtime/py_additions.c	3707	int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
+runtime/py_additions.c	3834	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
+runtime/py_additions.c	3841	(void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
+runtime/py_additions.c	3935	int64_t zeta_call1(int64_t fptr, int64_t a) {
+runtime/py_additions.c	4007-4057	// BATCH-296: geometry-based kind test for a handle whose STATIC type is unknown // (`d = {}; d["x"] = {...}` types the value I64, and `dict[str, Any]` from the
+runtime/py_additions.c	4024	static int zt_dyn_is_map(int64_t h) {
+runtime/py_additions.c	4024-4034	static int zt_dyn_is_map(int64_t h) { if (h <= 0x1000) return 0; if (GC_base((void*)h) != (void*)h) return 0; int64_t* w = (int64_t*)h; int64_t cap = w[0]; if (
+runtime/py_additions.c	4026	if (GC_base((void*)h) != (void*)h) return 0;
+runtime/py_additions.c	4036	static int64_t* zt_dyn_vec_hdr(int64_t h) {
+runtime/py_additions.c	4036-4057	static int64_t* zt_dyn_vec_hdr(int64_t h) { if (h <= 0x1000) return NULL; int64_t* hdr = (int64_t*)(h - 16); if (GC_base((void*)hdr) != (void*)hdr) return NULL;
+runtime/py_additions.c	4043	int64_t have = (int64_t)GC_size((void*)hdr);
+runtime/py_additions.c	4059	int64_t zeta_dyn_len(int64_t h) {
+runtime/py_additions.c	4059-4071	int64_t zeta_dyn_len(int64_t h) { if (!h) return 0; if (zt_dyn_is_map(h)) return zeta_map_len(h); int64_t* hdr = zt_dyn_vec_hdr(h); if (hdr) return hdr[1]; // T
+runtime/py_additions.c	4152	int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
 runtime/tokio_runtime_stub.c	206	#define MAP_ENTRY_SIZE 24
 runtime/tokio_runtime_stub.c	227-233	// A `-> dict` annotation on a function whose body returns `json.loads(...)` types // the result `map`, while the VALUE is a PyJson cell [tag, payload] (tag 1..
 runtime/tokio_runtime_stub.c	241-248	// The h-16 read must NEVER touch memory outside h's own GC block: a map // handle IS its block base, and blocks that start at a page edge make // h-16 a guard 
@@ -190,75 +190,75 @@ src/main.rs	648	let no_link = args.iter().any(|a| a == "--no-link");
 src/main.rs	942-945	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
 src/main.rs	946	all_mirs.sort_by(|a, b| {
 src/main.rs	1001	if no_link {
-src/middle/mir/gen.rs	416	fn global_ty_of(&self, name: &str) -> Option<Type> {
-src/middle/mir/gen.rs	423	.map(|m| format!("{}__", m.replace('.', "_")))
-src/middle/mir/gen.rs	459	fn env_store(&mut self, name: &str, value: u32) -> u32 {
-src/middle/mir/gen.rs	526	fn env_slot_ty(&self, name: &str) -> Type {
-src/middle/mir/gen.rs	549-553	/// The mirror reads the SLOT it follows, never the `rhs` id: codegen /// re-evaluates an expression at each use, so handing over the right-hand /// side a seco
-src/middle/mir/gen.rs	554	fn mirror_module_global_writes(&mut self) {
-src/middle/mir/gen.rs	573	fn splice_env_mirrors(
-src/middle/mir/gen.rs	585	let (mirror, _key) = self.env_mirror(name, lhs);
-src/middle/mir/gen.rs	666	Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
-src/middle/mir/gen.rs	778	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
-src/middle/mir/gen.rs	785	let prefix = format!("{}__", module.replace('.', "_"));
-src/middle/mir/gen.rs	1267-1287	fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>>) { let missing: Vec<&str> = params .iter() .enumerate() .filter(|(i, _)| slots
-src/middle/mir/gen.rs	1623	self.mirror_module_global_writes();
-src/middle/mir/gen.rs	1687	Self::pin_declared_int_return(&mut mir, ast);
-src/middle/mir/gen.rs	1705	fn pin_declared_int_return(mir: &mut Mir, ast: &AstNode) {
-src/middle/mir/gen.rs	1775	);
-src/middle/mir/gen.rs	1790	let key_id = self.env_store(name, rhs_id);
-src/middle/mir/gen.rs	2237	if self.nonlocal_names.contains(name) {
-src/middle/mir/gen.rs	2239	self.env_store(name, rhs_id);
-src/middle/mir/gen.rs	2252	} else if self.nonlocal_names.contains(name) {
-src/middle/mir/gen.rs	2254	let key_id = self.env_store(name, rhs_id);
-src/middle/mir/gen.rs	2329	self.env_store(name, rhs_id);
-src/middle/mir/gen.rs	3526	self.lower_ast(body);
-src/middle/mir/gen.rs	3607	// Macros should have been expanded before MIR lowering.
-src/middle/mir/gen.rs	3885	) -> Vec<(String, u32)> {
-src/middle/mir/gen.rs	3907	fn enum_is_boxed(&self, enum_name: &str) -> bool {
-src/middle/mir/gen.rs	4009	fn lower_range_guard(
-src/middle/mir/gen.rs	4031	func: if inclusive { "<=" } else { "<" }.to_string(),
-src/middle/mir/gen.rs	4337	format!("{}__{}", module.replace('.', "_"), member);
-src/middle/mir/gen.rs	4344-4362	// PY-A V3: nonlocal names ALWAYS read through env (fresh // value), even when a local alias exists. if self.nonlocal_names.contains(name) { let key_id = self.n
-src/middle/mir/gen.rs	4692	"zeta_dyn_truth"
-src/middle/mir/gen.rs	6936-6948	if method == "parse_args" && receiver.is_some() { let recv = self.lower_expr(receiver.as_ref().unwrap()); self.stmts.push(MirStmt::Call { func: "py_argparse_par
-src/middle/mir/gen.rs	7313-7334	// `log.info(fmt, *args)` — a varargs HANDLE has no // static length, and lowering the starred operand // emitted a raw Deref that codegen compiled into // `ldr
-src/middle/mir/gen.rs	8008	func: "zeta_dyn_len".to_string(),
-src/middle/mir/gen.rs	8031-8033	// The block written here MUST be the block the runtime readers // decode: `option_is_some` tests slot 0 and `option_get_data` // reads slot 1 (tokio_runtime_st
-src/middle/mir/gen.rs	8038-8047	if receiver.is_none() && matches!(method.as_str(), "Some" | "Ok" | "Err") && args.len() == 1 { let val_id = self.lower_expr(&args[0]); let (variant, tag_val) = 
-src/middle/mir/gen.rs	8048-8050	// `Option` is `[tag | data]`, `Result` is `[tag | ok | err]` // (the layouts `option_get_data` / `host_result_get_data` // decode), so an unused payload slot i
-src/middle/mir/gen.rs	9607	Some(Type::Str) => "println_str",
-src/middle/mir/gen.rs	9718-9724	for (i, a) in pos.into_iter().enumerate() { if i < slots.len() { slots[i] = Some(a); } else { slots.push(Some(a)); } }
-src/middle/mir/gen.rs	9725-9730	for (n, v) in kw { match params.iter().position(|p| *p == n) { Some(i) => slots[i] = Some(v), None => slots.push(Some(v)), } }
-src/middle/mir/gen.rs	9727	Some(i) => slots[i] = Some(v),
-src/middle/mir/gen.rs	9728	None => slots.push(Some(v)),
-src/middle/mir/gen.rs	9731-9743	// A `**` mapping fills whatever is still unbound. for m in spread { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { *slot = Some(AstNode::S
-src/middle/mir/gen.rs	9744-9753	// Finally, declared defaults. if let Some(defaults) = &callee_defaults { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { if let Some(Some(d
-src/middle/mir/gen.rs	9883-9919	// PY-A: starred args `f(*arr)` expand to per-element args // (V1: static-size arrays compile-time unrolled). for a in &ordered_args { if let AstNode::UnaryOp {
-src/middle/mir/gen.rs	10336	// (`[dynamic]str__max`), reached once annotated params keep their
-src/middle/mir/gen.rs	10355	// same ghost family as `.isna()` (`[dynamic]i64__all`).
-src/middle/mir/gen.rs	10374	// `[dynamic]str__isna` and aborted. Route to the runtime helper.
-src/middle/mir/gen.rs	10393	// vector): compiled to the ghost `[dynamic]str__pct_change`, and
-src/middle/mir/gen.rs	10440	func: "[dynamic]str__map".to_string(),
-src/middle/mir/gen.rs	10453	// `[dynamic]str__normalize` and the link failed.
-src/middle/mir/gen.rs	10699	func: "zeta_dyn_contains".to_string(),
-src/middle/mir/gen.rs	10945-10955	.insert(id, Type::DynamicArray(Box::new(elem))); return id; } // PY-A: Python list methods. The opaque-receiver fallback // just below routes `index`/`count` to
-src/middle/mir/gen.rs	12048-12072	if receiver.is_none() && arg_ids.len() <= 4 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
-src/middle/mir/gen.rs	12327-12329	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
-src/middle/mir/gen.rs	12330-12340	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
-src/middle/mir/gen.rs	12341-12347	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
-src/middle/mir/gen.rs	12354	format!("{}_{}", func, arg_ids.len())
-src/middle/mir/gen.rs	12916	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
-src/middle/mir/gen.rs	13177-13210	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
-src/middle/mir/gen.rs	13892	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
-src/middle/mir/gen.rs	13896	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
-src/middle/mir/gen.rs	13993	format!("{}_{}", func_name, arg_ids.len())
-src/middle/mir/gen.rs	14047	if size == 0 || !matches!(elem_ty_pre, Type::F32 | Type::F64) {
-src/middle/mir/gen.rs	14650	func: "zeta_dyn_getitem".to_string(),
-src/middle/mir/gen.rs	14678	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
-src/middle/mir/gen.rs	15069	self.env_store(name, cur_id);
-src/middle/mir/gen.rs	15305-15310	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
-src/middle/mir/gen.rs	15805	self.mirror_module_global_writes();
+src/middle/mir/gen.rs	420	fn global_ty_of(&self, name: &str) -> Option<Type> {
+src/middle/mir/gen.rs	427	.map(|m| format!("{}__", m.replace('.', "_")))
+src/middle/mir/gen.rs	463	fn env_store(&mut self, name: &str, value: u32) -> u32 {
+src/middle/mir/gen.rs	530	fn env_slot_ty(&self, name: &str) -> Type {
+src/middle/mir/gen.rs	553-557	/// The mirror reads the SLOT it follows, never the `rhs` id: codegen /// re-evaluates an expression at each use, so handing over the right-hand /// side a seco
+src/middle/mir/gen.rs	558	fn mirror_module_global_writes(&mut self) {
+src/middle/mir/gen.rs	577	fn splice_env_mirrors(
+src/middle/mir/gen.rs	589	let (mirror, _key) = self.env_mirror(name, lhs);
+src/middle/mir/gen.rs	670	Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
+src/middle/mir/gen.rs	782	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
+src/middle/mir/gen.rs	789	let prefix = format!("{}__", module.replace('.', "_"));
+src/middle/mir/gen.rs	1271-1291	fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>>) { let missing: Vec<&str> = params .iter() .enumerate() .filter(|(i, _)| slots
+src/middle/mir/gen.rs	1627	self.mirror_module_global_writes();
+src/middle/mir/gen.rs	1691	Self::pin_declared_int_return(&mut mir, ast);
+src/middle/mir/gen.rs	1709	fn pin_declared_int_return(mir: &mut Mir, ast: &AstNode) {
+src/middle/mir/gen.rs	1779	);
+src/middle/mir/gen.rs	1794	let key_id = self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	2241	if self.nonlocal_names.contains(name) {
+src/middle/mir/gen.rs	2243	self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	2256	} else if self.nonlocal_names.contains(name) {
+src/middle/mir/gen.rs	2258	let key_id = self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	2333	self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	3530	self.lower_ast(body);
+src/middle/mir/gen.rs	3611	// Macros should have been expanded before MIR lowering.
+src/middle/mir/gen.rs	3889	) -> Vec<(String, u32)> {
+src/middle/mir/gen.rs	3911	fn enum_is_boxed(&self, enum_name: &str) -> bool {
+src/middle/mir/gen.rs	4013	fn lower_range_guard(
+src/middle/mir/gen.rs	4035	func: if inclusive { "<=" } else { "<" }.to_string(),
+src/middle/mir/gen.rs	4341	format!("{}__{}", module.replace('.', "_"), member);
+src/middle/mir/gen.rs	4348-4366	// PY-A V3: nonlocal names ALWAYS read through env (fresh // value), even when a local alias exists. if self.nonlocal_names.contains(name) { let key_id = self.n
+src/middle/mir/gen.rs	4696	"zeta_dyn_truth"
+src/middle/mir/gen.rs	6940-6952	if method == "parse_args" && receiver.is_some() { let recv = self.lower_expr(receiver.as_ref().unwrap()); self.stmts.push(MirStmt::Call { func: "py_argparse_par
+src/middle/mir/gen.rs	7317-7338	// `log.info(fmt, *args)` — a varargs HANDLE has no // static length, and lowering the starred operand // emitted a raw Deref that codegen compiled into // `ldr
+src/middle/mir/gen.rs	8012	func: "zeta_dyn_len".to_string(),
+src/middle/mir/gen.rs	8035-8037	// The block written here MUST be the block the runtime readers // decode: `option_is_some` tests slot 0 and `option_get_data` // reads slot 1 (tokio_runtime_st
+src/middle/mir/gen.rs	8042-8051	if receiver.is_none() && matches!(method.as_str(), "Some" | "Ok" | "Err") && args.len() == 1 { let val_id = self.lower_expr(&args[0]); let (variant, tag_val) = 
+src/middle/mir/gen.rs	8052-8054	// `Option` is `[tag | data]`, `Result` is `[tag | ok | err]` // (the layouts `option_get_data` / `host_result_get_data` // decode), so an unused payload slot i
+src/middle/mir/gen.rs	9718	Some(Type::Str) => "println_str",
+src/middle/mir/gen.rs	9829-9835	for (i, a) in pos.into_iter().enumerate() { if i < slots.len() { slots[i] = Some(a); } else { slots.push(Some(a)); } }
+src/middle/mir/gen.rs	9836-9841	for (n, v) in kw { match params.iter().position(|p| *p == n) { Some(i) => slots[i] = Some(v), None => slots.push(Some(v)), } }
+src/middle/mir/gen.rs	9838	Some(i) => slots[i] = Some(v),
+src/middle/mir/gen.rs	9839	None => slots.push(Some(v)),
+src/middle/mir/gen.rs	9842-9854	// A `**` mapping fills whatever is still unbound. for m in spread { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { *slot = Some(AstNode::S
+src/middle/mir/gen.rs	9855-9864	// Finally, declared defaults. if let Some(defaults) = &callee_defaults { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { if let Some(Some(d
+src/middle/mir/gen.rs	9994-10030	// PY-A: starred args `f(*arr)` expand to per-element args // (V1: static-size arrays compile-time unrolled). for a in &ordered_args { if let AstNode::UnaryOp {
+src/middle/mir/gen.rs	10447	// (`[dynamic]str__max`), reached once annotated params keep their
+src/middle/mir/gen.rs	10466	// same ghost family as `.isna()` (`[dynamic]i64__all`).
+src/middle/mir/gen.rs	10485	// `[dynamic]str__isna` and aborted. Route to the runtime helper.
+src/middle/mir/gen.rs	10504	// vector): compiled to the ghost `[dynamic]str__pct_change`, and
+src/middle/mir/gen.rs	10551	func: "[dynamic]str__map".to_string(),
+src/middle/mir/gen.rs	10564	// `[dynamic]str__normalize` and the link failed.
+src/middle/mir/gen.rs	10810	func: "zeta_dyn_contains".to_string(),
+src/middle/mir/gen.rs	11056-11066	.insert(id, Type::DynamicArray(Box::new(elem))); return id; } // PY-A: Python list methods. The opaque-receiver fallback // just below routes `index`/`count` to
+src/middle/mir/gen.rs	12159-12183	if receiver.is_none() && arg_ids.len() <= 4 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
+src/middle/mir/gen.rs	12438-12440	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
+src/middle/mir/gen.rs	12441-12451	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
+src/middle/mir/gen.rs	12452-12458	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
+src/middle/mir/gen.rs	12465	format!("{}_{}", func, arg_ids.len())
+src/middle/mir/gen.rs	13027	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
+src/middle/mir/gen.rs	13288-13321	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
+src/middle/mir/gen.rs	14003	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
+src/middle/mir/gen.rs	14007	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
+src/middle/mir/gen.rs	14104	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	14158	if size == 0 || !matches!(elem_ty_pre, Type::F32 | Type::F64) {
+src/middle/mir/gen.rs	14786	func: "zeta_dyn_getitem".to_string(),
+src/middle/mir/gen.rs	14814	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
+src/middle/mir/gen.rs	15205	self.env_store(name, cur_id);
+src/middle/mir/gen.rs	15441-15446	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
+src/middle/mir/gen.rs	15941	self.mirror_module_global_writes();
 src/middle/mir/mir.rs	45-60	/// 批次 399 (类型基础②): the ONE entry saying what this function's `ret` /// carries, so the callee's LLVM signature and the caller's destination slot /// stop being
 src/middle/mir/mir.rs	61-75	pub fn signature_ret_ty(&self) -> Option<Type> { for stmt in &self.stmts { if let MirStmt::Return { val } = stmt { if let Some(ty) = self.type_map.get(val) { re
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");
