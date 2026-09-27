@@ -1,0 +1,24 @@
+// PY-A: 元组赋值的三格"右值引用左目标"形状 ＋ 一格函数体内二元交换（负对照）
+// 期望逐字来自本机 CPython（roadmap §批次 541 §四）。
+// 并前二进制（旁路 530 修复之前）实拍：`3 3 3` / `8` / `abcd` / `abcd` ——
+// 三元素轮转与表达式右值两格被打坏，第三格两侧皆对故留作负对照。
+// expect: 3 1 2
+// expect: 8
+// expect: cd
+// expect: abcd
+a, b, c = 1, 2, 3
+a, b, c = c, a, b
+print(a, b, c)
+
+def f(x, y):
+    p, q = x, y
+    p, q = q, p
+    return p
+
+print(f(7, 8))
+
+s = "ab"
+u = "cd"
+u, s = s + u, u
+print(s)
+print(u)
