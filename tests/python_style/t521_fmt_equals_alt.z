@@ -1,0 +1,40 @@
+// 批次 551（旁路 cleanup）闭 backlog #200：f-string 的 '=' 对齐与 '#' 备选形式。
+// '='：填充 strictly 夹在符号（+进制前缀）与数字之间；'#'：b/o/x/X 挂
+// 0b/0o/0x/0X 前缀，补零宽度把前缀算在头节（#010x → 0x000004d2）。
+// 末三条是 #200 登记的"已正确勿重复"守卫（453 批 sign 旗标成果不受扰）。
+n = -1234
+p = 1234
+print(f"{n:=7d}")
+print(f"{p:=7d}")
+print(f"{p:#010x}")
+print(f"{255:#x}")
+print(f"{255:#X}")
+print(f"{255:#o}")
+print(f"{5:#b}")
+print(f"{255:x}")
+print(f"{-255:#x}")
+print(f"{255:08x}")
+print(f"{255:#08x}")
+print(f"{0:#x}")
+print(f"{n:=10x}")
+print(f"{n:#010b}")
+print(f"{n:07d}")
+print(f"{n:07x}")
+print(f"{n:+07d}")
+// expect: -  1234
+// expect:    1234
+// expect: 0x000004d2
+// expect: 0xff
+// expect: 0XFF
+// expect: 0o377
+// expect: 0b101
+// expect: ff
+// expect: -0xff
+// expect: 000000ff
+// expect: 0x0000ff
+// expect: 0x0
+// expect: -      4d2
+// expect: -0b10011010010
+// expect: -001234
+// expect: -0004d2
+// expect: -001234

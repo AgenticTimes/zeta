@@ -651,7 +651,8 @@ typedef struct {
     int has_precision;
     int precision;
     int numeric;
-    int group; /* ',' grouping option seen in the spec */
+    int group;  /* ',' grouping option seen in the spec */
+    int alt;    /* '#' alternate form (0x/0X/0b/0o prefixes) */
 } zt_fmt_t;
 
 // Insert ',' every three digits counting from the right (Python's ','
@@ -694,15 +695,17 @@ static char* zt_group_float_str(const char* s) {
 static void zt_parse_spec(const char* s, zt_fmt_t* f) {
     f->fill = ' '; f->align = 0; f->sign = 0; f->type = 0; f->width = 0;
     f->zero = 0; f->has_precision = 0; f->precision = 0; f->numeric = 0;
-    f->group = 0;
+    f->group = 0; f->alt = 0;
     const char* p = s ? s : "";
     if (p[0] && p[1] && (p[1] == '<' || p[1] == '>' || p[1] == '^')) {
         f->fill = p[0]; f->align = p[1]; p += 2;
-    } else if (*p == '<' || *p == '>' || *p == '^') {
+    } else if (*p == '<' || *p == '>' || *p == '^' || *p == '=') {
+        /* '=' — pad between the sign and the digits (batch 453 family,
+           backlog #200) */
         f->align = *p; p++;
     }
     if (*p == '+' || *p == '-' || *p == ' ') { f->sign = *p; p++; }
-    if (*p == '#') p++;
+    if (*p == '#') { f->alt = 1; p++; }
     if (*p == '0') { f->zero = 1; p++; }
     while (*p >= '0' && *p <= '9') { f->width = f->width * 10 + (*p - '0'); p++; }
     if (*p == ',') { f->group = 1; p++; }
@@ -727,6 +730,10 @@ static int64_t zt_fmt_pad(const char* body, zt_fmt_t* f) {
         left = pad;
     } else if (al == '>') {
         left = pad;
+    } else if (al == '=') {
+        /* '=' — padding strictly between the sign/prefix and the digits
+           (backlog #200); the fill char stays the spec's own */
+        left = pad;
     } else if (al == '<') {
         right = pad;
     } else {
@@ -734,6 +741,23 @@ static int64_t zt_fmt_pad(const char* body, zt_fmt_t* f) {
         right = pad - left;
     }
     char* out = (char*)GC_malloc((size_t)f->width + 1);
+    /* The HEAD (leading sign plus 0x/0X/0b/0o prefix) stays glued to the
+       front; zero-fill and '=' padding go after it (#200: '#010x' must be
+       '0x000004d2', not '00000 0x4d2'). */
+    size_t head = 0;
+    if (n > 0 && (body[0] == '-' || body[0] == '+')) head = 1;
+    if (n > head + 1 && body[head] == '0' &&
+        (body[head + 1] == 'x' || body[head + 1] == 'X' ||
+         body[head + 1] == 'b' || body[head + 1] == 'o'))
+        head += 2;
+    if (head > 0 && ((f->zero && !f->align && f->numeric) || al == '=')) {
+        char pf = f->zero ? '0' : fill;
+        memcpy(out, body, head);
+        memset(out + head, pf, pad);
+        memcpy(out + head + pad, body + head, n - head);
+        out[(size_t)f->width] = 0;
+        return (int64_t)out;
+    }
     // Zero padding goes after a leading sign, not before it.
     if (fill == '0' && n > 0 && (body[0] == '-' || body[0] == '+')) {
         out[0] = body[0];
@@ -773,9 +797,10 @@ int64_t py_fmt_i64(int64_t v, int64_t spec) {
         int k = 0;
         char sg = zt_int_sign_char(v, &f);
         if (sg) tmp[k++] = sg;
+        if (f.alt) { tmp[k++] = '0'; tmp[k++] = 'b'; }
         int d0 = k;
         if (!mag) tmp[k++] = '0';
-        while (mag && k < 159) { tmp[k++] = (char)('0' + (mag & 1)); mag >>= 1; }
+        while (mag && k < 155) { tmp[k++] = (char)('0' + (mag & 1)); mag >>= 1; }
         for (int a = d0, b = k - 1; a < b; a++, b--) { char c = tmp[a]; tmp[a] = tmp[b]; tmp[b] = c; }
         tmp[k] = 0;
         return zt_fmt_pad(tmp, &f);
@@ -789,8 +814,9 @@ int64_t py_fmt_i64(int64_t v, int64_t spec) {
         char digits[160];
         snprintf(digits, sizeof digits, t == 'x' ? "%llx" : (t == 'X' ? "%llX" : "%llo"), mag);
         char sg = zt_int_sign_char(v, &f);
-        if (sg) snprintf(body, sizeof body, "%c%s", sg, digits);
-        else snprintf(body, sizeof body, "%s", digits);
+        const char* pre = f.alt ? (t == 'x' ? "0x" : (t == 'X' ? "0X" : "0o")) : "";
+        if (sg) snprintf(body, sizeof body, "%c%s%s", sg, pre, digits);
+        else snprintf(body, sizeof body, "%s%s", pre, digits);
     } else if (t == 'f' || t == 'F' || t == 'e' || t == 'E' || t == 'g' || t == 'G') {
         char cfmt[24];
         snprintf(cfmt, sizeof cfmt, f.has_precision ? "%%%s.%d%c" : "%%%s%c", sfl, f.precision, t);
