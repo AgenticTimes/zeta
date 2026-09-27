@@ -1,0 +1,5 @@
+// 批次 554（旁路 cleanup）：未捕获的除零必须响——zeta_raise 无 try 帧时
+// 打 "Unhandled exception" 并 exit(1)（fail-loud 红线：此前静默得 inf）。
+x = 5 / 0
+print("unreachable")
+// expect-abort: Unhandled exception

@@ -4785,6 +4785,66 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 let right_id = self.lower_expr(right);
                 let dest = self.next_id();
 
+                // ZeroDivisionError (except_division_zero, batch 554): CPython
+                // raises on every `/` whose divisor is zero; the inline div
+                // silently answered inf (float) or UB (sdiv). Materialize the
+                // divisor (the check would otherwise evaluate it a second
+                // time — codegen re-evaluates at each use), raise through the
+                // zeta_raise trampoline (bare `except:` catches it; uncaught
+                // → loud exit), then divide.
+                if op == "/" {
+                    let rslot = match self.exprs.get(&right_id) {
+                        Some(MirExpr::Var(_)) => right_id,
+                        _ => {
+                            let f = self.next_id();
+                            self.exprs.insert(f, MirExpr::Var(f));
+                            let ty =
+                                self.type_map.get(&right_id).cloned().unwrap_or(Type::I64);
+                            self.type_map.insert(f, ty);
+                            self.stmts.push(MirStmt::Assign {
+                                lhs: f,
+                                rhs: right_id,
+                            });
+                            f
+                        }
+                    };
+                    let float_div = matches!(
+                        self.type_map.get(&rslot),
+                        Some(Type::F32) | Some(Type::F64)
+                    ) || matches!(
+                        self.type_map.get(&left_id),
+                        Some(Type::F32) | Some(Type::F64)
+                    ) || matches!(self.exprs.get(&rslot), Some(MirExpr::FloatLit(_)));
+                    let zero_id = if float_div {
+                        let z = self.next_id();
+                        self.exprs.insert(z, MirExpr::FloatLit(0.0));
+                        self.type_map.insert(z, Type::F64);
+                        z
+                    } else {
+                        self.next_id_with_lit(0)
+                    };
+                    let cond_id = self.next_id();
+                    self.exprs.insert(
+                        cond_id,
+                        MirExpr::BinaryOp {
+                            op: "==".to_string(),
+                            left: rslot,
+                            right: zero_id,
+                        },
+                    );
+                    self.type_map.insert(cond_id, Type::Bool);
+                    let code_id = self.next_id_with_lit(2);
+                    self.stmts.push(MirStmt::If {
+                        cond: cond_id,
+                        then: vec![MirStmt::VoidCall {
+                            func: "zeta_raise".to_string(),
+                            args: vec![code_id],
+                        }],
+                        else_: vec![],
+                        dest: None,
+                    });
+                }
+
                 // PY-A: operator dispatch on library handles (datetime
                 // date/timedelta arithmetic and comparisons). Without it the
                 // operands were treated as plain integers, silently producing
