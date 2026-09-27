@@ -202,6 +202,7 @@
 | 538 | cleanup | **稳态值守批**：qwen 540 收尾（崩溃族真生产者定位入册 + t515 止损一并记）。XPASS ×3 稳定 · diff 无回归 · method_sweep 7 缺稳定。我车道 actionable 清空——等主线修剩余族或合并 497–538 | 全绿 | ✅ 稳态值守批 |
 | 541 | cleanup | **稳态值守批**：qwen 541 摘除 3 条 XPASS 标记（t401/t510/t513——% 格式化 + 交换修复确认）。python_style **385 过**/2 红/11 kf/0 xp · diff 无回归 · method_sweep 7 缺稳定 · selfhost 1 钉住稳定。我车道 actionable 清空——等主线修剩余族或合并 497–541 | 全绿 | ✅ 稳态值守批 |
 | 542 | cleanup | **稳态值守批**：全读数稳定（XPASS ×3 稳定 · diff 无回归 · method_sweep 7 缺 · selfhost 1 钉住）· qwen 542 归因修正确认。我车道 actionable 清空——等主线修剩余族或合并 497–542 | 全绿 | ✅ 稳态值守批 |
+| 543 | cleanup | **稳态值守批**：qwen 541 新增 t516 钉住交换族三元轮转与表达式右值两形。python_style **386 过**/2 红/11 kf/0 xp · diff 无回归 · method_sweep 7 缺稳定 · selfhost 1 钉住稳定。我车道 actionable 清空——等主线修剩余族或合并 497–543 | 全绿 | ✅ 稳态值守批 |
 | 542 | cleanup | **稳态值守批**：全读数稳定（XPASS ×3 稳定 · diff 无回归 · method_sweep 7 缺 · selfhost 1 钉住）· qwen 541 归因修正确认。我车道 actionable 清空——等主线修剩余族或合并 497–542 | 全绿 | ✅ 稳态值守批 |
 | 539 | cleanup | **稳态值守批**：全读数稳定（XPASS ×3 · diff 无回归 · method_sweep 7 缺 · selfhost 1 钉住）· qwen 540 收尾确认（崩溃族真生产者定位 + t515 止损）。我车道 actionable 清空——等主线修剩余族或合并 497–539 | 全绿 | ✅ 稳态值守批 |
 | 540 | cleanup | **稳态值守批**：qwen 541 摘除 3 条 XPASS 标记（t401/t510/t513——% 格式化 + 交换修复确认）。python_style **385 过**/2 红/11 kf/0 xp · diff 无回归 · method_sweep 7 缺稳定 · selfhost 1 钉住稳定。我车道 actionable 清空——等主线修剩余族或合并 497–540 | 全绿 | ✅ 稳态值守批 |
