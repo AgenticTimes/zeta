@@ -2864,6 +2864,93 @@ fn parse_shift(input: &str) -> IResult<&str, AstNode> {
 /// StringLit。%% → 字面量 %。右侧是单表达式或 Tuple 时按序取值。
 /// 仅覆盖单值右操作数的常见场景；Tuple 右操作数的每个元素按序消费。
 fn build_percent_format(template: &str, right: &AstNode) -> AstNode {
+    // Batch 581: NAMED form `%(key)s=%(val)d` with a DICT literal rhs —
+    // CPython maps each name to the dict entry. The template is a literal, so
+    // the rewrite is static: parts = literal segments + __fmtspec__(value,
+    // spec) calls pulling the entry expressions straight from the DictLit.
+    if let AstNode::DictLit { entries } = right {
+        if template.contains("%(") {
+            let named: Vec<(&str, &AstNode)> = entries
+                .iter()
+                .filter_map(|(k, v)| match k {
+                    AstNode::StringLit(kn) => Some((kn.as_str(), v)),
+                    _ => None,
+                })
+                .collect();
+            let chars: Vec<char> = template.chars().collect();
+            let mut i = 0usize;
+            let mut parts: Vec<AstNode> = Vec::new();
+            let mut lit = String::new();
+            while i < chars.len() {
+                if chars[i] != '%' {
+                    lit.push(chars[i]);
+                    i += 1;
+                    continue;
+                }
+                if i + 1 < chars.len() && chars[i + 1] == '%' {
+                    lit.push('%');
+                    i += 2;
+                    continue;
+                }
+                if i + 1 >= chars.len() || chars[i + 1] != '(' {
+                    lit.push('%');
+                    i += 1;
+                    continue;
+                }
+                // %(name)spec
+                let close = chars[i + 2..].iter().position(|&c| c == ')');
+                let close = match close {
+                    Some(off) => i + 2 + off,
+                    None => {
+                        lit.push('%');
+                        i += 1;
+                        continue;
+                    }
+                };
+                let name: String = chars[i + 2..close].iter().collect();
+                if close + 1 >= chars.len() || !chars[close + 1].is_ascii_alphabetic() {
+                    lit.push('%');
+                    i += 1;
+                    continue;
+                }
+                let type_char = chars[close + 1];
+                let hit = named.iter().find(|(n, _)| *n == name).map(|(_, e)| *e);
+                let val = match hit {
+                    Some(v) => v.clone(),
+                    None => {
+                        // Unknown name: keep the segment literal (fail-soft;
+                        // CPython raises KeyError — registered corner).
+                        lit.push('%');
+                        i += 1;
+                        continue;
+                    }
+                };
+                if !lit.is_empty() {
+                    parts.push(AstNode::StringLit(std::mem::take(&mut lit)));
+                }
+                let fmt_spec = if type_char == 's' {
+                    String::new()
+                } else {
+                    type_char.to_string()
+                };
+                parts.push(AstNode::Call {
+                    receiver: None,
+                    method: "__fmtspec__".to_string(),
+                    args: vec![val, AstNode::StringLit(fmt_spec)],
+                    type_args: vec![],
+                    structural: false,
+                });
+                i = close + 2;
+            }
+            if !lit.is_empty() {
+                parts.push(AstNode::StringLit(lit));
+            }
+            if parts.is_empty() {
+                parts.push(AstNode::StringLit(String::new()));
+            }
+            return AstNode::FString(parts);
+        }
+    }
     let values: Vec<&AstNode> = match right {
         AstNode::Tuple(items) => items.iter().collect(),
         other => vec![other],
