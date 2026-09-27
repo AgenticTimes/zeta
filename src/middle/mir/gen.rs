@@ -12038,6 +12038,10 @@ call, no NULL-handle dereference).",
                     ) {
                         (Type::I64, Some(Type::F64)) => Type::F64,
                         (Type::I64, Some(Type::Str)) => Type::Str,
+                        // Batch 576: under-typed map fields (`self.data = {}`
+                        // → PyDynamic placeholders) with a concrete default.
+                        (Type::PyDynamic, Some(Type::Str)) => Type::Str,
+                        (Type::PyDynamic, Some(Type::F64)) => Type::F64,
                         _ => map_value_ty.clone(),
                     };
                     self.type_map.insert(id, vty);
@@ -12520,6 +12524,21 @@ call, no NULL-handle dereference).",
                             }
                         } else {
                             Type::I64
+                        };
+                        // Batch 576: the DEFAULT argument is the caller's own
+                        // evidence of the value type (batch 291 re-tagging
+                        // rule). An under-typed map field (`self.data = {}` —
+                        // placeholders [I64, I64]) with a Str default returned
+                        // the default's POINTER typed I64.
+                        let dty = arg_ids
+                            .get(2)
+                            .and_then(|i| self.type_map.get(i).cloned());
+                        let map_value_ty = match (&map_value_ty, dty.as_ref()) {
+                            (Type::I64, Some(Type::Str)) => Type::Str,
+                            (Type::I64, Some(Type::F64)) => Type::F64,
+                            (Type::PyDynamic, Some(Type::Str)) => Type::Str,
+                            (Type::PyDynamic, Some(Type::F64)) => Type::F64,
+                            _ => map_value_ty,
                         };
                         let ty = match ret_handle {
                             Some(h) => Type::Named(h.to_string(), vec![]),
