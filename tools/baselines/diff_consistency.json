@@ -1,13 +1,13 @@
 {
   "total": 507,
   "judged": 506,
-  "match": 441,
-  "rate_pct": 87.2,
-  "match_min": 441,
+  "match": 453,
+  "rate_pct": 89.5,
+  "match_min": 453,
   "by_verdict": {
-    "mismatch": 54,
+    "mismatch": 42,
     "runtime": 7,
-    "match": 441,
+    "match": 453,
     "bad_case": 1,
     "compile": 4
   },
@@ -21,7 +21,7 @@
       "judged": 83
     },
     "container": {
-      "match": 154,
+      "match": 166,
       "judged": 185
     },
     "numeric": {
@@ -144,7 +144,7 @@
     },
     "container_dict_methods": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "container_empty_dict_truth": {
       "cat": "container",
@@ -164,7 +164,7 @@
     },
     "container_intkey_order": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "container_len": {
       "cat": "container",
@@ -716,43 +716,43 @@
     },
     "gen_dmethod2_s246_000": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_dmethod2_s246_001": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_dmethod2_s246_002": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_dmethod2_s246_003": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_dmethod2_s246_004": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_dmethod2_s246_005": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_dmethod2_s246_006": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_dmethod2_s246_007": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_dmethod2_s246_008": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_dmethod2_s246_009": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_dmethod_s97531_000": {
       "cat": "container",
