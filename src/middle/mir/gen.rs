@@ -11461,14 +11461,42 @@ call, no NULL-handle dereference).",
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
-                        // Batch 568: get/setdefault/pop RETURN the map's
-                        // declared value type — typing them I64 made str
-                        // values print as pointers (setdefault_str_addr).
-                        let val_ty = match (method.as_str(), receiver_ty.as_ref()) {
-                            ("get" | "setdefault" | "pop", Some(Type::Named(_, targs)))
-                                if targs.len() == 2 =>
-                            {
-                                targs[1].clone()
+                        // Batch 569: `m.get(k, default)` — a concrete
+                        // non-I64 default refines an under-typed map's value
+                        // type (the same widening the setdefault arm does),
+                        // so both this get's result and later reads render
+                        // correctly.
+                        if method == "get"
+                            && arg_ids.len() == 3
+                            && let Some(Type::Named(n, mut targs)) =
+                                self.type_map.get(&arg_ids[0]).cloned()
+                            && (n == "map" || n == "dict")
+                        {
+                            let vt = self
+                                .type_map
+                                .get(&arg_ids[2])
+                                .cloned()
+                                .unwrap_or(Type::I64);
+                            let concrete_other = !matches!(vt, Type::I64);
+                            while targs.len() < 2 {
+                                targs.push(Type::I64);
+                            }
+                            if concrete_other && targs[1] == Type::I64 {
+                                targs[1] = vt;
+                                self.type_map.insert(arg_ids[0], Type::Named(n, targs));
+                            }
+                        }
+                        // Batch 568/569: get/setdefault/pop RETURN the map's
+                        // value type — read LIVE from type_map (after the
+                        // refinement above), not the pre-refinement snapshot.
+                        let val_ty = match method.as_str() {
+                            "get" | "setdefault" | "pop" => {
+                                match self.type_map.get(&arg_ids[0]).cloned() {
+                                    Some(Type::Named(_, targs)) if targs.len() == 2 => {
+                                        targs[1].clone()
+                                    }
+                                    _ => Type::I64,
+                                }
                             }
                             _ => Type::I64,
                         };
