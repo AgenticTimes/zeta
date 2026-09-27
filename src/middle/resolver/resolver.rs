@@ -1906,7 +1906,10 @@ impl Resolver {
             }
             // `X.Y(...)` / `Y(...)` through the registry, or `handle.method()`.
             AstNode::Call {
-                receiver, method, ..
+                receiver,
+                method,
+                args,
+                ..
             } => {
                 // Batch 291: `g = _G()` — a global built from a USER CLASS ctor
                 // must keep the class type. With no entry here, every
@@ -1959,6 +1962,19 @@ impl Resolver {
                     }
                 }
                 if let Some(recv) = receiver {
+                    // Batch 580: `sep.join(iterable)` on a Str receiver yields
+                    // Str (the W table has no str/join row, so the infer fell
+                    // through and tag_str()-style methods stayed I64-typed,
+                    // printing the joined string's POINTER).
+                    if method == "join"
+                        && args.len() == 1
+                        && matches!(
+                            infer_global_ty(recv, seen, aliases, member_aliases, fn_rets, classes),
+                            Some(Type::Str)
+                        )
+                    {
+                        return Some(Type::Str);
+                    }
                     if let Some(Type::Named(tag, _)) = infer_global_ty(recv, seen, aliases, member_aliases, fn_rets, classes) {
                         if let Some(t) = method_result_ty(&tag, method) {
                             return Some(t);
@@ -3013,6 +3029,23 @@ impl Resolver {
                 // has_tag returned the un-inferable call and stayed I64).
                 AstNode::Call { method, .. } if method == "__contains__" => {
                     Some(Type::Bool)
+                }
+                // Batch 580: `sep.join(iterable)` on a Str receiver yields
+                // Str (tag_str()-style methods stayed I64-typed and printed
+                // the joined string's POINTER).
+                AstNode::Call {
+                    receiver: Some(recv),
+                    method: m2,
+                    ..
+                } if m2 == "join" => {
+                    if matches!(
+                        infer(recv, seen, aliases, classes, fn_rets),
+                        Some(Type::Str)
+                    ) {
+                        Some(Type::Str)
+                    } else {
+                        None
+                    }
                 }
                 AstNode::Call {
                     receiver: None,
