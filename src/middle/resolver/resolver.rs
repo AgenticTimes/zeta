@@ -1906,7 +1906,10 @@ impl Resolver {
             }
             // `X.Y(...)` / `Y(...)` through the registry, or `handle.method()`.
             AstNode::Call {
-                receiver, method, ..
+                receiver,
+                method,
+                args,
+                ..
             } => {
                 // Batch 291: `g = _G()` — a global built from a USER CLASS ctor
                 // must keep the class type. With no entry here, every
@@ -1959,6 +1962,19 @@ impl Resolver {
                     }
                 }
                 if let Some(recv) = receiver {
+                    // Batch 580: `sep.join(iterable)` on a Str receiver yields
+                    // Str (the W table has no str/join row, so the infer fell
+                    // through and tag_str()-style methods stayed I64-typed,
+                    // printing the joined string's POINTER).
+                    if method == "join"
+                        && args.len() == 1
+                        && matches!(
+                            infer_global_ty(recv, seen, aliases, member_aliases, fn_rets, classes),
+                            Some(Type::Str)
+                        )
+                    {
+                        return Some(Type::Str);
+                    }
                     if let Some(Type::Named(tag, _)) = infer_global_ty(recv, seen, aliases, member_aliases, fn_rets, classes) {
                         if let Some(t) = method_result_ty(&tag, method) {
                             return Some(t);
@@ -2970,6 +2986,16 @@ impl Resolver {
                 AstNode::BinaryOp { op, left, right } => {
                     let l = infer(left, seen, aliases, classes, fn_rets);
                     let r = infer(right, seen, aliases, classes, fn_rets);
+                    // Batch 575: comparisons and membership ALWAYS yield Bool
+                    // in Python — inferable, unlike and/or (value-selecting).
+                    // class_tag_probe: `return t in self.tags` recovered Bool,
+                    // so has_tag("web") prints True instead of the raw 1.
+                    if matches!(
+                        op.as_str(),
+                        "==" | "!=" | "<" | ">" | "<=" | ">=" | "in" | "not in"
+                    ) {
+                        return Some(Type::Bool);
+                    }
                     let is_f = |t: Option<&Type>| matches!(t, Some(Type::F32) | Some(Type::F64));
                     if matches!(
                         op.as_str(),
@@ -2998,6 +3024,29 @@ impl Resolver {
                         .and_then(|e| infer(e, seen, aliases, classes, fn_rets))
                         .unwrap_or(Type::I64),
                 ))),
+                // Batch 579: `x in y` desugars to `y.__contains__(x)` —
+                // membership is ALWAYS Bool in Python (class_tag_probe:
+                // has_tag returned the un-inferable call and stayed I64).
+                AstNode::Call { method, .. } if method == "__contains__" => {
+                    Some(Type::Bool)
+                }
+                // Batch 580: `sep.join(iterable)` on a Str receiver yields
+                // Str (tag_str()-style methods stayed I64-typed and printed
+                // the joined string's POINTER).
+                AstNode::Call {
+                    receiver: Some(recv),
+                    method: m2,
+                    ..
+                } if m2 == "join" => {
+                    if matches!(
+                        infer(recv, seen, aliases, classes, fn_rets),
+                        Some(Type::Str)
+                    ) {
+                        Some(Type::Str)
+                    } else {
+                        None
+                    }
+                }
                 AstNode::Call {
                     receiver: None,
                     method,
@@ -3352,14 +3401,9 @@ fn shim_class_normalize(t: &Type) -> Type {
                 let ret = if matches!(ret, Type::Tuple(ref inner) if inner.is_empty())
                     || matches!(ret, Type::I64)
                 {
-                    Self::unannotated_return_ty(
-                        &defs_snapshot,
-                        name,
-                        &class_names,
-                        &decl_rets,
-                        &sig_params,
-                    )
-                    .unwrap_or(ret)
+                    let recovered =
+                        Self::unannotated_return_ty(&defs_snapshot, name, &class_names, &decl_rets, &sig_params);
+                    recovered.unwrap_or(ret)
                 } else {
                     ret
                 };

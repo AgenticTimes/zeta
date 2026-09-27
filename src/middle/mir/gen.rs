@@ -3786,19 +3786,24 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
     }
 
     fn lower_map_key(&mut self, id: u32) -> u32 {
-        if matches!(self.type_map.get(&id), Some(Type::Str)) {
-            let nid = self.next_id();
-            self.stmts.push(MirStmt::Call {
-                func: "map_str_key".to_string(),
-                args: vec![id],
-                dest: nid,
-                type_args: vec![],
-            });
-            self.exprs.insert(nid, MirExpr::Var(nid));
-            self.type_map.insert(nid, Type::I64);
-            return nid;
-        }
-        id
+        // Batch 574: ALWAYS route keys through the runtime normalizer —
+        // map_str_key content-hashes readable text handles and passes
+        // everything else (raw ints, already-hashed keys) through identity.
+        // Previously only Str-TYPED keys were normalized; an under-typed
+        // key holding a text pointer stored the POINTER as the key, so the
+        // same lookup through a different literal missed (`class_inventory_dict`:
+        // add_item(name, qty) wrote pointer-hashed keys, report() read
+        // content-hashed keys → all values 0).
+        let nid = self.next_id();
+        self.stmts.push(MirStmt::Call {
+            func: "map_str_key".to_string(),
+            args: vec![id],
+            dest: nid,
+            type_args: vec![],
+        });
+        self.exprs.insert(nid, MirExpr::Var(nid));
+        self.type_map.insert(nid, Type::I64);
+        nid
     }
 
     /// PY-A: ensure an expression id is a string handle — non-string values
@@ -12033,6 +12038,10 @@ call, no NULL-handle dereference).",
                     ) {
                         (Type::I64, Some(Type::F64)) => Type::F64,
                         (Type::I64, Some(Type::Str)) => Type::Str,
+                        // Batch 576: under-typed map fields (`self.data = {}`
+                        // → PyDynamic placeholders) with a concrete default.
+                        (Type::PyDynamic, Some(Type::Str)) => Type::Str,
+                        (Type::PyDynamic, Some(Type::F64)) => Type::F64,
                         _ => map_value_ty.clone(),
                     };
                     self.type_map.insert(id, vty);
@@ -12515,6 +12524,21 @@ call, no NULL-handle dereference).",
                             }
                         } else {
                             Type::I64
+                        };
+                        // Batch 576: the DEFAULT argument is the caller's own
+                        // evidence of the value type (batch 291 re-tagging
+                        // rule). An under-typed map field (`self.data = {}` —
+                        // placeholders [I64, I64]) with a Str default returned
+                        // the default's POINTER typed I64.
+                        let dty = arg_ids
+                            .get(2)
+                            .and_then(|i| self.type_map.get(i).cloned());
+                        let map_value_ty = match (&map_value_ty, dty.as_ref()) {
+                            (Type::I64, Some(Type::Str)) => Type::Str,
+                            (Type::I64, Some(Type::F64)) => Type::F64,
+                            (Type::PyDynamic, Some(Type::Str)) => Type::Str,
+                            (Type::PyDynamic, Some(Type::F64)) => Type::F64,
+                            _ => map_value_ty,
                         };
                         let ty = match ret_handle {
                             Some(h) => Type::Named(h.to_string(), vec![]),
