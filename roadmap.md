@@ -21738,6 +21738,88 @@ HEAD 侧对照在隔离 worktree 自测（`/tmp/b458/head-wt`，458 之前那颗
 `/tmp/b460/`：`gate_full.log`（189 行全量）、`bench459.log`／`post_utf8.log`／`pre_utf8.log`／`pre_wt.log`（§二 三向对照；改前那份在 `git worktree` 副本里跑，已 `git worktree remove --force` 清掉，主树 `runtime/py_additions.c` md5 未动）、`mbvar_full.log`、`anchor_now.log`、`diff_now.{json,log}`／`diff_bless.log`／`diff_after_bless.log`／`diff_baseline_before.json`（§四）、`build_runtime.log`、`zetac_before.md5`、`kf/`（§七 14 个 verdict）、`gate_scripts.txt`（§六 行数证据）。
 **本批未收**（OPEN 净增 **1**）：**①** 诊断面 python_style **+19 行/+6 文件**未逐条归因（并入 #180 那一族）；**②** XPASS 两例的标记未摘、转绿批次未二分（§七）；**③** `run_all.sh` 的 mbvar 分母标签报错（31 应为 25），tools 车道只登记（§六）；**④** §三 那条"旧 `.o` 与源同内容"是推理不是实测。下一次全量门禁＝**批次 470**。队头不变：**#182 余 57 行 → #167 余项 ①④⑤ → #195/#196 → #203④ → #145**；本批新出的 ②③ 都是小件，排在 #167 之前按损害量再定。
 
+## 批次 535（3.2 Lowering × 4.x 运行期值表示／**列写侧**的元素表示）：下标赋值整句不经过 `DictInsert` 那条登记臂 ⇒ tag 恒 0；补登记时又量到"登记表不驱动声明"这条死链 —— 主线位移 **0**
+
+**层归位**：**3.2 Lowering**（下标赋值的语句分派点 `src/middle/mir/gen.rs:2034`–`:2081`）× **4.x 运行期值表示**（元素表示号 4..7 的登记面，`runtime/py_additions.c` 的 `zt_col_as_text`/`zt_vec_textify` 读边界）。harness 任务 **#210**；承接 **#145**（语料崩 `str_trim+24`）、**#205③**（457/458 在册的"`df["h"]=…` 的 setitem 无 tag 通道"）、并顺带收了 **#207** 那条锚点线的面（见 §八）。
+
+**提交**：代码 **`0cfcfd02`**（`src/middle/mir/gen.rs` **+37/−0**、`src/backend/codegen/codegen.rs` **+11/−0**、`runtime/py_additions.c` **+15/−0**、`pylib/runtime_core.txt` **+1/−0**、`src/backend/codegen/runtime_decls_core.rs` **+1/−0**（死文件，随登记表重生成）、夹具 `tests/python_style/t514_df_col_value_tag.z` **+46/−0**、`zeta_runtime_c.o` 重建）；锚点/基线 **`bd4ddf7e`**（`docs/ABI.md` 134/134、`tools/baselines/abi_anchors.tsv` 149/149 —— 行数两份都不变）。**主线位移＝0**（§六，含崩身份逐字相同的证据）。
+
+### 一、最小复现与 pre/post 实拍（`tests/python_style/t514_df_col_value_tag.z`）
+
+夹具四格：`A` 下标赋一个 i64 列表并读回两端＋`len`、`B` 同形 f64、`C` 文本列（tag 4 的负对照：读边界**不复制不猜**，原样返回）、`D` 标量广播（不登记的负对照，另起新帧以免上一句改变行数）。`A` 那格的期望 `3` 是**本仓行为、不是 pandas 真值** —— 本批当场用 `python3` 对数：pandas 3.0.5 对 2 行框赋 3 个值抛 `ValueError: Length of values (3) does not match length of index (2)`，本仓按 push 长列收下（夹具头注已写明）。本例断言的是**元素表示登记**，不是列长语义；`D` 段与 pandas 3.0.5 逐字相同（`D zz 2`）。
+
+| 侧 | 编译器 | 运行期 `.o` | 结果 |
+|---|---|---|---|
+| 改前 | `target/release/zetac_pre535` md5 `aca54812f04847e7340e9af0bddb7ed5`（＝HEAD 那颗） | HEAD 的 `zeta_runtime_c.o` md5 `eb1460e1e0f1cf5e1eb26f01b3435b6b`（`nm` 里**无** `py_df_set_value_tag`） | **rc=139、stdout 0 行** |
+| 改后 | `target/release/zetac` md5 `d9b104095a4b3e14358ccf7b38c0e552` | 本批重建 md5 `75ddc18ec10f76380b2bd22145573508`（**有**该符号） | **rc=0、4 行**：`A 10 30 3`／`B 1.5 2`／`C y 2`／`D zz 2` |
+
+两颗 `zetac` 同留 `target/release/`（坑 37/68：库面基随二进制位置变化，放到仓外会少三条布局读数）、两侧 `tokio_runtime.o` 同一颗 `bc2e0dcf5171bb052ce1f79520e6f424`，取读数用 `ZETA_RUNTIME_DIR`＋`ZETA_STRICT_RUNTIME_DIR=1`、`run_one.sh` 一对一私有目录（`/tmp/b535/f/{t514,t514pre}`）。
+
+### 二、根因一（本批要修的那格）：登记只挂在 `DictInsert` 上，下标赋值这条路根本不经过它
+
+元素表示号 4..7 唯一的发射点历史上是出码层的 `MirStmt::DictInsert` 臂（`codegen.rs:5380`–`:5410`，即 `pd.DataFrame({"v": [10, 20]})` 那条构造路）。而 `df["col"] = <容器>` 在 **3.2** 就整句下成了 `DataFrame.__setitem__` 的一条 `VoidCall`（`gen.rs:2053`–`:2061`），**永远不落进 `DictInsert`** ⇒ 运行期 `py_df_setitem` 把实参句柄原样转进列映射，值表示号保持 **0**。读边界对 0 号的约定是"不复制、不猜"（批次 456 钉下）⇒ 原样返回句柄 ⇒ 非文本格被当 `char*` 交给 `str_trim`。修法只在**写侧**：分派点按实参的静态元素类型补发一条 `py_df_set_value_tag(frame, key, tag)`，表与 `DictInsert` 臂逐字同源（新函数 `zt_container_value_tag`，`gen.rs:3831`–`:3846`；`Array(el,_` 只认 `F64`，`F32` 4 字节步长不进 6 号）。**读边界一个字未动。**
+
+### 三、根因二（挡路的那条死链，比修法更值钱）：`pylib/runtime_core.txt` 不驱动任何声明
+
+MIR 是对的（`VoidCall{func: py_df_set_value_tag, args: [23, 34, 35]}`），IR 却是 `declare void @py_df_set_value_tag(i64)` ＋ 只装第一个操作数。排查链与结论：
+
+1. 第一假设"改完没重编"—— **否**：`cargo build --release` 后逐字相同。
+2. 真因：`pylib/runtime_core.txt` → `tools/gen_from_registry.py --emit-core` → `src/backend/codegen/runtime_decls_core.rs::declare_core_runtime_fns` 这条链**从不参与编译** —— 该函数在 `tools/baselines/dc_default.txt:2` 以 never-used 身份**在册**（图内也无调用者）。运行期 extern 实际全部来自 `codegen.rs` 里手写的 `module.add_function(...)` 列表（`:950`–`:1020` 那一段）。
+3. 名字不在手写列表里时，落到 `get_function` 的兜底（`codegen.rs:2845` 一带）：按 `declare void @name(i64)` **一参**造符号 ⇒ 链接期不报错、运行期第 2/3 个实参**从不装寄存器**。⇒ 本批在 `codegen.rs:997`–`:1007` 补那条三参声明，并写明"只加登记表不够"。
+4. 这条是**轴 A 候选**：登记表要么接上真驱动、要么删掉，否则每个新增 C 符号都要踩一次同一个坑（登记为 OPEN，§九 ③）。
+
+### 四、发射面与边界（用一份语料 IR 量的，不是推理）
+
+`--emit-llvm` 单模块（`/tmp/b535/corpus_post.ll`，4,441,642 字节，`rc=0`）：
+
+| 读数 | 值 | 口径 |
+|---|---|---|
+| `declare void @py_df_set_value_tag(i64, i64, i64)` | **1** | 三参签名在场（不是 §三 那条一参兜底） |
+| `call void @py_df_set_value_tag` | **38** | 逐条实参是 `(接收者槽, 键, 常量号)`，tag 分布 **4×35 / 6×2 / 5×1** |
+| `"DataFrame::__setitem__"` 分派 | **61** | 差的 23 条＝实参是标量广播或动态槽（无静态元素类型 ⇒ 不发射） |
+| 其余 `*__setitem__` 被调符号 | **0** | 该 IR 里除 DataFrame 外没有任何类别走这条路 ⇒ 本语料零误登记 |
+
+**结构性残口**（登记，不修）：`gen.rs:2053` 的判据只看"接收者是 `Named` 且能查到 `__setitem__` 候选"，**不限定列帧**。语料在场成员为 0，但任何自定义类的 `obj[k] = <列表>` 都会被按"列映射帧"去登记 tag（`py_df_set_value_tag` 取的是 `*(int64_t*)frame` 当 map）。§九 ②。
+
+### 五、快门禁读数（`/tmp/b535/gate.log`，改动面＝`src/middle`＋`src/backend`＋`runtime/*.c` ⇒ `run_all.sh` 的 14 项跳过组合）
+
+| 步骤 | 本批 | 460 全量在册 | 归因 |
+|---|---|---|---|
+| official | compile **194/194**、pass **191/194**、link-only 3 | 同 | 未变 |
+| 诊断面 official | **5 文件 / 21 行**、`not_measured 0` | 5/21、0 | 未变 |
+| python_style | **381 passed / 2 failed / 12 known-fail / 2 xpass** | 380/2/12/2 | **+1 passed ＝ t514**；两条红仍是存量 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ **零新增红** |
+| 诊断面 python_style | **266 行 / 123 文件** | 263/122 | **+3 行 / +1 文件逐字归因到新夹具**：单独编 t514 的 stderr 恰 `3` 条 `warning:`（pandas shim 共存、`errors` 默认值被 coerce、clang `-no-pie`） |
+| comment_drift / dyn_binding | 0 处复述 / 4 条断言不一致 0 | 同 | 未变 |
+
+`GATE_RC=1` 的红源与 460 两侧相同（那两条存量）；语料/jit/diff 等步按 AGENTS.md 路由表跳过（本批不动解析面）。
+
+### 六、主线 301 位移 A/B ＝ **0**（并且"崩/不崩"在同一侧内就交替 ⇒ 它不是本批的读数）
+
+`strategies/code/_drv_accept_409.py`，两侧各 **n=6**、每侧**重新编译＋运行**交替（`/tmp/b535/run_ab_535.sh`、汇总 `/tmp/b535/ab_summary.log`；cwd＝语料根，坑：run 的 cwd 决定走哪条数据分支）。`compile_rc` **12/12 全 0**。
+
+| 侧 | `run_rc=0` | `run_rc=139` | 崩的那些次的共同形状 |
+|---|---|---|---|
+| pre | **4/6**（stderr 321 行、`parity=74 fail1=74 morning=37`） | 2/6（pre_2、pre_4） | stderr **119 行**、末行 `[INFO] backend.market_data: 缓存命中 103 只；待拉取 0 只`、`parity/fail1/morning` 计数 **0** |
+| post | **3/6**（同形 321 行） | 3/6（post_1、post_3 同 119 行；post_5 是另一支：stderr 127 行、末行「缓存命中 **4** 只」） | 同上 |
+
+⇒ 崩与不崩**两侧同形**、且同一侧内交替：这是语料自身的运行期分支非确定性（#145 在册的"位置非确定 135/135/119/135"是同一件事），**不是本批造成的差异**。位移判定：**pre 4/6 → post 3/6，差 1 次，落在 n=6 的既有噪声内 ⇒ 判 0，不判收益也不判回归**（护栏：未归因的增量不许记成收益）。
+
+崩身份（改后侧）：macOS 把同类崩溃**合并成一份** `.ips`（`~/Library/Logs/DiagnosticReports/bin-2026-09-27-111453.ips`）⇒ 不能逐次归因，改用偏移相定：frame0 `imageOffset=0x3e224`，`nm` 对同颗产物给 `000000010003e20c T _str_trim` ⇒ **`str_trim`+24**，与 #145 在册崩点逐字相同。
+
+### 七、为什么本批**收不掉** #145（这是本批对主线最有用的读数）
+
+#145 的实拍不是"缺标签"，是**列的内容本身**：lldb 零重编观测器给的是 `map_insert <- py_df_setitem` 发布的一块 `cap=2048 len=1615` 且 **1615 格全为 0**。而读边界对 **4 号**（`vec<str>`）的合同本来就是"原样返回句柄、不复制不猜"（批次 456）——所以**登记到位之后，那一格的读路径与 tag 0 时逐字相同**，非文本格照样被当 `char*` 交给 `str_trim`。§六 的位移 0 与这条推理一致（推理的前提"4 号原样返回"是 456 已实测的合同，不是猜测；"语料那格已被登记成 4 号"未单独实拍，见 §九 ①）。⇒ **#145 保持 OPEN**，头名换成**那块全 0 列的生产者**：`py_df_setitem` 的广播分支会造 `cap==len` 的块，`cap=2048>len=1615` 是 push 长出来的 ⇒ 生产者不在 setitem 里。
+
+### 八、锚点重绑（`bd4ddf7e`，工具项 #207/#52 同线）
+
+本批在 `codegen.rs:996` 后插 11 行、`gen.rs:2061` 后插 18 行、`gen.rs:3812` 后插 19 行 ⇒ 两份文档锚点整体搬家。`--rebind`：漂移 **169** 条 → 判定搬家 **149** 自动改回、拒改 60。手改 **5** 条（内容不唯一，按合同 rebind 不收）：`codegen.rs:1462-1471`→`1473-1482`、`codegen.rs:2048`→`2059`、`gen.rs:3365`→`3383`、`gen.rs:3552`→`3570`、`gen.rs:3848`→`3885`（`docs/ABI.md` 内 **12** 处引用同步，含 4 处"裸行号"形态——#52 说核对器看不见那些，但引用是承重的）。每条都按 HEAD 原文块逐行比对确认是**纯位移**而非改指。`--bless-only` 只点名这 5 条重采快照，**旧键 5 行手工从 tsv 删除**（`--bless-only` 只增不删，留着就成对报"新＋消失"——本批第一次跑就踩到了：`漂移 20 / 消失 45`，删后才 `15 / 40`）。
+
+终态读数（隔离 worktree `/tmp/b535/head-wt` 取 HEAD 自基线对照）：漂移 **18→15**、新 **23→23**、消失 **42→40**、基线 **300** 条不变、`docs/ABI.md` **1130** 行不变、tsv **398** 行不变。改后 15 条漂移是改前 18 条的**真子集**（`runtime/tokio_runtime_stub.c:2550` 与 `codegen.rs` 两条被 rebind 收走）⇒ 本批**无新增漂移、无新增消失**；两条定位失败（`ABI.md:945`、`:955` 指着 `run.sh:96`、`136-142`，该文件现 93 行）是 459 §七 在册的旁路 461 拆分遗留，未变。
+
+### 九、本批未收（OPEN 净增 **1 行＝新登记 #211，三条新形都挂在它名下**；①同时是 #145 的头名收窄）
+
+**①**（新，挂 #145）语料那格**全 0 列**的生产者未定位——本批只证明了"补写侧登记不改变该格读路径"；**且"那一格已被登记成 4 号"这一步未单独实拍**（§七 只证了合同），下一批从 `map_insert` 的发布链回溯 `define` 名反查。**②**（新）`gen.rs:2053` 的下标赋值登记判据不限列帧：任何 `Named`＋`__setitem__` 的接收者都会被按列映射帧登记（语料在场成员 0，实测见 §四）。**③**（登记给轴 A / #22 同族）`pylib/runtime_core.txt` → `runtime_decls_core.rs` 整条链是死代码，新增运行期 C 符号必须**同时**手改 `codegen.rs` 的 extern 列表，否则兜底发一参 void 且不报错。**④**（沿用在册）`zt_maybe_vec_fwd`/`zt_maybe_vec` 的几何判形仍可把标量 `char*` 当列转发。**⑤**（沿用在册）`py_df_groupby` 发布全 0 块（cap 16/32/64）。`/tmp/b535/`：`gate.log`、`ab_summary.log`＋`run_ab_535.sh`＋`ab/{pre,post,runs/*}`、`corpus_post.{ll,err}`（§四 的 IR 证据）、`f/{t514,t514pre,t514_recheck}/verdict`、`pair/`、`build_runtime.log`、`head-wt`（收尾 `git worktree remove`）、`{head,mine}_drift*.txt`＋`h.txt`/`m.txt`（§八 两侧对照）。两颗 `zetac_*535` 与两份 `.o` 留 `target/release/`、`/tmp/b535/ab/{pre,post}/`。下一次全量门禁＝**批次 470**。队头：**#145 全 0 列生产者（本批把它的候选面收窄成"发布链"）→ #182 余 57 行 → #167 余项 ①④⑤ → #195/#196 → #203④**。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
