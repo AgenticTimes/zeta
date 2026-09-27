@@ -3786,19 +3786,24 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
     }
 
     fn lower_map_key(&mut self, id: u32) -> u32 {
-        if matches!(self.type_map.get(&id), Some(Type::Str)) {
-            let nid = self.next_id();
-            self.stmts.push(MirStmt::Call {
-                func: "map_str_key".to_string(),
-                args: vec![id],
-                dest: nid,
-                type_args: vec![],
-            });
-            self.exprs.insert(nid, MirExpr::Var(nid));
-            self.type_map.insert(nid, Type::I64);
-            return nid;
-        }
-        id
+        // Batch 574: ALWAYS route keys through the runtime normalizer —
+        // map_str_key content-hashes readable text handles and passes
+        // everything else (raw ints, already-hashed keys) through identity.
+        // Previously only Str-TYPED keys were normalized; an under-typed
+        // key holding a text pointer stored the POINTER as the key, so the
+        // same lookup through a different literal missed (`class_inventory_dict`:
+        // add_item(name, qty) wrote pointer-hashed keys, report() read
+        // content-hashed keys → all values 0).
+        let nid = self.next_id();
+        self.stmts.push(MirStmt::Call {
+            func: "map_str_key".to_string(),
+            args: vec![id],
+            dest: nid,
+            type_args: vec![],
+        });
+        self.exprs.insert(nid, MirExpr::Var(nid));
+        self.type_map.insert(nid, Type::I64);
+        nid
     }
 
     /// PY-A: ensure an expression id is a string handle — non-string values
