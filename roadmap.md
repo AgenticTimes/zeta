@@ -21666,6 +21666,78 @@ HEAD 侧对照在隔离 worktree 自测（`/tmp/b458/head-wt`，458 之前那颗
 
 **本批未收**（OPEN 净增 **0**；#167 余项收 ②、③ 随冲突判据退役）：**①** `find_snippet_lines` 对"行号写错、内容还在同一函数附近"仍然宽容 ⇒ **"漂移 0"不等于"引用行号对"**（同族 #52）；**④ 前半** 头行形状未变、后半（新措辞打断旧 grep）已随本批入册；**⑤** 新登记＝`docs/ABI.md` 的 codegen.rs/gen.rs 引用批量陈旧（58 条 E1005 挡着，不许刷基线）。另有两条与本批无涉、只是顺带实拍到的：`docs/ABI.md:945`、`:955` 两条定位失败仍是旁路 461 把 `run.sh` 拆出 `run_one.sh` 造成的（458 §七 已记，未变）。**下一次全量门禁＝批次 460**（17 步逐项读数入册、独占机器）。队头不变：**#182 余 57 行 → #167 余项 ①④⑤ → #195/#196 → #203④ → #145**。
 
+## 批次 460（门禁面／全量门禁批 + 459 自伤的 mbvar 修复）：17 步逐项入册；判据台那 7 处在 UTF-8 终端上本来会当场死掉，本机 C locale 把它藏住了；#186 第九次复发已代录
+
+**层归位**：不在 pyramid 出码层（2.2/3.2/4.3.b 都不是）——本批**零编译器源码改动**，做的是证据面：全量门禁 17 步读数入册（refactor 6.1 内部验证）+ 收掉 459 自己引进的 `tools/abi_anchors_check.sh` 文案缺陷（G.5d 锚点核对线）。harness 任务 **#208**（460 门禁批），连带 **#167②** 的收尾余波。
+**提交**：代码 **`fbfaf6e7`**（`fix(tools)`，`tools/abi_anchors_check.sh` **7/7**＝只补花括号，行数与语义不变）；基线 **`ecb39af8`**（`tools/baselines/diff_consistency.json` **+44/−12**，1869→1901 行）。**主线位移：n/a**——`src/middle`/`src/backend`/`runtime/*.c` 一行未动，AGENTS.md「动这三面必跑位移 A/B」的触发条件不成立（不是"0 位移"，是无位移面）；`zeta_runtime_c.o` 只是**重建了产物**，`runtime/py_additions.c` 的 md5 `f1b2a8e6ee356bcc271b8d4a6b77929e` 与 `git show HEAD:… | md5 -q` 逐字相同 ⇒ 旧 `.o` 里不含未知差异。
+**门禁**：全量 17 步（本批就是"每 10 批一次"的那次），独占机器，见 §一；`GATE_RC=1` 的红源两侧都是存量 `t231_dict_set_cast_fromkeys`/`t233_listcomp_condition_capture` ⇒ **本批零新增红**。被测二进制 `target/release/zetac` md5 `aca54812f04847e7340e9af0bddb7ed5`，门禁前与 `build_runtime.sh` 之后同一颗（未重编）。
+
+### 一、17 步逐项读数（`/tmp/b460/gate_full.log`，08:51:41→08:58:07＝**386s＝6'26"**）
+
+| 步骤 | 本次（460） | 450 那次全量 | 差值的归因 |
+|---|---|---|---|
+| official | compile **194/194**、compile+link **191/194**、link-only **3**（`integration_all_features`/`quantum_basic`/`selfhost`） | 同 | 未变 |
+| 诊断面 official | **5 文件 / 21 行**、`not_measured 0` | 5/21、0 | 未变 |
+| python_style | **380 passed / 2 failed / 12 known-fail / 2 xpass** | 367/2/15/0 | passed +13＝450 后新增夹具（t483–t493 是主线 451–458 的 11 例，t51x 段是旁路）；known-fail 15→14＝摘掉 `t508_fmt_sign_flag`、`t509_fmt_negative_binary`（主线 453 真修后转正）＋新增 `t513_percent_format`（旁路）；xpass 0→2 见 §七 |
+| 诊断面 python_style | **263 行 / 122 文件** | 244/116 | +19 行/+6 文件随新夹具而来，**未逐条归因**（同 #180 那一族的口径，登记在 §八） |
+| 语料 corpus | **40/40 = 100%**（53s） | 40/40（54s） | 未变 |
+| jit sweep | **ok=180 / trap=413 / fail=0 / timeout=0 / segv=0**（total 593，最小 ok=163）⇒ GREEN | ok=180 trap=401 total 581 | total **+12 ＝ 输入文件 +12**：`ls tests/unit-tests/*.z tests/python_style/*.z`＝593 与 total 逐字相等；`comm` 对 `b63f4293`（450 记录 rev）列出那 12 个＝t483(451)、t484/t485(452)、t486(453)、t487–t489(454)、t490(455)、t491(456)、t492(457)、t493(458)、t513(旁路)。ok 未回退、四红计数全 0 |
+| truth（按类） | truth 42/43 · str 79/83 · container 152/181 · numeric 65/88 · control **69/71** | 42/43 · 66/79 · 140/154 · 65/86 · 69/69 | 各族增量是 451–459 各批**已入册**的收益与旁路新夹具共同造成的分母变化，本批不重复记账；`control` 那 2 格见 §五 |
+| diff | **match=407 / judged=466 / 87.3% / bad_case 0** | 382/431/88.6%/0 | judged +35／match +25；其中本批 +8 例的净账见 §四，其余是 450→459 的累积 |
+| knob / swallow / import / empty_stmt | 23 / 6 / 22 / 68 条，FAIL **0** | 同 | 未变 |
+| clean_checkout | **rc=0（3s，rev=`f50b3815`）** | rc=0（3s，rev=`b63f4293`） | 「当前树可干净检出编译」仍是正证据 |
+| pysrc / cli_semantics / ignore_rules | 42 / 87 / 19 条，FAIL **0** | 同 | 未变 |
+| mbvar | **31 行输出，违规 7**（rc=1） | 24 行，违规 0 | 那 7 处全在 459 新写的判据台里 ⇒ §二；"31" 是行数不是脚本数 ⇒ §六 |
+| comment_drift / emit_stable / dyn_binding | 0 处复述 / 2 夹具违规 0 / 4 条不一致 0 | 同 | 未变 |
+| 锚点核对（门禁外只读复跑，`/tmp/b460/anchor_now.log`） | **rc=2**、`283 个可解析（来自 319 条引用）／2 个定位失败`、漂移 **18** / 新 **23** / 消失 **40**（基线 300 条锚点行、tsv 393 行）、改号配对 0、共用同一键 36 条、待归属 **103 条/93 种**、声明为仓外 14 条 | rc=2、漂移 26/新 11/消失 12（基线 258）、待归属 100/91、同键多义 7 组·被顶掉 47 | 差值全部来自 459 的**换键 + 措辞改口径**，不是文档搬家（459 §五、§七 已逐条记）；与 459 终态读数逐项相同 ⇒ 460 的两处改动（文案补括号、基线代录）没搬动任何锚点 |
+
+### 二、本批的真事实：459 的判据台在 UTF-8 locale 下会**当场死在第一行输出**，本机 C locale 把它藏了四批
+
+门禁第 14 步报 7 处违规（`tools/abi_anchors_check.sh:49/:69/:75/:77/:83/:85/:113`，全是 `$rc／`、`$S（`、`$E（` 这类裸变量名紧跟多字节字符）。修法是加花括号（语义等价）。但**为什么 459 那次"E1–E5 全过 rc=0"没暴露它**——这条才是本批要留的东西，我做了三向对照：
+
+| 取读数的条件 | 命令 | 结果 |
+|---|---|---|
+| 改前 + UTF-8 locale | `git worktree add --detach /tmp/b460/pre-wt HEAD~1`，在里面 `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 bash tools/abi_anchors_check.sh` | **rc=1**、`tools/abi_anchors_check.sh: line 49: S\xef: unbound variable` —— 整台死在 E1 之前，一条判据都没跑 |
+| 改后 + UTF-8 locale | 主树同命令 | **rc=0**、E1–E5 全过（`/tmp/b460/post_utf8.log`） |
+| 改后 + 本机默认 locale | `bash tools/abi_anchors_check.sh` | **rc=0**、E1–E5 全过（`/tmp/b460/bench459.log`） |
+
+再把变量本身拆开测（`set -u; rc=1; p=2; echo "A=$rc：B=$p（C=${rc}D"`）：`LANG` 未设（本机 `locale` 显示 `LC_CTYPE="C"`）和 `LANG=C` 两种条件下**正常展开**（打 `A=1：B=2（`），`LANG=en_US.UTF-8` 与 `LANG=zh_CN.UTF-8` 两种条件下报 `rc\xef: unbound variable` 并终止。
+⇒ **结论**：mbvar 是一条**静态**判据，同一个写法是否成为活 bug 由 `LC_CTYPE` 决定。我 459 在册的那次"E1–E5 全过"**作为键结构语义的判据仍然成立**（E1–E5 的断言确实都跑了），但它**不构成**"这台在 UTF-8 终端上能跑"的证据——那半从未被测过。修法：把 locale 当成判据台的**输入维度**，本批两条各跑一遍入档；后续任何带中文文案 + `set -u` 的台，收尾读数须注明 locale（这是 #52 同族的"读数随环境变"，不是新形态）。
+判据面复跑：`bash tools/mbvar_lint.sh` → **25 个脚本、0 处违规、rc=0**；`--full` → **28 个脚本、0 处违规、rc=0**（`/tmp/b460/mbvar_full.log`）。
+
+### 三、W2003 那条是我自己弄脏的（不入收益、只入诚实账）
+
+门禁第一行就是 `[W2003] runtime/py_additions.c 比 zeta_runtime_c.o 新`。成因：459 收尾时我为测 **#175**（"改完源码的门禁可能跑在旧二进制上"）执行过 `touch runtime/py_additions.c` —— 内容没动（md5 与 HEAD 相同，见开头），只有 mtime 变了，而 `run_all.sh:65` 的 `zt_stale_check` 只比 mtime。
+处置：`./tools/build_runtime.sh`（rc=0，`ok: tokio_runtime.o (656 T) + zeta_runtime_c.o`），之后按 `run_all.sh:71/:72` 那两条判据原样复跑 ⇒ 六个比较**无一报 STALE**，`zetac` md5 前后不变。
+**边界**：这条不判成回归也不判成收益——它证明的是"本次门禁的运行期 `.o` 与源文件内容一致"，而 460 门禁跑的时候 `.o` 还是旧的（比 `py_additions.c` 旧），所以 §一 的 official/python_style 读数取的是**旧 `.o`**。由于源内容与 HEAD 逐字相同，旧 `.o` 与源应是同一份代码的产物 ⇒ 读数不受影响；但这条推理依赖"`.o` 是从这份源编的"这一**未测前提**，标为推理而非实测。
+
+### 四、#186 第九次当场复发：差分基线停在 458 例时代，"无回归"跑在松了 8 例的闸上
+
+门禁读数 `match=407 / judged=466` 而基线 `total=458 / match_min=406` ⇒ 分母差 8。**这次它没判红**（新例里有 1 例绿，407 抬过了 406 的地板），但"闸门松 8 例"和"判红"是两件事——红不红取决于运气，松是既成事实。
+逐条比对（基线 `cases` vs 本次 `--json /tmp/b460/diff_now.json`）：**新增 8／消失 0／既有条目 verdict 改动 0** ⇒ 本批零回归，可代录。8 例全来自旁路夹具提交（`git log -1` 逐条）：`class_linked_list`(530 `f15e577c`，**绿**)、`class_tag_probe`(527 `3117cf74`)、`builtin_pow_divmod`(533 `d707a933`)、`except_division_zero`＋`closure_nonlocal`(524 `ffa3e616`)、`sorted_key_none`(525 `27b369b0`)、`type_conversion_gaps`(524b `636adb1e`)、`list_slice_assign`(534 `2ce1087f`)；七个 commit 都已并入 `bootstrap`（`git branch --contains` 逐条＝`bootstrap,+cleanup`）。
+净账自洽：`match 406→407`(+1)、`mismatch 46→50`(+4)、`runtime 3→6`(+3) ＝ +8。
+代录（`ecb39af8`）：json 1869→1901 行（+44/−12 ＝ 5 个计数行改写 + 32 行新条目 + 7 个分类行），**`match_min` 抬到 407**（有 1 例真绿，不是只抬分母）。追平后复跑 `python3 tools/diff_test.py` ⇒ **rc=0、`差分一致率无回归`、total=judged=466**——这一步的"无回归"这次才是真判据。
+
+### 五、`control 69/71` 的 2 格缺口归因（450 那次是满格）
+
+不是解析面/出码面回退：`control` 的 `judged` 从 69 涨到 71，多出的两条正是本批新并入的两条旁路夹具——`closure_nonlocal`（verdict **runtime**）与 `except_division_zero`（verdict **mismatch**），两条的 `match` 计数一条没加（69→69）。同类核对：`container` judged 177→181(+4)＝`class_linked_list`(绿)＋`class_tag_probe`/`list_slice_assign`(mismatch)＋`sorted_key_none`(runtime)；`numeric` judged 86→88(+2)＝`builtin_pow_divmod`(mismatch)＋`type_conversion_gaps`(runtime)；`truth`/`str` 两族 judged 未动。三族 judged 增量 4+2+2 ＝ 8 ＝ §四 的新例数，逐条闭合。
+
+### 六、门禁读数里抓到的第二处口径缺陷（tools 车道，只登记不动手）
+
+汇总行印成 **`mbvar: 31 个脚本，违规 7`**，而 `mbvar_lint.sh` 自己的汇总行印 **`25 个脚本，0 处违规`** —— 差的 6 就是那 7 条 FAIL 行：`run_all.sh:479-480` 用 `grep -cE '^  (ok|FAIL) '` 数**输出行**却按**脚本数**打印，一个脚本有 N 处违规就多报 N−1。反证很干净：450 那次 24 行＝24 个脚本（当时无违规，一行一脚本）；459 加了第 25 个脚本、它贡献 7 行 ⇒ 24 行 ok + 7 行 FAIL ＝ 31。同一段的 `mbvar_failed` 用 `grep -c '  FAIL '` 是对的，错的只有分母标签。
+`run_all.sh` 在 tools 车道（用户裁定：「tool优化 zeta 在做了你不用处理」），本批**不改**，只在 backlog 登记。
+
+### 七、XPASS 2 例＝标记可摘除（下一条待办）
+
+`known-fail` 家族逐个单跑（`run_one.sh` 一对一私有目录，`/tmp/b460/kf/<name>/verdict`）复现出与门禁逐字相同的 12 KNOWN-FAIL / 2 XPASS：两条 **XPASS** 是 `t401_percent_s_from_dict`、`t513_percent_format`（都是 `%` 格式化族）。它们现在靠 `// known-fail:` 标记挂着，而 `run_one.sh:10` 的规则是"逐字相同才记 XPASS＝标记可摘除"。
+**未测的那半**：这两例是在 451–459 之间哪一批转绿的，本批**没有二分定位**（要逐批重编，代价不划算）——所以不许把它记成任何一批的收益。待办＝单独一批摘标记、把两例转成普通用例并跑快门禁（`python_style` 单步即可）。
+
+### 八、耗时口径与本批未收
+
+全量 17 步 **386s＝6'26"**，比 450 那次的 **325s** 多 61s：本批同样没重编（`zetac` md5 不变），多出的量在 `jit sweep`（输入 581→593 例）与 `python_style`（+13 例），两者都是夹具面变大的必然代价，不是性能回归。AGENTS.md 在册的 666s 仍是**含构建**口径（438 那次），三者不可互相当回归证据。
+`/tmp/b460/`：`gate_full.log`（189 行全量）、`bench459.log`／`post_utf8.log`／`pre_utf8.log`／`pre_wt.log`（§二 三向对照；改前那份在 `git worktree` 副本里跑，已 `git worktree remove --force` 清掉，主树 `runtime/py_additions.c` md5 未动）、`mbvar_full.log`、`anchor_now.log`、`diff_now.{json,log}`／`diff_bless.log`／`diff_after_bless.log`／`diff_baseline_before.json`（§四）、`build_runtime.log`、`zetac_before.md5`、`kf/`（§七 14 个 verdict）、`gate_scripts.txt`（§六 行数证据）。
+**本批未收**（OPEN 净增 **1**）：**①** 诊断面 python_style **+19 行/+6 文件**未逐条归因（并入 #180 那一族）；**②** XPASS 两例的标记未摘、转绿批次未二分（§七）；**③** `run_all.sh` 的 mbvar 分母标签报错（31 应为 25），tools 车道只登记（§六）；**④** §三 那条"旧 `.o` 与源同内容"是推理不是实测。下一次全量门禁＝**批次 470**。队头不变：**#182 余 57 行 → #167 余项 ①④⑤ → #195/#196 → #203④ → #145**；本批新出的 ②③ 都是小件，排在 #167 之前按损害量再定。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
