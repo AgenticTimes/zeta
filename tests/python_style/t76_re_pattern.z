@@ -3,7 +3,7 @@
 // expect: 22
 // expect: 333
 // expect: 34
-// expect: ["1-2", "3-4"]
+// expect: ['1-2', '3-4']
 // expect: a Z b
 import re
 

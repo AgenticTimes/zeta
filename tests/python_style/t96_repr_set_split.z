@@ -2,8 +2,8 @@
 // expect: 'x'
 // expect: 5
 // expect: 3
-// expect: ["a", "b,c"]
-// expect: ["a", "b", "c"]
+// expect: ['a', 'b,c']
+// expect: ['a', 'b', 'c']
 print(repr("x"))
 print(repr(5))
 

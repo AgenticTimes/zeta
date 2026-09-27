@@ -2,7 +2,7 @@
 // expect: ABC
 // expect: 12
 // expect: 3
-// expect: ["1", "22", "333"]
+// expect: ['1', '22', '333']
 // expect: bonono
 import re
 

@@ -3277,15 +3277,25 @@ int64_t py_json_dumps_vec_typed(int64_t vec, int64_t tag) {
                 n += (size_t)sprintf(out + n, "%g", d);
                 break;
             }
-            case 2:
+            case 2: {
+                /* Batch 565: CPython repr prefers SINGLE quotes — print(xs)
+                   is a repr, not JSON (json.dumps has its own function). */
                 if (v) {
-                    n += (size_t)zt_json_quote((const char*)v, out + n);
+                    out[n++] = '\'';
+                    for (const char* p = (const char*)v; *p; p++) {
+                        if (n + 3 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+                        if (*p == '\'') out[n++] = '\\';
+                        out[n++] = *p;
+                    }
+                    out[n++] = '\'';
                 } else {
-                    n += (size_t)sprintf(out + n, "\"\"");
+                    out[n++] = '\'';
+                    out[n++] = '\'';
                 }
                 break;
+            }
             case 3:
-                n += (size_t)sprintf(out + n, "%s", v ? "true" : "false");
+                n += (size_t)sprintf(out + n, "%s", v ? "True" : "False");
                 break;
             default:
                 n += (size_t)sprintf(out + n, "%lld", (long long)v);
