@@ -13,5 +13,5 @@ print("pre" f"{1}" "post")
 
 // expect: ab
 // expect: x1y2
-// expect: 滑点50.00% | 保守=true
+// expect: 滑点50.00% | 保守=True
 // expect: pre1post

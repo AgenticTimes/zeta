@@ -3467,6 +3467,20 @@ int64_t py_print_pair(int64_t pair, int64_t k_str, int64_t v_str) {
     return (int64_t)out;
 }
 
+// Batch 562: list(str) — a Vec of single-character strings (str_get walks
+// the same 1-char extraction the s[i] path uses).
+int64_t str_get(int64_t, int64_t);
+int64_t str_len(int64_t);
+int64_t py_list_str(int64_t s) {
+    if (!s) return 0;
+    int64_t n = str_len(s);
+    int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n > 0 ? n : 1) * 8);
+    base[0] = n > 0 ? n : 1;
+    base[1] = n;
+    for (int64_t i = 0; i < n; i++) base[2 + i] = str_get(s, i);
+    return (int64_t)(base + 2);
+}
+
 // ── PY-A: Python list methods ────────────────────────────────────────
 // index/count/insert/remove/pop/sort/reverse. Vec layout: the handle points
 // at the data, header [cap|len] at handle-16 (vec_push/vec_len layout).

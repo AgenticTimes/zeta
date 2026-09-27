@@ -494,7 +494,7 @@ int64_t is_null_i64(int64_t v) { return v == 0; }
 int64_t to_string_i64(int64_t v) { char* s = (char*)GC_malloc(24); sprintf(s, "%lld", (long long)v); return (int64_t)s; }
 int64_t clone_bool(int64_t v) { return v; }
 int64_t is_null_bool(int64_t v) { return v == 0; }
-int64_t to_string_bool(int64_t v) { char* s = (char*)GC_malloc(6); sprintf(s, "%s", v ? "true" : "false"); return (int64_t)s; }
+int64_t to_string_bool(int64_t v) { char* s = (char*)GC_malloc(8); sprintf(s, "%s", v ? "True" : "False"); return (int64_t)s; }  /* batch 562: CPython str(True) capitalization */
 int64_t to_string_str(int64_t v) { return v; }
 
 // === Option<T> runtime (GC-allocated, layout: [tag i64 | data i64]) ===
