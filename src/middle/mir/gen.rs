@@ -159,6 +159,9 @@ pub struct MirGen {
     last_dict_pair_ty: Option<(Type, Type)>,
     /// Stack of loop result slots for `loop { break EXPR; }` value semantics.
     loop_value_stack: Vec<u32>,
+    /// 批次 557: slots known to hold PAIR handles from a list-of-pairs
+    /// subscript — their chained subscripts route to stack_array_get.
+    pair_slots: std::collections::HashSet<u32>,
     /// t425: for-loop variables whose body is currently being lowered. Their
     /// per-iteration value lives only in the slot, so the py_entry env-first
     /// module-global read carves them out until their loop is done.
@@ -274,6 +277,7 @@ impl MirGen {
             last_dict_pair_ty: None,
             loop_value_stack: Vec::new(),
             loop_var_active: std::collections::HashSet::new(),
+            pair_slots: std::collections::HashSet::new(),
             last_loop_result: None,
             py_entry: false,
             generated_mirs: vec![],
@@ -8920,6 +8924,20 @@ call, no NULL-handle dereference).",
                 if receiver.is_none() && method == "zip" && args.len() == 2 {
                     let a = self.lower_expr(&args[0]);
                     let b = self.lower_expr(&args[1]);
+                    // 批次 557: per-position element types from the operands
+                    // (zip(["x","y"], [10,20]) pairs are (Str, I64) — the old
+                    // hardcoded (I64, I64) made every destructured name print
+                    // its pointer).
+                    let ta = match self.type_map.get(&a).cloned() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
+                        Some(Type::Str) => Type::Str,
+                        _ => Type::I64,
+                    };
+                    let tb = match self.type_map.get(&b).cloned() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
+                        Some(Type::Str) => Type::Str,
+                        _ => Type::I64,
+                    };
                     self.stmts.push(MirStmt::Call {
                         func: "py_zip".to_string(),
                         args: vec![a, b],
@@ -8929,10 +8947,7 @@ call, no NULL-handle dereference).",
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(
                         id,
-                        Type::DynamicArray(Box::new(Type::Tuple(vec![
-                            Type::I64,
-                            Type::I64,
-                        ]))),
+                        Type::DynamicArray(Box::new(Type::Tuple(vec![ta, tb]))),
                     );
                     return id;
                 }
@@ -8987,6 +9002,41 @@ call, no NULL-handle dereference).",
                 // (arange/linspace/diff as free calls) — dispatch by type.
                 if receiver.is_none() && args.len() <= 3 {
                     let argc = args.len();
+                    // 批次 557: `enumerate(xs[, start])` as a VALUE — the for
+                    // desugar covered the loop spelling only, so
+                    // `list(enumerate(xs, start=1))` built an EMPTY list (the
+                    // `start=1` kwarg dropped to a positional start, and no
+                    // runtime function existed). Pairs carry [2,2] headers so
+                    // len()/subscript/destructure all see the same shape.
+                    if method == "enumerate" && (argc == 1 || argc == 2) {
+                        let coll_id = self.lower_expr(&args[0]);
+                        let start_id = if argc == 2 {
+                            self.lower_expr(&args[1])
+                        } else {
+                            self.next_id_with_lit(0)
+                        };
+                        let elem_ty = match self.type_map.get(&coll_id).cloned() {
+                            Some(Type::DynamicArray(e)) => *e,
+                            Some(Type::Str) => Type::Str,
+                            _ => Type::I64,
+                        };
+                        let pid = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_enumerate".to_string(),
+                            args: vec![coll_id, start_id],
+                            dest: pid,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(pid, MirExpr::Var(pid));
+                        self.type_map.insert(
+                            pid,
+                            Type::DynamicArray(Box::new(Type::Tuple(vec![
+                                Type::I64,
+                                elem_ty,
+                            ]))),
+                        );
+                        return pid;
+                    }
                     let lowered_args: Option<Vec<u32>> = match method.as_str() {
                         "list" if argc == 1 => Some(vec![self.lower_expr(&args[0])]),
                         "int" if argc == 1 => {
@@ -9459,6 +9509,67 @@ call, no NULL-handle dereference).",
                         // first keeps it on the existing print path.
                         // A list prints by its (static) element type, Python
                         // repr differs only in spacing/quoting.
+                        // 批次 557: a list of PAIRS prints as CPython tuple
+                        // text `[(1, 'x'), (2, 'y')]` — per-position string
+                        // flags from the static pair types (py_print_pairs).
+                        // Without this the arg fell into the int-vec dump and
+                        // printed raw element words.
+                        // a BARE pair value (`print(e[0])`) — same spelling
+                        // for a single pair.
+                        if let Some(Type::Tuple(ts)) = self.type_map.get(arg_id).cloned() {
+                            if ts.len() == 2 {
+                                let kid = self.next_id_with_lit(matches!(ts[0], Type::Str) as i64);
+                                let vid = self.next_id_with_lit(matches!(ts[1], Type::Str) as i64);
+                                let sid = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "py_print_pair".to_string(),
+                                    args: vec![*arg_id, kid, vid],
+                                    dest: sid,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(sid, MirExpr::Var(sid));
+                                self.type_map.insert(sid, Type::Str);
+                                let f = if is_last { "println_str" } else { "print_str" };
+                                self.stmts.push(MirStmt::VoidCall {
+                                    func: f.to_string(),
+                                    args: vec![sid],
+                                });
+                                continue;
+                            }
+                        }
+                        if let Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) =
+                            self.type_map.get(arg_id)
+                        {
+                            if let Type::Tuple(ts) = &**e {
+                                if ts.len() == 2 {
+                                    let k_str =
+                                        matches!(ts[0], Type::Str) as i64;
+                                    let v_str =
+                                        matches!(ts[1], Type::Str) as i64;
+                                    let kid = self.next_id_with_lit(k_str);
+                                    let vid = self.next_id_with_lit(v_str);
+                                    let sid = self.next_id();
+                                    self.stmts.push(MirStmt::Call {
+                                        func: "py_print_pairs".to_string(),
+                                        args: vec![*arg_id, kid, vid],
+                                        dest: sid,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs.insert(sid, MirExpr::Var(sid));
+                                    self.type_map.insert(sid, Type::Str);
+                                    let f = if is_last {
+                                        "println_str"
+                                    } else {
+                                        "print_str"
+                                    };
+                                    self.stmts.push(MirStmt::VoidCall {
+                                        func: f.to_string(),
+                                        args: vec![sid],
+                                    });
+                                    continue;
+                                }
+                            }
+                        }
                         if let Some(tag) = match self.type_map.get(arg_id) {
                             Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
                                 Some(match **e {
@@ -14399,10 +14510,35 @@ call, no NULL-handle dereference).",
                     // tuple comes back as `Named("tuple", …)`, so accept that too
                     // (the value is a stack array at runtime either way).
                     let is_tuple = self.tuple_slots.contains(&bid)
-                        || matches!(self.type_map.get(&bid), Some(Type::Named(n, _)) if n == "tuple");
+                        || self.pair_slots.contains(&bid)
+                        || matches!(self.type_map.get(&bid), Some(Type::Named(n, _)) if n == "tuple")
+                        || matches!(
+                            self.type_map.get(&bid),
+                            Some(Type::DynamicArray(inner)) | Some(Type::Array(inner, _))
+                                if matches!(**inner, Type::Tuple(_))
+                        );
                     let tuple_base = self.type_map.get(&bid).cloned();
                     if is_tuple {
-                    if let Some(Type::Tuple(ts)) = tuple_base {
+                    // list-of-pairs base (`list(enumerate(xs))[0]`): the vec
+                    // holds pair HANDLES, stack_array_get returns one; the
+                    // element carries the whole pair type so `e[0][1]` chains.
+                    if let Some(Type::DynamicArray(inner))
+                    | Some(Type::Array(inner, _)) = &tuple_base {
+                        if let Type::Tuple(ts) = &**inner {
+                            self.stmts.push(MirStmt::Call {
+                                func: "stack_array_get".to_string(),
+                                args: vec![bid, iid],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map
+                                .insert(id, Type::Tuple(ts.clone()));
+                            self.pair_slots.insert(id);
+                            return id;
+                        }
+                    }
+                    if let Some(Type::Tuple(ts)) = tuple_base.clone() {
                         self.stmts.push(MirStmt::Call {
                             func: "stack_array_get".to_string(),
                             args: vec![bid, iid],

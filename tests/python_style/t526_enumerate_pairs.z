@@ -1,0 +1,37 @@
+// 批次 557（旁路 cleanup）：enumerate 值形态 + 对子块 [2,2] 头约定 +
+// 对子列表/单对子的 CPython 拼写打印。enumerate 此前只有 for 脱糖，
+// 值形态 list(enumerate(xs, start=1)) 造出空列表；zip/items 的对子是
+// 裸 2 槽块（len/下标读到垃圾）。头部约定＝句柄指元素首、[cap,len]
+// 在其后：解构（stack_array_get）与 len/下标/打印看到同一形状。
+xs = ["x", "y"]
+e = list(enumerate(xs, start=1))
+print(len(e))
+print(e[0])
+print(e[0][0])
+print(e[0][1])
+print(e[1][0])
+ys = [10, 20]
+z = list(zip(xs, ys))
+print(len(z))
+print(z[0][0])
+print(z[1][1])
+for a, b in z:
+    print(a, b)
+d = {"k1": 7}
+items = list(d.items())
+print(items[0][0])
+print(items[0][1])
+print(list(enumerate([9])))
+// expect: 2
+// expect: (1, 'x')
+// expect: 1
+// expect: x
+// expect: 2
+// expect: 2
+// expect: x
+// expect: 20
+// expect: x 10
+// expect: y 20
+// expect: k1
+// expect: 7
+// expect: [(0, 9)]
