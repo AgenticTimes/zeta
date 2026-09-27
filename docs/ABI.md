@@ -565,7 +565,7 @@ HashMap 迭代顺序随机 ⇒ `print.N` 冲突改名和运行期别名表"从�
 
 **N11 `[dynamic]<T>__<method>` 是类型打印器造出来的"符号名"，C 侧只能起别名接住。**
 `Type::DynamicArray(inner)` 的 `display_name()` 就是 `[dynamic]{inner}`
-（types/mod.rs:768）；分派侧用 `::` 形（pylib.rs:963
+（types/mod.rs:768）；分派侧用 `::` 形（pylib.rs:987
 `dispatched_member("[dynamic]str::isin")`），落到 MIR 时是 `__` 形
 （gen.rs:10257 `func: "[dynamic]str__map"`）；C 侧的实现叫 `zt_dyn_str_map`，
 靠 `__asm__("_\\[dynamic\\]str__map")` 顶这个名字（py_additions.c:1069）。
@@ -584,7 +584,7 @@ docs/ARCHITECTURE-REVIEW-2026-09.md:103 记的是"四份符号表手工同步"�
 | 处 | 现状 | 锚点 |
 |---|---|---|
 | ① LLVM 声明 | **仍是手写**：codegen.rs 内 255 处 `add_function`（实测计数） | 例 codegen.rs:1128、:1138、:1147 |
-| ①′ 生成物 | `runtime_decls_registry.rs`（294 处 `add_function`）+ `runtime_decls_core.rs`（61 处）由 `--emit`/`--emit-core` 生成，**两个入口函数从未被调用** | codegen/mod.rs:7、:9 只声明模块；`declare_registry_runtime_fns`/`declare_core_runtime_fns` callers **图内无边**（codegraph）+ grep 全仓仅定义处与一处注释（pylib.rs:842） |
+| ①′ 生成物 | `runtime_decls_registry.rs`（294 处 `add_function`）+ `runtime_decls_core.rs`（61 处）由 `--emit`/`--emit-core` 生成，**两个入口函数从未被调用** | codegen/mod.rs:7、:9 只声明模块；`declare_registry_runtime_fns`/`declare_core_runtime_fns` callers **图内无边**（codegraph）+ grep 全仓仅定义处与一处注释（pylib.rs:866） |
 | ② gen.rs 分发 | 手工 | 例 gen.rs:10257、:10509 |
 | ③ C 实现 | 手工 | 例 py_additions.c:1069、:3533 |
 | ④ `.set` 别名 | 已生成（数据 pylib/runtime_aliases.txt:1 的注释自述"Generated/**edited by hand**"，即"生成物同时被人手改"） | aliases.inc.c:1-2 |
