@@ -2970,6 +2970,16 @@ impl Resolver {
                 AstNode::BinaryOp { op, left, right } => {
                     let l = infer(left, seen, aliases, classes, fn_rets);
                     let r = infer(right, seen, aliases, classes, fn_rets);
+                    // Batch 575: comparisons and membership ALWAYS yield Bool
+                    // in Python — inferable, unlike and/or (value-selecting).
+                    // class_tag_probe: `return t in self.tags` recovered Bool,
+                    // so has_tag("web") prints True instead of the raw 1.
+                    if matches!(
+                        op.as_str(),
+                        "==" | "!=" | "<" | ">" | "<=" | ">=" | "in" | "not in"
+                    ) {
+                        return Some(Type::Bool);
+                    }
                     let is_f = |t: Option<&Type>| matches!(t, Some(Type::F32) | Some(Type::F64));
                     if matches!(
                         op.as_str(),

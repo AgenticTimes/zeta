@@ -2046,8 +2046,11 @@ int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
             // ← `_build_stock_arrays`. Content equality must not dereference a
             // packed value.
             if (v && x && zt_str_content_eq(v, x)) return 1;
-        } else if (v && x && zt_ptr_is_gc_object(v) && zt_ptr_is_gc_object(x)) {
-            if (getenv("ZT_DEBUG_CONTAINS")) fprintf(stderr, "CONTAINS cmp '%s' vs '%s'\n", (const char*)v, (const char*)x);
+        } else if (v && x && zt_c_readable(v) && zt_c_readable(x)) {
+            // Batch 575: content-compare ANY two readable words (relaxed from
+            // the GC-object guard): class-field str lists hold RODATA literal
+            // pointers that are not GC objects, so `has_tag("web")` word-missed
+            // every element. vm_read probes make this safe for non-text words.
             if (strcmp((const char*)v, (const char*)x) == 0) return 1;
         }
     }
