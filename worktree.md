@@ -200,6 +200,7 @@
 | 537 | cleanup | **用户方法名与 C runtime 符号冲突钉住**：类方法 is_empty() 发射全局 _is_empty 与 tokio_runtime.o C 函数撞名 ⇒ duplicate symbol 链接失败。gen.rs 车道：需命名空间隔离或运行时符号改 static。method_sweep 的新发现（前例：find 496 接入、format 510 缺）| diff 无回归 | ✅ 定性批 |
 | 538 | cleanup | **稳态值守批**：qwen 540 收尾（崩溃族真生产者定位入册 + t515 止损一并记）。XPASS ×3 稳定 · diff 无回归 · method_sweep 7 缺稳定。我车道 actionable 清空——等主线修剩余族或合并 497–538 | 全绿 | ✅ 稳态值守批 |
 | 541 | cleanup | **稳态值守批**：qwen 541 摘除 3 条 XPASS 标记（t401/t510/t513——% 格式化 + 交换修复确认）。python_style **385 过**/2 红/11 kf/0 xp · diff 无回归 · method_sweep 7 缺稳定 · selfhost 1 钉住稳定。我车道 actionable 清空——等主线修剩余族或合并 497–541 | 全绿 | ✅ 稳态值守批 |
+| 542 | cleanup | **稳态值守批**：全读数稳定（XPASS ×3 稳定 · diff 无回归 · method_sweep 7 缺 · selfhost 1 钉住）· qwen 541 归因修正确认。我车道 actionable 清空——等主线修剩余族或合并 497–542 | 全绿 | ✅ 稳态值守批 |
 | 539 | cleanup | **稳态值守批**：全读数稳定（XPASS ×3 · diff 无回归 · method_sweep 7 缺 · selfhost 1 钉住）· qwen 540 收尾确认（崩溃族真生产者定位 + t515 止损）。我车道 actionable 清空——等主线修剩余族或合并 497–539 | 全绿 | ✅ 稳态值守批 |
 | 540 | cleanup | **稳态值守批**：qwen 541 摘除 3 条 XPASS 标记（t401/t510/t513——% 格式化 + 交换修复确认）。python_style **385 过**/2 红/11 kf/0 xp · diff 无回归 · method_sweep 7 缺稳定 · selfhost 1 钉住稳定。我车道 actionable 清空——等主线修剩余族或合并 497–540 | 全绿 | ✅ 稳态值守批 |
 | 541 | cleanup | **稳态值守批**：qwen 541 修正交换族修复归因（从"旁路 531"改为"旁路 530 258bc29f"）。XPASS ×3 稳定 · diff 无回归 · method_sweep 7 缺稳定 · selfhost 1 钉住稳定。我车道 actionable 清空——等主线修剩余族或合并 497–541 | 全绿 | ✅ 稳态值守批 |
