@@ -1,0 +1,18 @@
+# @cat: container
+# @note: 随机容器（seed=570002 #7）—— CPython 先验通过
+#@@ python
+d = {"a": -347, "key1": -181}
+print(len(d))
+print(d["a"])
+d["a"] = 236
+print(d["a"])
+print("missing" in d)
+
+#@@ zeta
+d = {"a": -347, "key1": -181}
+print(len(d))
+print(d["a"])
+d["a"] = 236
+print(d["a"])
+print("missing" in d)
+

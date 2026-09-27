@@ -2292,6 +2292,10 @@ int64_t py_math_isqrt(int64_t n) {
 int64_t py_map_setdefault(int64_t m, int64_t key, int64_t def) {
     if (py_map_contains(m, key)) return map_get(m, key);
     map_insert(m, key, def);
+    // Batch 568: record the value's kind so the DictGet read boundary
+    // renders it as text (otherwise d["k"] printed the raw pointer).
+    // A text handle is readable memory; ints/float-bits are not.
+    if (def > 0x10000 && zt_c_readable(def)) zeta_map_set_tag(m, key, 2);
     return def;
 }
 // Appends in place; the handle can move when the vector grows, so the caller
