@@ -4735,18 +4735,41 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     // PyDynamic and `cfg.get` would dispatch to `_get`.
                     let lt = self.type_map.get(&left_id).cloned();
                     let rt = self.type_map.get(&right_id).cloned();
-                    let concrete = |t: &Option<Type>| match t {
-                        Some(Type::I64) | Some(Type::PyDynamic) | Some(Type::Bool) | None => None,
-                        other => other.clone(),
+                    // t512: the chain RETURNS one of its operands, so when the
+                    // left side is a compile-time constant the selection is
+                    // decidable and the result takes the SELECTED side's type
+                    // (`1 and 2 == 3` is False — a bool; typing it I64 made
+                    // print render 0). Unknown truthiness keeps the batch-152
+                    // rule: a wrong Bool claim would misrender an int result.
+                    let lhs_truth: Option<bool> = match self.exprs.get(&left_id) {
+                        Some(MirExpr::IntLit(v)) => Some(*v != 0),
+                        Some(MirExpr::FloatLit(v)) => Some(*v != 0.0),
+                        Some(MirExpr::StringLit(s)) => Some(!s.is_empty()),
+                        _ => None,
                     };
-                    let dest_ty = match (concrete(&lt), concrete(&rt)) {
-                        (Some(a), Some(b)) if a == b => a,
-                        (Some(a), _) => a,
-                        (_, Some(b)) => b,
-                        _ => match (lt, rt) {
+                    let selected_ty = match (op.as_str(), lhs_truth) {
+                        ("&&", Some(false)) | ("||", Some(true)) => lt.clone(),
+                        ("&&", Some(true)) | ("||", Some(false)) => rt.clone(),
+                        _ => None,
+                    };
+                    let dest_ty = if let Some(t) = selected_ty {
+                        t
+                    } else {
+                        let concrete = |t: &Option<Type>| match t {
+                            Some(Type::I64) | Some(Type::PyDynamic) | Some(Type::Bool) | None => {
+                                None
+                            }
+                            other => other.clone(),
+                        };
+                        match (concrete(&lt), concrete(&rt)) {
                             (Some(a), Some(b)) if a == b => a,
-                            _ => Type::I64,
-                        },
+                            (Some(a), _) => a,
+                            (_, Some(b)) => b,
+                            _ => match (lt, rt) {
+                                (Some(a), Some(b)) if a == b => a,
+                                _ => Type::I64,
+                            },
+                        }
                     };
                     self.type_map.insert(dest, dest_ty);
                     self.exprs.insert(dest, MirExpr::Var(dest));
