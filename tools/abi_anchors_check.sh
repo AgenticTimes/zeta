@@ -159,7 +159,7 @@ python3 "$CHK" --doc "$D6b" --baseline "$B6" >"$W/e6e.log" 2>&1; rc2=$?
 if [ "$rc" = "0" ] && [ "$n6" = "1" ] && [ "$rc2" = "0" ] && grep -q '锚点全部对上' "$W/e6e.log"; then
   ok "漂移清零后删掉那条死行 ⇒ 基线 $n6 行（只剩 B）、复跑 rc=0 并打印\"锚点全部对上\""
 else
-  bad "prune rc=${rc}／基线 $n6 行／复跑 rc=$rc2，期望 0／1／0 —— $(tail -1 "$W/e6d.log" | tr '\n' ' ')"
+  bad "prune rc=${rc}／基线 $n6 行／复跑 rc=${rc2}，期望 0／1／0 —— $(tail -1 "$W/e6d.log" | tr '\n' ' ')"
 fi
 B6_MD5_NOOP=$(md5 -q "$B6")
 python3 "$CHK" --doc "$D6b" --baseline "$B6" --prune-gone >"$W/e6f.log" 2>&1; rc=$?
