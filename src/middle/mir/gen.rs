@@ -9038,6 +9038,42 @@ call, no NULL-handle dereference).",
                         return pid;
                     }
                     let lowered_args: Option<Vec<u32>> = match method.as_str() {
+                        // 批次 559: pow 按操作数类型分派——整型幂走
+                        // zeta_pow_i64（否则裸外名 pow 链到 libc 的 double
+                        // 签名、i64 读回垃圾）；含 F64 操作数走 libm
+                        // py_math_pow；dyn 参数保留原路（已知角）。
+                        "pow" if argc == 2 => {
+                            let a = self.lower_expr(&args[0]);
+                            let b = self.lower_expr(&args[1]);
+                            let float_args = matches!(
+                                self.type_map.get(&a).cloned(),
+                                Some(Type::F64) | Some(Type::F32)
+                            ) || matches!(
+                                self.type_map.get(&b).cloned(),
+                                Some(Type::F64) | Some(Type::F32)
+                            ) || matches!(self.exprs.get(&b), Some(MirExpr::FloatLit(_)))
+                                || matches!(self.exprs.get(&a), Some(MirExpr::FloatLit(_)));
+                            // dyn operands also take the int pow — the
+                            // previous fallback (libc pow with i64 args read
+                            // as doubles) was garbage in every case.
+                            let (f, ty) = if float_args {
+                                ("py_math_pow", Type::F64)
+                            } else {
+                                ("zeta_pow_i64", Type::I64)
+                            };
+                            let nid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: f.to_string(),
+                                args: vec![a, b],
+                                dest: nid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(nid, MirExpr::Var(nid));
+                            self.type_map.insert(nid, ty.clone());
+                            self.exprs.insert(id, MirExpr::Var(nid));
+                            self.type_map.insert(id, ty);
+                            return id;
+                        }
                         "list" if argc == 1 => Some(vec![self.lower_expr(&args[0])]),
                         "int" if argc == 1 => {
                             // This used to compute the right conversion
@@ -9200,17 +9236,35 @@ call, no NULL-handle dereference).",
                                         self.type_map.insert(nid, Type::I64);
                                         nid
                                     }
+                                    // Batch 559: a DynamicArray has no
+                                    // literal size — len=-1 made
+                                    // zeta_sorted_vec_len sort NOTHING, so
+                                    // reverse=True over `["c","b","a"]` just
+                                    // reversed the input order. Ask the vec.
                                     _ => {
                                         let nid = self.next_id();
-                                        self.exprs.insert(nid, MirExpr::IntLit(-1));
+                                        self.stmts.push(MirStmt::Call {
+                                            func: "vec_len".to_string(),
+                                            args: vec![a],
+                                            dest: nid,
+                                            type_args: vec![],
+                                        });
+                                        self.exprs
+                                            .insert(nid, MirExpr::Var(nid));
                                         self.type_map.insert(nid, Type::I64);
                                         nid
                                     }
                                 };
+                                let elem_is_str = matches!(
+                                    self.type_map.get(&a).cloned(),
+                                    Some(Type::DynamicArray(e)) | Some(Type::Array(e, _))
+                                        if matches!(*e, Type::Str)
+                                ) as i64;
+                                let flag_id = self.next_id_with_lit(elem_is_str);
                                 let nid = self.next_id();
                                 self.stmts.push(MirStmt::Call {
                                     func: "py_sorted_vec_rev".to_string(),
-                                    args: vec![a, len_id, rev_id],
+                                    args: vec![a, len_id, rev_id, flag_id],
                                     dest: nid,
                                     type_args: vec![],
                                 });

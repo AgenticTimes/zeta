@@ -940,8 +940,14 @@ int64_t py_zip(int64_t a, int64_t b) {
 
 // ── PY-A: sorted(xs, reverse=True) — sort then reverse in place ──────
 extern int64_t zeta_sorted_vec_len(int64_t vec, int64_t len);
-int64_t py_sorted_vec_rev(int64_t vec, int64_t len, int64_t rev) {
-    int64_t out = zeta_sorted_vec_len(vec, len);
+// Batch 559: `sorted(xs, reverse=True)` — elem_is_str selects the CONTENT
+// comparator (the int variant compared heap pointers for str vecs); the
+// caller passes the real length (a DynamicArray has no literal size, and
+// len=-1 sorted nothing, leaving just the reverse of the input order).
+extern int64_t zeta_sorted_vec_len_str(int64_t vec, int64_t len);
+int64_t py_sorted_vec_rev(int64_t vec, int64_t len, int64_t rev, int64_t elem_is_str) {
+    int64_t out = elem_is_str ? zeta_sorted_vec_len_str(vec, len)
+                              : zeta_sorted_vec_len(vec, len);
     if (rev && out) {
         int64_t n = ((int64_t*)(out - 16))[1];
         for (int64_t i = 0, j = n - 1; i < j; i++, j--) {
