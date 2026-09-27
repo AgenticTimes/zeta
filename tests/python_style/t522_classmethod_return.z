@@ -1,0 +1,32 @@
+// 批次 552（旁路 cleanup）闭 backlog #195 前半：@classmethod 的返回类型
+// 恢复。451 判据只认"首参 self 且类型是类别名"，而脱糖把 cls 留成普通
+// 未注解参数 ⇒ 判据看不见接收者、i64 兜底照旧 → 返回 str 打成指针。
+// 加一档：首参是未注解的 `cls`（"dyn" 拼写，zeta 侧真注解不受扰）。
+// 边界（不在本夹具、登记在 #195 余项）：参数直传 `return s` 仍指针
+// （要调用点类型流入返回推断）；float 返回打 1.500000＝既有 print 方言。
+class C:
+    @classmethod
+    def make(cls):
+        out = "a"
+        return out
+    @classmethod
+    def num(cls):
+        return 42
+    @staticmethod
+    def stat():
+        return "b"
+    def inst(self):
+        out = "c"
+        return out
+
+print(C.make())
+print(C.num())
+print(C.stat())
+o = C()
+print(o.inst())
+print(len(C.make()))
+// expect: a
+// expect: 42
+// expect: b
+// expect: c
+// expect: 1

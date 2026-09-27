@@ -3132,9 +3132,17 @@ impl Resolver {
                 // (`top_level.rs:53`), so zeta-mode `-> i64` methods stay untouched.
                 let py_method_default_i64 = ret.trim() == "i64"
                     && matches!(params.first(), Some((pn, pt))
-                        if (pn == "self" || pn == "&self" || pn == "&mut self")
+                        if ((pn == "self" || pn == "&self" || pn == "&mut self")
                             && pt.trim() != "Self"
-                            && class_ty(pt.trim(), classes).is_some());
+                            && class_ty(pt.trim(), classes).is_some())
+                            /* @classmethod (backlog #195): the desugar keeps
+                               `cls` as a plain parameter — no receiver for the
+                               self-arm to see — so the class-table tie is
+                               replaced by "first param is an UNANNOTATED cls",
+                               which only the classmethod path produces (a
+                               zeta-side `fn f(cls: i64)` carries a real type
+                               and stays untouched). */
+                            || (pn == "cls" && pt.trim() == "dyn"));
                 if !unannotated && !py_method_default_i64 {
                     return None;
                 }
