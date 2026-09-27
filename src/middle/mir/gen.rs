@@ -5418,6 +5418,101 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         || op == "&&"
                         || op == "||"
                     {
+                        // 容器比较族（container_cmp_order，批次 553）：list/tuple
+                        // 的 `< <= > >= == !=` 都是先按词典序（或逐元素相等）
+                        // 得到 -1/0/1，再与 0 比较——掉到这里的整型回退比的是
+                        // 句柄，`[1, 2] < [1, 3]` 恒 False。== / != 也从这里走：
+                        // 旧表路径不认元组变量（t1 == (1, 2) 打 False 实拍）。
+                        let vec_shaped = |t: Option<&Type>| match t {
+                            Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                            | Some(Type::Tuple(_)) => true,
+                            Some(Type::Named(n, _)) => n == "tuple",
+                            _ => false,
+                        };
+                        let both_vec = matches!(
+                            op.as_str(),
+                            "<" | "<=" | ">" | ">=" | "==" | "!="
+                        ) && vec_shaped(self.type_map.get(&left_id))
+                            && vec_shaped(self.type_map.get(&right_id));
+                        if both_vec {
+                            let elem_is_str = match (
+                                self.type_map.get(&left_id),
+                                self.type_map.get(&right_id),
+                            ) {
+                                (Some(Type::DynamicArray(e)), _)
+                                | (_, Some(Type::DynamicArray(e)))
+                                    if matches!(**e, Type::Str) =>
+                                {
+                                    1i64
+                                }
+                                (Some(Type::Tuple(ts)), _)
+                                | (_, Some(Type::Tuple(ts)))
+                                    if ts.first().map_or(false, |t| matches!(t, Type::Str)) =>
+                                {
+                                    1
+                                }
+                                _ => 0,
+                            };
+                            let flag = self.next_id_with_lit(elem_is_str);
+                            let cmp_id = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_list_cmp".to_string(),
+                                args: vec![left_id, right_id, flag],
+                                dest: cmp_id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(cmp_id, MirExpr::Var(cmp_id));
+                            self.type_map.insert(cmp_id, Type::I64);
+                            let zero = self.next_id_with_lit(0);
+                            self.exprs.insert(
+                                dest,
+                                MirExpr::BinaryOp {
+                                    op: op.clone(),
+                                    left: cmp_id,
+                                    right: zero,
+                                },
+                            );
+                            self.type_map.insert(dest, Type::Bool);
+                            return dest;
+                        }
+                        // dict 的 == / !=：键值全等（map__eq）。此前两个句柄
+                        // 按整数比较，内容相等的两个 dict 恒 False。
+                        let map_shaped = |t: Option<&Type>| {
+                            matches!(t, Some(Type::Named(n, _)) if n == "map" || n == "dict")
+                        };
+                        if matches!(op.as_str(), "==" | "!=")
+                            && map_shaped(self.type_map.get(&left_id))
+                            && map_shaped(self.type_map.get(&right_id))
+                        {
+                            let eq_id = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "map__eq".to_string(),
+                                args: vec![left_id, right_id],
+                                dest: eq_id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(eq_id, MirExpr::Var(eq_id));
+                            self.type_map.insert(eq_id, Type::I64);
+                            if op == "==" {
+                                // map__eq IS the answer — comparing it to 0
+                                // here would invert it (measured: d1 == d1
+                                // printed False).
+                                self.exprs.insert(dest, MirExpr::Var(eq_id));
+                                self.type_map.insert(dest, Type::Bool);
+                                return dest;
+                            }
+                            let zero = self.next_id_with_lit(0);
+                            self.exprs.insert(
+                                dest,
+                                MirExpr::BinaryOp {
+                                    op: "==".to_string(),
+                                    left: eq_id,
+                                    right: zero,
+                                },
+                            );
+                            self.type_map.insert(dest, Type::Bool);
+                            return dest;
+                        }
                         self.exprs.insert(
                             dest,
                             MirExpr::BinaryOp {
