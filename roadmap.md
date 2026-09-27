@@ -22067,6 +22067,73 @@ official **194/194**·**191/194**·link-only **3**（`integration_all_features`�
 并入面动 `runtime/` ⇒ 按 AGENTS 路由表该有主线 301 位移 A/B。旁路在册论证是**构造性的**（零编译器源码改动 ⇒ zetac 出码不动，IR 侧双侧同；非分组十进制路径输出与改写前逐字相同）——主线侧**未独立复核**该静态断言，也**未取**运行期 A/B ⇒ 记为「并入面位移读数未取」，不写作"位移 0"（前例：批次 541 的"运行期读数不可得"）。下一次 301 批照例带 pre/post 两颗 A/B。
 
 账务（口径同 542：`^| #` 且行内含 ⬜/🟡/🔶/❓ 其一）：合并后全表 **43** 条、open **22** 条 ⇒ **OPEN 净增 0**。**#196 硬核对**（`grep -cE '^\| [0-9]+ \| bootstrap' worktree.md`）＝**50**（＝542 在册的"入册后 49" ＋ 544 记录批 1 行）。产物留 `/tmp/b544/`（`anch_postmerge/rebind_merge/rebind_merge2/anch_after_handfix/anch_final_merge.log`、`gate_merge.log`）。
+## 批次 545（4.x 运行期值表示／**度量批**，#213①）：`zt_maybe_vec` 其余五处消费者逐处取读数 —— 三条"语料无成员"、一条静态实证（`clip` 的实参在跨界时被丢掉）、一处谓词的 true 臂恒不可达
+
+### 一、这批为什么只度量
+
+`runtime/py_additions.c` 的真修需用户授权（AGENTS.md 铁律侧的运行期门槛），所以 540 那句"其余五处无各自读数 ⇒ 先量再动"落成本批：**零代码改动**，只交读数与一条防放松夹具。基线坐标先按 544 合并后的实体刷新：`zt_maybe_vec` 定义 `runtime/py_additions.c:986`、谓词行 `:990`，六处调用点 `:993`（`zt_bare_mask`）、`:1328`（`py_is_vec`）、`:1385/:1386/:1388/:1392`（`clip`／`clip_2`／`clip_3`／`clip_4`）、`:1662`（`py_df_loc` 的掩码分支）。backlog #213 行里那组 `:908/:912/:915/:1250/:1307/:1584` 是 544 合并前的旧坐标，**不回改**，以本批这组为准。
+
+### 二、读数表（IR 口径＝`call [^@]*@sym\(`，与 `declare`／`define` 分开数）
+
+| 消费者 | 语料 IR 站点 | 宿主 `define` | 运行期出声臂命中 | 结论 |
+|---|---|---|---|---|
+| `zt_bare_mask` `:993` | **0** | — | **0** | 语料无成员（见 §五口径更正） |
+| `py_is_vec` `:1328` | **4** | `DataFrame::iloc`／`DataFrame::loc`／`iloc`／`loc` | 不适用（无出声） | 库面常量，非用例发的（§五） |
+| `clip` `:1385` | **2** | `backend_datasrc_data_cleaning__validate_and_repair_stock_ohlcv`（源码 `backend/datasrc/data_cleaning.py:221`、`:226`） | 不适用 | **静态实证：实参被丢**（§三） |
+| `clip_2/:1386`、`clip_3/:1388`、`clip_4/:1392` | **0/0/0** | — | — | **发射点为 0 ⇒ 构造上不可达**（§三） |
+| `py_df_loc` 掩码分支 `:1662` | 2（`DataFrame::loc`、`loc`） | 同上 | **0** | **true 臂恒不可达**（§四） |
+
+语料读数来源：IR＝`/tmp/b545/drv_post545.ll`（100,600 行，`--emit-llvm`，IR_RC=0）；运行期＝`/tmp/b545/drv.bin`（`-o` 编译，compile_rc=0）在 `REPLAYQUANT_LOCAL=1` 下跑完，rc=0、stdout 121 行，尾两行 `R2 36 0.000000 0 0`／`R4 final 0.000000`。**本批不动编译器一行 ⇒ 不报位移**，主线 301 的读数与 544 收尾同值。
+
+另外两行"没有成员"的实测支撑：`isna`／`isna_1`／`notna`／`notna_1`（`zt_bare_mask` 的四个 C 入口，`:3448-3451`）在语料 IR 里 calls **全 0**，语料里的 `isna` 走的是具型臂 `py_vec_isna`（calls=5，宿主 `_fetch_remote_bs`×2、`_validate_and_repair_stock_ohlcv`、`__normalize_market_df`、`__transform_rq_to_schema`）；夹具侧 `from pandas import isna` 被 pylib 的同名函数接走（`/tmp/b545/fx/m3.ll` 里 `isna` calls=0）⇒ **兜底臂连"能不能被发出来"都还没实拍**，登记为未量，不当"已死代码"结案。
+
+### 三、静态实证：`clip(lower=0)` 的 `lower` 在跨 C 边界时被丢掉（与 #183 同族）
+
+- 语料 IR：`declare i64 @clip(i64, i64)`（`/tmp/b545/drv_post545.ll:100461`）＋ `call i64 @clip(i64 %516, i64 %517)`（`:34940`、`:35004`）——两个实参。
+- C 侧：`int64_t clip(int64_t v) { return zt_maybe_vec(v) ? py_vec_clip(v, 0, 0, 0, 0) : v; }`（`:1385`）——一个形参，且 `has_lo`/`has_hi` **写死 0**。
+- 结论：动态接收者的 `.clip(lower=…)` 走到运行期就是**不夹取下界**（第二个实参落在没人读的寄存器上，链接期与运行期都不报错）。语料成员＝§二那 2 行。
+- 对照组（同一条 `.clip` 的四种拼写在**具型**接收者上）：`/tmp/b545/fx/m2c.z` 的 `.clip()`／`.clip(lower=0)`／`.clip(0,1)`／`.clip(0,1,0)` 四条 **4/4 发射 `py_vec_clip`**（具型臂在 `gen.rs:10029-10053`，自己数 `arg_ids` 并造 `has_lo`/`has_hi`）⇒ 缺臂只在裸名兜底那一路。
+- 同一批读出 `clip_2`/`clip_3`/`clip_4`（`:1386/:1388/:1392`）在 `src/`、`pylib/`、语料 IR 三处**都是 0**，而兜底路对任意元数都发裸名 `clip` ⇒ 这三条**构造上选不中**。删码需裁决（轴 A），本批只入册。
+
+**为什么这条没有运行时夹具**：`clip` 之后唯一的读边界本身在打堆地址——`/tmp/b545/fx/m2b.z` 的控制臂（只 `fillna(0)`、不 `clip`）与实验臂**同样**打堆地址（`CTRL 4312629232…`／`CLIP 4312629136…`，两侧地址随 ASLR 变），所以"没夹取"这个后果在 stdout 上不可钉；而 `sum()` 读同一条列直接 SIGSEGV（`m2d.bin` rc=139，归 #112 的"元素按 `char*` 解释"同族）。故本条以**静态实证**入账，不交一条会把两个缺陷混在一起的夹具。
+
+### 四、这次量到一个会出声的缺陷：非向量掩码的"同列空帧"回退路径自身 raise
+
+`pylib/pandas.z:188`、`:197` 承诺掩码不是向量时返回同列空帧，实现走 `py_df_empty_like`（`runtime/py_additions.c:1346`）：它先过 `zt_maybe_map` 守卫（`:981`，判据 `cap < 0`——**与 540 修掉的那条同型的松判据**），守卫放行后同函数 `:1371` 的 `map_keys` 用自己的严判据把**同一个句柄**判为非 dict ⇒ raise、rc=1、stdout 一行都没有。实拍 4/4 形状同症状（单列／双列 × int 掩码／str 掩码，`/tmp/b545/fx/m1b|m1a|m1d|m1e`），对照臂 `df.loc[df["a"]]`（健康向量掩码）rc=0、len 3 ⇒ 症状专属这条回退路径。入册夹具＝`tests/python_style/t494_loc_non_vec_mask_fallback.z`（known-fail）。
+
+这条同时说明 §二里 `py_is_vec` 那格为什么是"未定"：想判它对 str 句柄是否误判（`cap >= 0` 放行），得看它放行后走哪条臂，而两条臂（空帧回退／`py_df_loc`）在这里都出声失败或恒不可达 ⇒ **判据本身的可观测面被隔壁缺陷挡住了**。真修顺序应是先修回退路径，再回来量谓词。
+
+`:1662` 的 true 臂恒不可达是同一链上的静态结论：`py_df_loc` 在本颗二进制里的唯一调用方就是 pylib 那两个 `loc` 定义（IR 站点 2＝两趟），它们**先**用同一实参问过同一个 `zt_maybe_vec`，所以 `if (!zt_maybe_vec(mask))` 只能在假的前提下被跳过；语料运行期该臂的"empty selection"打印 0 命中，与静态一致。
+
+### 五、两处口径更正（别把库面和 C 内部函数当用例足迹）
+
+1. **`zt_bare_mask` 是 C 内部函数**——语料 IR 里它连 `declare` 都没有（grep=0）是**正常读数**，不是"没接线的证据"；量它的可达性要量它的四个 C 入口（`isna`/`isna_1`/`notna`/`notna_1`）。本批第一次 grep 就差点把这 0 当成结论。
+2. **`py_is_vec` 的 4 个站点来自 pylib 库体**，不是用例发的：`/tmp/b545/fx/m2.ll` 与 `m3.ll` 是两个不相干的夹具，两者的 `py_is_vec`／`py_df_loc`／`py_df_empty_like`／`map_keys` 计数**完全相同**（4/2/4/4）⇒ 这是每颗二进制都带的常量库面，任何"用例让 X 计数涨了"的归因都必须先减掉这个底。
+
+### 六、账务
+
+- **改动面**：`runtime/`、`src/` **零改动**；新增 1 条夹具（known-fail 入册）。门禁＝快门禁（加夹具 ⇒ `python_style` 必跑），读数见 §七。
+- **backlog**：**OPEN 净增 0**（登记规则第 2 条）。#213 行的 ① 由"无各自读数"改为"545 已量，五处结论各异"，§三、§四 两格**并写进 #213 同一行**（沿用 541 的"同一行、净增 0"写法），不新开行：新增的是 ①′（`clip` 裸名兜底丢实参 + `clip_2/3/4` 构造上不可达，待裁决）与 ⑧（`zt_maybe_map` 松判据 vs `map_keys` 严判据 ⇒ 回退路径 raise，t494 已钉）。旧坐标 `:908/:912/:915/:1250/:1307/:1584` 在 #213 行内**不回改**，由 §一 那组新坐标为准。
+- **头名变化**：#213① 的"先量再动"已交卷；按损害量序，运行期侧下一格换成**回退路径 raise**（它是 rc=1 硬失败，4/4 形状实拍），`clip` argc 缺臂在其后（静默错值、语料 2 行）。
+
+
+### 七、快门禁读数（配方逐字取 AGENTS.md §门禁节奏；`/tmp/b545/gate_fast.log`，GATE_RC=1）
+
+| 步 | 读数 | 与 544 收尾（roadmap.md:22061）之比 |
+|---|---|---|
+| official | compile **194/194**、compile+link **191/194**；link-only **3**（`integration_all_features`、`quantum_basic`、`selfhost`，缺符号名单逐字相同） | 相同 |
+| official 诊断 | 5 文件 / 21 行 | 相同 |
+| python_style | **389 passed／2 failed／10 known-fail／0 xpass**；`389+2+10 = 401 = ls tests/python_style/t*.z`（当场 401）；红源仍 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` | known-fail 9→**10**，其余逐字相同 ⇒ 那条增量正是 t494，且它没被判成绿（0 xpass） |
+| python_style 诊断 | 272 行 / 125 文件 | +3 行 / +1 文件＝t494 那一条夹具自身带来的三行库面提示（`pandas` 同名 shim、`errors` 默认值 coerced、imported module） |
+| comment_drift | 0 处复述 | 相同 |
+| dyn_binding | 4 条断言、不一致 0（rc=0） | 相同 |
+| corpus／jit／diff／knob／swallow／import／empty／clean／pysrc／sem／ignore／mbvar／emit-stable | 13 步 skipped：JSON 里 `corpus` 是 `{parse_ok:0,total:0}`，其余带 `skipped:1` | 按 `tools/run_all.sh:78` 的初值 + `:160` 的"未 skip 才写"，这里的 0 是**跳过表示**不是读数（与坑 2 的"0 有两种成因"同形） |
+
+- **位移 A/B：本批不适用**，不是"位移 0"。AGENTS.md 护栏 1 要求动 `src/middle`／`src/backend`／`runtime` 才必跑，本批这三面**零改动** ⇒ 没有可量的位移；主线 301 的在册读数沿用 544。
+- GATE_RC=1 的存量红源两侧相同（t231/t233），本批未新增红。
+- 夹具运行与门禁窗口有重叠（夹具编译到 16:38，门禁 JSON ts 16:39:03Z）。这不影响本批读数，理由是**两条当场核过的**：① 零 `src/` 改动 ⇒ 期间重编出的二进制与本批开始时的编译器同内容；② 每条夹具的编译 stderr 都写着 `imported module pandas from /Users/meetai/source/zeta-src/pylib/pandas.z` ⇒ 库面基来自仓内，**坑 68 那个"二进制在仓外＝库面变薄"的成因在本批不存在**（`zetac` 从未离开 `target/release/`）。
+- **#196 硬核对**（口径＝`grep -cE '^\| [0-9]+ \| bootstrap' worktree.md`）：§4 台账行入册前 HEAD **50** ＝ 工作树 **50**，本行入册后 **51**。backlog 侧复算：`^| #` 全表 **43** 条、open **22** 条，两个数都与入册前相同 ⇒ **OPEN 净增 0**。
+
 ## 旁路并入（2026-09-27，批次 535 收尾合并：旁路 534b／535／537／538 ＋ #186 第十次复发代录）
 
 **合并面**：`git merge cleanup`＝**`1f8a64d9`**，并 5 颗（`6544ea7d` 534 的 `sorted_key_func.dcase`、`57767295` 旁路 535 台账、`4021da04` 537 的 `method_name_collision.dcase`、`fc2ae8d2`/`5d6e0e75` 537／538 台账），文件面 **3 files +40/−0**＝2 颗 `.dcase` ＋ `worktree.md` 3 行。**并入面对 `src/`、`runtime/`、`docs/ABI.md`、`tools/baselines/` 零命中** ⇒ 批次 535 的快门禁与位移读数不因本次合并失效（不重跑，口径照 451 收尾／452 收尾）；`cargo build --release` 当场回 `Finished`＝未重编，`target/release/zetac` md5 仍 `d9b10409…`（依 447 那条教训只作观察，不用哈希论证二进制同异）。台账行在 `worktree.md` §4「535 收尾」＋ §7 合并日志。
