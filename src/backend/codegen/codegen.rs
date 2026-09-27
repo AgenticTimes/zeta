@@ -996,6 +996,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
             void_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
             Some(Linkage::External),
         );
+        // 批次 535：列写侧的元素表示登记（`df["c"] = <容器>` 走 shim 的那条路）。
+        // 只加 `pylib/runtime_core.txt` 不够 —— `declare_core_runtime_fns` 在
+        // `tools/baselines/dc_default.txt:2` 记为 never used，登记表不驱动声明。
+        // 缺这一条时 `get_function` 的兜底会按 "1 参、void" 发 extern（:2845），
+        // 实参 key/tag 不装寄存器：语料里 `map_insert` 发布的列 cap=2048 len=1615
+        // 全 0、tag 恒 0，读边界把非文本格当 `char*` 交给 `str_trim` ⇒ SIGSEGV。
+        module.add_function(
+            "py_df_set_value_tag",
+            void_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
         module.add_function(
             "zeta_dynarray_new",
             i64_type.fn_type(&[i64_type.into()], false),

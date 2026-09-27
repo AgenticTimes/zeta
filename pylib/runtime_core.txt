@@ -21,6 +21,7 @@ print_str args=i64 ret=void
 println_f64 args=f64 ret=void
 println_i64 args=i64 ret=void
 println_str args=i64 ret=void
+py_df_set_value_tag args=i64,i64,i64 ret=void
 zeta_arange args=i64 ret=i64
 zeta_arange_from args=i64,i64 ret=i64
 zeta_arange_step args=i64,i64,i64 ret=i64

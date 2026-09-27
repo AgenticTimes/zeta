@@ -35,6 +35,7 @@ pub fn declare_core_runtime_fns<'ctx>(
     module.add_function("println_f64", void_type.fn_type(&[f64_type.into()], false), Some(Linkage::External));
     module.add_function("println_i64", void_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
     module.add_function("println_str", void_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+    module.add_function("py_df_set_value_tag", void_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("zeta_arange", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
     module.add_function("zeta_arange_from", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("zeta_arange_step", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));

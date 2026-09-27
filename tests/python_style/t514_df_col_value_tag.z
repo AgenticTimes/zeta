@@ -1,0 +1,46 @@
+// 批次 535（3.2 Lowering／4.x 值表示，主线 301 #145）：`df["col"] = <容器>` 的写侧
+// 没有登记元素表示 ⇒ 读边界拿到 tag 0。
+// 元素表示号（4=vec<str>、5=vec<i64>、6=vec<f64>、7=vec<bool>）只在出码层的
+// `MirStmt::DictInsert` 臂登记（`pd.DataFrame({"v": [10, 20]})` 那条路，批次 456/457）。
+// **下标赋值**不经过 DictInsert：它整句下成 `DataFrame.__setitem__` 的 VoidCall ⇒
+// 运行期 `py_df_setitem` 把实参句柄原样转进列映射，tag 保持 0。
+// 而 `zt_col_as_text`（pandas.z 的列读边界）对 tag 0 的约定是**不复制、不猜**（批次 456
+// 钉下）⇒ 原样返回句柄 ⇒ 非文本格被当 `char*` 交给 `str_trim`／`println_str`。
+// 语料实拍（lldb 零重编观察器，`/tmp/b461m/holes.log`）：
+//   `publish h=0x100707010 cap=2048 len=1615 zeros=1615 first_zero=0`
+//     链＝`map_insert <- py_df_setitem <- backend_datasrc_data_cleaning__validate_and_repair_stock_ohlcv <- MarketDataFetcher::_load_cache`
+//   同一句柄随后出现在 `zt_vec_textify(tag=0)`（整跑里观测到的唯一 tag 值＝0）
+//   ⇒ 崩点 `str_trim+24`。cap 是 2 的幂（2048>1615）＝push 长出来的块，
+//   不是 `py_df_setitem` 广播分支造的（那条 `zeta_dynarray_new(nrows)` 会 cap==len）。
+// 修法只动**写侧**：下标赋值的分派点按实参的静态元素类型补一条
+// `py_df_set_value_tag(frame, key, tag)`（与 DictInsert 臂同一张表）。读边界一个字未动。
+// 第二格缺陷（同批实测、同一修必须一起收）：**登记表不驱动声明**。`pylib/runtime_core.txt`
+// 加行 + `gen_from_registry.py --emit-core` 重生成 `runtime_decls_core.rs` 后，出码仍发
+// 1 参 void extern —— `declare_core_runtime_fns` 是死代码（`tools/baselines/dc_default.txt:2`
+// 记为 never used），真正的声明点在 `codegen.rs` 的手写 extern 列表里。漏声明 ⇒
+// `get_function` 兜底按 "1 参 void" 发符号，key/tag 两个实参根本不装寄存器（实测
+// `PROBE set_value_tag map=104ad0c40 key=1f080010 tag=1`，tag 位是上一条语句留在 x2 的垃圾）。
+// 负对照两格：文本列（tag 4 原样返回，不复制）、标量广播（不登记 —— 每格都是同一个字，
+// 登记与否都不改变读边界；D 用独立新框，行数是定义的 2）。
+// A 段 `len(df["n"]) = 3` 是本仓行为，**不是** CPython/pandas 真值：当场 `python3` 对数
+// pandas 3.0.5 对 2 行框赋 3 个值抛 `ValueError: Length of values (3) does not match
+// length of index (2)`，本仓按 push 长列收下。本例断言的是元素表示登记，不是列长语义。
+// D 段与 pandas 3.0.5 逐字相同（`D zz 2`）。
+// expect: A 10 30 3
+// expect: B 1.5 2
+// expect: C y 2
+// expect: D zz 2
+from pandas import DataFrame
+
+df = DataFrame({"code": ["x", "y"]})
+df["n"] = [10, 20, 30]
+print("A", df["n"][0], df["n"][2], len(df["n"]))
+
+df["f"] = [1.5, 2.5]
+print("B", df["f"][0], len(df["f"]))
+
+print("C", df["code"][1], len(df["code"]))
+
+g = DataFrame({"a": [1, 2]})
+g["k"] = "zz"
+print("D", g["k"][0], len(g["k"]))

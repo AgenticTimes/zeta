@@ -1374,6 +1374,21 @@ int64_t py_df_setitem(int64_t frame, int64_t key, int64_t val) {
     return 0;
 }
 
+// 批次 535：`df["col"] = <容器>` 的写侧登记（出码层按实参的**静态元素类型**点名）。
+// `py_df_setitem` 只把句柄原样转进列映射，元素表示于是没有进 `zeta_map_set_tag` 侧表；
+// 读边界 `zt_col_as_text` 对 tag 0 的约定是"不复制、不猜"，非文本列因此被当成
+// `vec<str>` 交给 `str_trim`。语料实拍（lldb 零重编，`bin` ＝ HEAD 出码）：
+// `map_insert <- py_df_setitem` 发布 cap=2048 len=1615、1615 格全为 0 的列，同一句柄
+// 由 `zt_vec_textify(tag=0)` 原样返回 ⇒ 崩 `str_trim+24`（批次 420 的 #145 读数）。
+// 登记与 `DictInsert` 用同一个哈希键（`map_str_key`），读侧一行未改。
+void zeta_map_set_tag(int64_t map, int64_t key, int64_t tag);
+void py_df_set_value_tag(int64_t frame, int64_t key, int64_t tag) {
+    if (!frame) return;
+    int64_t map = *(int64_t*)frame;
+    if (!map) return;
+    zeta_map_set_tag(map, map_str_key(key), tag);
+}
+
 // ---- groupby -------------------------------------------------------------
 // `for key, grp in df.groupby("col")` — the shim's GroupBy carried only the
 // frame, so the loop iterated a struct handle (garbage) and the whole

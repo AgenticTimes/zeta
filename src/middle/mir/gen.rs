@@ -2059,6 +2059,24 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                                     func: qualified,
                                     args: vec![base_id, index_id, rhs_id],
                                 });
+                                // 批次 535：列写侧登记元素表示。`df["col"] = <容器>` 走
+                                // shim 的 `__setitem__` → `py_df_setitem`，那条路把实参
+                                // 句柄**原样**转进列映射，而元素表示只在出码层的
+                                // `DictInsert` 臂登记过 —— 下标赋值这条路于是留 tag 0，
+                                // 读边界 `zt_col_as_text` 按批次 456 的约定"不复制、不猜"
+                                // 原样返回句柄，非文本格被当 `char*` 交给 `str_trim`。
+                                // 语料实拍（lldb 零重编）：`map_insert <- py_df_setitem`
+                                // 发布的列 cap=2048 len=1615 且 1615 格全为 0，同一句柄
+                                // 被 `zt_vec_textify(tag=0)` 原样返回 ⇒ 崩 str_trim+24。
+                                if let Some(tag) =
+                                    Self::zt_container_value_tag(self.type_map.get(&rhs_id))
+                                {
+                                    let tag_id = self.int_slot(tag);
+                                    self.stmts.push(MirStmt::VoidCall {
+                                        func: "py_df_set_value_tag".to_string(),
+                                        args: vec![base_id, index_id, tag_id],
+                                    });
+                                }
                                 return;
                             }
                         }
@@ -3808,6 +3826,25 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             }
             _ => false,
         }
+    }
+
+    /// 批次 535：容器实参的元素表示编号（与 `codegen.rs` 的 `DictInsert` 登记臂同一张
+    /// 表：4=vec<str>、5=vec<i64>、6=vec<f64>、7=vec<bool>）。**只登记容器**：标量走
+    /// `py_df_setitem` 的广播分支，列里每个格都是同一个字，登记与否都不改变读边界。
+    fn zt_container_value_tag(ty: Option<&Type>) -> Option<i64> {
+        let el: &Type = match ty {
+            Some(Type::DynamicArray(el)) => &**el,
+            Some(Type::Array(el, _)) if matches!(**el, Type::F64) => &**el,
+            _ => return None,
+        };
+        Some(match el {
+            Type::Str => 4,
+            Type::F64 | Type::F32 => 6,
+            Type::Bool => 7,
+            Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::U8 | Type::U16 | Type::U32
+            | Type::U64 | Type::Usize => 5,
+            _ => return None,
+        })
     }
 
     /// A standalone integer literal, already registered in `exprs`/`type_map`.
