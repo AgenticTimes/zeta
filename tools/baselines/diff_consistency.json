@@ -1,36 +1,36 @@
 {
-  "total": 527,
-  "judged": 526,
-  "match": 476,
-  "rate_pct": 90.5,
-  "match_min": 476,
+  "total": 557,
+  "judged": 556,
+  "match": 513,
+  "rate_pct": 92.3,
+  "match_min": 513,
   "by_verdict": {
-    "match": 476,
-    "mismatch": 42,
+    "match": 513,
+    "mismatch": 35,
     "runtime": 4,
     "bad_case": 1,
     "compile": 4
   },
   "per_cat": {
     "truth": {
-      "match": 42,
+      "match": 43,
       "judged": 43
     },
     "str": {
-      "match": 79,
-      "judged": 83
+      "match": 90,
+      "judged": 93
     },
     "container": {
-      "match": 188,
-      "judged": 205
+      "match": 199,
+      "judged": 215
     },
     "numeric": {
-      "match": 98,
+      "match": 102,
       "judged": 124
     },
     "control": {
-      "match": 69,
-      "judged": 71
+      "match": 79,
+      "judged": 81
     }
   },
   "cases": {
@@ -423,6 +423,46 @@
       "verdict": "match"
     },
     "gen_builtin_s24680_014": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s563001_000": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s563001_001": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s563001_002": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s563001_003": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s563001_004": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s563001_005": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s563001_006": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s563001_007": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s563001_008": {
+      "cat": "container",
+      "verdict": "match"
+    },
+    "gen_builtin_s563001_009": {
       "cat": "container",
       "verdict": "match"
     },
@@ -1000,6 +1040,46 @@
     },
     "gen_list_s5150_011": {
       "cat": "container",
+      "verdict": "match"
+    },
+    "gen_loop_s563001_000": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s563001_001": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s563001_002": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s563001_003": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s563001_004": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s563001_005": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s563001_006": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s563001_007": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s563001_008": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_loop_s563001_009": {
+      "cat": "control",
       "verdict": "match"
     },
     "gen_loop_s7788_000": {
@@ -1646,6 +1726,46 @@
       "cat": "str",
       "verdict": "match"
     },
+    "gen_slice_s563001_000": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s563001_001": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s563001_002": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s563001_003": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s563001_004": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s563001_005": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s563001_006": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s563001_007": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s563001_008": {
+      "cat": "str",
+      "verdict": "match"
+    },
+    "gen_slice_s563001_009": {
+      "cat": "str",
+      "verdict": "match"
+    },
     "gen_stmts_s4711_000": {
       "cat": "numeric",
       "verdict": "match"
@@ -1792,7 +1912,7 @@
     },
     "list_slice_assign": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "method_name_collision": {
       "cat": "container",
@@ -1812,11 +1932,11 @@
     },
     "numeric_float_add": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "numeric_float_promote": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "numeric_floordiv": {
       "cat": "numeric",
@@ -1856,7 +1976,7 @@
     },
     "numeric_mod_float": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "numeric_mod_neg": {
       "cat": "numeric",
@@ -1916,7 +2036,7 @@
     },
     "numeric_truediv": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "setdefault_str_addr": {
       "cat": "container",
@@ -2020,7 +2140,7 @@
     },
     "str_sorted_reverse": {
       "cat": "str",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "str_split_len": {
       "cat": "str",
@@ -2056,7 +2176,7 @@
     },
     "truth_builtin_min": {
       "cat": "truth",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "truth_cmp_chain": {
       "cat": "truth",
