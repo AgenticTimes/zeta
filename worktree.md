@@ -200,6 +200,7 @@
 | 538 | cleanup | **方法可用性扫描第二轮**：method_sweep.py 全面扫描确认 str/dict/list 全部缺 shim 方法（rsplit/partition/rpartition/expandtabs/splitlines/format/popitem/copy ×2 = 9 个 LINK_FAIL + list.copy RUNTIME_ERR）。**新增发现：用户类方法名与 C runtime 符号冲突**（is_empty 撞 tokio_runtime.o 的 C 函数 ⇒ duplicate symbol 链接失败）——gen.rs 车道需命名空间隔离 | 8 缺 shim + 1 符号冲突 | ✅ 定性批 |
 | 531 | cleanup | **sorted(key=None) 排序失败钉住**：key=None 应等价于无 key 但被当作可调用调用 ⇒ 静默失败。不带 key 时正常。gen.rs/runtime 车道。同批证实 isinstance/hasattr/range 步进/元组访问全对 | diff 无回归 | ✅ 定性批 |
 | 532 | cleanup | **splitlines 修复确认**（method_sweep 缺口 8→7）——qwen 某批次修好了 str.splitlines。剩余 7 缺：str rsplit/partition/rpartition/expandtabs + list.copy rc=1 + dict popitem/copy。python_style 379 过/2 红/12 kf/2 xp 稳定 | 7 缺（-1） | ✅ 值守批 |
+| 533 | cleanup | **稳态值守批**：XPASS ×3 稳定（t401/t510/t513）· python_style 370 过/2 红/12 kf · diff 无回归 · selfhost 1 钉住（correctness.z 回归已上报待 qwen）· qwen 452+ 在 W1010/W1011 族持续修复。我车道 actionable 清空——等主线修剩余族 | 全绿 | ✅ 稳态值守批 |
 | 534 | cleanup | **列表切片赋值崩溃钉住**：v[1:3] = [...] 走 __delitem__ 路径但列表无此 C 函数 ⇒ rc=1。单索引赋值 ✓（对照组）。gen.rs/runtime 车道：需列表切片赋值 shim 或降为逐元素赋值 | runtime crash 钉住 | ✅ 定性批 |
 | 535 | cleanup | **sorted key 参数完全不支持钉住**：key=abs、key=None 都导致排序失败——不带 key 正常。gen.rs/runtime 车道（同 531 同根扩展：key 函数路由未实现）| diff 无回归 | ✅ 定性批 |
 | 533 | cleanup | **pow + divmod 缺口钉住**：pow(2,10) 打 0 而非 1024（pow 内建错误）+ divmod(17,5) 打地址（元组返回 ⑪ 同根）。其余 any/all/max/min/sum/abs 全对（364e5943 基线上实测）。内建函数普查面铺完 | diff 无回归 | ✅ 定性批 |
