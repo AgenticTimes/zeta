@@ -1340,7 +1340,9 @@ static int zt_maybe_vec_fwd(int64_t v) {
     if (v < 0x1000) return 0;
     int64_t cap = ((int64_t*)(v - 16))[0];
     int64_t len = ((int64_t*)(v - 16))[1];
-    return cap >= 0 && len >= 0 && len <= cap && cap <= (1LL << 30);
+    // 一条 vec 句柄的 cap 恒 >= 1；而 `df["col"] = <标量 str>` 的 char* 句柄，其前 16 字节
+    // 可以正好读成 cap=0 len=0 的"健康表头"——旧判据放它过，列就存成了裸字符串。
+    return cap >= 1 && len >= 0 && len <= cap && cap <= (1LL << 30);
 }
 static int64_t zt_frame_rows(int64_t map) {
     int64_t keys = map_keys(map);
