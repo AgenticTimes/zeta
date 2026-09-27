@@ -15,42 +15,42 @@ runtime/aliases.inc.c	12	".globl _print.13\n\t.set _print.13, _print2\n"
 runtime/py_additions.c	43	int64_t host_str_eq(int64_t a, int64_t b) { return str_eq(a, b); }
 runtime/py_additions.c	244	int64_t map_str_key(int64_t handle) {
 runtime/py_additions.c	244-268	int64_t map_str_key(int64_t handle) { if (!handle) return 0; // Batch 291: vec<str> slots can hold small strings PACKED into the 8-byte // word ("43601853" = 0x
-runtime/py_additions.c	1286	int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
-runtime/py_additions.c	1969	static int zt_packed_cstr_eq(int64_t packed, const char* s) {
-runtime/py_additions.c	1971-1972	if (n > 7) return 0; const unsigned char* p = (const unsigned char*)&packed;
-runtime/py_additions.c	2126	int64_t* pair = (int64_t*)GC_malloc(24);
-runtime/py_additions.c	2151-2185	int64_t py_argparse_parse(int64_t parser) { int64_t ns = map_new(); int64_t n = zt_vec_len(parser); for (int64_t i = 0; i < n; i++) { int64_t* pair = (int64_t*)
-runtime/py_additions.c	2155	int64_t* pair = (int64_t*)((int64_t*)parser)[i];
-runtime/py_additions.c	2163	map_insert(ns, map_str_key((int64_t)dest), (int64_t)GC_strdup(val ? val : ""));
-runtime/py_additions.c	3016	int64_t zeta_env_get(int64_t name_handle) {
-runtime/py_additions.c	3032	int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
-runtime/py_additions.c	3303	if (getenv("ZETA_PROBE")) {
-runtime/py_additions.c	3707	int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
-runtime/py_additions.c	3834	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
-runtime/py_additions.c	3841	(void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
-runtime/py_additions.c	3935	int64_t zeta_call1(int64_t fptr, int64_t a) {
-runtime/py_additions.c	4007-4057	// BATCH-296: geometry-based kind test for a handle whose STATIC type is unknown // (`d = {}; d["x"] = {...}` types the value I64, and `dict[str, Any]` from the
-runtime/py_additions.c	4024	static int zt_dyn_is_map(int64_t h) {
-runtime/py_additions.c	4024-4034	static int zt_dyn_is_map(int64_t h) { if (h <= 0x1000) return 0; if (GC_base((void*)h) != (void*)h) return 0; int64_t* w = (int64_t*)h; int64_t cap = w[0]; if (
-runtime/py_additions.c	4026	if (GC_base((void*)h) != (void*)h) return 0;
-runtime/py_additions.c	4036	static int64_t* zt_dyn_vec_hdr(int64_t h) {
-runtime/py_additions.c	4036-4057	static int64_t* zt_dyn_vec_hdr(int64_t h) { if (h <= 0x1000) return NULL; int64_t* hdr = (int64_t*)(h - 16); if (GC_base((void*)hdr) != (void*)hdr) return NULL;
-runtime/py_additions.c	4043	int64_t have = (int64_t)GC_size((void*)hdr);
-runtime/py_additions.c	4059	int64_t zeta_dyn_len(int64_t h) {
-runtime/py_additions.c	4059-4071	int64_t zeta_dyn_len(int64_t h) { if (!h) return 0; if (zt_dyn_is_map(h)) return zeta_map_len(h); int64_t* hdr = zt_dyn_vec_hdr(h); if (hdr) return hdr[1]; // T
-runtime/py_additions.c	4152	int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
+runtime/py_additions.c	1295	int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
+runtime/py_additions.c	1978	static int zt_packed_cstr_eq(int64_t packed, const char* s) {
+runtime/py_additions.c	1980-1981	if (n > 7) return 0; const unsigned char* p = (const unsigned char*)&packed;
+runtime/py_additions.c	2135	int64_t* pair = (int64_t*)GC_malloc(24);
+runtime/py_additions.c	2160-2194	int64_t py_argparse_parse(int64_t parser) { int64_t ns = map_new(); int64_t n = zt_vec_len(parser); for (int64_t i = 0; i < n; i++) { int64_t* pair = (int64_t*)
+runtime/py_additions.c	2164	int64_t* pair = (int64_t*)((int64_t*)parser)[i];
+runtime/py_additions.c	2172	map_insert(ns, map_str_key((int64_t)dest), (int64_t)GC_strdup(val ? val : ""));
+runtime/py_additions.c	3025	int64_t zeta_env_get(int64_t name_handle) {
+runtime/py_additions.c	3041	int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
+runtime/py_additions.c	3312	if (getenv("ZETA_PROBE")) {
+runtime/py_additions.c	3726	int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
+runtime/py_additions.c	3853	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
+runtime/py_additions.c	3860	(void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
+runtime/py_additions.c	3954	int64_t zeta_call1(int64_t fptr, int64_t a) {
+runtime/py_additions.c	4026-4076	// BATCH-296: geometry-based kind test for a handle whose STATIC type is unknown // (`d = {}; d["x"] = {...}` types the value I64, and `dict[str, Any]` from the
+runtime/py_additions.c	4043	static int zt_dyn_is_map(int64_t h) {
+runtime/py_additions.c	4043-4053	static int zt_dyn_is_map(int64_t h) { if (h <= 0x1000) return 0; if (GC_base((void*)h) != (void*)h) return 0; int64_t* w = (int64_t*)h; int64_t cap = w[0]; if (
+runtime/py_additions.c	4045	if (GC_base((void*)h) != (void*)h) return 0;
+runtime/py_additions.c	4055	static int64_t* zt_dyn_vec_hdr(int64_t h) {
+runtime/py_additions.c	4055-4076	static int64_t* zt_dyn_vec_hdr(int64_t h) { if (h <= 0x1000) return NULL; int64_t* hdr = (int64_t*)(h - 16); if (GC_base((void*)hdr) != (void*)hdr) return NULL;
+runtime/py_additions.c	4062	int64_t have = (int64_t)GC_size((void*)hdr);
+runtime/py_additions.c	4078	int64_t zeta_dyn_len(int64_t h) {
+runtime/py_additions.c	4078-4090	int64_t zeta_dyn_len(int64_t h) { if (!h) return 0; if (zt_dyn_is_map(h)) return zeta_map_len(h); int64_t* hdr = zt_dyn_vec_hdr(h); if (hdr) return hdr[1]; // T
+runtime/py_additions.c	4171	int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
 runtime/tokio_runtime_stub.c	206	#define MAP_ENTRY_SIZE 24
 runtime/tokio_runtime_stub.c	227-233	// A `-> dict` annotation on a function whose body returns `json.loads(...)` types // the result `map`, while the VALUE is a PyJson cell [tag, payload] (tag 1..
 runtime/tokio_runtime_stub.c	241-248	// The h-16 read must NEVER touch memory outside h's own GC block: a map // handle IS its block base, and blocks that start at a page edge make // h-16 a guard 
-runtime/tokio_runtime_stub.c	427	// LLVM renames overloaded array_new_1 to array_new.10 internally
-runtime/tokio_runtime_stub.c	431-432	// Multi-arg print overloads: LLVM renames print -> print.N per module, and arity // varies (1-6). Provide implementations; the .set aliases below map each prin
-runtime/tokio_runtime_stub.c	444-446	// LLVM .N rename aliases — data in pylib/runtime_aliases.txt; // regenerate: python3 tools/gen_from_registry.py --emit-aliases #include "aliases.inc.c"
-runtime/tokio_runtime_stub.c	1366-1370	// Registry: stub=1. Loud fail via py_stub_abort (D / advice.md). int64_t py_stub_abort(int64_t name_ptr); int64_t py_asdict_unexpanded(int64_t v) { (void)v; re
-runtime/tokio_runtime_stub.c	2775	#define ZJ_NULL 0
-runtime/tokio_runtime_stub.c	2775-2781	#define ZJ_NULL 0 #define ZJ_INT 1 #define ZJ_F64 2 #define ZJ_STR 3 #define ZJ_ARR 4 #define ZJ_OBJ 5 #define ZJ_BOOL 6
-runtime/tokio_runtime_stub.c	2785	static int64_t zj_make(int64_t tag, int64_t payload) {
-runtime/tokio_runtime_stub.c	3205-3235	static int64_t g_tag_val[ZT_TAG_CAP]; static uint64_t zt_tag_slot(int64_t map, int64_t key) { uint64_t h = (uint64_t)map * 1099511628211ULL ^ (uint64_t)key; ret
-runtime/tokio_runtime_stub.c	3880	int64_t zeta_call0(int64_t fptr) {
+runtime/tokio_runtime_stub.c	449	// LLVM renames overloaded array_new_1 to array_new.10 internally
+runtime/tokio_runtime_stub.c	453-454	// Multi-arg print overloads: LLVM renames print -> print.N per module, and arity // varies (1-6). Provide implementations; the .set aliases below map each prin
+runtime/tokio_runtime_stub.c	466-468	// LLVM .N rename aliases — data in pylib/runtime_aliases.txt; // regenerate: python3 tools/gen_from_registry.py --emit-aliases #include "aliases.inc.c"
+runtime/tokio_runtime_stub.c	1388-1392	// Registry: stub=1. Loud fail via py_stub_abort (D / advice.md). int64_t py_stub_abort(int64_t name_ptr); int64_t py_asdict_unexpanded(int64_t v) { (void)v; re
+runtime/tokio_runtime_stub.c	2797	#define ZJ_NULL 0
+runtime/tokio_runtime_stub.c	2797-2803	#define ZJ_NULL 0 #define ZJ_INT 1 #define ZJ_F64 2 #define ZJ_STR 3 #define ZJ_ARR 4 #define ZJ_OBJ 5 #define ZJ_BOOL 6
+runtime/tokio_runtime_stub.c	2807	static int64_t zj_make(int64_t tag, int64_t payload) {
+runtime/tokio_runtime_stub.c	3227-3257	static int64_t g_tag_val[ZT_TAG_CAP]; static uint64_t zt_tag_slot(int64_t map, int64_t key) { uint64_t h = (uint64_t)map * 1099511628211ULL ^ (uint64_t)key; ret
+runtime/tokio_runtime_stub.c	3902	int64_t zeta_call0(int64_t fptr) {
 runtime/unavailable_stubs.c	110	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
 src/backend/codegen/codegen.rs	60	pub slot_read_ids: std::collections::HashSet<u32>,
 src/backend/codegen/codegen.rs	1128	module.add_function("zeta_call1", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
