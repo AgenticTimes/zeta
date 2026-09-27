@@ -1,10 +1,18 @@
-// §5.2 known-fail 包：元组变量上的 `in`。
-//   编译期告警在位（`in` membership is only supported for strings/dicts in V1
-//   (container type: Some(Tuple([I64, I64, I64])))），但**结果仍是 False 而不是
-//   报错** ⇒ 程序静默拿到错值。钉住"命中即 False"这条，修复后应转 True。
+// §5.2 known-fail 包（批次 547 摘钉）：元组字面量降为 StackArray，其块头
+// [cap, len] 与 vec 探针同形 ⇒ 元组接收者接进 zeta_dyn_contains 的几何
+// 分派（map/vec/text），逐元素扫描——原先响亮告警后仍回常量 False。
+s = ("a", "b")
+print("a" in s)
+print("z" in s)
+e = ()
+print(1 in e)
+print(2 in (1, 2, 3))
 // expect: True
 // expect: False
-// known-fail: 元组容器未实现，`in` 恒 False（告警响亮但值仍错）
+// expect: False
+// expect: True
 t = (1, 2, 3)
 print(2 in t)
 print(9 in t)
+// expect: True
+// expect: False

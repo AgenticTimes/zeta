@@ -10515,10 +10515,17 @@ call, no NULL-handle dereference).",
                     // tells map / vec / text apart at runtime by GC geometry;
                     // the two key forms are what the typed branches pass
                     // (content hash for the dict, raw handle for the list).
+                    // t402: tuple literals lower to StackArray, whose block
+                    // carries the same [cap, len] header the vec probe reads —
+                    // routing Tuple receivers here scans the elements instead
+                    // of answering a constant False.
                     if arg_ids.len() == 2
                         && matches!(
                             receiver_ty.as_ref(),
-                            None | Some(Type::I64) | Some(Type::PyDynamic)
+                            None
+                                | Some(Type::I64)
+                                | Some(Type::PyDynamic)
+                                | Some(Type::Tuple(_))
                         )
                     {
                         let key_id = arg_ids[1];
