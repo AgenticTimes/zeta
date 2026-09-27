@@ -2,15 +2,17 @@
 # 批次 459 判据台（任务 #167②）：锚点快照的键必须是 (文件, 起始行, 终点行)。
 #
 # 旧版键只有起始行 ⇒ 同一行号被文档引成两种长度时，两条引用塌进同一条槽位、
-# 后写的顶掉先写的。后果是四类读数失真（下面 E1–E5 各拦一类）：
+# 后写的顶掉先写的。后果是一类读数失真（下面 E1–E6 各拦一类）：
 #   E1 一份两条引用的文档只配出一行基线；
 #   E2 把其中一条引用整条删掉，核对器打印"锚点全部对上"且 rc=0；
 #   E3 把多行区间缩短一行（内容跟着变），核对器看不见"换了区间"；
 #   E4 --bless-only 无法点名多行锚点（带区间的写法被 E1003 拒收）；
-#   E5 行号整体位移后 --rebind 拒改那一条（"同一键有不同长度"），搬家关不掉。
+#   E5 行号整体位移后 --rebind 拒改那一条（"同一键有不同长度"），搬家关不掉；
+#   E6 基线里的死行没有删除路径（批次 544）：E1005 把消失与漂移并成一栏 ⇒ 有死行就
+#      整次拒收全量重采，而唯一出路 --bless --force 会顺带给当场在场的真漂移盖章。
 #
 # 用法：bash tools/abi_anchors_check.sh [被检的 check_abi_anchors.py 路径]
-# 退出码：0=五条全过；1=有失败。E5 需要一个 detached worktree，脚本自己建自己删。
+# 退出码：0=全过；1=有失败。E5 需要一个 detached worktree，脚本自己建自己删。
 # 仓库文件一个字都不改（E1–E4 用合成文档 + 真实只读源，E5 在 worktree 副本里改）。
 set -u
 cd "$(dirname "$0")/.." || exit 2
@@ -121,6 +123,53 @@ fi
   && ok "主树 $SRC 逐字未动（E5 只在 worktree 副本里改文件）" \
   || bad "主树 $SRC 被本台改动了 —— 立即 git checkout -- $SRC"
 
+echo "=== E6 死行的删除路径：掺着漂移必须拒收，只删该删的那条 ==="
+D6="$W/e6ab.md"; D6b="$W/e6b.md"; B6="$W/e6base.tsv"
+printf '# 台：A（单行）+ B（三行）\n- `%s:%s`\n- `%s:%s-%s`\n' \
+  "$SRC" "$S" "$SRC" "$S" "$E" > "$D6"
+printf '# 台：只留 B ⇒ A 成死行\n- `%s:%s-%s`\n' "$SRC" "$S" "$E" > "$D6b"
+python3 "$CHK" --doc "$D6" --baseline "$B6" --bless >"$W/e6a.log" 2>&1
+# 造一条漂移不许改源文件（那是全仓的锚点），所以只把**基线里** B 那行的内容改成假的 ——
+# 核对器看到的正是"文档说的与代码里的不是同一段"，与真漂移同形。
+python3 - "$B6" "$SRC" "$S" "$E" <<'PY'
+import sys
+p, src, s, e = sys.argv[1:5]
+want = f"{src}:{s}-{e}"
+rows = []
+for raw in open(p, encoding="utf-8"):
+    f = raw.rstrip("\n").split("\t", 2)
+    if len(f) == 3 and f"{f[0]}:{f[1]}" == want:
+        f[2] = "Z 假内容：台故意写歪，用来制造一条真漂移"
+    rows.append("\t".join(f))
+open(p, "w", encoding="utf-8").write("".join(r + "\n" for r in rows))
+PY
+B6_MD5=$(md5 -q "$B6")
+python3 "$CHK" --doc "$D6b" --baseline "$B6" --prune-gone >"$W/e6b.log" 2>&1; rc=$?
+B6_MD5_AFTER=$(md5 -q "$B6")
+if [ "$rc" = "2" ] && grep -q '\[E1006\]' "$W/e6b.log" && [ "$B6_MD5" = "$B6_MD5_AFTER" ]; then
+  ok "漂移与死行同时在场 ⇒ 拒收 rc=2、基线逐字未动（旧版唯一出路是 --bless --force，会连漂移一起盖章）"
+else
+  bad "rc=${rc}／E1006 $(grep -c '\[E1006\]' "$W/e6b.log") 条／基线$( [ "$B6_MD5" = "$B6_MD5_AFTER" ] && echo 未动 || echo 被改 )，期望 rc=2＋E1006＋未动"
+fi
+# 先把那条漂移修掉（点名重采 B），死行仍在 ⇒ 这时删除路径应当放行
+python3 "$CHK" --doc "$D6b" --baseline "$B6" --bless-only "$SRC:$S-$E" >"$W/e6c.log" 2>&1
+python3 "$CHK" --doc "$D6b" --baseline "$B6" --prune-gone >"$W/e6d.log" 2>&1; rc=$?
+n6=$(grep -vc '^«待归属»' "$B6" 2>/dev/null); n6=${n6:-0}
+python3 "$CHK" --doc "$D6b" --baseline "$B6" >"$W/e6e.log" 2>&1; rc2=$?
+if [ "$rc" = "0" ] && [ "$n6" = "1" ] && [ "$rc2" = "0" ] && grep -q '锚点全部对上' "$W/e6e.log"; then
+  ok "漂移清零后删掉那条死行 ⇒ 基线 $n6 行（只剩 B）、复跑 rc=0 并打印\"锚点全部对上\""
+else
+  bad "prune rc=${rc}／基线 $n6 行／复跑 rc=$rc2，期望 0／1／0 —— $(tail -1 "$W/e6d.log" | tr '\n' ' ')"
+fi
+B6_MD5_NOOP=$(md5 -q "$B6")
+python3 "$CHK" --doc "$D6b" --baseline "$B6" --prune-gone >"$W/e6f.log" 2>&1; rc=$?
+if [ "$rc" = "0" ] && grep -q '没有可删的死行' "$W/e6f.log" \
+   && [ "$(md5 -q "$B6")" = "$B6_MD5_NOOP" ]; then
+  ok "无事可删时出声且不动文件（旧版没有这条路径，只能 --bless --force 空转一次全量重采）"
+else
+  bad "rc=${rc}，期望 0 且打印\"没有可删的死行\" —— $(tail -1 "$W/e6f.log" | tr '\n' ' ')"
+fi
+
 rm -rf "$W"
-echo "判据台结论：$([ "$fails" = 0 ] && echo 'E1–E5 全过' || echo "$fails 条失败")"
+echo "判据台结论：$([ "$fails" = 0 ] && echo 'E1–E6 全过' || echo "$fails 条失败")"
 [ "$fails" = 0 ]

@@ -30,12 +30,20 @@
   ./tools/check_abi_anchors.py             # 核对；漂移/待归属增加 rc=1，歧义/越界 rc=2
   ./tools/check_abi_anchors.py --list      # 打印"每个锚点现在指着哪句代码"（归属自查）
   ./tools/check_abi_anchors.py --rebind    # 自动收尾两类行号错位：搬家（改文档）+ 改号（刷基线）；--dry 只看不动
+  ./tools/check_abi_anchors.py --prune-gone  # 删掉基线里"文档已不再引用"的死行；当场有漂移则拒收
 
 `--bless` 的护栏（批次 355）：全量重采会覆盖核对器**此刻正判为假**的条目，批次 355 实测
 "装一条改号 + 一条漂移 → --bless → rc=0 且打印'锚点全部对上'"，那条假引用从此带着工具自己
 盖章的证据。所以现在要先拦一次：被抹平的条目逐条点名、整次拒收（rc=2）；确实要覆盖得加
 `--force`（仍打印覆盖清单），只想刷个别几条用 `--bless-only`。纯新增（文档刚加了一批锚点）
 不在射程内——它不覆盖任何东西。
+
+`--prune-gone` 补的是这张护栏留下的死角（批次 544）：E1005 把"消失"与"漂移"并成一栏，
+于是**基线里只要还有一条死行，全量重采就整次拒收**；而 `--bless-only` 结构上只能加不能删
+（点不到的恰好就是死行 ⇒ E1004），`--rebind` 又要求内容逐字相同的唯一配对。三条收尾手段
+对一条死行全部失灵时，唯一能把 rc 按回 0 的动作就只剩 `--bless --force` —— 那正是
+blessed-wrong 的成因：一次记账动作顺带给当场在场的真漂移盖了章。删死行不含任何内容断言
+（文档已经不指它了），所以它可以独立存在，前提是当场漂移为 0。
 
 `--rebind` 治的是这一件事：往 `tools/run_all.sh` 之类被引用的文件里插行，锚点行的**内容
 一字未动、行号全漂**。批次 336/337/338/339 连续四批都是这个形状，每批手工重绑 3~4 条。
@@ -663,6 +671,57 @@ def bless_only(
     return 0
 
 
+def prune_gone(
+    base: Path, gone, snap, old, old_pending, drifted, added, dry
+) -> int:
+    """删掉基线里"文档已不再引用"的死行，其余行逐字不动。
+
+    存在的理由（批次 544）：基线过去只有加的路径，没有删的路径。三条收尾手段对一条死行
+    全部失灵 —— `--bless` 被 E1005 拦住（它把消失与漂移并成同一张"会被抹平"清单，于是
+    只要还有死行就整次拒收）、`--bless-only` 被 E1004 拦住（"点不到"的恰好就是消失键，
+    它结构上只能加不能删）、`--rebind` 要求内容逐字相同的唯一配对。三堵之下唯一能把 rc
+    按回 0 的动作只剩 `--bless --force`，而那正是 blessed-wrong 的成因：删死行这个动作
+    顺带给当场在场的真漂移盖了章。
+
+    删死行本身不含"这段代码就是文档说的内容"的断言（文档已经不指它了），所以它可以独立
+    存在 —— 但前提是**当场没有漂移**：有漂移时先把引用修对，别让一次记账动作掺进鉴定。
+    每条死行分开打印两种成因，因为"我把单行锚点改成了区间锚点"与"文档丢了一条引用"
+    是两件事，只有后者值得人再看一眼文档。
+    """
+    if drifted:
+        print(f"  [漂移] {drifted[0][0]}:{fmt_span(drifted[0][1], drifted[0][2])} —— 共 {len(drifted)} 条")
+        print("[E1006] --prune-gone 要求当场漂移为 0 ⇒ 拒收（基线未改）："
+              "先修引用内容，再来记账")
+        return 2
+    if not gone:
+        print("没有可删的死行（消失 0 条）⇒ 基线未改")
+        return 0
+    live_starts = {(k[0], k[1]) for k in snap}
+    gone_sorted = sorted(gone)
+    moved_n = 0
+    for rel, s, e in gone_sorted:
+        if (rel, s) in live_starts:
+            moved_n += 1
+            why = "起始行仍被文档引用（换了区间）"
+        else:
+            why = "该起始行已完全不再被文档引用"
+        print(f"  [删] {rel}:{fmt_span(s, e)} — {why}")
+    remaining = len(old) - len(gone)
+    if dry:
+        print(f"--dry：本会删 {len(gone)} 条死行（基线 {len(old)} → {remaining}），未写盘")
+        return 0
+    drop = set(gone_sorted)
+    write_base(base, [(k, v) for k, v in old.items() if k not in drop], old_pending)
+    print(
+        f"删死行 {len(gone)} 条 → {base}（基线 {len(old)} → {remaining} 条；"
+        f"其中换区间 {moved_n} 条／整行不再被引用 {len(gone) - moved_n} 条）；"
+        f"待归属沿用基线旧值（{sum(old_pending.values())} 条 / {len(old_pending)} 种，本档不动）"
+    )
+    if added:
+        print(f"  剩余 {len(added)} 条新锚点仍需逐条核实后用 --bless-only 点名入表")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--doc", default=str(DEFAULT_DOC))
@@ -685,21 +744,31 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="打印每个锚点当前指向的代码行")
     ap.add_argument("--pending", action="store_true", help="打印待归属引用的文档行号")
     ap.add_argument(
+        "--prune-gone",
+        action="store_true",
+        help="删掉基线里“文档已不再引用”的死行（当场有漂移则拒收；不与 --bless*/--rebind 同用）",
+    )
+    ap.add_argument(
         "--rebind",
         action="store_true",
         help="把“内容逐字未变、只是行号搬家”的锚点自动改回文档（唯一命中才改）",
     )
-    ap.add_argument("--dry", action="store_true", help="与 --rebind 同用：只打印判定，不动文件")
+    ap.add_argument("--dry", action="store_true",
+                    help="与 --rebind / --prune-gone 同用：只打印判定，不动文件")
     args = ap.parse_args()
-    if args.dry and not args.rebind:
+    if args.dry and not (args.rebind or args.prune_gone):
         # 单挂一个不生效的开关 = 任务 #63 那一类缺陷（参数收下即弃）。当场拒收，不静默。
-        print("[E1002] --dry 只对 --rebind 有意义，单独使用什么都不做 ⇒ 拒收")
+        print("[E1002] --dry 只对 --rebind / --prune-gone 有意义，单独使用什么都不做 ⇒ 拒收")
         return 2
     if args.force and not args.bless:
         print("[E1002] --force 只对 --bless 有意义（--bless-only 本来就只刷点名的那条）⇒ 拒收")
         return 2
     if args.bless_only and (args.bless or args.rebind):
         print("[E1002] --bless-only 是独立动作，不与 --bless/--rebind 同用 ⇒ 拒收")
+        return 2
+    if args.prune_gone and (args.bless or args.bless_only or args.rebind or args.force):
+        print("[E1002] --prune-gone 是独立动作，不与 --bless/--bless-only/--rebind/--force 同用"
+              "（它只删行，不重采任何内容）⇒ 拒收")
         return 2
 
     doc = Path(args.doc)
@@ -739,6 +808,13 @@ def main() -> int:
             return 2
         return bless_only(base, args.bless_only, new, old, old_pending)
 
+    if args.prune_gone:
+        if not base.is_file():
+            print(f"[E1001] 无基线 {base} ⇒ 没有可删的死行，先用 --bless 建表")
+            return 2
+        return prune_gone(base, unmatched_gone, new, old, old_pending, drifted,
+                          added, args.dry)
+
     if args.bless:
         # 全量重采会**覆盖**核对器此刻判为假的条目。批次 355 实测：副本上装一条改号 +
         # 一条漂移，`--bless` 之后核对 rc=0、打印"锚点全部对上"——那条被判定"文档引用的
@@ -752,6 +828,7 @@ def main() -> int:
             print(
                 f"[E1005] --bless 会把上面 {len(washed)} 条**已被判为假**的引用一并抹平 ⇒ 拒收。"
                 f"搬家/改号用 --rebind，确实只重采个别几条用 --bless-only 点名，"
+                f"清单里只剩“文档已不再引用”的死行用 --prune-gone 删，"
                 f"都要覆盖才加 --force"
             )
             return 2
