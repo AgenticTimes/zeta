@@ -2730,6 +2730,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                                 }
                                 MirStmt::Call {
                                     dest: call_dest, ..
+                                }
+                                | MirStmt::SemiringFold { result: call_dest, .. }
+                                | MirStmt::DictGet {
+                                    dest: call_dest, ..
+                                }
+                                | MirStmt::MapNew { dest: call_dest }
+                                | MirStmt::StructNew {
+                                    dest: call_dest, ..
                                 } => {
                                     // Block ends with function call - use its result
                                     then_stmts.push(MirStmt::Assign {
@@ -2799,6 +2807,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                                     });
                                 }
                                 MirStmt::Call {
+                                    dest: call_dest, ..
+                                }
+                                | MirStmt::SemiringFold { result: call_dest, .. }
+                                | MirStmt::DictGet {
+                                    dest: call_dest, ..
+                                }
+                                | MirStmt::MapNew { dest: call_dest }
+                                | MirStmt::StructNew {
                                     dest: call_dest, ..
                                 } => {
                                     // Block ends with function call - use its result
@@ -6026,6 +6042,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                                 // (function returns, dest unused)
                             }
                             MirStmt::Call {
+                                dest: call_dest, ..
+                            }
+                            | MirStmt::SemiringFold { result: call_dest, .. }
+                            | MirStmt::DictGet {
+                                dest: call_dest, ..
+                            }
+                            | MirStmt::MapNew { dest: call_dest }
+                            | MirStmt::StructNew {
                                 dest: call_dest, ..
                             } => {
                                 // Block ends with function call - use its result
