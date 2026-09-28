@@ -24722,6 +24722,79 @@ AGENTS.md 明文「全量门禁两侧不并发」⇒ 这次是**旁路侧破的*
 - **队头**＝**#211①（nunique 兄弟列污染的槽对槽定位＋具名列）** → `str_trim` 族（需 `runtime/py_additions.c` 语义真修授权）→ **#167① 修法三形甲／乙／丙（待裁）**／**#52 余项** → #182 → t494／#213⑧ → #48。下一次全量＝主线 **610**（含语料级位移复跑）。待用户裁决累计 **10 条**。
 - **产物**＝`/tmp/b601/`（`ABI.md.bak`／`abi_anchors.tsv.bak`／`roadmap.md.bak` 等改前快照、`md5_pre.txt`、`anch_{pre,post}.txt`、`rebind_{dry,real}.txt`、`build601.log`、`gate601.log`、`gate_md5_{before,after}.txt`、`ab601.sh`／`ab601.tsv`、`diff_readonly.txt`）。**收尾清理**＝`target/release/` 内本批存件 `zetac_b601pre` 与 `ab601_*`（`.bin`／`.ll`／`.cc`）随记录笔删除。
 
+## 批次 636（2026-09-29，**7.3 生态与工具／文档合同 × 门禁面·合并面收尾**，会话任务 #243；**并入的代码面属 3.2／4.x 渲染族**）：并入旁路 633–634 ⇒ 锚点 **33 条**漂移（机械 31／手绑 2）一趟收干（`ANCHOR_RC=1`→**0**）；快门禁 86s ＋ 差分**逐案闭合**＝零代录零回归 ＋ A/B **位移 1 形**（t542 六处 dumps 站点里五处从堆地址转成真渲染）；**号位撞车一条入册**（旁路 02:59 也取 635 ⇒ 主线这条落 636）
+
+### 〇、号位账务：两侧同时占用 635，主线这条让号到 636（不回改任何已提交物件）
+
+- **开工枚举**＝`grep -oE '^\| 6[0-9][0-9] \|' worktree.md` 得 600–632 在册，`git log cleanup --oneline` 头名＝旁路 **634** ⇒ 主线取 **635**（合并笔 `5f1cbf2d` 落 `02:46:17`、fix 笔 `96ab871c` 落 `02:49:54`）。
+- **旁路在 13 分钟后也提交了他们的 635**＝`e4d9afa5`（`02:59:42`，bool 渲染亚族的 print 层拆支、新钉 `t543`、`gen_numeric_s20260926_001` 整例转 MATCH 575→576）＋`1447056d`（`03:00:01`，其台账行）。⇒ **同号不同批**，且成因不是"谁没数"而是**号位登记点两侧不同**：旁路的 635 记在 `cleanup` 分支的 `worktree.md`，主线开工时枚举的是**主树工作区的 worktree.md**（尚无旁路 635 行）。
+- **处置**＝主线这条在 `roadmap.md`／`worktree.md` 台账落 **636**（`grep -c '| 636 |' worktree.md` 改前＝0，两侧未占用），已提交的 `96ab871c` message 里的"批次 635"**不回改**（本地未 push，但按"推翻旧结论另起一批不回改／只加对照"的在册纪律）⇒ 对照表：**台账 636 行 ＝ 提交面 `5f1cbf2d`（merge）＋ `96ab871c`（fix，写作 635）＋ 本记录笔**。
+- **让号的理由不是时间序**（时间上主线 635 先到 02:49:54），是**跨侧改旁路已提交的台账行**这条更贵：教训 2（按 HEAD 复原会丢对侧行）＋第 7 条（跨车道修文件须报备）。让号是单向、零回改、零跨侧写。
+- **下一个可用整十号位＝640**（601 在册的"下一次全量＝主线 610"**作废**——`worktree.md` 台账里 **610 已有两行**，早被旁路占用）。本批只加对照说明，不回改 601 正文。
+
+### 一、并入面：merge-base 口径**第二次兑现**（152/20 四文件＋一颗 .o），并自纠一条存件错位
+
+- 合并提交 **`5f1cbf2d`**（`02:46:17`，**冲突 0**、`ort` 自动合并 `worktree.md`）。落地 numstat＝`runtime/tokio_runtime_stub.c` **68/0**、`src/middle/mir/gen.rs` **58/20**、`tests/python_style/t542_nested_list_str.z` **24/0**、`worktree.md` **2/0** ＋ `tokio_runtime.o`（二进制，`-/-`）＝**152/20**。
+- 真并入面＝`git merge-base 5f1cbf2d^1 5f1cbf2d^2`＝**`9c730499`**（旁路 632 的记录笔），`9c730499..5f1cbf2d^2` 与落地 numstat **逐字相同** ⇒ 601 入册的口径这轮直接复用、一次到位。
+- 两-dot `5f1cbf2d^1..5f1cbf2d^2` 当场报**十二文件**（`roadmap.md` 0/**847**、`docs/ABI.md` 92/92、`abi_anchors.tsv` 129/131、`tools/baselines/diff_consistency.json` **29/28**、`check_abi_anchors.py` 5/**46**、`backlog.md` 3/52、`tools/abi_anchors_check.sh` 1/49…）＝两侧树的对称差，不是并入面；那些"删除"全是我侧 593–601 领先的部分（旁路尚未 `git rebase bootstrap`）。
+- **本批自纠一条（读数作废并重取）**＝存件 `/tmp/b635/mergebase_numstat.txt` 第一次落进去的**是两点式内容**（文件名与内容错位，正是"没核对存件正文"的形态）。已重取并分家：`mergebase_numstat.txt`＝`git diff --numstat 9c730499 5f1cbf2d^2`、`twodot_numstat.txt`＝`git diff --numstat 5f1cbf2d^1 5f1cbf2d^2`。上面两个读数来自这两份文件，不是记忆。
+- **633 做的事**（读合并 diff，不是转述其台账）＝把 565/551 的**平面**元素 tag 计算**递归化**：新 helper `elem_tag_string(&Type) -> String`（F64/F32⇒`"1"`、Str⇒`"2"`、Bool⇒`"3"`、`DynamicArray|Array`⇒`format!("4,{}", 内层)`、`_`⇒`"0"`）；调用点按 tag 长度**分派两选一**——`tags.len()==1` 仍走 `py_json_dumps_vec_typed`（实参是 `IntLit(tag-b'0')`，**平面路径逐字不动**＝零回归的来源），否则走新符号 `py_json_dumps_vec_nested`（实参是 `StringLit(tags)`），并就地 `type_map.insert(tid, Type::I64 | Type::Str)` 把返回型钉回。runtime 侧新增 `static int64_t dumps_vec_nested(int64_t vec, const char* tags)` 与导出 `py_json_dumps_vec_nested`（`if (!t || !t[0]) t = "0";`＝空 tag 兜底）。
+- **告警面未新增**＝cargo 那条 `unused_mut` 改前报 `resolver.rs:3537`（600 的 `build600.log`）、601 报 `:3572`，本批 `build635.log` 仍**只有这一条**、同点同 Δ＋35 未再动 ⇒ 合并面没引入新告警。
+
+### 二、.o 面：一颗换、一颗没换（本批自纠第二条＝存件口径不对称，改用 `git cat-file` 三方对照）
+
+- 开工时 `o_md5_pre.txt` 记了**两颗**（`369e8dd2…`／`8dd2995e…`），收尾 `o_md5_post.txt` 只记**一颗**（`7d4f1519…`）⇒ 两栏口径不对称，"哪颗变了"这轮问不出答案，该存件读数不成立。
+- 重取（`/tmp/b635/o_attr.txt`，用 `git cat-file -p <rev>:<file> | md5 -q` 而非工作树文件，避免"改后 .o 已覆盖"的坑 94 形态）＝**`tokio_runtime.o`**：main^1＝`369e8dd2` → cleanup＝`7d4f1519` → 工作树＝`7d4f1519`（与旁路那颗**逐字相同**＝旁路按 `build_runtime.sh` 重编后随批入库的那颗被合并带进主仓）；**`zeta_runtime_c.o`**：main^1 与工作树**同为** `8dd2995e` ⇒ 未动。
+- 符号面实拍＝`nm -gU`：`_py_json_dumps_vec_nested` 在 post 那颗 .o 里 **1** 条、pre 那颗 **0** 条 ⇒ 新符号确实随 .o 进仓，与 t542 的链接成功（rc=0）首尾相接。
+
+### 三、锚点面：33 条漂移＝机械 31（全文件唯一命中）＋手绑 2（`--rebind` 判据够不到的两条形）
+
+- 改前只读核对＝**`ANCHOR_RC=1`**：漂移 **33**／新 0／消失 0、`306 个可解析（来自 344 条引用）／0 个定位失败`（`/tmp/b635/anch_pre.txt`）。
+- `--rebind --dry`＝`漂移 33 条 → 搬家 31 条／拒改 2 条；改号配对 0 对／落单消失 0／落单新 0`；实跑＝`已改写 docs/ABI.md（23 行 / 46 个数字）`＋基线刷新（tsv 仍 306 锚点、定位失败 0）。
+- **位移三档**（按 `rebind_real.txt` 逐条算 Δ＝新−旧）＝**29 条 Δ+23**（全在 `src/middle/mir/gen.rs`）＋ **1 条 Δ+38**（`gen.rs:16327-16332 → :16365-16370`）＋ **1 条 Δ+68**（`runtime/tokio_runtime_stub.c:4082 → :4150`，恰等于 633 在 stub 里加的 68 行）⇒ 三档与"旁路在 gen.rs 前部插两处行块、在 stub 尾部加 68 行"完全对得上。
+- **拒改两条＝手绑**（`--rebind` 的"全文件唯一命中"判据不够）＝`gen.rs:10332`（`Some(Type::Str) => "println_str",` 在 10067 与 10355 各一处）与 `gen.rs:16827`（`self.mirror_module_global_writes();` 在 1697 与 16865 各一处）。归因**用改前文件的上下文实拍**，不用内容匹配：前者在 ABI.md 里的引用句是"JIT 表里只有 `println_i64`"那条 union 分派段（段长在 10355 那侧），后者是 `splice_env_mirrors → env_mirror` 调用点句（`:1697` 那条同名调用**没动**＝所以它不在漂移清单里，只有第二处搬家）。⇒ 手绑改 `docs/ABI.md`（`10332→10355`、`:16827→:16865`）→ `--bless-only` 带完整路径点名（坑 67）→ 只读报**消失 2**（旧键成死行）→ `--prune-gone`（基线 308→306）→ 复跑只读 **`ANCHOR_RC=0`「锚点全部对上」**。
+- 待归属 **98 条／88 种**、仓外声明 **14 条**、共用键 **38 条**——**三格与改前逐字相同**（`anch_pre.txt` ⇔ `anch_final2.txt`）。
+- 提交＝**`96ab871c`**（fix，numstat `docs/ABI.md` **25/25**、`tools/baselines/abi_anchors.tsv` **33/33**；改前快照 `/tmp/b635/ABI.md.bak`、`abi_anchors.tsv.bak`）。**25/25 与 33/33 之差＝手绑那 2 条**（机械臂改的 23 行引用＋基线 31 条键，加手绑 2 条＝33 键；ABI.md 侧 23＋2＝25 行）。
+- **#167①（按符号锚定）的收益证据这轮拿到"单批 31 条"的量级**：601 是"同一条锚点连续三批搬家"（逐批 Δ+35），本批是"一次并入搬 31 条"（Δ+23 为主）⇒ 两种形态都在，机械臂一趟能吃掉，但**手绑那 2 条形**（同文件两处同内容）按符号锚定才是唯一解。
+
+### 四、快门禁（src/middle ＋ runtime/*.c ＋ .o 路由：official ＋ python_style ＋ 新增夹具 ＋ 位移 A/B）
+
+`/tmp/b635/gate635.log`：`18:50:15Z`→`18:51:41Z` ＝ **86s**、**`GATE_RC=1`**；被测二进制 md5 跑前跑后各戳一次**逐字相同**（`gate_md5_before.txt` ⇔ `gate635.log` 末行＝`ebb3b663db4b63f158af5230d2a4c36e`＝#175/坑 83 守门）。构建纪律＝改前先把 `zetac_b635pre` 存件并戳 md5（**`f548279b…`＝601 的 post 那颗**，跨侧二进制链相接），再 `cargo build --release`（18.71s）。
+
+| 步骤 | 601（上一次在册） | 本批 636（快门禁） | 归因 |
+|---|---|---|---|
+| official | compile **194/194**、compile+link **191/194**、link-only **3** | 194/194、191/194、3 | 三条同名同缺符号名单逐字未动（`integration_all_features`／`quantum_basic`／`selfhost`） |
+| 诊断面 official | 5 文件 / 21 行、`not_measured 0` | 5/21、0 | 未变 |
+| python_style | **418**/2/6/0 xpass | **419**/2/6/0 | **＋1＝恰 `t542`**（633 新钉）；桶和自证 419+2+6+0＝**427** ⇔ `ls tests/python_style/t*.z`＝**427**；红源两条（`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）逐字同名 ⇒ **零新增红**，`GATE_RC=1` 的来源仍是这两枚存量红 |
+| 诊断面 python_style | 271 行 / 126 文件 | **271 / 126** | 逐字相同 ⇒ t542 未新增告警面（597 那次 −5 行／−1 文件的收敛在 600 全量、601 子集、636 子集三代都站得住） |
+| comment_drift / dyn_binding | 0 处复述 ／ 4 条不一致 0 | 同 | 未变 |
+| corpus / jit / truth / knob / swallow / import / empty_stmt / clean_checkout / pysrc / cli_semantics / ignore_rules / mbvar / emit_stable | 40/40・ok 178/total 622・五族 match 575・23/6/22/68・rc=0・42/87/19・25・2・4 | **未跑**（全量专属，下一次＝主线 **640**） | 按 AGENTS 门禁节奏的改动面路由裁剪；**但 `diff` 步虽被 `--skip-diff` 跳过，本批另跑只读**（见§五），因为合并面动的是下型层、差分面是唯一能看语义回归的真值面 |
+
+### 五、差分面：**零代录**＋逐案闭合，且**扩面候选拿到第二个样本**
+
+- 只读 `python3 tools/diff_test.py`（`/tmp/b635/diff_readonly.txt`）＝**`match=575 judged=600 rate=95.8% bad_case=1（总用例 601）`**、`DIFF_RC=2`（来源仍是 `bad_case del_undefined_var` 恒置 rc=2，**待裁**、本批不改判）；`per_cat`＝truth 43/43、str 105/105、container 225/227、numeric 112/134、control 90/91 ⇒ 与盘上基线**逐字相同**；`git status --porcelain tools/baselines/`＝**空** ⇒ `diff_consistency.json` 本批未改、**无 bless 可做**。分母核对（坑 77）＝基线 `total 601` ⇔ `judged 600`（差 1＝bad_case 被排除出分母）。
+- **逐案闭合**＝实时非 match 名 **26**（mismatch 24 ＋ compile `method_name_collision` 1 ＋ bad_case `del_undefined_var` 1）vs 基线 `cases[*].verdict != match` 的 **26** ⇒ **新增 0／消失 0** ⇒ 633 在差分面**零成员**：既没转好也没回归（`match_min 575` 的闸连续第三批以"持平"形态通过）。取值口径按 601 自纠后的 `v['verdict']`（值是 `{cat, verdict}` 字典，坑 66 同族）。脚本＝`/tmp/b635/closure.py`。
+- **601 那条"方法返回链零成员"的扩面候选，本批拿到第二个独立样本**＝差分库 601 例里含 `[[` 的只有 **8** 条（逐个 `print` 行已列：6 条 `v[i][j]` 二级下标／写回、1 条 `m[-1]` 负下标、1 条 `1 if [[]] else 0` 真值），`print(str(` 形**全库只有 1 条**且不含嵌套 ⇒ **`str(嵌套列表)` 这一形在差分面成员 0** ⇒ 633 的收益面（嵌套渲染）在差分面**整体失明**（和 628/630/631 三批的返回链同一形态）。扩面仍归 **#49** 名下，本批不动 #49 行本体。
+- ** ahead-of-merge 一条只作预告**＝旁路 635（**尚未并入**）在册声称把 `gen_numeric_s20260926_001` 整例转 MATCH（575→576＝96.0%）⇒ 并入时 `diff_consistency.json` 要主线代录，属下一批动作。
+
+### 六、主线位移栏：**位移 1 形**，两半都有正证据；顺带一条 #211③ 的结构线索
+
+驱动＝`/tmp/b635/ab635.sh`（表 `/tmp/b635/ab635.tsv`＝**6 行**＝3 夹具 × 2 侧 × 2 趟）；两颗 `zetac` 与两颗产物、四份 IR 同在 `target/release/`（坑 52/68）；仓根两颗跟踪 `.o` 零改动（本批 A/B 期间未重编运行期）。
+
+- **正向半 t542**＝pre 侧六条 print 里**五条打 `<ADDR>` 样堆地址**（两趟地址数值不同＝GC 地址熵，**形状**仍是地址样整数），post 侧六条**逐字对上夹具 expect**（`[[1, 2], [3]]`／`[[[1]]]`／`[['a', 'b'], ['c']]`／`[[True, False]]`／`[[1, 2], [3]]`／`[1, 2]`）；第 6 条 `print(x[0])` 两侧本就对（平面 int 列表的 tag 走 `_typed`，551/601 的基础设施已通，不是 633 的功劳）⇒ 位移**不是整例转绿**：t542 有 **6 处** dumps 调用站点，pre 侧**全部**是 `call i64 @py_json_dumps_vec_typed(…, i64 0)`（6 条），post 侧 **5 处**改走 `@py_json_dumps_vec_nested`、**1 处**仍是 `_typed`（`print(x[0])` 的平面 int 列表）。
+- **IR 面（单模块 `--emit-llvm`）**＝t542 两侧 **1396 → 1403 行（＋7）**、变判 **41 行**＝**几何＋分派两处都动**（与 597/601 的"行数不变、只换调用名"不同形）：调用名换 `py_json_dumps_vec_typed(i64 %139, i64 0)` → `py_json_dumps_vec_nested(i64 %139, i64 ptrtoint (ptr @str_lit.38 to i64))`，且**新增四条 tag 字面量**（`"4,0"`／`"4,4,0"`／`"4,2"`／`"4,3"`）挤进 `str_lit` 编号池（原 `.38–.43` 整体后移）。＋7 行 ⇔ 4 条新字面量＋声明行。
+- **负对照半**＝`t540`（630 夹具）与 `t527`（595/596 在册负对照）：各侧 2 趟 stdout **同侧逐字节相同、跨侧逐字节相同**；IR 两侧 **变判 0 行**（t540 1371 行、t527 1273 行，行数也没动）⇒ **位移面封闭在"嵌套列表渲染"这一形**，正证据成立。
+- **语料级 301 驱动 A/B＝本批未复跑**（600/601 各在册一次＝位移 0；语料复跑挂下一次全量＝**640**）。**不构成矛盾的一条**＝旁路 633 在册的"6/6 rc=0＋masked stdout 逐字同＝位移 0"是**同一改动面在 301 语料驱动**上的 n=3/侧读数（其台账原文＝「A/B 301 驱动 n=3/侧、两侧各用各自 runtime」），与主线这条**夹具级**收益读数不同面；语料里 `str(嵌套列表)` 成员是否非零，属 §五 的 #49 扩面问题，不在此判。
+- **结构线索（折进 #211③ 名下，不新开任务号）＝双写义务缺位这轮零损害**：新符号 `py_json_dumps_vec_nested` 只出现在 `src/middle/mir/gen.rs:9873/10213` 与 `runtime/tokio_runtime_stub.c`，**不在**手写 declare 清单（`src/backend/codegen/codegen.rs:986`、`src/backend/codegen/runtime_decls_registry.rs:103-104` 只有 `_vec`／`_vec_typed`）⇒ 走 `get_function`（`codegen.rs:2621`）兜底。**实拍＝**t542 的 post IR 里 `declare i64 @py_json_dumps_vec_nested(i64, i64)` 落在 **1399 行**、而最后一个 `define` 在 **1088 行**＝不在头部声明块、在函数体之后 ⇒ 兜底路径确证；形参 `(i64,i64)` 与 C 侧一致、链接 rc=0、6/6 运行 rc=0、post 那颗 .o 有符号（§二）⇒ 本轮无害，但兜底靠调用点实参反推签名，若某日实参数量／型别与 C 侧不符会静默错值（#211③ 的原命题）。
+- **未做**＝`--dump-mir` 面（收益在分派选择＋字面量池，IR 41 行已定位，未取 MIR）。
+
+### 七、编号／提交面／队头／产物
+
+- **提交面**＝`5f1cbf2d`（merge 633–634，**152/20 四文件＋一颗 .o**）→ `96ab871c`（fix：`ABI.md` 25/25 ＋ `abi_anchors.tsv` 33/33，message 写作"批次 635"见§〇 对照）→ 记录批随本行入库；**不 push**（目标级裁定覆盖 AGENTS 收尾推送）。
+- **OPEN 净增 0**＝`grep -cE '^\| #' backlog.md` 收尾复算仍 **43**。
+- **队头**＝**下一批先并入旁路 635**（`e4d9afa5` 动 `src/middle/mir/gen.rs` 的 print 层拆支 ＋ `t543` ⇒ python_style 预期 420、差分基线代录 576、锚点又要搬家）→ **#211①／#212（nunique 兄弟列污染，真修需 `runtime/` 授权）** → `str_trim` 族（需 `runtime/py_additions.c` 语义真修授权）→ **#167① 修法三形甲／乙／丙（待裁）**／**#52 余项** → #182 → t494／#213⑧ → #48。下一次全量＝主线 **640**（含语料级位移复跑）。待用户裁决累计 **10 条**（号位撞车的让号属主线侧所有权范围内的登记动作，已自行收下并在此入册，不另立待裁项）。
+- **产物**＝`/tmp/b635/`（改前快照 `ABI.md.bak`／`abi_anchors.tsv.bak`、`md5_pre.txt`、`o_md5_{pre,post}.txt` 与重取的 `o_attr.txt`、`anch_{pre,post,final,final2}.txt`、`rebind_{dry,real}.txt`、`build635.log`、`gate635.log`、`gate_md5_before.txt`、`mergebase_numstat.txt`／`twodot_numstat.txt`、`ab635.sh`／`ab635.tsv`、`closure.py`、`diff_readonly.txt`、`o_pre_tokio.o`／`o_pre_zeta.o`／`o_cl_tokio.o`、`roadmap_636.md`／`worktree_636.md`／`backlog_636.md`／`splice_636.py`）。**收尾清理**＝`target/release/` 内本批存件 `zetac_b635pre` 与 `ab635_*`（`.bin`／`.bin.o`／`.ll`／`.cc`）随记录笔删除。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
