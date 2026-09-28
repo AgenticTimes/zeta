@@ -24863,6 +24863,56 @@ AGENTS.md 明文「全量门禁两侧不并发」⇒ 这次是**旁路侧破的*
 - 仍存缺口：0 笔成交的症状未变（#211／#212 链）；待用户裁决累计 **10 条**（不变）。
 
 
+## 批次 638（2026-09-29，**3.2 Lowering／名绑定族·批次 438 名下"未量三形"定价批（只量不动）**，会话任务 #173／harness #245）
+
+### 〇、这一批的形状：三形各自先量成员数，结果三形都是"代码事实成立、实测成员 0"
+
+- **零代码改动**＝`git status` 收尾只剩会话开始前就在的三处（`AGENTS.md`／`.ouroboros/work.md`／`tools/corpus_baseline.py`，都不属本批）⇒ 无 fix 笔、只有本记录笔；被测二进制全程未重编（`target/release/zetac` md5 从头到尾 `55a366a9…`＝637 的 post，两次各戳）。
+- **门禁不适用并写明理由**（不是"少验收"）：本批改动面为空 ⇒ AGENTS 的路由表没有对应行；全部测量走只读标志（`--dump-mir`／`--emit-llvm`／`--report-stubs`），跑门禁只会重复 637 已在册的读数。位移 A/B 同样不适用——没有 pre／post 两颗之分。
+
+### 一、口径先立（本轮两次打到假零成员，都当场复算纠正）
+
+- canonical dump 的 `exprs:` 段是 `{:#?}` **多行**打印 ⇒ `FuncAddr(` 与字符串之间有换行，单行 grep 必失（我第一次就读成 0）。正确正则＝`FuncAddr\(\s*"((?:[^"\\]|\\.)*)"`。
+- 调用点目标在这个 dump 里**不是** `Call("…")` 形态，而是语句的 `func:` 字段 ⇒ 拿 `Call\(` 计数得到的 0 是**假零成员**。当场实拍＝`mir/jq_wufu_local.mir` 有 5,054 条 `func:` 缩进行、`Call(` 零条。
+- 形参型别**不在** `param_indices: [("&self", 1)]` 这一行里，要按 id 回 `type_map:` 段查（`ParamInit { param_id, arg_index }` 没有 `ty` 字段）。
+
+### 二、① FuncAddr 上的 `{ty}::method` 拼写（438 只改了 Call／VoidCall 两形）
+
+- 量（40 个语料文件全量 `--dump-mir`，存件 `/tmp/b638/mir/` 41M，`readings_final.txt`）＝**FuncAddr 1,140 条，带 `::` 的 0 条**；未定义的 FuncAddr 名 0 条。
+- 尺子可达的正证据（同一批文件、同一份存件）＝`func:` 字段共 **81,476 条，其中带 `::` 的 7,780 条** ⇒ "类别名::成员"这一拼写在语料里大量存在，但**从不以取地址形出现**。
+- 后端事实（为什么是零成员而不是"测不到"）＝`codegen.rs:6872` 的 FuncAddr 降低走 `get_function → self.fns → 兜底 get_or_declare_function(name,&[],0)`，declare 不 define ⇒ 一旦命中就链接期 `Undefined symbols`。所以这条漏绑**若有成员必然出声**，全语料零成员＝438 的 `rebind_nested_calls` 只扫 Call／VoidCall 是**零损害的覆盖面缺口**，不开真修批、不动判据。
+- `gen.rs:4711` 的枚举守卫（`name.contains("::")` → `enum_unit_variant_index`）注释里的历史受害者是 `FuncAddr("Color::Green")` 那类**枚举单元变体**，与 `{ty}::method` 不同形，其既有覆盖不变。
+
+### 三、② 非嵌套（普通 impl）路径的 `&mut self` 接收者
+
+- 代码事实两条都成立：
+  - `gen.rs:898 is_receiver_param` 只认 `"self" | "&self" | "&mut self"`，**缺裸 `"mut self"` 臂**，而 `top_level.rs:52-67` 会产出四种拼写；
+  - `gen.rs:1629` 用 `name.trim_start_matches('&') == "self"` 把接收者填成 `Type::Named(current_class)` ⇒ `&mut self` 剥 `&` 得 `"mut self"`，**这一支确实落空**。
+- 后果测不出来（三口径，`recv2/self_ty_final.txt`＋`readings_mutself.txt`）：
+  1. **真源扫描**＝仓内含 self 形参的 6 个 `.z`、42 条 self 形参行（`&self` 14／`&mut self` 28）；按 id 回 `type_map:` 取型别＝**两形同为 `Named("Self")`**（`&self` 14/14、`&mut self` 26/28），余下 2 条是单态化产物（`generate_inst_i64`／`parse_program_inst_i64`），不是 `:1629` 落空的表现。`:1629` 落空没造出差异，是因为 `Self` 由 `resolver.rs:5144` 的 `subst["Self"] = key.type_args[0]` 从另一条路填入。
+  2. **损害面**＝这 6 个文件编译 rc 全 0、**W1011 替身读 0 行**（W1010 7 行落在 `minimal_compiler.z`／`test_v0_5_0_snippet.z`，属签名面、与字段布局无关）。
+  3. **语料侧裸 `mut self` 成员数**＝40 个文件 MIR 的 self 形参拼写只有一种＝`&mut self` **4,192 条**，`mut self`／`&self`／`self` 全 **0 条** ⇒ `is_receiver_param` 缺的那一臂零成员。
+- 结论：两处缺臂**只入册、不开批**（成员 0／后果 0），并把上面三条口径留给未来的复测。
+
+### 四、③ `runtime/unavailable_stubs.c:152-153` 两个手工注册名——先纠正判据用法，再三口径测引用
+
+- **`--report-stubs` 结构上点不到这两个名**（不是"这次没命中"）：报告器的标记集＝`pylib.rs:744 all_stub_symbols()`＝registry `stub=1` ∪ pylib `# stub:` 标记，而这两个名字**只存在于 `runtime/unavailable_stubs.c`**（全仓 `src/` 除 `gen.rs:907-915`／`:969` 的注释外零命中）⇒ `stub_call_match`（`pylib.rs:841`）那两张索引表里没有这个键。原在册要求"要 `--report-stubs` 点名"**判据本身用不了**，改走引用测。
+- 机制活着的正证据（防把"够不到"读成"报告器坏了"）＝宿主文件 `jq_wufu_local.py` 的 `--report-stubs` 印 `stub report: 16 fake-value stub(s) reached by this program`（`numpy__isnan` ×12 等在列）＋ `bare-member report: 65 member call(s) degraded to a bare symbol, bound only at link time`。
+- 引用测三口径（全为 0）：
+  1. MIR＝40 文件里 `NautilusJqStrategy___jq_bar_types`／`NautilusJqStrategy__subscribe_bars` **0 条**；`jq_bar_types` 全名 **0 条**，`subscribe_bars` 只以 `[dynamic]_Impl::subscribe_bars` 出现 **4 次**（`_drv_accept_409` ×2、`jq_wufu_local` ×2）。
+  2. **IR＝决定性的一口**＝那两个宿主文件的 `--emit-llvm`（rc 均 0，存件 `/tmp/b638/ir/{_drv_accept_409,jq_wufu_local}.ll`＝4.5M／4.8M）里两个 mangled 名**零引用**；那 4 条动态调用现在降到 **`zeta_dyn_missing__dynamic__Impl__subscribe_bars`**（批次 428 的"按名抛异常"桩，每个文件 3 处）。
+  3. 报告器覆盖面＝见上，两名不在标记集 ⇒ "无人引用"只能靠 1／2 定。
+- 结论：438（嵌套类名重绑）＋ 428（幽灵按名抛异常）之后，**`:152-153` 这两条桩已无引用＝可删项**。但 `runtime/unavailable_stubs.c` 在"永不出手"清单内、删它属 `runtime/` 语义改动 ⇒ **本批不删，登记为第 11 条待裁**。
+
+### 五、账务／队头／产物
+
+- 提交面＝只有本记录笔（零代码改动）。#173 的三形**全部闭**；438 名下仍未收的只剩 #174（同函数体两个同名嵌套类的 `closure_vars` 串线风险，成员数仍未量）。
+- 待用户裁决累计 **11 条**（637 是 10）＝新增"`unavailable_stubs.c:152-153` 两条无引用桩是否删"。
+- 小夹具路线按止损规则放弃（`f1_nested_fa.z`、`fa/s1–s3` 三形）：接收者本就被 struct 布局判退化、两形输出逐字相同，且 `tr -d ' &'` 让 `&self`／`self` 两个 slug 互相覆盖 ⇒ **在册判定＝这三份存件作废**，②的读数改由真源（6 个 `.z`）＋语料（40 文件）两口径给。
+- 队头不变：**#211①／#212**（需 `runtime/` 授权）→ `str_trim` 族（需 `runtime/py_additions.c` 授权）→ **#167① 修法三形**（待裁）／**#52 余项** → #182 → t494／#213⑧ → #48；**下一次全量门禁＝主线 640**。
+- 产物＝`/tmp/b638/`：`corpus_files.txt`（40 文件清单）、`mir/*.mir|*.err`（全量 `--dump-mir` 存件）、`readings_final.txt`（①）、`readings_mutself.txt`（②语料拼写）、`recv2/{rows.json,self_ty_rows.json,self_ty_final.txt,verify.txt,tl.mir}`（②真源 42 行表）、`ir/*.ll|*.out|*.err`（③两颗 IR）、作废的 `f1_nested_fa.z` 与 `fa/`。
+
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
