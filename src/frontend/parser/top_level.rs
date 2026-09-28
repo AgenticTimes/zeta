@@ -1432,10 +1432,16 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     // inheritance pass adopts the base's ctor/fields for exactly this
     // shape (no own `__init__`, single base).
     let mut impl_attrs: Vec<String> = Vec::new();
-    if !has_init {
-        if let Some(b) = &base_name {
-            impl_attrs.push(format!("__bases__:{}", b));
-        }
+    if let Some(b) = &base_name {
+        // Marker for EVERY based class; the resolver's inheritance pass
+        // decides adoption (no own fields/ctor) vs field-merge only.
+        impl_attrs.push(format!("__bases__:{}", b));
+    }
+    if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
+        eprintln!(
+            "[P603] parse_class: name={} has_init={} impl_attrs={:?}",
+            name, has_init, impl_attrs
+        );
     }
     let impl_node = AstNode::ImplBlock {
         concept: String::new(),

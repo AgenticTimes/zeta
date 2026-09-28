@@ -38,6 +38,10 @@ pub struct Resolver {
     /// on the ImplBlock attrs, no own `__init__`) — consumed by
     /// `inherit_class_members` after registration completes.
     pending_inherits: std::cell::RefCell<Vec<(String, String)>>,
+    /// Batch 602/603: class -> first base (from `__bases__:` ImplBlock attrs),
+    /// recorded for EVERY class with a base; consumed by the gen-side
+    /// base-chain method lookup via `class_bases()`.
+    class_bases: std::cell::RefCell<HashMap<String, String>>,
     pub cached_mirs: HashMap<String, Mir>,
     pub mono_mirs: HashMap<MonoKey, Mir>,
     pub borrow_checker: RefCell<BorrowChecker>,
@@ -132,6 +136,7 @@ impl Resolver {
         let mut r = Self {
             impls: HashMap::new(),
             pending_inherits: std::cell::RefCell::new(Vec::new()),
+            class_bases: std::cell::RefCell::new(HashMap::new()),
             cached_mirs: HashMap::new(),
             mono_mirs: HashMap::new(),
             borrow_checker: RefCell::new(BorrowChecker::new()),
@@ -1008,6 +1013,9 @@ impl Resolver {
                         self.pending_inherits
                             .borrow_mut()
                             .push((ty.clone(), b.to_string()));
+                        self.class_bases
+                            .borrow_mut()
+                            .insert(ty.clone(), b.to_string());
                     }
                 }
                 // Register functions with qualified names
@@ -2319,10 +2327,6 @@ impl Resolver {
     /// before `refine_ctor_field_types`.
     pub fn inherit_class_members(&mut self) {
         let pairs = self.pending_inherits.borrow().clone();
-        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
-            eprintln!("[P602] pairs={:?} ({} base ctors in funcs)", pairs,
-                pairs.iter().filter(|(_, b)| self.funcs.contains_key(b)).count());
-        }
         for (ty, base) in pairs {
             let base_params = self.funcs.get(&base).map(|(p, _, _)| p.clone());
             let base_fields: Vec<(String, String)> = match self.type_decls.get(&base) {
@@ -2331,6 +2335,30 @@ impl Resolver {
                 }
                 _ => Vec::new(),
             };
+            // Batch 603: an own-init subclass gets FIELD-MERGE ONLY (base
+            // fields it does not declare itself — slots for super-written
+            // values); the ctor ADOPTION below is for the no-own-init shape
+            // (empty own fields + empty params = the synthesized stand-in).
+            let own_fields: Vec<(String, String)> = match self.type_decls.get(&ty) {
+                Some(crate::middle::mir::r#gen::TypeDecl::Struct { fields, .. }) => {
+                    fields.clone()
+                }
+                _ => Vec::new(),
+            };
+            if !own_fields.is_empty() {
+                if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                    fields: cf,
+                    ..
+                }) = self.type_decls.get_mut(&ty)
+                {
+                    for (f, s) in &base_fields {
+                        if !cf.iter().any(|(x, _)| x == f) {
+                            cf.push((f.clone(), s.clone()));
+                        }
+                    }
+                }
+                continue;
+            }
             let Some(bp) = base_params else { continue };
             let bp_texts: Vec<(String, String)> = bp
                 .iter()
@@ -2475,6 +2503,16 @@ impl Resolver {
                 }
             }
         }
+    }
+
+    /// Batch 603: class -> first base, for the gen-side base-chain method
+    /// lookup (inherited methods: `d.greet()` on a Dog with greet on Animal).
+    pub fn class_bases(&self) -> HashMap<String, String> {
+        let m = self.class_bases.borrow().clone();
+        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
+            eprintln!("[P603] class_bases() -> {:?} ({} entries)", m, m.len());
+        }
+        m
     }
 
     /// PY-A: parameter names per function, for keyword-argument binding.
@@ -3808,6 +3846,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_py_user_modules(self.py_user_modules.borrow().clone())
             .with_py_module_paths(self.py_module_paths.borrow().clone())
             .with_module_global_types(self.module_global_types())
+            .with_class_bases(self.class_bases())
             .with_source_file(self.source_file.borrow().clone())
             .with_argparse_kinds(self.argparse_kinds.borrow().clone())
             .with_param_defaults(

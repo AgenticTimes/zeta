@@ -208,6 +208,9 @@ pub struct MirGen {
     /// PY-A: static type of each module-level global, so env reads keep the
     /// handle tag (`q = queue.Queue()` then `q.put(x)` inside a function).
     module_global_types: HashMap<String, Type>,
+    /// Batch 603: class -> first base (resolver `__bases__` markers) — the
+    /// base-chain walk for inherited-method dispatch.
+    class_bases: HashMap<String, String>,
     /// PY-A: set while lowering the replacement closure of `re.sub`, so its
     /// parameter is typed as a Match (`m.group(0)` must dispatch).
     re_repl_param: bool,
@@ -295,6 +298,7 @@ impl MirGen {
             py_module_paths: std::collections::HashMap::new(),
             symbol_renames: HashMap::new(),
             module_global_types: HashMap::new(),
+            class_bases: HashMap::new(),
             re_repl_param: false,
             current_class: None,
             nested_class_aliases: Vec::new(),
@@ -321,6 +325,12 @@ impl MirGen {
     /// PY-A: module-global name → static type (see the field docs).
     pub fn with_module_global_types(mut self, types: HashMap<String, Type>) -> Self {
         self.module_global_types = types;
+        self
+    }
+
+    /// Batch 603: resolver's class->base map (see `class_bases`).
+    pub fn with_class_bases(mut self, bases: HashMap<String, String>) -> Self {
+        self.class_bases = bases;
         self
     }
 
@@ -1055,6 +1065,31 @@ impl MirGen {
             if self.func_ret_types.contains_key(&cand) {
                 return Some(cand);
             }
+        }
+        // Batch 603: INHERITED methods — walk the base chain (`Dog` ->
+        // `Animal`) while the direct class misses. The W-table/registry
+        // paths below cannot see user classes, so an inherited call
+        // (`d.greet()` with greet on Animal) otherwise degraded to an
+        // I64-typed generic call and printed the handle.
+        let mut cur = tn.rsplit("__").next().unwrap_or(tn).to_string();
+        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
+            eprintln!(
+                "[P603] candidate walk tn={} method={} bases={:?} fret={}",
+                tn,
+                method,
+                self.class_bases.get(&cur),
+                self.func_ret_types.contains_key(&format!("Animal::{}", method))
+            );
+        }
+        for _ in 0..8 {
+            let Some(base) = self.class_bases.get(&cur) else {
+                break;
+            };
+            let cand = format!("{}::{}", base, method);
+            if self.func_ret_types.contains_key(&cand) {
+                return Some(cand);
+            }
+            cur = base.clone();
         }
         None
     }
