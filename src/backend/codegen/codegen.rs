@@ -7442,11 +7442,39 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         recv_classes.push(tn.clone());
                     }
                 }
+                // Batch 597: when the base's OWN declared struct declares the
+                // field as DATA, the plain field load wins and the root-class
+                // @property fallback below must not fire — it otherwise claims
+                // same-named methods from UNRELATED classes for an
+                // Engine-typed receiver (`self.engine.power` with Car::power
+                // called on the Engine handle → SIGSEGV;
+                // class_cross_ref_silent). The fallback stays for genuinely
+                // unknown base types (batch 295's lost-type case).
+                let base_declares_field = self
+                    .current_type_map
+                    .as_ref()
+                    .and_then(|tm| tm.get(base))
+                    .and_then(|t| match t {
+                        Type::Named(tn, _) => {
+                            let plain = tn.rsplit("__").next().unwrap_or(tn).to_string();
+                            let key_like = format!("struct_{}_", plain);
+                            Some(
+                                self.struct_defs
+                                    .iter()
+                                    .any(|(k, fs)| {
+                                        k.starts_with(&key_like)
+                                            && fs.iter().any(|f| f == field)
+                                    }),
+                            )
+                        }
+                        _ => None,
+                    });
                 if let Some(crate::middle::mir::mir::MirExpr::FieldAccess {
                     base: pbase,
                     field: pfield,
                 }) = exprs.get(base)
                 {
+                    if base_declares_field != Some(true) {
                     let mut cur: u32 = *pbase;
                     for _ in 0..6 {
                         match exprs.get(&cur) {
@@ -7503,6 +7531,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                             return self.i64_type.const_int(0, true).into();
                         }
                     }
+                }
                 }
                 // Handle field access for structs
                 let base_val = self.gen_expr(&exprs[base], exprs, None);
