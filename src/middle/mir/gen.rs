@@ -4607,6 +4607,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     self.type_map.insert(slot_id, ty);
                     return slot_id;
                 }
+                // Batch 593: a nested `def` hoisted as a closure — the name
+                // used as a VALUE (`return inner`; `f = inner`) must produce
+                // the synthetic function's address, exactly like a lambda
+                // value. Without this the read fell to the implicit-declare
+                // slot and `return inner` handed back an uninitialized word
+                // (indirect call → SIGBUS; closure_nonlocal).
+                if let Some(hoisted) = self
+                    .closure_vars
+                    .get(name.as_str())
+                    .cloned()
+                    .or_else(|| self.hoisted_names.get(name.as_str()).cloned())
+                {
+                    let id = self.next_id();
+                    self.exprs.insert(id, MirExpr::FuncAddr(hoisted));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
 
                 // Unit-variant path of a registered enum (e.g. `Color::Green`)
                 // lowers to its variant tag (integer discriminant).
