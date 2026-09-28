@@ -1319,6 +1319,43 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
             }
         }
     }
+    // Batch 608: explicit base-ctor call `B.__init__(self, a, b)` — collect
+    // per-field inits (field <- the arg's own Var name). The whitelist below
+    // DROPS these statements, so base-ctor initialized fields never existed
+    // on the subclass (d.name had no slot/value). Non-Var args skipped.
+    for st in &init_stmts {
+        if let AstNode::ExprStmt { expr } = st {
+            if let AstNode::Call {
+                receiver: Some(recv),
+                method: m,
+                args: cargs,
+                ..
+            } = &**expr
+            {
+                if m == "__init__"
+                    && !cargs.is_empty()
+                    && base_name.is_some()
+                {
+                    if let (AstNode::Var(bn), AstNode::Var(selfv)) =
+                        (&**recv, &cargs[0])
+                    {
+                        if selfv == "self" && bn == base_name.as_deref().unwrap_or("") {
+                            for a in &cargs[1..] {
+                                if let AstNode::Var(f) = a {
+                                    if !fields.iter().any(|(x, _)| x == f) {
+                                        fields.push((f.clone(), "i64".to_string()));
+                                    }
+                                    if !field_inits.iter().any(|(x, _)| x == f) {
+                                        field_inits.push((f.clone(), (*a).clone()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Constructor fn `Name(params) -> Name { return Name { field: init, ... } }`
     //

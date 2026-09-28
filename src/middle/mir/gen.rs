@@ -13099,6 +13099,11 @@ call, no NULL-handle dereference).",
                         ..
                     }) = self.type_decls.get_mut(base_func)
                     {
+                        let pnames = self
+                            .func_param_names
+                            .get(base_func)
+                            .cloned()
+                            .unwrap_or_default();
                         for (i, aid) in arg_ids.iter().enumerate() {
                             let concrete = match self.type_map.get(aid) {
                                 Some(Type::Str) => "str",
@@ -13107,7 +13112,12 @@ call, no NULL-handle dereference).",
                                 Some(Type::Bool) => "bool",
                                 _ => continue,
                             };
-                            if let Some((_, dt)) = decl_fields.get_mut(i) {
+                            // Batch 608: refine by PARAM NAME (positional
+                            // fallback) — see the generic-call site.
+                            let target = pnames.get(i).and_then(|pn| {
+                                decl_fields.iter().position(|(f, _)| f == pn)
+                            }).unwrap_or(i);
+                            if let Some((_, dt)) = decl_fields.get_mut(target) {
                                 if dt.as_str() == "i64" {
                                     *dt = concrete.to_string();
                                 }
@@ -13219,6 +13229,11 @@ call, no NULL-handle dereference).",
                         ..
                     }) = self.type_decls.get_mut(base)
                     {
+                        let pnames = self
+                            .func_param_names
+                            .get(base)
+                            .cloned()
+                            .unwrap_or_default();
                         for (i, aid) in arg_ids.iter().enumerate() {
                             let concrete: Option<String> = match self.type_map.get(aid) {
                                 Some(Type::Str) => Some("str".to_string()),
@@ -13239,7 +13254,15 @@ call, no NULL-handle dereference).",
                                 _ => None,
                             };
                             if let Some(concrete) = concrete {
-                                if let Some((_, dt)) = decl_fields.get_mut(i) {
+                                // Batch 608: refine by PARAM NAME (field ==
+                                // param by the `self.x = x` convention) with a
+                                // positional FALLBACK — the positional form
+                                // refined `legs` for `Dog("Rex")` (args map to
+                                // PARAMS, not field order).
+                                let target = pnames.get(i).and_then(|pn| {
+                                    decl_fields.iter().position(|(f, _)| f == pn)
+                                }).unwrap_or(i);
+                                if let Some((_, dt)) = decl_fields.get_mut(target) {
                                     if dt.as_str() == "i64" || dt.as_str() == "map" {
                                         *dt = concrete;
                                     }
