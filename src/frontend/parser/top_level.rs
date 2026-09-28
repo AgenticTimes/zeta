@@ -1151,6 +1151,11 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     // The resolver owns the base param->field map, so it binds these to the
     // base ctor's params positionally at adoption time — Var args keep the
     // 608 field-slot conflation for the own-`__init__` path.
+    // Batch 622: `super().__init__(·)` — the zero-arg `super` builtin as the
+    // receiver, NO self in the args (the explicit form passes self; this one
+    // doesn't). Rewritten to the class's FIRST base (MRO-lite head, the same
+    // class a chained `A.__init__` ladder names level by level), so the
+    // resolver's binding/substitution machinery treats both forms alike.
     let mut baseargs_markers: Vec<String> = Vec::new();
     for st in &init_stmts {
         if let AstNode::ExprStmt { expr } = st {
@@ -1161,55 +1166,67 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                 ..
             } = &**expr
             {
-                if m == "__init__"
-                    && !cargs.is_empty()
-                {
-                    if let AstNode::Var(selfv) = &cargs[0] {
-                        if selfv == "self" {
-                            let bname = match &**recv {
-                                AstNode::Var(v) => Some(v.clone()),
-                                _ => None,
-                            };
-                            let mut enc: Vec<String> = Vec::new();
-                            for a in &cargs[1..] {
-                                match a {
-                                    AstNode::Var(f) => {
-                                        if !fields.iter().any(|(x, _)| x == f) {
-                                            fields.push((f.clone(), "i64".to_string()));
-                                        }
-                                        if !field_inits.iter().any(|(x, _)| x == f) {
-                                            field_inits.push((f.clone(), (*a).clone()));
-                                        }
-                                        enc.push(format!("v{}", f));
-                                    }
-                                    AstNode::Lit(i) => enc.push(format!("i{}", i)),
-                                    AstNode::FloatLit(x) => enc.push(format!("f{}", x)),
-                                    AstNode::StringLit(s) => {
-                                        enc.push(format!("s{}", s.replace('\u{1f}', " ")))
-                                    }
-                                    AstNode::Bool(b) => {
-                                        enc.push(format!("b{}", if *b { 1 } else { 0 }))
-                                    }
-                                    AstNode::UnaryOp { op, expr: e } => match (&**op, &**e) {
-                                        (o, AstNode::Lit(i)) if o == "-" => {
-                                            enc.push(format!("i-{}", i))
-                                        }
-                                        (o, AstNode::FloatLit(x)) if o == "-" => {
-                                            enc.push(format!("f-{}", x))
-                                        }
-                                        _ => enc.push("x".to_string()),
-                                    },
-                                    _ => enc.push("x".to_string()),
-                                }
+                if m == "__init__" {
+                    // (base name, effective arg slice) for this call.
+                    // Dispatch on the RECEIVER first: `super().__init__(·)`
+                    // (batch 622) means the class's FIRST base and carries
+                    // its args verbatim (no self element); the explicit
+                    // `Base.__init__(self, ·)` form keeps the self-strip.
+                    let target: Option<(&String, &[AstNode])> = match &**recv {
+                        AstNode::Call {
+                            receiver: None,
+                            method: sm,
+                            args: sargs,
+                            ..
+                        } if sm == "super" && sargs.is_empty() => {
+                            base_list.first().map(|b| (b, &cargs[..]))
+                        }
+                        AstNode::Var(v) => match cargs.first() {
+                            Some(AstNode::Var(selfv)) if selfv == "self" => {
+                                Some((v, &cargs[1..]))
                             }
-                            if let Some(b) = bname {
-                                baseargs_markers.push(format!(
-                                    "__baseargs__:{}:{}",
-                                    b,
-                                    enc.join("\u{1f}")
-                                ));
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some((bname, call_args)) = target {
+                        let mut enc: Vec<String> = Vec::new();
+                        for a in call_args {
+                            match a {
+                                AstNode::Var(f) => {
+                                    if !fields.iter().any(|(x, _)| x == f) {
+                                        fields.push((f.clone(), "i64".to_string()));
+                                    }
+                                    if !field_inits.iter().any(|(x, _)| x == f) {
+                                        field_inits.push((f.clone(), (*a).clone()));
+                                    }
+                                    enc.push(format!("v{}", f));
+                                }
+                                AstNode::Lit(i) => enc.push(format!("i{}", i)),
+                                AstNode::FloatLit(x) => enc.push(format!("f{}", x)),
+                                AstNode::StringLit(s) => {
+                                    enc.push(format!("s{}", s.replace('\u{1f}', " ")))
+                                }
+                                AstNode::Bool(b) => {
+                                    enc.push(format!("b{}", if *b { 1 } else { 0 }))
+                                }
+                                AstNode::UnaryOp { op, expr: e } => match (&**op, &**e) {
+                                    (o, AstNode::Lit(i)) if o == "-" => {
+                                        enc.push(format!("i-{}", i))
+                                    }
+                                    (o, AstNode::FloatLit(x)) if o == "-" => {
+                                        enc.push(format!("f-{}", x))
+                                    }
+                                    _ => enc.push("x".to_string()),
+                                },
+                                _ => enc.push("x".to_string()),
                             }
                         }
+                        baseargs_markers.push(format!(
+                            "__baseargs__:{}:{}",
+                            bname,
+                            enc.join("\u{1f}")
+                        ));
                     }
                 }
             }

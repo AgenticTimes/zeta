@@ -1,0 +1,60 @@
+// 批次 622（旁路 cleanup）：super().__init__(·) 链——继承余半末格。
+// `super()` 零参内建作为接收者时实参里没有 self（显式形有），原 608 收集
+// 的 cargs[0]==self 门直接跳过 ⇒ 基字段对全缺、positional 写错位（实拍：
+// 单级 2/2、A→B→C 深链 3/3/3——都读到末字段的槽）。改按接收者先分发：
+// super 臂＝类首基（MRO-lite 头，等价逐级显式梯子）、实参全量带走；
+// Var 臂保持 self-strip。标记/绑定/替换/重建全部复用 620/621 的
+// __baseargs__ 机制——深链的每一级在 resolver 的 first-seen 序上先重建
+// 再被上级当基读，链式自然成立。边界（不在本夹具、另行登记）：
+// super().method() 非 init 委托＝链接期 `_super` 未定义（本批未收）。
+class A:
+    def __init__(self):
+        self.x = 1
+class B(A):
+    def __init__(self):
+        super().__init__()
+        self.y = 2
+class C(B):
+    def __init__(self):
+        super().__init__()
+        self.z = 3
+
+class Animal:
+    def __init__(self, name):
+        self.name = name
+class Dog(Animal):
+    def __init__(self):
+        super().__init__("Rex")
+        self.legs = 4
+
+class P:
+    def __init__(self, n):
+        self.x = n
+class Q(P):
+    def __init__(self):
+        P.__init__(self, 7)
+        self.y = 2
+class R(Q):
+    def __init__(self):
+        super().__init__()
+        self.z = 3
+
+c = C()
+print(c.x)
+print(c.y)
+print(c.z)
+d = Dog()
+print(d.name)
+print(d.legs)
+r = R()
+print(r.x)
+print(r.y)
+print(r.z)
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: Rex
+// expect: 4
+// expect: 7
+// expect: 2
+// expect: 3
