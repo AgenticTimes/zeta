@@ -12396,22 +12396,110 @@ call, no NULL-handle dereference).",
                                 {
                                     return self.lower_expr(&AstNode::FString(parts));
                                 }
-                                // Named fields (`"{a}".format(a=…)`) and index
-                                // mismatches cannot be rewritten — say so here
-                                // instead of leaving a bare `format` symbol for
-                                // the linker to report.
-                                static WARNED_FMT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-                                WARNED_FMT.get_or_init(|| {
-                                    eprintln!(
-                                        "error: str.format on a literal template could not be \
-                                         rewritten (named fields / index out of range) — \
-                                         the call will link against an undefined `format` symbol"
-                                    );
+                                // Named fields (`"{a}".format(a=…)`) with no
+                                // positional fallback still cannot be rewritten —
+                                // say so here instead of leaving a bare `format`
+                                // symbol for the linker to report.
+                                if !named.is_empty() {
+                                    static WARNED_FMT: std::sync::OnceLock<()> =
+                                        std::sync::OnceLock::new();
+                                    WARNED_FMT.get_or_init(|| {
+                                        eprintln!(
+                                            "error: str.format with named fields could not be \
+                                             rewritten — the call will link against an \
+                                             undefined `format` symbol"
+                                        );
+                                    });
+                                }
+                            }
+                            // Batch 588: a receiver that is NOT a literal (or a
+                            // literal whose rewrite failed with only positional
+                            // args left) — the template lives at runtime, so
+                            // render every argument by its own type (the same
+                            // `lower_to_string` an f-string part uses), pass a
+                            // Vec<str> plus the template to the runtime shim.
+                            // `{name}` without named args renders literally
+                            // (CPython raises; fail-soft corner, batch 588).
+                            let mut named: Vec<(String, AstNode)> = Vec::new();
+                            let mut positional: Vec<AstNode> = Vec::new();
+                            for a in args {
+                                match a {
+                                    AstNode::Call { method: km, args: ka, .. }
+                                        if km == "__kwarg__" && ka.len() == 2 =>
+                                    {
+                                        if let AstNode::StringLit(n) = &ka[0] {
+                                            named.push((n.clone(), ka[1].clone()));
+                                        }
+                                    }
+                                    _ => positional.push(a.clone()),
+                                }
+                            }
+                            if named.is_empty() {
+                                if positional.is_empty() {
+                                    // `t.format()` — a template is returned
+                                    // unchanged when no argument is consumed;
+                                    // CPython only raises when the template
+                                    // still holds a replacement field (corner).
+                                    return self.lower_expr(recv);
+                                }
+                                let rid = self.lower_expr(recv);
+                                let mut elem_ids: Vec<u32> = Vec::new();
+                                for a in &positional {
+                                    let aid = self.lower_expr(a);
+                                    let sid = self.lower_to_string(aid);
+                                    elem_ids.push(sid);
+                                }
+                                let cap_id = self.next_id_with_lit(positional.len() as i64);
+                                let mut vec_id = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "vec_new".to_string(),
+                                    args: vec![cap_id],
+                                    dest: vec_id,
+                                    type_args: vec![],
                                 });
+                                self.exprs.insert(vec_id, MirExpr::Var(vec_id));
+                                self.type_map
+                                    .insert(vec_id, Type::DynamicArray(Box::new(Type::Str)));
+                                for e in &elem_ids {
+                                    let nid = self.next_id();
+                                    self.stmts.push(MirStmt::Call {
+                                        func: "vec_push".to_string(),
+                                        args: vec![vec_id, *e],
+                                        dest: nid,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs.insert(nid, MirExpr::Var(nid));
+                                    self.type_map
+                                        .insert(nid, Type::DynamicArray(Box::new(Type::Str)));
+                                    vec_id = nid;
+                                }
+                                self.stmts.push(MirStmt::Call {
+                                    func: "host_str_format".to_string(),
+                                    args: vec![rid, vec_id],
+                                    dest: id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(id, MirExpr::Var(id));
+                                self.type_map.insert(id, Type::Str);
+                                return id;
                             }
                         }
                     }
-                    let m = str_method_symbol(method.as_str());
+                    let mut m = str_method_symbol(method.as_str());
+                    // Batch 588: the start-offset forms — `s.find(sub, start)`
+                    // maps to the 3-argument shim when a third argument is
+                    // present (table rows are single-arity; without this the
+                    // 3-arg form fell through and linked a bare `find`).
+                    if arg_ids.len() == 3 {
+                        if let Some(f3) = str_method_symbol3(method.as_str()) {
+                            m = Some(f3);
+                        }
+                    }
+                    // Batch 588: `rsplit(sep)` without maxsplit equals
+                    // `split(sep)` in CPython.
+                    if method == "rsplit" && arg_ids.len() == 2 {
+                        m = Some(("host_str_split", 2, "split"));
+                    }
                     if let Some((func, argc, ret)) = m {
                         if ret == "split" {
                             // returns a Vec handle of string elements
@@ -16609,6 +16697,14 @@ fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)
         "count" => Some(("host_str_count", 2, "i64")),
         "len" => Some(("host_str_len", 1, "i64")),
         "split" => Some(("host_str_split", 2, "split")),
+        // Batch 588: newline-only sibling of split (the C side walks \n,
+        // \r\n, \r itself — CPython's exotic Unicode separators are a
+        // registered corner).
+        "splitlines" => Some(("host_str_splitlines", 1, "split")),
+        // Batch 588: the 2-argument user form `s.rsplit(sep, maxsplit)`;
+        // `rsplit(sep)` is routed to host_str_split at the call site
+        // (identical semantics when maxsplit is absent).
+        "rsplit" => Some(("host_str_rsplit", 3, "split")),
         "join" => Some(("host_str_join", 2, "str")),
         "zfill" => Some(("host_str_zfill", 2, "str")),
         "ljust" => Some(("host_str_ljust", 3, "str")),
@@ -16629,6 +16725,16 @@ fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)
         "istitle" => Some(("host_str_istitle", 1, "bool")),
         "removeprefix" => Some(("host_str_removeprefix", 2, "str")),
         "removesuffix" => Some(("host_str_removesuffix", 2, "str")),
+        _ => None,
+    }
+}
+
+/// Batch 588: the start-offset overloads — consulted only when a call site
+/// carries a third argument (`s.find(sub, start)`). `index` keeps find's
+/// -1-on-miss semantics instead of raising (registered corner).
+fn str_method_symbol3(method: &str) -> Option<(&'static str, usize, &'static str)> {
+    match method {
+        "find" | "index" => Some(("host_str_find3", 3, "i64")),
         _ => None,
     }
 }
