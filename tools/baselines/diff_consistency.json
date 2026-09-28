@@ -1,12 +1,12 @@
 {
-  "total": 581,
-  "judged": 580,
-  "match": 541,
-  "rate_pct": 93.3,
-  "match_min": 541,
+  "total": 601,
+  "judged": 600,
+  "match": 557,
+  "rate_pct": 92.8,
+  "match_min": 557,
   "by_verdict": {
-    "match": 541,
-    "mismatch": 32,
+    "match": 557,
+    "mismatch": 36,
     "runtime": 3,
     "bad_case": 1,
     "compile": 4
@@ -21,16 +21,16 @@
       "judged": 105
     },
     "container": {
-      "match": 215,
+      "match": 216,
       "judged": 227
     },
     "numeric": {
-      "match": 102,
-      "judged": 124
+      "match": 107,
+      "judged": 134
     },
     "control": {
-      "match": 79,
-      "judged": 81
+      "match": 89,
+      "judged": 91
     }
   },
   "cases": {
@@ -92,7 +92,7 @@
     },
     "class_tag_probe": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "class_variable_crash": {
       "cat": "container",
@@ -743,6 +743,46 @@
       "verdict": "match"
     },
     "gen_control_s1122_019": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s585002_000": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s585002_001": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s585002_002": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s585002_003": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s585002_004": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s585002_005": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s585002_006": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s585002_007": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s585002_008": {
+      "cat": "control",
+      "verdict": "match"
+    },
+    "gen_control_s585002_009": {
       "cat": "control",
       "verdict": "match"
     },
@@ -1873,6 +1913,46 @@
     "gen_stmts_s4711_014": {
       "cat": "numeric",
       "verdict": "match"
+    },
+    "gen_stmts_s585001_000": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "gen_stmts_s585001_001": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_stmts_s585001_002": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_stmts_s585001_003": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "gen_stmts_s585001_004": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "gen_stmts_s585001_005": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_stmts_s585001_006": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_stmts_s585001_007": {
+      "cat": "numeric",
+      "verdict": "mismatch"
+    },
+    "gen_stmts_s585001_008": {
+      "cat": "numeric",
+      "verdict": "match"
+    },
+    "gen_stmts_s585001_009": {
+      "cat": "numeric",
+      "verdict": "mismatch"
     },
     "gen_str_s314159_000": {
       "cat": "str",
