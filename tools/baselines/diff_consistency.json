@@ -1,12 +1,12 @@
 {
   "total": 601,
   "judged": 600,
-  "match": 575,
-  "rate_pct": 95.8,
-  "match_min": 575,
+  "match": 576,
+  "rate_pct": 96.0,
+  "match_min": 576,
   "by_verdict": {
-    "match": 575,
-    "mismatch": 24,
+    "match": 576,
+    "mismatch": 23,
     "bad_case": 1,
     "compile": 1
   },
@@ -24,7 +24,7 @@
       "judged": 227
     },
     "numeric": {
-      "match": 112,
+      "match": 113,
       "judged": 134
     },
     "control": {
@@ -1455,7 +1455,7 @@
     },
     "gen_numeric_s20260926_001": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_numeric_s20260926_002": {
       "cat": "numeric",
