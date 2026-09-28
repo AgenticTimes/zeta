@@ -24912,6 +24912,14 @@ AGENTS.md 明文「全量门禁两侧不并发」⇒ 这次是**旁路侧破的*
 - 队头不变：**#211①／#212**（需 `runtime/` 授权）→ `str_trim` 族（需 `runtime/py_additions.c` 授权）→ **#167① 修法三形**（待裁）／**#52 余项** → #182 → t494／#213⑧ → #48；**下一次全量门禁＝主线 640**。
 - 产物＝`/tmp/b638/`：`corpus_files.txt`（40 文件清单）、`mir/*.mir|*.err`（全量 `--dump-mir` 存件）、`readings_final.txt`（①）、`readings_mutself.txt`（②语料拼写）、`recv2/{rows.json,self_ty_rows.json,self_ty_final.txt,verify.txt,tl.mir}`（②真源 42 行表）、`ir/*.ll|*.out|*.err`（③两颗 IR）、作废的 `f1_nested_fa.z` 与 `fa/`。
 
+### 六、批间同步（本批收尾窗口，合并提交 `0c69ac35`）
+
+- `git log cleanup --oneline -3` → 旁路自上次合并后只做了一笔：**638（`7ccd2ab0`）＝全量门禁 17 步补跑**（提交树 `1218baf8`、独占机器；逐项读数见 worktree 台账 `| 638 | cleanup |` 行）。`git merge cleanup` 自动合并 `worktree.md` **无冲突**（两侧各自追加行、落在不同节：主线行在主线台账、旁路行在旁路台账），带入面＝`worktree.md` 1 行。
+- **同号撞车第 10 次**（上一次在册＝第 9 次，主线 591 期）：主线 638（#173 三形定价批）与旁路 638（全量门禁批）同号。今后引用「批次 638」必须带分支列，两行台账分别是 `| 638 | bootstrap |` 与 `| 638 | cleanup |`。
+- 合并树复跑锚点核对：**`ANCHOR_RC=0`**（306 个可解析／漂移 0／新 0／消失 0；存件 `/tmp/b638/anchor_after_merge.txt`）。本侧 `target/release/zetac` md5 合并前后皆 `55a366a9bdf758896a11f77768fdb756`＝与旁路 637/638 台账记录的提交态同值（两侧本批都零代码改动）。
+- 与「主线 640 全量门禁」的关系（保守判定，不拿旁路读数替代）：`git diff --name-only 1218baf8 72d82d3c` 实测主线侧净差只有 `backlog.md`／`docs/ABI.md`／`roadmap.md`／`tools/abi_anchors_check.sh`／`tools/baselines/abi_anchors.tsv`／`tools/baselines/diff_consistency.json`／`tools/check_abi_anchors.py`／`worktree.md` 八个文件，**`src/` 与 `runtime/` 零文件** ⇒ 旁路那份 17 步读数与本树的差异只落在锚点核对步，该步已单步复跑对上；但 640 的全量门禁仍按 AGENTS 独占机器逐项跑并入册。
+- **不 push**（目标级裁定覆盖 AGENTS 收尾推送步骤）。
+
 
 ## 优先级调整（2026-09-24，用户裁定）
 
