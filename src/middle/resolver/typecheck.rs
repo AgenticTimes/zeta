@@ -28,6 +28,9 @@ impl Resolver {
         // before the gen-time ret_types snapshot).
         let pm = self.refine_method_param_types();
         self.refine_method_return_types(&pm);
+        // Batch 629: field element types from method-body append calls,
+        // reading the same refinement map.
+        self.refine_field_element_types(&pm);
         self.method_param_refinements = pm;
 
         // Borrow checker pass (separate scope to avoid RefCell conflict)

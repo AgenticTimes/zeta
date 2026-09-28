@@ -2779,10 +2779,11 @@ impl Resolver {
                         AstNode::ExprStmt { expr } => {
                             Self::collect_p627_in_expr(expr, &out, &env, self, &mut map);
                         }
-                        AstNode::Call { args, .. } => {
-                            for a in args {
-                                Self::collect_p627_in_expr(a, &out, &env, self, &mut map);
-                            }
+                        AstNode::Call { .. } => {
+                            // The statement's own Call is itself a potential
+                            // site (`bg.add("a")` as a bare statement — the
+                            // site is the statement, not an argument).
+                            Self::collect_p627_in_expr(st, &out, &env, self, &mut map);
                         }
                         _ => {}
                     }
@@ -3034,6 +3035,201 @@ impl Resolver {
         };
         if let AstNode::FuncDef { body, .. } = fd {
             walk(body, out);
+        }
+    }
+
+    /// Batch 629: field ELEMENT-type refinement from method-body append
+    /// calls (class_list_field_method). `self.items = []` carries no element
+    /// evidence — the 594 spelling defaults to `list<i64>` — so
+    /// `bg.items[0]` read the string handle as i64 and printed the address.
+    /// When a method body calls `self.<f>.append(<e>)` and e's type is
+    /// inferable (a literal, or a parameter the 627 map refined), vote for
+    /// that element type; when all votes for a field agree, rewrite the
+    /// spelling `list<i64>` -> `list<T>` — never overriding an explicit or
+    /// already-refined element type.
+    pub fn refine_field_element_types(
+        &mut self,
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+    ) -> usize {
+        let mut votes: HashMap<(String, String), Vec<Type>> = HashMap::new();
+        for ((_concept, ty), body) in self.impls.iter() {
+            for item in body {
+                if let AstNode::FuncDef {
+                    name: mname,
+                    params,
+                    body: mbody,
+                    ret_expr,
+                    ..
+                } = item
+                {
+                    let qname = format!("{}::{}", ty, mname);
+                    Self::p629_walk_stmts(
+                        mbody, ty, params, param_map, &qname, &mut votes,
+                    );
+                    // Batch-592/:992 behaviour: a method whose only statement
+                    // is an ExprStmt has it promoted into ret_expr —
+                    // `self.items.append(x)` lives THERE, not in body.
+                    if let Some(re) = ret_expr {
+                        Self::p629_walk_expr(
+                            re, ty, params, param_map, &qname, &mut votes,
+                        );
+                    }
+                }
+            }
+        }
+        let spell = |t: &Type| match t {
+            Type::Str => "str",
+            Type::F64 => "f64",
+            Type::Bool => "bool",
+            _ => "i64",
+        };
+        let mut refined = 0;
+        for ((ty, field), vs) in votes {
+            if vs.is_empty() {
+                continue;
+            }
+            let first = vs[0].clone();
+            if !vs.iter().all(|t| *t == first) {
+                continue;
+            }
+            if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                fields, ..
+            }) = self.type_decls.get_mut(&ty)
+            {
+                for (f, spelling) in fields.iter_mut() {
+                    if f == &field && spelling == "list<i64>" {
+                        *spelling = format!("list<{}>", spell(&first));
+                        refined += 1;
+                    }
+                }
+            }
+        }
+        refined
+    }
+
+    /// Recursive walker for append-call sites (top-level statements plus
+    /// If/While/For bodies and Assign/Return expressions).
+    fn p629_walk_stmts(
+        stmts: &Vec<AstNode>,
+        ty: &str,
+        params: &[(String, String)],
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+        qname: &str,
+        votes: &mut HashMap<(String, String), Vec<Type>>,
+    ) {
+        for st in stmts {
+            match st {
+                AstNode::ExprStmt { expr } => {
+                    Self::p629_walk_expr(expr, ty, params, param_map, qname, votes);
+                }
+                AstNode::Call { args, .. } => {
+                    for a in args {
+                        Self::p629_walk_expr(a, ty, params, param_map, qname, votes);
+                    }
+                }
+                AstNode::Assign(_, rhs) | AstNode::Return(rhs) => {
+                    Self::p629_walk_expr(rhs, ty, params, param_map, qname, votes);
+                }
+                AstNode::AssignOp { value, .. } => {
+                    Self::p629_walk_expr(value, ty, params, param_map, qname, votes);
+                }
+                AstNode::If { then, else_, .. } => {
+                    Self::p629_walk_stmts(then, ty, params, param_map, qname, votes);
+                    Self::p629_walk_stmts(else_, ty, params, param_map, qname, votes);
+                }
+                AstNode::While { body, else_body, .. } => {
+                    Self::p629_walk_stmts(body, ty, params, param_map, qname, votes);
+                    Self::p629_walk_stmts(else_body, ty, params, param_map, qname, votes);
+                }
+                AstNode::For {
+                    body,
+                    else_body,
+                    ..
+                } => {
+                    Self::p629_walk_stmts(body, ty, params, param_map, qname, votes);
+                    Self::p629_walk_stmts(else_body, ty, params, param_map, qname, votes);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn p629_infer_elem(
+        e: &AstNode,
+        params: &[(String, String)],
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+        qname: &str,
+    ) -> Option<Type> {
+        match e {
+            AstNode::StringLit(_) => Some(Type::Str),
+            AstNode::FloatLit(_) => Some(Type::F64),
+            AstNode::Bool(_) => Some(Type::Bool),
+            AstNode::Var(v) => {
+                let pos = params.iter().position(|(pn, _)| pn == v);
+                let pos = pos?;
+                param_map
+                    .get(qname)?
+                    .iter()
+                    .find(|(p, _)| *p == pos)
+                    .map(|(_, t)| t.clone())
+                    .filter(|t| matches!(t, Type::Str | Type::F64 | Type::Bool))
+            }
+            _ => None,
+        }
+    }
+
+    fn p629_walk_expr(
+        e: &AstNode,
+        ty: &str,
+        params: &[(String, String)],
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+        qname: &str,
+        votes: &mut HashMap<(String, String), Vec<Type>>,
+    ) {
+        match e {
+            AstNode::Call {
+                receiver: Some(rc),
+                method,
+                args,
+                ..
+            } => {
+                if method == "append" && args.len() == 1 {
+                    if let AstNode::FieldAccess { base, field } = &**rc {
+                        if let AstNode::Var(b) = &**base {
+                            if b == "self" {
+                                if let Some(t) = Self::p629_infer_elem(
+                                    &args[0], params, param_map, qname,
+                                ) {
+                                    votes
+                                        .entry((ty.to_string(), field.clone()))
+                                        .or_default()
+                                        .push(t);
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+                Self::p629_walk_expr(rc, ty, params, param_map, qname, votes);
+                for a in args {
+                    Self::p629_walk_expr(a, ty, params, param_map, qname, votes);
+                }
+            }
+            AstNode::BinaryOp { left, right, .. } => {
+                Self::p629_walk_expr(left, ty, params, param_map, qname, votes);
+                Self::p629_walk_expr(right, ty, params, param_map, qname, votes);
+            }
+            AstNode::ExprStmt { expr } => {
+                Self::p629_walk_expr(expr, ty, params, param_map, qname, votes);
+            }
+            AstNode::Assign(lhs, rhs) => {
+                Self::p629_walk_expr(lhs, ty, params, param_map, qname, votes);
+                Self::p629_walk_expr(rhs, ty, params, param_map, qname, votes);
+            }
+            AstNode::Return(v) => {
+                Self::p629_walk_expr(v, ty, params, param_map, qname, votes);
+            }
+            _ => {}
         }
     }
 
