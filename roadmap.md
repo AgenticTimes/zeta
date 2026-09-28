@@ -24481,6 +24481,44 @@ AGENTS.md 明文「全量门禁两侧不并发」⇒ 这次是**旁路侧破的*
 - 队头（本批之后）＝**#211①** → `str_trim` 族（需 `runtime/py_additions.c` 语义真修授权）→ **#167① 修法三形甲／乙／丙（待裁）／#52 余项** → #182 → t494／#213⑧ → #48；主线 **600 全量门禁批**（含 593 起的主线位移补读）。
 - 产物＝`/tmp/b594/`（`candidates.txt`＝15 条的逐条候选与 Δ、`context.txt`＝各候选所属 `fn` 与邻接关系、`rebind_docs.txt`＝17 处改写逐条 count 断言、`read1.txt`＝手绑后 rc=1 与 17/17、`bless.txt`、`prune.txt`、`read2.txt`＝**rc=0**）。
 
+## 批次 595（2026-09-29，**7.3 生态与工具／文档合同 × 门禁面·合并面**，会话任务 #238）：并入旁路 626 ⇒ 锚点 32 条漂移收干到 **`ANCHOR_RC=0`**、差分基线代录 **564→573**、A/B 正反两半首次同批配齐
+
+### 一、并入面与合并当场读数
+
+- 合并提交＝**`2e819bb1`**（**冲突 0**）numstat＝`src/middle/mir/gen.rs` **31/0**、`tests/python_style/t536_str_list_face.z` **26/0**、`worktree.md` **1/0**（旁路 626 台账行随并入入册）。
+- 旁路 626 内容＝`str(<list>)` 面改走 print 那套渲染（`py_json_dumps_vec_typed`，元素型别 tag f64=1／str=2／bool=3／int=0＝557／565 批的 CPython repr 拼法），修掉 `lower_to_string` 对 vec 句柄打裸地址 ⇒ `type_conversion_gaps` 整例转 MATCH。
+- 合并当场只读核对＝**`ANCHOR_RC=1`**、**漂移 32／新 0／消失 0／定位失败 0**（306 个可解析 ⇔ 344 条引用，基线 306 条；`/tmp/b595/CHK_merge595.txt`）。**这个 rc 是复现值不是推断**：主树那趟没把 rc 落盘，改在隔离 worktree 检出 `2e819bb1` 复跑取到 **1**。
+- **坑 71 第二次同形兑现（已进"取读数的九十九类 shell 坑"在册表）**：隔离 worktree 首跑虚报「定位失败 2／消失 2」（`aliases.inc.c:12`、`:1-2`），成因＝未跟踪生成物 `runtime/aliases.inc.c` 不在 worktree 里；把那颗文件拷进去后与主树读数**逐字相同**（漂移 32／新 0／消失 0），rc 由虚高的 **2** 回到 **1** ⇒ 复现对照必须先补生成物，否则差值是产物不是状态。
+
+### 二、锚点面：30 条机械 ＋ 2 条手绑，而那 2 条最终由"改号配对"臂机械关闭
+
+- `--rebind --dry` 事前点名＝**搬家 30／拒改 2**（`rebind_dry.txt`，文档不动）；第一趟落地 30 条（`docs/ABI.md` 改写 **22 行／45 个数字**，tsv 306 锚点随之刷新），第二趟 `--dry`＝**搬家 0／拒改 2** ⇒ 机械面一趟收完（与 593 同形，与 557 的"两趟才收完"不同形）。
+- 拒改那 2 条＝594 建立的**单行真二义**形的现网成员：`:10266`（`Some(Type::Str) => "println_str",`，2 处命中 `10023`／`10297`）、`:16761`（2 处命中 `1662`／`16792`）。判据＝**插入点在 `gen.rs:9820`**（`@@ -9819,0 +9820,31 @@`）⇒ 其后行号 Δ 恒 **+31**：`10266+31=10297`、`16761+31=16792`，另两名（`10023`、`1662`）在插入点之前、不动。手绑改文档号（`:10297` 落文档行 1045、`:16792` 落文档行 196）后，核对器把这 2 对判成**改号配对**（「内容逐字相同、互为唯一候选」，`CHK_after_hand.txt`）⇒ 第三趟 `--rebind` 连基线一起机械关闭，本轮**没有用到** `--bless-only` 与 `--prune-gone`。
+- **这是 #167① 成本结构的新读数**：593/594 那 15 条的人肉代价是「改文档号 ＋ `--bless-only` 点名 ＋ `--prune-gone` 删死键」三步，本轮这 2 条只付了「改文档号」一步 ⇒ 分水岭＝**同文多命中的候选里是否只剩一个满足 Δ**（本轮 `10023`／`1662` 因在插入点另一侧被 Δ 排除；594 那批候选之间 Δ 相同且序保持，才必须点名）。**没取的部分**：这个"改号配对臂能否自动关闭"未回测到 594 那 15 条身上（Δ 分布不同，外推未测）。
+- 终态＝**`ANCHOR_RC=0`**、漂移 0／新 0／消失 0／定位失败 0、「锚点全部对上」（`CHK_final.txt` 与提交前复跑 `CHK_precommit.txt` 两趟逐字相同）。
+
+### 三、差分基线代录：564→573 的逐案账，与"16 条 vs 9 条"的口径差
+
+- 代录前只读跑＝`match=573 judged=600 rate=95.5% bad_case=1（总用例 601）`、**`DIFF_RC=2` 只因 `bad_case`**＝`del_undefined_var`（参考侧跑不出真值，存量）；`较基线转好 9 条`（逐名在 `diff_readonly.txt`）。
+- `--bless` 落盘＝`tools/baselines/diff_consistency.json` **18/19 行**：`match 564→573`、`rate_pct 94.0→95.5`、**`match_min 564→573`**（只升不降）。
+- 逐案核账（新旧 JSON 的 `cases` 逐名比）＝**11 条变判**：8 条 `mismatch→match`（`class_inheritance`、`class_inheritance_field`、`class_str_comprehension`、`gen_numeric_s77102_008`、`gen_stmts_s4711_012`、`gen_stmts_s585001_000`、`gen_stmts_s585001_003`、`type_conversion_gaps`）＋ 1 条 `runtime→match`（`class_cross_ref_silent`）＝**+9 恰对上转好清单**；另 2 条 `runtime→mismatch`（`class_list_field_method`、`closure_nonlocal`＝从"跑不起来"变成"能比对但值不同"）；**`match→mismatch` 0 条** ⇒ 这次代录没有把回归抹平。计数自洽：`mismatch 32→26`（−8＋2）、`runtime 3→0`、`bad_case 1`、`compile 1` 不变。
+- **"转好 16 条待主线代录"（旁路 626 在册）与主树实测 9 条不同源**：主树判据是"相对已提交基线 564 的转好清单"。核账＝旁路在册「改前 572」⇒ **564→572 这 8 条是 593 合并面（旁路 592–625）累积**（那批只读核对没跑 diff 步、基线未代录），**572→573 那 1 条＝本轮 626 的 `type_conversion_gaps`** ⇒ 基线抬到 573 后，主树口径下这笔欠账结清；余下 16−9＝7 条在主树基线上不可复现（旁路那个数是跨它自己更早基线的累计计数）。
+
+### 四、A/B 与门禁
+
+- **正向半（实拍）**：新钉 `t536_str_list_face.z`（26 行／8 断言），两颗二进制同目录（`target/release/`）——改前 `zetac_b595pre`（md5 `eb2b957d8ce7252e316978963cb35427`）8 行全打堆地址样整数（`4369649520`／`4369649424`／`4369649328`／`10`／`v=4369649424`／…）；改后 `zetac`（md5 `cc5e759b35ff946c6bff1aab44e10426`）8 行逐字＝`[1, 2]`、`[1, 2]`、`['a', 'b']`、`6`、`v=[1, 2]`、`[]`、`[1.5, 2.5]`、`[True, False]`（`out_zetac*_t536_str_list_face.txt`）。
+- **负对照半（本轮补跑成立）**：`t527_sorted_key_shapes.z` 两侧各 2 趟——同侧噪声底逐字节相同（pre#1＝pre#2、post#1＝post#2），跨侧 pre#i vs post#i **逐字节相同**（n=2/侧），且 6 行输出与夹具 `// expect` 逐字相同 ⇒ **位移 0 的正证据**。（上一轮这半没成立＝循环里把文件名写成 `t527_sorted_key_none`，被 `[ -f ]` 静默跳过，只跑了 t536 两趟；在册"负断言要配正证据"的同族。）
+- **主线 301 语料位移仍＝已登记缺口**（593 起挂那格）：本批主线文件面只有文档＋基线表，`src` 改动是合并带入的、其损害量由各旁路批在册（626 自己那格＝n=3/侧、编译诊断与 masked stdout 两侧相同）⇒ **下一次全量＝主线 600 时补主线侧读数**。
+- 快门禁（改动面含 `src/middle/**` ⇒ 跑快门禁而非记 `n/a`；配方＝13 个 `--skip-*`，不动 `run_all.sh`）＝**141.20s（2'21"）**、机器独占（跑前 `ps` 确认无并发 cargo/zetac、被测二进制 md5 当场复测＝`cc5e759b…`）：**`GATE_RC=1`，两源皆存量红**（`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）；`official` **194/194・191/194**（link-only 3 名单逐字未动＝`integration_all_features`／`quantum_basic`／`selfhost`）、`python_style` **413 passed／2 failed／6 known-fail／0 xpass**（412→413 恰＝新钉 t536，与旁路 `gate_626` 在册值逐字相同）、`dyn_binding` 4 条断言 0 不一致、`comment_drift` restated 0；诊断面 official **5 文件/21 行**・python_style **127 文件/276 行**。**未跑** `corpus`／`jit`／`truth`／`diff`（diff 另做过只读跑）／全量。
+- **订正（不回改 593 已提交正文）**：593 §四 写作「python_style **128 文件/277 行**」，而 `gate593b.log:17` 与其 JSON（`:131-132`）实测＝**127 文件/276 行**，且与本轮 `gate595.log` 对应两行**逐字相同** ⇒ 以日志为准，593 那格是抄写错。**顺带一条口径提醒**：门禁打印的逐项直方图是**截断样本**（坑 92），两趟直方图 `diff` 空**不能**证明总数相同 ⇒ 本次结论取自表头行与 JSON 两处一致，不是取自直方图。
+
+### 五、编号、提交面与队头
+
+- 提交面＝**四笔**：`2e819bb1`（merge，冲突 0）→ `7a0d656e`（fix：`docs/ABI.md` **24/24** ＋ `tools/baselines/abi_anchors.tsv` **32/32**）→ `0d45dca7`（chore：`diff_consistency.json` 18/19）→ 本记录笔；**不 push**（目标级裁定覆盖 AGENTS 收尾推送）。
+- **OPEN 净增 0**＝`backlog.md` 的 `^\| #` 计数保持 **43**（本批欠账全部折写进 §4.1 批次 bullet）。
+- 队头（本批之后）＝**599/600＝主线侧全量门禁批（并补主线 301 位移读数）** → **#211①** → `str_trim` 族（需 `runtime/py_additions.c` 语义真修授权）→ **#167① 修法三形甲／乙／丙（待裁）／#52 余项** → #182 → t494／#213⑧ → #48。待用户裁决仍累计 **10 条**（590 §八 的 9 条 ＋ 592 的修法三形）。
+- 产物＝`/tmp/b595/`（`CHK_merge595.txt`＝合并当场 32/0/0；`CHK_merge595_rc.txt`／`CHK_merge595_rc2.txt`＝隔离 worktree 补生成物前后两趟（rc 2→1，逐字对齐主树）；`rebind_dry.txt`／`rebind_p1.txt`／`rebind_p2_dry.txt`＝机械面三趟；`rebind2.py`／`CHK_after_hand.txt`＝手绑与改号配对；`CHK_final.txt`／`CHK_precommit.txt`＝rc=0 两趟；`build595.log`、`diff_readonly.txt`、`bless.txt`、`gate595.log`、`out_*`／`nc_*`＝A/B 正反两半）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
