@@ -24920,6 +24920,54 @@ AGENTS.md 明文「全量门禁两侧不并发」⇒ 这次是**旁路侧破的*
 - 与「主线 640 全量门禁」的关系（保守判定，不拿旁路读数替代）：`git diff --name-only 1218baf8 72d82d3c` 实测主线侧净差只有 `backlog.md`／`docs/ABI.md`／`roadmap.md`／`tools/abi_anchors_check.sh`／`tools/baselines/abi_anchors.tsv`／`tools/baselines/diff_consistency.json`／`tools/check_abi_anchors.py`／`worktree.md` 八个文件，**`src/` 与 `runtime/` 零文件** ⇒ 旁路那份 17 步读数与本树的差异只落在锚点核对步，该步已单步复跑对上；但 640 的全量门禁仍按 AGENTS 独占机器逐项跑并入册。
 - **不 push**（目标级裁定覆盖 AGENTS 收尾推送步骤）。
 
+## 批次 639（2026-09-29，**3.2 Lowering／名绑定族·#174「438 登记③：closure_vars 裸名键串线」定价批（量形状＋两形实拍红，零净改动）**，会话任务 #174／harness #246）
+
+### 〇、本批性质与门禁
+
+- 只量不动：`src/`、`runtime/`、`tests/` 零改动，被测二进制未重编（`target/release/zetac` md5 全程 `55a366a9bdf758896a11f77768fdb756`＝637/638 的 post）。
+- 门禁不适用（改动面只有文档；AGENTS 路由表里"位移 A/B"的条件是动 `src/middle`／`src/backend`／`runtime`，本批一个都没动）。
+
+### 一、代码事实（先读键结构）
+
+- `closure_vars` 是 MirGen 上的**一张平表**：`HashMap<String, String>`（`src/middle/mir/gen.rs:253`），没有作用域栈、也没有"哪一次定义"的维度。
+- 批次 438 对嵌套类方法发布**两个键**：限定名 `format!("{cls}::{fn_name}")`（`:2688`，`cls` 取自 `self.current_class`）与裸成员名 `fn_name`（`:2694`）。
+- 子上下文创建时把父表整体 `clone` 下去（`:16796`），读取点有裸名查询（`:6893`、`:10886`、`:13085`、`:13315`）。
+- 结论（代码事实层面）：#174 说的"裸成员名可能互相看见"成立，而且比登记更宽——**同名两个嵌套类连限定键也一样**（`cls` 就是那个同名），键里没有任何区分两次定义的字段。`nested_class_aliases` 靠窗口 `split_off` 隔离（`:3247`）救不了这张表。
+
+### 二、语料成员数（分母先报）
+
+- 口径：对门禁语料 40 文件（清单 `/tmp/b638/corpus_files.txt`）跑 CPython `ast`，收集"函数体内直接定义的 class"（不下钻进嵌套 def），再按四形计数；脚本 `/tmp/b639/measure.py`，读数 `/tmp/b639/measure.out`。
+- 读数：`func_with_nested_class` **1**、`nested_class` **1**、`nested_class_method` **1**（且是 `__init__`）；`parse_fail` **0**（40 文件全解析成功＝尺子可达的正证据）。
+- 两形成员：**S2 同名嵌套类 0、S3 跨嵌套类同裸方法名 0、S4 嵌套方法名撞外层局部名 0、S5 撞兄弟嵌套 def 0** ⇒ 语料里连"两个嵌套类"都没有，串线在验收语料上**成员 0**。
+
+### 三、套件成员数（另一条分母）
+
+- 同一脚本换文件清单＝`tests/python_style/t*.z` 428 个（`/tmp/b639/measure_suite.py`、读数 `measure_suite3.out`）。
+- 读数：`func_with_nested_class` **5**、`nested_class` **5**、`nested_class_method` **9**（`__init__` 2）；S2/S3/S4/S5 **全 0**。
+- 口径边界须写明：这批夹具是 zeta 方言，CPython `ast` 对 **78/428** 个文件报 `SyntaxError`（剥掉 `//` 头注后仍失败）⇒ 套件的 5/9 是"能解析的那部分"的成员数，不是全套件。已单独核对唯一已知的"一个函数两个嵌套类"候选 `t180_nested_class.z`：`class P`（:12）在 `make`、`class Q`（:21）在 `make2`，**两个不同函数**⇒ 不是 S2 成员（正证据：当场 `ast` 打印 `fn make nested classes: ['P']`／`fn make2 ... ['Q']`）。
+
+### 四、两形实拍＝真串线（改前二进制当场打红）
+
+三形夹具在 `/tmp/b639/`，编译运行在仓根、产物落 `target/release/f639_*`（同目录口径，坑 68），逐字对照见 `/tmp/b639/fixtures.out`：
+
+| 形 | 夹具 | CPython | zeta（`55a366a9`） | 判定 |
+|---|---|---|---|---|
+| S2 同名嵌套类 | `s1_dup_class.z`（`class Box` 定义两次，各自 `get` 返 1／2） | `1` `2` | **`2` `2`** | **红＝串线实锤**：`b1.get()` 读到第二次定义的 `Box::get` |
+| S4 嵌套方法名撞外层名 | `s2_method_vs_outer.z`（外层 `def helper` 返 7，`Box.helper` 返 9） | `7` `9` | **`9` `9`** | **红＝串线实锤**：裸 `helper()` 被 `Box::helper` 顶走 |
+| S3 同名方法×不同类名 | `s3_shared_method.z`（`A.go` 返 11、`B.go` 返 22） | `11` `22` | `11` `22` | 绿 |
+
+- 三形即止损（臂不可达时的止损规则）；S3 绿对 S1/S2 红正是**对照**：串线需要"键相同"，`{cls}::{fn_name}` 里 `cls` 同名才撞 ⇒ 与 §一的代码事实闭合。
+- 静默性：两颗二进制都 `compile_rc=0`、`run_rc=0`，**一声不出**（无诊断、无链接错误），错值直接进 stdout。
+
+### 五、账务／队头／产物
+
+- 提交面＝只有本记录笔（`roadmap.md`／`worktree.md`／`backlog.md`，零代码、零夹具改动）。
+- 定价结论：损害量＝**两形实拍红（静默错值）**，覆盖面＝**语料成员 0 / 套件成员 0** ⇒ 不挤当前队头；修法已定位到一处判据（发布裸键与限定键时，键里要带"本次定义"的身份，或对已在表中的同名键不覆盖并出声），但它动的是 438 发布点本身、需连带核对 `t470/t471/t472/t180` 四夹具与语料 301 位移，**另批做**，登记为 #246 的子项。
+- 待用户裁决仍 **11 条**（本批没新增：改动面不需要授权，也不需要裁决）。
+- 队头不变：**#211①／#212**（需 `runtime/` 授权）→ `str_trim` 族（需 `runtime/py_additions.c` 授权）→ #167①／#52 余项 → #182 → t494／#213⑧ → #48。
+- 下一次全量门禁＝主线 **640**（独占机器）。
+- 产物＝`/tmp/b639/`：`measure.py`＋`measure.out`（语料四形）、`measure_suite.py`＋`measure_suite3.out`（套件四形＋78 例解析失败名单）、`s1_dup_class.z`／`s2_method_vs_outer.z`／`s3_shared_method.z`＋`fixtures.out`（三形实拍）、`*.compile.err`。
+
 
 ## 优先级调整（2026-09-24，用户裁定）
 
