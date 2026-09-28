@@ -1,0 +1,29 @@
+// 批次 629（旁路 cleanup）：字段元素型别精化——class_list_field_method
+// 收口。`self.items = []` 空字面量无元素证据（594 拼写默认 list<i64>）⇒
+// bg.items[0] 把串句柄按 i64 读、打地址。现从方法体的
+// `self.<f>.append(<e>)` 站点投票元素型别——e 为字面量或 627 已精化的
+// 参数（bg.add("a") → add 的 x→Str → append 实参 Str → items 投 Str），
+// 全体一致时把拼写 list<i64> 改写 list<str>（只从 i64 默认改、显式或已
+// 精化元素不覆盖）。链上三坑在册：① 627 扫描器裸 Call 语句只下沉 args
+// 不查语句自身——bg.add("a") 的站点＝语句本身（本批补）；② :992 的
+// ret_expr 提升——方法体唯一语句是 ExprStmt 时被提升，append 站点在
+// ret_expr 不在 body；③ 拼写匹配须逐字 "list<i64>"（594 角形式）。
+// 边界（不在本夹具）：混合元素型别的 append 投票弃权；dict 值型别同族
+// 未收（"map" 拼写无元素位）。
+class Bag:
+    def __init__(self):
+        self.items = []
+    def add(self, x):
+        self.items.append(x)
+    def size(self):
+        return len(self.items)
+
+bg = Bag()
+bg.add("a")
+bg.add("b")
+print(bg.size())
+print(bg.items[0])
+print(bg.items[1])
+// expect: 2
+// expect: a
+// expect: b

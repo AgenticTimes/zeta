@@ -22,6 +22,16 @@ impl Resolver {
         // refinement then reads param names from).
         self.inherit_class_members();
         self.refine_ctor_field_types();
+        // Batch 627/628: call-site param refinement, then return-type
+        // inference reading those refinements. Computed once here so the
+        // generator builder reuses the same map (funcs.ret edits must land
+        // before the gen-time ret_types snapshot).
+        let pm = self.refine_method_param_types();
+        self.refine_method_return_types(&pm);
+        // Batch 629: field element types from method-body append calls,
+        // reading the same refinement map.
+        self.refine_field_element_types(&pm);
+        self.method_param_refinements = pm;
 
         // Borrow checker pass (separate scope to avoid RefCell conflict)
         for ast in asts {

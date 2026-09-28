@@ -38,6 +38,11 @@ pub struct Resolver {
     /// on the ImplBlock attrs, no own `__init__`) — consumed by
     /// `inherit_class_members` after registration completes.
     pending_inherits: std::cell::RefCell<Vec<(String, String)>>,
+    /// Batch 628: `Class::method` -> [(FuncDef param position, Type)] — the
+    /// 627 call-site refinements, computed once at typecheck so the return
+    /// inference below can read them and the generator builder can reuse
+    /// the same map.
+    pub(crate) method_param_refinements: HashMap<String, Vec<(usize, Type)>>,
     /// Batch 602/603: class -> first base (from `__bases__:` ImplBlock attrs),
     /// recorded for EVERY class with a base; consumed by the gen-side
     /// base-chain method lookup via `class_bases()`.
@@ -142,6 +147,7 @@ impl Resolver {
         let mut r = Self {
             impls: HashMap::new(),
             pending_inherits: std::cell::RefCell::new(Vec::new()),
+            method_param_refinements: HashMap::new(),
             class_bases: std::cell::RefCell::new(HashMap::new()),
             pending_baseargs: std::cell::RefCell::new(Vec::new()),
             cached_mirs: HashMap::new(),
@@ -2773,10 +2779,11 @@ impl Resolver {
                         AstNode::ExprStmt { expr } => {
                             Self::collect_p627_in_expr(expr, &out, &env, self, &mut map);
                         }
-                        AstNode::Call { args, .. } => {
-                            for a in args {
-                                Self::collect_p627_in_expr(a, &out, &env, self, &mut map);
-                            }
+                        AstNode::Call { .. } => {
+                            // The statement's own Call is itself a potential
+                            // site (`bg.add("a")` as a bare statement — the
+                            // site is the statement, not an argument).
+                            Self::collect_p627_in_expr(st, &out, &env, self, &mut map);
                         }
                         _ => {}
                     }
@@ -2874,6 +2881,353 @@ impl Resolver {
             }
             AstNode::Return(v) => {
                 Self::collect_p627_in_expr(v, out, env, resolver, map);
+            }
+            _ => {}
+        }
+    }
+
+    /// Batch 628: return-type inference for unannotated methods — the
+    /// #195 remainder. `def ident(self, w): return w` refines `w` to Str in
+    /// the body (627), yet the caller printed the raw handle: the call site
+    /// types the result from the REGISTERED return type (I64) and picks
+    /// println_i64. Infer the return type from every `Return` expression in
+    /// the body — a StringLit, or a parameter the 627 map already refined —
+    /// and write it into `funcs` when all returns agree and the registered
+    /// type is still I64 (unannotated). The generator's ret_types snapshot
+    /// is built from `funcs` at gen time, so one write reaches every call
+    /// site. Methods come from `impls` (class-attributed keys); plain
+    /// module functions ride their bare-name signatures.
+    pub fn refine_method_return_types(
+        &mut self,
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+    ) -> usize {
+        let mut refined = 0;
+        // (qualified name, method FuncDef) pairs: methods from impls,
+        // plain functions from registered_func_defs.
+        let mut candidates: Vec<(String, AstNode)> = Vec::new();
+        for ((_concept, ty), body) in self.impls.iter() {
+            for item in body {
+                if let AstNode::FuncDef { name, .. } = item {
+                    candidates.push((format!("{}::{}", ty, name), item.clone()));
+                }
+            }
+        }
+        for d in self.registered_func_defs.borrow().iter() {
+            if let AstNode::FuncDef { name, .. } = d {
+                // Plain module functions only: the funcs key is the bare
+                // name, and a `::`-qualified entry belongs to the impls loop.
+                if !name.contains("::") && self.funcs.contains_key(name.as_str()) {
+                    candidates.push((name.clone(), d.clone()));
+                }
+            }
+        }
+        for (qname, fd) in candidates {
+            let unannotated = match self.funcs.get(&qname) {
+                Some((_, Type::I64, _)) => true,
+                _ => false,
+            };
+            if !unannotated {
+                continue;
+            }
+            let AstNode::FuncDef { params, .. } = &fd else {
+                continue;
+            };
+            let mut rets: Vec<Type> = Vec::new();
+            Self::collect_return_kinds(&fd, params, param_map, &qname, &mut rets);
+            if rets.is_empty() {
+                continue;
+            }
+            let first = rets[0].clone();
+            // Only literal-kind types are writable; a unanimous PyDynamic
+            // vote means every return was un-inferable — abstain.
+            if matches!(first, Type::Str | Type::F64 | Type::Bool)
+                && rets.iter().all(|t| *t == first)
+            {
+                if let Some((_, ret, _)) = self.funcs.get_mut(&qname) {
+                    if matches!(ret, Type::I64) {
+                        *ret = first.clone();
+                        refined += 1;
+                    }
+                }
+            }
+        }
+        refined
+    }
+
+    /// Collect the inferable type of every `Return` expression in a method
+    /// body: a string/float/bool literal, or a parameter the 627 map
+    /// refined. Anything else yields no evidence (abstain).
+    fn collect_return_kinds(
+        fd: &AstNode,
+        params: &[(String, String)],
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+        qname: &str,
+        out: &mut Vec<Type>,
+    ) {
+        // `+` with any inferable-Str operand is Str concat (CPython);
+        // F64+F64 stays F64. Recursion is bounded by expression depth.
+        fn refinable(
+            e: &AstNode,
+            params: &[(String, String)],
+            param_map: &HashMap<String, Vec<(usize, Type)>>,
+            qname: &str,
+        ) -> Option<Type> {
+            match e {
+                AstNode::StringLit(_) => Some(Type::Str),
+                AstNode::FloatLit(_) => Some(Type::F64),
+                AstNode::Bool(_) => Some(Type::Bool),
+                AstNode::Var(v) => {
+                    let pos = params.iter().position(|(pn, _)| pn == v)?;
+                    param_map
+                        .get(qname)?
+                        .iter()
+                        .find(|(p, _)| *p == pos)
+                        .map(|(_, t)| t.clone())
+                }
+                AstNode::BinaryOp { op, left, right } if op == "+" => {
+                    let l = refinable(left, params, param_map, qname);
+                    let r = refinable(right, params, param_map, qname);
+                    if matches!(l, Some(Type::Str)) || matches!(r, Some(Type::Str)) {
+                        Some(Type::Str)
+                    } else if matches!(l, Some(Type::F64)) && matches!(r, Some(Type::F64)) {
+                        Some(Type::F64)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+        let refinable = |e: &AstNode| -> Option<Type> {
+            refinable(e, params, param_map, qname)
+        };
+        let walk = |stmts: &Vec<AstNode>, out: &mut Vec<Type>| {
+            for st in stmts {
+                match st {
+                    AstNode::Return(val) => {
+                        // A bare `return` ( Lit(0) placeholder) carries no
+                        // evidence; Lit(0) is also the historical None
+                        // spelling, so it never infers.
+                        if !matches!(**val, AstNode::Lit(0)) {
+                            if let Some(t) = refinable(val) {
+                                out.push(t);
+                            } else {
+                                // Un-inferable return: poison the vote so a
+                                // mixed body never refines.
+                                out.push(Type::PyDynamic);
+                            }
+                        }
+                    }
+                    AstNode::If { then, else_, .. } => {
+                        for s in then.iter().chain(else_.iter()) {
+                            if let AstNode::Return(val) = s {
+                                if let Some(t) = refinable(val) {
+                                    out.push(t);
+                                } else if !matches!(**val, AstNode::Lit(0)) {
+                                    out.push(Type::PyDynamic);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        };
+        if let AstNode::FuncDef { body, .. } = fd {
+            walk(body, out);
+        }
+    }
+
+    /// Batch 629: field ELEMENT-type refinement from method-body append
+    /// calls (class_list_field_method). `self.items = []` carries no element
+    /// evidence — the 594 spelling defaults to `list<i64>` — so
+    /// `bg.items[0]` read the string handle as i64 and printed the address.
+    /// When a method body calls `self.<f>.append(<e>)` and e's type is
+    /// inferable (a literal, or a parameter the 627 map refined), vote for
+    /// that element type; when all votes for a field agree, rewrite the
+    /// spelling `list<i64>` -> `list<T>` — never overriding an explicit or
+    /// already-refined element type.
+    pub fn refine_field_element_types(
+        &mut self,
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+    ) -> usize {
+        let mut votes: HashMap<(String, String), Vec<Type>> = HashMap::new();
+        for ((_concept, ty), body) in self.impls.iter() {
+            for item in body {
+                if let AstNode::FuncDef {
+                    name: mname,
+                    params,
+                    body: mbody,
+                    ret_expr,
+                    ..
+                } = item
+                {
+                    let qname = format!("{}::{}", ty, mname);
+                    Self::p629_walk_stmts(
+                        mbody, ty, params, param_map, &qname, &mut votes,
+                    );
+                    // Batch-592/:992 behaviour: a method whose only statement
+                    // is an ExprStmt has it promoted into ret_expr —
+                    // `self.items.append(x)` lives THERE, not in body.
+                    if let Some(re) = ret_expr {
+                        Self::p629_walk_expr(
+                            re, ty, params, param_map, &qname, &mut votes,
+                        );
+                    }
+                }
+            }
+        }
+        let spell = |t: &Type| match t {
+            Type::Str => "str",
+            Type::F64 => "f64",
+            Type::Bool => "bool",
+            _ => "i64",
+        };
+        let mut refined = 0;
+        for ((ty, field), vs) in votes {
+            if vs.is_empty() {
+                continue;
+            }
+            let first = vs[0].clone();
+            if !vs.iter().all(|t| *t == first) {
+                continue;
+            }
+            if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                fields, ..
+            }) = self.type_decls.get_mut(&ty)
+            {
+                for (f, spelling) in fields.iter_mut() {
+                    if f == &field && spelling == "list<i64>" {
+                        *spelling = format!("list<{}>", spell(&first));
+                        refined += 1;
+                    }
+                }
+            }
+        }
+        refined
+    }
+
+    /// Recursive walker for append-call sites (top-level statements plus
+    /// If/While/For bodies and Assign/Return expressions).
+    fn p629_walk_stmts(
+        stmts: &Vec<AstNode>,
+        ty: &str,
+        params: &[(String, String)],
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+        qname: &str,
+        votes: &mut HashMap<(String, String), Vec<Type>>,
+    ) {
+        for st in stmts {
+            match st {
+                AstNode::ExprStmt { expr } => {
+                    Self::p629_walk_expr(expr, ty, params, param_map, qname, votes);
+                }
+                AstNode::Call { args, .. } => {
+                    for a in args {
+                        Self::p629_walk_expr(a, ty, params, param_map, qname, votes);
+                    }
+                }
+                AstNode::Assign(_, rhs) | AstNode::Return(rhs) => {
+                    Self::p629_walk_expr(rhs, ty, params, param_map, qname, votes);
+                }
+                AstNode::AssignOp { value, .. } => {
+                    Self::p629_walk_expr(value, ty, params, param_map, qname, votes);
+                }
+                AstNode::If { then, else_, .. } => {
+                    Self::p629_walk_stmts(then, ty, params, param_map, qname, votes);
+                    Self::p629_walk_stmts(else_, ty, params, param_map, qname, votes);
+                }
+                AstNode::While { body, else_body, .. } => {
+                    Self::p629_walk_stmts(body, ty, params, param_map, qname, votes);
+                    Self::p629_walk_stmts(else_body, ty, params, param_map, qname, votes);
+                }
+                AstNode::For {
+                    body,
+                    else_body,
+                    ..
+                } => {
+                    Self::p629_walk_stmts(body, ty, params, param_map, qname, votes);
+                    Self::p629_walk_stmts(else_body, ty, params, param_map, qname, votes);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn p629_infer_elem(
+        e: &AstNode,
+        params: &[(String, String)],
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+        qname: &str,
+    ) -> Option<Type> {
+        match e {
+            AstNode::StringLit(_) => Some(Type::Str),
+            AstNode::FloatLit(_) => Some(Type::F64),
+            AstNode::Bool(_) => Some(Type::Bool),
+            AstNode::Var(v) => {
+                let pos = params.iter().position(|(pn, _)| pn == v);
+                let pos = pos?;
+                param_map
+                    .get(qname)?
+                    .iter()
+                    .find(|(p, _)| *p == pos)
+                    .map(|(_, t)| t.clone())
+                    .filter(|t| matches!(t, Type::Str | Type::F64 | Type::Bool))
+            }
+            _ => None,
+        }
+    }
+
+    fn p629_walk_expr(
+        e: &AstNode,
+        ty: &str,
+        params: &[(String, String)],
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+        qname: &str,
+        votes: &mut HashMap<(String, String), Vec<Type>>,
+    ) {
+        match e {
+            AstNode::Call {
+                receiver: Some(rc),
+                method,
+                args,
+                ..
+            } => {
+                if method == "append" && args.len() == 1 {
+                    if let AstNode::FieldAccess { base, field } = &**rc {
+                        if let AstNode::Var(b) = &**base {
+                            if b == "self" {
+                                if let Some(t) = Self::p629_infer_elem(
+                                    &args[0], params, param_map, qname,
+                                ) {
+                                    votes
+                                        .entry((ty.to_string(), field.clone()))
+                                        .or_default()
+                                        .push(t);
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+                Self::p629_walk_expr(rc, ty, params, param_map, qname, votes);
+                for a in args {
+                    Self::p629_walk_expr(a, ty, params, param_map, qname, votes);
+                }
+            }
+            AstNode::BinaryOp { left, right, .. } => {
+                Self::p629_walk_expr(left, ty, params, param_map, qname, votes);
+                Self::p629_walk_expr(right, ty, params, param_map, qname, votes);
+            }
+            AstNode::ExprStmt { expr } => {
+                Self::p629_walk_expr(expr, ty, params, param_map, qname, votes);
+            }
+            AstNode::Assign(lhs, rhs) => {
+                Self::p629_walk_expr(lhs, ty, params, param_map, qname, votes);
+                Self::p629_walk_expr(rhs, ty, params, param_map, qname, votes);
+            }
+            AstNode::Return(v) => {
+                Self::p629_walk_expr(v, ty, params, param_map, qname, votes);
             }
             _ => {}
         }
@@ -4298,7 +4652,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_py_module_paths(self.py_module_paths.borrow().clone())
             .with_module_global_types(self.module_global_types())
             .with_class_bases(self.class_bases())
-            .with_method_param_refinements(self.refine_method_param_types())
+            .with_method_param_refinements(self.method_param_refinements.clone())
             .with_source_file(self.source_file.borrow().clone())
             .with_argparse_kinds(self.argparse_kinds.borrow().clone())
             .with_param_defaults(
