@@ -2921,6 +2921,35 @@ impl Resolver {
                 }
             }
         }
+        // Batch 630: map-field value types, for the `.get(k, <lit>)`
+        // return face — the default literal is only evidence when it agrees
+        // with the map's voted value type (an int-valued map with a string
+        // default is a genuine union — inferring Str would corrupt the hit
+        // path).
+        let mut map_vals: HashMap<(String, String), Type> = HashMap::new();
+        for (ty, td) in self.type_decls.iter() {
+            if let crate::middle::mir::r#gen::TypeDecl::Struct { fields, .. } = td {
+                for (f, spelling) in fields {
+                    if let Some(rest) = spelling.strip_prefix("map<") {
+                        let inner = rest.trim_end_matches('>');
+                        let mut it = inner.split(',');
+                        let one = |x: &str| match x.trim() {
+                            "str" => Some(Type::Str),
+                            "f64" => Some(Type::F64),
+                            "bool" => Some(Type::Bool),
+                            "i64" => Some(Type::I64),
+                            _ => None,
+                        };
+                        if let (Some(_k), Some(v)) = (
+                            it.next().and_then(|x| one(x)),
+                            it.next().and_then(|x| one(x)),
+                        ) {
+                            map_vals.insert((ty.clone(), f.clone()), v);
+                        }
+                    }
+                }
+            }
+        }
         for (qname, fd) in candidates {
             let unannotated = match self.funcs.get(&qname) {
                 Some((_, Type::I64, _)) => true,
@@ -2933,7 +2962,14 @@ impl Resolver {
                 continue;
             };
             let mut rets: Vec<Type> = Vec::new();
-            Self::collect_return_kinds(&fd, params, param_map, &qname, &mut rets);
+            Self::collect_return_kinds(
+                &fd,
+                params,
+                param_map,
+                &qname,
+                &map_vals,
+                &mut rets,
+            );
             if rets.is_empty() {
                 continue;
             }
@@ -2962,8 +2998,10 @@ impl Resolver {
         params: &[(String, String)],
         param_map: &HashMap<String, Vec<(usize, Type)>>,
         qname: &str,
+        map_vals: &HashMap<(String, String), Type>,
         out: &mut Vec<Type>,
     ) {
+        let cls = qname.split("::").next().unwrap_or("").to_string();
         // `+` with any inferable-Str operand is Str concat (CPython);
         // F64+F64 stays F64. Recursion is bounded by expression depth.
         fn refinable(
@@ -3011,6 +3049,47 @@ impl Resolver {
                         if !matches!(**val, AstNode::Lit(0)) {
                             if let Some(t) = refinable(val) {
                                 out.push(t);
+                            } else if let AstNode::Call {
+                                receiver: Some(rc),
+                                method,
+                                args,
+                                ..
+                            } = &**val
+                            {
+                                // Batch 630: `return self.<f>.get(k, <lit>)`
+                                // — the default literal is the value-type
+                                // evidence ONLY when it agrees with the
+                                // map's voted value type; otherwise the hit
+                                // path is a genuine union (poison).
+                                let face = match (&**rc, method.as_str(), args.len()) {
+                                    (
+                                        AstNode::FieldAccess { base: fb, field },
+                                        "get",
+                                        2,
+                                    ) => match &**fb {
+                                        AstNode::Var(b) if b == "self" => {
+                                            let vt = map_vals
+                                                .get(&(cls.clone(), field.clone()));
+                                            let dt = match &args[1] {
+                                                AstNode::StringLit(_) => Some(Type::Str),
+                                                AstNode::FloatLit(_) => Some(Type::F64),
+                                                AstNode::Bool(_) => Some(Type::Bool),
+                                                _ => None,
+                                            };
+                                            match (vt, dt) {
+                                                (Some(v), Some(d)) if *v == d => Some(d.clone()),
+                                                (Some(_), Some(_)) => Some(Type::PyDynamic),
+                                                _ => None,
+                                            }
+                                        }
+                                        _ => None,
+                                    },
+                                    _ => None,
+                                };
+                                match face {
+                                    Some(t) if t != Type::PyDynamic => out.push(t),
+                                    _ => out.push(Type::PyDynamic),
+                                }
                             } else {
                                 // Un-inferable return: poison the vote so a
                                 // mixed body never refines.
@@ -3228,6 +3307,203 @@ impl Resolver {
             }
             AstNode::Return(v) => {
                 Self::p629_walk_expr(v, ty, params, param_map, qname, votes);
+            }
+            _ => {}
+        }
+    }
+
+    /// Batch 630: map VALUE-type voting from method-body subscript writes
+    /// (629's recipe for dicts). `self.d = {}` carries no value evidence
+    /// (the 594 spelling is the bare "map"), so a `self.d.get(k, <str>)`
+    /// chain had no static value type and the method's return stayed I64 —
+    /// the caller printed the string handle as an integer (s38). Vote the
+    /// (key, value) kinds from `self.<f>[<k>] = <v>` sites (literals or
+    /// 627-refined params); when a field's votes are unanimous and the
+    /// value kind is Str/F64/Bool, rewrite the spelling `map` ->
+    /// `map<K, V>` (the lt_annotation_type form the read side parses).
+    /// Annotated `map<K, V>` spellings are never touched.
+    pub fn refine_map_value_types(
+        &mut self,
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+    ) -> usize {
+        let mut votes: HashMap<(String, String), Vec<(Type, Type)>> = HashMap::new();
+        for ((_concept, ty), body) in self.impls.iter() {
+            for item in body {
+                if let AstNode::FuncDef {
+                    name: mname,
+                    params,
+                    body: mbody,
+                    ret_expr,
+                    ..
+                } = item
+                {
+                    let qname = format!("{}::{}", ty, mname);
+                    Self::p630_walk_stmts(mbody, ty, params, param_map, &qname, &mut votes);
+                    // The :992 promotion — a sole-statement method body lives
+                    // in ret_expr (same trap batch 629 hit for append).
+                    if let Some(re) = ret_expr {
+                        Self::p630_walk_expr(re, ty, params, param_map, &qname, &mut votes);
+                    }
+                }
+            }
+        }
+        let spell = |t: &Type| match t {
+            Type::Str => "str",
+            Type::F64 => "f64",
+            Type::Bool => "bool",
+            _ => "i64",
+        };
+        let mut refined = 0;
+        for ((ty, field), vs) in votes {
+            if vs.is_empty() {
+                continue;
+            }
+            let (k0, v0) = (&vs[0].0, &vs[0].1);
+            if !vs.iter().all(|(k, v)| k == k0 && v == v0) {
+                continue;
+            }
+            if !matches!(v0, Type::Str | Type::F64 | Type::Bool) {
+                continue;
+            }
+            if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                fields, ..
+            }) = self.type_decls.get_mut(&ty)
+            {
+                for (f, spelling) in fields.iter_mut() {
+                    if f == &field && spelling == "map" {
+                        *spelling = format!("map<{}, {}>", spell(k0), spell(v0));
+                        refined += 1;
+                    }
+                }
+            }
+        }
+        refined
+    }
+
+    fn p630_walk_stmts(
+        stmts: &Vec<AstNode>,
+        ty: &str,
+        params: &[(String, String)],
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+        qname: &str,
+        votes: &mut HashMap<(String, String), Vec<(Type, Type)>>,
+    ) {
+        for st in stmts {
+            match st {
+                AstNode::ExprStmt { expr } => {
+                    Self::p630_walk_expr(expr, ty, params, param_map, qname, votes);
+                }
+                AstNode::Call { args, .. } => {
+                    for a in args {
+                        Self::p630_walk_expr(a, ty, params, param_map, qname, votes);
+                    }
+                }
+                AstNode::Assign(lhs, rhs) => {
+                    // The voting site: `self.<f>[<k>] = <v>`.
+                    if let (
+                        AstNode::Subscript {
+                            base,
+                            index: kexpr,
+                        },
+                        vexpr,
+                    ) = (&**lhs, &**rhs)
+                    {
+                        if let AstNode::FieldAccess { base: fb, field } = &**base {
+                            if let AstNode::Var(b) = &**fb {
+                                if b == "self" {
+                                    let kt = Self::p629_infer_elem(
+                                        kexpr, params, param_map, qname,
+                                    );
+                                    let vt = Self::p629_infer_elem(
+                                        vexpr, params, param_map, qname,
+                                    );
+                                    if let (Some(kt), Some(vt)) = (kt, vt) {
+                                        votes
+                                            .entry((ty.to_string(), field.clone()))
+                                            .or_default()
+                                            .push((kt, vt));
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    Self::p630_walk_expr(rhs, ty, params, param_map, qname, votes);
+                }
+                AstNode::AssignOp { value, .. } => {
+                    Self::p630_walk_expr(value, ty, params, param_map, qname, votes);
+                }
+                AstNode::Return(v) => {
+                    Self::p630_walk_expr(v, ty, params, param_map, qname, votes);
+                }
+                AstNode::If { then, else_, .. } => {
+                    Self::p630_walk_stmts(then, ty, params, param_map, qname, votes);
+                    Self::p630_walk_stmts(else_, ty, params, param_map, qname, votes);
+                }
+                AstNode::While { body, else_body, .. } => {
+                    Self::p630_walk_stmts(body, ty, params, param_map, qname, votes);
+                    Self::p630_walk_stmts(else_body, ty, params, param_map, qname, votes);
+                }
+                AstNode::For {
+                    body,
+                    else_body,
+                    ..
+                } => {
+                    Self::p630_walk_stmts(body, ty, params, param_map, qname, votes);
+                    Self::p630_walk_stmts(else_body, ty, params, param_map, qname, votes);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn p630_walk_expr(
+        e: &AstNode,
+        ty: &str,
+        params: &[(String, String)],
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+        qname: &str,
+        votes: &mut HashMap<(String, String), Vec<(Type, Type)>>,
+    ) {
+        match e {
+            AstNode::Assign(lhs, rhs) => {
+                if let (
+                    AstNode::Subscript {
+                        base,
+                        index: kexpr,
+                    },
+                    vexpr,
+                ) = (&**lhs, &**rhs)
+                {
+                    if let AstNode::FieldAccess { base: fb, field } = &**base {
+                        if let AstNode::Var(b) = &**fb {
+                            if b == "self" {
+                                let kt =
+                                    Self::p629_infer_elem(kexpr, params, param_map, qname);
+                                let vt =
+                                    Self::p629_infer_elem(vexpr, params, param_map, qname);
+                                if let (Some(kt), Some(vt)) = (kt, vt) {
+                                    votes
+                                        .entry((ty.to_string(), field.clone()))
+                                        .or_default()
+                                        .push((kt, vt));
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+                Self::p630_walk_expr(lhs, ty, params, param_map, qname, votes);
+                Self::p630_walk_expr(rhs, ty, params, param_map, qname, votes);
+            }
+            AstNode::BinaryOp { left, right, .. } => {
+                Self::p630_walk_expr(left, ty, params, param_map, qname, votes);
+                Self::p630_walk_expr(right, ty, params, param_map, qname, votes);
+            }
+            AstNode::Call { args, .. } => {
+                for a in args {
+                    Self::p630_walk_expr(a, ty, params, param_map, qname, votes);
+                }
             }
             _ => {}
         }

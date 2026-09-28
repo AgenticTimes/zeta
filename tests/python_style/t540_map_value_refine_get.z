@@ -1,0 +1,31 @@
+// 批次 630（旁路 cleanup）：map 值型别投票＋.get 返回面——⑫ 邻域。
+// `self.d = {}` 的 594 拼写是裸 "map"（无值型位）⇒ 方法链
+// self.d[k]=v 写入 + self.d.get(k, <str 默认>) 返回的 funcs.ret 停 I64，
+// 调用方 println_i64 把串句柄打地址（s38 实拍连纯字串字典都败）。
+// refine_map_value_types 从 `self.<f>[<k>] = <v>` 站点投票 (键, 值) 型别
+// （字面量或 627 已精化参数），一致时把裸 "map" 改写 "map<K, V>"
+// （lt_annotation_type 角形式、带注解的拼写不覆盖）；返回推断扩
+// `return self.<f>.get(k, <lit>)` 面——默认字面量只在与投票值型别一致时
+// 才是证据，不一致（int 值字典＋str 默认＝真 union）投毒弃权，hit 路径
+// 不被腐蚀（s37 实测 10 ✓ 保持）。:992 的 ret_expr 提升坑同 629。
+// 边界（不在本夹具）：int 值＋str 默认的 union 跨函数边界＝#117 深水
+// （class_dict_field_get dcase 留队）；带注解 map<K,V> 不覆盖。
+class Cfg:
+    def __init__(self):
+        self.d = {}
+    def put(self, k, v):
+        self.d[k] = v
+    def fetch(self, k):
+        return self.d.get(k, "missing")
+
+c = Cfg()
+c.put("a", "x")
+c.put("b", "y")
+print(c.fetch("a"))
+print(c.fetch("z"))
+print(c.fetch("b"))
+print(len(c.fetch("a")))
+// expect: x
+// expect: missing
+// expect: y
+// expect: 1
