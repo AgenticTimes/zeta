@@ -9817,6 +9817,37 @@ call, no NULL-handle dereference).",
                         return id;
                     }
                     let arg_id = self.lower_expr(&args[0]);
+                    // Batch 626: `str(<list>)` — the same CPython repr the
+                    // print face renders (py_json_dumps_vec_typed, batches
+                    // 557/565). lower_to_string on a vec handle printed the
+                    // raw address (type_conversion_gaps diff line #3).
+                    if let Some(tag) = match self.type_map.get(&arg_id) {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
+                            Some(match **e {
+                                Type::F64 | Type::F32 => 1,
+                                Type::Str => 2,
+                                Type::Bool => 3,
+                                _ => 0,
+                            })
+                        }
+                        _ => None,
+                    } {
+                        let tid = self.next_id();
+                        self.exprs.insert(tid, MirExpr::IntLit(tag));
+                        self.type_map.insert(tid, Type::I64);
+                        let nid = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_json_dumps_vec_typed".to_string(),
+                            args: vec![arg_id, tid],
+                            dest: nid,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(nid, MirExpr::Var(nid));
+                        self.type_map.insert(nid, Type::Str);
+                        self.exprs.insert(id, MirExpr::Var(nid));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
                     // A Json value knows its own type: stringify by tag.
                     if matches!(
                         self.type_map.get(&arg_id),
