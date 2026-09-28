@@ -2260,16 +2260,7 @@ impl Resolver {
                 if let Some(t) =
                     Self::unannotated_return_ty(&rec_defs, fname, &classes, &declared, &sig_params)
                 {
-                    if fname.contains("speak")
-                        && crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS")
-                    {
-                        eprintln!("[P601] recovered {} = {:?}", fname, t);
-                    }
                     *fty = t;
-                } else if fname.contains("speak")
-                    && crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS")
-                {
-                    eprintln!("[P601] recovery None for {}", fname);
                 }
             }
         }
@@ -2316,13 +2307,6 @@ impl Resolver {
     pub fn refine_ctor_field_types(&mut self) {
         let out = self.module_global_types();
         let defs = self.registered_func_defs.borrow().clone();
-        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
-            eprintln!(
-                "[P600] refine: defs={} classes={:?}",
-                defs.len(),
-                self.type_decls.keys().collect::<Vec<_>>()
-            );
-        }
         for d in &defs {
             if let AstNode::FuncDef { body, .. } = d {
                 for st in body {
@@ -2342,14 +2326,6 @@ impl Resolver {
                                 .get(method.as_str())
                                 .cloned()
                                 .unwrap_or_default();
-                            if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
-                                eprintln!(
-                                    "[P600] ctor call: {} args={} pnames={:?}",
-                                    method,
-                                    args.len(),
-                                    pnames
-                                );
-                            }
                             if pnames.is_empty() {
                                 continue;
                             }
@@ -2393,14 +2369,8 @@ impl Resolver {
                                         .find(|(f, _)| *f == pn)
                                     {
                                         if dt.as_str() == "i64" {
-                                            *dt = spell.clone();
+                                            *dt = spell;
                                         }
-                                    }
-                                    if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
-                                        eprintln!(
-                                            "[P600] refine field {} = {} (fields now {:?})",
-                                            pn, spell, *decl_fields
-                                        );
                                     }
                                 }
                             }
