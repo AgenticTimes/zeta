@@ -1,13 +1,12 @@
 {
   "total": 601,
   "judged": 600,
-  "match": 564,
-  "rate_pct": 94.0,
-  "match_min": 564,
+  "match": 573,
+  "rate_pct": 95.5,
+  "match_min": 573,
   "by_verdict": {
-    "match": 564,
-    "runtime": 3,
-    "mismatch": 32,
+    "match": 573,
+    "mismatch": 26,
     "bad_case": 1,
     "compile": 1
   },
@@ -21,11 +20,11 @@
       "judged": 105
     },
     "container": {
-      "match": 220,
+      "match": 224,
       "judged": 227
     },
     "numeric": {
-      "match": 107,
+      "match": 112,
       "judged": 134
     },
     "control": {
@@ -44,7 +43,7 @@
     },
     "class_cross_ref_silent": {
       "cat": "container",
-      "verdict": "runtime"
+      "verdict": "match"
     },
     "class_dict_composition": {
       "cat": "container",
@@ -56,11 +55,11 @@
     },
     "class_inheritance": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "class_inheritance_field": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "class_inventory_dict": {
       "cat": "container",
@@ -72,7 +71,7 @@
     },
     "class_list_field_method": {
       "cat": "container",
-      "verdict": "runtime"
+      "verdict": "mismatch"
     },
     "class_method_str_accum": {
       "cat": "container",
@@ -88,7 +87,7 @@
     },
     "class_str_comprehension": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "class_tag_probe": {
       "cat": "container",
@@ -100,7 +99,7 @@
     },
     "closure_nonlocal": {
       "cat": "control",
-      "verdict": "runtime"
+      "verdict": "mismatch"
     },
     "container_append": {
       "cat": "container",
@@ -1708,7 +1707,7 @@
     },
     "gen_numeric_s77102_008": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_numeric_s77102_009": {
       "cat": "numeric",
@@ -1904,7 +1903,7 @@
     },
     "gen_stmts_s4711_012": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_stmts_s4711_013": {
       "cat": "numeric",
@@ -1916,7 +1915,7 @@
     },
     "gen_stmts_s585001_000": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_stmts_s585001_001": {
       "cat": "numeric",
@@ -1928,7 +1927,7 @@
     },
     "gen_stmts_s585001_003": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen_stmts_s585001_004": {
       "cat": "numeric",
@@ -2436,7 +2435,7 @@
     },
     "type_conversion_gaps": {
       "cat": "numeric",
-      "verdict": "mismatch"
+      "verdict": "match"
     }
   }
 }
