@@ -3003,6 +3003,18 @@ impl Resolver {
                     ) && (is_f(l.as_ref()) || is_f(r.as_ref()))
                     {
                         Some(Type::F64)
+                    } else if op == "+"
+                        && (matches!(l.as_ref(), Some(Type::Str))
+                            && r.as_ref().map_or(true, |t| matches!(t, Type::Str))
+                            || matches!(r.as_ref(), Some(Type::Str))
+                                && l.as_ref().map_or(true, |t| matches!(t, Type::Str)))
+                    {
+                        // Batch 587: Python has no implicit str↔num `+`, so a
+                        // `+` with one Str side and the other Str-or-unknown is
+                        // concatenation — infer Str instead of vetoing the
+                        // whole function's recovered return (`"hello " +
+                        // self.name()` printed the pointer before this).
+                        Some(Type::Str)
                     } else {
                         None
                     }
@@ -3037,14 +3049,32 @@ impl Resolver {
                     receiver: Some(recv),
                     method: m2,
                     ..
-                } if m2 == "join" => {
-                    if matches!(
+                } if m2 == "join"
+                    || matches!(
+                        m2.as_str(),
+                        "upper"
+                            | "lower"
+                            | "capitalize"
+                            | "title"
+                            | "strip"
+                            | "lstrip"
+                            | "rstrip"
+                            | "trim"
+                            | "trim_start"
+                            | "trim_end"
+                            | "to_string"
+                    ) =>
+                {
+                    // Batch 587: the str-method family on an unknown-typed
+                    // receiver yields Str (the same fallback the codegen
+                    // uses); `join` additionally requires a Str receiver.
+                    match (
+                        m2 == "join",
                         infer(recv, seen, aliases, classes, fn_rets),
-                        Some(Type::Str)
                     ) {
-                        Some(Type::Str)
-                    } else {
-                        None
+                        (_, Some(Type::Str)) => Some(Type::Str),
+                        (_, None) => Some(Type::Str),
+                        _ => None,
                     }
                 }
                 AstNode::Call {
@@ -3124,9 +3154,49 @@ impl Resolver {
                     other => {
                         if let Some((alias, member)) = import_alias(other) {
                             aliases.insert(alias, member);
-                        } else if let AstNode::ExprStmt { expr } = other {
-                            if let Some((alias, member)) = import_alias(expr) {
-                                aliases.insert(alias, member);
+                        }
+                        // Batch 587: a statement-position call reaches this walk in
+                        // TWO shapes — `ExprStmt`-wrapped (block parser) and a BARE
+                        // `Call` (loop bodies; measured on `result.append(t.upper())`
+                        // inside `for`, which arrived unwrapped and made every
+                        // ExprStmt-keyed refinement dead code). Unwrap both.
+                        let stmt_call: Option<&AstNode> = match other {
+                            AstNode::ExprStmt { expr } => {
+                                if let Some((alias, member)) = import_alias(expr) {
+                                    aliases.insert(alias, member);
+                                }
+                                Some(expr.as_ref())
+                            }
+                            other @ AstNode::Call { .. } => Some(other),
+                            _ => None,
+                        };
+                        if let Some(AstNode::Call {
+                            receiver: Some(recv),
+                            method,
+                            args,
+                            ..
+                        }) = stmt_call
+                        {
+                            // `result.append(v)` — a concrete non-I64 appended value
+                            // widens an I64-placeholder vec's element type in `seen`,
+                            // so the fn's recovered return carries it (`up_all`
+                            // returned vec<i64> and `r[0]` rendered the raw pointer
+                            // before this).
+                            if method == "append"
+                                && args.len() == 1
+                                && let AstNode::Var(v) = &**recv
+                                && let Some(Type::DynamicArray(e)) =
+                                    seen.get(v.as_str()).cloned()
+                                && matches!(*e, Type::I64)
+                                && let Some(vt) =
+                                    infer(&args[0], seen, aliases, classes, fn_rets)
+                                && !matches!(
+                                    vt,
+                                    Type::I64 | Type::PyDynamic | Type::Variable(_)
+                                )
+                                && !is_unit(&vt)
+                            {
+                                seen.insert(v.clone(), Type::DynamicArray(Box::new(vt)));
                             }
                         }
                     }
