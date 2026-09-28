@@ -1,15 +1,15 @@
 {
   "total": 601,
   "judged": 600,
-  "match": 557,
-  "rate_pct": 92.8,
-  "match_min": 557,
+  "match": 564,
+  "rate_pct": 94.0,
+  "match_min": 564,
   "by_verdict": {
-    "match": 557,
-    "mismatch": 36,
+    "match": 564,
     "runtime": 3,
+    "mismatch": 32,
     "bad_case": 1,
-    "compile": 4
+    "compile": 1
   },
   "per_cat": {
     "truth": {
@@ -17,11 +17,11 @@
       "judged": 43
     },
     "str": {
-      "match": 102,
+      "match": 105,
       "judged": 105
     },
     "container": {
-      "match": 216,
+      "match": 220,
       "judged": 227
     },
     "numeric": {
@@ -40,7 +40,7 @@
     },
     "class_cross_method_str": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "class_cross_ref_silent": {
       "cat": "container",
@@ -80,7 +80,7 @@
     },
     "class_method_str_concat": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "class_self_chain": {
       "cat": "container",
@@ -196,7 +196,7 @@
     },
     "container_neg_index_in_and_ternary": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "container_nested_index": {
       "cat": "container",
@@ -332,7 +332,7 @@
     },
     "func_return_str_list": {
       "cat": "container",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "gen009_control": {
       "cat": "control",
@@ -1968,7 +1968,7 @@
     },
     "gen_str_s314159_003": {
       "cat": "str",
-      "verdict": "compile"
+      "verdict": "match"
     },
     "gen_str_s314159_004": {
       "cat": "str",
@@ -2252,7 +2252,7 @@
     },
     "str_format_method": {
       "cat": "str",
-      "verdict": "compile"
+      "verdict": "match"
     },
     "str_fstring": {
       "cat": "str",
@@ -2324,7 +2324,7 @@
     },
     "str_split_missing": {
       "cat": "str",
-      "verdict": "compile"
+      "verdict": "match"
     },
     "str_strip": {
       "cat": "str",
