@@ -1,12 +1,12 @@
 {
   "total": 601,
   "judged": 600,
-  "match": 573,
-  "rate_pct": 95.5,
-  "match_min": 573,
+  "match": 574,
+  "rate_pct": 95.7,
+  "match_min": 574,
   "by_verdict": {
-    "match": 573,
-    "mismatch": 26,
+    "match": 574,
+    "mismatch": 25,
     "bad_case": 1,
     "compile": 1
   },
@@ -28,7 +28,7 @@
       "judged": 134
     },
     "control": {
-      "match": 89,
+      "match": 90,
       "judged": 91
     }
   },
@@ -99,7 +99,7 @@
     },
     "closure_nonlocal": {
       "cat": "control",
-      "verdict": "mismatch"
+      "verdict": "match"
     },
     "container_append": {
       "cat": "container",
