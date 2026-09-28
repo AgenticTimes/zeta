@@ -24291,6 +24291,79 @@ AGENTS.md 明文「全量门禁两侧不并发」⇒ 这次是**旁路侧破的*
 - **闸门不受影响**：`ok=178 ≥ 最小 ok=163`、`timeout=0 fail=0 segv=0` ⇒ 门禁判 `GREEN: JIT 无静默崩溃，ok 未回退`。
 
 
+## 批次 591（2026-09-28，**7.3 生态与工具／文档合同 × 门禁面**，backlog **#52 第 ② 格的第一半＝名单外扩展名（文件其实在仓里）**／会话任务 #234）：核对器的扩展名门从「手写九项名单」换成「名单下限 ∪ 仓内派生」——`docs/ABI.md:997` 那条指向 **97 行文件尾之外**的 `.github/workflows/ci.yml:103-113` 第一次**被看见**并改绑 `:91-97`；判据台加 **E7 三翼**（改前两翼红、守门翼两侧都绿）；**锚点 304→306／引用 342→344**、终态 `ANCHOR_RC=0`；射程内引用 **203→205**
+
+### 一、最小复现（先让缺陷出声，再动判据）
+
+- 缺陷现场（改前，`docs/ABI.md:997` 逐字）＝`` `.github/workflows/ci.yml:103-113` ``，而 `wc -l .github/workflows/ci.yml` ＝ **97** ⇒ 这是一条**指到文件尾之外**的引用。
+- 改前核对器对它的反应＝**当场打印「锚点全部对上」、`rc=0`**（E7 首翼实拍＝`/tmp/b591/tai_pre5.txt`：`[败] rc=0／基线 0 行`、`[败] rc=0 并打印"锚点全部对上"`，该份尾部带 `PRE_RC=1`）。
+- **病因不在那条写歪的号，在门本身**：`ANCHOR_RE` 的扩展名是硬写的九项名单（`rs c h py sh txt toml md z`，现 `check_abi_anchors.py:123` 的 `HARD_EXTS`），名单里没有 `yml`、也没有 `zeta` ⇒ **这两条引用从未进入定位环节**（不是「定位失败」，是压根没被扫到）。这一格对得上 #52 行在册的第 ② 格原文＝「文档里新增引用**只要写成 `.ll` 或『第 NNNN 行』就完全不在 `ANCHOR_RE`/`SRC_EXT` 的射程内**」——`ci.yml` 是同一道名单的另一个受害拼写（`.ll` 那一半因文件未入库本批仍留射程外，见 §六）；#52 行的第 ① 格（「定位失败的引用不进 `--list`」）本批**未动**。
+
+### 二、修法（一处派生，不设兼容壳）
+
+- 门＝`HARD_EXTS ∪ git ls-files 派生`，`Index.combined()`（`:213`）一份文档构建一次；模块级 `ANCHOR_RE`/`COMBINED` **删除**（不留别名壳），`collect()` 循环改走 `idx.combined()`。
+- 派生三条排除项＝**无文本意义**（`LINELESS_EXTS`，仓内实际命中被排除的有 `backup/bak/drawio/lock/o/png/rmeta/svg` 八种）、非 `[A-Za-z][A-Za-z0-9]*`、长度 > 8。
+- **取并集而非纯派生**的理由（docstring 已写、本批当场复算）＝`git ls-files` 里 `.h` 结尾的文件 **0 个**（`grep -c '\.h$'`），纯派生会把手写名单已覆盖的 `h` 这一格悄悄吐出去。实测规模＝tracked **2158** 个文件 ⇒ 手写 **9** 项（`c h md py sh toml txt rs z`）、派生新增 **13** 项（`TAG dcase dot html json log ps1 pyc tsv yaml yml zet zeta`）、并集 **22** 项。
+- **为什么不整道放开名单**：仓外未入库的转储（如 `dump.ll`）进了射程 ⇒ 定位得 `无解` ⇒ 落进 `problems` ⇒ `rc=2` 硬报错。E7 第三翼（守门翼）两侧都绿＝改前改后「仓外扩展名仍留在射程外且不报错（`rc=0`、定位失败 0 条）」⇒ 本批没有把文档管线改聋。
+- `SRC_EXT`（`:146`）**刻意未动**：它只管「同行最近归属」的继承，不是射程门；一并改会把归属语义和射程语义搅在一个开关里。
+
+### 三、12 条盲区成员逐名分类（尺＝`/tmp/b591/members.py`，两种形态各一把）
+
+| 形态 | 条数 | 逐名 | 本批处置 |
+|---|---|---|---|
+| **A**『路径.扩展名:行号』且改前射程外 | **2** | `ABI.md:449` `RELEASE_NOTES_v1.0.19.zeta:19`；`ABI.md:997` `.github/workflows/ci.yml:103-113` | **收**：两条进射程，`:997` 改绑 `91-97`，`:449` 内容本就对得上 ⇒ 一并 `--bless-only` 入表 |
+| **B**『… 第 NNNN 行』散文 | **5** | `ABI.md:158`（第 534 行）、`:159`（538）、`:161`（553）、`:572`（refactor.md 第 130 行）、`:614`（pylib/registry.txt 第 208 行） | **不收**（见 §六） |
+| **C**『路径 空格 行号』 | **5** | `ABI.md:155` `pinned.ll 17687`／`ungated.ll 17689`；`:160` `pre454.ll 103251`／`pinned.ll 103256`；`:161` `pinned.ll 94935` | **不收**（同 §六；这三份 `.ll` 转储当场复算＝**未入库**（`git ls-files \| grep -c '\.ll$'` ＝ **0**）且**当前工作树里也已不存在**（`ls pinned.ll ungated.ll pre454.ll` 三个名均报 No such file）⇒ 进射程只会造 `无解`） |
+
+对照读数＝**射程内引用 改前 203 条 → 改后 205 条**（+2，恰等于形态 A 的两条，说明门放宽没有把别的行卷进来）。
+
+### 四、四段序与全部核对器读数
+
+| 段 | 动作 | 读数 |
+|---|---|---|
+| ① 纯读（改文档前） | `check_abi_anchors.py` | `305 个可解析（来自 343 条引用）／1 个定位失败`＝`[定位失败] ABI.md:997 … 越界（该文件没有这么多行）: .github/workflows/ci.yml(97 行)`；漂移 0／**新 1**／消失 0（基线 304）⇒ **RC=2**（`CHK_first_rc.txt`；这条「新 1」是门放宽后 `zeta:19` 进射程，不是文档写歪） |
+| ② 改绑后纯读 | 手改 `ABI.md:997` → `:91-97` | `306 个可解析（来自 344 条引用）／0 个定位失败`；漂移 0／**新 2**／消失 0；待归属 98 条／88 种、仓外 14、共用键 38 三项**与 590 终态逐字相同**（`CHK_readonly2.txt`） |
+| ③ 逐名实读＋点名入表 | `--bless-only` 两段各带完整路径 | `只刷点名的 2 条锚点 … 基线共 306 条；其中新入表 2 条`＝`ci.yml:91-97 → - name: Upload baseline JSON …`、`RELEASE_NOTES_v1.0.19.zeta:19 → "Struct literals allocate on heap via runtime_malloc …"`（先 `sed -n '91,97p'` 与 `sed -n '19p'` 逐字读过才入表，坑 67 的规矩） |
+| ④ 再纯读（终态） | 只读核对 | `306 ⇔ 344`、定位失败 0、漂移 **0**／新 **0**／消失 **0**（基线 306）、待归属 98/88、仓外 14、共用键 38、**「锚点全部对上」、`ANCHOR_RC=0`**（`CHK_final_readonly.txt`） |
+
+提交面自证：`docs/ABI.md` **1/1** 等长替换 ⇒ 文件仍 **1158 行**（以 ABI.md 行号为目标的其它引用不受影响）；`tools/baselines/abi_anchors.tsv` **2/0**、392→**394** 行且 `git diff --stat` 无重排；`tools/check_abi_anchors.py` 46/5（**895→936** 行）、`tools/abi_anchors_check.sh` 49/1（**175→223** 行）。
+
+### 五、判据台（E7）红→绿
+
+- 改前对照＝HEAD 副本跑（`git show 52f1504b^:tools/check_abi_anchors.py > tools/_abi_pre591.py`，`md5 -q` ＝ `8bd524754e9cafd1738729f1b7621798`，与上一段所记逐字相同；收尾复跑这次是第二趟取该副本读数）：**判据台结论 2 条失败、`PRE_RC=1`**（`/tmp/b591/tai_pre5.txt` 尾部即 `PRE_RC=1` 行），红的是 E7 前两翼——「`rc=0`／基线 0 行」与「`rc=0` 并打印『锚点全部对上』」；E1–E6 与第三翼绿。副本跑完**已删**（主树文件未动，脚本自身也只改 worktree 副本）。
+- 改后＝`bash tools/abi_anchors_check.sh` ⇒ **`E1–E7 全过`、`POST_RC=0`**（`tai_post4.txt`），E7 三翼逐字＝「在界内的那条进了射程：基线 1 行（旧版 0 行——核对器连看都没看见它）」／「指到文件尾之外要出声：`rc=2`、定位失败 1 条且判据写『越界』」／守门翼「仓外扩展名仍留在射程外且不报错（`rc=0`、定位失败 0 条）」。
+- **一次落盘缺口（如实登记，已在收尾补上）**：会话中途那三趟（`tai_pre.txt`／`tai_pre2.txt`／`tai_pre3.txt`、`tai_post.txt`／`tai_post2.txt`，以及第一版收尾重跑的 `tai_pre4.txt`／`tai_post3.txt`）只把结论行落盘、`rc` 只在会话里念过 ⇒ 光看文件不可复算（只能按脚本头注明的判据台契约「0=全过；1=有失败」反推）。按 572 在册的「会被覆盖的读数必须当场落盘」，收尾把两侧**各再跑一遍并用 `> file 2>&1; echo RC=$?` 追加 `PRE_RC=`／`POST_RC=` 行**＝上面引用的 `tai_pre5.txt`（`PRE_RC=1`）与 `tai_post4.txt`（`POST_RC=0`）；`tai_pre4.txt`／`tai_post3.txt` 留作过程件。
+- 脚本头注释同步改了病因那句（`:16`：`ANCHOR_RE 的名单` → `扩展名名单`），**E1–E6 的判据一个字没动**。
+
+### 六、本批不收的两格（如实登记，不宣称结案）
+
+1. **形态 B／C 合计 10 条**仍是盲区成员。收它们的代价＝跨行归属要在每行重复带路径的锚点（批次 542 立的规矩：散文式裸号只能靠「同行最近归属」继承，跨行就断），而这两形指向的多是**仓外或未入库转储**（`.ll`）⇒ 进射程只会造 `无解`⇒`rc=2`。**判据侧的缺口留在 #52 名下**，本批只把「名单外但仓内查得到文件」这一形收掉。
+2. **`SCOPE_RE` 的「声明为仓外」不保护带路径的引用**（该分支只在无路径的 `CONT_RE` 命中上生效）＝结构事实，本批未动、留档。
+3. `tools/abi_anchors_check.sh` 里 `HARD_EXTS` 的九项与 E7 用词「名单外扩展名」是**下限**语义，不是穷举——日后加文件类型不需要改脚本，这一点写在 `combined()` 的 docstring 里。
+
+### 七、门禁（按 AGENTS 路由表：`tools/**`＋门禁自身 ⇒ 判据脚本 + `python_style`）
+
+- **快门禁＝两步**：① 判据台 `bash tools/abi_anchors_check.sh` ⇒ **E1–E7 全过、`POST_RC=0`**（`tai_post4.txt`）；② `python_style` 单步 ⇒ **405 passed／2 failed／6 known-fail／0 xpass**（桶和 413 ⇔ 590 在册同档），红源 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` **与 590 全量逐项逐字相同** ⇒ **零新增红**（`/tmp/b591/py_only.txt`）。
+- **未跑 `official`／`corpus`／`jit`／差分**：本批没有动 `src/**`、`runtime/**`、`tests/**`、`pylib/**`（AGENTS 路由表里这四步分别挂在解析面与下型/出码面），跑了只是重复已知读数。
+- **主线 301 位移＝`n/a`**（沿用 541 的口径，不写「位移 0」）：资格正证据＝`git diff --numstat 52f1504b^ 52f1504b -- src runtime tests pylib` **0 行**，工作树同一配方也 **0 行**。
+- **全量节奏未受影响**：下一次全量＝主线侧 **600**。
+
+### 八、本批自造的三处读数错（如实入册）
+
+1. **`PIPESTATUS` 在 zsh 里不存在** ⇒ `echo "ANCHOR_RC=${PIPESTATUS[0]:-$?}"` 退化成管道尾段（`tail`）的 0，把 **rc=2 读成 rc=0**。修法＝不走管道，`> file 2>&1; echo $?` ⇒ `REAL_RC=2`（坑 1／48 的复现，这次是它的新变体：**兜底 `:-$?` 会让假读数看起来像有出处**）。
+2. **`m.span("path")` 对续写分支返回 `(-1,-1)`** ⇒ `covered()` 把任何东西判成「已覆盖」，且「改后射程内」被算成 **454**（混进 `CONT_RE` 的命中）。修法＝先 `if m.group("path")` 过滤 ⇒ 205。这是 `members.txt`（第一版）与 `members2.txt` 的差别，第一版**不作读数**。
+3. **散文尺正则写成 `第 NNNN 行`（要求两侧空格）** ⇒ 打 **0 条**，与同一段此前实测的 5 条冲突；改回 `第\s*(\d{2,6})(?:-(\d{2,6}))?\s*行` 并加「不落进已识别锚点内」的排除 ⇒ 5 条逐名（§三 形态 B）。**两次都是「尺自己坏掉」**，判据＝与上一段已有读数冲突时先怀疑尺。
+
+另有两处环境噪声：`tools/__pycache__/` 由本批 `import check_abi_anchors` 自造（比对旁路 518 先例后 `rm -rf` 清掉，复跑后再次清）；`runtime/py_additions.c` 出现过一次 **假 ` M`**（`md5` 与 HEAD 逐字相同＝mtime 抖动），**未做任何 checkout/restore**，后续 `git status` 亦不再列。
+
+### 九、编号、提交面与队头
+
+- **编号**＝本批取 **591**：当场点名 `git log HEAD..cleanup` **空**（旁路已全部并入）、`591` 未被占用。**但本批核对时拍到一处同号**＝旁路 `d165e846`「批次 590 入册」（`method_name_collision` 定性批，文件面只有 `worktree.md` **1/0**，经 `c6412769` 并入）与主线 `efb0be86`「批次 590 记录」时间戳**相隔 7 秒并行同号**（`10:51:25` ⇔ `10:51:32`）⇒ 这是两侧同号撞车的**第 8 次**，且**`worktree.md` §4 那条 590 行在册的「旁路 587/588/589 已用、590 起未占用」在本批不再成立**——按规矩不回改历史行，只在此登记订正。引用一律以**提交哈希**为身份（号段政策＝等裁定第 ④ 件）。
+- **提交面（两笔，全部不 push）**：① `fix(tools)` ＝ `52f1504b`（四件：`tools/check_abi_anchors.py`、`tools/abi_anchors_check.sh`、`docs/ABI.md`、`tools/baselines/abi_anchors.tsv`）；② `docs(codegen)` ＝ 本记录批（roadmap 新节 ＋ `worktree.md` §4 台账 ＋ `backlog.md` #52 行内折写）。`.ouroboros/work.md`、`tools/corpus_baseline.py` 与仓根那几个在册未跟踪件**留在工作树未暂存**。
+- **队头**（不变，等用户裁决的 9 条见 590 §八）：**#211①**（全 0 列生产者）→ `str_trim` 族（需 `runtime/py_additions.c` 语义真修授权）→ **#167①／#52 余项**（本批的形态 B／C 10 条挂在这里）→ #182 → t494／#213⑧ → #48。
+- **产物**＝`/tmp/b591/`（核对器四段：`CHK_first_readonly.txt`、`CHK_first_rc.txt`、`CHK_readonly2.txt`、`CHK_bless.txt`、`CHK_final_readonly.txt`、`CHK_record_readonly.txt`／`CHK_record_readonly2.txt`〔记录批收尾的只读复跑，后一份尾部带 `ANCHOR_RC=0`〕；判据台：**`tai_pre5.txt`＝`PRE_RC=1`、`tai_post4.txt`＝`POST_RC=0` 是带 `rc` 行的正式读数**，`tai_pre.txt`／`tai_pre2.txt`／`tai_pre3.txt`／`tai_pre4.txt`、`tai_post.txt`／`tai_post2.txt`／`tai_post3.txt` 留作过程件〔只有结论行〕；另有 `py_only.txt`、`members.py`、`members.txt`〔第一版，**不作读数**〕、`members2.txt`、`check_unrestricted.py`〔完全放开名单的探针〕、`wt_before.txt`／`wt_row.md`〔§4 台账插入前后的点名自证〕）＋ `/tmp/b591_scan.py`、`/tmp/b591_space.py`、`/tmp/b591_prose.py`（三把尺，**按命名留在了 `/tmp` 根而非本批目录**——日后找不到现场先按这条找）；改前对照副本 `tools/_abi_pre591.py`（`md5 -q` ＝ `8bd524754e9cafd1738729f1b7621798`）跑完**已删**，`tools/__pycache__/` 每次跑完即清。
+
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
