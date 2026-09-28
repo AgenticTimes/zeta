@@ -9856,23 +9856,32 @@ call, no NULL-handle dereference).",
                     // print face renders (py_json_dumps_vec_typed, batches
                     // 557/565). lower_to_string on a vec handle printed the
                     // raw address (type_conversion_gaps diff line #3).
-                    if let Some(tag) = match self.type_map.get(&arg_id) {
+                    if let Some(tags) = match self.type_map.get(&arg_id) {
                         Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
-                            Some(match **e {
-                                Type::F64 | Type::F32 => 1,
-                                Type::Str => 2,
-                                Type::Bool => 3,
-                                _ => 0,
-                            })
+                            Some(Self::elem_tag_string(e))
                         }
                         _ => None,
                     } {
+                        // Batch 633: nested lists (`[[1, 2], [3]]`) carry a
+                        // RECURSIVE tag string ("4,0" = list of int-lists);
+                        // the flat forms keep the typed dumps call.
+                        let (fname, tags_arg): (&str, MirExpr) = if tags.len() == 1 {
+                            ("py_json_dumps_vec_typed", MirExpr::IntLit(
+                                tags.as_bytes()[0].wrapping_sub(b'0') as i64,
+                            ))
+                        } else {
+                            ("py_json_dumps_vec_nested", MirExpr::StringLit(tags.clone()))
+                        };
                         let tid = self.next_id();
-                        self.exprs.insert(tid, MirExpr::IntLit(tag));
-                        self.type_map.insert(tid, Type::I64);
+                        self.exprs.insert(tid, tags_arg);
+                        if fname.ends_with("_typed") {
+                            self.type_map.insert(tid, Type::I64);
+                        } else {
+                            self.type_map.insert(tid, Type::Str);
+                        }
                         let nid = self.next_id();
                         self.stmts.push(MirStmt::Call {
-                            func: "py_json_dumps_vec_typed".to_string(),
+                            func: fname.to_string(),
                             args: vec![arg_id, tid],
                             dest: nid,
                             type_args: vec![],
@@ -10184,23 +10193,37 @@ call, no NULL-handle dereference).",
                                 }
                             }
                         }
-                        if let Some(tag) = match self.type_map.get(arg_id) {
+                        if let Some(tags) = match self.type_map.get(arg_id) {
                             Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
-                                Some(match **e {
-                                    Type::F64 | Type::F32 => 1,
-                                    Type::Str => 2,
-                                    Type::Bool => 3,
-                                    _ => 0,
-                                })
+                                Some(Self::elem_tag_string(e))
                             }
                             _ => None,
                         } {
+                            // Batch 633: nested lists carry a recursive tag
+                            // string ("4,0" = list of int-lists) and route to
+                            // the recursive runtime; flat forms keep the typed
+                            // dumps call unchanged.
+                            let (fname, tags_expr): (&str, MirExpr) = if tags.len() == 1 {
+                                (
+                                    "py_json_dumps_vec_typed",
+                                    MirExpr::IntLit(tags.as_bytes()[0].wrapping_sub(b'0') as i64),
+                                )
+                            } else {
+                                (
+                                    "py_json_dumps_vec_nested",
+                                    MirExpr::StringLit(tags.clone()),
+                                )
+                            };
                             let sid = self.next_id();
                             let tid = self.next_id();
-                            self.exprs.insert(tid, MirExpr::IntLit(tag));
-                            self.type_map.insert(tid, Type::I64);
+                            self.exprs.insert(tid, tags_expr);
+                            if fname.ends_with("_typed") {
+                                self.type_map.insert(tid, Type::I64);
+                            } else {
+                                self.type_map.insert(tid, Type::Str);
+                            }
                             self.stmts.push(MirStmt::Call {
-                                func: "py_json_dumps_vec_typed".to_string(),
+                                func: fname.to_string(),
                                 args: vec![*arg_id, tid],
                                 dest: sid,
                                 type_args: vec![],
@@ -16305,6 +16328,21 @@ call, no NULL-handle dereference).",
 
     /// Get the common type of element expressions.
     /// If elements is empty, returns Type::I64 as default.
+    /// Batch 633: recursive element-type tag string for nested-list repr —
+    /// "0" int, "1" f64, "2" str, "3" bool, "4,<inner>" list. The runtime
+    /// `py_json_dumps_vec_nested` walks the tokens level by level.
+    fn elem_tag_string(t: &Type) -> String {
+        match t {
+            Type::DynamicArray(e) | Type::Array(e, _) => {
+                format!("4,{}", Self::elem_tag_string(e))
+            }
+            Type::F64 | Type::F32 => "1".to_string(),
+            Type::Str => "2".to_string(),
+            Type::Bool => "3".to_string(),
+            _ => "0".to_string(),
+        }
+    }
+
     fn get_common_element_type(&self, element_ids: &[u32]) -> Type {
         if let Some(first_elem_id) = element_ids.first() {
             self.type_map

@@ -1,0 +1,24 @@
+// 批次 633（旁路 cleanup）：嵌套 list 的 str()/print 渲染——626 面的递归
+// 扩展（632 定性批的可收设计实施）。632 三层链实为两层：字面量元素型别
+// 本就带嵌套（get_common_element_type 读首元素 type_map＝DynamicArray），
+// 缺的只是 ① str() 臂的 tag 计算不递归（DynamicArray 落 `_ => 0` int 路
+// 打句柄地址）② runtime 无递归臂。现 str() 臂按元素型别递归编码 tag 串
+// （"4,0"＝int 列表的列表；平面形仍走 py_json_dumps_vec_typed 零回归），
+// 新 runtime py_json_dumps_vec_nested 解析 tag 串逐级下钻（tag=4 对元素
+// 句柄以余串递归；NULL 元素渲染 []）。边界（不在本夹具）：混合元素型别
+// 的嵌套（[[1,"a"]]）按首元素投票、异型元素按该型别渲染＝误读面（
+// 运行期无逐元素标记，#117 同族）；print 面嵌套同臂受益（同一 tag 管线
+// 经 .get/str 之外的 print 分派另计）。
+print(str([[1, 2], [3]]))
+print(str([[[1]]]))
+print(str([["a", "b"], ["c"]]))
+print(str([[True, False]]))
+x = [[1, 2], [3]]
+print(str(x))
+print(x[0])
+// expect: [[1, 2], [3]]
+// expect: [[[1]]]
+// expect: [['a', 'b'], ['c']]
+// expect: [[True, False]]
+// expect: [[1, 2], [3]]
+// expect: [1, 2]
