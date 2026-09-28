@@ -2335,28 +2335,36 @@ impl Resolver {
                 }
                 _ => Vec::new(),
             };
-            // Batch 603: an own-init subclass gets FIELD-MERGE ONLY (base
+            // Batch 603/608: an own-init subclass gets FIELD-MERGE ONLY (base
             // fields it does not declare itself — slots for super-written
             // values); the ctor ADOPTION below is for the no-own-init shape
             // (empty own fields + empty params = the synthesized stand-in).
+            // BASE FIELDS GO FIRST: inherited methods read via the BASE's
+            // layout (name@base-idx) — appending base fields after own fields
+            // made `d.greet()` read the wrong slot (s10b3: name@1 read as
+            // Animal's name@0 → empty).
             let own_fields: Vec<(String, String)> = match self.type_decls.get(&ty) {
                 Some(crate::middle::mir::r#gen::TypeDecl::Struct { fields, .. }) => {
                     fields.clone()
                 }
                 _ => Vec::new(),
             };
-            if !own_fields.is_empty() {
+            {
+                let mut merged: Vec<(String, String)> = base_fields.clone();
+                for (f, s) in &own_fields {
+                    if !merged.iter().any(|(x, _)| x == f) {
+                        merged.push((f.clone(), s.clone()));
+                    }
+                }
                 if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
                     fields: cf,
                     ..
                 }) = self.type_decls.get_mut(&ty)
                 {
-                    for (f, s) in &base_fields {
-                        if !cf.iter().any(|(x, _)| x == f) {
-                            cf.push((f.clone(), s.clone()));
-                        }
-                    }
+                    *cf = merged;
                 }
+            }
+            if !own_fields.is_empty() {
                 continue;
             }
             let Some(bp) = base_params else { continue };
