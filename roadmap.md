@@ -25107,3 +25107,36 @@ S5（不同名）同一位置的三处调用是三个**互不相同**的闭包�
 - pyramid 层＝**3.2 Lowering／名绑定族**；上接 639（#174 定价）、638（#173 未量三形）。
 - 队头不变：真修 #247（本批把它的修法方向从"两张表未分离"收成"一张表，方向确定"）、`runtime` 需授权件（#211①／#212）、`str_trim` 族（需 `py_additions.c` 授权）→ #167①／#52 余项 → #182 → t494／#213⑧ → #48。待用户裁决累计 **11 条**不变。
 - 下次全量门禁＝批次 650。**不 push**。
+
+
+## 批次 642（2026-09-29，**真修批尝试＝已回退**，harness #247／pyramid 3.2 Lowering·名绑定族）
+
+### 一、动了什么、为什么回退
+
+按批次 641 收口的方向落 `src/middle/mir/gen.rs`：在 hoisted-def 那一臂（`:2694` 裸键 insert、`:2704` 别名表 insert）加"首定义者保留"守卫 ＋ 未绑定侧 `eprintln!("warning: PY-A: …")` 出声（沿用 gen.rs 既有 PY-A 家族，不开新诊断码 ⇒ 不动 `src/error_codes.rs`、不触一码一义判据 #87）。
+
+两版键写法都没过类型检查：
+
+- `self.closure_vars.get(fn_name.as_ref())` ⇒ **E0283**（`String: AsRef<_>`／`Borrow<_>` 多实现，Q 推断不出来，gen.rs:2706:26）；
+- `self.closure_vars.get(&fn_name)` ⇒ **E0277**（`fn_name` 实为 `&String`，`String: Borrow<&String>` 不成立；编译器同屏提示成立的是 `Borrow<str>`）。
+
+⇒ 唯一正确写法是 `.get(fn_name.as_str())`。**没有把它改成能编译的形状、也没有跑门禁，所以整份改动已 `git checkout -- src/middle/mir/gen.rs` 回退**：补丁全文存 `/tmp/b642/patch_642_gen.diff`（54 行），HEAD 仍是 641 记录笔 `8ef33801`，工作树只剩会话前既有的三件（`.ouroboros/work.md`／`AGENTS.md`／`tools/corpus_baseline.py`）。
+
+### 二、本批实拍到的读数（都是**改前**那颗二进制）
+
+`target/release/zetac` md5 `55a366a9bdf758896a11f77768fdb756`（＝640/641 在册值；两次 `cargo build --release` 都失败，二进制没换过）：
+
+| 形 | 输出 | 对照 |
+|---|---|---|
+| S1 `s1_dup_class.z`（两个同名嵌套类 `Box.get`） | `2 2` | CPython `1 2` ⇒ 红；病因＝同名类别共用 struct 布局（批次 430 族），**本补丁不改变它** |
+| S2 `s2_method_vs_outer.z`（外层 def 与同名方法） | `9 9` | CPython `7 9` ⇒ 红＝641 的靶形 |
+| S3 `s3_shared_method.z`（对照） | `11 22` | 639 判绿的那个形 |
+| S5 `s5_same_class_diff_method.z`（第四形） | `7 9` | 与 CPython 同 ⇒ 绿（641 结论复现） |
+
+改前二进制另存 `/tmp/b642/zetac.pre`，两颗同目录规则的后续 A/B 直接可用（坑 68）。
+
+### 三、账务
+
+- 未提交任何代码改动 ⇒ 快门禁与位移 A/B 本批**未跑**（没有可测的 post 二进制），不入册为"验证通过"。
+- #247 仍 OPEN，描述里已写入"下一步唯一改动＝`.get(fn_name.as_str())`"＋四形 pre 值＋必跑清单。
+- 队头与待裁 11 条不变；下次全量门禁仍＝批次 650。**不 push**。
