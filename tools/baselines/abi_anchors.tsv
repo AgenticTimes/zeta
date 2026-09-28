@@ -118,15 +118,15 @@ src/backend/codegen/codegen.rs	3363-3366	let param_types: Vec<_> = (0..args_coun
 src/backend/codegen/codegen.rs	3872-3897	MirStmt::Assign { lhs, rhs } => { let val = self.gen_expr_safe(rhs, exprs); let alloca = *self.locals.get(lhs).unwrap(); // An INT value stored into a FLOAT slo
 src/backend/codegen/codegen.rs	3906	self.note_return_slot_mismatch(func, dest, args.len());
 src/backend/codegen/codegen.rs	4392-4400	let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, l, r, "eq").unwrap(); self.builder.build_int_z_extend(cmp, self.i64_type, "eq_ext").unwrap()
-src/backend/codegen/codegen.rs	4424	let coerced = self.coerce_call_args(callee, arg_vals, args);
-src/backend/codegen/codegen.rs	4440	let coerced = self.coerce_call_args(callee, arg_vals, args);
+src/backend/codegen/codegen.rs	4430	let coerced = self.coerce_call_args(callee, arg_vals, args);
+src/backend/codegen/codegen.rs	4446	let coerced = self.coerce_call_args(callee, arg_vals, args);
 src/backend/codegen/codegen.rs	4543	if func == "read" && args.len() == 1 {
 src/backend/codegen/codegen.rs	4929	// The MIR gen already appends _N (arg count) to function names.
 src/backend/codegen/codegen.rs	4948-4959	let needs_ptr_arg = base_func == "option_is_some" || base_func == "option_get_data" || base_func == "option_free" || base_func == "host_result_is_ok" || base_fu
-src/backend/codegen/codegen.rs	4955-4974	let arg_vals: Vec<BasicMetadataValueEnum> = args .iter() .enumerate() .map(|(i, &id)| { let val = self.gen_expr_safe(&id, exprs); // If this function needs poin
-src/backend/codegen/codegen.rs	4975	let coerced = self.coerce_call_args(callee, arg_vals, args);
+src/backend/codegen/codegen.rs	4961-4980	let arg_vals: Vec<BasicMetadataValueEnum> = args .iter() .enumerate() .map(|(i, &id)| { let val = self.gen_expr_safe(&id, exprs); // If this function needs poin
+src/backend/codegen/codegen.rs	4981	let coerced = self.coerce_call_args(callee, arg_vals, args);
 src/backend/codegen/codegen.rs	4985-4993	let final_val = if returns_ptr { let ptr_val = val.into_pointer_value(); self.builder .build_ptr_to_int(ptr_val, self.i64_type, "ptrtoint") .unwrap() .into() } 
-src/backend/codegen/codegen.rs	5132	let coerced = self.coerce_call_args(callee, arg_vals, args);
+src/backend/codegen/codegen.rs	5138	let coerced = self.coerce_call_args(callee, arg_vals, args);
 src/backend/codegen/codegen.rs	5152-5161	let want_float = self .builder .get_insert_block() .and_then(|b| b.get_parent()) .map_or(false, |f| { matches!( f.get_type().get_return_type(), Some(inkwell::ty
 src/backend/codegen/codegen.rs	5162-5196	let ret_val = if want_float && !matches!( ret_val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_) ) { self.builder .build_signed_int_to_float(ret_val.in
 src/backend/codegen/codegen.rs	5184-5185	// linker at all. `infer_fn_return_type` only scans top-level // returns, so nested ones are never consulted.
@@ -144,7 +144,7 @@ src/backend/codegen/codegen.rs	7037	if (l_str || r_str) && matches!(op.as_str(),
 src/backend/codegen/codegen.rs	7384	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
 src/backend/codegen/codegen.rs	7385	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
 src/backend/codegen/codegen.rs	7423-7424	// Return heap pointer as i64 (caller reads from valid heap memory) heap_ptr_val.into()
-src/backend/codegen/codegen.rs	7531-7543	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> = (0..field_count).map(|_| self.i64_type.into()
+src/backend/codegen/codegen.rs	7566-7578	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> = (0..field_count).map(|_| self.i64_type.into()
 src/backend/codegen/codegen.rs	7583-7586	let extracted = self .builder .build_extract_value(loaded_struct.into_struct_value(), field_index, "") .unwrap();
 src/backend/codegen/codegen.rs	7768	MirExpr::StackArray { elements, size } => {
 src/backend/codegen/codegen.rs	7853-7854	// Return pointer to elem0 (buf + 16) as i64 let data_ptr = unsafe {
@@ -158,10 +158,10 @@ src/backend/codegen/codegen.rs	7999-8002	self.builder .build_signed_int_to_float
 src/backend/codegen/codegen.rs	8008-8013	(BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => { self.abi_note( &callee_name, i, &format!("fptosi → i{}", pt.get_bit_wi
 src/backend/codegen/codegen.rs	8014-8017	match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataV
 src/backend/codegen/codegen.rs	8019-8023	(BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_)) | (BasicMetadataValueEnum::PointerValue(_), inkwell::types::BasicTypeEnum
-src/backend/codegen/codegen.rs	8020-8034	fn abi_note(&mut self, callee: &str, arg_i: usize, kind: &str) { self.abi_warn_count = self.abi_warn_count.saturating_add(1); if self.abi_warn_count <= 8 { epri
 src/backend/codegen/codegen.rs	8024	_ => result.push(arg),
 src/backend/codegen/codegen.rs	8027-8048	if result.len() < n_params { for i in result.len()..n_params { let pt_meta = fn_type.get_param_types()[i]; let zero: BasicMetadataValueEnum<'ctx> = match pt_met
 src/backend/codegen/codegen.rs	8049-8050	} else if result.len() > n_params { result.truncate(n_params);
+src/backend/codegen/codegen.rs	8055-8069	fn abi_note(&mut self, callee: &str, arg_i: usize, kind: &str) { self.abi_warn_count = self.abi_warn_count.saturating_add(1); if self.abi_warn_count <= 8 { epri
 src/backend/codegen/codegen.rs	8057	if self.abi_warn_count <= 8 {
 src/backend/codegen/codegen.rs	8063	if self.strict_abi && self.abi_fatal.is_none() {
 src/backend/codegen/codegen.rs	8078	fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
@@ -204,16 +204,16 @@ src/middle/mir/gen.rs	680	Some(format!("{}__{}", module.replace('.', "_"), parts
 src/middle/mir/gen.rs	792	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
 src/middle/mir/gen.rs	799	let prefix = format!("{}__", module.replace('.', "_"));
 src/middle/mir/gen.rs	1306-1326	fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>>) { let missing: Vec<&str> = params .iter() .enumerate() .filter(|(i, _)| slots
-src/middle/mir/gen.rs	1627	self.mirror_module_global_writes();
+src/middle/mir/gen.rs	1662	self.mirror_module_global_writes();
 src/middle/mir/gen.rs	1726	Self::pin_declared_int_return(&mut mir, ast);
 src/middle/mir/gen.rs	1744	fn pin_declared_int_return(mir: &mut Mir, ast: &AstNode) {
-src/middle/mir/gen.rs	1779	);
-src/middle/mir/gen.rs	1794	let key_id = self.env_store(name, rhs_id);
-src/middle/mir/gen.rs	2341	if self.nonlocal_names.contains(name) {
-src/middle/mir/gen.rs	2343	self.env_store(name, rhs_id);
-src/middle/mir/gen.rs	2358	let key_id = self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	1825-1826	AstNode::Var(name) if self.nonlocal_names.contains(name) => { // PY-A V3: nonlocal name — defining assignment stores
+src/middle/mir/gen.rs	1829	let key_id = self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	2376	if self.nonlocal_names.contains(name) {
+src/middle/mir/gen.rs	2378	self.env_store(name, rhs_id);
 src/middle/mir/gen.rs	2391	} else if self.nonlocal_names.contains(name) {
-src/middle/mir/gen.rs	2452	self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	2393	let key_id = self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	2487	self.env_store(name, rhs_id);
 src/middle/mir/gen.rs	3700	self.lower_ast(body);
 src/middle/mir/gen.rs	3781	// Macros should have been expanded before MIR lowering.
 src/middle/mir/gen.rs	4064	) -> Vec<(String, u32)> {
@@ -229,7 +229,7 @@ src/middle/mir/gen.rs	8243	func: "zeta_dyn_len".to_string(),
 src/middle/mir/gen.rs	8266-8268	// The block written here MUST be the block the runtime readers // decode: `option_is_some` tests slot 0 and `option_get_data` // reads slot 1 (tokio_runtime_st
 src/middle/mir/gen.rs	8273-8282	if receiver.is_none() && matches!(method.as_str(), "Some" | "Ok" | "Err") && args.len() == 1 { let val_id = self.lower_expr(&args[0]); let (variant, tag_val) = 
 src/middle/mir/gen.rs	8283-8285	// `Option` is `[tag | data]`, `Result` is `[tag | ok | err]` // (the layouts `option_get_data` / `host_result_get_data` // decode), so an unused payload slot i
-src/middle/mir/gen.rs	10065	Some(Type::Str) => "println_str",
+src/middle/mir/gen.rs	10266	Some(Type::Str) => "println_str",
 src/middle/mir/gen.rs	10377-10383	for (i, a) in pos.into_iter().enumerate() { if i < slots.len() { slots[i] = Some(a); } else { slots.push(Some(a)); } }
 src/middle/mir/gen.rs	10384-10389	for (n, v) in kw { match params.iter().position(|p| *p == n) { Some(i) => slots[i] = Some(v), None => slots.push(Some(v)), } }
 src/middle/mir/gen.rs	10386	Some(i) => slots[i] = Some(v),
@@ -250,7 +250,7 @@ src/middle/mir/gen.rs	13189-13191	// Append arg count to disambiguate overloaded
 src/middle/mir/gen.rs	13192-13202	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
 src/middle/mir/gen.rs	13203-13209	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
 src/middle/mir/gen.rs	13216	format!("{}_{}", func, arg_ids.len())
-src/middle/mir/gen.rs	13567	self.lower_range_guard(scrutinee_id, start, end, *inclusive)
+src/middle/mir/gen.rs	13786	// x @ start..end: bind, then guard the range. The
 src/middle/mir/gen.rs	14108-14141	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
 src/middle/mir/gen.rs	14823	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
 src/middle/mir/gen.rs	14827	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
@@ -260,7 +260,7 @@ src/middle/mir/gen.rs	15606	func: "zeta_dyn_getitem".to_string(),
 src/middle/mir/gen.rs	15634	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
 src/middle/mir/gen.rs	16025	self.env_store(name, cur_id);
 src/middle/mir/gen.rs	16261-16266	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
-src/middle/mir/gen.rs	16495	self.mirror_module_global_writes();
+src/middle/mir/gen.rs	16761	self.mirror_module_global_writes();
 src/middle/mir/mir.rs	45-60	/// 批次 399 (类型基础②): the ONE entry saying what this function's `ret` /// carries, so the callee's LLVM signature and the caller's destination slot /// stop being
 src/middle/mir/mir.rs	61-75	pub fn signature_ret_ty(&self) -> Option<Type> { for stmt in &self.stmts { if let MirStmt::Return { val } = stmt { if let Some(ty) = self.type_map.get(val) { re
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");

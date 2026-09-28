@@ -183,7 +183,7 @@ C 运行时里按名字查的那一格（`zeta_env_get`/`zeta_env_set`，runtime
 ① `=` —— 写局部槽 + 镜像 env（批次 391 起：`mirror_module_global_writes` 后置遍，gen.rs:568，
 本规则的第一处实现是批次 385 的内联点，旧号 gen.rs 的 3885）；
 ② `global` 声明的名字、以及批次 384 抬到模块作用域的 `static` —— 这些名字**没有**局部槽
-（读写一律走 env，gen.rs:2341 与 :2391），所以是"只写 env"，与 ① 不是一条规则；
+（读写一律走 env，gen.rs:2376 与 :2391），所以是"只写 env"，与 ① 不是一条规则；
 ③ `+=`（`AssignOp`）—— 批次 385 之前只看局部槽，`total += 5` 连调两次打回 `5 / 5`，
 现在与 ① 对称（同一个后置遍，gen.rs:568）。
 **上面这些 `=`/`+=` 的段号是批次 385 写的；批次 387 在同一个文件前面插入了两个公共入口，
@@ -193,9 +193,9 @@ C 运行时里按名字查的那一格（`zeta_env_get`/`zeta_env_set`，runtime
 当成一条活引用、把历史号打回漂移。八条写点从批次 387 起一律走 `env_store`，四条原先
 硬写 `Type::I64` 的读点一律走 `env_slot_ty`。
 **批次 391 把"八条按语句种类内联镜像"收敛成一个 Assign 后置遍**：`mirror_module_global_writes`
-（gen.rs:568）→ `splice_env_mirrors`（:587）→ `env_mirror(name, lhs)`（:599），调用点在 :1627 与 :16495。
+（gen.rs:568）→ `splice_env_mirrors`（:587）→ `env_mirror(name, lhs)`（:599），调用点在 :1662 与 :16761。
 上面那五个内联点号随之不再存在；本批（542）实测的现号：`global_ty_of` gen.rs:430、
-`env_store` 定义 gen.rs:473（其余内联调用点 5 处 = gen.rs:1794、:2343、:2358、:2452、:16025，
+`env_store` 定义 gen.rs:473（其余内联调用点 5 处 = gen.rs:1829、:2378、:2393、:2487、:16025，
 实参一律是"刚写过的那个槽" `rhs_id`，其中 gen.rs:16025 传 `cur_id`）、`env_slot_ty` gen.rs:540。
 **三条路径镜像的都是"刚写过的那个槽"，不是原来那条表达式**（后置遍对 `=` 与 `+=` 同一条规则：
 `env_mirror` 拿的是 `Assign` 的 `lhs`，见 gen.rs:563-567 的注释原文 "The mirror reads the SLOT it
@@ -222,7 +222,7 @@ acc = acc + 4`）返回 7、env 里 11。
 `ratio = 2.5` 在别的函数里打回 `0.000000`（写侧 `fptosi` 存成 2，2 的位模式是 1e-323）；
 改后 `t426_f64_env_roundtrip.z` 为 `2.500000 / 2.500000`，`global` 写与 `+=` 写两形见
 `t427_f64_env_write_paths.z`（`3.500000 / 3.750000 / 3.750000`，与 `python3` 逐字相同）。
-**没有声明类型的那一族仍然截断**（闭包里的 `nonlocal`：`gen.rs:1779` 一侧，实拍
+**没有声明类型的那一族仍然截断**（闭包里的 `nonlocal`：`gen.rs:1825-1826` 一侧，实拍
 `/tmp/b386/pA.z` 的 `read= 2`，两条 `fptosi` 告警仍在）—— 它的读侧按 `I64` 走，写侧存位
 模式会打成十几亿量级的整数垃圾，那不是修复。收掉这一格要给 env 带类型，是轴 B/F 的活。
 另一半没闭合的：`x: float` 的模块全局被**整数字面量**赋值时，值不是浮点 ⇒ 走原样的整数存储，
@@ -254,7 +254,7 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 （:6397 注释原文 "Allocate struct on HEAP to prevent dangling pointers"、:6398-6401、
 :7423-7424）；元组走 `StackArray` 的 `[cap|len|elems…]`、句柄 = `buf+16`（:6926-6931、
 :7853-7854，与 §1#6 同一几何）。读侧：字段访问 = `int_to_ptr` + **整块 load**
-`struct_type(&[i64; N], false)`（:7531-7543，非 packed）+ `extract_value`（:7583-7586）；
+`struct_type(&[i64; N], false)`（:7566-7578，非 packed）+ `extract_value`（:7583-7586）；
 字段写 = 地址算术 `base + idx*8` 后 `store`（:6095-6116）。
 ⚠️ **另一套通用映射器不参与签名**：`type_to_llvm_type`（:8461）会把 `Type::Tuple`
 映成真 LLVM struct（:8567-8573）。改签名时只认 :1473-1482，认它就等着 ABI 不一致。
@@ -310,9 +310,9 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 ### 3.2 实参强转全表（`coerce_call_args`）
 
 > 锚点源码：src/backend/codegen/codegen.rs
-锚点 codegen.rs:7928-8053；告警器 `abi_note` :8020-8034（stderr 最多 8 条，上界在 :8057；
-`strict_abi` 时首条即致命，改写在 :8063）。调用点：:4424、:4440（运算符名兜底）、:4975（常规调用）、
-:5132（void 调用兜底）、:5359（`DictInsert`→`map_insert`，传空 `arg_ids`）。
+锚点 codegen.rs:7928-8053；告警器 `abi_note` :8055-8069（stderr 最多 8 条，上界在 :8057；
+`strict_abi` 时首条即致命，改写在 :8063）。调用点：:4430、:4446（运算符名兜底）、:4981（常规调用）、
+:5138（void 调用兜底）、:5359（`DictInsert`→`map_insert`，传空 `arg_ids`）。
 **旧号（批次 316 当时；本节起旧号一律不写成引用形态，免得核对器把"历史号"当活引用打回漂移）**：
 锚点 7197 至 7322、`abi_note` 7197 至 7212、调用点 4311、4327、4862、5019 —— 本批（542）
 实测整体后移，其中两个锚点旧号同写 7197 起，是当时抄号之误，现号已按定义点各自核对。
@@ -361,7 +361,7 @@ LLVM 层不存在聚合返回 —— `sret`/`byval`/`struct_ret` 在 `src/` 命�
 
 > 锚点源码：src/backend/codegen/codegen.rs
 **C6 唯一的例外是 10 个手写 runtime 函数**（`option_*` / `host_result_*`）：它们以真
-`ptr` 进出，故调用点前对**第 0 个实参**插 `inttoptr`（:4948-4959 名单 + :4955-4974 插入点），
+`ptr` 进出，故调用点前对**第 0 个实参**插 `inttoptr`（:4948-4959 名单 + :4961-4980 插入点），
 调用后对返回插 `ptrtoint`（:4985-4993）。
 ⚠️ 两个事实要记住：`i == 0` 的限定意味着**第 2 个及以后的 ptr 形参不会被转换**（:4543），
 以及 —— 新增 ptr 形参的 runtime 函数请走 C5 的 i64 约定，**不要扩这份名单**。
@@ -679,7 +679,7 @@ tag 取值 `ZJ_NULL 0 / INT 1 / F64 2 / STR 3 / ARR 4 / OBJ 5 / BOOL 6`
 **L5 用户 `struct` / 元组：8 字节字段数组。**
 struct 是 GC 块、字段各占一个 64 位槽，读侧用**非 packed** 的
 `struct_type(&[i64; N], false)` 整块 load 再 `extract_value`
-（codegen.rs:7531-7543），写侧是地址算术 `base + idx*8`（5446-5463）。
+（codegen.rs:7566-7578），写侧是地址算术 `base + idx*8`（5446-5463）。
 元组复用 L2 的 `[cap|len|elems…]`（:6630-6690）。
 
 **L6 packed 短串：ASCII ≤7 字节按字节小端打进这 8 个字节本身，余下为 NUL。**
@@ -1042,7 +1042,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      绑定模式前判后，截断文件 12→11、丢行 1,805→1,749，四套基线不动
      （official 194/194、python_style 285/2/4/0、corpus 39/39、jit segv=0）。
      该族修复顺带**暴露**了第二个缺口：`print(x)` 在 MIR 里发 `println_str`
-     （`src/middle/mir/gen.rs:10065`），而 JIT 表里只有 `println_i64` ⇒ 新解析出的代码
+     （`src/middle/mir/gen.rs:10266`），而 JIT 表里只有 `println_i64` ⇒ 新解析出的代码
      一执行就 E4016 填桩；补 `pylib/jit_mappings.txt` 七条后 jit ok **163→170**。
    - **批次 322 关掉第二族：字符串字面量作 match 模式**（`parse_lit` 只吃数字，
      模式里 `"+"` 停在引号处 ⇒ 臂拿不到 `=>`）。接线时有**两层**缺陷，第二层是
@@ -1108,7 +1108,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      （`match 5 { 1..=10 => 111, _ => 222 }` → 222），是这段下型代码写下来起就没对过。
      ③ 下型 B（`x @ 1..=10` 专有）：条件被 `Var(inner_cond_id)` 多包了一层，
      而那一格从无写入 ⇒ `-O` 把"读未初始化 alloca"降成 `brk #0x1` ⇒ **SIGTRAP、
-     一行输出都没有**。修法是把 guard 的 dest 直接交给上层读（`gen.rs:13567`）。
+     一行输出都没有**。修法是把 guard 的 dest 直接交给上层读（`gen.rs:13786`）。
      ④ `inclusive` 字段此前被 `inclusive: _` 丢掉 ⇒ `..` 一直按 `..=` 运行。
      现已区分（`gen.rs:4210`）。official 194 文件里**没有一处**用排他范围作模式
      （`..` 全是 for 循环与切片，走 `MirExpr::Range` 那条独立路径）⇒ 语义变更零回归面。
