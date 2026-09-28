@@ -842,10 +842,32 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     // not model MRO, but *rejecting* the `(` used to Failure the whole class
     // and drop every following top-level def (`market_data_sources.py` lost
     // `_baostock_login` / `_from_rq_code` / …). Consume the base list and
-    // continue; bases are ignored.
-    let input = if let Ok((after_paren, _)) = ws(tag("(")).parse(input) {
+    // continue.
+    // Batch 602: record the FIRST base on the struct's attrs as
+    // `__bases__:<name>` when the class has NO own `__init__` — the
+    // resolver's inheritance pass adopts the base's ctor and fields for
+    // exactly that shape (single inheritance, V1).
+    let mut base_list: Vec<String> = Vec::new();
+    let input = if let Ok((after_paren, _tag_out)) = ws(tag("(")).parse(input) {
         match after_paren.find(')') {
-            Some(idx) => &after_paren[idx + 1..],
+            Some(idx) => {
+                for seg in after_paren[..idx].split(',') {
+                    let b = seg
+                        .trim()
+                        .split('<')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if !b.is_empty() {
+                        let last = b.rsplit('.').next().unwrap_or(&b).to_string();
+                        if !base_list.iter().any(|x| x == &last) {
+                            base_list.push(last);
+                        }
+                    }
+                }
+                &after_paren[idx + 1..]
+            }
             None => {
                 return Err(nom::Err::Failure(nom::error::Error::new(
                     input,
@@ -907,9 +929,9 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                 AstNode::FuncDef {
                     name: mname,
                     params,
-                    body,
+                    mut body,
                     ret,
-                    ret_expr,
+                    mut ret_expr,
                     ..
                 },
             )) => {
@@ -967,12 +989,32 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                     } else {
                         "i64".to_string()
                     };
-                    // CRITICAL: keep parse_func's ret_expr. A method whose only
-                    // statement is an ExprStmt (`self.d.pop(key)`, `self.x`) has
-                    // that stmt promoted out of `body` into `ret_expr`. Dropping
-                    // it here left `__delitem__` / one-liner methods as empty
-                    // stubs (ret 0) with no MIR for the call.
-                    methods.push(AstNode::FuncDef {
+    // Batch 623: `super().m(·)` and explicit `Base.m(self, ·)` inside method
+    // bodies — rewrite to `PathCall { path: [Base], method: m }` so the
+    // lowering emits a DIRECT call to the qualified base implementation
+    // (`Base::m`) with self as the first argument. Both forms previously
+    // lowered as receiver dispatches on the class NAME (`Animal` resolved to
+    // the class's ctor FuncAddr, then `.speak` dispatched through the bare
+    // name thunk with that address as the receiver — rc=139), and `super()`
+    // didn't resolve at all (`_super` undefined at link time). Direct
+    // dispatch also sidesteps re-finding the overriding method on self's
+    // type (infinite recursion). `__init__` bodies do NOT pass through here
+    // (they flow to `init_stmts` for the batch-622 baseargs collection
+    // before the whitelist drops them).
+    if !base_list.is_empty() {
+        for st in &mut body {
+            rewrite_super_in_stmt(st, &base_list);
+        }
+        if let Some(re) = &mut ret_expr {
+            rewrite_super_in_expr(re, &base_list);
+        }
+    }
+    // CRITICAL: keep parse_func's ret_expr. A method whose only
+    // statement is an ExprStmt (`self.d.pop(key)`, `self.x`) has
+    // that stmt promoted out of `body` into `ret_expr`. Dropping
+    // it here left `__delitem__` / one-liner methods as empty
+    // stubs (ret 0) with no MIR for the call.
+    methods.push(AstNode::FuncDef {
                         name: mname,
                         generics: Vec::new(),
                         lifetimes: Vec::new(),
@@ -1120,6 +1162,104 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
         }
     }
     let param_names: Vec<&str> = init_params.iter().map(|(n, _)| n.as_str()).collect();
+    // Batch 608: explicit base-ctor call `B.__init__(self, a, b)` — collect
+    // per-field inits (field <- the arg's own Var name). The whitelist below
+    // DROPS these statements, so base-ctor initialized fields never existed
+    // on the subclass (d.name had no slot/value). Non-Var args skipped.
+    // Batch 620: every such call also emits a `__baseargs__:<B>:<enc>` impl
+    // attr (self stripped; kinds v/i/f/s/b, `x` unsupported, \u{1f}-joined).
+    // The resolver owns the base param->field map, so it binds these to the
+    // base ctor's params positionally at adoption time — Var args keep the
+    // 608 field-slot conflation for the own-`__init__` path.
+    // Batch 622: `super().__init__(·)` — the zero-arg `super` builtin as the
+    // receiver, NO self in the args (the explicit form passes self; this one
+    // doesn't). Rewritten to the class's FIRST base (MRO-lite head, the same
+    // class a chained `A.__init__` ladder names level by level), so the
+    // resolver's binding/substitution machinery treats both forms alike.
+    let mut baseargs_markers: Vec<String> = Vec::new();
+    for st in &init_stmts {
+        if let AstNode::ExprStmt { expr } = st {
+            if let AstNode::Call {
+                receiver: Some(recv),
+                method: m,
+                args: cargs,
+                ..
+            } = &**expr
+            {
+                if m == "__init__" {
+                    // (base name, effective arg slice) for this call.
+                    // Dispatch on the RECEIVER first: `super().__init__(·)`
+                    // (batch 622) means the class's FIRST base and carries
+                    // its args verbatim (no self element); the explicit
+                    // `Base.__init__(self, ·)` form keeps the self-strip.
+                    let target: Option<(&String, &[AstNode])> = match &**recv {
+                        AstNode::Call {
+                            receiver: None,
+                            method: sm,
+                            args: sargs,
+                            ..
+                        } if sm == "super" && sargs.is_empty() => {
+                            base_list.first().map(|b| (b, &cargs[..]))
+                        }
+                        AstNode::Var(v) => match cargs.first() {
+                            Some(AstNode::Var(selfv)) if selfv == "self" => {
+                                Some((v, &cargs[1..]))
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some((bname, call_args)) = target {
+                        let mut enc: Vec<String> = Vec::new();
+                        for a in call_args {
+                            match a {
+                                AstNode::Var(f) => {
+                                    if !fields.iter().any(|(x, _)| x == f) {
+                                        fields.push((f.clone(), "i64".to_string()));
+                                    }
+                                    if !field_inits.iter().any(|(x, _)| x == f) {
+                                        field_inits.push((f.clone(), (*a).clone()));
+                                    }
+                                    enc.push(format!("v{}", f));
+                                }
+                                AstNode::Lit(i) => enc.push(format!("i{}", i)),
+                                AstNode::FloatLit(x) => enc.push(format!("f{}", x)),
+                                AstNode::StringLit(s) => {
+                                    enc.push(format!("s{}", s.replace('\u{1f}', " ")))
+                                }
+                                AstNode::Bool(b) => {
+                                    enc.push(format!("b{}", if *b { 1 } else { 0 }))
+                                }
+                                AstNode::UnaryOp { op, expr: e } => match (&**op, &**e) {
+                                    (o, AstNode::Lit(i)) if o == "-" => {
+                                        enc.push(format!("i-{}", i))
+                                    }
+                                    (o, AstNode::FloatLit(x)) if o == "-" => {
+                                        enc.push(format!("f-{}", x))
+                                    }
+                                    _ => enc.push("x".to_string()),
+                                },
+                                _ => enc.push("x".to_string()),
+                            }
+                        }
+                        baseargs_markers.push(format!(
+                            "__baseargs__:{}:{}",
+                            bname,
+                            enc.join("\u{1f}")
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Constructor fn `Name(params) -> Name { return Name { field: init, ... } }`
+    //
+    // PY-A: carry `__init__`'s default-argument markers onto the synthesized
+    // constructor. The Resolver keys defaults by FUNCTION name, and `Pair(5)`
+    // resolves to the constructor `Pair` — not to `__init__`. Without this,
+    // `def __init__(self, x, y=2)` + `Pair(5)` read 0 for `y`: a wrong value
+    // with no diagnostic. The marker's index counts `self`, which the
     for st in &init_stmts {
         if let AstNode::Assign(lhs, rhs) = st {
             if let AstNode::FieldAccess { base, field } = &**lhs {
@@ -1153,8 +1293,26 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                             AstNode::DictLit { .. } => "map".to_string(),
                             AstNode::FloatLit(_) => "f64".to_string(),
                             AstNode::StringLit(_) => "str".to_string(),
-                            AstNode::ArrayLit(_) | AstNode::DynamicArrayLit { .. } => {
-                                "DynamicArray".to_string()
+                            AstNode::ArrayLit(items) | AstNode::DynamicArrayLit { elements: items, .. } => {
+                                // Batch 594: an ELEMENT-AWARE spelling. The bare
+                                // "DynamicArray" left every list field i64-typed
+                                // at the read sites (`print(p.ages)` rendered the
+                                // handle; `q = p.ages; q[0]` dispatched map_get
+                                // and crashed). `list[T]` is the spelling the
+                                // read side already parses (lt_annotation_type,
+                                // batch 291). Element type from the first item's
+                                // literal shape; anything else conservatively i64.
+                                let elem = items.first().map(|e| match e {
+                                    AstNode::StringLit(_) => "str",
+                                    AstNode::FloatLit(_) => "f64",
+                                    AstNode::Bool(_) => "bool",
+                                    _ => "i64",
+                                }).unwrap_or("i64");
+                                // `list<…>` (angle form) is the dialect
+                                // `lt_annotation_type` — the read side —
+                                // parses; the `[…]` subscript form belongs to
+                                // the annotation parser and is NOT read here.
+                                format!("list<{}>", elem)
                             }
                             AstNode::Var(name) if param_names.contains(&name.as_str()) => {
                                 // `self.x = x` — take the PARAMETER's declared
@@ -1278,14 +1436,6 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
             }
         }
     }
-
-    // Constructor fn `Name(params) -> Name { return Name { field: init, ... } }`
-    //
-    // PY-A: carry `__init__`'s default-argument markers onto the synthesized
-    // constructor. The Resolver keys defaults by FUNCTION name, and `Pair(5)`
-    // resolves to the constructor `Pair` — not to `__init__`. Without this,
-    // `def __init__(self, x, y=2)` + `Pair(5)` read 0 for `y`: a wrong value
-    // with no diagnostic. The marker's index counts `self`, which the
     // constructor's parameter list does not, so it shifts down by one.
     let mut ctor_body: Vec<AstNode> = dataclass_defaults.clone();
     for st in &init_stmts {
@@ -1387,13 +1537,30 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
         pub_: false,
         where_clauses: Vec::new(),
     };
+    // Batch 602: `__bases__:<name>` on the IMPL attrs — the resolver's
+    // inheritance pass adopts the base's ctor/fields for exactly this
+    // shape (no own `__init__`, single base).
+    let mut impl_attrs: Vec<String> = Vec::new();
+    // Batch 613: markers for EVERY base (multi-base subclasses call several
+    // bases' inits explicitly).
+    for b in &base_list {
+        impl_attrs.push(format!("__bases__:{}", b));
+    }
+    // Batch 620: explicit-base-call args per base (see the collection loop).
+    impl_attrs.extend(baseargs_markers.iter().cloned());
+    if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
+        eprintln!(
+            "[P603] parse_class: name={} has_init={} impl_attrs={:?}",
+            name, has_init, impl_attrs
+        );
+    }
     let impl_node = AstNode::ImplBlock {
         concept: String::new(),
         generics: Vec::new(),
         lifetimes: Vec::new(),
         ty: name.clone(),
         body: methods,
-        attrs: Vec::new(),
+        attrs: impl_attrs,
         doc: String::new(),
         where_clauses: Vec::new(),
     };
@@ -2352,4 +2519,147 @@ fn is_top_level_sync_line(trimmed: &str) -> bool {
         }
     }
     false
+}
+
+// Batch 623: `super().m(·)` / `Base.m(self, ·)` delegation inside method
+// bodies. Rewritten to `PathCall { path: [Base], method: m, args }` so the
+// lowering emits a direct call to the qualified base implementation
+// (`Base::m`) — the receiver forms instead lowered the class NAME to its
+// ctor FuncAddr and dispatched through the bare-name thunk with that
+// address as the receiver (rc=139), and a bare `super()` didn't link at
+// all (`_super` undefined). Only super() delegations and base-name
+// receivers whose first argument is `self` are rewritten; everything else
+// recurses untouched.
+
+fn is_super_zero_call(e: &AstNode) -> bool {
+    matches!(e, AstNode::Call { receiver: None, method, args, .. }
+        if method == "super" && args.is_empty())
+}
+
+fn rewrite_super_in_stmt(st: &mut AstNode, bases: &[String]) {
+    match st {
+        AstNode::ExprStmt { expr } => rewrite_super_in_expr(expr, bases),
+        AstNode::Assign(lhs, rhs) => {
+            rewrite_super_in_expr(lhs, bases);
+            rewrite_super_in_expr(rhs, bases);
+        }
+        AstNode::AssignOp { target, value, .. } => {
+            rewrite_super_in_expr(target, bases);
+            rewrite_super_in_expr(value, bases);
+        }
+        AstNode::Return(val) => rewrite_super_in_expr(val, bases),
+        AstNode::If { cond, then, else_ } => {
+            rewrite_super_in_expr(cond, bases);
+            for s in then.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+            for s in else_.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+        }
+        AstNode::While {
+            cond,
+            body,
+            else_body,
+        } => {
+            rewrite_super_in_expr(cond, bases);
+            for s in body.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+            for s in else_body.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+        }
+        AstNode::For {
+            pattern,
+            expr,
+            body,
+            else_body,
+        } => {
+            rewrite_super_in_expr(pattern, bases);
+            rewrite_super_in_expr(expr, bases);
+            for s in body.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+            for s in else_body.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_super_in_expr(e: &mut AstNode, bases: &[String]) {
+    // First rewrite children, then consider this node.
+    match e {
+        AstNode::Call { receiver, args, .. } => {
+            if let Some(rc) = receiver {
+                rewrite_super_in_expr(rc, bases);
+            }
+            for a in args.iter_mut() {
+                rewrite_super_in_expr(a, bases);
+            }
+        }
+        AstNode::PathCall { args, .. } => {
+            for a in args.iter_mut() {
+                rewrite_super_in_expr(a, bases);
+            }
+        }
+        AstNode::BinaryOp { left, right, .. } => {
+            rewrite_super_in_expr(left, bases);
+            rewrite_super_in_expr(right, bases);
+        }
+        AstNode::UnaryOp { expr: inner, .. } => rewrite_super_in_expr(inner, bases),
+        AstNode::FieldAccess { base, .. } => rewrite_super_in_expr(base, bases),
+        AstNode::FString(parts) | AstNode::ArrayLit(parts) | AstNode::Tuple(parts) => {
+            for p in parts.iter_mut() {
+                rewrite_super_in_expr(p, bases);
+            }
+        }
+        AstNode::DictLit { entries } => {
+            for (k, v) in entries.iter_mut() {
+                rewrite_super_in_expr(k, bases);
+                rewrite_super_in_expr(v, bases);
+            }
+        }
+        _ => {}
+    }
+    // The rewrite itself: `super().m(a)` → `Base::m(self, a)`, and
+    // `Base.m(self, a)` (already spelled explicitly) → the same PathCall.
+    if let AstNode::Call {
+        receiver: Some(rc),
+        method: m,
+        args,
+        type_args,
+        ..
+    } = e
+    {
+        let target: Option<String> = if is_super_zero_call(rc) {
+            bases.first().cloned()
+        } else if let AstNode::Var(v) = &**rc {
+            if bases.iter().any(|b| b == v) {
+                Some(v.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let self_first = matches!(args.first(), Some(AstNode::Var(sv)) if sv == "self");
+        if let Some(base) = target {
+            if self_first || is_super_zero_call(rc) {
+                let mut new_args: Vec<AstNode> = Vec::with_capacity(args.len() + 1);
+                if !self_first {
+                    new_args.push(AstNode::Var("self".to_string()));
+                }
+                new_args.extend(args.drain(..));
+                *e = AstNode::PathCall {
+                    path: vec![base],
+                    method: m.clone(),
+                    args: new_args,
+                    type_args: type_args.clone(),
+                };
+            }
+        }
+    }
 }

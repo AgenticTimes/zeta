@@ -208,6 +208,9 @@ pub struct MirGen {
     /// PY-A: static type of each module-level global, so env reads keep the
     /// handle tag (`q = queue.Queue()` then `q.put(x)` inside a function).
     module_global_types: HashMap<String, Type>,
+    /// Batch 603: class -> first base (resolver `__bases__` markers) — the
+    /// base-chain walk for inherited-method dispatch.
+    class_bases: HashMap<String, String>,
     /// PY-A: set while lowering the replacement closure of `re.sub`, so its
     /// parameter is typed as a Match (`m.group(0)` must dispatch).
     re_repl_param: bool,
@@ -295,6 +298,7 @@ impl MirGen {
             py_module_paths: std::collections::HashMap::new(),
             symbol_renames: HashMap::new(),
             module_global_types: HashMap::new(),
+            class_bases: HashMap::new(),
             re_repl_param: false,
             current_class: None,
             nested_class_aliases: Vec::new(),
@@ -321,6 +325,12 @@ impl MirGen {
     /// PY-A: module-global name → static type (see the field docs).
     pub fn with_module_global_types(mut self, types: HashMap<String, Type>) -> Self {
         self.module_global_types = types;
+        self
+    }
+
+    /// Batch 603: resolver's class->base map (see `class_bases`).
+    pub fn with_class_bases(mut self, bases: HashMap<String, String>) -> Self {
+        self.class_bases = bases;
         self
     }
 
@@ -1055,6 +1065,31 @@ impl MirGen {
             if self.func_ret_types.contains_key(&cand) {
                 return Some(cand);
             }
+        }
+        // Batch 603: INHERITED methods — walk the base chain (`Dog` ->
+        // `Animal`) while the direct class misses. The W-table/registry
+        // paths below cannot see user classes, so an inherited call
+        // (`d.greet()` with greet on Animal) otherwise degraded to an
+        // I64-typed generic call and printed the handle.
+        let mut cur = tn.rsplit("__").next().unwrap_or(tn).to_string();
+        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
+            eprintln!(
+                "[P603] candidate walk tn={} method={} bases={:?} fret={}",
+                tn,
+                method,
+                self.class_bases.get(&cur),
+                self.func_ret_types.contains_key(&format!("Animal::{}", method))
+            );
+        }
+        for _ in 0..8 {
+            let Some(base) = self.class_bases.get(&cur) else {
+                break;
+            };
+            let cand = format!("{}::{}", base, method);
+            if self.func_ret_types.contains_key(&cand) {
+                return Some(cand);
+            }
+            cur = base.clone();
         }
         None
     }
@@ -4607,6 +4642,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     self.type_map.insert(slot_id, ty);
                     return slot_id;
                 }
+                // Batch 593: a nested `def` hoisted as a closure — the name
+                // used as a VALUE (`return inner`; `f = inner`) must produce
+                // the synthetic function's address, exactly like a lambda
+                // value. Without this the read fell to the implicit-declare
+                // slot and `return inner` handed back an uninitialized word
+                // (indirect call → SIGBUS; closure_nonlocal).
+                if let Some(hoisted) = self
+                    .closure_vars
+                    .get(name.as_str())
+                    .cloned()
+                    .or_else(|| self.hoisted_names.get(name.as_str()).cloned())
+                {
+                    let id = self.next_id();
+                    self.exprs.insert(id, MirExpr::FuncAddr(hoisted));
+                    self.type_map.insert(id, Type::I64);
+                    return id;
+                }
 
                 // Unit-variant path of a registered enum (e.g. `Color::Green`)
                 // lowers to its variant tag (integer discriminant).
@@ -4758,6 +4810,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 self.exprs.insert(id, MirExpr::IntLit(value));
                 self.type_map.insert(id, Type::Bool);
             }
+            AstNode::NoneLit => {
+                // Batch 624: `None` as a VALUE stays 0 (i64) — only the
+                // print/str literal faces render "None" (see those arms).
+                self.exprs.insert(id, MirExpr::IntLit(0));
+                self.type_map.insert(id, Type::I64);
+            }
             AstNode::StringLit(s) => {
                 self.exprs.insert(id, MirExpr::StringLit(s.clone()));
                 self.type_map.insert(id, Type::Str);
@@ -4767,6 +4825,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 // expressions go through a to_string_* dispatch.
                 let mut part_ids: Vec<u32> = Vec::new();
                 for p in parts {
+                    // Batch 625: `f"{None}"` literal face renders "None" —
+                    // lowered as the ordinary StringLit part it is (value
+                    // representation stays 0, #113/#189 deep water).
+                    if matches!(p, AstNode::NoneLit) {
+                        let pid = self.lower_expr(&AstNode::StringLit("None".to_string()));
+                        part_ids.push(pid);
+                        continue;
+                    }
                     let pid = self.lower_expr(p);
                     // An INLINE CONDITIONAL whose branches are both strings
                     // (`f"{'sh' if exch == 'XSHG' else 'sz'}.{num}"`) left the
@@ -9373,11 +9439,14 @@ call, no NULL-handle dereference).",
                             // `key=None` — None lexes to Lit(0); the raw 0
                             // reached py_sorted_key as a function pointer and
                             // SEGV'd (batch 560). Treat it as no key.
+                            // Batch 624: None now lexes as AstNode::NoneLit
+                            // (the literal-face batch) — keep both shapes.
                             // `key=abs` — builtins have no function value to
                             // pass through the fn-pointer sort (raw abs
                             // lowered to a dead slot -> SEGV); route to the
                             // abs-key sort runtime.
-                            let none_key = matches!(&keyf, Some(AstNode::Lit(0)));
+                            let none_key =
+                                matches!(&keyf, Some(AstNode::Lit(0)) | Some(AstNode::NoneLit));
                             let abs_key = matches!(&keyf, Some(AstNode::Var(n)) if n == "abs");
                             if none_key || abs_key {
                                 keyf = None;
@@ -9724,6 +9793,29 @@ call, no NULL-handle dereference).",
 
                 // PY-A: Python `str(x)` — convert any value to its string form
                 if method == "str" && receiver.is_none() && args.len() == 1 {
+                    // Batch 624: `str(None)` literal face renders "None"
+                    // (value representation stays 0, #113/#189 deep water).
+                    // The constant must reach the result through a DEFINING
+                    // stmt — aliasing a bare constant id reads an
+                    // uninitialized alloca (the BATCH-296 trap below).
+                    if matches!(args[0], AstNode::NoneLit) {
+                        let cid = self.next_id();
+                        self.exprs
+                            .insert(cid, MirExpr::StringLit("None".to_string()));
+                        self.type_map.insert(cid, Type::Str);
+                        let nid = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_identity".to_string(),
+                            args: vec![cid],
+                            dest: nid,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(nid, MirExpr::Var(nid));
+                        self.type_map.insert(nid, Type::Str);
+                        self.exprs.insert(id, MirExpr::Var(nid));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
                     let arg_id = self.lower_expr(&args[0]);
                     // A Json value knows its own type: stringify by tag.
                     if matches!(
@@ -9824,9 +9916,118 @@ call, no NULL-handle dereference).",
                         }
                         positional.push(a);
                     }
+                    // Batch 598: `print(d.get(k, D))` on a map-typed receiver —
+                    // the result is an int-or-str UNION a static slot cannot
+                    // type (batch 576 typed it Str and the hit path deref'd
+                    // garbage). Split at statement level: each branch prints
+                    // its own statically typed value. k and D are evaluated
+                    // eagerly (CPython: D lazy — registered corner). Sole-
+                    // positional-arg shape only; sep/end keep the generic path.
+                    if positional.len() == 1 && sep_expr.is_none() && end_expr.is_none() {
+                        if let AstNode::Call {
+                            receiver: Some(recv),
+                            method: m,
+                            args: gargs,
+                            ..
+                        } = positional[0]
+                        {
+                            if m == "get" && gargs.len() == 2 {
+                                let recv_id = self.lower_expr(recv);
+                                let recv_is_map = matches!(
+                                    self.type_map.get(&recv_id),
+                                    Some(Type::Named(n, _)) if n == "map"
+                                );
+                                if recv_is_map {
+                                    let k_id = self.lower_expr(&gargs[0]);
+                                    // Key normalization — the WRITE side
+                                    // (`DictInsert`) stores `map_str_key(k)`
+                                    // (content-hash for text, identity for
+                                    // ints); the probe must hash identically
+                                    // or every present key reads absent
+                                    // (t178).
+                                    let knorm = self.next_id();
+                                    self.stmts.push(MirStmt::Call {
+                                        func: "map_str_key".to_string(),
+                                        args: vec![k_id],
+                                        dest: knorm,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs.insert(knorm, MirExpr::Var(knorm));
+                                    self.type_map.insert(knorm, Type::I64);
+                                    // Existence via py_map_contains DIRECTLY —
+                                    // the receiver is verified map-typed above;
+                                    // routing through `__contains__` dispatch
+                                    // re-derived the receiver's type and could
+                                    // fall to a dyn/str fallback that answered
+                                    // False for present keys whose value is 0
+                                    // (t178: `{"z": 0}` — batch 598).
+                                    let cond_id = self.next_id();
+                                    self.stmts.push(MirStmt::Call {
+                                        func: "py_map_contains".to_string(),
+                                        args: vec![recv_id, knorm],
+                                        dest: cond_id,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs
+                                        .insert(cond_id, MirExpr::Var(cond_id));
+                                    self.type_map.insert(cond_id, Type::Bool);
+                                    // hit branch: `d[k]` — typed by the map's
+                                    // declared value type.
+                                    let outer = std::mem::take(&mut self.stmts);
+                                    let hit_ast = AstNode::Subscript {
+                                        base: recv.clone(),
+                                        index: Box::new(gargs[0].clone()),
+                                    };
+                                    let hit_id = self.lower_expr(&hit_ast);
+                                    let hit_ty = self.type_map.get(&hit_id).cloned();
+                                    let mut then_stmts = std::mem::take(&mut self.stmts);
+                                    self.stmts = outer;
+                                    // miss branch: `D` — its own static type.
+                                    let outer2 = std::mem::take(&mut self.stmts);
+                                    let miss_id = self.lower_expr(&gargs[1]);
+                                    let miss_ty = self.type_map.get(&miss_id).cloned();
+                                    let mut else_stmts = std::mem::take(&mut self.stmts);
+                                    self.stmts = outer2;
+                                    let pf = |t: &Option<Type>| match t {
+                                        Some(Type::Str) => "println_str",
+                                        Some(Type::F64) | Some(Type::F32) => "println_f64",
+                                        _ => "println_i64",
+                                    };
+                                    then_stmts.push(MirStmt::VoidCall {
+                                        func: pf(&hit_ty).to_string(),
+                                        args: vec![hit_id],
+                                    });
+                                    else_stmts.push(MirStmt::VoidCall {
+                                        func: pf(&miss_ty).to_string(),
+                                        args: vec![miss_id],
+                                    });
+                                    self.stmts.push(MirStmt::If {
+                                        cond: cond_id,
+                                        then: then_stmts,
+                                        else_: else_stmts,
+                                        dest: None,
+                                    });
+                                    let unit = self.next_id();
+                                    self.exprs.insert(unit, MirExpr::IntLit(0));
+                                    self.type_map.insert(unit, Type::Tuple(vec![]));
+                                    return unit;
+                                }
+                            }
+                        }
+                    }
                     let mut arg_ids = vec![];
                     for a in &positional {
-                        arg_ids.push(self.lower_expr(a));
+                        // Batch 624: `print(None)` literal face renders
+                        // "None" (value representation stays 0).
+                        if matches!(a, AstNode::NoneLit) {
+                            let nid = self.next_id();
+                            self.exprs
+                                .insert(nid, MirExpr::StringLit("None".to_string()));
+                            self.type_map.insert(nid, Type::Str);
+                            arg_ids.push(nid);
+                        } else {
+                            arg_ids.push(self.lower_expr(a));
+                        }
                     }
                     let n = arg_ids.len();
                     // Separator (default one space).
@@ -12948,6 +13149,11 @@ call, no NULL-handle dereference).",
                         ..
                     }) = self.type_decls.get_mut(base_func)
                     {
+                        let pnames = self
+                            .func_param_names
+                            .get(base_func)
+                            .cloned()
+                            .unwrap_or_default();
                         for (i, aid) in arg_ids.iter().enumerate() {
                             let concrete = match self.type_map.get(aid) {
                                 Some(Type::Str) => "str",
@@ -12956,7 +13162,12 @@ call, no NULL-handle dereference).",
                                 Some(Type::Bool) => "bool",
                                 _ => continue,
                             };
-                            if let Some((_, dt)) = decl_fields.get_mut(i) {
+                            // Batch 608: refine by PARAM NAME (positional
+                            // fallback) — see the generic-call site.
+                            let target = pnames.get(i).and_then(|pn| {
+                                decl_fields.iter().position(|(f, _)| f == pn)
+                            }).unwrap_or(i);
+                            if let Some((_, dt)) = decl_fields.get_mut(target) {
                                 if dt.as_str() == "i64" {
                                     *dt = concrete.to_string();
                                 }
@@ -13068,6 +13279,11 @@ call, no NULL-handle dereference).",
                         ..
                     }) = self.type_decls.get_mut(base)
                     {
+                        let pnames = self
+                            .func_param_names
+                            .get(base)
+                            .cloned()
+                            .unwrap_or_default();
                         for (i, aid) in arg_ids.iter().enumerate() {
                             let concrete: Option<String> = match self.type_map.get(aid) {
                                 Some(Type::Str) => Some("str".to_string()),
@@ -13088,7 +13304,15 @@ call, no NULL-handle dereference).",
                                 _ => None,
                             };
                             if let Some(concrete) = concrete {
-                                if let Some((_, dt)) = decl_fields.get_mut(i) {
+                                // Batch 608: refine by PARAM NAME (field ==
+                                // param by the `self.x = x` convention) with a
+                                // positional FALLBACK — the positional form
+                                // refined `legs` for `Dog("Rex")` (args map to
+                                // PARAMS, not field order).
+                                let target = pnames.get(i).and_then(|pn| {
+                                    decl_fields.iter().position(|(f, _)| f == pn)
+                                }).unwrap_or(i);
+                                if let Some((_, dt)) = decl_fields.get_mut(target) {
                                     if dt.as_str() == "i64" || dt.as_str() == "map" {
                                         *dt = concrete;
                                     }
@@ -13716,6 +13940,39 @@ call, no NULL-handle dereference).",
                         return self.lower_expr(&AstNode::Var(gname));
                     }
                 }
+                // Batch 610: `c.kind` — a CLASS VARIABLE read through an
+                // INSTANCE base (the route above needs the base to BE the
+                // class name). When the base's declared type is a known class
+                // whose mangled class-variable global exists — and the field
+                // is NOT a struct field of it — read the global (CPython:
+                // instance lookup falls back to the class). Without this the
+                // read hit the instance layout's stand-in slot and returned
+                // another field's value (cif: `c.kind` printed 7 = c.v).
+                if let AstNode::Var(vname) = &**base {
+                    let tn = self.module_global_types.get(vname.as_str()).and_then(
+                        |t| match t {
+                            Type::Named(n, _)
+                                if !self.type_decls.contains_key(vname.as_str()) =>
+                            {
+                                Some(n.clone())
+                            }
+                            _ => None,
+                        },
+                    );
+                    if let Some(tn) = tn {
+                        let gname = format!("{}__{}", tn, field);
+                        let is_struct_field = matches!(
+                            self.type_decls.get(tn.as_str()),
+                            Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                                fields,
+                                ..
+                            }) if fields.iter().any(|(f, _)| f == field)
+                        );
+                        if !is_struct_field && self.module_globals.contains(&gname) {
+                            return self.lower_expr(&AstNode::Var(gname));
+                        }
+                    }
+                }
                 // `self.<field>` where `self` is NOT bound (a synthesized
                 // constructor): the value is the one already computed for that
                 // field — see `self_field_aliases`. Guarded on `self` being
@@ -13824,7 +14081,16 @@ call, no NULL-handle dereference).",
                                     "bool" => Some(Type::Bool),
                                     "i64" | "int" | "dyn" => None,
                                     other => {
-                                        if let Some(tag) = crate::middle::pylib::handle_tag(other) {
+                                        // Batch 594: `list[T]` field spellings
+                                        // (element-aware init-expr inference)
+                                        // must reach the vec type here too —
+                                        // `self.names`-style reads inside
+                                        // methods otherwise stayed I64.
+                                        if let Some(t) = lt_annotation_type(other) {
+                                            Some(t)
+                                        } else if let Some(tag) =
+                                            crate::middle::pylib::handle_tag(other)
+                                        {
                                             Some(Type::Named(tag.to_string(), vec![]))
                                         } else if other == "PyPath" {
                                             Some(Type::Named("PyPath".to_string(), vec![]))

@@ -1,0 +1,41 @@
+// 批次 621（旁路 cleanup）：own-`__init__` 子类的非 Var 基调用实参——
+// merge-only 路径的 ctor 重建（620 已登记边界）。608 收集循环拿实参的
+// Var 名当字段槽名，非 Var 实参造不出槽 ⇒ 合成 ctor 的 StructLit 漏掉
+// 基布局字段、positional 写按 StructLit 序错位（s16 实拍：d.name 读到
+// legs 的槽打 4）。收养守卫现按「有缺口＋有 __baseargs__ 标记」放行
+// 重建：own 对与 params 逐字保留（own `__init__` 签名＝用户面签名），
+// 缺失字段来自按位绑定后的基初始化器，悬空 Var 降 Lit 0，字段型别随
+// 字面量类别精化（基侧未注解参数误推 i64）。无缺口形状（s10d 的
+// Var 实参形）一字不动——守卫双条件缺一即 continue。
+class Animal:
+    def __init__(self, name):
+        self.name = name
+class Dog(Animal):
+    def __init__(self):
+        Animal.__init__(self, "Rex")
+        self.legs = 4
+
+class A:
+    def __init__(self, n):
+        self.x = n
+class B:
+    def __init__(self, m):
+        self.y = m
+class C(A, B):
+    def __init__(self):
+        A.__init__(self, 7)
+        B.__init__(self, 5)
+        self.z = 9
+
+d = Dog()
+print(d.name)
+print(d.legs)
+c = C()
+print(c.x)
+print(c.y)
+print(c.z)
+// expect: Rex
+// expect: 4
+// expect: 7
+// expect: 5
+// expect: 9

@@ -1,0 +1,52 @@
+// 批次 620（旁路 cleanup）：显式基调用的非 Var 实参——收养 ctor 的值链。
+// parse 把 `A.__init__(self, ·)` 的实参按基编码进 `__baseargs__:<B>:` impl
+// 标记（v/i/f/s/b 五类，\u{1f} 分隔）；resolver 在收养时按位绑定基 ctor
+// 的参数并深替换其字段初始化器（`A.__init__(self, 7)` ⇒ n ← 7 ⇒ x ← 7），
+// 参数名字段同名的形状基初始化器优先于 param-Var（s15 实测 0/0 → Rex/4），
+// 字面量类别的字段型别随收养精化（基侧只见未注解参数会误推 i64、读出
+// 裸指针）。未被字段值引用的收养参数删除（`C()` 不再告警读 0）。
+// 边界（不在本夹具、登记继承余半）：own-`__init__` 子类的非 Var 基调用
+// 实参（608 的字段槽以实参名命名，非 Var 无名可推）仍不收。
+class A:
+    def __init__(self, n):
+        self.x = n
+class B:
+    def __init__(self, m):
+        self.y = m * 2
+class C(A, B):
+    def __init__(self):
+        A.__init__(self, 7)
+        B.__init__(self, 5)
+    def show(self):
+        return self.x + self.y
+
+class Animal:
+    def __init__(self, name, legs):
+        self.name = name
+        self.legs = legs
+class Dog(Animal):
+    def __init__(self):
+        Animal.__init__(self, "Rex", 4)
+
+class P:
+    def __init__(self, v):
+        self.v = v
+class Q(P):
+    def __init__(self, k):
+        P.__init__(self, k)
+
+c = C()
+print(c.x)
+print(c.y)
+print(c.show())
+d = Dog()
+print(d.name)
+print(d.legs)
+q = Q(9)
+print(q.v)
+// expect: 7
+// expect: 10
+// expect: 17
+// expect: Rex
+// expect: 4
+// expect: 9

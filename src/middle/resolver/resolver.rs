@@ -34,6 +34,20 @@ struct CacheFile {
 
 pub struct Resolver {
     pub impls: HashMap<(String, String), Vec<AstNode>>,
+    /// Batch 602: (class, base) pairs marked by parse_class (`__bases__:B`
+    /// on the ImplBlock attrs, no own `__init__`) — consumed by
+    /// `inherit_class_members` after registration completes.
+    pending_inherits: std::cell::RefCell<Vec<(String, String)>>,
+    /// Batch 602/603: class -> first base (from `__bases__:` ImplBlock attrs),
+    /// recorded for EVERY class with a base; consumed by the gen-side
+    /// base-chain method lookup via `class_bases()`.
+    class_bases: std::cell::RefCell<HashMap<String, String>>,
+    /// Batch 620: (class, base, args) from `__baseargs__:<B>:` ImplBlock
+    /// attrs — the explicit `B.__init__(self, ·)` call args (self stripped,
+    /// non-Var kinds encoded by parse). Consumed by `inherit_class_members`
+    /// to bind the base ctor's params positionally before adopting its
+    /// field initializers.
+    pending_baseargs: std::cell::RefCell<Vec<(String, String, Vec<AstNode>)>>,
     pub cached_mirs: HashMap<String, Mir>,
     pub mono_mirs: HashMap<MonoKey, Mir>,
     pub borrow_checker: RefCell<BorrowChecker>,
@@ -127,6 +141,9 @@ impl Resolver {
     pub fn new() -> Self {
         let mut r = Self {
             impls: HashMap::new(),
+            pending_inherits: std::cell::RefCell::new(Vec::new()),
+            class_bases: std::cell::RefCell::new(HashMap::new()),
+            pending_baseargs: std::cell::RefCell::new(Vec::new()),
             cached_mirs: HashMap::new(),
             mono_mirs: HashMap::new(),
             borrow_checker: RefCell::new(BorrowChecker::new()),
@@ -993,9 +1010,46 @@ impl Resolver {
                 self.funcs.insert(name, (typed_params, typed_ret, true));
             }
             AstNode::ImplBlock {
-                concept, ty, body, ..
+                concept, ty, body, attrs, ..
             } => {
                 self.impls.insert((concept, ty.clone()), body.clone());
+                // Batch 602: single-inheritance adoption marker (no own
+                // `__init__` — parse_class only marks that shape).
+                for a in attrs {
+                    if let Some(b) = a.strip_prefix("__bases__:") {
+                        self.pending_inherits
+                            .borrow_mut()
+                            .push((ty.clone(), b.to_string()));
+                        self.class_bases
+                            .borrow_mut()
+                            .insert(ty.clone(), b.to_string());
+                    }
+                    // Batch 620: `__baseargs__:<B>:<enc>` — the explicit
+                    // `B.__init__(self, ·)` args, self stripped, kinds encoded
+                    // by parse (`v`ar/i`nt`/`f`loat/`s`tring/`b`ool`,`
+                    // `x` unsupported), joined by \u{1f}. Decoded back to
+                    // AstNodes here; consumed by `inherit_class_members`.
+                    if let Some(rest) = a.strip_prefix("__baseargs__:") {
+                        if let Some((bname, enc)) = rest.split_once(':') {
+                            let args = enc
+                                .split('\u{1f}')
+                                .filter(|s| !s.is_empty())
+                                .map(|s| match s.split_at(1) {
+                                    ("v", n) => AstNode::Var(n.to_string()),
+                                    ("i", x) => AstNode::Lit(x.parse().unwrap_or(0)),
+                                    ("f", x) => AstNode::FloatLit(x.to_string()),
+                                    ("s", x) => AstNode::StringLit(x.to_string()),
+                                    ("b", "1") => AstNode::Bool(true),
+                                    ("b", _) => AstNode::Bool(false),
+                                    _ => AstNode::Lit(0),
+                                })
+                                .collect();
+                            self.pending_baseargs
+                                .borrow_mut()
+                                .push((ty.clone(), bname.to_string(), args));
+                        }
+                    }
+                }
                 // Register functions with qualified names
                 let base_ty = impl_key_base(ty.as_str());
                 for b in body.clone() {
@@ -1979,6 +2033,24 @@ impl Resolver {
                         if let Some(t) = method_result_ty(&tag, method) {
                             return Some(t);
                         }
+                        // Batch 601: a USER-CLASS method — fn_rets carries the
+                        // recovered `Class::method` return (qualified-defs
+                        // recovery, batch 600). The registry paths below cannot
+                        // see user classes, so a module-level `d.speak()` fell
+                        // through to None and printed the handle.
+                        let q = format!("{}::{}", tag, method);
+                        if let Some(t) = fn_rets.get(&q) {
+                            return Some(t.clone());
+                        }
+                        let suffix = format!("::{}", method);
+                        let hits: Vec<Type> = fn_rets
+                            .iter()
+                            .filter(|(k, _)| k.ends_with(suffix.as_str()))
+                            .map(|(_, v)| v.clone())
+                            .collect();
+                        if !hits.is_empty() && hits.iter().all(|t| *t == hits[0]) {
+                            return Some(hits[0].clone());
+                        }
                     }
                     // `mod.member(...)` — a registry module member.
                     let mut parts: Vec<String> = Vec::new();
@@ -2213,12 +2285,34 @@ impl Resolver {
         // indexes an empty struct variant (field 0) instead of the class.
         {
             let declared = fn_rets.clone();
+            // Batch 600: the recovery must see the QUALIFIED method defs —
+            // registered_func_defs carries the BARE originals, and two classes
+            // defining the same method name (`speak` on Animal and Dog) made
+            // the suffix match hit twice → the uniqueness gate vetoed BOTH
+            // recoveries → i64. registered_funcs carries the qualified clones
+            // with real bodies.
+            let mut rec_defs = defs.clone();
+            for (k, v) in self.registered_funcs.iter() {
+                if k.contains("::") {
+                    if let AstNode::FuncDef { .. } = v {
+                        rec_defs.push(v.clone());
+                    }
+                }
+            }
             for (fname, fty) in fn_rets.iter_mut() {
-                if !matches!(fty, Type::Tuple(inner) if inner.is_empty()) {
+                // Batch 600: a py CLASS method arrives with the desugaring's
+                // `i64` default (parse_class body_is_string_return only
+                // claims bare StringLit returns), so `::`-qualified entries
+                // join the recovery exactly like batch 451's per-lowering
+                // pass. Without it, `print(d.speak())` typed the call I64 and
+                // printed the handle (class_inheritance).
+                let is_class_method =
+                    matches!(fty, Type::I64) && fname.contains("::");
+                if !matches!(fty, Type::Tuple(inner) if inner.is_empty()) && !is_class_method {
                     continue;
                 }
                 if let Some(t) =
-                    Self::unannotated_return_ty(&defs, fname, &classes, &declared, &sig_params)
+                    Self::unannotated_return_ty(&rec_defs, fname, &classes, &declared, &sig_params)
                 {
                     *fty = t;
                 }
@@ -2254,6 +2348,469 @@ impl Resolver {
             }
         }
         out
+    }
+
+    /// Batch 602: single-inheritance adoption — for each `class C(B)` with NO
+    /// own `__init__` (parse_class marker on the ImplBlock attrs), adopt B's
+    /// ctor parameters and merge B's fields into C's layout, so `Dog("Rex")`
+    /// builds a Dog carrying `name` (class_inheritance). Method inheritance
+    /// rides the existing bare-name fallback dispatch. Runs after ALL
+    /// registration (the synthesized empty ctor is overwritten here) and
+    /// before `refine_ctor_field_types`.
+    /// Batch 613: a synthesized ctor carries its StructLit in the BODY's
+    /// `Return` (ret_expr is None for parse-synthesized ctors).
+    fn ctor_structlit_pairs(v: &AstNode) -> Vec<(String, AstNode)> {
+        match v {
+            AstNode::FuncDef { body, ret_expr, .. } => {
+                let lit = ret_expr
+                    .as_ref()
+                    .and_then(|re| match &**re {
+                        AstNode::StructLit { .. } => Some(re.as_ref()),
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        body.iter().find_map(|st| match st {
+                            AstNode::Return(val) => match &**val {
+                                AstNode::StructLit { .. } => Some(val.as_ref()),
+                                _ => None,
+                            },
+                            _ => None,
+                        })
+                    });
+                match lit {
+                    Some(AstNode::StructLit { fields, .. }) => fields.clone(),
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn expr_refs_var(e: &AstNode, name: &str) -> bool {
+        match e {
+            AstNode::Var(v) => v == name,
+            AstNode::BinaryOp { left, right, .. } => {
+                Self::expr_refs_var(left, name) || Self::expr_refs_var(right, name)
+            }
+            AstNode::Call { args, .. } => args.iter().any(|a| Self::expr_refs_var(a, name)),
+            _ => false,
+        }
+    }
+
+    /// Batch 620: deep-rewrite `Var(p)` occurrences through `bind`
+    /// (base ctor param -> explicit call arg). Unbound names survive.
+    fn subst_vars(e: &AstNode, bind: &[(String, AstNode)]) -> AstNode {
+        match e {
+            AstNode::Var(v) => match bind.iter().find(|(p, _)| p == v) {
+                Some((_, a)) => a.clone(),
+                None => e.clone(),
+            },
+            AstNode::BinaryOp {
+                op,
+                left,
+                right,
+            } => AstNode::BinaryOp {
+                op: op.clone(),
+                left: Box::new(Self::subst_vars(left, bind)),
+                right: Box::new(Self::subst_vars(right, bind)),
+            },
+            AstNode::Call {
+                receiver,
+                method,
+                args,
+                type_args,
+                structural,
+            } => AstNode::Call {
+                receiver: receiver.as_ref().map(|r| Box::new(Self::subst_vars(r, bind))),
+                method: method.clone(),
+                args: args.iter().map(|a| Self::subst_vars(a, bind)).collect(),
+                type_args: type_args.clone(),
+                structural: *structural,
+            },
+            other => other.clone(),
+        }
+    }
+
+    pub fn inherit_class_members(&mut self) {
+        let pairs = self.pending_inherits.borrow().clone();
+        let mut order: Vec<String> = Vec::new();
+        let mut bases_of: HashMap<String, Vec<String>> = HashMap::new();
+        for (ty, base) in pairs {
+            if !bases_of.contains_key(&ty) {
+                order.push(ty.clone());
+            }
+            bases_of.entry(ty.clone()).or_default().push(base);
+        }
+        for ty in order {
+            let bases = &bases_of[&ty];
+            // Merge fields from ALL bases (first occurrence wins = MRO-lite).
+            let mut merged: Vec<(String, String)> = Vec::new();
+            let mut base_inits: Vec<(String, AstNode)> = Vec::new();
+            for b in bases {
+                if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                    fields: bf,
+                    ..
+                }) = self.type_decls.get(b)
+                {
+                    for (f, s) in bf {
+                        if !merged.iter().any(|(x, _)| x == f) {
+                            merged.push((f.clone(), s.clone()));
+                        }
+                    }
+                }
+                if let Some(v) = self.registered_funcs.get(b) {
+                    // Batch 620: bind this base's ctor params to the explicit
+                    // call args (`A.__init__(self, 7)` ⇒ n ← 7) positionally,
+                    // then rewrite its field initializers through that
+                    // binding — the adopted ctor inherits the call's VALUES,
+                    // not dangling base-param names.
+                    let bind: Vec<(String, AstNode)> = {
+                        let mut out: Vec<(String, AstNode)> = Vec::new();
+                        if let Some((p, _, _)) = self.funcs.get(b) {
+                            let call_args = self
+                                .pending_baseargs
+                                .borrow()
+                                .iter()
+                                .find(|(c, bb, _)| c == &ty && bb == b)
+                                .map(|(_, _, a)| a.clone())
+                                .unwrap_or_default();
+                            for (k, (pn, _)) in p.iter().enumerate() {
+                                if let Some(a) = call_args.get(k) {
+                                    out.push((pn.clone(), a.clone()));
+                                }
+                            }
+                        }
+                        out
+                    };
+                    for (f, e) in Self::ctor_structlit_pairs(v) {
+                        let e = if bind.is_empty() {
+                            e
+                        } else {
+                            Self::subst_vars(&e, &bind)
+                        };
+                        if !base_inits.iter().any(|(x, _)| x.as_str() == f.as_str()) {
+                            base_inits.push((f, e));
+                        }
+                    }
+                }
+            }
+            let own = match self.type_decls.get(&ty) {
+                Some(crate::middle::mir::r#gen::TypeDecl::Struct { fields, .. }) => {
+                    fields.clone()
+                }
+                _ => Vec::new(),
+            };
+            for (f, s) in &own {
+                if !merged.iter().any(|(x, _)| x == f) {
+                    merged.push((f.clone(), s.clone()));
+                }
+            }
+            if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                fields: cf,
+                ..
+            }) = self.type_decls.get_mut(&ty)
+            {
+                *cf = merged.clone();
+            }
+            // The parse-synthesized ctor's own pairs/params, needed by BOTH
+            // paths below (batch 621 hoisted the extraction here).
+            let (synth_pairs, synth_params) = match self.registered_funcs.get(&ty) {
+                Some(v @ AstNode::FuncDef { params, .. }) => {
+                    (Self::ctor_structlit_pairs(v), params.clone())
+                }
+                _ => (Vec::new(), Vec::new()),
+            };
+            // Own-`__init__` subclasses are merge-only — the synthesized ctor
+            // carries every OWN field (the :1146 collection pairs fields with
+            // inits). Batch 621: EXCEPT when an explicit base call passed
+            // non-Var args — the 608 collection names slots after the arg's
+            // Var, so it cannot create those, and the ctor's StructLit misses
+            // base-layout fields while positional writes follow the StructLit
+            // order (s16: `Animal.__init__(self, "Rex")` + own `legs` made
+            // d.name read legs' slot and print 4). When a gap actually exists
+            // AND base call args were recorded, rebuild the ctor in merged
+            // layout order — own pairs preserved verbatim (params untouched:
+            // the own `__init__` signature is the user-facing one), missing
+            // fields from the substituted base initializers.
+            if !own.is_empty() {
+                let has_baseargs = self
+                    .pending_baseargs
+                    .borrow()
+                    .iter()
+                    .any(|(c, _, _)| c == &ty);
+                let has_gap = merged
+                    .iter()
+                    .any(|(f, _)| !synth_pairs.iter().any(|(n, _)| n == f));
+                if !has_gap || !has_baseargs {
+                    continue;
+                }
+                let mut ctor_fields: Vec<(String, AstNode)> = Vec::new();
+                for (f, _s) in merged.iter() {
+                    let value = if let Some((_, e)) =
+                        synth_pairs.iter().find(|(n, _)| n == f)
+                    {
+                        e.clone()
+                    } else if let Some((_, e)) =
+                        base_inits.iter().find(|(n, _)| n == f)
+                    {
+                        e.clone()
+                    } else if synth_params.iter().any(|(pn, _)| pn == f) {
+                        AstNode::Var(f.clone())
+                    } else {
+                        AstNode::Lit(0)
+                    };
+                    ctor_fields.push((f.clone(), value));
+                }
+                // A base initializer naming a base param that is not among the
+                // own signature's params would dangle — degrade to Lit 0.
+                for (_, v) in ctor_fields.iter_mut() {
+                    if let AstNode::Var(name) = v {
+                        if !synth_params.iter().any(|(pn, _)| pn == name) {
+                            *v = AstNode::Lit(0);
+                        }
+                    }
+                }
+                // Same kind refinement as the adoption path below: the base's
+                // inference saw only its unannotated params (i64), so a Str
+                // initializer would read back as a raw pointer.
+                if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                    fields: cf, ..
+                }) = self.type_decls.get_mut(&ty)
+                {
+                    for (f, v) in cf.iter_mut() {
+                        if let Some((_, e)) = ctor_fields.iter().find(|(n, _)| n == f) {
+                            match e {
+                                AstNode::StringLit(_) => *v = "str".to_string(),
+                                AstNode::FloatLit(_) => *v = "f64".to_string(),
+                                AstNode::Bool(_) => *v = "bool".to_string(),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                let ctor = AstNode::FuncDef {
+                    name: ty.clone(),
+                    generics: Vec::new(),
+                    lifetimes: Vec::new(),
+                    params: synth_params,
+                    ret: ty.clone(),
+                    body: vec![],
+                    attrs: vec![],
+                    ret_expr: Some(Box::new(AstNode::StructLit {
+                        variant: ty.clone(),
+                        fields: ctor_fields,
+                    })),
+                    single_line: false,
+                    doc: String::new(),
+                    pub_: false,
+                    async_: false,
+                    const_: false,
+                    comptime_: false,
+                    where_clauses: Vec::new(),
+                };
+                self.register(ctor);
+                continue;
+            }
+            // No-own-init adoption. Batch 620: the parse-synthesized ctor for
+            // `ty` — which this adoption REPLACES — carries the 605-collected
+            // explicit-base-call args (`A.__init__(self, 7)` ⇒ x ← 7). Those
+            // call-site values outrank the param-name and base-initializer
+            // fallbacks (previously they were discarded, so the arg read 0).
+            // Params: the synthesized ctor's own signature first (it is the
+            // user-facing one), then base-ctor params; any param no ctor
+            // field references is dropped, and a base initializer naming a
+            // dropped param degrades to Lit 0 (a dangling Var reads garbage).
+            let mut ctor_params: Vec<(String, String)> = synth_params;
+            for b in bases {
+                if let Some((p, _, _)) = self.funcs.get(b) {
+                    if !p.is_empty() {
+                        for (pn, pt) in p {
+                            if !ctor_params.iter().any(|(n, _)| n == pn) {
+                                let s = match pt {
+                                    Type::Str => "str".to_string(),
+                                    Type::F64 => "f64".to_string(),
+                                    Type::Bool => "bool".to_string(),
+                                    Type::Named(n, _) => n.clone(),
+                                    Type::PyDynamic => "dyn".to_string(),
+                                    _ => "i64".to_string(),
+                                };
+                                ctor_params.push((pn.clone(), s));
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            let mut ctor_fields: Vec<(String, AstNode)> = Vec::new();
+            for (f, _s) in merged.iter() {
+                // Order matters: base_inits carries the 620 call-site
+                // substitution (`A.__init__(self, "Rex", 4)` ⇒ name ← "Rex")
+                // and must outrank the param-name branch — when a base param
+                // shares the field's name, Var(f) would silently discard the
+                // explicit arg (measured: s15 printed 0/0).
+                let value = if let Some((_, e)) = synth_pairs.iter().find(|(n, _)| n == f) {
+                    e.clone()
+                } else if let Some((_, e)) =
+                    base_inits.iter().find(|(n, _)| n == f)
+                {
+                    e.clone()
+                } else if ctor_params.iter().any(|(pn, _)| pn == f) {
+                    AstNode::Var(f.clone())
+                } else {
+                    AstNode::Lit(0)
+                };
+                ctor_fields.push((f.clone(), value));
+            }
+            ctor_params.retain(|(pn, _)| {
+                ctor_fields
+                    .iter()
+                    .any(|(_, e)| Self::expr_refs_var(e, pn))
+            });
+            // Batch 620: the folded initializer kinds refine the field types —
+            // `A.__init__(self, "Rex", 4)` makes C.name a Str slot. The base's
+            // own inference saw only the unannotated param and typed it i64,
+            // so the read printed the raw pointer (measured).
+            if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                fields: cf, ..
+            }) = self.type_decls.get_mut(&ty)
+            {
+                for (f, v) in cf.iter_mut() {
+                    if let Some((_, e)) = ctor_fields.iter().find(|(n, _)| n == f) {
+                        match e {
+                            AstNode::StringLit(_) => *v = "str".to_string(),
+                            AstNode::FloatLit(_) => *v = "f64".to_string(),
+                            AstNode::Bool(_) => *v = "bool".to_string(),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            for (_, v) in ctor_fields.iter_mut() {
+                if let AstNode::Var(name) = v {
+                    if !ctor_params.iter().any(|(pn, _)| pn == name) {
+                        *v = AstNode::Lit(0);
+                    }
+                }
+            }
+            let ctor = AstNode::FuncDef {
+                name: ty.clone(),
+                generics: Vec::new(),
+                lifetimes: Vec::new(),
+                params: ctor_params,
+                ret: ty.clone(),
+                body: vec![],
+                attrs: vec![],
+                ret_expr: Some(Box::new(AstNode::StructLit {
+                    variant: ty.clone(),
+                    fields: ctor_fields,
+                })),
+                single_line: false,
+                doc: String::new(),
+                pub_: false,
+                async_: false,
+                const_: false,
+                comptime_: false,
+                where_clauses: Vec::new(),
+            };
+            self.register(ctor);
+        }
+    }
+
+
+
+    /// Batch 600: ctor call-site field refinement — a module-level
+    /// `a = Animal("Generic")` PROVES field `name` is Str; upgrade the
+    /// class's i64-default field spellings from the call's positional args
+    /// (param→field by shared name, `self.name = name`). Must run BEFORE
+    /// any per-function lowering snapshots `type_decls`, so `self.name`
+    /// reads inside methods (and the concatenation arm) see the concrete
+    /// type. Literal/Var args only (out is the module-global type table);
+    /// anything else stays conservatively i64.
+    pub fn refine_ctor_field_types(&mut self) {
+        let out = self.module_global_types();
+        let defs = self.registered_func_defs.borrow().clone();
+        for d in &defs {
+            if let AstNode::FuncDef { body, .. } = d {
+                for st in body {
+                    if let AstNode::Assign(lhs, rhs) = st {
+                        if let (
+                            AstNode::Var(_),
+                            AstNode::Call {
+                                receiver: None,
+                                method,
+                                args,
+                                ..
+                            },
+                        ) = (&**lhs, &**rhs)
+                        {
+                            let pnames = self
+                                .func_param_names()
+                                .get(method.as_str())
+                                .cloned()
+                                .unwrap_or_default();
+                            if pnames.is_empty() {
+                                continue;
+                            }
+                            let mut decl_fields = match self
+                                .type_decls
+                                .get_mut(method.as_str())
+                            {
+                                Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                                    fields,
+                                    ..
+                                }) => fields,
+                                _ => continue,
+                            };
+                            for (i, arg) in args.iter().enumerate() {
+                                let Some(pn) = pnames.get(i).cloned() else {
+                                    continue;
+                                };
+                                let spell = match arg {
+                                    AstNode::StringLit(_) => Some("str".to_string()),
+                                    AstNode::FloatLit(_) => Some("f64".to_string()),
+                                    AstNode::Bool(_) => Some("bool".to_string()),
+                                    AstNode::Var(v) => match out.get(v) {
+                                        Some(Type::Str) => Some("str".to_string()),
+                                        Some(Type::F64) => Some("f64".to_string()),
+                                        Some(Type::Bool) => Some("bool".to_string()),
+                                        Some(Type::DynamicArray(e)) => Some(format!(
+                                            "list<{}>",
+                                            match **e {
+                                                Type::Str => "str",
+                                                Type::F64 => "f64",
+                                                _ => "i64",
+                                            }
+                                        )),
+                                        _ => None,
+                                    },
+                                    _ => None,
+                                };
+                                if let Some(spell) = spell {
+                                    if let Some((_, dt)) = decl_fields
+                                        .iter_mut()
+                                        .find(|(f, _)| *f == pn)
+                                    {
+                                        if dt.as_str() == "i64" {
+                                            *dt = spell;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Batch 603: class -> first base, for the gen-side base-chain method
+    /// lookup (inherited methods: `d.greet()` on a Dog with greet on Animal).
+    pub fn class_bases(&self) -> HashMap<String, String> {
+        let m = self.class_bases.borrow().clone();
+        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
+            eprintln!("[P603] class_bases() -> {:?} ({} entries)", m, m.len());
+        }
+        m
     }
 
     /// PY-A: parameter names per function, for keyword-argument binding.
@@ -3042,6 +3599,29 @@ impl Resolver {
                 AstNode::Call { method, .. } if method == "__contains__" => {
                     Some(Type::Bool)
                 }
+                // Batch 592: a list comprehension desugars to
+                // `__collect__(iter, λ)` — the recovered return type must see
+                // it as DynamicArray(element). Without this arm a method
+                // returning a comprehension was vetoed to I64 and `print`
+                // rendered the raw handle (class_str_comprehension: `summary`
+                // printed the pointer while `longest` was already right).
+                // The element type comes from the lambda body's expression —
+                // for the filtered form that is the `if cond { EXPR } else {
+                // -1 }` then-branch.
+                AstNode::Call { method, args, .. } if method == "__collect__" => {
+                    let elem: Option<&AstNode> = args.get(1).and_then(|lam| match lam {
+                        AstNode::Closure { body, .. } => match &**body {
+                            AstNode::If { then, .. } => then.first().and_then(|s| match s {
+                                AstNode::ExprStmt { expr } => Some(expr.as_ref()),
+                                _ => None,
+                            }),
+                            other => Some(other),
+                        },
+                        _ => None,
+                    });
+                    let et = elem.and_then(|e| infer(e, seen, aliases, classes, fn_rets));
+                    Some(Type::DynamicArray(Box::new(et.unwrap_or(Type::I64))))
+                }
                 // Batch 580: `sep.join(iterable)` on a Str receiver yields
                 // Str (tag_str()-style methods stayed I64-typed and printed
                 // the joined string's POINTER).
@@ -3415,7 +3995,18 @@ fn shim_class_normalize(t: &Type) -> Type {
 }
 
     pub fn lower_to_mir(&self, ast: &AstNode) -> Mir {
-        let defs_snapshot = self.registered_func_defs.borrow().clone();
+        // Batch 601: the unannotated-return recovery must see the QUALIFIED
+        // method defs — the bare originals collide across classes (two
+        // `speak` defs → the uniqueness gate vetoed BOTH recoveries → i64).
+        // registered_funcs carries the qualified clones with real bodies.
+        let mut defs_snapshot = self.registered_func_defs.borrow().clone();
+        for (k, v) in self.registered_funcs.iter() {
+            if k.contains("::") {
+                if let AstNode::FuncDef { .. } = v {
+                    defs_snapshot.push(v.clone());
+                }
+            }
+        }
         // Batch 300 inputs for `unannotated_return_ty`. The decl table is keyed by
         // the MANGLED class name, and iteration order must not matter.
         let mut class_names: Vec<String> = self.type_decls.keys().cloned().collect();
@@ -3553,6 +4144,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_py_user_modules(self.py_user_modules.borrow().clone())
             .with_py_module_paths(self.py_module_paths.borrow().clone())
             .with_module_global_types(self.module_global_types())
+            .with_class_bases(self.class_bases())
             .with_source_file(self.source_file.borrow().clone())
             .with_argparse_kinds(self.argparse_kinds.borrow().clone())
             .with_param_defaults(

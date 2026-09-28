@@ -1466,7 +1466,7 @@ fn parse_python_bool(input: &str) -> IResult<&str, AstNode> {
     alt((
         map(terminated(tag("True"), boundary), |_| AstNode::Bool(true)),
         map(terminated(tag("False"), boundary), |_| AstNode::Bool(false)),
-        map(terminated(tag("None"), boundary), |_| AstNode::Lit(0)),
+        map(terminated(tag("None"), boundary), |_| AstNode::NoneLit),
     ))
     .parse(input)
 }

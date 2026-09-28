@@ -1,0 +1,19 @@
+// 批次 624（旁路 cleanup）：None 字面量面（#117/#113 邻域的可单批格）。
+// `None` 原先在 parse 就坍缩成 Lit(0)——字面量身份被销毁，str(None)/
+// print(None) 全打 0。新增 AstNode::NoneLit：值表示仍是 0（lower 臂镜像
+// Lit、ctfe 归一 Lit(0)＝#113/#189 深水不动），只有 print/str 两个字面量
+// 面按身份渲染 "None"。str() 面的常量必须经 zeta_identity 定义性语句
+// 落槽——裸别名常量 id 读未初始化 alloca（BATCH-296 坑，改中实拍 rc=139/
+// 空 行）。边界（不在本夹具）：变量携带的 None（x=None; print(x)）与
+// 无返回函数仍打 0＝值表示面；f-string {None} 同族。
+print(str(None))
+print(None)
+print("v", str(None))
+print(str(True), str(None))
+x = str(None)
+print(x)
+// expect: None
+// expect: None
+// expect: v None
+// expect: True None
+// expect: None
