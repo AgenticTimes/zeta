@@ -269,7 +269,7 @@ src/middle/pylib.rs	987	assert_eq!(dispatched_member("[dynamic]str::isin"), "isi
 src/middle/resolver/resolver.rs	645-669	if method == "zeta_param_default" && args.len() == 2 { if let AstNode::Lit(i) = &args[0] { if (*i as usize) < defaults.len() { // Fail-loud when the default's l
 src/middle/resolver/resolver.rs	659-666	if mismatch { eprintln!( "warning: PY-A: the default for `{}` has a kind that \ parameter type `{}` cannot hold — it is coerced \ (annotate the parameter, or ch
 src/middle/resolver/resolver.rs	2109	let mangled = format!("{}__{}", module.replace('.', "_"), member);
-src/middle/resolver/resolver.rs	3906	let mangled = format!("{}__{}", canon.replace('.', "_"), src_mem);
+src/middle/resolver/resolver.rs	4182	let mangled = format!("{}__{}", canon.replace('.', "_"), src_mem);
 src/middle/specialization.rs	27	format!("{}_inst_{}", self.func_name, self.type_args.join("_"))
 src/middle/types/mod.rs	768	Type::DynamicArray(inner) => format!("[dynamic]{}", inner.display_name()),
 src/runtime/option.rs	17	pub unsafe extern "C" fn option_make_some(data: i64) -> *mut u8 {
