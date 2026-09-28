@@ -847,25 +847,24 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     // `__bases__:<name>` when the class has NO own `__init__` — the
     // resolver's inheritance pass adopts the base's ctor and fields for
     // exactly that shape (single inheritance, V1).
-    let mut base_name: Option<String> = None;
+    let mut base_list: Vec<String> = Vec::new();
     let input = if let Ok((after_paren, _tag_out)) = ws(tag("(")).parse(input) {
         match after_paren.find(')') {
             Some(idx) => {
-                let first = after_paren[..idx]
-                    .split(',')
-                    .next()
-                    .map(|s| {
-                        s.trim()
-                            .split('<')
-                            .next()
-                            .unwrap_or("")
-                            .trim()
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                if !first.is_empty() {
-                    let last = first.rsplit('.').next().unwrap_or(&first).to_string();
-                    base_name = Some(last);
+                for seg in after_paren[..idx].split(',') {
+                    let b = seg
+                        .trim()
+                        .split('<')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if !b.is_empty() {
+                        let last = b.rsplit('.').next().unwrap_or(&b).to_string();
+                        if !base_list.iter().any(|x| x == &last) {
+                            base_list.push(last);
+                        }
+                    }
                 }
                 &after_paren[idx + 1..]
             }
@@ -1158,12 +1157,9 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
             {
                 if m == "__init__"
                     && !cargs.is_empty()
-                    && base_name.is_some()
                 {
-                    if let (AstNode::Var(bn), AstNode::Var(selfv)) =
-                        (&**recv, &cargs[0])
-                    {
-                        if selfv == "self" && bn == base_name.as_deref().unwrap_or("") {
+                    if let AstNode::Var(selfv) = &cargs[0] {
+                        if selfv == "self" {
                             for a in &cargs[1..] {
                                 if let AstNode::Var(f) = a {
                                     if !fields.iter().any(|(x, _)| x == f) {
@@ -1469,9 +1465,9 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     // inheritance pass adopts the base's ctor/fields for exactly this
     // shape (no own `__init__`, single base).
     let mut impl_attrs: Vec<String> = Vec::new();
-    if let Some(b) = &base_name {
-        // Marker for EVERY based class; the resolver's inheritance pass
-        // decides adoption (no own fields/ctor) vs field-merge only.
+    // Batch 613: markers for EVERY base (multi-base subclasses call several
+    // bases' inits explicitly).
+    for b in &base_list {
         impl_attrs.push(format!("__bases__:{}", b));
     }
     if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {

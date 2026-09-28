@@ -2325,78 +2325,138 @@ impl Resolver {
     /// rides the existing bare-name fallback dispatch. Runs after ALL
     /// registration (the synthesized empty ctor is overwritten here) and
     /// before `refine_ctor_field_types`.
+    /// Batch 613: a synthesized ctor carries its StructLit in the BODY's
+    /// `Return` (ret_expr is None for parse-synthesized ctors).
+    fn ctor_structlit_pairs(v: &AstNode) -> Vec<(String, AstNode)> {
+        match v {
+            AstNode::FuncDef { body, ret_expr, .. } => {
+                let lit = ret_expr
+                    .as_ref()
+                    .and_then(|re| match &**re {
+                        AstNode::StructLit { .. } => Some(re.as_ref()),
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        body.iter().find_map(|st| match st {
+                            AstNode::Return(val) => match &**val {
+                                AstNode::StructLit { .. } => Some(val.as_ref()),
+                                _ => None,
+                            },
+                            _ => None,
+                        })
+                    });
+                match lit {
+                    Some(AstNode::StructLit { fields, .. }) => fields.clone(),
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
     pub fn inherit_class_members(&mut self) {
         let pairs = self.pending_inherits.borrow().clone();
+        let mut order: Vec<String> = Vec::new();
+        let mut bases_of: HashMap<String, Vec<String>> = HashMap::new();
         for (ty, base) in pairs {
-            let base_params = self.funcs.get(&base).map(|(p, _, _)| p.clone());
-            let base_fields: Vec<(String, String)> = match self.type_decls.get(&base) {
-                Some(crate::middle::mir::r#gen::TypeDecl::Struct { fields, .. }) => {
-                    fields.clone()
-                }
-                _ => Vec::new(),
-            };
-            // Batch 603/608: an own-init subclass gets FIELD-MERGE ONLY (base
-            // fields it does not declare itself — slots for super-written
-            // values); the ctor ADOPTION below is for the no-own-init shape
-            // (empty own fields + empty params = the synthesized stand-in).
-            // BASE FIELDS GO FIRST: inherited methods read via the BASE's
-            // layout (name@base-idx) — appending base fields after own fields
-            // made `d.greet()` read the wrong slot (s10b3: name@1 read as
-            // Animal's name@0 → empty).
-            let own_fields: Vec<(String, String)> = match self.type_decls.get(&ty) {
-                Some(crate::middle::mir::r#gen::TypeDecl::Struct { fields, .. }) => {
-                    fields.clone()
-                }
-                _ => Vec::new(),
-            };
-            {
-                let mut merged: Vec<(String, String)> = base_fields.clone();
-                for (f, s) in &own_fields {
-                    if !merged.iter().any(|(x, _)| x == f) {
-                        merged.push((f.clone(), s.clone()));
+            if !bases_of.contains_key(&ty) {
+                order.push(ty.clone());
+            }
+            bases_of.entry(ty.clone()).or_default().push(base);
+        }
+        for ty in order {
+            let bases = &bases_of[&ty];
+            // Merge fields from ALL bases (first occurrence wins = MRO-lite).
+            let mut merged: Vec<(String, String)> = Vec::new();
+            let mut base_inits: Vec<(String, AstNode)> = Vec::new();
+            for b in bases {
+                if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                    fields: bf,
+                    ..
+                }) = self.type_decls.get(b)
+                {
+                    for (f, s) in bf {
+                        if !merged.iter().any(|(x, _)| x == f) {
+                            merged.push((f.clone(), s.clone()));
+                        }
                     }
                 }
-                if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
-                    fields: cf,
-                    ..
-                }) = self.type_decls.get_mut(&ty)
-                {
-                    *cf = merged;
+                if let Some(v) = self.registered_funcs.get(b) {
+                    for (f, e) in Self::ctor_structlit_pairs(v) {
+                        if !base_inits.iter().any(|(x, _)| x.as_str() == f.as_str()) {
+                            base_inits.push((f, e));
+                        }
+                    }
                 }
             }
-            if !own_fields.is_empty() {
+            let own = match self.type_decls.get(&ty) {
+                Some(crate::middle::mir::r#gen::TypeDecl::Struct { fields, .. }) => {
+                    fields.clone()
+                }
+                _ => Vec::new(),
+            };
+            for (f, s) in &own {
+                if !merged.iter().any(|(x, _)| x == f) {
+                    merged.push((f.clone(), s.clone()));
+                }
+            }
+            if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                fields: cf,
+                ..
+            }) = self.type_decls.get_mut(&ty)
+            {
+                *cf = merged.clone();
+            }
+            // Own-`__init__` subclasses: the parse-synthesized ctor already
+            // carries all own fields (the batch-605 collection feeds them) —
+            // merge-only, no adoption.
+            if !own.is_empty() {
                 continue;
             }
-            let Some(bp) = base_params else { continue };
-            let bp_texts: Vec<(String, String)> = bp
-                .iter()
-                .map(|(pn, pt)| {
-                    let s = match pt {
-                        Type::Str => "str".to_string(),
-                        Type::F64 => "f64".to_string(),
-                        Type::Bool => "bool".to_string(),
-                        Type::Named(n, _) => n.clone(),
-                        // Unannotated base-ctor params stay DYNAMIC: the
-                        // value travels as the raw word (a Str arg must not
-                        // be int-coerced at the adopted ctor's entry).
-                        Type::PyDynamic => "dyn".to_string(),
-                        _ => "i64".to_string(),
-                    };
-                    (pn.clone(), s)
-                })
-                .collect();
-            // Adopted ctor: params = base params; the ret_expr StructLit
-            // builds THIS class's struct from the same-name params.
-            let ctor_fields: Vec<(String, AstNode)> = base_fields
-                .iter()
-                .filter(|(f, _)| bp_texts.iter().any(|(pn, _)| pn == f))
-                .map(|(f, _)| (f.clone(), AstNode::Var(f.clone())))
-                .collect();
+            // No-own-init adoption: params from the first base ctor that has
+            // any; the ret_expr StructLit builds THIS class's struct in
+            // merged-layout order, with values from the base ctors'
+            // initializers falling back to same-name params and Lit 0.
+            let mut ctor_params: Vec<(String, String)> = Vec::new();
+            for b in bases {
+                if let Some((p, _, _)) = self.funcs.get(b) {
+                    if !p.is_empty() {
+                        ctor_params = p
+                            .iter()
+                            .map(|(pn, pt)| {
+                                let s = match pt {
+                                    Type::Str => "str".to_string(),
+                                    Type::F64 => "f64".to_string(),
+                                    Type::Bool => "bool".to_string(),
+                                    Type::Named(n, _) => n.clone(),
+                                    Type::PyDynamic => "dyn".to_string(),
+                                    _ => "i64".to_string(),
+                                };
+                                (pn.clone(), s)
+                            })
+                            .collect();
+                        break;
+                    }
+                }
+            }
+            let mut ctor_fields: Vec<(String, AstNode)> = Vec::new();
+            for (f, _s) in merged.iter() {
+                let value = if ctor_params.iter().any(|(pn, _)| pn == f) {
+                    AstNode::Var(f.clone())
+                } else if let Some((_, e)) =
+                    base_inits.iter().find(|(n, _)| n == f)
+                {
+                    e.clone()
+                } else {
+                    AstNode::Lit(0)
+                };
+                ctor_fields.push((f.clone(), value));
+            }
             let ctor = AstNode::FuncDef {
                 name: ty.clone(),
                 generics: Vec::new(),
                 lifetimes: Vec::new(),
-                params: bp_texts.clone(),
+                params: ctor_params,
                 ret: ty.clone(),
                 body: vec![],
                 attrs: vec![],
@@ -2412,21 +2472,11 @@ impl Resolver {
                 comptime_: false,
                 where_clauses: Vec::new(),
             };
-            // Overwrites the synthesized empty ctor (registration order put
-            // it here first); `register` threads funcs + registered_funcs +
-            // registered_func_defs consistently.
             self.register(ctor);
-            if let Some(crate::middle::mir::r#gen::TypeDecl::Struct { fields: cf, .. }) =
-                self.type_decls.get_mut(&ty)
-            {
-                for (f, s) in &base_fields {
-                    if !cf.iter().any(|(x, _)| x == f) {
-                        cf.push((f.clone(), s.clone()));
-                    }
-                }
-            }
         }
     }
+
+
 
     /// Batch 600: ctor call-site field refinement — a module-level
     /// `a = Animal("Generic")` PROVES field `name` is Str; upgrade the
