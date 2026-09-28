@@ -1,0 +1,28 @@
+// 批次 613（旁路 cleanup）：多基收养整批落地的钉子（611/612 设计输入实施）。
+// parse 侧全基提取＋per-base `__bases__:<B>` 标记＋605 门限收窄为
+// `X.__init__(self,·)` 形；resolver inherit_class_members 多基重写：
+// MRO-lite 字段并集（首现者胜）＋ctor_structlit_pairs 折叠全部基 ctor
+// StructLit 对＋收养 ctor 携带基 ctor params、StructLit 按 type_decls
+// 合并布局序。此前多基形（class C(A, B)）只记首基，C 的实例缺 y 字段。
+// 边界（不在本夹具、登记继承余半）：非 Var 实参的显式基调用（基参数名
+// 对位）与 super() 深链未收；MRO 为首现者胜近似（非 C3 线性化）。
+class A:
+    def __init__(self):
+        self.x = 1
+class B:
+    def __init__(self):
+        self.y = 2
+class C(A, B):
+    def __init__(self):
+        A.__init__(self)
+        B.__init__(self)
+    def show(self):
+        return self.x + self.y
+
+c = C()
+print(c.x)
+print(c.y)
+print(c.show())
+// expect: 1
+// expect: 2
+// expect: 3
