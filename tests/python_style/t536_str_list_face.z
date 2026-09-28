@@ -1,0 +1,26 @@
+// 批次 626（旁路 cleanup）：str(<list>) 面——type_conversion_gaps 首差异
+// 行 #3 收口。str() 臂原先对 list 类型参数走 lower_to_string ⇒ 打裸句柄
+// 地址（print 面在 557/565 已对齐 CPython，str 面没跟）。现 str 臂对
+// DynamicArray/Array 类型参数改走 print 面同一渲染 `py_json_dumps_vec_typed`
+// （元素型别 tag：f64=1/str=2/bool=3/int=0），字面量与变量两面、拼接、
+// len、空表全对齐。边界（不在本夹具）：嵌套 list（元素还是 list）打
+// 地址＝运行期递归渲染面；str(<dict>) 同族未跟（print 面有
+// py_json_dumps_map，str 面留队）。
+print(str([1, 2]))
+x = [1, 2]
+print(str(x))
+print(str(["a", "b"]))
+s = str(x)
+print(len(s))
+print("v=" + str(x))
+print(str([]))
+print(str([1.5, 2.5]))
+print(str([True, False]))
+// expect: [1, 2]
+// expect: [1, 2]
+// expect: ['a', 'b']
+// expect: 6
+// expect: v=[1, 2]
+// expect: []
+// expect: [1.5, 2.5]
+// expect: [True, False]
