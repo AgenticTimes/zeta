@@ -3042,6 +3042,29 @@ impl Resolver {
                 AstNode::Call { method, .. } if method == "__contains__" => {
                     Some(Type::Bool)
                 }
+                // Batch 592: a list comprehension desugars to
+                // `__collect__(iter, λ)` — the recovered return type must see
+                // it as DynamicArray(element). Without this arm a method
+                // returning a comprehension was vetoed to I64 and `print`
+                // rendered the raw handle (class_str_comprehension: `summary`
+                // printed the pointer while `longest` was already right).
+                // The element type comes from the lambda body's expression —
+                // for the filtered form that is the `if cond { EXPR } else {
+                // -1 }` then-branch.
+                AstNode::Call { method, args, .. } if method == "__collect__" => {
+                    let elem: Option<&AstNode> = args.get(1).and_then(|lam| match lam {
+                        AstNode::Closure { body, .. } => match &**body {
+                            AstNode::If { then, .. } => then.first().and_then(|s| match s {
+                                AstNode::ExprStmt { expr } => Some(expr.as_ref()),
+                                _ => None,
+                            }),
+                            other => Some(other),
+                        },
+                        _ => None,
+                    });
+                    let et = elem.and_then(|e| infer(e, seen, aliases, classes, fn_rets));
+                    Some(Type::DynamicArray(Box::new(et.unwrap_or(Type::I64))))
+                }
                 // Batch 580: `sep.join(iterable)` on a Str receiver yields
                 // Str (tag_str()-style methods stayed I64-typed and printed
                 // the joined string's POINTER).
