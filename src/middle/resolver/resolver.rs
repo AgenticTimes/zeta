@@ -2512,10 +2512,103 @@ impl Resolver {
             {
                 *cf = merged.clone();
             }
-            // Own-`__init__` subclasses: the parse-synthesized ctor already
-            // carries all own fields (the batch-605 collection feeds them) —
-            // merge-only, no adoption.
+            // The parse-synthesized ctor's own pairs/params, needed by BOTH
+            // paths below (batch 621 hoisted the extraction here).
+            let (synth_pairs, synth_params) = match self.registered_funcs.get(&ty) {
+                Some(v @ AstNode::FuncDef { params, .. }) => {
+                    (Self::ctor_structlit_pairs(v), params.clone())
+                }
+                _ => (Vec::new(), Vec::new()),
+            };
+            // Own-`__init__` subclasses are merge-only — the synthesized ctor
+            // carries every OWN field (the :1146 collection pairs fields with
+            // inits). Batch 621: EXCEPT when an explicit base call passed
+            // non-Var args — the 608 collection names slots after the arg's
+            // Var, so it cannot create those, and the ctor's StructLit misses
+            // base-layout fields while positional writes follow the StructLit
+            // order (s16: `Animal.__init__(self, "Rex")` + own `legs` made
+            // d.name read legs' slot and print 4). When a gap actually exists
+            // AND base call args were recorded, rebuild the ctor in merged
+            // layout order — own pairs preserved verbatim (params untouched:
+            // the own `__init__` signature is the user-facing one), missing
+            // fields from the substituted base initializers.
             if !own.is_empty() {
+                let has_baseargs = self
+                    .pending_baseargs
+                    .borrow()
+                    .iter()
+                    .any(|(c, _, _)| c == &ty);
+                let has_gap = merged
+                    .iter()
+                    .any(|(f, _)| !synth_pairs.iter().any(|(n, _)| n == f));
+                if !has_gap || !has_baseargs {
+                    continue;
+                }
+                let mut ctor_fields: Vec<(String, AstNode)> = Vec::new();
+                for (f, _s) in merged.iter() {
+                    let value = if let Some((_, e)) =
+                        synth_pairs.iter().find(|(n, _)| n == f)
+                    {
+                        e.clone()
+                    } else if let Some((_, e)) =
+                        base_inits.iter().find(|(n, _)| n == f)
+                    {
+                        e.clone()
+                    } else if synth_params.iter().any(|(pn, _)| pn == f) {
+                        AstNode::Var(f.clone())
+                    } else {
+                        AstNode::Lit(0)
+                    };
+                    ctor_fields.push((f.clone(), value));
+                }
+                // A base initializer naming a base param that is not among the
+                // own signature's params would dangle — degrade to Lit 0.
+                for (_, v) in ctor_fields.iter_mut() {
+                    if let AstNode::Var(name) = v {
+                        if !synth_params.iter().any(|(pn, _)| pn == name) {
+                            *v = AstNode::Lit(0);
+                        }
+                    }
+                }
+                // Same kind refinement as the adoption path below: the base's
+                // inference saw only its unannotated params (i64), so a Str
+                // initializer would read back as a raw pointer.
+                if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                    fields: cf, ..
+                }) = self.type_decls.get_mut(&ty)
+                {
+                    for (f, v) in cf.iter_mut() {
+                        if let Some((_, e)) = ctor_fields.iter().find(|(n, _)| n == f) {
+                            match e {
+                                AstNode::StringLit(_) => *v = "str".to_string(),
+                                AstNode::FloatLit(_) => *v = "f64".to_string(),
+                                AstNode::Bool(_) => *v = "bool".to_string(),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                let ctor = AstNode::FuncDef {
+                    name: ty.clone(),
+                    generics: Vec::new(),
+                    lifetimes: Vec::new(),
+                    params: synth_params,
+                    ret: ty.clone(),
+                    body: vec![],
+                    attrs: vec![],
+                    ret_expr: Some(Box::new(AstNode::StructLit {
+                        variant: ty.clone(),
+                        fields: ctor_fields,
+                    })),
+                    single_line: false,
+                    doc: String::new(),
+                    pub_: false,
+                    async_: false,
+                    const_: false,
+                    comptime_: false,
+                    where_clauses: Vec::new(),
+                };
+                self.register(ctor);
                 continue;
             }
             // No-own-init adoption. Batch 620: the parse-synthesized ctor for
@@ -2527,12 +2620,6 @@ impl Resolver {
             // user-facing one), then base-ctor params; any param no ctor
             // field references is dropped, and a base initializer naming a
             // dropped param degrades to Lit 0 (a dangling Var reads garbage).
-            let (synth_pairs, synth_params) = match self.registered_funcs.get(&ty) {
-                Some(v @ AstNode::FuncDef { params, .. }) => {
-                    (Self::ctor_structlit_pairs(v), params.clone())
-                }
-                _ => (Vec::new(), Vec::new()),
-            };
             let mut ctor_params: Vec<(String, String)> = synth_params;
             for b in bases {
                 if let Some((p, _, _)) = self.funcs.get(b) {
