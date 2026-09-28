@@ -34,6 +34,10 @@ struct CacheFile {
 
 pub struct Resolver {
     pub impls: HashMap<(String, String), Vec<AstNode>>,
+    /// Batch 602: (class, base) pairs marked by parse_class (`__bases__:B`
+    /// on the ImplBlock attrs, no own `__init__`) — consumed by
+    /// `inherit_class_members` after registration completes.
+    pending_inherits: std::cell::RefCell<Vec<(String, String)>>,
     pub cached_mirs: HashMap<String, Mir>,
     pub mono_mirs: HashMap<MonoKey, Mir>,
     pub borrow_checker: RefCell<BorrowChecker>,
@@ -127,6 +131,7 @@ impl Resolver {
     pub fn new() -> Self {
         let mut r = Self {
             impls: HashMap::new(),
+            pending_inherits: std::cell::RefCell::new(Vec::new()),
             cached_mirs: HashMap::new(),
             mono_mirs: HashMap::new(),
             borrow_checker: RefCell::new(BorrowChecker::new()),
@@ -993,9 +998,18 @@ impl Resolver {
                 self.funcs.insert(name, (typed_params, typed_ret, true));
             }
             AstNode::ImplBlock {
-                concept, ty, body, ..
+                concept, ty, body, attrs, ..
             } => {
                 self.impls.insert((concept, ty.clone()), body.clone());
+                // Batch 602: single-inheritance adoption marker (no own
+                // `__init__` — parse_class only marks that shape).
+                for a in attrs {
+                    if let Some(b) = a.strip_prefix("__bases__:") {
+                        self.pending_inherits
+                            .borrow_mut()
+                            .push((ty.clone(), b.to_string()));
+                    }
+                }
                 // Register functions with qualified names
                 let base_ty = impl_key_base(ty.as_str());
                 for b in body.clone() {
@@ -2294,6 +2308,88 @@ impl Resolver {
             }
         }
         out
+    }
+
+    /// Batch 602: single-inheritance adoption — for each `class C(B)` with NO
+    /// own `__init__` (parse_class marker on the ImplBlock attrs), adopt B's
+    /// ctor parameters and merge B's fields into C's layout, so `Dog("Rex")`
+    /// builds a Dog carrying `name` (class_inheritance). Method inheritance
+    /// rides the existing bare-name fallback dispatch. Runs after ALL
+    /// registration (the synthesized empty ctor is overwritten here) and
+    /// before `refine_ctor_field_types`.
+    pub fn inherit_class_members(&mut self) {
+        let pairs = self.pending_inherits.borrow().clone();
+        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
+            eprintln!("[P602] pairs={:?} ({} base ctors in funcs)", pairs,
+                pairs.iter().filter(|(_, b)| self.funcs.contains_key(b)).count());
+        }
+        for (ty, base) in pairs {
+            let base_params = self.funcs.get(&base).map(|(p, _, _)| p.clone());
+            let base_fields: Vec<(String, String)> = match self.type_decls.get(&base) {
+                Some(crate::middle::mir::r#gen::TypeDecl::Struct { fields, .. }) => {
+                    fields.clone()
+                }
+                _ => Vec::new(),
+            };
+            let Some(bp) = base_params else { continue };
+            let bp_texts: Vec<(String, String)> = bp
+                .iter()
+                .map(|(pn, pt)| {
+                    let s = match pt {
+                        Type::Str => "str".to_string(),
+                        Type::F64 => "f64".to_string(),
+                        Type::Bool => "bool".to_string(),
+                        Type::Named(n, _) => n.clone(),
+                        // Unannotated base-ctor params stay DYNAMIC: the
+                        // value travels as the raw word (a Str arg must not
+                        // be int-coerced at the adopted ctor's entry).
+                        Type::PyDynamic => "dyn".to_string(),
+                        _ => "i64".to_string(),
+                    };
+                    (pn.clone(), s)
+                })
+                .collect();
+            // Adopted ctor: params = base params; the ret_expr StructLit
+            // builds THIS class's struct from the same-name params.
+            let ctor_fields: Vec<(String, AstNode)> = base_fields
+                .iter()
+                .filter(|(f, _)| bp_texts.iter().any(|(pn, _)| pn == f))
+                .map(|(f, _)| (f.clone(), AstNode::Var(f.clone())))
+                .collect();
+            let ctor = AstNode::FuncDef {
+                name: ty.clone(),
+                generics: Vec::new(),
+                lifetimes: Vec::new(),
+                params: bp_texts.clone(),
+                ret: ty.clone(),
+                body: vec![],
+                attrs: vec![],
+                ret_expr: Some(Box::new(AstNode::StructLit {
+                    variant: ty.clone(),
+                    fields: ctor_fields,
+                })),
+                single_line: false,
+                doc: String::new(),
+                pub_: false,
+                async_: false,
+                const_: false,
+                comptime_: false,
+                where_clauses: Vec::new(),
+            };
+            // Overwrites the synthesized empty ctor (registration order put
+            // it here first); `register` threads funcs + registered_funcs +
+            // registered_func_defs consistently.
+            self.register(ctor);
+            if let Some(crate::middle::mir::r#gen::TypeDecl::Struct { fields: cf, .. }) =
+                self.type_decls.get_mut(&ty)
+            {
+                for (f, s) in &base_fields {
+                    if !cf.iter().any(|(x, _)| x == f) {
+                        cf.push((f.clone(), s.clone()));
+                    }
+                }
+            }
+        }
     }
 
     /// Batch 600: ctor call-site field refinement — a module-level

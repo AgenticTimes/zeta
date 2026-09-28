@@ -842,10 +842,33 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     // not model MRO, but *rejecting* the `(` used to Failure the whole class
     // and drop every following top-level def (`market_data_sources.py` lost
     // `_baostock_login` / `_from_rq_code` / …). Consume the base list and
-    // continue; bases are ignored.
-    let input = if let Ok((after_paren, _)) = ws(tag("(")).parse(input) {
+    // continue.
+    // Batch 602: record the FIRST base on the struct's attrs as
+    // `__bases__:<name>` when the class has NO own `__init__` — the
+    // resolver's inheritance pass adopts the base's ctor and fields for
+    // exactly that shape (single inheritance, V1).
+    let mut base_name: Option<String> = None;
+    let input = if let Ok((after_paren, _tag_out)) = ws(tag("(")).parse(input) {
         match after_paren.find(')') {
-            Some(idx) => &after_paren[idx + 1..],
+            Some(idx) => {
+                let first = after_paren[..idx]
+                    .split(',')
+                    .next()
+                    .map(|s| {
+                        s.trim()
+                            .split('<')
+                            .next()
+                            .unwrap_or("")
+                            .trim()
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                if !first.is_empty() {
+                    let last = first.rsplit('.').next().unwrap_or(&first).to_string();
+                    base_name = Some(last);
+                }
+                &after_paren[idx + 1..]
+            }
             None => {
                 return Err(nom::Err::Failure(nom::error::Error::new(
                     input,
@@ -1405,13 +1428,22 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
         pub_: false,
         where_clauses: Vec::new(),
     };
+    // Batch 602: `__bases__:<name>` on the IMPL attrs — the resolver's
+    // inheritance pass adopts the base's ctor/fields for exactly this
+    // shape (no own `__init__`, single base).
+    let mut impl_attrs: Vec<String> = Vec::new();
+    if !has_init {
+        if let Some(b) = &base_name {
+            impl_attrs.push(format!("__bases__:{}", b));
+        }
+    }
     let impl_node = AstNode::ImplBlock {
         concept: String::new(),
         generics: Vec::new(),
         lifetimes: Vec::new(),
         ty: name.clone(),
         body: methods,
-        attrs: Vec::new(),
+        attrs: impl_attrs,
         doc: String::new(),
         where_clauses: Vec::new(),
     };
