@@ -9841,6 +9841,105 @@ call, no NULL-handle dereference).",
                         }
                         positional.push(a);
                     }
+                    // Batch 598: `print(d.get(k, D))` on a map-typed receiver —
+                    // the result is an int-or-str UNION a static slot cannot
+                    // type (batch 576 typed it Str and the hit path deref'd
+                    // garbage). Split at statement level: each branch prints
+                    // its own statically typed value. k and D are evaluated
+                    // eagerly (CPython: D lazy — registered corner). Sole-
+                    // positional-arg shape only; sep/end keep the generic path.
+                    if positional.len() == 1 && sep_expr.is_none() && end_expr.is_none() {
+                        if let AstNode::Call {
+                            receiver: Some(recv),
+                            method: m,
+                            args: gargs,
+                            ..
+                        } = positional[0]
+                        {
+                            if m == "get" && gargs.len() == 2 {
+                                let recv_id = self.lower_expr(recv);
+                                let recv_is_map = matches!(
+                                    self.type_map.get(&recv_id),
+                                    Some(Type::Named(n, _)) if n == "map"
+                                );
+                                if recv_is_map {
+                                    let k_id = self.lower_expr(&gargs[0]);
+                                    // Key normalization — the WRITE side
+                                    // (`DictInsert`) stores `map_str_key(k)`
+                                    // (content-hash for text, identity for
+                                    // ints); the probe must hash identically
+                                    // or every present key reads absent
+                                    // (t178).
+                                    let knorm = self.next_id();
+                                    self.stmts.push(MirStmt::Call {
+                                        func: "map_str_key".to_string(),
+                                        args: vec![k_id],
+                                        dest: knorm,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs.insert(knorm, MirExpr::Var(knorm));
+                                    self.type_map.insert(knorm, Type::I64);
+                                    // Existence via py_map_contains DIRECTLY —
+                                    // the receiver is verified map-typed above;
+                                    // routing through `__contains__` dispatch
+                                    // re-derived the receiver's type and could
+                                    // fall to a dyn/str fallback that answered
+                                    // False for present keys whose value is 0
+                                    // (t178: `{"z": 0}` — batch 598).
+                                    let cond_id = self.next_id();
+                                    self.stmts.push(MirStmt::Call {
+                                        func: "py_map_contains".to_string(),
+                                        args: vec![recv_id, knorm],
+                                        dest: cond_id,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs
+                                        .insert(cond_id, MirExpr::Var(cond_id));
+                                    self.type_map.insert(cond_id, Type::Bool);
+                                    // hit branch: `d[k]` — typed by the map's
+                                    // declared value type.
+                                    let outer = std::mem::take(&mut self.stmts);
+                                    let hit_ast = AstNode::Subscript {
+                                        base: recv.clone(),
+                                        index: Box::new(gargs[0].clone()),
+                                    };
+                                    let hit_id = self.lower_expr(&hit_ast);
+                                    let hit_ty = self.type_map.get(&hit_id).cloned();
+                                    let mut then_stmts = std::mem::take(&mut self.stmts);
+                                    self.stmts = outer;
+                                    // miss branch: `D` — its own static type.
+                                    let outer2 = std::mem::take(&mut self.stmts);
+                                    let miss_id = self.lower_expr(&gargs[1]);
+                                    let miss_ty = self.type_map.get(&miss_id).cloned();
+                                    let mut else_stmts = std::mem::take(&mut self.stmts);
+                                    self.stmts = outer2;
+                                    let pf = |t: &Option<Type>| match t {
+                                        Some(Type::Str) => "println_str",
+                                        Some(Type::F64) | Some(Type::F32) => "println_f64",
+                                        _ => "println_i64",
+                                    };
+                                    then_stmts.push(MirStmt::VoidCall {
+                                        func: pf(&hit_ty).to_string(),
+                                        args: vec![hit_id],
+                                    });
+                                    else_stmts.push(MirStmt::VoidCall {
+                                        func: pf(&miss_ty).to_string(),
+                                        args: vec![miss_id],
+                                    });
+                                    self.stmts.push(MirStmt::If {
+                                        cond: cond_id,
+                                        then: then_stmts,
+                                        else_: else_stmts,
+                                        dest: None,
+                                    });
+                                    let unit = self.next_id();
+                                    self.exprs.insert(unit, MirExpr::IntLit(0));
+                                    self.type_map.insert(unit, Type::Tuple(vec![]));
+                                    return unit;
+                                }
+                            }
+                        }
+                    }
                     let mut arg_ids = vec![];
                     for a in &positional {
                         arg_ids.push(self.lower_expr(a));
