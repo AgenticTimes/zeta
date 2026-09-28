@@ -24988,3 +24988,64 @@ AGENTS.md 明文「全量门禁两侧不并发」⇒ 这次是**旁路侧破的*
 
 完整依据与依赖关系见 refactor.md §9 的"当前判断"与排序表。
 
+
+## 批次 640（2026-09-29，**全量门禁批（十倍位 640，17 步独占逐项读数入册；零代码改动）**，harness #248）
+
+### 〇、本批性质与前置事实
+
+- 按 AGENTS「全量门禁每 10 批一次」：主线上一次全量＝批次 600，本次＝640。批次 638 只做过批间同步、639 是零净改动定价批，两侧都没跳过十倍位欠账。
+- 独占机器：全程无并发构建、无并发取读数（AGENTS 护栏 2/3）。
+- 二进制未重编：`cargo build --release` 回 `Finished in 0.28s`，`target/release/zetac` md5 `55a366a9bdf758896a11f77768fdb756` ＝ 637/638/639 在册同值 ⇒ 本批跑的是与 639 收尾态完全相同的工具链。
+- 改动面：`src/`、`runtime/`、`tools/` 零文件，只动三份文档（`roadmap.md`／`worktree.md`／`backlog.md`）。
+- 存件：`/tmp/b640/gate_full.log`（190 行，末行 `GATE_RC=1`）。
+
+### 一、17 步逐项读数（本次，rev `b33dc447`）
+
+| 步骤 | 读数 |
+|---|---|
+| official | compile **194/194**，compile+link **191/194**；link-only 3 ＝ `integration_all_features`／`quantum_basic`／`selfhost`（缺运行时绑定，存量） |
+| 诊断面 official | 5/194 文件有编译告警，**21 行** |
+| python_style | **420 passed / 2 failed / 6 known-fail / 0 xpass**；红源 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`（唯一两条） |
+| 诊断面 python_style | **271 warning 行 / 126 文件** |
+| corpus | 语料 40 文件，解析通过 **40/40 ＝ 100%**，耗时 **77s** |
+| jit sweep | **ok=178 trap=447 fail=0 timeout=0 segv=0**（total 625，最小 ok=163）⇒ `GREEN: JIT 无静默崩溃，ok 未回退` |
+| diff | **match=576 judged=600 rate=96.0% bad_case=1**（总用例 601）；坏用例 `del_undefined_var`（参考侧 NameError，已排除出分母） |
+| truth | **43/43** |
+| knob | 23 条断言 FAIL 0（rc=0） |
+| swallow | 6 条断言 FAIL 0（rc=0） |
+| import_form | 22 条断言 FAIL 0（rc=0） |
+| empty_stmt | 68 条断言 FAIL 0（rc=0） |
+| pysrc | 42 条断言 FAIL 0（rc=0） |
+| cli_semantics | 87 条断言 FAIL 0（rc=0） |
+| ignore_rules | 19 条断言 FAIL 0（rc=0） |
+| mbvar | 25 个脚本 违规 0（rc=0） |
+| comment_drift | 0 处复述（期望 0） |
+| emit_stable | 2 个夹具 违规 0（rc=0） |
+| dyn_binding | 4 条断言 不一致 0（rc=0） |
+| clean_checkout | rc=0（2s，rev=`b33dc447`，worktree=/Users/meetai/zeta-clean-checkout） |
+
+**总耗时 8'18"（560.65s user / 157.09s system / 144% cpu / 498.39s total）**；`GATE_RC=1`。
+
+### 二、与旁路 638（树 `1218baf8`）逐项对照
+
+旁路台账行已列的各格读数与本次**逐格相同**：official 194/194·191/194（同 3 条 link-only）、诊断 official 5 文件/21 行、python_style 420/2/6/0（同两条红源 t231/t233）、corpus 40/40、jit ok=178/trap=447/fail=0/segv=0（total 625、最小 ok=163）、diff 576/600＝96.0%（bad_case 1 同 `del_undefined_var`）、truth 43/43、knob 23/0、swallow 6/0、import 22/0、empty_stmt 68/0、pysrc 42/0、cli_semantics 87/0、comment_drift 0、dyn_binding 4/0、clean_checkout rc=0。
+
+- 唯一差异＝ `clean_checkout` 的 rev（旁路 `1218baf8` vs 主线 `b33dc447`），这是两侧提交不同本身，不是读数差异。
+- 旁路行未列的三格本次入册：ignore_rules 19/0、mbvar 25/0、emit_stable 2/0；另补 python_style 诊断面 271 行/126 文件、corpus 77s、门禁总耗时 498.39s。
+- 结论：**两份全量互相印证，主线 613–640 与旁路并批面在真值面、语料面、差分面均零新红。**
+
+### 三、口径漂移登记（归因未实测）
+
+- AGENTS 快门禁配方里 python_style 诊断面在册口径＝**239 warning 行 / 113 文件**（438 期），本次＝**271 行 / 126 文件**（+32 行 / +13 文件）。
+- 文件数 113→126 与旁路新夹具（`t501`–`t513` 系列）进入套件同期发生；行数增量含 `PY-A` 类重复计数（单文件多行同规则）。**本批零 `src/` 改动 ⇒ 该增量不可能来自本批**；具体逐规则归因未实测，只作口径登记，后续批次引用诊断面时应以 271/126 为新基线。
+
+### 四、主线 301 位移栏
+
+**不适用**：本批零 `src/middle`／`src/backend`／`runtime` 改动，且被测二进制未重编（md5 与 637/638/639 同值）⇒ 无位移可测，未跑 A/B（AGENTS 铁律：不并发、不为不会变的读数花 12 对编译）。
+
+### 五、账务与队头
+
+- 全量欠账清偿：主线十倍位 640 已跑并入册；**下次全量＝批次 650**。
+- 不挤队头。真修批仍是 **#247**（`closure_vars` 裸名键串线）；归因分离挂 **#249**（S2 落点：`--dump-mir` ＋ `nm` 反查、另造"同名类＋不同方法名"第四形）。
+- 待用户裁决累计 **11 条**不变（含 `runtime/*.c` 语义真修授权、`py_additions.c`、`src/lib.rs` 最小修法授权）。
+- 批间窗口见下一节；**不 push**（目标级裁定）。
