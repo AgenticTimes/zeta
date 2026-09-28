@@ -23876,6 +23876,93 @@ frame #0: acc568_1.bin`str_trim + 24
 
 **队头**：582 不改头名归属，按 581 §七续 —— **① 槽对槽定位**（donor 列具名，`market_data_fetcher.py:708-716` 候选；本批把它的证据加固一格：坏读块几何正常、内容读点前已坏、形如「同长向量混进 0.7–1.0% 非代码项」⇒ 与错绑兄弟列同形）→ **② `str_trim` 调用链具名**（#145／#165；崩溃家族现在是实测显著那支，`p=0.000033`）→ **③ `heapalign` 臂**（§九.2，只在仍要追 GC 假设时才排）→ **④ t494／#213⑧**（需 `runtime/` 授权）→ **⑤ #182 余 57 行** → **⑥ #167①** → **⑦ #48 浮点 repr 方言裁决**。
 
+## 批次 586（合并面收尾批）：并入旁路 581–584（`%(key)s`＝dict 命名格式落地＋stmts/control 新种子 20 例＋⑫ 三发改性批）——**锚点零重绑**（本线第一次带编译器源码改动的合并面一趟 `ANCHOR_RC=0`）、**差分闸门 541→557 代录**（逐名：新增 20／转好 1／变差 0／消失 0）、**位移 A/B 第二次实拍零位移**（n=13/侧，321 行 stderr 掩码后逐字同形）
+
+### 一、层归位与主线位移资格
+
+**层归位**：2.2（解析层——`build_percent_format` 的 NAMED 形静态重写）↔ G.3（差分车道／基线代录）↔ 5.4（主线 301 语料路径）。
+
+**主线位移：本批记实测读数＝零位移**（§六），不记 `n/a`。并入面动了编译器源码（`src/frontend/parser/expr.rs` +87），按 AGENTS.md 路由表这属 `src/frontend`（解析）⇒ 必跑 `official + python_style + corpus`，位移 A/B 的硬触发面（`src/middle`/`src/backend`/`runtime`）本批**零命中**（正证据见 §二）——仍跑，理由与 581 相同：解析层改动可以搬 IR，欠的就是这一格。
+
+### 二、并入面：10 提交、22 文件 +527/−1，编译器源码只有一颗
+
+合并提交 `47cdabba`（`git merge cleanup`，无冲突）。旁路侧本次带入的 10 笔：`d6ce1b15`（批次 581，`%(key)s` 落地）、`2b7ac78f`（582 入册）、`90b43c98`（583 入册）、`b1d087e7`（578 第二次入册）、`308dca4f`/`a9588de7`/`5473116e`/`1b1b8fa6`/`cda8beda`（584 入册＋新种子 20 例＋三次台账补正）。
+
+`git diff --numstat HEAD^1 HEAD` 逐项：`src/frontend/parser/expr.rs` **87/0**（唯一编译器面）、`tests/diff/cases/gen_stmts_s585001_*.dcase` ×10（+18/14/16…）、`tests/diff/cases/gen_control_s585002_*.dcase` ×10、`worktree.md` 6/1。
+
+**位移硬触发面零命中（正证据，非推断）**：`git diff HEAD^1 HEAD --name-only -- runtime/ src/middle/ src/backend/ tools/ docs/` 行数＝**0** ⇒ 运行期 `.o`、下型／出码、门禁脚本、`docs/ABI.md` 一颗没动，A/B 因此**不需要** 581 那种 `ZETA_RUNTIME_DIR` 双侧 override（那格读数缺口随之消失：两侧同树同 `.o`，见 581 §七.2）。
+
+### 三、锚点：**零重绑**，并给出"为什么可以零"的结构理由
+
+合并树上 `python3 tools/check_abi_anchors.py` 一趟 **ANCHOR_RC=0**：304 个可解析锚点 ⇔ 342 条引用、漂移 0／新 0／消失 0／定位失败 0、待归属 98 条·88 种、声明为仓外 14 条、共用同一键 38 条——`docs/ABI.md` 仍 **1158** 行、`tools/baselines/abi_anchors.tsv` 仍 **392** 行（`wc -l` 实测），⇒ 外部对 ABI.md 的行号引用不搬家。
+
+这是本线第一次「合并面带 +87 行编译器改动却零锚点动作」（前三格合并面分别重绑 **76／33／78** 项＝批次 581／569／567，标题读数在册；581 那格的 76＝机械 72＋`--prune-gone` 3＋手绑 1）。**结构理由**（不是运气）：`docs/ABI.md` 引 `src/frontend/parser/expr.rs` 的三条在 `:2422`、`:2440`、`:364`（`grep -n 'expr\.rs' docs/ABI.md` 实测 3 命中，落点在 ABI.md 第 1071／1072／1089 行），而本次 hunk 头是 `@@ -2864,6 +2864,93 @@ fn parse_shift`（`git diff HEAD^1 HEAD -- src/frontend/parser/expr.rs | grep -c '^@@'`＝**1**，整颗文件只一个 hunk）⇒ 三条被引语句全部落在改动点**上方**，行号不搬家；其余 21 个文件都不是被引文件。
+
+### 四、差分基线代录（＝本批的 fix 笔 `57bceba5`）
+
+旁路对 `tools/baselines/**` 只读，抬阈只能主线做。合并树上 `diff_test.py --json` 的逐名核账（基线 `cases` 字典 ⇔ 本次 `cases` 字典）：
+
+| 格 | 读数 |
+|---|---|
+| 总用例 | 581 → **601**（＋20，消失 0） |
+| judged | 580 → **600**（`del_undefined_var` 仍因参考侧跑不出真值被排除出分母＝未决项⑤） |
+| match | 541 → **557**＝基线 541 ＋ 新增例里 match 15 ＋ 转好 1 |
+| rate | 93.3% → **92.8%**（分母扩面的算术后果；旧 581 面子集＝557−15 / 600−20＝**542/580＝93.4%**，与旁路在册数字对上） |
+| 新增 20 的 verdict | 15 match／5 mismatch，非 match 全部落在 `gen_stmts_s585001_{000,003,004,007,009}`（`gen_control_s585002_*` 全绿） |
+| 转好 | 1 条＝`class_tag_probe`（旁路 581 的 `%(key)s` 落地，579 `__contains__` Bool＋580 `join` Str 三批合力） |
+| 变差（基线 match→本次非 match） | **0** |
+
+5 条新 miss 的家族归位**自己读过源码**，不转抄旁侧结论：五例都是 `# @note: 随机赋值链（seed=585001）——变量类型流经签名表`，算子面为 `^ >> & | % //` 在 10^14 量级大数上的链式组合，差异形状是 `期望 '<N>' 实得 '-<N>'`（符号档），与在册 `gen_numeric_s77102_*`／`gen_numeric_s556002_*` 同一族＝**bigint／负操作数方言**（#46/#48 名下），不是新家族。
+
+一条口径差入册（不回改旁路行）：旁侧台账写「bless **542**→557」，而仓内在册地板是 **541**——那 1 条差是旁路工作树里 `class_tag_probe` 已转好却无权 bless 的读数，不是基线本身。
+
+### 五、快门禁（`src/frontend` 路由＝official＋python_style＋corpus＋truth/diff，独占一趟）
+
+`bash tools/run_all.sh --skip-jit --skip-knob --skip-swallow --skip-import --skip-empty --skip-clean --skip-pysrc --skip-sem --skip-ignore --skip-mbvar --skip-emit-stable`（＝AGENTS 在册快门禁配方去掉 `--skip-corpus` 与 `--skip-diff`），`GATE_RC=1`，逐项：
+
+| 步 | 读数 | 与 581 在册比较 |
+|---|---|---|
+| official | compile **194/194**、compile+link **191/194**（link-only 3 条存量，明细 `/tmp/zeta_official_link.txt`） | 同 |
+| python_style | **405 passed / 2 failed / 6 known-fail / 0 xpass**；红源仍 `t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture` ⇒ **零新增红** | 同 |
+| corpus | parse_ok **40/40** | 同（旁路未动解析吞行面） |
+| truth | **43/43** | 同 |
+| diff | match **557**／judged 600／rate 92.8%／bad_case 1（`del_undefined_var`，不参与判定） | 代录后本步绿 |
+| 诊断面 | official 5 文件／21 行；python_style **127 文件／276 行** | AGENTS 在册快门禁配方＝238 行／112 文件 ⇒ ＋38 行／＋15 文件**未逐项归因**，登记在 §七.2 |
+| dyn_binding | 4 条断言、不一致 **0** | 同 |
+
+### 六、主线 301 位移 A/B：**零位移**（第二次实拍，且这次不带 override）
+
+口径（沿用 568 §五／574 §三／581 §六）：cwd `~/source/quant/REasyQuant`、`REPLAYQUANT_LOCAL=1`、驱动 `strategies/code/_drv_accept_409.py`、**两颗 zetac 与两颗产物同放仓内 `target/release/`**（坑 68）、串行独占、n=13/侧、≈9.5 s/run。
+
+改前 zetac md5 `c840b0206db239c850c409e1e7ae6716`（**与 581 在册那颗 post 逐字相同**＝可复现构建的正证据，本批 pre 侧无需重编即可复得）；改后 `c724f742e6b9a95dd187de3f81455417`（`cargo build --release` 回 `Compiling zetac`／17.32s＝真重编，防 #175）。两颗产物 `acc586_pre.bin`（`ed7a437434e9ad0dc33581469b3e14e3`）／`acc586_post.bin`（`c13cd88528f20c49711d927a9a0b00ef`）**均 621,568 B**（＝568 的 `acc568_1.bin` 同尺寸），md5 不同＝编译面确实变了、尺寸不变＝语料几何没变。
+
+| 读数 | pre | post |
+|---|---|---|
+| rc 组成（n=13） | **11 × rc=0／1 × rc=134／1 × rc=139** | **11 × rc=0／0 × rc=134／2 × rc=139** |
+| 各档 stderr 行数 | 321／135／119 | 321／119（档位与 581 在册 321/135/119 齐） |
+| rc=134 末行 | `zeta: stub not implemented: numpy.vstack` | 本侧 0 次（同档缺席） |
+| rc=139 末行 | `[INFO] backend.market_data: 缓存命中 103 只；待拉取 0 只` | 同（＝#145 `str_trim` 早站崩的在册签名） |
+| rc=0 的 stderr | 321 行 | 321 行＝**掩码后与 pre 逐字同形（差异行数 0）** |
+| rc=0 的 stdout | 1 行裸整数 `4363220736` | 1 行裸整数 `4394711232`＝`json.dumps` 那行仍打地址（打印族／#213⑥ 未变） |
+| `合计 … 行` | 12,858／544 | 12,858／544（逐字相同） |
+| 成交 | 0 | 0 |
+
+**判定**：三档形状齐备、321 行 stderr 归一后**零差异**、崩点位置一格没动、`合计` 数据档与 stdout 打印族两侧相同 ⇒ 并入面（`%(key)s` 命名格式＋新种子 20 例＋⑫ 三发改性批）对主线 301 ＝**零位移**。rc 组成的 1×134⇔0×134、1×139⇔2×139 换位**不作尺**（568 §九.3／#145 已登记：同二进制跨跑抖动量级大于该差；n=13 下 1⇔0 也没有功效）。
+
+**新坑（坑 69，进记忆）**：掩码次序会造出假差异。第一趟把 `s/[0-9]{7,}/N/g` 写在 `s/0x[0-9a-f]+/HEX/g` **之前**，ASLR 句柄 `0x…` 里的数字段先被折成 `N`，HEX 规则随即打不中 ⇒ 两侧同一形状的句柄行被读成「差 2 行」。改正次序（先 `0x[0-9a-f]+`、后 `[0-9]{7,}`）重跑同一对文件＝**差异 0 行**。⇒ 逐字节比 stderr 是假尺（在册），**掩码正则的先后次序也是尺的一部分**；两侧必须用同一条已验证次序，否则"差异行数"读的是掩码器而不是产物。
+
+### 七、本批明确没做的事／自报
+
+1. **旁路四格同号撞车**（引用以哈希为身份）：旁路 `d6ce1b15` 自名「批次 581」与主线批次 581（`7971c17a` 那对）同号；旁路 `2b7ac78f` 自名「批次 582」与主线批次 582（`a65ef57f`）同号；旁路另用掉 583（`90b43c98`）、584（`308dca4f` 等 5 笔）与其 585 补充（`cda8beda`）。本批**取 586**＝主动避开与旁路已用号段新撞，不改历史行。批次号段政策仍是待裁决第 ④ 件。
+2. **诊断面 ＋15 文件／＋38 行未逐项归因**：合并树相对 581 的 python_style 诊断涨了，本批只登记量、没做集合差（旁路 574 动过 `lower_map_key`、581 动过 `parse_shift`，最可能来自新转好面的 warning 覆盖面，但**未测**＝不写成结论）。
+3. **未跑全量门禁**：下一次全量＝主线侧下一个 10 的整数倍那批（**590**）。
+4. **未动** `runtime/*.c`、`tools/**`、`pylib/**`、`docs/ABI.md`；`tools/corpus_baseline.py` 按用户裁定只登记不改（工作树里那笔未提交改动仍在，不纳入本批）。
+5. **旁路 584 的 `append` 元素型精化未接通**这一格在本线只是并入其结论（补丁存档在他们 `/tmp`，主线未复现、未接手）。
+6. **scratch 产物**：`target/release/` 的 `zetac_pre586`／`zetac_post586`／`acc586_pre.bin`／`acc586_post.bin` 与 `/tmp/b586/`（`ab586.sh`、`ab586.tsv`、`m_{pre,post}.txt`、`compile_{pre,post}.log`）；`target/` 不入库，复现 A/B 只需两颗 zetac 的 md5（已在册）。
+7. **本批不 push**（目标级裁定「不 push」覆盖 AGENTS.md 的收尾推送）；`agentic/bootstrap` 的远端指针不动。
+
+**队头**（582 §九 的序不变，本批无新损害量读数插队）：**① 槽对槽定位**（donor 列具名，`market_data_fetcher.py:708-716` 候选仍未证；582 已把污染形状钉成「等长向量、GC 几何正常、读点之前内容已错」＝这一支的头名资格加固）→ **② `str_trim` 调用链具名**（#145/#165；582 量到显著的是**崩溃家族** 0/80 vs 19/120、`p=0.000033`，这一支现在是实测显著那一支）→ **③ `heapalign` 臂**（只在仍追 GC 假设时才跑，拆「收集与否 × 堆顶 7–8 倍」的机械混杂）→ **④ t494/#213⑧**（需 `runtime/` 授权）→ **⑤ #182 余 57 行** → **⑥ #167①**（现 8 名成员）→ **⑦ #48 浮点 repr 方言裁决**。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
