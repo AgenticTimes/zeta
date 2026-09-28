@@ -2760,6 +2760,132 @@ int64_t host_str_istitle(int64_t s) { return str_is_title(s); }
 int64_t host_str_join(int64_t sep, int64_t vec) { return str_join(sep, vec); }
 int64_t host_str_ljust(int64_t s, int64_t w, int64_t f) { return str_ljust(s, w, f); }
 int64_t host_str_rjust(int64_t s, int64_t w, int64_t f) { return str_rjust(s, w, f); }
+
+// ── batch 588: str method bind-gap family ────────────────────────────────
+
+// s.find(sub, start) — the search must BEGIN at `start` (a plain strstr on
+// hay+start returns an offset relative to the slice, not the string).
+// CPython's negative-start counts from the end; we clamp to 0 (registered
+// corner — the diff corpus only exercises start >= 0).
+int64_t host_str_find3(int64_t hay, int64_t needle, int64_t start) {
+    if (!hay || !needle) return -1;
+    const char* h = (const char*)hay;
+    size_t len = strlen(h);
+    if (start < 0) start = 0;
+    if ((size_t)start > len) return -1;
+    const char* p = strstr(h + start, (const char*)needle);
+    return p ? (int64_t)(p - h) : -1;
+}
+
+// s.splitlines() — \n, \r\n and \r boundaries; a trailing boundary does not
+// produce a final empty element (CPython). The exotic Unicode separators
+// (\v \f \x1c …) are a registered corner.
+int64_t host_str_splitlines(int64_t s) {
+    if (!s) return vec_new(4);
+    int64_t out = vec_new(8);
+    const char* p = (const char*)s;
+    const char* start = p;
+    while (*p) {
+        if (*p == '\n' || *p == '\r') {
+            size_t len = (size_t)(p - start);
+            char* piece = (char*)GC_malloc(len + 1);
+            memcpy(piece, start, len);
+            piece[len] = 0;
+            out = vec_push(out, (int64_t)piece);
+            if (*p == '\r' && p[1] == '\n') p++;
+            p++;
+            start = p;
+        } else {
+            p++;
+        }
+    }
+    if (p > start) {
+        size_t len = (size_t)(p - start);
+        char* piece = (char*)GC_malloc(len + 1);
+        memcpy(piece, start, len);
+        piece[len] = 0;
+        out = vec_push(out, (int64_t)piece);
+    }
+    return out;
+}
+
+// str.format over PRE-RENDERED arguments (batch 588): the compiler renders
+// every positional argument by its own type (the same to_string_* dispatch
+// an f-string part uses) and passes a Vec<str>; this shim only walks the
+// template. `{}` consumes the next element, `{N}` element N, `{{`/`}}` are
+// escapes; any other brace group (`{name}`, `{spec}`) stays literal —
+// CPython raises there, registered as a fail-soft corner.
+static char* zt_fmt_put(char* out, size_t* cap, size_t* n, const char* s, size_t len) {
+    if (*n + len + 1 > *cap) {
+        while (*n + len + 1 > *cap) *cap *= 2;
+        char* nb = (char*)GC_malloc(*cap);
+        memcpy(nb, out, *n);
+        out = nb;
+    }
+    memcpy(out + *n, s, len);
+    *n += len;
+    return out;
+}
+int64_t host_str_format(int64_t tmpl, int64_t vec) {
+    const char* t = tmpl ? (const char*)tmpl : "";
+    int64_t vlen = 0;
+    const int64_t* elems = NULL;
+    if (vec) {
+        vlen = ((int64_t*)(vec - 16))[1];
+        elems = (const int64_t*)vec;
+    }
+    int64_t next = 0;
+    size_t cap = 64, n = 0;
+    char* out = (char*)GC_malloc(cap);
+    const char* p = t;
+    while (*p) {
+        if (*p == '{' && p[1] == '{') { out = zt_fmt_put(out, &cap, &n, "{", 1); p += 2; continue; }
+        if (*p == '}' && p[1] == '}') { out = zt_fmt_put(out, &cap, &n, "}", 1); p += 2; continue; }
+        if (*p == '}') { out = zt_fmt_put(out, &cap, &n, "}", 1); p++; continue; }
+        if (*p == '{') {
+            const char* close = strchr(p, '}');
+            int64_t idx = 0;
+            int all_digits = 0;
+            if (close) {
+                size_t glen = (size_t)(close - p - 1);
+                all_digits = glen > 0;
+                for (size_t i = 0; i < glen; i++) {
+                    char c = p[1 + i];
+                    if (c < '0' || c > '9') { all_digits = 0; break; }
+                    idx = idx * 10 + (c - '0');
+                }
+                int ok = 0;
+                const char* piece = NULL;
+                if (glen == 0 && next < vlen) {
+                    piece = (const char*)elems[next++];
+                    ok = 1;
+                } else if (all_digits && idx < vlen) {
+                    piece = (const char*)elems[idx];
+                    ok = 1;
+                }
+                if (ok) {
+                    out = zt_fmt_put(out, &cap, &n, piece ? piece : "", piece ? strlen(piece) : 0);
+                    p = close + 1;
+                    continue;
+                }
+            }
+            // not substitutable: keep the brace group literally
+            if (close) {
+                out = zt_fmt_put(out, &cap, &n, p, (size_t)(close - p) + 1);
+                p = close + 1;
+            } else {
+                out = zt_fmt_put(out, &cap, &n, p, strlen(p));
+                p += strlen(p);
+            }
+            continue;
+        }
+        out = zt_fmt_put(out, &cap, &n, p, 1);
+        p++;
+    }
+    out[n] = 0;
+    return (int64_t)out;
+}
+
 // Python's ljust(width[, fillchar]) — the 2-argument form is the common one.
 // NOTE: `fill` is a STRING handle (str_ljust dereferences it), so the default
 // must be a one-char string, not the byte value ' '.
