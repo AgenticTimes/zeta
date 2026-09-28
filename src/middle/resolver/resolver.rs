@@ -1979,6 +1979,24 @@ impl Resolver {
                         if let Some(t) = method_result_ty(&tag, method) {
                             return Some(t);
                         }
+                        // Batch 601: a USER-CLASS method — fn_rets carries the
+                        // recovered `Class::method` return (qualified-defs
+                        // recovery, batch 600). The registry paths below cannot
+                        // see user classes, so a module-level `d.speak()` fell
+                        // through to None and printed the handle.
+                        let q = format!("{}::{}", tag, method);
+                        if let Some(t) = fn_rets.get(&q) {
+                            return Some(t.clone());
+                        }
+                        let suffix = format!("::{}", method);
+                        let hits: Vec<Type> = fn_rets
+                            .iter()
+                            .filter(|(k, _)| k.ends_with(suffix.as_str()))
+                            .map(|(_, v)| v.clone())
+                            .collect();
+                        if !hits.is_empty() && hits.iter().all(|t| *t == hits[0]) {
+                            return Some(hits[0].clone());
+                        }
                     }
                     // `mod.member(...)` — a registry module member.
                     let mut parts: Vec<String> = Vec::new();
@@ -2213,14 +2231,45 @@ impl Resolver {
         // indexes an empty struct variant (field 0) instead of the class.
         {
             let declared = fn_rets.clone();
+            // Batch 600: the recovery must see the QUALIFIED method defs —
+            // registered_func_defs carries the BARE originals, and two classes
+            // defining the same method name (`speak` on Animal and Dog) made
+            // the suffix match hit twice → the uniqueness gate vetoed BOTH
+            // recoveries → i64. registered_funcs carries the qualified clones
+            // with real bodies.
+            let mut rec_defs = defs.clone();
+            for (k, v) in self.registered_funcs.iter() {
+                if k.contains("::") {
+                    if let AstNode::FuncDef { .. } = v {
+                        rec_defs.push(v.clone());
+                    }
+                }
+            }
             for (fname, fty) in fn_rets.iter_mut() {
-                if !matches!(fty, Type::Tuple(inner) if inner.is_empty()) {
+                // Batch 600: a py CLASS method arrives with the desugaring's
+                // `i64` default (parse_class body_is_string_return only
+                // claims bare StringLit returns), so `::`-qualified entries
+                // join the recovery exactly like batch 451's per-lowering
+                // pass. Without it, `print(d.speak())` typed the call I64 and
+                // printed the handle (class_inheritance).
+                let is_class_method =
+                    matches!(fty, Type::I64) && fname.contains("::");
+                if !matches!(fty, Type::Tuple(inner) if inner.is_empty()) && !is_class_method {
                     continue;
                 }
                 if let Some(t) =
-                    Self::unannotated_return_ty(&defs, fname, &classes, &declared, &sig_params)
+                    Self::unannotated_return_ty(&rec_defs, fname, &classes, &declared, &sig_params)
                 {
+                    if fname.contains("speak")
+                        && crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS")
+                    {
+                        eprintln!("[P601] recovered {} = {:?}", fname, t);
+                    }
                     *fty = t;
+                } else if fname.contains("speak")
+                    && crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS")
+                {
+                    eprintln!("[P601] recovery None for {}", fname);
                 }
             }
         }
@@ -3544,7 +3593,18 @@ fn shim_class_normalize(t: &Type) -> Type {
 }
 
     pub fn lower_to_mir(&self, ast: &AstNode) -> Mir {
-        let defs_snapshot = self.registered_func_defs.borrow().clone();
+        // Batch 601: the unannotated-return recovery must see the QUALIFIED
+        // method defs — the bare originals collide across classes (two
+        // `speak` defs → the uniqueness gate vetoed BOTH recoveries → i64).
+        // registered_funcs carries the qualified clones with real bodies.
+        let mut defs_snapshot = self.registered_func_defs.borrow().clone();
+        for (k, v) in self.registered_funcs.iter() {
+            if k.contains("::") {
+                if let AstNode::FuncDef { .. } = v {
+                    defs_snapshot.push(v.clone());
+                }
+            }
+        }
         // Batch 300 inputs for `unannotated_return_ty`. The decl table is keyed by
         // the MANGLED class name, and iteration order must not matter.
         let mut class_names: Vec<String> = self.type_decls.keys().cloned().collect();
