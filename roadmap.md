@@ -24663,6 +24663,65 @@ AGENTS.md 明文「全量门禁两侧不并发」⇒ 这次是**旁路侧破的*
 - **本批新登记一条候选（不新开任务号，OPEN≤30）**＝§二 那条"同一个锚点在相邻两批里连续搬家"（`:3552 → :3906 → :4182`，两次都是旁路在 `resolver.rs` 前部插行）⇒ #167① 修法三形若选"按符号锚定"，这条就是最直接的收益证据；已折写进 backlog §4.1 本批 bullets，不动 #167 行本体。
 - **产物**＝`/tmp/b600/`（`ABI.md.bak`／`abi_anchors.tsv.bak` 改前快照、`anch_pre.txt`／`anch_post.txt`、`rebind_dry.txt`／`rebind_real.txt`、`build600.log`、`gate600.log`、`gate_md5_{before,after}.txt`、`zetac_b600pre` 存件、`compile_{pre,post}.log`／`diag_{pre,post}.txt`、`ab600.sh`／`ab600.tsv`／`run_{side}_{i}.{out,err}`、`stdout/{pre,post}.masked`、`roadmap_600.md`／`worktree_600.md`／`backlog_600.md`／`splice_*.py`）。**收尾清理**＝`target/release/` 内本批存件 `zetac_b600pre`、`acc600_pre.bin`、`acc600_post.bin` 随记录笔删除。
 
+## 批次 601（2026-09-29，**7.3 生态与工具／文档合同 × 门禁面·合并面收尾**，会话任务 #242）：并入旁路 631–632 ⇒ 锚点 **1 条**漂移（同一条锚点**连续三批**搬家）一趟机械收干（`ANCHOR_RC=1`→**0**）；快门禁 147s ＋ **差分逐案闭合＝零代录零回归** ＋ A/B 两半（t541 一处 `println_i64`→`println_str`、负对照两侧逐字同）；**跨侧 md5 交叉验证第二次兑现**（两侧 A/B 出自同一对二进制）
+
+### 一、并入面：`9f8209e0` 是三文件 93/27，而两-dot diff 报的是九文件
+
+- 旁路侧三笔＝`15232a15`（631 代码）、`c8d72790`（631 台账）、`9c730499`（632 台账＝**零净改动定性批**，文件面只有 `worktree.md`）。主线在 600 的记录笔 `d5fd25b2` 之后 `git merge cleanup` ⇒ 合并提交 **`9f8209e0`**（`18:27:5xZ`，**冲突 0**、`ort` 自动合并 `worktree.md`）。
+- **判并入面必须用 merge-base 三点式（本轮新入册的一条口径）**＝`git diff --numstat HEAD..cleanup` 当场报**九文件**（`roadmap.md` 0/**788**、`docs/ABI.md` **92/92**、`abi_anchors.tsv` 129/131、`tools/check_abi_anchors.py` 5/**46**、`tools/abi_anchors_check.sh` 1/49、`backlog.md` 3/47…），读起来像旁路动了工具面与文档合同；而 `git merge-base HEAD cleanup`＝**`3c79dfe3`**（旁路 630 的记录笔），`3c79dfe3..cleanup` 只有 **`resolver.rs` 62/27 ＋ `t541` 29/0 ＋ `worktree.md` 2/0**＝**93/27 三文件**，与合并落地后的 numstat **逐字相同** ⇒ 那些"删除"全是我侧 593–600 领先的部分（旁路尚未 `git rebase bootstrap`）。两-dot `HEAD..cleanup` 是**两侧树的对称差**，不是并入面。
+- **旁路 631 做的事**（读合并 diff，不是转述其台账）＝把 628/630 的返回推断器扩到**委托面**：① `return self.<m>(·)` 读 `funcs["C::m"].ret` 的**已精化**值（键由 `format!("{}::{}", cls, method)` 拼）；② `return <plain>(·)` 读裸名键；callee 未知或 ret 仍是 `I64` ⇒ `.filter(Str|F64|Bool)` 不收 ⇒ `face=None` ⇒ 投 **PyDynamic 毒票**（命中路径不被腐蚀）。**不动点迭代**＝`for _round in 0..4`（`resolver.rs:2902` 起）每轮按 `self.funcs` 重建 `fn_rets` 快照、`refined_round==0` 就 `break` ⇒ 源序靠后的 callee 下一轮收敛。
+- **631 的实现坑（本轮独立复现，不靠读代码断言）**＝630 的 `.get` 面用 `match …{ (FieldAccess,"get",2)=>…, _=>None }` 与 else-if 串联时，会把**一切 Call 形返回**吞掉 ⇒ 委托面**不可达**；631 的修法是把两面并成**同一段 `face` 计算**（先算 `.get` 面，`face.is_none()` 才走 callee 面）。主线侧正证据＝t541 **改前打堆地址、改后打 `deep`**（见 §六），即"该面真跑到并真产出收益"，而不只是"代码里写了"。
+- **告警面未新增**（顺带一条负证据的正向用法）＝cargo 那条 `unused_mut` 改前报 `resolver.rs:3537`（600 的 `build600.log`）、改后报 `:3572`（本批 `build601.log`），**同一点、同一个 Δ+35**，两批都只有这一条 ⇒ 合并面没引入新告警。
+
+### 二、锚点面：1 条漂移，机械臂一趟收干（零点名／零手绑／零 `--prune-gone`）
+
+- 改前只读核对＝**`ANCHOR_RC=1`**：漂移 1／新 0／消失 0、`306 个可解析（来自 344 条引用）／0 个定位失败`（`/tmp/b601/anch_pre.txt`）。
+- `--rebind --dry`＝`漂移 1 条 → 搬家 1 条／拒改 0 条；改号配对 0 对／落单消失 0／落单新 0`；唯一一条＝**`src/middle/resolver/resolver.rs:4182 → :4217`**（1 行内容逐字相同，全文件唯一命中，Δ**+35**）。
+- **同一条锚点连续三批搬家**＝`:3552 →（597）→ :3906 →（600）→ :4182 →（601）→ :4217`，三次都因旁路在 `resolver.rs` 前部插行 ⇒ 600 §六 那条"按符号锚定"的候选现在拿到**三连样本**（#167① 的收益证据，本批仍不新开任务号）。
+- 实跑 `--rebind`＝`已改写 docs/ABI.md（1 行 / 1 个数字）`＋基线刷新（tsv 仍 306 锚点、定位失败 0）⇒ 复跑只读 **`ANCHOR_RC=0`**「锚点全部对上」；待归属 98 条／88 种、仓外声明 14 条、共用键 38 条——**三格与 600 逐字相同**。提交＝**`ed1c8fb2`**（fix，numstat `docs/ABI.md` 1/1、`tools/baselines/abi_anchors.tsv` 1/1；改前快照 `/tmp/b601/ABI.md.bak`、`abi_anchors.tsv.bak`）。
+
+### 三、跨侧 md5 交叉验证（第二次兑现，形态与 600 §一 相同）
+
+旁路 631 在册的 post 侧 md5 **`f548279b`** ＝ 主线合并后重建这颗 **`f548279b8a74c82259e386067b2ea352`**；其 pre 侧 **`dc9c6c8d`** ＝ 主线**开工前先存**的那颗 **`dc9c6c8d0c86580824f0c17fe6365813`**（＝600 的 post 那颗）。⇒ **两侧 A/B 出自同一对二进制**，本批位移栏与旁路 631 的位移栏可直接对照、不需换算；同时把"旁路在册的语料级 A/B"接进主线口径（见 §六末条）。构建纪律照 600＝改前存件在 `cargo build --release` 之前落盘并戳 md5，且重建后 post 侧 md5 **确实变了**（`dc9c6c8d`→`f548279b`）＝旁路教训 1（cargo 增量漏检）这轮没踩到。
+
+### 四、快门禁（src/middle 路由：official ＋ python_style ＋ 新增夹具）
+
+`/tmp/b601/gate601.log`：`18:29:44Z`→`18:32:11Z` ＝ **147s**、**`GATE_RC=1`**；被测二进制 md5 跑前跑后各戳一次**逐字相同**（`gate_md5_{before,after}.txt`＝`f548279b…`＝#175/坑 83 守门）。
+
+| 步骤 | 600（上一次全量在册） | 本批 601（快门禁） | 归因 |
+|---|---|---|---|
+| official | compile **194/194**、compile+link **191/194**、link-only **3** | 194/194、191/194、3 | 三条同名同缺符号名单逐字未动（`integration_all_features`／`quantum_basic`／`selfhost`） |
+| 诊断面 official | 5 文件 / 21 行、`not_measured 0` | 5/21、0 | 未变 |
+| python_style | **417**/2/6/0 xpass | **418**/2/6/0 | **＋1＝恰 `t541`**（631 新钉）；桶和自证 418+2+6+0＝**426** ⇔ `ls tests/python_style/t*.z`＝**426**；红源两条（`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）逐字同名 ⇒ **零新增红**，`GATE_RC=1` 的来源仍是这两枚存量红 |
+| 诊断面 python_style | 271 行 / 126 文件 | **271 / 126** | 逐字相同 ⇒ t541 未新增告警面；597 那次 −5 行／−1 文件的收敛在 600（全量）与 601（子集）两代都站得住 |
+| comment_drift / dyn_binding | 0 处复述 ／ 4 条不一致 0 | 同（`gate601.log:28-29`） | 未变 |
+| corpus / jit / truth / knob / swallow / import / empty_stmt / clean_checkout / pysrc / cli_semantics / ignore_rules / mbvar / emit_stable | 40/40・ok 178/total 622・五族 match 575・23/6/22/68・rc=0・42/87/19・25・2・4 | **未跑**（全量专属，下一次＝主线 **610**） | 按 AGENTS 门禁节奏的改动面路由裁剪；**但 `diff` 步虽被 `--skip-diff` 跳过，本批另跑只读**（见 §五），因为合并面动的是下型层、差分面是唯一能看语义回归的真值面 |
+
+### 五、差分面：**零代录**，且这轮做到**逐案闭合**（新增一条口径）
+
+- 只读 `python3 tools/diff_test.py`（`/tmp/b601/diff_readonly.txt`）＝**`match=575 judged=600 rate=95.8% bad_case=1（总用例 601）`**、`DIFF_RC=2`（来源仍是 `bad_case del_undefined_var` 恒置 rc=2，**待裁**、本批不改判）；`per_cat`＝truth 43/43、str 105/105、container 225/227、numeric 112/134、control 90/91 ⇒ 与盘上基线**逐字相同**，`tools/baselines/diff_consistency.json` 本批**未改**（`git status` 无该文件）＝**无 bless 可做**。分母核对（坑 77）＝基线 `total 601` ⇔ `judged 600`（差 1＝bad_case 被排除出分母）。
+- **逐案闭合（本轮新做法）**＝把只读清单列出的非 match 名（**26 条**＝mismatch 24 ＋ compile 1 ＋ bad_case 1）与基线 JSON `cases[*].verdict != match` 的 **26 条**取集合差 ⇒ **新增 0／消失 0** ⇒ 631 在差分面**零成员**：既没转好也没回归（`match_min 575` 的闸连续第二批以"持平"形态通过）。这比上一代的"只看总数持平"强：总数持平可以是"一进一退"的抵消。
+- **本批自纠一条（读数作废并如实入册）**＝第一次做逐案比时按 `cases[name] == "match"` 取值，而基线 JSON 的值是 **`{cat, verdict}` 字典** ⇒ 那趟输出"base nonmatch 601／recovered 600 条"是**取值口径错**（与坑 66 同族：拿错字段当键用），该读数不成立；改 `v['verdict']` 后才得到上面的闭合。
+- **由此得一条扩面候选（属 #49 名下，不新开任务号）**＝"方法返回链"（`return self.<m>()`）这一形在差分库 601 例里**零成员** ⇒ 差分面对 628/630/631 三批的返回推断收益**整体失明**；扩面归 #49（差分库持续扩充）。本批只在 backlog 记一条候选，不动 #49 行本体。
+
+### 六、主线位移栏：位移 **0**，两半都有正证据
+
+驱动＝`/tmp/b601/ab601.sh`（表 `/tmp/b601/ab601.tsv`＝12 行＝3 夹具 × 2 侧 × 2 趟）；两颗 `zetac` 与两颗产物、四份 IR 同在 `target/release/`（坑 52/68）；`runtime/` 零改动 ⇒ 不做 `ZETA_RUNTIME_DIR` override。
+
+- **正向半 t541**＝pre 两条 print 打 **`4343587600`／`4372914960`**（两趟地址不同＝旁路教训 4 的 GC 地址熵，**形状**仍是堆地址样整数）＋ `x`；post＝**`deep`** ＋ `x` ⇒ 收益恰在"方法委托链"那一格；同夹具第二条（普通函数链 `f()`）两侧本就对＝451/601 基础设施在 pre 侧已通，不是 631 的功劳。
+- **IR 面（单模块 `--emit-llvm`）**＝t541 两侧 **1196 行**、变判 **1 个站点**＝`call void @println_i64(i64 %21)` → `call void @println_str(i64 %21)` ⇒ 行数不变而调用名换＝**收益在分派选择不在几何**（与 597 的三处／两处同形）。
+- **负对照半**＝`t540`（630 的夹具）与 `t527`（595/596 在册负对照）：各侧 2 趟 stdout **同侧逐字节相同、跨侧逐字节相同**（t540＝`x|missing|y|1`；t527＝六行排序形状）；IR 两侧 **变判 0 行**（t540 1371 行、t527 1273 行）⇒ **位移 0 有正证据**。
+- **语料级 `_drv_accept_409.py` A/B＝本批未复跑**（600 刚在册一次＝位移 0；本批 src 改动面是合并带入、其收益面在类方法返回推断）。旁路 631 在**同一对二进制**（§三）上跑过 n=3/侧：编译诊断 sorted 3/3 相同 ＋ rc=0 发掩码 stdout 逐字同＝位移 0，崩溃侧 post 一发 `rc=134`、其自报归 vstack 桩已知族。按 600 §五 入册的两条纪律（同侧方差带、n=3 不足以定性；崩溃族不入账）⇒ **这条只作"同二进制对上的旁路读数"引用，主线侧不据此判收益也不判回归**；语料级复跑挂**下一次全量＝610**。
+- **未做**＝`--dump-mir` 面（本轮收益在分派选择、IR 一行已定位，未取 MIR）；truth 步（全量专属）。
+
+### 七、编号／提交面／队头／产物
+
+- **编号**＝本批取 **601**：当场 `git log HEAD..cleanup --oneline` 拍到旁路头名＝**632**，`601` 未被两侧占用。
+- **提交面**＝`9f8209e0`（merge，**93/27 三文件**）→ `ed1c8fb2`（fix：`ABI.md` 1/1 ＋ `abi_anchors.tsv` 1/1）→ 记录批随本行入库；**不 push**（目标级裁定覆盖 AGENTS 收尾推送）；旁路侧下一步＝`git rebase bootstrap`。
+- **OPEN 净增 0**＝`grep -cE '^\| #' backlog.md` 收尾复算仍 **43**。
+- **队头**＝**#211①（nunique 兄弟列污染的槽对槽定位＋具名列）** → `str_trim` 族（需 `runtime/py_additions.c` 语义真修授权）→ **#167① 修法三形甲／乙／丙（待裁）**／**#52 余项** → #182 → t494／#213⑧ → #48。下一次全量＝主线 **610**（含语料级位移复跑）。待用户裁决累计 **10 条**。
+- **产物**＝`/tmp/b601/`（`ABI.md.bak`／`abi_anchors.tsv.bak`／`roadmap.md.bak` 等改前快照、`md5_pre.txt`、`anch_{pre,post}.txt`、`rebind_{dry,real}.txt`、`build601.log`、`gate601.log`、`gate_md5_{before,after}.txt`、`ab601.sh`／`ab601.tsv`、`diff_readonly.txt`）。**收尾清理**＝`target/release/` 内本批存件 `zetac_b601pre` 与 `ab601_*`（`.bin`／`.ll`／`.cc`）随记录笔删除。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
