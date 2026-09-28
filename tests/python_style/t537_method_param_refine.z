@@ -1,0 +1,26 @@
+// 批次 627（旁路 cleanup）：方法参数的调用点精化——600 ctor 精化器的
+// 方法版。未注解方法参数在 funcs 停 I64（gen 侧 spelling 停 PyDynamic），
+// `g.greet("World")` 的字串实参没流回去 ⇒ 方法体内该参数的 f-string
+// 部件走 to_string_i64 把串句柄打成地址（closure_nonlocal 首差异行 #4：
+// `Hello, <N>!`；实拍 prefix 字段渲染本来就对，坏的是 name 参数）。
+// resolver 扫描模块级调用站点（裸 Call/ExprStmt/Assign 三态＋print 实参
+// 下沉＋`g = Greeter(..)` 局部类别环境）记 `Class::method` → [(参数位,
+// Type)]，经 builder 过墙，gen 参数循环按位覆写 type_map。守卫＝现状
+// I64/PyDynamic 才精化——真注解永不覆盖。
+// 边界（不在本夹具、登记 #195 余项）：返回值面——`def ident(self, w):
+// return w` 的参数精化已生效（体内型别 Str），但调用方按注册返回类型
+// I64 选 println 分派仍打地址（s35/s36 实拍）；非字面量实参不精化＝600
+// 同一映射面。
+class Greeter:
+    def __init__(self, prefix):
+        self.prefix = prefix
+    def greet(self, name):
+        return f"{self.prefix}, {name}!"
+    def tag(self, name):
+        return f"[{name}]"
+
+g = Greeter("Hello")
+print(g.greet("World"))
+print(g.tag("XSHG"))
+// expect: Hello, World!
+// expect: [XSHG]
