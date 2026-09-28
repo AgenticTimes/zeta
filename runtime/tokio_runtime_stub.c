@@ -3430,6 +3430,74 @@ int64_t zeta_map_value_tag(int64_t map, int64_t key) {
 // homogeneous), so the compiler passes its tag instead of a per-element side
 // table — indices move on realloc, the static type does not.
 // tag: 0 = int, 1 = f64, 2 = str, 3 = bool
+/* Batch 633: nested-list repr. `tags` is a NUL-terminated tag string —
+   "0" int, "1" f64, "2" str, "3" bool, "4,<inner>" list — one token per
+   LEVEL. tag '4' recurses into each element (itself a vec handle) with the
+   remainder of the string. Non-list tags render exactly like the flat
+   py_json_dumps_vec_typed switch. */
+static int64_t dumps_vec_nested(int64_t vec, const char* tags) {
+    if (!vec) return (int64_t)zt_strdup("[]");
+    int64_t len = ((int64_t*)(vec - 16))[1];
+    size_t cap = 64, n = 0;
+    char* out = (char*)GC_malloc(cap);
+    out[n++] = '[';
+    char tag = tags[0];
+    const char* inner = (tag == '4') ? (tags[1] == ',' ? tags + 2 : tags + 1) : tags;
+    for (int64_t i = 0; i < len; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        if (n + 64 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+        if (i) { out[n++] = ','; out[n++] = ' '; }
+        switch (tag) {
+            case '1': {
+                double d;
+                memcpy(&d, &v, sizeof d);
+                n += (size_t)sprintf(out + n, "%g", d);
+                break;
+            }
+            case '2': {
+                if (v) {
+                    out[n++] = '\'';
+                    for (const char* p = (const char*)v; *p; p++) {
+                        if (n + 3 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+                        if (*p == '\'') out[n++] = '\\';
+                        out[n++] = *p;
+                    }
+                    out[n++] = '\'';
+                } else {
+                    out[n++] = '\'';
+                    out[n++] = '\'';
+                }
+                break;
+            }
+            case '3':
+                n += (size_t)sprintf(out + n, "%s", v ? "True" : "False");
+                break;
+            case '4': {
+                /* A nested list: NULL renders as an empty list, matching
+                   the flat path's `if (!vec) return "[]"` guard. */
+                int64_t sub = v ? dumps_vec_nested(v, inner) : (int64_t)zt_strdup("[]");
+                size_t slen = strlen((const char*)sub);
+                while (n + slen + 2 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+                memcpy(out + n, (const char*)sub, slen);
+                n += slen;
+                break;
+            }
+            default:
+                n += (size_t)sprintf(out + n, "%lld", (long long)v);
+                break;
+        }
+    }
+    out[n++] = ']';
+    out[n] = 0;
+    return (int64_t)out;
+}
+
+int64_t py_json_dumps_vec_nested(int64_t vec, int64_t tags) {
+    const char* t = (const char*)tags;
+    if (!t || !t[0]) t = "0";
+    return dumps_vec_nested(vec, t);
+}
+
 int64_t py_json_dumps_vec_typed(int64_t vec, int64_t tag) {
     if (!vec) return (int64_t)zt_strdup("[]");
     int64_t len = ((int64_t*)(vec - 16))[1];
