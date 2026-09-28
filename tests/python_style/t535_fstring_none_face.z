@@ -1,0 +1,18 @@
+// 批次 625（旁路 cleanup）：f-string {None} 字面量面（624 NoneLit 身份的
+// 下一面）。FString 降值臂原先把 NoneLit part 一路 lower 成 IntLit(0) 再
+// to_string ⇒ 三面全打 0（裸/嵌入/赋值中转）。现 NoneLit part 直接落成
+// StringLit("None") part——与 `f"a{x}"` 的字面量 part 同一条已有路（常量
+// 经参数位物化，无 BATCH-296 别名坑）。边界（不在本夹具）：变量携带的
+// None（x=None; f"{x}"）仍打 0＝#113/#189 值表示面；`{None!r}` 转换符
+// 未量。
+print(f"{None}")
+print(f"a{None}b")
+x = f"{None}"
+print(x)
+print(f"{None}{1}")
+print(f"v={None}")
+// expect: None
+// expect: aNoneb
+// expect: None
+// expect: None1
+// expect: v=None

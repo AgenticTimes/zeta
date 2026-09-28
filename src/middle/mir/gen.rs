@@ -4825,6 +4825,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 // expressions go through a to_string_* dispatch.
                 let mut part_ids: Vec<u32> = Vec::new();
                 for p in parts {
+                    // Batch 625: `f"{None}"` literal face renders "None" —
+                    // lowered as the ordinary StringLit part it is (value
+                    // representation stays 0, #113/#189 deep water).
+                    if matches!(p, AstNode::NoneLit) {
+                        let pid = self.lower_expr(&AstNode::StringLit("None".to_string()));
+                        part_ids.push(pid);
+                        continue;
+                    }
                     let pid = self.lower_expr(p);
                     // An INLINE CONDITIONAL whose branches are both strings
                     // (`f"{'sh' if exch == 'XSHG' else 'sz'}.{num}"`) left the
