@@ -406,7 +406,7 @@ codegen.rs:1133-1136，定义 tokio_runtime_stub.c:4082/3850/3856/3862。五者�
 
 **C10 默认值 / kwarg 在 MIR 期折叠成定长位置实参**，运行期不参与：
 注入标记 `zeta_param_default(index, value)`（parser/top_level.rs:347-368）→
-Resolver 收集 `param_defaults`（resolver.rs:639-663，kind 不匹配时 :653-660 告警）→
+Resolver 收集 `param_defaults`（resolver.rs:645-669，kind 不匹配时 :659-666 告警）→
 > 锚点源码：src/middle/mir/gen.rs
 gen.rs `fill` 按**声明顺序**落槽：位置实参（:10443-10449）→ 关键字（:10450-10455）→
 `**` 映射填未绑定槽（:10456-10468）→ 默认值（:10469-10478）。
@@ -461,7 +461,7 @@ M1–M4 在 `/tmp/abi3_*`（批次 316），M5–M7 在 `/tmp/abi8/`（批次 31
 ### 4.1 轴一的写侧：四种拼写，没有一种可逆
 
 **N1 模块限定的规范形是 `<module 的点换成下划线>__<member>`。**
-锚点 resolver.rs:2103、:3552；mir/gen.rs:453、:696、:808、:815、:4568。
+锚点 resolver.rs:2109、:3906；mir/gen.rs:453、:696、:808、:815、:4568。
 构造就是两次 `replace`，**没有转义**：`__` 既是分隔符又可能出现在 member 里，
 点号也会把 `a.b` 和 `a__b` 映到同一串。判"这是不是模块限定名"目前只有
 `actual_name.contains("__")`（codegen.rs:3350，与同一行的
