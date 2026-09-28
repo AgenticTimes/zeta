@@ -77,6 +77,9 @@ impl ConstEvaluator {
     /// Recursively transform an AST node, evaluating const expressions
     fn transform_ast_node(&mut self, node: &AstNode) -> CtfeResult<AstNode> {
         match node {
+            // Batch 624: `None` literal — value-wise it stays 0 (the
+            // representation-level None is #113/#189 deep water).
+            AstNode::NoneLit => Ok(AstNode::Lit(0)),
             AstNode::ConstDef {
                 name,
                 ty,

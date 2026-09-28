@@ -147,6 +147,10 @@ pub enum AstNode {
     Spawn { func: String, args: Vec<AstNode> },
     /// Integer literal value.
     Lit(i64),
+    /// Python `None` literal (batch 624). Renders as "None" through
+    /// print/str literal faces; value-wise it still carries 0 (the
+    /// representation-level None is #113/#189 deep water).
+    NoneLit,
     /// Float literal value.
     FloatLit(String),
     /// String literal as owned UTF-8 string.

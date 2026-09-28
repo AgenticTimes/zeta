@@ -4810,6 +4810,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 self.exprs.insert(id, MirExpr::IntLit(value));
                 self.type_map.insert(id, Type::Bool);
             }
+            AstNode::NoneLit => {
+                // Batch 624: `None` as a VALUE stays 0 (i64) — only the
+                // print/str literal faces render "None" (see those arms).
+                self.exprs.insert(id, MirExpr::IntLit(0));
+                self.type_map.insert(id, Type::I64);
+            }
             AstNode::StringLit(s) => {
                 self.exprs.insert(id, MirExpr::StringLit(s.clone()));
                 self.type_map.insert(id, Type::Str);
@@ -9425,11 +9431,14 @@ call, no NULL-handle dereference).",
                             // `key=None` — None lexes to Lit(0); the raw 0
                             // reached py_sorted_key as a function pointer and
                             // SEGV'd (batch 560). Treat it as no key.
+                            // Batch 624: None now lexes as AstNode::NoneLit
+                            // (the literal-face batch) — keep both shapes.
                             // `key=abs` — builtins have no function value to
                             // pass through the fn-pointer sort (raw abs
                             // lowered to a dead slot -> SEGV); route to the
                             // abs-key sort runtime.
-                            let none_key = matches!(&keyf, Some(AstNode::Lit(0)));
+                            let none_key =
+                                matches!(&keyf, Some(AstNode::Lit(0)) | Some(AstNode::NoneLit));
                             let abs_key = matches!(&keyf, Some(AstNode::Var(n)) if n == "abs");
                             if none_key || abs_key {
                                 keyf = None;
@@ -9776,6 +9785,29 @@ call, no NULL-handle dereference).",
 
                 // PY-A: Python `str(x)` — convert any value to its string form
                 if method == "str" && receiver.is_none() && args.len() == 1 {
+                    // Batch 624: `str(None)` literal face renders "None"
+                    // (value representation stays 0, #113/#189 deep water).
+                    // The constant must reach the result through a DEFINING
+                    // stmt — aliasing a bare constant id reads an
+                    // uninitialized alloca (the BATCH-296 trap below).
+                    if matches!(args[0], AstNode::NoneLit) {
+                        let cid = self.next_id();
+                        self.exprs
+                            .insert(cid, MirExpr::StringLit("None".to_string()));
+                        self.type_map.insert(cid, Type::Str);
+                        let nid = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_identity".to_string(),
+                            args: vec![cid],
+                            dest: nid,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(nid, MirExpr::Var(nid));
+                        self.type_map.insert(nid, Type::Str);
+                        self.exprs.insert(id, MirExpr::Var(nid));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
                     let arg_id = self.lower_expr(&args[0]);
                     // A Json value knows its own type: stringify by tag.
                     if matches!(
@@ -9977,7 +10009,17 @@ call, no NULL-handle dereference).",
                     }
                     let mut arg_ids = vec![];
                     for a in &positional {
-                        arg_ids.push(self.lower_expr(a));
+                        // Batch 624: `print(None)` literal face renders
+                        // "None" (value representation stays 0).
+                        if matches!(a, AstNode::NoneLit) {
+                            let nid = self.next_id();
+                            self.exprs
+                                .insert(nid, MirExpr::StringLit("None".to_string()));
+                            self.type_map.insert(nid, Type::Str);
+                            arg_ids.push(nid);
+                        } else {
+                            arg_ids.push(self.lower_expr(a));
+                        }
                     }
                     let n = arg_ids.len();
                     // Separator (default one space).
