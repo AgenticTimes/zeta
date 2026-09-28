@@ -1,0 +1,29 @@
+// 批次 631（旁路 cleanup）：方法返回链的推断——628 推断器的委托面。
+// `def outer(self): return self.inner()` ——inner 的 ret 已被 628 精化
+// （体内字面量），但 outer 的推断器不认 Call 形 ⇒ funcs.ret 停 I64，调用
+// 方 println_i64 打地址（s42 实拍）。现返回推断扩两个调用面：①
+// `return self.<m>(·)`（读 funcs["C::m"].ret 的已精化值）；②
+// `return <plain>(·)`（funcs 裸名键）；I64/未知 callee 毒票（返回字可为
+// 任何值）。**不动点迭代**（≤4 轮，每轮重建 funcs.ret 快照）——源序靠后
+// 的 callee 在下一轮收敛。普通函数链 s41 本就通（451/601 基础设施）。
+// 实现坑在册：.get 面（630）的 else-if 吞掉一切 Call 返回——委托面须与
+// .get 面合并为同一段 face 计算而非并列 else-if。
+// 边界（不在本夹具）：容器返回链不推断＝628 保守面；str(dict) 面死结＝
+// map 槽序非插入序（{"b": 2, "a": 1} 实拍）＋t55 钉死 print 双引号方言
+// ＋插入序需数据结构改造＝深水留队。
+class C:
+    def inner(self):
+        return "deep"
+    def outer(self):
+        return self.inner()
+
+def g():
+    return "x"
+def f():
+    return g()
+
+c = C()
+print(c.outer())
+print(f())
+// expect: deep
+// expect: x

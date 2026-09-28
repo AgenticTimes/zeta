@@ -2902,6 +2902,11 @@ impl Resolver {
         param_map: &HashMap<String, Vec<(usize, Type)>>,
     ) -> usize {
         let mut refined = 0;
+        // Batch 631: return CHAINS (`return self.inner()`) need the callee's
+        // ret refined first — iterate to a fixpoint (bounded) rebuilding the
+        // ret snapshot each round.
+        for _round in 0..4 {
+        let mut refined_round = 0;
         // (qualified name, method FuncDef) pairs: methods from impls,
         // plain functions from registered_func_defs.
         let mut candidates: Vec<(String, AstNode)> = Vec::new();
@@ -2950,6 +2955,11 @@ impl Resolver {
                 }
             }
         }
+        let fn_rets: HashMap<String, Type> = self
+            .funcs
+            .iter()
+            .map(|(n, (_, r, _))| (n.clone(), r.clone()))
+            .collect();
         for (qname, fd) in candidates {
             let unannotated = match self.funcs.get(&qname) {
                 Some((_, Type::I64, _)) => true,
@@ -2968,6 +2978,7 @@ impl Resolver {
                 param_map,
                 &qname,
                 &map_vals,
+                &fn_rets,
                 &mut rets,
             );
             if rets.is_empty() {
@@ -2983,9 +2994,14 @@ impl Resolver {
                     if matches!(ret, Type::I64) {
                         *ret = first.clone();
                         refined += 1;
+                        refined_round += 1;
                     }
                 }
             }
+        }
+        if refined_round == 0 {
+            break;
+        }
         }
         refined
     }
@@ -2999,6 +3015,7 @@ impl Resolver {
         param_map: &HashMap<String, Vec<(usize, Type)>>,
         qname: &str,
         map_vals: &HashMap<(String, String), Type>,
+        fn_rets: &HashMap<String, Type>,
         out: &mut Vec<Type>,
     ) {
         let cls = qname.split("::").next().unwrap_or("").to_string();
@@ -3056,36 +3073,54 @@ impl Resolver {
                                 ..
                             } = &**val
                             {
-                                // Batch 630: `return self.<f>.get(k, <lit>)`
-                                // — the default literal is the value-type
-                                // evidence ONLY when it agrees with the
-                                // map's voted value type; otherwise the hit
-                                // path is a genuine union (poison).
-                                let face = match (&**rc, method.as_str(), args.len()) {
-                                    (
-                                        AstNode::FieldAccess { base: fb, field },
-                                        "get",
-                                        2,
-                                    ) => match &**fb {
-                                        AstNode::Var(b) if b == "self" => {
-                                            let vt = map_vals
-                                                .get(&(cls.clone(), field.clone()));
-                                            let dt = match &args[1] {
-                                                AstNode::StringLit(_) => Some(Type::Str),
-                                                AstNode::FloatLit(_) => Some(Type::F64),
-                                                AstNode::Bool(_) => Some(Type::Bool),
-                                                _ => None,
-                                            };
-                                            match (vt, dt) {
-                                                (Some(v), Some(d)) if *v == d => Some(d.clone()),
-                                                (Some(_), Some(_)) => Some(Type::PyDynamic),
-                                                _ => None,
+                                // Batch 630/631 call faces, in order:
+                                // ① `return self.<f>.get(k, <lit>)` — the
+                                //    default literal is value-type evidence
+                                //    ONLY when it agrees with the map's voted
+                                //    value type; disagreement = genuine union
+                                //    (poison — the hit path must not corrupt).
+                                // ② `return self.<m>(·)` / `return <plain>(·)`
+                                //    — the callee's ALREADY-REFINED ret is
+                                //    evidence (the 631 fixpoint re-runs the
+                                //    pass so chains converge); an
+                                //    I64/unknown callee poisons.
+                                let mut face: Option<Type> = None;
+                                if method == "get" && args.len() == 2 {
+                                    if let AstNode::FieldAccess { base: fb, field } = &**rc {
+                                        if let AstNode::Var(b) = &**fb {
+                                            if b == "self" {
+                                                let vt = map_vals
+                                                    .get(&(cls.clone(), field.clone()));
+                                                let dt = match &args[1] {
+                                                    AstNode::StringLit(_) => Some(Type::Str),
+                                                    AstNode::FloatLit(_) => Some(Type::F64),
+                                                    AstNode::Bool(_) => Some(Type::Bool),
+                                                    _ => None,
+                                                };
+                                                face = match (vt, dt) {
+                                                    (Some(v), Some(d)) if *v == d => Some(d.clone()),
+                                                    (Some(_), Some(_)) => Some(Type::PyDynamic),
+                                                    _ => None,
+                                                };
                                             }
                                         }
+                                    }
+                                }
+                                if face.is_none() {
+                                    let callee = match &**rc {
+                                        AstNode::Var(b) if b == "self" => {
+                                            Some(format!("{}::{}", cls, method))
+                                        }
+                                        AstNode::Var(b) if !b.is_empty() => Some(b.clone()),
                                         _ => None,
-                                    },
-                                    _ => None,
-                                };
+                                    };
+                                    face = callee
+                                        .and_then(|c| fn_rets.get(&c))
+                                        .filter(|t| {
+                                            matches!(**t, Type::Str | Type::F64 | Type::Bool)
+                                        })
+                                        .cloned();
+                                }
                                 match face {
                                     Some(t) if t != Type::PyDynamic => out.push(t),
                                     _ => out.push(Type::PyDynamic),
