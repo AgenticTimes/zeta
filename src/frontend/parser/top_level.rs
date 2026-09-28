@@ -1146,6 +1146,12 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     // per-field inits (field <- the arg's own Var name). The whitelist below
     // DROPS these statements, so base-ctor initialized fields never existed
     // on the subclass (d.name had no slot/value). Non-Var args skipped.
+    // Batch 620: every such call also emits a `__baseargs__:<B>:<enc>` impl
+    // attr (self stripped; kinds v/i/f/s/b, `x` unsupported, \u{1f}-joined).
+    // The resolver owns the base param->field map, so it binds these to the
+    // base ctor's params positionally at adoption time — Var args keep the
+    // 608 field-slot conflation for the own-`__init__` path.
+    let mut baseargs_markers: Vec<String> = Vec::new();
     for st in &init_stmts {
         if let AstNode::ExprStmt { expr } = st {
             if let AstNode::Call {
@@ -1160,15 +1166,48 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                 {
                     if let AstNode::Var(selfv) = &cargs[0] {
                         if selfv == "self" {
+                            let bname = match &**recv {
+                                AstNode::Var(v) => Some(v.clone()),
+                                _ => None,
+                            };
+                            let mut enc: Vec<String> = Vec::new();
                             for a in &cargs[1..] {
-                                if let AstNode::Var(f) = a {
-                                    if !fields.iter().any(|(x, _)| x == f) {
-                                        fields.push((f.clone(), "i64".to_string()));
+                                match a {
+                                    AstNode::Var(f) => {
+                                        if !fields.iter().any(|(x, _)| x == f) {
+                                            fields.push((f.clone(), "i64".to_string()));
+                                        }
+                                        if !field_inits.iter().any(|(x, _)| x == f) {
+                                            field_inits.push((f.clone(), (*a).clone()));
+                                        }
+                                        enc.push(format!("v{}", f));
                                     }
-                                    if !field_inits.iter().any(|(x, _)| x == f) {
-                                        field_inits.push((f.clone(), (*a).clone()));
+                                    AstNode::Lit(i) => enc.push(format!("i{}", i)),
+                                    AstNode::FloatLit(x) => enc.push(format!("f{}", x)),
+                                    AstNode::StringLit(s) => {
+                                        enc.push(format!("s{}", s.replace('\u{1f}', " ")))
                                     }
+                                    AstNode::Bool(b) => {
+                                        enc.push(format!("b{}", if *b { 1 } else { 0 }))
+                                    }
+                                    AstNode::UnaryOp { op, expr: e } => match (&**op, &**e) {
+                                        (o, AstNode::Lit(i)) if o == "-" => {
+                                            enc.push(format!("i-{}", i))
+                                        }
+                                        (o, AstNode::FloatLit(x)) if o == "-" => {
+                                            enc.push(format!("f-{}", x))
+                                        }
+                                        _ => enc.push("x".to_string()),
+                                    },
+                                    _ => enc.push("x".to_string()),
                                 }
+                            }
+                            if let Some(b) = bname {
+                                baseargs_markers.push(format!(
+                                    "__baseargs__:{}:{}",
+                                    b,
+                                    enc.join("\u{1f}")
+                                ));
                             }
                         }
                     }
@@ -1470,6 +1509,8 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
     for b in &base_list {
         impl_attrs.push(format!("__bases__:{}", b));
     }
+    // Batch 620: explicit-base-call args per base (see the collection loop).
+    impl_attrs.extend(baseargs_markers.iter().cloned());
     if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
         eprintln!(
             "[P603] parse_class: name={} has_init={} impl_attrs={:?}",
