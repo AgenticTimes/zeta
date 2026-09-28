@@ -1,0 +1,25 @@
+// 批次 628（旁路 cleanup）：方法返回类型的推断——#195 余项（627 的实证
+// 后继）。`def ident(self, w): return w` 的参数精化在体内已生效（627），
+// 但调用方按 funcs 注册的返回类型 I64 选 println_i64 ⇒ 打串句柄地址
+// （s35/s36 实拍）。现从方法体每个 return 表达式推断返回型别——字面量、
+// 627 已精化的参数、以及 `+` 拼接（任一侧 Str 即 Str、双侧 F64 即 F64，
+// 递归）——全体一致且注册类型仍是 I64（未注解）时写入 funcs；gen 侧的
+// ret_types 快照在 gen 时从 funcs 现算，一处写入全调用点生效。投票制：
+// 混合型别或不可推断（PyDynamic 毒票）一律弃权；裸 return/Lit(0)（None
+// 的历史拼法）不带证据。边界（不在本夹具）：容器返回（list/dict）不推
+// 断＝保守面；无注解普通函数同批受益（funcs 裸名键）。
+class Bag:
+    def ident(self, w):
+        return w
+    def bang(self, word):
+        return word + "!"
+    def greet(self, name):
+        return "hi " + name
+
+b = Bag()
+print(b.ident("X"))
+print(b.bang("Hey"))
+print(b.greet("moe"))
+// expect: X
+// expect: Hey!
+// expect: hi moe

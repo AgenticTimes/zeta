@@ -38,6 +38,11 @@ pub struct Resolver {
     /// on the ImplBlock attrs, no own `__init__`) — consumed by
     /// `inherit_class_members` after registration completes.
     pending_inherits: std::cell::RefCell<Vec<(String, String)>>,
+    /// Batch 628: `Class::method` -> [(FuncDef param position, Type)] — the
+    /// 627 call-site refinements, computed once at typecheck so the return
+    /// inference below can read them and the generator builder can reuse
+    /// the same map.
+    pub(crate) method_param_refinements: HashMap<String, Vec<(usize, Type)>>,
     /// Batch 602/603: class -> first base (from `__bases__:` ImplBlock attrs),
     /// recorded for EVERY class with a base; consumed by the gen-side
     /// base-chain method lookup via `class_bases()`.
@@ -142,6 +147,7 @@ impl Resolver {
         let mut r = Self {
             impls: HashMap::new(),
             pending_inherits: std::cell::RefCell::new(Vec::new()),
+            method_param_refinements: HashMap::new(),
             class_bases: std::cell::RefCell::new(HashMap::new()),
             pending_baseargs: std::cell::RefCell::new(Vec::new()),
             cached_mirs: HashMap::new(),
@@ -2879,6 +2885,158 @@ impl Resolver {
         }
     }
 
+    /// Batch 628: return-type inference for unannotated methods — the
+    /// #195 remainder. `def ident(self, w): return w` refines `w` to Str in
+    /// the body (627), yet the caller printed the raw handle: the call site
+    /// types the result from the REGISTERED return type (I64) and picks
+    /// println_i64. Infer the return type from every `Return` expression in
+    /// the body — a StringLit, or a parameter the 627 map already refined —
+    /// and write it into `funcs` when all returns agree and the registered
+    /// type is still I64 (unannotated). The generator's ret_types snapshot
+    /// is built from `funcs` at gen time, so one write reaches every call
+    /// site. Methods come from `impls` (class-attributed keys); plain
+    /// module functions ride their bare-name signatures.
+    pub fn refine_method_return_types(
+        &mut self,
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+    ) -> usize {
+        let mut refined = 0;
+        // (qualified name, method FuncDef) pairs: methods from impls,
+        // plain functions from registered_func_defs.
+        let mut candidates: Vec<(String, AstNode)> = Vec::new();
+        for ((_concept, ty), body) in self.impls.iter() {
+            for item in body {
+                if let AstNode::FuncDef { name, .. } = item {
+                    candidates.push((format!("{}::{}", ty, name), item.clone()));
+                }
+            }
+        }
+        for d in self.registered_func_defs.borrow().iter() {
+            if let AstNode::FuncDef { name, .. } = d {
+                // Plain module functions only: the funcs key is the bare
+                // name, and a `::`-qualified entry belongs to the impls loop.
+                if !name.contains("::") && self.funcs.contains_key(name.as_str()) {
+                    candidates.push((name.clone(), d.clone()));
+                }
+            }
+        }
+        for (qname, fd) in candidates {
+            let unannotated = match self.funcs.get(&qname) {
+                Some((_, Type::I64, _)) => true,
+                _ => false,
+            };
+            if !unannotated {
+                continue;
+            }
+            let AstNode::FuncDef { params, .. } = &fd else {
+                continue;
+            };
+            let mut rets: Vec<Type> = Vec::new();
+            Self::collect_return_kinds(&fd, params, param_map, &qname, &mut rets);
+            if rets.is_empty() {
+                continue;
+            }
+            let first = rets[0].clone();
+            // Only literal-kind types are writable; a unanimous PyDynamic
+            // vote means every return was un-inferable — abstain.
+            if matches!(first, Type::Str | Type::F64 | Type::Bool)
+                && rets.iter().all(|t| *t == first)
+            {
+                if let Some((_, ret, _)) = self.funcs.get_mut(&qname) {
+                    if matches!(ret, Type::I64) {
+                        *ret = first.clone();
+                        refined += 1;
+                    }
+                }
+            }
+        }
+        refined
+    }
+
+    /// Collect the inferable type of every `Return` expression in a method
+    /// body: a string/float/bool literal, or a parameter the 627 map
+    /// refined. Anything else yields no evidence (abstain).
+    fn collect_return_kinds(
+        fd: &AstNode,
+        params: &[(String, String)],
+        param_map: &HashMap<String, Vec<(usize, Type)>>,
+        qname: &str,
+        out: &mut Vec<Type>,
+    ) {
+        // `+` with any inferable-Str operand is Str concat (CPython);
+        // F64+F64 stays F64. Recursion is bounded by expression depth.
+        fn refinable(
+            e: &AstNode,
+            params: &[(String, String)],
+            param_map: &HashMap<String, Vec<(usize, Type)>>,
+            qname: &str,
+        ) -> Option<Type> {
+            match e {
+                AstNode::StringLit(_) => Some(Type::Str),
+                AstNode::FloatLit(_) => Some(Type::F64),
+                AstNode::Bool(_) => Some(Type::Bool),
+                AstNode::Var(v) => {
+                    let pos = params.iter().position(|(pn, _)| pn == v)?;
+                    param_map
+                        .get(qname)?
+                        .iter()
+                        .find(|(p, _)| *p == pos)
+                        .map(|(_, t)| t.clone())
+                }
+                AstNode::BinaryOp { op, left, right } if op == "+" => {
+                    let l = refinable(left, params, param_map, qname);
+                    let r = refinable(right, params, param_map, qname);
+                    if matches!(l, Some(Type::Str)) || matches!(r, Some(Type::Str)) {
+                        Some(Type::Str)
+                    } else if matches!(l, Some(Type::F64)) && matches!(r, Some(Type::F64)) {
+                        Some(Type::F64)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+        let refinable = |e: &AstNode| -> Option<Type> {
+            refinable(e, params, param_map, qname)
+        };
+        let walk = |stmts: &Vec<AstNode>, out: &mut Vec<Type>| {
+            for st in stmts {
+                match st {
+                    AstNode::Return(val) => {
+                        // A bare `return` ( Lit(0) placeholder) carries no
+                        // evidence; Lit(0) is also the historical None
+                        // spelling, so it never infers.
+                        if !matches!(**val, AstNode::Lit(0)) {
+                            if let Some(t) = refinable(val) {
+                                out.push(t);
+                            } else {
+                                // Un-inferable return: poison the vote so a
+                                // mixed body never refines.
+                                out.push(Type::PyDynamic);
+                            }
+                        }
+                    }
+                    AstNode::If { then, else_, .. } => {
+                        for s in then.iter().chain(else_.iter()) {
+                            if let AstNode::Return(val) = s {
+                                if let Some(t) = refinable(val) {
+                                    out.push(t);
+                                } else if !matches!(**val, AstNode::Lit(0)) {
+                                    out.push(Type::PyDynamic);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        };
+        if let AstNode::FuncDef { body, .. } = fd {
+            walk(body, out);
+        }
+    }
+
     pub fn refine_ctor_field_types(&mut self) {
         let out = self.module_global_types();
         let defs = self.registered_func_defs.borrow().clone();
@@ -4298,7 +4456,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_py_module_paths(self.py_module_paths.borrow().clone())
             .with_module_global_types(self.module_global_types())
             .with_class_bases(self.class_bases())
-            .with_method_param_refinements(self.refine_method_param_types())
+            .with_method_param_refinements(self.method_param_refinements.clone())
             .with_source_file(self.source_file.borrow().clone())
             .with_argparse_kinds(self.argparse_kinds.borrow().clone())
             .with_param_defaults(
