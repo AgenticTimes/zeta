@@ -15,6 +15,11 @@ impl Resolver {
     pub fn typecheck(&mut self, asts: &[AstNode]) -> bool {
         let mut ok = true;
 
+        // Batch 600: ctor call-site field refinement must complete before any
+        // per-function lowering snapshots `type_decls` — this pass is the last
+        // `&mut` point ahead of `get_registered_funcs`/lowering.
+        self.refine_ctor_field_types();
+
         // Borrow checker pass (separate scope to avoid RefCell conflict)
         for ast in asts {
             let borrow_ok = {

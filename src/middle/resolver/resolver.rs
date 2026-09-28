@@ -2256,6 +2256,112 @@ impl Resolver {
         out
     }
 
+    /// Batch 600: ctor call-site field refinement — a module-level
+    /// `a = Animal("Generic")` PROVES field `name` is Str; upgrade the
+    /// class's i64-default field spellings from the call's positional args
+    /// (param→field by shared name, `self.name = name`). Must run BEFORE
+    /// any per-function lowering snapshots `type_decls`, so `self.name`
+    /// reads inside methods (and the concatenation arm) see the concrete
+    /// type. Literal/Var args only (out is the module-global type table);
+    /// anything else stays conservatively i64.
+    pub fn refine_ctor_field_types(&mut self) {
+        let out = self.module_global_types();
+        let defs = self.registered_func_defs.borrow().clone();
+        if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
+            eprintln!(
+                "[P600] refine: defs={} classes={:?}",
+                defs.len(),
+                self.type_decls.keys().collect::<Vec<_>>()
+            );
+        }
+        for d in &defs {
+            if let AstNode::FuncDef { body, .. } = d {
+                for st in body {
+                    if let AstNode::Assign(lhs, rhs) = st {
+                        if let (
+                            AstNode::Var(_),
+                            AstNode::Call {
+                                receiver: None,
+                                method,
+                                args,
+                                ..
+                            },
+                        ) = (&**lhs, &**rhs)
+                        {
+                            let pnames = self
+                                .func_param_names()
+                                .get(method.as_str())
+                                .cloned()
+                                .unwrap_or_default();
+                            if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
+                                eprintln!(
+                                    "[P600] ctor call: {} args={} pnames={:?}",
+                                    method,
+                                    args.len(),
+                                    pnames
+                                );
+                            }
+                            if pnames.is_empty() {
+                                continue;
+                            }
+                            let mut decl_fields = match self
+                                .type_decls
+                                .get_mut(method.as_str())
+                            {
+                                Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                                    fields,
+                                    ..
+                                }) => fields,
+                                _ => continue,
+                            };
+                            for (i, arg) in args.iter().enumerate() {
+                                let Some(pn) = pnames.get(i).cloned() else {
+                                    continue;
+                                };
+                                let spell = match arg {
+                                    AstNode::StringLit(_) => Some("str".to_string()),
+                                    AstNode::FloatLit(_) => Some("f64".to_string()),
+                                    AstNode::Bool(_) => Some("bool".to_string()),
+                                    AstNode::Var(v) => match out.get(v) {
+                                        Some(Type::Str) => Some("str".to_string()),
+                                        Some(Type::F64) => Some("f64".to_string()),
+                                        Some(Type::Bool) => Some("bool".to_string()),
+                                        Some(Type::DynamicArray(e)) => Some(format!(
+                                            "list<{}>",
+                                            match **e {
+                                                Type::Str => "str",
+                                                Type::F64 => "f64",
+                                                _ => "i64",
+                                            }
+                                        )),
+                                        _ => None,
+                                    },
+                                    _ => None,
+                                };
+                                if let Some(spell) = spell {
+                                    if let Some((_, dt)) = decl_fields
+                                        .iter_mut()
+                                        .find(|(f, _)| *f == pn)
+                                    {
+                                        if dt.as_str() == "i64" {
+                                            *dt = spell.clone();
+                                        }
+                                    }
+                                    if crate::diagnostics::env_flag("ZETA_PROBE_GLOBALS") {
+                                        eprintln!(
+                                            "[P600] refine field {} = {} (fields now {:?})",
+                                            pn, spell, *decl_fields
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// PY-A: parameter names per function, for keyword-argument binding.
     pub fn func_param_names(&self) -> HashMap<String, Vec<String>> {
         self.funcs
