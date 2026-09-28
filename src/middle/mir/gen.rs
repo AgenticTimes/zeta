@@ -2690,8 +2690,32 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         self.nested_class_aliases
                             .push((qualified, hoisted.clone()));
                     }
-                    // bind user name → synthetic fn so `inc()` calls dispatch
-                    self.closure_vars.insert(fn_name.clone(), hoisted.clone());
+                    // bind user name → synthetic fn so `inc()` calls dispatch.
+                    // BATCH-642: the BARE key must not silently shadow a
+                    // different definition. `def helper()` in the enclosing
+                    // function and method `helper` of a nested class are two
+                    // definitions, and last-write-wins bound BOTH call sites to
+                    // one `__closure_*` symbol (measured pre-fix: the fixture
+                    // printed `9 9` where CPython prints `7 9`; MIR showed the
+                    // two calls carrying the identical `func:` field). Keep the
+                    // first owner of the bare name and say out loud what was
+                    // not bound — the method stays reachable through the
+                    // receiver-typed route (`Box::helper` qualified key).
+                    let shadowed = self
+                        .closure_vars
+                        .get(fn_name.as_str())
+                        .filter(|prev| *prev != &hoisted)
+                        .cloned();
+                    if let Some(prev) = &shadowed {
+                        eprintln!(
+                            "warning: PY-A: bare name `{}` already refers to `{}` — the later \
+                             definition `{}` is not bound under that bare name (calls through a \
+                             receiver still resolve it)",
+                            fn_name, prev, hoisted
+                        );
+                    } else {
+                        self.closure_vars.insert(fn_name.clone(), hoisted.clone());
+                    }
                     // The call site reads the return type off `closure_ret_tys`
                     // (and falls back to I64, which for a string means "print the
                     // heap address"). The Closure-expression arm records it; the
@@ -2700,8 +2724,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     if let Some(t) = self.last_closure_ret_ty.clone() {
                         self.closure_ret_tys.insert(hoisted.clone(), t);
                     }
-                    // Publish under the user-visible name too (alias map)
-                    self.hoisted_names.insert(fn_name.clone(), hoisted);
+                    // Publish under the user-visible name too (alias map) — same
+                    // BATCH-642 rule: a second definition never silently retargets
+                    // a bare name that already belongs to another one.
+                    if shadowed.is_none() {
+                        self.hoisted_names.insert(fn_name.clone(), hoisted);
+                    }
                     return;
                 }
                 for stmt in body {
