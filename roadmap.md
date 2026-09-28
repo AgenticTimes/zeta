@@ -24794,6 +24794,72 @@ AGENTS.md 明文「全量门禁两侧不并发」⇒ 这次是**旁路侧破的*
 - **OPEN 净增 0**＝`grep -cE '^\| #' backlog.md` 收尾复算仍 **43**。
 - **队头**＝**下一批先并入旁路 635**（`e4d9afa5` 动 `src/middle/mir/gen.rs` 的 print 层拆支 ＋ `t543` ⇒ python_style 预期 420、差分基线代录 576、锚点又要搬家）→ **#211①／#212（nunique 兄弟列污染，真修需 `runtime/` 授权）** → `str_trim` 族（需 `runtime/py_additions.c` 语义真修授权）→ **#167① 修法三形甲／乙／丙（待裁）**／**#52 余项** → #182 → t494／#213⑧ → #48。下一次全量＝主线 **640**（含语料级位移复跑）。待用户裁决累计 **10 条**（号位撞车的让号属主线侧所有权范围内的登记动作，已自行收下并在此入册，不另立待裁项）。
 - **产物**＝`/tmp/b635/`（改前快照 `ABI.md.bak`／`abi_anchors.tsv.bak`、`md5_pre.txt`、`o_md5_{pre,post}.txt` 与重取的 `o_attr.txt`、`anch_{pre,post,final,final2}.txt`、`rebind_{dry,real}.txt`、`build635.log`、`gate635.log`、`gate_md5_before.txt`、`mergebase_numstat.txt`／`twodot_numstat.txt`、`ab635.sh`／`ab635.tsv`、`closure.py`、`diff_readonly.txt`、`o_pre_tokio.o`／`o_pre_zeta.o`／`o_cl_tokio.o`、`roadmap_636.md`／`worktree_636.md`／`backlog_636.md`／`splice_636.py`）。**收尾清理**＝`target/release/` 内本批存件 `zetac_b635pre` 与 `ab635_*`（`.bin`／`.bin.o`／`.ll`／`.cc`）随记录笔删除。
+## 批次 637（2026-09-29，**7.3 生态与工具／文档合同 × 门禁面·合并面收尾**，会话任务 harness #244）
+
+### 〇、号位账务：跨侧重号的第二次实测——"让号"消不掉它，唯一性的键是（号，侧）
+
+- 主线在 03:10 合并（`d8722982`，带入旁路 635–636）、03:13 落 fix 笔 `2e94c4a6` 时取 **637**：当时 `git show cleanup:worktree.md` 的台账头名仍是 `| 636 | cleanup |`，637 在两侧皆空（`grep -c "^| 637 |" worktree.md`＝0）。
+- 旁路在 **03:26**（主线批次进行中）也登记了自己的 637＝`1218baf8`（回退批：NoneType 局部链传播，A/B 拦下语料值位回归两连），落在 `cleanup` 分支的 `worktree.md:292` ⇒ 下一次合并后台账会同时有 `| 637 | bootstrap |`（本批，:174 位）与 `| 637 | cleanup |`。
+- **自纠一条（636 的处置口径要更正）**：636 记录笔写的"主线这条让号到 636"并没有避开重号——旁路的 636＝`20e73bf4`（03:02）比主线记录笔（03:09）**早 7 分钟**，所以台账里 `| 636 | bootstrap |`（:173）与 `| 636 | cleanup |`（:304）**并存**。让号只保证"主线自己的笔不撞自己"，不保证跨侧唯一。
+- **入册判据（新增口径）**：① 枚举号位必须把 `git show cleanup:worktree.md` 的台账行与 `git log cleanup --oneline` 一起看（635／636／637 三次撞车都源于只看其一或只看自己侧）；② 引用他批要写"636（主线）／636（旁路）"——裸号 636 在本仓已有两个所指，裸号 637 从本批起也是。
+
+### 一、并入面：merge-base 口径**第三次兑现**（113/0 三文件）
+
+- 合并提交 `d8722982`（03:10，**冲突 0**）。真并入面＝`git merge-base d8722982^1 d8722982^2`＝**`939121be`**（旁路 634 的记录笔）..`d8722982^2`＝**`src/middle/mir/gen.rs` 93/0 ＋ `tests/python_style/t543_and_bool_print.z` 18/0 ＋ `worktree.md` 2/0 ⇒ 113/0 三文件**（存件 `mergebase_numstat.txt` 与落地复核 `landing_numstat.txt` 逐字同）。
+- 两-dot `HEAD^1..HEAD^2`（`twodot_numstat.txt`）当场报**十文件**，含 `roadmap.md` 0/**920**、`docs/ABI.md` 92/92、`tools/baselines/abi_anchors.tsv` 129/131、`tools/check_abi_anchors.py` 5/46、`tools/abi_anchors_check.sh` 1/49 ⇒ 那是两侧树的对称差（把主线自己的收尾也算成"旁路带来的"），不是并入面。同一口径 601 首次、636 第二次、本批第三次兑现。
+
+### 二、改动面本体（旁路 635 的修法，主线复核）
+
+- `gen.rs` 的打印臂对**顶层 and/or 实参**做语句级拆支：`op ∈ {&&, ||}` 且单实参且无 sep/end ⇒ 先把左右两侧降级，再按型别判 `split_worthy`（右侧必须是 `Bool`，左侧是 `I64`／`PyDynamic`／未知）；真支走 `to_string_bool(R)` + `println_str`，假支走 `println_i64(L)`；左侧非 Bool 时先补一条 `zeta_dyn_truth` 取真值槽（运行期没有 `println_bool` 这个符号）。
+- 复核结论：`zeta_dyn_truth`／`to_string_bool`／`println_str`／`println_i64` 四个都是既有符号，没有新增运行期绑定；`std::mem::take(&mut self.stmts)` 的两次换出／换回把拆支期间产生的语句收进 `right_stmts`，不污染函数体主序 ⇒ 半径封闭在打印臂。
+
+### 三、锚点面：32 条漂移＝机械 30（Δ **单档 +93**）＋ 手绑 2，一趟收干
+
+- 改前只读核对（`anch_pre.txt`）＝`锚点：306 个可解析（来自 344 条引用） / 0 个定位失败`、`漂移 32 / 新 0 / 消失 0`、`ANCHOR_RC=1`。
+- `--rebind --dry`（`rebind_dry.txt`）＝**搬家 30 条，Δ 全部 +93**（`rebind_dry.txt` 逐条 `python3` 复算 Counter＝`{93: 30}`）——与并入面那 93 行 `gen.rs` 逐字对上，这是"单 hunk 插入 ⇒ 单一 Δ 档"的第一次可核实证（636 是三档 29／1／1）。
+- **拒改 2 条**＝`gen.rs:10355`（两处命中 10067／10448）、`gen.rs:16865`（两处命中 1697／16958），成因仍是"同内容两处命中"⇒ `--rebind` 的唯一性判据够不到。
+- **手绑落点不靠猜**：单 hunk `@@ -10092,6 +10092,99 @@` 给出插入点 10092，改前文件双命中在 10067 与 10355 ⇒ 10067 在插入点之前**没搬家**，故 10355 必搬到 10355+93＝**10448**；同一条推理给出 `16865→16958`（1697 那条同内容命中在插入点之前，未动）。
+- 四步序收尾＝改 `ABI.md` 的 `:10448`／`:16958` → `--bless-only` 点名两条完整路径（`bless_only.txt`）→ 只读报"消失 2"（`anch_after_bless.txt`）→ `--prune-gone` 删死行 2 条（`prune.txt`，基线 308→306）。
+- 终态（`anch_final.txt`）＝`漂移 0 / 新 0 / 消失 0 … 锚点全部对上`、**`ANCHOR_RC=0`**；三格与 636 终态逐字同＝待归属 **98 条 / 88 种**、声明为仓外 **14 条**、共用同一键 **38 条**。
+- 落地 `2e94c4a6`＝`docs/ABI.md` **24/24**（机械 22 行 ＋ 手绑 2 行；`--rebind` 自印"22 行 / 45 个数字"）＋ `abi_anchors.tsv` **32/32** 净变（终态 306 条）。`ABI.md` 的 `:196`、`:1045` 两处是等长替换 ⇒ 文件行数不变，不需要再动别处引用。
+
+### 四、快门禁（改动面＝src/middle ⇒ official＋python_style＋位移 A/B）
+
+`gate637.log`，`19:13:26Z → 19:15:58Z`＝**152s**；被测二进制 md5 跑前跑后各戳、逐字相同＝`55a366a9…`（`gate_md5_before.txt`／`gate_end.txt`＝#175／坑 83）。
+
+- official **194/194**・compile+link **191/194**・link-only 3（名单未动，明细 `/tmp/zeta_official_link.txt`）。
+- python_style **420 passed / 2 failed / 6 known-fail / 0 xpass**（419→420 恰＝`t543`；桶和 420+2+6+0＝**428** ⇔ `ls tests/python_style/t*.z`＝**428**）。
+- 红源仍是 `t231_dict_set_cast_fromkeys`／`t233_listcomp_condition_capture` 两枚存量红 ⇒ **零新增红**、`GATE_RC=1` 来源不变。
+- 诊断面 official **5 文件 / 21 行**・python_style **126 文件 / 271 行**（与 600 全量、601、636 的子集读数逐字同＝合并面零新告警）。
+- comment_drift **0**・dyn_binding **4 条断言／不一致 0**。
+
+### 五、差分面：代录 575→576（**首破 96%**），逐案闭合＝新增 0／消失 1
+
+- 分母核对＝`ls tests/diff/cases/*.dcase`＝**601** ⇔ 基线 `judged 600`（坑 77；`CASE_DIR` 从 `diff_test.py:12/:192` 读，不是 `tests/diff_cases/`）。
+- 只读跑（快门禁 `--skip-diff`，故单独跑 `tools/diff_test.py`，存件 `diff_readonly.txt`）＝`match=575 / judged=600 / rate=95.8% / bad_case=1（总 601）`，非 match 行 **25** 条。
+- **逐案闭合两种证法都在**：① 工具自印 `diff_readonly.txt:33`＝`较基线转好 1 条（记得 --bless 抬高闸门）: gen_numeric_s20260926_001`；② `closure.py`＝实时非 match 25 vs 基线 26 ⇒ **新增 0／消失 1**，消失那条恰是旁路 635 的正主。
+- 代录（`diff_bless.txt`）＝`python3 tools/diff_test.py --bless` 印 `基线已写入 tools/baselines/diff_consistency.json（match_min=576，比率 96.0%）`；终态 `match 576 / mismatch 23 / bad_case 1 / compile 1`、`per_cat`＝truth 43/43・str 105/105・container 225/227・**numeric 113/134**・control 90/91。落地 `4bb5af77`（**7/7 净变**，`match_min` 只升不降）。
+- 该档对旁路只读（AGENTS 铁律）⇒ 代录只能由主线在合并窗口做。
+- `--bless` 落盘后 rc 仍是 **2**：rc=2 的语义是"转好 N 条、记得抬闸"，不是失败（这条已入册，本批再确认一次）。
+
+### 六、主线位移栏：**位移 1 形**，正负两半都有实拍
+
+`ab637.sh`／`ab637.tsv`＝3 夹具 × 2 侧 × 2 趟，两颗 `zetac` 与全部产物同在 `target/release/`（坑 52／68），stdout 经 `sed -E 's/0x[0-9a-f]+/<HEX>/g; s/[0-9]{9,}/<ADDR>/g'` 掩码。
+
+- **正证据**＝`t543_and_bool_print`：pre 两趟 `True|1|1|0`、post 两趟 `True|1|True|0` ⇒ 第 3 行从 `1` 变 `True`。夹具的 4 条 expect 是 `True`／`1`／`True`／`0`（`t543_and_bool_print.z:15-18`），**pre 与 expect 不符 ⇒ 新用例在改前二进制上实拍为红**（回归用例真值来源那条纪律）。
+- **负对照**＝`t542_nested_list_str`（6 条 print）与 `t527_sorted_key_shapes`（6 条 print）两侧两趟 stdout **逐字节相同**、`compile_rc=0`、运行 rc `#0` ⇒ 邻近两族零位移。
+- **IR 面**（收尾当场 `wc -l`／`diff | grep -c '^[<>]'` 复算）＝`t543` 1199→1200 行、变判 **71 行**；`t542` 1403→1403、变判 **0 行**；`t527` 1273→1273、变判 **0 行** ⇒ 71 行全落在 t543 那一条拆支上，改动半径没有外溢到另外两族。
+- **跨侧二进制链**＝主线 post md5 **`55a366a9…`** 逐字等于旁路 635 台账在册的 post ⇒ 重建树与旁路提交态一致；主线 pre＝`ebb3b663…` 逐字等于 636 的被测二进制（`md5_pre.txt`）⇒ 601→636→637 三批 A/B 出自同一条链，位移栏可直接对照。
+
+### 七、编号／提交面／队头／产物
+
+- 提交面＝`d8722982`（merge）→ `2e94c4a6`（fix：锚点重绑）→ `4bb5af77`（chore(baselines)：差分代录）→ 本记录笔。四笔全部**未 push**（目标级裁定覆盖 AGENTS 收尾推送）。
+- OPEN 净增 0＝`grep -cE '^\| #' backlog.md` 收尾复算仍 **43**。
+- 队头＝先并入旁路 637 及之后（号位要**重枚举**：`1218baf8` 已占 637（旁路），主线下一个整十号位仍是 **640**）；之后按已实测损害量序＝#211①／#212（nunique 兄弟列污染，真修需 `runtime/` 授权）→ `str_trim` 族（需 `runtime/py_additions.c` 授权）→ #167① 修法三形（待裁）／#52 余项 → #182 → t494／#213⑧ → #48。
+- **下一次全量门禁＝主线 640**（含语料级 301 位移复跑）。
+- 产物＝`/tmp/b637/`：改前快照 `ABI.md.bak`／`abi_anchors.tsv.bak`、`anch_pre.txt`／`rebind_dry.txt`／`rebind_real.txt`／`bless_only.txt`／`anch_after_bless.txt`／`prune.txt`／`anch_final.txt`、`mergebase_numstat.txt`／`twodot_numstat.txt`／`landing_numstat.txt`、`gate637.log` ＋ `gate_start.txt`／`gate_end.txt`／`gate_md5_before.txt`／`md5_pre.txt`／`md5_both.txt`、`diff_readonly.txt`／`diff_bless.txt`／`closure.py`、`ab637.sh`／`ab637.tsv` ＋ 6 份 `.ll`／`.bin`／`.bin.o`／`.cc` 与 12 份 `r_*.out|.err`。记录笔收尾时清理 `target/release/` 里的 `zetac_b637pre` 与 `ab637_*`。
+- 仍存缺口：0 笔成交的症状未变（#211／#212 链）；待用户裁决累计 **10 条**（不变）。
+
 
 ## 优先级调整（2026-09-24，用户裁定）
 
