@@ -27,6 +27,9 @@ impl Resolver {
         // generator builder reuses the same map (funcs.ret edits must land
         // before the gen-time ret_types snapshot).
         let pm = self.refine_method_param_types();
+        // Batch 630: map value kinds first — the return inference reads the
+        // refined `map<K, V>` spellings.
+        self.refine_map_value_types(&pm);
         self.refine_method_return_types(&pm);
         // Batch 629: field element types from method-body append calls,
         // reading the same refinement map.
