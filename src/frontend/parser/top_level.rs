@@ -1153,8 +1153,26 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                             AstNode::DictLit { .. } => "map".to_string(),
                             AstNode::FloatLit(_) => "f64".to_string(),
                             AstNode::StringLit(_) => "str".to_string(),
-                            AstNode::ArrayLit(_) | AstNode::DynamicArrayLit { .. } => {
-                                "DynamicArray".to_string()
+                            AstNode::ArrayLit(items) | AstNode::DynamicArrayLit { elements: items, .. } => {
+                                // Batch 594: an ELEMENT-AWARE spelling. The bare
+                                // "DynamicArray" left every list field i64-typed
+                                // at the read sites (`print(p.ages)` rendered the
+                                // handle; `q = p.ages; q[0]` dispatched map_get
+                                // and crashed). `list[T]` is the spelling the
+                                // read side already parses (lt_annotation_type,
+                                // batch 291). Element type from the first item's
+                                // literal shape; anything else conservatively i64.
+                                let elem = items.first().map(|e| match e {
+                                    AstNode::StringLit(_) => "str",
+                                    AstNode::FloatLit(_) => "f64",
+                                    AstNode::Bool(_) => "bool",
+                                    _ => "i64",
+                                }).unwrap_or("i64");
+                                // `list<…>` (angle form) is the dialect
+                                // `lt_annotation_type` — the read side —
+                                // parses; the `[…]` subscript form belongs to
+                                // the annotation parser and is NOT read here.
+                                format!("list<{}>", elem)
                             }
                             AstNode::Var(name) if param_names.contains(&name.as_str()) => {
                                 // `self.x = x` — take the PARAMETER's declared

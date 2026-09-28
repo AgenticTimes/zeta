@@ -13841,7 +13841,16 @@ call, no NULL-handle dereference).",
                                     "bool" => Some(Type::Bool),
                                     "i64" | "int" | "dyn" => None,
                                     other => {
-                                        if let Some(tag) = crate::middle::pylib::handle_tag(other) {
+                                        // Batch 594: `list[T]` field spellings
+                                        // (element-aware init-expr inference)
+                                        // must reach the vec type here too —
+                                        // `self.names`-style reads inside
+                                        // methods otherwise stayed I64.
+                                        if let Some(t) = lt_annotation_type(other) {
+                                            Some(t)
+                                        } else if let Some(tag) =
+                                            crate::middle::pylib::handle_tag(other)
+                                        {
                                             Some(Type::Named(tag.to_string(), vec![]))
                                         } else if other == "PyPath" {
                                             Some(Type::Named("PyPath".to_string(), vec![]))
