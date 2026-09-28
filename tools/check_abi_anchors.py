@@ -113,8 +113,21 @@ DEFAULT_BASE = ROOT / "tools" / "baselines" / "abi_anchors.tsv"
 # 扩展名含 md/z：`validate.md:149`、`tests/.../t27_builtins_fmt.z:18` 都是仓内、
 # 会漂移、且此前**完全核不到**的引用。（活文档例外：refactor.md 的行号会被
 # 用户自己的编辑改掉，那条已在本批改写成按章节引用——锚点不指向移动中的文档。）
-ANCHOR_RE = re.compile(
-    r"(?<![\w./-])(?P<path>(?:[\w.-]+/)*[\w.-]+\.(?:rs|c|h|py|sh|txt|toml|md|z))"
+#
+# 批次 591（任务 #52 第 ② 格）把这道门从"手写的名单"改成"仓里真有这种文件"：
+# 实测 docs/ABI.md:997 的 `.github/workflows/ci.yml:103-113` 指到文件尾之外（该文件
+# 97 行），而核对器当场打印"锚点全部对上"、rc=0——病因不在那个写歪的号，在名单里
+# 没有 yml ⇒ 这条引用**从未进入视野**。名单会跟着仓库静默欠覆盖，欠的那一格正好
+# 是核对器唯一自称可信的地方（"未越界"那层判据）。现在名单下限保留（`.h` 这类仓里
+# 暂时没有也留着），上界由 Index 按仓库文件派生（见 Index.combined）。
+HARD_EXTS = "rs c h py sh txt toml md z".split()
+# 有行号却没有文本意义的扩展名（图片／目标文件／编译中间物）⇒ 不进射程。
+LINELESS_EXTS = frozenset(
+    "png jpg jpeg gif webp ico svg o a rmeta bak backup drawio lock bin wasm mp4 pdf"
+    .split()
+)
+ANCHOR_BODY = (
+    r"(?<![\w./-])(?P<path>(?:[\w.-]+/)*[\w.-]+\.(?:{exts}))"
     r":(?P<a>\d+)(?:-(?P<b>\d+))?"
 )
 # 续写形态：`resolver.rs:1887、:2639` 里的 `:2639` —— 只认**同一行内**最近一个
@@ -123,7 +136,7 @@ ANCHOR_RE = re.compile(
 # （`（:6630-6690）`、`调用点：:3766`）、区间右端点带冒号（`:4-:17`）、
 # 以及斜杠分隔的并列（`:1450/:1458`）。
 # 反向排除 `(?<![\w/])`：`ci.yml:61`、`http://h:8080` 里的冒号属于"前一个 token
-# 是名字"，那是路径没被 ANCHOR_RE 认出来（或压根不是路径），不能当续写挂到别处。
+# 是名字"，那是路径没被扩展名门认出来（或压根不是路径），不能当续写挂到别处。
 # 末尾只要求后面不是数字（不挡 `/` `，` `` ` ``），否则 `:1450/` 整条匹配失败、又飘回看不见。
 CONT_RE = re.compile(r"(?<![\w/]):(?P<c>\d+)(?:-:?(?P<d>\d+))?(?!\d)")
 # 显式作用域声明行：`> 锚点源码：codegen.rs` / `> 锚点源码：外部转储（不入锚点核对）`
@@ -138,7 +151,6 @@ EXEMPT_RES = (
     re.compile(r"批次\s*\d+(?:-\d+)?"),
     re.compile(r"\d{4}-\d{2}-\d{2}"),  # ISO 日期
 )
-COMBINED = re.compile(ANCHOR_RE.pattern + "|" + CONT_RE.pattern)
 # 文档里的 IR/汇编转储行也会带 `foo.c:` 形态的字符串，但不是本仓锚点。
 SKIP_PREFIXES = ("/tmp/", "http:", "https:")
 PENDING = "«待归属»"
@@ -185,12 +197,40 @@ def tracked_files() -> list[str]:
 
 class Index:
     def __init__(self, paths: list[str]) -> None:
+        self.paths = paths
         self.by_suffix: dict[str, list[str]] = defaultdict(list)
         for rel in paths:
             parts = rel.split("/")
             for i in range(len(parts)):
                 self.by_suffix["/".join(parts[i:])].append(rel)
         self._lines: dict[str, list[str]] = {}
+        self._combined: re.Pattern[str] | None = None
+
+    def combined(self) -> re.Pattern[str]:
+        """扩展名门 = 手写名单 ∪ 仓内真有的扩展名（批次 591／任务 #52 第 ② 格）。
+
+        派生只做两件事：把 `ci.yml` 这类**仓里查得到文件**的引用拉进射程，以及把没
+        入库的转储（`dump.ll`）留在射程外——那种行号不受本仓约束，进了射程就成 `无解`
+        ⇒ 硬报错。取并集而非纯派生：`git ls-files` 里没有 `.h`，纯派生会把手写名单已
+        覆盖的类型悄悄吐出去。
+        """
+        if self._combined is None:
+            exts = set(HARD_EXTS)
+            for rel in self.paths:
+                name = rel.rsplit("/", 1)[-1]
+                ext = name.rsplit(".", 1)[-1] if "." in name else ""
+                if (
+                    ext
+                    and len(ext) <= 8
+                    and ext not in LINELESS_EXTS
+                    and re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", ext)
+                ):
+                    exts.add(ext)
+            alts = "|".join(sorted(exts, key=lambda e: (-len(e), e)))
+            self._combined = re.compile(
+                ANCHOR_BODY.format(exts=alts) + "|" + CONT_RE.pattern
+            )
+        return self._combined
 
     def lines(self, rel: str) -> list[str]:
         if rel not in self._lines:
@@ -252,6 +292,7 @@ def collect(
     positions: list[Pos] = []
     pending_locs: list[tuple[int, str, str]] = []
     external_n = 0
+    combined = idx.combined()  # 扩展名门按仓内文件派生，一份文档一次构建
     scope: str | None = None  # 已解析的显式作用域路径；None=无，EXTERNAL=声明为仓外
     doc_lines = doc.read_text(encoding="utf-8", errors="replace").splitlines()
     for docno, raw in enumerate(doc_lines, 1):
@@ -279,7 +320,7 @@ def collect(
         line = strip_exempt(raw)
 
         last_cited: str | None = None  # 续写锚点继承**本行**最近的路径，逐行重置
-        for m in COMBINED.finditer(line):
+        for m in combined.finditer(line):
             cited = m.group("path")
             if cited is None:
                 a, b = m.group("c"), m.group("d")

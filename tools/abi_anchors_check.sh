@@ -10,6 +10,10 @@
 #   E5 行号整体位移后 --rebind 拒改那一条（"同一键有不同长度"），搬家关不掉；
 #   E6 基线里的死行没有删除路径（批次 544）：E1005 把消失与漂移并成一栏 ⇒ 有死行就
 #      整次拒收全量重采，而唯一出路 --bless --force 会顺带给当场在场的真漂移盖章。
+#   E7 扩展名不在硬写名单里、但文件确实在仓内的引用**完全不进视野**（批次 591／任务 #52
+#      第 ② 格）：本批实测 docs/ABI.md:997 写 `.github/workflows/ci.yml:103-113`，而该文件
+#      只有 97 行 ⇒ 一条指到文件尾之外的引用，核对器当场打印"锚点全部对上"、rc=0。
+#      病因不在那条写歪的号，在扩展名名单里没有 yml ⇒ 这条引用从未被看过一眼。
 #
 # 用法：bash tools/abi_anchors_check.sh [被检的 check_abi_anchors.py 路径]
 # 退出码：0=全过；1=有失败。E5 需要一个 detached worktree，脚本自己建自己删。
@@ -170,6 +174,50 @@ else
   bad "rc=${rc}，期望 0 且打印\"没有可删的死行\" —— $(tail -1 "$W/e6f.log" | tr '\n' ' ')"
 fi
 
+echo "=== E7 名单外扩展名、但文件在仓里的引用必须进射程（任务 #52／批次 591）==="
+YML=$(git ls-files '*.yml' | head -1)
+if [ -z "$YML" ]; then
+  bad "仓库里找不到 .yml 文件 ⇒ 本翼造不出『名单外扩展名』的引用（判据失效要出声）"
+else
+  YS=$(pick_anchor "$YML")
+  if [ -z "$YS" ]; then
+    bad "$YML 上选不出锚点（该行须全文件唯一且前后非空）⇒ 本翼无法运行"
+  else
+    D7="$W/e7.md"; D7b="$W/e7b.md"; D7c="$W/e7c.md"
+    B7="$W/e7base.tsv"
+    printf '# 台：仓内文件、扩展名在硬写名单外\n- `%s:%s`\n' "$YML" "$YS" > "$D7"
+    python3 "$CHK" --doc "$D7" --baseline "$B7" --bless >"$W/e7a.log" 2>&1; rc=$?
+    n7=$(grep -vc '^«待归属»' "$B7" 2>/dev/null); n7=${n7:-0}
+    if [ "$rc" = "0" ] && [ "$n7" = "1" ]; then
+      ok "在界内的那条进了射程：基线 ${n7} 行（旧版 0 行——核对器连看都没看见它）"
+    else
+      bad "rc=${rc}／基线 ${n7} 行，期望 0／1 —— $(tail -1 "$W/e7a.log" | tr '\n' ' ')"
+    fi
+
+    printf '# 台：同一条引用写到文件尾之外\n- `%s:%s`\n' "$YML" "$((YS + 400))" > "$D7b"
+    python3 "$CHK" --doc "$D7b" --baseline "$B7" >"$W/e7b.log" 2>&1; rc=$?
+    q7=$(grep -c '\[定位失败\]' "$W/e7b.log"); q7=${q7:-0}
+    if [ "$rc" != "0" ] && [ "$q7" != "0" ] && grep -q '越界' "$W/e7b.log"; then
+      ok "指到文件尾之外要出声：rc=${rc}、定位失败 ${q7} 条且判据写『越界』（旧版 rc=0 并打印\"锚点全部对上\"）"
+    else
+      bad "rc=${rc}／定位失败 ${q7} 条，期望 rc≠0 且有『越界』 —— $(tail -1 "$W/e7b.log" | tr '\n' ' ')"
+    fi
+
+    # 反翼：扩展名压根不在仓里的（一次性 IR 转储、外部产物）不许变成新报错。
+    # 放开名单不等于把核对器改成"凡带点带冒号就报错"——那是文档在引外部产物，不是行号搬家。
+    # 这一翼在旧版也过（它啥也没看见，自然不报错）⇒ 它是**防改聋的守门翼**，不是本批的红→绿证据。
+    printf '# 台：仓内引用 + 一条指向仓外转储的引用\n- `%s:%s`\n- `probe_dump_591.ll:12345`\n' \
+      "$YML" "$YS" > "$D7c"
+    python3 "$CHK" --doc "$D7c" --baseline "$B7" >"$W/e7c.log" 2>&1; rc=$?
+    q7c=$(grep -c '\[定位失败\]' "$W/e7c.log"); q7c=${q7c:-0}
+    if [ "$rc" = "0" ] && [ "$q7c" = "0" ]; then
+      ok "仓外扩展名仍留在射程外且不报错（rc=0、定位失败 0 条）⇒ 本批没有把文档管线改聋"
+    else
+      bad "rc=${rc}／定位失败 ${q7c} 条，期望 0／0 —— $(tail -1 "$W/e7c.log" | tr '\n' ' ')"
+    fi
+  fi
+fi
+
 rm -rf "$W"
-echo "判据台结论：$([ "$fails" = 0 ] && echo 'E1–E6 全过' || echo "$fails 条失败")"
+echo "判据台结论：$([ "$fails" = 0 ] && echo 'E1–E7 全过' || echo "$fails 条失败")"
 [ "$fails" = 0 ]

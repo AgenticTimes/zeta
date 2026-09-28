@@ -1,3 +1,5 @@
+.github/workflows/ci.yml	91-97	- name: Upload baseline JSON if: always() uses: actions/upload-artifact@v4 with: name: zeta-baseline path: artifacts/zeta_baseline.json if-no-files-found: warn
+RELEASE_NOTES_v1.0.19.zeta	19	"Struct literals allocate on heap via runtime_malloc — no dangling stack pointers",
 docs/ARCHITECTURE-REVIEW-2026-09.md	102	- **符号 ABI 靠启发式瀑布对齐**：`get_or_declare_function`（codegen.rs:2415–2727，约 310 行）依次尝试裸名→mangle→裸方法+arity 校验→`name_N` 后缀→`_inst_` 泛型→剥尾缀→LLVM `.N` 冲突改名→`host_` 前缀→兜底
 docs/ARCHITECTURE-REVIEW-2026-09.md	103	- **四份符号表手工同步**：新增一个运行时函数要改 ①codegen `new()` 里 240 个 LLVM 声明 ②gen.rs 分发 ③C 实现 ④必要时 `.set` 别名；JIT 模式还要在 jit.rs 的 ~90 个 `add_global_mapping` 里再登记一份。
 docs/ARCHITECTURE-REVIEW-2026-09.md	104	- **静默错值链**：`coerce_call_args` 自动 zext/truncate/sitofp/fptosi 任何参数不匹配（validate.md 记录的 `abs(-2.5)→nan` 即此类）；方法名撞 libc（`isalnum/isspace/strftime`）会静默链接到 libc 同名函数
