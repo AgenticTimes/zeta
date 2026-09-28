@@ -1,0 +1,18 @@
+// 批次 635（旁路 cleanup）：bool 渲染亚族的 print 层拆支——634 定性的
+// 语句顺序敏感效应收口。`print(L and R)`（int 左＋Bool 右）的真值依赖
+// union：单 println 分派只能对一个型别正确（I64 dest 把 True 渲成 1、
+// Bool dest 把 int 渲坏）。现 print 臂对顶层 and/or 实参按 598 .get 配方
+// 语句级拆支——左真值 zeta_dyn_truth 条件、真支 to_string_bool(R)+
+// println_str、假支 println_i64(L)——CTPython 操作数语义逐支对齐。
+// ctfe 顺序效应被绕开（拆支不依赖 ctfe 折叠）。守卫：唯一位置实参、
+// 无 sep/end、rt=Bool 且 lt∈{I64,PyDynamic,None}（Str/F64 左已走
+// concrete 采纳）。边界（不在本夹具）：嵌套 and/or 链只拆顶层；
+// `x = L and R` 赋值面仍单 dest＝#117 同族 union。
+print(1 and True)
+print(True and 1)
+print((113201790292688 > 253969000720279) + -134424964410809 & 201235898769519 and (-225044044257953 << 5 != 2))
+print(0 and True)
+// expect: True
+// expect: 1
+// expect: True
+// expect: 0

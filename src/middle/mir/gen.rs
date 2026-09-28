@@ -10092,6 +10092,99 @@ call, no NULL-handle dereference).",
                     }
                     let mut arg_ids = vec![];
                     for a in &positional {
+                        // Batch 635: `print(L and R)` with an int left and a
+                        // Bool right — the union cannot share one println
+                        // dispatch (the falsy branch prints an int, the
+                        // truthy branch prints True/False; a single I64 dest
+                        // rendered the Bool side as 1). Split at statement
+                        // level like the batch-598 `.get` shape: each branch
+                        // prints its own operand with its own dispatch.
+                        // Guards: sole positional arg, no sep/end, right
+                        // operand Bool-typed, left I64/PyDynamic-typed
+                        // (Str/F64 lefts already adopt their concrete type).
+                        if let AstNode::BinaryOp { op, left, right } = &**a {
+                            if (op == "&&" || op == "||")
+                                && positional.len() == 1
+                                && sep_expr.is_none()
+                                && end_expr.is_none()
+                            {
+                                let saved3 = std::mem::take(&mut self.stmts);
+                                let left_id = self.lower_expr(left);
+                                let lt = self.type_map.get(&left_id).cloned();
+                                let right_id = self.lower_expr(right);
+                                let rt = self.type_map.get(&right_id).cloned();
+                                let mut right_stmts = std::mem::take(&mut self.stmts);
+                                self.stmts = saved3;
+                                let split_worthy = matches!(rt, Some(Type::Bool))
+                                    && matches!(lt, Some(Type::I64) | Some(Type::PyDynamic) | None);
+                                if split_worthy {
+                                    let truth_id =
+                                        if matches!(lt, Some(Type::Bool)) {
+                                            left_id
+                                        } else {
+                                            let tid = self.next_id();
+                                            self.stmts.push(MirStmt::Call {
+                                                func: "zeta_dyn_truth".to_string(),
+                                                args: vec![left_id],
+                                                dest: tid,
+                                                type_args: vec![],
+                                            });
+                                            self.exprs.insert(tid, MirExpr::Var(tid));
+                                            self.type_map.insert(tid, Type::I64);
+                                            tid
+                                        };
+                                    let cond_id = self.next_id();
+                                    let zero_id = self.next_id_with_lit(0);
+                                    self.exprs.insert(
+                                        cond_id,
+                                        MirExpr::BinaryOp {
+                                            op: "!=".to_string(),
+                                            left: truth_id,
+                                            right: zero_id,
+                                        },
+                                    );
+                                    self.type_map.insert(cond_id, Type::Bool);
+                                    // `&&`: truthy left selects the RIGHT
+                                    // operand (Bool — True/False via
+                                    // to_string_bool + println_str); falsy
+                                    // prints the LEFT (int). `||` mirrors.
+                                    let cid = self.next_id();
+                                    self.exprs.insert(cid, MirExpr::Var(cid));
+                                    self.type_map.insert(cid, Type::Str);
+                                    right_stmts.push(MirStmt::Call {
+                                        func: "to_string_bool".to_string(),
+                                        args: vec![right_id],
+                                        dest: cid,
+                                        type_args: vec![],
+                                    });
+                                    right_stmts.push(MirStmt::VoidCall {
+                                        func: "println_str".to_string(),
+                                        args: vec![cid],
+                                    });
+                                    let left_print = MirStmt::VoidCall {
+                                        func: "println_i64".to_string(),
+                                        args: vec![left_id],
+                                    };
+                                    let (then_b, else_b) = if op == "&&" {
+                                        (right_stmts, vec![left_print])
+                                    } else {
+                                        (vec![left_print], right_stmts)
+                                    };
+                                    self.stmts.push(MirStmt::If {
+                                        cond: cond_id,
+                                        then: then_b,
+                                        else_: else_b,
+                                        dest: None,
+                                    });
+                                    continue;
+                                }
+                                // Not split-worthy: discard the speculative
+                                // operand buffers (they live in right_stmts)
+                                // and lower the node plainly.
+                                arg_ids.push(self.lower_expr(a));
+                                continue;
+                            }
+                        }
                         // Batch 624: `print(None)` literal face renders
                         // "None" (value representation stays 0).
                         if matches!(a, AstNode::NoneLit) {
