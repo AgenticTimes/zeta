@@ -13890,6 +13890,39 @@ call, no NULL-handle dereference).",
                         return self.lower_expr(&AstNode::Var(gname));
                     }
                 }
+                // Batch 610: `c.kind` — a CLASS VARIABLE read through an
+                // INSTANCE base (the route above needs the base to BE the
+                // class name). When the base's declared type is a known class
+                // whose mangled class-variable global exists — and the field
+                // is NOT a struct field of it — read the global (CPython:
+                // instance lookup falls back to the class). Without this the
+                // read hit the instance layout's stand-in slot and returned
+                // another field's value (cif: `c.kind` printed 7 = c.v).
+                if let AstNode::Var(vname) = &**base {
+                    let tn = self.module_global_types.get(vname.as_str()).and_then(
+                        |t| match t {
+                            Type::Named(n, _)
+                                if !self.type_decls.contains_key(vname.as_str()) =>
+                            {
+                                Some(n.clone())
+                            }
+                            _ => None,
+                        },
+                    );
+                    if let Some(tn) = tn {
+                        let gname = format!("{}__{}", tn, field);
+                        let is_struct_field = matches!(
+                            self.type_decls.get(tn.as_str()),
+                            Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                                fields,
+                                ..
+                            }) if fields.iter().any(|(f, _)| f == field)
+                        );
+                        if !is_struct_field && self.module_globals.contains(&gname) {
+                            return self.lower_expr(&AstNode::Var(gname));
+                        }
+                    }
+                }
                 // `self.<field>` where `self` is NOT bound (a synthesized
                 // constructor): the value is the one already computed for that
                 // field — see `self_field_aliases`. Guarded on `self` being
