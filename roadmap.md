@@ -24562,6 +24562,44 @@ AGENTS.md 明文「全量门禁两侧不并发」⇒ 这次是**旁路侧破的*
 - 队头（本批之后）＝**600＝主线侧全量门禁批（17 步逐项 ＋ 补主线 301 位移）** → **#211①** → `str_trim` 族（需 `runtime/py_additions.c` 语义真修授权）→ **#167① 修法三形甲／乙／丙（待裁）／#52 余项** → #182 → t494／#213⑧ → #48。待用户裁决仍累计 **10 条**（590 §八 的 9 条 ＋ 592 的修法三形）。
 - 产物＝`/tmp/b596/`（`CHK_merge596.txt`＝当场 2/68/0/2；`rebind_dry.txt`／`rebind_p1.txt`／`CHK_after_p1.txt`／`rebind_p2_dry.txt`／`rebind_p2.txt`＝机械三趟与配对账；`bless6.txt`＝竖线错用那次 rc=2、`bless6b.txt`＝逗号点名 6 条；`prune_dry.txt`／`prune.txt`＝312→306；`CHK_final.txt`／`CHK_precommit.txt`＝rc=0 两趟逐字相同（后者是记录笔提交前复跑的）；`ABI.md.bak`／`abi_anchors.tsv.bak`／`diff_consistency.json.bak`＝三处改前快照；`build596.log`、`diff_readonly.txt`、`bless.txt`、`gate596.log`、`gate_md5_{before,after}.txt`、`ab_{pre,post}_t537*`、`nc_*`、`ir537/{pre,post}.ll`、`ir/{pre,post}/m.ll`）；本会话自建存件 `target/release/zetac_b596pre` 与 `ab_*`／`nc_*` 于批末清理（更早会话的 `ab_main_module_*`、`ab_minimal_compiler_*` 不动）。
 
+## 批次 597（2026-09-29，**7.3 生态与工具／文档合同 × 门禁面·合并面**，会话任务 #240）：并入旁路 628/629 ⇒ 锚点 4 条漂移一趟收干到 **`ANCHOR_RC=0`**（纯机械、零手绑）、差分基线代录 **574→575**、A/B 正反两半配齐＋诊断面 −5 行**归因到单个文件**
+
+### 一、并入面
+
+- **合并提交 `d1a94738`**（`Merge branch 'cleanup' into bootstrap`，**冲突 0**）；`git diff --numstat HEAD^1 HEAD`＝`src/middle/resolver/resolver.rs` **359/5**、`src/middle/resolver/typecheck.rs` **10/0**、`tests/python_style/t538_return_type_infer.z` **25/0**、`t539_field_element_refine.z` **29/0**、`worktree.md` **2/0** ⇒ `docs/ABI.md`、`tools/baselines/**`、`roadmap.md`、`backlog.md` 各 0 行。
+- 旁路两批的内容（只作并收录，本侧未复跑其套件）：**628＝`3200fc16`（＋账 `3f981616`）** 方法返回类型推断（#195 余项）＝`refine_method_return_types` 从方法体每个 `return` 表达式投票型别（字面量／627 已精化参数／`+` 拼接递归），全体一致且注册类型仍是未注解的 I64 时写入 `funcs`，gen 侧 `ret_types` 快照在 gen 时从 `funcs` 现算；numstat＝`resolver.rs` 159/1、`typecheck.rs` 7/0、`t538` 25/0。**629＝`449471d4`（＋账 `09acdd24`）** 字段元素型别精化＝`refine_field_element_types` 从方法体 `self.<f>.append(<e>)` 站点投票元素型别，全体一致时把 `list<i64>` 拼写改写 `list<str>`（只从 i64 默认改）；numstat＝`resolver.rs` 200/4、`typecheck.rs` 3/0、`t539` 29/0。两批在册的链上三坑（裸 Call 语句站点／`:992` 的 `ret_expr` 提升／`list<i64>` 逐字拼写）与边界（容器返回不推断、混合元素投票弃权、dict 值型别同族未收）随夹具头注入库。
+- **改前二进制丢失（本批的事故与补救）**：起 `cargo build --release` 前**没先存** `target/release/zetac`，构建完成后再 `cp` 拿到的那颗其实是改后二进制（md5 `5103727130ad…` ≠ 596 终态 `40283cf0c4c3…`），错名存件已 `rm`。**补救＝`git worktree add /tmp/b597/pre-wt f0ac3f10` ＋ 独立 `CARGO_TARGET_DIR=/tmp/b597/pre-target` 重建**（`PRE_BUILD_RC=0`、74s）；该 worktree 缺未跟踪生成物 ⇒ 先 `cp runtime/aliases.inc.c`（`.gitignore:123` 屏蔽，两侧 md5 `1bebe772…` 逐字相同）＝595 在册的**坑 71 本轮兑现了一次真用途**。**交叉验证**＝重建出的 pre 二进制 md5＝`40283cf0c4c33fe89d538700f51a139d`，与 596 记录的"改后那颗"**逐字相同** ⇒ 隔离 worktree 重建可作为"pre 侧丢失"的可复用止损，且 md5 撞上是它没跑偏的正证据。收尾时 `git worktree remove` 未做，登记在 §五。
+
+### 二、锚点面（4 条纯机械，一趟到 `rc=0`）
+
+- 合并当场 `ANCHOR_RC=1`＝**漂移 4／新 0／消失 0／定位失败 0**（`CHK_merge597.txt`）。
+- `--rebind` 一趟：`rebind：漂移 4 条 → 判定搬家 4 条 / 拒改 0 条；改号配对 0 对 / 落单消失 0 条 / 落单新锚点 0 条`，四条全部"内容逐字相同＋全文件唯一命中"（`resolver.rs:639-663→:645-669`、`:653-660→:659-666`、`:2103→:2109`、`:3552→:3906`）⇒ `已改写 docs/ABI.md（2 行 / 6 个数字）`、基线刷新 `306 个锚点／定位失败 0 条` ⇒ 复跑 **`ANCHOR_RC=0`「锚点全部对上」**（`CHK_final.txt`）。
+- **无手绑、无点名、无 `--prune-gone`**＝与 596 的"70 条账（60 机械＋10 人肉）"对照，本轮是纯机械面；提交面 numstat＝`docs/ABI.md` **2/2**、`tools/baselines/abi_anchors.tsv` **4/4**（＝`4feb54a9`）。
+- **一条 #167① 判据的顺带印证**：四条同属一个文件、Δ 却分两档（前两条与 `:2103` 是 **+6**，`:3552` 是 **+354**）——机械面按"内容逐字＋唯一命中"定位，**与 Δ 无关**（596 订正过"配对臂不看 Δ"，这里是主 `--rebind` 臂同样不看 Δ）。
+- 记录笔提交前复跑只读核对＝`CHK_precommit.txt` 与 `CHK_final.txt` **`cmp -s` rc=0**（3 行逐字相同）。
+
+### 三、差分代录（574 → 575）
+
+- 只读跑＝`DIFF_RC=2`、`match=575 judged=600 rate=95.8% bad_case=1（总用例 601）`、`较基线转好 1 条: class_list_field_method`；分母核对 `find . -name '*.dcase' -not -path './target/*'` 与 `judged` 的 **601/600** 口径未变（坑 77）。
+- `--bless` 落盘＝**7/7 行**（`match 574→575`、`rate_pct 95.7→95.8`、`match_min 574→575`、`per_cat.container 224→225`、`by_verdict.mismatch 25→24`、1 条 case `verdict: mismatch→match`），逐案账用同一 python 对 `HEAD` 与工作树两份 JSON 的 `cases` 键比对＝**变判恰 1 条（`class_list_field_method`）、`match→mismatch` 0 条、两侧 case 数 601/601** ⇒ 提交 `0eca1a93`（只 add `tools/baselines/diff_consistency.json`）。
+- **`--bless` 单次跑超 120s 会转后台**（本轮实测），落盘账要等通知再取，别在前台超时后据"没输出"判定失败。
+- 与旁路在册一致＝629 记的"574→575＝95.8%、`mismatch 27→24`、三连升"里 `mismatch` 起点是旁路自己那条闸（未 bless 的 596 代录后基线是 25），本侧账以 `25→24` 为准。
+
+### 四、A/B 与快门禁
+
+- **正向半（两颗同目录 `target/release/`，坑 52/68）**：`t538_return_type_infer` pre **FAIL**（actual `4333003622`／`4336242656`／`4336242640`＝三个串句柄被按整数槽打）→ post **PASS**（`X`／`Hey!`／`hi moe`）；`t539_field_element_refine` pre **FAIL**（`size()` 的 `2` 已对，`items[0]`／`items[1]` 打 `4334559990`／`4334559992`）→ post **PASS**（`2`／`a`／`b`）。**IR 面同一站点**＝`--emit-llvm` 单模块逐行比：t538 `1264` 行两侧同、变判 **6 行＝3 处 `call void @println_i64` → `@println_str`**（恰对应三个 `print` 调用点）；t539 `1283` 行两侧同、变判 **4 行＝2 处 `println_i64 → println_str`**（两个元素读）。行数不变而调用名换＝收益落在分派选择，不是几何。
+- **负对照半＝位移 0 有正证据**：`t527_sorted_key_shapes` 与 `t537_method_param_refine` 的 pre／post IR **各自 `cmp -s` rc=0、变判行数 0**（`1273` 与 `1286` 行两侧同）⇒ 旁路两批各自在册的"运行期位移 0"在主线侧独立复现成立。
+- **快门禁**（`gate597.log`，13 个 `--skip-*` 配方；被测二进制 md5 前后各戳一次逐字相同＝`5103727130ad…`＝post 那颗，#175/坑 83 守门）＝**`GATE_RC=1`，两源皆存量红**（`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）· official **194/194 compile・191/194 compile+link**（link-only 3 名单逐字未动＝`integration_all_features`、`quantum_basic`、`selfhost`）· python_style **416 passed／2 failed／6 known-fail／0 xpass**（414→416 恰＝t538＋t539，与旁路 `gate_629` 在册逐字相同）· dyn_binding **4 条断言 0 不一致**（rc=0）· comment_drift **0 处复述** · clean_checkout **rc=0（skipped=1）** · 诊断面 official **5 文件/21 行**（与 596 逐字同）· python_style **126 文件/271 行**（596＝127/276）⇒ **－1 文件／－5 行**。
+- **诊断面 −5 行／−1 文件的逐项归因（做了独立复现，正证据）**：本批改动面是 `src/middle/**` ⇒ 按 AGENTS 路由本不需复现，但 −5 行是**减少**、必须验它不是"告警被吞"。做法＝`/tmp/b597/diag_attr.sh` 把全部 `t*.z` 按 `run_one.sh:81` 的同形口径（`zetac <f> -o <bin>`，`grep -v '^clang: warning'` ＋ `run.sh:88` 的 `sed -E 's/[0-9]+/N/g' | sort | uniq -c`）分别用 pre／post 各整编译一遍取逐文件 stderr。**独立口径读数＝pre 129 文件/280 行 → post 128 文件/275 行**（与门禁的 127/276→126/271 **位移量逐字相同**；绝对值差 2 文件/4 行＝这条独立口径未套夹具的 `// env:`，属口径差不是判据差）。**变化面恰一个文件**＝`t298_field_float_infer` 5 行 → **0 行**（`diff perfile.txt` 只此一行不同），其 5 行原文＝`ABI coerce in call to Ledger::spend arg[1]: fptosi → i64`（2 次）、`Ledger::earn arg[1]`、`Ledger::bump arg[1]` 各 1 次，加该文件的聚合行 `ABI coerce: 4 non-allowlisted cast(s)`（正是类目面 9→8 那一行）⇒ **5 行全部来自同一文件、−1 文件与 −5 行互洽，无失踪项**。夹具侧对得上＝`l.spend(100.0)`／`l.earn(50.0)`／`l.bump(2.0)` 是 float 实参打在未注解参数上。**它两侧都 PASS**（`/tmp/b597/t298/{pre,post}/verdict` 逐字 `PASS t298_field_float_infer`）⇒ 这 5 行的消失是**告警面收敛不是用例转坏**。**单批归因未做**＝没为"是 628 还是 629 收的"另建两颗单批二进制；候选成因是 628 在册的那条时序改动（参数表改在 typecheck 算一次并存字段，"ret 精化须先于 gen 时 `ret_types` 快照"），但本轮读数只支持**归因到 628＋629 的并集**。
+- **未跑**＝corpus／jit／truth／全量。**主线 301 语料位移＝仍挂已登记缺口**（自 593）⇒ **600 全量补**（17 步逐项）。
+
+### 五、编号、提交面、队头与产物
+
+- **OPEN 净增 0**＝`grep -cE '^\| #'` 仍 **43**；本批只在 §4.1 追加 bullets，不开新任务号。
+- 提交面四笔＝`d1a94738`（merge）→ `4feb54a9`（fix：`ABI.md` 2/2 ＋ tsv 4/4）→ `0eca1a93`（chore：差分基线 7/7）→ 记录批随本行入库；**不 push**（目标级裁定覆盖 AGENTS 收尾推送）。
+- 下一次全量＝主线 **600**。队头＝**600 全量门禁批（17 步逐项＋补主线 301 位移）→ #211① → `str_trim` 族（需 `runtime/py_additions.c` 语义真修授权）→ #167① 修法三形甲／乙／丙（待裁）／#52 余项 → #182 → t494／#213⑧ → #48**；待用户裁决累计 **10 条**（590 §八 9 条＋592 修法三形）。
+- 产物＝`/tmp/b597/`（`ABI.md.bak`／`abi_anchors.tsv.bak`／`diff_consistency.json.bak` 三处改前快照、`CHK_merge597.txt`、`rebind_dry.txt`／`rebind_p1.txt`、`CHK_final.txt`／`CHK_precommit.txt`、`build597.log`、`build_pre.log`、`diff_readonly.txt`、`bless.txt`、`gate597.log`、`gate_md5_{before,after}.txt`、`zetac_b597post`、`pre/`＋`post/` 的 verdict、`ir_pre/`＋`ir_post/` 的四份 IR、`diag_attr.sh`／`diag_attr.log`／`diag/{pre,post}/`）＋ 本会话自建存件 `target/release/zetac_b597pre` 与隔离 worktree `/tmp/b597/pre-wt`、`CARGO_TARGET_DIR=/tmp/b597/pre-target`（收尾时 `git worktree remove` ＋ 删存件）。
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
