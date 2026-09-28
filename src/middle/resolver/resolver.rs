@@ -2726,6 +2726,159 @@ impl Resolver {
     /// reads inside methods (and the concatenation arm) see the concrete
     /// type. Literal/Var args only (out is the module-global type table);
     /// anything else stays conservatively i64.
+    /// Batch 627: method-parameter refinement from module-level call sites.
+    /// `g.greet("World")` — an unannotated method parameter stayed i64, so an
+    /// f-string part stringified the string handle with `to_string_i64`
+    /// (`Hello, <addr>!`, closure_nonlocal diff line #4). Record refinements
+    /// for the generator: `Class::method` -> [(FuncDef param position, Type)].
+    /// Only i64-typed (unannotated) params are refined — explicit annotations
+    /// are never overridden. Literal-kind mapping mirrors
+    /// `refine_ctor_field_types`.
+    pub fn refine_method_param_types(&self) -> HashMap<String, Vec<(usize, Type)>> {
+        let out = self.module_global_types();
+        let defs = self.registered_func_defs.borrow().clone();
+        let mut map: HashMap<String, Vec<(usize, Type)>> = HashMap::new();
+        for d in &defs {
+            if let AstNode::FuncDef { body, .. } = d {
+                // Local class env: `g = Greeter(...)` at module level. The
+                // resolver-wide table (out) does not carry plain module vars.
+                let mut env: HashMap<String, String> = HashMap::new();
+                for st in body {
+                    // Track `x = <Ctor>(...)` before collecting this
+                    // statement's sites (rhs uses the previous env).
+                    if let AstNode::Assign(lhs, rhs) = st {
+                        if let (
+                            AstNode::Var(x),
+                            AstNode::Call {
+                                receiver: None,
+                                method,
+                                ..
+                            },
+                        ) = (&**lhs, &**rhs)
+                        {
+                            if self.funcs.contains_key(method.as_str()) {
+                                env.insert(x.clone(), method.clone());
+                            }
+                        }
+                        Self::collect_p627_in_expr(
+                            rhs,
+                            &out,
+                            &env,
+                            self,
+                            &mut map,
+                        );
+                        continue;
+                    }
+                    match st {
+                        AstNode::ExprStmt { expr } => {
+                            Self::collect_p627_in_expr(expr, &out, &env, self, &mut map);
+                        }
+                        AstNode::Call { args, .. } => {
+                            for a in args {
+                                Self::collect_p627_in_expr(a, &out, &env, self, &mut map);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        map
+    }
+
+    fn p627_record(
+        cls: &str,
+        method: &str,
+        args: &[AstNode],
+        resolver: &Self,
+        map: &mut HashMap<String, Vec<(usize, Type)>>,
+    ) {
+        let qname = format!("{}::{}", cls, method);
+        let Some((params, _, _)) = resolver.funcs.get(&qname) else {
+            return;
+        };
+        for (i, arg) in args.iter().enumerate() {
+            // Method FuncDefs carry self at param position 0.
+            let Some((_pn, pt)) = params.get(i + 1) else {
+                continue;
+            };
+            // Unannotated params sit as I64 in `funcs` (or PyDynamic in the
+            // gen-side spelling) — both mean "no annotation"; an explicit
+            // annotation is never overridden.
+            if !matches!(pt, Type::I64 | Type::PyDynamic) {
+                continue;
+            }
+            let spell = match arg {
+                AstNode::StringLit(_) => Some(Type::Str),
+                AstNode::FloatLit(_) => Some(Type::F64),
+                AstNode::Bool(_) => Some(Type::Bool),
+                _ => None,
+            };
+            if let Some(t) = spell {
+                map.entry(qname.clone()).or_default().push((i + 1, t));
+            }
+        }
+    }
+
+    fn collect_p627_in_expr(
+        e: &AstNode,
+        out: &HashMap<String, Type>,
+        env: &HashMap<String, String>,
+        resolver: &Self,
+        map: &mut HashMap<String, Vec<(usize, Type)>>,
+    ) {
+        match e {
+            AstNode::Call { receiver, method, args, .. } => {
+                if let Some(rc) = receiver {
+                    if let AstNode::Var(v) = &**rc {
+                        let cls = out
+                            .get(v)
+                            .and_then(|t| match t {
+                                Type::Named(n, _) => Some(n.clone()),
+                                _ => None,
+                            })
+                            .or_else(|| env.get(v).cloned());
+                        if let Some(cls) = cls {
+                            Self::p627_record(&cls, method, args, resolver, map);
+                        }
+                    }
+                }
+                for a in args {
+                    Self::collect_p627_in_expr(a, out, env, resolver, map);
+                }
+            }
+            AstNode::BinaryOp { left, right, .. } => {
+                Self::collect_p627_in_expr(left, out, env, resolver, map);
+                Self::collect_p627_in_expr(right, out, env, resolver, map);
+            }
+            AstNode::UnaryOp { expr: inner, .. } => {
+                Self::collect_p627_in_expr(inner, out, env, resolver, map);
+            }
+            AstNode::FieldAccess { base, .. } => {
+                Self::collect_p627_in_expr(base, out, env, resolver, map);
+            }
+            AstNode::FString(parts) | AstNode::ArrayLit(parts) | AstNode::Tuple(parts) => {
+                for p in parts {
+                    Self::collect_p627_in_expr(p, out, env, resolver, map);
+                }
+            }
+            AstNode::DictLit { entries } => {
+                for (k, v) in entries {
+                    Self::collect_p627_in_expr(k, out, env, resolver, map);
+                    Self::collect_p627_in_expr(v, out, env, resolver, map);
+                }
+            }
+            AstNode::Assign(lhs, rhs) => {
+                Self::collect_p627_in_expr(lhs, out, env, resolver, map);
+                Self::collect_p627_in_expr(rhs, out, env, resolver, map);
+            }
+            AstNode::Return(v) => {
+                Self::collect_p627_in_expr(v, out, env, resolver, map);
+            }
+            _ => {}
+        }
+    }
+
     pub fn refine_ctor_field_types(&mut self) {
         let out = self.module_global_types();
         let defs = self.registered_func_defs.borrow().clone();
@@ -4145,6 +4298,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_py_module_paths(self.py_module_paths.borrow().clone())
             .with_module_global_types(self.module_global_types())
             .with_class_bases(self.class_bases())
+            .with_method_param_refinements(self.refine_method_param_types())
             .with_source_file(self.source_file.borrow().clone())
             .with_argparse_kinds(self.argparse_kinds.borrow().clone())
             .with_param_defaults(

@@ -211,6 +211,10 @@ pub struct MirGen {
     /// Batch 603: class -> first base (resolver `__bases__` markers) — the
     /// base-chain walk for inherited-method dispatch.
     class_bases: HashMap<String, String>,
+    /// Batch 627: `Class::method` -> [(FuncDef param position, Type)] —
+    /// call-site refinements for unannotated method params (see the
+    /// builder).
+    method_param_refinements: HashMap<String, Vec<(usize, Type)>>,
     /// PY-A: set while lowering the replacement closure of `re.sub`, so its
     /// parameter is typed as a Match (`m.group(0)` must dispatch).
     re_repl_param: bool,
@@ -299,6 +303,7 @@ impl MirGen {
             symbol_renames: HashMap::new(),
             module_global_types: HashMap::new(),
             class_bases: HashMap::new(),
+            method_param_refinements: HashMap::new(),
             re_repl_param: false,
             current_class: None,
             nested_class_aliases: Vec::new(),
@@ -331,6 +336,17 @@ impl MirGen {
     /// Batch 603: resolver's class->base map (see `class_bases`).
     pub fn with_class_bases(mut self, bases: HashMap<String, String>) -> Self {
         self.class_bases = bases;
+        self
+    }
+
+    /// Batch 627: `Class::method` -> [(FuncDef param position, Type)] from
+    /// the resolver's call-site scan — refines unannotated method params so
+    /// f-string parts type from the argument, not the i64 default.
+    pub fn with_method_param_refinements(
+        mut self,
+        map: HashMap<String, Vec<(usize, Type)>>,
+    ) -> Self {
+        self.method_param_refinements = map;
         self
     }
 
@@ -1438,10 +1454,26 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         _ => None,
                     })
                     .collect();
+                let mpr_key = if fname.contains("::") {
+                    fname.clone()
+                } else {
+                    self.current_class
+                        .as_ref()
+                        .map(|c| format!("{}::{}", c, fname))
+                        .unwrap_or_else(|| fname.clone())
+                };
                 for (i, (name, param_type)) in params.iter().enumerate() {
                     let id = self.next_id();
                     self.name_to_id.insert(name.clone(), id);
                     self.exprs.insert(id, MirExpr::Var(id));
+                    // Batch 627: call-site refinement for unannotated method
+                    // params (`g.greet("World")` ⇒ name: Str) — see the
+                    // resolver's refine_method_param_types.
+                    let mpr = self
+                        .method_param_refinements
+                        .get(&mpr_key)
+                        .and_then(|v| v.iter().find(|(pos, _)| *pos == i))
+                        .map(|(_, t)| t.clone());
                     // Keep params as I64 — arrays pass as pointers (i64).
                     // Only true f64/i64 params should be non-I64, and those
                     // are handled by the codegen's param_types inference below.
@@ -1479,6 +1511,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     } else if pt_str.starts_with('[') {
                         // Array param stays I64 — pointer semantics.
                         // Element type is inferred from source_types in Subscript.
+                    }
+                    if let Some(t) = mpr {
+                        self.type_map.insert(id, t);
                     }
                     // PY-A: a param annotated with a LIBRARY HANDLE tag
                     // (`def f(d: PyDate)`) must keep that tag. Without this it
