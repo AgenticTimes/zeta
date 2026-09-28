@@ -24091,6 +24091,206 @@ NU5 COL volume … ptrlike=12858 zero=0 head=102bc1980 102bc1970 102bc1960 102bc
 或对 `tlen` 非零的污染跑比步长是否同一区间。**代价已量**：一圈 15 s、命中率 1/16～1/27 ⇒ 每换一个判据要花 5–10 分钟取一次读数，
 这条不是免费队列，别再拿它当每日读数来源。
 
+## 批次 590（合并面收尾＋全量门禁批／会话任务 #233）：并入旁路 587–589（合并提交 `0fdcfbce`）——**锚点 51 条漂移＝机械 50＋手绑 2**、ANCHOR_RC=0；**全量 17 步逐项读数 770s＝12'50"**（对照 572 第二趟 696s＝11'36"）；**差分代录 557→564**（转好 7 条逐字＝旁路三批点名、分母 600 不动 ⇒ 非 match 集合纯收缩）；**jit `ok` −2 ＝与本次并入无关**（三趟 `-v` 逐字节相同，见 §九）
+
+### 一、17 步逐项读数（`/tmp/b590/gate_full.log` 196 行：`02:20:09Z`→`02:32:59Z` ＝ **770s＝12'50"**）
+
+对照列＝**批次 572 的第二趟全量**（`/tmp/b572/gate_merged.log`，`03:33:40`→`03:45:16`＝696s＝11'36"，rev=`3ae738f6`）＝
+本侧上一次 HEAD 全量；本批是 572 之后第一次全量（中间 575/581/586/590 四次合并都只跑了子集）。
+被测二进制 **`5251bd199fce50b8e6d193b2849f05e9`**（跑前当场 `md5`＋时间戳落盘 `/tmp/b590/evidence.log`＝572 那次"旧二进制趟"的正面修法），
+与旁路 589 在册 post 侧逐字相同 ⇒ HEAD 侧读数与旁路自报读数出自**同一颗**。
+
+| 步骤 | 572 第二趟（改前对照） | 本批 590（合并＋重绑后） | 差值的归因 |
+|---|---|---|---|
+| official | compile **194/194**、compile+link **191/194**、link-only **3** | 194/194、191/194、3 | 三条**同名同缺符号**逐字未变（`integration_all_features`→`_predict,_train`；`quantum_basic`→`_factor,_optimal_iterations,_success_probability`；`selfhost`→`_as_str,_into_iter,_is_alphabetic,_push`）⇒ 跨五代全量不变 |
+| 诊断面 official | 5 文件 / 21 行、`not_measured 0` | 5/21、0 | 未变 |
+| python_style | **405**/2/6/0 xpass | **405**/2/6/0 | **零位移**；桶和自证 405+2+6+0＝**413** ⇔ `ls tests/python_style/t*.z`＝**413**（572 那趟也是 405/2/6/0＝413 ⇒ 同一档）；红源两条（`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`）三侧**逐字相同** ⇒ 零新增红 |
+| 诊断面 python_style | 276 行 / 127 文件 | 276/127 | 未变（560 那对 276/127 也在同一档） |
+| 语料 corpus | 40/40＝100%（`耗时: 85s`） | 40/40（**120s**） | 分母与通过率未变；耗时六代 53(460)/168(438)/82(554)/81–86(560)/85(572)/120(590) ⇒ **时间噪声底仍未量过**，不据此判性能回归 |
+| jit sweep | ok=**180**/trap=430/fail 0/to 0/segv 0（total **610**）⇒ GREEN | ok=**178**/trap=**432**/0/0/0（total **610**） | **`ok` −2 是本批唯一需要解释的门禁读数**，归因见 §九；分母闭合：`total`＝`python_style/*.z`(416)＋`unit-tests/*.z`(194)＝**610**，与实测逐字相等（`ls-tree` 口径：`tests/unit-tests` 递归 198 条含 4 条非顶层件 ⇒ 报数用顶层 glob 的 194，别混） |
+| truth（按类） | 43/43 · **102**/105 · **213**/227 · **102**/124 · **79**/81 | 43/43 · **105**/105 · **220**/227 · **107**/134 · **89**/91 | `numeric` 124→134、`control` 81→91 那 **+10/+10＝20 条是新种子**（旁路 584 在册"stmts/control 新种子 20 例入册（总 601）"、`str` 105 与 `container` 227 分母未动）；五族 match 相加 **539→564（+25）** ⇔ 顶层 `match` 逐字相等，judged 相加 **580→600（+20）** ⇔ `judged` 闭合 ⇒ **扩面 20、存量转好 5＋新例里过了 20**（`str` +3、`container` +7、`numeric` +5、`control` +10 减去各自新增分母＝存量转好 `str` 3、`container` 7、`numeric` 5、`control` 10−10＝0 ⇒ **逐类比只能看 match 绝对数**） |
+| diff | match=**539**/judged=**580**/92.9%/bad_case 1（总 581） | match=**564**/judged=**600**/**94.0%**/bad_case 1（总 601） | 代录阶梯见 §四；**`rate_pct` 不是单调量**（分母涨 20 就把 92.9% 抬到 94.0%）⇒ 看进度只认 `match` 计数 |
+| knob / swallow / import / empty_stmt | 23 / 6 / 22 / 68 条，FAIL 0 | 同，FAIL 0 | 未变 |
+| clean_checkout | rc=0（**0s**，rev=`3ae738f6`） | rc=0（**4s**，rev=`0fdcfbce`） | rev 跟着 HEAD 走 ⇒ 本批"当前树可干净检出编译"的正证据；0s↔4s 是缓存档差，不是读数 |
+| pysrc / cli_semantics / ignore_rules | 42 / 87 / 19 条，FAIL 0 | 同 | 未变 |
+| mbvar | 25 个脚本／违规 0（rc=0） | 25／违规 0（rc=0） | 未回潮；554 入册的"25 这格对旧缺陷不可见"仍未处理（#209 余量） |
+| comment_drift / emit_stable / dyn_binding | 0 处复述 / 2 夹具违规 0 / 4 条不一致 0 | 同 | 未变 |
+| 锚点核对（**门禁外**只读复跑） | —（572 未记这一列） | **rc=0、304 ⇔ 342**、漂移 0／新 0／消失 0／定位失败 0；待归属 98 条／88 种、共用键 38 条、E1–E6 全过 | 改前那 51 条是本批并入面的镜像，本批收干净 ⇒ §三；提交前后各复跑一次都是 rc=0 |
+| `GATE_RC` | 1 | **1** | 两趟同数，来源仍是 `del_undefined_var` 那条 bad_case 无条件置 rc=2（**待用户裁决**，见 §七）；**本批没有新增红源** |
+
+### 二、并入面：`0fdcfbce` 是真合并提交（这次不是 fast-forward）
+
+`git diff --numstat HEAD^1 HEAD` ＝ `gen.rs +142/−12`、`resolver.rs +79/−9`、`runtime/tokio_runtime_stub.c +126/0`、
+`tokio_runtime.o`（二进制，字节数 164,076→169,204 由旁路 588 自己重打并入库）、`worktree.md +3`。
+两条口径结论：
+
+1. **`src/runtime/tests` 之外没有别的改动面 ⇒ 本批"主线位移"栏＝`n/a`（本批提交面没动编译器）**：
+   合并带进来的编译器代码位移由旁路三批各自的 A/B 负责（见 §六），主线不再重跑同一把尺。
+2. **`zeta_runtime_c.o` 未动、`tokio_runtime.o` 动** ⇒ 与 558 那条经验一致：并入 `runtime/*.c` 时先看那颗 `.o`
+   在不在 merge 的文件面里，在就不必重跑 `tools/build_runtime.sh`（本批 `tokio_runtime.o` 就在，`git show --numstat` 里以 `-	-` 出现）。
+
+### 三、锚点：51 条漂移的构成，与"拒改 2 条"的两种成因
+
+改前只读核对（`/tmp/b590/anchor_pre.log`）＝ **漂移 51**（`gen.rs` 46／`tokio_runtime_stub.c` 5）＋ **定位失败 1**
+＋ **消失 1**，锚点 303 可解析 ⇔ 341 引用。`--rebind`（`/tmp/b590/rebind1.log`）原话＝
+「**漂移 51 条 → 判定搬家 50 条 / 拒改 2 条；改号配对 0 对 / 落单消失 1 条**」：
+
+- **50 条机械搬家**（`gen.rs` 45／`stub.c` 5）＝ 51 里的 50 条；
+- **拒改 2 条**里只有 `gen.rs:16383` 在 51 的漂移分母内（成因＝`self.mirror_module_global_writes();` 在文件里
+  **两处命中（1627、16495）⇒ 唯一性不成立**）；`gen.rs:14449` 不在 51 内，它是那条**定位失败＋消失**
+  （文档改号后原坐标落在**空行**上 ⇒ 核对器报"该行内容为空"，`--rebind` 只搬在架引用、结构上够不着）。
+  ⇒ 所以 50＋1＝51 闭合，而"拒改 2"是**两个不同分母**的数，别当成 51−50＝1 的算术矛盾。
+- **手绑 2 条**按文档语义定（"两个调用点"取 `:16495`；`14449+112＝14561`），落点先 `sed -n '14561p;16495p'` 断言
+  内容与基线片段逐字相同；改完复跑（`/tmp/b590/anchor_3.log`）核对器把这 2 条**独立配成 2 对"改号对"**
+  （`[改号] 14449 → :14561`、`[改号] 16383 → :16495`，理由栏写"内容逐字相同、互为唯一候选"）＝ 工具侧反证，不是人挑的。
+- 收尾四步序（558 入册的那套）：改文档 → 复跑「漂移 0／新 2／消失 2」→ `--bless-only` 点名 2 条新坐标 →
+  `--prune-gone` 删 2 条死行 → 复跑 **rc=0**（`/tmp/b590/anchor_final2.log`：304 ⇔ 342、四类读数全 0）。
+  `--prune-gone` 前那颗中间态（`/tmp/b590/anchor_final.log`）＝「基线 306、漂移 0／新 0／**消失 2**」，正是它要删的两行。
+- **差异面自证**：`docs/ABI.md` 的 git numstat＝**39/39**，把两侧整份掩掉数字（`sed -E 's/[0-9]+/N/g'`）后
+  **diff＝0 行**（`/tmp/b590/a.mask` vs `b.mask`）⇒ 本批没动一个字，只动行号；`abi_anchors.tsv` 52/52 同口径。
+
+### 四、差分代录 557→564：四步序走全，且"零回归"有分母级证明
+
+基线改前＝`{total 601, judged 600, match 557, rate_pct 92.8, match_min 557}`（586 那次代录的终态）。
+
+1. **纯读**（在门禁里，`/tmp/b590/gate_full.log`）＝ `match=564 judged=600 rate=94.0% bad_case=1（总用例 601）`，
+   并打出「较基线转好 **7** 条」＝`class_cross_method_str class_method_str_concat container_neg_index_in_and_ternary func_return_str_list gen_str_s314159_003 str_format_method str_split_missing`。
+2. **逐名核账**＝ 这 7 条与旁路三批在册点名的 7 条**逐字相同、不多不少**：587 三条（`func_return_str_list`、
+   `class_cross_method_str`、`class_method_str_concat`＝"意外红利"）＋ 588 三条（`str_format_method`、
+   `gen_str_s314159_003`、`str_split_missing`）＋ 589 一条（`container_neg_index_in_and_ternary`，#56 结案）。
+3. **`--bless`**（`/tmp/b590/bless.log` 3556 字节，`BLESS_RC=2`）→ 打出
+   `基线已写入 …/tools/baselines/diff_consistency.json（match_min=564，比率 94.0%）`。
+   **`BLESS_RC=2` 不是回归**：那 1 条 `bad_case del_undefined_var` 让 rc 无条件置 2（#5 在册；本批 bless 输出里它逐字在场）。
+4. **再纯读**（`/tmp/b590/diff_reread.log`，rc 落 `evidence.log` 的 `REREAD_RC`）→ 见 §四附；bless 分支在回归比对之前就
+   `return`，所以只跑 bless 不构成零回归证据，这一趟才是。
+
+**"零回归"不靠目视清单**：分母 `judged 600` 未动（601−1 条 bad_case 恒定）、`match` 从 557 涨到 564＝**+7**，
+而非 match 集合从 43 收缩到 36＝**−7**，且转好清单正好 7 条 ⇒ 集合是**纯收缩**，不是"转好 8 条＋回归 1 条"那种换血
+（若有既有用例转差，非 match 集合会既 −7 又 +≥1，尺寸不可能正好减 7）。这条推理只用顶层四个数，
+**没有**拿 stdout 的截断清单当分母（572 那次踩过的坑 92）。
+
+**#186 本批不复发**：盘上 `.dcase` 总用例 **601** ⇔ 基线 `total 601`／`judged 600` 同档 ⇒ 代录后错档为零。
+
+### 五、jit `ok` 180→178：尺与判据（读数在 §九）
+
+尺：同一份测试文件集（`git ls-tree` 对 `HEAD^1`↔`HEAD` 在 `tests/**` 差集为空 ⇒ 分类变化不是文件数造成的）、
+两颗二进制同放 `target/release/`（`zetac_post586` md5 `c724f742e6b9a95dd187de3f81455417`＝旁路 587 在册 pre 侧逐字相同；
+`zetac` md5 `5251bd19…`＝当前），`tools/jit_sweep.sh -v` 各跑一遍（`/tmp/b590/jit_pre.txt`、`/tmp/b590/jit_post.txt`），
+取 ok 集合差集。
+
+### 六、主线位移栏：本批＝`n/a`，并面三批的读数逐字引用
+
+- **本批提交面**＝`docs/ABI.md`＋`tools/baselines/**`＋记录（`git diff --numstat -- src runtime` 为空）⇒ 无位移面，写 `n/a`（459 立的那条规矩）。
+- **并入面**（旁路三批各自在册，主线不重跑）：587 pre587/post587 n=3/侧全 rc=0、ERE 掩码后 stderr 321 行**差 0**、同侧跨跑亦差 0、成交 0⇔0；
+  588 n=3/侧、掩码后 321 行差 0（run1 差 6 行＝同侧跨跑同量抖动档）、成交 0⇔0；589 n=3/侧、cross 差 0/10/10 而 **within 差 0**，
+  10 行全部＝`合计 12,857↔12,858 行` 的在册 ±1 抖动档（574 §四）⇒ **三批都是零位移**。
+- 确定性构建第四次自证：旁路每批的 pre 侧 md5 与上一批在册 post 侧逐字相同（`c724f742`→`d31cf0b5`→`14bc73f0`→`5251bd19`）。
+
+### 七、门禁纪律事故实拍：**并发取读数**（发起方＝旁路），以及它对本批读数的影响面
+
+`/tmp/b590/evidence.log` 当场落盘：本批全量 **10:20:09 起**（pid 36063），旁路在 **10:27:28** 起了一个快门禁
+（pid 7839，`--skip-corpus --skip-jit --skip-diff …`＝只跑 official＋python_style），两者**重叠到 10:32:59**（本批终点）为止。
+AGENTS.md 明文「全量门禁两侧不并发」⇒ 这次是**旁路侧破的**，且它没加 `nice`。影响面逐条量过：
+
+- 重叠期落在本批的 **truth/diff＋其后 11 步**（corpus、jit 两步在 10:25:48 前已落盘）⇒ 受影响的是 CPU 争用，不是共享产物；
+- **共享路径 `/tmp/zeta_baseline.json` 双方都在写**：旁路那条命令收尾 `python3 -c "json.load('/tmp/zeta_baseline.json')"` 读的是
+  绝对路径（它 `TMPDIR=/tmp/zeta-bz-tmp` 也改不掉这条），所以它打印的 official/python_style 有可能是**本批那颗**的数 ——
+  旁路自报 405/2/6/0、official 191/194 与本批逐字相同，两棵二进制同树 ⇒ 数值不受影响，但**它的归因口径不可靠**；
+- 本批自身读数的可靠性另有两把尺：python_style 405/2/6/0 与 572 同档、official 三条 link-only 缺符号名逐字未变 ⇒
+  **没有一项读数需要作废重跑**。耗时 770s vs 572 的 696s（+74s）在"时间噪声底从未量过"的既有口径下**不判回归**（§一 corpus 行同规矩）。
+- **`ok=178` 那一步不受这次并发影响**（先排除才敢用）：门禁日志里 corpus＋jit 两段在 **10:25:48** 前已落盘，
+  旁路那趟是 **10:27:28** 起的 ⇒ jit 扫描跑在独占窗口内，`ok −2` **不能**用"并发把某个文件顶过 25 s 预算"解释
+  （`timeout=0`、`fail=0`、`segv=0` 三项同侧闭合）。
+- 处置：不重跑全量（成本 13 分钟、且会覆盖这次唯一一份带 md5 落盘的读数），改为**把重叠窗口写进记录**并要求两侧
+  以后"全量门禁跑期间不并发"由发起方自己核对 —— 这条不自修，属**待用户裁决第 9 条**（见 §八）。
+
+### 八、未做、边界与队头
+
+**§四附：bless 后的盘上终态与算术闭合**（`/tmp/b590/bless.log`、`git diff -- tools/baselines/diff_consistency.json`）
+
+- 基线改后＝`{total 601, judged 600, match 564, rate_pct 94.0, match_min 564}`；
+- `by_verdict`：`mismatch 36→32`（−4）、`compile 4→1`（−3）、`runtime 3`、`bad_case 1` 两侧同 ⇒
+  **−4 与 −3 恰好＝清单里的 4 条 mismatch→match ＋ 3 条 compile→match**（逐名：`class_cross_method_str`
+  `class_method_str_concat` `container_neg_index_in_and_ternary` `func_return_str_list` ＋
+  `gen_str_s314159_003` `str_format_method` `str_split_missing`）；
+- `per_cat`：`str 102→105`（＝那三条 `compile→match` 都在 str 类）、`container 216→220`（四条都在 container 类）、
+  truth/numeric/control 三类不动 ⇒ 分桶与逐名两条独立账对到同一个 +7；
+- **`BLESS_RC=2` 已判为存量**：`bad_case del_undefined_var` 那一条在 bless 输出里逐字在场（#5 在册：它让 rc 恒为 2）。
+- **再纯读**（`REREAD_RC`／`diff_reread.log`）：见下表末行。
+
+**§五附＝见 §九**（三趟 `-v` 现场读数、分母闭合与窗口收窄）。
+
+**未做（本批刻意不做的）**
+
+1. **`runtime/*.c` 语义真修**：队头 #211①「全 0 列生产者」与 `str_trim` 族（#145/#165）的自然落点都在
+   `runtime/py_additions.c` ⇒ 按裁定第 ① 件走授权，本批未绕行、未在 Rust 侧按元素类型分叉掩盖。
+2. **全仓 `cargo fmt`**：等裁定第 ② 件（会一次性造出数百行锚点漂移，等于把 590 的重绑成本乘十）。
+3. **不重跑被并发污染的窗口**：见 §七处置条。
+4. **`tools/corpus_baseline.py` 的在途改动**（工作树 50/13）属旁路 tool 车道，未代录、未还原。
+
+**边界（本批读数的适用范围）**
+
+- 17 步读数＝**当前树**（`5251bd19…` 那颗 `zetac`，md5 落 `evidence.log`）；official/python_style 两档与 572 同档，
+  但**归因窗口与旁路重叠**（§七）⇒ 若日后复核，这两步宜以本批自跑值为准，不作"独占窗口"证据引用。
+- 锚点 304/342 的终态只保证"文档引用与代码行号对上"，不保证语义仍是同一段代码 —— 手绑那 2 条用
+  `sed -n '14561p;16495p'` 当场验过内容逐字相同，机械那 50 条由 `--rebind` 的唯一性判据保证。
+- 差分"+7 零回归"的证明用顶层四个数，**没有**用 stdout 截断清单当分母；它只说"非 match 集合纯收缩"，
+  不说收缩掉的 7 条各自修到什么程度（旁路三批各自在册）。
+
+**队头（下一批候选，按已实测损害量）**
+
+1. **#211① 全 0 列生产者定位**（589 实拍：同帧 `high`/`low` 两列 `zero=12858 ptrlike=0`，干净跑读数）——
+   落点大概率要 `runtime/` 授权 ⇒ 先出"两种落点"报告再动手。
+2. **str_trim 最小夹具**（#145/#165）：574/582/589 三批已把机制面收窄到"回收后陈旧句柄 vs 提前回收"未分；
+   夹具臂已被同链兄弟档否证过（见 [[feedback-arm-unreachable-by-small-fixture]]），需从语料 IR 改绑行反查。
+3. **#167① 工具本体**（`find_snippet_lines` 宽容假行号）与 **#52**（锚点核对器看不见裸行号引用）。
+4. **#182 余 57 行**（W1010 三堆）、**t494／#213⑧**、**#48 float repr 方言裁决**。
+5. 节奏：**下一次全量门禁＝主线侧下一个 10 的整数倍那批＝600**。
+
+**待用户裁决（累积 9 条，主线侧不自行裁定）**
+
+① `runtime/*.c` 语义真修的授权面（含旁路 558 先例）；② 全仓 `cargo fmt`；③ 门禁节奏措辞（"每 10 批"与
+旁路并发的关系）；④ 批次号段政策（第 12 次撞车在册）；⑤ `del_undefined_var` 让 diff rc 恒为 2 的永久污染；
+⑥ 台账"收尾口径"不可机械复算；⑦ `#196` 收尾行不计入 plain 计数；⑧ float repr 方言（#48/#190）；
+⑨ **本批新增：全量门禁跑期间的并发纪律由谁核对**（AGENTS 写了"两侧不并发"，但没有指定发起方之外的核对动作；
+本批两次重叠都是旁路侧起的，主线侧只做了落盘取证）。
+
+**提交面（四笔，全部不 push）**
+
+| 笔 | 内容 | 哈希 |
+|---|---|---|
+| ① | `docs(codegen)` 589 §十 入册（roadmap 24085→24112，§十 落在 24068） | `e04f936f`（27/0） |
+| ② | `fix(tools)` 合并面锚点重绑（`docs/ABI.md` 39/39 ＋ `abi_anchors.tsv` 52/52；掩数字后两侧差异 0 行；提交前后 `ANCHOR_RC=0`） | `7b0b82cd` |
+| ③ | `chore(baselines)` 差分基线代录 557→564（`tools/baselines/diff_consistency.json`，numstat 15/15） | `647e402a` |
+| ④ | `docs(codegen)` 本记录批（roadmap 新节 ＋ `worktree.md` 590 行 ＋ `backlog.md` #211 行内折写） | 本笔 |
+
+### 九、jit 归因现场读数（补 §五附／§八）
+
+| 趟 | 二进制（md5 前 8） | 树 | 读数 | 文件 |
+|---|---|---|---|---|
+| pre（590 并入前） | `c724f742` ＝ `zetac_post586` | 586 收尾后 | `ok=178 trap=432 fail=0 timeout=0 segv=0 (total 610)` | `jit_pre.txt` |
+| post（当前树） | `5251bd19` ＝ `zetac` | 590 并面后 | `ok=178 trap=432 fail=0 timeout=0 segv=0 (total 610)` | `jit_post.txt` |
+| 追加定点趟 | `zetac_pre586`（07:39 存件） | 586 并入**前** | `ok=178 trap=432 fail=0 timeout=0 segv=0 (total 610)`，`PRE586_RC=0` | `jit_pre586.txt` |
+
+- **三趟 `-v` 输出逐字节相同**（`cmp jit_pre.txt jit_post.txt` ＝ IDENTICAL、md5 同为 `01abcc48…`；
+  追加趟同为 612 行、聚合行逐字相同）⇒ **本批并入面 587–589 对 jit 零影响**，`ok −2` 与本批无关。
+- **分母不是变量**：`tests/python_style` ＋ `tests/unit-tests` 的 `.z` 名单在 `3ae738f6`（572 那颗）↔ `HEAD`
+  之间**逐字相同**（`comm` 两向差集均空，各 **614** 个 `.z`；扫描口径 `total 610` 两侧同）⇒ 是**两个文件从 ok 移到 trap**，
+  不是夹具增删。
+- **窗口**＝`[572 的 jit 读数（roadmap:23509，ok=180/430/610）, 586 前侧]`；586 之后、590 之前的每一批门禁都带
+  `--skip-jit`（`roadmap:23115`、`:23214`、`:23921` 逐字）⇒ 这条位移**在两个跳过 jit 的合并批之间静默发生**，
+  本批是它第一次被读到。
+- **窗口内没有新增桩文本**：`git diff -U0 3ae738f6..HEAD -- src runtime | grep -E '^\+.*(not implemented|E4016|unavailable_stub|todo!|unimplemented)'`
+  **零命中**；改动面＝`py_additions.c 5/2`、`tokio_runtime_stub.c 126/0`、`expr.rs 87/0`、`gen.rs 179/25`、`resolver.rs 126/12`
+  ⇒ 形状是"路由/降级改了，撞上既有桩"，不是"新加了一条桩"。
+- **未做的半条（如实登记）**：**那两个文件名未逐名取到** —— 572 的 `-v` 清单没落盘（`tools/jit_sweep.sh` 用
+  `mktemp -d /tmp/zeta_jitsweep.XXXXXX` ＋ `trap … EXIT` ＋ `rm -f "$jit_log"`，门禁只留汇总行），
+  现存的 572 侧编译器二进制为零。取法已给出：隔离 worktree 检 `3ae738f6` 自行 `cargo build --release`
+  （自带 `target/`，不与主树争件）后跑 `-v`，与本批 `jit_post.txt` 取 ok 集合差集 ⇒ 恰两名。
+  **本批不新建任务号**（OPEN≤30 的硬约束）：判据侧缺口折写进 `backlog.md` 的 #209 行 ③（那条就是"全量门禁读数里抓到的门禁面小件"），队列备注记在 §八 队头 3。
+- **闸门不受影响**：`ok=178 ≥ 最小 ok=163`、`timeout=0 fail=0 segv=0` ⇒ 门禁判 `GREEN: JIT 无静默崩溃，ok 未回退`。
+
+
 ## 优先级调整（2026-09-24，用户裁定）
 
 
