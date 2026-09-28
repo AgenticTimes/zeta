@@ -1,0 +1,36 @@
+// 批次 623（旁路 cleanup）：super().m(·) 非 init 委托（622 已登记边界）与
+// 显式 `Base.m(self, ·)` 同批收口。方法体内的两类接收者形原先都降成对类
+// 名的接收者分派——`Animal` 解析成类构造器的 FuncAddr、再经裸名 thunk 以
+// 该地址为接收者调 `m`（运行期 rc=139），裸 `super()` 则根本不链接
+// （`_super` 未定义）。parse 现把两形改写为 `PathCall{path:[Base],
+// method: m, args:[self,…]}`＝对限定名基实现的直调：绕开 self 类型的
+// 动态分派（不会递归回覆写方法），链式 C→B→A 自然成立。改写只动方法体
+// （`__init__` 走 init_stmts 的 622 收集，不在此路），实参首为 self 的
+// 基名接收者才改写（带 self 判据防局部变量遮蔽类名误伤）。
+class Animal:
+    def speak(self):
+        return "A"
+class Dog(Animal):
+    def speak(self):
+        return "Dog+" + Animal.speak(self)
+
+class A:
+    def greet(self):
+        return "A"
+class B(A):
+    def greet(self):
+        return "B+" + super().greet()
+class C(B):
+    def greet(self):
+        return "C+" + super().greet()
+
+d = Dog()
+print(d.speak())
+print(Dog().speak())
+c = C()
+print(c.greet())
+print(B().greet())
+// expect: Dog+A
+// expect: Dog+A
+// expect: C+B+A
+// expect: B+A

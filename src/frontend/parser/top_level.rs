@@ -929,9 +929,9 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                 AstNode::FuncDef {
                     name: mname,
                     params,
-                    body,
+                    mut body,
                     ret,
-                    ret_expr,
+                    mut ret_expr,
                     ..
                 },
             )) => {
@@ -989,12 +989,32 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                     } else {
                         "i64".to_string()
                     };
-                    // CRITICAL: keep parse_func's ret_expr. A method whose only
-                    // statement is an ExprStmt (`self.d.pop(key)`, `self.x`) has
-                    // that stmt promoted out of `body` into `ret_expr`. Dropping
-                    // it here left `__delitem__` / one-liner methods as empty
-                    // stubs (ret 0) with no MIR for the call.
-                    methods.push(AstNode::FuncDef {
+    // Batch 623: `super().m(·)` and explicit `Base.m(self, ·)` inside method
+    // bodies — rewrite to `PathCall { path: [Base], method: m }` so the
+    // lowering emits a DIRECT call to the qualified base implementation
+    // (`Base::m`) with self as the first argument. Both forms previously
+    // lowered as receiver dispatches on the class NAME (`Animal` resolved to
+    // the class's ctor FuncAddr, then `.speak` dispatched through the bare
+    // name thunk with that address as the receiver — rc=139), and `super()`
+    // didn't resolve at all (`_super` undefined at link time). Direct
+    // dispatch also sidesteps re-finding the overriding method on self's
+    // type (infinite recursion). `__init__` bodies do NOT pass through here
+    // (they flow to `init_stmts` for the batch-622 baseargs collection
+    // before the whitelist drops them).
+    if !base_list.is_empty() {
+        for st in &mut body {
+            rewrite_super_in_stmt(st, &base_list);
+        }
+        if let Some(re) = &mut ret_expr {
+            rewrite_super_in_expr(re, &base_list);
+        }
+    }
+    // CRITICAL: keep parse_func's ret_expr. A method whose only
+    // statement is an ExprStmt (`self.d.pop(key)`, `self.x`) has
+    // that stmt promoted out of `body` into `ret_expr`. Dropping
+    // it here left `__delitem__` / one-liner methods as empty
+    // stubs (ret 0) with no MIR for the call.
+    methods.push(AstNode::FuncDef {
                         name: mname,
                         generics: Vec::new(),
                         lifetimes: Vec::new(),
@@ -2499,4 +2519,147 @@ fn is_top_level_sync_line(trimmed: &str) -> bool {
         }
     }
     false
+}
+
+// Batch 623: `super().m(·)` / `Base.m(self, ·)` delegation inside method
+// bodies. Rewritten to `PathCall { path: [Base], method: m, args }` so the
+// lowering emits a direct call to the qualified base implementation
+// (`Base::m`) — the receiver forms instead lowered the class NAME to its
+// ctor FuncAddr and dispatched through the bare-name thunk with that
+// address as the receiver (rc=139), and a bare `super()` didn't link at
+// all (`_super` undefined). Only super() delegations and base-name
+// receivers whose first argument is `self` are rewritten; everything else
+// recurses untouched.
+
+fn is_super_zero_call(e: &AstNode) -> bool {
+    matches!(e, AstNode::Call { receiver: None, method, args, .. }
+        if method == "super" && args.is_empty())
+}
+
+fn rewrite_super_in_stmt(st: &mut AstNode, bases: &[String]) {
+    match st {
+        AstNode::ExprStmt { expr } => rewrite_super_in_expr(expr, bases),
+        AstNode::Assign(lhs, rhs) => {
+            rewrite_super_in_expr(lhs, bases);
+            rewrite_super_in_expr(rhs, bases);
+        }
+        AstNode::AssignOp { target, value, .. } => {
+            rewrite_super_in_expr(target, bases);
+            rewrite_super_in_expr(value, bases);
+        }
+        AstNode::Return(val) => rewrite_super_in_expr(val, bases),
+        AstNode::If { cond, then, else_ } => {
+            rewrite_super_in_expr(cond, bases);
+            for s in then.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+            for s in else_.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+        }
+        AstNode::While {
+            cond,
+            body,
+            else_body,
+        } => {
+            rewrite_super_in_expr(cond, bases);
+            for s in body.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+            for s in else_body.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+        }
+        AstNode::For {
+            pattern,
+            expr,
+            body,
+            else_body,
+        } => {
+            rewrite_super_in_expr(pattern, bases);
+            rewrite_super_in_expr(expr, bases);
+            for s in body.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+            for s in else_body.iter_mut() {
+                rewrite_super_in_stmt(s, bases);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_super_in_expr(e: &mut AstNode, bases: &[String]) {
+    // First rewrite children, then consider this node.
+    match e {
+        AstNode::Call { receiver, args, .. } => {
+            if let Some(rc) = receiver {
+                rewrite_super_in_expr(rc, bases);
+            }
+            for a in args.iter_mut() {
+                rewrite_super_in_expr(a, bases);
+            }
+        }
+        AstNode::PathCall { args, .. } => {
+            for a in args.iter_mut() {
+                rewrite_super_in_expr(a, bases);
+            }
+        }
+        AstNode::BinaryOp { left, right, .. } => {
+            rewrite_super_in_expr(left, bases);
+            rewrite_super_in_expr(right, bases);
+        }
+        AstNode::UnaryOp { expr: inner, .. } => rewrite_super_in_expr(inner, bases),
+        AstNode::FieldAccess { base, .. } => rewrite_super_in_expr(base, bases),
+        AstNode::FString(parts) | AstNode::ArrayLit(parts) | AstNode::Tuple(parts) => {
+            for p in parts.iter_mut() {
+                rewrite_super_in_expr(p, bases);
+            }
+        }
+        AstNode::DictLit { entries } => {
+            for (k, v) in entries.iter_mut() {
+                rewrite_super_in_expr(k, bases);
+                rewrite_super_in_expr(v, bases);
+            }
+        }
+        _ => {}
+    }
+    // The rewrite itself: `super().m(a)` → `Base::m(self, a)`, and
+    // `Base.m(self, a)` (already spelled explicitly) → the same PathCall.
+    if let AstNode::Call {
+        receiver: Some(rc),
+        method: m,
+        args,
+        type_args,
+        ..
+    } = e
+    {
+        let target: Option<String> = if is_super_zero_call(rc) {
+            bases.first().cloned()
+        } else if let AstNode::Var(v) = &**rc {
+            if bases.iter().any(|b| b == v) {
+                Some(v.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let self_first = matches!(args.first(), Some(AstNode::Var(sv)) if sv == "self");
+        if let Some(base) = target {
+            if self_first || is_super_zero_call(rc) {
+                let mut new_args: Vec<AstNode> = Vec::with_capacity(args.len() + 1);
+                if !self_first {
+                    new_args.push(AstNode::Var("self".to_string()));
+                }
+                new_args.extend(args.drain(..));
+                *e = AstNode::PathCall {
+                    path: vec![base],
+                    method: m.clone(),
+                    args: new_args,
+                    type_args: type_args.clone(),
+                };
+            }
+        }
+    }
 }
