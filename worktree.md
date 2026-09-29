@@ -189,6 +189,7 @@
 | 652 | bootstrap | len() 对动态数组值返回正确长度（主线 409 (a)①②）：classify() 加 ArrayLit/DynamicArrayLit 分支＋zeta_dyn_len 注册 | 快门禁：official 194/194·191/194、python_style 420/3/6/0（红源仍 t231/t233/t404，t404 基线已失败非回归） | 已入册 |
 | 653 | bootstrap | print/repr 对 PyDynamic 值的派发（主线 #117）：新增 `zeta_dyn_to_string` 运行期函数（`runtime/py_additions.c`），用 GC 几何探针（`zt_dyn_is_map`→`zt_dyn_vec_hdr`→`zt_c_readable`→整型兜底）判别动态句柄实际类型后转字符串；`gen.rs` 三处（print 多参/println 单参/repr）在类型派发前插入转换调用，将 `Type::PyDynamic` 提升为 `Type::Str` 后走既有字符串路径；新用例 t497 | 快门禁：official 194/194·191/194、python_style 421/3/6/0（红源仍 t231/t233/t404，+1 用例＝t497） | 已入册 |
 | 654 | bootstrap | str % value 格式化（主线 #117 动态槽列表侧）：`gen.rs` 拦截 `op=="%"` + `left==Str` 走新运行期函数 `zeta_str_percent_fmt`（解析格式串、%s/%r 经 `zeta_dyn_to_string`、%d/%i 走 snprintf、%f 走 double 重解释、%% 字面量）；元组 rhs 经 `zt_dyn_vec_hdr` 解包（元组与动态数组共享 `[cap|len|elems...]` 布局）；`codegen.rs` 注册函数声明（arity 2）；摘钉 t401/t513 | 快门禁：official 194/194·191/194、python_style 421/3/6/0（红源仍 t231/t233/t404，−2 钉＝t401/t513） | 已入册 |
+| 655 | bootstrap | print(3 and None) 渲染 "None"（t507）：`gen.rs` print 参数循环顶部新增 `and_or_select_is_none` 检查（批次 635 handler 之前），静态判定 AND/OR 选中 NoneLit 时替换为 `StringLit("None")` 走 `println_str`；摘钉 t507 | 快门禁：official 194/194·191/194、python_style 422/3/5/0（红源仍 t231/t233/t404，−1 钉＝t507） | 已入册 |
 | （续） | | | | |
 
 ## 5. Agent-2 旁路台账（ZCode 维护；cleanup）

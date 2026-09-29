@@ -25479,3 +25479,29 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 代码改动优先：本批主体是真实代码修复（3 文件 108 行），测试夹具摘钉随批附带
 - 门禁读数入册：official 194/194·191/194、python_style 421/3/6/0 逐项记录
 - t404 回归排查：确认其 known-fail 标记完好＋批次 284 入册，非本批引入
+
+## 批次 655 —— print(3 and None) 渲染 "None"（t507）
+
+**提交**：`7a8b18e0`（bootstrap 分支）
+
+**问题**：`print(3 and None)` 打出 `0` 而非 CPython 的 `None`。None 词法降级为 `Lit(0)`（BR-L09），AND/OR 选中 None 后结果是 I64 0，print 按整数路径渲染。
+
+**根因**：print 参数降级循环里，批次 635 的 AND/OR 分 handler（gen.rs:10157）拦截所有 `BinaryOp { op: "&&"|"||" }` 参数。当 right 不是 Bool 型（None 是 I64）时 `split_worthy = false`，走 `arg_ids.push(self.lower_expr(a)); continue;`——`continue` 跳过了后面的 NoneLit 检查。`3 and None` 被正常降级为 I64 0，print 走 `println_i64` ⇒ 打 `0`。
+
+**修法**（1 文件，47 行增改）：
+1. **gen.rs**（print 参数循环顶部，批次 635 handler 之前）：新增 `and_or_select_is_none(a)` 检查——静态判定 AND/OR 的选中操作数是否为 NoneLit，是则替换为 `StringLit("None")`（Type::Str），走 `println_str` 路径
+2. **gen.rs**（辅助方法 `and_or_select_is_none`）：根据左操作数静态真值与运算符判定选中侧：`&&` + 左真 ⇒ 选右；`&&` + 左假 ⇒ 选左；`||` + 左假 ⇒ 选右；`||` + 左真 ⇒ 选左。选中侧为 `NoneLit` 则返回 true
+3. **t507**：摘除 known-fail 注释
+
+**验证**：
+- t507 三行输出：`True` / `None` / `5` ✓（改前 `True` / `0` / `5`）
+
+**门禁**（快门禁，改动面 = src/middle）：
+- official：compile 194/194, pass 191/194（3 条存量 link-only 失败，与基线相同）
+- python_style：422 passed, 3 failed（t231/t233/t404 全存量），5 known-fail, 0 xpass
+- 对比批次 652 基线（420/3/6/0）：+2 passed（t507 摘钉＋批次 654 的 t401/t513 摘钉在上一批未计入基线读数）、−1 known-fail（t507）
+
+**纪律自查**：
+- 代码改动优先：本批主体是真实代码修复（gen.rs 47 行），测试夹具摘钉随批附带
+- 门禁读数入册：official 194/194·191/194、python_style 422/3/5/0 逐项记录
+- 存量红源未动：t231/t233/t404 与基线逐字相同
