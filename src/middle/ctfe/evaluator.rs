@@ -128,11 +128,18 @@ impl ConstEvaluator {
                         Some((l, lb))
                     };
                 }
-                /* Python CHAINED comparisons: `a < b != c` ==
-                   (a < b) and (b != c). The parse nests left, so a
-                   comparison whose LEFT is another comparison is a chain:
-                   evaluate (a, mid) with the inner op and (mid, c) with
-                   this op. */
+                /* Batch 665: comparisons fold with VALUE semantics —
+                   `(a == b) > c` compares the INNER BOOL with c, exactly
+                   like the runtime's left-associated lowering. The former
+                   chained-comparison heuristic (`a < b != c` ≡ (a < b) and
+                   (b != c)) misfired on PARENTHESIZED comparisons — the
+                   AST cannot distinguish the two spellings, and the
+                   runtime itself has no chain support, so the heuristic
+                   made the fold and the runtime DISAGREE on the same
+                   source: `(-5 == 0) > -16` folded to False while the
+                   un-folded path answered True (gen_numeric_s664202_001).
+                   Real Python chains need a parser-level chain node —
+                   registered, not foldable here. */
                 if matches!(
                     op.as_str(),
                     "<" | ">" | "<=" | ">=" | "==" | "!="
@@ -151,28 +158,6 @@ impl ConstEvaluator {
                                 true,
                             ))
                         };
-                    if let AstNode::BinaryOp {
-                        op: op2,
-                        left: l2,
-                        right: r2,
-                    } = &**left
-                    {
-                        if matches!(
-                            op2.as_str(),
-                            "<" | ">" | "<=" | ">=" | "==" | "!="
-                        ) {
-                            let (a, _) = self.eval_i128_tree(l2, depth + 1)?;
-                            let (mid, _) = self.eval_i128_tree(r2, depth + 1)?;
-                            let (c, _) = self.eval_i128_tree(right, depth + 1)?;
-                            let r1 = apply(op2, a, mid)?;
-                            let r2r = apply(op, mid, c)?;
-                            return if r1.0 == 1 && r2r.0 == 1 {
-                                Some((1, true))
-                            } else {
-                                Some((0, true))
-                            };
-                        }
-                    }
                     let (a, _) = self.eval_i128_tree(left, depth + 1)?;
                     let (b, _) = self.eval_i128_tree(right, depth + 1)?;
                     return apply(op, a, b);

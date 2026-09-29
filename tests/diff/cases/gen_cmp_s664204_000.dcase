@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=664204 #0）
+#@@ python
+print(not 71)
+print(933 > 938 >= 380)
+print(39 < 965 != 625)
+
+#@@ zeta
+print(not 71)
+print(933 > 938 >= 380)
+print(39 < 965 != 625)
+
