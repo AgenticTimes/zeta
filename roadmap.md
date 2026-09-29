@@ -25446,3 +25446,36 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 代码改动优先：本批主体是真实代码修复（3 文件 40 行），测试夹具随批附带
 - 门禁读数入册：official 194/194·191/194、python_style 420/3/6/0 逐项记录
 - t404 回归排查：先 stash 改动测基线确认是存量失败，再恢复改动继续推进
+
+## 批次 654 —— str % value 格式化（#117 动态槽列表侧）
+
+**提交**：`9ff68eec`（bootstrap 分支）
+
+**问题**：`"f=%s" % d["name"]` 编译通过、退出 0，但打出句柄整数（如 13）而不是 `abc`；`"n=%d" % 42` 同样输出垃圾值。五种 `%` 格式化形态全错（批次 511 定性，简报 ⑭）。
+
+**根因**：`str % value` 在 `gen.rs` BinaryOp 链中无专用处理。`op == "%"` 落入通用 `MirStmt::Call { func: "%" }`，被 codegen 的 `is_operator` 捕获后走 `build_floormod_int`——对字符串指针和值句柄做整数取模，产出垃圾。
+
+**修法**（3 文件，108 行增改）：
+1. **gen.rs**（string repeat `*` 臂后新增 else-if）：拦截 `op == "%"` + `left == Type::Str`，生成 `MirStmt::Call { func: "zeta_str_percent_fmt", args: [left, right] }`，目标类型钉为 `Type::Str`
+2. **codegen.rs**（:990 注册循环）：加 `("zeta_str_percent_fmt", 2)` 声明（i64 × 2 → i64）
+3. **runtime/py_additions.c**（`zeta_dyn_to_string` 后新增 85 行）：
+   - 统计格式串中 `%` 说明符个数
+   - 用 `zt_dyn_vec_hdr(value)` 判定 rhs 是否为元组/数组（共享 `[cap|len|elems...]` 布局）
+   - 逐字符扫描格式串：`%s`/`%r` 走 `zt_c_readable` 直通或 `zeta_dyn_to_string` 转换；`%d`/`%i` 走 `snprintf("%lld")`；`%f` 走 `memcpy` 重解释为 `double`；`%%` 输出字面 `%`
+   - 输出缓冲 `GC_malloc_atomic`，最终 `GC_strdup` 返回
+
+**验证**：
+- t401（`"f=%s" % d["name"]`）：`f=abc` ✓（改前打句柄整数）
+- t513（`"n=%d" % 42`、`"%s-%s" % ("a", "b")`）：`n=42` / `a-b` ✓（改前全错）
+- 两颗夹具摘除 known-fail 注释
+
+**门禁**（快门禁，改动面 = src/middle + src/backend + runtime）：
+- official：compile 194/194, link 191/194（3 条存量 link-only 失败，与基线相同）
+- python_style：421 passed, 3 failed（t231/t233/t404 全存量），6 known-fail, 0 xpass
+- t404 在基线已失败（`known-fail` 标记完好），非本批引入的回归
+- 二进制 md5：`54e3bb80664453f65885eb6f155092d7`
+
+**纪律自查**：
+- 代码改动优先：本批主体是真实代码修复（3 文件 108 行），测试夹具摘钉随批附带
+- 门禁读数入册：official 194/194·191/194、python_style 421/3/6/0 逐项记录
+- t404 回归排查：确认其 known-fail 标记完好＋批次 284 入册，非本批引入
