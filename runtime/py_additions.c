@@ -42,11 +42,45 @@ int64_t str_eq(int64_t a, int64_t b) {
 }
 int64_t host_str_eq(int64_t a, int64_t b) { return str_eq(a, b); }
 
-// str(f64) — %g keeps Python's compact float repr ("2.5", not "2.500000")
+// str(f64) — CPython repr: the SHORTEST decimal string that round-trips
+// (batch 639, user-sanctioned layer release; 610/611 design). %g alone
+// caps at 6 significant digits ("0.333333"); we try %.{1..17}g and take
+// the first whose strtod round-trips, then add ".0" for integral values
+// (CPython repr(518880.0) == "518880.0", %g gives "518880").
+static char* zt_f64_repr(double v) {
+    char* s = (char*)GC_malloc(48);
+    if (v != v) { snprintf(s, 48, "nan"); return s; }
+    if (v - v != 0) { snprintf(s, 48, v > 0 ? "inf" : "-inf"); return s; }
+    int prec = 17;
+    for (int p = 1; p <= 17; p++) {
+        snprintf(s, 48, "%.*g", p, v);
+        if (strtod(s, NULL) == v) { prec = p; break; }
+    }
+    char* e = strchr(s, 'e');
+    if (e) {
+        /* CPython repr uses scientific only outside [-4, 16); inside,
+           re-render fixed at the same precision and trim trailing zeros
+           (%g switched to e-form at exp >= prec, e.g. 518880 -> "5.1888e+05"). */
+        int exp = atoi(e + 1);
+        if (exp >= -4 && exp < 16) {
+            snprintf(s, 48, "%.*f", prec, v);
+            char* dot = strchr(s, '.');
+            if (dot) {
+                char* end = s + strlen(s) - 1;
+                while (end > dot && *end == '0') *end-- = 0;
+                if (*end == '.') { end[1] = '0'; end[2] = 0; }
+            }
+        }
+    } else if (!strchr(s, '.') && !strchr(s, 'n') && !strchr(s, 'i')
+               && v > -1e16 && v < 1e16) {
+        size_t n = strlen(s);
+        s[n] = '.'; s[n + 1] = '0'; s[n + 2] = 0;
+    }
+    return s;
+}
+
 int64_t to_string_f64(double v) {
-    char* s = (char*)GC_malloc(32);
-    snprintf(s, 32, "%g", v);
-    return (int64_t)s;
+    return (int64_t)zt_f64_repr(v);
 }
 
 // str_split(s, sep) — Python s.split(sep): returns a Vec-layout handle
@@ -885,10 +919,15 @@ int64_t py_fmt_f64(double v, int64_t spec) {
     char cfmt[24];
     if (f.has_precision) {
         snprintf(cfmt, sizeof cfmt, "%%%s.%d%c", sfl, f.precision, t);
-    } else if (t == 'f' || t == 'F') {
-        snprintf(cfmt, sizeof cfmt, "%%%s.6%c", sfl, t); /* Python's default float repr */
+    } else if (!f.type) {
+        /* Batch 639: the EMPTY spec (no type, no precision) is repr —
+           shortest round-trip. An EXPLICIT `f` keeps Python's .6f fixed
+           form (format(2.71828, '>8f') == ' 2.718280'). */
+        char* r = zt_f64_repr(v);
+        snprintf(body, sizeof body, "%s", r);
+        return zt_fmt_pad(body, &f);
     } else {
-        snprintf(cfmt, sizeof cfmt, "%%%s%c", sfl, t);
+        snprintf(cfmt, sizeof cfmt, "%%%s.6%c", sfl, t);
     }
     snprintf(body, sizeof body, cfmt, v);
     if (f.group) {
