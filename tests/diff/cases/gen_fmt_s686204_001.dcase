@@ -1,0 +1,10 @@
+# @cat: str
+# @note: 随机 f-string 规格（seed=686204 #1）
+#@@ python
+x = 65
+print(f"{x:*^+6o}")
+
+#@@ zeta
+x = 65
+print(f"{x:*^+6o}")
+

@@ -1,0 +1,18 @@
+# @cat: container
+# @note: 随机容器（seed=686105 #0）—— CPython 先验通过
+#@@ python
+d = {"dd": -265, "key1": 278, "b": 96}
+print(len(d))
+print(d["b"])
+d["key1"] = 85
+print(d["key1"])
+print("key1" in d)
+
+#@@ zeta
+d = {"dd": -265, "key1": 278, "b": 96}
+print(len(d))
+print(d["b"])
+d["key1"] = 85
+print(d["key1"])
+print("key1" in d)
+
