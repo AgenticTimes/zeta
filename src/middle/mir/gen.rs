@@ -9602,6 +9602,27 @@ call, no NULL-handle dereference).",
                         self.type_map.insert(id, Type::Named("map".to_string(), vec![]));
                         return id;
                     }
+                    /* Batch 661: an argument NOT statically a map (t231's
+                       `def copy_dict(x): return dict(x)` — untyped param)
+                       used to fall through to the compile-time `_dict`
+                       ghost (loud unimplemented abort). The runtime ctor
+                       routes through map_resolve, whose pre-load guard
+                       raises loudly on a non-dict handle (Python
+                       TypeError parity) — copy-when-map is honest here. */
+                    let fresh = self.next_id();
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_dict_ctor".to_string(),
+                        args: vec![src_id],
+                        dest: fresh,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(fresh, MirExpr::Var(fresh));
+                    self.type_map
+                        .insert(fresh, Type::Named("map".to_string(), vec![]));
+                    self.exprs.insert(id, MirExpr::Var(fresh));
+                    self.type_map
+                        .insert(id, Type::Named("map".to_string(), vec![]));
+                    return id;
                 }
                 // PY-A: `zip(a, b)` — a Vec of (a[i], b[i]) pairs, so
                 // `for x, y in zip(a, b):` destructures. (Previously a bare

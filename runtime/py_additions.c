@@ -386,6 +386,24 @@ static int64_t zt_key_display(int64_t key) {
 // the display text that map_keys hands back) matters: string-keyed maps store
 // content hashes, and a later d["k"] lookup goes through map_str_key, so
 // re-inserting display text would never be found.
+/* Batch 661: `dict(x)` with an argument not statically a map — CPython's
+   constructor. The old gen route kept the compile-time `_dict` ghost for
+   anything but a statically-typed map (t231's `def copy_dict(x):
+   return dict(x)` never linked). map_resolve is the one place that can
+   say "that handle was never a dict" BEFORE the first load (loud,
+   catchable raise — the Python TypeError parity), so copy-when-map is
+   honest for dynamic arguments too. */
+int64_t py_map_update(int64_t dst, int64_t src);
+
+int64_t py_dict_ctor(int64_t x) {
+    int64_t fresh = map_new();
+    if (x) {
+        int64_t m = map_resolve(x);
+        py_map_update(fresh, m);
+    }
+    return fresh;
+}
+
 int64_t py_map_update(int64_t dst, int64_t src) {
     dst = map_resolve(dst);
     src = map_resolve(src);
