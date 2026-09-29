@@ -217,9 +217,19 @@ pub fn parse_lit(input: &str) -> IResult<&str, AstNode> {
     let num_str = &input[..pos];
     let remaining = &input[pos..];
 
-    // Remove underscores and parse as i64
+    // Remove underscores and parse as i64. A literal beyond i64 keeps its
+    // full value as a BigIntLit (batch 647 — i128 covers every registered
+    // case per the 640 分布; beyond i128 stays the historical clamp-to-0).
     let clean_num: String = num_str.chars().filter(|c| c.is_ascii_digit()).collect();
-    let value = clean_num.parse::<i64>().unwrap_or(0);
+    let value = match clean_num.parse::<i64>() {
+        Ok(v) => v,
+        Err(_) => {
+            if let Ok(v128) = clean_num.parse::<i128>() {
+                return Ok((remaining, AstNode::BigIntLit(v128.to_string())));
+            }
+            0
+        }
+    };
 
     // Consume optional type suffix (e.g. `42i64`, `42u32`, `42f64`). The
     // suffix is type annotation only — value stays the same. Without this,

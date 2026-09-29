@@ -147,6 +147,10 @@ pub enum AstNode {
     Spawn { func: String, args: Vec<AstNode> },
     /// Integer literal value.
     Lit(i64),
+    /// Batch 647: an integer literal beyond i64 — kept as full decimal text
+    /// (i128 covers every registered case; 640 分布实拍 22/22 ≤127 位).
+    /// Lowered to a `Named("BigInt")` slot via the zeta_big runtime family.
+    BigIntLit(String),
     /// Python `None` literal (batch 624). Renders as "None" through
     /// print/str literal faces; value-wise it still carries 0 (the
     /// representation-level None is #113/#189 deep water).

@@ -3157,7 +3157,9 @@ int64_t zeta_py_from(int64_t module, int64_t member, int64_t alias) {
 // constructors/extractors. Overflowing i64 arithmetic boxes through
 // zeta_big_from_i64 at the gen-side promotion point (batch 642+).
 
-static int64_t zeta_big_new(int64_t lo, int64_t hi) {
+/* Batch 647: exported — the generated code constructs big handles directly
+   from BigIntLit literals ([lo|hi] halves split at compile time). */
+int64_t zeta_big_new(int64_t lo, int64_t hi) {
     int64_t* b = (int64_t*)GC_malloc(16);
     b[0] = lo;
     b[1] = hi;

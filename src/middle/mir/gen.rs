@@ -4851,6 +4851,25 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 self.exprs.insert(id, MirExpr::IntLit(0));
                 self.type_map.insert(id, Type::I64);
             }
+            AstNode::BigIntLit(text) => {
+                // Batch 647: a beyond-i64 literal lowers to the zeta_big
+                // runtime handle ([lo|hi] 16-byte GC block, batch 641),
+                // statically typed Named("BigInt") — arithmetic on it
+                // routes through the big family, print/str render via
+                // zeta_big_to_string.
+                let v: i128 = text.parse().unwrap_or(0);
+                let lo = self.int_slot(v as i64);
+                let hi = self.int_slot((v >> 64) as i64);
+                self.stmts.push(MirStmt::Call {
+                    func: "zeta_big_new".to_string(),
+                    args: vec![lo, hi],
+                    dest: id,
+                    type_args: vec![],
+                });
+                self.exprs.insert(id, MirExpr::Var(id));
+                self.type_map
+                    .insert(id, Type::Named("BigInt".to_string(), vec![]));
+            }
             AstNode::StringLit(s) => {
                 self.exprs.insert(id, MirExpr::StringLit(s.clone()));
                 self.type_map.insert(id, Type::Str);
@@ -5046,6 +5065,105 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 let left_id = self.lower_expr(left);
                 let right_id = self.lower_expr(right);
                 let dest = self.next_id();
+                /* Batch 647: BigInt arithmetic — either operand carrying the
+                   Named("BigInt") type routes the whole op through the
+                   zeta_big family (the other side is boxed from I64). The
+                   result stays a BigInt handle; comparisons yield Bool. */
+                let big_arm = matches!(
+                    self.type_map.get(&left_id),
+                    Some(Type::Named(n, _)) if n == "BigInt"
+                ) || matches!(
+                    self.type_map.get(&right_id),
+                    Some(Type::Named(n, _)) if n == "BigInt"
+                );
+                if big_arm {
+                    if matches!(op.as_str(), "/" | "%" | "floordiv") {
+                        /* Python truediv on a BigInt is a float — the
+                           runtime family has no big-div yet: abstain. */
+                        self.type_map.insert(dest, Type::I64);
+                        return dest;
+                    }
+                    let box_side = |side: u32, g: &mut Self| -> u32 {
+                        match g.type_map.get(&side) {
+                            Some(Type::Named(n, _)) if n == "BigInt" => side,
+                            _ => {
+                                let b = g.next_id();
+                                g.stmts.push(MirStmt::Call {
+                                    func: "zeta_big_from_i64".to_string(),
+                                    args: vec![side],
+                                    dest: b,
+                                    type_args: vec![],
+                                });
+                                g.exprs.insert(b, MirExpr::Var(b));
+                                g.type_map.insert(
+                                    b,
+                                    Type::Named("BigInt".to_string(), vec![]),
+                                );
+                                b
+                            }
+                        }
+                    };
+                    let bl = box_side(left_id, self);
+                    let br = box_side(right_id, self);
+                    let is_cmp = matches!(
+                        op.as_str(),
+                        "<" | ">" | "<=" | ">=" | "==" | "!="
+                    );
+                    if is_cmp {
+                        let c = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_big_cmp".to_string(),
+                            args: vec![bl, br],
+                            dest: c,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(c, MirExpr::Var(c));
+                        self.type_map.insert(c, Type::I64);
+                        let zero = self.next_id_with_lit(0);
+                        let ord = match op.as_str() {
+                            "<" => "<",
+                            ">" => ">",
+                            "<=" => "<=",
+                            ">=" => ">=",
+                            "==" => "==",
+                            _ => "!=",
+                        };
+                        self.exprs.insert(
+                            dest,
+                            MirExpr::BinaryOp {
+                                op: ord.to_string(),
+                                left: c,
+                                right: zero,
+                            },
+                        );
+                        self.type_map.insert(dest, Type::Bool);
+                        return dest;
+                    }
+                    let sym = match op.as_str() {
+                        "+" => "zeta_big_add",
+                        "-" => "zeta_big_sub",
+                        "*" => "zeta_big_mul",
+                        "<<" => "zeta_big_shl",
+                        ">>" => "zeta_big_shr",
+                        "|" => "zeta_big_or",
+                        "&" => "zeta_big_and",
+                        "^" => "zeta_big_xor",
+                        _ => {
+                            self.type_map.insert(dest, Type::I64);
+                            return dest;
+                        }
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: sym.to_string(),
+                        args: vec![bl, br],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map
+                        .insert(dest, Type::Named("BigInt".to_string(), vec![]));
+                    return dest;
+                }
                 /* Batch 645: a LITERAL zero divisor on `/` makes the 554
                    raise unconditional — the division never executes, so its
                    result slot types I64 (the except branch's integer write
@@ -9859,6 +9977,24 @@ call, no NULL-handle dereference).",
                         return id;
                     }
                     let arg_id = self.lower_expr(&args[0]);
+                    // Batch 647: `str(<BigInt>)` renders the decimal value.
+                    if matches!(
+                        self.type_map.get(&arg_id),
+                        Some(Type::Named(n, _)) if n == "BigInt"
+                    ) {
+                        let nid = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_big_to_string".to_string(),
+                            args: vec![arg_id],
+                            dest: nid,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(nid, MirExpr::Var(nid));
+                        self.type_map.insert(nid, Type::Str);
+                        self.exprs.insert(id, MirExpr::Var(nid));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
                     // Batch 626: `str(<list>)` — the same CPython repr the
                     // print face renders (py_json_dumps_vec_typed, batches
                     // 557/565). lower_to_string on a vec handle printed the
@@ -10192,6 +10328,23 @@ call, no NULL-handle dereference).",
                                 continue;
                             }
                         }
+                        // Batch 647: a BigInt operand (handle or var slot
+                        // typed BigInt) renders via zeta_big_to_string —
+                        // pushed as a Str arg id like the NoneLit face.
+                        if matches!(a, AstNode::BigIntLit(_)) {
+                            let lhs0 = self.lower_expr(a);
+                            let sid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_big_to_string".to_string(),
+                                args: vec![lhs0],
+                                dest: sid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(sid, MirExpr::Var(sid));
+                            self.type_map.insert(sid, Type::Str);
+                            arg_ids.push(sid);
+                            continue;
+                        }
                         // Batch 624: `print(None)` literal face renders
                         // "None" (value representation stays 0).
                         if matches!(a, AstNode::NoneLit) {
@@ -10239,6 +10392,28 @@ call, no NULL-handle dereference).",
                         // printed raw element words.
                         // a BARE pair value (`print(e[0])`) — same spelling
                         // for a single pair.
+                        // Batch 647: a BigInt-typed value (literal or the
+                        // result of big arithmetic) renders its decimal value.
+                        if matches!(
+                            self.type_map.get(arg_id),
+                            Some(Type::Named(n, _)) if n == "BigInt"
+                        ) {
+                            let sid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_big_to_string".to_string(),
+                                args: vec![*arg_id],
+                                dest: sid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(sid, MirExpr::Var(sid));
+                            self.type_map.insert(sid, Type::Str);
+                            let f = if is_last { "println_str" } else { "print_str" };
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: f.to_string(),
+                                args: vec![sid],
+                            });
+                            continue;
+                        }
                         if let Some(Type::Tuple(ts)) = self.type_map.get(arg_id).cloned() {
                             if ts.len() == 2 {
                                 let kid = self.next_id_with_lit(matches!(ts[0], Type::Str) as i64);

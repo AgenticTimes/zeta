@@ -1,0 +1,33 @@
+// 批次 647（旁路 cleanup）：bigint 运行期首批（640 施工序③④最小切片）。
+// 超 i64 字面量解析为 BigIntLit（i128 承载，640 分布 22/22 ≤127 位）⇒ 槽
+// 记 Named("BigInt")、值走 zeta_big 句柄（[lo|hi] 16 字节 GC 块，641 族）；
+// 模块级常量赋值经 ctfe 求值越界时 rhs 改写 BigIntLit（b = 1 << 100 的
+// 运行期槽由此持有句柄而非 wrap 0）；算术任一操作数为 BigInt ⇒ 全式走
+// zeta_big_add/sub/mul/shl/shr/or/and/xor（另一侧 from_i64 装箱），比较走
+// zeta_big_cmp；print/str 按 Named("BigInt") 经 zeta_big_to_string 渲染。
+// 边界（不在本夹具）：循环体内常量折叠禁用（642 守卫）⇒ 循环内溢出仍
+// wrap＝gen BinaryOp 溢出提升续批；BigInt truediv 弃权（无 big-div）；
+// 超 i128 字面量仍 clamp 0（响亮不变，历史行为）。
+a = 1267650600228229401496703205376
+print(a)
+print(a + 1)
+print(a * 2)
+print(a - 1)
+print(a < 2)
+print(a > 2)
+print(a | 1)
+b = 1 << 100
+print(b)
+c = a + b
+print(c)
+print(str(a))
+// expect: 1267650600228229401496703205376
+// expect: 1267650600228229401496703205377
+// expect: 2535301200456458802993406410752
+// expect: 1267650600228229401496703205375
+// expect: False
+// expect: True
+// expect: 1267650600228229401496703205377
+// expect: 1267650600228229401496703205376
+// expect: 2535301200456458802993406410752
+// expect: 1267650600228229401496703205376

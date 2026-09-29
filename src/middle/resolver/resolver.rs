@@ -1862,6 +1862,9 @@ impl Resolver {
             AstNode::FloatLit(_) => Some(Type::F64),
             AstNode::Bool(_) => Some(Type::Bool),
             AstNode::Lit(_) => Some(Type::I64),
+            // Batch 647: a beyond-i64 literal types the global BigInt —
+            // reads route through the zeta_big runtime family.
+            AstNode::BigIntLit(_) => Some(Type::Named("BigInt".to_string(), vec![])),
             AstNode::DictLit { entries } => Some(Type::Named(
                 "map".to_string(),
                 match entries.first() {

@@ -550,6 +550,23 @@ impl ConstEvaluator {
         // NOT inside loop/conditional bodies (p642_depth).
         if self.p642_depth == 0 {
             self.note_i128_assign(node);
+            // Batch 647: a module-level (non-loop) assignment whose i128
+            // value exceeds i64 rewrites its rhs to a BigIntLit — the slot
+            // then holds a zeta_big handle at runtime, arithmetic promotes,
+            // print/str render by type (the 642 fold only covered prints).
+            if let AstNode::Assign(lhs, rhs) = node {
+                if let AstNode::Var(x) = &**lhs {
+                    if let Some((v, false)) = self.eval_i128_tree(rhs, 0) {
+                        if v > i64::MAX as i128 || v < i64::MIN as i128 {
+                            let rewritten = AstNode::Assign(
+                                lhs.clone(),
+                                Box::new(AstNode::BigIntLit(v.to_string())),
+                            );
+                            return Ok(rewritten);
+                        }
+                    }
+                }
+            }
             if let Some(rewritten) = self.rewrite_big_print(node) {
                 return Ok(rewritten);
             }
@@ -558,6 +575,9 @@ impl ConstEvaluator {
             // Batch 624: `None` literal — value-wise it stays 0 (the
             // representation-level None is #113/#189 deep water).
             AstNode::NoneLit => Ok(AstNode::Lit(0)),
+            // Batch 647: a big literal is already its own value — pass it
+            // through (the gen side lowers it to the zeta_big runtime).
+            AstNode::BigIntLit(_) => Ok(node.clone()),
             AstNode::ConstDef {
                 name,
                 ty,
