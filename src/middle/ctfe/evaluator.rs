@@ -497,6 +497,18 @@ impl ConstEvaluator {
         }
     }
 
+    fn p642_collect_pattern_vars(p: &AstNode, out: &mut Vec<String>) {
+        match p {
+            AstNode::Var(v) => out.push(v.clone()),
+            AstNode::Tuple(items) => {
+                for it in items {
+                    Self::p642_collect_pattern_vars(it, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn p642_collect_assigned(node: &AstNode, out: &mut Vec<String>) {
         match node {
             AstNode::Assign(lhs, _) => {
@@ -510,9 +522,10 @@ impl ConstEvaluator {
                 }
             }
             AstNode::For { pattern, body, else_body, .. } => {
-                if let AstNode::Var(v) = &**pattern {
-                    out.push(v.clone());
-                }
+                /* The pattern may be a TUPLE (`for k2, v2 in pairs:`) —
+                   collect every Var it binds (t518: k2/v2 survived the kill
+                   and print(k2) folded the stale pre-loop 0). */
+                Self::p642_collect_pattern_vars(pattern, out);
                 for st in body.iter().chain(else_body.iter()) {
                     Self::p642_collect_assigned(st, out);
                 }

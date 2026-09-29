@@ -1,7 +1,6 @@
-// known-fail: 批次 642（旁路 cleanup）ctfe i128 折叠把 `print(x)` 的参数
-// 改写为 StringLit ⇒ main 的槽布局移位 ⇒ 545 泄漏镜像按旧槽号写读
-// （line 11: 2→0 实拍；line 1 的 total 与 line 10 的 x 仍对＝部分移位）。
-// 续批＝gen BinaryOp 溢出提升（640 施工序③④）或槽稳定折叠后摘标记。
+// 批次 644（旁路 cleanup）摘标记：真根＝642 kill 收集器只认 Var 模式，
+// `for k2, v2 in pairs:` 的 Tuple 模式未杀 ⇒ print(k2) 折叠陈值 0——
+// 收集器递归 Tuple 模式后全绿（2/b 逐字）。槽移位假说作废。
 // 批次 545（旁路 cleanup）：模块体 env-first 读的守卫机制钉。
 // ① t425 核心：函数写过 env 后主程序读回新值；
 // ② range 循环变量泄漏（CPython：循环后变量 = 最后绑定值）；
