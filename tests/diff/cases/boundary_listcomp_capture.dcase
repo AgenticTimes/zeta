@@ -1,0 +1,24 @@
+# @cat: control
+# @note: 批次 669 边界面专项（手写）：listcomp 过滤捕获外层 lambda（662 面）
+#@@ python
+def go() -> i64:
+    steps = [(0, lambda m: m > 0, True)]
+    xs = [1, 2, -1, 0]
+    n = 0
+    for _, condition, enabled in steps:
+        if enabled:
+            out = [m for m in xs if condition(m)]
+            n = len(out)
+    return n
+print(go())
+#@@ zeta
+def go() -> i64:
+    steps = [(0, lambda m: m > 0, True)]
+    xs = [1, 2, -1, 0]
+    n = 0
+    for _, condition, enabled in steps:
+        if enabled:
+            out = [m for m in xs if condition(m)]
+            n = len(out)
+    return n
+print(go())

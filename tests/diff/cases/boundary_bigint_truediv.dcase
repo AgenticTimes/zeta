@@ -1,0 +1,14 @@
+# @cat: numeric
+# @note: 批次 669 边界面专项（手写）：BigInt 真除混合型（651/655 面）
+#@@ python
+x = 2 ** 100
+print(x / 3)
+print(10 / x)
+print(x / 2.0)
+print(x / x)
+#@@ zeta
+x = 2 ** 100
+print(x / 3)
+print(10 / x)
+print(x / 2.0)
+print(x / x)

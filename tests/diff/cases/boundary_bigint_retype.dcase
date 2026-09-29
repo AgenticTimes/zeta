@@ -1,0 +1,20 @@
+# @cat: numeric
+# @note: 批次 669 边界面专项（手写）：变量携带 BigInt 槽型翻转（657 面）
+#@@ python
+big = 0
+i = 0
+while i < 1:
+    big = 1 << 100
+    i = i + 1
+print(big)
+big = 5
+print(big * 3)
+#@@ zeta
+big = 0
+i = 0
+while i < 1:
+    big = 1 << 100
+    i = i + 1
+print(big)
+big = 5
+print(big * 3)

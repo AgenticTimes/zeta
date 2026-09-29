@@ -1,0 +1,20 @@
+# @cat: control
+# @note: 批次 669 边界面专项（手写）：负移位量 except 面＋零移位（656 面）
+#@@ python
+n = -3
+try:
+    print(5 << n)
+except:
+    print("caught")
+m = 2
+print(1 << m)
+print(8 >> m)
+#@@ zeta
+n = -3
+try:
+    print(5 << n)
+except:
+    print("caught")
+m = 2
+print(1 << m)
+print(8 >> m)
