@@ -25300,3 +25300,30 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 **最小修形状（交下一批落地，本批不动手）**：在 `:1456-1462` **追加**一条带模块前缀的别名键（`{mangled_cls}::{fname}` 同体发布），裸键原样保留 ⇒ 定义侧一处、纯增量；解析侧 `:1050` 的 `direct` 优先天然命中带前缀那颗，`:1056` 的 `tail` 兜底继续服务库面 ⇒ 不改任何消费者。验证闸门三条：① 647 夹具转绿（`1 7`）② pylib 库面方法族不红（`python_style` 353 passed/2 failed/6 known-fail 口径）③ 主线 301 位移 A/B 两颗同目录（n≥6/侧、归一后比对）。改前红已实拍（批次 647），新回归用例入库须照此先红后绿。
 
 **门禁**：零 `src/`、`runtime/`、`tools/`、夹具入库改动 ⇒ 快门禁不适用；只读 `bash tools/abi_anchors_check.sh` ⇒ `ANCHOR_RC=0`。不 push。
+
+### 批次 649（3.2／定位更正批：方法条目键的真生产点在 resolver 侧，不在 gen.rs）
+
+**本批零 `src/` 改动。** 648 的落点地图有一处错位，若不先更正，650 会把补丁打在错误的表上。
+
+**648 说错的**：`src/middle/mir/gen.rs:1456-1462` 造的 `mpr_key` 不是方法条目键。它唯一的消费点是 `gen.rs:1474` 的 `self.method_param_refinements.get(&mpr_key)` —— 那是批次 627 的**参数细化表**（按实参证据修未注解形参的类型），与 `func_ret_types` 无关。
+
+**方法条目表的真链路（本批逐点实拍）**：
+
+| 环节 | 坐标 | 实读内容 |
+|---|---|---|
+| 表的生产 | `src/middle/resolver/resolver.rs:4838` | `let ret_types: HashMap<String, Type> = self.get_all_func_signatures().iter().map(...)` |
+| 键的来源 | `src/middle/resolver/resolver.rs:1244` | `get_all_func_signatures()` 直接返回 `&self.funcs` —— 键＝签名表键本身 |
+| 键的写入 | `src/middle/resolver/resolver.rs:1016 / 1107 / 1124 / 1146` | `self.funcs.insert(name, ...)`（裸名／限定名按分支不同） |
+| 跨模块限定名的另一处 | `src/middle/resolver/resolver.rs:1085` | `self.registered_funcs.insert(qualified, qualified_ast)` —— 同族注册点，带模块限定 |
+| 递交给 MIR | `src/middle/resolver/resolver.rs:4953` | `.with_func_ret_types(ret_types)` |
+| MIR 侧接收 | `src/middle/mir/gen.rs:359-363` | `with_func_ret_types` 只是整表赋值；gen.rs 内**没有任何 `func_ret_types.insert`**（`grep -n 'func_ret_types\.\(insert\|entry\)' src/middle/mir/gen.rs` 命中 0 条） |
+| 消费面 | `src/middle/mir/gen.rs:1050-1142`、`:12070` | `qualified_method_candidate` 的多档拼写试探 + `struct_has_method` |
+
+**由此得两条硬结论**：
+
+1. `gen.rs:1437` 那句"剥模块 mangle 前缀……`type_decls`/`func_ret_types` 以裸类名为键"是**对上游事实的描述**，不是本文件的动作 —— 前缀早在 resolver 注册时就被处理掉了。648 把它当"根因落点"是不准确的。
+2. 别名键（`{module}::{class}::{method}` 一类）的**最小修落点在 resolver 侧**（`:4838` 的 `ret_types` 组装，或 `:1016/1107/1124/1146` 的 `funcs` 写入），不在 gen.rs。好消息是模块信息在递交点同函数内唾手可得：`resolver.rs:4940-4948` 已用 `self.py_mangled_to_module.borrow().get(fn_name_for_module)` 取当前模块名。
+
+**未定项（如实留）**：`:1016/1107/1124/1146` 四处 `funcs.insert` 的 `name` 各自从哪条 AST 路径来、647 夹具里 `Cfg::show` 具体绑到哪一处 —— **本批未逐点追**，四处的归因留给下一批（这决定别名键加在一处还是四处）。
+
+**门禁**：零 `src/`、`runtime/`、`tools/` 改动 ⇒ 按 AGENTS 路由表快门禁不适用；只读锚点核对 `bash tools/abi_anchors_check.sh` 得 ANCHOR_RC=0。
