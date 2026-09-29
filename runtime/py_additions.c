@@ -3328,6 +3328,13 @@ int64_t zeta_big_to_string(int64_t h) {
     return (int64_t)out;
 }
 
+/* Batch 655: Python truediv on a BigInt answers with a float. The
+   128-bit decimal string round-trips through strtod (correctly
+   rounded); the string is GC_malloc'd — no free, arena-owned. */
+double zeta_big_to_f64(int64_t h) {
+    return strtod((const char*)zeta_big_to_string(h), NULL);
+}
+
 int64_t zeta_map_value_tag(int64_t map, int64_t key);
 int64_t map_get(int64_t m, int64_t k);
 int64_t map_resolve(int64_t m);

@@ -5097,10 +5097,89 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     Some(Type::Named(n, _)) if n == "BigInt"
                 );
                 if big_arm {
-                    if matches!(op.as_str(), "/" | "%" | "floordiv") {
-                        /* Python truediv on a BigInt is a float — the
-                           runtime family has no big-div yet: abstain. */
+                    if matches!(op.as_str(), "%" | "floordiv") {
+                        /* No big mod/floordiv in the runtime family yet:
+                           abstain (dest stays unlowered). */
                         self.type_map.insert(dest, Type::I64);
+                        return dest;
+                    }
+                    if op == "/" {
+                        /* Batch 655: `/` is TRUEDIV — Python answers with
+                           a float (2**100 / 3 = 4.2e+29); the old abstain
+                           left dest unlowered and every such division
+                           printed 0. Both sides convert through the
+                           128-bit decimal string (strtod = correctly
+                           rounded); a zero divisor still raises like the
+                           batch-554 guard. */
+                        /* Only the BigInt side converts (boxing a float
+                           slot through from_i64 would bit-reinterpret it);
+                           int/float sides flow to the codegen float-div
+                           path, which sitofps them natively. The zero
+                           sentinel matches the divisor's converted kind —
+                           an unconverted int divisor compares against
+                           IntLit(0) like the batch-554 guard. */
+                        let mut to_f = |side: u32, g: &mut Self| -> u32 {
+                            if matches!(
+                                g.type_map.get(&side),
+                                Some(Type::Named(n, _)) if n == "BigInt"
+                            ) {
+                                let f = g.next_id();
+                                g.stmts.push(MirStmt::Call {
+                                    func: "zeta_big_to_f64".to_string(),
+                                    args: vec![side],
+                                    dest: f,
+                                    type_args: vec![],
+                                });
+                                g.exprs.insert(f, MirExpr::Var(f));
+                                g.type_map.insert(f, Type::F64);
+                                f
+                            } else {
+                                side
+                            }
+                        };
+                        let fl = to_f(left_id, self);
+                        let fr = to_f(right_id, self);
+                        let div_is_float = matches!(
+                            self.type_map.get(&fr),
+                            Some(Type::F64) | Some(Type::F32)
+                        );
+                        let zero = self.next_id();
+                        if div_is_float {
+                            self.exprs.insert(zero, MirExpr::FloatLit(0.0));
+                            self.type_map.insert(zero, Type::F64);
+                        } else {
+                            self.exprs.insert(zero, MirExpr::IntLit(0));
+                            self.type_map.insert(zero, Type::I64);
+                        }
+                        let cond_id = self.next_id();
+                        self.exprs.insert(
+                            cond_id,
+                            MirExpr::BinaryOp {
+                                op: "==".to_string(),
+                                left: fr,
+                                right: zero,
+                            },
+                        );
+                        self.type_map.insert(cond_id, Type::Bool);
+                        let code_id = self.next_id_with_lit(2);
+                        self.stmts.push(MirStmt::If {
+                            cond: cond_id,
+                            then: vec![MirStmt::VoidCall {
+                                func: "zeta_raise".to_string(),
+                                args: vec![code_id],
+                            }],
+                            else_: vec![],
+                            dest: None,
+                        });
+                        self.exprs.insert(
+                            dest,
+                            MirExpr::BinaryOp {
+                                op: "/".to_string(),
+                                left: fl,
+                                right: fr,
+                            },
+                        );
+                        self.type_map.insert(dest, Type::F64);
                         return dest;
                     }
                     let box_side = |side: u32, g: &mut Self| -> u32 {
