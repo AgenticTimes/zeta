@@ -3342,6 +3342,34 @@ double zeta_big_to_f64(int64_t h) {
     return strtod((const char*)zeta_big_to_string(h), NULL);
 }
 
+/* Batch 658: Python % and // on 128-bit handles. Both results leave
+   as HANDLES — `big // 3` is 4.2e29, far beyond i64 — assembled from
+   the [lo|hi] words into __int128 (clang lowers to __divti3). Floor
+   semantics: C % keeps the dividend's sign (7 % -3 = 1) while Python
+   takes the divisor's (−2); // truncates toward zero where Python
+   floors. A zero divisor raises like the 554 family. */
+int64_t zeta_big_mod(int64_t a, int64_t b) {
+    uint64_t alo = ((uint64_t*)a)[0], ahi = ((uint64_t*)a)[1];
+    uint64_t blo = ((uint64_t*)b)[0], bhi = ((uint64_t*)b)[1];
+    __int128 x = (__int128)alo | ((__int128)(int64_t)ahi << 64);
+    __int128 y = (__int128)blo | ((__int128)(int64_t)bhi << 64);
+    if (y == 0) zeta_raise(2);
+    __int128 r = x % y;
+    if (r != 0 && ((r < 0) != (y < 0))) r += y;
+    return zeta_big_new((int64_t)(uint64_t)r, (int64_t)(uint64_t)(r >> 64));
+}
+
+int64_t zeta_big_floordiv(int64_t a, int64_t b) {
+    uint64_t alo = ((uint64_t*)a)[0], ahi = ((uint64_t*)a)[1];
+    uint64_t blo = ((uint64_t*)b)[0], bhi = ((uint64_t*)b)[1];
+    __int128 x = (__int128)alo | ((__int128)(int64_t)ahi << 64);
+    __int128 y = (__int128)blo | ((__int128)(int64_t)bhi << 64);
+    if (y == 0) zeta_raise(2);
+    __int128 q = x / y;
+    if ((x % y) != 0 && ((x < 0) != (y < 0))) q--;
+    return zeta_big_new((int64_t)(uint64_t)q, (int64_t)(uint64_t)(q >> 64));
+}
+
 int64_t zeta_map_value_tag(int64_t map, int64_t key);
 int64_t map_get(int64_t m, int64_t k);
 int64_t map_resolve(int64_t m);

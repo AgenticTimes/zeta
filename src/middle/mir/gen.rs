@@ -5126,9 +5126,47 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 );
                 if big_arm {
                     if matches!(op.as_str(), "%" | "floordiv") {
-                        /* No big mod/floordiv in the runtime family yet:
-                           abstain (dest stays unlowered). */
-                        self.type_map.insert(dest, Type::I64);
+                        /* Batch 658: `%`/`//` on handles route through the
+                           runtime family with Python floor semantics; the
+                           result stays a BigInt handle (big // 3 is far
+                           beyond i64). A zero divisor raises inside
+                           zeta_big_mod/zeta_big_floordiv (the 554 guard
+                           below never runs on this path). */
+                        let box_side = |side: u32, g: &mut Self| -> u32 {
+                            match g.type_map.get(&side) {
+                                Some(Type::Named(n, _)) if n == "BigInt" => side,
+                                _ => {
+                                    let b = g.next_id();
+                                    g.stmts.push(MirStmt::Call {
+                                        func: "zeta_big_from_i64".to_string(),
+                                        args: vec![side],
+                                        dest: b,
+                                        type_args: vec![],
+                                    });
+                                    g.exprs.insert(b, MirExpr::Var(b));
+                                    g.type_map.insert(
+                                        b,
+                                        Type::Named("BigInt".to_string(), vec![]),
+                                    );
+                                    b
+                                }
+                            }
+                        };
+                        let bl = box_side(left_id, self);
+                        let br = box_side(right_id, self);
+                        self.stmts.push(MirStmt::Call {
+                            func: if op == "%" {
+                                "zeta_big_mod".to_string()
+                            } else {
+                                "zeta_big_floordiv".to_string()
+                            },
+                            args: vec![bl, br],
+                            dest,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(dest, MirExpr::Var(dest));
+                        self.type_map
+                            .insert(dest, Type::Named("BigInt".to_string(), vec![]));
                         return dest;
                     }
                     if op == "/" {
@@ -16468,6 +16506,21 @@ call, no NULL-handle dereference).",
                                 right: expr_id,
                             },
                         );
+                    } else if matches!(
+                        self.type_map.get(&expr_id),
+                        Some(Type::Named(n, _)) if n == "BigInt"
+                    ) {
+                        /* Batch 658: a BigInt handle negates through the
+                           big family — the i64 unary_minus bit-flips the
+                           POINTER, and the print face then derefs garbage
+                           (measured rc=139 on a loop-assigned big; the
+                           static shape only survived via the ctfe fold). */
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_big_neg".to_string(),
+                            args: vec![expr_id],
+                            dest,
+                            type_args: vec![],
+                        });
                     } else {
                         // Unary minus - use special function name to avoid conflict with binary minus
                         self.stmts.push(MirStmt::Call {
