@@ -181,6 +181,7 @@
 | 644 | bootstrap | **度量批（#251 结案／主线 301 运行面位移 A/B）**：口径照 569／581 §六——两颗 zetac（pre `55a366a9…`／post `69dbec10…`）都复制进 `target/release/`（坑 68），产物 `acc644_{pre,post}.bin` 均 622,608 B、compile rc 0/0；cwd `~/source/quant/REasyQuant`、`REPLAYQUANT_LOCAL=1`、相对源路径 `strategies/code/_drv_accept_409.py`、串行独占、n＝13/侧；尺＝归一后 stderr 逐对＋rc＋stdout 行数＋末行（不做逐字节比，异常码嵌堆地址＝假尺） | 读数：**零位移**——两侧 rc=`1`×13、stdout=`0` 行×13、stderr=`17` 行×13、末行同为 `Unhandled exception: code=<N>`×13、`str_trim`/`vstack` 命中 0/0、归一后 **0/13 差异**。**如实记一格**：本趟两侧同停在「缓存命中 0 只→Unhandled exception」档，与在册三档（跑完／`vstack`／`str_trim`）不同档（分档由 cwd／行情缓存状态决定，非二进制差异；证据＝同档在两颗上 13/13 齐备）⇒ 结论只覆盖这一档路径，恢复缓存现场本批未做。锚点核对只读跑；快门禁不适用（零 `src/`/`runtime/`/`tools/` 改动）。存件 /tmp/b643/ | ✅ 位移 A/B 补齐（#251 结案；下一批交 S1 同名类别共用布局族） |
 | 645 | bootstrap | 定价批（3.2／名绑定族 S1 形覆盖面）：同名类别共用布局——语料面 0／库面 0 成员，双判据互证＋夹具正对照 | 零 `src/` 改动 ⇒ 快门禁不适用；只读锚点核对 ANCHOR_RC=0 | 已入册 |
 | 646 | bootstrap | 度量批（3.2／名绑定族套件面回归半径）：`tests/` 931 文件·110 类定义·45 互异名——同文件重名 **0 对**（S1 形）、跨文件重名 **23 名**（430 形）；pair 判据带夹具正对照 | 零 `src/` 改动 ⇒ 快门禁不适用；只读锚点核对 ANCHOR_RC=0 | 已入册 |
+| 647 | bootstrap | 定位批（3.2／批次 430 键化漏面）：跨模块同名类别·字段序相反 ⇒ 静默错值 `2 9` vs CPython `1 7`；MIR 实拍构造侧已按模块键化、方法条目 `Cfg::show` 仍是裸类别名键（两调用点共用） | 零 `src/` 改动 ⇒ 快门禁不适用；只读锚点核对 ANCHOR_RC=0 | 已入册 |
 | （续） | | | | |
 
 ## 5. Agent-2 旁路台账（ZCode 维护；cleanup）
