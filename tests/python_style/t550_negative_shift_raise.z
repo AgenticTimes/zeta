@@ -1,0 +1,28 @@
+// 批次 656（旁路 cleanup）：负移位量响亮化（t546 头登记项的收口）。
+// Python 语义：负移位量是 ValueError（"negative shift count"），可被
+// except 接住；旧 zeta_big_shl/shr 的 `n <= 0` 恒等分支把 `1 << -1`
+// 静默答成 1（未移位值）＝LLVM poison 邻域的静默错答。现 n<0 走
+// zeta_raise(2)（554 家族同码——longjmp 到最内 try，未捕获＝响亮
+// 退出 rc=1）。n==0 恒等、正移位面不受扰（t546/t547 续绿）。
+// 边界（不在本夹具）：ctfe 静态折叠的负移位量（编译期即拦还是放行
+// 给运行期＝另证）；BigInt %/floordiv 的运行期弃权面（657 候选）。
+print(1 << 0)
+print(7 >> 1)
+n = -3
+try:
+    print(5 << n)
+except:
+    print("caught")
+try:
+    print(5 >> n)
+except:
+    print("caught")
+m = 2
+print(1 << m)
+print(8 >> m)
+// expect: 1
+// expect: 3
+// expect: caught
+// expect: caught
+// expect: 4
+// expect: 2

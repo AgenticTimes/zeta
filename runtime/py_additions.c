@@ -3230,7 +3230,12 @@ int64_t zeta_big_mul(int64_t a, int64_t b) {
 
 int64_t zeta_big_shl(int64_t a, int64_t n) {
     uint64_t* x = (uint64_t*)a;
-    if (n <= 0) return a;
+    /* Batch 656: a NEGATIVE shift count is Python's ValueError
+       ("negative shift count"), not identity — the old `n <= 0`
+       identity branch silently answered the unshifted value (1 << -1
+       printed 1). Raise like the 554 family; catchable by except. */
+    if (n < 0) zeta_raise(2);
+    if (n == 0) return a;
     if (n >= 128) return zeta_big_new(0, 0);
     uint64_t lo = (uint64_t)x[0], hi = (uint64_t)x[1];
     if (n >= 64) {
@@ -3246,7 +3251,9 @@ int64_t zeta_big_shl(int64_t a, int64_t n) {
 int64_t zeta_big_shr(int64_t a, int64_t n) {
     /* arithmetic (sign-filling) right shift, Python >> semantics */
     uint64_t* x = (uint64_t*)a;
-    if (n <= 0) return a;
+    /* Batch 656: negative count raises — same ValueError parity as shl. */
+    if (n < 0) zeta_raise(2);
+    if (n == 0) return a;
     uint64_t lo = (uint64_t)x[0], hi = (uint64_t)x[1];
     int neg = (int64_t)hi < 0;
     if (n >= 128) {
