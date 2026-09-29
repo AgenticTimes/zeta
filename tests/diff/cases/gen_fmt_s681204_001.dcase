@@ -1,0 +1,10 @@
+# @cat: str
+# @note: 随机 f-string 规格（seed=681204 #1）
+#@@ python
+n = -42
+print(f"{n:>3x}")
+
+#@@ zeta
+n = -42
+print(f"{n:>3x}")
+

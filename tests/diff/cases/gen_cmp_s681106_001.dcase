@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=681106 #1）
+#@@ python
+print(not 85)
+print(62 == 903 > 649)
+print(-(-6) < 36, 6 == 6)
+
+#@@ zeta
+print(not 85)
+print(62 == 903 > 649)
+print(-(-6) < 36, 6 == 6)
+
