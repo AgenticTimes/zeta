@@ -9244,6 +9244,20 @@ call, no NULL-handle dereference).",
                         self.exprs.insert(id, MirExpr::Var(fresh));
                         self.type_map.insert(id, Type::Named("map".to_string(), vec![]));
                         return id;
+                    } else {
+                        // Dynamic/unknown argument: emit `map__copy(src)` which
+                        // works on any handle (creates new map + copies entries).
+                        // This fixes t231 where `dict(x)` with `x: PyDynamic`
+                        // fell through to ghost `dict_1`.
+                        self.stmts.push(MirStmt::Call {
+                            func: "map__copy".to_string(),
+                            args: vec![src_id],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Named("map".to_string(), vec![]));
+                        return id;
                     }
                 }
                 // PY-A: `zip(a, b)` — a Vec of (a[i], b[i]) pairs, so
