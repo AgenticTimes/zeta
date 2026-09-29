@@ -154,4 +154,22 @@ G.5e 符号注册表（= C1 SymbolRegistry）
 
 **提交**：`d7da9915`
 
+### 批次 659（2026-09-30，主线）：`collect_free_vars` 识别裸调用 callee 为自由变量（t233 转绿）
+
+**现象**：t233 (`listcomp_condition_capture`) 运行期 abort：`PY-A: _condition is NOT implemented in this build`。测试里的 `[m for m in xs if condition(m)]` 中 `condition` 来自 tuple unpacking `for _, condition, enabled in steps`，是一个持有 lambda 的局部变量。
+
+**根因**：`src/middle/mir/gen.rs:16613-16621` 的 `collect_free_vars` 在处理 `AstNode::Call` 时假设 method 名永远是静态符号（`let _ = method`），从不检查 callee 名是否是自由变量。当 `condition(m)` 是裸调用（`receiver = None`）且 `condition` 是闭包外的局部变量时，`condition` 不被收集为自由变量 ⇒ 闭包不通过 `zeta_env_get` 捕获它 ⇒ BATCH-294 的 `zeta_call1` 路径走不到（`name_to_id` 里没有 `condition`）⇒ 落到静态符号 `_condition` ⇒ 链接期 NOT implemented。
+
+**修法**（`src/middle/mir/gen.rs:16617-16623`）：当 `receiver.is_none()` 且 `method` 不在 `bound` 集合时，将 `method` 加入 `free` 集合。这样 `lower_closure` 通过 `zeta_env_get` 捕获 `condition`，在子 MirGen 的 `name_to_id` 里注册为 `MirExpr::Var(slot_id)`，BATCH-294 的 `is_value_slot` 判真 ⇒ 发 `zeta_call1(condition_slot, m_arg)`。
+
+**门禁读数**（快门禁）：
+- official: compile 194/194, compile+link 191/194（不变）
+- python_style: 426 passed, 0 failed, 4 known-fail, 0 xpass
+  - t233 转绿（存量红从 1 颗减到 0 颗）
+- dyn_binding: 4/0, comment_drift: 0
+
+**改动面**：`src/middle/mir/gen.rs`（自由变量收集）
+
+**提交**：`07e89027`
+
 （暂空——下一批从 409 §十一 (a)①② 的隔离复现开始，记录格式沿用 roadmap.md 的四段证据纪律。）
