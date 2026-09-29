@@ -12060,30 +12060,21 @@ call, no NULL-handle dereference).",
                         return id;
                     }
                     if is_map && arg_ids.len() == 2 {
-                        // `key in dict` — DictGet(key) != 0 (V1: value 0 is
-                        // indistinguishable from a missing key); DictGet keeps
-                        // the same codegen path as d[key] subscripting.
-                        let get_id = self.next_id();
+                        /* Batch 682b: `key in dict` probes the ENTRY TABLE
+                           via py_map_contains — the old DictGet(key) != 0
+                           answered False for a key whose VALUE is 0
+                           (`d["b"] = 0` stored 0, `0 != 0` false; batch 598
+                           fixed .get's existence check the same way, this is
+                           the `in` sibling). The key goes through the same
+                           map_str_key normalization the write side uses. */
                         let key_id = self.lower_map_key(arg_ids[1]);
-                        self.stmts.push(MirStmt::DictGet {
-                            map_id: arg_ids[0],
-                            key_id,
-                            dest: get_id,
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_map_contains".to_string(),
+                            args: vec![arg_ids[0], key_id],
+                            dest: id,
+                            type_args: vec![],
                         });
-                        self.exprs.insert(get_id, MirExpr::Var(get_id));
-                        self.type_map.insert(get_id, Type::I64);
-                        let zero_id = self.next_id();
-                        self.exprs.insert(zero_id, MirExpr::IntLit(0));
-                        self.type_map.insert(zero_id, Type::I64);
-                        // i64 != via BinaryOp (the verified comparison path)
-                        self.exprs.insert(
-                            id,
-                            MirExpr::BinaryOp {
-                                op: "!=".to_string(),
-                                left: get_id,
-                                right: zero_id,
-                            },
-                        );
+                        self.exprs.insert(id, MirExpr::Var(id));
                         self.type_map.insert(id, Type::Bool);
                         return id;
                     }
