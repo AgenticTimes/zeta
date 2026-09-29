@@ -5164,68 +5164,38 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         .insert(dest, Type::Named("BigInt".to_string(), vec![]));
                     return dest;
                 }
-                /* Batch 649: literal-shift promotion — `a << 64` (shift
-                   count literal ≥ 64) never fits i64, and the raw i64 shl
-                   with n ≥ 64 is LLVM poison (silent garbage, measured: the
-                   loop-internal `3 << 64` printed 0 then 1). Sound by the
-                   literal alone, no value-range analysis: promote to the
-                   zeta_big family. `a >> 64` is always 0 (a ≥ 0) or -1
-                   (a < 0) — a plain select, no big needed. */
-                if op == "<<" {
-                    if let Some(MirExpr::IntLit(n)) = self.exprs.get(&right_id).cloned() {
-                        if n >= 64 {
-                            let bl = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "zeta_big_from_i64".to_string(),
-                                args: vec![left_id],
-                                dest: bl,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(bl, MirExpr::Var(bl));
-                            self.type_map
-                                .insert(bl, Type::Named("BigInt".to_string(), vec![]));
-                            self.stmts.push(MirStmt::Call {
-                                func: "zeta_big_shl".to_string(),
-                                args: vec![bl, right_id],
-                                dest,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(dest, MirExpr::Var(dest));
-                            self.type_map
-                                .insert(dest, Type::Named("BigInt".to_string(), vec![]));
-                            return dest;
-                        }
-                    }
-                }
-                if op == ">>" {
-                    if let Some(MirExpr::IntLit(n)) = self.exprs.get(&right_id).cloned() {
-                        if n >= 64 {
-                            /* zeta_big_shr is an arithmetic shift: 0 for
-                               a ≥ 0, -1 for a < 0 — exactly Python's
-                               semantics, no big needed for the VALUE but
-                               the handle keeps one representation. */
-                            let bl = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "zeta_big_from_i64".to_string(),
-                                args: vec![left_id],
-                                dest: bl,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(bl, MirExpr::Var(bl));
-                            self.type_map
-                                .insert(bl, Type::Named("BigInt".to_string(), vec![]));
-                            self.stmts.push(MirStmt::Call {
-                                func: "zeta_big_shr".to_string(),
-                                args: vec![bl, right_id],
-                                dest,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(dest, MirExpr::Var(dest));
-                            self.type_map
-                                .insert(dest, Type::Named("BigInt".to_string(), vec![]));
-                            return dest;
-                        }
-                    }
+                /* Batch 650: SHIFT ARITHMETIC IS ALWAYS BIG. Python's `<<`
+                   is the grow-an-integer operator — the result is exact for
+                   every shift count, so the raw i64 shl (poison at n ≥ 64,
+                   silent wrap below) is never the right lowering. Both
+                   operands box through the zeta_big family and the dest is
+                   a BigInt handle: variable shift counts included (the
+                   batch-649 literal-only gate is subsumed; a loop-internal
+                   `y = 3 << 64` now prints the true value every iteration).
+                   `>>` is arithmetic in zeta_big_shr — 0 for a ≥ 0, -1 for
+                   a < 0 at n ≥ 64, exact below. Float/string receivers keep
+                   their previous (garbage-in) behavior out of scope. */
+                if matches!(op.as_str(), "<<" | ">>") {
+                    let bl = self.next_id();
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_big_from_i64".to_string(),
+                        args: vec![left_id],
+                        dest: bl,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(bl, MirExpr::Var(bl));
+                    self.type_map
+                        .insert(bl, Type::Named("BigInt".to_string(), vec![]));
+                    self.stmts.push(MirStmt::Call {
+                        func: if op == "<<" { "zeta_big_shl" } else { "zeta_big_shr" }.to_string(),
+                        args: vec![bl, right_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map
+                        .insert(dest, Type::Named("BigInt".to_string(), vec![]));
+                    return dest;
                 }
                 /* Batch 645: a LITERAL zero divisor on `/` makes the 554
                    raise unconditional — the division never executes, so its
