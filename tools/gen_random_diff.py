@@ -717,6 +717,14 @@ def main() -> int:
         expected = python_eval(expr)
         if expected is None:
             continue  # CPython 侧报错 = bad_case，不进分母，直接不写
+        # 批次 679：i128 包络过滤（与 stmts 路径的 2**62 过滤同族）——移位/幂
+        # 组合可把值推过 2**127 表示上限（s679101 实测 A<<88 回绕），超出即
+        # 剔除不写（640 登记的 127 位表示上限，非编译器缺口）。
+        try:
+            if abs(int(expected.strip())) >= 2**126:
+                continue
+        except ValueError:
+            pass
         name = f"gen_{a.mode}_s{a.seed}_{written:03d}.dcase"
         body = (
             f"# @cat: {a.mode}\n"

@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=679106 #0）
+#@@ python
+print(not 49)
+print(819 > 889 != 6)
+
+#@@ zeta
+print(not 49)
+print(819 > 889 != 6)
+
