@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=671106 #1）
+#@@ python
+print(-(--11) < 18, -11 == -11)
+print(not -84)
+
+#@@ zeta
+print(-(--11) < 18, -11 == -11)
+print(not -84)
+
