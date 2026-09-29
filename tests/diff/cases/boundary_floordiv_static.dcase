@@ -1,0 +1,12 @@
+# @cat: numeric
+# @note: 批次 670 边界面专项（手写）：i64 floordiv/mod 静态 floor 语义（643/645 面）
+#@@ python
+print(-7 // 2)
+print(7 % -3)
+print(-7 % 3)
+print(7 // 2)
+#@@ zeta
+print(-7 // 2)
+print(7 % -3)
+print(-7 % 3)
+print(7 // 2)

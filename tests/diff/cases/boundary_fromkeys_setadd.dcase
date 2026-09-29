@@ -1,0 +1,22 @@
+# @cat: container
+# @note: 批次 670 边界面专项（手写）：set.add 去重/dict.fromkeys 1 参/cast（661 面）。
+#   注：fromkeys 1 参的值 CPython 是 None、zeta i64 模型填 0（#113 表示面既有分歧，
+#   661 头注记）——get 行不入本例。
+#@@ python
+from typing import cast
+s = set()
+s.add(1)
+s.add(1)
+print(len(s))
+fk = dict.fromkeys(["x", "y"])
+print(len(fk))
+print(cast(int, 42))
+#@@ zeta
+from typing import cast
+s = set()
+s.add(1)
+s.add(1)
+print(len(s))
+fk = dict.fromkeys(["x", "y"])
+print(len(fk))
+print(cast(int, 42))

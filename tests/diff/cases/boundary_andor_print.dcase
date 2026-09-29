@@ -1,0 +1,12 @@
+# @cat: control
+# @note: 批次 670 边界面专项（手写）：and/or print 拆分与 None/Bool 混合（635/648 面）
+#@@ python
+print(3 and None)
+print(0 or True)
+print(2 and 3)
+print(None or 5)
+#@@ zeta
+print(3 and None)
+print(0 or True)
+print(2 and 3)
+print(None or 5)
