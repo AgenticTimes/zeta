@@ -1,0 +1,33 @@
+// 批次 642（旁路 cleanup）：ctfe i128 树求值——bigint 第二层首批收口。
+// 22 条 numeric mismatch 全部为纯常量表达式（640 实拍），ctfe 的 print
+// 臂对参数子树做 i128 求值（Python 语义：floor 除、模取除数号、有界幂、
+// and/or 取操作数、链式比较 (a<b) and (b≠c)），成功即改写十进制/True/
+// False 串——绕开运行期 i64 wrap。**顺序即正确**：变换按语句序走，
+// print 只见前序赋值；循环/条件体内禁录禁折（p642_depth 守卫——首轮
+// 实测循环体折叠曾致 53 条 control/loop 回归）；AssignOp 推进表
+// （numeric_aug_assign：不推进则 print 折陈值实拍）；`/` 弃权（truediv
+// 是浮点）。边界（不在本夹具）：循环/条件内的常量运算仍运行期 wrap
+// ＝gen BinaryOp 溢出提升（640 施工序③④续批）；Var 携带丢 bool 标记。
+print(1 << 64)
+print(2 ** 100)
+a = 113201790292688
+print((a << 48) - 1)
+print(61180469571415 | (-35442324074144 << 62) < 56012436744467)
+print(54 < 168 != 298)
+print(1 or 2)
+print(0 or 2)
+print(3 and 5)
+b = 1
+b += 2
+print(b)
+print(-35442324074144 << 62)
+// expect: 18446744073709551616
+// expect: 1267650600228229401496703205376
+// expect: 31863471286238919257728483327
+// expect: True
+// expect: True
+// expect: 1
+// expect: 2
+// expect: 5
+// expect: 3
+// expect: -163448870393302300717529144754176
