@@ -113,4 +113,27 @@ G.5e 符号注册表（= C1 SymbolRegistry）
 
 **提交**：`7ae93e44`
 
+### 批次 657（2026-09-29，主线）：`module_renames_for` 方法回退剥模块前缀（`import pandas as pd` 的 `DataFrame(...)` 不再落 `zeta_platform_obj` 错布局）
+
+**现象**：t404 (`df[idx]` 行过滤) 在 `import pandas as pd` 下崩溃（rc=139 / `map_keys` raise），同一测试用 `from pandas import DataFrame` 则通过（批次 656 记录末尾登记了这一线索）。
+
+**根因**：`src/middle/resolver/resolver.rs` 的 `module_renames_for` 方法回退路径从 `func_name`（如 `"pandas__DataFrame::loc"`）取出 `head = "pandas__DataFrame"`（已带模块前缀的 mangled 名），却拿它去 `py_module_own_names`（存裸名 `"DataFrame"`）里查——永远查不到 ⇒ 方法体拿不到 symbol rename 表 ⇒ `DataFrame(result)` 落到 `gen.rs:10979-11006` 的大写 catch-all `zeta_platform_obj`（布局 `[name|a|b|c]`，name 串在 offset 0）⇒ `self.data` 读到的是 name 串而非 map ⇒ `map_keys` 段错误 / raise。
+
+**修法**（`src/middle/resolver/resolver.rs:4249-4275`）：在查 `py_module_own_names` 之前，先剥掉 `head` 的模块前缀（遍历 `py_module_own_names` 的键，取 `"pandas__"` 前缀，`strip_prefix` 恢复裸名 `"DataFrame"`），再用裸名查。`import pandas as pd` 与 `from pandas import DataFrame` 两条路径现在产出相同的 LLVM IR（`loc` 方法内 `DataFrame(result)` → `call @pandas__DataFrame`）。
+
+**附带**：
+- t494 摘钉：batch 656 的 `py_df_empty_like` 直接返回 map 同时修好了非向量掩码空帧回退路径（`df.loc[7]` 现在返回空帧 `len=0`），`known-fail:` 标记移除
+- `zeta_runtime_c.o` 补提交（batch 656 运行期改动后未重编入库）
+
+**门禁读数**（快门禁）：
+- official: compile 194/194, compile+link 191/194（存量 3 link-only 失败不变）
+- python_style: 424 passed, 2 failed (t231, t233), 4 known-fail, 0 xpass
+  - 较 batch 656 收尾：+1 pass（t404 修复）、t494 从 known-fail/xpass 转 pass
+- compile-diagnostics: python_style 273 warning lines / 128 files（+34 lines vs 239 基线，新测试文件增加）
+- dyn_binding: 4/0, comment_drift: 0
+
+**改动面**：`src/middle/resolver`（下型/出码面）+ 测试标记 + 运行期 `.o`
+
+**提交**：`d7f9a8fd`
+
 （暂空——下一批从 409 §十一 (a)①② 的隔离复现开始，记录格式沿用 roadmap.md 的四段证据纪律。）
