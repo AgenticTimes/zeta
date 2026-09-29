@@ -3149,6 +3149,183 @@ int64_t zeta_py_from(int64_t module, int64_t member, int64_t alias) {
 // PY-A: list comprehension collector — iter is a Vec-layout handle
 // ([cap|len|data...]); fn_ptr is the address of a generated closure taking
 // one i64 and returning i64 (-1 = skip). Returns a new Vec-layout handle.
+// ── Batch 641: i128 value representation + arithmetic family ──────────
+// A 16-byte GC block holding a two's-complement 128-bit integer, little-
+// endian [lo | hi]. Values travel as HANDLES — the compiler tracks the
+// i128-ness statically (batch 640 step ④), so there is no runtime tag:
+// every function here takes/returns handles except the i64-boundary
+// constructors/extractors. Overflowing i64 arithmetic boxes through
+// zeta_big_from_i64 at the gen-side promotion point (batch 642+).
+
+static int64_t zeta_big_new(int64_t lo, int64_t hi) {
+    int64_t* b = (int64_t*)GC_malloc(16);
+    b[0] = lo;
+    b[1] = hi;
+    return (int64_t)b;
+}
+
+int64_t zeta_big_from_i64(int64_t v) {
+    return zeta_big_new(v, v < 0 ? -1 : 0);
+}
+
+int64_t zeta_big_lo(int64_t h) { return ((int64_t*)h)[0]; }
+int64_t zeta_big_hi(int64_t h) { return ((int64_t*)h)[1]; }
+
+static uint64_t big_add64(uint64_t a, uint64_t b, uint64_t* carry) {
+    uint64_t r = a + b;
+    *carry = (r < a) ? 1 : 0;
+    return r;
+}
+
+int64_t zeta_big_add(int64_t a, int64_t b) {
+    uint64_t* x = (uint64_t*)a;
+    uint64_t* y = (uint64_t*)b;
+    uint64_t c = 0;
+    uint64_t lo = big_add64(x[0], y[0], &c);
+    uint64_t hi = x[1] + y[1] + c;
+    return zeta_big_new((int64_t)lo, (int64_t)hi);
+}
+
+int64_t zeta_big_sub(int64_t a, int64_t b) {
+    uint64_t* x = (uint64_t*)a;
+    uint64_t* y = (uint64_t*)b;
+    uint64_t borrow = 0;
+    uint64_t lo = x[0] - y[0];
+    if (x[0] < y[0]) borrow = 1;
+    uint64_t hi = x[1] - y[1] - borrow;
+    return zeta_big_new((int64_t)lo, (int64_t)hi);
+}
+
+int64_t zeta_big_neg(int64_t a) {
+    uint64_t* x = (uint64_t*)a;
+    uint64_t lo = ~x[0] + 1;
+    uint64_t hi = ~x[1] + (lo == 0 ? 1 : 0);
+    return zeta_big_new((int64_t)lo, (int64_t)hi);
+}
+
+static void big_mulu64(uint64_t a, uint64_t b, uint64_t* lo, uint64_t* hi) {
+    uint64_t alo = a & 0xFFFFFFFFULL, ahi = a >> 32;
+    uint64_t blo = b & 0xFFFFFFFFULL, bhi = b >> 32;
+    uint64_t ll = alo * blo;
+    uint64_t lh = alo * bhi;
+    uint64_t hl = ahi * blo;
+    uint64_t hh = ahi * bhi;
+    uint64_t mid = lh + hl + (ll >> 32);
+    *lo = (mid << 32) | (ll & 0xFFFFFFFFULL);
+    *hi = hh + (mid >> 32);
+}
+
+int64_t zeta_big_mul(int64_t a, int64_t b) {
+    uint64_t* x = (uint64_t*)a;
+    uint64_t* y = (uint64_t*)b;
+    uint64_t l0, h0, l1, h1, l2, h2;
+    big_mulu64(x[0], y[0], &l0, &h0);
+    big_mulu64(x[0], y[1], &l1, &h1);
+    big_mulu64(x[1], y[0], &l2, &h2);
+    uint64_t hi = h0 + l1 + l2; /* low 128 bits of the 256-bit product */
+    return zeta_big_new((int64_t)l0, (int64_t)hi);
+}
+
+int64_t zeta_big_shl(int64_t a, int64_t n) {
+    uint64_t* x = (uint64_t*)a;
+    if (n <= 0) return a;
+    if (n >= 128) return zeta_big_new(0, 0);
+    uint64_t lo = (uint64_t)x[0], hi = (uint64_t)x[1];
+    if (n >= 64) {
+        hi = lo << (n - 64);
+        lo = 0;
+    } else if (n) {
+        hi = (hi << n) | (lo >> (64 - n));
+        lo = lo << n;
+    }
+    return zeta_big_new((int64_t)lo, (int64_t)hi);
+}
+
+int64_t zeta_big_shr(int64_t a, int64_t n) {
+    /* arithmetic (sign-filling) right shift, Python >> semantics */
+    uint64_t* x = (uint64_t*)a;
+    if (n <= 0) return a;
+    uint64_t lo = (uint64_t)x[0], hi = (uint64_t)x[1];
+    int neg = (int64_t)hi < 0;
+    if (n >= 128) {
+        lo = neg ? ~(uint64_t)0 : 0;
+        hi = neg ? ~(uint64_t)0 : 0;
+    } else if (n >= 64) {
+        lo = hi >> (n - 64);
+        if (neg) lo |= ~(uint64_t)0 << (64 - (n - 64)) << 1;
+        hi = neg ? ~(uint64_t)0 : 0;
+    } else if (n) {
+        lo = (lo >> n) | (hi << (64 - n));
+        hi = hi >> n;
+        if (neg) hi |= ~(uint64_t)0 << (64 - n) << 1;
+    }
+    return zeta_big_new((int64_t)lo, (int64_t)hi);
+}
+
+int64_t zeta_big_or(int64_t a, int64_t b) {
+    return zeta_big_new(((int64_t*)a)[0] | ((int64_t*)b)[0],
+                        ((int64_t*)a)[1] | ((int64_t*)b)[1]);
+}
+int64_t zeta_big_and(int64_t a, int64_t b) {
+    return zeta_big_new(((int64_t*)a)[0] & ((int64_t*)b)[0],
+                        ((int64_t*)a)[1] & ((int64_t*)b)[1]);
+}
+int64_t zeta_big_xor(int64_t a, int64_t b) {
+    return zeta_big_new(((int64_t*)a)[0] ^ ((int64_t*)b)[0],
+                        ((int64_t*)a)[1] ^ ((int64_t*)b)[1]);
+}
+
+int64_t zeta_big_cmp(int64_t a, int64_t b) {
+    int64_t ah = ((int64_t*)a)[1], bh = ((int64_t*)b)[1];
+    if (ah != bh) return ah < bh ? -1 : 1;
+    uint64_t alo = (uint64_t)((int64_t*)a)[0], blo = (uint64_t)((int64_t*)b)[0];
+    if (alo != blo) return alo < blo ? -1 : 1;
+    return 0;
+}
+
+/* decimal rendering of the signed 128-bit value (batch 640 step ③):
+   magnitude via 128/10 long division (bit loop), one digit per pass. */
+int64_t zeta_big_to_string(int64_t h) {
+    uint64_t lo = (uint64_t)((int64_t*)h)[0], hi = (uint64_t)((int64_t*)h)[1];
+    char tmp[48];
+    size_t n = 0;
+    int neg = (int64_t)hi < 0;
+    if (neg) {
+        uint64_t nlo = ~lo + 1;
+        uint64_t nhi = ~hi + (nlo == 0 ? 1 : 0);
+        lo = nlo;
+        hi = nhi;
+    }
+    if (!lo && !hi) {
+        char* z = (char*)GC_malloc(2);
+        z[0] = '0';
+        z[1] = 0;
+        return (int64_t)z;
+    }
+    while (lo || hi) {
+        uint64_t qlo = 0, qhi = 0, r = 0;
+        for (int bit = 127; bit >= 0; bit--) {
+            uint64_t b = (bit >= 64) ? ((hi >> (bit - 64)) & 1)
+                                     : ((lo >> bit) & 1);
+            r = r * 2 + b;
+            if (r >= 10) {
+                r -= 10;
+                if (bit >= 64) qhi |= 1ULL << (bit - 64);
+                else qlo |= 1ULL << bit;
+            }
+        }
+        tmp[n++] = (char)('0' + (char)r);
+        lo = qlo;
+        hi = qhi;
+    }
+    char* out = (char*)GC_malloc(n + 2);
+    size_t k = 0;
+    if (neg) out[k++] = '-';
+    while (n) out[k++] = tmp[--n];
+    out[k] = 0;
+    return (int64_t)out;
+}
+
 int64_t zeta_collect_vec_n(int64_t iter, int64_t fn_ptr, int64_t len_override) {
     if (!iter) return 0;
     int64_t len = len_override;
