@@ -172,4 +172,72 @@ G.5e 符号注册表（= C1 SymbolRegistry）
 
 **提交**：`07e89027`
 
+### 批次 660（2026-09-30，主线）：`.get(k, default)` 的「已知并集」写回 `PyDynamic`（`class_dict_field_get` 转绿）＋十倍位全量门禁批
+
+**层号＝4.3.b（类型基础③／返回位），任务＝harness #256。** 这是批次 400 那条「证据冲突 ⇒ 退成动态」规则（当时落在**参数位**）在**返回位**的成员。同时是本十日位的全量门禁批（上次在册＝批次 650）。
+
+**现象（在册红例）**：`tests/diff/cases/class_dict_field_get.dcase`——`self.data.get(key, "missing")` 三行 print 里走默认值那一行打堆地址（改前二进制 md5 `5d08320cc073679a0e22498a6108ca2c` 实拍 `10 / 4300696640 / 20`，run_rc=0＝**静默错值**），CPython 真值 `10 / missing / 20`。
+
+**根因**（`src/middle/resolver/resolver.rs` 本批实读）：py 类方法的返回类型由 `refine_method_return_types`（`:2991`）＋ `collect_return_kinds`（`:3110`）这台引擎决定。在 `.get(k, default)` 面上，字段值类型 `vt` 查 `map_vals`：`self.data = {}` 没有 `map<k,v>` 注解 ⇒ `vt = None` ⇒ 旧判据没有 `(None, Some(_))` 这一支、落到 `_ => None` ⇒ 这条返回被当**毒票**推成 `PyDynamic` ⇒ 写回闸门「全票 PyDynamic＝弃权」⇒ `funcs` 保留解析层硬写的 **i64** ⇒ 调用点按 `println_i64` 打 `char*`。
+
+**修法**＝把「我推不出来」和「证据表明这是真并集」分成两档：
+1. `resolver.rs:3201` 起：`(None, Some(_))` ⇒ `Some(Type::PyDynamic)`——字段值类型静态不可知 ⇒ 返回值就是「命中值 ∪ 默认值」的真并集，这是**证据**不是**缺口**；
+2. `collect_return_kinds` 加 `dyn_faces: &mut usize`（`:3118`）只统计这条 `.get` 面（callee 回退那条 filter 只放行 `Str|F64|Bool`，所以 `Some(PyDynamic)` 的 face 唯一对应 `.get`）；
+3. 写回闸门（`:3080`）加一支：`dyn_faces == rets.len()` 且全票都是 `PyDynamic` ⇒ 写 `Type::PyDynamic`；毒票仍按批次 628 的口径弃权。
+调用点无需新代码——`PyDynamic` 返回在批次 653 已端到端可渲染（`zeta_dyn_to_string` + `println_str`）。代码笔 `f3fa96f2`（1 文件 **+26/−4**）。
+
+**否决的另一条改法**：把 `.get(k, default)` 按默认值字面量直接钉成 `Str`（`classify` 那台引擎上的更宽方案，只对本例第一行 `10`/第三行 `20` 是错的）——那会把该例现在**打对**的两行整数变成垃圾。按在册纪律「修掉巧合会揭出依赖它的绿用例」否决。
+
+**收益读数（本批主产出）**：`class_dict_field_get` mismatch → match ⇒ 差分 **576 → 577**（96.0% → **96.2%**）、`per_cat.container 225 → 226`、mismatch 23 → 22，逐案闭合＝转好恰这一条／转差 0 条。闸门代录笔 `9eef3f27`。
+
+**一、十倍位全量门禁（17 步逐项；存件 `/tmp/b660/gate_full.log` 179 行，独占机器、`GATE_RC=` 末行戳记）**
+
+| 步骤 | 本次（660） | 与 650 在册对照 |
+|---|---|---|
+| official | compile **194/194**、compile+link **191/194**；link-only 3 条名单逐字未动（`integration_all_features`／`quantum_basic`／`selfhost`） | 相同 |
+| 诊断面 official | 5/194 文件、**21 行** | 相同 |
+| python_style | **426 passed / 0 failed / 4 known-fail / 0 xpass** | 650＝420/2/6/0 ⇒ 两条存量红（`t231`、`t233`）已由 658/659 收干，known-fail 6→4 |
+| 诊断面 python_style | **273 行 / 128 文件** | 650＝271/126 ⇒ **+2 行/+2 文件，未逐项归因**（登记；651–659 快门禁未跑该步） |
+| corpus | 40 文件、解析 **40/40 = 100%** | 相同 |
+| jit sweep | **ok=176 trap=451 fail=0 timeout=0 segv=0**（total 627，最小 ok=163）⇒ `GREEN` | 650＝178/447/0/0/**625** ⇒ 输入 +2、**ok −2**。**归因＝不是本批**：`ZETAC=` 各指 pre/post 两颗各跑一遍，两侧逐字相同（`ok=176 trap=451 total=627`）⇒ 这一档在 651–659 之间发生且当时跳过了 jit 步；**具体哪两条从 ok 变 trap 未逐案定位**（登记） |
+| truth | **43/43** | 相同 |
+| 真值面分族 | str 105/105、container **226/227**、numeric 113/134、control 90/91 | container +1＝本批那一格，其余相同 |
+| diff | **match=577 judged=600 rate=96.2% bad_case=1**（总用例 601） | 650＝576/600/96.0%/1 |
+| 坏用例 | `del_undefined_var`（参考侧 `NameError: name 'x' is not defined`） | 相同 |
+| knob/swallow/import/empty_stmt | 23 / 6 / 22 / 68 条断言，FAIL 全 0 | 相同 |
+| pysrc/cli_semantics/ignore_rules | 42 / 87 / 19 条，FAIL 全 0 | 相同 |
+| mbvar/emit_stable/dyn_binding/comment_drift | 25 脚本违规 0／2 夹具违规 0／4 条不一致 0／复述 0 处 | 相同 |
+| clean_checkout | rc=0（3s，rev=`67613a9e`） | 相同（rev 搬家＝本批 HEAD） |
+
+⇒ **整趟 `GATE_RC=0`**（650 那次是 1，红源就是 `t231`/`t233` 两条存量红）。**顺带一条台账过时**：AGENTS.md「门禁节奏」一节里那句「`GATE_RC=1` 的存量红源两侧相同＝`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`」自本批起不再成立（该文件不在本批所有权动作里，只登记不改）。
+
+**二、主线 301 位移 A/B＝0（正证据）**
+
+- 两颗同在仓内 `target/release/`（坑 52/68）：`zetac.pre660` md5 `5d08320cc073679a0e22498a6108ca2c`（＝659 终态那颗；原存件被重建覆盖后按在册止损配方在隔离 worktree `/tmp/b660/pre_wt`@`67613a9e` 重建并**撞上在册 md5**＝正证据）、`zetac.post660` md5 `b7c061c482a35d8f0f8289acea03a14b`（＝当前 `target/release/zetac`）。
+- 口径：cwd `~/source/quant/REasyQuant`、`REPLAYQUANT_LOCAL=1`、驱动相对源路径 `strategies/code/_drv_accept_409.py`、**串行独占**、n＝**13/侧**；脚本 `/tmp/b660/ab660.sh`、表 `/tmp/b660/ab660.tsv`（26 行）。
+- 产物：`acc660_pre.bin`／`acc660_post.bin` 各 **686,752 B**、compile_rc **0/0**、md5 互异（`56f8832f…`/`82bcea64…`）⇒ 尺寸相同不是判据（坑：产物尺寸当位移判据在 439 已作废）。
+- 读数：两侧 26 发**全部** rc=1、stdout **0** 行、stderr **903** 行、`vstack` 命中 0、`成交` 命中 0、末行 `Unhandled exception: code=<N>`；归一后 stderr（`0x..`→`<A>`、数字→`<N>`）取 md5 ⇒ **26 发全落同一颗哈希 `617c614b7b29d72516b9152d46e40317`**。
+- 编译诊断面：`diag_pre.txt`／`diag_post.txt` 归一后 **218 行逐字相同**（warning 404／含 `error` 行 19／`PY-A:` 251 两侧同）。
+- ⇒ **零位移**（运行面＋编译面各有正证据）。分档如实：这趟两侧都停在 644 §三 在册的「行情缓存命中 0 只 → `Unhandled exception`」档，与 569/575/581 的三档不同档 ⇒ 结论只覆盖这条路径；**主线 301「0 笔成交」症状本批未变**。
+
+**三、锚点面＝本批零重绑义务**
+
+- 改后：漂移 **68**／新 **0**／消失 **4**（基线 306 条），待归属 98 条/88 种、声明为仓外 14 条、共用同键 38 条，rc=1。
+- 对照在隔离 worktree `/tmp/b660/pre_wt`（HEAD 自基线）：漂移 **68**／新 0／消失 **6**。
+- 逐项核过（不是只比计数）：两份 `[漂移]` **集合 68 条逐字相同**（`diff` 为空）⇒ **本批净 +22 行没把任何一条原本正确的引用推离**，零重绑义务。
+- 消失 6 vs 4 的差＝pre_wt 缺未跟踪生成物 `runtime/aliases.inc.c`（`.gitignore` 屏蔽，在册坑 71）带出的 2 条定位失败＋2 条消失＝**worktree 假 delta**，不是本批 damage。
+- 唯一内容级差异＝已漂移的 `resolver.rs:4217` 那条引用在新树下指向了另一行（本批 +22 行把它推远）——它改前就在那 68 条存量里，属 **#167** 的账。
+
+**四、事故与自纠（入册以免重犯）**
+
+第一笔改动打到了**错误的引擎**：PY-A 有两台独立的返回推断引擎，`classify`＋`infer_untyped_returns`（`:1335`）只服务模块级无注解 def——它的入口闸门是 `ret.is_empty() || ret == "()"`，而 py 类方法带着解析层硬写的 i64 默认，**根本进不去**。改完编译通过、夹具读数一个字没变（仍是地址）才发现打错。回退四行后用 `git diff --stat src/` 复验工作树为空，再重做。⇒ 教训：**同族两台引擎要先确认哪台在服务这条拼写**，判据＝改后读数不变即打错点。
+
+**五、登记的三个残口（本批刻意未动、也未量成员数）**
+
+1. `self.<f>.get(key, <int 字面量>)`：默认值是整数时 `dt` 也取不到 ⇒ 落 `(None, None)` ⇒ 仍是毒票弃权 ⇒ **同族另一头还红着**；
+2. 模块级 `def f(d): return d.get(k, "x")`：走的是另一台引擎（`infer_untyped_returns`），本批未接；
+3. 无注解字段 × 默认值类型推不出（`(None, None)`）整档弃权。
+
+**账务**：代码 `f3fa96f2` → 代录 `9eef3f27` → 本记录批（＋worktree 台账行）。下一次全量门禁＝**批次 670**。存件 `/tmp/b660/`（`gate_full.log`、`ab660.sh`/`ab660.tsv`/`runs/*`、`compile_{pre,post}.log`、`diag_{pre,post}.txt`、`compile_diag.tsv`、`anchors_{head,post}.txt`＋两份漂移集合、`t660.z`、`bless.py`、`pre_build.log`、`pre_wt/`）。
+
 （暂空——下一批从 409 §十一 (a)①② 的隔离复现开始，记录格式沿用 roadmap.md 的四段证据纪律。）
