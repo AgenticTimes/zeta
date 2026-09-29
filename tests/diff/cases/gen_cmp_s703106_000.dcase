@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=703106 #0）
+#@@ python
+print(16.88 < 36.44)
+print(-57.83 != -86.82)
+print(not 51)
+print(not 31)
+
+#@@ zeta
+print(16.88 < 36.44)
+print(-57.83 != -86.82)
+print(not 51)
+print(not 31)
+

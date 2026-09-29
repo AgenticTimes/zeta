@@ -1,0 +1,6 @@
+# @cat: numeric
+# @note: 随机生成（seed=703101 #2）—— CPython 先验通过，oracle = 实跑输出
+#@@ python
+print(94970880216379)
+#@@ zeta
+print(94970880216379)
