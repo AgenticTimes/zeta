@@ -187,6 +187,7 @@
 | 650 | bootstrap | 归因半笔＋十倍位全量门禁批（3.2／别名键候选臂 4→2：ConstDef:1124／EnumDef:1146 两臂排除，只剩 FuncDef :1016/:1107；守卫未读、真修未动手） | 全量 17 步零新增红，GATE_RC=1＝两条存量红＋G.3 一条坏用例，与 640 逐格相同；下次全量＝660 | 已入册 |
 | 651 | bootstrap | 跨模块同名类方法派发碰撞（主线 301 根因链；金字塔 3.2；harness #253）：ImplBlock 注册＋rename_definition＋inherit_class_members 三层修法 | 快门禁：official 194/194·191/194、python_style 418/3/6/0（红源仍 t231/t233/t404） | 已入册 |
 | 652 | bootstrap | len() 对动态数组值返回正确长度（主线 409 (a)①②）：classify() 加 ArrayLit/DynamicArrayLit 分支＋zeta_dyn_len 注册 | 快门禁：official 194/194·191/194、python_style 420/3/6/0（红源仍 t231/t233/t404，t404 基线已失败非回归） | 已入册 |
+| 653 | bootstrap | print/repr 对 PyDynamic 值的派发（主线 #117）：新增 `zeta_dyn_to_string` 运行期函数（`runtime/py_additions.c`），用 GC 几何探针（`zt_dyn_is_map`→`zt_dyn_vec_hdr`→`zt_c_readable`→整型兜底）判别动态句柄实际类型后转字符串；`gen.rs` 三处（print 多参/println 单参/repr）在类型派发前插入转换调用，将 `Type::PyDynamic` 提升为 `Type::Str` 后走既有字符串路径；新用例 t497 | 快门禁：official 194/194·191/194、python_style 421/3/6/0（红源仍 t231/t233/t404，+1 用例＝t497） | 已入册 |
 | （续） | | | | |
 
 ## 5. Agent-2 旁路台账（ZCode 维护；cleanup）
