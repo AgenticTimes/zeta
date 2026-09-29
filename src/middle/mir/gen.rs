@@ -5489,6 +5489,28 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     });
                     self.exprs.insert(dest, MirExpr::Var(dest));
                     self.type_map.insert(dest, Type::Str);
+                } else if op == "%"
+                    && matches!(self.type_map.get(&left_id), Some(Type::Str))
+                {
+                    // PY-A: `"f=%s" % value` — Python's printf-style string
+                    // formatting.  Previously the `%` fell through to integer
+                    // modulo on the string pointer and the value handle, so
+                    // `"f=%s" % d["name"]` printed 13 (garbage) instead of
+                    // f=abc (measured in t401).  Route through a dedicated
+                    // runtime function that parses the format string and
+                    // converts each value — PyDynamic goes through
+                    // zeta_dyn_to_string, integers get snprintf'd, strings
+                    // pass through as char*.
+                    let left_id = self.materialize_for_call(left_id);
+                    let right_id = self.materialize_for_call(right_id);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_str_percent_fmt".to_string(),
+                        args: vec![left_id, right_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map.insert(dest, Type::Str);
                 } else if op == "*"
                     && matches!(
                         self.type_map.get(&left_id),

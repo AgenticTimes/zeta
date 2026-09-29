@@ -4229,6 +4229,91 @@ int64_t zeta_dyn_to_string(int64_t h) {
     return to_string_i64(h);
 }
 
+// Batch 654 (#117): Python's `str % value` formatting operator.
+// Previously the `%` was compiled as integer modulo on the string pointer
+// and the value handle, so `"f=%s" % d["name"]` printed 13 (garbage)
+// instead of f=abc.  Handles %s / %d / %r / %% / %f; a tuple rhs supplies
+// one element per specifier, a scalar rhs is reused for every specifier.
+int64_t zeta_str_percent_fmt(int64_t fmt, int64_t value) {
+    if (!fmt) return (int64_t)GC_strdup("");
+    const char* f = (const char*)fmt;
+    size_t flen = strlen(f);
+
+    // Count format specifiers to decide single-value vs tuple mode.
+    int nspec = 0;
+    for (size_t i = 0; i < flen; i++) {
+        if (f[i] == '%' && i + 1 < flen && f[i + 1] == '%') { i++; continue; }
+        if (f[i] == '%') nspec++;
+    }
+
+    // Tuple rhs: dynamic-array header exists ⇒ extract per-element values.
+    int is_tuple = (zt_dyn_vec_hdr(value) != NULL);
+    int64_t* elems = NULL;
+    int64_t n_elems = 0;
+    if (is_tuple) {
+        int64_t* hdr = zt_dyn_vec_hdr(value);
+        n_elems = hdr[1];
+        elems = &hdr[2];
+    }
+
+    char* buf = (char*)GC_malloc_atomic(flen * 64 + 256);
+    if (!buf) return (int64_t)GC_strdup("<OOM>");
+    size_t out = 0, vi = 0;
+
+    for (size_t i = 0; i < flen; i++) {
+        if (f[i] != '%') { buf[out++] = f[i]; continue; }
+        if (i + 1 >= flen) { buf[out++] = f[i]; continue; }
+        char spec = f[i + 1];
+        if (spec == '%') { buf[out++] = '%'; i++; continue; }
+
+        // Pick the value for this specifier.
+        int64_t v;
+        if (is_tuple && vi < (size_t)n_elems) {
+            v = elems[vi];
+        } else if (!is_tuple) {
+            v = value;
+        } else {
+            v = 0;  // tuple exhausted — fill zeroes
+        }
+        vi++;
+
+        switch (spec) {
+        case 's': case 'r': {
+            // Convert value to its string representation.
+            int64_t sv;
+            if (zt_c_readable(v)) {
+                sv = v;  // already a char*
+            } else {
+                sv = zeta_dyn_to_string(v);
+            }
+            const char* s = (const char*)sv;
+            if (s) { size_t sl = strlen(s); memcpy(buf + out, s, sl); out += sl; }
+            break;
+        }
+        case 'd': case 'i': {
+            out += (size_t)snprintf(buf + out, 64, "%lld", (long long)v);
+            break;
+        }
+        case 'f': {
+            // Float stored as i64 bit pattern (same convention as the rest
+            // of the compiler: sitofp at the consumer).
+            double dval;
+            memcpy(&dval, &v, sizeof(double));
+            out += (size_t)snprintf(buf + out, 64, "%f", dval);
+            break;
+        }
+        default:
+            // Unknown specifier — emit literally.
+            buf[out++] = '%';
+            buf[out++] = spec;
+            break;
+        }
+        i++;  // skip specifier char
+    }
+    buf[out] = '\0';
+    return (int64_t)GC_strdup(buf);
+}
+
 // BATCH-297: Python truthiness of a PARSED JSON value.
 // `json.loads` values are tagged cells (`word0 = kind, word1 = payload`, see
 // the ZJ_* block in the stub), so `zeta_dyn_truth`'s GC-geometry probes cannot
