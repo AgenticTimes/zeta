@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=676104 #1）
+#@@ python
+print(77.18 > -24.67)
+print(525 < 573 < 470)
+
+#@@ zeta
+print(77.18 > -24.67)
+print(525 < 573 < 470)
+
