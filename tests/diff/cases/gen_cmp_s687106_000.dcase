@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=687106 #0）
+#@@ python
+print(78.44 == -86.96)
+print(308 < 5 <= 97)
+
+#@@ zeta
+print(78.44 == -86.96)
+print(308 < 5 <= 97)
+
