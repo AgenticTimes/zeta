@@ -10258,7 +10258,15 @@ call, no NULL-handle dereference).",
                                 let rt = self.type_map.get(&right_id).cloned();
                                 let mut right_stmts = std::mem::take(&mut self.stmts);
                                 self.stmts = saved3;
-                                let split_worthy = matches!(rt, Some(Type::Bool))
+                                /* Batch 648: the RIGHT operand may also be
+                                   a NoneLit (`3 and None` in CPython prints
+                                   None) — the None face renders it. */
+                                let right_none = matches!(
+                                    &**right,
+                                    AstNode::NoneLit
+                                );
+                                let split_worthy = (matches!(rt, Some(Type::Bool))
+                                    || right_none)
                                     && matches!(lt, Some(Type::I64) | Some(Type::PyDynamic) | None);
                                 if split_worthy {
                                     let truth_id =
@@ -10291,19 +10299,33 @@ call, no NULL-handle dereference).",
                                     // operand (Bool — True/False via
                                     // to_string_bool + println_str); falsy
                                     // prints the LEFT (int). `||` mirrors.
-                                    let cid = self.next_id();
-                                    self.exprs.insert(cid, MirExpr::Var(cid));
-                                    self.type_map.insert(cid, Type::Str);
-                                    right_stmts.push(MirStmt::Call {
-                                        func: "to_string_bool".to_string(),
-                                        args: vec![right_id],
-                                        dest: cid,
-                                        type_args: vec![],
-                                    });
-                                    right_stmts.push(MirStmt::VoidCall {
-                                        func: "println_str".to_string(),
-                                        args: vec![cid],
-                                    });
+                                    if right_none {
+                                        /* None side: print the literal "None"
+                                           (a NoneLit operand lowers to I64 0,
+                                           which would render as an integer). */
+                                        let nid = self.next_id();
+                                        self.exprs
+                                            .insert(nid, MirExpr::StringLit("None".to_string()));
+                                        self.type_map.insert(nid, Type::Str);
+                                        right_stmts.push(MirStmt::VoidCall {
+                                            func: "println_str".to_string(),
+                                            args: vec![nid],
+                                        });
+                                    } else {
+                                        let cid = self.next_id();
+                                        self.exprs.insert(cid, MirExpr::Var(cid));
+                                        self.type_map.insert(cid, Type::Str);
+                                        right_stmts.push(MirStmt::Call {
+                                            func: "to_string_bool".to_string(),
+                                            args: vec![right_id],
+                                            dest: cid,
+                                            type_args: vec![],
+                                        });
+                                        right_stmts.push(MirStmt::VoidCall {
+                                            func: "println_str".to_string(),
+                                            args: vec![cid],
+                                        });
+                                    }
                                     let left_print = MirStmt::VoidCall {
                                         func: "println_i64".to_string(),
                                         args: vec![left_id],
