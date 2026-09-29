@@ -1,0 +1,26 @@
+# t496: len() on dynamic value and array literal
+# Batch 652: two compounding defects
+// expect: 1
+// expect: 5
+// expect: 2
+// expect: 3
+// expect: 3
+
+def foo(x):
+    return len(x)
+
+cache = {"k": [1, 2, 3]}
+r1 = foo(cache)
+r2 = foo([1, 2, 3, 4, 5])
+data = {"a": 1, "b": 2}
+r3 = foo(data)
+
+print(r1)
+print(r2)
+print(r3)
+
+r4 = len([10, 20, 30])
+print(r4)
+
+r5 = len(cache["k"])
+print(r5)

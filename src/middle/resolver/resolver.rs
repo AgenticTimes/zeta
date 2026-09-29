@@ -1527,6 +1527,11 @@ impl Resolver {
                         0
                     }
                 }
+                // 批次 652：数组字面量（`[1,2,3]` / `DynamicArrayLit`）返回 kind=4，
+                // 让参数证据链里数组可见。旧代码 `_ => 0` 让数组永远不触发冲突检测
+                // ⇒ `len(cache["k"])` 与 `len([1,2,3])` 共享参数时，数组那侧的证据
+                // 被吞，参数被单方面钉成 Str ⇒ len() 走 str_len 路径 ⇒ 错值。
+                AstNode::ArrayLit(_) | AstNode::DynamicArrayLit { .. } => 4,
                 _ => 0,
             }
         }
@@ -1734,6 +1739,9 @@ impl Resolver {
                             1 => "str",
                             2 => "f64",
                             3 => "i64",
+                            // 批次 652：数组字面量参与冲突检测。"array" 与 "str"/"handle"
+                            // 算跨族（clash 触发 ⇒ 参数退 PyDynamic），与 i64/f64 也算跨族。
+                            4 => "array",
                             _ => "",
                         };
                         // PY-A: a param that receives a library HANDLE value
@@ -1845,6 +1853,10 @@ impl Resolver {
                         match kind {
                             "str" => changed.push((i, Type::Str)),
                             "f64" => changed.push((i, Type::F64)),
+                            // 批次 652：数组字面量钉成 DynamicArray(I64)。与 Str 跨族 ⇒
+                            // 下一调用点若传 str 会触发 clash ⇒ 退 PyDynamic ⇒ len()
+                            // 走 zeta_dyn_len（本批注册）而不是 str_len。
+                            "array" => changed.push((i, Type::DynamicArray(Box::new(Type::I64)))),
                             _ => {}
                         }
                         if let Some(tag) = handle {

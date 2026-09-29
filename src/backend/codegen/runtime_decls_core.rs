@@ -57,6 +57,7 @@ pub fn declare_core_runtime_fns<'ctx>(
     module.add_function("zeta_floor_f64", f64_type.fn_type(&[f64_type.into()], false), Some(Linkage::External));
     module.add_function("zeta_fmt_f64_spec", i64_type.fn_type(&[f64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("zeta_identity1", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+    module.add_function("zeta_dyn_len", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
     module.add_function("zeta_int_f64", i64_type.fn_type(&[f64_type.into()], false), Some(Linkage::External));
     module.add_function("zeta_int_i64", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
     module.add_function("zeta_int_str", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
