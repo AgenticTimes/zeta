@@ -10,7 +10,11 @@
 //   对照臂（健康掩码）`df.loc[df["a"]]` ⇒ rc=0、len 3，所以症状专属这条回退路径而非 loc 本身。
 // 本批＝度量批：只登记读数，不改 `runtime/`（运行期真修需用户授权，见 roadmap2 批次 545 §读数表）。
 // 期望值是**本仓约定**（`pylib/pandas.z:181-189` 注释承诺的「同列空帧」）；pandas 在标签缺失时抛 KeyError。
-// known-fail: 非向量掩码的同列空帧回退路径 raise（zt_maybe_map 松判据放行后 map_keys 严判据拒收）
+// known-fail: 非向量掩码的同列空帧回退路径 raise——批次 663 定性升级：判据已对齐
+//   （zt_maybe_map 原 m-16 偏移＝vec 头约定，对 map 句柄是错窗采样；已改读 map_resolve
+//   同款 word0＋幂二判据），探针实拍**同一 m 守卫过（cap=16）、map_keys 收到 448B 外
+//   的另一块**＝移动 GC 在两读之间搬家（#213① 运行期值表示/GC 可见性深水），判据面
+//   已非缺口。
 // expect: M 0
 from pandas import DataFrame
 df = DataFrame({"a": [1, 2, 3]})

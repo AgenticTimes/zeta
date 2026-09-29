@@ -1268,8 +1268,14 @@ int64_t py_vec_notna(int64_t vec);
 // A plausible `map<..>` block: header is `[cap|len]` with sane bounds.
 static int zt_maybe_map(int64_t m) {
     if (!m || m < 0x1000) return 0;
-    int64_t cap = ((int64_t*)(m - 16))[0];
-    if (cap < 0 || cap > (1LL << 26)) return 0;
+    /* Batch 663: read the cap word at offset 0 — the same word
+       map_resolve inspects — with the same power-of-two criteria. The
+       old `m - 16` offset was the VEC header convention, so this guard
+       sampled an unrelated word and passed garbage that map_keys's own
+       strict check then rejected (t494's registered raise: lenient
+       guard + strict consumer on the same handle). */
+    int64_t cap = ((int64_t*)m)[0];
+    if (cap < 16 || cap > (1LL << 30) || (cap & (cap - 1)) != 0) return 0;
     return 1;
 }
 static int zt_maybe_vec(int64_t v) {
