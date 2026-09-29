@@ -25282,3 +25282,21 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 **下一批（真修草图，不动手）**：把方法条目键也带上定义身份（与 `m647a__Cfg` 同一套前缀来源，别新开第二套命名），落地面预计是 gen.rs 的 `{cls}::{fn_name}` 限定键一处＋其读点；本仓三面覆盖面已实测：**语料 0／库面 0／套件 0（同文件形）**，跨文件同名 23 名是天然回归素材——所以真修必须自带这条跨模块夹具进门禁（新 `t` 号：主线段 `t45x–t49x` 已用满，`tests/` 现有最大号 543，跨段取号需先报备，harness 号段纪律见 AGENTS）。
 
 **门禁**：零 `src/`、`runtime/`、`tools/`、夹具入库改动 ⇒ 快门禁不适用；只读跑 `bash tools/abi_anchors_check.sh` ⇒ `ANCHOR_RC=0`。不 push。
+
+### 批次 648（定位批／3.2 Lowering・方法条目键的定义侧落点地图）
+
+**层号归位**：pyramid 3.2。承接批次 647 的红成员（`2 9` vs CPython `1 7`），本批只把**修法落点**量准，零代码改动——因为解析侧有 5 组站点共用同一条不变式，单点改动会打断全仓方法派发。
+
+**根因（一句话，带出处）**：定义侧**故意**把模块 mangle 前缀剥掉。`src/middle/mir/gen.rs:1437-1445` 把 `fname` 里的 `pandas__DataFrame` 剥成裸类名 `DataFrame` 存进 `current_class`，注释原文即「剥模块 mangle 前缀（pandas__DataFrame → DataFrame），type_decls/func_ret_types 以裸类名为键」；紧接着 `:1456-1462` 用 `mpr_key = format!("{}::{}", c, fname)` 造出方法条目键 ⇒ 两个模块的 `Cfg::show` 落成**同一个键**。这正是 647 在 MIR 里看到的形状（构造侧 `m647a__Cfg`/`m647b__Cfg` 两颗，方法侧只有一条 `Cfg::show`）。
+
+**这条不变式的消费面（改动半径，实测坐标）**：
+- `:1050-1080` `qualified_method_candidate`：先试 `tn::method`（`tn` 可以是带前缀的 `m647a__Cfg`），落空才退到 `tail::method`／下划线候选／`:1080` 的 `last::method`。
+- `:12070` `struct_has_method` 用 `format!("{}::{}", tn, method)` 查 `func_ret_types`（决定"已知 struct 上的方法优先于 opaque 兜底"）。
+- `:13168`／`:13181`／`:13193` 调用点分发：`Type::Named(tn,_)` 走 `qualified_method_candidate`，接收者类型未知时按 `::method` 后缀扫 `func_ret_types` 的**唯一**候选。
+- `:14553`／`:14566` 字段限定名与 `:14748`／`:14901` 路径拼法同源于裸类名。
+
+**为什么不能替换键**：`pylib/pandas.z` 的方法在库内以 `DataFrame::columns` 这类**裸类名键**注册并被 `self`（其类型是 mangle 后的 `pandas__DataFrame`）反向查到——`:1050` 的双写法兜底就是为它写的。把裸键改成带模块前缀的键，会一次打断整套库方法派发（覆盖面：库面 3 类＋套件 110 条类定义＋语料 9 类）。
+
+**最小修形状（交下一批落地，本批不动手）**：在 `:1456-1462` **追加**一条带模块前缀的别名键（`{mangled_cls}::{fname}` 同体发布），裸键原样保留 ⇒ 定义侧一处、纯增量；解析侧 `:1050` 的 `direct` 优先天然命中带前缀那颗，`:1056` 的 `tail` 兜底继续服务库面 ⇒ 不改任何消费者。验证闸门三条：① 647 夹具转绿（`1 7`）② pylib 库面方法族不红（`python_style` 353 passed/2 failed/6 known-fail 口径）③ 主线 301 位移 A/B 两颗同目录（n≥6/侧、归一后比对）。改前红已实拍（批次 647），新回归用例入库须照此先红后绿。
+
+**门禁**：零 `src/`、`runtime/`、`tools/`、夹具入库改动 ⇒ 快门禁不适用；只读 `bash tools/abi_anchors_check.sh` ⇒ `ANCHOR_RC=0`。不 push。
