@@ -1,0 +1,16 @@
+# @cat: container
+# @note: 随机字典方法链（seed=683202 #1）
+#@@ python
+d = {"alpha": 46, "k1": 0}
+print("beta" in d)
+print("alpha" in d)
+print(d.get("beta", -81))
+print(len(d))
+
+#@@ zeta
+d = {"alpha": 46, "k1": 0}
+print("beta" in d)
+print("alpha" in d)
+print(d.get("beta", -81))
+print(len(d))
+
