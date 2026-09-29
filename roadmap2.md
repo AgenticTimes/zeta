@@ -136,4 +136,22 @@ G.5e 符号注册表（= C1 SymbolRegistry）
 
 **提交**：`d7f9a8fd`
 
+### 批次 658（2026-09-29，主线）：`dict(x)` 动态参数走 `map__copy`（t231 转绿）
+
+**现象**：t231 (`dict_set_cast_fromkeys`) 运行期 abort：`PY-A: _dict is NOT implemented in this build`。测试里的 `def copy_dict(x): return dict(x)` 在 `x` 为函数形参（类型 `PyDynamic`）时落到幽灵 `dict_1`。
+
+**根因**：`src/middle/mir/gen.rs:9220-9248` 的 `dict(m)` 浅拷贝路径只在参数静态类型为 `map`/`dict` 时生效（`is_map` 判真 ⇒ `MapNew` + `py_map_update`）。当 `m` 是 `PyDynamic` 时，`is_map` 判假 ⇒ 整段跳过 ⇒ `dict(x)` 变成裸大写调用，最终解析为幽灵 `dict_1` ⇒ 链接期 `_dict` NOT implemented。
+
+**修法**（`src/middle/mir/gen.rs:9248-9261`）：在 `if is_map { ... }` 后加 `else` 臂——动态/未知类型参数走 `map__copy(src)`（`runtime/py_additions.c:3718`，创建新 map + `py_map_update` 复制全部条目），语义与 Python `dict(m)` 浅拷贝一致。
+
+**门禁读数**（快门禁）：
+- official: compile 194/194, compile+link 191/194（不变）
+- python_style: 425 passed, 1 failed (t233), 4 known-fail, 0 xpass
+  - t231 转绿（存量红从 2 颗减到 1 颗）
+- dyn_binding: 4/0, comment_drift: 0
+
+**改动面**：`src/middle/mir/gen.rs`（下型/出码面）
+
+**提交**：`d7da9915`
+
 （暂空——下一批从 409 §十一 (a)①② 的隔离复现开始，记录格式沿用 roadmap.md 的四段证据纪律。）
