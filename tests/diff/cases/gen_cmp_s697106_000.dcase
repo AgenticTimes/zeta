@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=697106 #0）
+#@@ python
+print(903 < 296 <= 148)
+print(not 95)
+print(not -95)
+print(288 < -5 > 316)
+
+#@@ zeta
+print(903 < 296 <= 148)
+print(not 95)
+print(not -95)
+print(288 < -5 > 316)
+
