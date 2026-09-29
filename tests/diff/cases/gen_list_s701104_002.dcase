@@ -1,0 +1,18 @@
+# @cat: container
+# @note: 随机容器（seed=701104 #2）—— CPython 先验通过
+#@@ python
+v = [-922, 456, 320, 453, -183]
+print(len(v))
+print(v[2])
+v.append(187)
+print(len(v))
+print(187 in v)
+
+#@@ zeta
+v = [-922, 456, 320, 453, -183]
+print(len(v))
+print(v[2])
+v.append(187)
+print(len(v))
+print(187 in v)
+
