@@ -790,11 +790,13 @@ static int64_t zt_fmt_pad(const char* body, zt_fmt_t* f) {
     char al = f->align;
     if (!al) al = f->numeric ? '>' : '<';
     char fill = f->fill;
+    /* Batch 677: CPython's `0` flag overrides the fill with '0' for
+       numerics while the alignment direction stays as given — the old
+       guard required NO align, so `f"{65:>+07d}"` (align `>` + 0 flag)
+       space-filled instead of zero-filled ('0000+65'). */
+    if (f->zero && f->numeric) fill = '0';
     size_t left = 0, right = 0;
-    if (f->zero && !f->align && f->numeric) {
-        fill = '0';
-        left = pad;
-    } else if (al == '>') {
+    if (al == '>') {
         left = pad;
     } else if (al == '=') {
         /* '=' — padding strictly between the sign/prefix and the digits
@@ -825,7 +827,11 @@ static int64_t zt_fmt_pad(const char* body, zt_fmt_t* f) {
         return (int64_t)out;
     }
     // Zero padding goes after a leading sign, not before it.
-    if (fill == '0' && n > 0 && (body[0] == '-' || body[0] == '+')) {
+    /* Batch 677: sign-first zero-fill is the `=` (default numeric)
+       alignment's shape — an EXPLICIT `>`/`<`/`^` keeps the body intact
+       and pads around it (CPython `f"{65:>+07d}"` = '0000+65'). */
+    if (fill == '0' && (!al || al == '=') && n > 0 &&
+        (body[0] == '-' || body[0] == '+')) {
         out[0] = body[0];
         memset(out + 1, fill, left);
         memcpy(out + 1 + left, body + 1, n - 1);
@@ -901,11 +907,15 @@ int64_t py_fmt_i64(int64_t v, int64_t spec) {
         size_t dn = strlen(digs);
         size_t sl = sg ? 1u : 0u;
         size_t dlen = dn;
-        if (f.group && f.zero && f.width > 0) {
+        /* Batch 677: the sign-then-zeros digit pre-padding is the `=`
+           (default numeric) alignment's job — with an EXPLICIT align
+           (`>` / `<` / `^`) the 0 fill belongs OUTSIDE the signed body
+           (CPython `f"{65:>+07d}"` = '0000+65', not '+000065'). */
+        if ((!f.align || f.align == '=') && f.group && f.zero && f.width > 0) {
             while (dlen + (dlen - 1) / 3 + sl < (size_t)f.width && dlen < 30) dlen++;
         }
         char tmp[32];
-        if (dlen > dn) {
+        if ((!f.align || f.align == '=') && dlen > dn) {
             memset(tmp, '0', dlen - dn);
             memcpy(tmp + (dlen - dn), digs, dn + 1);
         } else {

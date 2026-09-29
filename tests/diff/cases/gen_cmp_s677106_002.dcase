@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=677106 #2）
+#@@ python
+print(not 48)
+print(-(--12) < -3, -12 == -12)
+print(not -58)
+
+#@@ zeta
+print(not 48)
+print(-(--12) < -3, -12 == -12)
+print(not -58)
+
