@@ -179,7 +179,7 @@ impl ConstEvaluator {
                     "+" => l.checked_add(r).map(|v| (v, false)),
                     "-" => l.checked_sub(r).map(|v| (v, false)),
                     "*" => l.checked_mul(r).map(|v| (v, false)),
-                    "//" => {
+                    "//" | "floordiv" => {
                         if r == 0 {
                             None
                         } else {
@@ -304,6 +304,9 @@ impl ConstEvaluator {
             }
             if std::env::var("ZETA_DBG_P642").is_ok() {
                 eprintln!("P642 rewrite eval(a)={:?}", self.eval_i128_tree(a, 0));
+            }
+            if std::env::var("ZETA_DBG_P642").is_ok() {
+                eprintln!("P642 print eval={:?} map={:?}", self.eval_i128_tree(a, 0), self.i128_consts);
             }
             if let Some((v, is_bool)) = self.eval_i128_tree(a, 0) {
                 // A successful i128 eval IS the CPython result for a pure
