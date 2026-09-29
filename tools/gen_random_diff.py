@@ -461,6 +461,12 @@ def write_stmts_case(a, rng, idx: int) -> bool:
     expected = python_eval_program(text)
     if expected is None:
         return False  # CPython 侧报错，不进分母
+    # 批次 674：`//` 方言守卫——stmts 路径把 `// N` 放进赋值右值＝语句层被词法
+    # 当行注释吃掉（s672303/s674103 两例实测：`w = A // B` 答成 A）。方言裁定
+    # （语句层=整除 or 注释）到达前，含 `//` 的赋值链直接跳过不写；numeric/
+    # str 路径的 `//` 恒在 print() 括号内＝整除语义，不过此守卫。
+    if "//" in text:
+        return False
     # 溢出族过滤：链式乘法极易爆 i64（已知独立族），不滤会把其他缺口淹没
     try:
         if abs(int(expected.strip())) >= 2**62:
