@@ -1058,6 +1058,18 @@ impl Resolver {
                 }
                 // Register functions with qualified names
                 let base_ty = impl_key_base(ty.as_str());
+                // Batch 651: cross-module same-named classes share the bare
+                // qualified key (`Cfg::show` from both `m647a` and `m647b`).
+                // `qualified_method_candidate` (gen.rs:1050) tries the mangled
+                // direct key first (`m647a__Cfg::show`) — add it as an alias
+                // so the direct arm hits and the tail fallback (which collides
+                // across modules) is not needed.
+                let mangled_cls = self
+                    .py_current_module
+                    .borrow()
+                    .as_ref()
+                    .map(|m| format!("{}__{}", m.replace('.', "_"), base_ty))
+                    .filter(|mc| self.type_decls.contains_key(mc));
                 for b in body.clone() {
                     if let AstNode::FuncDef {
                         name, params, ret, ..
@@ -1072,7 +1084,7 @@ impl Resolver {
                             .collect();
                         let typed_ret = self.string_to_type(ret);
                         self.funcs
-                            .insert(qualified_name, (typed_params, typed_ret, false));
+                            .insert(qualified_name, (typed_params.clone(), typed_ret.clone(), false));
                     }
                     // Register with qualified name (for MIR resolution)
                     // Clone the func and override its name so MIR matches the call site
@@ -1087,7 +1099,50 @@ impl Resolver {
                     // Also register with simple name for backwards compat.
                     // Defaults stay keyed by the bare method name (`reset_index`);
                     // MirGen::callee_sig_for_call also looks up `Type::method`.
-                    self.register(b);
+                    // Batch 651: clone `b` so the mangled-alias block below
+                    // can still borrow/clone it after register consumes the original.
+                    self.register(b.clone());
+                    // Batch 651: RE-INSERT mangled-class aliases AFTER
+                    // self.register(b) — the bare-name registration overwrites
+                    // both self.funcs and registered_funcs entries, so the
+                    // mangled aliases must be set AFTER it, not before.
+                    if let Some(ref mc) = mangled_cls {
+                        if let AstNode::FuncDef {
+                            name: mname,
+                            params: mparams,
+                            ret: mret,
+                            ..
+                        } = &b
+                        {
+                            let mq = format!("{}::{}", mc, mname);
+                            let mp: Vec<(String, Type)> = mparams
+                                .iter()
+                                .map(|(n, t)| (n.clone(), self.string_to_type(t)))
+                                .collect();
+                            let mr = self.string_to_type(mret);
+                            self.funcs.insert(mq.clone(), (mp, mr, false));
+                            let mut mangled_ast = b.clone();
+                            if let AstNode::FuncDef {
+                                ref mut name,
+                                ref mut params,
+                                ..
+                            } = mangled_ast
+                            {
+                                *name = mq.clone();
+                                // Batch 651: also rewrite the `self` parameter
+                                // type to use the mangled class name, so the
+                                // receiver type in the method body matches the
+                                // mangled struct (not the bare name that
+                                // resolves to the wrong module's class).
+                                if let Some((_, self_ty)) = params.first_mut() {
+                                    if self_ty == &base_ty {
+                                        *self_ty = mc.clone();
+                                    }
+                                }
+                            }
+                            self.registered_funcs.insert(mq, mangled_ast);
+                        }
+                    }
                 }
             }
             AstNode::ConceptDef { methods, .. } => {
@@ -2602,8 +2657,22 @@ impl Resolver {
                     ret: ty.clone(),
                     body: vec![],
                     attrs: vec![],
+                    // Batch 651: the variant name must match the mangled class
+                    // name (e.g., `m647a__Cfg`), not the bare name (`Cfg`).
+                    // Without this, cross-module same-named classes both return
+                    // `Struct { variant: "Cfg" }`, and the receiver type is bare
+                    // `Cfg`, causing method dispatch to collide on `Cfg::show`.
+                    // Search `type_decls` for the mangled name: it ends with
+                    // `__<bare_name>` and belongs to the same module context.
                     ret_expr: Some(Box::new(AstNode::StructLit {
-                        variant: ty.clone(),
+                        variant: {
+                            let suffix = format!("__{}", ty);
+                            self.type_decls
+                                .keys()
+                                .find(|k| k.ends_with(&suffix))
+                                .cloned()
+                                .unwrap_or_else(|| ty.clone())
+                        },
                         fields: ctor_fields,
                     })),
                     single_line: false,
@@ -2706,8 +2775,18 @@ impl Resolver {
                 ret: ty.clone(),
                 body: vec![],
                 attrs: vec![],
+                // Batch 651: same fix as the other constructor path — use the
+                // mangled class name for the variant so the receiver type is
+                // mangled and method dispatch doesn't collide.
                 ret_expr: Some(Box::new(AstNode::StructLit {
-                    variant: ty.clone(),
+                    variant: {
+                        let suffix = format!("__{}", ty);
+                        self.type_decls
+                            .keys()
+                            .find(|k| k.ends_with(&suffix))
+                            .cloned()
+                            .unwrap_or_else(|| ty.clone())
+                    },
                     fields: ctor_fields,
                 })),
                 single_line: false,
@@ -6472,22 +6551,73 @@ fn rename_definition(a: AstNode, prefix: &str) -> AstNode {
             const_,
             comptime_,
             where_clauses,
-        } => AstNode::FuncDef {
-            name: format!("{}{}", prefix, name),
-            generics,
-            lifetimes,
-            params,
-            ret,
-            body,
-            attrs,
-            ret_expr,
-            single_line,
-            doc,
-            pub_,
-            async_,
-            const_,
-            comptime_,
-            where_clauses,
+        } => {
+            // Batch 651: when a constructor is mangled (e.g., `Cfg` →
+            // `m647a__Cfg`), its return expression's StructLit variant must
+            // also be mangled so the returned value carries the mangled type
+            // name. Without this, cross-module same-named classes both return
+            // `Struct { variant: "Cfg" }`, and method dispatch on the receiver
+            // type resolves to the bare `Cfg::show` (which collides) instead
+            // of the mangled `m647a__Cfg::show`.
+            let ret_expr = ret_expr.map(|re| {
+                if let AstNode::StructLit { variant, fields } = *re {
+                    Box::new(AstNode::StructLit {
+                        variant: format!("{}{}", prefix, variant),
+                        fields,
+                    })
+                } else {
+                    re
+                }
+            });
+            // Batch 651: the parser-synthesized constructor puts the
+            // StructLit in the body as a Return statement (ret_expr is
+            // None), so the ret_expr mangling above does not catch it.
+            // Walk the body and mangle any StructLit variants inside
+            // Return nodes so the constructor returns the mangled type.
+            let body = body
+                .into_iter()
+                .map(|stmt| match stmt {
+                    AstNode::Return(inner) => {
+                        if let AstNode::StructLit { variant, fields } =
+                            *inner
+                        {
+                            AstNode::Return(Box::new(AstNode::StructLit {
+                                variant: format!("{}{}", prefix, variant),
+                                fields,
+                            }))
+                        } else {
+                            AstNode::Return(inner)
+                        }
+                    },
+                    other => other,
+                })
+                .collect();
+            // Batch 651: for constructors, the `ret` field is the class
+            // name (same as the function name). Mangle it so the return
+            // type carries the mangled class name, which propagates to
+            // the receiver type at method call sites.
+            let ret = if ret == name {
+                format!("{}{}", prefix, ret)
+            } else {
+                ret
+            };
+            AstNode::FuncDef {
+                name: format!("{}{}", prefix, name),
+                generics,
+                lifetimes,
+                params,
+                ret,
+                body,
+                attrs,
+                ret_expr,
+                single_line,
+                doc,
+                pub_,
+                async_,
+                const_,
+                comptime_,
+                where_clauses,
+            }
         },
         AstNode::StructDef {
             name,
