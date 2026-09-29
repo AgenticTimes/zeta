@@ -94,4 +94,23 @@ G.5e 符号注册表（= C1 SymbolRegistry）
 
 ## 6. 批次记录（自批次 410 起追加于此）
 
+### 批次 656（2026-09-29，主线）：`py_df_empty_like` 直接返回 map（帧套帧修复）
+
+**现象**：t404 (`df[idx]` 行过滤) 在 `import pandas as pd` 下崩溃，报错 `map_keys was called on a value that is not a dict (first word="DataFrame")`。同一测试用 `from pandas import DataFrame` 则通过。
+
+**根因**：`py_df_empty_like` 返回的是帧结构体（指针，首字段是 map），但 pylib 的 `loc`/`iloc` 方法直接把结果传给 `DataFrame(...)` 构造器。构造器期望的是 map，于是把帧结构体指针存进 `self.data`。后续 `self.data.keys()` 对帧结构体调 `map_keys`，而帧结构体的首字是 `"DataFrame"` 字符串标签 ⇒ 报错。
+
+**修法**：
+- `runtime/py_additions.c:1582-1610`：`py_df_empty_like` 直接返回 `nm`（map），不再包成帧结构体
+- `runtime/py_additions.c:1903`：`py_df_loc` 的空选择分支直接 `return py_df_empty_like(frame)`，不再 `*(int64_t*)ef` 解包
+- `pylib/pandas.z:189-198`：`loc` 方法minor重构，拆成两行便于阅读
+
+**门禁读数**（快门禁，跳过 corpus/jit/diff 等）：
+- python_style: 422 passed, 3 failed (t231, t233, t404), 4 known-fail, 1 xpass
+- t404 在 `import pandas as pd` 下仍失败，`from pandas import DataFrame` 下通过——import 风格依赖行为，单独调查
+
+**改动面**：runtime C + pylib（不影响 `src/middle`/`src/backend`，无需位移 A/B）
+
+**提交**：`7ae93e44`
+
 （暂空——下一批从 409 §十一 (a)①② 的隔离复现开始，记录格式沿用 roadmap.md 的四段证据纪律。）
