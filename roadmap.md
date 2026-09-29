@@ -25409,3 +25409,40 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - dyn_binding：4 条断言，不一致 0
 
 **结论**：跨模块同名类方法派发碰撞已修复，快门禁零新增红。本批是连续 6 批零代码（645-650）后的第一个真修批，符合 AGENTS 纪律「同一族连续 2 批零代码 ⇒ 下一批必真修」。
+
+## 批次 652 —— len() 对动态数组值返回正确长度（主线 409 (a)①②）
+
+**提交**：`4a016fe8`（bootstrap 分支）
+
+**问题**：两个叠加缺陷导致 `len()` 对数组和动态值返回错误结果：
+1. `len(cache["k"])` 返回 0（cache 是 dict，cache["k"] 是数组）
+2. `len([1,2,3])` 返回 1（数组字面量经参数冲突后）
+
+**根因**（两层）：
+1. **classify() 缺数组分支**（resolver.rs:1530）：`ArrayLit` / `DynamicArrayLit` 走 `_ => 0`，数组参数对类型钉扎不可见。`len(cache["k"])` 与 `len([1,2,3])` 共享参数时，数组侧证据被吞，参数被单方面钉成 Str ⇒ len() 走 str_len 路径 ⇒ 错值。
+2. **zeta_dyn_len 未注册**（codegen.rs:990, runtime_decls_core.rs:61）：即使参数退化为 PyDynamic，len() 调用 zeta_dyn_len 时因未注册走 void(i64) 回退声明 ⇒ 返回值被丢弃 ⇒ 永远返回 0 或 1。
+
+**修法**（3 文件，40 行增改）：
+1. **classify()**（resolver.rs:1534）：`ArrayLit(_) | DynamicArrayLit { .. } => 4`
+2. **kind 映射**（resolver.rs:1744）：`4 => "array"`，参与参数冲突检测
+3. **类型钉扎**（resolver.rs:1859）：`"array" => DynamicArray(I64)`，与 Str 跨族触发 clash ⇒ 参数退 PyDynamic
+4. **zeta_dyn_len 注册**（codegen.rs:990）：在 arity-based 循环里加 `("zeta_dyn_len", 1)`
+5. **zeta_dyn_len 声明**（runtime_decls_core.rs:61）：按字母序加声明
+
+**验证**：
+- 测试夹具 `tests/python_style/t496_len_dyn_array.z`：5 个 expect 全过
+  - `len(cache["k"])` → 3（改前 0）
+  - `len([1,2,3,4,5])` → 5（改前 1）
+  - `len(data)` → 2（dict，改前 0）
+  - `len([10,20,30])` → 3（改前 1）
+  - `len(cache)` → 1（dict，改前 0）
+
+**门禁**（快门禁，改动面 = src/middle + src/backend）：
+- official：compile 194/194, link 191/194（3 条存量 link-only 失败，与基线相同）
+- python_style：420 passed, 3 failed（t231/t233/t404 全存量），6 known-fail, 0 xpass
+- t404 在基线（改前二进制）已失败（"map_keys was called on a value that is not a dict"），非本批引入的回归
+
+**纪律自查**：
+- 代码改动优先：本批主体是真实代码修复（3 文件 40 行），测试夹具随批附带
+- 门禁读数入册：official 194/194·191/194、python_style 420/3/6/0 逐项记录
+- t404 回归排查：先 stash 改动测基线确认是存量失败，再恢复改动继续推进

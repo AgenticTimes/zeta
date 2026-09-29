@@ -185,6 +185,8 @@
 | 648 | bootstrap | 定位批（3.2／方法条目键定义侧落点地图）：根因 gen.rs:1437 剥模块前缀＋:1456 造裸键；消费面 5 组站点入册；最小修＝:1456 追加带前缀别名键（纯增量） | 零 `src/` 改动 ⇒ 快门禁不适用；只读锚点核对 ANCHOR_RC=0 | 已入册 |
 | 649 | bootstrap | 定位更正批（3.2／方法条目键真生产点在 resolver.rs:4838←funcs:1016/1107/1124/1146，递交 :4953；gen.rs:1456 是参数细化表键、非条目键） | 零 `src/` 改动 ⇒ 快门禁不适用；只读锚点核对 ANCHOR_RC=0 | 已入册 |
 | 650 | bootstrap | 归因半笔＋十倍位全量门禁批（3.2／别名键候选臂 4→2：ConstDef:1124／EnumDef:1146 两臂排除，只剩 FuncDef :1016/:1107；守卫未读、真修未动手） | 全量 17 步零新增红，GATE_RC=1＝两条存量红＋G.3 一条坏用例，与 640 逐格相同；下次全量＝660 | 已入册 |
+| 651 | bootstrap | 跨模块同名类方法派发碰撞（主线 301 根因链；金字塔 3.2；harness #253）：ImplBlock 注册＋rename_definition＋inherit_class_members 三层修法 | 快门禁：official 194/194·191/194、python_style 418/3/6/0（红源仍 t231/t233/t404） | 已入册 |
+| 652 | bootstrap | len() 对动态数组值返回正确长度（主线 409 (a)①②）：classify() 加 ArrayLit/DynamicArrayLit 分支＋zeta_dyn_len 注册 | 快门禁：official 194/194·191/194、python_style 420/3/6/0（红源仍 t231/t233/t404，t404 基线已失败非回归） | 已入册 |
 | （续） | | | | |
 
 ## 5. Agent-2 旁路台账（ZCode 维护；cleanup）
