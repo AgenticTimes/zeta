@@ -25205,3 +25205,32 @@ official **194/194·191/194**（3 link-only 存量同 640）·诊断 official **
 - 零 `src/`、`runtime/`、`tools/` 改动 ⇒ 快门禁不适用；只读跑锚点核对（读数见 worktree 台账行）。
 - 存件：`/tmp/b643/`＝`ab644.txt`（26 发逐项读数）、`runs/`（52 份 out/err ＋ 归一本 `m_*`）、`compile_{pre,post}.log`、`zetac.post`、`drive644.sh`。
 - 队头：名绑定族剩下的头名＝S1 那一族（**同名类别共用 struct 布局**，批次 430／#155·#177 名下）；其上是需授权的 `runtime` 件（#211①／#212）与 `str_trim` 族（需 `py_additions.c` 授权）；再后 #167①／#52 余项 → #182 → t494／#213⑧ → #48。待用户裁决累计 **11 条**不变；下次全量门禁＝批次 650。**不 push**。
+
+### 批次 645（定价批／3.2 Lowering・名绑定族 S1 形的覆盖面）
+
+**层号归位**：pyramid 3.2（Lowering／名字与类别表）。承接批次 641 的第四形分离结论——S2 那一族已由批次 643 的 `closure_vars` 裸名键真修收掉，队头换成语义**同名类别共用一条 struct 布局／方法表**那一族（批次 430／#155·#177 名下），本批只量覆盖面、不动代码。
+
+**改前红形状复测（新二进制仍在红）**：`/tmp/b639/s1_dup_class.z` —— CPython `1 2`（当场对数，`cpy_rc=0`），`target/release/zetac`（md5 `69dbec101c6f9213962e91d99c9670b3`，与 643/644 存件同一颗）编译 `compile_rc=0`、运行 `run_rc=0` 打出 **`2 2`**：同一函数体内第二次 `class Box` 把 `b1.get()` 的派发也一起改走了后一个定义。⇒ 批次 643 的改动确实**不覆盖**这一族（与 641 的表分离判据自洽，不是回归）。
+
+**损害量读数（本批主产出）**：
+
+| 面 | 分母 | 同名类别定义数 | 方法／字段可互换的成员数 |
+|---|---|---|---|
+| 语料（门禁"语料"步的真实分母 `~/source/quant/REasyQuant/strategies`） | 40 文件、`parse_fail=0`、**9 条 class 定义、9 个互异名字** | **0** | 0 |
+| 库面（`pylib/*.z`：`numpy.z` 98 行、`pandas.z` 455 行） | 3 条 class 定义（`Series`／`GroupBy`／`DataFrame`，名字互异） | **0** | 0 |
+
+两条独立判据互证同一个 0：AST 扫描（`/tmp/b645/scan645.py`、`scan645b.py`）报 `class_defs=9 distinct_names=9 names_with_multiple_defs=0`，纯文本 `grep '^[[:space:]]*class '` 也报 **9** 条（口径一致）。
+
+**负断言的正证据**（防"扫描器打不到"式假 0）：把 S1 夹具本身喂进同一对脚本当正对照——
+- `scan645.py /tmp/b645/pos` → `same_scope_duplicate_class_names=1`、`DUP s1_dup_class.z name=Box scope=FunctionDef lines=[2, 6]`
+- `scan645b.py /tmp/b645/pos` → `files=1 class_defs=2 distinct_names=1 names_with_multiple_defs=1`
+两个检测器都能在"确实存在该形状"时命中 ⇒ 语料／库面的 0 是**真成员数**，不是检测失败。
+
+**口径与盲区（如实登记）**：
+1. 判据是**名字级**启发式——它回答"有没有两个同名 class 定义"，不回答"编译器把哪两张表并成了一条"。名字互异 ⇒ 该族按定义不可能有成员；名字相同但形状不同（继承、宽度不同）本批不细分。
+2. 库面 `pylib/*.z` **不是 python 语法**（`ast.parse` 两文件都 `SyntaxError`）⇒ 那 3 条来自文本扫描，会漏掉非常规缩进之外写法（如经宏／拼接生成的类名）；语料面 9 条则由 AST 与文本两种方法各自独立取得同值。
+3. 套件面（真修的回归半径）本批只跑了脚本、未取汇总读数（`tests/` 下 `primezeta/*.z` 大量 `SyntaxError` 属预期——那是 zeta 方言夹具，AST 判据对它们不适用），因此**不作为结论证据**，只登记为下一步可查项。
+
+**结论与 ROI 改判**：S1 这一族是**静默错值**（rc 0、无诊断出声），但**真实覆盖面 0**（语料 40 文件 9 类、库面 3 类，全为互异名）。⇒ 按"已实测损害量排 ROI"的铁律，动 `src/middle` 的真修**不再排队头**；本轮剩余的高损害量候选仍是主线 301 的 nunique 兄弟列污染（#212／harness #227·#232）与 packed str 生产者（#145／#420），以及需用户授权的 `runtime/*.c` 语义真修（#211①／#212）与 `str_trim` 族（需 `runtime/py_additions.c` 授权）。S1 留在队尾作"名表按定义身份键化"的同族条目，等一次带出声的最小收口（不开新诊断码，避开 #87 未上门禁的判据）。
+
+**门禁**：零 `src/`、`runtime/`、`tools/` 改动 ⇒ 快门禁不适用（AGENTS 路由表无匹配面）；只读跑 `bash tools/abi_anchors_check.sh` ⇒ `ANCHOR_RC=0`。不 push。
