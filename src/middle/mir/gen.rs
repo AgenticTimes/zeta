@@ -2430,6 +2430,34 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             lhs: existing,
                             rhs: rhs_id,
                         });
+                        /* Batch 657: the slot's static type must follow a
+                           re-assignment on the BigInt edge — `big = 0`
+                           pins I64, a later in-loop `big = 1 << 100`
+                           stores an i64-width handle that print/arm
+                           dispatch then read as a plain int (measured:
+                           `print(big)` → 4301332416). Handles need no
+                           widening; only the type moves. Retype ONLY on
+                           the BigInt↔int edge: widening is always safe,
+                           narrowing on a plain-int rhs keeps flip-flop
+                           loops coherent — every other kind change keeps
+                           its existing dyn-coercion behavior (the 637
+                           lesson: propagation faces stay off the table). */
+                        let rhs_big = matches!(
+                            self.type_map.get(&rhs_id),
+                            Some(Type::Named(n, _)) if n == "BigInt"
+                        );
+                        let cur_big = matches!(
+                            self.type_map.get(&existing),
+                            Some(Type::Named(n, _)) if n == "BigInt"
+                        );
+                        if rhs_big != cur_big {
+                            let new_ty = if rhs_big {
+                                Type::Named("BigInt".to_string(), vec![])
+                            } else {
+                                Type::I64
+                            };
+                            self.type_map.insert(existing, new_ty);
+                        }
                         // The env mirror for a module-global write is emitted by
                         // `mirror_module_global_writes`, once, over the finished
                         // body (batch 391).

@@ -1,0 +1,25 @@
+// 批次 657（旁路 cleanup）：变量携带 BigInt 的槽型随重赋值翻转（654
+// none_vars 同族「顺序表」思想的型别版，但落点在 gen 的既有槽重绑定
+// 处）。Python 名字无型别：`big = 0` 后循环内 `big = 1 << 100`，下游
+// print/算术按大数语义。旧法：重绑定只 MirStmt::Assign 进既有槽、槽
+// 静态型别钉死首绑的 I64——句柄按 int 读＝`print(big)` 打 4301332416
+// 垃圾（实测）。修法：仅沿 BigInt↔int 边沿重定型（句柄 i64 等宽免扩
+// 槽；扩为 BigInt 恒安全、遇 plain-int rhs 收回 I64 保翻转循环自洽），
+// 其余型别变化维持既有 dyn-coerce 行为不动（637 传播面教训）。
+// 边界（不在本夹具）：运行期 BigInt %/floordiv（runtime 族未建，658
+// 候选）；t546/t547 的字面量/表达式直传面本已绿。
+big = 0
+i = 0
+while i < 1:
+    big = 1 << 100
+    i = i + 1
+print(big)
+big = 5
+print(big)
+print(big * 3)
+big = 1 << 70
+print(big + 1)
+// expect: 1267650600228229401496703205376
+// expect: 5
+// expect: 15
+// expect: 1180591620717411303425
