@@ -16614,11 +16614,19 @@ call, no NULL-handle dereference).",
                 if let Some(r) = receiver {
                     Self::collect_free_vars(r, bound, free);
                 }
-                // method 名不是自由变量；args 递归
+                // BATCH-659: a bare call `condition(m)` where `condition` is
+                // a local variable (not a declared function) — the callee
+                // name IS a free variable of the closure.  The old code
+                // assumed method names are always static symbols, but a
+                // variable held callable (lambda from tuple unpacking,
+                // function parameter, etc.) must be captured through the
+                // env so BATCH-294 can dispatch through zeta_call<N>.
+                if receiver.is_none() && !bound.contains(method.as_str()) {
+                    free.insert(method.clone());
+                }
                 for a in args {
                     Self::collect_free_vars(a, bound, free);
                 }
-                let _ = method;
             }
             AstNode::FieldAccess { base, .. } => Self::collect_free_vars(base, bound, free),
             AstNode::Subscript { base, index } => {
