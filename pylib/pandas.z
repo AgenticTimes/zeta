@@ -186,8 +186,10 @@ class DataFrame:
         # `DataFrame(py_df_loc(...))` 把「帧」当成 columns map 再包一层（帧套帧 ⇒
         # 下游 `self.data` 拿到的是帧指针，整条流变空，实测 `remove_extreme_return_bars`）。
         if py_is_vec(mask) == 0:
-            return DataFrame(py_df_empty_like(self))
-        return DataFrame(py_df_loc(self, mask))
+            ef = py_df_empty_like(self)
+            return DataFrame(ef)
+        result = py_df_loc(self, mask)
+        return DataFrame(result)
 
     def iloc(self, mask: lt(vec, i64)) -> DataFrame:
         # `df.iloc[<掩码>]` 在本模型里与 loc 同义（按行取子集）。

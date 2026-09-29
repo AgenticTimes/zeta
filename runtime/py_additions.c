@@ -1575,6 +1575,10 @@ int64_t zt_safe_str_key(int64_t v) {
 // A frame with the SAME columns and zero rows (`df.iloc[0:0]`). Previously the
 // empty-slice case reached `py_df_loc` with mask 0 and aborted ("mask is
 // missing") — measured in `remove_extreme_return_bars`'s `if not parts:` path.
+// Batch 656: return the MAP directly (not a frame struct), so the pylib `loc`
+// method can pass it to `DataFrame(...)` without unwrapping. The old frame-
+// struct return caused `DataFrame.__init__` to receive a struct pointer and
+// call `map_keys` on the "DataFrame" string tag ⇒ raise (t404/t494).
 int64_t py_df_empty_like(int64_t frame) {
     if (!frame) return 0;
     int64_t map = map_resolve(*(int64_t*)frame);
@@ -1594,9 +1598,7 @@ int64_t py_df_empty_like(int64_t frame) {
             }
             free(syms);
         }
-        int64_t* out = (int64_t*)GC_malloc(sizeof(int64_t));
-        out[0] = map_new();
-        return (int64_t)out;
+        return map_new();
     }
     int64_t nm = map_new();
     int64_t names = map_keys(map);
@@ -1604,9 +1606,7 @@ int64_t py_df_empty_like(int64_t frame) {
     for (int64_t i = 0; i < n; i++) {
         map_insert(nm, ((int64_t*)names)[i], zeta_dynarray_new(1));
     }
-    int64_t* out = (int64_t*)GC_malloc(sizeof(int64_t));
-    out[0] = nm;
-    return (int64_t)out;
+    return nm;
 }
 
 // `series.clip(lower=..., upper=...)` — element-wise clamp of a numeric column
@@ -1899,10 +1899,8 @@ int64_t py_df_loc(int64_t frame, int64_t mask) {
         // handing back a frame struct made a frame-in-frame and every later
         // `self.data` read a struct pointer (measured: `remove_extreme_return_bars`
         // returned an empty result through `market_df.iloc[0:0]`).
-        {
-            int64_t ef = py_df_empty_like(frame);
-            return ef ? *(int64_t*)ef : map_new();
-        }
+        // Batch 656: `py_df_empty_like` now returns the map directly.
+        return py_df_empty_like(frame);
     }
     int64_t keys = map_keys(map);
     int64_t nk = zt_vec_len(keys);
