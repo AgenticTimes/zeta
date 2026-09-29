@@ -1,0 +1,16 @@
+# @cat: container
+# @note: 随机嵌套容器链（seed=688202 #0）
+#@@ python
+m = { "a": { "b": -51 } }
+print(m["a"]["b"])
+m["a"]["b"] = 36
+print(m["a"]["b"])
+print(len(m))
+
+#@@ zeta
+m = { "a": { "b": -51 } }
+print(m["a"]["b"])
+m["a"]["b"] = 36
+print(m["a"]["b"])
+print(len(m))
+
