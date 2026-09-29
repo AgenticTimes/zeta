@@ -5046,6 +5046,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 let left_id = self.lower_expr(left);
                 let right_id = self.lower_expr(right);
                 let dest = self.next_id();
+                /* Batch 645: a LITERAL zero divisor on `/` makes the 554
+                   raise unconditional — the division never executes, so its
+                   result slot types I64 (the except branch's integer write
+                   then dominates the variable's render;
+                   except_division_zero: y printed -1.0 instead of -1). */
+                let dead_div = op == "/"
+                    && matches!(self.exprs.get(&right_id), Some(MirExpr::IntLit(0)));
 
                 // ZeroDivisionError (except_division_zero, batch 554): CPython
                 // raises on every `/` whose divisor is zero; the inline div
@@ -5947,7 +5954,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         // a Str/Named/Dynamic side keeps its previous answer.
                         // `//` never reaches here (the parser emits "floordiv").
                         (Some(Type::I64) | Some(Type::Bool), Some(Type::I64) | Some(Type::Bool))
-                            if op == "/" =>
+                            if op == "/" && !dead_div =>
                         {
                             Type::F64
                         }
