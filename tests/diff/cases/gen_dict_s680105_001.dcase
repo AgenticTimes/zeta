@@ -1,0 +1,18 @@
+# @cat: container
+# @note: 随机容器（seed=680105 #1）—— CPython 先验通过
+#@@ python
+d = {"a": 452, "b": -76, "c": 375}
+print(len(d))
+print(d["c"])
+d["c"] = 16
+print(d["c"])
+print("b" in d)
+
+#@@ zeta
+d = {"a": 452, "b": -76, "c": 375}
+print(len(d))
+print(d["c"])
+d["c"] = 16
+print(d["c"])
+print("b" in d)
+

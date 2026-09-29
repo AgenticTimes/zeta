@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=680106 #1）
+#@@ python
+print(-(--26) < -10, -26 == -26)
+print(not -100)
+
+#@@ zeta
+print(-(--26) < -10, -26 == -26)
+print(not -100)
+
