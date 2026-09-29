@@ -3063,6 +3063,7 @@ impl Resolver {
                 continue;
             };
             let mut rets: Vec<Type> = Vec::new();
+            let mut dyn_faces = 0usize;
             Self::collect_return_kinds(
                 &fd,
                 params,
@@ -3071,6 +3072,7 @@ impl Resolver {
                 &map_vals,
                 &fn_rets,
                 &mut rets,
+                &mut dyn_faces,
             );
             if rets.is_empty() {
                 continue;
@@ -3078,9 +3080,14 @@ impl Resolver {
             let first = rets[0].clone();
             // Only literal-kind types are writable; a unanimous PyDynamic
             // vote means every return was un-inferable — abstain.
-            if matches!(first, Type::Str | Type::F64 | Type::Bool)
-                && rets.iter().all(|t| *t == first)
-            {
+            // 批次 660 例外：全票都是**已知动态**面（每条返回都是证据表明的真并集，
+            // `dyn_faces == rets.len()`）时写 PyDynamic —— 这是批次 400「证据冲突 ⇒
+            // 退成动态」规则在返回位的成员；毒票（推不出来）仍按原样弃权。
+            let writable = (matches!(first, Type::Str | Type::F64 | Type::Bool)
+                && rets.iter().all(|t| *t == first))
+                || (dyn_faces == rets.len()
+                    && rets.iter().all(|t| matches!(t, Type::PyDynamic)));
+            if writable {
                 if let Some((_, ret, _)) = self.funcs.get_mut(&qname) {
                     if matches!(ret, Type::I64) {
                         *ret = first.clone();
@@ -3108,6 +3115,10 @@ impl Resolver {
         map_vals: &HashMap<(String, String), Type>,
         fn_rets: &HashMap<String, Type>,
         out: &mut Vec<Type>,
+        // 批次 660：`out` 里的 PyDynamic 有两种成因 ——「证据表明这是真并集」（已知动态，
+        // 计入本计数）与「这一条返回我推不出来」（毒票，不计）。写回时只有**全部**是
+        // 已知动态才允许把返回钉成 PyDynamic，毒票维持批次 628 的弃权。
+        dyn_faces: &mut usize,
     ) {
         let cls = qname.split("::").next().unwrap_or("").to_string();
         // `+` with any inferable-Str operand is Str concat (CPython);
@@ -3147,7 +3158,7 @@ impl Resolver {
         let refinable = |e: &AstNode| -> Option<Type> {
             refinable(e, params, param_map, qname)
         };
-        let walk = |stmts: &Vec<AstNode>, out: &mut Vec<Type>| {
+        let mut walk = |stmts: &Vec<AstNode>, out: &mut Vec<Type>| {
             for st in stmts {
                 match st {
                     AstNode::Return(val) => {
@@ -3190,6 +3201,12 @@ impl Resolver {
                                                 };
                                                 face = match (vt, dt) {
                                                     (Some(v), Some(d)) if *v == d => Some(d.clone()),
+                                                    // 批次 660：字段没有 `map<k,v>` 注解
+                                                    // （`self.data = {}`）⇒ 表里存的值类型
+                                                    // 静态不可知 ⇒ 返回值是真并集（命中值 ∪
+                                                    // 默认值）＝已知动态面。旧代码落 `_ => None`
+                                                    // ⇒ 走毒票 ⇒ 弃权 ⇒ 保持 i64 ⇒ 调用点打堆地址。
+                                                    (None, Some(_)) => Some(Type::PyDynamic),
                                                     (Some(_), Some(_)) => Some(Type::PyDynamic),
                                                     _ => None,
                                                 };
@@ -3211,6 +3228,11 @@ impl Resolver {
                                             matches!(**t, Type::Str | Type::F64 | Type::Bool)
                                         })
                                         .cloned();
+                                }
+                                // 已知动态面（只有 `.get(k, default)` 面会产生 PyDynamic 的
+                                // face —— callee 回退那条 filter 只放行 Str/F64/Bool）。
+                                if matches!(face, Some(Type::PyDynamic)) {
+                                    *dyn_faces += 1;
                                 }
                                 match face {
                                     Some(t) if t != Type::PyDynamic => out.push(t),
