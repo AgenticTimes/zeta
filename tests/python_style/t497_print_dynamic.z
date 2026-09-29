@@ -1,0 +1,29 @@
+// 批次 653（#117 动态接收槽无标记）：print/repr 对 PyDynamic 值的派发。
+//
+// 判据点：`gen.rs:10418` 的 print 派发与 `gen.rs:9071` 的 repr 派发 —— 它们按
+// `type_map` 里的静态类型选运行期函数（Str→println_str、F64→println_f64…），
+// 但 PyDynamic 没有专属臂，落入 `_ => println_i64` ⇒ 把堆指针当十进制整数打印。
+//
+// 触发形状：一个未注解形参被两种不同类型的实参调用（str 与 i64），resolver
+// 的 `classify` 判据冲突 ⇒ 形参停在 PyDynamic（`resolver.rs:1649-1716`）。
+// 函数体里 `print(x)` 的 `x` 就是 PyDynamic ⇒ 改前打堆地址、改后打值。
+//
+// 修法：运行期新增 `zeta_dyn_to_string`（`runtime/py_additions.c`），用与
+// `zeta_dyn_len`/`zeta_dyn_truth` 相同的 GC 几何探测（map→vec→text→int）把
+// 动态句柄转成字符串；出码侧在 print/println/repr 三处派发链加 PyDynamic 臂，
+// 先调 `zeta_dyn_to_string` 再走 println_str。
+//
+// 改前实拍（`zetac_b653_pre`，同一份源）：
+//   4375668390      ← 堆地址（期望 hello）
+//   42
+// 改后实拍：
+//   hello
+//   42
+//
+// expect: hello
+// expect: 42
+def show(x):
+    print(x)
+
+show("hello")
+show(42)

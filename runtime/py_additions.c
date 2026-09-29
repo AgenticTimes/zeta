@@ -4208,6 +4208,27 @@ int64_t zeta_dyn_truth(int64_t h) {
     return 1;
 }
 
+// Batch 653: convert a dynamic handle to its Python string representation.
+// The ABI type is i64 (a handle), but the runtime shape is unknown — could be
+// a string pointer, a map handle, a vec handle, or a plain integer. Use the
+// same GC-geometry probes as zeta_dyn_len/zeta_dyn_truth to discriminate.
+int64_t py_json_dumps_map(int64_t map);
+int64_t py_json_dumps_vec_typed(int64_t vec, int64_t tag);
+int64_t to_string_i64(int64_t v);
+
+int64_t zeta_dyn_to_string(int64_t h) {
+    if (!h) return (int64_t)GC_strdup("0");
+    // Map: handle IS the GC block base [cap | used | entries...]
+    if (zt_dyn_is_map(h)) return py_json_dumps_map(h);
+    // Vec: handle points past header [cap | len | data...], header at h-16
+    int64_t* hdr = zt_dyn_vec_hdr(h);
+    if (hdr) return py_json_dumps_vec_typed(h, 0);  // tag 0 = int elements
+    // Text: raw char* pointer (may be in .rodata or GC heap)
+    if (zt_c_readable(h)) return h;
+    // Default: treat as integer
+    return to_string_i64(h);
+}
+
 // BATCH-297: Python truthiness of a PARSED JSON value.
 // `json.loads` values are tagged cells (`word0 = kind, word1 = payload`, see
 // the ZJ_* block in the stub), so `zeta_dyn_truth`'s GC-geometry probes cannot

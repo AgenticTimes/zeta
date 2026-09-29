@@ -9072,6 +9072,8 @@ call, no NULL-handle dereference).",
                         Some(Type::Str) => ("py_repr_str", Type::Str),
                         Some(Type::F64) | Some(Type::F32) => ("to_string_f64", Type::Str),
                         Some(Type::Bool) => ("to_string_bool", Type::Str),
+                        // Batch 653 (#117): dynamic values need GC-geometry conversion.
+                        Some(Type::PyDynamic) => ("zeta_dyn_to_string", Type::Str),
                         _ => ("to_string_i64", Type::Str),
                     };
                     self.stmts.push(MirStmt::Call {
@@ -10412,6 +10414,20 @@ call, no NULL-handle dereference).",
                             self.exprs.insert(sid, MirExpr::Var(sid));
                             self.type_map.insert(sid, Type::Str);
                             sid
+                        } else if matches!(self.type_map.get(arg_id), Some(Type::PyDynamic)) {
+                            // Batch 653 (#117): dynamic values have no runtime type tag,
+                            // so the print dispatch can't tell str from int from map.
+                            // Convert to string first using GC-geometry probes.
+                            let sid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_dyn_to_string".to_string(),
+                                args: vec![*arg_id],
+                                dest: sid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(sid, MirExpr::Var(sid));
+                            self.type_map.insert(sid, Type::Str);
+                            sid
                         } else {
                             *arg_id
                         };
@@ -10469,6 +10485,20 @@ call, no NULL-handle dereference).",
                     let mut arg_ids = vec![];
                     for a in args {
                         arg_ids.push(self.lower_expr(a));
+                    }
+
+                    // Batch 653 (#117): PyDynamic needs conversion to string first.
+                    if arg_ids.len() == 1 && matches!(self.type_map.get(&arg_ids[0]), Some(Type::PyDynamic)) {
+                        let sid = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_dyn_to_string".to_string(),
+                            args: vec![arg_ids[0]],
+                            dest: sid,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(sid, MirExpr::Var(sid));
+                        self.type_map.insert(sid, Type::Str);
+                        arg_ids[0] = sid;
                     }
 
                     let func = if arg_ids.len() == 1 {
