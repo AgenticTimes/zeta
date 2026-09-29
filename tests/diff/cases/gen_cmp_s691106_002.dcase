@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=691106 #2）
+#@@ python
+print(not 28)
+print(-(-4) < -44, 4 == 4)
+print(not -21)
+print(681 < 809 > 961)
+
+#@@ zeta
+print(not 28)
+print(-(-4) < -44, 4 == 4)
+print(not -21)
+print(681 < 809 > 961)
+
