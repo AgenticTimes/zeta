@@ -4065,6 +4065,40 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         }
     }
 
+    /// Batch 659: a map Subscript whose receiver is a plain variable with a
+    /// Str-refined value type renders through the 535 per-key tag side table
+    /// (`zeta_map_get_render`) — the raw word otherwise reaches string
+    /// consumption as a bogus pointer (strlen/segv or truncated concat).
+    /// Returns None for anything else so callers fall through untouched.
+    fn mapsub_render_str(&mut self, b: &AstNode, k: &AstNode) -> Option<u32> {
+        let is_map_str = if let AstNode::Var(vname) = b {
+            self.name_to_id.get(vname.as_str()).map_or(false, |&sid| {
+                matches!(
+                    self.type_map.get(&sid),
+                    Some(Type::Named(n, params))
+                        if n == "map" && matches!(params.last(), Some(Type::Str))
+                )
+            })
+        } else {
+            false
+        };
+        if !is_map_str {
+            return None;
+        }
+        let recv_id = self.lower_expr(b);
+        let k_id = self.lower_expr(k);
+        let r_id = self.next_id();
+        self.stmts.push(MirStmt::Call {
+            func: "zeta_map_get_render".to_string(),
+            args: vec![recv_id, k_id],
+            dest: r_id,
+            type_args: vec![],
+        });
+        self.exprs.insert(r_id, MirExpr::Var(r_id));
+        self.type_map.insert(r_id, Type::Str);
+        Some(r_id)
+    }
+
     fn lower_to_string(&mut self, id: u32) -> u32 {
         if matches!(self.type_map.get(&id), Some(Type::Str)) {
             return id;
@@ -4935,6 +4969,42 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             continue;
                         }
                     }
+                    // Batch 659: a map Subscript part behind a Str-refined
+                    // value type (`f"n={d["k"]}"`) — same per-key-tag render
+                    // as the print arm; the raw word otherwise flowed into
+                    // str_concat as a "string" pointer (measured ZT-WARN +
+                    // truncated output).
+                    if let AstNode::Subscript { base, index } = p {
+                        let base_map_str = if let AstNode::Var(vname) = &**base {
+                            self.name_to_id
+                                .get(vname.as_str())
+                                .map_or(false, |&sid| {
+                                    matches!(
+                                        self.type_map.get(&sid),
+                                        Some(Type::Named(n, params))
+                                            if n == "map"
+                                                && matches!(params.last(), Some(Type::Str))
+                                    )
+                                })
+                        } else {
+                            false
+                        };
+                        if base_map_str {
+                            let recv_id = self.lower_expr(base);
+                            let k_id = self.lower_expr(index);
+                            let r_id = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_map_get_render".to_string(),
+                                args: vec![recv_id, k_id],
+                                dest: r_id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(r_id, MirExpr::Var(r_id));
+                            self.type_map.insert(r_id, Type::Str);
+                            part_ids.push(r_id);
+                            continue;
+                        }
+                    }
                     let pid = self.lower_expr(p);
                     // An INLINE CONDITIONAL whose branches are both strings
                     // (`f"{'sh' if exch == 'XSHG' else 'sz'}.{num}"`) left the
@@ -5541,12 +5611,28 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     // PY-A: string concatenation — route through BinaryOp so
                     // the codegen string dispatch (host_str_concat) handles it,
                     // instead of the numeric SemiringFold adder.
+                    // Batch 659: either side being a Str-refined map subscript
+                    // renders through the per-key tag table first — the raw
+                    // word would reach host_str_concat as a bogus pointer
+                    // (measured ZT-WARN + truncated output).
+                    let mut l_use = left_id;
+                    let mut r_use = right_id;
+                    if let AstNode::Subscript { base, index } = &**left {
+                        if let Some(r) = self.mapsub_render_str(base, index) {
+                            l_use = r;
+                        }
+                    }
+                    if let AstNode::Subscript { base, index } = &**right {
+                        if let Some(r) = self.mapsub_render_str(base, index) {
+                            r_use = r;
+                        }
+                    }
                     self.exprs.insert(
                         dest,
                         MirExpr::BinaryOp {
                             op: op.clone(),
-                            left: left_id,
-                            right: right_id,
+                            left: l_use,
+                            right: r_use,
                         },
                     );
                     self.type_map.insert(dest, Type::Str);
@@ -10151,6 +10237,49 @@ call, no NULL-handle dereference).",
 
                 // PY-A: Python `str(x)` — convert any value to its string form
                 if method == "str" && receiver.is_none() && args.len() == 1 {
+
+                            // Batch 659: a map Subscript behind a Str-refined
+                            // value type renders through the per-key tag side
+                            // table — the raw word otherwise reaches string
+                            // consumption as a bogus pointer.
+                            let mapsub_render = |g: &mut Self, b: &AstNode, k: &AstNode| -> Option<u32> {
+                                let is_map_str = if let AstNode::Var(vname) = b {
+                                    g.name_to_id.get(vname.as_str()).map_or(false, |&sid| {
+                                        matches!(
+                                            g.type_map.get(&sid),
+                                            Some(Type::Named(n, params))
+                                                if n == "map"
+                                                    && matches!(params.last(), Some(Type::Str))
+                                        )
+                                    })
+                                } else {
+                                    false
+                                };
+                                if !is_map_str {
+                                    return None;
+                                }
+                                let recv_id = g.lower_expr(b);
+                                let k_id = g.lower_expr(k);
+                                let r_id = g.next_id();
+                                g.stmts.push(MirStmt::Call {
+                                    func: "zeta_map_get_render".to_string(),
+                                    args: vec![recv_id, k_id],
+                                    dest: r_id,
+                                    type_args: vec![],
+                                });
+                                g.exprs.insert(r_id, MirExpr::Var(r_id));
+                                g.type_map.insert(r_id, Type::Str);
+                                Some(r_id)
+                            };
+                    // Batch 659: `str(d[k])` on a Str-refined map — per-key
+                    // tag render (the raw word would strlen as a pointer).
+                    if let AstNode::Subscript { base, index } = &args[0] {
+                        if let Some(r_id) = mapsub_render(self, base, index) {
+                            self.exprs.insert(id, MirExpr::Var(r_id));
+                            self.type_map.insert(id, Type::Str);
+                            return id;
+                        }
+                    }
                     // Batch 624: `str(None)` literal face renders "None"
                     // (value representation stays 0, #113/#189 deep water).
                     // The constant must reach the result through a DEFINING
@@ -10431,8 +10560,76 @@ call, no NULL-handle dereference).",
                             }
                         }
                     }
+                    // Batch 659: `print(d[k])` on a map-typed variable
+                    // whose value type refined to Str (651/652 混合值型
+                    // map 的毒化面) — the generic path renders EVERY read
+                    // through that single dispatch, so an int word behind
+                    // the str refinement went to println_str and strlen'd
+                    // the raw word (measured rc=139 with no output; str
+                    // reads printed fine, which is why the crash looked
+                    // shape-dependent). The 535 per-key tag side table
+                    // knows the real kind: render via zeta_map_get_render
+                    // (653 infra, unwired) and print the STRING. Three
+                    // guards keep the 653 lesson honored: Var receiver
+                    // only (no double-eval, .get calls untouched), render
+                    // only in this consumption position (bare `x = d[k]`
+                    // keeps the generic path), and only when the static
+                    // value type is Str (pure int/container maps keep
+                    // their working dispatches).
+                    if positional.len() == 1 && sep_expr.is_none() && end_expr.is_none() {
+                        if let AstNode::Subscript { base, index } = positional[0] {
+                            let base_map_str = if let AstNode::Var(vname) = &**base {
+                                self.name_to_id
+                                    .get(vname.as_str())
+                                    .map_or(false, |&sid| {
+                                        matches!(
+                                            self.type_map.get(&sid),
+                                            Some(Type::Named(n, params))
+                                                if n == "map"
+                                                    && matches!(
+                                                        params.last(),
+                                                        Some(Type::Str)
+                                                    )
+                                        )
+                                    })
+                            } else {
+                                false
+                            };
+                            if base_map_str {
+                                let recv_id = self.lower_expr(base);
+                                let k_id = self.lower_expr(index);
+                                let r_id = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "zeta_map_get_render".to_string(),
+                                    args: vec![recv_id, k_id],
+                                    dest: r_id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(r_id, MirExpr::Var(r_id));
+                                self.type_map.insert(r_id, Type::Str);
+                                self.stmts.push(MirStmt::VoidCall {
+                                    func: "println_str".to_string(),
+                                    args: vec![r_id],
+                                });
+                                let unit = self.next_id();
+                                self.exprs.insert(unit, MirExpr::IntLit(0));
+                                self.type_map.insert(unit, Type::Tuple(vec![]));
+                                return unit;
+                            }
+                        }
+                    }
                     let mut arg_ids = vec![];
                     for a in &positional {
+                        // Batch 659: per-arg map-subscript render — a mixed
+                        // map's int word must not reach the println dispatch
+                        // through the str refinement (`print(d["n"], d["s"])`
+                        // segvs the int side otherwise).
+                        if let AstNode::Subscript { base, index } = a {
+                            if let Some(r_id) = self.mapsub_render_str(base, index) {
+                                arg_ids.push(r_id);
+                                continue;
+                            }
+                        }
                         // Batch 635: `print(L and R)` with an int left and a
                         // Bool right — the union cannot share one println
                         // dispatch (the falsy branch prints an int, the

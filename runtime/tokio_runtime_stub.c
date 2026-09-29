@@ -3426,6 +3426,21 @@ int64_t zeta_map_value_tag(int64_t map, int64_t key) {
     return 0;
 }
 
+/* Batch 659: 1 when this key has NO tag-table entry at all. Write paths
+   that feed the table register ints as 5 (never 0 at runtime), so a key
+   absent from the table means the insert came from a path that does not
+   tag (dict comprehensions) — its word is already what the static type
+   claims (e.g. a real str pointer). */
+int64_t zeta_map_value_untagged(int64_t map, int64_t key) {
+    uint64_t i = zt_tag_slot(map, key);
+    for (int n = 0; n < ZT_TAG_CAP; n++) {
+        uint64_t j = (i + (uint64_t)n) & (ZT_TAG_CAP - 1);
+        if (g_tag_map[j] == 0) return 1;
+        if (g_tag_map[j] == (map ? map : 1) && g_tag_key[j] == key) return 0;
+    }
+    return 1;
+}
+
 // Typed vector dumper: the element type is known STATICALLY (a list literal is
 // homogeneous), so the compiler passes its tag instead of a per-element side
 // table — indices move on realloc, the static type does not.

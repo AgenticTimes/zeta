@@ -3371,6 +3371,7 @@ int64_t zeta_big_floordiv(int64_t a, int64_t b) {
 }
 
 int64_t zeta_map_value_tag(int64_t map, int64_t key);
+int64_t zeta_map_value_untagged(int64_t map, int64_t key);
 int64_t map_get(int64_t m, int64_t k);
 int64_t map_resolve(int64_t m);
 /* zj cell layout (tokio_runtime_stub.c): 16 bytes [tag | payload]. zj_make
@@ -3442,6 +3443,11 @@ static int64_t zeta_map_get_render_core(int64_t map, int64_t key, int64_t dflt, 
     if (m) {
         int64_t v = map_get(m, kh);
         if (v) {
+            /* Batch 659: an UNtagged key (dict-comprehension writes never
+               feed the table) returns the word as-is — in the Str-refined
+               face it already is a real str handle (t482: comp of str
+               values); %lld-ing it rendered the pointer. */
+            if (zeta_map_value_untagged(m, kh)) return v;
             int64_t tag = zeta_map_value_tag(m, kh);
             char* s = (char*)GC_malloc(48);
             switch (tag) {

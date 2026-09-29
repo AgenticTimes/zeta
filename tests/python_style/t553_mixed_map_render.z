@@ -1,0 +1,33 @@
+// 批次 659（旁路 cleanup）：混合值型 map 的串消费面按 per-key 标签渲染
+// （651/652 登记的 S 级项收口；「teardown 崩溃」经定性实为读取渲染崩溃）。
+// 毒化机理：混合 map 的静态值型被 refine 成单一 Str（末次 str 写胜出），
+// 一切直读都按 println_str/strlen 分派——int 词被当串指针（rc=139 无输
+// 出；str 读正常＝崩相随形状漂移，651 误归 teardown）。修法＝render at
+// consumption（653 教训的正形）：zeta_map_get_render（653 未接线基础设施
+// 转正）查 535 per-key 标签侧表（0=%lld/1=%g/2=raw/3=True/False），仅在
+// 串消费位渲染——print 单/多参、f-string part、str()、拼接五点；守卫三
+// 条（Var 接收者防双求值、仅 Str-refined 值型＝纯 int/容器 map 不进、
+// 裸读 x=d[k] 不动）。边界（不在本夹具）：变量携带读（T4 形）与读取后
+// 算术（d[k]+1）＝#113/#189 值语义面（653 已否证两路，深水维持）。
+d = {}
+d["n"] = 10
+d["s"] = "text"
+print(d["n"])
+print(d["s"])
+print(f"n={d["n"]}")
+print(str(d["n"]))
+print(d["n"], d["s"])
+print("v=" + d["n"])
+e = {}
+e["a"] = 1
+e["b"] = 2
+print(e["a"] + e["b"])
+print(len(d.get("s", "")))
+// expect: 10
+// expect: text
+// expect: n=10
+// expect: 10
+// expect: 10 text
+// expect: v=10
+// expect: 3
+// expect: 4
