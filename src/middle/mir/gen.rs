@@ -10144,6 +10144,20 @@ call, no NULL-handle dereference).",
                     }
                     let mut arg_ids = vec![];
                     for a in &positional {
+                        // Batch 655: `print(3 and None)` / `print(None or 5)`
+                        // — AND/OR whose statically-selected operand is a None
+                        // literal renders "None" (value repr stays 0). Must be
+                        // checked BEFORE the batch-635 handler below, which
+                        // intercepts all AND/OR BinaryOps and would lower the
+                        // None-selected result as I64 0 ⇒ print "0" (t507).
+                        if self.and_or_select_is_none(a) {
+                            let nid = self.next_id();
+                            self.exprs
+                                .insert(nid, MirExpr::StringLit("None".to_string()));
+                            self.type_map.insert(nid, Type::Str);
+                            arg_ids.push(nid);
+                            continue;
+                        }
                         // Batch 635: `print(L and R)` with an int left and a
                         // Bool right — the union cannot share one println
                         // dispatch (the falsy branch prints an int, the
@@ -10237,9 +10251,9 @@ call, no NULL-handle dereference).",
                                 continue;
                             }
                         }
-                        // Batch 624: `print(None)` literal face renders
-                        // "None" (value representation stays 0).
                         if matches!(a, AstNode::NoneLit) {
+                            // Batch 624: `print(None)` literal face renders
+                            // "None" (value representation stays 0).
                             let nid = self.next_id();
                             self.exprs
                                 .insert(nid, MirExpr::StringLit("None".to_string()));
@@ -16482,6 +16496,34 @@ call, no NULL-handle dereference).",
                 let inner = src.trim_start_matches("*mut ").trim_start_matches('[');
                 inner.starts_with("str") || inner.starts_with("String")
             }
+        }
+    }
+
+    /// Batch 655: statically determine whether an AND/OR expression's result
+    /// is a None literal.  `3 and None` → true (truthy left ⇒ selects right =
+    /// None).  `None or 5` → true (falsy left ⇒ selects left = None).  Used
+    /// by the print lowering to render "None" instead of "0" (t507).
+    fn and_or_select_is_none(&self, expr: &AstNode) -> bool {
+        if let AstNode::BinaryOp { op, left, right } = expr {
+            if op != "&&" && op != "||" {
+                return false;
+            }
+            let lhs_truth = match left.as_ref() {
+                AstNode::Lit(0) => Some(false),
+                AstNode::NoneLit => Some(false),
+                AstNode::Lit(n) if *n != 0 => Some(true),
+                AstNode::StringLit(s) => Some(!s.is_empty()),
+                _ => None,
+            };
+            match (op.as_str(), lhs_truth) {
+                ("&&", Some(true)) => matches!(right.as_ref(), AstNode::NoneLit),
+                ("&&", Some(false)) => matches!(left.as_ref(), AstNode::NoneLit),
+                ("||", Some(false)) => matches!(right.as_ref(), AstNode::NoneLit),
+                ("||", Some(true)) => matches!(left.as_ref(), AstNode::NoneLit),
+                _ => false,
+            }
+        } else {
+            false
         }
     }
 
