@@ -12121,6 +12121,30 @@ call, no NULL-handle dereference).",
                     && !matches!(receiver_ty.as_ref(), Some(Type::Named(n, _)) if n == "map")
                 {
                     let key_id = self.lower_map_key(arg_ids[1]);
+                    /* Batch 646: when the default is a STRING (the union
+                       shape — int values + a str default), the single dest
+                       cannot type both. Return the TAGGED CELL instead
+                       (zeta_map_get_default_cell) typed PyJson: the print
+                       face's existing PyJson handling renders scalars bare,
+                       so both the hit (int) and the miss (str) render as
+                       CPython does. */
+                    let dflt_is_str = matches!(
+                        self.type_map.get(&arg_ids[2]),
+                        Some(Type::Str)
+                    );
+                    if dflt_is_str {
+                        let dis = self.next_id_with_lit(1);
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_map_get_default_cell".to_string(),
+                            args: vec![arg_ids[0], key_id, arg_ids[2], dis],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map
+                            .insert(id, Type::Named("PyJson".to_string(), vec![]));
+                        return id;
+                    }
                     self.stmts.push(MirStmt::Call {
                         func: "map_get_default".to_string(),
                         args: vec![arg_ids[0], key_id, arg_ids[2]],
@@ -12431,6 +12455,34 @@ call, no NULL-handle dereference).",
                         .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
                     && arg_ids.len() == 3
                 {
+                    /* Batch 646: an ERASED map value type (I64/PyDynamic)
+                       with a STRING default is the genuine union — the hit
+                       (int) and the miss (str) cannot share one dest type.
+                       Return the TAGGED CELL (the runtime's per-key value
+                       tag types the hit; the default's kind types the miss)
+                       typed PyJson, rendered bare by the print face. */
+                    let erased_value_ty = matches!(
+                        &map_value_ty,
+                        Type::I64 | Type::PyDynamic
+                    );
+                    let str_default = matches!(
+                        self.type_map.get(&arg_ids[2]),
+                        Some(Type::Str)
+                    );
+                    if erased_value_ty && str_default {
+                        let key_id = self.lower_map_key(arg_ids[1]);
+                        let dis = self.next_id_with_lit(1);
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_map_get_default_cell".to_string(),
+                            args: vec![arg_ids[0], key_id, arg_ids[2], dis],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map
+                            .insert(id, Type::Named("PyJson".to_string(), vec![]));
+                        return id;
+                    }
                     let key_id = self.lower_map_key(arg_ids[1]);
                     self.stmts.push(MirStmt::Call {
                         func: "map_get_default".to_string(),

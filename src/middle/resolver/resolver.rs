@@ -2951,6 +2951,15 @@ impl Resolver {
                         ) {
                             map_vals.insert((ty.clone(), f.clone()), v);
                         }
+                    } else if spelling == "map" {
+                        /* Batch 646: the BARE spelling — values erased
+                           (PyDynamic). A `.get(k, <str>)` on it is the
+                           genuine union; the ret becomes PyJson so the
+                           caller renders the gen-side tagged cell by tag. */
+                        map_vals.insert(
+                            (ty.clone(), f.clone()),
+                            Type::PyDynamic,
+                        );
                     }
                 }
             }
@@ -2960,6 +2969,22 @@ impl Resolver {
             .iter()
             .map(|(n, (_, r, _))| (n.clone(), r.clone()))
             .collect();
+        /* Batch 646: (class, field) whose map spelling is the BARE "map"
+           (values erased) — a `return self.<f>.get(k, <str>)` on such a
+           field is the genuine union; the gen-side cell route returns a
+           tagged cell, so the method's registered ret becomes PyJson and
+           the caller renders through py_json_as_str. */
+        let mut erased_map_fields: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        for (ty, td) in self.type_decls.iter() {
+            if let crate::middle::mir::r#gen::TypeDecl::Struct { fields, .. } = td {
+                for (f, spelling) in fields {
+                    if spelling == "map" {
+                        erased_map_fields.insert((ty.clone(), f.clone()));
+                    }
+                }
+            }
+        }
         for (qname, fd) in candidates {
             let unannotated = match self.funcs.get(&qname) {
                 Some((_, Type::I64, _)) => true,
@@ -2968,6 +2993,7 @@ impl Resolver {
             if !unannotated {
                 continue;
             }
+            let cls = qname.split("::").next().unwrap_or("").to_string();
             let AstNode::FuncDef { params, .. } = &fd else {
                 continue;
             };
@@ -2978,6 +3004,8 @@ impl Resolver {
                 param_map,
                 &qname,
                 &map_vals,
+                &erased_map_fields,
+                &cls,
                 &fn_rets,
                 &mut rets,
             );
@@ -2987,7 +3015,10 @@ impl Resolver {
             let first = rets[0].clone();
             // Only literal-kind types are writable; a unanimous PyDynamic
             // vote means every return was un-inferable — abstain.
-            if matches!(first, Type::Str | Type::F64 | Type::Bool)
+            // Batch 646: Named("PyJson") is writable — the tagged-cell
+            // return face (the caller renders by tag).
+            if (matches!(first, Type::Str | Type::F64 | Type::Bool)
+                || first == Type::Named("PyJson".to_string(), vec![]))
                 && rets.iter().all(|t| *t == first)
             {
                 if let Some((_, ret, _)) = self.funcs.get_mut(&qname) {
@@ -3009,16 +3040,18 @@ impl Resolver {
     /// Collect the inferable type of every `Return` expression in a method
     /// body: a string/float/bool literal, or a parameter the 627 map
     /// refined. Anything else yields no evidence (abstain).
+    #[allow(clippy::too_many_arguments)]
     fn collect_return_kinds(
         fd: &AstNode,
         params: &[(String, String)],
         param_map: &HashMap<String, Vec<(usize, Type)>>,
         qname: &str,
         map_vals: &HashMap<(String, String), Type>,
+        erased_map_fields: &std::collections::HashSet<(String, String)>,
+        cls: &str,
         fn_rets: &HashMap<String, Type>,
         out: &mut Vec<Type>,
     ) {
-        let cls = qname.split("::").next().unwrap_or("").to_string();
         // `+` with any inferable-Str operand is Str concat (CPython);
         // F64+F64 stays F64. Recursion is bounded by expression depth.
         fn refinable(
@@ -3090,7 +3123,7 @@ impl Resolver {
                                         if let AstNode::Var(b) = &**fb {
                                             if b == "self" {
                                                 let vt = map_vals
-                                                    .get(&(cls.clone(), field.clone()));
+                                                    .get(&(cls.to_string(), field.clone()));
                                                 let dt = match &args[1] {
                                                     AstNode::StringLit(_) => Some(Type::Str),
                                                     AstNode::FloatLit(_) => Some(Type::F64),
@@ -3099,6 +3132,19 @@ impl Resolver {
                                                 };
                                                 face = match (vt, dt) {
                                                     (Some(v), Some(d)) if *v == d => Some(d.clone()),
+                                                    /* Batch 646: the genuine
+                                                       union (erased map values
+                                                       + a str default) — the
+                                                       gen cell route returns
+                                                       the tagged cell; type
+                                                       the ret PyJson so the
+                                                       caller renders by tag. */
+                                                    (Some(Type::PyDynamic), Some(d)) => {
+                                                        Some(Type::Named(
+                                                            "PyJson".to_string(),
+                                                            vec![],
+                                                        ))
+                                                    }
                                                     (Some(_), Some(_)) => Some(Type::PyDynamic),
                                                     _ => None,
                                                 };

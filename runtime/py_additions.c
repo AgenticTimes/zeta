@@ -3326,6 +3326,50 @@ int64_t zeta_big_to_string(int64_t h) {
     return (int64_t)out;
 }
 
+int64_t zeta_map_value_tag(int64_t map, int64_t key);
+int64_t map_get(int64_t m, int64_t k);
+int64_t map_resolve(int64_t m);
+/* zj cell layout (tokio_runtime_stub.c): 16 bytes [tag | payload]. zj_make
+   is static there, so allocate the same layout locally. */
+#define ZJ_INT 1
+#define ZJ_F64 2
+#define ZJ_STR 3
+#define ZJ_BOOL 6
+static int64_t zt_cell_make(int64_t tag, int64_t payload) {
+    int64_t* c = (int64_t*)GC_malloc(16);
+    c[0] = tag;
+    c[1] = payload;
+    return (int64_t)c;
+}
+
+// ── Batch 646: tagged-cell pilot for the method-boundary `.get` union ──
+// `self.d.get(k, <dflt>)` where the map's values and the default have
+// DIFFERENT types (int values + a str default) is a genuine union: the
+// single dest slot cannot type both. The runtime already records a per-key
+// value tag at insert time (`zeta_map_value_tag`, batch 535) and the PyJson
+// cell (`zj_make`) is the in-tree tagged representation. This function
+// returns a TAGGED CELL for both the hit (value tag from the map) and the
+// miss (default kind from the compiler) — the caller renders it through
+// the existing py_json_as_str/print-PyJson faces.
+int64_t zeta_map_get_default_cell(int64_t map, int64_t key, int64_t dflt, int64_t dflt_is_str) {
+    int64_t m = map ? map_resolve(map) : 0;
+    int64_t kh = map_str_key(key);
+    if (m) {
+        int64_t v = map_get(m, kh);
+        if (v) {
+            int64_t tag = zeta_map_value_tag(map, kh);
+            switch (tag) {
+                case 1: return zt_cell_make(ZJ_F64, v);
+                case 2: return zt_cell_make(ZJ_STR, v);
+                case 3: return zt_cell_make(ZJ_BOOL, v);
+                default: return zt_cell_make(ZJ_INT, v);
+            }
+        }
+    }
+    if (!dflt) return zt_cell_make(ZJ_INT, 0);
+    return dflt_is_str ? zt_cell_make(ZJ_STR, dflt) : zt_cell_make(ZJ_INT, dflt);
+}
+
 int64_t zeta_collect_vec_n(int64_t iter, int64_t fn_ptr, int64_t len_override) {
     if (!iter) return 0;
     int64_t len = len_override;
