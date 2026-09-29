@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=682106 #2）
+#@@ python
+print(not -55)
+print(not 50)
+print(955 >= 618 < 408)
+print(613 <= 831 != 903)
+
+#@@ zeta
+print(not -55)
+print(not 50)
+print(955 >= 618 < 408)
+print(613 <= 831 != 903)
+
