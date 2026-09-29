@@ -211,6 +211,9 @@ pub struct MirGen {
     /// Batch 603: class -> first base (resolver `__bases__` markers) — the
     /// base-chain walk for inherited-method dispatch.
     class_bases: HashMap<String, String>,
+    /// Batch 654: names whose last top-level assignment was `None` —
+    /// threaded from the ctfe pass; print/str render these as "None".
+    none_vars_gen: std::collections::HashSet<String>,
     /// Batch 627: `Class::method` -> [(FuncDef param position, Type)] —
     /// call-site refinements for unannotated method params (see the
     /// builder).
@@ -303,6 +306,7 @@ impl MirGen {
             symbol_renames: HashMap::new(),
             module_global_types: HashMap::new(),
             class_bases: HashMap::new(),
+    none_vars_gen: std::collections::HashSet::new(),
             method_param_refinements: HashMap::new(),
             re_repl_param: false,
             current_class: None,
@@ -336,6 +340,12 @@ impl MirGen {
     /// Batch 603: resolver's class->base map (see `class_bases`).
     pub fn with_class_bases(mut self, bases: HashMap<String, String>) -> Self {
         self.class_bases = bases;
+        self
+    }
+
+    /// Batch 654: the NoneVar set (see the ctfe pass).
+    pub fn with_none_vars(mut self, set: std::collections::HashSet<String>) -> Self {
+        self.none_vars_gen = set;
         self
     }
 
@@ -4886,6 +4896,16 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         let pid = self.lower_expr(&AstNode::StringLit("None".to_string()));
                         part_ids.push(pid);
                         continue;
+                    }
+                    // Batch 654: a NoneVar part (`x = None; f"{x}"`) — same
+                    // render-at-consumption face as the print arm; the slot
+                    // stays I64 0.
+                    if let AstNode::Var(x) = p {
+                        if self.none_vars_gen.contains(x) {
+                            let pid = self.lower_expr(&AstNode::StringLit("None".to_string()));
+                            part_ids.push(pid);
+                            continue;
+                        }
                     }
                     let pid = self.lower_expr(p);
                     // An INLINE CONDITIONAL whose branches are both strings
@@ -10408,6 +10428,18 @@ call, no NULL-handle dereference).",
                                 .insert(nid, MirExpr::StringLit("None".to_string()));
                             self.type_map.insert(nid, Type::Str);
                             arg_ids.push(nid);
+                        } else if let AstNode::Var(x) = a {
+                            /* Batch 654: a NoneVar name (last top-level
+                               assignment was `x = None`) renders "None". */
+                            if self.none_vars_gen.contains(x) {
+                                let nid = self.next_id();
+                                self.exprs
+                                    .insert(nid, MirExpr::StringLit("None".to_string()));
+                                self.type_map.insert(nid, Type::Str);
+                                arg_ids.push(nid);
+                            } else {
+                                arg_ids.push(self.lower_expr(a));
+                            }
                         } else {
                             arg_ids.push(self.lower_expr(a));
                         }

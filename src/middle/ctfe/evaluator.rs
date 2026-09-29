@@ -19,6 +19,9 @@ pub struct ConstEvaluator {
     /// expr>`), for the out-of-i64 print folding. Sequential: a print sees
     /// only the assignments before it.
     i128_consts: std::collections::HashMap<String, i128>,
+    /// Batch 654: module-level names whose last top-level assignment was the
+    /// literal `None`. Sequential; any later assignment kills the entry.
+    none_vars: std::collections::HashSet<String>,
     /// Batch 642: >0 while transforming a loop/conditional body — constant
     /// recording and print folding are disabled there (a loop body's
     /// assignments re-execute with different values; folding them from the
@@ -55,6 +58,7 @@ impl ConstEvaluator {
             returned_value: None,
             recursion_depth: 0,
             i128_consts: std::collections::HashMap::new(),
+            none_vars: std::collections::HashSet::new(),
             p642_depth: 0,
         }
     }
@@ -549,6 +553,48 @@ impl ConstEvaluator {
         // string; plain int assignments feed the i128 const table — but
         // NOT inside loop/conditional bodies (p642_depth).
         if self.p642_depth == 0 {
+            /* Batch 654: maintain the NoneVar table — `x = None` records;
+               any other plain assignment to x kills (conservative). */
+            if let AstNode::Assign(lhs, rhs) = node {
+                if let (AstNode::Var(x), rk) = (&**lhs, &**rhs) {
+                    match rk {
+                        AstNode::NoneLit => {
+                            self.none_vars.insert(x.clone());
+                        }
+                        AstNode::Lit(_) | AstNode::FloatLit(_)
+                        | AstNode::StringLit(_) | AstNode::Bool(_)
+                        | AstNode::BigIntLit(_) => {
+                            self.none_vars.remove(x);
+                        }
+                        // Batch 654: `z = x` copies the None-ness when the
+                        // source is registered (t548 line 5); unknown
+                        // sources stay untouched (conservative).
+                        AstNode::Var(src) => {
+                            if self.none_vars.contains(src) {
+                                self.none_vars.insert(x.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            /* Batch 654: `str(x)` where x is a NoneVar — rewrite to the
+               "None" string literal in any expression position (the slot
+               stays I64 0; the render is by the sequential table). */
+            if let AstNode::Call {
+                receiver: None,
+                method: m,
+                args,
+                ..
+            } = node
+            {
+                if m == "str"
+                    && args.len() == 1
+                    && matches!(&args[0], AstNode::Var(x) if self.none_vars.contains(x))
+                {
+                    return Ok(AstNode::StringLit("None".to_string()));
+                }
+            }
             self.note_i128_assign(node);
             // Batch 647: a module-level (non-loop) assignment whose i128
             // value exceeds i64 rewrites its rhs to a BigIntLit — the slot
@@ -832,6 +878,17 @@ impl ConstEvaluator {
                     args.iter().map(|arg| self.transform_expr(arg)).collect();
                 let transformed_args = transformed_args?;
 
+                // Batch 654: `str(x)` on a NoneVar — the same rewrite the
+                // statement-level pass does, but expression-nested calls
+                // only travel through transform_expr, so the face lives
+                // here too (s89b: `str(x) == "None"`).
+                if receiver.is_none()
+                    && method == "str"
+                    && args.len() == 1
+                    && matches!(&args[0], AstNode::Var(x) if self.none_vars.contains(x))
+                {
+                    return Ok(AstNode::StringLit("None".to_string()));
+                }
                 // Check if this is a comptime function call with no receiver.
                 // Try to evaluate eagerly. If evaluation fails because variables
                 // aren't bound yet (we're inside a function body being transformed),

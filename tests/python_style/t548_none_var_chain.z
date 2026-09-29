@@ -1,0 +1,25 @@
+// 批次 654（旁路 cleanup）：变量 None 的窄切片——NoneVar 顺序表三层。
+// 登记面：resolver note_none_vars 遍历 main 体——`x = None` 记录、
+// `z = x` 复制、任何字面量/复合赋值即杀（循环/条件体内经 p642_depth
+// 守卫不录＝保守）。消费面按「值被消费的地方」渲染，槽型别零接触
+// （I64 0，637 传播面教训的窄化实施）：gen print 臂＋FString part 臂
+// 按表打 "None"；ctfe transform_expr Call 臂把 str(x) 改写为
+// StringLit("None")（表达式嵌套的 str 只走 transform_expr，statement
+// 级改写接不到）。边界（不在本夹具）：函数参数/容器内 None、跨函数
+// 传播＝顺序表不可见＝#113/#189 表示面深水维持。
+x = None
+print(x)
+print(x == None)
+print(str(x))
+y = 5
+print(y)
+z = x
+print(z)
+w = f"v={x}"
+print(w)
+// expect: None
+// expect: True
+// expect: None
+// expect: 5
+// expect: None
+// expect: v=None
