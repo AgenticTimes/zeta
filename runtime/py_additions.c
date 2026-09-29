@@ -3372,6 +3372,77 @@ int64_t zeta_map_get_default_cell(int64_t map, int64_t key, int64_t dflt, int64_
     return dflt_is_str ? zt_cell_make(ZJ_STR, dflt) : zt_cell_make(ZJ_INT, dflt);
 }
 
+// ── Batch 653: per-key tag render for map subscript reads in print faces ──
+// A map whose value type the compiler erased/refined (mixed writes: int then
+// str) cannot have one static println channel — the per-key value tag (batch
+// 535 side table) is the runtime truth. Renders the value by its tag:
+// 0=int %lld, 1=f64 via zt_f64_repr (batch 639), 2=raw str, 3=bool.
+int64_t zeta_map_value_tag(int64_t map, int64_t key);
+int64_t map_get(int64_t m, int64_t k);
+int64_t map_resolve(int64_t m);
+int64_t map_str_key(int64_t key);
+char* zt_f64_repr(double v);
+static char* zt_dup_local(const char* s) {
+    size_t n = strlen(s) + 1;
+    char* p = (char*)GC_malloc(n);
+    memcpy(p, s, n);
+    return p;
+}
+
+/* ── Batch 653: per-key tag render for `.get` reads in print faces ──
+   Mixed-value maps (str value + int value) cannot share one static println
+   channel: the per-key tag side table (batch 535) is the runtime truth.
+   Hit: render the stored value by its recorded tag. Miss: render the
+   default by ITS kind (dflt_kind: 0 int, 1 f64, 2 str). */
+static int64_t zeta_map_get_render_core(int64_t map, int64_t key, int64_t dflt, int64_t dflt_is_str) {
+    int64_t m = map ? map_resolve(map) : 0;
+    int64_t kh = map_str_key(key);
+    if (m) {
+        int64_t v = map_get(m, kh);
+        if (v) {
+            int64_t tag = zeta_map_value_tag(m, kh);
+            char* s = (char*)GC_malloc(48);
+            switch (tag) {
+                case 1: {
+                    double d;
+                    memcpy(&d, &v, sizeof d);
+                    snprintf(s, 48, "%g", d);
+                    return (int64_t)s;
+                }
+                case 2:
+                    return v;
+                case 3:
+                    snprintf(s, 48, v ? "True" : "False");
+                    return (int64_t)s;
+                default:
+                    snprintf(s, 48, "%lld", (long long)v);
+                    return (int64_t)s;
+            }
+        }
+    }
+    if (dflt_is_str) return dflt;
+    {
+        char* s = (char*)GC_malloc(48);
+        double d;
+        memcpy(&d, &dflt, sizeof d);
+        snprintf(s, 48, "%g", d);
+        return (int64_t)s;
+    }
+}
+
+int64_t zeta_map_get_render(int64_t map, int64_t key) {
+    /* No default: render the miss as an int word (legacy channel). */
+    return zeta_map_get_render_core(map, key, 0, 0);
+}
+
+int64_t zeta_map_get_render_d(int64_t map, int64_t key, int64_t dflt, int64_t dflt_is_str) {
+    /* dflt_is_str: the default handle is a str — render raw. Otherwise
+       render the i64 word via %g (CPython prints floats compactly). */
+    if (dflt_is_str) return dflt;
+    return zeta_map_get_render_core(map, key, dflt, dflt_is_str);
+}
+
+
 int64_t zeta_collect_vec_n(int64_t iter, int64_t fn_ptr, int64_t len_override) {
     if (!iter) return 0;
     int64_t len = len_override;
