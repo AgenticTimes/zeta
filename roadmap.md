@@ -25374,3 +25374,38 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 
 1. **push 欠账**：目标行「不 push」被我当成持续覆盖项，从批次 536 起到 649 连续只 commit 不 push（`agentic/bootstrap` 落后 337 个提交）。已补推（`4219dd2b..7bf0ff30`），并恢复 AGENTS 的批间收尾＝每批推。⇒ 今后与"每批必推"冲突的措辞只按**单批裁决**处理。
 2. **读数批堆积**：批次 645–649 连续 5 批零 `src/` 改动（定价／度量／定位），最近 40 笔提交里只有 4 笔动代码。定位做到"能动手"就该动手 ⇒ 新加一条自查：**同一族连续 2 批零代码即强制转真修批**，除非有实测障碍（需授权件、需方言裁决）。
+
+---
+
+## 批次 651 —— 跨模块同名类方法派发碰撞（主线 301 根因链；金字塔 3.2；harness #253）
+
+**提交**：`21a006e9`（bootstrap 分支，已推 `agentic/bootstrap`）
+
+**问题**：两个模块各定义一个同名类（如 `m647a.Cfg` 和 `m647b.Cfg`），方法派发共用裸限定键 `Cfg::show`，导致 `a.show()` 和 `b.show()` 调用错误模块的方法体。测试夹具 `m647_main.py` 输出 `2, 9`（方法互换），正确应为 `1, 7`。
+
+**根因链**（四层，每层都有独立实证）：
+1. **ImplBlock 注册**：方法以裸限定名 `Cfg::show` 注册，两个模块的同名方法共用一条条目
+2. **构造器返回类型**：`rename_definition` 把构造器函数名从 `Cfg` 改为 `m647a__Cfg`，但 `ret` 字段（返回类型）仍是裸名 `Cfg`，导致接收者类型是 `Named("Cfg", [])`
+3. **StructLit variant**：解析器合成的构造器在 body 里用 `Return(StructLit { variant: "Cfg" })`，`rename_definition` 只改 `ret_expr` 不改 body，variant 仍是裸名
+4. **方法体 self 参数类型**：即使添加了 `m647a__Cfg::show` 别名，方法体的 `self` 参数类型仍是裸名 `Cfg`，在类型解析时被映射到第一个匹配的模块（`m647a__Cfg`），导致 `m647b__Cfg::show` 的接收者类型错误
+
+**修法**（resolver.rs，150 行增改）：
+1. **ImplBlock 注册**（:1073-1130）：在裸名注册之后，添加模块前缀限定别名（`m647a__Cfg::show`）到 `self.funcs` 和 `self.registered_funcs`；同时改写方法体 AST 的 `self` 参数类型为模块前缀限定名
+2. **rename_definition**（:6551-6623）：
+   - 改写 `ret_expr` 里的 StructLit variant（已有）
+   - 新增：改写 body 里 Return 语句中的 StructLit variant（解析器合成的构造器用这种形式）
+   - 新增：当 `ret == name` 时（构造器），改写 `ret` 字段为模块前缀限定名
+3. **inherit_class_members**（:2657-2671）： adopted 构造器的 StructLit variant 搜索 `type_decls` 找模块前缀限定名
+
+**验证**：
+- 测试夹具 `/tmp/b647/m647_main.py`：输出 `1, 7`（正确），改前为 `2, 9`（错误）
+- MIR 验证：构造器返回 `Struct { variant: "m647a__Cfg" }`，方法调用为 `m647a__Cfg::show` 和 `m647b__Cfg::show`，接收者类型分别为 `Named("m647a__Cfg", [])` 和 `Named("m647b__Cfg", [])`
+
+**门禁**（快门禁，跳过 corpus/jit/diff 等 10 步）：
+- official：compile **194/194**，compile+link **191/194**（3 条 link-only 失败＝存量红）
+- python_style：**419 passed / 3 failed / 6 known-fail / 0 xpass**
+  - 红源：`t231_dict_set_cast_fromkeys`、`t233_listcomp_condition_capture`（两条存量红）、`t404_df_row_index_via_var`（批次 548 应修未修，与本次改动无关）
+- 诊断面：official 21 行 / python_style 271 行（与改前相同）
+- dyn_binding：4 条断言，不一致 0
+
+**结论**：跨模块同名类方法派发碰撞已修复，快门禁零新增红。本批是连续 6 批零代码（645-650）后的第一个真修批，符合 AGENTS 纪律「同一族连续 2 批零代码 ⇒ 下一批必真修」。
