@@ -1,0 +1,14 @@
+# @cat: str
+# @note: 随机字符串切片（seed=664106 #0）
+#@@ python
+print("abcdef"[:0])
+print("abcdef"[:1])
+print("abcdef"[1:2])
+print(len("abcdef"[1:4]))
+
+#@@ zeta
+print("abcdef"[:0])
+print("abcdef"[:1])
+print("abcdef"[1:2])
+print(len("abcdef"[1:4]))
+
