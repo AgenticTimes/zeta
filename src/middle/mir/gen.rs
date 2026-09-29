@@ -17177,11 +17177,20 @@ call, no NULL-handle dereference).",
                 if let Some(r) = receiver {
                     Self::collect_free_vars(r, bound, free);
                 }
-                // method 名不是自由变量；args 递归
+                // Batch 662: a no-receiver CALLEE name is a free variable
+                // when it names a captured local lambda — the comprehension
+                // filter `if condition(m)` captures `condition` by CALL,
+                // not by a Var read (t233: without this the closure body
+                // fell to the `_condition` ghost stub). Over-collecting
+                // builtin/module callee names is harmless: every capture
+                // consumer filters through name_to_id.
+                if receiver.is_none() && !bound.contains(method) {
+                    free.insert(method.clone());
+                }
+                // args 递归
                 for a in args {
                     Self::collect_free_vars(a, bound, free);
                 }
-                let _ = method;
             }
             AstNode::FieldAccess { base, .. } => Self::collect_free_vars(base, bound, free),
             AstNode::Subscript { base, index } => {
@@ -17572,6 +17581,19 @@ call, no NULL-handle dereference).",
             child.type_map.insert(slot_id, cap_ty);
             child.name_to_id.insert(name.clone(), slot_id);
             child.captured_vars.insert(name.clone(), name_id);
+            // Batch 662: a captured name bound to a LAMBDA keeps its
+            // callability inside the closure — the comprehension filter
+            // `if condition(m)` (condition = a loop-unpacked lambda from
+            // the enclosing scope) otherwise falls to the `_condition`
+            // ghost stub at run time (t233's registered red). The
+            // ret-type entry rides along so the direct named call types
+            // its result.
+            if let Some(cfn) = self.closure_vars.get(name) {
+                child.closure_vars.insert(name.clone(), cfn.clone());
+                if let Some(rt) = self.closure_ret_tys.get(cfn) {
+                    child.closure_ret_tys.insert(cfn.clone(), rt.clone());
+                }
+            }
         }
         if crate::diagnostics::env_flag("ZETA_PROBE") {
             eprintln!("PROBE closure {} body stmts={}", closure_name,
