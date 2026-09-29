@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=705106 #2）
+#@@ python
+print(61 == 816 < 920)
+print(833 < 764 > -23)
+
+#@@ zeta
+print(61 == 816 < 920)
+print(833 < 764 > -23)
+
