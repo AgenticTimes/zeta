@@ -4247,13 +4247,32 @@ impl Resolver {
                 // OWN NAMES ONLY: the re-exports half produced fresh ghosts
                 // (`_pd.Timestamp__date`, `_filter`) when applied inside methods.
                 let head = func_name.split("::").next().unwrap_or("").to_string();
-                let hits: Vec<String> = if head.is_empty() {
+                // `head` is the MANGLED class name (e.g. "pandas__DataFrame").
+                // `py_module_own_names` stores BARE names (e.g. "DataFrame").
+                // Strip the module prefix from `head` to recover the bare class
+                // name before searching — otherwise methods never get a rename
+                // table and `DataFrame(...)` inside a method body falls through
+                // to `zeta_platform_obj` (wrong memory layout ⇒ crash at
+                // `map_keys`; measured: t404 with `import pandas as pd`).
+                let bare_head = {
+                    let own = self.py_module_own_names.borrow();
+                    let mut found = head.clone();
+                    for (m, _) in own.iter() {
+                        let prefix = format!("{}__", m.replace('.', "_"));
+                        if let Some(stripped) = found.strip_prefix(&prefix) {
+                            found = stripped.to_string();
+                            break;
+                        }
+                    }
+                    found
+                };
+                let hits: Vec<String> = if bare_head.is_empty() {
                     Vec::new()
                 } else {
                     self.py_module_own_names
                         .borrow()
                         .iter()
-                        .filter(|(_, names)| names.contains(&head))
+                        .filter(|(_, names)| names.contains(&bare_head))
                         .map(|(m, _)| m.clone())
                         .collect()
                 };
