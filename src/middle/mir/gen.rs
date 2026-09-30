@@ -4163,14 +4163,46 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         let func = match self.type_map.get(&id).cloned() {
             Some(Type::F64) | Some(Type::F32) => "to_string_f64",
             Some(Type::Bool) => "to_string_bool",
-            // Batch 742 (#213④b): containers with an EXISTING repr channel
-            // route through it — the raw handle used to go through
-            // to_string_i64 and str(d) printed a pointer. Tuples need a
-            // general-arity repr runtime that doesn't exist yet (py_print_pair
-            // is the dict.items() k/v channel) — registered as the remaining
-            // ④b work.
+            // Batch 742/743 (#213④b): containers route through their repr
+            // channels — the raw handle used to go through to_string_i64 and
+            // str(d)/str(t) printed a pointer.
             Some(Type::Named(n, _)) if n == "map" || n == "dict" => "py_json_dumps_map",
             Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)) => "py_json_dumps_vec",
+            Some(Type::Tuple(ts)) => {
+                // General tuple repr: arity + per-element 2-bit kind tags are
+                // known statically from Type::Tuple; the runtime renders the
+                // contiguous i64-slot run (stack_array_get layout).
+                let mut tags: i64 = 0;
+                for (i, t) in ts.iter().enumerate() {
+                    if i >= 31 {
+                        break;
+                    }
+                    let code: i64 = match t {
+                        Type::Str => 1,
+                        Type::F64 | Type::F32 => 2,
+                        Type::Bool => 3,
+                        _ => 0,
+                    };
+                    tags |= code << (2 * i);
+                }
+                let len_id = self.next_id();
+                self.exprs
+                    .insert(len_id, MirExpr::IntLit(ts.len() as i64));
+                self.type_map.insert(len_id, Type::I64);
+                let tags_id = self.next_id();
+                self.exprs.insert(tags_id, MirExpr::IntLit(tags));
+                self.type_map.insert(tags_id, Type::I64);
+                let nid = self.next_id();
+                self.stmts.push(MirStmt::Call {
+                    func: "zeta_tuple_repr".to_string(),
+                    args: vec![id, len_id, tags_id],
+                    dest: nid,
+                    type_args: vec![],
+                });
+                self.exprs.insert(nid, MirExpr::Var(nid));
+                self.type_map.insert(nid, Type::Str);
+                return nid;
+            }
             _ => "to_string_i64",
         };
         let nid = self.next_id();

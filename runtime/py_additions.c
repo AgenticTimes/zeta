@@ -1276,6 +1276,56 @@ int64_t py_vec_notna(int64_t vec);
 // that way; anything else is passed through unchanged with a warning (never a
 // wild read, never a fabricated mask).
 // A plausible `map<..>` block: header is `[cap|len]` with sane bounds.
+/* Batch 743 (#213④b): general tuple repr — the compiler knows the arity and
+   per-element kinds statically (Type::Tuple), so it passes `len` and a 2-bit
+   tag per element (00=int, 01=str, 10=f64-bit-pattern, 11=bool) and the tuple
+   itself is a contiguous run of i64 slots (what stack_array_get reads).
+   Nested containers inside a tuple still print their handles (registered
+   boundary). Returns GC text "(a, b, …)". */
+int64_t zeta_tuple_repr(int64_t arr, int64_t len, int64_t tags) {
+    if (len < 0) len = 0;
+    size_t cap = 16 + (size_t)(len + 1) * 24;
+    char* out = (char*)GC_malloc(cap);
+    size_t n = 0;
+    #define ZT_TR_PUT(c) do {         if (n + 1 >= cap) { cap *= 2; out = (char*)GC_realloc(out, cap); }         out[n++] = (char)(c);     } while (0)
+    #define ZT_TR_PUTS(sv) do { const char* _s = (sv); while (*_s) ZT_TR_PUT(*_s++); } while (0)
+    ZT_TR_PUT('(');
+    for (int64_t i = 0; i < len; i++) {
+        if (i) ZT_TR_PUTS(", ");
+        int64_t tag = (tags >> (2 * i)) & 3;
+        int64_t v = ((int64_t*)arr)[i];
+        switch (tag) {
+        case 1: { /* str */
+            ZT_TR_PUT('\'');
+            ZT_TR_PUTS((const char*)v);
+            ZT_TR_PUT('\'');
+            break;
+        }
+        case 2: { /* f64 bit pattern */
+            double d;
+            memcpy(&d, &v, sizeof d);
+            char num[40];
+            snprintf(num, sizeof num, "%.17g", d);
+            ZT_TR_PUTS(num);
+            break;
+        }
+        case 3: /* bool */
+            ZT_TR_PUTS(v ? "True" : "False");
+            break;
+        default: { /* int */
+            char num[24];
+            snprintf(num, sizeof num, "%lld", (long long)v);
+            ZT_TR_PUTS(num);
+            break;
+        }
+        }
+    }
+    if (len == 1) ZT_TR_PUT(','); /* Python 1-tuple keeps the trailing comma */
+    ZT_TR_PUT(')');
+    out[n] = 0;
+    return (int64_t)out;
+}
+
 static int zt_maybe_map(int64_t m) {
     if (!m || m < 0x1000) return 0;
     /* Batch 663: read the cap word at offset 0 — the same word

@@ -1,12 +1,24 @@
-// 批次 742（#213④b 半收）：str() 对容器走既有 repr 通道——dict 走
-// py_json_dumps_map（print 面同源），列表本就有 [1, 2] 文本化。元组的
-// str() 需通用变长 repr runtime（py_print_pair 是 dict.items() 专用）＝
-// #213④b 余项续作，本钉不含。
+// 批次 742/743（#213④b 收口）：str() 对容器走 repr 通道——dict 走
+// py_json_dumps_map、列表走 py_json_dumps_vec、元组走 zeta_tuple_repr
+// （743 新 runtime：编译期从 Type::Tuple 静态传 len＋每元素 2 位类型标签
+// int/str/f64/bool，渲染连续 i64 槽；1 元组保尾逗号＝CPython）。边界：
+// 嵌套容器在元组内仍打句柄（标签无容器码，另登）。
 d = {"a": 1}
 print(str(d))
 xs = [1, 2]
 print(str(xs))
 print(str(d) == '{"a": 1}')
+print(str((1, 2)))
+print(str((1,)))
+print(str(("a", 2)))
+print(str((1.5, True)))
+p = (1, 2)
+print(str(p))
 // expect: {"a": 1}
 // expect: [1, 2]
 // expect: True
+// expect: (1, 2)
+// expect: (1,)
+// expect: ('a', 2)
+// expect: (1.5, True)
+// expect: (1, 2)
