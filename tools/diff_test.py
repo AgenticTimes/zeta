@@ -183,6 +183,9 @@ def main() -> int:
     ap.add_argument("--bless", action="store_true", help="采集/刷新基线")
     ap.add_argument("--only", metavar="SUBSTR", help="只跑名字含该子串的用例（调试用，不参与基线判定）")
     ap.add_argument("--verbose", "-v", action="store_true", help="打印每条 mismatch/compile 的实际输出")
+    ap.add_argument("--sample", metavar="K:OFFSET",
+                    help="轮转抽样：只跑排序序号满足 序号 %% K == OFFSET 的用例（K 分之一），"
+                         "配套每 10 批的全量门禁仍跑全套；抽样读数不参与基线判定")
     ap.add_argument("--json", metavar="PATH", help="把本次读数另存一份 JSON")
     args = ap.parse_args()
 
@@ -192,6 +195,19 @@ def main() -> int:
     cases = sorted(CASE_DIR.glob("*.dcase"))
     if args.only:
         cases = [c for c in cases if args.only in c.name]
+    if args.sample:
+        try:
+            k_s, off_s = args.sample.split(":", 1)
+            k, off = int(k_s), int(off_s)
+        except ValueError:
+            print(f"--sample 格式应为 K:OFFSET（如 10:3），实为 {args.sample!r}", file=sys.stderr)
+            return 2
+        if k < 1 or not 0 <= off < k:
+            print(f"--sample 需 0 <= OFFSET < K，实为 {args.sample!r}", file=sys.stderr)
+            return 2
+        before = len(cases)
+        cases = [c for i, c in enumerate(cases) if i % k == off]
+        print(f"抽样 {k} 分之 {off}：{before} → {len(cases)} 条（全套覆盖由每 10 批的全量门禁承担）")
     if not cases:
         print(f"{CASE_DIR} 下没有 .dcase 用例", file=sys.stderr)
         return 2
@@ -289,8 +305,12 @@ def main() -> int:
     if bad:
         print(f"坏用例 {len(bad)} 条（参考侧跑不出真值，已排除出分母）: {' '.join(bad)}")
         rc = 2
-    if args.only:
-        print("--only 子集跑：不与基线比对（子集里「消失」的用例不是回归），判定只到本次读数")
+    if args.only or args.sample:
+        if args.sample:
+            print(f"--sample {args.sample} 抽样跑：不与基线比对（未抽到的用例不是回归），"
+                  "全套覆盖由每 10 批的全量门禁承担")
+        if args.only:
+            print("--only 子集跑：不与基线比对（子集里「消失」的用例不是回归），判定只到本次读数")
         return rc
     if base is None:
         print(f"无基线 {BASELINE}——只出读数，不判定。先 --bless", file=sys.stderr)
