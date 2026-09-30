@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=715106 #1）
+#@@ python
+print(-(-39) < -40, 39 == 39)
+print(not 37)
+
+#@@ zeta
+print(-(-39) < -40, 39 == 39)
+print(not 37)
+
