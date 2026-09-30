@@ -1934,37 +1934,19 @@ impl Resolver {
     fn module_global_types_at(&self, site: &str) -> HashMap<String, Type> {
         // Batch 738: the s5195 site (lower_to_mir's builder) runs once per
         // function/closure — 651 identical full-AST walks on jq_wufu_local
-        // (= 42s, profiled: 72% of compile time in AstNode clone/drop).
-        // The module-level assignment set is FIXED once lowering begins, so
-        // the map is memoized; a ZETA_COUNT_MGT hash check verifies every
-        // cached hit equals the first computation (mismatch ⇒ loud stderr,
-        // cache invalidated for that call).
+        // (= 42s, profiled: 72% of compile time in AstNode clone/drop). The
+        // module-level assignment set is FIXED once lowering begins, so the
+        // map is memoized for this site; the other two call sites (refine
+        // passes) may see a still-growing table and keep recomputing.
         if site == "s5195" {
             if let Some(hit) = self.mgt_cache.borrow().as_ref() {
                 return hit.clone();
             }
-        }
-        let computed = self.module_global_types_uncached();
-        if site == "s5195" {
-            if std::env::var("ZETA_COUNT_MGT").is_ok() {
-                if let Some(prev) = self.mgt_cache.borrow().as_ref() {
-                    use std::hash::Hasher;
-                    let h = |m: &HashMap<String, Type>| {
-                        let mut hh = std::collections::hash_map::DefaultHasher::new();
-                        hh.write(format!("{m:?}").as_bytes());
-                        hh.finish()
-                    };
-                    let (h1, h2) = (h(prev), h(&computed));
-                    if h1 != h2 {
-                        eprintln!("[mgt] WARNING: cached map differs from recomputed — recomputing");
-                        return computed;
-                    }
-                }
-            }
+            let computed = self.module_global_types_uncached();
             *self.mgt_cache.borrow_mut() = Some(computed.clone());
             return computed;
         }
-        computed
+        self.module_global_types_uncached()
     }
 
     fn module_global_types_uncached(&self) -> HashMap<String, Type> {
