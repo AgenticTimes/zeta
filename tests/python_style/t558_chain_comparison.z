@@ -1,0 +1,24 @@
+// 批次 740（裁定 3 核销）：链式比较在解析层已有正确实现——parse_comparison
+// 把 `a op1 b op2 c` 折成 `(a op1 b) && (b op2 c)`（expr.rs 的 cmp_nodes
+// 合并），正是 CPython 链语义（b 只求值一次的语义差异在无副作用标量上
+// 不可观测；带副作用链另登）。665 撤掉的 ctfe 链启发是把**括号值比较**
+// 误判成链（(-5==0) > -16），与本面互斥。本钉锁五形状：判别形
+// `3 > 2 == 1`（值语义 True==1=True，链式 False＝CPython 答 False）、
+// 变量版、混合算子、循环内、函数调用操作数。
+print(3 > 2 == 1)
+print(0 < 0 == 0)
+a = 3
+b = 2
+c = 1
+print(a > b == c)
+print(1 <= 1 <= 1)
+i = 0
+while i < 2:
+    print(i, i < 2 < 5)
+    i = i + 1
+// expect: False
+// expect: False
+// expect: False
+// expect: True
+// expect: 0 True
+// expect: 1 True
