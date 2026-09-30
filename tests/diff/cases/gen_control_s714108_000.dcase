@@ -1,0 +1,30 @@
+# @cat: control
+# @note: 随机控制流（seed=714108 #0）——else/break/continue 组合
+#@@ python
+s = 0
+for i in range(5):
+    s += i
+    if i == 5:
+        continue
+    s += 1
+    if i == 2:
+        break
+    s += 2
+else:
+    s += 100
+print(s)
+
+#@@ zeta
+s = 0
+for i in range(5):
+    s += i
+    if i == 5:
+        continue
+    s += 1
+    if i == 2:
+        break
+    s += 2
+else:
+    s += 100
+print(s)
+
