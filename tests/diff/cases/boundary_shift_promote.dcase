@@ -1,0 +1,18 @@
+# @cat: numeric
+# @note: 批次 670 边界面专项（手写）：移位提升与大数精确（649/650 面）
+#@@ python
+print(1 << 64)
+print(5 >> 70)
+i = 0
+while i < 3:
+    print(1 << (60 + i))
+    i = i + 1
+print((1 << 70) & 255)
+#@@ zeta
+print(1 << 64)
+print(5 >> 70)
+i = 0
+while i < 3:
+    print(1 << (60 + i))
+    i = i + 1
+print((1 << 70) & 255)

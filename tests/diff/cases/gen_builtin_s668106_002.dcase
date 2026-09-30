@@ -1,0 +1,20 @@
+# @cat: container
+# @note: 随机内建函数（seed=668106 #2）
+#@@ python
+v = [882, 525]
+print(sum([882, 525]))
+print(min([882, 525]))
+print(max([882, 525]))
+print(abs(525))
+print(round(24 / 10))
+print(len([882, 525]) + sum([882, 525]))
+
+#@@ zeta
+v = [882, 525]
+print(sum([882, 525]))
+print(min([882, 525]))
+print(max([882, 525]))
+print(abs(525))
+print(round(24 / 10))
+print(len([882, 525]) + sum([882, 525]))
+

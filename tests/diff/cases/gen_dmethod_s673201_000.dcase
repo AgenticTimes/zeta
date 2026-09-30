@@ -1,0 +1,16 @@
+# @cat: container
+# @note: 随机字典方法链（seed=673201 #0）
+#@@ python
+d = {"k1": 2, "alpha": -73}
+d["alpha"] = -98
+print(d["alpha"])
+print(d.get("z9", -29))
+print(len(d))
+
+#@@ zeta
+d = {"k1": 2, "alpha": -73}
+d["alpha"] = -98
+print(d["alpha"])
+print(d.get("z9", -29))
+print(len(d))
+

@@ -38,6 +38,9 @@ pub struct Resolver {
     /// on the ImplBlock attrs, no own `__init__`) — consumed by
     /// `inherit_class_members` after registration completes.
     pending_inherits: std::cell::RefCell<Vec<(String, String)>>,
+    /// Batch 654: module-level names whose last top-level assignment was the
+    /// literal `None` — sequential; feeds the gen print/str render faces.
+    none_vars: std::cell::RefCell<std::collections::HashSet<String>>,
     /// Batch 628: `Class::method` -> [(FuncDef param position, Type)] — the
     /// 627 call-site refinements, computed once at typecheck so the return
     /// inference below can read them and the generator builder can reuse
@@ -147,6 +150,7 @@ impl Resolver {
         let mut r = Self {
             impls: HashMap::new(),
             pending_inherits: std::cell::RefCell::new(Vec::new()),
+            none_vars: std::cell::RefCell::new(std::collections::HashSet::new()),
             method_param_refinements: HashMap::new(),
             class_bases: std::cell::RefCell::new(HashMap::new()),
             pending_baseargs: std::cell::RefCell::new(Vec::new()),
@@ -1929,6 +1933,9 @@ impl Resolver {
             AstNode::FloatLit(_) => Some(Type::F64),
             AstNode::Bool(_) => Some(Type::Bool),
             AstNode::Lit(_) => Some(Type::I64),
+            // Batch 647: a beyond-i64 literal types the global BigInt —
+            // reads route through the zeta_big runtime family.
+            AstNode::BigIntLit(_) => Some(Type::Named("BigInt".to_string(), vec![])),
             AstNode::DictLit { entries } => Some(Type::Named(
                 "map".to_string(),
                 match entries.first() {
@@ -3042,6 +3049,15 @@ impl Resolver {
                         ) {
                             map_vals.insert((ty.clone(), f.clone()), v);
                         }
+                    } else if spelling == "map" {
+                        /* Batch 646: the BARE spelling — values erased
+                           (PyDynamic). A `.get(k, <str>)` on it is the
+                           genuine union; the ret becomes PyJson so the
+                           caller renders the gen-side tagged cell by tag. */
+                        map_vals.insert(
+                            (ty.clone(), f.clone()),
+                            Type::PyDynamic,
+                        );
                     }
                 }
             }
@@ -3051,6 +3067,22 @@ impl Resolver {
             .iter()
             .map(|(n, (_, r, _))| (n.clone(), r.clone()))
             .collect();
+        /* Batch 646: (class, field) whose map spelling is the BARE "map"
+           (values erased) — a `return self.<f>.get(k, <str>)` on such a
+           field is the genuine union; the gen-side cell route returns a
+           tagged cell, so the method's registered ret becomes PyJson and
+           the caller renders through py_json_as_str. */
+        let mut erased_map_fields: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        for (ty, td) in self.type_decls.iter() {
+            if let crate::middle::mir::r#gen::TypeDecl::Struct { fields, .. } = td {
+                for (f, spelling) in fields {
+                    if spelling == "map" {
+                        erased_map_fields.insert((ty.clone(), f.clone()));
+                    }
+                }
+            }
+        }
         for (qname, fd) in candidates {
             let unannotated = match self.funcs.get(&qname) {
                 Some((_, Type::I64, _)) => true,
@@ -3059,6 +3091,7 @@ impl Resolver {
             if !unannotated {
                 continue;
             }
+            let cls = qname.split("::").next().unwrap_or("").to_string();
             let AstNode::FuncDef { params, .. } = &fd else {
                 continue;
             };
@@ -3070,6 +3103,8 @@ impl Resolver {
                 param_map,
                 &qname,
                 &map_vals,
+                &erased_map_fields,
+                &cls,
                 &fn_rets,
                 &mut rets,
                 &mut dyn_faces,
@@ -3080,10 +3115,12 @@ impl Resolver {
             let first = rets[0].clone();
             // Only literal-kind types are writable; a unanimous PyDynamic
             // vote means every return was un-inferable — abstain.
-            // 批次 660 例外：全票都是**已知动态**面（每条返回都是证据表明的真并集，
-            // `dyn_faces == rets.len()`）时写 PyDynamic —— 这是批次 400「证据冲突 ⇒
-            // 退成动态」规则在返回位的成员；毒票（推不出来）仍按原样弃权。
-            let writable = (matches!(first, Type::Str | Type::F64 | Type::Bool)
+            // Batch 660 (mainline): an all-dyn union face (every return is
+            // evidenced PyDynamic) writes PyDynamic. Batch 646 (cleanup):
+            // Named("PyJson") is also writable — the tagged-cell return face
+            // (the caller renders by tag).
+            let writable = ((matches!(first, Type::Str | Type::F64 | Type::Bool)
+                || first == Type::Named("PyJson".to_string(), vec![]))
                 && rets.iter().all(|t| *t == first))
                 || (dyn_faces == rets.len()
                     && rets.iter().all(|t| matches!(t, Type::PyDynamic)));
@@ -3107,12 +3144,15 @@ impl Resolver {
     /// Collect the inferable type of every `Return` expression in a method
     /// body: a string/float/bool literal, or a parameter the 627 map
     /// refined. Anything else yields no evidence (abstain).
+    #[allow(clippy::too_many_arguments)]
     fn collect_return_kinds(
         fd: &AstNode,
         params: &[(String, String)],
         param_map: &HashMap<String, Vec<(usize, Type)>>,
         qname: &str,
         map_vals: &HashMap<(String, String), Type>,
+        erased_map_fields: &std::collections::HashSet<(String, String)>,
+        cls: &str,
         fn_rets: &HashMap<String, Type>,
         out: &mut Vec<Type>,
         // 批次 660：`out` 里的 PyDynamic 有两种成因 ——「证据表明这是真并集」（已知动态，
@@ -3120,7 +3160,6 @@ impl Resolver {
         // 已知动态才允许把返回钉成 PyDynamic，毒票维持批次 628 的弃权。
         dyn_faces: &mut usize,
     ) {
-        let cls = qname.split("::").next().unwrap_or("").to_string();
         // `+` with any inferable-Str operand is Str concat (CPython);
         // F64+F64 stays F64. Recursion is bounded by expression depth.
         fn refinable(
@@ -3192,7 +3231,7 @@ impl Resolver {
                                         if let AstNode::Var(b) = &**fb {
                                             if b == "self" {
                                                 let vt = map_vals
-                                                    .get(&(cls.clone(), field.clone()));
+                                                    .get(&(cls.to_string(), field.clone()));
                                                 let dt = match &args[1] {
                                                     AstNode::StringLit(_) => Some(Type::Str),
                                                     AstNode::FloatLit(_) => Some(Type::F64),
@@ -3201,12 +3240,23 @@ impl Resolver {
                                                 };
                                                 face = match (vt, dt) {
                                                     (Some(v), Some(d)) if *v == d => Some(d.clone()),
-                                                    // 批次 660：字段没有 `map<k,v>` 注解
-                                                    // （`self.data = {}`）⇒ 表里存的值类型
-                                                    // 静态不可知 ⇒ 返回值是真并集（命中值 ∪
-                                                    // 默认值）＝已知动态面。旧代码落 `_ => None`
-                                                    // ⇒ 走毒票 ⇒ 弃权 ⇒ 保持 i64 ⇒ 调用点打堆地址。
+                                                    // Batch 660 (mainline): the field has no
+                                                    // map<k,v> annotation ⇒ the stored value
+                                                    // type is statically unknown ⇒ the return
+                                                    // is a genuine union (hit ∪ default) = a
+                                                    // known-dynamic face.
                                                     (None, Some(_)) => Some(Type::PyDynamic),
+                                                    /* Batch 646 (cleanup): the genuine union
+                                                       (erased map values + a str default) —
+                                                       the gen cell route returns the tagged
+                                                       cell; type the ret PyJson so the caller
+                                                       renders by tag. */
+                                                    (Some(Type::PyDynamic), Some(d)) => {
+                                                        Some(Type::Named(
+                                                            "PyJson".to_string(),
+                                                            vec![],
+                                                        ))
+                                                    }
                                                     (Some(_), Some(_)) => Some(Type::PyDynamic),
                                                     _ => None,
                                                 };
@@ -3654,6 +3704,55 @@ impl Resolver {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Batch 654: record `x = None` module-level assigns into the NoneVar
+    /// set (sequential; any later plain assignment to x kills the entry).
+    /// The set threads to the gen print/str faces via with_none_vars.
+    pub fn note_none_vars(&mut self) {
+        let defs = self.registered_func_defs.borrow().clone();
+        for d in &defs {
+            if let AstNode::FuncDef { body, .. } = d {
+                for st in body {
+                    match st {
+                        AstNode::Assign(lhs, rhs) => {
+                            if let (AstNode::Var(x), rk) = (&**lhs, &**rhs) {
+                                match rk {
+                                    AstNode::NoneLit => {
+                                        self.none_vars
+                                            .borrow_mut()
+                                            .insert(x.clone());
+                                    }
+                                    AstNode::Lit(_) | AstNode::FloatLit(_)
+                                    | AstNode::StringLit(_) | AstNode::Bool(_)
+                                    | AstNode::BigIntLit(_) => {
+                                        self.none_vars.borrow_mut().remove(x);
+                                    }
+                                    // Batch 654: `z = x` copies the
+                                    // None-ness when the source is
+                                    // registered; unknown sources stay
+                                    // untouched (conservative).
+                                    AstNode::Var(src) => {
+                                        if self.none_vars.borrow().contains(src) {
+                                            self.none_vars
+                                                .borrow_mut()
+                                                .insert(x.clone());
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        AstNode::AssignOp { target, .. } => {
+                            if let AstNode::Var(x) = &**target {
+                                self.none_vars.borrow_mut().remove(x);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
@@ -5095,6 +5194,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_py_module_paths(self.py_module_paths.borrow().clone())
             .with_module_global_types(self.module_global_types())
             .with_class_bases(self.class_bases())
+            .with_none_vars(self.none_vars.borrow().clone())
             .with_method_param_refinements(self.method_param_refinements.clone())
             .with_source_file(self.source_file.borrow().clone())
             .with_argparse_kinds(self.argparse_kinds.borrow().clone())

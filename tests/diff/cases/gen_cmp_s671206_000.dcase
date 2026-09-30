@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=671206 #0）
+#@@ python
+print(702 <= -58 < 221)
+print(not -73)
+
+#@@ zeta
+print(702 <= -58 < 221)
+print(not -73)
+

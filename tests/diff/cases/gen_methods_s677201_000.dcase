@@ -1,0 +1,14 @@
+# @cat: container
+# @note: 随机容器方法链（seed=677201 #0）
+#@@ python
+d = {"x": 97, "w": -78}
+ks = d.keys()
+print(len(ks))
+print(d.get("x"))
+
+#@@ zeta
+d = {"x": 97, "w": -78}
+ks = d.keys()
+print(len(ks))
+print(d.get("x"))
+

@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=710106 #2）
+#@@ python
+print(899 == 561 > 423)
+print(not 12)
+
+#@@ zeta
+print(899 == 561 > 423)
+print(not 12)
+

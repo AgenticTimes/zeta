@@ -1,0 +1,15 @@
+# @cat: container
+# @note: 批次 669 边界面专项（手写）：dict(x) 直接构造浅拷贝＋插键（661 面）。
+#   注：经函数返回的 len() 面（409(a)① 症状）仍活＝已登记主线车道，不在本例。
+#@@ python
+d1 = dict({"a": 1})
+print(len(d1))
+d1["b"] = 2
+print(len(d1))
+print(d1["a"])
+#@@ zeta
+d1 = dict({"a": 1})
+print(len(d1))
+d1["b"] = 2
+print(len(d1))
+print(d1["a"])

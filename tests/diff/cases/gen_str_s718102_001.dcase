@@ -1,0 +1,6 @@
+# @cat: str
+# @note: 随机生成（seed=718102 #1）—— CPython 先验通过，oracle = 实跑输出
+#@@ python
+print(("ba")[0] * 4)
+#@@ zeta
+print(("ba")[0] * 4)

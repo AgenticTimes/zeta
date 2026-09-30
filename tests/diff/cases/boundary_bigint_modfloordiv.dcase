@@ -1,0 +1,22 @@
+# @cat: numeric
+# @note: 批次 669 边界面专项（手写）：BigInt 运行期取模/整除 floor 语义（658 面）
+#@@ python
+i = 0
+big = 0
+while i < 1:
+    big = 1 << 100
+    i = i + 1
+print(big % 7)
+print(big // 3)
+print(big % -7)
+print(-big // 3)
+#@@ zeta
+i = 0
+big = 0
+while i < 1:
+    big = 1 << 100
+    i = i + 1
+print(big % 7)
+print(big // 3)
+print(big % -7)
+print(-big // 3)

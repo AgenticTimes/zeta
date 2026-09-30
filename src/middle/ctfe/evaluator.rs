@@ -15,6 +15,18 @@ use super::visitor::{AstTransformer, AstVisitor};
 pub struct ConstEvaluator {
     /// Evaluation context
     context: ConstContext,
+    /// Batch 642: module-level ints whose i128 value is known (`a = <const
+    /// expr>`), for the out-of-i64 print folding. Sequential: a print sees
+    /// only the assignments before it.
+    i128_consts: std::collections::HashMap<String, i128>,
+    /// Batch 654: module-level names whose last top-level assignment was the
+    /// literal `None`. Sequential; any later assignment kills the entry.
+    none_vars: std::collections::HashSet<String>,
+    /// Batch 642: >0 while transforming a loop/conditional body — constant
+    /// recording and print folding are disabled there (a loop body's
+    /// assignments re-execute with different values; folding them from the
+    /// transform-time view regressed 53 control/loop cases, measured).
+    p642_depth: u32,
     /// Set when a Return statement is evaluated — used for early exit from function bodies
     returned_value: Option<ConstValue>,
     /// Recursion depth counter to prevent stack overflow on recursive comptime functions
@@ -45,6 +57,9 @@ impl ConstEvaluator {
             context: ConstContext::new(),
             returned_value: None,
             recursion_depth: 0,
+            i128_consts: std::collections::HashMap::new(),
+            none_vars: std::collections::HashSet::new(),
+            p642_depth: 0,
         }
     }
 
@@ -74,12 +89,526 @@ impl ConstEvaluator {
         Ok(result)
     }
 
+    /// Batch 642: i128 tree evaluation with Python semantics — floor
+    /// division, Python modulo, bounded pow. Returns None on anything not
+    /// statically known (unknown vars, calls, out-of-bounds shifts).
+    fn eval_i128_tree(
+        &self,
+        e: &AstNode,
+        depth: u32,
+    ) -> Option<(i128, bool)> {
+        if depth > 64 {
+            return None;
+        }
+        match e {
+            AstNode::Lit(i) => Some((*i as i128, false)),
+            AstNode::UnaryOp { op, expr } if op == "-" => {
+                let (v, b) = self.eval_i128_tree(expr, depth + 1)?;
+                Some((-v, b))
+            }
+            /* Batch 637/642: a var-carried value loses the bool marker
+               (the table stores plain i128) — it renders as an int. */
+            AstNode::Var(v) => self.i128_consts.get(v).copied().map(|v| (v, false)),
+            AstNode::BinaryOp { op, left, right } => {
+                /* Python and/or return the OPERAND: `or` — left when truthy
+                   else right; `and` — left when falsy else right. */
+                if op == "or" || op == "and" || op == "||" || op == "&&" {
+                    let (l, lb) = self.eval_i128_tree(left, depth + 1)?;
+                    /* `or`/`||`: truthy left selects LEFT; `and`/`&&`:
+                       falsy left selects LEFT. The result's boolean-ness
+                       follows the SELECTED operand. */
+                    let take_right = if op == "or" || op == "||" {
+                        l == 0
+                    } else {
+                        l != 0
+                    };
+                    return if take_right {
+                        self.eval_i128_tree(right, depth + 1)
+                    } else {
+                        Some((l, lb))
+                    };
+                }
+                /* Batch 665: comparisons fold with VALUE semantics —
+                   `(a == b) > c` compares the INNER BOOL with c, exactly
+                   like the runtime's left-associated lowering. The former
+                   chained-comparison heuristic (`a < b != c` ≡ (a < b) and
+                   (b != c)) misfired on PARENTHESIZED comparisons — the
+                   AST cannot distinguish the two spellings, and the
+                   runtime itself has no chain support, so the heuristic
+                   made the fold and the runtime DISAGREE on the same
+                   source: `(-5 == 0) > -16` folded to False while the
+                   un-folded path answered True (gen_numeric_s664202_001).
+                   Real Python chains need a parser-level chain node —
+                   registered, not foldable here. */
+                if matches!(
+                    op.as_str(),
+                    "<" | ">" | "<=" | ">=" | "==" | "!="
+                ) {
+                    let apply =
+                        |o: &str, a: i128, b: i128| -> Option<(i128, bool)> {
+                            Some((
+                                match o {
+                                    "<" => (a < b) as i128,
+                                    ">" => (a > b) as i128,
+                                    "<=" => (a <= b) as i128,
+                                    ">=" => (a >= b) as i128,
+                                    "==" => (a == b) as i128,
+                                    _ => (a != b) as i128,
+                                },
+                                true,
+                            ))
+                        };
+                    let (a, _) = self.eval_i128_tree(left, depth + 1)?;
+                    let (b, _) = self.eval_i128_tree(right, depth + 1)?;
+                    return apply(op, a, b);
+                }
+                let (l, lb) = self.eval_i128_tree(left, depth + 1)?;
+                let (r, rb) = self.eval_i128_tree(right, depth + 1)?;
+                match op.as_str() {
+                    "+" => l.checked_add(r).map(|v| (v, false)),
+                    "-" => l.checked_sub(r).map(|v| (v, false)),
+                    "*" => l.checked_mul(r).map(|v| (v, false)),
+                    "//" | "floordiv" => {
+                        if r == 0 {
+                            None
+                        } else {
+                            /* Python floor division */
+                            let q = l / r;
+                            Some((
+                                if (l % r != 0) && ((l < 0) != (r < 0)) {
+                                    q - 1
+                                } else {
+                                    q
+                                },
+                                false,
+                            ))
+                        }
+                    }
+                    /* Batch 642: Python `/` yields a FLOAT (truediv) — the
+                       i128 evaluator abstains (numeric_truediv regression,
+                       measured). */
+                    "%" => {
+                        if r == 0 {
+                            None
+                        } else {
+                            /* Python modulo: sign of the divisor */
+                            let m = l % r;
+                            Some((
+                                if m != 0 && ((m < 0) != (r < 0)) {
+                                    m + r
+                                } else {
+                                    m
+                                },
+                                false,
+                            ))
+                        }
+                    }
+                    "<<" => {
+                        if r < 0 || r >= 127 {
+                            None
+                        } else {
+                            l.checked_shl(r as u32).map(|v| (v, false))
+                        }
+                    }
+                    ">>" => {
+                        if r < 0 || r >= 127 {
+                            None
+                        } else {
+                            Some((l >> (r as u32), false))
+                        }
+                    }
+                    "&" => Some((l & r, false)),
+                    "|" => Some((l | r, false)),
+                    "^" => Some((l ^ r, false)),
+                    "**" => {
+                        if r < 0 || r > 4096 {
+                            return None;
+                        }
+                        let mut acc: i128 = 1;
+                        let mut base = l;
+                        let mut k = r;
+                        while k > 0 {
+                            if k & 1 == 1 {
+                                acc = acc.checked_mul(base)?;
+                            }
+                            k >>= 1;
+                            if k > 0 {
+                                base = base.checked_mul(base)?;
+                            }
+                        }
+                        Some((acc, false))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Batch 642: rewrite `print(<const-expr>)` whose result exceeds the
+    /// i64 range into `print("<decimal>")` — the 22 numeric-family
+    /// mismatches are all constant expressions (batch 640), and the
+    /// runtime i64 path wraps them. In-range results keep the existing
+    /// lowering (zero perturbation); anything not statically known
+    /// abstains and stays on the runtime path.
+    fn rewrite_big_print(&mut self, node: &AstNode) -> Option<AstNode> {
+        if self.p642_depth > 0 {
+            return None;
+        }
+        let (method, args) = match node {
+            AstNode::ExprStmt { expr } => match &**expr {
+                AstNode::Call {
+                    receiver: None,
+                    method,
+                    args,
+                    ..
+                } => (method, args),
+                _ => return None,
+            },
+            AstNode::Call {
+                receiver: None,
+                method,
+                args,
+                ..
+            } => (method, args),
+            _ => return None,
+        };
+        if method != "print" || args.is_empty() {
+            return None;
+        }
+        let mut changed = false;
+        let mut new_args: Vec<AstNode> = Vec::with_capacity(args.len());
+        for a in args {
+            // Kwarg markers pass through untouched.
+            if let AstNode::Call {
+                receiver: None,
+                method: m,
+                ..
+            } = a
+            {
+                if m == "__kwarg__" {
+                    new_args.push(a.clone());
+                    continue;
+                }
+            }
+            if std::env::var("ZETA_DBG_P642").is_ok() {
+                eprintln!("P642 rewrite eval(a)={:?}", self.eval_i128_tree(a, 0));
+            }
+            if std::env::var("ZETA_DBG_P642").is_ok() {
+                eprintln!("P642 print eval={:?} map={:?}", self.eval_i128_tree(a, 0), self.i128_consts);
+            }
+            if let Some((v, is_bool)) = self.eval_i128_tree(a, 0) {
+                // A successful i128 eval IS the CPython result for a pure
+                // int tree — rewrite unconditionally (an in-range decimal
+                // renders identically; a Bool top-level renders True/False;
+                // an out-of-i64 value fixes the wrap).
+                let rendered = if is_bool {
+                    if v == 0 { "False" } else { "True" }.to_string()
+                } else {
+                    v.to_string()
+                };
+                new_args.push(AstNode::StringLit(rendered));
+                changed = true;
+                continue;
+            }
+            new_args.push(a.clone());
+        }
+        if !changed {
+            return None;
+        }
+        let call = AstNode::Call {
+            receiver: None,
+            method: "print".to_string(),
+            args: new_args,
+            type_args: vec![],
+            structural: false,
+        };
+        Some(match node {
+            AstNode::ExprStmt { .. } => AstNode::ExprStmt { expr: Box::new(call) },
+            _ => call,
+        })
+    }
+
+    /// Batch 642: record `x = <const-expr>` into the i128 const table for
+    /// later prints (sequential — a print only sees earlier assignments).
+    fn note_i128_assign(&mut self, node: &AstNode) {
+        if self.p642_depth > 0 {
+            return;
+        }
+        /* Any non-print CALL statement could mutate globals through paths
+           this sequential table cannot see (t36_global/t518: a function
+           writing a module global measured) — clear the table. */
+        match node {
+            AstNode::ExprStmt { expr } => {
+                if let AstNode::Call { receiver: None, method, .. } = &**expr {
+                    if method != "print" {
+                        self.i128_consts.clear();
+                    }
+                } else {
+                    self.i128_consts.clear();
+                }
+            }
+            AstNode::Call { receiver: None, method, .. } => {
+                if method != "print" {
+                    self.i128_consts.clear();
+                }
+            }
+            AstNode::Assign(lhs, rhs) => match &**lhs {
+                AstNode::Var(x) => {
+                    if let Some((v, _)) = self.eval_i128_tree(rhs, 0) {
+                        self.i128_consts.insert(x.clone(), v);
+                    } else {
+                        // Not statically known — a later read must abstain.
+                        self.i128_consts.remove(x);
+                    }
+                }
+                AstNode::Tuple(items) => {
+                    // `a, b = b, a` — the swap's rhs is valid but the
+                    // conservative kill keeps later reads on the runtime.
+                    for it in items {
+                        if let AstNode::Var(v) = it {
+                            self.i128_consts.remove(v);
+                        }
+                    }
+                }
+                _ => self.i128_consts.clear(),
+            },
+            AstNode::AssignOp { op, target, value } => {
+                // Batch 642: `x += 2` must advance the table or a later
+                // `print(x)` folds the STALE value (numeric_aug_assign:
+                // printed 1 instead of 3, measured).
+                if let AstNode::Var(x) = &**target {
+                    let cur = match self.i128_consts.get(x) {
+                        Some(v) => *v,
+                        None => return, // unknown base — the read abstains
+                    };
+                    if let Some((v, _)) = self.eval_i128_tree(value, 0) {
+                        let next = match op.as_str() {
+                            "+=" => cur.checked_add(v),
+                            "-=" => cur.checked_sub(v),
+                            "*=" => cur.checked_mul(v),
+                            "//=" => {
+                                if v == 0 {
+                                    None
+                                } else {
+                                    let q = cur / v;
+                                    Some(if (cur % v != 0) && ((cur < 0) != (v < 0)) {
+                                        q - 1
+                                    } else {
+                                        q
+                                    })
+                                }
+                            }
+                            "%=" => {
+                                if v == 0 {
+                                    None
+                                } else {
+                                    let m = cur % v;
+                                    Some(if m != 0 && ((m < 0) != (v < 0)) {
+                                        m + v
+                                    } else {
+                                        m
+                                    })
+                                }
+                            }
+                            "|=" => Some(cur | v),
+                            "&=" => Some(cur & v),
+                            "^=" => Some(cur ^ v),
+                            "<<=" => {
+                                if v < 0 || v >= 127 {
+                                    None
+                                } else {
+                                    cur.checked_shl(v as u32)
+                                }
+                            }
+                            ">>=" => {
+                                if v < 0 || v >= 127 {
+                                    None
+                                } else {
+                                    Some(cur >> (v as u32))
+                                }
+                            }
+                            _ => None, /* /= (float), **= deep — abstain */
+                        };
+                        match next {
+                            Some(nv) => {
+                                self.i128_consts.insert(x.clone(), nv);
+                            }
+                            None => {
+                                self.i128_consts.remove(x);
+                            }
+                        }
+                    } else {
+                        self.i128_consts.remove(x);
+                    }
+                } else {
+                    self.i128_consts.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Recursively transform an AST node, evaluating const expressions
     fn transform_ast_node(&mut self, node: &AstNode) -> CtfeResult<AstNode> {
+        // Batch 642: loop/conditional bodies disable recording and folding
+        // (their assignments re-execute — folding from the transform-time
+        // view regressed 53 control/loop cases), and the names they assign
+        // are killed so later reads abstain.
+        let block = matches!(
+            node,
+            AstNode::While { .. } | AstNode::For { .. } | AstNode::If { .. }
+        );
+        if block {
+            if std::env::var("ZETA_DBG_P642").is_ok() {
+                let mut names = Vec::new();
+                Self::p642_collect_assigned(node, &mut names);
+                eprintln!("P642 block kill names={:?} map_before={:?}",
+                    names, self.i128_consts);
+            }
+            self.p642_kill_names(node);
+            self.p642_depth += 1;
+        }
+        let r = self.transform_ast_node_inner(node);
+        if block {
+            self.p642_depth -= 1;
+        }
+        r
+    }
+
+    /// Batch 642: remove every name assigned anywhere in this statement's
+    /// body from the i128 const table (conservative kill).
+    fn p642_kill_names(&mut self, node: &AstNode) {
+        let mut names: Vec<String> = Vec::new();
+        Self::p642_collect_assigned(node, &mut names);
+        for n in names {
+            self.i128_consts.remove(&n);
+        }
+    }
+
+    fn p642_collect_pattern_vars(p: &AstNode, out: &mut Vec<String>) {
+        match p {
+            AstNode::Var(v) => out.push(v.clone()),
+            AstNode::Tuple(items) => {
+                for it in items {
+                    Self::p642_collect_pattern_vars(it, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn p642_collect_assigned(node: &AstNode, out: &mut Vec<String>) {
+        match node {
+            AstNode::Assign(lhs, _) => {
+                if let AstNode::Var(v) = &**lhs {
+                    out.push(v.clone());
+                }
+            }
+            AstNode::AssignOp { target, .. } => {
+                if let AstNode::Var(v) = &**target {
+                    out.push(v.clone());
+                }
+            }
+            AstNode::For { pattern, body, else_body, .. } => {
+                /* The pattern may be a TUPLE (`for k2, v2 in pairs:`) —
+                   collect every Var it binds (t518: k2/v2 survived the kill
+                   and print(k2) folded the stale pre-loop 0). */
+                Self::p642_collect_pattern_vars(pattern, out);
+                for st in body.iter().chain(else_body.iter()) {
+                    Self::p642_collect_assigned(st, out);
+                }
+            }
+            AstNode::While { body, else_body, .. } => {
+                for st in body.iter().chain(else_body.iter()) {
+                    Self::p642_collect_assigned(st, out);
+                }
+            }
+            AstNode::If { then, else_, .. } => {
+                for st in then.iter().chain(else_.iter()) {
+                    Self::p642_collect_assigned(st, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn transform_ast_node_inner(&mut self, node: &AstNode) -> CtfeResult<AstNode> {
+        // Batch 642: out-of-i64 constant prints fold to their decimal
+        // string; plain int assignments feed the i128 const table — but
+        // NOT inside loop/conditional bodies (p642_depth).
+        if self.p642_depth == 0 {
+            /* Batch 654: maintain the NoneVar table — `x = None` records;
+               any other plain assignment to x kills (conservative). */
+            if let AstNode::Assign(lhs, rhs) = node {
+                if let (AstNode::Var(x), rk) = (&**lhs, &**rhs) {
+                    match rk {
+                        AstNode::NoneLit => {
+                            self.none_vars.insert(x.clone());
+                        }
+                        AstNode::Lit(_) | AstNode::FloatLit(_)
+                        | AstNode::StringLit(_) | AstNode::Bool(_)
+                        | AstNode::BigIntLit(_) => {
+                            self.none_vars.remove(x);
+                        }
+                        // Batch 654: `z = x` copies the None-ness when the
+                        // source is registered (t548 line 5); unknown
+                        // sources stay untouched (conservative).
+                        AstNode::Var(src) => {
+                            if self.none_vars.contains(src) {
+                                self.none_vars.insert(x.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            /* Batch 654: `str(x)` where x is a NoneVar — rewrite to the
+               "None" string literal in any expression position (the slot
+               stays I64 0; the render is by the sequential table). */
+            if let AstNode::Call {
+                receiver: None,
+                method: m,
+                args,
+                ..
+            } = node
+            {
+                if m == "str"
+                    && args.len() == 1
+                    && matches!(&args[0], AstNode::Var(x) if self.none_vars.contains(x))
+                {
+                    return Ok(AstNode::StringLit("None".to_string()));
+                }
+            }
+            self.note_i128_assign(node);
+            // Batch 647: a module-level (non-loop) assignment whose i128
+            // value exceeds i64 rewrites its rhs to a BigIntLit — the slot
+            // then holds a zeta_big handle at runtime, arithmetic promotes,
+            // print/str render by type (the 642 fold only covered prints).
+            if let AstNode::Assign(lhs, rhs) = node {
+                if let AstNode::Var(x) = &**lhs {
+                    if let Some((v, false)) = self.eval_i128_tree(rhs, 0) {
+                        if v > i64::MAX as i128 || v < i64::MIN as i128 {
+                            let rewritten = AstNode::Assign(
+                                lhs.clone(),
+                                Box::new(AstNode::BigIntLit(v.to_string())),
+                            );
+                            return Ok(rewritten);
+                        }
+                    }
+                }
+            }
+            if let Some(rewritten) = self.rewrite_big_print(node) {
+                return Ok(rewritten);
+            }
+        }
         match node {
             // Batch 624: `None` literal — value-wise it stays 0 (the
             // representation-level None is #113/#189 deep water).
             AstNode::NoneLit => Ok(AstNode::Lit(0)),
+            // Batch 647: a big literal is already its own value — pass it
+            // through (the gen side lowers it to the zeta_big runtime).
+            AstNode::BigIntLit(_) => Ok(node.clone()),
             AstNode::ConstDef {
                 name,
                 ty,
@@ -334,6 +863,17 @@ impl ConstEvaluator {
                     args.iter().map(|arg| self.transform_expr(arg)).collect();
                 let transformed_args = transformed_args?;
 
+                // Batch 654: `str(x)` on a NoneVar — the same rewrite the
+                // statement-level pass does, but expression-nested calls
+                // only travel through transform_expr, so the face lives
+                // here too (s89b: `str(x) == "None"`).
+                if receiver.is_none()
+                    && method == "str"
+                    && args.len() == 1
+                    && matches!(&args[0], AstNode::Var(x) if self.none_vars.contains(x))
+                {
+                    return Ok(AstNode::StringLit("None".to_string()));
+                }
                 // Check if this is a comptime function call with no receiver.
                 // Try to evaluate eagerly. If evaluation fails because variables
                 // aren't bound yet (we're inside a function body being transformed),

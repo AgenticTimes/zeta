@@ -2642,8 +2642,15 @@ int64_t host_str_is_whitespace(int64_t s) {
 int64_t host_str_clone(int64_t s) { return s; }
 // 裸别名只给未知类型接收者的回退路径用。clone 故意不给裸别名——
 // Linux 上会与 glibc 的 clone 同名冲突，类型已知时走 host_str_clone。
-int64_t is_empty(int64_t s) { return host_str_is_empty(s); }
-int64_t is_whitespace(int64_t s) { return host_str_is_whitespace(s); }
+// 批次 660: both wrappers are static now — as global T symbols they
+// collided with USER CLASS METHODS of the same name at link time
+// (`class Stack: def is_empty(self)` emitted _is_empty → duplicate
+// symbol; the registered diff case method_name_collision). No compiler
+// site emits the bare names (typed receivers route through host_str_*),
+// so local linkage keeps any stray internal caller working while the
+// namespace frees the name for user code.
+static int64_t is_empty(int64_t s) { return host_str_is_empty(s); }
+static int64_t is_whitespace(int64_t s) { return host_str_is_whitespace(s); }
 
 // —— 批次 365（任务 #42）：parse / unwrap 系 / chars / nth / iter / push_str ——
 // 契约（修订批次 364 的登记）：Result 用本文件既有的 host_result_* 三字段单元
@@ -3424,6 +3431,21 @@ int64_t zeta_map_value_tag(int64_t map, int64_t key) {
         if (g_tag_map[j] == (map ? map : 1) && g_tag_key[j] == key) return g_tag_val[j];
     }
     return 0;
+}
+
+/* Batch 659: 1 when this key has NO tag-table entry at all. Write paths
+   that feed the table register ints as 5 (never 0 at runtime), so a key
+   absent from the table means the insert came from a path that does not
+   tag (dict comprehensions) — its word is already what the static type
+   claims (e.g. a real str pointer). */
+int64_t zeta_map_value_untagged(int64_t map, int64_t key) {
+    uint64_t i = zt_tag_slot(map, key);
+    for (int n = 0; n < ZT_TAG_CAP; n++) {
+        uint64_t j = (i + (uint64_t)n) & (ZT_TAG_CAP - 1);
+        if (g_tag_map[j] == 0) return 1;
+        if (g_tag_map[j] == (map ? map : 1) && g_tag_key[j] == key) return 0;
+    }
+    return 1;
 }
 
 // Typed vector dumper: the element type is known STATICALLY (a list literal is

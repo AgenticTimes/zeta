@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=676104 #2）
+#@@ python
+print(118 < 634 >= 793)
+print(not 32)
+print(257 <= 80 > 93)
+
+#@@ zeta
+print(118 < 634 >= 793)
+print(not 32)
+print(257 <= 80 > 93)
+

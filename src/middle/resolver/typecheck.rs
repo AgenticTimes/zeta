@@ -34,6 +34,8 @@ impl Resolver {
         // Batch 629: field element types from method-body append calls,
         // reading the same refinement map.
         self.refine_field_element_types(&pm);
+        // Batch 654: NoneVar table for the gen print/str render faces.
+        self.note_none_vars();
         self.method_param_refinements = pm;
 
         // Borrow checker pass (separate scope to avoid RefCell conflict)

@@ -1,0 +1,32 @@
+// 批次 658（旁路 cleanup）：运行期 BigInt %/floordiv＋一元负号 big 臂。
+// ① `%`/`//`：647 弃权面收口——runtime zeta_big_mod/zeta_big_floordiv
+//   （[lo|hi] 组装 __int128，floor 语义：C % 取被除数符（7%-3=1）而
+//   Python 取除数符（-2）、C / 向零截断而 Python 向下取整；除零
+//   zeta_raise(2)＝554 同码）。结果恒句柄（big//3＝4.2e29 远超 i64）。
+// ② 一元负号：非浮点臂旧只走 unary_minus（i64 位翻转）——句柄指针被
+//   位翻转后 print 解引用垃圾＝rc=139（静态形状靠 ctfe 折叠幸存）。
+//   现 BigInt 操作数走 zeta_big_neg（runtime 647 已建，gen 未接）。
+// 本夹具全部为运行期形状（循环内赋值，p642 禁折）；静态形状另证。
+// 边界：2**N≥128＝表示架构 127 位上限（640 登记）。
+i = 0
+big = 0
+while i < 1:
+    big = 1 << 100
+    i = i + 1
+print(big % 7)
+print(big // 3)
+print(big % -7)
+print(-big // 3)
+print(big % big)
+print(big // big)
+neg = -big
+print(neg)
+print(neg // 3)
+// expect: 2
+// expect: 422550200076076467165567735125
+// expect: -5
+// expect: -422550200076076467165567735126
+// expect: 0
+// expect: 1
+// expect: -1267650600228229401496703205376
+// expect: -422550200076076467165567735126

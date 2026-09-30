@@ -1,0 +1,10 @@
+# @cat: str
+# @note: 随机 f-string 规格（seed=674106 #0）
+#@@ python
+f = 2.71828
+print(f"{f:=>+4e}")
+
+#@@ zeta
+f = 2.71828
+print(f"{f:=>+4e}")
+

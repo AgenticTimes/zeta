@@ -1,0 +1,18 @@
+# @cat: container
+# @note: 随机字典方法链（seed=721204 #1）
+#@@ python
+d = {"alpha": 41, "gamma": -37, "beta": 20}
+print(d.get("beta", -23))
+print(d.get("alpha", 64))
+print(len(d))
+d["k1"] = -87
+print(d["k1"])
+
+#@@ zeta
+d = {"alpha": 41, "gamma": -37, "beta": 20}
+print(d.get("beta", -23))
+print(d.get("alpha", 64))
+print(len(d))
+d["k1"] = -87
+print(d["k1"])
+

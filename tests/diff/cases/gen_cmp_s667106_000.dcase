@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=667106 #0）
+#@@ python
+print(not 2)
+print(not -17)
+print(39.68 < -23.49)
+
+#@@ zeta
+print(not 2)
+print(not -17)
+print(39.68 < -23.49)
+

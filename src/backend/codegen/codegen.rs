@@ -996,6 +996,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
             void_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
             Some(Linkage::External),
         );
+        // Batch 655: truediv on a BigInt converts through the 128-bit
+        // decimal string; the arity fallback declares i64->i64, which
+        // truncates the double — an explicit f64 return is required.
+        module.add_function(
+            "zeta_big_to_f64",
+            context.f64_type().fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
         // 批次 535：列写侧的元素表示登记（`df["c"] = <容器>` 走 shim 的那条路）。
         // 只加 `pylib/runtime_core.txt` 不够 —— `declare_core_runtime_fns` 在
         // `tools/baselines/dc_default.txt:2` 记为 never used，登记表不驱动声明。

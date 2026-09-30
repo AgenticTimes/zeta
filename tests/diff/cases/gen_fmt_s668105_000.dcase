@@ -1,0 +1,10 @@
+# @cat: str
+# @note: 随机 f-string 规格（seed=668105 #0）
+#@@ python
+n = -42
+print(f"{n:07d}")
+
+#@@ zeta
+n = -42
+print(f"{n:07d}")
+

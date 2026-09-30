@@ -1,0 +1,21 @@
+// 批次 650（旁路 cleanup）：移位算术无条件走 zeta_big——变量移位量的
+// Python 精确语义。`<<` 是 Python 的造大数运算：任何移位量的结果都必须
+// 精确，原始 i64 shl（n≥64 为 LLVM poison、n<64 静默 wrap）永远不是正
+// 确降值。两操作数经 from_i64 装箱走 zeta_big_shl/shr，dest 恒 BigInt
+// 槽（print/str/比较/后续算术沿 647 面自动提升）。变量移位量在循环内
+// 逐迭代精确（649 只收字面量移位量的缺口补全）。边界（不在本夹具）：
+// BigInt truediv/pow 未提升；负移位量仍 poison；BigInt 作数组下标未收。
+i = 0
+while i < 3:
+    print(1 << (60 + i))
+    i = i + 1
+v = 5
+print(v << 70)
+print(v >> 70)
+print((v << 70) & 255)
+// expect: 1152921504606846976
+// expect: 2305843009213693952
+// expect: 4611686018427387904
+// expect: 5902958103587056517120
+// expect: 0
+// expect: 0

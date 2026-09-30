@@ -42,11 +42,45 @@ int64_t str_eq(int64_t a, int64_t b) {
 }
 int64_t host_str_eq(int64_t a, int64_t b) { return str_eq(a, b); }
 
-// str(f64) — %g keeps Python's compact float repr ("2.5", not "2.500000")
+// str(f64) — CPython repr: the SHORTEST decimal string that round-trips
+// (batch 639, user-sanctioned layer release; 610/611 design). %g alone
+// caps at 6 significant digits ("0.333333"); we try %.{1..17}g and take
+// the first whose strtod round-trips, then add ".0" for integral values
+// (CPython repr(518880.0) == "518880.0", %g gives "518880").
+static char* zt_f64_repr(double v) {
+    char* s = (char*)GC_malloc(48);
+    if (v != v) { snprintf(s, 48, "nan"); return s; }
+    if (v - v != 0) { snprintf(s, 48, v > 0 ? "inf" : "-inf"); return s; }
+    int prec = 17;
+    for (int p = 1; p <= 17; p++) {
+        snprintf(s, 48, "%.*g", p, v);
+        if (strtod(s, NULL) == v) { prec = p; break; }
+    }
+    char* e = strchr(s, 'e');
+    if (e) {
+        /* CPython repr uses scientific only outside [-4, 16); inside,
+           re-render fixed at the same precision and trim trailing zeros
+           (%g switched to e-form at exp >= prec, e.g. 518880 -> "5.1888e+05"). */
+        int exp = atoi(e + 1);
+        if (exp >= -4 && exp < 16) {
+            snprintf(s, 48, "%.*f", prec, v);
+            char* dot = strchr(s, '.');
+            if (dot) {
+                char* end = s + strlen(s) - 1;
+                while (end > dot && *end == '0') *end-- = 0;
+                if (*end == '.') { end[1] = '0'; end[2] = 0; }
+            }
+        }
+    } else if (!strchr(s, '.') && !strchr(s, 'n') && !strchr(s, 'i')
+               && v > -1e16 && v < 1e16) {
+        size_t n = strlen(s);
+        s[n] = '.'; s[n + 1] = '0'; s[n + 2] = 0;
+    }
+    return s;
+}
+
 int64_t to_string_f64(double v) {
-    char* s = (char*)GC_malloc(32);
-    snprintf(s, 32, "%g", v);
-    return (int64_t)s;
+    return (int64_t)zt_f64_repr(v);
 }
 
 // str_split(s, sep) — Python s.split(sep): returns a Vec-layout handle
@@ -352,6 +386,24 @@ static int64_t zt_key_display(int64_t key) {
 // the display text that map_keys hands back) matters: string-keyed maps store
 // content hashes, and a later d["k"] lookup goes through map_str_key, so
 // re-inserting display text would never be found.
+/* Batch 661: `dict(x)` with an argument not statically a map — CPython's
+   constructor. The old gen route kept the compile-time `_dict` ghost for
+   anything but a statically-typed map (t231's `def copy_dict(x):
+   return dict(x)` never linked). map_resolve is the one place that can
+   say "that handle was never a dict" BEFORE the first load (loud,
+   catchable raise — the Python TypeError parity), so copy-when-map is
+   honest for dynamic arguments too. */
+int64_t py_map_update(int64_t dst, int64_t src);
+
+int64_t py_dict_ctor(int64_t x) {
+    int64_t fresh = map_new();
+    if (x) {
+        int64_t m = map_resolve(x);
+        py_map_update(fresh, m);
+    }
+    return fresh;
+}
+
 int64_t py_map_update(int64_t dst, int64_t src) {
     dst = map_resolve(dst);
     src = map_resolve(src);
@@ -738,11 +790,13 @@ static int64_t zt_fmt_pad(const char* body, zt_fmt_t* f) {
     char al = f->align;
     if (!al) al = f->numeric ? '>' : '<';
     char fill = f->fill;
+    /* Batch 677: CPython's `0` flag overrides the fill with '0' for
+       numerics while the alignment direction stays as given — the old
+       guard required NO align, so `f"{65:>+07d}"` (align `>` + 0 flag)
+       space-filled instead of zero-filled ('0000+65'). */
+    if (f->zero && f->numeric) fill = '0';
     size_t left = 0, right = 0;
-    if (f->zero && !f->align && f->numeric) {
-        fill = '0';
-        left = pad;
-    } else if (al == '>') {
+    if (al == '>') {
         left = pad;
     } else if (al == '=') {
         /* '=' — padding strictly between the sign/prefix and the digits
@@ -773,7 +827,11 @@ static int64_t zt_fmt_pad(const char* body, zt_fmt_t* f) {
         return (int64_t)out;
     }
     // Zero padding goes after a leading sign, not before it.
-    if (fill == '0' && n > 0 && (body[0] == '-' || body[0] == '+')) {
+    /* Batch 677: sign-first zero-fill is the `=` (default numeric)
+       alignment's shape — an EXPLICIT `>`/`<`/`^` keeps the body intact
+       and pads around it (CPython `f"{65:>+07d}"` = '0000+65'). */
+    if (fill == '0' && (!al || al == '=') && n > 0 &&
+        (body[0] == '-' || body[0] == '+')) {
         out[0] = body[0];
         memset(out + 1, fill, left);
         memcpy(out + 1 + left, body + 1, n - 1);
@@ -849,11 +907,15 @@ int64_t py_fmt_i64(int64_t v, int64_t spec) {
         size_t dn = strlen(digs);
         size_t sl = sg ? 1u : 0u;
         size_t dlen = dn;
-        if (f.group && f.zero && f.width > 0) {
+        /* Batch 677: the sign-then-zeros digit pre-padding is the `=`
+           (default numeric) alignment's job — with an EXPLICIT align
+           (`>` / `<` / `^`) the 0 fill belongs OUTSIDE the signed body
+           (CPython `f"{65:>+07d}"` = '0000+65', not '+000065'). */
+        if ((!f.align || f.align == '=') && f.group && f.zero && f.width > 0) {
             while (dlen + (dlen - 1) / 3 + sl < (size_t)f.width && dlen < 30) dlen++;
         }
         char tmp[32];
-        if (dlen > dn) {
+        if ((!f.align || f.align == '=') && dlen > dn) {
             memset(tmp, '0', dlen - dn);
             memcpy(tmp + (dlen - dn), digs, dn + 1);
         } else {
@@ -885,10 +947,15 @@ int64_t py_fmt_f64(double v, int64_t spec) {
     char cfmt[24];
     if (f.has_precision) {
         snprintf(cfmt, sizeof cfmt, "%%%s.%d%c", sfl, f.precision, t);
-    } else if (t == 'f' || t == 'F') {
-        snprintf(cfmt, sizeof cfmt, "%%%s.6%c", sfl, t); /* Python's default float repr */
+    } else if (!f.type) {
+        /* Batch 639: the EMPTY spec (no type, no precision) is repr —
+           shortest round-trip. An EXPLICIT `f` keeps Python's .6f fixed
+           form (format(2.71828, '>8f') == ' 2.718280'). */
+        char* r = zt_f64_repr(v);
+        snprintf(body, sizeof body, "%s", r);
+        return zt_fmt_pad(body, &f);
     } else {
-        snprintf(cfmt, sizeof cfmt, "%%%s%c", sfl, t);
+        snprintf(cfmt, sizeof cfmt, "%%%s.6%c", sfl, t);
     }
     snprintf(body, sizeof body, cfmt, v);
     if (f.group) {
@@ -1211,8 +1278,14 @@ int64_t py_vec_notna(int64_t vec);
 // A plausible `map<..>` block: header is `[cap|len]` with sane bounds.
 static int zt_maybe_map(int64_t m) {
     if (!m || m < 0x1000) return 0;
-    int64_t cap = ((int64_t*)(m - 16))[0];
-    if (cap < 0 || cap > (1LL << 26)) return 0;
+    /* Batch 663: read the cap word at offset 0 — the same word
+       map_resolve inspects — with the same power-of-two criteria. The
+       old `m - 16` offset was the VEC header convention, so this guard
+       sampled an unrelated word and passed garbage that map_keys's own
+       strict check then rejected (t494's registered raise: lenient
+       guard + strict consumer on the same handle). */
+    int64_t cap = ((int64_t*)m)[0];
+    if (cap < 16 || cap > (1LL << 30) || (cap & (cap - 1)) != 0) return 0;
     return 1;
 }
 static int zt_maybe_vec(int64_t v) {
@@ -3108,6 +3181,348 @@ int64_t zeta_py_from(int64_t module, int64_t member, int64_t alias) {
 // PY-A: list comprehension collector — iter is a Vec-layout handle
 // ([cap|len|data...]); fn_ptr is the address of a generated closure taking
 // one i64 and returning i64 (-1 = skip). Returns a new Vec-layout handle.
+// ── Batch 641: i128 value representation + arithmetic family ──────────
+// A 16-byte GC block holding a two's-complement 128-bit integer, little-
+// endian [lo | hi]. Values travel as HANDLES — the compiler tracks the
+// i128-ness statically (batch 640 step ④), so there is no runtime tag:
+// every function here takes/returns handles except the i64-boundary
+// constructors/extractors. Overflowing i64 arithmetic boxes through
+// zeta_big_from_i64 at the gen-side promotion point (batch 642+).
+
+/* Batch 647: exported — the generated code constructs big handles directly
+   from BigIntLit literals ([lo|hi] halves split at compile time). */
+int64_t zeta_big_new(int64_t lo, int64_t hi) {
+    int64_t* b = (int64_t*)GC_malloc(16);
+    b[0] = lo;
+    b[1] = hi;
+    return (int64_t)b;
+}
+
+int64_t zeta_big_from_i64(int64_t v) {
+    return zeta_big_new(v, v < 0 ? -1 : 0);
+}
+
+int64_t zeta_big_lo(int64_t h) { return ((int64_t*)h)[0]; }
+int64_t zeta_big_hi(int64_t h) { return ((int64_t*)h)[1]; }
+
+static uint64_t big_add64(uint64_t a, uint64_t b, uint64_t* carry) {
+    uint64_t r = a + b;
+    *carry = (r < a) ? 1 : 0;
+    return r;
+}
+
+int64_t zeta_big_add(int64_t a, int64_t b) {
+    uint64_t* x = (uint64_t*)a;
+    uint64_t* y = (uint64_t*)b;
+    uint64_t c = 0;
+    uint64_t lo = big_add64(x[0], y[0], &c);
+    uint64_t hi = x[1] + y[1] + c;
+    return zeta_big_new((int64_t)lo, (int64_t)hi);
+}
+
+int64_t zeta_big_sub(int64_t a, int64_t b) {
+    uint64_t* x = (uint64_t*)a;
+    uint64_t* y = (uint64_t*)b;
+    uint64_t borrow = 0;
+    uint64_t lo = x[0] - y[0];
+    if (x[0] < y[0]) borrow = 1;
+    uint64_t hi = x[1] - y[1] - borrow;
+    return zeta_big_new((int64_t)lo, (int64_t)hi);
+}
+
+int64_t zeta_big_neg(int64_t a) {
+    uint64_t* x = (uint64_t*)a;
+    uint64_t lo = ~x[0] + 1;
+    uint64_t hi = ~x[1] + (lo == 0 ? 1 : 0);
+    return zeta_big_new((int64_t)lo, (int64_t)hi);
+}
+
+static void big_mulu64(uint64_t a, uint64_t b, uint64_t* lo, uint64_t* hi) {
+    uint64_t alo = a & 0xFFFFFFFFULL, ahi = a >> 32;
+    uint64_t blo = b & 0xFFFFFFFFULL, bhi = b >> 32;
+    uint64_t ll = alo * blo;
+    uint64_t lh = alo * bhi;
+    uint64_t hl = ahi * blo;
+    uint64_t hh = ahi * bhi;
+    uint64_t mid = lh + hl + (ll >> 32);
+    *lo = (mid << 32) | (ll & 0xFFFFFFFFULL);
+    *hi = hh + (mid >> 32);
+}
+
+int64_t zeta_big_mul(int64_t a, int64_t b) {
+    uint64_t* x = (uint64_t*)a;
+    uint64_t* y = (uint64_t*)b;
+    uint64_t l0, h0, l1, h1, l2, h2;
+    big_mulu64(x[0], y[0], &l0, &h0);
+    big_mulu64(x[0], y[1], &l1, &h1);
+    big_mulu64(x[1], y[0], &l2, &h2);
+    uint64_t hi = h0 + l1 + l2; /* low 128 bits of the 256-bit product */
+    return zeta_big_new((int64_t)l0, (int64_t)hi);
+}
+
+int64_t zeta_big_shl(int64_t a, int64_t n) {
+    uint64_t* x = (uint64_t*)a;
+    /* Batch 656: a NEGATIVE shift count is Python's ValueError
+       ("negative shift count"), not identity — the old `n <= 0`
+       identity branch silently answered the unshifted value (1 << -1
+       printed 1). Raise like the 554 family; catchable by except. */
+    if (n < 0) zeta_raise(2);
+    if (n == 0) return a;
+    if (n >= 128) return zeta_big_new(0, 0);
+    uint64_t lo = (uint64_t)x[0], hi = (uint64_t)x[1];
+    if (n >= 64) {
+        hi = lo << (n - 64);
+        lo = 0;
+    } else if (n) {
+        hi = (hi << n) | (lo >> (64 - n));
+        lo = lo << n;
+    }
+    return zeta_big_new((int64_t)lo, (int64_t)hi);
+}
+
+int64_t zeta_big_shr(int64_t a, int64_t n) {
+    /* arithmetic (sign-filling) right shift, Python >> semantics */
+    uint64_t* x = (uint64_t*)a;
+    /* Batch 656: negative count raises — same ValueError parity as shl. */
+    if (n < 0) zeta_raise(2);
+    if (n == 0) return a;
+    uint64_t lo = (uint64_t)x[0], hi = (uint64_t)x[1];
+    int neg = (int64_t)hi < 0;
+    if (n >= 128) {
+        lo = neg ? ~(uint64_t)0 : 0;
+        hi = neg ? ~(uint64_t)0 : 0;
+    } else if (n >= 64) {
+        lo = hi >> (n - 64);
+        if (neg) lo |= ~(uint64_t)0 << (64 - (n - 64)) << 1;
+        hi = neg ? ~(uint64_t)0 : 0;
+    } else if (n) {
+        lo = (lo >> n) | (hi << (64 - n));
+        hi = hi >> n;
+        if (neg) hi |= ~(uint64_t)0 << (64 - n) << 1;
+    }
+    return zeta_big_new((int64_t)lo, (int64_t)hi);
+}
+
+int64_t zeta_big_or(int64_t a, int64_t b) {
+    return zeta_big_new(((int64_t*)a)[0] | ((int64_t*)b)[0],
+                        ((int64_t*)a)[1] | ((int64_t*)b)[1]);
+}
+int64_t zeta_big_and(int64_t a, int64_t b) {
+    return zeta_big_new(((int64_t*)a)[0] & ((int64_t*)b)[0],
+                        ((int64_t*)a)[1] & ((int64_t*)b)[1]);
+}
+int64_t zeta_big_xor(int64_t a, int64_t b) {
+    return zeta_big_new(((int64_t*)a)[0] ^ ((int64_t*)b)[0],
+                        ((int64_t*)a)[1] ^ ((int64_t*)b)[1]);
+}
+
+int64_t zeta_big_cmp(int64_t a, int64_t b) {
+    int64_t ah = ((int64_t*)a)[1], bh = ((int64_t*)b)[1];
+    if (ah != bh) return ah < bh ? -1 : 1;
+    uint64_t alo = (uint64_t)((int64_t*)a)[0], blo = (uint64_t)((int64_t*)b)[0];
+    if (alo != blo) return alo < blo ? -1 : 1;
+    return 0;
+}
+
+/* decimal rendering of the signed 128-bit value (batch 640 step ③):
+   magnitude via 128/10 long division (bit loop), one digit per pass. */
+int64_t zeta_big_to_string(int64_t h) {
+    uint64_t lo = (uint64_t)((int64_t*)h)[0], hi = (uint64_t)((int64_t*)h)[1];
+    char tmp[48];
+    size_t n = 0;
+    int neg = (int64_t)hi < 0;
+    if (neg) {
+        uint64_t nlo = ~lo + 1;
+        uint64_t nhi = ~hi + (nlo == 0 ? 1 : 0);
+        lo = nlo;
+        hi = nhi;
+    }
+    if (!lo && !hi) {
+        char* z = (char*)GC_malloc(2);
+        z[0] = '0';
+        z[1] = 0;
+        return (int64_t)z;
+    }
+    while (lo || hi) {
+        uint64_t qlo = 0, qhi = 0, r = 0;
+        for (int bit = 127; bit >= 0; bit--) {
+            uint64_t b = (bit >= 64) ? ((hi >> (bit - 64)) & 1)
+                                     : ((lo >> bit) & 1);
+            r = r * 2 + b;
+            if (r >= 10) {
+                r -= 10;
+                if (bit >= 64) qhi |= 1ULL << (bit - 64);
+                else qlo |= 1ULL << bit;
+            }
+        }
+        tmp[n++] = (char)('0' + (char)r);
+        lo = qlo;
+        hi = qhi;
+    }
+    char* out = (char*)GC_malloc(n + 2);
+    size_t k = 0;
+    if (neg) out[k++] = '-';
+    while (n) out[k++] = tmp[--n];
+    out[k] = 0;
+    return (int64_t)out;
+}
+
+/* Batch 655: Python truediv on a BigInt answers with a float. The
+   128-bit decimal string round-trips through strtod (correctly
+   rounded); the string is GC_malloc'd — no free, arena-owned. */
+double zeta_big_to_f64(int64_t h) {
+    return strtod((const char*)zeta_big_to_string(h), NULL);
+}
+
+/* Batch 658: Python % and // on 128-bit handles. Both results leave
+   as HANDLES — `big // 3` is 4.2e29, far beyond i64 — assembled from
+   the [lo|hi] words into __int128 (clang lowers to __divti3). Floor
+   semantics: C % keeps the dividend's sign (7 % -3 = 1) while Python
+   takes the divisor's (−2); // truncates toward zero where Python
+   floors. A zero divisor raises like the 554 family. */
+int64_t zeta_big_mod(int64_t a, int64_t b) {
+    uint64_t alo = ((uint64_t*)a)[0], ahi = ((uint64_t*)a)[1];
+    uint64_t blo = ((uint64_t*)b)[0], bhi = ((uint64_t*)b)[1];
+    __int128 x = (__int128)alo | ((__int128)(int64_t)ahi << 64);
+    __int128 y = (__int128)blo | ((__int128)(int64_t)bhi << 64);
+    if (y == 0) zeta_raise(2);
+    __int128 r = x % y;
+    if (r != 0 && ((r < 0) != (y < 0))) r += y;
+    return zeta_big_new((int64_t)(uint64_t)r, (int64_t)(uint64_t)(r >> 64));
+}
+
+int64_t zeta_big_floordiv(int64_t a, int64_t b) {
+    uint64_t alo = ((uint64_t*)a)[0], ahi = ((uint64_t*)a)[1];
+    uint64_t blo = ((uint64_t*)b)[0], bhi = ((uint64_t*)b)[1];
+    __int128 x = (__int128)alo | ((__int128)(int64_t)ahi << 64);
+    __int128 y = (__int128)blo | ((__int128)(int64_t)bhi << 64);
+    if (y == 0) zeta_raise(2);
+    __int128 q = x / y;
+    if ((x % y) != 0 && ((x < 0) != (y < 0))) q--;
+    return zeta_big_new((int64_t)(uint64_t)q, (int64_t)(uint64_t)(q >> 64));
+}
+
+int64_t zeta_map_value_tag(int64_t map, int64_t key);
+int64_t zeta_map_value_untagged(int64_t map, int64_t key);
+int64_t map_get(int64_t m, int64_t k);
+int64_t map_resolve(int64_t m);
+/* zj cell layout (tokio_runtime_stub.c): 16 bytes [tag | payload]. zj_make
+   is static there, so allocate the same layout locally. */
+#define ZJ_INT 1
+#define ZJ_F64 2
+#define ZJ_STR 3
+#define ZJ_BOOL 6
+static int64_t zt_cell_make(int64_t tag, int64_t payload) {
+    int64_t* c = (int64_t*)GC_malloc(16);
+    c[0] = tag;
+    c[1] = payload;
+    return (int64_t)c;
+}
+
+// ── Batch 646: tagged-cell pilot for the method-boundary `.get` union ──
+// `self.d.get(k, <dflt>)` where the map's values and the default have
+// DIFFERENT types (int values + a str default) is a genuine union: the
+// single dest slot cannot type both. The runtime already records a per-key
+// value tag at insert time (`zeta_map_value_tag`, batch 535) and the PyJson
+// cell (`zj_make`) is the in-tree tagged representation. This function
+// returns a TAGGED CELL for both the hit (value tag from the map) and the
+// miss (default kind from the compiler) — the caller renders it through
+// the existing py_json_as_str/print-PyJson faces.
+int64_t zeta_map_get_default_cell(int64_t map, int64_t key, int64_t dflt, int64_t dflt_is_str) {
+    int64_t m = map ? map_resolve(map) : 0;
+    int64_t kh = map_str_key(key);
+    if (m) {
+        int64_t v = map_get(m, kh);
+        if (v) {
+            int64_t tag = zeta_map_value_tag(map, kh);
+            switch (tag) {
+                case 1: return zt_cell_make(ZJ_F64, v);
+                case 2: return zt_cell_make(ZJ_STR, v);
+                case 3: return zt_cell_make(ZJ_BOOL, v);
+                default: return zt_cell_make(ZJ_INT, v);
+            }
+        }
+    }
+    if (!dflt) return zt_cell_make(ZJ_INT, 0);
+    return dflt_is_str ? zt_cell_make(ZJ_STR, dflt) : zt_cell_make(ZJ_INT, dflt);
+}
+
+// ── Batch 653: per-key tag render for map subscript reads in print faces ──
+// A map whose value type the compiler erased/refined (mixed writes: int then
+// str) cannot have one static println channel — the per-key value tag (batch
+// 535 side table) is the runtime truth. Renders the value by its tag:
+// 0=int %lld, 1=f64 via zt_f64_repr (batch 639), 2=raw str, 3=bool.
+int64_t zeta_map_value_tag(int64_t map, int64_t key);
+int64_t map_get(int64_t m, int64_t k);
+int64_t map_resolve(int64_t m);
+int64_t map_str_key(int64_t key);
+char* zt_f64_repr(double v);
+static char* zt_dup_local(const char* s) {
+    size_t n = strlen(s) + 1;
+    char* p = (char*)GC_malloc(n);
+    memcpy(p, s, n);
+    return p;
+}
+
+/* ── Batch 653: per-key tag render for `.get` reads in print faces ──
+   Mixed-value maps (str value + int value) cannot share one static println
+   channel: the per-key tag side table (batch 535) is the runtime truth.
+   Hit: render the stored value by its recorded tag. Miss: render the
+   default by ITS kind (dflt_kind: 0 int, 1 f64, 2 str). */
+static int64_t zeta_map_get_render_core(int64_t map, int64_t key, int64_t dflt, int64_t dflt_is_str) {
+    int64_t m = map ? map_resolve(map) : 0;
+    int64_t kh = map_str_key(key);
+    if (m) {
+        int64_t v = map_get(m, kh);
+        if (v) {
+            /* Batch 659: an UNtagged key (dict-comprehension writes never
+               feed the table) returns the word as-is — in the Str-refined
+               face it already is a real str handle (t482: comp of str
+               values); %lld-ing it rendered the pointer. */
+            if (zeta_map_value_untagged(m, kh)) return v;
+            int64_t tag = zeta_map_value_tag(m, kh);
+            char* s = (char*)GC_malloc(48);
+            switch (tag) {
+                case 1: {
+                    double d;
+                    memcpy(&d, &v, sizeof d);
+                    snprintf(s, 48, "%g", d);
+                    return (int64_t)s;
+                }
+                case 2:
+                    return v;
+                case 3:
+                    snprintf(s, 48, v ? "True" : "False");
+                    return (int64_t)s;
+                default:
+                    snprintf(s, 48, "%lld", (long long)v);
+                    return (int64_t)s;
+            }
+        }
+    }
+    if (dflt_is_str) return dflt;
+    {
+        char* s = (char*)GC_malloc(48);
+        double d;
+        memcpy(&d, &dflt, sizeof d);
+        snprintf(s, 48, "%g", d);
+        return (int64_t)s;
+    }
+}
+
+int64_t zeta_map_get_render(int64_t map, int64_t key) {
+    /* No default: render the miss as an int word (legacy channel). */
+    return zeta_map_get_render_core(map, key, 0, 0);
+}
+
+int64_t zeta_map_get_render_d(int64_t map, int64_t key, int64_t dflt, int64_t dflt_is_str) {
+    /* dflt_is_str: the default handle is a str — render raw. Otherwise
+       render the i64 word via %g (CPython prints floats compactly). */
+    if (dflt_is_str) return dflt;
+    return zeta_map_get_render_core(map, key, dflt, dflt_is_str);
+}
+
+
 int64_t zeta_collect_vec_n(int64_t iter, int64_t fn_ptr, int64_t len_override) {
     if (!iter) return 0;
     int64_t len = len_override;

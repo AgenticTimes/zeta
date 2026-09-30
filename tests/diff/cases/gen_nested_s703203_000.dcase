@@ -1,0 +1,16 @@
+# @cat: container
+# @note: 随机嵌套容器链（seed=703203 #0）
+#@@ python
+d = { "k1": [-37, -78, 81] }
+print(d["k1"][0])
+d["k1"][0] = -77
+print(d["k1"][0])
+print(len(d["k1"]))
+
+#@@ zeta
+d = { "k1": [-37, -78, 81] }
+print(d["k1"][0])
+d["k1"][0] = -77
+print(d["k1"][0])
+print(len(d["k1"]))
+

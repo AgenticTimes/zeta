@@ -1,0 +1,26 @@
+// 批次 655（旁路 cleanup）：BigInt truediv 接通（647 遗留弃权的收口）。
+// Python 语义：`/` 恒为真除、BigInt 参与即答 float（2**100/3＝4.2e+29）；
+// 647 的 big_arm 当时对 `/`/`%`/`floordiv` 整体弃权（dest 不降值＝打 0）。
+// 本批：runtime zeta_big_to_f64（128 位十进制串经 strtod＝正确舍入）＋
+// gen `/` 臂——仅 BigInt 侧转换（浮点槽经 from_i64 装箱会按位重解释），
+// int/float 侧留给 codegen 浮点除原生 sitofp；零除哨兵按除数转换后型别
+// 选 FloatLit(0.0)/IntLit(0)（554 形状，除零仍响亮 raise＝code 2）。
+// f64 签名显式登记于 declare_core_runtime_fns（按参数个数兜底声明是
+// i64 返回，会把 double 截坏——实测 0.0 假象）。边界（不在本夹具）：
+// BigInt `%`/`//` 仍弃权；2**N 超 i128（N≥128）＝表示架构 127 位上限
+// （640 登记）；除零 raise 面归 554 家族夹具。
+x = 2 ** 100
+print(x / 3)
+print(10 / x)
+print(x / 2.0)
+print(x / x)
+i = 0
+while i < 2:
+    print(x / (i + 1))
+    i = i + 1
+// expect: 4.2255020007607644e+29
+// expect: 7.888609052210118e-30
+// expect: 6.338253001141147e+29
+// expect: 1.0
+// expect: 1.2676506002282294e+30
+// expect: 6.338253001141147e+29

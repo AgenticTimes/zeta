@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=721106 #0）
+#@@ python
+print(not 5)
+print(17.96 >= 33.61)
+print(-(--50) < -15, -50 == -50)
+print(330 < 796 < 894)
+
+#@@ zeta
+print(not 5)
+print(17.96 >= 33.61)
+print(-(--50) < -15, -50 == -50)
+print(330 < 796 < 894)
+

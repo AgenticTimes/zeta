@@ -1,0 +1,25 @@
+// 批次 649（旁路 cleanup）：字面移位量 ≥64 的溢出提升（640 施工序③④的
+// sound 切片）。i64 shl/shr 移位 ≥64 是 LLVM poison（静默垃圾：循环内
+// 3 << 64 打 0/1 实拍）；Python 语义下字面移位量本身即决定溢出——无需值
+// 域分析：`a << n≥64` 提升走 zeta_big_shl（from_i64 装箱，BigInt 槽），
+// `a >> n≥64` 走 zeta_big_shr（算术移位＝0/-1 语义），循环内同样生效。
+// 边界（不在本夹具）：变量移位量 ≥64 未提升（需运行期检测）；负移位量
+// 仍 LLVM poison（Python 是 ValueError，另立响亮项）。
+x = 1 << 64
+print(x)
+i = 0
+while i < 2:
+    y = 3 << 64
+    print(y)
+    i = i + 1
+print(5 >> 64)
+print(-7 >> 64)
+print(1 << 63)
+print(2 >> 1)
+// expect: 18446744073709551616
+// expect: 55340232221128654848
+// expect: 55340232221128654848
+// expect: 0
+// expect: -1
+// expect: 9223372036854775808
+// expect: 1

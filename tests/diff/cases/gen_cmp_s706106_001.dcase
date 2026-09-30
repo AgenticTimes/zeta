@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=706106 #1）
+#@@ python
+print(not 55)
+print(not 66)
+print(-(--42) < -1, -42 == -42)
+
+#@@ zeta
+print(not 55)
+print(not 66)
+print(-(--42) < -1, -42 == -42)
+

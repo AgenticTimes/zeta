@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=673104 #0）
+#@@ python
+print(not -25)
+print(623 >= 673 < 939)
+
+#@@ zeta
+print(not -25)
+print(623 >= 673 < 939)
+

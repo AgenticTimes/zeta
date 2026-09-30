@@ -1,0 +1,14 @@
+# @cat: numeric
+# @note: 批次 670 边界面专项（手写）：i128 树折叠与字面大数（642/644/647 面）
+#@@ python
+x = 2 ** 100
+y = 10 ** 30
+print(x + y)
+print(x * 2)
+print(y - x)
+#@@ zeta
+x = 2 ** 100
+y = 10 ** 30
+print(x + y)
+print(x * 2)
+print(y - x)

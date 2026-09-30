@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=679106 #1）
+#@@ python
+print(not 67)
+print(696 <= -100 == 439)
+print(468 <= -27 < 884)
+print(115 > 400 > 53)
+
+#@@ zeta
+print(not 67)
+print(696 <= -100 == 439)
+print(468 <= -27 < 884)
+print(115 > 400 > 53)
+

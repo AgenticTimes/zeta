@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=685106 #2）
+#@@ python
+print(793 <= 371 < -41)
+print(987 >= 51 < -49)
+
+#@@ zeta
+print(793 <= 371 < -41)
+print(987 >= 51 < -49)
+

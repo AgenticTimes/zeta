@@ -1,0 +1,14 @@
+# @cat: numeric
+# @note: 批次 670 边界面专项（手写）：变量移位量循环内精确（650 面）
+#@@ python
+v = 5
+print(v << 70)
+print(v >> 70)
+n = 100
+print(2 ** n == 1 << 100)
+#@@ zeta
+v = 5
+print(v << 70)
+print(v >> 70)
+n = 100
+print(2 ** n == 1 << 100)

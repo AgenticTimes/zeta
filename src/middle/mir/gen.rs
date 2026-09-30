@@ -211,6 +211,9 @@ pub struct MirGen {
     /// Batch 603: class -> first base (resolver `__bases__` markers) — the
     /// base-chain walk for inherited-method dispatch.
     class_bases: HashMap<String, String>,
+    /// Batch 654: names whose last top-level assignment was `None` —
+    /// threaded from the ctfe pass; print/str render these as "None".
+    none_vars_gen: std::collections::HashSet<String>,
     /// Batch 627: `Class::method` -> [(FuncDef param position, Type)] —
     /// call-site refinements for unannotated method params (see the
     /// builder).
@@ -303,6 +306,7 @@ impl MirGen {
             symbol_renames: HashMap::new(),
             module_global_types: HashMap::new(),
             class_bases: HashMap::new(),
+    none_vars_gen: std::collections::HashSet::new(),
             method_param_refinements: HashMap::new(),
             re_repl_param: false,
             current_class: None,
@@ -336,6 +340,12 @@ impl MirGen {
     /// Batch 603: resolver's class->base map (see `class_bases`).
     pub fn with_class_bases(mut self, bases: HashMap<String, String>) -> Self {
         self.class_bases = bases;
+        self
+    }
+
+    /// Batch 654: the NoneVar set (see the ctfe pass).
+    pub fn with_none_vars(mut self, set: std::collections::HashSet<String>) -> Self {
+        self.none_vars_gen = set;
         self
     }
 
@@ -2420,6 +2430,34 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             lhs: existing,
                             rhs: rhs_id,
                         });
+                        /* Batch 657: the slot's static type must follow a
+                           re-assignment on the BigInt edge — `big = 0`
+                           pins I64, a later in-loop `big = 1 << 100`
+                           stores an i64-width handle that print/arm
+                           dispatch then read as a plain int (measured:
+                           `print(big)` → 4301332416). Handles need no
+                           widening; only the type moves. Retype ONLY on
+                           the BigInt↔int edge: widening is always safe,
+                           narrowing on a plain-int rhs keeps flip-flop
+                           loops coherent — every other kind change keeps
+                           its existing dyn-coercion behavior (the 637
+                           lesson: propagation faces stay off the table). */
+                        let rhs_big = matches!(
+                            self.type_map.get(&rhs_id),
+                            Some(Type::Named(n, _)) if n == "BigInt"
+                        );
+                        let cur_big = matches!(
+                            self.type_map.get(&existing),
+                            Some(Type::Named(n, _)) if n == "BigInt"
+                        );
+                        if rhs_big != cur_big {
+                            let new_ty = if rhs_big {
+                                Type::Named("BigInt".to_string(), vec![])
+                            } else {
+                                Type::I64
+                            };
+                            self.type_map.insert(existing, new_ty);
+                        }
                         // The env mirror for a module-global write is emitted by
                         // `mirror_module_global_writes`, once, over the finished
                         // body (batch 391).
@@ -4055,6 +4093,40 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         }
     }
 
+    /// Batch 659: a map Subscript whose receiver is a plain variable with a
+    /// Str-refined value type renders through the 535 per-key tag side table
+    /// (`zeta_map_get_render`) — the raw word otherwise reaches string
+    /// consumption as a bogus pointer (strlen/segv or truncated concat).
+    /// Returns None for anything else so callers fall through untouched.
+    fn mapsub_render_str(&mut self, b: &AstNode, k: &AstNode) -> Option<u32> {
+        let is_map_str = if let AstNode::Var(vname) = b {
+            self.name_to_id.get(vname.as_str()).map_or(false, |&sid| {
+                matches!(
+                    self.type_map.get(&sid),
+                    Some(Type::Named(n, params))
+                        if n == "map" && matches!(params.last(), Some(Type::Str))
+                )
+            })
+        } else {
+            false
+        };
+        if !is_map_str {
+            return None;
+        }
+        let recv_id = self.lower_expr(b);
+        let k_id = self.lower_expr(k);
+        let r_id = self.next_id();
+        self.stmts.push(MirStmt::Call {
+            func: "zeta_map_get_render".to_string(),
+            args: vec![recv_id, k_id],
+            dest: r_id,
+            type_args: vec![],
+        });
+        self.exprs.insert(r_id, MirExpr::Var(r_id));
+        self.type_map.insert(r_id, Type::Str);
+        Some(r_id)
+    }
+
     fn lower_to_string(&mut self, id: u32) -> u32 {
         if matches!(self.type_map.get(&id), Some(Type::Str)) {
             return id;
@@ -4879,6 +4951,25 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 self.exprs.insert(id, MirExpr::IntLit(0));
                 self.type_map.insert(id, Type::I64);
             }
+            AstNode::BigIntLit(text) => {
+                // Batch 647: a beyond-i64 literal lowers to the zeta_big
+                // runtime handle ([lo|hi] 16-byte GC block, batch 641),
+                // statically typed Named("BigInt") — arithmetic on it
+                // routes through the big family, print/str render via
+                // zeta_big_to_string.
+                let v: i128 = text.parse().unwrap_or(0);
+                let lo = self.int_slot(v as i64);
+                let hi = self.int_slot((v >> 64) as i64);
+                self.stmts.push(MirStmt::Call {
+                    func: "zeta_big_new".to_string(),
+                    args: vec![lo, hi],
+                    dest: id,
+                    type_args: vec![],
+                });
+                self.exprs.insert(id, MirExpr::Var(id));
+                self.type_map
+                    .insert(id, Type::Named("BigInt".to_string(), vec![]));
+            }
             AstNode::StringLit(s) => {
                 self.exprs.insert(id, MirExpr::StringLit(s.clone()));
                 self.type_map.insert(id, Type::Str);
@@ -4895,6 +4986,52 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         let pid = self.lower_expr(&AstNode::StringLit("None".to_string()));
                         part_ids.push(pid);
                         continue;
+                    }
+                    // Batch 654: a NoneVar part (`x = None; f"{x}"`) — same
+                    // render-at-consumption face as the print arm; the slot
+                    // stays I64 0.
+                    if let AstNode::Var(x) = p {
+                        if self.none_vars_gen.contains(x) {
+                            let pid = self.lower_expr(&AstNode::StringLit("None".to_string()));
+                            part_ids.push(pid);
+                            continue;
+                        }
+                    }
+                    // Batch 659: a map Subscript part behind a Str-refined
+                    // value type (`f"n={d["k"]}"`) — same per-key-tag render
+                    // as the print arm; the raw word otherwise flowed into
+                    // str_concat as a "string" pointer (measured ZT-WARN +
+                    // truncated output).
+                    if let AstNode::Subscript { base, index } = p {
+                        let base_map_str = if let AstNode::Var(vname) = &**base {
+                            self.name_to_id
+                                .get(vname.as_str())
+                                .map_or(false, |&sid| {
+                                    matches!(
+                                        self.type_map.get(&sid),
+                                        Some(Type::Named(n, params))
+                                            if n == "map"
+                                                && matches!(params.last(), Some(Type::Str))
+                                    )
+                                })
+                        } else {
+                            false
+                        };
+                        if base_map_str {
+                            let recv_id = self.lower_expr(base);
+                            let k_id = self.lower_expr(index);
+                            let r_id = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_map_get_render".to_string(),
+                                args: vec![recv_id, k_id],
+                                dest: r_id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(r_id, MirExpr::Var(r_id));
+                            self.type_map.insert(r_id, Type::Str);
+                            part_ids.push(r_id);
+                            continue;
+                        }
                     }
                     let pid = self.lower_expr(p);
                     // An INLINE CONDITIONAL whose branches are both strings
@@ -5074,6 +5211,262 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 let left_id = self.lower_expr(left);
                 let right_id = self.lower_expr(right);
                 let dest = self.next_id();
+                /* Batch 647: BigInt arithmetic — either operand carrying the
+                   Named("BigInt") type routes the whole op through the
+                   zeta_big family (the other side is boxed from I64). The
+                   result stays a BigInt handle; comparisons yield Bool. */
+                let big_arm = matches!(
+                    self.type_map.get(&left_id),
+                    Some(Type::Named(n, _)) if n == "BigInt"
+                ) || matches!(
+                    self.type_map.get(&right_id),
+                    Some(Type::Named(n, _)) if n == "BigInt"
+                );
+                if big_arm {
+                    if matches!(op.as_str(), "%" | "floordiv") {
+                        /* Batch 658: `%`/`//` on handles route through the
+                           runtime family with Python floor semantics; the
+                           result stays a BigInt handle (big // 3 is far
+                           beyond i64). A zero divisor raises inside
+                           zeta_big_mod/zeta_big_floordiv (the 554 guard
+                           below never runs on this path). */
+                        let box_side = |side: u32, g: &mut Self| -> u32 {
+                            match g.type_map.get(&side) {
+                                Some(Type::Named(n, _)) if n == "BigInt" => side,
+                                _ => {
+                                    let b = g.next_id();
+                                    g.stmts.push(MirStmt::Call {
+                                        func: "zeta_big_from_i64".to_string(),
+                                        args: vec![side],
+                                        dest: b,
+                                        type_args: vec![],
+                                    });
+                                    g.exprs.insert(b, MirExpr::Var(b));
+                                    g.type_map.insert(
+                                        b,
+                                        Type::Named("BigInt".to_string(), vec![]),
+                                    );
+                                    b
+                                }
+                            }
+                        };
+                        let bl = box_side(left_id, self);
+                        let br = box_side(right_id, self);
+                        self.stmts.push(MirStmt::Call {
+                            func: if op == "%" {
+                                "zeta_big_mod".to_string()
+                            } else {
+                                "zeta_big_floordiv".to_string()
+                            },
+                            args: vec![bl, br],
+                            dest,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(dest, MirExpr::Var(dest));
+                        self.type_map
+                            .insert(dest, Type::Named("BigInt".to_string(), vec![]));
+                        return dest;
+                    }
+                    if op == "/" {
+                        /* Batch 655: `/` is TRUEDIV — Python answers with
+                           a float (2**100 / 3 = 4.2e+29); the old abstain
+                           left dest unlowered and every such division
+                           printed 0. Both sides convert through the
+                           128-bit decimal string (strtod = correctly
+                           rounded); a zero divisor still raises like the
+                           batch-554 guard. */
+                        /* Only the BigInt side converts (boxing a float
+                           slot through from_i64 would bit-reinterpret it);
+                           int/float sides flow to the codegen float-div
+                           path, which sitofps them natively. The zero
+                           sentinel matches the divisor's converted kind —
+                           an unconverted int divisor compares against
+                           IntLit(0) like the batch-554 guard. */
+                        let mut to_f = |side: u32, g: &mut Self| -> u32 {
+                            if matches!(
+                                g.type_map.get(&side),
+                                Some(Type::Named(n, _)) if n == "BigInt"
+                            ) {
+                                let f = g.next_id();
+                                g.stmts.push(MirStmt::Call {
+                                    func: "zeta_big_to_f64".to_string(),
+                                    args: vec![side],
+                                    dest: f,
+                                    type_args: vec![],
+                                });
+                                g.exprs.insert(f, MirExpr::Var(f));
+                                g.type_map.insert(f, Type::F64);
+                                f
+                            } else {
+                                side
+                            }
+                        };
+                        let fl = to_f(left_id, self);
+                        let fr = to_f(right_id, self);
+                        let div_is_float = matches!(
+                            self.type_map.get(&fr),
+                            Some(Type::F64) | Some(Type::F32)
+                        );
+                        let zero = self.next_id();
+                        if div_is_float {
+                            self.exprs.insert(zero, MirExpr::FloatLit(0.0));
+                            self.type_map.insert(zero, Type::F64);
+                        } else {
+                            self.exprs.insert(zero, MirExpr::IntLit(0));
+                            self.type_map.insert(zero, Type::I64);
+                        }
+                        let cond_id = self.next_id();
+                        self.exprs.insert(
+                            cond_id,
+                            MirExpr::BinaryOp {
+                                op: "==".to_string(),
+                                left: fr,
+                                right: zero,
+                            },
+                        );
+                        self.type_map.insert(cond_id, Type::Bool);
+                        let code_id = self.next_id_with_lit(2);
+                        self.stmts.push(MirStmt::If {
+                            cond: cond_id,
+                            then: vec![MirStmt::VoidCall {
+                                func: "zeta_raise".to_string(),
+                                args: vec![code_id],
+                            }],
+                            else_: vec![],
+                            dest: None,
+                        });
+                        self.exprs.insert(
+                            dest,
+                            MirExpr::BinaryOp {
+                                op: "/".to_string(),
+                                left: fl,
+                                right: fr,
+                            },
+                        );
+                        self.type_map.insert(dest, Type::F64);
+                        return dest;
+                    }
+                    let box_side = |side: u32, g: &mut Self| -> u32 {
+                        match g.type_map.get(&side) {
+                            Some(Type::Named(n, _)) if n == "BigInt" => side,
+                            _ => {
+                                let b = g.next_id();
+                                g.stmts.push(MirStmt::Call {
+                                    func: "zeta_big_from_i64".to_string(),
+                                    args: vec![side],
+                                    dest: b,
+                                    type_args: vec![],
+                                });
+                                g.exprs.insert(b, MirExpr::Var(b));
+                                g.type_map.insert(
+                                    b,
+                                    Type::Named("BigInt".to_string(), vec![]),
+                                );
+                                b
+                            }
+                        }
+                    };
+                    let bl = box_side(left_id, self);
+                    let br = box_side(right_id, self);
+                    let is_cmp = matches!(
+                        op.as_str(),
+                        "<" | ">" | "<=" | ">=" | "==" | "!="
+                    );
+                    if is_cmp {
+                        let c = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_big_cmp".to_string(),
+                            args: vec![bl, br],
+                            dest: c,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(c, MirExpr::Var(c));
+                        self.type_map.insert(c, Type::I64);
+                        let zero = self.next_id_with_lit(0);
+                        let ord = match op.as_str() {
+                            "<" => "<",
+                            ">" => ">",
+                            "<=" => "<=",
+                            ">=" => ">=",
+                            "==" => "==",
+                            _ => "!=",
+                        };
+                        self.exprs.insert(
+                            dest,
+                            MirExpr::BinaryOp {
+                                op: ord.to_string(),
+                                left: c,
+                                right: zero,
+                            },
+                        );
+                        self.type_map.insert(dest, Type::Bool);
+                        return dest;
+                    }
+                    let sym = match op.as_str() {
+                        "+" => "zeta_big_add",
+                        "-" => "zeta_big_sub",
+                        "*" => "zeta_big_mul",
+                        "<<" => "zeta_big_shl",
+                        ">>" => "zeta_big_shr",
+                        "|" => "zeta_big_or",
+                        "&" => "zeta_big_and",
+                        "^" => "zeta_big_xor",
+                        _ => {
+                            self.type_map.insert(dest, Type::I64);
+                            return dest;
+                        }
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: sym.to_string(),
+                        args: vec![bl, br],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map
+                        .insert(dest, Type::Named("BigInt".to_string(), vec![]));
+                    return dest;
+                }
+                /* Batch 650: SHIFT ARITHMETIC IS ALWAYS BIG. Python's `<<`
+                   is the grow-an-integer operator — the result is exact for
+                   every shift count, so the raw i64 shl (poison at n ≥ 64,
+                   silent wrap below) is never the right lowering. Both
+                   operands box through the zeta_big family and the dest is
+                   a BigInt handle: variable shift counts included (the
+                   batch-649 literal-only gate is subsumed; a loop-internal
+                   `y = 3 << 64` now prints the true value every iteration).
+                   `>>` is arithmetic in zeta_big_shr — 0 for a ≥ 0, -1 for
+                   a < 0 at n ≥ 64, exact below. Float/string receivers keep
+                   their previous (garbage-in) behavior out of scope. */
+                if matches!(op.as_str(), "<<" | ">>") {
+                    let bl = self.next_id();
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_big_from_i64".to_string(),
+                        args: vec![left_id],
+                        dest: bl,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(bl, MirExpr::Var(bl));
+                    self.type_map
+                        .insert(bl, Type::Named("BigInt".to_string(), vec![]));
+                    self.stmts.push(MirStmt::Call {
+                        func: if op == "<<" { "zeta_big_shl" } else { "zeta_big_shr" }.to_string(),
+                        args: vec![bl, right_id],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map
+                        .insert(dest, Type::Named("BigInt".to_string(), vec![]));
+                    return dest;
+                }
+                /* Batch 645: a LITERAL zero divisor on `/` makes the 554
+                   raise unconditional — the division never executes, so its
+                   result slot types I64 (the except branch's integer write
+                   then dominates the variable's render;
+                   except_division_zero: y printed -1.0 instead of -1). */
+                let dead_div = op == "/"
+                    && matches!(self.exprs.get(&right_id), Some(MirExpr::IntLit(0)));
 
                 // ZeroDivisionError (except_division_zero, batch 554): CPython
                 // raises on every `/` whose divisor is zero; the inline div
@@ -5246,12 +5639,28 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     // PY-A: string concatenation — route through BinaryOp so
                     // the codegen string dispatch (host_str_concat) handles it,
                     // instead of the numeric SemiringFold adder.
+                    // Batch 659: either side being a Str-refined map subscript
+                    // renders through the per-key tag table first — the raw
+                    // word would reach host_str_concat as a bogus pointer
+                    // (measured ZT-WARN + truncated output).
+                    let mut l_use = left_id;
+                    let mut r_use = right_id;
+                    if let AstNode::Subscript { base, index } = &**left {
+                        if let Some(r) = self.mapsub_render_str(base, index) {
+                            l_use = r;
+                        }
+                    }
+                    if let AstNode::Subscript { base, index } = &**right {
+                        if let Some(r) = self.mapsub_render_str(base, index) {
+                            r_use = r;
+                        }
+                    }
                     self.exprs.insert(
                         dest,
                         MirExpr::BinaryOp {
                             op: op.clone(),
-                            left: left_id,
-                            right: right_id,
+                            left: l_use,
+                            right: r_use,
                         },
                     );
                     self.type_map.insert(dest, Type::Str);
@@ -5997,7 +6406,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         // a Str/Named/Dynamic side keeps its previous answer.
                         // `//` never reaches here (the parser emits "floordiv").
                         (Some(Type::I64) | Some(Type::Bool), Some(Type::I64) | Some(Type::Bool))
-                            if op == "/" =>
+                            if op == "/" && !dead_div =>
                         {
                             Type::F64
                         }
@@ -9259,6 +9668,12 @@ call, no NULL-handle dereference).",
                         self.type_map.insert(id, Type::Named("map".to_string(), vec![]));
                         return id;
                     }
+                    /* Batch 661 (cleanup) reconciliation: the dynamic route
+                       above is mainline 658's `map__copy` — functionally
+                       equivalent to this lane's `py_dict_ctor` (both funnel
+                       non-dict handles through map_resolve's loud guard =
+                       TypeError parity), so ONE route is kept. The runtime
+                       `py_dict_ctor` stays as unwired infrastructure. */
                 }
                 // PY-A: `zip(a, b)` — a Vec of (a[i], b[i]) pairs, so
                 // `for x, y in zip(a, b):` destructures. (Previously a bare
@@ -9894,6 +10309,49 @@ call, no NULL-handle dereference).",
 
                 // PY-A: Python `str(x)` — convert any value to its string form
                 if method == "str" && receiver.is_none() && args.len() == 1 {
+
+                            // Batch 659: a map Subscript behind a Str-refined
+                            // value type renders through the per-key tag side
+                            // table — the raw word otherwise reaches string
+                            // consumption as a bogus pointer.
+                            let mapsub_render = |g: &mut Self, b: &AstNode, k: &AstNode| -> Option<u32> {
+                                let is_map_str = if let AstNode::Var(vname) = b {
+                                    g.name_to_id.get(vname.as_str()).map_or(false, |&sid| {
+                                        matches!(
+                                            g.type_map.get(&sid),
+                                            Some(Type::Named(n, params))
+                                                if n == "map"
+                                                    && matches!(params.last(), Some(Type::Str))
+                                        )
+                                    })
+                                } else {
+                                    false
+                                };
+                                if !is_map_str {
+                                    return None;
+                                }
+                                let recv_id = g.lower_expr(b);
+                                let k_id = g.lower_expr(k);
+                                let r_id = g.next_id();
+                                g.stmts.push(MirStmt::Call {
+                                    func: "zeta_map_get_render".to_string(),
+                                    args: vec![recv_id, k_id],
+                                    dest: r_id,
+                                    type_args: vec![],
+                                });
+                                g.exprs.insert(r_id, MirExpr::Var(r_id));
+                                g.type_map.insert(r_id, Type::Str);
+                                Some(r_id)
+                            };
+                    // Batch 659: `str(d[k])` on a Str-refined map — per-key
+                    // tag render (the raw word would strlen as a pointer).
+                    if let AstNode::Subscript { base, index } = &args[0] {
+                        if let Some(r_id) = mapsub_render(self, base, index) {
+                            self.exprs.insert(id, MirExpr::Var(r_id));
+                            self.type_map.insert(id, Type::Str);
+                            return id;
+                        }
+                    }
                     // Batch 624: `str(None)` literal face renders "None"
                     // (value representation stays 0, #113/#189 deep water).
                     // The constant must reach the result through a DEFINING
@@ -9918,6 +10376,24 @@ call, no NULL-handle dereference).",
                         return id;
                     }
                     let arg_id = self.lower_expr(&args[0]);
+                    // Batch 647: `str(<BigInt>)` renders the decimal value.
+                    if matches!(
+                        self.type_map.get(&arg_id),
+                        Some(Type::Named(n, _)) if n == "BigInt"
+                    ) {
+                        let nid = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_big_to_string".to_string(),
+                            args: vec![arg_id],
+                            dest: nid,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(nid, MirExpr::Var(nid));
+                        self.type_map.insert(nid, Type::Str);
+                        self.exprs.insert(id, MirExpr::Var(nid));
+                        self.type_map.insert(id, Type::Str);
+                        return id;
+                    }
                     // Batch 626: `str(<list>)` — the same CPython repr the
                     // print face renders (py_json_dumps_vec_typed, batches
                     // 557/565). lower_to_string on a vec handle printed the
@@ -10156,14 +10632,71 @@ call, no NULL-handle dereference).",
                             }
                         }
                     }
+                    // Batch 659: `print(d[k])` on a map-typed variable
+                    // whose value type refined to Str (651/652 混合值型
+                    // map 的毒化面) — the generic path renders EVERY read
+                    // through that single dispatch, so an int word behind
+                    // the str refinement went to println_str and strlen'd
+                    // the raw word (measured rc=139 with no output; str
+                    // reads printed fine, which is why the crash looked
+                    // shape-dependent). The 535 per-key tag side table
+                    // knows the real kind: render via zeta_map_get_render
+                    // (653 infra, unwired) and print the STRING. Three
+                    // guards keep the 653 lesson honored: Var receiver
+                    // only (no double-eval, .get calls untouched), render
+                    // only in this consumption position (bare `x = d[k]`
+                    // keeps the generic path), and only when the static
+                    // value type is Str (pure int/container maps keep
+                    // their working dispatches).
+                    if positional.len() == 1 && sep_expr.is_none() && end_expr.is_none() {
+                        if let AstNode::Subscript { base, index } = positional[0] {
+                            let base_map_str = if let AstNode::Var(vname) = &**base {
+                                self.name_to_id
+                                    .get(vname.as_str())
+                                    .map_or(false, |&sid| {
+                                        matches!(
+                                            self.type_map.get(&sid),
+                                            Some(Type::Named(n, params))
+                                                if n == "map"
+                                                    && matches!(
+                                                        params.last(),
+                                                        Some(Type::Str)
+                                                    )
+                                        )
+                                    })
+                            } else {
+                                false
+                            };
+                            if base_map_str {
+                                let recv_id = self.lower_expr(base);
+                                let k_id = self.lower_expr(index);
+                                let r_id = self.next_id();
+                                self.stmts.push(MirStmt::Call {
+                                    func: "zeta_map_get_render".to_string(),
+                                    args: vec![recv_id, k_id],
+                                    dest: r_id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(r_id, MirExpr::Var(r_id));
+                                self.type_map.insert(r_id, Type::Str);
+                                self.stmts.push(MirStmt::VoidCall {
+                                    func: "println_str".to_string(),
+                                    args: vec![r_id],
+                                });
+                                let unit = self.next_id();
+                                self.exprs.insert(unit, MirExpr::IntLit(0));
+                                self.type_map.insert(unit, Type::Tuple(vec![]));
+                                return unit;
+                            }
+                        }
+                    }
                     let mut arg_ids = vec![];
                     for a in &positional {
-                        // Batch 655: `print(3 and None)` / `print(None or 5)`
-                        // — AND/OR whose statically-selected operand is a None
-                        // literal renders "None" (value repr stays 0). Must be
-                        // checked BEFORE the batch-635 handler below, which
-                        // intercepts all AND/OR BinaryOps and would lower the
-                        // None-selected result as I64 0 ⇒ print "0" (t507).
+                        // Batch 655 (mainline): `print(3 and None)` /
+                        // `print(None or 5)` — AND/OR whose statically-selected
+                        // operand is a None literal renders "None" (value repr
+                        // stays 0). Must be checked BEFORE the batch-635 handler
+                        // below, which intercepts all AND/OR BinaryOps.
                         if self.and_or_select_is_none(a) {
                             let nid = self.next_id();
                             self.exprs
@@ -10171,6 +10704,16 @@ call, no NULL-handle dereference).",
                             self.type_map.insert(nid, Type::Str);
                             arg_ids.push(nid);
                             continue;
+                        }
+                        // Batch 659 (cleanup): per-arg map-subscript render — a
+                        // mixed map's int word must not reach the println
+                        // dispatch through the str refinement
+                        // (`print(d["n"], d["s"])` segvs the int side).
+                        if let AstNode::Subscript { base, index } = a {
+                            if let Some(r_id) = self.mapsub_render_str(base, index) {
+                                arg_ids.push(r_id);
+                                continue;
+                            }
                         }
                         // Batch 635: `print(L and R)` with an int left and a
                         // Bool right — the union cannot share one println
@@ -10195,7 +10738,15 @@ call, no NULL-handle dereference).",
                                 let rt = self.type_map.get(&right_id).cloned();
                                 let mut right_stmts = std::mem::take(&mut self.stmts);
                                 self.stmts = saved3;
-                                let split_worthy = matches!(rt, Some(Type::Bool))
+                                /* Batch 648: the RIGHT operand may also be
+                                   a NoneLit (`3 and None` in CPython prints
+                                   None) — the None face renders it. */
+                                let right_none = matches!(
+                                    &**right,
+                                    AstNode::NoneLit
+                                );
+                                let split_worthy = (matches!(rt, Some(Type::Bool))
+                                    || right_none)
                                     && matches!(lt, Some(Type::I64) | Some(Type::PyDynamic) | None);
                                 if split_worthy {
                                     let truth_id =
@@ -10228,19 +10779,33 @@ call, no NULL-handle dereference).",
                                     // operand (Bool — True/False via
                                     // to_string_bool + println_str); falsy
                                     // prints the LEFT (int). `||` mirrors.
-                                    let cid = self.next_id();
-                                    self.exprs.insert(cid, MirExpr::Var(cid));
-                                    self.type_map.insert(cid, Type::Str);
-                                    right_stmts.push(MirStmt::Call {
-                                        func: "to_string_bool".to_string(),
-                                        args: vec![right_id],
-                                        dest: cid,
-                                        type_args: vec![],
-                                    });
-                                    right_stmts.push(MirStmt::VoidCall {
-                                        func: "println_str".to_string(),
-                                        args: vec![cid],
-                                    });
+                                    if right_none {
+                                        /* None side: print the literal "None"
+                                           (a NoneLit operand lowers to I64 0,
+                                           which would render as an integer). */
+                                        let nid = self.next_id();
+                                        self.exprs
+                                            .insert(nid, MirExpr::StringLit("None".to_string()));
+                                        self.type_map.insert(nid, Type::Str);
+                                        right_stmts.push(MirStmt::VoidCall {
+                                            func: "println_str".to_string(),
+                                            args: vec![nid],
+                                        });
+                                    } else {
+                                        let cid = self.next_id();
+                                        self.exprs.insert(cid, MirExpr::Var(cid));
+                                        self.type_map.insert(cid, Type::Str);
+                                        right_stmts.push(MirStmt::Call {
+                                            func: "to_string_bool".to_string(),
+                                            args: vec![right_id],
+                                            dest: cid,
+                                            type_args: vec![],
+                                        });
+                                        right_stmts.push(MirStmt::VoidCall {
+                                            func: "println_str".to_string(),
+                                            args: vec![cid],
+                                        });
+                                    }
                                     let left_print = MirStmt::VoidCall {
                                         func: "println_i64".to_string(),
                                         args: vec![left_id],
@@ -10265,6 +10830,23 @@ call, no NULL-handle dereference).",
                                 continue;
                             }
                         }
+                        // Batch 647 (cleanup): a BigInt operand renders via
+                        // zeta_big_to_string — pushed as a Str arg id like
+                        // the NoneLit face.
+                        if matches!(a, AstNode::BigIntLit(_)) {
+                            let lhs0 = self.lower_expr(a);
+                            let sid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_big_to_string".to_string(),
+                                args: vec![lhs0],
+                                dest: sid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(sid, MirExpr::Var(sid));
+                            self.type_map.insert(sid, Type::Str);
+                            arg_ids.push(sid);
+                            continue;
+                        }
                         if matches!(a, AstNode::NoneLit) {
                             // Batch 624: `print(None)` literal face renders
                             // "None" (value representation stays 0).
@@ -10273,6 +10855,18 @@ call, no NULL-handle dereference).",
                                 .insert(nid, MirExpr::StringLit("None".to_string()));
                             self.type_map.insert(nid, Type::Str);
                             arg_ids.push(nid);
+                        } else if let AstNode::Var(x) = a {
+                            /* Batch 654: a NoneVar name (last top-level
+                               assignment was `x = None`) renders "None". */
+                            if self.none_vars_gen.contains(x) {
+                                let nid = self.next_id();
+                                self.exprs
+                                    .insert(nid, MirExpr::StringLit("None".to_string()));
+                                self.type_map.insert(nid, Type::Str);
+                                arg_ids.push(nid);
+                            } else {
+                                arg_ids.push(self.lower_expr(a));
+                            }
                         } else {
                             arg_ids.push(self.lower_expr(a));
                         }
@@ -10312,6 +10906,28 @@ call, no NULL-handle dereference).",
                         // printed raw element words.
                         // a BARE pair value (`print(e[0])`) — same spelling
                         // for a single pair.
+                        // Batch 647: a BigInt-typed value (literal or the
+                        // result of big arithmetic) renders its decimal value.
+                        if matches!(
+                            self.type_map.get(arg_id),
+                            Some(Type::Named(n, _)) if n == "BigInt"
+                        ) {
+                            let sid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_big_to_string".to_string(),
+                                args: vec![*arg_id],
+                                dest: sid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(sid, MirExpr::Var(sid));
+                            self.type_map.insert(sid, Type::Str);
+                            let f = if is_last { "println_str" } else { "print_str" };
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: f.to_string(),
+                                args: vec![sid],
+                            });
+                            continue;
+                        }
                         if let Some(Type::Tuple(ts)) = self.type_map.get(arg_id).cloned() {
                             if ts.len() == 2 {
                                 let kid = self.next_id_with_lit(matches!(ts[0], Type::Str) as i64);
@@ -11536,30 +12152,21 @@ call, no NULL-handle dereference).",
                         return id;
                     }
                     if is_map && arg_ids.len() == 2 {
-                        // `key in dict` — DictGet(key) != 0 (V1: value 0 is
-                        // indistinguishable from a missing key); DictGet keeps
-                        // the same codegen path as d[key] subscripting.
-                        let get_id = self.next_id();
+                        /* Batch 682b: `key in dict` probes the ENTRY TABLE
+                           via py_map_contains — the old DictGet(key) != 0
+                           answered False for a key whose VALUE is 0
+                           (`d["b"] = 0` stored 0, `0 != 0` false; batch 598
+                           fixed .get's existence check the same way, this is
+                           the `in` sibling). The key goes through the same
+                           map_str_key normalization the write side uses. */
                         let key_id = self.lower_map_key(arg_ids[1]);
-                        self.stmts.push(MirStmt::DictGet {
-                            map_id: arg_ids[0],
-                            key_id,
-                            dest: get_id,
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_map_contains".to_string(),
+                            args: vec![arg_ids[0], key_id],
+                            dest: id,
+                            type_args: vec![],
                         });
-                        self.exprs.insert(get_id, MirExpr::Var(get_id));
-                        self.type_map.insert(get_id, Type::I64);
-                        let zero_id = self.next_id();
-                        self.exprs.insert(zero_id, MirExpr::IntLit(0));
-                        self.type_map.insert(zero_id, Type::I64);
-                        // i64 != via BinaryOp (the verified comparison path)
-                        self.exprs.insert(
-                            id,
-                            MirExpr::BinaryOp {
-                                op: "!=".to_string(),
-                                left: get_id,
-                                right: zero_id,
-                            },
-                        );
+                        self.exprs.insert(id, MirExpr::Var(id));
                         self.type_map.insert(id, Type::Bool);
                         return id;
                     }
@@ -12222,6 +12829,30 @@ call, no NULL-handle dereference).",
                     && !matches!(receiver_ty.as_ref(), Some(Type::Named(n, _)) if n == "map")
                 {
                     let key_id = self.lower_map_key(arg_ids[1]);
+                    /* Batch 646: when the default is a STRING (the union
+                       shape — int values + a str default), the single dest
+                       cannot type both. Return the TAGGED CELL instead
+                       (zeta_map_get_default_cell) typed PyJson: the print
+                       face's existing PyJson handling renders scalars bare,
+                       so both the hit (int) and the miss (str) render as
+                       CPython does. */
+                    let dflt_is_str = matches!(
+                        self.type_map.get(&arg_ids[2]),
+                        Some(Type::Str)
+                    );
+                    if dflt_is_str {
+                        let dis = self.next_id_with_lit(1);
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_map_get_default_cell".to_string(),
+                            args: vec![arg_ids[0], key_id, arg_ids[2], dis],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map
+                            .insert(id, Type::Named("PyJson".to_string(), vec![]));
+                        return id;
+                    }
                     self.stmts.push(MirStmt::Call {
                         func: "map_get_default".to_string(),
                         args: vec![arg_ids[0], key_id, arg_ids[2]],
@@ -12532,6 +13163,34 @@ call, no NULL-handle dereference).",
                         .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
                     && arg_ids.len() == 3
                 {
+                    /* Batch 646: an ERASED map value type (I64/PyDynamic)
+                       with a STRING default is the genuine union — the hit
+                       (int) and the miss (str) cannot share one dest type.
+                       Return the TAGGED CELL (the runtime's per-key value
+                       tag types the hit; the default's kind types the miss)
+                       typed PyJson, rendered bare by the print face. */
+                    let erased_value_ty = matches!(
+                        &map_value_ty,
+                        Type::I64 | Type::PyDynamic
+                    );
+                    let str_default = matches!(
+                        self.type_map.get(&arg_ids[2]),
+                        Some(Type::Str)
+                    );
+                    if erased_value_ty && str_default {
+                        let key_id = self.lower_map_key(arg_ids[1]);
+                        let dis = self.next_id_with_lit(1);
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_map_get_default_cell".to_string(),
+                            args: vec![arg_ids[0], key_id, arg_ids[2], dis],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map
+                            .insert(id, Type::Named("PyJson".to_string(), vec![]));
+                        return id;
+                    }
                     let key_id = self.lower_map_key(arg_ids[1]);
                     self.stmts.push(MirStmt::Call {
                         func: "map_get_default".to_string(),
@@ -16148,6 +16807,21 @@ call, no NULL-handle dereference).",
                                 right: expr_id,
                             },
                         );
+                    } else if matches!(
+                        self.type_map.get(&expr_id),
+                        Some(Type::Named(n, _)) if n == "BigInt"
+                    ) {
+                        /* Batch 658: a BigInt handle negates through the
+                           big family — the i64 unary_minus bit-flips the
+                           POINTER, and the print face then derefs garbage
+                           (measured rc=139 on a loop-assigned big; the
+                           static shape only survived via the ctfe fold). */
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_big_neg".to_string(),
+                            args: vec![expr_id],
+                            dest,
+                            type_args: vec![],
+                        });
                     } else {
                         // Unary minus - use special function name to avoid conflict with binary minus
                         self.stmts.push(MirStmt::Call {
@@ -16614,16 +17288,18 @@ call, no NULL-handle dereference).",
                 if let Some(r) = receiver {
                     Self::collect_free_vars(r, bound, free);
                 }
-                // BATCH-659: a bare call `condition(m)` where `condition` is
-                // a local variable (not a declared function) — the callee
-                // name IS a free variable of the closure.  The old code
-                // assumed method names are always static symbols, but a
-                // variable held callable (lambda from tuple unpacking,
-                // function parameter, etc.) must be captured through the
-                // env so BATCH-294 can dispatch through zeta_call<N>.
-                if receiver.is_none() && !bound.contains(method.as_str()) {
+                // Batch 659 (mainline) / 662 (cleanup): a no-receiver CALLEE
+                // name is a free variable when it names a captured local
+                // lambda — `condition(m)` inside a comprehension filter
+                // captures `condition` by CALL, not by a Var read (t233:
+                // without this the closure body fell to the `_condition`
+                // ghost stub). Both lanes converged on the same fix. builtin/
+                // module callee names over-collect harmlessly: every capture
+                // consumer filters through name_to_id.
+                if receiver.is_none() && !bound.contains(method) {
                     free.insert(method.clone());
                 }
+                // args 递归
                 for a in args {
                     Self::collect_free_vars(a, bound, free);
                 }
@@ -17017,6 +17693,19 @@ call, no NULL-handle dereference).",
             child.type_map.insert(slot_id, cap_ty);
             child.name_to_id.insert(name.clone(), slot_id);
             child.captured_vars.insert(name.clone(), name_id);
+            // Batch 662: a captured name bound to a LAMBDA keeps its
+            // callability inside the closure — the comprehension filter
+            // `if condition(m)` (condition = a loop-unpacked lambda from
+            // the enclosing scope) otherwise falls to the `_condition`
+            // ghost stub at run time (t233's registered red). The
+            // ret-type entry rides along so the direct named call types
+            // its result.
+            if let Some(cfn) = self.closure_vars.get(name) {
+                child.closure_vars.insert(name.clone(), cfn.clone());
+                if let Some(rt) = self.closure_ret_tys.get(cfn) {
+                    child.closure_ret_tys.insert(cfn.clone(), rt.clone());
+                }
+            }
         }
         if crate::diagnostics::env_flag("ZETA_PROBE") {
             eprintln!("PROBE closure {} body stmts={}", closure_name,

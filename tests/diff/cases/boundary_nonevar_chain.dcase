@@ -1,0 +1,16 @@
+# @cat: str
+# @note: 批次 669 边界面专项（手写）：变量 None 窄切片（654 面）
+#@@ python
+x = None
+print(x)
+print(x == None)
+print(str(x))
+z = x
+print(z)
+#@@ zeta
+x = None
+print(x)
+print(x == None)
+print(str(x))
+z = x
+print(z)

@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=703106 #1）
+#@@ python
+print(-69.11 != -71.26)
+print(-(--12) < 24, -12 == -12)
+print(not 61)
+
+#@@ zeta
+print(-69.11 != -71.26)
+print(-(--12) < 24, -12 == -12)
+print(not 61)
+

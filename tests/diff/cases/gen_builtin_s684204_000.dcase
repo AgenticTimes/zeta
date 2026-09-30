@@ -1,0 +1,20 @@
+# @cat: container
+# @note: 随机内建函数（seed=684204 #0）
+#@@ python
+v = [-180, -997]
+print(sum([-180, -997]))
+print(min([-180, -997]))
+print(max([-180, -997]))
+print(abs(-997))
+print(round(-75 / 10))
+print(len([-180, -997]) + sum([-180, -997]))
+
+#@@ zeta
+v = [-180, -997]
+print(sum([-180, -997]))
+print(min([-180, -997]))
+print(max([-180, -997]))
+print(abs(-997))
+print(round(-75 / 10))
+print(len([-180, -997]) + sum([-180, -997]))
+

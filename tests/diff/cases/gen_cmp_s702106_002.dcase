@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=702106 #2）
+#@@ python
+print(22 <= 856 != 132)
+print(-32.74 >= 6.2)
+
+#@@ zeta
+print(22 <= 856 != 132)
+print(-32.74 >= 6.2)
+

@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=685106 #1）
+#@@ python
+print(-(-11) < -8, 11 == 11)
+print(not 59)
+print(841 != 392 != -69)
+
+#@@ zeta
+print(-(-11) < -8, 11 == 11)
+print(not 59)
+print(841 != 392 != -69)
+

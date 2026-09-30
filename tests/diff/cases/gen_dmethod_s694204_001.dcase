@@ -1,0 +1,14 @@
+# @cat: container
+# @note: 随机字典方法链（seed=694204 #1）
+#@@ python
+d = {"gamma": -24, "k1": 4, "z9": -51, "dd": -67}
+print(d.get("dd", 73))
+print(len(d))
+print(len(d))
+
+#@@ zeta
+d = {"gamma": -24, "k1": 4, "z9": -51, "dd": -67}
+print(d.get("dd", 73))
+print(len(d))
+print(len(d))
+

@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=713106 #0）
+#@@ python
+print(35.33 == 90.23)
+print(not -86)
+print(222 != 345 <= 675)
+
+#@@ zeta
+print(35.33 == 90.23)
+print(not -86)
+print(222 != 345 <= 675)
+

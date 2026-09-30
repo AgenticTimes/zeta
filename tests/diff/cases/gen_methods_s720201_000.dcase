@@ -1,0 +1,26 @@
+# @cat: container
+# @note: 随机容器方法链（seed=720201 #0）
+#@@ python
+v = [60, 2, 18]
+v.sort()
+print(len(v))
+print(v.pop())
+print(len(v))
+v.reverse()
+print(len(v))
+print(v.index(18))
+print(len(v))
+print(v)
+
+#@@ zeta
+v = [60, 2, 18]
+v.sort()
+print(len(v))
+print(v.pop())
+print(len(v))
+v.reverse()
+print(len(v))
+print(v.index(18))
+print(len(v))
+print(v)
+

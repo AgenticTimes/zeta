@@ -1,6 +1,6 @@
-// Batch 655: None 参与逻辑链后的打印——`3 and None` 在 CPython 打 None，
-// zeta 的 None 词法降级为 Lit(0)（BR-L09），print 对 AND/OR 选中 None 的
-// 静态路径替换为 StringLit("None")（t507）。
+// Batch 655 (mainline): None 参与逻辑链后的打印——`3 and None` 在 CPython
+// 打 None，print 对 AND/OR 选中 None 的静态路径替换为 StringLit("None")。
+// Batch 654 (cleanup): 变量携带 None 的窄切片同一夹具覆盖（x = None; print(x)）。
 x = None
 print(x == None)
 print(3 and None)

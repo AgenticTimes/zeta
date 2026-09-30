@@ -33,7 +33,10 @@
 // expect: [value=42]
 // expect: [ab]
 // expect: [hello!!!]
-// expect: [1.750000|42|str|end]
+// 批次 639（旁路 cleanup）改期望为 CPython 真值：空 spec＝repr（str 语义
+// ＝最短往返），旧期望 1.750000 是 .6f 旧方言金标准——用户已放行浮点
+// repr 层（str(f)/format 空 spec 对齐 CPython）。
+// expect: [1.75|42|str|end]
 // expect: [k=42][k=42]
 // expect: [Shape#3]
 // expect: [p=42q=42]
