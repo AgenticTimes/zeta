@@ -72,13 +72,20 @@ fn parse_param_full(input: &str) -> IResult<&str, (String, String, Option<AstNod
     // i64 param (V1: call sites with extra args coerce; real variadics need
     // arg-tuple support). The FIRST star is mandatory so this branch can
     // never shadow regular params.
+    //
+    // The trailing annotation (`**k: Any`, `*args: int`) must be consumed too:
+    // leaving `: Any` in the input makes the parameter list unable to close, so
+    // the whole definition fails and everything after it is dropped (W1002).
+    // Annotated and bare forms keep the same opaque i64 mapping — the annotation
+    // is discarded, not applied.
     let parse_star = map(
         (
             ws(tag("*")),
             opt(ws(tag("*"))),
             ws(parse_ident),
+            opt(preceded(ws(tag(":")), ws(parse_type))),
         ),
-        |(_, _, name)| (name, "i64".to_string(), None),
+        |(_, _, name, _)| (name, "i64".to_string(), None),
     );
 
     // Try regular parameter: `name: type` — PY-A / B3: type annotation optional
