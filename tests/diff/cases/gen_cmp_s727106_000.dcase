@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=727106 #0）
+#@@ python
+print(538 <= 57 < 299)
+print(377 < 732 == 511)
+
+#@@ zeta
+print(538 <= 57 < 299)
+print(377 < 732 == 511)
+
