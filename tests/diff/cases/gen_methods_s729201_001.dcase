@@ -1,0 +1,26 @@
+# @cat: container
+# @note: 随机容器方法链（seed=729201 #1）
+#@@ python
+v = [-61, -25, 57, -39, 85]
+v.reverse()
+print(len(v))
+print(v.index(85))
+print(len(v))
+v.reverse()
+print(len(v))
+print(v.pop())
+print(len(v))
+print(v)
+
+#@@ zeta
+v = [-61, -25, 57, -39, 85]
+v.reverse()
+print(len(v))
+print(v.index(85))
+print(len(v))
+v.reverse()
+print(len(v))
+print(v.pop())
+print(len(v))
+print(v)
+

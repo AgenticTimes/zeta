@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=729106 #0）
+#@@ python
+print(648 == 343 >= 917)
+print(not -9)
+
+#@@ zeta
+print(648 == 343 >= 917)
+print(not -9)
+
