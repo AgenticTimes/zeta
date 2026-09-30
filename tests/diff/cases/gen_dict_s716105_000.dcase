@@ -1,0 +1,18 @@
+# @cat: container
+# @note: 随机容器（seed=716105 #0）—— CPython 先验通过
+#@@ python
+d = {"dd": -366, "b": -281}
+print(len(d))
+print(d["b"])
+d["b"] = -146
+print(d["b"])
+print("missing" in d)
+
+#@@ zeta
+d = {"dd": -366, "b": -281}
+print(len(d))
+print(d["b"])
+d["b"] = -146
+print(d["b"])
+print("missing" in d)
+

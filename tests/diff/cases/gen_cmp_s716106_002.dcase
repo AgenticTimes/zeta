@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=716106 #2）
+#@@ python
+print(805 != 464 == 399)
+print(701 != 197 <= 548)
+print(not 26)
+print(not -11)
+
+#@@ zeta
+print(805 != 464 == 399)
+print(701 != 197 <= 548)
+print(not 26)
+print(not -11)
+
