@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=731106 #1）
+#@@ python
+print(-(-30) < 40, 30 == 30)
+print(not -99)
+print(-(-38) < 31, 38 == 38)
+print(921 >= 100 > 547)
+
+#@@ zeta
+print(-(-30) < 40, 30 == 30)
+print(not -99)
+print(-(-38) < 31, 38 == 38)
+print(921 >= 100 > 547)
+
