@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=709106 #1）
+#@@ python
+print(420 <= -63 > 17)
+print(697 > 741 == 966)
+
+#@@ zeta
+print(420 <= -63 > 17)
+print(697 > 741 == 966)
+
