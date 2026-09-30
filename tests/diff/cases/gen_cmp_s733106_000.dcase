@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=733106 #0）
+#@@ python
+print(345 < 16 <= 11)
+print(-58 >= 209 >= 401)
+
+#@@ zeta
+print(345 < 16 <= 11)
+print(-58 >= 209 >= 401)
+
