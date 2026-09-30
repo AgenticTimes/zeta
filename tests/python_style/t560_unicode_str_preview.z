@@ -1,0 +1,9 @@
+// 批次 744（corpus 扩扫战果）：identity_verification 的字符串预览用字节切片
+// `&value[..20]`——中文（多字节 UTF-8）字面量在第 18..21 字节处 panic（语料
+// strategy_prompt.py 实拍：QuantGPT 中文提示词）。修＝按字符数截断。本钉锁：
+// 中文字面量（>20 字节）赋值不 panic、程序照常输出。
+prompt = "你是 QuantGPT，一个专业的 AI 量化策略助手。你的任务是根据用户的自然语言描述，生成符合规范的 Python 量化交易策略代码。"
+print(prompt)
+print("tail-reached")
+// expect: 你是 QuantGPT，一个专业的 AI 量化策略助手。你的任务是根据用户的自然语言描述，生成符合规范的 Python 量化交易策略代码。
+// expect: tail-reached

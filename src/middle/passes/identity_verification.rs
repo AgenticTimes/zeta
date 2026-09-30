@@ -243,8 +243,17 @@ impl IdentityVerificationPass {
 
         for (pattern, description) in identity_patterns {
             if value.contains(pattern) {
+                // Batch 744: `&value[..20]` is a BYTE slice — a Chinese doc
+                // prompt (multi-byte UTF-8) panicked with "byte index 20 is
+                // not a char boundary" (strategy_prompt.py corpus member).
+                // Truncate on a CHAR boundary instead.
+                let preview: String = if value.chars().count() > 20 {
+                    format!("{}...", value.chars().take(20).collect::<String>())
+                } else {
+                    value.to_string()
+                };
                 self.warnings.push(format!("String literal '{}' appears to be an identity ({}) - consider using identity type", 
-                    if value.len() > 20 { format!("{}...", &value[..20]) } else { value.to_string() }, 
+                    preview, 
                     description));
                 break;
             }
