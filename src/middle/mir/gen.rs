@@ -2458,6 +2458,29 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             };
                             self.type_map.insert(existing, new_ty);
                         }
+                        /* Batch 738: nested-list accumulator edge — `out = []`
+                           pins the element I64; a later `out = out + [row]`
+                           (row a vec handle) stores handles that read back as
+                           pointers unless the slot's ELEMENT widens to the rhs
+                           element. Same "slot follows re-assignment" principle
+                           as the BigInt edge above: widening an I64 element to
+                           a real container type is always safe (the narrow
+                           I64 was the degenerate empty-literal guess), and
+                           narrowing back keeps flip-flop loops coherent. */
+                        if let (
+                            Some(Type::DynamicArray(le)),
+                            Some(Type::DynamicArray(re)),
+                        ) = (
+                            self.type_map.get(&existing).cloned(),
+                            self.type_map.get(&rhs_id).cloned(),
+                        ) {
+                            if *le == Type::I64 && *re != Type::I64 {
+                                self.type_map.insert(
+                                    existing,
+                                    Type::DynamicArray(re.clone()),
+                                );
+                            }
+                        }
                         // The env mirror for a module-global write is emitted by
                         // `mirror_module_global_writes`, once, over the finished
                         // body (batch 391).
@@ -5676,8 +5699,25 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 {
                     // PY-A: `[1, 2] + [3, 4]` — list concatenation. Previously
                     // the numeric adder ran on the two handles (garbage).
-                    let elem = match self.type_map.get(&left_id).cloned() {
-                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
+                    // Batch 737: the element type prefers the NON-degenerate
+                    // side — `out = []` types its element I64, so
+                    // `out + [[1, 2]]` used to keep I64 and every read of the
+                    // row printed a raw pointer. I64-vs-real matches take the
+                    // real element; true conflicts keep the left.
+                    let le = match self.type_map.get(&left_id).cloned() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => Some(*e),
+                        _ => None,
+                    };
+                    let re = match self.type_map.get(&right_id).cloned() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => Some(*e),
+                        _ => None,
+                    };
+                    let elem = match (le, re) {
+                        (Some(l), Some(r)) => {
+                            if l == Type::I64 && r != Type::I64 { r } else { l }
+                        }
+                        (Some(l), None) => l,
+                        (None, r) => r.unwrap_or(Type::I64),
                         _ => Type::I64,
                     };
                     self.stmts.push(MirStmt::Call {

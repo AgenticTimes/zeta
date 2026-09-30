@@ -23,6 +23,12 @@ def asarray(x) -> lt(vec, i64):
     # 列表已是 Vec 句柄；dtype= 未做。
     return zeta_identity(x)
 
+def array(x) -> lt(vec, i64):
+    # 批次 737（#213④c 前置）：`np.array` 与 asarray 同义（列表已是 Vec 句柄；
+    # dtype= 未做）。此前缺这个名字 ⇒ `np.array([1,2])` 落 undefined
+    # `_numpy__array` 链接失败。
+    return zeta_identity(x)
+
 def where(mask) -> lt(vec, i64):
     # 1 参索引形文档桩。`from numpy import where` / 3 参仍走 registry+F + MIR
     #（registered members win，避免 3 参落到本 1 参函数）。
@@ -50,9 +56,14 @@ def any(xs) -> bool:
             return True
     return False
 
-# stub: numpy.vstack
 def vstack(arrays):
-    return py_stub_abort("numpy.vstack")
+    # 批次 737（#213④c 摘桩）：输入元组/列表的每个元素（1-d 数组＝vec 句柄）
+    # 依序成为输出的行——返回行列表。numpy 的 2-d 打印形是它自己的 repr，
+    # zeta 侧行列表的 print 形不同（另登表示面），但 len/下标/行迭代全可用。
+    out: lt(vec, lt(vec, i64)) = []
+    for row in arrays:
+        out = out + [row]
+    return out
 
 # stub: numpy.log
 def log(x) -> i64:

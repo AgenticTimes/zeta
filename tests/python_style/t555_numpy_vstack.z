@@ -1,0 +1,18 @@
+// 批次 737（#213④c 摘桩）：numpy.vstack 与 np.array 库面实现。
+// numpy.z 新增 def array（与 asarray 同义：列表已是 vec 句柄；此前缺名字
+// ⇒ undefined _numpy__array 链接失败）与 vstack 真实现（输入元组的每元素
+// 依序成为行——原先 py_stub_abort）。len/双下标/行迭代值语义全可用。
+// 边界（另登）：行的 print repr＝动态句柄打裸指针（无注解函数返回型推断
+// 660 家族残口 §五-2，值访问不受影响）；本钉只锁值语义形状。
+import numpy as np
+a = np.array([1, 2])
+b = np.array([3, 4])
+r = np.vstack((a, b))
+print(len(r))
+print(r[0][0])
+print(r[1][1])
+print(len(r[0]))
+// expect: 2
+// expect: 1
+// expect: 4
+// expect: 2
