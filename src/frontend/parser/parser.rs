@@ -80,7 +80,7 @@ pub fn parse_ident(input: &str) -> IResult<&str, String> {
         |s: &str| {
             ![
                 "let", "mut", "if", "else", "for", "in", "loop", "while", "unsafe", "return",
-                "break", "continue", "fn", "concept", "enum", "struct", "use",
+                "break", "continue", "concept", "enum", "struct", "use",
                 "extern", "dyn", "box", "as", "true", "false", "comptime", "const", "async", "pub",
                 "match", "mod", "defer",
                 // PY-A: `where` is deliberately NOT reserved — Python uses it as
@@ -97,6 +97,17 @@ pub fn parse_ident(input: &str) -> IResult<&str, String> {
                 // tried before the expression path in the statement
                 // alternation, and `impl` followed by an identifier + `{` is not
                 // a valid expression statement.
+                // Batch 661: `fn` is deliberately NOT reserved — Python passes
+                // callbacks under exactly this name (`def call(fn): fn()`,
+                // `for _, _, fn in tasks: fn(self.context)` —
+                // jq_shim.py:1006). Reserving it made every statement that READ
+                // the variable fail, which dropped the enclosing definition AND
+                // the rest of the file (W1002; measured: probe 54 lines, class
+                // shape 17 lines, whole program silently printing nothing).
+                // Zeta's `fn name() { … }` declaration still parses: the item
+                // parser matches `tag("fn")` literally, and the top-level
+                // DEFINITION_KEYWORDS guard now treats `fn` as a keyword only in
+                // declaration position (`fn_is_decl`).
                 
                 // PY-A: `type` is deliberately NOT reserved — Python's builtin
                 // `type(x)` is common and reserving the word made the whole

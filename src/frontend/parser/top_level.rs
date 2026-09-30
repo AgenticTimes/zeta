@@ -1797,10 +1797,7 @@ fn parse_top_level_item(input: &str) -> IResult<&str, AstNode> {
             // `if`/`for`/`while`/`match`/`try`/`with` are NOT in this list:
             // module-level statements are legitimate and must still reach
             // `parse_stmt`.
-            const DEFINITION_KEYWORDS: &[&str] = &[
-                "def", "class", "fn", "struct", "enum", "impl", "trait", "concept", "macro",
-                "mod", "const", "pub",
-            ];
+            // (The list itself is module-level — `ends_on_item_keyword` needs it.)
             // `impl` is a definition keyword only when it begins an impl BLOCK
             // (`impl Type { … }`). Now that `impl` may be an ordinary variable
             // (`impl = strategy._make()`), `impl = …` / `impl.foo()` must still
@@ -1812,9 +1809,21 @@ fn parse_top_level_item(input: &str) -> IResult<&str, AstNode> {
                     input[4..].trim_start().chars().next(),
                     Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '<'
                 );
+            // Batch 661: same carve-out for `fn`. Python uses it as a plain
+            // callback variable, so `fn(x)` / `fn = x` must reach `parse_stmt`;
+            // only `fn name(…)` (or `fn<…>`) is a declaration keyword whose
+            // failure should stop `many0` instead of splitting the item.
+            let fn_is_decl = input.starts_with("fn")
+                && !input[2..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                && matches!(
+                    input[2..].trim_start().chars().next(),
+                    Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '<'
+                );
             let is_def_kw = DEFINITION_KEYWORDS
                 .iter()
-                .filter(|kw| **kw != "impl" || impl_is_block)
+                .filter(|kw| {
+                    (**kw != "impl" || impl_is_block) && (**kw != "fn" || fn_is_decl)
+                })
                 .any(|kw| {
                     input.starts_with(kw)
                         && !input[kw.len()..]
@@ -1827,6 +1836,40 @@ fn parse_top_level_item(input: &str) -> IResult<&str, AstNode> {
             crate::frontend::parser::stmt::parse_stmt(input)
         }
     }
+}
+
+/// Top-level definition keywords, shared by `parse_top_level_item`'s guard and
+/// `ends_on_item_keyword` below.
+const DEFINITION_KEYWORDS: &[&str] = &[
+    "def", "class", "fn", "struct", "enum", "impl", "trait", "concept", "macro",
+    "mod", "const", "pub",
+];
+
+/// True when the text an entry consumed ENDS on a line consisting of one
+/// definition keyword and nothing else (`!!!\n\nfn` — the entry began on the
+/// junk line and stopped right after the NEXT item's keyword).
+///
+/// How that is reachable: `fn`, `impl` and `type` are deliberately ordinary
+/// identifiers for Python sources (`parser.rs::parse_ident`), so a junk
+/// expression can run past a line break and absorb the keyword of the
+/// following declaration. The leftover then starts at `second() -> i64 {`, which
+/// no rule accepts, so that definition is buried — W1003 under recovery, W1002
+/// truncation under the default path. Measured on the batch-661 binary against
+/// `tests/python_style/t259_parse_sync_recover.z`: `fn second` never reached the
+/// AST and the link failed on `_second`.
+///
+/// Rejecting the entry instead keeps the boundary where the author wrote it: the
+/// junk item fails at its own line, and the keyword line survives for the next
+/// parse attempt (the same reasoning that put `def` in the guard above).
+fn ends_on_item_keyword(consumed: &str) -> bool {
+    let Some(nl) = consumed.rfind('\n') else {
+        return false;
+    };
+    let last = consumed[nl + 1..].trim_end();
+    nl > 0
+        && !last.is_empty()
+        && consumed[nl + 1..].starts_with(last)
+        && DEFINITION_KEYWORDS.iter().any(|kw| *kw == last)
 }
 
 /// One top-level entry: a `use`, an item, or an EMPTY statement (`;`).
@@ -1847,12 +1890,19 @@ fn parse_top_level_item(input: &str) -> IResult<&str, AstNode> {
 /// Shared by the file loop and both `mod { … }` bodies (and the opt-in recovery
 /// loop) so those paths cannot disagree about the same input.
 fn parse_top_level_entry(input: &str) -> IResult<&str, Vec<AstNode>> {
-    alt((
+    let (rest, nodes) = alt((
         parse_use_statement,
         map(parse_top_level_item, |node| vec![node]),
         value(vec![], tag(";")),
     ))
-    .parse(input)
+    .parse(input)?;
+    if ends_on_item_keyword(&input[..input.len() - rest.len()]) {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Eof,
+        )));
+    }
+    Ok((rest, nodes))
 }
 
 pub fn parse_zeta(input: &str) -> IResult<&str, Vec<AstNode>> {

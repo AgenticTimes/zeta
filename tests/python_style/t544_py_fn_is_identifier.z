@@ -1,0 +1,39 @@
+// 批次 661（主线）：共享关键字表把 `fn` 当保留字 ⇒ Python 源里任何读取 `fn`
+// 变量的语句让所在顶层项连同文件剩余部分整体丢弃（W1002「tail-drop」族）。
+// 改前实拍：本文件只打出第一行之前已解析的内容，`fn` 之后的全部语句静默消失。
+// 三形都来自实测：① 回调参数裸调用（探针 _drv_probe661 的 step 形状）、
+// ② 模块级 `fn` 赋值读回（jq_shim.py:1006 附近 `for _, _, fn in tasks`）、
+// ③ 类方法体内 `fn` 解包 + 裸调用（jq_shim.py:1003-1006）。
+// 除名先例：`where`（批次 328）、`impl`（PY-A）—— 声明路径走 tag("fn") 字面量，
+// 不依赖 parse_ident，所以 `fn foo() {}` 的 .z 出码不受影响（official 套件核对）。
+// 本批外实测（不入本夹具）：类方法里 `for name, fn in tasks: print(name, fn)` 的
+// `name` 打堆地址＝#199「tuple 无运行期表示」，与本批的截断族是两个独立病因，
+// 故第三形改为不解包的 `for fn in tasks`。
+def call_twice(fn):
+    fn()
+    fn()
+
+
+def shout():
+    print("shout")
+
+
+call_twice(shout)
+
+fn = 4
+print("fn read", fn)
+
+
+class Runner:
+    def go(self, tasks):
+        for fn in tasks:
+            print("task", fn)
+
+
+Runner().go([7])
+print("tail-reached")
+// expect: shout
+// expect: shout
+// expect: fn read 4
+// expect: task 7
+// expect: tail-reached
