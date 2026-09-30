@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=720106 #1）
+#@@ python
+print(833 >= 19 > 66)
+print(19.46 > -30.24)
+
+#@@ zeta
+print(833 >= 19 > 66)
+print(19.46 > -30.24)
+
