@@ -240,4 +240,83 @@ G.5e 符号注册表（= C1 SymbolRegistry）
 
 **账务**：代码 `f3fa96f2` → 代录 `9eef3f27` → 本记录批（＋worktree 台账行）。下一次全量门禁＝**批次 670**。存件 `/tmp/b660/`（`gate_full.log`、`ab660.sh`/`ab660.tsv`/`runs/*`、`compile_{pre,post}.log`、`diag_{pre,post}.txt`、`compile_diag.tsv`、`anchors_{head,post}.txt`＋两份漂移集合、`t660.z`、`bless.py`、`pre_build.log`、`pre_wt/`）。
 
-（暂空——下一批从 409 §十一 (a)①② 的隔离复现开始，记录格式沿用 roadmap.md 的四段证据纪律。）
+（暂空——下一批从 **#257 的两条分歧归因** 开始，记录格式沿用 roadmap.md 的四段证据纪律。）
+
+### 批次 661（2026-09-30，主线）：`fn` 从 Python 源的保留字表摘掉 —— 收 W1002 整文件截断（2.2／共享关键字表）
+
+**pyramid 层归位＝2.2 前端解析**（`parser.rs::parse_ident` 的共享保留字表），缺陷族＝**W1002 静默截断**（尾丢），harness 任务＝**#258**。顺带在同一改动面收掉一条本批中途自己引入的回归（#258 的 ②）。
+
+**一、根因（不是症状）**
+
+`parse_ident`（`src/frontend/parser/parser.rs:83`）把 `fn` 列为保留字 ⇒ 任何**读取**名为 `fn` 的变量的语句（`fn(x)`、`fn = x`、`for fn in tasks:`）在词法层就失败。顶层是 `many0(parse_top_level_entry)`，第一项失败即停止 ⇒ 该定义**连同其后整个文件**被丢弃，而 `ensure_fully_parsed`（`src/main.rs:478-502`）只发 W1002 警告、程序照旧 rc=0 编译。与 `where`（批次 328）、`impl`、`type`（PY-A）同一族、同一个理由、同一个修法形状：**保留字只在声明位置认**。
+
+**二、最小复现与改前实拍**
+
+- 夹具 `tests/python_style/t544_py_fn_is_identifier.z`（三形：`def call_twice(fn): fn(); fn()`＋模块级 `fn = 4`＋类别方法里 `for fn in tasks`，尾行 `print("tail-reached")` 作截断哨）。
+- 改前二进制（`target/release/zetac.pre661`，md5 `b7c061c482a35d8f0f8289acea03a14b`）实拍为红：`tests/python_style/t544_py_fn_is_identifier.z:12: 33 line(s) … were NOT parsed`（存件 `/tmp/b661/err_pre661.txt`）；改后 `zetac` md5 `4c3892a6c0a0bcc6f1f16a45abe11bc6` 下 5 行 expect 逐字命中。
+- 语料成员实拍：`strategies/code/_drv_probe661.py:12` 改前 W1002 **54 行**（`/tmp/b661/probe_pre.err`）⇒ 改后该文件**不再打 W1002**（`/tmp/b661/probe_post.err`）。
+
+**三、位移 A/B＝−520 行（正证据，语料全项目口径）**
+
+两颗二进制同在仓内 `target/release/`（坑 52/68）；表＝`/tmp/b661/w1002_ab.txt`、合计行 `/tmp/b661/w1002_ab.log`（脚本 `/tmp/b661/w1002_ab.sh`，cwd `~/source/quant/REasyQuant`）。分母＝该仓 310 个 `.py`（`-not -path` 排除 `.venv` 等，**不是**门禁 corpus 步的 40 文件口径）里的 8 个截断成员：
+
+| 成员 | pre | post |
+|---|---|---|
+| `tests/test_data_service_facade.py` | 35 | **0** |
+| `tests/test_expression_facade.py` | 46 | **0** |
+| `tests/test_expression_parser.py` | 407 | **0** |
+| `tests/test_feishu_notifier.py` | 210 | **178** |
+| `tests/test_jq_shim.py` | 571 | 571 |
+| `backend/datasrc/split_factors.py` | 97 | 97 |
+| `backend/datasrc/dividend_factors.py` | 190 | 190 |
+| `backend/engines/jq_shim.py` | 1092 | 1092 |
+| **合计** | **2648** | **2128**（**−520**） |
+
+⇒ 4 个成员改善、**0 个变差**；其余 4 个截断成员的病因不是 `fn`（另登 #259）。
+
+**四、本批中途引入并已收口的回归（#258②）**
+
+摘掉保留字后，垃圾表达式可以**跨过换行**吃掉下一项的声明关键字：`!!!\n\nfn second() {…}` 读成 `not not not fn`，`fn second` 就此埋葬。实测在册夹具 `t259_parse_sync_recover.z`（`// env: ZETA_PARSE_RECOVER=1`）：
+
+- pre＝`W1003` 报在**第 9 行**、打印 `1 2`；
+- 只改 `fn` 的中转二进制（`c9925b4df09202177cbeaf379c7ac773`）＝`W1003` 推到**第 11 行**、`Undefined symbols: "_second"` / `Linking failed`；
+- 修法＝`ends_on_item_keyword`（`top_level.rs`）识别「消费文本正好止于单独一行定义关键字」的项并**拒绝该入口项**（边界回到作者写的换行处），`DEFINITION_KEYWORDS` 同时提到模块作用域供两处共用。
+- 复验＝终态二进制下 t259 行为与 pre **逐字相同**（W1003 在第 9 行、`1 2` 照打）。
+
+**五、快门禁（committed 树 `72ed9fac`，二进制 `4c3892a6…`，`/tmp/b661/gate3.log`）**
+
+| 步 | 读数 | 与 660 在册底对比 |
+|---|---|---|
+| official | compile **194/194**、compile+link **191/194** | 相同（缺运行时绑定仍 3 个：`integration_all_features`、`quantum_basic`、`selfhost`，`/tmp/zeta_official_link.txt`） |
+| 诊断面 official | **5 文件 / 21 行** | 相同 |
+| 诊断面 python_style | **273 行 / 128 文件** | 相同 |
+| python_style | **427 passed / 0 failed / 4 known-fail / 0 xpass** | 660＝426/0/4/0 ⇒ **＋1＝本批新夹具 t544**，其余格不动 |
+| dyn_binding / comment_drift | 4 条断言不一致 0 / 复述 0 处 | 相同 |
+| **GATE_RC** | **0** | 相同 |
+
+**corpus 步另有一句（工具项，不入本批损害）**：`tools/corpus_baseline.py:19` 的 `timeout=30` 是**硬编码**（`ZETA_CORPUS_TIMEOUT` 对它无效，实测抬 120 仍按 30 抛 `TimeoutExpired`）。用同一份清单与判定、把预算抬到 180s 的旁路脚本（`/tmp/b661/corpus_run.py`）实测 **42/42 解析通过、W1002 丢行合计 0**；其中 2 个是我自己塞进语料目录的探针（`_drv_probe661.py`、`_drv_probe661b.py`，两支都是 OK／W1002=0），删除后**分母回到 40**，与 660 在册的「40 文件、40/40」一致。越界的是 4 个大文件（`jq_wufu_local` 25.5s、`wufu_bt` 35.0s、`wufu_v1` 35.3s、`wufu_v2` 33.4s），**不是本批推过去的**：对 `wufu_bt`/`wufu_v1` 两颗二进制各 2 发计时＝pre **27.8 / 27.3 / 31.0 / 30.9**、post **29.4 / 30.6 / 31.0 / 30.5**（`/tmp/b661/tt.log`）⇒ **改前那一侧也越 30s**，是同一侧方差卡在预算边界（在册坑 84：同侧方差不入账）。⇒ 登工具项 **#260**。
+
+**六、锚点面＝零重绑义务**：漂移 **68**／新 **0**／消失 **4**（基线 306 条），与 660 的 `/tmp/b660/anchors_post.txt` 逐项核过＝两份 `[漂移]` **集合逐字相同**（`diff` 为空），且 68 条里没有一条落在 `src/frontend/parser/**`（本批唯一 `.rs` 改动面）⇒ 本批 `src/**` 净 +61 行（+69/−8）没推离任何引用。
+
+**七、#257 的第一份读数（本批只量、未归因）**
+
+探针 5 步在改后二进制上第一次**真跑到**（改前它整段被 W1002 丢掉）。cwd `~/source/quant/REasyQuant`、`REPLAYQUANT_LOCAL=1`，存件 `/tmp/b661/257_{zeta,oracle}.{out,err}`：
+
+| 步 | zeta（`4c3892a6`） | CPython oracle |
+|---|---|---|
+| 1 `read_parquet` | OK，`rows 892 cols 9` | OK，同 |
+| 2 赋列 | OK，`after assign rows 892` | OK，同 |
+| 3 `to_datetime` | OK，`date coerced` | OK，同 |
+| 4 `load_metadata` | OK 但 **`meta size 0`** | OK，**`meta size 2`** |
+| 5 `validate_and_repair_stock_ohlcv` | **`RAISE … 1`** | OK，**`repaired rows 892`** |
+
+⇒ 两条分歧：① 缓存元数据读成空（stderr 另有 `load_metadata failed for data/stocks/000300_XSHG.parquet: 1`）；② 清洗函数抛异常、异常载荷是 `1`。同一趟 stderr 还有一句线索：`zt_col_as_text was called on a value that is not a dict (handle=0x104d86e47, first word=7881706469483372868)`，而 `7881706469483372868` 小端 8 字节解码＝ ASCII **`DataFram`**（`python3 -c` 实测）⇒ 那个接收者是**类名字符串**而不是 map。**归因未做**，留在 #257。
+
+**八、登记的独立缺陷（本批刻意未动，成员数已实测）**
+
+1. **`m6` 形仍截断**＝`def t(cb: dyn): for x in [1]: cb(x)` 之后的 `print("z")` 被丢（`/tmp/b661/m6.py` 改后 W1002 **7 行**；同批兄弟形 `m1`–`m5` 全 0）⇒ 不是 `fn` 那条词法闸门，另一条成因（#261）。
+2. **保留字族的剩余成员＝10 名**：同名探针在终态二进制上仍各丢 2 行＝`mut let pub mod use trait struct enum dyn box`；已收口为 0 的 10 名＝`fn impl crate ref where self super is do pass`（`/tmp/b661/kw_*.py` × `target/release/zetac` 逐名实测）⇒ 下一批按这张表挑损害量最大的名（#262）。
+3. **4 个语料成员仍截断且成因不是 `fn`**（571／190／97／1092 行，`/tmp/b661/w1002_ab.txt`）（#259）。
+4. **corpus 工具的 30s 硬编码预算**（#260）。
+
+**账务**：代码 `72ed9fac`（`parser.rs` +12/−1、`top_level.rs` +57/−7、`t544` 新夹具 +39/−0）→ 本记录批。下一次全量门禁＝**批次 670**。存件 `/tmp/b661/`（`zetac.pre661` 备份、`gate.log`/`gate2.log`/`gate3.log`、`w1002_ab.sh`/`w1002_ab.txt`/`w1002_ab.log`、`corpus_run.py`/`corpus_post_final.{log,txt}`、`tt.sh`/`tt.log`、`err_pre661.txt`、`probe_{pre,post}.err`、`t259_*` 两颗对照、`257_{zeta,oracle}.{out,err}`、`kw_*.py`、`m1–m6.py`、`corpus_files.txt`(310)/`corpus_fn_files.txt`(10)/`ab_files.txt`(8)）。语料目录里我那两支探针已删（`_drv_probe661.py` 文本存 `/tmp/b661/probe661_kept.py`，#257 复用）。
