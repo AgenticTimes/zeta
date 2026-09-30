@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=707106 #2）
+#@@ python
+print(not 94)
+print(211 != -22 <= -2)
+
+#@@ zeta
+print(not 94)
+print(211 != -22 <= -2)
+
