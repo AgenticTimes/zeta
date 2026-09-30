@@ -2081,6 +2081,134 @@ fn splice_main_guard_body(
     }
 }
 
+/// Batch 739 (裁定 2): rename the user's `main` to `__user_main__` and point
+/// every `main()` call/read in `node`'s tree at it. Used by the entry path of
+/// `synthesize_implicit_main` when a script defines `main` AND has module
+/// statements: CPython's module body IS the program and `main` is an ordinary
+/// function — the old merge (statements prepended into `main`) made any
+/// `print(main())` in the module body self-recursive (rc=139, measured).
+pub fn rename_user_main(node: &mut AstNode) {
+    match node {
+        AstNode::Var(v) if v == "main" => *v = "__user_main__".to_string(),
+        AstNode::Call { receiver, method, args, .. } => {
+            if receiver.is_none() && method == "main" {
+                *method = "__user_main__".to_string();
+            }
+            if let Some(r) = receiver.as_mut() {
+                rename_user_main(r);
+            }
+            for a in args {
+                rename_user_main(a);
+            }
+        }
+        AstNode::Assign(lhs, rhs) => {
+            rename_user_main(lhs);
+            rename_user_main(rhs);
+        }
+        AstNode::AssignOp { target, value, .. } => {
+            rename_user_main(target);
+            rename_user_main(value);
+        }
+        AstNode::BinaryOp { left, right, .. } => {
+            rename_user_main(left);
+            rename_user_main(right);
+        }
+        AstNode::UnaryOp { expr, .. } => rename_user_main(expr),
+        AstNode::Return(e) => rename_user_main(e),
+        AstNode::If { cond, then, else_ } => {
+            rename_user_main(cond);
+            for st in then {
+                rename_user_main(st);
+            }
+            for st in else_ {
+                rename_user_main(st);
+            }
+        }
+        AstNode::For { pattern, expr, body, else_body } => {
+            rename_user_main(pattern);
+            rename_user_main(expr);
+            for st in body {
+                rename_user_main(st);
+            }
+            for st in else_body {
+                rename_user_main(st);
+            }
+        }
+        AstNode::While { cond, body, else_body } => {
+            rename_user_main(cond);
+            for st in body {
+                rename_user_main(st);
+            }
+            for st in else_body {
+                rename_user_main(st);
+            }
+        }
+        AstNode::Loop { body } => {
+            for st in body {
+                rename_user_main(st);
+            }
+        }
+        AstNode::ExprStmt { expr } => rename_user_main(expr),
+        AstNode::Block { body } => {
+            for st in body {
+                rename_user_main(st);
+            }
+        }
+        AstNode::Subscript { base, index } => {
+            rename_user_main(base);
+            rename_user_main(index);
+        }
+        AstNode::Call { receiver: _, .. } => {}
+        _ => {}
+    }
+}
+
+/// Batch 739: does this statement tree CALL or reference `main` (receiver-none
+/// `Call { method: "main" }` or a bare `Var("main")` value read)? The new
+/// entry shape (module statements ARE the program, user main renamed) must
+/// only fire when the module body actually invokes main — zeta-native scripts
+/// whose module level merely initializes globals (t424 family) keep the merge
+/// path (init globals, then run main as the entry).
+pub fn module_tree_calls_main(node: &AstNode) -> bool {
+    match node {
+        AstNode::Var(v) if v == "main" => true,
+        AstNode::Call { receiver, method, args, .. } => {
+            if receiver.is_none() && method == "main" {
+                return true;
+            }
+            receiver.as_ref().is_some_and(|r| module_tree_calls_main(r))
+                || args.iter().any(module_tree_calls_main)
+        }
+        AstNode::Assign(lhs, rhs) => module_tree_calls_main(lhs) || module_tree_calls_main(rhs),
+        AstNode::AssignOp { target, value, .. } => {
+            module_tree_calls_main(target) || module_tree_calls_main(value)
+        }
+        AstNode::BinaryOp { left, right, .. } => {
+            module_tree_calls_main(left) || module_tree_calls_main(right)
+        }
+        AstNode::UnaryOp { expr, .. } => module_tree_calls_main(expr),
+        AstNode::Return(e) => module_tree_calls_main(e),
+        AstNode::If { cond, then, else_ } => {
+            module_tree_calls_main(cond)
+                || then.iter().any(module_tree_calls_main)
+                || else_.iter().any(module_tree_calls_main)
+        }
+        AstNode::While { cond, body, .. } => {
+            module_tree_calls_main(cond) || body.iter().any(module_tree_calls_main)
+        }
+        AstNode::For { expr, body, .. } => {
+            module_tree_calls_main(expr) || body.iter().any(module_tree_calls_main)
+        }
+        AstNode::Loop { body } => body.iter().any(module_tree_calls_main),
+        AstNode::ExprStmt { expr } => module_tree_calls_main(expr),
+        AstNode::Block { body } => body.iter().any(module_tree_calls_main),
+        AstNode::Subscript { base, index } => {
+            module_tree_calls_main(base) || module_tree_calls_main(index)
+        }
+        _ => false,
+    }
+}
+
 /// Marks a `main` that carries a **module body**: the one this function
 /// synthesizes when the source declared no entry function, and the user's
 /// `main` when module statements got prepended into it. `MirGen` otherwise ends
@@ -2304,6 +2432,34 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
     // module statements as the import-time initializer, so merging them into
     // `main` would execute the whole entry point on every import.
     let module_ctx = parsing_imported_module();
+    // Batch 739 (裁定 2): ENTRY script + user `main` + module statements that
+    // are not merely a `__main__` guard ⇒ the module statements become the
+    // PROGRAM (entry main's body) and the user `main` is renamed
+    // `__user_main__` (an ordinary function the statements call). The old
+    // merge prepended the statements INTO main, so a `print(main())` in them
+    // self-recursive (rc=139). Zeta-native `fn main(){…}` files have an empty
+    // statement list here and keep the current entry-merges-with-nothing
+    // behavior.
+    let module_stmt_worthy = |a: &AstNode| -> bool {
+        if is_main_guard(a) {
+            return true;
+        }
+        match a {
+            AstNode::Block { body } => body
+                .iter()
+                .any(|n| !is_definition(n) || is_main_guard(n)),
+            other => !is_definition(other),
+        }
+    };
+    let new_entry_shape = has_main
+        && !module_ctx
+        && asts.iter().any(|a| {
+            module_stmt_worthy(a)
+                && match a {
+                    AstNode::Block { body } => body.iter().any(module_tree_calls_main),
+                    other => module_tree_calls_main(other),
+                }
+        });
     for a in asts {
         match a {
             // PY-A: a class desugars to [struct, impl, ctor] wrapped in a
@@ -2313,6 +2469,14 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
                     if is_definition(&node) {
                         out.push(node);
                     } else {
+                        if new_entry_shape {
+                            // Batch 739: keep EVERYTHING — guards stay runtime
+                            // checks (true at entry) and bare `main()` calls
+                            // stay calls (they run the renamed user main).
+                            collect_module_global(&node, &mut module_globals);
+                            main_body.push(node);
+                            continue;
+                        }
                         if has_main && is_bare_main_call(&node) {
                             continue;
                         }
@@ -2328,6 +2492,11 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
             }
             other if is_definition(&other) => out.push(other),
             stmt => {
+                if new_entry_shape {
+                    collect_module_global(&stmt, &mut module_globals);
+                    main_body.push(stmt);
+                    continue;
+                }
                 // BATCH-290: the `if __name__ == "__main__":` guard now SURVIVES
                 // parsing as an If (stmt.rs no longer unwraps it). When this file
                 // defines `main`, its module statements get PREPENDED into that
@@ -2383,6 +2552,44 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
                 ret: "i64".to_string(),
                 body: main_body,
                 attrs: Vec::new(),
+                ret_expr: None,
+                single_line: false,
+                doc: String::new(),
+                pub_: false,
+                async_: false,
+                const_: false,
+                comptime_: false,
+                where_clauses: Vec::new(),
+            });
+            return out;
+        }
+        // Batch 739 (裁定 2): the module statements ARE the program — the user
+        // `main` is an ordinary function under `__user_main__`, and the entry
+        // main's body is exactly the module statements (calls to `main` in them
+        // resolve to the renamed function). CPython prints "in-main"/7 once for
+        // `def main(){…} print(main())`; the old merge self-recursed.
+        if new_entry_shape {
+            for node in &mut out {
+                if let AstNode::FuncDef { name, body, .. } = node {
+                    if name == "main" {
+                        *name = "__user_main__".to_string();
+                        for st in body {
+                            rename_user_main(st);
+                        }
+                    }
+                }
+            }
+            for st in &mut main_body {
+                rename_user_main(st);
+            }
+            out.push(AstNode::FuncDef {
+                name: "main".to_string(),
+                generics: Vec::new(),
+                lifetimes: Vec::new(),
+                params: Vec::new(),
+                ret: "i64".to_string(),
+                body: main_body,
+                attrs: vec![PY_ENTRY_ATTR.to_string()],
                 ret_expr: None,
                 single_line: false,
                 doc: String::new(),

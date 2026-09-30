@@ -1,0 +1,9 @@
+// 批次 739：guard 形（`if __name__ == "__main__": main()`）在新入口合成下
+// 保留为运行时检查（入口处恒真）→ 调改名后的 __user_main__ 一次。CPython
+// 惯例；旧行为也是一次（guard 被拼接、裸调用被删），钉住防回归。
+def main() -> i64:
+    print("go-main")
+    return 7
+if __name__ == "__main__":
+    main()
+// expect: go-main
