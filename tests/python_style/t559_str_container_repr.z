@@ -1,0 +1,12 @@
+// 批次 742（#213④b 半收）：str() 对容器走既有 repr 通道——dict 走
+// py_json_dumps_map（print 面同源），列表本就有 [1, 2] 文本化。元组的
+// str() 需通用变长 repr runtime（py_print_pair 是 dict.items() 专用）＝
+// #213④b 余项续作，本钉不含。
+d = {"a": 1}
+print(str(d))
+xs = [1, 2]
+print(str(xs))
+print(str(d) == '{"a": 1}')
+// expect: {"a": 1}
+// expect: [1, 2]
+// expect: True

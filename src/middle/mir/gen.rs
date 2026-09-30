@@ -4163,6 +4163,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         let func = match self.type_map.get(&id).cloned() {
             Some(Type::F64) | Some(Type::F32) => "to_string_f64",
             Some(Type::Bool) => "to_string_bool",
+            // Batch 742 (#213④b): containers with an EXISTING repr channel
+            // route through it — the raw handle used to go through
+            // to_string_i64 and str(d) printed a pointer. Tuples need a
+            // general-arity repr runtime that doesn't exist yet (py_print_pair
+            // is the dict.items() k/v channel) — registered as the remaining
+            // ④b work.
+            Some(Type::Named(n, _)) if n == "map" || n == "dict" => "py_json_dumps_map",
+            Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)) => "py_json_dumps_vec",
             _ => "to_string_i64",
         };
         let nid = self.next_id();
