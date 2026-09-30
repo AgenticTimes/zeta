@@ -1,0 +1,16 @@
+# @cat: container
+# @note: 随机字典方法链（seed=725204 #0）
+#@@ python
+d = {"beta": 83, "gamma": -56, "dd": 39}
+d["k1"] = -82
+print(d["k1"])
+print("dd" in d)
+print(len(d))
+
+#@@ zeta
+d = {"beta": 83, "gamma": -56, "dd": 39}
+d["k1"] = -82
+print(d["k1"])
+print("dd" in d)
+print(len(d))
+

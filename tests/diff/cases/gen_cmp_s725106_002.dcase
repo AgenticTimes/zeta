@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=725106 #2）
+#@@ python
+print(922 != 885 >= 428)
+print(not 99)
+print(22.95 > -23.44)
+print(-(--13) < -17, -13 == -13)
+
+#@@ zeta
+print(922 != 885 >= 428)
+print(not 99)
+print(22.95 > -23.44)
+print(-(--13) < -17, -13 == -13)
+
