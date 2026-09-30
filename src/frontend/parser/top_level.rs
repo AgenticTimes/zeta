@@ -1803,38 +1803,53 @@ fn parse_top_level_item(input: &str) -> IResult<&str, AstNode> {
             // (`impl = strategy._make()`), `impl = …` / `impl.foo()` must still
             // reach the statement parser — otherwise top-level uses fail while
             // the same use inside a function body works.
-            let impl_is_block = input.starts_with("impl")
-                && !input[4..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
-                && matches!(
-                    input[4..].trim_start().chars().next(),
-                    Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '<'
-                );
-            // Batch 661: same carve-out for `fn`. Python uses it as a plain
-            // callback variable, so `fn(x)` / `fn = x` must reach `parse_stmt`;
-            // only `fn name(…)` (or `fn<…>`) is a declaration keyword whose
-            // failure should stop `many0` instead of splitting the item.
-            let fn_is_decl = input.starts_with("fn")
-                && !input[2..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
-                && matches!(
-                    input[2..].trim_start().chars().next(),
-                    Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '<'
-                );
+            // Batch 738 (#262): the per-keyword declaration test is
+            // generalized (the impl/fn carve-outs were the first two members).
+            // With `struct`/`enum`/`trait`/`mod`/`pub` no longer reserved
+            // (Python sources use them as ordinary identifiers), the guard
+            // must NOT treat `struct = 5` as a failed declaration — that
+            // shape used to truncate the rest of the file (W1002, measured
+            // per name).
             let is_def_kw = DEFINITION_KEYWORDS
                 .iter()
-                .filter(|kw| {
-                    (**kw != "impl" || impl_is_block) && (**kw != "fn" || fn_is_decl)
-                })
-                .any(|kw| {
-                    input.starts_with(kw)
-                        && !input[kw.len()..]
-                            .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
-                });
+                .any(|kw| kw_starts_declaration(input, kw));
             if is_def_kw {
                 return Err(def_err);
             }
             // Also allow statements at top level
             crate::frontend::parser::stmt::parse_stmt(input)
         }
+    }
+}
+
+/// Batch 738 (#262): does `input` at this position start a top-level
+/// DECLARATION of kind `kw` (fail-loud on a failed definition parse), or is
+/// `kw` an ordinary identifier here (`struct = 5` must reach `parse_stmt`)?
+///
+/// - `impl`/`fn`: a name (or generic) must follow — the original carve-outs,
+///   now folded in.
+/// - `struct`/`enum`/`trait`/`mod`/`pub`: a NAME (for `pub`, another
+///   definition keyword) must follow; `pub = 5` / `struct = 5` are plain
+///   assignments.
+/// - everything else (`def`/`class`/`concept`/`macro`/`const`): the keyword
+///   alone is a declaration (unchanged).
+fn kw_starts_declaration(input: &str, kw: &str) -> bool {
+    let rest = match input.strip_prefix(kw) {
+        Some(r) => r,
+        None => return false,
+    };
+    if rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+        return false; // boundary: `structs` is an identifier
+    }
+    let next = rest.trim_start().chars().next();
+    match kw {
+        "impl" | "fn" => {
+            matches!(next, Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '<')
+        }
+        "struct" | "enum" | "trait" | "mod" | "pub" => {
+            matches!(next, Some(c) if c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => true,
     }
 }
 

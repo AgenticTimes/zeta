@@ -79,10 +79,10 @@ pub fn parse_ident(input: &str) -> IResult<&str, String> {
         )),
         |s: &str| {
             ![
-                "let", "mut", "if", "else", "for", "in", "loop", "while", "unsafe", "return",
-                "break", "continue", "concept", "enum", "struct", "use",
-                "extern", "dyn", "box", "as", "true", "false", "comptime", "const", "async", "pub",
-                "match", "mod", "defer",
+                "if", "else", "for", "in", "loop", "while", "unsafe", "return",
+                "break", "continue", "concept",
+                "extern", "as", "true", "false", "comptime", "const", "async",
+                "match", "defer",
                 // PY-A: `where` is deliberately NOT reserved — Python uses it as
                 // a free name (`from numpy import where`; `where(mask)`). Reserving
                 // it made the call (and often the enclosing def) fail to parse.

@@ -41,6 +41,14 @@ pub struct Resolver {
     /// Batch 654: module-level names whose last top-level assignment was the
     /// literal `None` — sequential; feeds the gen print/str render faces.
     none_vars: std::cell::RefCell<std::collections::HashSet<String>>,
+    /// Batch 738: memoized `module_global_types` for the lower_to_mir builder
+    /// (site s5195) — lower_to_mir runs once per function/closure (651 calls
+    /// on jq_wufu_local), and each call re-walked the WHOLE module AST to
+    /// rebuild the same map ⇒ O(functions × program). The module-level
+    /// assignment set is fixed once lowering begins, so the map is computed
+    /// once and cloned per request. Other call sites (refine passes) keep
+    /// the uncached path: their inputs may still be growing.
+    mgt_cache: std::cell::RefCell<Option<HashMap<String, Type>>>,
     /// Batch 628: `Class::method` -> [(FuncDef param position, Type)] — the
     /// 627 call-site refinements, computed once at typecheck so the return
     /// inference below can read them and the generator builder can reuse
@@ -151,6 +159,7 @@ impl Resolver {
             impls: HashMap::new(),
             pending_inherits: std::cell::RefCell::new(Vec::new()),
             none_vars: std::cell::RefCell::new(std::collections::HashSet::new()),
+            mgt_cache: std::cell::RefCell::new(None),
             method_param_refinements: HashMap::new(),
             class_bases: std::cell::RefCell::new(HashMap::new()),
             pending_baseargs: std::cell::RefCell::new(Vec::new()),
@@ -1916,6 +1925,46 @@ impl Resolver {
     /// body for assignments to names that became module globals.
 
     pub fn module_global_types(&self) -> HashMap<String, Type> {
+        self.module_global_types_at("direct")
+    }
+
+    fn module_global_types_at(&self, site: &str) -> HashMap<String, Type> {
+        // Batch 738: the s5195 site (lower_to_mir's builder) runs once per
+        // function/closure — 651 identical full-AST walks on jq_wufu_local
+        // (= 42s, profiled: 72% of compile time in AstNode clone/drop).
+        // The module-level assignment set is FIXED once lowering begins, so
+        // the map is memoized; a ZETA_COUNT_MGT hash check verifies every
+        // cached hit equals the first computation (mismatch ⇒ loud stderr,
+        // cache invalidated for that call).
+        if site == "s5195" {
+            if let Some(hit) = self.mgt_cache.borrow().as_ref() {
+                return hit.clone();
+            }
+        }
+        let computed = self.module_global_types_uncached();
+        if site == "s5195" {
+            if std::env::var("ZETA_COUNT_MGT").is_ok() {
+                if let Some(prev) = self.mgt_cache.borrow().as_ref() {
+                    use std::hash::Hasher;
+                    let h = |m: &HashMap<String, Type>| {
+                        let mut hh = std::collections::hash_map::DefaultHasher::new();
+                        hh.write(format!("{m:?}").as_bytes());
+                        hh.finish()
+                    };
+                    let (h1, h2) = (h(prev), h(&computed));
+                    if h1 != h2 {
+                        eprintln!("[mgt] WARNING: cached map differs from recomputed — recomputing");
+                        return computed;
+                    }
+                }
+            }
+            *self.mgt_cache.borrow_mut() = Some(computed.clone());
+            return computed;
+        }
+        computed
+    }
+
+    fn module_global_types_uncached(&self) -> HashMap<String, Type> {
     /// Infer the MIR type of a module-level expression. `seen` holds the types of
     /// globals defined EARLIER in the same module (so aliases and constant chains
     /// resolve in declaration order); `aliases` maps import aliases to modules.
@@ -2839,7 +2888,7 @@ impl Resolver {
     /// are never overridden. Literal-kind mapping mirrors
     /// `refine_ctor_field_types`.
     pub fn refine_method_param_types(&self) -> HashMap<String, Vec<(usize, Type)>> {
-        let out = self.module_global_types();
+        let out = self.module_global_types_at("s2842");
         let defs = self.registered_func_defs.borrow().clone();
         let mut map: HashMap<String, Vec<(usize, Type)>> = HashMap::new();
         for d in &defs {
@@ -3757,7 +3806,7 @@ impl Resolver {
     }
 
     pub fn refine_ctor_field_types(&mut self) {
-        let out = self.module_global_types();
+        let out = self.module_global_types_at("s3782");
         let defs = self.registered_func_defs.borrow().clone();
         for d in &defs {
             if let AstNode::FuncDef { body, .. } = d {
@@ -5192,7 +5241,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             )
             .with_py_user_modules(self.py_user_modules.borrow().clone())
             .with_py_module_paths(self.py_module_paths.borrow().clone())
-            .with_module_global_types(self.module_global_types())
+            .with_module_global_types(self.module_global_types_at("s5195"))
             .with_class_bases(self.class_bases())
             .with_none_vars(self.none_vars.borrow().clone())
             .with_method_param_refinements(self.method_param_refinements.clone())
