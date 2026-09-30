@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=717106 #1）
+#@@ python
+print(923 != 645 <= -65)
+print(75.57 > 93.95)
+print(not 56)
+
+#@@ zeta
+print(923 != 645 <= -65)
+print(75.57 > 93.95)
+print(not 56)
+
