@@ -142,7 +142,7 @@ pub struct Resolver {
     py_current_module: RefCell<Option<String>>,
     /// PY-A: every registered function definition (including ones loaded from
     /// imported modules) — return-type inference must cover all of them.
-    registered_func_defs: RefCell<Vec<AstNode>>,
+    registered_func_defs: RefCell<Vec<std::rc::Rc<AstNode>>>,
     /// 批次 400（类型基础③）：`"函数.参数"` → 该参数在各调用点看到的实参类形
     /// （如 `str≠i64`）。只有**证据不一致**的参数才会进这张表，它们是"因为冲突
     /// 而保持动态"的位置，`--report-untyped` 把它们和"从来没有任何证据"的动态
@@ -237,7 +237,9 @@ impl Resolver {
         // PY-A: keep the definition for return-type inference (imported
         // modules register through this same path).
         if matches!(ast, AstNode::FuncDef { .. }) {
-            self.registered_func_defs.borrow_mut().push(ast.clone());
+            self.registered_func_defs
+                .borrow_mut()
+                .push(std::rc::Rc::new(ast.clone()));
         }
         // PY-A V3: pre-collect all `nonlocal` names (program-wide set) so the
         // defining scope's assignments route through the closure env.
@@ -1348,7 +1350,7 @@ impl Resolver {
     pub fn infer_untyped_returns(&mut self, _asts: &[AstNode]) {
         // Includes functions from imported modules: they were registered
         // through the same path, so their bodies are here too.
-        let asts: Vec<AstNode> = self.registered_func_defs.borrow().clone();
+        let asts: Vec<std::rc::Rc<AstNode>> = self.registered_func_defs.borrow().clone();
         fn collect_returns(body: &[AstNode], out: &mut Vec<AstNode>) {
             for s in body {
                 match s {
@@ -1559,6 +1561,7 @@ impl Resolver {
             std::collections::HashSet::new();
         for _ in 0..6 {
             for ast in &asts {
+                let ast: &AstNode = ast;
                 let AstNode::FuncDef { name, body, ret, .. } = ast else {
                     continue;
                 };
@@ -2424,7 +2427,7 @@ impl Resolver {
             for (k, v) in self.registered_funcs.iter() {
                 if k.contains("::") {
                     if let AstNode::FuncDef { .. } = v {
-                        rec_defs.push(v.clone());
+                        rec_defs.push(std::rc::Rc::new(v.clone()));
                     }
                 }
             }
@@ -2448,6 +2451,7 @@ impl Resolver {
             }
         }
         for d in &defs {
+            let d: &AstNode = d;
             if let AstNode::FuncDef { name, body, .. } = d {
                 // A module body is registered as `<module with _ for .>__init`;
                 // the prefix tells us the mangled spelling of its globals.
@@ -2892,6 +2896,7 @@ impl Resolver {
         let defs = self.registered_func_defs.borrow().clone();
         let mut map: HashMap<String, Vec<(usize, Type)>> = HashMap::new();
         for d in &defs {
+            let d: &AstNode = d;
             if let AstNode::FuncDef { body, .. } = d {
                 // Local class env: `g = Greeter(...)` at module level. The
                 // resolver-wide table (out) does not carry plain module vars.
@@ -3065,6 +3070,7 @@ impl Resolver {
             }
         }
         for d in self.registered_func_defs.borrow().iter() {
+            let d: &AstNode = d;
             if let AstNode::FuncDef { name, .. } = d {
                 // Plain module functions only: the funcs key is the bare
                 // name, and a `::`-qualified entry belongs to the impls loop.
@@ -3762,6 +3768,7 @@ impl Resolver {
     pub fn note_none_vars(&mut self) {
         let defs = self.registered_func_defs.borrow().clone();
         for d in &defs {
+            let d: &AstNode = d;
             if let AstNode::FuncDef { body, .. } = d {
                 for st in body {
                     match st {
@@ -3809,6 +3816,7 @@ impl Resolver {
         let out = self.module_global_types_at("s3782");
         let defs = self.registered_func_defs.borrow().clone();
         for d in &defs {
+            let d: &AstNode = d;
             if let AstNode::FuncDef { body, .. } = d {
                 for st in body {
                     if let AstNode::Assign(lhs, rhs) = st {
@@ -4560,7 +4568,7 @@ impl Resolver {
     /// here, so the caller's slot stayed i64 while the callee's signature was
     /// already `double` (measured: `h=4608308318706860032`, 1.25's bit pattern).
     fn unannotated_return_ty(
-        defs: &[AstNode],
+        defs: &[std::rc::Rc<AstNode>],
         name: &str,
         classes: &[String],
         fn_rets: &HashMap<String, Type>,
@@ -4884,10 +4892,10 @@ impl Resolver {
 
         let tail = name.rsplit("::").next().unwrap_or(name);
         let exact = defs.iter().find(|d| {
-            matches!(d, AstNode::FuncDef { name: n, .. } if n == name)
+            matches!(d.as_ref(), AstNode::FuncDef { name: n, .. } if n == name)
         });
-        let def = match exact {
-            Some(d) => Some(d),
+        let def: &AstNode = match exact {
+            Some(d) => Some(d.as_ref()),
             // A method is keyed `Type::method` while the definition carries the
             // bare name — accept it only when exactly one definition matches, so
             // two classes sharing a method name cannot cross-contaminate.
@@ -4895,9 +4903,10 @@ impl Resolver {
                 let hits: Vec<&AstNode> = defs
                     .iter()
                     .filter(|d| {
-                        matches!(d, AstNode::FuncDef { name: n, .. }
+                        matches!(d.as_ref(), AstNode::FuncDef { name: n, .. }
                             if n.rsplit("::").next().unwrap_or("") == tail)
                     })
+                    .map(|d| d.as_ref())
                     .collect();
                 if hits.len() == 1 {
                     Some(hits[0])
@@ -5101,7 +5110,7 @@ fn shim_class_normalize(t: &Type) -> Type {
         for (k, v) in self.registered_funcs.iter() {
             if k.contains("::") {
                 if let AstNode::FuncDef { .. } = v {
-                    defs_snapshot.push(v.clone());
+                    defs_snapshot.push(std::rc::Rc::new(v.clone()));
                 }
             }
         }
@@ -5175,11 +5184,13 @@ fn shim_class_normalize(t: &Type) -> Type {
                 // `.items()` paths already exist.
                 let is_dict_ret = matches!(&ret, Type::Named(n, _) if n == "map" || n == "dict");
                 if is_dict_ret {
-                    if let Some(AstNode::FuncDef { body, .. }) =
-                        defs_snapshot.iter().find(|d| {
-                            matches!(d, AstNode::FuncDef { name: n, .. } if n == name)
+                    let hit = defs_snapshot
+                        .iter()
+                        .find(|d| {
+                            matches!(d.as_ref(), AstNode::FuncDef { name: n, .. } if n == name)
                         })
-                    {
+                        .map(|d| d.as_ref());
+                    if let Some(AstNode::FuncDef { body, .. }) = hit {
                         if Self::returns_json_loads(body) {
                             return (name.clone(), Type::Named("PyJson".to_string(), vec![]));
                         }
@@ -5199,9 +5210,10 @@ fn shim_class_normalize(t: &Type) -> Type {
                     let hits: Vec<&AstNode> = defs_snapshot
                         .iter()
                         .filter(|d| {
-                            matches!(d, AstNode::FuncDef { name: n, .. }
+                            matches!(d.as_ref(), AstNode::FuncDef { name: n, .. }
                                 if n.rsplit("::").next().unwrap_or("") == tail)
                         })
+                        .map(|d| d.as_ref())
                         .collect();
                     if hits.len() == 1 {
                         if let Some(AstNode::FuncDef { body, .. }) = hits.first() {
