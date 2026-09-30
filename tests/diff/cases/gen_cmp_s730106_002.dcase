@@ -1,0 +1,12 @@
+# @cat: truth
+# @note: 随机比较链（seed=730106 #2）
+#@@ python
+print(264 < 707 < 738)
+print(not -72)
+print(not 22)
+
+#@@ zeta
+print(264 < 707 < 738)
+print(not -72)
+print(not 22)
+
