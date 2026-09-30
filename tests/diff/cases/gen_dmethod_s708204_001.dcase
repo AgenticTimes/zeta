@@ -1,0 +1,20 @@
+# @cat: container
+# @note: 随机字典方法链（seed=708204 #1）
+#@@ python
+d = {"dd": -61, "alpha": 66}
+print(d.get("z9", 44))
+d["dd"] = 78
+print(d["dd"])
+print(len(d))
+print("alpha" in d)
+print("gamma" in d)
+
+#@@ zeta
+d = {"dd": -61, "alpha": 66}
+print(d.get("z9", 44))
+d["dd"] = 78
+print(d["dd"])
+print(len(d))
+print("alpha" in d)
+print("gamma" in d)
+
