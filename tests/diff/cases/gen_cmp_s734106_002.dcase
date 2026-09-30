@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=734106 #2）
+#@@ python
+print(not -30)
+print(-(--7) < 48, -7 == -7)
+print(425 >= 577 <= -12)
+print(not -52)
+
+#@@ zeta
+print(not -30)
+print(-(--7) < 48, -7 == -7)
+print(425 >= 577 <= -12)
+print(not -52)
+

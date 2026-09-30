@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=734106 #0）
+#@@ python
+print(not 97)
+print(not 1)
+
+#@@ zeta
+print(not 97)
+print(not 1)
+
