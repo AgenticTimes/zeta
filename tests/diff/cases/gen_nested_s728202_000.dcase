@@ -1,0 +1,16 @@
+# @cat: container
+# @note: 随机嵌套容器链（seed=728202 #0）
+#@@ python
+v = [[-29, -65], [-25, -85]]
+print(v[0][0])
+v[1][1] = -81
+print(v[1][1])
+print(len(v))
+
+#@@ zeta
+v = [[-29, -65], [-25, -85]]
+print(v[0][0])
+v[1][1] = -81
+print(v[1][1])
+print(len(v))
+

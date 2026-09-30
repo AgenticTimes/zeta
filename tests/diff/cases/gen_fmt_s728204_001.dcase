@@ -1,0 +1,10 @@
+# @cat: str
+# @note: 随机 f-string 规格（seed=728204 #1）
+#@@ python
+w = 123456
+print(f"{w:<+10x}")
+
+#@@ zeta
+w = 123456
+print(f"{w:<+10x}")
+
