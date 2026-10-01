@@ -904,6 +904,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some(Linkage::External),
         );
         module.add_function(
+            "py_fmt_bool",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
             "py_fmt_f64",
             i64_type.fn_type(&[context.f64_type().into(), i64_type.into()], false),
             Some(Linkage::External),

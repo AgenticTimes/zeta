@@ -63,6 +63,7 @@ pub fn declare_registry_runtime_fns<'ctx>(
     module.add_function("py_file_write", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("py_fmt_f64", i64_type.fn_type(&[f64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("py_fmt_i64", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+    module.add_function("py_fmt_bool", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("py_fmt_str", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("py_functools_reduce", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("py_functools_reduce_3", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false), Some(Linkage::External));

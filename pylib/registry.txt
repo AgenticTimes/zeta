@@ -516,6 +516,7 @@ F scipy.linalg solve zeta_np_solve_stub args=i64,i64 ret=i64
 
 # ---- batch 139: move remaining hand decls from codegen::new → registry ----
 X py_fmt_i64 args=i64,i64 ret=i64
+X py_fmt_bool args=i64,i64 ret=i64
 X py_fmt_f64 args=f64,i64 ret=i64
 X py_fmt_str args=i64,i64 ret=i64
 X py_round_n args=f64,i64 ret=f64

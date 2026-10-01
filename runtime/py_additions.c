@@ -20,6 +20,7 @@ int64_t map_insert(int64_t, int64_t, int64_t);
 // A grown dict forwards from its old block; every reader must resolve first.
 int64_t map_resolve(int64_t);
 int64_t py_df_empty_like(int64_t frame);
+int64_t py_fmt_i64(int64_t v, int64_t spec);
 static int zt_maybe_map(int64_t);
 int zt_map_is_json_handle(int64_t);
 void zt_map_json_mismatch(const char*, int64_t);
@@ -852,6 +853,16 @@ static char zt_int_sign_char(int64_t v, const zt_fmt_t* f) {
     if (v < 0) return '-';
     if (f->sign == '+' || f->sign == ' ') return f->sign;
     return 0;
+}
+
+// Batch 748 (#45 tenth member): bool inside a format spec slot. CPython:
+// format(True, "") == "True" (str-based), while ANY non-empty spec renders
+// bool as int (bool subclasses int): format(True, "04") == "0001".
+// The int spelling delegates to py_fmt_i64 unchanged.
+int64_t py_fmt_bool(int64_t v, int64_t spec) {
+    if (!spec || ((const char*)spec)[0] == 0)
+        return (int64_t)GC_strdup(v ? "True" : "False");
+    return py_fmt_i64(v, spec);
 }
 
 int64_t py_fmt_i64(int64_t v, int64_t spec) {

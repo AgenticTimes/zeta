@@ -9822,6 +9822,9 @@ call, no NULL-handle dereference).",
                     let func = match self.type_map.get(&val_id).cloned() {
                         Some(Type::F64) | Some(Type::F32) => "py_fmt_f64",
                         Some(Type::Str) => "py_fmt_str",
+                        // 批次 748（#45 第十成员）：bool 档缺失时落 i64 打印器，
+                        // `format!("{}", true)` 打 1 而不是 True（291 契约格）。
+                        Some(Type::Bool) => "py_fmt_bool",
                         _ => "py_fmt_i64",
                     };
                     self.stmts.push(MirStmt::Call {
