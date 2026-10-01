@@ -70,9 +70,10 @@ pub struct Resolver {
     pub associated_types: HashMap<(String, String), String>,
     pub ctfe_consts: HashMap<String, crate::middle::ctfe::value::ConstValue>,
     funcs: HashMap<String, FuncSignature>,
-    /// Batch 747 (#264): callee -> its `**name` star-param, for call-site
-    /// collection of unmatched keyword arguments into a dict.
-    star_params: RefCell<HashMap<String, String>>,
+    /// Batch 747 (#264): callee -> (its `*args` param, its `**kwargs`
+    /// param), for call-site collection of positional overflow / unmatched
+    /// keyword arguments.
+    star_params: RefCell<HashMap<String, (Option<String>, Option<String>)>>,
     /// Registered function ASTs (including module functions)
     registered_funcs: HashMap<String, AstNode>,
     /// Module resolver for Zorb imports
@@ -3965,11 +3966,12 @@ impl Resolver {
     }
 
     /// Batch 747 (#264): one parameter's type at registration time. The
-    /// parser marks `**name` star-params with the reserved type string "**";
-    /// the slot is an ordinary map handle (which is what `**name` IS), and
-    /// the name is recorded — first star wins, Python allows only one — so
-    /// call sites can collect unmatched keyword arguments into a dict bound
-    /// to this parameter.
+    /// parser marks `**name` star-params with the reserved type string "**"
+    /// (and `*name` with "*", batch 752); the slot is an ordinary map /
+    /// list handle (which is what `**name` / `*name` IS), and the name is
+    /// recorded — first of each kind wins, Python allows one of each — so
+    /// call sites can collect positional overflow (list) and unmatched
+    /// keyword arguments (dict) bound to these parameters.
     fn typed_param_type(
         &self,
         fname: &str,
@@ -3977,20 +3979,32 @@ impl Resolver {
         ty_str: &str,
         generic_names: &[String],
     ) -> Type {
-        if ty_str.trim() == "**" {
-            self.star_params
-                .borrow_mut()
-                .entry(fname.to_string())
-                .or_insert_with(|| pname.to_string());
-            Type::Named("map".to_string(), Vec::new())
-        } else {
-            self.string_to_generic_type(ty_str, generic_names)
+        match ty_str.trim() {
+            "**" | "*" => {
+                let mut sp = self.star_params.borrow_mut();
+                let e = sp
+                    .entry(fname.to_string())
+                    .or_insert_with(|| (None, None));
+                if ty_str.trim() == "**" {
+                    if e.1.is_none() {
+                        e.1 = Some(pname.to_string());
+                    }
+                } else if e.0.is_none() {
+                    e.0 = Some(pname.to_string());
+                }
+                if ty_str.trim() == "**" {
+                    Type::Named("map".to_string(), Vec::new())
+                } else {
+                    Type::DynamicArray(Box::new(Type::PyDynamic))
+                }
+            }
+            _ => self.string_to_generic_type(ty_str, generic_names),
         }
     }
 
-    /// Batch 747 (#264): callee -> its `**name` star-param, keyed like
-    /// `func_param_names`.
-    pub fn func_star_params(&self) -> HashMap<String, String> {
+    /// Batch 747 (#264): callee -> (`*name`, `**name`) star-params, keyed
+    /// like `func_param_names`.
+    pub fn func_star_params(&self) -> HashMap<String, (Option<String>, Option<String>)> {
         self.star_params.borrow().clone()
     }
 

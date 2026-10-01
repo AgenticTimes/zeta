@@ -104,6 +104,11 @@ impl NewTypeCheck for Resolver {
         if s == "**" {
             return Type::Named("map".to_string(), Vec::new());
         }
+        // Batch 752: `*args` star-param marker — an ordinary list handle
+        // (what positional overflow IS).
+        if s == "*" {
+            return Type::DynamicArray(Box::new(Type::PyDynamic));
+        }
 
         // Debug: print what we're parsing (disabled for performance)
 

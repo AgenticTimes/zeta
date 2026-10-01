@@ -250,10 +250,10 @@ pub struct MirGen {
     func_ret_types: HashMap<String, Type>,
     /// Parameter names per function, for keyword-argument binding.
     func_param_names: HashMap<String, Vec<String>>,
-    /// Batch 747 (#264): callee -> its `**name` star-param. Call sites
-    /// collect keyword arguments matching no declared parameter into a dict
-    /// bound to this parameter.
-    func_star_params: HashMap<String, String>,
+    /// Batch 747 (#264): callee -> (its `*args` param, its `**kwargs`
+    /// param). Call sites collect positional overflow (list) and unmatched
+    /// keyword arguments (dict) bound to these parameters.
+    func_star_params: HashMap<String, (Option<String>, Option<String>)>,
     /// PY-A: variables bound to a lambda/closure value, mapped to the
     /// synthetic closure function name. Lets call sites (`f(41)` where `f =
     /// lambda x: x+1`) lower to a direct named call to the closure function.
@@ -371,9 +371,12 @@ impl MirGen {
         self
     }
 
-    /// Batch 747 (#264): `**name` star-params, so unmatched keyword
-    /// arguments collect into a dict at the call site.
-    pub fn with_func_star_params(mut self, stars: HashMap<String, String>) -> Self {
+    /// Batch 747 (#264): `*name`/`**name` star-params, so positional
+    /// overflow and unmatched keyword arguments collect at the call site.
+    pub fn with_func_star_params(
+        mut self,
+        stars: HashMap<String, (Option<String>, Option<String>)>,
+    ) -> Self {
         self.func_star_params = stars;
         self
     }
@@ -1526,6 +1529,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         // inside the body dispatch as map.
                         self.type_map
                             .insert(id, Type::Named("map".to_string(), Vec::new()));
+                    } else if pt_str == "*" {
+                        // Batch 752: `*args` star-param — the slot holds an
+                        // ordinary list handle, so len/subscript inside the
+                        // body dispatch as array.
+                        self.type_map
+                            .insert(id, Type::DynamicArray(Box::new(Type::PyDynamic)));
                     } else if let Some(gidx) =
                         generic_names.iter().position(|g| g.as_str() == pt_str)
                     {
@@ -11376,20 +11385,43 @@ call, no NULL-handle dereference).",
                         None
                     };
                     let callee_name = method.clone();
-                    // Batch 747 (#264): the callee's `**name` star-param, if
-                    // declared. Keyword arguments matching no declared
-                    // parameter collect into a dict bound to it.
-                    let star_param: Option<String> =
+                    // Batch 747 (#264): the callee's `*args` / `**kwargs`
+                    // star-params, if declared. Positional overflow collects
+                    // into a list bound to the former; keyword arguments
+                    // matching no declared parameter collect into a dict
+                    // bound to the latter.
+                    let star_param: Option<(Option<String>, Option<String>)> =
                         self.func_star_params.get(method.as_str()).cloned();
+                    let (star_args, star_kwargs) = star_param
+                        .as_ref()
+                        .map_or((None, None), |(a, k)| (a.as_deref(), k.as_deref()));
                     let fill = |slots: &mut Vec<Option<AstNode>>,
                                 params: &[String],
                                 pos: Vec<AstNode>,
                                 kw: Vec<(String, AstNode)>,
                                 spread: &[AstNode],
-                                star: Option<&str>| {
-                        for (i, a) in pos.into_iter().enumerate() {
-                            if i < slots.len() {
-                                slots[i] = Some(a);
+                                star_args: Option<&str>,
+                                star_kwargs: Option<&str>| {
+                        // Star-param slot indices: neither kind of star slot
+                        // ever takes a positional binding (Python semantics).
+                        let kw_slot =
+                            star_kwargs.and_then(|sp| params.iter().position(|p| p == sp));
+                        let args_slot =
+                            star_args.and_then(|sp| params.iter().position(|p| p == sp));
+                        let pos_targets: Vec<usize> = (0..params.len())
+                            .filter(|&i| Some(i) != kw_slot && Some(i) != args_slot)
+                            .collect();
+                        // Batch 752: positional overflow collects into the
+                        // `*args` list; without one, keep the old append
+                        // (callee ignores extras).
+                        let mut pos_extra: Vec<AstNode> = Vec::new();
+                        let mut cursor = 0usize;
+                        for a in pos {
+                            if cursor < pos_targets.len() {
+                                slots[pos_targets[cursor]] = Some(a);
+                                cursor += 1;
+                            } else if args_slot.is_some() {
+                                pos_extra.push(a);
                             } else {
                                 slots.push(Some(a));
                             }
@@ -11397,14 +11429,12 @@ call, no NULL-handle dereference).",
                         // #264: unmatched keyword arguments go to the star
                         // param when the callee declares one; without one,
                         // keep the old append (callee ignores extras).
-                        let star_slot =
-                            star.and_then(|sp| params.iter().position(|p| p == sp));
-                        let mut star_acc: Vec<(AstNode, AstNode)> = Vec::new();
+                        let mut kw_acc: Vec<(AstNode, AstNode)> = Vec::new();
                         for (n, v) in kw {
                             match params.iter().position(|p| *p == n) {
                                 Some(i) => slots[i] = Some(v),
-                                None => match star_slot {
-                                    Some(_) => star_acc.push((AstNode::StringLit(n), v)),
+                                None => match kw_slot {
+                                    Some(_) => kw_acc.push((AstNode::StringLit(n), v)),
                                     None => slots.push(Some(v)),
                                 },
                             }
@@ -11432,14 +11462,22 @@ call, no NULL-handle dereference).",
                                 }
                             }
                         }
-                        // #264: the star-param slot binds a fresh dict —
-                        // the collected kwargs, or `{}` when none were
-                        // passed (Python semantics). A slot already bound
-                        // (explicit positional / `**` mapping) stays.
-                        if let Some(si) = star_slot {
+                        // #264/752: star-param slots bind fresh containers —
+                        // the collected overflow, or empty `[]` / `{}` when
+                        // nothing was passed (Python semantics). A slot
+                        // already bound (explicit positional / `**` mapping)
+                        // stays.
+                        if let Some(si) = args_slot {
+                            if si < slots.len() && slots[si].is_none() {
+                                slots[si] = Some(AstNode::ArrayLit(std::mem::take(
+                                    &mut pos_extra,
+                                )));
+                            }
+                        }
+                        if let Some(si) = kw_slot {
                             if si < slots.len() && slots[si].is_none() {
                                 slots[si] = Some(AstNode::DictLit {
-                                    entries: star_acc,
+                                    entries: kw_acc,
                                 });
                             }
                         }
@@ -11457,7 +11495,7 @@ call, no NULL-handle dereference).",
                             Some(params) => {
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
-                                fill(&mut slots, &params, pos, kw, &spread, star_param.as_deref());
+                                fill(&mut slots, &params, pos, kw, &spread, star_args, star_kwargs);
                                 Self::warn_unbound(&callee_name, &params, &mut slots);
                                 slots.into_iter().flatten().collect()
                             }
@@ -11485,28 +11523,33 @@ call, no NULL-handle dereference).",
                             Some(params) if receiver.is_none() => {
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
-                                fill(&mut slots, &params, pos, kw, &[], star_param.as_deref());
+                                fill(&mut slots, &params, pos, kw, &[], star_args, star_kwargs);
                                 Self::warn_unbound(&callee_name, &params, &mut slots);
                                 slots.into_iter().flatten().collect()
                             }
-                            // Method call whose callee DECLARES defaults.
-                            // `func_param_names` / `param_defaults` are keyed
-                            // by the bare method name and index `self` at 0,
-                            // which the dispatch site prepends — so drop it
-                            // here. Without this `a.reset_index()` left the
-                            // argument unbound and codegen padded 0, i.e.
-                            // drop=0 (=False) instead of the declared True
-                            // (t229, wrong value with no diagnostic).
+                            // Method call whose callee DECLARES defaults —
+                            // or star-params (batch 752: the `*args`/`**kwargs`
+                            // slots need their fresh containers even when the
+                            // call passes neither extra positionals nor
+                            // keywords). `func_param_names` / `param_defaults`
+                            // are keyed by the bare method name and index
+                            // `self` at 0, which the dispatch site prepends —
+                            // so drop it here. Without this `a.reset_index()`
+                            // left the argument unbound and codegen padded 0,
+                            // i.e. drop=0 (=False) instead of the declared
+                            // True (t229, wrong value with no diagnostic).
                             Some(params)
                                 if method_defaults
                                     .as_ref()
-                                    .map_or(false, |d| d.iter().any(|x| x.is_some())) =>
+                                    .map_or(false, |d| d.iter().any(|x| x.is_some()))
+                                    || star_args.is_some()
+                                    || star_kwargs.is_some() =>
                             {
                                 let params: Vec<String> =
                                     params.into_iter().skip(1).collect();
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
-                                fill(&mut slots, &params, pos, kw, &[], star_param.as_deref());
+                                fill(&mut slots, &params, pos, kw, &[], star_args, star_kwargs);
                                 if let Some(d) = &method_defaults {
                                     for (i, slot) in slots.iter_mut().enumerate() {
                                         if slot.is_none() {
@@ -11526,7 +11569,7 @@ call, no NULL-handle dereference).",
                             Some(params) => {
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
-                                fill(&mut slots, &params, pos, kw, &[], star_param.as_deref());
+                                fill(&mut slots, &params, pos, kw, &[], star_args, star_kwargs);
                                 Self::warn_unbound(&callee_name, &params, &mut slots);
                                 slots.into_iter().flatten().collect()
                             }
@@ -11551,7 +11594,7 @@ call, no NULL-handle dereference).",
                                     params.into_iter().skip(1).collect();
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
-                                fill(&mut slots, &params, pos, kw, &[], star_param.as_deref());
+                                fill(&mut slots, &params, pos, kw, &[], star_args, star_kwargs);
                                 if let Some(d) = &mdef {
                                     for (i, slot) in slots.iter_mut().enumerate() {
                                         if slot.is_none() {
@@ -13784,6 +13827,28 @@ call, no NULL-handle dereference).",
                                 self.type_map.insert(id, Type::Str);
                                 return id;
                             }
+                        }
+                    }
+                    // 批次 753（#45 第十一成员落点三）：`x.to_string()` 在非 str
+                    // 接收者上过去被本表恒发 host_str_to_string——i64/f64/bool 的
+                    // 值被当 char* 解引用，运行期 rc=139（改前实拍五形状仅 str
+                    // 接收者一形通过）。已知非 str 接收者走 str() 家族同款 repr
+                    // 通道（`lower_to_string`＝f-string 部件、批次 742 str(d) 的
+                    // 那条）。未知形状（PyDynamic）与其他 Named 不动：363 在册的
+                    // 未定类型接收者保留 str 兜底语义，别把崩溃换成静默句柄值。
+                    if method == "to_string" && arg_ids.len() == 1 {
+                        let routable = match self.type_map.get(&arg_ids[0]).cloned() {
+                            Some(Type::I8) | Some(Type::I16) | Some(Type::I32)
+                            | Some(Type::I64) | Some(Type::U8) | Some(Type::U16)
+                            | Some(Type::U32) | Some(Type::U64) | Some(Type::Usize)
+                            | Some(Type::F32) | Some(Type::F64) | Some(Type::Bool)
+                            | Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
+                            | Some(Type::Tuple(_)) => true,
+                            Some(Type::Named(n, _)) => n == "map" || n == "dict",
+                            _ => false,
+                        };
+                        if routable {
+                            return self.lower_to_string(arg_ids[0]);
                         }
                     }
                     let mut m = str_method_symbol(method.as_str());

@@ -1,0 +1,27 @@
+// 批次 752（#264 余量）：`*args` 位置收集——调用点把超出非星形参的位置实参
+// 收集成列表绑定到 `*name` 槽。此前星参槽吃进第一个溢出位置实参（`len` 在
+// 非字典上 raise）、其余静默丢弃。四路：len、下标＋算术、空收集、方法接收者；
+// 另锁 `*a, **k` 双星并存（751 的字典收集不回退）。已知边界（非本批）：
+// jq_wufu_local.py 的 codegen float/整型崩溃＝HEAD 基线同拍（corpus 38/40
+// 的两颗 panic 之一，另行登记），与本批无关。
+def f(a, *rest):
+    return len(rest)
+print(f(1))
+print(f(1, 2, 3))
+
+def first(*xs):
+    return xs[0] + xs[2]
+print(first(7, 8, 9))
+
+class C:
+    def m(self, *extra):
+        return len(extra)
+c = C()
+print(c.m())
+print(c.m(4, 5))
+
+def h(*a, **k):
+    return len(a) * 10 + len(k)
+print(h())
+print(h(1, 2, x=9))
+print(h(1, 2, 3, x=9, y=8))

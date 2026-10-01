@@ -362,6 +362,11 @@ impl Resolver {
         if s.trim() == "**" {
             return Type::Named("map".to_string(), Vec::new());
         }
+        // Batch 752: `*args` star-param marker — an ordinary list handle
+        // (what positional overflow IS).
+        if s.trim() == "*" {
+            return Type::DynamicArray(Box::new(Type::PyDynamic));
+        }
         // Use the unified type parsing
         match self.parse_type_string(s) {
             Ok(ty) => ty,

@@ -81,6 +81,8 @@ fn parse_param_full(input: &str) -> IResult<&str, (String, String, Option<AstNod
     // resolver lowers it to an ordinary map (what `**name` IS) and records
     // the name so call sites collect unmatched keyword arguments into a
     // dict bound to this parameter.
+    // Batch 752: single star emits "*" — the call site collects positional
+    // overflow into a list bound to this parameter.
     let parse_star = map(
         (
             ws(tag("*")),
@@ -88,7 +90,12 @@ fn parse_param_full(input: &str) -> IResult<&str, (String, String, Option<AstNod
             ws(parse_ident),
             opt(preceded(ws(tag(":")), ws(parse_type))),
         ),
-        |(_, _, name, _)| (name, "**".to_string(), None),
+        // 元组序＝(首星, 次星opt, 名字, 注解opt)——752 初版把第 3 位当次星、
+        // 实为注解位，`**k` 因此恒判单星（单测 probe_double_star 实证）。
+        |(_, second, name, _)| {
+            let marker = if second.is_some() { "**" } else { "*" };
+            (name, marker.to_string(), None)
+        },
     );
 
     // Try regular parameter: `name: type` — PY-A / B3: type annotation optional
@@ -2945,3 +2952,4 @@ fn rewrite_super_in_expr(e: &mut AstNode, bases: &[String]) {
         }
     }
 }
+
