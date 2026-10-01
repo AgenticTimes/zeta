@@ -267,6 +267,33 @@ pub struct MirGen {
     pending_closure_binding: Option<String>,
 }
 
+/// 批次 753（#45 第十一成员落点三，跨道补全）：接收者类型是否属 repr 通道
+/// 可渲染家族——`x.to_string()` 据此改发 `lower_to_string`。白名单＝数值/
+/// bool/str/char、地图、数组；PyDynamic／未知 Named（未定型 struct 句柄）/
+/// TypeVariable 不入——363 在册的未定型 str 兜底语义保留，句柄值不被静默
+/// 打印（宁崩不假值）。本辅助在制品缺定义致全树不编译，按单车道约定补全。
+fn repr_routable(t: &Type) -> bool {
+    match t {
+        Type::I8
+        | Type::I16
+        | Type::I32
+        | Type::I64
+        | Type::U8
+        | Type::U16
+        | Type::U32
+        | Type::U64
+        | Type::Usize
+        | Type::F32
+        | Type::F64
+        | Type::Bool
+        | Type::Char
+        | Type::Str => true,
+        Type::Named(n, _) => n == "map" || n == "String",
+        Type::DynamicArray(_) | Type::Array(..) => true,
+        _ => false,
+    }
+}
+
 impl MirGen {
     pub fn new() -> Self {
         Self {
@@ -13108,6 +13135,21 @@ call, no NULL-handle dereference).",
                 } else {
                     None
                 };
+                // 批次 753（#45 第十一成员落点三）：`x.to_string()` 在非 str
+                // 接收者上过去落到下面 opaque_fallback 的 `_ => str_fallback`
+                // 臂——host_str_to_string 把 i64/f64/bool 的**值**当 char* 解
+                // 引用，运行期 rc=139（改前实拍：六形状里除 `a: str` 外全崩，
+                // 编译 rc=0 且带一条 fptosi ABI 警告）。接收者静态类型已知且
+                // 属 repr 通道可渲染家族时，改发 str() 家族同款 `lower_to_string`
+                // （f-string 部件、批次 742 str(d) 的那条）。PyDynamic／未知
+                // 类型接收者不动＝363 在册的未定型 str 兜底语义保留，未定型
+                // struct 接收者亦别把崩溃换成静默句柄值。
+                if method == "to_string"
+                    && arg_ids.len() == 1
+                    && receiver_ty.as_ref().map_or(false, repr_routable)
+                {
+                    return self.lower_to_string(arg_ids[0]);
+                }
                 if let Some((func, ret)) = opaque_fallback {
                     self.stmts.push(MirStmt::Call {
                         func: func.to_string(),
