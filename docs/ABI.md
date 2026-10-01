@@ -408,7 +408,7 @@ codegen.rs:1146-1149，定义 tokio_runtime_stub.c:4172/3850/3856/3862。五者�
 注入标记 `zeta_param_default(index, value)`（parser/top_level.rs:367-388）→
 Resolver 收集 `param_defaults`（resolver.rs:668-692，kind 不匹配时 :682-689 告警）→
 > 锚点源码：src/middle/mir/gen.rs
-gen.rs `fill` 按**声明顺序**落槽：位置实参（:10559-10565）→ 关键字（:10566-10571）→
+gen.rs `fill` 按**声明顺序**落槽：位置实参（:11658-11672）→ 关键字（:11677-11682）→
 `**` 映射填未绑定槽（:11570-11582）→ 默认值（:11583-11592）。
 C 侧 `zeta_param_default` 是**恒等 no-op**（py_additions.c:3208），存在只为让标记不成未定义符号。
 > 锚点源码：src/middle/mir/gen.rs
@@ -474,7 +474,7 @@ M1–M4 在 `/tmp/abi3_*`（批次 316），M5–M7 在 `/tmp/abi8/`（批次 31
 src/backend/codegen/codegen.rs:1457-1475（`_inst` 后逐个拼 `_` 加类型短名）。
 与 N1 共用 `_` 作类型名内部字符和分隔符，同样不可逆。
 
-**N3 重载消歧形是 `<name>_<实参数>`，由 MIR 生成侧加**：gen.rs:14500、:16255
+**N3 重载消歧形是 `<name>_<实参数>`，由 MIR 生成侧加**：gen.rs:14616、:16371
 （`format!("{}_{}", func, arg_ids.len())`）。同处注释分三段：
 加后缀的理由（src/middle/mir/gen.rs:14473-14475）、三类**不加**后缀的名字
 （`zeta_*`、含 `__`、含 `::`，src/middle/mir/gen.rs:14476-14486）、以及"读侧剥后缀会误伤
@@ -529,7 +529,7 @@ docs/ARCHITECTURE-REVIEW-2026-09.md:104 那条"静默错值链"的上游。
 **N7 `::` 与 `__` 双态是并存的事实，不是待修的笔误。**
 存储侧写 `__`、调用点引用带 `::`（:3005-3006 注释原文）。`name.replace("::", "__")` 实测有
 **9 处**（旧文档记"4 处"是错的，且它列的第 4 个锚点其实是一行注释）：
-读侧查表 :2640、:2863、:2898、:2914（第 4 处是 extern 兜底臂，动作是 `add_function` 而非查表）、:3014，mangle 之后再拼 :3187、:3197，
+读侧查表 :2640、:2863、:2898、:2914（第 4 处是 extern 兜底臂，动作是 `add_function` 而非查表）、:3026，mangle 之后再拼 :3187、:3197，
 extern 声明 :3272、:3275——**9 处全部落在 codegen.rs 这一份文件里**（全仓 grep 无第 10 处）。
 但 capybara 的 bug 记录说的是**相反**的存储形：
 "gen_mirs stores functions with `::` separator"（COMPILER_BUGS.md:31），且它观察到的
@@ -837,7 +837,7 @@ Rust 式建模在起作用，Python 侧的对应规则（模块尾值只被 REPL
 而 `print(7 // 2)` 与 `return 1  // Success` 走的是同一条分支。
 
 现行合同（批次 334 立）：`changed==true` 的文件里 `//` 一律按运算符改写（缩进本身就是方言
-证据，这条不变）；`changed==false` 时**逐处**判——`indent.rs:646` 带一个跨行携带的 `(`/`[`
+证据，这条不变）；`changed==false` 时**逐处**判——`indent.rs:649` 带一个跨行携带的 `(`/`[`
 净深度走完文件，`indent.rs:712` 只在深度 > 0 处改写，其余原样留作注释。`{` 故意不计入深度，
 否则花括号方言的 `if x {  // note` 会被吃掉注释。
 
