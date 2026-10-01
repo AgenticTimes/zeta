@@ -4,6 +4,17 @@
 // 另锁 `*a, **k` 双星并存（751 的字典收集不回退）。已知边界（非本批）：
 // jq_wufu_local.py 的 codegen float/整型崩溃＝HEAD 基线同拍（corpus 38/40
 // 的两颗 panic 之一，另行登记），与本批无关。
+// 批次 755 补 expect 行：752 执笔时只落正文没带期望行，harness 按
+// "expected 空"比对 ⇒ python_style 套件恒红；值与批次 752 在册探针读数
+// 及本批独立复跑逐字一致（0/2/16/0/2/0/21/32，三遍全同，CPython 逐条核）。
+// expect: 0
+// expect: 2
+// expect: 16
+// expect: 0
+// expect: 2
+// expect: 0
+// expect: 21
+// expect: 32
 def f(a, *rest):
     return len(rest)
 print(f(1))

@@ -4,6 +4,13 @@
 // （self 剥离后按名收集）。已知边界（非本批、pre-existing 混合值地图读同族）：
 // 混合类型下标读的运行期标签分派＝#113/#189 深水——本钉只用 int 值读、len、
 // 空字典，避开 str/bool 下标读与 print(opts)（键序/JSON 渲染属 742 宽渲染族）。
+// 批次 755 补 expect 行：747/751 执笔时只落正文没带期望行，harness 按
+// "expected 空"比对 ⇒ python_style 套件恒红；值与批次 751 在册探针读数
+// 及本批独立复跑逐字一致（0/2/14/9，三遍全同）。
+// expect: 0
+// expect: 2
+// expect: 14
+// expect: 9
 def f(a, **kw):
     return len(kw)
 print(f(1))

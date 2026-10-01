@@ -1,0 +1,32 @@
+// 批次 753（#45 第十一成员落点三）回归钉：`x.to_string()` 在非 str 接收者。
+// 病灶（backlog #45 第十一成员在册三落点之一）：`.to_string()` 被字符串方法
+// 表恒发 `host_str_to_string`，i64/f64/bool 的**值**被当 char* 解引用。
+// 改前实拍（/tmp/b753/zetac_pre，md5 faf5d483，同一正文双端跑）：
+//   x=42 / y: i64 / f: f64 / bool / 绑定变量五形状编译 rc=0（伴警告
+//   `ABI coerce in call to host_str_to_string arg[0]: fptosi`），运行 rc=139
+//   （SIGSEGV，stdout 零行）；dict 形改前链接失败（Undefined symbols
+//   `_map__to_string`，编译 rc=1）；仅 `a: str` 接收者本就正确。
+// 改后（二进制 3b21babc，批次 754 同树）：正文六行绿 hi/42/42!/1.5/True/
+//   {"k": 1}，逐字对齐 CPython（str(42)='42'、str(1.5)='1.5'、str(True)='True'）；
+//   dict 形打 {"k": 1}——JSON 风格引号属 742 宽渲染族边界（CPython 为
+//   {'k': 1}），本钉锁"不崩不打句柄"，引号风格不在锁面。
+// str 接收者 .to_string()＝恒等（363 在表语义，句柄不复制）。
+// expect: hi
+// expect: 42
+// expect: 42!
+// expect: 1.5
+// expect: True
+// expect: {"k": 1}
+a: str = "hi"
+print(a.to_string())
+x = 42
+print(x.to_string())
+y: i64 = 42
+s = y.to_string()
+print(s + "!")
+f: f64 = 1.5
+print(f.to_string())
+b = 1 < 2
+print(b.to_string())
+d = {"k": 1}
+print(d.to_string())
