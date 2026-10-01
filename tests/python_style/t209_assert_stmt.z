@@ -4,6 +4,9 @@
 // expect: 1
 // expect: ok
 // expect: 2
+// 末段 `assert False` 设计内响亮中止（批次 773 补标：JIT/AOT 两侧实拍 rc=1、
+// stderr 含 AssertionError，jit_sweep 由此从 fail 档进 xabort 档）
+// expect-abort: AssertionError
 print(1)
 assert True
 assert 1 == 1
