@@ -25578,3 +25578,10 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 
 - 主体：t209_assert_stmt.z 加 `// expect-abort: AssertionError`＋头注两行。判据双验：run_one harness 复跑 PASS（改前也 PASS，不回退）；jit_sweep 复跑该枚入 xabort 档，fail 2→1 余量清零（trap 5→4、timeout 1→2 为跨跑抖动不入账，坑 73）。
 - 自纠一条：772 记录 message 的 rows 数（419→420）是写时估算、未跑测量（实测 421/422）；按"不许编造读数"纪律在此如实对照，message 不回改。
+
+## 批次 777（原计划 774，让号）：JIT↔AOT 值级对照门禁
+
+- 动机：768/773 后 sweep fail 档清零，剩"双侧 rc=0 静默值差"无门禁覆盖；对 655 例做全量对照扫描并把探针固化成 tools/jit_vs_aot.sh。
+- 读数：vsame=503 vswitch=0 aot0jitred=0 jit0aotred=137 bothred=8 known=1 timeout=1 nobuild=5 total=655 GREEN——JIT/AOT 值级零分歧（本轮 641 ok 面全对照）。
+- 判据教训两条：空分母假 GREEN（BSD split 参数不兼容）⇒ 分母守卫；掩码步骤注释与实现脱节 ⇒ 503 例假 vswitch。均在同批修正并留证。
+- 号位：并行侧 ce923895/894de21f/f160ae97 占 774-776（#52 审计面），本批取 777。
