@@ -93,6 +93,10 @@ fn main() {
     // rustc 在 mac 上无条件传 -Wl,-dead_strip；C 符号与 Rust 代码无静态引用链会被剥掉
     // （实验 /tmp/b759/exp：plain 与 alias 档 dlsym 命中，裸 dead_strip 档三枚全 0x0）。
     // -alias 让目标成为 dead-strip 根：_keep_* 别名把原符号整体钉进镜像。
+    // 批次 780 实测更正两点：① 别名名本身在 dead_strip 后不落符号表（镜像 _ztk_keep*
+    // 计数恒 0，/tmp/b778 最小复现同拍），核验存活要看目标符号，不能看别名名；
+    // ② 这 1011 条在兑现——临时摘除后重链，keep 名单 1011 枚中 1008 枚从镜像消失，
+    // 仅 3 枚凭引用链存活。摘 alias 的对照实验勿再做第二次归因用。
     let mut keep: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for obj in ["zt_zeta_runtime_c.o", "zt_tokio_runtime.o"] {
         let nm = Command::new("nm")
