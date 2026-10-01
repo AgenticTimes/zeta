@@ -1211,9 +1211,9 @@ impl ErrorCodeRegistry {
                 description: "JIT cannot resolve a runtime symbol".to_string(),
                 example: None,
                 suggestion: Some(
-                    "Compile with -o <path> and run the binary: JIT mode can only bind the host \
-                     functions listed in pylib/jit_mappings.txt plus the symbols zetac itself \
-                     already exports, and the runtime/*.c definitions are not linked into it."
+                    "Compile with -o <path> and run the binary: JIT mode binds the host functions \
+                     listed in pylib/jit_mappings.txt, the symbols zetac itself exports, and the \
+                     runtime/*.c definitions build.rs links in; anything else traps."
                         .to_string(),
                 ),
             },

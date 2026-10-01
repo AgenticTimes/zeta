@@ -64,8 +64,9 @@ println_i64  crate::runtime::zeta_runtime::zeta_println_i64
 # （gen.rs:7810 起、:7932），JIT 一律绑不到 ⇒ E4016 填桩。批次 321 实测：修掉解析器
 # `x @ 1..=10` 的截断后，`test_advanced_patterns.z` 第一次真正执行到这些调用，
 # jit ok 从 163 掉到 162 —— 掉的那一个不是回归，是**被暴露**的缺口。
-# println_f64 / print_f64 故意不在此列：它们只有 C 侧实现，而仓里没有 build.rs
-# （批次 315 根因），Rust 侧无符号可指。
+# println_f64 / print_f64 不在此列：它们只有 C 侧实现，Rust 侧无符号可指；
+# 批次 759 起 build.rs 把 runtime/*.c 链进 zetac 镜像，dlsym 腿直接命中，
+# 无需表项（批次 315 登记的"仓里没有 build.rs"根因已收口）。
 print_i64  crate::runtime::io::print_i64
 print_bool  crate::runtime::io::print_bool
 print_str  crate::runtime::io::print_str
