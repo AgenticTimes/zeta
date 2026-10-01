@@ -100,6 +100,10 @@ pub struct MirGen {
     next_id: u32,
     /// Batch 761 (#80③): 未声明名告警去重——同一名字一次编译只喊一声。
     undeclared_warned: std::collections::HashSet<String>,
+    /// Batch 767 (值标签大弧·读侧)：下标读结果槽 → 格标签槽（zeta_map_value_tag
+    /// 读回的 int）。len() 消费：PyDynamic 实参带格标签 ⇒ 运行期按 tag 分派
+    /// 各类的 __len__，全不中落 zeta_dyn_len 几何兜底。
+    slot_tags: HashMap<u32, u32>,
     /// Batch 763 (#33 M5): 当前函数的声明返回型——Return 处把 I64 值收口成
     /// F64（sitofp 语义），替代按位重读（`-> f64 { return 1 }` 曾打 5e-324）。
     current_fn_ret: Option<Type>,
@@ -307,6 +311,7 @@ impl MirGen {
     pub fn new() -> Self {
         Self {
             undeclared_warned: std::collections::HashSet::new(),
+            slot_tags: HashMap::new(),
             current_fn_ret: None,
             repl_mode: false,
             next_id: 1,
@@ -8950,6 +8955,67 @@ call, no NULL-handle dereference).",
                             return id;
                         }
                     }
+                    // Batch 767 (值标签大弧·读侧按格分派)：PyDynamic 实参带格
+                    // 标签 ⇒ 运行期 tag == 类 id 的按格分派（有 __len__ 的类，
+                    // 名字序定链序），全不中落 zeta_dyn_len 几何兜底。t450 的
+                    // len(c["df"]) 由这里兑现 2（DataFrame.__len__）。
+                    if matches!(arg_ty, Some(Type::PyDynamic) | None) {
+                        if let Some(tag_slot) = self.slot_tags.get(&arg_id).cloned() {
+                            let mut candidates: Vec<(i64, String)> = Vec::new();
+                            let mut cls_names: Vec<&String> =
+                                self.type_decls.keys().collect();
+                            cls_names.sort();
+                            for cn in cls_names {
+                                if let (Some(t), Some(q)) = (
+                                    self.class_tag_id(cn),
+                                    self.qualified_method_candidate(cn, "__len__"),
+                                ) {
+                                    candidates.push((t, q));
+                                }
+                            }
+                            if !candidates.is_empty() {
+                                let mut chain_else: Vec<MirStmt> =
+                                    vec![MirStmt::Call {
+                                        func: "zeta_dyn_len".to_string(),
+                                        args: vec![arg_id],
+                                        dest: id,
+                                        type_args: vec![],
+                                    }];
+                                for (tag_val, qlen) in candidates.iter().rev() {
+                                    let lit = self.next_id();
+                                    self.exprs.insert(lit, MirExpr::IntLit(*tag_val));
+                                    self.type_map.insert(lit, Type::I64);
+                                    let cond = self.next_id();
+                                    self.exprs.insert(
+                                        cond,
+                                        MirExpr::BinaryOp {
+                                            op: "==".to_string(),
+                                            left: tag_slot,
+                                            right: lit,
+                                        },
+                                    );
+                                    self.type_map.insert(cond, Type::Bool);
+                                    let then_stmts = vec![MirStmt::Call {
+                                        func: qlen.clone(),
+                                        args: vec![arg_id],
+                                        dest: id,
+                                        type_args: vec![],
+                                    }];
+                                    let if_stmt = MirStmt::If {
+                                        cond,
+                                        then: then_stmts,
+                                        else_: chain_else,
+                                        dest: None,
+                                    };
+                                    chain_else = vec![if_stmt];
+                                }
+                                self.stmts.extend(chain_else);
+                                self.exprs.insert(id, MirExpr::Var(id));
+                                self.type_map.insert(id, Type::I64);
+                                return id;
+                            }
+                        }
+                    }
                     match arg_ty {
                         Some(Type::Array(_, ArraySize::Literal(n))) => {
                             self.exprs.insert(id, MirExpr::IntLit(n as i64));
@@ -16923,7 +16989,22 @@ call, no NULL-handle dereference).",
                         }
                         _ => Type::I64,
                     };
-                    self.type_map.insert(id, val_ty);
+                    self.type_map.insert(id, val_ty.clone());
+                    // Batch 767 (值标签大弧·读侧)：Any 值槽 ⇒ 读格标签备用。
+                    // 766 写侧登记的类实例 tag（≥CLASS_TAG_BASE）由 len() 等消费，
+                    // 运行期按格分派，静态槽型保持 PyDynamic（异构字典安全）。
+                    if matches!(val_ty, Type::PyDynamic) {
+                        let tag_slot = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_map_value_tag".to_string(),
+                            args: vec![map_slot, key_id],
+                            dest: tag_slot,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(tag_slot, MirExpr::Var(tag_slot));
+                        self.type_map.insert(tag_slot, Type::I64);
+                        self.slot_tags.insert(id, tag_slot);
+                    }
                     return id;
                 }
                 if let Type::DynamicArray(_) = base_ty {

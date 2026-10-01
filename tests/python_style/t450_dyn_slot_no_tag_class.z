@@ -1,11 +1,11 @@
 // 批次 413 残口（承接批次 400 登记①）：`dict[str, Any]` 里存的**类实例**从动态槽读
 // 出来只剩一个 i64 handle ⇒ `zeta_dyn_len` 几何判形闪败（十跑 8×5/2×3）。
-// 批次 765 尝试与回退：首插精化占位面 I64→PyDynamic 确实让本钉五连稳定 2
-// （len 分派 __len__），但 t449 的异构防线被重新武装（413 时代 rc=139 的
-// DataFrame::__len__×列表句柄）⇒ 回退。正确切口＝逐格标签（zeta_map_set_tag
-// 侧表扩类名字母表＋读侧按格分派），refactor 级，非字典级钉型可替代。
-// known-fail: 动态槽无逐格类型标签 ⇒ 类实例经 dict[str, Any] 读出的是几何判形
-// 结果；摘标条件＝值标签大弧第一格真正落地。
+// 批次 765 尝试与回退：字典级首插钉型（I64→PyDynamic 占位放宽）让本钉五连
+// 稳定 2，但 t449 的异构防线被重新武装（413 时代 rc=139）⇒ 回退。
+// 批次 766/767 正解落地（值标签大弧）：写侧——DictInsert 对 py 模式类实例按
+// 类名字母表登记 zeta_map_set_tag（≥100＝类 id）；读侧——Any 值槽下标读时
+// zeta_map_value_tag 读回格标签，len() 按格分派各类 __len__、全不中落
+// zeta_dyn_len 几何兜底。t449 异构防线与 t450 同构字典同时成立。
 // expect: w8 2
 from typing import Any
 from pandas import DataFrame
