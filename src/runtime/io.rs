@@ -7,7 +7,6 @@ use std::io::{self, Write};
 ///
 /// # Safety
 /// No safety concerns
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn print_i64(value: i64) {
     print!("{}", value);
 }
@@ -16,7 +15,6 @@ pub unsafe extern "C" fn print_i64(value: i64) {
 ///
 /// # Safety
 /// No safety concerns
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn print_bool(value: i64) {
     print!("{}", value != 0);
 }
@@ -25,7 +23,6 @@ pub unsafe extern "C" fn print_bool(value: i64) {
 ///
 /// # Safety
 /// ptr must point to valid null-terminated UTF-8 string or be null
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn print_str(ptr: i64) {
     if ptr == 0 {
         return;
@@ -60,7 +57,6 @@ pub unsafe extern "C" fn println() {
 ///
 /// # Safety
 /// No safety concerns
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn println_i64(value: i64) {
     println!("{}", value);
 }
@@ -85,7 +81,6 @@ pub unsafe extern "C" fn println_bool(value: i64) {
 ///
 /// # Safety
 /// ptr must point to valid null-terminated UTF-8 string or be null
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn println_str(ptr: i64) {
     if ptr == 0 {
         println!();
@@ -112,7 +107,6 @@ pub unsafe extern "C" fn println_str(ptr: i64) {
 ///
 /// # Safety
 /// No safety concerns
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn flush() {
     let _ = io::stdout().flush();
 }

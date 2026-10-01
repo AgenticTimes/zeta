@@ -24,7 +24,6 @@ pub unsafe extern "C" fn host_result_make_err(data: i64) -> *mut c_void {
 /// Host function to check if a result is ok.
 /// # Safety
 /// Pointer must be valid Result ptr.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn host_result_is_ok(ptr: *const c_void) -> i64 {
     if ptr.is_null() {
         0
@@ -35,7 +34,6 @@ pub unsafe extern "C" fn host_result_is_ok(ptr: *const c_void) -> i64 {
 /// Host function to retrieve data from a result.
 /// # Safety
 /// Pointer must be valid Result ptr.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn host_result_get_data(ptr: *const c_void) -> i64 {
     if ptr.is_null() {
         0
