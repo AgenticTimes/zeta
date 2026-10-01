@@ -6964,6 +6964,26 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 // (strategies/code/jq_shim.py) could never link.
                 if receiver.is_none() {
                     if let Some((module, member)) = self.py_member_aliases.get(method).cloned() {
+                        // Batch 754 (#265): the caller's OWN module defining the
+                        // same bare name wins over a transitive import alias —
+                        // CPython scope semantics: another module's
+                        // `from .x import f` must not leak into this file's
+                        // namespace. jq_wufu.py defines its own tuple-returning
+                        // `get_premium_rate`; wufu_core's import alias of the
+                        // backend's same-name f64 function hijacked every call
+                        // in the file, typed the tuple result F64 and crashed
+                        // codegen on the tuple unpack (stack_array_get on a
+                        // float-typed slot, corpus 38/40 → this fix).
+                        let (module, member) = {
+                            let own =
+                                format!("{}__{}", self.current_module.replace('.', "_"), method);
+                            let alias_q = format!("{}__{}", module.replace('.', "_"), member);
+                            if own != alias_q && self.func_param_names.contains_key(&own) {
+                                (self.current_module.clone(), method.clone())
+                            } else {
+                                (module, member)
+                            }
+                        };
                         // A member the REGISTRY already declares keeps its C
                         // shim: a library that SUPPLEMENTS a registered module
                         // would otherwise steal `pd.Timestamp` from the
@@ -9460,6 +9480,18 @@ call, no NULL-handle dereference).",
                     });
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, Type::Str);
+                    return id;
+                }
+                // Batch 754 (#265 后续): tuple(xs) — a bare `tuple` extern
+                // (link failure, `_tuple` undefined in wufu_strategy
+                // `_log_rebalance`). A tuple IS a dynamic array in the value
+                // model, so the constructor is the identity on its argument;
+                // keep the element type.
+                if receiver.is_none() && method == "tuple" && args.len() == 1 {
+                    let a = self.lower_expr(&args[0]);
+                    let ty = self.type_map.get(&a).cloned().unwrap_or(Type::I64);
+                    self.exprs.insert(id, MirExpr::Var(a));
+                    self.type_map.insert(id, ty);
                     return id;
                 }
                 if receiver.is_none() && method == "reversed" && args.len() == 1 {
