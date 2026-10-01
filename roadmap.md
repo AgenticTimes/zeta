@@ -25567,3 +25567,9 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 在制品被并包：+5 恢复提交前被并行侧 af2c2c2d（其 765 负结果批）整包收进（坑 109 第二次实拍），hash 对照入册：摘五枚=0b1e5c5b、恢复五枚=af2c2c2d、本批代码=f042cfdf（jit_sweep＋t569 两处）。message/台账不回改。
 - 全量复验读数：python_style 全量 457/0/1/0（红 0；与并行侧 767 自读 458/0/0/0 的差异＝本趟跑在 t450 摘标落地前的树态，只作本批 AOT 面无回归证据）；全套差分 match=2845/judged=2845 rate=100%（bad_case=1 del_undefined_var 按 756 口径单列），较基线转好 23 条——--bless 抬闸在册待做。
 - backlog：②余量族行补注——host.rs 五枚属 AOT 在用面已恢复＝摘除白名单收紧，C∩Rust 余量九族摘前必须同证 JIT 与 AOT 两侧不依赖（本批实证 AOT 侧依赖真实存在）。
+
+## 批次 772（原计划 769，让号）：差分基线抬闸＋②余量族探针收口
+
+- 主体：tools/baselines/diff_consistency.json --bless 重采（601→2846 例口径），抬闸面逐条核干净（消失 0/翻转 0/新增 2245 全 match），CONFIRM_RC=0。绑二进制 7f909b2c（bfb6f636 树态）。
+- ②探针：见 worktree 772 行——九枚名单钉正、array_set_len 大数组形两侧自洽不摘、Result: 回显系设计。
+- 号位：并行侧连占 769-771；本车道第三次撞号（768 与我方记录行 9dbccad2 同号）以 hash 对照入册，不回改。
