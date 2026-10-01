@@ -72,13 +72,19 @@ fn parse_param_full(input: &str) -> IResult<&str, (String, String, Option<AstNod
     // i64 param (V1: call sites with extra args coerce; real variadics need
     // arg-tuple support). The FIRST star is mandatory so this branch can
     // never shadow regular params.
+    // Batch 745 (#264): the annotation after `*args`/`**kwargs` (`: Any`,
+    // `: dict[str, Any]`) is consumed and DISCARDED — the slots stay opaque
+    // i64. Without this, `**kwargs: Any` left `: Any` in the stream and the
+    // parameter list (and the whole def) failed to parse (base.py:76
+    // `def run_backtest(engine: str, **kwargs: Any) -> …`, W1002 34 lines).
     let parse_star = map(
         (
             ws(tag("*")),
             opt(ws(tag("*"))),
             ws(parse_ident),
+            opt(preceded(ws(tag(":")), ws(parse_type))),
         ),
-        |(_, _, name)| (name, "i64".to_string(), None),
+        |(_, _, name, _)| (name, "i64".to_string(), None),
     );
 
     // Try regular parameter: `name: type` — PY-A / B3: type annotation optional
