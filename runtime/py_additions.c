@@ -1353,7 +1353,11 @@ static int zt_maybe_vec(int64_t v) {
     if (v < 0x1000) return 0;
     int64_t cap = ((int64_t*)(v - 16))[0];
     int64_t len = ((int64_t*)(v - 16))[1];
-    return cap >= 0 && len >= 0 && len <= cap && cap <= (1LL << 30);
+    // Batch 783 (#213①)：对齐 _fwd 严格形（cap >= 1）。先量后动量测（探针链接
+    // runtime 实测）：运行期 zeta_dynarray_new 恒 `cap < 8 → cap = 8` ⇒ 真 vec
+    // （含空表）cap ≥ 8，严格形零误伤；20 字符 GC 串的 -16 头可 mimic 成
+    // cap/len 健康形 ⇒ 宽松 cap >= 0 收下（lenient=1/strict=0 实拍）。
+    return cap >= 1 && len >= 0 && len <= cap && cap <= (1LL << 30);
 }
 int64_t zt_bare_mask(int64_t v, int want_notna) {
     if (zt_maybe_vec(v)) {
