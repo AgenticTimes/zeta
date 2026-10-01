@@ -250,6 +250,10 @@ pub struct MirGen {
     func_ret_types: HashMap<String, Type>,
     /// Parameter names per function, for keyword-argument binding.
     func_param_names: HashMap<String, Vec<String>>,
+    /// Batch 747 (#264): callee -> its `**name` star-param. Call sites
+    /// collect keyword arguments matching no declared parameter into a dict
+    /// bound to this parameter.
+    func_star_params: HashMap<String, String>,
     /// PY-A: variables bound to a lambda/closure value, mapped to the
     /// synthetic closure function name. Lets call sites (`f(41)` where `f =
     /// lambda x: x+1`) lower to a direct named call to the closure function.
@@ -317,6 +321,7 @@ impl MirGen {
             captured_vars: std::collections::HashMap::new(),
             func_ret_types: HashMap::new(),
             func_param_names: HashMap::new(),
+            func_star_params: HashMap::new(),
             closure_vars: HashMap::new(),
             closure_ret_tys: HashMap::new(),
             pending_closure_binding: None,
@@ -363,6 +368,13 @@ impl MirGen {
     /// PY-A: parameter names, so `f(a=1)` binds by name.
     pub fn with_func_param_names(mut self, names: HashMap<String, Vec<String>>) -> Self {
         self.func_param_names = names;
+        self
+    }
+
+    /// Batch 747 (#264): `**name` star-params, so unmatched keyword
+    /// arguments collect into a dict at the call site.
+    pub fn with_func_star_params(mut self, stars: HashMap<String, String>) -> Self {
+        self.func_star_params = stars;
         self
     }
 
@@ -1508,6 +1520,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         // `Named("Str")` (a fake class) and so lost every str
                         // dispatch: `input[i]` became a DictGet over a `char*`.
                         self.type_map.insert(id, Type::Str);
+                    } else if pt_str == "**" {
+                        // Batch 747 (#264): `**kwargs` star-param — the slot
+                        // holds an ordinary map handle, so print/len/subscript
+                        // inside the body dispatch as map.
+                        self.type_map
+                            .insert(id, Type::Named("map".to_string(), Vec::new()));
                     } else if let Some(gidx) =
                         generic_names.iter().position(|g| g.as_str() == pt_str)
                     {
@@ -11358,11 +11376,17 @@ call, no NULL-handle dereference).",
                         None
                     };
                     let callee_name = method.clone();
+                    // Batch 747 (#264): the callee's `**name` star-param, if
+                    // declared. Keyword arguments matching no declared
+                    // parameter collect into a dict bound to it.
+                    let star_param: Option<String> =
+                        self.func_star_params.get(method.as_str()).cloned();
                     let fill = |slots: &mut Vec<Option<AstNode>>,
                                 params: &[String],
                                 pos: Vec<AstNode>,
                                 kw: Vec<(String, AstNode)>,
-                                spread: &[AstNode]| {
+                                spread: &[AstNode],
+                                star: Option<&str>| {
                         for (i, a) in pos.into_iter().enumerate() {
                             if i < slots.len() {
                                 slots[i] = Some(a);
@@ -11370,10 +11394,19 @@ call, no NULL-handle dereference).",
                                 slots.push(Some(a));
                             }
                         }
+                        // #264: unmatched keyword arguments go to the star
+                        // param when the callee declares one; without one,
+                        // keep the old append (callee ignores extras).
+                        let star_slot =
+                            star.and_then(|sp| params.iter().position(|p| p == sp));
+                        let mut star_acc: Vec<(AstNode, AstNode)> = Vec::new();
                         for (n, v) in kw {
                             match params.iter().position(|p| *p == n) {
                                 Some(i) => slots[i] = Some(v),
-                                None => slots.push(Some(v)),
+                                None => match star_slot {
+                                    Some(_) => star_acc.push((AstNode::StringLit(n), v)),
+                                    None => slots.push(Some(v)),
+                                },
                             }
                         }
                         // A `**` mapping fills whatever is still unbound.
@@ -11399,6 +11432,17 @@ call, no NULL-handle dereference).",
                                 }
                             }
                         }
+                        // #264: the star-param slot binds a fresh dict —
+                        // the collected kwargs, or `{}` when none were
+                        // passed (Python semantics). A slot already bound
+                        // (explicit positional / `**` mapping) stays.
+                        if let Some(si) = star_slot {
+                            if si < slots.len() && slots[si].is_none() {
+                                slots[si] = Some(AstNode::DictLit {
+                                    entries: star_acc,
+                                });
+                            }
+                        }
                     };
                     if !spread.is_empty() {
                         // Unknown signature (external shim / method): there are no
@@ -11413,7 +11457,7 @@ call, no NULL-handle dereference).",
                             Some(params) => {
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
-                                fill(&mut slots, &params, pos, kw, &spread);
+                                fill(&mut slots, &params, pos, kw, &spread, star_param.as_deref());
                                 Self::warn_unbound(&callee_name, &params, &mut slots);
                                 slots.into_iter().flatten().collect()
                             }
@@ -11441,7 +11485,7 @@ call, no NULL-handle dereference).",
                             Some(params) if receiver.is_none() => {
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
-                                fill(&mut slots, &params, pos, kw, &[]);
+                                fill(&mut slots, &params, pos, kw, &[], star_param.as_deref());
                                 Self::warn_unbound(&callee_name, &params, &mut slots);
                                 slots.into_iter().flatten().collect()
                             }
@@ -11462,7 +11506,7 @@ call, no NULL-handle dereference).",
                                     params.into_iter().skip(1).collect();
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
-                                fill(&mut slots, &params, pos, kw, &[]);
+                                fill(&mut slots, &params, pos, kw, &[], star_param.as_deref());
                                 if let Some(d) = &method_defaults {
                                     for (i, slot) in slots.iter_mut().enumerate() {
                                         if slot.is_none() {
@@ -11482,7 +11526,7 @@ call, no NULL-handle dereference).",
                             Some(params) => {
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
-                                fill(&mut slots, &params, pos, kw, &[]);
+                                fill(&mut slots, &params, pos, kw, &[], star_param.as_deref());
                                 Self::warn_unbound(&callee_name, &params, &mut slots);
                                 slots.into_iter().flatten().collect()
                             }
@@ -11507,7 +11551,7 @@ call, no NULL-handle dereference).",
                                     params.into_iter().skip(1).collect();
                                 let mut slots: Vec<Option<AstNode>> =
                                     params.iter().map(|_| None).collect();
-                                fill(&mut slots, &params, pos, kw, &[]);
+                                fill(&mut slots, &params, pos, kw, &[], star_param.as_deref());
                                 if let Some(d) = &mdef {
                                     for (i, slot) in slots.iter_mut().enumerate() {
                                         if slot.is_none() {
@@ -17687,6 +17731,7 @@ call, no NULL-handle dereference).",
             .with_py_module_paths(self.py_module_paths.clone())
             .with_module_global_types(self.module_global_types.clone())
             .with_func_param_names(self.func_param_names.clone())
+            .with_func_star_params(self.func_star_params.clone())
             .with_argparse_kinds(self.argparse_kinds.clone())
             .with_param_defaults(self.param_defaults.clone())
             .with_source_file(self.source_file.clone())

@@ -70,6 +70,9 @@ pub struct Resolver {
     pub associated_types: HashMap<(String, String), String>,
     pub ctfe_consts: HashMap<String, crate::middle::ctfe::value::ConstValue>,
     funcs: HashMap<String, FuncSignature>,
+    /// Batch 747 (#264): callee -> its `**name` star-param, for call-site
+    /// collection of unmatched keyword arguments into a dict.
+    star_params: RefCell<HashMap<String, String>>,
     /// Registered function ASTs (including module functions)
     registered_funcs: HashMap<String, AstNode>,
     /// Module resolver for Zorb imports
@@ -169,6 +172,7 @@ impl Resolver {
             associated_types: HashMap::new(),
             ctfe_consts: HashMap::new(),
             funcs: HashMap::new(),
+            star_params: RefCell::new(HashMap::new()),
             registered_funcs: HashMap::new(),
             module_resolver: ModuleResolver::new("."),
             macro_expander: MacroExpander::new(),
@@ -932,7 +936,17 @@ impl Resolver {
                                                 format!("{}::{}", base_ty, name);
                                             let typed_params: Vec<_> = params
                                                 .iter()
-                                                .map(|(n, t)| (n.clone(), self.string_to_type(t)))
+                                                .map(|(n, t)| {
+                                                    (
+                                                        n.clone(),
+                                                        self.typed_param_type(
+                                                            &qualified_name,
+                                                            n,
+                                                            t,
+                                                            &[],
+                                                        ),
+                                                    )
+                                                })
                                                 .collect();
                                             let typed_ret = self.string_to_type(ret);
                                             eprintln!(
@@ -1003,8 +1017,11 @@ impl Resolver {
                 // Convert string types to Type enum
                 let typed_params: Vec<(String, Type)> = params
                     .iter()
-                    .map(|(name, ty_str)| {
-                        (name.clone(), self.string_to_generic_type(ty_str, &generic_names))
+                    .map(|(pname, ty_str)| {
+                        (
+                            pname.clone(),
+                            self.typed_param_type(name, pname, ty_str, &generic_names),
+                        )
                     })
                     .collect();
                 let typed_ret = self.string_to_generic_type(ret, &generic_names);
@@ -1025,7 +1042,12 @@ impl Resolver {
                 // Convert string types to Type enum
                 let typed_params: Vec<(String, Type)> = params
                     .iter()
-                    .map(|(name, ty_str)| (name.clone(), self.string_to_type(ty_str)))
+                    .map(|(pname, ty_str)| {
+                        (
+                            pname.clone(),
+                            self.typed_param_type(&name, pname, ty_str, &[]),
+                        )
+                    })
                     .collect();
                 let typed_ret = self.string_to_type(&ret);
                 self.funcs.insert(name, (typed_params, typed_ret, true));
@@ -1095,7 +1117,12 @@ impl Resolver {
                         // Convert string types to Type enum
                         let typed_params: Vec<(String, Type)> = params
                             .iter()
-                            .map(|(name, ty_str)| (name.clone(), self.string_to_type(ty_str)))
+                            .map(|(pname, ty_str)| {
+                                (
+                                    pname.clone(),
+                                    self.typed_param_type(&qualified_name, pname, ty_str, &[]),
+                                )
+                            })
                             .collect();
                         let typed_ret = self.string_to_type(ret);
                         self.funcs
@@ -1132,7 +1159,12 @@ impl Resolver {
                             let mq = format!("{}::{}", mc, mname);
                             let mp: Vec<(String, Type)> = mparams
                                 .iter()
-                                .map(|(n, t)| (n.clone(), self.string_to_type(t)))
+                                .map(|(n, t)| {
+                                    (
+                                        n.clone(),
+                                        self.typed_param_type(&mq, n, t, &[]),
+                                    )
+                                })
                                 .collect();
                             let mr = self.string_to_type(mret);
                             self.funcs.insert(mq.clone(), (mp, mr, false));
@@ -1171,7 +1203,12 @@ impl Resolver {
                 // Convert string types to Type enum
                 let typed_params: Vec<(String, Type)> = params
                     .iter()
-                    .map(|(name, ty_str)| (name.clone(), self.string_to_type(ty_str)))
+                    .map(|(pname, ty_str)| {
+                        (
+                            pname.clone(),
+                            self.typed_param_type(&name, pname, ty_str, &[]),
+                        )
+                    })
                     .collect();
                 let typed_ret = self.string_to_type(&ret);
                 self.funcs.insert(name, (typed_params, typed_ret, false));
@@ -3927,6 +3964,36 @@ impl Resolver {
             .collect()
     }
 
+    /// Batch 747 (#264): one parameter's type at registration time. The
+    /// parser marks `**name` star-params with the reserved type string "**";
+    /// the slot is an ordinary map handle (which is what `**name` IS), and
+    /// the name is recorded — first star wins, Python allows only one — so
+    /// call sites can collect unmatched keyword arguments into a dict bound
+    /// to this parameter.
+    fn typed_param_type(
+        &self,
+        fname: &str,
+        pname: &str,
+        ty_str: &str,
+        generic_names: &[String],
+    ) -> Type {
+        if ty_str.trim() == "**" {
+            self.star_params
+                .borrow_mut()
+                .entry(fname.to_string())
+                .or_insert_with(|| pname.to_string());
+            Type::Named("map".to_string(), Vec::new())
+        } else {
+            self.string_to_generic_type(ty_str, generic_names)
+        }
+    }
+
+    /// Batch 747 (#264): callee -> its `**name` star-param, keyed like
+    /// `func_param_names`.
+    pub fn func_star_params(&self) -> HashMap<String, String> {
+        self.star_params.borrow().clone()
+    }
+
     pub fn is_abi_stable(&self, key: &MonoKey) -> bool {
         key.type_args.iter().all(|t| is_cache_safe(t))
     }
@@ -5258,6 +5325,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_global_consts(self.ctfe_consts.clone())
             .with_func_ret_types(ret_types)
             .with_func_param_names(self.func_param_names())
+            .with_func_star_params(self.func_star_params())
             .with_type_decls(self.type_decls.clone())
             .with_nonlocal_names(self.nonlocal_names.borrow().clone())
             .with_module_globals(self.module_globals.borrow().clone())

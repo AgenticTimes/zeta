@@ -99,6 +99,12 @@ impl NewTypeCheck for Resolver {
         // Handle reference types: &str, &mut i64, etc.
         let s = s.trim();
 
+        // Batch 747 (#264): `**kwargs` star-param marker from the parser —
+        // the slot holds an ordinary map handle, which is what `**name` is.
+        if s == "**" {
+            return Type::Named("map".to_string(), Vec::new());
+        }
+
         // Debug: print what we're parsing (disabled for performance)
 
         // Safety check: empty / dyn → PyDynamic (B3)

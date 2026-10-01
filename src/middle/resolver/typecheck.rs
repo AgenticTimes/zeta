@@ -357,6 +357,11 @@ impl Resolver {
     /// Convert string type annotation to Type enum
     /// Uses unified type parsing interface
     fn string_to_type(&self, s: &str) -> Type {
+        // Batch 747 (#264): `**kwargs` star-param marker from the parser —
+        // the slot holds an ordinary map handle, which is what `**name` is.
+        if s.trim() == "**" {
+            return Type::Named("map".to_string(), Vec::new());
+        }
         // Use the unified type parsing
         match self.parse_type_string(s) {
             Ok(ty) => ty,
