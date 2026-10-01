@@ -25549,3 +25549,12 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 附带澄清：`W0003 Typecheck failed (non-fatal)` 只在 p_f64/p_nl 形状出现（且仅 JIT 侧报），与 segv 大族不同一条线，typecheck 面另查。
 
 证据面：本批零代码改动（度量+登记），判据＝上列当场命令实拍；二进制＝761 落地后 e60048d9 树重建件。scratch：/tmp/b759/{r1,r2,r3}.z、r2.ll、r2.bin。
+
+## 批次 764（2026-10-01，**修复批：值当指针族——jit 宿主绑定裸名占用摘除**，提交 0b1e5c5b）
+
+- 承 761 新开（jit_sweep segv 0→6）与 762 度量（分族+r2 最小复现）。号位让渡：并行侧连占 761/762/763（9d246f68/c16537a2/3790260b），本批 764。
+- 根因实拍：`nm -m` 镜像 `_array_len` 单枚 T＝objdump 反汇编为 Rust magic 检查体（0x41524152 比较+print 调用）；C 体在 `_array_len.2`（cbz/ldur [x0,#-8]/ret＝tokio_runtime_stub.c:525）。merged .o 内 plain 与 .2 同址＝stub 的 C 体经 ld -r 改名后缀面进镜像，裸名被 Rust no_mangle 导出占用⇒dlsym 恒回 Rust 体。摘表 44 行后 MCJIT 走默认宿主查找（dlsym）＝仍绑 Rust＝r2 仍红；摘 Rust 侧同名 no_mangle 后裸名归 C，r2 转绿。
+- 附带发现（另批归因）：build.rs 1011 条 -Wl,-alias 确进 rustc 链接命令行（`Running` 行 grep 实拍），但镜像 `nm|grep -c ztk_keep`＝0、dyld_info 亦 0——761 台账写的"-alias 钉 dead-strip 根"未兑现，实际留存面是 ld -r 改名后缀＋直链 .o；改后复验：摘 Rust 占用后 C plain 名在镜像且 JIT 端到端正确，功能面无损，机制账待补。
+- 改动面：pylib/jit_mappings.txt −44 行（138→94）；jit_mappings_gen.rs 重生成；src/runtime/{array.rs,map.rs,io.rs,host.rs,actor/result.rs}＋src/std/collections/mod.rs 摘 26 处 #[unsafe(no_mangle)]；tests/python_style/t569_jit_cbind_array.z 新钉。
+- 读数：r2 JIT=9（AOT 基准 9）magic 零；六枚 segv 全 rc=0；jit_sweep ok 536→639、segv 6→0、fail 105→8、timeout 2→1（total 653）；sample_gate 764 rc=0（窗口 4：285/285、54/0、26/26、40/40）；窗口 3 参考轮 rc=0；emit_stable 2/0；ABI rc=2（漂移全在 src/middle 并行侧在制面，src/runtime/src/std 零）。
+- 新开：①-alias 机制归因（登记 backlog）；②C∩Rust 同名 no_mangle 余量族（reactor_/waker_/option_/runtime_malloc/host_result_make_ 等，摘除需同面验证，防"修掉巧合"——现 JIT 对这些走 Rust 体可能恰是自洽面）。
