@@ -4180,8 +4180,25 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 // Handle array_get and stack_array_get specially for inline memory access
                 // (avoids function call overhead — 10x speedup for pure Zeta array operations)
                 if (func == "array_get" || func == "stack_array_get") && args.len() == 2 {
-                    let array_ptr_val = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                    let index_val = self.gen_expr_safe(&args[1], exprs).into_int_value();
+                    let p0 = self.gen_expr_safe(&args[0], exprs);
+                    let p1 = self.gen_expr_safe(&args[1], exprs);
+                    let array_ptr_val = p0.into_int_value();
+                    // Batch 769 (#79)：`/` 真除法（Python 语义，#188 家族）让整型
+                    // 索引算术产出 F64（`mid = lo + (hi - lo) / 2`，correctness.z
+                    // 的泛型 binary_search）——into_int_value 直接 panic（rc=101，
+                    // selfhost 全量判据的新失败）。索引 F64 ⇒ fptosi 收口（与调用
+                    // 实参 ABI coerce 同款），不再假设索引恒整。
+                    let index_val: inkwell::values::IntValue<'ctx> = if p1.is_float_value() {
+                        self.builder
+                            .build_float_to_signed_int(
+                                p1.into_float_value(),
+                                self.context.i64_type(),
+                                "idx_fptosi",
+                            )
+                            .unwrap()
+                    } else {
+                        p1.into_int_value()
+                    };
 
                     let array_ptr = self
                         .builder
