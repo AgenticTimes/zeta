@@ -25505,3 +25505,24 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 代码改动优先：本批主体是真实代码修复（gen.rs 47 行），测试夹具摘钉随批附带
 - 门禁读数入册：official 194/194·191/194、python_style 422/3/5/0 逐项记录
 - 存量红源未动：t231/t233/t404 与基线逐字相同
+
+## 批次 761（2026-10-01，**修复批：jit E4016 绑定缺位真收口——build.rs 嵌入 C 运行期（#26 根）**，提交 e60048d9）
+
+**号位交代**：本批原按 759 号位实现；并行侧 91830094 在我实现期间以"batch 759"（#196 台账核对工具）提交、其在制 `src/main.rs` 注释自称 Batch 760（后由 c1cc30ee 落地），故让至 761。我的代码提交 e60048d9 夹在两者之间，commit message 不回改，本节与 worktree 行为对照。
+
+**根因链（systematic-debugging 走完四阶段）**：
+1. 实拍＝JIT 模式（无 -o）对几乎每个程序打 E4016 陷阱——p_base（三行算术）就 trap `zeta_module_decl/zeta_env_get/zeta_env_set`；AOT 全绿证明实现存在于 repo 根 zeta_runtime_c.o/tokio_runtime.o（tools/build_runtime.sh 配方）。
+2. 判定腿＝jit.rs:38 `jit_symbol_resolvable` 三腿（JIT_VEC_BINDINGS 前缀 / jit_mappings_gen 表 138 条 / defined_in_process_image＝dlopen(NULL)+dlsym）；探针符号全部不在表、不在前缀 ⇒ 唯一可行腿是进程镜像。
+3. 第一轮 build.rs 只链 .o：nm 计数 0、探针仍 trap——rustc 在 mac 无条件传 -Wl,-dead_strip，无引用链的 C 码整族被剥。/tmp/b759/exp 三档对照钉死：plain 链接 dlsym 三枚全命中；-dead_strip 档三枚全 0x0；-exported_symbols_list 限列档链接失败（限列会把其余符号藏掉）。ld 无 -no_dead_strip（unknown options 实拍）。
+4. 定案：-Wl,-alias 把每个 .o 全局符号钉成 dead-strip 根（E 档：目标留存、**原名** dlsym 命中）；build.rs 用 `nm -g -U -j` 枚举两颗合并 .o 的符号自动发 alias。jit.rs 判定码零改动。
+
+**实现面**：build.rs（新，135 行）镜像 tools/build_runtime.sh 步骤序（含 tokio_runtime.c 编不过退 stub-only 的兜底）；非 mac 目标／clang 缺失只跳过嵌入不打死构建；`cargo:rerun-if-changed` 逐 .c＋该脚本本身（防坑 85）。文案三处：error_codes E4016 suggestion、jit.rs 注释块（首版把"trap 名在列"逻辑写反，当场自纠）、jit_mappings.txt 的 println_f64 exclusion 注记（+1 行；已查 gen_from_registry.py 不持有该注释，手改安全）。
+
+**读数**（全部当场命令实拍）：
+- 四探针改前（/tmp/b759/zetac_pre＝e9341c0f）全 trap；改后端到端 p_base=3、p_f64=2.5、p_mod=2.0、p_nl=2，E4016 零出现；AOT 参照同值。
+- jit_sweep：pre＝ok 180/trap 472/fail 0/timeout 1/segv 0；post＝ok 536/trap 4/fail 105/timeout 2/segv 6（total 653）。fail/timeout 档＝原 trap 早退的程序转为真执行后失败，属暴露面非回归面。
+- **新开缺陷族**：jit 真执行 segv 6 枚（名单见台账行）。AOT 侧六枚全 rc=0 ⇒ JIT 特有。首枚 lldb 崩点＝py_os_path_join+44 对 [x21]（address 0x8）解引用＝空字符串指针入参；`__file__` 单独探针（p_file）JIT 可读，非直接元凶。追根因另批（已入 backlog 新开登记）。
+- 全套 python_style 455/0/1/0（与 758 落地时持平）；sample_gate 761 rc=0（窗口 1：python_style 54/0、official 18/18、corpus 40/40）；此前以 759 名义跑过一轮 rc=0（窗口 9：official 20/20、corpus 40/40）。ABI 锚点 rc=0；emit_stable 2/0。
+- 位移 A/B（--emit-llvm 456 夹具，pre vs post）：仅 t23_generic_instantiation 一枚 @id 定义块顺序搬家；两侧各自同二进制两遍逐字节自洽 ⇒ 差异来自 pre 快照（含 758 在制态）与 HEAD 的 758 族间差，非本批（本批零 codegen 码改动）。如实标注：门禁读数跑于含并行侧 main.rs 在制的二进制。
+
+**方法记录**：改前后各轮都先用当场 md5 认二进制（会话开头在册的 15f46497 已被并行侧重编换代为 e9341c0f，按快照实拍走，未沿用旧号读数）；A/B 循环产物即删（ab/ 目录不留 456×2 文件）；cmp 一律带 -s 与显式路径（坑 100）。
