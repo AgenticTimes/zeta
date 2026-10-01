@@ -3343,6 +3343,38 @@ impl Resolver {
                             }
                         }
                     }
+                    // Batch 745: match arms carry returns too — the Python
+                    // `case pat:` form wraps them in a Block (parse_match_arm's
+                    // block-body form), and the Rust `=> expr` form IS an
+                    // implicit return of the arm expression. Without this
+                    // descent a match-based String return left the function
+                    // pinned I64 (callers printed 0 for `f(1)`).
+                    AstNode::Match { arms, .. } => {
+                        for arm in arms {
+                            // case form: body is a Block of stmts (collect the
+                            // Returns); => form: body IS the implicit return
+                            // expr. Nested match-in-match inside an arm body is
+                            // a registered boundary (no recursion in this walk).
+                            match &*arm.body {
+                                AstNode::Block { body } => {
+                                    for s in body {
+                                        if let AstNode::Return(val) = s {
+                                            if let Some(t) = refinable(val) {
+                                                out.push(t);
+                                            } else if !matches!(**val, AstNode::Lit(0)) {
+                                                out.push(Type::PyDynamic);
+                                            }
+                                        }
+                                    }
+                                }
+                                other => {
+                                    if let Some(t) = refinable(other) {
+                                        out.push(t);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
