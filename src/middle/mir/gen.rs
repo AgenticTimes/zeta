@@ -12414,6 +12414,58 @@ call, no NULL-handle dereference).",
                     self.type_map.insert(id, receiver_ty.clone().unwrap());
                     return id;
                 }
+                // Batch 785 (#213① 下游·裸形)：裸 `clip(v[, lo[, hi]])` 调用的
+                // 元素型分派——f64 位元素列表走 py_vec_clip_f64（C 侧按位
+                // clamp）；裸名原路（C clip 族按 char* → strtod）对 f64 位
+                // 元素 = 按位当指针 ⇒ strtod(SEGV，clip→len 闪崩真身)。
+                // 非 F64 元素（str/int 列）原路不动。bounds 整型先 sitofp。
+                if receiver.is_none()
+                    && matches!(method.as_str(), "clip" | "clip_2" | "clip_3" | "clip_4")
+                    && !arg_ids.is_empty()
+                    && matches!(
+                        self.type_map.get(&arg_ids[0]),
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _))
+                            if matches!(**e, Type::F64)
+                    )
+                {
+                    fn to_f64(s: &mut MirGen, id: u32) -> u32 {
+                        match s.type_map.get(&id).cloned() {
+                            Some(Type::F64) => id,
+                            _ => {
+                                let f = s.next_id();
+                                s.stmts.push(MirStmt::Call {
+                                    func: "zeta_float_i64".to_string(),
+                                    args: vec![id],
+                                    dest: f,
+                                    type_args: vec![],
+                                });
+                                s.exprs.insert(f, MirExpr::Var(f));
+                                s.type_map.insert(f, Type::F64);
+                                f
+                            }
+                        }
+                    }
+                    let lo_f = arg_ids.get(1).map(|&id| to_f64(self, id));
+                    let hi_f = arg_ids.get(2).map(|&id| to_f64(self, id));
+                    let lo = lo_f.unwrap_or_else(|| self.next_id_with_lit(0));
+                    let hi = hi_f.unwrap_or_else(|| self.next_id_with_lit(0));
+                    let has_lo = self.next_id_with_lit(if lo_f.is_some() { 1 } else { 0 });
+                    let has_hi = self.next_id_with_lit(if hi_f.is_some() { 1 } else { 0 });
+                    self.type_map.insert(has_lo, Type::I64);
+                    self.type_map.insert(has_hi, Type::I64);
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_vec_clip_f64".to_string(),
+                        args: vec![arg_ids[0], lo, hi, has_lo, has_hi],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(
+                        id,
+                        Type::DynamicArray(Box::new(Type::F64)),
+                    );
+                    return id;
+                }
                 // `series.max()` / `.min()` on a COLUMN — same ghost family
                 // (`[dynamic]str__max`), reached once annotated params keep their
                 // DataFrame type (`covers_range` does `cache_df[date_col].max()`).
