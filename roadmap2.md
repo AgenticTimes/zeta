@@ -320,3 +320,52 @@ G.5e 符号注册表（= C1 SymbolRegistry）
 4. **corpus 工具的 30s 硬编码预算**（#260）。
 
 **账务**：代码 `72ed9fac`（`parser.rs` +12/−1、`top_level.rs` +57/−7、`t544` 新夹具 +39/−0）→ 本记录批。下一次全量门禁＝**批次 670**。存件 `/tmp/b661/`（改前二进制**在仓内** `target/release/zetac.pre661`（坑 52：A/B 两颗须同目录，故不放 /tmp）、`gate.log`/`gate2.log`/`gate3.log`、`w1002_ab.sh`/`w1002_ab.txt`/`w1002_ab.log`、`corpus_run.py`/`corpus_post_final.{log,txt}`、`tt.sh`/`tt.log`、`err_pre661.txt`、`probe_{pre,post}.err`、`t259_*` 两颗对照、`257_{zeta,oracle}.{out,err}`、`kw_*.py`、`m1–m6.py`、`corpus_files.txt`(310)/`corpus_fn_files.txt`(10)/`ab_files.txt`(8)）。语料目录里我那两支探针已删（`_drv_probe661.py` 文本存 `/tmp/b661/probe661_kept.py`，#257 复用）。
+
+---
+
+### 批次 739（2026-10-01，cleanup 车道）：参数表里的 `*args: T` / `**kwargs: T` 带类型注解 ⇒ 整条 `def` 连同其后所有顶层项被丢（2.2 前端解析／参数表）
+
+代码笔 `c68b815b`（`src/frontend/parser/top_level.rs` +9/−1、新夹具 `tests/python_style/t556_star_param_annotation.z` +42/−0）→ 本记录批。harness #263。
+
+**一、最小复现（改前二进制 `64b0af81`、改后 `b2b9daf2`，两颗同目录＝坑 52；记录批复测矩阵 `/tmp/b662/probe739.sh`）**
+
+| 探针 | 形 | 改前丢弃行 | 改后丢弃行 |
+|---|---|---|---|
+| `p1.py` | `def f(a, **k)`（裸，无注解） | 0 | 0 |
+| `p2.py` | 多行参数表 + 默认值 + 裸 `**k` | 0 | 0 |
+| `q8.py` | `def f(a, **k)`（裸） | 0 | 0 |
+| `q6.py` | `def f(a, **k: Any)` | 4 | 0 |
+| `q7.py` | `def f(a, *args: int)` | 4 | 0 |
+| `q9.py` | `def f(**k: str)` | 4 | 0 |
+| `q10.py` | `def f(a: int = 1, **k: Any)` | 4 | 0 |
+| `q2.py` | 嵌套 `def` 内多行参数表 + `**k: Any,` | 10 | 0 |
+| `q4.py` | 多行参数表 + `**k: Any,` + `-> tuple[...]` | 7 | 0 |
+| `def223.py` | 语料成员 `backend/engines/jq_shim.py:232` 的 `def _macd(...)` 隔离件 | 58 | 0 |
+
+⇒ 裸星形参数一直是通的，**只有"带注解"这一种常见 py 拼写触发**；四条带注解的形全红、改后全 0。当场实拍只出 W1002（`grep -oE "W100[0-9]"` 逐形统计＝`1 W1002`，无 W1004），改前夹具运行期零输出。
+
+**二、定位**：`parse_param_full` 的 `parse_star` 臂（`src/frontend/parser/top_level.rs:74-83`）只消费 `*`/`**` + 标识符，不接后面的 `: 类型`。残留的 `: Any` 使参数表 `many0`+`)` 无法收尾 ⇒ 整条 `def` 项解析失败 ⇒ 顶层 `many0` 停在第一项，`ensure_fully_parsed`（`src/main.rs:478-502`）报 W1002 并**保留 rc=0**（静默截断，同 661 的 `fn` 族形状）。
+
+**三、最小修（+8/−1）**：`parse_star` 的四元组补一项 `opt(preceded(ws(tag(":")), ws(parse_type)))`，映射仍返回 `(name, "i64", None)` —— **注解只被消费、不参与定型**，V1 语义（星形参数按不透明 i64 收）逐字不变。兄弟臂 `parse_regular`/`parse_self` 本来就消费注解，本修只是把星形臂补齐到同一形状。
+
+**四、位移（语料全项目口径＝310 文件，cwd `~/source/quant/REasyQuant`；`/tmp/b662/w1002_ab739.sh`、`ab739.{pre,post}.tsv`）**：W1002 丢弃行 **10739 → 9486（−1253）**，5 个成员改善、**0 个变差**、305 个不变。
+
+| 成员 | 改前 | 改后 |
+|---|---|---|
+| `backend/engines/nautilus_engine.py` | 413 | 0 |
+| `backend/engines/strategy_api.py` | 312 | 0 |
+| `backend/datasrc/data_service.py` | 129 | 0 |
+| `backend/engines/base.py` | 34 | 0 |
+| `backend/engines/jq_shim.py` | 1092 | 727 |
+
+⇒ **#259 由四成员 1950 行收窄为四成员 1585 行**（`jq_shim.py` 的星形注解那 365 行已收，剩余成因不同：727／571／190／97）。门禁那步 `corpus` 的分母是另一个口径（`~/source/quant/REasyQuant/strategies`，40 文件），别与本表的 310 混用。
+
+**五、快门禁读数**（`tools/run_all.sh --skip-jit --skip-mbvar --skip-emit-stable --skip-clean`，独占机器，日志 `/tmp/b662/gate739.log`；动 `src/frontend` ⇒ 差分全套非抽样）：official 编译 194/194、编译+链接 191/194（3 条 link-only 存量）；**python_style 443 passed / 0 failed / 1 known-fail / 0 xpass**（＝主线 738b 在册 442 + 新夹具 t556；改前二进制未重跑本步，442 取自 738b 提交信息）；语料 40 文件解析通过 38/40（两条失败 `_drv_accept_409.py`、`jq_wufu_local.py` 均存量）；**差分 match=2717 judged=2717 rate=100.0%，bad_case=1（总用例 2718）**；诊断面 official 6 文件 27 行、python_style 131 文件 280 行；swallow 6/0、import 22/0、empty_stmt 68/0、pysrc 42/0、cli_semantics 87/0、ignore_rules 19/0、dyn_binding 4/0、comment_drift 0 处复述。**`GATE_RC=1`**，唯一红源＝存量坏用例 `del_undefined_var`（`tests/diff/cases/del_undefined_var.dcase`，`del` 未定义变量不报 NameError；批次 554 §六③ 已在册，非本批引入）。
+
+**六、非本批读数（都有 A/B 证据）**
+
+1. **knob 步 23 条断言里 FAIL 15**：改前/改后两颗二进制的输出**逐字节相同**（`/tmp/b662/knob.{pre,post}.txt` 各 1433 字节，md5 `beac89cb4644c09d28c8025991f5eae7`），且 `gate739.log:67` 印的是「A 段 rc=1（B 段未跑）」⇒ 与本批无关、本车道从未逐条归因 ⇒ 登记 **#264**。
+2. **差分「较基线转好 23 条」**：这 23 条名字里 **0 条**含星形参数注解，抽 5 条在改前二进制上已 match ⇒ 不是本批收益，只是 blessed 闸门低于现状（**未 --bless 抬闸**，抬闸随主线裁定）。
+3. **锚点**：`tools/check_abi_anchors.py` 报**漂移 216 / 新 0 / 消失 5**（存件 `/tmp/b662/anchors739.txt`），其中 **2 条属本批搬家**＝`src/frontend/parser/top_level.rs:347-368`、`:938-951`（对应 `docs/ABI.md:421`、`:857` 的引用）；其余 214 条在本车道改前已漂。**车道纪律：`docs/ABI.md` 与 `tools/baselines/**` 对 cleanup 只读，本批不重绑 ⇒ 重绑义务随合入面走（合入那批须把这 2 条一起收）**。
+
+**账务**：代码 `c68b815b` → 本记录批。存件 `/tmp/b662/`（改前二进制在仓内 `target/release/zetac.pre662`、`gate739.log`、`w1002_ab739.sh`/`ab739.{pre,post}.tsv`/`ab739.log`、`probe739.sh`、`p1–p5.py`/`q2–q10.py`/`def223.py`、`jqshim_post.err`、`knob.{pre,post}.txt`、`anchors739.txt`、`build_bz.log`）。下一次全量门禁＝**批次 680 边界由主线定**。

@@ -1,0 +1,42 @@
+// 批次 739（cleanup 车道）：`*args: T` / `**kwargs: T` 带类型注解 ⇒ 参数表无法收尾 ⇒
+// 整条 def 连同其后所有顶层项被丢（当场实拍只出 W1002，无 W1004）。
+// 根因＝parse_param_full 的 parse_star 只吃 `*`/`**`＋标识符，不接 `: 类型`；
+// 裸 `**k`（无注解）一直是通的，所以本缺陷只在"写注解"这一种常见 py 拼写上触发。
+// 四形都是当场实拍（改前二进制逐条 W1002；本夹具改前编译只出 1 条 W1002 且
+// 运行期零输出，改后五条 print 全出）：
+// ① `def f(a, **k: Any)`、② `def f(a, *args: int)`、③ `def f(**k: str)`、
+// ④ 多行参数表＋带默认值参数＋`**k: Any`（语料成员 REasyQuant/backend/engines/
+//    jq_shim.py:232 的 `def _macd(...)` 即此形；隔离成单文件后改前丢弃 58 行）。
+// V1 语义不变：star 参数仍按不透明 i64 收，注解只被消费、不参与定型。
+// 少给实参（本夹具的 `konly2()`、`multi("x")`）会出 PY-A「缺参读 0」告警——
+// 与注解无关，值来自函数体 return，不受影响。
+def kwonly(a: int, **k: Any) -> int:
+    return a
+
+
+def varargs(a: int, *args: int) -> int:
+    return a
+
+
+def konly2(**k: str) -> int:
+    return 5
+
+
+def multi(
+    security: str,
+    check_date: Any = None,
+    **k: Any,
+) -> int:
+    return 12
+
+
+print("kw", kwonly(7))
+print("va", varargs(8))
+print("k2", konly2())
+print("multi", multi("x"))
+print("tail-reached")
+// expect: kw 7
+// expect: va 8
+// expect: k2 5
+// expect: multi 12
+// expect: tail-reached

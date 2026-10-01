@@ -77,6 +77,9 @@ fn parse_param_full(input: &str) -> IResult<&str, (String, String, Option<AstNod
     // `**kwargs: Any` left `: Any` in the stream and the parameter list
     // (and the whole def) failed to parse (base.py:76
     // `def run_backtest(engine: str, **kwargs: Any) -> …`, W1002 34 lines).
+    // 合注（757 合并核销）：cleanup 739（`c68b815b`）独立修了同一个洞（消费
+    // `: 类型` 注解、槽仍发不透明 "i64"）——本侧 745b 起同修并走得更远，其
+    // 文字与本行并入下述演化链。
     // Batch 747 (#264): the slot type is the reserved marker string "**";
     // resolver lowers it to an ordinary map (what `**name` IS) and records
     // the name so call sites collect unmatched keyword arguments into a
