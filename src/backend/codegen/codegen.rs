@@ -168,31 +168,30 @@ impl<'ctx> LLVMCodegen<'ctx> {
             i64_type.fn_type(&[ptr_type.into()], false),
             Some(Linkage::External),
         );
+        // Batch 771 (#79 余一格收口)：与 C 桩实签对齐（tokio_runtime_stub.c:545+
+        // 全 i64 ABI）——原 ptr 签名陈旧于 Rust host 时代，遮住 result.z 的 i64
+        // extern 声明 ⇒ verifier 双错（ret i64 vs ptr＋参数不匹配）。
         module.add_function(
             "host_result_make_ok",
-            ptr_type.fn_type(&[i64_type.into()], false),
+            i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
         module.add_function(
             "host_result_make_err",
-            ptr_type.fn_type(&[i64_type.into()], false),
+            i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
         module.add_function(
             "host_result_is_ok",
-            i64_type.fn_type(&[ptr_type.into()], false),
+            i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
         module.add_function(
             "host_result_get_data",
-            i64_type.fn_type(&[ptr_type.into()], false),
+            i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
-        module.add_function(
-            "host_result_free",
-            void_type.fn_type(&[ptr_type.into()], false),
-            Some(Linkage::External),
-        );
+
         // Option runtime functions
         module.add_function(
             "option_make_some",
@@ -4975,18 +4974,19 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     };
 
                     // Check if this is a runtime function that takes pointer arguments
+                    // Batch 771 (#79 余一格收口)：host_result_* 四名摘除——已链接
+                    // 的 C 桩（tokio_runtime_stub.c:545-581）全是 i64 ABI
+                    // （int64_t option_make_some(int64_t) / host_result_make_ok(int64_t)），
+                    // inttoptr 实参对 i64 形参＝verifier 错（result.z 的 rc=101 即此）；
+                    // Rust ptr-ABI 旧宿主已不入用户链接。option_* 桩同为 i64，一并
+                    // 如实化（实测语义不变）。
                     let needs_ptr_arg = base_func == "option_is_some"
                         || base_func == "option_get_data"
-                        || base_func == "option_free"
-                        || base_func == "host_result_is_ok"
-                        || base_func == "host_result_get_data"
-                        || base_func == "host_result_free";
+                        || base_func == "option_free";
 
                     // Check if this is a runtime function that returns a pointer
                     let returns_ptr = base_func == "option_make_some"
-                        || base_func == "option_make_none"
-                        || base_func == "host_result_make_ok"
-                        || base_func == "host_result_make_err";
+                        || base_func == "option_make_none";
 
                     let arg_vals: Vec<BasicMetadataValueEnum> = args
                         .iter()

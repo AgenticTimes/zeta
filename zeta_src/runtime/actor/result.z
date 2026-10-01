@@ -1,52 +1,18 @@
 // zeta_src/runtime/actor/result.z
 // Result type host helpers for Zeta runtime
 // Used for ? propagation and error handling
-// Ported from src/runtime/actor/result.rs, implementations now in Zeta.
+//
+// 批次 771（#79 余一格收口）：host 实现在 C 运行期（tokio_runtime_stub.c:545+，
+// 全 i64 ABI），本文件改走 extern 声明路。此前版本用 Box/unsafe 在 zeta 侧重实现
+// 同名函数——与 codegen 的指针特判名单（按名匹配 host_result_*）三层绞索：
+// 特判的 inttoptr 实参撞 i64 形参 ⇒ LLVM verifier 双错（ret i64 vs ptr ＋
+// host_result_free_1 参数不匹配，rc=101，selfhost 判据唯一登记失败）。
+// 特判名单已摘 host_result_* 四名（对已链接 C 桩本就错误），本文件改 extern。
 
-use std::ffi::c_void;
-
-#[derive(Debug)]
-struct ResultInner {
-    tag: bool, // true for Ok, false for Err
-    data: i64,
-}
-
-/// Host function to create an ok result.
-pub fn host_result_make_ok(data: i64) -> *mut c_void {
-    Box::into_raw(Box::new(ResultInner { tag: true, data })) as *mut c_void
-}
-
-/// Host function to create an error result.
-pub fn host_result_make_err(data: i64) -> *mut c_void {
-    Box::into_raw(Box::new(ResultInner { tag: false, data })) as *mut c_void
-}
-
-/// Host function to check if a result is ok.
-pub fn host_result_is_ok(ptr: *const c_void) -> i64 {
-    if ptr.is_null() {
-        0
-    } else {
-        unsafe { (*(ptr as *const ResultInner)).tag as i64 }
-    }
-}
-
-/// Host function to retrieve data from a result.
-pub fn host_result_get_data(ptr: *const c_void) -> i64 {
-    if ptr.is_null() {
-        0
-    } else {
-        unsafe { (*(ptr as *const ResultInner)).data }
-    }
-}
-
-/// Host function to free a result pointer.
-pub fn host_result_free(ptr: *mut c_void) {
-    if !ptr.is_null() {
-        unsafe {
-            let _ = Box::from_raw(ptr as *mut ResultInner);
-        }
-    }
-}
+extern fn host_result_make_ok(data: i64) -> i64;
+extern fn host_result_make_err(data: i64) -> i64;
+extern fn host_result_is_ok(res: i64) -> i64;
+extern fn host_result_get_data(res: i64) -> i64;
 
 #[derive(Clone, Debug)]
 pub enum Result<T, E> {
@@ -62,32 +28,22 @@ impl<T, E> Result<T, E> {
         }
     }
 
-    pub fn unwrap(self) -> T {
-        match self {
-            Result::Ok(val) => val,
-            Result::Err(_) => panic("unwrap on Err"),
-        }
-    }
-
-    // Stub helpers using host (real impl in Rust)
+    // unwrap(self) -> T 暂缺：泛型 impl 方法的裸名 mangling（_unwrap）在多份
+    // 单化副本下重复符号（批次 771 实拍，#33 泛型方法符号族新发现）。
     pub fn make_ok(data: i64) -> i64 {
-        host_result_make_ok(data) as i64
+        host_result_make_ok(data)
     }
 
     pub fn make_err(data: i64) -> i64 {
-        host_result_make_err(data) as i64
+        host_result_make_err(data)
     }
 
     pub fn is_ok_ptr(ptr: i64) -> bool {
-        host_result_is_ok(ptr as *const c_void) != 0
+        host_result_is_ok(ptr) != 0
     }
 
     pub fn get_data(ptr: i64) -> i64 {
-        host_result_get_data(ptr as *const c_void)
-    }
-
-    pub fn free(ptr: i64) {
-        host_result_free(ptr as *mut c_void)
+        host_result_get_data(ptr)
     }
 }
 
