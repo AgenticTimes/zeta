@@ -4636,6 +4636,27 @@ static int64_t* zt_dyn_vec_hdr(int64_t h) {
     return hdr;
 }
 
+// Batch 784 (#213① 下游 / 值标签延伸)：f64 元素列表的逐元素 clip——
+// py_vec_clip 是 vec<str> 列的数值裁剪（元素按 char* → strtod），f64 位
+// 元素列表传入 = 按位当指针 ⇒ strtod(SEGV，clip→len ASLR 闪崩的真身)。
+// 本变体元素按 f64 位直接 clamp，结果同形 vec。
+int64_t py_vec_clip_f64(int64_t vec, double lo, double hi, int64_t has_lo, int64_t has_hi) {
+    int64_t* hdr = zt_dyn_vec_hdr(vec);
+    if (!hdr) return vec;
+    int64_t len = hdr[1];
+    int64_t out = zeta_dynarray_new(len > 0 ? len : 1);
+    for (int64_t i = 0; i < len; i++) {
+        double e;
+        memcpy(&e, &hdr[2 + i], sizeof e);
+        if (has_lo && e < lo) e = lo;
+        if (has_hi && e > hi) e = hi;
+        int64_t bits;
+        memcpy(&bits, &e, sizeof bits);
+        vec_push(out, bits);
+    }
+    return out;
+}
+
 // Batch 779 (#203⑥ 第一格)：list / scalar 逐元素除——Python 语义
 // （[10.0, 20.0] / 2 == [5.0, 10.0]）。此前 `v / 2` 走标量 sdiv/句柄算术，
 // 元素读回是位垃圾（2.31e+18 实拍）。元素按 f64 位存取（与 slot_bits 家族

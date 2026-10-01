@@ -12393,8 +12393,19 @@ call, no NULL-handle dereference).",
                     let f2 = self.next_id();
                     self.exprs.insert(f2, MirExpr::IntLit(has_hi));
                     self.type_map.insert(f2, Type::I64);
+                    // Batch 784 (#213① 下游)：元素型分派——f64 位元素列表走
+                    // py_vec_clip_f64（元素按 f64 位 clamp）；py_vec_clip 是
+                    // vec<str> 列的数值裁剪（元素按 char* → strtod），f64 位
+                    // 元素传入 = 按位当指针 ⇒ strtod(SEGV，clip→len ASLR 闪崩
+                    // 的真身，783 实拍六跑全 139)。
+                    let elem_f64 = matches!(
+                        self.type_map.get(&arg_ids[0]),
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _))
+                            if matches!(**e, Type::F64)
+                    );
+                    let clip_fn = if elem_f64 { "py_vec_clip_f64" } else { "py_vec_clip" };
                     self.stmts.push(MirStmt::Call {
-                        func: "py_vec_clip".to_string(),
+                        func: clip_fn.to_string(),
                         args: vec![arg_ids[0], lo, hi, f1, f2],
                         dest: id,
                         type_args: vec![],
