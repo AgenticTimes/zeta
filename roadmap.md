@@ -25558,3 +25558,4 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 改动面：pylib/jit_mappings.txt −44 行（138→94）；jit_mappings_gen.rs 重生成；src/runtime/{array.rs,map.rs,io.rs,host.rs,actor/result.rs}＋src/std/collections/mod.rs 摘 26 处 #[unsafe(no_mangle)]；tests/python_style/t569_jit_cbind_array.z 新钉。
 - 读数：r2 JIT=9（AOT 基准 9）magic 零；六枚 segv 全 rc=0；jit_sweep ok 536→639、segv 6→0、fail 105→8、timeout 2→1（total 653）；sample_gate 764 rc=0（窗口 4：285/285、54/0、26/26、40/40）；窗口 3 参考轮 rc=0；emit_stable 2/0；ABI rc=2（漂移全在 src/middle 并行侧在制面，src/runtime/src/std 零）。
 - 新开：①-alias 机制归因（登记 backlog）；②C∩Rust 同名 no_mangle 余量族（reactor_/waker_/option_/runtime_malloc/host_result_make_ 等，摘除需同面验证，防"修掉巧合"——现 JIT 对这些走 Rust 体可能恰是自洽面）。
+- 撞号对照（764 二次占用）：本车道 0b1e5c5b 取号时 HEAD=3790260b（763 已占、764 空闲实拍）；并行侧 2f4bfc63（#52 机械半清）在本车道代码提交后、记录提交前落地，同标 764。两侧 message 与台账行均不回改，以后补此对照：764-值当指针=0b1e5c5b、764-锚点重绑=2f4bfc63。
