@@ -1,0 +1,42 @@
+// 批次 758（#38①）：match 臂内 return 字符串——此前三种拼写全部打不对：
+// ① case 块臂 `case 1: return "one"` 的 return 被吞（parse_func 把体尾 match
+//    提升进 ret_expr、body 留空，gen 臂体特判只认顶层 Return、块内 fabricate 0
+//    ⇒ 调用方读 0）；② 箭头臂 `=> return "one"` 值通但函数返回槽恒 I64
+//    （collect_return_kinds 的箭头臂分支不解包 Return ⇒ 无证据 ⇒ 地址）；
+//    ③ ret_expr 提升后 infer_untyped_returns/fixpoint 只读 body ⇒ 登记返回型
+//    停在 Tuple([]) 占位。三修：gen 块臂按语句语义下型（Return 进 then_branch、
+//    ExprStmt 弃值）；collect_return_kinds 箭头臂解包 Return（不可证＝PyDynamic）；
+//    collect_returns 认 Match 臂＋infer_untyped_returns/fixpoint 下降 ret_expr
+//    ＋fixpoint 放行 Tuple([]) 占位（unanimous 字面量证据才写）。
+fn case_style(x):
+    match x:
+        case 1:
+            return "one"
+        case _:
+            return "other"
+print(case_style(1))
+print(case_style(2))
+
+fn arrow_style(x) {
+    match x {
+        1 => return "first",
+        _ => return "rest",
+    }
+}
+print(arrow_style(1))
+print(arrow_style(9))
+
+fn value_style(x):
+    match x:
+        case 5:
+            "five"
+        case _:
+            "not five"
+print(value_style(5))
+print(value_style(6))
+// expect: one
+// expect: other
+// expect: first
+// expect: rest
+// expect: five
+// expect: not five

@@ -1401,6 +1401,49 @@ impl Resolver {
                         collect_returns(body, out);
                     }
                     AstNode::Block { body } => collect_returns(body, out),
+                    // Batch 758 (#38①): match arms carry returns too — a
+                    // `case pat:` block recurses (its Returns are the
+                    // evidence); an `=> expr` body IS the returned value.
+                    AstNode::Match { arms, .. } => {
+                        for arm in arms {
+                            match &*arm.body {
+                                AstNode::Block { body } => {
+                                    collect_returns(body, out);
+                                    // Batch 758 (#38①): a trailing bare
+                                    // expression IS the arm's value (the
+                                    // promoted ret_expr is the fn tail) —
+                                    // `case 5: "five"` returns "five".
+                                    if let Some(last) = body.last() {
+                                        let is_stmt = matches!(
+                                            last,
+                                            AstNode::Return(_)
+                                                | AstNode::Assign(..)
+                                                | AstNode::Let { .. }
+                                                | AstNode::While { .. }
+                                                | AstNode::For { .. }
+                                                | AstNode::If { .. }
+                                                | AstNode::Match { .. }
+                                        );
+                                        if !is_stmt {
+                                            match last {
+                                                AstNode::ExprStmt { expr } => {
+                                                    out.push((**expr).clone())
+                                                }
+                                                _ => out.push((*last).clone()),
+                                            }
+                                        }
+                                    }
+                                }
+                                AstNode::Return(_) => {
+                                    collect_returns(
+                                        std::slice::from_ref(&*arm.body),
+                                        out,
+                                    );
+                                }
+                                other => out.push((*other).clone()),
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1600,7 +1643,14 @@ impl Resolver {
         for _ in 0..6 {
             for ast in &asts {
                 let ast: &AstNode = ast;
-                let AstNode::FuncDef { name, body, ret, .. } = ast else {
+                let AstNode::FuncDef {
+                    name,
+                    body,
+                    ret,
+                    ret_expr,
+                    ..
+                } = ast
+                else {
                     continue;
                 };
                 let prefix = self
@@ -1621,6 +1671,14 @@ impl Resolver {
                     std::collections::HashSet::new();
                 if infer_return {
                     collect_returns(body, &mut rets);
+                    // Batch 758 (#38①): parse_func promotes the body's
+                    // trailing match into `ret_expr` and leaves `body` empty
+                    // — the arms carry the returns (measured: a match-bodied
+                    // unannotated fn registered Tuple([]) and callers of its
+                    // string returns printed addresses).
+                    if let Some(rx) = ret_expr {
+                        collect_returns(std::slice::from_ref(rx), &mut rets);
+                    }
                     collect_map_locals(body, &mut map_locals);
                 }
                 let mut saw_str = false;
@@ -3159,8 +3217,16 @@ impl Resolver {
             }
         }
         for (qname, fd) in candidates {
+            // Batch 758 (#38①c): the placeholder face for "no declared
+            // return" is not only I64 — body-derived inference answers
+            // Tuple([]) (unit) for match-bodied functions (its Match arm
+            // abstains), and those were exactly the fns this fixpoint
+            // exists for. A unit placeholder with unanimous literal-return
+            // evidence is safe to refine: a body that returns literals is
+            // not a procedure.
             let unannotated = match self.funcs.get(&qname) {
                 Some((_, Type::I64, _)) => true,
+                Some((_, Type::Tuple(ts), _)) if ts.is_empty() => true,
                 _ => false,
             };
             if !unannotated {
@@ -3201,7 +3267,12 @@ impl Resolver {
                     && rets.iter().all(|t| matches!(t, Type::PyDynamic)));
             if writable {
                 if let Some((_, ret, _)) = self.funcs.get_mut(&qname) {
-                    if matches!(ret, Type::I64) {
+                    // Batch 758: the unit placeholder writes too (see the
+                    // unannotated gate above) — it is the Match-bodied
+                    // spelling of "no declared return".
+                    if matches!(ret, Type::I64)
+                        || matches!(ret, Type::Tuple(ts) if ts.is_empty())
+                    {
                         *ret = first.clone();
                         refined += 1;
                         refined_round += 1;
@@ -3404,9 +3475,39 @@ impl Resolver {
                                             }
                                         }
                                     }
+                                    // Batch 758 (#38①): the trailing bare
+                                    // expression is the arm's value — vote it
+                                    // when refinable (no PyDynamic poison:
+                                    // statement-only arms abstain).
+                                    if let Some(last) = body.last() {
+                                        let v = match last {
+                                            AstNode::ExprStmt { expr } => Some(&**expr),
+                                            other => Some(other),
+                                        };
+                                        if let Some(v) = v {
+                                            if !matches!(v, AstNode::Return(_)) {
+                                                if let Some(t) = refinable(v) {
+                                                    out.push(t);
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 other => {
-                                    if let Some(t) = refinable(other) {
+                                    // Batch 758 (#38①b): an arrow arm body of
+                                    // `return <expr>` IS a return — unwrap it
+                                    // (refinable() has no Return arm, so the
+                                    // evidence was dropped and the fn stayed
+                                    // I64; callers printed the string handle
+                                    // as an address). Non-inferable values
+                                    // mirror the Block branch's PyDynamic.
+                                    if let AstNode::Return(val) = other {
+                                        if let Some(t) = refinable(val) {
+                                            out.push(t);
+                                        } else if !matches!(**val, AstNode::Lit(0)) {
+                                            out.push(Type::PyDynamic);
+                                        }
+                                    } else if let Some(t) = refinable(other) {
                                         out.push(t);
                                     }
                                 }
@@ -3419,6 +3520,15 @@ impl Resolver {
         };
         if let AstNode::FuncDef { body, .. } = fd {
             walk(body, out);
+        }
+        // Batch 758 (#38①): the promoted ret_expr (see infer_untyped_returns)
+        // carries the same returns for match-bodied functions.
+        if let AstNode::FuncDef {
+            ret_expr: Some(rx), ..
+        } = fd
+        {
+            let one = vec![(**rx).clone()];
+            walk(&one, out);
         }
     }
 

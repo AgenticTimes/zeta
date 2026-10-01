@@ -46,13 +46,20 @@ fi
 
 if [ "$run_official" -eq 1 ]; then
     echo "── official 抽样 窗口 $W ─────────────────────"
-    ok=0; total=0
+    ok=0; total=0; link_only=0
     for z in "$ROOT"/tests/unit-tests/*.z; do
         b=$(basename "$z" .z)
         h=$(( $(printf '%s' "$b" | cksum | awk '{print $1}') % 10 ))
         [ "$h" -eq "$W" ] || continue
         total=$((total + 1))
-        if "$ROOT/target/release/zetac" "$z" -o "/tmp/zeta_sample_gate_$b" >/dev/null 2>&1; then
+        out=$("$ROOT/target/release/zetac" "$z" -o "/tmp/zeta_sample_gate_$b" 2>&1 || true)
+        # 口径同 run_all：编译通过（含链接缺绑定）都计 compile；链接缺绑定
+        # 单列 chronic 不算红，只有真编译失败才红。
+        if echo "$out" | grep -q "Linking failed"; then
+            ok=$((ok + 1))
+            link_only=$((link_only + 1))
+            echo "official 链接缺绑定（chronic 口径）: $b"
+        elif echo "$out" | grep -q "Compiled to"; then
             ok=$((ok + 1))
         else
             echo "official 编译失败: $b"
@@ -60,7 +67,7 @@ if [ "$run_official" -eq 1 ]; then
         fi
         rm -f "/tmp/zeta_sample_gate_$b"
     done
-    echo "official: $ok/$total compiled (窗口 $W)"
+    echo "official: $ok/$total compiled, $link_only link-only chronic (窗口 $W)"
 fi
 
 if [ "$run_corpus" -eq 1 ]; then

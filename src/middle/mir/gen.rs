@@ -15084,21 +15084,68 @@ call, no NULL-handle dereference).",
                     // only the matched one. Measured on `match 2 { 1 => n+=1,
                     // 2 => n+=10, _ => n+=100 }`:改前退出码 111（三条都跑），改后 10。
                     let arm_body_start = self.stmts.len();
-                    let mut then_branch = if let AstNode::Return(inner) = &*arm.body {
+                    let mut then_branch: Vec<MirStmt> = Vec::new();
+                    if let AstNode::Return(inner) = &*arm.body {
                         let ret_val = self.lower_expr(inner);
                         if let Some(ty) = self.type_map.get(&ret_val).cloned() {
                             arm_value_tys.push(ty);
                         }
-                        vec![MirStmt::Return { val: ret_val }]
+                        then_branch.push(MirStmt::Return { val: ret_val });
+                    } else if let AstNode::Block { body } = &*arm.body {
+                        // Batch 758 (#38①a): case-block arms lower by STATEMENT
+                        // semantics — a `return` inside the arm block is a
+                        // function return (lower_expr has no Return arm and
+                        // fabricated 0; measured: `case 1: return "one"` fell
+                        // through to the fn default and the caller read 0).
+                        // Statements push into self.stmts and the drain below
+                        // moves them into THIS arm's branch, in body order —
+                        // the Return stays last. The last expression value
+                        // feeds the result slot (a promoted match IS the fn
+                        // tail value), but a `return` wins: no slot write
+                        // after it (an Assign past the Return was a terminator
+                        // in the middle of the basic block, measured).
+                        let mut last_val: Option<u32> = None;
+                        let mut returned = false;
+                        for st in body {
+                            match st {
+                                AstNode::Return(inner) => {
+                                    let ret_val = self.lower_expr(inner);
+                                    if let Some(ty) = self.type_map.get(&ret_val).cloned() {
+                                        arm_value_tys.push(ty);
+                                    }
+                                    then_branch.push(MirStmt::Return { val: ret_val });
+                                    returned = true;
+                                    last_val = None;
+                                }
+                                AstNode::ExprStmt { expr } => {
+                                    last_val = Some(self.lower_expr(expr));
+                                }
+                                other => {
+                                    self.lower_ast(other);
+                                    last_val = None;
+                                }
+                            }
+                        }
+                        if !returned {
+                            if let Some(v) = last_val {
+                                if let Some(ty) = self.type_map.get(&v).cloned() {
+                                    arm_value_tys.push(ty);
+                                }
+                                then_branch.push(MirStmt::Assign {
+                                    lhs: result_id,
+                                    rhs: v,
+                                });
+                            }
+                        }
                     } else {
                         let arm_body_id = self.lower_expr(&arm.body);
                         if let Some(ty) = self.type_map.get(&arm_body_id).cloned() {
                             arm_value_tys.push(ty);
                         }
-                        vec![MirStmt::Assign {
+                        then_branch.push(MirStmt::Assign {
                             lhs: result_id,
                             rhs: arm_body_id,
-                        }]
+                        });
                     };
                     let arm_body_end = self.stmts.len();
                     if arm_body_end > arm_body_start {
