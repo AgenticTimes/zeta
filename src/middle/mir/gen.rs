@@ -16552,7 +16552,30 @@ call, no NULL-handle dereference).",
                 // FLOAT lists keep the StackArray form: `vec_push` is an i64
                 // channel, so an f64 element would be reinterpreted as its bit
                 // pattern (t56/t139 went red when EVERY literal became dynamic).
-                if size == 0 || !matches!(elem_ty_pre, Type::F32 | Type::F64) {
+                // Batch 782 (#203⑥ 尾巴)：float 字面量列表改 DynamicArray——
+                // 元素经 zeta_vec_push_f64（f64 直进 xmm，C 侧按位 push），列表
+                // 型 DynamicArray(F64) ⇒ len/下标/vec_* 全走 dyn 面。t56/t139
+                // 重锚验证见本批读数。
+                if size == 0 {
+                    let capacity_id = self.next_id();
+                    self.exprs.insert(capacity_id, MirExpr::IntLit(0));
+                    self.type_map.insert(capacity_id, Type::I64);
+                    let h = self.next_id();
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_dynarray_new".to_string(),
+                        args: vec![capacity_id],
+                        dest: h,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(h, MirExpr::Var(h));
+                    self.type_map
+                        .insert(h, Type::DynamicArray(Box::new(Type::I64)));
+                    self.exprs.insert(id, MirExpr::Var(h));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                    return id;
+                }
+                if !matches!(elem_ty_pre, Type::F32 | Type::F64) {
                     let start = if size == 0 { Vec::new() } else { lowered_elems };
                     let elem_ty = if size == 0 { Type::I64 } else { elem_ty_pre };
                     let capacity_id = self.next_id();
@@ -16584,6 +16607,63 @@ call, no NULL-handle dereference).",
                     self.exprs.insert(id, MirExpr::Var(h));
                     self.type_map
                         .insert(id, Type::DynamicArray(Box::new(elem_ty)));
+                    return id;
+                }
+
+                // Batch 782 (#203⑥ 尾巴)：float 字面量列表 → DynamicArray(F64)
+                // 元素经 zeta_vec_push_f64（f64 直进 xmm，C 侧按位 push）；列表
+                // 型 DynamicArray(F64) ⇒ 下标读 F64 渲染、len/vec_* 可用。
+                if matches!(elem_ty_pre, Type::F32 | Type::F64) {
+                    let capacity_id = self.next_id();
+                    self.exprs.insert(capacity_id, MirExpr::IntLit(size as i64));
+                    self.type_map.insert(capacity_id, Type::I64);
+                    let h = self.next_id();
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_dynarray_new".to_string(),
+                        args: vec![capacity_id],
+                        dest: h,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(h, MirExpr::Var(h));
+                    self.type_map.insert(
+                        h,
+                        Type::DynamicArray(Box::new(elem_ty_pre.clone())),
+                    );
+                    for e in &lowered_elems {
+                        let e_ty = self.type_map.get(e).cloned().unwrap_or(Type::I64);
+                        let e_f = if matches!(e_ty, Type::F64) {
+                            *e
+                        } else {
+                            let f = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "zeta_float_i64".to_string(),
+                                args: vec![*e],
+                                dest: f,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(f, MirExpr::Var(f));
+                            self.type_map.insert(f, Type::F64);
+                            f
+                        };
+                        let sink = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_vec_push_f64".to_string(),
+                            args: vec![h, e_f],
+                            dest: sink,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(sink, MirExpr::Var(sink));
+                        self.type_map.insert(
+                            sink,
+                            Type::DynamicArray(Box::new(Type::F64)),
+                        );
+                        self.stmts.push(MirStmt::Assign { lhs: h, rhs: sink });
+                    }
+                    self.exprs.insert(id, MirExpr::Var(h));
+                    self.type_map.insert(
+                        id,
+                        Type::DynamicArray(Box::new(elem_ty_pre.clone())),
+                    );
                     return id;
                 }
 
