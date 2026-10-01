@@ -25585,3 +25585,10 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 读数：vsame=503 vswitch=0 aot0jitred=0 jit0aotred=137 bothred=8 known=1 timeout=1 nobuild=5 total=655 GREEN——JIT/AOT 值级零分歧（本轮 641 ok 面全对照）。
 - 判据教训两条：空分母假 GREEN（BSD split 参数不兼容）⇒ 分母守卫；掩码步骤注释与实现脱节 ⇒ 503 例假 vswitch。均在同批修正并留证。
 - 号位：并行侧 ce923895/894de21f/f160ae97 占 774-776（#52 审计面），本批取 777。
+
+## 批次 781（代码 ee834081 自称 780，让号两次后仍与并行 91bbed7c 撞）：build.rs -alias 机制归因
+
+- 结论：761 的「-alias 钉 dead-strip 根」记载成立；764 登记的「镜像 _ztk_keep 计数 0＝机制未兑现」是核验对象错——macOS ld 在 -dead_strip 下把别名名自身剥出符号表，目标符号却被钉住。最小复现 /tmp/b778：u0（无 alias）未引用目标消失、u1（带 alias）目标存活且别名名不落 nm；真树 A/B：摘 1011 条发射⇒keep 名单缺 1008/1011（仅 _waker_create/_waker_wake/_zeta_vec_clear 凭引用链存活），恢复⇒缺 0。
+- 代码面：build.rs 注释按实测更正（4 行），alias 发射逐字恢复原样＝功能零改动；改前后二进制符号面 keep 名单均 0 缺失（2e083f8d→9aa25920 树仅并行位移，非本批）。
+- 读数（二进制 9aa25920）：sample_gate 窗口 0 rc=0（差分复跑两遍 285/285，首跑 283/285 撞并行重编；python_style 抽样 43/0；official 14/14 零 chronic；corpus 40/40）；全套 python_style 458/0/0/0；jit_sweep ok=641 trap=4 fail=1 xabort=7 timeout=2 segv=0（total 655）。
+- backlog 764 新开①核销；②余量族维持 772「九枚在册、无受损证据、不摘」。
