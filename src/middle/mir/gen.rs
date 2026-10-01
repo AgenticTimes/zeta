@@ -2635,6 +2635,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         rhs: rhs_id,
                     });
                 }
+                // Batch 768 (值标签延伸格)：格标签随 Assign 跟随——`df = c["df"]`
+                // 之后 len(df) 与 len(c["df"]) 同样按格分派（767 只覆盖内联直读形）。
+                if let AstNode::Var(name) = &**lhs {
+                    if let Some(&sid) = self.name_to_id.get(name.as_str()) {
+                        if let Some(t) = self.slot_tags.get(&rhs_id).cloned() {
+                            self.slot_tags.insert(sid, t);
+                        }
+                    }
+                }
             }
             AstNode::AssignOp { op, target, value } => {
                 // Batch 572: `Counter.count += 1` — class VARIABLE compound

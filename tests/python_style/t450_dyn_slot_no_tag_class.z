@@ -7,9 +7,12 @@
 // zeta_map_value_tag 读回格标签，len() 按格分派各类 __len__、全不中落
 // zeta_dyn_len 几何兜底。t449 异构防线与 t450 同构字典同时成立。
 // expect: w8 2
+// expect: w9 2
 from typing import Any
 from pandas import DataFrame
 
 c: dict[str, Any] = {}
 c["df"] = DataFrame({"code": ["a", "b"], "x": ["1", "2"]})
 print("w8", len(c["df"]))
+df = c["df"]
+print("w9", len(df))
