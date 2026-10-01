@@ -25573,3 +25573,8 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 主体：tools/baselines/diff_consistency.json --bless 重采（601→2846 例口径），抬闸面逐条核干净（消失 0/翻转 0/新增 2245 全 match），CONFIRM_RC=0。绑二进制 7f909b2c（bfb6f636 树态）。
 - ②探针：见 worktree 772 行——九枚名单钉正、array_set_len 大数组形两侧自洽不摘、Result: 回显系设计。
 - 号位：并行侧连占 769-771；本车道第三次撞号（768 与我方记录行 9dbccad2 同号）以 hash 对照入册，不回改。
+
+## 批次 773：t209 补 expect-abort——sweep fail 档只剩 chronic 一枚
+
+- 主体：t209_assert_stmt.z 加 `// expect-abort: AssertionError`＋头注两行。判据双验：run_one harness 复跑 PASS（改前也 PASS，不回退）；jit_sweep 复跑该枚入 xabort 档，fail 2→1 余量清零（trap 5→4、timeout 1→2 为跨跑抖动不入账，坑 73）。
+- 自纠一条：772 记录 message 的 rows 数（419→420）是写时估算、未跑测量（实测 421/422）；按"不许编造读数"纪律在此如实对照，message 不回改。
