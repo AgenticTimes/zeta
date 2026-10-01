@@ -4636,17 +4636,22 @@ static int64_t* zt_dyn_vec_hdr(int64_t h) {
 // （[10.0, 20.0] / 2 == [5.0, 10.0]）。此前 `v / 2` 走标量 sdiv/句柄算术，
 // 元素读回是位垃圾（2.31e+18 实拍）。元素按 f64 位存取（与 slot_bits 家族
 // 同一约定），结果列同形 vec；标量恒以 double 位进入（gen 侧 sitofp＋bitcast）。
-int64_t zeta_vec_div_scalar(int64_t vec, int64_t scalar_bits) {
+int64_t zeta_vec_div_scalar(int64_t vec, double scalar, int64_t elem_is_i64) {
     int64_t* hdr = zt_dyn_vec_hdr(vec);
     if (!hdr) return vec;
     int64_t len = hdr[1];
-    double d;
-    memcpy(&d, &scalar_bits, sizeof d);
+    double d = scalar;
     if (d == 0.0) return vec;
     int64_t out = zeta_dynarray_new(len > 0 ? len : 1);
     for (int64_t i = 0; i < len; i++) {
+        // elem_is_i64：int 元素列表的真除（CPython [10, 20] / 2 == [5.0, 10.0]）
+        // ——先 sitofp 再除；f64 位元素直接除。
         double e;
-        memcpy(&e, &hdr[2 + i], sizeof e);
+        if (elem_is_i64) {
+            e = (double)hdr[2 + i];
+        } else {
+            memcpy(&e, &hdr[2 + i], sizeof e);
+        }
         double r = e / d;
         int64_t bits;
         memcpy(&bits, &r, sizeof bits);

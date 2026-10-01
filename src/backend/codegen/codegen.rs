@@ -170,7 +170,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
         );
         module.add_function(
             "zeta_vec_div_scalar",
-            i64_type.fn_type(&[i64_type.into(), f64_type.into()], false),
+            i64_type.fn_type(
+                &[i64_type.into(), f64_type.into(), i64_type.into()],
+                false,
+            ),
             Some(Linkage::External),
         );
         // Batch 771 (#79 余一格收口)：与 C 桩实签对齐（tokio_runtime_stub.c:545+

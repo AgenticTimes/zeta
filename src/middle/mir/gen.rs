@@ -5876,9 +5876,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         self.type_map.insert(f, Type::F64);
                         f
                     };
+                    // 元素型出声：int 元素列表走真除（CPython [10,20]/2 =
+                    // [5.0, 10.0]），f64 位元素直除。
+                    let elem_i64 = matches!(
+                        self.type_map.get(&left_id),
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _))
+                            if matches!(**e, Type::I64)
+                    );
+                    let elem_flag = self.next_id_with_lit(elem_i64 as i64);
                     self.stmts.push(MirStmt::Call {
                         func: "zeta_vec_div_scalar".to_string(),
-                        args: vec![left_id, r_f64],
+                        args: vec![left_id, r_f64, elem_flag],
                         dest,
                         type_args: vec![],
                     });
