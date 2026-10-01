@@ -1351,8 +1351,13 @@ static int zt_maybe_map(int64_t m) {
 }
 static int zt_maybe_vec(int64_t v) {
     if (v < 0x1000) return 0;
-    int64_t cap = ((int64_t*)(v - 16))[0];
-    int64_t len = ((int64_t*)(v - 16))[1];
+    int64_t* hdr = (int64_t*)(v - 16);
+    // Batch 787 (#213②)：GC_base 门——≥0x1000 的标量整数（真堆地址、序数、
+    // 浮点位模式）直接解引用 v-16 会 SEGV 或读到旧堆块假判形；真 vec 的头
+    // 恰是 GC_malloc 块起点（dynarray_new 返回 buf+2），GC_base 相等才读。
+    if (GC_base((void*)hdr) != (void*)hdr) return 0;
+    int64_t cap = hdr[0];
+    int64_t len = hdr[1];
     // Batch 783 (#213①)：对齐 _fwd 严格形（cap >= 1）。先量后动量测（探针链接
     // runtime 实测）：运行期 zeta_dynarray_new 恒 `cap < 8 → cap = 8` ⇒ 真 vec
     // （含空表）cap ≥ 8，严格形零误伤；20 字符 GC 串的 -16 头可 mimic 成
@@ -1786,8 +1791,12 @@ int64_t py_vec_clip(int64_t vec, double lo, double hi, int64_t has_lo, int64_t h
 
 static int zt_maybe_vec_fwd(int64_t v) {
     if (v < 0x1000) return 0;
-    int64_t cap = ((int64_t*)(v - 16))[0];
-    int64_t len = ((int64_t*)(v - 16))[1];
+    int64_t* hdr = (int64_t*)(v - 16);
+    // Batch 787 (#213②)：同款 GC_base 门（540/461 两侧撞过的读法——正解方向
+    // 「用对象起点而不是候选值自身」的落地）。
+    if (GC_base((void*)hdr) != (void*)hdr) return 0;
+    int64_t cap = hdr[0];
+    int64_t len = hdr[1];
     // 一条 vec 句柄的 cap 恒 >= 1；而 `df["col"] = <标量 str>` 的 char* 句柄，其前 16 字节
     // 可以正好读成 cap=0 len=0 的"健康表头"——旧判据放它过，列就存成了裸字符串。
     return cap >= 1 && len >= 0 && len <= cap && cap <= (1LL << 30);

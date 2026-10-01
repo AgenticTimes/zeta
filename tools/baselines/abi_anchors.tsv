@@ -17,30 +17,30 @@ runtime/aliases.inc.c	12	".globl _print.13\n\t.set _print.13, _print2\n"
 runtime/py_additions.c	44	int64_t host_str_eq(int64_t a, int64_t b) { return str_eq(a, b); }
 runtime/py_additions.c	278-302	int64_t map_str_key(int64_t handle) { if (!handle) return 0; // Batch 291: vec<str> slots can hold small strings PACKED into the 8-byte // word ("43601853" = 0x
 runtime/py_additions.c	279	int64_t map_str_key(int64_t handle) {
-runtime/py_additions.c	1439	int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
-runtime/py_additions.c	2120	static int zt_packed_cstr_eq(int64_t packed, const char* s) {
-runtime/py_additions.c	2122-2123	if (n > 7) return 0; const unsigned char* p = (const unsigned char*)&packed;
-runtime/py_additions.c	2302	int64_t* pair = (int64_t*)GC_malloc(24);
-runtime/py_additions.c	2327-2361	int64_t py_argparse_parse(int64_t parser) { int64_t ns = map_new(); int64_t n = zt_vec_len(parser); for (int64_t i = 0; i < n; i++) { int64_t* pair = (int64_t*)
-runtime/py_additions.c	2331	int64_t* pair = (int64_t*)((int64_t*)parser)[i];
-runtime/py_additions.c	2339	map_insert(ns, map_str_key((int64_t)dest), (int64_t)GC_strdup(val ? val : ""));
-runtime/py_additions.c	3196	int64_t zeta_env_get(int64_t name_handle) {
-runtime/py_additions.c	3212	int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
-runtime/py_additions.c	3826	if (getenv("ZETA_PROBE")) {
-runtime/py_additions.c	4287	int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
-runtime/py_additions.c	4412	? (const char*)(uintptr_t)name_ptr
-runtime/py_additions.c	4421	(void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
-runtime/py_additions.c	4515	int64_t zeta_call1(int64_t fptr, int64_t a) {
-runtime/py_additions.c	4586-4636	// BATCH-296: geometry-based kind test for a handle whose STATIC type is unknown // (`d = {}; d["x"] = {...}` types the value I64, and `dict[str, Any]` from the
-runtime/py_additions.c	4603-4613	static int zt_dyn_is_map(int64_t h) { if (h <= 0x1000) return 0; if (GC_base((void*)h) != (void*)h) return 0; int64_t* w = (int64_t*)h; int64_t cap = w[0]; if (
-runtime/py_additions.c	4604	static int zt_dyn_is_map(int64_t h) {
-runtime/py_additions.c	4606	if (GC_base((void*)h) != (void*)h) return 0;
-runtime/py_additions.c	4615-4636	static int64_t* zt_dyn_vec_hdr(int64_t h) { if (h <= 0x1000) return NULL; int64_t* hdr = (int64_t*)(h - 16); if (GC_base((void*)hdr) != (void*)hdr) return NULL;
-runtime/py_additions.c	4616	static int64_t* zt_dyn_vec_hdr(int64_t h) {
-runtime/py_additions.c	4623	int64_t have = (int64_t)GC_size((void*)hdr);
-runtime/py_additions.c	4695-4707	int64_t zeta_dyn_len(int64_t h) { if (!h) return 0; if (zt_dyn_is_map(h)) return zeta_map_len(h); int64_t* hdr = zt_dyn_vec_hdr(h); if (hdr) return hdr[1]; // T
-runtime/py_additions.c	4696	int64_t zeta_dyn_len(int64_t h) {
-runtime/py_additions.c	4895	int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
+runtime/py_additions.c	1444	int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
+runtime/py_additions.c	2129	static int zt_packed_cstr_eq(int64_t packed, const char* s) {
+runtime/py_additions.c	2131-2132	if (n > 7) return 0; const unsigned char* p = (const unsigned char*)&packed;
+runtime/py_additions.c	2311	int64_t* pair = (int64_t*)GC_malloc(24);
+runtime/py_additions.c	2336-2370	int64_t py_argparse_parse(int64_t parser) { int64_t ns = map_new(); int64_t n = zt_vec_len(parser); for (int64_t i = 0; i < n; i++) { int64_t* pair = (int64_t*)
+runtime/py_additions.c	2340	int64_t* pair = (int64_t*)((int64_t*)parser)[i];
+runtime/py_additions.c	2348	map_insert(ns, map_str_key((int64_t)dest), (int64_t)GC_strdup(val ? val : ""));
+runtime/py_additions.c	3205	int64_t zeta_env_get(int64_t name_handle) {
+runtime/py_additions.c	3221	int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
+runtime/py_additions.c	3835	if (getenv("ZETA_PROBE")) {
+runtime/py_additions.c	4296	int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
+runtime/py_additions.c	4421	? (const char*)(uintptr_t)name_ptr
+runtime/py_additions.c	4430	(void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
+runtime/py_additions.c	4524	int64_t zeta_call1(int64_t fptr, int64_t a) {
+runtime/py_additions.c	4595-4645	// BATCH-296: geometry-based kind test for a handle whose STATIC type is unknown // (`d = {}; d["x"] = {...}` types the value I64, and `dict[str, Any]` from the
+runtime/py_additions.c	4612-4622	static int zt_dyn_is_map(int64_t h) { if (h <= 0x1000) return 0; if (GC_base((void*)h) != (void*)h) return 0; int64_t* w = (int64_t*)h; int64_t cap = w[0]; if (
+runtime/py_additions.c	4613	static int zt_dyn_is_map(int64_t h) {
+runtime/py_additions.c	4615	if (GC_base((void*)h) != (void*)h) return 0;
+runtime/py_additions.c	4624-4645	static int64_t* zt_dyn_vec_hdr(int64_t h) { if (h <= 0x1000) return NULL; int64_t* hdr = (int64_t*)(h - 16); if (GC_base((void*)hdr) != (void*)hdr) return NULL;
+runtime/py_additions.c	4625	static int64_t* zt_dyn_vec_hdr(int64_t h) {
+runtime/py_additions.c	4632	int64_t have = (int64_t)GC_size((void*)hdr);
+runtime/py_additions.c	4704-4716	int64_t zeta_dyn_len(int64_t h) { if (!h) return 0; if (zt_dyn_is_map(h)) return zeta_map_len(h); int64_t* hdr = zt_dyn_vec_hdr(h); if (hdr) return hdr[1]; // T
+runtime/py_additions.c	4705	int64_t zeta_dyn_len(int64_t h) {
+runtime/py_additions.c	4904	int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
 runtime/tokio_runtime_stub.c	250	#define MAP_ENTRY_SIZE 24
 runtime/tokio_runtime_stub.c	271-277	// A `-> dict` annotation on a function whose body returns `json.loads(...)` types // the result `map`, while the VALUE is a PyJson cell [tag, payload] (tag 1..
 runtime/tokio_runtime_stub.c	285-292	// The h-16 read must NEVER touch memory outside h's own GC block: a map // handle IS its block base, and blocks that start at a page edge make // h-16 a guard 
