@@ -13377,6 +13377,44 @@ call, no NULL-handle dereference).",
                     self.type_map.insert(id, vty);
                     return id;
                 }
+                // Batch 781 (#203⑥)：`v.append(<f64>)` on a DynamicArray
+                // receiver — the f64 value must travel as BITS. vec_push is an
+                // i64 channel and the codegen coerce fptosi's computed floats
+                // (measured: append(10.0) stored 0). zeta_vec_push_f64 takes
+                // the double directly; the list's element type widens I64 → F64
+                // (the `= []` degenerate guess, 738 principle).
+                if method == "append"
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(false, |t| matches!(t, Type::DynamicArray(_)))
+                    && arg_ids.len() == 2
+                    && matches!(
+                        self.type_map.get(&arg_ids[1]).cloned(),
+                        Some(Type::F64)
+                    )
+                {
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_vec_push_f64".to_string(),
+                        args: vec![arg_ids[0], arg_ids[1]],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    if let Some(Type::DynamicArray(e)) = receiver_ty.clone() {
+                        if matches!(*e, Type::I64) {
+                            if let AstNode::Var(vname) = &**receiver.as_ref().unwrap() {
+                                if let Some(&slot) = self.name_to_id.get(vname.as_str()) {
+                                    self.type_map.insert(
+                                        slot,
+                                        Type::DynamicArray(Box::new(Type::F64)),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    self.type_map.insert(id, receiver_ty.clone().unwrap());
+                    return id;
+                }
                 let opaque_fallback: Option<(&str, &str)> = if receiver.is_some()
                     && !struct_has_method
                     && receiver_ty.as_ref().map_or(true, |t| {

@@ -4636,6 +4636,14 @@ static int64_t* zt_dyn_vec_hdr(int64_t h) {
 // （[10.0, 20.0] / 2 == [5.0, 10.0]）。此前 `v / 2` 走标量 sdiv/句柄算术，
 // 元素读回是位垃圾（2.31e+18 实拍）。元素按 f64 位存取（与 slot_bits 家族
 // 同一约定），结果列同形 vec；标量恒以 double 位进入（gen 侧 sitofp＋bitcast）。
+// Batch 781 (#203⑥)：f64 append 专用 push——f64 直进 xmm，C 侧按位
+// vec_push（vec_push 是 i64 通道，codegen coerce 的 fptosi 会截掉小数）。
+int64_t zeta_vec_push_f64(int64_t vec, double v) {
+    int64_t bits;
+    memcpy(&bits, &v, sizeof bits);
+    return vec_push(vec, bits);
+}
+
 int64_t zeta_vec_div_scalar(int64_t vec, double scalar, int64_t elem_is_i64) {
     int64_t* hdr = zt_dyn_vec_hdr(vec);
     if (!hdr) return vec;
