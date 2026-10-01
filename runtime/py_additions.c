@@ -3464,6 +3464,7 @@ int64_t zeta_big_floordiv(int64_t a, int64_t b) {
 }
 
 int64_t zeta_map_value_tag(int64_t map, int64_t key);
+
 int64_t zeta_map_value_untagged(int64_t map, int64_t key);
 int64_t map_get(int64_t m, int64_t k);
 int64_t map_resolve(int64_t m);
@@ -4629,6 +4630,29 @@ static int64_t* zt_dyn_vec_hdr(int64_t h) {
     // merely starts with two small ints. Long vecs keep the `>=` rule as is.
     if (cap < 8 && have > need + 16) return NULL;
     return hdr;
+}
+
+// Batch 779 (#203⑥ 第一格)：list / scalar 逐元素除——Python 语义
+// （[10.0, 20.0] / 2 == [5.0, 10.0]）。此前 `v / 2` 走标量 sdiv/句柄算术，
+// 元素读回是位垃圾（2.31e+18 实拍）。元素按 f64 位存取（与 slot_bits 家族
+// 同一约定），结果列同形 vec；标量恒以 double 位进入（gen 侧 sitofp＋bitcast）。
+int64_t zeta_vec_div_scalar(int64_t vec, int64_t scalar_bits) {
+    int64_t* hdr = zt_dyn_vec_hdr(vec);
+    if (!hdr) return vec;
+    int64_t len = hdr[1];
+    double d;
+    memcpy(&d, &scalar_bits, sizeof d);
+    if (d == 0.0) return vec;
+    int64_t out = zeta_dynarray_new(len > 0 ? len : 1);
+    for (int64_t i = 0; i < len; i++) {
+        double e;
+        memcpy(&e, &hdr[2 + i], sizeof e);
+        double r = e / d;
+        int64_t bits;
+        memcpy(&bits, &r, sizeof bits);
+        vec_push(out, bits);
+    }
+    return out;
 }
 
 int64_t zeta_dyn_len(int64_t h) {

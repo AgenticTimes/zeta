@@ -168,6 +168,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
             i64_type.fn_type(&[ptr_type.into()], false),
             Some(Linkage::External),
         );
+        module.add_function(
+            "zeta_vec_div_scalar",
+            i64_type.fn_type(&[i64_type.into(), f64_type.into()], false),
+            Some(Linkage::External),
+        );
         // Batch 771 (#79 余一格收口)：与 C 桩实签对齐（tokio_runtime_stub.c:545+
         // 全 i64 ABI）——原 ptr 签名陈旧于 Rust host 时代，遮住 result.z 的 i64
         // extern 声明 ⇒ verifier 双错（ret i64 vs ptr＋参数不匹配）。

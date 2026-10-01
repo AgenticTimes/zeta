@@ -2576,6 +2576,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                                 );
                             }
                         }
+                        // Batch 779 (#203③): same principle, scalar face —
+                        // `s = 0` pins the slot I64; a later `s = s + 1 / 2`
+                        // (true-div → F64) stored f64 BITS into the I64 slot
+                        // and `print(s)` showed the bit pattern as a huge
+                        // int (measured: 4602678819172646912 = 0.5). Widening
+                        // I64 → F64 on a float rhs is Python-correct and
+                        // always safe (the I64 was the `= 0` degenerate guess).
+                        if matches!(
+                            self.type_map.get(&existing).cloned(),
+                            Some(Type::I64)
+                        )
+                            && matches!(
+                                self.type_map.get(&rhs_id).cloned(),
+                                Some(Type::F64)
+                            ) {
+                            self.type_map.insert(existing, Type::F64);
+                        }
                         // The env mirror for a module-global write is emitted by
                         // `mirror_module_global_writes`, once, over the finished
                         // body (batch 391).
@@ -5818,6 +5835,60 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     }
                 }
 
+                // Batch 779 (#203⑥ 第一格)：list / scalar 逐元素除——Python 语义
+                // （[10.0, 20.0] / 2 == [5.0, 10.0]）。此前走标量 sdiv/句柄算术，
+                // 元素读回是位垃圾。C 侧 zeta_vec_div_scalar（元素 f64 位、标量
+                // double 形参），标量为整型时先 sitofp。
+                // 只收 DynamicArray（堆 vec，[cap|len|elems] 头）——定长
+                // 栈数组（Array(F64, N) 字面量形）没有 dyn 头，C 侧原样返回
+                // 会别名原列表；其逐元素算术待值模型统一（#203 行内在册）。
+                // Str 元素列排除：文本列的除法走 zt_col_arith 的文本 coerc 路
+                // （455 批），zeta_vec_div_scalar 按 f64 位读 char* 会出垃圾
+                // （t490 half[1]=1073888190 实拍）。
+                if op == "/"
+                    && matches!(
+                        self.type_map.get(&left_id),
+                        Some(Type::DynamicArray(_))
+                    )
+                    && !matches!(
+                        self.type_map.get(&left_id),
+                        Some(Type::DynamicArray(e)) if matches!(**e, Type::Str)
+                    )
+                    && !matches!(
+                        self.type_map.get(&right_id),
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(..))
+                    )
+                {
+                    let r_f64 = if matches!(
+                        self.type_map.get(&right_id).cloned(),
+                        Some(Type::F64)
+                    ) {
+                        right_id
+                    } else {
+                        let f = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "zeta_float_i64".to_string(),
+                            args: vec![right_id],
+                            dest: f,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(f, MirExpr::Var(f));
+                        self.type_map.insert(f, Type::F64);
+                        f
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_vec_div_scalar".to_string(),
+                        args: vec![left_id, r_f64],
+                        dest,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(dest, MirExpr::Var(dest));
+                    self.type_map.insert(
+                        dest,
+                        Type::DynamicArray(Box::new(Type::F64)),
+                    );
+                    return dest;
+                }
                 if op == ".." {
                     // Range expression for for loops
                     self.exprs.insert(
@@ -6398,7 +6469,20 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     } else if num_is_float {
                         base.to_string()
                     } else {
-                        format!("{}_i", base)
+                        // Batch 779 (#203⑥)：变体跟**向量元素型**走——F64 元素
+                        // 的列表配浮点变体（元素是 f64 位），整型标量在 C 侧
+                        // sitofp；落 `_i` 会把 f64 位当整数除（[10.0,20.0]/2
+                        // 元素读回 2.3e18 实拍）。
+                        let vec_elem_f64 = matches!(
+                            self.type_map.get(&vec_id),
+                            Some(Type::DynamicArray(e)) | Some(Type::Array(e, _))
+                                if matches!(**e, Type::F64)
+                        );
+                        if vec_elem_f64 {
+                            base.to_string()
+                        } else {
+                            format!("{}_i", base)
+                        }
                     };
                     self.stmts.push(MirStmt::Call {
                         func,
