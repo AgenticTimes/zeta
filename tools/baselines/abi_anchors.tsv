@@ -55,118 +55,118 @@ runtime/tokio_runtime_stub.c	3404-3434	static int64_t g_tag_val[ZT_TAG_CAP]; sta
 runtime/tokio_runtime_stub.c	4172	int64_t zeta_call0(int64_t fptr) {
 runtime/unavailable_stubs.c	110	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
 src/backend/codegen/codegen.rs	60	pub slot_read_ids: std::collections::HashSet<u32>,
-src/backend/codegen/codegen.rs	1140	module.add_function("zeta_call1", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
-src/backend/codegen/codegen.rs	1145-1148	module.add_function("zeta_call0", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External)); module.add_function("zeta_call2", i64_type.fn_type(&[i6
-src/backend/codegen/codegen.rs	1150	module.add_function("zeta_dyn_getitem", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
-src/backend/codegen/codegen.rs	1157-1159	// variadic: (count, fn_ptr, e1..en) — declared with 6 fixed params // (max unroll width); coerce_call_args pads/truncates the rest module.add_function("zeta_co
-src/backend/codegen/codegen.rs	1159	module.add_function("zeta_collect_literals", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.in
-src/backend/codegen/codegen.rs	1185-1186	let printf_type = context.i32_type().fn_type(&[ptr_type.into()], true); // variadic module.add_function("printf", printf_type, Some(Linkage::External));
-src/backend/codegen/codegen.rs	1236	"==",
-src/backend/codegen/codegen.rs	1415	strict_abi: crate::diagnostics::env_flag("ZETA_STRICT_ABI"),
-src/backend/codegen/codegen.rs	1456-1474	fn mangle_function_name( &self, base_name: &str, type_args: &[crate::middle::types::Type], ) -> String { if type_args.is_empty() { return base_name.to_string();
+src/backend/codegen/codegen.rs	1128	module.add_function("zeta_call1", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+src/backend/codegen/codegen.rs	1133-1136	module.add_function("zeta_call0", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External)); module.add_function("zeta_call2", i64_type.fn_type(&[i6
+src/backend/codegen/codegen.rs	1138	module.add_function("zeta_dyn_getitem", i64_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
+src/backend/codegen/codegen.rs	1145-1147	// variadic: (count, fn_ptr, e1..en) — declared with 6 fixed params // (max unroll width); coerce_call_args pads/truncates the rest module.add_function("zeta_co
+src/backend/codegen/codegen.rs	1147	module.add_function("zeta_collect_literals", i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.into(), i64_type.in
+src/backend/codegen/codegen.rs	1173-1174	let printf_type = context.i32_type().fn_type(&[ptr_type.into()], true); // variadic module.add_function("printf", printf_type, Some(Linkage::External));
+src/backend/codegen/codegen.rs	1224	"==",
+src/backend/codegen/codegen.rs	1403	strict_abi: crate::diagnostics::env_flag("ZETA_STRICT_ABI"),
+src/backend/codegen/codegen.rs	1444-1462	fn mangle_function_name( &self, base_name: &str, type_args: &[crate::middle::types::Type], ) -> String { if type_args.is_empty() { return base_name.to_string();
 src/backend/codegen/codegen.rs	1484-1493	fn infer_fn_return_type(&self, mir: &Mir) -> inkwell::types::BasicTypeEnum<'ctx> { // 批次 399: the answer comes from `Mir::signature_ret_ty`, the same entry // t
 src/backend/codegen/codegen.rs	1492	_ => self.i64_type.into(),
-src/backend/codegen/codegen.rs	1668-1676	let param_types: Vec<_> = mir .param_indices .iter() .map(|(_, pid)| match mir.type_map.get(pid) { Some(Type::F32) => self.context.f32_type().into(), Some(Type:
-src/backend/codegen/codegen.rs	1678-1682	let fn_type = match ret_type { inkwell::types::BasicTypeEnum::IntType(it) => it.fn_type(&param_types, false), inkwell::types::BasicTypeEnum::FloatType(ft) => ft
-src/backend/codegen/codegen.rs	1795	self.slot_read_ids = Self::collect_slot_reads(&mir.stmts);
-src/backend/codegen/codegen.rs	1803-1807	for &id in &all_ids { let alloca = match self.current_type_map.as_ref().and_then(|tm| tm.get(&id)) { Some(Type::F32) => self.builder.build_alloca(self.context.f
-src/backend/codegen/codegen.rs	1961-1963	/// int→double for a word that came straight out of a container slot is a /// REINTERPRETATION (the writer bit-cast the double), not a numeric /// conversion — 
-src/backend/codegen/codegen.rs	1964-1979	fn slot_or_sitofp( &mut self, v: inkwell::values::IntValue<'ctx>, id: u32, name: &str, ) -> inkwell::values::FloatValue<'ctx> { if self.slot_read_ids.contains(&
-src/backend/codegen/codegen.rs	1970	if self.slot_read_ids.contains(&id) {
-src/backend/codegen/codegen.rs	2008	fn column_arith_dispatch(&self, op: &str, left: u32, right: u32) -> Option<i64> {
-src/backend/codegen/codegen.rs	2069-2076	let callee = match self.module.get_function("zt_col_arith") { Some(f) => f, None => self.module.add_function( "zt_col_arith", self.i64_type.fn_type(&[self.i64_t
+src/backend/codegen/codegen.rs	1656-1664	let param_types: Vec<_> = mir .param_indices .iter() .map(|(_, pid)| match mir.type_map.get(pid) { Some(Type::F32) => self.context.f32_type().into(), Some(Type:
+src/backend/codegen/codegen.rs	1666-1670	let fn_type = match ret_type { inkwell::types::BasicTypeEnum::IntType(it) => it.fn_type(&param_types, false), inkwell::types::BasicTypeEnum::FloatType(ft) => ft
+src/backend/codegen/codegen.rs	1783	self.slot_read_ids = Self::collect_slot_reads(&mir.stmts);
+src/backend/codegen/codegen.rs	1791-1795	for &id in &all_ids { let alloca = match self.current_type_map.as_ref().and_then(|tm| tm.get(&id)) { Some(Type::F32) => self.builder.build_alloca(self.context.f
+src/backend/codegen/codegen.rs	1949-1951	/// int→double for a word that came straight out of a container slot is a /// REINTERPRETATION (the writer bit-cast the double), not a numeric /// conversion — 
+src/backend/codegen/codegen.rs	1952-1967	fn slot_or_sitofp( &mut self, v: inkwell::values::IntValue<'ctx>, id: u32, name: &str, ) -> inkwell::values::FloatValue<'ctx> { if self.slot_read_ids.contains(&
+src/backend/codegen/codegen.rs	1958	if self.slot_read_ids.contains(&id) {
+src/backend/codegen/codegen.rs	1996	fn column_arith_dispatch(&self, op: &str, left: u32, right: u32) -> Option<i64> {
+src/backend/codegen/codegen.rs	2057-2064	let callee = match self.module.get_function("zt_col_arith") { Some(f) => f, None => self.module.add_function( "zt_col_arith", self.i64_type.fn_type(&[self.i64_t
 src/backend/codegen/codegen.rs	2071	None => self.module.add_function(
-src/backend/codegen/codegen.rs	2640	let mangled = name.replace("::", "__");
-src/backend/codegen/codegen.rs	2759	if (name == ">=" || name == "ge" || name == "ge_i64")
-src/backend/codegen/codegen.rs	2766	&& let Some(f) = self.module.get_function("option_make_some")
-src/backend/codegen/codegen.rs	2863	let mangled = name.replace("::", "__");
-src/backend/codegen/codegen.rs	2898	let mangled = name.replace("::", "__");
-src/backend/codegen/codegen.rs	2914	let mangled = name.replace("::", "__");
-src/backend/codegen/codegen.rs	2952-2978	// Use 0-param variadic so it accepts any call site's argument count. let fn_type = self.i64_type.fn_type(&[], false); let f = self .module .add_function(&mangl
-src/backend/codegen/codegen.rs	2980-3070	"starts_with" | "startswith" => "str_starts_with".to_string(), "ends_with" | "endswith" => "str_ends_with".to_string(), "contains" | "includes" => "str_contains
-src/backend/codegen/codegen.rs	2998-3379	fn get_or_declare_function( &mut self, name: &str, type_args: &[crate::middle::types::Type], args_count: usize, ) -> FunctionValue<'ctx> { // Try existing looku
-src/backend/codegen/codegen.rs	3004-3005	// Try existing lookup first — check mangled name (:: → __) BEFORE raw name. // gen_mirs stores functions with __, call sites reference with ::.
-src/backend/codegen/codegen.rs	3007-3013	let host_mapped_name = if name.starts_with("str_") { format!("host_{}", name) } else if let Some(resolved) = Self::resolve_string_method(name) { format!("host_{
+src/backend/codegen/codegen.rs	2628	let mangled = name.replace("::", "__");
+src/backend/codegen/codegen.rs	2747	if (name == ">=" || name == "ge" || name == "ge_i64")
+src/backend/codegen/codegen.rs	2754	&& let Some(f) = self.module.get_function("option_make_some")
+src/backend/codegen/codegen.rs	2851	let mangled = name.replace("::", "__");
+src/backend/codegen/codegen.rs	2886	let mangled = name.replace("::", "__");
+src/backend/codegen/codegen.rs	2902	let mangled = name.replace("::", "__");
+src/backend/codegen/codegen.rs	2940-2966	// Use 0-param variadic so it accepts any call site's argument count. let fn_type = self.i64_type.fn_type(&[], false); let f = self .module .add_function(&mangl
+src/backend/codegen/codegen.rs	2968-3058	"starts_with" | "startswith" => "str_starts_with".to_string(), "ends_with" | "endswith" => "str_ends_with".to_string(), "contains" | "includes" => "str_contains
+src/backend/codegen/codegen.rs	2986-3367	fn get_or_declare_function( &mut self, name: &str, type_args: &[crate::middle::types::Type], args_count: usize, ) -> FunctionValue<'ctx> { // Try existing looku
+src/backend/codegen/codegen.rs	2992-2993	// Try existing lookup first — check mangled name (:: → __) BEFORE raw name. // gen_mirs stores functions with __, call sites reference with ::.
+src/backend/codegen/codegen.rs	2995-3001	let host_mapped_name = if name.starts_with("str_") { format!("host_{}", name) } else if let Some(resolved) = Self::resolve_string_method(name) { format!("host_{
+src/backend/codegen/codegen.rs	3005-3013	if name.contains("::") { // The EXACT qualified name first, and if it is not there yet (the // definition may be emitted later in the same module) DECLARE it — 
 src/backend/codegen/codegen.rs	3014	let mangled = name.replace("::", "__");
-src/backend/codegen/codegen.rs	3017-3025	if name.contains("::") { // The EXACT qualified name first, and if it is not there yet (the // definition may be emitted later in the same module) DECLARE it — 
 src/backend/codegen/codegen.rs	3018-3026	// The EXACT qualified name first, and if it is not there yet (the // definition may be emitted later in the same module) DECLARE it — // do NOT fall back to th
 src/backend/codegen/codegen.rs	3026-3032	let mangled = name.replace("::", "__"); if let Some(f) = self.module.get_function(&mangled) { return f; } if let Some(&f) = self.fns.get(&mangled) { return f; }
-src/backend/codegen/codegen.rs	3072-3080	// Also try the method name directly (Self::new → new) // with param count validation and suffix search. if let Some(method) = name.split("::").last() { // Try 
-src/backend/codegen/codegen.rs	3081-3086	// Try param-suffixed: new_0, new_1, etc. let suffixed = format!("{}_{}", method, args_count); if let Some(f) = self.module.get_function(&suffixed) { return f; 
-src/backend/codegen/codegen.rs	3088-3096	// Check host-mapped name for str_* functions if !host_mapped_name.is_empty() { if let Some(f) = self.module.get_function(&host_mapped_name) { return f; } if le
-src/backend/codegen/codegen.rs	3097-3109	// Fall through to raw name check. // Only return the function if the param count matches. // If param count differs, try param-suffixed name below. if let Some
-src/backend/codegen/codegen.rs	3110-3118	// Try param-count-suffixed name before extern declaration. // Handles overloaded functions declared as name_N in gen_mirs. let param_suffixed = format!("{}_{}"
-src/backend/codegen/codegen.rs	3119-3126	// PY/泛型: call site with no explicit type arguments to a declared // generic function — instantiate with the default substitution // (params fall back to i64, m
-src/backend/codegen/codegen.rs	3128-3131	let mangled = self.mangle_function_name(name, type_args); if let Some(f) = self.module.get_function(&mangled) { return f; }
-src/backend/codegen/codegen.rs	3132-3145	// PY: declared generic called with (inferred or explicit) type args // — monomorphize. The call name may carry a trailing _argc suffix // (id_1 → id); the gene
-src/backend/codegen/codegen.rs	3146-3158	// Also try stripping trailing _N from the full name before mangling. // MIR gen appends _0 for overload disambiguation (oneshot::channel_0), // but the monomor
-src/backend/codegen/codegen.rs	3159-3178	// For path-qualified names (e.g., "oneshot::channel::channel_0"), also try mangling // just the base method name — monomorphized functions use fully-qualified 
-src/backend/codegen/codegen.rs	3179-3203	// Also try the fully-qualified module path as the function name. // e.g., "oneshot::channel::channel_0" → qualified = "oneshot::channel" // Then mangle: "onesh
-src/backend/codegen/codegen.rs	3186	let qual_stored = qual_mangled.replace("::", "__");
-src/backend/codegen/codegen.rs	3196	let base_qual_stored = base_qual_mangled.replace("::", "__");
-src/backend/codegen/codegen.rs	3204-3213	// Check host-mapped name if !host_mapped_name.is_empty() && let Some(f) = self.module.get_function(&host_mapped_name) { return f; } // Check bare name in case 
-src/backend/codegen/codegen.rs	3215-3220	// Also handle LLVM's internal .N suffix for overloaded functions // (LLVM renames e.g. array_new_1 to array_new.1 when name collision detected) let dot_suffixe
-src/backend/codegen/codegen.rs	3221-3228	// Try param-count-suffixed name before creating extern. let param_suffixed = format!("{}_{}", name, args_count); if let Some(f) = self.module.get_function(&par
-src/backend/codegen/codegen.rs	3236-3238	// Guard: the suffix must be ALL digits (a real _N disambiguator). // Without this, "to_string_f64" was treated as "to_string" + suffix // ("f64" contains digit
-src/backend/codegen/codegen.rs	3271	base_name.replace("::", "__")
-src/backend/codegen/codegen.rs	3274	.replace("::", "__")
-src/backend/codegen/codegen.rs	3333-3337	let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect(); let fn_type = self.i64_type.fn_type(&param_types, false); return self .module
-src/backend/codegen/codegen.rs	3346-3364	// Dedupe guard: adding a function whose name already exists makes LLVM // auto-rename the duplicate (name.N), producing call sites that point // at symbols wit
-src/backend/codegen/codegen.rs	3359-3361	// linker could never satisfy (4 of them: __get_price_3/__get_price_7/ // __get_trade_days_2/__OrderCost_6). Default arguments make the // call-site arity diffe
-src/backend/codegen/codegen.rs	3362	if actual_name.starts_with("zeta_") || actual_name.contains("__") {
-src/backend/codegen/codegen.rs	3375-3378	let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect(); let fn_type = self.i64_type.fn_type(&param_types, false); self.module .add_fu
-src/backend/codegen/codegen.rs	3884-3909	MirStmt::Assign { lhs, rhs } => { let val = self.gen_expr_safe(rhs, exprs); let alloca = *self.locals.get(lhs).unwrap(); // An INT value stored into a FLOAT slo
-src/backend/codegen/codegen.rs	3918	self.note_return_slot_mismatch(func, dest, args.len());
-src/backend/codegen/codegen.rs	4421-4429	let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, l, r, "eq").unwrap(); self.builder.build_int_z_extend(cmp, self.i64_type, "eq_ext").unwrap()
-src/backend/codegen/codegen.rs	4459	let coerced = self.coerce_call_args(callee, arg_vals, args);
-src/backend/codegen/codegen.rs	4475	let coerced = self.coerce_call_args(callee, arg_vals, args);
-src/backend/codegen/codegen.rs	4572	if func == "read" && args.len() == 1 {
-src/backend/codegen/codegen.rs	4958	// The MIR gen already appends _N (arg count) to function names.
-src/backend/codegen/codegen.rs	4961-4972	let needs_ptr_arg = base_func == "option_is_some" || base_func == "option_get_data" || base_func == "option_free" || base_func == "host_result_is_ok" || base_fu
+src/backend/codegen/codegen.rs	3060-3068	// Also try the method name directly (Self::new → new) // with param count validation and suffix search. if let Some(method) = name.split("::").last() { // Try 
+src/backend/codegen/codegen.rs	3069-3074	// Try param-suffixed: new_0, new_1, etc. let suffixed = format!("{}_{}", method, args_count); if let Some(f) = self.module.get_function(&suffixed) { return f; 
+src/backend/codegen/codegen.rs	3076-3084	// Check host-mapped name for str_* functions if !host_mapped_name.is_empty() { if let Some(f) = self.module.get_function(&host_mapped_name) { return f; } if le
+src/backend/codegen/codegen.rs	3085-3097	// Fall through to raw name check. // Only return the function if the param count matches. // If param count differs, try param-suffixed name below. if let Some
+src/backend/codegen/codegen.rs	3098-3106	// Try param-count-suffixed name before extern declaration. // Handles overloaded functions declared as name_N in gen_mirs. let param_suffixed = format!("{}_{}"
+src/backend/codegen/codegen.rs	3107-3114	// PY/泛型: call site with no explicit type arguments to a declared // generic function — instantiate with the default substitution // (params fall back to i64, m
+src/backend/codegen/codegen.rs	3116-3119	let mangled = self.mangle_function_name(name, type_args); if let Some(f) = self.module.get_function(&mangled) { return f; }
+src/backend/codegen/codegen.rs	3120-3133	// PY: declared generic called with (inferred or explicit) type args // — monomorphize. The call name may carry a trailing _argc suffix // (id_1 → id); the gene
+src/backend/codegen/codegen.rs	3134-3146	// Also try stripping trailing _N from the full name before mangling. // MIR gen appends _0 for overload disambiguation (oneshot::channel_0), // but the monomor
+src/backend/codegen/codegen.rs	3147-3166	// For path-qualified names (e.g., "oneshot::channel::channel_0"), also try mangling // just the base method name — monomorphized functions use fully-qualified 
+src/backend/codegen/codegen.rs	3167-3191	// Also try the fully-qualified module path as the function name. // e.g., "oneshot::channel::channel_0" → qualified = "oneshot::channel" // Then mangle: "onesh
+src/backend/codegen/codegen.rs	3174	let qual_stored = qual_mangled.replace("::", "__");
+src/backend/codegen/codegen.rs	3184	let base_qual_stored = base_qual_mangled.replace("::", "__");
+src/backend/codegen/codegen.rs	3192-3201	// Check host-mapped name if !host_mapped_name.is_empty() && let Some(f) = self.module.get_function(&host_mapped_name) { return f; } // Check bare name in case 
+src/backend/codegen/codegen.rs	3203-3208	// Also handle LLVM's internal .N suffix for overloaded functions // (LLVM renames e.g. array_new_1 to array_new.1 when name collision detected) let dot_suffixe
+src/backend/codegen/codegen.rs	3209-3216	// Try param-count-suffixed name before creating extern. let param_suffixed = format!("{}_{}", name, args_count); if let Some(f) = self.module.get_function(&par
+src/backend/codegen/codegen.rs	3224-3226	// Guard: the suffix must be ALL digits (a real _N disambiguator). // Without this, "to_string_f64" was treated as "to_string" + suffix // ("f64" contains digit
+src/backend/codegen/codegen.rs	3259	base_name.replace("::", "__")
+src/backend/codegen/codegen.rs	3262	.replace("::", "__")
+src/backend/codegen/codegen.rs	3321-3325	let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect(); let fn_type = self.i64_type.fn_type(&param_types, false); return self .module
+src/backend/codegen/codegen.rs	3334-3352	// Dedupe guard: adding a function whose name already exists makes LLVM // auto-rename the duplicate (name.N), producing call sites that point // at symbols wit
+src/backend/codegen/codegen.rs	3347-3349	// linker could never satisfy (4 of them: __get_price_3/__get_price_7/ // __get_trade_days_2/__OrderCost_6). Default arguments make the // call-site arity diffe
+src/backend/codegen/codegen.rs	3350	if actual_name.starts_with("zeta_") || actual_name.contains("__") {
+src/backend/codegen/codegen.rs	3363-3366	let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect(); let fn_type = self.i64_type.fn_type(&param_types, false); self.module .add_fu
+src/backend/codegen/codegen.rs	3872-3897	MirStmt::Assign { lhs, rhs } => { let val = self.gen_expr_safe(rhs, exprs); let alloca = *self.locals.get(lhs).unwrap(); // An INT value stored into a FLOAT slo
+src/backend/codegen/codegen.rs	3906	self.note_return_slot_mismatch(func, dest, args.len());
+src/backend/codegen/codegen.rs	4392-4400	let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, l, r, "eq").unwrap(); self.builder.build_int_z_extend(cmp, self.i64_type, "eq_ext").unwrap()
+src/backend/codegen/codegen.rs	4430	let coerced = self.coerce_call_args(callee, arg_vals, args);
+src/backend/codegen/codegen.rs	4446	let coerced = self.coerce_call_args(callee, arg_vals, args);
+src/backend/codegen/codegen.rs	4543	if func == "read" && args.len() == 1 {
+src/backend/codegen/codegen.rs	4929	// The MIR gen already appends _N (arg count) to function names.
+src/backend/codegen/codegen.rs	4948-4959	let needs_ptr_arg = base_func == "option_is_some" || base_func == "option_get_data" || base_func == "option_free" || base_func == "host_result_is_ok" || base_fu
+src/backend/codegen/codegen.rs	4981	let coerced = self.coerce_call_args(callee, arg_vals, args);
+src/backend/codegen/codegen.rs	4985-4993	let final_val = if returns_ptr { let ptr_val = val.into_pointer_value(); self.builder .build_ptr_to_int(ptr_val, self.i64_type, "ptrtoint") .unwrap() .into() } 
 src/backend/codegen/codegen.rs	4990-5009	let arg_vals: Vec<BasicMetadataValueEnum> = args .iter() .enumerate() .map(|(i, &id)| { let val = self.gen_expr_safe(&id, exprs); // If this function needs poin
-src/backend/codegen/codegen.rs	5011	let coerced = self.coerce_call_args(callee, arg_vals, args);
-src/backend/codegen/codegen.rs	5015-5023	let final_val = if returns_ptr { let ptr_val = val.into_pointer_value(); self.builder .build_ptr_to_int(ptr_val, self.i64_type, "ptrtoint") .unwrap() .into() } 
-src/backend/codegen/codegen.rs	5168	let coerced = self.coerce_call_args(callee, arg_vals, args);
-src/backend/codegen/codegen.rs	5182-5191	let want_float = self .builder .get_insert_block() .and_then(|b| b.get_parent()) .map_or(false, |f| { matches!( f.get_type().get_return_type(), Some(inkwell::ty
-src/backend/codegen/codegen.rs	5192-5226	let ret_val = if want_float && !matches!( ret_val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_) ) { self.builder .build_signed_int_to_float(ret_val.in
-src/backend/codegen/codegen.rs	5214-5215	// linker at all. `infer_fn_return_type` only scans top-level // returns, so nested ones are never consulted.
-src/backend/codegen/codegen.rs	5389	let coerced = self.coerce_call_args(
-src/backend/codegen/codegen.rs	5398-5436	// 0 = int/unknown, 1 = f64, 2 = str, 3 = bool. // 批次 456: container values got their own numbers (4..7) because a // column map (`pd.DataFrame({...})`) must kn
-src/backend/codegen/codegen.rs	6125-6146	MirStmt::StructFieldStore { base_id, field, val_id, } => { // base.field = val — store through the heap struct pointer. // Fields are 8-byte slots at offset ind
-src/backend/codegen/codegen.rs	6348	fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
-src/backend/codegen/codegen.rs	6427	/// Map a class SPELLING onto the bare variant the layout tables are keyed
-src/backend/codegen/codegen.rs	6428-6431	/// by. Two spellings reach the backend: the `Cls::method` prefix of a MIR /// item, and a receiver's declared `Named(...)` type — which is /// module-mangled (
-src/backend/codegen/codegen.rs	6615-6620	let declared = self .current_type_map .as_ref() .and_then(|tm| tm.get(&base)) .and_then(|t| match t { Type::Named(n, _) => Some(n.clone()),
-src/backend/codegen/codegen.rs	6694-6715	None => { let recovered = self.resolve_struct_layout_by_field(field); // BATCH-427: when BOTH routes decline, the read goes // on silently against the stand-in,
-src/backend/codegen/codegen.rs	6879-6898	MirExpr::StringLit(s) => { let global = self.module.add_global( self.context.i8_type().array_type(s.len() as u32 + 1), None, "str_lit", ); global.set_linkage(in
-src/backend/codegen/codegen.rs	6956-6961	// `FieldAccess` operand cannot look up its static type, so a float // field skipped the bitcast-back and the fold ran on the raw BIT // PATTERN: `self._cash = 
-src/backend/codegen/codegen.rs	7067	if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
-src/backend/codegen/codegen.rs	7414	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
-src/backend/codegen/codegen.rs	7415	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
-src/backend/codegen/codegen.rs	7453-7454	// Return heap pointer as i64 (caller reads from valid heap memory) heap_ptr_val.into()
+src/backend/codegen/codegen.rs	5138	let coerced = self.coerce_call_args(callee, arg_vals, args);
+src/backend/codegen/codegen.rs	5152-5161	let want_float = self .builder .get_insert_block() .and_then(|b| b.get_parent()) .map_or(false, |f| { matches!( f.get_type().get_return_type(), Some(inkwell::ty
+src/backend/codegen/codegen.rs	5162-5196	let ret_val = if want_float && !matches!( ret_val.get_type(), inkwell::types::BasicTypeEnum::FloatType(_) ) { self.builder .build_signed_int_to_float(ret_val.in
+src/backend/codegen/codegen.rs	5184-5185	// linker at all. `infer_fn_return_type` only scans top-level // returns, so nested ones are never consulted.
+src/backend/codegen/codegen.rs	5359	let coerced = self.coerce_call_args(
+src/backend/codegen/codegen.rs	5368-5406	// 0 = int/unknown, 1 = f64, 2 = str, 3 = bool. // 批次 456: container values got their own numbers (4..7) because a // column map (`pd.DataFrame({...})`) must kn
+src/backend/codegen/codegen.rs	6095-6116	MirStmt::StructFieldStore { base_id, field, val_id, } => { // base.field = val — store through the heap struct pointer. // Fields are 8-byte slots at offset ind
+src/backend/codegen/codegen.rs	6318	fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
+src/backend/codegen/codegen.rs	6397	/// Map a class SPELLING onto the bare variant the layout tables are keyed
+src/backend/codegen/codegen.rs	6398-6401	/// by. Two spellings reach the backend: the `Cls::method` prefix of a MIR /// item, and a receiver's declared `Named(...)` type — which is /// module-mangled (
+src/backend/codegen/codegen.rs	6585-6590	let declared = self .current_type_map .as_ref() .and_then(|tm| tm.get(&base)) .and_then(|t| match t { Type::Named(n, _) => Some(n.clone()),
+src/backend/codegen/codegen.rs	6664-6685	None => { let recovered = self.resolve_struct_layout_by_field(field); // BATCH-427: when BOTH routes decline, the read goes // on silently against the stand-in,
+src/backend/codegen/codegen.rs	6849-6868	MirExpr::StringLit(s) => { let global = self.module.add_global( self.context.i8_type().array_type(s.len() as u32 + 1), None, "str_lit", ); global.set_linkage(in
+src/backend/codegen/codegen.rs	6926-6931	// `FieldAccess` operand cannot look up its static type, so a float // field skipped the bitcast-back and the fold ran on the raw BIT // PATTERN: `self._cash = 
+src/backend/codegen/codegen.rs	7037	if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
+src/backend/codegen/codegen.rs	7384	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
+src/backend/codegen/codegen.rs	7385	// Struct fields are stored as 64-bit slots; bitcast float to i64 to fit.
+src/backend/codegen/codegen.rs	7423-7424	// Return heap pointer as i64 (caller reads from valid heap memory) heap_ptr_val.into()
+src/backend/codegen/codegen.rs	7583-7586	let extracted = self .builder .build_extract_value(loaded_struct.into_struct_value(), field_index, "") .unwrap();
 src/backend/codegen/codegen.rs	7595-7607	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> = (0..field_count).map(|_| self.i64_type.into()
-src/backend/codegen/codegen.rs	7613-7616	let extracted = self .builder .build_extract_value(loaded_struct.into_struct_value(), field_index, "") .unwrap();
-src/backend/codegen/codegen.rs	7798	MirExpr::StackArray { elements, size } => {
-src/backend/codegen/codegen.rs	7883-7884	// Return pointer to elem0 (buf + 16) as i64 let data_ptr = unsafe {
-src/backend/codegen/codegen.rs	7958-8083	fn coerce_call_args( &mut self, callee: inkwell::values::FunctionValue<'ctx>, args: Vec<BasicMetadataValueEnum<'ctx>>, arg_ids: &[u32], ) -> Vec<BasicMetadataVa
+src/backend/codegen/codegen.rs	7768	MirExpr::StackArray { elements, size } => {
+src/backend/codegen/codegen.rs	7853-7854	// Return pointer to elem0 (buf + 16) as i64 let data_ptr = unsafe {
+src/backend/codegen/codegen.rs	7928-8053	fn coerce_call_args( &mut self, callee: inkwell::values::FunctionValue<'ctx>, args: Vec<BasicMetadataValueEnum<'ctx>>, arg_ids: &[u32], ) -> Vec<BasicMetadataVa
+src/backend/codegen/codegen.rs	7970-7978	self.abi_note( &callee_name, i, &format!( "narrow i{}→i{}", arg_ty.get_bit_width(), pt.get_bit_width() ), );
+src/backend/codegen/codegen.rs	7979-7982	match self.builder.build_int_truncate(iv, pt, "arg_trunc") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum
+src/backend/codegen/codegen.rs	7983-7985	} else { result.push(BasicMetadataValueEnum::IntValue(iv)); }
+src/backend/codegen/codegen.rs	7987-7998	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::FloatType(ft)) => { // Batch 299: a raw container-slot word is a BIT PATTERN, so // reinte
 src/backend/codegen/codegen.rs	7992-7995	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::IntType(pt)) => { let arg_ty = iv.get_type(); if arg_ty.get_bit_width() < pt.get_bit_width
-src/backend/codegen/codegen.rs	8000-8008	self.abi_note( &callee_name, i, &format!( "narrow i{}→i{}", arg_ty.get_bit_width(), pt.get_bit_width() ), );
-src/backend/codegen/codegen.rs	8009-8012	match self.builder.build_int_truncate(iv, pt, "arg_trunc") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum
-src/backend/codegen/codegen.rs	8013-8015	} else { result.push(BasicMetadataValueEnum::IntValue(iv)); }
-src/backend/codegen/codegen.rs	8017-8028	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::FloatType(ft)) => { // Batch 299: a raw container-slot word is a BIT PATTERN, so // reinte
-src/backend/codegen/codegen.rs	8029-8032	self.builder .build_signed_int_to_float(iv, ft, "arg_sitofp") .map(|v| BasicValueEnum::from(v)) };
-src/backend/codegen/codegen.rs	8038-8043	(BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => { self.abi_note( &callee_name, i, &format!("fptosi → i{}", pt.get_bit_wi
-src/backend/codegen/codegen.rs	8044-8047	match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataV
-src/backend/codegen/codegen.rs	8049-8053	(BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_)) | (BasicMetadataValueEnum::PointerValue(_), inkwell::types::BasicTypeEnum
-src/backend/codegen/codegen.rs	8054	_ => result.push(arg),
-src/backend/codegen/codegen.rs	8057-8078	if result.len() < n_params { for i in result.len()..n_params { let pt_meta = fn_type.get_param_types()[i]; let zero: BasicMetadataValueEnum<'ctx> = match pt_met
-src/backend/codegen/codegen.rs	8079-8080	} else if result.len() > n_params { result.truncate(n_params);
+src/backend/codegen/codegen.rs	7999-8002	self.builder .build_signed_int_to_float(iv, ft, "arg_sitofp") .map(|v| BasicValueEnum::from(v)) };
+src/backend/codegen/codegen.rs	8008-8013	(BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => { self.abi_note( &callee_name, i, &format!("fptosi → i{}", pt.get_bit_wi
+src/backend/codegen/codegen.rs	8014-8017	match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataV
+src/backend/codegen/codegen.rs	8019-8023	(BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_)) | (BasicMetadataValueEnum::PointerValue(_), inkwell::types::BasicTypeEnum
+src/backend/codegen/codegen.rs	8024	_ => result.push(arg),
+src/backend/codegen/codegen.rs	8027-8048	if result.len() < n_params { for i in result.len()..n_params { let pt_meta = fn_type.get_param_types()[i]; let zero: BasicMetadataValueEnum<'ctx> = match pt_met
+src/backend/codegen/codegen.rs	8049-8050	} else if result.len() > n_params { result.truncate(n_params);
+src/backend/codegen/codegen.rs	8057	if self.abi_warn_count <= 8 {
+src/backend/codegen/codegen.rs	8063	if self.strict_abi && self.abi_fatal.is_none() {
+src/backend/codegen/codegen.rs	8078	fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
 src/backend/codegen/codegen.rs	8084-8098	fn abi_note(&mut self, callee: &str, arg_i: usize, kind: &str) { self.abi_warn_count = self.abi_warn_count.saturating_add(1); if self.abi_warn_count <= 8 { epri
-src/backend/codegen/codegen.rs	8087	if self.abi_warn_count <= 8 {
-src/backend/codegen/codegen.rs	8093	if self.strict_abi && self.abi_fatal.is_none() {
-src/backend/codegen/codegen.rs	8108	fn note_return_slot_mismatch(&mut self, func: &str, dest: &u32, nargs: usize) {
-src/backend/codegen/codegen.rs	8491	pub fn type_to_llvm_type(&self, ty: &Type) -> inkwell::types::BasicTypeEnum<'ctx> {
-src/backend/codegen/codegen.rs	8597-8603	Type::Tuple(element_types) => { let llvm_element_types: Vec<inkwell::types::BasicTypeEnum> = element_types .iter() .map(|t| self.type_to_llvm_type(t)) .collect(
+src/backend/codegen/codegen.rs	8461	pub fn type_to_llvm_type(&self, ty: &Type) -> inkwell::types::BasicTypeEnum<'ctx> {
+src/backend/codegen/codegen.rs	8567-8573	Type::Tuple(element_types) => { let llvm_element_types: Vec<inkwell::types::BasicTypeEnum> = element_types .iter() .map(|t| self.type_to_llvm_type(t)) .collect(
 src/backend/codegen/mod.rs	7	mod runtime_decls_registry;
 src/backend/codegen/mod.rs	9	mod runtime_decls_core;
 src/backend/codegen/runtime_decls_core.rs	52-53	module.add_function("zeta_env_get", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External)); module.add_function("zeta_env_set", void_type.fn_type
@@ -192,75 +192,75 @@ src/main.rs	648	let no_link = args.iter().any(|a| a == "--no-link");
 src/main.rs	965-968	// Deterministic emission order: HashMap iteration order is // random per process, which made LLVM's print.N collision // renames (and the runtime .set alias ta
 src/main.rs	969	all_mirs.sort_by(|a, b| {
 src/main.rs	1024	if no_link {
+src/middle/mir/gen.rs	453	.map(|m| format!("{}__", m.replace('.', "_")))
+src/middle/mir/gen.rs	489	fn env_store(&mut self, name: &str, value: u32) -> u32 {
 src/middle/mir/gen.rs	515	fn global_ty_of(&self, name: &str) -> Option<Type> {
-src/middle/mir/gen.rs	522	.map(|m| format!("{}__", m.replace('.', "_")))
-src/middle/mir/gen.rs	558	fn env_store(&mut self, name: &str, value: u32) -> u32 {
-src/middle/mir/gen.rs	625	fn env_slot_ty(&self, name: &str) -> Type {
-src/middle/mir/gen.rs	648-652	/// The mirror reads the SLOT it follows, never the `rhs` id: codegen /// re-evaluates an expression at each use, so handing over the right-hand /// side a seco
-src/middle/mir/gen.rs	653	fn mirror_module_global_writes(&mut self) {
-src/middle/mir/gen.rs	672	fn splice_env_mirrors(
-src/middle/mir/gen.rs	684	let (mirror, _key) = self.env_mirror(name, lhs);
-src/middle/mir/gen.rs	765	Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
-src/middle/mir/gen.rs	877	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
-src/middle/mir/gen.rs	884	let prefix = format!("{}__", module.replace('.', "_"));
-src/middle/mir/gen.rs	1391-1411	fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>>) { let missing: Vec<&str> = params .iter() .enumerate() .filter(|(i, _)| slots
-src/middle/mir/gen.rs	1778	self.mirror_module_global_writes();
-src/middle/mir/gen.rs	1842	Self::pin_declared_int_return(&mut mir, ast);
-src/middle/mir/gen.rs	1860	fn pin_declared_int_return(mir: &mut Mir, ast: &AstNode) {
-src/middle/mir/gen.rs	1941-1942	AstNode::Var(name) if self.nonlocal_names.contains(name) => { // PY-A V3: nonlocal name — defining assignment stores
-src/middle/mir/gen.rs	1945	let key_id = self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	556	fn env_slot_ty(&self, name: &str) -> Type {
+src/middle/mir/gen.rs	579-583	/// The mirror reads the SLOT it follows, never the `rhs` id: codegen /// re-evaluates an expression at each use, so handing over the right-hand /// side a seco
+src/middle/mir/gen.rs	584	fn mirror_module_global_writes(&mut self) {
+src/middle/mir/gen.rs	603	fn splice_env_mirrors(
+src/middle/mir/gen.rs	615	let (mirror, _key) = self.env_mirror(name, lhs);
+src/middle/mir/gen.rs	696	Some(format!("{}__{}", module.replace('.', "_"), parts[0]))
+src/middle/mir/gen.rs	808	Box::leak(format!("{}__{}", dotted.replace('.', "_"), new_member).into_boxed_str()),
+src/middle/mir/gen.rs	815	let prefix = format!("{}__", module.replace('.', "_"));
+src/middle/mir/gen.rs	1322-1342	fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>>) { let missing: Vec<&str> = params .iter() .enumerate() .filter(|(i, _)| slots
+src/middle/mir/gen.rs	1697	self.mirror_module_global_writes();
+src/middle/mir/gen.rs	1761	Self::pin_declared_int_return(&mut mir, ast);
+src/middle/mir/gen.rs	1779	fn pin_declared_int_return(mir: &mut Mir, ast: &AstNode) {
+src/middle/mir/gen.rs	1860-1861	AstNode::Var(name) if self.nonlocal_names.contains(name) => { // PY-A V3: nonlocal name — defining assignment stores
+src/middle/mir/gen.rs	1864	let key_id = self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	2413	self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	2426	} else if self.nonlocal_names.contains(name) {
+src/middle/mir/gen.rs	2428	let key_id = self.env_store(name, rhs_id);
 src/middle/mir/gen.rs	2516	if self.nonlocal_names.contains(name) {
-src/middle/mir/gen.rs	2518	self.env_store(name, rhs_id);
-src/middle/mir/gen.rs	2582	} else if self.nonlocal_names.contains(name) {
-src/middle/mir/gen.rs	2584	let key_id = self.env_store(name, rhs_id);
-src/middle/mir/gen.rs	2687	self.env_store(name, rhs_id);
-src/middle/mir/gen.rs	3936	self.lower_ast(body);
-src/middle/mir/gen.rs	4017	// Macros should have been expanded before MIR lowering.
-src/middle/mir/gen.rs	4374	) -> Vec<(String, u32)> {
-src/middle/mir/gen.rs	4396	fn enum_is_boxed(&self, enum_name: &str) -> bool {
-src/middle/mir/gen.rs	4498	fn lower_range_guard(
-src/middle/mir/gen.rs	4520	func: if inclusive { "<=" } else { "<" }.to_string(),
-src/middle/mir/gen.rs	4907	format!("{}__{}", module.replace('.', "_"), member);
-src/middle/mir/gen.rs	4914-4932	// PY-A V3: nonlocal names ALWAYS read through env (fresh // value), even when a local alias exists. if self.nonlocal_names.contains(name) { let key_id = self.n
-src/middle/mir/gen.rs	5360	"zeta_dyn_truth"
-src/middle/mir/gen.rs	7943-7955	if method == "parse_args" && receiver.is_some() { let recv = self.lower_expr(receiver.as_ref().unwrap()); self.stmts.push(MirStmt::Call { func: "py_argparse_par
-src/middle/mir/gen.rs	8320-8341	// `log.info(fmt, *args)` — a varargs HANDLE has no // static length, and lowering the starred operand // emitted a raw Deref that codegen compiled into // `ldr
+src/middle/mir/gen.rs	2522	self.env_store(name, rhs_id);
+src/middle/mir/gen.rs	3735	self.lower_ast(body);
+src/middle/mir/gen.rs	3816	// Macros should have been expanded before MIR lowering.
+src/middle/mir/gen.rs	4099	) -> Vec<(String, u32)> {
+src/middle/mir/gen.rs	4121	fn enum_is_boxed(&self, enum_name: &str) -> bool {
+src/middle/mir/gen.rs	4223	fn lower_range_guard(
+src/middle/mir/gen.rs	4245	func: if inclusive { "<=" } else { "<" }.to_string(),
+src/middle/mir/gen.rs	4568	format!("{}__{}", module.replace('.', "_"), member);
+src/middle/mir/gen.rs	4575-4593	// PY-A V3: nonlocal names ALWAYS read through env (fresh // value), even when a local alias exists. if self.nonlocal_names.contains(name) { let key_id = self.n
+src/middle/mir/gen.rs	4954	"zeta_dyn_truth"
+src/middle/mir/gen.rs	7206-7218	if method == "parse_args" && receiver.is_some() { let recv = self.lower_expr(receiver.as_ref().unwrap()); self.stmts.push(MirStmt::Call { func: "py_argparse_par
+src/middle/mir/gen.rs	7583-7604	// `log.info(fmt, *args)` — a varargs HANDLE has no // static length, and lowering the starred operand // emitted a raw Deref that codegen compiled into // `ldr
+src/middle/mir/gen.rs	8301-8303	// The block written here MUST be the block the runtime readers // decode: `option_is_some` tests slot 0 and `option_get_data` // reads slot 1 (tokio_runtime_st
+src/middle/mir/gen.rs	8308-8317	if receiver.is_none() && matches!(method.as_str(), "Some" | "Ok" | "Err") && args.len() == 1 { let val_id = self.lower_expr(&args[0]); let (variant, tag_val) = 
+src/middle/mir/gen.rs	8318-8320	// `Option` is `[tag | data]`, `Result` is `[tag | ok | err]` // (the layouts `option_get_data` / `host_result_get_data` // decode), so an unused payload slot i
 src/middle/mir/gen.rs	8988	func: "zeta_dyn_len".to_string(),
-src/middle/mir/gen.rs	9099-9101	// The block written here MUST be the block the runtime readers // decode: `option_is_some` tests slot 0 and `option_get_data` // reads slot 1 (tokio_runtime_st
-src/middle/mir/gen.rs	9106-9115	if receiver.is_none() && matches!(method.as_str(), "Some" | "Ok" | "Err") && args.len() == 1 { let val_id = self.lower_expr(&args[0]); let (variant, tag_val) = 
-src/middle/mir/gen.rs	9116-9118	// `Option` is `[tag | data]`, `Result` is `[tag | ok | err]` // (the layouts `option_get_data` / `host_result_get_data` // decode), so an unused payload slot i
-src/middle/mir/gen.rs	10448	Some(Type::Str) => "println_str",
 src/middle/mir/gen.rs	10559-10565	for (i, a) in pos.into_iter().enumerate() { if i < slots.len() { slots[i] = Some(a); } else { slots.push(Some(a)); } }
 src/middle/mir/gen.rs	10566-10571	for (n, v) in kw { match params.iter().position(|p| *p == n) { Some(i) => slots[i] = Some(v), None => slots.push(Some(v)), } }
-src/middle/mir/gen.rs	11679	Some(i) => slots[i] = Some(v),
-src/middle/mir/gen.rs	11682	None => slots.push(Some(v)),
-src/middle/mir/gen.rs	11686-11698	// A `**` mapping fills whatever is still unbound. for m in spread { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { *slot = Some(AstNode::S
-src/middle/mir/gen.rs	11699-11708	// Finally, declared defaults. if let Some(defaults) = &callee_defaults { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { if let Some(Some(d
-src/middle/mir/gen.rs	11862-11898	// PY-A: starred args `f(*arr)` expand to per-element args // (V1: static-size arrays compile-time unrolled). for a in &ordered_args { if let AstNode::UnaryOp {
-src/middle/mir/gen.rs	12315	// (`[dynamic]str__max`), reached once annotated params keep their
-src/middle/mir/gen.rs	12334	// same ghost family as `.isna()` (`[dynamic]i64__all`).
-src/middle/mir/gen.rs	12353	// `[dynamic]str__isna` and aborted. Route to the runtime helper.
-src/middle/mir/gen.rs	12372	// vector): compiled to the ghost `[dynamic]str__pct_change`, and
-src/middle/mir/gen.rs	12419	func: "[dynamic]str__map".to_string(),
-src/middle/mir/gen.rs	12432	// `[dynamic]str__normalize` and the link failed.
-src/middle/mir/gen.rs	12669	func: "zeta_dyn_contains".to_string(),
-src/middle/mir/gen.rs	12915-12925	.insert(id, Type::DynamicArray(Box::new(elem))); return id; } // PY-A: Python list methods. The opaque-receiver fallback // just below routes `index`/`count` to
-src/middle/mir/gen.rs	14300-14324	if receiver.is_none() && arg_ids.len() <= 4 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
-src/middle/mir/gen.rs	14500	format!("{}_{}", func, arg_ids.len())
-src/middle/mir/gen.rs	14589-14591	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
-src/middle/mir/gen.rs	14592-14602	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
-src/middle/mir/gen.rs	14603-14609	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
-src/middle/mir/gen.rs	15186	// x @ start..end: bind, then guard the range. The
-src/middle/mir/gen.rs	15555-15588	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
-src/middle/mir/gen.rs	16270	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
-src/middle/mir/gen.rs	16274	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
-src/middle/mir/gen.rs	16371	format!("{}_{}", func_name, arg_ids.len())
-src/middle/mir/gen.rs	16425	if size == 0 || !matches!(elem_ty_pre, Type::F32 | Type::F64) {
+src/middle/mir/gen.rs	10568	Some(i) => slots[i] = Some(v),
+src/middle/mir/gen.rs	10569	None => slots.push(Some(v)),
+src/middle/mir/gen.rs	10572-10584	// A `**` mapping fills whatever is still unbound. for m in spread { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { *slot = Some(AstNode::S
+src/middle/mir/gen.rs	10585-10594	// Finally, declared defaults. if let Some(defaults) = &callee_defaults { for (i, slot) in slots.iter_mut().enumerate() { if slot.is_none() { if let Some(Some(d
+src/middle/mir/gen.rs	10724-10760	// PY-A: starred args `f(*arr)` expand to per-element args // (V1: static-size arrays compile-time unrolled). for a in &ordered_args { if let AstNode::UnaryOp {
+src/middle/mir/gen.rs	10963	Some(Type::Str) => "println_str",
+src/middle/mir/gen.rs	11177	// (`[dynamic]str__max`), reached once annotated params keep their
+src/middle/mir/gen.rs	11196	// same ghost family as `.isna()` (`[dynamic]i64__all`).
+src/middle/mir/gen.rs	11215	// `[dynamic]str__isna` and aborted. Route to the runtime helper.
+src/middle/mir/gen.rs	11234	// vector): compiled to the ghost `[dynamic]str__pct_change`, and
+src/middle/mir/gen.rs	11281	func: "[dynamic]str__map".to_string(),
+src/middle/mir/gen.rs	11294	// `[dynamic]str__normalize` and the link failed.
+src/middle/mir/gen.rs	11540	func: "zeta_dyn_contains".to_string(),
+src/middle/mir/gen.rs	11786-11796	.insert(id, Type::DynamicArray(Box::new(elem))); return id; } // PY-A: Python list methods. The opaque-receiver fallback // just below routes `index`/`count` to
+src/middle/mir/gen.rs	13082-13106	if receiver.is_none() && arg_ids.len() <= 4 && !self.func_ret_types.contains_key(method.as_str()) && !self.closure_vars.contains_key(method.as_str()) { if let S
+src/middle/mir/gen.rs	13371-13373	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
+src/middle/mir/gen.rs	13374-13384	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
+src/middle/mir/gen.rs	13385-13391	// Whether the `_<argc>` disambiguation suffix was actually // appended — the return-type lookup below must NOT strip an // underscore that was part of the NAME
+src/middle/mir/gen.rs	13398	format!("{}_{}", func, arg_ids.len())
+src/middle/mir/gen.rs	13968	// x @ start..end: bind, then guard the range. The
+src/middle/mir/gen.rs	14290-14323	if matches!( self.type_map.get(&probe_id), Some(Type::Named(n, _)) if n == "PyArgNS" ) { let kind = self.argparse_kinds.get(field).cloned(); let (func, ty) = ma
+src/middle/mir/gen.rs	15005	if path.len() == 1 && path[0] == "Box" && method == "new" && args.len() == 1 {
+src/middle/mir/gen.rs	15009	if path.len() == 1 && path[0] == "String" && method == "new" && args.is_empty() {
+src/middle/mir/gen.rs	15106	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	15160	if size == 0 || !matches!(elem_ty_pre, Type::F32 | Type::F64) {
+src/middle/mir/gen.rs	15788	func: "zeta_dyn_getitem".to_string(),
+src/middle/mir/gen.rs	15816	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
+src/middle/mir/gen.rs	16207	self.env_store(name, cur_id);
+src/middle/mir/gen.rs	16458-16463	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
 src/middle/mir/gen.rs	16958	self.mirror_module_global_writes();
-src/middle/mir/gen.rs	17068	func: "zeta_dyn_getitem".to_string(),
-src/middle/mir/gen.rs	17096	// bare ghost (`notna_1`, `[dynamic]str__isna`, …).
-src/middle/mir/gen.rs	17502	self.env_store(name, cur_id);
-src/middle/mir/gen.rs	17781-17786	/// return its name. The closure value is then the function address /// (i64), so `let f = lambda x: x + 1; f(41)` lowers to a direct call /// to the named clos
 src/middle/mir/mir.rs	45-60	/// 批次 399 (类型基础②): the ONE entry saying what this function's `ret` /// carries, so the callee's LLVM signature and the caller's destination slot /// stop being
 src/middle/mir/mir.rs	61-75	pub fn signature_ret_ty(&self) -> Option<Type> { for stmt in &self.stmts { if let MirStmt::Return { val } = stmt { if let Some(ty) = self.type_map.get(val) { re
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");

@@ -453,10 +453,6 @@ def pair_renumber(
     return pairs, sorted(unmatched_gone), unmatched_added
 
 
-# 多义自动配对的位移上界（行）：本周代码移动的单批上界实测 ~160，留一倍余量。
-MAX_AUTO_MOVE = 500
-
-
 def rebind(
     doc: Path,
     idx: Index,
@@ -530,7 +526,8 @@ def rebind(
         if len(hits) > 1:
             # 批次 773 (#52 余量收敛)：多义不再一律拒改——同形文本多处命中时
             # 延迟到**同文件多义族的序保持贪心**（见 multi_pending 消费段）：
-            # 按旧行序逐个取最近且未被前面占用的命中，位移 ≤ MAX_AUTO_MOVE。
+            # 按旧行序逐个取最近且未被前面占用的命中（距离不设限：内容逐字
+            # 相同＋序保持＋不占用＝三重合同；远距位移由 [自动配对] 行出声）。
             # 动机与验证：五处相同的 `let mangled = ...` 逐一按纯距离配对会把
             # 2902 配到 2898（撞 2886 的落点）；序保持贪心给 2914（+12，与
             # 同族 +12 位移一致）。批次 772 人工合同读的 31 个映射与此全部一致。
@@ -551,7 +548,8 @@ def rebind(
 
     # ── Batch 773：多义族的序保持贪心配对 ──
     # 同文件的多义锚点按旧行升序消费：每个取「最近且未被同族前面锚点占用」的
-    # 命中（占位 = 已被本族更早的锚点配走）。位移 ≤ MAX_AUTO_MOVE 才收；
+    # 命中（占位 = 已被本族更早的锚点配走）。三重合同：内容逐字相同＋序保持
+    # ＋不占用；距离不设限——远距位移由 [自动配对] 行的位移数字出声。
     # 并列/超界/无可用命中仍拒改（原样进 refused，基线保留规则不变）。
     multi_by_file: dict[str, list] = {}
     for entry in multi_pending:
@@ -570,16 +568,12 @@ def rebind(
             nearest = min(avail, key=lambda h: abs(h - line))
             nd = abs(nearest - line)
             tied = any(abs(h - line) == nd for h in avail if h != nearest)
-            if nd > MAX_AUTO_MOVE or tied:
+            if tied:
                 refuse(
                     (rel, line, last),
                     f"{rel}:{fmt_span(line, last)} → {len(hits)} 处命中（"
                     f"{', '.join(map(str, hits[:5]))}{'…' if len(hits) > 5 else ''}）："
-                    + (
-                        f"最近可用 {nearest} 位移 {nearest - line:+d} 超界 {MAX_AUTO_MOVE}"
-                        if not tied
-                        else f"距离并列（最近可用 {nearest}），不猜"
-                    ),
+                    "距离并列（序保持也无法定序），不猜",
                 )
                 continue
             taken.add(nearest)

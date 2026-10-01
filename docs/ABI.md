@@ -193,8 +193,8 @@ C 运行时里按名字查的那一格（`zeta_env_get`/`zeta_env_set`，runtime
 当成一条活引用、把历史号打回漂移。八条写点从批次 387 起一律走 `env_store`，四条原先
 硬写 `Type::I64` 的读点一律走 `env_slot_ty`。
 **批次 391 把"八条按语句种类内联镜像"收敛成一个 Assign 后置遍**：`mirror_module_global_writes`
-（gen.rs:648）→ `splice_env_mirrors`（:667）→ `env_mirror(name, lhs)`（:679），调用点在 :1778 与 :16958。
-上面那五个内联点号随之不再存在；本批（542）实测的现号：`global_ty_of` gen.rs:446、
+（gen.rs:648）→ `splice_env_mirrors`（:667）→ `env_mirror(name, lhs)`（:679），调用点在 :1778 与 :18305。
+上面那五个内联点号随之不再存在；本批（542）实测的现号：`global_ty_of` gen.rs:515、
 `env_store` 定义 gen.rs:553（其余内联调用点 5 处 = gen.rs:1945、:2518、:2584、:2687、:17371，
 实参一律是"刚写过的那个槽" `rhs_id`，其中 gen.rs:17371 传 `cur_id`）、`env_slot_ty` gen.rs:620。
 **三条路径镜像的都是"刚写过的那个槽"，不是原来那条表达式**（后置遍对 `=` 与 `+=` 同一条规则：
@@ -213,7 +213,7 @@ acc = acc + 4`）返回 7、env 里 11。
 成因未bisect。现号 454 / 521 为本批 `grep -n 'fn env_'` 实测。）
 实测三档：
 ① 整数精确；
-② 容器句柄作为一个词存回取回都对，因为读侧把声明类型带给了槽（`global_ty_of`，gen.rs:446）
+② 容器句柄作为一个词存回取回都对，因为读侧把声明类型带给了槽（`global_ty_of`，gen.rs:515）
 —— 顶层 `data = [10, 20, 30]`，`len(data)` 在外层和别的函数里都是 `3 / 3`（`/tmp/b385/p7.z`）；
 ③ **声明是浮点的名字存位模式**：`env_store` 对"声明 `F32`/`F64` 且值也是浮点"的名字，先把值
 落进一个槽，再 `AddrOf` + `Deref{pointee_width: 8}` 从那个 `double` 的地址读出裸词传给
@@ -1042,7 +1042,7 @@ official 语料 194 个文件里 **115 个一个分号都没有**，其中 54 �
      绑定模式前判后，截断文件 12→11、丢行 1,805→1,749，四套基线不动
      （official 194/194、python_style 285/2/4/0、corpus 39/39、jit segv=0）。
      该族修复顺带**暴露**了第二个缺口：`print(x)` 在 MIR 里发 `println_str`
-     （`src/middle/mir/gen.rs:10448`），而 JIT 表里只有 `println_i64` ⇒ 新解析出的代码
+     （`src/middle/mir/gen.rs:10963`），而 JIT 表里只有 `println_i64` ⇒ 新解析出的代码
      一执行就 E4016 填桩；补 `pylib/jit_mappings.txt` 七条后 jit ok **163→170**。
    - **批次 322 关掉第二族：字符串字面量作 match 模式**（`parse_lit` 只吃数字，
      模式里 `"+"` 停在引号处 ⇒ 臂拿不到 `=>`）。接线时有**两层**缺陷，第二层是
