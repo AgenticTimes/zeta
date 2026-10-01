@@ -1374,6 +1374,7 @@ fn repl(dump_mir: bool, dump_ir: bool) -> Result<(), Box<dyn std::error::Error>>
         }
 
         let mut resolver = Resolver::new();
+        resolver.set_repl_lowering(true);
         for ast in &asts {
             resolver.register(ast.clone());
         }

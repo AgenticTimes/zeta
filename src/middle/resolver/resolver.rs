@@ -70,6 +70,8 @@ pub struct Resolver {
     pub associated_types: HashMap<(String, String), String>,
     pub ctfe_consts: HashMap<String, crate::middle::ctfe::value::ConstValue>,
     funcs: HashMap<String, FuncSignature>,
+    /// Batch 761 (#80③): REPL 每行降值模式旗标（穿线给 MirGen::with_repl_mode）。
+    repl_lowering: bool,
     /// Batch 747 (#264): callee -> (its `*args` param, its `**kwargs`
     /// param), for call-site collection of positional overflow / unmatched
     /// keyword arguments.
@@ -173,6 +175,7 @@ impl Resolver {
             associated_types: HashMap::new(),
             ctfe_consts: HashMap::new(),
             funcs: HashMap::new(),
+            repl_lowering: false,
             star_params: RefCell::new(HashMap::new()),
             registered_funcs: HashMap::new(),
             module_resolver: ModuleResolver::new("."),
@@ -4135,6 +4138,12 @@ impl Resolver {
         );
     }
 
+    /// Batch 761 (#80③): REPL 每行降值模式——MirGen 的未声明名告警只在
+    /// repl_mode 出声（见 gen.rs repl_mode 字段）。
+    pub fn set_repl_lowering(&mut self, on: bool) {
+        self.repl_lowering = on;
+    }
+
     pub fn set_source_dir(&mut self, path: &std::path::Path) {
         if let Some(parent) = path.parent() {
             self.module_resolver.set_root_dir(parent);
@@ -5450,6 +5459,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_func_ret_types(ret_types)
             .with_func_param_names(self.func_param_names())
             .with_func_star_params(self.func_star_params())
+            .with_repl_mode(self.repl_lowering)
             .with_type_decls(self.type_decls.clone())
             .with_nonlocal_names(self.nonlocal_names.borrow().clone())
             .with_module_globals(self.module_globals.borrow().clone())

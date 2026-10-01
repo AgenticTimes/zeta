@@ -98,6 +98,12 @@ pub enum TypeDecl {
 
 pub struct MirGen {
     next_id: u32,
+    /// Batch 761 (#80③): 未声明名告警去重——同一名字一次编译只喊一声。
+    undeclared_warned: std::collections::HashSet<String>,
+    /// Batch 761 (#80③): REPL 降值模式——每行独立 resolver、无 import/模块面，
+    /// 裸未知名必然真未声明 ⇒ 告警只在 repl_mode 出声（文件路动态名合法链路多，
+    /// 全开会淹语料：39/39 文件 1222 行实测）。
+    repl_mode: bool,
     stmts: Vec<MirStmt>,
     exprs: HashMap<u32, MirExpr>,
     ctfe_consts: HashMap<u32, i64>, // TODO: Change to ConstValue
@@ -297,6 +303,8 @@ fn repr_routable(t: &Type) -> bool {
 impl MirGen {
     pub fn new() -> Self {
         Self {
+            undeclared_warned: std::collections::HashSet::new(),
+            repl_mode: false,
             next_id: 1,
             stmts: vec![],
             exprs: HashMap::new(),
@@ -4561,6 +4569,32 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
     /// hardcoded paths — so `HashMap::new()` and `std::env::var(..)` reached the
     /// end of the arm with neither. The invariant is therefore enforced at this
     /// single point rather than one route at a time.
+    /// Batch 761 (#80③): REPL 降值模式开关（见 repl_mode 字段）。
+    pub fn with_repl_mode(mut self, on: bool) -> Self {
+        self.repl_mode = on;
+        self
+    }
+
+    /// Batch 761 (#80③): 未声明名读——此前静默 fabricate（REPL 里 `exit`
+    /// 打 1、`fn main() -> i64 { exit }` 整个文件无声编译）。行为保持（槽值
+    /// 照旧），只把沉默变成点名告警；每名每编译一次。
+    fn warn_undeclared(&mut self, name: &str) {
+        if self.undeclared_warned.contains(name) {
+            return;
+        }
+        if !self.repl_mode {
+            return;
+        }
+        self.undeclared_warned.insert(name.to_string());
+        // 直写 stderr（`warning: [Wxxx] ` 前缀＝run_all 诊断聚合的 grep 口径）。
+        // 不走 diagnostics::emit——TL_REPORTER 缓冲全仓无排水方（take_diagnostics
+        // 零调用），走它就是黑洞（本批实测：warn 被调用、W0106 不落 stderr）。
+        eprintln!(
+            "warning: [W0106] PY-A: undeclared name `{}` — reading it fabricated a slot value; check spelling or declare it",
+            name
+        );
+    }
+
     fn lower_expr(&mut self, expr: &AstNode) -> u32 {
         let id = self.lower_expr_node(expr);
         if !self.exprs.contains_key(&id) {
@@ -5028,6 +5062,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         }
                         _ => {
                             // Fallback to regular variable
+                            self.warn_undeclared(name);
                             self.exprs.insert(id, MirExpr::Var(id));
                             self.type_map.insert(id, Type::I64);
                         }
@@ -5045,6 +5080,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     self.type_map.insert(id, Type::I64);
                 } else {
                     // Regular variable
+                    self.warn_undeclared(name);
                     self.exprs.insert(id, MirExpr::Var(id));
                     self.type_map.insert(id, Type::I64);
                 }
