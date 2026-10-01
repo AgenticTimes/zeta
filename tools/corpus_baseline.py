@@ -12,11 +12,19 @@ import subprocess, glob, os, sys
 
 ZETAC = "target/release/zetac"
 WORKDIR = "/tmp/corpus_baseline"
+# 批次 755（backlog #260 余量）：30 秒是冷缓存下的贴地飞行——_drv_accept_409.py
+# 实测 20.8s（热），负载下越过 30s ⇒ TimeoutExpired 一炸全批中止、连"解析通过"
+# 行都不打（760 门禁当日两次 corpus total=0 的真因）。放宽到 90 秒，并把单文件
+# 超时降级为该文件计败、继续跑完——测量器不该比被测物先脆。
+TIMEOUT = 90
 
 
 def parse_ok(path):
-    r = subprocess.run([ZETAC, path, "-o", os.path.join(WORKDIR, "probe")],
-                       capture_output=True, text=True, timeout=30)
+    try:
+        r = subprocess.run([ZETAC, path, "-o", os.path.join(WORKDIR, "probe")],
+                           capture_output=True, text=True, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False
     out = (r.stderr or "") + (r.stdout or "")
     if "Linking failed" in out or "Compiled to" in out:
         return True   # parse 阶段通过（链接失败是下一阶段的事）

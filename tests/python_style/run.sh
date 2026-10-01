@@ -31,6 +31,19 @@ case "$JOBS" in ''|*[!0-9]*) JOBS=4 ;; esac
 [ "$JOBS" -gt 24 ] && JOBS=24
 
 CASES=("$ROOT"/tests/python_style/t*.z)
+# 批次 755（2026-10-01 用户裁定：停跑全套）：ZETA_PY_SAMPLE=<0-9> 只跑用例名稳定
+# 哈希命中该窗口的 1/10——与差分抽样同规：批号 %10 轮转、命中窗口长期逼近全覆盖、
+# 红了由调用方按需跑全族定位。未设置＝全量（原有行为，门禁逐字不变）。
+if [ -n "${ZETA_PY_SAMPLE:-}" ]; then
+    sampled=()
+    for f in "${CASES[@]}"; do
+        cname="$(basename "$f" .z)"
+        h=$(( $(printf '%s' "$cname" | cksum | awk '{print $1}') % 10 ))
+        [ "$h" -eq "$ZETA_PY_SAMPLE" ] && sampled+=("$f")
+    done
+    echo "python_style 抽样 ZETA_PY_SAMPLE=$ZETA_PY_SAMPLE:${#sampled[@]}/${#CASES[@]} 例" >&2
+    CASES=("${sampled[@]}")
+fi
 WORK="$(mktemp -d /tmp/zeta_pytests.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 

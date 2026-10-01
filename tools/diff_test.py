@@ -27,16 +27,16 @@ CPython 才是这门语言的规范本体（pyramid 1.2 的豁免理由就是"�
   mismatch   zeta 跑通了但值不同  —— 真语义缺口，本 harness 的存在理由
   compile    zeta 编译/降级失败  —— 能力缺口
   runtime    zeta 运行期非 0/超时 —— 崩点
-  bad_case   python 参考侧自身报错 —— 用例写坏了，记 rc=2 并**排除出分母**
+  bad_case   python 参考侧自身报错 —— 用例写坏了，单列计数并**排除出分母**（不计 rc，批次 756 裁定⑤）
 
 判据（对齐 tools/jit_sweep.sh 的"计数不回退"口径，不用比率当闸门）：
   硬闸门 1：基线里记为 match 的用例不许变差（逐用例比对，位置无关）。
   硬闸门 2：match 绝对数 >= 基线 `match_min`（新增用例失败不罚，
             把已通过的改坏必罚）。比率只做展示指标。
   ./tools/diff_test.py --bless    # 采集/刷新 tools/baselines/diff_consistency.json
-  ./tools/diff_test.py            # 核对；回归 rc=1，坏用例 rc=2
-  退出码 precedence：**回归优先**——曾经 match 的用例退化成 bad_case 同时命中两条，
-  此时报 1（run_all.sh 里 rc=2 只喊话不判红，判 1 才会拦住"覆盖度静默消失"）。
+  ./tools/diff_test.py            # 核对；回归 rc=1，坏用例单列计数不进 rc（批次 756 裁定⑤）
+  回归优先语义仍成立：曾经 match 的用例退化成 bad_case 会进回归清单并判 1，
+  **不会**被"单列不计 rc"放行（run_all.sh 按 bad_case 计数喊话，判 1 才拦得住覆盖度静默消失）。
 
 已知边界（不是缺陷，别当"已覆盖"）：
   1) 呈现层与语义层混在一根尺子上：`%.6f` 的浮点打印、`None`/容器的 repr 差异
@@ -207,7 +207,7 @@ def main() -> int:
             return 2
         before = len(cases)
         cases = [c for i, c in enumerate(cases) if i % k == off]
-        print(f"抽样 {k} 分之 {off}：{before} → {len(cases)} 条（全套覆盖由每 10 批的全量门禁承担）")
+        print(f"抽样 {k} 分之 {off}：{before} → {len(cases)} 条（红了由调用方按需跑全族定位（批次 755：全套门禁已裁停））")
     if not cases:
         print(f"{CASE_DIR} 下没有 .dcase 用例", file=sys.stderr)
         return 2
@@ -298,17 +298,16 @@ def main() -> int:
     if args.bless:
         BASELINE.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
         print(f"基线已写入 {BASELINE}（match_min={match}，比率 {rate:.1f}%）")
-        return 2 if bad else 0
+        return 0
 
     base = load_baseline(BASELINE)
     rc = 0
     if bad:
-        print(f"坏用例 {len(bad)} 条（参考侧跑不出真值，已排除出分母）: {' '.join(bad)}")
-        rc = 2
+        print(f"坏用例 {len(bad)} 条（参考侧跑不出真值，已排除出分母，单列不计 rc）: {' '.join(bad)}")
     if args.only or args.sample:
         if args.sample:
             print(f"--sample {args.sample} 抽样跑：不与基线比对（未抽到的用例不是回归），"
-                  "全套覆盖由每 10 批的全量门禁承担")
+                  "红了由调用方按需跑全族定位（批次 755：全套门禁已裁停）")
         if args.only:
             print("--only 子集跑：不与基线比对（子集里「消失」的用例不是回归），判定只到本次读数")
         return rc
