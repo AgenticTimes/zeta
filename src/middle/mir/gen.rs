@@ -2414,6 +2414,20 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             key_id,
                             val_id: rhs_id,
                         });
+                        // Batch 766 (值标签大弧·写侧第一步)：值是 py 模式类实例
+                        // ⇒ 侧表登记类 id（CLASS_TAG_BASE+id）。运行期只存不解释；
+                        // 读侧按格分派是下一格。现有字母表 0..7（标量＋vec 族）
+                        // 不覆盖类实例 ⇒ 类实例在 dict[str, Any] 槽读回即失型
+                        // （t450 几何判形闪败的写侧半）。
+                        if let Type::Named(cn, _) = &val_ty {
+                            if let Some(tag) = self.class_tag_id(cn) {
+                                let tag_id = self.int_slot(tag);
+                                self.stmts.push(MirStmt::VoidCall {
+                                    func: "zeta_map_set_tag".to_string(),
+                                    args: vec![base_id, key_id, tag_id],
+                                });
+                            }
+                        }
                     } else if let Type::DynamicArray(_) = base_ty {
                         // Generate array_set call for dynamic arrays
                         self.stmts.push(MirStmt::VoidCall {
@@ -4595,6 +4609,23 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
     pub fn with_repl_mode(mut self, on: bool) -> Self {
         self.repl_mode = on;
         self
+    }
+
+    /// Batch 766 (值标签大弧·写侧第一步)：类名字母表——type_decls 的 py 模式类
+    /// 按名字排序给稳定 id，tag 值＝CLASS_TAG_BASE + id。运行期只存不解释这个
+    /// int；读侧（下一格）拿 tag 反查类名做 __len__/方法分派。
+    const CLASS_TAG_BASE: i64 = 100;
+
+    fn class_tag_id(&self, name: &str) -> Option<i64> {
+        if !self.type_decls.contains_key(name) {
+            return None;
+        }
+        let mut names: Vec<&String> = self.type_decls.keys().collect();
+        names.sort();
+        names
+            .iter()
+            .position(|n| n.as_str() == name)
+            .map(|i| Self::CLASS_TAG_BASE + i as i64)
     }
 
     /// Batch 763 (#33 M5): 声明返回 F64 的函数里 return 的 I64 值收口成 F64。
