@@ -25526,3 +25526,26 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 位移 A/B（--emit-llvm 456 夹具，pre vs post）：仅 t23_generic_instantiation 一枚 @id 定义块顺序搬家；两侧各自同二进制两遍逐字节自洽 ⇒ 差异来自 pre 快照（含 758 在制态）与 HEAD 的 758 族间差，非本批（本批零 codegen 码改动）。如实标注：门禁读数跑于含并行侧 main.rs 在制的二进制。
 
 **方法记录**：改前后各轮都先用当场 md5 认二进制（会话开头在册的 15f46497 已被并行侧重编换代为 e9341c0f，按快照实拍走，未沿用旧号读数）；A/B 循环产物即删（ab/ 目录不留 456×2 文件）；cmp 一律带 -s 与显式路径（坑 100）。
+
+## 批次 762（2026-10-01，**度量批：761 新开 jit segv 族分族实拍**，零 src/ 改动）
+
+六枚 segv 逐枚 lldb（`-b -o run -o quit`）取崩点：
+
+| 文件 | 崩点 | address | 归族 |
+|---|---|---|---|
+| t269_path_parents | libc `strrchr+16` | 0x4 | "空/错形 char*" |
+| t35_comprehensions2 | `host_map_get+24`（hd9663…） | 0x1a | "值当指针" |
+| t518_module_global_env_first | `println_str+36` `ldrb w19,[x0]` | 0x2（x0=2） | "值当指针" |
+| t270_module_global_chain | `py_os_path_join+44` `ldrb w8,[x21]` | 0x8 | "值当指针" |
+| memory_model_test | `zeta_sieve_run+4` | 0xbadf00d | 毒值语义（在册设计值），另族 |
+| t458_pyjson_pair_get_with_default | `host_map_get+24` 与 t35 **同哈希同偏移** | 0x1a | "值当指针" |
+
+最小复现（按"最多三形状止损"纪律）：
+- r1 `total=0; def add…; add(5); print(total)` → JIT 绿（5）＝非触发形。
+- r2 `x=0; for x in [7,8,9]: pass; print(x)` → **JIT 分化实拍**：stderr `[ARRAY_LEN] Expected magic: 0x41525241, Found: 0x0`、stdout 打堆地址 4381146823；AOT 同源文件打 9、零警告。r2 形状两侧编译行为一致（都不报 W0003）⇒ 分化在 lowering 还是执行落位**未钉死**，763 从这里接。
+- r3 `pairs=[(1,"a"),(2,"b")]; for k,v in pairs: print(k)` → JIT 同款 magic 警告。
+- `--emit-llvm`（r2）：模块内字符串是裸 `@str_lit = private constant [2 x i8] c"x\00"`，无 src/runtime/array.rs:141 处宿主期望的 magic 头对象结构。
+
+附带澄清：`W0003 Typecheck failed (non-fatal)` 只在 p_f64/p_nl 形状出现（且仅 JIT 侧报），与 segv 大族不同一条线，typecheck 面另查。
+
+证据面：本批零代码改动（度量+登记），判据＝上列当场命令实拍；二进制＝761 落地后 e60048d9 树重建件。scratch：/tmp/b759/{r1,r2,r3}.z、r2.ll、r2.bin。
