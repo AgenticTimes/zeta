@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=745106 #2）
+#@@ python
+print(161 < 956 == 803)
+print(not 15)
+print(-17 >= 237 >= 390)
+print(not 46)
+
+#@@ zeta
+print(161 < 956 == 803)
+print(not 15)
+print(-17 >= 237 >= 390)
+print(not 46)
+
