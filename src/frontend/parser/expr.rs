@@ -3457,7 +3457,34 @@ pub fn parse_match_expr(input: &str) -> IResult<&str, AstNode> {
 }
 
 /// Parse a single match arm: `pattern => expr` or `pattern if guard => expr`
+/// Batch 745: the optional `case` keyword of a Python-style match arm.
+/// nom's `verify` closure receives the TAG OUTPUT ("case" itself), not the
+/// remaining input — testing the word boundary there made verify FAIL on every
+/// `case` (the word starts with an alnum by definition) and the prefix was
+/// never consumed (#213④b's str(tuple) blocker). A standalone fn over the
+/// remaining input tests the boundary correctly.
+fn case_kw(input: &str) -> IResult<&str, ()> {
+    match input.strip_prefix("case") {
+        Some(rest)
+            if !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') =>
+        {
+            Ok((rest, ()))
+        }
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        ))),
+    }
+}
+
 fn parse_match_arm(input: &str) -> IResult<&str, MatchArm> {
+    // Batch 745: Python-style arms are `case <pattern>: <block>` — the indent
+    // preprocessor braces the block (`case 1 { return "one" }`), so `case` is
+    // an optional prefix and `{ … }` an accepted body form (alongside the
+    // existing `pattern => expr`).
+    let (input, _) = opt(case_kw).parse(input)?;
+    let (input, _) = skip_ws_and_comments0(input)?;
+
     // Parse pattern (supports variables, literals, struct patterns, etc.)
     let (input, pattern) = parse_pattern(input)?;
 
@@ -3475,18 +3502,48 @@ fn parse_match_arm(input: &str) -> IResult<&str, MatchArm> {
 
     let (input, _) = skip_ws_and_comments0(input)?;
 
-    // Parse arrow
-    let (input, _) = ws(tag::<_, _, nom::error::Error<&str>>("=>")).parse(input)?;
+    // Parse arrow — or, in the Python `case` form, a block body braced by the
+    // indent preprocessor (`case 1 { return "one" }`, batch 745).
+    let block_body = input.starts_with('{');
 
-    // Parse body: allow `return` statements as well as plain expressions
-    // PY-A: single-value return form — the comma here separates arms, so a
-    // tuple return inside an arm needs parentheses.
-    // PY-A: an arm body may also be an assignment (`_ => i += 1`). `parse_expr`
-    // has no assignment form, so before this the whole `match` failed to parse
-    // and every item after it in the file was dropped (W1002). `parse_assign`
-    // is tried first and only consumes the text when a real `=`/`+=` follows a
-    // lhs AND the rhs parses, so `x == 1` still falls through to `parse_expr`.
-    let (input, body) = alt((parse_return_single, parse_assign, parse_expr)).parse(input)?;
+    let (input, body) = if block_body {
+        let (input, _) = tag::<_, _, nom::error::Error<&str>>("{").parse(input)?;
+        let mut stmts: Vec<AstNode> = Vec::new();
+        let mut cur = input;
+        loop {
+            let (ws_in, _) = skip_ws_and_comments0(cur)?;
+            if ws_in.starts_with('}') {
+                cur = ws_in;
+                break;
+            }
+            match crate::frontend::parser::stmt::parse_stmt(ws_in) {
+                Ok((next, st)) => {
+                    stmts.push(st);
+                    cur = next;
+                }
+                Err(_) => {
+                    cur = ws_in;
+                    break;
+                }
+            }
+        }
+        let (input, _) = tag::<_, _, nom::error::Error<&str>>("}").parse(cur)?;
+        let input = input;
+        (input, AstNode::Block { body: stmts })
+    } else {
+        // Parse arrow
+        let (input, _) = ws(tag::<_, _, nom::error::Error<&str>>("=>")).parse(input)?;
+
+        // Parse body: allow `return` statements as well as plain expressions
+        // PY-A: single-value return form — the comma here separates arms, so a
+        // tuple return inside an arm needs parentheses.
+        // PY-A: an arm body may also be an assignment (`_ => i += 1`). `parse_expr`
+        // has no assignment form, so before this the whole `match` failed to parse
+        // and every item after it in the file was dropped (W1002). `parse_assign`
+        // is tried first and only consumes the text when a real `=`/`+=` follows a
+        // lhs AND the rhs parses, so `x == 1` still falls through to `parse_expr`.
+        alt((parse_return_single, parse_assign, parse_expr)).parse(input)?
+    };
 
     Ok((
         input,
