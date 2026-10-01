@@ -1,6 +1,6 @@
 # AGENTS.md — Agent 工作约定（每次会话开工前必读）
 
-单车道：主线 agent 已停工，cleanup 已并入 bootstrap（2026-09-30，合并提交 `6b96da32`）。所有工作在主树 `/Users/meetai/source/zeta-src` 的 `bootstrap` 分支执行；**不 push**。历史上的双 worker 分工、号段与合并协议见 `worktree.md`。
+单车道：主线 agent 已停工，cleanup 已并入 bootstrap（2026-09-30，合并提交 `6b96da32`；757 补合并 `cd35c276` 清零滞留）。所有工作在主树 `/Users/meetai/source/zeta-src` 的 `bootstrap` 分支执行；**不 push**。**每批开工先 `git log bootstrap..cleanup --oneline` 查滞留，非空先合并再开工**（757 实证：739 滞留与 745b 重复修同一 bug）。历史上的双 worker 分工、号段与合并协议见 `worktree.md`。
 
 ## 语言纪律（2026-09-30 裁定）
 
