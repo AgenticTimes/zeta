@@ -720,6 +720,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut i = 1;
 
     if args.iter().any(|a| a == "--bootstrap") {
+        // Batch 760 (#80②): `--bootstrap` used to return BEFORE the input loop,
+        // so `zetac file.z --bootstrap` silently ignored the file (measured:
+        // `Lowered 285 functions` + stack overflow rc=134 with or without the
+        // file, byte-identical). Loud refusal naming the file.
+        let mut value_slots: Vec<usize> = Vec::new();
+        for (idx, a) in args.iter().enumerate().skip(1) {
+            if matches!(a.as_str(), "-o" | "--features" | "--target") {
+                value_slots.push(idx + 1);
+            }
+        }
+        let input = args
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find(|(idx, a)| !a.starts_with('-') && !value_slots.contains(idx))
+            .map(|(_, a)| a.clone());
+        if let Some(file) = input {
+            return Err(format!(
+                "`--bootstrap` compiles the bundled self-host corpus and takes no input file, but `{}` was given — drop one of the two",
+                file
+            )
+            .into());
+        }
         return bootstrap_zeta(&output, &target);
     }
 
