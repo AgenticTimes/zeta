@@ -2385,6 +2385,16 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             } else {
                                 old_key.clone()
                             };
+                            // Batch 765 (值标签大弧): first-insert refinement
+                            // for PyDynamic placeholders was TRIED and
+                            // REVERTED — it fixes homogeneous `dict[str, Any]`
+                            // (t450 len dispatches __len__ = 2, 5-run stable)
+                            // but re-arms batch 413's heterogeneous SEGV:
+                            // t449 writes DataFrame first, then a list — the
+                            // pinned V dispatches DataFrame.__len__ on a vec
+                            // handle (413-era rc=139). The correct grid is
+                            // PER-CELL tags (zeta_map_set_tag side table with
+                            // a class-id alphabet), not dict-level pinning.
                             let new_val = if matches!(old_val, Type::I64)
                                 && !matches!(val_ty, Type::I64)
                             {

@@ -704,6 +704,7 @@ pub unsafe extern "C" fn array_new_OLD_DUPLICATE() -> i64 {
 ///
 /// # Safety
 /// arr_ptr must be a valid pointer to a DynamicArray
+#[unsafe(no_mangle)]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe extern "C" fn array_push(arr_ptr: i64, value: i64) {
     if arr_ptr == 0 {
@@ -745,6 +746,7 @@ pub unsafe extern "C" fn array_push(arr_ptr: i64, value: i64) {
 ///
 /// # Safety
 /// arr_ptr must be a valid pointer to a DynamicArray or 0
+#[unsafe(no_mangle)]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe extern "C" fn array_len(arr_ptr: i64) -> i64 {
     if arr_ptr == 0 {
@@ -759,6 +761,7 @@ pub unsafe extern "C" fn array_len(arr_ptr: i64) -> i64 {
 /// # Safety
 /// arr_ptr must be a valid pointer to a DynamicArray
 /// Returns 0 if index is out of bounds
+#[unsafe(no_mangle)]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe extern "C" fn array_get(arr_ptr: i64, index: i64) -> i64 {
     if arr_ptr == 0 {
@@ -778,6 +781,7 @@ pub unsafe extern "C" fn array_get(arr_ptr: i64, index: i64) -> i64 {
 /// # Safety
 /// arr_ptr must be a valid pointer to a DynamicArray
 /// Index must be within bounds (0 <= index < length)
+#[unsafe(no_mangle)]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe extern "C" fn array_set(arr_ptr: i64, index: i64, value: i64) {
     if arr_ptr == 0 {
@@ -796,6 +800,7 @@ pub unsafe extern "C" fn array_set(arr_ptr: i64, index: i64, value: i64) {
 ///
 /// # Safety
 /// arr_ptr must be a valid pointer to a DynamicArray or 0
+#[unsafe(no_mangle)]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe extern "C" fn array_free(arr_ptr: i64) {
     if arr_ptr == 0 {

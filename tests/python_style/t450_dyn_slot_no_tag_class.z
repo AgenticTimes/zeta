@@ -1,12 +1,11 @@
-// 批次 413 残口（承接批次 400 登记①）：`dict[str, Any]` 里存的**类实例**从动态槽读出来
-// 只剩一个 i64 handle，槽身上没有类型标记 ⇒ `zeta_dyn_len` 只能按几何判形
-// （map 桶数 / vec 头 / 文本首字节），结构体三条都不匹配，最后落到 strnlen 上。
-// 实测：DataFrame（2 行）从 `c["df"]` 读出 5，三次构建+运行一致；CPython 参照 2。
-// 摘标条件：动态槽带值标签（refactor 项「给值加类型标记」），或 pylib DataFrame 的
-// handle 本身就是可判形的容器。
-// known-fail: 动态槽无类型标记 ⇒ 类实例经 dict[str, Any] 读出的是几何判形
-// 结果。批次 562 复核：单步 run_one 偶发转绿（w8 2）但全量并行下仍红——
-// 闪败，非稳定收口；维持钉住，等「给值加类型标记」。
+// 批次 413 残口（承接批次 400 登记①）：`dict[str, Any]` 里存的**类实例**从动态槽读
+// 出来只剩一个 i64 handle ⇒ `zeta_dyn_len` 几何判形闪败（十跑 8×5/2×3）。
+// 批次 765 尝试与回退：首插精化占位面 I64→PyDynamic 确实让本钉五连稳定 2
+// （len 分派 __len__），但 t449 的异构防线被重新武装（413 时代 rc=139 的
+// DataFrame::__len__×列表句柄）⇒ 回退。正确切口＝逐格标签（zeta_map_set_tag
+// 侧表扩类名字母表＋读侧按格分派），refactor 级，非字典级钉型可替代。
+// known-fail: 动态槽无逐格类型标签 ⇒ 类实例经 dict[str, Any] 读出的是几何判形
+// 结果；摘标条件＝值标签大弧第一格真正落地。
 // expect: w8 2
 from typing import Any
 from pandas import DataFrame
