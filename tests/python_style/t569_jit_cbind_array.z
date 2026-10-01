@@ -5,7 +5,7 @@
 // 修＝摘掉这 21 个 Rust 导出的 no_mangle（数组/字典/打印/host_result/vec 族），
 // 裸名让位给 build.rs 嵌入的 C 实现，JIT 与 AOT 同走 C 约定。本钉 AOT 跑
 // run.sh、jit_sweep 亦含 python_style 全量。
-// 批次 765 更正：初摘时另动过 host.rs 的 array_push/len/get/set/free 五枚，
+// 批次 768 更正（原计划取 765，被并行侧连占后让号）：初摘时另动过 host.rs 的 array_push/len/get/set/free 五枚，
 // 该族是 DynamicArray 的 AOT 在用接口（t449 三跑确定性红实证），已恢复；
 // 裸名仍由 C 体占位（恢复的是另一编译单元，不夺回裸名），JIT 行为不变。
 x = 0

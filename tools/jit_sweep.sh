@@ -32,7 +32,7 @@ WORK=$(mktemp)
 
 # 批次 461（并行化）：557 个文件逐个串行编译+运行是门禁第二大头（~10-15 分钟）。
 # 文件之间零共享，按 ZETA_JIT_JOBS（默认核数，上限 8）分片成多个子进程并行，
-# 各写各的分片文件避免追加交错；分类规则与串行版一致（批次 765 起增 xabort 档）。
+# 各写各的分片文件避免追加交错；分类规则与串行版一致（批次 768 起增 xabort 档）。
 JOBS="${ZETA_JIT_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
 case "$JOBS" in ''|*[!0-9]*) JOBS=4 ;; esac
 [ "$JOBS" -lt 1 ] && JOBS=1
@@ -59,7 +59,7 @@ while [ "$w" -lt "$JOBS" ]; do
         124) tag=timeout ;;
         *) if printf '%s' "$msg" | grep -q 'E4016'; then tag=trap
            else
-             # 批次 765：夹具带 `// expect-abort: <串>` 且输出含该串＝设计内响亮中止，
+             # 批次 768：夹具带 `// expect-abort: <串>` 且输出含该串＝设计内响亮中止，
              # 单列 xabort 档（判据口径与 run_one.sh 的 expect-abort 一致）。
              want=$(grep -m1 '^// expect-abort:' "$f" | sed 's|^// expect-abort: ||')
              if [ -n "$want" ] && printf '%s' "$msg" | grep -qF -- "$want"; then tag=xabort; else tag=fail; fi

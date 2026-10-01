@@ -25559,3 +25559,11 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 读数：r2 JIT=9（AOT 基准 9）magic 零；六枚 segv 全 rc=0；jit_sweep ok 536→639、segv 6→0、fail 105→8、timeout 2→1（total 653）；sample_gate 764 rc=0（窗口 4：285/285、54/0、26/26、40/40）；窗口 3 参考轮 rc=0；emit_stable 2/0；ABI rc=2（漂移全在 src/middle 并行侧在制面，src/runtime/src/std 零）。
 - 新开：①-alias 机制归因（登记 backlog）；②C∩Rust 同名 no_mangle 余量族（reactor_/waker_/option_/runtime_malloc/host_result_make_ 等，摘除需同面验证，防"修掉巧合"——现 JIT 对这些走 Rust 体可能恰是自洽面）。
 - 撞号对照（764 二次占用）：本车道 0b1e5c5b 取号时 HEAD=3790260b（763 已占、764 空闲实拍）；并行侧 2f4bfc63（#52 机械半清）在本车道代码提交后、记录提交前落地，同标 764。两侧 message 与台账行均不回改，以后补此对照：764-值当指针=0b1e5c5b、764-锚点重绑=2f4bfc63。
+
+## 批次 768（原计划 765，让号）：jit_sweep xabort 档＋t449 回归归因
+
+- 主体：tools/jit_sweep.sh 增 xabort 分类档（非零 rc 且无 E4016＋夹具带 `// expect-abort: 串`＋输出含该串 ⇒ 设计内响亮中止，判据口径对齐 run_one.sh:93）。764 后 fail=8 全数定性：6 枚进 xabort、余 2 枚在册（t209 无 marker 缓补、minimal_compiler selfhost chronic）。本档实测 ok=641 trap=5 fail=2 xabort=6 timeout=1 segv=0 total=655 GREEN。trap/fail 跨跑法不可比（坑 73），ok/segv/total 为尺。
+- t449 回归链：sample_gate 765 窗口 5 实拍三跑确定性红（AOT 面）⇒ 归因 0b1e5c5b 多摘的 host.rs 五枚 DynamicArray 导出（AOT 链接在用面）⇒ `git checkout 3790260b -- src/runtime/host.rs` 恢复＋重编（6e22c6d5）⇒ t449 rc=0 七翼全对、r2 JIT 依旧 9。符号面复验：恢复不夺回裸名（nm：_array_len 与 _array_len.2 同址 0x1005a7660＝C 体），JIT 行为不变。**教训落账**：窗口抽样把本回归掩到全量才显（764 界窗口 4 全绿）——动 no_mangle 面属跨面改动，摘每枚前须 separately 证 AOT 面不依赖（与记忆"修掉巧合会揭出依赖它的绿用例"同型，第二次实拍）。
+- 在制品被并包：+5 恢复提交前被并行侧 af2c2c2d（其 765 负结果批）整包收进（坑 109 第二次实拍），hash 对照入册：摘五枚=0b1e5c5b、恢复五枚=af2c2c2d、本批代码=f042cfdf（jit_sweep＋t569 两处）。message/台账不回改。
+- 全量复验读数：python_style 全量 457/0/1/0（红 0；与并行侧 767 自读 458/0/0/0 的差异＝本趟跑在 t450 摘标落地前的树态，只作本批 AOT 面无回归证据）；全套差分 match=2845/judged=2845 rate=100%（bad_case=1 del_undefined_var 按 756 口径单列），较基线转好 23 条——--bless 抬闸在册待做。
+- backlog：②余量族行补注——host.rs 五枚属 AOT 在用面已恢复＝摘除白名单收紧，C∩Rust 余量九族摘前必须同证 JIT 与 AOT 两侧不依赖（本批实证 AOT 侧依赖真实存在）。
