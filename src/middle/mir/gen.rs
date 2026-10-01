@@ -100,6 +100,9 @@ pub struct MirGen {
     next_id: u32,
     /// Batch 761 (#80③): 未声明名告警去重——同一名字一次编译只喊一声。
     undeclared_warned: std::collections::HashSet<String>,
+    /// Batch 763 (#33 M5): 当前函数的声明返回型——Return 处把 I64 值收口成
+    /// F64（sitofp 语义），替代按位重读（`-> f64 { return 1 }` 曾打 5e-324）。
+    current_fn_ret: Option<Type>,
     /// Batch 761 (#80③): REPL 降值模式——每行独立 resolver、无 import/模块面，
     /// 裸未知名必然真未声明 ⇒ 告警只在 repl_mode 出声（文件路动态名合法链路多，
     /// 全开会淹语料：39/39 文件 1222 行实测）。
@@ -304,6 +307,7 @@ impl MirGen {
     pub fn new() -> Self {
         Self {
             undeclared_warned: std::collections::HashSet::new(),
+            current_fn_ret: None,
             repl_mode: false,
             next_id: 1,
             stmts: vec![],
@@ -2682,7 +2686,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 // `[cap|len]` array — `stack_array_get(arr, i)` reads
                 // `((i64*)arr)[i]`, i.e. exactly the dynarray DATA pointer that
                 // `zeta_dynarray_new`/`vec_push` hand out.
-                let val = if let AstNode::Tuple(items) = &**inner {
+                let mut val = if let AstNode::Tuple(items) = &**inner {
                     let mut vals = Vec::with_capacity(items.len());
                     let mut tys = Vec::with_capacity(items.len());
                     for it in items {
@@ -2729,6 +2733,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 } else {
                     self.lower_expr(inner)
                 };
+                let val = self.coerce_return_val(val);
                 self.stmts.push(MirStmt::Return { val });
             }
             AstNode::BinaryOp { op, left, right } => {
@@ -2769,6 +2774,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 ret_expr,
                 ..
             } => {
+                // Batch 763 (#33 M5): 本函数的声明返回型供 Return 收口；嵌套
+                // def 走提升臂、子 MirGen 各自为政，这里保存/恢复外层值。
+                let saved_fn_ret = self.current_fn_ret.take();
+                self.current_fn_ret = self.func_ret_types.get(fn_name).cloned();
                 // PY-A: NESTED def inside a function body — lowering inline
                 // mixes its Returns into the enclosing stream (double
                 // terminator). Instead, lower it as a STANDALONE synthetic
@@ -2853,6 +2862,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     if shadowed.is_none() {
                         self.hoisted_names.insert(fn_name.clone(), hoisted);
                     }
+                    self.current_fn_ret = saved_fn_ret;
                     return;
                 }
                 for stmt in body {
@@ -2860,8 +2870,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 }
                 if let Some(ret_expr) = ret_expr {
                     let val = self.lower_expr(ret_expr);
+                    let val = self.coerce_return_val(val);
                     self.stmts.push(MirStmt::Return { val });
                 }
+                self.current_fn_ret = saved_fn_ret;
             }
             AstNode::If { cond, then, else_ } => {
                 // PY-A: compile-time env switch (see fold_env_condition).
@@ -4573,6 +4585,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
     pub fn with_repl_mode(mut self, on: bool) -> Self {
         self.repl_mode = on;
         self
+    }
+
+    /// Batch 763 (#33 M5): 声明返回 F64 的函数里 return 的 I64 值收口成 F64。
+    /// 按位重读曾把整数位当浮点尾数打 5e-324（t 座探针 m5.z）。反向
+    /// （声明 I64 返回 F64）不动——现状偶然与 CPython 一致，收口反成回归。
+    fn coerce_return_val(&mut self, val: u32) -> u32 {
+        if matches!(self.current_fn_ret, Some(Type::F64))
+            && matches!(self.type_map.get(&val), Some(Type::I64))
+        {
+            let nid = self.next_id();
+            self.stmts.push(MirStmt::Call {
+                func: "zeta_float_i64".to_string(),
+                args: vec![val],
+                dest: nid,
+                type_args: vec![],
+            });
+            self.exprs.insert(nid, MirExpr::Var(nid));
+            self.type_map.insert(nid, Type::F64);
+            return nid;
+        }
+        val
     }
 
     /// Batch 761 (#80③): 未声明名读——此前静默 fabricate（REPL 里 `exit`
