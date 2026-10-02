@@ -25856,3 +25856,31 @@ official 总数为 0、语料读不到"解析通过"行或分母为 0 ⇒ 一律
 （批次 413 立钉，562 复核"单步偶发转绿、全量并行仍红"维持钉住），本树 ② 步还没有
 "带 known-fail 标记的夹具非 PASS 不计红／转绿提示摘标"的语义 ⇒ 登 `#273④`，本批不加
 （一笔只改一个口径，免得两件事混在同一份 diff 里说不清）。
+
+## 批次 10008（cleanup 车道）：抽样门禁第②步接上 known-fail 语义（代码 `7123aa10`）
+
+**动因**：10007 批跑窗口 7 时 ② 报 `44/45 PASS，非 PASS: t450_dyn_slot_no_tag_class`，
+去核该夹具：`tests/python_style/t450_dyn_slot_no_tag_class.z:7` 带 `// known-fail:`
+（批次 413 立钉，562 复核为闪败维持钉住）。读 `tests/python_style/run_one.sh` 的 `verdict()` 确认
+判定词表：钉住用例值符合预期给 `XPASS … 可摘除标记`，其余给 `KNOWN-FAIL …`，非钉住才给 PASS/FAIL。
+旧 ② 步只认 `^PASS`，其余全落进 `ps_bad` ⇒ 已知缺口照旧＝红。
+
+**修法**：② 步按四个判定词分支——`PASS` 计数、`KNOWN-FAIL` 单独计数并在绿路径上报"钉住 N 条不计红"、
+`XPASS` 上报"可摘标"、`FAIL` 与"缺 verdict／分母为 0"仍然判红。
+
+**验收**（件 `ed5227cc…`／`.o` `878479be…` 两侧同值，零 `src/` 改动）：
+- 改前在册读数（10007 批）：`bash tools/sample_gate.sh 10007` ⇒ ② `44/45 PASS，非 PASS: t450…`，总 rc=1。
+- 改后同一条命令：② `44/44 PASS（另 1 条钉住 KNOWN-FAIL 不计红: t450_dyn_slot_no_tag_class）`。
+  该跑次总 rc 仍 1，红因换到第④步（见下），不再是 ②。
+- 本批门禁 `bash tools/sample_gate.sh 10008`（窗口 8）：① 271/271 rc=0；② 47/47 PASS；
+  ③ 18/18（链接缺绑定 1 条 chronic 不计红）；④ 40/40；**总 rc=0**。
+- XPASS 分支只有 `run_one.sh` 侧的字面依据，没有实跑照片：全树在册 known-fail 夹具只 t450 一枚，
+  本批两跑次它都给 KNOWN-FAIL。所以"可摘标提示"按未实拍登记，不当已验证。
+
+**窗口 7 复跑第④步的空读数（已查到成因，本批未改）**：`/tmp/zeta_gate_10007.SaOsuO/corpus.log`
+末尾是 `subprocess.TimeoutExpired: Command '['target/release/zetac',
+'…/strategies/code/jq_wufu_local.py', '-o', '/tmp/corpus_baseline/probe']' timed out after 30 seconds`
+＝`tools/corpus_baseline.py:19` 写死的 30 秒预算被击穿，整个脚本抛异常、连"解析通过"行都没印出来，
+本批第④步的分母守卫因此判红（守卫按设计生效：缺读数绝不当通过）。同件同脚本的窗口 8 跑次读满 40/40
+⇒ 该超时是临界的、逐跑可翻。这与 10006 有因果关系：那条文件以前在 codegen 就 ICE 退出（很快），
+现在真的走完编译流程。另登 backlog。
