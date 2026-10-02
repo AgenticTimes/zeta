@@ -4446,6 +4446,19 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         id
     }
 
+    /// 批次 805（#表示上限格）：expr id 的编译期整值（字面量或 CTFE 常量），
+    /// 供 `**` 折算臂判定溢出面。
+    fn ctfe_int_of(
+        exprs: &HashMap<u32, MirExpr>,
+        consts: &HashMap<u32, i64>,
+        id: u32,
+    ) -> Option<i64> {
+        if let Some(MirExpr::IntLit(v)) = exprs.get(&id) {
+            return Some(*v);
+        }
+        consts.get(&id).copied()
+    }
+
     /// `dest = deref(addr_id)` — one i64 loaded through a heap block pointer.
     /// Materialized into a slot (not left as a bare expr) because arm bindings
     /// and `==` operands are read back as variables.
@@ -6218,6 +6231,50 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     };
                     self.type_map.insert(dest, op_type);
                 } else if op == "**" {
+                    // 批次 805（#表示上限格）：字面量**字面量编译期折算——
+                    // 结果入 i64 ⇒ IntLit；溢出但在 128 位大数模型内 ⇒ BigInt
+                    // 折算（zeta_big 家族，647 的 BigIntLit 同款出码）。此前
+                    // 2**127 及以上落 zeta_pow_i64 静默溢出打 0（探针实拍；
+                    // 差分过滤器按 2^126 上限设计，suite 抓不到）。变底数形
+                    // （6**40）的运行期升级是另一格；>128 位超出模型上限。
+                    if let (Some(a), Some(b)) =
+                        (Self::ctfe_int_of(&self.exprs, &self.ctfe_consts, left_id),
+                         Self::ctfe_int_of(&self.exprs, &self.ctfe_consts, right_id))
+                    {
+                        if b >= 0 && b <= 127 {
+                            let mut r: i128 = 1;
+                            let mut over = false;
+                            let base = a as i128;
+                            for _ in 0..b {
+                                match r.checked_mul(base) {
+                                    Some(x) => r = x,
+                                    None => {
+                                        over = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !over {
+                                if r >= i64::MIN as i128 && r <= i64::MAX as i128 {
+                                    self.exprs.insert(dest, MirExpr::IntLit(r as i64));
+                                    self.type_map.insert(dest, Type::I64);
+                                } else {
+                                    let lo = self.int_slot(r as i64);
+                                    let hi = self.int_slot((r >> 64) as i64);
+                                    self.stmts.push(MirStmt::Call {
+                                        func: "zeta_big_new".to_string(),
+                                        args: vec![lo, hi],
+                                        dest,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs.insert(dest, MirExpr::Var(dest));
+                                    self.type_map
+                                        .insert(dest, Type::Named("BigInt".to_string(), vec![]));
+                                }
+                                return dest;
+                            }
+                        }
+                    }
                     // PY-A: Python's power operator. Previously `2 ** 10` was
                     // parsed as `2 * (*10)` and dereferenced the literal as a
                     // pointer (crash). Integer bases use an exponentiation
