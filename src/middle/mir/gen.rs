@@ -9889,22 +9889,44 @@ call, no NULL-handle dereference).",
                     let is_dict = receiver.is_none()
                         || matches!(receiver.as_deref(), Some(AstNode::Var(v)) if v == "dict");
                     if is_dict {
+                        // 批次 804（#113 fromkeys 格）：显式 None / 1 参缺省 /
+                        // NoneVar 名 ⇒ 值全 None——结果型 map[K, NoneValue]，
+                        // 读边界元素型块（本文件 Named("map",targs).get(1) 臂）
+                        // 让 `d["k"]` 带上 NoneValue，print 按型渲染 "None"
+                        //（654 NoneVar 按名渲染的按型同款）。值仍是 i64 0，
+                        // 算术/比较面不改（CPython 会 TypeError 的形不在格内）。
+                        let none_val = match args.get(1) {
+                            None => true,
+                            Some(AstNode::NoneLit) => true,
+                            Some(AstNode::Var(v)) if self.none_vars_gen.contains(v) => true,
+                            _ => false,
+                        };
                         // A LITERAL key list is built inline as a dict literal:
                         // a literal list lowers to a StackArray (no `[cap|len]`
                         // header), so the runtime helper read a garbage length and
                         // walked off the buffer — measured as a SEGV inside
-                        // `py_map_fromkeys` during `wufu_constants`' module init.
+                        // `py_map_fromkeys` during `wufu_constants' module init`.
                         if let AstNode::ArrayLit(items) = &args[0] {
                             let val_expr = match args.get(1) {
                                 Some(v) => v.clone(),
                                 None => AstNode::Lit(0),
                             };
-                            return self.lower_expr(&AstNode::DictLit {
+                            let did = self.lower_expr(&AstNode::DictLit {
                                 entries: items
                                     .iter()
                                     .map(|k| (k.clone(), val_expr.clone()))
                                     .collect(),
                             });
+                            if none_val {
+                                self.type_map.insert(
+                                    did,
+                                    Type::Named(
+                                        "map".to_string(),
+                                        vec![Type::Str, Type::Named("NoneValue".to_string(), vec![])],
+                                    ),
+                                );
+                            }
+                            return did;
                         }
                         let keys = self.lower_expr(&args[0]);
                         let keys_are_str = matches!(
@@ -9934,12 +9956,17 @@ call, no NULL-handle dereference).",
                             type_args: vec![],
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
+                        let key_ty = if keys_are_str { Type::Str } else { Type::I64 };
                         self.type_map.insert(
                             id,
-                            Type::Named(
-                                "map".to_string(),
-                                vec![if keys_are_str { Type::Str } else { Type::I64 }],
-                            ),
+                            if none_val {
+                                Type::Named(
+                                    "map".to_string(),
+                                    vec![key_ty, Type::Named("NoneValue".to_string(), vec![])],
+                                )
+                            } else {
+                                Type::Named("map".to_string(), vec![key_ty])
+                            },
                         );
                         return id;
                     }
@@ -11358,7 +11385,22 @@ call, no NULL-handle dereference).",
                                 arg_ids.push(self.lower_expr(a));
                             }
                         } else {
-                            arg_ids.push(self.lower_expr(a));
+                            let aid = self.lower_expr(a);
+                            // 批次 804（#113 fromkeys 格）：值型 NoneValue 的
+                            // 读——按型渲染 "None"（654 NoneVar 按名渲染的按型
+                            // 同款；fromkeys None 结果型 map[K, NoneValue] 让
+                            // d["k"] 读带上该型）。
+                            if matches!(self.type_map.get(&aid),
+                                Some(Type::Named(n, _)) if n == "NoneValue")
+                            {
+                                let nid = self.next_id();
+                                self.exprs
+                                    .insert(nid, MirExpr::StringLit("None".to_string()));
+                                self.type_map.insert(nid, Type::Str);
+                                arg_ids.push(nid);
+                            } else {
+                                arg_ids.push(aid);
+                            }
                         }
                     }
                     let n = arg_ids.len();
@@ -16309,10 +16351,14 @@ call, no NULL-handle dereference).",
                         fields: struct_fields,
                     },
                 );
-                // For now, assume struct type is a generic type
-                // TODO: Need proper type inference for struct literals
+                // Batch 805: the literal's type is its VARIANT name (`S {..}` →
+                // Named("S")), not the placeholder spelling "Struct" — with the
+                // placeholder every method call on a Rust-shape literal missed
+                // func_ret_types ("S::greet") and degraded to I64, printing the
+                // heap handle for a Str-returning method (measured twice: 404
+                // `[impl=4374191776]`, and `-> str` methods too).
                 self.type_map
-                    .insert(id, Type::Named("Struct".to_string(), vec![]));
+                    .insert(id, Type::Named(variant.clone(), vec![]));
             }
             AstNode::PathCall {
                 path,
