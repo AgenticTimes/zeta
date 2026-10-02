@@ -4997,12 +4997,16 @@ int64_t zeta_map_value_tag(int64_t map, int64_t key);
 static int64_t zt_word_to_text(int64_t w, int64_t elem_tag) {
     char buf[64];
     switch (elem_tag) {
-    case 6: {
-        double d;
-        memcpy(&d, &w, sizeof d);
-        snprintf(buf, sizeof buf, "%.10g", d);
-        break;
-    }
+    case 6:
+        // 批次 799：f64 位元素的文本化走 zt_f64_repr（CPython repr——10.0
+        // 打 "10.0" 非 "10"）。原 "%.10g" 是显示层残差：数值 map（strtod）
+        // 不受影响，但恒等 map / 文本消费打印 "10"，与 CPython str(10.0) 差
+        // ".0"（批 798 mulprobe 第三行实拍）。
+        {
+            double d;
+            memcpy(&d, &w, sizeof d);
+            return (int64_t)zt_f64_repr(d);
+        }
     case 7:
         snprintf(buf, sizeof buf, "%s", w ? "True" : "False");
         break;
