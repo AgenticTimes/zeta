@@ -12919,21 +12919,23 @@ call, no NULL-handle dereference).",
                 // 批次 10002（移植 bootstrap 批次 810）：`mean` 此前只被下面 opaque 兜底的
                 // pandas 链式臂接走（`("mean", _) => zeta_identity`），而它是那条列表里唯一
                 // 返回标量的成员，向量句柄因此被当数用（改前本树实拍：
-                // `statistics.mean([1.0, 2.0])` 打 10）。这里只接静态类型是向量／PyDynamic／
-                // 未知标量的接收者；`Type::Named` 一律放行——pylib/pandas.z 的 GroupBy.mean
-                // 库方法表靠兜底臂继续生效，把它折成数值是新造的静默错值。
+                // `statistics.mean([1.0, 2.0])` 打 10）。
                 // 与 bootstrap 版两处差异：本树没有 `emit_call_into`，按本树的 MirStmt::Call
                 // 发射；并显式要求 receiver 存在（裸名 mean(x) 不接，避免抢别的臂）。
+                // 接收者范围收窄到静态向量（批次 10004，修批次 10002 引入的回归 #267）：
+                // 原先还接 PyDynamic／I64／None 三种"类型未知"的接收者，而折叠结果一律标
+                // `Type::F64`。语料实拍形状 `def f(data): return data.rolling(w).mean()`
+                // 的接收者是 pandas 对象句柄（静态类型未知），标 F64 后经批次 10001 的
+                // 返回型回填变成函数声明返回浮点，调用点把返回的 Series 当浮点存槽，再对它
+                // 做字典下标就打到 codegen.rs:5462 的 `into_int_value()` 硬转（四行夹具
+                // 已复现，见本批记录）。运行时那一侧同样是错：把对象句柄当向量读头部＝
+                // 又一个静默错值。类型未知时不折叠、交回兜底臂（当对象看待）。
                 if method == "mean"
                     && receiver.is_some()
                     && arg_ids.len() == 1
                     && matches!(
                         receiver_ty.as_ref(),
-                        Some(Type::PyDynamic)
-                            | Some(Type::I64)
-                            | Some(Type::DynamicArray(_))
-                            | Some(Type::Array(_, _))
-                            | None
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
                     )
                 {
                     let elem_is_i64 = match receiver_ty.as_ref() {
