@@ -26525,3 +26525,11 @@ F.1 清单第二类落地：types 层新增 Type::is_map()（dict/map 双拼写�
 
 **验证**：type_conversion_gaps ✓、抽查秒过 ✓、差分 --group 50 无回归 ✓、
 内置测试 135/135 ✓。
+
+## 批次 816（代码本批）：gen.rs 拆家族第一刀——集合族入 gen/call_set.rs
+
+Call 巨臂拆分起点（业界调研模板：rustc/Go/Swift 按构造种类分文件）。
+集合族 95 行搬入子模块；同位调用保顺序语义；搬移引入的守卫优先级回归
+（单参 intersection 越过 len==2 守卫）已修（t807 十行实拍）。
+同批交付 tools/batch_gate.sh（指纹缓存＋三路并行＋进度日志——Go/Bazel
+测试缓存调研落地）与 AGENTS.md 长任务进度可视规则（用户裁定）。
