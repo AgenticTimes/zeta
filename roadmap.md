@@ -25773,3 +25773,27 @@ baselines/runtime_doublewrite.txt 登记 53 条，复跑 rc=0 稳定；python_st
 
 余项：f64 原型新符号风险由核对器新增红挡下（工具不自动读 C 原型，口径写
 在 docstring）；①② 两形仍在 #211 行内。不 push。
+
+## 批次 801（代码 0539cf7c）：动态 len 409(a)① 根修——返回型推断补 dict 构造调用臂
+
+**症状（车道 669 行精确移交）**：`def copy_dict(x): return dict(x)` 经函数返回的 map，
+`len(d1)` 答 **0** 而同句柄 `d1["a"]` 答 1；直构 `dict(src)` 同形全对。本批探针复现
+（1/0 → 1/1）后 IR 实拍分派分裂：经返回的 `len` 发 `array_len`（对 map 句柄读 vec 表头
+＝0），直构发 `zeta_map_len`。
+
+**根因**：resolver 返回型推断（resolver.rs rets 循环）的 `saw_map` 只认 `DictLit` 与
+map 局部变量（`collect_map_locals` 投票面）；`dict(x)` 收进来是**构造调用**，
+`classify` 落 0 ⇒ 四旗全空 ⇒ `new_ret=None` ⇒ 函数返回型停默认，调用点 `len()` 按默认
+型派 `array_len`。
+
+**修法**：rets 循环补两条 disjunct——`Call{receiver:None, method:"dict"}`（含
+`ExprStmt` 包裹形）⇒ `saw_map`。dict 构造恒产 map，无 union 投毒面；union 侧
+（dict∨str 混返回）由既有 `!saw_str` 守卫 abstain——较改前（dict 侧被 Str 定型污染）
+strictly 改善；真 union 跨函数读边界仍归 #117（本批探针 `maybe()` 的 `m["a"]` 空行实拍
+即该格现状）。
+
+**验证**：探针 `len(copy_dict(src))`=1、两跳 `mid` 传递 len=2 全对 CPython；
+python_style 全量 **462/0/1/0**；差分**全套** 2845/2845＝**100.0%** 无回归；official
+193 行 2 LINK-FAIL 存量在册；锚点 1 条搬家（`resolver.rs:4719→4727`）`--rebind` 全自动
+配对（1 行内容逐字全文件唯一命中）复验 rc=0。位移 A/B 按 798 前例豁免（增 disjunct，
+非 dict 返回程序的 MIR 零变化，全套差分即行为面）。
