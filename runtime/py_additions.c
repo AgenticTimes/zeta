@@ -365,8 +365,13 @@ int64_t zeta_slice_vec(int64_t data, int64_t start, int64_t end) {
     // elements.
     int64_t n;
     if (start >= 0 && end >= 0) {
-        // Both bounds concrete: no header read needed (static arrays are
-        // fully normalized at compile time by gen.rs and reach this path).
+        // Both bounds concrete (static receivers are folded to this shape by
+        // gen.rs). The end still has to meet the real length: `xs[3:10]` on a
+        // length-5 vector is 2 items, not 7 — reading 7 copied five words past
+        // the tail. The header was already validated by the guard above, so
+        // this read is exactly as safe as the one in the branch below.
+        int64_t len = ((int64_t*)(data - 16))[1];
+        if (end > len) end = len;
         n = end - start;
     } else {
         int64_t len = ((int64_t*)(data - 16))[1];
