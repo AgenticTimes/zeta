@@ -1688,6 +1688,10 @@ impl Resolver {
                 let mut saw_f64 = false;
                 let mut saw_i64 = false;
                 let mut saw_map = false;
+                // 批次 806（#113 携带读面）：`return None` 的 None 性在 AST
+                // 可见（NoneLit）——纯 None 返回 ⇒ NoneValue（print 按型渲染，
+                // 804 fromkeys 同款）。混型（None∨其它）不动，落弃权。
+                let saw_none = rets.iter().any(|r| matches!(r, AstNode::NoneLit));
                 let aliases = self.py_module_aliases.borrow().clone();
                 for r in &rets {
                     if matches!(r, AstNode::DictLit { .. })
@@ -1730,6 +1734,10 @@ impl Resolver {
                     // 键下标走 DictGet、len 走 zeta_dyn_len 几何形判），map/str
                     // 两面都活。
                     Some(Type::PyDynamic)
+                } else if saw_none && !saw_str && !saw_f64 && !saw_i64 && !saw_map {
+                    // 批次 806（#113 携带读面）：纯 None 返回 ⇒ NoneValue——
+                    // 调用点槽带型，print 按型渲染 "None"（值仍 i64 0）。
+                    Some(Type::Named("NoneValue".to_string(), vec![]))
                 } else {
                     None
                 };

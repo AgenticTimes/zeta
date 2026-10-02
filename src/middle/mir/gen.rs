@@ -7163,6 +7163,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 let mut val_ty = Type::I64;
                 let mut first_key = true;
                 let mut first_val = true;
+                // 批次 806：全 None 值判定（混型不动）
+                let mut all_none_val = true;
                 for (k, v) in entries {
                     // PY-A: `{**m, ...}` — merge m's entries into the literal.
                     if let AstNode::Call {
@@ -7212,6 +7214,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         val_ty = self.type_map.get(&vid).cloned().unwrap_or(Type::I64);
                         first_val = false;
                     }
+                    // 批次 806（#113 携带读面）：全 None 值字典 ⇒ 值型
+                    // NoneValue（print 按型渲染 "None"，804 fromkeys 同款）。
+                    // 混型字典不动（首个值型 Wins 的旧约定，per-key 渲染另格）。
+                    if !matches!(v, AstNode::NoneLit) {
+                        all_none_val = false;
+                    }
                     self.stmts.push(MirStmt::DictInsert {
                         map_id,
                         key_id: kid,
@@ -7223,6 +7231,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 } else {
                     Type::I64
                 };
+                if all_none_val && !entries.is_empty() {
+                    val_ty = Type::Named("NoneValue".to_string(), vec![]);
+                }
                 self.exprs.insert(map_id, MirExpr::Var(map_id));
                 self.type_map.insert(
                     map_id,
@@ -11439,7 +11450,21 @@ call, no NULL-handle dereference).",
                                 self.type_map.insert(nid, Type::Str);
                                 arg_ids.push(nid);
                             } else {
-                                arg_ids.push(self.lower_expr(a));
+                                // 批次 806（#113 携带读面）：Var 槽带 NoneValue
+                                // 型（`v = f()`，f 纯 None 返回）——按型渲染，
+                                // 与非 Var 实参的 804 臂同款。
+                                let aid = self.lower_expr(a);
+                                if matches!(self.type_map.get(&aid),
+                                    Some(Type::Named(n, _)) if n == "NoneValue")
+                                {
+                                    let nid = self.next_id();
+                                    self.exprs
+                                        .insert(nid, MirExpr::StringLit("None".to_string()));
+                                    self.type_map.insert(nid, Type::Str);
+                                    arg_ids.push(nid);
+                                } else {
+                                    arg_ids.push(aid);
+                                }
                             }
                         } else {
                             let aid = self.lower_expr(a);
