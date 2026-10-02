@@ -26541,3 +26541,10 @@ str_method_symbol/str_method_symbol3 两张符号表（含 path_ends_with_mem
 驱动真值表测试（known/unknown 解析、三参界、符号族合同防拼错静默跨族）。
 cargo test --lib call_str 毫秒级——新测试节奏（817 裁定）首个完整样板：
 改哪测哪。全库 141/141。gen.rs 18699→18609。
+
+## 批次 819（代码 5e29ce55）：len 族路由分类函数——rustc 判定/发射分离模式
+
+gen/call_len.rs：LenRoute 枚举＋classify_len 纯函数（静态类型→发射路由，
+无副作用毫秒级单测）。**TDD 首战立功**：路由合同测试抓到分类器漏 dict
+拼写（违反 815 等价规则）——发布前拦截。len 臂同步消费等价规则。
+全库内置测试 **144/144**（新增 3）。
