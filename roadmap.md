@@ -26236,3 +26236,65 @@ MISSING|zeta_print_f64_word|arity=2）属 808 已提交面 e719d9bb，不代绑�
 `def f(v): return v.mean()` 对 `[10.0, 20.0]` 打 4624633867356078080（＝15.0 的 double 位模式），
 同式在调用点直接 `print(xs.mean())` 打对 15.000000 ⇒ 折叠值对、返回型在函数边界丢。
 
+
+## 批次 811（代码 0d02f085）：负索引切片根修——"省略终点"哨兵与显式负终点分离，负起点按真实长度归一化
+
+**症状与实拍**（改前基座＝隔离 worktree `/tmp/wt811pre`，HEAD f113a3b6 的编译器 4b4fbe52 ＋
+该树自带 zeta_runtime_c.o 45e7d389；改后＝主树编译器 34d77b6b ＋ zeta_runtime_c.o a00e0965。
+九枚单形逐枚跑的改前读数与 #268① 台账在册值逐枚相符 ⇒ 基座有效）：
+
+| 形（ys=[10,20,30,40,50]） | 真（CPython） | 改前 | 改后 |
+|---|---|---|---|
+| `len(ys[-2:])` | 2 | 7 | 2 |
+| `ys[-2:][0]` / `ys[-2:][1]` | 40 / 50 | 8 / 5 | 40 / 50 |
+| `len(ys[:-1])` | 4 | 5 | 4 |
+| `len(ys[1:-1])` / `[0]` | 3 / 20 | 4 / 20 | 3 / 20 |
+| `len(ys[-4:-1])` / `[2]` | 3 / 40 | 9 / 8 | 3 / 40 |
+| `len(ys[:-5])` | 0 | 5 | 0 |
+| `len(ys[-99:])` | 5 | 104 | 5 |
+| `ys[-1:][0]` | 50 | 5 | 50 |
+| `len(ys[-3:-1])` | 2 | 8 | 2 |
+
+改前的 8／5／104 是源向量头部之外的内存字：取段循环按 `data + start`（start 为负）起读，
+既错值又越界读。`ys[-99:]` 打 104 说明越界幅度直接由负偏移量决定。
+
+静态接收者另证一形（`a = [0] * 5` ⇒ `AstNode::ArrayRepeat` 经 gen.rs:17316 建
+`Type::Array(_, ArraySize::Literal(5))`，走编译期折界一支）：`len(a[-2:])` 7→2、
+`len(a[:-1])` 5→4，`len(a[:])` 5／`len(a[1:])` 4 不变，四枚改后皆与 CPython 同值。
+`a[:-1]` 那枚就是撞车本体——显式负终点与"省略终点"哨兵在 C 边界同值。
+
+**根因两处**：①发射侧 `src/middle/mir/gen.rs` 把 parser 的省略哨兵（`src/frontend/parser/expr.rs:1953`
+的 `AstNode::Lit(i64::MIN)`）改写成 `-1` 再交给运行期，于是 `xs[:]` 与 `xs[:-1]` 不可分；
+②`runtime/py_additions.c:354` 的 `zeta_slice_vec` 里 `if (end < 0) n = 头部len - start` 一支
+把任何负终点当"到尾"，且负起点从不归一化。同文件的 `zeta_slice_vec_step`（:2969 起）早已按
+`INT64_MIN`＝省略、负界 `+= n` 的口径实现，本次把二维切片拉齐到该口径。
+
+**修法（登记的两缝择一＝签名不变那条）**：
+- 运行期：两端皆具体 ⇒ `n = end - start`（静态接收者不得读 Vec 头，靠这条）；否则读头部真实
+  长度，负界 `+= len`、`INT64_MIN` 才是"到尾"，并夹到 `[0, len]`。
+- 发射侧：删掉 `i64::MIN → -1` 的改写；静态接收者在编译期把哨兵与字面负界按已知长度折成具体界
+  （负起点同样折），动态接收者把原始界交给运行期。
+
+**验证**：新钉 `tests/python_style/t811_slice_bounds.z`（21 枚 expect，逐枚等于 CPython 读数）
+改前 FAIL（21 枚里 13 枚错值：第 1~4 枚 7/8/5/5、第 6 枚 4、第 8~13 枚 9/8/5/104/5/8、
+第 18~19 枚 7/5，逐枚存 `/tmp/b811/w_pre/verdict`），改后主树 PASS 两跑同值
+（两次产物 md5 皆 7a45d0f3）。CPython 真值清单 `/tmp/b811/cp_truth.txt`。
+
+**门禁**：`bash tools/sample_gate.sh 811` rc=0（差分抽样 match=285 judged=285 rate=100.0%
+bad_case=0；python_style 抽样 54/0；official 18/18；corpus 解析通过 40/40）。
+
+**位移 A/B（runtime/*.c 面，HEAD 隔离 worktree 基线法）**：python_style 全量 471/0 → 472/0
+（+1＝本批新钉，两侧零失败）；差分抽样 285/285 与 corpus 40/40 两侧同值 ⇒ 零位移。
+改后 python_style 全量 472/0（`/tmp/b811/pre_pyfull.log` 为改前读数）。
+
+**双写核对器**：`tools/check_runtime_doublewrite.py` rc=1，在册 54 条／新增 2
+（`MISSING|zeta_print_bool_word|arity=2`、`MISSING|zeta_print_f64_word|arity=2`）；
+改前基座同跑，两侧 MISSING 集合 diff 为空 ⇒ 本批零新增符号，残差属既有面，不 `--bless`。
+
+**锚点核对**：`tools/check_abi_anchors.py` rc=2，漂移 182 → 185，本批新增 3 条全在
+`runtime/py_additions.c`（1492／2177／2179，被 :354 一支的 +10 行顶下）；消失 4 → 2。
+按 810／795 先例不 `--rebind`（别家在制面未清），改号留到收口批统一处理。
+
+**不接的一形（转 #269 在册）**：两端皆具体而终点越界 `ys[3:10]` 改前改后皆 7（真 2）——
+该分支与静态接收者共用、不许读 Vec 头，运行期无从夹尾；修它要动签名（带接收者长度）或
+给运行期一个接收者种类标记。语料权重本批未测，不编数。
