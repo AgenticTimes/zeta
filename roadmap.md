@@ -26168,3 +26168,71 @@ repr 路径）。纯 None 字典（806）与非 None 字典零新增面。
 （`ref_cache.json` 键＝用例内容哈希，省 ~1/3）与**同族稳定小 case 合并主题大 case**
 （2846 次编译→~60 次，预计进 1 分钟级；崩溃隔离/逐条判定粒度由手写家族与独立小 case
 保留）。
+
+## 批次 810（代码 a5a5b3b8）：`xs.mean()` 的向量折叠根修——句柄被当标量用的静默错值
+
+**症状与根因**：`xs.mean()` 落到 gen.rs 那条 pandas 链式兜底臂（`("mean", _) => zeta_identity`，
+fillna/astype/shift/groupby/transform/rank/sort_values/rolling/mean/to_period/set_index 同臂），
+把接收者句柄原样回传。mean 是这条列表里唯一返回标量的成员 ⇒ 句柄被当数用：编译 rc=0、运行 rc=0、
+零警告。改前实拍（隔离基座＝改前提交 cea8c834 的编译器 9c188541 ＋同树 `zeta_runtime_c.o` 07559896，
+`nm` 里 mean 符号 0 颗）：夹具 `t810_mean_fold` 七行期望全打成句柄字
+4374056816／4374056720／4374056624／8748113632.0／4374056817.0／4374056528／4374056432，
+逐次变（稳定的是"每次都是地址、从不出 2.0"）。
+
+**语料权重**（40 个 .py 全扫 `~/source/quant/REasyQuant/strategies`）：`.mean(` 48 处／18 文件；
+其中 `np.mean`／`numpy.mean` 模块形 19 处，接收者形 28 处／14 文件（真代码站点口径；按纯文本匹配
+另含 `code/jq_shim.py:209` 的 docstring 散文一句＝29 处／15 文件）。宿主形如
+`code/jq_wufu_daily.py:553` 的 `x.mean()`、`:646` 的 `df["close"][-g.breadth_ma_window:].mean()`。
+
+**修三面**：①gen.rs 在 `sum`／`unique` 那张向量折叠表后加一条 `zeta_mean_vec(vec, elem_is_i64)`
+折叠调用，结果按 `Type::F64` 入 type_map，标记位与 809 的 `elem_is_str` 同形；接收者守卫只放
+PyDynamic／I64／DynamicArray／Array／未知，`Type::Named` 排除在外（`pylib/pandas.z:332-339` 的
+`GroupBy::mean` 与 `pylib/numpy.z:43` 的模块形各有自己的路，本批不动）。②`runtime/py_additions.c`
+加 `double zeta_mean_vec(int64_t, int64_t)`：几何走 `zt_dyn_vec_hdr`，元素读法照同处
+`zeta_vec_div_scalar`（静态已知整数向量按值读，f64 向量与类型未知一律按位读——语料是价格序列，
+按整数读会把 2.0 读成 4611686018427387904）；空向量与不可识别句柄给 NaN 不给 0（pandas 空
+Series.mean() 即 nan，0 是看起来完全合理的错值）。③`src/backend/codegen/codegen.rs` 的
+`Codegen::new` 预声明 `double zeta_mean_vec(i64, i64)`——返回 double 必须先有 prototype，否则
+`get_or_declare_function`（:3128 的按名查找＋param-count 守卫）命不中这条、按 i64(i64×N) 现推签名，
+把 v0 里的 double 当整数返回值读；先例＝同处的 `py_round_n`。
+
+**验证**：钉 `tests/python_style/t810_mean_fold.z` 七行（含动态接收者 `d["c"]` 与空向量）——
+改前侧 FAIL（七行全句柄，读数见上）、改后主树 PASS 两跑（二进制 4b4fbe52 ＋ `.o` 45e7d389）。
+位移 A/B＝10 枚夹具 `--emit-llvm -o` 两侧各在自己的仓根跑（非空守卫），10/10 只差一条
+`declare double @zeta_mean_vec(i64, i64)` 加一行空行；`@numpy__mean`、`@"GroupBy::mean"`
+的调用点逐字节未动。
+
+**门禁**：`bash tools/sample_gate.sh 810` rc=0（python_style 44/0、official 14/14、corpus 40/40）。
+
+**双写核对器**：`tools/check_runtime_doublewrite.py` 本批零新增 MISSING（`zeta_mean_vec` 的声明侧与
+定义侧同写）。主树现况 rc=1 的两条新增（MISSING|zeta_print_bool_word|arity=2、
+MISSING|zeta_print_f64_word|arity=2）属 808 已提交面 e719d9bb，不代绑、不 --bless。
+
+**锚点**：`python3 tools/check_abi_anchors.py` rc=2＝漂移 182／新 0／消失 2（基线 307 条），逐文件
+＝codegen.rs 111、gen.rs 36、py_additions.c 21、tokio_runtime_stub.c 12、resolver.rs 2。
+**归因实测**：同树把本批 codegen.rs 的 +11 行 `git apply -R` 反卷后＝漂移 71 且 codegen.rs 0 条，
+恢复后 md5 90cb5b7e… 逐字节相同 ⇒ 那 111 条＋消失 1 条（codegen.rs:1998）由本笔行号位移造成。
+**不 --rebind**：基线里另有车道在制面共 71 条（gen.rs／py_additions.c／tokio_runtime_stub.c／resolver.rs），
+按 795/803-809 纪律由收口批统一重绑。**对 808 节的补正（只加不改）**：批次 808 节把"漂移 182／消失 2"
+整笔记成"车道 807 后大量落树"，按上测其中 codegen.rs 的 111 条＋消失 1 条是当时未提交的本批 +11 行。
+
+**勘案（撞面与源像）**：gen.rs 的折叠臂与重建后的 `zeta_runtime_c.o` 已被车道的 808 代码笔 e719d9bb
+收进它的提交（`git diff HEAD -- src/middle/mir/gen.rs`＝0 行），于是 HEAD 一度是「`.o` 导出
+`_zeta_mean_vec` 而 `runtime/py_additions.c` 无定义」——从 HEAD 源码重建会把符号丢掉。本笔补上 C 侧定义后
+实测闭合：照 `tools/build_runtime.sh` 的三颗命令重建，产物逐字节等于在册 `.o`（45e7d389）；本笔的注释改写
+另用同路径两版对照＝对象字节不变（两颗 .o md5 1f04a813 相同）。收尾强制 `cargo build --release` 后
+二进制 md5 仍是 4b4fbe52，与全部入账读数同一颗（排除"中途换二进制"）。
+
+**ROI 归因的一次更正**：开批候选表把 `std` 排在前面（#267② 记 6 处／6 文件＝单成员最高）。810 复测
+该计数含传递编译：`strategies` 40 文件里真 `.std(` 文本站点只 2 处／1 文件（`code/jq_wufu_daily.py:550`
+的 `sx, sy = x.std(), y.std()`），另外 5 个文件（`_drv_accept_409.py`／`jq_wufu_local.py`／`wufu_bt.py`／
+`wufu_v1.py`／`wufu_v2.py`）各自发出 1 声而自身文本里没有 `.std(` ⇒ 告警来自被传递编译的 `backend.*`
+模块（未逐文件追导入链坐实哪条边发的是哪一声）。据此改把 mean 一族（接收者形 28 处／14 文件）判为损害更大
+且更该先修的目标。本口径只核了 `std` 一员，`isin`／`dropna` 等逐成员裁定前需按同口径复核（已随 #267② 落注）。
+
+**不接的两形（已登记 #268，现势二进制 4b4fbe52 实拍）**：①负起点切片的 `len` 把负偏移当正偏移减——
+`len(xs[-2:])` 对 3 元素向量打 5、对 5 元素向量打 7（正确都是 2），同夹具 `len(xs[0:2])`／`len(xs[:2])`／
+`len(xs[1:])` 打 2／2／4 全对；mean 只是把这个既存错值显形。②用户函数返回 f64 时结果按 i64 打位模式——
+`def f(v): return v.mean()` 对 `[10.0, 20.0]` 打 4624633867356078080（＝15.0 的 double 位模式），
+同式在调用点直接 `print(xs.mean())` 打对 15.000000 ⇒ 折叠值对、返回型在函数边界丢。
+
