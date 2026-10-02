@@ -1,0 +1,45 @@
+// 批次 810：`xs.mean()` 此前落到 opaque 兜底的 `zeta_identity` 臂（gen.rs 那条 pandas
+// 链式列表 fillna/astype/shift/groupby/transform/rank/sort_values/rolling/mean/
+// to_period/set_index 用 `("mean", _) => zeta_identity`），而 mean 是列表里唯一返回
+// **标量**的成员——句柄原样当数用。改前实拍（隔离基座 /tmp/wt810＝改前提交 cea8c834 的
+// 编译器 9c188541 ＋ 同树 zeta_runtime_c.o 07559896，`nm` 里 mean 符号 0 颗）：七行期望
+// 全部打出句柄字——4374056816／4374056720／4374056624／8748113632.0／4374056817.0／
+// 4374056528／4374056432，逐次变（稳定的是"每次都是地址、从不出 2.0"）——乘 2 那行
+// 看着像算过，其实是拿地址在算；编译 rc=0、运行 rc=0、零警告＝静默错值。
+// 真实语料 `.mean(` 48 处/18 文件，去掉 `np.mean` 这类
+// 模块形后接收者形 28 处/14 文件（~/source/quant/REasyQuant/strategies，40 个 .py
+// 全扫；如 code/jq_wufu_daily.py:553 `x.mean()`、:646 `df["close"][-n:].mean()`）。
+// 修法：gen.rs 在 sum/unique 那张向量折叠表后加一条 `zeta_mean_vec(vec, elem_is_i64)`
+// 折叠调用，C 侧返回 double，prototype 在 codegen.rs 的 Codegen::new 预声明（照
+// py_round_n 的 f64 返回先例；按名查找 codegen.rs:3136 的 param-count 守卫命中它，
+// 否则调用点会按 i64(i64×N) 现推签名，把 v0 里的 double 当整数返回值读）。
+// 结果按 Type::F64 入 type_map，标记位与批次 809 的 `elem_is_str` 同形。
+// 元素编码：静态类型已知是整数向量才按整数读（`[2,4,6]`→4.0），f64 向量按位读；
+// 类型未知一律按 f64 位——语料的实际用法是价格序列，按整数读会把 2.0 读成
+// 4611686018427387904。空向量与不可识别句柄给 NaN，不拿 0 冒充均值（pandas 空
+// Series.mean() 即 nan，0 是一个看起来完全合理的错值）。
+// 不接的两形（本批实拍在册、另格登记，改它们要动的是别的地形）：负起点切片
+// `xs[-2:]` 的 `len` 本身就是 5（正确应是 2），mean 只是把这个既存错值显形；
+// 用户函数返回 f64 时按 i64 打位模式（`def f(v): return v.mean()` 打
+// 4624633867356078080＝15.0 的位模式，折叠值对、返回型不对）。
+xs = [1.0, 2.0, 3.0]
+print(xs.mean())
+ys = [2, 4, 6]
+print(ys.mean())
+zs = [1.5]
+print(zs.mean())
+print(xs.mean() * 2.0)
+m = xs.mean()
+print(m + 1.0)
+d = {"c": [1.0, 3.0]}
+v = d["c"]
+print(v.mean())
+es = []
+print(es.mean())
+// expect: 2.0
+// expect: 4.0
+// expect: 1.5
+// expect: 4.0
+// expect: 3.0
+// expect: 2.0
+// expect: nan

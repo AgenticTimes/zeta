@@ -949,6 +949,17 @@ impl<'ctx> LLVMCodegen<'ctx> {
             context.f64_type().fn_type(&[context.f64_type().into(), i64_type.into()], false),
             Some(Linkage::External),
         );
+        // 批次 810：`xs.mean()` 的向量折叠。返回 double 必须在调用点之前就有 prototype
+        // ——get_or_declare_function（:3128 的按名查找）命中这条就照它的签名发调用，
+        // 命不中才会按 i64(i64×N) 现推，那是把 v0 里的 double 当 x0 整数返回值读。
+        // 先例＝上面的 py_round_n。
+        module.add_function(
+            "zeta_mean_vec",
+            context
+                .f64_type()
+                .fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
         module.add_function(
             "py_round_i64",
             i64_type.fn_type(&[context.f64_type().into()], false),
