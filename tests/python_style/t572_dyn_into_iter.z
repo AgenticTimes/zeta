@@ -1,0 +1,12 @@
+// 批次 794（#266）known-fail 钉：动态接收者的 `into_iter()`。C 侧恒等别名已补
+// （selfhost 的裸 `into_iter_1` 由此兜住、链接 chronic 清零，实拍 /tmp/b784），
+// 但 `xs=[1,2]` 的接收者在 codegen 是 `[dynamic]i64::into_iter` 幽灵派发，
+// batch-419 面按 AttributeError raise（改前后同态，/tmp/b782/push3.z 两侧实拍
+// code=1）。修面在 DYN_RUNTIME_BINDINGS 白名单接线，随 #266 余项另批处理。
+// known-fail: dynamic receiver into_iter raises instead of iterating
+xs = [1, 2]
+total = 0
+for v in xs.into_iter():
+    total += v
+print(total)
+// expect: 3

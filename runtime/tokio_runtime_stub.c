@@ -2659,7 +2659,12 @@ static int64_t is_whitespace(int64_t s) { return host_str_is_whitespace(s); }
 int64_t zeta_call1(int64_t fptr, int64_t a);
 
 // 整串转 i64：前后空白允许；整串必须是整数，否则 make_err。
-int64_t parse(int64_t s) {
+// 批次 794（#266）：weak——selfhost.z 自带 `fn parse`（resolver 的 Class::method
+// 裸名二注面把 `_parse` 也发进生成物），改前四个缺符一接上链，这里就报
+// duplicate symbol '_parse'（/tmp/b784/link3.err 实拍）。weak 定义下用户强符号
+// 胜出、`.parse()` 派发点照旧在本名上链接；JIT 侧 dlsym 与 build.rs keep 名单
+// 都按地址取符号，W 型导出不受影响。其余裸别名同名相撞时同法处理（未实拍不加）。
+__attribute__((weak)) int64_t parse(int64_t s) {
     if (!s) return host_result_make_err(0);
     const char* p = (const char*)s;
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
@@ -2754,6 +2759,33 @@ int64_t host_str_chars(int64_t s) { return chars(s); }
 // 判定族裸别名补齐（peek() 返回的单字符字符串上调用；与 libc 无同名冲突）
 int64_t is_digit(int64_t s) { return str_is_digit(s); }
 int64_t is_alphanumeric(int64_t s) { return str_is_alnum(s); }
+// 批次 794（#266）：selfhost.z 裸名派发面的四枚缺口。这些调用点的接收者静态
+// 类型缺失（MIR 发 `push_2`/`as_str_1`/`into_iter_1`/`is_alphabetic_1`，
+// codegen.rs:3246 剥掉 arity 后声明 extern 裸名），改前 -o 链接报
+// Undefined symbols _push/_as_str/_into_iter/_is_alphabetic（/tmp/b784 在
+// 9aa25920 与 c031f3f7 两颗二进制实拍同清单）。此前它们只能链接失败，
+// 不存在依赖旧行为的在跑程序，别名是纯增量接线（363/365 批的裸别名惯例）。
+int64_t is_alphabetic(int64_t s) { return str_is_alpha(s); }
+int64_t push(int64_t dst, int64_t src) { return host_str_push_str(dst, src); }
+int64_t as_str(int64_t s) { return s; }
+int64_t into_iter(int64_t x) { return x; }
+
+// 批次 794（#266）：`ch.is_digit(10)` 的 radix 形。改前裸别名 is_digit 只有一参
+// （radix 被忽略）且返回值定型 I64，打印 1 而非 True（/tmp/b782/push4.z 实拍）。
+// Rust 语义是 char::is_digit：单字符、该字符在给定进制下的数值 < radix。
+// 多字符串返回 0（登记角落，调用侧静态类型已是整串）。
+int64_t host_str_is_digit(int64_t s, int64_t radix) {
+    if (!s || radix < 2 || radix > 36) return 0;
+    const char* p = (const char*)s;
+    if (!p[0] || p[1]) return 0;
+    char c = p[0];
+    int64_t v;
+    if (c >= '0' && c <= '9') v = c - '0';
+    else if (c >= 'a' && c <= 'z') v = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'Z') v = c - 'A' + 10;
+    else return 0;
+    return v < radix;
+}
 int64_t host_str_swapcase(int64_t s) { return str_swapcase(s); }
 int64_t host_str_removeprefix(int64_t s, int64_t p) { return str_remove_prefix(s, p); }
 int64_t host_str_removesuffix(int64_t s, int64_t p) { return str_remove_suffix(s, p); }

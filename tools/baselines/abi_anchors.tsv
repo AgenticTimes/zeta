@@ -48,11 +48,11 @@ runtime/tokio_runtime_stub.c	493	// LLVM renames overloaded array_new_1 to array
 runtime/tokio_runtime_stub.c	497-498	// Multi-arg print overloads: LLVM renames print -> print.N per module, and arity // varies (1-6). Provide implementations; the .set aliases below map each prin
 runtime/tokio_runtime_stub.c	510-512	// LLVM .N rename aliases — data in pylib/runtime_aliases.txt; // regenerate: python3 tools/gen_from_registry.py --emit-aliases #include "aliases.inc.c"
 runtime/tokio_runtime_stub.c	1432-1436	// Registry: stub=1. Loud fail via py_stub_abort (D / advice.md). int64_t py_stub_abort(int64_t name_ptr); int64_t py_asdict_unexpanded(int64_t v) { (void)v; re
-runtime/tokio_runtime_stub.c	2974	#define ZJ_NULL 0
-runtime/tokio_runtime_stub.c	2974-2980	#define ZJ_NULL 0 #define ZJ_INT 1 #define ZJ_F64 2 #define ZJ_STR 3 #define ZJ_ARR 4 #define ZJ_OBJ 5 #define ZJ_BOOL 6
-runtime/tokio_runtime_stub.c	2984	static int64_t zj_make(int64_t tag, int64_t payload) {
-runtime/tokio_runtime_stub.c	3404-3434	static int64_t g_tag_val[ZT_TAG_CAP]; static uint64_t zt_tag_slot(int64_t map, int64_t key) { uint64_t h = (uint64_t)map * 1099511628211ULL ^ (uint64_t)key; ret
-runtime/tokio_runtime_stub.c	4172	int64_t zeta_call0(int64_t fptr) {
+runtime/tokio_runtime_stub.c	3006	#define ZJ_NULL 0
+runtime/tokio_runtime_stub.c	3006-3012	#define ZJ_NULL 0 #define ZJ_INT 1 #define ZJ_F64 2 #define ZJ_STR 3 #define ZJ_ARR 4 #define ZJ_OBJ 5 #define ZJ_BOOL 6
+runtime/tokio_runtime_stub.c	3016	static int64_t zj_make(int64_t tag, int64_t payload) {
+runtime/tokio_runtime_stub.c	3436-3466	static int64_t g_tag_val[ZT_TAG_CAP]; static uint64_t zt_tag_slot(int64_t map, int64_t key) { uint64_t h = (uint64_t)map * 1099511628211ULL ^ (uint64_t)key; ret
+runtime/tokio_runtime_stub.c	4204	int64_t zeta_call0(int64_t fptr) {
 runtime/unavailable_stubs.c	110	if (getenv("ZETA_LENIENT_STUBS") != NULL) {
 src/backend/codegen/codegen.rs	60	pub slot_read_ids: std::collections::HashSet<u32>,
 src/backend/codegen/codegen.rs	1168	// 批次 395: the other arities of the call-through-a-value trampoline
@@ -246,22 +246,22 @@ src/middle/mir/gen.rs	12395	self.type_map.insert(f2, Type::I64);
 src/middle/mir/gen.rs	12471	// DataFrame type (`covers_range` does `cache_df[date_col].max()`).
 src/middle/mir/gen.rs	12547	}
 src/middle/mir/gen.rs	12954-12964	} _ => Type::I64, }; let elem_ty = if method == "values" { val_ty.clone() } else { key_ty.clone() }; let out_ty = if method == "most_common" || method == "items
-src/middle/mir/gen.rs	14377-14401	// write_text` exists. let tag = crate::middle::pylib::handle_tag(tn) .map(|h| h.to_string()) .unwrap_or_else(|| tn.clone()); if let Some((sym, ret_handle)) = c
-src/middle/mir/gen.rs	14666-14668	self.exprs.insert(size_id, MirExpr::IntLit(elem_size)); let mul_id = self.next_id();
-src/middle/mir/gen.rs	14669-14679	self.exprs.insert( mul_id, MirExpr::BinaryOp { op: "*".to_string(), left: offset_id, right: size_id, }, ); // Store the pointer arithmetic directly as an inline
-src/middle/mir/gen.rs	14798	// underscore that was part of the NAME. `DataFrame::reset_index`
-src/middle/mir/gen.rs	14809	format!("{}_{}", func, arg_ids.len())
-src/middle/mir/gen.rs	15093	}
-src/middle/mir/gen.rs	15632-15665	{ let ty = self.type_map.get(&aid).cloned().unwrap_or(Type::I64); self.exprs.insert(id, MirExpr::Var(aid)); self.type_map.insert(id, ty); return id; } } } } // 
-src/middle/mir/gen.rs	16235	return id;
-src/middle/mir/gen.rs	16339	for a in args {
-src/middle/mir/gen.rs	16347	fields,
-src/middle/mir/gen.rs	16564	format!("{}_{}", func_name, arg_ids.len())
-src/middle/mir/gen.rs	16994	);
-src/middle/mir/gen.rs	17070	args: vec![bid, iid],
-src/middle/mir/gen.rs	17372	}
-src/middle/mir/gen.rs	17923-17928	let mut ids: Vec<u32> = args.iter().map(|a| self.lower_expr(a)).collect(); while ids.len() < 3 { let filler = self.next_id(); self.exprs.insert(filler, MirExpr:
-src/middle/mir/gen.rs	18578	self.mirror_module_global_writes();
+src/middle/mir/gen.rs	14405-14429	// write_text` exists. let tag = crate::middle::pylib::handle_tag(tn) .map(|h| h.to_string()) .unwrap_or_else(|| tn.clone()); if let Some((sym, ret_handle)) = c
+src/middle/mir/gen.rs	14694-14696	self.exprs.insert(size_id, MirExpr::IntLit(elem_size)); let mul_id = self.next_id();
+src/middle/mir/gen.rs	14697-14707	self.exprs.insert( mul_id, MirExpr::BinaryOp { op: "*".to_string(), left: offset_id, right: size_id, }, ); // Store the pointer arithmetic directly as an inline
+src/middle/mir/gen.rs	14826	// underscore that was part of the NAME. `DataFrame::reset_index`
+src/middle/mir/gen.rs	14837	format!("{}_{}", func, arg_ids.len())
+src/middle/mir/gen.rs	15121	}
+src/middle/mir/gen.rs	15660-15693	{ let ty = self.type_map.get(&aid).cloned().unwrap_or(Type::I64); self.exprs.insert(id, MirExpr::Var(aid)); self.type_map.insert(id, ty); return id; } } } } // 
+src/middle/mir/gen.rs	16263	return id;
+src/middle/mir/gen.rs	16367	for a in args {
+src/middle/mir/gen.rs	16375	fields,
+src/middle/mir/gen.rs	16592	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	17022	);
+src/middle/mir/gen.rs	17098	args: vec![bid, iid],
+src/middle/mir/gen.rs	17383	}
+src/middle/mir/gen.rs	17951-17956	let mut ids: Vec<u32> = args.iter().map(|a| self.lower_expr(a)).collect(); while ids.len() < 3 { let filler = self.next_id(); self.exprs.insert(filler, MirExpr:
+src/middle/mir/gen.rs	18606	self.mirror_module_global_writes();
 src/middle/mir/mir.rs	45-60	/// 批次 399 (类型基础②): the ONE entry saying what this function's `ret` /// carries, so the callee's LLVM signature and the caller's destination slot /// stop being
 src/middle/mir/mir.rs	61-75	pub fn signature_ret_ty(&self) -> Option<Type> { for stmt in &self.stmts { if let MirStmt::Return { val } = stmt { if let Some(ty) = self.type_map.get(val) { re
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");
