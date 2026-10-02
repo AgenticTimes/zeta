@@ -1,4 +1,4 @@
-// 批次 797（#266 余项后续）known-fail 钉：无型面接收者（枚举变体载荷绑定槽/
+// 批次 797（#266 余项后续）钉：无型面接收者（枚举变体载荷绑定槽/
 // `into_iter` 通用调用 dest，默认定型 I64）上的 `.map(closure)`。改前落幽灵名
 // `map_2` 链 `_map` weak 桩，调用即 abort rc=134 零输出（/tmp/b797/probe_map.z
 // 实拍）；修法＝gen.rs 增臂把「接收者无型或 I64 定型＋首实参闭包」发
@@ -7,8 +7,12 @@
 // 出现、run rc 134→0）。余半：闭包体的具名函数调用 lowering 丢体——MIR 实拍仅
 // zeta_env_get("double_it")+Return IntLit(0)，值停在 0（probe_typed.z `|a| a*2`
 // 打 0、t34 comprehension 行 3 打 6 非 12，且 t34/t35 红在改前 HEAD 二进制
-// 同形＝车道 794c 残差「数值减半」同格，非本臂回归）。闭包体面收口后摘本标记。
-// known-fail: closure body call lowering loses value (sum stays 0)
+// 同形＝车道 794c 残差「数值减半」同格，非本臂回归）。
+// 批次 800 收口：λ 体单表达式被前端包成 `ExprStmt{expr}`，`lower_closure`
+// 的 body lowering 无拆包臂落 `IntLit(0)` 兜底零发射（实拍 body shape
+// `ExprStmt { expr: Call { receiver: None, method: "double_it", …`）；
+// 修＝body_val match 增 `AstNode::ExprStmt{expr} => lower_expr(expr)` 拆包臂
+// （对齐 :4794 Block 末表达式先例）。摘 known-fail 标记，本夹具转常规回归。
 enum E {
     P(Vec<i64>),
     N(i64),

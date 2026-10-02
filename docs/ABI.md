@@ -193,7 +193,7 @@ C 运行时里按名字查的那一格（`zeta_env_get`/`zeta_env_set`，runtime
 当成一条活引用、把历史号打回漂移。八条写点从批次 387 起一律走 `env_store`，四条原先
 硬写 `Type::I64` 的读点一律走 `env_slot_ty`。
 **批次 391 把"八条按语句种类内联镜像"收敛成一个 Assign 后置遍**：`mirror_module_global_writes`
-（gen.rs:648）→ `splice_env_mirrors`（:667）→ `env_mirror(name, lhs)`（:679），调用点在 :1778 与 :18742。
+（gen.rs:648）→ `splice_env_mirrors`（:667）→ `env_mirror(name, lhs)`（:679），调用点在 :1778 与 :18749。
 上面那五个内联点号随之不再存在；本批（542）实测的现号：`global_ty_of` gen.rs:515、
 `env_store` 定义 gen.rs:553（其余内联调用点 5 处 = gen.rs:1945、:2518、:2601、:2704、:17404，
 实参一律是"刚写过的那个槽" `rhs_id`，其中 gen.rs:17404 传 `cur_id`）、`env_slot_ty` gen.rs:620。

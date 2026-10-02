@@ -18678,6 +18678,13 @@ call, no NULL-handle dereference).",
                 child.type_map.insert(z, Type::I64);
                 z
             }
+            // Batch 800: a lambda/comprehension body whose single expression
+            // is statement-wrapped arrives as `ExprStmt{expr}`. `lower_expr`
+            // has no ExprStmt arm and fell to the `IntLit(0)` fallback with
+            // zero emitted statements — the body silently vanished
+            // (`|a| double_it(a)` returned 0). Unwrap first, same as the
+            // Block-last-expression arm at :4794.
+            AstNode::ExprStmt { expr } => child.lower_expr(expr),
             _ => child.lower_expr(body),
         };
         // Remember the body's value type for the enclosing comprehension (the
