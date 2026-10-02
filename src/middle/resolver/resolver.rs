@@ -149,6 +149,14 @@ pub struct Resolver {
     /// PY-A: every registered function definition (including ones loaded from
     /// imported modules) — return-type inference must cover all of them.
     registered_func_defs: RefCell<Vec<std::rc::Rc<AstNode>>>,
+    /// 批次 813（#268②）：函数名 → 它自己降完 MIR 后的 `signature_ret_ty()`，
+    /// 只登记 F32/F64。供后面的调用点填空调用槽（声明表里的空白位），与
+    /// codegen 给被调方定的 LLVM 签名同源＝批次 399 定的那一条规则。
+    body_ret_tys: RefCell<HashMap<String, Type>>,
+    /// 批次 813：`prime_body_ret` 已就地降过名的集合（非浮点的 def 也进，避免反复重降）。
+    primed_names: RefCell<std::collections::HashSet<String>>,
+    /// 批次 813：正在就地预热的名字，挡住 `a` 调 `b`、`b` 又调 `a` 的环。
+    priming: RefCell<std::collections::HashSet<String>>,
     /// 批次 400（类型基础③）：`"函数.参数"` → 该参数在各调用点看到的实参类形
     /// （如 `str≠i64`）。只有**证据不一致**的参数才会进这张表，它们是"因为冲突
     /// 而保持动态"的位置，`--report-untyped` 把它们和"从来没有任何证据"的动态
@@ -200,6 +208,9 @@ impl Resolver {
             py_module_pkg: RefCell::new(std::collections::HashMap::new()),
             py_current_module: RefCell::new(None),
             registered_func_defs: RefCell::new(Vec::new()),
+            body_ret_tys: RefCell::new(HashMap::new()),
+            primed_names: RefCell::new(std::collections::HashSet::new()),
+            priming: RefCell::new(std::collections::HashSet::new()),
             ambiguous_dyn_params: RefCell::new(std::collections::HashMap::new()),
         };
 
@@ -5363,7 +5374,7 @@ fn shim_class_normalize(t: &Type) -> Type {
             .map(|(n, (_, r, _))| (n.clone(), r.clone()))
             .collect();
         let sig_params = self.sig_params_snapshot();
-        let ret_types: HashMap<String, Type> = self
+        let mut ret_types: HashMap<String, Type> = self
             .get_all_func_signatures()
             .iter()
             .map(|(name, (_, ret, _))| {
@@ -5465,6 +5476,57 @@ fn shim_class_normalize(t: &Type) -> Type {
                 (name.clone(), ret)
             })
             .collect();
+        // 批次 813（#268②）：调用槽的型与 LLVM 签名此前由两张表各自决定——被调
+        // 方读自己 MIR 的 `signature_ret_ty()`（批次 399 定的唯一规则），调用方读
+        // 下面这张声明表。未标注的 `def f(v): return v.mean()` 在声明表里是空格
+        // （普通 def＝单元、class 方法＝i64 脱糖默认），而 `v.mean()` 的浮点型是
+        // gen.rs 降 MIR 时才折出来的，AST 级回收（`unannotated_return_ty`）看不见
+        // ⇒ 槽留 i64、被调方发 `double`，R7 把位模式当整数打（实拍
+        // `print(f(xs))` 打 4624633867356078080，真值 15.0）。修法＝把已经降完的
+        // 函数的 body 型回灌进这张表，且只灌声明表里本来就空着的槽：
+        //   - 声明了 `-> i64` 却返回浮点的分歧不动（那是 docs/ABI.md §2 R7 自己的
+        //     问题，批次 399 / 任务 #33 在册）；
+        //   - 表里没有的名字不新增——gen.rs 有 20 多处 `func_ret_types.contains_key`
+        //     把"在册"当"是用户函数"用，凭空加键会拨动那些臂。
+        // 读数必须与降型顺序无关：lib 的降型循环按 `registered_funcs`（HashMap）取项，
+        // 顺序逐次变——实拍同一份 min1.z（一个 `def m` ＋ `print(m(xs))`）连编 6 次，
+        // `main` 有 3 次排在 `m` 之前，那次表还是空的，同一个源文件的读数就在 20.0 与
+        // 4626322717216342016 之间随机翻（本批第一版按"降到的顺序"填表，就是这样翻的）。
+        // 所以填表前先就地预热：把本张表里每个空槽对应的 def 立刻降一遍（MIR 丢弃，只留
+        // 登记的 body 型），这样任何调用点看到的表都是齐的。递归降下去时同一规则继续适用
+        // ⇒ def 调 def 的链也齐（环由 `priming` 挡住）。
+        {
+            let blanks: Vec<String> = ret_types
+                .iter()
+                .filter(|(_, ty)| {
+                    matches!(ty, Type::I64)
+                        || matches!(ty, Type::Tuple(inner) if inner.is_empty())
+                })
+                .map(|(name, _)| name.clone())
+                .collect();
+            let missing: Vec<String> = {
+                let seen = self.body_ret_tys.borrow();
+                let done = self.primed_names.borrow();
+                blanks
+                    .iter()
+                    .filter(|n| {
+                        !seen.contains_key(n.as_str()) && !done.contains(n.as_str())
+                    })
+                    .cloned()
+                    .collect()
+            };
+            for name in &missing {
+                self.prime_body_ret(name);
+            }
+            let body = self.body_ret_tys.borrow();
+            for name in &blanks {
+                if let Some(float @ (Type::F32 | Type::F64)) = body.get(name.as_str()) {
+                    if let Some(ty) = ret_types.get_mut(name.as_str()) {
+                        *ty = float.clone();
+                    }
+                }
+            }
+        }
         // `__name__` = the module this function belongs to (the root file is
         // `__main__`). `py_mangled_to_module` maps a definition's mangled name to
         // its module, so a function that is not there belongs to the root file.
@@ -5524,7 +5586,51 @@ fn shim_class_normalize(t: &Type) -> Type {
                     m.name.clone().map(|n| (n, m))
                 }));
         }
+        // 批次 813（#268②）：登记本函数的 body 型，供后面的调用点填空调用槽。
+        // 只登记 F32/F64——i64 就是空槽原本的读法，把它也写进来会让这张表变成
+        // 第二个真相源。嵌套 def 走 `lower_closure`、不经过这里（调用点已按
+        // `closure_ret_tys` 取 body 型）。
+        if let AstNode::FuncDef { name, .. } = ast {
+            if let Some(float @ (Type::F32 | Type::F64)) = mir.signature_ret_ty() {
+                self.body_ret_tys.borrow_mut().insert(name.clone(), float);
+            }
+        }
         mir
+    }
+
+    /// 批次 813（#268②）：把 `name` 这个 def 就地降一遍，只为让 `lower_to_mir` 末尾
+    /// 把它的 body 型登记进 `body_ret_tys`；产出的 MIR 丢弃——真正的定义仍由 lib 的
+    /// 降型循环各发一遍。`primed_names` 记住"这个名看过了"（非浮点的 def 也记，否则每
+    /// 个调用点都要重降一次），`priming` 挡住 `a` 调 `b`、`b` 又调 `a` 的环。
+    fn prime_body_ret(&self, name: &str) {
+        if self.primed_names.borrow().contains(name) || self.priming.borrow().contains(name) {
+            return;
+        }
+        let mut target: Option<AstNode> = None;
+        for d in self.registered_func_defs.borrow().iter() {
+            if let AstNode::FuncDef { name: n, .. } = d.as_ref() {
+                if n == name {
+                    target = Some(d.as_ref().clone());
+                    break;
+                }
+            }
+        }
+        if target.is_none() {
+            if let Some(v) = self.registered_funcs.get(name) {
+                if let AstNode::FuncDef { .. } = v {
+                    target = Some(v.clone());
+                }
+            }
+        }
+        let Some(node) = target else {
+            self.primed_names.borrow_mut().insert(name.to_string());
+            return;
+        };
+        self.priming.borrow_mut().insert(name.to_string());
+        let mir = self.lower_to_mir(&node);
+        self.priming.borrow_mut().remove(name);
+        drop(mir);
+        self.primed_names.borrow_mut().insert(name.to_string());
     }
 
     /// PY-A V3: is this name declared `nonlocal` anywhere?

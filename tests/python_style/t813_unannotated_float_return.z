@@ -1,0 +1,45 @@
+// 批次 813（#268②）：未标注的 `def` 返回浮点时，调用点的目的槽仍读声明表（空调）＝
+// i64，而被调方的 LLVM 签名读自己 MIR 的 `signature_ret_ty()`＝double，两边没人对齐
+// ⇒ 落槽按位重打（docs/ABI.md §2 R7）。改前实拍见本行下方"读数"栏。
+// 修法：resolver.lower_to_mir 把已降完函数的 body 型（只 F32/F64）回灌进
+// func_ret_types 的空白槽（单元＝普通 def 的空调、i64＝class 方法脱糖默认），
+// 声明了 `-> i64` 的分歧不动、表里没有的名字不新增。
+// 本批不收的形状：`def r1(v): return round(v, 1)` —— 改前 6/6 稳定位型
+// （4613037098315599053），改后 6 跑 2 次 2.6 / 4 次位型（逐次翻）。翻点在调用槽
+// （MIR 差异仅 `main` 局部槽 2 的 `F64` ↔ `Tuple([])` 一处，被调方 `r1` 的 MIR
+// 六跑逐字节相同），成因未实测 ⇒ 另登 backlog 行，不进本钉（Flaky 形状入-suite
+// 会让全量 python_style 逐次不稳）。
+def m(v):
+    return v.mean()
+
+def plus(a, b):
+    return a + b
+
+def greet(n):
+    return "hi " + n
+
+class Calc:
+    def avg(self, v):
+        return v.mean()
+
+xs = [10.0, 20.0, 30.0]
+print(m(xs))
+y = m(xs)
+print(y)
+print(plus(2, 3))
+print(greet("bob"))
+print(Calc().avg(xs))
+
+def outer():
+    def inner(v):
+        return v.mean()
+
+    return inner([1.0, 2.0, 3.0])
+
+print(outer())
+// expect: 20.0
+// expect: 20.0
+// expect: 5
+// expect: hi bob
+// expect: 20.0
+// expect: 2.0
