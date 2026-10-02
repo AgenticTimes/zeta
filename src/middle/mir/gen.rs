@@ -6870,6 +6870,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 // (strategies/code/jq_shim.py) could never link.
                 if receiver.is_none() {
                     if let Some((module, member)) = self.py_member_aliases.get(method).cloned() {
+                        // Batch 10006 (#266①, port of bootstrap batch 754 #265): the
+                        // CALLER'S OWN module defining the same bare name wins over an
+                        // import alias. CPython scope semantics: another module's
+                        // `from .x import f` must not leak into this file's namespace.
+                        // Measured here: `jq_wufu.py:632` defines its own tuple-returning
+                        // `get_premium_rate`, but the shared resolver's alias table
+                        // (`resolver.rs:604`) points the bare call at
+                        // `backend.strategy.wufu_trading`'s same-name f64 function, so
+                        // `jq_wufu.py:674` (`premium, _, _ = get_premium_rate(…)`) typed a
+                        // tuple handle as F64 and codegen hard-turned it at
+                        // `codegen.rs:4178` (corpus blocked on 2 files).
+                        let (module, member) = {
+                            let own =
+                                format!("{}__{}", self.current_module.replace('.', "_"), method);
+                            let alias_q = format!("{}__{}", module.replace('.', "_"), member);
+                            if own != alias_q && self.func_param_names.contains_key(&own) {
+                                (self.current_module.clone(), method.clone())
+                            } else {
+                                (module, member)
+                            }
+                        };
                         // A member the REGISTRY already declares keeps its C
                         // shim: a library that SUPPLEMENTS a registered module
                         // would otherwise steal `pd.Timestamp` from the
