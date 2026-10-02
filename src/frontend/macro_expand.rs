@@ -71,6 +71,7 @@ impl MacroExpander {
                 }
                 self.expand_assert_eq(&[args[0].clone(), AstNode::Bool(true)])
             }
+            "matches" => self.expand_matches(args),
             _ => {
                 // Check for registered declarative macros
                 if let Some(macro_def) = self.declarative_macros.get(name) {
@@ -346,6 +347,69 @@ impl MacroExpander {
         };
 
         Ok(vec![if_stmt])
+    }
+
+    /// Expand matches! macro: `matches!(expr, pattern)` →
+    /// `match expr { pattern => true, _ => false }`. A `==` lowering is not
+    /// possible: patterns like `Token::Ident(n)` are variant shapes, not values.
+    fn expand_matches(&self, args: &[AstNode]) -> Result<Vec<AstNode>, String> {
+        if args.len() != 2 {
+            return Err("matches! requires exactly 2 arguments".to_string());
+        }
+        let pattern = Self::pattern_from_expr(&args[1]);
+        Ok(vec![AstNode::Match {
+            scrutinee: Box::new(args[0].clone()),
+            arms: vec![
+                crate::frontend::ast::MatchArm {
+                    pattern: Box::new(pattern),
+                    guard: None,
+                    body: Box::new(AstNode::Bool(true)),
+                },
+                crate::frontend::ast::MatchArm {
+                    pattern: Box::new(AstNode::Ignore),
+                    guard: None,
+                    body: Box::new(AstNode::Bool(false)),
+                },
+            ],
+        }])
+    }
+
+    /// A macro argument is parsed as an *expression*, but a match arm wants a
+    /// *pattern*: `Tok::Ident(s)` arrives as `PathCall{path:["Tok"],
+    /// method:"Ident"}` while `parse_pattern` builds
+    /// `StructPattern{variant:"Tok::Ident", fields:[("0", Var s)]}`. Left
+    /// unconverted the arm's constructor never resolves and gen.rs lowers it
+    /// to never-match (`IntLit(0)`) — measured: `matches!(t, Tok::Ident(s))`
+    /// stayed false for an `Ident` value.
+    fn pattern_from_expr(node: &AstNode) -> AstNode {
+        match node {
+            AstNode::PathCall { path, method, args, .. } => {
+                let mut variant = path.join("::");
+                variant.push_str("::");
+                variant.push_str(method);
+                AstNode::StructPattern {
+                    variant,
+                    fields: args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| (i.to_string(), Self::pattern_from_expr(a)))
+                        .collect(),
+                    rest: false,
+                }
+            }
+            AstNode::Call { receiver: None, method, args, .. } if !args.is_empty() => {
+                AstNode::StructPattern {
+                    variant: method.clone(),
+                    fields: args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| (i.to_string(), Self::pattern_from_expr(a)))
+                        .collect(),
+                    rest: false,
+                }
+            }
+            other => other.clone(),
+        }
     }
 
     /// Expand a declarative macro
