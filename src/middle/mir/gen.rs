@@ -6,6 +6,8 @@
 //! Clean, fast, and fully documented.
 
 mod call_set;
+mod call_str;
+use self::call_str::{path_ends_with_mem, str_method_symbol, str_method_symbol3};
 
 use crate::frontend::ast::AstNode;
 use crate::middle::mir::mir::{Mir, MirExpr, MirStmt, SemiringOp};
@@ -18601,101 +18603,6 @@ fn lt_annotation_type(s: &str) -> Option<Type> {
             let v = it.next().map(one).unwrap_or(Type::I64);
             Some(Type::Named("map".to_string(), vec![k, v]))
         }
-        _ => None,
-    }
-}
-
-/// `std::mem::size_of` is written both fully qualified and after a `use`
-/// (`mem::size_of::<f32>()` in `zeta_src/runtime/tensor.z:37`).
-fn path_ends_with_mem(path: &[String]) -> bool {
-    path.last().map(String::as_str) == Some("mem")
-        && (path.len() == 1 || (path.len() == 2 && path[0].as_str() == "std"))
-}
-
-fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)> {    match method {
-        "upper" => Some(("host_str_to_uppercase", 1, "str")),
-        // `.to_string()` on a string is identity (strings are immutable here);
-        // the same-named C alias `to_string` covers call sites whose receiver
-        // type is unknown and bypasses this table (batch 363, task #42).
-        "to_string" => Some(("host_str_to_string", 1, "str")),
-        // Batch 364 (task #42): the string predicate family. `is_whitespace`
-        // follows Rust's all-chars rule; `clone` is identity for the same
-        // immutability reason as `to_string`. Bare C aliases for the untyped
-        // fallback path are in tokio_runtime_stub.c.
-        "is_empty" => Some(("host_str_is_empty", 1, "bool")),
-        "is_whitespace" => Some(("host_str_is_whitespace", 1, "bool")),
-        "clone" => Some(("host_str_clone", 1, "str")),
-        // push_str 返回新串（纯函数）；不进表的话结果被定型 I64，
-        // 后续 .len() 派发就错了（批次 365 实测）。
-        "push_str" => Some(("host_str_push_str", 2, "str")),
-        // chars 返回单字符字符串的 vec（"split" = vec<str> 返回种类）。
-        "chars" => Some(("host_str_chars", 1, "split")),
-        "lower" => Some(("host_str_to_lowercase", 1, "str")),
-        "capitalize" => Some(("host_str_capitalize", 1, "str")),
-        "title" => Some(("host_str_title", 1, "str")),
-        "swapcase" => Some(("host_str_swapcase", 1, "str")),
-        "trim" | "strip" => Some(("host_str_trim", 1, "str")),
-        "lstrip" => Some(("host_str_lstrip", 1, "str")),
-        "rstrip" => Some(("host_str_rstrip", 1, "str")),
-        "contains" => Some(("host_str_contains", 2, "bool")),
-        "startswith" | "starts_with" => Some(("host_str_starts_with", 2, "bool")),
-        "endswith" | "ends_with" => Some(("host_str_ends_with", 2, "bool")),
-        "replace" => Some(("host_str_replace", 3, "str")),
-        // `s.repeat(n)` is the Rust spelling of `"ab" * 3`: same symbol, and
-        // without this row the fall-through emitted a bare `_repeat` extern.
-        "repeat" => Some(("host_str_repeat", 2, "str")),
-        "find" | "index" => Some(("host_str_find", 2, "i64")),
-        "rfind" => Some(("host_str_rfind", 2, "i64")),
-        "count" => Some(("host_str_count", 2, "i64")),
-        "len" => Some(("host_str_len", 1, "i64")),
-        "split" => Some(("host_str_split", 2, "split")),
-        // Batch 588: newline-only sibling of split (the C side walks \n,
-        // \r\n, \r itself — CPython's exotic Unicode separators are a
-        // registered corner).
-        "splitlines" => Some(("host_str_splitlines", 1, "split")),
-        // Batch 588: the 2-argument user form `s.rsplit(sep, maxsplit)`;
-        // `rsplit(sep)` is routed to host_str_split at the call site
-        // (identical semantics when maxsplit is absent).
-        "rsplit" => Some(("host_str_rsplit", 3, "split")),
-        "join" => Some(("host_str_join", 2, "str")),
-        "zfill" => Some(("host_str_zfill", 2, "str")),
-        "ljust" => Some(("host_str_ljust", 3, "str")),
-        "rjust" => Some(("host_str_rjust", 3, "str")),
-        "isalpha" => Some(("host_str_isalpha", 1, "bool")),
-        // 批次 794（#266）：Rust 拼写的判定族成员。selfhost.z 在 `input[i]`
-        // （str_get 结果，静态类型 Str）上调 `.is_alphabetic()/.is_alphanumeric()`，
-        // 表里没有这两行时走通用派发发裸 `is_alphabetic_1`，-o 链接失败；
-        // is_alphanumeric 虽有 C 裸别名兜链接，返回值定型 I64、打印不出 True。
-        "is_alphabetic" => Some(("host_str_isalpha", 1, "bool")),
-        "is_alphanumeric" => Some(("host_str_isalnum", 1, "bool")),
-        // 批次 794（#266）：`word.as_str()` 恒等（串即句柄，与 clone 同理）——
-        // 没有这行时定型 I64，print 打句柄数字（改前是链接失败）。
-        "as_str" => Some(("host_str_clone", 1, "str")),
-        "isdigit" => Some(("host_str_isdigit", 1, "bool")),
-        "isupper" => Some(("host_str_isupper", 1, "bool")),
-        "islower" => Some(("host_str_islower", 1, "bool")),
-        // The rest of the str.is* family. Without a table entry each name
-        // linked against the same-named libc ctype function (a different
-        // signature entirely) and silently returned 0.
-        "isalnum" => Some(("host_str_isalnum", 1, "bool")),
-        "isspace" => Some(("host_str_isspace", 1, "bool")),
-        "isnumeric" => Some(("host_str_isnumeric", 1, "bool")),
-        "isdecimal" => Some(("host_str_isdecimal", 1, "bool")),
-        "isascii" => Some(("host_str_isascii", 1, "bool")),
-        "isprintable" => Some(("host_str_isprintable", 1, "bool")),
-        "istitle" => Some(("host_str_istitle", 1, "bool")),
-        "removeprefix" => Some(("host_str_removeprefix", 2, "str")),
-        "removesuffix" => Some(("host_str_removesuffix", 2, "str")),
-        _ => None,
-    }
-}
-
-/// Batch 588: the start-offset overloads — consulted only when a call site
-/// carries a third argument (`s.find(sub, start)`). `index` keeps find's
-/// -1-on-miss semantics instead of raising (registered corner).
-fn str_method_symbol3(method: &str) -> Option<(&'static str, usize, &'static str)> {
-    match method {
-        "find" | "index" => Some(("host_str_find3", 3, "i64")),
         _ => None,
     }
 }
