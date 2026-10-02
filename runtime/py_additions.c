@@ -357,13 +357,30 @@ int64_t zeta_slice_vec(int64_t data, int64_t start, int64_t end) {
         int64_t probe = 0;
         if (!zt_vec_header_ok(data, &probe)) return 0;
     }
-    // Python semantics: end is EXCLUSIVE. end < 0 → slice to the end (reads
-    // the Vec header; only valid for dynamic-array handles).
+    // Python semantics: end is EXCLUSIVE; INT64_MIN marks an omitted end
+    // (an omitted start is already folded to 0 by the parser). Negative
+    // bounds count from the end and must be normalized against the real
+    // length, otherwise the copy loop reads the source header words as
+    // elements.
     int64_t n;
-    if (end < 0) {
-        n = ((int64_t*)(data - 16))[1] - start;
-    } else {
+    if (start >= 0 && end >= 0) {
+        // Both bounds concrete (static receivers are folded to this shape by
+        // gen.rs). The end still has to meet the real length: `xs[3:10]` on a
+        // length-5 vector is 2 items, not 7 — reading 7 copied five words past
+        // the tail. The header was already validated by the guard above, so
+        // this read is exactly as safe as the one in the branch below.
+        int64_t len = ((int64_t*)(data - 16))[1];
+        if (end > len) end = len;
         n = end - start;
+    } else {
+        int64_t len = ((int64_t*)(data - 16))[1];
+        int64_t st = (start < 0) ? start + len : start;
+        int64_t en = (end == INT64_MIN) ? len : (end < 0 ? end + len : end);
+        if (st < 0) st = 0;
+        if (en > len) en = len;
+        if (en < st) en = st;
+        n = en - st;
+        start = st;
     }
     if (n < 0) n = 0;
     int64_t cap = n < 8 ? 8 : n;

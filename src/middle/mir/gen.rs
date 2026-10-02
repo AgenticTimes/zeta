@@ -12504,30 +12504,35 @@ call, no NULL-handle dereference).",
                         Some(Type::DynamicArray(e)) => (**e).clone(),
                         _ => Type::I64,
                     };
-                    // Static-size arrays: replace the "to the end" sentinel
-                    // (-1) with the known length (zeta_slice_vec reads the
-                    // Vec header only for dynamic handles).
                     let mut args2 = arg_ids.clone();
-                    // Normalize the omitted-end sentinel to -1, which is what
-                    // zeta_slice_vec understands as "to the end".
-                    if matches!(args.get(1), Some(AstNode::Lit(v)) if *v == i64::MIN) {
-                        let neg = self.next_id();
-                        self.exprs.insert(neg, MirExpr::IntLit(-1));
-                        self.type_map.insert(neg, Type::I64);
-                        args2[2] = neg;
-                    }
+                    // 静态数组不能读 Vec 头：把"省略终点"哨兵（i64::MIN）与字面
+                    // 负界在编译期按已知长度折成具体界。动态句柄保留原始界，由
+                    // zeta_slice_vec 按真实长度归一化（旧写法把哨兵改写成 -1，
+                    // 与显式 `xs[:-1]` 撞成同一个值）。
                     if let Some(Type::Array(_, ArraySize::Literal(n))) =
                         receiver_ty.as_ref()
                     {
-                        if matches!(
-                            self.exprs.get(&args2[2]),
-                            Some(MirExpr::IntLit(-1))
-                        ) {
-                            let n_id = self.next_id();
-                            self.exprs
-                                .insert(n_id, MirExpr::IntLit(*n as i64));
-                            self.type_map.insert(n_id, Type::I64);
-                            args2[2] = n_id;
+                        let len = *n as i64;
+                        let fixed_start = match args.get(0) {
+                            Some(AstNode::Lit(v)) if *v < 0 => Some(len + *v),
+                            _ => None,
+                        };
+                        if let Some(v) = fixed_start {
+                            let s = self.next_id();
+                            self.exprs.insert(s, MirExpr::IntLit(v));
+                            self.type_map.insert(s, Type::I64);
+                            args2[1] = s;
+                        }
+                        let fixed_end = match args.get(1) {
+                            Some(AstNode::Lit(v)) if *v == i64::MIN => Some(len),
+                            Some(AstNode::Lit(v)) if *v < 0 => Some(len + *v),
+                            _ => None,
+                        };
+                        if let Some(v) = fixed_end {
+                            let s = self.next_id();
+                            self.exprs.insert(s, MirExpr::IntLit(v));
+                            self.type_map.insert(s, Type::I64);
+                            args2[2] = s;
                         }
                     }
                     self.stmts.push(MirStmt::Call {
