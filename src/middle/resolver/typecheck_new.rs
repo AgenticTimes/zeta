@@ -131,8 +131,7 @@ impl NewTypeCheck for Resolver {
             // generic-name path as `Named("Str")` — a fake class — so the CALLER
             // typed the result i64: `println!("{}", first(s))` printed the `char*`
             // instead of the string, and a `Str` param lost every str dispatch.
-            "Str" => return Type::Str,
-            "String" => return Type::Named("String".to_string(), Vec::new()),
+            "Str" | "String" => return Type::Str,
             "i8" => return Type::I8,
             "i16" => return Type::I16,
             "u8" => return Type::U8,
@@ -381,8 +380,7 @@ impl NewTypeCheck for Resolver {
             "i64" => Type::I64,
             "i32" => Type::I32,
             "bool" => Type::Bool,
-            "str" => Type::Str,
-            "String" => Type::Named("String".to_string(), Vec::new()),
+            "str" | "String" => Type::Str,
             "i8" => Type::I8,
             "i16" => Type::I16,
             "u8" => Type::U8,

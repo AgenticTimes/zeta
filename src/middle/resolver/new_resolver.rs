@@ -445,7 +445,7 @@ impl InferContext {
             "u32" => Ok(Type::U32),
             "u64" => Ok(Type::U64),
             "usize" => Ok(Type::Usize),
-            "String" => Ok(Type::Named("String".to_string(), Vec::new())),
+            "String" => Ok(Type::Str),
             _ => {
                 // Check if it's a single uppercase letter (type variable)
                 if s.len() == 1 && s.chars().next().unwrap().is_ascii_uppercase() {
