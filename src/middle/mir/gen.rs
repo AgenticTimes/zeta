@@ -14303,6 +14303,28 @@ call, no NULL-handle dereference).",
                             return self.lower_to_string(arg_ids[0]);
                         }
                     }
+                    // 批次 794（#266）：Rust 风格 `word.push(ch)` 在 Str 接收者上。
+                    // 重绑定约定抄 vec push（上方 DynamicArray 臂）：
+                    // host_str_push_str 是纯函数（返回新句柄），而语句形
+                    // `word.push(c)` 会丢弃返回值——不写回槽位 word 永远为空
+                    // （selfhost.z 分词器的 word 累积即此形，改前链接失败无在跑依赖）。
+                    if method == "push" && arg_ids.len() == 2 {
+                        self.stmts.push(MirStmt::Call {
+                            func: "host_str_push_str".to_string(),
+                            args: arg_ids.clone(),
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::Str);
+                        if let Some(recv_ast) = receiver
+                            && let AstNode::Var(name) = &**recv_ast
+                            && let Some(&slot) = self.name_to_id.get(name)
+                        {
+                            self.stmts.push(MirStmt::Assign { lhs: slot, rhs: id });
+                        }
+                        return id;
+                    }
                     let mut m = str_method_symbol(method.as_str());
                     // Batch 588: the start-offset forms — `s.find(sub, start)`
                     // maps to the 3-argument shim when a third argument is
@@ -14312,6 +14334,12 @@ call, no NULL-handle dereference).",
                         if let Some(f3) = str_method_symbol3(method.as_str()) {
                             m = Some(f3);
                         }
+                    }
+                    // 批次 794（#266）：Rust `ch.is_digit(10)` 的 radix 形——改前落
+                    // 裸别名 is_digit（一参，radix 被忽略）且返回值定型 I64，
+                    // 打印 1 而非 True（/tmp/b782/push4.z 实拍）。
+                    if method == "is_digit" && arg_ids.len() == 2 {
+                        m = Some(("host_str_is_digit", 2, "bool"));
                     }
                     // Batch 588: `rsplit(sep)` without maxsplit equals
                     // `split(sep)` in CPython.
@@ -18817,6 +18845,15 @@ fn str_method_symbol(method: &str) -> Option<(&'static str, usize, &'static str)
         "ljust" => Some(("host_str_ljust", 3, "str")),
         "rjust" => Some(("host_str_rjust", 3, "str")),
         "isalpha" => Some(("host_str_isalpha", 1, "bool")),
+        // 批次 794（#266）：Rust 拼写的判定族成员。selfhost.z 在 `input[i]`
+        // （str_get 结果，静态类型 Str）上调 `.is_alphabetic()/.is_alphanumeric()`，
+        // 表里没有这两行时走通用派发发裸 `is_alphabetic_1`，-o 链接失败；
+        // is_alphanumeric 虽有 C 裸别名兜链接，返回值定型 I64、打印不出 True。
+        "is_alphabetic" => Some(("host_str_isalpha", 1, "bool")),
+        "is_alphanumeric" => Some(("host_str_isalnum", 1, "bool")),
+        // 批次 794（#266）：`word.as_str()` 恒等（串即句柄，与 clone 同理）——
+        // 没有这行时定型 I64，print 打句柄数字（改前是链接失败）。
+        "as_str" => Some(("host_str_clone", 1, "str")),
         "isdigit" => Some(("host_str_isdigit", 1, "bool")),
         "isupper" => Some(("host_str_isupper", 1, "bool")),
         "islower" => Some(("host_str_islower", 1, "bool")),
