@@ -1441,6 +1441,30 @@ static int zt_maybe_vec_arity1(int64_t v) { return v > 0x1000; }
 // closure is compiled to a plain function (`__closure_N`), same convention as
 // `py_functools_reduce`. Used by `fetch_stocks`'s
 // `result["stock_code"].map(lambda x: …)`.
+// Batch 794 (#214)：数值列的 map 运行期变体——列元素是文本指针
+// （__getitem__ 读边界按 vec<str> 约定 materialize），str__map 直传文本词
+// 给闭包 ⇒ 数值 lambda（x*2）打串接。本变体逐元素 strtod 成 f64、**位**
+// 传闭包（闭包形参由出码层 hint 成 F64），结果按闭包返回位收集。
+int64_t zeta_series_map_f64(int64_t vec, int64_t fn);
+int64_t zeta_series_map_f64(int64_t vec, int64_t fn) {
+    if (!vec) return vec;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    int64_t dbg = getenv("ZETA_PROBE_STAR") ? 1 : 0;
+    for (int64_t i = 0; i < n; i++) {
+        const char* s = (const char*)((int64_t*)vec)[i];
+        double d = s ? strtod(s, NULL) : 0.0;
+        int64_t bits;
+        memcpy(&bits, &d, sizeof bits);
+        int64_t r = ((int64_t(*)(int64_t))fn)(bits);
+        if (dbg) fprintf(stderr, "[M794] i=%lld in_bits=%lld out_bits=%lld\n",
+                         (long long)i, (long long)bits, (long long)r);
+        int64_t pushed = vec_push(out, r);
+        if (pushed != out) out = pushed;
+    }
+    return out;
+}
+
 int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
 int64_t zt_dyn_str_map(int64_t vec, int64_t fn) {
     if (!vec) return vec;

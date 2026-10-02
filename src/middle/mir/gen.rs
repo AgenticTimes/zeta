@@ -4680,6 +4680,50 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         val
     }
 
+    /// Batch 794 (#214)：map 闭包形参用法推断。1＝数值证据（形参直参与
+    /// 数字字面量做 `*`/`+`/`-`）、0＝未知/str。深度限 12。
+    fn closure_param_usage(node: &AstNode, param: &str, depth: i32) -> i8 {
+        if depth > 12 {
+            return 0;
+        }
+        let is_param = |n: &AstNode| matches!(n, AstNode::Var(v) if v == param);
+        match node {
+            AstNode::BinaryOp { op, left, right } => {
+                if matches!(op.as_str(), "*" | "+" | "-" | "/")
+                    && ((is_param(left)
+                        && matches!(
+                            **right,
+                            AstNode::Lit(_) | AstNode::FloatLit(_)
+                        ))
+                        || (is_param(right)
+                            && matches!(
+                                **left,
+                                AstNode::Lit(_) | AstNode::FloatLit(_)
+                            )))
+                {
+                    return 1;
+                }
+                let l = Self::closure_param_usage(left, param, depth + 1);
+                if l != 0 {
+                    return l;
+                }
+                Self::closure_param_usage(right, param, depth + 1)
+            }
+            AstNode::ExprStmt { expr } => Self::closure_param_usage(expr, param, depth + 1),
+            AstNode::Return(val) => match &**val {
+                AstNode::Tuple(items) => {
+                    let mut any = 0;
+                    for it in items {
+                        any = Self::closure_param_usage(it, param, depth + 1);
+                    }
+                    any
+                }
+                _ => Self::closure_param_usage(val, param, depth + 1),
+            },
+            _ => 0,
+        }
+    }
+
     /// Batch 761 (#80③): 未声明名读——此前静默 fabricate（REPL 里 `exit`
     /// 打 1、`fn main() -> i64 { exit }` 整个文件无声编译）。行为保持（槽值
     /// 照旧），只把沉默变成点名告警；每名每编译一次。
@@ -12024,7 +12068,21 @@ call, no NULL-handle dereference).",
                                         | Some(Type::Array(e, _)) => (*e).clone(),
                                         _ => Type::I64,
                                     };
-                                    self.pending_closure_param_types = Some(vec![elem]);
+                                    // Batch 794 (#214)：闭包形参按**用法**推断——
+                                    // 数值证据（形参 ×/＋ 数字字面量）⇒ F64（文本列
+                                    // 的数值 map 由 zeta_series_map_f64 逐元素
+                                    // strtod 喂闭包）；否则接收者元素（旧行为）。
+                                    let mut final_hint = elem;
+                                    if let AstNode::Closure { params, body, .. } = a {
+                                        let p0 = params.iter().find(|p| p.as_str() == "x").cloned();
+                                        if let Some(p0) = p0 {
+                                            if Self::closure_param_usage(body, &p0, 0) == 1 {
+                                                final_hint = Type::F64;
+                                            }
+                                        }
+                                    }
+                                    self.pending_closure_param_types =
+                                        Some(vec![final_hint]);
                                 }
                             }
                         }
@@ -12570,8 +12628,23 @@ call, no NULL-handle dereference).",
                             .unwrap_or(elem.clone()),
                         _ => elem.clone(),
                     };
+                    let numeric_map = match args.first() {
+                        Some(AstNode::Closure { params, body, .. }) => {
+                            let p0 = params.iter().find(|p| p.as_str() == "x").cloned();
+                            p0.map_or(false, |p0| {
+                                Self::closure_param_usage(body, &p0, 0) == 1
+                            })
+                        }
+                        _ => false,
+                    };
+                    let res_elem = if numeric_map { Type::F64 } else { res_elem };
                     self.stmts.push(MirStmt::Call {
-                        func: "[dynamic]str__map".to_string(),
+                        func: (if numeric_map {
+                            "zeta_series_map_f64"
+                        } else {
+                            "[dynamic]str__map"
+                        })
+                        .to_string(),
                         args: arg_ids.clone(),
                         dest: id,
                         type_args: vec![],

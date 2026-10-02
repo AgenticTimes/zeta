@@ -193,10 +193,10 @@ C 运行时里按名字查的那一格（`zeta_env_get`/`zeta_env_set`，runtime
 当成一条活引用、把历史号打回漂移。八条写点从批次 387 起一律走 `env_store`，四条原先
 硬写 `Type::I64` 的读点一律走 `env_slot_ty`。
 **批次 391 把"八条按语句种类内联镜像"收敛成一个 Assign 后置遍**：`mirror_module_global_writes`
-（gen.rs:648）→ `splice_env_mirrors`（:667）→ `env_mirror(name, lhs)`（:679），调用点在 :1778 与 :18606。
+（gen.rs:648）→ `splice_env_mirrors`（:667）→ `env_mirror(name, lhs)`（:679），调用点在 :1778 与 :18621。
 上面那五个内联点号随之不再存在；本批（542）实测的现号：`global_ty_of` gen.rs:515、
-`env_store` 定义 gen.rs:553（其余内联调用点 5 处 = gen.rs:1945、:2518、:2601、:2704、:17383，
-实参一律是"刚写过的那个槽" `rhs_id`，其中 gen.rs:17383 传 `cur_id`）、`env_slot_ty` gen.rs:620。
+`env_store` 定义 gen.rs:553（其余内联调用点 5 处 = gen.rs:1945、:2518、:2601、:2704、:17398，
+实参一律是"刚写过的那个槽" `rhs_id`，其中 gen.rs:17398 传 `cur_id`）、`env_slot_ty` gen.rs:620。
 **三条路径镜像的都是"刚写过的那个槽"，不是原来那条表达式**（后置遍对 `=` 与 `+=` 同一条规则：
 `env_mirror` 拿的是 `Assign` 的 `lhs`，见 gen.rs:643-647 的注释原文 "The mirror reads the SLOT it
 follows, never the `rhs` id"）。理由实测：折叠出的加法表达式里就带着这个槽
@@ -387,7 +387,7 @@ vec 头地址，让 C 侧"自己判断哪边是列"就会重演 454 的 `t488` �
 ### 3.4 间接调用与 Python 式形参折叠
 
 **C8 闭包 V1 不捕获环境**：合成具名函数 `__closure_N` 直调，无环境结构体
-（gen.rs:12954-12964 注释、:17951-17956 "The closure value is then the function address
+（gen.rs:12954-12964 注释、:17966-17971 "The closure value is then the function address
 (i64)"）。
 
 **C9 `zeta_call<argc>(fptr, a…)` 逐 arity 一个跳板（0..4）**：`zeta_call1` 声明
