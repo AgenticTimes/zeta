@@ -25973,3 +25973,45 @@ NoneVar 家族余格；③NoneValue 值的算术/比较面按 0 语义（CPython
 成立；本线提交 d508b9a0 文件面勘验纯净（gen.rs +66 全带本批标记，无车道吸收）。
 期间锚点 17400↔17404 回摆的成因即车道提交落树位移，两轮 rebind 终态 rc=0 稳定。
 下一批从 **805** 起。
+
+## 批次 805（代码 6aaf944e）：#45 落点一根修——`-> String` 返回值传播两环
+
+**症状**：404 在册第十一成员落点一"impl 方法返回 Str 交给打印占位符打句柄
+（`[impl=4374191776]`）"。本批探针实拍范围更大：`/tmp/b798/probe805b.z` 显示
+**普通函数** `-> String` 也打句柄（b=堆地址）而 `-> str` 正常（a=ok）；
+`/tmp/b798/probe805c.z` 显示 impl 方法**连 `-> str` 都打句柄**（m_str=堆地址）。
+
+**根因两环**：
+1. resolver 型表三处把 Rust 拼法 `String` 解成 `Named("String")` 假类
+   （typecheck_new.rs:135/:385、new_resolver.rs:448），打印分派
+   gen.rs:10258 `py_fmt_*` 只认 `Type::Str` ⇒ 调用点退化整数打印器。
+   typecheck_new 在册 `Str` 臂注释自证同款缺陷（当年 `Str` 也落假类，已修）。
+2. gen.rs:16355 Rust 形结构字面量 `S { n: 1 }` 的定型是占位拼写
+   `Named("Struct")`（原注释"For now, assume struct type is a generic type"＋
+   TODO）。MIR 实拍 `variant: "S"` 正确而 `type_map: Named("Struct")`；
+   ZETA_PROBE_GLOBALS 实拍 `candidate walk tn=Struct method=greet fret=false`
+   ⇒ func_ret_types 的 "S::greet" 键查不到、按 603 在册退化 I64 打句柄。
+   grep 实拍 src 内 Named("Struct") 拼写零消费者（后端仅 3 处 test 自用）。
+
+**修法**：①三处臂折进 `Type::Str`（`"Str" | "String"`、`"str" | "String"`、
+`Ok(Type::Str)`）；②字面量定型改用 variant 名。
+
+**验证**：钉 `t805_str_return_propagation.z` 五格——改前隔离 worktree /tmp/pre805
+（HEAD=bbbbbdbe，二进制 b614b645）harness 面 FAIL：impl/plain/direct/m_str 四句柄、
+field=7 正对照改前改后同形；改后 aef1be96 PASS。回归专项 #45 家族与字面量形态
+十例全绿（t439_named_field_variant_tag/t561/t418/t440/t417/t562/t566/t563/
+t567/t410），selfhost jit `Result: 0`、ZT-WARN 0 不变。
+
+**门禁**：sample_gate 805 rc=0——差分窗口 5 285/285=100.0% bad_case=0；
+python_style 窗口 5 49/0/1/0（known-fail=t572 在册；t805 未被窗口轮转抽中，
+单步 run_one 补跑 PASS）；official 17/17 无 link chronic；corpus 全跑 40/40。
+锚点 rc=2：漂移 43 全在 gen.rs＝车道在制（fromkeys 已落 d508b9a0＋warn_unbound
+新在制 +57 行）与本批 gen.rs 位移混在面，不 --rebind（防把车道未落树行号焊进
+文档），随车道收口批统一重绑（795/803/804 先例）。
+
+**勘案（坑 109 五度＋撞号双立）**：本批 gen.rs 环 hunk 在暂存前被车道 d508b9a0
+（fromkeys #113）整包收编——`git show HEAD:gen.rs` 在场可验（:16354 "Batch 805"
+注释）；本笔暂存面＝resolver 两文件＋t805 钉。车道 c179a716 声明"下一批从 805
+起"为意向非落树，805 写台账时点枚举空闲、本批落树成立、号不回改。804 同号双立
+（本线 e4666317/bbbbbdbe＋车道 d508b9a0/fcdf1284）以哈希为身份，双方台账均已
+勘案。读数树含车道 gen.rs warn_unbound 在制（795 先例，车道自理）。
