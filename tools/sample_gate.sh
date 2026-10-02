@@ -36,10 +36,19 @@ python3 "$ROOT/tools/diff_test.py" --sample "10:$W" > "$WORK/diff.log" 2>&1
 rc_diff=$?
 judged=$(grep -oE 'judged=[0-9]+' "$WORK/diff.log" | tail -1 | cut -d= -f2)
 match=$(grep -oE 'match=[0-9]+' "$WORK/diff.log" | tail -1 | cut -d= -f2)
+bad=$(grep -oE 'bad_case=[0-9]+' "$WORK/diff.log" | tail -1 | cut -d= -f2)
+dif=$(( ${judged:-0} - ${match:-0} ))
+# 红/绿只看读数，不看 diff_test 的 rc（批次 10007 改口径，两处都是实测）：
+# `--sample` 模式下 `tools/diff_test.py:307` 只会因"参考侧跑不出真值的坏用例"置 rc=2，
+# 真正的分歧要走到基线比对才置 rc=1，而 :317 的 `return rc` 在抽样分支提前退出够不到它
+# ⇒ rc 对分奇毫无区分力：坏用例 rc=2（旧口径误判红），有分歧 rc=0（旧口径误判绿）。
+# 坏用例不计红＝主树批次 756 已裁定的口径，本树此前未跟。
 if [ "${judged:-0}" -eq 0 ]; then
-  echo "① 差分: 分母为 0＝读数作废（抽样一条也没跑到）"; rc_total=1
-elif [ "$rc_diff" -ne 0 ]; then
-  echo "① 差分: 红 rc=$rc_diff match=${match:-?}/${judged}"; rc_total=1
+  echo "① 差分: 分母为 0＝读数作废（抽样一条也没跑到，rc=$rc_diff）"; rc_total=1
+elif [ "$dif" -gt 0 ]; then
+  echo "① 差分: 红 ${match:-0}/${judged} 不一致 ${dif} 条（rc=$rc_diff）"; rc_total=1
+elif [ "${bad:-0}" -gt 0 ]; then
+  echo "① 差分: ${match}/${judged} 一致；另 ${bad} 条坏用例（参考侧跑不出真值，不计红，rc=$rc_diff）"
 else
   echo "① 差分: ${match}/${judged} 一致 rc=0"
 fi
