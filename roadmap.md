@@ -25505,3 +25505,80 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 代码改动优先：本批主体是真实代码修复（gen.rs 47 行），测试夹具摘钉随批附带
 - 门禁读数入册：official 194/194·191/194、python_style 422/3/5/0 逐项记录
 - 存量红源未动：t231/t233/t404 与基线逐字相同
+
+
+## 批次 10001 —— 未标注 `def` 返回浮点时调用点目的槽丢浮点型（代码 3ee403fc）
+
+**号位**：cleanup 车道按 2026-10-02 裁定用 10000 以上序列，本批为该车首笔；对应的 bootstrap 侧工作是
+批次 813（代码 `6cd4193a`，记录 `53d3e67b`）的余项 814。bootstrap 历史未改写，813 的改动以补丁内容
+并入本笔（`git apply -3`，未做 cherry-pick）。
+
+**症状**：
+
+    def r1(v):
+        return round(v, 1)
+    print(r1(2.567))
+
+在 cleanup 树件上打成 `4613037098315599053`（把 double 的位当整数寄存器读），期望 `2.6`；同形但返回
+整数的 `def plus(a,b): return a+b` 不受影响。
+
+**根因（两层，第二层是 813 自己引入的）**：
+
+1. 返回类型有两张表，没人对齐。被调方的 LLVM 签名取自身 MIR 的 `signature_ret_ty()`
+   （`src/middle/mir/mir.rs:61`，只被 `src/backend/codegen/codegen.rs:1524` 的 `infer_fn_return_type` 消费）；
+   调用点目的槽取 resolver 的声明表 `func_ret_types`（`src/middle/mir/gen.rs:15346` 读，缺失即
+   `unwrap_or(Type::I64)`）。未标注的 `def` 在声明表里留空白（普通 def＝`Type::Tuple(vec![])`，
+   class 方法脱糖＝`Type::I64`），于是签名是 double、落槽按 i64 重打（`codegen.rs:8158`
+   `note_return_slot_mismatch` 只报诊断，docs/ABI.md §2 R7）。
+2. 补 1) 时预热取错集合：`src/lib.rs:129-138` 的降型循环按 `registered_funcs`（HashMap，逐次顺序不同）取项，
+   而 `prime_body_ret` 原先按 `registered_func_defs` 取——那是另一份 AST 拷贝，同一 def 在那份上的
+   `signature_ret_ty()` 读回 I64。结果同一个函数名有两个版本体，谁被预热取决于 HashMap 顺序，
+   把确定性错值改成了逐次翻牌（改前实拍：bootstrap 侧 6 跑 3 种值）。
+
+**修法**：`lower_to_mir` 降完一个 `FuncDef` 后把 body 的 `F32`/`F64` 记进 `body_ret_tys`
+（`resolver.rs` 新增字段）；对声明表里的空白位按该表回填，只填单元（普通 def 的空调）与 `I64`
+（方法脱糖默认），显式写了 `-> i64` 的分歧不动、表里没有的名字不新增；回填前先对缺失名就地预热，
+预热改为先读 `registered_funcs`（与降型循环同源），读不到再回落 `registered_func_defs`。
+
+**钉子**：`tests/python_style/t10001_round_float_return.z`（`round`/`plus` 两形状，2 个 expect）。
+不含 `xs.mean()` 一族——那条依赖 bootstrap 批次 810 的 mean 折叠根修（`a5a5b3b8`），本树没有，
+所以没有照搬 bootstrap 的 `t813_unannotated_float_return.z`（打了也测不到目标臂）。
+
+**改前/改后读数**（件都放在本树 `target/release`，同目录对照）：
+
+| 侧 | 件 md5 | 六次直接编译输出 |
+|---|---|---|
+| 改前（`git show HEAD:src/middle/resolver/resolver.rs` 重建） | `0d5e59121b2861590f71028f00e90cef` | `4613037098315599053,5` ×6（确定性红） |
+| 改后（本批代码） | `4fbf0e55e521ed89bff840ba3d73c81d` | `2.6,5` ×6；重编后 md5 复现同值 |
+
+**门禁**（本树没有 `tools/sample_gate.sh`，按 bootstrap 同名口径手跑，窗口＝10001 % 10 ＝ 1）：
+
+| 步 | 读数 |
+|---|---|
+| 差分 10% 抽样 `tools/diff_test.py --sample 10:1` | 2718 → 272 条，match=272 judged=272 rate=100.0% bad_case=0，rc=0 |
+| python_style 10% 轮转（45 例，`run_one.sh` 逐个跑，判定读 `verdict` 文件） | 两趟各 45/45 PASS、0 FAIL、0 known-fail；两趟判定逐字节相同（`cmp -s`） |
+| official 10% 轮转（`tests/unit-tests/*.z` 按名 cksum 取 1/10，口径照抄 bootstrap `sample_gate.sh:48-72`） | 18/18 编译通过，0 链接缺绑定，rc=0 |
+| corpus 全跑 `tools/corpus_baseline.py` | 40 文件解析通过 38/40，失败：`_drv_accept_409.py`、`jq_wufu_local.py` |
+| `tools/check_abi_anchors.py` | rc=2：漂移 216／消失 5／新 0（基线 306 条）；未 `--rebind` |
+| 双写核对 `tools/check_runtime_doublewrite.py` | 本树不存在该脚本，此步无读数 |
+
+**门禁口径要如实记的两点**：
+
+- `tools/corpus_baseline.py` 在本树既不与基线比对也不设退出码（全文无 baseline／exit 逻辑，rc 恒 0），
+  所以 38/40 只是读数不是判据；改前对照没取——上次为取这条 A/B 换过树件，那条命令跑了 27 分钟没跑完
+  被我掐掉，掐的时候连还原步骤一起死了。本批不重复这个动作，未归因入 #215。
+- 锚点 216 条漂移里只有 4 条在 `src/middle/resolver/resolver.rs`（:645、:659、:2109、:4217），
+  本批在该文件字段区与 `lower_to_mir` 内插行，这些行号搬家是预期的；其余 212 条落在本批未碰的
+  `runtime/py_additions.c`、`src/backend/codegen/codegen.rs`、`src/middle/mir/gen.rs` 等文件，
+  属本树 `docs/ABI.md` 自身陈旧（本树落后 bootstrap 144 个提交）。**本批没有扩大漂移面**：本树
+  backlog 尾部"批次 739 待合入面（锚点重绑义务）"一行记的读数与本趟逐字相同（漂移 216／新 0／消失 5），
+  即开工前就已是这个数；resolver 那 4 条仍需 rebind 记账（本批插行使它们搬家到别的行）。
+
+**残留**（登 backlog #215）：① corpus 两个解析失败未取改前对照；② resolver.rs 4 条锚点搬家未 rebind；
+③ 本树缺 `sample_gate.sh` 与双写核对器，每批门禁要手跑。bootstrap 侧 #271 的主项（`round` 形状逐次翻）
+在本树已随本批修完，bootstrap 侧仍挂着（那一侧的工作由主线 agent 继续）。
+
+**纪律自查**：主体是真实代码改动（`resolver.rs` +109/-1，加一枚新钉），记录随批且不先行；
+车道在制面（`src/error_codes.rs`、`src/frontend/parser/expr.rs`、`src/frontend/parser/top_level.rs`、
+`worktree.md`、`t562`/`t563`）零触碰、未暂存；`worktree.md` 因带该在制面而未随批（本笔只落 roadmap/backlog）；
+不 push。

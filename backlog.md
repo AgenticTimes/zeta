@@ -737,3 +737,20 @@
 - 批次 739 复述（#262 由主线批次 738 闭，本车道当场复测）：`/tmp/b661/kw_*.py` 十名在 cleanup 终态二进制（md5 `b2b9daf2…`）逐名复跑＝`mut let pub mod use trait struct enum dyn box` **全部 dropped=0**（`/tmp/b662/kw262.sh`）⇒ 摘除已在合入面上生效、本车道读数与主线一致
 - 批次 739 登记（#264／门禁面）：快门禁 knob 步 23 条断言里 **FAIL 15**，改前二进制 `64b0af81…` 与改后 `b2b9daf2…` 的输出**逐字节相同**（`/tmp/b662/knob.{pre,post}.txt` 各 1433 字节、md5 `beac89cb…`）⇒ 非本批引入；`gate739.log:67` 印「A 段 rc=1（B 段未跑）」，A 段为何停、15 条各自落点仍未逐条归因（本车道历史上只把它当存量，没有过归因记录）
 - 批次 739 待合入面（锚点重绑义务）：`tools/check_abi_anchors.py` 报漂移 216／新 0／消失 5（`/tmp/b662/anchors739.txt`），其中 **2 条由本批搬家**＝`src/frontend/parser/top_level.rs:347-368`、`:938-951`（引用点 `docs/ABI.md:421`、`:857`）。cleanup 车道对 `docs/ABI.md` 与 `tools/baselines/**` 只读 ⇒ 本批不重绑，**合入那批须把这 2 条一起收**；其余 214 条本批改前已漂，与本批无关
+
+- 批次 10001 已闭（bootstrap 侧 #268② 与 #271 主项在本树落地，代码 `3ee403fc`）：未标注 `def` 返回浮点时
+  调用点目的槽仍读声明表空调＝i64，而被调方 LLVM 签名读自己 MIR 的 `signature_ret_ty()`＝double，两边没人
+  对齐 ⇒ 落槽按位重打。改法＝`lower_to_mir` 把已降完函数的 body 型（只 F32/F64）回灌进 `func_ret_types`
+  的空白位，声明了 `-> i64` 的分歧不动、表里没有的名字不新增；预热（`prime_body_ret`）改为先读
+  `registered_funcs`（与 `src/lib.rs:129-138` 的降型循环同源），读不到再回落 `registered_func_defs`——
+  不同源那版会让同一个 def 有两份体，结果随 HashMap 顺序逐次翻（813 在 bootstrap 侧实测 6 跑 3 种值）。
+  新钉 `tests/python_style/t10001_round_float_return.z`：改前件 `0d5e5912…` 六次 `4613037098315599053,5`，
+  改后件 `4fbf0e55…` 六次 `2.6,5`。本钉不含 `xs.mean()` 一族（依赖 bootstrap 批次 810 的 mean 折叠根修，本树未含）。
+- 批次 10001 登记（#265／门禁与锚点义务，本树工具面）：① corpus 全跑 38/40（`_drv_accept_409.py`、
+  `jq_wufu_local.py`）未取改前对照 ⇒ 未归因；`tools/corpus_baseline.py` 无基线比对且 rc 恒 0，该步只作读数
+  不作判据（改前 A/B 需换树件，上一次这条命令跑了 27 分钟没跑完，掐掉时连还原步骤一起死）。
+  ② `resolver.rs` 4 条锚点（:645、:659、:2109、:4217）因本批插行搬家，未 `--rebind`；本树整体读数
+  漂移 216／新 0／消失 5 与批次 739 记录的逐字相同 ⇒ 本批未扩大漂移面，但那 216 条仍是待重绑义务。
+  ③ 本树缺 `tools/sample_gate.sh` 与 `tools/check_runtime_doublewrite.py`，每批必跑的检查要手跑
+  （差分 `--sample 10:1`＝272/272 rc=0；python_style 10% 轮转 45 例两趟 45/45 且判定逐字节相同；
+  official 10% 轮转 18/18；双写核对本批无读数）。
