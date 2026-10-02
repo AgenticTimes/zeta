@@ -25618,3 +25618,46 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 车道 WIP 归还：795/796 期间我 `git checkout` 摘下的 gen.rs 车道面（closure_param_usage 区）已从 /tmp/b796/gen.merged.rs 备份恢复工作副本；车道随后在 111c95ed 自行提交（gen.rs +77）。
 - 位移 A/B 未跑：改动为按定型归一化的增臂（Named("Vec") 此前无臂即无既有行为可挤占），全量门禁同批绿。
 - 余项：selfhost RUN 新两格（host_str_concat 文本读、`_map` 绑定）；下批必须真修。scratch：/tmp/b796/
+
+## 批次 797（代码 f1b14418；实修臂 gen.rs +35 随车道 c587400b 落树——坑 109 第四次）
+
+**格**：#266 余项——selfhost RUN 挡格 `PY-A: `_map` is NOT implemented` 抛停（rc=134）。
+
+**根因**：枚举变体载荷绑定槽与通用调用 dest（`into_iter_1` 等）在 type_map 默认定型 I64；
+BATCH-296 列臂只认 `Some(DynamicArray(_))` ⇒ selfhost:141
+`asts.into_iter().map(|a| SimpleEval::eval(a)).sum()` 漏臂，调用落幽灵名 `map_2` ⇒
+codegen 剥 arity 后缀（`format!("{}_{}", func, arg_ids.len())` 的读侧）链到 `_map` weak
+桩 ⇒ 调用即 abort。改前 probe_map.z 实拍：compile/link rc=0、run rc=134。
+
+**修法**：gen.rs 增臂——`method == "map"`、两实参、首实参为 Closure、接收者无型或 I64 ⇒
+绑运行期 `_[dynamic]str__map`（逐元素按位传闭包、按位收结果，元素型无关），dest 定型
+DynamicArray(闭包记录返回型或 I64)。与车道 c587400b 重写的 BATCH-296 数值分派臂串联
+正确：列臂仍要求 DynamicArray，无型接收者才进 797 臂。
+
+**读数（合流树二进制 876df45f，教训 1 先 touch 再强制重编）**：
+- probe_map run 134→0（值残差另格，见下）。
+- selfhost（examples/selfhost.z）AOT 链接 rc=0、Undefined=0、run rc=0、`_map` 抛零行；
+  stdout 0 行＝文本化残差（车道 #214 账面"文本列恒等 map 显示 10 而非 10.0"同弧）。
+- jit 直跑（无 -o）rc=0 `Result: 0`、零 E4016；selfhost_compile 59/59。
+- python_style 全量 461/0/2/0 rc=0（known-fail＝t572＋t574；t34/t35 已由车道 c587400b
+  int/double ABI 错配根修转 PASS——此前纯面 459/2/2/0 两红即该缺陷，非 797 臂引入，
+  隔离树改前二进制 daef0085 pre==post 实证过）。
+- sample_gate 797（窗口 7）rc=0：差分 284/284 bad_case=0、py 抽样 43/0、official 27/27
+  零 chronic、corpus 40/40。
+
+**污染勘案**：首组全量读数取自混面二进制 5a286ce5（我的暂存臂＋车道未提交 WIP 同树），
+整组作废；纯面（2d38341c）与合流面（876df45f）分别重测后才入账。
+
+**残差登记（新格）**：`map(|a| double_it(a))` 经 `_[dynamic]str__map` 通道值恒 0——
+闭包体内对全局函数的调用在降格时丢体（`ParamInit; zeta_env_get; Return IntLit(0)`，
+MIR 实拍），与调用语义无关，另格追；t574 known-fail 钉住（expect 12、actual 0）。
+
+**锚点**：两步收口——隔离树对纯面 rebind（61 自动搬家＋手绑 4296→4320、3221→3245、
+4430→4454×3、gen.rs:14826→14947、15121→15530＋bless-only/prune-gone）；车道 c587400b
+又位移 C 面 +24 ⇒ 合流树 rebind 21 条全自动配对＋手绑 4320→4344、3245→3269、
+4454→4478 ⇒ 终态 rc=0"锚点全部对上"（基线 307 条；待归属 98 条/88 种常设）。
+N3 段两处区间引用修正：14815-14817→14931-14933、14818-14828→14934-14944。
+
+**接口教训复犯**：run_one/probe 的 NotFound 两例都是自己拼错路径——夹具实名
+t573_vec_param_subscript（不是 vec_typed_param）、selfhost 入口在 examples/ 不在
+zeta_src/；NotFound 第一看文件在不在，别先疑运行时。
