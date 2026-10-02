@@ -25797,3 +25797,38 @@ python_style 全量 **462/0/1/0**；差分**全套** 2845/2845＝**100.0%** 无�
 193 行 2 LINK-FAIL 存量在册；锚点 1 条搬家（`resolver.rs:4719→4727`）`--rebind` 全自动
 配对（1 行内容逐字全文件唯一命中）复验 rc=0。位移 A/B 按 798 前例豁免（增 disjunct，
 非 dict 返回程序的 MIR 零变化，全套差分即行为面）。
+
+## 批次 802（代码 a189a4f1）：selfhost RUN 挡格 host_str_concat bad arg 根修
+
+**症状**（796 在册那颗的变形）：selfhost AOT/jit run rc=0 但 stdout 仅 `Result: 0`，
+stderr 三条 `ZT-WARN host_str_concat bad arg a=<堆指针>[] b=0x8[?]`，帧 #1 =
+build_ast+0xb8/+0xcc/+0x128（796 时的 rc=134 崩停已被批 292 降级臂转成静默丢文本）。
+
+**根因**（IR/MIR 双实拍，非推断）：`fn build_ast` 三处
+`if let Token::Ident(n) = tokens[i].clone()` 的载荷绑定走 gen.rs `deref_slot`
+（:4453，臂绑定 :15360 调用）——地址下成 `BinaryOp(+, 句柄, IntLit(8))` + `Deref`，
+而 codegen.rs 的 PY-A 字符串臂（:7086）按操作数 `Type::Str` 路由 `+` 到
+`host_str_concat`。scrutinee 类型为 Str 是因为 `ts[i].clone()` 是带 String 载荷的
+boxed-enum 句柄。于是**指针偏移被发成字符串拼接**（改前 IR 五处
+`%strop = call i64 @host_str_concat(i64 %x, i64 8)`），运行期 C 侧把不可读的 b=0x8
+降级为 `""`，Deref 读回空串块首字 ⇒ `n` 恒非文本、`name` 恒空。对照：t431 族
+夹具的 scrutinee 是裸 i64 句柄（类型 I64）不命中，所以此前全绿。
+
+**最小复现**：t802b（单层 match Ident 臂）、t802c（Fn 臂内嵌套 if let，selfhost 同形）、
+t802f（双命中＋值比较，即入库钉）——改前二进制（HEAD 隔离 worktree 重建 7e633feb）
+AOT 全部 rc=139＋ZT-WARN；主树改前 ec0cff42 jit 同红。隔离 worktree 缺未跟踪
+运行期生成物致 jit 少 9 条绑定（坑 71 复现），红形改由 AOT 面取证。
+
+**修法**：字符串臂对 `op == "+"` 且另一侧是字面 `IntLit` 的组合不放行拼接、
+落回整数加法臂（即批 292 之前的原生指针算术）。依据：CPython `str + int` 是
+TypeError，py 方言里不存在合法的 Str×IntLit 拼接；`==`/`!=` 面不动（tag 比对
+的 deref 结果槽本就是 I64）。
+
+**读数**：三夹具改后 jit/AOT 双面绿（t802f hits=3）；selfhost 双面 ZT-WARN 清零、
+run rc=0（stdout `Result: 0` 为 stub 账面，期望链值归 #266 后续格）；
+sample_gate 802 rc=0（差分 285/285=100.0%、python_style 抽样 42/0/0/0、
+official 13/13、corpus 40/40）；锚点 25 条 --rebind 收口＋车道 resolver 两条
+误绑回退（复验漂移恰此二条，按 801 先例车道自理）。
+
+**余项**：selfhost `Result:` 值链（build_ast 的 Lit/Plus 臂与 eval 汇总）仍未到期望
+形——与本批根修解耦，#266 账面继续跟。
