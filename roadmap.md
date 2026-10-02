@@ -25592,3 +25592,14 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 代码面：build.rs 注释按实测更正（4 行），alias 发射逐字恢复原样＝功能零改动；改前后二进制符号面 keep 名单均 0 缺失（2e083f8d→9aa25920 树仅并行位移，非本批）。
 - 读数（二进制 9aa25920）：sample_gate 窗口 0 rc=0（差分复跑两遍 285/285，首跑 283/285 撞并行重编；python_style 抽样 43/0；official 14/14 零 chronic；corpus 40/40）；全套 python_style 458/0/0/0；jit_sweep ok=641 trap=4 fail=1 xabort=7 timeout=2 segv=0（total 655）。
 - backlog 764 新开①核销；②余量族维持 772「九枚在册、无受损证据、不摘」。
+
+## 批次 795（原 784→794 撞号让位；代码 6f0cfcaa，gen.rs 面在 af4abe95 内）：#266 selfhost -o 四接线＋is_digit(radix) 收口
+
+- 落地（gen.rs，+37 行，随 af4abe95 记录批被一并提交，内容=我的暂存面逐字节一致）：Str 接收者 `push` 臂（host_str_push_str 纯函数返回新句柄后写回变量槽——重绑约定抄 vec push 臂 gen.rs DynamicArray 那族）；`is_digit` 二参臂（radix 形走 host_str_is_digit，返回值定型 bool）；表行 `is_alphabetic`/`is_alphanumeric`/`as_str`（此前 Str 接收者落通用派发发裸名 `*_1`，-o 链接缺符）。
+- 落地（runtime/tokio_runtime_stub.c，6f0cfcaa）：裸别名 is_alphabetic/push/as_str/into_iter（批 363/365 同族约定）＋ host_str_is_digit 按位值判定（radix 2..36，多字符串判 0——已登记角落）；`parse` 别名 `__attribute__((weak))` 化解 duplicate _parse（selfhost 自身 parse 强符号优先；此前该程序根本链不上，纯改善）。
+- 根 tokio_runtime.o/zeta_runtime_c.o 在 af4abe95+本批 stub 的隔离 worktree 重生成后拷回主树（nm 实拍 weak external _parse、五别名 T；车道未提交的 py_additions.c WIP 不入册不嵌入——隔离树用 HEAD 版源码）。
+- 读数（二进制 8fb2a7e8；工作树含车道 py_additions.c WIP，门禁为该树态实拍）：python_style 全量 460/0/1/0 rc=0；sample_gate 794 窗口 4 rc=0（差分 285/285、python_style 抽样 55/55、official 26/26、corpus 40/40）；jit_sweep GREEN ok=643 trap=3 fail=3 xabort=7 timeout=2 segv=0（total 658）；jit 定点 t570 五行 True/False 全对、t571 ab1c9/xy、t572 如实抛。换干净 .o 后复测 selfhost -o rc=0、Undefined=0、t570/t571 PASS。
+- 新钉：t570（Rust 拼写判定族）、t571（push 累积+as_str）、t572（known-fail：动态接收者 into_iter 抛 code=1，改前后同形——修路在 DYN_RUNTIME_BINDINGS 白格，非本批面）。
+- 锚点：主树直接 --rebind 会把车道未提交 py_additions WIP 的位置钉进文档（撤）。改在隔离树 af4abe95+stub 重绑：漂移 20→0；拒改 1 条 gen.rs:14809（format! 行，+37 搬家到 14837，同文多命中属设计性拒改）手绑→--bless-only→--prune-gone ⇒ rc=0「锚点全部对上」。worktree 首跑报 aliases.inc.c 消失 2 条＝坑 71 复现（该文件未跟踪，隔离树缺）——拷入后重跑清零。
+- 余项登记：① selfhost RUN 面 map_get called on non-dict ⇒ raise code=1（--jit/AOT 同形，改前后不变）——四接线后挡 selfhost 全链的下一格；② t572 动态 into_iter；③ 归因更正：#266 登记时的错值路径 codegen.rs:3002 str_isnumeric 回退不是活路径，实为 1 参裸别名＋I64 定型。
+- 号位两次被撞：原 784→（782-793 车道占用）→794→（af4abe95 records 先入册且连带提交我的 gen.rs 暂存面）→795。代码注释「批次 794」串保留不回改，勘案见 worktree.md 795 行。
