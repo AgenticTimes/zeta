@@ -834,3 +834,18 @@
   在 10005 之后仍未落地，且已明确**不**用"拆包处把基座强改成句柄型"这种窄改动顶上——
   那只会把编译期崩溃换成运行期错值。开批时的第一个待裁定项仍是：
   按模块限定名分键（解析与返回型表两侧同时改）还是歧义时明确报错。
+
+
+- 批次 10005 之后的实测加注（`#273①`，零代码；副本已删，不算落地）：bootstrap 的
+  `tools/check_runtime_doublewrite.py`（348 行）拷进本树直接跑 ⇒ rc=1、`[MISSING]` 52 条，
+  但**首跑读数不可信，两条已证伪**：`zeta_map_update` 在 `runtime/py_additions.c:4105`
+  就有定义（`int64_t zeta_map_update(int64_t m, int64_t other)`），`zeta_dyn_truth` 在
+  `runtime/py_additions.c:4660` 有定义（`:1639` 先有前置声明、`:1647` 有调用），
+  而工具把这两颗都报成"满足链全空"。成因是满足面模型按 bootstrap 地形写死：本树
+  `runtime/*.c` 的 `no_mangle` 命中 0 颗，运行期导出形态是裸的 `int64_t py_*`／`int64_t zeta_*`
+  定义（见 `runtime/py_additions.c:22`、`:28`、`:413`），bootstrap 那条"src/ 的 338 颗 `#[no_mangle]`
+  ＋ `str_*`→`host_*` 重映射"的臂在本树整个空转，另两臂（`all_externs`、codegen `add_function`，
+  本树 265 处）能否对上也要重编模型后才能判。
+  所以本树要做这一格，必须按本树地形重跑五类满足链（不是移植脚本就完事），
+  也不能先 `--bless` 把 52 条里的假阳性固化成基线。副本已删除：
+  `tools/check_runtime_doublewrite.py` 不在树内，工作树回到 `65e6310a` 的状态。
