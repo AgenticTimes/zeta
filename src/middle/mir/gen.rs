@@ -12072,12 +12072,18 @@ call, no NULL-handle dereference).",
                                     // 数值证据（形参 ×/＋ 数字字面量）⇒ F64（文本列
                                     // 的数值 map 由 zeta_series_map_f64 逐元素
                                     // strtod 喂闭包）；否则接收者元素（旧行为）。
+                                    // 批 795 两点收紧：取**首个形参**（任何名字，
+                                    // 原先只认字面 "x"，lambda y 直接漏判）；数值
+                                    // 升级只限 method=="map"（comprehension 走
+                                    // zeta_collect_vec_n 的整数调用规约，绝不能
+                                    // 给成 double 签名——t34 实拍 x*2 恒等化和）。
                                     let mut final_hint = elem;
-                                    if let AstNode::Closure { params, body, .. } = a {
-                                        let p0 = params.iter().find(|p| p.as_str() == "x").cloned();
-                                        if let Some(p0) = p0 {
-                                            if Self::closure_param_usage(body, &p0, 0) == 1 {
-                                                final_hint = Type::F64;
+                                    if method == "map" {
+                                        if let AstNode::Closure { params, body, .. } = a {
+                                            if let Some(p0) = params.first().cloned() {
+                                                if Self::closure_param_usage(body, &p0, 0) == 1 {
+                                                    final_hint = Type::F64;
+                                                }
                                             }
                                         }
                                     }
@@ -12628,23 +12634,65 @@ call, no NULL-handle dereference).",
                             .unwrap_or(elem.clone()),
                         _ => elem.clone(),
                     };
+                    // 批 795：数值判定与 hint 侧同判据——**首个形参**按用法
+                    // （任何名字，原先只认字面 "x"，lambda y 漏判掉进 str__map
+                    // 再撞 int/double ABI 错配）；接收者元素已是 F64 时即使
+                    // 用法判不出也走 f64 变体（恒等/透传闭包仍是 double 签名）。
+                    // 元素是文本 → strtod 变体；已是 f64 位 → 位型变体
+                    // （map_f64 的输出与 zeta_vec_push_f64 的列都是位型，
+                    // strtod 会把位整当指针解引用）。
                     let numeric_map = match args.first() {
-                        Some(AstNode::Closure { params, body, .. }) => {
-                            let p0 = params.iter().find(|p| p.as_str() == "x").cloned();
-                            p0.map_or(false, |p0| {
-                                Self::closure_param_usage(body, &p0, 0) == 1
-                            })
-                        }
+                        Some(AstNode::Closure { params, body, .. }) => params
+                            .first()
+                            .map_or(false, |p0| Self::closure_param_usage(body, p0, 0) == 1),
                         _ => false,
                     };
-                    let res_elem = if numeric_map { Type::F64 } else { res_elem };
+                    let f64_map = numeric_map || matches!(elem, Type::F64);
+                    let res_elem = if f64_map { Type::F64 } else { res_elem };
                     self.stmts.push(MirStmt::Call {
-                        func: (if numeric_map {
+                        func: (if !f64_map {
+                            "[dynamic]str__map"
+                        } else if matches!(elem, Type::Str) {
                             "zeta_series_map_f64"
                         } else {
-                            "[dynamic]str__map"
+                            "zeta_series_map_f64_bits"
                         })
                         .to_string(),
+                        args: arg_ids.clone(),
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map
+                        .insert(id, Type::DynamicArray(Box::new(res_elem)));
+                    return id;
+                }
+                // 批次 797（selfhost RUN 挡格）：`.map(closure)` 于**无型条目面**的
+                // 接收者——枚举变体载荷绑定槽与通用调用 dest（如 `into_iter_1`）
+                // 默认定型 I64，selfhost:141 的 `asts.into_iter().map(|a|
+                // SimpleEval::eval(a)).sum()` 正是该形：上面 BATCH-296 列臂只认
+                // Some(DynamicArray(_)) ⇒ 漏臂落幽灵名 `map_2` ⇒ codegen 剥 arity
+                // 后缀链到 `_map` weak 桩 ⇒ 调用即 abort rc=134（改前 probe_map.z
+                // 实拍：compile/link rc=0、run 134、PY-A `_map`）。运行期 helper
+                // `_[dynamic]str__map` 逐元素按位传闭包、按位收结果
+                // （py_additions.c:1469，元素型无关），vec 句柄运行时正落在形参位。
+                if method == "map"
+                    && arg_ids.len() == 2
+                    && matches!(args.first(), Some(AstNode::Closure { .. }))
+                    && receiver_ty
+                        .as_ref()
+                        .map_or(true, |t| matches!(t, Type::I64))
+                {
+                    let res_elem = match self.exprs.get(&arg_ids[1]) {
+                        Some(MirExpr::FuncAddr(n)) => self
+                            .closure_ret_tys
+                            .get(n)
+                            .cloned()
+                            .unwrap_or(Type::I64),
+                        _ => Type::I64,
+                    };
+                    self.stmts.push(MirStmt::Call {
+                        func: "[dynamic]str__map".to_string(),
                         args: arg_ids.clone(),
                         dest: id,
                         type_args: vec![],

@@ -1445,20 +1445,44 @@ static int zt_maybe_vec_arity1(int64_t v) { return v > 0x1000; }
 // （__getitem__ 读边界按 vec<str> 约定 materialize），str__map 直传文本词
 // 给闭包 ⇒ 数值 lambda（x*2）打串接。本变体逐元素 strtod 成 f64、**位**
 // 传闭包（闭包形参由出码层 hint 成 F64），结果按闭包返回位收集。
+// 数值 map 的回调是 hint 过的闭包：MIR 侧 pending_closure_param_types 强制
+// 形参 F64，codegen 产出 `double(double)` 签名（参数/返回都走 XMM）。
+// 必须按浮点 ABI 调用——按 int64(*)(int64) 调会把入参放 RDI、从 RDI 收返回，
+// callee 读 XMM0 的残留值、调用方读回未被动过的 RDI，λ 体等于整个被丢
+// （批 795 实拍：x*3 / x+1 都原样返回入参，out_bits==in_bits）。
 int64_t zeta_series_map_f64(int64_t vec, int64_t fn);
 int64_t zeta_series_map_f64(int64_t vec, int64_t fn) {
     if (!vec) return vec;
     int64_t n = zt_vec_len(vec);
     int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
-    int64_t dbg = getenv("ZETA_PROBE_STAR") ? 1 : 0;
+    double (*fdf)(double) = (double (*)(double))fn;
     for (int64_t i = 0; i < n; i++) {
         const char* s = (const char*)((int64_t*)vec)[i];
         double d = s ? strtod(s, NULL) : 0.0;
-        int64_t bits;
-        memcpy(&bits, &d, sizeof bits);
-        int64_t r = ((int64_t(*)(int64_t))fn)(bits);
-        if (dbg) fprintf(stderr, "[M794] i=%lld in_bits=%lld out_bits=%lld\n",
-                         (long long)i, (long long)bits, (long long)r);
+        double r2 = fdf(d);
+        int64_t r;
+        memcpy(&r, &r2, sizeof r);
+        int64_t pushed = vec_push(out, r);
+        if (pushed != out) out = pushed;
+    }
+    return out;
+}
+
+// 位型变体：接收者元素已是 f64 位（上一跳 zeta_series_map_f64 的输出、
+// zeta_vec_push_f64 构造的列）。文本变体的 strtod 会把位整当指针解引用。
+int64_t zeta_series_map_f64_bits(int64_t vec, int64_t fn);
+int64_t zeta_series_map_f64_bits(int64_t vec, int64_t fn) {
+    if (!vec) return vec;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    double (*fdf)(double) = (double (*)(double))fn;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t raw = ((int64_t*)vec)[i];
+        double d;
+        memcpy(&d, &raw, sizeof d);
+        double r2 = fdf(d);
+        int64_t r;
+        memcpy(&r, &r2, sizeof r);
         int64_t pushed = vec_push(out, r);
         if (pushed != out) out = pushed;
     }
