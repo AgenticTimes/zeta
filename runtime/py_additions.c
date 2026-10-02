@@ -2672,7 +2672,19 @@ int64_t py_repr_str(int64_t s) {
 
 // set(xs) — V1: a deduplicated Vec (no add/remove, membership via the list
 // path). Order follows first appearance.
-int64_t py_builtin_set(int64_t vec) {
+//
+// Batch 809 (#267①): the old dedup compared the SLOT WORD, but a `vec<str>`
+// slot holds a pointer — `set(["a","a","b"])` kept all three because the two
+// "a" literals are two allocations. Measured damage: the real strategy corpus
+// spells `list(set(pool))` / `list(set(target_list))` over ticker-string lists at
+// 20+ sites, and every one of them silently kept its duplicates instead of
+// deduping — a wrong value, not a raise. `elem_is_str` now selects content
+// comparison, the same rule `py_list_contains` (:2229) uses for membership, so
+// the constructor and `in` cannot disagree about two elements being equal.
+// The exact-word test is kept FIRST and covers 0/NULL: routing this through
+// `py_list_contains` instead would drop them (its `v == x && v != 0` guard),
+// which would be a new silent wrong value for int sets.
+int64_t py_builtin_set(int64_t vec, int64_t elem_is_str) {
     int64_t n = zt_vec_len(vec);
     int64_t cap = n ? n : 1;
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
@@ -2682,7 +2694,13 @@ int64_t py_builtin_set(int64_t vec) {
         int64_t v = ((int64_t*)vec)[i];
         int dup = 0;
         for (int64_t j = 0; j < base[1]; j++) {
-            if (base[2 + j] == v) { dup = 1; break; }
+            int64_t w = base[2 + j];
+            if (w == v) { dup = 1; break; }
+            if (v && w && ((elem_is_str && zt_str_content_eq(v, w))
+                           || (!elem_is_str && zt_c_readable(v) && zt_c_readable(w)
+                               && strcmp((const char*)v, (const char*)w) == 0))) {
+                dup = 1; break;
+            }
         }
         if (!dup) base[2 + base[1]++] = v;
     }

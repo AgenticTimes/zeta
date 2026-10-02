@@ -10121,9 +10121,19 @@ call, no NULL-handle dereference).",
                             (z, Type::I64)
                         }
                     };
+                    // Batch 809 (#267①): the constructor deduped by slot WORD,
+                    // but a `vec<str>` slot holds a pointer, so `set(["a","a","b"])`
+                    // kept three elements — every `list(set(pool))` over ticker
+                    // strings in the real corpus silently kept its duplicates.
+                    // The flag tells the runtime to compare text by CONTENT, the
+                    // same rule `py_list_contains` uses for membership.
+                    let elem_is_str = matches!(elem, Type::Str);
+                    let flag = self.next_id();
+                    self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
+                    self.type_map.insert(flag, Type::I64);
                     self.stmts.push(MirStmt::Call {
                         func: "py_builtin_set".to_string(),
-                        args: vec![a],
+                        args: vec![a, flag],
                         dest: id,
                         type_args: vec![],
                     });
