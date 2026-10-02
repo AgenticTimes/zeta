@@ -25582,3 +25582,62 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 车道在制面（`src/error_codes.rs`、`src/frontend/parser/expr.rs`、`src/frontend/parser/top_level.rs`、
 `worktree.md`、`t562`/`t563`）零触碰、未暂存；`worktree.md` 因带该在制面而未随批（本笔只落 roadmap/backlog）；
 不 push。
+
+
+## 批次 10002 —— `xs.mean()` 的向量折叠臂（代码 8742f2f7，移植 bootstrap 批次 810）
+
+**症状**：`xs = [1.0, 2.0, 3.0]; print(xs.mean())` 打成 `4368388048` 这类堆句柄字（每次跑值不同），
+`statistics.mean([1.0, 2.0])` 打 `10`；编译 rc=0、运行 rc=0、零警告＝静默错值。
+
+**根因**：`src/middle/mir/gen.rs` 的 opaque 兜底把 pandas 链式成员列成一张"原样回传"的身份表
+（`("mean", _) => zeta_identity`）。对返回同形对象的成员（fillna/astype/shift/groupby/transform/
+rank/sort_values/rolling/to_period/set_index）这是对的，mean 是其中唯一返回**标量**的成员，
+于是接收者的向量句柄被当数用。本树运行期里根本没有折叠函数：改前 `zeta_runtime_c.o`（`07379f7d`）
+`nm` 中 `zeta_mean_vec` 0 颗。
+
+**修法**（三处，按本树地形改写，不是原样搬）：
+
+| 处 | 内容 | 与本树地形的关系 |
+|---|---|---|
+| `runtime/py_additions.c` | 新增 `double zeta_mean_vec(int64_t vec, int64_t elem_is_i64)`；整数向量按值读、其余按 f64 位读；空向量与不可识别句柄给 NaN | 插在 `zeta_dyn_len`（原 4573 行）前；bootstrap 插在 `zeta_vec_div_scalar` 后，本树没有那条函数，故插入点不同 |
+| `src/middle/mir/gen.rs` | 在 opaque 兜底表之前接走该形（接收者存在＋一参＋静态型是 PyDynamic/I64/DynamicArray/Array/未知） | 本树无 `emit_call_into`，改按本树的 `MirStmt::Call` 发射并回写 `type_map = Type::F64`；并显式要求 `receiver.is_some()`，裸名 `mean(x)` 不接（避免抢别的臂） |
+| `src/backend/codegen/codegen.rs` | `Codegen::new` 预声明 `f64(i64, i64)` 的 prototype | 命不中按名查找就会按 `i64(i64×N)` 现推签名，把 `v0` 里的 double 当整数返回值读（照 `py_round_n` 先例） |
+
+`Type::Named` 的接收者一律放行——`pylib/pandas.z` 的 GroupBy.mean 库方法表继续走兜底臂，
+把它折成数值是新造的静默错值。
+
+**运行期对象**：`zeta_runtime_c.o` 随批 `tools/build_runtime.sh` 重编（新 `2df1f1ec…`）；
+`tokio_runtime.o` 逐字节未变（`5dd998dd…`），车道的运行期面零触碰。
+
+**证据**：新钉 `tests/python_style/t10002_mean_fold.z`（bootstrap `t810_mean_fold.z` 文本原样，7 个 expect）。
+
+| 侧 | 件 md5 | 三跑判定 |
+|---|---|---|
+| 改前（＝批次 10001 落地件） | `4fbf0e55e521ed89bff840ba3d73c81d` | FAIL ×3，actual 七行全句柄字（`4368388048`／`4368396144`／`4368400368`／`8736776096.0`／`4368388049.0`／`4368388000`／`4368396048`） |
+| 改后 | `731fb3ecdab25d4ddaec0db96886b267` | PASS ×3 |
+
+件都放在本树 `target/release` 同目录对照（改前件临时名 `zetac_pre10002`，读完即删）。
+
+**门禁**（窗口＝10002 % 10 ＝ 2）：差分 `--sample 10:2` = 272/272 相符；python_style 10% 轮转 45 例
+45/45 PASS；official 10% 轮转 13/13 编译通过；本批两钉（t10001、t10002）单跑 PASS。
+锚点 `check_abi_anchors.py` rc=2：漂移 219／新 0／消失 2（上一批读数为 216／0／5），
+增出的 3 条来自本批在 `codegen.rs`、`gen.rs`、`py_additions.c` 的插行搬家，未 `--rebind`（仍记 #265②）。
+corpus 未重跑：该指标只看 parse 阶段是否走完，本批改的是运行期折叠与 IR 发射。
+
+**#265① 由此归因闭环**：语料两个失败文件（`jq_wufu_local.py`、`_drv_accept_409.py` 走同一条链）
+的真实成因不是批次 10001，而是 `src/backend/codegen/codegen.rs:4178` 的
+`array_get`／`stack_array_get` 快捷臂 panic
+（`Found FloatValue(...) but expected the IntValue`，接收者 IR 是 `%32 = load double, ptr %9`）——
+改前件与改后件同一站点、rc 同为 101，两侧输出只差线程号与堆地址。触发形状定位到
+`jq_wufu_local.py:213` 的 `strat = cerebro.run()[0]`（对未标注返回型的调用结果再取下标）。
+八种最小形状均未打到该臂（dict 取列表下标、切片、函数返回列表下标、变量索引、类属性、嵌套列表、
+句柄复用、`statistics.mean`），真形状待从语料 IR 反查。
+
+**残留**（登 #266）：① `codegen.rs:4178` 快捷臂的 FloatValue 接收者 panic，挡着 corpus 2/40；
+② mean 两形仍不接——负起点切片 `xs[-2:]` 的 `len` 本身是 5（依赖 bootstrap 批次 811／812 的切片根修，
+本树未含），以及本批已顺带修好的用户函数返回 f64 那形（10001 已接走，bootstrap t810 头注记的
+"另格"在本树不再是缺口）。
+
+**纪律自查**：主体是真实代码改动（C 28 行 + gen.rs 40 行 + codegen.rs 11 行 + 重编 .o + 新钉 45 行）；
+车道在制面（`src/error_codes.rs`、`frontend/parser/*`、`worktree.md`、t562/t563）未入本笔；
+`worktree.md` 因带该在制面连续两批未随批，待补行文本记在 10001 记录笔的提交信息里；不 push。

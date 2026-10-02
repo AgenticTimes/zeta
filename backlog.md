@@ -754,3 +754,22 @@
   ③ 本树缺 `tools/sample_gate.sh` 与 `tools/check_runtime_doublewrite.py`，每批必跑的检查要手跑
   （差分 `--sample 10:1`＝272/272 rc=0；python_style 10% 轮转 45 例两趟 45/45 且判定逐字节相同；
   official 10% 轮转 18/18；双写核对本批无读数）。
+
+- 批次 10002 已闭（#265① 归因，代码 `8742f2f7`）：语料两个失败文件（`jq_wufu_local.py`、
+  `_drv_accept_409.py` 走同一条链）与批次 10001／10002 无关，真实成因是
+  `src/backend/codegen/codegen.rs:4178` 的 `array_get`／`stack_array_get` 快捷臂 panic
+  （`Found FloatValue(...) but expected the IntValue`，接收者 IR `%32 = load double, ptr %9`）；
+  改前件 `4fbf0e55` 与 10002 改后件 `731fb3ec` 同一站点、rc 同为 101，两侧输出只差线程号与堆地址。
+  触发形状定位到 `jq_wufu_local.py:213` 的 `strat = cerebro.run()[0]`。八种最小形状均未打到该臂，
+  真形状待从语料 IR 反查（转 #266①）。同批把 mean 折叠臂在本树接上（移植 bootstrap 批次 810，
+  按本树地形改写：C 侧新增 `zeta_mean_vec`、gen.rs 折叠臂按本树 `MirStmt::Call` 发射且要求接收者存在、
+  codegen.rs 预声明 f64 prototype、`zeta_runtime_c.o` 随批重编 `2df1f1ec`，`tokio_runtime.o` 未变）。
+  新钉 `tests/python_style/t10002_mean_fold.z`：改前三跑 FAIL 且七行全打句柄字，改后三跑 PASS。
+  门禁（窗口 2）：差分 272/272、python_style 10% 轮转 45/45、official 10% 轮转 13/13。
+- 批次 10002 登记（#266／未修的两格）：① `codegen.rs:4178` 的 `array_get`／`stack_array_get` 快捷臂
+  对 FloatValue 接收者直接 `into_int_value()` panic，挡着 corpus 2/40（`jq_wufu_local.py` 一条链）。
+  该臂本身是硬转，不能就地改成"容忍浮点"——要先弄清 `cerebro.run()` 为什么被降成标量 double
+  （未标注返回型 + 取下标的地形，与本树 10001 那张声明表相邻）；归因未做。
+  ② mean 仍不接负起点切片那形：`xs[-2:]` 的 `len` 本身读成 5（正确是 2），折叠只是把这个既存错值
+  显形；根修在 bootstrap 批次 811／812（切片起点归一化＋终点夹尾），本树未含，需另批移植。
+  （bootstrap t810 头注里"用户函数返回 f64 打成位模式"那形在本树不再是缺口，已由 10001 接走。）
