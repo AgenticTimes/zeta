@@ -12911,6 +12911,46 @@ call, no NULL-handle dereference).",
                     self.type_map.insert(id, vty);
                     return id;
                 }
+                // 批次 10002（移植 bootstrap 批次 810）：`mean` 此前只被下面 opaque 兜底的
+                // pandas 链式臂接走（`("mean", _) => zeta_identity`），而它是那条列表里唯一
+                // 返回标量的成员，向量句柄因此被当数用（改前本树实拍：
+                // `statistics.mean([1.0, 2.0])` 打 10）。这里只接静态类型是向量／PyDynamic／
+                // 未知标量的接收者；`Type::Named` 一律放行——pylib/pandas.z 的 GroupBy.mean
+                // 库方法表靠兜底臂继续生效，把它折成数值是新造的静默错值。
+                // 与 bootstrap 版两处差异：本树没有 `emit_call_into`，按本树的 MirStmt::Call
+                // 发射；并显式要求 receiver 存在（裸名 mean(x) 不接，避免抢别的臂）。
+                if method == "mean"
+                    && receiver.is_some()
+                    && arg_ids.len() == 1
+                    && matches!(
+                        receiver_ty.as_ref(),
+                        Some(Type::PyDynamic)
+                            | Some(Type::I64)
+                            | Some(Type::DynamicArray(_))
+                            | Some(Type::Array(_, _))
+                            | None
+                    )
+                {
+                    let elem_is_i64 = match receiver_ty.as_ref() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
+                            matches!(**e, Type::I64)
+                        }
+                        _ => false,
+                    };
+                    let flag = self.next_id();
+                    self.exprs.insert(flag, MirExpr::IntLit(elem_is_i64 as i64));
+                    self.type_map.insert(flag, Type::I64);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_mean_vec".to_string(),
+                        args: vec![arg_ids[0], flag],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::F64);
+                    return id;
+                }
+
                 let opaque_fallback: Option<(&str, &str)> = if receiver.is_some()
                     && !struct_has_method
                     && receiver_ty.as_ref().map_or(true, |t| {

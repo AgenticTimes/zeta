@@ -4570,6 +4570,34 @@ static int64_t* zt_dyn_vec_hdr(int64_t h) {
     return hdr;
 }
 
+// 批次 10002（移植 bootstrap 批次 810，commit a5a5b3b8）：`xs.mean()` 此前由 gen.rs 的
+// opaque 兜底臂接走——那条 pandas 链式列表（fillna/astype/shift/…/mean）用 `zeta_identity`
+// 把接收者原样回传，对返回同形对象的成员是对的，但 mean 返回**标量**，于是句柄被当成数用
+// （改前本树实拍：statistics.mean([1.0, 2.0]) 打 10）。
+// 元素读法照 zeta_vec_div_scalar 的口径：整数向量按值读、f64 向量按位读；静态类型
+// 未知的接收者由调用侧固定传 0（按位），因为语料的实际用法是
+// `df["close"][-n:].mean()` 这类价格序列，按整数读会把 2.0 读成 4611686018427387904。
+// 空向量与不可识别句柄给 NaN 而不是 0：pandas 空 Series.mean() 就是 NaN，而 0 是一
+// 个看起来完全合理的错值。
+double zeta_mean_vec(int64_t vec, int64_t elem_is_i64) {
+    int64_t* hdr = zt_dyn_vec_hdr(vec);
+    if (!hdr) return (double)NAN;
+    int64_t len = hdr[1];
+    if (len <= 0) return (double)NAN;
+    double acc = 0.0;
+    for (int64_t i = 0; i < len; i++) {
+        int64_t w = hdr[2 + i];
+        double e;
+        if (elem_is_i64) {
+            e = (double)w;
+        } else {
+            memcpy(&e, &w, sizeof e);
+        }
+        acc += e;
+    }
+    return acc / (double)len;
+}
+
 int64_t zeta_dyn_len(int64_t h) {
     if (!h) return 0;
     if (zt_dyn_is_map(h)) return zeta_map_len(h);
