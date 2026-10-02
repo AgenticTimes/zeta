@@ -806,3 +806,20 @@
   真要修得先给 pandas 侧的 Series 一个运行期种类标记（句柄自带"我是向量／我是 Series"），
   否则编译期无从判断该折叠还是放行。编译面已实拍（本批语料 38/40，这三条文件恢复解析通过）；
   运行期把句柄当数用的读数本批未取（那是 10002 之前的既有形态，不是本批新增损害）。
+
+- 批次 10004 之后补的归因（不是新批，零代码；只把 #266① 的成因换成实测结论）：
+  `codegen.rs:4189` 那条 `array_get`／`stack_array_get` 快捷臂打到的真正地形已定位。
+  语料侧（`jq.mir` 全量 dump 后按"id 的类型是 F64 且被当 array_get 基座"筛，1191 个 MIR 块命中 6 处，
+  集中在 `jq_wufu__premium_blocks_entry` 的 id 11 与 `jq_wufu__premium_risk_sell` 的 id 39）：
+  源码是 `jq_wufu.py:674` 的 `premium, _, _ = get_premium_rate(code, prev_date)`——**元组拆包**。
+  两条同名定义：`jq_wufu.py:632 def get_premium_rate(code, date)` 返回三值元组（与调用点 2 个实参相符）；
+  `backend/strategy/wufu_trading.py:18 def get_premium_rate(code, as_of_idx, close_panel, nav_panel, …)`
+  标注 `-> float | None` 返回单个浮点。MIR 里被调符号是后者
+  （`backend_strategy_wufu_trading__get_premium_rate`），实参却只有 2 颗 ⇒
+  **同名函数跨模块绑错**（解析层），叠加返回型表 `func_ret_types` 以裸名为键（gen.rs:250，
+  resolver.rs:5138 由 `get_all_func_signatures()` 直接 `map` 进 HashMap ⇒ 同名后写覆盖先写），
+  于是元组句柄被标成 F64，拆包基座落到浮点槽 ⇒ 快捷臂 `into_int_value()` ICE。
+  10001 的 body 回填不是本条成因（这里的 F64 来自源码显式标注，不来自回填）。
+  因此"就地容忍浮点"与"歧义时删表项"都只是把编译期 ICE 换成运行期错值，不作修复。
+  真修要先定方向：按模块限定名分键（解析与表两侧同时改，影响面大），还是让同名跨模块绑定在歧义时明确报错。
+  下一批从这两个方向的选择开始；本条只登记证据。
