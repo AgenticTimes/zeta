@@ -1,0 +1,70 @@
+// 批次 804：`match` 顶层图案写 char 字面量（`'('`）时，比较的必须是**内容**，
+// 不许拿字符串句柄的堆地址去比码点整数。
+//
+// 病因（实拍）：本引擎 char 值面是 1 字串句柄（`s[i]` 走 str_get 返回句柄），
+// 但 `parse_simple_pattern` 的 alt 里 `parse_char_lit` 抢在 `parse_string_lit`
+// 之前，把顶层 char 图案解成**码点** `Lit`；gen.rs 的 `Lit` 图案臂降成
+// `Call("==", [Var, IntLit])`（`i64(i64,i64)` 地址/整数比较）⇒ 句柄 ≠ 码点，
+// 恒不匹配。selfhost `fn tokenize` 的符号臂 `match ch { '(' => … }` 因此全部
+// 静默丢 token（ntok=5，忠实数 11）。对照：`"(" == s[0]` 走 StringLit→
+// host_str_eq 内容比较，一直是通的。
+//
+// 修法：pattern.rs `parse_simple_pattern` 的 alt 删 `parse_char_lit` 一行 ⇒
+// 顶层 char 图案落 `parse_string_lit` → StringLit → host_str_eq 轨。
+// `parse_range_pattern` 的端点（`'a'..='z'`）仍直调 `parse_char_lit`，码点
+// 语义不动。
+//
+// 期望（改后实拍）：
+// expect: b1=1
+// expect: b2=2
+// expect: b3=0
+// expect: c1=1
+// expect: c2=2
+// expect: c3=0
+// expect: o1=1
+// expect: o2=0
+
+#[derive(Clone)]
+enum Tok {
+    Sym,
+}
+
+fn classify_infer(c: char) -> i64 {
+    match c {
+        '(' => 1,
+        ')' => 2,
+        _ => 0,
+    }
+}
+
+fn classify_callsite(s: Str) -> i64 {
+    match s[0] {
+        '(' => 1,
+        ')' => 2,
+        _ => 0,
+    }
+}
+
+fn classify_or(c: char) -> i64 {
+    match c {
+        '+' | '-' => 1,
+        _ => 0,
+    }
+}
+
+fn main() -> i64 {
+    let s = "(";
+    let t = ")";
+    let u = "a";
+    let p = "+";
+    let m = "*";
+    println!("b1={}", classify_infer(s[0]));
+    println!("b2={}", classify_infer(t[0]));
+    println!("b3={}", classify_infer(u[0]));
+    println!("c1={}", classify_callsite(s));
+    println!("c2={}", classify_callsite(t));
+    println!("c3={}", classify_callsite(u));
+    println!("o1={}", classify_or(p[0]));
+    println!("o2={}", classify_or(m[0]));
+    return 0;
+}

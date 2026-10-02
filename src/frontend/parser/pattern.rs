@@ -321,6 +321,18 @@ fn parse_or_pattern(input: &str) -> IResult<&str, AstNode> {
 }
 
 /// Parse a simple pattern (without | operator) for use in or-patterns
+///
+/// Batch 804: `parse_char_lit` is deliberately NOT in this alt. It yields a
+/// codepoint `Lit`, and gen.rs's literal arm lowers that to the external
+/// `i64(i64,i64)` `==` — but a char value in this engine is a **1-char string
+/// handle** (string indexing and `'x'` expression literals both produce one;
+/// `input[i].is_alphanumeric()` dispatches on the str table). So a top-level
+/// `'('` arm compared a heap handle against 40 and never matched (measured:
+/// selfhost tokenize emitted 0 tokens for every symbol branch, ntok=5 vs the
+/// faithful 11). Falling through to `parse_string_lit` gives the same shape as
+/// the working `"a"` pattern: a `StringLit`, lowered to the backend's
+/// `host_str_eq` content-compare route. Range endpoints (`'a'..='z'`) still
+/// call `parse_char_lit` directly and keep their codepoint semantics.
 fn parse_simple_pattern(input: &str) -> IResult<&str, AstNode> {
     alt((
         tag("_").map(|_| AstNode::Ignore),
@@ -329,7 +341,6 @@ fn parse_simple_pattern(input: &str) -> IResult<&str, AstNode> {
         parse_struct_pattern,
         parse_range_pattern,
         parse_lit,
-        parse_char_lit,
         parse_string_lit,
         parse_ident.map(AstNode::Var),
     ))
