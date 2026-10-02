@@ -25603,3 +25603,18 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 锚点：主树直接 --rebind 会把车道未提交 py_additions WIP 的位置钉进文档（撤）。改在隔离树 af4abe95+stub 重绑：漂移 20→0；拒改 1 条 gen.rs:14809（format! 行，+37 搬家到 14837，同文多命中属设计性拒改）手绑→--bless-only→--prune-gone ⇒ rc=0「锚点全部对上」。worktree 首跑报 aliases.inc.c 消失 2 条＝坑 71 复现（该文件未跟踪，隔离树缺）——拷入后重跑清零。
 - 余项登记：① selfhost RUN 面 map_get called on non-dict ⇒ raise code=1（--jit/AOT 同形，改前后不变）——四接线后挡 selfhost 全链的下一格；② t572 动态 into_iter；③ 归因更正：#266 登记时的错值路径 codegen.rs:3002 str_isnumeric 回退不是活路径，实为 1 参裸别名＋I64 定型。
 - 号位两次被撞：原 784→（782-793 车道占用）→794→（af4abe95 records 先入册且连带提交我的 gen.rs 暂存面）→795。代码注释「批次 794」串保留不回改，勘案见 worktree.md 795 行。
+
+## 批次 796（代码面随车道提交 be40cebd/111c95ed 落树——坑 109 三次吸收，本节即勘案入册）：#266 余项① Vec<T> 下标非 dict 抛收口
+
+- 症状：selfhost RUN 面 map_get 非 dict 抛 code=1、零输出（795 收口链接面后登记的余项①；--jit/AOT 同形、795 改前后不变）。
+- 根因（探针实证，非推测）：Rust 方言形参标注 `xs: Vec<T>` 被定型为 `Type::Named("Vec",[T])`；`src/middle/mir/gen.rs` 下标链（DynamicArray/Array/array_param/BATCH-295 I64|PyDynamic 判别）没有这个形的臂 ⇒ 整串 `xs[i]` 落 dict 兜底发 `map_str_key`+`MirStmt::DictGet` ⇒ 运行时 `map_get`（tokio_runtime_stub.c:422）首字读到堆指针、422 守卫（批次 422 立的 raise，此前是垃圾值/SEGV）触发 `zt_map_not_a_map`。探针：`Vec<Tok>` 和 `Vec<i64>` 形参皆发 DictGet——与枚举前向解析无关，W0003 typecheck 注记是另一格。
+- 修法（gen.rs +15，base_ty 读点）：`Named("Vec",targs)` 归一化为 `DynamicArray(targs[0] 或 I64)`，接既有 array_get 臂；元素型解析不出按 I64 与该链尾部约定一致。不新增派发面。
+- 新钉：`tests/python_style/t573_vec_param_subscript.z`（`fn first(xs: Vec<i64>) -> i64 { xs[0] }` 两探针）。改前二进制 8fb2a7e8 实拍 FAIL（空输出），改后 664cbab9 PASS（7/30）；jit 面同值。
+- 读数：python_style 全量 461/0/1/0 rc=0；sample_gate 796（窗口 6）rc=0——差分 bad_case=1（del_undefined_var，参考侧跑不出真值，单列不计 rc，756 裁定口径）、py 抽样 45/0、official 23/23（1 条 chronic＝integration_all_features Undefined `_predict`/`_train`，链接面既有病只登记）、corpus 40/40；jit_sweep GREEN ok=644 trap=3 fail=3 xabort=7 timeout=2 segv=0 total 659。注：读数二进制 664cbab9 的构建树含车道未提交 py_additions.c WIP，账面如实；gen.rs 面＝HEAD 祖先树（e6d87cb3+我 15 行），与提交内容逐字一致。
+- 锚点随批：HEAD（be40cebd）隔离树重绑——漂移 3 条全自动配对：gen.rs:17383→17398、17951-17956→17966-17971、18606→18621（位移皆 +15＝本批 hunk），零拒改零消失；复验 rc=0「锚点全部对上」。坑 71 预防：未跟踪 runtime/aliases.inc.c 拷入隔离树。
+- 落树勘案（号不回改）：我按纪律「先提交代码」暂存 gen.rs blob d79022b5 期间，车道 be40cebd（794b）把暂存面连同其记录吸收提交（diff 页脚 index b5c777c6..d79022b5 即我 blob）；随后我暂存的 t573+ABI.md+tsv 又被 111c95ed（794c）吸收（`git diff HEAD` 主树对我三件零残留＝内容未动）。我尝试的 796 独立提交因此无主体可放，796 号位保留给本台账；坑 109 从「中途换二进制」延伸到「暂存面被并行者提交」，第三次撞号。
+- selfhost RUN 推进一格＋新挡格登记：map_get 抛零行确认已清；现 rc=134——build_ast 段 `ZT-WARN host_str_concat bad arg b=0x8[?]`×3（枚举 vec 元素被按文本读，#214「构造边界保句柄」同弧）后 `PY-A: '_map' is NOT implemented in this build` 抛停（DYN_RUNTIME_BINDINGS 族，t572 表亲）；--jit 同形。
+- run_one.sh 接口教训：判定写入 `$wd/verdict` 文件、脚本恒退 0——`cmd && echo PASS` 是空证；单步验证必须 cat verdict（全量套件计数不受影响）。
+- 车道 WIP 归还：795/796 期间我 `git checkout` 摘下的 gen.rs 车道面（closure_param_usage 区）已从 /tmp/b796/gen.merged.rs 备份恢复工作副本；车道随后在 111c95ed 自行提交（gen.rs +77）。
+- 位移 A/B 未跑：改动为按定型归一化的增臂（Named("Vec") 此前无臂即无既有行为可挤占），全量门禁同批绿。
+- 余项：selfhost RUN 新两格（host_str_concat 文本读、`_map` 绑定）；下批必须真修。scratch：/tmp/b796/
