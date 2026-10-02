@@ -25832,3 +25832,26 @@ official 13/13、corpus 40/40）；锚点 25 条 --rebind 收口＋车道 resolv
 
 **余项**：selfhost `Result:` 值链（build_ast 的 Lit/Plus 臂与 eval 汇总）仍未到期望
 形——与本批根修解耦，#266 账面继续跟。
+
+## 批次 802（代码 d0ac5a0d）：union #117 首格根修——Str 定型臂补 !saw_map 守卫＋map 真 union 定型 PyDynamic
+
+**探针定性**：`def maybe(b, x)` 按 b 返回 `dict(x)`/`"none"`，调用点 `m["a"]` 打**空**、
+`len(m)` 打 **1**（CPython 1/2）；IR 实拍 `m["a"]` 发 `str_get`（map 句柄当 char* 读）、
+`len(m)` 发 `host_str_len`、`m.get("a")` 反而对（map_get 打 1）——m 被投毒定型 Str。
+
+**真根因（臂序）**：返回型推断的 Str 臂守卫 `saw_str && !saw_i64 && !saw_f64` **漏了
+`!saw_map`**——map∨str 真 union 恰好落进这条臂把 dict 侧投毒。630 批的票源弃权只防了
+dict 值型投票面，这条定型臂自己就是投毒源（ZETA_DBG 插桩实拍：rets 两条都收集、
+saw_map/saw_str 同亮、Str 臂先中）。
+
+**修法两件**（纯 resolver，零新增 C）：①Str 臂补 `!saw_map`；②`else if saw_map` ⇒
+定型 **PyDynamic**（弃权不等于停默认）——读边界按运行期句柄形分派：字符串键下标走
+DictGet、len 走 `zeta_dyn_len` 几何形判（767 值标签大弧既有机器）、下标非字符串键走
+`zeta_dyn_getitem`（BATCH-295/452 既有），map/str 两面都活。
+
+**验证**：双面探针 `m["a"]=1`／`len(m)=2`／`s="none"`／`len(s)=4`／`s=="none"=True`
+全对 CPython（801 探针2 的 `m["a"]` 空行形同步复活为 1）；python_style 全量
+**463/0/1/0**；差分**全套** 2845/2845＝**100.0%** 无回归；official 193 行 2 LINK-FAIL
+存量在册；锚点 1 条搬家（`resolver.rs:4727→4736`）`--rebind` 全自动配对复验 rc=0。
+残界登记：数值面 union（i64∨f64 返回）仍走旧默认（本批不动，无实害案例）；PyDynamic
+值的方法面（如 `s.upper()`）依赖注册表面，未见实害不在本批。
