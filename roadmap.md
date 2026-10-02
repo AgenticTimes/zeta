@@ -25661,3 +25661,37 @@ N3 段两处区间引用修正：14815-14817→14931-14933、14818-14828→14934
 **接口教训复犯**：run_one/probe 的 NotFound 两例都是自己拼错路径——夹具实名
 t573_vec_param_subscript（不是 vec_typed_param）、selfhost 入口在 examples/ 不在
 zeta_src/；NotFound 第一看文件在不在，别先疑运行时。
+
+## 批次 798（代码 c587400b；号位勘案——795 号位已被车道 6f0cfcaa 先占，引用以哈希为身份）：#214 数值减半残差根修——map 数值闭包 int/double ABI 错配
+
+**根因（M794 位级实拍）**：数值 map 闭包被 hint 成 F64 后 codegen 产出 `double(double)`
+签名（参数/返回走 XMM 寄存器），而 C 侧 `zeta_series_map_f64` 按 `int64(*)(int64)` 调用
+（入参放 RDI、返回读 RDI）——callee 读 XMM 残留值、调用方读回未被动过的 RDI，λ 体整个被丢：
+探针 `fn(10.0)` 打 `in_bits==out_bits==0x4024000000000000`，x*3/x+1 都原样返回入参。
+裸函数/裸闭包分离复现全对（30.0/30/11/10.0）⇒ 丢体只在 map 闭包＋hint 组合，ABI 判死。
+
+**修法四件**：
+1. C 侧改按 `double(*)(double)` 浮点 ABI 调用（根修）。
+2. `zeta_series_map_f64_bits` 位型变体：map_f64 输出与 `zeta_vec_push_f64` 构造的列元素是
+   f64 位（push 实拍推位整），文本变体的 strtod 会把位整当指针解引用；MIR 按接收者元素型选
+   strtod（Str 列）/位型（F64 列）入口。
+3. 分派判据取**首个形参**按用法（原只认字面 `"x"`，`lambda y` 漏判掉进 str__map 再撞 ABI
+   错配——xy 对照实拍）；接收者元素已是 F64 时恒等/透传闭包也走 f64 变体。
+4. hint 数值升级限域 `method=="map"`：comprehension 走 `zeta_collect_vec_n` 整数调用规约，
+   绝不能给成 double 签名（794b 无域升级把 t34 的 `x*2` 恒等化成 6——sum 1+2+3，IR 实拍
+   main 的 comprehension 闭包为 double 签名；限域后 12/3/12/12 全对）。M794 插桩摘除。
+
+**落树勘案（坑 109 第五次）**：批 795 编辑首次落盘后被并行车道 797 挡格块（gen.rs +35）的
+暂存/checkout 吸收抹去（796 记录批在册"暂存 blob d79022b5 被车道吸收"），二次重放后随
+c587400b 一并落树；车道 797 行自记"代码臂 gen.rs +35 被车道 c587400b 吸收"＝同一提交双
+车道互吸收实拍。C 侧修改幸存未重写。
+
+**读数**（二进制随 c587400b 树重建）：python_style 全量 **461/0/2/0**（t34/t35 复活，
+known-fail＝t572+t574）；差分**全套** 2845/2845＝**100.0%** 无回归（bad_case=1＝
+del_undefined_var 存量排除项）；official 193 行 2 LINK-FAIL（integration_all_features/
+quantum_basic＝存量缺运行时绑定，roadmap:25006 在册）；锚点漂移 0 rc=0"锚点全部对上"
+（307 可解析；C 面 +28 零重绑＝重绑已由车道 797 行对 c587400b 合流树收口，本批为零漂移复核）。
+探针：x*3/x+1/x*2/链式 y+0.5 全对齐 CPython（30.0/11.0/20.0/40.0/20.5）。
+
+**残差另案**：①文本列恒等 map 显示 `10` 非 `10.0`（构造文本化把 10.0 存成 "10"，浮点 repr
+格式另格）；②t574 闭包体内全局函数调用丢体（车道 797 行已登记）。
