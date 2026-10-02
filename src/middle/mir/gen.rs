@@ -6,6 +6,7 @@
 //! Clean, fast, and fully documented.
 
 mod call_set;
+mod call_len;
 mod call_str;
 use self::call_str::{path_ends_with_mem, str_method_symbol, str_method_symbol3};
 
@@ -9120,8 +9121,10 @@ call, no NULL-handle dereference).",
                                 type_args: vec![],
                             });
                         }
-                        Some(Type::Named(n, _)) if n == "map" => {
+                        Some(t) if t.is_map() => {
                             // len(dict/Counter): count the used slots.
+                            // 批次 819：路由判定收敛到 classify_len（含 dict
+                            // 拼写等价——815 规则，TDD 曾抓到本臂漏 dict）。
                             self.stmts.push(MirStmt::Call {
                                 func: "zeta_map_len".to_string(),
                                 args: vec![arg_id],
