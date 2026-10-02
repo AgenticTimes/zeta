@@ -141,33 +141,33 @@ src/backend/codegen/codegen.rs	6704-6725	best.map(|Hit(v, total)| (v, total)) })
 src/backend/codegen/codegen.rs	6889-6908	role, field, variant, field_count, field_index ); } (variant, field_count, field_index) } fn gen_expr( &mut self, expr: &MirExpr, exprs: &HashMap<u32, MirExpr>,
 src/backend/codegen/codegen.rs	6966-6971	.build_call( self.module.get_function("host_str_concat").unwrap(), &[res.into(), next.into()], "fconcat", ) .unwrap();
 src/backend/codegen/codegen.rs	7077	None => self.module.add_function("zenith_syscall", fn_type, None),
-src/backend/codegen/codegen.rs	7424	let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
-src/backend/codegen/codegen.rs	7425	let struct_base = self
-src/backend/codegen/codegen.rs	7441	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
-src/backend/codegen/codegen.rs	7463-7464	} for i in fields.len()..words {
-src/backend/codegen/codegen.rs	7622-7634	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> = (0..field_count).map(|_| self.i64_type.into()
-src/backend/codegen/codegen.rs	7623-7626	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> =
-src/backend/codegen/codegen.rs	7806	}
-src/backend/codegen/codegen.rs	7893-7894	.unwrap() .into();
-src/backend/codegen/codegen.rs	7968-8093	let ty = self.current_type_map.as_ref().and_then(|tm| tm.get(&id)); match ty { Some(Type::F32) => self.builder.build_load(self.context.f32_type(), ptr, "").unwr
-src/backend/codegen/codegen.rs	8002-8009	continue; } let param_ty = fn_type.get_param_types()[i]; let param_basic: inkwell::types::BasicTypeEnum<'ctx> = match param_ty { inkwell::types::BasicMetadataTy
-src/backend/codegen/codegen.rs	8010-8018	inkwell::types::BasicMetadataTypeEnum::StructType(t) => t.into(), inkwell::types::BasicMetadataTypeEnum::VectorType(t) => t.into(), inkwell::types::BasicMetadat
-src/backend/codegen/codegen.rs	8019-8022	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::IntType(pt)) => { let arg_ty = iv.get_type(); if arg_ty.get_bit_width() < pt.get_bit_width
-src/backend/codegen/codegen.rs	8023-8025	Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum::IntValue(iv)), }
-src/backend/codegen/codegen.rs	8027-8038	self.abi_note( &callee_name, i, &format!( "narrow i{}→i{}", arg_ty.get_bit_width(), pt.get_bit_width() ), ); match self.builder.build_int_truncate(iv, pt, "arg_
-src/backend/codegen/codegen.rs	8039	}
-src/backend/codegen/codegen.rs	8039-8042	} } else { result.push(BasicMetadataValueEnum::IntValue(iv)); }
-src/backend/codegen/codegen.rs	8048-8053	let from_slot = arg_ids .get(i) .is_some_and(|id| self.slot_read_ids.contains(id)); let built = if from_slot { self.builder .build_bit_cast(iv, ft, "arg_slot_bi
-src/backend/codegen/codegen.rs	8054-8057	.map(|v| BasicValueEnum::from(v)) } else { self.builder .build_signed_int_to_float(iv, ft, "arg_sitofp")
-src/backend/codegen/codegen.rs	8059	};
-src/backend/codegen/codegen.rs	8059-8063	}; match built { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum::IntValue(iv)), }
-src/backend/codegen/codegen.rs	8067-8088	&callee_name, i, &format!("fptosi → i{}", pt.get_bit_width()), ); match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") { Ok(v) => result.push(Basi
-src/backend/codegen/codegen.rs	8070	);
-src/backend/codegen/codegen.rs	8089-8090	BasicMetadataValueEnum::FloatValue(t.const_float(0.0)) }
-src/backend/codegen/codegen.rs	8097	other => match other {
-src/backend/codegen/codegen.rs	8111-8125	fn abi_note(&mut self, callee: &str, arg_i: usize, kind: &str) { self.abi_warn_count = self.abi_warn_count.saturating_add(1); if self.abi_warn_count <= 8 { epri
-src/backend/codegen/codegen.rs	8501	"sub" => self.builder.build_int_sub(vec_a, vec_b, "vsub").unwrap(),
-src/backend/codegen/codegen.rs	8607-8613	) .into() } Type::DynamicArray(element_type) => { let element_llvm_type = self.type_to_llvm_type(element_type); // Dynamic array is similar to slice self.contex
+src/backend/codegen/codegen.rs	7436	let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+src/backend/codegen/codegen.rs	7437	let struct_base = self
+src/backend/codegen/codegen.rs	7453	let field_val = self.gen_expr(&exprs[field_id], exprs, None);
+src/backend/codegen/codegen.rs	7475-7476	} for i in fields.len()..words {
+src/backend/codegen/codegen.rs	7634-7646	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> = (0..field_count).map(|_| self.i64_type.into()
+src/backend/codegen/codegen.rs	7635-7638	let struct_type = if let Some(ty) = self.specialized_types.get(&type_key) { *ty } else { let field_types: Vec<_> =
+src/backend/codegen/codegen.rs	7818	}
+src/backend/codegen/codegen.rs	7905-7906	.unwrap() .into();
+src/backend/codegen/codegen.rs	7980-8105	let ty = self.current_type_map.as_ref().and_then(|tm| tm.get(&id)); match ty { Some(Type::F32) => self.builder.build_load(self.context.f32_type(), ptr, "").unwr
+src/backend/codegen/codegen.rs	8014-8021	continue; } let param_ty = fn_type.get_param_types()[i]; let param_basic: inkwell::types::BasicTypeEnum<'ctx> = match param_ty { inkwell::types::BasicMetadataTy
+src/backend/codegen/codegen.rs	8022-8030	inkwell::types::BasicMetadataTypeEnum::StructType(t) => t.into(), inkwell::types::BasicMetadataTypeEnum::VectorType(t) => t.into(), inkwell::types::BasicMetadat
+src/backend/codegen/codegen.rs	8031-8034	(BasicMetadataValueEnum::IntValue(iv), inkwell::types::BasicTypeEnum::IntType(pt)) => { let arg_ty = iv.get_type(); if arg_ty.get_bit_width() < pt.get_bit_width
+src/backend/codegen/codegen.rs	8035-8037	Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum::IntValue(iv)), }
+src/backend/codegen/codegen.rs	8037	}
+src/backend/codegen/codegen.rs	8039-8050	self.abi_note( &callee_name, i, &format!( "narrow i{}→i{}", arg_ty.get_bit_width(), pt.get_bit_width() ), ); match self.builder.build_int_truncate(iv, pt, "arg_
+src/backend/codegen/codegen.rs	8051-8054	} } else { result.push(BasicMetadataValueEnum::IntValue(iv)); }
+src/backend/codegen/codegen.rs	8060-8065	let from_slot = arg_ids .get(i) .is_some_and(|id| self.slot_read_ids.contains(id)); let built = if from_slot { self.builder .build_bit_cast(iv, ft, "arg_slot_bi
+src/backend/codegen/codegen.rs	8066-8069	.map(|v| BasicValueEnum::from(v)) } else { self.builder .build_signed_int_to_float(iv, ft, "arg_sitofp")
+src/backend/codegen/codegen.rs	8071	};
+src/backend/codegen/codegen.rs	8071-8075	}; match built { Ok(v) => result.push(BasicMetadataValueEnum::from(v)), Err(_) => result.push(BasicMetadataValueEnum::IntValue(iv)), }
+src/backend/codegen/codegen.rs	8079-8100	&callee_name, i, &format!("fptosi → i{}", pt.get_bit_width()), ); match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") { Ok(v) => result.push(Basi
+src/backend/codegen/codegen.rs	8082	);
+src/backend/codegen/codegen.rs	8101-8102	BasicMetadataValueEnum::FloatValue(t.const_float(0.0)) }
+src/backend/codegen/codegen.rs	8109	other => match other {
+src/backend/codegen/codegen.rs	8123-8137	fn abi_note(&mut self, callee: &str, arg_i: usize, kind: &str) { self.abi_warn_count = self.abi_warn_count.saturating_add(1); if self.abi_warn_count <= 8 { epri
+src/backend/codegen/codegen.rs	8513	"sub" => self.builder.build_int_sub(vec_a, vec_b, "vsub").unwrap(),
+src/backend/codegen/codegen.rs	8619-8625	) .into() } Type::DynamicArray(element_type) => { let element_llvm_type = self.type_to_llvm_type(element_type); // Dynamic array is similar to slice self.contex
 src/backend/codegen/mod.rs	7	mod runtime_decls_registry;
 src/backend/codegen/mod.rs	9	mod runtime_decls_core;
 src/backend/codegen/runtime_decls_core.rs	52-53	module.add_function("zeta_env_get", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External)); module.add_function("zeta_env_set", void_type.fn_type

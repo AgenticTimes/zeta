@@ -1,0 +1,61 @@
+// 批次 802：`match`/`if let` 的 scrutinee 是 **Str 型 enum 句柄**（`ts[i].clone()`）时，
+// 载荷绑定读的必须是 `[tag, p0, …]` 块的槽，不许被字符串拼接劫持。
+//
+// 病因（实拍）：gen.rs `deref_slot` 把载荷读下成 `BinaryOp(+, 句柄, IntLit(8*k))` +
+// Deref，而 codegen.rs 的 PY-A 字符串臂按操作数 `Type::Str` 路由 ⇒ 这条**地址算术**
+// 被发成 `host_str_concat(handle, 8)`（改前 IR 实拍 `%strop = call i64
+// @host_str_concat(i64 %187, i64 8)`）。运行期 C 侧批 292 降级臂把不可读的 b 换成
+// `""`（ZT-WARN 三处），Deref 读到的是空串块首字 ⇒ 绑定值恒错；jit 面直接 rc=139。
+// selfhost `fn build_ast` 三处 `if let Token::Ident(n)` 全部静默丢名（796 在册挡格变形）。
+//
+// 修法：codegen.rs 字符串臂对 `op == "+"` 且另一侧是字面 IntLit 的组合放行到整数
+// 加法臂——`str + int` 在 CPython 是 TypeError，不存在合法拼接形态，而这正是
+// `deref_slot` 需要的指针偏移算术（批 292 之前的原生路径）。
+//
+// 期望（改后 jit 实拍）：
+// expect: hits=3
+
+#[derive(Clone)]
+enum Tok {
+    A,
+    Ident(String),
+}
+
+fn pick(ts: Vec<Tok>) -> i64 {
+    let mut i = 0;
+    let mut acc = 0;
+    while i < ts.len() {
+        match ts[i].clone() {
+            Tok::A => {
+                i += 1;
+                let n = if let Tok::Ident(x) = ts[i].clone() {
+                    i += 1;
+                    if x == "hi" {
+                        acc = acc + 1;
+                    }
+                    if x == "no" {
+                        acc = acc + 2;
+                    }
+                    x
+                } else {
+                    "".to_string()
+                };
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    acc
+}
+
+fn main() -> i64 {
+    let mut v = vec![];
+    v.push(Tok::A);
+    v.push(Tok::Ident("hi"));
+    v.push(Tok::A);
+    v.push(Tok::Ident("no"));
+    let r = pick(v);
+    println!("hits={}", r);
+    return 0;
+}

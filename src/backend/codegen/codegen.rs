@@ -7091,7 +7091,19 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .and_then(|tm| tm.get(left)).map_or(false, |t| matches!(t, Type::Str));
                     let r_str = self.current_type_map.as_ref()
                         .and_then(|tm| tm.get(right)).map_or(false, |t| matches!(t, Type::Str));
-                    if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
+                    // Batch 802: `handle + IntLit` with one side Str is NOT a
+                    // concat — CPython rejects `str + int`, and this is the
+                    // shape gen.rs `deref_slot` builds to read a boxed-enum
+                    // payload slot (measured: it emitted
+                    // `host_str_concat(h, 8)`, the C downgrade arm fed the tag
+                    // read back as text, selfhost build_ast silently lost
+                    // every `Token::Ident(n)` binding). Let it fall through to
+                    // the integer adder, which is the pointer arithmetic the
+                    // address expression needs.
+                    let addr_off_plus = op == "+"
+                        && ((l_str && matches!(exprs.get(right), Some(MirExpr::IntLit(_))))
+                            || (r_str && matches!(exprs.get(left), Some(MirExpr::IntLit(_)))));
+                    if !addr_off_plus && (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
                         let lv = self.gen_expr(&exprs[left], exprs, None);
                         let rv = self.gen_expr(&exprs[right], exprs, None);
                         let fname = if op == "+" { "host_str_concat" } else { "host_str_eq" };
