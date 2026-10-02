@@ -25941,3 +25941,29 @@ chronic；corpus 全跑 40/40。锚点 rc=2：漂移 30＋消失 1 全在 gen.rs
 fromkeys（#113）位移（其注释自标"批次 804"＝撞号警示；提交时点核对车道未落
 804，本批保留号位）；本批 gen.rs 位移＝0 不代绑（795/803 先例）。读数树含
 车道 gen.rs 在制。
+
+## 批次 804（代码 d508b9a0；号位勘案——803 已被车道 matches! 宏根修笔 46b3c9a1 占用，本批让位 804）：fromkeys None #113 收口
+
+**探针定性**：`dict.fromkeys(ks, None)` 与 1 参缺省形的元素读打 **0**（CPython None），
+显式/隐式同病，控制组 `fromkeys(ks, 0)` ✓。None 性在 AST 层可见（解析器产
+`AstNode::NoneLit`，非 Lit(0)）⇒ 按型渲染的最小面成立。同族对照实拍：裸 `x = None`
+打印链路本就活（654 NoneVar 按名渲染），`{"k": None}` 字面量值与 `return None` 打 0
+（同族另格，本批不动）。
+
+**修法两件**（纯 gen.rs）：①fromkeys 臂两条路（字面量键表 ⇒ DictLit 内联、运行期
+`py_map_fromkeys`）检测 None 值（1 参缺省／NoneLit／NoneVar 名三种）⇒ 结果定型
+`map[K, NoneValue]`——下标读的元素型块既有 `Named(map, targs).get(1)` 臂让 `d["k"]`
+读带上该型；②print 臂补按型渲染：NoneValue 型实参渲染字符串 `"None"`（654 按名渲染的
+按型同款）。值仍 i64 0，算术/比较面不改；CPython 会 TypeError 的形（`d["a"]+1`）
+不在格内。
+
+**验证**：三形探针全对齐 CPython（变量键表 None/2/None/2/0/2、1 参缺省同、字面量键表
+None/2/None/2/5）；NoneVar 名实参形 `fromkeys(ks, x)` 亦 None；python_style 全量
+**464/0/1/0**；差分**全套** 2845/2845＝**100.0%** 无回归；official 193 行 2 LINK-FAIL
+存量在册。**锚点**：漂移 30 两轮 `--rebind` 收敛（第二轮 17400→17404 等回摆＝首轮
+tsv 陈旧基线所致，终态稳定）＋1 条悬空**人绑**（`gen.rs:16496→16538`，引文
+`fields,` 全文件非唯一＝拒改为设计行为，人核上下文：qualified 变体构造器 fields 建行、
+`:16203` String::new 锚相邻完好）；复验 rc=0"锚点全部对上"。
+
+**残界**：①dict 字面量值 None（`{"k": None}` 读打 0）；②`return None`（打 0）——
+NoneVar 家族余格；③NoneValue 值的算术/比较面按 0 语义（CPython TypeError）。
