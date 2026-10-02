@@ -17,30 +17,30 @@ runtime/aliases.inc.c	12	".globl _print.13\n\t.set _print.13, _print2\n"
 runtime/py_additions.c	44	int64_t host_str_eq(int64_t a, int64_t b) { return str_eq(a, b); }
 runtime/py_additions.c	278-302	int64_t map_str_key(int64_t handle) { if (!handle) return 0; // Batch 291: vec<str> slots can hold small strings PACKED into the 8-byte // word ("43601853" = 0x
 runtime/py_additions.c	279	int64_t map_str_key(int64_t handle) {
-runtime/py_additions.c	1444	int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
-runtime/py_additions.c	2129	static int zt_packed_cstr_eq(int64_t packed, const char* s) {
-runtime/py_additions.c	2131-2132	if (n > 7) return 0; const unsigned char* p = (const unsigned char*)&packed;
-runtime/py_additions.c	2311	int64_t* pair = (int64_t*)GC_malloc(24);
-runtime/py_additions.c	2336-2370	int64_t py_argparse_parse(int64_t parser) { int64_t ns = map_new(); int64_t n = zt_vec_len(parser); for (int64_t i = 0; i < n; i++) { int64_t* pair = (int64_t*)
-runtime/py_additions.c	2340	int64_t* pair = (int64_t*)((int64_t*)parser)[i];
-runtime/py_additions.c	2348	map_insert(ns, map_str_key((int64_t)dest), (int64_t)GC_strdup(val ? val : ""));
-runtime/py_additions.c	3205	int64_t zeta_env_get(int64_t name_handle) {
-runtime/py_additions.c	3221	int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
-runtime/py_additions.c	3835	if (getenv("ZETA_PROBE")) {
-runtime/py_additions.c	4296	int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
-runtime/py_additions.c	4421	? (const char*)(uintptr_t)name_ptr
-runtime/py_additions.c	4430	(void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
-runtime/py_additions.c	4524	int64_t zeta_call1(int64_t fptr, int64_t a) {
-runtime/py_additions.c	4595-4645	// BATCH-296: geometry-based kind test for a handle whose STATIC type is unknown // (`d = {}; d["x"] = {...}` types the value I64, and `dict[str, Any]` from the
-runtime/py_additions.c	4612-4622	static int zt_dyn_is_map(int64_t h) { if (h <= 0x1000) return 0; if (GC_base((void*)h) != (void*)h) return 0; int64_t* w = (int64_t*)h; int64_t cap = w[0]; if (
-runtime/py_additions.c	4613	static int zt_dyn_is_map(int64_t h) {
-runtime/py_additions.c	4615	if (GC_base((void*)h) != (void*)h) return 0;
-runtime/py_additions.c	4624-4645	static int64_t* zt_dyn_vec_hdr(int64_t h) { if (h <= 0x1000) return NULL; int64_t* hdr = (int64_t*)(h - 16); if (GC_base((void*)hdr) != (void*)hdr) return NULL;
-runtime/py_additions.c	4625	static int64_t* zt_dyn_vec_hdr(int64_t h) {
-runtime/py_additions.c	4632	int64_t have = (int64_t)GC_size((void*)hdr);
-runtime/py_additions.c	4704-4716	int64_t zeta_dyn_len(int64_t h) { if (!h) return 0; if (zt_dyn_is_map(h)) return zeta_map_len(h); int64_t* hdr = zt_dyn_vec_hdr(h); if (hdr) return hdr[1]; // T
-runtime/py_additions.c	4705	int64_t zeta_dyn_len(int64_t h) {
-runtime/py_additions.c	4904	int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
+runtime/py_additions.c	1492	int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
+runtime/py_additions.c	2177	static int zt_packed_cstr_eq(int64_t packed, const char* s) {
+runtime/py_additions.c	2179-2180	if (n > 7) return 0; const unsigned char* p = (const unsigned char*)&packed;
+runtime/py_additions.c	2359	int64_t* pair = (int64_t*)GC_malloc(24);
+runtime/py_additions.c	2384-2418	int64_t py_argparse_parse(int64_t parser) { int64_t ns = map_new(); int64_t n = zt_vec_len(parser); for (int64_t i = 0; i < n; i++) { int64_t* pair = (int64_t*)
+runtime/py_additions.c	2388	int64_t* pair = (int64_t*)((int64_t*)parser)[i];
+runtime/py_additions.c	2396	map_insert(ns, map_str_key((int64_t)dest), (int64_t)GC_strdup(val ? val : ""));
+runtime/py_additions.c	3253	int64_t zeta_env_get(int64_t name_handle) {
+runtime/py_additions.c	3269	int64_t zeta_param_default(int64_t index, int64_t value) { (void)index; return value; }
+runtime/py_additions.c	3883	if (getenv("ZETA_PROBE")) {
+runtime/py_additions.c	4344	int64_t zeta_call_fn_arg(int64_t fn_ptr, int64_t arg) {
+runtime/py_additions.c	4469	? (const char*)(uintptr_t)name_ptr
+runtime/py_additions.c	4478	(void)getenv("ZETA_STRICT_STUBS"); /* default is strict; env is documentary */
+runtime/py_additions.c	4572	int64_t zeta_call1(int64_t fptr, int64_t a) {
+runtime/py_additions.c	4643-4693	// BATCH-296: geometry-based kind test for a handle whose STATIC type is unknown // (`d = {}; d["x"] = {...}` types the value I64, and `dict[str, Any]` from the
+runtime/py_additions.c	4660-4670	static int zt_dyn_is_map(int64_t h) { if (h <= 0x1000) return 0; if (GC_base((void*)h) != (void*)h) return 0; int64_t* w = (int64_t*)h; int64_t cap = w[0]; if (
+runtime/py_additions.c	4661	static int zt_dyn_is_map(int64_t h) {
+runtime/py_additions.c	4663	if (GC_base((void*)h) != (void*)h) return 0;
+runtime/py_additions.c	4672-4693	static int64_t* zt_dyn_vec_hdr(int64_t h) { if (h <= 0x1000) return NULL; int64_t* hdr = (int64_t*)(h - 16); if (GC_base((void*)hdr) != (void*)hdr) return NULL;
+runtime/py_additions.c	4673	static int64_t* zt_dyn_vec_hdr(int64_t h) {
+runtime/py_additions.c	4680	int64_t have = (int64_t)GC_size((void*)hdr);
+runtime/py_additions.c	4752-4764	int64_t zeta_dyn_len(int64_t h) { if (!h) return 0; if (zt_dyn_is_map(h)) return zeta_map_len(h); int64_t* hdr = zt_dyn_vec_hdr(h); if (hdr) return hdr[1]; // T
+runtime/py_additions.c	4753	int64_t zeta_dyn_len(int64_t h) {
+runtime/py_additions.c	4952	int64_t zt_col_arith(int64_t kind, int64_t a, int64_t b) {
 runtime/tokio_runtime_stub.c	250	#define MAP_ENTRY_SIZE 24
 runtime/tokio_runtime_stub.c	271-277	// A `-> dict` annotation on a function whose body returns `json.loads(...)` types // the result `map`, while the VALUE is a PyJson cell [tag, payload] (tag 1..
 runtime/tokio_runtime_stub.c	285-292	// The h-16 read must NEVER touch memory outside h's own GC block: a map // handle IS its block base, and blocks that start at a page edge make // h-16 a guard 
@@ -220,48 +220,48 @@ src/middle/mir/gen.rs	3996	self.stmts.push(MirStmt::While {
 src/middle/mir/gen.rs	4361	}
 src/middle/mir/gen.rs	4467	);
 src/middle/mir/gen.rs	4499	dest: cond_id,
-src/middle/mir/gen.rs	4869	// point at the ENTRY's ancestors (REasyQuant
-src/middle/mir/gen.rs	4876-4894	.cloned() .or_else(|| self.source_file.clone()); if let Some(f) = own { self.exprs.insert(id, MirExpr::StringLit(f)); self.type_map.insert(id, Type::Str); retur
-src/middle/mir/gen.rs	5064	// "_Color__Green"`; when the slot is dead-code-eliminated the
-src/middle/mir/gen.rs	5322	let rewritten = AstNode::BinaryOp {
-src/middle/mir/gen.rs	7980-7992	not enforced (V1)" ), _ => {} } continue; } } } if let AstNode::StringLit(s) = a { if flag.is_none() { flag = Some(s.clone()); } }
-src/middle/mir/gen.rs	8357-8378	declared_ret }; self.type_map.insert( id, match (handle, ret) { (Some(h), _) => Type::Named(h.to_string(), vec![]), (None, r) => declared_ret.unwrap_or_else(|| 
-src/middle/mir/gen.rs	9075-9077	} } if !candidates.is_empty() {
-src/middle/mir/gen.rs	9080	func: "zeta_dyn_len".to_string(),
-src/middle/mir/gen.rs	9082-9091	dest: id, type_args: vec![], }]; for (tag_val, qlen) in candidates.iter().rev() { let lit = self.next_id(); self.exprs.insert(lit, MirExpr::IntLit(*tag_val)); s
-src/middle/mir/gen.rs	9092-9094	MirExpr::BinaryOp { op: "==".to_string(), left: tag_slot,
-src/middle/mir/gen.rs	11055	Some(Type::Str) => "println_str",
-src/middle/mir/gen.rs	11655	type_args.iter().map(|t| Type::from_string(t)).collect();
-src/middle/mir/gen.rs	11658	func: func_name.clone(),
-src/middle/mir/gen.rs	11662-11674	}); self.exprs.insert(id, MirExpr::Var(id)); self.type_map.insert(id, Type::I64); return id; } // Not a variable, fall through } } let mut arg_ids = vec![]; let
-src/middle/mir/gen.rs	11675-11684	arg_ids.push(rid); Some(self.type_map.get(&rid).cloned().unwrap_or(Type::I64)) } else { None }; // PY-A: keyword arguments — bind by parameter name when the // 
-src/middle/mir/gen.rs	11750-11764	// Batch 752: positional overflow collects into the // `*args` list; without one, keep the old append // (callee ignores extras). let mut pos_extra: Vec<AstNode
-src/middle/mir/gen.rs	11769-11774	for (n, v) in kw { match params.iter().position(|p| *p == n) { Some(i) => slots[i] = Some(v), None => match kw_slot { Some(_) => kw_acc.push((AstNode::StringLit
-src/middle/mir/gen.rs	11838-11874	None => { eprintln!( "warning: PY-A: `{}` is called with `**` unpacking but its \ signature is unknown — the mapping is DROPPED (nothing is \ bound for it)", me
-src/middle/mir/gen.rs	12266	&& arg_ids.len() == 1
-src/middle/mir/gen.rs	12296	)
-src/middle/mir/gen.rs	12310	// COLUMN NAME (`self.data[map_str_key(key)]`), so a row mask went
-src/middle/mir/gen.rs	12348	// `df[["a", "b"]]` — pandas reads a LIST-LIKE key as a
-src/middle/mir/gen.rs	12395	self.type_map.insert(f2, Type::I64);
-src/middle/mir/gen.rs	12471	// DataFrame type (`covers_range` does `cache_df[date_col].max()`).
-src/middle/mir/gen.rs	12547	}
-src/middle/mir/gen.rs	12954-12964	} _ => Type::I64, }; let elem_ty = if method == "values" { val_ty.clone() } else { key_ty.clone() }; let out_ty = if method == "most_common" || method == "items
-src/middle/mir/gen.rs	14405-14429	// write_text` exists. let tag = crate::middle::pylib::handle_tag(tn) .map(|h| h.to_string()) .unwrap_or_else(|| tn.clone()); if let Some((sym, ret_handle)) = c
-src/middle/mir/gen.rs	14694-14696	self.exprs.insert(size_id, MirExpr::IntLit(elem_size)); let mul_id = self.next_id();
-src/middle/mir/gen.rs	14697-14707	self.exprs.insert( mul_id, MirExpr::BinaryOp { op: "*".to_string(), left: offset_id, right: size_id, }, ); // Store the pointer arithmetic directly as an inline
-src/middle/mir/gen.rs	14826	// underscore that was part of the NAME. `DataFrame::reset_index`
-src/middle/mir/gen.rs	14837	format!("{}_{}", func, arg_ids.len())
-src/middle/mir/gen.rs	15121	}
-src/middle/mir/gen.rs	15660-15693	{ let ty = self.type_map.get(&aid).cloned().unwrap_or(Type::I64); self.exprs.insert(id, MirExpr::Var(aid)); self.type_map.insert(id, ty); return id; } } } } // 
-src/middle/mir/gen.rs	16263	return id;
-src/middle/mir/gen.rs	16367	for a in args {
-src/middle/mir/gen.rs	16375	fields,
-src/middle/mir/gen.rs	16592	format!("{}_{}", func_name, arg_ids.len())
-src/middle/mir/gen.rs	17022	);
-src/middle/mir/gen.rs	17098	args: vec![bid, iid],
-src/middle/mir/gen.rs	17398	}
-src/middle/mir/gen.rs	17966-17971	let mut ids: Vec<u32> = args.iter().map(|a| self.lower_expr(a)).collect(); while ids.len() < 3 { let filler = self.next_id(); self.exprs.insert(filler, MirExpr:
-src/middle/mir/gen.rs	18621	self.mirror_module_global_writes();
+src/middle/mir/gen.rs	4913	// point at the ENTRY's ancestors (REasyQuant
+src/middle/mir/gen.rs	4920-4938	.cloned() .or_else(|| self.source_file.clone()); if let Some(f) = own { self.exprs.insert(id, MirExpr::StringLit(f)); self.type_map.insert(id, Type::Str); retur
+src/middle/mir/gen.rs	5108	// "_Color__Green"`; when the slot is dead-code-eliminated the
+src/middle/mir/gen.rs	5366	let rewritten = AstNode::BinaryOp {
+src/middle/mir/gen.rs	8024-8036	not enforced (V1)" ), _ => {} } continue; } } } if let AstNode::StringLit(s) = a { if flag.is_none() { flag = Some(s.clone()); } }
+src/middle/mir/gen.rs	8401-8422	declared_ret }; self.type_map.insert( id, match (handle, ret) { (Some(h), _) => Type::Named(h.to_string(), vec![]), (None, r) => declared_ret.unwrap_or_else(|| 
+src/middle/mir/gen.rs	9119-9121	} } if !candidates.is_empty() {
+src/middle/mir/gen.rs	9124	func: "zeta_dyn_len".to_string(),
+src/middle/mir/gen.rs	9126-9135	dest: id, type_args: vec![], }]; for (tag_val, qlen) in candidates.iter().rev() { let lit = self.next_id(); self.exprs.insert(lit, MirExpr::IntLit(*tag_val)); s
+src/middle/mir/gen.rs	9136-9138	MirExpr::BinaryOp { op: "==".to_string(), left: tag_slot,
+src/middle/mir/gen.rs	11099	Some(Type::Str) => "println_str",
+src/middle/mir/gen.rs	11699	type_args.iter().map(|t| Type::from_string(t)).collect();
+src/middle/mir/gen.rs	11702	func: func_name.clone(),
+src/middle/mir/gen.rs	11706-11718	}); self.exprs.insert(id, MirExpr::Var(id)); self.type_map.insert(id, Type::I64); return id; } // Not a variable, fall through } } let mut arg_ids = vec![]; let
+src/middle/mir/gen.rs	11719-11728	arg_ids.push(rid); Some(self.type_map.get(&rid).cloned().unwrap_or(Type::I64)) } else { None }; // PY-A: keyword arguments — bind by parameter name when the // 
+src/middle/mir/gen.rs	11794-11808	// Batch 752: positional overflow collects into the // `*args` list; without one, keep the old append // (callee ignores extras). let mut pos_extra: Vec<AstNode
+src/middle/mir/gen.rs	11813-11818	for (n, v) in kw { match params.iter().position(|p| *p == n) { Some(i) => slots[i] = Some(v), None => match kw_slot { Some(_) => kw_acc.push((AstNode::StringLit
+src/middle/mir/gen.rs	11882-11918	None => { eprintln!( "warning: PY-A: `{}` is called with `**` unpacking but its \ signature is unknown — the mapping is DROPPED (nothing is \ bound for it)", me
+src/middle/mir/gen.rs	12330	&& arg_ids.len() == 1
+src/middle/mir/gen.rs	12360	)
+src/middle/mir/gen.rs	12374	// COLUMN NAME (`self.data[map_str_key(key)]`), so a row mask went
+src/middle/mir/gen.rs	12412	// `df[["a", "b"]]` — pandas reads a LIST-LIKE key as a
+src/middle/mir/gen.rs	12459	self.type_map.insert(f2, Type::I64);
+src/middle/mir/gen.rs	12535	// DataFrame type (`covers_range` does `cache_df[date_col].max()`).
+src/middle/mir/gen.rs	12551	}
+src/middle/mir/gen.rs	13075-13085	} _ => Type::I64, }; let elem_ty = if method == "values" { val_ty.clone() } else { key_ty.clone() }; let out_ty = if method == "most_common" || method == "items
+src/middle/mir/gen.rs	14526-14550	// write_text` exists. let tag = crate::middle::pylib::handle_tag(tn) .map(|h| h.to_string()) .unwrap_or_else(|| tn.clone()); if let Some((sym, ret_handle)) = c
+src/middle/mir/gen.rs	14931-14933	// Append arg count to disambiguate overloaded functions. // gen_mirs creates name_N for overloaded declarations; // this ensures call sites match the right dec
+src/middle/mir/gen.rs	14934-14944	// PY-A: zeta_* runtime dispatch names stay bare — the codegen // method-dispatch (opaque fallback) matches them exactly. // Module-qualified names (`<module>__
+src/middle/mir/gen.rs	14947	// underscore that was part of the NAME. `DataFrame::reset_index`
+src/middle/mir/gen.rs	14958	format!("{}_{}", func, arg_ids.len())
+src/middle/mir/gen.rs	15530	// read through THAT id — an extra `Var(inner_cond_id)`
+src/middle/mir/gen.rs	15781-15814	{ let ty = self.type_map.get(&aid).cloned().unwrap_or(Type::I64); self.exprs.insert(id, MirExpr::Var(aid)); self.type_map.insert(id, ty); return id; } } } } // 
+src/middle/mir/gen.rs	16199	return id;
+src/middle/mir/gen.rs	16488	for a in args {
+src/middle/mir/gen.rs	16496	fields,
+src/middle/mir/gen.rs	16713	format!("{}_{}", func_name, arg_ids.len())
+src/middle/mir/gen.rs	17029	);
+src/middle/mir/gen.rs	17219	args: vec![bid, iid],
+src/middle/mir/gen.rs	17404	}
+src/middle/mir/gen.rs	18087-18092	let mut ids: Vec<u32> = args.iter().map(|a| self.lower_expr(a)).collect(); while ids.len() < 3 { let filler = self.next_id(); self.exprs.insert(filler, MirExpr:
+src/middle/mir/gen.rs	18742	self.mirror_module_global_writes();
 src/middle/mir/mir.rs	45-60	/// 批次 399 (类型基础②): the ONE entry saying what this function's `ret` /// carries, so the callee's LLVM signature and the caller's destination slot /// stop being
 src/middle/mir/mir.rs	61-75	pub fn signature_ret_ty(&self) -> Option<Type> { for stmt in &self.stmts { if let MirStmt::Return { val } = stmt { if let Some(ty) = self.type_map.get(val) { re
 src/middle/pylib.rs	22	const REGISTRY_SRC: &str = include_str!("../../pylib/registry.txt");

@@ -1,0 +1,30 @@
+// 批次 797（#266 余项后续）known-fail 钉：无型面接收者（枚举变体载荷绑定槽/
+// `into_iter` 通用调用 dest，默认定型 I64）上的 `.map(closure)`。改前落幽灵名
+// `map_2` 链 `_map` weak 桩，调用即 abort rc=134 零输出（/tmp/b797/probe_map.z
+// 实拍）；修法＝gen.rs 增臂把「接收者无型或 I64 定型＋首实参闭包」发
+// `_[dynamic]str__map`（逐元素按位传闭包，py_additions.c:1469），selfhost:141
+// `asts.into_iter().map(|a| eval(a)).sum()` 由此解挡（AOT/jit 两侧实拍 PY-A 零
+// 出现、run rc 134→0）。余半：闭包体的具名函数调用 lowering 丢体——MIR 实拍仅
+// zeta_env_get("double_it")+Return IntLit(0)，值停在 0（probe_typed.z `|a| a*2`
+// 打 0、t34 comprehension 行 3 打 6 非 12，且 t34/t35 红在改前 HEAD 二进制
+// 同形＝车道 794c 残差「数值减半」同格，非本臂回归）。闭包体面收口后摘本标记。
+// known-fail: closure body call lowering loses value (sum stays 0)
+enum E {
+    P(Vec<i64>),
+    N(i64),
+}
+
+fn double_it(a: i64) -> i64 { a * 2 }
+
+fn run(e: E) -> i64 {
+    match e {
+        E::P(asts) => asts.into_iter().map(|a| double_it(a)).sum(),
+        _ => 0,
+    }
+}
+
+fn main() -> i64 {
+    print(run(E::P([1, 2, 3])));
+    0
+}
+// expect: 12
