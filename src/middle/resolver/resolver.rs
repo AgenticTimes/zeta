@@ -1692,6 +1692,14 @@ impl Resolver {
                 for r in &rets {
                     if matches!(r, AstNode::DictLit { .. })
                         || matches!(r, AstNode::Var(v) if map_locals.contains(v.as_str()))
+                        // 批次 801（#409(a)①）：`return dict(x)` 收进来是构造
+                        // 调用而非 DictLit——classify 落 0、saw_map 不亮，返回型
+                        // 停默认，调用点 `len()` 对 map 句柄派了 array_len（读
+                        // vec 表头答 0，实拍 len(d1)=0 而 d1["a"]=1）。dict 构造
+                        // 调用恒产 map，无 union 投毒面。
+                        || matches!(r, AstNode::Call { receiver: None, method, .. } if method == "dict")
+                        || matches!(r, AstNode::ExprStmt { expr }
+                            if matches!(**expr, AstNode::Call { receiver: None, method: ref m2, .. } if m2 == "dict"))
                     {
                         saw_map = true;
                     }
