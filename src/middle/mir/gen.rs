@@ -17147,6 +17147,21 @@ call, no NULL-handle dereference).",
                 }
                 // Check if base is an array type (dynamic or static)
                 let base_ty = self.type_map.get(&bid).cloned().unwrap_or(Type::I64);
+                // 批次 796（#266 RUN 面）：Rust 方言形参标注 `xs: Vec<T>` 定型为
+                // Named("Vec", [T])——下面整条下标链（DynamicArray/Array/
+                // array_param/I64|PyDynamic 判别）没有这个形的臂，落进 dict
+                // 兜底发 map_str_key+DictGet：selfhost build_ast 的 `tokens[i]`
+                // 实拍运行时 map_get 见非 dict 形抛 code=1、零输出（stub:422 守卫；
+                // --jit/AOT 同形）。归一化成 DynamicArray 走既有 array_get 臂；
+                // 元素型解析不出时按 I64（与该链尾部约定一致）。
+                let base_ty = match &base_ty {
+                    Type::Named(n, targs) if n == "Vec" => {
+                        Type::DynamicArray(Box::new(
+                            targs.first().cloned().unwrap_or(Type::I64),
+                        ))
+                    }
+                    _ => base_ty.clone(),
+                };
                 let base_ty_clone = base_ty.clone(); // clone for later elem-type lookup
                 // Also check source_types for function params with array types
                 let source_ty = self.source_types.get(&bid).cloned().unwrap_or_default();
