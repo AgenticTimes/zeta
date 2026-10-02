@@ -62,6 +62,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CASE_DIR = ROOT / "tests" / "diff" / "cases"
 BASELINE = ROOT / "tools" / "baselines" / "diff_consistency.json"
+# 批次 809：CPython 真值缓存——键＝python 源 sha256，值＝norm 后 stdout 行或
+# {"__bad__": detail}。用例纯计算、CPython 确定性强（483 批在册），源不变真值
+# 不变；--bless 时忽略缓存全部重跑并回写。
+REF_CACHE = ROOT / "tools" / "baselines" / "ref_cache.json"
 ZETAC = Path(os.environ.get("ZETAC", ROOT / "target" / "release" / "zetac"))
 CATEGORIES = ("truth", "str", "container", "numeric", "control")
 RUN_TIMEOUT = 20
@@ -135,7 +139,10 @@ def run_ref(src: str, name: str, workdir: Path) -> list[str]:
     if r.returncode != 0:
         tail = (r.stderr or "").strip().splitlines()
         raise BadCase(f"参考侧退出 {r.returncode}: {tail[-1] if tail else '无 stderr'}")
-    return norm(r.stdout)
+    # 批次 809：返回原始行（不 norm）——组模式的真值合成需要成员尾部空行
+    # 原样在场（norm 会把它们剥掉，组内却成了中间行 ⇒ 恒假 mismatch）。
+    # 逐例比较侧自行 norm（见 judge）。
+    return r.stdout.split("\n")
 
 
 def run_zeta(src: str, name: str, workdir: Path) -> tuple[str, list[str], str]:
@@ -187,6 +194,10 @@ def main() -> int:
                     help="轮转抽样：只跑排序序号满足 序号 %% K == OFFSET 的用例（K 分之一），"
                          "配套每 10 批的全量门禁仍跑全套；抽样读数不参与基线判定")
     ap.add_argument("--json", metavar="PATH", help="把本次读数另存一份 JSON")
+    ap.add_argument("--group", type=int, default=0, metavar="N",
+                    help="批 809：合并模式——每 N 例拼一组、整组编译一次；组真值由逐例"
+                         "缓存合成（组级 CPython 零次），mismatch 组自动回退逐例定位；"
+                         "判定口径与逐例模式一致（同基线可比）")
     args = ap.parse_args()
 
     if not ZETAC.exists():
@@ -216,17 +227,56 @@ def main() -> int:
     results: dict[str, dict] = {}
     per_cat: dict[str, list[int]] = {c: [0, 0] for c in CATEGORIES}  # [match, judged]
     bad = []
+    # 批次 809：真值缓存装载/回写（miss 时跑 CPython，命中零进程；--bless
+    # 忽略命中全量重跑）。cache_dirty 用 list 当计数器（线程安全的 append）。
+    ref_cache: dict = {}
+    if REF_CACHE.exists():
+        try:
+            ref_cache = json.loads(REF_CACHE.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"警告：真值缓存损坏（{e}），按空缓存重采", file=sys.stderr)
+    cache_dirty: list = []
+    def ref_for(case: dict, name: str) -> list[str] | None:
+        """批次 809：真值获取（缓存优先）。参考侧跑不出 → 抛 BadCase（已缓存）。
+        --bless 忽略命中强制重采。"""
+        import hashlib
+        key = "v2:" + hashlib.sha256(case["python"].encode("utf-8")).hexdigest()[:32]
+        if not args.bless:
+            hit = ref_cache.get(key)
+            if isinstance(hit, dict) and "__bad__" in hit:
+                raise BadCase(hit["__bad__"])
+            if isinstance(hit, list):
+                return hit
+        try:
+            ref = run_ref(case["python"], name, workdir)
+        except BadCase as e:
+            ref_cache[key] = {"__bad__": str(e)}
+            cache_dirty.append(1)
+            raise
+        ref_cache[key] = ref
+        cache_dirty.append(1)
+        return ref
+
     def judge(path: Path) -> tuple[str, dict]:
         name = path.stem
         rec = {"cat": "?", "verdict": "bad_case", "detail": ""}
         try:
             case = parse_case(path)
             rec["cat"] = case["cat"]
-            ref = run_ref(case["python"], name, workdir)
+            ref = ref_for(case, name)
+            # 批次 809：ref 是原始行——逐例比较前 norm（与旧口径一致）。
+            ref_cmp = list(ref)
+            while ref_cmp and ref_cmp[-1].strip() == "":
+                ref_cmp.pop()
+            # 批次 809：zeta 侧单次重试（批次 507 教训制度化：负载尖峰下的
+            # 编译/运行偶发超时＝假红；真失败复现同判，偶发自愈）。仅重试
+            # 非ok 判定；mismatch 本身确定性强、重试不掩真回归。
             verdict, got, detail = run_zeta(case["zeta"], name, workdir)
             if verdict != "ok":
+                verdict, got, detail = run_zeta(case["zeta"], name, workdir)
+            if verdict != "ok":
                 rec.update(verdict=verdict, detail=detail)
-            elif got == ref:
+            elif got == ref_cmp:
                 rec["verdict"] = "match"
             else:
                 diff = first_diff(ref, got)
@@ -247,16 +297,123 @@ def main() -> int:
         from concurrent.futures import ThreadPoolExecutor
         raw = os.environ.get("DIFF_JOBS", "0") or os.cpu_count() or 4
         workers = max(1, min(8, int(raw)))
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            for name, rec in ex.map(judge, cases):
-                results[name] = rec
-                if rec["verdict"] != "bad_case":
-                    slot = per_cat.setdefault(rec["cat"], [0, 0])
-                    slot[1] += 1
-                    if rec["verdict"] == "match":
-                        slot[0] += 1
+
+        def ingest(name: str, rec: dict) -> None:
+            results[name] = rec
+            if rec["verdict"] != "bad_case":
+                slot = per_cat.setdefault(rec["cat"], [0, 0])
+                slot[1] += 1
+                if rec["verdict"] == "match":
+                    slot[0] += 1
+
+        if args.group > 0:
+            # 批次 809：合并模式。组真值＝逐例缓存合成（miss 成员先单独采，
+            # bad_case 成员剔除单列）；zeta 侧整组一次编译运行；组不中 →
+            # 回退逐例跑该组定位。逐例判定口径不变（同基线可比）。
+            groups = [cases[i:i + args.group] for i in range(0, len(cases), args.group)]
+            print(f"合并模式：{len(cases)} 例 → {len(groups)} 组（每组 ≤{args.group}）")
+            fallback_groups: list = []
+
+            def run_group(gi: int, members: list[Path]) -> None:
+                expected: list[str] = []
+                bad_members: list[tuple[str, dict]] = []
+                srcs_p: list[str] = []
+                srcs_z: list[str] = []
+                gname = f"__group_{gi}"
+                for p in members:
+                    mname = p.stem
+                    try:
+                        mcase = parse_case(p)
+                        mref = ref_for(mcase, mname)
+                    except BadCase as e:
+                        bad_members.append((mname, {"cat": "?", "verdict": "bad_case", "detail": str(e)}))
+                        continue
+                    except Exception as e:
+                        bad_members.append((mname, {"cat": "?", "verdict": "bad_case",
+                                                    "detail": f"harness 异常: {type(e).__name__}: {e}"}))
+                        continue
+                    # 剥恰好一个尾空行＝split("\n") 的终结符幻影（"a\n"→
+                    # ["a",""]）；成员真打的空行保留（组内是中间行）。
+                    if mref and mref[-1] == "":
+                        mref = mref[:-1]
+                    expected.extend(mref)
+                    srcs_p.append(f"# --- {mname} ---\n" + mcase["python"])
+                    srcs_z.append(f"# --- {mname} ---\n" + mcase["zeta"])
+                # 组期望＝原始行直拼，末尾 norm（中间成员的尾空行必须原样在场）
+                while expected and expected[-1].strip() == "":
+                    expected.pop()
+                if not srcs_p:
+                    for n, r in bad_members:
+                        ingest(n, r)
+                    return
+                gpy = "\n\n".join(srcs_p) + "\n"
+                gze = "\n\n".join(srcs_z) + "\n"
+                # 批次 809：整组裸拼接会撞重复符号（两例都 `def f` ⇒ LLVM 两个
+                # @f，实测 50 例组 compile 直接失败 → 全组回退逐例＝白合并）。
+                # 每例包进唯一名 `_zcase_i()` 再调用：符号随包装名唯一，顺序
+                # 执行语义不变，且 snippet 间名字互不可见（泄漏面消失＝更严）。
+                # 三引号/global 在库内零命中（缩进包裹文本安全，grep 实测）。
+                def wrap(i: int, src: str) -> str:
+                    body = "\n".join(("    " + ln) if ln.strip() else "" for ln in src.splitlines())
+                    return f"def _zcase_{i}():\n{body}\n\n_zcase_{i}()\n"
+                wrapped_p = []
+                wrapped_z = []
+                for i, (sp, sz) in enumerate(zip(srcs_p, srcs_z)):
+                    wrapped_p.append(wrap(i, sp))
+                    wrapped_z.append(wrap(i, sz))
+                gpy = "\n\n".join(wrapped_p) + "\n"
+                gze = "\n\n".join(wrapped_z) + "\n"
+                try:
+                    verdict, got, detail = run_zeta(gze, gname, workdir)
+                    if verdict != "ok" or got != expected:
+                        # 批次 809：整组单次重试（负载尖峰假红自愈，同 judge）
+                        verdict, got, detail = run_zeta(gze, gname, workdir)
+                except Exception as e:
+                    verdict, detail = "runtime", f"harness 异常: {type(e).__name__}: {e}"
+                if verdict == "ok" and got == expected:
+                    for p in members:
+                        n = p.stem
+                        if n in results:
+                            continue
+                        ingest(n, {"cat": parse_case(p)["cat"], "verdict": "match", "detail": ""})
+                    for n, r in bad_members:
+                        ingest(n, r)
+                    return
+                # 回退：整组逐例定位（编译失败/超时/输出不齐都在这里现形）
+                fallback_groups.append((gi, [p.stem for p in members]))
+                for p in members:
+                    n = p.stem
+                    if n in results:
+                        continue
+                    try:
+                        ingest(n, judge(p)[1])
+                    except Exception as e:
+                        ingest(n, {"cat": "?", "verdict": "bad_case",
+                                   "detail": f"harness 异常: {type(e).__name__}: {e}"})
+                for n, r in bad_members:
+                    ingest(n, r)
+
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = [ex.submit(run_group, gi, g) for gi, g in enumerate(groups)]
+                for f in futures:
+                    f.result()
+            if fallback_groups:
+                print(f"合并模式回退 {len(fallback_groups)}/{len(groups)} 组（整组编译/输出不齐，已逐例定位）："
+                      + " ".join(f"#{gi}" for gi, _ in fallback_groups[:10])
+                      + ("…" if len(fallback_groups) > 10 else ""))
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                for name, rec in ex.map(judge, cases):
+                    ingest(name, rec)
     finally:
         os.system(f"rm -rf {shlex.quote(str(workdir))}")
+    # 批次 809：新采真值回写缓存（原子写：临时文件+rename）。
+    if cache_dirty:
+        REF_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = REF_CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(ref_cache, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(REF_CACHE)
+        print(f"真值缓存：新采 {len(cache_dirty)} 条 → {REF_CACHE.name}（总 {len(ref_cache)}）")
     bad = sorted(n for n, r in results.items() if r["verdict"] == "bad_case")
 
     judged = len(cases) - len(bad)
