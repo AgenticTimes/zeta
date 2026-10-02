@@ -25751,3 +25751,25 @@ i 列整数渲染 `%lld` 不变（`df["i"][0]` 仍 `10`）。
 python_style 全量 **462/0/1/0**（t492 重烙后绿；known-fail 仅 t572；t574 已被车道拆包
 臂修复转常规绿）；差分**全套** 2845/2845＝**100.0%** 无回归；official 193 行 2
 LINK-FAIL 存量在册；锚点漂移 0 rc=0（307 可解析，C 面 ±行零重绑）。
+
+
+## 批次 801（eb63d146）：#211③ 运行期符号双写一致性核对器
+
+方法：把 535 写成人记义务的“双写”（gen.rs 字面量发射 ↔ 运行期符号声明）做成
+机械核对。满足链按 codegen 实拍建模五路（S1 手写清单两形态 / S2 all_externs
+清单驱动 / S3 pylib extern fn / S4 Rust no_mangle / S5 str_→host_ 重映射），
+元数不符先过 `_N` 后缀消歧（codegen param_suffixed）。rc 口径与基线机制仿
+锚点核对（--bless、新增/过期皆 rc=1）。
+
+读数（全部来自已跑命令）：gen.rs 字面量发射 218 处；MISSING 53 条＝按需
+`i64(i64×N)` 声明面（t545/t526 IR 正形实拍；×f64 原型求交＝0，唯一候选
+py_vec_clip_f64 由 S1 正签名满足，t230 IR 实拍）⇒ 基线 tools/
+baselines/runtime_doublewrite.txt 登记 53 条，复跑 rc=0 稳定；python_style
+全量 462/0/1/0；锚点漂移 2 条＝车道 resolver.rs WIP 位移（不代绑）。
+
+调试修正三处假阳/假阴源：形态二 usize 后缀正则、形态一 fn_type 跨行 `&[`
+捕获、parse_counted_vec 尾随逗号多计。535 的“一参 void 兜底”文案按本批
+实拍更正：裸名常规路径按调用元数发 i64 extern，void 臂只在限定名等路径命中。
+
+余项：f64 原型新符号风险由核对器新增红挡下（工具不自动读 C 原型，口径写
+在 docstring）；①② 两形仍在 #211 行内。不 push。
