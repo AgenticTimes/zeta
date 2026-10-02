@@ -26015,3 +26015,49 @@ python_style 窗口 5 49/0/1/0（known-fail=t572 在册；t805 未被窗口轮�
 起"为意向非落树，805 写台账时点枚举空闲、本批落树成立、号不回改。804 同号双立
 （本线 e4666317/bbbbbdbe＋车道 d508b9a0/fcdf1284）以哈希为身份，双方台账均已
 勘案。读数树含车道 gen.rs warn_unbound 在制（795 先例，车道自理）。
+
+## 批次 806（代码 3fc85326）：动态接收者 into_iter 的幽灵派发根修——vec 形接收者折成本地 Assign
+
+**症状**：#266 余项②在册格"动态接收者 `into_iter()` ⇒ raise"（known-fail 钉
+t572_dyn_into_iter，批次 794 登记）。本批在现势二进制（改前工作树面）实拍三形全挡：
+`xs=[1,2]`／`[1.5,2.25]`／`["a","b"]` 的 `for v in xs.into_iter()` 编译与链接都 rc=0、
+出声一行 `warning: PY-A: 动态接收者成员 [dynamic]i64::into_iter 无定义 ⇒ 该调用点改为抛异常`，
+运行 `Unhandled exception: code=1`（/tmp/b798/p806_i64.z、p806_f64.z、p806_str.z）。
+
+**根因**：ghost 名把**接收者的元素型**编了进去（i64/f64/str 三名各一），而批次 428 的
+判据是「不在 `DYN_RUNTIME_BINDINGS`（codegen.rs:3441）白名单里的 ghost ⇒ 抛」，白名单只有
+`[dynamic]str::map/pct_change/abs/nth` 四条 ⇒ into_iter 三形全部落抛。MIR 侧实拍说明这
+一次调用本不该存在：`--dump-mir` 里 ghost 调用的 dest 之后紧跟 `array_len(21)`／
+`array_get(21, 24)`——for 降型已经把结果当 vec 句柄在读，identity 才是正形
+（`for v in xs` 直接迭代同一条路径，实拍打 3）。
+
+**修法**：mir/gen.rs:12448 加一条 vec 形接收者臂——`into_iter`/`iter`、单参（只有接收者）、
+接收者型为 `DynamicArray(_)` 或 `Array(_, _)` 时发本地 `MirStmt::Assign { lhs: id, rhs: 接收者 }`
+并把 `type_map[id]` 继承接收者型，不再发调用。**元素型必须继承而非硬写 I64**：硬写会把
+f64 列的位整、str 列的句柄当整数读，等于把"出声抛"换成"静默错值"（AGENTS 与本仓定为最恶劣
+的一类，t572 旧注里"修面在白名单接线"的计划因此换面——降型侧修，运行期符号一个都不动，
+`tools/dyn_binding_lint.sh` 两侧仍 4/4 一致）。
+
+**验证**：新钉 `t806_dyn_into_iter_values.z` 锁三形**按值**（3.75／ab／15，与 CPython 同形
+逐字相同；t572 只锁 i64 计数一形，不够挡"抛换静默错值"）。改前红＝隔离 worktree
+/tmp/pre806（HEAD=a0f0e241 重建，二进制 56b4820e）：t806 harness 面 FAIL（expected
+3.75|ab|15 vs actual 空）、t572 在该树仍 KNOWN-FAIL（expected 3 vs actual 空）；
+改后主树二进制 e9c4b639：t806 PASS、t572 摘掉 `// known-fail:` 标记后转常规回归 PASS。
+回归专项十二例全绿（t574/t448/t567/t563/t566/t573/t571/t561/t56/t57/t805/t804），
+selfhost jit `Result: 0`、ZT-WARN 0 不变。
+
+**门禁**：sample_gate 806 rc=0——python_style 窗口 6 45/0/0/0（套件 known-fail 计数清零），
+official 窗口 6 23/23 编译＋1 link-only chronic（integration_all_features，在册 chronic 族），
+corpus 全跑 40/40；差分窗口 6 抽样 rc=0、坏用例 1 条 del_undefined_var（参考侧跑不出真值，
+排除出分母、单列不计 rc）。按 755 裁定抽样步不与基线比对，本批日志里没有 match/judged
+计数行——不拿 `tools/baselines/diff_consistency.json` 的全量基线冒充本批读数。
+锚点 rc=2：漂移 43／消失 1，全部落 gen.rs＝本批 +26 行位移与车道 warn_unbound 在制混在面，
+按 795/803/804/805 先例**不 --rebind**，随车道收口批统一重绑。
+
+**勘案（同号第二次＋暂存面隔离新法）**：车道在工作树的 gen.rs 有两处 57 行在制
+（hunk @@4446/@@6218），注释自标"批次 805（#表示上限格）"——805 号位已被本线双线占用
+（本线 6aaf944e/a0f0e241 在册先讲），车道面尚未落树。本批不重演坑 109 的被动收编：
+把 `git diff` 的三 hunk 按 new-start 拆开，只 `git apply --cached` 本批那一条
+（核验＝暂存 26 行全带"批次 806"标记、"表示上限"字样 0 处），车道在制保持未暂存；
+提交后工作树 `git status` 只剩 gen.rs 的 57 行车道面＋`.ouroboros/work.md`。
+读数树仍含车道 gen.rs 在制（795 先例，车道自理）。
