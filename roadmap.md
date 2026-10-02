@@ -25744,3 +25744,39 @@ official 10% 轮转 26/26 编译通过（本窗口无链接缺绑定）；锚点
 按"推翻旧结论另起一批不回改台账"处理——批次 10002 的台账与 #266/#267 原文不回改，只在本节加注。
 车道在制面（`src/error_codes.rs`、`frontend/parser/*`、`worktree.md`、t562/t563）未入本笔；
 `worktree.md` 连续四批未随批。不 push。
+
+## 批次 10005 —— 本树抽样门禁脚本 tools/sample_gate.sh（代码 65e6310a）
+
+**动因是上一批的真实事故**，不是补一个"看着缺的工具"：cleanup 树原先没有每批必跑的抽样脚本，
+10004 那批手搓检查时把 `run_one.sh` 当成在仓库根（本树实际路径是 `tests/python_style/run_one.sh`），
+12 次调用一次也没执行，`verdict` 文件全空——读数呈现为"12 例都没判定"，而不是"根本没跑到"。
+同一批里还有一处 `ls run_one.sh` 因 zsh 未引号 glob 报 `no matches found`，把那一整行读数一起带走。
+空输出伪装成正常读数是这一批要堵的洞。
+
+**做法**：`tools/sample_gate.sh <批次号>`，窗口＝批号 %10，四步——
+① 差分 `tools/diff_test.py --sample 10:<窗口>`；② python_style 按 `cksum(用例名) % 10` 轮转，
+逐例走 `tests/python_style/run_one.sh <用例> <私有目录>`（本树 `run.sh` 没有 `ZETA_PY_SAMPLE` 钩子，
+口径只能自己按本树工具搭）；③ official 同名哈希轮转编译，`Linking failed` 计长期既存不计红；
+④ 语料全跑 `tools/corpus_baseline.py`（该脚本 rc 恒 0，故只读"解析通过 n/40"这一行，n<40 只报不判红，
+在册失败由 backlog 记账）。全程 `ZETA_STRICT_RUNTIME_DIR=1`（本树的 `.o` 是跟踪进仓库的，
+不打这行环境就会打到别处那颗），并在开头校验被测件与单用例工具在场，缺任一项 rc=2。
+
+**每步的分母守卫**：差分 `judged=0`、python_style 轮转总数为 0 或某例 verdict 缺失/为空、
+official 总数为 0、语料读不到"解析通过"行或分母为 0 ⇒ 一律判红并把具体文件名单列，绝不当成通过。
+脚本自己印四行分步读数＋一行总结，总结在最后（避免明细清单把摘要挤出可见范围）。
+
+**验收标准（两跑，都已实拍）**：
+- 负分支：把 `RUN_ONE` 换成 `/tmp/noop_worker.sh`（存在但什么都不做），另存临时副本跑，跑完即删。
+  ⇒ `rc=1`，第②步输出"缺 verdict 判定文件（工具没跑到底）: t103_setdefault_extend t111_math_libm …"，
+  而同一次运行里第③步 official 17/17、第④步语料 38/40 照常读出 ⇒ 守卫只拦真没跑到的那一步。
+- 正分支：`bash tools/sample_gate.sh 10005`（窗口 5，件 `67935f67` ＋ `.o` `878479be`）⇒ `rc=0`：
+  ① 272/272 一致；② 47/47 PASS；③ 17/17 编译通过（链接缺绑定 0）；④ 语料 38/40
+  （＝批次 10004 之后的水位，剩两格是 `#266①` 的同名函数跨模块绑错，归因见 `403df85d`）。
+
+**纪律自查**：主体是 `tools/**` 真实代码（121 行新脚本），并按本仓"改工具⇒跑该工具判据＋python_style"
+的口径完成验证（python_style 那一轮就是本脚本的第②步读出的）。
+候选 A（`#266①` 的跨模块绑定次序修正）本批**未做**：改点在裸名 callee→限定符号的绑定次序，
+半径覆盖 `jq_shim`／`wufu_*` 全部同名用例，剩余预算装不下"改＋语料＋门禁＋两次提交＋一次回退"，
+按"宁可零落地也不交半修"停在归因（`403df85d`）这一步。车道在制面
+（`src/error_codes.rs`、`frontend/parser/*`、`worktree.md`、t562/t563）未入本笔；
+`worktree.md` 连续五批未随批。不 push。
