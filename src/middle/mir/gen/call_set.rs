@@ -18,11 +18,8 @@ impl MirGen {
         arg_ids: &[u32],
         dest: u32,
     ) -> Option<u32> {
-                if matches!(method, "add" | "discard" | "remove")
-                    && (matches!(receiver_ty, Type::DynamicArray(_) | Type::Array(_, _))
-                        || matches!(receiver_ty, Type::Named(n, _) if n == "set" || n == "frozenset")
-                        || (!matches!(receiver_ty, Type::Str)
-                            && matches!(receiver_ty, Type::I64 | Type::PyDynamic)))
+                if set_like_receiver(receiver_ty)
+                    && set_family_method_ok(method, arg_ids.len())
                 {
                     if method == "add" && arg_ids.len() == 2 {
                         let elem_is_str = matches!(self.type_map.get(&arg_ids[1]), Some(Type::Str));
@@ -80,12 +77,9 @@ impl MirGen {
                 // read a str column's handles as integers, swapping a loud raise
                 // for a silent wrong value (this repo's worst class).
                 if method == "intersection"
-                    && arg_ids.len() == 2
                     && receiver.is_some()
-                    && (matches!(receiver_ty, Type::DynamicArray(_) | Type::Array(_, _))
-                        || matches!(receiver_ty, Type::Named(n, _) if n == "set" || n == "frozenset")
-                        || (!matches!(receiver_ty, Type::Str)
-                            && matches!(receiver_ty, Type::I64 | Type::PyDynamic)))
+                    && set_like_receiver(receiver_ty)
+                    && set_family_method_ok(method, arg_ids.len())
                 {
                     let elem_of_str = |t: Option<&Type>| match t {
                         Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
@@ -112,5 +106,56 @@ impl MirGen {
                     return Some(dest);
                 }
         None
+    }
+}
+
+/// 批次 816（TDD 内化）：集合族守卫的纯函数面——从 if 链抽出，可毫秒级单测。
+/// 语义合同（CPython set 语义＋本仓约定）：
+/// - 接收者像集合：DynamicArray/Array（list-backed set）、Named set/frozenset、
+///   或非 Str 的 I64/PyDynamic（动态槽，运行期再判）；Str 明确不是集合。
+/// - add/discard/remove 与 intersection 都要求恰好 2 参（含接收者），否则
+///   不归本族（落链上后续，最终由响亮失败兜底）。
+fn set_like_receiver(t: &Type) -> bool {
+    matches!(t, Type::DynamicArray(_) | Type::Array(_, _))
+        || matches!(t, Type::Named(n, _) if n == "set" || n == "frozenset")
+        || (!matches!(t, Type::Str) && matches!(t, Type::I64 | Type::PyDynamic))
+}
+
+fn set_family_method_ok(method: &str, arg_len: usize) -> bool {
+    arg_len == 2
+        && matches!(method, "add" | "discard" | "remove" | "intersection")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dyn_str() -> Type { Type::DynamicArray(Box::new(Type::Str)) }
+    fn dyn_i64() -> Type { Type::DynamicArray(Box::new(Type::I64)) }
+
+    #[test]
+    fn set_like_receiver_truth_table() {
+        assert!(set_like_receiver(&dyn_str()));
+        assert!(set_like_receiver(&dyn_i64()));
+        assert!(set_like_receiver(&Type::Named("set".into(), vec![])));
+        assert!(set_like_receiver(&Type::Named("frozenset".into(), vec![])));
+        assert!(set_like_receiver(&Type::I64));       // 动态槽运行期再判
+        assert!(set_like_receiver(&Type::PyDynamic)); // 同上
+        assert!(!set_like_receiver(&Type::Str));      // 字符串不是集合
+        assert!(!set_like_receiver(&Type::F64));      // 浮点不是集合
+        assert!(!set_like_receiver(&Type::Bool));
+    }
+
+    #[test]
+    fn set_family_method_truth_table() {
+        // 恰好 2 参（接收者+一参）才归本族
+        for m in ["add", "discard", "remove", "intersection"] {
+            assert!(set_family_method_ok(m, 2), "{m} 两参应命中");
+            assert!(!set_family_method_ok(m, 1), "{m} 单参不归本族");
+            assert!(!set_family_method_ok(m, 3), "{m} 三参不归本族");
+        }
+        assert!(!set_family_method_ok("clear", 2));  // clear 归 map 族
+        assert!(!set_family_method_ok("union", 2));  // 未接线成员不收
+        assert!(!set_family_method_ok("push", 2));   // vec 语义归他族
     }
 }
