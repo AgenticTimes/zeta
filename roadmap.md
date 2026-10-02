@@ -26533,3 +26533,11 @@ Call 巨臂拆分起点（业界调研模板：rustc/Go/Swift 按构造种类分
 （单参 intersection 越过 len==2 守卫）已修（t807 十行实拍）。
 同批交付 tools/batch_gate.sh（指纹缓存＋三路并行＋进度日志——Go/Bazel
 测试缓存调研落地）与 AGENTS.md 长任务进度可视规则（用户裁定）。
+
+## 批次 818（本批）：gen.rs 拆家族第二刀——字符串符号表入 gen/call_str.rs＋表驱动单测
+
+str_method_symbol/str_method_symbol3 两张符号表（含 path_ends_with_mem
+伴生函数）迁入 gen/call_str.rs（pub(super)＋父侧 use）；模块内 4 个表
+驱动真值表测试（known/unknown 解析、三参界、符号族合同防拼错静默跨族）。
+cargo test --lib call_str 毫秒级——新测试节奏（817 裁定）首个完整样板：
+改哪测哪。全库 141/141。gen.rs 18699→18609。
