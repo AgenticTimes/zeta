@@ -26431,3 +26431,64 @@ CPython 零次）；不齐组自动回退逐例＋组级单次重试（507 假�
 载具/门禁等 16 词列平实说法）＋第 4 条检验标准"不熟这个仓库的人能不能不看
 上下文读懂"。历史台账行按既定规则不回改，新文即起生效。三件事仍等用户拍板：
 承认类型标记路线／先出散落点清单／大文件验收方式改节奏性。本笔无代码面。
+
+## 批次 813（代码 6cd4193a）：#268② 未标注函数返回浮点时的调用槽回填
+
+### 一、症状（可复现）
+
+```python
+def m(v):
+    return v.mean()
+
+xs = [10.0, 20.0, 30.0]
+print(m(xs))          # 打 4626322717216342016，真值 20.0
+y = m(xs); print(y)   # 同上
+class Calc:
+    def avg(self, v):
+        return v.mean()
+print(Calc().avg(xs)) # 同上；嵌套 def 里 `return inner([1.0,2.0,3.0])` 同族
+```
+
+`4626322717216342016` 是 20.0 的 IEEE-754 位型按整数打出来＝值走对了、槽的类型错了。同批实拍的阴性对照：`def plus(a,b): return a + b` 打 5、`def greet(n): return "hi " + n` 打 `hi bob` 一直是对的（整数/字符串面的空白槽本就按 I64 走）。
+
+### 二、根因（两张表没人对齐，批次 399 定的那条规则只兑现了一半）
+
+1. **被调方**的 LLVM 返回型：`Mir::signature_ret_ty()`（`src/middle/mir/mir.rs:61`，取函数体第一个顶层 `return` 的类型，保留 F32/F64/Str，否则 I64），只被 codegen 的 `infer_fn_return_type`（`src/backend/codegen/codegen.rs:1524-1527`）消费。
+2. **调用点**目的槽型：resolver 的声明表 `func_ret_types`，读于 `src/middle/mir/gen.rs:15346-15350`，`get(base).cloned().unwrap_or(Type::I64)`。未标注 def 在这张表里是空白值——普通 def 是单元 `Tuple([])`（批次 300 的写法），class 方法脱糖默认是 `I64`（批次 451）。
+3. `print` 的分派在降 MIR 时就按 type_map 定死（`gen.rs:11238`、`:11911`：F32/F64 ⇒ `println_f64`，否则 `println_i64`）⇒ **codegen 侧修不了**，只能从 MIR/降级侧动手。codegen 的 `note_return_slot_mismatch`（`codegen.rs:8158`，docs/ABI.md §2 R7）会报 "callee returns float, caller's dest slot is int"，是诊断不是修法。
+4. AST 侧的 `Resolver::unannotated_return_ty`（`resolver.rs:4809`）看不到 MIR 侧的折叠（`v.mean()` → `zeta_mean_vec`、`round(v,1)` → `py_round_n`），所以补不出浮点型——这条路本批没走，改读被调方自己降完的结论。
+
+### 三、修法（一处，`src/middle/resolver/resolver.rs`）
+
+- `lower_to_mir` 末尾：`if let AstNode::FuncDef{name,..} = ast` 时，把 `mir.signature_ret_ty()` 里的 F32/F64 记进新表 `body_ret_tys`（非浮点不记）。
+- 同函数取表处：把空白位（`I64`／`Tuple([])`）用 `body_ret_tys` 回填；`-> i64` 这种显式声明与被调浮点的分歧不动（留 #33／R7 裁），表里没有的名字不新增键（20+ 处 `contains_key` 分支依赖"键存在＝声明过"）。
+- **顺序无关是这一批的真正难点**：`src/lib.rs:129-138` 的降型循环按 `resolver.get_registered_funcs()`（`resolver.rs:6063`，`registered_funcs.values()`）取项，是 HashMap 序，逐次变。插印记六跑实拍：三次 `enter lower_to_mir main` 早于 `enter lower_to_mir m`。第一版直接依赖该表 ⇒ 钉子逐次翻；第二版在取表前批量预热一轮 ⇒ `m` 族修好、`round` 族仍翻；第三版改惰性 `prime_body_ret(name)`：需要哪个空白名就就地降哪个 def（产出的 MIR 丢弃，真定义仍由 lib 的循环各发一遍），`primed_names` 记住"看过"避免反复重降，`priming` 挡 `a` 调 `b`、`b` 又调 `a` 的环。
+
+### 四、钉子读数（改前 vs 改后，同一套 expect）
+
+`t813_unannotated_float_return.z`（6 条 expect：20.0／20.0／5／hi bob／20.0／2.0，真值按 CPython 的 `statistics.mean`／整数加／字符串拼同源核对）。
+
+- 改前：隔离树 `/tmp/wt813pre`（HEAD 自基线）放改前件 bf6271be5438ef9982c9cb258eeda3b1 与改前 `.o` 5cc8441f…，`verdict` FAIL，actual 三处位型：`4626322717216342016`（20.0）×3、`4611686018427387904`（2.0）。
+- 改后：件 6d52b8ff221e17a257c137633a70576e，`run_one.sh` 四跑 verdict 全 PASS（`/tmp/b813/nailpost1-3`、`np_raw`）。
+- 最小面确定性：`/tmp/b813/min1.z`（mean＋嵌套＋class）8/8 与 4/4 全对。
+
+### 五、本批不收的形状（实拍留证，另登 #271）
+
+`def r1(v): return round(v, 1)`：改前 6/6 稳定位型 4613037098315599053（真值 2.6）；改后 6 跑＝2 次 2.6／4 次位型。逐跑 MIR 差异只有两处——`main` 局部槽 2 的 `F64` ↔ `Tuple([])` 与 `println_f64`／`println_i64` 一行（md5：af55dbff… ×4、a6778f01… ×2），被调方 `r1` 自己的 MIR 六跑逐字节相同。⇒ 翻点在"能否登记到被调方 body 型"这一环；候选是 `prime_body_ret` 的命中条件与 `gen.rs:17086` 硬写 `type_map.insert(id, Type::I64)` 的 plain-call 臂，成因未实测，不写成结论。把这个逐次翻的形状放进套件会让全量 python_style 逐次不稳，故从钉子里摘出（夹具头留了实拍注记）。
+
+### 六、门禁与核对
+
+- 全量 `bash tests/python_style/run.sh` 两遍：`474 passed, 0 failed, 0 known-fail, 0 xpass`，两遍日志 `diff` 为空 ⇒ 本批未把任何在绿用例改成逐次翻。
+- `bash tools/sample_gate.sh 813` rc=0：差分窗口 3 `match=285 judged=285 rate=100.0% bad_case=0`（总用例 285）；python_style 抽样 42/0；official 18/18（1 条 chronic 链接缺绑定＝quantum_basic）；corpus 解析 37/40＝92%。
+- 位移 A/B（`src/middle` 渗透面广）：改前二进制置同目录（`target/release/zetac_pre813`，避免仓外件的 pylib 库面差）跑同窗口差分，285/285 与改后同读数。
+- 双写核对 `tools/check_runtime_doublewrite.py`：主树 rc=1（新增 2＝MISSING zeta_print_bool_word arity=2、MISSING zeta_print_f64_word arity=2）；改前隔离树同样 rc=1、同样两条，且两侧 `runtime/py_additions.c`（a8140963…）与 `src/backend/codegen/codegen.rs`（90cb5b7e…）md5 相同 ⇒ HEAD 既存、属车道未提交面，非本批引入（本批零 `runtime/`、零 codegen 改动）。
+- 锚点核对 `tools/check_abi_anchors.py`：rc=2，漂移 183／新 0／消失 6（基线 307 条、待归属 98 条）。本批 resolver.rs 有行号搬家，按 795／803-807 先例在有车道在制面时不 `--rebind`，漂移数入账。
+- `tools/corpus_baseline.py` 的 37/40：在册读数 40/40（roadmap:26284）。取改前对照时发现该脚本第 13 行 `ZETAC = "target/release/zetac"` 是写死常量（环境变量覆盖无效），改件后跑挂到 27 分钟不返回（改后侧同件 77-86 秒跑完）⇒ 掐进程、还原树件，归因未取得，与 #271 附项同登。三枚未过＝`趋势筛选ETF轮动.py`、`趋势筛选ETF轮动10倍.py`、`首板低开优化版.py`。
+
+### 七、残留
+
+1. #271 主项：`round` 形状逐次翻的定性与修法。
+2. #271 附项：corpus 37/40 与在册 40/40 的差异归因（本批未跑成）。
+3. #268 其余成员、#270（`df["col"].mean()`，另一处站点，无 R7 出声）、#267 余项。
+4. 锚点重绑债与未归因分母 342→337 照旧在册。
+5. 显式 `-> i64` 声明与被调浮点的分歧仍只出声不裁（#33／docs/ABI.md §2 R7）。
