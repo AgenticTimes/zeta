@@ -54,7 +54,7 @@ else
 fi
 
 # --- ② python_style 10% 轮转 ---
-ps_ok=0; ps_total=0; ps_bad=""; ps_missing=""
+ps_ok=0; ps_total=0; ps_bad=""; ps_missing=""; ps_known_n=0; ps_known=""; ps_xpass=""
 for z in "$ROOT"/tests/python_style/t*.z; do
   [ -e "$z" ] || continue
   b=$(basename "$z" .z)
@@ -68,18 +68,28 @@ for z in "$ROOT"/tests/python_style/t*.z; do
     ps_missing="$ps_missing $b"
   elif grep -q "^PASS" "$d/verdict"; then
     ps_ok=$(( ps_ok + 1 ))
+  elif grep -q "^KNOWN-FAIL" "$d/verdict"; then
+    ps_known_n=$(( ps_known_n + 1 )); ps_known="$ps_known $b"
+  elif grep -q "^XPASS" "$d/verdict"; then
+    ps_xpass="$ps_xpass $b"
   else
     ps_bad="$ps_bad $b"
   fi
 done
+# 钉住的夹具（`// known-fail:`）不计红：run_one.sh 对带标记的用例只在值符合预期时给
+# XPASS、其余给 KNOWN-FAIL（批次 304 口径），所以 KNOWN-FAIL＝"已知缺口照旧"，
+# XPASS＝"预期已达成、标记可摘"——两者都不是本批引入的失败。真红仍然只有
+# FAIL、缺 verdict 与分母为 0 三类（批次 10008 加这段；窗口 7 首跑实拍 t450 被当红）。
 if [ "$ps_total" -eq 0 ]; then
   echo "② python_style: 分母为 0＝读数作废"; rc_total=1
 elif [ -n "$ps_missing" ]; then
   echo "② python_style: 缺 verdict 判定文件（工具没跑到底）:$ps_missing"; rc_total=1
 elif [ -n "$ps_bad" ]; then
-  echo "② python_style: ${ps_ok}/${ps_total} PASS，非 PASS:$ps_bad"; rc_total=1
+  echo "② python_style: ${ps_ok}/$(( ps_total - ps_known_n )) PASS，非 PASS:$ps_bad"; rc_total=1
 else
-  echo "② python_style: ${ps_ok}/${ps_total} PASS"
+  echo "② python_style: ${ps_ok}/$(( ps_total - ps_known_n )) PASS" \
+       "$([ "$ps_known_n" -gt 0 ] && printf '（另 %d 条钉住 KNOWN-FAIL 不计红:%s）' "$ps_known_n" "$ps_known")" \
+       "$([ -n "$ps_xpass" ] && printf '★ 可摘标（XPASS）:%s' "$ps_xpass")"
 fi
 
 # --- ③ official 10% 轮转 ---
