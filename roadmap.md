@@ -25780,3 +25780,45 @@ official 总数为 0、语料读不到"解析通过"行或分母为 0 ⇒ 一律
 按"宁可零落地也不交半修"停在归因（`403df85d`）这一步。车道在制面
 （`src/error_codes.rs`、`frontend/parser/*`、`worktree.md`、t562/t563）未入本笔；
 `worktree.md` 连续五批未随批。不 push。
+
+## 批次 10006（cleanup 车道）：#266① 跨模块同名绑定——调用方本模块自有定义优先
+
+**动因**：`#266①` 是 10004 后续归因（`403df85d`）留下的最后一格挡住语料的缺陷（2/40 文件编译期硬崩溃）。
+查证 bootstrap 树时发现同一形状已在 bootstrap 批次 754 修过（`#265`，守卫在
+`/Users/meetai/source/zeta-src/src/middle/mir/gen.rs:7224-7244`），本树缺这段 ⇒ 本批按本树地形移植。
+
+**根因（本树实测链）**：裸名调用降低 `src/middle/mir/gen.rs:6872` 直接查 `py_member_aliases`
+（写入点 `src/middle/resolver/resolver.rs:604-607`，普通 `insert`，同名后写覆盖先写），
+**不看调用方自己模块里有没有同名定义**。语料 `jq_wufu.py` 自带 `get_premium_rate`（`:632`，返回三值元组），
+但别名表把它指向 `backend.strategy.wufu_trading` 的同名函数（标注 `-> float | None`），
+于是 `:674` 的 `premium, _, _ = get_premium_rate(…)` 把元组句柄标成 F64，
+`src/backend/codegen/codegen.rs:4178` 快捷臂 `into_int_value()` 对 FloatValue 硬转崩溃。
+返回型表本身不冲突（`resolver.rs:5120-5147` 的键是改名后的限定名，两颗同名函数各自在册），
+坏的只是被调符号的选取。
+
+**修法**：在查别名表之后、发调用之前插入一段守卫——用 `current_module` 拼出本模块限定名，
+若该名字在 `func_param_names` 里（＝本模块确有这个定义）且与别名指向的限定名不同，
+就把 `(module, member)` 改回 `(current_module, method)`。即"别的模块的 `from .x import f`
+不得漏进本文件的命名空间"，与 CPython 作用域语义一致。字段在本树齐备
+（`gen.rs:236 current_module`、`gen.rs:252 func_param_names`），无新增依赖。
+
+**读数**（改前件 `67935f670e32a84bb24dc780c536d64d`／改后件 `ed5227ccd29b70c4ee9ae17500926f10`，
+运行期 `.o` 两侧同值 `878479bebf8d79a8539ee9a680fb463b`，零 C 改动）：
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| 语料解析通过 | 38/40（10005 门禁在册读数） | **40/40** |
+| 差分（窗口 6，272 条抽 271 判定） | 未跑该窗口 | 271/271 全配（bad_case 1 条见下） |
+| python_style（窗口 6） | 未跑该窗口 | 42/42 |
+| official（窗口 6） | 未跑该窗口 | 23/23（含链接缺绑定 1，chronic 不计红） |
+
+**差分步 rc=2 的说明（不是假绿，也不是本批引入）**：唯一未判定的一条是 `del_undefined_var`，
+门禁日志原文 `bad_case del_undefined_var [control] 参考侧退出 1: NameError: name 'x' is not defined`
+＝对照侧（CPython）自己跑不出真值，与编译器无关；`diff_test.py` 因此回 rc=2，`tools/sample_gate.sh`
+原样透传成总 rc=1。本树抽样工具的"坏用例是否计红"口径另登 `#273③`（bootstrap 侧批次 756 已裁定
+不计红，本树未跟）。窗口 6 是 `sample_gate.sh`（10005 才落地）第一次跑到该轮转，
+所以这条不是新出现的失败。
+
+**未做**：本批没有新增 `tests/python_style/` 夹具——该形状需要包内多模块导入
+（`tests/python_style/` 现有带 import 的夹具全是标准库单文件），单文件打不到；
+正证据取自语料两文件的改前/改后读数。`worktree.md` 仍带车道批次 745 的在制面，连续六批未随批。

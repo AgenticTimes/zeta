@@ -849,3 +849,17 @@
   所以本树要做这一格，必须按本树地形重跑五类满足链（不是移植脚本就完事），
   也不能先 `--bless` 把 52 条里的假阳性固化成基线。副本已删除：
   `tools/check_runtime_doublewrite.py` 不在树内，工作树回到 `65e6310a` 的状态。
+
+- 批次 10006 已闭（#266①，代码 `5db01c33`）：裸名调用的被调符号选取加上"调用方本模块自有定义优先"
+  （`src/middle/mir/gen.rs:6872` 之后插守卫，移植 bootstrap 批次 754 的 `#265` 修法，字段
+  `current_module`/`func_param_names` 本树已在册）。语料解析通过 38/40 → **40/40**（改前件
+  `67935f67…`／改后件 `ed5227cc…`，`.o` 两侧同值 `878479be…`，零 C 改动）。#266 三格中 ①② 已闭，
+  剩 ③（`data.rolling(w).mean()` 这类未知接收者的 `.mean()` 落回 `zeta_identity` 静默错值）。
+  本批无新增 `tests/python_style/` 夹具：跨模块同名劫持需要包内多模块导入地形，单文件夹具打不到，
+  正证据是语料两文件（`jq_wufu.py`／`wufu_trading.py`）的改前改后读数。
+- 批次 10006 加注（#273 新增第 ③ 格，工具面）：`tools/sample_gate.sh` 把"对照侧跑不出真值"的
+  坏用例算进了红——窗口 6 首跑差分步 271/271 全配、`bad_case del_undefined_var`
+  （日志原文：`[control] 参考侧退出 1: NameError: name 'x' is not defined`）却使 `diff_test.py`
+  回 rc=2、总 rc=1。bootstrap 侧批次 756 已裁定"坏用例单列、不计 rc"，本树未跟该口径。
+  待办＝在 `tools/diff_test.py`／`tools/sample_gate.sh` 任一侧把 bad_case 排除出 rc，
+  并保持"缺判定文件／分母为 0"两类真红仍然计红。
