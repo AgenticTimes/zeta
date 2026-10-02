@@ -1717,10 +1717,19 @@ impl Resolver {
                 }
                 let new_ret = if saw_map && !saw_str && !saw_i64 && !saw_f64 {
                     Some(Type::Named("map".to_string(), vec![]))
-                } else if saw_str && !saw_i64 && !saw_f64 {
+                } else if saw_str && !saw_i64 && !saw_f64 && !saw_map {
+                    // 批次 802（#117）：补 !saw_map——map ∨ str 真 union 原先
+                    // 落进这条 Str 臂把 dict 侧投毒（m["a"] 派 str_get 把 map
+                    // 句柄当 char* 读，实拍空行、len 打 1）。
                     Some(Type::Str)
                 } else if saw_f64 && !saw_i64 && !saw_str {
                     Some(Type::F64)
+                } else if saw_map {
+                    // 批次 802（#117）：map ∨ 其它 = 真 union——弃权不等于停
+                    // 默认。定型 PyDynamic：读边界按运行期句柄形分派（字符串
+                    // 键下标走 DictGet、len 走 zeta_dyn_len 几何形判），map/str
+                    // 两面都活。
+                    Some(Type::PyDynamic)
                 } else {
                     None
                 };
@@ -5860,13 +5869,13 @@ fn shim_class_normalize(t: &Type) -> Type {
             }
             AstNode::While { cond, body, else_body } => {
                 Ok(vec![AstNode::While {
-                    cond: cond.clone(),
+                    cond: self.expand_expr_node(cond)?,
                     body: self.expand_stmts(body)?,
                     else_body: self.expand_stmts(else_body)?,
                 }])
             }
             AstNode::If { cond, then, else_ } => Ok(vec![AstNode::If {
-                cond: cond.clone(),
+                cond: self.expand_expr_node(cond)?,
                 then: self.expand_stmts(then)?,
                 else_: self.expand_stmts(else_)?,
             }]),
