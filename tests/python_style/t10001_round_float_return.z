@@ -1,0 +1,17 @@
+# 批次 10001（cleanup 车道）：未标注 def 返回 round(...) 的浮点时，调用点目的槽读
+# 声明表（空白＝单元）＝i64，而被调方 LLVM 签名读自己 MIR 的 signature_ret_ty()＝double
+# ⇒ 落槽按位重打（真值 2.6，错值 4613037098315599053）。
+# 修法＝resolver.lower_to_mir 把已降完 def 的 body 型（只 F32/F64）回灌进 func_ret_types
+# 的空白槽；预热取体必须与 lib 的降型循环同源（registered_funcs），否则同一个 def 两遍
+# 降出不同的 signature_ret_ty()，读数随 HashMap 顺序逐次翻。
+# 本钉不含 xs.mean() 一族：那是批次 810（bootstrap 侧 a5a5b3b8）的折叠根修，cleanup 未含。
+def r1(v):
+    return round(v, 1)
+
+def plus(a, b):
+    return a + b
+
+print(r1(2.567))
+print(plus(2, 3))
+// expect: 2.6
+// expect: 5
