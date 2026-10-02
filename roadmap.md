@@ -26085,3 +26085,29 @@ i128 逐步 checked 乘：入 i64 ⇒ IntLit 折叠；溢出但 128 位内 ⇒ `
 
 **残界**：≥2^127 print 面＝signed-128 模型帽（升精度＝任意精度大数改造，非格级）；
 变底数运行期溢出升级（6**40 形已由既有 i64 幂循环覆盖到 2^63 内，超出同帽）。
+
+## 批次 806（代码 d4333bbf）：None 携带读三面收口——#113 NoneVar 家族余格
+
+**探针五形**：`print(f())`／`v = f()` 后 `print(v)`／`{"k": None}` 读——全打 **0**
+（CPython None）；`m = None`、重绑 `w = None` 两形本就对（654 none_vars 按名渲染）。
+None 性在 AST 可见（`NoneLit`）⇒ 按型渲染最小面成立。
+
+**修三件**：①resolver 返回推断补**纯 None 臂**（`saw_none` 且无 str/f64/i64/map 旗）
+⇒ 定型 `NoneValue`——混型 None∨其它落弃权不动（802 同哲学）；②gen DictLit **全 None
+值**（混型不动，首个值型 Wins 旧约定保持）⇒ 值型 `NoneValue`，经既有 map[K,V] 二参
+读边界让 `d["k"]` 带型；③print 臂 **Var 分支**补 NoneValue 渲染——804 臂只盖非 Var
+实参，`v = f()` 的携带读正漏在这。
+
+**验证**：五形探针全对 CPython；混型 `{"k": None, "j": 5}` 的 `d["j"]=5` ✓、重绑
+`v=5` 后打印 5 ✓、全 None 字典 `len=2` ✓；python_style 全量 **469/0/0/0**（known-fail
+清零＝车道运行期 WIP 使 t572 转绿）；差分**全套** 2845/2845＝**100.0%** 无回归；
+official 193 行 2 LINK-FAIL 存量在册。
+
+**锚点与号位勘案**：漂移 60／消失 1（gen.rs 38＋py_additions 位移＋resolver 2＝车道
+807 落树与其在制面）——**按车道 807 自记先例不 `--rebind`，随车道收口批统一重绑**。
+号位：车道已落树 807（3640045f，list-set intersection），本批 806 后行落树（799/800
+同款倒序先例），以哈希为身份。gen.rs 暂存面单拣勘验：未暂存 diff 四 hunk 全带 806
+标记（车道 warn_unbound hunk 已随其 807 入树），无吸收。
+
+**残界**：混型 dict 的 None 值（per-key 渲染需格标签侧表）；NoneValue 算术/比较面按
+0 语义（CPython TypeError）。
