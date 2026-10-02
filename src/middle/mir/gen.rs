@@ -12388,6 +12388,32 @@ call, no NULL-handle dereference).",
                         .insert(id, receiver_ty.unwrap_or(Type::I64));
                     return id;
                 }
+                // 批次 806（t572 known-fail 收口）：vec 形接收者上的 `xs.into_iter()`
+                // 就是那个 vec。for 降型本就把结果交给 array_len/array_get 去读
+                // （MIR 实拍：ghost 调用的 dest 之后紧跟 `array_len(21)`／
+                // `array_get(21, 24)`），缺的只有那一次调用本身——接收者的元素型
+                // 进了幽灵名 ⇒ `[dynamic]i64::into_iter` 一族，而批次 428 的判据是
+                // "不在 DYN_RUNTIME_BINDINGS 白名单里的 ghost ⇒ 抛"，于是
+                // `xs=[1,2]; for v in xs.into_iter()` 运行期 code=1（i64/f64/str 三形
+                // 实拍全抛）。折成本地 Assign 把句柄原样交给循环，元素型随接收者走：
+                // 若在这里硬写 I64，f64 列的位整会被当整数读——那是把"抛异常"换成
+                // "静默错值"，本仓定为最恶劣的一类，不做。
+                if matches!(method.as_str(), "into_iter" | "iter")
+                    && arg_ids.len() == 1
+                    && receiver.is_some()
+                    && receiver_ty.as_ref().map_or(false, |t| {
+                        matches!(t, Type::DynamicArray(_) | Type::Array(_, _))
+                    })
+                {
+                    self.stmts.push(MirStmt::Assign {
+                        lhs: id,
+                        rhs: arg_ids[0],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    let ty = receiver_ty.unwrap();
+                    self.type_map.insert(id, ty);
+                    return id;
+                }
                 // BATCH-294: `<opaque>.date()` (e.g. `context.current_dt.date()`
                 // where the context factory erased the field type) reached the
                 // weak `_date` abort stub. Zeta's datetime handle IS a PyDate

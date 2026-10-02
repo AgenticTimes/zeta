@@ -1,0 +1,30 @@
+// 批次 806 钉：动态接收者 `into_iter()` / `iter()` 在 vec 形接收者上是 identity，
+// 且**元素型随接收者走**（t572 只锁 i64 一形；这里锁 f64/str/`iter` 三形按值）。
+// 病因（实拍）：接收者的元素型进了幽灵名 ⇒ `[dynamic]i64::into_iter`／
+// `[dynamic]f64::into_iter`／`[dynamic]str::into_iter` 一族，批次 428 的判据是
+// 「不在 `DYN_RUNTIME_BINDINGS` 白名单里的 ghost ⇒ 抛」，于是三形运行期全
+// `Unhandled exception: code=1`（/tmp/b798/p806_{i64,f64,str}.z 在现势二进制实拍）。
+// 修法＝`mir/gen.rs` 给 vec 形接收者（`DynamicArray(_)`／`Array(_, _)`）上的
+// `into_iter`/`iter` 加 identity 臂，把结果折成本地 `Assign` 交给循环——for 降型本
+// 就用 `array_len`/`array_get` 读该句柄（MIR 实拍：ghost 调用的 dest 之后紧跟
+// `array_len(21)`／`array_get(21, 24)`），所以缺的只有那一次调用本身。
+// 元素型必须继承接收者而不是硬写 I64：硬写会把 f64 列的位整当整数读、把 str 列的
+// 句柄当整数读，等于把「出声抛」换成「静默错值」——本仓定为最恶劣的一类，不做。
+ys = [1.5, 2.25]
+acc = 0.0
+for y in ys.into_iter():
+    acc += y
+print(acc)
+zs = ["a", "b"]
+seen = ""
+for z in zs.into_iter():
+    seen += z
+print(seen)
+ks = [7, 8]
+n = 0
+for k in ks.iter():
+    n += k
+print(n)
+// expect: 3.75
+// expect: ab
+// expect: 15

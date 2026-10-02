@@ -3,7 +3,12 @@
 // 但 `xs=[1,2]` 的接收者在 codegen 是 `[dynamic]i64::into_iter` 幽灵派发，
 // batch-419 面按 AttributeError raise（改前后同态，/tmp/b782/push3.z 两侧实拍
 // code=1）。修面在 DYN_RUNTIME_BINDINGS 白名单接线，随 #266 余项另批处理。
-// known-fail: dynamic receiver into_iter raises instead of iterating
+// 批次 806 收口（旧计划的"白名单接线"换面，原句不回改）：真修法在降型侧——
+// mir/gen.rs 给 vec 形接收者（DynamicArray(_)/Array(_,_)）上的 into_iter/iter 加
+// identity 臂，折成本地 Assign 交给 for（循环本就用 array_len/array_get 读该句柄），
+// 元素型继承接收者而非硬写 I64（硬写会把 f64 位型/str 句柄当整数读＝抛换静默错值）。
+// known-fail 标记摘除，本夹具转常规回归；f64/str/iter 三形按值另锁
+// t806_dyn_into_iter_values（3.75/ab/15，与 CPython 逐字相同）。
 xs = [1, 2]
 total = 0
 for v in xs.into_iter():
