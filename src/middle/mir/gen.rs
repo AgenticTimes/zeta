@@ -5,6 +5,8 @@
 //! All Zeta features (methods, generics, control flow, dicts, etc.) are lowered here.
 //! Clean, fast, and fully documented.
 
+mod call_set;
+
 use crate::frontend::ast::AstNode;
 use crate::middle::mir::mir::{Mir, MirExpr, MirStmt, SemiringOp};
 use crate::middle::specialization::MonoKey;
@@ -12125,100 +12127,17 @@ call, no NULL-handle dereference).",
                 // Python `set` methods on our list-backed sets: `s.add(x)` is a
                 // push; `s.discard(x)` / `s.remove(x)` rebuild without the slot.
                 // They compiled to ghosts (`_set__add`) and failed the link.
-                if matches!(method.as_str(), "add" | "discard" | "remove")
-                    && receiver_ty.as_ref().map_or(false, |t| {
-                        matches!(t, Type::DynamicArray(_) | Type::Array(_, _))
-                            || matches!(t, Type::Named(n, _) if n == "set" || n == "frozenset")
-                            || matches!(t, Type::Str) == false && matches!(t, Type::I64 | Type::PyDynamic)
-                    })
-                {
-                    if method == "add" && arg_ids.len() == 2 {
-                        let elem_is_str = matches!(self.type_map.get(&arg_ids[1]), Some(Type::Str));
-                        let flag = self.next_id();
-                        self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
-                        self.type_map.insert(flag, Type::I64);
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_vec_add_unique".to_string(),
-                            args: vec![arg_ids[0], arg_ids[1], flag],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        // vec_push may reallocate and returns the new handle — write
-                        // it back so a growing set is not silently lost.
-                        if let Some(AstNode::Var(name)) = receiver.as_ref().map(|r| &**r) {
-                            if let Some(&slot) = self.name_to_id.get(name) {
-                                self.stmts.push(MirStmt::Assign { lhs: slot, rhs: id });
-                            }
-                        }
-                        self.type_map.insert(id, receiver_ty.clone().unwrap());
-                        return id;
-                    }
-                    if arg_ids.len() == 2 {
-                        let elem_is_str = matches!(
-                            self.type_map.get(&arg_ids[1]),
-                            Some(Type::Str)
-                        );
-                        let flag = self.next_id();
-                        self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
-                        self.type_map.insert(flag, Type::I64);
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_vec_discard".to_string(),
-                            args: vec![arg_ids[0], arg_ids[1], flag],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        if let Some(AstNode::Var(name)) = receiver.as_ref().map(|r| &**r) {
-                            if let Some(&slot) = self.name_to_id.get(name) {
-                                self.stmts.push(MirStmt::Assign { lhs: slot, rhs: id });
-                            }
-                        }
-                        self.type_map.insert(id, receiver_ty.clone().unwrap());
-                        return id;
-                    }
-                }
-                // Batch 807: `sa.intersection(sb)` on a list-backed set. The
-                // receiver's element type is what reached the ghost name
-                // (`[dynamic]i64::intersection` / `[dynamic]str::…`), so batch
-                // 428's rule turned the call site into a raise — measured 9 of
-                // the 40 real strategy files writing
-                // `list(set(temp).intersection(set(stockList)))`.
-                // The result type INHERITS the receiver: a hard-coded I64 would
-                // read a str column's handles as integers, swapping a loud raise
-                // for a silent wrong value (this repo's worst class).
-                if method == "intersection"
-                    && arg_ids.len() == 2
-                    && receiver.is_some()
-                    && receiver_ty.as_ref().map_or(false, |t| {
-                        matches!(t, Type::DynamicArray(_) | Type::Array(_, _))
-                            || matches!(t, Type::Named(n, _) if n == "set" || n == "frozenset")
-                            || matches!(t, Type::Str) == false && matches!(t, Type::I64 | Type::PyDynamic)
-                    })
-                {
-                    let elem_of_str = |t: Option<&Type>| match t {
-                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
-                            matches!(**e, Type::Str)
-                        }
-                        Some(Type::Str) => true,
-                        _ => false,
-                    };
-                    let elem_is_str =
-                        elem_of_str(receiver_ty.as_ref()) || elem_of_str(self.type_map.get(&arg_ids[1]));
-                    let flag = self.next_id();
-                    self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
-                    self.type_map.insert(flag, Type::I64);
-                    self.stmts.push(MirStmt::Call {
-                        func: "py_vec_intersect".to_string(),
-                        args: vec![arg_ids[0], arg_ids[1], flag],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    // The helper returns a FRESH vector and never mutates the
-                    // receiver, so no write-back here (unlike add/discard above).
-                    self.type_map.insert(id, receiver_ty.clone().unwrap());
-                    return id;
+                // 批次 816：集合族（add/discard/remove/intersection）搬到
+                // 子模块 gen/call_set.rs——家族文件第一刀。同位调用：链中
+                // 位置不变，顺序语义保持。
+                if let Some(sid) = self.lower_set_family(
+                    receiver.as_deref(),
+                    receiver_ty.as_ref().unwrap_or(&Type::I64),
+                    method.as_str(),
+                    &arg_ids,
+                    id,
+                ) {
+                    return sid;
                 }
                 // `s.clear()` on a list-backed set (batch 294:
                 // `PositionLedger._today_buys.clear()` hit the weak `_clear`
