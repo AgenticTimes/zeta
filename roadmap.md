@@ -25855,3 +25855,46 @@ DictGet、len 走 `zeta_dyn_len` 几何形判（767 值标签大弧既有机器�
 存量在册；锚点 1 条搬家（`resolver.rs:4727→4736`）`--rebind` 全自动配对复验 rc=0。
 残界登记：数值面 union（i64∨f64 返回）仍走旧默认（本批不动，无实害案例）；PyDynamic
 值的方法面（如 `s.upper()`）依赖注册表面，未见实害不在本批。
+
+## 批次 803（代码 46b3c9a1）：matches! 恒 false 根修——宏展开＋模式折算＋cond 递归
+
+**症状**：selfhost `Result: 0`（796/802 余项"期望链值未到"格）。探针
+`/tmp/b798/probe_matches.z` 实拍 matches! 三面全挡：`p_a=100 p_b=100 p_i=100`
+（期望 101/110/0）；MIR 实拍 cond 直接 `IntLit(0)`、`!matches!` 成
+`Call{func:"!", args:[IntLit 0]}`。
+
+**根因三段**（逐段实拍，每段修法后读数推进一格）：
+1. `macro_expand.rs` dispatch 无 "matches" 臂 ⇒ `Unknown macro` Err ⇒ 节点透传
+   gen.rs:4831 `MacroCall => IntLit(0)` 静默兜底 ⇒ 恒 false。
+2. resolver `expand_macros_in_node` 的 If/While 臂只递归 then/body/else_，
+   **cond 原样 clone** ⇒ cond 位宏永不进扩展器（加①后探针读数不变 100/100/100）。
+3. 宏实参按**表达式**解析：`Tok::Ident(s)` → `PathCall{path:["Tok"],
+   method:"Ident"}`；match 臂模式侧 `parse_struct_pattern` 产
+   `StructPattern{variant:"Tok::Ident", fields:[("0", Var s)]}`——形不同形 ⇒
+   构造子解析不到 ⇒ 载荷臂恒不匹配（①②修后中间读数 p_i=100；unit 臂
+   `Tok::A` 两侧同形 `Var("Tok::A")`，故 p_a/p_b 先到）。对照钉
+   `probe_match_direct.z` 直写 match 三面全对 ⇒ 差在折算非降格。
+
+**修法**：macro_expand.rs 加 `expand_matches`（`matches!(e, pat)` 展开为
+`match e { pat => true, _ => false }`）＋`pattern_from_expr` 递归折算
+（PathCall/Call→StructPattern，字段键按位置 "0"/"1"…）；resolver While/If 的
+cond 改走 `expand_expr_node`（UnaryOp/BinaryOp 既有递归自动接管 `!` 与 `&&`）。
+
+**验证**：钉 `t803_matches_variant_pattern.z`（p_a=101/p_b=110/p_i=0）；改前红形
+用 HEAD detached worktree（b1b8f994）AOT 实拍 100/100/100——首趟 Os NotFound
+＝HEAD 树无本批新夹具，cp 后取红；改后 jit/AOT 双面全绿。直 match 对照片
+d_i=100/d_a=1/d_b=0 两侧不变（无回归面）。
+
+**门禁**：sample_gate 803 rc=0——差分窗口 3 285/285=100.0% bad_case=0；
+python_style 窗口 3 42/0/0/0；official 18/18＋1 link-only chronic（quantum_basic
+在册）；corpus 全跑 40/40。锚点 307/307 漂移 0（resolver 改动净行数零变）。
+
+**selfhost 新格**：ZT-WARN 保持 0；`Result:` 仍 0——matches! 环通后挡格换面：
+带打印副本（/tmp/b798/sh803_probe.z）实拍 ntok=5、nast=1，tokenize 外层 while
+尾 `i += 1` 与分支内推进双计的 Rust 方言 quirk 在现行引擎下丢 token
+（BraceOpen/BraceClose 等丢发）⇒ 值链余项归 tokenize 面（#266 新登记格）。
+
+**勘案（坑 109 四度）**：resolver.rs 的 cond 递归两 hunk 在暂存前被并行车道
+提交 d0ac5a0d（802 union #117）整包收编——工作树与 HEAD 一致、无法再分段；
+本批主体提交 46b3c9a1 含 macro_expand.rs＋t803 钉，cond 递归以 d0ac5a0d
+为落树载体。
