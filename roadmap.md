@@ -26492,3 +26492,22 @@ print(Calc().avg(xs)) # 同上；嵌套 def 里 `return inner([1.0,2.0,3.0])` �
 3. #268 其余成员、#270（`df["col"].mean()`，另一处站点，无 R7 出声）、#267 余项。
 4. 锚点重绑债与未归因分母 342→337 照旧在册。
 5. 显式 `-> i64` 声明与被调浮点的分歧仍只出声不裁（#33／docs/ABI.md §2 R7）。
+
+## 批次 814（代码 acd74181）：gen.rs 重构第一步——emit_call 记账收拢＋dump 探针提前收工＋auto 对照模式
+
+**业界调研**（rustc/Go/Swift/CPython/V8/Cranelift）：无一用单巨文件组织"语句→
+中间指令"翻译；按构造种类分文件是全行业默认；rustc 另有显式"表达式分类函数"
+先例。报告 /tmp/architecture-review-genrs-20261002.html。
+
+**三件**：①emit_call/emit_call_into 收拢 84 处三行记账（机械脚本逐字匹配，
+174 处形状不标准跳过），净 -612 行（19392→18780）；②main.rs 只读探针打印后
+立即收工（此前 dump 后仍落穿完整 LLVM 生成＋链接——帮助文本本承诺
+print instead of building；--dump-mir 与 --emit-llvm 连用仍落穿）；③mir_diff.sh
+auto 模式（基准从 git HEAD 自动派生，按提交哈希缓存构建）。
+
+**验证曲折如实登记**：首验发现编译病态变慢，A/B 定责期间两条车道并发修改
+同一函数（其正调试降级死循环、以 813 防重入收口）污染实验；车道收口后干净
+基座重验全过。字节级对照（mir_diff）因 #268 dump 非确定旋转挂起，行为面
+双层证明替代。附：docs/type-dispatch-inventory.md（F.1 清单，五类 228 处）。
+**挂账**：python_style 结果后补（异步跑中）；#268 修复后补做 mir_diff 逐字节
+对照收官。
