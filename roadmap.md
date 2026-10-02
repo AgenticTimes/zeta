@@ -25898,3 +25898,46 @@ python_style 窗口 3 42/0/0/0；official 18/18＋1 link-only chronic（quantum_
 提交 d0ac5a0d（802 union #117）整包收编——工作树与 HEAD 一致、无法再分段；
 本批主体提交 46b3c9a1 含 macro_expand.rs＋t803 钉，cond 递归以 d0ac5a0d
 为落树载体。
+
+## 批次 804（代码 e4666317）：selfhost tokenize 符号臂丢 token 根修——match 顶层 char 图案走内容比较
+
+**症状**：803 换格项——selfhost `fn tokenize` 的符号臂 `match ch { '(' => … }`
+全部静默丢 token（带打印副本实拍 ntok=5，忠实数 11）。分支隔离探针
+`/tmp/b798/probe_tok804.z` 实拍：word/digit 臂在改前已到（t1/t2/t4/t10 正确），
+符号臂 t3/t8/t9 改前＝0。
+
+**根因（char 值面与图案表示双轨）**：本引擎 char 值是 **1 字串句柄**——`s[i]`
+走 str_get 返回句柄、`'x'` 表达式字面量走 parse_string_lit（单引号＝串引号，
+`s.split(',')` 方言依赖），探针实拍 `s[0] as i64` 是堆地址；而 match **顶层 char
+图案**在 `parse_simple_pattern` 的 alt 里被 `parse_char_lit` 抢先解成**码点**
+`Lit(40/41/123…)`，gen.rs 的 `Lit` 图案臂降成外部 `i64(i64,i64)` `==` ⇒
+句柄≠码点恒不中。对照：`StringLit` 图案臂（gen.rs:15152 注释自曝同款坑）走
+backend PY-A host_str_eq 内容比较是通的（`s[0]=="("`→True 实拍）；
+`src/runtime/char_.rs` 的码点约定（char::from_u32）是历史残留面，不在主派发
+路径。改前存量：仓内除 selfhost 外 char 字面量图案臂 0 处——缺陷因此存活。
+
+**修法**：pattern.rs `parse_simple_pattern` 的 alt 删 `parse_char_lit` 一行 ⇒
+顶层 char 图案落 `parse_string_lit` → StringLit → host_str_eq 轨。
+`parse_range_pattern` 的端点（:276/:279 直调 parse_char_lit）码点语义不动
+（t306 `'a'..='z'` 保持 PASS）。
+
+**验证**：钉 `t804_char_pattern_content_eq.z` 三形态八项（形参 match／调用点
+`s[0]` match／or 链 `'+' | '-'`）。改前红：隔离 worktree /tmp/pre804
+（HEAD=10d17b4a 重建，二进制 fd50176f）harness 面 FAIL 八项全 0——首趟
+Os NotFound＝坑 71 复现（未跟踪新钉不在 HEAD 树，cp 后取红）；改后 0ac6a6e2
+jit PASS＋探针八项全绿。回归专项 t306/t303/t501/t561/t567/t570/t571/
+t572(known-fail 不变)/t573 无放松。
+
+**selfhost 值链裁定（`Result: 0`＝忠实值）**：修复后 ntok=11（Fn,Ident(
+simple),RParen,Minus,Gt,Ident(i32),BraceOpen,Lit42,Plus,Lit1,BraceClose；
+LParen 被 stub 外层 while 尾 `i += 1` 双计 quirk 吃掉＝文本自身行为）；
+nast=1（build_ast 的 Fn 臂 skip 循环吃到 BraceClose，body 内 Lit(42)/Plus/
+Lit(1) 进不了 Program）。此前"期望 44"推演**作废**——把 body token 误当顶层。
+jit rc=0、AOT build/run rc=0、ZT-WARN 0 ⇒ #266 值链余项无缺陷值待追。
+
+**门禁**：sample_gate 804 rc=0——差分窗口 4 285/285=100.0% bad_case=0；
+python_style 窗口 4 57/0/0/0（含新钉 t804）；official 26/26 无 link-only
+chronic；corpus 全跑 40/40。锚点 rc=2：漂移 30＋消失 1 全在 gen.rs＝车道在制
+fromkeys（#113）位移（其注释自标"批次 804"＝撞号警示；提交时点核对车道未落
+804，本批保留号位）；本批 gen.rs 位移＝0 不代绑（795/803 先例）。读数树含
+车道 gen.rs 在制。
