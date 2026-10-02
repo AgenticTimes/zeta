@@ -2250,6 +2250,29 @@ int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
     return 0;
 }
 
+// Batch 807: `sa.intersection(sb)` on our list-backed sets (`py_vec_add_unique`
+// / `py_vec_discard` above own the mutators). Nine of the forty real strategy
+// files spell `list(set(temp).intersection(set(stockList)))` and the call
+// compiled to the ghost `[dynamic]i64::intersection`, which batch 428's rule
+// turns into a raise. Walk the LEFT operand and keep what the right holds,
+// through `py_list_contains` so the packed-word / small-string slot forms
+// (batches 291 / 575) are compared by CONTENT rather than dereferenced.
+// Push-if-absent, so the result is a set even when `set([...])` left
+// duplicates in the INPUT (the constructor's own dedup gap is a separate
+// entry — it is NOT papered over here).
+int64_t py_vec_intersect(int64_t a, int64_t b, int64_t elem_is_str) {
+    int64_t n = zt_vec_len(a);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    if (!a || !b) return out;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t v = ((int64_t*)a)[i];
+        if (!py_list_contains(b, v, elem_is_str)) continue;
+        if (py_list_contains(out, v, elem_is_str)) continue;
+        out = vec_push(out, v);
+    }
+    return out;
+}
+
 // ── PY-A: sort/sorted with a key callable (decorate-sort-undecorate) ──
 // Keys are computed once per element; the original index is the tie-breaker,
 // so the sort stays stable like Python's.

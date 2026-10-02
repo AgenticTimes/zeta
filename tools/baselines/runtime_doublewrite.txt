@@ -31,6 +31,7 @@ MISSING|py_str_prefix_any|arity=3
 MISSING|py_vec_add_unique|arity=3
 MISSING|py_vec_cmp_str|arity=3
 MISSING|py_vec_discard|arity=3
+MISSING|py_vec_intersect|arity=3
 MISSING|py_vec_mul|arity=2
 MISSING|py_vec_not|arity=1
 MISSING|py_vec_or|arity=2

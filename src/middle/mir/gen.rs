@@ -12419,6 +12419,48 @@ call, no NULL-handle dereference).",
                         return id;
                     }
                 }
+                // Batch 807: `sa.intersection(sb)` on a list-backed set. The
+                // receiver's element type is what reached the ghost name
+                // (`[dynamic]i64::intersection` / `[dynamic]str::…`), so batch
+                // 428's rule turned the call site into a raise — measured 9 of
+                // the 40 real strategy files writing
+                // `list(set(temp).intersection(set(stockList)))`.
+                // The result type INHERITS the receiver: a hard-coded I64 would
+                // read a str column's handles as integers, swapping a loud raise
+                // for a silent wrong value (this repo's worst class).
+                if method == "intersection"
+                    && arg_ids.len() == 2
+                    && receiver.is_some()
+                    && receiver_ty.as_ref().map_or(false, |t| {
+                        matches!(t, Type::DynamicArray(_) | Type::Array(_, _))
+                            || matches!(t, Type::Named(n, _) if n == "set" || n == "frozenset")
+                            || matches!(t, Type::Str) == false && matches!(t, Type::I64 | Type::PyDynamic)
+                    })
+                {
+                    let elem_of_str = |t: Option<&Type>| match t {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
+                            matches!(**e, Type::Str)
+                        }
+                        Some(Type::Str) => true,
+                        _ => false,
+                    };
+                    let elem_is_str =
+                        elem_of_str(receiver_ty.as_ref()) || elem_of_str(self.type_map.get(&arg_ids[1]));
+                    let flag = self.next_id();
+                    self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
+                    self.type_map.insert(flag, Type::I64);
+                    self.stmts.push(MirStmt::Call {
+                        func: "py_vec_intersect".to_string(),
+                        args: vec![arg_ids[0], arg_ids[1], flag],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    // The helper returns a FRESH vector and never mutates the
+                    // receiver, so no write-back here (unlike add/discard above).
+                    self.type_map.insert(id, receiver_ty.clone().unwrap());
+                    return id;
+                }
                 // `s.clear()` on a list-backed set (batch 294:
                 // `PositionLedger._today_buys.clear()` hit the weak `_clear`
                 // abort stub). In-place len=0 — the handle stays valid, so no
