@@ -25695,3 +25695,40 @@ quantum_basic＝存量缺运行时绑定，roadmap:25006 在册）；锚点漂�
 
 **残差另案**：①文本列恒等 map 显示 `10` 非 `10.0`（构造文本化把 10.0 存成 "10"，浮点 repr
 格式另格）；②t574 闭包体内全局函数调用丢体（车道 797 行已登记）。
+
+## 批次 800（70d5e50d）：闭包体全局调用丢体根修——lower_closure 增 ExprStmt 拆包臂
+
+**方法**：systematic-debugging 四阶段。Phase 1 用 ZETA_PROBE 双插桩（Call 臂入口＋closure body 形状）
+实拍锁定：λ 体单表达式被前端包成 `ExprStmt{expr}`，`lower_closure` body_val 的 `_` 臂把它直送
+`lower_expr`，而 lower_expr_node 主匹配无 `AstNode::ExprStmt` 臂 ⇒ 落尾兜底 `_ => exprs.insert(id, IntLit(0))`
+（gen.rs:18073），零语句发射、无告警（无 W1010 恰证兜底臂路径）。闭包 MIR 三面实拍同形：
+`ParamInit; Call zeta_env_get("double_it")→槽; Return IntLit(0)`。对照面：同文件顶层
+`g = double_it; g(5)` 走 BATCH-294 蹦床臂（gen.rs:14641，发 `zeta_call1`）打 10 正确——缺陷只在闭包体路径。
+
+**修法**：body_val match 增 `AstNode::ExprStmt { expr } => child.lower_expr(expr)`（+7 行含注释）。
+选点依据＝仓内既有四处 ExprStmt 拆包先例（lower_ast:3167、Block 末表达式:4794、多下标:7034、
+collect_free_vars:18286）都是局部拆包，不动主匹配兜底以控爆炸半径；`last_closure_ret_ty` 的
+非 Block 读类型路径随拆包自然生效。
+
+**验证**（主树二进制 a8249df7；隔离树纯面 dd462260 A/B 复测判据全同）：
+- p1 `xs.map(|a| double_it(a))`：0/0/0 → **2/4/6**；p2 `h(3)`：0 → **6**
+- probe_typed 1/6/1e-323/**12**；probe_map **12**（SimpleEval 方法调用面不受影响，如实读数）
+- t574 摘 known-fail 转常规钉（run_one 双面 PASS，expect 12）
+- selfhost：AOT compile/link rc=0（PY-A 0、Undefined 0）、run rc=0；jit rc=0 `Result: 0` 零 E4016
+- python_style 全量 **462/0/1/0**（唯一 known-fail＝t572）；selfhost_compile **59/59**
+- sample_gate 800 窗口 0 **rc=0**（差分 285/285 bad_case=0、py 43/0、official 14/14、corpus 40/40）
+- 锚点：gen.rs +7 位移 1 条自动配对 rebind（18742→18749），复验 rc=0"锚点全部对上"
+
+**号位**：原编 798——车道记录笔 d4719f3f 已占 798；让到 799——车道在制批自述"批次 799 裁定落地"
+（t492 expect 10→10.0 方言），再让位 800。代码注释即最终号 800。
+
+**勘案两条**：
+1. 污染面：主树测量二进制含车道未提交 py_additions.c 在制改；隔离树以 HEAD C 面重建复测，
+   全部判据读数一致 ⇒ 本臂结论与车道 WIP 无关。隔离树首建时 build.rs 因缺未跟踪生成物
+   `runtime/aliases.inc.c` 跳掉整个 C 运行期嵌入（坑 71 复现，症状＝jit 全符号 E4016 陷阱），
+   cp 生成物＋touch C 源强制重跑 build.rs 后正常——"cargo Finished 但 md5 不变"＝build.rs 没重跑。
+2. t492 首红归因更正（对会话中途的"负载假红"初判）：车道在制把该钉 expect 从 `10` 改烙成 `10.0`
+   （浮点 repr 方言裁定落地），首跑套件读到半改面（expected 旧值 vs actual 新渲染）⇒ 红非负载噪声、
+   非本批回归。
+
+**余项**：无——#266 行"闭包体全局调用丢体"残差格清零。
