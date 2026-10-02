@@ -4075,15 +4075,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             Some(Type::Named(_, targs)) if matches!(targs.first(), Some(Type::Str))
         );
         if key_is_str {
-            let nid = self.next_id();
-            self.stmts.push(MirStmt::Call {
-                func: "map_str_key".to_string(),
-                args: vec![id],
-                dest: nid,
-                type_args: vec![],
-            });
-            self.exprs.insert(nid, MirExpr::Var(nid));
-            self.type_map.insert(nid, Type::I64);
+            let nid = self.emit_call("map_str_key", vec![id], Type::I64);
             return nid;
         }
         self.lower_map_key(id)
@@ -4098,15 +4090,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         // same lookup through a different literal missed (`class_inventory_dict`:
         // add_item(name, qty) wrote pointer-hashed keys, report() read
         // content-hashed keys → all values 0).
-        let nid = self.next_id();
-        self.stmts.push(MirStmt::Call {
-            func: "map_str_key".to_string(),
-            args: vec![id],
-            dest: nid,
-            type_args: vec![],
-        });
-        self.exprs.insert(nid, MirExpr::Var(nid));
-        self.type_map.insert(nid, Type::I64);
+        let nid = self.emit_call("map_str_key", vec![id], Type::I64);
         nid
     }
 
@@ -4267,15 +4251,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         }
         let recv_id = self.lower_expr(b);
         let k_id = self.lower_expr(k);
-        let r_id = self.next_id();
-        self.stmts.push(MirStmt::Call {
-            func: "zeta_map_get_render".to_string(),
-            args: vec![recv_id, k_id],
-            dest: r_id,
-            type_args: vec![],
-        });
-        self.exprs.insert(r_id, MirExpr::Var(r_id));
-        self.type_map.insert(r_id, Type::Str);
+        let r_id = self.emit_call("zeta_map_get_render", vec![recv_id, k_id], Type::Str);
         Some(r_id)
     }
 
@@ -4321,15 +4297,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 let tags_id = self.next_id();
                 self.exprs.insert(tags_id, MirExpr::IntLit(tags));
                 self.type_map.insert(tags_id, Type::I64);
-                let nid = self.next_id();
-                self.stmts.push(MirStmt::Call {
-                    func: "zeta_tuple_repr".to_string(),
-                    args: vec![id, len_id, tags_id],
-                    dest: nid,
-                    type_args: vec![],
-                });
-                self.exprs.insert(nid, MirExpr::Var(nid));
-                self.type_map.insert(nid, Type::Str);
+                let nid = self.emit_call("zeta_tuple_repr", vec![id, len_id, tags_id], Type::Str);
                 return nid;
             }
             _ => "to_string_i64",
@@ -4505,15 +4473,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         let expect_id = self.next_id();
         self.exprs.insert(expect_id, MirExpr::IntLit(tag));
         self.type_map.insert(expect_id, Type::I64);
-        let cond_id = self.next_id();
-        self.stmts.push(MirStmt::Call {
-            func: "==".to_string(),
-            args: vec![tag_slot, expect_id],
-            dest: cond_id,
-            type_args: vec![],
-        });
-        self.exprs.insert(cond_id, MirExpr::Var(cond_id));
-        self.type_map.insert(cond_id, Type::Bool);
+        let cond_id = self.emit_call("==", vec![tag_slot, expect_id], Type::Bool);
         cond_id
     }
 
@@ -4537,14 +4497,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         let start_id = self.lower_expr(start);
         let end_id = self.lower_expr(end);
 
-        self.stmts.push(MirStmt::Call {
-            func: ">=".to_string(),
-            args: vec![scrutinee_id, start_id],
-            dest: ge_id,
-            type_args: vec![],
-        });
-        self.exprs.insert(ge_id, MirExpr::Var(ge_id));
-        self.type_map.insert(ge_id, Type::Bool);
+        self.emit_call_into(ge_id, ">=", vec![scrutinee_id, start_id], Type::Bool);
 
         self.stmts.push(MirStmt::Call {
             func: if inclusive { "<=" } else { "<" }.to_string(),
@@ -4555,15 +4508,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         self.exprs.insert(le_id, MirExpr::Var(le_id));
         self.type_map.insert(le_id, Type::Bool);
 
-        let and_id = self.next_id();
-        self.stmts.push(MirStmt::Call {
-            func: "&&".to_string(),
-            args: vec![ge_id, le_id],
-            dest: and_id,
-            type_args: vec![],
-        });
-        self.exprs.insert(and_id, MirExpr::Var(and_id));
-        self.type_map.insert(and_id, Type::Bool);
+        let and_id = self.emit_call("&&", vec![ge_id, le_id], Type::Bool);
         and_id
     }
 
@@ -4601,15 +4546,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         }
         let len_id = match base_ty {
             Type::DynamicArray(_) => {
-                let len_id = self.next_id();
-                self.stmts.push(MirStmt::Call {
-                    func: "vec_len".to_string(),
-                    args: vec![base_id],
-                    dest: len_id,
-                    type_args: vec![],
-                });
-                self.exprs.insert(len_id, MirExpr::Var(len_id));
-                self.type_map.insert(len_id, Type::I64);
+                let len_id = self.emit_call("vec_len", vec![base_id], Type::I64);
                 len_id
             }
             Type::Array(_, ArraySize::Literal(n)) => {
@@ -4679,15 +4616,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         if matches!(self.current_fn_ret, Some(Type::F64))
             && matches!(self.type_map.get(&val), Some(Type::I64))
         {
-            let nid = self.next_id();
-            self.stmts.push(MirStmt::Call {
-                func: "zeta_float_i64".to_string(),
-                args: vec![val],
-                dest: nid,
-                type_args: vec![],
-            });
-            self.exprs.insert(nid, MirExpr::Var(nid));
-            self.type_map.insert(nid, Type::F64);
+            let nid = self.emit_call("zeta_float_i64", vec![val], Type::F64);
             return nid;
         }
         val
@@ -5335,15 +5264,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         if base_map_str {
                             let recv_id = self.lower_expr(base);
                             let k_id = self.lower_expr(index);
-                            let r_id = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "zeta_map_get_render".to_string(),
-                                args: vec![recv_id, k_id],
-                                dest: r_id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(r_id, MirExpr::Var(r_id));
-                            self.type_map.insert(r_id, Type::Str);
+                            let r_id = self.emit_call("zeta_map_get_render", vec![recv_id, k_id], Type::Str);
                             part_ids.push(r_id);
                             continue;
                         }
@@ -5688,15 +5609,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         "<" | ">" | "<=" | ">=" | "==" | "!="
                     );
                     if is_cmp {
-                        let c = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "zeta_big_cmp".to_string(),
-                            args: vec![bl, br],
-                            dest: c,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(c, MirExpr::Var(c));
-                        self.type_map.insert(c, Type::I64);
+                        let c = self.emit_call("zeta_big_cmp", vec![bl, br], Type::I64);
                         let zero = self.next_id_with_lit(0);
                         let ord = match op.as_str() {
                             "<" => "<",
@@ -5922,15 +5835,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     ) {
                         right_id
                     } else {
-                        let f = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "zeta_float_i64".to_string(),
-                            args: vec![right_id],
-                            dest: f,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(f, MirExpr::Var(f));
-                        self.type_map.insert(f, Type::F64);
+                        let f = self.emit_call("zeta_float_i64", vec![right_id], Type::F64);
                         f
                     };
                     // 元素型出声：int 元素列表走真除（CPython [10,20]/2 =
@@ -5986,15 +5891,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     let flag = self.next_id();
                     self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
                     self.type_map.insert(flag, Type::I64);
-                    let eq_id = self.next_id();
-                    self.stmts.push(MirStmt::Call {
-                        func: "py_list_eq".to_string(),
-                        args: vec![left_id, right_id, flag],
-                        dest: eq_id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(eq_id, MirExpr::Var(eq_id));
-                    self.type_map.insert(eq_id, Type::Bool);
+                    let eq_id = self.emit_call("py_list_eq", vec![left_id, right_id, flag], Type::Bool);
                     if op == "!=" {
                         let one = self.next_id_with_lit(1);
                         self.exprs.insert(
@@ -6538,15 +6435,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         self.exprs
                             .insert(fmt_id, MirExpr::StringLit("%Y-%m-%d".to_string()));
                         self.type_map.insert(fmt_id, Type::Str);
-                        let ts_id = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_dt_strftime".to_string(),
-                            args: vec![num_id, fmt_id],
-                            dest: ts_id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(ts_id, MirExpr::Var(ts_id));
-                        self.type_map.insert(ts_id, Type::Str);
+                        let ts_id = self.emit_call("py_dt_strftime", vec![num_id, fmt_id], Type::Str);
                         let kid = self.next_id_with_lit(kind);
                         self.stmts.push(MirStmt::Call {
                             func: "py_vec_cmp_str".to_string(),
@@ -6691,15 +6580,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                                 _ => 0,
                             };
                             let flag = self.next_id_with_lit(elem_is_str);
-                            let cmp_id = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_list_cmp".to_string(),
-                                args: vec![left_id, right_id, flag],
-                                dest: cmp_id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(cmp_id, MirExpr::Var(cmp_id));
-                            self.type_map.insert(cmp_id, Type::I64);
+                            let cmp_id = self.emit_call("py_list_cmp", vec![left_id, right_id, flag], Type::I64);
                             let zero = self.next_id_with_lit(0);
                             self.exprs.insert(
                                 dest,
@@ -6721,15 +6602,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             && map_shaped(self.type_map.get(&left_id))
                             && map_shaped(self.type_map.get(&right_id))
                         {
-                            let eq_id = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "map__eq".to_string(),
-                                args: vec![left_id, right_id],
-                                dest: eq_id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(eq_id, MirExpr::Var(eq_id));
-                            self.type_map.insert(eq_id, Type::I64);
+                            let eq_id = self.emit_call("map__eq", vec![left_id, right_id], Type::I64);
                             if op == "==" {
                                 // map__eq IS the answer — comparing it to 0
                                 // here would invert it (measured: d1 == d1
@@ -7693,14 +7566,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             let tag_id = self.next_id();
                             self.exprs.insert(tag_id, MirExpr::IntLit(tag));
                             self.type_map.insert(tag_id, Type::I64);
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_json_dumps_vec_typed".to_string(),
-                                args: vec![arg_id, tag_id],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(id, MirExpr::Var(id));
-                            self.type_map.insert(id, Type::Str);
+                            self.emit_call_into(id, "py_json_dumps_vec_typed", vec![arg_id, tag_id], Type::Str);
                             return id;
                         }
                         // dict values now carry a type tag recorded at insert
@@ -7757,14 +7623,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         self.exprs.insert(text_id, MirExpr::Var(text_id));
                         self.type_map.insert(text_id, Type::Str);
                         let file_id = self.lower_expr(&args[1]);
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_file_write".to_string(),
-                            args: vec![file_id, text_id],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::I64);
+                        self.emit_call_into(id, "py_file_write", vec![file_id, text_id], Type::I64);
                         return id;
                     }
                 }
@@ -8166,14 +8025,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         let flag_id = self.next_id();
                         self.exprs.insert(flag_id, MirExpr::StringLit(fname.clone()));
                         self.type_map.insert(flag_id, Type::Str);
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_argparse_add".to_string(),
-                            args: vec![recv, name_id, flag_id, dstr],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::I64);
+                        self.emit_call_into(id, "py_argparse_add", vec![recv, name_id, flag_id, dstr], Type::I64);
                         return id;
                     }
                 }
@@ -8584,14 +8436,7 @@ call, no NULL-handle dereference).",
                                 while vals.len() < 4 {
                                     vals.push(self.next_id_with_lit(0));
                                 }
-                                self.stmts.push(MirStmt::Call {
-                                    func: format!("py_logger_{}_n", method),
-                                    args: vec![lg, fmt, n_lit, vals[0], vals[1], vals[2], vals[3]],
-                                    dest: id,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(id, MirExpr::Var(id));
-                                self.type_map.insert(id, Type::I64);
+                                self.emit_call_into(id, &format!("py_logger_{}_n", method), vec![lg, fmt, n_lit, vals[0], vals[1], vals[2], vals[3]], Type::I64);
                                 return id;
                             }
                         }
@@ -8923,15 +8768,7 @@ call, no NULL-handle dereference).",
                 // SPECIAL HANDLING: join(handle) — wait for spawn'd task.
                 if method == "join" && receiver.is_none() && args.len() == 1 {
                     let handle_id = self.lower_expr(&args[0]);
-                    let join_dest = self.next_id();
-                    self.stmts.push(MirStmt::Call {
-                        func: "join".to_string(),
-                        args: vec![handle_id],
-                        dest: join_dest,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(join_dest, MirExpr::Var(join_dest));
-                    self.type_map.insert(join_dest, Type::I64);
+                    let join_dest = self.emit_call("join", vec![handle_id], Type::I64);
                     return join_dest;
                 }
 
@@ -9052,14 +8889,7 @@ call, no NULL-handle dereference).",
                 // time (3 corpus call sites).
                 if method == "object" && receiver.is_none() && args.is_empty() {
                     let z = self.next_id_with_lit(0);
-                    self.stmts.push(MirStmt::Call {
-                        func: "zeta_platform_obj".to_string(),
-                        args: vec![z, z, z, z],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    self.emit_call_into(id, "zeta_platform_obj", vec![z, z, z, z], Type::I64);
                     return id;
                 }
                 // PY-A: `getattr(obj, "field")` with a LITERAL name is Python's
@@ -9112,14 +8942,7 @@ call, no NULL-handle dereference).",
                         let fill = self.next_id_with_lit(if ids.len() == 2 { 1 } else { 0 });
                         ids.push(fill);
                     }
-                    self.stmts.push(MirStmt::Call {
-                        func: "py_slice_new".to_string(),
-                        args: vec![ids[0], ids[1], ids[2]],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    self.emit_call_into(id, "py_slice_new", vec![ids[0], ids[1], ids[2]], Type::I64);
                     return id;
                 }
                 // PY-A: `range(n)` as a VALUE (`xs = range(5)`) — materialize it
@@ -9190,14 +9013,7 @@ call, no NULL-handle dereference).",
                     // `__len__` method (t196: `len(F())`, `len(df)`).
                     if let Some(Type::Named(n, _)) = &arg_ty {
                         if let Some(qlen) = self.qualified_method_candidate(n, "__len__") {
-                            self.stmts.push(MirStmt::Call {
-                                func: qlen,
-                                args: vec![arg_id],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(id, MirExpr::Var(id));
-                            self.type_map.insert(id, Type::I64);
+                            self.emit_call_into(id, &qlen, vec![arg_id], Type::I64);
                             return id;
                         }
                     }
@@ -9640,14 +9456,7 @@ call, no NULL-handle dereference).",
                         // 动态名（非字面量）→ 响亮失败
                         let obj_id = self.lower_expr(&args[0]);
                         let name_id = self.lower_expr(&args[1]);
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_getattr_dynamic".to_string(),
-                            args: vec![obj_id, name_id],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::I64);
+                        self.emit_call_into(id, "py_getattr_dynamic", vec![obj_id, name_id], Type::I64);
                         return id;
                     }
                 }
@@ -9679,14 +9488,7 @@ call, no NULL-handle dereference).",
                     {
                         let a0 = self.lower_expr(&args[0]);
                         let a1 = self.lower_expr(&args[1]);
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_getattr_dynamic".to_string(),
-                            args: vec![a0, a1],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::I64);
+                        self.emit_call_into(id, "py_getattr_dynamic", vec![a0, a1], Type::I64);
                         return id;
                     }
                     eprintln!(
@@ -9702,14 +9504,7 @@ call, no NULL-handle dereference).",
                         return self.lower_expr(&args[1]);
                     }
                     let aid = self.lower_expr(&args[0]);
-                    self.stmts.push(MirStmt::Call {
-                        func: "py_builtin_next".to_string(),
-                        args: vec![aid],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    self.emit_call_into(id, "py_builtin_next", vec![aid], Type::I64);
                     return id;
                 }
                 if method == "next" && receiver.is_some() {
@@ -9722,14 +9517,7 @@ call, no NULL-handle dereference).",
                         _ => false,
                     };
                     if !known_next {
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_method_next".to_string(),
-                            args: vec![sid],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::I64);
+                        self.emit_call_into(id, "py_method_next", vec![sid], Type::I64);
                         return id;
                     }
                 }
@@ -9840,14 +9628,7 @@ call, no NULL-handle dereference).",
                                 let tid = self.next_id();
                                 self.exprs.insert(tid, MirExpr::IntLit(t));
                                 self.type_map.insert(tid, Type::I64);
-                                self.stmts.push(MirStmt::Call {
-                                    func: "py_json_is_kind".to_string(),
-                                    args: vec![vid, tid],
-                                    dest: id,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(id, MirExpr::Var(id));
-                                self.type_map.insert(id, Type::Bool);
+                                self.emit_call_into(id, "py_json_is_kind", vec![vid, tid], Type::Bool);
                                 return id;
                             }
                         }
@@ -9976,14 +9757,7 @@ call, no NULL-handle dereference).",
                 if receiver.is_none() && method == "int" && args.len() == 2 {
                     let a = self.lower_expr(&args[0]);
                     let b = self.lower_expr(&args[1]);
-                    self.stmts.push(MirStmt::Call {
-                        func: "py_int_base".to_string(),
-                        args: vec![a, b],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    self.emit_call_into(id, "py_int_base", vec![a, b], Type::I64);
                     return id;
                 }
                 if method == "fromkeys" && (args.len() == 1 || args.len() == 2) {
@@ -10089,24 +9863,10 @@ call, no NULL-handle dereference).",
                         return x;
                     }
                     if args.len() == 1 {
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_round_i64".to_string(),
-                            args: vec![x],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::I64);
+                        self.emit_call_into(id, "py_round_i64", vec![x], Type::I64);
                     } else {
                         let n = self.lower_expr(&args[1]);
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_round_n".to_string(),
-                            args: vec![x, n],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::F64);
+                        self.emit_call_into(id, "py_round_n", vec![x, n], Type::F64);
                     }
                     return id;
                 }
@@ -10204,26 +9964,12 @@ call, no NULL-handle dereference).",
                 // bare externs (link failure) or missing entirely.
                 if receiver.is_none() && method == "chr" && args.len() == 1 {
                     let a = self.lower_expr(&args[0]);
-                    self.stmts.push(MirStmt::Call {
-                        func: "py_builtin_chr".to_string(),
-                        args: vec![a],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::Str);
+                    self.emit_call_into(id, "py_builtin_chr", vec![a], Type::Str);
                     return id;
                 }
                 if receiver.is_none() && method == "ord" && args.len() == 1 {
                     let a = self.lower_expr(&args[0]);
-                    self.stmts.push(MirStmt::Call {
-                        func: "py_builtin_ord".to_string(),
-                        args: vec![a],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    self.emit_call_into(id, "py_builtin_ord", vec![a], Type::I64);
                     return id;
                 }
                 // divmod(a, b) → (a // b, a % b) as a tuple, so
@@ -10266,15 +10012,7 @@ call, no NULL-handle dereference).",
                         // The VALUE of `dict(m)` is the new map, not
                         // py_map_update's return (which is 0 — using it as the
                         // dest made `dict(d)` an empty map).
-                        let sink = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_map_update".to_string(),
-                            args: vec![fresh, src_id],
-                            dest: sink,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(sink, MirExpr::Var(sink));
-                        self.type_map.insert(sink, Type::I64);
+                        let sink = self.emit_call("py_map_update", vec![fresh, src_id], Type::I64);
                         self.exprs.insert(id, MirExpr::Var(fresh));
                         self.type_map.insert(id, Type::Named("map".to_string(), vec![]));
                         return id;
@@ -10283,14 +10021,7 @@ call, no NULL-handle dereference).",
                         // works on any handle (creates new map + copies entries).
                         // This fixes t231 where `dict(x)` with `x: PyDynamic`
                         // fell through to ghost `dict_1`.
-                        self.stmts.push(MirStmt::Call {
-                            func: "map__copy".to_string(),
-                            args: vec![src_id],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::Named("map".to_string(), vec![]));
+                        self.emit_call_into(id, "map__copy", vec![src_id], Type::Named("map".to_string(), vec![]));
                         return id;
                     }
                     /* Batch 661 (cleanup) reconciliation: the dynamic route
@@ -10634,15 +10365,7 @@ call, no NULL-handle dereference).",
                                         nid
                                     }
                                     _ => {
-                                        let nid = self.next_id();
-                                        self.stmts.push(MirStmt::Call {
-                                            func: "vec_len".to_string(),
-                                            args: vec![xs],
-                                            dest: nid,
-                                            type_args: vec![],
-                                        });
-                                        self.exprs.insert(nid, MirExpr::Var(nid));
-                                        self.type_map.insert(nid, Type::I64);
+                                        let nid = self.emit_call("vec_len", vec![xs], Type::I64);
                                         nid
                                     }
                                 };
@@ -10990,15 +10713,7 @@ call, no NULL-handle dereference).",
                         self.exprs
                             .insert(cid, MirExpr::StringLit("None".to_string()));
                         self.type_map.insert(cid, Type::Str);
-                        let nid = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "zeta_identity".to_string(),
-                            args: vec![cid],
-                            dest: nid,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(nid, MirExpr::Var(nid));
-                        self.type_map.insert(nid, Type::Str);
+                        let nid = self.emit_call("zeta_identity", vec![cid], Type::Str);
                         self.exprs.insert(id, MirExpr::Var(nid));
                         self.type_map.insert(id, Type::Str);
                         return id;
@@ -11009,15 +10724,7 @@ call, no NULL-handle dereference).",
                         self.type_map.get(&arg_id),
                         Some(Type::Named(n, _)) if n == "BigInt"
                     ) {
-                        let nid = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "zeta_big_to_string".to_string(),
-                            args: vec![arg_id],
-                            dest: nid,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(nid, MirExpr::Var(nid));
-                        self.type_map.insert(nid, Type::Str);
+                        let nid = self.emit_call("zeta_big_to_string", vec![arg_id], Type::Str);
                         self.exprs.insert(id, MirExpr::Var(nid));
                         self.type_map.insert(id, Type::Str);
                         return id;
@@ -11067,15 +10774,7 @@ call, no NULL-handle dereference).",
                         self.type_map.get(&arg_id),
                         Some(Type::Named(n, _)) if n == "PyJson"
                     ) {
-                        let nid = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_json_as_str".to_string(),
-                            args: vec![arg_id],
-                            dest: nid,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(nid, MirExpr::Var(nid));
-                        self.type_map.insert(nid, Type::Str);
+                        let nid = self.emit_call("py_json_as_str", vec![arg_id], Type::Str);
                         self.exprs.insert(id, MirExpr::Var(nid));
                         self.type_map.insert(id, Type::Str);
                         return id;
@@ -11088,15 +10787,7 @@ call, no NULL-handle dereference).",
                     // `%13 = load i64, ptr %0` with no preceding store). Route
                     // through the identity helper so the slot is really written.
                     let nid = if matches!(self.type_map.get(&arg_id), Some(Type::Str)) {
-                        let sid = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "zeta_identity".to_string(),
-                            args: vec![arg_id],
-                            dest: sid,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(sid, MirExpr::Var(sid));
-                        self.type_map.insert(sid, Type::Str);
+                        let sid = self.emit_call("zeta_identity", vec![arg_id], Type::Str);
                         sid
                     } else {
                         self.lower_to_string(arg_id)
@@ -11190,15 +10881,7 @@ call, no NULL-handle dereference).",
                                     // ints); the probe must hash identically
                                     // or every present key reads absent
                                     // (t178).
-                                    let knorm = self.next_id();
-                                    self.stmts.push(MirStmt::Call {
-                                        func: "map_str_key".to_string(),
-                                        args: vec![k_id],
-                                        dest: knorm,
-                                        type_args: vec![],
-                                    });
-                                    self.exprs.insert(knorm, MirExpr::Var(knorm));
-                                    self.type_map.insert(knorm, Type::I64);
+                                    let knorm = self.emit_call("map_str_key", vec![k_id], Type::I64);
                                     // Existence via py_map_contains DIRECTLY —
                                     // the receiver is verified map-typed above;
                                     // routing through `__contains__` dispatch
@@ -11298,15 +10981,7 @@ call, no NULL-handle dereference).",
                             if base_map_str {
                                 let recv_id = self.lower_expr(base);
                                 let k_id = self.lower_expr(index);
-                                let r_id = self.next_id();
-                                self.stmts.push(MirStmt::Call {
-                                    func: "zeta_map_get_render".to_string(),
-                                    args: vec![recv_id, k_id],
-                                    dest: r_id,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(r_id, MirExpr::Var(r_id));
-                                self.type_map.insert(r_id, Type::Str);
+                                let r_id = self.emit_call("zeta_map_get_render", vec![recv_id, k_id], Type::Str);
                                 self.stmts.push(MirStmt::VoidCall {
                                     func: "println_str".to_string(),
                                     args: vec![r_id],
@@ -11381,15 +11056,7 @@ call, no NULL-handle dereference).",
                                         if matches!(lt, Some(Type::Bool)) {
                                             left_id
                                         } else {
-                                            let tid = self.next_id();
-                                            self.stmts.push(MirStmt::Call {
-                                                func: "zeta_dyn_truth".to_string(),
-                                                args: vec![left_id],
-                                                dest: tid,
-                                                type_args: vec![],
-                                            });
-                                            self.exprs.insert(tid, MirExpr::Var(tid));
-                                            self.type_map.insert(tid, Type::I64);
+                                            let tid = self.emit_call("zeta_dyn_truth", vec![left_id], Type::I64);
                                             tid
                                         };
                                     let cond_id = self.next_id();
@@ -11463,15 +11130,7 @@ call, no NULL-handle dereference).",
                         // the NoneLit face.
                         if matches!(a, AstNode::BigIntLit(_)) {
                             let lhs0 = self.lower_expr(a);
-                            let sid = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "zeta_big_to_string".to_string(),
-                                args: vec![lhs0],
-                                dest: sid,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(sid, MirExpr::Var(sid));
-                            self.type_map.insert(sid, Type::Str);
+                            let sid = self.emit_call("zeta_big_to_string", vec![lhs0], Type::Str);
                             arg_ids.push(sid);
                             continue;
                         }
@@ -11649,15 +11308,7 @@ call, no NULL-handle dereference).",
                             self.type_map.get(arg_id),
                             Some(Type::Named(n, _)) if n == "BigInt"
                         ) {
-                            let sid = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "zeta_big_to_string".to_string(),
-                                args: vec![*arg_id],
-                                dest: sid,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(sid, MirExpr::Var(sid));
-                            self.type_map.insert(sid, Type::Str);
+                            let sid = self.emit_call("zeta_big_to_string", vec![*arg_id], Type::Str);
                             let f = if is_last { "println_str" } else { "print_str" };
                             self.stmts.push(MirStmt::VoidCall {
                                 func: f.to_string(),
@@ -11669,15 +11320,7 @@ call, no NULL-handle dereference).",
                             if ts.len() == 2 {
                                 let kid = self.next_id_with_lit(matches!(ts[0], Type::Str) as i64);
                                 let vid = self.next_id_with_lit(matches!(ts[1], Type::Str) as i64);
-                                let sid = self.next_id();
-                                self.stmts.push(MirStmt::Call {
-                                    func: "py_print_pair".to_string(),
-                                    args: vec![*arg_id, kid, vid],
-                                    dest: sid,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(sid, MirExpr::Var(sid));
-                                self.type_map.insert(sid, Type::Str);
+                                let sid = self.emit_call("py_print_pair", vec![*arg_id, kid, vid], Type::Str);
                                 let f = if is_last { "println_str" } else { "print_str" };
                                 self.stmts.push(MirStmt::VoidCall {
                                     func: f.to_string(),
@@ -11697,15 +11340,7 @@ call, no NULL-handle dereference).",
                                         matches!(ts[1], Type::Str) as i64;
                                     let kid = self.next_id_with_lit(k_str);
                                     let vid = self.next_id_with_lit(v_str);
-                                    let sid = self.next_id();
-                                    self.stmts.push(MirStmt::Call {
-                                        func: "py_print_pairs".to_string(),
-                                        args: vec![*arg_id, kid, vid],
-                                        dest: sid,
-                                        type_args: vec![],
-                                    });
-                                    self.exprs.insert(sid, MirExpr::Var(sid));
-                                    self.type_map.insert(sid, Type::Str);
+                                    let sid = self.emit_call("py_print_pairs", vec![*arg_id, kid, vid], Type::Str);
                                     let f = if is_last {
                                         "println_str"
                                     } else {
@@ -11769,15 +11404,7 @@ call, no NULL-handle dereference).",
                             self.type_map.get(arg_id),
                             Some(Type::Named(name, _)) if name == "map"
                         ) {
-                            let sid = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_json_dumps_map".to_string(),
-                                args: vec![*arg_id],
-                                dest: sid,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(sid, MirExpr::Var(sid));
-                            self.type_map.insert(sid, Type::Str);
+                            let sid = self.emit_call("py_json_dumps_map", vec![*arg_id], Type::Str);
                             let f = if is_last { "println_str" } else { "print_str" };
                             self.stmts.push(MirStmt::VoidCall {
                                 func: f.to_string(),
@@ -11789,15 +11416,7 @@ call, no NULL-handle dereference).",
                             self.type_map.get(arg_id),
                             Some(Type::Named(name, _)) if name == "PyJson"
                         ) {
-                            let sid = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_json_repr".to_string(),
-                                args: vec![*arg_id],
-                                dest: sid,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(sid, MirExpr::Var(sid));
-                            self.type_map.insert(sid, Type::Str);
+                            let sid = self.emit_call("py_json_repr", vec![*arg_id], Type::Str);
                             sid
                         } else if matches!(
                             self.type_map.get(arg_id),
@@ -11807,29 +11426,13 @@ call, no NULL-handle dereference).",
                             let gid = self.next_id();
                             self.exprs.insert(gid, MirExpr::IntLit(0));
                             self.type_map.insert(gid, Type::I64);
-                            let sid = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_re_group".to_string(),
-                                args: vec![*arg_id, gid],
-                                dest: sid,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(sid, MirExpr::Var(sid));
-                            self.type_map.insert(sid, Type::Str);
+                            let sid = self.emit_call("py_re_group", vec![*arg_id, gid], Type::Str);
                             sid
                         } else if matches!(self.type_map.get(arg_id), Some(Type::PyDynamic)) {
                             // Batch 653 (#117): dynamic values have no runtime type tag,
                             // so the print dispatch can't tell str from int from map.
                             // Convert to string first using GC-geometry probes.
-                            let sid = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "zeta_dyn_to_string".to_string(),
-                                args: vec![*arg_id],
-                                dest: sid,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(sid, MirExpr::Var(sid));
-                            self.type_map.insert(sid, Type::Str);
+                            let sid = self.emit_call("zeta_dyn_to_string", vec![*arg_id], Type::Str);
                             sid
                         } else {
                             *arg_id
@@ -11892,15 +11495,7 @@ call, no NULL-handle dereference).",
 
                     // Batch 653 (#117): PyDynamic needs conversion to string first.
                     if arg_ids.len() == 1 && matches!(self.type_map.get(&arg_ids[0]), Some(Type::PyDynamic)) {
-                        let sid = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "zeta_dyn_to_string".to_string(),
-                            args: vec![arg_ids[0]],
-                            dest: sid,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(sid, MirExpr::Var(sid));
-                        self.type_map.insert(sid, Type::Str);
+                        let sid = self.emit_call("zeta_dyn_to_string", vec![arg_ids[0]], Type::Str);
                         arg_ids[0] = sid;
                     }
 
@@ -12264,15 +11859,7 @@ call, no NULL-handle dereference).",
                                 let idx_id = self.next_id();
                                 self.exprs.insert(idx_id, MirExpr::IntLit(i as i64));
                                 self.type_map.insert(idx_id, Type::I64);
-                                let elem = self.next_id();
-                                self.stmts.push(MirStmt::Call {
-                                    func: "array_get".to_string(),
-                                    args: vec![arr_id, idx_id],
-                                    dest: elem,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(elem, MirExpr::Var(elem));
-                                self.type_map.insert(elem, Type::I64);
+                                let elem = self.emit_call("array_get", vec![arr_id, idx_id], Type::I64);
                                 arg_ids.push(elem);
                             }
                             continue;
@@ -12854,14 +12441,7 @@ call, no NULL-handle dereference).",
                         .map_or(false, |t| matches!(t, Type::DynamicArray(_) | Type::Array(_, _)))
                     && arg_ids.len() == 1
                 {
-                    self.stmts.push(MirStmt::Call {
-                        func: format!("py_vec_{}", method),
-                        args: vec![arg_ids[0]],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::Str);
+                    self.emit_call_into(id, &format!("py_vec_{}", method), vec![arg_ids[0]], Type::Str);
                     return id;
                 }
                 // `mask.any()` / `mask.all()` on a boolean or label vector —
@@ -12872,14 +12452,7 @@ call, no NULL-handle dereference).",
                         .map_or(false, |t| matches!(t, Type::DynamicArray(_) | Type::Array(_, _)))
                     && arg_ids.len() == 1
                 {
-                    self.stmts.push(MirStmt::Call {
-                        func: format!("py_vec_{}", method),
-                        args: vec![arg_ids[0]],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::Bool);
+                    self.emit_call_into(id, &format!("py_vec_{}", method), vec![arg_ids[0]], Type::Bool);
                     return id;
                 }
                 // `series.isna()` on a COLUMN (a string vector): the shim's module
@@ -13058,14 +12631,7 @@ call, no NULL-handle dereference).",
                                 MirExpr::IntLit(if method == "startswith" { 0 } else { 1 }),
                             );
                             self.type_map.insert(flag_id, Type::I64);
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_str_prefix_any".to_string(),
-                                args: vec![arg_ids[0], vec_id, flag_id],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(id, MirExpr::Var(id));
-                            self.type_map.insert(id, Type::Bool);
+                            self.emit_call_into(id, "py_str_prefix_any", vec![arg_ids[0], vec_id, flag_id], Type::Bool);
                             return id;
                         }
                     }
@@ -13146,14 +12712,7 @@ call, no NULL-handle dereference).",
                         let flag = self.next_id();
                         self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
                         self.type_map.insert(flag, Type::I64);
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_list_contains".to_string(),
-                            args: vec![arg_ids[0], arg_ids[1], flag],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::Bool);
+                        self.emit_call_into(id, "py_list_contains", vec![arg_ids[0], arg_ids[1], flag], Type::Bool);
                         return id;
                     }
                     if is_map && arg_ids.len() == 2 {
@@ -13165,14 +12724,7 @@ call, no NULL-handle dereference).",
                            the `in` sibling). The key goes through the same
                            map_str_key normalization the write side uses. */
                         let key_id = self.lower_map_key(arg_ids[1]);
-                        self.stmts.push(MirStmt::Call {
-                            func: "py_map_contains".to_string(),
-                            args: vec![arg_ids[0], key_id],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::Bool);
+                        self.emit_call_into(id, "py_map_contains", vec![arg_ids[0], key_id], Type::Bool);
                         return id;
                     }
                     // PY-A: `x in obj` — dispatch to a `__contains__` method
@@ -13256,14 +12808,7 @@ call, no NULL-handle dereference).",
                         self.exprs.insert(flag, MirExpr::IntLit(key_is_str));
                         self.type_map.insert(flag, Type::I64);
                         let hkey = self.lower_map_key(key_id);
-                        self.stmts.push(MirStmt::Call {
-                            func: "zeta_dyn_contains".to_string(),
-                            args: vec![arg_ids[0], key_id, hkey, flag],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::Bool);
+                        self.emit_call_into(id, "zeta_dyn_contains", vec![arg_ids[0], key_id, hkey, flag], Type::Bool);
                         return id;
                     }
                     eprintln!(
@@ -13454,14 +12999,7 @@ call, no NULL-handle dereference).",
                         let flag = self.next_id();
                         self.exprs.insert(flag, MirExpr::IntLit(to_end as i64));
                         self.type_map.insert(flag, Type::I64);
-                        self.stmts.push(MirStmt::Call {
-                            func: "str_slice".to_string(),
-                            args: vec![arg_ids[0], arg_ids[1], arg_ids[2], flag],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::Str);
+                        self.emit_call_into(id, "str_slice", vec![arg_ids[0], arg_ids[1], arg_ids[2], flag], Type::Str);
                         return id;
                     }
                     let elem = match receiver_ty.as_ref() {
@@ -13729,14 +13267,7 @@ call, no NULL-handle dereference).",
                     let flag = self.next_id();
                     self.exprs.insert(flag, MirExpr::IntLit(elem_is_i64 as i64));
                     self.type_map.insert(flag, Type::I64);
-                    self.stmts.push(MirStmt::Call {
-                        func: "zeta_mean_vec".to_string(),
-                        args: vec![arg_ids[0], flag],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::F64);
+                    self.emit_call_into(id, "zeta_mean_vec", vec![arg_ids[0], flag], Type::F64);
                     return id;
                 }
 
@@ -14168,15 +13699,7 @@ call, no NULL-handle dereference).",
                     let v_ty = self.type_map.get(&arg_ids[1]).cloned().unwrap_or(Type::I64);
                     self.last_dict_pair_ty = Some((k_ty.clone(), v_ty.clone()));
                     if matches!(k_ty, Type::Str) {
-                        let hashed = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "map_str_key".to_string(),
-                            args: vec![arg_ids[0]],
-                            dest: hashed,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(hashed, MirExpr::Var(hashed));
-                        self.type_map.insert(hashed, Type::I64);
+                        let hashed = self.emit_call("map_str_key", vec![arg_ids[0]], Type::I64);
                         arg_ids[0] = hashed;
                     }
                 }
@@ -14424,14 +13947,7 @@ call, no NULL-handle dereference).",
                     let cap_id = self.next_id();
                     self.exprs.insert(cap_id, MirExpr::IntLit(8));
                     self.type_map.insert(cap_id, Type::I64);
-                    self.stmts.push(MirStmt::Call {
-                        func: "vec_new".to_string(),
-                        args: vec![cap_id],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::DynamicArray(Box::new(Type::I64)));
+                    self.emit_call_into(id, "vec_new", vec![cap_id], Type::DynamicArray(Box::new(Type::I64)));
                     return id;
                 }
 
@@ -14750,14 +14266,7 @@ call, no NULL-handle dereference).",
                                         .insert(nid, Type::DynamicArray(Box::new(Type::Str)));
                                     vec_id = nid;
                                 }
-                                self.stmts.push(MirStmt::Call {
-                                    func: "host_str_format".to_string(),
-                                    args: vec![rid, vec_id],
-                                    dest: id,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(id, MirExpr::Var(id));
-                                self.type_map.insert(id, Type::Str);
+                                self.emit_call_into(id, "host_str_format", vec![rid, vec_id], Type::Str);
                                 return id;
                             }
                         }
@@ -15458,14 +14967,7 @@ call, no NULL-handle dereference).",
 
                             // Create equality comparison: scrutinee == pattern
                             // This creates a call to the "==" operator
-                            self.stmts.push(MirStmt::Call {
-                                func: "==".to_string(),
-                                args: vec![scrutinee_id, pattern_id],
-                                dest: cond_id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(cond_id, MirExpr::Var(cond_id));
-                            self.type_map.insert(cond_id, Type::Bool);
+                            self.emit_call_into(cond_id, "==", vec![scrutinee_id, pattern_id], Type::Bool);
                         }
                         AstNode::StringLit(pattern_value) => {
                             // String-literal pattern. Deliberately **not** the
@@ -15539,15 +15041,7 @@ call, no NULL-handle dereference).",
                                 self.type_map.insert(check_result_id, Type::Bool);
 
                                 // Invert the check (None is not Some, Err is not Ok)
-                                let inverted_id = self.next_id();
-                                self.stmts.push(MirStmt::Call {
-                                    func: "!".to_string(),
-                                    args: vec![check_result_id],
-                                    dest: inverted_id,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(inverted_id, MirExpr::Var(inverted_id));
-                                self.type_map.insert(inverted_id, Type::Bool);
+                                let inverted_id = self.emit_call("!", vec![check_result_id], Type::Bool);
 
                                 self.exprs.insert(cond_id, MirExpr::Var(inverted_id));
                                 self.type_map.insert(cond_id, Type::Bool);
@@ -15568,14 +15062,7 @@ call, no NULL-handle dereference).",
                                     let pattern_id = self.next_id();
                                     self.exprs.insert(pattern_id, MirExpr::IntLit(tag));
                                     self.type_map.insert(pattern_id, Type::I64);
-                                    self.stmts.push(MirStmt::Call {
-                                        func: "==".to_string(),
-                                        args: vec![scrutinee_id, pattern_id],
-                                        dest: cond,
-                                        type_args: vec![],
-                                    });
-                                    self.exprs.insert(cond, MirExpr::Var(cond));
-                                    self.type_map.insert(cond, Type::Bool);
+                                    self.emit_call_into(cond, "==", vec![scrutinee_id, pattern_id], Type::Bool);
                                     cond
                                 };
                                 self.exprs.insert(cond_id, MirExpr::Var(cond));
@@ -15653,15 +15140,7 @@ call, no NULL-handle dereference).",
                                 // For None and Err, we need to invert the check
                                 let final_check_id =
                                     if variant == "Option::None" || variant == "Result::Err" {
-                                        let inverted_id = self.next_id();
-                                        self.stmts.push(MirStmt::Call {
-                                            func: "!".to_string(),
-                                            args: vec![check_result_id],
-                                            dest: inverted_id,
-                                            type_args: vec![],
-                                        });
-                                        self.exprs.insert(inverted_id, MirExpr::Var(inverted_id));
-                                        self.type_map.insert(inverted_id, Type::Bool);
+                                        let inverted_id = self.emit_call("!", vec![check_result_id], Type::Bool);
                                         inverted_id
                                     } else {
                                         check_result_id
@@ -15831,15 +15310,7 @@ call, no NULL-handle dereference).",
 
                                 if let Some(prev) = or_cond {
                                     // OR the conditions: prev || sub_pat
-                                    let or_result_id = self.next_id();
-                                    self.stmts.push(MirStmt::Call {
-                                        func: "||".to_string(),
-                                        args: vec![prev, sub_pat_id],
-                                        dest: or_result_id,
-                                        type_args: vec![],
-                                    });
-                                    self.exprs.insert(or_result_id, MirExpr::Var(or_result_id));
-                                    self.type_map.insert(or_result_id, Type::Bool);
+                                    let or_result_id = self.emit_call("||", vec![prev, sub_pat_id], Type::Bool);
                                     or_cond = Some(or_result_id);
                                 } else {
                                     or_cond = Some(sub_pat_id);
@@ -15947,15 +15418,7 @@ call, no NULL-handle dereference).",
                         let guard_id = self.lower_expr(guard);
 
                         // Create AND condition: pattern_matches && guard_condition
-                        let and_cond_id = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "&&".to_string(),
-                            args: vec![cond_id, guard_id],
-                            dest: and_cond_id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(and_cond_id, MirExpr::Var(and_cond_id));
-                        self.type_map.insert(and_cond_id, Type::Bool);
+                        let and_cond_id = self.emit_call("&&", vec![cond_id, guard_id], Type::Bool);
 
                         and_cond_id
                     } else {
@@ -16510,14 +15973,7 @@ call, no NULL-handle dereference).",
                         }
                     };
                     if let Some(ret_ty) = self.func_ret_types.get(&qualified).cloned() {
-                        self.stmts.push(MirStmt::Call {
-                            func: qualified,
-                            args: vec![base_id],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, ret_ty);
+                        self.emit_call_into(id, &qualified, vec![base_id], ret_ty);
                         return id;
                     }
                 }
@@ -16548,14 +16004,7 @@ call, no NULL-handle dereference).",
                 if !matches!(self.type_map.get(&base_id), Some(Type::Named(_, _)))
                     && let Some((symbol, ret_ty)) = self.unique_zero_arg_property(field)
                 {
-                    self.stmts.push(MirStmt::Call {
-                        func: symbol,
-                        args: vec![base_id],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, ret_ty);
+                    self.emit_call_into(id, &symbol, vec![base_id], ret_ty);
                     return id;
                 }
                 // 2. Create FieldAccess expression
@@ -16751,14 +16200,7 @@ call, no NULL-handle dereference).",
                 if path.len() == 2 && path[0] == "std" && path[1] == "time"
                     && method == "now" && args.is_empty()
                 {
-                    self.stmts.push(MirStmt::Call {
-                        func: "monotonic_ns".to_string(),
-                        args: vec![],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    self.emit_call_into(id, "monotonic_ns", vec![], Type::I64);
                     return id;
                 }
 
@@ -16781,14 +16223,7 @@ call, no NULL-handle dereference).",
                     } else {
                         self.lower_expr(&args[0])
                     };
-                    self.stmts.push(MirStmt::Call {
-                        func: "zeta_qc_new".to_string(),
-                        args: vec![n_id],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    self.emit_call_into(id, "zeta_qc_new", vec![n_id], Type::I64);
                     return id;
                 }
                 // `std::quantum::QubitState::one/zero` etc. (batch 446: same
@@ -16805,14 +16240,7 @@ call, no NULL-handle dereference).",
                     let z = self.next_id();
                     self.exprs.insert(z, MirExpr::IntLit(1));
                     self.type_map.insert(z, Type::I64);
-                    self.stmts.push(MirStmt::Call {
-                        func: "zeta_qc_is_normalized".to_string(),
-                        args: vec![z],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    self.emit_call_into(id, "zeta_qc_is_normalized", vec![z], Type::I64);
                     return id;
                 }
 
@@ -16821,14 +16249,7 @@ call, no NULL-handle dereference).",
                     && path[2] == "capability" && method == "new" && args.len() == 1
                 {
                     let n_id = self.lower_expr(&args[0]);
-                    self.stmts.push(MirStmt::Call {
-                        func: "zeta_dynarray_new".to_string(),
-                        args: vec![n_id],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
+                    self.emit_call_into(id, "zeta_dynarray_new", vec![n_id], Type::I64);
                     return id;
                 }
 
@@ -17044,15 +16465,7 @@ call, no NULL-handle dereference).",
                                     let idx_id = self.next_id();
                                     self.exprs.insert(idx_id, MirExpr::IntLit(i as i64));
                                     self.type_map.insert(idx_id, Type::I64);
-                                    let elem = self.next_id();
-                                    self.stmts.push(MirStmt::Call {
-                                        func: "array_get".to_string(),
-                                        args: vec![arr_id, idx_id],
-                                        dest: elem,
-                                        type_args: vec![],
-                                    });
-                                    self.exprs.insert(elem, MirExpr::Var(elem));
-                                    self.type_map.insert(elem, Type::I64);
+                                    let elem = self.emit_call("array_get", vec![arr_id, idx_id], Type::I64);
                                     arg_ids.push(elem);
                                 }
                                 continue;
@@ -17210,15 +16623,7 @@ call, no NULL-handle dereference).",
                         let e_f = if matches!(e_ty, Type::F64) {
                             *e
                         } else {
-                            let f = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "zeta_float_i64".to_string(),
-                                args: vec![*e],
-                                dest: f,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(f, MirExpr::Var(f));
-                            self.type_map.insert(f, Type::F64);
+                            let f = self.emit_call("zeta_float_i64", vec![*e], Type::F64);
                             f
                         };
                         let sink = self.next_id();
@@ -17484,15 +16889,7 @@ call, no NULL-handle dereference).",
                     (AstNode::UnaryOp { op, expr }, Type::DynamicArray(_)) if op == "-" => {
                         match &**expr {
                             AstNode::Lit(k) if *k > 0 => {
-                                let len_id = self.next_id();
-                                self.stmts.push(MirStmt::Call {
-                                    func: "vec_len".to_string(),
-                                    args: vec![bid],
-                                    dest: len_id,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(len_id, MirExpr::Var(len_id));
-                                self.type_map.insert(len_id, Type::I64);
+                                let len_id = self.emit_call("vec_len", vec![bid], Type::I64);
                                 let k_id = self.next_id();
                                 self.exprs.insert(k_id, MirExpr::IntLit(*k));
                                 self.type_map.insert(k_id, Type::I64);
@@ -17669,14 +17066,7 @@ call, no NULL-handle dereference).",
                 }
                 if let Type::Str = base_ty {
                     // Python `s[i]` on a string yields a 1-character string.
-                    self.stmts.push(MirStmt::Call {
-                        func: "str_get".to_string(),
-                        args: vec![bid, iid],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::Str);
+                    self.emit_call_into(id, "str_get", vec![bid, iid], Type::Str);
                     return id;
                 }
                 // 批次145 重放: subscript on a KNOWN struct with `__getitem__`
@@ -17804,15 +17194,7 @@ call, no NULL-handle dereference).",
                     // 766 写侧登记的类实例 tag（≥CLASS_TAG_BASE）由 len() 等消费，
                     // 运行期按格分派，静态槽型保持 PyDynamic（异构字典安全）。
                     if matches!(val_ty, Type::PyDynamic) {
-                        let tag_slot = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "zeta_map_value_tag".to_string(),
-                            args: vec![map_slot, key_id],
-                            dest: tag_slot,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(tag_slot, MirExpr::Var(tag_slot));
-                        self.type_map.insert(tag_slot, Type::I64);
+                        let tag_slot = self.emit_call("zeta_map_value_tag", vec![map_slot, key_id], Type::I64);
                         self.slot_tags.insert(id, tag_slot);
                     }
                     return id;
@@ -17980,27 +17362,12 @@ call, no NULL-handle dereference).",
                     let subject =
                         if matches!(self.type_map.get(&expr_id), Some(Type::Named(n, _)) if n == "PyJson")
                         {
-                            let tj = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_json_truth".to_string(),
-                                args: vec![expr_id],
-                                dest: tj,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(tj, MirExpr::Var(tj));
-                            self.type_map.insert(tj, Type::I64);
+                            let tj = self.emit_call("py_json_truth", vec![expr_id], Type::I64);
                             tj
                         } else {
                             expr_id
                         };
-                    self.stmts.push(MirStmt::Call {
-                        func: "py_not".to_string(),
-                        args: vec![subject],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::Bool);
+                    self.emit_call_into(id, "py_not", vec![subject], Type::Bool);
                     return id;
                 }
                 let op: &str = op;

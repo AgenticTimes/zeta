@@ -618,12 +618,12 @@ mod tests {
             Type::Named("Option".to_string(), vec![Type::Bool])
         );
 
+        // 批次 814：`String` 在本语言里归一化为 `Str`（typecheck_new.rs:383、
+        // new_resolver.rs:448、gen.rs 三处同款——Python 方言没有 Rust 的
+        // String 类型）。测试期待从 Named("String") 更新为 Str 以对齐现实。
         assert_eq!(
             resolver.string_to_type("Result<i32, String>"),
-            Type::Named(
-                "Result".to_string(),
-                vec![Type::I32, Type::Named("String".to_string(), Vec::new())]
-            )
+            Type::Named("Result".to_string(), vec![Type::I32, Type::Str])
         );
 
         // Test nested generic types
@@ -658,10 +658,7 @@ mod tests {
 
         assert_eq!(
             resolver.string_to_type("HashMap<String, i32>"),
-            Type::Named(
-                "HashMap".to_string(),
-                vec![Type::Named("String".to_string(), Vec::new()), Type::I32]
-            )
+            Type::Named("HashMap".to_string(), vec![Type::Str, Type::I32])
         );
 
         // Test generic type display
