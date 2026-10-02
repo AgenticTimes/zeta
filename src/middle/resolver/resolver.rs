@@ -5432,7 +5432,7 @@ fn shim_class_normalize(t: &Type) -> Type {
                 // (measured with lldb in the local backtest). The runtime identity
                 // wins: type it PyJson, whose `.get(k, default)` / `len()` /
                 // `.items()` paths already exist.
-                let is_dict_ret = matches!(&ret, Type::Named(n, _) if n == "map" || n == "dict");
+                let is_dict_ret = ret.is_map();
                 if is_dict_ret {
                     let hit = defs_snapshot
                         .iter()

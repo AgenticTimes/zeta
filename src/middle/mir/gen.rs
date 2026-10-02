@@ -4271,7 +4271,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             // Batch 742/743 (#213④b): containers route through their repr
             // channels — the raw handle used to go through to_string_i64 and
             // str(d)/str(t) printed a pointer.
-            Some(Type::Named(n, _)) if n == "map" || n == "dict" => "py_json_dumps_map",
+            Some(t) if t.is_map() => "py_json_dumps_map",
             Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)) => "py_json_dumps_vec",
             Some(Type::Tuple(ts)) => {
                 // General tuple repr: arity + per-element 2-bit kind tags are
@@ -4412,6 +4412,30 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         self.exprs.insert(id, MirExpr::IntLit(value));
         self.type_map.insert(id, Type::I64);
         id
+    }
+
+    /// 批次 814（重构第一步）：发射一条运行期调用并完成三行记账
+    /// （登记指令、登记表达式、登记类型）。收拢前这三行在全文手写
+    /// 381 处，漏写 type_map 一行就是"静默错值"事故。
+    /// 【勘案补记】本助手曾因笔误自调自身（应为调 emit_call_into），
+    /// 尾调用优化成无限循环＝814 验证期所有"编译转圈"的真凶；
+    /// 车道并发修改纯属巧合。勘误见 worktree.md 815 行。
+    fn emit_call(&mut self, func: &str, args: Vec<u32>, ty: Type) -> u32 {
+        let id = self.next_id();
+        self.emit_call_into(id, func, args, ty);
+        id
+    }
+
+    /// 同上，但槽号由调用方持有（`let x = self.next_id();` 在前的现场）。
+    fn emit_call_into(&mut self, dest: u32, func: &str, args: Vec<u32>, ty: Type) {
+        self.stmts.push(MirStmt::Call {
+            func: func.to_string(),
+            args,
+            dest,
+            type_args: vec![],
+        });
+        self.exprs.insert(dest, MirExpr::Var(dest));
+        self.type_map.insert(dest, ty);
     }
 
     /// 批次 805（#表示上限格）：expr id 的编译期整值（字面量或 CTFE 常量），
@@ -6596,7 +6620,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         // dict 的 == / !=：键值全等（map__eq）。此前两个句柄
                         // 按整数比较，内容相等的两个 dict 恒 False。
                         let map_shaped = |t: Option<&Type>| {
-                            matches!(t, Some(Type::Named(n, _)) if n == "map" || n == "dict")
+                            matches!(t, Some(t) if t.is_map())
                         };
                         if matches!(op.as_str(), "==" | "!=")
                             && map_shaped(self.type_map.get(&left_id))
@@ -10001,7 +10025,7 @@ call, no NULL-handle dereference).",
                     let src_id = self.lower_expr(&args[0]);
                     let is_map = matches!(
                         self.type_map.get(&src_id),
-                        Some(Type::Named(n, _)) if n == "map" || n == "dict"
+                        Some(t) if t.is_map()
                     );
                     if is_map {
                         let fresh = self.next_id();
@@ -13960,7 +13984,7 @@ call, no NULL-handle dereference).",
                     && arg_ids.len() == 1
                     && matches!(
                         receiver_ty.as_ref(),
-                        Some(Type::Named(n, _)) if n == "map" || n == "dict"
+                        Some(t) if t.is_map()
                     )
                 {
                     let ret = receiver_ty.as_ref().cloned().unwrap_or(Type::I64);
@@ -17162,7 +17186,7 @@ call, no NULL-handle dereference).",
                 // (`d[k] = v`) already handled maps, but the expression path did
                 // not: `self.d["a"]` fell through to the array branches and read
                 // the map handle as an array — a SEGFAULT, not a wrong value.
-                if matches!(&base_ty, Type::Named(n, _) if n == "map" || n == "dict") {
+                if base_ty.is_map() {
                     let key_id = self.lower_map_key_typed(iid, Some(&base_ty));
                     // The base must live in a LOCAL slot: codegen's DictGet does
                     // `load_local(map_id)`, and a field read (or any non-local

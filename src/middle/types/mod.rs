@@ -279,6 +279,23 @@ impl GenericContext {
 }
 
 impl Type {
+    /// 批次 815：这个类型是不是字典（dict/map 两种拼写等价——Python 方言
+    /// 两种都出现，等价规则此前在 37 处调用点各手写一遍）。
+    pub fn is_map(&self) -> bool {
+        matches!(self, Type::Named(n, _) if n == "map" || n == "dict")
+    }
+
+    /// 字典的键/值类型（`map<K, V>`；缺省槽按 I64，与既有读边界约定一致）。
+    pub fn map_kv(&self) -> Option<(Type, Type)> {
+        match self {
+            Type::Named(n, targs) if n == "map" || n == "dict" => Some((
+                targs.first().cloned().unwrap_or(Type::I64),
+                targs.get(1).cloned().unwrap_or(Type::I64),
+            )),
+            _ => None,
+        }
+    }
+
     /// Parse a type from a string representation
     pub fn from_string(s: &str) -> Type {
         let s = s.trim();
