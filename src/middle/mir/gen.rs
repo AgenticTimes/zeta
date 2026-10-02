@@ -7165,6 +7165,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 let mut first_val = true;
                 // 批次 806：全 None 值判定（混型不动）
                 let mut all_none_val = true;
+                // 批次 808（混型 dict None 值格）：含 None 且含非 None ⇒
+                // 混型——值型 PyDynamic（读侧 17638 格标签读随之点亮），
+                // 字面量值写侧打格标签（8=None、4=文本、5=i64、6=f64 位、
+                // 7=bool），print 位运行期按格渲染。非字面量值 tag 0 落
+                // i64 缺省（残界）。纯字典零新增面。
+                let has_none = entries.iter().any(|(_, v)| matches!(v, AstNode::NoneLit));
+                let mixed = has_none && entries.iter().any(|(_, v)| !matches!(v, AstNode::NoneLit));
                 for (k, v) in entries {
                     // PY-A: `{**m, ...}` — merge m's entries into the literal.
                     if let AstNode::Call {
@@ -7225,6 +7232,26 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         key_id: kid,
                         val_id: vid,
                     });
+                    // 批次 808：混型字典的字面量值打格标签（767 值标签大弧
+                    // 写侧；读侧格标签读由值型 PyDynamic 点亮，print 位按格
+                    // 渲染）。非字面量值不打（tag 0 落 i64 缺省＝残界）。
+                    if mixed {
+                        let tag: Option<i64> = match v {
+                            AstNode::NoneLit => Some(8),
+                            AstNode::StringLit(_) => Some(4),
+                            AstNode::Lit(_) => Some(5),
+                            AstNode::Bool(_) => Some(7),
+                            AstNode::FloatLit(_) => Some(6),
+                            _ => None,
+                        };
+                        if let Some(t) = tag {
+                            let tid = self.int_slot(t);
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: "zeta_map_set_tag".to_string(),
+                                args: vec![map_id, kid, tid],
+                            });
+                        }
+                    }
                 }
                 let key_ty = if matches!(key_ty, Type::Str) {
                     Type::Str
@@ -7233,6 +7260,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 };
                 if all_none_val && !entries.is_empty() {
                     val_ty = Type::Named("NoneValue".to_string(), vec![]);
+                }
+                // 批次 808：混型（含 None 又含非 None）⇒ 值型 PyDynamic——
+                // 读侧格标签读点亮（17638 门），print 位按格渲染；异构字典
+                // 安全语义与 apply_dict_annotation 的 Any 同源。
+                if mixed {
+                    val_ty = Type::PyDynamic;
                 }
                 self.exprs.insert(map_id, MirExpr::Var(map_id));
                 self.type_map.insert(
@@ -11518,6 +11551,86 @@ call, no NULL-handle dereference).",
                             });
                         }
                         let is_last = !has_end && i + 1 == n;
+                        // 批次 808（混型 dict None 值格）：PyDynamic 实参带格
+                        // 标签 ⇒ 运行期按格渲染链（767 len 链同构、自底向上
+                        // else-if）。8=None、4=文本、5=i64、6=f64 位、7=bool；
+                        // 0/未知落 i64（静态缺省同形）。非混型字典无标签读、
+                        // 无本链，零新增面。
+                        if matches!(self.type_map.get(arg_id), Some(Type::PyDynamic)) {
+                            if let Some(tag_slot) = self.slot_tags.get(arg_id).cloned() {
+                                let nl_id = self.int_slot(is_last as i64);
+                                let (s_pr, s_prn) = ("print_str", "println_str");
+                                let (i_pr, i_prn) = ("print_i64", "println_i64");
+                                let none_str = self.next_id();
+                                self.exprs
+                                    .insert(none_str, MirExpr::StringLit("None".to_string()));
+                                self.type_map.insert(none_str, Type::Str);
+                                let layers: Vec<(i64, MirStmt)> = vec![
+                                    (
+                                        8,
+                                        MirStmt::VoidCall {
+                                            func: (if is_last { s_prn } else { s_pr }).to_string(),
+                                            args: vec![none_str],
+                                        },
+                                    ),
+                                    (
+                                        4,
+                                        MirStmt::VoidCall {
+                                            func: (if is_last { s_prn } else { s_pr }).to_string(),
+                                            args: vec![*arg_id],
+                                        },
+                                    ),
+                                    (
+                                        5,
+                                        MirStmt::VoidCall {
+                                            func: (if is_last { i_prn } else { i_pr }).to_string(),
+                                            args: vec![*arg_id],
+                                        },
+                                    ),
+                                    (
+                                        6,
+                                        MirStmt::VoidCall {
+                                            func: "zeta_print_f64_word".to_string(),
+                                            args: vec![*arg_id, nl_id],
+                                        },
+                                    ),
+                                    (
+                                        7,
+                                        MirStmt::VoidCall {
+                                            func: "zeta_print_bool_word".to_string(),
+                                            args: vec![*arg_id, nl_id],
+                                        },
+                                    ),
+                                ];
+                                let mut acc: Vec<MirStmt> = vec![MirStmt::VoidCall {
+                                    func: (if is_last { i_prn } else { i_pr }).to_string(),
+                                    args: vec![*arg_id],
+                                }];
+                                for (tag, then_stmt) in layers.iter().rev() {
+                                    let lit = self.next_id();
+                                    self.exprs.insert(lit, MirExpr::IntLit(*tag));
+                                    self.type_map.insert(lit, Type::I64);
+                                    let cond = self.next_id();
+                                    self.exprs.insert(
+                                        cond,
+                                        MirExpr::BinaryOp {
+                                            op: "==".to_string(),
+                                            left: tag_slot,
+                                            right: lit,
+                                        },
+                                    );
+                                    self.type_map.insert(cond, Type::I64);
+                                    acc = vec![MirStmt::If {
+                                        cond,
+                                        then: vec![then_stmt.clone()],
+                                        else_: std::mem::take(&mut acc),
+                                        dest: None,
+                                    }];
+                                }
+                                self.stmts.extend(acc);
+                                continue;
+                            }
+                        }
                         // A Json value prints by its tag (scalars bare,
                         // containers as JSON text) — converting to a string
                         // first keeps it on the existing print path.
@@ -13584,6 +13697,44 @@ call, no NULL-handle dereference).",
                     }
                 }
 
+                // 批次 810：`mean` 此前只被下面 opaque 兜底的 pandas 链式臂接走
+                // （`("mean", _) => zeta_identity`），而它是那条列表里唯一返回**标量**的
+                // 成员 ⇒ 向量句柄当数用（夹具 t810_mean_fold 改前实拍：期望 2.0 打出堆
+                // 地址，末行乘 2 也"看着对"）。这里只接静态类型是向量／PyDynamic／未知
+                // 标量的接收者：`Type::Named` 一律放行——pylib/pandas.z:339 的
+                // GroupBy.mean 库方法表就是靠兜底臂继续生效的，把它折成数值是新造的
+                // 静默错值。
+                if method == "mean"
+                    && arg_ids.len() == 1
+                    && matches!(
+                        receiver_ty.as_ref(),
+                        Some(Type::PyDynamic)
+                            | Some(Type::I64)
+                            | Some(Type::DynamicArray(_))
+                            | Some(Type::Array(_, _))
+                            | None
+                    )
+                {
+                    let elem_is_i64 = match receiver_ty.as_ref() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
+                            matches!(**e, Type::I64)
+                        }
+                        _ => false,
+                    };
+                    let flag = self.next_id();
+                    self.exprs.insert(flag, MirExpr::IntLit(elem_is_i64 as i64));
+                    self.type_map.insert(flag, Type::I64);
+                    self.stmts.push(MirStmt::Call {
+                        func: "zeta_mean_vec".to_string(),
+                        args: vec![arg_ids[0], flag],
+                        dest: id,
+                        type_args: vec![],
+                    });
+                    self.exprs.insert(id, MirExpr::Var(id));
+                    self.type_map.insert(id, Type::F64);
+                    return id;
+                }
+
                 // Batch 288: slot read of a TYPED element. The comprehension
                 // tuple target desugars to `stack_array_get(ELEMENT, i)`; with
                 // the element's DynamicArray hint in play, the slot carries the
@@ -13845,6 +13996,8 @@ call, no NULL-handle dereference).",
                         // ALL other unknown methods also chain by identity so
                         // real-world sources link. (Earlier strict `_ => None`
                         // made every chain a link error.)
+                        // 批次 810：单参的 `x.mean()` 在上面向量折叠表后就返回了，
+                        // 留在这条的只有多参（`mean(axis=…)`）与 Named 接收者。
                         ("fillna", _) | ("astype", _) | ("shift", _) | ("groupby", _)
                         | ("transform", _) | ("rank", _) | ("sort_values", _)
                         | ("rolling", _) | ("mean", _) | ("to_period", _)

@@ -84,6 +84,19 @@ void print_str(int64_t v) { printf("%s", zt_str_or_null(v)); }
 void println_str(int64_t v) { printf("%s\n", zt_str_or_null(v)); }
 void print(int64_t v) { fputs(zt_str_or_null(v), stdout); }
 
+// 批次 808（混型 dict None 值格）：PyDynamic 槽带格标签的运行期渲染——
+// f64 以位整形态躺在 i64 槽里，跨 ABI 边界必须在此 memcpy 回 double；
+// bool 打 CPython 词法（True/False）。
+void zeta_print_f64_word(int64_t w, int64_t nl) {
+    double d;
+    memcpy(&d, &w, sizeof d);
+    if (nl) println_f64(d); else print_f64(d);
+}
+void zeta_print_bool_word(int64_t w, int64_t nl) {
+    if (nl) printf(w ? "True\n" : "False\n");
+    else printf(w ? "True" : "False");
+}
+
 // === String runtime (str_* mapped to host_str_* by codegen, GC-allocated) ===
 int64_t str_len(int64_t s) { return s ? (int64_t)strlen((char*)s) : 0; }
 int64_t str_concat(int64_t a, int64_t b) {
