@@ -891,3 +891,25 @@
   不再让一条文件超时把"解析通过 n/40"整行带走。验收＝压到 1 秒真打该文件回 `'timeout'`、
   同文件 90 秒回 `True`、全量一轮 40/40（1:50）、python_style 窗口 9 首轮 40/40 PASS。
   未跑整条 `sample_gate.sh 10009`（预算不足，④ 步用全量一轮代打），如实记在 roadmap。
+
+- 批次 10010 开批前的实测加注（`#266③`，零代码，不算落地）：这一格与主树在册的 `#270` 是同一个缺陷，
+  主树已带四枚实拍读数（`/Users/meetai/source/zeta-src/backlog.md:128`）：
+  `df["close"].mean()` → `2.143195903e-314`（真 30.0）、`s = df["close"]; s.mean()` → `2.164760374e-314`、
+  局部变量 `c` 再 `.mean()` → `2.12682018e-314`、切片后 `.mean()` 同族。位模式＝把堆句柄当 f64 读。
+  **两棵树都没修好这一格**：主树折叠臂 `bs/src/middle/mir/gen.rs:13193` 的接收者门是
+  `PyDynamic | I64 | DynamicArray | Array | None`（比本树 10004 收窄后的门宽），
+  所以它在 pandas 句柄上照样发 `zeta_mean_vec` ⇒ 主树是"折叠了但读错形"，本树是"不折叠、落回
+  `zeta_identity` 把句柄原样当数用"——两条都是静默错值，本树形态是 10004 为了止住 #267 那条
+  型污染扩散而主动让出来的格子。
+  **排除掉的方向（实测理由）**：把未知接收者的 `.mean()` 改成编译期明确报错不可行——语料里
+  `strategies/` 下 20 处 `.mean()` 的接收者几乎全是 pandas 对象
+  （`趋势筛选ETF轮动.py:79` 与 `趋势筛选ETF轮动10倍.py:104` 的 `data.rolling(window=window).mean()`、
+  `小市值排除3bug版.py:238` 与 `四大搅屎棍.py:224` 的 `index_df['close'].rolling(...).mean()`、
+  `国九条中小板微盘.py:219` 的 `index_df['close'].mean()`、`高股息价投.py:127` 的
+  `df_close.rolling(window=20, axis=1).mean().iloc[:, -p_count:]`），报错＝整批语料退出可编译集，
+  比静默错值更可测但不可接受。
+  **下一批的真修法**＝运行期按句柄标签派发：`runtime/py_additions.c:4820`（主树）那条
+  `zeta_mean_vec` 现在无条件按向量头部读，需要先判形（DataFrame 列容器／Series／真向量／非数值），
+  判不出来就明确报错而不是返回垃圾 double。改动面含 `runtime/*.c` ⇒ 必须本树
+  `tools/build_runtime.sh` 重建那颗被跟踪的 `.o`（主树的 `.o` 吃不了 git 二进制补丁），
+  两侧 A/B 都带 `ZETA_STRICT_RUNTIME_DIR=1` 并先比 `.o` 的 md5。
