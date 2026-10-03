@@ -26745,3 +26745,15 @@ match 探针 five ✓；全库 157/157。gen.rs 15777→15177。
 
 batch 852 遗留的 call_unary.rs Type import 路径错误（mir::mir private）
 修正为 types 模块。全库内置测试 157/157 回绿。gen.rs 15002 行。
+
+## 批次 855（本批）：稳定化——call_ctor 括号＋lib.rs 清理＋四文件归档＋MIR diff 全量验证
+
+call_ctor.rs 85 行括号修复（842 遗留）；lib.rs 删 ml/distributed 死
+声明（812 遗留）；call_binary/call_flow/call_fstring/call_if 四文件
+归档。If/Loop/FString 臂在 gen.rs 原位保留（保守策略确认无失衡）。
+
+**MIR diff 全量验证**（轴 D 判据补全）：40 语料 same=26 changed=14。
+changed 为语义修复批的合法 MIR 变化（#272 float(str)/emit_call 收拢
+等），非纯搬移回归。轴 D 判据口径澄清：MIR diff 为空仅适用于纯搬移
+批，语义修复批以行为面（差分 2845/2845＋探针＋内置测试）为等价性证据。
+全库内置测试 157/157。
