@@ -28798,3 +28798,19 @@ cleanup 车道 10026–10027 并入（bb73fac9）后本批为收口批，兑现 
 之后三轮探针"不打印"全是陈旧二进制——构建失败被管道吞掉后，测试全在旧件上跑。
 此教训已四次现身（494b/507b、bisect 污染、本轮），后续所有构建命令改为
 `cargo build --release 2>&1 | tail -3` 直接看输出，不再只数 error 行。
+
+## 批次 880（2026-10-04，**修复批：#278 主面根修——模块属性读路径丢 member**）
+
+`import math; print(math.pi)` 打 0（应 3.14159…）。根因：call_field.rs 的模块
+属性注册表路由对 `base` 做 flatten_module_receiver——`math.pi` 的 base 是
+Var("math")，parts 为空，**当前 field（pi）从未拼进路径** ⇒ member 恒空串 ⇒
+find_member 必然 None ⇒ 常量静默降 0。上方"flatten 已含 field，勿重复拼"的
+注释是 Call 臂口径（receiver 不含方法名），抄到本臂时没跟着改——同时把
+py_user_modules 的 env 读路由（parts.len()==1）一并修活。
+gen.rs→call_field.rs 一处＋两行（parts.push(field)）。
+
+**验证**：math.pi/e 全对；python_style 全量 **475 过／4 FAIL**（修前 465/14，
+10 例转好：t105/t106/t107/t111/t115/t454/t45/t46/t48/t75）；全量差分
+（--group 50）match=2845/2845＝100%；内置单元测试 157/157。
+余 4 例（t217_np_where／t274_df_columns_kwarg／t79_counter_most_common／
+t813_unannotated_float_return）属另族，#278 已收窄登记。

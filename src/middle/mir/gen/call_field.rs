@@ -282,7 +282,14 @@ impl MirGen {
             // last part — do not append it twice (a doubled path misses
             // the registry and falls through to a real field access on a
             // module handle, which dereferences garbage).
-            if let Some((root, parts)) = Self::flatten_module_receiver(base) {
+            // 批次 880（#278）：这里必须把当前 `field` 拼进路径——本臂的
+            // flatten 只收到 `base`（`math.pi` 的 base＝Var("math") ⇒ parts=[]），
+            // 不补 field 则 member 恒为空串，find_member 必然 None ⇒ 模块常量
+            // 全部静默降 0（math.pi／math.e 一族，python_style 14 例）。
+            // "flatten 已含 field"是 Call 臂的口径（receiver 不含方法名），
+            // 抄到这里时没跟着改。
+            if let Some((root, mut parts)) = Self::flatten_module_receiver(base) {
+                parts.push(field.clone());
                 if let Some(module) = self.py_module_aliases.get(&root).cloned() {
                     // User module namespace read: `mod.CONST` is the module
                     // global `mod__CONST` in the env (written by the
