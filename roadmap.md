@@ -26589,3 +26589,8 @@ CPython。全库内置测试 154/154。
 
 successor/predecessor/abs/min-max 臂改读 classify_call（NumericBuiltin）。
 全库内置测试 154/154。
+
+## 批次 827（本批）：print 按格渲染链抽为 emit_tagged_print（808 行为保持）
+
+767/808 值标签大弧 print 位渲染链抽独立方法（守卫留调用侧、链体进方法）。
+行为探针 None/5 全对；全库 154/154。
