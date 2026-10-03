@@ -20,6 +20,7 @@ mod call_print;
 mod call_subscript;
 mod call_len;
 mod call_unary;
+mod call_expr_lit;
 mod call_str;
 use self::call_class::{classify_call, type_name_of, CallClass};
 use self::call_json::json_route;
@@ -13064,57 +13065,8 @@ call, no NULL-handle dereference).",
                 self.lower_field_access(base, field, id);
             }
             AstNode::StructLit { variant, fields } => {
-                // Implement proper struct literal creation
-                let mut field_ids = Vec::new();
-                // Fields are lowered in source order and a Python `__init__` may
-                // read a field it assigned a line earlier (`self.a = x` then
-                // `self.b = join(self.a, ...)`). The synthesized ctor has NO
-                // `self`, so record each computed value under its field name for
-                // the later initializers of this same literal. Nesting is safe:
-                // the list is truncated back on the way out.
-                let alias_mark = self.self_field_aliases.len();
-                for (field_name, field_expr) in fields {
-                    let field_id = self.lower_expr(field_expr);
-                    // Register the alias as a REAL SLOT, not as the expression id.
-                    // A literal/expression id has no alloca, so a later
-                    // `self.x` read passed it to a runtime call and codegen loaded
-                    // the (missing) slot: `self.cd = "/tmp/root/data";
-                    // self.scd = os.path.join(self.cd, "stocks")` produced just
-                    // "stocks" — and `MarketDataFetcher.cache_dir` came out as
-                    // 2 bytes of garbage, which made every cache path miss.
-                    let slot = self.next_id();
-                    self.stmts.push(MirStmt::Assign { lhs: slot, rhs: field_id });
-                    let ty = self.type_map.get(&field_id).cloned().unwrap_or_else(Type::slot_fallback);
-                    self.exprs.insert(slot, MirExpr::Var(slot));
-                    self.type_map.insert(slot, ty);
-                    self.self_field_aliases.push((field_name.clone(), slot));
-                    field_ids.push((field_name.clone(), field_id));
-                }
-                self.self_field_aliases.truncate(alias_mark);
-                // Create Struct expression.
-                //
-                // `with_enum_tag` is load-bearing for the named-field form of a
-                // variant ctor (`Shape::Rect { w: 3, h: 4 }`): this used to copy
-                // the literal's own field list straight through, so the block
-                // had no slot 0 tag and the arm test — which reads slot 0 —
-                // never matched one. `match v { Shape::Rect { w, h } => 1, … }`
-                // fell to the wildcard and printed 99 (measured).
-                let struct_fields = self.with_enum_tag(variant, field_ids);
-                self.exprs.insert(
-                    id,
-                    MirExpr::Struct {
-                        variant: variant.clone(),
-                        fields: struct_fields,
-                    },
-                );
-                // Batch 805: the literal's type is its VARIANT name (`S {..}` →
-                // Named("S")), not the placeholder spelling "Struct" — with the
-                // placeholder every method call on a Rust-shape literal missed
-                // func_ret_types ("S::greet") and degraded to I64, printing the
-                // heap handle for a Str-returning method (measured twice: 404
-                // `[impl=4374191776]`, and `-> str` methods too).
-                self.type_map
-                    .insert(id, Type::Named(variant.clone(), vec![]));
+                // 批次 853：StructLit 臂迁入 gen/call_struct.rs。
+                return self.lower_struct_lit(variant, fields, id);
             }
             AstNode::PathCall {
                 path,
@@ -13503,213 +13455,8 @@ call, no NULL-handle dereference).",
                 );
             }
             AstNode::ArrayLit(elements) => {
-                // Create an array using ArrayHeader API
-
-                let size = elements.len();
-
-                // Python's `[]` is a GROWABLE list, never a 0-length fixed array.
-                // As a `StackArray` of size 0 it had no `[cap|len]` header, so
-                // `xs.append(v)`'s `vec_push` read the header 16 bytes BEFORE the
-                // alloca (garbage) and wrote past the buffer — stack corruption.
-                // That is the UB behind the pandas cluster's Bus errors / SEGVs
-                // (`idx: lt(vec, str) = []` + `idx.append(str(i))` in
-                // pylib/pandas.z) and behind t207's `len(xs)` staying 0.
-                // Lower the elements ONCE — the branch below decides the
-                // representation, and lowering twice would duplicate side effects.
-                let mut lowered_elems = Vec::new();
-                for element in elements {
-                    lowered_elems.push(self.lower_expr(element));
-                }
-                let elem_ty_pre = self.get_common_element_type(&lowered_elems);
-                // A Python list literal must be a GROWABLE list with the
-                // `[cap|len]` header: every vec_* runtime call (concat /
-                // fromkeys / len / index / push) reads that header. As a
-                // StackArray those calls read 16 bytes BEFORE the buffer and
-                // walked off it — measured as a SEGV in `py_map_fromkeys`, from
-                // `wufu_constants`' `dict.fromkeys(GLOBAL_ETF_POOL + …)`.
-                // FLOAT lists keep the StackArray form: `vec_push` is an i64
-                // channel, so an f64 element would be reinterpreted as its bit
-                // pattern (t56/t139 went red when EVERY literal became dynamic).
-                // Batch 782 (#203⑥ 尾巴)：float 字面量列表改 DynamicArray——
-                // 元素经 zeta_vec_push_f64（f64 直进 xmm，C 侧按位 push），列表
-                // 型 DynamicArray(F64) ⇒ len/下标/vec_* 全走 dyn 面。t56/t139
-                // 重锚验证见本批读数。
-                if size == 0 {
-                    let capacity_id = self.next_id();
-                    self.exprs.insert(capacity_id, MirExpr::IntLit(0));
-                    self.type_map.insert(capacity_id, Type::I64);
-                    let h = self.next_id();
-                    self.stmts.push(MirStmt::Call {
-                        func: "zeta_dynarray_new".to_string(),
-                        args: vec![capacity_id],
-                        dest: h,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(h, MirExpr::Var(h));
-                    self.type_map
-                        .insert(h, Type::DynamicArray(Box::new(Type::I64)));
-                    self.exprs.insert(id, MirExpr::Var(h));
-                    self.type_map
-                        .insert(id, Type::DynamicArray(Box::new(Type::I64)));
-                    return id;
-                }
-                if !matches!(elem_ty_pre, Type::F32 | Type::F64) {
-                    let start = if size == 0 { Vec::new() } else { lowered_elems };
-                    let elem_ty = if size == 0 { Type::I64 } else { elem_ty_pre };
-                    let capacity_id = self.next_id();
-                    self.exprs.insert(capacity_id, MirExpr::IntLit(size as i64));
-                    self.type_map.insert(capacity_id, Type::I64);
-                    let h = self.next_id();
-                    self.stmts.push(MirStmt::Call {
-                        func: "zeta_dynarray_new".to_string(),
-                        args: vec![capacity_id],
-                        dest: h,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(h, MirExpr::Var(h));
-                    self.type_map
-                        .insert(h, Type::DynamicArray(Box::new(elem_ty.clone())));
-                    for e in start {
-                        let sink = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "vec_push".to_string(),
-                            args: vec![h, e],
-                            dest: sink,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(sink, MirExpr::Var(sink));
-                        self.type_map
-                            .insert(sink, Type::DynamicArray(Box::new(elem_ty.clone())));
-                        self.stmts.push(MirStmt::Assign { lhs: h, rhs: sink });
-                    }
-                    self.exprs.insert(id, MirExpr::Var(h));
-                    self.type_map
-                        .insert(id, Type::DynamicArray(Box::new(elem_ty)));
-                    return id;
-                }
-
-                // Batch 782 (#203⑥ 尾巴)：float 字面量列表 → DynamicArray(F64)
-                // 元素经 zeta_vec_push_f64（f64 直进 xmm，C 侧按位 push）；列表
-                // 型 DynamicArray(F64) ⇒ 下标读 F64 渲染、len/vec_* 可用。
-                if matches!(elem_ty_pre, Type::F32 | Type::F64) {
-                    let capacity_id = self.next_id();
-                    self.exprs.insert(capacity_id, MirExpr::IntLit(size as i64));
-                    self.type_map.insert(capacity_id, Type::I64);
-                    let h = self.next_id();
-                    self.stmts.push(MirStmt::Call {
-                        func: "zeta_dynarray_new".to_string(),
-                        args: vec![capacity_id],
-                        dest: h,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(h, MirExpr::Var(h));
-                    self.type_map.insert(
-                        h,
-                        Type::DynamicArray(Box::new(elem_ty_pre.clone())),
-                    );
-                    for e in &lowered_elems {
-                        let e_ty = self.type_map.get(e).cloned().unwrap_or_else(Type::slot_fallback);
-                        let e_f = if matches!(e_ty, Type::F64) {
-                            *e
-                        } else {
-                            let f = self.emit_call("zeta_float_i64", vec![*e], Type::F64);
-                            f
-                        };
-                        let sink = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "zeta_vec_push_f64".to_string(),
-                            args: vec![h, e_f],
-                            dest: sink,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(sink, MirExpr::Var(sink));
-                        self.type_map.insert(
-                            sink,
-                            Type::DynamicArray(Box::new(Type::F64)),
-                        );
-                        self.stmts.push(MirStmt::Assign { lhs: h, rhs: sink });
-                    }
-                    self.exprs.insert(id, MirExpr::Var(h));
-                    self.type_map.insert(
-                        id,
-                        Type::DynamicArray(Box::new(elem_ty_pre.clone())),
-                    );
-                    return id;
-                }
-
-                // HYBRID MEMORY SYSTEM: Check if this should be a stack array
-                // For small, fixed-size arrays, use stack allocation
-                if size <= 20000 {
-                    // Reasonable stack size limit
-
-                    let element_ids = lowered_elems;
-                    let element_ids_clone = element_ids.clone();
-
-                    // Create StackArray expression
-                    self.exprs.insert(
-                        id,
-                        MirExpr::StackArray {
-                            elements: element_ids,
-                            size,
-                        },
-                    );
-
-                    // Determine element type from elements
-                    let elem_type = self.get_common_element_type(&element_ids_clone);
-
-                    // Set the type to Array(elem_type, size) for subscript access
-                    self.type_map.insert(
-                        id,
-                        Type::Array(Box::new(elem_type), ArraySize::Literal(size)),
-                    );
-                } else {
-                    // Large array, use heap allocation
-
-                    // Call array_new with capacity = size
-                    let array_data_ptr = self.next_id();
-                    let capacity_id = self.next_id();
-                    self.exprs.insert(capacity_id, MirExpr::IntLit(size as i64));
-                    self.stmts.push(MirStmt::Call {
-                        func: "array_new".to_string(),
-                        args: vec![capacity_id],
-                        dest: array_data_ptr,
-                        type_args: vec![],
-                    });
-
-                    // For heap arrays, we need to set the length
-                    let len_id = self.next_id();
-                    self.exprs.insert(len_id, MirExpr::IntLit(size as i64));
-                    self.stmts.push(MirStmt::VoidCall {
-                        func: "array_set_len".to_string(),
-                        args: vec![array_data_ptr, len_id],
-                    });
-
-                    // Set each element at its index and collect element IDs
-                    let mut heap_element_ids = Vec::new();
-                    for (i, element) in elements.iter().enumerate() {
-                        let elem_id = self.lower_expr(element);
-                        heap_element_ids.push(elem_id);
-                        let index_id = self.next_id();
-                        self.exprs.insert(index_id, MirExpr::IntLit(i as i64));
-                        self.stmts.push(MirStmt::VoidCall {
-                            func: "array_set".to_string(),
-                            args: vec![array_data_ptr, index_id, elem_id],
-                        });
-                    }
-
-                    // Clone heap_element_ids before using it
-                    let heap_element_ids_clone = heap_element_ids.clone();
-
-                    // Return the data pointer (after header)
-                    self.exprs.insert(id, MirExpr::Var(array_data_ptr));
-                    // Determine element type from elements
-                    let elem_type = self.get_common_element_type(&heap_element_ids_clone);
-                    // Set the type to Array(elem_type, size) for subscript access
-                    self.type_map.insert(
-                        id,
-                        Type::Array(Box::new(elem_type), ArraySize::Literal(size)),
-                    );
-                }
+                // 批次 853：ArrayLit 臂迁入 gen/call_array.rs。
+                return self.lower_array_lit(elements, id);
             }
             AstNode::ArrayRepeat { value, size } => {
                 let value_id = self.lower_expr(value);
@@ -14137,49 +13884,10 @@ call, no NULL-handle dereference).",
                 self.exprs.insert(id, MirExpr::IntLit(0));
                 self.type_map.insert(id, Type::I64);
             }
-        }
-        id
-    }
-
-    /// PY-A: lower one element of a comma subscript. A slice element
-    /// (`df.iloc[:, 0]`) must NOT go through the real `zeta_slice_vec` path:
-    /// that interprets the base as a Vec handle, and the base here is an
-    /// opaque platform object (numpy/pandas), so it read a garbage header off
-    /// the handle — `d[:, 0]` on a plain integer base segfaulted. The slice is
-    /// an opaque placeholder, which is all `py_getitem2` needs.
-    fn lower_multi_index_element(&mut self, item: &AstNode) -> u32 {
-        if let AstNode::Call {
-            method, args, ..
-        } = item
-        {
-            if method == "__slice__" || method == "__slice_step__" {
-                let mut ids: Vec<u32> = args.iter().map(|a| self.lower_expr(a)).collect();
-                while ids.len() < 3 {
-                    let filler = self.next_id();
-                    self.exprs.insert(filler, MirExpr::IntLit(0));
-                    self.type_map.insert(filler, Type::I64);
-                    ids.push(filler);
-                }
-                let dest = self.next_id();
-                self.stmts.push(MirStmt::Call {
-                    func: "py_slice_new".to_string(),
-                    args: vec![ids[0], ids[1], ids[2]],
-                    dest,
-                    type_args: vec![],
-                });
-                self.exprs.insert(dest, MirExpr::Var(dest));
-                self.type_map.insert(dest, Type::I64);
-                return dest;
+            AstNode::Tuple(elements) => {
+                // 批次 853：Tuple 臂迁入 gen/call_tuple.rs。
+                return self.lower_tuple(elements, id);
             }
-        }
-        self.lower_expr(item)
-    }
-
-    fn next_id(&mut self) -> u32 {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
-    }
 
     /// Is this value an array (or an array-typed parameter)? Parameters are
     /// typed through `source_types` because unannotated ones default to i64.
