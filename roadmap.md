@@ -26640,3 +26640,9 @@ lower_assert 迁入；首验链接错 _assert undefined＝守卫笔误（Special
 
 lower_re_sub 迁入；分类器 RegularSub 变体＋入口消费。探针双例对齐
 CPython；全库 156/156。
+
+## 批次 836（本批）：logging 家族迁入 call_logging.rs＋分类器 Logging 变体
+
+FileHandler/getLogger 两执行方法＋统一入口；探针全链通过（logging ok）。
+教训再录：impl 方法不能 use 导入（call_re 同坑第二次），家族执行者一律
+self. 方法式调用。全库 156/156。
