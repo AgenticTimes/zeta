@@ -49,7 +49,16 @@ impl MirGen {
                     && matches!(**index, AstNode::Lit(0))
                     && receiver.as_ref().map_or(false, |r| matches!(**r, AstNode::Var(_)))
                 {
-                    self.lower_expr(base);
+                    // 批次 888（#278/t217）：必须把 where 结果写进 dest——原
+                    // 实现 `lower_expr(base); return;` 只跑副作用，dest 保持
+                    // 派发器缺省槽（IntLit 0），`idx = np.where(mask)[0]` 的
+                    // len/取位全落空（len=0、元素 0）。
+                    let wid = self.lower_expr(base);
+                    self.exprs.insert(dest, MirExpr::Var(wid));
+                    self.type_map.insert(
+                        dest,
+                        self.type_map.get(&wid).cloned().unwrap_or(Type::I64),
+                    );
                     return;
                 }
             }

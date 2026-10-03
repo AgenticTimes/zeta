@@ -28913,3 +28913,17 @@ counter_new_str）死亡，落回指针键 shim。修＝分类器补 `"Counter" 
 **验证**：python_style **477 过／2 FAIL**（t79/t274 转好，余 t217_np_where／
 t813——t813 的张力已登 #279）；全量差分（--group 50）match=2845/2845＝100%；
 内置单元测试 158/158（新增分类器钉）；历史探针七套零差异。
+
+## 批次 888（2026-10-04，**修复批：t217 根修——批 148 的 np.where 下标路由缺 dest 写回**）
+
+`idx = np.where(mask)[0]` 的 len/取位全落空（len=0）。诊断修正：批 887 的
+"下标无下发路由"判断有误——W1010×4 是与 print 同源的老噪音（无链式下标的
+s888b 同样 4 条），批 148 路由本身有接住（插桩实拍 method=where 命中）。
+真根因：该路由 `self.lower_expr(base); return;` **只跑副作用、未写 dest**——
+idx 绑到派发器缺省槽（IntLit 0），len(idx) 实读的是 import 句柄槽（array_len
+实拍读槽 7 = zeta_py_import 的 dest ⇒ 0）。
+修法：路由补 `exprs[dest] = Var(where结果)` ＋型拷贝。gen 内一处（call_subscript.rs）。
+
+**验证**：t217 全行对齐（2/0/2/10/20/10/2）；python_style **478 过／1 FAIL**
+（仅余 t813＝#279 设计张力）；全量差分（--group 50）match=2845/2845＝100%；
+内置单元测试 158/158；历史探针七套零差异。
