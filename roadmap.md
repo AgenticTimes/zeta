@@ -28496,3 +28496,21 @@ subscript/print 等家族按契约写 dest 无此类路径，11885 lower_range_g
   （10030）做。
 - `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件＋两枚未跟踪用例，记录笔只暂存
   roadmap＋backlog 两本台账，**连续二十四批**）；待补行文本写进本批记录笔的提交信息。
+## 批次 867（2026-10-03，**重构批：Let 语句臂（145 行）迁入 gen/stmt_let.rs**＋cleanup 滞留 10023–10025 并入）
+
+零替换法＋行号精确手术：`lower_ast_inner` 的 `AstNode::Let` 臂迁入
+`gen/stmt_let.rs::lower_let_stmt(&mut self, pattern: &AstNode, expr: &AstNode)`。
+迁移前按 866 教训先审计早退路径：零早退（全部写 dest 或局部槽）⇒ 语句位委托
+无需转发。签名适配 2 处（`match &**pattern`→`match pattern`、元组模式处
+`&**pattern`→`&pattern`），嵌套的 `&**inner_pattern` 本就正确、保留。
+gen.rs 14163→14023（净 -140）。
+
+**cleanup 滞留 10023–10025 并入**（ac0c6bb7）：仅台账＋regression_history.rs
+（+7 条＝46/46），零编译器面；roadmap EOF 双追加冲突两边都保留。
+
+**新发现缺陷 #275（非本批引入，ac0c6bb7 复现在案）**：`global g; g = g + 1`
+函数内写 env 单元后模块层同名读拿旧值（t425 env 镜像未覆盖 global 写面）。
+已登记 backlog，探针其余四面（普通绑定/带注解元素型回填/元组解构/赋值语句）
+与 CPython 逐字对齐。
+
+验证：编译零错误；内置单元测试 157/157；历史缺陷测试 46/46；batch_gate GREEN。
