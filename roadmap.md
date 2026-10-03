@@ -26725,3 +26725,8 @@ float 注册表项符号 zeta_float_i64 把 str 句柄当 i64 转 double（实�
 4.3e9 垃圾）。修法：Call 臂加 float 改道臂（注册表路由前），按实参
 静态类型选 zeta_float_str/zeta_float_i64。四态探针 2.5/3.0/2.0/1.5
 全对齐 CPython。全库 157/157。移除临时探针。
+
+## 批次 851（本批）：Match 臂（600 行）迁入 gen/call_match.rs——零替换法
+
+Match 表达式发射体迁入 lower_match_expr（scrutinee/arms/id 签名）。
+match 探针 five ✓；全库 157/157。gen.rs 15777→15177。
