@@ -992,6 +992,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     report_bare_member_calls(&all_mirs);
                 }
 
+                // 批次 814/856：只读探针（--dump-mir 等）打印后立即收工——
+                // 不落穿到 LLVM codegen（gen_mirs 里的 into_int_value 在
+                // FloatValue 槽上 panic＝#265/#268 的 dump 旋转/崩溃根因）。
+                if probe_only && !dump_ir {
+                    return Ok(());
+                }
+
                 let context = Context::create();
                 let mut codegen = LLVMCodegen::new(&context, "module");
                 if strict_abi {
