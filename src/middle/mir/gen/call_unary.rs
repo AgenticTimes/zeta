@@ -2,7 +2,8 @@
 
 use super::MirGen;
 use crate::frontend::ast::AstNode;
-use crate::middle::mir::mir::{MirExpr, MirStmt, Type};
+use crate::middle::mir::mir::{MirExpr, MirStmt};
+use crate::middle::types::Type;
 
 impl MirGen {
     pub(super) fn lower_unary_op(
