@@ -26783,3 +26783,8 @@ BinaryOp 迁移留 fresh session 用 proper tooling 重新做。
 to_i64_safe 助手（FloatValue bitcast 不 panic）加 codegen.rs——120 处
 into_int_value 的动态类型路径可增量替换。call_ctor 括号＋lib.rs 清理。
 全库 157/157；构建零错误。
+
+## 批次 858（本批）：轴 A 死代码清理收尾——根目录杂物清走
+
+b3ir.log/test_match*.z/tools/__pycache__ 清理（refactor.md 轴 A 尾段
+"根目录杂物"判据收口）。构建零错误。
