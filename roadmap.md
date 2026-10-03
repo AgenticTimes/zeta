@@ -26584,3 +26584,8 @@ json_route 纯函数（符号＋vec 元素标签），dumps/dump 两份手写 ma
 收敛为一份。合同三条：标量各归其道（PyDynamic 兜底钉）、容器 typed
 vec 元素标签、map/dict 同路＋PyJson 递归。json.dumps 探针对齐
 CPython。全库内置测试 154/154。
+
+## 批次 826（本批）：数值内建族四臂入口接入分类器
+
+successor/predecessor/abs/min-max 臂改读 classify_call（NumericBuiltin）。
+全库内置测试 154/154。
