@@ -9,6 +9,7 @@ mod call_set;
 mod call_class;
 mod call_len;
 mod call_str;
+use self::call_class::{classify_call, CallClass};
 use self::call_str::{path_ends_with_mem, str_method_symbol, str_method_symbol3, to_string_channel};
 
 use crate::frontend::ast::AstNode;
@@ -9041,7 +9042,12 @@ call, no NULL-handle dereference).",
                         .insert(id, Type::DynamicArray(Box::new(Type::I64)));
                     return id;
                 }
-                if method == "len" && receiver.is_none() && args.len() == 1 {
+                // 批次 824：入口判定改读分类器（classify_call）——路由决策
+                // 收敛到唯一决策点；本臂只负责 Len 路由的发射。
+                if classify_call(method) == CallClass::Len
+                    && receiver.is_none()
+                    && args.len() == 1
+                {
                     let arg_id = self.lower_expr(&args[0]);
                     let arg_ty = self.type_map.get(&arg_id).cloned();
                     // 批次146 重放: `len(obj)` dispatches to the object's
@@ -12138,17 +12144,23 @@ call, no NULL-handle dereference).",
                 // Python `set` methods on our list-backed sets: `s.add(x)` is a
                 // push; `s.discard(x)` / `s.remove(x)` rebuild without the slot.
                 // They compiled to ghosts (`_set__add`) and failed the link.
-                // 批次 816：集合族（add/discard/remove/intersection）搬到
-                // 子模块 gen/call_set.rs——家族文件第一刀。同位调用：链中
-                // 位置不变，顺序语义保持。
-                if let Some(sid) = self.lower_set_family(
-                    receiver.as_deref(),
-                    receiver_ty.as_ref().unwrap_or(&Type::I64),
-                    method.as_str(),
-                    &arg_ids,
-                    id,
-                ) {
-                    return sid;
+                // 批次 816/824：集合族（add/discard/remove/intersection）搬
+                // 子模块 gen/call_set.rs；入口判定改读分类器（SetMutation/
+                // SetIntersection 互斥在分类层保证），执行文件只管发射。
+                if matches!(
+                    classify_call(method),
+                    CallClass::SetMutation | CallClass::SetIntersection
+                ) && receiver_ty.is_some()
+                {
+                    if let Some(sid) = self.lower_set_family(
+                        receiver.as_deref(),
+                        receiver_ty.as_ref().unwrap_or(&Type::I64),
+                        method.as_str(),
+                        &arg_ids,
+                        id,
+                    ) {
+                        return sid;
+                    }
                 }
                 // `s.clear()` on a list-backed set (batch 294:
                 // `PositionLedger._today_buys.clear()` hit the weak `_clear`
