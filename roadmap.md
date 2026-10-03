@@ -27106,3 +27106,64 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   （零 `src/` 改动 ⇒ 抽样窗口未重跑，结论沿用 10024 的 rc=0）。全局逐个用例那一档在十批界（10030）做。
 - `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件＋两枚未跟踪用例，记录笔只暂存
   roadmap＋backlog 两本台账，**连续二十五批**）；待补行文本写进本批记录笔的提交信息。
+
+## 批次 10027（续 #20005：把历史缺陷做成进程内单元测试，第十七批——来源批次 172／300 的全局变量推型臂）
+
+- 主体代码：`tests/regression_history.rs` +193 行（`git show --numstat 6503000f`），用例数 47 → **49**。
+  本批只动测试文件，`src/**` 零改动（三处变异都是临时写入后原地还原）。
+- 新增两条（都钉"全局变量的类型推不出来 ⇒ 环境读回整段消失"，站点不同、夹具形状不同）：
+  1. `global_list_comprehension_keeps_element_type_at_env_reads`
+     ＝来源批次 172（主线 `9e9c16c1`「列表推导式常量的类型（`__collect__`）⇒ 消灭非确定性段错误」），
+     站点＝`src/middle/resolver/resolver.rs:2079`（`infer_global_ty` 里带 `method == "__collect__"`
+     守卫的那条臂）；夹具＝`def to_bs(c): return "B" + c` ／ `CODES = [to_bs(c) for c in ["a","b"]]`
+     ＋ `print(len(CODES))`／`print(CODES[0])`。
+  2. `global_assigned_from_unannotated_call_keeps_return_type_at_env_reads`
+     ＝来源批次 300（主线 `610b8db5`「未标注 `def` 的返回类型从自身 `return` 反推」），
+     站点＝同文件 :2425-2462 的补偿块（被改的那条循环在 :2445，函数＝`module_global_types_uncached`）；
+     夹具＝`def tags(): return ["a", "b"]` ／ `T = tags()` ＋同样两个打印。
+  另外把取槽逻辑收成两个小工具 `env_slots`／`call_args`（按符号名＋`StringLit` 名字槽取，
+  不写死槽号；槽号只出现在头注的实拍记录里）。
+- 接线依据（本批新查清的）：降形入口 `resolver.rs:5318` 带
+  `.with_module_global_types(self.module_global_types_at("s5195"))`，也就是
+  `module_global_types` 这一族**本来就跑在 harness 的 `lower_to_mir` 路径上**，不用扩 harness；
+  同族嵌套调用链＝`infer_global_ty`(:1985) ← `walk`(:2341) ← `module_global_types_uncached`(:1981)。
+- 候选筛查（三臂变异 × 三枚夹具，`--dump-mir` 差异行数；产物 `/tmp/b10027/`）：
+  | 夹具＼臂 | c172（:2079 守卫 `&& false`） | c171（:2232 `fn_rets.get(method)` 改不存在的名） | c300（:2445 `iter_mut().take(0)`） |
+  |---|---|---|---|
+  | f172 列表推导式 | **82**（main 段）／120（全文件） | 0 | 0 |
+  | f171 未标注函数返回列表 | 0 | 0 | **82**／120 |
+  | f300 类实例 `pf = make(…)` | 0 | 0 | **0** |
+  两臂各自只打红自己那枚夹具 ⇒ 两条用例互不备份；c171 全 0＝阴性（未钉住，登记见下）。
+  `git blame` 核对：:2144 属批次 173（`1f2a656d`）、:2232 属批次 171（`78e60ec5`），
+  与候选清单写的来源批次一致（清单只当线索，站点仍要实测）。
+- 症状形状（两臂相同，都是记录里的症状）：撤臂后 `main` 段里两次 `zeta_env_get` 消失、
+  全局名的 `StringLit` 槽消失、读回槽从 `DynamicArray(Str)` 退成 `I64`
+  （f172 的 21／28，f171 的 10／17），`len`／下标改为直接吃写入槽。
+- 真值三侧同批实拍：f172 CPython 打 `2`／`Ba`，同一份源 `-o` 编译后执行打 `2`／`Ba`
+  （`f172bin`，rc=0）；f171 CPython 打 `2`／`a`，运行同值（`f171bin`，rc=0）；
+  f300 CPython 打 `n`，运行同值。编译期真值＝`--dump-mir` 的 `main` 段（取段按 `== MIR <名> ==`
+  切到下一个 `== MIR ` 为止，10024 记的那格）。
+- 进程内变异复验（还原源＝`git show HEAD:src/middle/resolver/resolver.rs`，双向 md5）：
+  | 臂 | 结果 | 红点（末轮实跑行号） | 红值 |
+  |---|---|---|---|
+  | c172 | 49 条只红第 48 条（`global_list_comprehension…`），其余 48 绿 | `tests/regression_history.rs:3503:5` | 前置条件：`读回槽 []`＝症状 |
+  | c300 | 49 条只红第 49 条（`global_assigned_from_unannotated_call…`），其余 48 绿 | `:3583:5` | 同上：`写入槽 [5]／读回槽 []` |
+  | 还原 | 49/49 绿／0.06 秒 | — | `resolver.rs` md5 `e841c2206fe81514fe57895e73991edf` 等于 HEAD，该路径工作树干净 |
+  两条的红点都落在前置条件那一行 ⇒ 其后的类型格与 `vec_len`／`array_get` 正证据**没执行到**，
+  只算防放松（写进用例头注，不写成"已证有效"）。
+  还原并 `cargo build --release` 后，`--dump-mir` 对 f172／f171 与改前基线读数**差异行数 0**，
+  二进制 md5 `ed5227ccd29b70c4ee9ae17500926f10`（与实拍三侧时同一颗）。
+- 未覆盖／未钉住（如实登记，都在 #20005 余项内，不另占任务号）：
+  ① 批次 171 的 :2232 臂（`fn_rets.get(method)` 那处）三枚夹具形状差异行数全 0——它管的形状
+  本套还没打到；② 批次 300 记录里的原形状（`pf = make(…)` 类实例＋`print(pf.tag)`）在三臂下都是
+  0 行＝登记形状与真靶形不同（10024 的教训第三次复现），`pf.tag` 那一形仍未锁；
+  ③ 补偿块里批次 600 的 `::` 限定类方法补充、`infer_unannotated_returns` 里 :4728 的 `__collect__`
+  同名臂本批未变异；④ c172／c300 各只撤了臂的一半（守卫／循环入口），没做逐格全组合。
+- 检查节奏：按 2026-10-03 的测试节奏，零 `src/` 改动只跑改到的测试目标＋编译零错误
+  （`cargo test --release --test regression_history` 49/49）。十批界的全局逐个用例在 10030 做。
+  编译期既存两条警告：`src/middle/mir/gen.rs:5308`、`src/middle/resolver/resolver.rs:3852` 的多余
+  `mut`——非本批引入（本批没碰这两个文件），未动。
+- `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件 `src/error_codes.rs`／
+  `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
+  `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
+  两本台账，**连续二十六批**）；待补台账行的文字写进本批记录笔的提交信息。
