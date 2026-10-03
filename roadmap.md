@@ -28883,3 +28883,15 @@ gen.rs 4587→4225（净 -362）。
 
 验证：编译零错误；内置单元测试 157/157；历史探针七套零差异；
 **全量差分（--group 50）match=2845/2845＝100%**。
+
+## 批次 886（2026-10-04，**重构批：lower_expr_node 尾盘四臂迁出（ArrayRepeat 106／Assign-expr 58／Await-expr 98／Block-expr 47）**）
+
+869 零适配法批量应用：ArrayRepeat → call_expr_lit.rs（lower_array_repeat，签名
+按 AST 实型 Box/Box）；Assign-expr → stmt_assign.rs（lower_assign_expr——
+表达式位赋值，类变量改写早退返回 i64 零槽）；Await-expr／Block-expr →
+stmt_misc.rs（lower_await_expr／lower_block_expr，均写 id 槽 ⇒ 签名 `-> u32`
+＋id 参数）。gen.rs 4225→3928（净 -297）。lower_expr_node 剩余约 1030 行
+（小模式臂与 getattr 域）。
+
+验证：编译零错误；内置单元测试 157/157；历史探针七套零差异；
+**全量差分（--group 50）match=2845/2845＝100%**。

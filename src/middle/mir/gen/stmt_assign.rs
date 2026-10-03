@@ -695,4 +695,66 @@ impl MirGen {
             self.lower_ast(&assign);
     }
 
+
+    /// 赋值表达式位（`a = b` 出现在表达式上下文——批 886 原臂逐字迁入）。
+    pub(super) fn lower_assign_expr(&mut self, lhs: &AstNode, rhs: &AstNode) -> u32 {
+            // Batch 572: `Counter.count = x` — class VARIABLE write
+            // rewrites to the mangled module global.
+            if let AstNode::FieldAccess { base, field } = lhs {
+                if let AstNode::Var(vname) = &**base {
+                    let gname = format!("{}__{}", vname, field);
+                    if self.type_decls.contains_key(vname.as_str())
+                        && self.module_globals.contains(&gname)
+                    {
+                        let rewritten = AstNode::Assign(
+                            Box::new(AstNode::Var(gname)),
+                            Box::new(rhs.clone()),
+                        );
+                        self.lower_ast(&rewritten);
+                        return self.i64_zero_id();
+                    }
+                }
+            }
+            // PY-A: walrus `name := expr` in expression position — lower
+            // rhs, bind the name (implicit decl or rebinding), and the
+            // expression value is the assigned value.
+            if let AstNode::Var(name) = lhs {
+                let rhs_id = self.lower_expr(rhs);
+                let dest = match self.name_to_id.get(name).copied() {
+                    None => {
+                        let new_id = self.next_id();
+                        self.exprs.insert(new_id, MirExpr::Var(new_id));
+                        let ty = self.type_map.get(&rhs_id).cloned().unwrap_or_else(Type::slot_fallback);
+                        self.type_map.insert(new_id, ty);
+                        self.name_to_id.insert(name.clone(), new_id);
+                        self.stmts.push(MirStmt::Assign {
+                            lhs: new_id,
+                            rhs: rhs_id,
+                        });
+                        new_id
+                    }
+                    // PY-A: the name is already bound — the store was simply
+                    // missing, so rebinding (`i := i + 1`, and now an
+                    // assignment arm `_ => i = 5`) left the slot untouched and
+                    // read back its old value. Measured: `match 1 { _ =>
+                    // (i := i + 1) }` exited 0 with `i` still 0.
+                    Some(slot) => {
+                        self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
+                        slot
+                    }
+                };
+                // The value is the SLOT, not `rhs_id`: an expression id can be
+                // consumed more than once downstream, and re-emitting it re-runs
+                // its computation — `d = (m := m + 3)` with `m = 4` stored 7 into
+                // `m` and then read 10 into `d`.
+                return dest;
+            }
+            // Non-var lhs: statement assign with a 0-value expression
+            self.lower_ast(&AstNode::Assign(Box::new(lhs.clone()), Box::new(rhs.clone())));
+            let z = self.next_id();
+            self.exprs.insert(z, MirExpr::IntLit(0));
+            self.type_map.insert(z, Type::I64);
+            return z;
+    }
+
 }

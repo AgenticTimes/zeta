@@ -367,4 +367,120 @@ impl MirGen {
             self.tuple_slots.insert(id);
     id
     }
+
+    /// `[v; n]` 数组重复字面量（批 886 自 gen.rs 原臂逐字迁入）。
+    pub(super) fn lower_array_repeat(
+        &mut self,
+        value: &Box<AstNode>,
+        size: &Box<AstNode>,
+        id: u32,
+    ) -> u32 {
+            let value_id = self.lower_expr(value);
+
+            // Get the type of the value expression
+            let elem_type = self.type_map.get(&value_id).cloned().unwrap_or_else(Type::slot_fallback);
+
+            // Check if size is a literal by examining the AST node directly
+            // We need to pattern match on the boxed value
+            match size.as_ref() {
+                AstNode::Lit(size_lit) => {
+                    let size_val = *size_lit as usize;
+
+                    // HYBRID MEMORY SYSTEM: Use StackArray for small fixed-size arrays
+                    if size_val <= 20000 {
+                        // Reasonable stack size limit
+
+                        // Create StackArray expression with repeated value
+                        self.exprs.insert(
+                            id,
+                            MirExpr::StackArray {
+                                elements: vec![value_id; size_val],
+                                size: size_val,
+                            },
+                        );
+
+                        // Set the type to Array(elem_type, size) for subscript access
+                        self.type_map.insert(
+                            id,
+                            Type::Array(Box::new(elem_type), ArraySize::Literal(size_val)),
+                        );
+                    } else {
+                        // Large array, use heap allocation
+
+                        // Allocate array using array_new with capacity = size
+                        let array_ptr = self.next_id();
+                        let capacity_id = self.next_id();
+                        self.exprs
+                            .insert(capacity_id, MirExpr::IntLit(size_val as i64));
+                        self.stmts.push(MirStmt::Call {
+                            func: "array_new".to_string(),
+                            args: vec![capacity_id],
+                            dest: array_ptr,
+                            type_args: vec![],
+                        });
+
+                        // Set array length first
+                        let len_id = self.next_id();
+                        self.exprs.insert(len_id, MirExpr::IntLit(size_val as i64));
+                        self.stmts.push(MirStmt::VoidCall {
+                            func: "array_set_len".to_string(),
+                            args: vec![array_ptr, len_id],
+                        });
+
+                        // Fill array with value
+                        // Use memset intrinsic for zero initialization (performance optimization)
+                        let val_expr = value_id;
+                        let is_lit_zero = match self.exprs.get(&val_expr) {
+                            Some(MirExpr::IntLit(0)) => true,
+                            _ => false,
+                        };
+                        if is_lit_zero && size_val > 4 {
+                            // Zero initialization: use memset for efficiency
+                            let byte_size_id = self.next_id();
+                            let elem_byte_size = match &elem_type {
+                                Type::I8 | Type::U8 | Type::Bool => 1,
+                                Type::I16 | Type::U16 => 2,
+                                Type::I32 | Type::U32 | Type::F32 => 4,
+                                Type::I64 | Type::U64 | Type::F64 | Type::Usize => 8,
+                                _ => 8, // Default to 8 bytes for complex types
+                            };
+                            self.exprs.insert(
+                                byte_size_id,
+                                MirExpr::IntLit((size_val * elem_byte_size) as i64),
+                            );
+                            self.stmts.push(MirStmt::VoidCall {
+                                func: "__builtin_memset".to_string(),
+                                args: vec![array_ptr, value_id, byte_size_id],
+                            });
+                        } else {
+                            // Non-zero or small array: use per-element assignment
+                            for idx in 0..size_val {
+                                let idx_id = self.next_id();
+                                self.exprs.insert(idx_id, MirExpr::IntLit(idx as i64));
+                                self.stmts.push(MirStmt::VoidCall {
+                                    func: "array_set".to_string(),
+                                    args: vec![array_ptr, idx_id, value_id],
+                                });
+                            }
+                        }
+
+                        // Return the array pointer
+                        self.exprs.insert(id, MirExpr::Var(array_ptr));
+                        // Set the type to Array(elem_type, size) for subscript access
+                        self.type_map.insert(
+                            id,
+                            Type::Array(Box::new(elem_type), ArraySize::Literal(size_val)),
+                        );
+                    }
+                }
+                _ => {
+                    // Size is not a literal constant
+                    // For now, create a placeholder
+                    self.exprs.insert(id, MirExpr::IntLit(0));
+                    self.type_map.insert(id, Type::I64);
+                }
+            }
+    id
+    }
+
 }

@@ -3029,52 +3029,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         let id = self.next_id();
         match expr {
             AstNode::Block { body } => {
-                // Block expression: lower body statements, capture last value.
-                if body.is_empty() {
-                    self.exprs.insert(id, MirExpr::IntLit(0));
-                    self.type_map.insert(id, Type::I64);
-                    return id;
-                }
-                // Save and isolate block stmts
-                let saved_stmts = std::mem::take(&mut self.stmts);
-                // Lower all but the last as statements
-                for stmt in &body[..body.len() - 1] {
-                    self.lower_ast(stmt);
-                }
-                // Lower the last as an expression (block value)
-                let last = &body[body.len() - 1];
-                // If last is an ExprStmt, unwrap it
-                let val_id = match last {
-                    AstNode::ExprStmt { expr } => self.lower_expr(expr),
-                    // PY-A: statement-form last (Assign/Let/Return…) — lower
-                    // as a statement; the block value falls back to the last
-                    // produced value or 0.
-                    AstNode::Return(_) => self.i64_zero_id(), // Return handled by closure fn tail
-                    AstNode::Assign(_, _) | AstNode::Let { .. } => {
-                        self.lower_ast(last);
-                        self.i64_zero_id()
-                    }
-                    other => self.lower_expr(other),
-                };
-                let block_stmts = std::mem::take(&mut self.stmts);
-                self.stmts = saved_stmts;
-                // Forward all block stmts
-                for s in block_stmts {
-                    self.stmts.push(s);
-                }
-                // Assign the block result to the block's local slot
-                self.stmts.push(MirStmt::Assign {
-                    lhs: id,
-                    rhs: val_id,
-                });
-                // Store the block result (reference own alloca so gen_expr_safe loads from it)
-                self.exprs.insert(id, MirExpr::Var(id));
-                if let Some(ty) = self.type_map.get(&val_id) {
-                    self.type_map.insert(id, ty.clone());
-                } else {
-                    self.type_map.insert(id, Type::I64);
-                }
-                return id;
+                // 批次 886：Block 表达式臂迁入 gen/stmt_misc.rs（869 法）。
+                self.lower_block_expr(body, id);
             }
             AstNode::FloatLit(s) => {
                 // Float literal: parse directly to f64, store as FloatLit.
@@ -3090,63 +3046,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             }
             // Match is handled below with full if-else chain lowering.
             AstNode::Assign(lhs, rhs) => {
-                // Batch 572: `Counter.count = x` — class VARIABLE write
-                // rewrites to the mangled module global.
-                if let AstNode::FieldAccess { base, field } = &**lhs {
-                    if let AstNode::Var(vname) = &**base {
-                        let gname = format!("{}__{}", vname, field);
-                        if self.type_decls.contains_key(vname.as_str())
-                            && self.module_globals.contains(&gname)
-                        {
-                            let rewritten = AstNode::Assign(
-                                Box::new(AstNode::Var(gname)),
-                                rhs.clone(),
-                            );
-                            self.lower_ast(&rewritten);
-                            return self.i64_zero_id();
-                        }
-                    }
-                }
-                // PY-A: walrus `name := expr` in expression position — lower
-                // rhs, bind the name (implicit decl or rebinding), and the
-                // expression value is the assigned value.
-                if let AstNode::Var(name) = &**lhs {
-                    let rhs_id = self.lower_expr(rhs);
-                    let dest = match self.name_to_id.get(name).copied() {
-                        None => {
-                            let new_id = self.next_id();
-                            self.exprs.insert(new_id, MirExpr::Var(new_id));
-                            let ty = self.type_map.get(&rhs_id).cloned().unwrap_or_else(Type::slot_fallback);
-                            self.type_map.insert(new_id, ty);
-                            self.name_to_id.insert(name.clone(), new_id);
-                            self.stmts.push(MirStmt::Assign {
-                                lhs: new_id,
-                                rhs: rhs_id,
-                            });
-                            new_id
-                        }
-                        // PY-A: the name is already bound — the store was simply
-                        // missing, so rebinding (`i := i + 1`, and now an
-                        // assignment arm `_ => i = 5`) left the slot untouched and
-                        // read back its old value. Measured: `match 1 { _ =>
-                        // (i := i + 1) }` exited 0 with `i` still 0.
-                        Some(slot) => {
-                            self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
-                            slot
-                        }
-                    };
-                    // The value is the SLOT, not `rhs_id`: an expression id can be
-                    // consumed more than once downstream, and re-emitting it re-runs
-                    // its computation — `d = (m := m + 3)` with `m = 4` stored 7 into
-                    // `m` and then read 10 into `d`.
-                    return dest;
-                }
-                // Non-var lhs: statement assign with a 0-value expression
-                self.lower_ast(&AstNode::Assign(lhs.clone(), rhs.clone()));
-                let z = self.next_id();
-                self.exprs.insert(z, MirExpr::IntLit(0));
-                self.type_map.insert(z, Type::I64);
-                return z;
+                // 批次 886：Assign 表达式臂迁入 gen/stmt_assign.rs（869 法）。
+                self.lower_assign_expr(lhs, rhs);
             }
             AstNode::AssignOp { .. } => {
                 // PY-A: `i += 1` in expression position (an assignment match
@@ -3310,111 +3211,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 return self.lower_array_lit(elements, id);
             }
             AstNode::ArrayRepeat { value, size } => {
-                let value_id = self.lower_expr(value);
-
-                // Get the type of the value expression
-                let elem_type = self.type_map.get(&value_id).cloned().unwrap_or_else(Type::slot_fallback);
-
-                // Check if size is a literal by examining the AST node directly
-                // We need to pattern match on the boxed value
-                match size.as_ref() {
-                    AstNode::Lit(size_lit) => {
-                        let size_val = *size_lit as usize;
-
-                        // HYBRID MEMORY SYSTEM: Use StackArray for small fixed-size arrays
-                        if size_val <= 20000 {
-                            // Reasonable stack size limit
-
-                            // Create StackArray expression with repeated value
-                            self.exprs.insert(
-                                id,
-                                MirExpr::StackArray {
-                                    elements: vec![value_id; size_val],
-                                    size: size_val,
-                                },
-                            );
-
-                            // Set the type to Array(elem_type, size) for subscript access
-                            self.type_map.insert(
-                                id,
-                                Type::Array(Box::new(elem_type), ArraySize::Literal(size_val)),
-                            );
-                        } else {
-                            // Large array, use heap allocation
-
-                            // Allocate array using array_new with capacity = size
-                            let array_ptr = self.next_id();
-                            let capacity_id = self.next_id();
-                            self.exprs
-                                .insert(capacity_id, MirExpr::IntLit(size_val as i64));
-                            self.stmts.push(MirStmt::Call {
-                                func: "array_new".to_string(),
-                                args: vec![capacity_id],
-                                dest: array_ptr,
-                                type_args: vec![],
-                            });
-
-                            // Set array length first
-                            let len_id = self.next_id();
-                            self.exprs.insert(len_id, MirExpr::IntLit(size_val as i64));
-                            self.stmts.push(MirStmt::VoidCall {
-                                func: "array_set_len".to_string(),
-                                args: vec![array_ptr, len_id],
-                            });
-
-                            // Fill array with value
-                            // Use memset intrinsic for zero initialization (performance optimization)
-                            let val_expr = value_id;
-                            let is_lit_zero = match self.exprs.get(&val_expr) {
-                                Some(MirExpr::IntLit(0)) => true,
-                                _ => false,
-                            };
-                            if is_lit_zero && size_val > 4 {
-                                // Zero initialization: use memset for efficiency
-                                let byte_size_id = self.next_id();
-                                let elem_byte_size = match &elem_type {
-                                    Type::I8 | Type::U8 | Type::Bool => 1,
-                                    Type::I16 | Type::U16 => 2,
-                                    Type::I32 | Type::U32 | Type::F32 => 4,
-                                    Type::I64 | Type::U64 | Type::F64 | Type::Usize => 8,
-                                    _ => 8, // Default to 8 bytes for complex types
-                                };
-                                self.exprs.insert(
-                                    byte_size_id,
-                                    MirExpr::IntLit((size_val * elem_byte_size) as i64),
-                                );
-                                self.stmts.push(MirStmt::VoidCall {
-                                    func: "__builtin_memset".to_string(),
-                                    args: vec![array_ptr, value_id, byte_size_id],
-                                });
-                            } else {
-                                // Non-zero or small array: use per-element assignment
-                                for idx in 0..size_val {
-                                    let idx_id = self.next_id();
-                                    self.exprs.insert(idx_id, MirExpr::IntLit(idx as i64));
-                                    self.stmts.push(MirStmt::VoidCall {
-                                        func: "array_set".to_string(),
-                                        args: vec![array_ptr, idx_id, value_id],
-                                    });
-                                }
-                            }
-
-                            // Return the array pointer
-                            self.exprs.insert(id, MirExpr::Var(array_ptr));
-                            // Set the type to Array(elem_type, size) for subscript access
-                            self.type_map.insert(
-                                id,
-                                Type::Array(Box::new(elem_type), ArraySize::Literal(size_val)),
-                            );
-                        }
-                    }
-                    _ => {
-                        // Size is not a literal constant
-                        // For now, create a placeholder
-                        self.exprs.insert(id, MirExpr::IntLit(0));
-                        self.type_map.insert(id, Type::I64);
-                    }
-                }
+                // 批次 886：ArrayRepeat 臂迁入 gen/call_expr_lit.rs（869 法）。
+                return self.lower_array_repeat(value, size, id);
             }
             AstNode::Subscript { base, index } => {
                 // 批次 845：Subscript 臂整体迁入 gen/call_subscript.rs
@@ -3551,103 +3349,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 return self.lower_expr(body);
             }
             AstNode::Await(body) => {
-                // Await expression: poll the sub-future until ready, then extract value.
-                // Generates:
-                //   let __fut = <body>;           // create sub-future
-                //   while true {
-                //       let __pr = future_poll(__fut);
-                //       if __pr != 0 {               // Ready
-                //           result = future_result(__fut);
-                //           break;
-                //       }
-                //   }
-                //   return result;
-                let fut_id = self.lower_expr(body);
-                // Create IDs
-                let pr_id = self.next_id();
-                let result_id = self.next_id();
-                let zero_id = self.next_id_with_lit(0);
-
-                // Store the sub-future pointer
-                let stored_fut = self.next_id();
-                self.exprs.insert(stored_fut, MirExpr::Var(stored_fut));
-                self.type_map.insert(stored_fut, Type::I64);
-                self.stmts.push(MirStmt::Assign {
-                    lhs: stored_fut,
-                    rhs: fut_id,
-                });
-
-                // poll result
-                self.exprs.insert(pr_id, MirExpr::Var(pr_id));
-                self.type_map.insert(pr_id, Type::I64);
-
-                // result
-                self.exprs.insert(result_id, MirExpr::Var(result_id));
-                self.type_map.insert(result_id, Type::I64);
-
-                // While loop body
-                let mut body_stmts = vec![];
-
-                // pr = future_poll(stored_fut)
-                body_stmts.push(MirStmt::Call {
-                    func: "future_poll".to_string(),
-                    args: vec![stored_fut],
-                    dest: pr_id,
-                    type_args: vec![],
-                });
-
-                // if pr != 0 { result = future_result(stored_fut); break; }
-                let mut then_stmts = vec![];
-                then_stmts.push(MirStmt::Call {
-                    func: "future_result".to_string(),
-                    args: vec![stored_fut],
-                    dest: result_id,
-                    type_args: vec![],
-                });
-                then_stmts.push(MirStmt::Break);
-
-                let cond_id = self.next_id();
-                self.exprs.insert(
-                    cond_id,
-                    MirExpr::BinaryOp {
-                        op: "!=".to_string(),
-                        left: pr_id,
-                        right: zero_id,
-                    },
-                );
-                self.type_map.insert(cond_id, Type::Bool);
-
-                body_stmts.push(MirStmt::If {
-                    cond: cond_id,
-                    then: then_stmts,
-                    else_: vec![],
-                    dest: None,
-                });
-
-                // While(true) loop
-                let true_id = self.next_id_with_lit(1);
-                self.stmts.push(MirStmt::While {
-                    cond: true_id,
-                    pre_cond: vec![],
-                    body: body_stmts,
-                    else_body: vec![],
-                });
-
-                // Store result back to the expression ID so it's accessible
-                // via load_local(id) later (e.g., in a return statement).
-                self.stmts.push(MirStmt::Assign {
-                    lhs: id,
-                    rhs: result_id,
-                });
-
-                // Register result as the expression value
-                self.exprs.insert(id, MirExpr::Var(result_id));
-                if let Some(ty) = self.type_map.get(&fut_id) {
-                    self.type_map.insert(id, ty.clone());
-                } else {
-                    self.type_map.insert(id, Type::I64);
-                }
-                return id;
+                // 批次 886：Await 表达式臂迁入 gen/stmt_misc.rs（869 法）。
+                self.lower_await_expr(body, id);
             }
             AstNode::TimingOwned { inner, .. } => {
                 // Timing-owned: wrap the inner expression.
