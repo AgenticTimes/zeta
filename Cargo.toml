@@ -179,5 +179,10 @@ path = "tests/unit/quantum_module_test.rs"
 name = "teranode_integration"
 path = "tests/integration/teranode_integration.rs"
 
+# 历史缺陷回归钉（批次 10011）：编译期层面的毫秒级复验，见文件头覆盖边界说明。
+[[test]]
+name = "regression_history"
+path = "tests/regression_history.rs"
+
 # Benchmark configurations.
 
