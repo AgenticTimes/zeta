@@ -563,7 +563,7 @@ print(r2)
 /// （`gen.rs:2888` 语句位、`:3242` 表达式位换成 `IntLit(0)`）⇒ 编译成功、退出码 0、
 /// 臂里的副作用一条都不发。
 /// 期望值来源：本夹具按记录里的四种形态写 8 个 `println!` 出现点，每个点展开成 2 个节点
-/// （378 记录对批次 369 零效果的勘案：" `println!` 展开是 2 个节点"）⇒ 16 次打印；
+/// （378 记录对批次 369 零效果的查证：" `println!` 展开是 2 个节点"）⇒ 16 次打印；
 /// 改前这 8 个点全在臂里，一次都不会发（0）。
 #[test]
 fn macros_in_match_arms_and_value_positions_reach_mir() {
@@ -689,5 +689,159 @@ print(r)
         Some(&Type::Str),
         "格式化结果槽应标成 Str（槽 {dest} 实得 {:?}）",
         f.type_map.get(&dest)
+    );
+}
+
+/// 批次 376（`src/frontend/macro_expand.rs` 的 `expand_println` 无格式串那条叉）：
+/// `println!(x)` 里打印器的名字不许按 x 的**语法形状**在展开期写死。
+/// 症状（批次 376 记录）：单参数只要是 变量／整数字面量／调用结果 三种形状之一，展开器就
+/// 直接发 `println_i64`（整数打印器），而展开期没有类型信息 ⇒ 字符串变量打出堆地址
+/// （记录里 `4331907520`）、浮点变量被当整数截掉（`let g = 1.75` 打 `1`——不打地址、
+/// 看着像一个合理整数）。名字写死那一笔按 `git log -S` 追到 v0.7.0 的 `13697ac8`，
+/// 外面套的"按形状选"那条叉是 `139a7454`（改前文件 blame 实测，两笔隔 41 行、同函数不同段——
+/// 376 记录把那条 "For now, simple expansion to a function call" 注释称作"同段"，本行按 blame 更正）。
+/// 期望值来源：记录定位那一节说"带类型信息的分派本来就在 `gen.rs` 的单参 `println` 臂"
+/// （按 `type_map` 选 `println_str`／`println_f64`／`println`），整数那一档由后端的
+/// `println → println_i64` 映射接住，所以正确形态是 字符串→`println_str`、
+/// 整数→保留 `println`，而 `println_i64` 这个名字不该由展开期发出来。
+#[test]
+fn println_without_format_string_dispatches_by_type_not_by_syntax_shape() {
+    let mirs = lower_all(
+        r#"def sv():
+    return "from-call"
+
+s = "hi"
+n = 42
+println!(s)
+println!(n)
+println!(sv())
+"#,
+    );
+    let f = mir(&mirs, "main");
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        2,
+        "字符串变量与返回 str 的调用结果都该按类型拿到 `println_str`（改前两者都被展开期写成整数打印器），实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝展开期把 变量／字面量／调用结果 三种形状统一写成 `println_i64`，这个名字不许出现在降形结果里，实得调用: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|c| c == "println"),
+        "整数变量该保留 `println` 交给后端按 `println → println_i64` 映射接住（记录里整数一档改前改后读数不变），实得调用: {calls:?}"
+    );
+}
+
+/// 批次 377（同一函数的格式串那条叉）：`println!("A={}B", v)` 要在展开期把格式串按 `{}`
+/// 切成"字面量段 + 值段"逐段发语句，最后补一条换行。
+/// 症状（批次 377 记录，改前读数在批次 376 的构建上实拍）：改前 :130-135 把格式串
+/// **整个剥掉**、只把值参传下去 ⇒ 字面量段必丢（`println!("A={}", a)` 只打 `1`）；
+/// 多值合并成一次 `println` 调用，而 `println` 在 MIR 里只有单参分派、后端又映射到只吃
+/// 一个参数的 `println_i64` ⇒ 第二个以后的值参被丢掉（`println!("C={}D={}", a, b)` 只打 `1`）。
+/// 期望值来源：记录的修法那一节列出的节点序列——字面量段→`print_str(段)`、
+/// 值段→`print(值, end="")`（按静态类型派发）、收尾 `print_str("\n")`。
+/// 断言只钉"段有没有下发"与"每个值各发一次按型派发"，不钉打印调用总条数——
+/// 值段那条 `end=""` 实参会另外落成一次空串 `print_str`（`gen.rs` 的 `has_end` 路径），
+/// 那是实现细节、不是这一格的症状，总条数会随它变。
+/// 第二站两个占位符实参按"字符串在前、浮点在后"排：浮点站第二个位置，
+/// 改前"多占位符只发第一个值"那一支才会被这条用例抓到（变异 M3 实测）。
+#[test]
+fn println_format_string_splits_into_literal_and_value_segments() {
+    let mirs = lower_all(
+        r#"n = 7
+g = 1.75
+m = "ab"
+println!("A={}B", n)
+println!("C={}D={}", m, g)
+"#,
+    );
+    let f = mir(&mirs, "main");
+
+    // 正向证据①：五个字面量段（含收尾换行）都在 MIR 里（改前格式串被整个剥掉，一个都不在）。
+    let literals: Vec<&str> = f
+        .exprs
+        .values()
+        .filter_map(|e| match e {
+            MirExpr::StringLit(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    let missing: Vec<&str> = ["A=", "B", "C=", "D=", "\n"]
+        .iter()
+        .copied()
+        .filter(|lit| !literals.contains(lit))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "格式串的字面量段要逐段下发（改前整条被剥掉），缺: {missing:?}",
+    );
+
+    // 正向证据②：每个值段各自按静态类型派发。浮点值故意放在第二站的**第二个**占位符——
+    // 改前多占位符只发第一个值，它排在前面时这条断言打不到。
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "print_i64").count(),
+        1,
+        "第一站的整数值该发一次 `print_i64`（改前整站合并成一次 `println_i64`），实得调用: {calls:?}"
+    );
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "print_f64").count(),
+        1,
+        "第二站的浮点值也要各发一次——改前多占位符只打第一个值，这一条会丢，实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c.starts_with("println")),
+        "带格式串的 `println!` 改后不再合并成一次 `println`（那样第二个值会丢），实得调用: {calls:?}"
+    );
+}
+
+/// 批次 407（站点 `src/middle/resolver/resolver.rs` 的 `collect_calls`）：调用点证据的
+/// 收集要下钻 `FString`，否则"唯一调用点写在插值里"的函数拿不到参数类型。
+/// 症状（批次 407 记录）：`collect_calls` 的 match 原本有九条下钻臂，没有 `FString` 那条
+/// ⇒ 插值里的调用整个不见 ⇒ 未注解形参停在 `"dyn"` → `unannotated_return_ty` 拿到
+/// `PyDynamic` → 调用结果槽被 `.unwrap_or(Type::I64)` 定成 I64 → `lower_to_string` 发
+/// `to_string_i64` ⇒ 堆指针被当十进制打印（记录 p1 实拍 `p=4367215168`，真值 `p=direct`），
+/// 同一批 `t443` 的第四条期望里地址还会被喂进 `len` 参与算术（改前 `20`、改后 `4`）。
+/// 期望值来源：记录的改前正证据是逐槽写明的——`rp` 体内 `type_map: 1: PyDynamic`、
+/// `main` 里作用于调用结果的是 `to_string_i64`；同文件另外三处（`:1794` 与 `infer` 两支）
+/// 都把 `FString` 当叶子直接答 `Str`，所以这条臂只是把不一致补齐。
+/// 边界（不在本条覆盖内）：记录 §七 实拍嵌套 `def` 被提升成 `__closure_0_*` 名后仍拿不到
+/// 证据（证据消费端只认三种名字解释），那一格本批未修。
+#[test]
+fn sole_callsite_inside_fstring_still_gives_param_type_evidence() {
+    let mirs = lower_all(
+        r#"def rp(s):
+    return s
+
+print(f"p={rp('direct')}")
+"#,
+    );
+    let rp = mir(&mirs, "rp");
+    let (param_name, param_slot) = &rp.param_indices[0];
+    assert_eq!(param_name, "s", "读的是哪个形参要跟实现在册一致，实得 {param_name}");
+    assert_eq!(
+        rp.type_map.get(param_slot),
+        Some(&Type::Str),
+        "唯一调用点在插值里时，实参 `'direct'` 也该给形参提供 Str 证据（改前停在 PyDynamic），实得 {:?}",
+        rp.type_map.get(param_slot)
+    );
+
+    let main = mir(&mirs, "main");
+    let calls = call_symbols(main);
+    // 调用点本身要还在（否则这条用例什么都没测到）；注册名去重后会带 `_1` 这类后缀，
+    // 名字不是这一格的症状，所以只按前缀认。
+    assert!(
+        calls.iter().any(|c| c.starts_with("rp")),
+        "调用点本身要还在（否则这条用例什么都没测到），实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c == "to_string_i64"),
+        "改前症状是把调用结果按整数转字符串（打出堆地址），`to_string_i64` 不应出现，实得调用: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|c| c == "println_str"),
+        "结果槽带上 Str 后打印该走 `println_str`，实得调用: {calls:?}"
     );
 }
