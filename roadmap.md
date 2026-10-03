@@ -26111,3 +26111,86 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
 - 本批零 `src/` 改动（变异只存在于核验脚本运行的那 6 秒里，逐笔复原）。
 
 **登记**：#20005 状态保持 🟡，现 15 条（代码 `0e955cdb`）。余项＝按 roadmap 已修批次逐批继续补；`worktree.md` 仍带车道批次 745 的在制面，连续十三批未随批。不 push。
+
+## 批次 10015 —— 历史缺陷回归测试第五批（续 #20005：327／447／451 各转一条，现 18 条）
+
+**动因**：继续把已修好、且结论落在 `Mir`（符号名／槽位类型／语句是否下发）上的历史缺陷转成
+进程内单元测试（用户任务＝"把历史问题的错误和修改，做成单元测试，这样不必每次都跑全量测试"）。
+
+**候选筛子两把**（沿用第四批）：① 该批的修复代码要在这棵树里（三条都用
+`git merge-base --is-ancestor` 验过：327＝`e4e5591e`、447＝`70ee016c`、451＝`19c54e59`）；
+② 站点避开主线正在重构的 `gen.rs` 与车道在制的两个解析器文件
+（`src/frontend/parser/expr.rs`、`src/frontend/parser/top_level.rs`）——本批零 `src/` 改动。
+
+### 一、三条用例
+
+| 用例（`tests/regression_history.rs`） | 来源批次 | 站点（本树现行位置） | 期望值出处 | 记录里的症状 |
+|---|---|---|---|---|
+| `constant_folded_comparison_yields_bool_not_int_zero` | 327（任务 #45） | `src/middle/ctfe/evaluator.rs:303-308` 的 print 实参改写臂（批次 642 `adc0ffba` 引入） | 327 记录"一条 MIR 就够的证据"那一节：比较的结果要是布尔，不是 0/1；642 记录里 `(值, is_bool)` 的约定：顶层是布尔就渲染 `True`／`False` | 327 实拍 `print(3 == 4)` 的 MIR＝`VoidCall{"println_i64",[2]}`＋`exprs 2: IntLit(0)`＋`type_map 2: I64`，整条 MIR 里没有 BinaryOp ⇒ 打印选到整数那一档（真值 `False`） |
+| `generic_impl_method_key_drops_angle_brackets_at_callsite` | 447（#182 B 堆第一格） | `src/middle/resolver/resolver.rs` 的 `impl_key_base`（现 :6836）与六处登记键 | 447 记录证据①：定义侧把尖括号原样发进 LLVM 符号名（`@"C2<K, V>::make"`），修法是把登记键截到第一个 `<` 之前 ⇒ 定义与调用两侧同串 | 键带泛型原文 ⇒ 名表永不命中；方法名是 `new` 时整条路径没有出口，既不 `stmts.push` 也不 `exprs.insert`（调用语句被丢掉＋W1010），方法名是别的时落进"首字母大写＝句柄"的兜底 |
+| `py_class_method_str_return_marks_callsite_dest_as_str` | 451（3.2 Lowering／返回标记） | `src/middle/resolver/resolver.rs` 的 `unannotated_return_ty`（现 :4581，识别条件 :4950）；记录写作内层 :3120-3140＋外层 :3337-3346 | 451 记录根因链④：调用点目的槽本该按恢复出来的返回类型确定；记录的修法＝用接收者参数的类型拼写区分"脱糖默认 i64"与"用户写的注解" | 无注解 py 方法的返回标记被解析层硬写成 `"i64"` ⇒ 两道守卫（原本只认空注解）永远进不去 ⇒ 目的槽走 `.unwrap_or(Type::I64)` ⇒ 运行期按整数打印一个 str 指针（靶夹具实拍 `4310769584`，真值 `a,b,`） |
+
+### 二、一处归属更正（这条是本批最值钱的一笔）
+
+候选清单把 `print(3 == 4)` 这一形挂在 327 新写的 `compare_int`／`compare_uint` 上。实测两条
+证据都反对这个归属，用例注释里按实测改写：
+
+1. **变异不红**：把 `compare_int` 的结果改回 `ConstValue::Int(cmp as i64)`（＝327 的改前状态），
+   `cargo test --test regression_history` 的 18 条读数一字不变（`/tmp/b10015/mutation_check.log` 的 M1 行）。
+2. **探针不触发**：在 `compare_int` 开头加 `eprintln!` 后跑这条用例（`cargo test -- --nocapture`），
+    stdout 里只有 `test result: ok. 1 passed`，一条 `PROBE` 都没有——这一形在本树**不走**
+   `ConstValue::binary_op` 的 Int/Int 臂。（这笔读数只在本会话里取过，未单独落盘；
+   加完探针后按 `git checkout` 复原，四颗 src md5 逐颗对上 `/tmp/b10015/md5_pre.txt`。）
+
+活路径查到了 `src/middle/ctfe/evaluator.rs`：print 的实参树求值成功后就地改写成十进制串
+或 `True`／`False`（`(值, is_bool)` 那一支，批次 642 `adc0ffba` 引入）。把
+`if v == 0 { "False" } else { "True" }` 换成 `v.to_string()`（＝症状值）后，
+这条用例立刻红（`/tmp/b10015/mutation_m1b.log` 的 M1b 行）⇒ 用例真跟着的是这一臂。
+
+`compare_int` 本身仍是活的，只是活在 const／comptime 折叠那条路上；
+**327 那一格的用例（打到 `compare_int` 的输入形状）另批补**，本批不冒充已覆盖。
+
+### 三、验证
+
+- `cargo test --test regression_history`：**18 passed / 0 failed / 0.04s**。
+- 变异核验（每条只改一处、跑完立刻按 md5 复原并核对，逐文件点名——本树 `src/` 常带车道在制面，
+  用"`git diff src/` 空不空"复原不了任何东西）：
+
+| 编号 | 改哪 | 撤的哪一支 | 预期 | 实得 |
+|---|---|---|---|---|
+| M1 | `ctfe/value.rs` 的 `compare_int` 结果改回 `ConstValue::Int` | 327 记录的修复 | 红＝归属成立 | **不红**（＋探针不触发）⇒ 归属不成立，见 §二 |
+| M1b | `ctfe/evaluator.rs` 的 print 实参改写臂 `is_bool` 那一支换成十进制 | 现活路径 | 红 | 红，且只红 `constant_folded_comparison_yields_bool_not_int_zero` |
+| M2 | `resolver.rs` 的 `impl_key_base` 不再截断 | 447 的登记键修法 | 红 | 红，且只红 `generic_impl_method_key_drops_angle_brackets_at_callsite`，报错第一行正是在册那条 W1010：`` `Box2::new()` has no lowering route — its slot reads 0 `` |
+| M3 | `resolver.rs` 的 `py_method_default_i64` 恒 `false` | 451 的识别条件 | 红 | 红，且只红 `py_class_method_str_return_marks_callsite_dest_as_str`（`tests/regression_history.rs:1070`＝目的槽断言，实得 `Some(I64)`＝记录根因链④的症状值） |
+
+- 复原核对：改前三颗 md5 留在 `/tmp/b10015/md5_pre.txt`（value.rs
+  `b3940978ef6d31e7975da6d42ef3b92a`、resolver.rs `e841c2206fe81514fe57895e73991edf`、
+  evaluator.rs `9fe501ef4a137e4bff6eb5a50a1f4648`），每笔变异跑完逐颗对上；收尾另加 gen.rs
+  `0260cb5775b49561fb17f7609067287f` 一起复验；最后 `git status --porcelain src/` 只剩车道在制
+  那三个文件（`src/error_codes.rs`、`src/frontend/parser/expr.rs`、`src/frontend/parser/top_level.rs`）。
+- 每批必跑的检查（`bash tools/sample_gate.sh 10015`，窗口 5＝批号 %10）：**rc=0**
+  ——① 差分 272/272 一致、② python_style 47/47 PASS、③ official 17/17 编译通过（链接缺绑定 0，
+  在册长期项不计红）、④ 语料 40/40 满数；被测件 md5 `ed5227ccd29b70c4ee9ae17500926f10`
+  （＝批次 10012/10013/10014 在册那颗，本批零 `src/` 改动），运行期 `.o` md5
+  `878479bebf8d79a8539ee9a680fb463b`，明细目录 `/tmp/zeta_gate_10015.nHpVIW`。
+- 一次形状试错并留证（这笔不是编译器缺陷，是测试面的覆盖边界）：451 那条先写成
+  "模块级 `let b = B()` 再 `print(b.r())`"，进程内读数目的槽是 `Some(I64)` 而红；
+  同一份输入拿 `target/release/zetac --dump-mir` 实拍，目的槽 id=7 是 **`Str`**
+  （`/tmp/b10015/g2.dump` 的 `== MIR main ==` 那一段）⇒ 两侧不一致，差在 harness 少跑一趟
+  （候选＝`main.rs:965` 的 `refine_param_types` 或 `:924` 的单态化重降，**未定位**）。
+  本条因此锁的是记录靶夹具那一形（`print(B().r())`，两侧读数一致），
+  `let` 绑定接收者那一形按 harness 头注的覆盖边界处理：不进本文件，等补那一趟再收。
+
+### 四、边界
+
+- 本批零 `src/` 改动：只加测试面，行为面一行未动。
+- 三条用例都只查"结论落在 `Mir` 上的那一格"（符号名／槽位类型／语句是否下发），
+  整份 MIR 逐字节比对一条都没有。
+- 期望值全部来自缺陷记录（roadmap 对应批次节）与 CPython 对照，没有一条是"现行输出是什么就写什么"。
+- 并树这件事仍未做：开批实测 `bootstrap..cleanup` 滞留 **32** 条、`cleanup..bootstrap` 192 条，
+  主树工作区仍是别人的在制面，合并要等那侧腾开；本批三条用例的来源批次都验过在本树祖先里，
+  不受滞留影响。
+
+**登记**：#20005 状态保持 🟡，现 18 条（代码 `6a405096`）。余项＝按 roadmap 已修批次逐批继续补
+（327 那一格另批补、`compare_int` 的 const／comptime 折叠形状待打）＋"harness 少跑的那一趟要不要
+按 10013 的办法补上"。`worktree.md` 仍带车道批次 745 的在制面，连续十四批未随批。不 push。
