@@ -26675,3 +26675,10 @@ lower_len 发射体迁入（路由合同全 preserved）；len 四面探针对�
 map/filter/chr/ord/divmod/dict 逐字迁入 lower_builtin_1；探针九项对齐
 CPython；全库 156/156。zip 起余表段原位（批 842 续迁）。教训三条入册
 （use 导入方法/多行 if 块尾/return 表达式形）。
+
+## 批次 842（本批）：内建族第二片迁入 call_builtin.rs＋#272 登记
+
+zip/any/all/enumerate/list/int/float/sorted 表段逐字迁入
+lower_builtin_2；len 臂归 call_len.rs（gen.rs 17471→17441）。
+新登记 #272：float(str) 静默错值（注册表路由先于内建表截胡，存量）。
+探针 zip/enumerate/sorted 对齐 CPython；全库 156/156。
