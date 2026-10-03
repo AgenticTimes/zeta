@@ -156,6 +156,27 @@ fn int_lit(m: &Mir, id: u32) -> Option<i64> {
     }
 }
 
+/// 找到把值赋进 `lhs` 槽那条语句的右侧表达式 id，跟着 `If`／`While` 的块走下去。
+fn find_assign_rhs(stmts: &[MirStmt], lhs: u32) -> Option<u32> {
+    for s in stmts {
+        match s {
+            MirStmt::Assign { lhs: l, rhs, .. } if *l == lhs => return Some(*rhs),
+            MirStmt::While { body, else_body, .. } => {
+                if let Some(r) = find_assign_rhs(body, lhs).or_else(|| find_assign_rhs(else_body, lhs)) {
+                    return Some(r);
+                }
+            }
+            MirStmt::If { then, else_, .. } => {
+                if let Some(r) = find_assign_rhs(then, lhs).or_else(|| find_assign_rhs(else_, lhs)) {
+                    return Some(r);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// 批次 10002（移植 bootstrap 批次 810）／backlog 旧 #266③前身。
 /// 症状（改前二进制 target/release/zetac.pre740、zetac.pre662 实拍）：
 /// `xs.mean()` 走兜底臂发 `zeta_identity`、打印走 `println_i64`——
@@ -1090,5 +1111,259 @@ print(plain())
     assert!(
         !calls.iter().any(|c| c == "println_i64"),
         "改前症状＝目的槽是 I64 ⇒ 按整数打印（打出堆地址），`println_i64` 不应出现，实得调用: {calls:?}"
+    );
+}
+
+/// 批次 552（旁路 cleanup 车道编号，代码 `dd6e81d7`；roadmap 无此节，记录在提交信息里；
+/// 站点 `src/middle/resolver/resolver.rs` 的
+/// `unannotated_return_ty` 里 `cls`/`dyn` 那一档，现 :4951-4962）／backlog 旧 #195 前半。
+/// 症状（552 记录 ＋ 夹具 `tests/python_style/t522_classmethod_return.z`）：批次 451 那一档
+/// 只认"首参是 self 且类型是类别名"，而 `@classmethod` 的脱糖把 `cls` 留成普通未注解参数
+/// ⇒ 判据看不见接收者，返回标记落回 i64 兜底 ⇒ 调用点按整数打印一个 str 指针。
+/// 期望值来源：t522 的 `// expect:` 五行（a / 42 / b / c / 1）——`make`／`stat`／`inst`
+/// 返回字符串，`num` 返回整数。
+/// 边界（本条不覆盖）：552 记录登记在 #195 余项的"参数直传 `return s` 仍打指针"
+/// （要调用点类型流进返回推断＝批次 628 那一族，本文件另有一条）与"float 返回打
+/// 1.500000"的既有 print 方言。
+#[test]
+fn classmethod_return_recovers_str_at_callsite() {
+    let mirs = lower_all(
+        r#"class C:
+    @classmethod
+    def make(cls):
+        out = "a"
+        return out
+    @classmethod
+    def num(cls):
+        return 42
+    @staticmethod
+    def stat():
+        return "b"
+    def inst(self):
+        out = "c"
+        return out
+
+print(C.make())
+print(C.num())
+print(C.stat())
+o = C()
+print(o.inst())
+"#,
+    );
+
+    // @classmethod 体自己的恢复：返回槽（局部变量 `out` 那一跳）该是 Str。
+    // 改前 `cls` 那一档不认，返回标记被当成显式注解的 i64，恢复整条不启动。
+    let make = mir(&mirs, "C::make");
+    let ret_val = make
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::Return { val } => Some(*val),
+            _ => None,
+        })
+        .expect("classmethod 有返回值");
+    assert_eq!(
+        make.type_map.get(&ret_val),
+        Some(&Type::Str),
+        "无注解 @classmethod 的返回表达式该按体恢复成 Str（改前 cls 不是接收者拼写，被当成显式注解），实得 {:?}",
+        make.type_map.get(&ret_val)
+    );
+
+    let f = mir(&mirs, "main");
+    let dests: Vec<(String, u32)> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. }
+                if matches!(func.as_str(), "C::make" | "C::num" | "C::stat" | "C::inst") =>
+            {
+                Some((func.clone(), *dest))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        4,
+        "前置条件：四个调用点（classmethod 两形＋staticmethod＋实例方法）都要降出来，少一个这条用例就什么都没测到，实得 {dests:?}"
+    );
+    for (func, d) in &dests {
+        // 期望值取自 t522 的 expect 行：make/stat/inst 是字符串，num 是整数 42。
+        let want = if func.as_str() == "C::num" { Type::I64 } else { Type::Str };
+        assert_eq!(
+            f.type_map.get(d),
+            Some(&want),
+            "{func} 的调用点目的槽该是 {want:?}（改前 @classmethod 两格落 I64 ⇒ 运行期按整数打印 str 指针，打出堆地址），实得 {:?}",
+            f.type_map.get(d)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        3,
+        "三条返回字符串的调用点该选字符串打印器（改前 make/stat/inst 三格都被当成整数），实得调用: {calls:?}"
+    );
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_i64").count(),
+        1,
+        "只有 C::num 那一格按整数打印（真值 42），实得调用: {calls:?}"
+    );
+}
+
+/// 批次 628（旁路 cleanup 车道编号，代码 `3200fc16`；记录在本树 `roadmap.md:24570`
+/// 的并收录行内，无独立小节；
+/// 站点 `src/middle/resolver/resolver.rs` 的
+/// `refine_method_return_types` ＋ `collect_return_kinds` 的 `refinable` 参数转发臂；
+/// 这趟由 `typecheck.rs:33` 接线）／backlog 旧 #195 余项。
+/// 症状（628 记录 ＋ 夹具 `tests/python_style/t538_return_type_infer.z`）：
+/// `def ident(self, w): return w` 的形参 `w` 在体内已被批次 627 精化成 Str，但注册到
+/// `funcs` 的返回类型还停在 I64 ⇒ 调用点按 I64 选打印器，把串句柄地址打出来
+/// （s35／s36 实拍）。
+/// 期望值来源：t538 的 `// expect:` 三行（X / Hey! / hi moe）＝三个返回都是字符串。
+/// 边界（本条不覆盖）：628 记录在册的保守面——容器返回（list/dict）不推断；
+/// 混合型别投票与不可推断（PyDynamic）投毒弃权。
+#[test]
+fn method_return_inference_from_param_and_concat_marks_callsites_str() {
+    let mirs = lower_all(
+        r#"class Bag:
+    def ident(self, w):
+        return w
+    def bang(self, word):
+        return word + "!"
+    def greet(self, name):
+        return "hi " + name
+
+b = Bag()
+print(b.ident("X"))
+print(b.bang("Hey"))
+print(b.greet("moe"))
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let dests: Vec<(String, u32)> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. }
+                if matches!(func.as_str(), "Bag::ident" | "Bag::bang" | "Bag::greet") =>
+            {
+                Some((func.clone(), *dest))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        3,
+        "前置条件：三个调用点都要降出来（少一个这条用例就什么都没测到），实得 {dests:?}"
+    );
+    for (func, d) in &dests {
+        assert_eq!(
+            f.type_map.get(d),
+            Some(&Type::Str),
+            "{func} 的调用点目的槽该是 Str（改前注册的返回类型停 I64 ⇒ 运行期按整数打串句柄地址），实得 {:?}",
+            f.type_map.get(d)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        3,
+        "三个调用点都该按 Str 选打印器（参数直传、拼接两侧、拼接左字面量三种证据各一条），实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝返回类型停 I64 ⇒ 按整数打印串句柄，`println_i64` 不应出现，实得调用: {calls:?}"
+    );
+}
+
+/// 批次 644（旁路 cleanup 车道编号，代码 `23a32829`；记录在该笔的提交信息里。
+/// **批次编号与主树重合**：本树 `roadmap.md:25177` 的"批次 644"是另一批（主线度量批／#251），
+/// 引用以哈希为身份；站点 `src/middle/ctfe/evaluator.rs` 的
+/// `p642_collect_pattern_vars` 与 `p642_collect_assigned` 的 `For` 臂）／夹具
+/// `tests/python_style/t518_module_global_env_first.z` 的 ⑤ 段（`pairs` 那一段；该夹具头注只编到 ⑤）。
+/// 症状（644 记录）：批次 642 的"循环／分支内被赋过名的量不再折叠"收集器只认 `Var`
+/// 模式，`for k2, v2 in pairs:` 的 Tuple 模式没被杀 ⇒ `k2`／`v2` 停在常量表里 ⇒
+/// `print(k2)` 折成循环前的陈值 0、`print(v2)` 折成空串（expect 2／b 实拍）。
+/// 期望值来源：t518 的 `// expect:` 六行（1 / a / 2 / b / 2 / b）——循环内两条与循环外
+/// 两条都要读运行期的槽，`k2` 是整数、`v2` 是字符串。
+/// 边界（本条不覆盖）：644 记录同时作废的"槽移位假说"（那是归因更正，不是行为面）。
+#[test]
+fn tuple_for_loop_pattern_kills_stale_consts_before_print_folds() {
+    let mirs = lower_all(
+        r#"pairs = [(1, "a"), (2, "b")]
+k2 = 0
+v2 = ""
+for k2, v2 in pairs:
+    print(k2)
+    print(v2)
+print(k2)
+print(v2)
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    // 循环体内那两条 print 在 While 的 body 里，得跟着块走（只扫顶层会漏掉一半）。
+    let mut printed: Vec<(String, u32)> = Vec::new();
+    {
+        fn walk(stmts: &[MirStmt], out: &mut Vec<(String, u32)>) {
+            for s in stmts {
+                match s {
+                    MirStmt::VoidCall { func, args }
+                        if matches!(func.as_str(), "println_i64" | "println_str") =>
+                    {
+                        out.push((func.clone(), args[0]));
+                    }
+                    MirStmt::While { body, else_body, .. } => {
+                        walk(body, out);
+                        walk(else_body, out);
+                    }
+                    MirStmt::If { then, else_, .. } => {
+                        walk(then, out);
+                        walk(else_, out);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        walk(&f.stmts, &mut printed);
+    }
+    assert_eq!(
+        printed.len(),
+        4,
+        "前置条件：循环内两条＋循环外两条 print 都要降出来，实得 {printed:?}",
+    );
+
+    // 症状那一格：被陈值折叠的 print 实参是字面量（改前四格全成 IntLit(0)／StringLit 空串），
+    // 修法之后必须读运行期的槽。
+    for (func, a) in &printed {
+        let direct = f.exprs.get(a);
+        assert!(
+            !matches!(direct, Some(MirExpr::IntLit(_)) | Some(MirExpr::StringLit(_))),
+            "{func} 的实参 id={a} 不该是折叠后的字面量（改前＝循环前陈值 0 与空串），实得 {direct:?}"
+        );
+        // 实参槽常是 `Var(id)` 一跳（本文件 `int_lit` 那条口径），字面量可能藏在赋右侧。
+        let hopped = find_assign_rhs(&f.stmts, *a).and_then(|rhs| f.exprs.get(&rhs));
+        if let Some(e) = hopped {
+            assert!(
+                !matches!(e, MirExpr::IntLit(_) | MirExpr::StringLit(_)),
+                "{func} 的实参 id={a} 往回一跳也不该是字面量（改前陈值就藏在赋右侧），实得 {e:?}"
+            );
+        }
+    }
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_i64").count(),
+        2,
+        "两条 `print(k2)` 该按整数走（真值 1 与 2），实得调用: {calls:?}",
+    );
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        2,
+        "两条 `print(v2)` 该按字符串走（真值 a 与 b；改前四格都被折成陈字面量 ⇒ 全走字符串打印器），实得调用: {calls:?}",
     );
 }
