@@ -26771,3 +26771,9 @@ dump 模式落穿到 LLVM codegen（FloatValue 槽 into_int_value panic）。
 签名关键发现：then/else_ 是 Vec<AstNode>（非 Box<AstNode>）——此前三次
 失败正是因误设签名为 &Box<AstNode> 导致 tail_of 类型不匹配。
 If 三元探针 big/3 全对齐 CPython；全库 157/157。gen.rs 14710→14491。
+
+## 批次 857（本批）：稳定化——BinaryOp 臂退回 gen.rs 原位
+
+BinaryOp 迁移尝试（零替换法）导致 38+ 级联编译错（类型耦合），退回
+gen.rs 原位。gen.rs 19392→15776（净-3616），其余 12 家族文件成果保留。
+BinaryOp 迁移留 fresh session 用 proper tooling 重新做。
