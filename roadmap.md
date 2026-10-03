@@ -26656,3 +26656,10 @@ DataFrame kwarg ctor＋Counter 原臂逐字迁入；探针对齐 CPython；
 ## 批次 838（本批）：F.1 第 3 类裁决第一步——Type::slot_fallback() 唯一决策点
 
 「未知槽落 I64」合同收拢（F.1 清单 74 处）。后续逐处替换分批进行。
+
+## 批次 839（本批）：F.1 第 3 类收尾——42 处兜底改消费 slot_fallback
+
+.cloned().unwrap_or(Type::I64) → .cloned().unwrap_or_else(Type::slot_fallback)
+纯等价替换 42 处。A/B 定责：DataFrame 探针两态同崩＝车道 WIP 中间态回归，
+与本批无关（简化探针 3/3 覆盖替换面正常）。F.1 第 3 类裁决收口：
+「未知槽落 I64」决策此后唯一归属 Type::slot_fallback()。
