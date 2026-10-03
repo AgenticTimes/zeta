@@ -26794,3 +26794,8 @@ b3ir.log/test_match*.z/tools/__pycache__ 清理（refactor.md 轴 A 尾段
 If 表达式发射体（cond 降型→ast_branch_ty→process_block→branch_ty）原臂
 逐字迁入 lower_if_expr。gen.rs 占位 dest→id 修正。If 三元探针 big/3
 全对齐 CPython；全库 157/157。gen.rs 15002→14785。
+
+## 批次 860（本批）：Loop（30 行）/FString（69 行）臂迁入 call_flow.rs/call_fstring.rs——零替换法
+
+Loop 无限循环＋f-string 发射体原臂逐字迁入。行为探针 loop ✓、
+count: 42 ✓；全库 157/157。
