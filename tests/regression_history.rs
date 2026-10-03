@@ -44,7 +44,53 @@ fn lower_all(src: &str) -> Vec<Mir> {
         .unwrap_or_else(|e| std::panic::resume_unwind(e))
 }
 
+/// 多模块夹具：把 `files` 写进一个临时目录，`entry` 当入口编译。入口里的
+/// `from <mod> import <名>` 会走 `Resolver::register` → `load_user_python_module`
+/// （**从磁盘读**），这是批次 154/159 那一族（模块前缀键、再导出名）唯一的到达路径。
+/// 降形完之后临时目录删掉——MIR 已经在返回值里。
+fn lower_multi(files: &[(&str, &str)], entry: &str) -> Vec<Mir> {
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "zeta_regression_history_{}_{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("建临时目录失败: {e}"));
+    for (name, src) in files {
+        std::fs::write(dir.join(name), src)
+            .unwrap_or_else(|e| panic!("写 {name} 失败: {e}"));
+    }
+    let entry_path = dir.join(entry);
+    let src = std::fs::read_to_string(&entry_path).expect("入口文件读不出来");
+    // 降形同样走大栈线程（和 lower_all 一个理由），临时目录由子线程收尾删除。
+    let worker = {
+        let dir2 = dir.clone();
+        let entry_path2 = entry_path.clone();
+        move || {
+            let mirs = lower_with_source_dir(&src, Some(&entry_path2));
+            let _ = std::fs::remove_dir_all(&dir2);
+            mirs
+        }
+    };
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(worker)
+        .expect("起大栈线程失败")
+        .join()
+        .unwrap_or_else(|e| {
+            let _ = std::fs::remove_dir_all(&dir);
+            std::panic::resume_unwind(e)
+        })
+}
+
 fn lower_all_inner(src: &str) -> Vec<Mir> {
+    lower_with_source_dir(src, None)
+}
+
+fn lower_with_source_dir(
+    src: &str,
+    entry_path: Option<&std::path::Path>,
+) -> Vec<Mir> {
     let (remaining, asts) = parse_zeta(src).unwrap_or_else(|e| panic!("解析失败: {e:?}"));
     assert!(
         remaining.trim().is_empty(),
@@ -58,6 +104,11 @@ fn lower_all_inner(src: &str) -> Vec<Mir> {
         .unwrap_or_else(|e| panic!("常量求值失败: {e}"));
 
     let mut resolver = Resolver::new();
+    // 与 main.rs:826 同序：文件模式在注册前把源码目录交出去，模块加载才找得到
+    // 同目录的 `X.z`／`X/__init__.z`（少了这一步，多模块夹具只会得到空模块表）。
+    if let Some(p) = entry_path {
+        resolver.set_source_dir(p);
+    }
     // 与 main.rs 主干同序：先展开宏，再注册展开后的 AST（少这一步，
     // `-2` 这类常量在 harness 里就不会折成字面量，读数与 CLI 不一致）。
     let expanded = resolver
@@ -3615,3 +3666,140 @@ print(T[0])
     assert_eq!(call_args(f, "println_i64").len(), 1, "`print(len(T))` 该有一次 `println_i64`");
     assert_eq!(call_args(f, "println_str").len(), 1, "`print(T[0])` 该有一次 `println_str`");
 }
+/// 批次 154（主线 `b3007ef9` ＋追加 `244ca889`）。站点两处，都在
+/// `src/middle/resolver/resolver.rs`（本树 HEAD `e53c0147` 上）：
+/// ① 模块前缀剥离臂 :2318-2336（`for pfx in &prefixes { g.strip_prefix(pfx) }`）；
+/// ② 全局类型表双键写入臂 :2397-2402（裸名＋`<prefix><name>` 两个键都写）。
+///
+/// 症状（记录原文）：以下划线开头的全局名拼成 mangled 键是 `datasrc___ROOT`（三个下划线），
+/// 用 `rsplit_once("__")` 剥前缀会把前导下划线一起吃掉 ⇒ 剥出来 `PROJECT_ROOT` 这类裸名，
+/// 与 walk 从源码 AST 取的 `_ROOT` 不匹配 ⇒ 整张模块全局类型表为空（追加那一笔是同族第二格：
+/// 再导出的名字在消费模块里读的是 mangled 键，而表里只有裸名）。类型表的格子没了 ⇒
+/// 变量读回槽定成 `I64` ⇒ `print(_ROOT)` 发 `println_i64` 而不是 `println_str`。
+///
+/// 期望值来源（三份真值同批实拍，产物在 `/tmp/b10028/`）：
+/// ① CPython 同形源（`_ROOT = "abc"`＋`print(_ROOT)`，两处消费点）打两行 `abc`；
+/// ② 编译期＝`--dump-mir`：`datasrc__show`／`consumer__use_it` 两段各有一次
+///    `zeta_env_get("datasrc___ROOT") -> 目的槽`，目的槽类型 `Str`，打印走 `println_str`
+///    （`f154a_base.mir`／`f154b_base.mir`）；
+/// ③ 运行期（`-o` 编译后执行）**与 ① 不一致**：只打一行 `abc`。原因见下面覆盖面分工 ⑤
+///    那条本批新发现的缺陷 ⇒ 本条的期望值取 ①② 两侧，不写成"三方一致"。
+///
+/// 覆盖面分工（变异实测，差异行数按夹具的 `--dump-mir` 全文统计；臂＝在 HEAD 源码上
+/// 原地改那一支再重编）：
+/// ① 撤①号臂（把前缀剥离改成 `g.rsplit_once("__")`）⇒ `f154a` 8 行／`f154b` 16 行差异，
+///    `datasrc__show` 与 `consumer__use_it` **两段同时** `println_str`→`println_i64`、
+///    目的槽 `Str`→`I64`。
+/// ② 撤②号臂（把双键写入改成只留 `let _ = pfx;`，即不写 mangled 键）⇒ 差异行数与症状
+///    **一字相同**（8/16，同两段同两处）。
+/// ③ ⇒ **两臂是一条链，不互为备份**：本批只写一条用例，撤任一臂都打红它，
+///    所以这条钉不住"只有其中一臂坏"那种形状，余项里写清楚。
+/// ④ 多模块路径本批新（`lower_multi`）：`from datasrc import _ROOT` 要求磁盘上真有
+///    `datasrc.z`，走 `register` → `load_user_python_module`；harness 里补的那一步是
+///    `resolver.set_source_dir(entry_path)`，与 `src/main.rs:826` 文件模式同序。
+///    之前 49 条全是单文件夹具，模块前缀那一族（154／159）到不了。
+/// ⑤ 本批顺带**新发现的缺陷（未修，不属于本条收编范围）**：双模块入口的 `main` 段里
+///    `consumer__use_it` 这个调用点整条没了（`consumer__init`、两次 `zeta_py_from`、
+///    `datasrc__init`、`datasrc__show` 都在，就是少 `consumer__use_it`），
+///    AOT 运行因此只打一行而 CPython 打两行；只 import `consumer` 的那枚（`only_consumer.z`）
+///    AOT 不打任何输出。登记在 #20005 余项内。
+/// ⑥ 进程内变异复验（末轮实跑）：c154a 与 c154b 都是 50 条只红本条这一条，红点与红值
+///    一字相同——`tests/regression_history.rs:3782:9`，
+///    `夹具A/datasrc__show 的读回槽 id=5 …实得 Some(I64)`（right 侧 `Some(Str)`）。
+///    红点落在读回槽类型那一行＝前置条件（读回次数）在撤臂时不变，这条的正证据是实质断言；
+///    `println_str`／`println_i64` 两格在红点之后＝未执行到，只算防放松。
+#[test]
+fn underscore_global_reexport_keeps_str_type_at_module_env_reads() {
+    // 夹具 A：main 只 import `show`，`show` 在自己模块里读 `_ROOT`（单跳）。
+    let a = lower_multi(
+        &[
+            (
+                "datasrc.z",
+                r#"_ROOT = "abc"
+
+def show():
+    print(_ROOT)
+"#,
+            ),
+            (
+                "main.z",
+                r#"from datasrc import show
+
+show()
+"#,
+            ),
+        ],
+        "main.z",
+    );
+    // 夹具 B：`consumer` 自己不定义 `_ROOT`，从 `datasrc` 再导出后读（154 追加那一格）。
+    let b = lower_multi(
+        &[
+            (
+                "datasrc.z",
+                r#"_ROOT = "abc"
+
+def show():
+    print(_ROOT)
+"#,
+            ),
+            (
+                "consumer.z",
+                r#"from datasrc import _ROOT
+
+def use_it():
+    print(_ROOT)
+"#,
+            ),
+            (
+                "main.z",
+                r#"from consumer import use_it
+from datasrc import show
+
+show()
+use_it()
+"#,
+            ),
+        ],
+        "main.z",
+    );
+
+    for (label, mirs, func) in [
+        ("夹具A/datasrc__show", &a, "datasrc__show"),
+        ("夹具B/datasrc__show", &b, "datasrc__show"),
+        ("夹具B/consumer__use_it", &b, "consumer__use_it"),
+    ] {
+        let f = mir(mirs, func);
+        // mangled 键：模块前缀 `datasrc__` ＋源码裸名 `_ROOT`，三个下划线。
+        let (writes, reads) = env_slots(f, "datasrc___ROOT");
+        assert_eq!(
+            (writes.len(), reads.len()),
+            (0, 1),
+            "前置条件：{label} 里 `_ROOT` 该有一次 `zeta_env_get` 读回、零次写入\
+             （写入在 `datasrc__init` 段），实得 写入槽 {writes:?}／读回槽 {reads:?}",
+        );
+
+        let dest = reads[0];
+        assert_eq!(
+            f.type_map.get(&dest),
+            Some(&Type::Str),
+            "{label} 的读回槽 id={dest} 该带模块全局类型表里的 `Str`\
+             （154 之前整张表为空，这一格是 `I64`），实得 {:?}",
+            f.type_map.get(&dest),
+        );
+
+        let strs = call_args(f, "println_str");
+        assert_eq!(
+            strs.first().map(|a| a.first().copied()),
+            Some(Some(dest)),
+            "`print(_ROOT)` 该把读回槽 {dest} 交给 `println_str`，{label} 实得 {strs:?}",
+        );
+        assert_eq!(
+            call_args(f, "println_i64").len(),
+            0,
+            "154 的症状是把 `Str` 读成 `I64`⇒发 `println_i64`，{label} 不该有该符号，\
+             实得调用: {:?}",
+            call_symbols(f),
+        );
+    }
+}
+
