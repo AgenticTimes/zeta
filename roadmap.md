@@ -28736,3 +28736,18 @@ lower_ast_inner 至此从 2153 行缩至约 420 行，语句位 40 余臂全部�
   `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
   `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
   两本台账，**连续二十六批**）；待补台账行的文字写进本批记录笔的提交信息。
+## 批次 876（2026-10-04，**重构批：Call 臂（5840 行——方法分派主干）整体迁入 gen/call_dispatch.rs**）
+
+869 零适配法最大应用：签名取臂的原样解构类型
+`lower_call_arm(&mut self, receiver: &Option<Box<AstNode>>, method: &String,
+args: &Vec<AstNode>, type_args: &Vec<String>, id: u32) -> u32`——5832 行臂体逐字。
+调用点转发返回值（臂内 15 处早退产出非 id 槽）；函数尾补 `id` 对齐派发约定
+（原臂的尾部 if/else 链靠派发尾巴统一返回）。导入镜像 gen.rs 完整 use 块
+（self::→super:: 三处）＋五颗模块级自由函数（list_elem_suffix／
+registry_ret_type／repr_routable／format_template_parts）＋TypeDecl。
+子族发射体（call_print/call_len/call_str 等）不动，本函数只承载留在主干的分派链。
+gen.rs 11037→5209（净 -5828；**会话累计 19392→5209＝-73.1%**）。
+
+验证：编译零错误；内置单元测试 157/157；历史探针全套复跑（861/862/864/
+forelse2/869/873——除 869 的 #275 存量面外零差异）；**全量差分（--group 50）
+match=2845/2845＝100%**。
