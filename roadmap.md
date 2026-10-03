@@ -26705,3 +26705,10 @@ CPython；全库 156/156。#272 float(str) 登记并附内建表 Str 路由。
 loc/iloc 重写、PyJson、array_get、定长折叠、zeta_dyn_getitem、DictGet
 兜底——原臂逐字入 lower_subscript（返回 ()，slot/type_map 传递）。
 下标七面探针＋转换面抽查 ✓；全库 157/157。gen.rs 16777→16308。
+
+## 批次 846（本批）：FieldAccess 臂（537 行）迁入 call_field.rs
+
+struct 字段读/枚举载荷/类变量读/dotted module 路由原臂逐字迁入
+lower_field_access（返回 u32）。三处修（TypeDecl r#gen 路径/HashMap
+import/expr→base 别名）。类变量读 A/B 实测存量缺口（批 610 部分覆盖）
+非本批引入。实例属性探针 Rex ✓；全库 157/157。gen.rs 16308→15771。
