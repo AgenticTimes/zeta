@@ -26548,3 +26548,12 @@ gen/call_len.rs：LenRoute 枚举＋classify_len 纯函数（静态类型→发�
 无副作用毫秒级单测）。**TDD 首战立功**：路由合同测试抓到分类器漏 dict
 拼写（违反 815 等价规则）——发布前拦截。len 臂同步消费等价规则。
 全库内置测试 **144/144**（新增 3）。
+
+## 批次 821（本批）：集合族守卫拆分修复——intersection 误入变异族（816 回归）
+
+816 抽取时 set_family_method_ok 清单误含 intersection ⇒
+a.intersection(b) 走进 discard 臂（MIR 实拍 py_vec_discard、交集结果
+变差集，t807 十行实拍 3/x/y vs 期望 2/y/z）。本批拆成
+set_mutation_ok/set_intersection_ok 两个精确纯函数＋4 条回归钉
+（816 两条＋参数个数两条）。t807 十行全对、内置 145/145、抽查 ✓。
+**教训入册：家族抽取时方法清单逐族精确——合并清单＝行为合并。**
