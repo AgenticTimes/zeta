@@ -26612,3 +26612,8 @@ lower_numeric_builtin 入口＋lower_abs（llvm.fabs 防位模式强转）＋
 lower_sum（vec/动态/定长折叠三路）。行为探针 5/5 对齐 CPython；
 全库 154/154。过程事故如实登记：首脚本中间态写盘致 gen.rs 半破坏
 （三处逐一对照 HEAD 恢复），教训＝多步脚本先算后写。
+
+## 批次 831（本批）：数值族收尾——三臂迁入 call_num.rs，gen.rs 侧单占位
+
+successor/predecessor/min-max 迁入执行者；gen.rs 数值族入口统一单占位。
+六探针全对齐 CPython；全库 154/154。
