@@ -11,6 +11,8 @@ impl MirGen {
     /// generic 路径把值列表当 data，len(df) SEGV（实测）。
     pub(super) fn lower_dataframe_kwarg(
         &mut self,
+        method: &str,
+        type_args: &[String],
         receiver: &Option<Box<AstNode>>,
         args: &[AstNode],
         dest: u32,
@@ -86,9 +88,9 @@ impl MirGen {
                             receiver: receiver.clone(),
                             method: "DataFrame".to_string(),
                             args: vec![data],
-                            type_args: type_args.clone(),
+                            type_args: type_args.to_vec(),
                             structural: false,
-                        });
+                        }));
                     }
                 }
         None
@@ -98,6 +100,7 @@ impl MirGen {
     /// 指针键 shim 会把每个字面量点位分开计数。
     pub(super) fn lower_counter(
         &mut self,
+        method: &str,
         receiver: &Option<Box<AstNode>>,
         args: &[AstNode],
         dest: u32,
@@ -129,7 +132,7 @@ impl MirGen {
                                 dest: dest,
                                 type_args: vec![],
                             });
-                            self.exprs.insert(dest, MirExpr::Var(id));
+                            self.exprs.insert(dest, MirExpr::Var(dest));
                             // String-keyed Counter → keys() is Vec<str>.
                             self.type_map.insert(
                                 dest,
@@ -147,10 +150,11 @@ impl MirGen {
         &mut self,
         receiver: &Option<Box<AstNode>>,
         method: &str,
+        type_args: &[String],
         args: &[AstNode],
         dest: u32,
     ) -> Option<u32> {
-        self.lower_dataframe_kwarg(receiver, args, dest)
-            .or_else(|| self.lower_counter(receiver, args, dest))
+        self.lower_dataframe_kwarg(method, type_args, receiver, args, dest)
+            .or_else(|| self.lower_counter(method, receiver, args, dest))
     }
 }

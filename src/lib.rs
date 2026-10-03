@@ -57,10 +57,8 @@ pub mod frontend;
 pub mod integration;
 pub mod lsp;
 pub mod middle;
-pub mod ml;
 pub mod package;
 // pub mod memory;  // Temporarily disabled due to compilation errors
-pub mod distributed;
 pub mod runtime;
 pub mod std;
 pub mod workflows;
