@@ -150,6 +150,14 @@ impl MirGen {
                             right: expr_id,
                         },
                     );
+                    self.type_map.insert(dest, Type::F64);
+                    // 批次 884（#277）：必须提前返回——臂尾公共出口会执行
+                    // `exprs[dest] = Var(dest)`，把本支刚写入的懒表达式
+                    // （BinaryOp 0.0-x）覆盖成空槽引用（槽无人计算 ⇒ 恒 0，
+                    // `print(-f)` 打 0.0；两次运行分别见过 nan／3.67e-270 的
+                    // 位垃圾同根）。整型支不受影响：unary_minus 是 Call，槽
+                    // 已被算出，Var(dest) 读回的是结果。
+                    return dest;
                 } else if matches!(
                     self.type_map.get(&expr_id),
                     Some(Type::Named(n, _)) if n == "BigInt"
