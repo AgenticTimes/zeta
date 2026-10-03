@@ -22,6 +22,7 @@
 
 use zetac::frontend::ast::AstNode;
 use zetac::frontend::parser::top_level::parse_zeta;
+use zetac::middle::ctfe::value::ConstValue;
 use zetac::middle::mir::mir::{Mir, MirExpr, MirStmt, SemiringOp};
 use zetac::middle::resolver::resolver::Resolver;
 use zetac::middle::types::Type;
@@ -2709,5 +2710,624 @@ fn after_typed_for() -> i64 {
             }
         )),
         "循环体不该是空的（改写一旦发生，`sum = sum + i` 就掉出了本语句），实得 body: {body:?}"
+    );
+}
+
+/// 批次 370（主线 `ceb704c9`）：数组类型注解的长度位收表达式。
+///
+/// 症状（记录原文口径）：`parse_zeta_array` 的长度位只认 `digit1 | parse_ident`，
+/// `[usize; MAX + 1]` 在这里失败 → 整个 `fn` 被拒 → W1002 丢掉其后顶层项
+/// （`tests/unit-tests/test_const_expression.z` 丢 14 行，含 `fn main`）。
+///
+/// 期望值来源：在册 official 夹具 `test_const_expression.z` 的 AOT 退出码（本批实拍
+/// 退出码 0＝`arr[50]` 的值，`/tmp/b10023/out370`）＋Python 等价写法
+/// `arr=[0]*(MAX+1); arr[50]` 也给 0；缺陷记录里那句"整个 fn 被拒"。
+/// 两个接缝都钉：
+/// 1. **解析器接缝**（`pub fn parse_array_type`）——长度位是表达式时返回的类型串
+///    逐字为 `"[i64; MAX + 1]"`（改前这条直接 Err，所以红点落在这一句本身）；
+/// 2. **降形接缝**——带该注解的 `fn` 与它后面的顶层项都还在。
+///
+/// 覆盖面分工与边界：见批次 10023 的台账（变异实测后写）。
+#[test]
+fn array_type_size_slot_accepts_const_expression() {
+    let parsed = zetac::frontend::parser::parser::parse_array_type("[i64; MAX + 1]")
+        .unwrap_or_else(|e| panic!("长度位是表达式时应解析成功（改前在这里 Err），实得 {e:?}"));
+    assert!(
+        parsed.0.trim().is_empty(),
+        "整个类型注解该被吃满，剩余: {:?}",
+        parsed.0
+    );
+    assert_eq!(
+        parsed.1, "[i64; MAX + 1]",
+        "长度位原文（去空白）该原样带进类型串"
+    );
+
+    let mirs = lower_all(
+        r#"fn fill(buf: [i64; MAX + 1]) -> i64 {
+    return 3
+}
+fn after_array_expr() -> i64 {
+    return 4
+}
+"#,
+    );
+    let fill = mir(&mirs, "fill");
+    assert!(
+        fill
+            .param_indices
+            .iter()
+            .any(|(n, id)| n == "buf" && fill.type_map.contains_key(id)),
+        "`buf` 该作为形参登记，实得 param_indices: {:?}",
+        fill.param_indices
+    );
+    assert!(
+        mirs.iter().any(|m| m.name.as_deref() == Some("after_array_expr")),
+        "带数组注解的 `fn` 后面那个顶层项不该被丢"
+    );
+}
+
+/// 批次 362（主线；源码笔 `8aa318d8`，文档笔 `5921ae0e`）：路径关键字加词边界。
+///
+/// 症状（记录原文口径）：`tag("self")` 没有词边界，`self_compile_test` 被截成
+/// 路径 `self` ＋ 剩下的 `_compile_test` ⇒ 整条调用解析失败、**其后所有语句静默丢弃**
+/// （`minimal_compiler.z` 因此丢 230 行）。
+/// 本批实拍补一条口径：该笔的**源码**是隔了一笔才提交的（`5921ae0e` 的提交说明写了
+/// 两处改动、实际只提了文档），所以引用这一格要带 `8aa318d8`。
+///
+/// 期望值来源：在册夹具 `tests/python_style/t408_self_prefix_ident.z` 的
+/// `// expect: 10 / 14 / 16`（本批用当前二进制实拍同值，`/tmp/b10023/out408`）
+/// ＋形状侧 `--dump-mir`（`/tmp/b10023/mir_f362h.txt`：实参槽 3 由
+/// `Assign { lhs: 3, rhs: 1 }` 从形参绑来，调用 `args: [3]`）。
+/// **CPython 侧不适用**：`fn`／`-> i64` 是 zeta 的 Rust 方言拼法。
+///
+/// 读到的现行事实（写给下批省一趟）：用户函数的调用点符号带**实例后缀**
+/// （`make` 在 MIR 里是 `make_1`、`bb()` 是 `bb_0`），所以断言按前缀取，别写死全名。
+#[test]
+fn self_prefixed_local_stays_one_identifier_in_call_args() {
+    let mirs = lower_all(
+        r#"fn make(x: i64) -> i64 {
+    return x * 2
+}
+fn uses_self_prefix(a: i64) -> i64 {
+    let self_compile_test = a
+    let doubled = make(self_compile_test)
+    return doubled
+}
+fn after_self_prefix(b: i64) -> i64 {
+    return b + 2
+}
+"#,
+    );
+    let u = mir(&mirs, "uses_self_prefix");
+
+    // 形参 → self 前缀局部：这条 Assign 是症状的正面证据（它存在说明
+    // `let self_compile_test = a` 整条被解析了）。
+    assert!(
+        top_assigns(u).contains(&(3, 1)),
+        "`let self_compile_test = a` 该是把形参槽 1 赋进槽 3，实得顶层赋值: {:?}",
+        top_assigns(u)
+    );
+
+    let mut calls = u.stmts.iter().filter_map(|s| match s {
+        MirStmt::Call { func, args, .. } => Some((func.clone(), args.clone())),
+        _ => None,
+    });
+    let (callee, args) = calls
+        .next()
+        .expect("`make(self_compile_test)` 该降出一次调用（改前整条失败）");
+    assert!(
+        calls.next().is_none(),
+        "函数体里只该有这一次调用，多出来的＝解析错位"
+    );
+    assert!(
+        callee.starts_with("make"),
+        "被调名该是 `make`（带实例后缀），实得 {callee}"
+    );
+    assert_eq!(
+        args,
+        vec![3],
+        "实参该是那个 self 前缀局部（槽 3），不是 `self` 路径本身"
+    );
+    assert!(
+        mirs.iter().any(|m| m.name.as_deref() == Some("after_self_prefix")),
+        "`fn` 不该因为这一条语句被整块丢掉"
+    );
+}
+
+/// 批次 334（主线 `3f7504aa`，任务旧 #51）：flat 文件里 `//` 按**行内括号深度**判定。
+///
+/// 症状（记录原文口径）：`//`→`floordiv` 的重写挂在 `normalize_blocks` 的
+/// `changed` 后面，而 flat（无缩进）文件不需要改写 ⇒ `changed` 为假，整个重写被跳过，
+/// `print(x // y)` 的后半截被当行注释吃掉（W1002 截断，"编译成功"却一个字不打）。
+/// 修法＝无缩进证据时逐处判：该列上 `(`/`[` 未闭合 ⇒ 在表达式内部 ⇒ 是运算符；
+/// **深度跨行携带**。
+///
+/// 期望值来源：在册夹具 `tests/python_style/t403_floor_div_inside_call.z` 的
+/// `// expect: 3` ＋ CPython 现跑（本批夹具 `print(\n len(xs) // 2\n)` 两侧都打 2，
+/// `/tmp/b10023/out334b`）＋形状侧 `--dump-mir`（`/tmp/b10023/mir_f334b.txt`：
+/// `Call { func: "floordiv", args: [18, 22], dest: 23 }` → `VoidCall { println_i64, [23] }`）。
+///
+/// 夹具故意取**跨行调用**那一形：`//` 被吃掉时剩下的 `print(` ＋ `)` 仍然配平，
+/// 前置断言（:48）不会红，所以红点只能落在下面这几句形状断言上——
+/// 与批次 10022 那三条"红点在 :48、形状断言没执行到"的格子互补。
+///
+/// 覆盖面分工与边界：见批次 10023 的台账（变异实测后写）。
+#[test]
+fn flat_file_double_slash_inside_open_bracket_is_the_operator() {
+    let mirs = lower_all("xs = [1, 2, 3, 4]\nprint(\n    len(xs) // 2\n)\n");
+    let main = mir(&mirs, "main");
+
+    let folds: Vec<(Vec<u32>, u32)> = main
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, args, dest, .. } if func == "floordiv" => {
+                Some((args.clone(), *dest))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        folds.len(),
+        1,
+        "`//` 在未闭合的 `(` 里该是整除运算符（改前它被当注释吃掉，一处都不剩），实得: {folds:?}"
+    );
+    let (args, dest) = folds[0].clone();
+    assert_eq!(args.len(), 2, "整除该有两个实参，实得 {args:?}");
+    assert_eq!(
+        int_lit(main, args[1]),
+        Some(2),
+        "除数该是字面量 2（t403 那条形如 `x // y`，本夹具取真值 2）"
+    );
+    assert!(
+        main.stmts.iter().any(|s| matches!(
+            s,
+            MirStmt::VoidCall { func, args } if func == "println_i64" && args == &[dest]
+        )),
+        "整除结果槽 {dest} 该直接喂给打印（喂错槽＝把被吃掉的那半截当没有）"
+    );
+}
+
+/// 批次 327（代码 `e4e5591e`，站点 `src/middle/ctfe/value.rs` 的 `ConstValue::binary_op`
+/// 整数两臂：比较器先问＝现 :179 与 :185，配套新增的 `compare_int`（现 :248）／
+/// `compare_uint`（现 :261）；记录＝`roadmap.md:10541`，标题把病因写成"比较结果的 `1/0`
+/// 不在下型层，在**常量折叠**层"）／旧 #45 一族。
+///
+/// 症状（记录原文）：`ConstValue::binary_op` 的 Int/Int、UInt/UInt 两臂把算术器结果
+/// **无条件** `.map(ConstValue::Int)`，而算术器 `binary_op_int` 里兼任了
+/// `== != < <= > >=` 六臂、返回 `(left == right) as i64` ⇒ 折叠层把比较**定型**成整数，
+/// `print(3 == 4)` 打 `0`。
+///
+/// 本条补的是批次 10015 登记的那条余项（"327 的 const／comptime 折叠形状"）：那批实测
+/// 撤掉 `compare_int` 的结果臂后 18 条读数一字不变——现树上 `print(3 == 4)` 走的是批次 642
+/// `adc0ffba` 的 print 实参改写臂（`ctfe/evaluator.rs:303-308`），`compare_int` 只活在常量位。
+/// 所以取**具名 `const` 绑定**那一形：折叠结果不进表达式树，而是落进 MIR 的
+/// `global_consts` 表（`src/middle/mir/mir.rs:13`），比较器的产物形状在那里能直接读到。
+///
+/// 期望值来源：三份真值同批实拍（产物在 `/tmp/b10024/`）。
+/// ① 折叠表＝`--dump-mir`：`EQ: Bool(false)`／`NE: Bool(true)`；撤掉比较器臂
+///    （改回把比较结果包成 `ConstValue::Int`）后同位置是 `Int(0)`／`Int(1)`＝症状值。
+/// ② 运行期＝同一份源编译后跑打 `False`，CPython
+///    `EQ = (3 == 4); NE = (3 != 4); print(EQ == NE)` 逐字相同。
+/// ③ 编译期形状＝`EQ == NE` 在 MIR 里保留为 `BinaryOp`、槽型 `Bool`、走 `print_bool`。
+///    这条通路正是 327 记录"副作用面"那一格自陈的新形状："(Bool, Int) 混合算术在 CTFE 里
+///    不再是 Int/Int ⇒ 折叠失败，`transform_expr` 的 `_ =>` 分支保留 BinaryOp 走动态路径"，
+///    当时只锁在差分夹具 `truth_fold_arith`／`truth_fold_logic`，本条是它第一次进进程内。
+///
+/// 覆盖面分工（变异实测，日志 `/tmp/b10024/mutation.log`）：变异 M1＝把 `value.rs:179` 与 `:185`
+/// 两行从 `ConstValue::Bool(cmp)` 改回 `ConstValue::Int(cmp as i64)`（＝327 记录里的改前状态，
+/// 比较结果重新被折叠层定型成整数）⇒ 全套 45 条**只有本条红**，红点＝折叠表那一断言
+/// （`global_consts` 读数），实得 `Some(Int(0))` 正是症状值；本文件那条
+/// `constant_folded_comparison_yields_bool_not_int_zero`（现 :889，
+/// 走批次 642 `adc0ffba` 的 print 实参改写臂）不红。两条分工＝:889 那条判"print 分发认得布尔"，
+/// 本条判"折叠层把比较存成 Bool"——327 新写的比较臂第一次有单独红点（10015 那次变异动的是
+/// `compare_int` 函数体内返回值，打不到任何条目，见 :879-885 头注）。
+/// 边界（本条不覆盖）：M1 一次改了两行（Int/Int ＋ UInt/UInt 成对），但红点只由 Int/Int 那一支
+/// 产生——夹具两个操作数都是有符号字面量，`compare_uint`（现 :261）这一形没被走到，UInt 侧
+/// 仍是未钉住的半边（与 :886-887 那格 `as_int()` 消费者缺口不同的一条）。
+#[test]
+fn const_folded_comparison_is_stored_as_bool_not_int() {
+    let mirs = lower_all(
+        r#"const EQ: bool = 3 == 4
+const NE: bool = 3 != 4
+print(EQ == NE)
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+
+    // ① 折叠层产物：比较器给 Bool，不给 Int。
+    for (name, want) in [("EQ", false), ("NE", true)] {
+        let want_cv = ConstValue::Bool(want);
+        assert_eq!(
+            f.global_consts.get(name),
+            Some(&want_cv),
+            "具名 `const` 绑定 `{name}` 该以 `ConstValue::Bool({want})` 存进 global_consts\
+             （改前症状＝折叠层把比较定型成整数，同位置是 `Int({})`），实得 {:?}",
+            if want { 1 } else { 0 },
+            f.global_consts.get(name)
+        );
+    }
+
+    // ③ 正证据：两个 Bool 常量之间的比较没被折叠掉，而是留在 MIR 里走动态路径。
+    let cmp_dests: Vec<u32> = f
+        .exprs
+        .iter()
+        .filter_map(|(id, e)| match e {
+            MirExpr::BinaryOp { op, .. } if op == "==" => Some(*id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        cmp_dests.len(),
+        1,
+        "前置条件：`EQ == NE` 该以 `BinaryOp` 留在 MIR 里（被折掉＝这条动态通路没跑到），实得 {cmp_dests:?}",
+    );
+    let d = cmp_dests[0];
+    assert_eq!(
+        f.type_map.get(&d),
+        Some(&Type::Bool),
+        "比较结果槽 id={d} 该标 Bool（下型臂：比较运算恒 Bool），实得 {:?}",
+        f.type_map.get(&d)
+    );
+    let calls = call_symbols(f);
+    assert!(
+        calls.iter().any(|c| c == "print_bool"),
+        "`print(EQ == NE)` 该走布尔打印器（真值 False），实得调用: {calls:?}",
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝比较结果按整数打，`println_i64` 不应出现，实得调用: {calls:?}",
+    );
+}
+
+/// 批次 592（旁路 cleanup 车道编号，代码 `d4750ffa`，台账行 `worktree.md:297`；
+/// **编号与主树重合**：`worktree.md:184` 那行"批次 592"是 bootstrap 车道的另一批
+/// ⇒ 引用以哈希 `d4750ffa` 为身份。站点＝`unannotated_return_ty` 那层嵌套 `infer`
+/// 里的 `__collect__` 臂，现 :4728，元素型取 λ 体表达式那一行＋兜底
+/// `unwrap_or(Type::I64)`）／旧 #167 一族。
+///
+/// 症状（592 记录 ＋ 在册差分夹具 `tests/diff/cases/class_str_comprehension.dcase`）：
+/// 列表推导脱糖成 `__collect__(iter, λ)`，推断器不认这个调用形 ⇒ 返回方法被否决成 I64
+/// ⇒ `print` 打的是向量句柄而不是内容。
+///
+/// 本条与批次 10018 那条余项的关系（三次变异后照实改写）：那条余项要求"单独判臂内『取 λ 体
+/// 表达式当元素型』那一行"（现 :4739）。本条把元素从 `len(n)`（与兜底同形）换成字面量 `"x!"`
+/// （`Str`，与兜底 `I64` 不同形）以后，那一行**仍然打不到**——三次变异的读数见下面的覆盖面分工。
+/// 所以本条钉的不是那条余项，而是 592 修完之后的半成品状态：被调方体内推导式结果槽已带 `Str`
+/// 标记，调用点目的槽仍读 `DynamicArray(I64)`。那条余项按原样继续登记。
+/// 元素取字面量而非 `n + "!"` 是实测选择：`n` 在推导器里读成 `I64`，拼接支（批次 587：一侧 Str、
+/// 另一侧 Str 或未知才算拼接）因此拒推 ⇒ 元素型仍落兜底。
+///
+/// 期望值来源：同一份源在 CPython 下的实拍真值 `['x!', 'x!', 'x!']`（三个元素都是 str）。
+/// 编译期形状侧 `--dump-mir` 读**被调方那一段**（`== MIR Stats::tags ==`：
+/// `Call { func: "zeta_collect_vec_n", dest: 2 }` → `Return { val: 2 }` →
+/// `type_map: 2: DynamicArray(Str)`），进程内读数与 CLI 逐格相同。
+/// 注意取段要取到下一个 `== MIR ` 为止：同一次 dump 里 `main` 段的 `7:` 与被调方段的 `2:`
+/// 不是同一格，用 `sed '/== MIR main ==/,$p'` 这类"打到文件末尾"的取法会把后者读成前者的
+/// （本批实拍踩到）。
+///
+/// 覆盖面分工（变异实测，日志 `/tmp/b10024/mutation{,2,3,4}.log`；产物 `/tmp/b10024/`）。
+/// 三次变异、两种元素形状都跑了：
+/// ① M2＝把元素那一行（`resolver.rs:4739`）改成恒走兜底 ⇒ **45 条读数一字不变**；元素换成
+///    `n + "!"` 的第一版夹具同样不变。⇒ 那一行在进程内打不到，余项仍开着。
+/// ② M2d＝撤 `infer_global_ty` 里另一条同名 `__collect__` 臂（现 :2079）的元素推导（:2102 硬编
+///    `Bool`）⇒ **45 条读数一字不变**（该臂在此形下是否被走到未单独取证，这条只算阴性结果）。
+/// ③ M2c＝撤整条 592 臂（现 :4728-4741）⇒ **2 条红**：本条的调用点槽那一断言（下面标着
+///    "现状锁"那一格，实得 `Some(I64)`＝592 记录写的改前症状"向量被否决成标量"）＋
+///    `list_comprehension_method_return_keeps_vector_shape_at_callsite`
+///    （现 :1733，同一症状）。⇒ 本条确实跑到这条臂，但判据落在**形状层**（`DynamicArray` 有没有），
+///    与本文件那条 `len(n)` 用例共用同一条臂、同一个红点。
+/// 结论：本条相对既有 592 用例的增量＝把"被调方槽 `Str` ＋ 调用点槽 `I64` 元素"这一对**同时**钉住
+/// （既有那条只读调用点的向量形，元素本来就是 `I64`）。那个调用点 `I64` 不是 ①②任一处的元素推导
+/// 给的（两处硬编都不动它），成因站点未定位＝本批开出的新余项。
+///
+/// 边界（本条不覆盖）两格：
+/// ① **调用点目的槽**（`main` 段 `Stats::tags` 那条 `Call` 的 `dest`）仍是兜底值
+///    `DynamicArray(I64)`——恢复出来的返回型没传到 caller 槽。本条把这个读数按"现状锁"钉住
+///    （修好后它会红，届时要连注释一起改），它不是 592 那条缺陷的症状值：592 的症状是
+///    向量整个被否决成标量 `I64`，那一条由本文件那条 `len(n)` 用例覆盖。
+/// ② 运行期取值仍是**指针地址**而非字符串内容（编译后跑实拍
+///    `[4299448288, 4299448272, 4299448256]`，地址随 ASLR 变）＝向量元素身上的类型标记还没接上，
+///    与批次 400 用例头注自陈的残留缺口同一条，故本条不回显运行期读数。
+#[test]
+fn comprehension_element_marker_is_str_in_the_callee_but_not_at_the_call_site() {
+    let mirs = lower_all(
+        r#"class Stats:
+    def __init__(self):
+        self.names = ["x", "yy", "z"]
+    def tags(self):
+        return ["x!" for n in self.names]
+
+st = Stats()
+print(st.tags())
+"#,
+    );
+
+    let g = mir(&mirs, "Stats::tags");
+    let collect: Vec<u32> = g
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func == "zeta_collect_vec_n" => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        collect.len(),
+        1,
+        "前置条件：推导式要降成 `zeta_collect_vec_n` 一处，实得 {collect:?}"
+    );
+    let d = collect[0];
+    let want = Type::DynamicArray(Box::new(Type::Str));
+    assert_eq!(
+        g.type_map.get(&d),
+        Some(&want),
+        "被调方里推导式结果槽 id={d} 该是 `DynamicArray(Str)`（元素是字面量 `\"x!\"`）。\
+         注意：这个读数不由 592 臂内那一行元素推导给出——把 :4739 改成恒兜底、把 :2102 硬编 `Bool` \
+         都不动它（覆盖面分工 ①②），给出它的站点未定位。兜底值是 `DynamicArray(I64)`，\
+         与本文件那条 `len(n)` 夹具同形，实得 {:?}",
+        g.type_map.get(&d)
+    );
+    assert!(
+        g.stmts
+            .iter()
+            .any(|s| matches!(s, MirStmt::Return { val } if *val == d)),
+        "这一形返回的就是推导式结果槽 {d}（不返回它＝本条读的不是那条臂的产物）"
+    );
+
+    // 现状锁（边界①）：调用点目的槽仍是兜底值，不是被调方那个 DynamicArray(Str)。
+    let f = mir(&mirs, "main");
+    let dests: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func == "Stats::tags" => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        1,
+        "前置条件：`st.tags()` 的调用点要降出来，实得 {dests:?}"
+    );
+    let cd = dests[0];
+    assert_eq!(
+        f.type_map.get(&cd),
+        Some(&Type::DynamicArray(Box::new(Type::I64))),
+        "现状锁：调用点目的槽 id={cd} 现在仍读兜底的 `DynamicArray(I64)`（元素标记没传到 caller 槽，\
+         与运行期打指针地址同一条缺口；元素的来源见覆盖面分工，撤整条臂时这一格读到 `Some(I64)`）。 \
+         这条断言会在传过去那一天变红——那时把它改成 `Str` \
+         并删掉本条注释里这句现状锁，实得 {:?}",
+        f.type_map.get(&cd)
+    );
+
+    let calls = call_symbols(f);
+    assert!(
+        calls.iter().any(|c| c == "py_json_dumps_vec_typed"),
+        "打印一个向量该走 `py_json_dumps_vec_typed` 那条路，实得调用: {calls:?}",
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝向量句柄被当整数打，`println_i64` 不应出现，实得调用: {calls:?}",
+    );
+}
+
+/// 批次 399（代码 `ee58b7d8`，站点两条：`src/middle/resolver/resolver.rs` 里"按体恢复
+/// 返回类型"那层嵌套 `infer` 的算术形状臂（任一操作数是浮点 ⇒ F64，现 :4676-4682），
+/// 以及 `src/middle/mir/mir.rs:61` 的 `Mir::signature_ret_ty`——记录把它写成
+/// "the ONE entry saying what this function's `ret` carries, so the callee's LLVM signature
+/// and the caller's destination slot stop being decided by two different rules"）／旧 #45 一族。
+///
+/// 症状（记录原文）：未标注 `def` 的返回槽类型与 LLVM 签名有两个独立来源 ⇒
+/// `def scale(v): return v * 1.0` 的被调方签名已是 `define double @scale(double)`，
+/// 调用点那个空槽却按声明表拿 unit ⇒ double 写进 int 槽、按位重读成
+/// `4602678819172646912`（0.5 的 IEEE-754 位型）。
+///
+/// 本条补的是批次 10023 登记的那条余项：本文件那条 399 用例（`scale`／`forward` 两形）
+/// **撤下算术形状臂后整套读数一字不变**（成因未定位）——它钉住的是 `sig_params_snapshot`
+/// （现 :4557）那条"纯转发时取参数的调用点证据型"的臂。本条先把参数彻底拿掉
+/// （`def bonus(): return 10 * 1.5` 没有形参 ⇒ 签名表覆盖层没有可给的证据），
+/// 结果这条**同样**打不到算术形状臂（本批变异 M3 实拍：撤掉整支 45 条读数一字不变），
+/// 于是把断言挪到那层嵌套 `infer` 的**下游入口** `signature_ret_ty` 上——
+/// 这一形里被调方签名与调用点目的槽都从它取，撤掉它的浮点支会红（覆盖面分工见下）。
+/// 算术形状臂那一支的余项**仍未销**，且现在多一条实测边界：有参、无参两形都不由它决定。
+///
+/// 期望值来源：同一份源在 CPython 下的真值 `15.0`，zeta 编译后运行逐字相同（打 `15.0`）；
+/// 形状侧 `--dump-mir` 读 `Call { func: "bonus_0", args: [], dest: 2 }` →
+/// `type_map: 2: F64` → `VoidCall { println_f64, [2] }`；被调方体内
+/// `SemiringFold { op: Mul, values: [2, 3], result: 4 }` 的 `result` 槽也是 F64。
+///
+/// 覆盖面分工（变异实测，日志 `/tmp/b10024/mutation{,2}.log`）：
+/// ① M3＝撤下 resolver 的算术形状臂整支（现 :4673-4680，"任一操作数是浮点 ⇒ F64"，
+///    保留后面的 Str 拼接支）⇒ **45 条读数一字不变**。⇒ 无参形同样打不到那一支；
+///    本条对 399 的覆盖不在这里，10023 那条余项继续开着。
+/// ② M3b＝撤 `src/middle/mir/mir.rs:61` `signature_ret_ty` 的浮点保留支
+///    （`Type::F32 => Type::F32`／`Type::F64 => Type::F64` 两行改成 `=> Type::I64`）
+///    ⇒ **2 条红**：本条（红点＝`signature_ret_ty()` 那一断言，实得 `Some(I64)`）＋
+///    `unannotated_float_return_keeps_f64_at_module_call_site`（现 :271，批次 10001（本树）／
+///    主树批次 813，backlog 旧 #268②）。本文件那条 399 用例
+///    `crossfn_return_slot_and_forwarded_param_share_one_table`（现 :2109）不红。
+/// ⇒ 本条覆盖＝399 记录里"被调方签名与调用点目的槽是同一个读数"那一格（`signature_ret_ty`），
+/// 相对 :271 那条的增量＝**无参形**（那条的 `scale` 有形参，证据还能从签名表覆盖层取）；
+/// 与 :271 那条共用同一个入口，因此互为同臂红点、不互为备份。不覆盖＝resolver 的算术形状臂（①）。
+#[test]
+fn float_operand_in_body_sets_the_call_slot_when_the_function_has_no_params() {
+    let mirs = lower_all(
+        r#"def bonus():
+    return 10 * 1.5
+print(bonus())
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let dests: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func.starts_with("bonus") => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        1,
+        "前置条件：`bonus()` 的调用点要降出来，实得 {dests:?}"
+    );
+    let d = dests[0];
+    assert_eq!(
+        f.type_map.get(&d),
+        Some(&Type::F64),
+        "目的槽 id={d} 该是 F64：这个 `def` 没有形参，签名表覆盖层给不出证据，\
+         浮点形状只能由被调方的返回读数决定（真值 15.0；改前症状＝double 按位重读成整数），实得 {:?}",
+        f.type_map.get(&d)
+    );
+
+    let calls = call_symbols(f);
+    assert!(
+        calls.iter().any(|c| c == "println_f64"),
+        "`print(bonus())` 该按浮点选打印器（真值 15.0），实得调用: {calls:?}",
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝浮点值按整数位型打，`println_i64` 不应出现，实得调用: {calls:?}",
+    );
+
+    // 被调方自身：体的算术形状同样要把结果槽标成 F64（签名与目的槽不许有两个来源）。
+    let g = mir(&mirs, "bonus");
+    let folds: Vec<u32> = g
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::SemiringFold { op, result, .. } if *op == SemiringOp::Mul => Some(*result),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        folds.len(),
+        1,
+        "前置条件：`10 * 1.5` 要降成折叠运算，实得 {folds:?}",
+    );
+    let r = folds[0];
+    assert_eq!(
+        g.type_map.get(&r),
+        Some(&Type::F64),
+        "被调方里乘法结果槽 id={r} 该是 F64，实得 {:?}",
+        g.type_map.get(&r)
+    );
+
+    // 399 立的那条"唯一入口"：被调方签名与调用点目的槽共用这一条读数（撤掉它的浮点支＝
+    // 回到"两个来源"的形状，签名按 int 发、目的槽仍是浮点位型）。
+    assert_eq!(
+        g.signature_ret_ty(),
+        Some(Type::F64),
+        "`bonus` 的 `signature_ret_ty()` 该给 F64（返回槽 id={r} 的型在这里被读成签名），实得 {:?}",
+        g.signature_ret_ty()
+    );
+    assert_eq!(
+        g.signature_ret_ty(),
+        f.type_map.get(&d).cloned(),
+        "被调方签名与调用点目的槽必须是同一个读数（399 的症状正是这两个来源分家）：\
+         签名={:?} 目的槽={:?}",
+        g.signature_ret_ty(),
+        f.type_map.get(&d)
+    );
+}
+
+/// 批次 10024 新开的未修项 ②（`roadmap.md` 的 10024 段「新开两条未修」第二格；
+/// 站点＝`src/middle/mir/gen.rs` 里 `global_consts.get(name)` 那个 `match` 的 `_ =>` 兜底臂，
+/// 本树 HEAD `7b80115a` 上是 :4935-4939，插入 `MirExpr::Var(id)` ＋ `Type::I64`；
+/// `ConstValue::Bool` 在这个 `match` 里**没有自己的臂**）／#20005 余项。
+///
+/// 症状（10024 记录原文）：`const X: bool = …` 的读取槽按 I64 ⇒ `print(X)` 打 `1` 而不是 `False`。
+/// 折叠层已经给出正确答案（批次 327 `e4e5591e` 的比较臂把结果存成 `ConstValue::Bool`），
+/// 丢型发生在**读取**那一层：`MirExpr::Var(id)` ＋ `Type::I64` ⇒ 打印分发选中 `println_i64`。
+///
+/// 本条是**现状锁**（缺陷未修，锁住当前读数并写明它错在哪），不是正确性锁：
+/// 期望值来源三份真值同批实拍（产物在 `/tmp/b10025/`）。
+/// ① CPython `T = 3 != 4; F = 3 == 4; print(T); print(F)` ⇒ `True` / `False`
+///    （`/tmp/b10025/cpython_truth.txt`）。
+/// ② 运行期＝同一份源 `zetac /tmp/b10025/c1.z` 直接执行打 `1` / `0`，并带一条
+///    `error[W0003]: Typecheck failed (non-fatal)` 提示（rc=0，非致命）⇒ 与 ① 逐字不同＝症状实拍。
+/// ③ 编译期形状＝`--dump-mir`：`global_consts` 是 `T: Bool(true)` / `F: Bool(false)`，
+///    而两个打印槽是 `Var(2)`/`Var(6)` ＋ `type_map: 2: I64, 6: I64` ＋
+///    两次 `VoidCall { func: "println_i64" }`。
+///    取段按 `== MIR <名> ==` 切到下一个 `== MIR ` 为止（10024 记的坑：整段尾巴会串到被调方）。
+///
+/// 覆盖面分工（变异实测，日志 `/tmp/b10025/m1_suite.log`／`m2_suite.log`）：
+/// M1＝把这条兜底臂插入的槽型从 `Type::I64` 换成 `Type::Str` ⇒ 全套 46 条**只有本条红**，
+/// 翻红的是「打印槽清单」那一条前置断言（实得 `[]`＝`println_i64` 不再被发出）。这一笔的
+/// 作用是**站点归因**：夹具的读取确实打在这条 `_ =>` 臂上，而不是 `global_consts` 没命中时
+/// 的「普通变量」那一支——两支插入的形状逐字相同（`Var(id)` ＋ `Type::I64`），只看改前读数分不开。
+/// M2＝修复方向实拍：在同一个 `match` 里补一条 `ConstValue::Bool(b)` 臂
+/// （`IntLit(if *b {1} else {0})` ＋ `Type::Bool` ＋ `return id`）⇒ 同样只有本条红，
+/// 而 `--dump-mir` 的读取变成 `type_map: 2: Bool` ＋ `VoidCall { func: "print_bool" }`
+/// （`/tmp/b10025/c1.m2.mir.txt`）。运行期那半（`print_bool` 是否真打 `True`／`False`）
+/// 本批**未取**——要重编 release 二进制后执行才知道。
+///
+/// 边界（本条不覆盖）：① 夹具只走具名 `const` 的读取两形，`print(3 != 4)` 那种直接形不在本条；
+/// ② `ConstValue` 共七个变体（`Int`／`UInt`／`Bool`／`Array`／`IntArray`／`Unit`／`String`，
+/// `src/middle/ctfe/value.rs:7-22`），这个 `match` 只写了 `Int`／`String`／`Array` 三臂
+/// （静态读臂所得，未逐一支变异）⇒ `UInt`／`IntArray`／`Unit` 与 `Bool` 同样落到这条兜底，
+/// 本条只钉住 `Bool` 一支的现状，其余三支的读取型未锁。
+#[test]
+fn bool_const_reads_as_int64_at_the_use_site_current_state() {
+    let mirs = lower_all(
+        r#"const T: bool = 3 != 4
+const F: bool = 3 == 4
+print(T)
+print(F)
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+
+    // 正证据（已修的那半）：折叠层给的是 Bool，不是 1/0。
+    for (name, want) in [("T", true), ("F", false)] {
+        assert_eq!(
+            f.global_consts.get(name),
+            Some(&ConstValue::Bool(want)),
+            "`{name}` 该以 `ConstValue::Bool({want})` 存进 global_consts（327 的产物），实得 {:?}",
+            f.global_consts.get(name)
+        );
+    }
+
+    // 现状锁（未修的那半）：每一次 `print(布尔常量)` 都按整数下发。
+    let slots: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::VoidCall { func, args } if func == "println_i64" => {
+                args.first().copied()
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        slots,
+        vec![2, 6],
+        "前置条件：两个打印各一次 `println_i64`（真值应为 `True`／`False`，现在按整数下发），\
+         实得槽 {slots:?}",
+    );
+    for slot in slots {
+        assert!(
+            matches!(f.exprs.get(&slot), Some(MirExpr::Var(i)) if *i == slot),
+            "读取槽 {slot} 该是 `Var({slot})`（布尔常量没被折成字面量，走的是 `_ =>` 兜底那一支），实得 {:?}",
+            f.exprs.get(&slot)
+        );
+        assert_eq!(
+            f.type_map.get(&slot),
+            Some(&Type::I64),
+            "现状锁：读取槽 {slot} 现在标 I64 ⇒ 打印分发拿到整数 ⇒ 打 `1`/`0`。\
+             这一格是要被改掉的那格（改成 Bool 才会走 `print_bool`），改动它时本断言必须显式翻红。实得 {:?}",
+            f.type_map.get(&slot)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert!(
+        !calls.iter().any(|c| c == "print_bool"),
+        "`print(T)`／`print(F)` 现在**不**走布尔打印器（＝缺陷所在）；如果这条红了，\
+         说明读取型已被修好，请把本用例的正确性期望改成 True/False 那一侧。实得调用: {calls:?}",
     );
 }
