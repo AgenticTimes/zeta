@@ -28871,3 +28871,15 @@ match=2845/2845＝100%；python_style 475/4（与基线同）；内置单元测�
 **验证**：`print(-f)`＝-2.5 对齐 CPython（print(f)＝2.5 对照不回归）；
 全量差分（--group 50）match=2845/2845＝100%；历史探针七套零差异；
 内置单元测试 157/157。
+
+## 批次 885（2026-10-04，**重构批：PathCall 臂（373 行）迁入 gen/call_path.rs**）
+
+869 零适配法：`lower_path_call(&mut self, path: &Vec<String>, method: &String,
+args: &Vec<AstNode>, type_args: &Vec<String>, id: u32) -> u32`——臂体逐字
+（`module.func(...)`／`Type::func(...)` 的静态路径调用分派），调用点转发
+（臂内 1 处早退产出非 id 槽），尾补 `id`。导入补 path_ends_with_mem
+（call_str 家族的 pub(super) 自由函数）＋ArraySize。
+gen.rs 4587→4225（净 -362）。
+
+验证：编译零错误；内置单元测试 157/157；历史探针七套零差异；
+**全量差分（--group 50）match=2845/2845＝100%**。
