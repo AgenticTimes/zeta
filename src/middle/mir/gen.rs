@@ -7,9 +7,11 @@
 
 mod call_set;
 mod call_class;
+mod call_json;
 mod call_len;
 mod call_str;
 use self::call_class::{classify_call, CallClass};
+use self::call_json::json_route;
 use self::call_str::{path_ends_with_mem, str_method_symbol, str_method_symbol3, to_string_channel};
 
 use crate::frontend::ast::AstNode;
@@ -7576,28 +7578,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         }
                         let arg_id = self.lower_expr(&args[0]);
                         let ty = self.type_map.get(&arg_id).cloned().unwrap_or(Type::I64);
-                        let sym = match &ty {
-                            Type::Str => "py_json_dumps_str",
-                            Type::F64 => "py_json_dumps_f64",
-                            Type::Bool => "py_json_dumps_bool",
-                            Type::Named(n, _) if n == "map" => "py_json_dumps_map",
-                            // A Json value carries its own types: dump it
-                            // recursively, no guessing and no warning.
-                            Type::Named(n, _) if n == "PyJson" => "py_json_dump",
-                            Type::DynamicArray(_) | Type::Array(_, _) => "py_json_dumps_vec",
-                            _ => "py_json_dumps_i64",
-                        };
-                        // A list is homogeneous, so its element type decides
-                        // the serializer — no side table needed.
-                        let vec_elem_tag: Option<i64> = match &ty {
-                            Type::DynamicArray(e) | Type::Array(e, _) => Some(match **e {
-                                Type::F64 | Type::F32 => 1,
-                                Type::Str => 2,
-                                Type::Bool => 3,
-                                _ => 0,
-                            }),
-                            _ => None,
-                        };
+                        // 批次 825：分类面收敛到 call_json::json_route
+                        // （dumps/dump 两处共用，822 同款判定/发射分离）。
+                        let route = json_route(&ty);
+                        let sym = route.sym;
+                        let vec_elem_tag = route.vec_elem_tag;
                         if let Some(tag) = vec_elem_tag {
                             let tag_id = self.next_id();
                             self.exprs.insert(tag_id, MirExpr::IntLit(tag));
@@ -7625,23 +7610,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     if m == "json" && mem == "dump" && args.len() == 2 {
                         let obj_id = self.lower_expr(&args[0]);
                         let oty = self.type_map.get(&obj_id).cloned().unwrap_or(Type::I64);
-                        let (sym, vec_tag): (&str, Option<i64>) = match &oty {
-                            Type::Str => ("py_json_dumps_str", None),
-                            Type::F64 => ("py_json_dumps_f64", None),
-                            Type::Bool => ("py_json_dumps_bool", None),
-                            Type::Named(n, _) if n == "map" => ("py_json_dumps_map", None),
-                            Type::Named(n, _) if n == "PyJson" => ("py_json_dump", None),
-                            Type::DynamicArray(e) | Type::Array(e, _) => (
-                                "py_json_dumps_vec_typed",
-                                Some(match **e {
-                                    Type::F64 | Type::F32 => 1,
-                                    Type::Str => 2,
-                                    Type::Bool => 3,
-                                    _ => 0,
-                                }),
-                            ),
-                            _ => ("py_json_dumps_i64", None),
-                        };
+                        // 批次 825：同款收敛（dump 与 dumps 共用一份分类）。
+                        let route = json_route(&oty);
+                        let sym = route.sym;
+                        let vec_tag = route.vec_elem_tag;
                         let text_id = self.next_id();
                         let mut cargs = vec![obj_id];
                         if let Some(tag) = vec_tag {
