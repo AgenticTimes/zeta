@@ -26688,3 +26688,8 @@ lower_builtin_2；len 臂归 call_len.rs（gen.rs 17471→17441）。
 lower_builtin_2（zip/any/all/enumerate/list/int/float/sorted 表段逐字）
 ＋lower_len 归 call_len.rs（与 819 classify_len 同文件）。五探针对齐
 CPython；全库 156/156。#272 float(str) 登记并附内建表 Str 路由。
+
+## 批次 843（本批）：type(x) 判定面抽出 call_class.rs::type_name_of
+
+静态类型→Python 类型名 7 条映射抽纯函数＋逐条单测；gen.rs type 臂
+改消费分类器判定。全库内置测试 157/157。
