@@ -26663,3 +26663,9 @@ DataFrame kwarg ctor＋Counter 原臂逐字迁入；探针对齐 CPython；
 纯等价替换 42 处。A/B 定责：DataFrame 探针两态同崩＝车道 WIP 中间态回归，
 与本批无关（简化探针 3/3 覆盖替换面正常）。F.1 第 3 类裁决收口：
 「未知槽落 I64」决策此后唯一归属 Type::slot_fallback()。
+
+## 批次 840（本批）：len 臂整体迁入 call_len.rs——分类与发射同文件
+
+lower_len 发射体迁入（路由合同全 preserved）；len 四面探针对齐 CPython；
+全库内置测试 155/155。gen.rs 17880→17775。教训：结构手术失败即整文件
+重写（部件已知时最快），配平校验＋引用清扫一次成。
