@@ -10,6 +10,7 @@ mod call_assert;
 mod call_logging;
 mod call_re;
 mod call_class;
+mod call_ctor;
 mod call_json;
 mod call_num;
 mod call_print;
@@ -7439,43 +7440,6 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 // PY-A: `Counter(<list of str>)` must content-hash its keys,
                 // exactly like a dict literal — the plain shim keys by pointer
                 // and would count each literal site separately.
-                if method == "Counter" && args.len() == 1 {
-                    let is_counter = match receiver {
-                        None => self
-                            .py_member_aliases
-                            .get("Counter")
-                            .map(|(m, mem)| m == "collections" && mem == "Counter")
-                            .unwrap_or(false),
-                        Some(_) => self
-                            .py_member_target(receiver, method)
-                            .map(|(m, mem)| m == "collections" && mem == "Counter")
-                            .unwrap_or(false),
-                    };
-                    if is_counter {
-                        let arg_id = self.lower_expr(&args[0]);
-                        let elem_is_str = match self.type_map.get(&arg_id) {
-                            Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
-                                matches!(**e, Type::Str)
-                            }
-                            _ => false,
-                        };
-                        if elem_is_str {
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_collections_counter_new_str".to_string(),
-                                args: vec![arg_id],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(id, MirExpr::Var(id));
-                            // String-keyed Counter → keys() is Vec<str>.
-                            self.type_map.insert(
-                                id,
-                                Type::Named("map".to_string(), vec![Type::Str]),
-                            );
-                            return id;
-                        }
-                    }
-                }
                 // PY-A: `dataclasses.asdict(x)` — the receiver's struct type is
                 // known statically, so expand to a dict literal of its fields.
                 // There is no runtime reflection to build such a dict, and a
@@ -8049,80 +8013,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 // each named column becomes an EMPTY column; a schema-less frame
                 // becomes an empty map. 10 `columns=` + 4 `index=/dtype=` sites in
                 // REasyQuant's data/ML layer hit this.
-                if method == "DataFrame"
-                    && !args.is_empty()
-                    && args.iter().all(|a| {
-                        matches!(a, AstNode::Call { method: km, args: ka, .. }
-                            if km == "__kwarg__" && ka.len() == 2)
-                    })
+                // 批次 837：构造器族（DataFrame kwarg ctor／Counter）迁入
+                // gen/call_ctor.rs；入口判定读分类器（Special + 方法名）。
+                if classify_call(method) == CallClass::Special
+                    && (method == "DataFrame" || method == "Counter")
                 {
-                    let is_pd = match receiver.as_deref() {
-                        Some(AstNode::Var(v)) => {
-                            self.py_module_aliases.get(v).map_or(false, |m| m == "pandas")
-                        }
-                        None => self
-                            .py_member_target(&None, "DataFrame")
-                            .map_or(false, |(m, mem)| m == "pandas" && mem == "DataFrame"),
-                        _ => false,
-                    };
-                    if is_pd {
-                        let mut columns: Option<AstNode> = None;
-                        for a in args {
-                            if let AstNode::Call { method: km, args: ka, .. } = a {
-                                if km == "__kwarg__" && ka.len() == 2 {
-                                    if let AstNode::StringLit(n) = &ka[0] {
-                                        if n == "columns" {
-                                            columns = Some(ka[1].clone());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // A LITERAL column list is built as a dict literal of
-                        // `name: []` in MIR: a literal list lowers to a
-                        // StackArray (no `[cap|len]` header), so the runtime
-                        // helper below would read its length as 0 and produce an
-                        // EMPTY frame (measured: `len(df.columns)` was 0, not 2).
-                        // Non-literal lists (`list(fields)`, `df.columns`) are real
-                        // DynamicArrays and go through the helper.
-                        let data = match columns {
-                            Some(AstNode::ArrayLit(items)) => AstNode::DictLit {
-                                entries: items
-                                    .iter()
-                                    .map(|it| {
-                                        (
-                                            it.clone(),
-                                            AstNode::DynamicArrayLit {
-                                                elem_type: "str".to_string(),
-                                                elements: vec![],
-                                            },
-                                        )
-                                    })
-                                    .collect(),
-                            },
-                            Some(expr) => AstNode::Call {
-                                receiver: None,
-                                method: "zeta_df_with_columns".to_string(),
-                                args: vec![expr],
-                                type_args: vec![],
-                                structural: false,
-                            },
-                            None => AstNode::DictLit { entries: vec![] },
-                        };
-                        // Re-enter the ORDINARY path with a positional data
-                        // argument: it is the one that resolves the ctor symbol
-                        // (`pandas__DataFrame`) AND types the result
-                        // (`Named("DataFrame")`, which the later `.columns` /
-                        // `len()` dispatch needs). Emitting a bare free call here
-                        // left the result I64, so `e.columns` became a struct
-                        // field read + `array_len` → 0 (measured).
-                        return self.lower_expr(&AstNode::Call {
-                            receiver: receiver.clone(),
-                            method: "DataFrame".to_string(),
-                            args: vec![data],
-                            type_args: type_args.clone(),
-                            structural: false,
-                        });
+                    if let Some(nid) = self.lower_ctor(receiver, method, args, id) {
+                        return nid;
                     }
                 }
                 // `typing.cast(T, v)` is a NO-OP that only narrows the STATIC
