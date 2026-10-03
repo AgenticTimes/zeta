@@ -8,6 +8,7 @@
 mod call_set;
 mod call_class;
 mod call_json;
+mod call_num;
 mod call_print;
 mod call_len;
 mod call_str;
@@ -9270,34 +9271,18 @@ call, no NULL-handle dereference).",
                     return unit_id;
                 }
 
-                // PY-A: Python builtins abs/min/max/sum — dispatch by type
+                // 批次 830：abs/sum 臂体迁入 gen/call_num.rs（家族执行文件）；
+                // 入口判定（分类器）已在此前接好，这里只调用执行者。
                 if classify_call(method) == CallClass::NumericBuiltin
                     && receiver.is_none()
-                    && method == "abs"
+                    && (method == "abs" || method == "sum")
                     && args.len() == 1
                 {
-                    let arg_id = self.lower_expr(&args[0]);
-                    let f64_arg = matches!(
-                        self.type_map.get(&arg_id),
-                        Some(Type::F64) | Some(Type::F32)
-                    );
-                    // PY-A fix: f64 abs via the llvm.fabs.f64 intrinsic — a
-                    // runtime extern with an i64 signature coerced the float
-                    // bit pattern and returned garbage.
-                    let func = if f64_arg { "llvm.fabs.f64" } else { "zeta_abs_i64" };
-                    self.stmts.push(MirStmt::Call {
-                        func: func.to_string(),
-                        args: vec![arg_id],
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(
-                        id,
-                        if f64_arg { Type::F64 } else { Type::I64 },
-                    );
-                    return id;
+                    if let Some(nid) = self.lower_numeric_builtin(method, &args, id) {
+                        return nid;
+                    }
                 }
+
                 if receiver.is_none()
                     && (method == "min" || method == "max")
                     && args.len() >= 2
@@ -9387,39 +9372,6 @@ call, no NULL-handle dereference).",
                 if method == "sum" && crate::diagnostics::env_flag("ZETA_PROBE") {
                     eprintln!("PROBE sum seen, receiver_none={} args={}", receiver.is_none(), args.len());
                 }
-                if receiver.is_none() && method == "sum" && args.len() == 1 {
-                    let arg_id = self.lower_expr(&args[0]);
-                    let (func, extra) = match self.type_map.get(&arg_id).cloned() {
-                        Some(Type::DynamicArray(_)) => ("zeta_sum_vec".to_string(), Vec::new()),
-                        // 批次145: PyDynamic/未跟踪的实参（如未注解形参）在运行期
-                        // 是动态 vec —— 此前落到 zeta_sum_n 静态路径打印 0（t224 f）。
-                        Some(Type::PyDynamic) | None => {
-                            ("zeta_sum_vec".to_string(), Vec::new())
-                        }
-                        Some(Type::Array(_, ArraySize::Literal(n))) => (
-                            "zeta_sum_n".to_string(),
-                            vec![{
-                                let nid = self.next_id();
-                                self.exprs.insert(nid, MirExpr::IntLit(n as i64));
-                                self.type_map.insert(nid, Type::I64);
-                                nid
-                            }],
-                        ),
-                        _ => ("zeta_sum_n".to_string(), Vec::new()),
-                    };
-                    let mut call_args = vec![arg_id];
-                    call_args.extend(extra);
-                    self.stmts.push(MirStmt::Call {
-                        func,
-                        args: call_args,
-                        dest: id,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
-                    return id;
-                }
-                // 批次145 重放(批次123): builtin `getattr(obj, "name" [, default])`.
                 // 已知 struct（或可从构造调用恢复类名）→ 改写为 FieldAccess，
                 // 复用字段/零参方法分派与类型；字段不存在 → default；
                 // 未跟踪接收者 → 有 default 用 default（一次告警）；
