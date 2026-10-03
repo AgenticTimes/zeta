@@ -3331,3 +3331,287 @@ print(F)
          说明读取型已被修好，请把本用例的正确性期望改成 True/False 那一侧。实得调用: {calls:?}",
     );
 }
+
+/// 批次 184（主线 `e44a238f`，站点＝`infer_unannotated_returns` 那层嵌套 `infer` 里的
+/// `AstNode::DictLit` 臂——按**首条**键值推出 `map<K, V>` 的两个类型参数，
+/// 本树 HEAD `e53c0147` 上是 :4697-4710；同名臂另有一处在 `infer_global_ty`（现 :2002），
+/// 那一处本批五枚夹具形状的 `--dump-mir` 差异都是 0 行，未钉住，见覆盖面分工）／旧 #45 相邻族。
+///
+/// 症状（记录原文）：`_get is NOT implemented in this build`——全局类型表里它是
+/// `Named("map", [])`（**没有类型参数**）⇒ 下标后的值类型 I64 ⇒ `.get(source, 0.5)` 掉出 map 分派
+/// ⇒ 裸 `get` ⇒ 撞未实现桩停机。
+///
+/// 期望值来源：三份真值同批实拍（产物在 `/tmp/b10026/`）。
+/// ① CPython 同形源（类方法返回字典字面量＋`h.cfg().get("a", 0)`）打 `1`；
+/// ② 运行期＝同一份源 `-o` 编译后执行打 `1`（`s3bin`，rc=0）⇒ 与 ① 逐字相同；
+/// ③ 编译期＝`--dump-mir` 的 `main` 段 `type_map` 里三处 `map` 槽（id 7 / 13 / 17）都是
+///    `Named("map", [Str, I64])`（`s3_baseA.mir`），且调用面出现 `map_str_key`＋`py_map_contains`、
+///    没有裸 `get`。
+///    取段按 `== MIR <名> ==` 切，别打到文件末尾（10024 记的那格）。
+///
+/// 覆盖面分工（变异实测，日志 `/tmp/b10026/m_d4699_suite.log`／`m_d2004_suite.log`）：
+/// ① 撤本条那一臂（把 `:4697` 的 `match entries.first()` 换成恒 `None`）⇒ 47 条**只红本条**，
+///    红值 `Some(Named("map", []))`＝记录里的症状值。
+/// ② 撤另一处同名臂 `infer_global_ty`（现 :2002）⇒ 47 条读数一字不变（阴性结果；先在 CLI 侧
+///    对五枚夹具形状跑过 A/B，那一臂的差异行数也全为 0）。⇒ 本条只钉住 :4697 这一处，
+///    :2002 那处的症状面（全局字典变量直读）在本套夹具里没有对应形状。
+/// ③ ① 的红点落在"三处 `map` 槽带类型参数"那一行（末轮实跑＝`:3402:9`）：前置条件在它之前已先通过、
+///    `map_str_key` 那条正证据在它之后未执行到 ⇒ 这两处只是**防放松**，不写成"已证有效"。
+#[test]
+fn dict_literal_return_carries_map_type_args_at_the_callsite() {
+    let mirs = lower_all(
+        r#"class Holder:
+    def cfg(self):
+        return {"a": 1, "b": 2}
+
+h = Holder()
+print(h.cfg().get("a", 0))
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+
+    // 前置条件：`h.cfg()` 这个调用点真的在 main 里（没被内联掉／没被丢掉）。
+    let cfg_calls: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func.starts_with("Holder::cfg") => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !cfg_calls.is_empty(),
+        "前置条件：`main` 里要有 `Holder::cfg` 的调用点（没有＝这条链没跑到，用例是空的），实得 {:?}",
+        f.stmts.len()
+    );
+
+    // ③ 症状格：`map` 型槽必须带两个类型参数（首条键值推出来的 Str／I64）。
+    let map_slots: Vec<u32> = f
+        .type_map
+        .iter()
+        .filter(|(_, t)| matches!(t, Type::Named(n, _) if n == "map"))
+        .map(|(k, _)| *k)
+        .collect();
+    assert_eq!(
+        map_slots.len(),
+        3,
+        "前置条件：`main` 段该有三处 `map` 型槽（返回槽＋链上两处接收者），实得 {map_slots:?}",
+    );
+    for id in &map_slots {
+        assert_eq!(
+            f.type_map.get(id),
+            Some(&Type::Named(
+                "map".to_string(),
+                vec![Type::Str, Type::I64],
+            )),
+            "`map` 槽 id={id} 该带首条推出来的两个类型参数 `<Str, I64>`（184 的症状正是退成\
+             `Named(\"map\", [])` ⇒ 下标值型落 I64 ⇒ `.get` 掉出 map 分派），实得 {:?}",
+            f.type_map.get(id)
+        );
+    }
+
+    // 正证据：`.get` 仍在 map 面上分派，没有掉成裸 `get` 桩。
+    let calls = call_symbols(f);
+    assert!(
+        calls.iter().any(|c| c == "map_str_key"),
+        "`get(\"a\", 0)` 该走 map 的键面（`map_str_key`），实得调用: {calls:?}",
+    );
+    assert!(
+        !calls.iter().any(|c| c == "get" || c.starts_with("get_")),
+        "184 的症状是掉成裸 `get`／`get_3` 撞未实现桩停机，这类符号不该出现，实得调用: {calls:?}",
+    );
+}
+/// 全局变量的环境写入／读回槽位：`zeta_env_set(名字槽, 值槽)` 与
+/// `zeta_env_get(名字槽) -> 目的槽`，只收"名字槽的表达式是 `StringLit(name)`"的那些。
+/// 返回（写入的值槽列表, 读回的目的槽列表），按语句出现顺序。
+fn env_slots(m: &Mir, name: &str) -> (Vec<u32>, Vec<u32>) {
+    let named = |slot: u32| matches!(m.exprs.get(&slot), Some(MirExpr::StringLit(s)) if s == name);
+    let mut writes = Vec::new();
+    let mut reads = Vec::new();
+    for s in &m.stmts {
+        match s {
+            MirStmt::VoidCall { func, args } if func == "zeta_env_set" && args.len() == 2 => {
+                if named(args[0]) {
+                    writes.push(args[1]);
+                }
+            }
+            MirStmt::Call { func, args, dest, .. } if func == "zeta_env_get" && args.len() == 1 => {
+                if named(args[0]) {
+                    reads.push(*dest);
+                }
+            }
+            _ => {}
+        }
+    }
+    (writes, reads)
+}
+
+/// 按符号名取出该调用的实参槽列表（只看顶层语句，本套夹具的调用都是顶层的）。
+fn call_args(m: &Mir, sym: &str) -> Vec<Vec<u32>> {
+    m.stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, args, .. } if func == sym => Some(args.clone()),
+            MirStmt::VoidCall { func, args } if func == sym => Some(args.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 批次 172（主线 `9e9c16c1`，站点＝`infer_global_ty` 里带 `method == "__collect__"` 守卫的
+/// 那条臂，本树 HEAD `e53c0147` 上是 `src/middle/resolver/resolver.rs:2079`）。
+///
+/// 症状（记录原文）：列表推导式赋给全局变量时，全局类型表推不出它的类型 ⇒ 变量读回
+/// （`zeta_env_get`）整段消失，长度与下标都直接拿写入槽算 ⇒ 非确定性段错误。
+///
+/// 期望值来源：三份真值同批实拍（产物在 `/tmp/b10027/`）。
+/// ① CPython 同形源（`def to_bs(c): return "B" + c`／`CODES = [to_bs(c) for c in ["a","b"]]`）
+///    打 `2` 和 `Ba`；
+/// ② 运行期＝同一份源 `-o` 编译后执行打 `2` 和 `Ba`（`f172bin`，rc=0）⇒ 与 ① 逐字相同；
+/// ③ 编译期＝`--dump-mir` 的 `main` 段：`zeta_env_set` 的值槽（id 16）与两次 `zeta_env_get`
+///    的目的槽（id 21／28）都是 `DynamicArray(Str)`（`f172_base.mir`），`len` 打在读回槽上
+///    走 `vec_len`、下标打在读回槽上走 `array_get`。
+///    取段按 `== MIR <名> ==` 切，别打到文件末尾（10024 记的那格）。
+///
+/// 覆盖面分工（变异实测，`main` 段差异行数；臂＝在 HEAD 源码上原地改那一支再重编）：
+/// ① 撤本条那一臂（`:2079` 的守卫改成 `method == "__collect__" && false`）⇒ 只有本夹具的
+///    `main` 段变（82 行／全文件 120 行）：两次 `zeta_env_get` 消失、`CODES` 的名字槽消失、
+///    读回槽 21／28 的 `DynamicArray(Str)` 没了；另两枚夹具 0 行。
+/// ② 撤同名另一处臂（`infer_unannotated_returns` 里的 `__collect__` 臂，现 :4728）＝未变异；
+///    本条只钉 `:2079` 这一处。
+/// ③ 全局字典字面量那一族由 10026 的第 47 条钉住（站点＝`infer_unannotated_returns` 的
+///    `DictLit` 臂），两条款形状不同（列表推导式／字典字面量返回），不互为备份。
+/// ④ 红点末轮实跑落在 `tests/regression_history.rs:3503:5`（前置条件那一行：读回槽空）⇒
+///    它之后的症状格与 `vec_len`／`array_get` 正证据**未执行到**，那两处只算**防放松**，
+///    不写成"已证有效"。
+#[test]
+fn global_list_comprehension_keeps_element_type_at_env_reads() {
+    let mirs = lower_all(
+        r#"def to_bs(c):
+    return "B" + c
+
+CODES = [to_bs(c) for c in ["a", "b"]]
+print(len(CODES))
+print(CODES[0])
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let (writes, reads) = env_slots(f, "CODES");
+
+    assert_eq!(
+        (writes.len(), reads.len()),
+        (1, 2),
+        "前置条件：全局 `CODES` 该有一次 `zeta_env_set` 写入＋两次 `zeta_env_get` 读回\
+         （172 的症状正是读回整段消失），实得 写入槽 {writes:?}／读回槽 {reads:?}",
+    );
+
+    // 症状格：写入槽与每一个读回槽都带元素型 `DynamicArray(Str)`。
+    for (what, slot) in std::iter::once(("写入", writes[0]))
+        .chain(reads.iter().map(|&r| ("读回", r)))
+    {
+        assert_eq!(
+            f.type_map.get(&slot),
+            Some(&Type::DynamicArray(Box::new(Type::Str))),
+            "`CODES` 的{what}槽 id={slot} 该是 `DynamicArray(Str)`（推导式元素按 `to_bs` 的返回型推出来），\
+             实得 {:?}",
+            f.type_map.get(&slot)
+        );
+    }
+
+    // 正证据：`len`／下标真的打在**读回槽**上，不是绕过读回直接用写入槽。
+    let lens = call_args(f, "vec_len");
+    let gets = call_args(f, "array_get");
+    assert_eq!(
+        lens.first().map(|a| a.first().copied()),
+        Some(Some(reads[0])),
+        "`len(CODES)` 该把 `zeta_env_get` 的读回槽交给 `vec_len`（172 的症状是这一步直接用写入槽），\
+         实得 {lens:?}"
+    );
+    assert_eq!(
+        gets.first().map(|a| a.first().copied()),
+        Some(Some(reads[1])),
+        "`CODES[0]` 该把 `zeta_env_get` 的读回槽交给 `array_get`，实得 {gets:?}"
+    );
+
+    // 运行期形状：两个打印各走一次自己的打印机（元素是 Str，长度是 I64）。
+    assert_eq!(call_args(f, "println_i64").len(), 1, "`print(len(CODES))` 该有一次 `println_i64`");
+    assert_eq!(call_args(f, "println_str").len(), 1, "`print(CODES[0])` 该有一次 `println_str`");
+}
+
+/// 批次 300（主线 `610b8db5`，站点＝`module_global_types_uncached` 里"未标注 `def` 的返回类型
+/// 从自身 `return` 反推"的补偿块，本树 HEAD `e53c0147` 上是 `resolver.rs:2425-2462`，
+/// 被变异的循环在 :2445）。
+///
+/// 症状（记录原文）：模块级全局变量赋成**未标注函数**的调用结果（`pf = make(…)`）时，
+/// 全局类型表里它带 `Tuple([])`（＝没有返回型）⇒ 之后每一次读取都按空结构体处理。
+///
+/// 期望值来源：三份真值同批实拍（产物在 `/tmp/b10027/`）。
+/// ① CPython 同形源（`def tags(): return ["a", "b"]`／`T = tags()`）打 `2` 和 `a`；
+/// ② 运行期＝同一份源 `-o` 编译后执行打 `2` 和 `a`（`f171bin`，rc=0）⇒ 与 ① 逐字相同；
+/// ③ 编译期＝`--dump-mir` 的 `main` 段：`zeta_env_set` 的值槽（id 5）与两次 `zeta_env_get`
+///    的目的槽（id 10／17）都是 `DynamicArray(Str)`（`f171_base.mir`）。
+///
+/// 覆盖面分工（变异实测，`main` 段差异行数）：
+/// ① 撤本条那一臂（:2445 的 `fn_rets.iter_mut()` 改成 `.iter_mut().take(0)`）⇒ 只有本夹具的
+///    `main` 段变（82 行／全文件 120 行）：两次 `zeta_env_get` 消失、`T` 的名字槽消失、
+///    读回槽 17 从 `DynamicArray(Str)` 退成 `I64`；172 那枚夹具 0 行。
+/// ② 记录里的原形状（`pf = make(…)` ＋ `print(pf.tag)`，类实例）在这**三臂**变异下差异行数都是 0
+///    ⇒ 那个形状在本套里打不到这一支（10024 记的"登记形状必须实测"再次成立）；本条改用
+///    列表返回那一形，`pf.tag` 那形仍未锁。
+/// ③ 同块的批次 600 补充（`::` 限定的类方法也进补偿）与 171 的 `fn_rets.get(method)` 那一臂
+///    （现 :2232）本批未变异；:2232 那臂在三枚夹具形状下差异行数均为 0（阴性，未钉住）。
+/// ④ 红点末轮实跑落在 `tests/regression_history.rs:3583:5`（前置条件那一行：读回槽空）⇒
+///    它之后的症状格与 `vec_len`／`array_get` 正证据**未执行到**，那两处只算**防放松**，
+///    不写成"已证有效"。
+#[test]
+fn global_assigned_from_unannotated_call_keeps_return_type_at_env_reads() {
+    let mirs = lower_all(
+        r#"def tags():
+    return ["a", "b"]
+
+T = tags()
+print(len(T))
+print(T[0])
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let (writes, reads) = env_slots(f, "T");
+
+    assert_eq!(
+        (writes.len(), reads.len()),
+        (1, 2),
+        "前置条件：全局 `T` 该有一次 `zeta_env_set` 写入＋两次 `zeta_env_get` 读回\
+         （300 的症状是返回型推不出⇒读回整段消失），实得 写入槽 {writes:?}／读回槽 {reads:?}",
+    );
+
+    for (what, slot) in std::iter::once(("写入", writes[0]))
+        .chain(reads.iter().map(|&r| ("读回", r)))
+    {
+        assert_eq!(
+            f.type_map.get(&slot),
+            Some(&Type::DynamicArray(Box::new(Type::Str))),
+            "`T` 的{what}槽 id={slot} 该带未标注函数自身 `return` 反推出的 `DynamicArray(Str)`\
+             （300 之前这一格是 `Tuple([])`／退化成 `I64`），实得 {:?}",
+            f.type_map.get(&slot)
+        );
+    }
+
+    let lens = call_args(f, "vec_len");
+    let gets = call_args(f, "array_get");
+    assert_eq!(
+        lens.first().map(|a| a.first().copied()),
+        Some(Some(reads[0])),
+        "`len(T)` 该把读回槽交给 `vec_len`，实得 {lens:?}"
+    );
+    assert_eq!(
+        gets.first().map(|a| a.first().copied()),
+        Some(Some(reads[1])),
+        "`T[0]` 该把读回槽交给 `array_get`，实得 {gets:?}"
+    );
+
+    assert_eq!(call_args(f, "println_i64").len(), 1, "`print(len(T))` 该有一次 `println_i64`");
+    assert_eq!(call_args(f, "println_str").len(), 1, "`print(T[0])` 该有一次 `println_str`");
+}
