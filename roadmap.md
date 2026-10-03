@@ -26669,3 +26669,9 @@ DataFrame kwarg ctor＋Counter 原臂逐字迁入；探针对齐 CPython；
 lower_len 发射体迁入（路由合同全 preserved）；len 四面探针对齐 CPython；
 全库内置测试 155/155。gen.rs 17880→17775。教训：结构手术失败即整文件
 重写（部件已知时最快），配平校验＋引用清扫一次成。
+
+## 批次 841（本批）：无接收者内建族第一片迁入 call_builtin.rs
+
+map/filter/chr/ord/divmod/dict 逐字迁入 lower_builtin_1；探针九项对齐
+CPython；全库 156/156。zip 起余表段原位（批 842 续迁）。教训三条入册
+（use 导入方法/多行 if 块尾/return 表达式形）。
