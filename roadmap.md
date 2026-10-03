@@ -26635,3 +26635,8 @@ import 应一次算齐；③原位替换重跑报错＝已成功的误报（幂�
 lower_assert 迁入；首验链接错 _assert undefined＝守卫笔误（Special 永不
 命中），修为分类器 Assert 变体＋测试。双探针（真过/假响亮失败）✓；
 全库内置测试 156/156。gen.rs 17804→17801。
+
+## 批次 835（本批）：re.sub 族迁入 call_re.rs＋分类器补 RegularSub
+
+lower_re_sub 迁入；分类器 RegularSub 变体＋入口消费。探针双例对齐
+CPython；全库 156/156。
