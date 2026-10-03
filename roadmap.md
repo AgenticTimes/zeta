@@ -26730,3 +26730,8 @@ float 注册表项符号 zeta_float_i64 把 str 句柄当 i64 转 double（实�
 
 Match 表达式发射体迁入 lower_match_expr（scrutinee/arms/id 签名）。
 match 探针 five ✓；全库 157/157。gen.rs 15777→15177。
+
+## 批次 852（本批）：UnaryOp 臂（185 行）迁入 gen/call_unary.rs——零替换法
+
+负号/位非/not 发射体原臂逐字迁入 lower_unary_op。行为探针 -5/-2.5
+全对齐 CPython；全库 157/157。gen.rs 15177→15002。
