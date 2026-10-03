@@ -2013,3 +2013,245 @@ print(d.legs)
         "只有 `print(d.legs)` 那一格按整数打印（真值 4），实得调用: {calls:?}"
     );
 }
+
+/// 批次 600（旁路 cleanup 车道编号，代码 `1b1946e9`，台账行 `worktree.md:466`；
+/// **编号与主树重合**：`worktree.md:190` 那行"批次 600"是 bootstrap 车道的全量检查批
+/// ⇒ 引用以哈希 `1b1946e9` 为身份。站点 `src/middle/resolver/resolver.rs:3826` 的
+/// `refine_ctor_field_types`，调用点 `src/middle/resolver/typecheck.rs:24`）：
+/// 构造器调用点实参的字面量型别要写回类别的字段型别表。
+/// 症状（600 记录 ＋ 该批探针实拍）：`self.tag = tag` 脱糖后字段型停在解析期的 `i64`
+/// 默认值，调用点 `Animal("Generic")` 的字符串实参没有被读回来 ⇒ 读字段的槽按整数选，
+/// 运行期把字符串指针当整数打。修法＝类型检查开头补一趟 `refine_ctor_field_types`
+/// （扫 `Assign(Var, Call(class-ctor, args))` 形、param→field 同名映射、只升级 `i64`
+/// 默认档，拼写 Str/F64/Bool/`list<elem>`）；该批探针实拍 `Animal` fields 变成
+/// `[("name","str")]`。
+/// 形状说明（本批 CLI A/B 实拍，日志 `/tmp/b10020v2/ab.log`）：字段读发生在**方法体内**
+/// （`return self.tag + " says hi"`）才吃到那张字段表；把类型检查里那一趟摘掉，四处
+/// 方法体的字段读槽从 Str 变 I64。而模块级 `print(a.name)` 那种直接读法在摘臂前后
+/// 读数一字不变（形参槽由调用点证据另一条路证成 Str），所以那种写法不能证明这一臂。
+/// 期望值来源：同一份源在 CPython 下的真值 `Generic says hi`／`Rex barks`
+/// （zeta 编译后运行逐字相同）＋ 编译期＝字段读槽 Str；撤臂实拍的 I64 就是改前形状。
+/// 边界（本条不覆盖）：同批的 `list<elem>` 与 `Bool` 升级支；跨类继承字段的布局补齐
+/// （批次 621 那条用例覆盖）；本形的运行期输出在撤臂前后相同，故本条钉的是类型标记面。
+#[test]
+fn ctor_field_table_upgrade_reaches_the_field_read_inside_methods() {
+    let mirs = lower_all(
+        r#"class Animal:
+    def __init__(self, tag):
+        self.tag = tag
+    def speak(self):
+        return self.tag + " says hi"
+
+class Dog(Animal):
+    def speak(self):
+        return self.tag + " barks"
+
+a = Animal("Generic")
+d = Dog("Rex")
+print(a.speak())
+print(d.speak())
+"#,
+    );
+
+    let mut reads = 0;
+    for m in &mirs {
+        let hits: Vec<u32> = m
+            .exprs
+            .iter()
+            .filter_map(|(id, e)| match e {
+                MirExpr::FieldAccess { field, .. } if field == "tag" => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for id in hits {
+            reads += 1;
+            assert_eq!(
+                m.type_map.get(&id),
+                Some(&Type::Str),
+                "`{}` 里 `self.tag` 的接收槽（id={id}）该拿到字段表升级后的 Str（撤掉那一趟＝停在解析期 i64 默认），实得 {:?}",
+                m.name.clone().unwrap_or_default(),
+                m.type_map.get(&id)
+            );
+        }
+    }
+    assert!(
+        reads >= 2,
+        "前置条件（正证据）：两个同名方法的字段读都要降出来，实得 {reads} 处"
+    );
+}
+
+/// 批次 399（代码 `ee58b7d8`，站点 `src/middle/resolver/resolver.rs` 两处：
+/// "按体恢复返回类型"内层 `infer` 的算术形状臂（现 :4676，任一浮点操作数 ⇒ F64），
+/// 以及 `sig_params_snapshot`（现 :4557）作为覆盖层传进恢复（现 :2424、:5137））：
+/// 未标注 `def` 的返回槽类型与 LLVM 签名不许有两个独立来源。
+/// 症状（缺陷记录＝在册夹具 `tests/python_style/t435_crossfn_return_slot_type.z` 头部原文）：
+/// `def scale(v): return v * 1.0` 的被调方签名已经是 `define double @scale(double)`，
+/// 而调用点那个空槽的类型来自 resolver 的声明表——未标注 `def` 在那张表里是
+/// `Tuple([])`（unit），于是 double 被写进 int 槽、按位重读成 `4602678819172646912`
+/// （0.5 的 IEEE-754 位型；记录里另一格 `forward(1.25)` 打 `4608308318706860032`）。
+/// 修法两条臂：体的算术形状（浮点操作数 ⇒ F64）与纯转发时参数的**调用点证据类型**
+/// （参数在 AST 里恒为 `"dyn"`，而 `funcs` 表已按调用点把它证成 F64）。
+/// 期望值来源：在册夹具 t435 的 `// expect:` 前两行（`scale=0.5`／`copied=0.5`）＋
+/// 同一份源在 CPython 下的真值 `0.5`／`1.25`（zeta 编译后运行逐字相同），
+/// 编译期＝两个调用点目的槽 F64 且走 `println_f64`。
+/// 覆盖面分工（变异实测，日志 `/tmp/b10020v2/mutation_2.log`）：撤签名表覆盖层
+/// （`sig_params_snapshot` 换成空表）红在 `forward` 那条断言，实得 `PyDynamic`＝记录里
+/// "恢复落空"的形状；同一笔变异同时打红批次 407 那条用例（两条共用这一臂，不互为备份）。
+/// 而**撤下浮点操作数那一支（算术形状臂）本套 33 条读数一字不变**——现树上 `scale` 的
+/// 目的槽 F64 不由那一支决定（成因未定位，登记成余项）。所以 `scale` 那条断言只是把
+/// 在册夹具 t435 的头两行读数在编译期锁住（防放松），不是对算术形状臂的覆盖证明。
+/// 边界（本条不覆盖）：同批另外两处改动在 `mir.rs` 与 codegen（`signature_ret_ty` 与
+/// `infer_fn_return_type` 的委托），本套只走到降形；记录点名的两格未收窄项
+/// （声明与实现不一致 `-> i64` 却 `return 2.7`＝任务 #33；只有整数证据的 `/ % //`
+/// 仍按整数走＝numeric 方言族）本条不查。
+#[test]
+fn crossfn_return_slot_and_forwarded_param_share_one_table() {
+    let mirs = lower_all(
+        r#"def scale(v):
+    return v * 1.0
+
+def forward(v):
+    return v
+
+n = scale(0.5)
+m = forward(1.25)
+print(n)
+print(m)
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let mut scale_dest: Vec<u32> = Vec::new();
+    let mut forward_dest: Vec<u32> = Vec::new();
+    for stmt in &f.stmts {
+        if let MirStmt::Call { func, dest, .. } = stmt {
+            if func.starts_with("scale") {
+                scale_dest.push(*dest);
+            } else if func.starts_with("forward") {
+                forward_dest.push(*dest);
+            }
+        }
+    }
+    assert_eq!(
+        (scale_dest.len(), forward_dest.len()),
+        (1, 1),
+        "前置条件：两个调用点都要降出来，实得 scale={scale_dest:?} forward={forward_dest:?}"
+    );
+
+    let d = scale_dest[0];
+    assert_eq!(
+        f.type_map.get(&d),
+        Some(&Type::F64),
+        "`scale(0.5)` 的目的槽 id={d} 该是 F64（在册夹具 t435 的头两行读数＝scale=0.5/copied=0.5；改前＝调用点空槽按声明表拿 unit、double 写进 int 槽按位重读成 4602678819172646912），实得 {:?}",
+        f.type_map.get(&d)
+    );
+    let d = forward_dest[0];
+    assert_eq!(
+        f.type_map.get(&d),
+        Some(&Type::F64),
+        "`forward(1.25)` 的目的槽 id={d} 该从签名表拿到参数的调用点证据型 F64（改前＝AST 里参数恒为 dyn ⇒ 恢复落空 ⇒ 按整数打 1.25 的位型），实得 {:?}",
+        f.type_map.get(&d)
+    );
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_f64").count(),
+        2,
+        "两处 `print` 都该按浮点选打印器（真值 0.5／1.25），实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝double 按位重读成整数打印，`println_i64` 不应出现，实得调用: {calls:?}",
+    );
+}
+
+/// 批次 400（代码 `4ce47f9e`，站点 `src/middle/resolver/resolver.rs` 里
+/// "这条参数还钉不钉得动"那道闸门：冲突计算现 :1825（`clash`），回退现 :1859-1873
+/// （`conflicts.insert` ＋ 形参型回 `PyDynamic` ＋ AST 拼写回 `"dyn"`））：
+/// 一条未标注参数在两个调用点收到**不同族**的实参时，不许被单侧证据钉死。
+/// 症状（缺陷记录＝在册夹具 `tests/python_style/t436_dyn_param_conflicting_args.z`
+/// 头部原文，改前图证也是原文）：`show("hi")` 那条调用点的证据把参数 `v` 全局钉成 str，
+/// 于是 `show(3)` 的接收槽也判为 Str、走 `println_str` ⇒ 把整数 3 当 `char*` 解引用
+/// ⇒ SIGSEGV（rc=139，整个程序连一行都没输出）。
+/// 现树规则（同批记录）：i64 与 f64 算同族（钉 f64，整数实参在调用点加宽，两侧值都对）；
+/// 跨族（str×数值、句柄×其余）不可合并 ⇒ 参数保持动态，编译期给一次警告。
+/// 期望值来源：在册夹具的两行 `// expect:`（`3`／`14`）＋ CPython 同输入真值逐字相同；
+/// 编译期＝`show` 的形参槽是 `PyDynamic`（记录："参数保持动态"）、两个调用点的实参槽
+/// 一侧 Str 一侧 I64（正证据：两种族别确实都到了同一形参）、动态槽不被 `println_str`
+/// 直接吃（改前形状＝`VoidCall { func: "println_str", args: [<被钉成 Str 的槽>] }`）。
+/// 边界（本条不覆盖）：动态槽身上仍没有类型标记，str 值打印的是指针地址（在册夹具头
+/// 自陈的残留缺口，故本条不回显 str 侧的值）；同族合并（i64×f64 钉 f64）那一支、
+/// 以及 `--report-untyped` 的记录面（`ambiguous_dyn_params`）属 CLI 输出面，本条不查。
+#[test]
+fn conflicting_argument_kinds_across_callsites_leave_parameter_dynamic() {
+    let mirs = lower_all(
+        r#"def show(v):
+    return v
+
+def main() -> i64:
+    show("hi")
+    n = show(3)
+    print(n)
+    print(n + 11)
+    return 0
+"#,
+    );
+
+    let show = mir(&mirs, "show");
+    let (pname, pslot) = show.param_indices[0].clone();
+    assert_eq!(pname, "v", "前置条件：形参名要传进来");
+    assert_eq!(
+        show.type_map.get(&pslot),
+        Some(&Type::PyDynamic),
+        "冲突实参下的形参 `{pname}`（id={pslot}）该保持动态（改前＝被 str 侧证据钉成 Str），实得 {:?}",
+        show.type_map.get(&pslot)
+    );
+
+    let f = mir(&mirs, "main");
+    let sites: Vec<(u32, u32)> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, args, dest, .. } if func.starts_with("show") => {
+                Some((args[0], *dest))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sites.len(), 2, "两个调用点都要降出来，实得 {sites:?}");
+    let arg_types: Vec<Option<&Type>> =
+        sites.iter().map(|(a, _)| f.type_map.get(a)).collect();
+    assert!(
+        arg_types.contains(&Some(&Type::Str)) && arg_types.contains(&Some(&Type::I64)),
+        "前置条件（正证据）：两个调用点的实参槽要一侧 Str、一侧 I64，实得 {arg_types:?}"
+    );
+    for (_, d) in &sites {
+        assert_eq!(
+            f.type_map.get(d),
+            Some(&Type::PyDynamic),
+            "调用点目的槽 id={d} 该随参数保持动态，实得 {:?}",
+            f.type_map.get(d)
+        );
+    }
+
+    for stmt in &f.stmts {
+        if let MirStmt::VoidCall { func, args } = stmt {
+            if func == "println_str" {
+                for a in args {
+                    assert_ne!(
+                        f.type_map.get(a),
+                        Some(&Type::PyDynamic),
+                        "`println_str` 不许直接吃动态槽 id={a}（改前＝动态槽被钉成 Str 后按字符串解引用整数），实得调用: {func}"
+                    );
+                }
+            }
+        }
+    }
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_i64").count(),
+        1,
+        "只有 `print(n + 11)` 那一格按整数打印（真值 14），实得调用: {calls:?}"
+    );
+}
