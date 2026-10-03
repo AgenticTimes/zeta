@@ -26564,3 +26564,11 @@ lower_to_string 通道选择抽纯函数 to_string_channel（免转面 None／
 F64/Bool/map/vec/未知 i64 各归其道；dict 拼写同路＝815 规则；元组
 特算留 gen.rs）。三合同：免转 None、容器标量归道、未知 i64 兜底钉。
 str 容器渲染探针 {/[ 对齐 CPython。gen.rs 18612→18597。
+
+## 批次 823（本批）：Call 臂路由分类函数 classify_call——判定/发射分离的骨架落地
+
+gen/call_class.rs：CallClass 枚举八变体＋纯函数 classify_call；三条设计
+合同钉进测试（集合两族互斥／内建族逐个路由／**Unknown 不越权**——猜家族
+＝816 intersection 误入变异族同形）。后续家族拆分＝枚举加变体＋执行文件
+实现，分类函数是唯一路由决策点；json.dumps 搬运顺延到分类器就位之后。
+全库内置测试 151/151。
