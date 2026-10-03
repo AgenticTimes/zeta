@@ -26682,3 +26682,9 @@ zip/any/all/enumerate/list/int/float/sorted 表段逐字迁入
 lower_builtin_2；len 臂归 call_len.rs（gen.rs 17471→17441）。
 新登记 #272：float(str) 静默错值（注册表路由先于内建表截胡，存量）。
 探针 zip/enumerate/sorted 对齐 CPython；全库 156/156。
+
+## 批次 842（本批）：内建族第二片迁入 call_builtin.rs＋len 臂归族
+
+lower_builtin_2（zip/any/all/enumerate/list/int/float/sorted 表段逐字）
+＋lower_len 归 call_len.rs（与 819 classify_len 同文件）。五探针对齐
+CPython；全库 156/156。#272 float(str) 登记并附内建表 Str 路由。
