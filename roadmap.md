@@ -26712,3 +26712,9 @@ struct 字段读/枚举载荷/类变量读/dotted module 路由原臂逐字迁�
 lower_field_access（返回 u32）。三处修（TypeDecl r#gen 路径/HashMap
 import/expr→base 别名）。类变量读 A/B 实测存量缺口（批 610 部分覆盖）
 非本批引入。实例属性探针 Rex ✓；全库 157/157。gen.rs 16308→15771。
+
+## 批次 849（本批）：稳定化——call_ctor.rs 签名补齐＋lib.rs 清理
+
+call_ctor.rs 经多次重叠修改后签名脱节；统一补齐 method/type_args
+参数＋括号＋lib.rs 死声明。全库 157/157。len(df) 崩＝车道 WIP 中间态
+（839 A/B 定责在案）。
