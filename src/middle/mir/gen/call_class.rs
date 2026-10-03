@@ -37,6 +37,11 @@ pub enum CallClass {
 /// 纯函数：方法名 → 家族分类。无副作用。
 pub fn classify_call(method: &str) -> CallClass {
     match method {
+        // 批次 887（#278/t79）：构造器族的分类器映射自 837 起缺失——
+        // 消费门（call_dispatch 的 Special + 方法名）从未匹配 ⇒ Counter 的
+        // 内容哈希构造路由死了，`Counter(["a","b","a"])` 落回指针键 shim
+        // （len=5、计数全 1）。补上映射即复活 837 的整套入口判定。
+        "Counter" | "DataFrame" => CallClass::Special,
         "add" | "discard" | "remove" => CallClass::SetMutation,
         "intersection" => CallClass::SetIntersection,
         "len" => CallClass::Len,
@@ -55,6 +60,15 @@ pub fn classify_call(method: &str) -> CallClass {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctor_family_routes_special() {
+        // 887 回归钉（#278/t79）：构造器族的分类器映射自 837 缺失——消费门
+        // （Special + 方法名）从未匹配，Counter 的内容哈希构造死了
+        // （Counter(["a","b","a"]) len=5、计数全 1）。DataFrame 同门。
+        assert_eq!(classify_call("Counter"), CallClass::Special);
+        assert_eq!(classify_call("DataFrame"), CallClass::Special);
+    }
 
     #[test]
     fn set_family_split_is_exact() {

@@ -28895,3 +28895,21 @@ stmt_misc.rs（lower_await_expr／lower_block_expr，均写 id 槽 ⇒ 签名 `-
 
 验证：编译零错误；内置单元测试 157/157；历史探针七套零差异；
 **全量差分（--group 50）match=2845/2845＝100%**。
+
+## 批次 887（2026-10-04，**修复批：#278 再收 2 例——分类器缺构造器族映射＋886 委托丢返回值自纠**）
+
+**① t79_counter_most_common**（len=5、计数全 1）：`classify_call` 自 837 起
+**没有任何方法映射到 CallClass::Special**——call_dispatch 的构造器消费门
+（Special + 方法名）从未匹配 ⇒ Counter 的内容哈希构造路由（py_collections_
+counter_new_str）死亡，落回指针键 shim。修＝分类器补 `"Counter" | "DataFrame"
+=> CallClass::Special`＋单测钉（ctor_family_routes_special）。DataFrame kwarg
+构造同门复活（t274_df_columns_kwarg 一并转好）。
+
+**② t33_starred_walrus 新红自纠**：886 的 Assign-expr 委托**丢弃返回值**
+（866 教训被自己违反）——walrus `n := len(data)` 返回的活槽被扔掉，派发器退回
+缺省 IntLit(0)，`> 2` 恒假。修＝委托改 `return self.lower_assign_expr(...)`。
+全委托复核：其余表达式臂委托均正确转发（Await/Block 直写 id 槽无需转发）。
+
+**验证**：python_style **477 过／2 FAIL**（t79/t274 转好，余 t217_np_where／
+t813——t813 的张力已登 #279）；全量差分（--group 50）match=2845/2845＝100%；
+内置单元测试 158/158（新增分类器钉）；历史探针七套零差异。

@@ -3047,7 +3047,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             // Match is handled below with full if-else chain lowering.
             AstNode::Assign(lhs, rhs) => {
                 // 批次 886：Assign 表达式臂迁入 gen/stmt_assign.rs（869 法）。
-                self.lower_assign_expr(lhs, rhs);
+                // 批次 887：返回值必须转发（866 教训）——walrus `n := len(d)`
+                // 的活槽被丢弃后派发器退回缺省 IntLit(0)，`> 2` 恒假、print 跳过
+                // （t33 新红的根因）。
+                return self.lower_assign_expr(lhs, rhs);
             }
             AstNode::AssignOp { .. } => {
                 // PY-A: `i += 1` in expression position (an assignment match
