@@ -28203,3 +28203,26 @@ pub(crate) 自由函数，子模块经 super 路径引用）。gen.rs 14965→14
 验证：编译零错误；内置单元测试 157/157；行为探针七面与 CPython 逐字对齐
 （语句 if／if-else／elif 链／表达式 if 值捕获／字符串分支型回填／分支含
 return／嵌套 if）；batch_gate GREEN。
+
+## 批次 865（2026-10-03，**重构批：Assign 臂（582 行，lower_ast_inner 最大臂）迁入 gen/stmt_assign.rs**）
+
+零替换法＋行号精确手术：`lower_ast_inner` 的 `AstNode::Assign` 臂迁入新家族文件
+`gen/stmt_assign.rs::lower_assign_stmt(&mut self, lhs: &AstNode, rhs: &AstNode)`。
+臂体一字未动；签名适配 15 处（`&**lhs`→`lhs`×11、`&**rhs`→`rhs`×4）＋两处
+`rhs.clone()` 补 Box（AstNode::Assign 构造点）＋导入补 ArraySize。
+gen.rs 14735→14158（净 -577）。
+
+**新发现缺陷 #274（非本批引入，c21f99b4 复现在案）**：调用返回元组解包的字符串
+元素按指针字渲染（`p, q = pair()` 打堆地址，CPython 真值 `abc def`）——与 #273
+同族的格标签读取面缺口。已登记 backlog，探针其余六面对齐。
+
+验证：编译零错误；内置单元测试 157/157；行为探针七面中六面与 CPython 逐字对齐
+（单赋值／并行赋值交换（#190 面）／字面量元组解包／下标赋值／类变量写（批 572 面）／
+带注解赋值），调用返回解包一面按 #274 存量差异如实登记。
+
+**batch_gate RED（十批界全局跑，回归经查为存量）**：match=2843 < 基线 2845，两例
+`class_inheritance_field`／`class_variable_crash`（类变量面，`Counter.count` 打 0
+期望 2）。逐批干净工作树重建复测：批 859/862/863/864 全部同坏 ⇒ 与本批无关，回归
+窗口在更早（≤859，772 基线采集时仍好）；初步 git bisect 结果被共享 target/ 的增量
+构建污染作废（教训 #1 复现），改用每提交独立工作树干净构建二分中，引入批次下批记录。
+本批 865 的提交判定：探针行为面与改前二进制一致（含两例存量坏面），迁移本身行为保持。
