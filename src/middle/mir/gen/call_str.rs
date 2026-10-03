@@ -141,3 +141,80 @@ mod tests {
         }
     }
 }
+
+/// 批次 822：to_string 通道的**纯判定面**——给定静态类型，返回该走的
+/// 转换函数名；None = 无需转换（值已经是字符串形态：Str/PyPath）。
+/// 元组特例（需要 arity+逐位标签）不在本表，由调用方单走。
+/// 单测钉住每条通道（str(d)/str(t) 曾把句柄当整数打印指针，批次 742/743）。
+pub(super) fn to_string_channel(ty: &Type) -> Option<&'static str> {
+    match ty {
+        Type::Str => None,
+        Type::Named(n, _) if n == "PyPath" => None,
+        Type::F64 | Type::F32 => Some("to_string_f64"),
+        Type::Bool => Some("to_string_bool"),
+        t if t.is_map() => Some("py_json_dumps_map"),
+        Type::DynamicArray(_) | Type::Array(_, _) => Some("py_json_dumps_vec"),
+        Type::Tuple(_) => None, // 元组需 arity+标签特算，调用方单走
+        _ => Some("to_string_i64"),
+    }
+}
+
+#[cfg(test)]
+mod to_string_tests {
+    use super::*;
+    use crate::middle::types::ArraySize;
+
+    #[test]
+    fn identity_faces_return_none() {
+        assert_eq!(to_string_channel(&Type::Str), None);
+        assert_eq!(
+            to_string_channel(&Type::Named("PyPath".into(), vec![])),
+            None
+        );
+        // 元组特例由调用方单走
+        assert_eq!(
+            to_string_channel(&Type::Tuple(vec![Type::Str, Type::I64])),
+            None
+        );
+    }
+
+    #[test]
+    fn scalar_and_container_channels() {
+        assert_eq!(
+            to_string_channel(&Type::F64),
+            Some("to_string_f64")
+        );
+        assert_eq!(to_string_channel(&Type::Bool), Some("to_string_bool"));
+        assert_eq!(
+            to_string_channel(&Type::Named("map".into(), vec![])),
+            Some("py_json_dumps_map")
+        );
+        // 815 等价规则：dict 拼写同路
+        assert_eq!(
+            to_string_channel(&Type::Named("dict".into(), vec![])),
+            Some("py_json_dumps_map")
+        );
+        assert_eq!(
+            to_string_channel(&Type::DynamicArray(Box::new(Type::I64))),
+            Some("py_json_dumps_vec")
+        );
+        assert_eq!(
+            to_string_channel(&Type::Array(
+                Box::new(Type::Str),
+                ArraySize::Literal(3)
+            )),
+            Some("py_json_dumps_vec")
+        );
+    }
+
+    #[test]
+    fn unknown_falls_to_i64_channel() {
+        // I64 槽兜底：编译器不知道类型时按整数转——这是"值对类型丢"
+        // 风险位，本测试钉住该兜底存在且不被误改。
+        assert_eq!(to_string_channel(&Type::I64), Some("to_string_i64"));
+        assert_eq!(
+            to_string_channel(&Type::PyDynamic),
+            Some("to_string_i64")
+        );
+    }
+}

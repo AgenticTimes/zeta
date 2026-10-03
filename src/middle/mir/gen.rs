@@ -8,7 +8,7 @@
 mod call_set;
 mod call_len;
 mod call_str;
-use self::call_str::{path_ends_with_mem, str_method_symbol, str_method_symbol3};
+use self::call_str::{path_ends_with_mem, str_method_symbol, str_method_symbol3, to_string_channel};
 
 use crate::frontend::ast::AstNode;
 use crate::middle::mir::mir::{Mir, MirExpr, MirStmt, SemiringOp};
@@ -4270,14 +4270,19 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         if matches!(self.type_map.get(&id), Some(Type::Named(n, _)) if n == "PyPath") {
             return id;
         }
+        // 批次 822：通道判定收敛到 call_str::to_string_channel（单测钉住
+        // 每条通道）；元组特算留在本处（需要 arity+逐位标签）。
+        if let Some(func) = self
+            .type_map
+            .get(&id)
+            .cloned()
+            .as_ref()
+            .and_then(to_string_channel)
+        {
+            let nid = self.emit_call(func, vec![id], Type::Str);
+            return nid;
+        }
         let func = match self.type_map.get(&id).cloned() {
-            Some(Type::F64) | Some(Type::F32) => "to_string_f64",
-            Some(Type::Bool) => "to_string_bool",
-            // Batch 742/743 (#213④b): containers route through their repr
-            // channels — the raw handle used to go through to_string_i64 and
-            // str(d)/str(t) printed a pointer.
-            Some(t) if t.is_map() => "py_json_dumps_map",
-            Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)) => "py_json_dumps_vec",
             Some(Type::Tuple(ts)) => {
                 // General tuple repr: arity + per-element 2-bit kind tags are
                 // known statically from Type::Tuple; the runtime renders the
