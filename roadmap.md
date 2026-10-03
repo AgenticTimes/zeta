@@ -26617,3 +26617,9 @@ lower_sum（vec/动态/定长折叠三路）。行为探针 5/5 对齐 CPython�
 
 successor/predecessor/min-max 迁入执行者；gen.rs 数值族入口统一单占位。
 六探针全对齐 CPython；全库 154/154。
+
+## 批次 832（本批）：print 家族整体迁入 call_print.rs（约 600 行臂体）
+
+sep/end 抽取、多参循环、按格渲染、Bool 尾行补换行、map-str 专道全部
+原样迁入 lower_print。行为探针 5 项对齐 CPython；全库 154/154。
+gen.rs 18470→17903（重构链累计净 -1489 行）。
