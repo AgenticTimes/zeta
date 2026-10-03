@@ -26557,3 +26557,10 @@ a.intersection(b) 走进 discard 臂（MIR 实拍 py_vec_discard、交集结果
 set_mutation_ok/set_intersection_ok 两个精确纯函数＋4 条回归钉
 （816 两条＋参数个数两条）。t807 十行全对、内置 145/145、抽查 ✓。
 **教训入册：家族抽取时方法清单逐族精确——合并清单＝行为合并。**
+
+## 批次 822（本批）：to_string 通道判定抽出 call_str.rs——3 合同单测（148/148）
+
+lower_to_string 通道选择抽纯函数 to_string_channel（免转面 None／
+F64/Bool/map/vec/未知 i64 各归其道；dict 拼写同路＝815 规则；元组
+特算留 gen.rs）。三合同：免转 None、容器标量归道、未知 i64 兜底钉。
+str 容器渲染探针 {/[ 对齐 CPython。gen.rs 18612→18597。
