@@ -28579,3 +28579,16 @@ in-not in 元组（早退改写面）／and-or 短路值面（99/42）／混合�
 历史探针复跑仅 869 的 #275 存量面差异。
 
 验证：编译零错误；内置单元测试 157/157；全量差分（--group 50）一致率无回归。
+
+## 批次 872（2026-10-03，**重构批：表达式字面量四臂（Tuple 42／ArrayLit 208／StructLit 52／DynamicArrayLit 39）迁入 gen/call_expr_lit.rs**）
+
+869 法批量应用，四臂一批。过程事故如实记：第一版拼接把 mod 声明插入后行号整体
++1，而四臂行号取自插入前的快照——StructLit 委托错位、FieldAccess 闭括号被吃
+（编译期"未闭合分隔符"当场拦下，未入库）。回滚 gen.rs 到 871 HEAD 重做：发现与
+拼接共用同一快照＋多行解构头从第 4 行取体＋逐臂内容断言。签名按 AST 实型校正
+（StructLit.fields 是 Vec<(String, AstNode)>、DynamicArrayLit.elem_type 是 String
+非 Option）。gen.rs 11705→11380（净 -325）。
+
+验证：编译零错误；内置单元测试 157/157；**全量差分（--group 50）
+match=2845/2845＝100%**；探针数组/元组/结构体三面对齐 CPython（dynamic
+方言行 CPython 不认，不入 diff）；历史探针复跑零差异。
