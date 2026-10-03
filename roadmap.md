@@ -26699,3 +26699,9 @@ CPython；全库 156/156。#272 float(str) 登记并附内建表 Str 路由。
 收官数据：19392→16777（净-2615）；12 家族文件；157/157；七族综合
 探针全对齐。轴 D 三判据全过。type_name_of 扩面经语料扫描确认零消费
 按 YAGNI 跳过。getattr×4 顺序敏感长尾按节奏判据留后续语义批。
+
+## 批次 845（本批）：Subscript 臂（476 行）迁入 gen/call_subscript.rs
+
+loc/iloc 重写、PyJson、array_get、定长折叠、zeta_dyn_getitem、DictGet
+兜底——原臂逐字入 lower_subscript（返回 ()，slot/type_map 传递）。
+下标七面探针＋转换面抽查 ✓；全库 157/157。gen.rs 16777→16308。
