@@ -279,6 +279,15 @@ impl GenericContext {
 }
 
 impl Type {
+    /// 批次 838（F.1 清单第 3 类）：「未知槽落 I64」的**唯一决策点**——
+    /// 编译器拿不到槽的静态类型时，按本机约定落 I64（运行期一个 64 位字，
+    /// ABI 层与 PyDynamic 同形）。此谓词不改行为，只把 76 处散落的
+    /// `unwrap_or(Type::I64)` 兜底决策收拢成有名字的合同：后续若把未知槽
+    /// 改为 PyDynamic/带格标记，只改这一处＋跑全量。
+    pub fn slot_fallback() -> Type {
+        Type::I64
+    }
+
     /// 批次 815：这个类型是不是字典（dict/map 两种拼写等价——Python 方言
     /// 两种都出现，等价规则此前在 37 处调用点各手写一遍）。
     pub fn is_map(&self) -> bool {
