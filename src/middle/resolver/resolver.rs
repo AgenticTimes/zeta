@@ -3300,6 +3300,7 @@ impl Resolver {
             // Named("PyJson") is also writable — the tagged-cell return face
             // (the caller renders by tag).
             let writable = ((matches!(first, Type::Str | Type::F64 | Type::Bool)
+                || matches!(&first, Type::Tuple(ts) if !ts.is_empty())
                 || first == Type::Named("PyJson".to_string(), vec![]))
                 && rets.iter().all(|t| *t == first))
                 || (dyn_faces == rets.len()
@@ -3357,6 +3358,17 @@ impl Resolver {
                 AstNode::StringLit(_) => Some(Type::Str),
                 AstNode::FloatLit(_) => Some(Type::F64),
                 AstNode::Bool(_) => Some(Type::Bool),
+                // 批次 883（#274）：元组字面量也是证据——每个元素各自可推断
+                // 即得 per-位元组型（`return ("abc", "def")` ⇒ Tuple([Str, Str])）。
+                // 此前元组无证据 ⇒ 函数停在单元占位 Tuple([])，调用点解包的
+                // 每位元素全落 I64，字符串按指针字渲染（静默错值）。
+                AstNode::Tuple(items) => {
+                    let mut ts = Vec::with_capacity(items.len());
+                    for it in items {
+                        ts.push(refinable(it, params, param_map, qname)?);
+                    }
+                    Some(Type::Tuple(ts))
+                }
                 AstNode::Var(v) => {
                     let pos = params.iter().position(|(pn, _)| pn == v)?;
                     param_map

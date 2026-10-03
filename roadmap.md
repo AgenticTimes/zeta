@@ -28844,3 +28844,17 @@ t36_global/t518 保守口径同款）。对照实验闭环：`g = int("1")`（�
 首次全部零差异**（probe869 的 #275 存量面一并转好）；全量差分（--group 50）
 match=2845/2845＝100%；内置单元测试 157/157。附带：清理 call_var.rs 两处
 无条件调试打印。
+
+## 批次 883（2026-10-04，**修复批：#274 根修——元组字面量进返回型推断证据集**）
+
+`def pair(): return ("abc", "def")` 的 `p, q = pair()` 元素按指针字渲染。
+根因：infer_untyped_returns 的证据分类只有 str/float/int/bool——元组字面量
+无证据 ⇒ 函数停在单元占位 Tuple([]) ⇒ 解包的 per-位取型（stmt_assign.rs 的
+Type::Tuple(ts) 分支，646 批已有）拿不到元素型，全落 I64。
+修法（resolver 两处）：collect_return_kinds 的 refinable 加 Tuple 臂
+（每元素各自可推断即得 per-位 Tuple 型，混合型支持）；可写判定放行非空 Tuple。
+gen.rs 零改动。
+
+**验证**：`p, q = pair()` 全对齐 CPython；全量差分（--group 50）
+match=2845/2845＝100%；python_style 475/4（与基线同）；内置单元测试 157/157；
+历史缺陷测试 49/49；历史探针七套零差异。
