@@ -28602,3 +28602,14 @@ match=2845/2845＝100%**；探针数组/元组/结构体三面对齐 CPython（d
 验证：编译零错误；内置单元测试 157/157；**全量差分（--group 50）
 match=2845/2845＝100%**；探针五面（字面量取值／键型传播／展开／全 None／
 混型取值）对齐 CPython；历史探针复跑零差异。
+
+## 批次 874（2026-10-03，**重构批：FuncDef 语句臂（107 行）迁入 gen/stmt_funcdef.rs**）
+
+869 法：`lower_funcdef_stmt(&mut self, fn_name: &String, params: &Vec<(String, String)>,
+body: &Vec<AstNode>, ret_expr: &Option<Box<AstNode>>)`——签名按 AST 实型
+（FuncDef.params 是 Vec<(String, String)>），臂体逐字零适配。gen.rs 11264→11168
+（净 -96）。
+
+验证：编译零错误；内置单元测试 157/157；**全量差分（--group 50）
+match=2845/2845＝100%**；探针三面（嵌套 def／字符串拼接返回／递归 fib(10)=55）
+对齐 CPython；历史探针复跑零差异。
