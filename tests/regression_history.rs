@@ -845,3 +845,250 @@ print(f"p={rp('direct')}")
         "结果槽带上 Str 后打印该走 `println_str`，实得调用: {calls:?}"
     );
 }
+
+/// 常量比较的打印结果要按布尔走，不按整数 0/1 走（症状记录＝批次 327 任务 #45）。
+/// 症状（批次 327 记录"一条 MIR 就够的证据"那一节实拍）：`print(3 == 4)` 的 MIR 是
+/// `VoidCall{ "println_i64", [2] }` ＋ `exprs 2: IntLit(0)` ＋ `type_map 2: I64`，
+/// 整条 MIR 里没有 BinaryOp ⇒ 常量折叠在 `gen.rs` 的下型与 print 分发**之前**就把比较吃成了
+/// 整数 0/1，打印选到整数那一档（真值是 `False`，CPython 同输入打 `False`／`True`）。
+/// 期望值来源：批次 327 记录（比较的结果必须是布尔，不是 0/1）＋ 批次 642 记录里
+/// `(值, is_bool)` 那一臂的约定（顶层是布尔时渲染 `True`／`False`，不是十进制）。
+///
+/// 站点归属（批次 10015 实测更正，两条变异都留档）：本树里 `print(常量比较)` 这一形走的
+/// 是 `src/middle/ctfe/evaluator.rs` 的 print 实参改写臂（`let rendered = if is_bool {…}`，
+/// 现 :303-308，由批次 642 `adc0ffba` 引入），**不是** 327 新写的 `compare_int`——
+/// 把 `compare_int` 的结果改回 `ConstValue::Int(cmp as i64)`（＝327 的改前状态）本用例读数
+/// 一字不变（变异 M1 不红），在 `compare_int` 里加打印探针跑本用例，探针一次都不出。
+/// 打这一臂（把 `True`／`False` 换成 `v.to_string()`）本用例立刻红（变异 M1b）。
+/// `compare_int` 本身仍是活的，只是活在 const／comptime 折叠那条路上，那一形的用例另批补。
+/// 边界（本条不覆盖）：批次 327 记录 §副作用面 里 `ConstValue::as_int()` 对 Bool 返回 None
+/// 的三个消费者（求下标／重复计数／切分），记录自己写明"没为这条写用例"。
+#[test]
+fn constant_folded_comparison_yields_bool_not_int_zero() {
+    let mirs = lower_all(
+        r#"print(3 == 4)
+print(2 == 2)
+"#,
+    );
+    let f = mir(&mirs, "main");
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        2,
+        "两条常量比较都该按布尔打成字符串（改前按整数打 0/1），实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝折叠层把比较结果确定成整数类型，打印选到 `println_i64`，这个名字不许出现，实得调用: {calls:?}"
+    );
+
+    // 正向证据：下发的字面量是布尔的两个拼写，不是 0 和 1。
+    let literals: Vec<&str> = f
+        .exprs
+        .values()
+        .filter_map(|e| match e {
+            MirExpr::StringLit(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    for want in ["False", "True"] {
+        assert!(
+            literals.contains(&want),
+            "比较结果要以布尔字面量下发（真值 {want}），实得字符串字面量: {literals:?}"
+        );
+    }
+
+    // 直接查"喂给打印器的那一格"：改前是 IntLit(0)／IntLit(1)，改后是两条布尔拼写。
+    // 不查全部整数字面量——收尾那条无值语句本来也带一个 IntLit(0)，查它会误判。
+    let printed: Vec<String> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::VoidCall { func, args } if func.starts_with("println") => {
+                args.first().and_then(|a| match f.exprs.get(a) {
+                    Some(MirExpr::StringLit(v)) => Some(v.clone()),
+                    Some(other) => Some(format!("{other:?}")),
+                    None => Some("<缺槽>".to_string()),
+                })
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        printed,
+        vec!["False".to_string(), "True".to_string()],
+        "两条常量比较下发给打印器的实参要是布尔字面量（改前是 IntLit(0) 与 IntLit(1)）"
+    );
+}
+
+/// 批次 447（2.2 名字绑定／#182 B 堆，站点 `src/middle/resolver/resolver.rs` 的
+/// `impl_key_base` 与六处登记键）：泛型 `impl<K, V> Box2<K, V>` 的方法登记进名表时，
+/// 键带着 impl 头部的**泛型原文**（`Box2<K, V>::new`），而调用点写的是裸类别名。
+/// 症状（批次 447 记录）分两条后果：方法名是 `new` 时名表路由不命中、兜底臂又排除
+/// `new` ⇒ 整条臂走完既不 `stmts.push` 也不 `exprs.insert` ⇒ 调用语句**被丢掉**
+/// （夹具实拍 rc=133、stdout 空 ＋ 一条 W1010）；方法名是别的时落进"首字母大写＝句柄"
+/// 的兜底，被改写成 `zeta_platform_obj(...)` ⇒ 一声不出地返回堆地址。
+/// 期望值来源：记录的三条独立证据之①——定义侧把尖括号原样发进 LLVM 符号名
+/// （`@"C2<K, V>::make"`），修法是把登记键截到第一个 `<` 之前 ⇒ 定义与调用两侧同串。
+/// 非泛型的 `impl Plain` 是记录里的对照组（改前就绿），本条把它一起放进来当**前置条件**：
+/// 泛型是这一格里唯一的变量。
+#[test]
+fn generic_impl_method_key_drops_angle_brackets_at_callsite() {
+    let mirs = lower_all(
+        r#"struct Inner { q: i64 }
+
+pub struct Box2<K, V> {
+    k: K,
+    v: V,
+    inner: Inner,
+}
+
+impl<K, V> Box2<K, V> {
+    pub fn new() -> Self {
+        Box2 { k: 5, v: 6, inner: Inner { q: 7 } }
+    }
+
+    pub fn tagged() -> i64 {
+        3
+    }
+}
+
+struct Plain { p: i64 }
+
+impl Plain {
+    pub fn new() -> Self {
+        Plain { p: 13 }
+    }
+}
+
+fn main() {
+    let n = Plain::new()
+    let b = Box2::new()
+    let t = Box2::tagged()
+    print(t)
+}
+"#,
+    );
+
+    // 前置条件（对照组）：非泛型的 impl 键一直是绑上的，所以"泛型"是唯一的变量。
+    let plain = mir(&mirs, "Plain::new");
+    assert!(
+        !plain.stmts.is_empty(),
+        "对照组：非泛型 `impl Plain` 的 `new` 要能降出体内语句，实得 {:?}",
+        plain.stmts.len()
+    );
+
+    // 泛型方法的定义名不再带尖括号（改前登记键＝`Box2<K, V>::new`，
+    // 记录证据①：那个键被原样发进 LLVM 符号名）。
+    let names: Vec<&str> = mirs.iter().filter_map(|m| m.name.as_deref()).collect();
+    assert!(
+        names.contains(&"Box2::new"),
+        "泛型 impl 的构造子该以裸类别名进名表（改前带尖括号 ⇒ 调用点永不命中），实得函数名: {names:?}"
+    );
+    assert!(
+        names.contains(&"Box2::tagged"),
+        "泛型 impl 的非构造子方法同理，实得函数名: {names:?}"
+    );
+    let bracketed: Vec<&str> = names.iter().copied().filter(|n| n.contains('<')).collect();
+    assert!(
+        bracketed.is_empty(),
+        "降形结果里不许出现带泛型参数的名字（那是改前的登记键），实得: {bracketed:?}"
+    );
+
+    // 后果①：调用语句要真的下发（改前整条臂没有出口 ⇒ 既不 push 也不 insert）。
+    let f = mir(&mirs, "main");
+    let calls = call_symbols(f);
+    for want in ["Box2::new", "Box2::tagged", "Plain::new"] {
+        assert!(
+            calls.iter().any(|c| c == want),
+            "调用点 `{want}` 要出现在降形结果里（改前这一条被整条臂丢掉），实得调用: {calls:?}"
+        );
+    }
+}
+
+/// 批次 451（3.2 Lowering／返回标记，站点 `src/middle/resolver/resolver.rs` 的
+/// `unannotated_return_ty`——本树现 :4581，识别条件在 :4950；记录写作内层 :3120-3140 ＋
+/// 外层 :3337-3346）：
+/// py `class` 脱糖出来的**无注解方法**，返回标记被解析层硬写成 `"i64"` ⇒
+/// 中间层"按体恢复返回类型"的两道守卫（原本只认空注解）永远进不去 ⇒
+/// 调用点目的槽被 `.unwrap_or(Type::I64)` 定成整数 ⇒ 运行期按整数打印一个 str 指针。
+/// 症状（批次 451 记录根因链④ ＋ 靶夹具实拍）：改前 `4310769584`、改后 `a,b,`；
+/// 同一段里 `print(len(b.parts))` 两侧都是 `2` ⇒ 值本身是好 str，坏的只有调用点那一格标记。
+/// 期望值来源：记录的修法那一节——识别依据是接收者参数的类型拼写（脱糖写类别名、
+/// 手写 `impl` 写 `"Self"`），命中"脱糖默认"就允许按体恢复；`out = "a"; return out`
+/// 这种体在 `unannotated_return_ty` 的本地作用域表里判得出 Str。
+/// 正对照：记录 §三 表明的"顶层 `def` 同形改前就是对的"，本条把它一起锁住防回潮。
+/// 边界（本条不覆盖）：记录 §三 的 `@classmethod` 那一格已由批次 552（`dd6e81d7`）接走
+/// （#195 前半已闭），本条不重复它；"写了注解而体不符"仍归 #33，记录有意不越权。
+#[test]
+fn py_class_method_str_return_marks_callsite_dest_as_str() {
+    let mirs = lower_all(
+        r#"class B:
+    def r(self):
+        out = "a"
+        return out
+
+def plain():
+    out = "b"
+    return out
+
+print(B().r())
+print(plain())
+"#,
+    );
+
+    // 方法体自己的恢复：返回槽（局部变量 `out` 那一跳）该是 Str，不是被 "i64" 顶掉。
+    let r = mir(&mirs, "B::r");
+    let ret_val = r
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::Return { val } => Some(*val),
+            _ => None,
+        })
+        .expect("方法有返回值");
+    assert_eq!(
+        r.type_map.get(&ret_val),
+        Some(&Type::Str),
+        "无注解 py 方法的返回表达式该按体恢复成 Str（改前登记键写作 i64，被当成显式注解），实得 {:?}",
+        r.type_map.get(&ret_val)
+    );
+
+    let f = mir(&mirs, "main");
+    // 调用点目的槽：本批那一格的症状就在这一格（记录根因链④）。
+    let dests: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func == "B::r" || func == "plain_0" || func == "plain" => {
+                Some(*dest)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        2,
+        "前置条件：两个调用点都要降出来（少一个这条用例就什么都没测到），实得 {dests:?}"
+    );
+    for d in &dests {
+        assert_eq!(
+            f.type_map.get(d),
+            Some(&Type::Str),
+            "调用点目的槽 id={d} 该是 Str（改前是 I64 ⇒ 运行期按整数打印 str 指针，打出堆地址），实得 {:?}",
+            f.type_map.get(d)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        2,
+        "两个调用点都该按 Str 选打印器，实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝目的槽是 I64 ⇒ 按整数打印（打出堆地址），`println_i64` 不应出现，实得调用: {calls:?}"
+    );
+}
