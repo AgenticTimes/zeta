@@ -26718,3 +26718,10 @@ import/expr→base 别名）。类变量读 A/B 实测存量缺口（批 610 部
 call_ctor.rs 经多次重叠修改后签名脱节；统一补齐 method/type_args
 参数＋括号＋lib.rs 死声明。全库 157/157。len(df) 崩＝车道 WIP 中间态
 （839 A/B 定责在案）。
+
+## 批次 850（本批）：#272 float(str) 静默错值根治
+
+float 注册表项符号 zeta_float_i64 把 str 句柄当 i64 转 double（实测
+4.3e9 垃圾）。修法：Call 臂加 float 改道臂（注册表路由前），按实参
+静态类型选 zeta_float_str/zeta_float_i64。四态探针 2.5/3.0/2.0/1.5
+全对齐 CPython。全库 157/157。移除临时探针。
