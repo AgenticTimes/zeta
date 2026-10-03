@@ -1591,3 +1591,187 @@ print(f())
         "改前症状＝委托链的返回停 I64 ⇒ 按整数打印，`println_i64` 不应出现，实得调用: {calls:?}",
     );
 }
+
+/// 批次 579（旁路 cleanup 车道编号，代码 `4ee26e8a`，台账行 `worktree.md:288`；
+/// 站点 `src/middle/resolver/resolver.rs` 的 `unannotated_return_ty`（现 :4581）里那层嵌套
+/// `infer`（现 :4635）的 `__contains__` 臂，现 :4716）／旧 ⑫ 注册期传播第一批。
+/// 症状（579 记录 ＋ 差分夹具 `tests/diff/cases/class_tag_probe.dcase`）：
+/// `t in self.tags` 在解析层脱糖成 `self.tags.__contains__(t)`，而方法返回推断的 Call 臂
+/// 不认这个名字 ⇒ `has_tag` 的返回推不出来、停在 i64 ⇒ 调用点 `print` 打 `1` 而不是 `True`。
+/// 修法＝补"`__contains__` 恒 Bool"臂（membership 在 Python 里恒为 Bool）。
+/// 期望值来源：同一份源在 CPython 下的实拍真值 `True`／`False`（本批用 `python3` 现跑取），
+/// 对应到编译期＝两个调用点目的槽都该是 `Bool`、打印走 `print_bool`。
+/// 边界（本条不覆盖）：579 记录里同批留下的余项（`tag_str` 的 join 推断＝下面 580 那条、
+/// `%(key)s=dict` 的 ⑭ 子形）；运行期打印文案（`True` 还是 `true`）也不在这里，只看类型标记与派发。
+#[test]
+fn membership_method_return_gives_bool_not_int_at_callsite() {
+    let mirs = lower_all(
+        r#"class Tagged:
+    def __init__(self, name, tags):
+        self.name = name
+        self.tags = tags
+    def has_tag(self, t):
+        return t in self.tags
+
+t = Tagged("srv", ["web", "db"])
+print(t.has_tag("web"))
+print(t.has_tag("cache"))
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let dests: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func == "Tagged::has_tag" => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        2,
+        "前置条件：两个 `t.has_tag(..)` 调用点都要降出来，实得 {dests:?}"
+    );
+    for d in &dests {
+        assert_eq!(
+            f.type_map.get(d),
+            Some(&Type::Bool),
+            "调用点目的槽 id={d} 该是 Bool（改前 `__contains__` 推不出来 ⇒ 方法返回停在 I64 ⇒ 按整数打印 1），实得 {:?}",
+            f.type_map.get(d)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "print_bool").count(),
+        2,
+        "两条 `print(t.has_tag(..))` 该按 Bool 选打印器（真值 True 与 False），实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝返回停在 I64 ⇒ 按整数打印，`println_i64` 不应出现，实得调用: {calls:?}",
+    );
+}
+
+/// 批次 580（旁路 cleanup 车道编号，代码 `988a553d`，台账行 `worktree.md:285`；
+/// 站点同 :4716 那层嵌套 `infer` 里的字符串方法臂，现 :4744-4775，`m2 == "join"` 那一支）
+/// ／旧 ⑫ 方法返回推断扩面。
+/// 症状（580 记录 ＋ 同一份差分夹具 `class_tag_probe.dcase` 的第三格）：
+/// `return ",".join(self.tags)` 里 `join` 不在推断表内 ⇒ 方法返回落空 ⇒ 停在 I64，
+/// 调用点 `print` 把连接串的指针当整数打出来。修法＝`infer_global_ty` 的 Call 臂解构补绑 `args`，
+/// 并给嵌套 `infer` 同步加 join 臂（Str 接收者上 join 恒返回 Str）。
+/// 期望值来源：同一份源在 CPython 下的实拍真值 `web,db`，对应编译期＝目的槽 `Str`＋走 `println_str`。
+/// 边界（本条不覆盖）：批次 587 在同一条臂上扩出的"未知接收者的字符串方法族"（`upper`／`strip` 等）
+/// 只在臂的 `matches!` 表里出现，本条夹具打不到它，撤 587 那半不构成对本条的变异；
+/// 运行期连接值仍归 `tests/diff/cases/class_tag_probe.dcase` 与差分步。
+#[test]
+fn str_join_method_return_marks_callsite_dest_as_str() {
+    let mirs = lower_all(
+        r#"class Tagged:
+    def __init__(self, tags):
+        self.tags = tags
+    def tag_str(self):
+        return ",".join(self.tags)
+
+t = Tagged(["web", "db"])
+print(t.tag_str())
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let dests: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func == "Tagged::tag_str" => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        1,
+        "前置条件：`t.tag_str()` 的调用点要降出来，实得 {dests:?}"
+    );
+    for d in &dests {
+        assert_eq!(
+            f.type_map.get(d),
+            Some(&Type::Str),
+            "调用点目的槽 id={d} 该是 Str（改前 join 不在推断表里 ⇒ 方法返回落空停在 I64 ⇒ 按整数打连接串的指针），实得 {:?}",
+            f.type_map.get(d)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        1,
+        "`print(t.tag_str())` 该按 Str 选打印器（真值 web,db），实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝连接串指针按整数打，`println_i64` 不应出现，实得调用: {calls:?}",
+    );
+}
+
+/// 批次 592（旁路 cleanup 车道编号，代码 `d4750ffa`，台账行 `worktree.md:297`；
+/// **编号与主树重合**：`worktree.md:184` 那行"批次 592"是 bootstrap 车道的另一批
+/// （#167 余项①／`find_snippet_lines` 成因批）⇒ 引用以哈希 `d4750ffa` 为身份。
+/// 站点同那层嵌套 `infer` 里的 `__collect__` 臂，现 :4728）／旧 #167 一族。
+/// 症状（592 记录 ＋ 差分夹具 `tests/diff/cases/class_str_comprehension.dcase`）：
+/// 列表推导 `[len(n) for n in self.names]` 脱糖成 `__collect__(iter, λ)`，推断器不认这个调用形
+/// ⇒ 返回方法被否决成 I64 ⇒ `print` 打的是向量句柄而不是内容。修法＝补 `__collect__` 臂，
+/// 元素型取 λ 体表达式（带 `if` 的筛形取 then 支），取不到时兜底 `DynamicArray(I64)`。
+/// 期望值来源：同一份源在 CPython 下的实拍真值 `[1, 2, 1]`，对应编译期＝目的槽
+/// `DynamicArray(I64)`，且 `print` 走向量打印路径（`py_json_dumps_vec_typed`）而不是整数打印器。
+/// 边界（本条不覆盖）：元素型来自 λ 体推导的那半（本条夹具的元素是 `len(n)`＝整数，
+/// 与兜底值同形，所以撤掉臂会红、但臂内取元素型那条线不能单独被本条区分）——
+/// 字符串元素的推导形留在差分夹具里；`__collect__` 在 `infer_global_ty`（现 :2079）里的另一臂
+/// 走的是全局变量路径，与本条的"方法返回"路径不同站点。
+#[test]
+fn list_comprehension_method_return_keeps_vector_shape_at_callsite() {
+    let mirs = lower_all(
+        r#"class Stats:
+    def __init__(self):
+        self.names = ["x", "yy", "z"]
+    def summary(self):
+        return [len(n) for n in self.names]
+
+st = Stats()
+print(st.summary())
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let dests: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func == "Stats::summary" => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        1,
+        "前置条件：`st.summary()` 的调用点要降出来，实得 {dests:?}"
+    );
+    for d in &dests {
+        assert_eq!(
+            f.type_map.get(d),
+            Some(&Type::DynamicArray(Box::new(Type::I64))),
+            "调用点目的槽 id={d} 该保留向量形（改前推导式被否决成 I64 ⇒ print 打裸句柄），实得 {:?}",
+            f.type_map.get(d)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert!(
+        calls.iter().any(|c| c == "py_json_dumps_vec_typed"),
+        "打印一个向量该走 `py_json_dumps_vec_typed` 那条路（真值 [1, 2, 1]），实得调用: {calls:?}",
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝向量句柄被当整数打，`println_i64` 不应出现，实得调用: {calls:?}",
+    );
+}
