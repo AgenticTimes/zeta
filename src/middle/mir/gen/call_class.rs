@@ -22,6 +22,8 @@ pub enum CallClass {
     JsonDump,
     /// re.sub 正则替换族。
     RegularSub,
+    /// logging 家族（FileHandler/getLogger）。
+    Logging,
     /// print 家族。
     Print,
     /// long tail：逐条特判的方法（getattr/groupby/spawn/…，各有独立语义）。
@@ -42,6 +44,7 @@ pub fn classify_call(method: &str) -> CallClass {
         }
         "dumps" | "dump" => CallClass::JsonDump,
         "sub" => CallClass::RegularSub,
+        "FileHandler" | "getLogger" => CallClass::Logging,
         "print" => CallClass::Print,
         _ => CallClass::Unknown,
     }

@@ -7,6 +7,7 @@
 
 mod call_set;
 mod call_assert;
+mod call_logging;
 mod call_re;
 mod call_class;
 mod call_json;
@@ -8027,55 +8028,17 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 // hint the local no-op shim has no use for, but it must not turn
                 // the call into a phantom arity-suffixed symbol
                 // (`py_logging_FileHandler_2`). Keep the first positional arg.
-                if method == "FileHandler" && args.len() > 1 {
-                    if let Some((m, mem)) = self.py_member_target(receiver, method) {
-                        if m == "logging" && mem == "FileHandler" {
-                            static WARNED_FH: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-                            WARNED_FH.get_or_init(|| {
-                                eprintln!(
-                                    "warning: PY-A: logging.FileHandler mode/… is ignored \
-                                     (local no-op shim)"
-                                );
-                            });
-                            let path = self.lower_expr(&args[0]);
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_logging_FileHandler".to_string(),
-                                args: vec![path],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(id, MirExpr::Var(id));
-                            self.type_map.insert(
-                                id,
-                                Type::Named("PyFileHandler".to_string(), vec![]),
-                            );
-                            return id;
-                        }
+                // 批次 836：logging.FileHandler 迁入 gen/call_logging.rs。
+                if classify_call(method) == CallClass::Logging {
+                    if let Some(nid) = self.lower_logging(receiver, method, &args, id) {
+                        return nid;
                     }
                 }
-                // PY-A: `logging.getLogger()` — Python's name argument is
-                // OPTIONAL, but the registry declares one required arg, so a
-                // 0-arg call was arity-mangled into the phantom symbol
-                // `py_logging_getLogger_0` (corpus: `logging.getLogger()`).
-                // Pass an empty name: the runtime stub's logger identity IS its
-                // name, and every method on it is a no-op shim locally.
-                if args.is_empty() {
-                    if let Some((m, mem)) = self.py_member_target(receiver, method) {
-                        if m == "logging" && mem == "getLogger" {
-                            let name_id = self.next_id();
-                            self.exprs.insert(name_id, MirExpr::StringLit(String::new()));
-                            self.type_map.insert(name_id, Type::Str);
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_logging_getLogger".to_string(),
-                                args: vec![name_id],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(id, MirExpr::Var(id));
-                            self.type_map
-                                .insert(id, Type::Named("PyLogger".to_string(), vec![]));
-                            return id;
-                        }
+                // 批次 836：logging.getLogger 迁入 gen/call_logging.rs
+                //（0 参补空名防幽灵符号）。
+                if classify_call(method) == CallClass::Logging {
+                    if let Some(nid) = self.lower_logging(receiver, method, &args, id) {
+                        return nid;
                     }
                 }
                 // `pd.DataFrame(columns=[...])` / `pd.DataFrame(index=…, dtype=…)`
