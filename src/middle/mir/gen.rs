@@ -7,6 +7,7 @@
 
 mod call_set;
 mod call_assert;
+mod call_re;
 mod call_class;
 mod call_json;
 mod call_num;
@@ -7422,41 +7423,11 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     }
                 }
 
-                // PY-A: `re.sub(pat, repl, s)` — repl may be a STRING or a
-                // callable (`lambda m: ...`). The closure's parameter must be
-                // typed as a Match so `m.group(0)` inside it dispatches.
-                if let Some((m, mem)) = self.py_member_target(receiver, method) {
-                    if m == "re" && mem == "sub" && args.len() == 3 {
-                        let pat_id = self.lower_expr(&args[0]);
-                        let callable_repl = matches!(
-                            &args[1],
-                            AstNode::Closure { .. }
-                        ) || matches!(
-                            &args[1],
-                            AstNode::Var(n) if self.func_ret_types.contains_key(n.as_str())
-                        );
-                        let repl_id = {
-                            if callable_repl {
-                                self.re_repl_param = true;
-                            }
-                            let id_ = self.lower_expr(&args[1]);
-                            self.re_repl_param = false;
-                            id_
-                        };
-                        let s_id = self.lower_expr(&args[2]);
-                        self.stmts.push(MirStmt::Call {
-                            func: if callable_repl {
-                                "py_re_sub_call".to_string()
-                            } else {
-                                "py_re_sub".to_string()
-                            },
-                            args: vec![pat_id, repl_id, s_id],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::Str);
-                        return id;
+                // 批次 835：re.sub 臂迁入 gen/call_re.rs；入口判定读分类器
+                // （RegularSub）。
+                if classify_call(method) == CallClass::RegularSub {
+                    if let Some(nid) = self.lower_re_sub(receiver, method, &args, id) {
+                        return nid;
                     }
                 }
                 // PY-A: a keyword-argument marker that reached expression

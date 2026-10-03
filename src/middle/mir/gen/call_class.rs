@@ -20,6 +20,8 @@ pub enum CallClass {
     NumericBuiltin,
     /// json.dumps/dump 序列化族。
     JsonDump,
+    /// re.sub 正则替换族。
+    RegularSub,
     /// print 家族。
     Print,
     /// long tail：逐条特判的方法（getattr/groupby/spawn/…，各有独立语义）。
@@ -39,6 +41,7 @@ pub fn classify_call(method: &str) -> CallClass {
             CallClass::NumericBuiltin
         }
         "dumps" | "dump" => CallClass::JsonDump,
+        "sub" => CallClass::RegularSub,
         "print" => CallClass::Print,
         _ => CallClass::Unknown,
     }
