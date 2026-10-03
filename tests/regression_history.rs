@@ -1775,3 +1775,241 @@ print(st.summary())
         "改前症状＝向量句柄被当整数打，`println_i64` 不应出现，实得调用: {calls:?}",
     );
 }
+
+/// 批次 575（旁路 cleanup 车道编号，代码 `fe213d56`，台账行 `worktree.md:287`；
+/// 站点＝`unannotated_return_ty` 那层嵌套 `infer` 里的 `AstNode::BinaryOp` 臂，
+/// 现 :4667-4672——比较与成员运算在 Python 里恒为 Bool，故方法返回可推断）／旧 #195 一族。
+/// 症状（575 记录自陈的余项 ＋ 差分夹具 `tests/diff/cases/class_tag_probe.dcase`）：
+/// `def gt(self, a, b): return a > b` 里比较结果推不出类型 ⇒ 方法返回否决停在 I64
+/// ⇒ 调用点按整数打布尔值（记录实拍：打 `1` 而不是 `True`）。
+/// 期望值来源：同一份源在 CPython 下的实拍真值 `False / True / False`，
+/// 对应编译期＝三个调用点目的槽都是 `Bool`，且打印走 `print_bool` 而不是整数打印器。
+/// 覆盖面分工（变异实测）：撤掉这一支（整支删掉恒 Bool 那个 `if`）后**只有本条变红**，
+/// 批次 10018 那条 579 用例照旧绿 ⇒ `t in self.tags` 走的是 579 的 `__contains__` 调用名臂，
+/// 两条臂各自独立、不互为备份；红值＝目的槽回 `Some(I64)`，与 575 记录自陈的余项
+/// （调用点"打 `1` 非 `True`"）是同一个症状。
+/// 边界（本条不覆盖）：575 同批还放宽了运行期 `py_list_contains` 的内容比较
+/// （`runtime/py_additions.c`，类字段串列表的元素是 rodata 字面量指针而非 GC 对象），
+/// 那半只有真执行观测得到，仍归差分步；`and`／`or` 这类"按值选择"的运算本条臂刻意不接。
+#[test]
+fn comparison_method_return_marks_callsite_dest_as_bool() {
+    let mirs = lower_all(
+        r#"class Cmp:
+    def gt(self, a, b):
+        return a > b
+    def neq(self, a, b):
+        return a != b
+
+c = Cmp()
+print(c.gt(3, 5))
+print(c.gt(9, 2))
+print(c.neq(1, 1))
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let dests: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. }
+                if func.starts_with("Cmp::gt") || func.starts_with("Cmp::neq") =>
+            {
+                Some(*dest)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        3,
+        "前置条件：三个比较方法调用点都要降出来，实得 {dests:?}"
+    );
+    for d in &dests {
+        assert_eq!(
+            f.type_map.get(d),
+            Some(&Type::Bool),
+            "调用点目的槽 id={d} 该是 Bool（改前比较结果推不出 ⇒ 方法返回停 I64 ⇒ 按整数打布尔值），实得 {:?}",
+            f.type_map.get(d)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "print_bool").count(),
+        3,
+        "三格都该按 Bool 选打印器（真值 False/True/False），实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c.starts_with("println_i64")),
+        "改前症状＝布尔值按整数打，整数打印器不应出现，实得调用: {calls:?}",
+    );
+}
+
+/// 批次 587（旁路 cleanup 车道编号，代码 `a5f8280b`，台账行 `worktree.md:292`；
+/// 站点＝同层 `infer` 里 580 那条 `join` 守卫被扩成的"未知接收者字符串方法族"表
+/// （现 :4749-4775），加同批在语句位走查里补的裸 `Call` 解包与 `append` 元素型精化
+/// （现 :4896））／旧 #195 一族。
+/// 症状（587 记录 ＋ 差分夹具 `tests/diff/cases/func_return_str_list.dcase`）：
+/// `for t in words: result.append(t.upper())` 里 `t` 是被迭代元素、型别未知，
+/// 580 的表只认 `join` ⇒ `.upper()` 推不出 ⇒ `append` 的元素型精化拿不到 Str ⇒
+/// 函数返回的 `vec` 元素停在 I64 占位 ⇒ `r[0]` 按整数打字符串指针（记录实拍"打地址"）。
+/// 期望值来源：同一份源在 CPython 下的实拍真值 `2 / ALPHA`，对应编译期＝
+/// `up_all` 调用点目的槽 `DynamicArray(Str)`、`r[0]` 的 `array_get` 目的槽 `Str`，
+/// 且两格分别选整数与字符串打印器。
+/// 覆盖面分工（变异实测）：本条同时覆盖 587 的两支——把守卫退回 580 的"只认 `join`"
+/// （撤字符串方法族表 :4749-4775）与撤 `append` 的元素型精化（:4896 那行 `seen.insert`）
+/// 都在**同一个断言**上变红、读数一字不差（`up_all` 的目的槽回 `DynamicArray(I64)`＝
+/// 记录里"元素停在 I64 占位"那一处）⇒ 这两支在本条夹具上是同一条链的上下两环，
+/// 本条不能把它们各自单独拆出来证明。
+/// 边界（本条不覆盖）：587 还在同层 `infer` 的 `+` 运算上加了"一侧是 Str 即按拼接"的臂
+/// （现 :4686，差分夹具 `class_method_str_concat`），本条夹具打不到那一支；
+/// 580 那条 `join` 本体由批次 10018 的用例覆盖，本条只扩到表里的其余方法名。
+#[test]
+fn unknown_receiver_str_method_in_loop_keeps_vector_element_str_across_call() {
+    let mirs = lower_all(
+        r#"def up_all(words):
+    result = []
+    for t in words:
+        result.append(t.upper())
+    return result
+
+r = up_all(["alpha", "beta"])
+print(len(r))
+print(r[0])
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let call_dest = |want: &str| -> Vec<u32> {
+        f.stmts
+            .iter()
+            .filter_map(|s| match s {
+                MirStmt::Call { func, dest, .. } if func.starts_with(want) => Some(*dest),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let ret = call_dest("up_all");
+    assert_eq!(
+        ret.len(),
+        1,
+        "前置条件：`up_all([...])` 的调用点要降出来，实得 {ret:?}"
+    );
+    assert_eq!(
+        f.type_map.get(&ret[0]),
+        Some(&Type::DynamicArray(Box::new(Type::Str))),
+        "`up_all` 的调用点目的槽该是 vec<Str>（改前 `.upper()` 推不出 ⇒ 元素停 I64 占位），实得 {:?}",
+        f.type_map.get(&ret[0])
+    );
+
+    let elem = call_dest("array_get");
+    assert_eq!(
+        elem.len(),
+        1,
+        "前置条件：`r[0]` 的下标读要降出来，实得 {elem:?}"
+    );
+    assert_eq!(
+        f.type_map.get(&elem[0]),
+        Some(&Type::Str),
+        "`r[0]` 的目的槽该是 Str（改前按整数打字符串指针），实得 {:?}",
+        f.type_map.get(&elem[0])
+    );
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        1,
+        "`print(r[0])` 该按 Str 选打印器（真值 ALPHA），实得调用: {calls:?}"
+    );
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_i64").count(),
+        1,
+        "只有 `print(len(r))` 那一格按整数打印（真值 2），实得调用: {calls:?}"
+    );
+}
+
+/// 批次 621（旁路 cleanup 车道编号，代码 `571636ba`，台账行 `worktree.md:329`；
+/// 站点＝`inherit_class_members`（现 :2578 起）里 own-`__init__` 分支的收养守卫
+/// 「有缺口＋有 `__baseargs__` 标记」双条件，现 :2688）／旧 #195 一族。
+/// 症状（621 记录 ＋ 在册夹具 `tests/python_style/t531_own_init_base_args.z`）：
+/// 子类自带 `__init__` 且用字面量调基初始化器（`Animal.__init__(self, "Rex")`）时，
+/// 608 的收集循环拿实参的 **Var 名**当字段槽名，字面量造不出槽 ⇒ 合成 ctor 的
+/// `Struct` 漏掉基布局字段、而位置写按 `Struct` 序走 ⇒ `d.name` 读到 `legs` 的槽、
+/// 打出 4（记录 s16 实拍）。
+/// 期望值来源：在册夹具 `t531` 的 `// expect:` 前两行（`Rex` / `4`），对应编译期＝
+/// ctor 的 `Struct` 字段名按布局序为 `["name", "legs"]`、`name` 的初值槽型别是 `Str`
+/// （621 同批把字段型别随字面量类别精化），且 `main` 两格分别选字符串与整数打印器。
+/// 覆盖面分工（变异实测）：把双条件守卫改成恒 `continue`（＝改前行为）后本条变红，
+/// 红在 `Struct` 字段名序那个断言、实得 `["legs"]`＝记录 s16 实拍的形状
+/// （基字段 `name` 整个漏掉、位置写按 `Struct` 序错位）。
+/// 边界（本条不覆盖）：`t531` 后半的多继承 `C(A, B)`（真值 7/5/9）走的是"无缺口"
+/// 那条 continue，本条不查；运行期取值仍归 python_style。
+#[test]
+fn own_init_base_call_literal_rebuilds_ctor_struct_in_layout_order() {
+    let mirs = lower_all(
+        r#"class Animal:
+    def __init__(self, name):
+        self.name = name
+
+class Dog(Animal):
+    def __init__(self):
+        Animal.__init__(self, "Rex")
+        self.legs = 4
+
+d = Dog()
+print(d.name)
+print(d.legs)
+"#,
+    );
+
+    let mut found: Option<(&Mir, &Vec<(String, u32)>)> = None;
+    for m in &mirs {
+        for e in m.exprs.values() {
+            if let MirExpr::Struct { variant, fields } = e {
+                if variant.as_str() == "Dog" {
+                    found = Some((m, fields));
+                }
+            }
+        }
+    }
+    let (dog, fields) = found.unwrap_or_else(|| {
+        panic!(
+            "没有哪个函数体降出变体名为 Dog 的 `Struct`（实得 items {:?}）",
+            mirs.iter().map(|m| m.name.clone()).collect::<Vec<_>>()
+        )
+    });
+
+    let names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["name", "legs"],
+        "ctor 的 `Struct` 该按合并布局补齐基字段（改前漏 `name`、位置写错位），实得 {names:?}"
+    );
+
+    let name_slot = fields
+        .iter()
+        .find(|(n, _)| n == "name")
+        .map(|(_, s)| *s)
+        .expect("`Struct` 里应有 name 字段");
+    assert_eq!(
+        dog.type_map.get(&name_slot),
+        Some(&Type::Str),
+        "`name` 的初值槽（id={name_slot}）该随字面量精化成 Str（改前基侧参数误推 i64 ⇒ 打指针），实得 {:?}",
+        dog.type_map.get(&name_slot)
+    );
+
+    let f = mir(&mirs, "main");
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        1,
+        "`print(d.name)` 该按 Str 选打印器（真值 Rex），实得调用: {calls:?}"
+    );
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_i64").count(),
+        1,
+        "只有 `print(d.legs)` 那一格按整数打印（真值 4），实得调用: {calls:?}"
+    );
+}
