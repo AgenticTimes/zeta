@@ -28190,3 +28190,16 @@ i64 渲染（`[1, "a"]` 打 `[1, 4343530674]`）＋退化 vec 头混型追加后
 探针避开混型列表（for-else 用同型值验证），十个面全绿。
 
 验证：编译零错误；内置单元测试 157/157；batch_gate GREEN。
+
+## 批次 864（2026-10-03，**重构批：If 语句臂（234 行）迁入 gen/call_if.rs**）
+
+零替换法＋行号精确手术：`lower_ast_inner` 的 `AstNode::If` 语句臂迁入
+`gen/call_if.rs::lower_if_stmt(&mut self, cond: &AstNode, then: &[AstNode],
+else_: &[AstNode])`——与批 859 迁入的表达式级 `lower_if_expr` 同族同文件。
+臂体一字未动（含 fold_env_condition 编译期环境开关、表达式 if 值槽捕获、
+批 293 的分支型回填）；仅补 `use super::fold_env_condition;`（gen.rs:81 的
+pub(crate) 自由函数，子模块经 super 路径引用）。gen.rs 14965→14735（净 -230）。
+
+验证：编译零错误；内置单元测试 157/157；行为探针七面与 CPython 逐字对齐
+（语句 if／if-else／elif 链／表达式 if 值捕获／字符串分支型回填／分支含
+return／嵌套 if）；batch_gate GREEN。

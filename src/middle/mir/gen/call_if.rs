@@ -1,5 +1,6 @@
 //! 批次 858：If 表达式发射体（原臂逐字迁入——零替换法）。
 
+use super::fold_env_condition;
 use super::MirGen;
 use crate::frontend::ast::AstNode;
 use crate::middle::mir::mir::{MirExpr, MirStmt};
@@ -235,5 +236,242 @@ impl MirGen {
                 return dest_id;
             
         dest
+    }
+
+    /// `if cond { … } else { … }` 语句／表达式位（批 864 自 gen.rs 原臂逐字迁入；
+    /// 含 fold_env_condition 编译期环境开关、表达式 if 的值槽捕获与分支型回填）。
+    pub(super) fn lower_if_stmt(&mut self, cond: &AstNode, then: &[AstNode], else_: &[AstNode]) {
+            // PY-A: compile-time env switch (see fold_env_condition).
+            if let Some(taken) = fold_env_condition(cond) {
+                let branch: &[AstNode] = if taken { then } else { else_ };
+                for s in branch {
+                    self.lower_expr(s);
+                }
+                return;
+            }
+            let cond_id = self.lower_expr(cond);
+
+            // Check if this is expression if (branches produce values) or statement if
+            // Simple heuristic: if any branch contains return, treat as statement
+            let mut is_statement_if = false;
+            let mut then_has_return = false;
+            let mut else_has_return = false;
+
+            // Scan branches for returns/breaks/continues (statement-only)
+            for s in then.iter() {
+                if let AstNode::Return(_) | AstNode::Break(_) | AstNode::Continue(_) = s {
+                    then_has_return = true;
+                    is_statement_if = true;
+                    break;
+                }
+            }
+            for s in else_.iter() {
+                if let AstNode::Return(_) | AstNode::Break(_) | AstNode::Continue(_) = s {
+                    else_has_return = true;
+                    is_statement_if = true;
+                    break;
+                }
+            }
+
+            let dest_id = if is_statement_if {
+                // Statement if: no destination needed
+                None
+            } else {
+                // Expression if: create destination
+                let id = self.next_id();
+
+                self.exprs.insert(id, MirExpr::Var(id));
+                self.type_map.insert(id, Type::I64);
+                Some(id)
+            };
+
+            // Generate then block in isolated context
+            // Generate then block inline (no isolated context)
+            let mut then_stmts = vec![];
+            if !then.is_empty() {
+                // Save current statements
+                let saved_stmts = std::mem::take(&mut self.stmts);
+
+                // Generate block statements directly in current context
+                for s in then {
+                    self.lower_ast(s);
+                }
+
+                // Take the generated statements
+                then_stmts = std::mem::take(&mut self.stmts);
+
+                // Restore main statements
+                self.stmts = saved_stmts;
+
+                // For expression if, capture the last value
+                if let Some(dest) = dest_id
+                    && !then_has_return
+                {
+                    if let Some(last_stmt) = then_stmts.last() {
+                        match last_stmt {
+                            MirStmt::Assign { lhs, .. } => {
+                                // Add assignment to dest
+                                then_stmts.push(MirStmt::Assign {
+                                    lhs: dest,
+                                    rhs: *lhs,
+                                });
+                            }
+                            MirStmt::If {
+                                dest: Some(if_dest),
+                                ..
+                            } => {
+                                // Block ends with if expression - use its destination
+                                then_stmts.push(MirStmt::Assign {
+                                    lhs: dest,
+                                    rhs: *if_dest,
+                                });
+                            }
+                            MirStmt::Call {
+                                dest: call_dest, ..
+                            }
+                            | MirStmt::SemiringFold { result: call_dest, .. }
+                            | MirStmt::DictGet {
+                                dest: call_dest, ..
+                            }
+                            | MirStmt::MapNew { dest: call_dest }
+                            | MirStmt::StructNew {
+                                dest: call_dest, ..
+                            } => {
+                                // Block ends with function call - use its result
+                                then_stmts.push(MirStmt::Assign {
+                                    lhs: dest,
+                                    rhs: *call_dest,
+                                });
+                            }
+                            _ => {
+                                // No value-producing statement found
+                                let zero_id = self.next_id_with_lit(0);
+                                then_stmts.push(MirStmt::Assign {
+                                    lhs: dest,
+                                    rhs: zero_id,
+                                });
+                            }
+                        }
+                    } else if let Some(last_ast) = then.last() {
+                        // then_stmts is empty but then block has AST nodes
+                        // Lower the last AST as an expression for its value
+                        let val_id = self.lower_expr(last_ast);
+                        then_stmts.push(MirStmt::Assign {
+                            lhs: dest,
+                            rhs: val_id,
+                        });
+                    }
+                }
+            }
+
+            // Generate else block inline
+            let mut else_stmts = vec![];
+            if !else_.is_empty() {
+                // Save current statements
+                let saved_stmts = std::mem::take(&mut self.stmts);
+
+                // Generate block statements directly in current context
+                for s in else_ {
+                    self.lower_ast(s);
+                }
+
+                // Take the generated statements
+                else_stmts = std::mem::take(&mut self.stmts);
+
+                // Restore main statements
+                self.stmts = saved_stmts;
+
+                // For expression if, capture the last value
+                if let Some(dest) = dest_id
+                    && !else_has_return
+                {
+                    if let Some(last_stmt) = else_stmts.last() {
+                        match last_stmt {
+                            MirStmt::Assign { lhs, .. } => {
+                                // Add assignment to dest
+                                else_stmts.push(MirStmt::Assign {
+                                    lhs: dest,
+                                    rhs: *lhs,
+                                });
+                            }
+                            MirStmt::If {
+                                dest: Some(if_dest),
+                                ..
+                            } => {
+                                // Block ends with if expression - use its destination
+                                else_stmts.push(MirStmt::Assign {
+                                    lhs: dest,
+                                    rhs: *if_dest,
+                                });
+                            }
+                            MirStmt::Call {
+                                dest: call_dest, ..
+                            }
+                            | MirStmt::SemiringFold { result: call_dest, .. }
+                            | MirStmt::DictGet {
+                                dest: call_dest, ..
+                            }
+                            | MirStmt::MapNew { dest: call_dest }
+                            | MirStmt::StructNew {
+                                dest: call_dest, ..
+                            } => {
+                                // Block ends with function call - use its result
+                                else_stmts.push(MirStmt::Assign {
+                                    lhs: dest,
+                                    rhs: *call_dest,
+                                });
+                            }
+                            _ => {
+                                // No value-producing statement found
+                                let zero_id = self.next_id_with_lit(0);
+                                else_stmts.push(MirStmt::Assign {
+                                    lhs: dest,
+                                    rhs: zero_id,
+                                });
+                            }
+                        }
+                    } else if let Some(last_ast) = else_.last() {
+                        // else_stmts is empty but else block has AST nodes
+                        // Lower the last AST as an expression for its value
+                        let val_id = self.lower_expr(last_ast);
+                        else_stmts.push(MirStmt::Assign {
+                            lhs: dest,
+                            rhs: val_id,
+                        });
+                    }
+                }
+            }
+
+            // Expressions are already in self.exprs (generated inline)
+            // No need to merge or update next_id
+
+            // An expression-if's dest starts I64; a str-valued branch then
+            // leaks a pointer-typed slot (batch 293: `[d for d in days if
+            // cond]` desugars to `if cond { d } else { -1 }`, the dest
+            // stayed I64, so `trading_days_filtered` was DynamicArray(I64)
+            // and the driver's date filter pointer-compared to 0 days).
+            // Trust the branch that carries the comprehension element; the
+            // -1 skip sentinel needs no type.
+            if let Some(dest) = dest_id {
+                let branch_val = |stmts: &Vec<MirStmt>| -> Option<u32> {
+                    stmts.last().and_then(|s| match s {
+                        MirStmt::Assign { lhs, rhs } if *lhs == dest => Some(*rhs),
+                        _ => None,
+                    })
+                };
+                let refined = branch_val(&then_stmts)
+                    .or_else(|| branch_val(&else_stmts))
+                    .and_then(|v| self.type_map.get(&v).cloned());
+                if let Some(t) = refined {
+                    self.type_map.insert(dest, t);
+                }
+            }
+
+            self.stmts.push(MirStmt::If {
+                cond: cond_id,
+                then: then_stmts,
+                else_: else_stmts,
+                dest: dest_id,
+            });
     }
 }
