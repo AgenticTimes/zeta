@@ -50,7 +50,9 @@ LOGDIR="$(mktemp -d /tmp/batch_gate.XXXXXX)"
 
 run_libtest(){ cargo test -p zetac --lib -- --test-threads=1 >"$LOGDIR/libtest.log" 2>&1; }
 run_global() { # 每 10 批一次：全局逐个跑（diff_test 本就逐例判定、逐例点名）
-  python3 tools/diff_test.py >"$LOGDIR/diff.log" 2>&1
+  # 批次 869：接 --group 50 合并编译模式（809 批落地的加速，实测 ~40 分钟→4 分钟；
+  # 判定逐字一致、逐例点名语义不变）
+  python3 tools/diff_test.py --group 50 >"$LOGDIR/diff.log" 2>&1
   bash tests/python_style/run.sh >"$LOGDIR/pystyle.log" 2>&1
 }
 
