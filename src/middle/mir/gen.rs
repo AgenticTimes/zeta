@@ -6949,6 +6949,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         // in the file, typed the tuple result F64 and crashed
                         // codegen on the tuple unpack (stack_array_get on a
                         // float-typed slot, corpus 38/40 → this fix).
+                        // (cleanup lane batch 10006 ported the same guard.)
                         let (module, member) = {
                             let own =
                                 format!("{}__{}", self.current_module.replace('.', "_"), method);
@@ -11054,15 +11055,17 @@ call, no NULL-handle dereference).",
                 // 标量的接收者：`Type::Named` 一律放行——pylib/pandas.z:339 的
                 // GroupBy.mean 库方法表就是靠兜底臂继续生效的，把它折成数值是新造的
                 // 静默错值。
+                // 批次 10004（#267，cleanup 车道修正随合并入库）：接收者收窄到静态
+                // 向量。原先还接 PyDynamic／I64／None 这些"类型未知"的接收者，而折叠
+                // 结果一律标 Type::F64——pandas 对象句柄被当浮点存槽后，后续字典下标
+                // 打到 codegen 的硬转（静默错值在先、响亮失败在后）。类型未知时不折
+                // 叠、交回兜底臂当对象看待。
                 if method == "mean"
+                    && receiver.is_some()
                     && arg_ids.len() == 1
                     && matches!(
                         receiver_ty.as_ref(),
-                        Some(Type::PyDynamic)
-                            | Some(Type::I64)
-                            | Some(Type::DynamicArray(_))
-                            | Some(Type::Array(_, _))
-                            | None
+                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
                     )
                 {
                     let elem_is_i64 = match receiver_ty.as_ref() {
@@ -11295,6 +11298,7 @@ call, no NULL-handle dereference).",
                     self.type_map.insert(id, receiver_ty.clone().unwrap());
                     return id;
                 }
+
                 let opaque_fallback: Option<(&str, &str)> = if receiver.is_some()
                     && !struct_has_method
                     && receiver_ty.as_ref().map_or(true, |t| {

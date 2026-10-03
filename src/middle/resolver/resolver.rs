@@ -5607,18 +5607,20 @@ fn shim_class_normalize(t: &Type) -> Type {
             return;
         }
         let mut target: Option<AstNode> = None;
-        for d in self.registered_func_defs.borrow().iter() {
-            if let AstNode::FuncDef { name: n, .. } = d.as_ref() {
-                if n == name {
-                    target = Some(d.as_ref().clone());
-                    break;
-                }
+        // lib 的降型循环取的是 `registered_funcs`，预热必须同源（cleanup 车道批次
+        // 随合并入库）；`registered_func_defs` 留作回退源。
+        if let Some(v) = self.registered_funcs.get(name) {
+            if let AstNode::FuncDef { .. } = v {
+                target = Some(v.clone());
             }
         }
         if target.is_none() {
-            if let Some(v) = self.registered_funcs.get(name) {
-                if let AstNode::FuncDef { .. } = v {
-                    target = Some(v.clone());
+            for d in self.registered_func_defs.borrow().iter() {
+                if let AstNode::FuncDef { name: n, .. } = d.as_ref() {
+                    if n == name {
+                        target = Some(d.as_ref().clone());
+                        break;
+                    }
                 }
             }
         }
