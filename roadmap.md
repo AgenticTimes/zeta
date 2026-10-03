@@ -26577,3 +26577,10 @@ gen/call_class.rs：CallClass 枚举八变体＋纯函数 classify_call；三条
 
 classify_call 消费落地（len 臂＋集合族入口）；路由决策收敛到
 classify_call 唯一决策点。t807 抽查（2/y/z）＋转换面 ✓；内置 151/151。
+
+## 批次 825（本批）：json 序列化分类面抽出 call_json.rs——dumps/dump 共用判定
+
+json_route 纯函数（符号＋vec 元素标签），dumps/dump 两份手写 match
+收敛为一份。合同三条：标量各归其道（PyDynamic 兜底钉）、容器 typed
+vec 元素标签、map/dict 同路＋PyJson 递归。json.dumps 探针对齐
+CPython。全库内置测试 154/154。
