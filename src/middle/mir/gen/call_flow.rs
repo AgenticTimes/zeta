@@ -1,4 +1,4 @@
-//! 批次 854：Loop 无限循环发射体。
+//! 批次 860：Loop 无限循环发射体。
 
 use super::MirGen;
 use crate::frontend::ast::AstNode;
@@ -6,35 +6,35 @@ use crate::middle::mir::mir::{MirExpr, MirStmt};
 use crate::middle::types::Type;
 
 impl MirGen {
-PY-A Loop 无限循环发射体——原臂逐字。
-pub(super) fn lower_loop(&mut self, body: &Box<AstNode>, dest: u32) {
-                    tail = body.last();
-                }
-                match tail {
-                    Some(AstNode::ExprStmt { expr }) | Some(AstNode::Return(expr)) => {
-                        ast_ty(expr)
-                    }
-                    Some(AstNode::Assign(_, rhs)) => ast_ty(rhs),
-                    _ => None,
-                }
-            };
-            let t = tail_of(then);
-            let e = tail_of(else_);
-            match (t, e) {
-                (Some(a), Some(b)) if a == b => Some(a),
-                // Mixed arms: a filtered comprehension is
-                // `if cond { ELEMENT } else { -1 }` — the i64 sentinel
-                // must not drag the result type to I64 (batch 293:
-                // this made every str comprehension a DynamicArray
-                // (I64), and the driver's trading-day filter then
-                // pointer-compared to 0 days).
-                (Some(Type::I64), Some(b)) => Some(b),
-                (Some(a), Some(Type::I64)) => Some(a),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                _ => None,
+    pub(super) fn lower_loop(&mut self, body: &Box<AstNode>, dest: u32) -> u32 {
+            // Loop expression: result slot (default 0); break EXPR writes it.
+            let result_id = self.next_id();
+            self.exprs.insert(result_id, MirExpr::IntLit(0));
+            self.type_map.insert(result_id, Type::I64);
+            self.loop_value_stack.push(result_id);
+
+            let stmts_before = self.stmts.len();
+            for stmt in body {
+                self.lower_ast(stmt);
             }
-        };
-        // Create destination for expression result
-}
+            let loop_stmts = self.stmts.split_off(stmts_before);
+            self.loop_value_stack.pop();
+
+            let cond_id = self.next_id();
+            self.exprs.insert(cond_id, MirExpr::IntLit(1));
+            self.type_map.insert(cond_id, Type::I64);
+            self.stmts.push(MirStmt::While {
+                cond: cond_id,
+                pre_cond: vec![],
+                body: loop_stmts,
+                else_body: vec![],
+            });
+
+            self.exprs.insert(result_id, MirExpr::Var(result_id));
+            self.type_map.insert(result_id, Type::I64);
+            self.exprs.insert(id, MirExpr::Var(result_id));
+            self.type_map.insert(id, Type::I64);
+            return result_id;
+        dest
+    }
 }

@@ -5268,73 +5268,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 self.type_map.insert(id, Type::Str);
             }
             AstNode::FString(parts) => {
-                // PY-A: every part must be a string handle — non-string
-                // expressions go through a to_string_* dispatch.
-                let mut part_ids: Vec<u32> = Vec::new();
-                for p in parts {
-                    // Batch 625: `f"{None}"` literal face renders "None" —
-                    // lowered as the ordinary StringLit part it is (value
-                    // representation stays 0, #113/#189 deep water).
-                    if matches!(p, AstNode::NoneLit) {
-                        let pid = self.lower_expr(&AstNode::StringLit("None".to_string()));
-                        part_ids.push(pid);
-                        continue;
-                    }
-                    // Batch 654: a NoneVar part (`x = None; f"{x}"`) — same
-                    // render-at-consumption face as the print arm; the slot
-                    // stays I64 0.
-                    if let AstNode::Var(x) = p {
-                        if self.none_vars_gen.contains(x) {
-                            let pid = self.lower_expr(&AstNode::StringLit("None".to_string()));
-                            part_ids.push(pid);
-                            continue;
-                        }
-                    }
-                    // Batch 659: a map Subscript part behind a Str-refined
-                    // value type (`f"n={d["k"]}"`) — same per-key-tag render
-                    // as the print arm; the raw word otherwise flowed into
-                    // str_concat as a "string" pointer (measured ZT-WARN +
-                    // truncated output).
-                    if let AstNode::Subscript { base, index } = p {
-                        let base_map_str = if let AstNode::Var(vname) = &**base {
-                            self.name_to_id
-                                .get(vname.as_str())
-                                .map_or(false, |&sid| {
-                                    matches!(
-                                        self.type_map.get(&sid),
-                                        Some(Type::Named(n, params))
-                                            if n == "map"
-                                                && matches!(params.last(), Some(Type::Str))
-                                    )
-                                })
-                        } else {
-                            false
-                        };
-                        if base_map_str {
-                            let recv_id = self.lower_expr(base);
-                            let k_id = self.lower_expr(index);
-                            let r_id = self.emit_call("zeta_map_get_render", vec![recv_id, k_id], Type::Str);
-                            part_ids.push(r_id);
-                            continue;
-                        }
-                    }
-                    let pid = self.lower_expr(p);
-                    // An INLINE CONDITIONAL whose branches are both strings
-                    // (`f"{'sh' if exch == 'XSHG' else 'sz'}.{num}"`) left the
-                    // part typed i64, so `lower_to_string` stringified the raw
-                    // handle: `jq_to_bs("510300.XSHG")` returned
-                    // `4339988730.510300` instead of `sh.510300` — i.e. EVERY
-                    // code in the wufu universe came out numerically garbage.
-                    if matches!(self.type_map.get(&pid), Some(Type::I64) | Some(Type::PyDynamic)) {
-                        if Self::both_branches_are_strings(p) {
-                            self.type_map.insert(pid, Type::Str);
-                        }
-                    }
-                    let pid = self.lower_to_string(pid);
-                    part_ids.push(pid);
-                }
-                self.exprs.insert(id, MirExpr::FString(part_ids));
-                self.type_map.insert(id, Type::Str);
+                // 批次 860：FString 臂迁入 gen/call_fstring.rs。
+                return self.lower_fstring(parts, dest);
             }
             AstNode::BinaryOp { op, left, right } => {
                 // `x in ("sh", "sz")` — a TUPLE literal on the right. Tuples are
@@ -6887,36 +6822,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     {
                         if method == "zeta_dict_spread" && ka.len() == 1 {
                             let src_id = self.lower_expr(&ka[0]);
-                            // Take the key kind from the source map so a
-                            // spread-only literal (`{**a}`) is still
-                            // string-keyed and `d.keys()` stays Vec<str>.
-                            if first_key {
-                                if let Some(Type::Named(n, params)) =
-                                    self.type_map.get(&src_id).cloned()
-                                {
-                                    if n == "map" {
-                                        if let Some(kt) = params.first() {
-                                            key_ty = kt.clone();
-                                            first_key = false;
-                                        }
-                                    }
-                                }
-                            }
-                            let scratch = self.next_id();
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_map_update".to_string(),
-                                args: vec![map_id, src_id],
-                                dest: scratch,
-                                type_args: vec![],
-                            });
-                            continue;
-                        }
-                    }
-                    let kid0 = self.lower_expr(k);
-                    if first_key {
-                        // Remember whether keys are strings: the map type carries
-                        // the key kind so `d.keys()` is typed Vec<str>.
-                        key_ty = self.type_map.get(&kid0).cloned().unwrap_or_else(Type::slot_fallback);
+            AstNode::Loop { body } => {
+                // 批次 860：Loop 臂迁入 gen/call_flow.rs。
+                return self.lower_loop(body, dest);
+            }
                         first_key = false;
                     }
                     let kid = self.lower_map_key(kid0);
