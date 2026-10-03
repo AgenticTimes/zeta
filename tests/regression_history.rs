@@ -2711,3 +2711,178 @@ fn after_typed_for() -> i64 {
         "循环体不该是空的（改写一旦发生，`sum = sum + i` 就掉出了本语句），实得 body: {body:?}"
     );
 }
+
+/// 批次 370（主线 `ceb704c9`）：数组类型注解的长度位收表达式。
+///
+/// 症状（记录原文口径）：`parse_zeta_array` 的长度位只认 `digit1 | parse_ident`，
+/// `[usize; MAX + 1]` 在这里失败 → 整个 `fn` 被拒 → W1002 丢掉其后顶层项
+/// （`tests/unit-tests/test_const_expression.z` 丢 14 行，含 `fn main`）。
+///
+/// 期望值来源：在册 official 夹具 `test_const_expression.z` 的 AOT 退出码（本批实拍
+/// 退出码 0＝`arr[50]` 的值，`/tmp/b10023/out370`）＋Python 等价写法
+/// `arr=[0]*(MAX+1); arr[50]` 也给 0；缺陷记录里那句"整个 fn 被拒"。
+/// 两个接缝都钉：
+/// 1. **解析器接缝**（`pub fn parse_array_type`）——长度位是表达式时返回的类型串
+///    逐字为 `"[i64; MAX + 1]"`（改前这条直接 Err，所以红点落在这一句本身）；
+/// 2. **降形接缝**——带该注解的 `fn` 与它后面的顶层项都还在。
+///
+/// 覆盖面分工与边界：见批次 10023 的台账（变异实测后写）。
+#[test]
+fn array_type_size_slot_accepts_const_expression() {
+    let parsed = zetac::frontend::parser::parser::parse_array_type("[i64; MAX + 1]")
+        .unwrap_or_else(|e| panic!("长度位是表达式时应解析成功（改前在这里 Err），实得 {e:?}"));
+    assert!(
+        parsed.0.trim().is_empty(),
+        "整个类型注解该被吃满，剩余: {:?}",
+        parsed.0
+    );
+    assert_eq!(
+        parsed.1, "[i64; MAX + 1]",
+        "长度位原文（去空白）该原样带进类型串"
+    );
+
+    let mirs = lower_all(
+        r#"fn fill(buf: [i64; MAX + 1]) -> i64 {
+    return 3
+}
+fn after_array_expr() -> i64 {
+    return 4
+}
+"#,
+    );
+    let fill = mir(&mirs, "fill");
+    assert!(
+        fill
+            .param_indices
+            .iter()
+            .any(|(n, id)| n == "buf" && fill.type_map.contains_key(id)),
+        "`buf` 该作为形参登记，实得 param_indices: {:?}",
+        fill.param_indices
+    );
+    assert!(
+        mirs.iter().any(|m| m.name.as_deref() == Some("after_array_expr")),
+        "带数组注解的 `fn` 后面那个顶层项不该被丢"
+    );
+}
+
+/// 批次 362（主线；源码笔 `8aa318d8`，文档笔 `5921ae0e`）：路径关键字加词边界。
+///
+/// 症状（记录原文口径）：`tag("self")` 没有词边界，`self_compile_test` 被截成
+/// 路径 `self` ＋ 剩下的 `_compile_test` ⇒ 整条调用解析失败、**其后所有语句静默丢弃**
+/// （`minimal_compiler.z` 因此丢 230 行）。
+/// 本批实拍补一条口径：该笔的**源码**是隔了一笔才提交的（`5921ae0e` 的提交说明写了
+/// 两处改动、实际只提了文档），所以引用这一格要带 `8aa318d8`。
+///
+/// 期望值来源：在册夹具 `tests/python_style/t408_self_prefix_ident.z` 的
+/// `// expect: 10 / 14 / 16`（本批用当前二进制实拍同值，`/tmp/b10023/out408`）
+/// ＋形状侧 `--dump-mir`（`/tmp/b10023/mir_f362h.txt`：实参槽 3 由
+/// `Assign { lhs: 3, rhs: 1 }` 从形参绑来，调用 `args: [3]`）。
+/// **CPython 侧不适用**：`fn`／`-> i64` 是 zeta 的 Rust 方言拼法。
+///
+/// 读到的现行事实（写给下批省一趟）：用户函数的调用点符号带**实例后缀**
+/// （`make` 在 MIR 里是 `make_1`、`bb()` 是 `bb_0`），所以断言按前缀取，别写死全名。
+#[test]
+fn self_prefixed_local_stays_one_identifier_in_call_args() {
+    let mirs = lower_all(
+        r#"fn make(x: i64) -> i64 {
+    return x * 2
+}
+fn uses_self_prefix(a: i64) -> i64 {
+    let self_compile_test = a
+    let doubled = make(self_compile_test)
+    return doubled
+}
+fn after_self_prefix(b: i64) -> i64 {
+    return b + 2
+}
+"#,
+    );
+    let u = mir(&mirs, "uses_self_prefix");
+
+    // 形参 → self 前缀局部：这条 Assign 是症状的正面证据（它存在说明
+    // `let self_compile_test = a` 整条被解析了）。
+    assert!(
+        top_assigns(u).contains(&(3, 1)),
+        "`let self_compile_test = a` 该是把形参槽 1 赋进槽 3，实得顶层赋值: {:?}",
+        top_assigns(u)
+    );
+
+    let mut calls = u.stmts.iter().filter_map(|s| match s {
+        MirStmt::Call { func, args, .. } => Some((func.clone(), args.clone())),
+        _ => None,
+    });
+    let (callee, args) = calls
+        .next()
+        .expect("`make(self_compile_test)` 该降出一次调用（改前整条失败）");
+    assert!(
+        calls.next().is_none(),
+        "函数体里只该有这一次调用，多出来的＝解析错位"
+    );
+    assert!(
+        callee.starts_with("make"),
+        "被调名该是 `make`（带实例后缀），实得 {callee}"
+    );
+    assert_eq!(
+        args,
+        vec![3],
+        "实参该是那个 self 前缀局部（槽 3），不是 `self` 路径本身"
+    );
+    assert!(
+        mirs.iter().any(|m| m.name.as_deref() == Some("after_self_prefix")),
+        "`fn` 不该因为这一条语句被整块丢掉"
+    );
+}
+
+/// 批次 334（主线 `3f7504aa`，任务旧 #51）：flat 文件里 `//` 按**行内括号深度**判定。
+///
+/// 症状（记录原文口径）：`//`→`floordiv` 的重写挂在 `normalize_blocks` 的
+/// `changed` 后面，而 flat（无缩进）文件不需要改写 ⇒ `changed` 为假，整个重写被跳过，
+/// `print(x // y)` 的后半截被当行注释吃掉（W1002 截断，"编译成功"却一个字不打）。
+/// 修法＝无缩进证据时逐处判：该列上 `(`/`[` 未闭合 ⇒ 在表达式内部 ⇒ 是运算符；
+/// **深度跨行携带**。
+///
+/// 期望值来源：在册夹具 `tests/python_style/t403_floor_div_inside_call.z` 的
+/// `// expect: 3` ＋ CPython 现跑（本批夹具 `print(\n len(xs) // 2\n)` 两侧都打 2，
+/// `/tmp/b10023/out334b`）＋形状侧 `--dump-mir`（`/tmp/b10023/mir_f334b.txt`：
+/// `Call { func: "floordiv", args: [18, 22], dest: 23 }` → `VoidCall { println_i64, [23] }`）。
+///
+/// 夹具故意取**跨行调用**那一形：`//` 被吃掉时剩下的 `print(` ＋ `)` 仍然配平，
+/// 前置断言（:48）不会红，所以红点只能落在下面这几句形状断言上——
+/// 与批次 10022 那三条"红点在 :48、形状断言没执行到"的格子互补。
+///
+/// 覆盖面分工与边界：见批次 10023 的台账（变异实测后写）。
+#[test]
+fn flat_file_double_slash_inside_open_bracket_is_the_operator() {
+    let mirs = lower_all("xs = [1, 2, 3, 4]\nprint(\n    len(xs) // 2\n)\n");
+    let main = mir(&mirs, "main");
+
+    let folds: Vec<(Vec<u32>, u32)> = main
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, args, dest, .. } if func == "floordiv" => {
+                Some((args.clone(), *dest))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        folds.len(),
+        1,
+        "`//` 在未闭合的 `(` 里该是整除运算符（改前它被当注释吃掉，一处都不剩），实得: {folds:?}"
+    );
+    let (args, dest) = folds[0].clone();
+    assert_eq!(args.len(), 2, "整除该有两个实参，实得 {args:?}");
+    assert_eq!(
+        int_lit(main, args[1]),
+        Some(2),
+        "除数该是字面量 2（t403 那条形如 `x // y`，本夹具取真值 2）"
+    );
+    assert!(
+        main.stmts.iter().any(|s| matches!(
+            s,
+            MirStmt::VoidCall { func, args } if func == "println_i64" && args == &[dest]
+        )),
+        "整除结果槽 {dest} 该直接喂给打印（喂错槽＝把被吃掉的那半截当没有）"
+    );
+}
