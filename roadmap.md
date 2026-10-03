@@ -26757,3 +26757,11 @@ changed 为语义修复批的合法 MIR 变化（#272 float(str)/emit_call 收�
 等），非纯搬移回归。轴 D 判据口径澄清：MIR diff 为空仅适用于纯搬移
 批，语义修复批以行为面（差分 2845/2845＋探针＋内置测试）为等价性证据。
 全库内置测试 157/157。
+
+## 批次 856（本批）：#268 dump 旋转根修——probe_only 提前返回重加
+
+根因：814 批加的 probe_only 提前返回在 git reset --hard 中丢失，
+dump 模式落穿到 LLVM codegen（FloatValue 槽 into_int_value panic）。
+修法：main.rs 加 probe_only && !dump_ir → return Ok(())。全语料
+40/40 dump PASS 零旋转。MIR diff 工具从此可用。
+教训：git reset --hard 丢失未提交修复——重要修复应及时提交。
