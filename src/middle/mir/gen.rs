@@ -6,6 +6,7 @@
 //! Clean, fast, and fully documented.
 
 mod call_set;
+mod call_class;
 mod call_len;
 mod call_str;
 use self::call_str::{path_ends_with_mem, str_method_symbol, str_method_symbol3, to_string_channel};
