@@ -28814,3 +28814,13 @@ gen.rs→call_field.rs 一处＋两行（parts.push(field)）。
 （--group 50）match=2845/2845＝100%；内置单元测试 157/157。
 余 4 例（t217_np_where／t274_df_columns_kwarg／t79_counter_most_common／
 t813_unannotated_float_return）属另族，#278 已收窄登记。
+
+## 批次 881（2026-10-04，**重构批：Var 读臂（328 行）迁入 gen/call_var.rs**）
+
+869 零适配法：`lower_var_read(&mut self, name: &String, id: u32) -> u32`——臂体
+逐字（nonlocal/env 优先读、模块全局、函数地址 FuncAddr、捕获变量、未声明名
+告警全保留），尾补 `id`；调用点转发（臂内 2 处早退产出非 id 槽）。
+gen.rs 4907→4588（净 -319）。
+
+验证：编译零错误；内置单元测试 157/157；历史探针七套复跑（除 869 的 #275
+存量面外零差异）；**全量差分（--group 50）match=2845/2845＝100%**。
