@@ -2207,7 +2207,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                                 let ty = match self.type_map.get(&rhs_id).cloned() {
                                     Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => *e,
                                     Some(Type::Tuple(ts)) => {
-                                        ts.get(i).cloned().unwrap_or(Type::I64)
+                                        ts.get(i).cloned().unwrap_or_else(Type::slot_fallback)
                                     }
                                     // A function returning a tuple ANNOTATED in
                                     // Python spelling (`-> tuple[pd.DataFrame, int]`,
@@ -2218,7 +2218,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                                     // (`len(out.columns)` → MAP lookup = 0;
                                     // `out["a"]` → SEGV).
                                     Some(Type::Named(n, ts)) if n == "tuple" => {
-                                        ts.get(i).cloned().unwrap_or(Type::I64)
+                                        ts.get(i).cloned().unwrap_or_else(Type::slot_fallback)
                                     }
                                     Some(Type::Str) => Type::Str,
                                     _ => Type::I64,
@@ -2330,7 +2330,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     let index_id = self.lower_expr(index);
 
                     // Check if base is an array type
-                    let base_ty = self.type_map.get(&base_id).cloned().unwrap_or(Type::I64);
+                    let base_ty = self.type_map.get(&base_id).cloned().unwrap_or_else(Type::slot_fallback);
                     let source_ty = self.source_types.get(&base_id).cloned().unwrap_or_default();
                     let is_array_param =
                         source_ty.starts_with("[") || source_ty.starts_with("*mut [");
@@ -2389,15 +2389,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         // fields off the handle (`PositionLedger.positions`).
                         // Inserting a value refines the declared type, exactly like
                         // the first entry of a dict literal.
-                        let val_ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
+                        let val_ty = self.type_map.get(&rhs_id).cloned().unwrap_or_else(Type::slot_fallback);
                         let key_ty = self
                             .type_map
                             .get(&index_id)
                             .cloned()
                             .unwrap_or(Type::I64);
                         if let Type::Named(_, targs) = &base_ty {
-                            let old_key = targs.first().cloned().unwrap_or(Type::I64);
-                            let old_val = targs.get(1).cloned().unwrap_or(Type::I64);
+                            let old_key = targs.first().cloned().unwrap_or_else(Type::slot_fallback);
+                            let old_val = targs.get(1).cloned().unwrap_or_else(Type::slot_fallback);
                             let new_key = if matches!(old_key, Type::I64)
                                 && matches!(key_ty, Type::Str)
                             {
@@ -2650,7 +2650,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         let new_id = self.next_id();
                         self.name_to_id.insert(name.clone(), new_id);
                         self.exprs.insert(new_id, MirExpr::Var(new_id));
-                        let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
+                        let ty = self.type_map.get(&rhs_id).cloned().unwrap_or_else(Type::slot_fallback);
                         self.type_map.insert(new_id, ty);
                         if self.tuple_slots.contains(&rhs_id) {
                             self.tuple_slots.insert(new_id);
@@ -2720,7 +2720,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         return;
                     }
                     let rhs_id = self.lower_expr(&new_rhs);
-                    let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
+                    let ty = self.type_map.get(&rhs_id).cloned().unwrap_or_else(Type::slot_fallback);
                     match self.name_to_id.get(name).copied() {
                         Some(slot) => {
                             self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
@@ -2761,7 +2761,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     let mut tys = Vec::with_capacity(items.len());
                     for it in items {
                         let vid = self.lower_expr(it);
-                        tys.push(self.type_map.get(&vid).cloned().unwrap_or(Type::I64));
+                        tys.push(self.type_map.get(&vid).cloned().unwrap_or_else(Type::slot_fallback));
                         vals.push(vid);
                     }
                     let cap = self.next_id_with_lit(items.len() as i64);
@@ -2775,7 +2775,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     self.exprs.insert(h, MirExpr::Var(h));
                     self.type_map.insert(
                         h,
-                        Type::DynamicArray(Box::new(tys.first().cloned().unwrap_or(Type::I64))),
+                        Type::DynamicArray(Box::new(tys.first().cloned().unwrap_or_else(Type::slot_fallback))),
                     );
                     // Mirror the ArrayLit lowering EXACTLY: every push targets the
                     // ORIGINAL handle `h` (the runtime grows it and returns a new
@@ -2794,7 +2794,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         self.exprs.insert(sink, MirExpr::Var(sink));
                         self.type_map.insert(
                             sink,
-                            Type::DynamicArray(Box::new(tys.first().cloned().unwrap_or(Type::I64))),
+                            Type::DynamicArray(Box::new(tys.first().cloned().unwrap_or_else(Type::slot_fallback))),
                         );
                     }
                     self.type_map.insert(h, Type::Tuple(tys));
@@ -3339,7 +3339,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             self.exprs.insert(coll_slot, MirExpr::Var(coll_slot));
                             self.type_map.insert(
                                 coll_slot,
-                                self.type_map.get(&raw_id).cloned().unwrap_or(Type::I64),
+                                self.type_map.get(&raw_id).cloned().unwrap_or_else(Type::slot_fallback),
                             );
                             self.stmts.push(MirStmt::Assign {
                                 lhs: coll_slot,
@@ -4073,7 +4073,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
     /// codegen's call-arg path reads operands from local slots, and an
     /// expression result (FieldAccess, call, subscript) has no alloca.
     fn materialize_for_call(&mut self, id: u32) -> u32 {
-        let ty = self.type_map.get(&id).cloned().unwrap_or(Type::I64);
+        let ty = self.type_map.get(&id).cloned().unwrap_or_else(Type::slot_fallback);
         let slot = self.next_id();
         self.stmts.push(MirStmt::Assign {
             lhs: slot,
@@ -4182,8 +4182,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         };
         let (cur_key, cur_val) = match self.type_map.get(&slot) {
             Some(Type::Named(n, targs)) if n == "map" || n == "dict" => (
-                targs.first().cloned().unwrap_or(Type::I64),
-                targs.get(1).cloned().unwrap_or(Type::I64),
+                targs.first().cloned().unwrap_or_else(Type::slot_fallback),
+                targs.get(1).cloned().unwrap_or_else(Type::slot_fallback),
             ),
             _ => return,
         };
@@ -4849,7 +4849,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         None => {
                             let new_id = self.next_id();
                             self.exprs.insert(new_id, MirExpr::Var(new_id));
-                            let ty = self.type_map.get(&rhs_id).cloned().unwrap_or(Type::I64);
+                            let ty = self.type_map.get(&rhs_id).cloned().unwrap_or_else(Type::slot_fallback);
                             self.type_map.insert(new_id, ty);
                             self.name_to_id.insert(name.clone(), new_id);
                             self.stmts.push(MirStmt::Assign {
@@ -5759,7 +5759,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             let f = self.next_id();
                             self.exprs.insert(f, MirExpr::Var(f));
                             let ty =
-                                self.type_map.get(&right_id).cloned().unwrap_or(Type::I64);
+                                self.type_map.get(&right_id).cloned().unwrap_or_else(Type::slot_fallback);
                             self.type_map.insert(f, ty);
                             self.stmts.push(MirStmt::Assign {
                                 lhs: f,
@@ -6148,7 +6148,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         type_args: vec![],
                     });
                     self.exprs.insert(dest, MirExpr::Var(dest));
-                    let lt = self.type_map.get(&left_id).cloned().unwrap_or(Type::I64);
+                    let lt = self.type_map.get(&left_id).cloned().unwrap_or_else(Type::slot_fallback);
                     self.type_map.insert(dest, lt);
                 } else if op == "+" {
                     self.stmts.push(MirStmt::SemiringFold {
@@ -7130,13 +7130,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     if first_key {
                         // Remember whether keys are strings: the map type carries
                         // the key kind so `d.keys()` is typed Vec<str>.
-                        key_ty = self.type_map.get(&kid0).cloned().unwrap_or(Type::I64);
+                        key_ty = self.type_map.get(&kid0).cloned().unwrap_or_else(Type::slot_fallback);
                         first_key = false;
                     }
                     let kid = self.lower_map_key(kid0);
                     let vid = self.lower_expr(v);
                     if first_val {
-                        val_ty = self.type_map.get(&vid).cloned().unwrap_or(Type::I64);
+                        val_ty = self.type_map.get(&vid).cloned().unwrap_or_else(Type::slot_fallback);
                         first_val = false;
                     }
                     // 批次 806（#113 携带读面）：全 None 值字典 ⇒ 值型
@@ -8018,7 +8018,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 if classify_call(method) == CallClass::Special
                     && (method == "DataFrame" || method == "Counter")
                 {
-                    if let Some(nid) = self.lower_ctor(receiver, method, args, id) {
+                    if let Some(nid) = self.lower_ctor(receiver, method, type_args, args, id) {
                         return nid;
                     }
                 }
@@ -9355,7 +9355,7 @@ call, no NULL-handle dereference).",
                 // keep the element type.
                 if receiver.is_none() && method == "tuple" && args.len() == 1 {
                     let a = self.lower_expr(&args[0]);
-                    let ty = self.type_map.get(&a).cloned().unwrap_or(Type::I64);
+                    let ty = self.type_map.get(&a).cloned().unwrap_or_else(Type::slot_fallback);
                     self.exprs.insert(id, MirExpr::Var(a));
                     self.type_map.insert(id, ty);
                     return id;
@@ -10228,7 +10228,7 @@ call, no NULL-handle dereference).",
                                         type_args: vec![],
                                     });
                                     self.exprs.insert(nid, MirExpr::Var(nid));
-                                    let kty = targs.first().cloned().unwrap_or(Type::I64);
+                                    let kty = targs.first().cloned().unwrap_or_else(Type::slot_fallback);
                                     self.type_map
                                         .insert(nid, Type::DynamicArray(Box::new(kty.clone())));
                                     self.exprs.insert(id, MirExpr::Var(nid));
@@ -10567,7 +10567,7 @@ call, no NULL-handle dereference).",
                 let receiver_ty = if let Some(r) = receiver {
                     let rid = self.lower_expr(r);
                     arg_ids.push(rid);
-                    Some(self.type_map.get(&rid).cloned().unwrap_or(Type::I64))
+                    Some(self.type_map.get(&rid).cloned().unwrap_or_else(Type::slot_fallback))
                 } else {
                     None
                 };
@@ -11872,7 +11872,7 @@ call, no NULL-handle dereference).",
                         };
                         let val_ty = match receiver_ty.as_ref() {
                             Some(Type::Named(_, args)) => {
-                                args.get(1).cloned().unwrap_or(Type::I64)
+                                args.get(1).cloned().unwrap_or_else(Type::slot_fallback)
                             }
                             _ => Type::I64,
                         };
@@ -12245,7 +12245,7 @@ call, no NULL-handle dereference).",
                                 });
                                 match idx {
                                     Some(i) if i >= 0 => {
-                                        ts.get(i as usize).cloned().unwrap_or(Type::I64)
+                                        ts.get(i as usize).cloned().unwrap_or_else(Type::slot_fallback)
                                     }
                                     _ => Type::I64,
                                 }
@@ -12636,8 +12636,8 @@ call, no NULL-handle dereference).",
                 // String VALUES are refused loudly further down instead of being
                 // silently stored as a pointer-to-i64.
                 if method == "__pack_pair__" && arg_ids.len() == 2 {
-                    let k_ty = self.type_map.get(&arg_ids[0]).cloned().unwrap_or(Type::I64);
-                    let v_ty = self.type_map.get(&arg_ids[1]).cloned().unwrap_or(Type::I64);
+                    let k_ty = self.type_map.get(&arg_ids[0]).cloned().unwrap_or_else(Type::slot_fallback);
+                    let v_ty = self.type_map.get(&arg_ids[1]).cloned().unwrap_or_else(Type::slot_fallback);
                     self.last_dict_pair_ty = Some((k_ty.clone(), v_ty.clone()));
                     if matches!(k_ty, Type::Str) {
                         let hashed = self.emit_call("map_str_key", vec![arg_ids[0]], Type::I64);
@@ -12702,7 +12702,7 @@ call, no NULL-handle dereference).",
                 // calibration.py) — the comparison still worked, but `print`
                 // showed the raw handle, i.e. one silent wrong VALUE per use.
                 let map_value_ty = match receiver_ty.as_ref() {
-                    Some(Type::Named(_, targs)) => targs.get(1).cloned().unwrap_or(Type::I64),
+                    Some(Type::Named(_, targs)) => targs.get(1).cloned().unwrap_or_else(Type::slot_fallback),
                     _ => Type::I64,
                 };
                 // PY-A: dict methods — Python d.get(k) (missing key → 0)
@@ -12904,7 +12904,7 @@ call, no NULL-handle dereference).",
                         Some(t) if t.is_map()
                     )
                 {
-                    let ret = receiver_ty.as_ref().cloned().unwrap_or(Type::I64);
+                    let ret = receiver_ty.as_ref().cloned().unwrap_or_else(Type::slot_fallback);
                     self.stmts.push(MirStmt::Call {
                         func: "map__copy".to_string(),
                         args: arg_ids.clone(),
@@ -12941,7 +12941,7 @@ call, no NULL-handle dereference).",
                     && arg_ids.len() == 1
                     && receiver_ty.as_ref().map_or(false, |t| matches!(t, Type::DynamicArray(_)))
                 {
-                    let ret = receiver_ty.as_ref().cloned().unwrap_or(Type::I64);
+                    let ret = receiver_ty.as_ref().cloned().unwrap_or_else(Type::slot_fallback);
                     self.stmts.push(MirStmt::Call {
                         func: "zeta_vec_copy".to_string(),
                         args: arg_ids.clone(),
@@ -13383,7 +13383,7 @@ call, no NULL-handle dereference).",
                         let map_value_ty = if tag == "map" && method == "get" {
                             match receiver_ty.as_ref() {
                                 Some(Type::Named(_, targs)) => {
-                                    targs.get(1).cloned().unwrap_or(Type::I64)
+                                    targs.get(1).cloned().unwrap_or_else(Type::slot_fallback)
                                 }
                                 _ => Type::I64,
                             }
@@ -14543,7 +14543,7 @@ call, no NULL-handle dereference).",
                                 .find(|(f, _)| f == field)
                                 .cloned()
                             {
-                                let ty = self.type_map.get(&aid).cloned().unwrap_or(Type::I64);
+                                let ty = self.type_map.get(&aid).cloned().unwrap_or_else(Type::slot_fallback);
                                 self.exprs.insert(id, MirExpr::Var(aid));
                                 self.type_map.insert(id, ty);
                                 return id;
@@ -15036,7 +15036,7 @@ call, no NULL-handle dereference).",
                     // 2 bytes of garbage, which made every cache path miss.
                     let slot = self.next_id();
                     self.stmts.push(MirStmt::Assign { lhs: slot, rhs: field_id });
-                    let ty = self.type_map.get(&field_id).cloned().unwrap_or(Type::I64);
+                    let ty = self.type_map.get(&field_id).cloned().unwrap_or_else(Type::slot_fallback);
                     self.exprs.insert(slot, MirExpr::Var(slot));
                     self.type_map.insert(slot, ty);
                     self.self_field_aliases.push((field_name.clone(), slot));
@@ -15560,7 +15560,7 @@ call, no NULL-handle dereference).",
                         Type::DynamicArray(Box::new(elem_ty_pre.clone())),
                     );
                     for e in &lowered_elems {
-                        let e_ty = self.type_map.get(e).cloned().unwrap_or(Type::I64);
+                        let e_ty = self.type_map.get(e).cloned().unwrap_or_else(Type::slot_fallback);
                         let e_f = if matches!(e_ty, Type::F64) {
                             *e
                         } else {
@@ -15667,7 +15667,7 @@ call, no NULL-handle dereference).",
                 let value_id = self.lower_expr(value);
 
                 // Get the type of the value expression
-                let elem_type = self.type_map.get(&value_id).cloned().unwrap_or(Type::I64);
+                let elem_type = self.type_map.get(&value_id).cloned().unwrap_or_else(Type::slot_fallback);
 
                 // Check if size is a literal by examining the AST node directly
                 // We need to pattern match on the boxed value
@@ -15809,7 +15809,7 @@ call, no NULL-handle dereference).",
                     }
                 }
                 let bid = self.lower_expr(base);
-                let base_ty_pre = self.type_map.get(&bid).cloned().unwrap_or(Type::I64);
+                let base_ty_pre = self.type_map.get(&bid).cloned().unwrap_or_else(Type::slot_fallback);
                 // PY-A: negative index `arr[-k]` → `arr[n-k]` for arrays with a
                 // compile-time-known size (Python semantics).
                 // A DynamicArray base needs the count at RUNTIME: `arr[-k]` →
@@ -15938,7 +15938,7 @@ call, no NULL-handle dereference).",
                         });
                         self.exprs.insert(id, MirExpr::Var(id));
                         let elem = match &*index {
-                            AstNode::Lit(k) => ts.get(*k as usize).cloned().unwrap_or(Type::I64),
+                            AstNode::Lit(k) => ts.get(*k as usize).cloned().unwrap_or_else(Type::slot_fallback),
                             _ => Type::I64,
                         };
                         self.type_map.insert(id, elem);
@@ -15969,7 +15969,7 @@ call, no NULL-handle dereference).",
                     }
                 }
                 // Check if base is an array type (dynamic or static)
-                let base_ty = self.type_map.get(&bid).cloned().unwrap_or(Type::I64);
+                let base_ty = self.type_map.get(&bid).cloned().unwrap_or_else(Type::slot_fallback);
                 // 批次 796（#266 RUN 面）：Rust 方言形参标注 `xs: Vec<T>` 定型为
                 // Named("Vec", [T])——下面整条下标链（DynamicArray/Array/
                 // array_param/I64|PyDynamic 判别）没有这个形的臂，落进 dict
@@ -15980,7 +15980,7 @@ call, no NULL-handle dereference).",
                 let base_ty = match &base_ty {
                     Type::Named(n, targs) if n == "Vec" => {
                         Type::DynamicArray(Box::new(
-                            targs.first().cloned().unwrap_or(Type::I64),
+                            targs.first().cloned().unwrap_or_else(Type::slot_fallback),
                         ))
                     }
                     _ => base_ty.clone(),
@@ -16126,7 +16126,7 @@ call, no NULL-handle dereference).",
                     // `map<K, V>`), so a Vec-valued map stays indexable.
                     let val_ty = match &base_ty {
                         Type::Named(_, targs) => {
-                            targs.get(1).cloned().unwrap_or(Type::I64)
+                            targs.get(1).cloned().unwrap_or_else(Type::slot_fallback)
                         }
                         _ => Type::I64,
                     };
@@ -16467,7 +16467,7 @@ call, no NULL-handle dereference).",
                 self.exprs.insert(dest, MirExpr::Var(dest));
                 // Preserve the operand's type — unary_minus on f64 should still be f64.
                 // The old code hardcoded Type::I64, which broke float casts like `b as i64`.
-                let op_ty = self.type_map.get(&expr_id).cloned().unwrap_or(Type::I64);
+                let op_ty = self.type_map.get(&expr_id).cloned().unwrap_or_else(Type::slot_fallback);
                 self.type_map.insert(dest, op_ty);
                 return dest;
             }
@@ -16524,7 +16524,7 @@ call, no NULL-handle dereference).",
                 // Take each type from the lowered element instead.
                 let tys = element_ids
                     .iter()
-                    .map(|&eid| self.type_map.get(&eid).cloned().unwrap_or(Type::I64))
+                    .map(|&eid| self.type_map.get(&eid).cloned().unwrap_or_else(Type::slot_fallback))
                     .collect();
                 self.type_map.insert(id, Type::Tuple(tys));
                 self.tuple_slots.insert(id);
