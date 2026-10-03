@@ -38,4 +38,33 @@ impl MirGen {
         self.type_map.insert(id, Type::I64);
         result_id
     }
+
+    /// `while cond { body } else { ... }` 语句（批 862 自 gen.rs 原臂逐字迁入）。
+    pub(super) fn lower_while_stmt(
+        &mut self,
+        cond: &AstNode,
+        body: &[AstNode],
+        else_body: &[AstNode],
+    ) {
+        // Cond side-effects (e.g. `array_len` in `while j < len(xs)`)
+        // must re-run every iteration *before* the condition load —
+        // including on `continue`. Put them in `pre_cond`, not body.
+        let stmts_before_cond = self.stmts.len();
+        let cond_id = self.lower_expr(cond);
+        let pre_cond = self.stmts.split_off(stmts_before_cond);
+
+        let stmts_before_body = self.stmts.len();
+        for stmt in body {
+            self.lower_ast(stmt);
+        }
+        let body_stmts = self.stmts.split_off(stmts_before_body);
+
+        let else_stmts = self.lower_loop_else(else_body);
+        self.stmts.push(MirStmt::While {
+            cond: cond_id,
+            pre_cond,
+            body: body_stmts,
+            else_body: else_stmts,
+        });
+    }
 }

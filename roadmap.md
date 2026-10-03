@@ -28156,3 +28156,15 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
 39/39（cleanup 车道 10013–10022 新增 33 条随批生效）；行为探针与 CPython 逐字对齐
 （loop break、f-string 插值、`{**a, "b": 2}` 展开——三处正是批 860 破坏面）；
 `bash tools/batch_gate.sh` GREEN。W1010 提示为合并基点前既有的老噪音，非本批回归。
+
+## 批次 862（2026-10-03，**重构批：While 语句臂迁入 gen/call_flow.rs**）
+
+零替换法（原臂逐字）：`lower_ast_inner` 的 `AstNode::While` 臂（26 行）迁入
+`gen/call_flow.rs::lower_while_stmt(&mut self, cond: &AstNode, body: &[AstNode],
+else_body: &[AstNode])`——签名按 AST 实型（`While { cond: Box<AstNode>,
+body: Vec<AstNode>, else_body: Vec<AstNode> }`，批 860 签名写错教训在案），臂体
+一字未动，gen.rs 侧只留一行委托。gen.rs 15468→15456。
+
+验证：编译零错误；内置单元测试 157/157；行为探针与 CPython 逐字对齐
+（`while` 累加 10／`while…else` 走 else 分支／条件含负终值 j=-2 三面）；
+batch_gate GREEN。For 臂（约 500 行）留批 863 单独迁。
