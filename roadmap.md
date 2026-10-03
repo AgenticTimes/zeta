@@ -26788,3 +26788,9 @@ into_int_value 的动态类型路径可增量替换。call_ctor 括号＋lib.rs 
 
 b3ir.log/test_match*.z/tools/__pycache__ 清理（refactor.md 轴 A 尾段
 "根目录杂物"判据收口）。构建零错误。
+
+## 批次 859（本批）：If 表达式臂（222 行）迁入 gen/call_if.rs——零替换法
+
+If 表达式发射体（cond 降型→ast_branch_ty→process_block→branch_ty）原臂
+逐字迁入 lower_if_expr。gen.rs 占位 dest→id 修正。If 三元探针 big/3
+全对齐 CPython；全库 157/157。gen.rs 15002→14785。
