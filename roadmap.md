@@ -26735,3 +26735,8 @@ match 探针 five ✓；全库 157/157。gen.rs 15777→15177。
 
 负号/位非/not 发射体原臂逐字迁入 lower_unary_op。行为探针 -5/-2.5
 全对齐 CPython；全库 157/157。gen.rs 15177→15002。
+
+## 批次 853（本批）：Tuple/StructLit/ArrayLit 三臂迁入 call_expr_lit.rs
+
+零替换法：Tuple(43行)/StructLit(53行)/ArrayLit(209行) 三臂逐字迁入。
+行为探针四项对齐 CPython；全库 157/157。gen.rs 15002→14710。
