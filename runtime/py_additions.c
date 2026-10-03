@@ -1663,6 +1663,27 @@ int64_t py_vec_mul(int64_t a, int64_t b) {
     return out;
 }
 
+int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str);
+
+// 批次 879（#276）：set 的 `|` 是集合并集——内容判等去重合并（py_list_contains
+// 的 elem_is_str 口径，与 807 的 py_vec_intersect 同族）。py_vec_or 是逐元素
+// 逻辑或（掩码面），对 set[str] 是静默错值：set() | {"q"} 算出 [1]。
+int64_t py_vec_union(int64_t a, int64_t b, int64_t elem_is_str) {
+    if (!a) return b;
+    if (!b) return a;
+    int64_t out = zeta_dynarray_new(8);
+    int64_t na = zt_vec_len(a), nb = zt_vec_len(b);
+    for (int64_t i = 0; i < na; i++) {
+        int64_t v = ((int64_t*)a)[i];
+        if (!py_list_contains(out, v, elem_is_str)) out = vec_push(out, v);
+    }
+    for (int64_t i = 0; i < nb; i++) {
+        int64_t v = ((int64_t*)b)[i];
+        if (!py_list_contains(out, v, elem_is_str)) out = vec_push(out, v);
+    }
+    return out;
+}
+
 int64_t py_vec_or(int64_t a, int64_t b) {
     if (!a) return b;
     if (!b) return a;

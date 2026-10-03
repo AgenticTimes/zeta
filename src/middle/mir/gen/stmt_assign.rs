@@ -47,6 +47,29 @@ impl MirGen {
                                 self.type_map.insert(slot, nt);
                             }
                         }
+                        // 批次 879（#276）：容器注解的元素型细化——与 Let 臂的
+                        // TypeAnnotatedPattern 分支同款（annotation_elem_ty）。
+                        // `codes: set[str] = set()` 的 RHS 只能降成元素未知的空
+                        // 容器（DynamicArray(I64)），注解是元素型的唯一记录；
+                        // 这里不细化，后续 `|=` 集合路由就认不出 Str 元（成员判
+                        // 定按句柄判等）。注意守卫不能挡 DynamicArray——那正是
+                        // 待细化的形状。
+                        let refined = cur.clone().map(|t| {
+                            match (&t, MirGen::annotation_elem_ty(ty)) {
+                                (Type::DynamicArray(e), Some(el))
+                                    if matches!(**e, Type::I64) =>
+                                {
+                                    Type::DynamicArray(Box::new(el))
+                                }
+                                (Type::I64, Some(el)) | (Type::PyDynamic, Some(el)) => {
+                                    Type::DynamicArray(Box::new(el))
+                                }
+                                _ => t,
+                            }
+                        });
+                        if let Some(rt) = refined {
+                            self.type_map.insert(slot, rt);
+                        }
                         self.apply_dict_annotation(slot, ty);
                     }
                     return;

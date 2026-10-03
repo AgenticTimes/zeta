@@ -766,6 +766,34 @@ impl MirGen {
                     }
                     _ => false,
                 };
+                // 批次 879（#276）：set[str] 的 `|` 是集合并集——必须先于
+                // 掩码路由接走（py_vec_or 是逐元素逻辑或，对 set 是静默错值：
+                // `codes: set[str] = set(); codes |= {"q"}` 算出 [1] 且槽型被
+                // 刷成 I64 元素，`"q" in codes` 按句柄判等永不命中）。
+                if op == "|" || op == "|=" {
+                    let set_like = |t: Option<&Type>| {
+                        matches!(t, Some(Type::DynamicArray(e)) if matches!(**e, Type::Str))
+                    };
+                    if set_like(self.type_map.get(&left_id))
+                        && set_like(self.type_map.get(&right_id))
+                    {
+                        let flag = self.next_id();
+                        self.exprs.insert(flag, MirExpr::IntLit(1));
+                        self.type_map.insert(flag, Type::I64);
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_vec_union".to_string(),
+                            args: vec![left_id, right_id, flag],
+                            dest,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(dest, MirExpr::Var(dest));
+                        self.type_map.insert(
+                            dest,
+                            self.type_map.get(&left_id).cloned().unwrap_or(Type::I64),
+                        );
+                        return dest;
+                    }
+                }
                 if vecish(self.type_map.get(&left_id).cloned())
                     || vecish(self.type_map.get(&right_id).cloned())
                     || boolish(self.type_map.get(&left_id).cloned())

@@ -28772,3 +28772,29 @@ cleanup 车道 10026–10027 并入（bb73fac9）后本批为收口批，兑现 
 的派发重组是 846 类缺陷的温床，且已住 call_dispatch.rs 家族文件）。
 
 验证：锚点核对 RC=0；编译零错误；内置单元测试 157/157。
+
+## 批次 879（2026-10-04，**修复批：#276 set 并集——解析器丢注解＋py_vec_or 语义错装 双根修**）
+
+`codes: set[str] = set(); codes |= {"q"}; "q" in codes` 打 False（CPython True）。
+根因三层：
+1. **解析器**（stmt.rs:463）：带注解赋值只在 class_like/dict_like 时包
+   TypeAnnotatedPattern，`set[str]` 的注解被整个丢弃——放宽加 set_like
+   （注意 ty 已被 parse_type 归一成尖括号 `set<str>`，须认 `<`）。
+2. **gen 元素细化**（stmt_assign.rs TA 分支）：只有类名回填＋dict 回填，
+   补 annotation_elem_ty 元素细化（与 Let 臂同款、无条件套用——待细化的正是
+   DynamicArray(I64) 形状，原 I64 守卫会把它挡掉）；annotation_elem_ty 同步
+   认尖括号。
+3. **运行期**：`|` 的向量路由 py_vec_or 是逐元素逻辑或（掩码面），对 set 是
+   静默错值（set() | {"q"} 算出 [1]）——新增 py_vec_union(a,b,elem_is_str)
+   （内容判等去重，py_list_contains 口径，807 intersect 同族）＋call_binary.rs
+   掩码路由前的集合路由（op 认 "|" 与 "|="，两侧元素皆 Str 才接）。
+
+**验证**：三面全对齐 CPython（`|=` 字面量／字面量并字面量／add 对照面）；
+全量差分（--group 50）match=2845/2845＝100%；python_style 全量 465 过＋14 FAIL
+**与 HEAD 完全同集合**＝零新增回归（14 个 FAIL 另登记 #278——import 模块常量
+读打 0 的一族，HEAD 复现在案）。
+
+**过程教训（第 4 次）**：`cargo build | grep -cE "^error"` 打出 2 被当读数忽略，
+之后三轮探针"不打印"全是陈旧二进制——构建失败被管道吞掉后，测试全在旧件上跑。
+此教训已四次现身（494b/507b、bisect 污染、本轮），后续所有构建命令改为
+`cargo build --release 2>&1 | tail -3` 直接看输出，不再只数 error 行。

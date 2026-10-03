@@ -2381,10 +2381,12 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         let t = ty.trim();
         for kw in ["list", "set", "frozenset", "List", "Set", "FrozenSet"] {
             if let Some(rest) = t.strip_prefix(kw) {
+                // 批次 879（#276）：parse_type 已把 `set[str]` 归一成尖括号
+                // `set<str>`（与 dict→map 同一批），这里两种括号都要认。
                 if let Some(inner) = rest
                     .trim()
-                    .strip_prefix('[')
-                    .and_then(|r| r.trim_end().strip_suffix(']'))
+                    .strip_prefix(|c: char| c == '[' || c == '<')
+                    .and_then(|r| r.trim_end().strip_suffix(|c: char| c == ']' || c == '>'))
                 {
                     return match inner.trim() {
                         "str" | "String" => Some(Type::Str),
