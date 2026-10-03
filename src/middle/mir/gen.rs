@@ -8739,149 +8739,15 @@ call, no NULL-handle dereference).",
                 }
                 // 批次 824：入口判定改读分类器（classify_call）——路由决策
                 // 收敛到唯一决策点；本臂只负责 Len 路由的发射。
+                // 批次 840：len 臂整体迁入 gen/call_len.rs（分类函数与发射
+                // 同文件）；入口判定读分类器。
                 if classify_call(method) == CallClass::Len
                     && receiver.is_none()
                     && args.len() == 1
                 {
-                    let arg_id = self.lower_expr(&args[0]);
-                    let arg_ty = self.type_map.get(&arg_id).cloned();
-                    // 批次146 重放: `len(obj)` dispatches to the object's
-                    // `__len__` method (t196: `len(F())`, `len(df)`).
-                    if let Some(Type::Named(n, _)) = &arg_ty {
-                        if let Some(qlen) = self.qualified_method_candidate(n, "__len__") {
-                            self.emit_call_into(id, &qlen, vec![arg_id], Type::I64);
-                            return id;
-                        }
+                    if let Some(nid) = self.lower_len(args, id) {
+                        return nid;
                     }
-                    // Batch 767 (值标签大弧·读侧按格分派)：PyDynamic 实参带格
-                    // 标签 ⇒ 运行期 tag == 类 id 的按格分派（有 __len__ 的类，
-                    // 名字序定链序），全不中落 zeta_dyn_len 几何兜底。t450 的
-                    // len(c["df"]) 由这里兑现 2（DataFrame.__len__）。
-                    if matches!(arg_ty, Some(Type::PyDynamic) | None) {
-                        if let Some(tag_slot) = self.slot_tags.get(&arg_id).cloned() {
-                            let mut candidates: Vec<(i64, String)> = Vec::new();
-                            let mut cls_names: Vec<&String> =
-                                self.type_decls.keys().collect();
-                            cls_names.sort();
-                            for cn in cls_names {
-                                if let (Some(t), Some(q)) = (
-                                    self.class_tag_id(cn),
-                                    self.qualified_method_candidate(cn, "__len__"),
-                                ) {
-                                    candidates.push((t, q));
-                                }
-                            }
-                            if !candidates.is_empty() {
-                                let mut chain_else: Vec<MirStmt> =
-                                    vec![MirStmt::Call {
-                                        func: "zeta_dyn_len".to_string(),
-                                        args: vec![arg_id],
-                                        dest: id,
-                                        type_args: vec![],
-                                    }];
-                                for (tag_val, qlen) in candidates.iter().rev() {
-                                    let lit = self.next_id();
-                                    self.exprs.insert(lit, MirExpr::IntLit(*tag_val));
-                                    self.type_map.insert(lit, Type::I64);
-                                    let cond = self.next_id();
-                                    self.exprs.insert(
-                                        cond,
-                                        MirExpr::BinaryOp {
-                                            op: "==".to_string(),
-                                            left: tag_slot,
-                                            right: lit,
-                                        },
-                                    );
-                                    self.type_map.insert(cond, Type::Bool);
-                                    let then_stmts = vec![MirStmt::Call {
-                                        func: qlen.clone(),
-                                        args: vec![arg_id],
-                                        dest: id,
-                                        type_args: vec![],
-                                    }];
-                                    let if_stmt = MirStmt::If {
-                                        cond,
-                                        then: then_stmts,
-                                        else_: chain_else,
-                                        dest: None,
-                                    };
-                                    chain_else = vec![if_stmt];
-                                }
-                                self.stmts.extend(chain_else);
-                                self.exprs.insert(id, MirExpr::Var(id));
-                                self.type_map.insert(id, Type::I64);
-                                return id;
-                            }
-                        }
-                    }
-                    match arg_ty {
-                        Some(Type::Array(_, ArraySize::Literal(n))) => {
-                            self.exprs.insert(id, MirExpr::IntLit(n as i64));
-                            self.type_map.insert(id, Type::I64);
-                            return id;
-                        }
-                        Some(Type::Str) => {
-                            self.stmts.push(MirStmt::Call {
-                                func: "str_len".to_string(),
-                                args: vec![arg_id],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                        }
-                        Some(t) if t.is_map() => {
-                            // len(dict/Counter): count the used slots.
-                            // 批次 819：路由判定收敛到 classify_len（含 dict
-                            // 拼写等价——815 规则，TDD 曾抓到本臂漏 dict）。
-                            self.stmts.push(MirStmt::Call {
-                                func: "zeta_map_len".to_string(),
-                                args: vec![arg_id],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                        }
-                        Some(Type::Named(n, _)) if n == "PyJson" => {
-                            // Json length by tag: array/object/string.
-                            self.stmts.push(MirStmt::Call {
-                                func: "py_json_len".to_string(),
-                                args: vec![arg_id],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                        }
-                        Some(Type::DynamicArray(_)) => {
-                            self.stmts.push(MirStmt::Call {
-                                func: "vec_len".to_string(),
-                                args: vec![arg_id],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                        }
-                        // BATCH-296: a value the compiler could not type (the
-                        // element of a `dict[str, Any]`, a dyn parameter). The
-                        // old `array_len` fallback read the PRECEDING GC block
-                        // and answered 0 — `codes=0` in the local backtest while
-                        // `_build_stock_arrays` really returned 91 entries. Let
-                        // the runtime tell map / vec / text apart by geometry.
-                        None | Some(Type::I64) | Some(Type::PyDynamic) => {
-                            self.stmts.push(MirStmt::Call {
-                                func: "zeta_dyn_len".to_string(),
-                                args: vec![arg_id],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                        }
-                        _ => {
-                            self.stmts.push(MirStmt::Call {
-                                func: "array_len".to_string(),
-                                args: vec![arg_id],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                        }
-                    }
-                    self.exprs.insert(id, MirExpr::Var(id));
-                    self.type_map.insert(id, Type::I64);
-                    return id;
                 }
 
                 // PY-A: `Some(v)` / `Ok(v)` / `Err(e)` free-call form —
