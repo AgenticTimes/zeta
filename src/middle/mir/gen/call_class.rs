@@ -14,6 +14,8 @@ pub enum CallClass {
     SetIntersection,
     /// 内建 len()。
     Len,
+    /// 断言族（assert(cond, msg)——失败即 zeta_assert_fail）。
+    Assert,
     /// 内建 min/max/sum/abs/successor/predecessor 数值族。
     NumericBuiltin,
     /// json.dumps/dump 序列化族。
@@ -32,6 +34,7 @@ pub fn classify_call(method: &str) -> CallClass {
         "add" | "discard" | "remove" => CallClass::SetMutation,
         "intersection" => CallClass::SetIntersection,
         "len" => CallClass::Len,
+        "assert" => CallClass::Assert,
         "min" | "max" | "sum" | "abs" | "successor" | "predecessor" => {
             CallClass::NumericBuiltin
         }
@@ -63,6 +66,11 @@ mod tests {
         assert_eq!(classify_call("dumps"), CallClass::JsonDump);
         assert_eq!(classify_call("dump"), CallClass::JsonDump);
         assert_eq!(classify_call("print"), CallClass::Print);
+    }
+
+    #[test]
+    fn assert_routes_to_assert() {
+        assert_eq!(classify_call("assert"), CallClass::Assert);
     }
 
     #[test]

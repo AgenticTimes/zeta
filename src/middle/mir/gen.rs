@@ -6,6 +6,7 @@
 //! Clean, fast, and fully documented.
 
 mod call_set;
+mod call_assert;
 mod call_class;
 mod call_json;
 mod call_num;
@@ -9110,45 +9111,14 @@ call, no NULL-handle dereference).",
                     return id;
                 }
 
-                // PY-A: `assert(cond, msg)` — on failure print msg and abort.
-                // if cond == 0 { zeta_assert_fail(msg) }
-                if method == "assert" && receiver.is_none() && args.len() >= 1 {
-                    let cond_id = self.lower_expr(&args[0]);
-                    let msg_id = if args.len() > 1 {
-                        self.lower_expr(&args[1])
-                    } else {
-                        let m = self.next_id();
-                        self.exprs
-                            .insert(m, MirExpr::StringLit("assertion failed".to_string()));
-                        self.type_map.insert(m, Type::Str);
-                        m
-                    };
-                    let zero_id = self.next_id();
-                    self.exprs.insert(zero_id, MirExpr::IntLit(0));
-                    self.type_map.insert(zero_id, Type::I64);
-                    let eq_id = self.next_id();
-                    self.exprs.insert(
-                        eq_id,
-                        MirExpr::BinaryOp {
-                            op: "==".to_string(),
-                            left: cond_id,
-                            right: zero_id,
-                        },
-                    );
-                    self.type_map.insert(eq_id, Type::Bool);
-                    self.stmts.push(MirStmt::If {
-                        cond: eq_id,
-                        then: vec![MirStmt::VoidCall {
-                            func: "zeta_assert_fail".to_string(),
-                            args: vec![msg_id],
-                        }],
-                        else_: vec![],
-                        dest: None,
-                    });
-                    let unit_id = self.next_id();
-                    self.exprs.insert(unit_id, MirExpr::IntLit(0));
-                    self.type_map.insert(unit_id, Type::I64);
-                    return unit_id;
+                // 批次 834：assert 臂迁入 gen/call_assert.rs。
+                if classify_call(method) == CallClass::Assert
+                    && method == "assert"
+                    && receiver.is_none()
+                {
+                    if let Some(unit_id) = self.lower_assert(args) {
+                        return unit_id;
+                    }
                 }
 
                 // 批次 830：abs/sum 臂体迁入 gen/call_num.rs（家族执行文件）；
