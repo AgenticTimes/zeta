@@ -1367,3 +1367,227 @@ print(v2)
         "两条 `print(v2)` 该按字符串走（真值 a 与 b；改前四格都被折成陈字面量 ⇒ 全走字符串打印器），实得调用: {calls:?}",
     );
 }
+
+/// 批次 629（旁路 cleanup 车道编号，代码 `449471d4`，台账行 `worktree.md:337`；
+/// 站点 `src/middle/resolver/resolver.rs` 的 `refine_field_element_types`，
+/// 由 `src/middle/resolver/typecheck.rs` 在返回推断之后接线）／旧 #195 余项一族。
+/// 症状（629 记录 ＋ 夹具 `tests/python_style/t539_field_element_refine.z`）：
+/// `self.items = []` 是空字面量、没有元素证据，注册时按批次 594 的拼写默认落成 `list<i64>`
+/// ⇒ `bg.items[0]` 的结果槽是 I64 ⇒ 运行期按整数读一个字符串句柄（打出地址）。
+/// 修法是**投票**：从方法体里的 `self.<f>.append(<e>)` 站点取元素型别（`e` 是字面量或
+/// 批次 627 已精化的参数），全体一致时把拼写从 `list<i64>` 改写 `list<str>`（只从默认改）。
+/// 期望值来源：t539 的 `// expect:` 三行（2 / a / b）——`size()` 是整数，两次下标读是字符串。
+/// 边界（本条不覆盖）：629 记录在册的保守面——混合元素型别投票弃权、显式注解不覆盖；
+/// 以及那条链上的两个实现坑（裸 Call 语句站点、`ret_expr` 提升）本身不在这里复验。
+#[test]
+fn list_field_append_votes_str_element_at_index_callsite() {
+    let mirs = lower_all(
+        r#"class Bag:
+    def __init__(self):
+        self.items = []
+    def add(self, x):
+        self.items.append(x)
+    def size(self):
+        return len(self.items)
+
+bg = Bag()
+bg.add("a")
+bg.add("b")
+print(bg.size())
+print(bg.items[0])
+print(bg.items[1])
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    // (接收者槽, 结果槽)：两个下标读取。
+    let gets: Vec<(u32, u32)> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, args, dest, .. } if func == "array_get" => Some((args[0], *dest)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        gets.len(),
+        2,
+        "前置条件：两次 `bg.items[i]` 都要降出来（少一个这条用例就什么都没测到），实得 {gets:?}"
+    );
+    for (recv, dest) in &gets {
+        assert_eq!(
+            f.type_map.get(recv),
+            Some(&Type::DynamicArray(Box::new(Type::Str))),
+            "字段槽 id={recv} 该被投票改写成 `list<str>`（改前停在默认的 `list<i64>` ⇒ 元素按整数读），实得 {:?}",
+            f.type_map.get(recv)
+        );
+        assert_eq!(
+            f.type_map.get(dest),
+            Some(&Type::Str),
+            "下标结果槽 id={dest} 该是 Str（改前随字段型别落 I64 ⇒ 运行期打串句柄地址），实得 {:?}",
+            f.type_map.get(dest)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        2,
+        "两次下标读都该按 Str 选打印器（真值 a 与 b），实得调用: {calls:?}"
+    );
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_i64").count(),
+        1,
+        "只有 `print(bg.size())` 那一格按整数打印（真值 2），实得调用: {calls:?}"
+    );
+}
+
+/// 批次 630（旁路 cleanup 车道编号，代码 `01351a31`，台账行 `worktree.md:338`；
+/// 站点 `src/middle/resolver/resolver.rs` 的 `refine_map_value_types` ＋
+/// `refine_method_return_types` 里的 `self.<f>.get(k, <字面量>)` 那一面，
+/// 接线顺序＝map 投票先于返回推断）／旧 #195 余项一族。
+/// 症状（630 记录 ＋ 夹具 `tests/python_style/t540_map_value_refine_get.z`）：
+/// `self.d = {}` 在批次 594 的拼写里是裸 `map`（没有值型别位）⇒ `fetch` 注册的返回类型
+/// 停在 I64，调用方按整数选打印器，把串句柄地址打出来（记录实拍 s38 连纯字符串字典都败）。
+/// 修法＝从 `self.<f>[<k>] = <v>` 站点投票出 `(键, 值)` 型别，一致时把裸 `map` 改写
+/// `map<K, V>`；返回推断再读这个型别。默认字面量只在与投票值一致时才算证据，
+/// 不一致（int 值＋str 默认＝真 union）投毒弃权。
+/// 期望值来源：t540 的 `// expect:` 四行（x / missing / y / 1）——三个返回都是字符串，
+/// `len(...)` 那一格才是整数。
+/// 变异读数如实记：撤掉 `refine_map_value_types` 的接线后，目的槽回的是
+/// `Named("PyJson")` 而不是记录实拍的 I64——因为批次 646/660 在这支后面又补了
+/// "值型别未知＝真 union"的 PyJson／PyDynamic 支。用例照样红（不是 Str），
+/// 但"红值＝记录症状值"只在 629/631 两条成立。
+/// 边界（本条不覆盖）：union 跨函数边界＝记录留队的旧 #117 那格；带注解的 `map<K,V>` 不覆盖。
+#[test]
+fn map_field_value_votes_str_and_get_default_marks_callsites_str() {
+    let mirs = lower_all(
+        r#"class Cfg:
+    def __init__(self):
+        self.d = {}
+    def put(self, k, v):
+        self.d[k] = v
+    def fetch(self, k):
+        return self.d.get(k, "missing")
+
+c = Cfg()
+c.put("a", "x")
+c.put("b", "y")
+print(c.fetch("a"))
+print(c.fetch("z"))
+print(c.fetch("b"))
+print(len(c.fetch("a")))
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let dests: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func == "Cfg::fetch" => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        4,
+        "前置条件：四个 `c.fetch(...)` 调用点都要降出来（含 `len` 里那一个），实得 {dests:?}"
+    );
+    for d in &dests {
+        assert_eq!(
+            f.type_map.get(d),
+            Some(&Type::Str),
+            "调用点目的槽 id={d} 该是 Str（改前值型别无证据 ⇒ 注册返回停 I64 ⇒ 按整数打串句柄地址），实得 {:?}",
+            f.type_map.get(d)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        3,
+        "三条 `print(c.fetch(..))` 该按 Str 选打印器（真值 x / missing / y），实得调用: {calls:?}"
+    );
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_i64").count(),
+        1,
+        "只有 `print(len(c.fetch(\"a\")))` 那一格按整数打印（真值 1），实得调用: {calls:?}"
+    );
+}
+
+/// 批次 631（旁路 cleanup 车道编号，代码 `15232a15`，台账行 `worktree.md:339`；
+/// 站点 `src/middle/resolver/resolver.rs` 的 `refine_method_return_types` 两个调用面：
+/// `return self.<m>(·)` 读 `funcs["C::m"].ret`、`return <plain>(·)` 读裸名键）／旧 #195 余项一族。
+/// 症状（631 记录 ＋ 夹具 `tests/python_style/t541_return_chain_infer.z`）：
+/// `def outer(self): return self.inner()` 里 `inner` 的返回已被批次 628 精化成 Str，
+/// 但推断器不认 `Call` 形 ⇒ `outer` 注册返回停在 I64，调用方按整数打印串句柄地址
+/// （记录实拍 s42）。修法＝扩两个调用面＋不动点迭代（≤4 轮，每轮重建 `funcs.ret` 快照），
+/// callee 是 I64 或未知时投毒弃权。
+/// 期望值来源：t541 的 `// expect:` 两行（deep / x）——委托方法与普通函数链各一条。
+/// 覆盖面分工（变异实测）：这一条真正覆盖的是**委托面**（撤掉 `return self.<m>(·)`
+/// 读 `funcs["C::m"].ret` 那一支，目的槽立刻回 `I64`＝记录症状）；`print(f())`
+/// 那一格撤掉 `return <plain>(·)` 读裸名键后读数**不变**（24/24 照旧）。该支确系 631 所加
+/// （`git log -S` 实跑到 `15232a15`），撤了不红说明这一形另有更早的推断在起作用——631 记录自陈
+/// "普通函数链 s41 本就通（451/601 基础设施）"与此吻合。因此那一格只算回退保护（防止以后
+/// 这一形被别的改动放松掉），不算 631 的证据。
+/// 边界（本条不覆盖）：631 记录留队的 `str(dict)` 那一格（map 槽序非插入序）；
+/// 容器返回链不推断＝628 的保守面。
+#[test]
+fn method_return_chain_delegation_marks_callsites_str() {
+    let mirs = lower_all(
+        r#"class C:
+    def inner(self):
+        return "deep"
+    def outer(self):
+        return self.inner()
+
+def g():
+    return "x"
+def f():
+    return g()
+
+c = C()
+print(c.outer())
+print(f())
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+    let dests: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. }
+                if func == "C::outer" || func == "f" || func == "f_0" =>
+            {
+                Some(*dest)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        2,
+        "前置条件：委托方法那一格与普通函数链那一格都要降出来，实得 {dests:?}"
+    );
+    for d in &dests {
+        assert_eq!(
+            f.type_map.get(d),
+            Some(&Type::Str),
+            "调用点目的槽 id={d} 该是 Str（改前推断器不认 Call 形 ⇒ 注册返回停 I64 ⇒ 按整数打串句柄地址），实得 {:?}",
+            f.type_map.get(d)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert_eq!(
+        calls.iter().filter(|c| c.as_str() == "println_str").count(),
+        2,
+        "两个调用点都该按 Str 选打印器（真值 deep 与 x），实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c == "println_i64"),
+        "改前症状＝委托链的返回停 I64 ⇒ 按整数打印，`println_i64` 不应出现，实得调用: {calls:?}",
+    );
+}
