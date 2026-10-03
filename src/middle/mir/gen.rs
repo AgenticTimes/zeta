@@ -7554,90 +7554,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         }
                     }
                 }
-                // PY-A: `json.dumps(x)` needs the COMPILER's type — an i64
-                // handle carries no runtime tag, so dispatch to the typed
-                // entry point here instead of guessing in C.
-                if let Some((m, mem)) = self.py_member_target(receiver, method) {
-                    // `json.dumps(x, ensure_ascii=False, indent=2)` — the extra
-                    // args are `__kwarg__` formatting hints. Before this they made
-                    // `args.len() == 1` fail, the call fell through to the generic
-                    // path and emitted a phantom arity-suffixed symbol
-                    // (`py_json_dumps_i64_3`, 4 corpus call sites). Keep the first
-                    // POSITIONAL value; say once that formatting kwargs are ignored
-                    // (cosmetic only, and never silent).
-                    let first_is_positional = !matches!(
-                        args.first(),
-                        Some(AstNode::Call { method: km, .. }) if km == "__kwarg__"
-                    );
-                    if m == "json" && mem == "dumps" && !args.is_empty() && first_is_positional {
-                        if args.len() > 1 {
-                            static WARNED_DUMPS: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-                            WARNED_DUMPS.get_or_init(|| {
-                                eprintln!(
-                                    "warning: PY-A: json.dumps formatting kwargs \
-                                     (ensure_ascii/indent/…) are ignored"
-                                );
-                            });
-                        }
-                        let arg_id = self.lower_expr(&args[0]);
-                        let ty = self.type_map.get(&arg_id).cloned().unwrap_or(Type::I64);
-                        // 批次 825：分类面收敛到 call_json::json_route
-                        // （dumps/dump 两处共用，822 同款判定/发射分离）。
-                        let route = json_route(&ty);
-                        let sym = route.sym;
-                        let vec_elem_tag = route.vec_elem_tag;
-                        if let Some(tag) = vec_elem_tag {
-                            let tag_id = self.next_id();
-                            self.exprs.insert(tag_id, MirExpr::IntLit(tag));
-                            self.type_map.insert(tag_id, Type::I64);
-                            self.emit_call_into(id, "py_json_dumps_vec_typed", vec![arg_id, tag_id], Type::Str);
-                            return id;
-                        }
-                        // dict values now carry a type tag recorded at insert
-                        // time, so no warning is needed for maps.
+                // 批次 833 重做：json.dumps/dump 执行者调用（原臂逐字迁入
+                // call_json.rs::lower_json）。
+                if classify_call(method) == CallClass::JsonDump {
+                    if let Some(nid) = self.lower_json(receiver, method, &args, id) {
+                        return nid;
+                    }
+                }
 
-                        self.stmts.push(MirStmt::Call {
-                            func: sym.to_string(),
-                            args: vec![arg_id],
-                            dest: id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(id, MirExpr::Var(id));
-                        self.type_map.insert(id, Type::Str);
-                        return id;
-                    }
-                }
-                // PY-A: `json.dump(obj, f)` — serialize the object with the
-                // same type-driven serializer as json.dumps, then write it.
-                if let Some((m, mem)) = self.py_member_target(receiver, method) {
-                    if m == "json" && mem == "dump" && args.len() == 2 {
-                        let obj_id = self.lower_expr(&args[0]);
-                        let oty = self.type_map.get(&obj_id).cloned().unwrap_or(Type::I64);
-                        // 批次 825：同款收敛（dump 与 dumps 共用一份分类）。
-                        let route = json_route(&oty);
-                        let sym = route.sym;
-                        let vec_tag = route.vec_elem_tag;
-                        let text_id = self.next_id();
-                        let mut cargs = vec![obj_id];
-                        if let Some(tag) = vec_tag {
-                            let tid = self.next_id();
-                            self.exprs.insert(tid, MirExpr::IntLit(tag));
-                            self.type_map.insert(tid, Type::I64);
-                            cargs.push(tid);
-                        }
-                        self.stmts.push(MirStmt::Call {
-                            func: sym.to_string(),
-                            args: cargs,
-                            dest: text_id,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(text_id, MirExpr::Var(text_id));
-                        self.type_map.insert(text_id, Type::Str);
-                        let file_id = self.lower_expr(&args[1]);
-                        self.emit_call_into(id, "py_file_write", vec![file_id, text_id], Type::I64);
-                        return id;
-                    }
-                }
                 // PY-A: `import X` for a user module also runs its module body
                 // once (Python executes a module on import). The init function
                 // guards itself, so repeated imports are harmless. `from X

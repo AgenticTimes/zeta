@@ -1,6 +1,9 @@
 //! 批次 825：json 序列化族的**纯分类面**（dumps/dump 两处共用同一套
 //! 判定——此前是两份手写 match，改一处漏一处的温床）。发射留在 gen.rs。
 
+use super::MirGen;
+use crate::frontend::ast::AstNode;
+use crate::middle::mir::mir::{MirExpr, MirStmt};
 use crate::middle::types::Type;
 
 /// 序列化路由：符号 ＋（vec 族才有的）元素型标签。
@@ -73,5 +76,80 @@ mod tests {
         assert_eq!(json_route(&Type::Named("PyJson".into(), vec![])).sym, "py_json_dump");
         // map/json 无元素标签（tag 机制只服务 vec）
         assert_eq!(json_route(&Type::Named("map".into(), vec![])).vec_elem_tag, None);
+    }
+}
+
+impl MirGen {
+    /// 批次 833 重做：json.dumps/dump 执行者——原臂体**逐字**搬入
+    /// （821/833 教训：带副作用的臂迁移必须逐字＋探针即测＋先算后写）。
+    /// 返回 Some(id)＝命中并发射；None＝不归本族。
+    pub(super) fn lower_json(
+        &mut self,
+        receiver: &Option<Box<AstNode>>,
+        method: &str,
+        args: &[AstNode],
+        id: u32,
+    ) -> Option<u32> {
+        if let Some((m, mem)) = self.py_member_target(receiver, method) {
+            let first_is_positional = !matches!(
+                args.first(),
+                Some(AstNode::Call { method: km, .. }) if km == "__kwarg__"
+            );
+            if m == "json" && mem == "dumps" && !args.is_empty() && first_is_positional {
+                if args.len() > 1 {
+                    static WARNED_DUMPS: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+                    WARNED_DUMPS.get_or_init(|| {
+                        eprintln!(
+                            "warning: PY-A: json.dumps formatting kwargs \
+                             (ensure_ascii/indent/…) are ignored"
+                        );
+                    });
+                }
+                let arg_id = self.lower_expr(&args[0]);
+                let ty = self.type_map.get(&arg_id).cloned().unwrap_or(Type::I64);
+                let route = json_route(&ty);
+                if let Some(tag) = route.vec_elem_tag {
+                    let tag_id = self.next_id();
+                    self.exprs.insert(tag_id, MirExpr::IntLit(tag));
+                    self.type_map.insert(tag_id, Type::I64);
+                    self.emit_call_into(id, "py_json_dumps_vec_typed", vec![arg_id, tag_id], Type::Str);
+                    return Some(id);
+                }
+                self.stmts.push(MirStmt::Call {
+                    func: route.sym.to_string(),
+                    args: vec![arg_id],
+                    dest: id,
+                    type_args: vec![],
+                });
+                self.exprs.insert(id, MirExpr::Var(id));
+                self.type_map.insert(id, Type::Str);
+                return Some(id);
+            }
+            if m == "json" && mem == "dump" && args.len() == 2 {
+                let obj_id = self.lower_expr(&args[0]);
+                let oty = self.type_map.get(&obj_id).cloned().unwrap_or(Type::I64);
+                let route = json_route(&oty);
+                let text_id = self.next_id();
+                let mut cargs = vec![obj_id];
+                if let Some(tag) = route.vec_elem_tag {
+                    let tid = self.next_id();
+                    self.exprs.insert(tid, MirExpr::IntLit(tag));
+                    self.type_map.insert(tid, Type::I64);
+                    cargs.push(tid);
+                }
+                self.stmts.push(MirStmt::Call {
+                    func: route.sym.to_string(),
+                    args: cargs,
+                    dest: text_id,
+                    type_args: vec![],
+                });
+                self.exprs.insert(text_id, MirExpr::Var(text_id));
+                self.type_map.insert(text_id, Type::Str);
+                let file_id = self.lower_expr(&args[1]);
+                self.emit_call_into(id, "py_file_write", vec![file_id, text_id], Type::I64);
+                return Some(id);
+            }
+        }
+        None
     }
 }
