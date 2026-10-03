@@ -65,6 +65,10 @@ fn lower_all_inner(src: &str) -> Vec<Mir> {
     for ast in &expanded {
         resolver.register(ast.clone());
     }
+    // 与 main.rs:837-842 同序：注册后、类型检查前跑一次返回类型推断，
+    // `classify()`＋形参类形冲突（批次 400/652 那一层）就发生在这趟里。
+    // 少了这一步，形参类型永远停在 `PyDynamic`，凡是"参数被钉成什么类型"的缺陷都观测不到。
+    resolver.infer_untyped_returns(&expanded);
     let _ = resolver.typecheck(&expanded);
 
     let mut mirs: Vec<Mir> = resolver
@@ -505,5 +509,185 @@ print(after())
         values,
         vec![4, 5, 6, 7, 8],
         "五个保留字赋值形都该收进 main（截断时一个都没有），实得 {values:?}"
+    );
+}
+
+/// 批次 652（`4a016fe8`，站点 `src/middle/resolver/resolver.rs` 的 `classify()`＋参数冲突）：
+/// 同一个形参既接字符串、又接数组字面量时，两侧类型跨族必须让参数退化 `PyDynamic`、`len()` 发
+/// `zeta_dyn_len`，绝不能只按字符串侧证据把参数判定成 Str 后发 `str_len`。
+/// 症状（批次 652 记录）：`classify()` 缺 `ArrayLit`/`DynamicArrayLit` 分支，数组侧的类型证据
+/// 对参数冲突检测不可见 ⇒ 参数被单方面判定成 Str ⇒ `len(cache["k"])` 返回 0、
+/// `len([1,2,3])` 返回 1（静默错值，不报错）。
+/// 形态说明（批次 10013 实测两处）：`classify()` 与形参类形冲突都发生在
+/// `Resolver::infer_untyped_returns`（`resolver.rs:1361`，CLI 在 `main.rs:842` 调用），
+/// 本 harness 原先不跑这一趟，三种写法（字典下标、字典 vs 数组、单侧数组）在撤掉数组分支前后
+/// 读数一字不变 ⇒ harness 已补上该趟（与 CLI 同序）；实参形状取"同一形参既接字符串又接数组"，
+/// 这才是记录里"数组证据被吞 ⇒ 参数单方面判成 Str"的那一侧。
+/// 该批第 2 层修法（`zeta_dyn_len` 在 `codegen.rs:990` 的注册）属后端面，本套只走到降形，覆盖不到。
+#[test]
+fn len_on_param_shared_by_str_and_array_degrades_to_dynamic_route() {
+    let mirs = lower_all(
+        r#"def foo(x):
+    return len(x)
+
+r1 = foo("abcd")
+r2 = foo([1, 2, 3])
+print(r1)
+print(r2)
+"#,
+    );
+    let f = mir(&mirs, "foo");
+    let (param_name, param_slot) = &f.param_indices[0];
+    assert_eq!(param_name, "x", "读的是哪个形参要跟实现在册一致，实得 {param_name}");
+    assert_eq!(
+        f.type_map.get(param_slot),
+        Some(&Type::PyDynamic),
+        "字符串与数组字面量的跨族冲突应让共享形参退化 PyDynamic（改前按字符串侧判定成 Str），实得 {:?}",
+        f.type_map.get(param_slot)
+    );
+    let calls = call_symbols(f);
+    assert!(
+        calls.iter().any(|c| c == "zeta_dyn_len"),
+        "退化后的 `len()` 应发 `zeta_dyn_len`，实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c == "str_len"),
+        "改前症状就是把动态参数当字符串取长度，`str_len` 不应出现，实得调用: {calls:?}"
+    );
+}
+
+/// 批次 378（`0ee8b855`，站点 `src/middle/resolver/resolver.rs` 的 `expand_macros_in_node`）：
+/// `match` 臂体、块臂里带 `ExprStmt` 外壳的语句、`let` 初值位、`x =` 右值位里的宏都要展开。
+/// 症状（批次 378 记录＋夹具 `tests/python_style/t419_match_arm_macros.z`）：递归缺这四支，
+/// 臂里的 `println!` 保持未展开的 `MacroCall`，而 MIR 生成对未展开宏是"悄悄跳过"
+/// （`gen.rs:2888` 语句位、`:3242` 表达式位换成 `IntLit(0)`）⇒ 编译成功、退出码 0、
+/// 臂里的副作用一条都不发。
+/// 期望值来源：本夹具按记录里的四种形态写 8 个 `println!` 出现点，每个点展开成 2 个节点
+/// （378 记录对批次 369 零效果的勘案：" `println!` 展开是 2 个节点"）⇒ 16 次打印；
+/// 改前这 8 个点全在臂里，一次都不会发（0）。
+#[test]
+fn macros_in_match_arms_and_value_positions_reach_mir() {
+    let mirs = lower_all(
+        r#"fn main() -> i64 {
+    let n = 2
+    let mut hits = 0
+    let mut x = 0
+    match n {
+        1 => println!("one"),
+        2 => println!("two"),
+        _ => println!("other"),
+    }
+    match n {
+        1 => println!("skip-me"),
+        2 => {
+            println!("in-block")
+            hits = 5
+        }
+        _ => println!("skip-other"),
+    }
+    let a = match n {
+        2 => {
+            println!("let-side")
+            7
+        }
+        _ => 0,
+    }
+    x = match n {
+        2 => {
+            println!("assign-side")
+            9
+        }
+        _ => 0,
+    }
+    return 0
+}
+"#,
+    );
+    let m = mir(&mirs, "main");
+
+    // 正向证据：每个臂里的字面量都作为字符串节点进了 MIR（宏未展开时整棵子树被跳过）。
+    let literals: Vec<&str> = m
+        .exprs
+        .values()
+        .filter_map(|e| match e {
+            MirExpr::StringLit(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    let missing: Vec<&str> = [
+        "one",
+        "two",
+        "other",
+        "skip-me",
+        "in-block",
+        "skip-other",
+        "let-side",
+        "assign-side",
+    ]
+    .iter()
+    .copied()
+    .filter(|lit| !literals.contains(lit))
+    .collect();
+    assert!(
+        missing.is_empty(),
+        "四种形态的臂宏都应展开并下发（改前一个都不在 MIR 里），缺: {missing:?}",
+    );
+
+    let calls = call_symbols(m);
+    let prints = calls
+        .iter()
+        .filter(|c| c.starts_with("print_str") || c.starts_with("println_str"))
+        .count();
+    assert_eq!(
+        prints, 16,
+        "8 个 `println!` 出现点 × 每点 2 个展开节点 = 16 次打印（改前 0 次），全部调用: {calls:?}"
+    );
+}
+
+/// 批次 654（`9ff68eec`，站点 `src/middle/mir/gen.rs` 的 `str % value` 分支）：
+/// 左操作数是 Str 的 `%` 要发 `zeta_str_percent_fmt` 并把目的槽标成 Str，
+/// 不能落进通用 `"%"` 调用。
+/// 症状（批次 654 记录）：`op == "%"` 落入通用 `MirStmt::Call { func: "%" }`，被 codegen 的
+/// `is_operator` 捕获后走 `build_floormod_int`——对字符串指针和值句柄做整数取模
+/// ⇒ `"f=%s" % d["name"]` 编译成功、退出码 0，打出句柄整数 13 而不是 `f=abc`。
+/// 形态说明（批次 10013 实测）：记录里 t401 的原始写法是函数形参接模板，本套进程内管线
+/// 只跑到降形、不跑 `refine_param_types`，形参停在 `PyDynamic` 就让不了这一臂的 Str 条件
+/// （那种写法在本 harness 里实得 `["zeta_raise", "%"]`）。这里改用顶层变量持字符串模板，
+/// 左操作数由类型推断直接得到 Str；`--dump-mir` 走 CLI 时两种写法都发 `zeta_str_percent_fmt`。
+/// 另外模板直接写成字面量时，展开阶段会先按说明符切段改走 `py_fmt_*`，也打不到这一分支。
+#[test]
+fn str_percent_value_routes_to_percent_fmt_not_integer_modulo() {
+    let mirs = lower_all(
+        r#"tmpl = "a=%s"
+v = 42
+r = tmpl % v
+print(r)
+"#,
+    );
+    let f = mir(&mirs, "main");
+    let calls = call_symbols(f);
+    let (dest, argc) = f
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::Call {
+                func,
+                dest,
+                args,
+                ..
+            } if func == "zeta_str_percent_fmt" => Some((*dest, args.len())),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("`Str % 动态值` 应发 `zeta_str_percent_fmt`，实得调用: {calls:?}"));
+    assert_eq!(argc, 2, "格式化调用应带（模板, 值）两个实参，实得 {argc}");
+    assert!(
+        !calls.iter().any(|c| c == "%"),
+        "改前症状是落进通用 `%`（后端按整数取模处理指针×句柄），不应出现，实得调用: {calls:?}"
+    );
+    assert_eq!(
+        f.type_map.get(&dest),
+        Some(&Type::Str),
+        "格式化结果槽应标成 Str（槽 {dest} 实得 {:?}）",
+        f.type_map.get(&dest)
     );
 }
