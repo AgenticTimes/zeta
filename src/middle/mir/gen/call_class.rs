@@ -5,6 +5,8 @@
 //! 接收者类型/参数个数），返回家族分类。后续家族拆分 = 给枚举加变体＋
 //! 在对应执行文件实现；**分类函数是唯一路由决策点**。
 
+use crate::middle::types::Type;
+
 /// Call 臂的家族分类。
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CallClass {
@@ -86,5 +88,58 @@ mod tests {
         for m in ["no_such", "upper", "union", "clear", "push", "corr"] {
             assert_eq!(classify_call(m), CallClass::Unknown, "{m} 应 Unknown");
         }
+    }
+}
+
+/// 批次 843：`type(x)` 的纯判定面——静态类型 → Python 类型名。
+/// 无运行期反射（_type extern 不再链接）；未知落 "object"。
+pub fn type_name_of(ty: &Type) -> &'static str {
+    match ty {
+        Type::Str => "str",
+        Type::F64 => "float",
+        Type::Bool => "bool",
+        Type::I64 => "int",
+        Type::DynamicArray(_) | Type::Array(_, _) => "list",
+        t if t.is_map() => "dict",
+        Type::Named(n, _) if n == "PySlice" => "slice",
+        _ => "object",
+    }
+}
+
+#[cfg(test)]
+mod type_name_tests {
+    use super::*;
+
+    #[test]
+    fn python_type_names() {
+        assert_eq!(type_name_of(&Type::Str), "str");
+        assert_eq!(type_name_of(&Type::F64), "float");
+        assert_eq!(type_name_of(&Type::Bool), "bool");
+        assert_eq!(type_name_of(&Type::I64), "int");
+        assert_eq!(
+            type_name_of(&Type::DynamicArray(Box::new(Type::Str))),
+            "list"
+        );
+        assert_eq!(type_name_of(&Type::Named("map".into(), vec![])), "dict");
+        assert_eq!(type_name_of(&Type::Named("dict".into(), vec![])), "dict");
+        assert_eq!(
+            type_name_of(&Type::Named("PySlice".into(), vec![])),
+            "slice"
+        );
+    }
+
+    #[test]
+    fn unknown_falls_to_object() {
+        // PyDynamic/自定义 Named/PyJson 都落 "object"（CPython 语义：
+        // type(未知) 只有 Python 层才知道，静态面给 object 是保守正确）。
+        assert_eq!(type_name_of(&Type::PyDynamic), "object");
+        assert_eq!(
+            type_name_of(&Type::Named("MyStruct".into(), vec![])),
+            "object"
+        );
+        assert_eq!(
+            type_name_of(&Type::Named("PyJson".into(), vec![])),
+            "object"
+        );
     }
 }

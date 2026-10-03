@@ -17,7 +17,7 @@ mod call_num;
 mod call_print;
 mod call_len;
 mod call_str;
-use self::call_class::{classify_call, CallClass};
+use self::call_class::{classify_call, type_name_of, CallClass};
 use self::call_json::json_route;
 use self::call_str::{path_ends_with_mem, str_method_symbol, str_method_symbol3, to_string_channel};
 
@@ -10169,15 +10169,11 @@ call, no NULL-handle dereference).",
                 // `_type` extern). `print(type(x))` / `type(x) is int`-style code
                 // in the wild then works instead of failing to link.
                 if method == "type" && receiver.is_none() && arg_ids.len() == 1 {
+                    // 批次 843：判定面收敛到 call_class::type_name_of（单测
+                    // 钉住每条映射；未知落 object 保守正确）。
                     let tn = match self.type_map.get(&arg_ids[0]) {
-                        Some(Type::Str) => "str",
-                        Some(Type::F64) => "float",
-                        Some(Type::Bool) => "bool",
-                        Some(Type::I64) => "int",
-                        Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)) => "list",
-                        Some(Type::Named(n, _)) if n == "map" => "dict",
-                        Some(Type::Named(n, _)) if n == "PySlice" => "slice",
-                        _ => "object",
+                        Some(t) => call_class::type_name_of(t),
+                        None => "object",
                     };
                     let sid = self.next_id();
                     self.exprs.insert(sid, MirExpr::StringLit(tn.to_string()));
