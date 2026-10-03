@@ -26966,3 +26966,49 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   所以按被调名断言要取前缀，别写死全名。
 - `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件＋两枚未跟踪用例，
   记录笔只暂存 roadmap＋backlog 两本台账，**连续二十二批**）；待补行文本写进本批记录笔的提交信息。
+
+## 批次 10024（续 #20005：历史缺陷的编译期单元测试，第十四批）
+
+- 代码笔 `8b4862fe`（`tests/regression_history.rs` +347 行，套件 42 → **45 条**，全绿 0.18 秒）。
+  零 `src/` 改动，本批改动的主体在测试面。
+- 三条用例（来源批次的引用一律带提交哈希）：
+
+| 用例 | 来源 | 站点 | 这条读什么 |
+|---|---|---|---|
+| `const_folded_comparison_is_stored_as_bool_not_int` | 327 `e4e5591e` | `src/middle/ctfe/value.rs:179`／`:185`（`binary_op` 里"比较器先问"两行）＋ `compare_int`（`:248`） | 具名 `const` 绑定的比较结果以 `ConstValue::Bool` 存进 `Mir::global_consts`（`src/middle/mir/mir.rs:13`），不是 `Int(0/1)` |
+| `comprehension_element_marker_is_str_in_the_callee_but_not_at_the_call_site` | 592 `d4750ffa` | `src/middle/resolver/resolver.rs:4728-4741`（`unannotated_return_ty` 那层嵌套 `infer` 的 `__collect__` 臂） | 推导式在被调方结果槽已有 `DynamicArray(Str)`，调用点目的槽仍读 `DynamicArray(I64)`，两格同时钉住 |
+| `float_operand_in_body_sets_the_call_slot_when_the_function_has_no_params` | 399 `ee58b7d8` | `src/middle/mir/mir.rs:61` 的 `Mir::signature_ret_ty` 浮点保留支 | 无参函数体里的浮点操作数经同一个入口同时决定被调方签名与调用点目的槽（两边读数必须相同） |
+
+- 变异实测六笔（产物 `/tmp/b10024/`，日志 `mutation.log`／`mutation2.log`／`mutation3.log`／
+  `mutation4.log`；每笔都做了"应用后 md5 ≠ HEAD、复原后 md5 == HEAD"两向核对）：
+
+| 变异 | 动的格子 | 读数 |
+|---|---|---|
+| M1 | `value.rs:179`＋`:185` 的 `ConstValue::Bool(cmp)` 改回 `ConstValue::Int(cmp as i64)` | 45 条只红 1 条＝本批 327 那条，红值 `Some(Int(0))`＝症状值；既有那条走 642 print 实参臂的用例（`:889`）不红 |
+| M2 | `resolver.rs:4739` 元素那一行改成恒走兜底（`let et: Option<Type> = None;`） | **45 条读数一字不变**；元素换成 `n + "!"` 的第一版夹具同样不变 |
+| M2c | 撤整条 592 臂（`:4728-4741`） | 红 2 条＝本批那条的现状锁（实得 `Some(I64)`）＋既有那条 `len(n)` 用例（`:1733`），同一条症状 |
+| M2d | `:2079` 那条同名 `__collect__` 臂的元素推导硬编 `Bool`（`:2102`） | **45 条读数一字不变**（阴性结果；该臂在此形下是否被走到未单独取证） |
+| M3 | 撤 resolver 算术形状臂整支（`:4673-4680`） | **45 条读数一字不变** |
+| M3b | `mir.rs:61` `signature_ret_ty` 的 `Type::F32/F64 => 自身` 改成 `=> Type::I64` | 红 2 条＝本批 399 那条（实得 `Some(I64)`）＋ `unannotated_float_return_keeps_f64_at_module_call_site`（`:271`，批次 10001 本树／主树 813） |
+
+- 三条余项的去向：**327 的 const／comptime 折叠形状＝销**（M1 有单独红点）；
+  **592 的"元素型从 λ 体表达式取"那一行＝未销**（M2／M2d 都不敏感，只有撤整条臂才红，且红在形状层）；
+  **399 的算术形状臂＝未销**（M3 在无参形下也不敏感，10023 已在有参形实拍同样的阴性）。
+  来源批次 327／592／399 此前都已登记过，本批是同格补第二条用例，去重清单不新增。
+- 本批新开出两条**未修**问题（按登记规则 2「新增一项须同时关闭一项」，当前无可关项，先记在
+  `#20005` 的余项清单里、不占新任务号）：
+  ① 推导式的元素标记传不到调用点目的槽——被调方槽 `DynamicArray(Str)`、调用点槽 `DynamicArray(I64)`，
+  而 M2 与 M2d 两处元素推导都不是这个 `I64` 的来源（两处硬编都不动它），成因站点未定位；
+  ② `const X: bool = 3 == 4` 之后**读**它时槽型按 I64 ⇒ `print(X)` 打 `1` 而不是 `False`
+  （编译期折叠表本身已对，缺的是读取路径；与本表旧 #45 一族相邻）。
+- 每批必跑的检查 `bash tools/sample_gate.sh 10024`（窗口 4）**rc=0**：① 差分 272/272
+  ② python_style 55/55 ③ official 26/26 编译通过 ④ 语料 38/40（`jq_wufu.py`／`jq_wufu_daily.py`，
+  同 10021 起那对在册失败，归因见 `#20003`）；被测件 md5 `ed5227ccd29b70c4ee9ae17500926f10`、
+  运行期 `.o` md5 `878479bebf8d79a8539ee9a680fb463b`，与 10012 起那颗逐字相同 ⇒ 非本批引入。
+  `#20006` 那两枚空判定用例本批未被窗口 4 抽到（未复现不等于已修）。
+- 本批工具面一条（写给下一批的变异与取证脚本）：`zetac --dump-mir` 的读数要按
+  `== MIR <名> ==` **切段**取到下一个 `== MIR ` 为止；`sed -n '/== MIR main ==/,$p'` 这种
+  "打到文件末尾"的取法会把被调方段的 `type_map` 读成 `main` 的格子（本批实拍踩到，第一版
+  用例因此把断言目标写错了一格，跑出来才发现）。切段脚本 `/tmp/b10024/sec.sh`。
+- `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件＋两枚未跟踪用例，
+  记录笔只暂存 roadmap＋backlog 两本台账，**连续二十三批**）；待补行文本写进本批记录笔的提交信息。
