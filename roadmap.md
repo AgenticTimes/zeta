@@ -25953,3 +25953,50 @@ official 总数为 0、语料读不到"解析通过"行或分母为 0 ⇒ 一律
 
 **登记**：新增任务 **#20005**（历史缺陷转编译期单元测试，逐批补钉）。本批是它的第一批落地。
 `worktree.md` 仍带车道批次 745 在制面，连续十批未随批。不 push。
+
+## 批次 10012（cleanup 车道）——历史缺陷回归测试第二批（代码 `99c9d30b`）
+
+**动因**：续 #20005（用户任务"把历史问题的错误和修改做成单元测试，这样不必每次都跑全量测试"）。
+本批往 `tests/regression_history.rs` 补三条，来源批次全部**已在本树落地**（改前树里还没有的
+修复不能写进来——期望值会直接是红的，那属于 #20005 的"并树后补"余项）。
+
+**先查在册面**（决定能钉哪些）：`git log` 里 404／737／738 三条修复都在本树历史；
+批次 749 的代码笔 `275b3068` 用 `git merge-base --is-ancestor` 实测**不是** HEAD 祖先，
+主车道 805／806 同样未并（实拍：`[dynamic]i64::into_iter` 幽灵调用仍在、`-> String`
+调用点仍是 `Named`＋`println_i64`）⇒ 那三格等并树后再补；批次 753 的 `to_string` 症状只在
+运行期观测得到 ⇒ 不进这里。
+
+**三条新用例**（期望值取自缺陷记录，不取自现行输出）：
+
+| 测试名 | 来源批次 | 钉住的契约 | 改前症状 |
+|---|---|---|---|
+| `concat_element_type_prefers_the_non_degenerate_side` | 737（`189e2716`，站点 `gen.rs` 的 `py_array_concat` 分支） | `[1, 2] + [1.5]` 的拼接目的槽元素型＝`DynamicArray(F64)`（两侧之一退化取另一侧） | 元素型无条件取左侧 ⇒ 标成 `DynamicArray(I64)`，读每一行打裸指针 |
+| `format_bang_splits_each_value_segment_into_fmt_dispatch` | 404（`c443c34a`，站点 `macro_expand.rs:191` 的 `expand_format`） | 两个 `{}` 孔各发一次 `py_fmt_*` 派发，MIR 里不出现写死串 `"formatted string"` | 宏不看参数、整个塌成 `StringLit("formatted string")`；语料 29 文件／121 处调用打在同一个串上，编译成功、退出码 0、一声不出 |
+| `reserved_word_assignment_forms_do_not_truncate_the_file` | 738（`79be2515`，站点 `top_level.rs` 的顶层项守卫） | `struct/enum/trait/mod/pub` 五个赋值形都收进 `main`，且其后的 `after` 声明仍在 | `struct = 5` 被当成一次失败的声明 ⇒ `many0` 就地停止，文件后面全被截掉（W1002） |
+
+第三条按"负断言要配正证据"写：不只断言没报错，还断言五个赋值的字面量值 `[4,5,6,7,8]` 都在
+`main` 里、且截断时根本降不出来的 `after` 确实存在。
+
+**本批的真实缺陷面（harness 自己）**：`format!` 那条用例在 debug 构建下溢栈，把整条
+`cargo test` 卡死。`sample` 抓到的递归链是 `Resolver::lower_to_mir → prime_body_ret →
+lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环；`lower_expr_node`
+是单个巨型函数，debug 构建一层栈帧几十 KB，测试线程默认只有 2 MiB。修＝`lower_all` 起一条
+显式 64 MiB 栈的线程去做降形，`cargo test` 不再需要外部设 `RUST_MIN_STACK`。
+释放构建走主线程 8 MiB 没这个问题，所以这不是编译器缺陷，是测试面的构建形态。
+**如实记一条副作用**：溢栈之后的进程停在 `UE`（不可中断＋正在退出）态，`kill -9` 收不掉，
+会在后续用 `pgrep` 判活时装成"还在跑"（本批累计三颗这样的残留件）。
+
+**读数**（件 md5 `ed5227ccd29b70c4ee9ae17500926f10`／`.o` `878479bebf8d79a8539ee9a680fb463b`，
+本批零 `src/` 改动，改前改后同颗）：
+
+- `cargo test --test regression_history`：**9 passed／0 failed，finished in 0.01s**（原 6 条＋本批 3 条）。
+- 变异核验：3 条新用例共 **5 处**期望值改成症状值 → **5/5 全部转红**
+  （737 取左侧退化型；404 的"零次派发"与"写死串出现"两处分开变异；738 的"一个赋值都没收到"
+  与"`after` 体不是那个 11"两处）；复原后回 9/9 绿，脚本 `/tmp/b10012/mutation_check.py`
+  （每处替换前断言锚点在文件里唯一）。
+- 门禁 `sample_gate.sh 10012` 窗口 2 **rc=0**：① 差分 272/272 一致、② python_style 40/40 PASS、
+  ③ official 13/13 编译通过、④ 语料 40/40 满数。
+
+**登记**：#20005 状态保持 🟡，余项不变（继续按在册已修批次逐批补；404 之外还能钉的本树批次
+已在盘点里；运行期取值类挪进进程内执行面是单独一格）。`worktree.md` 仍带车道批次 745 在制面，
+连续十一批未随批。不 push。
