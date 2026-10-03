@@ -124,6 +124,40 @@
 >   ③ official 14/14 ④ 语料 40/40；被测件 md5 与 10012–10019 同一颗）——② 那一枚＝**#20006**
 >   的 `t256_pylib_stub_abort` 在窗口 0 复现，非本批引入（本批零 `src/` 改动、唯一改动面
 >   `tests/regression_history.rs` 与 ② 步跑的夹具无交集）。
+>   批次 10021（代码 `563e4635`）再补 3 条到 **36 条**（旁路 524 `adef6f4c`＝`signature_ret_ty` 的
+>   `Type::Str` 臂／cleanup 643 `04d19eb4`＝ctfe 的 `"floordiv"` 别名档／主线 414 `70b46b22`＝with 降形
+>   handler 分支的 exit 发射）。resolver 那把筛子已见底，本批改用"只留 `fix(` 前缀 ＋ 站点必须有 MIR
+>   可见面（排除 `src/backend/`）"重筛（`/tmp/b10021/index.py`＋`index2.py`，读数 `index.log`＝
+>   206 个批次号里 19 格、`index2.log`＝CAND 18 行）⇒ 换文件面这一步确实有货。
+>   三条做法级约束：
+>   ① **变异回退不必等于真修的那一笔**——414 真修是 2 文件 +151/−26，但能打到记录症状的最小臂只有
+>   handler 分支里那一行 `exit,` 发射（`stmt.rs:1741`）；先问"哪一行的存在决定了症状"，别整笔 reverse-apply
+>   （同笔的 `zeta_try_frame` 骨架抽取、terminator 改写都不决定这条断言的读数）。
+>   ② **折叠／改写类站点要先测"哪条发射路径真的经过它"**——同一道 `17 floordiv 5` 写成模块级赋值时
+>   MIR 里仍是两处 `Call { func: "floordiv" }`、没有折叠（`/tmp/b10021/f643.z`＋`mir_643.txt`），只有
+>   `print(<纯整数树>)` 那条实参改写臂（批次 642 引入）才塌成字符串常量 ⇒ 夹具形状选错＝撤臂也不会红，
+>   与 10013 的"harness 少跑一趟"、10015 的 327 那格同属"用例是空的"那一类。
+>   ③ **候选表里的批次号在写引用前先做车道归属三查**（10019 立的规矩本批又应验）：`worktree.md` 里
+>   643 有两行——`:199`＝bootstrap 车道 `acd9c657`（#247 名绑定族）、`:351`＝cleanup 车道 `04d19eb4`
+>   （floordiv）；524 的 `adef6f4c` 记作"旁路 524"并经主线合并笔 `1b282239` 并入（并入面读数在
+>   `roadmap.md:21903`，其中 `mir.rs` +1 就是 `:68` 那一行）；414 的 `70b46b22` 是主线批
+>   （`roadmap.md:17638`，该笔推过 `agentic/bootstrap`）⇒ 引用一律带哈希与车道坐标。
+>   变异核验 M1／M2／M3 各只红对应那一条用例、红值＝记录症状（`Some(I64)`／折叠实参读数 `[]`／
+>   异常出口分支缺 `py_threading_lock_release`），复原后 36/36 绿，三笔还原的 md5 与改前逐字相同
+>   （`/tmp/b10021/mutation_run.log`＋`mutation_progress.log`）。
+>   每批必跑的检查窗口 1 rc=0（① 差分 272/272 ② python_style 53/53 ③ official 18/18 ④ 语料 **38/40**；
+>   被测件 md5 与 10012–10020 同一颗、运行期 `.o` md5 同 10020）——④ 少的两枚 `jq_wufu.py`／`jq_wufu_daily.py`
+>   **不是解析失败**：`--dump-mir` 走完 504 个 MIR item，崩在后端 `codegen.rs:4189` 的
+>   `array_get`／`stack_array_get` 内联快路径 `into_int_value()` 硬转（Found FloatValue … expected IntValue），
+>   `tools/corpus_baseline.py:37` 的兜底臂 `return "panicked" not in out` 把 parse 之后的崩也算进 L1 读数
+>   ⇒ **语料读数不能当"解析退化"读**（工具口径缺陷，另记）。单文件 6/6 确定性崩、主树二进制
+>   （`777909e5…`，别人的在制面⇒参考不入账）同样两枚都崩；顺带给在册 **#20003**（旧 #272，
+>   "codegen 硬转处缺失败往上抛的通道"）补一个同族新站点 `:4189`（该格登记的是 `:5462`），
+>   记忆里"现已无语料能打到"那句按本批实测更正，修法未裁、状态保持 ⬜。
+>   与 10019／10020 的 40/40 那一层差**未归因**（已排：两枚文件 mtime/birth 都在 9 月、两颗 md5 与当时相同、
+>   我这侧 shell 无 `ZETA_*` 环境变量、非负载抖动）。已用到的来源批次去重清单新增 **524、643、414**。
+>   余项不变：399 的算术形状臂、592 的"元素型从 λ 体表达式取"那一支、327 的 const／comptime 折叠形状、
+>   **#20007**（601 那一族的三条臂）。
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；

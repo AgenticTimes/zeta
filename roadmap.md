@@ -26594,3 +26594,124 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
 642、447、451、404、407、376、377、378、327（活路径记在 642 那臂下）、552、628、644、629、630、631、
 579、580、592、575、587、621、**600、399、400**（601 实测打不到，算已查证、不算已覆盖）。
 `worktree.md` 仍带车道批次 745 的在制面，本批未随批（连续十九批）。
+
+## 批次 10021（续 #20005：历史缺陷的编译期单元测试，第十一批）
+
+**任务与口径**：主线任务 `#20005`（把已修好的历史缺陷转成进程内单元测试，替掉"每次都跑全量"）。
+本批三条，来源批次 **524／643／414**；代码笔 `563e4635`（`tests/regression_history.rs` ＋210 行，
+**零 `src/` 改动**），全套现在 **36 条／0.03 秒**。窗口＝10021 % 10 ＝ **1**。
+
+### 候选怎么筛出来的（10016 那把机器筛，本批换了过滤条件）
+
+`resolver.rs` 那一族按 10020 收尾的说法只剩 600／601，而 601 已开成 `#20007` ⇒ 本批**换文件面重筛**。
+脚本与读数＝`/tmp/b10021/index.py`＋`index.log`、`/tmp/b10021/index2.py`＋`index2.log`：
+
+- `index.py`：把 `git log` 里 subject 形如 `fix|feat|chore|refactor(…): 批次 N` 的提交按批次号建索引
+  （实测 **206 个批次号**），逐笔 `git show --name-only` 取文件面，只留"提交在本树祖先里 ＋ `src/` 面
+  不含 `gen.rs`／`parser/expr.rs`／`parser/top_level.rs` ＋ 有非 `src/backend/` 的 MIR 可见站点"的格
+  ⇒ **19 格**；
+- `index2.py`：在同一条链上只留 `fix(` 前缀的笔（`feat|chore|refactor` 的subject 常写的是搬迁而不是
+  缺陷），并打出每笔的文件面与 `anc=` 读数 ⇒ **CAND 18 行**。
+  注意同一批次号可以出现两行（不同笔落不同文件）：本批三格里 524、643 各有一行是 `BANNED`
+  （524 的另一笔在 `frontend/parser/expr.rs`、643 的另一笔在 `middle/mir/gen.rs`），
+  取的是它们各自那条 `CAND` 笔——**按笔取站点，不按批次号取站点**。
+
+### 三格
+
+（车道归属按 10019 立的三查——`worktree.md` 车道列＋`git log --grep`＋`git show` 都过了，
+所以每条都带哈希与台账坐标；**643 这个号两车道各有一套**：`worktree.md:199` 的 643 是 bootstrap
+车道的 `acd9c657`（#247 名绑定族），`worktree.md:351` 的 643 才是本条引用的 cleanup 笔。）
+
+| 来源批次 | 代码 | 站点 | 症状（记录原文口径） | 本条锁的编译期结论 |
+|---|---|---|---|---|
+| 旁路 524（经主线合并笔 `1b282239` 并入，并入面读数见 `roadmap.md:21903`） | `adef6f4c` | `src/middle/mir/mir.rs:68`（`signature_ret_ty` 的 `Type::Str => Type::Str` 臂） | 方法返回字符串被兜底臂 `_ => Type::I64` 降成整数＝把字符串指针当整数 | 限定名与裸名两份降形的 `return` 值槽都是 `Str`，且 `signature_ret_ty()` 读 `Some(Str)` |
+| cleanup 643（`worktree.md:351`） | `04d19eb4` | `src/middle/ctfe/evaluator.rs:171`（`"//" \| "floordiv"` 那一档） | zeta 词法把 Python 的 `//` 当行注释，方言面唯一能写的拼写是词算子 `floordiv`，而 i128 求值器只认 `"//"` ⇒ 折叠落空（该批实拍 v0＝被除数本身 27951846246271，不等于商） | `print(17 floordiv 5)`／`print(-1169321853448 floordiv 7)` 的实参塌成字符串常量 `"3"`／`"-167045979064"`，且函数体内不再有运行期 `floordiv` 调用 |
+| 主线 414（`roadmap.md:17638`，该笔推过 `agentic/bootstrap`，见 `roadmap.md:17766`） | `70b46b22` | `src/frontend/parser/stmt.rs:1729-1751`（with 降形的 handler 分支；共用骨架 `zeta_try_frame` 现 :1373） | 异常 longjmp 出 with 体，跳过块边界的收尾 exit ⇒ 互斥量一直被持有 ⇒ 下一次 acquire 永久阻塞（语料探针 rc=124；在册夹具 t452 改前实拍 rc=124 零输出） | try 帧**两条分支各释放一次**（不得双释放），handler 分支按「先释放、再重抛」排 |
+
+### 验证
+
+1. **三侧真值**（写断言前取的，10018 立的规矩）：
+   - 524：CPython 同输入 `python3 /tmp/b10021/py_f524.py` → `hello`（`pyout_524.txt`），
+     zeta 编译后运行 `/tmp/b10021/f524.bin` → `hello`（`run_524.txt`，`cmp -s` 逐字相同），
+     `--dump-mir` 里 `Greeter::greet` 与裸名 `greet` 两项的返回槽都读 `2: Str`（`mir_524.txt`）；
+   - 643：CPython → `3`／`-167045979064`（`pyout_643.txt`），AOT 二进制同两行（`run_643.txt`），
+     `--dump-mir` 读 `StringLit("3")`／`StringLit("-167045979064")`（`mir_643b.txt`）；
+   - 414：运行期真值由在册夹具 `t452_with_exception_releases_lock.z` 的 `// expect: t452 [1, 4, 5]`
+     承担（本条不锁运行期值，锁的是降形形状）；形状侧取 `--dump-mir`（`/tmp/b10021/mir_414.txt`：
+     handler 分支序＝`zeta_last_error` → `zeta_try_end` → `py_threading_lock_release` → `zeta_raise`），
+     与本套 `lower_all` 的读数同一条链。
+2. **本批实测发现（643 的夹具形状）**：`floordiv` 的折叠只发生在 `print(<纯整数树>)` 那条实参改写臂上
+   （批次 642 引入的路径）。同一道题写成模块级赋值 `a = 17 floordiv 5` 时，MIR 里仍是
+   `Call { func: "floordiv" }` 两处、**没有**折叠（`/tmp/b10021/f643.z`＋`mir_643.txt`）——
+   所以夹具必须用 `print(...)` 形，否则断言打在一条本就不参与折叠的路径上、撤臂也不会红。
+   这是"候选清单写的来源批次＝站点要实测"第 N 次应验（10015 的 327 那格同型）。
+3. **变异核验**（每次只撤一条臂，跑全套；日志＝`/tmp/b10021/mutation_run.log`，
+   分档＝`M1.log`／`M2.log`／`M3.log`，进度＝`mutation_progress.log`）：
+
+   | 撤掉的臂 | 红了哪条 | 红值＝记录症状 |
+   |---|---|---|
+   | M1 `mir.rs:68` 的 `Type::Str => Type::Str,` | 只有 524 那条，红在 `tests/regression_history.rs:2314` | `left: Some(I64)`／`right: Some(Str)`＝兜底臂把字符串返回当整数（记录原文） |
+   | M2 `evaluator.rs:171` 的 `\| "floordiv"` | 只有 643 那条，红在 `tests/regression_history.rs:2361` | `left: []`＝两处实参都不是折叠出的字符串常量（折叠落空，记录原文） |
+   | M3 `stmt.rs:1741` handler 分支里的 `exit,` | 只有 414 那条，红在 `tests/regression_history.rs:2451` | 实得分支调用 `["zeta_last_error", "zeta_try_end", "zeta_raise"]`＝异常出口没有释放（锁被永久扣住，记录原文） |
+
+   三笔都是**一笔红一条**、且红的是记录里那条症状对应的支；每笔还原后 md5 与改前逐字相同
+   （`mir.rs 61ced1bd…`／`evaluator.rs 9fe501ef…`／`stmt.rs 628bf015…`，
+   `mutation_progress.log` 末行"全部还原：三颗 md5 一致"）。
+   **做法级读数**：414 的真修是 128 行的笔（`git show --numstat`＝102 加 26 删），但能打到症状的最小臂
+   只有 handler 分支里那一行 exit 发射 ⇒ 变异核验不必整笔回退，找得到臂就行。
+4. **每批必跑的检查**（`bash tools/sample_gate.sh 10021`，窗口 1；明细目录
+   `/tmp/zeta_gate_10021.RAVtv1`，日志 `/tmp/b10021/gate.log`）：**rc=0**
+   —— ①差分 **272/272** 一致 ②python_style **53/53** PASS ③official **18/18** 编译通过 ④语料 **38/40**。
+   被测件 md5 `ed5227ccd29b70c4ee9ae17500926f10`（＝10012 起那颗；本批零 `src/` 改动），
+   运行期 `.o` md5 `878479bebf8d79a8539ee9a680fb463b`。
+
+   **④ 步 38/40 的逐条归因**（读数比 10018/10019/10020 的 40/40 少两枚，必须点名）：
+   - 失败两枚＝`jq_wufu.py`、`jq_wufu_daily.py`（`/tmp/zeta_gate_10021.RAVtv1/corpus.log`）；
+   - **不是解析失败**：同一颗二进制跑 `--dump-mir` 出 **504 个 MIR item**、2 648 150 字节，解析与降形都走完
+     （`/tmp/corpus_probe10021/jq_wufu.mir`），崩点在**后端**
+     —— `thread 'main' panicked at src/backend/codegen/codegen.rs:4189:77:
+     Found FloatValue(...) but expected the IntValue variant`，那一行是 `array_get`／`stack_array_get`
+     内联快路径的 `gen_expr_safe(&args[0], …).into_int_value()` 硬转（接收者是 `load double` 出来的浮点值）；
+     `tools/corpus_baseline.py:37` 的兜底臂 `return "panicked" not in out` 把它计成了"解析失败"
+     ——**工具口径缺陷**：走完 parse 之后的崩也被算进 L1，读数因此不能当"解析退化"读。
+   - **不属本批引入**：本批零 `src/` 改动、被测件 md5 与 10012–10020 逐字相同；单文件重跑 **6/6 确定性崩**
+     （两枚各 3 次，`/tmp/corpus_probe10021/` 的 `run1/2/3` 读数），不是负载抖动也不是顺序翻牌。
+     主树二进制（`/Users/meetai/source/zeta-src/target/release/zetac`，md5 `777909e5…`）**同样两枚都崩**
+     ——该侧是别人的在制面，读数只作"两树都在"的参考，不入账。
+   - **与 10019／10020 的 40/40 之差仍未归因**（时间窗＝今天 14:15:28 到 14:42:55 之间）：
+     能查的常见嫌疑都排掉了——① 输入没动：`jq_wufu.py` mtime 2026-09-04 23:15、birth 21:46，
+     `jq_wufu_daily.py` mtime 2026-09-01，都早于 10020 的门禁（birth 也早 ⇒ 不是"用 `cp -p` 换过内容"，
+     换过的话 birth 会是今天）；② 被测件与运行期 `.o` 两颗 md5 与 10020 门禁打印的逐字相同
+     （`ed5227cc…`／`878479be…`）；③ 我这侧 shell 里 `ZETA_*` 环境变量为空（能改 codegen 形态的那批开关：
+     `ZETA_NO_OPT`／`ZETA_STRICT_ABI`／`ZETA_PYLIB`／`ZETA_RUNTIME_DIR` 等，`grep -rhoE '"ZETA_[A-Z_]+"' src`
+     枚举过）；④ 单文件重跑 6/6 确定性 ⇒ 不是负载抖动、不是 `HashMap` 顺序翻牌。
+     观察到但没证的关系：语料目录今天被换过面——`code/wufu_v1.py`／`wufu_v2.py`／`wufu_bt.py`
+     三枚 birth＝今天 14:13:11（10020 门禁前两分钟），分母仍是 40 ⇒ 该目录另有文件进出。
+     **语料不是我的在制面，不改它、也不替它编故事**；追那一层差的下一批要先在同一颗二进制上重跑整轮。
+
+   - 这条读数顺带给在册 `#20003`（旧 `#272`，"codegen 硬转处缺'失败往上抛'的通道，现在只能就地崩或静默"）
+     补一个**同族新站点**：`codegen.rs:4189`（该格登记的是 `:5462`），且有语料能打到 ⇒ 记忆里
+     "现已无语料能打到"那句按本批实测更正。修法仍未裁，状态保持 ⬜。
+
+
+### 边界（本批三条不覆盖的）
+
+- 524 那条只锁 `signature_ret_ty()` 这个**镜像层**读到的形状；该函数在 `codegen.rs:1496`、
+  `resolver.rs:5353`、`gen.rs:1775` 三处被读，调用方各自怎么用它（尤其后端返回值转换器）本条不查。
+- 643 那条不查同批记录里在册的另两格：除零那一支（`r == 0` 返回 `None`）是 643 之前就有的守卫，
+  `/`（truediv）自批次 642 起故意让 i128 求值器弃权（`evaluator.rs:187-189` 注释在册）；
+  该批还改了三条差分夹具的 zeta 节拼写，属运行期差分面。
+- 414 那条只锁 with 的异常出口一条边：`return`／`break`／"僵尸 try 帧被下一次 raise 落点吃到"
+  （同批记录里的 `load_metadata` SEGV 那一类）都要运行期才观测得到。
+- 并树这件事仍未做。本批代码笔 `563e4635` 落地后实测 `bootstrap..cleanup` 滞留 **45 条**、
+  `cleanup..bootstrap` **222 条**（落笔时刻主树 HEAD＝`cd7ff4ee`＝批次 853 的记录笔）
+  ⇒ 与 10020 收尾的 43／210 同量级还在涨，主树工作区仍是别人的在制面。
+
+### 登记
+
+- `#20005` 状态保持 🟡，现 **36 条**（代码 `563e4635`）。已用到的来源批次去重清单新增
+  **524、643、414**（三笔都在 cleanup 车道，引用一律带哈希：`adef6f4c`／`04d19eb4`／`70b46b22`）。
+- `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件＋两枚未跟踪用例，
+  记录笔只暂存 roadmap＋backlog 两本台账，**连续二十批**）；待补行文本写进本批记录笔的提交信息。
+- 更正：批次 10020 的记录笔 `0b545f9b` 的提交信息写"roadmap +125 行"，`git show --stat` 实为 **126 行**
+  （数字取自最后一次 roadmap 编辑之前）。历史提交信息不回改，更正记在这里。
