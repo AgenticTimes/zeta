@@ -8798,50 +8798,6 @@ call, no NULL-handle dereference).",
                     return unit_id;
                 }
 
-                // SPECIAL HANDLING: successor(it) — advance iterator by 1
-                if classify_call(method) == CallClass::NumericBuiltin
-                    && method == "successor"
-                    && receiver.is_none()
-                    && args.len() == 1
-                {
-                    let it_id = self.lower_expr(&args[0]);
-                    let one_id = self.next_id();
-                    self.exprs.insert(one_id, MirExpr::IntLit(1));
-                    self.type_map.insert(one_id, Type::I64);
-                    self.exprs.insert(
-                        id,
-                        MirExpr::BinaryOp {
-                            op: "+".to_string(),
-                            left: it_id,
-                            right: one_id,
-                        },
-                    );
-                    self.type_map.insert(id, Type::I64);
-                    return id;
-                }
-
-                // SPECIAL HANDLING: predecessor(it) — advance iterator by -1
-                if classify_call(method) == CallClass::NumericBuiltin
-                    && method == "predecessor"
-                    && receiver.is_none()
-                    && args.len() == 1
-                {
-                    let it_id = self.lower_expr(&args[0]);
-                    let one_id = self.next_id();
-                    self.exprs.insert(one_id, MirExpr::IntLit(1));
-                    self.type_map.insert(one_id, Type::I64);
-                    self.exprs.insert(
-                        id,
-                        MirExpr::BinaryOp {
-                            op: "-".to_string(),
-                            left: it_id,
-                            right: one_id,
-                        },
-                    );
-                    self.type_map.insert(id, Type::I64);
-                    return id;
-                }
-
                 // SPECIAL HANDLING: begin(r) / end(r) — get iterators from a range/container
                 if (method == "begin" || method == "end") && receiver.is_none() && args.len() == 1 {
                     // For now, begin returns the pointer to start, end returns pointer past end
@@ -12018,6 +11974,16 @@ call, no NULL-handle dereference).",
                 // Python `set` methods on our list-backed sets: `s.add(x)` is a
                 // push; `s.discard(x)` / `s.remove(x)` rebuild without the slot.
                 // They compiled to ghosts (`_set__add`) and failed the link.
+                // 批次 831：数值内建族（successor/predecessor/abs/sum/min/max）
+                // 全部迁入 gen/call_num.rs；入口判定读分类器，执行者只管发射。
+                if classify_call(method) == CallClass::NumericBuiltin
+                    && receiver.is_none()
+                {
+                    if let Some(nid) = self.lower_numeric_builtin(method, args, id) {
+                        return nid;
+                    }
+                }
+
                 // 批次 816/824：集合族（add/discard/remove/intersection）搬
                 // 子模块 gen/call_set.rs；入口判定改读分类器（SetMutation/
                 // SetIntersection 互斥在分类层保证），执行文件只管发射。
