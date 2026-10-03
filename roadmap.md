@@ -28168,3 +28168,25 @@ body: Vec<AstNode>, else_body: Vec<AstNode> }`，批 860 签名写错教训在�
 验证：编译零错误；内置单元测试 157/157；行为探针与 CPython 逐字对齐
 （`while` 累加 10／`while…else` 走 else 分支／条件含负终值 j=-2 三面）；
 batch_gate GREEN。For 臂（约 500 行）留批 863 单独迁。
+
+## 批次 863（2026-10-03，**重构批：For 语句臂（501 行）迁入 gen/call_flow.rs**）
+
+零替换法＋行号精确手术（860 事故后弃模糊替换）：`lower_ast_inner` 的
+`AstNode::For` 臂（501 行，集合迭代＋区间两条路）迁入
+`gen/call_flow.rs::lower_for_stmt(&mut self, pattern: &AstNode, expr: &AstNode,
+body: &[AstNode], else_body: &[AstNode])`。臂体一字未动，仅签名适配四处
+Box 解引用（`&**expr`→`expr`、`&*pattern_clone`→`&pattern_clone`×3、
+`&**pattern`→`pattern`）＋切片迭代一处（`&body_clone`→`body_clone`，
+`&[AstNode].clone()` 语义随签名变化）。gen.rs 15456→14965（净 -491）。
+
+**探针十个面与 CPython 逐字对齐**：区间求和／通配符循环变量／列表迭代／
+continue 推进在前（849 死循环形）／for-else 正常走／空集合走 else／
+break 跳过 else／字典键迭代／元组解构（per-位型）／字符串迭代。
+
+**新发现缺陷 #273（非本批引入，be4b4c78 复现在案）**：混型列表元素按位当
+i64 渲染（`[1, "a"]` 打 `[1, 4343530674]`）＋退化 vec 头混型追加后打印段
+错误（`py_json_dumps_vec_typed`，崩点 `address=0x1`）。混型逐元素按格渲染
+是 808 注释"另格"的既有登记缺口，本批补正式编号入 backlog。已验证路线：
+探针避开混型列表（for-else 用同型值验证），十个面全绿。
+
+验证：编译零错误；内置单元测试 157/157；batch_gate GREEN。
