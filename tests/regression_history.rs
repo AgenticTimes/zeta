@@ -22,7 +22,7 @@
 
 use zetac::frontend::ast::AstNode;
 use zetac::frontend::parser::top_level::parse_zeta;
-use zetac::middle::mir::mir::{Mir, MirExpr, MirStmt};
+use zetac::middle::mir::mir::{Mir, MirExpr, MirStmt, SemiringOp};
 use zetac::middle::resolver::resolver::Resolver;
 use zetac::middle::types::Type;
 
@@ -2463,5 +2463,251 @@ def raise_out():
         matches!((release, reraise), (Some(r), Some(p)) if r < p),
         "handler 分支要按「先释放、再重抛」排（释放在重抛之后＝那一支跑不到，等于没修；\
          没有重抛＝传播被吞掉，在册夹具注释里的「`R` 里有 4 才算传到外层 except」那一格），实得分支调用: {else_funcs:?}"
+    );
+}
+
+// 批次 460（旁路 cleanup 车道，代码 `060b0ea3`，站点 `src/frontend/parser/pattern.rs:37`
+// 的引用模式臂＋`parse_ref_pattern`（现 :109））。
+// 症状（记录原文）：模式位置的 `&value` 不被识别 → `parse_match_arm` 失败 →
+// **整个 `fn` 连同其后顶层项被丢**（W1002）；来源是 `zeta_src/runtime/array.z` 的 `array_get`。
+// 修法＝按槽位模型剥掉 `&` 直接绑定内层（i64 word 无移动/借用之分），`&mut` 带词边界检查、
+// 递归支持 `&&p`。
+// 真值来源（本批取的三侧）：在册夹具 `tests/python_style/t501_ref_pattern_match.z` 的
+// `// expect: 42 / 0 / 5` ＋改后二进制实拍（`/tmp/b10022/run_t501_ref_pattern_match.txt`＝
+// 42、0、5）＋`--dump-mir`（`/tmp/b10022/mir_f460.txt`：`option_is_some` → `option_get_data`
+// → `Assign{lhs: 结果槽, rhs: get_data 的 dest}`）。CPython 侧不适用——`fn`/`match`/`Option`
+// 是 zeta 的 Rust 方言拼法，没有 Python 对照写法。
+// 本条不锁运行期取值（42/0/5 由夹具承担），锁编译期两格：① 函数与后续顶层项都还在；
+// ② `&` 模式绑的是内层载荷（`option_get_data` 的目的槽流进返回槽），不是引用本身。
+#[test]
+fn reference_pattern_arm_keeps_function_and_binds_inner_payload() {
+    fn assigns_in_order(stmts: &[MirStmt], out: &mut Vec<(u32, u32)>) {
+        for s in stmts {
+            match s {
+                MirStmt::Assign { lhs, rhs } => out.push((*lhs, *rhs)),
+                MirStmt::If { then, else_, .. } => {
+                    assigns_in_order(then, out);
+                    assigns_in_order(else_, out);
+                }
+                MirStmt::For { body, else_body, .. } | MirStmt::While { body, else_body, .. } => {
+                    assigns_in_order(body, out);
+                    assigns_in_order(else_body, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mirs = lower_all(
+        r#"fn pick(o: Option<i64>) -> i64 {
+    match o {
+        Some(&value) => value,
+        None => 0,
+    }
+}
+fn pick_mut(o: Option<i64>) -> i64 {
+    match o {
+        Some(&mut value) => value,
+        None => 7,
+    }
+}
+fn after_ref_pattern(o: Option<i64>) -> i64 {
+    return 99;
+}
+"#,
+    );
+
+    // ① 三个顶层项都在（改前症状就是 `pick` 之后的项被带走）
+    let names: Vec<&str> = mirs.iter().filter_map(|m| m.name.as_deref()).collect();
+    for want in ["pick", "pick_mut", "after_ref_pattern"] {
+        assert!(
+            names.contains(&want),
+            "引用模式不该把函数丢掉（缺一个＝改前那条 W1002 又回来了），实得顶层项: {names:?}"
+        );
+    }
+
+    // ② 两条臂（`&value`／`&mut value`）都按「取内层载荷 → 写进返回槽」降
+    for name in ["pick", "pick_mut"] {
+        let f = mir(&mirs, name);
+        let mut calls = Vec::new();
+        fn collect(stmts: &[MirStmt], out: &mut Vec<(String, u32)>) {
+            for s in stmts {
+                match s {
+                    MirStmt::Call { func, dest, .. } => out.push((func.clone(), *dest)),
+                    MirStmt::If { then, else_, .. } => {
+                        collect(then, out);
+                        collect(else_, out);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        collect(&f.stmts, &mut calls);
+        let payload = calls
+            .iter()
+            .find(|(c, _)| c == "option_get_data")
+            .unwrap_or_else(|| panic!("`{name}` 里没取载荷（实得调用: {calls:?})"))
+            .1;
+        assert!(
+            calls.iter().any(|(c, _)| c == "option_is_some"),
+            "`Some(..)` 臂头该先做 is_some 测试（正证据：这条臂真跑了），实得调用: {calls:?}"
+        );
+
+        let mut asg = Vec::new();
+        assigns_in_order(&f.stmts, &mut asg);
+        let ret = f
+            .stmts
+            .iter()
+            .find_map(|s| match s {
+                MirStmt::Return { val } => Some(*val),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("`{name}` 没有返回语句"));
+        assert!(
+            asg.iter().any(|(lhs, rhs)| *lhs == ret && *rhs == payload),
+            "`&`／`&mut` 该剥掉、把内层载荷（槽 {payload}）赋进返回槽 {ret}，实得赋值: {asg:?}"
+        );
+    }
+}
+
+// 批次 371（主线，代码 `0fff1809`，站点 `src/frontend/parser/pattern.rs:66-80`：
+// 在 alt 之后统一 `many0` 收集 `| 后续模式`，非空即折成 `AstNode::OrPattern`）。
+// 症状（记录原文）：`A | B`、`"x" | "y"` 这类臂头过去**只有左边被消费**——
+// `parse_struct_pattern` 对裸路径必定成功（pattern.rs:135 的 Var 兜底），所以非字面量开头的链
+// 根本拿不到剩余的 `| …`；后果是 `advanced_patterns_test` 丢 62 行。
+// 编译期结论：一条 or 臂折成**一次** `"||"` 调用、两个实参各是一个被或进来的分支测试
+// （`--dump-mir` 实拍＝`/tmp/b10022/mir_f371.txt`：`Call{func:"||", args:[7,9], dest:11}` 与
+// `Call{func:"||", args:[14,16], dest:18}`，`type_map` 里 7/9/14/16 都是 `Bool`）。
+// 运行期真值仍由 official 的 advanced_patterns 夹具承担，本条不重复锁。
+#[test]
+fn or_pattern_arm_head_lowers_to_one_disjunction_per_arm() {
+    let mirs = lower_all(
+        r#"fn alt_head(x: Option<i64>) -> i64 {
+    match x {
+        Some(1) | Some(2) => 10,
+        Some(3) | Some(4) => 20,
+        _ => 30,
+    }
+}
+fn after_or_chain(x: i64) -> i64 {
+    return 77;
+}
+"#,
+    );
+
+    let names: Vec<&str> = mirs.iter().filter_map(|m| m.name.as_deref()).collect();
+    assert!(
+        names.contains(&"after_or_chain"),
+        "or 臂后面的顶层项不该被丢（改前＝臂头只吃左边，剩余文本没人消费），实得顶层项: {names:?}"
+    );
+    let f = mir(&mirs, "alt_head");
+
+    let mut disjunctions: Vec<Vec<u32>> = Vec::new();
+    fn collect(stmts: &[MirStmt], out: &mut Vec<Vec<u32>>) {
+        for s in stmts {
+            match s {
+                MirStmt::Call { func, args, .. } if func == "||" => out.push(args.clone()),
+                MirStmt::If { then, else_, .. } => {
+                    collect(then, out);
+                    collect(else_, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    collect(&f.stmts, &mut disjunctions);
+
+    assert_eq!(
+        disjunctions.len(),
+        2,
+        "两条 or 臂该各折成一次 `||`（改前＝只有左边被消费，一条都折不出来），实得: {disjunctions:?}"
+    );
+    for args in &disjunctions {
+        assert_eq!(
+            args.len(),
+            2,
+            "or 链该恰好带两个被或进来的分支，实得: {args:?}"
+        );
+        for id in args {
+            assert_eq!(
+                f.type_map.get(id),
+                Some(&Type::Bool),
+                "槽 {id} 该是一个分支测试的结果（Bool）——正证据：`||` 两侧真的各算了一次比较"
+            );
+        }
+    }
+}
+
+// 批次 367（主线，代码 `62f65255`，站点 `src/frontend/indent.rs:488-496`：
+// `find_inline_colon` 里「冒号之后的代码已有本语句自己的 `{`」这条守卫）。
+// 症状（记录原文）：`for i: usize in 0..10 {` 的类型注解冒号曾被行内冒号规则当成 Python 单行块，
+// 改写成语法错误的 `for i { usize in 0..10 { }`，`primezeta_usize_test` **丢 36 行**。
+// 本批实测的发射路径liveness（10021 立的规矩：改写类站点先测哪条路径真经过它）：
+// 该 fixture 的 `calc` 走 `rewrite_inline_body` → `is_header_start`（首词 `for` 在
+// HEADER_KEYWORDS）→ `find_inline_colon`，撤掉守卫后改写真发生、`calc` 与 `after_typed_for`
+// 一起消失（变异 M3 实拍＝本批验证表）。
+// 边界：循环体真跑那半属批次 368（`var_id`／`counter_id` 分离那条，站点在 `gen.rs`，
+// 本套按 10014 的规矩避开），本条只锁「注解冒号不改写」＝循环形状与后续顶层项还在。
+#[test]
+fn typed_for_variable_annotation_is_not_rewritten_as_one_line_block() {
+    let mirs = lower_all(
+        r#"fn calc() -> i64 {
+    let mut sum = 0
+    for i: usize in 0..5 {
+        sum = sum + i
+    }
+    return sum
+}
+fn after_typed_for() -> i64 {
+    return 55;
+}
+"#,
+    );
+
+    let names: Vec<&str> = mirs.iter().filter_map(|m| m.name.as_deref()).collect();
+    assert!(
+        names.contains(&"after_typed_for"),
+        "带类型注解的 for 行不该把后面的顶层项带走（改前＝改写成语法错误、静默丢行），实得顶层项: {names:?}"
+    );
+
+    let f = mir(&mirs, "calc");
+    let (iterator, pattern, body) = f
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::For {
+                iterator,
+                pattern,
+                body,
+                ..
+            } => Some((*iterator, pattern.clone(), body.clone())),
+            _ => None,
+        })
+        .expect("`for i: usize in 0..5 { … }` 该降出一条 For（改前那行被改写成 `for i { … }` 就没有循环了）");
+    assert_eq!(
+        pattern, "i",
+        "循环变量名该是注解前的 `i`（`usize` 是类型不是名字的一部分）"
+    );
+    match f.exprs.get(&iterator) {
+        Some(MirExpr::Range { start, end }) => {
+            let lo = f.exprs.get(start);
+            let hi = f.exprs.get(end);
+            assert!(
+                matches!(lo, Some(MirExpr::IntLit(0)))
+                    && matches!(hi, Some(MirExpr::IntLit(5))),
+                "`0..5` 该原样进 Range 的两个端点（实得 start={lo:?} end={hi:?}）"
+            );
+        }
+        other => panic!("迭代器槽 {iterator} 该是 `Range`，实得 {other:?}"),
+    }
+    assert!(
+        body.iter().any(|s| matches!(
+            s,
+            MirStmt::SemiringFold {
+                op: SemiringOp::Add,
+                ..
+            }
+        )),
+        "循环体不该是空的（改写一旦发生，`sum = sum + i` 就掉出了本语句），实得 body: {body:?}"
     );
 }
