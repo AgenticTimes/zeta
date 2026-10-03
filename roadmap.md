@@ -26765,3 +26765,9 @@ dump 模式落穿到 LLVM codegen（FloatValue 槽 into_int_value panic）。
 修法：main.rs 加 probe_only && !dump_ir → return Ok(())。全语料
 40/40 dump PASS 零旋转。MIR diff 工具从此可用。
 教训：git reset --hard 丢失未提交修复——重要修复应及时提交。
+
+## 批次 858（本批）：If 表达式臂（222 行）迁入 call_if.rs——零替换法
+
+签名关键发现：then/else_ 是 Vec<AstNode>（非 Box<AstNode>）——此前三次
+失败正是因误设签名为 &Box<AstNode> 导致 tail_of 类型不匹配。
+If 三元探针 big/3 全对齐 CPython；全库 157/157。gen.rs 14710→14491。
