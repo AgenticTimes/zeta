@@ -26327,3 +26327,69 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   206 条（主树已到批次 843），主树工作区仍是别人的在制面。
 
 **登记**：#20005 状态保持 🟡，现 **24 条**（代码 `4c7081db`）。余项＝按 roadmap 已修批次逐批继续补：候选仍出自 `middle/resolver/resolver.rs` 那一族，本批未用的格子＝621／601／600／592／587／580／579／575；327 的 const／comptime 折叠那一格仍待另批补（10015 已登记）；已用到的来源批次去重清单＝10001／10002／10003／10004、736、737、738、739、652、654、642、447、451、404、407、376、377、378、327（活路径记在 642 那臂下）、552、628、644、629、630、631。`worktree.md` 仍带车道批次 745 的在制面，本批未随批（连续十六批）。
+
+## 批次 10018 —— 历史缺陷回归测试第八批（续 #20005：579／580／592 各转一条，现 27 条）
+
+**动因**：继续把已修好、且结论落在 `Mir`（被调符号名／槽位类型）上的历史缺陷转成进程内
+单元测试（用户任务＝"把历史问题的错误和修改，做成单元测试，这样不必每次都跑全量测试"）。
+
+**候选来源**：三笔仍出自批次 10016 那把"按修复提交只碰哪些文件"筛出的表
+（`/tmp/b10016/index.log` 第 36-45 行 `middle/resolver/resolver.rs` 一族里 10017 没用完的格子：
+575／579／580／587／592／600／621）。本批取 579／580／592——三笔的站点都在同一个函数
+（`unannotated_return_ty` 现 :4581 里那层嵌套 `infer` 现 :4635）的三条不同臂上，
+变异能各打各的。前两把筛子照旧：① 三笔修复都验过是 HEAD 祖先
+（`git merge-base --is-ancestor`：579＝`4ee26e8a`、580＝`988a553d`、592＝`d4750ffa`）；
+② 站点避开主树在重构的 `gen.rs` 与车道在制的两颗解析器文件——本批零 `src/` 改动。
+车道归属按 10016 那把方法核过：`worktree.md` 台账行 579＝`:288`、580＝`:285`、592＝`:297`
+都是 `cleanup`；**592 的编号与主树重合**——`worktree.md:184` 那行"批次 592"是 bootstrap 车道的
+另一批（#167 余项①／`find_snippet_lines` 相邻退化成因批），所以引用以哈希 `d4750ffa` 为身份。
+
+### 一、三条用例
+
+| 用例（`tests/regression_history.rs`） | 来源批次 | 站点（本树现行位置） | 期望值出处 | 记录里的症状 |
+|---|---|---|---|---|
+| `membership_method_return_gives_bool_not_int_at_callsite` | 579（`4ee26e8a`） | `resolver.rs` 的 `unannotated_return_ty` 内层 `infer` 的 `__contains__` 臂（现 :4716） | 差分夹具 `tests/diff/cases/class_tag_probe.dcase` ＋ 本批 `python3` 现跑同一份源的真值 `True`／`False` | `t in self.tags` 在解析层脱糖成 `__contains__` 调用，推断的 Call 臂不认该名 ⇒ 方法返回推不出、停在 i64 ⇒ 调用点 `print` 打 `1` 而不是 `True` |
+| `str_join_method_return_marks_callsite_dest_as_str` | 580（`988a553d`） | 同一层 `infer` 里 `m2 == "join"` 那一支（现 :4744-4775） | 同一份 `class_tag_probe.dcase` ＋ CPython 真值 `web,db` | `return ",".join(self.tags)` 里 `join` 不在推断表内 ⇒ 返回落空停 I64 ⇒ `print` 把连接串的指针当整数打。修法含 `infer_global_ty` 的 Call 臂解构补绑 `args` |
+| `list_comprehension_method_return_keeps_vector_shape_at_callsite` | 592（`d4750ffa`） | 同一层 `infer` 里的 `__collect__` 臂（现 :4728） | 差分夹具 `class_str_comprehension.dcase` ＋ CPython 真值 `[1, 2, 1]` | 列表推导脱糖成 `__collect__(iter, λ)` ⇒ 返回方法被否决成 I64 ⇒ `print` 打向量句柄而不是内容 |
+
+### 二、验证
+
+- `cargo test --test regression_history`：**27 passed / 0 failed / 0.06s**。
+- 断言值先取两侧真值再写（10017 那把做法沿用）：
+  ① CPython 侧＝`python3 /tmp/b10018/f579.z`→`True`／`False`，`f580.z`→`web,db`，
+  `f592.z`→`[1, 2, 1]`；② zeta 侧＝`target/release/zetac -o` 编译后运行三枚二进制，
+  输出与 CPython **逐字相同**（三枚都是）；③ `--dump-mir` 槽位读数（`/tmp/b10018/*.mir`，
+  被测件 md5 `ed5227cc…`）与进程内 `lower_all` 读数逐格一致：f579 `main` 的目的槽 16／24＝`Bool`
+  且 `print_bool`×2；f580 目的槽 14＝`Str` 且 `println_str`×1；f592 目的槽 7＝
+  `DynamicArray(I64)` 且打印走 `py_json_dumps_vec_typed`。
+  这三形的进程内读数与 CLI 一致，没有出现 10015 那笔"harness 少跑一趟"的分歧。
+- 变异核验（每条只改一处、跑完按 md5 复原；`/tmp/b10018/mutation.log`，脚本 `mutation.py`）：
+
+| 编号 | 撤的哪一支 | 改法 | 实得 |
+|---|---|---|---|
+| M1 | 579 的 `__contains__` 恒 Bool 臂 | 臂的守卫名改成不存在的 `__contains__MUT` | 红，且只红 `membership_..._at_callsite`（`:1637`），目的槽回 `Some(I64)`＝记录症状值 |
+| M2 | 580 的 `join` 支 | 守卫里 `m2 == "join"` 改成 `"joinMUT"`（不动 587 扩的字符串方法名表） | 红，且只红 `str_join_..._as_str`（`:1697`），目的槽回 `Some(I64)`＝记录症状值 |
+| M3 | 592 的 `__collect__` 臂 | 守卫名改成 `__collect__MUT` | 红，且只红 `list_comprehension_..._at_callsite`（`:1760`），目的槽回 `Some(I64)`＝记录症状值 |
+
+  三笔红值都等于记录里的症状值（改前停在 I64）＝七批做下来第一次三条全中，
+  不需要像 10017 的 M2 那样披露"红值≠症状值"。
+- 复原核对：改前 md5 在 `/tmp/b10018/mutation.log` 头部（resolver.rs `e841c220…`＝10017 那颗，
+  本批零 `src/` 改动），三笔变异每笔跑完脚本内 `assert` 核对；复原后复跑 27 passed。
+  行号取的是"测试文件最后一次编辑之后"那一轮实跑（10017 的教训：改注释会把断言行搬走）。
+- 每批必跑的检查（`bash tools/sample_gate.sh 10018`，窗口 8＝批号 %10）：**rc=0**，① 差分 271/271 一致 ② python_style 47/47 PASS（本窗口无 known-fail 成员）③ official 18/18 编译通过（含链接缺绑定 1，chronic 口径不计红）④ 语料 40/40 满数。被测件 md5 `ed5227ccd29b70c4ee9ae17500926f10`＝10012–10017 那颗（本批零 `src/` 改动），运行期 `.o` md5 `878479bebf8d79a8539ee9a680fb463b`；明细目录 `/tmp/zeta_gate_10018.tctNm6`。
+
+### 三、边界
+
+- 本批零 `src/` 改动：只加测试面，行为面一行未动。
+- 三条都只查"结论落在 `Mir` 上的那一格"（目的槽类型＋被调符号名），运行期打印文案
+  （`True` 还是 `true`、`[1, 2, 1]` 的中括号方言）仍归 `tests/diff/cases/` 与差分步。
+- 579 那条不覆盖 579 记录同批留下的 `%(key)s=dict`（⑭ 子形）那一格。
+- 580 那条不覆盖批次 587 在同一条臂上扩出的"未知接收者字符串方法族"（`upper`／`strip` 等
+  在 `matches!` 表里），本批夹具打不到那一半。
+- 592 那条只覆盖"推导式不被否决成标量"这一格；臂内"元素型从 λ 体表达式取"那条线本条
+  区分不出来（夹具元素是 `len(n)`＝整数，与兜底值同形）⇒ 需要一条字符串元素推导的夹具
+  才能单独打它，登记成余项。
+- 并树这件事仍未做：本批代码笔 `e721a5d9` 后实测 `bootstrap..cleanup` 滞留 39 条、
+  `cleanup..bootstrap` 208 条（主树已到批次 845），主树工作区仍是别人的在制面。
+
+**登记**：#20005 状态保持 🟡，现 **27 条**（代码 `e721a5d9`）。余项＝按 roadmap 已修批次逐批继续补：候选仍出自 `middle/resolver/resolver.rs` 那一族，本批未用的格子＝621／601／600／587／575；592 那条臂内"元素型从 λ 体表达式取"这一支现有夹具区分不出来（夹具元素是 `len(n)`＝整数，与兜底值同形），要补一条字符串元素推导的夹具形才能单独打它（本批新登记）；327 的 const／comptime 折叠那一格仍待另批补（10015 已登记）；"harness 少跑的那一趟要不要按 10013 的办法补上"仍未决（10015 已登记）。已用到的来源批次去重清单＝10001／10002／10003／10004、736、737、738、739、652、654、642、447、451、404、407、376、377、378、327（活路径记在 642 那臂下）、552、628、644、629、630、631、579、580、592。`worktree.md` 仍带车道批次 745 的在制面，本批未随批（连续十七批）。
