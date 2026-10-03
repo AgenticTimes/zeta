@@ -19,7 +19,7 @@ impl MirGen {
         dest: u32,
     ) -> Option<u32> {
                 if set_like_receiver(receiver_ty)
-                    && set_family_method_ok(method, arg_ids.len())
+                    && set_mutation_ok(method, arg_ids.len())
                 {
                     if method == "add" && arg_ids.len() == 2 {
                         let elem_is_str = matches!(self.type_map.get(&arg_ids[1]), Some(Type::Str));
@@ -79,7 +79,7 @@ impl MirGen {
                 if method == "intersection"
                     && receiver.is_some()
                     && set_like_receiver(receiver_ty)
-                    && set_family_method_ok(method, arg_ids.len())
+                    && set_intersection_ok(method, arg_ids.len())
                 {
                     let elem_of_str = |t: Option<&Type>| match t {
                         Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
@@ -121,9 +121,15 @@ fn set_like_receiver(t: &Type) -> bool {
         || (!matches!(t, Type::Str) && matches!(t, Type::I64 | Type::PyDynamic))
 }
 
-fn set_family_method_ok(method: &str, arg_len: usize) -> bool {
-    arg_len == 2
-        && matches!(method, "add" | "discard" | "remove" | "intersection")
+fn set_mutation_ok(method: &str, arg_len: usize) -> bool {
+    // 变异族（写回接收者）：add/discard/remove。**不含 intersection**——
+    // 批次 816 抽取时曾把 intersection 误入本清单，`a.intersection(b)`
+    // 走进 discard 臂＝交集结果变差集（t807 十行实拍 3/x/y），特此拆分。
+    arg_len == 2 && matches!(method, "add" | "discard" | "remove")
+}
+
+fn set_intersection_ok(method: &str, arg_len: usize) -> bool {
+    arg_len == 2 && method == "intersection"
 }
 
 #[cfg(test)]
@@ -147,15 +153,25 @@ mod tests {
     }
 
     #[test]
-    fn set_family_method_truth_table() {
-        // 恰好 2 参（接收者+一参）才归本族
-        for m in ["add", "discard", "remove", "intersection"] {
-            assert!(set_family_method_ok(m, 2), "{m} 两参应命中");
-            assert!(!set_family_method_ok(m, 1), "{m} 单参不归本族");
-            assert!(!set_family_method_ok(m, 3), "{m} 三参不归本族");
+    fn set_mutation_truth_table() {
+        for m in ["add", "discard", "remove"] {
+            assert!(set_mutation_ok(m, 2), "{m} 两参应命中");
+            assert!(!set_mutation_ok(m, 1), "{m} 单参不归本族");
+            assert!(!set_mutation_ok(m, 3), "{m} 三参不归本族");
         }
-        assert!(!set_family_method_ok("clear", 2));  // clear 归 map 族
-        assert!(!set_family_method_ok("union", 2));  // 未接线成员不收
-        assert!(!set_family_method_ok("push", 2));   // vec 语义归他族
+        // 816 回归钉：intersection 绝不许进变异族（曾致交集变差集）
+        assert!(!set_mutation_ok("intersection", 2));
+        assert!(!set_mutation_ok("clear", 2));  // clear 归 map 族
+        assert!(!set_mutation_ok("push", 2));   // vec 语义归他族
+    }
+
+    #[test]
+    fn set_intersection_truth_table() {
+        assert!(set_intersection_ok("intersection", 2));
+        assert!(!set_intersection_ok("intersection", 1));
+        assert!(!set_intersection_ok("intersection", 3));
+        // 816 回归钉：intersection 不落 str__map/text 通用路
+        assert!(!set_intersection_ok("add", 2));
+        assert!(!set_intersection_ok("upper", 2));
     }
 }
