@@ -27012,3 +27012,47 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   用例因此把断言目标写错了一格，跑出来才发现）。切段脚本 `/tmp/b10024/sec.sh`。
 - `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件＋两枚未跟踪用例，
   记录笔只暂存 roadmap＋backlog 两本台账，**连续二十三批**）；待补行文本写进本批记录笔的提交信息。
+
+## 批次 10025（续 #20005：历史缺陷的编译期单元测试，第十五批）
+
+- 代码笔 `e2606a25`：`tests/regression_history.rs` +98 行，套件 45 → **46 条**；变异全部还原后复跑
+  46/46 绿（0.21 秒），`src/middle/mir/gen.rs` 还原态 md5 `0260cb5775b49561fb17f7609067287f`
+  等于 `git show HEAD:` 那颗（两向核对逐笔实拍）。
+- 本批一条用例＝把批次 10024 记录里**新开未修项 ②**（`const X: bool = …` 的读取槽按 I64 ⇒
+  `print(X)` 打 `1` 而不是 `False`）做成进程内用例：
+  `bool_const_reads_as_int64_at_the_use_site_current_state`。**形状＝现状锁**（缺陷未修，锁住当前
+  读数并在断言文案里写明这一格是要被改掉的），同批把已修的另外半（折叠表给 `ConstValue::Bool`）
+  作正证据一起钉住。
+- 三份真值（产物 `/tmp/b10025/`）：
+  ① CPython `T = 3 != 4; F = 3 == 4; print(T); print(F)` ⇒ `True` / `False`（`cpython_truth.txt`）；
+  ② 运行期 `zetac /tmp/b10025/c1.z` 直接执行 ⇒ `1` / `0`，并带一条
+  `error[W0003]: Typecheck failed (non-fatal)`（rc=0）＝与 ① 逐字不同，症状实拍；
+  ③ 编译期 `--dump-mir` ⇒ `global_consts: T: Bool(true) / F: Bool(false)`，两个打印槽
+  `Var(2)`/`Var(6)` ＋ `type_map: 2: I64, 6: I64` ＋ 两次 `VoidCall { func: "println_i64" }`。
+- 站点归因（两笔变异，脚本 `/tmp/b10025/m.py`，日志 `m1_suite.log`／`m2_suite.log`；每笔都做了
+  "应用后 md5 ≠ HEAD、复原后 md5 == HEAD"两向核对）：
+
+| 变异 | 动的格子 | 读数 |
+|---|---|---|
+| M1 | `gen.rs` 里 `global_consts.get(name)` 那个 `match` 的 `_ =>` 兜底臂插入型 `Type::I64` → `Type::Str`（现 :4938） | 46 条只红 1 条＝本批这条，红在"打印槽清单"那一条前置断言（实得 `[]`＝`println_i64` 不再被发出） |
+| M2 | 修复方向：同一个 `match` 里补一条 `ConstValue::Bool(b)` 臂（`IntLit(0/1)` ＋ `Type::Bool` ＋ `return`） | 46 条同样只红 1 条＝本批这条；`--dump-mir` 变 `type_map: 2: Bool` ＋ `VoidCall { func: "print_bool" }`（`c1.m2.mir.txt`） |
+
+- 结论：M1 是**站点归因**那一笔——兜底臂与"`global_consts` 没命中时的普通变量"那一支插入形状
+  逐字相同（都是 `Var(id)` ＋ `Type::I64`），只看改前读数分不开，改兜底臂的插入型会让清单立刻变空
+  ⇒ 夹具的读取确实打在兜底臂上。M2 是**修复方向**那一笔：补一条 `Bool` 臂就能把打印分发搬到
+  `print_bool`；运行期那半（`print_bool` 到底打不打 `True`／`False`）**本批未取**，要重编 release
+  二进制后执行才知道，未写成已证。
+- 未修项 ② 的去向：**仍开着**（缺陷没修），但从"只有一条台账描述"变成"有一条进程内现状锁＋
+  站点已归因到一条臂＋修复方向已实拍到 MIR 层"，下批接手可直接从 M2 那五行走。
+  新开项无（本批没发现新缺陷形）。
+- 边界（本条用例不覆盖，写进用例头注）：`ConstValue` 共七个变体（`Int`/`UInt`/`Bool`/`Array`/
+  `IntArray`/`Unit`/`String`，`src/middle/ctfe/value.rs:7-22`），那个 `match` 只写了 `Int`/`String`/
+  `Array` 三臂（静态读臂所得，未逐一支变异）⇒ `UInt`/`IntArray`/`Unit` 与 `Bool` 同样落到兜底，
+  本批只钉住 `Bool` 一支的现状读数，另外三支未锁。
+- 检查节奏：本批 `src/**` 零改动（只动测试文件），按 2026-10-03 的测试节奏只跑改到的测试目标
+  ＋编译零错误：`cargo test --test regression_history` 46/46 绿、库随套件构建零错误；
+  被测件 md5 `ed5227ccd29b70c4ee9ae17500926f10` 与批次 10024 那颗逐字相同 ⇒ 抽样检查（窗口 5）
+  未重跑，读数按 10024 的 rc=0 沿用（同一颗二进制，跑与不跑结论同源）；全局逐个用例那一档在十批界
+  （10030）做。
+- `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件＋两枚未跟踪用例，记录笔只暂存
+  roadmap＋backlog 两本台账，**连续二十四批**）；待补行文本写进本批记录笔的提交信息。

@@ -275,6 +275,25 @@
 >   ④ 语料 38/40（同 10021 起那对 `jq_wufu*`，归因 `#20003`）；被测件 md5
 >   `ed5227ccd29b70c4ee9ae17500926f10`、运行期 `.o` md5 `878479bebf8d79a8539ee9a680fb463b`
 >   与 10012 起那颗逐字相同 ⇒ 非本批引入。`#20006` 那两枚空判定用例本批未被窗口 4 抽到（未复现≠已修）。
+>   批次 10025（代码 `e2606a25`）补 1 条到 **46 条**＝把本项 ② 做成进程内**现状锁**用例
+>   `bool_const_reads_as_int64_at_the_use_site_current_state`，零 `src/` 改动。夹具
+>   `const T: bool = 3 != 4 / const F: bool = 3 == 4 / print(T) / print(F)`；正证据＝折叠表给
+>   `T: Bool(true)`／`F: Bool(false)`（327 的产物），现状锁＝两个读取槽 `Var(id)` ＋
+>   `type_map: I64` ＋ 两次 `println_i64` 且 `print_bool` 不出现。三侧真值：CPython `True`/`False`、
+>   运行期 `1`/`0`（另带一条非致命 `error[W0003]: Typecheck failed`）、`--dump-mir` 同上形状。
+>   变异两笔（`/tmp/b10025/m1_suite.log`／`m2_suite.log`，各做"应用后 md5≠HEAD、复原后 md5==HEAD"两向核对）：
+>   M1＝把 `_ =>` 兜底臂插入的型改 `Type::Str` ⇒ 46 条只红本条、红在打印槽清单那一断言（实得 `[]`）
+>   ⇒ **站点归因到 `gen.rs` 里 `global_consts.get(name)` 那个 `match` 的 `_ =>` 兜底臂**（它与
+>   "`global_consts` 没命中时的普通变量"那一支插入形状逐字相同，不做变异分不开）；
+>   M2＝修复方向（同一 `match` 补一条 `ConstValue::Bool(b)` 臂 ＋ `Type::Bool`）⇒ 同样只红本条，
+>   `--dump-mir` 变 `type_map: 2: Bool` ＋ `VoidCall print_bool`。**运行期那半（`print_bool` 是否真打
+>   `True`/`False`）未取**，要重编 release 件后执行才知道。⇒ 本项 ② **仍开着**，但已从"只有台账描述"
+>   变成"有现状锁＋站点已归因＋修复方向已实拍到 MIR 层"；本项 ① 本批未动。
+>   边界：`ConstValue` 七个变体（`ctfe/value.rs:7-22`）里该 `match` 只写 `Int`/`String`/`Array` 三臂
+>   （静态读臂所得，未逐一支变异）⇒ `UInt`/`IntArray`/`Unit` 与 `Bool` 同落兜底，本批只钉 `Bool` 一支。
+>   检查节奏：本批零 `src/` 改动 ⇒ 按 2026-10-03 的测试节奏只跑改到的测试目标（46/46 绿）＋编译零错误；
+>   被测件 md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10024 那颗逐字相同 ⇒ 抽样窗口 5 未重跑，
+>   读数沿用 10024 的 rc=0；全局逐个用例那一档在十批界（10030）做。
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；
