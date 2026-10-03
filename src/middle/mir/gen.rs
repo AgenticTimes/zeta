@@ -8796,7 +8796,11 @@ call, no NULL-handle dereference).",
                 }
 
                 // SPECIAL HANDLING: successor(it) — advance iterator by 1
-                if method == "successor" && receiver.is_none() && args.len() == 1 {
+                if classify_call(method) == CallClass::NumericBuiltin
+                    && method == "successor"
+                    && receiver.is_none()
+                    && args.len() == 1
+                {
                     let it_id = self.lower_expr(&args[0]);
                     let one_id = self.next_id();
                     self.exprs.insert(one_id, MirExpr::IntLit(1));
@@ -8814,7 +8818,11 @@ call, no NULL-handle dereference).",
                 }
 
                 // SPECIAL HANDLING: predecessor(it) — advance iterator by -1
-                if method == "predecessor" && receiver.is_none() && args.len() == 1 {
+                if classify_call(method) == CallClass::NumericBuiltin
+                    && method == "predecessor"
+                    && receiver.is_none()
+                    && args.len() == 1
+                {
                     let it_id = self.lower_expr(&args[0]);
                     let one_id = self.next_id();
                     self.exprs.insert(one_id, MirExpr::IntLit(1));
@@ -9261,7 +9269,11 @@ call, no NULL-handle dereference).",
                 }
 
                 // PY-A: Python builtins abs/min/max/sum — dispatch by type
-                if receiver.is_none() && method == "abs" && args.len() == 1 {
+                if classify_call(method) == CallClass::NumericBuiltin
+                    && receiver.is_none()
+                    && method == "abs"
+                    && args.len() == 1
+                {
                     let arg_id = self.lower_expr(&args[0]);
                     let f64_arg = matches!(
                         self.type_map.get(&arg_id),
@@ -9288,6 +9300,7 @@ call, no NULL-handle dereference).",
                     && (method == "min" || method == "max")
                     && args.len() >= 2
                 {
+                    // 批次 826：入口判定改读分类器（NumericBuiltin）。
                     // A `key=` keyword selects the ITERABLE form; handle it
                     // here, before the min-of-two path treats the callable as a
                     // value (which returned the function pointer as the result).
