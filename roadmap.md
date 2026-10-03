@@ -26000,3 +26000,53 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
 **登记**：#20005 状态保持 🟡，余项不变（继续按在册已修批次逐批补；404 之外还能钉的本树批次
 已在盘点里；运行期取值类挪进进程内执行面是单独一格）。`worktree.md` 仍带车道批次 745 在制面，
 连续十一批未随批。不 push。
+
+## 批次 10013 —— 历史缺陷回归测试第三批（续 #20005）：三条用例，外加 harness 少跑了一趟 CLI 的类型推断
+
+### 动因
+继续用户任务"把历史问题的错误和修改做成单元测试，不必每次都跑全量测试"。候选先按"该批修复是否已在本树"筛（`git merge-base --is-ancestor`）：批次 652（`4a016fe8`）、378（`0ee8b855`）、654（`9ff68eec`）三条都在册，本批各转一条用例。
+
+### 三条用例（主体改动＝`tests/regression_history.rs`，509 → 693 行，其中 harness 段 +5 行、用例段 +179 行）
+| 用例 | 来源批次／站点 | 断言（期望值出处） | 记录里的改前症状 |
+|---|---|---|---|
+| `len_on_param_shared_by_str_and_array_degrades_to_dynamic_route` | 652／`resolver.rs:1560` 的 `classify()` 数组分支 | 同一形参既接字符串又接数组字面量 ⇒ 形参类型 `PyDynamic`、`len()` 发 `zeta_dyn_len`、不发 `str_len` | 数组侧证据对冲突检测不可见 ⇒ 参数被单方面判成 Str ⇒ `len([1,2,3])` 返回 1 |
+| `macros_in_match_arms_and_value_positions_reach_mir` | 378／`resolver.rs` 的 `expand_macros_in_node` 四支（`Match`／`ExprStmt`／`Let`／`Assign`） | 夹具按四种形态写 8 个 `println!` 点 ⇒ 每个点展开成 2 个节点（378 记录对批次 369 的查证结论）＝ 16 次打印，且 8 个字面量都要出现在 MIR | 递归缺这四支 ⇒ 臂里的宏保持未展开 ⇒ MIR 生成对未展开宏"悄悄跳过"（`gen.rs:2888` 语句位、`:3242` 表达式位）⇒ 编译成功、退出 0、臂的副作用一条不发 |
+| `str_percent_value_routes_to_percent_fmt_not_integer_modulo` | 654／`gen.rs:5941` 的 `str % value` 分支 | 左操作数是 Str 的 `%` 发 `zeta_str_percent_fmt`（两个实参、结果槽标 Str），不发通用 `"%"` 调用 | `%` 落进通用 `Call{func:"%"}`，被 codegen 的 `is_operator` 走 `build_floormod_int` ⇒ 对字符串指针和值句柄做整数取模，`"f=%s" % d["name"]` 打句柄整数 13 |
+
+### 本批真正的发现不在用例里，在 harness 少跑的一趟（三条独立实测）
+1. **第一版 652 用例是空的**：按记录原文写 `len(cache["k"])`＋数组字面量共用形参，做完异核验（把 `classify()` 的数组分支退回 `=> 0`，即 652 改前的状态）读数一字不变。
+2. **换形状也不敏感**：又试两种——字典与数组字面量共用形参、只有数组单侧站点——撤掉数组分支前后都还是 `PyDynamic`＋`zeta_dyn_len`。按"最多三种形状即止损"停手，回去查机制而不是继续试。
+3. **机制**：`classify()` 与形参类形冲突都写在 `Resolver::infer_untyped_returns`（`resolver.rs:1361`）里，全仓只有 CLI 驱动 `src/main.rs:842` 调用它。harness 走 `expand_macros → register → typecheck → lower_to_mir`，从不跑这一趟，所以形参类型在任何夹具里都停在 `PyDynamic`，"参数被钉成什么类型"这一类缺陷在进程内根本观测不到。
+4. **修法**：harness 在注册之后、类型检查之前补 `resolver.infer_untyped_returns(&expanded)`（与 `main.rs` 同序，`tests/regression_history.rs:64`），652 用例改写成"同一形参既接字符串又接数组"——这才是记录里"数组证据被吞 ⇒ 参数单方面判成 Str"的那一侧。补完后变异 M1 变红，报错值正是记录里的改前状态（实得 `Some(Str)`，应为 `Some(PyDynamic)`）。
+5. **补这趟的影响面**：12 条用例（本批前 9 条）全部仍绿，实测无一条读数被这趟改变。
+
+### 验证
+- `cargo test --test regression_history`：**12 passed / 0 failed**，0.03 秒（一次编译，进程内）。
+- **变异核验 6/6 红**（脚本 `/tmp/b10013/mutation_check.py`，逐笔改完立即复原；收尾断言 `resolver.rs`／`gen.rs` md5 等于改前值，实得 `e841c220…`／改前一致，`git diff --stat src/` 空）：
+  | 变异 | 站点 | 红在哪条 | 报错读数 |
+  |---|---|---|---|
+  | M1 | `classify()` 数组分支退回 `=> 0` | 652 用例 | 形参实得 `Some(Str)`（正是 652 改前状态） |
+  | M2 | `Match` 臂不再递归臂体 | 378 用例 | 8 个臂字面量全缺（`["one","two","other","skip-me","in-block","skip-other","let-side","assign-side"]`） |
+  | M3 | `Let` 初值位不再展开 | 378 用例 | 只缺 `"let-side"` |
+  | M4 | `Assign` 右值位不再展开 | 378 用例 | 只缺 `"assign-side"` |
+  | M5 | `ExprStmt` 外壳直接原样返回 | 378 用例 | 缺 `"in-block"`／`"let-side"`／`"assign-side"` 三形 |
+  | M6 | `gen.rs:5941` 的 `op == "%"` 条件改成永不成立 | 654 用例 | `zeta_str_percent_fmt` 消失，实得调用里出现通用 `"%"` |
+  M2–M5 分别点名四种形态，说明 378 那条用例对四个分支各自敏感，不是只被 `Match` 一支带动。
+- 每批必跑的检查 `bash tools/sample_gate.sh 10013`（窗口 3）：①差分 272/272 一致；②python_style 41 例里 39 例出判定、2 例 verdict 是空文件（`t253_stub_abort`／`t405_hard_stub_aborts_loudly`，桩中止后进程不收尾，已登 #20006）；③official 18/18 编译通过（含 1 条链接缺绑定，属在册长期项，不据此判红）；④语料 40/40 满数；整批 rc=1；被测件 md5 `ed5227ccd29b70c4ee9ae17500926f10`、运行期 `.o` md5 `878479bebf8d79a8539ee9a680fb463b` 与批次 10012 收尾时相同（本批零 `src/` 改动，只有测试面）。
+
+### 每批检查第②步抽到的另一件事：桩中止的进程不收尾（本批未修，已登 backlog #20006）
+- 读数：`bash tools/sample_gate.sh 10013`（窗口 3）——①差分 272/272 一致；②python_style 41 例里 39 例出判定、2 例 `verdict` 是空文件；③official 18/18 编译通过（含 1 条链接缺绑定，属在册长期项，不据此判红）；④语料 40/40 满数；整批 rc=1。
+- 那两枚是 `t253_stub_abort`、`t405_hard_stub_aborts_loudly`，都带 `// expect-abort:`。单独复跑各两遍，每遍都吃满 `run_one.sh` 的 `timeout 20` 仍不写 verdict，`timeout -s KILL 15` 才停得下来 ⇒ 退出码 137（SIGKILL），而在册预期是 SIGABRT（134）。
+- 不走检查脚本的手工复现：`zetac -o` 出二进制直接跑，stderr 确实打出 `zeta: stub not implemented: pandas.date_range`／`zeta: stub not implemented: py_asdict_unexpanded`，消息之后进程不收尾。
+- 同族第三枚 `t256_pylib_stub_abort`（属窗口 0，本窗口不抽）用同一颗二进制跑也挂 ⇒ 不是这两份夹具各自的问题，是中止路径的问题。
+- 对照组：`t471_nested_class_ghost_raises` 走运行期 raise（不经桩中止），1 秒内 rc=1 退出并打出 `PY-A: dynamic receiver has no member …` ⇒ 只有中止这一条路挂。
+- 站点候选：`runtime/py_additions.c:4361` 的 `py_stub_abort`——消息在 `:4373`、`fflush(stderr)` 在 `:4374`、`abort()` 在 `:4375`，实测形状正是"消息出来了、`abort()` 之后不停"。全仓查过成因不在信号处理：`grep -rn "SIGABRT\|SIGSEGV\|sigaction\|sigprocmask" runtime/*.c src/` 共 32 行命中，逐行看全是注释文字（把行号前缀后的注释行反选后剩 0 行），可调用 `signal(` 的地方只有 `runtime/unavailable_stubs.c:176` 那个名为 `getsignal` 的桩，没有任何处理器或信号屏蔽登记在册。
+- 归因边界（分两半，第二半是推断不是读数）：**已证**＝非本批引入，本批零 `src/` 改动，被测件 md5 与批次 10012 收尾时相同（`ed5227ccd29b70c4ee9ae17500926f10`）。**未证**＝挂死始于哪批：`tools/sample_gate.sh` 首现在批次 10005（`65e6310a`），窗口 3 在本工具下是第一次跑（10005–10012 跑过 6/7/8/9/1/2），批次 10003 的"45 例 45/45 PASS"出自更早的手搓轮转、分母 45 与本规则的 41 不符，两份名单不能等同规则互推；按 cksum 用 10003 的提交树重算窗口 3 得 41 例、与 HEAD 的名单逐字相同且包含这两枚，所以"它们当时通过"只在"10003 那趟确实覆盖窗口 3 名单"这个前提下成立，该趟名单未留档。10003 之后的树面变动（含车道那三个未提交的解析器文件）未做 bisect。
+- 处置：登 `backlog.md` #20006（状态 ⬜）另批追根因。本批不自修的两条理由：它是运行期退出路径，不属"把历史缺陷转成进程内用例"这条线；改 `runtime/*.c` 要配套位移 A/B 与运行期 `.o` 同步，混进本批会把两件事的验证搅在一起。
+
+### 边界（如实说明，别当成"全量测试可以退役"）
+- 本套只收**编译期可观测**的缺陷（降形选错了运行期符号、类型判定、宏展开有没有下发）。运行期取值类（打印内容、退出码）仍由 `tests/python_style`＋差分测试守，比如 652 的 `t496_len_dyn_array.z` 五个期望值、378 的 `t419_match_arm_macros.z` 七行输出。
+- 652 的第二层修法（`zeta_dyn_len` 在 `codegen.rs:990` 的注册）在后端面，本套只跑到降形，覆盖不到。
+- 654 记录里 t401 的原始写法（模板作函数形参）在本 harness 里取不到：补跑 `infer_untyped_returns` 之后仍需实测才能确定该形状会把模板判成什么类型，本批用顶层变量持模板的形状（`--dump-mir` 两种写法都发 `zeta_str_percent_fmt`，实测 `/tmp/b10013_p6.z`／`/tmp/b10013_p7.z`）。
+
+**登记**：#20005 状态保持 🟡，现 12 条（代码 `4e83fd8d`）。余项＝按 roadmap 已修批次逐批继续补；652 的第二层（`codegen.rs:990` 的注册）在后端面，本套覆盖不到。`worktree.md` 仍带车道批次 745 的在制面，连续十二批未随批。不 push。
