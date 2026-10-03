@@ -590,4 +590,86 @@ impl MirGen {
                 }
             }
     }
+
+    /// `target op= value`：类变量复合赋值改写、env 名走 env_store、
+    /// 普通 Var 名刷新槽型，其余脱糖为 `target = target op value`
+    /// （批 868 自 gen.rs 原臂逐字迁入；签名取臂的原样解构类型，
+    /// 臂体零适配）。
+    pub(super) fn lower_assign_op(
+        &mut self,
+        op: &String,
+        target: &Box<AstNode>,
+        value: &Box<AstNode>,
+    ) {
+            // Batch 572: `Counter.count += 1` — class VARIABLE compound
+            // assignment rewrites to the mangled module global, whose
+            // Var target below routes reads and writes through the env.
+            if let AstNode::FieldAccess { base, field } = &**target {
+                if let AstNode::Var(vname) = &**base {
+                    let gname = format!("{}__{}", vname, field);
+                    if self.type_decls.contains_key(vname.as_str())
+                        && self.module_globals.contains(&gname)
+                    {
+                        let rewritten = AstNode::AssignOp {
+                            op: op.clone(),
+                            target: Box::new(AstNode::Var(gname)),
+                            value: value.clone(),
+                        };
+                        self.lower_ast(&rewritten);
+                        return;
+                    }
+                }
+            }
+            // Desugar: target op= value → target = target op value
+            let new_rhs = Box::new(AstNode::BinaryOp {
+                op: op.clone(),
+                left: target.clone(),
+                right: value.clone(),
+            });
+            // A plain `Var` target is handled HERE so the slot's static type
+            // can be refreshed from the combined value. `c: set[str] =
+            // set(); c |= {"q"}` kept the slot's OLD type (`DynamicArray(I64)`
+            // = "unknown"), so `"q" in c` later passed elem_is_str=0 and
+            // compared HANDLES — every string counted as absent (measured in
+            // `fetch_stocks`'s `fetched_codes`).
+            if let AstNode::Var(name) = &**target {
+                // A name routed through the env global (module global, `global`,
+                // or a lifted `static`) has no local slot to refresh — writing
+                // one here left the cell at its initial value while the read
+                // path, which always goes to the env, printed that value back.
+                if self.nonlocal_names.contains(name) {
+                    let rhs_id = self.lower_expr(&new_rhs);
+                    self.env_store(name, rhs_id);
+                    return;
+                }
+                let rhs_id = self.lower_expr(&new_rhs);
+                let ty = self.type_map.get(&rhs_id).cloned().unwrap_or_else(Type::slot_fallback);
+                match self.name_to_id.get(name).copied() {
+                    Some(slot) => {
+                        self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
+                        if !matches!(ty, Type::I64 | Type::PyDynamic) {
+                            self.type_map.insert(slot, ty);
+                        }
+                    }
+                    None => {
+                        let slot = self.next_id();
+                        self.exprs.insert(slot, MirExpr::Var(slot));
+                        self.type_map.insert(slot, ty);
+                        self.name_to_id.insert(name.clone(), slot);
+                        self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
+                    }
+                }
+                // The env cell is the one other functions read (they have no
+                // slot for this name), so a `+=` that stops at the slot is
+                // discarded on the next call — `total += 5` twice printed `5`
+                // both times (batch 385). `mirror_module_global_writes` now
+                // emits that mirror for every write to the slot, `=` and `+=`
+                // alike, so the rule has one home instead of one per
+                // statement kind.
+                return;
+            }
+            let assign = AstNode::Assign(target.clone(), new_rhs);
+            self.lower_ast(&assign);
+    }
+
 }

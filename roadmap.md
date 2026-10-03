@@ -28514,3 +28514,18 @@ gen.rs 14163→14023（净 -140）。
 与 CPython 逐字对齐。
 
 验证：编译零错误；内置单元测试 157/157；历史缺陷测试 46/46；batch_gate GREEN。
+
+## 批次 868（2026-10-03，**重构批：AssignOp 臂（71 行）迁入 gen/stmt_assign.rs**）
+
+零替换法＋**签名取原样解构类型**（857 教训的正向应用）：
+`lower_assign_op(&mut self, op: &String, target: &Box<AstNode>, value: &Box<AstNode>)`
+——臂体内 `op.clone()`／`&**target`／`target.clone()` 等全部保持原义，臂体零适配
+逐字迁入。三条 `return;` 均 void（语句臂返回 ()），无 866 类转发问题。
+gen.rs 14023→13958（净 -65）。
+
+**新发现缺陷 #276（非本批引入，7ce03c3c 复现在案）**：`c: set[str] = set();`
+`c |= {"q"}` 后 `"q" in c` 判 False——臂注释记载的槽型刷新修未生效（与在册
+fetch_stocks fetched_codes 形状同源）。已登记，探针其余三面（类变量复合赋值
+批 572 面／global 复合赋值（#275 存量面）／下标复合赋值）与 CPython 对齐。
+
+验证：编译零错误；内置单元测试 157/157；batch_gate GREEN。
