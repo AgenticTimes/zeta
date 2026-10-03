@@ -26646,3 +26646,9 @@ CPython；全库 156/156。
 FileHandler/getLogger 两执行方法＋统一入口；探针全链通过（logging ok）。
 教训再录：impl 方法不能 use 导入（call_re 同坑第二次），家族执行者一律
 self. 方法式调用。全库 156/156。
+
+## 批次 837（本批）：构造器族迁入 call_ctor.rs（第七家族文件）
+
+DataFrame kwarg ctor＋Counter 原臂逐字迁入；探针对齐 CPython；
+全库 154/154。教训：多行 if 头深度归零会落在条件闭包上——块尾判定
+加同缩进纯 } 行条件；存档先验证完整性再用。
