@@ -26594,3 +26594,8 @@ successor/predecessor/abs/min-max 臂改读 classify_call（NumericBuiltin）。
 
 767/808 值标签大弧 print 位渲染链抽独立方法（守卫留调用侧、链体进方法）。
 行为探针 None/5 全对；全库 154/154。
+
+## 批次 828（本批）：print 按格渲染迁入 gen/call_print.rs（家族归位）
+
+emit_tagged_print 迁子模块；行为探针 None/5 保持；全库 154/154。
+gen.rs 18629→18606。
