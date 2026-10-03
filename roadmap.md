@@ -25911,3 +25911,45 @@ official 总数为 0、语料读不到"解析通过"行或分母为 0 ⇒ 一律
 **未做**：没跑整条 `sample_gate.sh 10009`（四步全跑约 4 分钟，本批剩余预算装不下"改＋验证＋两提交＋一次回退"
 再加一轮）；①③④ 三步在本批未取窗口 9 读数，第④步用上面的全量一轮直接代打。
 `worktree.md` 仍带车道批次 745 在制面，连续九批未随批。
+
+## 批次 10011（cleanup 车道）——历史缺陷转编译期单元测试（代码 `fb1d8cb2`）
+
+**动因**：用户任务"把历史问题的错误和修改做成单元测试，这样不必每次都跑全量测试"。
+此前每次复验都得真编译＋真运行（差分 601 例／python_style 454 夹具／official 206 例），
+本批起把**结论落在编译期**的那部分改成进程内毫秒级检查。
+
+**落地**：`tests/regression_history.rs`（`Cargo.toml` 加 `[[test]]` 注册）。harness 与
+`src/main.rs` 文件模式同序：解析 → 常量求值 → 宏展开 → 注册 → 类型检查 → `lower_to_mir`，
+不跑单态化／`refine_param_types`／后端。文件头写清两件事：哪些缺陷能进这里（被调符号名／
+槽位类型标记／参数是否被丢），以及加新条目的四步做法（含"把期望值改成症状值确认会红"）。
+
+**本批唯一的红→绿**：harness 起初少了常量求值那一步，`xs[-2:]` 的起点仍降成
+`unary_minus` 调用，与 CLI 读数的 `IntLit(-2)` 不同形（同段 MIR 逐行对照定位）；补上
+`evaluate_constants` 后两侧同形。选错的地方是 harness 自己，不是编译器。
+
+**六条钉**（编号＝来源批次；期望值取自缺陷记录与改前二进制实拍，不取自现行输出）：
+
+| 测试名 | 来源批次 | 钉住的契约 | 改前症状 |
+|---|---|---|---|
+| `mean_fold_routes_static_vector_to_vector_fold` | 10002（移植 810） | 静态向量 `.mean()` 发 `zeta_mean_vec`、目的槽 F64 | `zetac.pre740`／`pre662` 实拍发 `zeta_identity`＋`println_i64`（句柄当数用） |
+| `mean_fold_abstains_when_receiver_type_is_unknown` | 10004（收 10002 自引入的旧 #267） | 接收者 `PyDynamic` 时不折叠、返回值不标 F64 | 标了 F64 后经返回型回填污染调用点，字典下标打到 `codegen.rs:5462` 硬转 |
+| `unannotated_float_return_keeps_f64_at_module_call_site` | 10001（同主树 813／旧 #268②） | 模块级调用点目的槽拿到 F64 | 两张类型表键不同，其中一张只有裸名 ⇒ 目的槽丢浮点型 |
+| `negative_slice_start_stays_negative_with_omitted_end_sentinel` | 10003（移植 811） | 负起点原样传负数、省略终点＝`i64::MIN` | 编译期提前加长度；省略终点与显式负终点同值 |
+| `tuple_swap_snapshots_before_writing_live_slots` | 736（旧 #190） | `a, b = b, a` 先快照进临时槽再写回，直写形不得出现 | 直写两条 ⇒ 第二条读到已被覆盖的值，两边同值 |
+| `star_param_with_annotation_keeps_both_params` | 739 | `*rest: int` 带注解时两个参数都在 | `parse_star` 不吃 `: 类型` ⇒ W1002 丢掉整个顶层项（语料 10739 行丢行） |
+
+**读数**（件 md5 `ed5227cc…`／`.o` `878479be…` 与本树在册件相同，本批零 `src/` 改动）：
+
+- `cargo test --test regression_history`：**6 passed／0 failed，finished in 0.01s**。
+- 变异核验（证明不是空跑）：把六条期望值逐一改成症状值 → **6/6 FAILED**（rc=101）；
+  复原后重新跑回 6/6 绿。脚本 `/tmp/b10011/mutation_check.py`（每处替换前断言锚点唯一）。
+- 门禁 `sample_gate.sh 10011` 窗口 1 **rc=0**：① 差分 272/272 一致、② python_style 53/53 PASS、
+  ③ official 18/18 编译通过、④ 语料 40/40 满数。
+
+**边界（如实）**：只能钉编译期可观测的缺陷。运行期取值类（切片越界夹尾、字符串越界、
+打印表示族）仍由 `tests/python_style/` 与 `tools/diff_test.py` 承担——要挪进毫秒级需要
+先在进程内执行（`src/lib.rs:91 compile_and_run_zeta` 只回退出码、`src/main.rs:1098`
+有 `finalize_and_jit` 面），那是单独一格工程量，登在 #20005 的后续里。
+
+**登记**：新增任务 **#20005**（历史缺陷转编译期单元测试，逐批补钉）。本批是它的第一批落地。
+`worktree.md` 仍带车道批次 745 在制面，连续十批未随批。不 push。
