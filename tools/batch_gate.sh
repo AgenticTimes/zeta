@@ -12,6 +12,9 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# cargo 自举：调用方环境可能没有 ~/.cargo/bin（如后台任务/精简 shell）
+command -v cargo >/dev/null 2>&1 || export PATH="$HOME/.cargo/bin:$PATH"
+command -v cargo >/dev/null 2>&1 || { echo "缺 cargo（~/.cargo/bin 不存在？）" >&2; exit 2; }
 STATE="tools/baselines/.batch_gate_state"
 
 FORCE=0
@@ -58,6 +61,7 @@ echo $BATCH > "$CNT_FILE"
 echo "batch_gate: 第 $BATCH 批"
 
 # 每批：只跑内置单元测试（模块内部，毫秒级——2026-10-03 用户裁定）
+P1=""; P2=""
 run_libtest & P3=$!
 GLOBAL_RUN=0
 if [ $(( BATCH % 10 )) -eq 0 ]; then
@@ -66,30 +70,35 @@ if [ $(( BATCH % 10 )) -eq 0 ]; then
 fi
 
 # 进度看门狗（2026-10-03 用户裁定：长任务必须可视化）：每 10 秒把三路
-# 推进写进 progress.log，跑完自动退出。
+# 推进写进 progress.log，跑完自动退出。P1/P2 空值批（非全局批）不误判。
 DIFFWD=""
 ( while true; do
     PY="$(grep -oE '[0-9]+/47[0-9]' "$LOGDIR/pystyle.log" 2>/dev/null | tail -1)"
-    DSTAT="running"; kill -0 $P1 2>/dev/null || DSTAT="done"
+    DSTAT="running"; [ -n "$P1" ] && { kill -0 $P1 2>/dev/null || DSTAT="done"; }
     LSTAT="running"; kill -0 $P3 2>/dev/null || LSTAT="done"
     echo "[$(date +%H:%M:%S)] 差分:$DSTAT | python_style:${PY:-启动中} | 内置:$LSTAT" >> "$LOGDIR/progress.log"
-    kill -0 $P1 2>/dev/null || kill -0 $P2 2>/dev/null || kill -0 $P3 2>/dev/null || break
+    ALIVE=0
+    [ -n "$P1" ] && kill -0 $P1 2>/dev/null && ALIVE=1
+    [ -n "$P2" ] && kill -0 $P2 2>/dev/null && ALIVE=1
+    kill -0 $P3 2>/dev/null && ALIVE=1
+    [ "$ALIVE" = "0" ] && break
     sleep 10
   done ) &
 WATCHDOG=$!
 RC=0
-kill $WATCHDOG 2>/dev/null
-tail -3 "$LOGDIR/progress.log" 2>/dev/null
 wait $P3 || { echo "❌ 内置单元测试红："; grep -E "FAILED|panicked" "$LOGDIR/libtest.log" | head -3; RC=1; }
 if [ "$GLOBAL_RUN" = "1" ]; then
   wait $P1 || { echo "❌ 全局红（失败用例按裁定转模块内置测试后从全局退役）："; tail -3 "$LOGDIR/diff.log"; RC=1; }
 fi
+kill $WATCHDOG 2>/dev/null
+wait $WATCHDOG 2>/dev/null
+tail -3 "$LOGDIR/progress.log" 2>/dev/null
 
 if [[ $RC -eq 0 ]]; then
   echo "$FP GREEN $(date '+%m-%d %H:%M')" > "$STATE"
   echo "batch_gate: GREEN（内置单元测试过）— 日志 $LOGDIR"
 else
   rm -f "$STATE"
-  echo "batch_gate: RED — 日志 $LOGDIR（修复后重跑自动替换指纹）"
+  echo "batch_gate: RED — 日志 ${LOGDIR}（修复后重跑自动替换指纹）"
 fi
 exit $RC

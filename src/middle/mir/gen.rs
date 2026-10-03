@@ -20,6 +20,8 @@ mod call_subscript;
 mod call_if;
 mod call_len;
 mod call_str;
+mod call_flow;
+mod call_fstring;
 use self::call_class::{classify_call, type_name_of, CallClass};
 use self::call_json::json_route;
 use self::call_str::{path_ends_with_mem, str_method_symbol, str_method_symbol3, to_string_channel};
@@ -5269,7 +5271,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             }
             AstNode::FString(parts) => {
                 // 批次 860：FString 臂迁入 gen/call_fstring.rs。
-                return self.lower_fstring(parts, dest);
+                return self.lower_fstring(parts, id);
             }
             AstNode::BinaryOp { op, left, right } => {
                 // `x in ("sh", "sz")` — a TUPLE literal on the right. Tuples are
@@ -6758,34 +6760,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             }
 
             AstNode::Loop { body } => {
-                // Loop expression: result slot (default 0); break EXPR writes it.
-                let result_id = self.next_id();
-                self.exprs.insert(result_id, MirExpr::IntLit(0));
-                self.type_map.insert(result_id, Type::I64);
-                self.loop_value_stack.push(result_id);
-
-                let stmts_before = self.stmts.len();
-                for stmt in body {
-                    self.lower_ast(stmt);
-                }
-                let loop_stmts = self.stmts.split_off(stmts_before);
-                self.loop_value_stack.pop();
-
-                let cond_id = self.next_id();
-                self.exprs.insert(cond_id, MirExpr::IntLit(1));
-                self.type_map.insert(cond_id, Type::I64);
-                self.stmts.push(MirStmt::While {
-                    cond: cond_id,
-                    pre_cond: vec![],
-                    body: loop_stmts,
-                    else_body: vec![],
-                });
-
-                self.exprs.insert(result_id, MirExpr::Var(result_id));
-                self.type_map.insert(result_id, Type::I64);
-                self.exprs.insert(id, MirExpr::Var(result_id));
-                self.type_map.insert(id, Type::I64);
-                return result_id;
+                // 批次 861：Loop 臂迁入 gen/call_flow.rs（批 860 的迁移从未
+                // 编译通过——替换文本被脚本拼进 dict_spread 块，本批重做）。
+                return self.lower_loop(body, id);
             }
             AstNode::If { cond, then, else_ } => {
                 // 批次 859：If 表达式臂迁入 gen/call_if.rs（原臂逐字）。
@@ -6822,10 +6799,36 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     {
                         if method == "zeta_dict_spread" && ka.len() == 1 {
                             let src_id = self.lower_expr(&ka[0]);
-            AstNode::Loop { body } => {
-                // 批次 860：Loop 臂迁入 gen/call_flow.rs。
-                return self.lower_loop(body, dest);
-            }
+                            // Take the key kind from the source map so a
+                            // spread-only literal (`{**a}`) is still
+                            // string-keyed and `d.keys()` stays Vec<str>.
+                            if first_key {
+                                if let Some(Type::Named(n, params)) =
+                                    self.type_map.get(&src_id).cloned()
+                                {
+                                    if n == "map" {
+                                        if let Some(kt) = params.first() {
+                                            key_ty = kt.clone();
+                                            first_key = false;
+                                        }
+                                    }
+                                }
+                            }
+                            let scratch = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_map_update".to_string(),
+                                args: vec![map_id, src_id],
+                                dest: scratch,
+                                type_args: vec![],
+                            });
+                            continue;
+                        }
+                    }
+                    let kid0 = self.lower_expr(k);
+                    if first_key {
+                        // Remember whether keys are strings: the map type carries
+                        // the key kind so `d.keys()` is typed Vec<str>.
+                        key_ty = self.type_map.get(&kid0).cloned().unwrap_or_else(Type::slot_fallback);
                         first_key = false;
                     }
                     let kid = self.lower_map_key(kid0);
@@ -6914,7 +6917,6 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 type_args,
                 ..
             } => {
-                eprintln!("[DBG-A] Call 臂进入 method={}", method);
                 // PY-A batch 291: `cls(...)` inside a @classmethod body. The
                 // class desugar keeps classmethods as plain functions named
                 // `Class::method` with `cls` as a first parameter that no

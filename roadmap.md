@@ -28115,3 +28115,44 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `1b282239` 并入（同批正文的三格表就这么写的）⇒ 该登记行以偏概全。历史行不回改，更正记在这里。
 - `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件＋两枚未跟踪用例，
   记录笔只暂存 roadmap＋backlog 两本台账，**连续二十一批**）；待补行文本写进本批记录笔的提交信息。
+## 批次 861（2026-10-03，**修复批：批 860 迁移损坏重做＋cleanup 车道滞留并入**，提交见本批）
+
+**批 860 损坏实拍与重做**：批 860 自称"Loop/FString 臂迁入、全库 157/157"为**假绿**——
+替换文本被脚本拼进 `gen.rs` 的 `zeta_dict_spread` 块中间（丢语法括号一个、丢 spread 的
+键型传播＋`py_map_update` 发射段），`gen/call_flow.rs`、`gen/call_fstring.rs` 本体引用
+不存在的 `id`/`dest` 且函数尾有孤行，从未编译通过。上一轮"157/157"读数出处不可考
+（管道 `| tail` 吞退出码是主嫌，本批起长命令一律直接看 `PIPESTATUS`/落盘日志）。
+重做（零替换法，原臂逐字）：
+- `gen.rs`：恢复 dict_spread 段（照批 859 提交面逐字）；真 Loop 臂换
+  `return self.lower_loop(body, id)`；FString 臂委托的 `dest` 改 `id`；
+  删 `lower_expr_node` Call 臂入口的遗留调试打印 `[DBG-A]`。
+- `gen/call_flow.rs` 重写：`lower_loop(&mut self, body: &[AstNode], id: u32)`
+  （批 860 的 `&Box<AstNode>` 签名与 AST 实型不符——Loop.body 是 `Vec<AstNode>`）。
+- `gen/call_fstring.rs` 修正：参数名统一为 `id`，删孤行。
+- `mod call_flow; mod call_fstring;` 声明补入 gen.rs。
+- 删除三颗从未挂载的死副本文件：`call_match.rs`（618 行）、`call_unary.rs`（199）、
+  `call_expr_lit.rs`（317）——批 857 稳定化时三臂已内联回 gen.rs（:12752/:14157/:13356
+  为活代码），文件本体批 851–853 之后不再被编译。
+
+**cleanup 车道滞留并入（10013–10022，合并提交 `7bd60781`）**：冲突 7 文件逐个核。
+- `gen.rs`：append 臂（批 781）与 mean 臂（批 810）双臂并存；**mean 臂接收者收窄**
+  （cleanup 批 10004，#267）移植——未知类型接收者不再折叠成 F64，防 pandas Series
+  句柄被当浮点存槽的静默错值。
+- `resolver.rs` `prime_body_ret`：取 cleanup 侧查找顺序（`registered_funcs` 与 lib
+  降型循环同源，`registered_func_defs` 留作回退）。
+- `py_additions.c`：保留主线侧（批 784/781 函数定义仅在主线），注释并 cleanup 实测。
+- `tools/corpus_baseline.py`、`tools/sample_gate.sh`：取 cleanup 侧（单文件超时三态
+  返回＋分母守卫——10005 手搓检查静默空跑、10007 差分 rc 口径、10008 缺判定文件
+  三起事故的修正）。
+- `backlog.md`/`roadmap.md`：两边条目都保留（EOF 双追加冲突）。
+- `zeta_runtime_c.o`：占位取 HEAD，合并后由 build.rs 从合并后的 C 源重建。
+
+**工具面**：`tools/batch_gate.sh` 三处小修——看门狗在非全局批引用未初始化的 `P1/P2`
+首轮即崩（progress.log 拿不到）；cargo 未上 PATH 时整门禁报"command not found"（加
+自举）；RED 分支 `$LOGDIR（` 后跟全角括号有解析隐患（加花括号）。杀看门狗后 `wait`
+掉，消 "Terminated" 噪音。
+
+**验证**：`cargo build --release` 零错误；内置单元测试 157/157；历史缺陷测试
+39/39（cleanup 车道 10013–10022 新增 33 条随批生效）；行为探针与 CPython 逐字对齐
+（loop break、f-string 插值、`{**a, "b": 2}` 展开——三处正是批 860 破坏面）；
+`bash tools/batch_gate.sh` GREEN。W1010 提示为合并基点前既有的老噪音，非本批回归。

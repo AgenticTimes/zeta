@@ -1,4 +1,4 @@
-//! 批次 860：f-string 发射体（原臂逐字迁入）。
+//! 批次 861：f-string 发射体（原臂逐字迁入；批 860 写坏的本体本批重修）。
 
 use super::MirGen;
 use crate::frontend::ast::AstNode;
@@ -6,7 +6,7 @@ use crate::middle::mir::mir::{MirExpr, MirStmt};
 use crate::middle::types::Type;
 
 impl MirGen {
-    pub(super) fn lower_fstring(&mut self, parts: &[AstNode], dest: u32) -> u32 {
+    pub(super) fn lower_fstring(&mut self, parts: &[AstNode], id: u32) -> u32 {
             // PY-A: every part must be a string handle — non-string
             // expressions go through a to_string_* dispatch.
             let mut part_ids: Vec<u32> = Vec::new();
@@ -74,6 +74,6 @@ impl MirGen {
             }
             self.exprs.insert(id, MirExpr::FString(part_ids));
             self.type_map.insert(id, Type::Str);
-        dest
+            id
     }
 }
