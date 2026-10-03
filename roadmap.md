@@ -26605,3 +26605,10 @@ gen.rs 18629→18606。
 819 分类函数的 KnownLength 路由已在臂内兑现（9106 行 IntLit 直折叠）。
 行为探针 len([10,20,30])+len([1,2])=5、len([7,7,7,7])=4 对齐 CPython。
 无代码改动。
+
+## 批次 830（本批）：数值内建族执行文件 call_num.rs——abs/sum 迁入
+
+lower_numeric_builtin 入口＋lower_abs（llvm.fabs 防位模式强转）＋
+lower_sum（vec/动态/定长折叠三路）。行为探针 5/5 对齐 CPython；
+全库 154/154。过程事故如实登记：首脚本中间态写盘致 gen.rs 半破坏
+（三处逐一对照 HEAD 恢复），教训＝多步脚本先算后写。
