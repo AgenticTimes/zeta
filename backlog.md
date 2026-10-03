@@ -346,6 +346,34 @@
 >   检查节奏：零 `src/` 改动 ⇒ 只跑改到的测试目标（49/49）＋编译零错误；被测件与 10026 那颗
 >   同一颗（md5 相同）⇒ 抽样窗口未重跑，沿用 10024 的 rc=0；全局逐个用例那一档在十批界（10030）做。
 >   既存编译警告两条非本批引入：`src/middle/mir/gen.rs:5308`、`resolver.rs:3852` 的多余 `mut`。
+>   批次 10028（代码 `caca4436`）补 1 条到 **50 条**＝来源批次 154（主线 `b3007ef9`＋追加
+>   `244ca889`），站点两处都在 `src/middle/resolver/resolver.rs`：① 已知前缀剥离臂 :2318-2336、
+>   ② 全局类型表双键写入臂 :2397-2402。零 `src/` 改动。**本批同时把 harness 的多模块路径打开**：
+>   新增 `lower_multi(files, entry)`＋`lower_with_source_dir(src, entry_path)`，入口路径交给
+>   `Resolver::set_source_dir`（:3944）后才走 `register` → `load_user_python_module`（:4106）
+>   从磁盘读模块（与 `src/main.rs:826` 文件模式同序），临时目录在降形完删除、大栈线程不变
+>   ⇒ 之前 49 条全单文件夹具，模块前缀那一族（154／159）在进程内到不了，现在可达。
+>   症状＝以 `_` 开头的全局名 mangled 键是 `datasrc___ROOT`（三个下划线），`rsplit_once("__")`
+>   剥前缀把前导下划线一起吃掉 ⇒ 与源码裸名不匹配 ⇒ 模块全局类型表整张为空（追加那格＝
+>   再导出的名在消费模块里读 mangled 键、表里只写裸名）⇒ 读回槽定成 `I64`⇒`print(_ROOT)`
+>   发 `println_i64`。夹具 A＝`main` 只 import `show`（单跳），夹具 B＝`consumer` 再导出 `_ROOT`
+>   后 `print`；用例对三枚段（`datasrc__show`×2、`consumer__use_it`×1）各断一次
+>   `zeta_env_get("datasrc___ROOT")` 读回、目的槽 `Str`、`println_str` 吃该槽、无 `println_i64`。
+>   三侧真值：CPython 打两行 `abc`；`--dump-mir`（`f154a_base.mir`／`f154b_base.mir`）三枚段的
+>   读回槽都是 `Str`；运行期 `-o` 后**只打一行**＝与 CPython 不一致（成因见下面新缺陷）
+>   ⇒ 期望值只取编译期＋CPython 两侧。两臂差异行数一字相同（f154a 8 行／f154b 16 行，
+>   症状同形）⇒ 是一条链、不互为备份，进程内复验两臂都 50 条只红本条，红点末轮实跑
+>   `tests/regression_history.rs:3782:9`、红值 `Some(I64)`（右 `Some(Str)`）；红点落在类型那一行
+>   ＝前置条件在撤臂时不变，`println_*` 两格在其后＝只算防放松；循环首枚 panic 即停 ⇒
+>   夹具B 两段只有 `--dump-mir` 侧证据，进程内未逐枚打到。还原＝`git show HEAD:` 两向 md5
+>   （e841c2206fe81514fe57895e73991edf）＋重编后 `--dump-mir` 与基线差异 0 行、二进制 ed5227ccd29b70c4ee9ae17500926f10 与 10027 同一颗。
+>   本批新发现（未修，登记在此不另占号）＝双模块入口的 `main` 段少了 `consumer__use_it`
+>   调用点（`consumer__init`／两次 `zeta_py_from`／`datasrc__init`／`datasrc__show` 都在），
+>   AOT 只打一行而 CPython 打两行；`only_consumer.z` 那枚 AOT 零输出。仍未锁的：本条只覆盖
+>   "两臂同形"这一格，单臂坏另一臂正确的形状没锁；159（同族、需多模块）本批路径已开但未做。
+>   检查节奏：零 `src/` 改动 ⇒ 只跑改到的测试目标（50/50 绿／0.11 秒）＋编译零错误；
+>   十批界的全局逐个用例在 10030 做。
+
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；

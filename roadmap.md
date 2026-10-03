@@ -27167,3 +27167,62 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
   `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
   两本台账，**连续二十六批**）；待补台账行的文字写进本批记录笔的提交信息。
+## 批次 10028（续 #20005：把历史缺陷做成进程内单元测试，第十八批——来源批次 154 的模块全局类型表；harness 打开多模块路径）
+
+- 主体代码：`tests/regression_history.rs` +188 行／−0（`git diff --numstat`，代码笔 caca4436），
+  用例数 49 → **50**。`src/**` 零改动（两枚变异臂都是临时写入后按 `git show HEAD:` 原地还原）。
+- harness 扩展（本批的关键推进）：新增 `lower_multi(files, entry)`（:51）＋
+  `lower_with_source_dir(src, entry_path)`（:90）。做法＝把入口与各模块文件写进一个临时目录，
+  把**入口路径**交给 `Resolver::set_source_dir`（`src/middle/resolver/resolver.rs:3944`），
+  与 `src/main.rs:826` 文件模式同序；之后 `register` → `load_user_python_module`（:4106）
+  从磁盘读模块，降形完删临时目录，降形仍走 64 MiB 大栈线程。之前 49 条全是单文件夹具
+  ⇒ 模块前缀那一族（154／159）在进程内根本到不了，本批把这条路径打开（159 那格也顺带可达了）。
+- 新增用例 `underscore_global_reexport_keeps_str_type_at_module_env_reads`
+  ＝来源批次 154（主线 `b3007ef9`「mangled 前缀剥离吃掉前导下划线」＋追加 `244ca889`
+  「再导出的全局名读的是 mangled 键，表里只有裸名」）。站点两处：
+  ① 已知前缀剥离臂 `resolver.rs:2318-2336`；② 全局类型表双键写入臂 `:2397-2402`。
+  症状＝以 `_` 开头的全局名拼出的 mangled 键是 `datasrc___ROOT`（三个下划线），
+  用 `rsplit_once("__")` 剥前缀会把前导下划线一起吃掉 ⇒ 与源码裸名不匹配 ⇒ 整张模块全局
+  类型表为空（追加那一格是同族第二处：消费模块读 mangled 键、表里只写裸名）。表没了⇒
+  读回槽定成 `I64`⇒`print(_ROOT)` 发 `println_i64` 而不是 `println_str`。
+- 夹具两枚（产物 `/tmp/b10028/`）：A＝`datasrc.z`（`_ROOT = "abc"` ＋ `def show(): print(_ROOT)`）
+  ＋`main.z`（只 import `show`，单跳）；B＝再加 `consumer.z`（`from datasrc import _ROOT` ＋
+  `def use_it(): print(_ROOT)`，即再导出）＋`main.z` 两处调用。用例对三枚函数段
+  （`datasrc__show`×2、`consumer__use_it`×1）各断：一次 `zeta_env_get("datasrc___ROOT")` 读回、
+  目的槽 `Type::Str`、`println_str` 吃该读回槽、`println_i64` 不出现。
+- 三侧真值：① CPython 同形源打两行 `abc`；② 编译期 `--dump-mir`（`f154a_base.mir`／
+  `f154b_base.mir`）三枚段的读回槽都是 `Str`、打印都走 `println_str`；③ 运行期（`-o` 编译后执行）
+  **只打一行** ⇒ 与 ① 不一致，原因见下面「本批新发现的缺陷」⇒ 本条期望值只取 ①② 两侧，
+  头注明写不写成"三方一致"。
+- 变异 × `--dump-mir` 差异行数（臂＝在 HEAD 源码上原地改那一支再重编；基线＝`*_base.mir`）：
+
+  | 臂 | f154a | f154b | 症状 |
+  |---|---|---|---|
+  | c154a（:2318-2336 换成 `g.rsplit_once("__")` 直接返回后半） | 8 | 16 | 两段同时 `println_str`→`println_i64`、目的槽 `Str`→`I64` |
+  | c154b（:2397-2402 的 mangled 键改成不写） | 8 | 16 | 与 c154a 一字相同 |
+
+  ⇒ **两臂是一条链**（同症状、同格子），本批只写一条用例；撤任一臂都打红它，但这条钉不住
+  "只有其中一臂坏、另一臂仍正确"那种形状（写进用例头注 ③）。
+- 进程内变异复验（还原源＝`git show HEAD:src/middle/resolver/resolver.rs`，应用/复原两向 md5；
+  日志 `/tmp/b10028/mut_c154a.log`／`mut_c154b.log`）：两臂各跑一遍 ⇒ 50 条**只红本条这一条**
+  （49 passed／1 failed），红点末轮实跑 `tests/regression_history.rs:3782:9`、红值
+  `Some(I64)`（right 侧 `Some(Str)`），两臂读数一字相同。红点落在读回槽类型那一行
+  ＝前置条件（读回次数）在撤臂时不变 ⇒ 这条的正证据是实质断言；`println_str`／`println_i64`
+  两格在红点之后＝未执行到，只算防放松。循环在首枚 panic 即停 ⇒ 夹具B 那两段的同格症状
+  只有 `--dump-mir` 侧证据（8／16 行），进程内未逐枚打到。
+- 还原核对：`resolver.rs` md5 e841c2206fe81514fe57895e73991edf 等于 HEAD，该路径工作树干净；`cargo build --release`
+  后 `--dump-mir` 对 f154a／f154b 与改前基线**差异行数 0**，二进制 md5 ed5227ccd29b70c4ee9ae17500926f10（与 10027 实拍
+  三侧时同一颗）；`cargo test --release --test regression_history` 50/50 绿／0.11 秒。
+- 本批顺带**新发现的缺陷（未修，不属于 #20005 收编范围）**：双模块入口的 `main` 段里
+  `consumer__use_it` 这个调用点整条没了（`consumer__init`、两次 `zeta_py_from`、`datasrc__init`、
+  `datasrc__show` 都在），AOT 运行只打一行而 CPython 打两行；只 import `consumer` 的那枚
+  （`only_consumer.z`）AOT 不打任何输出。不锁错误行为，登记在 #20005 余项内（按登记规则 2
+  不另占任务号）。
+- 检查节奏：零 `src/` 改动 ⇒ 只跑改到的测试目标＋编译零错误；十批界的全局逐个用例在 10030 做。
+  既存编译警告两条非本批引入：`src/middle/mir/gen.rs:5308`、`src/middle/resolver/resolver.rs:3852`
+  的多余 `mut`。
+- `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件 `src/error_codes.rs`／
+  `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
+  `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
+  两本台账，**连续二十七批**）；待补台账行的文字写进本批记录笔的提交信息。
+
