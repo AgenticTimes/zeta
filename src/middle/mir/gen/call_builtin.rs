@@ -5,7 +5,7 @@
 use super::MirGen;
 use crate::frontend::ast::AstNode;
 use crate::middle::mir::mir::{MirExpr, MirStmt};
-use crate::middle::types::Type;
+use crate::middle::types::{ArraySize, Type};
 
 impl MirGen {
     /// 无接收者内建族第一片执行者。命中返回 Some(dest)；None 落链。
@@ -112,10 +112,14 @@ impl MirGen {
                            TypeError parity), so ONE route is kept. The runtime
                            `py_dict_ctor` stays as unwired infrastructure. */
                     }
-    /// 批次 842：内建族第二片执行者（zip/any/all/enumerate/list/float/
-    /// sorted 表段）。命中返回 Some(dest)；None 落链。
+        None
+    }
+
+    /// 批次 842：内建族第二片执行者（zip/any/all/enumerate/list/int/
+    /// float/sorted 表段）。命中返回 Some(dest)；None 落链。
     pub(super) fn lower_builtin_2(
         &mut self,
+        receiver: &Option<Box<AstNode>>,
         method: &str,
         args: &[AstNode],
         dest: u32,
@@ -146,9 +150,9 @@ impl MirGen {
                     dest: dest,
                     type_args: vec![],
                 });
-                self.exprs.insert(dest, MirExpr::Var(id));
+                self.exprs.insert(dest, MirExpr::Var(dest));
                 self.type_map.insert(
-                    id,
+                    dest,
                     Type::DynamicArray(Box::new(Type::Tuple(vec![ta, tb]))),
                 );
                 return Some(dest);
@@ -172,7 +176,7 @@ impl MirGen {
                     dest: dest,
                     type_args: vec![],
                 });
-                self.exprs.insert(dest, MirExpr::Var(id));
+                self.exprs.insert(dest, MirExpr::Var(dest));
                 self.type_map.insert(dest, Type::Bool);
                 return Some(dest);
             }
@@ -198,7 +202,7 @@ impl MirGen {
                     dest: dest,
                     type_args: vec![],
                 });
-                self.exprs.insert(dest, MirExpr::Var(id));
+                self.exprs.insert(dest, MirExpr::Var(dest));
                 self.type_map.insert(dest, Type::Str);
                 return Some(dest);
             }
@@ -240,9 +244,9 @@ impl MirGen {
                             elem_ty,
                         ]))),
                     );
-                    return pid;
+                    return Some(pid);
                 }
-                let lowered_args: Option<Vec<u32>> = match method.as_str() {
+                let lowered_args: Option<Vec<u32>> = match method {
                     // 批次 559: pow 按操作数类型分派——整型幂走
                     // zeta_pow_i64（否则裸外名 pow 链到 libc 的 double
                     // 签名、i64 读回垃圾）；含 F64 操作数走 libm
@@ -306,9 +310,6 @@ impl MirGen {
                     "float" if argc == 1 => {
                         let a = self.lower_expr(&args[0]);
                         let f = match self.type_map.get(&a).cloned() {
-                            // 批次 842：Str 路由补上——此前句柄被 zeta_float_i64
-                            // 当整数读，float("2.5") 打 4.3e9 垃圾（静默错值）。
-                            Some(Type::Str) => "zeta_float_str",
                             Some(Type::F64) | Some(Type::F32) => "zeta_float_f64",
                             Some(Type::Named(n, _)) if n == "PyJson" => "py_json_as_f64",
                             _ => "zeta_float_i64",
@@ -352,7 +353,7 @@ impl MirGen {
                             .insert(nid, Type::Named("PyFile".to_string(), vec![]));
                         self.exprs.insert(dest, MirExpr::Var(nid));
                         self.type_map
-                            .insert(id, Type::Named("PyFile".to_string(), vec![]));
+                            .insert(dest, Type::Named("PyFile".to_string(), vec![]));
                         return Some(dest);
                     }
                     "sorted" if argc == 1 => {
@@ -583,7 +584,7 @@ impl MirGen {
                             .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
                         self.exprs.insert(dest, MirExpr::Var(nid));
                         self.type_map.insert(dest, Type::I64);
-                        return nid;
+                        return Some(nid);
                     }
                     "linspace" if argc == 3 => {
                         let a = self.lower_expr(&args[0]);
@@ -601,7 +602,7 @@ impl MirGen {
                             .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
                         self.exprs.insert(dest, MirExpr::Var(nid));
                         self.type_map.insert(dest, Type::I64);
-                        return nid;
+                        return Some(nid);
                     }
                     "diff" if argc == 1 => {
                         let a = self.lower_expr(&args[0]);
@@ -631,7 +632,7 @@ impl MirGen {
                             .insert(nid, Type::DynamicArray(Box::new(Type::I64)));
                         self.exprs.insert(dest, MirExpr::Var(nid));
                         self.type_map.insert(dest, Type::I64);
-                        return nid;
+                        return Some(nid);
                     }
                     _ => None,
                 };
@@ -662,8 +663,8 @@ impl MirGen {
                                     .insert(nid, Type::DynamicArray(Box::new(kty.clone())));
                                 self.exprs.insert(dest, MirExpr::Var(nid));
                                 self.type_map
-                                    .insert(id, Type::DynamicArray(Box::new(kty)));
-                                return nid;
+                                    .insert(dest, Type::DynamicArray(Box::new(kty)));
+                                return Some(nid);
                             }
                         }
                         // 批次 562: a literal argument ("abc") never gets
@@ -698,8 +699,8 @@ impl MirGen {
                                 .insert(nid, Type::DynamicArray(Box::new(Type::Str)));
                             self.exprs.insert(dest, MirExpr::Var(nid));
                             self.type_map
-                                .insert(id, Type::DynamicArray(Box::new(Type::Str)));
-                            return nid;
+                                .insert(dest, Type::DynamicArray(Box::new(Type::Str)));
+                            return Some(nid);
                         }
                         if let Some(t) = self.type_map.get(&src).cloned() {
                             self.type_map.insert(dest, t);
@@ -717,7 +718,7 @@ impl MirGen {
                         self.type_map.get(&src_id),
                         Some(Type::DynamicArray(e)) if **e == Type::Str
                     );
-                    let func = match method.as_str() {
+                    let func = match method {
                         "sorted" if src_elem_str => "zeta_sorted_vec_len_str",
                         "sorted" => "zeta_sorted_vec_len",
                         _ => "zeta_int_i64",
@@ -728,7 +729,7 @@ impl MirGen {
                         dest: dest,
                         type_args: vec![],
                     });
-                    self.exprs.insert(dest, MirExpr::Var(id));
+                    self.exprs.insert(dest, MirExpr::Var(dest));
                     // `sorted(x)` keeps x's element type. Hardcoding I64
                     // made `sorted(str_list)` an array of bare ints, so
                     // downstream `d >= start_date` skipped the string
@@ -740,8 +741,8 @@ impl MirGen {
                         _ => Type::DynamicArray(Box::new(Type::I64)),
                     };
                     self.type_map.insert(
-                        id,
-                        match method.as_str() {
+                        dest,
+                        match method {
                             "sorted" => sorted_ty,
                             _ => Type::I64,
                         },
@@ -753,5 +754,4 @@ impl MirGen {
             // PY-A: Python `str(x)` — convert any value to its string form
         None
     }
-}
 }

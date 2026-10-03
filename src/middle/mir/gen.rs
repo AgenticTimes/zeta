@@ -7220,6 +7220,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 type_args,
                 ..
             } => {
+                eprintln!("[DBG-A] Call 臂进入 method={}", method);
                 // PY-A batch 291: `cls(...)` inside a @classmethod body. The
                 // class desugar keeps classmethods as plain functions named
                 // `Class::method` with `cls` as a first parameter that no
@@ -8038,6 +8039,24 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         .map_or(false, |(m, mem)| m == "typing" && mem == "cast")
                 {
                     return self.lower_expr(&args[1]);
+                }
+                // 批次 843（#272）：float(字符串) 静默错值根治——注册表
+                // float 项符号是 zeta_float_i64（整数语义），Str 实参会把
+                // 句柄当 i64 转 double（实测 float("2.5") 打 4.3e9）。在
+                // 注册表路由**之前**按实参静态类型改道：Str ⇒ zeta_float_str
+                //（运行期 strtod，py_additions.c:3810 在库）。
+                if method == "float"
+                    && receiver.is_none()
+                    && args.len() == 1
+                {
+                    eprintln!("[DBG-B] float 改道臂命中");
+                    let a = self.lower_expr(&args[0]);
+                    let route = match self.type_map.get(&a).cloned() {
+                        Some(Type::Str) => "zeta_float_str",
+                        _ => "zeta_float_i64",
+                    };
+                    let nid = self.emit_call(route, vec![a], Type::F64);
+                    return nid;
                 }
                 let member_call = self.py_member_call(receiver, method).or_else(|| {
                     let recv = receiver.as_ref()?;
@@ -9475,7 +9494,7 @@ call, no NULL-handle dereference).",
                 // 批次 842：内建族第二片（zip/any/all/enumerate/list/
                 // float/sorted 表段）迁入 gen/call_builtin.rs。
                 if receiver.is_none() {
-                    if let Some(nid) = self.lower_builtin_2(method, args, id) {
+                    if let Some(nid) = self.lower_builtin_2(receiver, method, args, id) {
                         return nid;
                     }
                 }
