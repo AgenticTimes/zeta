@@ -1,9 +1,9 @@
-//! 历史缺陷回归钉（编译期层面）
+//! 历史缺陷的编译期回归测试
 //!
-//! 用途：把已经修好的缺陷在**进程内**钉住——`cargo test --test regression_history`
+//! 用途：把已经修好的缺陷在**进程内**复验住——`cargo test --test regression_history`
 //! 一次编译、每条用例毫秒级，替代"每次都跑全量差分/python_style"。
 //!
-//! 覆盖边界（如实说明）：这里只钉**编译期可观测**的缺陷（降形选错了运行期符号、
+//! 覆盖边界（如实说明）：这里只收**编译期可观测**的缺陷（降形选错了运行期符号、
 //! 类型标记丢了、参数被丢弃）。凡是只能从运行期打印值观测的缺陷（切片越界夹尾、
 //! 字符串越界等），仍由 `tests/python_style/` 与 `tools/diff_test.py` 承担——
 //! 那类需要真执行，挪不进毫秒级检查。
@@ -28,7 +28,22 @@ use zetac::middle::types::Type;
 
 /// 源码 → 全部函数的 MIR（按名排序，保证读数可复现）。
 /// 流程与 `src/main.rs` 的编译主干一致：解析 → 注册 → 类型检查 → 降形。
+///
+/// 降形走在大栈线程上：`MirGen::lower_expr_node` 是单个巨型函数，debug 构建里
+/// 一层栈帧就有几十 KB，测试线程默认 2 MiB 会在 `format!` 这类嵌套表达式上溢栈
+/// （批次 10012 实拍：`cargo test` 全threads 卡死、`has overflowed its stack`）。
+/// 释放构建走主线程 8 MiB 没这个问题，所以这不是产品缺陷，是测试面的构建形态。
 fn lower_all(src: &str) -> Vec<Mir> {
+    let src = src.to_string();
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || lower_all_inner(&src))
+        .expect("起大栈线程失败")
+        .join()
+        .unwrap_or_else(|e| std::panic::resume_unwind(e))
+}
+
+fn lower_all_inner(src: &str) -> Vec<Mir> {
     let (remaining, asts) = parse_zeta(src).unwrap_or_else(|e| panic!("解析失败: {e:?}"));
     assert!(
         remaining.trim().is_empty(),
@@ -382,4 +397,113 @@ print(sum_all(1, 2, 3))
         .filter(|s| matches!(s, MirStmt::ParamInit { .. }))
         .count();
     assert_eq!(param_inits, 2, "两个参数都应有 ParamInit，实得 {param_inits}");
+}
+
+/// 批次 737（`189e2716`，站点 `src/middle/mir/gen.rs` 的 `py_array_concat` 分支）：
+/// 列表拼接的元素型合并。
+/// 症状（缺陷记录原文）：元素型无条件取**左侧**，而 `out = []` 这类槽的元素型
+/// 退化成 I64，于是 `out + [[1, 2]]` 拼完仍标 I64，读每一行打的是裸指针。
+/// 现树规则：两侧之一是 I64、另一侧有真实型时取真实型；真冲突才保留左侧。
+#[test]
+fn concat_element_type_prefers_the_non_degenerate_side() {
+    let mirs = lower_all(
+        "xs = [1, 2]
+ys = [1.5]
+zs = xs + ys
+print(zs)
+",
+    );
+    let m = mir(&mirs, "main");
+
+    let dest = m
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func == "py_array_concat" => Some(*dest),
+            _ => None,
+        })
+        .expect("找得到 py_array_concat 调用");
+    assert_eq!(
+        m.type_map.get(&dest),
+        Some(&Type::DynamicArray(Box::new(Type::F64))),
+        "左侧 I64、右侧 F64 的拼接应取右侧真实型；改前取左侧退化成 \
+         DynamicArray(I64)（槽 {dest} 实得 {:?}）",
+        m.type_map.get(&dest)
+    );
+}
+
+/// 批次 404（`c443c34a`，站点 `src/frontend/macro_expand.rs:191` 的 `expand_format`）：
+/// `format!` 不再是桩。
+/// 症状（roadmap.md:16231 记录）：`expand_format` 不看参数，整个宏无条件返回写死的
+/// `StringLit("formatted string")`——语料 29 个文件 / 121 处 `format!(` 全打在同一个串上，
+/// 编译成功、退出码 0、一声不出（`format!("value={}", 42)` 实测打 `[0]`）。
+/// 现树规则：首参是字面量时按 `{}` 切段，每个值段发一次 `__fmtspec__`（下型到
+/// `py_fmt_*`），与字面量段用 `+` 串接。
+#[test]
+fn format_bang_splits_each_value_segment_into_fmt_dispatch() {
+    let mirs = lower_all(
+        "n = 7
+s = format!(\"value={} end={}\", n, 3)
+print(s)
+",
+    );
+    let m = mir(&mirs, "main");
+
+    let calls = call_symbols(m);
+    let value_segments = calls.iter().filter(|c| c.starts_with("py_fmt_")).count();
+    assert_eq!(
+        value_segments, 2,
+        "两个 {{}} 孔应各发一次 py_fmt_* 派发（改前是 0 次），实得调用: {calls:?}"
+    );
+
+    let stub = m
+        .exprs
+        .values()
+        .filter(|e| matches!(e, MirExpr::StringLit(s) if s == "formatted string"))
+        .count();
+    assert_eq!(
+        stub, 0,
+        "整个宏塌成写死串 \"formatted string\" 是改前的桩症状，不应出现在 MIR 里"
+    );
+}
+
+/// 批次 738（`79be2515`，站点 `src/frontend/parser/top_level.rs` 的顶层项守卫）：
+/// 保留字作普通标识符的**赋值形**不打断整份文件。
+/// 症状（本批提交信息＋`kw_starts_declaration` 文档注释）：`struct`/`enum`/`trait`/
+/// `mod`/`pub` 曾在 `DEFINITION_KEYWORDS` 里无条件命中，`struct = 5` 被当成一次失败的
+/// 声明 ⇒ `many0` 就地停止，**后面的内容全被截掉**（W1002，按名逐个实测过）。
+/// 现树规则：这五个名后面必须跟名字才算声明；`struct = 5` 落回 `parse_stmt`。
+#[test]
+fn reserved_word_assignment_forms_do_not_truncate_the_file() {
+    let mirs = lower_all(
+        "struct = 4
+enum = 5
+trait = 6
+mod = 7
+pub = 8
+def after() -> i64:
+    return 11
+
+print(after())
+",
+    );
+    // 截断时 `after` 这条声明根本进不来，所以先拿它做"文件确实吃满了"的正向证据。
+    let after = mir(&mirs, "after");
+    assert_eq!(
+        after.exprs.values().filter(|e| matches!(e, MirExpr::IntLit(11))).count(),
+        1,
+        "五个保留字赋值之后的声明必须还在（`after` 体应返回字面量 11）"
+    );
+
+    let m = mir(&mirs, "main");
+    let mut values: Vec<i64> = top_assigns(m)
+        .iter()
+        .filter_map(|(_, rhs)| int_lit(m, *rhs))
+        .collect();
+    values.sort();
+    assert_eq!(
+        values,
+        vec![4, 5, 6, 7, 8],
+        "五个保留字赋值形都该收进 main（截断时一个都没有），实得 {values:?}"
+    );
 }
