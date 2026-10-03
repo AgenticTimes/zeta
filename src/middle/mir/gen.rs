@@ -12035,7 +12035,13 @@ call, no NULL-handle dereference).",
             }
             AstNode::FieldAccess { base, field } => {
                 // 批次 846：FieldAccess 臂整体迁入 gen/call_field.rs。
-                self.lower_field_access(base, field, id);
+                // 批次 866：返回值必须转发——函数体内多处早退
+                // `return self.lower_expr(...)`（类变量路由、实例类变量路由、
+                // self_field_aliases 等）产出的是新槽而不是 dest；批 846 的
+                // 迁移调用点丢弃了返回值，这些路径全被预填的替身槽
+                // （IntLit(0)）顶掉＝静默错值（Counter::get 打 0，
+                // class_variable_crash／class_inheritance_field 两例回归）。
+                return self.lower_field_access(base, field, id);
             }
             AstNode::StructLit { variant, fields } => {
                 // Implement proper struct literal creation
