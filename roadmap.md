@@ -26050,3 +26050,64 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
 - 654 记录里 t401 的原始写法（模板作函数形参）在本 harness 里取不到：补跑 `infer_untyped_returns` 之后仍需实测才能确定该形状会把模板判成什么类型，本批用顶层变量持模板的形状（`--dump-mir` 两种写法都发 `zeta_str_percent_fmt`，实测 `/tmp/b10013_p6.z`／`/tmp/b10013_p7.z`）。
 
 **登记**：#20005 状态保持 🟡，现 12 条（代码 `4e83fd8d`）。余项＝按 roadmap 已修批次逐批继续补；652 的第二层（`codegen.rs:990` 的注册）在后端面，本套覆盖不到。`worktree.md` 仍带车道批次 745 的在制面，连续十二批未随批。不 push。
+
+## 批次 10014 —— 历史缺陷回归测试第四批（续 #20005）：三条用例，外加两处自我更正
+
+### 动因
+继续用户任务"把历史问题的错误和修改做成单元测试，不必每次都跑全量测试"。候选筛子两把：
+① 该批修复要已在本树（`git merge-base --is-ancestor`）；② 站点避开主树在重构的 `gen.rs`
+和车道那三个在制的解析器文件。选中 `src/frontend/macro_expand.rs` 的 `expand_println`
+两条叉（批次 376、377）＋`src/middle/resolver/resolver.rs` 的 `collect_calls` 一条下钻臂
+（批次 407）——三处都在干净文件里。
+
+### 三条用例（主体改动＝`tests/regression_history.rs`，693 → 847 行，＋155／−1）
+| 用例 | 来源批次／站点 | 断言（期望值出处） | 记录里的改前症状 |
+|---|---|---|---|
+| `println_without_format_string_dispatches_by_type_not_by_syntax_shape` | 376／`expand_println` 无格式串那条叉（改前 `:148-168`） | 字符串变量与返回 str 的调用结果都发 `println_str`（各一次）；`println_i64` 这个名字不许由展开期发出来；整数变量保留 `println` 交后端映射 | 单值参只要形状是 变量／整数字面量／调用结果，名字就写死成整数打印器 ⇒ 字符串变量打堆地址（记录 `4331907520`）、`let g = 1.75` 打 `1` |
+| `println_format_string_splits_into_literal_and_value_segments` | 377／同一函数的格式串那条叉（改前 `:130-135`） | 五个字面量段（`A=`／`B`／`C=`／`D=`／收尾 `\n`）逐段出现在 MIR 里；整数值发一次 `print_i64`、浮点值发一次 `print_f64`；不再出现任何 `println*` | 格式串被整个剥掉 ⇒ 字面量段必丢（`println!("A={}", 1)` 只打 `1`）；多值合并成一次 `println`，后端映射到只吃一参的 `println_i64` ⇒ 第二个以后的值丢掉 |
+| `sole_callsite_inside_fstring_still_gives_param_type_evidence` | 407／`collect_calls` 的 `FString` 下钻臂（记录当时在 `resolver.rs:1553`，现 `:1707`） | 唯一调用点写在插值里时，形参槽仍是 `Str`；调用点本身还在（按名字前缀认）；`to_string_i64` 不许出现；结果槽走 `println_str` | `collect_calls` 九条臂没有 `FString` ⇒ 插值里的调用整个不见 ⇒ 形参停在 `PyDynamic` → 结果槽 `.unwrap_or(Type::I64)` → 发 `to_string_i64` ⇒ 堆指针被当十进制打印（记录 p1 实拍 `p=4367215168`，真值 `p=direct`） |
+
+### 两处自我更正（都写进测试文件，如实）
+1. **第一版 377 用例对"只发第一个值"这一支不敏感**：夹具原本写 `println!("C={}D={}", g, m)`，
+   浮点值 `g` 站在第一个占位符——变异 M3（把 `values.get(i)` 改成只取 `i == 0`）撤掉后续值时
+   `print_f64` 计数照旧是 1，用例照绿。换序成 `(m, g)` 让浮点站第二个位置后，M3 才把它打红。
+   用例注释里补了一句"浮点值故意放第二位"，免得后人又把它换回去。
+2. **一条照抄记录的说法被 blame 更正**：376 记录把 "For now, simple expansion to a function
+   call" 称作那条形状叉的"同段注释"。实测改前文件（`git show 795409a9^`）里那条注释在 `:106`、
+   形状叉在 `:148`，同函数不同段；`git blame` 还分出两笔——写死 `println_i64` 这个名字的是
+   v0.7.0 的 `13697ac8`，外面套"按形状选"的那条叉是 `139a7454`。用例注释按 blame 改写，
+   记录那行按"历史行不回改"留着。
+3. 顺带把批次 10013 落在测试文件里的一个黑话词（"勘案"）改成"查证"（新文即起生效的口径；
+   `git diff --stat` 那 1 行删除就是它）。
+
+### 验证
+- `cargo test --test regression_history`：**15 passed / 0 failed**，0.03 秒（进程内，一次编译）。
+- **变异核验 5/5 红**（脚本 `/tmp/b10014/mutation_check.py`，逐笔改完立即复原）：
+  | 变异 | 站点 | 红在哪条 | 说明 |
+  |---|---|---|---|
+  | M1 | `expand_println` 无格式串臂退回 376 改前原样（按形状写死 `println_i64`） | 376 用例（唯一红） | 14 passed / 1 failed |
+  | M2 | 字面量段整段不发（`if !segment.is_empty()` → `if false`） | 377 用例＋378 用例 | 378 的夹具也用带字面量的格式串，两笔同时命中＝两条用例都真在检查 |
+  | M3 | 多占位符只发第一个值（`values.get(i)` → `.filter(\|_\| i == 0)`） | 377 用例（唯一红） | 换序前这条打不红，见上面更正 1 |
+  | M4 | 收尾换行段不发（删 `out.push(self.print_str_stmt("\n"))`） | 377 用例＋378 用例 | 缺的正是收尾那一段换行字面量 |
+  | M5 | `collect_calls` 删掉 `FString` 臂（落进 `_ => {}`） | 407 用例（唯一红） | 报错值正是记录里的改前状态（形参实得 `Some(PyDynamic)`） |
+  复原后复跑 15/15 绿；`src/frontend/macro_expand.rs` md5 `a066dbd705cb8b761068413d7ed540bc`、
+  `src/middle/resolver/resolver.rs` md5 `e841c2206fe81514fe57895e73991edf` 与改前逐字相同；
+  `git diff --name-only src/` 只剩车道在册的三个在制文件（`src/error_codes.rs`、
+  `src/frontend/parser/expr.rs`、`src/frontend/parser/top_level.rs`），非本批所改。
+- 变异脚本自己的收尾断言写错过一次，记在这里免得重犯：它原本断言"`git diff --stat src/` 为空"，
+  在本树恒不成立（那三个在制文件长期挂着，5 笔变异其实全部复原成功）。干净与否要按
+  "本批改过的文件 md5 等于改前值"点名核对，不能用整目录干净做尺。
+- 每批必跑的检查 `bash tools/sample_gate.sh 10014`（窗口 4）：①差分 272/272 一致；②python_style 55/55 PASS；③official 26/26 编译通过（链接缺绑定 0 条）；④语料 40/40 满数；整批 rc=0。被测件 md5 `ed5227ccd29b70c4ee9ae17500926f10`、运行期 `.o` md5 `878479bebf8d79a8539ee9a680fb463b`，与批次 10012／10013 收尾时相同（本批零 `src/` 改动，变异只活在核验脚本里、逐笔复原）。
+  第②步顺带量到两件事：本窗口 55 枚成员里实测 0 枚带 `// expect-abort:`、0 枚带 `// known-fail:`，所以 55/55 是全出判定且全绿，不是把钉住的或挂死的算进通过；#20006 那三枚夹具按同一口径实测分属窗口 3／3／0（`t253_stub_abort`／`t405_hard_stub_aborts_loudly`／`t256_pylib_stub_abort`），本窗口抽不到，所以这次没复现那两枚空判定不说明它好了。
+  另记一条取数口径坑：复现这个轮转分母必须用检查脚本自己的取键法——`basename` 去掉 `.z` 再 `cksum % 10`。第一遍我带上了 `.z` 后缀算，窗口 4 只数出 36 枚，和读到的 55 对不上，还会把三枚挂件的窗口算成 5／6／9（正解 3／3／0）。
+
+### 边界（如实说明）
+- 376／377 记录里的运行期读数（打地址、`1.75` 打成 `1`、bool 从 `1` 变 `True`、容器 repr 从
+  句柄变 `[1, 2, 3]`）本套只到 MIR 的被调符号名与字面量段，逐字输出仍归 `t417`／`t418`＋差分测试。
+- 376 记录"边界"第 2 条（`println!("{}", <数组/字典>)` 仍打句柄）本批未转成用例：症状是运行期
+  取值，不在本套的观测面内。
+- 407 记录 §七 那一格（嵌套 `def` 被提升成 `__closure_0_*` 名后仍拿不到证据）本树仍未修，
+  用例注释里点名了这条边界。
+- 本批零 `src/` 改动（变异只存在于核验脚本运行的那 6 秒里，逐笔复原）。
+
+**登记**：#20005 状态保持 🟡，现 15 条（代码 `0e955cdb`）。余项＝按 roadmap 已修批次逐批继续补；`worktree.md` 仍带车道批次 745 的在制面，连续十三批未随批。不 push。
