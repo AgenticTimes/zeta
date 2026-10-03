@@ -26623,3 +26623,9 @@ successor/predecessor/min-max 迁入执行者；gen.rs 数值族入口统一单�
 sep/end 抽取、多参循环、按格渲染、Bool 尾行补换行、map-str 专道全部
 原样迁入 lower_print。行为探针 5 项对齐 CPython；全库 154/154。
 gen.rs 18470→17903（重构链累计净 -1489 行）。
+
+## 批次 833（本批，重做完成）：json.dumps/dump 臂整体迁入 call_json.rs::lower_json
+
+三次尝试方成，教训完整：①脚本断言中断＝旧版回写（先算后写）；②新文件
+import 应一次算齐；③原位替换重跑报错＝已成功的误报（幂等检查先行）。
+行为探针对齐 CPython；全库 154/154；gen.rs 17880→17804（累计净-1588）。
