@@ -26599,3 +26599,9 @@ successor/predecessor/abs/min-max 臂改读 classify_call（NumericBuiltin）。
 
 emit_tagged_print 迁子模块；行为探针 None/5 保持；全库 154/154。
 gen.rs 18629→18606。
+
+## 批次 829（验证批）：len KnownLength 折叠行为确认
+
+819 分类函数的 KnownLength 路由已在臂内兑现（9106 行 IntLit 直折叠）。
+行为探针 len([10,20,30])+len([1,2])=5、len([7,7,7,7])=4 对齐 CPython。
+无代码改动。
