@@ -3331,3 +3331,94 @@ print(F)
          说明读取型已被修好，请把本用例的正确性期望改成 True/False 那一侧。实得调用: {calls:?}",
     );
 }
+
+/// 批次 184（主线 `e44a238f`，站点＝`infer_unannotated_returns` 那层嵌套 `infer` 里的
+/// `AstNode::DictLit` 臂——按**首条**键值推出 `map<K, V>` 的两个类型参数，
+/// 本树 HEAD `e53c0147` 上是 :4697-4710；同名臂另有一处在 `infer_global_ty`（现 :2002），
+/// 那一处本批五枚夹具形状的 `--dump-mir` 差异都是 0 行，未钉住，见覆盖面分工）／旧 #45 相邻族。
+///
+/// 症状（记录原文）：`_get is NOT implemented in this build`——全局类型表里它是
+/// `Named("map", [])`（**没有类型参数**）⇒ 下标后的值类型 I64 ⇒ `.get(source, 0.5)` 掉出 map 分派
+/// ⇒ 裸 `get` ⇒ 撞未实现桩停机。
+///
+/// 期望值来源：三份真值同批实拍（产物在 `/tmp/b10026/`）。
+/// ① CPython 同形源（类方法返回字典字面量＋`h.cfg().get("a", 0)`）打 `1`；
+/// ② 运行期＝同一份源 `-o` 编译后执行打 `1`（`s3bin`，rc=0）⇒ 与 ① 逐字相同；
+/// ③ 编译期＝`--dump-mir` 的 `main` 段 `type_map` 里三处 `map` 槽（id 7 / 13 / 17）都是
+///    `Named("map", [Str, I64])`（`s3_baseA.mir`），且调用面出现 `map_str_key`＋`py_map_contains`、
+///    没有裸 `get`。
+///    取段按 `== MIR <名> ==` 切，别打到文件末尾（10024 记的那格）。
+///
+/// 覆盖面分工（变异实测，日志 `/tmp/b10026/m_d4699_suite.log`／`m_d2004_suite.log`）：
+/// ① 撤本条那一臂（把 `:4697` 的 `match entries.first()` 换成恒 `None`）⇒ 47 条**只红本条**，
+///    红值 `Some(Named("map", []))`＝记录里的症状值。
+/// ② 撤另一处同名臂 `infer_global_ty`（现 :2002）⇒ 47 条读数一字不变（阴性结果；先在 CLI 侧
+///    对五枚夹具形状跑过 A/B，那一臂的差异行数也全为 0）。⇒ 本条只钉住 :4697 这一处，
+///    :2002 那处的症状面（全局字典变量直读）在本套夹具里没有对应形状。
+/// ③ ① 的红点落在"三处 `map` 槽带类型参数"那一行（末轮实跑＝`:3402:9`）：前置条件在它之前已先通过、
+///    `map_str_key` 那条正证据在它之后未执行到 ⇒ 这两处只是**防放松**，不写成"已证有效"。
+#[test]
+fn dict_literal_return_carries_map_type_args_at_the_callsite() {
+    let mirs = lower_all(
+        r#"class Holder:
+    def cfg(self):
+        return {"a": 1, "b": 2}
+
+h = Holder()
+print(h.cfg().get("a", 0))
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+
+    // 前置条件：`h.cfg()` 这个调用点真的在 main 里（没被内联掉／没被丢掉）。
+    let cfg_calls: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func.starts_with("Holder::cfg") => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !cfg_calls.is_empty(),
+        "前置条件：`main` 里要有 `Holder::cfg` 的调用点（没有＝这条链没跑到，用例是空的），实得 {:?}",
+        f.stmts.len()
+    );
+
+    // ③ 症状格：`map` 型槽必须带两个类型参数（首条键值推出来的 Str／I64）。
+    let map_slots: Vec<u32> = f
+        .type_map
+        .iter()
+        .filter(|(_, t)| matches!(t, Type::Named(n, _) if n == "map"))
+        .map(|(k, _)| *k)
+        .collect();
+    assert_eq!(
+        map_slots.len(),
+        3,
+        "前置条件：`main` 段该有三处 `map` 型槽（返回槽＋链上两处接收者），实得 {map_slots:?}",
+    );
+    for id in &map_slots {
+        assert_eq!(
+            f.type_map.get(id),
+            Some(&Type::Named(
+                "map".to_string(),
+                vec![Type::Str, Type::I64],
+            )),
+            "`map` 槽 id={id} 该带首条推出来的两个类型参数 `<Str, I64>`（184 的症状正是退成\
+             `Named(\"map\", [])` ⇒ 下标值型落 I64 ⇒ `.get` 掉出 map 分派），实得 {:?}",
+            f.type_map.get(id)
+        );
+    }
+
+    // 正证据：`.get` 仍在 map 面上分派，没有掉成裸 `get` 桩。
+    let calls = call_symbols(f);
+    assert!(
+        calls.iter().any(|c| c == "map_str_key"),
+        "`get(\"a\", 0)` 该走 map 的键面（`map_str_key`），实得调用: {calls:?}",
+    );
+    assert!(
+        !calls.iter().any(|c| c == "get" || c.starts_with("get_")),
+        "184 的症状是掉成裸 `get`／`get_3` 撞未实现桩停机，这类符号不该出现，实得调用: {calls:?}",
+    );
+}
