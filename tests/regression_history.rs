@@ -2255,3 +2255,213 @@ def main() -> i64:
         "只有 `print(n + 11)` 那一格按整数打印（真值 14），实得调用: {calls:?}"
     );
 }
+
+/// 批次 524（代码 `adef6f4c`，站点 `src/middle/mir/mir.rs:68` 补的那一行
+/// `Type::Str => Type::Str`）：函数签名返回型只有一个来源＝被调方自己降完的 MIR
+/// （`Mir::signature_ret_ty`），那张映射里 `Str` 不许再被兜底臂吞掉。
+/// 症状（提交信息原文）：`signature_ret_ty` 以 `_ => Type::I64` 兜底，返回字符串的函数
+/// 被强制降成整数 ⇒ "LLVM 函数签名和调用方都把字符串指针当整数处理"（该批所属家族＝
+/// 类方法打地址）。改法就一行：`F32`／`F64` 之后补 `Str` 自身一档。
+/// 期望值出处：① 提交信息自陈"加 Type::Str 臂后 MIR 返回类型正确标为 Str"；
+/// ② 同一份源在 CPython 下的真值 `hello`（zeta 编译后运行逐字相同，`cmp -s` SAME，
+/// 读数 `/tmp/b10021/run_524.txt`）；③ 编译期＝`--dump-mir` 里 `return "hello"` 那个值槽
+/// 读 `Str`（`/tmp/b10021/mir_524.txt`），与本套 `lower_all` 逐格一致。
+/// 覆盖面分工（变异实测）：撤掉 `mir.rs:68` 那一行时，返回语句值槽在 `type_map` 里仍是 Str
+/// （第一条断言＝正证据，不红），只有签名那一格回 `Some(I64)`＝记录症状值，所以本条钉的
+/// 正是"签名不许比体低一档"这一处。限定名与裸名两份降形都查（`Greeter::greet`／`greet`）。
+/// 边界（本条不覆盖）：该批自陈的残留"FieldAccess 结果在方法 MIR 的 type_map 中标为 I64"
+/// 由旁路批次 600（`1b1946e9`）修掉，已由 10020 那条用例覆盖；签名发射到 LLVM 那一跳在
+/// `src/backend/codegen/codegen.rs:1496`，本套只走到降形。
+#[test]
+fn string_returning_method_signature_is_not_degraded_to_int() {
+    let mirs = lower_all(
+        r#"class Greeter:
+    def greet(self) -> str:
+        return "hello"
+
+g = Greeter()
+s = g.greet()
+print(s)
+"#,
+    );
+    let methods: Vec<&Mir> = mirs
+        .iter()
+        .filter(|m| m.name.as_deref().unwrap_or("").ends_with("greet"))
+        .collect();
+    assert_eq!(
+        methods.len(),
+        2,
+        "前置条件（正证据）：限定名与裸名两份降形都要在，实得 {:?}",
+        mirs.iter().map(|m| m.name.clone()).collect::<Vec<_>>()
+    );
+    for m in methods {
+        let ret_val = m
+            .stmts
+            .iter()
+            .find_map(|s| match s {
+                MirStmt::Return { val } => Some(*val),
+                _ => None,
+            })
+            .expect("方法体里要有一条 return，否则本条断言是空的");
+        assert_eq!(
+            m.type_map.get(&ret_val),
+            Some(&Type::Str),
+            "`{}` 的返回语句值槽 id={ret_val} 该是 Str（真值 `hello`；这是签名读的来源，\
+             它不该是被兜底出来的），实得 {:?}",
+            m.name.clone().unwrap_or_default(),
+            m.type_map.get(&ret_val)
+        );
+        assert_eq!(
+            m.signature_ret_ty(),
+            Some(Type::Str),
+            "`{}` 的签名返回型不许被兜底臂降成整数（改前＝`_ => I64` 把字符串指针当整数），实得 {:?}",
+            m.name.clone().unwrap_or_default(),
+            m.signature_ret_ty()
+        );
+    }
+}
+
+/// 批次 643（代码 `04d19eb4`，站点 `src/middle/ctfe/evaluator.rs:171` 的 `"//" | "floordiv"`
+/// 那一档；同笔还改了三条差分夹具的 zeta 节拼写）：常量折叠的整数求值器认得哪些算子拼写，
+/// 决定 `print(纯整数树)` 能不能在编译期塌成一个字符串常量。
+/// 症状（提交信息原文）：zeta 词法把 Python 的 `//` 当行注释（`parser.rs:23 tag("//")`），
+/// 差分夹具的操作数在 parse 阶段就被截断；方言面能表达的拼写是 indent 预处理器那条词算子
+/// `floordiv`，而 i128 求值器只认 `"//"` ⇒ 折叠落空（该批实拍 v0＝被除数本身 27951846246271，
+/// 不等于商 0）。修法＝加别名档 `"//" | "floordiv"`，语义按 Python 向下取整
+/// （余数非零且两操作数异号时再减一，现 :175-186）。
+/// 期望值来源：同样两道被除式在 CPython 下的真值 `3`／`-167045979064`（`python3` 现跑，
+/// zeta 编译后运行 `cmp -s` 逐字相同；读数 `/tmp/b10021/pyout_643.txt`＋`run_643.txt`）＋
+/// `--dump-mir` 里两处实参读 `StringLit("3")`／`StringLit("-167045979064")`
+/// （`/tmp/b10021/mir_643b.txt`，与本套 `lower_all` 逐格一致）。
+/// 覆盖面分工（变异实测）：撤掉 `"floordiv"` 别名后实参不再是折叠出的字符串常量、运行期
+/// `floordiv` 调用回来 ⇒ 本头两条断言同时红，红值＝记录症状。
+/// 边界（本条不覆盖）：除零那一支（`r == 0` 返回 `None`）是 643 之前就有的守卫，该批自陈余下
+/// 2 条差分失败＝#117 union＋除零异常（在册）；`/`（truediv）自批次 642 起故意让 i128 求值器
+/// 弃权（`evaluator.rs:187-189` 注释在册），本条不查。
+#[test]
+fn floordiv_word_operator_folds_at_compile_time() {
+    let mirs = lower_all(
+        r#"print(17 floordiv 5)
+print(-1169321853448 floordiv 7)
+"#,
+    );
+    let f = mir(&mirs, "main");
+    let folded: Vec<&str> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::VoidCall { func, args } if func == "println_str" => args.first(),
+            _ => None,
+        })
+        .filter_map(|id| match f.exprs.get(id) {
+            Some(MirExpr::StringLit(s)) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        folded,
+        vec!["3", "-167045979064"],
+        "两处 `print` 的实参该在编译期塌成 CPython 真值那个十进制串（折叠落空＝实参不是字符串常量），实得 {folded:?}"
+    );
+    let calls = call_symbols(f);
+    assert!(
+        !calls.iter().any(|c| c == "floordiv"),
+        "折叠成功后不该再有运行期 `floordiv` 调用（改前＝这一档不被识别、商留到运行期算），实得调用: {calls:?}"
+    );
+}
+
+/// 批次 414（代码 `70b46b22`，站点 `src/frontend/parser/stmt.rs` 的 with 降形：
+/// 共用骨架 `zeta_try_frame`（现 :1373）、handler 分支体现 :1729-1751）：
+/// `with` 体抛异常时收尾的 `__exit__` 必须照跑，否则锁被永久扣住。
+/// 症状（提交信息原文）：异常 longjmp 出 with 体，跳过块边界的收尾 exit ⇒ 互斥量一直被
+/// 持有 ⇒ 下一次 acquire 永久阻塞（语料探针 `fetch_stocks` rc=124，栈停在
+/// `py_threading_lock_acquire`；同一驱动 CPython 1.1 秒跑完）。在册夹具
+/// `tests/python_style/t452_with_exception_releases_lock.z` 改前实拍 rc=124 零输出。
+/// 修法＝把 with 体下进 try 帧，**两条分支都跑 exit**，handler 分支跑完再 `zeta_raise`
+/// 原码（传播语义不变）；`return`／`break`／`continue` 三条边不经 try 帧，仍由
+/// terminator 改写各自补一次 `zeta_try_end`，所以每条出口只释放一次。
+/// 期望值来源：缺陷记录里那两处符号名（`py_threading_lock_release`／`zeta_raise`）
+/// ＋ `--dump-mir` 形状实拍（`/tmp/b10021/mir_414.txt`：handler 分支序＝
+/// `zeta_last_error` → `zeta_try_end` → `py_threading_lock_release` → `zeta_raise`；
+/// 与本套 `lower_all` 的读数是同一条链，运行期真值仍由在册夹具的 `t452 [1, 4, 5]` 承担）。
+/// 释放排在重抛**之前**是这条边的硬要求：排在之后＝那一支永远执行不到，等于没修。
+/// 覆盖面分工（变异实测）：从 handler 分支删掉那次 exit 发射 ⇒ 本条的异常出口断言红，
+/// 红值＝记录症状（这一支没有释放调用）。
+/// 边界（本条不覆盖）：`return`／`break` 两条边的 terminator 改写、以及同批记录里
+/// "留下的僵尸帧被下一次 raise 落点吃到"那一类（`load_metadata` SEGV）都要运行期才观测
+/// 得到；本条只锁 with 异常出口这一条边的降形形状。
+#[test]
+fn with_body_exception_path_releases_lock_in_both_try_branches() {
+    // 释放与重抛的**顺序**在本条里是断言对象，所以分支要按原序取符号名。
+    fn funcs_in_order(stmts: &[MirStmt], out: &mut Vec<String>) {
+        for s in stmts {
+            match s {
+                MirStmt::Call { func, .. } | MirStmt::VoidCall { func, .. } => {
+                    out.push(func.clone())
+                }
+                MirStmt::If { then, else_, .. } => {
+                    funcs_in_order(then, out);
+                    funcs_in_order(else_, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mirs = lower_all(
+        r#"import threading
+
+L = threading.Lock()
+
+def raise_out():
+    with L:
+        raise ValueError("boom")
+"#,
+    );
+    let f = mir(&mirs, "raise_out");
+
+    let frame = f
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::If { then, else_, .. } => Some((then.clone(), else_.clone())),
+            _ => None,
+        })
+        .expect("`with` 体该降出一个 try 帧（`zeta_try_setjmp` 的形状就是这条 If）");
+    let mut flat = Vec::new();
+    funcs_in_order(&f.stmts, &mut flat);
+    assert!(
+        flat.iter().any(|c| c == "zeta_try_enter") && flat.iter().any(|c| c == "zeta_try_setjmp"),
+        "前置条件（正证据）：try 帧的两条建立调用都要在，否则本条断言打在别的分支上，实得调用: {flat:?}"
+    );
+
+    let mut then_funcs = Vec::new();
+    funcs_in_order(&frame.0, &mut then_funcs);
+    let mut else_funcs = Vec::new();
+    funcs_in_order(&frame.1, &mut else_funcs);
+
+    assert_eq!(
+        then_funcs
+            .iter()
+            .filter(|c| *c == "py_threading_lock_release")
+            .count(),
+        1,
+        "`with` 体的正常出口该恰好释放一次（同批纪律：每条出口不得双释放），实得分支调用: {then_funcs:?}"
+    );
+    assert_eq!(
+        else_funcs
+            .iter()
+            .filter(|c| *c == "py_threading_lock_release")
+            .count(),
+        1,
+        "异常出口（handler 分支）也该恰好释放一次（改前＝这一支没有 exit，锁被永久扣住），实得分支调用: {else_funcs:?}"
+    );
+
+    let release = else_funcs.iter().position(|c| c == "py_threading_lock_release");
+    let reraise = else_funcs.iter().position(|c| c == "zeta_raise");
+    assert!(
+        matches!((release, reraise), (Some(r), Some(p)) if r < p),
+        "handler 分支要按「先释放、再重抛」排（释放在重抛之后＝那一支跑不到，等于没修；\
+         没有重抛＝传播被吞掉，在册夹具注释里的「`R` 里有 4 才算传到外层 except」那一格），实得分支调用: {else_funcs:?}"
+    );
+}
