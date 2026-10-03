@@ -8057,6 +8057,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         Some(Type::Str) => "zeta_float_str",
                         _ => "zeta_float_i64",
                     };
+                    eprintln!("[DBG-C] float arg slot={} type={:?}", a, self.type_map.get(&a));
                     let nid = self.emit_call(route, vec![a], Type::F64);
                     return nid;
                 }
