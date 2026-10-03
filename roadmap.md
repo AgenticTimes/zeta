@@ -26740,3 +26740,8 @@ match 探针 five ✓；全库 157/157。gen.rs 15777→15177。
 
 零替换法：Tuple(43行)/StructLit(53行)/ArrayLit(209行) 三臂逐字迁入。
 行为探针四项对齐 CPython；全库 157/157。gen.rs 15002→14710。
+
+## 批次 853（本批）：call_unary.rs Type import 修正——gen.rs 回绿
+
+batch 852 遗留的 call_unary.rs Type import 路径错误（mir::mir private）
+修正为 types 模块。全库内置测试 157/157 回绿。gen.rs 15002 行。
