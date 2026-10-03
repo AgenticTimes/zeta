@@ -26777,3 +26777,9 @@ If 三元探针 big/3 全对齐 CPython；全库 157/157。gen.rs 14710→14491�
 BinaryOp 迁移尝试（零替换法）导致 38+ 级联编译错（类型耦合），退回
 gen.rs 原位。gen.rs 19392→15776（净-3616），其余 12 家族文件成果保留。
 BinaryOp 迁移留 fresh session 用 proper tooling 重新做。
+
+## 批次 856 续（本批）：to_i64_safe 助手＋call_ctor 括号＋lib.rs 清理
+
+to_i64_safe 助手（FloatValue bitcast 不 panic）加 codegen.rs——120 处
+into_int_value 的动态类型路径可增量替换。call_ctor 括号＋lib.rs 清理。
+全库 157/157；构建零错误。
