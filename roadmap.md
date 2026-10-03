@@ -26715,3 +26715,109 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   记录笔只暂存 roadmap＋backlog 两本台账，**连续二十批**）；待补行文本写进本批记录笔的提交信息。
 - 更正：批次 10020 的记录笔 `0b545f9b` 的提交信息写"roadmap +125 行"，`git show --stat` 实为 **126 行**
   （数字取自最后一次 roadmap 编辑之前）。历史提交信息不回改，更正记在这里。
+
+## 批次 10022（续 #20005：历史缺陷的编译期单元测试，第十二批）
+
+**任务与口径**：主线任务 `#20005`（把已修好的历史缺陷转成进程内单元测试，替掉"每次都跑全量"）。
+本批三条，来源批次 **460／371／367**；代码笔 `c260e003`（`tests/regression_history.rs` ＋247 行、−1 行，
+**零 `src/` 改动**），全套现在 **39 条／0.05 秒**。窗口＝10022 % 10 ＝ **2**。
+
+### 候选怎么筛出来的（沿用 10021 那张表，本批没重跑）
+
+上批 `index2.py` 的 CAND 18 行（`/tmp/b10021/index2.log`）去掉两批用掉的六格
+（643／524／414 与本批 460／371／367）还剩 12 行。本批取的三格与排除项：
+
+| 候选 | 站点 | 取／不取 |
+|---|---|---|
+| 460 `060b0ea3` | `frontend/parser/pattern.rs:42`（`parse_reference_pattern` 那条臂） | 取：解析面补臂，症状＝整个 `fn` 被丢＝Mir 顶层项少一个 |
+| 371 `0fff1809` | `frontend/parser/pattern.rs:79-87`（alt 之后的 or 链收集） | 取：or 臂头折成 `AstNode::OrPattern`，降形里看得见 `"\|\|"` |
+| 367 `62f65255` | `frontend/indent.rs:493-496`（注解冒号守卫） | 取：预处理改写发生在 `parse_zeta` 内部（`top_level.rs:1944` 调 `indent_preprocess`），harness 走得到 |
+| 546 `4943f818` | `middle/pylib.rs`＋`pylib/registry.txt` | **不取**：该笔自陈读数＝"语料 data_cleaning.py 的 MIR 两侧逐字节相同（25,597 行），差异只有 `@clip → @clip_2` 两处调用点"⇒ 结论落在后端 IR，不落在 `Mir`，本套不收 |
+| 448 | `src/error_codes.rs` | **不取**：站点正是车道在制面（批次 745 那三个文件之一），按 10014 的约束避开 |
+| 424／350／349／348 | `main.rs` | **不取**：发生在 harness 不跑的那几趟（单态化／`refine_param_types`／CLI） |
+| 464 | `runtime/std.rs` | **不取**：运行期竞态 |
+
+余下 383／370／362／361／334 五格留在表里待下批。
+
+### 三格（车道归属按 10019 立的三查：车道列＋`git log --grep`＋`git show`）
+
+| 来源批次 | 代码 | 站点（现行号） | 症状（记录原文口径） | 本条锁的编译期结论 |
+|---|---|---|---|---|
+| cleanup 460（旁路，backlog #79 第 2 条钉住项） | `060b0ea3` | `src/frontend/parser/pattern.rs:42`＋`parse_ref_pattern`（现 :114） | 模式位置的 `&value` 不被识别 → `parse_match_arm` 失败 → **整个 `fn` 连同其后文件被丢**（W1002），`zeta_src/runtime/array.z` 的 `array_get` 即此 | `pick`／`pick_mut`／`after_ref_pattern` 三个顶层项都在，且 `option_get_data` 的目的槽被赋进返回槽（`&` 是按槽位模型剥掉、绑内层载荷） |
+| 主线 371 | `0fff1809` | `src/frontend/parser/pattern.rs:79-87`（`many0` 收 `\| 后续模式` → `AstNode::OrPattern`） | `A \| B` 这类臂头过去**只有左边被消费**（`parse_struct_pattern` 对裸路径必定成功），`advanced_patterns_test` 丢 62 行 | 两条 or 臂各折成**一次** `"\|\|"` 调用、每个恰好两个 `Bool` 实参；臂后面的顶层项还在 |
+| 主线 367（第一部分） | `62f65255` | `src/frontend/indent.rs:493-496`（`find_inline_colon` 里"冒号之后已有本语句自己的 `{`"守卫） | `for i: usize in 0..10 {` 的类型注解冒号被当成 Python 单行块，改写成语法错误的 `for i { usize in 0..10 { }`，`primezeta_usize_test` **丢 36 行** | `calc` 真降出一条 `For`（循环变量名 `i`、`Range` 端点 0/5、体非空），且后面的 `after_typed_for` 还在 |
+
+### 验证
+
+1. **三侧真值**（写断言前取的，10018 立的规矩）：
+   - 460：运行期真值由在册夹具 `tests/python_style/t501_ref_pattern_match.z` 的
+     `// expect: 42 / 0 / 5` 承担，本批用当前二进制实拍 `42`、`0`、`5`
+     （`/tmp/b10022/run_t501_ref_pattern_match.txt`）；形状侧 `--dump-mir`
+     （`/tmp/b10022/mir_f460.txt`：`option_is_some` → `option_get_data` → `Assign{lhs: 2, rhs: 10}`，
+     返回槽＝2）。**CPython 侧不适用**：`fn`／`match`／`Option` 是 zeta 的 Rust 方言拼法，
+     没有等价 Python 写法，这一格的真值来源＝在册夹具期望＋缺陷记录原文。
+   - 371：形状侧 `/tmp/b10022/mir_f371.txt`（`Call{func:"||", args:[7,9], dest:11}` 与
+     `Call{func:"||", args:[14,16], dest:18}`，`type_map` 里 7/9/14/16 都是 `Bool`）；
+     运行期真值由 official 的 advanced_patterns 夹具承担（371 那笔的记录读数就是它 62 行清零）。
+     CPython 同样不适用。
+   - 367：在册夹具 `t413_for_typed_var_colon.z` 的 `// expect: 10 / done`＋本批实拍
+     `10`、`done`（`/tmp/b10022/run_t413_for_typed_var_colon.txt`）；形状侧
+     `/tmp/b10022/mir_f367.txt`（`For{iterator:7, pattern:"i"}`、`7: Range{start:3,end:4}`、
+     `3: IntLit(0)`、`4: IntLit(5)`）。
+2. **变异核验**（每次只撤一条臂，跑全套；日志＝`/tmp/b10022/M1.log`／`M2.log`／`M3.log`，
+   进度＝`mutation_progress.log`，脚本＝`mutate.sh`＋`m1.py`／`m2.py`／`m3.py`）：
+
+   | 撤掉的臂 | 红了哪条 | 红点与红值 |
+   |---|---|---|
+   | M1 撤 `parse_reference_pattern` 那条臂 | 只有 460 那条 | `tests/regression_history.rs:48`"解析没有吃满输入"，剩余串＝整个 `pick`/`pick_mut`/`after_ref_pattern` 三个 `fn` 原文 |
+   | M2 撤 or 链收集（`let pattern = pattern;`） | 只有 371 那条 | 同一前置断言 :48，剩余串从 `Some(1) | Some(2) => 10,` 起 |
+   | M3 撤注解冒号守卫 | 只有 367 那条 | 同一前置断言 :48，剩余串里**实拍到改写后那一行** `for i { usize in 0..5 { }`（与 367 记录原文同形） |
+
+   三笔各只红对应那一条、复原后 39/39 绿（`git diff` 对两份站点文件为空、md5 与改前逐字相同）。
+   **红点三条都落在 harness 自己的前置断言上**——见下面"本批的做法级发现"①。
+3. **每批必跑的检查**（`bash tools/sample_gate.sh 10022`，窗口 2；明细目录
+   `/tmp/zeta_gate_10022.3w7V8u`，日志 `/tmp/b10022/gate.log`）：**rc=0**
+   —— ①差分 **272/272** 一致 ②python_style **40/40** PASS ③official **13/13** 编译通过 ④语料 **38/40**。
+   被测件 md5 `ed5227ccd29b70c4ee9ae17500926f10`（＝10012 起那颗；本批零 `src/` 改动），
+   运行期 `.o` md5 `878479bebf8d79a8539ee9a680fb463b`（与 10021 逐字相同）。
+
+   ④ 少的两枚＝`jq_wufu.py`／`jq_wufu_daily.py`（`corpus.log`），与上批同一对、同一颗二进制：
+   已定性为**后端** `codegen.rs:4189` 的 `into_int_value()` 硬转崩（归因与工具口径见批次 10021 的
+   ④ 段与 `#20003`），不是解析退化；**换到窗口 2 仍是 38/40**⇒那一层差与抽样窗口无关，
+   仍未归因（本批不再重复取证）。
+
+### 本批的做法级发现
+
+1. **"解析丢项"这一族：撤臂后的红点不在定向断言上，而在 harness 的前置断言（:48）上**。
+   三条用例的形状断言（返回槽绑定、`"\|\|"` 计数、`For` 形状）在红色跑里一次都没执行到——
+   因为改前整个顶层项已经没了。⇒ 形状断言只能算**防另一类放松**（例如"解析成功但把引用本身当值绑上"），
+   不许写成"已证形状断言有效"；这与 10020 对 399 那条 `scale` 断言的口径同一类。
+   反向的好消息是：这一族的**症状证据直接写在 remaining 串里**（M3 实拍到被改写成
+   `for i { usize in 0..5 { }` 的那一行），不必另开 `ZETA_DUMP_PP` 复现。
+2. **同一函数里的两条臂是两条独立覆盖**——460 与 371 的站点都在 `parse_pattern` 内
+   （:42 的臂与 :79-87 的收集），M1 不红 371 的用例、M2 不红 460 的用例（各自日志只 1 个 FAILED）
+   ⇒ 与 10019 那条"两支红在同一断言同一读数＝一条链"相反，这一对是真两条。
+3. **排除项也要留证**：546 那笔的站点在 `pylib.rs`（文件面看着"可进"），但它自己记录的读数是
+   MIR 逐字节相同、差异只在 IR ⇒ 决定"能不能进本套"的是**结论落在哪一层**，不是站点文件在哪。
+
+### 边界（本批三条不覆盖的）
+
+- 460：只锁 `&value`／`&mut value` 两种拼法，`&&p` 递归引用、引用模式出现在 tuple／struct 臂头
+  都没锁；运行期 42/0/5 由在册夹具承担。
+- 371：只锁"每条 or 臂折成一次 `||`"与"臂后面的顶层项还在"；`"x" | "y"` 字符串臂头、
+  裸名 `A | B`（走 :58 的 `parse_or_pattern` 那一臂）没锁；三个以上 alternative 折成几次 `||` 本批未测。
+- 367：只锁"注解冒号不改写"这一条边；循环体真跑那半属批次 368（站点在 `gen.rs`，本套按 10014 避开），
+  其它 header 关键字（`if`／`while`）带注解冒号的形状没锁。
+- 并树这件事仍未做。本批代码笔 `c260e003` 落地后实测 `bootstrap..cleanup` 滞留 **47 条**、
+  `cleanup..bootstrap` **230 条**（落笔时刻主树 HEAD＝`c169ba7a`＝批次 857 的记录笔）
+  ⇒ 与 10021 收尾的 46／224 同量级还在涨，主树工作区仍是别人的在制面。
+
+### 登记
+
+- `#20005` 状态保持 🟡，现 **39 条**（代码 `c260e003`）。已用到的来源批次去重清单新增
+  **460、371、367**（引用带哈希：`060b0ea3`＝cleanup 车道、`0fff1809`＝主线、`62f65255`＝主线）。
+- 更正：批次 10021 的登记行写"**524、643、414** 三笔都在 cleanup 车道"，实拍 414 那笔
+  （`70b46b22`）是**主线**批（`roadmap.md:17638`），而 524（`adef6f4c`）是旁路笔、经主线合并笔
+  `1b282239` 并入（同批正文的三格表就这么写的）⇒ 该登记行以偏概全。历史行不回改，更正记在这里。
+- `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件＋两枚未跟踪用例，
+  记录笔只暂存 roadmap＋backlog 两本台账，**连续二十一批**）；待补行文本写进本批记录笔的提交信息。
