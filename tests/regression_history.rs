@@ -3233,3 +3233,101 @@ print(bonus())
         f.type_map.get(&d)
     );
 }
+
+/// 批次 10024 新开的未修项 ②（`roadmap.md` 的 10024 段「新开两条未修」第二格；
+/// 站点＝`src/middle/mir/gen.rs` 里 `global_consts.get(name)` 那个 `match` 的 `_ =>` 兜底臂，
+/// 本树 HEAD `7b80115a` 上是 :4935-4939，插入 `MirExpr::Var(id)` ＋ `Type::I64`；
+/// `ConstValue::Bool` 在这个 `match` 里**没有自己的臂**）／#20005 余项。
+///
+/// 症状（10024 记录原文）：`const X: bool = …` 的读取槽按 I64 ⇒ `print(X)` 打 `1` 而不是 `False`。
+/// 折叠层已经给出正确答案（批次 327 `e4e5591e` 的比较臂把结果存成 `ConstValue::Bool`），
+/// 丢型发生在**读取**那一层：`MirExpr::Var(id)` ＋ `Type::I64` ⇒ 打印分发选中 `println_i64`。
+///
+/// 本条是**现状锁**（缺陷未修，锁住当前读数并写明它错在哪），不是正确性锁：
+/// 期望值来源三份真值同批实拍（产物在 `/tmp/b10025/`）。
+/// ① CPython `T = 3 != 4; F = 3 == 4; print(T); print(F)` ⇒ `True` / `False`
+///    （`/tmp/b10025/cpython_truth.txt`）。
+/// ② 运行期＝同一份源 `zetac /tmp/b10025/c1.z` 直接执行打 `1` / `0`，并带一条
+///    `error[W0003]: Typecheck failed (non-fatal)` 提示（rc=0，非致命）⇒ 与 ① 逐字不同＝症状实拍。
+/// ③ 编译期形状＝`--dump-mir`：`global_consts` 是 `T: Bool(true)` / `F: Bool(false)`，
+///    而两个打印槽是 `Var(2)`/`Var(6)` ＋ `type_map: 2: I64, 6: I64` ＋
+///    两次 `VoidCall { func: "println_i64" }`。
+///    取段按 `== MIR <名> ==` 切到下一个 `== MIR ` 为止（10024 记的坑：整段尾巴会串到被调方）。
+///
+/// 覆盖面分工（变异实测，日志 `/tmp/b10025/m1_suite.log`／`m2_suite.log`）：
+/// M1＝把这条兜底臂插入的槽型从 `Type::I64` 换成 `Type::Str` ⇒ 全套 46 条**只有本条红**，
+/// 翻红的是「打印槽清单」那一条前置断言（实得 `[]`＝`println_i64` 不再被发出）。这一笔的
+/// 作用是**站点归因**：夹具的读取确实打在这条 `_ =>` 臂上，而不是 `global_consts` 没命中时
+/// 的「普通变量」那一支——两支插入的形状逐字相同（`Var(id)` ＋ `Type::I64`），只看改前读数分不开。
+/// M2＝修复方向实拍：在同一个 `match` 里补一条 `ConstValue::Bool(b)` 臂
+/// （`IntLit(if *b {1} else {0})` ＋ `Type::Bool` ＋ `return id`）⇒ 同样只有本条红，
+/// 而 `--dump-mir` 的读取变成 `type_map: 2: Bool` ＋ `VoidCall { func: "print_bool" }`
+/// （`/tmp/b10025/c1.m2.mir.txt`）。运行期那半（`print_bool` 是否真打 `True`／`False`）
+/// 本批**未取**——要重编 release 二进制后执行才知道。
+///
+/// 边界（本条不覆盖）：① 夹具只走具名 `const` 的读取两形，`print(3 != 4)` 那种直接形不在本条；
+/// ② `ConstValue` 共七个变体（`Int`／`UInt`／`Bool`／`Array`／`IntArray`／`Unit`／`String`，
+/// `src/middle/ctfe/value.rs:7-22`），这个 `match` 只写了 `Int`／`String`／`Array` 三臂
+/// （静态读臂所得，未逐一支变异）⇒ `UInt`／`IntArray`／`Unit` 与 `Bool` 同样落到这条兜底，
+/// 本条只钉住 `Bool` 一支的现状，其余三支的读取型未锁。
+#[test]
+fn bool_const_reads_as_int64_at_the_use_site_current_state() {
+    let mirs = lower_all(
+        r#"const T: bool = 3 != 4
+const F: bool = 3 == 4
+print(T)
+print(F)
+"#,
+    );
+
+    let f = mir(&mirs, "main");
+
+    // 正证据（已修的那半）：折叠层给的是 Bool，不是 1/0。
+    for (name, want) in [("T", true), ("F", false)] {
+        assert_eq!(
+            f.global_consts.get(name),
+            Some(&ConstValue::Bool(want)),
+            "`{name}` 该以 `ConstValue::Bool({want})` 存进 global_consts（327 的产物），实得 {:?}",
+            f.global_consts.get(name)
+        );
+    }
+
+    // 现状锁（未修的那半）：每一次 `print(布尔常量)` 都按整数下发。
+    let slots: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::VoidCall { func, args } if func == "println_i64" => {
+                args.first().copied()
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        slots,
+        vec![2, 6],
+        "前置条件：两个打印各一次 `println_i64`（真值应为 `True`／`False`，现在按整数下发），\
+         实得槽 {slots:?}",
+    );
+    for slot in slots {
+        assert!(
+            matches!(f.exprs.get(&slot), Some(MirExpr::Var(i)) if *i == slot),
+            "读取槽 {slot} 该是 `Var({slot})`（布尔常量没被折成字面量，走的是 `_ =>` 兜底那一支），实得 {:?}",
+            f.exprs.get(&slot)
+        );
+        assert_eq!(
+            f.type_map.get(&slot),
+            Some(&Type::I64),
+            "现状锁：读取槽 {slot} 现在标 I64 ⇒ 打印分发拿到整数 ⇒ 打 `1`/`0`。\
+             这一格是要被改掉的那格（改成 Bool 才会走 `print_bool`），改动它时本断言必须显式翻红。实得 {:?}",
+            f.type_map.get(&slot)
+        );
+    }
+
+    let calls = call_symbols(f);
+    assert!(
+        !calls.iter().any(|c| c == "print_bool"),
+        "`print(T)`／`print(F)` 现在**不**走布尔打印器（＝缺陷所在）；如果这条红了，\
+         说明读取型已被修好，请把本用例的正确性期望改成 True/False 那一侧。实得调用: {calls:?}",
+    );
+}
