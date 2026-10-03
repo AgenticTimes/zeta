@@ -3330,9 +3330,12 @@ static int64_t env_map(void) {
 }
 int64_t zeta_env_map_for_probe(void) { return env_map(); }
 int64_t zeta_env_get(int64_t name_handle) {
-    return map_get(env_map(), map_str_key(name_handle));
+    int64_t r = map_get(env_map(), map_str_key(name_handle));
+    if (getenv("ZT_DEBUG_ENV")) fprintf(stderr, "[ENV] get \"%s\" -> %lld\n", (char*)name_handle, (long long)r);
+    return r;
 }
 void zeta_env_set(int64_t name_handle, int64_t v) {
+    if (getenv("ZT_DEBUG_ENV")) fprintf(stderr, "[ENV] set \"%s\" = %lld\n", (char*)name_handle, (long long)v);
     map_insert(env_map(), map_str_key(name_handle), v);
 }
 

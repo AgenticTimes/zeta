@@ -358,16 +358,27 @@ impl ConstEvaluator {
                     if let Some((v, _)) = self.eval_i128_tree(rhs, 0) {
                         self.i128_consts.insert(x.clone(), v);
                     } else {
-                        // Not statically known — a later read must abstain.
-                        self.i128_consts.remove(x);
+                        // 批次 880（#275）：rhs 不可静态求值（典型＝`r = f()`，
+                        // f 声明 `global g` 后改写模块全局）——除删 x 外必须
+                        // 整表清空：表里其他名（g）的"编译期值"可能已被该
+                        // 调用在运行期改掉，留着会让后续读（h = g、print(g)）
+                        // 折叠成改前旧值（`g=1; def bump(): global g; g+=1` 实
+                        // 拍 print(g) 打 1）。与上方 ExprStmt-call 的整表清空
+                        // 同一口径（t36_global/t518 先例）。
+                        self.i128_consts.clear();
                     }
                 }
                 AstNode::Tuple(items) => {
-                    // `a, b = b, a` — the swap's rhs is valid but the
-                    // conservative kill keeps later reads on the runtime.
-                    for it in items {
-                        if let AstNode::Var(v) = it {
-                            self.i128_consts.remove(v);
+                    // `a, b = f()` 的 rhs 可能经调用改写任意全局——整表清空；
+                    // `a, b = b, a` 的 swap 在 rhs 可求值时不进本支。
+                    // （原仅删 LHS 名，与上支同一静默错值面。）
+                    if self.eval_i128_tree(rhs, 0).is_none() {
+                        self.i128_consts.clear();
+                    } else {
+                        for it in items {
+                            if let AstNode::Var(v) = it {
+                                self.i128_consts.remove(v);
+                            }
                         }
                     }
                 }
