@@ -99,6 +99,26 @@ fn scan_stmts(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
             AstNode::Loop { body, .. } | AstNode::Unsafe { body } => {
                 scan_stmts(env, body, ctx);
             }
+            // for 循环：迭代变量从序列元素型推断＋体递归（批 919）
+            AstNode::For {
+                pattern,
+                expr,
+                body,
+                else_body,
+            } => {
+                if let AstNode::Var(name) = pattern.as_ref() {
+                    if let Some(lat) = for_elem_lat(expr, env) {
+                        env.meet_slot(name, lat);
+                    }
+                }
+                scan_stmts(env, body, ctx);
+                scan_stmts(env, else_body, ctx);
+            }
+            // while 循环：体递归（批 919；此前循环体整体漏扫）
+            AstNode::While { body, else_body, .. } => {
+                scan_stmts(env, body, ctx);
+                scan_stmts(env, else_body, ctx);
+            }
             AstNode::FuncDef { body, .. } => {
                 scan_stmts(env, body, ctx);
             }
@@ -117,6 +137,41 @@ fn scan_stmts(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
 
 fn scan_expr(_env: &mut TypeEnv, _expr: &AstNode, _ctx: &InferCtx) {
     // P2 后续扩展点：表达式内嵌套约束（当前不需要）
+}
+
+/// for 迭代序列的元素型（批 919；保守：只做有把握的形态，set 无元素型信息不推断）。
+fn for_elem_lat(expr: &AstNode, env: &TypeEnv) -> Option<LatticeTy> {
+    match expr {
+        // range 家族 ⇒ I64（`a..b`、Range 节点、range() 调用）
+        AstNode::BinaryOp { op, .. } if op == ".." => {
+            return Some(LatticeTy::known(Type::I64));
+        }
+        AstNode::Range { .. } => return Some(LatticeTy::known(Type::I64)),
+        AstNode::Call {
+            receiver: None,
+            method,
+            ..
+        } if method == "range" => return Some(LatticeTy::known(Type::I64)),
+        _ => {}
+    }
+    if let AstNode::Var(src) = expr {
+        return match env.get_slot(src) {
+            LatticeTy::Known(Type::DynamicArray(e))
+            | LatticeTy::Known(Type::Slice(e))
+            | LatticeTy::Known(Type::Array(e, _)) => Some(LatticeTy::known((*e).clone())),
+            // map 迭代产出键（对齐 gen/call_flow.rs map_keys 语义：Str 键映射保 Str，其余 I64）
+            LatticeTy::Known(Type::Named(n, targs)) if n == "map" => {
+                let key = if matches!(targs.first(), Some(Type::Str)) {
+                    Type::Str
+                } else {
+                    Type::I64
+                };
+                Some(LatticeTy::known(key))
+            }
+            _ => None,
+        };
+    }
+    None
 }
 
 /// 赋值传播：确定 rhs 的型并 meet 到 lhs 名。
@@ -322,5 +377,130 @@ mod tests {
             &ctx,
         );
         assert_eq!(env.get_slot("y"), LatticeTy::known(Type::F64));
+    }
+
+    fn call(method: &str, args: Vec<AstNode>) -> AstNode {
+        AstNode::Call {
+            receiver: None,
+            method: method.to_string(),
+            args,
+            type_args: vec![],
+            structural: false,
+        }
+    }
+
+    /// for 循环：迭代变量从数组元素型推断（批 919）。
+    #[test]
+    fn for_iter_var_types_from_list() {
+        let mut env = TypeEnv::new();
+        env.meet_slot(
+            "arr",
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::F64))),
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[AstNode::For {
+                pattern: Box::new(var("x")),
+                expr: Box::new(var("arr")),
+                body: vec![],
+                else_body: vec![],
+            }],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("x"), LatticeTy::known(Type::F64));
+    }
+
+    /// for over range ⇒ 迭代变量 I64（批 919）。
+    #[test]
+    fn for_over_range_types_i64() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[AstNode::For {
+                pattern: Box::new(var("i")),
+                expr: Box::new(call("range", vec![AstNode::Lit(10)])),
+                body: vec![],
+                else_body: vec![],
+            }],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("i"), LatticeTy::known(Type::I64));
+    }
+
+    /// map 迭代产出键：Str 键映射保持 Str，其余 I64（对齐 map_keys 语义，批 919）。
+    #[test]
+    fn for_over_map_types_key() {
+        let mut env = TypeEnv::new();
+        env.meet_slot(
+            "d",
+            LatticeTy::known(Type::Named("map".to_string(), vec![Type::Str, Type::I64])),
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[AstNode::For {
+                pattern: Box::new(var("k")),
+                expr: Box::new(var("d")),
+                body: vec![],
+                else_body: vec![],
+            }],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("k"), LatticeTy::known(Type::Str));
+    }
+
+    /// 循环体内的赋值也被扫描（批 919：For/While 体递归）。
+    #[test]
+    fn loop_body_assigns_scanned() {
+        let mut env = TypeEnv::new();
+        env.meet_slot(
+            "arr",
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::Str))),
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[
+                AstNode::For {
+                    pattern: Box::new(var("s")),
+                    expr: Box::new(var("arr")),
+                    body: vec![assign("n", AstNode::Lit(42))],
+                    else_body: vec![],
+                },
+                AstNode::While {
+                    cond: Box::new(AstNode::Lit(1)),
+                    body: vec![assign(
+                        "m",
+                        AstNode::FloatLit("2.5".to_string()),
+                    )],
+                    else_body: vec![],
+                },
+            ],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("n"), LatticeTy::known(Type::I64));
+        assert_eq!(env.get_slot("m"), LatticeTy::known(Type::F64));
     }
 }
