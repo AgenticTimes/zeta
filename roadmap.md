@@ -29481,3 +29481,34 @@ index-count-in/remove。
 checker 推断形态累计 **19 类**；库测试 182→216；每批渗透面全量差分
 2845/2845、python_style 479/0（零位移——checker_env 消费点仍只有 mean 臂，
 P4 回灌替换是下一个消费面扩张点）。
+
+## 批次 933–940（2026-10-05）：类型推断收官——容器字面量＋跨函数传播三形态＋端到端打通
+
+- **批 933（`46413289`）DictLit**：⇒ Named(map,[键型,值型])，键 Str 保 Str
+  否则 I64；值同型⇒该型、混型⇒PyDynamic、空⇒map[I64,I64]（对齐
+  gen/call_dict.rs）。
+- **批 934（`54e7504b`）跨函数·字面量实参→形参**：collect_param_evidence
+  模块级预扫描；多调用点冲突永久放弃（冲突位独立记账——首版把置 None
+  的位被后续一致调用重新填充，测试抓出）。
+- **批 935（`0322556f`）fn_rets 消费闭环**：collect_module_body_rets 收集
+  全模块函数返回型，resolver 并进 checker 查表（注解优先）——fn_rets
+  从 per-function 孤岛变成消费面；ret_expr_ty 补列表字面量 Return。
+- **批 936（`740beddb`）二跳**：实参为调用表达式 ⇒ body_rets 查被调函数
+  返回型。
+- **批 937（`9d043414`）三跳**：实参为变量 ⇒ 查调用函数推断后的槽型
+  （resolver 三轮编排：证据→body_rets→env 缓存→三跳证据）。
+- **批 938（`7d62b041`）计划缓存**：三轮模块扫描原在 with_checker_env
+  闭包（lower_to_mir 每函数 651 次调用）＝O(N²) 结构风险 ⇒
+  ModuleCheckerPlan 入口惰性构建一次；perf 追测入册（当前语料无可见
+  劣化，消除的是结构风险）。
+- **批 939/940（`34509fb5`）端到端打通**（探针逐层破案，三层缺陷）：
+  ① 顶层调用点不在任何函数体 ⇒ resolver 存 top_level_stmts 并入证据；
+  ② 顶层语句包装进 main 体后是裸 Call（无 ExprStmt 包裹）⇒
+  collect_calls 补臂；③ 参数注解 "dyn"（细化阶段动态标记，
+  from_string⇒PyDynamic）把证据挡了 ⇒ prime_param_slots 让位规则。
+  实拍：show(get_data()) 的 data.mean() 从 zeta_mean_to_string 变
+  zeta_mean_vec 折叠。
+
+**类型推断覆盖现状**：函数内 20 类形态＋跨函数传播三形态＋fn_rets
+闭环；库测试 216→222。未做（登记）：控制流窄化（isinstance 分支内）、
+全局变量槽推断、P4 回灌替换消费面扩张。
