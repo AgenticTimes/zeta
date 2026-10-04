@@ -5,11 +5,16 @@
 # 产出：
 #   <dir>/verdict   — 判定输出（可多行；由 run.sh 按用例名排序后原样打印）
 #   <dir>/<name>.cc — 编译 stderr 原样（供 run.sh 的 compile-diagnostics 聚合）
+#   <dir>/<name>.out / <dir>/<name>.stderr — 运行期 stdout / stderr（后台跑落文件，
+#                    见下面 run_capped 的说明；不进 compile-diagnostics）
 #
 # 判定逻辑与并行化前的 run.sh 循环体逐字等价：批次 304 的按值判定，
 # expect-error / expect-abort / expect-no-compile / args / env / known-fail
 # 全部保留。run.sh 只负责派发、排序聚合与总数——一个用例一个目录，互不共享
 # 任何文件，因此并行安全。
+# 批次 10030 起的偏离：跑被测程序改成"后台起＋输出落文件＋轮询"（见 run_capped），
+# 新增判定行 STUCK（expect-abort 用例停在不可中断态、退出码取不到时）。
+# 其余判定口径不变。
 set -u
 
 f="$1"; wd="$2"
@@ -53,7 +58,7 @@ if [ "$known" != "0" ]; then
     want_abort=""
 fi
 
-verdict() { # $1 = ok|bad, $2 = detail(可空)
+verdict() { # $1 = ok|bad|stuck, $2 = detail(可空)
     if [ "$known" != "0" ]; then
         if [ "$1" = ok ]; then
             echo "XPASS      $name (known-fail 已达成预期，可摘除标记)" >> "$V"
@@ -63,9 +68,45 @@ verdict() { # $1 = ok|bad, $2 = detail(可空)
         fi
     elif [ "$1" = ok ]; then
         echo "PASS       $name" >> "$V"
+    elif [ "$1" = stuck ]; then
+        echo "STUCK      $name${2:+ ($2)}" >> "$V"
     else
         echo "FAIL       $name${2:+ ($2)}" >> "$V"
     fi
+}
+
+# 跑被测程序：后台起＋输出落文件＋轮询，不依赖"能等到退出码"。
+# 原因（#20006，2026-10-04 全量跑第②步卡 34 分钟实证）：调用 abort 的二进制在本机
+# 可能停在不可中断态（ps 状态 UE），kill -9 收不掉，timeout 发完信号也要等它收尾，
+# 于是同步等待的 worker 一起挂住，整池不再推进。这里把"等退出码"变成可选：
+# 进程真退出了才取退出码；确认它停在不可中断态、或到了上限，就不再等。
+# 写回全局：RUN_RC（取不到为 -1）、RUN_OUT、RUN_ERR、RUN_STUCK（0/1）。
+run_capped() { # $1 = 上限秒, $2 = stdout 落点, $3 = stderr 落点, 其余 = 命令
+    local cap=$1 outfile=$2 errfile=$3
+    shift 3
+    : > "$outfile"; : > "$errfile"
+    "$@" >"$outfile" 2>"$errfile" &
+    local pid=$! polls=0 max=$((cap * 5)) stat=""
+    while :; do
+        stat=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')
+        [ -z "$stat" ] && break        # 已退出（下一条 wait 能取到退出码）
+        case "$stat" in
+            *U*) break ;;             # 不可中断：收不掉，别再等
+            Z*)  break ;;             # 已退出待回收
+        esac
+        if [ "$polls" -ge "$max" ]; then
+            kill -TERM "$pid" 2>/dev/null
+            break
+        fi
+        sleep 0.2; polls=$((polls + 1))
+    done
+    RUN_OUT=$(cat "$outfile")
+    RUN_ERR=$(cat "$errfile")
+    case "$stat" in
+        *U*) RUN_STUCK=1; RUN_RC=-1 ;;
+        *)   RUN_STUCK=0
+             if wait "$pid" 2>/dev/null; then RUN_RC=0; else RUN_RC=$?; fi ;;
+    esac
 }
 
 # 负面用例：编译必须失败
@@ -92,16 +133,22 @@ fi
 
 # expect-abort：运行必须非 0 且 stderr 含期望子串
 if [ -n "$want_abort" ]; then
-    set +e
     if [ ${#envs[@]} -gt 0 ]; then
-        err=$(timeout 20 env "${envs[@]}" "$wd/$name" 2>&1 >/dev/null)
-        rc=$?
+        run_capped 20 "$wd/$name.out" "$wd/$name.stderr" env "${envs[@]}" "$wd/$name"
     else
-        err=$(timeout 20 "$wd/$name" 2>&1 >/dev/null)
-        rc=$?
+        run_capped 20 "$wd/$name.out" "$wd/$name.stderr" "$wd/$name"
     fi
-    set -u
-    if [ "$rc" -eq 0 ]; then
+    err="$RUN_ERR"
+    if [ "$RUN_STUCK" = 1 ]; then
+        # 停在不可中断态＝退出码取不到。stderr 命中期望串说明响亮 abort 已发生，
+        # 只是收尾收不掉（#20006）；不冒充 PASS，单独记 STUCK 交 run.sh 计数。
+        if printf '%s' "$err" | grep -qF "$want_abort"; then
+            verdict stuck "进程停在不可中断态，退出码取不到；stderr 已命中期望串（#20006）"
+        else
+            verdict bad "进程停在不可中断态且 stderr 未含: $want_abort"
+            echo "  stderr: $(printf '%s' "$err" | tr '\n' ' ' | head -c 200)" >> "$V"
+        fi
+    elif [ "$RUN_RC" -eq 0 ]; then
         verdict bad "期望 abort，却退出 0"
     elif printf '%s' "$err" | grep -qF "$want_abort"; then
         verdict ok
@@ -113,16 +160,17 @@ if [ -n "$want_abort" ]; then
 fi
 
 # ⚠️ `env "${envs[@]}"` 空数组会展开成 `env "" prog`，必须按空 分支（同 run.sh 原版）。
-# timeout 20：挂死的程序不许拖住整个套件（曾有一次 for…continue 挂了 30 分钟）。
+# 上限 20 秒：挂死的程序不许拖住整个套件（曾有一次 for…continue 挂了 30 分钟）。
 if [ ${#envs[@]} -gt 0 ] && [ ${#args[@]} -gt 0 ]; then
-    actual=$(timeout 20 env "${envs[@]}" "$wd/$name" "${args[@]}" 2>/dev/null)
+    run_capped 20 "$wd/$name.out" "$wd/$name.stderr" env "${envs[@]}" "$wd/$name" "${args[@]}"
 elif [ ${#envs[@]} -gt 0 ]; then
-    actual=$(timeout 20 env "${envs[@]}" "$wd/$name" 2>/dev/null)
+    run_capped 20 "$wd/$name.out" "$wd/$name.stderr" env "${envs[@]}" "$wd/$name"
 elif [ ${#args[@]} -gt 0 ]; then
-    actual=$(timeout 20 "$wd/$name" "${args[@]}" 2>/dev/null)
+    run_capped 20 "$wd/$name.out" "$wd/$name.stderr" "$wd/$name" "${args[@]}"
 else
-    actual=$(timeout 20 "$wd/$name" 2>/dev/null)
+    run_capped 20 "$wd/$name.out" "$wd/$name.stderr" "$wd/$name"
 fi
+actual="$RUN_OUT"
 
 expected="$(printf '%s\n' "${expects[@]:-}" | sed -e ':a' -e '/^[[:space:]]*$/{$d;N;ba' -e '}')"
 actual_n="$(printf '%s\n' "$actual" | sed -e ':a' -e '/^[[:space:]]*$/{$d;N;ba' -e '}')"

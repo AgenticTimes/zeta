@@ -53,7 +53,7 @@ done
 wait
 
 # 聚合：按用例名排序（与串行版 glob 序一致），判定行与详情行原样打印
-pass=0; fail=0; knownfail=0; xpass=0; failed_files=""
+pass=0; fail=0; knownfail=0; xpass=0; stuck=0; failed_files=""; stuck_files=""
 for f in "${CASES[@]}"; do
     name="$(basename "$f" .z)"
     v="$WORK/$name/verdict"
@@ -64,13 +64,15 @@ for f in "${CASES[@]}"; do
         PASS)       pass=$((pass + 1)) ;;
         XPASS)      xpass=$((xpass + 1)) ;;
         KNOWN-FAIL) knownfail=$((knownfail + 1)) ;;
+        STUCK)      stuck=$((stuck + 1)); stuck_files="$stuck_files $name" ;;
         *)          fail=$((fail + 1)); failed_files="$failed_files $name" ;;
     esac
 done
 
 echo "----------------------------------------"
-echo "python_style: $pass passed, $fail failed, $knownfail known-fail, $xpass xpass"
+echo "python_style: $pass passed, $fail failed, $knownfail known-fail, $xpass xpass, $stuck stuck"
 [ -n "$failed_files" ] && echo "failed:$failed_files"
+[ -n "$stuck_files" ] && echo "stuck:$stuck_files (进程停在不可中断态，退出码取不到——见 backlog #20006)"
 
 # 任务 #34 (docs/ABI.md 附 B#9)：编译期告警必须在删目录**之前**聚合。判定不受
 # 影响：比对读的是运行期 stdout，这里只是把编译期 stderr 变成可见的数字 +
