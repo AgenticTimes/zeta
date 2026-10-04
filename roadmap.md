@@ -27920,3 +27920,126 @@ AOT／CPython 一跑就推翻（`1<2<3` 若右结合该答 False，实答 True�
 不等于"第 i 格"：M4 那臂实拿到"六条 True＋五条读不到"的清单，落点全是猜的 ⇒ 逐格
 `lower_all` 才可用，这已经把第三笔改掉。③ 后台任务的日志路径要在启动前定死，
 启动后再 `sed` 改脚本对已在跑的进程无效（本批第一次矩阵就是靠 `HEAD md5=` 那行分段才没读串）。
+
+## 批次 10038（cleanup）——#20005 第二十七批：把批次 657 的方法体模块改写表做成编译期单元测试
+
+**车道分歧**：开批实测 `bootstrap..cleanup`＝32、`cleanup..bootstrap`＝336；三笔代码笔落地后
+重取＝34／336（主树本批期间未动那颗 `cleanup..bootstrap` 数），仍未并树（并树归主树侧，
+本车道只推 `agentic cleanup`）。
+
+**来源批次**：657（`d7f9a8fd`，2026-09-30，"module_renames_for 方法回退剥模块前缀"）。
+`git merge-base --is-ancestor d7f9a8fd HEAD` rc=0（已验在本树）；那笔在
+`src/middle/resolver/resolver.rs` ＋21/−2，另摘掉 `tests/python_style/t494_loc_non_vec_mask_fallback.z`
+的 known-fail 标记、补提交 `zeta_runtime_c.o`。站点＝`resolver.rs:4426-4478`
+`module_renames_for` 的方法回退臂（本批落笔后仍在同一位置）：`head` 取类名 :4438、
+`bare_head` 剥前缀的循环 :4446-4455（strip 那行 :4451）、`hits` 查所属模块 :4458-4466
+（筛选那行 :4464）、`if hits.len() == 1` 建改写表 :4468-4476（插入那行 :4473）、
+`return out;` :4477；消费点＝`:5331` `.with_symbol_renames(self.module_renames_for(…))`。
+另：`hits.len() == 1` 这一形在 `resolver.rs` 里有四处（:4146 `load_user_python_module`、
+:4468 本站点、:4922 `walk`、:5229 `lower_to_mir`），本批的臂只动 :4468 那处，其余三处与
+本缺陷的接管关系未查（见余项③）。
+
+**症状与修法（657 原意）**：方法段的 MIR 名是 `Class::method`，不是
+`py_mangled_to_module`（只收定义）的键 ⇒ 改前那臂拿 `head`（已带模块前缀的 `pandas__DataFrame`）
+直接去 `py_module_own_names`（存裸名 `DataFrame`）里查，永远查不到 ⇒ 方法体拿不到改写表 ⇒
+体里的 `DataFrame(result)` 落到 `zeta_platform_obj`（错的内存布局）。657 的修法＝查表前先把
+`head` 的模块前缀剥掉还原裸类名。
+
+**候选筛选（为什么是 657）**：本树只有 651–699 这段号（无 690）。653–699 里 653／654 的结论落在
+后端 IR 层（`codegen.rs`，MIR 面读不到，按 #20005 口径不收）、660 在批次 10026 已做过 A/B 且
+全 0 行（不重复试）、661 动 `top_level.rs`（本车道在制文件，跨车改动要先报备）、665 已做
+（批次 10037）⇒ 取 657。
+
+**本批代码三笔（`git show --numstat`）**：
+- `5a2ed8b0` tests/regression_history.rs ＋224/−0（新增一条用例，九格）；
+- `48c69d52` tests/regression_history.rs ＋29/−6（补 `Holder::again` 两格，试图把
+  "跳过类名自身"那支变异放进射程，共十一格）；
+- `a48c0155` tests/regression_history.rs ＋2/−2（更正 `fresh` 那格的标签措辞）。
+站点零改动：本批不含 `src/**`。
+
+**用例**：`method_bodies_recover_the_module_rename_table_from_the_mangled_class_name`
+（现 :4952 起，断言 :5165 一处 `assert_eq!` 比 `Vec<(&str, String)>`）。三组夹具各一次
+`lower_multi`（多模块夹具的唯一到达路径＝`Resolver::set_source_dir` ＋ 从磁盘读模块）：
+- 主夹具 `m657a`（模块私有函数 `make`、类 `Helper`／`Node`／`Holder`，`Holder` 有
+  `get`／`build`／`fresh`／`again` 四个方法）＋ `main`：格 1＝`m657a__Holder::get` 体内调用
+  `m657a__make`；格 2/3＝`build` 体内调用 `m657a__Helper` ＋ 目的槽类型
+  `Named("m657a__Helper", [])`；格 4/5＝`fresh`（引用第三个类 `Node`）同样两读；
+  格 6/7＝`again`（引用自己所在的类 `Holder`）；格 8＝`main` 里五个带 `::` 的调用点符号串。
+- 歧义夹具 `m657c`／`m657d`（两个模块各有一个同名类 `Shared`）：格 9/10＝两个 `take` 段体内调用
+  都留在裸名 `extra_0`＝**未修的现状锁**（钉住"守卫 `hits.len()==1` 在歧义时给不出改写表"这一读数）。
+- 对照夹具 `m657e`（模块级函数 `top`）：格 11＝`m657e__make`，走 `module_renames_for` 的**定义命中臂**
+  ⇒ 本批七臂都打不到它，只算防放松。
+
+**真值来源（本批实拍）**：
+- CPython（`target/tmp_b10038/fx/` 里把两份 `.z` 复制成 `.py` 直接跑）＝`7`／`3`／`11`，rc=0；
+- HEAD 二进制 `--dump-mir main.z` 的逐段读数＝上面十一格的期望值（`/tmp/b10038/mir_fx_head.txt`
+  1256 行 26 段、补 `again` 后 `/tmp/b10038/mir_fx_head2.txt` 1367 行 30 段）；用例首跑即
+  61/61 绿 ⇒ harness 与 CLI 同序；
+- 改前形状＝本批用 HEAD 二进制做的 CLI 侧 A/B（撤掉剥前缀这一步后 `cargo build --release`）：
+  `m657a__Holder::get` → `make_0`、`m657a__Holder::build` → `zeta_platform_obj`，与 657 记录的
+  症状一字相同（`/tmp/b10038/ab_m1.log`、`/tmp/b10038/mir_m1.txt` 868 行）；
+- AOT 端到端在 HEAD 上仍红（新开的未修项，本条不锁）：`zetac -o probe_fx main.z` rc=1，
+  `Undefined symbols: "_make", referenced from: _get in probe_fx.o / _get_inst_i64 in probe_fx.o`
+  ＝方法体的**裸名副本段**（`func_name` 是裸 `get`，不含 `::`）同样拿不到改写表；
+  撤掉剥前缀那一步后链接错误的引用方多出 `_m657a__Holder::get` 与 `_main` 两格
+  （`/tmp/b10038/aot_head.err` 对 `/tmp/b10038/aot_build.err`）⇒ 657 那一步管住的正是改写段这半边。
+- 对照夹具的 AOT 是通的：`m657e`＋`main3` 编译 rc=0（`/tmp/b10038/aot_ctl.out`），运行打 `7`；
+  歧义夹具 AOT 也红（`_extra` 未定义，引用方含 `_m657c__Shared::take`／`_m657d__Shared::take`）。
+
+**变异矩阵（七臂，全部在 `src/middle/resolver/resolver.rs`；还原源＝`git show HEAD:<路径>`，
+每臂 assert 锚点次数＝1 且"变异后 md5 ≠ 还原态 md5"；逐臂跑整套 61 条；日志
+`/tmp/b10038/matrix2.log`，逐臂原始读数 `/tmp/b10038/arm_M*.txt`）**：
+
+| 臂 | 坏法 | 结果 | 红格（编号见上） | 判定 |
+|---|---|---|---|---|
+| M1 | strip 空前缀＝"还原裸类名"这一步等于没做 | rc=101 | 1、2、3、4、5 | 链 A（＝657 那一步） |
+| M4 | 剥前缀用的分隔符写成单下划线（前缀对不上） | rc=101 | 1、2、3、4、5 | 与 M1 读数一字相同＝同一条链 |
+| M7 | 取类名从第一段改成最后一段（`head` 变成方法名） | rc=101 | 1、2、3、4、5 | 同上＝同一条链 |
+| M2 | `hits.len() == 1` 放宽成非空（歧义时取哈希表第一个模块） | rc=101 | 9、10 | 链 B＝独立覆盖 |
+| M3 | 建改写表时跳过类名自身那一项 | rc=0（61 全绿） | 无 | **阴性** |
+| M5 | 剥前缀循环去掉 `break` | rc=0（61 全绿） | 无 | **阴性** |
+| M6 | 所属模块筛选恒真（`hits` 收全部模块） | rc=0（61 全绿） | 无 | **阴性** |
+
+链 A 的三臂红值一字相同（格 1..5＝`make_0`／`zeta_platform_obj`／`I64`／`zeta_platform_obj`／`I64`）
+⇒ 按 2026-10-03 的口径"读数一字相同的同链臂只算一条覆盖"，本批共**两条**独立覆盖（链 A、链 B）。
+链 B 的歧义读数在本批两跑里翻过面（`/tmp/b10038/matrix.log` 那跑读到 `m657d__extra`，
+`matrix2.log` 这跑读到 `m657c__extra`）＝`hits` 来自 `HashMap` 迭代顺序，放宽守卫并不等于消歧，
+只是随机挑一个模块（两格挑到同一个模块 ⇒ 另一个模块的方法体拿到错模块的表）。
+M3／M5／M6 三臂的阴性各有一条解释：M5＝剥前缀命中后没有第二个模块的前缀还能再命中；
+M6＝主夹具只注册了一个用户模块（`hits` 仍长度 1），歧义夹具两个模块则被守卫挡住、读数不变；
+M3＝见余项②——方法体里构造"自己所在的类"这一形实测不依赖改写表。
+
+**独立性判定**：两条独立覆盖（链 A 五格、链 B 两格）＋ 六格只算现状锁／防放松
+（格 6、7 在七臂下读数一字不变；格 8＝main 侧调用点符号名同样七臂不变；格 11 走另一条臂）。
+
+**与既有用例的分工**：`cross_module_same_named_class_methods_keep_their_own_mangled_target`
+（批次 10035 转的 651 那条）钉**跨模块同名类**的调用点别名键与接收者槽型（站点＝别名键进函数表）；
+本条钉**单个模块内**方法体里的私有名改写（站点＝`module_renames_for` 的方法回退臂），并把
+651 那条没测到的"两模块同名类 ⇒ 改写表为空"这一形作为现状锁收进来。两者红点不同形，互不备份。
+
+**每批必跑的检查与节奏**：`cargo test --test regression_history` 61/61（0.24 秒）；
+`cargo test -p zetac --lib` 145/145（0.38 秒）；编译零错误。本批不含 `src/**` 改动 ⇒
+`target/release/zetac` md5＝`ed5227ccd29b70c4ee9ae17500926f10`，与开批那颗一字相同
+（矩阵只跑 debug 目标，没重编 release）⇒ 抽样检查按 2026-10-03 节奏跳过。
+临时件目录 `target/tmp_b10038/`（`cargo clean` 会清；三份夹具正文已抄进用例的 `const`，
+不依赖这个目录）。`worktree.md`（状态板）本车道仍在制 ⇒ 本批不暂存那个文件，状态板的本批行仍未写。
+
+**余项（记在 #20005 内，未占新号）**：① 方法体的裸名副本段（`get`／`get_inst_i64`，
+`func_name` 不含 `::`）拿不到改写表 ⇒ 主夹具的 AOT 在 HEAD 上链接失败（`_make` 未定义）；
+本批只锁了改写段那半边，端到端未修，修法要回答"这些副本是谁在什么阶段产出的"。
+② 方法体里构造**自己所在的类**不经过改写表（M3 撤臂 61 条一字不变），main 侧方法调用点的符号名
+同样不经过改写表（格 8 七臂不变）＝这两处的名字由别的臂给出，接管者本批未定位。
+③ `hits.len() == 1` 守卫在 `resolver.rs` 有四处（:4146／:4468／:4922／:5229），本批只测了
+:4468；跨模块同名类的消歧未做（放宽守卫实测＝随机命中一个模块，两跑翻面），现状锁在格 9/10。
+④ 主夹具的 `m657a` 模块里 `again` 未被任何调用点使用，仍会产出裸名副本段（`== MIR again ==`）
+＝副本产出与调用点无关，未归因。
+⑤ 本批未测的臂：改写表建出来但值写错（恒等改写 `n → n`）、re-export 那半边被并进方法回退表
+（657 的注释说那样会得到编译器不认识的新名字，未复现）。
+
+**教训**：① 新增靶格要**先实测那支臂打不打得到**再提交——本批第二笔为了 M3 补了 `again` 两格，
+M3 实跑仍 61 条一字不变（阴性），原因是"构造自己所在的类"不走改写表；补笔因此没买到第三条覆盖，
+只买到一格现状锁。格 6/7 留着（它钉住"自类构造在改写表为空时也不变"这一实测事实），但台账里
+必须写清它不是分支锁。② 歧义夹具的放宽读数在两跑之间翻面（`m657d__extra` ↔ `m657c__extra`）
+＝`HashMap` 迭代顺序入读数；凡是"放宽守卫"类变异，读数要跑够两遍再定性，别把一次读数写成必然值。
+③ 同形守卫要先数清有几处再定锚点：`if hits.len() == 1 {` 在 `resolver.rs` 里有 4 处，
+矩阵首跑在锚点自检那一步就报"次数=4"退出（树未被改动、md5 复核等于 HEAD），改两行锚点后才开跑。
