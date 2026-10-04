@@ -27740,3 +27740,80 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
   `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
   两本台账，**连续三十四批**）；待补台账行的文字写进本批记录笔的提交信息。
+
+## 批次 10036（cleanup）——#20005 第二十五批：把批次 644 的循环模式陈值清除做成编译期单元测试
+
+- 开批实测滞留：`bootstrap..cleanup`＝23、`cleanup..bootstrap`＝331；记录笔落笔时重取＝26、334
+  （主树在推进），按车道惯例继续不并主树。
+- 代码笔三笔：`a2450830`（前三格＋观测 helper，＋112）、`a47d3c0d`（第四格＝循环体内普通赋值，
+  ＋22/−5，同一笔把 helper 的"找循环"从只认 `For` 改成 `For | While`）、`e12c9bce`（第五、六格＝
+  体内 `if` 分支赋值与 `while` 体内赋值，＋28/−5）。本批零 `src/` 改动，三笔合计 `+152 / −0`
+  （`git diff --numstat a2450830~1..HEAD` 实测）。
+- 来源＝批次 644（`23a32829`，2026-09-29，`fix(ctfe)`，只动 `src/middle/ctfe/evaluator.rs` ＋19/−3
+  与夹具 `tests/python_style/t518_module_global_env_first.z`；`git merge-base --is-ancestor 23a32829 HEAD`
+  rc=0 已验在本树）。症状：批次 642 给循环／条件体加的"陈值清除"（体里被赋过值的名字要从 i128
+  常量表里删掉，之后的读取才不会被折成常量）那版收集器 `p642_collect_assigned` 的 `For` 臂只认
+  `AstNode::Var` 形态的循环模式，`for k2, v2 in pairs:` 这种**元组模式**的两个绑定名一个都没进
+  清除名单 ⇒ 循环前 `k2 = 0` 那条赋值的陈值留在表里 ⇒ 循环之后的 `print(k2)` 被折成 `0`
+  （644 记录里 t518 实拍＝打 `0`，应为 `2`）。修法＝`For` 臂改走新增的 `p642_collect_pattern_vars`，
+  递归收集模式里的每个绑定名。644 的提交信息同时把"ctfe 改写字面量使槽布局移位"那条假说判废
+  （真根＝模式收集缺口）。
+- 新增用例 `loop_pattern_bindings_kill_the_stale_int_const_before_later_prints`
+  （`tests/regression_history.rs:4727`，单条 `assert_eq!` 在 `:4790`，套件 58→59）＋观测 helper
+  `print_operand_shape_after_last_for`（`:4659`）：取顶层最后一个循环（`for` 在 MIR 里降成 `While`，
+  helper 两形都认）之后第一条 `println_*` 的操作数形状——读到变量＝`env_get(名字)` 或 `var`，
+  被折成陈常量＝`StringLit(值)`。六枚夹具六格：①元组模式·第一个绑定 `k2`、②裸名模式 `i`、
+  ③元组模式·第二个绑定 `v2`、④循环体内普通赋值 `acc`、⑤循环体内 `if` 分支赋值 `acc`、
+  ⑥`while` 体内赋值 `i`。
+- 三侧真值：CPython 侧 `f1`→`1 2 2`、`f2`→`7 9 9`、`f3`→`a b b`、`f4`→`7`、`f5`→`6`、`f6`→`2`；
+  AOT 侧六枚都同值、rc=0（`target/tmp_b10036/f{1..6}.bin`，在仓根构建并运行）；`--dump-mir` 侧＝
+  ①`zeta_env_get("k2")`→`println_i64`、②`zeta_env_get("i")`、③`Var`→`println_str`（`f3` 打的是
+  字符串绑定，值仍来自循环）、④⑤`zeta_env_get("acc")`、⑥`zeta_env_get("i")`。`ZETA_DBG_P642=1`
+  的清除名单（`f5`＝`["x","acc"]`、`f6`＝`["i"]`）只作归因证据，本套不断言。
+- 变异矩阵（九支臂，都在 `src/middle/ctfe/evaluator.rs`；还原源＝`git show HEAD:<路径>`，每支先断言
+  锚点出现 1 次、变异后 md5 不同于还原态，跑完立即还原；最后一支跑完复核 md5＝
+  `9fe501ef4a137e4bff6eb5a50a1f4648` 且 `git status` 对该文件为空；红点行号按最后一轮实跑的
+  `mut_inproc.log` 取）：
+
+| 撤掉的臂（HEAD 位置） | 撤法 | 本条逐格实得（只列变的那几格） | 全套红点 |
+|---|---|---|---|
+| `:517` `For` 臂的模式收集（644 改的就是这一行） | 换回 644 之前的 `if let AstNode::Var(v)` 写法 | ①`StringLit("0")`、③`StringLit("0")` | 2 条（本条 `:4790` ＋旧用例 `:1396`） |
+| `:492-496` `Tuple` 臂（递归收元组成员） | 换成 `AstNode::Tuple(_items) => {}` | ①③读数与上一支一字相同 | 2 条（同上） |
+| `:491` `Var` 臂（模式里的裸名） | 换成 `AstNode::Var(_v) => {},` | ①②③（②也变 `StringLit("0")`） | 2 条（同上） |
+| `:484-486` 清除动作本身 | 换成 `let _ = names;` | 六格全变（④⑤`StringLit("5")`、⑥`StringLit("0")`） | 2 条（同上） |
+| `:492-496` 改成"只收第一个成员" | `if let Some(it) = items.first()` | 只有③`StringLit("0")`，①照旧 `env_get(k2)` | 1 条（只本条） |
+| `:503-507` 收集器 `Assign` 臂 | 换成 `AstNode::Assign(_lhs, _) => {}` | ④⑤`StringLit("5")`、⑥`StringLit("0")` | 1 条（只本条） |
+| `:518-520` `For` 臂往体里的递归 | 只留模式收集那一行 | ④⑤变、⑥照旧 `env_get(i)` | 1 条（只本条） |
+| `:527-531` `If` 臂的再入递归 | 换成 `AstNode::If { .. } => {}` | 只有⑤ | 1 条（只本条） |
+| `:522-526` `While` 臂的再入递归 | 换成 `AstNode::While { .. } => {}` | 只有⑥ | 1 条（只本条） |
+
+  九支全红、零阴性臂（每支至少打掉本条）。
+- 独立性判定：`:517` 与 `:492-496` 两支在**同一断言、六格读数一字相同**＝元组收集这一条链的两环，
+  只算一条覆盖；`:491`（多红②）、`:484-486`（红满六格）、"只收第一个成员"（只红③）、`Assign` 臂
+  （红④⑤⑥）、`For` 递归（红④⑤而⑥不变）、`If` 臂（只红⑤）、`While` 臂（只红⑥）＝七支各自的
+  红点格集互不相同，算七条独立覆盖。按格看：③的坏臂集比①多出"只收第一个成员"那一支、⑤比④多出
+  `If` 臂那一支、⑥靠的是 `While` 臂而不是 `For` 臂递归＝三格各锁到一条别的格锁不到的臂；
+  ②的坏臂集 `{C, D}` 是①的 `{A, B, C, D}` 的子集＝不算独立锁，但它能指出坏的是 `:491` 还是元组
+  那一支。
+- 与旧用例的分工：本文件 `:1347` 的 `tuple_for_loop_pattern_kills_stale_consts_before_print_folds`
+  是同源（批次 644）的第一条，它夹具里的 `v2 = ""` 是字符串、进不了 i128 常量表，所以"只收元组
+  第一个名字"这种坏法打不到它——本批实测那一支全套只有本条红（旧用例照绿）；本条的③（`v2 = 0`）
+  与④⑤⑥（体内赋值）才是新增覆盖，①②与旧用例同臂、留在本条只为六格读数一次可比。**开批选定
+  来源批次后没先查套件里有没有同源用例，是写到一半才发现的**（见坑 202）。
+- CLI 侧对照（九臂前置矩阵 `matrix.log`／`matrix_E.log`，编译＋AOT 运行两侧读数）：撤 `:517` 或
+  `:492-496` 后 `f1` 打 `1 2 0`（应 `1 2 2`）、`f3` 打 `a b 0`、`f2` 照旧 `7 9 9`＝644 记录那条症状
+  在夹具上的实拍复现；撤 `:491` 后 `f2` 也变 `7 9 0`；"只收第一个成员"那支只让 `f3` 变 `a b 0`
+  而 `f1` 仍 `1 2 2`。与进程内矩阵逐臂一致。
+- 仍未锁（按登记规则 2 记进 #20005 余项，不占新号）：① `p642_collect_assigned` 的 `AssignOp` 臂
+  （`:508-512`，`acc += 1` 这类）本批没有夹具、也没变异＝未锁；② `For`／`While` 臂的
+  `.chain(else_body.iter())`（`for … else:` / `while … else:` 那一半）只由"体内"那一半红＝`else`
+  那一半未锁；③ 收集器五臂之外的形状（循环体里函数定义体内的赋值、更深层嵌套）是否收得到未实测；
+  ④ `ZETA_DBG_P642` 的清除名单只在 CLI 读数里，本套不断言＝覆盖边界；⑤ 六格共用一条 `assert_eq!`，
+  首格之后那些格在某些臂下的读数没读到（Rust 断言失败即停）。
+- 检查节奏：零 `src/` 改动 ⇒ 按 2026-10-03 的节奏只跑改到的目标——`tests/regression_history.rs`
+  59/59 绿（0.08 秒）、crate 内单元测试 145/145 绿、编译零错误；抽样窗口未跑（改动面不含 `src/**`；
+  变异跑完 `evaluator.rs` 的 md5 回到 HEAD 那颗，与开批时同一颗）。
+- `worktree.md` 的行仍未随批（车道在制面还挂着批次 745 那三个文件 `src/error_codes.rs`／
+  `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
+  `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
+  两本台账，**连续三十五批**）；待补台账行的文字写进本批记录笔的提交信息。
