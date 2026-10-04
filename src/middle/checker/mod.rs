@@ -194,6 +194,16 @@ fn scan_stmts(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
                         env.meet_slot(name, lat);
                     }
                 }
+                // 元组模式：enumerate(arr)/zip(a,b)/Tuple 槽逐分量（批 930）
+                if let AstNode::Tuple(elems) = pattern.as_ref() {
+                    if let Some(tys) = tuple_iter_components(expr, env) {
+                        for (i, e) in elems.iter().enumerate() {
+                            if let (AstNode::Var(nm), Some(t)) = (e, tys.get(i)) {
+                                env.meet_slot(nm.as_str(), LatticeTy::known(t.clone()));
+                            }
+                        }
+                    }
+                }
                 scan_stmts(env, body, ctx);
                 scan_stmts(env, else_body, ctx);
             }
@@ -253,6 +263,43 @@ fn for_elem_lat(expr: &AstNode, env: &TypeEnv) -> Option<LatticeTy> {
             }
             _ => None,
         };
+    }
+    None
+}
+
+/// for 元组模式的逐分量型：enumerate(seq)⇒(I64, elem)；zip(a,b)⇒逐序列
+/// 元素型；序列槽本身为 Tuple ⇒ 原样（批 930）。
+fn tuple_iter_components(expr: &AstNode, env: &TypeEnv) -> Option<Vec<Type>> {
+    if let AstNode::Call {
+        receiver: None,
+        method,
+        args,
+        ..
+    } = expr
+    {
+        match method.as_str() {
+            "enumerate" => {
+                let a0 = args.first()?;
+                let e = for_elem_lat(a0, env)?.known_ty()?;
+                return Some(vec![Type::I64, e]);
+            }
+            "zip" => {
+                let mut tys = Vec::new();
+                for a in args {
+                    tys.push(for_elem_lat(a, env)?.known_ty()?);
+                }
+                return Some(tys);
+            }
+            _ => {}
+        }
+    }
+    if let AstNode::Var(nm) = expr {
+        if let LatticeTy::Known(t @ Type::Tuple(_)) = env.get_slot(nm) {
+            return Some(match t {
+                Type::Tuple(tys) => tys.clone(),
+                _ => return None,
+            });
+        }
     }
     None
 }
@@ -344,7 +391,13 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
         return;
     }
     // 调用返回（ret_types 查表）
-    if let AstNode::Call { method, .. } = rhs {
+    if let AstNode::Call {
+        receiver,
+        method,
+        args,
+        ..
+    } = rhs
+    {
         // 转换内建 ⇒ 目标型（批 929）
         let conv = match method.as_str() {
             "str" => Some(Type::Str),
@@ -356,34 +409,54 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
             env.meet_slot(name, LatticeTy::known(t));
             return;
         }
+        // len ⇒ I64；sorted ⇒ DynamicArray(元素型)（批 930）
+        if method == "len" {
+            env.meet_slot(name, LatticeTy::known(Type::I64));
+            return;
+        }
+        if method == "sorted" {
+            if let Some(a0) = args.first() {
+                if let Some(LatticeTy::Known(e)) = for_elem_lat(a0, env) {
+                    env.meet_slot(
+                        name,
+                        LatticeTy::known(Type::DynamicArray(Box::new(e))),
+                    );
+                }
+            }
+            return;
+        }
+        // 方法调用（receiver 已知型）：pop ⇒ 元素型；method_ret 查表。
+        // 批 930 修正：这段原是独立臂，落在 ret_types 臂无条件 return 之后
+        // ——批 916 落地起就不可达（死代码），现并入。
+        if let Some(recv) = receiver {
+            if method == "pop" {
+                if let Some(LatticeTy::Known(e)) = for_elem_lat(recv, env) {
+                    env.meet_slot(name, LatticeTy::known(e));
+                    return;
+                }
+            }
+            if let AstNode::Var(recv_name) = &**recv {
+                if let LatticeTy::Known(Type::Named(tag, _)) =
+                    env.get_slot(recv_name.as_str())
+                {
+                    if let Some(ret_handle) =
+                        crate::middle::pylib::method_ret(tag.as_str(), method.as_str())
+                    {
+                        let ret_ty = match ret_handle {
+                            "str" => Type::Str,
+                            "f64" => Type::F64,
+                            _ => Type::Named(ret_handle.to_string(), vec![]),
+                        };
+                        env.meet_slot(name, LatticeTy::known(ret_ty));
+                        return;
+                    }
+                }
+            }
+        }
         if let Some(ty) = ctx.ret_types.get(method) {
             env.meet_slot(name, LatticeTy::known(ty.clone()));
         }
         return;
-    }
-    // 方法调用返回（receiver 上的 method → method_ret 查表，批 916 扩展）
-    if let AstNode::Call {
-        receiver: Some(recv),
-        method,
-        ..
-    } = rhs
-    {
-        if let AstNode::Var(recv_name) = &**recv {
-            let base_lat = env.get_slot(recv_name);
-            if let LatticeTy::Known(Type::Named(tag, _)) = &base_lat {
-                if let Some(ret_handle) =
-                    crate::middle::pylib::method_ret(tag, method)
-                {
-                    let ret_ty = match ret_handle {
-                        "str" => Type::Str,
-                        "f64" => Type::F64,
-                        _ => Type::Named(ret_handle.to_string(), vec![]),
-                    };
-                    env.meet_slot(name, LatticeTy::known(ret_ty));
-                    return;
-                }
-            }
-        }
     }
     // 字段访问：struct 已知 ⇒ 查字段型（批 915 扩展）
     if let AstNode::FieldAccess { base, field } = rhs {
@@ -1103,5 +1176,146 @@ mod tests {
         assert_eq!(env.get_slot("s"), LatticeTy::known(Type::Str));
         assert_eq!(env.get_slot("i"), LatticeTy::known(Type::I64));
         assert_eq!(env.get_slot("f"), LatticeTy::known(Type::F64));
+    }
+    /// len(x) ⇒ I64 恒成立（批 930）。
+    #[test]
+    fn len_call_types_i64() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign("n", call("len", vec![var("xs")]))],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("n"), LatticeTy::known(Type::I64));
+    }
+
+    /// for i, x in enumerate(arr)：元组模式逐分量推断（批 930）。
+    #[test]
+    fn for_enumerate_tuple_pattern() {
+        let mut env = TypeEnv::new();
+        env.meet_slot(
+            "arr",
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::F64))),
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[AstNode::For {
+                pattern: Box::new(AstNode::Tuple(vec![var("i"), var("x")])),
+                expr: Box::new(call("enumerate", vec![var("arr")])),
+                body: vec![],
+                else_body: vec![],
+            }],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("i"), LatticeTy::known(Type::I64));
+        assert_eq!(env.get_slot("x"), LatticeTy::known(Type::F64));
+    }
+
+    /// arr.pop() ⇒ 元素型（批 930）。
+    #[test]
+    fn pop_types_element() {
+        let mut env = TypeEnv::new();
+        env.meet_slot(
+            "xs",
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::Str))),
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign(
+                "last",
+                AstNode::Call {
+                    receiver: Some(Box::new(var("xs"))),
+                    method: "pop".to_string(),
+                    args: vec![],
+                    type_args: vec![],
+                    structural: false,
+                },
+            )],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("last"), LatticeTy::known(Type::Str));
+    }
+
+    /// 方法调用 method_ret 查表：接收者 Named(tag) ⇒ 表列返回型
+    /// （批 916 臂此前不可达，批 930 并入后补此测试）。
+    #[test]
+    fn method_call_ret_table_propagates() {
+        let mut env = TypeEnv::new();
+        env.meet_slot(
+            "d",
+            LatticeTy::known(Type::Named("map".to_string(), vec![Type::Str, Type::I64])),
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        // method_ret("map", "keys") 的表列返回型（有则断言 Known，无则跳过）
+        if let Some(handle) = crate::middle::pylib::method_ret("map", "keys") {
+            let expect = match handle {
+                "str" => Type::Str,
+                "f64" => Type::F64,
+                other => Type::Named(other.to_string(), vec![]),
+            };
+            infer_fn_body(
+                &mut env,
+                "test_fn",
+                &[assign(
+                    "ks",
+                    AstNode::Call {
+                        receiver: Some(Box::new(var("d"))),
+                        method: "keys".to_string(),
+                        args: vec![],
+                        type_args: vec![],
+                        structural: false,
+                    },
+                )],
+                &ctx,
+            );
+            assert_eq!(env.get_slot("ks"), LatticeTy::known(expect));
+        }
+    }
+
+    /// sorted(xs) ⇒ DynamicArray(元素型)（批 930）。
+    #[test]
+    fn sorted_types_dynamic_array() {
+        let mut env = TypeEnv::new();
+        env.meet_slot(
+            "xs",
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::F64))),
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign("s", call("sorted", vec![var("xs")]))],
+            &ctx,
+        );
+        assert_eq!(
+            env.get_slot("s"),
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::F64)))
+        );
     }
 }
