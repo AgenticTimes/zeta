@@ -44,6 +44,34 @@ impl MirGen {
                         return Some(dest);
                     }
                     if arg_ids.len() == 2 {
+                        // 批 928：f64 元素走 double 域剔除版（按位整数比较
+                        // 让 xs.remove(1.5) 失配、元素原样留着）
+                        let recv_elem_f64 = matches!(
+                            self.type_map.get(&arg_ids[0]),
+                            Some(Type::DynamicArray(e)) | Some(Type::Array(e, _))
+                                if matches!(**e, Type::F64 | Type::F32)
+                        );
+                        if recv_elem_f64 {
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_vec_discard_f64".to_string(),
+                                args: vec![arg_ids[0], arg_ids[1]],
+                                dest,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(dest, MirExpr::Var(dest));
+                            if let Some(AstNode::Var(name)) =
+                                receiver.as_ref().map(|r| &**r)
+                            {
+                                if let Some(&slot) = self.name_to_id.get(name) {
+                                    self.stmts.push(MirStmt::Assign {
+                                        lhs: slot,
+                                        rhs: dest,
+                                    });
+                                }
+                            }
+                            self.type_map.insert(dest, receiver_ty.clone());
+                            return Some(dest);
+                        }
                         let elem_is_str = matches!(
                             self.type_map.get(&arg_ids[1]),
                             Some(Type::Str)

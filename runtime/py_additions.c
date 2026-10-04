@@ -1281,6 +1281,25 @@ int64_t py_vec_discard(int64_t vec, int64_t x, int64_t elem_is_str) {
     return out;
 }
 
+// remove/discard 的 f64 元素版（批 928）：list-backed set 的 remove 归
+// discard 族（批次 816 裁决），py_vec_discard 按位整数比较让
+// xs.remove(1.5) 失配（实拍：元素原样留着，xs[0] 仍 1.5）。
+// 浮点元素按 f64 位模式存取，double 域比较重建。
+int64_t py_vec_discard_f64(int64_t vec, int64_t x_bits) {
+    if (!vec) return vec;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    double x;
+    memcpy(&x, &x_bits, sizeof x);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t raw = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &raw, sizeof v);
+        if (v != x) out = vec_push(out, raw);
+    }
+    return out;
+}
+
 int64_t py_vec_extreme(int64_t vec, int64_t want_max) {
     if (!vec) return (int64_t)GC_strdup("nan");
     int64_t n = zt_vec_len(vec);
