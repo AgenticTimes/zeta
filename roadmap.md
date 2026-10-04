@@ -27672,3 +27672,71 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
   `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
   两本台账，**连续三十三批**）；待补台账行的文字写进本批记录笔的提交信息。
+
+## 批次 10035（cleanup）——#20005 第二十四批：把批次 651 的跨模块同名类派发别名入册做成编译期单元测试
+
+- 开批实测滞留：`bootstrap..cleanup`＝19、`cleanup..bootstrap`＝328；记录笔落笔时重取＝22、330
+  （主树在推进），按车道惯例继续不并主树。
+- 代码笔三笔：`6a16570f`（第一枚夹具的四格，＋153）、`c823f018`（第二枚夹具＝不带 `__init__`
+  的同类，两格，＋66）、`ac04c9a9`（第三枚夹具＝带基类的同名子类，两格＋一条"该段只一个
+  Struct 字面量"的前置守卫，＋92/−6，同一笔里更正第一版的注释）。本批零 `src/` 改动。
+- 来源＝批次 651（`21a006e9`，"batch 651: cross-module same-named classes method dispatch
+  collision"，只动 `src/middle/resolver/resolver.rs`，＋150/−20；`git merge-base --is-ancestor
+  21a006e9 HEAD` rc=0 已验在本树）。症状：两个模块各写一个 `class Cfg`、方法同名（`show`）时，
+  裸限定键 `Cfg::show` 被后注册的模块覆盖 ⇒ 两个调用点打到同一个方法体，651 记录里打出来
+  是 2、9（应为 1、7）。修法＝注册 `ImplBlock` 时除裸名外再写入模块改写后的别名键
+  （`m647a__Cfg::show`）到 `funcs` 与 `registered_funcs`（必须排在裸名注册之后，否则被覆盖），
+  并把 `self` 形参型、构造器返回的 `StructLit` 变体名、`ret` 字段一起换成改写名；
+  消费方＝`gen.rs` 的 `qualified_method_candidate`（先试改写键，本批未动那个文件）。
+- 新增用例 `cross_module_same_named_class_methods_keep_their_own_mangled_target`
+  （`tests/regression_history.rs`，套件 57→58）。三枚夹具、八格：
+  ①`main` 段四个调用点目标名、②两个方法段的接收者槽型、③方法体里的加数常量、
+  ④构造段返回的 `Struct` 变体名；⑤⑥＝第二枚（不带 `__init__`）的①④同格；
+  ⑦⑧＝第三枚（带基类、子类自己写 `__init__` 并显式调用基类构造）的①④同格。
+- 三侧真值：CPython 侧 `11`、`27`，rc=0（同三份文件的 `.py` 等价写法，逐行可译）；
+  AOT 侧 `11`、`27`，rc=0（`target/tmp_b10035/m647.bin`，在仓根构建并运行）；
+  `--dump-mir` 侧＝①`m647a__Cfg`／`m647b__Cfg`／`m647a__Cfg::show`／`m647b__Cfg::show`
+  四个目标名、②接收者槽 `Named("m647a__Cfg")`／`Named("m647b__Cfg")`、③加数 `1`／`7`、
+  ④变体名与段名一字相同。三枚夹具的①④读数一字相同（第二、三枚的 CLI 侧读数与本批
+  harness 侧读数一致＝这形没有"少一趟管线"的差）。
+- 变异矩阵（八支臂，都在 `src/middle/resolver/resolver.rs`；还原源＝`git show HEAD:` 那版，
+  每支先断言锚点出现 1 次、变异后 md5 不同于还原态，跑完立即还原；最后一支跑完复核
+  md5＝`e841c2206fe81514fe57895e73991edf` 且 `git status` 对该文件为空。三轮读数的行号按
+  最后一轮（`ac04c9a9` 的文件）取）：
+
+| 撤掉的臂（HEAD 位置） | 撤法 | 红在哪一格＋逐格实得 | 全套红点 |
+|---|---|---|---|
+| `:1098` 别名键的 `type_decls.contains_key` 过滤 | 换成 `.filter(|_mc| false)` | ①（`:4421`）右＝`["m647a__Cfg","m647b__Cfg","Cfg::show","Cfg::show"]` | 1 条（本条） |
+| `:1135-1171` 别名键回插 `funcs`／`registered_funcs` | 整块撤成注释 | ①同一读数 | 1 条（本条） |
+| `:1164` `self` 形参改写成改写名 | 条件换 `if false` | ②（`:4447`）两格都 `Named("m647b__Cfg", [])` | 1 条（本条） |
+| `:2751-2758` 合成构造器变体名（路径 1） | 换成 `variant: ty.clone()` | — | 0 条＝阴性 |
+| `:2865-2872` 合成构造器变体名（路径 2） | 换成 `variant: ty.clone()` | — | 0 条＝阴性 |
+| `:6886` `rename_definition` 的 `ret_expr` 变体名 | 换成 `variant,` | — | 0 条＝阴性 |
+| `:6906` `rename_definition` 体内 `Return` 的变体名 | 换成 `variant,` | ④（`:4497`）两格都 `Some("Cfg")` | 1 条（本条） |
+| `:6920` `ret == name` 才改写 `ret` | 条件换 `if false` | ①同一读数 | 1 条（本条） |
+
+- 独立性判定：`:1098`／`:1135-1171`／`:6920` 三臂红在**同一格的同一读数**（方法调用点落回裸名
+  `Cfg::show`）＝一条链上的三环，只算一条覆盖，不写成三条；`:1164`（接收者槽型）与 `:6906`
+  （构造段变体名）各红各的格、各红各的读数＝两条独立覆盖。
+- 三支阴性的实测原因＝一次性探针（在 `:2735`／`:2853`／`:6884`／`:6902` 四处临时插 `eprintln!`，
+  编 `--release` 后对四种形状的夹具跑 CLI 取 stderr，随后 `git show HEAD:` 还原并核对 md5）：
+  体内 `Return(StructLit)` 那处（`:6902`）到 4 次，而 `ret_expr: Some(StructLit)` 那处（`:6884`）
+  一次都没到——构造器的字面量在体内不在 `ret_expr`（`:6893` 的注释本就写着这点，探针
+  只是把它从"注释里的主张"变成实测；4 次具体分摊在哪些段未逐条追）；`:2853` 那条合成路径
+  两种形状都到、探针打印的 `ty` 是裸名 `Cfg`，但撤掉它的变体名表达式后本用例八格读数一字不变；
+  `:2735` 那条四种形状的夹具都没到，按 `:2679-2690` 那段代码读它的门槛＝子类自己写 `__init__` ＋
+  显式基类调用带非变量实参 ＋ 合并布局里有合成器没命名的槽（三条各自是否成立未逐条实测）。
+- 仍未锁（按登记规则 2 记进 #20005 余项，不占新号）：① `:2751-2758` 臂在四种形状下都没到＝未锁；
+  ② `:6886` 臂未达＝未锁；③ `:2865-2872` 臂可达但撤臂八格不变＝那一格的最终变体名由别的臂
+  给出，接管者未定位；④ `:2865-2872` 的 `find(|k| k.ends_with("__Cfg"))` 在跨模块同名类下有两个
+  候选键（`m647a__Cfg`／`m647b__Cfg`），命中哪个取决于哈希表顺序——本批没测到它影响任何输出，
+  要锁得起需要"只查那一格"的对照；⑤ 红的三臂都在①格就停住（Rust 断言 panic 即停），
+  ⑤⑥⑦⑧ 四格在这些臂下的读数没读到。
+- 检查节奏：零 `src/` 改动 ⇒ 按 2026-10-03 的节奏只跑改到的目标——
+  `tests/regression_history.rs` 58/58 绿（0.06 秒）、crate 内单元测试 145/145 绿、编译零错误；
+  抽样窗口未跑（改动面不含 `src/**`；变异跑完 `resolver.rs` 的 md5 回到 HEAD 那颗，
+  与开批时同一颗）。
+- `worktree.md` 的行仍未随批（车道在制面还挂着批次 745 那三个文件 `src/error_codes.rs`／
+  `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
+  `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
+  两本台账，**连续三十四批**）；待补台账行的文字写进本批记录笔的提交信息。
