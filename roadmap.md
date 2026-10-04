@@ -27226,3 +27226,65 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
   两本台账，**连续二十七批**）；待补台账行的文字写进本批记录笔的提交信息。
 
+## 批次 10029（续 #20005：把历史缺陷做成进程内单元测试，第十九批——来源批次 402／155 的签名拼写表；文件面重筛到 `typecheck_new.rs`）
+
+- 主体代码：`tests/regression_history.rs` +171 行／−0（`git diff --numstat`，代码笔 4252b034），
+  用例数 50 → **52**。`src/**` 零改动（两枚变异臂都写在 `typecheck_new.rs` 上，按
+  `git show HEAD:` 原地还原）。
+- 文件面重筛（上一批台账记的"CAND 表已空、下批必须换文件面"）：按 fix 笔数排 `src/middle/**`
+  ＝`gen.rs` 189（主树在重构，本车道避开）／`resolver.rs` 45（10021–10028 已用完）／
+  `ctfe/evaluator.rs` 6／`mir/mir.rs` 5／`resolver/module_resolver.rs` 4／
+  `resolver/typecheck_new.rs` 3。取 `typecheck_new.rs` 这一格 3 笔里的两笔：
+  批次 402（`34bd4324`）与批次 155（`f08da4bc`），第三笔 150（`41e15672`）留作下一格。
+- 新增两条（同一个函数 `string_to_type` 里的两条**不同拼写臂**，各钉一条）：
+  1. `str_spelling_in_signature_table_keeps_callsite_dest_str`
+     ＝批次 402 的 `"Str" => return Type::Str` 臂（HEAD 上 `typecheck_new.rs:123`）。
+     症状＝`Str` 这个 Zeta 自己的字符串拼写不在签名表里 ⇒ 落通用名分支成假类 `Named("Str")` ⇒
+     调用点把返回值按非 `Str` 读、打印发 `println_i64`（打 `char*` 的数值）。
+     夹具＝`def first(s: Str) -> Str: return s[0]` ＋ `print(first("abc"))`。
+  2. `bare_dict_return_annotation_normalizes_to_map_at_callsite`
+     ＝批次 155 的裸名 `"dict" => return Type::Named("map", …)` 臂（同文件 :112）。
+     症状＝`Type::from_string` 在 153 已做 dict→map 归一化，但签名解析走的是另一条路没补 ⇒
+     调用点把 `-> dict` 的返回值当非 map ⇒ `.get(...)` 落 opaque 兜底发裸符号（REasyQuant 7 处）。
+     夹具＝`def m() -> dict: return {"a": 1}` ＋ `v = m()` ＋ `print(v.get("a", 0))`。
+- 三侧真值（同批实拍，产物 `/tmp/b10029/`）：f402 CPython（去掉 `Str` 注解的同形写法）打 `a`、
+  `-o` 运行打 `a`（rc=0）、`--dump-mir` 的 `main` 段 `Call{func:"first_1", dest:2}` 目的槽 2＝`Str`
+  且 `println_str(2)`；f155 CPython 打 `1`、`-o` 运行打 `1`（rc=0）、`main` 段
+  `Call{func:"m_0", dest:4}` 与存进环境那格都是 `Named("map", …)`，`.get` 的键面走
+  `map_str_key`＋`py_map_contains`。两枚夹具都是三侧一致（不同于 10028 那枚 AOT 少打一行的）。
+- 变异 × 读数（臂＝在 HEAD 源码上原地改那一支再重编；差异行数＝`--dump-mir` 全文）：
+
+  | 臂 | f402 差异行 | f155 差异行 | 进程内 | AOT 侧症状 |
+  |---|---|---|---|---|
+  | c402（删 :123 那行） | 7 行 | 0 行 | 51 绿／1 红（只红本条） | f402 打出 4303704048（`char*` 的堆地址数值，逐次会变）而不是 `a`，rc=0；f155 不受牵连仍打 `1` |
+  | c155（:112 的 `Named("map")` 改 `Named("dict")`） | 0 行 | 115 行 | 51 绿／1 红（只红本条） | 两枚运行期都不变（`a`／`1`）⇒ 这一臂的损害只在编译期（f155 的 MIR 有 115 行分派改道），本夹具的运行期值恰好仍对 |
+
+  两臂各只红自己那条 ⇒ 两条用例是独立覆盖（同函数不同拼写臂，不是 10028 那种一条链）。
+  运行期那一列来自第二趟测量（`/tmp/b10029/aotboth.log`）：主链脚本把执行二进制写成了
+  `. ./${fx}_bin`（dot-source 二进制），打出来是 shell 的报错而不是程序输出，故重跑一遍
+  直接执行；第二趟两臂的 `--dump-mir` 差异行数与第一趟一字相同（7／0、0／115）。
+- 进程内变异复验：c402 ⇒ 52 条只红 **1 条**＝`str_spelling_in_signature_table_keeps_callsite_dest_str`
+  （其余 51 条绿），红点 `tests/regression_history.rs:3864:5`、红值 `Some(Named("Str", []))` ≠ 期望 `Some(Str)`；c155 ⇒ 只红 **1 条**＝
+  `bare_dict_return_annotation_normalizes_to_map_at_callsite`（其余 51 条绿），红点 `tests/regression_history.rs:3958:5`、红值命名类型 `dict` ≠ 期望 `map`。
+  两臂各红各的那条、`--dump-mir` 差异行数也是各自那枚（另一枚 0 行）⇒ 两条用例互不备份。
+  两条的红点都落在**症状格本身**（调用点目的槽类型）而非前置条件 ⇒ 其后的 `println_str`／
+  `map_` 分派正证据只算防放松（红点之前那格是真红，之后的没执行到）。
+- 还原核对：`typecheck_new.rs` md5 `be3eca560b00e5231e0c370c51871431`（＝HEAD，工作树该路径干净）；
+  `cargo build --release` 后两枚夹具 `--dump-mir` 与基线**差异行数 0**、AOT 输出回到 `a`／`1`；
+  二进制 md5 `ed5227ccd29b70c4ee9ae17500926f10`（与主链还原态一字相同）；`cargo test --release --test regression_history` 52/52 绿／0.19 秒。
+- 未覆盖／未钉住（如实登记在 #20005 余项内，不另占号）：
+  ① 402 记录里的另一半臂在 `src/middle/mir/gen.rs:1142`（形参槽 ⇒ `s[i]` 走 `str_get` 而不是
+  `map_get`／AOT 静默读 0、JIT rc=139）。`gen.rs` 是主树在重构的文件，本车道按约定不碰，
+  所以本批只钉签名表那半，形参槽那一形仍未在进程内锁；
+  ② 155 记录里的 `dict.get` 返回值取 map 值类型那半同样在 `gen.rs`，未变异；
+  ③ 155 的泛型 `dict[K, V]` 与 `lt(dict, …)` 两臂（现 :289／:363 两处同形文本）本批未变异＝
+  夹具走的是裸名 `-> dict`，那两形未锁；
+  ④ `String` 拼写＝402 记录里"故意不收"（std 桩里有真的 `pub struct String`），本批没测它。
+- 检查节奏：零 `src/` 改动 ⇒ 只跑改到的测试目标＋编译零错误；十批界的全局逐个用例在 10030 做。
+  既存编译警告两条非本批引入：`src/middle/mir/gen.rs:5308`、`src/middle/resolver/resolver.rs:3852`
+  的多余 `mut`。
+- `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件 `src/error_codes.rs`／
+  `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
+  `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
+  两本台账，**连续二十八批**）；待补台账行的文字写进本批记录笔的提交信息。
+

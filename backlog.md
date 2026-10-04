@@ -374,6 +374,31 @@
 >   检查节奏：零 `src/` 改动 ⇒ 只跑改到的测试目标（50/50 绿／0.11 秒）＋编译零错误；
 >   十批界的全局逐个用例在 10030 做。
 
+>   批次 10029（代码 `4252b034`）补 2 条到 **52 条**＝文件面重筛到 `src/middle/resolver/typecheck_new.rs`
+>   （按 fix 笔数排 `src/middle/**`：`gen.rs` 189＝主树在重构避开、`resolver.rs` 45＝10021–10028 用完、
+>   `ctfe/evaluator.rs` 6、`mir/mir.rs` 5、`module_resolver.rs` 4、`typecheck_new.rs` 3），
+>   取其中两笔：批次 402（`34bd4324`，臂＝`string_to_type` 签名表 :123 的 `"Str" => Type::Str`）与
+>   批次 155（`f08da4bc`，臂＝同函数 :112 的裸名 `"dict" => Named("map")`）。零 `src/` 改动。
+>   症状分别＝`Str` 拼写不在签名表⇒假类 `Named("Str")`⇒调用点目的槽非 `Str`、打印发 `println_i64`
+>   （打 `char*` 数值）；`-> dict` 在签名路径没归一化成 map⇒`.get(...)` 落 opaque 兜底发裸符号。
+>   夹具＝`def first(s: Str) -> Str: return s[0]`＋`print(first("abc"))`／
+>   `def m() -> dict: return {"a": 1}`＋`v = m()`＋`print(v.get("a", 0))`。三侧真值一致：
+>   CPython `a`／`1`、`-o` 运行同值、`--dump-mir` 的 `main` 段 `first_1` 目的槽＝`Str`＋`println_str`、
+>   `m_0` 目的槽＝`Named("map", …)`＋`.get` 键面 `map_str_key`／`py_map_contains`。
+>   两臂各只红自己那条（差异行数／红点见 roadmap 7 行／0 行、0 行／115 行，
+>   红点 `tests/regression_history.rs:3864:5` 红值 `Some(Named("Str", []))` ≠ 期望 `Some(Str)`、`tests/regression_history.rs:3958:5` 红值命名类型 `dict` ≠ 期望 `map`）⇒ 同函数不同拼写臂＝独立覆盖，
+>   不是 10028 那种一条链；红点都落在症状格（目的槽类型）本身，非前置条件行。
+>   还原＝`git show HEAD:` 两向 md5（`be3eca560b00e5231e0c370c51871431`）＋重编后两枚夹具差异 0 行、AOT 回到 `a`／`1`、
+>   二进制 `ed5227ccd29b70c4ee9ae17500926f10`（与主链还原态一字相同）、52/52 绿 0.19 秒。
+>   仍未锁的（登记在此不另占号）：① 402／155 各有另一半臂在 `src/middle/mir/gen.rs`
+>   （:1142 形参槽⇒`s[i]` 走 `str_get`；`dict.get` 返回值取 map 值类型）＝本车道避开 `gen.rs`，
+>   两形的形参槽／取默认值那一格未钉；② 155 的泛型 `dict[K, V]` 与 `lt(dict, …)` 两臂
+>   （现 :289／:363 两处同形文本）未变异＝夹具只走裸名；③ `String` 拼写＝402 记录里故意不收
+>   （std 桩有真的 `pub struct String`），未测；④ 同格第三笔 150（`41e15672`，非法 IR＋`float`/`int`
+>   注解别名）留给下一批。
+>   检查节奏：零 `src/` 改动 ⇒ 只跑改到的测试目标（52/52 绿／0.19 秒）＋编译零错误；
+>   十批界的全局逐个用例在 10030 做。
+
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；
