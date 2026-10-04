@@ -3803,3 +3803,174 @@ use_it()
     }
 }
 
+/// 批次 402（主线 `34bd4324`；本批只取落在 `typecheck_new.rs` 的那半臂）。
+/// 站点＝`src/middle/resolver/typecheck_new.rs:123`（`string_to_type` 签名表里的
+/// `"Str" => return Type::Str`，本树 HEAD `ddf8343c` 上）。
+///
+/// 症状（记录原文＋本批实拍）：`Str` 是 Zeta 自己的字符串类型拼写（`tests/unit-tests/selfhost.z`
+/// 的 `fn parse(input: Str)` 用的就是它），但签名表只写了 python 侧的小写 `str`／`string` ⇒
+/// `Str` 落到通用名分支，回来是 `Named("Str")` 这个**假类** ⇒ 调用点据返回值把目的槽 typed 成
+/// 非 `Str`，打印走 `println_i64`（打的是 `char*` 的数值）。
+/// 另一半臂在 `src/middle/mir/gen.rs:1142`（形参槽那格，撤了会让 `s[i]` 下成 `map_get`）
+/// ——`gen.rs` 是主树在重构的文件，本车道按约定不碰，那半形状的覆盖登记在余项里。
+///
+/// 期望值来源（三侧同批实拍，产物 `/tmp/b10029/`）：
+/// ① CPython 同形源（去掉 `Str` 注解：`def first(s): return s[0]` ＋ `print(first("abc"))`）打 `a`；
+/// ② 运行期＝同一份源 `-o` 编译后执行打 `a`（`f402bin`，rc=0）⇒ 与 ① 相同；
+/// ③ 编译期＝`--dump-mir` 的 `main` 段：`Call { func: "first_1", dest: 2 }` 的目的槽 2 是 `Str`，
+///    打印走 `println_str(2)`（`f402_base.mir`）。取段按 `== MIR <名> ==` 切到下一个 `== MIR `。
+///
+/// 覆盖面分工（`--dump-mir` 全文差异行数 × 进程内 50→52 条实跑）：
+/// ① 撤本条那一臂（删 `:123` 那行）⇒ 只有 f402 变（行数见台账），f155 那枚 0 行；
+///    进程内红点＝本条，症状格＝目的槽类型（`Str` 变 `Named("Str")`／`I64`，实得值见台账）。
+/// ② 批次 155 那臂（同文件 :112）由下一条用例钉住，两臂同函数不同拼写臂、形状不互为备份。
+/// ③ `gen.rs:1142` 那半臂（形参槽 ⇒ `s[i]` 走 `str_get` 而不是 `map_get`）本批未变异：
+///    本条不断形参槽那一格，`s[0]` 的下标分派只作为 f402 的 `first` 段现状记录。
+#[test]
+fn str_spelling_in_signature_table_keeps_callsite_dest_str() {
+    let mirs = lower_all(
+        r#"def first(s: Str) -> Str:
+    return s[0]
+
+print(first("abc"))
+"#,
+    );
+    let f = mir(&mirs, "main");
+
+    // 调用点带实例后缀（`first` → `first_1`），按被调名取前缀＋纯数字后缀。
+    let dests: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. }
+                if func == "first"
+                    || func
+                        .strip_prefix("first_")
+                        .map_or(false, |x| !x.is_empty() && x.chars().all(|c| c.is_ascii_digit())) =>
+            {
+                Some(*dest)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        1,
+        "前置条件：`main` 段该有且只有一次对 `first` 的调用（打不出调用点就等于没测到这条臂），\
+         实得 {dests:?}"
+    );
+    let dest = dests[0];
+
+    assert_eq!(
+        f.type_map.get(&dest),
+        Some(&Type::Str),
+        "`first(...)` 调用点目的槽 id={dest} 该按签名表里的 `Str` 拼写定成 `Type::Str`\
+         （402 之前 `Str` 不在表里⇒落通用名分支成假类 `Named(\"Str\")`，这一格退成非 Str），\
+         实得 {:?}",
+        f.type_map.get(&dest)
+    );
+
+    let strs = call_args(f, "println_str");
+    assert_eq!(
+        strs.first().map(|a| a.first().copied()),
+        Some(Some(dest)),
+        "`print(first(\"abc\"))` 该把目的槽 {dest} 交给 `println_str`，实得 {strs:?}"
+    );
+    assert_eq!(
+        call_symbols(f)
+            .iter()
+            .filter(|c| c.as_str() == "println_i64")
+            .count(),
+        0,
+        "402 的症状是返回值按整数读⇒发 `println_i64`（打出 `char*` 的数值），实得调用: {:?}",
+        call_symbols(f)
+    );
+}
+
+/// 批次 155（主线 `f08da4bc`；本批只取落在 `typecheck_new.rs` 的那半臂）。
+/// 站点＝`src/middle/resolver/typecheck_new.rs:112`（`string_to_type` 里裸名
+/// `"dict" => return Type::Named("map", …)` 那条归一化臂）。
+///
+/// 症状（记录原文）：`Type::from_string` 在批次 153 已把 `dict` 归一成 `map`，但**签名解析走的是
+/// 另一条路**（`typecheck_new::string_to_type`），那条路没补 ⇒ 调用点把 `-> dict` 的返回值当
+/// 非 map 处理 ⇒ 之后的 `.get(...)`／`.values()` 落到 opaque 兜底发裸符号（REasyQuant 的
+/// `_load_split_factors() -> dict` 之后 `.get(stock_code)` 一共 7 处）。
+/// 另一半臂（`dict.get` 返回值取 map 的值类型）在 `gen.rs`，本车道不碰，登记在余项里。
+///
+/// 期望值来源（三侧同批实拍，产物 `/tmp/b10029/`）：
+/// ① CPython 同形源（`def m(): return {"a": 1}` ＋ `v = m()` ＋ `print(v.get("a", 0))`）打 `1`；
+/// ② 运行期＝同一份源 `-o` 编译后执行打 `1`（`f155bin`，rc=0）⇒ 与 ① 相同；
+/// ③ 编译期＝`--dump-mir` 的 `main` 段：`Call { func: "m_0", dest: 4 }` 的目的槽与存进环境的
+///    那格都是 `Named("map", …)`，`.get("a", 0)` 的判存在走 `py_map_contains`＋键面 `map_str_key`
+///    （`f155_base.mir`）。
+///
+/// 覆盖面分工（`--dump-mir` 差异行数 × 进程内实跑）：
+/// ① 撤本条那一臂（:112 的 `Named("map")` 改成 `Named("dict")`，＝不做归一化）⇒ 只有 f155 变，
+///    f402 那枚 0 行；进程内红点＝本条的症状格（目的槽的 map 名）。
+/// ② 批次 402 那臂（同文件 :123 的 `Str` 拼写）由上一条用例钉住；两臂是同一个
+///    `string_to_type` 函数里的**不同拼写臂**，撤各自只红自己那条 ⇒ 互为独立覆盖。
+/// ③ 155 记录里的另外两臂（泛型 `dict[K, V]` 与 `lt(dict, …)`，现 :289／:363 那两处
+///    `if tn == "dict" { "map" }`）本批未变异＝夹具走的是裸名 `-> dict`，那两形未锁，登记余项。
+#[test]
+fn bare_dict_return_annotation_normalizes_to_map_at_callsite() {
+    let mirs = lower_all(
+        r#"def m() -> dict:
+    return {"a": 1}
+
+v = m()
+print(v.get("a", 0))
+"#,
+    );
+    let f = mir(&mirs, "main");
+
+    let dests: Vec<u32> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::Call { func, dest, .. }
+                if func == "m"
+                    || func
+                        .strip_prefix("m_")
+                        .map_or(false, |x| !x.is_empty() && x.chars().all(|c| c.is_ascii_digit())) =>
+            {
+                Some(*dest)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dests.len(),
+        1,
+        "前置条件：`main` 段该有且只有一次对 `m` 的调用，实得 {dests:?}"
+    );
+    let dest = dests[0];
+
+    // 症状格：签名解析把裸名 `dict` 归一成 `map` 之后，调用点目的槽才是 map 名。
+    let got = match f.type_map.get(&dest) {
+        Some(Type::Named(n, _)) => n.clone(),
+        other => {
+            panic!(
+                "`m()` 调用点目的槽 id={dest} 该是 `Type::Named(\"map\", …)`\
+                 （155 之前签名路径没做 dict→map 归一化），实得 {other:?}"
+            )
+        }
+    };
+    assert_eq!(
+        got,
+        "map".to_string(),
+        "`-> dict` 注解在签名解析路径也要归一化成 `map`，实得命名类型 {got}"
+    );
+
+    // 正证据：`.get(k, d)` 的键面走 map 族分派（不是裸 `get`）。撤臂时这一格在红点之后，
+    // 所以它只算防放松。
+    let calls = call_symbols(f);
+    assert!(
+        calls.iter().any(|c| c.starts_with("map_")),
+        "`v.get(\"a\", 0)` 该在 map 面上分派（`map_str_key`），实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c == "get" || c.starts_with("get_")),
+        "155 的症状是落到 opaque 兜底发裸 `get`／`_get`，这类符号不该出现，实得调用: {calls:?}",
+    );
+}
+
