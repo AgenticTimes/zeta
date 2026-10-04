@@ -3550,6 +3550,19 @@ static int64_t dumps_vec_nested(int64_t vec, const char* tags) {
                 break;
             }
             default:
+                /* Batch 889 (#273): same per-element shape probe as the
+                   flat dumper — nested mixed lists render readable words
+                   as quoted strings instead of raw pointers. */
+                if (v && zt_ptr_readable(v)) {
+                    out[n++] = '\'';
+                    for (const char* p = (const char*)v; *p; p++) {
+                        if (n + 3 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+                        if (*p == '\'') out[n++] = '\\';
+                        out[n++] = *p;
+                    }
+                    out[n++] = '\'';
+                    break;
+                }
                 n += (size_t)sprintf(out + n, "%lld", (long long)v);
                 break;
         }
@@ -3564,6 +3577,8 @@ int64_t py_json_dumps_vec_nested(int64_t vec, int64_t tags) {
     if (!t || !t[0]) t = "0";
     return dumps_vec_nested(vec, t);
 }
+
+int zt_word_readable(int64_t a);
 
 int64_t py_json_dumps_vec_typed(int64_t vec, int64_t tag) {
     if (!vec) return (int64_t)zt_strdup("[]");
@@ -3583,6 +3598,13 @@ int64_t py_json_dumps_vec_typed(int64_t vec, int64_t tag) {
                 break;
             }
             case 2: {
+                /* Batch 889 (#273): per-element shape probe — a mixed list
+                   (acc.append(1); acc.append("x")) can carry ints in a
+                   str-tagged vec; deref-ing them was the SEGV face. */
+                if (v && !zt_word_readable(v)) {
+                    n += (size_t)sprintf(out + n, "%lld", (long long)v);
+                    break;
+                }
                 /* Batch 565: CPython repr prefers SINGLE quotes — print(xs)
                    is a repr, not JSON (json.dumps has its own function). */
                 if (v) {
@@ -3603,6 +3625,20 @@ int64_t py_json_dumps_vec_typed(int64_t vec, int64_t tag) {
                 n += (size_t)sprintf(out + n, "%s", v ? "True" : "False");
                 break;
             default:
+                /* Batch 889 (#273): the mirror face — an int-tagged vec can
+                   carry string pointers (mixed literal [1, "a"]): render
+                   readable words as quoted strings. Small ints never pass
+                   (vm_read fails on unmapped low addresses). */
+                if (v && zt_word_readable(v)) {
+                    out[n++] = '\'';
+                    for (const char* p = (const char*)v; *p; p++) {
+                        if (n + 3 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+                        if (*p == '\'') out[n++] = '\\';
+                        out[n++] = *p;
+                    }
+                    out[n++] = '\'';
+                    break;
+                }
                 n += (size_t)sprintf(out + n, "%lld", (long long)v);
                 break;
         }

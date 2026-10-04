@@ -28927,3 +28927,21 @@ idx 绑到派发器缺省槽（IntLit 0），len(idx) 实读的是 import 句柄
 **验证**：t217 全行对齐（2/0/2/10/20/10/2）；python_style **478 过／1 FAIL**
 （仅余 t813＝#279 设计张力）；全量差分（--group 50）match=2845/2845＝100%；
 内置单元测试 158/158；历史探针七套零差异。
+
+## 批次 889（2026-10-04，**修复批：#273 根修——混型列表运行期逐元素形状判别**）
+
+`y = [1, "a"]; print(y)` 打位垃圾、退化 vec 混型追加后打印段错误。根因：
+py_json_dumps_vec_typed／dumps_vec_nested 的元素渲染由**静态 tag**（0=int、
+2=str）单通道选定，混型列表必然有一半元素走错通道（str 按位打、int 按
+char* 解引用＝段错误面）。
+修法（runtime 两文件）：py_additions.c 暴露 `zt_word_readable`（vm_read_overwrite
+单字节安全探针的非静态包装）；tokio_runtime_stub.c 的 flat 与 nested 两个
+dump 器在 int/str 两通道各加逐元素判别——int 通道遇可读字渲染成带引号字符串、
+str 通道遇不可读字渲染成整数（段错误面闭合）。小整数永远通不过探针（未映射
+低位地址 vm_read 失败），与 zeta_dyn_truth 的几何探针同一安全口径；嵌套器用
+stub 本地的 zt_ptr_readable（204 行，同语义）。
+
+**验证**：四面全对齐 CPython——`[1, "a"]`／`[1, 2, 'else']`（原段错误面）／
+同型对照 `[1,2,3]`／`['x','y']`／嵌套 `[[1, 'a'], [2, 'b']]`；全量差分
+（--group 50）match=2845/2845＝100%；python_style 478/1（仅余 t813＝#279）；
+内置单元测试 158/158；历史探针七套零差异。

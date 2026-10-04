@@ -1775,6 +1775,11 @@ static int zt_c_readable(int64_t a) {
     return vm_read_overwrite(mach_task_self(), (vm_address_t)a, 1,
                              (vm_address_t)&p, &g) == KERN_SUCCESS;
 }
+// 批次 889（#273）：跨编译单元的逐元素形状探针——tokio_runtime_stub 的
+// py_json_dumps_vec_typed 用它做混型列表的运行期判别（int 通道遇可读字渲染
+// 成字符串、str 通道遇不可读字渲染成整数）。小整数永远通不过（未映射低位
+// 地址 vm_read 失败），与 zeta_dyn_truth 的几何探针同一安全口径。
+int zt_word_readable(int64_t a) { return zt_c_readable(a); }
 int64_t zeta_dyn_truth(int64_t h);
 int64_t py_not(int64_t x) {
     // BATCH-297: this used to probe vec/map only when `GC_base(x) != x`, which
