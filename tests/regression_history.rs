@@ -4805,9 +4805,11 @@ print(i)
 /// 现 :143-164）：**带括号的比较是值比较，不是 Python 链式比较**。
 ///
 /// 症状（665 记录＋本批实测）：改前那臂在**左操作数自己也是比较**时按 Python 链式语义折叠
-/// （`a < b != c` ≡ `(a < b) and (b != c)`）。而 parser 没有括号节点，AST 分不清
-/// `(a < b) != c`（值比较）与 `a < b != c`（链式）两种拼写；运行期又不支持链式
-/// ⇒ 同一份源码折叠与运行期各给一个值：`(-5 == 0) > -16` 折成 False，
+/// （`a < b != c` ≡ `(a < b) and (b != c)`）。本批实测：真链式拼写在 parser 层就已被
+/// `parse_comparison` 逐段折成 `&&`（`print(1 < 2 < 3)` 折与运行都答 True，
+/// `print(3 < 2 < 1)` 都答 False，与 CPython 一字相同），到这一臂时外层是逻辑与而不是比较
+/// ⇒ 启发式只对**带括号**的拼写生效；而运行期对带括号的形是"先算左再比"，
+/// 于是同一份源码折叠与运行期各给一个值：`(-5 == 0) > -16` 折成 False，
 /// 不折的路径答 True（`gen_numeric_s664202_001`）。665 把这一臂归回值语义：
 /// 先算左、再算右、然后用外层算子比（`:161-163`）。
 ///
@@ -4827,10 +4829,12 @@ print(i)
 /// 顶层**裸比较**（`print(3 == 4)`）折出来的是布尔拼写而不是 0/1 ＝批次 642 的渲染臂；
 /// 本条钉**嵌套比较**折出来的**值**＝批次 665 的折叠臂。两者红点不同形，互不备份。
 ///
-/// 边界（本条不覆盖）：Python 真链式（`1 < 2 < 3`）需要 parser 层的链节点，665 记录写明
-/// "另立登记"；本车道 `backlog.md` 按"链式"grep 到 5 处，无一是这条的登记项 ⇒ 该缺口
-/// 记在 #20005 余项内（未占新号）。第八格 `print(1 < 2 == 1)` 只钉当前降法
-/// （右结合：`1 < (2 == 1)` → False，恰与 CPython 的链式结果同值）＝现状锁。
+/// 第八格 `print(1 < 2 == 1)` 钉的是链式拼写走 parser 那条路的结果：外层是 `&&`
+/// 而不是比较 ⇒ 这一臂拿到的是"布尔与布尔比"，折成 False（与 CPython 同值）＝现状锁。
+///
+/// 本批同时更正了站点注释里那句"运行期不支持链式／真链式需要 parser 层节点"——
+/// 与上面的实测相悖（`parse_comparison` 早就做收集-折叠，主树 `roadmap.md:846` 记为
+/// 2026-09-12 完成，早于 665），注释按实测重写、行数不动。
 #[test]
 fn parenthesized_comparison_folds_with_value_semantics_not_as_a_python_chain() {
     // (标签, 夹具行, 期望)——前三列一起决定源码，源码与期望不会走偏。
@@ -4861,7 +4865,7 @@ fn parenthesized_comparison_folds_with_value_semantics_not_as_a_python_chain() {
             "True",
         ),
         (
-            "不带括号的比较串（右结合，启发式打不到）",
+            "不带括号的比较串（parser 已折成 &&，启发式打不到）",
             "print(1 < 2 == 1)",
             "False",
         ),
@@ -4883,41 +4887,30 @@ fn parenthesized_comparison_folds_with_value_semantics_not_as_a_python_chain() {
             "True",
         ),
     ];
-    let src = cells
-        .iter()
-        .map(|(_, line, _)| *line)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let mirs = lower_all(&src);
-    let f = mir(&mirs, "main");
-
-    let printed: Vec<String> = f
-        .stmts
-        .iter()
-        .filter_map(|s| match s {
-            MirStmt::VoidCall { func, args } if func.starts_with("println") => {
-                args.first().and_then(|a| match f.exprs.get(a) {
-                    Some(MirExpr::StringLit(v)) => Some(v.clone()),
-                    Some(other) => Some(format!("{other:?}")),
-                    None => Some("<缺槽>".to_string()),
-                })
-            }
-            _ => None,
-        })
-        .collect();
-
+    // 每格单独降一趟 MIR。合在一起降时，没折的那几条会换一条发射路径，
+    // "第 i 个 println 调用"与"第 i 格"就对不上号——批次 10037 的变异矩阵里
+    // M4（把 `==` 从算子表里摘掉）实拿到"六条 True＋五条读不到"的清单，
+    // 逐格落点全是猜的。逐格降低一趟 ⇒ 一格对一个调用。
     let got: Vec<(&str, String)> = cells
         .iter()
-        .enumerate()
-        .map(|(i, (label, _, _))| {
-            (
-                *label,
-                printed
-                    .get(i)
-                    .cloned()
-                    .unwrap_or_else(|| "<这条没打到打印器>".to_string()),
-            )
+        .map(|(label, line, _)| {
+            let mirs = lower_all(line);
+            let f = mir(&mirs, "main");
+            let operand = f
+                .stmts
+                .iter()
+                .find_map(|s| match s {
+                    MirStmt::VoidCall { func, args } if func.starts_with("println") => {
+                        args.first().copied()
+                    }
+                    _ => None,
+                });
+            let shape = match operand.and_then(|id| f.exprs.get(&id)) {
+                Some(MirExpr::StringLit(v)) => v.clone(),
+                Some(other) => format!("{other:?}"),
+                None => "<没有 println 调用>".to_string(),
+            };
+            (*label, shape)
         })
         .collect();
     let want: Vec<(&str, String)> = cells

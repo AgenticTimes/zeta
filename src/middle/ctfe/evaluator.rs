@@ -130,16 +130,16 @@ impl ConstEvaluator {
                 }
                 /* Batch 665: comparisons fold with VALUE semantics —
                    `(a == b) > c` compares the INNER BOOL with c, exactly
-                   like the runtime's left-associated lowering. The former
+                   like the runtime's lowering of the same tree. The former
                    chained-comparison heuristic (`a < b != c` ≡ (a < b) and
-                   (b != c)) misfired on PARENTHESIZED comparisons — the
-                   AST cannot distinguish the two spellings, and the
-                   runtime itself has no chain support, so the heuristic
-                   made the fold and the runtime DISAGREE on the same
+                   (b != c)) misfired on PARENTHESIZED comparisons: a real
+                   Python chain is already rewritten by `parse_comparison`
+                   into one `&&` per link, so a comparison whose LEFT is
+                   another comparison can only come from parentheses. The
+                   heuristic made fold and runtime DISAGREE on the same
                    source: `(-5 == 0) > -16` folded to False while the
                    un-folded path answered True (gen_numeric_s664202_001).
-                   Real Python chains need a parser-level chain node —
-                   registered, not foldable here. */
+                   Locked by batch 10037's comparison unit cases. */
                 if matches!(
                     op.as_str(),
                     "<" | ">" | "<=" | ">=" | "==" | "!="
