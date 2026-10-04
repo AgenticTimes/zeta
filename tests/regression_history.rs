@@ -4800,3 +4800,116 @@ print(i)
         "循环模式里的绑定名与体内（含 if／while 嵌套）被赋的值必须全部进陈值清除名单（批次 644／642）——读回字面量＝那条赋值没被清除"
     );
 }
+
+/// 批次 665（`f954223a`，2026-09-29，站点 `src/middle/ctfe/evaluator.rs` 的比较折叠臂，
+/// 现 :143-164）：**带括号的比较是值比较，不是 Python 链式比较**。
+///
+/// 症状（665 记录＋本批实测）：改前那臂在**左操作数自己也是比较**时按 Python 链式语义折叠
+/// （`a < b != c` ≡ `(a < b) and (b != c)`）。而 parser 没有括号节点，AST 分不清
+/// `(a < b) != c`（值比较）与 `a < b != c`（链式）两种拼写；运行期又不支持链式
+/// ⇒ 同一份源码折叠与运行期各给一个值：`(-5 == 0) > -16` 折成 False，
+/// 不折的路径答 True（`gen_numeric_s664202_001`）。665 把这一臂归回值语义：
+/// 先算左、再算右、然后用外层算子比（`:161-163`）。
+///
+/// 观测点：`print(纯常量比较)` 走 `rewrite_big_print`（:254），它调 `eval_i128_tree`（:300），
+/// 折出来的布尔由 :305-306 渲染成 `"True"`／`"False"` 字符串字面量下发给 `println_str`
+/// ⇒ 折叠值在 MIR 里直接可读（`VoidCall{args:[N]}` 的 `exprs[N]`）。
+///
+/// 三侧真值（本批实拍，八格全一致；夹具件在临时目录 `target/tmp_b10037/`，
+/// `cargo clean` 会清掉，八行源码与本条夹具表的顺序一字相同）：
+/// - CPython（`c8.py`）→ True True True True True False True False；
+/// - 编译期折叠＋AOT 运行（`c8.z` 同序八行）同值（`rc=0`）；
+/// - 强制走运行期（把操作数换成列表元素，`xs = [-5, 0, -16, 2, 1, 5, 3, 1, 0, 1]`，
+///   `r8.z` 八行同序）⇒ 同值 ⇒ 折叠与运行期在这一形上一致，正是 665 要的不变式。
+///
+/// 与既有那条的分工：`:940 constant_folded_comparison_yields_bool_not_int_zero` 钉的是
+/// 顶层**裸比较**（`print(3 == 4)`）折出来的是布尔拼写而不是 0/1 ＝批次 642 的渲染臂；
+/// 本条钉**嵌套比较**折出来的**值**＝批次 665 的折叠臂。两者红点不同形，互不备份。
+///
+/// 边界（本条不覆盖）：Python 真链式（`1 < 2 < 3`）需要 parser 层的链节点，665 记录写明
+/// "另立登记"；本车道 `backlog.md` 按"链式"grep 到 5 处，无一是这条的登记项 ⇒ 该缺口
+/// 记在 #20005 余项内（未占新号）。第八格 `print(1 < 2 == 1)` 只钉当前降法
+/// （右结合：`1 < (2 == 1)` → False，恰与 CPython 的链式结果同值）＝现状锁。
+#[test]
+fn parenthesized_comparison_folds_with_value_semantics_not_as_a_python_chain() {
+    // (标签, 夹具行, 期望)——前三列一起决定源码，源码与期望不会走偏。
+    let cells: [(&str, &str, &str); 8] = [
+        // 1..4：改前的链式启发折成 False，值语义折成 True＝区分格。
+        (
+            "括号比较作左操作数（665 症状形）",
+            "print((-5 == 0) > -16)",
+            "True",
+        ),
+        ("内层为假＋外层 < 5", "print((2 < 1) < 5)", "True"),
+        ("内层为假＋外层 < 1", "print((3 < 2) < 1)", "True"),
+        ("内层为假＋外层 != 1", "print((2 < 1) != 1)", "True"),
+        // 5..8：两种折法给同一个值，当对照组（这一臂出别的毛病会先红在这里）。
+        (
+            "内层为真＋外层 > 0（两折法同值）",
+            "print(((3 > 2) == 1) > 0)",
+            "True",
+        ),
+        (
+            "内层为假＋外层 == 1（两折法同值）",
+            "print((2 < 1) == 1)",
+            "False",
+        ),
+        (
+            "内层为真＋外层 == 1（两折法同值）",
+            "print((0 == 0) == 1)",
+            "True",
+        ),
+        (
+            "不带括号的比较串（右结合，启发式打不到）",
+            "print(1 < 2 == 1)",
+            "False",
+        ),
+    ];
+    let src = cells
+        .iter()
+        .map(|(_, line, _)| *line)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mirs = lower_all(&src);
+    let f = mir(&mirs, "main");
+
+    let printed: Vec<String> = f
+        .stmts
+        .iter()
+        .filter_map(|s| match s {
+            MirStmt::VoidCall { func, args } if func.starts_with("println") => {
+                args.first().and_then(|a| match f.exprs.get(a) {
+                    Some(MirExpr::StringLit(v)) => Some(v.clone()),
+                    Some(other) => Some(format!("{other:?}")),
+                    None => Some("<缺槽>".to_string()),
+                })
+            }
+            _ => None,
+        })
+        .collect();
+
+    let got: Vec<(&str, String)> = cells
+        .iter()
+        .enumerate()
+        .map(|(i, (label, _, _))| {
+            (
+                *label,
+                printed
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| "<这条没打到打印器>".to_string()),
+            )
+        })
+        .collect();
+    let want: Vec<(&str, String)> = cells
+        .iter()
+        .map(|(label, _, v)| (*label, (*v).to_string()))
+        .collect();
+
+    assert_eq!(
+        want, got,
+        "嵌套比较的折叠值必须按值语义下发（批次 665）——前四格读回 False＝链式启发式又回来了；\
+         读回非字符串形状＝这一臂没折，走了运行期"
+    );
+}
