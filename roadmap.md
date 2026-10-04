@@ -29534,3 +29534,26 @@ P4 回灌替换是下一个消费面扩张点）。
 isinstance 静态回答）；checker 55/55、库测试 226/226；每批全量差分
 2845/2845、python_style 479/0。深化方向（非功能缺口）：py 类 TypeDecl
 注册（py 类构造 Named 化）、P4 消费面继续扩张。
+
+## 批次 944–945（2026-10-05）：字段返回型链修复＋W1010 误报清零＋消费面普查
+
+- **批 944（`b9932b18`）字段访问返回型链**：前提勘正——parse_class 一直发
+  StructDef（top_level.rs:1550），py 类本就注册进 type_decls，批 943 修复
+  后 py 类构造/isinstance 单调用点已通。双调用点异型静态放弃是正确语义。
+  真实缺陷：getx(v) return v.px; x = getx(p); x*2 打位模式垃圾（9218868437227405312，
+  CPython 3.0）——字段型在函数边界丢。修：checker ret_expr_ty 补
+  FieldAccess 臂（基槽 Named(T) ⇒ 查 Struct 字段型）；gen/call_field.rs
+  基槽为 ABI 缺省时查 checker_env 具名型再走 struct_field_ty。
+- **批 945（`883f02df`）W1010 print 误报清零**：根因＝lower_print 只发
+  VoidCall 从不写 dest 槽，lower_expr 尾检见空就喊——每次 print 白喊
+  两声且污染语料编译日志。print 臂补 None 占位（与 fallback 同值），
+  print(1) 0 声（改前 2 声）、产物不变。
+- **消费面普查（探针，全对齐 CPython）**：str/list/dict 方法在证据定型
+  接收者上过函数边界（upper/append/下标）、py 类字段链（px*2）、方法
+  链（strip().upper()）、字段后下标（b.xs[0]*2）、字段列表 mean
+  （b.xs.mean() 折叠）——推断消费面已覆盖到三层组合。
+- **key= 缺口复测（仍在册）**：max(xs, key=abs) 崩溃（exit 138，内建无
+  一等函数值）；用户 key 函数 f64 位模式按 i64 比较错序——属函数值/ABI
+  轴（需 key 函数按元素型单态化），非推断轴。
+
+库测试 227/227；每批全量差分 2845/2845、python_style 479/0。
