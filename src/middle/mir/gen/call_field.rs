@@ -555,7 +555,23 @@ impl MirGen {
                         method,
                         ..
                     } => struct_field_ty(&self.type_decls, method, field),
-                    _ => None,
+                    // 批 944：基槽是 ABI 缺省（I64/PyDynamic/未知）时查
+                    // checker_env 的具名型——参数 v 的槽标 I64（数组按
+                    // 指针传参），但调用点证据链可能已把 v 定成 Named
+                    // (Point)；字段型丢在函数边界会让返回槽落 I64，
+                    // f64 位模式被整数算术读成垃圾（x*2 实拍
+                    // 9218868437227405312，CPython 3.0）
+                    _ => match &**base {
+                        AstNode::Var(vn) => {
+                            match self.checker_type_of(vn) {
+                                Some(Type::Named(tn, _)) => {
+                                    struct_field_ty(&self.type_decls, &tn, field)
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    },
                 },
             };
             self.type_map.insert(dest, field_ty.unwrap_or(Type::slot_fallback()));

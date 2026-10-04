@@ -575,6 +575,27 @@ fn ret_expr_ty(e: &AstNode, env: &TypeEnv, ctx: &InferCtx) -> Option<Type> {
         return uniform_elem_lat(elems)
             .map(|t| Type::DynamicArray(Box::new(t)));
     }
+    // 字段访问 Return ⇒ 字段型（批 944——return v.px 的 getx 函数边界
+    // 由此知道返回 f64；此前缺失使 x = getx(p) 的 x 槽落 I64，f64 位
+    // 模式被整数乘出垃圾）
+    if let AstNode::FieldAccess { base, field } = e {
+        if let AstNode::Var(bn) = &**base {
+            if let LatticeTy::Known(Type::Named(tn, _)) = env.get_slot(bn.as_str())
+            {
+                if let Some(crate::middle::mir::r#gen::TypeDecl::Struct {
+                    fields,
+                    ..
+                }) = ctx.type_decls.get(tn.as_str())
+                {
+                    if let Some((_, ft)) = fields.iter().find(|(f, _)| f == field)
+                    {
+                        return Some(Type::from_string(ft));
+                    }
+                }
+            }
+        }
+        return None;
+    }
     None
 }
 
@@ -2064,6 +2085,44 @@ mod tests {
             ev_show[0],
             Some(Type::DynamicArray(Box::new(Type::F64))),
             "顶层 show(get_data()) ⇒ data 位证据 DynamicArray(F64)"
+        );
+    }
+
+    /// return 字段访问：参数槽 Named(Point) ⇒ v.px 的字段型（批 944）。
+    #[test]
+    fn return_field_access_types_field() {
+        let mut env = TypeEnv::new();
+        let mut decls: HashMap<String, crate::middle::mir::r#gen::TypeDecl> =
+            HashMap::new();
+        decls.insert(
+            "Point".to_string(),
+            crate::middle::mir::r#gen::TypeDecl::Struct {
+                fields: vec![("px".to_string(), "f64".to_string())],
+                generics: vec![],
+            },
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &decls,
+            module_globals: &Default::default(),
+        };
+        // 参数证据：v ⇒ Named(Point)（模拟调用点 p = Point() 的三跳链）
+        let evidence = vec![Some(Type::Named("Point".to_string(), vec![]))];
+        infer_fn_body_full(
+            &mut env,
+            "getx",
+            &[("v".to_string(), String::new())],
+            Some(&evidence),
+            &[AstNode::Return(Box::new(AstNode::FieldAccess {
+                base: Box::new(var("v")),
+                field: "px".to_string(),
+            }))],
+            &ctx,
+        );
+        assert_eq!(
+            env.fn_rets.get("getx"),
+            Some(&Type::F64),
+            "return v.px ⇒ 字段型 F64 进 fn_rets"
         );
     }
 
