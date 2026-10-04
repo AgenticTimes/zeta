@@ -590,6 +590,34 @@
 >   `target/release/zetac` md5＝`ed5227ccd29b70c4ee9ae17500926f10` 与开批那颗一字相同（矩阵只跑
 >   debug 目标）⇒ 抽样窗口未跑。开批实测滞留 `bootstrap..cleanup`＝32／`cleanup..bootstrap`＝336，
 >   三笔代码笔落地后重取＝34／336。
+> - 批次 10039（代码 `4378024c` ＋ `59519f1e` ＋ `f3d51b25`）＝来源批次 169（`8383988f`，2026-09-20，
+>   注解 `-> dict` 而体里 `return json.loads(...)` 的函数要把登记返回型改成 `PyJson`；站点＝
+>   `src/middle/resolver/resolver.rs` 的 :4533 接收者守卫／:4543-4546 三臂走查／:5196 `is_dict_ret`／
+>   :5205-5206 改写落点，本批零 `src/` 改动；`git merge-base --is-ancestor` 已验在本树）：
+>   本套 **62 条全绿**（0.12-0.27 秒），crate 内单元测试 145 条一字不变。新用例
+>   `annotated_dict_return_becomes_pyjson_when_the_body_returns_json_loads`＝十三格一条 `assert_eq!`
+>   （体内目的槽四格＋`other` 体内一格＋`branchy` 体里字典字面量一格＋调用点目的槽六格）。
+>   真值：CPython 侧不适用（zeta 的注解＋内部型标记），期望取自 169 记录＋`--dump-mir` 的 `main`
+>   段 `type_map` 实测（`d`／`b` 两处 `PyJson`，`i`／`t`／`e`／`o` 四处 `map`）。
+>   七臂矩阵（还原源＝`git show HEAD:<路径>`，锚点次数＝1，变异后 md5≠还原态，收尾 md5＝
+>   `e841c2206fe81514fe57895e73991edf`）：A2（删改写那步）＝A6（顶层 `return` 那支不认）＝A7
+>   （`is_dict_ret` 换成注解里不会出现的名字）三臂红格一字相同（第 2/3/9 格退成 `map`）＝**一条链
+>   只算一条覆盖**；A3（放宽接收者守卫）只红第 13 格（`other` 调用点 `map`→`PyJson`）＝第二条独立覆盖；
+>   A1（只认 `map` 拼写）／A4（`If` 丢掉 `else_` 递归）／A5（丢掉 `Block` 递归）三臂 62 条一字不变＝**阴性**。
+>   判别跑（一枚 2×2 对照夹具，不在用例里）：`json.loads` 放 then 侧与放 else 侧，只要写了显式 `else:`
+>   就认不出（两侧都是 `map`），隐式 else（尾返回）两侧都认得出 ⇒ 分界是 `else:` 关键字本身，
+>   与侧无关；只看 `inelse` 一枚会误写成"else 递归坏了"。
+>   **仍未锁的（记在本条余项内、未占新号）**：① 显式 `else:` 形状与 `try:` 块内形状认不出（第 10/11/12
+>   格是未修现状锁，修好后要改成 `PyJson`），根因未查＝本树把这两种写法解析成什么 `AstNode` 没看，
+>   :4546 的 `If` 递归与 :4544 的 `Block` 递归对这四种形状没有贡献，但不写成死码（可能有别的形状打到）；
+>   ② :5196 的 `|| n == "dict"` 那一半阴性＝`dict` 拼写在 :5196 之前已被 153 的归一化变成 `map`，
+>   可达与否未证；③ 第 1-6 格对七臂全不敏感（`py_json_loads` 自带签名给的 `PyJson`）＝现状锁非分支锁；
+>   ④ 负向格只有第 8 格（`branchy` 体里字典字面量）与第 13 格（`other` 调用点），`main` 侧没有
+>   "改写过头把字典字面量顶成 `PyJson`"的对应格。
+>   检查节奏：只跑改到的目标＝历史套件 62/62 ＋ crate 内 145/145 ＋ 编译零错误；
+>   `target/release/zetac` md5＝`ed5227ccd29b70c4ee9ae17500926f10` 与 10038 那颗一字相同（矩阵只跑
+>   debug 目标，本批未重编）⇒ 抽样窗口未跑。开批实测 `cleanup..bootstrap`＝336，三笔代码笔落地后
+>   收尾实测 `bootstrap..cleanup`＝38／`cleanup..bootstrap`＝340。
 
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134

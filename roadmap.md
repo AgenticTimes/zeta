@@ -28043,3 +28043,92 @@ M3 实跑仍 61 条一字不变（阴性），原因是"构造自己所在的类
 ＝`HashMap` 迭代顺序入读数；凡是"放宽守卫"类变异，读数要跑够两遍再定性，别把一次读数写成必然值。
 ③ 同形守卫要先数清有几处再定锚点：`if hits.len() == 1 {` 在 `resolver.rs` 里有 4 处，
 矩阵首跑在锚点自检那一步就报"次数=4"退出（树未被改动、md5 复核等于 HEAD），改两行锚点后才开跑。
+
+## 批次 10039（cleanup）——#20005 第二十八批：把批次 169 的 `-> dict`＋`json.loads` 改判成 PyJson 做成编译期单元测试
+
+**车道分歧**：开批第一步实测 `cleanup..bootstrap`＝336（主树领先本车道，并树归主树侧，本车道只推
+`agentic cleanup`）；三笔代码笔落地后收尾实测 `bootstrap..cleanup`＝38、`cleanup..bootstrap`＝340。
+
+**来源批次**：169（`8383988f`，2026-09-20，"fix(py-a): batch 169 — `-> dict` + `json.loads` 的返回类型；
+map 原语对 JSON 句柄的响亮拒绝"）。`git merge-base --is-ancestor 8383988f HEAD` rc=0（已验在本树）；
+那笔在 `src/middle/resolver/resolver.rs` ＋49/−0，另动 `runtime/py_additions.c` ＋4、
+`runtime/tokio_runtime_stub.c` ＋27 与两颗 `.o`。站点＝本批落笔后的 `resolver.rs`：接收者守卫 :4533
+（`if v == "json" && method == "loads"`）、走查三臂 :4543（顶层 `Return`）／:4544（`Block` 递归）／
+:4546（`If` 的 then＋else 递归）、判定入口 :5196（`is_dict_ret`，认 `map` 与 `dict` 两种拼写）、
+改写落点 :5205-5206（命中就把登记型换成 `Named("PyJson", [])`）。
+
+**症状与修法（169 原意）**：函数注解写 `-> dict`（进 :5196 之前已被归一成 `Named("map", [])`）而函数体
+实际 `return json.loads(...)` 时，登记的返回型仍是 map ⇒ 调用点目的槽按 map 编译，而运行期的值是一个
+JSON 句柄；`map_get_default` 一类 map 原语把句柄头的标记当容量读，实测过挂死（`resolver.rs:5189-5195`
+的注释记了用 lldb 量到的过程）。169 的修法＝`is_dict_ret` 成立时走查函数体，
+认出 `json.loads` 那条 `return` 就把返回型改成 `PyJson`。
+
+**候选筛选（为什么是 169）**：resolver 家族的候选表在 10023 已用完，本批按文件面重筛（脚本
+`/tmp/b10039/screen.py`／`screen_old.py`／`screen_middle.py`，产出 `/tmp/b10039/cands*.json`）。
+排除理由：159 与 10038 同一站点（`module_renames_for`）；660 在批次 10026 已做过对照且差异 0 行；
+601 属 #20007（接管者未定位）；647／661 的站点在本车道在制的 `top_level.rs`／`expr.rs`（跨车改动要先报备）；
+结论落在后端 IR 或运行期而不落在 MIR 的（`codegen.rs`、`runtime/*.c`）按 #20005 口径不收。
+
+**本批代码三笔（`git show --numstat`）**：
+- `4378024c` tests/regression_history.rs ＋178/−0（新增一条用例，八格）；
+- `59519f1e` 同文件 ＋39/−4（夹具末尾加四条模块级赋值，新增第 9-12 格＝调用点目的槽）；
+- `f3d51b25` 同文件 ＋24/−7（再加 `exp_then` 那一角＝第 11 格，并把第 10/11/12 三格的标签改成
+  "显式 else 未修现状锁"，断言消息同步）。
+站点零改动：本批不含 `src/**`，`resolver.rs` md5 全程 `e841c2206fe81514fe57895e73991edf`＝HEAD。
+
+**用例**：`annotated_dict_return_becomes_pyjson_when_the_body_returns_json_loads`（`tests/regression_history.rs:5186`
+起，十三格一条 `assert_eq!`，红了能直接看出是哪一支臂坏的）。辅助走查 `find_call_dest` 要递归进
+`If`／`For`／`While` 的块（首跑就漏在 `branchy` 段：只走查顶层语句时报"段内没有被调名含 json_loads 的调用"，
+实得清单里 `py_json_loads` 在块内）；`MirStmt::TryProp` 不带体，`try` 块里的调用在 MIR 里是平铺的。
+
+**真值来源**：这一族是 zeta 的注解＋内部型标记，CPython 侧不适用。期望取自 169 的记录＋
+`--dump-mir` 的 `main` 段 `type_map` 实测：八格首跑时 `load`／`branchy`／`inelse`／`try_ret` 体内那次
+`json.loads` 的目的槽都是 `PyJson`（这颗来自 `py_json_loads` 的自带签名，不是 169 的改写），`other`
+体内是 `I64`（接收者是无型形参）；补调用点四格后实测 `d`／`b` 两处 `PyJson`，`i`／`t`／`o` 三处 `map`。
+
+**判别跑（不在用例里，一枚 2×2 对照夹具：`/tmp/b10039/fx/main3.z` ＋ `/tmp/b10039/mir_main3.txt`）**：
+把"json.loads 在 then 侧／else 侧" × "隐式 else（尾返回）／显式 `else:`"做成四格，读调用点目的槽：
+`then_implicit`＝`PyJson`、`tail_implicit`＝`PyJson`、`then_explicit`＝`map`、`else_explicit`＝`map`
+⇒ 认不出的是**带显式 `else:` 关键字**这一整形状，与 `json.loads` 落在哪一侧无关。据此第 11 格
+（`exp_then`，json.loads 在显式 if/else 的 then 侧）期望 `map` 入册；只看第 10 格会误写成"else 侧坏了"。
+
+**变异矩阵（七臂全在 `resolver.rs`；逐臂写文件＋`cargo test --test regression_history`，
+`/tmp/b10039/matrix.log` 第二跑、逐臂原始输出 `/tmp/b10039/arm_A*.txt`）**：
+
+| 臂 | 改法 | 红格 |
+|---|---|---|
+| A2 | 删掉改写那一步（:5205 条件恒假） | 第 2/3/9 格，实得都退成 `map` |
+| A6 | 顶层 `return` 那一支不认（:4543） | 第 2/3/9 格，与 A2 一字相同 |
+| A7 | `is_dict_ret` 换成注解里不会出现的名字（:5196，169 整条变死码） | 第 2/3/9 格，与 A2 一字相同 |
+| A3 | 放宽接收者守卫（:4533 不再要求接收者是 `json`） | 只有第 13 格（`other` 调用点 `map`→`PyJson`） |
+| A1 | 只认 `map` 拼写（删 :5196 的 `|| n == "dict"`） | 无（阴性） |
+| A4 | `If` 只看 then 侧（删 :4546 的 `\|\| …(else_)`） | 无（阴性） |
+| A5 | 丢掉 `Block` 递归（:4544 恒假） | 无（阴性） |
+
+⇒ **两条独立覆盖**：链 A2＝A6＝A7（红格集合相同，只算一条）＋ 接收者守卫 A3（独占第 13 格）。
+三臂阴性留档。A3 那一跑还读到第 10/11/12 格在放宽守卫下仍是 `map` ⇒ 那三格的挡住点在分支形状上，
+不在接收者守卫上。还原核对：每臂写完立刻断言 md5≠HEAD，写回 `git show HEAD:<路径>` 后断言 md5＝HEAD；
+七臂跑完复跑 62/62 绿、`resolver.rs` md5 回到 `e841c220…`。
+
+**检查**：历史套件 62/62 绿（0.12-0.27 秒）＋ crate 内单元测试 145/145（0.32 秒）＋ 编译零错误。
+`target/release/zetac` md5＝`ed5227ccd29b70c4ee9ae17500926f10`，与 10038 记录的那颗一字相同（矩阵只跑
+debug 目标，本批没重编）⇒ 按 2026-10-03 的每批节奏不跑抽样窗口。
+
+**余项（记在 #20005 内，未占新号）**：
+① 显式 `else:` 的函数体认不出（2×2 实测：`json.loads` 放 then 侧与放 else 侧同样得到 `map`）、
+`try:` 块内也认不出（第 12 格）。根因未查：要查得先看本树把这两种写法解析成什么 `AstNode`。
+:4546 的 `If` 递归与 :4544 的 `Block` 递归在 A4／A5 两臂下都没有可观测效果＝这两条臂对本批的四种形状
+没有贡献，但**不写成死码**（可能有别的形状打到它，本批没找）。
+② A1（`|| n == "dict"` 那一半）阴性 ⇒ 与批次 153 的拼写归一化一致，`dict` 在 :5196 之前已变成 `map`；
+那一半可达与否未证。
+③ 第 1-6 格（体内目的槽）对七臂全不敏感＝`py_json_loads` 自带签名的现状锁，不是分支锁。
+④ 负向格只有两枚（第 8 格＝`branchy` 体里的字典字面量仍是 `map`、第 13 格＝`other` 调用点）；
+"改写过头把字典字面量顶成 `PyJson`"这一形状只在 `branchy` 段内钉了一格，`main` 侧没有对应负向格。
+⑤ 前三批挂着的未锁项本批未触碰，数量不变：10035 五条、10036 五条、10037 三条、10038 五条。
+
+**教训**：① 新增观测格要先实测那支臂打不打得到——八格首跑时 A3／A4／A5 全阴性，原因是体内那几格的
+`PyJson` 来自 `py_json_loads` 的自带签名而不是 169 的改写；把调用点四格补进射程，A3 才第一次红在
+自己那一格（放宽守卫＝把 `obj.loads(...)` 也顶成 `PyJson`）。② 想知道分界是什么，先做 2×2 再说：
+只有 `inelse`（else 侧）一枚时会写成"else 递归坏了"，补上 `exp_then`（then 侧＋显式 else）那一角才发现
+分界是 `else:` 关键字本身。③ 用例标签改了要同步改矩阵的期望清单，脚本里那条 `assert k == gv_k`
+就是为这一步留的守卫（第三笔把第 10/11/12 格标签改成"显式 else"，矩阵 WANT 跟着重写成十三格才跑第二遍）。
