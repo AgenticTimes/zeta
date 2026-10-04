@@ -28977,3 +28977,32 @@ gen.rs 3931→3827（净 -104）。**lower_expr_node 内联臂至此清零**—�
 **验证**：编译零错误；内置单元测试 158/158；全量差分（--group 50）
 match=2845/2845＝100%；python_style 478/1（仅余 #279/t813）；历史探针七套
 两轮全零差异；cast/range 迷你探针对齐。
+
+## 批次 892（2026-10-04，**#279 方案②首步侦察：未知型均值链路五环节图＋各环节单修实验读数（零落地如实报）**）
+
+getattr 域决策：四个 getattr face 与 Batch 405 ghost 守卫（还共享 range）及其他
+face 交错，顺序敏感且已住 call_dispatch 家族文件——迁出低价值高风险，YAGNI
+维持（登记结论不变）。
+
+方案②首步＝把未知型均值的**完整类型传播链**测绘清楚。五环节：
+① mean 臂（call_dispatch，接收者型门→路由）；② body 型→signature_ret_ty
+（mir.rs——**PyDynamic→I64 映射是承重墙**：codegen infer_fn_return_type 对
+PyDynamic 落 i64，指针 ABI 与缺省一致，改映射本身安全）；③ body_ret_tys 登记
+（resolver :5607，只收 F32/F64）；④ 回灌消费（resolver :5535，只灌 F32/F64
+进 func_ret_types）；⑤ print 分派（call_print——PyDynamic 落 println_i64）。
+
+**各环节单修的实验读数**（每步独立编译实拍）：
+- 单修⑤（print 加 PyDynamic→zeta_dyn_to_string 形状分派面）：t813 仍打指针
+  （调用点槽型是 I64，没走新面）；
+- 加③④（回灌放宽 PyDynamic）：仍指针——signature_ret_ty 的 ②'（PyDynamic→
+  I64）在登记前就把型丢了；
+- 修②'（signature_ret_ty 保留 PyDynamic）：t813 变 **1e-322**（f64 渲染的
+  非规格数＝整数 20 的位模式按 f64 打）——**上游还有一处 F64 源**在回灌之外
+  覆盖了槽型（精确环节未定位，嫌疑＝批 813 原 F64 回灌的次序或 mean 臂自身
+  的残留 F64 型）。
+- t10004／t10002 全程绿（两面的运行期行为都正确，错的只是静态型）。
+
+**结论**：五环节必须同时对齐才能让未知型均值到达打印面——对齐本身就是
+方案②（运行期格标签）的主体工程。五个单点修复与链路图已全部入册，方案②
+立项时按图索骥即可。零落地如实报（全部尝试已回退，三 mean 夹具回登记面，
+lib 158/158、全量差分 100% 复验）。
