@@ -4648,3 +4648,115 @@ print(b.show())
         "基类接管后构造器返回的 Struct 变体名也该带模块前缀（左＝期望，右＝逐格实得）"
     );
 }
+
+/// 循环之后那句 print 的**操作数形状**（批次 644 的观测点）：
+/// - 值是从模块环境现读的 → `env_get("<名字>")`（陈值已被清除，读取留在 MIR 里）；
+/// - 值被折成了字面量 → `StringLit("0")`／`IntLit(0)`（＝644 的症状：循环前那条赋值的陈值）；
+/// - 其他（直接用一个槽的值）→ `var`。
+///
+/// 只看**顶层最后一个循环之后**（`for` 在 MIR 里降成 `While`）的第一条 `println_*`，
+/// 避免把循环体内那条 print 读进来。
+fn print_operand_shape_after_last_for(m: &Mir) -> String {
+    let last_for = m
+        .stmts
+        .iter()
+        .rposition(|s| matches!(s, MirStmt::For { .. } | MirStmt::While { .. }))
+        .unwrap_or_else(|| {
+            panic!(
+                "main 顶层没有循环（for 在 MIR 里降成 While），顶层语句形如: {:?}",
+                m.stmts
+                    .iter()
+                    .map(|s| format!("{s:?}").chars().take(40).collect::<String>())
+                    .collect::<Vec<_>>()
+            )
+        });
+    let operand = m.stmts[last_for + 1..]
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::VoidCall { func, args } if func.starts_with("println_") => args.first().copied(),
+            _ => None,
+        })
+        .expect("循环之后没有 println 调用");
+    let env_name = m.stmts.iter().find_map(|s| match s {
+        MirStmt::Call { func, args, dest, .. }
+            if func == "zeta_env_get" && *dest == operand =>
+        {
+            args.first().copied()
+        }
+        _ => None,
+    });
+    if let Some(nid) = env_name {
+        return match m.exprs.get(&nid) {
+            Some(MirExpr::StringLit(n)) => format!("env_get({n})"),
+            _ => "env_get(名字读不出)".to_string(),
+        };
+    }
+    match m.exprs.get(&operand) {
+        Some(MirExpr::StringLit(s)) => format!("StringLit({s:?})"),
+        Some(MirExpr::IntLit(i)) => format!("IntLit({i})"),
+        Some(MirExpr::Var(_)) => "var".to_string(),
+        Some(_) => "其他形状".to_string(),
+        None => "槽缺失".to_string(),
+    }
+}
+
+/// 来源＝批次 644（`23a32829`，2026-09-29，站点 `src/middle/ctfe/evaluator.rs`）。
+///
+/// 症状：批次 642 给循环／条件体加了"陈值清除"——体里被赋过值的名字要从 i128 常量表里
+/// 删掉，之后的读取才不会被折成常量。那版的收集器 `p642_collect_assigned` 的 `For` 臂只认
+/// `AstNode::Var` 形态的循环模式，`for k2, v2 in pairs:` 这种**元组模式**两个绑定名一个都没
+/// 收进清除名单 ⇒ 循环前 `k2 = 0` 那条赋值的陈值留在表里 ⇒ 循环之后的 `print(k2)` 被折成 `0`
+/// （644 记录里 t518 实拍＝打 `0`，应为 `2`）。
+///
+/// 修法：`For` 臂改走新增的 `p642_collect_pattern_vars`，递归收集模式里的每个绑定名。
+///
+/// 三侧真值（本批实测，`target/tmp_b10036/`）：
+/// - CPython 侧：`f1`→`1 2 2`、`f2`→`7 9 9`、`f3`→`a b b`；
+/// - AOT 侧：三枚都同值、rc=0（`target/tmp_b10036/f{1,2,3}.bin`，仓根构建并运行）；
+/// - `--dump-mir` 侧：三枚夹具循环后那句 print 的操作数分别是 `zeta_env_get("k2")`→`println_i64`、
+///   `zeta_env_get("i")`→`println_i64`、`Var`→`println_str`（`f3` 打的是字符串绑定，值仍来自循环）。
+#[test]
+fn loop_pattern_bindings_kill_the_stale_int_const_before_later_prints() {
+    // f1：元组模式，读**第一个**绑定名（644 记录里 t518 的原始形状）
+    let f1 = r#"
+pairs = [(1, "a"), (2, "b")]
+k2 = 0
+for k2, v2 in pairs:
+    print(k2)
+print(k2)
+"#;
+    // f2：裸名模式（644 之前就收集得到的形状）——用来区分"元组递归"和"收集器本身"
+    let f2 = r#"
+xs = [7, 9]
+i = 0
+for i in xs:
+    print(i)
+print(i)
+"#;
+    // f3：元组模式，读**第二个**绑定名——第一个名字收到、第二个漏掉时只有这一格会变
+    let f3 = r#"
+pairs = [(1, "a"), (2, "b")]
+v2 = 0
+for k2, v2 in pairs:
+    print(v2)
+print(v2)
+"#;
+    let readings: Vec<(&str, String)> = [
+        ("元组模式·第一个绑定 k2", f1),
+        ("裸名模式 i", f2),
+        ("元组模式·第二个绑定 v2", f3),
+    ]
+    .iter()
+    .map(|(label, src)| (*label, print_operand_shape_after_last_for(&mir(&lower_all(src), "main"))))
+    .collect();
+
+    assert_eq!(
+        readings,
+        vec![
+            ("元组模式·第一个绑定 k2", "env_get(k2)".to_string()),
+            ("裸名模式 i", "env_get(i)".to_string()),
+            ("元组模式·第二个绑定 v2", "var".to_string()),
+        ],
+        "循环模式里的绑定名必须全部进陈值清除名单（批次 644）——读回字面量＝那条赋值没被清除"
+    );
+}
