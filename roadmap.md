@@ -29574,3 +29574,27 @@ isinstance 静态回答）；checker 55/55、库测试 226/226；每批全量差
   （0.0/0.0 vs 3.0/0.0）——需按调用点单态化。
 - 新增 3 单元测试；checker 58/58、库测试 230/230；全量差分 2845/2845、
   python_style 479/0。
+
+## 批次 947（2026-10-05）：字典值型过函数边界——五层修复
+
+缺陷实拍：d = {}; d["a"] = 1.5; def get(dd,k): return dd[k]; get(d,"a")
+打 1.5 的 f64 位模式。五层（探针逐层定位）：
+
+1. **checker d[k]=v 写侧精化臂**（scan_stmts）：键/值型按 gen 首插规则
+   精化占位；已钉槽写异型值 ⇒ 值型退化 PyDynamic（污染信号，静态
+   per-cell——batch 765 的 dict 级钉型已被否决）。
+2. **顶层 Var 实参证据**：plan 的 module_env 前移，merge_top_level
+   补 module_env 查找——证据链跨顶层调用点。
+3. **gen .get() 臂 receiver.is_some() 守卫**：自由函数 get(d,k) 被劫持
+   成字典读（dest 硬编码 I64）。
+4. **gen 下标读 checker 兜底**：占位型基槽（I64/PyDynamic/map[I64,I64]）
+   查 checker_env；污染三类不信——PyDynamic 退化/占位 I64/基槽在
+   本函数内已发过 DictInsert（读前写）。
+5. **map 键值误用修正（批 923 引入）**：下标读臂误用 for_elem_lat
+   （for 迭代语义 map⇒键型），m["a"] 的值被读成键型——t485 负对照
+   SEGV 实拍。map 值型判定提到 for_elem_lat 之前。
+
+过程记录：二分实验的 `if false` 禁用标记未恢复＋清探针误删守卫行＋
+增量编译陈旧产物（教训 1），三读数互相矛盾——全部回滚 HEAD 一次
+成型重打。新增 1 单测；库测试 231/231；三探针全对齐；全量差分
+2845/2845、python_style 479/0。
