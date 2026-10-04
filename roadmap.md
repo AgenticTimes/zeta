@@ -27453,3 +27453,57 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
   `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
   两本台账，**连续二十九批**）；待补台账行的文字写进本批记录笔的提交信息。
+## 批次 10031（cleanup）——#20005 第二十批：把主树批次 150 的 `float`／`int` 注解别名做成编译期单元测试
+
+- 本批零 `src/` 改动，代码笔 `a287e84b`（只改 `tests/regression_history.rs`，+89 行、1 条用例）。
+  检查节奏按 2026-10-03 裁定＝只跑改到的测试目标＋编译零错误：
+  `cargo test --test regression_history` → **53 passed; 0 failed，0.38 秒**（追加前 52 条）。
+  十批界的全局逐个用例上一批（10030）刚跑过，本批不重跑。
+- 来源核实：主树批次 150 提交 `41e15672`（标题＝"非法 IR（分支内 return float）＋ Python
+  `float`/`int` 注解别名"）在本树可达（`git merge-base --is-ancestor 41e15672 HEAD` 通过）。
+  这一笔就是 #20005 余项里挂着的那条"同格第三笔 150…留给下一批"（`backlog.md:397-398`），本批销掉。
+- 记录里的三条症状（取自 `git show 41e15672` 的注释原文，不按当前输出反推）：
+  ① `float` 留作不透明命名型时，每个这样的形参拿到整数调用约定（调用点各插一条 fptosi）；
+  ② `-> float` 只在 `infer_fn_return_type` 恰好看见浮点字面量时才返回 f64，否则整型函数 `ret double`
+  发出非法 IR，整个编译在链接前中止；
+  ③ 即便被调方签名已是 double，调用点仍把结果记成 i64，`print(fee(2.0))` 打的是 f64 的位模式
+  （4611686018427387904）。
+- 夹具（`/tmp/b10031/alias150.z`，与用例正文一字同）＋三侧真值：
+  `def fee(amount: float, rate: int) -> float:` ＋ `return amount * 2.0` ＋ `x = fee(1.5, 2)` ＋ `print(x)`。
+  CPython 运行 `3.0`；`--dump-mir` rc=0、两段（`/tmp/b10031/mir_after.txt`，每段切到下一个 `== MIR ` 为止）
+  读数＝`fee` 段 `param_indices: [("amount", 1), ("rate", 2)]` 与 `type_map: 1: F64 / 2: I64 / 6: F64`，
+  `main` 段 `Call { func: "fee_2", dest: 4 }` 配 `4: F64`、`VoidCall { func: "println_f64", args: [13] }`。
+  症状②落在后端 IR／链接面，本 harness 只走到 MIR ⇒ 那一半不收录（见下面未锁第 ③ 条）。
+- 逐臂撤除矩阵（脚本 `/tmp/b10031/mut.py` 四臂整撤、`/tmp/b10031/mut2.py` 分工撤；
+  还原源固定 `git show HEAD:<路径>`，每臂撤前断言锚点次数＝1、变异后 md5≠还原态、还原后 md5 与
+  HEAD 一字相同；四臂最终与 `HEAD` 逐字节相同，`git status src/` 只剩批次 745 那三个在制文件）：
+
+  | 撤掉的臂 | 53 条读数 | 第一红点（最终文件行号） |
+  |---|---|---|
+  | `src/middle/mir/gen.rs:1498` 去掉 `float` 拼写 | 1 红 52 绿 | `:4020` 形参 `amount` 槽 `Some(I64)` ≠ 期望 `F64` |
+  | `src/middle/types/mod.rs:320` 的 `int` 那一行 | 1 红 52 绿 | `:4026` 形参 `rate` 槽 `Some(Named("int", []))` ≠ 期望 `I64` |
+  | `src/middle/resolver/typecheck_new.rs:140` 的 `float` 那一行 | 1 红 52 绿 | `:4050` 调用点目的槽 `Some(Named("float", []))` ≠ 期望 `F64` |
+  | `src/middle/resolver/new_resolver.rs:440-441` 两行整对 | 53 绿不变 | —（阴性） |
+  | `typecheck_new.rs:139` 单撤 `int` | 53 绿不变 | —（阴性） |
+  | `types/mod.rs:321` 单撤 `float` | 53 绿不变 | —（阴性） |
+
+  三臂各红各的那一格＝互为独立覆盖（与 10028 的"两臂红在同一断言同一读数＝一条链"相反）。
+  红点都落在症状格本身（形参槽／调用点目的槽），不是前置条件行。
+  第一趟四臂整撤（`mut.py`）里 B／C／D 也各自只红这一条用例，其余 52 条不动。
+- 红点行号口径（如实登记）：红色跑在"文档注释的分工块"与 `slot_of` 闭包换行两处编辑之前，
+  当次实测 `4008`／`4014`／`4038`；最终提交文件里三格位置 `4020`／`4026`／`4050`，
+  三格偏移一致为 +12（按消息文本所在行反推核对），上表按最终文件的号写。
+- 未锁与余项（不写成已覆盖）：
+  ① `new_resolver::parse_type_string`（A 臂）在本夹具下撤除后读数不变。它的调用点在签名登记侧
+  （`new_resolver.rs:872` 的 `return_ty`、`:891` 的 `param_ty`）；本夹具的形参槽来自 `gen.rs` 自己的
+  注解字符串解析（D 臂）、目的槽来自 `string_to_type`（B 臂），A 臂没进到这三格 ⇒ 需要一枚走到
+  `register` 侧签名的夹具，形状留给下一批；
+  ② `fee.signature_ret_ty()` 那一格在 B 臂红点之前仍是 `F64` ⇒ 它的值不取自这四臂，本条只算防放松；
+  ③ 症状②（非法 IR、链接前中止）与 150 那半笔 `f64→i64` 的 fptosi 补齐都落在后端 IR／codegen 面，
+  不落 MIR ⇒ 按 #20005 的收录口径不收录；
+  ④ 本批只读 `gen.rs`（主树在重构它）、未改；该文件的行号会随主树搬家，引用以 `41e15672`＋臂文本
+  为准。
+- `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件 `src/error_codes.rs`／
+  `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
+  `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
+  两本台账，**连续三十批**）；待补台账行的文字写进本批记录笔的提交信息。

@@ -398,6 +398,19 @@
 >   注解别名）留给下一批。
 >   检查节奏：零 `src/` 改动 ⇒ 只跑改到的测试目标（52/52 绿／0.19 秒）＋编译零错误；
 >   十批界的全局逐个用例在 10030 做。
+> - 批次 10031（代码笔 `a287e84b`，记录笔随批）销掉上面余项④那笔＝来源批次 150（`41e15672`）的
+>   `float`／`int` 注解别名：新增 `python_scalar_annotation_aliases_reach_param_and_callsite_slots`，
+>   本套现 **53 条／0.38 秒全绿**。三臂各红各的那一格（撤 `src/middle/mir/gen.rs:1498` 的 `float` 拼写 ⇒
+>   形参 `amount` 槽 `Some(I64)`；撤 `src/middle/types/mod.rs:320` ⇒ 形参 `rate` 槽 `Some(Named("int", []))`；
+>   撤 `src/middle/resolver/typecheck_new.rs:140` ⇒ 调用点目的槽 `Some(Named("float", []))`＝记录里
+>   "打 f64 位模式 4611686018427387904"那一格）⇒ 独立覆盖，且红点都在症状格本身而非前置条件行。
+>   三条阴性读数（撤 `new_resolver.rs:440-441` 整对、单撤 `typecheck_new.rs:139` 的 `int`、
+>   单撤 `types/mod.rs:321` 的 `float` ⇒ 53 条一字不变）＝**未锁**，登记在本条余项不另占号：
+>   ① A 臂（`InferContext::parse_type_string`）的调用点在签名登记侧（`new_resolver.rs:872`／`:891`），
+>   本夹具的三格读数都不经它 ⇒ 要另找一枚走到 `register` 侧签名的形状；
+>   ② `signature_ret_ty()` 那格在 B 臂红点之前仍是 `F64` ⇒ 值不取自这四臂，只算防放松；
+>   ③ 150 的非法 IR（整型函数 `ret double`、链接前中止）与 `f64→i64` 的 fptosi 补齐那半笔落在
+>   后端 IR／codegen 面，不落 MIR ⇒ 按本条收录口径不收录。
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
