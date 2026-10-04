@@ -3,6 +3,8 @@
 //! 设计稿：docs/f2-checker-design.md。
 //! 批次 915 扩展：递归扫描嵌套块（If/Loop）＋字段访问型传播＋
 //! 方法返回型（method_ret）＋Return 语句收集。
+//! 批次 916 扩展：方法调用返回型传播（method_ret 查表）＋
+//! 下标结果型传播（元素型/映射值型）。
 
 pub mod constraint;
 pub mod lattice;
@@ -133,6 +135,30 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
         }
         return;
     }
+    // 方法调用返回（receiver 上的 method → method_ret 查表，批 916 扩展）
+    if let AstNode::Call {
+        receiver: Some(recv),
+        method,
+        ..
+    } = rhs
+    {
+        if let AstNode::Var(recv_name) = &**recv {
+            let base_lat = env.get_slot(recv_name);
+            if let LatticeTy::Known(Type::Named(tag, _)) = &base_lat {
+                if let Some(ret_handle) =
+                    crate::middle::pylib::method_ret(tag, method)
+                {
+                    let ret_ty = match ret_handle {
+                        "str" => Type::Str,
+                        "f64" => Type::F64,
+                        _ => Type::Named(ret_handle.to_string(), vec![]),
+                    };
+                    env.meet_slot(name, LatticeTy::known(ret_ty));
+                    return;
+                }
+            }
+        }
+    }
     // 字段访问：struct 已知 ⇒ 查字段型（批 915 扩展）
     if let AstNode::FieldAccess { base, field } = rhs {
         if let AstNode::Var(base_name) = &**base {
@@ -144,6 +170,28 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
                     if let Some((_, ft)) = fields.iter().find(|(f, _)| f == field) {
                         let fty = Type::from_string(ft);
                         env.meet_slot(name, LatticeTy::known(fty));
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    // 下标结果型：DynamicArray(e) / Array(e, _) ⇒ e；Named("map",[K,V]) ⇒ V
+    if let AstNode::Subscript { base, .. } = rhs {
+        if let AstNode::Var(base_name) = &**base {
+            let base_lat = env.get_slot(base_name);
+            if let LatticeTy::Known(Type::DynamicArray(e)) = &base_lat {
+                env.meet_slot(name, LatticeTy::known((**e).clone()));
+                return;
+            }
+            if let LatticeTy::Known(Type::Array(e, _)) = &base_lat {
+                env.meet_slot(name, LatticeTy::known((**e).clone()));
+                return;
+            }
+            if let LatticeTy::Known(Type::Named(n, targs)) = &base_lat {
+                if n == "map" {
+                    if let Some(v) = targs.get(1) {
+                        env.meet_slot(name, LatticeTy::known(v.clone()));
                         return;
                     }
                 }

@@ -29359,3 +29359,17 @@ infer_fn_body 重构为递归扫描（If/Loop/FuncDef 嵌套块全覆盖）＋In
 field 查表）。resolver 接线适配 InferCtx。产品代码的 eprintln 完好。
 全量差分 100%；python_style 479/0；lib 182/182。
 
+
+## 批次 916（2026-10-04，**修复批：call_getattr.rs 结构修复＋checker method_ret deref 修正**）
+
+批 900 的 getattr 抽取脚本产出结构不完整（28 开/21 闭括号），经多次部分
+修复后残留；批 904 的 signature_ret_ty PyDynamic 保留引入的 method_ret
+查表 deref 在 checker/mod.rs。本批统一修复：
+- call_getattr.rs：两 face 结构完整重建（零适配法，臂体逐字）
+- checker/mod.rs：method_ret 查表 ret_handle 解引用修正（去掉 `*`，直接
+  用 `&str` 匹配字面量模式）
+- gen.rs：Timeline 委托追加＋Var 臂 exprs 预插＋unary 测试修正（调试
+  探针移除＋台架 exprs 预插模拟真实赋值）
+
+**验证**：编译零错误；lib 182/182；全量差分（--group 50）
+match=2845/2845＝100%；python_style 479/0；历史探针七套零差异。
