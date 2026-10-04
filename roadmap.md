@@ -29072,3 +29072,18 @@ resolver 面、后者是 map 键值型语义缺省，均非"未知槽兜底"）�
 
 **验证**：编译零错误；内置单元测试 158/158；历史探针七套零差异；
 全量差分（--group 50）match=2845/2845＝100%；python_style 479/0。
+
+## 批次 897（2026-10-04，**重构批：map/dict 双拼写比较收敛 is_map()——2/10 落地＋形态清单入册**）
+
+F.1 第二类（map/dict 字符串比较，现测 31 处）的收敛续片（815 先例）。
+形态盘点：**双拼写 10 处**（map||dict，is_map 交换＝行为中立）／map-only 19 处／
+dict-only 2 处／定义本体 2 处（is_map/map_kv 自身，不动）。
+落地 2 处（call_dispatch 4929 的 matches! 守卫＋gen.rs 2453 的 apply 注解面——
+均为借用绑定，ty.is_map() 无移动问题）；**call_dispatch 4136 与 call_builtin 652
+为按值绑定（.cloned() 后解构），ty.is_map 与内部移动冲突 ⇒ 保留原样登记**；
+binary 847/851 与 subscript 475 是三way（map/dict/set、map/dict/dict_like）另族。
+**登记待查**：map-only 19 处中若有 Python 源用 dict 拼写的，是潜在漏判面
+（行为变更需逐处语义裁决，非纯收口）。
+
+**验证**：编译零错误；内置单元测试 158/158；get 面迷你探针对齐；历史探针
+七套两轮零差异；全量差分（--group 50）match=2845/2845＝100%。

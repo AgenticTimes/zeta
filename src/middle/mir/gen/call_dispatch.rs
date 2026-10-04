@@ -5234,7 +5234,7 @@ call, no NULL-handle dereference).",
                         | Some(Type::F32) | Some(Type::F64) | Some(Type::Bool)
                         | Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
                         | Some(Type::Tuple(_)) => true,
-                        Some(Type::Named(n, _)) => n == "map" || n == "dict",
+                        Some(ty @ Type::Named(..)) => ty.is_map(),
                         _ => false,
                     };
                     if routable {

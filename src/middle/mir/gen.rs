@@ -2450,7 +2450,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             return;
         };
         let (cur_key, cur_val) = match self.type_map.get(&slot) {
-            Some(Type::Named(n, targs)) if n == "map" || n == "dict" => (
+            Some(ty @ Type::Named(_, targs)) if ty.is_map() => (
                 targs.first().cloned().unwrap_or_else(Type::slot_fallback),
                 targs.get(1).cloned().unwrap_or_else(Type::slot_fallback),
             ),
