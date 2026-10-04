@@ -8100,14 +8100,30 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     }
                 }
                 (BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => {
+                    // f64-bits 约定（批 926）：`*_f64` 后缀的运行时函数
+                    // （zeta_list_index_f64/count_f64/remove_f64 等）按位模式
+                    // 收浮点实参（值比较在 double 域）——bitcast 而非 fptosi。
+                    // fptosi 把 2.5 截成 2，`ys.index(2.5)` 在 [1.5, 2.5] 里
+                    // 返回 -1（实拍）；`in`/`count` 同样全部失配。
+                    if callee_name.ends_with("_f64") {
+                        match self.builder.build_bit_cast(
+                            inkwell::values::BasicValueEnum::FloatValue(fv),
+                            pt,
+                            "arg_f64bits",
+                        ) {
+                            Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
+                            Err(_) => result.push(BasicMetadataValueEnum::FloatValue(fv)),
+                        }
+                    } else {
                     self.abi_note(
                         &callee_name,
                         i,
                         &format!("fptosi → i{}", pt.get_bit_width()),
                     );
-                    match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") {
-                        Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
-                        Err(_) => result.push(BasicMetadataValueEnum::FloatValue(fv)),
+                        match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") {
+                            Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
+                            Err(_) => result.push(BasicMetadataValueEnum::FloatValue(fv)),
+                        }
                     }
                 }
                 (BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_))

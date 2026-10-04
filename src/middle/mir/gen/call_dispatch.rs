@@ -3548,6 +3548,23 @@ call, no NULL-handle dereference).",
                             inner.starts_with("str") || inner.starts_with("String")
                         }
                     };
+                    // 批 926：f64 元素走 double 域比较版（位模式按位比较
+                    // 让 `2.5 in [1.5, 2.5]` 为 False）
+                    let elem_is_f64 = match receiver_ty.as_ref() {
+                        Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
+                            matches!(**e, Type::F64 | Type::F32)
+                        }
+                        _ => false,
+                    };
+                    if elem_is_f64 {
+                        self.emit_call_into(
+                            id,
+                            "py_list_contains_f64",
+                            vec![arg_ids[0], arg_ids[1]],
+                            Type::Bool,
+                        );
+                        return id;
+                    }
                     let flag = self.next_id();
                     self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
                     self.type_map.insert(flag, Type::I64);

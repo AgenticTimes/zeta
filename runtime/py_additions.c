@@ -2321,6 +2321,22 @@ int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
     return 0;
 }
 
+// `in` 的 f64 元素版（批 926）：浮点元素按 f64 位模式存取
+// （zeta_vec_push_f64 同一约定），比较在 double 域。此前走 py_list_contains
+// 的按位整数比较，`2.5 in [1.5, 2.5]` 为 False（CPython True）。
+int64_t py_list_contains_f64(int64_t vec, int64_t x_bits) {
+    int64_t n = zt_vec_len(vec);
+    double x;
+    memcpy(&x, &x_bits, sizeof x);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t raw = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &raw, sizeof v);
+        if (v == x) return 1;
+    }
+    return 0;
+}
+
 // Batch 807: `sa.intersection(sb)` on our list-backed sets (`py_vec_add_unique`
 // / `py_vec_discard` above own the mutators). Nine of the forty real strategy
 // files spell `list(set(temp).intersection(set(stockList)))` and the call
