@@ -15,6 +15,8 @@ mod call_ctor;
 mod call_field;
 mod call_json;
 mod call_num;
+mod call_patterns;
+mod expr_small;
 mod call_path;
 mod call_print;
 mod call_subscript;
@@ -3089,23 +3091,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 self.type_map.insert(id, Type::I64);
             }
             AstNode::BigIntLit(text) => {
-                // Batch 647: a beyond-i64 literal lowers to the zeta_big
-                // runtime handle ([lo|hi] 16-byte GC block, batch 641),
-                // statically typed Named("BigInt") — arithmetic on it
-                // routes through the big family, print/str render via
-                // zeta_big_to_string.
-                let v: i128 = text.parse().unwrap_or(0);
-                let lo = self.int_slot(v as i64);
-                let hi = self.int_slot((v >> 64) as i64);
-                self.stmts.push(MirStmt::Call {
-                    func: "zeta_big_new".to_string(),
-                    args: vec![lo, hi],
-                    dest: id,
-                    type_args: vec![],
-                });
-                self.exprs.insert(id, MirExpr::Var(id));
-                self.type_map
-                    .insert(id, Type::Named("BigInt".to_string(), vec![]));
+                // 批次 891：BigIntLit 臂迁入 gen/expr_small.rs（869 法）。
+                return self.lower_bigint_lit(text, id);
             }
             AstNode::StringLit(s) => {
                 self.exprs.insert(id, MirExpr::StringLit(s.clone()));
@@ -3139,22 +3126,10 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             AstNode::Range {
                 start,
                 end,
-                inclusive: _,
+                inclusive,
             } => {
-                let start_id = self.lower_expr(start);
-                let end_id = self.lower_expr(end);
-                let dest = self.next_id();
-
-                // Range expression for for loops
-                self.exprs.insert(
-                    dest,
-                    MirExpr::Range {
-                        start: start_id,
-                        end: end_id,
-                    },
-                );
-                self.type_map.insert(dest, Type::Range);
-                return dest;
+                // 批次 891：Range 表达式臂迁入 gen/expr_small.rs（869 法）。
+                return self.lower_range_expr(start, end, inclusive, id);
             }
             AstNode::Call {
                 receiver,
@@ -3197,17 +3172,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 return self.lower_path_call(path, method, args, type_args, id);
             }
             AstNode::Cast { expr, ty } => {
-                let expr_id = self.lower_expr(expr);
-                let target_type = Type::from_string(ty);
-                self.type_map.insert(id, target_type.clone());
-                // Create As expression node
-                self.exprs.insert(
-                    id,
-                    MirExpr::As {
-                        expr: expr_id,
-                        target_type,
-                    },
-                );
+                // 批次 891：Cast 臂迁入 gen/expr_small.rs（869 法）。
+                return self.lower_cast(expr, ty, id);
             }
             AstNode::ArrayLit(elements) => {
                 // 批次 872：ArrayLit 臂迁入 gen/call_expr_lit.rs（869 法）。
@@ -3235,18 +3201,9 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 return self.lower_unary_op(op, expr, id);
             }
             AstNode::Unsafe { body } => {
-                // Evaluate the last expression in an unsafe block as the result
-                if let Some(last) = body.last()
-                    && let AstNode::ExprStmt { expr } = last
-                {
-                    return self.lower_expr(expr);
-                }
-                // Fallback: evaluate the whole body as statements
-                for stmt in body {
-                    self.lower_ast(stmt);
-                }
-                self.exprs.insert(id, MirExpr::IntLit(0));
-                self.type_map.insert(id, Type::I64);
+                // 批次 891：Unsafe 表达式臂迁入 gen/expr_small.rs（869 法；
+                // 臂内 1 处早退产出非 id 槽，返回值必须转发）。
+                return self.lower_unsafe_expr(body, id);
             }
             // ── Priority B: Pattern Expression Nodes ──
             AstNode::Tuple(elements) => {
@@ -3259,93 +3216,36 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 self.type_map.insert(id, Type::I64);
             }
             AstNode::BindPattern { name, pattern } => {
-                // Binding pattern: x @ pattern — bind name to inner value.
-                let inner_id = self.lower_expr(pattern);
-                self.name_to_id.insert(name.clone(), inner_id);
-                self.exprs.insert(id, MirExpr::Var(inner_id));
-                if let Some(ty) = self.type_map.get(&inner_id) {
-                    self.type_map.insert(id, ty.clone());
-                } else {
-                    self.type_map.insert(id, Type::I64);
-                }
+                // 批次 891：BindPattern 臂迁入 gen/call_patterns.rs（869 法）。
+                return self.lower_bind_pattern(name, pattern, id);
             }
             AstNode::RangePattern {
                 start,
                 end,
-                inclusive: _,
+                inclusive,
             } => {
-                // Range pattern: lower start/end for comparison.
-                let start_id = self.lower_expr(start);
-                let end_id = self.lower_expr(end);
-                self.exprs.insert(
-                    id,
-                    MirExpr::Range {
-                        start: start_id,
-                        end: end_id,
-                    },
-                );
-                self.type_map.insert(id, Type::Range);
+                // 批次 891：RangePattern 臂迁入 gen/call_patterns.rs（869 法）。
+                return self.lower_range_pattern(start, end, inclusive, id);
             }
             AstNode::OrPattern(patterns) => {
-                // Or pattern: evaluate the first alternative.
-                if let Some(first) = patterns.first() {
-                    return self.lower_expr(first);
-                }
-                self.exprs.insert(id, MirExpr::IntLit(0));
-                self.type_map.insert(id, Type::I64);
+                // 批次 891：OrPattern 臂迁入 gen/call_patterns.rs（869 法；
+                // 臂内 1 处早退产出非 id 槽，返回值必须转发）。
+                return self.lower_or_pattern(patterns, id);
             }
             AstNode::StructPattern {
-                variant, fields, ..
+                variant,
+                fields,
+                rest,
             } => {
-                // Struct pattern in expression position — create struct value.
-                let mut field_ids = Vec::new();
-                for (field_name, field_expr) in fields {
-                    let field_id = self.lower_expr(field_expr);
-                    field_ids.push((field_name.clone(), field_id));
-                }
-                self.exprs.insert(
-                    id,
-                    MirExpr::Struct {
-                        variant: variant.clone(),
-                        fields: field_ids,
-                    },
-                );
-                self.type_map
-                    .insert(id, Type::Named(variant.clone(), vec![]));
+                // 批次 891：StructPattern 臂迁入 gen/call_patterns.rs（869 法）。
+                return self.lower_struct_pattern(variant, fields, rest, id);
             }
             // ── Priority D & E: Remaining Expression Nodes ──
             AstNode::Closure { params, body, .. } => {
-                // PY-A: lambda/closure → emitted as a standalone synthetic
-                // function `__closure_<N>`; the expression value is the
-                // function address (V1: non-capturing only — the body may
-                // reference its own params; free-variable captures fall back
-                // to the existing no-op stub behaviour, noted in the
-                // lower_closure docs).
-                let closure_name = self.lower_closure(params, body);
-                // PY-A V2a: value-capture — snapshot each free variable into
-                // the closure env at creation time (reads see the snapshot).
-                {
-                    let mut bound: std::collections::HashSet<String> =
-                        params.iter().cloned().collect();
-                    let mut free: std::collections::BTreeSet<String> =
-                        std::collections::BTreeSet::new();
-                    Self::collect_free_vars(body, &mut bound, &mut free);
-                    for name in free.iter() {
-                        if let Some(&cur_id) = self.name_to_id.get(name) {
-                            self.env_store(name, cur_id);
-                        }
-                    }
-                }
-                if let Some(v) = self.pending_closure_binding.take() {
-                    self.closure_vars.insert(v.clone(), closure_name.clone());
-                }
-                if let Some(t) = self.last_closure_ret_ty.clone() {
-                    self.closure_ret_tys.insert(closure_name.clone(), t);
-                }
-                let addr_id = self.next_id();
-                self.exprs.insert(addr_id, MirExpr::FuncAddr(closure_name));
-                self.type_map.insert(addr_id, Type::I64);
-                return addr_id;
+                // 批次 891：Closure 表达式臂迁入 gen/lower_closure.rs（869 法）。
+                // 批次 891 自纠：返回值必须转发——闭包的 FuncAddr 槽被丢弃后
+                // 所有 lambda 调用打空（probe877 全空）。
+                return self.lower_closure_expr(params, body);
             }
             AstNode::Defer(body) => {
                 // Defer expression: evaluate and return the inner expression.
@@ -3355,15 +3255,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 // 批次 886：Await 表达式臂迁入 gen/stmt_misc.rs（869 法）。
                 self.lower_await_expr(body, id);
             }
-            AstNode::TimingOwned { inner, .. } => {
-                // Timing-owned: wrap the inner expression.
-                let inner_id = self.lower_expr(inner);
-                self.exprs.insert(id, MirExpr::TimingOwned(inner_id));
-                if let Some(ty) = self.type_map.get(&inner_id) {
-                    self.type_map.insert(id, ty.clone());
-                } else {
-                    self.type_map.insert(id, Type::I64);
-                }
+            AstNode::TimingOwned {
+                ty,
+                inner,
+                ..
+            } => {
+                // 批次 891：TimingOwned 臂迁入 gen/expr_small.rs（869 法）。
+                return self.lower_timing_owned(ty, inner, id);
             }
             _ => {
                 self.exprs.insert(id, MirExpr::IntLit(0));

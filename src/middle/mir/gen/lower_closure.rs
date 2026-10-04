@@ -310,4 +310,39 @@ impl MirGen {
         }
         closure_name
     }
+
+    pub(super) fn lower_closure_expr(&mut self, params: &Vec<String>, body: &Box<AstNode>) -> u32 {
+            // PY-A: lambda/closure → emitted as a standalone synthetic
+            // function `__closure_<N>`; the expression value is the
+            // function address (V1: non-capturing only — the body may
+            // reference its own params; free-variable captures fall back
+            // to the existing no-op stub behaviour, noted in the
+            // lower_closure docs).
+            let closure_name = self.lower_closure(params, body);
+            // PY-A V2a: value-capture — snapshot each free variable into
+            // the closure env at creation time (reads see the snapshot).
+            {
+                let mut bound: std::collections::HashSet<String> =
+                    params.iter().cloned().collect();
+                let mut free: std::collections::BTreeSet<String> =
+                    std::collections::BTreeSet::new();
+                Self::collect_free_vars(body, &mut bound, &mut free);
+                for name in free.iter() {
+                    if let Some(&cur_id) = self.name_to_id.get(name) {
+                        self.env_store(name, cur_id);
+                    }
+                }
+            }
+            if let Some(v) = self.pending_closure_binding.take() {
+                self.closure_vars.insert(v.clone(), closure_name.clone());
+            }
+            if let Some(t) = self.last_closure_ret_ty.clone() {
+                self.closure_ret_tys.insert(closure_name.clone(), t);
+            }
+            let addr_id = self.next_id();
+            self.exprs.insert(addr_id, MirExpr::FuncAddr(closure_name));
+            self.type_map.insert(addr_id, Type::I64);
+            return addr_id;
+    }
+
 }

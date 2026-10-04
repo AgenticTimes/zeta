@@ -28961,3 +28961,19 @@ stub 本地的 zt_ptr_readable（204 行，同语义）。
 大弧延伸）**，该工程落地前 t813 维持唯一 FAIL。
 
 **验证（回退后复验）**：编译零错误；lib 158/158；t10004/t10002 复原 PASS。
+
+## 批次 891（2026-10-04，**重构批：lower_expr_node 剩余十臂清盘（BindPattern/RangePattern/OrPattern/StructPattern/Closure/Cast/Range/BigIntLit/Unsafe/TimingOwned 共约 160 行）**）
+
+869 零适配法三家族落位：四个模式臂 → call_patterns.rs；Cast/Range/BigIntLit/
+Unsafe/TimingOwned → expr_small.rs；Closure 表达式臂 → lower_closure.rs
+（lower_closure_expr，写 FuncAddr 的表达式位 ⇒ 签名 -> u32）。
+unsafe／orpat 各 1 处早退已转发。
+gen.rs 3931→3827（净 -104）。**lower_expr_node 内联臂至此清零**——剩余全为
+一行委托＋getattr 域（YAGNI 在册）。
+
+**过程自纠一次**：Closure 委托初版丢弃返回的 FuncAddr 槽（866 教训第三次
+现身）——probe877 全空当场暴露，补 `return` 即愈。
+
+**验证**：编译零错误；内置单元测试 158/158；全量差分（--group 50）
+match=2845/2845＝100%；python_style 478/1（仅余 #279/t813）；历史探针七套
+两轮全零差异；cast/range 迷你探针对齐。
