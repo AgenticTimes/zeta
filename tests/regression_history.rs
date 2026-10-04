@@ -4279,9 +4279,13 @@ print(len(s.m.values()))
 /// （本批实跑 `target/tmp_b10034/t627b.bin`，rc=0）；MIR 侧 `--dump-mir` 里
 /// `Greeter::greet`／`Greeter::tag`／`Greeter::shout` 三段的形参槽都是 `Str`
 /// （本批读数）。
-/// 三个方法各走一条语句形态：`print(g.greet(…))`＝实参下沉递归、
-/// `g.tag(…)`＝表达式语句、`s = g.shout(…)`＝赋值右值。变异时各红自己那一格
-/// ＝独立覆盖（见批次 10034 台账）。
+/// 三条形参各由 `refine_method_param_types` 里一条语句形态臂精化：
+/// `print(g.greet(…))`＝`collect_p627_in_expr` 内对实参的递归（实参下沉）、
+/// `g.tag(…)`＝模块级裸 `Call` 语句臂、`s = g.shout(…)`＝赋值右值臂。
+/// 变异时各红自己那一格＝独立覆盖。另有两支在本夹具下是阴性（撤臂后 57 条一字
+/// 不变、未锁）：`ExprStmt` 臂（`g.tag(…)` 实测降成裸 `Call`，不走表达式语句那一支）
+/// 和 `g = Greeter(...)` 的局部类别表那一行（接收者类别由
+/// `module_global_types_at` 直接给出，不依赖该表）。读数见批次 10034 台账。
 /// 边界（本条不覆盖）：同名的裸段 `greet` 与实例化段 `greet_inst_i64` 里
 /// 同一形参槽仍是 PyDynamic（本批 `--dump-mir` 读数）＝"后端取哪一份 MIR"
 /// 的另一格，本条不断言；调用点目的槽为 Str 那一格由 628 的用例
@@ -4307,7 +4311,9 @@ print(s)
 "#,
     );
 
-    // ③ 三段的形参槽各由一条语句形态臂精化：段名＋形参名。
+    // 三段的形参槽各由一条语句形态臂精化（段名＋形参名）。逐格先收成一张表再一次
+    // 比较：单格 assert 在循环里只报第一格，某一支变异打掉两格时读不出打在谁身上。
+    let mut readings: Vec<(String, Option<Type>)> = Vec::new();
     for (seg, param) in [
         ("Greeter::greet", "name"),
         ("Greeter::tag", "name"),
@@ -4325,12 +4331,15 @@ print(s)
                     m.param_indices
                 )
             });
-        assert_eq!(
-            m.type_map.get(&slot),
-            Some(&Type::Str),
-            "{seg} 的形参 `{param}`（槽 {slot}）该按调用点的字面量实参精化成 Str；\
-             627 之前这格停 I64／PyDynamic，体内把字符串句柄按整数转成串＝打地址，实得 {:?}",
-            m.type_map.get(&slot)
-        );
+        readings.push((format!("{seg}#{param}"), m.type_map.get(&slot).cloned()));
     }
+    let expected: Vec<(String, Option<Type>)> = readings
+        .iter()
+        .map(|(k, _)| (k.clone(), Some(Type::Str)))
+        .collect();
+    assert_eq!(
+        expected, readings,
+        "三段形参槽都该按调用点的字面量实参精化成 Str；627 之前这格停 I64／PyDynamic，\
+         体内把字符串句柄按整数转成串＝打地址（左＝期望，右＝逐格实得）"
+    );
 }
