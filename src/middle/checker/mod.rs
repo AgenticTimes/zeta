@@ -129,6 +129,24 @@ fn ret_expr_ty(e: &AstNode, env: &TypeEnv, ctx: &InferCtx) -> Option<Type> {
     None
 }
 
+/// 数值标量／BigInt（-、~ 一元运算保持同型的操作数面，批 921）。
+fn is_numeric_ty(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::I8
+            | Type::I16
+            | Type::I32
+            | Type::I64
+            | Type::U8
+            | Type::U16
+            | Type::U32
+            | Type::U64
+            | Type::Usize
+            | Type::F32
+            | Type::F64
+    ) || matches!(ty, Type::Named(n, _) if n == "BigInt")
+}
+
 fn scan_stmts(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
     for stmt in body {
         match stmt {
@@ -262,6 +280,25 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
     // FString ⇒ Str（批次 917 扩展：f-string 结果恒为文本）
     if let AstNode::FString(_) = rhs {
         env.meet_slot(name, LatticeTy::known(Type::Str));
+        return;
+    }
+    // 一元运算（批 921）：not ⇒ Bool；-x/~x 操作数为数值标量或 BigInt ⇒ 同型
+    if let AstNode::UnaryOp { op, expr } = rhs {
+        match op.as_str() {
+            "not" => {
+                env.meet_slot(name, LatticeTy::known(Type::Bool));
+            }
+            "-" | "~" => {
+                if let AstNode::Var(src) = &**expr {
+                    if let LatticeTy::Known(ty) = env.get_slot(src) {
+                        if is_numeric_ty(&ty) {
+                            env.meet_slot(name, LatticeTy::known(ty));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
         return;
     }
     // 调用返回（ret_types 查表）
@@ -641,5 +678,54 @@ mod tests {
             &ctx,
         );
         assert_eq!(env.fn_rets.get("test_fn"), Some(&Type::F64));
+    }
+
+    /// -x：操作数槽为数值型 ⇒ 结果同型（批 921）。
+    #[test]
+    fn unary_neg_propagates_operand_ty() {
+        let mut env = TypeEnv::new();
+        env.meet_slot("x", LatticeTy::known(Type::F64));
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign(
+                "y",
+                AstNode::UnaryOp {
+                    op: "-".to_string(),
+                    expr: Box::new(var("x")),
+                },
+            )],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("y"), LatticeTy::known(Type::F64));
+    }
+
+    /// not x ⇒ Bool（批 921）。
+    #[test]
+    fn unary_not_types_bool() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign(
+                "flag",
+                AstNode::UnaryOp {
+                    op: "not".to_string(),
+                    expr: Box::new(var("x")),
+                },
+            )],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("flag"), LatticeTy::known(Type::Bool));
     }
 }

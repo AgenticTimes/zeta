@@ -23,6 +23,12 @@ pub fn literal_lattice(expr: &AstNode) -> Option<LatticeTy> {
             "NoneValue".to_string(),
             vec![],
         ))),
+        // 负字面量（批 921）：-1 ⇒ I64、-2.5 ⇒ F64（MIR 同样折叠负浮点，语义一致）
+        AstNode::UnaryOp { op, expr } if op == "-" => match &**expr {
+            AstNode::Lit(_) => Some(LatticeTy::known(Type::I64)),
+            AstNode::FloatLit(_) => Some(LatticeTy::known(Type::F64)),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -81,6 +87,26 @@ mod tests {
             structural: false,
         };
         assert_eq!(literal_lattice(&call), None);
+    }
+
+    /// 负整数字面量 ⇒ I64（批 921）。
+    #[test]
+    fn negative_int_literal_yields_i64() {
+        let neg = AstNode::UnaryOp {
+            op: "-".to_string(),
+            expr: Box::new(AstNode::Lit(1)),
+        };
+        assert_eq!(literal_lattice(&neg), Some(LatticeTy::known(Type::I64)));
+    }
+
+    /// 负浮点字面量 ⇒ F64（批 921）。
+    #[test]
+    fn negative_float_literal_yields_f64() {
+        let neg = AstNode::UnaryOp {
+            op: "-".to_string(),
+            expr: Box::new(AstNode::FloatLit("2.5".to_string())),
+        };
+        assert_eq!(literal_lattice(&neg), Some(LatticeTy::known(Type::F64)));
     }
 
     #[test]
