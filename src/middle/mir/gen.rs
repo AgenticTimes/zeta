@@ -27,6 +27,7 @@ mod call_binary;
 mod call_match;
 mod call_unary;
 mod call_dict;
+mod call_getattr;
 mod call_var;
 mod lower_closure;
 mod call_dispatch;

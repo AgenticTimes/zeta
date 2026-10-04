@@ -1459,36 +1459,9 @@ call, no NULL-handle dereference).",
             // unknown receiver would silently read garbage, see batch 26).
             // Otherwise fall through to the compile-time diagnostic below.
             if method == "getattr" && receiver.is_none() && (2..=3).contains(&args.len()) {
-                if let AstNode::StringLit(name) = &args[1] {
-                    // (a) a registry handle with a registered member.
-                    if let Some(tag) = self.py_handle_of(&args[0]) {
-                        if crate::middle::pylib::method_symbol(&tag, name).is_some() {
-                            let rewritten = AstNode::FieldAccess {
-                                base: Box::new(args[0].clone()),
-                                field: name.clone(),
-                            };
-                            return self.lower_expr(&rewritten);
-                        }
-                    }
-                    // (b) a struct-typed receiver (JoinQuant's `g`, a
-                    // module global, a config object): the field exists ->
-                    // plain field access; the field is absent but a default
-                    // was given -> the default, which IS Python's semantics
-                    // for a missing attribute. Absent with no default keeps
-                    // the loud diagnostic below (Python would raise
-                    // AttributeError, we must not silently read 0).
-                    if let Some(tyname) = self.py_struct_type_of(&args[0]) {
-                        if self.py_struct_has_field(&tyname, name) {
-                            let rewritten = AstNode::FieldAccess {
-                                base: Box::new(args[0].clone()),
-                                field: name.clone(),
-                            };
-                            return self.lower_expr(&rewritten);
-                        }
-                        if args.len() == 3 {
-                            return self.lower_expr(&args[2]);
-                        }
-                    }
+                // 批次 900：getattr 字面量 face 迁入 gen/call_getattr.rs（顺序保持）。
+                if let Some(r) = self.lower_getattr_literal(receiver, method, args, id) {
+                    return r;
                 }
             }
             // PY-A: the builtin `slice(a, b)` / `slice(a, b, step)` —
@@ -1754,68 +1727,9 @@ call, no NULL-handle dereference).",
             // 无 default 或动态名 → py_getattr_dynamic 运行期响亮 abort。
             if receiver.is_none() && method == "getattr" && (args.len() == 2 || args.len() == 3)
             {
-                if let AstNode::StringLit(lit) = &args[1] {
-                    let obj_id = self.lower_expr(&args[0]);
-                    // 类名：接收者的 Named 类型，或构造调用的方法名
-                    let class_of = |ty: Option<&Type>, node: &AstNode| -> Option<String> {
-                        if let Some(Type::Named(n, _)) = ty {
-                            if n != "map" && n != "dict" {
-                                return Some(n.clone());
-                            }
-                        }
-                        if let AstNode::Call {
-                            receiver: None,
-                            method: m,
-                            ..
-                        } = node
-                        {
-                            return Some(m.clone());
-                        }
-                        None
-                    };
-                    let obj_ty = self.type_map.get(&obj_id).cloned();
-                    let cls = class_of(obj_ty.as_ref(), &args[0]);
-                    match cls {
-                        Some(tn) => {
-                            let field_exists = self.type_decls.get(&tn).and_then(|d| match d {
-                                TypeDecl::Struct { fields, .. } => fields
-                                    .iter()
-                                    .find(|(fname, _)| fname.as_str() == lit.as_str())
-                                    .map(|(_, ft)| Type::from_string(ft)),
-                                _ => None,
-                            });
-                            if field_exists.is_some() || args.len() == 2 {
-                                let fa = AstNode::FieldAccess {
-                                    base: Box::new(args[0].clone()),
-                                    field: lit.clone(),
-                                };
-                                return self.lower_expr(&fa);
-                            }
-                            // 已知 struct 但字段不存在 → default
-                            if args.len() == 3 {
-                                return self.lower_expr(&args[2]);
-                            }
-                        }
-                        None => {
-                            if args.len() == 3 {
-                                eprintln!(
-                                    "warning: PY-A: getattr on untyped receiver uses the default for '{}'",
-                                    lit
-                                );
-                                return self.lower_expr(&args[2]);
-                            }
-                        }
-                    }
-                    // 字面量名未命中（已知 struct 缺字段 / 未跟踪接收者）
-                    // 且无 default → 故意保持幽灵路径（批次 123 红线，守 t225：
-                    // 链接期未定义符号即编译失败，不静默读 0）。
-                    // 不 return，落出本块即可。
-                } else {
-                    // 动态名（非字面量）→ 响亮失败
-                    let obj_id = self.lower_expr(&args[0]);
-                    let name_id = self.lower_expr(&args[1]);
-                    self.emit_call_into(id, "py_getattr_dynamic", vec![obj_id, name_id], Type::I64);
-                    return id;
+                // 批次 900：getattr struct face 迁入 gen/call_getattr.rs（顺序保持）。
+                if let Some(r) = self.lower_getattr_struct(receiver, method, args, id) {
+                    return r;
                 }
             }
             // Batch 405: this guard used to sit ABOVE the `getattr` arms, so

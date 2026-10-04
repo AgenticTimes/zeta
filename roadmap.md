@@ -29122,3 +29122,22 @@ binary 847/851 与 subscript 475 是三way（map/dict/set、map/dict/dict_like�
   （tracked，构建需要）；getattr×4 维持 YAGNI。
 
 验证：git status 工作树清净（仅剩 .o 持有件与忽略项）；lib 158/158。
+
+## 批次 900（2026-10-04，**重构批：getattr×4 实测裁决——两 face 顺序保持迁入 call_getattr.rs，迁移成功（YAGNI 终判撤销）**）
+
+892 登记的"getattr 域迁出低价值高风险"经实测推翻：两个自包含 face
+（字面量名 getattr 1461／struct+动态名+default getattr 1755）按 Option<u32>
+模式（Some＝接住、None＝贯穿）抽入 call_getattr.rs，委托在原位转发——
+派发顺序严格不变。Batch 405 ghost 守卫与 range 共享，留原位（非纯 getattr
+face，另族登记）。
+抽取事故三连（脚本化 return 包裹的边界）：class_of 闭包内部 return 被
+双包（Some(Some)）、残留多余右括号、两 face 外层 if 闭合行被排除——均
+编译期当场暴露并修复。**方法论补丁：含闭包/嵌套返回的臂禁用盲目 return
+包裹，逐 return 核对归属**。
+getattr 面探针：`getattr(g, "x")`=5、`getattr(g, "y", 9)`=9 全对齐。
+gen.rs 3928→3830（净 +2——getattr face 迁出但 mod/委托略增）；
+call_dispatch 5889→5803（-86）；call_getattr.rs 新增 133 行。
+
+**验证**：编译零错误；内置单元测试 158/158；getattr 探针全对齐；
+历史探针七套两轮零差异；全量差分（--group 50）match=2845/2845＝100%；
+python_style 479/0。
