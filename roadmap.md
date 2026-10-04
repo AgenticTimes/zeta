@@ -29006,3 +29006,25 @@ PyDynamic 落 i64，指针 ABI 与缺省一致，改映射本身安全）；③ 
 方案②（运行期格标签）的主体工程。五个单点修复与链路图已全部入册，方案②
 立项时按图索骥即可。零落地如实报（全部尝试已回退，三 mean 夹具回登记面，
 lib 158/158、全量差分 100% 复验）。
+
+## 批次 893（2026-10-04，**修复批：#279 方案②落地——五环节对齐＋C 助手类型错修正，t813 转好**）
+
+按 892 的五环节链路图逐环节对齐，五件套：
+① 运行期新函数 `zeta_mean_to_string(recv)`（py_additions.c）：vec 按浮点位读
+均值后返回 CPython repr 文本、非 vec 句柄原样返回＝identity（t10004 字典面）。
+**890 的"1e-322 之谜"破案＝本函数首版的 C 类型错**——`int64_t m = zeta_mean_vec(...)`
+把 double 返回值按值转成整数 20，下游 memcpy 重解释成 double 即 1e-322；
+修正为 `double m`。
+② call_dispatch mean 臂分双路：静态向量照旧折叠（F64）；PyDynamic/I64 接收者
+走 zeta_mean_to_string、dest 标 **PyDynamic**（值可能是文本也可能是句柄——
+静态单型 F64/Str 都必毒化一面，890 实测；PyDynamic＋下游形状分派是落地形）。
+③ mir.rs signature_ret_ty 保留 PyDynamic 身（codegen 的 LLVM 签名对
+PyDynamic 仍落 i64，指针 ABI 与缺省一致，无错位）。
+④ resolver 登记＋回灌放宽 PyDynamic（t813 实拍缺口：调用点拿 I64 会把文本
+句柄按整数打印）。
+⑤ call_print 加 PyDynamic 面：zeta_dyn_to_string 运行期形状分派
+（文本原样／map/vec 结构化／整数十进制）——原落 println_i64 打句柄。
+
+**验证**：t813 六行（20.0/20.0/5/hi bob/20.0/2.0）、t10004（1）、t10002（七行
+含 nan）**三面全对齐 CPython**；历史探针七套两轮零差异；全量差分与
+python_style 终值见下批记录补注（验证在途时入册）。

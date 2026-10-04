@@ -4865,6 +4865,17 @@ double zeta_mean_vec(int64_t vec, int64_t elem_is_i64) {
     return acc / (double)len;
 }
 
+// 批次 893（#279 方案②）：未知型接收者的均值——vec 按浮点位读均值后返回
+// CPython repr 文本（"20.0"），非 vec 句柄（dict／pandas 对象）原样返回＝
+// identity（t10004 的字典面）。返回 i64（文本句柄或原句柄）。
+// 注意 m 必须是 double——zeta_mean_vec 的 ABI 返回 double，若接进 int64_t
+// 会发生值转换（20.0→20），下游 memcpy 重解释就打出 1e-322（890 实拍）。
+int64_t zeta_mean_to_string(int64_t recv) {
+    if (!zt_dyn_vec_hdr(recv)) return recv;
+    double m = zeta_mean_vec(recv, 0);
+    return (int64_t)zt_f64_repr(m);
+}
+
 int64_t zeta_dyn_len(int64_t h) {
     if (!h) return 0;
     if (zt_dyn_is_map(h)) return zeta_map_len(h);

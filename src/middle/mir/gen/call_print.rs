@@ -508,6 +508,20 @@ pub(super) fn emit_tagged_print(&mut self, arg_id: u32, tag_slot: u32, is_last: 
                     // for a single pair.
                     // Batch 647: a BigInt-typed value (literal or the
                     // result of big arithmetic) renders its decimal value.
+                    // 批次 893（#279 方案②）：PyDynamic 槽的 print 按运行期
+                    // 形状分派（zeta_dyn_to_string：文本原样、map/vec 结构化、
+                    // 整数十进制）——未知型均值（zeta_mean_to_string）等"值可能
+                    // 是文本也可能是句柄"的槽在此收敛。原先落 println_i64，把
+                    // 文本句柄按整数打（t813 实拍）。
+                    if matches!(self.type_map.get(arg_id), Some(Type::PyDynamic)) {
+                        let sid = self.emit_call("zeta_dyn_to_string", vec![*arg_id], Type::Str);
+                        let f = if is_last { "println_str" } else { "print_str" };
+                        self.stmts.push(MirStmt::VoidCall {
+                            func: f.to_string(),
+                            args: vec![sid],
+                        });
+                        continue;
+                    }
                     if matches!(
                         self.type_map.get(arg_id),
                         Some(Type::Named(n, _)) if n == "BigInt"

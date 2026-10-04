@@ -66,6 +66,11 @@ impl Mir {
                         Type::F32 => Type::F32,
                         Type::F64 => Type::F64,
                         Type::Str => Type::Str,
+                        // 批次 893（#279 方案②）：PyDynamic 身保留——未知型均值
+                        // （zeta_mean_to_string）的 body 型必须到达调用点回灌；
+                        // codegen 的 LLVM 签名对 PyDynamic 仍落 i64（指针 ABI
+                        // 与缺省一致，infer_fn_return_type 的 _ 臂），无错位。
+                        Type::PyDynamic => Type::PyDynamic,
                         _ => Type::I64,
                     });
                 }

@@ -4174,6 +4174,13 @@ call, no NULL-handle dereference).",
             // 结果一律标 Type::F64——pandas 对象句柄被当浮点存槽后，后续字典下标
             // 打到 codegen 的硬转（静默错值在先、响亮失败在后）。类型未知时不折
             // 叠、交回兜底臂当对象看待。
+            // 批次 893（#279 方案②）：接收者分两路——静态向量照旧折叠
+            // （F64，元素型已知）；未知型接收者（PyDynamic／I64——运行期可能
+            // 是列表也可能是 dict／pandas 对象）走 zeta_mean_to_string：vec
+            // 返回均值文本（"20.0"）、非 vec 原样返回句柄（t10004 字典面）。
+            // 结果型诚实标 PyDynamic——下游按形状分派（print 的 dyn 渲染／
+            // dict 下标各自正确）；静态单型（F64 或 Str）都必毒化一面
+            // （890 实测），PyDynamic＋形状分派是方案②的落地形。
             if method == "mean"
                 && receiver.is_some()
                 && arg_ids.len() == 1
@@ -4192,6 +4199,22 @@ call, no NULL-handle dereference).",
                 self.exprs.insert(flag, MirExpr::IntLit(elem_is_i64 as i64));
                 self.type_map.insert(flag, Type::I64);
                 self.emit_call_into(id, "zeta_mean_vec", vec![arg_ids[0], flag], Type::F64);
+                return id;
+            }
+            if method == "mean"
+                && receiver.is_some()
+                && arg_ids.len() == 1
+                && matches!(
+                    receiver_ty.as_ref(),
+                    Some(Type::PyDynamic) | Some(Type::I64)
+                )
+            {
+                self.emit_call_into(
+                    id,
+                    "zeta_mean_to_string",
+                    vec![arg_ids[0]],
+                    Type::PyDynamic,
+                );
                 return id;
             }
 

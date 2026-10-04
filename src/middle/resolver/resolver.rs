@@ -5532,7 +5532,13 @@ fn shim_class_normalize(t: &Type) -> Type {
             }
             let body = self.body_ret_tys.borrow();
             for name in &blanks {
-                if let Some(float @ (Type::F32 | Type::F64)) = body.get(name.as_str()) {
+                // 批次 893（#279 方案②）：PyDynamic 也回灌——未知型均值
+                // （zeta_mean_to_string）的 body 型是 PyDynamic（文本或原句柄，
+                // 运行期按形状分派）；调用点拿到 I64 会把文本句柄按整数打印
+                // （t813 实拍）。PyDynamic 槽的下游读全部按形状分派，安全。
+                if let Some(float @ (Type::F32 | Type::F64 | Type::PyDynamic)) =
+                    body.get(name.as_str())
+                {
                     if let Some(ty) = ret_types.get_mut(name.as_str()) {
                         *ty = float.clone();
                     }
@@ -5603,7 +5609,10 @@ fn shim_class_normalize(t: &Type) -> Type {
         // 第二个真相源。嵌套 def 走 `lower_closure`、不经过这里（调用点已按
         // `closure_ret_tys` 取 body 型）。
         if let AstNode::FuncDef { name, .. } = ast {
-            if let Some(float @ (Type::F32 | Type::F64)) = mir.signature_ret_ty() {
+            // 批次 893（#279 方案②）：PyDynamic 同批登记（见消费侧注释）。
+            if let Some(float @ (Type::F32 | Type::F64 | Type::PyDynamic)) =
+                mir.signature_ret_ty()
+            {
                 self.body_ret_tys.borrow_mut().insert(name.clone(), float);
             }
         }
