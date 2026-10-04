@@ -29385,3 +29385,38 @@ gen.rs 3874→3874（行数不变——净增逻辑在 checker 侧）；checker 
 
 **验证**：编译零错误；lib 182/182；历史探针七套零差异；全量差分
 （--group 50）match=2845/2845＝100%；python_style 479/0。
+
+## 批次 924–926（2026-10-04）：浮点数组位模式缺陷族三连修
+
+**缺陷族背景**：浮点元素在动态数组里按 f64 位模式存储（`zeta_vec_push_f64`
+约定，`runtime/py_additions.c:4810`）。数值折叠/查找族运行时只支持 i64
+通道，浮点数组全族按位模式当整数算——每处独立实拍后三批各修一形。
+
+**批 924（`175e2946`）sum**：`sum([1.5, 2.5])` 打 9222246136947933184
+（CPython 4.0）。runtime 新增 `zeta_sum_vec_f64`/`zeta_sum_n_f64`（double
+累加）；codegen 提前声明 prototype（照 `zeta_mean_vec` 先例——返回 double
+不声明会被按 i64 现推）；gen `sum_target` 纯面按元素型分派＋checker_env
+兜底；Slice 等旧路裸调保持原样。坑：链接走仓库根 `zeta_runtime_c.o`
+（`tools/build_runtime.sh` 产物），cargo build 的 OUT_DIR .o 不被
+`find_runtime_obj` 用——改 runtime 后必须重跑 build_runtime.sh。
+
+**批 925（`946f0243`）min/max**：`min([1.5, 2.5])` 打 4609434218613702656
+（＝1.5 的位模式）。runtime 新增 `py_builtin_max_f64`/`py_builtin_min_f64`；
+gen `minmax_builtin_target` 纯面分派＋checker 兜底；移除旧 warning 绕行
+提示；浮点结果槽标 F64。附记录：`print(1)` 基线有 2 个 W1010 警告
+（HEAD 同值，既有行为，不影响产物，待查）。
+
+**批 926（`a5a18180`）index/count/in**：`ys.index(2.5)` → -1、
+`2.5 in ys` → False、`ys.count(1.5)` → 0。根因＝搜索值实参被 ABI coerce
+fptosi 截断（2.5→2）；`zeta_list_index_f64`/`count_f64` 函数选择本来就对，
+通道错了。修＝codegen coerce 臂对 `_f64` 后缀函数走 bitcast；runtime 新增
+`py_list_contains_f64`；gen `in` 浮点数组分派。
+
+**登记缺口（未修）**：`max(xs, key=abs)` 内建 key 崩溃（abs 无一等函数
+值形式）；用户 key 函数对浮点数组按 i64 比较位模式错序（`max(xs, key=ka)`
+打 2.0 位模式，CPython -3.5）——需 key 函数按元素型单态化，函数值化
+基础设施另批。
+
+**验证**：七组探针（sum 动态/定长/整数、min/max/abs、sorted、
+index/count/in、用户 key）逐一对齐 CPython；每批全量差分 2845/2845、
+python_style 479/0；库测试 182→207（checker 六批＋纯面单测累计）。
