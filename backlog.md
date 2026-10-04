@@ -617,7 +617,7 @@
 >   检查节奏：只跑改到的目标＝历史套件 62/62 ＋ crate 内 145/145 ＋ 编译零错误；
 >   `target/release/zetac` md5＝`ed5227ccd29b70c4ee9ae17500926f10` 与 10038 那颗一字相同（矩阵只跑
 >   debug 目标，本批未重编）⇒ 抽样窗口未跑。开批实测 `cleanup..bootstrap`＝336，三笔代码笔落地后
->   收尾实测 `bootstrap..cleanup`＝38／`cleanup..bootstrap`＝340。
+>   实测 `bootstrap..cleanup`＝38，本条记录笔落地后收尾＝39／`cleanup..bootstrap`＝340。
 
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134

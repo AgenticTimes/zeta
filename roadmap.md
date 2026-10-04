@@ -28047,7 +28047,9 @@ M3 实跑仍 61 条一字不变（阴性），原因是"构造自己所在的类
 ## 批次 10039（cleanup）——#20005 第二十八批：把批次 169 的 `-> dict`＋`json.loads` 改判成 PyJson 做成编译期单元测试
 
 **车道分歧**：开批第一步实测 `cleanup..bootstrap`＝336（主树领先本车道，并树归主树侧，本车道只推
-`agentic cleanup`）；三笔代码笔落地后收尾实测 `bootstrap..cleanup`＝38、`cleanup..bootstrap`＝340。
+`agentic cleanup`）；三笔代码笔落地后实测 `bootstrap..cleanup`＝38，本记录笔落地后收尾＝39、
+`cleanup..bootstrap`＝340（10038 收尾 35 ＋ 本批四笔＝39；逐笔 `git merge-base --is-ancestor <哈希> bootstrap`
+查得本批四笔与 10038 四笔都还没被主树并走）。
 
 **来源批次**：169（`8383988f`，2026-09-20，"fix(py-a): batch 169 — `-> dict` + `json.loads` 的返回类型；
 map 原语对 JSON 句柄的响亮拒绝"）。`git merge-base --is-ancestor 8383988f HEAD` rc=0（已验在本树）；
