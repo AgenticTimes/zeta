@@ -5205,6 +5205,13 @@ def inelse(flag, txt) -> dict:
         return json.loads(txt)
 
 
+def exp_then(flag, txt) -> dict:
+    if flag:
+        return json.loads(txt)
+    else:
+        return {"e": 5}
+
+
 def try_ret(txt) -> dict:
     try:
         return json.loads(txt)
@@ -5219,6 +5226,7 @@ def other(obj, txt) -> dict:
 d = load("{}")
 b = branchy(True, "{}")
 i = inelse(False, "{}")
+e = exp_then(True, "{}")
 t = try_ret("{}")
 o = other("x", "{}")
 "#;
@@ -5309,8 +5317,12 @@ o = other("x", "{}")
         }),
         ("main：branchy(...) 调用点的目的槽", dest_ty("main", "branchy")),
         (
-            "main：inelse(...) 调用点的目的槽（else 侧未修现状锁）",
+            "main：inelse(...) 调用点的目的槽（显式 else 未修现状锁）",
             dest_ty("main", "inelse"),
+        ),
+        (
+            "main：exp_then(...) 调用点的目的槽（显式 else 未修现状锁，另一侧）",
+            dest_ty("main", "exp_then"),
         ),
         (
             "main：try_ret(...) 调用点的目的槽（try 侧未修现状锁）",
@@ -5360,7 +5372,11 @@ o = other("x", "{}")
             "Named(\"PyJson\", [])".to_string(),
         ),
         (
-            "main：inelse(...) 调用点的目的槽（else 侧未修现状锁）",
+            "main：inelse(...) 调用点的目的槽（显式 else 未修现状锁）",
+            "Named(\"map\", [])".to_string(),
+        ),
+        (
+            "main：exp_then(...) 调用点的目的槽（显式 else 未修现状锁，另一侧）",
             "Named(\"map\", [])".to_string(),
         ),
         (
@@ -5376,11 +5392,12 @@ o = other("x", "{}")
     assert_eq!(
         want, got,
         "注解 `-> dict` 而体里 `return json.loads(...)` 的函数必须登记成 `PyJson`（批次 169）——\
-         第 2/3/9 格是消费面，红了说明返回类型没传到调用点；第 9 格专指 `if` 的 then 侧那条\
-         （递归走查），第 2 格只走顶层 `return`；第 12 格本该留在 `map`（接收者不是 `json`，\
+         第 2/3/9 格是消费面，红了说明返回类型没传到调用点（第 9 格靠 `if` 的 then 侧递归，\
+         第 2 格靠顶层 `return`）；第 10/11/12 格是未修现状锁：写了显式 `else:` 的函数\
+         两侧都认不出（`json.loads` 放 then 侧与放 else 侧实测同样得到 `map`），`try:` 块内\
+         也认不出，修好后这三格要改成 `PyJson`；第 13 格本该留在 `map`（接收者不是 `json`，\
          改写变宽＝把别的 `.loads` 也顶成 `PyJson`，这条是接收者守卫的负向锁）；\
-         第 10/11 格是未修现状锁——`else:` 侧与 `try:` 侧目前都没被认出来（仍是 `map`），\
-         修好那两侧后这两格要改成 `PyJson`；第 8 格读回空串＝字典字面量的 `map` 型被改写覆盖，\
-         169 的改写过头了；第 7 格本该留在 `I64`（`other` 体内那次 `.loads` 的接收者是无型形参）"
+         第 8 格读回空串＝字典字面量的 `map` 型被改写覆盖，169 的改写过头了；\
+         第 7 格本该留在 `I64`（`other` 体内那次 `.loads` 的接收者是无型形参）"
     );
 }
