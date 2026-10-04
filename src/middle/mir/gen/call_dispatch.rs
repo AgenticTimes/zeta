@@ -4128,6 +4128,31 @@ call, no NULL-handle dereference).",
                     Some(Type::PyDynamic) | Some(Type::I64)
                 )
             {
+                // 批次 913（P3）：接收者是 Var 且 checker_env 有已知型时升级
+                // ——DynamicArray(F64) ⇒ 折叠 zeta_mean_vec（F64 正确值而非文
+                // 本）；Named(map) ⇒ identity（字典面）。查表 miss（参数型
+                // Unknown）仍走 mean_to_string（893 语义保留）。
+                if let AstNode::Var(recv_name) = &**receiver.as_ref().unwrap() {
+                    if let Some(ty) = self.checker_type_of(recv_name) {
+                        match &ty {
+                            Type::DynamicArray(e) if matches!(**e, Type::F64) => {
+                                // checker 已知是 f64 向量 ⇒ 直接折叠（F64 正确值）
+                                let flag = self.next_id();
+                                self.exprs.insert(flag, MirExpr::IntLit(0));
+                                self.type_map.insert(flag, Type::I64);
+                                self.emit_call_into(id, "zeta_mean_vec", vec![arg_ids[0], flag], Type::F64);
+                                return id;
+                            }
+                            Type::Named(n, _) if n == "map" => {
+                                // checker 已知是 map ⇒ identity（字典面）
+                                self.exprs.insert(id, MirExpr::Var(arg_ids[0]));
+                                self.type_map.insert(id, ty.clone());
+                                return id;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 self.emit_call_into(
                     id,
                     "zeta_mean_to_string",

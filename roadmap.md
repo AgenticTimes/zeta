@@ -29306,3 +29306,15 @@ P1 骨架（批 911）的接线批：
 **验证**：编译零错误；内置单元测试 182/182；历史探针七套零差异；
 三 mean 夹具（t813/t10004/t10002）全对齐 CPython；全量差分（--group 50）
 match=2845/2845＝100%。
+
+## 批次 913（2026-10-04，**轴 F P3：mean 臂消费 checker_env——PyDynamic 接收者查表升级（零行为变更，消费模式就位）**）
+
+P2 接线的消费批：mean 臂的 PyDynamic/I64 分支在发 zeta_mean_to_string 前
+先查 checker_type_of(receiver_name)——Known(DynamicArray(F64)) ⇒ 折叠
+zeta_mean_vec（F64 正确值而非文本）；Known(map) ⇒ identity（字典面）；
+查表 miss（参数型 Unknown）仍走 mean_to_string（893 语义保留）。
+当前三 mean 夹具的行为不变（接收者是参数、checker_env 无已知型）——
+升级在有调用点参数传播后生效（627 机制推广到普通函数，独立排期）。
+
+**验证**：编译零错误；内置单元测试 182/182；三 mean 夹具＋历史探针
+七套＋全量差分（--group 50）match=2845/2845＝100%；python_style 479/0。
