@@ -29045,3 +29045,15 @@ python_style 终值见下批记录补注（验证在途时入册）。
 现状（3829 行/32 家族＋修复批附带产出＋方法论五条）。
 **缺口清单（按计划归属）**：轴 F checker（大工程）、轴 G 的 CI 侧四项
 （依赖 CI 环境本身）、轴 A 的 allow 两行待决、轴 B 完整格标签（= #279 延伸）。
+
+## 批次 895（2026-10-04，**度量批：轴 C 编译性能基线落地（refactor.md 轴 C 判据的"前"侧）**）
+
+轴 C 判据「`time zetac` 前后对照 ≥ 可测收益，否则不合并」此前没有"前"侧基线。
+本批建 `tools/baselines/compile_perf.txt`：代表集四档（small 1 行／medium 40 行／
+large-z 3301 行／large-z2 800 行）＋全量差分套件，`/usr/bin/time -p` 各 3 次取中位。
+读数：small 0.12s／medium 0.16-0.19s／build.z（3301 行）20.4-22.8s／
+minimal_compiler.z（800 行）2.3-2.5s／全量差分 --group 50 = 274.45s。
+方法论注：-o 必须指向可写路径（/dev/null 会 PermissionDenied）。
+任何触编译性能的改动（轴 C 的 clone/HashMap/intern）合并前在同文件同法复测追加。
+
+验证：编译零错误；基线文件入库 tools/baselines/compile_perf.txt。

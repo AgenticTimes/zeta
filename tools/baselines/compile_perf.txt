@@ -1,0 +1,24 @@
+# tools/baselines/compile_perf.txt — 编译性能基线（批次 895，2026-10-04）
+# 机器：Apple Silicon (arm64, macOS darwin 24.3.0)；被测件＝target/release/zetac
+# 方法：/usr/bin/time -p 各跑 3 次取中位；-o 写 /tmp（避免 root 目录权限噪声）。
+# 判据来源：refactor.md 轴 C「time zetac 前后对照 ≥ 可测收益，否则不合并」——
+# 本文件是"前后对照"的"前"基线；任何触编译性能的改动（clone/HashMap/intern）
+# 合并前在此同法复测并追加一节。
+
+[small] tests 尺寸≈1 行 print（perf_small.py）
+  real 0.12 / 0.12 / 0.21（首跑含页缓存冷启动）
+
+[medium] t813_unannotated_float_return（约 40 行，def/class/方法调用）
+  real 0.19 / 0.18 / 0.16
+
+[large-z] zetas/capybara/build.z（3301 行）
+  real 22.51 / 22.79 / 20.43
+  注：-o 必须指向可写路径（/dev/null 会 PermissionDenied）。
+
+[large-z2] tests/unit-tests/minimal_compiler.z（800 行）
+  real 2.47 / 2.45 / 2.29
+
+[suite] 全量差分 --group 50（2846 例，50 组）
+  real 274.45s（≈4 分 34 秒；含每组编译＋运行＋CPython 真值缓存命中）
+
+# —— 后续对照记录（追加在下方） ——
