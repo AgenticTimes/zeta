@@ -27288,3 +27288,168 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
   两本台账，**连续二十八批**）；待补台账行的文字写进本批记录笔的提交信息。
 
+
+## 批次 10030（cleanup）——十批界的全局逐个用例跑 ＋ python_style 的派发不再等"收尾收不掉"的进程
+
+- 被测件：`target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10`、运行期 `zeta_runtime_c.o`
+  md5 `878479bebf8d79a8539ee9a680fb463b`——与 10013→10029 那一颗一字相同（开跑前本树零 `src/` 改动）。
+- 十批界的全局逐个用例跑：`bash tools/run_all.sh`（17 步，`OUT_JSON=/tmp/b10030/zeta_baseline.json`，
+  日志 `/tmp/b10030/run_all.log`）。读数与逐个判定：
+  | 步骤 | 读数 |
+  |---|---|
+  | official | compile **194/194**，compile+link **191/194**；link-only 3 ＝ `integration_all_features`／`quantum_basic`／`selfhost`（缺运行时绑定，存量） |
+  | 诊断面 official | 6/194 文件有编译告警，**33 行** |
+  | python_style | **447 passed / 3 failed / 1 known-fail / 0 xpass / stuck＝无该字段（全局那一趟 09:00 起跑，worker 的 `stuck` 计数 10:11 才提交 `ab017966`；那 3 条 FAIL 用修好的 worker 复跑＝3 条 STUCK，见 U4）**；红源与 stuck 源见下（整行原样：`python_style: 447 passed, 3 failed, 1 known-fail, 0 xpass`） |
+  | 诊断面 python_style | **303 warning 行 / 132 文件** |
+  | corpus | 语料 40 文件，解析通过 **34/40 ＝ 85.0%**；超时单列 4 枚 `_drv_accept_409.py`／`_zeta_local_drv.py`／`jq_wufu_local.py`／`wufu_v2.py`，解析失败 2 枚 `jq_wufu.py`／`jq_wufu_daily.py` |
+  | jit sweep | jit sweep: ok=176 trap=469 fail=0 timeout=3 segv=0  (total 648，最小 ok=163) |
+  | diff | **match=2717 judged=2717 rate=100.0% bad_case=1** |
+  | knob | 23 条断言 违规 15（rc=1，`run_all.log:53`）＋ `knob_probe: A 段 rc=1（B 段未跑）`（`:81`） |
+  | swallow | 6 条断言 违规/不一致 0（rc=0） |
+  | import_form | 22 条断言 违规/不一致 0（rc=0） |
+  | empty_stmt | 68 条断言 违规/不一致 0（rc=0） |
+  | pysrc | 42 条断言 违规/不一致 0（rc=0） |
+  | cli_semantics | 87 条断言 违规/不一致 0（rc=0） |
+  | ignore_rules | 19 条断言 违规/不一致 0（rc=0） |
+  | mbvar | 摘要印 35（那是 ok/FAIL 行数，脚本实测 28 枚＝#209①）违规 10（rc=1） |
+  | emit_stable | 2 条断言 违规/不一致 0（rc=0） |
+  | dyn_binding | 4 条断言 违规/不一致 0（rc=0） |
+  | comment_drift | 0 处复述（期望 0，rc=0） |
+  | clean_checkout | rc=0（33s，rev=`07dcae71`） |
+  
+  `GATE_RC=1`，总耗时 2 时 17 分 27 秒（`run_all.log:1` 的 START 09:00:39 到 `:230` 的 END 11:18:06；该脚本没有逐步计时输出，17 步各占多少本批未取）。上次同口径全量在册＝批次 640（`roadmap.md:24992` 起，17 步含 `truth` 43/43，彼时独占机器总耗时 8 分 18 秒；本树 `tools/run_all.sh` 已无该步 ⇒ 本批逐项 19 格）；640 对照值：python_style 420/2/6/0、corpus 40/40、jit ok=178、diff match=576 judged=600（本轮差分分母已长到 2718）。本轮总耗时是在 load 49→70 的机器上与主树并行跑出来的，脚本没有逐步计时 ⇒ 无法拆到哪一步吃掉时间。
+- 开跑时机器负载 `load averages: 49.20 70.47 64.48`（主树在并行重编，约 33 颗 rustc），
+  跑了 2 时 17 分 27 秒（`run_all.log:1` 的 START 09:00:39 到 `:230` 的 END 11:18:06；该脚本没有逐步计时输出，17 步各占多少本批未取）；按经验教训 3（并行套件在重负载下可能误报失败，经验教训 3 原话用词见 AGENTS.md），红了的部分
+  落在第 ②⑥⑦⑯ 四步（`tools/run_all.sh` 的 rc 汇总段里 `:629`＝python_style、`:631`＝corpus、
+  `:638`＝knob、`:651`＝mbvar 这四条把 rc OR 进总 rc；差分那条是 `rc=2`＝坏用例只喊话不计红 `:662`，
+  official 的 191/194 差在链接面、`:628` 只比 compile 与 total 故不计红），逐个复跑定性：
+  - **⑯ mbvar 违规 10**：本批自己引入的红，也是唯一一条真新增。10 处已改完（`tools/sample_gate.sh`
+    8 处＋`tools/selfcheck_sample_gate_classify.sh` 1 处＋`tests/python_style/selfcheck_run_capped.sh`
+    1 处），复跑该步违规 0（代码笔 `129eb89d`）。两条读数口径入册：其一**已在册**＝#209①
+    （"把 mbvar 的输出行数当脚本数印"，立号于批次 460，仍未修），本批再证一次——摘要值 35 而
+    `find tools tests -name '*.sh'` 实测 28 枚，取数点在 `run_all.sh:478` 的
+    `grep -cE '^  (ok|FAIL) '`；#209 原文写的 `:479-480` 已搬家。其二**本批新见**＝明细只在 rc≠0 时
+    打 `tail -30`（`run_all.sh:483`），本轮日志可见 9 条 FAIL 而汇总行写 10 处违规＝有一条被截掉。
+  - **② python_style 3 failed**：挂死的后果，不是回归。三枚＝#20006 在册那三枚，用修好的 worker
+    复跑全量三遍（见 U4 那一格），三枚都改判 `STUCK`。
+  - **⑦ knob 15 FAIL ＋ knob_probe A 段 rc=1**：本批实拍定性为**两条既存红**，非本批引入
+    （被测件 md5 与 10013→10029 同一颗、本批零 `src/` 改动、`tools/knob_probe.sh` 最后改在批次 397）：
+    - A1 的 13 条＋A2 的 1 条（`ZETA_STRICT_PARSE=1` 期望 rc=1 实得 0）＝**夹具失效**。
+      `tools/knob_probe.sh:37-43` 的 A1 夹具（体内裸 `mut counter: i64 = 0`，指望它整项解析失败→
+      截断）用当前二进制单跑（`/tmp/b10030/kn_rec.z`）实得
+      `warning: [W1004] kn_rec.z:2: `mut` became a stand-alone statement while 'counter: i64 = 0'
+      was parsed as the next one` 且 rc=0 ⇒ 不再产出 W1002/W1003，那 13 条断言的 grep 目标恒空、
+      A2 的致命臂无从触发。形状与 `knob_probe.sh:34-36` 注释记载的批次 384 老夹具（`static mut`）
+      失效一模一样。B 段（恢复态对 official 194 文件的退出码对照）因 A 段 rc=1 未跑。
+    - A4 的 1 条＝**真站点**：期望"ZETA_* 旋钮侧残留 `is_ok()` 站点＝0"，实得 1＝
+      `src/middle/resolver/resolver.rs:1960` 的 `std::env::var("ZETA_COUNT_MGT").is_ok()`
+      （存在即开，写 `0` 的人得到的是开）。
+    两条都登记进 backlog 另批修，本批不动 `src/`。
+  - **⑥ corpus 34/40**：**未复跑**（该步 40 文件要几分钟，本批把预算给了 U4 三遍），只拆分读数：
+    超时单列 4 枚（`_drv_accept_409.py`／`_zeta_local_drv.py`／`jq_wufu_local.py`／`wufu_v2.py`，
+    单文件预算 90 秒）＋解析失败 2 枚（`jq_wufu.py`／`jq_wufu_daily.py`）。后两枚＝批次 10021／10022
+    在册那两枚，`roadmap.md:26672` 记的 panic 行是 `src/backend/codegen/codegen.rs:4189` 的
+    `into_int_value()` 硬转崩（不是解析退化），换窗口仍是这两枚；前四枚在负载 49→70 的机器上
+    与经验教训 3 的形状一致，但**未复跑＝未定性**，下批在低负载窗口取数。
+
+### 本批落地：`tests/python_style/run_one.sh` ＋ `run.sh`（代码笔 `ab017966`）＋ 自证脚本（附笔 `0a7e9254`）
+
+现象（第②步实拍）：派发清单 451 枚（`t*.z`）的并行池在已出判定 378 枚处停住 34 分钟不动，`ps` 追到三枚
+`run_one.sh` worker（状态 S，已等 34 分）各等一颗状态 `UE`（不可中断＋正在退出）的被测二进制；
+对六颗 worker 进程 `kill -TERM` 之后池才走完，那三枚因此被 run.sh 记成 `FAIL (worker 内部错误)`
+——即"3 failed"这一格是挂死的后果，不是新增回归，用例名＝`t253_stub_abort`／
+`t256_pylib_stub_abort`／`t405_hard_stub_aborts_loudly`，全部是 #20006 在册那三枚。
+
+根因取证（三条，都在本批实拍）：
+1. `run_one.sh:97`/`:100`/`:117-125` 的 `timeout 20` 挡不住它——`timeout` 发完信号仍要等子进程收尾，
+   而 `kill -9 30244`（已停 50 分钟的那颗）之后 2 秒 `ps` 仍列出同一颗，状态 `UE` ⇒ 收不掉。
+2. 对照形状：`/bin/sh` 脚本里 `kill -ABRT $$`（先写 stderr 再中止）在同一个 worker 机制下 1 秒内
+   取到退出码 134、进程正常收尾 ⇒ 停在不可中断态的不是 SIGABRT 本身，而是 zeta 产出的这颗二进制
+   （#20006 的成因线索从"信号处理"挪到"产出的二进制怎么死的"）。
+3. 本机 `UE` 进程计数开跑前 30 颗、本批取证后 34 颗；按 `ps -o stat,etime,command` 逐颗解析
+   （`/tmp/b10030/ue_now.txt`）：那三枚夹具本体 27 颗（`t253` 11／`t405` 9／`t256` 7）＋同三枚的
+   取证存件 2 颗＝29 颗，另有 `regression_history` 内置测试二进制 3 颗、`zetac` 自身 2 颗。
+   夹具侧最早一颗已停 1 天 13 时 0 分。这些进程 `kill -9` 收不掉，只有重启才清。
+
+改法：跑被测程序从"同步管道等退出码"改成 `run_capped`——后台起＋stdout/stderr 落文件＋轮询
+`ps -o stat=`；进程真退出才 `wait` 取退出码，确认它停在不可中断态（或到了 20 秒上限）就不再等。
+判定新增 `STUCK` 行：只在 `// expect-abort:` 用例上、退出码取不到而 stderr 已命中期望串时给出，
+`run.sh` 把它单列计数（`N stuck`）并打印用例名——不冒充 PASS（退出码确实没拿到），
+也不计入 `failed`（那三枚的主张"响亮 abort 已发生"这一半已被 stderr 命中证实）。
+
+验证（U1–U4，逐条留日志）：
+- U1 helper 四形状（`/tmp/b10030/t_fn.sh`，取 `run_capped` 函数体原文跑）：正常退出 rc=0＋
+  stdout/stderr 各自落位、非 0 退出 rc=134、SIGABRT 形状取到 rc=134、慢进程到 2 秒上限后
+  3 秒收手且不留活动进程——8 项断言全过。
+- U2 新旧 worker 同形对照（`/tmp/b10030/ab.sh`）：10 枚覆盖 expect／expect-error／args／env／
+  known-fail／expect-no-compile／expect-abort 七种形状的用例，判定行逐字相同 **10/10**。
+- U3 那三枚夹具同机对照（`/tmp/b10030/newrun/`、`/tmp/b10030/oldrun/`）：新 worker 出判定耗时
+  1s／5s／2s（三枚都 `STUCK`，stderr 命中期望串）；旧 worker 跑 `t253_stub_abort` 到 75 秒
+  外壳上限仍没有判定行（rc=124，`verdict` 空文件）。
+- U4 全套单步：复跑三遍（新 worker，`bash tests/python_style/run.sh`，日志 `/tmp/b10030/u4_py.log`／
+  `u4b_py.log`／`u4c_py.log`）：第一遍 11:18:07→11:24:31（6 分 24 秒，`u4.log` 有逐步时间戳）
+  **445 passed / 2 failed / 1 known-fail / 0 xpass / 3 stuck**；第二遍（起跑时刻未记，日志落在
+  12:04:27）**446 passed / 1 failed / 1 known-fail / 0 xpass / 3 stuck**；第三遍 12:07:56→12:18:33
+  （10 分 37 秒，按工作目录 `birth` 与日志 mtime 取）＝**447 passed / 0 failed / 1 known-fail /
+  0 xpass / 3 stuck**。
+  两件事分别从这两组读数里坐实：
+  ① `STUCK` 生效——#20006 那三枚在全局那一趟记 `FAIL (worker 内部错误)`，在修好的 worker 下
+     三遍都是 `STUCK`＋名单原样（`t253_stub_abort t256_pylib_stub_abort t405_hard_stub_aborts_loudly`），
+     全套不再在 378 枚处停 34 分钟（记时的两遍分别在 6 分 24 秒／10 分 37 秒内跑完，第二遍起跑未记）。
+  ② 前两遍的 2 枚／1 枚 FAIL 是负载引起的"输出为空"误报、不是回归：`t15_multiline_literals`／
+     `t175_getattr_literal_default`／`t37_module_read` 单用例复跑各 3/3 PASS、新旧 worker 同机
+     A/B 各 2/2 PASS，红的还换了名字 ⇒ 与用例无关；轮询间隔改 1 秒（附笔二 `92d69311`）后第三遍
+     0 枚，但三遍的负载不可比（第一遍起跑 load 59.77 记在 `u4.log`，第三遍起跑未记、跑测中 12:11
+     读到 52.67），**这一改对误报率的实际影响仍未定量**；
+     三遍读数按原样入册，不写成"已修"。
+- U5 仓库内自证（`tests/python_style/selfcheck_run_capped.sh`，提交 `0a7e9254`）：从同目录
+  `run_one.sh` 取 `run_capped` 原文函数体跑四形状，12 项断言全过、rc=0，秒级、不编译任何用例。
+- 测试节奏第 3 条（全局失败用例转模块内部单元测试）的处置：本批第②步那三枚红点
+  （`t253_stub_abort`／`t256_pylib_stub_abort`／`t405_hard_stub_aborts_loudly`）主张的是"运行期以 SIGABRT 响亮退出"，结论落在退出码与 stderr 上，不落在 MIR 上
+  ⇒ 按 #20005 的收录口径（只接落在 MIR 上的结论）不转成进程内单元测试；改由本批新增的 `STUCK`
+  判定行在册追踪（名单进 `run.sh` 摘要行），缺陷本体仍挂 #20006。判与不判的理由写在这里，
+  下一批不必再判一次。
+
+- 一处口径副作用（如实登记）：被测程序改成后台作业后，跑中止类用例时 bash 会在 worker 的标准错误
+  上打一行 `Abort trap: 6`（bash 3.2 对信号死亡的后台作业的通知；子 shell 包一层、`wait` 加重定向
+  都消不掉——`/tmp/b10030/jt.sh` 三种形状实拍都是退出码 134 ＋ 该行通知）。旧口径走命令替换不产生
+  该行，所以全量日志会多出几行（本套件带 `expect-abort:` 的 4 枚用例）。判定行与聚合计数不受影响；
+  没有把 worker 的标准错误改道进文件，因为那会把 worker 的真报错一起藏掉。
+- 本批附笔（代码 `07dcae71`）：新判定行 `STUCK` 的消费方核对。`tools/sample_gate.sh` 的 ② 步
+  逐个用例读判定文件，把不是 `PASS`／`KNOWN-FAIL`／`XPASS` 的行都算红——`STUCK` 落进去就是
+  每十批一遇的红，而它只在 stderr 已命中 `// expect-abort:` 期望串、仅退出码因 #20006 取不到时
+  才给，不是本批引入的失败。改成与 `KNOWN-FAIL` 同族：单列计数、不置红、摘要带名单，
+  并把 `PASS` 的分母扣掉 `STUCK` 那几枚（否则"39/41 PASS"会被读成两条真失败）。
+  验证：`tools/selfcheck_sample_gate_classify.sh` 用 sed 从 `sample_gate.sh` 取归类链与报告段原文
+  （结构一变就取不到、直接报错，防止两者走散），七种判定行分桶 7/7 对，报告段分母与 rc 四臂
+  （只有 STUCK → 39/39 且 rc=0；STUCK＋真 FAIL → 39/40 且 rc=1）4/4 对；真实夹具侧证两枚——
+  `t256_pylib_stub_abort` 给 `STUCK`、`t485_dyn_getitem_guard_stays_loud` 给 `PASS`。
+- 摘要行加字段的下游核对：全量那一趟 `tools/run_all.sh:134` 用四条 sed 从 `python_style:` 摘要行
+  取 passed/failed/known-fail/xpass 四个数写进 JSON，新字段只追加在行尾 ⇒ 四条 sed 对
+  `... 0 xpass, 2 stuck` 实测仍取到 447／3／1／0（`run_all.sh` 不改，docs/ABI.md 有裸行号引用）；
+  JSON 里没有 stuck 这一格，全量红绿口径不变。附带一条读数来源：本轮全局第②步在 09:00 起跑、
+  worker 修法 10:11 才提交，所以摘要行没有 `stuck` 字段，那 3 条 FAIL 就是 #20006 的三枚靶夹具
+  （`run_all.log:18` 点名 `t253_stub_abort t256_pylib_stub_abort t405_hard_stub_aborts_loudly`），
+  新 worker 的读数看下面 U4 那一格。
+- 本批附笔二（代码 `92d69311`）：`run_capped` 的轮询间隔 0.2 秒改 1 秒。动机＝两遍全量各有 1–2 枚
+  "输出为空"的误报（第一遍 `t15_multiline_literals`／`t175_getattr_literal_default`、第二遍
+  `t37_module_read`；这三枚单用例复跑各 3/3 PASS，新旧 worker 同机 A/B 也各 2/2 PASS，红的还换了
+  一枚 ⇒ 与用例无关、与负载有关），而每轮轮询要起一颗 `ps`：0.2 秒一档＝每 worker 每秒 5 次 fork，
+  451 枚用例的池一起摊这份开销。改后三枚靶夹具单用例实测 2s／4s／3s（含编译），判定语义与归类不变
+  （`selfcheck_run_capped.sh` 12/12、`selfcheck_sample_gate_classify.sh` 7/7 复跑）。
+  未定量：这一改对误报率的实际影响——第三遍全量的读数一并写在 U4 那一格。
+余项（不占新号，挂在 #20006 与测试节奏两格里）：
+① 缺陷本体未修——产出的二进制为什么停在不可中断态（`runtime/*.c` 的 `abort()` 路径、链接方式、
+  还是 macOS 崩溃报告排队）本批未定位，#20006 仍 ⬜；
+② `expect-abort` 用例的退出码这一半证据在 `STUCK` 格子里永久缺失，修好 #20006 后应回改成 PASS；
+③ 编译期调用（`run_one.sh` 跑 `zetac` 那一趟）仍可能吃到同类挂死（本机已有 `zetac` 自身停在
+  `UE` 的实例），本批只改了运行期那一趟；
+④ 全局第⑦步那两条既存红按登记规则第 2 条**不占新号**，只把站点写死在这里供下一批取：
+  `tools/knob_probe.sh:37-43` 的 A1 夹具已失效（当前二进制对它实得 `W1004`＋rc=0，不再产出
+  W1002/W1003 ⇒ A1 的 13 条与 A2 的 1 条空转，形状同 `knob_probe.sh:34-36` 注释里的批次 384 旧夹具）；
+  `src/middle/resolver/resolver.rs:1960` 的 `std::env::var("ZETA_COUNT_MGT").is_ok()` 是 A4 点名要的
+  那一处"存在即开"残留（期望 0 实得 1）。取夹具那条属 `tools/` 面，动它不需要碰主树在重构的 `gen.rs`。
+- `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件 `src/error_codes.rs`／
+  `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
+  `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
+  两本台账，**连续二十九批**）；待补台账行的文字写进本批记录笔的提交信息。
