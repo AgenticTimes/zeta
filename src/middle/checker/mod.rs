@@ -130,6 +130,12 @@ fn ret_expr_ty(e: &AstNode, env: &TypeEnv, ctx: &InferCtx) -> Option<Type> {
 }
 
 /// 数值标量／BigInt（-、~ 一元运算保持同型的操作数面，批 921）。
+/// 数值字面量（整数/浮点字面量节点，批 922）。
+fn is_num_literal(e: &AstNode) -> bool {
+    matches!(e, AstNode::Lit(_) | AstNode::FloatLit(_))
+}
+
+/// 数值标量／BigInt（-、~ 一元运算保持同型的操作数面，批 921）。
 fn is_numeric_ty(ty: &Type) -> bool {
     matches!(
         ty,
@@ -256,19 +262,9 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
         }
         return;
     }
-    // 二元运算同型传播
-    if let AstNode::BinaryOp { left, right, .. } = rhs {
-        if let (AstNode::Var(a), AstNode::Var(b)) = (&**left, &**right) {
-            let la = env.get_slot(a);
-            let lb = env.get_slot(b);
-            if la.is_known() && la == lb && !matches!(la, LatticeTy::Conflict) {
-                env.meet_slot(name, la);
-            }
-        }
-        return;
-    }
-    // 比较运算 ⇒ Bool（批次 917 扩展）
-    if let AstNode::BinaryOp { op, .. } = rhs {
+    // 二元运算传播（批 922 重构：同型双变量、变量与数值字面量、Str 拼接、比较⇒Bool）
+    if let AstNode::BinaryOp { op, left, right } = rhs {
+        // 比较运算 ⇒ Bool
         if matches!(
             op.as_str(),
             "==" | "!=" | "<" | ">" | "<=" | ">=" | "in" | "not in"
@@ -276,6 +272,42 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
             env.meet_slot(name, LatticeTy::known(Type::Bool));
             return;
         }
+        // 双变量同型 ⇒ 同型
+        if let (AstNode::Var(a), AstNode::Var(b)) = (&**left, &**right) {
+            let la = env.get_slot(a);
+            let lb = env.get_slot(b);
+            if la.is_known() && la == lb && !matches!(la, LatticeTy::Conflict) {
+                env.meet_slot(name, la);
+            }
+            return;
+        }
+        // 变量＋字面量：数值操作数保持变量型；Str 拼接 ⇒ Str（双向）
+        for (v, other) in [(left, right), (right, left)] {
+            if let AstNode::Var(a) = &**v {
+                if let LatticeTy::Known(ty) = env.get_slot(a) {
+                    if is_numeric_ty(&ty) && is_num_literal(other) {
+                        env.meet_slot(name, LatticeTy::known(ty));
+                        return;
+                    }
+                    if op == "+"
+                        && ty == Type::Str
+                        && matches!(&**other, AstNode::StringLit(_))
+                    {
+                        env.meet_slot(name, LatticeTy::known(Type::Str));
+                        return;
+                    }
+                    if op == "+" && ty == Type::Str {
+                        if let AstNode::Var(b) = &**other {
+                            if env.get_slot(b) == LatticeTy::known(Type::Str) {
+                                env.meet_slot(name, LatticeTy::known(Type::Str));
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
     }
     // FString ⇒ Str（批次 917 扩展：f-string 结果恒为文本）
     if let AstNode::FString(_) = rhs {
@@ -727,5 +759,94 @@ mod tests {
             &ctx,
         );
         assert_eq!(env.get_slot("flag"), LatticeTy::known(Type::Bool));
+    }
+
+    /// x + 整数字面量：x 为数值 ⇒ 同型（批 922）。
+    #[test]
+    fn binop_var_int_lit_propagates() {
+        let mut env = TypeEnv::new();
+        env.meet_slot("count", LatticeTy::known(Type::I64));
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign(
+                "next",
+                AstNode::BinaryOp {
+                    op: "+".to_string(),
+                    left: Box::new(var("count")),
+                    right: Box::new(AstNode::Lit(1)),
+                },
+            )],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("next"), LatticeTy::known(Type::I64));
+    }
+
+    /// x * 浮点字面量：x 为 F64 ⇒ 同型（批 922）。
+    #[test]
+    fn binop_var_float_lit_propagates() {
+        let mut env = TypeEnv::new();
+        env.meet_slot("total", LatticeTy::known(Type::F64));
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign(
+                "scaled",
+                AstNode::BinaryOp {
+                    op: "*".to_string(),
+                    left: Box::new(var("total")),
+                    right: Box::new(AstNode::FloatLit("2.0".to_string())),
+                },
+            )],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("scaled"), LatticeTy::known(Type::F64));
+    }
+
+    /// Str + 字符串字面量 ⇒ Str（批 922）。
+    #[test]
+    fn binop_str_concat_types_str() {
+        let mut env = TypeEnv::new();
+        env.meet_slot("s", LatticeTy::known(Type::Str));
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[
+                assign(
+                    "t",
+                    AstNode::BinaryOp {
+                        op: "+".to_string(),
+                        left: Box::new(var("s")),
+                        right: Box::new(AstNode::StringLit("!".to_string())),
+                    },
+                ),
+                assign(
+                    "u",
+                    AstNode::BinaryOp {
+                        op: "+".to_string(),
+                        left: Box::new(AstNode::StringLit("pre-".to_string())),
+                        right: Box::new(var("t")),
+                    },
+                ),
+            ],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("t"), LatticeTy::known(Type::Str));
+        assert_eq!(env.get_slot("u"), LatticeTy::known(Type::Str));
     }
 }
