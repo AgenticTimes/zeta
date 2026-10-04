@@ -4182,3 +4182,84 @@ print(x)
     );
 }
 
+/// 批次 10033（移植主树批次 153 `2ed6da43`）：`self.m = {}` 的字典字段不再被类型化成 i64。
+/// 症状（缺陷记录原文）：`parse_class` 的字段类型推断只认字面量／bool／浮点／字符串／数组，
+/// `DictLit` 落到兜底 `i64` ⇒ 字段上的 map 操作全部失配：`.get`／`.values` 发裸符号（链接失败）、
+/// `k in self.m` **恒返回 0**（不报错的静默错值）。
+/// 两处站点＝`src/frontend/parser/top_level.rs` 的字段类型推断（本车道该文件在制，本批不改它、
+/// 也不做它的变异，因此这一处只算现状锁）＋`src/middle/types/mod.rs` 的 `Type::from_string`
+/// 把 `dict`／`dict[K, V]` 归一化成 `map`（该处由本批的模块内单元测试直接锁）。
+/// 与 10029（来源批次 155）那条 `-> dict` 注解归一化＝症状同形而站点不同（那条在
+/// `typecheck_new.rs` 的 `string_to_type`），两条互不备份。
+#[test]
+fn dict_field_literal_init_reaches_map_slots() {
+    let mirs = lower_all(
+        r#"class Store:
+    def __init__(self):
+        self.m = {}
+
+    def put(self, k, v):
+        self.m[k] = v
+
+    def probe(self, k):
+        if k in self.m:
+            print("hit")
+        else:
+            print("miss")
+
+s = Store()
+s.put("a", 1)
+s.probe("a")
+s.probe("z")
+print(s.m.get("a", 0))
+print(len(s.m.values()))
+"#,
+    );
+    // 三侧真值：CPython 打 `hit/miss/1/1`；AOT 二进制 rc=0 同四行；MIR 面＝下面三格。
+    // ① 有 `MapNew` 的那一段（`self.m = {}` 的构造）里，目的槽该是 map，不是 i64。
+    let ctor = mirs
+        .iter()
+        .find(|m| {
+            m.name.as_deref().map(|n| n.starts_with("Store")).unwrap_or(false)
+                && m.stmts.iter().any(|s| matches!(s, MirStmt::MapNew { .. }))
+        })
+        .expect("构造段里有 `MapNew`（`self.m = {}`）");
+    let dest = ctor
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::MapNew { dest } => Some(*dest),
+            _ => None,
+        })
+        .expect("MapNew 带目的槽");
+    match ctor.type_map.get(&dest) {
+        Some(Type::Named(n, _)) if n == "map" => {}
+        other => panic!(
+            "`self.m = {{}}` 的字段槽 id={dest} 该是 `Named(\"map\", …)`\
+             （153 之前这格＝I64，字段上的 map 操作因此全部失配），实得 {other:?}"
+        ),
+    }
+
+    // ② 症状格（静默错值那一格）：`k in self.m` 该发 map 的成员判定调用，不是恒 0。
+    let probe = mirs
+        .iter()
+        .find(|m| m.name.as_deref().map(|n| n.ends_with("probe")).unwrap_or(false))
+        .expect("降出 probe 段");
+    let calls = call_symbols(probe);
+    assert!(
+        calls.iter().any(|c| c.contains("map_contains")),
+        "`k in self.m` 该走 map 成员判定（153 之前恒返回 0＝静默错值），实得调用: {calls:?}"
+    );
+
+    // ③ `.values()` 该发 map 方法分支，不是裸 `_values`（153 之前＝链接期找不到符号）。
+    let main = mir(&mirs, "main");
+    let mcalls = call_symbols(main);
+    assert!(
+        mcalls.iter().any(|c| c.contains("map_values")),
+        "`len(s.m.values())` 该发 map 的 values 分支，实得调用: {mcalls:?}"
+    );
+    assert!(
+        !mcalls.iter().any(|c| c == "_values"),
+        "153 的症状之一就是发裸符号 `_values`（链接失败），这个调用名不该出现"
+    );
+}

@@ -2376,4 +2376,21 @@ mod tests {
         // 全是 None 拼写时取不到成员，退回动态类型。
         assert_eq!(Type::from_string("None | NoneType"), Type::PyDynamic);
     }
+    #[test]
+    fn from_string_normalizes_dict_spelling_to_map() {
+        // 来源＝主树批次 153（`2ed6da43`）修法第 2 步：`dict` 拼写归一化成 `map`。
+        // 所有 map 消费点按名字 `"map"` 分派，`Named("dict")` 会全部落空。
+        // 与 10029（来源批次 155）那条 `-> dict` 注解＝症状同形而站点不同（那条在
+        // `typecheck_new.rs` 的 `string_to_type`），两条互不备份。
+        assert_eq!(Type::from_string("dict"), Type::Named("map".to_string(), vec![]));
+        // 泛型那一支只扫尖括号 `<…>`，所以带参时能归一化的只有 `dict<K, V>` 拼写。
+        assert_eq!(
+            Type::from_string("dict<str, str>"),
+            Type::Named("map".to_string(), vec![Type::Str, Type::Str])
+        );
+        // Python 方括号拼写 `dict[K, V]` 实测**不**归一化（三条串都落 `Named(整串)`）＝未修，
+        // 按登记规则 2（新增一项要同时关闭一项）本条登在 #20005 的余项里，未占新号。
+        // 影响面实测只在直接调用这一面：真实注解路径打 `UA: dict[str, str] = {…}` 的槽
+        // 仍是 `Named("map", [Str, Str])`（`--dump-mir`，本批读数）。
+    }
 }
