@@ -227,6 +227,7 @@ fn merge_top_level_evidence(
     funcs: &HashMap<String, AstNode>,
     base: &HashMap<String, Vec<Option<Type>>>,
     body_rets: Option<&HashMap<String, Type>>,
+    module_env: Option<&TypeEnv>,
     top_bodies: &[AstNode],
 ) -> HashMap<String, Vec<Option<Type>>> {
     if top_bodies.is_empty() {
@@ -266,6 +267,15 @@ fn merge_top_level_evidence(
                         ) = (a, body_rets)
                         {
                             br.get(m2).cloned()
+                        } else {
+                            None
+                        }
+                    })
+                    // 顶层 Var 实参 ⇒ 查 module_env 槽型（批 947：
+                    // get(d, "a") 的 dd 位吃 d 的精化槽）
+                    .or_else(|| {
+                        if let (AstNode::Var(vn), Some(me)) = (a, module_env) {
+                            me.get_slot(vn.as_str()).known_ty()
                         } else {
                             None
                         }
@@ -447,21 +457,24 @@ pub fn build_module_checker_plan(
             env_cache.insert(fname.clone(), fenv);
         }
     }
+    // 模块级槽推断（批 942）：顶层赋值语句的 Var lhs 建槽。批 947 起
+    // 先于证据合并——顶层 Var 实参的证据查 module_env（写侧精化后的
+    // 容器槽型由此过函数边界）
+    let mut module_env = TypeEnv::new();
+    scan_module_slots(&mut module_env, top_bodies, &ctx);
     let evidence =
         collect_param_evidence(funcs, Some(&body_rets), Some(&env_cache));
     let evidence = merge_top_level_evidence(
         funcs,
         &evidence,
         Some(&body_rets),
+        Some(&module_env),
         top_bodies,
     );
     let mut ret_map_full = body_rets;
     for (k, v) in ret_map.iter() {
         ret_map_full.entry(k.clone()).or_insert(v.clone());
     }
-    // 模块级槽推断（批 942）：顶层赋值语句的 Var lhs 建槽
-    let mut module_env = TypeEnv::new();
-    scan_module_slots(&mut module_env, top_bodies, &ctx);
     ModuleCheckerPlan {
         evidence,
         ret_map_full,
@@ -695,6 +708,49 @@ fn scan_stmts(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
             AstNode::Assign(lhs, rhs) => {
                 if let AstNode::Var(name) = &**lhs {
                     propagate_assign(env, name, rhs, ctx);
+                }
+                // d[k] = v 写侧精化（批 947）：map 槽的键/值型按 gen 同一条
+                // 首插规则精化（仅 I64 占位可被替换）；已钉槽写异型值 ⇒
+                // 值型退化 PyDynamic（污染信号，静态 per-cell 语义——
+                // batch 765 的 dict 级钉型已被否决，运行期格标签按格渲染）
+                if let AstNode::Subscript { base, index } = &**lhs {
+                    if let AstNode::Var(bn) = &**base {
+                        if let LatticeTy::Known(Type::Named(n, targs)) =
+                            env.get_slot(bn.as_str())
+                        {
+                            if n == "map" && targs.len() == 2 {
+                                let val_ty = expr_known_ty(rhs, env, ctx);
+                                let key_ty = match &**index {
+                                    AstNode::StringLit(_) => Some(Type::Str),
+                                    _ => expr_known_ty(index, env, ctx),
+                                };
+                                let old_key = targs[0].clone();
+                                let old_val = targs[1].clone();
+                                let new_key = match (&key_ty, &old_key) {
+                                    (Some(Type::Str), Type::I64) => Type::Str,
+                                    _ => old_key.clone(),
+                                };
+                                let new_val = match (&val_ty, &old_val) {
+                                    (Some(v), Type::I64) if *v != Type::I64 => {
+                                        v.clone()
+                                    }
+                                    (Some(v), old) if *v != old.clone() => {
+                                        Type::PyDynamic
+                                    }
+                                    _ => old_val.clone(),
+                                };
+                                if new_key != old_key || new_val != old_val {
+                                    env.slots.insert(
+                                        bn.clone(),
+                                        LatticeTy::known(Type::Named(
+                                            "map".to_string(),
+                                            vec![new_key, new_val],
+                                        )),
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
                 // 元组解包：x, y = pair ⇒ 逐分量传播（批 929）
                 if let (AstNode::Tuple(elems), _) = (&**lhs, &**rhs) {
@@ -1052,22 +1108,15 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
             }
         }
     }
-    // 下标（批 923 重构：切片⇒DynamicArray(e)，取元素⇒e，map⇒V）
+    // 下标（批 923 重构：切片⇒DynamicArray(e)，取元素⇒e，map⇒V）。
+    // 批 947 修正：map 下标读必须先于 for_elem_lat 判定——后者是 for
+    // 迭代语义（map ⇒ 键型），误用进下标读把 m["a"] 的**值**读成键型
+    //（t485 实拍 v=Str ⇒ v[0] 槽标 Str ⇒ print 走 strlen SEGV）
     if let AstNode::Subscript { base, index } = rhs {
         let is_slice = matches!(&**index, AstNode::Range { .. })
             || matches!(&**index, AstNode::BinaryOp { op, .. } if op == "..");
         if let AstNode::Var(base_name) = &**base {
             let base_lat = env.get_slot(base_name);
-            if let Some(LatticeTy::Known(seq_elem)) = for_elem_lat(base, env) {
-                // 数组族序列：元素型已判定；切片保持动态数组形状
-                let res = if is_slice {
-                    Type::DynamicArray(Box::new(seq_elem))
-                } else {
-                    seq_elem
-                };
-                env.meet_slot(name, LatticeTy::known(res));
-                return;
-            }
             if !is_slice {
                 if let LatticeTy::Known(Type::Named(n, targs)) = &base_lat {
                     if n == "map" {
@@ -1077,6 +1126,16 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
                         }
                     }
                 }
+            }
+            if let Some(LatticeTy::Known(seq_elem)) = for_elem_lat(base, env) {
+                // 数组族序列：元素型已判定；切片保持动态数组形状
+                let res = if is_slice {
+                    Type::DynamicArray(Box::new(seq_elem))
+                } else {
+                    seq_elem
+                };
+                env.meet_slot(name, LatticeTy::known(res));
+                return;
             }
         }
     }
@@ -2367,6 +2426,51 @@ mod tests {
             env.get_slot("y"),
             LatticeTy::known(Type::F64),
             "or 异型 ⇒ x 不窄化 ⇒ 字段读推不出"
+        );
+    }
+
+    /// d[k] = v 写侧值型精化（批 947）：d = {} 后写 f64 ⇒ 槽
+    /// map[I64,F64]；异型二写 ⇒ 值型退化 PyDynamic（静态 per-cell 语义）。
+    #[test]
+    fn subscript_assign_refines_map_value() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        let sub_assign = |k: AstNode, v: AstNode| {
+            AstNode::Assign(
+                Box::new(AstNode::Subscript {
+                    base: Box::new(var("d")),
+                    index: Box::new(k),
+                }),
+                Box::new(v),
+            )
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[
+                assign("d", AstNode::DictLit { entries: vec![] }),
+                sub_assign(
+                    AstNode::StringLit("a".to_string()),
+                    AstNode::FloatLit("1.5".to_string()),
+                ),
+                sub_assign(
+                    AstNode::StringLit("b".to_string()),
+                    AstNode::StringLit("s".to_string()),
+                ),
+            ],
+            &ctx,
+        );
+        assert_eq!(
+            env.get_slot("d"),
+            LatticeTy::known(Type::Named(
+                "map".to_string(),
+                vec![Type::Str, Type::PyDynamic]
+            )),
+            "Str 键精化＋f64 首插精化；异型二写 ⇒ 值型 PyDynamic"
         );
     }
 

@@ -4301,6 +4301,7 @@ call, no NULL-handle dereference).",
             // and one ABI survive (`map_get` takes `ptr`, not `i64`).
             if !struct_has_method
                 && !receiver_has_typed_route
+                && receiver.is_some()
                 && method == "get"
                 && arg_ids.len() == 2
                 && matches!(self.type_map.get(&arg_ids[1]), Some(Type::Str))

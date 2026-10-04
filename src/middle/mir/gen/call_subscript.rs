@@ -224,6 +224,66 @@ impl MirGen {
             }
             // Check if base is an array type (dynamic or static)
             let base_ty = self.type_map.get(&bid).cloned().unwrap_or_else(Type::slot_fallback);
+            // 批 947：基槽为占位型（ABI 缺省 I64/PyDynamic，或全局表未
+            // 精化的 map[I64,I64]）时查 checker_env 的具名型——跨函数
+            // 边界的容器实参由此拿到真实容器型（get(d,"a") 此前读出
+            // f64 位模式 4609434218613702656，CPython 1.5）。
+            // 污染判别：checker 值型已退化 PyDynamic ＝ 函数体内对该
+            // 字典写过异型值（t446 的 put 写 42/str）⇒ 证据不可信，
+            // 保持原型走既有运行期分派。
+            let base_ty = match &base_ty {
+                t if matches!(t, Type::I64 | Type::PyDynamic)
+                    || matches!(
+                        t,
+                        Type::Named(n, targs)
+                            if n == "map"
+                                && targs.iter().all(|x| matches!(x, Type::I64))
+                    ) =>
+                {
+                    if let AstNode::Var(vn) = &**base {
+                        match self.checker_type_of(vn) {
+                            Some(ct) => {
+                                // 污染三类（批 947）：值型退化 PyDynamic
+                                // ＝函数体内写过异型值；map[I64,I64] 占位
+                                // ＝调用点也没精化过；基槽在本函数内已发
+                                // 过 DictInsert（此读之前的写）＝值型被
+                                // 函数内写入污染（t446 实拍）——三者任一
+                                // ⇒ 证据不可信，保持原型走运行期分派
+                                let written_here = self.stmts.iter().any(
+                                    |st| {
+                                        matches!(
+                                            st,
+                                            MirStmt::DictInsert {
+                                                map_id, ..
+                                            } if *map_id == bid
+                                        )
+                                    },
+                                );
+                                let polluted = written_here
+                                    || matches!(
+                                        &ct,
+                                        Type::Named(_, targs)
+                                            if targs.get(1).map_or(false, |v| {
+                                                matches!(
+                                                    v,
+                                                    Type::PyDynamic | Type::I64
+                                                )
+                                            })
+                                    );
+                                if !polluted {
+                                    ct
+                                } else {
+                                    base_ty
+                                }
+                            }
+                            _ => base_ty,
+                        }
+                    } else {
+                        base_ty
+                    }
+                }
+                _ => base_ty,
+            };
             // 批次 796（#266 RUN 面）：Rust 方言形参标注 `xs: Vec<T>` 定型为
             // Named("Vec", [T])——下面整条下标链（DynamicArray/Array/
             // array_param/I64|PyDynamic 判别）没有这个形的臂，落进 dict
