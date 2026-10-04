@@ -142,7 +142,9 @@ pub fn collect_param_evidence(
                         }
                         // 字面量优先；调用表达式 ⇒ body_rets 查返回型
                         //（批 936 二跳）；变量 ⇒ 调用函数推断后的槽型
-                        //（批 937 三跳）
+                        //（批 937 三跳）；构造调用（首字母大写的注册名，
+                        // py 类降糖的 ctor FuncDef 也在册）⇒ Named(类名)
+                        //（批 946——scale(Point(), 2) 的 p 位由此定型）
                         let lit = constraint::literal_lattice(a)
                             .and_then(|l| l.known_ty())
                             .or_else(|| {
@@ -157,6 +159,27 @@ pub fn collect_param_evidence(
                                 } else {
                                     None
                                 }
+                            })
+                            .or_else(|| {
+                                if let AstNode::Call {
+                                    receiver: None,
+                                    method,
+                                    ..
+                                } = a
+                                {
+                                    if method
+                                        .chars()
+                                        .next()
+                                        .map_or(false, |c| c.is_uppercase())
+                                        && funcs.contains_key(method.as_str())
+                                    {
+                                        return Some(Type::Named(
+                                            method.clone(),
+                                            vec![],
+                                        ));
+                                    }
+                                }
+                                None
                             })
                             .or_else(|| {
                                 if let (
@@ -259,14 +282,56 @@ fn merge_top_level_evidence(
     out
 }
 
-/// cond 中的窄化提取（批 941）：isinstance(x, T) ⇒ [(x, T 型)]。T 认两类：
-/// 用户类名（type_decls 里在册 ⇒ Named(T)）与内建标量（int/float/str）。
-/// 其他形态（组合条件、list/dict 元信息不足）保守不窄化。
+/// cond 中的窄化提取（批 941；批 946 扩组合）：isinstance(x, T) ⇒
+/// [(x, T 型)]。T 认两类：用户类名（type_decls 里在册 ⇒ Named(T)）与
+/// 内建标量（int/float/str）。
+/// 组合语义（批 946）：
+/// - `A && B` 为真 ⇒ A、B 都真 ⇒ 两侧候选取并集；同一变量两侧不一致
+///   ⇒ 该变量放弃（A 且 B 不可满足， meet 会造 Conflict）
+/// - `A || B` 为真 ⇒ 至少一侧真 ⇒ 仅两侧候选完全一致才窄化
+///   （异型并集格上不可表达）
+/// - `not isinstance(...)` ⇒ then 内不成立 ⇒ 自然落空（不窄化）
 fn narrow_from_cond(
     cond: &AstNode,
-    _env: &TypeEnv,
+    env: &TypeEnv,
     ctx: &InferCtx,
 ) -> Vec<(String, Type)> {
+    narrow_from_cond_with_decls(cond, ctx.type_decls)
+}
+
+/// 窄化提取的 gen 消费面（批 946）：gen 侧 If 语句臂在 then 降级前
+/// push 覆盖层、降级后 pop——分支级槽型由此进入代码生成。
+pub(crate) fn narrow_from_cond_with_decls(
+    cond: &AstNode,
+    type_decls: &HashMap<String, crate::middle::mir::r#gen::TypeDecl>,
+) -> Vec<(String, Type)> {
+    if let AstNode::BinaryOp { op, left, right } = cond {
+        if op == "&&" || op == "||" {
+            let lc = narrow_from_cond_with_decls(left, type_decls);
+            let rc = narrow_from_cond_with_decls(right, type_decls);
+            return if op == "&&" {
+                // 并集；同变量冲突 ⇒ 弃该变量
+                let mut out = lc.clone();
+                for (n, t) in rc {
+                    if let Some(slot) = out.iter_mut().find(|(m, _)| *m == n) {
+                        if slot.1 != t {
+                            out.retain(|(m, _)| *m != n);
+                        }
+                    } else {
+                        out.push((n, t));
+                    }
+                }
+                out
+            } else {
+                // 两侧完全一致才窄化
+                if !lc.is_empty() && lc == rc {
+                    lc
+                } else {
+                    vec![]
+                }
+            };
+        }
+    }
     if let AstNode::Call {
         receiver: None,
         method,
@@ -276,7 +341,7 @@ fn narrow_from_cond(
     {
         if method == "isinstance" && args.len() == 2 {
             if let (AstNode::Var(x), AstNode::Var(t)) = (&args[0], &args[1]) {
-                let ty = if ctx.type_decls.contains_key(t.as_str()) {
+                let ty = if type_decls.contains_key(t.as_str()) {
                     Some(Type::Named(t.clone(), vec![]))
                 } else {
                     match t.as_str() {
@@ -2123,6 +2188,185 @@ mod tests {
             env.fn_rets.get("getx"),
             Some(&Type::F64),
             "return v.px ⇒ 字段型 F64 进 fn_rets"
+        );
+    }
+
+    /// and 组合窄化：isinstance(x, T) and <其他> ⇒ then 内 x 窄化（批 946）。
+    #[test]
+    fn and_composed_isinstance_narrows() {
+        let mut env = TypeEnv::new();
+        let mut decls: HashMap<String, crate::middle::mir::r#gen::TypeDecl> =
+            HashMap::new();
+        decls.insert(
+            "Point".to_string(),
+            crate::middle::mir::r#gen::TypeDecl::Struct {
+                fields: vec![("px".to_string(), "f64".to_string())],
+                generics: vec![],
+            },
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &decls,
+            module_globals: &Default::default(),
+        };
+        let is_inst = |x: &str, t: &str| {
+            AstNode::Call {
+                receiver: None,
+                method: "isinstance".to_string(),
+                args: vec![var(x), var(t)],
+                type_args: vec![],
+                structural: false,
+            }
+        };
+        // if isinstance(p, Point) and n > 0: y = p.px
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[AstNode::If {
+                cond: Box::new(AstNode::BinaryOp {
+                    op: "&&".to_string(),
+                    left: Box::new(is_inst("p", "Point")),
+                    right: Box::new(AstNode::BinaryOp {
+                        op: ">".to_string(),
+                        left: Box::new(var("n")),
+                        right: Box::new(AstNode::Lit(0)),
+                    }),
+                }),
+                then: vec![assign(
+                    "y",
+                    AstNode::FieldAccess {
+                        base: Box::new(var("p")),
+                        field: "px".to_string(),
+                    },
+                )],
+                else_: vec![],
+            }],
+            &ctx,
+        );
+        assert_eq!(
+            env.get_slot("y"),
+            LatticeTy::known(Type::F64),
+            "and 左侧 isinstance ⇒ then 内 p 窄化 ⇒ 字段 F64"
+        );
+        assert_eq!(env.get_slot("p"), LatticeTy::Unknown, "汇合不回流");
+    }
+
+    /// and 双 isinstance：两个变量同时窄化（批 946）。
+    #[test]
+    fn and_double_isinstance_narrows_both() {
+        let mut env = TypeEnv::new();
+        let mut decls: HashMap<String, crate::middle::mir::r#gen::TypeDecl> =
+            HashMap::new();
+        for (cn, f) in [("Point", "px"), ("Size", "sw")] {
+            decls.insert(
+                cn.to_string(),
+                crate::middle::mir::r#gen::TypeDecl::Struct {
+                    fields: vec![(f.to_string(), "f64".to_string())],
+                    generics: vec![],
+                },
+            );
+        }
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &decls,
+            module_globals: &Default::default(),
+        };
+        let is_inst = |x: &str, t: &str| {
+            AstNode::Call {
+                receiver: None,
+                method: "isinstance".to_string(),
+                args: vec![var(x), var(t)],
+                type_args: vec![],
+                structural: false,
+            }
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[AstNode::If {
+                cond: Box::new(AstNode::BinaryOp {
+                    op: "&&".to_string(),
+                    left: Box::new(is_inst("a", "Point")),
+                    right: Box::new(is_inst("b", "Size")),
+                }),
+                then: vec![
+                    assign(
+                        "u",
+                        AstNode::FieldAccess {
+                            base: Box::new(var("a")),
+                            field: "px".to_string(),
+                        },
+                    ),
+                    assign(
+                        "v",
+                        AstNode::FieldAccess {
+                            base: Box::new(var("b")),
+                            field: "sw".to_string(),
+                        },
+                    ),
+                ],
+                else_: vec![],
+            }],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("u"), LatticeTy::known(Type::F64));
+        assert_eq!(env.get_slot("v"), LatticeTy::known(Type::F64));
+    }
+
+    /// or 异型：isinstance(x, A) or isinstance(x, B) ⇒ 不窄化（并集
+    /// 不可表达，批 946）。
+    #[test]
+    fn or_mixed_types_no_narrow() {
+        let mut env = TypeEnv::new();
+        let mut decls: HashMap<String, crate::middle::mir::r#gen::TypeDecl> =
+            HashMap::new();
+        for cn in ["Point", "Size"] {
+            decls.insert(
+                cn.to_string(),
+                crate::middle::mir::r#gen::TypeDecl::Struct {
+                    fields: vec![("px".to_string(), "f64".to_string())],
+                    generics: vec![],
+                },
+            );
+        }
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &decls,
+            module_globals: &Default::default(),
+        };
+        let is_inst = |x: &str, t: &str| {
+            AstNode::Call {
+                receiver: None,
+                method: "isinstance".to_string(),
+                args: vec![var(x), var(t)],
+                type_args: vec![],
+                structural: false,
+            }
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[AstNode::If {
+                cond: Box::new(AstNode::BinaryOp {
+                    op: "||".to_string(),
+                    left: Box::new(is_inst("x", "Point")),
+                    right: Box::new(is_inst("x", "Size")),
+                }),
+                then: vec![assign(
+                    "y",
+                    AstNode::FieldAccess {
+                        base: Box::new(var("x")),
+                        field: "px".to_string(),
+                    },
+                )],
+                else_: vec![],
+            }],
+            &ctx,
+        );
+        assert_ne!(
+            env.get_slot("y"),
+            LatticeTy::known(Type::F64),
+            "or 异型 ⇒ x 不窄化 ⇒ 字段读推不出"
         );
     }
 

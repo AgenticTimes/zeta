@@ -292,10 +292,23 @@ impl MirGen {
                 // Save current statements
                 let saved_stmts = std::mem::take(&mut self.stmts);
 
+                // 批 946：cond 含 isinstance 窄化 ⇒ then 降级期间把收窄
+                // 槽 push 进覆盖层，降级后 pop——分支内 p.px 等字段读/
+                // 方法分派由此拿到具体型
+                let narrowed =
+                    crate::middle::checker::narrow_from_cond_with_decls(
+                        cond,
+                        &self.type_decls,
+                    );
+                let overlay_mark = self.checker_overlay.len();
+                for (n, t) in &narrowed {
+                    self.checker_overlay.push((n.clone(), t.clone()));
+                }
                 // Generate block statements directly in current context
                 for s in then {
                     self.lower_ast(s);
                 }
+                self.checker_overlay.truncate(overlay_mark);
 
                 // Take the generated statements
                 then_stmts = std::mem::take(&mut self.stmts);

@@ -180,6 +180,10 @@ pub struct MirGen {
     shared_type_decls: HashMap<String, TypeDecl>,
     /// 批次 912（轴 F P2）：checker 求解的槽→型表（未知型接收者查表用）。
     checker_env: Option<crate::middle::checker::TypeEnv>,
+    /// 批 946：分支级窄化覆盖层（If 的 then 降级期间 push，降级后 pop）。
+    /// checker_type_of 先查覆盖层再查 checker_env——分支内的槽型收窄
+    /// 不回流扁平 env（汇合语义），gen 侧由此消费。
+    checker_overlay: Vec<(String, crate::middle::types::Type)>,
     /// PY-A: the source file being compiled — the value of `__file__`.
     source_file: Option<String>,
     /// PY-A: argparse flag → value kind (program-wide, from the Resolver).
@@ -366,6 +370,7 @@ impl MirGen {
             type_decls: HashMap::new(),
             shared_type_decls: HashMap::new(),
             checker_env: None,
+            checker_overlay: Vec::new(),
             source_file: None,
             argparse_kinds: HashMap::new(),
             param_defaults: HashMap::new(),
@@ -1464,6 +1469,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
 
     /// 查 checker 解的槽型（miss＝None）。
     pub fn checker_type_of(&self, name: &str) -> Option<crate::middle::types::Type> {
+        // 分支窄化覆盖层优先（批 946）：then 降级期间的收窄是最具体的型
+        if let Some((_, t)) = self
+            .checker_overlay
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+        {
+            return Some(t.clone());
+        }
         self.checker_env
             .as_ref()
             .and_then(|env| env.get_slot(name).known_ty())
