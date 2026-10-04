@@ -5566,6 +5566,14 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_func_star_params(self.func_star_params())
             .with_repl_mode(self.repl_lowering)
             .with_type_decls(self.type_decls.clone())
+            // 批次 912（轴 F P2）：checker 求解的槽型环境传给 MirGen。
+            .with_checker_env({
+                let mut env = crate::middle::checker::TypeEnv::new();
+                if let AstNode::FuncDef { body, .. } = ast {
+                    crate::middle::checker::infer_fn_body(&mut env, body);
+                }
+                env
+            })
             .with_nonlocal_names(self.nonlocal_names.borrow().clone())
             .with_module_globals(self.module_globals.borrow().clone())
             .with_py_imports(

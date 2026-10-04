@@ -29292,3 +29292,17 @@ from_string 不认 set[str]（归一发生在注解包装面）——测试按 f
 **验证**：编译零错误；内置单元测试 **182/182**（+16：格六＋约束六＋
 TypeEnv 四）；历史探针七套零差异；全量差分（--group 50）
 match=2845/2845＝100%。
+
+## 批次 912（2026-10-04，**轴 F P2 接线：checker_env 贯通 resolver→MirGen（零行为变更）**）
+
+P1 骨架（批 911）的接线批：
+- **MirGen**：加 `checker_env: Option<TypeEnv>` 字段＋`with_checker_env` builder
+  ＋`checker_type_of(name)` 访问器（返回 Known 型的 Some(Type)）。
+- **resolver lower_to_mir**：MirGen 构建链插 `.with_checker_env(env)`——
+  env 由 `checker::infer_fn_body` 对 FuncDef body 求解。
+- **零行为变更**：checker_env 已可用但无消费者——mean 臂等下游的查表
+  消费在下批（P3）接线。
+
+**验证**：编译零错误；内置单元测试 182/182；历史探针七套零差异；
+三 mean 夹具（t813/t10004/t10002）全对齐 CPython；全量差分（--group 50）
+match=2845/2845＝100%。

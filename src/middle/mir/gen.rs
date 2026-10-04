@@ -178,6 +178,8 @@ pub struct MirGen {
     /// (enums/aliases live in their own AST items, but each function gets a
     /// fresh MirGen — these are re-seeded into `type_decls` per lowering).
     shared_type_decls: HashMap<String, TypeDecl>,
+    /// 批次 912（轴 F P2）：checker 求解的槽→型表（未知型接收者查表用）。
+    checker_env: Option<crate::middle::checker::TypeEnv>,
     /// PY-A: the source file being compiled — the value of `__file__`.
     source_file: Option<String>,
     /// PY-A: argparse flag → value kind (program-wide, from the Resolver).
@@ -363,6 +365,7 @@ impl MirGen {
             pointee_widths: HashMap::new(),
             type_decls: HashMap::new(),
             shared_type_decls: HashMap::new(),
+            checker_env: None,
             source_file: None,
             argparse_kinds: HashMap::new(),
             param_defaults: HashMap::new(),
@@ -1451,6 +1454,19 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
     pub fn with_type_decls(mut self, decls: HashMap<String, TypeDecl>) -> Self {
         self.shared_type_decls = decls;
         self
+    }
+
+    /// 批次 912（轴 F P2）：checker 求解的类型环境——未知型接收者查表。
+    pub fn with_checker_env(mut self, env: crate::middle::checker::TypeEnv) -> Self {
+        self.checker_env = Some(env);
+        self
+    }
+
+    /// 查 checker 解的槽型（miss＝None）。
+    pub fn checker_type_of(&self, name: &str) -> Option<crate::middle::types::Type> {
+        self.checker_env
+            .as_ref()
+            .and_then(|env| env.get_slot(name).known_ty())
     }
 
     /// PY-A: the file being compiled, so `__file__` can resolve to it.
