@@ -5573,10 +5573,28 @@ fn shim_class_normalize(t: &Type) -> Type {
                     .iter()
                     .map(|(n, (_, r, _))| (n.clone(), r.clone()))
                     .collect();
+                // 批 935：无注解函数的 body 返回型并入查表（注解优先，
+                // or_insert 不覆盖）——`x = g()`（g 无注解但 return 1.5）
+                // 的 x 由此推得 F64。
+                let evidence =
+                    crate::middle::checker::collect_param_evidence(
+                        &self.registered_funcs,
+                    );
+                let body_rets = crate::middle::checker::collect_module_body_rets(
+                    &self.registered_funcs,
+                    &evidence,
+                    &ret_map,
+                    &self.type_decls,
+                    &self.module_globals.borrow(),
+                );
+                let mut ret_map_full = ret_map;
+                for (k, v) in body_rets {
+                    ret_map_full.entry(k).or_insert(v);
+                }
                 let mut env = crate::middle::checker::TypeEnv::new();
                 if let AstNode::FuncDef { body, .. } = ast {
                     let ctx = crate::middle::checker::InferCtx {
-                        ret_types: &ret_map,
+                        ret_types: &ret_map_full,
                         type_decls: &self.type_decls,
                         module_globals: &self.module_globals.borrow(),
                     };
@@ -5588,10 +5606,7 @@ fn shim_class_normalize(t: &Type) -> Type {
                         }
                         _ => ("", Vec::new()),
                     };
-                    let evidence =
-                        crate::middle::checker::collect_param_evidence(
-                            &self.registered_funcs,
-                        );
+                    // 复用外层（批 935 起）已构建的证据表
                     let ev_slice = evidence.get(fn_name).map(|v| v.as_slice());
                     crate::middle::checker::infer_fn_body_full(
                         &mut env,

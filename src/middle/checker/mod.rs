@@ -161,6 +161,47 @@ pub fn collect_param_evidence(
     table.into_iter().map(|(k, (cand, _))| (k, cand)).collect()
 }
 
+/// 模块级 body 返回型收集（批 935）：对全部注册函数各建独立 env 推断
+/// 一轮（参数注解/证据先入槽），收集各自的 fn_rets 成全局表。供 resolver
+/// 并入 ctx 的 ret_types 查表——无注解函数调用的返回型由此闭环
+/// （注解优先，调用方 or_insert 不覆盖）。
+pub fn collect_module_body_rets(
+    funcs: &HashMap<String, AstNode>,
+    evidence: &HashMap<String, Vec<Option<Type>>>,
+    ret_types: &HashMap<String, Type>,
+    type_decls: &HashMap<String, crate::middle::mir::r#gen::TypeDecl>,
+    module_globals: &std::collections::HashSet<String>,
+) -> HashMap<String, Type> {
+    let ctx = InferCtx {
+        ret_types,
+        type_decls,
+        module_globals,
+    };
+    let mut out: HashMap<String, Type> = HashMap::new();
+    for (name, def) in funcs {
+        if let AstNode::FuncDef { params, body, .. } = def {
+            let mut env = TypeEnv::new();
+            for (i, (pname, anno)) in params.iter().enumerate() {
+                if !anno.is_empty() {
+                    if let Some(lat) = constraint::annotation_lattice(anno) {
+                        env.meet_slot(pname.as_str(), lat);
+                    }
+                } else if let Some(Some(t)) =
+                    evidence.get(name).and_then(|e| e.get(i))
+                {
+                    env.meet_slot(pname.as_str(), LatticeTy::known(t.clone()));
+                }
+            }
+            scan_stmts(&mut env, body, &ctx);
+            collect_fn_ret(&mut env, name.as_str(), body, &ctx);
+            for (k, v) in env.fn_rets {
+                out.entry(k).or_insert(v);
+            }
+        }
+    }
+    out
+}
+
 /// 递归收集函数体里所有无接收者 Call 节点（批 934）。
 fn collect_calls<'a>(body: &'a [AstNode], out: &mut Vec<&'a AstNode>) {
     for stmt in body {
@@ -255,6 +296,11 @@ fn ret_expr_ty(e: &AstNode, env: &TypeEnv, ctx: &InferCtx) -> Option<Type> {
     }
     if let AstNode::Call { method, .. } = e {
         return ctx.ret_types.get(method).cloned();
+    }
+    // 列表字面量 Return ⇒ DynamicArray(元素型)（批 935 补形态）
+    if let AstNode::ArrayLit(elems) = e {
+        return uniform_elem_lat(elems)
+            .map(|t| Type::DynamicArray(Box::new(t)));
     }
     None
 }
@@ -1453,6 +1499,40 @@ mod tests {
             &ctx,
         );
         assert_eq!(env.get_slot("x"), LatticeTy::known(Type::F64));
+    }
+
+    /// 模块级 body 返回型收集（批 935）：def f(): return 1.5 ⇒ f ⇒ F64。
+    #[test]
+    fn module_body_rets_collected() {
+        let f = AstNode::FuncDef {
+            name: "f".to_string(),
+            generics: vec![],
+            lifetimes: vec![],
+            params: vec![],
+            ret: String::new(),
+            body: vec![AstNode::Return(Box::new(AstNode::FloatLit(
+                "1.5".to_string(),
+            )))],
+            attrs: vec![],
+            ret_expr: None,
+            single_line: true,
+            doc: String::new(),
+            pub_: false,
+            async_: false,
+            const_: false,
+            comptime_: false,
+            where_clauses: vec![],
+        };
+        let mut registered = HashMap::new();
+        registered.insert("f".to_string(), f);
+        let rets = collect_module_body_rets(
+            &registered,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &Default::default(),
+        );
+        assert_eq!(rets.get("f"), Some(&Type::F64));
     }
 
     /// 字典字面量：键 Str 保 Str 否则 I64；值同型⇒该型、混型⇒PyDynamic、
