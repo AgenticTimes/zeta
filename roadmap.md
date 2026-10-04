@@ -29346,3 +29346,8 @@ infer_fn_body 签名加 `ret_types: &HashMap<String, Type>` 参数（来自
 get_all_func_signatures）；Assign rhs 为 Call 时查表传播返回型。
 resolver 接线点同步适配。历史探针七套＋全量差分 100%＋python_style 479/0
 复验零回归。
+
+## 批次 914 续（2026-10-04，**checker 推断扩展——二元运算同型传播**）
+
+infer_fn_body 加 BinaryOp 同型传播：两侧都是 Var 且格值相同且已知 ⇒ 结果
+同型（保守子集——异型/字面量混合留后续）。全量差分 100%＋探针零回归。

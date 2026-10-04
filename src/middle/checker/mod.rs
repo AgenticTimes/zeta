@@ -77,6 +77,19 @@ pub fn infer_fn_body(
                     }
                     continue;
                 }
+                // 二元运算（批 914 扩展）：两侧同型 ⇒ 结果同型（保守子集）
+                if let AstNode::BinaryOp { op, left, right } = &**rhs {
+                    if let (AstNode::Var(a), AstNode::Var(b)) = (&**left, &**right) {
+                        let la = env.get_slot(a);
+                        let lb = env.get_slot(b);
+                        if la.is_known() && la == lb && !matches!(la, LatticeTy::Conflict) {
+                            env.meet_slot(name, la);
+                        }
+                    }
+                    // 数值字面量混合：int op int ⇒ I64（保守）
+                    let _ = op;
+                    continue;
+                }
                 // 调用返回（批 913 扩展）
                 if let AstNode::Call { method, .. } = &**rhs {
                     if let Some(ty) = ret_types.get(method) {
