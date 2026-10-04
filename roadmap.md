@@ -29103,3 +29103,22 @@ binary 847/851 与 subscript 475 是三way（map/dict/set、map/dict/dict_like�
 （897 的"潜在漏判面"登记就此闭项：幻影型不存在，漏判无从发生。）
 
 验证：零代码改动（裁决批）；MIR 实拍＋CPython 对照（`d["a"]`=1）在案。
+
+## 批次 899（2026-10-04，**清理批：轴 A「根目录/源码树杂物待清」逐项核对后执行**）
+
+逐项核对引用后三分法处置：
+- **删除**（临时探针/编译产物，全仓零引用）：mulprobe_tmp.z、smap3_tmp.z
+  （pandas 探针）、t404_test／t404_trace／t404_trace2（Mach-O 二进制与 trace）、
+  空目录「锝点源码：外部转储（不入锝点核对）」。轴 A 表所列 b3ir.log／
+  test_match*.z 已不存在（前批已清）。
+- **入库**（真源码/文档，此前漏提交）：zorb/（自举 zorb::manifest/package 的
+  手写 stub，zeta_src/frontend/borrow.z 的 `use zorb::...` 引用它——删了会断
+  自举编译）；docs 四件＝F.1 审计（type-dispatch-inventory.md）、
+  DEEPENING-OPPORTUNITIES、architecture-health／architecture-risk 两目录。
+- **gitignore 补**：tests/python_style/build／zeta_src/build／
+  tools/baselines/.batch_gate_state／tools/__pycache__（构建产物与本地门禁
+  状态，不入库）。
+- **不动**（并发工作流持有件）：zeta_runtime_c.o／tokio_runtime.o
+  （tracked，构建需要）；getattr×4 维持 YAGNI。
+
+验证：git status 工作树清净（仅剩 .o 持有件与忽略项）；lib 158/158。
