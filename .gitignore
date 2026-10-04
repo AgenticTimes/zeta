@@ -186,3 +186,4 @@ tests/python_style/build/
 zeta_src/build/
 tools/baselines/.batch_gate_state
 tools/__pycache__/
+锚点源码：外部转储（不入锚点核对）
