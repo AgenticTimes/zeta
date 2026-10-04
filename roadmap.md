@@ -29557,3 +29557,20 @@ isinstance 静态回答）；checker 55/55、库测试 226/226；每批全量差
   轴（需 key 函数按元素型单态化），非推断轴。
 
 库测试 227/227；每批全量差分 2845/2845、python_style 479/0。
+
+## 批次 946（2026-10-05）：and/or 组合窄化＋gen 分支覆盖层＋构造调用证据
+
+- **组合语义**：A && B ⇒ 候选并集（同变量冲突弃位）；A || B ⇒ 两侧
+  一致才窄化；not isinstance 自然落空。narrow_from_cond 拆出
+  with_decls 核心供 gen 消费。
+- **gen 分支覆盖层（架构件）**：分支级窄化不回流扁平 env（汇合语义）
+  ⇒ MirGen 加 checker_overlay 栈，lower_if_stmt then 降级前 push/
+  降级后 pop，checker_type_of 覆盖层优先。gen 消费 checker 分支
+  语义的通道由此建立（后续分支级消费点共用）。
+- **构造调用证据**：scale(Point(), 2) 的 p 位 ⇒ Named(Point)
+  （首字母大写＋注册表在册——py 类 ctor FuncDef 也在册）。
+- 端到端：isinstance(p, Point) and n > 0 ⇒ p.px * n = 3.0（改前
+  0.0）。边界维持登记：单函数体双类型调用点的静态 isinstance 错一边
+  （0.0/0.0 vs 3.0/0.0）——需按调用点单态化。
+- 新增 3 单元测试；checker 58/58、库测试 230/230；全量差分 2845/2845、
+  python_style 479/0。
