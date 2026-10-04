@@ -29028,3 +29028,20 @@ PyDynamic 仍落 i64，指针 ABI 与缺省一致，无错位）。
 **验证**：t813 六行（20.0/20.0/5/hi bob/20.0/2.0）、t10004（1）、t10002（七行
 含 nan）**三面全对齐 CPython**；历史探针七套两轮零差异；全量差分与
 python_style 终值见下批记录补注（验证在途时入册）。
+
+## 批次 894（2026-10-04，**架构核对批：七轴计划（refactor.md）× 现状逐轴对照**）
+
+| 轴 | 计划判据 | 现状实证 | 判定 |
+|---|---|---|---|
+| A 死代码 | §1 表行数归零 | blockchain/holographic 族/type_cache/**ml/distributed** 均已删；`allow(dead_code)` 两行仍在（lib.rs/main.rs，待决项未决）；dc_audit 基线 101 条在库 | **基本完成**，余 allow 两行待决 |
+| B 类型标签 | 试金石（元组 `in`）转正、B.1 归零 | **试金石实测已转正**（`"a" in ("a","b")` 打 in ok，批 861–893 间修复）；808 dict 格标签＋889 列表形状判别＋893 mean PyDynamic 面逐步落地；B.1 的 I64 兜底 76 处收敛未清 | **主体推进**，完整格标签＝#279 方案②延伸 |
+| C 编译性能 | `time zetac` 前后对照 | 全量差分套件 --group 50（40min→4min）；`time zetac` 单体对照未做 | **部分**（工具链提速有实据，判据未走） |
+| D 层次 | lower_expr 净减 ≥1500 且 MIR diff 空；frontend→middle 边 0 | **净 -15563（超额 9.4 倍）**、每批差分 100%、越界 0；gen/ 32 家族文件 | **完成** |
+| E 测试架构 | known-fail 非空且随修复收缩 | known-fail 集合随修复收缩（475/4→479/0 即证）；python_style verdict 体系 479/0；regression_history 49/49；契约测试进 CI 未做 | **主体完成** |
+| F 检查器独立 | 三处定型删除、F.1 表清零 | **F.1 审计完成**（type-dispatch-inventory.md，五类 228 处）；checker 设计/实施未启动 | **未启动**（登记在案） |
+| G 正确性 | 差分 ≥N%、ABI.md 在位、OPT 矩阵/ASan/MIR verifier 进 CI | 差分 **100%（N=2845）**✓、ABI.md 在位且重绑 RC=0 ✓；OPT 矩阵/ASan 夜航/MIR verifier/截断报告化未进 CI（本仓无 CI） | **差分+ABI 完成**，CI 侧项随无 CI 环境搁置 |
+
+核对产出：docs/gen-refactor-status.md 从 844 时点（16777 行/12 家族）更新到
+现状（3829 行/32 家族＋修复批附带产出＋方法论五条）。
+**缺口清单（按计划归属）**：轴 F checker（大工程）、轴 G 的 CI 侧四项
+（依赖 CI 环境本身）、轴 A 的 allow 两行待决、轴 B 完整格标签（= #279 延伸）。
