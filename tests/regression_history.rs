@@ -4711,10 +4711,16 @@ fn print_operand_shape_after_last_for(m: &Mir) -> String {
 /// 修法：`For` 臂改走新增的 `p642_collect_pattern_vars`，递归收集模式里的每个绑定名。
 ///
 /// 三侧真值（本批实测，`target/tmp_b10036/`）：
-/// - CPython 侧：`f1`→`1 2 2`、`f2`→`7 9 9`、`f3`→`a b b`；
-/// - AOT 侧：三枚都同值、rc=0（`target/tmp_b10036/f{1,2,3}.bin`，仓根构建并运行）；
-/// - `--dump-mir` 侧：三枚夹具循环后那句 print 的操作数分别是 `zeta_env_get("k2")`→`println_i64`、
-///   `zeta_env_get("i")`→`println_i64`、`Var`→`println_str`（`f3` 打的是字符串绑定，值仍来自循环）。
+/// - CPython 侧：`f1`→`1 2 2`、`f2`→`7 9 9`、`f3`→`a b b`、`f4`→`7`；
+/// - AOT 侧：四枚都同值、rc=0（`target/tmp_b10036/f{1,2,3,4}.bin`，仓根构建并运行）；
+/// - `--dump-mir` 侧：四枚夹具循环后那句 print 的操作数分别是 `zeta_env_get("k2")`→`println_i64`、
+///   `zeta_env_get("i")`→`println_i64`、`Var`→`println_str`（`f3` 打的是字符串绑定，值仍来自循环）、
+///   `zeta_env_get("acc")`→`println_i64`。
+///
+/// 与旧用例的分工：本文件 :1347 的 `tuple_for_loop_pattern_kills_stale_consts_before_print_folds`
+/// 是同来源（批次 644）的第一条，它的夹具里 `v2 = ""` 是字符串、进不了 i128 常量表，
+/// 所以"只收元组第一个名字"这种坏法打不到它——本条的 `f3`（`v2 = 0`）与 `f4`（体内赋值）
+/// 才是新增的两格；`f1`、`f2` 与旧用例同臂，写在这里是为了让四格读数一次可比。
 #[test]
 fn loop_pattern_bindings_kill_the_stale_int_const_before_later_prints() {
     // f1：元组模式，读**第一个**绑定名（644 记录里 t518 的原始形状）
@@ -4741,10 +4747,20 @@ for k2, v2 in pairs:
     print(v2)
 print(v2)
 "#;
+    // f4：循环体里的普通赋值（不是循环模式）——这一格走收集器的 `Assign` 臂，
+    // 与三枚模式格分开：模式收集整条撤掉时这一格照旧是绿的。
+    let f4 = r#"
+xs = [3, 4]
+acc = 5
+for x in xs:
+    acc = acc + 1
+print(acc)
+"#;
     let readings: Vec<(&str, String)> = [
         ("元组模式·第一个绑定 k2", f1),
         ("裸名模式 i", f2),
         ("元组模式·第二个绑定 v2", f3),
+        ("循环体内赋值 acc", f4),
     ]
     .iter()
     .map(|(label, src)| (*label, print_operand_shape_after_last_for(&mir(&lower_all(src), "main"))))
@@ -4756,7 +4772,8 @@ print(v2)
             ("元组模式·第一个绑定 k2", "env_get(k2)".to_string()),
             ("裸名模式 i", "env_get(i)".to_string()),
             ("元组模式·第二个绑定 v2", "var".to_string()),
+            ("循环体内赋值 acc", "env_get(acc)".to_string()),
         ],
-        "循环模式里的绑定名必须全部进陈值清除名单（批次 644）——读回字面量＝那条赋值没被清除"
+        "循环模式里的绑定名与体内被赋的值必须全部进陈值清除名单（批次 644／642）——读回字面量＝那条赋值没被清除"
     );
 }
