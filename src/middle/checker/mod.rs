@@ -106,6 +106,7 @@ pub fn infer_fn_body_full(
 /// （保守放弃——错证据比缺证据危害大）。
 pub fn collect_param_evidence(
     funcs: &HashMap<String, AstNode>,
+    body_rets: Option<&HashMap<String, Type>>,
 ) -> HashMap<String, Vec<Option<Type>>> {
     // fn 名 → (候选列表, 冲突位列表)。冲突位单独记账：置 None 的候选
     // 不能被后续一致调用重新填充（None 兼"无证据"与"冲突"两义会漏记）。
@@ -141,8 +142,24 @@ pub fn collect_param_evidence(
                         if conflicted[i] {
                             continue;
                         }
+                        // 字面量优先；否则调用表达式 ⇒ body_rets 查返回型
+                        //（批 936 二跳：show(get_data()) 的 data 位吃
+                        // get_data 的 body 返回型）
                         let lit = constraint::literal_lattice(a)
-                            .and_then(|l| l.known_ty());
+                            .and_then(|l| l.known_ty())
+                            .or_else(|| {
+                                if let (
+                                    AstNode::Call {
+                                        receiver: None, method, ..
+                                    },
+                                    Some(br),
+                                ) = (a, body_rets)
+                                {
+                                    br.get(method).cloned()
+                                } else {
+                                    None
+                                }
+                            });
                         match (lit, &slot[i]) {
                             (Some(t), None) => slot[i] = Some(t),
                             // 与既有候选一致 ⇒ 保持
@@ -1467,14 +1484,14 @@ mod tests {
         );
         registered.insert("caller2".to_string(), caller2);
 
-        let ev = collect_param_evidence(&registered);
+        let ev = collect_param_evidence(&registered, None);
         let ev_g = ev.get("g").expect("g 的证据应存在");
         assert_eq!(ev_g[0], None, "a 位 F64/I64 冲突 ⇒ 放弃");
 
         // 只留一致调用点再验：a 位 F64、b 位 Str
         let mut registered2 = registered.clone();
         registered2.remove("caller2");
-        let ev2 = collect_param_evidence(&registered2);
+        let ev2 = collect_param_evidence(&registered2, None);
         let ev2_g = ev2.get("g").expect("g 证据");
         assert_eq!(ev2_g[0], Some(Type::F64));
         assert_eq!(ev2_g[1], Some(Type::Str));
@@ -1499,6 +1516,90 @@ mod tests {
             &ctx,
         );
         assert_eq!(env.get_slot("x"), LatticeTy::known(Type::F64));
+    }
+
+    /// 跨函数二跳：实参为调用表达式 ⇒ 用 body_rets 查型作证据（批 936）。
+    #[test]
+    fn call_arg_evidence_via_body_rets() {
+        let mk_def = |name: &str, params: Vec<(String, String)>, body: Vec<AstNode>| {
+            AstNode::FuncDef {
+                name: name.to_string(),
+                generics: vec![],
+                lifetimes: vec![],
+                params,
+                ret: String::new(),
+                body,
+                attrs: vec![],
+                ret_expr: None,
+                single_line: true,
+                doc: String::new(),
+                pub_: false,
+                async_: false,
+                const_: false,
+                comptime_: false,
+                where_clauses: vec![],
+            }
+        };
+        // def get_data(): return [1.0, 2.0, 4.0]
+        let get_data = mk_def(
+            "get_data",
+            vec![],
+            vec![AstNode::Return(Box::new(AstNode::ArrayLit(vec![
+                AstNode::FloatLit("1.0".to_string()),
+                AstNode::FloatLit("2.0".to_string()),
+                AstNode::FloatLit("4.0".to_string()),
+            ])))],
+        );
+        // def show(data): pass —— 调用点 show(get_data())
+        let show = mk_def(
+            "show",
+            vec![("data".to_string(), String::new())],
+            vec![AstNode::ExprStmt {
+                expr: Box::new(AstNode::Lit(0)),
+            }],
+        );
+        let caller = mk_def(
+            "caller",
+            vec![],
+            vec![AstNode::ExprStmt {
+                expr: Box::new(AstNode::Call {
+                    receiver: None,
+                    method: "show".to_string(),
+                    args: vec![AstNode::Call {
+                        receiver: None,
+                        method: "get_data".to_string(),
+                        args: vec![],
+                        type_args: vec![],
+                        structural: false,
+                    }],
+                    type_args: vec![],
+                    structural: false,
+                }),
+            }],
+        );
+        let mut registered = HashMap::new();
+        registered.insert("get_data".to_string(), get_data);
+        registered.insert("show".to_string(), show);
+        registered.insert("caller".to_string(), caller);
+
+        let ev0 = collect_param_evidence(&registered, None);
+        let body_rets = collect_module_body_rets(
+            &registered,
+            &ev0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &Default::default(),
+        );
+        assert_eq!(
+            body_rets.get("get_data"),
+            Some(&Type::DynamicArray(Box::new(Type::F64)))
+        );
+        let ev1 = collect_param_evidence(&registered, Some(&body_rets));
+        let ev_show = ev1.get("show").expect("show 证据");
+        assert_eq!(
+            ev_show[0],
+            Some(Type::DynamicArray(Box::new(Type::F64)))
+        );
     }
 
     /// 模块级 body 返回型收集（批 935）：def f(): return 1.5 ⇒ f ⇒ F64。

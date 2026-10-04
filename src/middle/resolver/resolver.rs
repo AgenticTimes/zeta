@@ -5576,16 +5576,22 @@ fn shim_class_normalize(t: &Type) -> Type {
                 // 批 935：无注解函数的 body 返回型并入查表（注解优先，
                 // or_insert 不覆盖）——`x = g()`（g 无注解但 return 1.5）
                 // 的 x 由此推得 F64。
-                let evidence =
-                    crate::middle::checker::collect_param_evidence(
-                        &self.registered_funcs,
-                    );
+                // 批 936 两轮：字面量证据 → body_rets → 二跳证据
+                //（实参为调用表达式时吃被调函数的 body 返回型）。
+                let ev0 = crate::middle::checker::collect_param_evidence(
+                    &self.registered_funcs,
+                    None,
+                );
                 let body_rets = crate::middle::checker::collect_module_body_rets(
                     &self.registered_funcs,
-                    &evidence,
+                    &ev0,
                     &ret_map,
                     &self.type_decls,
                     &self.module_globals.borrow(),
+                );
+                let evidence = crate::middle::checker::collect_param_evidence(
+                    &self.registered_funcs,
+                    Some(&body_rets),
                 );
                 let mut ret_map_full = ret_map;
                 for (k, v) in body_rets {
