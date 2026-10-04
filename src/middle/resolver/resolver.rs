@@ -5603,6 +5603,18 @@ fn shim_class_normalize(t: &Type) -> Type {
                 let plan = plan.as_ref().expect("checker plan 已构建");
                 let ret_map_full = &plan.ret_map_full;
                 let mut env = crate::middle::checker::TypeEnv::new();
+                // 批 942：模块级槽种子注入（同名参数遮蔽——排除本函数参数名）
+                let param_names: Vec<String> = match ast {
+                    AstNode::FuncDef { params, .. } => {
+                        params.iter().map(|(n, _)| n.clone()).collect()
+                    }
+                    _ => Vec::new(),
+                };
+                crate::middle::checker::seed_module_slots(
+                    &mut env,
+                    &plan.module_env,
+                    &param_names,
+                );
                 if let AstNode::FuncDef { body, .. } = ast {
                     let ctx = crate::middle::checker::InferCtx {
                         ret_types: ret_map_full,

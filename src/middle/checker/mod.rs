@@ -319,6 +319,20 @@ fn prime_param_slots(
     }
 }
 
+/// 全局槽种子注入（批 942）：模块级顶层赋值推断出的槽型进函数 env，
+/// skip 名单（函数参数）遮蔽——同名参数的型独立于全局。赋值/窄化只进
+/// 函数 env，不回写模块 env（每次降级从种子重建）。
+pub fn seed_module_slots(env: &mut TypeEnv, module_env: &TypeEnv, skip: &[String]) {
+    for (name, val) in module_env.slots.iter() {
+        if skip.iter().any(|p| p == name) {
+            continue;
+        }
+        if env.get_slot(name) != *val {
+            env.meet_slot(name, val.clone());
+        }
+    }
+}
+
 /// 模块级 checker 推断计划（批 938）：证据表＋并入 body_rets 的查表＋
 /// 函数 env 缓存。lower_to_mir 每函数/闭包调用一次（batch 738 在册
 /// 651 次）——这套编排只依赖全模块注册表，在入口惰性构建一次。
@@ -326,6 +340,9 @@ pub struct ModuleCheckerPlan {
     pub evidence: HashMap<String, Vec<Option<Type>>>,
     pub ret_map_full: HashMap<String, Type>,
     pub env_cache: HashMap<String, TypeEnv>,
+    /// 模块级顶层赋值推断的槽型（批 942）：G = [1.0, 2.0] 的 G ⇒
+    /// DynamicArray(F64)，函数 env 种子注入的来源。
+    pub module_env: TypeEnv,
 }
 
 /// 惰性构建模块级推断计划（批 938）：字面量证据 → body_rets → 每函数
@@ -370,11 +387,21 @@ pub fn build_module_checker_plan(
     for (k, v) in ret_map.iter() {
         ret_map_full.entry(k.clone()).or_insert(v.clone());
     }
+    // 模块级槽推断（批 942）：顶层赋值语句的 Var lhs 建槽
+    let mut module_env = TypeEnv::new();
+    scan_module_slots(&mut module_env, top_bodies, &ctx);
     ModuleCheckerPlan {
         evidence,
         ret_map_full,
         env_cache,
+        module_env,
     }
+}
+
+/// 顶层语句的槽推断（批 942）：扫 Assign（lhs Var/Tuple）与字面量，
+/// 建模块级槽型。复用 scan_stmts——If/For 等顶层控制流一并覆盖。
+fn scan_module_slots(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
+    scan_stmts(env, body, ctx);
 }
 
 /// 模块级 body 返回型收集（批 935）：对全部注册函数各建独立 env 推断
@@ -1984,6 +2011,25 @@ mod tests {
             Some(Type::DynamicArray(Box::new(Type::F64))),
             "顶层 show(get_data()) ⇒ data 位证据 DynamicArray(F64)"
         );
+    }
+
+    /// 全局槽种子注入：模块级槽型进函数 env，同名参数遮蔽（批 942）。
+    #[test]
+    fn module_slot_seeding_skips_params() {
+        let mut module_env = TypeEnv::new();
+        module_env.meet_slot(
+            "G",
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::F64))),
+        );
+        module_env.meet_slot("x", LatticeTy::known(Type::I64));
+        let mut env = TypeEnv::new();
+        // 函数参数 x 遮蔽全局 x
+        seed_module_slots(&mut env, &module_env, &["x".to_string()]);
+        assert_eq!(
+            env.get_slot("G"),
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::F64)))
+        );
+        assert_eq!(env.get_slot("x"), LatticeTy::Unknown, "同名参数遮蔽全局");
     }
 
     /// 控制流窄化：isinstance(x, T) 真分支内 x ⇒ Named(T)（字段访问/内建
