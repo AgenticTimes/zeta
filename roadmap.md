@@ -27507,3 +27507,60 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
   `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
   两本台账，**连续三十批**）；待补台账行的文字写进本批记录笔的提交信息。
+
+## 批次 10032（cleanup）——#20005 第二十一批：把主树批次 208 的 PEP 604 联合注解做成编译期单元测试
+
+- 落地：代码笔 `056b10ac`（`git diff --stat 056b10ac^..056b10ac`＝3 文件 +149 行）；记录笔＝本批第二笔。
+- 改动面：`tests/regression_history.rs` +119（两条 MIR 面用例，本套 53→**55 条／0.47 秒全绿**）、
+  `src/middle/types/mod.rs` +13、`src/middle/resolver/new_resolver.rs` +17（两处 `#[cfg(test)]`
+  测试模块各追加一条直接单元测试）。`src/` 非测试逻辑零改动；全量 crate 内单元测试
+  `cargo test -p zetac --lib`＝**144 条绿**（原 142＋本批 2），编译零错误。
+- 来源核实：`git merge-base --is-ancestor ac7e9f56 HEAD` 通过（主树批次 208 已在本树历史里）。
+  缺陷记录原文（该笔提交信息）：`pd.DataFrame | None` 整串解析失败⇒类型退化成 map，
+  `df["col"] = v` 编成对着 DataFrame 结构体指针做 `DictInsert`，实测崩在 `map_insert`。
+  该笔三处站点＝`Type::from_string` 的联合分支（`types/mod.rs:285-300`）、
+  `InferContext::parse_type_string` 的联合分支（`new_resolver.rs:96-111`）、
+  `qualified_method_candidate` 的点号类型名分支（`gen.rs:1089-1094`）。
+- 夹具与三侧真值（存 `/tmp/b10032/`）：
+  ① `u208c.z`＝类方法 `load(self, path: str) -> Cache | None`＋`d["col"] = 1`：
+     CPython 打 `set col 1`／`done`；本树 AOT 二进制运行 rc=0 同两行；`--dump-mir` 的 `main` 段
+     发 `VoidCall { func: "Cache::__setitem__" }`、全段无 `DictInsert`。
+  ② `u208b.z`＝`def fee(amount: float | None) -> float`＋`print(fee(1.5))`：
+     CPython `2.0`；AOT `2.0`；MIR 里 `fee` 形参槽＝`F64`、`main` 调用点目的槽＝`F64`、
+     打印走 `println_f64`。
+- 四组变异（脚本 `/tmp/b10032/mut4.py`＋日志 `mut4.log`；还原源＝`git show HEAD:<路径>`，
+  每组落盘前断言"锚点次数＝1"、落盘后断言 md5≠还原态、还原后断言 md5＝HEAD；
+  跑完 `git status src/` 只剩批次 745 那三个在制文件，`types/mod.rs`／`new_resolver.rs`／
+  `gen.rs` 三处与 HEAD 一字相同）：
+
+  | 站点 | 模块内单元测试（144 条） | regression_history（55 条） | 红点与红值 |
+  |---|---|---|---|
+  | `new_resolver.rs:96-111` 联合分支 | 1 红／143 绿 | 55 绿不变 | `new_resolver.rs:2152`（还原态 `:2167`）左 `Named("Cache \| None", [])` ≠ 右 `Named("Cache", [])` |
+  | `types/mod.rs:285-300` 联合分支 | 1 红／143 绿 | 55 绿不变 | `types/mod.rs:2353`（还原态 `:2370`）左 `Named("Cache \| None", [])` ≠ 右 `Named("Cache", [])` |
+  | `new_resolver.rs:440-441` 别名两行 | 1 红／143 绿 | 55 绿不变 | `new_resolver.rs:2169`（还原态 `:2171`）左 `Named("int", [])` ≠ 右 `I64` |
+  | `gen.rs:1089-1094` 点号名分支 | 144 绿不变 | 55 绿不变 | —（阴性） |
+
+  前两处红在同一测试文件、不同断言行，红值是两处函数各自的返回⇒两条独立覆盖；
+  第三处（别名两行）红在同一测试的 `int \| None` 那一格，红值形状不同＝另一格。
+- 本批的关键口径（方法学，写进 #20005）：MIR 面两条用例在四组变异下全部不变⇒它们**不是**
+  这三处分支的锁，而是现状锁（记录"`Cache \| None` 注解下赋值发 `__setitem__`、不发
+  `DictInsert`"这一现状，防的是类型推断链改坏）。原因是两枚夹具的槽位都来自推断：
+  `d` 的目的槽取自方法体 `return Cache()`，`amount` 槽取自调用实参 `1.5`——注解串没进这三处站点。
+  10031 余项① 问的"别名分支要换什么形状才打得到"，答案是**换调用方式不是换夹具形状**：
+  直接调用 `Type::from_string`／`InferContext::parse_type_string` 才打得到，MIR 面换形状打不到。
+- 红点行号口径：行号取自带 panic 消息的那趟（`/tmp/b10032/mut5.log`），当次文件是裁掉分支后的
+  变异态；还原态行号＝变异态＋被裁段落行数（联合分支那两处分别 15／17 行，别名两行 2 行），
+  括号内已换算。
+- 未锁与余项（不写成已覆盖）：
+  ① `gen.rs:1089-1094` 点号类型名分支＝阴性：两枚夹具的类型名都不带点（`Cache`／`float`），
+     该分支只在接收者类型名形如 `pd.DataFrame` 时进入；要打到它需要"注解名来自另一模块的点号名"
+     这枚形状，站点在 `gen.rs`（主树在重构该文件），本批不碰；
+  ② 208 的第三处改动（调用实参里的元组／数组／结构体字面量先物化）本批未覆盖；
+  ③ 本批新增的两条直接单元测试锁的是函数返回值本身，不落 MIR——按 #20005 收录口径，
+     它们记在来源站点的 `#[cfg(test)]` 位置，MIR 面那两条才是本套件的主体；
+  ④ `tests/regression_history.rs` 的两条用例是现状锁，将来若把注解串真正接进这三处站点，
+     需要重取一次真值再决定是否改断言。
+- `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件 `src/error_codes.rs`／
+  `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
+  `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
+  两本台账，**连续三十一批**）；待补台账行的文字写进本批记录笔的提交信息。

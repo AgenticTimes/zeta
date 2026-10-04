@@ -411,6 +411,30 @@
 >   ② `signature_ret_ty()` 那格在 B 臂红点之前仍是 `F64` ⇒ 值不取自这四臂，只算防放松；
 >   ③ 150 的非法 IR（整型函数 `ret double`、链接前中止）与 `f64→i64` 的 fptosi 补齐那半笔落在
 >   后端 IR／codegen 面，不落 MIR ⇒ 按本条收录口径不收录。
+> - 批次 10032（代码笔 `056b10ac`）＝来源批次 208（`ac7e9f56`，PEP 604 联合注解＋点号类型名分派）：
+>   本套 **55 条／0.47 秒全绿**，另有两处 `#[cfg(test)]` 直接单元测试（`types/mod.rs` 的
+>   `from_string_takes_first_non_none_member_of_pep604_union`、`new_resolver.rs` 的
+>   `parse_type_string_takes_first_non_none_member_of_pep604_union`），crate 内单元测试
+>   **144 条绿**（原 142）。三侧真值：`Cache | None` 那枚夹具 CPython 打 `set col 1`／`done`、
+>   AOT 二进制 rc=0 同两行、MIR 的 `main` 段发 `VoidCall { func: "Cache::__setitem__" }` 且全段
+>   无 `DictInsert`；`float | None` 那枚三侧都是 `2.0`，MIR 里形参槽与调用点目的槽都＝`F64`。
+>   四组变异（还原源＝`git show HEAD:<路径>`，每组断言锚点次数＝1＋变异后 md5≠还原态＋还原后
+>   md5＝HEAD）：`new_resolver.rs:96-111` 联合分支⇒红 `new_resolver.rs:2152`（还原态 `:2167`，
+>   左 `Named("Cache | None", [])` ≠ 右 `Named("Cache", [])`）；`types/mod.rs:285-300` 联合分支⇒红
+>   `types/mod.rs:2353`（还原态 `:2370`，红值同形）；`new_resolver.rs:440-441` 别名两行⇒红
+>   `new_resolver.rs:2169`（还原态 `:2171`，左 `Named("int", [])` ≠ 右 `I64`）；
+>   `gen.rs:1089-1094` 点号类型名分支⇒144 条与 55 条都一字不变＝**阴性、未锁**。
+>   前三组都只红直接单元测试那条、55 条那两枚 MIR 用例全不变⇒本批的关键口径：**MIR 面那两条
+>   是现状锁不是这三处分支的锁**，因为夹具的槽位来自类型推断（`d` 取自方法体 `return Cache()`、
+>   `amount` 取自调用实参 `1.5`），注解串根本没进这三处站点。由此销掉 10031 余项①（"别名分支要
+>   换什么形状才打得到"）＝答案不是换夹具形状，而是直接调用这两个函数。
+>   仍未锁的（登记在此不另占号）：① `gen.rs` 的点号类型名分支需要"注解名带点且来自另一模块"
+>   的形状，站点在主树正在重构的 `gen.rs`，本批不碰；② 208 的第三处改动（调用实参里的元组／
+>   数组／结构体字面量先物化）未覆盖；③ 两条直接单元测试锁的是函数返回值、不落 MIR，
+>   按本条收录口径记在站点位置而非本套件；④ 若日后把注解串真正接进这三处站点，
+>   `tests/regression_history.rs` 那两条现状锁要重取真值。
+>   检查节奏：改到 `src/middle/**`（只有测试模块）⇒ crate 内单元测试 144/144 绿＋编译零错误；
+>   `tests/regression_history.rs` 55/55 绿。
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
