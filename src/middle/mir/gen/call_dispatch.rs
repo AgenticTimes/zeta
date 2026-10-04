@@ -1876,7 +1876,23 @@ call, no NULL-handle dereference).",
             if receiver.is_none() && method == "isinstance" && args.len() == 2 {
                 if let AstNode::Var(tn) = &args[1] {
                     let val_id = self.lower_expr(&args[0]);
-                    let vt = self.type_map.get(&val_id).cloned();
+                    let mut vt = self.type_map.get(&val_id).cloned();
+                    // 批 943：checker 兜底——槽型是 ABI 缺省（I64/PyDynamic）
+                    // 或未知时不可信（数组也按 i64 指针传参），checker_env 的
+                    // 具名型（用户类/容器，来自调用点证据链）更可信
+                    if let AstNode::Var(vn) = &args[0] {
+                        let abi_default = matches!(
+                            &vt,
+                            None | Some(Type::I64) | Some(Type::PyDynamic)
+                        );
+                        if abi_default {
+                            if let Some(ct) = self.checker_type_of(vn) {
+                                if matches!(ct, Type::Named(_, _)) {
+                                    vt = Some(ct);
+                                }
+                            }
+                        }
+                    }
                     // A parsed JSON value's Python type is only known at
                     // RUNTIME — one static PyJson tag covers objects, arrays,
                     // strings and numbers. Answering statically returned 0, so

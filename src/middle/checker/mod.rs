@@ -178,11 +178,15 @@ pub fn collect_param_evidence(
                             (Some(t), None) => slot[i] = Some(t),
                             // 与既有候选一致 ⇒ 保持
                             (Some(t), Some(prev)) if *prev == t => {}
-                            // 冲突或推不出 ⇒ 永久放弃该位
-                            _ => {
+                            // 两个都推得出但不一致 ⇒ 真冲突，永久放弃
+                            (Some(_), Some(_)) => {
                                 slot[i] = None;
                                 conflicted[i] = true;
                             }
+                            // 本调用点推不出 ⇒ 不动既有候选（批 943 修正：
+                            // 此前"推不出"也被当冲突锁死，把可推断调用点
+                            // 的候选作废）
+                            (None, _) => {}
                         }
                     }
                 }
@@ -246,7 +250,8 @@ fn merge_top_level_evidence(
                 match (lit, &slot[i]) {
                     (Some(t), None) => slot[i] = Some(t),
                     (Some(t), Some(prev)) if *prev == t => {}
-                    _ => slot[i] = None,
+                    (Some(_), Some(_)) => slot[i] = None,
+                    (None, _) => {}
                 }
             }
         }
@@ -305,11 +310,13 @@ fn prime_param_slots(
         } else {
             constraint::annotation_lattice(anno)
         };
-        let is_dyn_marker = ann_lat
-            .as_ref()
-            .and_then(|l| l.known_ty())
-            .map_or(false, |t| matches!(t, Type::PyDynamic));
-        if is_dyn_marker && ev_ty.is_some() {
+        let known = ann_lat.as_ref().and_then(|l| l.known_ty());
+        // 弱注解（批 943）：refine 给未注解参数写 "i64"/"dyn" 缺省（gen 的
+        // codegen 签名面依赖字符串本身），checker 侧它们只是 ABI 缺省假设
+        // 不是用户意图——调用点证据（真实实参型）优先。
+        let weak = matches!(known, None | Some(Type::I64) | Some(Type::F64))
+            || matches!(known, Some(Type::PyDynamic));
+        if ev_ty.is_some() && weak {
             env.meet_slot(pname.as_str(), LatticeTy::known(ev_ty.unwrap()));
         } else if let Some(lat) = ann_lat {
             env.meet_slot(pname.as_str(), lat);
@@ -467,12 +474,40 @@ fn collect_calls<'a>(body: &'a [AstNode], out: &mut Vec<&'a AstNode>) {
 }
 
 fn collect_calls_expr<'a>(e: &'a AstNode, out: &mut Vec<&'a AstNode>) {
-    if let AstNode::Call {
-        receiver: None,
-        ..
-    } = e
-    {
-        out.push(e);
+    match e {
+        // 无接收者调用（用户函数候选）：收录并递归实参——嵌套调用
+        //（print(check(p)) 里的 check(p)）此前漏收，批 943
+        AstNode::Call {
+            receiver: None,
+            args,
+            ..
+        } => {
+            out.push(e);
+            for a in args {
+                collect_calls_expr(a, out);
+            }
+        }
+        AstNode::Call {
+            receiver: Some(r),
+            args,
+            ..
+        } => {
+            collect_calls_expr(r, out);
+            for a in args {
+                collect_calls_expr(a, out);
+            }
+        }
+        AstNode::FieldAccess { base, .. } => collect_calls_expr(base, out),
+        AstNode::Subscript { base, index } => {
+            collect_calls_expr(base, out);
+            collect_calls_expr(index, out);
+        }
+        AstNode::BinaryOp { left, right, .. } => {
+            collect_calls_expr(left, out);
+            collect_calls_expr(right, out);
+        }
+        AstNode::UnaryOp { expr, .. } => collect_calls_expr(expr, out),
+        _ => {}
     }
 }
 
@@ -900,6 +935,17 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
         }
         if let Some(ty) = ctx.ret_types.get(method) {
             env.meet_slot(name, LatticeTy::known(ty.clone()));
+            return;
+        }
+        // 构造调用：首字母大写且 type_decls 在册的类名 ⇒ Named(类名)
+        //（批 943——p = Point() 的 p 槽由此知道自己是 Point）
+        if method.chars().next().map_or(false, |c| c.is_uppercase())
+            && ctx.type_decls.contains_key(method.as_str())
+        {
+            env.meet_slot(
+                name,
+                LatticeTy::known(Type::Named(method.clone(), vec![])),
+            );
         }
         return;
     }
@@ -979,6 +1025,14 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
     // Cast ⇒ 目标注解型（批 923）
     if let AstNode::Cast { ty, .. } = rhs {
         env.meet_slot(name, LatticeTy::known(Type::from_string(ty)));
+        return;
+    }
+    // 结构字面量 ⇒ Named(变体名)（批 943——p = Point { .. } 的 p 槽）
+    if let AstNode::StructLit { variant, .. } = rhs {
+        env.meet_slot(
+            name,
+            LatticeTy::known(Type::Named(variant.clone(), vec![])),
+        );
         return;
     }
     // 字典字面量（批 933）：键取首个键型（Str 保 Str 否则 I64，对齐
@@ -2010,6 +2064,36 @@ mod tests {
             ev_show[0],
             Some(Type::DynamicArray(Box::new(Type::F64))),
             "顶层 show(get_data()) ⇒ data 位证据 DynamicArray(F64)"
+        );
+    }
+
+    /// 构造调用返回型：p = Point() ⇒ Named(Point)（type_decls 在册，批 943）。
+    #[test]
+    fn ctor_call_types_named() {
+        let mut env = TypeEnv::new();
+        let mut decls: HashMap<String, crate::middle::mir::r#gen::TypeDecl> =
+            HashMap::new();
+        decls.insert(
+            "Point".to_string(),
+            crate::middle::mir::r#gen::TypeDecl::Struct {
+                fields: vec![],
+                generics: vec![],
+            },
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &decls,
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign("p", call("Point", vec![]))],
+            &ctx,
+        );
+        assert_eq!(
+            env.get_slot("p"),
+            LatticeTy::known(Type::Named("Point".to_string(), vec![]))
         );
     }
 
