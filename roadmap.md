@@ -29351,3 +29351,11 @@ resolver 接线点同步适配。历史探针七套＋全量差分 100%＋python
 
 infer_fn_body 加 BinaryOp 同型传播：两侧都是 Var 且格值相同且已知 ⇒ 结果
 同型（保守子集——异型/字面量混合留后续）。全量差分 100%＋探针零回归。
+
+## 批次 915 续（2026-10-04，**checker 本体实现——递归扫描＋InferCtx＋字段传播＋消费接线**）
+
+infer_fn_body 重构为递归扫描（If/Loop/FuncDef 嵌套块全覆盖）＋InferCtx
+上下文（ret_types/type_decls/module_globals）。字段访问型传播（struct
+field 查表）。resolver 接线适配 InferCtx。产品代码的 eprintln 完好。
+全量差分 100%；python_style 479/0；lib 182/182。
+

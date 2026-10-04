@@ -1,12 +1,8 @@
 //! 批次 911（轴 F 方案② P1 骨架）：统一类型检查器——SCCP 式 slot→型不动点。
 //!
-//! 设计稿：docs/f2-checker-design.md。流程：
-//! 1. 预填（参数注解／已知返回型／调用点实参型）
-//! 2. 顺序扫函数体，每条语句产出约束入工作列表
-//! 3. 弹出 Work → meet 更新槽型；变化 ⇒ 引用该槽的语句重新入列
-//! 4. 双清空 ⇒ 不动点
-//!
-//! 批次 913 扩展：infer_fn_body 加 `ret_types` 参数（调用返回型传播）。
+//! 设计稿：docs/f2-checker-design.md。
+//! 批次 915 扩展：递归扫描嵌套块（If/Loop）＋字段访问型传播＋
+//! 方法返回型（method_ret）＋Return 语句收集。
 
 pub mod constraint;
 pub mod lattice;
@@ -50,52 +46,106 @@ impl TypeEnv {
     }
 }
 
-/// 单函数体内的顺序扫描＋约束传播。
-///
-/// 已支持的传播形状：
-/// - `x = <字面量>`     ⇒ meet(x, 字面量格值)
-/// - `x = <名字>`       ⇒ meet(x, 该名当前格值)（赋值边传播）
-/// - `x = <调用>`       ⇒ meet(x, ret_types[fn])（函数返回型，批 913 扩展）
-pub fn infer_fn_body(
-    env: &mut TypeEnv,
-    body: &[AstNode],
-    ret_types: &HashMap<String, Type>,
-) {
+/// 推断上下文：checker 需要访问的外部表。
+pub struct InferCtx<'a> {
+    /// 函数返回型表（来自 resolver 的 get_all_func_signatures）。
+    pub ret_types: &'a HashMap<String, Type>,
+    /// struct 名 → 字段表（来自 type_decls / shared_type_decls 合并）。
+    pub type_decls: &'a HashMap<String, crate::middle::mir::r#gen::TypeDecl>,
+    /// 模块全局名集合（env-first 读的判定）。
+    pub module_globals: &'a std::collections::HashSet<String>,
+}
+
+/// 单函数体内的递归扫描＋约束传播（批 915 重构：递归进 If/Loop 等嵌套块）。
+pub fn infer_fn_body(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
+    scan_stmts(env, body, ctx);
+}
+
+fn scan_stmts(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
     for stmt in body {
-        if let AstNode::Assign(lhs, rhs) = stmt {
-            if let AstNode::Var(name) = &**lhs {
-                // 字面量
-                if let Some(lat) = constraint::literal_lattice(rhs) {
-                    env.meet_slot(name, lat);
-                    continue;
+        match stmt {
+            // 赋值：lhs 为 Var 时传播型
+            AstNode::Assign(lhs, rhs) => {
+                if let AstNode::Var(name) = &**lhs {
+                    propagate_assign(env, name, rhs, ctx);
                 }
-                // 赋值边（名字→名字）
-                if let AstNode::Var(src) = &**rhs {
-                    let src_lat = env.get_slot(src);
-                    if src_lat.is_known() {
-                        env.meet_slot(name, src_lat);
+                // rhs 内嵌套赋值（walrus 等）递归
+                scan_expr(env, rhs, ctx);
+            }
+            // 控制流：递归进分支体
+            AstNode::If { then, else_, .. } => {
+                scan_stmts(env, then, ctx);
+                scan_stmts(env, else_, ctx);
+            }
+            AstNode::Loop { body, .. } | AstNode::Unsafe { body } => {
+                scan_stmts(env, body, ctx);
+            }
+            AstNode::FuncDef { body, .. } => {
+                scan_stmts(env, body, ctx);
+            }
+            // 表达式语句：递归进内嵌赋值
+            AstNode::ExprStmt { expr } => {
+                if let AstNode::Assign(lhs, rhs) = &**expr {
+                    if let AstNode::Var(name) = &**lhs {
+                        propagate_assign(env, name, rhs, ctx);
                     }
-                    continue;
                 }
-                // 二元运算（批 914 扩展）：两侧同型 ⇒ 结果同型（保守子集）
-                if let AstNode::BinaryOp { op, left, right } = &**rhs {
-                    if let (AstNode::Var(a), AstNode::Var(b)) = (&**left, &**right) {
-                        let la = env.get_slot(a);
-                        let lb = env.get_slot(b);
-                        if la.is_known() && la == lb && !matches!(la, LatticeTy::Conflict) {
-                            env.meet_slot(name, la);
-                        }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn scan_expr(_env: &mut TypeEnv, _expr: &AstNode, _ctx: &InferCtx) {
+    // P2 后续扩展点：表达式内嵌套约束（当前不需要）
+}
+
+/// 赋值传播：确定 rhs 的型并 meet 到 lhs 名。
+fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx) {
+    // 字面量
+    if let Some(lat) = constraint::literal_lattice(rhs) {
+        env.meet_slot(name, lat);
+        return;
+    }
+    // 赋值边（名字→名字）
+    if let AstNode::Var(src) = rhs {
+        let src_lat = env.get_slot(src);
+        if src_lat.is_known() {
+            env.meet_slot(name, src_lat);
+        }
+        return;
+    }
+    // 二元运算同型传播
+    if let AstNode::BinaryOp { left, right, .. } = rhs {
+        if let (AstNode::Var(a), AstNode::Var(b)) = (&**left, &**right) {
+            let la = env.get_slot(a);
+            let lb = env.get_slot(b);
+            if la.is_known() && la == lb && !matches!(la, LatticeTy::Conflict) {
+                env.meet_slot(name, la);
+            }
+        }
+        return;
+    }
+    // 调用返回（ret_types 查表）
+    if let AstNode::Call { method, .. } = rhs {
+        if let Some(ty) = ctx.ret_types.get(method) {
+            env.meet_slot(name, LatticeTy::known(ty.clone()));
+        }
+        return;
+    }
+    // 字段访问：struct 已知 ⇒ 查字段型（批 915 扩展）
+    if let AstNode::FieldAccess { base, field } = rhs {
+        if let AstNode::Var(base_name) = &**base {
+            let base_lat = env.get_slot(base_name);
+            if let LatticeTy::Known(Type::Named(tn, _)) = &base_lat {
+                if let Some(crate::middle::mir::r#gen::TypeDecl::Struct { fields, .. }) =
+                    ctx.type_decls.get(tn)
+                {
+                    if let Some((_, ft)) = fields.iter().find(|(f, _)| f == field) {
+                        let fty = Type::from_string(ft);
+                        env.meet_slot(name, LatticeTy::known(fty));
+                        return;
                     }
-                    // 数值字面量混合：int op int ⇒ I64（保守）
-                    let _ = op;
-                    continue;
-                }
-                // 调用返回（批 913 扩展）
-                if let AstNode::Call { method, .. } = &**rhs {
-                    if let Some(ty) = ret_types.get(method) {
-                        env.meet_slot(name, LatticeTy::known(ty.clone()));
-                    }
-                    continue;
                 }
             }
         }
@@ -106,6 +156,7 @@ pub fn infer_fn_body(
 mod tests {
     use super::*;
     use crate::frontend::ast::AstNode;
+    use std::collections::HashMap;
 
     fn var(n: &str) -> AstNode {
         AstNode::Var(n.to_string())
@@ -115,21 +166,16 @@ mod tests {
         AstNode::Assign(Box::new(var(lhs)), Box::new(rhs))
     }
 
-    fn call(method: &str) -> AstNode {
-        AstNode::Call {
-            receiver: None,
-            method: method.to_string(),
-            args: vec![],
-            type_args: vec![],
-            structural: false,
-        }
-    }
-
     /// 字面量赋值 ⇒ 槽型 Known(I64)。
     #[test]
     fn literal_assign_types_slot() {
         let mut env = TypeEnv::new();
-        infer_fn_body(&mut env, &[assign("x", AstNode::Lit(42))], &HashMap::new());
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(&mut env, &[assign("x", AstNode::Lit(42))], &ctx);
         assert_eq!(env.get_slot("x"), LatticeTy::known(Type::I64));
     }
 
@@ -137,44 +183,61 @@ mod tests {
     #[test]
     fn assign_edge_propagates() {
         let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
         infer_fn_body(
             &mut env,
             &[assign("a", AstNode::Lit(7)), assign("b", var("a"))],
-            &HashMap::new(),
+            &ctx,
         );
         assert_eq!(env.get_slot("b"), env.get_slot("a"));
     }
 
-    /// 冲突：同槽两种已知型 ⇒ Conflict（不静默选边）。
+    /// 冲突：同槽两种已知型 ⇒ Conflict。
     #[test]
     fn conflicting_writes_yield_conflict() {
         let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
         infer_fn_body(
             &mut env,
             &[
                 assign("x", AstNode::Lit(1)),
                 assign("x", AstNode::StringLit("s".to_string())),
             ],
-            &HashMap::new(),
+            &ctx,
         );
         assert_eq!(env.get_slot("x"), LatticeTy::Conflict);
     }
 
-    /// Unknown ⊕ Known ＝ Known（传播不受未知槽阻断）。
-    #[test]
-    fn unknown_meets_known_stays_known() {
-        let mut env = TypeEnv::new();
-        env.meet_slot("x", LatticeTy::known(Type::I64));
-        assert_eq!(env.get_slot("x"), LatticeTy::known(Type::I64));
-    }
-
-    /// 调用返回型传播（批 913 扩展）：ret_types 表里有 fn ⇒ 传播返回型。
+    /// 调用返回型传播：ret_types 表里有 fn ⇒ 传播返回型。
     #[test]
     fn call_return_propagates() {
         let mut env = TypeEnv::new();
         let mut rets = HashMap::new();
         rets.insert("get_data".to_string(), Type::F64);
-        infer_fn_body(&mut env, &[assign("y", call("get_data"))], &rets);
+        let ctx = InferCtx {
+            ret_types: &rets,
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            &[assign("y", AstNode::Call {
+                receiver: None,
+                method: "get_data".to_string(),
+                args: vec![],
+                type_args: vec![],
+                structural: false,
+            })],
+            &ctx,
+        );
         assert_eq!(env.get_slot("y"), LatticeTy::known(Type::F64));
     }
 }

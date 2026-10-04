@@ -5568,14 +5568,19 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_type_decls(self.type_decls.clone())
             // 批次 912（轴 F P2）：checker 求解的槽型环境传给 MirGen。
             .with_checker_env({
+                let ret_map: std::collections::HashMap<String, Type> = self
+                    .get_all_func_signatures()
+                    .iter()
+                    .map(|(n, (_, r, _))| (n.clone(), r.clone()))
+                    .collect();
                 let mut env = crate::middle::checker::TypeEnv::new();
                 if let AstNode::FuncDef { body, .. } = ast {
-                    let ret_map: std::collections::HashMap<String, Type> = self
-                        .get_all_func_signatures()
-                        .iter()
-                        .map(|(n, (_, r, _))| (n.clone(), r.clone()))
-                        .collect();
-                    crate::middle::checker::infer_fn_body(&mut env, body, &ret_map);
+                    let ctx = crate::middle::checker::InferCtx {
+                        ret_types: &ret_map,
+                        type_decls: &self.type_decls,
+                        module_globals: &self.module_globals.borrow(),
+                    };
+                    crate::middle::checker::infer_fn_body(&mut env, body, &ctx);
                 }
                 env
             })
