@@ -29512,3 +29512,25 @@ P4 回灌替换是下一个消费面扩张点）。
 **类型推断覆盖现状**：函数内 20 类形态＋跨函数传播三形态＋fn_rets
 闭环；库测试 216→222。未做（登记）：控制流窄化（isinstance 分支内）、
 全局变量槽推断、P4 回灌替换消费面扩张。
+
+## 批次 941–943（2026-10-05）：类型推断收官三批——窄化／全局槽／isinstance 静态回答
+
+- **批 941（`f70f7775`）控制流窄化**：isinstance(x, T) 真分支在克隆 env
+  上扫描（x ⇒ Named(T)/I64/F64/Str），汇合时窄化槽不回流（分支后不保证
+  是 T）；组合条件与 list/dict（元素型不足）保守不窄化；TypeEnv 加 Clone。
+- **批 942（`50ca4085`）全局变量槽**：ModuleCheckerPlan 加 module_env
+  （top_level_stmts 过 scan_stmts 建槽）；seed_module_slots 种子注入函数
+  env，同名参数遮蔽（skip 名单）。
+- **批 943（`3b1580dc`）isinstance 静态回答 checker 兜底**：缺陷实拍
+  check(p) 的 isinstance(v, Point) 恒 false（v 槽是 refine 写的 "i64" ABI
+  缺省注解）。修四层：①构造调用⇒Named(类名)、结构字面量⇒Named(变体名)；
+  ②collect_calls_expr 递归嵌套实参（print(check(p)) 漏收）；③"推不出"
+  不再当冲突锁死；④"i64"/"dyn" 缺省注解是弱注解、调用点证据优先（用户
+  显式非标量注解仍优先）；gen 侧 isinstance 臂槽型为 ABI 缺省时查
+  checker_env 具名型。实拍：struct 探针 isinstance 打 1（改前 0）。
+
+**类型推断覆盖终态**：函数内 21 类形态（＋构造调用/结构字面量/字典）＋
+跨函数传播三跳＋控制流窄化＋全局槽种子＋消费点两个（mean 折叠、
+isinstance 静态回答）；checker 55/55、库测试 226/226；每批全量差分
+2845/2845、python_style 479/0。深化方向（非功能缺口）：py 类 TypeDecl
+注册（py 类构造 Named 化）、P4 消费面继续扩张。
