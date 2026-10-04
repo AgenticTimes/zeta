@@ -33,7 +33,7 @@ ok=0; bad=0
 chk() { # $1 = 期望桶, $2 = verdict 内容（-＝文件缺失）
   got=$(cls "$2")
   if [ "$got" = "$1" ]; then ok=$((ok + 1)); echo "ok    期望 $1 实得 $got"
-  else bad=$((bad + 1)); echo "FAILED 期望 $1 实得 $got（内容: ${2:0:40}）"; fi
+  else bad=$((bad + 1)); echo "FAILED 期望 $1 实得 ${got}（内容: ${2:0:40}）"; fi
 }
 mkdir -p /tmp/sg_align
 chk missing ""

@@ -21,7 +21,7 @@ sed -n '/^run_capped() {/,/^}/p' "$ONE" > "$tmp/fn.sh"
 . "$tmp/fn.sh"
 
 ok=0; bad=0
-chk() { if [ "$2" = "$3" ]; then echo "  ok   $1"; ok=$((ok + 1)); else echo "  FAIL $1：期望 [$3] 实得 [$2]"; bad=$((bad + 1)); fi; }
+chk() { if [ "$2" = "$3" ]; then echo "  ok   $1"; ok=$((ok + 1)); else echo "  FAIL ${1}：期望 [$3] 实得 [$2]"; bad=$((bad + 1)); fi; }
 
 mk() { printf '#!/bin/sh\n%s\n' "$2" > "$tmp/$1"; chmod +x "$tmp/$1"; }
 mk normal  'echo hello-stdout; echo note-stderr >&2; exit 0'
