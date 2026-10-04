@@ -3974,3 +3974,92 @@ print(v.get("a", 0))
     );
 }
 
+/// 批次 10031（移植主树批次 150 `41e15672`）：Python 标量注解拼写 `float`／`int`
+/// 在四处型串解析臂上的别名。
+/// 症状（缺陷记录原文）：`float` 留作不透明命名型时——
+/// ① 每个这样的形参拿到整数调用约定（调用点各插一条 fptosi）；
+/// ② `-> float` 的函数只有在 `infer_fn_return_type` 恰好看见浮点字面量时才返回 f64，
+///    否则发出非法 IR（整型函数 `ret double`），整个编译在链接前中止；
+/// ③ 即便被调方签名已是 double，调用点仍把结果记成 i64，`print(fee(2.0))` 打的是
+///    f64 的位模式（4611686018427387904）。
+/// 现树规则：`float`→F64、`int`→I64，形参槽、签名返回型、调用点目的槽、打印分派四格一致。
+///
+/// 覆盖面分工（逐臂撤除，`cargo test --test regression_history` 实测，批次 10031）：
+/// ① 撤 `gen.rs:1498` 的 `|| pt_str == "float"` ⇒ 红在第一格（形参 `amount` 槽读回 I64）。
+/// ② 撤 `types/mod.rs:320` 的 `"int" => Type::I64` ⇒ 红在第二格（形参 `rate` 槽读回 `Named("int")`）。
+/// ③ 撤 `typecheck_new.rs:140` 的 `"float" => return Type::F64` ⇒ 红在第三格
+///    （调用点目的槽读回 `Named("float")`＝记录里"f64 位模式"那一格）。
+///    三臂各红各的格 ⇒ 互为独立覆盖。
+/// ④ 阴性读数（不入账为已覆盖）：撤 `new_resolver.rs:440-441` 整对、单撤 `typecheck_new.rs:139`
+///    的 `int`、单撤 `types/mod.rs:321` 的 `float` ⇒ 53 条读数一字不变；
+///    第三格（`signature_ret_ty`）在③红点之前仍为 F64，说明它不取自这四臂，本条只算防放松。
+#[test]
+fn python_scalar_annotation_aliases_reach_param_and_callsite_slots() {
+    let mirs = lower_all(
+        "def fee(amount: float, rate: int) -> float:
+    return amount * 2.0
+
+x = fee(1.5, 2)
+print(x)
+",
+    );
+
+    // ① 形参槽：注解拼写 `float`／`int` 解析成真实标量型，不是不透明命名型。
+    let fee = mir(&mirs, "fee");
+    let slot_of = |want: &str| {
+        let hit = fee.param_indices.iter().find(|(n, _)| n == want).map(|(_, id)| *id);
+        hit.unwrap_or_else(|| {
+            panic!(
+                "形参 {want} 应登记在 param_indices，实得 {:?}",
+                fee.param_indices
+            )
+        })
+    };
+    let amount = slot_of("amount");
+    let rate = slot_of("rate");
+    assert_eq!(
+        fee.type_map.get(&amount),
+        Some(&Type::F64),
+        "形参 `amount: float` 的槽 id={amount} 该是 F64（改前是不透明命名型，落到整数调用约定），实得 {:?}",
+        fee.type_map.get(&amount)
+    );
+    assert_eq!(
+        fee.type_map.get(&rate),
+        Some(&Type::I64),
+        "形参 `rate: int` 的槽 id={rate} 该是 I64，实得 {:?}",
+        fee.type_map.get(&rate)
+    );
+
+    // ② 签名返回型：`-> float` 解析成 F64。
+    assert_eq!(
+        fee.signature_ret_ty(),
+        Some(Type::F64),
+        "`-> float` 的签名返回型该是 F64（改前是不透明命名型）"
+    );
+
+    // ③ 调用点目的槽与被调方签名同读数；打印按 f64 分派，不打位模式。
+    let main = mir(&mirs, "main");
+    let dest = main
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func.starts_with("fee") => Some(*dest),
+            _ => None,
+        })
+        .expect("main 里有对 fee 的调用");
+    assert_eq!(
+        main.type_map.get(&dest),
+        Some(&Type::F64),
+        "调用点目的槽 id={dest} 该与被调方签名同为 F64（改前记成 i64，打的是 f64 位模式）"
+    );
+    let calls = call_symbols(main);
+    assert!(
+        calls.iter().any(|c| c.starts_with("println_f64")),
+        "`print(x)` 该按 F64 分派到 `println_f64`，实得调用: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c.starts_with("println_i64")),
+        "同一格里不该出现整数打印分派，实得调用: {calls:?}"
+    );
+}
+
