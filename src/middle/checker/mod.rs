@@ -568,6 +568,52 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
         env.meet_slot(name, LatticeTy::known(Type::from_string(ty)));
         return;
     }
+    // 字典字面量（批 933）：键取首个键型（Str 保 Str 否则 I64，对齐
+    // map_keys/map 字面量语义）；值同型⇒该型、混型或推不出⇒PyDynamic、
+    // 全 None⇒NoneValue、空⇒map[I64,I64]（对齐 gen/call_dict.rs 缺省）。
+    if let AstNode::DictLit { entries } = rhs {
+        let key_ty = match entries.first() {
+            Some((k, _)) => match expr_known_ty(k, env, ctx) {
+                Some(Type::Str) => Type::Str,
+                _ => Type::I64,
+            },
+            None => Type::I64,
+        };
+        let mut val_ty: Option<Type> = None;
+        let mut all_none = true;
+        let mut mixed = false;
+        for (_, v) in entries {
+            match v {
+                AstNode::NoneLit => {}
+                _ => {
+                    all_none = false;
+                    match expr_known_ty(v, env, ctx) {
+                        Some(t) => match &val_ty {
+                            None => val_ty = Some(t),
+                            Some(prev) if *prev == t => {}
+                            _ => mixed = true,
+                        },
+                        // 有值推不出 ⇒ 不猜（PyDynamic 动态槽）
+                        None => mixed = true,
+                    }
+                }
+            }
+        }
+        let vty = if entries.is_empty() {
+            Type::I64
+        } else if all_none {
+            Type::Named("NoneValue".to_string(), vec![])
+        } else if mixed {
+            Type::PyDynamic
+        } else {
+            val_ty.unwrap_or(Type::PyDynamic)
+        };
+        env.meet_slot(
+            name,
+            LatticeTy::known(Type::Named("map".to_string(), vec![key_ty, vty])),
+        );
+        return;
+    }
 }
 
 /// 列表字面量的统一元素型：全部元素同型且可判定才给出（批 923）。
@@ -1209,6 +1255,72 @@ mod tests {
         assert_eq!(env.get_slot("i"), LatticeTy::known(Type::I64));
         assert_eq!(env.get_slot("f"), LatticeTy::known(Type::F64));
     }
+    /// 字典字面量：键 Str 保 Str 否则 I64；值同型⇒该型、混型⇒PyDynamic、
+    /// 空⇒map[I64,I64]（对齐 gen/call_dict.rs 缺省，批 933）。
+    #[test]
+    fn dict_lit_types_map() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        let kv = |k: AstNode, v: AstNode| (k, v);
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[
+                assign(
+                    "d1",
+                    AstNode::DictLit {
+                        entries: vec![kv(
+                            AstNode::StringLit("a".to_string()),
+                            AstNode::Lit(1),
+                        )],
+                    },
+                ),
+                assign(
+                    "d2",
+                    AstNode::DictLit {
+                        entries: vec![
+                            kv(
+                                AstNode::StringLit("a".to_string()),
+                                AstNode::Lit(1),
+                            ),
+                            kv(
+                                AstNode::StringLit("b".to_string()),
+                                AstNode::StringLit("s".to_string()),
+                            ),
+                        ],
+                    },
+                ),
+                assign("d3", AstNode::DictLit { entries: vec![] }),
+            ],
+            &ctx,
+        );
+        assert_eq!(
+            env.get_slot("d1"),
+            LatticeTy::known(Type::Named(
+                "map".to_string(),
+                vec![Type::Str, Type::I64]
+            ))
+        );
+        assert_eq!(
+            env.get_slot("d2"),
+            LatticeTy::known(Type::Named(
+                "map".to_string(),
+                vec![Type::Str, Type::PyDynamic]
+            ))
+        );
+        assert_eq!(
+            env.get_slot("d3"),
+            LatticeTy::known(Type::Named(
+                "map".to_string(),
+                vec![Type::I64, Type::I64]
+            ))
+        );
+    }
+
     /// len(x) ⇒ I64 恒成立（批 930）。
     #[test]
     fn len_call_types_i64() {
