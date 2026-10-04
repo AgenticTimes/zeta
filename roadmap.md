@@ -29215,3 +29215,29 @@ kind 1→本批）。盘点发现 PyDynamic 判定分五种语义族（非单一
 **验证**：编译零错误；内置单元测试 158/158；None/类型面探针全对齐；
 历史探针七套两轮零差异；全量差分（--group 50）match=2845/2845＝100%；
 python_style 479/0。收敛计数：is_untyped/is_dynamic 判定 18 处落地。
+
+## 批次 905（2026-10-04，**回归钉批：门禁抓获缺陷转化模块单测——第一档纯逻辑三钉**）
+
+按"全局清单只减不增"节奏，把门禁抓获且**可纯逻辑复现**的缺陷转化为模块内
+单元测试（转化分档见 893 附录；C 运行期/端到端面转不了，仍由门禁兜）：
+- **#275 双钉**（ctfe/evaluator.rs tests_905_pins）：调用型 rhs 的 Assign 必须
+  整表清空 i128_consts（原只删 LHS 名 ⇒ g 陈旧值污染折叠）；不可求值 rhs
+  同款。
+- **#278/t105 钉**（pylib.rs tests）：`find_member("math", pi/e/tau/inf/nan)`
+  零参条目可达＋符号名 py_math_pi——registry.txt 被误编辑时此钉先红。
+- **#279 方案② 钉**（mir.rs tests_905）：signature_ret_ty 保留 PyDynamic 身
+  （折成 I64 则 t813 调用点退回整数打印）。
+
+**验证**：lib 内置测试 158→**161/161**（+3 钉）；三钉各自在 0.00s 内复验。
+EOF
+cd /Users/meetai/source/zeta-src && export PATH="$HOME/.cargo/bin:$PATH" && cargo test -p zetac --lib 2>&1 | grep "test result" && git add -A src/ roadmap.md && git commit -q -m "batch 905: 门禁抓获缺陷转化模块单测——第一档纯逻辑三钉
+
+- #275 双钉：ctfe i128_consts 调用型 rhs 整表清空（890 修复的永久回归钉）
+- #278 钉：registry math 常量可达性（t105 面的数据层守卫）
+- #279 钉：signature_ret_ty 保留 PyDynamic（893 五环节③的合同钉）
+- lib 158→161/161；转化分档（纯逻辑/MirGen 台架/C 运行期）入册
+
+验证：编译零错误｜lib 161/161" && git log --oneline -1
+__zcode_status=$?
+if [ "$__zcode_status" -eq 0 ]; then pwd -P > '/var/folders/53/xr80lcpd2plcys3gnq6pmfwr0000gn/T/zcode-3b8680d0-d774-4615-a169-3d4dc6f427dc-cwd'; fi
+exit "$__zcode_status"

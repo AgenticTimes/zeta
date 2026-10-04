@@ -1023,4 +1023,20 @@ mod tests {
             );
         }
     }
+
+    /// 批次 905（#278 回归钉）：math 常量的注册表可达性——t105（math.pi 打 0）
+    /// 的下游 face（call_field 模块属性路由）依赖 find_member("math", "pi")
+    /// 命中零参条目；注册表数据（registry.txt）被误编辑时此钉先红。
+    #[test]
+    fn math_constants_reachable_via_registry() {
+        for member in ["pi", "e", "tau", "inf", "nan"] {
+            let entry = crate::middle::pylib::find_member("math", member)
+                .unwrap_or_else(|| panic!("registry 丢失 math.{member}"));
+            assert!(entry.args.is_empty(), "math.{member} 应为零参常量条目");
+        }
+        assert_eq!(
+            crate::middle::pylib::find_member("math", "pi").unwrap().symbol,
+            "py_math_pi"
+        );
+    }
 }
