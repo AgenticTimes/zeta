@@ -75,16 +75,126 @@ pub fn infer_fn_body_with_params(
     body: &[AstNode],
     ctx: &InferCtx,
 ) {
-    for (pname, anno) in params {
+    infer_fn_body_full(env, fn_name, params, None, body, ctx);
+}
+
+/// 带调用点证据版（批 934）：无注解参数位若证据一致 ⇒ 用证据型 meet。
+pub fn infer_fn_body_full(
+    env: &mut TypeEnv,
+    fn_name: &str,
+    params: &[(String, String)],
+    evidence: Option<&[Option<Type>]>,
+    body: &[AstNode],
+    ctx: &InferCtx,
+) {
+    for (i, (pname, anno)) in params.iter().enumerate() {
         if !anno.is_empty() {
             if let Some(lat) = constraint::annotation_lattice(anno) {
                 env.meet_slot(pname.as_str(), lat);
             }
+        } else if let Some(Some(t)) = evidence.and_then(|e| e.get(i)) {
+            env.meet_slot(pname.as_str(), LatticeTy::known(t.clone()));
         }
     }
     scan_stmts(env, body, ctx);
     // Return 语句收集→fn_rets（批 918：P4 回灌替换的前提）
     collect_fn_ret(env, fn_name, body, ctx);
+}
+
+/// 模块级调用点证据（批 934）：扫描全部函数体，对用户函数的无接收者调用
+/// 收集字面量实参型 → 形参位候选。同一参数位多调用点型不一致 ⇒ None
+/// （保守放弃——错证据比缺证据危害大）。
+pub fn collect_param_evidence(
+    funcs: &HashMap<String, AstNode>,
+) -> HashMap<String, Vec<Option<Type>>> {
+    // fn 名 → (候选列表, 冲突位列表)。冲突位单独记账：置 None 的候选
+    // 不能被后续一致调用重新填充（None 兼"无证据"与"冲突"两义会漏记）。
+    let mut table: HashMap<String, (Vec<Option<Type>>, Vec<bool>)> =
+        HashMap::new();
+    for def in funcs.values() {
+        if let AstNode::FuncDef { body, .. } = def {
+            let mut calls: Vec<&AstNode> = Vec::new();
+            collect_calls(body, &mut calls);
+            for c in calls {
+                if let AstNode::Call {
+                    receiver: None,
+                    method,
+                    args,
+                    ..
+                } = c
+                {
+                    if !funcs.contains_key(method) {
+                        continue;
+                    }
+                    let (slot, conflicted) = table
+                        .entry(method.clone())
+                        .or_insert_with(|| {
+                            (
+                                vec![None; args.len().max(1)],
+                                vec![false; args.len().max(1)],
+                            )
+                        });
+                    for (i, a) in args.iter().enumerate() {
+                        if i >= slot.len() {
+                            continue;
+                        }
+                        if conflicted[i] {
+                            continue;
+                        }
+                        let lit = constraint::literal_lattice(a)
+                            .and_then(|l| l.known_ty());
+                        match (lit, &slot[i]) {
+                            (Some(t), None) => slot[i] = Some(t),
+                            // 与既有候选一致 ⇒ 保持
+                            (Some(t), Some(prev)) if *prev == t => {}
+                            // 冲突或推不出 ⇒ 永久放弃该位
+                            _ => {
+                                slot[i] = None;
+                                conflicted[i] = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    table.into_iter().map(|(k, (cand, _))| (k, cand)).collect()
+}
+
+/// 递归收集函数体里所有无接收者 Call 节点（批 934）。
+fn collect_calls<'a>(body: &'a [AstNode], out: &mut Vec<&'a AstNode>) {
+    for stmt in body {
+        match stmt {
+            AstNode::ExprStmt { expr } => collect_calls_expr(expr, out),
+            AstNode::Assign(_, rhs) => collect_calls_expr(rhs, out),
+            AstNode::Return(e) => collect_calls_expr(e, out),
+            AstNode::If { then, else_, .. } => {
+                collect_calls(then, out);
+                collect_calls(else_, out);
+            }
+            AstNode::Loop { body } => collect_calls(body, out),
+            AstNode::While { body, else_body, .. } => {
+                collect_calls(body, out);
+                collect_calls(else_body, out);
+            }
+            AstNode::For { body, else_body, .. } => {
+                collect_calls(body, out);
+                collect_calls(else_body, out);
+            }
+            AstNode::Unsafe { body } => collect_calls(body, out),
+            _ => {}
+        }
+    }
+}
+
+fn collect_calls_expr<'a>(e: &'a AstNode, out: &mut Vec<&'a AstNode>) {
+    if let AstNode::Call {
+        receiver: None,
+        ..
+    } = e
+    {
+        out.push(e);
+    }
 }
 
 /// 从函数体收集全部 Return（含嵌套块）并推断返回型，记入 fn_rets。
@@ -1255,6 +1365,96 @@ mod tests {
         assert_eq!(env.get_slot("i"), LatticeTy::known(Type::I64));
         assert_eq!(env.get_slot("f"), LatticeTy::known(Type::F64));
     }
+    /// 跨函数：调用点字面量实参 ⇒ 形参槽型（批 934）；冲突 ⇒ 不传。
+    #[test]
+    fn call_site_literals_type_params() {
+        let mk_def = |name: &str, body: Vec<AstNode>| AstNode::FuncDef {
+            name: name.to_string(),
+            generics: vec![],
+            lifetimes: vec![],
+            params: vec![
+                ("a".to_string(), String::new()),
+                ("b".to_string(), String::new()),
+            ],
+            ret: String::new(),
+            body,
+            attrs: vec![],
+            ret_expr: None,
+            single_line: true,
+            doc: String::new(),
+            pub_: false,
+            async_: false,
+            const_: false,
+            comptime_: false,
+            where_clauses: vec![],
+        };
+        let g = mk_def(
+            "g",
+            vec![AstNode::Return(Box::new(var("a")))],
+        );
+        let mut registered = HashMap::new();
+        registered.insert("g".to_string(), g);
+        // 主调函数体：g(1.5, "s") 与 g(2.5, "t")——a 位一致 F64、b 位一致 Str
+        let call_g = |x: AstNode, y: AstNode| {
+            AstNode::ExprStmt {
+                expr: Box::new(AstNode::Call {
+                    receiver: None,
+                    method: "g".to_string(),
+                    args: vec![x, y],
+                    type_args: vec![],
+                    structural: false,
+                }),
+            }
+        };
+        let caller = mk_def(
+            "caller",
+            vec![
+                call_g(AstNode::FloatLit("1.5".to_string()), AstNode::StringLit("s".to_string())),
+                call_g(AstNode::FloatLit("2.5".to_string()), AstNode::StringLit("t".to_string())),
+            ],
+        );
+        registered.insert("caller".to_string(), caller);
+        // 冲突 caller2：g(1, ...)——a 位 I64 与 F64 冲突 ⇒ 双位放弃
+        let caller2 = mk_def(
+            "caller2",
+            vec![call_g(AstNode::Lit(1), AstNode::StringLit("s".to_string()))],
+        );
+        registered.insert("caller2".to_string(), caller2);
+
+        let ev = collect_param_evidence(&registered);
+        let ev_g = ev.get("g").expect("g 的证据应存在");
+        assert_eq!(ev_g[0], None, "a 位 F64/I64 冲突 ⇒ 放弃");
+
+        // 只留一致调用点再验：a 位 F64、b 位 Str
+        let mut registered2 = registered.clone();
+        registered2.remove("caller2");
+        let ev2 = collect_param_evidence(&registered2);
+        let ev2_g = ev2.get("g").expect("g 证据");
+        assert_eq!(ev2_g[0], Some(Type::F64));
+        assert_eq!(ev2_g[1], Some(Type::Str));
+
+        // 证据进推断：def g(a, b): x = a ⇒ a 槽 F64
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        let g_params = vec![
+            ("a".to_string(), String::new()),
+            ("b".to_string(), String::new()),
+        ];
+        infer_fn_body_full(
+            &mut env,
+            "g",
+            &g_params,
+            Some(&[ev2_g[0].clone(), ev2_g[1].clone()]),
+            &[assign("x", var("a"))],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("x"), LatticeTy::known(Type::F64));
+    }
+
     /// 字典字面量：键 Str 保 Str 否则 I64；值同型⇒该型、混型⇒PyDynamic、
     /// 空⇒map[I64,I64]（对齐 gen/call_dict.rs 缺省，批 933）。
     #[test]
