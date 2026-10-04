@@ -5581,6 +5581,7 @@ fn shim_class_normalize(t: &Type) -> Type {
                 let ev0 = crate::middle::checker::collect_param_evidence(
                     &self.registered_funcs,
                     None,
+                    None,
                 );
                 let body_rets = crate::middle::checker::collect_module_body_rets(
                     &self.registered_funcs,
@@ -5589,9 +5590,40 @@ fn shim_class_normalize(t: &Type) -> Type {
                     &self.type_decls,
                     &self.module_globals.borrow(),
                 );
+                // 批 937 三跳：先给每个函数推断一轮缓存 env，
+                // Var 实参的证据查调用函数自己的槽型。
+                let mut lookup = body_rets.clone();
+                for (k, v) in ret_map.iter() {
+                    lookup.entry(k.clone()).or_insert(v.clone());
+                }
+                let ev_ctx = crate::middle::checker::InferCtx {
+                    ret_types: &lookup,
+                    type_decls: &self.type_decls,
+                    module_globals: &self.module_globals.borrow(),
+                };
+                let mut env_cache: std::collections::HashMap<
+                    String,
+                    crate::middle::checker::TypeEnv,
+                > = std::collections::HashMap::new();
+                for (fname, fdef) in self.registered_funcs.iter() {
+                    if let AstNode::FuncDef { params, body, .. } = fdef {
+                        let mut fenv = crate::middle::checker::TypeEnv::new();
+                        let f_ev = ev0.get(fname).map(|v| v.as_slice());
+                        crate::middle::checker::infer_fn_body_full(
+                            &mut fenv,
+                            fname,
+                            params,
+                            f_ev,
+                            body,
+                            &ev_ctx,
+                        );
+                        env_cache.insert(fname.clone(), fenv);
+                    }
+                }
                 let evidence = crate::middle::checker::collect_param_evidence(
                     &self.registered_funcs,
                     Some(&body_rets),
+                    Some(&env_cache),
                 );
                 let mut ret_map_full = ret_map;
                 for (k, v) in body_rets {

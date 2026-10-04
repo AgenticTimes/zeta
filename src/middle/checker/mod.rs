@@ -107,6 +107,7 @@ pub fn infer_fn_body_full(
 pub fn collect_param_evidence(
     funcs: &HashMap<String, AstNode>,
     body_rets: Option<&HashMap<String, Type>>,
+    envs: Option<&HashMap<String, TypeEnv>>,
 ) -> HashMap<String, Vec<Option<Type>>> {
     // fn 名 → (候选列表, 冲突位列表)。冲突位单独记账：置 None 的候选
     // 不能被后续一致调用重新填充（None 兼"无证据"与"冲突"两义会漏记）。
@@ -135,6 +136,11 @@ pub fn collect_param_evidence(
                                 vec![false; args.len().max(1)],
                             )
                         });
+                    // 当前函数名（Var 实参查调用函数自己的槽型，批 937）
+                    let caller_name = match def {
+                        AstNode::FuncDef { name, .. } => name.as_str(),
+                        _ => "",
+                    };
                     for (i, a) in args.iter().enumerate() {
                         if i >= slot.len() {
                             continue;
@@ -142,9 +148,9 @@ pub fn collect_param_evidence(
                         if conflicted[i] {
                             continue;
                         }
-                        // 字面量优先；否则调用表达式 ⇒ body_rets 查返回型
-                        //（批 936 二跳：show(get_data()) 的 data 位吃
-                        // get_data 的 body 返回型）
+                        // 字面量优先；调用表达式 ⇒ body_rets 查返回型
+                        //（批 936 二跳）；变量 ⇒ 调用函数推断后的槽型
+                        //（批 937 三跳）
                         let lit = constraint::literal_lattice(a)
                             .and_then(|l| l.known_ty())
                             .or_else(|| {
@@ -156,6 +162,22 @@ pub fn collect_param_evidence(
                                 ) = (a, body_rets)
                                 {
                                     br.get(method).cloned()
+                                } else {
+                                    None
+                                }
+                            })
+                            .or_else(|| {
+                                if let (
+                                    AstNode::Var(vn),
+                                    Some(env_map),
+                                ) = (a, envs)
+                                {
+                                    env_map
+                                        .get(caller_name)
+                                        .and_then(|env| {
+                                            env.get_slot(vn.as_str())
+                                                .known_ty()
+                                        })
                                 } else {
                                     None
                                 }
@@ -1484,14 +1506,14 @@ mod tests {
         );
         registered.insert("caller2".to_string(), caller2);
 
-        let ev = collect_param_evidence(&registered, None);
+        let ev = collect_param_evidence(&registered, None, None);
         let ev_g = ev.get("g").expect("g 的证据应存在");
         assert_eq!(ev_g[0], None, "a 位 F64/I64 冲突 ⇒ 放弃");
 
         // 只留一致调用点再验：a 位 F64、b 位 Str
         let mut registered2 = registered.clone();
         registered2.remove("caller2");
-        let ev2 = collect_param_evidence(&registered2, None);
+        let ev2 = collect_param_evidence(&registered2, None, None);
         let ev2_g = ev2.get("g").expect("g 证据");
         assert_eq!(ev2_g[0], Some(Type::F64));
         assert_eq!(ev2_g[1], Some(Type::Str));
@@ -1582,7 +1604,7 @@ mod tests {
         registered.insert("show".to_string(), show);
         registered.insert("caller".to_string(), caller);
 
-        let ev0 = collect_param_evidence(&registered, None);
+        let ev0 = collect_param_evidence(&registered, None, None);
         let body_rets = collect_module_body_rets(
             &registered,
             &ev0,
@@ -1594,7 +1616,108 @@ mod tests {
             body_rets.get("get_data"),
             Some(&Type::DynamicArray(Box::new(Type::F64)))
         );
-        let ev1 = collect_param_evidence(&registered, Some(&body_rets));
+        let ev1 = collect_param_evidence(&registered, Some(&body_rets), None);
+        let ev_show = ev1.get("show").expect("show 证据");
+        assert_eq!(
+            ev_show[0],
+            Some(Type::DynamicArray(Box::new(Type::F64)))
+        );
+    }
+
+    /// 跨函数三跳：实参为变量 ⇒ 查调用函数推断后的槽型（批 937）。
+    #[test]
+    fn call_arg_evidence_via_caller_envs() {
+        let mk_def = |name: &str, params: Vec<(String, String)>, body: Vec<AstNode>| {
+            AstNode::FuncDef {
+                name: name.to_string(),
+                generics: vec![],
+                lifetimes: vec![],
+                params,
+                ret: String::new(),
+                body,
+                attrs: vec![],
+                ret_expr: None,
+                single_line: true,
+                doc: String::new(),
+                pub_: false,
+                async_: false,
+                const_: false,
+                comptime_: false,
+                where_clauses: vec![],
+            }
+        };
+        let get_data = mk_def(
+            "get_data",
+            vec![],
+            vec![AstNode::Return(Box::new(AstNode::ArrayLit(vec![
+                AstNode::FloatLit("1.0".to_string()),
+                AstNode::FloatLit("2.0".to_string()),
+            ])))],
+        );
+        let show = mk_def(
+            "show",
+            vec![("data".to_string(), String::new())],
+            vec![AstNode::ExprStmt {
+                expr: Box::new(AstNode::Lit(0)),
+            }],
+        );
+        // def caller(): xs = get_data(); show(xs)
+        let caller = mk_def(
+            "caller",
+            vec![],
+            vec![
+                assign("xs", AstNode::Call {
+                    receiver: None,
+                    method: "get_data".to_string(),
+                    args: vec![],
+                    type_args: vec![],
+                    structural: false,
+                }),
+                AstNode::ExprStmt {
+                    expr: Box::new(AstNode::Call {
+                        receiver: None,
+                        method: "show".to_string(),
+                        args: vec![var("xs")],
+                        type_args: vec![],
+                        structural: false,
+                    }),
+                },
+            ],
+        );
+        let mut registered = HashMap::new();
+        registered.insert("get_data".to_string(), get_data);
+        registered.insert("show".to_string(), show);
+        registered.insert("caller".to_string(), caller);
+
+        // 轮 1：字面量证据 → body_rets
+        let ev0 = collect_param_evidence(&registered, None, None);
+        let body_rets = collect_module_body_rets(
+            &registered,
+            &ev0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &Default::default(),
+        );
+        // 轮 2：每函数推断缓存 env（用 ev0；ctx 的查表并入 body_rets 后略——
+        // 本测试 xs 的型走 ret_types 查表，需把 body_rets 并进查表表）
+        let mut lookup = body_rets.clone();
+        let ctx = InferCtx {
+            ret_types: &lookup,
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        let mut envs: HashMap<String, TypeEnv> = HashMap::new();
+        for (name, def) in &registered {
+            if let AstNode::FuncDef { params, body, .. } = def {
+                let mut env = TypeEnv::new();
+                let ev_fn = ev0.get(name);
+                let ev_slice = ev_fn.map(|v| v.as_slice());
+                infer_fn_body_full(&mut env, name, params, ev_slice, body, &ctx);
+                envs.insert(name.clone(), env);
+            }
+        }
+        // 轮 3：带 envs 的证据
+        let ev1 = collect_param_evidence(&registered, Some(&body_rets), Some(&envs));
         let ev_show = ev1.get("show").expect("show 证据");
         assert_eq!(
             ev_show[0],
