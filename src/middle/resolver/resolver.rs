@@ -5580,11 +5580,20 @@ fn shim_class_normalize(t: &Type) -> Type {
                         type_decls: &self.type_decls,
                         module_globals: &self.module_globals.borrow(),
                     };
-                    let fn_name = match ast {
-                        AstNode::FuncDef { name, .. } => name.as_str(),
-                        _ => "",
+                    // 批 931：参数注解先 meet 到参数槽（体内传播的源头）。
+                    let (fn_name, fn_params) = match ast {
+                        AstNode::FuncDef { name, params, .. } => {
+                            (name.as_str(), params.clone())
+                        }
+                        _ => ("", Vec::new()),
                     };
-                    crate::middle::checker::infer_fn_body(&mut env, fn_name, body, &ctx);
+                    crate::middle::checker::infer_fn_body_with_params(
+                        &mut env,
+                        fn_name,
+                        &fn_params,
+                        body,
+                        &ctx,
+                    );
                 }
                 env
             })

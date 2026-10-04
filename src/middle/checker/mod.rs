@@ -62,6 +62,26 @@ pub struct InferCtx<'a> {
 /// 批 918 扩展：Return 语句收集→fn_rets（P4 回灌替换的前提）。
 /// 批 920 扩展：collect_fn_ret 递归收集＋变量槽／调用返回型。
 pub fn infer_fn_body(env: &mut TypeEnv, fn_name: &str, body: &[AstNode], ctx: &InferCtx) {
+    infer_fn_body_with_params(env, fn_name, &[], body, ctx);
+}
+
+/// 带参数注解版（批 931）：注解非空的参数先 meet 到参数槽，再扫函数体。
+/// 参数槽已知后，体内的赋值边/二元运算/method_ret 查表都能吃到参数型
+/// （checker_env 下游 mean 臂等消费点的真实增益面）。
+pub fn infer_fn_body_with_params(
+    env: &mut TypeEnv,
+    fn_name: &str,
+    params: &[(String, String)],
+    body: &[AstNode],
+    ctx: &InferCtx,
+) {
+    for (pname, anno) in params {
+        if !anno.is_empty() {
+            if let Some(lat) = constraint::annotation_lattice(anno) {
+                env.meet_slot(pname.as_str(), lat);
+            }
+        }
+    }
     scan_stmts(env, body, ctx);
     // Return 语句收集→fn_rets（批 918：P4 回灌替换的前提）
     collect_fn_ret(env, fn_name, body, ctx);
@@ -1252,6 +1272,31 @@ mod tests {
             &ctx,
         );
         assert_eq!(env.get_slot("last"), LatticeTy::known(Type::Str));
+    }
+
+    /// 函数参数注解 ⇒ 参数槽型（批 931）；无注解参数不动。
+    #[test]
+    fn param_annotations_types_slots() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        let params = vec![
+            ("data".to_string(), "f64".to_string()),
+            ("n".to_string(), String::new()),
+        ];
+        infer_fn_body_with_params(
+            &mut env,
+            "f",
+            &params,
+            &[assign("x", var("data"))],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("data"), LatticeTy::known(Type::F64));
+        assert_eq!(env.get_slot("x"), LatticeTy::known(Type::F64));
+        assert_eq!(env.get_slot("n"), LatticeTy::Unknown);
     }
 
     /// 方法调用 method_ret 查表：接收者 Named(tag) ⇒ 表列返回型
