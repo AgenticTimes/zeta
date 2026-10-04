@@ -29141,3 +29141,23 @@ call_dispatch 5889→5803（-86）；call_getattr.rs 新增 133 行。
 **验证**：编译零错误；内置单元测试 158/158；getattr 探针全对齐；
 历史探针七套两轮零差异；全量差分（--group 50）match=2845/2845＝100%；
 python_style 479/0。
+
+## 批次 901（2026-10-04，**重构批：轴 F 第二片——map/dict 比较收敛 is_map()（9/17 落地，余 8 处登记）**）
+
+轴 F 实施第二片（接 896 的 I64 兜底收口、897 的 is_map 首批）。幻影型证据
+闭环后（898：三条产型路径全归一，Named("dict") 不可达），map-only 位点的
+is_map 转换**可证行为中立**。本批落地 9 处：
+- 单型 matches! 面 5 处（gen/call_print 143、call_flow 170、call_dispatch
+  1996/3724/3508 等）→ `.map_or(false, Type::is_map)`；
+- params 组合面 4 处（gen.rs 2528、call_dispatch 2236、call_print 240、
+  call_fstring 45——str-key 渲染判定）→ `ty.is_map() && matches!(ty,
+  Type::Named(_, params) if ...)`（ty 借用绑定，保 params 访问）。
+未转 8 处登记：gen.rs 341（map 与 String 同列的 ABI 通道判定——String 非
+拼写变体，是有意同列）；call_dispatch 4357（closure 内 is_str||is_map 组合，
+转 is_map 需重排闭包，语义相同留待 checker 本体）；三way 面（binary 847/851、
+subscript 475——map/dict/set、map/dict/dict_like 另族）。
+过程事故两次（正则批量替换的畸形产物：残留逗号括号、matches! 包裹 map_or）
+均编译期当场暴露并修复——**批量文本替换禁用于多行宏/闭包现场**。
+
+**验证**：编译零错误；内置单元测试 158/158；历史探针七套两轮零差异；
+全量差分（--group 50）match=2845/2845＝100%；python_style 479/0。

@@ -138,10 +138,11 @@ pub(super) fn emit_tagged_print(&mut self, arg_id: u32, tag_slot: u32, is_last: 
                     {
                         if m == "get" && gargs.len() == 2 {
                             let recv_id = self.lower_expr(recv);
-                            let recv_is_map = matches!(
-                                self.type_map.get(&recv_id),
-                                Some(Type::Named(n, _)) if n == "map"
-                            );
+                            // 批次 901：收敛到 is_map 唯一判定（Named("dict") 幻影型已证）。
+                            let recv_is_map = self
+                                .type_map
+                                .get(&recv_id)
+                                .map_or(false, Type::is_map);
                             if recv_is_map {
                                 let k_id = self.lower_expr(&gargs[0]);
                                 // Key normalization — the WRITE side
@@ -234,15 +235,15 @@ pub(super) fn emit_tagged_print(&mut self, arg_id: u32, tag_slot: u32, is_last: 
                             self.name_to_id
                                 .get(vname.as_str())
                                 .map_or(false, |&sid| {
-                                    matches!(
-                                        self.type_map.get(&sid),
-                                        Some(Type::Named(n, params))
-                                            if n == "map"
-                                                && matches!(
-                                                    params.last(),
-                                                    Some(Type::Str)
-                                                )
-                                    )
+                                    self.type_map.get(&sid).map_or(false, |ty| {
+                                        // 批次 901（轴 F）：收敛到 is_map 唯一判定。
+                                        ty.is_map()
+                                            && matches!(
+                                                ty,
+                                                Type::Named(_, params)
+                                                    if matches!(params.last(), Some(Type::Str))
+                                            )
+                                    })
                                 })
                         } else {
                             false

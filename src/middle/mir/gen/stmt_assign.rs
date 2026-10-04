@@ -314,7 +314,7 @@ impl MirGen {
                 // `d[k] = v` on a dict/Counter: a map insert, keyed by the
                 // content hash (the index was already lowered through
                 // lower_map_key for map literals; do the same here).
-                if matches!(&base_ty, Type::Named(n, _) if n == "map") {
+                if base_ty.is_map() {
                     // 批次146: hash by the MAP's declared key type (same as
                     // the expression path) — a param-typed key used to be
                     // pointer-hashed and never matched.

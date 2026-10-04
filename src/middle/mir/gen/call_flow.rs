@@ -165,10 +165,9 @@ impl MirGen {
                                 ]))),
                             );
                             pid
-                        } else if matches!(
-                            self.type_map.get(&raw_id),
-                            Some(Type::Named(n, _)) if n == "map"
-                        ) {
+                        }
+                        // 批次 901：收敛到 is_map 唯一判定（Named("dict") 幻影型已证）。
+                        else if self.type_map.get(&raw_id).map_or(false, Type::is_map) {
                             let kid = self.next_id();
                             self.stmts.push(MirStmt::Call {
                                 func: "map_keys".to_string(),

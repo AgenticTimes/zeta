@@ -39,12 +39,15 @@ impl MirGen {
                         self.name_to_id
                             .get(vname.as_str())
                             .map_or(false, |&sid| {
-                                matches!(
-                                    self.type_map.get(&sid),
-                                    Some(Type::Named(n, params))
-                                        if n == "map"
-                                            && matches!(params.last(), Some(Type::Str))
-                                )
+                                self.type_map.get(&sid).map_or(false, |ty| {
+                                    // 批次 901（轴 F）：收敛到 is_map 唯一判定。
+                                    ty.is_map()
+                                        && matches!(
+                                            ty,
+                                            Type::Named(_, params)
+                                                if matches!(params.last(), Some(Type::Str))
+                                        )
+                                })
                             })
                     } else {
                         false

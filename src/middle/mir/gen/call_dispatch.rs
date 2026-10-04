@@ -1993,7 +1993,7 @@ call, no NULL-handle dereference).",
                 let len_func = match self.type_map.get(&a).cloned() {
                     Some(Type::DynamicArray(_)) | Some(Type::Array(_, _)) => Some("array_len"),
                     Some(Type::Str) => Some("str_len"),
-                    Some(Type::Named(n, _)) if n == "map" => Some("zeta_map_len"),
+                    Some(ty) if ty.is_map() => Some("zeta_map_len"),
                     _ => None,
                 };
                 let lhs = if let Some(f) = len_func {
@@ -2230,12 +2230,14 @@ call, no NULL-handle dereference).",
                         let mapsub_render = |g: &mut Self, b: &AstNode, k: &AstNode| -> Option<u32> {
                             let is_map_str = if let AstNode::Var(vname) = b {
                                 g.name_to_id.get(vname.as_str()).map_or(false, |&sid| {
-                                    matches!(
-                                        g.type_map.get(&sid),
-                                        Some(Type::Named(n, params))
-                                            if n == "map"
-                                                && matches!(params.last(), Some(Type::Str))
-                                    )
+                                    g.type_map.get(&sid).map_or(false, |ty| {
+                                        ty.is_map()
+                                            && matches!(
+                                                ty,
+                                                Type::Named(_, params)
+                                                    if matches!(params.last(), Some(Type::Str))
+                                            )
+                                    })
                                 })
                             } else {
                                 false
@@ -3505,7 +3507,7 @@ call, no NULL-handle dereference).",
                 let src_ty = self.source_types.get(&arg_ids[0]).cloned().unwrap_or_default();
                 let is_map = receiver_ty
                     .as_ref()
-                    .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
+                    .map_or(false, Type::is_map)
                     || src_ty.starts_with("map<");
                 if is_str && arg_ids.len() == 2 {
                     self.stmts.push(MirStmt::Call {
@@ -3721,7 +3723,7 @@ call, no NULL-handle dereference).",
             // branch rather than the handle-method dispatch.
             if receiver_ty
                 .as_ref()
-                .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
+                .map_or(false, Type::is_map)
             {
                 let func = match (method.as_str(), args.len()) {
                     ("keys", 0) => Some("map_keys"),
@@ -4235,7 +4237,7 @@ call, no NULL-handle dereference).",
                 && method == "get"
                 && arg_ids.len() == 2
                 && matches!(self.type_map.get(&arg_ids[1]), Some(Type::Str))
-                && !matches!(receiver_ty.as_ref(), Some(Type::Named(n, _)) if n == "map")
+                && !receiver_ty.as_ref().map_or(false, |ty| ty.is_map())
             {
                 let key_id = self.lower_map_key(arg_ids[1]);
                 self.stmts.push(MirStmt::DictGet {
@@ -4266,7 +4268,7 @@ call, no NULL-handle dereference).",
                 && method == "get"
                 && arg_ids.len() == 3
                 && matches!(self.type_map.get(&arg_ids[1]), Some(Type::Str))
-                && !matches!(receiver_ty.as_ref(), Some(Type::Named(n, _)) if n == "map")
+                && !receiver_ty.as_ref().map_or(false, |ty| ty.is_map())
             {
                 let key_id = self.lower_map_key(arg_ids[1]);
                 /* Batch 646: when the default is a STRING (the union
@@ -4630,7 +4632,7 @@ call, no NULL-handle dereference).",
             if method == "get"
                 && receiver_ty
                     .as_ref()
-                    .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
+                    .map_or(false, Type::is_map)
                 && arg_ids.len() == 2
             {
                 // Same codegen path as d[k] subscripting (DictGet)
@@ -4648,7 +4650,7 @@ call, no NULL-handle dereference).",
             if method == "get"
                 && receiver_ty
                     .as_ref()
-                    .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
+                    .map_or(false, Type::is_map)
                 && arg_ids.len() == 3
             {
                 /* Batch 646: an ERASED map value type (I64/PyDynamic)
@@ -4715,7 +4717,7 @@ call, no NULL-handle dereference).",
             // bare externs (`_update`/`_pop`/`_clear`) and failed to link.
             if receiver_ty
                 .as_ref()
-                .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "map"))
+                .map_or(false, Type::is_map)
             {
                 // Batch 568b: `d = {}` then `d.setdefault("k", "v")` — the
                 // empty literal carries NO value type, so d["k"] rendered
