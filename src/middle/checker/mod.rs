@@ -60,24 +60,73 @@ pub struct InferCtx<'a> {
 
 /// 单函数体内的递归扫描＋约束传播（批 915 重构：递归进 If/Loop 等嵌套块）。
 /// 批 918 扩展：Return 语句收集→fn_rets（P4 回灌替换的前提）。
+/// 批 920 扩展：collect_fn_ret 递归收集＋变量槽／调用返回型。
 pub fn infer_fn_body(env: &mut TypeEnv, fn_name: &str, body: &[AstNode], ctx: &InferCtx) {
     scan_stmts(env, body, ctx);
     // Return 语句收集→fn_rets（批 918：P4 回灌替换的前提）
-    collect_fn_ret(env, fn_name, body);
+    collect_fn_ret(env, fn_name, body, ctx);
 }
 
-/// 从函数体的 Return 语句推断返回型，记入 fn_rets。
-fn collect_fn_ret(env: &mut TypeEnv, fn_name: &str, body: &[AstNode]) {
-    for stmt in body {
-        if let AstNode::Return(e) = stmt {
-            if let Some(lat) = constraint::literal_lattice(e) {
-                if let Some(ty) = lat.known_ty() {
-                    env.fn_rets.insert(fn_name.to_string(), ty);
-                }
+/// 从函数体收集全部 Return（含嵌套块）并推断返回型，记入 fn_rets。
+/// 多个 return 全部已知且一致才记入；互相冲突则保守不记（宁缺勿错）。
+fn collect_fn_ret(env: &mut TypeEnv, fn_name: &str, body: &[AstNode], ctx: &InferCtx) {
+    let mut rets: Vec<&AstNode> = Vec::new();
+    collect_returns(body, &mut rets);
+    let mut known: Option<Type> = None;
+    for e in &rets {
+        if let Some(ty) = ret_expr_ty(e, env, ctx) {
+            match &known {
+                None => known = Some(ty),
+                Some(prev) if *prev == ty => {}
+                // 已知型互相冲突 ⇒ 放弃记录
+                Some(_) => return,
             }
-            return;
         }
     }
+    if let Some(ty) = known {
+        env.fn_rets.insert(fn_name.to_string(), ty);
+    }
+}
+
+/// 递归收集函数体里所有 Return 的返回表达式。
+fn collect_returns<'a>(body: &'a [AstNode], out: &mut Vec<&'a AstNode>) {
+    for stmt in body {
+        match stmt {
+            AstNode::Return(e) => out.push(e),
+            AstNode::If { then, else_, .. } => {
+                collect_returns(then, out);
+                collect_returns(else_, out);
+            }
+            AstNode::Loop { body } => collect_returns(body, out),
+            AstNode::While { body, else_body, .. } => {
+                collect_returns(body, out);
+                collect_returns(else_body, out);
+            }
+            AstNode::For { body, else_body, .. } => {
+                collect_returns(body, out);
+                collect_returns(else_body, out);
+            }
+            AstNode::Unsafe { body } => collect_returns(body, out),
+            _ => {}
+        }
+    }
+}
+
+/// 单个 return 表达式的型：字面量／已知槽变量／ret_types 查表。
+fn ret_expr_ty(e: &AstNode, env: &TypeEnv, ctx: &InferCtx) -> Option<Type> {
+    if let Some(lat) = constraint::literal_lattice(e) {
+        return lat.known_ty();
+    }
+    if let AstNode::Var(name) = e {
+        if let LatticeTy::Known(ty) = env.get_slot(name) {
+            return Some(ty);
+        }
+        return None;
+    }
+    if let AstNode::Call { method, .. } = e {
+        return ctx.ret_types.get(method).cloned();
+    }
+    None
 }
 
 fn scan_stmts(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
@@ -502,5 +551,95 @@ mod tests {
         );
         assert_eq!(env.get_slot("n"), LatticeTy::known(Type::I64));
         assert_eq!(env.get_slot("m"), LatticeTy::known(Type::F64));
+    }
+
+    /// return 变量：槽已知 ⇒ fn_rets 记入该型（批 920）。
+    #[test]
+    fn return_var_types_fn() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[
+                assign("x", AstNode::Lit(5)),
+                AstNode::Return(Box::new(var("x"))),
+            ],
+            &ctx,
+        );
+        assert_eq!(env.fn_rets.get("test_fn"), Some(&Type::I64));
+    }
+
+    /// 多个 return 一致 ⇒ 记入；不一致 ⇒ 不记（保守，批 920）。
+    #[test]
+    fn multiple_returns_agree_then_record() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[
+                AstNode::If {
+                    cond: Box::new(AstNode::Lit(1)),
+                    then: vec![AstNode::Return(Box::new(AstNode::Lit(1)))],
+                    else_: vec![],
+                },
+                AstNode::Return(Box::new(AstNode::Lit(2))),
+            ],
+            &ctx,
+        );
+        assert_eq!(env.fn_rets.get("test_fn"), Some(&Type::I64));
+    }
+
+    #[test]
+    fn multiple_returns_conflict_skip() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[
+                AstNode::If {
+                    cond: Box::new(AstNode::Lit(1)),
+                    then: vec![AstNode::Return(Box::new(AstNode::Lit(1)))],
+                    else_: vec![],
+                },
+                AstNode::Return(Box::new(AstNode::StringLit("s".to_string()))),
+            ],
+            &ctx,
+        );
+        assert_eq!(env.fn_rets.get("test_fn"), None);
+    }
+
+    /// return 调用：ret_types 有 ⇒ 传播进 fn_rets（批 920）。
+    #[test]
+    fn return_call_types_fn() {
+        let mut env = TypeEnv::new();
+        let mut rets = HashMap::new();
+        rets.insert("get_data".to_string(), Type::F64);
+        let ctx = InferCtx {
+            ret_types: &rets,
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[AstNode::Return(Box::new(call("get_data", vec![])))],
+            &ctx,
+        );
+        assert_eq!(env.fn_rets.get("test_fn"), Some(&Type::F64));
     }
 }
