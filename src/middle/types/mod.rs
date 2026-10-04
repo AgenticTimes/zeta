@@ -294,6 +294,13 @@ impl Type {
         matches!(self, Type::Named(n, _) if n == "map" || n == "dict")
     }
 
+    /// 批次 903（轴 F kind 3）：这个类型是不是 NoneValue 标记（`v = f()`、
+    /// f 纯 None 返回、fromkeys None 等"值对类型丢"的空值携带面——804/806/808
+    /// 系列的判定位收拢成有名字的合同）。
+    pub fn is_none_value(&self) -> bool {
+        matches!(self, Type::Named(n, _) if n == "NoneValue")
+    }
+
     /// 字典的键/值类型（`map<K, V>`；缺省槽按 I64，与既有读边界约定一致）。
     pub fn map_kv(&self) -> Option<(Type, Type)> {
         match self {

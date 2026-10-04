@@ -29182,3 +29182,17 @@ subscript 475——map/dict/set、map/dict/dict_like 另族）。
 **验证**：编译零错误；内置单元测试 158/158；历史探针七套零差异；
 全量差分（--group 50）match=2845/2845＝100%；python_style 479/0；
 t10002 钉 PASS。
+
+## 批次 903（2026-10-04，**重构批：轴 F kind 3——NoneValue 判定收敛 is_none_value() 唯一入口**）
+
+轴 F 判断点收敛续片（kind 5→896、kind 2→897/901/902、kind 3→本批）。
+types/mod.rs 加命名合同 `is_none_value()`（is_map 同款，位于其紧邻）；
+call_print 两处同型的"槽型是否 NoneValue"判定（806 携带读面＋804 fromkeys 面）
+转换到唯一入口。kind 3 的其余引用为**生产者**（call_dict 116 的型构造、
+call_dispatch 2072/2112 的元组元素型、resolver 1751）——生产者不属于判定
+收敛范围（它们定义型，不判定型）。NoneLit 的 AST 模式匹配 7 处属 AST 层
+（节点形状匹配，非型判定），归 checker 本体（F.2）设计范围。
+
+**验证**：编译零错误；内置单元测试 158/158；None 三面探针（纯 None 返回/
+带标签打印/fromkeys）全对齐 CPython；历史探针七套零差异；全量差分
+（--group 50）match=2845/2845＝100%；python_style 479/0。

@@ -426,8 +426,11 @@ pub(super) fn emit_tagged_print(&mut self, arg_id: u32, tag_slot: u32, is_last: 
                             // 型（`v = f()`，f 纯 None 返回）——按型渲染，
                             // 与非 Var 实参的 804 臂同款。
                             let aid = self.lower_expr(a);
-                            if matches!(self.type_map.get(&aid),
-                                Some(Type::Named(n, _)) if n == "NoneValue")
+                            // 批次 903（轴 F kind 3）：收敛到 is_none_value 唯一判定。
+                            if self
+                                .type_map
+                                .get(&aid)
+                                .map_or(false, Type::is_none_value)
                             {
                                 let nid = self.next_id();
                                 self.exprs
@@ -444,8 +447,11 @@ pub(super) fn emit_tagged_print(&mut self, arg_id: u32, tag_slot: u32, is_last: 
                         // 读——按型渲染 "None"（654 NoneVar 按名渲染的按型
                         // 同款；fromkeys None 结果型 map[K, NoneValue] 让
                         // d["k"] 读带上该型）。
-                        if matches!(self.type_map.get(&aid),
-                            Some(Type::Named(n, _)) if n == "NoneValue")
+                        // 批次 903（轴 F kind 3）：同上收敛。
+                        if self
+                            .type_map
+                            .get(&aid)
+                            .map_or(false, Type::is_none_value)
                         {
                             let nid = self.next_id();
                             self.exprs
