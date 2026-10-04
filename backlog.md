@@ -435,6 +435,29 @@
 >   `tests/regression_history.rs` 那两条现状锁要重取真值。
 >   检查节奏：改到 `src/middle/**`（只有测试模块）⇒ crate 内单元测试 144/144 绿＋编译零错误；
 >   `tests/regression_history.rs` 55/55 绿。
+> - 批次 10033（代码笔 `362b61c6`）＝来源批次 153（`2ed6da43`，类字段 `self.m = {}` 被推成 `i64`）：
+>   本套 **56 条全绿**，另在 `types/mod.rs` 的 `#[cfg(test)]` 补 1 条直接单元测试
+>   `from_string_normalizes_dict_spelling_to_map`（crate 内 **145 条绿**，原 144）。MIR 那条锁三格＝
+>   构造段 `MapNew` 的目的槽 `Named("map", …)`、`probe` 段的 map 成员判定（实测全名 `py_map_contains`）、
+>   `main` 段有 `map_values` 且无裸 `_values`。三侧真值＝CPython 与 AOT 二进制都打 `hit / miss / 1 / 1`
+>   rc=0，MIR 面同那三格。
+>   两组变异（还原源＝`git show HEAD:<路径>`，锚点次数＝1，变异后 md5≠还原态，还原后 md5＝HEAD）：
+>   移除 `types/mod.rs:323` 的 `"dict" => Named("map", [])` ⇒ 红 `:2385`（变异态打 `:2384`），
+>   左 `Named("dict", [])` ≠ 右 `Named("map", [])`；把 `:703` 的比较对象改成永不命中的串 ⇒ 红 `:2387`，
+>   左 `Named("dict", [Str, Str])` ≠ 右 `Named("map", [Str, Str])`。**两支红在同一条测试的不同断言行、
+>   红值不同形⇒两处独立覆盖**；一次性探针另证：只移除 `:323` 时尖括号那格仍绿（145 条里 1 绿）
+>   ⇒两格各归各的分支。历史用例套件在两支变异下 56 条一字不变＝**阴性**（夹具的槽位来自
+>   字段推断＝153 第①步，不经过 `from_string` 的 `dict` 拼写分支；原因按修法结构推断，未逐行实测）。
+>   新登记的未修项（按登记规则 2 记在本条余项内、未占新号）：`Type::from_string` 的泛型分支只扫
+>   尖括号，Python 方括号拼写 `dict[K, V]`／`dict[str, str]`／`map[str, str]` 三条串全落 `Named(整串)`；
+>   真实注解路径实测仍得到 `Named("map", [Str, Str])`（`--dump-mir` 打 `UA: dict[str, str] = {…}`
+>   的 4／8／18 号槽）⇒方括号拼写在管线上是否有害未证。
+>   仍未锁的：① 153 的第一处站点 `top_level.rs` 字段推断＝本车道在制文件（批次 745 的未提交改动
+>   挂着它），本批不改、不做变异⇒MIR 那条用例对它只是现状锁；② `.get` 那一格本批只断言
+>   "有 `map_values`／无裸 `_values`"，`.get` 实测展开成 `map_str_key`＋`py_map_contains`＋两条
+>   `println_i64` 分支，未对它的调用名单独断言；③ 方括号拼写的管线影响面未证。
+>   检查节奏：改到 `src/middle/**`（只有测试模块）⇒ crate 内单元测试 145/145 绿＋编译零错误；
+>   `tests/regression_history.rs` 56/56 绿。
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚

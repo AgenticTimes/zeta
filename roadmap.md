@@ -27564,3 +27564,59 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
   `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
   两本台账，**连续三十一批**）；待补台账行的文字写进本批记录笔的提交信息。
+
+## 批次 10033（cleanup）——#20005 第二十二批：把主树批次 153 的字典字段推型做成编译期单元测试
+
+- 来源＝主树批次 153（提交 `2ed6da43`）。缺陷原文：`parse_class` 的字段类型推断只认整数
+  字面量／bool／浮点／字符串／数组五形，`DictLit`（字典字面量）落到兜底 `i64` ⇒ 字段上的
+  map 操作全部失配：`.get`／`.values` 发裸符号（链接期找不到符号）、`k in self.m` **恒返回 0**
+  （不报错的静默错值）。修法两步＝①`src/frontend/parser/top_level.rs` 的字段推断补
+  `AstNode::DictLit { .. } => "map"`；②`src/middle/types/mod.rs` 的 `Type::from_string` 把
+  `dict` 拼写归一化成 `map`（所有 map 消费点按名字 `"map"` 分派）。
+- 落地（代码笔 `362b61c6`）：`tests/regression_history.rs` 新增 1 条
+  `dict_field_literal_init_reaches_map_slots`（三格断言）；`src/middle/types/mod.rs` 的
+  `#[cfg(test)]` 新增 1 条 `from_string_normalizes_dict_spelling_to_map`（两格断言）。
+- 三侧真值（本批实测，`/tmp/b10033/d153_cpy.py`／`target/tmp_b10033/d153.bin`）：CPython 打
+  `hit / miss / 1 / 1`、rc=0；AOT 二进制同四行、rc=0；MIR 面三格＝构造段 `MapNew` 的目的槽
+  `Named("map", …)`、`probe` 段发 map 成员判定、`main` 段发 `map_values` 且没有裸 `_values`。
+  CLI `--dump-mir` 的调用名实测清单（`/tmp/b10033/d153.mir2`，1066 行）＝`map_str_key`×8、
+  `py_map_contains`×4、`map_values`×1、`vec_len`×1、`println_str`×6、`println_i64`×3，
+  裸 `_get`／`_values`／`_contains` 计数 0。用例②的断言写作"包含 `map_contains`"，
+  实测命中的全名是 `py_map_contains`。
+- 套件读数：`cargo test --test regression_history` **56 条全绿**（0.39—4.29 秒，冷构建那趟慢）；
+  `cargo test -p zetac --lib` **145 条全绿**（0.36—0.51 秒，原 144）。
+- 变异矩阵（每支单独移除／替换，还原源＝`git show HEAD:src/middle/types/mod.rs`，落盘前断言
+  锚点次数＝1，变异后 md5≠还原态，还原后 md5＝HEAD）：
+
+  | 移除的分支 | crate 内单元测试 | 历史用例套件 | 红点与红值 |
+  |---|---|---|---|
+  | `types/mod.rs:323` `"dict" => Named("map", [])` | 1 红／144 绿 | 56 绿不变（阴性） | `:2385`（变异态打 `:2384`）左 `Named("dict", [])` ≠ 右 `Named("map", [])` |
+  | `types/mod.rs:703` 泛型名比较 `== "dict"` | 1 红／144 绿 | 56 绿不变（阴性） | `:2387`（替换不删行⇒变异态同行）左 `Named("dict", [Str, Str])` ≠ 右 `Named("map", [Str, Str])` |
+
+  两支红在**同一条测试的不同断言行、红值不同形**⇒按车道口径算两处独立覆盖（与 10028 的
+  "两支红在同一断言同一读数＝一条链"相反）。另用一次性探针（未提交）实测：只移除 `:323` 时
+  `from_string("dict<str, str>")` 仍返回 `Named("map", [Str, Str])`（145 条里 1 绿）
+  ⇒尖括号那一格不依赖 `:323`，两格各归各的分支。变异态 md5＝`961e7679…`／`5c4de745…`，
+  还原后 md5＝`4fb9d46e…`；还原后只改过断言之后的注释三行，两处断言行号复测仍是
+  `:2385`／`:2387`（复测命令＝`grep -n 'Type::from_string("dict'`＋单条测试绿）。
+- 本批新登记的未修项（按登记规则 2"新增一项必须同时关闭一项或经批准扩容"，本条记在
+  #20005 余项内、**未占新号**）：`Type::from_string` 的泛型分支只扫尖括号 `<…>`，Python 方括号
+  拼写实测不归一化——`dict[str,str]`／`dict[str, str]`／`map[str, str]` 三条串全落 `Named(整串)`。
+  影响面：真实注解路径实测仍得到 `Named("map", [Str, Str])`（`--dump-mir` 打
+  `UA: dict[str, str] = {"k": "v"}`，`type_map` 的 4／8／18 号槽），因此方括号拼写在管线上
+  是否有害**未证**；本批没把它写成期望值。
+- 未锁与余项（不写成已覆盖）：
+  ① 153 的第一处站点 `top_level.rs` 的字段推断——本车道该文件在制（批次 745 的未提交改动
+     挂着它）⇒本批不改它、也不做它的变异，MIR 那条用例对它只是现状锁（防类型推断链改坏），
+     不是"移除 153 第①步会红"的锁；
+  ② 历史用例套件在两支变异下全绿＝阴性：夹具 `self.m = {}` 的槽位来自字段推断（153 第①步），
+     不经过 `Type::from_string` 的 `dict` 拼写分支（原因按修法结构推断，未逐行实测）⇒
+     这两处分支的锁是本批的直接调用单元测试；
+  ③ `.get` 那一格本批只在 `main` 段断言"没有裸 `_values`"＋"有 `map_values`"，`.get` 自身
+     实测发的是 `map_str_key`＋`py_map_contains`＋两条 `println_i64` 分支（展开成"含则取值、
+     否则默认"），本批未对 `.get` 的调用名单独断言；
+  ④ 方括号拼写的管线影响面未证（见上条）。
+- `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件 `src/error_codes.rs`／
+  `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
+  `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
+  两本台账，**连续三十二批**）；待补台账行的文字写进本批记录笔的提交信息。
