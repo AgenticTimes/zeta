@@ -27620,3 +27620,55 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
   `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
   两本台账，**连续三十二批**）；待补台账行的文字写进本批记录笔的提交信息。
+
+## 批次 10034（cleanup）——#20005 第二十三批：把批次 627 的方法参数调用点精化做成编译期单元测试
+
+- 代码笔 `03224db5` ＋ `dacceee4`（同一批两笔：第二笔把循环里的逐格断言合成一次比较，
+  理由是单格断言只报第一格，一支变异打掉两格时读不出打在谁身上）。
+- 来源＝批次 627（`3ba4dd07`，旁路 cleanup 车道的旧编号，号在 1000 以下那一段；
+  `git merge-base --is-ancestor 3ba4dd07 HEAD` 已验在本树）。症状：没有类型注解的方法形参
+  在函数表里停 I64（生成器那一侧的拼写是 PyDynamic），`g.greet("World")` 的字串实参没有
+  回流到方法体 ⇒ 体内 f-string 的那个部件按整数去转字符串，打出来是 "Hello, " 加一串地址。
+  修法＝resolver 扫模块级调用点，记 `Class::method` → [(形参位置, 类型)]，交给生成器按位置
+  覆写 `type_map`；站点 `src/middle/resolver/resolver.rs`，接线在 `typecheck.rs:29`。
+- 新增用例 `unannotated_method_params_take_the_argument_type_from_call_sites`
+  （`tests/regression_history.rs`，本批唯一改动的仓库文件）。夹具里三个方法各走一种调用形态：
+  `print(g.greet("World"))`、`g.tag("XSHG")`、`s = g.shout("hey")`。
+- 三侧真值：CPython 侧打 `Hello, World!` 和 `hey!`；AOT 侧同值、rc=0
+  （`target/tmp_b10034/t627b.bin`，在仓根构建并运行）；`--dump-mir` 侧
+  `Greeter::greet`／`Greeter::tag`／`Greeter::shout` 三段的形参槽都是 `Str`（本批读数）。
+- 变异矩阵（还原源＝`git show HEAD:src/middle/resolver/resolver.rs`；每支先把锚点出现次数
+  断言成 1，变异后 md5 必须不同于还原态，跑完立即还原并核对 md5 等于 HEAD 版；四支红的都在
+  `tests/regression_history.rs:4340` 那一次比较上，靠逐格读数区分打在哪一格）：
+
+| 撤掉的臂（改前位置） | 撤法 | 逐格实得（greet／tag／shout） | 全套红点 |
+|---|---|---|---|
+| `:3017` 对实参的递归（实参下沉） | 该行撤掉（换成注释） | PyDynamic／Str／Str | 2 条（本条＋628 那条） |
+| `:2932` 赋值右值那一支（7 行块） | 整支撤掉 | Str／Str／PyDynamic | 1 条（只有本条） |
+| `:2949` 模块级裸 `Call` 语句那一支 | 该行撤掉 | PyDynamic／PyDynamic／Str | 4 条（本条＋628／629／630 那三条） |
+| `:2978` 守卫里的 `PyDynamic` 一半 | 条件只留 `Type::I64` | PyDynamic／PyDynamic／PyDynamic | 4 条（同上） |
+| `:2978` 整块守卫（连 `continue`） | 三行撤掉 | 三格仍 Str | 0 条＝阴性 |
+| `:2929` 局部类别表那一行 | 撤掉 | 三格仍 Str | 0 条＝阴性 |
+| `:2943` 表达式语句那一支 | 撤掉 | 三格仍 Str | 0 条＝阴性 |
+
+- 独立性判定：`shout` 那一格只被赋值右值臂打到（全套也只有本条红）＝干净的一条链；
+  `tag` 那一格只被裸 `Call` 语句臂（和守卫的 `PyDynamic` 那一半）打到；`greet` 那一格在
+  实参递归臂和裸 `Call` 语句臂下红在同一格、同一读数 ⇒ 这两臂是**同一条链的两环**，
+  不写成两条独立覆盖。
+- 三支阴性的实测原因：`:2943` 那一支本夹具走不到（`g.tag(...)` 实测降成裸 `Call` 语句，
+  不是表达式语句包着的），`:2929` 的局部类别表也用不上——接收者 `g` 的类别由
+  `module_global_types_at` 直接给出；整块守卫撤掉不红＝本夹具三个形参都没写注解，
+  "写了真注解的形参永不覆盖"那一半没有夹具打到。
+- 仍未锁：① `:3017` 与 `:2949` 两臂对 `greet` 那一格互为同链（要换夹具形状才分得开，本批未做）；
+  ② "注解形参不被覆盖"那一半（需要 `def m(self, x: int)` 形状）；③ `greet` 的裸名副本段与
+  实例化段 `greet_inst_i64` 里同一槽仍是 PyDynamic（本批 `--dump-mir` 读数）＝"后端取哪一份
+  MIR"的另一格，本条不断言；④ 上表三支阴性臂＝未锁。
+- 检查节奏：本批零 `src/` 改动（只动测试文件）⇒ 按 2026-10-03 的节奏只跑改到的目标——
+  `tests/regression_history.rs` 57/57 绿（0.06 秒）、crate 内单元测试 145/145 绿、编译零错误；
+  来源夹具 `tests/python_style/t537_method_param_refine.z` 单步 PASS。抽样窗口未跑
+  （改动面不含 `src/**`；本批开批时因 `src/` 里有比二进制新的文件而先 `cargo build --release`
+  强制重建过一次，那颗就是跑 t537 用的同一颗）。
+- `worktree.md` 的行仍未随批（车道在制面还挂着批次 745 那三个文件 `src/error_codes.rs`／
+  `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
+  `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
+  两本台账，**连续三十三批**）；待补台账行的文字写进本批记录笔的提交信息。

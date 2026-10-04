@@ -458,6 +458,28 @@
 >   `println_i64` 分支，未对它的调用名单独断言；③ 方括号拼写的管线影响面未证。
 >   检查节奏：改到 `src/middle/**`（只有测试模块）⇒ crate 内单元测试 145/145 绿＋编译零错误；
 >   `tests/regression_history.rs` 56/56 绿。
+> - 批次 10034（代码笔 `03224db5` ＋ `dacceee4`）＝来源批次 627（`3ba4dd07`，未注解方法形参
+>   按调用点字面量实参精化；站点 `src/middle/resolver/resolver.rs`，接线 `typecheck.rs:29`）：
+>   本套 **57 条全绿**（0.06 秒），crate 内单元测试 145 条一字不变（本批零 `src/` 改动）。
+>   新用例 `unannotated_method_params_take_the_argument_type_from_call_sites` 一次比较三格＝
+>   `Greeter::greet`／`Greeter::tag`／`Greeter::shout` 的形参槽该是 `Str`。三侧真值＝CPython 与
+>   AOT 二进制都打 `Hello, World!` 和 `hey!`（rc=0），MIR 面同那三格。
+>   变异（还原源＝`git show HEAD:<路径>`，锚点次数＝1，变异后 md5≠还原态，还原后 md5＝HEAD；
+>   四支红的都在 `tests/regression_history.rs:4340`，逐格读数区分落在哪一格）：撤 `:3017` 实参递归
+>   ⇒ 只有 greet 那格 PyDynamic（全套 2 条红＝本条＋628 那条）；撤 `:2932` 赋值右值支 ⇒ 只有 shout
+>   那格（全套 1 条红）；撤 `:2949` 裸 `Call` 语句支 ⇒ greet＋tag 两格（4 条红）；守卫 `:2978`
+>   只留 `Type::I64`（撤掉 `PyDynamic` 那一半）⇒ 三格全 PyDynamic（4 条红）。
+>   **独立性写法**：shout 那格＝唯一被一支臂独占的一格；greet 那格在 `:3017` 与 `:2949` 两臂下
+>   红在同一格同一读数＝**一条链的两环**，不写成两条独立覆盖。
+>   三支阴性（各撤臂后 57 条一字不变）＝`:2943` 表达式语句支（本夹具的 `g.tag(...)` 实测降成裸
+>   `Call` 而非表达式语句）、`:2929` 局部类别表（接收者类别由 `module_global_types_at` 直接给出）、
+>   整块 `:2978` 守卫（本夹具三个形参都没注解⇒"真注解永不覆盖"那一半没打到）。
+>   仍未锁（记在本条余项内、未占新号）：① `:3017`／`:2949` 对 greet 那格互为同链，换夹具形状才分得开；
+>   ② 带注解形参（`def m(self, x: int)`）的"注解不被覆盖"那一半；③ `greet` 的裸名副本段与实例化段
+>   `greet_inst_i64` 同一槽仍 PyDynamic（本批 `--dump-mir` 读数）＝"后端取哪一份 MIR"的另一格；
+>   ④ 上表三支阴性臂。
+>   检查节奏：只跑改到的目标＝历史套件 57/57 绿 ＋ crate 内 145/145 绿 ＋ 编译零错误，
+>   来源夹具 `t537_method_param_refine.z` 单步 PASS；抽样窗口未跑（本批不含 `src/**`）。
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
