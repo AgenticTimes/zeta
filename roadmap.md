@@ -29386,6 +29386,31 @@ gen.rs 3874→3874（行数不变——净增逻辑在 checker 侧）；checker 
 **验证**：编译零错误；lib 182/182；历史探针七套零差异；全量差分
 （--group 50）match=2845/2845＝100%；python_style 479/0。
 
+## 批次 918–923（2026-10-04）：checker 推断能力六连扩
+
+承接"完成所有 checker 能力"目标，每批一个推断形态、模块内部单元测试先行：
+
+- **批 918（`e29af5c1`）Return 收集→fn_rets**：`infer_fn_body` 增加 fn_name
+  参数，函数体顶层 Return 的字面量型记入 `env.fn_rets`（P4 回灌替换的前提）。
+- **批 919（`dda8930d`）for/while 循环**：迭代变量从序列元素型推断
+  （DynamicArray/Slice/Array 取元素、map 取键——对齐 map_keys 语义、range 家族
+  →I64；set 无元素型信息不推断）；For/While 循环体此前整体漏扫
+  （落 `_ => {}`），现递归进 body＋else_body。
+- **批 920（`6eec6537`）return 扩展**：递归收集全部 Return（含嵌套块）；
+  返回表达式支持已知槽变量/ret_types 查表；多 return 全部已知且一致才记入
+  （宁缺勿错——fn_rets 是 P4 燃料，错型比缺型危害大）。
+- **批 921（`4f3365c4`）一元运算**：负字面量（-1⇒I64、-2.5⇒F64，对齐 MIR
+  负浮点折叠）；not⇒Bool；-x/~x 数值标量或 BigInt 同型。
+- **批 922（`afef891e`）二元运算**：比较臂提到最前（原比较臂在同型臂
+  return 之后属死代码——批 917 的"比较→Bool"从未生效，顺带修正）；变量与
+  数值字面量运算保持变量型；Str 拼接（双向）⇒ Str。
+- **批 923（`93edb08c`）字面量族**：下标臂重构（切片⇒DynamicArray(元素型)，
+  原被取元素臂截胡）；ArrayLit 元素同型⇒DynamicArray；Tuple 逐元素⇒Tuple；
+  Cast⇒from_string。
+
+checker 推断形态累计 13 类；每批后全量差分＋python_style 渗透面验证
+（checker_env 下游只有 mean 臂消费，零位移）。
+
 ## 批次 924–926（2026-10-04）：浮点数组位模式缺陷族三连修
 
 **缺陷族背景**：浮点元素在动态数组里按 f64 位模式存储（`zeta_vec_push_f64`
@@ -29420,3 +29445,20 @@ fptosi 截断（2.5→2）；`zeta_list_index_f64`/`count_f64` 函数选择本�
 **验证**：七组探针（sum 动态/定长/整数、min/max/abs、sorted、
 index/count/in、用户 key）逐一对齐 CPython；每批全量差分 2845/2845、
 python_style 479/0；库测试 182→207（checker 六批＋纯面单测累计）。
+
+## 批次 927–928（2026-10-04）：位模式缺陷族收尾——key= 缺口定位＋remove 修复
+
+**批 927**（并入 926 提交信息的登记）：`max(xs, key=abs)` 崩溃
+（exit 138，abs 无一等函数值形式）；用户 key 函数 `max(xs, key=ka)` 打
+2.0 位模式（CPython -3.5）——keyfn 以 i64 签名调用、返回的 f64 位模式
+按 i64 比较。修复需 key 函数按元素型单态化（specialization 基础设施），
+登记不修。
+
+**批 928（`355ab61d`）remove**：`xs.remove(1.5)` 后元素原样留着。
+MIR 实拍分派发的是 `py_vec_discard`（remove 归 list-backed set 的
+discard 族，批次 816 裁决），按位整数比较永不命中。runtime 新增
+`py_vec_discard_f64`；gen/call_set.rs discard 臂接收者元素 f64 时分派。
+
+**同族终局排查**：数组相等（==）、`.sort()`、`sorted()`（含负浮点）、
+`reverse` 探针全部已正确。位模式缺陷族共修五形收口：sum/min/max/
+index-count-in/remove。
