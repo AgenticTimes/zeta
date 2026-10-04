@@ -4934,12 +4934,16 @@ fn parenthesized_comparison_folds_with_value_semantics_not_as_a_python_chain() {
 ///
 /// 三组夹具（各一次 `lower_multi`）：
 /// - 主夹具：一个模块，方法体里分别引用模块私有函数（`get`）、另一个类（`build`）、
-///   自己所在的类（`fresh`＝自有名表里含类名自身这一项，变异 M3 的靶）；
+///   第三个类（`fresh`）、**自己所在的类**（`again`＝自有名表里含类名自身这一项，
+///   变异 M3 的靶；本批第一版把这一形写成了 `fresh` 引用 `Node`，M3 实跑 61 条一字不变＝
+///   阴性读数后才改正，见 roadmap 的教训段）；
+///   格 8＝`main` 里五个带 `::` 的调用点符号串（`m657a__Holder::get,build,fresh` ＋
+///   接收者方法 `m657a__Helper::val`／`m657a__Node::tag`）。
 /// - 歧义夹具：两个模块各有一个同名类 `Shared` ⇒ `hits.len() == 1` 守卫让两个方法体
 ///   **都**留在裸名 `extra_0`＝未修的现状锁（将来改成按调用点模块消歧时这两格要同步改，
 ///   见 backlog #20005 余项）；
 /// - 对照夹具：模块级函数 `top` 走的是另一条臂（`func_name` 直接命中定义表），
-///   本批的六支变异都打不到它 ⇒ 只算防放松。
+///   本批的变异都打不到它 ⇒ 只算防放松。
 ///
 /// 端到端未修（记在 #20005 余项，本条不锁）：主夹具在 HEAD 上 AOT 仍链接失败，
 /// `_make` 由裸名副本段 `_get`／`_get_inst_i64` 引用——那些副本的 `func_name` 是裸名
@@ -4969,6 +4973,9 @@ class Holder:
 
     def fresh(self):
         return Node()
+
+    def again(self):
+        return Holder()
 "#;
     const MAIN_FX: &str = r#"from m657a import Holder
 
@@ -5083,6 +5090,14 @@ print(top())
             dest_ty_of(&fx, "m657a__Holder::fresh"),
         ),
         (
+            "Holder::again 体内引用自己所在类的构造目标（变异 M3 的靶）",
+            call_of(&fx, "m657a__Holder::again"),
+        ),
+        (
+            "Holder::again 目的槽类型",
+            dest_ty_of(&fx, "m657a__Holder::again"),
+        ),
+        (
             "main 里三个方法调用点＋两个接收者方法",
             scoped_calls(&fx, "main"),
         ),
@@ -5121,6 +5136,14 @@ print(top())
             r#"Named("m657a__Node", [])"#.to_string(),
         ),
         (
+            "Holder::again 体内引用自己所在类的构造目标（变异 M3 的靶）",
+            "m657a__Holder".to_string(),
+        ),
+        (
+            "Holder::again 目的槽类型",
+            r#"Named("m657a__Holder", [])"#.to_string(),
+        ),
+        (
             "main 里三个方法调用点＋两个接收者方法",
             "m657a__Holder::get,m657a__Holder::build,m657a__Helper::val,m657a__Holder::fresh,m657a__Node::tag"
                 .to_string(),
@@ -5142,9 +5165,9 @@ print(top())
     assert_eq!(
         want, got,
         "方法段必须按改写类名还原裸类名、查到所属模块后建改写表（批次 657）——\
-         第 1 格读回 `make_0`＝改写表又空了；第 2/3 格（第 4/5 格同理）读回 \
-         `zeta_platform_obj`／非 `Named` 类型＝657 那个错误内存布局的形；\
-         第 7/8 格本该留在裸名 `extra_0`（两模块同名类的歧义未修，读到改写名＝守卫被\
-         放宽而没做消歧，先核对修法再改期望）；第 9 格走另一条臂，红了说明整个改写表机制坏了"
+         第 1 格读回 `make_0`＝改写表又空了；第 2/3、4/5、6/7 格读回 `zeta_platform_obj`／\
+         非 `Named` 类型＝657 那个错误内存布局的形（第 6/7 格只对\"跳过类名自身\"这种坏法敏感）；\
+         第 9/10 格本该留在裸名 `extra_0`（两模块同名类的歧义未修，读到改写名＝守卫被放宽\
+         而没做消歧，先核对修法再改期望）；第 11 格走另一条臂，红了说明整个改写表机制坏了"
     );
 }
