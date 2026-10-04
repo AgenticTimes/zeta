@@ -29241,3 +29241,21 @@ cd /Users/meetai/source/zeta-src && export PATH="$HOME/.cargo/bin:$PATH" && carg
 __zcode_status=$?
 if [ "$__zcode_status" -eq 0 ]; then pwd -P > '/var/folders/53/xr80lcpd2plcys3gnq6pmfwr0000gn/T/zcode-3b8680d0-d774-4615-a169-3d4dc6f427dc-cwd'; fi
 exit "$__zcode_status"
+## 批次 906（2026-10-04，**回归钉批：MirGen 台架四钉——第二档缺陷全部转化**）
+
+台架四钉（第二档＝需 MirGen 状态的 lowering 缺陷）：
+- **t217 钉**（call_subscript tests_906）：批 148 的 `X.where(0)` 路由必须写
+  dest（旧实现 dest 无人写 ⇒ exprs 无条目）。
+- **886 钉**（gen.rs tests_906）：Assign 表达式臂委托必须转发活槽
+  （丢返回值 ⇒ 派发器缺省 IntLit(0) 槽，t33 根因）。
+- **846 钉**（call_field tests_906）：类变量读必须返回 env_get 结果槽
+  （委托丢返回值 ⇒ 缺省 IntLit(0) 槽，t105/t813 族面）。
+台架两坑入册：①槽的**exprs 条目**与 type_map 同等重要——缺 exprs 条目触发
+lower_expr 尾部 W1010 兜底（IntLit(0)+I64 覆写），测试失真；②with_type_decls
+灌的是 shared_type_decls，**须手动模拟 lower_to_mir 的前置合并**，直接调
+lower_expr 不经过它。
+过程事故：贪婪正则误删产品代码两处 eprintln!（argparse 警告＋find_member
+None 警告）——已逐处恢复；教训入册＝**多行语句的删除禁止贪婪正则**。
+
+**验证**：编译零错误；内置单元测试 **166/166**（+4 钉）；历史探针七套
+零差异；全量差分（--group 50）match=2845/2845＝100%。

@@ -202,3 +202,51 @@ impl MirGen {
     id
     }
 }
+
+#[cfg(test)]
+mod tests_906 {
+    use super::*;
+
+    /// 批次 906（#277 回归钉）：浮点负号必须走 `0.0 - x` 的懒表达式——
+    /// 884 修复前的臂尾公共出口会用 `exprs[dest] = Var(dest)` 把它覆盖，
+    /// 槽无人计算 ⇒ print(-f) 打 0.0/nan。断言 dest 的 expr 是 BinaryOp。
+    #[test]
+    fn float_negation_keeps_lazy_binaryop() {
+        let mut g = MirGen::new();
+        let f_slot = g.next_id();
+        g.name_to_id.insert("f".to_string(), f_slot);
+        g.type_map.insert(f_slot, Type::F64);
+        // 台架须模拟真实赋值臂的 exprs[slot]=Var(slot)——缺 exprs 条目会触发
+        // lower_expr 尾部的 W1010 兜底（IntLit(0)+I64 覆写），测试失真。
+        g.exprs.insert(f_slot, MirExpr::Var(f_slot));
+        let dest = g.lower_unary_op(
+            &"-".to_string(),
+            &Box::new(AstNode::Var("f".to_string())),
+            f_slot,
+        );
+        match g.exprs.get(&dest) {
+            Some(MirExpr::BinaryOp { op, left, right }) => {
+                assert_eq!(op, "-");
+                // 左元＝FloatLit(0.0) 槽；右元＝f 的槽（890 实测的污染形状是
+                // dest 被覆盖成 Var(dest)，此处逐一断言防回归）。
+                let zero = g.exprs.get(left).cloned();
+                assert!(matches!(zero, Some(MirExpr::FloatLit(z)) if z == 0.0));
+                assert_eq!(*right, f_slot, "右元必须是 f 的槽");
+            }
+            other => {
+                eprintln!("DEBUG exprs:");
+                for (k, v) in &g.exprs {
+                    eprintln!("  {} = {:?}", k, v);
+                }
+                eprintln!("DEBUG type_map:");
+                for (k, v) in &g.type_map {
+                    eprintln!("  {} = {:?}", k, v);
+                }
+                panic!("dest expr 应为 BinaryOp(0.0 - f)，实得 {:?}", other)
+            }
+        }
+        assert!(g.type_map.get(&dest).is_some_and(|t| *t == Type::F64));
+    }
+
+
+}

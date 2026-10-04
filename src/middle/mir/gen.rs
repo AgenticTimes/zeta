@@ -3833,3 +3833,26 @@ fn lt_annotation_type(s: &str) -> Option<Type> {
     }
 }
 
+#[cfg(test)]
+mod tests_906 {
+    use super::*;
+
+    /// 批次 906（886 回归钉）：Assign 表达式臂的委托必须转发
+    /// lower_assign_expr 的返回槽——890 前的委托丢弃返回值，
+    /// `(n := 42)` 的活槽被丢、派发器退回缺省 IntLit(0) 槽
+    /// ⇒ `> 2` 恒假、print 跳过（t33 新红的根因）。
+    #[test]
+    fn assign_expr_delegate_forwards_live_slot() {
+        let mut g = MirGen::new();
+        let r = g.lower_expr(&AstNode::Assign(
+            Box::new(AstNode::Var("n".to_string())),
+            Box::new(AstNode::Lit(42)),
+        ));
+        let bound = g
+            .name_to_id
+            .get("n")
+            .copied()
+            .expect("walrus 必须绑定 n");
+        assert_eq!(r, bound, "886: 委托必须转发活槽（缺省槽＝回归）");
+    }
+}

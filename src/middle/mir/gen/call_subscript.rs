@@ -502,3 +502,32 @@ impl MirGen {
         
     }
 }
+
+#[cfg(test)]
+mod tests_906 {
+    use super::*;
+
+    /// 批次 906（t217 回归钉）：批 148 的 `X.where(0)` 路由必须把 where 结果
+    /// 写进 dest——旧实现 `lower_expr(base); return;` 只跑副作用，dest 无人写，
+    /// `idx = np.where(mask)[0]` 的 len/取位全落空（len 读 import 句柄槽）。
+    #[test]
+    fn where_subscript_writes_dest() {
+        let mut g = MirGen::new();
+        let dest = g.next_id();
+        let base = Box::new(AstNode::Call {
+            receiver: Some(Box::new(AstNode::Var("w".to_string()))),
+            method: "where".to_string(),
+            args: vec![],
+            type_args: vec![],
+            structural: false,
+        });
+        let idx = Box::new(AstNode::Lit(0));
+        g.lower_subscript(&base, &idx, dest);
+        // dest 必须有 expr 条目（批 148 修复后＝Var(where 结果槽)）。
+        // 旧实现 dest 无人写 ⇒ exprs.get(&dest) = None。
+        assert!(
+            g.exprs.get(&dest).is_some(),
+            "t217: 批 148 路由必须写 dest（旧实现槽无人写）"
+        );
+    }
+}

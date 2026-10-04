@@ -562,3 +562,46 @@ impl MirGen {
             dest
     }
 }
+
+#[cfg(test)]
+mod tests_906 {
+    use super::*;
+    use crate::middle::mir::r#gen::TypeDecl;
+    use std::collections::HashMap;
+
+    /// 批次 906（866 回归钉）：类变量读（FieldAccess）必须返回 env_get 的
+    /// 结果槽——866 前的委托丢弃 lower_field_access 的返回值，lower_expr
+    /// 退回派发器缺省 IntLit(0) 槽（t105/t813 族的静默错值面）。
+    #[test]
+    fn class_var_read_returns_env_slot() {
+        let mut decls = HashMap::new();
+        decls.insert(
+            "Counter".to_string(),
+            TypeDecl::Struct {
+                fields: vec![("count".to_string(), "i64".to_string())],
+                generics: vec![],
+            },
+        );
+        let mut globals = std::collections::HashSet::new();
+        globals.insert("Counter__count".to_string());
+        let mut g = MirGen::new()
+            .with_type_decls(decls)
+            .with_module_globals(globals);
+        // 台架须模拟 lower_to_mir 的前置合并（shared_type_decls → type_decls）
+        // ——直接调 lower_expr 不经过 lower_to_mir，type_decls 停留在空表。
+        g.type_decls.extend(
+            g.shared_type_decls
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+        let r = g.lower_expr(&AstNode::FieldAccess {
+            base: Box::new(AstNode::Var("Counter".to_string())),
+            field: "count".to_string(),
+        });
+        // 866 前的委托丢返回值 ⇒ r 落派发器缺省 IntLit(0) 槽
+        assert!(
+            matches!(g.exprs.get(&r), Some(MirExpr::Var(_))),
+            "866: 字段读必须返回 env_get 结果槽（缺省 IntLit(0)＝回归）"
+        );
+    }
+}
