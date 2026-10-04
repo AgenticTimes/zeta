@@ -2407,6 +2407,11 @@ call, no NULL-handle dereference).",
                 && !args.is_empty()
             {
                 self.lower_print(args, id);
+                // 批 945：print 返回 None——lower_print 只发 VoidCall 不写
+                // dest 槽，lower_expr 尾检见空就喊 W1010（每次 print 白喊
+                // 声）。补与 fallback 同值的占位，语义不变、警告消失。
+                self.exprs.insert(id, MirExpr::IntLit(0));
+                self.type_map.insert(id, Type::I64);
                 return id;
             }
 
