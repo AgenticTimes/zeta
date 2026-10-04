@@ -2429,6 +2429,122 @@ mod tests {
         );
     }
 
+    /// map 下标读 ⇒ 值型（非键型）——批 923 键值误用的回归锁
+    ///（t485 实拍：v = m["a"] 的 v 曾被给键型 Str，v[0] 槽标 Str ⇒
+    /// print 走 strlen SEGV）。
+    #[test]
+    fn map_subscript_read_yields_value_type() {
+        let mut env = TypeEnv::new();
+        env.meet_slot(
+            "m",
+            LatticeTy::known(Type::Named(
+                "map".to_string(),
+                vec![Type::Str, Type::I64],
+            )),
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign("v", AstNode::Subscript {
+                base: Box::new(var("m")),
+                index: Box::new(AstNode::StringLit("a".to_string())),
+            })],
+            &ctx,
+        );
+        assert_eq!(
+            env.get_slot("v"),
+            LatticeTy::known(Type::I64),
+            "m[\"a\"] ⇒ 值型 I64（非键型 Str）"
+        );
+    }
+
+    /// plan 层：顶层 Var 实参证据查 module_env 精化槽（批 947）。
+    #[test]
+    fn plan_top_level_var_evidence_uses_module_env() {
+        let mk_def = |name: &str, params: Vec<(String, String)>, body: Vec<AstNode>| {
+            AstNode::FuncDef {
+                name: name.to_string(),
+                generics: vec![],
+                lifetimes: vec![],
+                params,
+                ret: String::new(),
+                body,
+                attrs: vec![],
+                ret_expr: None,
+                single_line: true,
+                doc: String::new(),
+                pub_: false,
+                async_: false,
+                const_: false,
+                comptime_: false,
+                where_clauses: vec![],
+            }
+        };
+        // def get(dd, k): return dd[k]
+        let get = mk_def(
+            "get",
+            vec![
+                ("dd".to_string(), String::new()),
+                ("k".to_string(), String::new()),
+            ],
+            vec![AstNode::Return(Box::new(AstNode::Subscript {
+                base: Box::new(var("dd")),
+                index: Box::new(var("k")),
+            }))],
+        );
+        let mut registered = HashMap::new();
+        registered.insert("get".to_string(), get);
+        // 顶层：d = {}; d["a"] = 1.5; get(d, "a")
+        let top = vec![
+            assign("d", AstNode::DictLit { entries: vec![] }),
+            AstNode::Assign(
+                Box::new(AstNode::Subscript {
+                    base: Box::new(var("d")),
+                    index: Box::new(AstNode::StringLit("a".to_string())),
+                }),
+                Box::new(AstNode::FloatLit("1.5".to_string())),
+            ),
+            AstNode::ExprStmt {
+                expr: Box::new(AstNode::Call {
+                    receiver: None,
+                    method: "get".to_string(),
+                    args: vec![var("d"), AstNode::StringLit("a".to_string())],
+                    type_args: vec![],
+                    structural: false,
+                }),
+            },
+        ];
+        let plan = build_module_checker_plan(
+            &registered,
+            &HashMap::new(),
+            &HashMap::new(),
+            &Default::default(),
+            &top,
+        );
+        // d 的槽被写侧精化成 map[Str,F64]，顶层 Var 实参证据 ⇒ get.dd 位
+        assert_eq!(
+            plan.module_env.get_slot("d"),
+            LatticeTy::known(Type::Named(
+                "map".to_string(),
+                vec![Type::Str, Type::F64]
+            ))
+        );
+        let ev = plan.evidence.get("get").expect("get 证据");
+        assert_eq!(
+            ev[0],
+            Some(Type::Named(
+                "map".to_string(),
+                vec![Type::Str, Type::F64]
+            )),
+            "顶层 get(d, \"a\") ⇒ dd 位证据 = d 的精化槽"
+        );
+    }
+
     /// d[k] = v 写侧值型精化（批 947）：d = {} 后写 f64 ⇒ 槽
     /// map[I64,F64]；异型二写 ⇒ 值型退化 PyDynamic（静态 per-cell 语义）。
     #[test]
