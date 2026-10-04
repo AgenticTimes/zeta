@@ -4263,3 +4263,74 @@ print(len(s.m.values()))
         "153 的症状之一就是发裸符号 `_values`（链接失败），这个调用名不该出现"
     );
 }
+
+/// 批次 627（旁路 cleanup 车道旧编号，代码 `3ba4dd07`；夹具
+/// `tests/python_style/t537_method_param_refine.z`；落点
+/// `src/middle/resolver/resolver.rs` 的 `refine_method_param_types` ＋
+/// `p627_record` ＋ `collect_p627_in_expr`，接线在 `typecheck.rs:29`）／backlog 旧 #195。
+/// 症状（627 记录原文＋t537 实拍）：没有类型注解的方法形参在函数表里停在 I64
+/// （生成器那一侧的拼写是 PyDynamic），`g.greet("World")` 的字串实参没有回流到
+/// 方法体 ⇒ 体内 f-string 的这个部件按整数去 stringify 一个字符串句柄，
+/// 打出来是 "Hello, " 加一串地址，而不是 "Hello, World!"。
+/// 修法＝resolver 扫模块级调用点，记 `Class::method` → [(形参位置, 类型)]，
+/// 交给生成器按位置覆写 `type_map`；守卫＝现状是 I64 或 PyDynamic 才精化，
+/// 写了真注解的形参永不覆盖。
+/// 期望值来源＝三侧真值：CPython 侧打 "Hello, World!" 和 "hey!"；AOT 侧同值
+/// （本批实跑 `target/tmp_b10034/t627b.bin`，rc=0）；MIR 侧 `--dump-mir` 里
+/// `Greeter::greet`／`Greeter::tag`／`Greeter::shout` 三段的形参槽都是 `Str`
+/// （本批读数）。
+/// 三个方法各走一条语句形态：`print(g.greet(…))`＝实参下沉递归、
+/// `g.tag(…)`＝表达式语句、`s = g.shout(…)`＝赋值右值。变异时各红自己那一格
+/// ＝独立覆盖（见批次 10034 台账）。
+/// 边界（本条不覆盖）：同名的裸段 `greet` 与实例化段 `greet_inst_i64` 里
+/// 同一形参槽仍是 PyDynamic（本批 `--dump-mir` 读数）＝"后端取哪一份 MIR"
+/// 的另一格，本条不断言；调用点目的槽为 Str 那一格由 628 的用例
+/// `method_return_inference_from_param_and_concat_marks_callsites_str` 管，互不备份。
+#[test]
+fn unannotated_method_params_take_the_argument_type_from_call_sites() {
+    let mirs = lower_all(
+        r#"class Greeter:
+    def __init__(self, prefix):
+        self.prefix = prefix
+    def greet(self, name):
+        return f"{self.prefix}, {name}!"
+    def tag(self, name):
+        return f"[{name}]"
+    def shout(self, word):
+        return word + "!"
+
+g = Greeter("Hello")
+print(g.greet("World"))
+g.tag("XSHG")
+s = g.shout("hey")
+print(s)
+"#,
+    );
+
+    // ③ 三段的形参槽各由一条语句形态臂精化：段名＋形参名。
+    for (seg, param) in [
+        ("Greeter::greet", "name"),
+        ("Greeter::tag", "name"),
+        ("Greeter::shout", "word"),
+    ] {
+        let m = mir(&mirs, seg);
+        let slot = m
+            .param_indices
+            .iter()
+            .find(|(n, _)| n == param)
+            .map(|(_, i)| *i)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{seg} 要降出形参 `{param}` 的槽位（实得 param_indices {:?}）",
+                    m.param_indices
+                )
+            });
+        assert_eq!(
+            m.type_map.get(&slot),
+            Some(&Type::Str),
+            "{seg} 的形参 `{param}`（槽 {slot}）该按调用点的字面量实参精化成 Str；\
+             627 之前这格停 I64／PyDynamic，体内把字符串句柄按整数转成串＝打地址，实得 {:?}",
+            m.type_map.get(&slot)
+        );
+    }
+}
