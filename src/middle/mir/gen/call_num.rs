@@ -34,27 +34,52 @@ impl MirGen {
     /// PY-A sum：DynamicArray 走 zeta_sum_vec；PyDynamic/未知实参在运行期
     /// 是动态 vec（批次 145：此前落 zeta_sum_n 静态路径打印 0，t224f）；
     /// 定长数组折叠 zeta_sum_n（长度编译期已知）。
+    /// 批次 924：f64 元素走 f64 累加版（此前 i64 位模式累加产出垃圾和，
+    /// sum([1.5,2.5]) 实拍 9222246136947933184）；元素型 type_map 优先、
+    /// checker_env 兜底（与 mean 臂同模式的 P3 消费点）。
     fn lower_sum(&mut self, arg0_node: &AstNode, dest: u32) -> Option<u32> {
         let arg_id = self.lower_expr(arg0_node);
-        let (func, extra) = match self.type_map.get(&arg_id).cloned() {
-            Some(Type::DynamicArray(_)) => ("zeta_sum_vec".to_string(), Vec::new()),
-            Some(Type::PyDynamic) | None => ("zeta_sum_vec".to_string(), Vec::new()),
-            Some(Type::Array(_, ArraySize::Literal(n))) => (
-                "zeta_sum_n".to_string(),
-                vec![self.int_slot(n as i64)],
-            ),
-            _ => ("zeta_sum_n".to_string(), Vec::new()),
+        let seq_elem = match self.type_map.get(&arg_id) {
+            Some(Type::DynamicArray(e)) => {
+                Some((SumSeq::Dynamic, matches!(**e, Type::F64)))
+            }
+            Some(Type::Array(e, ArraySize::Literal(n))) => Some((
+                SumSeq::Static(*n as i64),
+                matches!(**e, Type::F64),
+            )),
+            Some(Type::Array(e, _)) => Some((SumSeq::LegacyBare, matches!(**e, Type::F64))),
+            Some(Type::PyDynamic) | None => None, // 动态槽：checker 兜底
+            _ => Some((SumSeq::LegacyBare, false)),
         };
+        let (elem_f64, seq) = match seq_elem {
+            Some((s, f)) => (f, s),
+            None => (
+                matches!(
+                    arg0_node,
+                    AstNode::Var(nm) if matches!(
+                        self.checker_type_of(nm),
+                        Some(Type::DynamicArray(e)) if matches!(*e, Type::F64)
+                    )
+                ),
+                SumSeq::Dynamic,
+            ),
+        };
+        let (func, dest_f64, n_arg) = sum_target(elem_f64, seq);
         let mut call_args = vec![arg_id];
-        call_args.extend(extra);
+        if let Some(n) = n_arg {
+            call_args.push(self.int_slot(n));
+        }
         self.stmts.push(MirStmt::Call {
-            func,
+            func: func.to_string(),
             args: call_args,
             dest,
             type_args: vec![],
         });
         self.exprs.insert(dest, MirExpr::Var(dest));
-        self.type_map.insert(dest, Type::I64);
+        self.type_map.insert(
+            dest,
+            if dest_f64 { Type::F64 } else { Type::I64 },
+        );
         Some(dest)
     }
 
@@ -192,5 +217,78 @@ impl MirGen {
             acc = d;
         }
         dest
+    }
+}
+
+/// sum 实参序列形状（批 924 抽纯面）：Dynamic=动态 vec（读 header）；
+/// Static(n)=定长栈数组（长度编译期已知，传 n）；LegacyBare=旧路裸调
+/// zeta_sum_n 不带长度参数（Slice 等，历史上如此，保持原样不动）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SumSeq {
+    Dynamic,
+    Static(i64),
+    LegacyBare,
+}
+
+/// sum 降级方案纯面（批 924）：元素是否 f64＋序列形状 ⇒（函数名, 结果槽
+/// 是否 f64, 长度参数）。语义合同：f64 元素按位模式存取（zeta_vec_push_f64
+/// 同一约定），必须走 f64 累加版——此前 i64 位模式累加产出垃圾和
+/// （sum([1.5,2.5]) 实拍 9222246136947933184，CPython 4.0）。
+fn sum_target(elem_f64: bool, seq: SumSeq) -> (&'static str, bool, Option<i64>) {
+    match (elem_f64, seq) {
+        (true, SumSeq::Static(n)) => ("zeta_sum_n_f64", true, Some(n)),
+        (false, SumSeq::Static(n)) => ("zeta_sum_n", false, Some(n)),
+        (true, SumSeq::Dynamic) => ("zeta_sum_vec_f64", true, None),
+        (false, SumSeq::Dynamic) => ("zeta_sum_vec", false, None),
+        (_, SumSeq::LegacyBare) => ("zeta_sum_n", false, None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 浮点动态数组 ⇒ f64 累加版、结果槽 F64（批 924 缺陷主面）。
+    #[test]
+    fn sum_f64_dynamic_targets_f64_accumulator() {
+        assert_eq!(
+            sum_target(true, SumSeq::Dynamic),
+            ("zeta_sum_vec_f64", true, None)
+        );
+    }
+
+    /// 整数动态数组保持原路（zeta_sum_vec、I64）。
+    #[test]
+    fn sum_i64_dynamic_keeps_legacy_path() {
+        assert_eq!(
+            sum_target(false, SumSeq::Dynamic),
+            ("zeta_sum_vec", false, None)
+        );
+    }
+
+    /// 定长栈数组：f64 版带长度参数；整数版同样带。
+    #[test]
+    fn sum_static_passes_length() {
+        assert_eq!(
+            sum_target(true, SumSeq::Static(3)),
+            ("zeta_sum_n_f64", true, Some(3))
+        );
+        assert_eq!(
+            sum_target(false, SumSeq::Static(3)),
+            ("zeta_sum_n", false, Some(3))
+        );
+    }
+
+    /// 旧路裸调（Slice 等）不带长度参数，f64 与否都落 zeta_sum_n（保持原样）。
+    #[test]
+    fn sum_legacy_bare_unchanged() {
+        assert_eq!(
+            sum_target(true, SumSeq::LegacyBare),
+            ("zeta_sum_n", false, None)
+        );
+        assert_eq!(
+            sum_target(false, SumSeq::LegacyBare),
+            ("zeta_sum_n", false, None)
+        );
     }
 }

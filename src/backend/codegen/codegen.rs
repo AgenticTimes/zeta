@@ -960,6 +960,20 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 .fn_type(&[i64_type.into(), i64_type.into()], false),
             Some(Linkage::External),
         );
+        // 批次 924：sum() 的 f64 元素版（zeta_mean_vec 同理——返回 double 必须
+        // 提前给 prototype，否则按 i64(i64×N) 现推会把 double 当整数返回读）。
+        module.add_function(
+            "zeta_sum_vec_f64",
+            context.f64_type().fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "zeta_sum_n_f64",
+            context
+                .f64_type()
+                .fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
         module.add_function(
             "py_round_i64",
             i64_type.fn_type(&[context.f64_type().into()], false),

@@ -652,6 +652,34 @@ int64_t zeta_sum_vec(int64_t data) {
     return acc;
 }
 
+// sum() 的 f64 元素版（批 924）：浮点元素按 f64 位模式存取（zeta_vec_push_f64
+// 同一约定），此前 i64 位模式累加产出垃圾和（sum([1.5,2.5]) 实拍
+// 9222246136947933184，CPython 4.0）。
+double zeta_sum_vec_f64(int64_t data) {
+    if (!data) return 0.0;
+    int64_t len = ((int64_t*)(data - 16))[1];
+    double acc = 0.0;
+    for (int64_t i = 0; i < len; i++) {
+        int64_t raw = ((int64_t*)data)[i];
+        double d;
+        memcpy(&d, &raw, sizeof d);
+        acc += d;
+    }
+    return acc;
+}
+
+double zeta_sum_n_f64(int64_t data, int64_t n) {
+    if (!data) return 0.0;
+    double acc = 0.0;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t raw = ((int64_t*)data)[i];
+        double d;
+        memcpy(&d, &raw, sizeof d);
+        acc += d;
+    }
+    return acc;
+}
+
 // Series/list `.unique()` — order-preserving dedup. Compare by i64 equality
 // first (ints / identical pointers); else by C-string content (str columns).
 int64_t zeta_vec_unique(int64_t data) {
