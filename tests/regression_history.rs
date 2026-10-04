@@ -4924,3 +4924,227 @@ fn parenthesized_comparison_folds_with_value_semantics_not_as_a_python_chain() {
          读回非字符串形状＝这一臂没折，走了运行期"
     );
 }
+
+/// 批次 657（`d7f9a8fd`）：方法段的 MIR 名是 `Class::method`，它**不在**
+/// `py_mangled_to_module`（那张表只收定义）里，所以 `module_renames_for` 早先给方法
+/// 建不出改写表 ⇒ 方法体里的模块私有名留在裸名：函数 `make()` 落到 `make_0`
+/// （链接期 `_make` 未定义），类 `Helper()` 落到 `zeta_platform_obj`（＝657 记的
+/// "错误内存布局 ⇒ 崩在 `map_keys`"）。657 的兜底臂先把改写类名 `m657a__Holder`
+/// 去掉模块前缀还原成裸名 `Holder`，再按裸名查所属模块、用该模块的自有名建表。
+///
+/// 三组夹具（各一次 `lower_multi`）：
+/// - 主夹具：一个模块，方法体里分别引用模块私有函数（`get`）、另一个类（`build`）、
+///   自己所在的类（`fresh`＝自有名表里含类名自身这一项，变异 M3 的靶）；
+/// - 歧义夹具：两个模块各有一个同名类 `Shared` ⇒ `hits.len() == 1` 守卫让两个方法体
+///   **都**留在裸名 `extra_0`＝未修的现状锁（将来改成按调用点模块消歧时这两格要同步改，
+///   见 backlog #20005 余项）；
+/// - 对照夹具：模块级函数 `top` 走的是另一条臂（`func_name` 直接命中定义表），
+///   本批的六支变异都打不到它 ⇒ 只算防放松。
+///
+/// 端到端未修（记在 #20005 余项，本条不锁）：主夹具在 HEAD 上 AOT 仍链接失败，
+/// `_make` 由裸名副本段 `_get`／`_get_inst_i64` 引用——那些副本的 `func_name` 是裸名
+/// `get`（不含 `::`），兜底臂对它同样建不出表。
+#[test]
+fn method_bodies_recover_the_module_rename_table_from_the_mangled_class_name() {
+    const M657A: &str = r#"def make():
+    return 7
+
+
+class Helper:
+    def val(self):
+        return 3
+
+
+class Node:
+    def tag(self):
+        return 11
+
+
+class Holder:
+    def get(self):
+        return make()
+
+    def build(self):
+        return Helper()
+
+    def fresh(self):
+        return Node()
+"#;
+    const MAIN_FX: &str = r#"from m657a import Holder
+
+h = Holder()
+print(h.get())
+b = h.build()
+print(b.val())
+n = h.fresh()
+print(n.tag())
+"#;
+    // CPython 对同一段（`m657a.py` ＋ `main.py`，批次 10038 实拍）：7 / 3 / 11。
+    const M657C: &str = r#"def extra():
+    return 5
+
+
+class Shared:
+    def take(self):
+        return extra()
+"#;
+    const M657D: &str = r#"def extra():
+    return 6
+
+
+class Shared:
+    def take(self):
+        return extra()
+"#;
+    const MAIN_AMB: &str = r#"from m657c import Shared as Sc
+from m657d import Shared as Sd
+
+a = Sc()
+b = Sd()
+print(a.take())
+print(b.take())
+"#;
+    const M657E: &str = r#"def make():
+    return 7
+
+
+def top():
+    return make()
+"#;
+    const MAIN_CTL: &str = r#"from m657e import top
+
+print(top())
+"#;
+
+    let fx = lower_multi(&[("m657a.z", M657A), ("main.z", MAIN_FX)], "main.z");
+    let amb = lower_multi(
+        &[("m657c.z", M657C), ("m657d.z", M657D), ("main2.z", MAIN_AMB)],
+        "main2.z",
+    );
+    let ctl = lower_multi(&[("m657e.z", M657E), ("main3.z", MAIN_CTL)], "main3.z");
+
+    // 段内第一个 `Call` 的被调符号名（`get`／`build`／`fresh`／`take`／`top` 都只有一条调用）。
+    let call_of = |mirs: &[Mir], item: &str| -> String {
+        let m = mir(mirs, item);
+        m.stmts
+            .iter()
+            .find_map(|s| match s {
+                MirStmt::Call { func, .. } => Some(func.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{item} 段内没有 Call（实得 stmts {} 条）", m.stmts.len()))
+    };
+    // 那条 `Call` 的目的槽类型：改写目标错了 ⇒ 这里跟着变（`zeta_platform_obj` 那臂
+    // 的目的槽是 I64／没有类型），657 的内存布局症状在 MIR 面上的读数就在这一格。
+    let dest_ty_of = |mirs: &[Mir], item: &str| -> String {
+        let m = mir(mirs, item);
+        let dest = m
+            .stmts
+            .iter()
+            .find_map(|s| match s {
+                MirStmt::Call { dest, .. } => Some(*dest),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{item} 段内没有 Call（取不到目的槽）"));
+        match m.type_map.get(&dest) {
+            Some(t) => format!("{t:?}"),
+            None => format!("<目的槽 {dest} 没有类型>"),
+        }
+    };
+    // 调用点侧：只收带 `::` 的被调符号（方法调用点），运行时内部调用（`zeta_*`、
+    // `println_*`）不算，免得夹具形状一动就串格。
+    let scoped_calls = |mirs: &[Mir], item: &str| -> String {
+        call_symbols(mirs.iter().find(|m| m.name.as_deref() == Some(item)).expect("没有 main 段"))
+            .into_iter()
+            .filter(|f| f.contains("::"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+
+    let got: Vec<(&str, String)> = vec![
+        (
+            "Holder::get 体内模块私有函数的改写目标",
+            call_of(&fx, "m657a__Holder::get"),
+        ),
+        (
+            "Holder::build 体内另一个类的构造目标",
+            call_of(&fx, "m657a__Holder::build"),
+        ),
+        (
+            "Holder::build 目的槽类型（657 的内存布局症状在 MIR 面上的读数）",
+            dest_ty_of(&fx, "m657a__Holder::build"),
+        ),
+        (
+            "Holder::fresh 体内引用自己所在类的构造目标",
+            call_of(&fx, "m657a__Holder::fresh"),
+        ),
+        (
+            "Holder::fresh 目的槽类型",
+            dest_ty_of(&fx, "m657a__Holder::fresh"),
+        ),
+        (
+            "main 里三个方法调用点＋两个接收者方法",
+            scoped_calls(&fx, "main"),
+        ),
+        (
+            "歧义夹具：m657c__Shared::take 体内调用（未修现状锁＝裸名）",
+            call_of(&amb, "m657c__Shared::take"),
+        ),
+        (
+            "歧义夹具：m657d__Shared::take 体内调用（未修现状锁＝裸名）",
+            call_of(&amb, "m657d__Shared::take"),
+        ),
+        (
+            "对照：模块级函数 top 走定义命中臂",
+            call_of(&ctl, "m657e__top"),
+        ),
+    ];
+    let want: Vec<(&str, String)> = vec![
+        (
+            "Holder::get 体内模块私有函数的改写目标",
+            "m657a__make".to_string(),
+        ),
+        (
+            "Holder::build 体内另一个类的构造目标",
+            "m657a__Helper".to_string(),
+        ),
+        (
+            "Holder::build 目的槽类型（657 的内存布局症状在 MIR 面上的读数）",
+            r#"Named("m657a__Helper", [])"#.to_string(),
+        ),
+        (
+            "Holder::fresh 体内引用自己所在类的构造目标",
+            "m657a__Node".to_string(),
+        ),
+        (
+            "Holder::fresh 目的槽类型",
+            r#"Named("m657a__Node", [])"#.to_string(),
+        ),
+        (
+            "main 里三个方法调用点＋两个接收者方法",
+            "m657a__Holder::get,m657a__Holder::build,m657a__Helper::val,m657a__Holder::fresh,m657a__Node::tag"
+                .to_string(),
+        ),
+        (
+            "歧义夹具：m657c__Shared::take 体内调用（未修现状锁＝裸名）",
+            "extra_0".to_string(),
+        ),
+        (
+            "歧义夹具：m657d__Shared::take 体内调用（未修现状锁＝裸名）",
+            "extra_0".to_string(),
+        ),
+        (
+            "对照：模块级函数 top 走定义命中臂",
+            "m657e__make".to_string(),
+        ),
+    ];
+
+    assert_eq!(
+        want, got,
+        "方法段必须按改写类名还原裸类名、查到所属模块后建改写表（批次 657）——\
+         第 1 格读回 `make_0`＝改写表又空了；第 2/3 格（第 4/5 格同理）读回 \
+         `zeta_platform_obj`／非 `Named` 类型＝657 那个错误内存布局的形；\
+         第 7/8 格本该留在裸名 `extra_0`（两模块同名类的歧义未修，读到改写名＝守卫被\
+         放宽而没做消歧，先核对修法再改期望）；第 9 格走另一条臂，红了说明整个改写表机制坏了"
+    );
+}
