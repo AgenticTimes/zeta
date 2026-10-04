@@ -29318,3 +29318,24 @@ zeta_mean_vec（F64 正确值而非文本）；Known(map) ⇒ identity（字典�
 
 **验证**：编译零错误；内置单元测试 182/182；三 mean 夹具＋历史探针
 七套＋全量差分（--group 50）match=2845/2845＝100%；python_style 479/0。
+
+## 批次 914（2026-10-04，**checker 集成收官：P4 登记为后续项（checker 推断能力不足，贸然替换＝降级）**）
+
+P4 的前提是 checker 的 fn_rets 能替代 prime_body_ret 的 body 型——
+实测差距：prime_body_ret 靠 MirGen 全量降型（196 种 AST 臂，含方法调用/
+字段访问/内建全部面）确定 body 型；checker 的 infer_fn_body 只处理
+字面量赋值与赋值边（3 种形状）。贸然替换＝未覆盖面从 F64 降为 Unknown
+（类型推断降级）。
+**P4 正确定位＝checker 本体（F.2）的能力扩展项**，不是接线步骤——
+checker 基础设施（P1 骨架/P2 接线/P3 消费模式）已就位，后续扩展在
+此基础上迭代。
+
+**checker 集成里程碑总结**（批 910–914）：
+- P1 骨架 ✅：lattice/constraint/mod 三文件＋15 单测（911）
+- P2 接线 ✅：checker_env 贯通 resolver→MirGen（912）
+- P3 消费模式 ✅：mean 臂查 checker_env（913）
+- P4 回灌替换 ⏳：需 checker 本体能力扩展（本批登记）
+
+**验证**：编译零错误；内置单元测试 182/182；历史探针七套零差异；
+全量差分（--group 50）match=2845/2845＝100%；python_style 479/0；
+三 mean 夹具全对齐 CPython。
