@@ -29259,3 +29259,16 @@ None 警告）——已逐处恢复；教训入册＝**多行语句的删除禁�
 
 **验证**：编译零错误；内置单元测试 **166/166**（+4 钉）；历史探针七套
 零差异；全量差分（--group 50）match=2845/2845＝100%。
+
+## 批次 910 设计稿（2026-10-04，**F.2 checker 设计定稿——路线 B 落地为 SCCP 式 slot→型不动点**）
+
+设计稿：docs/f2-checker-design.md。要点：
+- 类型格三值（Unknown=PyDynamic / Known(Type) / Conflict），Conflict 运行期
+  保持 PyDynamic＋形状分派（890 变体 A 教训：绝不静默选边）
+- 约束来源五条（字面量/赋值边/调用返回/保守运算规则/注解），刻意不含
+  方法调用返回型（依赖运行期形状的留在 gen 现场臂）
+- 求解器＝SCCP 工作列表（def-use 邻接＝赋值/读的变量名索引；格单调必收敛）
+- 四个对接点逐一列出（回灌/预热/mean 特判/slot_fallback），每步独立可回退
+- 灰度 P1–P4：P1 骨架＋单测（不接线）→ P2 mean 面 → P3 注解面 →
+  P4 全面替换回灌＋删 prime_body_ret
+- 类设计：checker/{mod,lattice,constraint}.rs；TypeEnv.slots 以名字为键
