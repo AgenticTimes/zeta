@@ -59,8 +59,25 @@ pub struct InferCtx<'a> {
 }
 
 /// 单函数体内的递归扫描＋约束传播（批 915 重构：递归进 If/Loop 等嵌套块）。
-pub fn infer_fn_body(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
+/// 批 918 扩展：Return 语句收集→fn_rets（P4 回灌替换的前提）。
+pub fn infer_fn_body(env: &mut TypeEnv, fn_name: &str, body: &[AstNode], ctx: &InferCtx) {
     scan_stmts(env, body, ctx);
+    // Return 语句收集→fn_rets（批 918：P4 回灌替换的前提）
+    collect_fn_ret(env, fn_name, body);
+}
+
+/// 从函数体的 Return 语句推断返回型，记入 fn_rets。
+fn collect_fn_ret(env: &mut TypeEnv, fn_name: &str, body: &[AstNode]) {
+    for stmt in body {
+        if let AstNode::Return(e) = stmt {
+            if let Some(lat) = constraint::literal_lattice(e) {
+                if let Some(ty) = lat.known_ty() {
+                    env.fn_rets.insert(fn_name.to_string(), ty);
+                }
+            }
+            return;
+        }
+    }
 }
 
 fn scan_stmts(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
@@ -238,7 +255,7 @@ mod tests {
             type_decls: &HashMap::new(),
             module_globals: &Default::default(),
         };
-        infer_fn_body(&mut env, &[assign("x", AstNode::Lit(42))], &ctx);
+        infer_fn_body(&mut env, "test_fn", &[assign("x", AstNode::Lit(42))], &ctx);
         assert_eq!(env.get_slot("x"), LatticeTy::known(Type::I64));
     }
 
@@ -253,6 +270,7 @@ mod tests {
         };
         infer_fn_body(
             &mut env,
+            "test_fn",
             &[assign("a", AstNode::Lit(7)), assign("b", var("a"))],
             &ctx,
         );
@@ -270,6 +288,7 @@ mod tests {
         };
         infer_fn_body(
             &mut env,
+            "test_fn",
             &[
                 assign("x", AstNode::Lit(1)),
                 assign("x", AstNode::StringLit("s".to_string())),
@@ -292,6 +311,7 @@ mod tests {
         };
         infer_fn_body(
             &mut env,
+            "test_fn",
             &[assign("y", AstNode::Call {
                 receiver: None,
                 method: "get_data".to_string(),

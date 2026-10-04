@@ -5580,7 +5580,11 @@ fn shim_class_normalize(t: &Type) -> Type {
                         type_decls: &self.type_decls,
                         module_globals: &self.module_globals.borrow(),
                     };
-                    crate::middle::checker::infer_fn_body(&mut env, body, &ctx);
+                    let fn_name = match ast {
+                        AstNode::FuncDef { name, .. } => name.as_str(),
+                        _ => "",
+                    };
+                    crate::middle::checker::infer_fn_body(&mut env, fn_name, body, &ctx);
                 }
                 env
             })
