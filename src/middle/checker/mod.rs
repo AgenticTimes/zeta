@@ -381,28 +381,102 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
             }
         }
     }
-    // 下标结果型：DynamicArray(e) / Array(e, _) ⇒ e；Named("map",[K,V]) ⇒ V
-    if let AstNode::Subscript { base, .. } = rhs {
+    // 下标（批 923 重构：切片⇒DynamicArray(e)，取元素⇒e，map⇒V）
+    if let AstNode::Subscript { base, index } = rhs {
+        let is_slice = matches!(&**index, AstNode::Range { .. })
+            || matches!(&**index, AstNode::BinaryOp { op, .. } if op == "..");
         if let AstNode::Var(base_name) = &**base {
             let base_lat = env.get_slot(base_name);
-            if let LatticeTy::Known(Type::DynamicArray(e)) = &base_lat {
-                env.meet_slot(name, LatticeTy::known((**e).clone()));
+            if let Some(LatticeTy::Known(seq_elem)) = for_elem_lat(base, env) {
+                // 数组族序列：元素型已判定；切片保持动态数组形状
+                let res = if is_slice {
+                    Type::DynamicArray(Box::new(seq_elem))
+                } else {
+                    seq_elem
+                };
+                env.meet_slot(name, LatticeTy::known(res));
                 return;
             }
-            if let LatticeTy::Known(Type::Array(e, _)) = &base_lat {
-                env.meet_slot(name, LatticeTy::known((**e).clone()));
-                return;
-            }
-            if let LatticeTy::Known(Type::Named(n, targs)) = &base_lat {
-                if n == "map" {
-                    if let Some(v) = targs.get(1) {
-                        env.meet_slot(name, LatticeTy::known(v.clone()));
-                        return;
+            if !is_slice {
+                if let LatticeTy::Known(Type::Named(n, targs)) = &base_lat {
+                    if n == "map" {
+                        if let Some(v) = targs.get(1) {
+                            env.meet_slot(name, LatticeTy::known(v.clone()));
+                            return;
+                        }
                     }
                 }
             }
         }
     }
+    // 列表字面量：元素型可直接判定 ⇒ DynamicArray(元素型)（批 923）
+    if let AstNode::ArrayLit(elems) = rhs {
+        if let Some(lat) = uniform_elem_lat(elems) {
+            env.meet_slot(
+                name,
+                LatticeTy::known(Type::DynamicArray(Box::new(lat))),
+            );
+        }
+        return;
+    }
+    // 元组字面量：逐元素推断（批 923）
+    if let AstNode::Tuple(elems) = rhs {
+        let mut tys = Vec::new();
+        let mut all = true;
+        for e in elems {
+            match expr_known_ty(e, env, ctx) {
+                Some(t) => tys.push(t),
+                None => {
+                    all = false;
+                    break;
+                }
+            }
+        }
+        if all {
+            env.meet_slot(name, LatticeTy::known(Type::Tuple(tys)));
+        }
+        return;
+    }
+    // Cast ⇒ 目标注解型（批 923）
+    if let AstNode::Cast { ty, .. } = rhs {
+        env.meet_slot(name, LatticeTy::known(Type::from_string(ty)));
+        return;
+    }
+}
+
+/// 列表字面量的统一元素型：全部元素同型且可判定才给出（批 923）。
+fn uniform_elem_lat(elems: &[AstNode]) -> Option<Type> {
+    let mut ty: Option<Type> = None;
+    for e in elems {
+        let t = match e {
+            AstNode::Lit(_) => Type::I64,
+            AstNode::FloatLit(_) => Type::F64,
+            AstNode::StringLit(_) => Type::Str,
+            _ => return None,
+        };
+        match &ty {
+            None => ty = Some(t),
+            Some(prev) if *prev == t => {}
+            _ => return None,
+        }
+    }
+    ty
+}
+
+/// 表达式的已知型（元素级推断共用面，批 923）。
+fn expr_known_ty(e: &AstNode, env: &TypeEnv, ctx: &InferCtx) -> Option<Type> {
+    if let Some(lat) = constraint::literal_lattice(e) {
+        return lat.known_ty();
+    }
+    if let AstNode::Var(n) = e {
+        if let LatticeTy::Known(t) = env.get_slot(n) {
+            return Some(t);
+        }
+    }
+    if let AstNode::Call { method, .. } = e {
+        return ctx.ret_types.get(method).cloned();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -848,5 +922,115 @@ mod tests {
         );
         assert_eq!(env.get_slot("t"), LatticeTy::known(Type::Str));
         assert_eq!(env.get_slot("u"), LatticeTy::known(Type::Str));
+    }
+
+    /// 列表字面量全整数 ⇒ DynamicArray(I64)（批 923）。
+    #[test]
+    fn array_lit_int_types_dynamic_array() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign(
+                "xs",
+                AstNode::ArrayLit(vec![AstNode::Lit(1), AstNode::Lit(2)]),
+            )],
+            &ctx,
+        );
+        assert_eq!(
+            env.get_slot("xs"),
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::I64)))
+        );
+    }
+
+    /// 元组字面量 ⇒ Tuple(逐元素型)（批 923）。
+    #[test]
+    fn tuple_lit_types_tuple() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign(
+                "pair",
+                AstNode::Tuple(vec![AstNode::Lit(1), AstNode::StringLit("s".to_string())]),
+            )],
+            &ctx,
+        );
+        assert_eq!(
+            env.get_slot("pair"),
+            LatticeTy::known(Type::Tuple(vec![Type::I64, Type::Str]))
+        );
+    }
+
+    /// 切片（下标为 Range）⇒ DynamicArray(元素型)（批 923）。
+    #[test]
+    fn slice_read_types_dynamic_array() {
+        let mut env = TypeEnv::new();
+        env.meet_slot(
+            "arr",
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::F64))),
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign(
+                "part",
+                AstNode::Subscript {
+                    base: Box::new(var("arr")),
+                    index: Box::new(AstNode::Range {
+                        start: Box::new(AstNode::Lit(0)),
+                        end: Box::new(AstNode::Lit(2)),
+                        inclusive: false,
+                    }),
+                },
+            )],
+            &ctx,
+        );
+        assert_eq!(
+            env.get_slot("part"),
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::F64)))
+        );
+    }
+
+    /// Cast ⇒ from_string(目标型拼写)（批 923）。
+    #[test]
+    fn cast_types_target() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[assign(
+                "f",
+                AstNode::Cast {
+                    expr: Box::new(AstNode::Lit(1)),
+                    ty: "f64".to_string(),
+                },
+            )],
+            &ctx,
+        );
+        assert_eq!(
+            env.get_slot("f"),
+            LatticeTy::known(Type::from_string("f64"))
+        );
     }
 }
