@@ -82,6 +82,62 @@
 "F32/F64/PyDynamic 专用"推广为通用型传播）。五环节链路图（批 892）
 的①③④三环随之自然收敛。
 
+
+
+## 七、补充调研：Nim／Go／Rust／LuaJIT（2026-10-04 追加）
+
+### Nim（静态，编译到 C）
+- 管线：lex/parse → **sem.nim 语义检查 pass**（semExpr/semTypeNode 定型、
+  semfold 常量折叠、vm 编译期求值）→ C 生成。
+- 类型检查是**独立语义 pass**，产出带型 AST 供 codegen 消费；1.4 的增量
+  编译（IC）围绕 sem pass 缓存带型 AST。
+- **对 zeta**：sem pass → 带型 AST → codegen＝路线 B 的直系先例（判据原话
+  "类型环境全程序唯一"在此成立）。
+
+### Go（静态，自举）
+- 管线：noder（syntax→nodes）→ **types2（类型检查）** → unified IR →
+  irgen → walk → SSA。
+- **关键先例**：Go 1.18 起把编译器内手搓的类型检查器**替换为 go/types 的
+  移植版 types2**——消灭编译器与标准库两套类型系统各自漂移的问题。
+  unified IR 让导入包与编译包走同一表示。
+- **对 zeta**：这正是轴 F 的终极形态——**杀掉手搓重复、移植唯一判定**。
+  896–904 的命名合同（is_map/is_dynamic/is_untyped/slot_fallback）就是
+  "可移植词汇表"的雏形；F.2 的目标＝把它们背后的判定逻辑集中成一个
+  zeta 版 types2。
+
+### Rust（静态，自举，两级检查）
+- 管线：AST→HIR → **typeck pass**（FnCtxt＋InferCtxt＋trait solving，按 item
+  产出 **TypeckResults** 表）→ MIR → **MIR typecheck**（借用检查内的第二级
+  型检查）→ 优化。
+- 两个先例：①typeck 产出 **TypeckResults 表**、下游阶段只查表不重推
+  （＝路线 B 的产出物形态）；②**两级检查**（HIR 源级型检查＋MIR 降级后
+  的二级核验）——zeta 未来可在轴 G 加 MIR 级核验器（现登记项）。
+- 推断与检查分离：rustc_infer（推断上下文）与 rustc_hir_typeck（检查驱动）
+  是两个 crate——"推断机制"与"检查驱动"分家，机制可被多驱动复用。
+
+### LuaJIT（动态 → JIT，无静态检查器）
+- **完全没有静态类型检查**：解释器跑通用字节码；热路径 trace 记录时按
+  **运行期类型特化**（ADD 按实际型分裂成 ADDLN/ADDIV），guard 校验假设、
+  失败走 side trace 或经 snapshot 退回解释器。
+- parser 的 Dyndata 是**词法/语法期的成长数组记账**（表达式回填表、常量表），
+  与类型无关（899 目录名混淆澄清：Dyndata ≠ 型机制）。
+- **对 zeta**：LuaJIT 证明动态源可以在**无静态检查器**的前提下达到原生速
+  度——条件是运行期特化＋guard。zeta 的 893 落地形（PyDynamic＋形状分派）
+  即同一思想的 AOT 版；**真正不可静态判定的面走运行期守卫是被 LuaJIT 验证
+  过的终局方案**，#279 方案②的格标签就是 zeta 版 guard。
+
+### 补充结论
+
+1. 静态语言（Nim/Go/Rust）一致采用：**独立类型 pass → 带型表 → 下游查表**
+   （路线 B 有三个静态语言先例）；Go 的 types2 移植是"杀手搓重复"的终极形态。
+2. 动态 → AOT（zeta/LuaJIT）一致采用：**可静态判定的静态定，不可判定的
+   运行期守卫**——zeta 的 893 落地形方向被 LuaJIT 长期验证。
+3. Rust 的两级检查（HIR typeck ＋ MIR typecheck）提示 zeta 的终局可加
+   MIR 级核验器（轴 G 登记项）。
+4. 之前的四先例（Codon/Numba/TS/渐进类型）结论不变，本批补充的四个静态
+   语言先例使路线 B 的先例证据从"动态语言推断系统"扩展到"静态语言主流
+   编译器"——**先例证据完备**。
+
 ## 来源
 
 - Codon：官方文档（Compilation Flow）、USENIX 2023 论文（Shajii et al.）、
@@ -92,3 +148,8 @@
   src/compiler/checker.ts、TS 7 原生移植报道
 - 学术：Pierce & Turner 2000；Dunfield & Krishnaswami 2019/2022；
   Siek & Taha 2006；Typed Racket 系列
+- 补充：Nim 编译器内部（sem.nim/semfold.nim/vm.nim，IC 1.4 发布说明）；
+  Go cmd/compile 架构（noder/types2/unified IR，types2 移植 CL）；
+  rustc-dev-guide（type-checking/traits/resolution 章，FnCtxt/InferCtxt/
+  TypeckResults）；LuaJIT 内部（trace/guard/snapshot，lj_record，SO 与
+  Cornell CS6120 讲义）
