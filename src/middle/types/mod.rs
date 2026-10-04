@@ -2363,4 +2363,17 @@ mod tests {
             panic!("Expected Named type");
         }
     }
+    #[test]
+    fn from_string_takes_first_non_none_member_of_pep604_union() {
+        // 来源＝主树批次 208（ac7e9f56）：`pd.DataFrame | None` 这类联合注解整串解析失败时
+        // 类型退化，`df["col"] = v` 于是编译成对着结构体指针的 map 写入（实测崩在 map_insert）。
+        assert_eq!(
+            Type::from_string("Cache | None"),
+            Type::Named("Cache".to_string(), vec![])
+        );
+        assert_eq!(Type::from_string("float | None"), Type::F64);
+        assert_eq!(Type::from_string("None | str"), Type::Str);
+        // 全是 None 拼写时取不到成员，退回动态类型。
+        assert_eq!(Type::from_string("None | NoneType"), Type::PyDynamic);
+    }
 }

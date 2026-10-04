@@ -4063,3 +4063,122 @@ print(x)
     );
 }
 
+/// 批次 10032（移植主树批次 208 `ac7e9f56`）：PEP 604 联合注解取第一个非 `None` 成员。
+/// 症状（缺陷记录原文）：整串 `pd.DataFrame | None` 解析失败⇒类型退化，
+/// `ParquetCache.load(...) -> pd.DataFrame | None` 回来是个 map，于是 `df["col"] = v`
+/// 编成对着 DataFrame 结构体指针做 `DictInsert`（实测崩在 `map_insert`）。
+/// 现树规则：`Type::from_string` 与 `new_resolver::parse_type_string` 都跳过 `None`
+/// 取首个成员⇒目的槽拿到类名，赋值分派到该类的 `__setitem__`。
+/// 实测口径（本批变异研究）：夹具走的是**方法体返回值推型**（`return Cache()`），
+/// 移除 208 的三处注解分支（`types/mod.rs` 的联合分支、`new_resolver.rs` 的联合分支、
+/// `gen.rs` 的点号名分派分支）后 55 条结果一字不变⇒ 本条锁的是**这套分派现状**
+/// （目的槽拿到类名＋发 `__setitem__` 而不是 `DictInsert`），不是那三处注解分支的锁；
+/// 那三处里能直接调到的两处由 `src/middle/types/mod.rs` 与
+/// `src/middle/resolver/new_resolver.rs` 的模块内单元测试锁定。
+#[test]
+fn union_annotation_takes_first_non_none_member_for_setitem_dispatch() {
+    let mirs = lower_all(
+        r#"class Cache:
+    def load(self, path: str) -> Cache | None:
+        return Cache()
+    def __setitem__(self, k, v):
+        print("set", k, v)
+
+c = Cache()
+d = c.load("a")
+d["col"] = 1
+print("done")
+"#,
+    );
+    let main = mir(&mirs, "main");
+
+    let dest = main
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func.ends_with("load") => Some(*dest),
+            _ => None,
+        })
+        .expect("main 里有对 load 的调用");
+    let got = match main.type_map.get(&dest) {
+        Some(Type::Named(n, args)) if args.is_empty() => n.clone(),
+        other => panic!(
+            "`c.load(\"a\")` 调用点目的槽 id={dest} 该是类名 `Named(\"Cache\", [])`\
+             （208 之前整串 `Cache | None` 解析失败退化成 map），实得 {other:?}"
+        ),
+    };
+    assert_eq!(
+        got,
+        "Cache".to_string(),
+        "联合注解 `Cache | None` 应取第一个非 None 成员 `Cache`，实得 {got}"
+    );
+
+    // 症状格：`d["col"] = 1` 走类的 `__setitem__`，不是对着结构体指针的 map 写入。
+    let calls = call_symbols(main);
+    assert!(
+        calls.iter().any(|c| c.ends_with("__setitem__")),
+        "`d[\"col\"] = 1` 该分派到 `Cache::__setitem__`，实得调用: {calls:?}"
+    );
+    assert!(
+        !main
+            .stmts
+            .iter()
+            .any(|s| matches!(s, MirStmt::DictInsert { .. })),
+        "208 的症状就是发 `DictInsert`（对着结构体指针做 map 写入），这条语句不该出现"
+    );
+}
+
+/// 批次 10032 第二条：联合注解里的标量拼写（`float | None`）在 MIR 槽面上的现状。
+/// 症状来源：批次 150（`41e15672`）的 `float`／`int` 别名缺失＝形参退化；
+/// 批次 208（`ac7e9f56`）的联合串整串解析失败＝类型退化。叠加时 `amount: float | None`
+/// 既不能留整串也不能退化。
+/// 实测口径：这枚夹具的形参槽由调用点实参推型填成 F64，移除 150 的别名两行
+/// （`new_resolver.rs:440-441`）与 208 的联合分支后结果一字不变⇒ 本条是现状锁；
+/// 那两行别名改由 `new_resolver.rs` 的模块内单元测试（直接调 `parse_type_string`）锁，
+/// 即 10031 余项①问的"别名分支要换什么形状才打得到"＝直接调用，不是这套夹具。
+#[test]
+fn union_scalar_member_reaches_param_slot() {
+    let mirs = lower_all(
+        "def fee(amount: float | None) -> float:
+    return 2.0
+
+x = fee(1.5)
+print(x)
+",
+    );
+    let fee = mir(&mirs, "fee");
+    let amount = fee
+        .param_indices
+        .iter()
+        .find(|(n, _)| n == "amount")
+        .map(|(_, id)| *id)
+        .expect("形参 amount 应登记在 param_indices");
+    assert_eq!(
+        fee.type_map.get(&amount),
+        Some(&Type::F64),
+        "形参 `amount: float | None` 的槽 id={amount} 该取联合首个非 None 成员并解析成 F64\
+         （留整串＝解析失败，退化＝不透明命名型），实得 {:?}",
+        fee.type_map.get(&amount)
+    );
+
+    let main = mir(&mirs, "main");
+    let dest = main
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::Call { func, dest, .. } if func.starts_with("fee") => Some(*dest),
+            _ => None,
+        })
+        .expect("main 里有对 fee 的调用");
+    assert_eq!(
+        main.type_map.get(&dest),
+        Some(&Type::F64),
+        "调用点目的槽 id={dest} 该同为 F64"
+    );
+    let calls = call_symbols(main);
+    assert!(
+        calls.iter().any(|c| c.starts_with("println_f64")),
+        "`print(x)` 该按 F64 分派，实得调用: {calls:?}"
+    );
+}
+

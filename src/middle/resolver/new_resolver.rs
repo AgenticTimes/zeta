@@ -2157,4 +2157,21 @@ mod tests {
         // Note: We can't easily check the exact type since we don't have
         // a Type::Named constructor in the test, but we can verify it doesn't fail
     }
+    #[test]
+    fn parse_type_string_takes_first_non_none_member_of_pep604_union() {
+        // 来源＝主树批次 208（ac7e9f56）的另一侧：`InferContext::parse_type_string`
+        // 与 `Type::from_string` 各自有联合注解分支，两处都取第一个非 None 成员。
+        // 第二格同时销批次 10031 的余项①：`int`／`float` 别名两行（本文件 :440-441）
+        // 在 10031 那枚夹具的 MIR 槽面上打不到（移除后 53 条结果不变），这里直接调用打到。
+        let ctx = InferContext::new();
+        assert_eq!(
+            ctx.parse_type_string("Cache | None").unwrap(),
+            Type::Named("Cache".to_string(), vec![])
+        );
+        assert_eq!(ctx.parse_type_string("int | None").unwrap(), Type::I64);
+        assert_eq!(
+            ctx.parse_type_string("None | NoneType").unwrap(),
+            Type::PyDynamic
+        );
+    }
 }
