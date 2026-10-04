@@ -200,6 +200,56 @@ pub fn collect_param_evidence(
     table.into_iter().map(|(k, (cand, _))| (k, cand)).collect()
 }
 
+/// 模块级 checker 推断计划（批 938）：证据表＋并入 body_rets 的查表＋
+/// 函数 env 缓存。lower_to_mir 每函数/闭包调用一次（batch 738 在册
+/// 651 次）——这套编排只依赖全模块注册表，在入口惰性构建一次。
+pub struct ModuleCheckerPlan {
+    pub evidence: HashMap<String, Vec<Option<Type>>>,
+    pub ret_map_full: HashMap<String, Type>,
+    pub env_cache: HashMap<String, TypeEnv>,
+}
+
+/// 惰性构建模块级推断计划（批 938）：字面量证据 → body_rets → 每函数
+/// 推断缓存 env → 二跳/三跳证据。
+pub fn build_module_checker_plan(
+    funcs: &HashMap<String, AstNode>,
+    ret_map: &HashMap<String, Type>,
+    type_decls: &HashMap<String, crate::middle::mir::r#gen::TypeDecl>,
+    module_globals: &std::collections::HashSet<String>,
+) -> ModuleCheckerPlan {
+    let ev0 = collect_param_evidence(funcs, None, None);
+    let body_rets =
+        collect_module_body_rets(funcs, &ev0, ret_map, type_decls, module_globals);
+    let mut lookup = body_rets.clone();
+    for (k, v) in ret_map.iter() {
+        lookup.entry(k.clone()).or_insert(v.clone());
+    }
+    let ctx = InferCtx {
+        ret_types: &lookup,
+        type_decls,
+        module_globals,
+    };
+    let mut env_cache: HashMap<String, TypeEnv> = HashMap::new();
+    for (fname, fdef) in funcs.iter() {
+        if let AstNode::FuncDef { params, body, .. } = fdef {
+            let mut fenv = TypeEnv::new();
+            let f_ev = ev0.get(fname).map(|v| v.as_slice());
+            infer_fn_body_full(&mut fenv, fname, params, f_ev, body, &ctx);
+            env_cache.insert(fname.clone(), fenv);
+        }
+    }
+    let evidence = collect_param_evidence(funcs, Some(&body_rets), Some(&env_cache));
+    let mut ret_map_full = body_rets;
+    for (k, v) in ret_map.iter() {
+        ret_map_full.entry(k.clone()).or_insert(v.clone());
+    }
+    ModuleCheckerPlan {
+        evidence,
+        ret_map_full,
+        env_cache,
+    }
+}
+
 /// 模块级 body 返回型收集（批 935）：对全部注册函数各建独立 env 推断
 /// 一轮（参数注解/证据先入槽），收集各自的 fn_rets 成全局表。供 resolver
 /// 并入 ctx 的 ret_types 查表——无注解函数调用的返回型由此闭环

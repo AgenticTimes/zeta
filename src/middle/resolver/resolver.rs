@@ -78,6 +78,11 @@ pub struct Resolver {
     star_params: RefCell<HashMap<String, (Option<String>, Option<String>)>>,
     /// Registered function ASTs (including module functions)
     registered_funcs: HashMap<String, AstNode>,
+    /// 批 938：checker 跨函数推断计划缓存。lower_to_mir 每函数/闭包调用
+    /// 一次（batch 738 在册 651 次），而证据/body_rets/函数 env 缓存只依赖
+    /// 全模块注册表——惰性构建一次，闭包内只查。
+    checker_plan:
+        RefCell<Option<crate::middle::checker::ModuleCheckerPlan>>,
     /// Module resolver for Zorb imports
     module_resolver: ModuleResolver,
     /// Macro expander for macro processing
@@ -186,6 +191,7 @@ impl Resolver {
             repl_lowering: false,
             star_params: RefCell::new(HashMap::new()),
             registered_funcs: HashMap::new(),
+            checker_plan: RefCell::new(None),
             module_resolver: ModuleResolver::new("."),
             macro_expander: MacroExpander::new(),
             type_decls: HashMap::new(),
@@ -5573,66 +5579,26 @@ fn shim_class_normalize(t: &Type) -> Type {
                     .iter()
                     .map(|(n, (_, r, _))| (n.clone(), r.clone()))
                     .collect();
-                // 批 935：无注解函数的 body 返回型并入查表（注解优先，
-                // or_insert 不覆盖）——`x = g()`（g 无注解但 return 1.5）
-                // 的 x 由此推得 F64。
-                // 批 936 两轮：字面量证据 → body_rets → 二跳证据
-                //（实参为调用表达式时吃被调函数的 body 返回型）。
-                let ev0 = crate::middle::checker::collect_param_evidence(
-                    &self.registered_funcs,
-                    None,
-                    None,
-                );
-                let body_rets = crate::middle::checker::collect_module_body_rets(
-                    &self.registered_funcs,
-                    &ev0,
-                    &ret_map,
-                    &self.type_decls,
-                    &self.module_globals.borrow(),
-                );
-                // 批 937 三跳：先给每个函数推断一轮缓存 env，
-                // Var 实参的证据查调用函数自己的槽型。
-                let mut lookup = body_rets.clone();
-                for (k, v) in ret_map.iter() {
-                    lookup.entry(k.clone()).or_insert(v.clone());
+                // 批 935–937 编排（证据/body_rets/env 缓存）批 938 起在
+                // 入口惰性构建一次：lower_to_mir 每函数/闭包调用一次
+                //（batch 738 在册 651 次），闭包内只查缓存。
+                let ret_map_for_plan = ret_map;
+                if self.checker_plan.borrow().is_none() {
+                    let plan = crate::middle::checker::build_module_checker_plan(
+                        &self.registered_funcs,
+                        &ret_map_for_plan,
+                        &self.type_decls,
+                        &self.module_globals.borrow(),
+                    );
+                    *self.checker_plan.borrow_mut() = Some(plan);
                 }
-                let ev_ctx = crate::middle::checker::InferCtx {
-                    ret_types: &lookup,
-                    type_decls: &self.type_decls,
-                    module_globals: &self.module_globals.borrow(),
-                };
-                let mut env_cache: std::collections::HashMap<
-                    String,
-                    crate::middle::checker::TypeEnv,
-                > = std::collections::HashMap::new();
-                for (fname, fdef) in self.registered_funcs.iter() {
-                    if let AstNode::FuncDef { params, body, .. } = fdef {
-                        let mut fenv = crate::middle::checker::TypeEnv::new();
-                        let f_ev = ev0.get(fname).map(|v| v.as_slice());
-                        crate::middle::checker::infer_fn_body_full(
-                            &mut fenv,
-                            fname,
-                            params,
-                            f_ev,
-                            body,
-                            &ev_ctx,
-                        );
-                        env_cache.insert(fname.clone(), fenv);
-                    }
-                }
-                let evidence = crate::middle::checker::collect_param_evidence(
-                    &self.registered_funcs,
-                    Some(&body_rets),
-                    Some(&env_cache),
-                );
-                let mut ret_map_full = ret_map;
-                for (k, v) in body_rets {
-                    ret_map_full.entry(k).or_insert(v);
-                }
+                let plan = self.checker_plan.borrow();
+                let plan = plan.as_ref().expect("checker plan 已构建");
+                let ret_map_full = &plan.ret_map_full;
                 let mut env = crate::middle::checker::TypeEnv::new();
                 if let AstNode::FuncDef { body, .. } = ast {
                     let ctx = crate::middle::checker::InferCtx {
-                        ret_types: &ret_map_full,
+                        ret_types: ret_map_full,
                         type_decls: &self.type_decls,
                         module_globals: &self.module_globals.borrow(),
                     };
@@ -5644,8 +5610,8 @@ fn shim_class_normalize(t: &Type) -> Type {
                         }
                         _ => ("", Vec::new()),
                     };
-                    // 复用外层（批 935 起）已构建的证据表
-                    let ev_slice = evidence.get(fn_name).map(|v| v.as_slice());
+                    // 查缓存的证据表（批 938）
+                    let ev_slice = plan.evidence.get(fn_name).map(|v| v.as_slice());
                     crate::middle::checker::infer_fn_body_full(
                         &mut env,
                         fn_name,
