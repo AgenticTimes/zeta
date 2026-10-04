@@ -429,6 +429,18 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
             env.meet_slot(name, LatticeTy::known(t));
             return;
         }
+        // 标量 abs/min/max（批 932）：操作数槽已知同型 ⇒ 同型
+        if matches!(method.as_str(), "abs" | "min" | "max") && receiver.is_none() {
+            let operand_lats: Vec<LatticeTy> =
+                args.iter().filter_map(|a| expr_known_ty(a, env, ctx)).map(LatticeTy::known).collect();
+            if !operand_lats.is_empty()
+                && operand_lats.iter().all(|l| l == &operand_lats[0])
+                && is_numeric_ty(operand_lats[0].known_ty().as_ref().unwrap_or(&Type::I64))
+            {
+                env.meet_slot(name, operand_lats[0].clone());
+                return;
+            }
+        }
         // len ⇒ I64；sorted ⇒ DynamicArray(元素型)（批 930）
         if method == "len" {
             env.meet_slot(name, LatticeTy::known(Type::I64));
@@ -1337,6 +1349,33 @@ mod tests {
             );
             assert_eq!(env.get_slot("ks"), LatticeTy::known(expect));
         }
+    }
+
+    /// abs(x) 操作数槽已知数值 ⇒ 同型；min/max 双同型 ⇒ 同型（批 932）。
+    #[test]
+    fn scalar_abs_minmax_propagates() {
+        let mut env = TypeEnv::new();
+        env.meet_slot("v", LatticeTy::known(Type::F64));
+        env.meet_slot("a", LatticeTy::known(Type::I64));
+        env.meet_slot("b", LatticeTy::known(Type::I64));
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[
+                assign("m", call("abs", vec![var("v")])),
+                assign("lo", call("min", vec![var("a"), var("b")])),
+                assign("hi", call("max", vec![var("a"), var("b")])),
+            ],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("m"), LatticeTy::known(Type::F64));
+        assert_eq!(env.get_slot("lo"), LatticeTy::known(Type::I64));
+        assert_eq!(env.get_slot("hi"), LatticeTy::known(Type::I64));
     }
 
     /// sorted(xs) ⇒ DynamicArray(元素型)（批 930）。
