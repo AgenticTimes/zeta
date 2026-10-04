@@ -65,7 +65,6 @@ pub mod workflows;
 pub mod zeta;
 
 // Paradigm-shifting features (simplified implementation)
-pub mod paradigm_simple;
 
 // #[cfg(test)]
 // mod tests;
