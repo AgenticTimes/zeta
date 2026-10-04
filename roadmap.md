@@ -29272,3 +29272,23 @@ None 警告）——已逐处恢复；教训入册＝**多行语句的删除禁�
 - 灰度 P1–P4：P1 骨架＋单测（不接线）→ P2 mean 面 → P3 注解面 →
   P4 全面替换回灌＋删 prime_body_ret
 - 类设计：checker/{mod,lattice,constraint}.rs；TypeEnv.slots 以名字为键
+
+## 批次 911（2026-10-04，**轴 F P1 骨架：checker 模块三文件＋15 单测——不接线**）
+
+设计稿（批 910）的 P1 落地：
+- **lattice.rs**：LatticeTy 三值格（Unknown/Known(Type)/Conflict）＋ meet
+  ＋ known_ty 提取；格六单测（单位元/稳定性/冲突吸收/结合律核心案例）。
+- **constraint.rs**：字面量→格值提取（保守子集：int/str/f64/NoneValue）＋
+  注解委托 Type::from_string；六单测。
+- **mod.rs**：TypeEnv（slots 以名字为键＋fn_rets）＋ meet_slot（变更报告）
+  ＋ infer_fn_body P1 保守子集（字面量赋值＋赋值边传播，四种单测：
+  字面量定型/边传播/冲突/单位元）。
+- **resolver 1375**：PyDynamic 判定顺手收敛 `ty.is_dynamic()`（904 合同首个
+  resolver 消费点）。
+**未接线**：不进任何现有管线（设计稿 P2–P4 再接）。契约测试发现
+from_string 不认 set[str]（归一发生在注解包装面）——测试按 from_string
+实际合同收窄。
+
+**验证**：编译零错误；内置单元测试 **182/182**（+16：格六＋约束六＋
+TypeEnv 四）；历史探针七套零差异；全量差分（--group 50）
+match=2845/2845＝100%。

@@ -1,4 +1,5 @@
 // src/middle/mod.rs
+pub mod checker;
 pub mod const_eval;
 pub mod ctfe;
 pub mod mir;
