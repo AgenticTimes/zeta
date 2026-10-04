@@ -4362,6 +4362,9 @@ print(s)
 ///   `m647a__Cfg::show`／`m647b__Cfg::show`；两段的 `self` 槽型分别是
 ///   `Named("m647a__Cfg")`／`Named("m647b__Cfg")`；方法体里的加数常量分别 `1`／`7`；
 ///   构造段返回的 `Struct` 变体名与段名一字相同。
+/// 第二枚夹具＝不带 `__init__` 的跨模块同名类（构造器由编译器合成，走另一条 `ret_expr:
+///     `Some(StructLit)` 路径），检查的格子与第一枚相同（调用点目标名＋构造段变体名），
+///     用来打合成路径那两处站点。
 #[test]
 fn cross_module_same_named_class_methods_keep_their_own_mangled_target() {
     let mirs = lower_multi(
@@ -4494,5 +4497,68 @@ print(b.show())
         want_variant, variant,
         "构造器返回的 Struct 变体名该带模块前缀（651 之前两枚构造都返回裸 `Cfg`，\
          接收者型随之塌成同一个类＝方法派发撞车；左＝期望，右＝逐格实得）"
+    );
+
+    // ⑤⑥ 第二枚夹具＝不带 `__init__` 的类（构造器由编译器合成，走另一条
+    //     `ret_expr: Some(StructLit)` 路径）。同样是跨模块同名类，检查合成构造器
+    //     有没有带上模块前缀（D／E 两臂的靶格）。
+    let mirs2 = lower_multi(
+        &[
+            (
+                "m647a.z",
+                r#"class Cfg:
+    def show(self):
+        return self.v + 1
+"#,
+            ),
+            (
+                "m647b.z",
+                r#"class Cfg:
+    def show(self):
+        return self.v + 7
+"#,
+            ),
+            (
+                "main.z",
+                r#"from m647a import Cfg as CfgA
+from m647b import Cfg as CfgB
+
+a = CfgA()
+b = CfgB()
+print(a.show())
+print(b.show())
+"#,
+            ),
+        ],
+        "main.z",
+    );
+    let main2 = mir(&mirs2, "main");
+    let sites2: Vec<String> = call_symbols(main2)
+        .into_iter()
+        .filter(|f| {
+            f.ends_with("__Cfg") || f.ends_with("Cfg::show") || f == "Cfg::show" || f == "show"
+        })
+        .collect();
+    assert_eq!(
+        want_sites.to_vec(),
+        sites2.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        "不带 `__init__` 的同名类同样该在四个调用点打到本模块的改写键（合成构造器那两条路径\
+         ＝651 的另两处站点）（左＝期望，右＝实得）"
+    );
+    let mut variant2: Vec<(&str, Option<String>)> = Vec::new();
+    for seg in ["m647a__Cfg", "m647b__Cfg"] {
+        let m = mir(&mirs2, seg);
+        let found = m
+            .exprs
+            .values()
+            .find_map(|e| match e {
+                MirExpr::Struct { variant, .. } => Some(variant.clone()),
+                _ => None,
+            });
+        variant2.push((seg, found));
+    }
+    assert_eq!(
+        want_variant, variant2,
+        "合成构造器返回的 Struct 变体名也该带模块前缀（左＝期望，右＝逐格实得）"
     );
 }
