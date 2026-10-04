@@ -4362,9 +4362,10 @@ print(s)
 ///   `m647a__Cfg::show`／`m647b__Cfg::show`；两段的 `self` 槽型分别是
 ///   `Named("m647a__Cfg")`／`Named("m647b__Cfg")`；方法体里的加数常量分别 `1`／`7`；
 ///   构造段返回的 `Struct` 变体名与段名一字相同。
-/// 第二枚夹具＝不带 `__init__` 的跨模块同名类（构造器由编译器合成，走另一条 `ret_expr:
-///     `Some(StructLit)` 路径），检查的格子与第一枚相同（调用点目标名＋构造段变体名），
-///     用来打合成路径那两处站点。
+/// 另有两枚夹具检查同样的格子（调用点目标名＋构造段变体名）：第二枚＝不带 `__init__`
+/// 的跨模块同名类（构造器由编译器合成），第三枚＝带基类的同名子类（基类写 `__init__`、
+/// 子类显式调用它）。一次性探针实测＝这两枚都打到 `resolver.rs:2853` 那条合成构造器
+/// 路径（探针打印 `ty` 是裸名 `Cfg`），`resolver.rs:2735` 那条四形都没到。
 #[test]
 fn cross_module_same_named_class_methods_keep_their_own_mangled_target() {
     let mirs = lower_multi(
@@ -4499,9 +4500,9 @@ print(b.show())
          接收者型随之塌成同一个类＝方法派发撞车；左＝期望，右＝逐格实得）"
     );
 
-    // ⑤⑥ 第二枚夹具＝不带 `__init__` 的类（构造器由编译器合成，走另一条
-    //     `ret_expr: Some(StructLit)` 路径）。同样是跨模块同名类，检查合成构造器
-    //     有没有带上模块前缀（D／E 两臂的靶格）。
+    // ⑤⑥ 第二枚夹具＝不带 `__init__` 的类（构造器由编译器合成）。同样是跨模块同名
+    //     类，检查合成构造器有没有带上模块前缀。撤 651 里两条 `ret_expr: Some(StructLit)`
+    //     站点（`resolver.rs:2735`／`:2853`）后这一格仍不变（探针实测与台账见批次 10035）。
     let mirs2 = lower_multi(
         &[
             (
@@ -4560,5 +4561,90 @@ print(b.show())
     assert_eq!(
         want_variant, variant2,
         "合成构造器返回的 Struct 变体名也该带模块前缀（左＝期望，右＝逐格实得）"
+    );
+    // ⑦⑧ 第三枚夹具＝带基类的同名子类（子类自己写 `__init__` 并显式调用基类构造）。
+    //     打这形的理由＝一次性探针实测：本形与第二枚（不带 `__init__`）都打到
+    //     `resolver.rs:2853` 那条构造器合成路径（探针打印 `ty` 还是裸名 `Cfg`），
+    //     而 `:2735` 那条一次都没到。检查的格子仍与第一枚相同：调用点目标名＋
+    //     构造段变体名。
+    let mirs3 = lower_multi(
+        &[
+            (
+                "m647a.z",
+                r#"class Base:
+    def __init__(self, tag):
+        self.tag = tag
+
+class Cfg(Base):
+    def __init__(self, x):
+        Base.__init__(self, "Rex")
+        self.legs = x
+
+    def show(self):
+        return self.legs + 1
+"#,
+            ),
+            (
+                "m647b.z",
+                r#"class Base:
+    def __init__(self, tag):
+        self.tag = tag
+
+class Cfg(Base):
+    def __init__(self, x):
+        Base.__init__(self, "Rex")
+        self.legs = x
+
+    def show(self):
+        return self.legs + 7
+"#,
+            ),
+            (
+                "main.z",
+                r#"from m647a import Cfg as CfgA
+from m647b import Cfg as CfgB
+
+a = CfgA(3)
+b = CfgB(4)
+print(a.show())
+print(b.show())
+"#,
+            ),
+        ],
+        "main.z",
+    );
+    let main3 = mir(&mirs3, "main");
+    let sites3: Vec<String> = call_symbols(main3)
+        .into_iter()
+        .filter(|f| {
+            f.ends_with("__Cfg") || f.ends_with("Cfg::show") || f == "Cfg::show" || f == "show"
+        })
+        .collect();
+    assert_eq!(
+        want_sites.to_vec(),
+        sites3.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        "带基类的同名子类同样该在四个调用点打到本模块的改写键（左＝期望，右＝实得）"
+    );
+    let mut variant3: Vec<(&str, Option<String>)> = Vec::new();
+    for seg in ["m647a__Cfg", "m647b__Cfg"] {
+        let m = mir(&mirs3, seg);
+        let structs: Vec<&String> = m
+            .exprs
+            .values()
+            .filter_map(|e| match e {
+                MirExpr::Struct { variant, .. } => Some(variant),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            1,
+            structs.len(),
+            "{seg} 段内该只有构造器那一个 Struct 字面量（多个＝变体名的归因会随哈希顺序漂）"
+        );
+        variant3.push((seg, Some(structs[0].clone())));
+    }
+    assert_eq!(
+        want_variant, variant3,
+        "基类接管后构造器返回的 Struct 变体名也该带模块前缀（左＝期望，右＝逐格实得）"
     );
 }
