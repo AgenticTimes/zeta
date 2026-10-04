@@ -33,7 +33,7 @@ impl MirGen {
                     .type_map
                     .get(&expr_id)
                     .cloned()
-                    .unwrap_or(Type::I64);
+                    .unwrap_or(Type::slot_fallback());
                 self.type_map.insert(temp_id, temp_ty);
             }
     }

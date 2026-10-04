@@ -209,7 +209,7 @@ impl MirGen {
                 .and_then(|pid| self.type_map.get(pid))
                 .cloned()
                 .or_else(|| self.global_ty_of(&key))
-                .unwrap_or(Type::I64);
+                .unwrap_or(Type::slot_fallback());
             child.type_map.insert(slot_id, cap_ty);
             child.name_to_id.insert(name.clone(), slot_id);
             child.captured_vars.insert(name.clone(), name_id);

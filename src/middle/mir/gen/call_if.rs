@@ -80,7 +80,7 @@ impl MirGen {
                 // Create destination for expression result
                 self.exprs.insert(dest_id, MirExpr::Var(dest_id));
                 self.type_map
-                    .insert(dest_id, ast_branch_ty.clone().unwrap_or(Type::I64));
+                    .insert(dest_id, ast_branch_ty.clone().unwrap_or(Type::slot_fallback()));
 
                 // Helper function to process block
                 fn process_block(

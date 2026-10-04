@@ -323,7 +323,7 @@ impl MirGen {
                         // the handle tag was lost and the link failed with a
                         // bare `_a__C.exists`. `from a import C` worked (its
                         // binding path already carried the type).
-                        let ty = self.global_ty_of(&key).unwrap_or(Type::I64);
+                        let ty = self.global_ty_of(&key).unwrap_or(Type::slot_fallback());
                         self.type_map.insert(dest, ty);
                         return dest;
                     }
@@ -558,7 +558,7 @@ impl MirGen {
                     _ => None,
                 },
             };
-            self.type_map.insert(dest, field_ty.unwrap_or(Type::I64));
+            self.type_map.insert(dest, field_ty.unwrap_or(Type::slot_fallback()));
             dest
     }
 }

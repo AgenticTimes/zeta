@@ -153,7 +153,7 @@ impl MirGen {
                                 .get(&func)
                                 .or_else(|| self.func_ret_types.get(&member))
                                 .cloned()
-                                .unwrap_or(Type::I64);
+                                .unwrap_or(Type::slot_fallback());
                             self.type_map.insert(id, ty);
                         }
                         return id;
@@ -1982,7 +1982,7 @@ call, no NULL-handle dereference).",
                         if let Some(t) = tag {
                             let vid = self.next_id();
                             self.exprs.insert(vid, MirExpr::Var(val_id));
-                            self.type_map.insert(vid, vt.clone().unwrap_or(Type::I64));
+                            self.type_map.insert(vid, vt.clone().unwrap_or(Type::slot_fallback()));
                             let tid = self.next_id();
                             self.exprs.insert(tid, MirExpr::IntLit(t));
                             self.type_map.insert(tid, Type::I64);
@@ -3141,7 +3141,7 @@ call, no NULL-handle dereference).",
                 });
                 self.exprs.insert(id, MirExpr::Var(id));
                 self.type_map
-                    .insert(id, receiver_ty.unwrap_or(Type::I64));
+                    .insert(id, receiver_ty.unwrap_or(Type::slot_fallback()));
                 return id;
             }
             // 批次 806（t572 known-fail 收口）：vec 形接收者上的 `xs.into_iter()`
@@ -3498,7 +3498,7 @@ call, no NULL-handle dereference).",
                         .closure_ret_tys
                         .get(n)
                         .cloned()
-                        .unwrap_or(Type::I64),
+                        .unwrap_or(Type::slot_fallback()),
                     _ => Type::I64,
                 };
                 self.stmts.push(MirStmt::Call {
@@ -4029,7 +4029,7 @@ call, no NULL-handle dereference).",
                     self.exprs.insert(id, MirExpr::Var(id));
                     let ret_ty = match method.as_str() {
                         "index" | "count" => Type::I64,
-                        "pop" => elem.clone().unwrap_or(Type::I64),
+                        "pop" => elem.clone().unwrap_or(Type::slot_fallback()),
                         "sort" | "reverse" => rt.clone(),
                         _ => Type::I64,
                     };
@@ -4126,7 +4126,7 @@ call, no NULL-handle dereference).",
                             .type_map
                             .get(&arg_ids[2])
                             .cloned()
-                            .unwrap_or(Type::I64);
+                            .unwrap_or(Type::slot_fallback());
                         let concrete_other = !matches!(vt, Type::I64);
                         while targs.len() < 2 {
                             targs.push(Type::I64);
@@ -4568,7 +4568,7 @@ call, no NULL-handle dereference).",
                                     .type_map
                                     .get(&arg_ids[1])
                                     .cloned()
-                                    .unwrap_or(Type::I64);
+                                    .unwrap_or(Type::slot_fallback());
                                 if !matches!(vty, Type::I64) {
                                     self.type_map
                                         .insert(slot, Type::DynamicArray(Box::new(vty)));
@@ -4697,7 +4697,7 @@ call, no NULL-handle dereference).",
                 self.type_map.insert(
                     id,
                     Type::DynamicArray(Box::new(
-                        collected_elem.unwrap_or(Type::I64),
+                        collected_elem.unwrap_or(Type::slot_fallback()),
                     )),
                 );
                 return id;
@@ -4819,7 +4819,7 @@ call, no NULL-handle dereference).",
                         .type_map
                         .get(&arg_ids[2])
                         .cloned()
-                        .unwrap_or(Type::I64);
+                        .unwrap_or(Type::slot_fallback());
                     let concrete_other = !matches!(vt, Type::I64);
                     while targs.len() < 2 {
                         targs.push(Type::I64);
@@ -5680,7 +5680,7 @@ call, no NULL-handle dereference).",
                         self.type_map
                             .get(&aid)
                             .cloned()
-                            .unwrap_or(Type::I64)
+                            .unwrap_or(Type::slot_fallback())
                     })
                     .collect();
             }
@@ -5740,7 +5740,7 @@ call, no NULL-handle dereference).",
                     .closure_ret_tys
                     .get(&closure_fn)
                     .cloned()
-                    .unwrap_or(Type::I64);
+                    .unwrap_or(Type::slot_fallback());
                 self.type_map.insert(id, ret_ty);
                 return id;
             }
@@ -5804,7 +5804,7 @@ call, no NULL-handle dereference).",
                             .func_ret_types
                             .get(base)
                             .cloned()
-                            .unwrap_or(Type::I64),
+                            .unwrap_or(Type::slot_fallback()),
                     },
                 };
                 // PY: generic callee — substitute concrete type args into

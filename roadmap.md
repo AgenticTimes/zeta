@@ -29057,3 +29057,18 @@ minimal_compiler.z（800 行）2.3-2.5s／全量差分 --group 50 = 274.45s。
 任何触编译性能的改动（轴 C 的 clone/HashMap/intern）合并前在同文件同法复测追加。
 
 验证：编译零错误；基线文件入库 tools/baselines/compile_perf.txt。
+
+## 批次 896（2026-10-04，**重构批：轴 F 首步——I64 槽兜底收口到 slot_fallback 唯一入口（middle/mir 树 34 处清零）**）
+
+F.1 清单刷新（814 时点 228 处 → 现测：PyDynamic 判定 32／map-dict 字符串比较
+31／NoneValue 14／I64 兜底 36 硬写＋42 已收口——口径与 814 不同，绝对值不可比，
+相对趋势＝gen.rs 迁移后散点面缩小）。
+本批收口：src/middle/mir/ 树（gen.rs＋13 家族文件）的 `unwrap_or(Type::I64)`
+34 处全部改 `unwrap_or(Type::slot_fallback())`——行为中立（slot_fallback 就
+返回 I64），语义＝兜底决策收拢到 types/mod.rs 的命名合同（839 批先例的续片）。
+**升级通道就位**：#279 方案②若推广"未知槽＝PyDynamic"，只改 slot_fallback
+一处＋跑全量。resolver 树 2 处与 types/mod.rs 的 map_kv 缺省未动（前者属
+resolver 面、后者是 map 键值型语义缺省，均非"未知槽兜底"）。
+
+**验证**：编译零错误；内置单元测试 158/158；历史探针七套零差异；
+全量差分（--group 50）match=2845/2845＝100%；python_style 479/0。

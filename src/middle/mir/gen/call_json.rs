@@ -106,7 +106,7 @@ impl MirGen {
                     });
                 }
                 let arg_id = self.lower_expr(&args[0]);
-                let ty = self.type_map.get(&arg_id).cloned().unwrap_or(Type::I64);
+                let ty = self.type_map.get(&arg_id).cloned().unwrap_or(Type::slot_fallback());
                 let route = json_route(&ty);
                 if let Some(tag) = route.vec_elem_tag {
                     let tag_id = self.next_id();
@@ -127,7 +127,7 @@ impl MirGen {
             }
             if m == "json" && mem == "dump" && args.len() == 2 {
                 let obj_id = self.lower_expr(&args[0]);
-                let oty = self.type_map.get(&obj_id).cloned().unwrap_or(Type::I64);
+                let oty = self.type_map.get(&obj_id).cloned().unwrap_or(Type::slot_fallback());
                 let route = json_route(&oty);
                 let text_id = self.next_id();
                 let mut cargs = vec![obj_id];

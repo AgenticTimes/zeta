@@ -700,7 +700,7 @@ impl MirGen {
                         if l == Type::I64 && r != Type::I64 { r } else { l }
                     }
                     (Some(l), None) => l,
-                    (None, r) => r.unwrap_or(Type::I64),
+                    (None, r) => r.unwrap_or(Type::slot_fallback()),
                     _ => Type::I64,
                 };
                 self.stmts.push(MirStmt::Call {
@@ -789,7 +789,7 @@ impl MirGen {
                         self.exprs.insert(dest, MirExpr::Var(dest));
                         self.type_map.insert(
                             dest,
-                            self.type_map.get(&left_id).cloned().unwrap_or(Type::I64),
+                            self.type_map.get(&left_id).cloned().unwrap_or(Type::slot_fallback()),
                         );
                         return dest;
                     }

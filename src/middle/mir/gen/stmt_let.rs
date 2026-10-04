@@ -101,7 +101,7 @@ impl MirGen {
                         } else {
                             refined
                         };
-                        let refined = refined.unwrap_or(Type::I64);
+                        let refined = refined.unwrap_or(Type::slot_fallback());
                         self.type_map.insert(lhs_id, refined.clone());
                         if matches!(refined, Type::Named(_, _)) {
                             self.apply_dict_annotation(lhs_id, ty);

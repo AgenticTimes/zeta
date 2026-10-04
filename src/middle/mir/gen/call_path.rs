@@ -191,7 +191,7 @@ impl MirGen {
                     .func_ret_types
                     .get(&func_name)
                     .cloned()
-                    .unwrap_or(Type::I64);
+                    .unwrap_or(Type::slot_fallback());
                 self.stmts.push(MirStmt::Call {
                     func: func_name.clone(),
                     args: arg_ids,

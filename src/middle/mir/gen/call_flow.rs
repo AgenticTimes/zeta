@@ -294,7 +294,7 @@ impl MirGen {
                                 self.name_to_id.insert(item_name.clone(), get_id);
                                 self.exprs.insert(get_id, MirExpr::Var(get_id));
                                 self.type_map
-                                    .insert(get_id, elem_ty.unwrap_or(Type::I64));
+                                    .insert(get_id, elem_ty.unwrap_or(Type::slot_fallback()));
                             }
                             // `for k, v in pairs:` — destructure the element.
                             // Previously a Tuple pattern bound NO names at
@@ -353,7 +353,7 @@ impl MirGen {
                                         let pty = pair_tys
                                             .as_ref()
                                             .and_then(|ts| ts.get(i).cloned())
-                                            .unwrap_or(Type::I64);
+                                            .unwrap_or(Type::slot_fallback());
                                         self.type_map.insert(part, pty);
                                     }
                                 }

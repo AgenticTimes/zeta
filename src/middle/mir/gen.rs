@@ -659,7 +659,7 @@ impl MirGen {
     /// name's declared type when it has one (the cell holds that value's word),
     /// `I64` otherwise. See `env_store` — write and read have to agree.
     fn env_slot_ty(&self, name: &str) -> Type {
-        self.global_ty_of(name).unwrap_or(Type::I64)
+        self.global_ty_of(name).unwrap_or(Type::slot_fallback())
     }
 
     /// PY-A: THE module-global write rule, in one place: every write to a
@@ -3400,7 +3400,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             self.type_map
                 .get(first_elem_id)
                 .cloned()
-                .unwrap_or(Type::I64)
+                .unwrap_or(Type::slot_fallback())
         } else {
             Type::I64
         }
@@ -3814,13 +3814,13 @@ fn lt_annotation_type(s: &str) -> Option<Type> {
             inner
                 .and_then(|i| i.split(',').next())
                 .map(one)
-                .unwrap_or(Type::I64),
+                .unwrap_or(Type::slot_fallback()),
         ))),
         "vecstr" => Some(Type::DynamicArray(Box::new(Type::Str))),
         "map" | "dict" => {
             let mut it = inner.unwrap_or("").split(',');
-            let k = it.next().map(one).unwrap_or(Type::I64);
-            let v = it.next().map(one).unwrap_or(Type::I64);
+            let k = it.next().map(one).unwrap_or(Type::slot_fallback());
+            let v = it.next().map(one).unwrap_or(Type::slot_fallback());
             Some(Type::Named("map".to_string(), vec![k, v]))
         }
         _ => None,

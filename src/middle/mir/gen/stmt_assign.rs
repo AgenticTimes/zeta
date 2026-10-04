@@ -330,7 +330,7 @@ impl MirGen {
                         .type_map
                         .get(&index_id)
                         .cloned()
-                        .unwrap_or(Type::I64);
+                        .unwrap_or(Type::slot_fallback());
                     if let Type::Named(_, targs) = &base_ty {
                         let old_key = targs.first().cloned().unwrap_or_else(Type::slot_fallback);
                         let old_val = targs.get(1).cloned().unwrap_or_else(Type::slot_fallback);

@@ -57,7 +57,7 @@ impl MirGen {
                     self.exprs.insert(dest, MirExpr::Var(wid));
                     self.type_map.insert(
                         dest,
-                        self.type_map.get(&wid).cloned().unwrap_or(Type::I64),
+                        self.type_map.get(&wid).cloned().unwrap_or(Type::slot_fallback()),
                     );
                     return;
                 }
@@ -214,7 +214,7 @@ impl MirGen {
                         (Some(Type::Named(_, ts)), AstNode::Lit(k)) => ts
                             .get(*k as usize)
                             .cloned()
-                            .unwrap_or(Type::I64),
+                            .unwrap_or(Type::slot_fallback()),
                         _ => Type::I64,
                     };
                     self.type_map.insert(dest, elem);
@@ -347,7 +347,7 @@ impl MirGen {
                         self.exprs.insert(dest, MirExpr::Var(dest));
                         self.type_map.insert(
                             dest,
-                            ret_ty.unwrap_or(Type::I64),
+                            ret_ty.unwrap_or(Type::slot_fallback()),
                         );
                         return;
                     }

@@ -114,7 +114,7 @@ impl MirGen {
                 // with pairs a module global — its slot carries
                 // Tuple element types that the cell's `DynamicArray(I64)`
                 // inference loses, and the destructure read garbage).
-                let cell_ty = self.global_ty_of(name).unwrap_or(Type::I64);
+                let cell_ty = self.global_ty_of(name).unwrap_or(Type::slot_fallback());
                 let env_first = self.py_entry
                     && self.module_globals.contains(name)
                     && !self.loop_var_active.contains(name)
@@ -144,7 +144,7 @@ impl MirGen {
                 self.exprs.insert(slot_id, MirExpr::Var(slot_id));
                 // Keep the global's static type: an untyped env read made
                 // `q.put(x)` a bare call, because the handle tag was lost.
-                let ty = self.global_ty_of(name).unwrap_or(Type::I64);
+                let ty = self.global_ty_of(name).unwrap_or(Type::slot_fallback());
                 self.type_map.insert(slot_id, ty);
                 // A module's plain `def` never reaches the env, so a bare read
                 // of one holds 0 and `zeta_call1(0, x)` no-ops by contract. Take
