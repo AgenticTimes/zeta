@@ -138,6 +138,62 @@
    语言先例使路线 B 的先例证据从"动态语言推断系统"扩展到"静态语言主流
    编译器"——**先例证据完备**。
 
+
+
+## 八、更先进的技术（2026-10-04 追加：可直接升级 zeta 方案的三项）
+
+### 8.1 SCCP 式稀疏不动点（最有落地价值的升级）
+
+SCCP（Wegman & Zadeck, POPL 1991）＝稀疏条件常量传播——LLVM/V8 生产级
+优化器的基石。关键性质：
+- 稀疏：值沿 SSA 的 def-use 边传播，不扫全 CFG——快。
+- 条件：与可达性联合分析——恒假分支直接折叠、不可达代码剪除。
+- 工作列表：两条 worklist（待重估的边＋待标记的可执行块），处理到双
+  清空为止；每个值住在三格点（top 未知 → 常量 c → bottom 冲突），meet 合并。
+- 可插拔格函数：LLVM 的 SparsePropagation.h 把引擎与格函数分离——
+  把常量格换成类型格就是类型传播（ACM 已有 type-propagation 变体先例）。
+
+对 zeta 的直接映射：路线 B 的 slot→型不动点不必用 Numba 式稠密迭代——
+zeta 已有现成的 def-use 图（name_to_id 就是槽的 def-use 边表）。类型格：
+top＝PyDynamic（未知）→ 具体型 c（I64/F64/Str/vec…）→ 冲突 bottom。
+升级后形态：工作列表只重估变化的槽；PyDynamic 是格的 top；两处写入冲突
+（同槽先 str 后 int）＝bottom＝响亮报错或保持 PyDynamic。这正是 892
+五环节链路图的系统性替代：不是五环节各自为政，是一个 SCCP 引擎在 def-use
+图上把型传播到不动点，五个环节全部查同一张终表。先例：LLVM
+SparsePropagation.h（格函数可插拔）＋ ACM type-propagation 变体。
+prime_body_ret/回灌/893 形状分派全部成为该引擎的特例。
+
+### 8.2 LLM/ML 辅助类型种子（2025 前沿，可选实验）
+
+- TypyBench（ICML 2025）：LLM 对整个 Python 仓库做类型推断的基准
+  （type-level 与 symbol-level 两指标）——GPT-4 级模型在仓库尺度上已可用。
+- 谱系：微软 Deep Learning Type Inference (2018, JS/Python) → MIT MINO
+  （Python 首个 ML 静态推断）→ TypeCare（Korea PL lab）→ TypyBench。
+- 对 zeta 的定位：LLM 推断不可信、必须验证——正确用法是格种子的低置信
+  来源：LLM 建议的型作为格的初始猜测（低于任何真实证据），由 SCCP 引擎
+  与真实证据（赋值/调用）竞争；冲突时真实证据胜。zeta 的场景（金融策略
+  Python，大多是 pandas/数学代码）是 TypyBench 的靶形。
+- 结论：实验性、非必需——SCCP 引擎先落地，LLM 种子作为后续增强。
+
+### 8.3 渐进类型研究前沿（2024–25）
+
+- 性能面：渐进类型检查的开销优化（JIT/内联与类型保证的交互）——
+  MPLR'24 专题；Ben Greenman 的渐进性能评估方法论。
+- 扩展面：渐进思想从值类型扩展到副作用（ML 的 row-based exceptions，
+  2024–25 活跃前沿）。
+- 工业面：TypeScript 7（Go 原生重写）保持渐进设计；PHP 与 Python 生态
+  成熟（mypy/pyright/TypeCare）。
+- 对 zeta：zeta 的 PyDynamic＋形状分派即渐进语义的 AOT 化——893 落地形的
+  理论定位确认；性能优化的先例（TS 7＝检查器移植成原生码）与 zeta 的
+  Rust 实现天然一致。
+
+### 8.4 三项的关系
+
+8.1（SCCP 引擎）＝主体工程，替代 892 链路图的五环节；
+8.3（渐进语义）＝理论定位（已隐式成立，补文献定位即可）；
+8.2（LLM 种子）＝可选增强，引擎落地后作为低置信种子源实验。
+
+
 ## 来源
 
 - Codon：官方文档（Compilation Flow）、USENIX 2023 论文（Shajii et al.）、
@@ -148,6 +204,11 @@
   src/compiler/checker.ts、TS 7 原生移植报道
 - 学术：Pierce & Turner 2000；Dunfield & Krishnaswami 2019/2022；
   Siek & Taha 2006；Typed Racket 系列
+- 补充：Nim 编译器内部（sem.nim/semfold.nim/vm.nim，IC 1.4）；Go
+  cmd/compile 架构（noder/types2/unified IR，types2 移植 CL）；
+  rustc-dev-guide（type-checking/traits 章）；LuaJIT 内部（trace/guard/
+  snapshot）；Wegman & Zadeck POPL 1991（SCCP）；LLVM SparsePropagation.h；
+  TypyBench ICML 2025
 - 补充：Nim 编译器内部（sem.nim/semfold.nim/vm.nim，IC 1.4 发布说明）；
   Go cmd/compile 架构（noder/types2/unified IR，types2 移植 CL）；
   rustc-dev-guide（type-checking/traits/resolution 章，FnCtxt/InferCtxt/
