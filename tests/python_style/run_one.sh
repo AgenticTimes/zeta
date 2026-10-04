@@ -86,7 +86,11 @@ run_capped() { # $1 = 上限秒, $2 = stdout 落点, $3 = stderr 落点, 其余 
     shift 3
     : > "$outfile"; : > "$errfile"
     "$@" >"$outfile" 2>"$errfile" &
-    local pid=$! polls=0 max=$((cap * 5)) stat=""
+    # 轮询间隔 1 秒：每轮要起一颗 `ps`，0.2 秒一档＝每 worker 每秒 5 次 fork，满负载的池里
+    # 这份开销由全部 451 枚用例分摊（批次 10030 两遍全量各出现 1–2 枚"输出为空"的假红，
+    # 同机还有另一条车道在跑自己的套件，未定量到这一层，先把能省的轮询省掉）。
+    # 改成 1 秒后三枚靶夹具单用例实测 2s／4s／3s（含编译），判定语义与归类不变。
+    local pid=$! polls=0 max=$cap stat=""
     while :; do
         stat=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')
         [ -z "$stat" ] && break        # 已退出（下一条 wait 能取到退出码）
@@ -98,7 +102,7 @@ run_capped() { # $1 = 上限秒, $2 = stdout 落点, $3 = stderr 落点, 其余 
             kill -TERM "$pid" 2>/dev/null
             break
         fi
-        sleep 0.2; polls=$((polls + 1))
+        sleep 1; polls=$((polls + 1))
     done
     RUN_OUT=$(cat "$outfile")
     RUN_ERR=$(cat "$errfile")
