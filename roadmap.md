@@ -29598,3 +29598,11 @@ isinstance 静态回答）；checker 55/55、库测试 226/226；每批全量差
 增量编译陈旧产物（教训 1），三读数互相矛盾——全部回滚 HEAD 一次
 成型重打。新增 1 单测；库测试 231/231；三探针全对齐；全量差分
 2845/2845、python_style 479/0。
+
+## 批次 948（2026-10-05）：补批 947 回归单测
+
+- map_subscript_read_yields_value_type：m["a"] ⇒ 值型 I64（非键型 Str），
+  键值误用修正（t485 SEGV 根因）的回归锁
+- plan_top_level_var_evidence_uses_module_env：顶层 d[k]=v 精化槽经
+  module_env 进 get 的 dd 位证据（plan 层全链锁定）
+- checker 63/63、库测试 233/233
