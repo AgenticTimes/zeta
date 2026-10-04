@@ -29339,3 +29339,10 @@ checker 基础设施（P1 骨架/P2 接线/P3 消费模式）已就位，后续�
 **验证**：编译零错误；内置单元测试 182/182；历史探针七套零差异；
 全量差分（--group 50）match=2845/2845＝100%；python_style 479/0；
 三 mean 夹具全对齐 CPython。
+
+## 批次 913 续（2026-10-04，**checker 推断能力扩展——调用返回型传播＋resolver 接线适配**）
+
+infer_fn_body 签名加 `ret_types: &HashMap<String, Type>` 参数（来自
+get_all_func_signatures）；Assign rhs 为 Call 时查表传播返回型。
+resolver 接线点同步适配。历史探针七套＋全量差分 100%＋python_style 479/0
+复验零回归。

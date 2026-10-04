@@ -5570,7 +5570,12 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_checker_env({
                 let mut env = crate::middle::checker::TypeEnv::new();
                 if let AstNode::FuncDef { body, .. } = ast {
-                    crate::middle::checker::infer_fn_body(&mut env, body);
+                    let ret_map: std::collections::HashMap<String, Type> = self
+                        .get_all_func_signatures()
+                        .iter()
+                        .map(|(n, (_, r, _))| (n.clone(), r.clone()))
+                        .collect();
+                    crate::middle::checker::infer_fn_body(&mut env, body, &ret_map);
                 }
                 env
             })
