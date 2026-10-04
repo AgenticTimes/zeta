@@ -128,6 +128,21 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
         }
         return;
     }
+    // 比较运算 ⇒ Bool（批次 917 扩展）
+    if let AstNode::BinaryOp { op, .. } = rhs {
+        if matches!(
+            op.as_str(),
+            "==" | "!=" | "<" | ">" | "<=" | ">=" | "in" | "not in"
+        ) {
+            env.meet_slot(name, LatticeTy::known(Type::Bool));
+            return;
+        }
+    }
+    // FString ⇒ Str（批次 917 扩展：f-string 结果恒为文本）
+    if let AstNode::FString(_) = rhs {
+        env.meet_slot(name, LatticeTy::known(Type::Str));
+        return;
+    }
     // 调用返回（ret_types 查表）
     if let AstNode::Call { method, .. } = rhs {
         if let Some(ty) = ctx.ret_types.get(method) {

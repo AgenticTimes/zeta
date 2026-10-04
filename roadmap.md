@@ -29373,3 +29373,15 @@ field 查表）。resolver 接线适配 InferCtx。产品代码的 eprintln 完�
 
 **验证**：编译零错误；lib 182/182；全量差分（--group 50）
 match=2845/2845＝100%；python_style 479/0；历史探针七套零差异。
+
+## 批次 917（2026-10-04，**重构批：checker 推断扩展——比较→Bool＋FString→Str**）
+
+propagate_assign 补两种高频推断形状（插入位置在调用返回之前——比较和
+f-string 是最常见的缺失面）：
+- 比较运算（==/!=/</>/<=/>=/in/not in）⇒ Bool
+- FString ⇒ Str
+gen.rs 3874→3874（行数不变——净增逻辑在 checker 侧）；checker 推断形状
+从 7 种扩展到 9 种（新增比较/FString）。
+
+**验证**：编译零错误；lib 182/182；历史探针七套零差异；全量差分
+（--group 50）match=2845/2845＝100%；python_style 479/0。
