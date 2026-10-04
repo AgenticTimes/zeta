@@ -5082,7 +5082,7 @@ print(top())
             dest_ty_of(&fx, "m657a__Holder::build"),
         ),
         (
-            "Holder::fresh 体内引用自己所在类的构造目标",
+            "Holder::fresh 体内引用第三个类（Node）的构造目标",
             call_of(&fx, "m657a__Holder::fresh"),
         ),
         (
@@ -5128,7 +5128,7 @@ print(top())
             r#"Named("m657a__Helper", [])"#.to_string(),
         ),
         (
-            "Holder::fresh 体内引用自己所在类的构造目标",
+            "Holder::fresh 体内引用第三个类（Node）的构造目标",
             "m657a__Node".to_string(),
         ),
         (
