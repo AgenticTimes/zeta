@@ -29606,3 +29606,12 @@ isinstance 静态回答）；checker 55/55、库测试 226/226；每批全量差
 - plan_top_level_var_evidence_uses_module_env：顶层 d[k]=v 精化槽经
   module_env 进 get 的 dd 位证据（plan 层全链锁定）
 - checker 63/63、库测试 233/233
+
+## 批次 949（2026-10-05）：轴 A 杂物清理——src 根目录卫生
+
+refactor.md §0 债务地图的"杂物"项落地：src 根 30 个历史 .z 夹具移
+tests/fixtures/src_root_historical/；删 paradigm_simple.rs（341 行幻觉
+代码，lib.rs 声明零使用）＋声明行；删 week3_string_compiler.rs（587 行
+死文件）/debug_test.rs；清 rmetaxtFyon/target_check* 构建缓存目录。
+src/ 根现仅剩真实源码。验证：编译零错误、库 233/233、差分抽样
+284/284、python_style 479/0。
