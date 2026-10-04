@@ -54,7 +54,7 @@ else
 fi
 
 # --- ② python_style 10% 轮转 ---
-ps_ok=0; ps_total=0; ps_bad=""; ps_missing=""; ps_known_n=0; ps_known=""; ps_xpass=""
+ps_ok=0; ps_total=0; ps_bad=""; ps_missing=""; ps_known_n=0; ps_known=""; ps_xpass=""; ps_stuck=""; ps_stuck_n=0
 for z in "$ROOT"/tests/python_style/t*.z; do
   [ -e "$z" ] || continue
   b=$(basename "$z" .z)
@@ -72,6 +72,8 @@ for z in "$ROOT"/tests/python_style/t*.z; do
     ps_known_n=$(( ps_known_n + 1 )); ps_known="$ps_known $b"
   elif grep -q "^XPASS" "$d/verdict"; then
     ps_xpass="$ps_xpass $b"
+  elif grep -q "^STUCK" "$d/verdict"; then
+    ps_stuck_n=$(( ps_stuck_n + 1 )); ps_stuck="$ps_stuck $b"
   else
     ps_bad="$ps_bad $b"
   fi
@@ -80,16 +82,21 @@ done
 # XPASS、其余给 KNOWN-FAIL（批次 304 口径），所以 KNOWN-FAIL＝"已知缺口照旧"，
 # XPASS＝"预期已达成、标记可摘"——两者都不是本批引入的失败。真红仍然只有
 # FAIL、缺 verdict 与分母为 0 三类（批次 10008 加这段；窗口 7 首跑实拍 t450 被当红）。
+# STUCK（批次 10030 新增的判定行）同样不计红：worker 对"停在不可中断态、退出码取不到"
+# 的进程只在 stderr 已命中 `// expect-abort:` 期望串时才给这一行，主张的 stdout 那一半
+# 本来就由 run_one.sh 的编译/值比对承担；取不到退出码是缺陷 #20006，不是本批引入。
 if [ "$ps_total" -eq 0 ]; then
   echo "② python_style: 分母为 0＝读数作废"; rc_total=1
 elif [ -n "$ps_missing" ]; then
   echo "② python_style: 缺 verdict 判定文件（工具没跑到底）:$ps_missing"; rc_total=1
 elif [ -n "$ps_bad" ]; then
-  echo "② python_style: ${ps_ok}/$(( ps_total - ps_known_n )) PASS，非 PASS:$ps_bad"; rc_total=1
+  echo "② python_style: ${ps_ok}/$(( ps_total - ps_known_n - ps_stuck_n )) PASS，非 PASS:$ps_bad" \
+       "$([ -n "$ps_stuck" ] && printf '（另 %d 条 STUCK 不计红:%s）' "$ps_stuck_n" "$ps_stuck")"; rc_total=1
 else
-  echo "② python_style: ${ps_ok}/$(( ps_total - ps_known_n )) PASS" \
+  echo "② python_style: ${ps_ok}/$(( ps_total - ps_known_n - ps_stuck_n )) PASS" \
        "$([ "$ps_known_n" -gt 0 ] && printf '（另 %d 条钉住 KNOWN-FAIL 不计红:%s）' "$ps_known_n" "$ps_known")" \
-       "$([ -n "$ps_xpass" ] && printf '★ 可摘标（XPASS）:%s' "$ps_xpass")"
+       "$([ -n "$ps_xpass" ] && printf '★ 可摘标（XPASS）:%s' "$ps_xpass")" \
+       "$([ -n "$ps_stuck" ] && printf '另 %d 条 STUCK（退出码取不到，见 #20006）不计红:%s' "$ps_stuck_n" "$ps_stuck")"
 fi
 
 # --- ③ official 10% 轮转 ---
