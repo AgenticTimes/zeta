@@ -5171,3 +5171,181 @@ print(top())
          而没做消歧，先核对修法再改期望）；第 11 格走另一条臂，红了说明整个改写表机制坏了"
     );
 }
+
+#[test]
+// 批次 169（提交 `8383988f`）：注解写 `-> dict`、函数体却 `return json.loads(...)` 时，
+// 登记的返回类型必须改成 `PyJson`。留着 `map`＝调用点按 map 原语去读 JSON 句柄
+// （原症状：`stats.get(k, d)` 把 JSON 标签当容量读，运行期死转）。
+// 站点＝`src/middle/resolver/resolver.rs:5196` 的 `is_dict_ret` 判定、
+// `:5205` 的改写、以及 `:4524` 的 `returns_json_loads` 三趟走查
+// （直接 `return`、`AstNode::Block` 递归、`If` 的 then／else 两侧）。
+// 八格分工：1＝体内直接 return；2/3＝调用点目的槽＋赋值左侧（消费面）；
+// 4＝`If` 的 then 侧；5＝`If` 的 else 侧；6＝try 块内（`Block` 那一支）；
+// 7＝接收者不是 `json` 的同名方法（守卫必须只认 `json.loads`；本格的"真值"未修，
+// 现按 `I64` 锁现状，见余项）；8＝返回字典字面量那格必须仍是 `map`（改写过宽会顶成 PyJson）。
+fn annotated_dict_return_becomes_pyjson_when_the_body_returns_json_loads() {
+    let src = r#"
+import json
+
+
+def load(txt) -> dict:
+    return json.loads(txt)
+
+
+def branchy(flag, txt) -> dict:
+    if flag:
+        return json.loads(txt)
+    return {"a": 1}
+
+
+def inelse(flag, txt) -> dict:
+    if flag:
+        return {"b": 2}
+    else:
+        return json.loads(txt)
+
+
+def try_ret(txt) -> dict:
+    try:
+        return json.loads(txt)
+    except:
+        return {"c": 3}
+
+
+def other(obj, txt) -> dict:
+    return obj.loads(txt)
+
+
+d = load("{}")
+"#;
+    let mirs = lower_all(src);
+
+    // 被调名含 `needle` 的第一个 `Call` 的目的槽（`If`/`For`/`While` 的块内也要找）。
+    fn find_call_dest(stmts: &[MirStmt], needle: &str) -> Option<u32> {
+        for s in stmts {
+            match s {
+                MirStmt::Call { func, dest, .. } if func.contains(needle) => return Some(*dest),
+                MirStmt::If { then, else_, .. } => {
+                    if let Some(d) = find_call_dest(then, needle) {
+                        return Some(d);
+                    }
+                    if let Some(d) = find_call_dest(else_, needle) {
+                        return Some(d);
+                    }
+                }
+                MirStmt::For { body, else_body, .. } | MirStmt::While { body, else_body, .. } => {
+                    if let Some(d) = find_call_dest(body, needle) {
+                        return Some(d);
+                    }
+                    if let Some(d) = find_call_dest(else_body, needle) {
+                        return Some(d);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    let dest_ty = |item: &str, needle: &str| -> String {
+        let m = mir(&mirs, item);
+        let dest = find_call_dest(&m.stmts, needle).unwrap_or_else(|| {
+            panic!("{item} 段内没有被调名含 {needle} 的调用（实得 {:?}）", call_symbols(m))
+        });
+        match m.type_map.get(&dest) {
+            Some(t) => format!("{t:?}"),
+            None => panic!("{item} 的目的槽 {dest} 没有类型（type_map {} 项）", m.type_map.len()),
+        }
+    };
+
+    // `d = load(...)` 左侧槽的类型：先按目的槽找到那条赋值，再读左侧。
+    let assigned_lhs_ty = || -> String {
+        let m = mir(&mirs, "main");
+        let dest = m
+            .stmts
+            .iter()
+            .find_map(|s| match s {
+                MirStmt::Call { func, dest, .. } if func.starts_with("load") => Some(*dest),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("main 段没有 load 调用（实得 {:?}）", call_symbols(m)));
+        let lhs = m
+            .stmts
+            .iter()
+            .find_map(|s| match s {
+                MirStmt::Assign { lhs, rhs, .. } if *rhs == dest => Some(*lhs),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("main 段没有把目的槽 {dest} 赋给左侧（顶层赋值 {} 条）",
+                                      m.stmts.iter().filter(|s| matches!(s, MirStmt::Assign { .. })).count()));
+        match m.type_map.get(&lhs) {
+            Some(t) => format!("{t:?}"),
+            None => panic!("main 的左侧槽 {lhs} 没有类型（type_map {} 项）", m.type_map.len()),
+        }
+    };
+
+    let got = vec![
+        ("load：体内 json.loads 的目的槽", dest_ty("load", "json_loads")),
+        ("main：load(...) 调用点的目的槽", dest_ty("main", "load")),
+        ("main：d = load(...) 的左侧槽", assigned_lhs_ty()),
+        ("branchy：If 的 then 侧 json.loads 目的槽", dest_ty("branchy", "json_loads")),
+        ("inelse：If 的 else 侧 json.loads 目的槽", dest_ty("inelse", "json_loads")),
+        ("try_ret：try 块内 json.loads 目的槽", dest_ty("try_ret", "json_loads")),
+        ("other：接收者非 json 的 loads 目的槽（未修现状锁）", dest_ty("other", "loads")),
+        ("branchy：字典字面量那格仍是 map", {
+            let m = mir(&mirs, "branchy");
+            let mut lits = m
+                .type_map
+                .iter()
+                .filter(|(_, t)| matches!(t, Type::Named(n, _) if n == "map"))
+                .map(|(_, t)| format!("{t:?}"))
+                .collect::<Vec<_>>();
+            lits.sort();
+            lits.join(",")
+        }),
+    ];
+
+    let want = vec![
+        (
+            "load：体内 json.loads 的目的槽",
+            "Named(\"PyJson\", [])".to_string(),
+        ),
+        (
+            "main：load(...) 调用点的目的槽",
+            "Named(\"PyJson\", [])".to_string(),
+        ),
+        (
+            "main：d = load(...) 的左侧槽",
+            "Named(\"PyJson\", [])".to_string(),
+        ),
+        (
+            "branchy：If 的 then 侧 json.loads 目的槽",
+            "Named(\"PyJson\", [])".to_string(),
+        ),
+        (
+            "inelse：If 的 else 侧 json.loads 目的槽",
+            "Named(\"PyJson\", [])".to_string(),
+        ),
+        (
+            "try_ret：try 块内 json.loads 目的槽",
+            "Named(\"PyJson\", [])".to_string(),
+        ),
+        (
+            "other：接收者非 json 的 loads 目的槽（未修现状锁）",
+            "I64".to_string(),
+        ),
+        (
+            "branchy：字典字面量那格仍是 map",
+            "Named(\"map\", [Str, I64])".to_string(),
+        ),
+    ];
+
+    assert_eq!(
+        want, got,
+        "注解 `-> dict` 而体里 `return json.loads(...)` 的函数必须登记成 `PyJson`（批次 169）——\
+         第 1/4/5/6 格读回 `Named(\"map\", ...)`＝169 那三趟走查里对应的一支不再认（第 5 格只对\
+         `else` 侧坏、第 6 格只对 `Block` 递归坏）；第 2/3 格是消费面，红了说明返回类型没传到调用点；\
+         第 7 格本该留在 `I64`（接收者不是 `json`，改写变宽＝把别的 `.loads` 也顶成 PyJson，\
+         这条是守卫的负向锁）；第 8 格读回空串＝字典字面量的 map 型被改写覆盖，169 的改写过头了"
+    );
+}
