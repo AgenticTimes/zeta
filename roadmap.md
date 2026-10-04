@@ -29462,3 +29462,22 @@ discard 族，批次 816 裁决），按位整数比较永不命中。runtime �
 **同族终局排查**：数组相等（==）、`.sort()`、`sorted()`（含负浮点）、
 `reverse` 探针全部已正确。位模式缺陷族共修五形收口：sum/min/max/
 index-count-in/remove。
+
+## 批次 929–932（2026-10-04）：checker 推断扩面四连批＋方法臂死代码修正
+
+- **批 929（`e1df018d`）元组解包＋转换内建**：`x, y = pair` 逐分量传播；
+  str()⇒Str、int()⇒I64、float()⇒F64。
+- **批 930（`2db85252`）len/enumerate/pop/sorted＋死代码修正**：len⇒I64、
+  sorted⇒DynamicArray(元素型)、pop⇒元素型、for 元组模式
+  （enumerate/zip/Tuple 槽，tuple_iter_components 纯面）；**方法调用返回臂
+  （method_ret 查表，批 916 落地）原落在 ret_types 臂无条件 return 之后
+  从未可达**——并入 Call 臂修正＋补测试（批 916 的测试缺口一并堵上）。
+- **批 931（`3afee5c0`）参数注解→参数槽型**：infer_fn_body_with_params
+  （旧签名委托，27 个既有测试不动）；resolver 传 FuncDef params。参数槽
+  已知后体内赋值边/二元运算/method_ret 都能吃到参数型——mean 臂等
+  消费点的真实增益面。
+- **批 932（`da0f5c43`）标量 abs/min/max**：操作数槽同型数值 ⇒ 同型。
+
+checker 推断形态累计 **19 类**；库测试 182→216；每批渗透面全量差分
+2845/2845、python_style 479/0（零位移——checker_env 消费点仍只有 mean 臂，
+P4 回灌替换是下一个消费面扩张点）。
