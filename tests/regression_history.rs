@@ -4343,3 +4343,156 @@ print(s)
          体内把字符串句柄按整数转成串＝打地址（左＝期望，右＝逐格实得）"
     );
 }
+
+/// 批次 651（`21a006e9`）＝跨模块同名类的方法派发撞车——编译期回归钉。
+///
+/// 症状（651 记录原文＋本批实拍）：两个模块各有一个 `class Cfg`、方法同名（`show`）时，
+/// 裸限定键 `Cfg::show` 被后注册的那个模块覆盖 ⇒ 两个调用点打到同一个方法体，
+/// 打出来是同一个值（本夹具＝两行都 27 或都 11），而不是 CPython 的 11／27。
+///
+/// 修法＝注册 `ImplBlock` 时除裸名外再写入模块改写后的别名键（`m647a__Cfg::show`）到
+/// `funcs` 与 `registered_funcs`（必须排在裸名注册之后，否则被覆盖），并把 `self` 形参型、
+/// 构造器返回的 `StructLit` 变体名、`ret` 字段一起换成改写名，让派发在直取臂命中
+/// （消费方＝`gen.rs` 的 `qualified_method_candidate`，先试改写键再走会撞车的尾部回退）。
+///
+/// 三侧真值（本批实测）：
+/// - CPython＝`11`、`27`，rc=0（同三份文件的 `.py` 等价写法，逐行可译）；
+/// - AOT 二进制＝`11`、`27`，rc=0（本批 AOT 编译运行实测，编译 rc=0）；
+/// - `--dump-mir`＝`main` 段的构造调用目标 `m647a__Cfg`／`m647b__Cfg`、方法调用目标
+///   `m647a__Cfg::show`／`m647b__Cfg::show`；两段的 `self` 槽型分别是
+///   `Named("m647a__Cfg")`／`Named("m647b__Cfg")`；方法体里的加数常量分别 `1`／`7`；
+///   构造段返回的 `Struct` 变体名与段名一字相同。
+#[test]
+fn cross_module_same_named_class_methods_keep_their_own_mangled_target() {
+    let mirs = lower_multi(
+        &[
+            (
+                "m647a.z",
+                r#"class Cfg:
+    def __init__(self):
+        self.v = 10
+    def show(self):
+        return self.v + 1
+"#,
+            ),
+            (
+                "m647b.z",
+                r#"class Cfg:
+    def __init__(self):
+        self.v = 20
+    def show(self):
+        return self.v + 7
+"#,
+            ),
+            (
+                "main.z",
+                r#"from m647a import Cfg as CfgA
+from m647b import Cfg as CfgB
+
+a = CfgA()
+b = CfgB()
+print(a.show())
+print(b.show())
+"#,
+            ),
+        ],
+        "main.z",
+    );
+
+    // ① 四个调用点（两处构造＋两处方法）的目标名，按出现顺序；筛掉的
+    //    `zeta_module_decl`／`zeta_py_from`／`println_i64` 是导入与打印的接线。
+    let main = mir(&mirs, "main");
+    let sites: Vec<String> = call_symbols(main)
+        .into_iter()
+        .filter(|f| {
+            f.ends_with("__Cfg") || f.ends_with("Cfg::show") || f == "Cfg::show" || f == "show"
+        })
+        .collect();
+    let want_sites = [
+        "m647a__Cfg",
+        "m647b__Cfg",
+        "m647a__Cfg::show",
+        "m647b__Cfg::show",
+    ];
+    assert_eq!(
+        want_sites.to_vec(),
+        sites.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        "跨模块同名类的四个调用点都该打到本模块的改写键（顺序＝构造 a、构造 b、方法 a、方法 b）；\
+         651 之前别名键没进函数表，方法调用点会落到裸名 `Cfg::show`（＝后注册模块的那个体）。\
+         左边＝期望，右边＝实得（含裸名即说明回退臂被走到）"
+    );
+
+    // ② 两个方法段的 `self` 槽型：各自模块的改写类名（漏一个＝接收者型回到裸 `Cfg`）。
+    let mut recv: Vec<(&str, Option<Type>)> = Vec::new();
+    for seg in ["m647a__Cfg::show", "m647b__Cfg::show"] {
+        let m = mir(&mirs, seg);
+        let slot = m
+            .param_indices
+            .first()
+            .map(|(_, i)| *i)
+            .unwrap_or_else(|| panic!("{seg} 要降出 self 形参槽位（实得 param_indices {:?}）", m.param_indices));
+        recv.push((seg, m.type_map.get(&slot).cloned()));
+    }
+    let want_recv: Vec<(&str, Option<Type>)> = [
+        ("m647a__Cfg::show", "m647a__Cfg"),
+        ("m647b__Cfg::show", "m647b__Cfg"),
+    ]
+    .into_iter()
+    .map(|(s, t)| (s, Some(Type::Named(t.to_string(), vec![]))))
+    .collect();
+    assert_eq!(
+        want_recv, recv,
+        "两个方法段的接收者槽型该分别是本模块的改写类名；651 之前 `self` 形参写的是裸名，\
+         两段的接收者都指到同一个类（左＝期望，右＝逐格实得）"
+    );
+
+    // ③ 两个方法体里的加数常量：a 段是 1、b 段是 7（＝方法体没被换成对方的）。
+    let mut addend: Vec<(&str, Option<i64>)> = Vec::new();
+    for seg in ["m647a__Cfg::show", "m647b__Cfg::show"] {
+        let m = mir(&mirs, seg);
+        let lits: Vec<i64> = m
+            .exprs
+            .values()
+            .filter_map(|e| match e {
+                MirExpr::IntLit(v) => Some(*v),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            lits.len(),
+            1,
+            "{seg} 段内该只有方法体那一个整数字面量（实得 {lits:?}）——多枚＝夹具形状变了，先核对夹具再谈归因"
+        );
+        addend.push((seg, lits.first().cloned()));
+    }
+    let want_addend: Vec<(&str, Option<i64>)> =
+        vec![("m647a__Cfg::show", Some(1)), ("m647b__Cfg::show", Some(7))];
+    assert_eq!(
+        want_addend, addend,
+        "两个方法段各自带的加数该是 1 和 7（＝派发没把 b 的方法体接到 a 的调用点上）；\
+         撞车时两格读数会变成同一个值（左＝期望，右＝逐格实得）"
+    );
+
+    // ④ 两个构造段返回的 Struct 变体名＝改写类名（与段名一字相同）。
+    let mut variant: Vec<(&str, Option<String>)> = Vec::new();
+    for seg in ["m647a__Cfg", "m647b__Cfg"] {
+        let m = mir(&mirs, seg);
+        let found = m
+            .exprs
+            .values()
+            .find_map(|e| match e {
+                MirExpr::Struct { variant, .. } => Some(variant.clone()),
+                _ => None,
+            });
+        variant.push((seg, found));
+    }
+    let want_variant: Vec<(&str, Option<String>)> = vec![
+        ("m647a__Cfg", Some("m647a__Cfg".to_string())),
+        ("m647b__Cfg", Some("m647b__Cfg".to_string())),
+    ];
+    assert_eq!(
+        want_variant, variant,
+        "构造器返回的 Struct 变体名该带模块前缀（651 之前两枚构造都返回裸 `Cfg`，\
+         接收者型随之塌成同一个类＝方法派发撞车；左＝期望，右＝逐格实得）"
+    );
+}
