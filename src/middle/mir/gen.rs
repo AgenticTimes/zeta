@@ -1649,7 +1649,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     // spelling too — otherwise `self` in the library's own
                     // methods stayed I64 and every `self.<map field>.keys()` was
                     // an undefined `_keys`.
-                    if matches!(self.type_map.get(&id), Some(Type::I64) | Some(Type::PyDynamic)) {
+                    if self.type_map.get(&id).map_or(false, Type::is_untyped) {
                         let mut struct_key: Option<String> = None;
                         if matches!(self.type_decls.get(pt_str), Some(TypeDecl::Struct { .. })) {
                             struct_key = Some(pt_str.to_string());
@@ -1671,7 +1671,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                             self.type_map.insert(id, Type::Named(k, vec![]));
                         }
                     }
-                    if matches!(self.type_map.get(&id), Some(Type::I64) | Some(Type::PyDynamic))
+                    if self.type_map.get(&id).map_or(false, Type::is_untyped)
                         && crate::middle::pylib::handle_tag(param_type.trim()).is_some()
                     {
                         // Batch 291: store the CANONICAL TAG, not the spelling.
@@ -1694,7 +1694,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     // miss → 0 → SEGV, t204), and `k in m` never took the map
                     // branch. Canonical forms only: `vec`→DynamicArray,
                     // `map`→Named("map",[K,V]) (V added by this batch).
-                    if matches!(self.type_map.get(&id), Some(Type::I64) | Some(Type::PyDynamic)) {
+                    if self.type_map.get(&id).map_or(false, Type::is_untyped) {
                         if let Some(ty) = lt_annotation_type(pt_str) {
                             self.type_map.insert(id, ty);
                         }
@@ -1706,7 +1706,7 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                     // `validate_and_repair_stock_ohlcv` took its `if df.empty:
                     // return pd.DataFrame()` early exit and the cache load returned
                     // an EMPTY frame.
-                    if matches!(self.type_map.get(&id), Some(Type::I64) | Some(Type::PyDynamic)) {
+                    if self.type_map.get(&id).map_or(false, Type::is_untyped) {
                         let ann = param_type.trim();
                         if !ann.is_empty() && ann != "dyn" && ann != "()" {
                             let ty = Type::from_string(ann);

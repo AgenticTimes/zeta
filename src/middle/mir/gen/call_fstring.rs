@@ -67,7 +67,7 @@ impl MirGen {
                 // handle: `jq_to_bs("510300.XSHG")` returned
                 // `4339988730.510300` instead of `sh.510300` — i.e. EVERY
                 // code in the wufu universe came out numerically garbage.
-                if matches!(self.type_map.get(&pid), Some(Type::I64) | Some(Type::PyDynamic)) {
+                if self.type_map.get(&pid).map_or(false, Type::is_untyped) {
                     if Self::both_branches_are_strings(p) {
                         self.type_map.insert(pid, Type::Str);
                     }

@@ -166,7 +166,7 @@ impl MirGen {
             // BATCH-438: same rule the ordinary item path applies at :1393 — the
             // receiver of a (nested) method is the class its impl block named.
             if is_receiver
-                && matches!(ty, Type::I64 | Type::PyDynamic)
+                && ty.is_untyped()
                 && let Some(cls) = self.current_class.clone()
             {
                 ty = Type::Named(cls, vec![]);

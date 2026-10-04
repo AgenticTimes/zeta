@@ -42,7 +42,7 @@ impl MirGen {
                     self.lower_ast(&bare);
                     if let Some(&slot) = self.name_to_id.get(name.as_str()) {
                         let cur = self.type_map.get(&slot).cloned();
-                        if matches!(cur, None | Some(Type::I64) | Some(Type::PyDynamic)) {
+                        if cur.as_ref().map_or(true, |t| t.is_untyped()) {
                             if let Some(nt) = self.annotation_named_ty(ty) {
                                 self.type_map.insert(slot, nt);
                             }
@@ -670,7 +670,7 @@ impl MirGen {
                 match self.name_to_id.get(name).copied() {
                     Some(slot) => {
                         self.stmts.push(MirStmt::Assign { lhs: slot, rhs: rhs_id });
-                        if !matches!(ty, Type::I64 | Type::PyDynamic) {
+                        if !ty.is_untyped() {
                             self.type_map.insert(slot, ty);
                         }
                     }

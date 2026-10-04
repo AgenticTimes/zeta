@@ -1372,7 +1372,7 @@ impl Resolver {
         let mut out = Vec::new();
         for (fname, (params, _ret, _)) in &self.funcs {
             for (pname, ty) in params {
-                if matches!(ty, Type::PyDynamic) {
+                if ty.is_dynamic() {
                     out.push((fname.clone(), pname.clone()));
                 }
             }

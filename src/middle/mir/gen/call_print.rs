@@ -320,7 +320,7 @@ pub(super) fn emit_tagged_print(&mut self, arg_id: u32, tag_slot: u32, is_last: 
                             );
                             let split_worthy = (matches!(rt, Some(Type::Bool))
                                 || right_none)
-                                && matches!(lt, Some(Type::I64) | Some(Type::PyDynamic) | None);
+                                && lt.as_ref().map_or(true, |t| t.is_untyped());
                             if split_worthy {
                                 let truth_id =
                                     if matches!(lt, Some(Type::Bool)) {
@@ -494,7 +494,7 @@ pub(super) fn emit_tagged_print(&mut self, arg_id: u32, tag_slot: u32, is_last: 
                     // 批次 808/827：PyDynamic 实参带格标签 ⇒ 按格渲染
                     // 链（抽为 emit_tagged_print，路由 8/4/5/6/7，
                     // 0/未知落 i64）。非混型字典无标签读、零新增面。
-                    if matches!(self.type_map.get(arg_id), Some(Type::PyDynamic)) {
+                    if self.type_map.get(arg_id).map_or(false, Type::is_dynamic) {
                         if let Some(tag_slot) = self.slot_tags.get(arg_id).cloned() {
                             if self.emit_tagged_print(*arg_id, tag_slot, is_last) {
                                 continue;
@@ -520,7 +520,7 @@ pub(super) fn emit_tagged_print(&mut self, arg_id: u32, tag_slot: u32, is_last: 
                     // 整数十进制）——未知型均值（zeta_mean_to_string）等"值可能
                     // 是文本也可能是句柄"的槽在此收敛。原先落 println_i64，把
                     // 文本句柄按整数打（t813 实拍）。
-                    if matches!(self.type_map.get(arg_id), Some(Type::PyDynamic)) {
+                    if self.type_map.get(arg_id).map_or(false, Type::is_dynamic) {
                         let sid = self.emit_call("zeta_dyn_to_string", vec![*arg_id], Type::Str);
                         let f = if is_last { "println_str" } else { "print_str" };
                         self.stmts.push(MirStmt::VoidCall {
@@ -653,7 +653,7 @@ pub(super) fn emit_tagged_print(&mut self, arg_id: u32, tag_slot: u32, is_last: 
                         self.type_map.insert(gid, Type::I64);
                         let sid = self.emit_call("py_re_group", vec![*arg_id, gid], Type::Str);
                         sid
-                    } else if matches!(self.type_map.get(arg_id), Some(Type::PyDynamic)) {
+                    } else if self.type_map.get(arg_id).map_or(false, Type::is_dynamic) {
                         // Batch 653 (#117): dynamic values have no runtime type tag,
                         // so the print dispatch can't tell str from int from map.
                         // Convert to string first using GC-geometry probes.

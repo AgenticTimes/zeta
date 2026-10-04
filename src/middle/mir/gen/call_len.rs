@@ -52,7 +52,7 @@ impl MirGen {
                     // 标签 ⇒ 运行期 tag == 类 id 的按格分派（有 __len__ 的类，
                     // 名字序定链序），全不中落 zeta_dyn_len 几何兜底。t450 的
                     // len(c["df"]) 由这里兑现 2（DataFrame.__len__）。
-                    if matches!(arg_ty, Some(Type::PyDynamic) | None) {
+                    if arg_ty.as_ref().map_or(true, |t| t.is_dynamic()) {
                         if let Some(tag_slot) = self.slot_tags.get(&arg_id).cloned() {
                             let mut candidates: Vec<(i64, String)> = Vec::new();
                             let mut cls_names: Vec<&String> =

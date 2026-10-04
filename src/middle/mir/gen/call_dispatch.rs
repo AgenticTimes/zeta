@@ -3046,7 +3046,7 @@ call, no NULL-handle dereference).",
                 && receiver_ty.as_ref().map_or(false, |t| {
                     matches!(t, Type::DynamicArray(_) | Type::Array(_, _))
                         || matches!(t, Type::Named(n, _) if n == "set" || n == "frozenset")
-                        || matches!(t, Type::I64 | Type::PyDynamic)
+                        || t.is_untyped()
                 })
             {
                 self.stmts.push(MirStmt::Call {
@@ -3970,7 +3970,7 @@ call, no NULL-handle dereference).",
             // B4: dyn receiver → unique W-table method by name only.
             // Also allow I64 leftovers (pre-B3 default) with the same SKIP
             // denylist — unique names like `get`/`keys` must not steal.
-            if matches!(receiver_ty.as_ref(), Some(Type::PyDynamic)) {
+            if receiver_ty.as_ref().map_or(false, Type::is_dynamic) {
                 if !crate::middle::pylib::NAME_ROUTE_DENYLIST.contains(&method.as_str())
                     && let Some((_handle, symbol, ret_handle, ret)) =
                         crate::middle::pylib::method_by_unique_name(method)

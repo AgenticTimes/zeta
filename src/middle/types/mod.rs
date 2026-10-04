@@ -301,6 +301,17 @@ impl Type {
         matches!(self, Type::Named(n, _) if n == "NoneValue")
     }
 
+    /// 批次 904（轴 F kind 1）：纯 PyDynamic 判定（值类型运行期可知未知）。
+    pub fn is_dynamic(&self) -> bool {
+        matches!(self, Type::PyDynamic)
+    }
+
+    /// 批次 904（轴 F kind 1）：槽型未定（缺省 I64 或 PyDynamic）——"值对
+    /// 类型丢"风险面的命名判定（I64 是空槽原本的读法，813 系口径）。
+    pub fn is_untyped(&self) -> bool {
+        matches!(self, Type::I64 | Type::PyDynamic)
+    }
+
     /// 字典的键/值类型（`map<K, V>`；缺省槽按 I64，与既有读边界约定一致）。
     pub fn map_kv(&self) -> Option<(Type, Type)> {
         match self {

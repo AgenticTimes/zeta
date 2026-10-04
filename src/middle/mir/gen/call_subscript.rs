@@ -388,7 +388,7 @@ impl MirGen {
                 // Batch 767 (值标签大弧·读侧)：Any 值槽 ⇒ 读格标签备用。
                 // 766 写侧登记的类实例 tag（≥CLASS_TAG_BASE）由 len() 等消费，
                 // 运行期按格分派，静态槽型保持 PyDynamic（异构字典安全）。
-                if matches!(val_ty, Type::PyDynamic) {
+                if val_ty.is_dynamic() {
                     let tag_slot = self.emit_call("zeta_map_value_tag", vec![map_slot, key_id], Type::I64);
                     self.slot_tags.insert(dest, tag_slot);
                 }
@@ -433,7 +433,7 @@ impl MirGen {
                     dest: dest,
                     type_args: vec![],
                 });
-            } else if matches!(base_ty, Type::I64 | Type::PyDynamic)
+            } else if base_ty.is_untyped()
                 && source_ty != "map"
                 && !matches!(self.type_map.get(&iid), Some(Type::Str))
             {

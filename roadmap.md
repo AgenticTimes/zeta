@@ -29196,3 +29196,22 @@ call_dispatch 2072/2112 的元组元素型、resolver 1751）——生产者不�
 **验证**：编译零错误；内置单元测试 158/158；None 三面探针（纯 None 返回/
 带标签打印/fromkeys）全对齐 CPython；历史探针七套零差异；全量差分
 （--group 50）match=2845/2845＝100%；python_style 479/0。
+
+## 批次 904（2026-10-04，**重构批：轴 F kind 1——PyDynamic 判定收敛 is_dynamic()/is_untyped() 双合同（18 处落地＋2 处 SKIP 登记）**）
+
+轴 F 判断点收敛第五批（kind 5→896、kind 2→897/901/902、kind 3→903、
+kind 1→本批）。盘点发现 PyDynamic 判定分五种语义族（非单一形态）：
+- 纯 PyDynamic 7 处 → `is_dynamic()`
+- I64|PyDynamic 成对 10 处 → `is_untyped()`（"槽型未定"——I64 是空槽原本
+  读法的 813 系口径，命名后即"值对类型丢"风险面的可检索判定）
+- None|I64|PyDynamic 1 处 → `.as_ref().map_or(true, |t| t.is_untyped())`
+- PyDynamic|None 1 处 → `.as_ref().map_or(true, |t| t.is_dynamic())`
+- I64|PyDynamic|None 1 处 → 同 is_untyped 形式
+2 处 SKIP 登记（call_dispatch 2406 的型已被 893 mean 臂改写、call_print 656
+的 else-if 已由前分支覆盖）。
+实施细节：Type 未实现 Copy ⇒ Option 上的 map_or 需 `.as_ref()`＋闭包形式
+（`Type::is_untyped` 直传编译错 E0631，三处修正入册）。
+
+**验证**：编译零错误；内置单元测试 158/158；None/类型面探针全对齐；
+历史探针七套两轮零差异；全量差分（--group 50）match=2845/2845＝100%；
+python_style 479/0。收敛计数：is_untyped/is_dynamic 判定 18 处落地。

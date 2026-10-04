@@ -118,7 +118,7 @@ impl MirGen {
 fn set_like_receiver(t: &Type) -> bool {
     matches!(t, Type::DynamicArray(_) | Type::Array(_, _))
         || matches!(t, Type::Named(n, _) if n == "set" || n == "frozenset")
-        || (!matches!(t, Type::Str) && matches!(t, Type::I64 | Type::PyDynamic))
+        || (!matches!(t, Type::Str) && t.is_untyped())
 }
 
 fn set_mutation_ok(method: &str, arg_len: usize) -> bool {
