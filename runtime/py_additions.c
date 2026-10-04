@@ -3160,6 +3160,45 @@ int64_t py_builtin_min(int64_t vec) {
     return best;
 }
 
+// min()/max() 单参数形式的 f64 元素版（批 925）：浮点元素按 f64 位模式
+// 存取（zeta_vec_push_f64 同一约定），比较在 double 域进行，返回位模式。
+// 此前只有 i64 版，浮点数组按位模式比大小（min([1.5,2.5]) 实拍
+// 4609434218613702656 ＝ 1.5 的位模式，CPython 1.5），gen 侧仅打 warning
+// 提示绕行。
+int64_t py_builtin_max_f64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t raw = ((int64_t*)vec)[0];
+    double best;
+    memcpy(&best, &raw, sizeof best);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t r2 = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &r2, sizeof v);
+        if (v > best) best = v;
+    }
+    int64_t out;
+    memcpy(&out, &best, sizeof out);
+    return out;
+}
+
+int64_t py_builtin_min_f64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t raw = ((int64_t*)vec)[0];
+    double best;
+    memcpy(&best, &raw, sizeof best);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t r2 = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &r2, sizeof v);
+        if (v < best) best = v;
+    }
+    int64_t out;
+    memcpy(&out, &best, sizeof out);
+    return out;
+}
+
 // ── PY-A: s.split() with no separator — split on whitespace runs, dropping
 // empty fields (Python semantics). The 2-arg form uses host_str_split. ──
 int64_t host_str_split_ws(int64_t s) {

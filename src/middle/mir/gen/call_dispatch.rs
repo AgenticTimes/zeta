@@ -1833,9 +1833,10 @@ call, no NULL-handle dereference).",
                 }
             }
             // PY-A: max(xs) / min(xs) — the 1-argument form (previously a
-            // bare `max`/`min` extern → link failure). f64 elements live as
-            // raw bit patterns, so those are warned about instead of
-            // silently compared as integers.
+            // bare `max`/`min` extern → link failure).
+            // 批次 925：f64 元素走 f64 比较版（元素按 f64 位模式存取，此前
+            // 只有 i64 版＋warning 提示绕行，min([1.5,2.5]) 打 1.5 的位模式
+            // 4609434218613702656）；元素型 type_map 优先、checker_env 兜底。
             if receiver.is_none()
                 && (method == "max" || method == "min")
                 && args.len() == 1
@@ -1845,20 +1846,17 @@ call, no NULL-handle dereference).",
                     Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
                         matches!(**e, Type::F64 | Type::F32)
                     }
-                    _ => false,
+                    _ => match &args[0] {
+                        AstNode::Var(nm) => matches!(
+                            self.checker_type_of(nm),
+                            Some(Type::DynamicArray(e))
+                                if matches!(*e, Type::F64 | Type::F32)
+                        ),
+                        _ => false,
+                    },
                 };
-                if elem_is_float {
-                    eprintln!(
-                        "warning: PY-A: `{}` over a float array compares raw bit \
-                         patterns — pass integers, or compare explicitly",
-                        method
-                    );
-                }
-                let func = if method == "max" {
-                    "py_builtin_max"
-                } else {
-                    "py_builtin_min"
-                };
+                let (func, dest_f64) =
+                    minmax_builtin_target(&method, elem_is_float);
                 self.stmts.push(MirStmt::Call {
                     func: func.to_string(),
                     args: vec![a],
@@ -1866,7 +1864,10 @@ call, no NULL-handle dereference).",
                     type_args: vec![],
                 });
                 self.exprs.insert(id, MirExpr::Var(id));
-                self.type_map.insert(id, Type::I64);
+                self.type_map.insert(
+                    id,
+                    if dest_f64 { Type::F64 } else { Type::I64 },
+                );
                 return id;
             }
             // PY-A: isinstance(x, T) — the value's STATIC type decides.
@@ -5830,5 +5831,36 @@ call, no NULL-handle dereference).",
                 self.type_map.insert(id, ret_ty);
             }
         id
+    }
+}
+
+/// min()/max() 单参数数组形式的降级方案纯面（批 925）：元素是否浮点 ⇒
+///（函数名, 结果槽是否 f64）。f64 版按位模式读、double 域比较、位模式返回；
+/// 结果槽标 F64 让下游按浮点消费。此前只有 i64 版，浮点数组按位模式比大小，
+/// gen 侧仅 warning 提示绕行。
+fn minmax_builtin_target(method: &str, elem_is_float: bool) -> (&'static str, bool) {
+    match (method, elem_is_float) {
+        ("max", true) => ("py_builtin_max_f64", true),
+        ("min", true) => ("py_builtin_min_f64", true),
+        ("max", false) => ("py_builtin_max", false),
+        ("min", false) => ("py_builtin_min", false),
+        _ => ("py_builtin_min", false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::minmax_builtin_target;
+
+    #[test]
+    fn minmax_float_arrays_target_f64_variants() {
+        assert_eq!(minmax_builtin_target("max", true), ("py_builtin_max_f64", true));
+        assert_eq!(minmax_builtin_target("min", true), ("py_builtin_min_f64", true));
+    }
+
+    #[test]
+    fn minmax_int_arrays_keep_legacy() {
+        assert_eq!(minmax_builtin_target("max", false), ("py_builtin_max", false));
+        assert_eq!(minmax_builtin_target("min", false), ("py_builtin_min", false));
     }
 }
