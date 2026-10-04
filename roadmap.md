@@ -29161,3 +29161,24 @@ subscript 475——map/dict/set、map/dict/dict_like 另族）。
 
 **验证**：编译零错误；内置单元测试 158/158；历史探针七套两轮零差异；
 全量差分（--group 50）match=2845/2845＝100%；python_style 479/0。
+
+## 批次 902（2026-10-04，**重构批：轴 F 第三片——余量 map/dict 位点逐处裁决（新增 3 处落地，3 处登记保留）**）
+
+901 余量的 8 处（params 组合/三way/混合）逐处裁决：
+- **落地 3 处**：call_dispatch 4357（closure is_str||is_map → `!(matches!(t,
+  Type::Str) || t.is_map())`，借用调用无移动）；4039（let-chain 前置
+  `.map_or(false, |ty| ty.is_map())` 判定、解构随后——owned 绑定与 is_map
+  的移动冲突解法＝判定先行）；4846（matches! 守卫 `ty @ Named(_, ts)` 借用
+  绑定＋ts.len() 组合守卫）。
+- **登记保留 3 处**：call_binary 847/851（三way map/dict/set——set 另族，
+  879 的集合并集路由已按型分派）；call_subscript 475（map/dict/dict_like
+  ——dict_like 是平台对象真型，非拼写变体）。
+- **语义保留 2 处**：call_dispatch 1930（拼写分派表——"dict" 臂匹配的是
+  注册拼写串而非型判定）；gen.rs 341（map 与 String 同列的 ABI 通道判定，
+  String 非拼写变体）。
+外加 897 已落地的 2 处＋901 的 9 处：**kind 2（map/dict 拼写比较）收敛完成
+13/17 落地、余量全部有据登记**。
+
+**验证**：编译零错误；内置单元测试 158/158；历史探针七套零差异；
+全量差分（--group 50）match=2845/2845＝100%；python_style 479/0；
+t10002 钉 PASS。

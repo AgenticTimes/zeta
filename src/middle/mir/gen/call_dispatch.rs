@@ -4034,9 +4034,12 @@ call, no NULL-handle dereference).",
                     // correctly.
                     if method == "get"
                         && arg_ids.len() == 3
+                        && self
+                            .type_map
+                            .get(&arg_ids[0])
+                            .map_or(false, |ty| ty.is_map())
                         && let Some(Type::Named(n, mut targs)) =
                             self.type_map.get(&arg_ids[0]).cloned()
-                        && (n == "map" || n == "dict")
                     {
                         let vt = self
                             .type_map
@@ -4354,10 +4357,11 @@ call, no NULL-handle dereference).",
 
             let opaque_fallback: Option<(&str, &str)> = if receiver.is_some()
                 && !struct_has_method
+                // 批次 902（轴 F）：is_map 收敛到唯一判定（t 为 &Type，借用
+                // 调用无移动）；Named("dict") 幻影型已证（898），is_map 即
+                // map/dict 全集。
                 && receiver_ty.as_ref().map_or(true, |t| {
-                    let is_str = matches!(t, Type::Str);
-                    let is_map = matches!(t, Type::Named(n, _) if n == "map");
-                    !(is_str || is_map)
+                    !(matches!(t, Type::Str) || t.is_map())
                 })
             {
                 // Untyped receiver (a Python function parameter almost
@@ -4842,7 +4846,7 @@ call, no NULL-handle dereference).",
                 && arg_ids.len() == 1
                 && matches!(
                     receiver_ty.as_ref(),
-                    Some(Type::Named(n, ts)) if (n == "map" || n == "dict") && ts.len() == 2
+                    Some(ty @ Type::Named(_, ts)) if ty.is_map() && ts.len() == 2
                 )
             {
                 let (kt, vt) = match receiver_ty.as_ref() {
