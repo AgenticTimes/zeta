@@ -161,6 +161,16 @@ fn scan_stmts(env: &mut TypeEnv, body: &[AstNode], ctx: &InferCtx) {
                 if let AstNode::Var(name) = &**lhs {
                     propagate_assign(env, name, rhs, ctx);
                 }
+                // 元组解包：x, y = pair ⇒ 逐分量传播（批 929）
+                if let (AstNode::Tuple(elems), _) = (&**lhs, &**rhs) {
+                    let src_ty = expr_known_ty(rhs, env, ctx);
+                    if let Some(Type::Tuple(tys)) = src_ty {
+                    for (i, e) in elems.iter().enumerate() {
+                        if let (AstNode::Var(nm), Some(t)) = (e, tys.get(i)) {
+                            env.meet_slot(nm.as_str(), LatticeTy::known(t.clone()));
+                        }
+                    }                    }
+                }
                 // rhs 内嵌套赋值（walrus 等）递归
                 scan_expr(env, rhs, ctx);
             }
@@ -335,6 +345,17 @@ fn propagate_assign(env: &mut TypeEnv, name: &str, rhs: &AstNode, ctx: &InferCtx
     }
     // 调用返回（ret_types 查表）
     if let AstNode::Call { method, .. } = rhs {
+        // 转换内建 ⇒ 目标型（批 929）
+        let conv = match method.as_str() {
+            "str" => Some(Type::Str),
+            "int" => Some(Type::I64),
+            "float" => Some(Type::F64),
+            _ => None,
+        };
+        if let Some(t) = conv {
+            env.meet_slot(name, LatticeTy::known(t));
+            return;
+        }
         if let Some(ty) = ctx.ret_types.get(method) {
             env.meet_slot(name, LatticeTy::known(ty.clone()));
         }
@@ -1032,5 +1053,55 @@ mod tests {
             env.get_slot("f"),
             LatticeTy::known(Type::from_string("f64"))
         );
+    }
+
+    /// 元组解包赋值：x, y = pair ⇒ 逐分量按 Tuple 元素型传播（批 929）。
+    #[test]
+    fn tuple_unpack_propagates() {
+        let mut env = TypeEnv::new();
+        env.meet_slot(
+            "pair",
+            LatticeTy::known(Type::Tuple(vec![Type::I64, Type::Str])),
+        );
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[AstNode::Assign(
+                Box::new(AstNode::Tuple(vec![var("x"), var("y")])),
+                Box::new(var("pair")),
+            )],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("x"), LatticeTy::known(Type::I64));
+        assert_eq!(env.get_slot("y"), LatticeTy::known(Type::Str));
+    }
+
+    /// str()/int()/float() 转换内建 ⇒ 目标型（批 929）。
+    #[test]
+    fn conversion_builtins_types_target() {
+        let mut env = TypeEnv::new();
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "test_fn",
+            &[
+                assign("s", call("str", vec![AstNode::Lit(1)])),
+                assign("i", call("int", vec![AstNode::FloatLit("2.5".to_string())])),
+                assign("f", call("float", vec![AstNode::Lit(3)])),
+            ],
+            &ctx,
+        );
+        assert_eq!(env.get_slot("s"), LatticeTy::known(Type::Str));
+        assert_eq!(env.get_slot("i"), LatticeTy::known(Type::I64));
+        assert_eq!(env.get_slot("f"), LatticeTy::known(Type::F64));
     }
 }
