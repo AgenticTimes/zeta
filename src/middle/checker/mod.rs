@@ -87,15 +87,7 @@ pub fn infer_fn_body_full(
     body: &[AstNode],
     ctx: &InferCtx,
 ) {
-    for (i, (pname, anno)) in params.iter().enumerate() {
-        if !anno.is_empty() {
-            if let Some(lat) = constraint::annotation_lattice(anno) {
-                env.meet_slot(pname.as_str(), lat);
-            }
-        } else if let Some(Some(t)) = evidence.and_then(|e| e.get(i)) {
-            env.meet_slot(pname.as_str(), LatticeTy::known(t.clone()));
-        }
-    }
+    prime_param_slots(env, params, evidence);
     scan_stmts(env, body, ctx);
     // Return 语句收集→fn_rets（批 918：P4 回灌替换的前提）
     collect_fn_ret(env, fn_name, body, ctx);
@@ -114,7 +106,7 @@ pub fn collect_param_evidence(
     let mut table: HashMap<String, (Vec<Option<Type>>, Vec<bool>)> =
         HashMap::new();
     for def in funcs.values() {
-        if let AstNode::FuncDef { body, .. } = def {
+        if let AstNode::FuncDef { name, body, .. } = def {
             let mut calls: Vec<&AstNode> = Vec::new();
             collect_calls(body, &mut calls);
             for c in calls {
@@ -200,6 +192,97 @@ pub fn collect_param_evidence(
     table.into_iter().map(|(k, (cand, _))| (k, cand)).collect()
 }
 
+/// 顶层调用点证据并入（批 940）：顶层 `show(get_data())` 不在任何函数体
+/// 里，collect_param_evidence 的函数体扫描收不到——单独扫顶层语句并调和。
+/// 候选来源：字面量、调用表达式（body_rets 查）；变量实参保守不收
+///（顶层 env 不在建计划阶段推断）。
+fn merge_top_level_evidence(
+    funcs: &HashMap<String, AstNode>,
+    base: &HashMap<String, Vec<Option<Type>>>,
+    body_rets: Option<&HashMap<String, Type>>,
+    top_bodies: &[AstNode],
+) -> HashMap<String, Vec<Option<Type>>> {
+    if top_bodies.is_empty() {
+        return base.clone();
+    }
+    let mut out = base.clone();
+    let mut calls: Vec<&AstNode> = Vec::new();
+    collect_calls(top_bodies, &mut calls);
+    for c in calls {
+        if let AstNode::Call {
+            receiver: None,
+            method,
+            args,
+            ..
+        } = c
+        {
+            if !funcs.contains_key(method) {
+                continue;
+            }
+            let slot = out
+                .entry(method.clone())
+                .or_insert_with(|| vec![None; args.len().max(1)]);
+            for (i, a) in args.iter().enumerate() {
+                if i >= slot.len() {
+                    continue;
+                }
+                let lit = constraint::literal_lattice(a)
+                    .and_then(|l| l.known_ty())
+                    .or_else(|| {
+                        if let (
+                            AstNode::Call {
+                                receiver: None,
+                                method: m2,
+                                ..
+                            },
+                            Some(br),
+                        ) = (a, body_rets)
+                        {
+                            br.get(m2).cloned()
+                        } else {
+                            None
+                        }
+                    });
+                match (lit, &slot[i]) {
+                    (Some(t), None) => slot[i] = Some(t),
+                    (Some(t), Some(prev)) if *prev == t => {}
+                    _ => slot[i] = None,
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 参数槽初始化（批 940 修正）：注解优先，但细化阶段的 "dyn" 动态标记
+/// （from_string ⇒ PyDynamic）让位给调用点证据——证据是真实调用点的
+/// 具体型，标记只是"没推断出"的占位。推断不出时标记维持动态语义。
+fn prime_param_slots(
+    env: &mut TypeEnv,
+    params: &[(String, String)],
+    evidence: Option<&[Option<Type>]>,
+) {
+    for (i, (pname, anno)) in params.iter().enumerate() {
+        let ev_ty = evidence.and_then(|e| e.get(i)).and_then(|o| o.clone());
+        let ann_lat = if anno.is_empty() {
+            None
+        } else {
+            constraint::annotation_lattice(anno)
+        };
+        let is_dyn_marker = ann_lat
+            .as_ref()
+            .and_then(|l| l.known_ty())
+            .map_or(false, |t| matches!(t, Type::PyDynamic));
+        if is_dyn_marker && ev_ty.is_some() {
+            env.meet_slot(pname.as_str(), LatticeTy::known(ev_ty.unwrap()));
+        } else if let Some(lat) = ann_lat {
+            env.meet_slot(pname.as_str(), lat);
+        } else if let Some(t) = ev_ty {
+            env.meet_slot(pname.as_str(), LatticeTy::known(t));
+        }
+    }
+}
+
 /// 模块级 checker 推断计划（批 938）：证据表＋并入 body_rets 的查表＋
 /// 函数 env 缓存。lower_to_mir 每函数/闭包调用一次（batch 738 在册
 /// 651 次）——这套编排只依赖全模块注册表，在入口惰性构建一次。
@@ -216,6 +299,7 @@ pub fn build_module_checker_plan(
     ret_map: &HashMap<String, Type>,
     type_decls: &HashMap<String, crate::middle::mir::r#gen::TypeDecl>,
     module_globals: &std::collections::HashSet<String>,
+    top_bodies: &[AstNode],
 ) -> ModuleCheckerPlan {
     let ev0 = collect_param_evidence(funcs, None, None);
     let body_rets =
@@ -238,7 +322,14 @@ pub fn build_module_checker_plan(
             env_cache.insert(fname.clone(), fenv);
         }
     }
-    let evidence = collect_param_evidence(funcs, Some(&body_rets), Some(&env_cache));
+    let evidence =
+        collect_param_evidence(funcs, Some(&body_rets), Some(&env_cache));
+    let evidence = merge_top_level_evidence(
+        funcs,
+        &evidence,
+        Some(&body_rets),
+        top_bodies,
+    );
     let mut ret_map_full = body_rets;
     for (k, v) in ret_map.iter() {
         ret_map_full.entry(k.clone()).or_insert(v.clone());
@@ -270,17 +361,8 @@ pub fn collect_module_body_rets(
     for (name, def) in funcs {
         if let AstNode::FuncDef { params, body, .. } = def {
             let mut env = TypeEnv::new();
-            for (i, (pname, anno)) in params.iter().enumerate() {
-                if !anno.is_empty() {
-                    if let Some(lat) = constraint::annotation_lattice(anno) {
-                        env.meet_slot(pname.as_str(), lat);
-                    }
-                } else if let Some(Some(t)) =
-                    evidence.get(name).and_then(|e| e.get(i))
-                {
-                    env.meet_slot(pname.as_str(), LatticeTy::known(t.clone()));
-                }
-            }
+            let ev_slice = evidence.get(name).map(|v| v.as_slice());
+            prime_param_slots(&mut env, params, ev_slice);
             scan_stmts(&mut env, body, &ctx);
             collect_fn_ret(&mut env, name.as_str(), body, &ctx);
             for (k, v) in env.fn_rets {
@@ -295,6 +377,10 @@ pub fn collect_module_body_rets(
 fn collect_calls<'a>(body: &'a [AstNode], out: &mut Vec<&'a AstNode>) {
     for stmt in body {
         match stmt {
+            // 裸调用语句：顶层可执行语句包装进 main 体后，表达式语句
+            // 是裸 Call（无 ExprStmt 包裹）——实测 main 体 heads=[Call,
+            // Call, Assign, Call]，漏此臂则顶层调用点全部漏收（批 940）
+            AstNode::Call { .. } => collect_calls_expr(stmt, out),
             AstNode::ExprStmt { expr } => collect_calls_expr(expr, out),
             AstNode::Assign(_, rhs) => collect_calls_expr(rhs, out),
             AstNode::Return(e) => collect_calls_expr(e, out),
@@ -1772,6 +1858,76 @@ mod tests {
         assert_eq!(
             ev_show[0],
             Some(Type::DynamicArray(Box::new(Type::F64)))
+        );
+    }
+
+    /// plan 层：顶层调用点证据并入（批 940）。
+    #[test]
+    fn plan_merges_top_level_call_evidence() {
+        let mk_def = |name: &str, params: Vec<(String, String)>, body: Vec<AstNode>| {
+            AstNode::FuncDef {
+                name: name.to_string(),
+                generics: vec![],
+                lifetimes: vec![],
+                params,
+                ret: String::new(),
+                body,
+                attrs: vec![],
+                ret_expr: None,
+                single_line: true,
+                doc: String::new(),
+                pub_: false,
+                async_: false,
+                const_: false,
+                comptime_: false,
+                where_clauses: vec![],
+            }
+        };
+        let get_data = mk_def(
+            "get_data",
+            vec![],
+            vec![AstNode::Return(Box::new(AstNode::ArrayLit(vec![
+                AstNode::FloatLit("1.0".to_string()),
+            ])))],
+        );
+        let show = mk_def(
+            "show",
+            vec![("data".to_string(), String::new())],
+            vec![AstNode::ExprStmt {
+                expr: Box::new(AstNode::Lit(0)),
+            }],
+        );
+        let mut registered = HashMap::new();
+        registered.insert("get_data".to_string(), get_data);
+        registered.insert("show".to_string(), show);
+        // 顶层：show(get_data())
+        let top = vec![AstNode::ExprStmt {
+            expr: Box::new(AstNode::Call {
+                receiver: None,
+                method: "show".to_string(),
+                args: vec![AstNode::Call {
+                    receiver: None,
+                    method: "get_data".to_string(),
+                    args: vec![],
+                    type_args: vec![],
+                    structural: false,
+                }],
+                type_args: vec![],
+                structural: false,
+            }),
+        }];
+        let plan = build_module_checker_plan(
+            &registered,
+            &HashMap::new(),
+            &HashMap::new(),
+            &Default::default(),
+            &top,
+        );
+        let ev_show = plan.evidence.get("show").expect("show 证据");
+        assert_eq!(
+            ev_show[0],
+            Some(Type::DynamicArray(Box::new(Type::F64))),
+            "顶层 show(get_data()) ⇒ data 位证据 DynamicArray(F64)"
         );
     }
 

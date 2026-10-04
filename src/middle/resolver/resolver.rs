@@ -83,6 +83,9 @@ pub struct Resolver {
     /// 全模块注册表——惰性构建一次，闭包内只查。
     checker_plan:
         RefCell<Option<crate::middle::checker::ModuleCheckerPlan>>,
+    /// 批 940：顶层语句（main 体）——调用点证据扫描的覆盖面。registered_funcs
+    /// 只含函数体，顶层 `show(get_data())` 这类调用点此前全部漏收。
+    top_level_stmts: RefCell<Vec<AstNode>>,
     /// Module resolver for Zorb imports
     module_resolver: ModuleResolver,
     /// Macro expander for macro processing
@@ -192,6 +195,7 @@ impl Resolver {
             star_params: RefCell::new(HashMap::new()),
             registered_funcs: HashMap::new(),
             checker_plan: RefCell::new(None),
+            top_level_stmts: RefCell::new(Vec::new()),
             module_resolver: ModuleResolver::new("."),
             macro_expander: MacroExpander::new(),
             type_decls: HashMap::new(),
@@ -259,6 +263,8 @@ impl Resolver {
                 self.py_loaded_modules.borrow().len()
             );
         }
+        // 批 940：顶层语句入册（checker 调用点证据扫描的覆盖面）
+        self.top_level_stmts.borrow_mut().push(ast.clone());
         // PY-A: keep the definition for return-type inference (imported
         // modules register through this same path).
         if matches!(ast, AstNode::FuncDef { .. }) {
@@ -5589,6 +5595,7 @@ fn shim_class_normalize(t: &Type) -> Type {
                         &ret_map_for_plan,
                         &self.type_decls,
                         &self.module_globals.borrow(),
+                        &self.top_level_stmts.borrow(),
                     );
                     *self.checker_plan.borrow_mut() = Some(plan);
                 }
