@@ -4815,12 +4815,13 @@ print(i)
 /// 折出来的布尔由 :305-306 渲染成 `"True"`／`"False"` 字符串字面量下发给 `println_str`
 /// ⇒ 折叠值在 MIR 里直接可读（`VoidCall{args:[N]}` 的 `exprs[N]`）。
 ///
-/// 三侧真值（本批实拍，八格全一致；夹具件在临时目录 `target/tmp_b10037/`，
-/// `cargo clean` 会清掉，八行源码与本条夹具表的顺序一字相同）：
-/// - CPython（`c8.py`）→ True True True True True False True False；
-/// - 编译期折叠＋AOT 运行（`c8.z` 同序八行）同值（`rc=0`）；
+/// 三侧真值（本批实拍，十一格全一致；夹具件在临时目录 `target/tmp_b10037/`，
+/// `cargo clean` 会清掉，八行源码＋三行追加与本条夹具表的顺序一字相同）：
+/// - CPython（`c8.py` 八行＋`c3.py` 三行追加）→ True True True True True False True
+///   False｜True True True；
+/// - 编译期折叠＋AOT 运行（`c8.z`／`c3.z`）同值（`rc=0`）；
 /// - 强制走运行期（把操作数换成列表元素，`xs = [-5, 0, -16, 2, 1, 5, 3, 1, 0, 1]`，
-///   `r8.z` 八行同序）⇒ 同值 ⇒ 折叠与运行期在这一形上一致，正是 665 要的不变式。
+///   `r8.z`／`r3.z` 同序）⇒ 同值 ⇒ 折叠与运行期在这一形上一致，正是 665 要的不变式。
 ///
 /// 与既有那条的分工：`:940 constant_folded_comparison_yields_bool_not_int_zero` 钉的是
 /// 顶层**裸比较**（`print(3 == 4)`）折出来的是布尔拼写而不是 0/1 ＝批次 642 的渲染臂；
@@ -4833,7 +4834,7 @@ print(i)
 #[test]
 fn parenthesized_comparison_folds_with_value_semantics_not_as_a_python_chain() {
     // (标签, 夹具行, 期望)——前三列一起决定源码，源码与期望不会走偏。
-    let cells: [(&str, &str, &str); 8] = [
+    let cells: [(&str, &str, &str); 11] = [
         // 1..4：改前的链式启发折成 False，值语义折成 True＝区分格。
         (
             "括号比较作左操作数（665 症状形）",
@@ -4863,6 +4864,23 @@ fn parenthesized_comparison_folds_with_value_semantics_not_as_a_python_chain() {
             "不带括号的比较串（右结合，启发式打不到）",
             "print(1 < 2 == 1)",
             "False",
+        ),
+        // 9..11：把 `apply` 闭包里 `>=`／`<=` 那两行也放进变异射程（8 格只用到
+        // `<`、`>`、`==`、`!=` 四行）。
+        (
+            "内层 <= 为假＋外层 >= 0（区分格，钉 >= 那一行）",
+            "print((2 <= 1) >= 0)",
+            "True",
+        ),
+        (
+            "内层 <= 靠相等为真＋外层 > 0（两折法同值，钉 <= 那一行）",
+            "print((1 <= 1) > 0)",
+            "True",
+        ),
+        (
+            "内层 >= 为假＋外层 <= 0（区分格，钉 >= 与 <= 两行）",
+            "print((1 >= 2) <= 0)",
+            "True",
         ),
     ];
     let src = cells
