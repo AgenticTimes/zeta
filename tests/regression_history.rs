@@ -5401,3 +5401,283 @@ o = other("x", "{}")
          第 7 格本该留在 `I64`（`other` 体内那次 `.loads` 的接收者是无型形参）"
     );
 }
+
+/// 批次 287（代码 `d8f69183`，站点 `src/frontend/parser/stmt.rs` 的 with 降形：
+/// 终结符改写 `rewrite_with_exits`（现 :1308-1364）与发射器 `zeta_with_exit_stmt`
+/// （现 :1272））：`with lock: return v` 死锁 + 静默错值。
+/// 症状（记录原文）：desugar 只在 body「能走到尾」时追加 `__exit__` ⇒ 体内 `return`
+/// 提前离开时锁永不释放（`_ranked_fetch_sources → py_threading_lock_acquire →
+/// __psynch_mutexwait`，drv 挂住 rc=124）；同一形态还有第二坑（`top_level.rs` 把以
+/// `return` 结尾的 Block 提升成 ret_expr）⇒ 返回值被吞、恒返 0。
+/// 修法＝把体内 `return v` 就地改写成 `{ __with_ret_N = v; try_end; __exit__();
+/// return __with_ret_N }`；`break`/`continue` 仅当绑定到 with **外层**循环时前置
+/// 释放（降入循环体后 `at_loop_depth` 复位，防"体内 break 提前放锁"）。
+/// 期望值来源：在册夹具 `tests/python_style/t287_with_lock_return.z` 的
+/// `// expect: 42 / 42 / 9`（运行期真值由该夹具承担）＋本批 `--dump-mir` 实拍
+/// （`/tmp/b10040/mir_v2.txt`、`/tmp/b10040/mir_head.txt`）与进程内逐函数事件轨迹
+/// （HEAD 态 14 格＝`/tmp/b10040/trace_head.txt`；改前形状＝`arm_M1_return_arm_gone.txt`
+/// 的 left 侧，那一臂就是把 `return` 那支改写撤掉＝287 改前）。槽号按首次出现顺序
+/// 规范化（`s0`、`s1`…），所以下面每格读的是**事件次序与配对关系**，不是全局槽号。
+/// 轨迹词表：`acq`＝加锁，`tend`＝弹 try 帧，`rel`＝释放锁，`raise`＝重抛，
+/// `wsK<-sL`＝把返回槽 sL 写进 sK，`ret sK`＝返回 sK，`brk`/`cont`＝跳出／继续，
+/// `if{…}else{…}`／`for{…}esle{…}`／`whl{…}esle{…}`＝分支与循环（`esle` 是 for/while
+/// 的 else 支）。
+/// 覆盖面分工（本批 14 臂变异矩阵实测，逐臂红点集见 roadmap 批次 10040）：
+/// ① 撤 `return` 那支的整段改写（＝改前形状）、② 单撤那支里的释放发射、③ 单撤那支里
+///   的弹帧——三臂红**同一组 9 格**（带 return 的九条轨迹），其余 5 格一字不动 ⇒ 三臂
+///   算一条覆盖；④ `brk` 那支红 2 格、⑤ `cont` 那支红 1 格、⑥ If 整支不递归红 3 格、
+///   ⑦ 只断 If 的 else_ 半支红 1 格、⑧⑨⑩ IfLet／Block／Loop 各自不递归分别红
+///   `ret_in_iflet`／`ret_in_nested_with`／`ret_in_loop`（三格互不重叠）、
+///   ⑪⑫ "降入循环体复位"那两处（for 体、while 体）各红 1 格，红的正是
+///   "体内 break/continue 不该放锁"那两格、⑬⑭ for 的 else 支与 while 的 else 支
+///   各自不递归分别红 `ret_in_for_else`／`break_in_while_else`。
+/// 14 臂全部有红点：无阴性臂、无空跑格（每格至少被一臂打红）。
+/// 未变异的一臂＝287 记录里的第二坑（`top_level.rs` 不再把以 `return` 结尾的 Block
+/// 提升成 ret_expr），站点在本车道的在制文件里 ⇒ 第 6 格 `ret_after_assign` 对那一臂
+/// 只算现状锁。
+/// 与在册批次 414 那条（`with_body_exception_path_releases_lock_in_both_try_branches`）
+/// 的分工：414 那条只走 `raise` 出口，本条走的是它头注里点名的未覆盖边界——
+/// `return`／`break`／`continue` 三条提前退出边；两者互不备份。
+/// 轨迹里的 `else{ tend rel raise }` 半段来自 414 的 handler 分支，撤那一臂本条也会
+/// 跟着红——那一格算互备，不算本条的独立覆盖。
+#[test]
+fn with_body_terminators_release_the_lock_before_leaving() {
+    use std::collections::{HashMap, HashSet};
+
+    const REL: &str = "rel";
+    const ACQ: &str = "acq";
+    const TEND: &str = "tend";
+    const RAISE: &str = "raise";
+
+    /// 槽号规范化器：按首次出现顺序发号，读数与全局槽号解耦。
+    struct Slots {
+        map: HashMap<u32, String>,
+        next: usize,
+    }
+    impl Slots {
+        fn id(&mut self, v: u32) -> String {
+            if let Some(l) = self.map.get(&v) {
+                return l.clone();
+            }
+            let l = format!("s{}", self.next);
+            self.next += 1;
+            self.map.insert(v, l.clone());
+            l
+        }
+    }
+
+    /// 函数体内所有 `Return` 返回的槽（只有这些槽的写入才进轨迹）。
+    fn ret_slots(stmts: &[MirStmt], out: &mut HashSet<u32>) {
+        for s in stmts {
+            match s {
+                MirStmt::Return { val } => {
+                    out.insert(*val);
+                }
+                MirStmt::If { then, else_, .. } => {
+                    ret_slots(then, out);
+                    ret_slots(else_, out);
+                }
+                MirStmt::For { body, else_body, .. } | MirStmt::While { body, else_body, .. } => {
+                    ret_slots(body, out);
+                    ret_slots(else_body, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 按序线性化成事件轨迹（深度优先，分支用花括号标出）。
+    fn trace(stmts: &[MirStmt], out: &mut Vec<String>, slots: &mut Slots, rets: &HashSet<u32>) {
+        for s in stmts {
+            match s {
+                MirStmt::Call { func, .. } | MirStmt::VoidCall { func, .. } => {
+                    let tok = if func.contains("lock_release") {
+                        REL
+                    } else if func.contains("lock_acquire") {
+                        ACQ
+                    } else if func.contains("try_end") {
+                        TEND
+                    } else if func.contains("zeta_raise") {
+                        RAISE
+                    } else {
+                        continue;
+                    };
+                    out.push(tok.to_string());
+                }
+                MirStmt::Assign { lhs, rhs } => {
+                    if rets.contains(lhs) {
+                        out.push(format!("w{}<-{}", slots.id(*lhs), slots.id(*rhs)));
+                    }
+                }
+                MirStmt::Return { val } => out.push(format!("ret{}", slots.id(*val))),
+                MirStmt::Break => out.push("brk".to_string()),
+                MirStmt::Continue => out.push("cont".to_string()),
+                MirStmt::If { then, else_, .. } => {
+                    out.push("if{".to_string());
+                    trace(then, out, slots, rets);
+                    out.push("}else{".to_string());
+                    trace(else_, out, slots, rets);
+                    out.push("}".to_string());
+                }
+                MirStmt::For { body, else_body, .. } => {
+                    out.push("for{".to_string());
+                    trace(body, out, slots, rets);
+                    out.push("}esle{".to_string());
+                    trace(else_body, out, slots, rets);
+                    out.push("}".to_string());
+                }
+                MirStmt::While { body, else_body, .. } => {
+                    out.push("whl{".to_string());
+                    trace(body, out, slots, rets);
+                    out.push("}esle{".to_string());
+                    trace(else_body, out, slots, rets);
+                    out.push("}".to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mirs = lower_all(
+        r#"import threading
+
+L = threading.Lock()
+M = threading.Lock()
+flag = True
+
+def ret_top():
+    with L:
+        return 7
+
+def ret_in_if(c: bool):
+    with L:
+        if c:
+            return 1
+    return 2
+
+def ret_in_elif(c: bool, d: bool):
+    with L:
+        if c:
+            return 21
+        elif d:
+            return 22
+        else:
+            return 23
+    return 24
+
+def ret_in_while():
+    with L:
+        while flag:
+            return 3
+    return 4
+
+def ret_in_for_else():
+    with L:
+        for i in range(2):
+            pass
+        else:
+            return 5
+    return 6
+
+def ret_after_assign():
+    x = 0
+    with L:
+        x = 8
+        return x + 1
+
+def ret_in_nested_with():
+    with L:
+        with M:
+            return 11
+
+def break_outer():
+    for i in range(3):
+        with L:
+            break
+
+def break_inner():
+    with L:
+        for i in range(3):
+            break
+
+def cont_outer():
+    for i in range(3):
+        with L:
+            continue
+
+def cont_inner():
+    with L:
+        while flag:
+            continue
+
+def ret_in_loop():
+    with L:
+        loop:
+            return 31
+
+def ret_in_iflet(o: Option<i64>) -> i64:
+    with L:
+        if let Some(v) = o:
+            return 32
+    return 33
+
+def break_in_while_else():
+    for i in range(3):
+        with L:
+            while flag:
+                pass
+            else:
+                break
+"#,
+    );
+
+    let traced = |name: &str| -> String {
+        let f = mir(&mirs, name);
+        let mut rets = HashSet::new();
+        ret_slots(&f.stmts, &mut rets);
+        let mut slots = Slots { map: HashMap::new(), next: 0 };
+        let mut v = Vec::new();
+        trace(&f.stmts, &mut v, &mut slots, &rets);
+        v.join(" ")
+    };
+
+    let got = vec![
+        ("ret_top：return 边的释放序", traced("ret_top")),
+        ("ret_in_if：If 的 then 支里 return", traced("ret_in_if")),
+        ("ret_in_elif：elif 链每一支的 return", traced("ret_in_elif")),
+        ("ret_in_while：whl 体里 return", traced("ret_in_while")),
+        ("ret_in_for_else：for 的 else 支里 return", traced("ret_in_for_else")),
+        ("ret_after_assign：先赋值再 return（287 第二坑的形状）", traced("ret_after_assign")),
+        ("ret_in_nested_with：嵌套 with 两层各放一次", traced("ret_in_nested_with")),
+        ("break_outer：外层循环的 break 边要放锁", traced("break_outer")),
+        ("break_inner：with 体内循环的 break 不放锁", traced("break_inner")),
+        ("cont_outer：外层循环的 continue 边要放锁", traced("cont_outer")),
+        ("cont_inner：with 体内循环的 continue 不放锁", traced("cont_inner")),
+        ("ret_in_loop：loop 体里 return", traced("ret_in_loop")),
+        ("ret_in_iflet：if let 支里 return", traced("ret_in_iflet")),
+        ("break_in_while_else：whl 的 else 支里 break", traced("break_in_while_else")),
+    ];
+    let want = vec![
+        ("ret_top：return 边的释放序", "acq if{ ws0<-s1 tend rel rets0 }else{ tend rel raise } ws2<-s3 rets2".to_string()),
+        ("ret_in_if：If 的 then 支里 return", "acq if{ if{ ws0<-s1 tend rel rets0 }else{ } tend rel }else{ tend rel raise } rets2".to_string()),
+        ("ret_in_elif：elif 链每一支的 return", "acq if{ if{ ws0<-s1 tend rel rets0 }else{ if{ ws0<-s2 tend rel rets0 }else{ ws0<-s3 tend rel rets0 } } }else{ tend rel raise } rets4".to_string()),
+        ("ret_in_while：whl 体里 return", "acq if{ whl{ ws0<-s1 tend rel rets0 }esle{ } tend rel }else{ tend rel raise } rets2".to_string()),
+        ("ret_in_for_else：for 的 else 支里 return", "acq if{ for{ }esle{ ws0<-s1 tend rel rets0 } tend rel }else{ tend rel raise } rets2".to_string()),
+        ("ret_after_assign：先赋值再 return（287 第二坑的形状）", "acq if{ ws0<-s1 tend rel rets0 }else{ tend rel raise } ws2<-s3 rets2".to_string()),
+        ("ret_in_nested_with：嵌套 with 两层各放一次", "acq if{ acq if{ tend rel ws0<-s1 tend rel rets0 }else{ tend rel raise } tend rel }else{ tend rel raise } ws2<-s3 rets2".to_string()),
+        ("break_outer：外层循环的 break 边要放锁", "for{ acq if{ tend rel brk }else{ tend rel raise } }esle{ } rets0".to_string()),
+        ("break_inner：with 体内循环的 break 不放锁", "acq if{ for{ brk }esle{ } tend rel }else{ tend rel raise } ws0<-s1 rets0".to_string()),
+        ("cont_outer：外层循环的 continue 边要放锁", "for{ acq if{ tend rel cont }else{ tend rel raise } }esle{ } rets0".to_string()),
+        ("cont_inner：with 体内循环的 continue 不放锁", "acq if{ whl{ cont }esle{ } tend rel }else{ tend rel raise } ws0<-s1 rets0".to_string()),
+        ("ret_in_loop：loop 体里 return", "acq if{ whl{ ws0<-s1 tend rel rets0 }esle{ } tend rel }else{ tend rel raise } ws2<-s3 rets2".to_string()),
+        ("ret_in_iflet：if let 支里 return", "acq if{ ws0<-s1 tend rel rets0 tend rel }else{ tend rel raise } rets2".to_string()),
+        ("break_in_while_else：whl 的 else 支里 break", "for{ acq if{ whl{ }esle{ tend rel brk } tend rel }else{ tend rel raise } }esle{ } rets0".to_string()),
+    ];
+    assert_eq!(
+        got, want,
+        "with 体里的提前退出（return／绑到外层循环的 break／continue）每条边都要在离开前\
+         弹帧＋放锁（改前＝desugar 只在体能走到尾时补 `__exit__`，这些边上锁永不释放 ⇒ 二次\
+         调用挂死）；而 with 体内自己循环的 break/continue **不该**提前放锁（287 记录的 lock5 \
+         探针：`locked()==1`）。上面每格是一个函数的规范化事件轨迹（槽号按首次出现发号）。"
+    );
+}
