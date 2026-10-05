@@ -7311,7 +7311,7 @@ fn container_annotation_keeps_key_and_value_type_in_mir_type_map() {
     assert_eq!(want, got);
 }
 
-/// 批次 384（`52a0c411`，2026-09-23）——函数体里的 `static [mut] NAME[: TY] = INIT`。
+/// 批次 384（`52a0c411`，2026-09-24）——函数体里的 `static [mut] NAME[: TY] = INIT`。
 ///
 /// 症状（roadmap 批次 384 节 ＋ `tests/python_style/t423_static_mut_persistent.z` 头）：
 /// 这个词组在 Zeta 里原来没有任何规则，`static` 被当裸名表达式吞掉，剩下的
