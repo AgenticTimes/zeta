@@ -29650,3 +29650,13 @@ classify_param_kind 纯函数（注解串优先、checker 补位）＋七个消�
 全量差分 2845/2845、python_style 479/0、b947 探针保持。
 F.4 剩余：module_global_types 替换、6 轮传播删除、
 codegen container_cond_i1 改读类型。
+
+## 批次 954（2026-10-05）：module_global_types 替换评估——保留＋泄漏修正
+
+审计结论：module_global_types（10 处）是 resolver 注解处理产物，checker
+无等价数据源（module_env 靠语句扫描）——**不可等价替换，保留**。
+顺带修正批 942 缺陷：module_env 扫描面含合成 main 体内部的局部变量，
+种子注入泄漏给所有函数 env（跨函数错型源）——module_env 槽按
+module_globals 名单过滤。新增 2 单测；库 242/242；全量差分 2845/2845、
+python_style 479/0、b947 探针保持。F.4 剩余：6 轮传播删除、
+codegen container_cond_i1 改读类型。
