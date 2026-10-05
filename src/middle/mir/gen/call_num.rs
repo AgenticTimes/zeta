@@ -164,6 +164,43 @@ impl MirGen {
                 && ka.len() == 2
                 && matches!(&ka[0], AstNode::StringLit(n) if n == "key")
             {
+                // 批 982 补：登记块——NumericBuiltin 入口先于 call_dispatch
+                // 的 key= 臂执行，store 恒空导致特化发射永不触发（min/max
+                // 落旧路 flag=0）
+                if let AstNode::Var(nm) = &ka[1] {
+                    let mangled = format!("__ZKEYF64_{}", nm);
+                    if !nm.starts_with("__")
+                        && self.full_funcdefs.contains_key(nm.as_str())
+                    {
+                        if let Some(store) = self.keyfn_spec_store.as_ref() {
+                            let already = store.borrow().iter().any(|a| {
+                                matches!(
+                                    a,
+                                    AstNode::FuncDef { name, .. }
+                                        if *name == mangled
+                                )
+                            });
+                            if !already {
+                                if let Some(mut full) = self
+                                    .full_funcdefs
+                                    .get(nm.as_str())
+                                    .cloned()
+                                {
+                                    if let AstNode::FuncDef {
+                                        params,
+                                        ..
+                                    } = &mut full
+                                    {
+                                        if let Some(p0) = params.first_mut() {
+                                            p0.1 = "f64".to_string();
+                                        }
+                                    }
+                                    store.borrow_mut().push(full);
+                                }
+                            }
+                        }
+                    }
+                }
                 // 批 967：f64 元素 ⇒ 特化副本发射
                 if let AstNode::Var(nm) = &ka[1] {
                     let mangled = format!("__ZKEYF64_{}", nm);
