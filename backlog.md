@@ -872,6 +872,24 @@
 >   ⇒ 那条 rc=101 与文件态不相符（还原写入的同一刻起 cargo，撞上重建窗口＝10030 记过的
 >   "后台重编时别并发取读数"），不入账。
 
+> - 批次 10046（代码 `f0ea7e4f`）＝来源批次 393（`e7513474`，2026-09-24，"函数体里的 `use 路径;` 打不开 ⇒
+>   该项及其后各项不进程序"）：`tests/regression_history.rs:6832` 一条 16 格用例，站点＝
+>   `src/frontend/parser/stmt.rs:1878` 的 `parse_use_stmt`（HEAD 干净、可变异；提升那两段在
+>   `top_level.rs`，本车道该文件有未提交改动 ⇒ 只锁现状不变异）。进程内矩阵：A1 撤 `alt` 挂臂红 5 格、
+>   A2 把词边界检查换成裸前缀红 1 格（`used_fn(n)` 被当成 `use d_fn` 吃掉，只有被调清单看得见）、
+>   A3 撤"两项时起 `Block`"那一支红 1 格（`from_b` 消失而 `sum` 保住）＝三条独立覆盖；
+>   A4 让 `parse_use_stmt` 返回 `Ignore` 红 4 格且其中 3 格与 A1 读数一字相同＝同一条链的两个原因，
+>   不写成第四条。同批修一处测试面串扰：`top_level.rs:2048` 的 `PARSING_IMPORTED_MODULE` 是进程级
+>   `static AtomicBool`（注释写明编译单线程），`cargo test` 并行时加载模块的用例会让别的用例把自己的顶层
+>   装进 `__zeta_module_body__` 载体（实拍：单跑全绿、全量并行连跑三遍 3/3 红在第 2、8、12 格，第 12 格
+>   源码里根本没有 `use`）⇒ 在唯一解析入口 `lower_pipeline` 取一把全目标共用的串行锁，全量连跑五遍 71/71。
+>   三条阴性如实登记（见 roadmap 批次 10046 §仍未锁）：① 393 那句"整项连同其后各项丢掉"在小夹具只有
+>   大括号那形能复现，`use 两段;`／`use 三段;` 在 A1 下与 HEAD 一字相同，真实文件 `quantum_basic.z` 撤臂后
+>   仍 1685 行／6 项／无 W1002 ⇒ 那 85 行的截断已不由这一臂决定、接管者未定位；② 词边界检查在
+>   "赋值名／裸名以 `use` 开头"两形上观测不到（A2 与 HEAD 逐字节差为空）；③ 同路径去重两格四臂都不红＝
+>   现状锁。零 `src/` 改动，`target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10025 起那颗
+>   相同 ⇒ 免补抽样窗口。滞留：代码笔后 `bootstrap..cleanup`＝53、`cleanup..bootstrap`＝378。
+>
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；

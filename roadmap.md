@@ -28685,3 +28685,104 @@ B2 与 B3 的红格集合互不相交且并起来＝B1 ⇒ 两条独立覆盖；
   **已经等于** HEAD（`628bf015bf66f080d4d58bf5654a2e2c`）；随后单独复跑同一测试目标得 70/70 全绿
   ⇒ 那条 rc=101 与文件状态不相符（脚本在还原写入的同一刻起 cargo，撞上重建窗口＝10030 记过的
   "后台重编时别并发取读数"），不入账，以复跑为准。
+
+## 批次 10046（2026-10-05，#20005 第三十五批：把"函数体里的 `use` 打不开"做成进程内单元测试，并修一处测试面串扰）
+
+代码笔 `f0ea7e4f`（`tests/regression_history.rs` ＋288／−2，按 `git diff --cached --numstat` 实测）。
+零 `src/` 改动：`target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10025 起在册那颗一字
+相同 ⇒ 按 2026-10-03 的测试节奏，本批不补抽样窗口。
+
+### 来源与站点
+来源批次 393（提交 `e7513474`，2026-09-24）：语句分发器 `src/frontend/parser/stmt.rs` 的 `parse_stmt`
+没有 `use` 臂，而 `use` 只在顶层项列表里有规则 ⇒ 函数体里的 `use 路径;` 让 `parse_block_body` 失败 ⇒
+该行之后的每一项都不进程序（W1002 实拍：`tests/unit-tests/quantum_basic.z` 报 `:73` 之后 85 行没解析，
+病因行 75；`tests/stdlib-foundation/fmt_time_env_test.z` 报 47 行）。修法三段：
+① 把 `parse_use_stmt` 挂进 pass/del/assert 那一格嵌套 `alt`（`stmt.rs:1852-1858`，函数体 `:1878-1896`）；
+② 节点是真 `AstNode::Use`，由 `top_level::hoist_statics_from` 提到模块级（`Resolver::register` 只遍历
+   顶层项，留在体里的 `use` 到不了加载模块那一步）；
+③ 提升按 `in_body` 收窄，顶层 `import a::b;` 就地生效、不被搬走。
+
+变异站点只取 ①：`stmt.rs` 在 HEAD 干净（md5 `628bf015bf66f080d4d58bf5654a2e2c`）。②③ 在
+`src/frontend/parser/top_level.rs`，该文件有本车道未提交改动（`parse_class` 三处，`git diff --stat`
+＝25 行），还原源不能是 `git show HEAD:`（会把在制品冲掉）⇒ 本批不变异那两段，只在读数里锁住现状。
+
+### 用例与 16 格
+`body_local_use_is_parsed_and_hoisted_so_module_items_reach_mir`（`tests/regression_history.rs:6832`），
+一条 `assert_eq!(want, got)` 比 `Vec<(标签, 读数)>`，读数＝"进得了 MIR 的函数清单 ＋ 解析停住后剩下的行数"，
+第 14 格另带一份被调清单。夹具分两族：真实模块（临时目录里有 `mylib.z`／`m1/a.z`／`m1/b.z`／`m1a.z`／
+`m1b.z`，走新增的 `lower_multi_allowing_truncation`）与模块不存在（单源、走 `lower_all_allowing_truncation`）。
+
+| # | 格 | want（＝CLI 实拍） | 打它的臂 |
+|---|---|---|---|
+| 1 | 体内单段use_真实模块 | `清单=[helper,main,wrapper] 未解析=0行` | A1、A4 |
+| 2 | 顶层单段use_对照 | `清单=[helper,main,wrapper] 未解析=0行` | 无（四臂都不红） |
+| 3 | 无use_基线 | `清单=[main,wrapper] 未解析=0行` | 无（正证据的另一半） |
+| 4 | 嵌套块体内use | `清单=[helper,main,wrapper] 未解析=0行` | A1、A4 |
+| 5 | 顶层加两份体内同路径 | `清单=[helper,main,one,two] 未解析=0行` | 无 |
+| 6 | 两份体内use_两个模块 | `清单=[first,main,only_a,only_b,second] 未解析=0行` | A1、A4 |
+| 7 | 大括号两形_体内_真实模块 | `清单=[from_a,from_b,main,sum] 未解析=0行` | A1、A3、A4（三形红值） |
+| 8 | 大括号两形_顶层对照 | `清单=[from_a,from_b,main,sum] 未解析=0行` | 无 |
+| 9 | 体内单段use_模块不存在 | `清单=[after_one,head,main,single] 未解析=0行` | 无 |
+| 10 | 体内大括号use_模块不存在 | `清单=[after_two,head,list_form,main] 未解析=0行` | A1（红值带 `未解析=12行`） |
+| 11 | 嵌套块体内use_模块不存在 | `清单=[after_three,deep,head,main] 未解析=0行` | 无 |
+| 12 | 词边界_赋值名以use开头 | `清单=[after_four,head,main,uses_kw] 未解析=0行` | 无 |
+| 13 | 词边界_裸名以use开头 | `清单=[after_seven,boundary,head,main] 未解析=0行` | 无 |
+| 14 | 词边界_调用名以use开头 | `清单=[after_eight,caller,head,main,used_fn] 未解析=0行 被调=[head,used_fn]` | A2 |
+| 15 | 顶层use_模块不存在 | `清单=[head,main,plain] 未解析=0行` | 无 |
+| 16 | 同路径三份use去重 | `清单=[dup_one,dup_two,head,main] 未解析=0行` | 无 |
+
+### CLI 前置矩阵（`src/frontend/parser/stmt.rs` 四臂 × 14＋3 形状，`--dump-mir` 的行数／项数）
+被测件＝`cargo build`（debug）的 `target/debug/zetac`；在册的 `target/release/zetac` 没动。HEAD 那一行的
+行数与释放构建的读数逐文件一字相同（155／155／138／197／224／241／178／178／250／250／292／286／155／172）
+⇒ 两颗二进制在这些形状上同行为。
+
+| 臂 | 改法 | 相对 HEAD 变了的形状 |
+|---|---|---|
+| A1_alt | 从嵌套 `alt` 里删掉 `parse_use_stmt,` | e_body 155→138（`helper` 没进来）、e_if 197→180、e_two_body_use 241→207、e_brace 178→21 项 4→1 且报 W1002、s2_list 250→38 项 4→2 且报 W1002 |
+| A2_boundary | `kw_boundary(input, "use")` 换成 `input.starts_with("use")` 的裸前缀匹配 | 只有 s8_call_use_prefix 301→289：`func: "used_fn_1"` 那条 `Call` 整条消失（`used_fn(n)` 被当成 `use d_fn` 吃掉），函数清单不变 ⇒ 必须看被调清单 |
+| A3_first_only | 删掉"两项时起 `AstNode::Block`"那一支，只取第一项 | 只有 e_brace 178→161 项 4→3（`from_b` 消失，`sum` 还在） |
+| A4_ignore | `parse_use_stmt` 返回 `AstNode::Ignore` | e_body 155→138、e_if 197→180、e_two_body_use 241→207、e_brace 178→144 项 4→2（`sum` 保住、两个模块都没加载） |
+
+四臂共同的不变项＝e_top／e_none／e_dup／s1／s3／s4／s5／s6／s7 以及三个顶层对照格 ⇒ 这一臂只管体内，
+不管顶层（顶层 `use` 走 `top_level.rs:139` 的 `parse_use_statement`）。
+
+### 进程内矩阵（同一测试目标，`--exact` 单跑这一条用例）
+HEAD 0／16 红；A1 红 5 格（1、4、6、7、10）；A2 红 1 格（14，`被调=[head]`）；A3 红 1 格（7）；
+A4 红 4 格（1、4、6、7）。逐格红值与 CLI 侧同形（例：第 7 格 A1＝`清单=[main] 未解析=9行`、
+A3＝`清单=[from_a,main,sum]`、A4＝`清单=[main,sum]`）。还原后复跑全套 71/71。
+
+独立性判定：
+- A2 的红格（14）与 A1 的红格集合不相交 ⇒ 独立覆盖。
+- A3 只红第 7 格，与 A1 同格而红值不同形（A3 保住了 `sum`、只少 `from_b`）⇒ 该格能把两臂分开，记为独立。
+- A4 的红格（1、4、6、7）是 A1 红格的子集，且在第 1、4、6 三格与 A1 的读数一字相同 ⇒ 同一条链上的两个原因，
+  不写成第四条独立覆盖；它对第 7 格给出的红值（`sum` 在、两个模块都不在）是它唯一的区分证据。
+
+### 修掉的测试面串扰（本批第二处代码改动）
+`frontend/parser/top_level.rs:2048` 的 `PARSING_IMPORTED_MODULE` 是进程级 `static AtomicBool`，注释写明
+"编译是单线程的，普通原子量足够"：resolver 加载模块前置位、`parse_zeta` 之后复位，
+`synthesize_implicit_main` 读它来决定顶层项装不装进 `__zeta_module_body__` 载体。`cargo test` 默认并行跑
+用例 ⇒ 别的用例在加载模块时，本用例正解析自己的顶层项，读到别人的位置。实拍：同一份 16 格源码
+`--exact` 单跑全绿，全量并行连跑三遍 3/3 红，红在第 2、8、12 三格（第 12 格的源码里根本没有 `use`，
+是纯粹的串扰）。修法＝在唯一的解析入口 `lower_pipeline` 取一把全测试目标共用的串行锁
+（`static PARSE_SERIAL: Mutex<()>`，用例在子线程里取放，不与父线程的 `join` 互卡），
+全量连跑五遍 71/71（0.5 秒，此前并行 0.11 秒）。
+
+### 仍未锁（实测过的形状，不是没试）
+① 393 记录里"整项连同其后各项丢掉"的截断，在小夹具只有大括号写法能复现：`use nonexistent::mylib;`
+   与 `use nonexistent::quantum::algorithms;`（两段、三段各一枚）在 A1 下与 HEAD 读数一字相同
+   （250 行／4 项／无 W1002）。拿真实文件复测同样不红：`tests/unit-tests/quantum_basic.z` 在 A1 下
+   1685 行／6 项／无 W1002，与 HEAD 逐字节相同、`test_shors_algorithm` 仍在 ⇒ 那 85 行的截断在当前
+   代码状态下已不由这一臂决定，接管者未定位 ⇒ 不写用例（本批第 10 格钉的是大括号那形）。
+② 词边界检查在"赋值名 `used`／裸名 `used`"两形上观测不到：A2 与 HEAD 的 `--dump-mir` 逐字节差为空
+   （s4 286 行、s7 268 行），进程内也不红 ⇒ 原因未证（怀疑 `d = 3` 让整条在 `alt` 回溯里被
+   `parse_expr_stmt` 接走），第 12、13 两格只算现状锁。
+③ ②③ 两段修法（`top_level.rs` 的提升、`in_body` 收窄）本批不变异，理由＝该文件有本车道未提交改动。
+   第 5、16 两格（同路径只提一份）在四臂下都不红，同样只算现状锁。
+④ 第 2、8 两个顶层对照格与第 3 格基线是正证据的另一半，不是臂的靶：它们保证"体内那格的红"能被读出来。
+
+### 检查节奏与滞留
+每批只跑改到的目标：`cargo test --test regression_history` 71/71（连跑 5＋2 遍都绿）、
+`cargo test -p zetac --lib` 145/145、`cargo build` 0 错误。代码笔落地后实测
+`bootstrap..cleanup`＝53、`cleanup..bootstrap`＝378（主树自 10045 记录笔后又涨 5 条）。
+不并主树的理由与 10045 同一条：本车道还有三个 `src/` 在制文件未提交，合并会换掉在册二进制
+（`ed5227cc…`），而"零 `src/` 改动 ⇒ 免抽样窗口"这条规则正依赖那颗二进制可追。
