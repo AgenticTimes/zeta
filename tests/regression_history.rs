@@ -91,12 +91,30 @@ fn lower_with_source_dir(
     src: &str,
     entry_path: Option<&std::path::Path>,
 ) -> Vec<Mir> {
+    lower_pipeline(src, entry_path, true).0
+}
+
+/// 容许解析截断的变体（批次 10041 起）：解析没吃满输入时不 panic，把剩余文本当第二格返回。
+/// 理由＝批次 325 那一族的失败模式是"第一个打不开的模式把文件余部整段丢掉"（W1002），
+/// 走 `lower_with_source_dir` 时这类臂的红点全落在同一句前置断言上、形状断言根本不执行；
+/// 有了"哪些函数进得了 MIR"这一格，各臂的集合才互不相同。
+fn lower_all_allowing_truncation(src: &str) -> (Vec<Mir>, String) {
+    lower_pipeline(src, None, false)
+}
+
+fn lower_pipeline(
+    src: &str,
+    entry_path: Option<&std::path::Path>,
+    assert_full_parse: bool,
+) -> (Vec<Mir>, String) {
     let (remaining, asts) = parse_zeta(src).unwrap_or_else(|e| panic!("解析失败: {e:?}"));
-    assert!(
-        remaining.trim().is_empty(),
-        "解析没有吃满输入，剩余: {:?}",
-        remaining.trim()
-    );
+    if assert_full_parse {
+        assert!(
+            remaining.trim().is_empty(),
+            "解析没有吃满输入，剩余: {:?}",
+            remaining.trim()
+        );
+    }
 
     // 与 CLI 文件模式同序：解析后先走常量求值（`-2` 这类在这里折成字面量），
     // 少了这一步 harness 的读数会和真实编译不一致。
@@ -147,7 +165,7 @@ fn lower_with_source_dir(
             .unwrap_or("~anon")
             .cmp(b.name.as_deref().unwrap_or("~anon"))
     });
-    mirs
+    (mirs, remaining.to_string())
 }
 
 fn mir<'a>(mirs: &'a [Mir], name: &str) -> &'a Mir {
@@ -5679,5 +5697,216 @@ def break_in_while_else():
          弹帧＋放锁（改前＝desugar 只在体能走到尾时补 `__exit__`，这些边上锁永不释放 ⇒ 二次\
          调用挂死）；而 with 体内自己循环的 break/continue **不该**提前放锁（287 记录的 lock5 \
          探针：`locked()==1`）。上面每格是一个函数的规范化事件轨迹（槽号按首次出现发号）。"
+    );
+}
+
+/// 批次 325（代码 `4f3e3833`，站点 `src/frontend/parser/pattern.rs` 的
+/// `parse_char_lit`（现 :238-272）与 `parse_range_pattern`（现 :275-289））：
+/// 范围模式族整族失效——两层缺陷叠着，所以"能解析"离"能对"只差一行读数。
+/// 症状（记录原文）：① `parse_range_pattern` 的两端只吃 `parse_lit` ⇒
+/// 字符字面量 `'a'..='z'` 直接解析失败，而解析失败的后果不是报错而是
+/// [W1002]「第一个打不开的模式起、文件余部整段丢掉」（退出码仍为 0）；
+/// ② `inclusive` 此前被 `inclusive: _` 丢弃 ⇒ `1..10` 与 `1..=10` 同义；
+/// ③ 模式位的字符是**码点整数**（`'a'`＝97），不是字符串——单引号在本语言里
+/// 还是普通字符串定界符（`s.split(',')` 依赖），所以只在模式位改语义。
+/// 本条只钉得住 ①③（解析位＋转义表位）与 ② 的 inclusive 位；同批的下型两处
+/// （`>=`/`<=` 的 Call dest 从没进 `exprs` ⇒ 静默回 i64 0、`x @ …` 多一层 Var）
+/// 站点在 `gen.rs`（主线在重构该文件，本批不取），那两处的读数在本条里是现状锁。
+/// 期望值来源：在册夹具 `tests/python_style/t306_range_pattern_guard.z` 的
+/// `// expect: 1/2/3/0/111/222/-1/111/-1/7/-1`（运行期真值由该夹具承担，本批
+/// AOT 实测同形）＋`/tmp/b10041/mir_head.txt` 的 `--dump-mir` 实拍＋变异矩阵
+/// 左侧 `/tmp/b10041/arm_*.txt`（HEAD 态）。Rust 方言形状 ⇒ CPython 侧不适用。
+/// 轨迹词表：`pi sK`＝形参入槽，`op(a,b) -> dK`＝`MirStmt::Call`（`op` 为被调符号，
+/// 实参若已在 `exprs` 里是整数字面量就直接写字面值，否则按首次出现发槽号），
+/// `sK <- v`＝赋值，`if(c){…}else{…}`＝分支，`ret sK`＝返回，
+/// `<没进 MIR>`＝该函数根本没降出来（＝解析在该函数之前被截断）。
+/// 四臂分工见台账：`inclusive` 位只改比较符不改函数清单，三枚端点位改函数清单。
+/// `esc_start` 那格（转义端点在起点＋整数终点，且排在 `end_char` 之前）是用来把
+/// "转义表位"与"终点字符位"分开的：少了这格时前者的坏格集是后者的真子集
+/// （任何打掉转义表的输入形状也打掉终点字符位），两臂互相当不了备份。
+#[test]
+fn range_pattern_endpoints_and_inclusivity_reach_the_guard() {
+    let (mirs, remaining) = lower_all_allowing_truncation(
+        r#"
+fn start_char(c: i64) -> i64 {
+    match c {
+        'a'..=5 => 1,
+        _ => 0
+    }
+}
+fn esc_start(c: i64) -> i64 {
+    match c {
+        '\n'..=5 => 4,
+        _ => 0
+    }
+}
+fn end_char(c: i64) -> i64 {
+    match c {
+        1..='z' => 2,
+        _ => 0
+    }
+}
+fn escapes(c: i64) -> i64 {
+    match c {
+        '\n'..='\t' => 7,
+        _ => 0
+    }
+}
+fn incl_int(x: i64) -> i64 {
+    match x {
+        1..=10 => 111,
+        _ => -1
+    }
+}
+fn excl_int(x: i64) -> i64 {
+    match x {
+        1..10 => 111,
+        _ => -1
+    }
+}
+fn char_letters(c: i64) -> i64 {
+    match c {
+        'a'..='z' => 1,
+        '0'..='9' => 3,
+        _ => 0
+    }
+}
+fn binder(x: i64) -> i64 {
+    match x {
+        q @ 1..=10 => q,
+        _ => -1
+    }
+}
+fn two_arms(x: i64) -> i64 {
+    match x {
+        1..=3 => 10,
+        8..=9 => 20,
+        _ => 0
+    }
+}
+"#,
+    );
+
+    #[derive(Default)]
+    struct Slots {
+        next: u32,
+        ids: std::collections::HashMap<u32, u32>,
+    }
+    impl Slots {
+        fn tok(&mut self, id: u32, m: &Mir) -> String {
+            if let Some(MirExpr::IntLit(v)) = m.exprs.get(&id) {
+                return format!("{v}");
+            }
+            if let Some(&n) = self.ids.get(&id) {
+                return format!("s{n}");
+            }
+            let n = self.next;
+            self.next += 1;
+            self.ids.insert(id, n);
+            format!("s{n}")
+        }
+    }
+
+    fn trace(m: &Mir, stmts: &[MirStmt], slots: &mut Slots, out: &mut Vec<String>) {
+        for s in stmts {
+            match s {
+                MirStmt::ParamInit { param_id, .. } => {
+                    let t = slots.tok(*param_id, m);
+                    out.push(format!("pi {t}"));
+                }
+                MirStmt::Call { func, args, dest, .. } => {
+                    let mut a: Vec<String> = Vec::with_capacity(args.len());
+                    for id in args {
+                        a.push(slots.tok(*id, m));
+                    }
+                    let d = slots.tok(*dest, m);
+                    out.push(format!("{func}({}) -> {d}", a.join(",")));
+                }
+                MirStmt::VoidCall { func, args, .. } => {
+                    let mut a: Vec<String> = Vec::with_capacity(args.len());
+                    for id in args {
+                        a.push(slots.tok(*id, m));
+                    }
+                    out.push(format!("void {func}({})", a.join(",")));
+                }
+                MirStmt::Assign { lhs, rhs } => {
+                    let l = slots.tok(*lhs, m);
+                    let r = slots.tok(*rhs, m);
+                    out.push(format!("{l} <- {r}"));
+                }
+                MirStmt::If { cond, then, else_, .. } => {
+                    let c = slots.tok(*cond, m);
+                    out.push(format!("if({c}){{"));
+                    trace(m, then, slots, out);
+                    out.push("}else{".to_string());
+                    trace(m, else_, slots, out);
+                    out.push("}".to_string());
+                }
+                MirStmt::Return { val } => {
+                    let v = slots.tok(*val, m);
+                    out.push(format!("ret {v}"));
+                }
+                MirStmt::Break => out.push("brk".to_string()),
+                MirStmt::Continue => out.push("cont".to_string()),
+                _ => out.push("其它语句".to_string()),
+            }
+        }
+    }
+
+    let cells = [
+        ("start_char：端点是字符＋整数", "start_char"),
+        ("esc_start：转义端点在起点＋整数终点", "esc_start"),
+        ("end_char：端点是整数＋字符", "end_char"),
+        ("escapes：转义端点 '\\n'..='\\t'", "escapes"),
+        ("incl_int：`1..=10` 闭区间", "incl_int"),
+        ("excl_int：`1..10` 开区间", "excl_int"),
+        ("char_letters：两条字符臂", "char_letters"),
+        ("binder：`q @ 1..=10` 绑定形", "binder"),
+        ("two_arms：两条整数臂的先后", "two_arms"),
+    ];
+
+    let names: Vec<String> = mirs
+        .iter()
+        .map(|m| m.name.clone().unwrap_or_else(|| "~anon".to_string()))
+        .collect();
+    let mut got: Vec<(String, String)> = vec![
+        ("进得了 MIR 的函数（按名排序）".to_string(), names.join(",")),
+        (
+            "解析是否被截断（剩余非空＝是）".to_string(),
+            if remaining.trim().is_empty() { "否".to_string() } else { "是".to_string() },
+        ),
+    ];
+    for (label, fname) in cells {
+        let cell = match mirs.iter().find(|m| m.name.as_deref() == Some(fname)) {
+            Some(m) => {
+                let mut slots = Slots::default();
+                let mut out: Vec<String> = Vec::new();
+                trace(m, &m.stmts, &mut slots, &mut out);
+                out.join(" ")
+            }
+            None => "<没进 MIR>".to_string(),
+        };
+        got.push((label.to_string(), cell));
+    }
+
+    let want: Vec<(String, String)> = vec![
+        ("进得了 MIR 的函数（按名排序）".to_string(), "binder,char_letters,end_char,esc_start,escapes,excl_int,incl_int,main,start_char,two_arms".to_string()),
+        ("解析是否被截断（剩余非空＝是）".to_string(), "否".to_string()),
+        ("start_char：端点是字符＋整数".to_string(), "pi s0 >=(s0,97) -> s1 <=(s0,5) -> s2 &&(s1,s2) -> s3 if(s4){ s5 <- 1 }else{ if(1){ s5 <- 0 }else{ } } ret s5".to_string()),
+        ("esc_start：转义端点在起点＋整数终点".to_string(), "pi s0 >=(s0,10) -> s1 <=(s0,5) -> s2 &&(s1,s2) -> s3 if(s4){ s5 <- 4 }else{ if(1){ s5 <- 0 }else{ } } ret s5".to_string()),
+        ("end_char：端点是整数＋字符".to_string(), "pi s0 >=(s0,1) -> s1 <=(s0,122) -> s2 &&(s1,s2) -> s3 if(s4){ s5 <- 2 }else{ if(1){ s5 <- 0 }else{ } } ret s5".to_string()),
+        ("escapes：转义端点 '\\n'..='\\t'".to_string(), "pi s0 >=(s0,10) -> s1 <=(s0,9) -> s2 &&(s1,s2) -> s3 if(s4){ s5 <- 7 }else{ if(1){ s5 <- 0 }else{ } } ret s5".to_string()),
+        ("incl_int：`1..=10` 闭区间".to_string(), "pi s0 >=(s0,1) -> s1 <=(s0,10) -> s2 &&(s1,s2) -> s3 if(s4){ s5 <- 111 }else{ if(1){ unary_minus(1) -> s6 s5 <- s6 }else{ } } ret s5".to_string()),
+        ("excl_int：`1..10` 开区间".to_string(), "pi s0 >=(s0,1) -> s1 <(s0,10) -> s2 &&(s1,s2) -> s3 if(s4){ s5 <- 111 }else{ if(1){ unary_minus(1) -> s6 s5 <- s6 }else{ } } ret s5".to_string()),
+        ("char_letters：两条字符臂".to_string(), "pi s0 >=(s0,48) -> s1 <=(s0,57) -> s2 &&(s1,s2) -> s3 >=(s0,97) -> s4 <=(s0,122) -> s5 &&(s4,s5) -> s6 if(s7){ s8 <- 1 }else{ if(s9){ s8 <- 3 }else{ if(1){ s8 <- 0 }else{ } } } ret s8".to_string()),
+        ("binder：`q @ 1..=10` 绑定形".to_string(), "pi s0 >=(s0,1) -> s1 <=(s0,10) -> s2 &&(s1,s2) -> s3 if(s4){ s5 <- s0 }else{ if(1){ unary_minus(1) -> s6 s5 <- s6 }else{ } } ret s5".to_string()),
+        ("two_arms：两条整数臂的先后".to_string(), "pi s0 >=(s0,8) -> s1 <=(s0,9) -> s2 &&(s1,s2) -> s3 >=(s0,1) -> s4 <=(s0,3) -> s5 &&(s4,s5) -> s6 if(s7){ s8 <- 10 }else{ if(s9){ s8 <- 20 }else{ if(1){ s8 <- 0 }else{ } } } ret s8".to_string()),
+    ];
+    assert_eq!(
+        got, want,
+        "范围模式族的三处解析位（起点字符端点／终点字符端点／转义表）任一失效，\
+         后果都不是报错而是「该函数起、文件余部整段丢掉」（W1002，退出码仍 0）；\
+         `inclusive` 位失效则 `..=` 与 `..` 同义（比较符 `<`/`<=` 不分）。改前＝批次 325 \
+         记录：`parse_range_pattern` 端点只吃 `parse_lit`、`inclusive: _` 被丢弃。"
     );
 }
