@@ -270,6 +270,7 @@ pub(crate) fn lookup_gen(name: &str) -> Option<Sig> {
         "py_re_match" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64, ValTy::I64] }),
         "py_re_multiline" => Some(Sig { ret: ValTy::I64, params: &[] }),
         "py_re_search" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64, ValTy::I64] }),
+        "py_re_search_3" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64, ValTy::I64, ValTy::I64] }),
         "py_re_split" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64, ValTy::I64] }),
         "py_re_start" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64] }),
         "py_re_sub" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64, ValTy::I64, ValTy::I64] }),

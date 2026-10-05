@@ -1633,15 +1633,23 @@ call, no NULL-handle dereference).",
             }
 
             // 批 996：`del <名字>` 标记（parser/stmt.rs parse_del 发出）——
-            // 本地槽保持 V1 no-op（绑定不动）；环境名发 zeta_env_del：
-            // 缺名运行期 zeta_raise(1)（try/except 可捕获，CPython 语义
-            // NameError），在则从环境移除。
+            // 批 998：本地槽保持 V1 no-op（绑定不动）；**env 镜像的模块
+            // 全局**（module_globals 命中，与 391 镜像遍历同一谓词）在槽
+            // no-op 之外并发 zeta_env_del——函数体经 env 的读回随即
+            // NameError（主程序体旧槽读回是 t425 在册族）；未知名发
+            // zeta_env_del：缺名 zeta_raise(1)。
             if method == "__del_name__"
                 && receiver.is_none()
                 && args.len() == 1
             {
                 if let AstNode::StringLit(name) = &args[0] {
-                    if self.name_to_id.contains_key(name.as_str()) {
+                    let is_env_global = self
+                        .name_to_id
+                        .contains_key(name.as_str())
+                        && self.module_globals.contains(name.as_str());
+                    if self.name_to_id.contains_key(name.as_str())
+                        && !is_env_global
+                    {
                         let slot = self.next_id();
                         self.exprs.insert(slot, MirExpr::IntLit(0));
                         self.type_map.insert(slot, Type::I64);

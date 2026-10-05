@@ -3701,6 +3701,15 @@ int64_t map_has(int64_t, int64_t);
 int64_t zeta_map_pop_default(int64_t, int64_t, int64_t);
 
 static int64_t g_env = 0;
+// 批 998：del 墓碑集合——被 zeta_env_del 删除的名字记入；env_get 读到
+// 墓碑名 ⇒ zeta_raise(1)（Python NameError 语义）。不设墓碑的缺名读
+// 维持旧返 0 行为（import 绑定/跨模块名存在合法的"先读后写"面，
+// 一刀切 raise 实测打红 12 个 py_style 用例）。
+static int64_t g_del_set = 0;
+static int64_t del_set(void) {
+    if (!g_del_set) g_del_set = map_new();
+    return g_del_set;
+}
 
 static int64_t env_map(void) {
     if (!g_env) g_env = map_new();
@@ -3708,13 +3717,20 @@ static int64_t env_map(void) {
 }
 int64_t zeta_env_map_for_probe(void) { return env_map(); }
 int64_t zeta_env_get(int64_t name_handle) {
-    int64_t r = map_get(env_map(), map_str_key(name_handle));
+    int64_t key = map_str_key(name_handle);
+    // 批 998：读【被 del 删除】的名字 ⇒ zeta_raise(1)（try/except 可捕
+    // 获，CPython NameError 语义）。从未写入的名字缺名读维持旧返 0
+    // （import 绑定等合法先读后写面，见 g_del_set 注释）。
+    if (map_has(del_set(), key)) return zeta_raise(1);
+    int64_t r = map_get(env_map(), key);
     if (getenv("ZT_DEBUG_ENV")) fprintf(stderr, "[ENV] get \"%s\" -> %lld\n", (char*)name_handle, (long long)r);
     return r;
 }
 void zeta_env_set(int64_t name_handle, int64_t v) {
     if (getenv("ZT_DEBUG_ENV")) fprintf(stderr, "[ENV] set \"%s\" = %lld\n", (char*)name_handle, (long long)v);
-    map_insert(env_map(), map_str_key(name_handle), v);
+    int64_t key = map_str_key(name_handle);
+    if (map_has(del_set(), key)) zeta_map_pop_default(del_set(), key, 0);
+    map_insert(env_map(), key, v);
 }
 // 批 996：del <module-global> —— 名字不在环境 ⇒ zeta_raise(1)
 //（try/except 可捕获；对应 CPython 的 NameError），在 ⇒ 移除
@@ -3723,6 +3739,7 @@ int64_t zeta_env_del(int64_t name_handle) {
     int64_t key = map_str_key(name_handle);
     if (!map_has(env_map(), key)) return zeta_raise(1);
     zeta_map_pop_default(env_map(), key, 0);
+    map_insert(del_set(), key, 1);
     return 0;
 }
 

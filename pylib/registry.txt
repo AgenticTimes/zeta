@@ -329,6 +329,7 @@ F re MULTILINE py_re_multiline args= ret=i64
 F re M py_re_multiline args= ret=i64
 F re sub py_re_sub args=i64,i64,i64 ret=str
 F re search py_re_search args=i64,i64 ret=i64 handle=PyMatch
+X py_re_search_3 args=i64,i64,i64 ret=i64 handle=PyMatch
 F re match py_re_match args=i64,i64 ret=i64 handle=PyMatch
 F re fullmatch py_re_fullmatch args=i64,i64 ret=i64 handle=PyMatch
 F re split py_re_split args=i64,i64 ret=vecstr
