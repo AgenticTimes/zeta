@@ -8131,3 +8131,114 @@ fn shim_class_qualifiers_in_return_annotations_strip_recursively_at_callsite() {
          读回带 `pd.` 的＝去壳支没走到；读回 `Path` 而非 `PyPath`＝registry 标签支没了"
     );
 }
+
+/// 来源批次 210（`92e452dc`，2026-09-20）＝`try/except` 的 handler 分支漏弹栈；同族更早一笔
+/// （`9d4f0e9f`，2026-09-18）＝脱糖在不能落穿的分支末尾也补弹栈调用，后端直接报
+/// `Terminator found in the middle of a basic block`，6 个语料文件整编译中断。
+/// 症状（缺陷记录原文）：只在「分支会落穿」时补 `zeta_try_end()` ⇒
+/// `except ...: return {}` 这类 handler 永不弹栈，`ParquetCache.load_metadata` 正是这样；
+/// 之后任何 `raise` 的 longjmp 跳进已失效的帧，表现为段错误而不是被捕获
+/// （`load_metadata + 184`：`t.schema.metadata` 而 `t == 0`）。
+/// 站点＝`src/frontend/parser/stmt.rs` 的 `parse_try_stmt`：then 分支带守卫的弹栈
+/// `:1541-1543`、else 分支无条件弹栈 `:1561`（在 `:1562` 接 handler 体之前）、
+/// `except ... as e` 取错误值 `:1545-1556`；以及 `branch_falls_through`（`:1252`）的
+/// 嵌套块递归臂 `:1257` 与 `if/else` 臂 `:1264-1270`。
+/// 期望值来源＝本批 `./target/debug/zetac --dump-mir` 的实拍（`/tmp/b10054/fix/dump2_g*.txt`，
+/// 七格逐项），读法＝该函数体里按出现顺序排出的被调符号名（含 if／while 的块）。
+/// 覆盖面分工（五臂各撤一处，还原源＝`git show HEAD:src/frontend/parser/stmt.rs`，
+/// HEAD md5 `628bf015bf66f080d4d58bf5654a2e2c`；红格清单与红值都取自本批实测
+/// `/tmp/b10054/arm_*.log`，格号＝下面 CASES 的顺序）：
+/// - 撤 `:1561`（handler 分支的无条件弹栈整行）＝七格全红，独占格 3
+///   （体直接 return ⇒ 只剩 handler 那一次弹栈；该格在其余四臂下都绿）。
+/// - 还原批次 210 改前形状（弹栈挪回 handler 体之后并带落穿守卫）＝红在格 2、格 4、格 5、格 6，
+///   与上一臂红格有交集 ⇒ 本臂无独占格；但格 4 的红值不同形
+///   （整行撤掉＝少一次弹栈；改前形状＝`zeta_last_error | println_i64 | zeta_try_end | println_i64`
+///   即弹栈仍在、只是排在 handler 体那条打印之后）⇒ 顺序断言把两臂分开了。
+/// - 撤 `:1541-1543`（体分支带守卫的弹栈）＝红在格 1、格 2、格 4、格 5，格 3／格 6／格 7 绿
+///   （那三格体分支本就不该弹栈）；与上一臂共用格 2／4／5，格 2 的红值两臂相同
+///   （`zeta_try_enter | zeta_try_setjmp | zeta_try_end`）⇒ 别按"整条链都红"下结论，按格点名。
+/// - 撤 `:1257`（`branch_falls_through` 的嵌套块递归臂）＝只红在格 6（多一次弹栈⇒后端会在
+///   return 之后收到一条调用），其余六格一字不变 ⇒ 格 6 是这一臂在进程内唯一的可见处。
+/// - 撤 `:1264-1270`（`if/else` 臂）＝红在格 6、格 7，格 7 为独占；同批既有用例
+///   `with_body_terminators_release_the_lock_before_leaving` 也红 ⇒ 与另一条用例互证同一臂。
+/// 小结：五臂都能被本条抓到（各撤一处都出红），其中格 3、格 7 是独占格；
+/// 撤整行／还原改前形状／撤体分支守卫三臂的红格有交集，区分靠红值形状而不是红格数。
+///
+/// 边界（本条不覆盖）：缺陷记录里的运行期后果（下一处 `raise` 跳进失效帧⇒段错误）发生在
+/// 执行期，进程内单元测试只看得到 MIR，按 #20005 口径不进本条；`9d4f0e9f` 那一笔的后端报错
+/// 同样在 IR 之后，本条只钉「弹栈调用出现在哪、出现在什么顺序」。
+#[test]
+fn try_except_frame_pops_appear_in_both_branches_with_handler_first() {
+    // (格名, 取读数的函数名, 夹具, 期望的被调符号序列)
+    const CASES: &[(&str, &str, &str, &str)] = &[
+        (
+            "体与 handler 都落穿（两臂各一次弹栈）",
+            "main",
+            "try:\n    a = 1\nexcept:\n    a = 2\n\nprint(a)\n",
+            "zeta_try_enter | zeta_try_setjmp | zeta_try_end | zeta_try_end | println_i64",
+        ),
+        (
+            "handler 直接 return（210 原形：仍要弹栈）",
+            "pick",
+            "def pick():\n    try:\n        x = 1\n    except:\n        return 0\n    return x\n\nprint(pick())\n",
+            "zeta_try_enter | zeta_try_setjmp | zeta_try_end | zeta_try_end",
+        ),
+        (
+            "体直接 return（该臂不弹栈，只有 handler 弹）",
+            "ret_first",
+            "def ret_first():\n    try:\n        return 1\n    except:\n        z = 2\n    return 3\n\nret_first()\n",
+            "zeta_try_enter | zeta_try_setjmp | zeta_try_end",
+        ),
+        (
+            "except E as e（弹栈排在取错误值之后、handler 体之前）",
+            "main",
+            "try:\n    a = 1\nexcept E as e:\n    print(e)\n\nprint(a)\n",
+            "zeta_try_enter | zeta_try_setjmp | zeta_try_end | zeta_last_error | zeta_try_end | println_i64 | println_i64",
+        ),
+        (
+            "嵌套 try，内层 handler 直接 return",
+            "outer",
+            "def outer():\n    try:\n        try:\n            x = 1\n        except:\n            return 0\n    except:\n        y = 2\n    return 3\n\nouter()\n",
+            "zeta_try_enter | zeta_try_setjmp | zeta_try_enter | zeta_try_setjmp | zeta_try_end | zeta_try_end | zeta_try_end | zeta_try_end",
+        ),
+        (
+            "嵌套 try，内层两臂都 return（外层体不落穿）",
+            "f6",
+            "def f6():\n    try:\n        try:\n            return 1\n        except:\n            return 2\n    except:\n        y = 3\n    return 4\n\nf6()\n",
+            "zeta_try_enter | zeta_try_setjmp | zeta_try_enter | zeta_try_setjmp | zeta_try_end | zeta_try_end",
+        ),
+        (
+            "体内 if/else 两臂都 return（该臂不落穿）",
+            "f7",
+            "def f7(c: int):\n    try:\n        if c:\n            return 1\n        else:\n            return 2\n    except:\n        y = 3\n    return 4\n\nf7(1)\n",
+            "zeta_try_enter | zeta_try_setjmp | zeta_try_end",
+        ),
+    ];
+
+    let mut got: Vec<(&str, String)> = Vec::new();
+    for (cell, item, src, _want) in CASES {
+        let mirs = lower_all(src);
+        let seq = call_symbols(mir(&mirs, item)).join(" | ");
+        got.push((cell, seq));
+    }
+
+    let want: Vec<(&str, String)> = CASES
+        .iter()
+        .map(|(c, _, _, w)| (*c, (*w).to_string()))
+        .collect();
+    let mismatches: Vec<&str> = want
+        .iter()
+        .zip(got.iter())
+        .filter(|(w, g)| w != g)
+        .map(|(w, _)| w.0)
+        .collect();
+    assert_eq!(
+        want,
+        got,
+        "try/except 弹栈位置七格（批次 210／`9d4f0e9f`），红格清单 = {:?}——\
+         少一次 `zeta_try_end`＝handler 分支漏弹栈（帧会泄漏）；\
+         体分支多一次＝弹栈被追加在 return 之后（后端报终结符在中段）；\
+         `zeta_last_error` 排在第二次弹栈之后＝先弹栈再取错误值，读的是外层帧",
+        mismatches
+    );
+}
