@@ -32807,3 +32807,26 @@ python_style 46/46（t63_thread_args_multi 经 threading_thread_new_2
 
 **提案①至此核心三段齐**：15 项 curated＋310 项生成段＋W0911/W0912
 双层核对。余量：keyfn 桥实参值类别核对（位模式槽消歧专项）。
+
+## 批次 998（2026-10-05）：del 读回 NameError（墓碑集合语义）——ROI 排序第一项
+
+ROI 排序（本会话盘点）的第一梯队首项（`abcfb32e`）：
+
+1. **env del 墓碑集合**：zeta_env_del 删除时记入 g_del_set；
+   zeta_env_get 读到墓碑名 ⇒ zeta_raise(1)。重新绑定清墓碑。缺名读
+   （从未写入）维持旧返 0——一刀切 raise 实测打红 12 个 py_style
+   （import 绑定/跨模块名的合法先读后写面：pandas/logging 全族），
+   墓碑收窄后全绿。
+2. **del 臂按 391 镜像谓词分流**：env 镜像的模块全局（module_globals
+   命中）在槽 no-op 外并发 zeta_env_del——函数体经 env 的读回随即
+   NameError（主程序体旧槽读回=t425 在册族，读侧环境化随 t425 专项）；
+   纯本地 V1 no-op。
+3. **连带**：全覆盖签名表咬出 re.search 3 参形态（IGNORECASE 面）——
+   X py_re_search_3（带 PyMatch handle）注册，t75_re_flags 复活。
+
+**验证**：del 读回三形态（函数读/主程序读/未定义名 del）与 CPython
+逐字一致；门禁窗口 8 rc=0——差分 284/284、python_style **50/50**
+（t75 复活）、official 18/18、语料 40/40；库 268/268。
+
+**余量（在册）**：从未写入名的缺名读 NameError 化（import 面消歧专
+项）；t425 主程序体旧槽读（共享格合同专项）。
