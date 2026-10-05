@@ -4710,6 +4710,17 @@ impl Resolver {
                 // class against the module that OWNS it, and build the table from
                 // OWN NAMES ONLY: the re-exports half produced fresh ghosts
                 // (`_pd.Timestamp__date`, `_filter`) when applied inside methods.
+                // 批 995：兜底路径仅对方法名（含 `::`）生效。裸函数名（根文件
+                // 本地 def）落到这里时 head＝函数名自身，会撞上任何恰好同名
+                // 的模块 own name——实拍：jq_wufu 本地 `premium_blocks_entry`
+                // 撞 wufu_trading 的同名 def，整个函数体的裸调用被改写到
+                // wufu_trading（2 参调用绑到 4 参版＋0 填充＋`-> float` 注解
+                // 污染结果槽，元组解包在 f64 槽上取址 ⇒ 编译期 panic，语料
+                // 38/40 的 jq_wufu 族）。Python 语义：模块本地 def 永远遮蔽
+                // import——裸名保持裸绑定（空表）即正确。
+                if !func_name.contains("::") {
+                    return out;
+                }
                 let head = func_name.split("::").next().unwrap_or("").to_string();
                 // `head` is the MANGLED class name (e.g. "pandas__DataFrame").
                 // `py_module_own_names` stores BARE names (e.g. "DataFrame").
