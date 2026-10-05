@@ -6275,3 +6275,165 @@ const E: int = 8 / 0
         "`const X: int = 字面量 / 字面量` 在 value.rs 的斜杠臂里折成**朝零截断**的商（批次 454 没管这一层；本条是现状锁）。读回 -4／-3＝这一臂改成地板除；读回缺项＝这一臂不再折叠；E 格若有值＝除零守卫被去掉，静默错值换了形状。"
     );
 }
+
+/// 批次 432 的观测点：把某一处成员调用在 MIR 里的 `func` 名与 `dest` 槽型读成
+/// `"{func} | {ty}"`。匹配只按**拼写形状**认（等于原名／原名＋`_N` 的降级后缀／
+/// `X::原名` 的限定名／`*_原名` 的表项符号／`zeta_vec_原名` 的逐元素表），不预设答案；
+/// 命中多项时全部列出，这样"顺带多绑了一处"也会显眼。
+fn member_call_shape(src: &str, base: &str) -> String {
+    let mirs = lower_all(src);
+    let mut hits: Vec<String> = Vec::new();
+    for m in &mirs {
+        let mut stack: Vec<&MirStmt> = m.stmts.iter().rev().collect();
+        while let Some(s) = stack.pop() {
+            let (func, dest) = match s {
+                MirStmt::Call { func, dest, .. } => (func.clone(), Some(*dest)),
+                MirStmt::VoidCall { func, .. } => (func.clone(), None),
+                MirStmt::If { then, else_, .. } => {
+                    stack.extend(then.iter().rev().chain(else_.iter().rev()));
+                    continue;
+                }
+                MirStmt::For { body, else_body, .. } | MirStmt::While { body, else_body, .. } => {
+                    stack.extend(body.iter().rev().chain(else_body.iter().rev()));
+                    continue;
+                }
+                _ => continue,
+            };
+            let related = func == base
+                || func.starts_with(&format!("{base}_"))
+                || func.ends_with(&format!("::{base}"))
+                || func.ends_with(&format!("_{base}"));
+            if !related {
+                continue;
+            }
+            let ty = match dest.as_ref().and_then(|d| m.type_map.get(d)) {
+                Some(t) => format!("{t:?}"),
+                None => "<dest 槽型缺失>".to_string(),
+            };
+            hits.push(format!("{func} | {ty}"));
+        }
+    }
+    hits.sort();
+    hits.dedup();
+    if hits.is_empty() {
+        "<MIR 里没有这一处调用>".to_string()
+    } else {
+        hits.join(" + ")
+    }
+}
+
+/// 批次 432（代码 `0cafbf52`，2026-09-26；roadmap `批次 432` 一节，`roadmap.md:19301`；
+/// 站点＝`src/middle/pylib.rs:375` 的 `unique_method_for_bare_call` 与 `:312` 的
+/// `NAME_ROUTE_DENYLIST`，调用点在 `src/middle/mir/gen.rs:14069-14070`（回避面，只观测）。
+/// 来源笔已 `git merge-base --is-ancestor` 验在本树）。
+///
+/// 症状（记录原文口径）：成员调用在"接收者类型给不出唯一方法"时**降级成裸符号** `member`，
+/// 再由出码侧退到 `Linkage::External` ⇒ 编译期一声不出、选定目标的是链接器。431 的归因表里
+/// 最重的一桶是 6 个"三个链接对象里都没有定义"的名字（`abs alarm close mkstemp signal strftime`），
+/// 由 libSystem 满足：`.strftime(...)` 绑到 libc 的 `size_t strftime(char*, size_t, const tm*, …)`，
+/// 第一个参数被当成输出缓冲区 ⇒ 在册夹具 `tests/python_style/t467_bare_member_registry_bind.z`
+/// 的改前实拍＝编译 rc=0、**运行 rc=139（SIGSEGV）、stdout 0 字节**。
+///
+/// 修法＝降级之前先问 `W` 表，四条判据全过才改绑那条真实现：拼写在句柄间唯一 → 非桩 →
+/// arity（含接收者）与实参数相等 → 不在名单内。返回类型取表项而不是猜 I64。
+///
+/// 观测点：MIR 里那一处 `Call` 的 `func` 名与 `dest` 槽型。绑对＝表里的符号名＋表项返回型
+/// （`Str`）；仍降级＝原名＋`_<实参数>` 后缀＋猜出来的 `I64`。
+///
+/// 期望值来源：批次 432 记录（改绑名单／`strftime`→`py_dt_strftime`、`close` 同名多主故意不猜、
+/// `values` 被名单挡住）＋本树 `--dump-mir` 逐格实拍（`/tmp/b10044/small/*.HEAD.mir`，
+/// 运行在仓根、逐格单独降一趟）。CPython 侧不适用于本条：这里锁的是符号名与槽型，不是打印值。
+///
+/// 覆盖面分工（五臂变异 × 10 个形状的前置矩阵，汇总 `/tmp/b10044/ab4_out.txt`，
+/// 逐臂 MIR 在同目录 `small/*.<臂名>.mir`）：
+/// ① 整条改绑臂撤掉（A1）＝第 1、2、3 格红（读回 `strftime_2`／`stem_1`／`read_1`＋`I64`），
+///   第 4、5、6、7 格绿——那四格在改前就已经返回"不绑"，撤臂当然不动它们，所以 A1 的坏格集
+///   **不是**其余三臂的并集；② 去掉 arity 判据（A3）只第 4 格红（`strftime_3`→`py_dt_strftime`）；
+///   ③ 去掉名单判据（A4）只第 5 格红（`values_1`→`py_json_values`）；④ 去掉唯一性判据（A5，
+///   改的是共用的 `unique_w_entry`）只第 6 格红（`close_1`→`py_mp_pool_close`，槽型仍是 `I64`，
+///   因为表项 `ret=i64`）；⑤ 去掉桩判据（A2）＝**10 个形状一字不变的阴性**：现役 `pylib/registry.txt`
+///   里 `W` 行**没有一条带 `stub=`**（实测 `grep -c '^W .*stub=' ＝ 0`）⇒ 这一条判据当前无项可命中，
+///   本测试锁不住它，登记在下批余项。四组坏格集两两不相交 ⇒ 七个格子各是独立覆盖，缺一条就少钉一臂。
+///
+/// 形状选小的理由与边界：批次 432 记录 §三 实测过 9 对"接收者是 `[dynamic]`"的小夹具改前改后
+/// IR 逐字节相同——那些形状被批次 429 的 B4 路线（`method_by_unique_name`）在**上游**接走了，
+/// 打不到本臂。本批的七个形状全部先用"臂 × 形状"矩阵验过可达性（不是靠读代码猜）。
+/// 另外两形**不在本条覆盖内**：`os.environ.setdefault(...)` 读回 `py_os_environ_setdefault`、
+/// `date(…)` 变量的 `.strftime(…)` 读回 `py_dt_strftime`，两形在五臂下一字不变＝另有改绑路线
+/// （432 记录里语料侧那个 `setdefault` 绑的是 `py_map_setdefault`，与本树的这一形不同源），
+/// 别把它们当成本臂的证据。运行期真值与"绑错会崩"的证据由在册夹具 t467 与
+/// `tools/cli_semantics_check.sh`（432 那批的 7 条 IR 断言）承担，本条只锁编译期 MIR 形状。
+#[test]
+fn member_call_binds_a_registry_entry_only_when_all_four_conditions_hold() {
+    let cells: [(&str, &str, &str, &str); 7] = [
+        (
+            "1-strftime（唯一＋非桩＋arity 2＋不在名单）改绑表项，返回型取表里的 Str",
+            r#"s = "abc"
+print(s.strftime("%Y"))
+"#,
+            "strftime",
+            "py_dt_strftime | Str",
+        ),
+        (
+            "2-stem（arity 1 的第二个名字）同一条臂改绑",
+            r#"s = "abc"
+print(s.stem())
+"#,
+            "stem",
+            "py_path_stem | Str",
+        ),
+        (
+            "3-read（接收者是整数变量，不是字符串）也走同一条臂＝不只对 str 接收者生效",
+            r#"n = 5
+print(n.read())
+"#,
+            "read",
+            "py_file_read | Str",
+        ),
+        (
+            "4-arity 不合（实参 3 个 vs 表项 args=2）保持旧行为：降级并叠 _3 后缀",
+            r#"s = "abc"
+print(s.strftime("%Y", 1))
+"#,
+            "strftime",
+            "strftime_3 | I64",
+        ),
+        (
+            "5-名单内的名字（values 虽唯一）不被拼写抢走：仍降级",
+            r#"s = "abc"
+print(s.values())
+"#,
+            "values",
+            "values_1 | I64",
+        ),
+        (
+            "6-同名多主（close 在 PyPool 与 PyFile 各一条）不猜：仍降级",
+            r#"s = "abc"
+s.close()
+"#,
+            "close",
+            "close_1 | I64",
+        ),
+        (
+            "7-列表接收者的 strftime 早在批次 145 落到逐元素表，本臂不许抢",
+            r#"xs = [1, 2]
+print(xs.strftime("%Y"))
+"#,
+            "strftime",
+            "zeta_vec_strftime | DynamicArray(Str)",
+        ),
+    ];
+    let want: Vec<(String, String)> = cells
+        .iter()
+        .map(|(label, _, _, v)| ((*label).to_string(), (*v).to_string()))
+        .collect();
+    let got: Vec<(String, String)> = cells
+        .iter()
+        .map(|(label, src, base, _)| ((*label).to_string(), member_call_shape(src, base)))
+        .collect();
+
+    assert_eq!(
+        want, got,
+        r#"成员调用的改绑只在"拼写唯一＋非桩＋arity 相合＋不在名单"四条都过时发生（批次 432）。读回 strftime_2／stem_1／read_1 这类"原名＋后缀、槽型 I64"＝这一条臂没被走到或判据被撤，链接期才会静默选目标（431 记录：strftime 落到 libSystem，第一参数当输出缓冲区，t467 改前运行 rc=139）；第 4、5、6 格读回 py_dt_strftime／py_json_values／py_mp_pool_close＝arity／名单／唯一性三条判据中的一条被放宽，那是拿猜测换绑定；第 7 格读回 py_dt_strftime＝逐元素表被本臂抢走。"#
+    );
+}
