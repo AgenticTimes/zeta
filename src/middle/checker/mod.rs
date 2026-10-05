@@ -7,6 +7,7 @@
 //! 下标结果型传播（元素型/映射值型）。
 
 pub mod constraint;
+pub mod field_ty;
 pub mod lattice;
 
 use crate::frontend::ast::AstNode;
