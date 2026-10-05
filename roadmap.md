@@ -28586,3 +28586,102 @@ HEAD 两跑皆绿（69/69，0.04 秒）＝格子清单逐次稳定。
 - 滞留读数（代码笔 `ffd443c6` 落地后实测）：`bootstrap..cleanup`＝49、`cleanup..bootstrap`＝371。
 - 脚本坑两处如实记：`gettypes.py` 首版正则字符类漏数字，差点把 `strftime_3` 读成缺项（补 `0-9`
   后逐条反查非 0）；变异脚本按 `left:`＝期望／`right:`＝实际解析（10043 那版读反过）。
+
+## 批次 10045（2026-10-05，#20005 第三十四批：把"`__main__` 守卫在解析阶段被拆掉"做成进程内单元测试）
+
+代码提交 `8ae3e641`（tests，+294/0，实测 `git diff --cached --numstat`）。零 `src/` 改动。
+
+### 一、来源与站点
+
+| 项 | 内容 |
+|---|---|
+| 来源批次 | 290＝`aa137140`（2026-09-21，"__main__ 守卫只认 ROOT 模块，import 不再执行入口"）；`git merge-base --is-ancestor aa137140 HEAD` 已验在本树 |
+| 原缺陷 | `src/frontend/parser/stmt.rs` 的 `parse_if_tail` 以前对**每个**模块都把 `if __name__ == "__main__":` 的 `then` 拆包摊平到模块顶层 ⇒ `import pkg.mod` 会执行那个模块的入口。290 记录里的实测：导入 `jq_wufu_local` 先跑了一整段参数全是乱值的回测，之后 SIGSEGV |
+| 修法 | 删掉那段无条件拆包；守卫 `If` 原样留在 AST，`__name__` 在 MIR 里降成"本次编译所在模块的名字"（根＝`__main__`，被导入的模块＝模块名），于是守卫只在根模块为真。290 的另一半（`PARSING_IMPORTED_MODULE` 与 `__zeta_module_body__` 那套模块名传递）在 `top_level.rs` 与 resolver，本批不碰 |
+| 本批站点 | `src/frontend/parser/stmt.rs`（在可改面，不是 `gen.rs`／`types`／`resolver` 三个回避面） |
+| 结论落点 | MIR：守卫那条 `MirStmt::If` 还在不在、它的 `then`／`else_` 里留着哪些调用、守卫之外还有多少调用 |
+
+### 二、本批一条测试（12 格）
+
+新增 `main_guard_survives_parse_so_import_does_not_run_entry`（`tests/regression_history.rs:6572`）＋读形工具
+`guard_shapes(mirs, func)`（`:6453`）。格 1—7 走单模块 `lower_pipeline`，格 8—12 走多模块
+`lower_multi(files, "entry.z")`（每份夹具是 `{module}.py` ＋ 一条 `import hi` 的入口）。
+
+| 格 | 形状 | 期望读数 |
+|---|---|---|
+| 1 | root 正写守卫 | `cmp(==) "__main__" "__main__" \| then=[go_0] \| else=[] \|\| 守卫外调用=[]` |
+| 2 | root 倒写守卫（`"__main__" == __name__`） | 同格 1 |
+| 3 | root 的 `is` 拼写 | 同格 1（`is` 在上游已归一化成 `==`，见第四节） |
+| 4 | root 的 `!=` 守卫（对照） | `cmp(!=) "__main__" "__main__" \| then=[go_0] \| else=[] \|\| 守卫外调用=[]` |
+| 5 | root 带 `else` 的守卫 | `cmp(==) ... \| then=[println_str] \| else=[println_str] \|\| 守卫外调用=[]` |
+| 6 | 函数体内的守卫（`wrapper`） | `cmp(==) "__main__" "__main__" \| then=[println_str] \| else=[] \|\| 守卫外调用=[]` |
+| 7 | 左端是普通变量的比较（对照） | `cmp(==) 非字面量(Var) "__main__" \| then=[println_str] \| else=[] \|\| 守卫外调用=[zeta_env_get, zeta_env_set, zeta_module_decl]` |
+| 8 | import 正写守卫（**症状格**） | `cmp(==) "guard_a" "__main__" \| then=[guard_a__main] \| else=[] \|\| 守卫外调用=[zeta_env_get, zeta_env_set]` |
+| 9 | import 倒写守卫 | `cmp(==) "__main__" "guard_b" \| then=[guard_b__main] \| else=[] \|\| 守卫外调用=[zeta_env_get, zeta_env_set]` |
+| 10 | import 的 `is` 拼写 | `cmp(==) "guard_c" "__main__" \| then=[guard_c__main] \| ...` |
+| 11 | import 的 `!=` 守卫（对照） | `cmp(!=) "guard_d" "__main__" \| then=[guard_d__main] \| ...` |
+| 12 | import 模块函数体内的守卫（`guard_e__wrapper`） | `cmp(==) "guard_e" "__main__" \| then=[println_str] \| else=[] \|\| 守卫外调用=[]` |
+
+期望值来源＝290 的记录＋本树 `--dump-mir` 逐格实拍（`/tmp/b10045/mir_*.HEAD.txt`，仓根运行、逐格单降）；
+CPython 侧不适用（格 8—12 的 `"guard_a"` 一侧是 zeta 的模块名机制，Python 里那行恒为真，两边形状本就不同）。
+
+读形工具渲染格式：每条守卫形比较渲染成 `cmp(<op>) <左> <右> | then=[...] | else=[...]`，排序去重后用
+` + ` 连接，末尾再附 `|| 守卫外调用=[...]`（在所有被认作守卫的 `If` 子树之外出现的调用）。非字面量的一端
+渲染成 `非字面量(Var)`／`非字面量(IntLit)`／`非字面量(其他)`；一条都没有时读数为 `没有守卫形比较`。
+
+### 三、为什么先做前置矩阵
+
+290 的修法是**删掉**一段代码，所以变异＝按子形状把那段拆包重新插回去（插在锚点
+`// \`synthesize_implicit_main\` (top_level.rs) instead.` 之后，还原源固定 `git show HEAD:src/frontend/parser/stmt.rs`
+并断言"锚点出现一次＋变异后 md5 不等于还原态"）。插回去的 `cond` 判断有四种宽窄，先做
+「臂 × 形状」矩阵才知道哪一格钉哪一支：
+
+**CLI 层 5 臂 × 13 形状**（`--dump-mir` 与 HEAD 的差异行数，`/tmp/b10045/matrix_cli_out.txt`；HEAD 各行数
+s1—s7＝95/95/95/99/131/75/118、e_gm1/2/3/6＝342、e_gm7/8＝391，全部非 0 行才当基线）：
+
+| 臂 | 插回去的条件 | 读数 |
+|---|---|---|
+| A1 | `op == "==" \|\| op == "is"`，两个方向 | s1 d=53 s2 53 s3 53 s4 55 s7 84 e_gm1 53 e_gm2 53 e_gm3 53 e_gm7 104 e_gm8 79；s5 s6 e_gm6 d=0 |
+| A2 | 只 `==`，两个方向 | 与 A1 **一字相同** |
+| A3 | 只 `==`，正写 | A1 减去 s2／e_gm2（那两格 d=0） |
+| A4 | 只 `==`，倒写 | 只有 s2 d=53／e_gm2 d=53，其余全 0 |
+| A5 | 只 `is`，两个方向 | **13 形状全 0** |
+
+A1＝A2 说明 `is` 那一半在 CLI 层没有任何作用；A5 全 0 是同一件事的第二次实测；A3／A4 的作用面正好互补
+⇒ 正写与倒写是两支独立的臂，格 1／3／5／6／8／10／12 钉正写那支，格 2／9 钉倒写那支。
+`s5`（普通变量参与的比较）、`s6`／`e_gm6`（`!=` 守卫）在任何臂都不变＝对照，不是漏测的那一支。
+
+**进程内 4 臂**（`/tmp/b10045/matrix_inproc_out.txt`，逐臂日志 `arm_*.log`）：
+
+| 臂 | 本条红格 |
+|---|---|
+| B1 两序并撤 | 9 格＝B2 ∪ B3（并集，不单独算覆盖，只当"两个方向同时坏也红"的防放松） |
+| B2 只撤正写 | `root 正写守卫`、`root 的 is 拼写`、`root 带 else 的守卫`、`函数体内的守卫`、`import 正写守卫（症状格）`、`import 的 is 拼写`、`import 模块函数体内的守卫` |
+| B3 只撤倒写 | `root 倒写守卫`、`import 倒写守卫` |
+| B4 只撤 `is` | **阴性**（本条一字不变） |
+
+B2 与 B3 的红格集合互不相交且并起来＝B1 ⇒ 两条独立覆盖；B4 阴性有出处（CLI A5 全 0 ＋ 格 3 的 MIR 实拍
+就是 `cmp(==)`）⇒ 写成"`is` 拼写在进 `parse_if_tail` 之前已被归一化，本批站点无靶"，不写死码结论。
+
+### 四、仍未锁项
+
+1. 290 的另一半（`PARSING_IMPORTED_MODULE`／`__zeta_module_body__` 的模块名传递，站点在 `top_level.rs`
+   与 resolver）＝本道与主线在制面，本批未变异、未锁；格 8—12 的 `"guard_a" == "__main__"` 是它的**结果**，
+   只锁了"模块名降进了比较"这一侧。
+2. 读形工具只列**调用语句名**。守卫 `then` 里若改坏成赋值／`print` 之外的其它语句形状，本批的
+   `then=[...]` 读不出那一类坏法（格 1—12 的期望串就是按这个边界取的）。
+3. 格 4／7／11 三枚是对照，任何臂都不红 ⇒ 只算"匹配形状收窄时会露出来"的松紧对照，不是分支锁。
+4. 运行期那半（被导入模块的入口不执行）没有进程内断言：#20005 口径只收落在 MIR 上的结论，那半留在
+   语料与 AOT 侧（290 当时的实测证据），本批没新增运行期格子。
+
+### 五、检查节奏与滞留
+
+- 只跑改到的目标＝历史套件 **70/70**（0.09 秒）＋ crate 内 `--lib` **145/145** ＋ 编译零错误。
+- 零 `src/` 改动＋被测件 `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10025 以来同一颗
+  ⇒ 按 2026-10-03 节奏不跑抽样窗口。
+- 开批沿用 10044 在册收尾读数 49／371；本批代码笔 `8ae3e641` 落地后实测 `bootstrap..cleanup`＝**51**、
+  `cleanup..bootstrap`＝**373**（主树自 10044 记录笔后又涨 2 条）。
+- 一处读数如实记：进程内矩阵脚本最后一行打印"还原后全套 rc=101 NOT-OK"，而同一行打印的 stmt.rs md5
+  **已经等于** HEAD（`628bf015bf66f080d4d58bf5654a2e2c`）；随后单独复跑同一测试目标得 70/70 全绿
+  ⇒ 那条 rc=101 与文件状态不相符（脚本在还原写入的同一刻起 cargo，撞上重建窗口＝10030 记过的
+  "后台重编时别并发取读数"），不入账，以复跑为准。

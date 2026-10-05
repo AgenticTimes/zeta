@@ -832,6 +832,46 @@
 >   `bootstrap..cleanup`＝48（`git rev-list --count bootstrap..ffd443c6^`）；代码笔 `ffd443c6`
 >   落地后实测 `bootstrap..cleanup`＝49、`cleanup..bootstrap`＝371。
 
+> - 批次 10045（代码 `8ae3e641`）＝来源批次 290（`aa137140`，2026-09-21，"`__main__` 守卫只认 ROOT 模块，
+>   import 不再执行入口"；`git merge-base --is-ancestor` 已验在本树）；站点＝`src/frontend/parser/stmt.rs`
+>   的 `parse_if_tail` 里被 290 **删掉**的那段无条件拆包（在可改面，不是 `gen.rs`／`types`／`resolver`
+>   三个回避面）。原缺陷＝每个模块的 `if __name__ == "__main__":` 都被摊平到顶层 ⇒ `import pkg.mod`
+>   会执行那个模块的入口（290 实测：导入 `jq_wufu_local` 先跑一整段乱参数回测，随后 SIGSEGV）。
+>   本套 **70 条全绿**（0.09 秒），crate 内单元测试 145 条一字不变。新增 **1 条 12 格**
+>   `main_guard_survives_parse_so_import_does_not_run_entry`＋读形工具 `guard_shapes(mirs, func)`
+>   （`tests/regression_history.rs:6453`／`:6572`），把 MIR 里"某一侧是字符串字面量的比较守卫"读成
+>   `cmp(op) 左 右 | then=[调用名] | else=[调用名] || 守卫外调用=[调用名]`。
+>   格 1—6 是根模块（正写／倒写／`is` 拼写／带 `else`／函数体内），格 7 与格 4／11 是对照
+>   （普通变量参与比较、`!=` 守卫）；格 8—12 是被 import 的模块，走 harness 的
+>   `lower_multi(files, "entry.z")`（`{module}.py` ＋一条 `import hi` 的入口），格 8＝症状格，
+>   期望读数 `cmp(==) "guard_a" "__main__" | then=[guard_a__main] | else=[] || 守卫外调用=[zeta_env_get,
+>   zeta_env_set]`＝守卫还在、入口调用还留在守卫 `then` 里。期望值来源＝290 记录＋本树 `--dump-mir`
+>   逐格实拍（`/tmp/b10045/mir_*.HEAD.txt`，仓根、逐格单降）；CPython 侧不适用（`"guard_a"` 那一侧是
+>   zeta 的模块名机制，Python 里该行恒真，形状本就不同）。
+>   **写期望之前先做"臂 × 形状"可达性矩阵**：CLI 层 5 臂 × 13 形状的差异行数
+>   （`/tmp/b10045/matrix_cli_out.txt`，HEAD 各行数 s1—s7＝95/95/95/99/131/75/118、e_gm1/2/3/6＝342、
+>   e_gm7/8＝391，先断言全部非 0 才当基线）＋进程内 4 臂的红格集合（`/tmp/b10045/matrix_inproc_out.txt`，
+>   逐臂日志 `arm_*.log`）。变异＝按子形状把删掉的拆包插回锚点之后（还原源固定 `git show HEAD:`＋断言
+>   锚点次数＝1 且变异后 md5≠还原态）。结论：正写序一臂（B2，红 7 格）与倒写序一臂（B3，红 2 格）
+>   红格互不相交、并起来＝两序并撤那臂（B1，红 9 格）⇒ B1 只当"两个方向同时坏也红"的防放松，
+>   两条独立覆盖＝B2／B3；CLI 的 A1（`==` 或 `is`）与 A2（只 `==`）13 形状读数**一字相同**、
+>   A5（只 `is`）全 0、进程内 B4（只 `is`）阴性 ⇒ 四路互证同一个结论：`if __name__ is "__main__"` 进
+>   `parse_if_tail` 之前已被归一化成 `==`（格 3 的 MIR 实拍就是 `cmp(==)`），该臂在本站点无靶，
+>   阴性有出处、不写成死码。对照三格（`!=` 两枚＋普通变量一枚）任何臂都不红＝只算松紧对照。
+>   仍未锁四项（记在本条余项内、不另占号）：① 290 的另一半（`PARSING_IMPORTED_MODULE`／
+>   `__zeta_module_body__` 的模块名传递，站点在 `top_level.rs` 与 resolver＝本道与主线在制面）未变异未锁，
+>   格 8—12 只锁了"模块名降进了比较"这一侧的结果；② 读形工具只列调用语句名，守卫 `then` 里改成赋值
+>   或别的语句形状读不出；③ 三枚对照格不是分支锁；④ 运行期那半（被导入模块的入口不执行）没有进程内
+>   断言，按 #20005 口径只落在 290 当时的实测证据与语料／AOT 侧。
+>   检查节奏：只跑改到的目标＝历史套件 70/70 ＋ crate 内 145/145 ＋ 编译零错误；零 `src/` 改动＋被测件
+>   与 10025 以来同一颗（`ed5227ccd29b70c4ee9ae17500926f10`）⇒ 按 2026-10-03 节奏不跑抽样窗口。
+>   开批沿用 10044 在册收尾读数 49／371；本批代码笔 `8ae3e641` 落地后实测 `bootstrap..cleanup`＝51、
+>   `cleanup..bootstrap`＝373（主树自 10044 记录笔后又涨 2 条）。
+>   一处读数如实记：进程内矩阵脚本最后一行打印"还原后全套 rc=101 NOT-OK"，同一行打印的 stmt.rs md5
+>   **已等于** HEAD（`628bf015bf66f080d4d58bf5654a2e2c`），随后单独复跑同一测试目标 70/70 全绿
+>   ⇒ 那条 rc=101 与文件态不相符（还原写入的同一刻起 cargo，撞上重建窗口＝10030 记过的
+>   "后台重编时别并发取读数"），不入账。
+
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；
