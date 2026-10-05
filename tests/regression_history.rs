@@ -7860,3 +7860,155 @@ fn match_pattern_arm_order_and_wildcard_boundary_keep_the_file() {
         r#"批次 10050：绑定模式臂序（外层／or 链两支）、通配 `_` 词边界与字符串模式两臂互为备份"#
     );
 }
+
+
+/// 来源批次 415（`6b0dc13a`，2026-09-25，标题 `fix(mir)`）＝`__file__` 是**每个模块
+/// 自己的**路径，不是全程序一份入口路径。
+/// 站点＝`src/middle/resolver/resolver.rs` 的 `load_user_python_module`（现 :4106 起）：
+/// 登记"模块名 → 来源文件"的两处插入（现 :4166 在标记用户模块之后、现 :4382 在函数尾）
+/// 加上把这张表交给降形侧的接线（现 :5317 `.with_py_module_paths(...)`）。
+/// 消费点在 `src/middle/mir/gen.rs:4639` 的 `__file__` 臂（主线在重构该文件＝避开面，
+/// 本批不变异它）：按 `current_module` 查表，查不到才退回入口路径。
+/// 症状（415 的提交信息＋在册夹具 `tests/python_style/t453_file_per_module.z`）：修前
+/// 模块体里的 `Path(__file__).resolve().parent.parent.parent` 按**入口** `.z` 的祖先算，
+/// 语料 `market_data_sources.py:146` 的 `_PROJECT_ROOT` 落到仓库的祖先目录，
+/// parquet 缓存目录 `data/stocks` 因此指向不存在的位置、缓存全部看不见。
+/// 期望值来源＝缺陷记录（不是"现行输出是什么就写什么"）：三侧真值＝CPython 的每模块
+/// `__file__`、t453 的 `// expect:` 行、以及本批用 `--dump-mir` 实拍到的形状。
+/// 临时目录名逐次会变，所以断言取**路径尾部**（`ends_with`）而不是整串路径。
+///
+/// 覆盖面分工（变异实测，还原源＝`git show HEAD:src/middle/resolver/resolver.rs`，
+/// 每臂还原后 md5 复验等于 HEAD）：
+/// - 只撤 :4166 那处插入＝76 条读数一字不变（阴性）；只撤 :4382 那处＝同样一字不变
+///   （阴性）；**两处一起撤**才红——对"正常加载"这一形，两处插入互为备份，所以本条对
+///   那两格是**现状锁**（钉住"这张表记的是模块自己的文件"），不是分支锁。
+/// - 撤 :5317 的接线 `.with_py_module_paths(...)`＝红，且红点与"两处一起撤"落在同一条
+///   断言、同一个读数（模块段读到入口 `main.z`）⇒ 本条能断定"表没送到降形侧＝模块读
+///   到入口路径"，但从红点分不出坏在登记还是坏在接线。
+/// - 四臂的红都只涉及本条这 1 条，其余 75 条不变（无连带损害）。
+///
+/// 边界（本条不覆盖）：消费点 `gen.rs:4639` 的 `__file__` 臂、以及它"查不到才退回入口
+/// 路径"那半在避开面（主线在重构 `gen.rs`），本批未变异；:4166 唯一独占的形状＝同一文件
+/// 的第二个拼写走别名提前返回（现 :4182），那条路线上被别名的模块名不产生自己的 `__file__`
+/// 读数，本批没打成红＝未证。运行期打印值仍归 `tests/python_style/t453_file_per_module.z`。
+#[test]
+fn file_dunder_reads_each_modules_own_path_not_the_entry_path() {
+    let mirs = lower_multi(
+        &[
+            (
+                "m_a.z",
+                r#"PATH_A = __file__
+
+
+def who():
+    return __file__
+"#,
+            ),
+            ("pkg/__init__.z", "PATH_P = __file__\n"),
+            (
+                "main.z",
+                r#"from m_a import PATH_A
+from pkg import PATH_P
+
+print(__file__)
+print(PATH_A)
+print(PATH_P)
+"#,
+            ),
+        ],
+        "main.z",
+    );
+
+    // 每个 item 里"以 .z 结尾的字符串常量"＝`__file__` 落成的字面量，按 (item 名, 槽号)
+    // 归组；顺带取该槽的型别，验证 `__file__` 臂同时把槽型标成 `Str`。
+    let mut cells: Vec<(String, u32, String)> = Vec::new();
+    let mut kinds: Vec<(String, u32, String)> = Vec::new();
+    for m in &mirs {
+        let name: String = m
+            .name
+            .clone()
+            .unwrap_or_else(|| "<无名>".to_string());
+        let mut local: Vec<(u32, String)> = Vec::new();
+        for (id, e) in m.exprs.iter() {
+            if let MirExpr::StringLit(s) = e {
+                if s.ends_with(".z") {
+                    local.push((*id, s.clone()));
+                }
+            }
+        }
+        local.sort();
+        for (id, s) in local {
+            cells.push((name.clone(), id, s));
+            let ty = m
+                .type_map
+                .get(&id)
+                .map(|t| format!("{:?}", t))
+                .unwrap_or_else(|| "<无槽>".to_string());
+            kinds.push((name.clone(), id, ty));
+        }
+    }
+    let reading = cells
+        .iter()
+        .map(|(n, i, s)| format!("{}#{}={}", n, i, s))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let kind_reading = kinds
+        .iter()
+        .map(|(n, i, t)| format!("{}#{}={}", n, i, t))
+        .collect::<Vec<_>>()
+        .join(" | ");
+
+    // ① 四格都得有读数：入口、`m_a` 的模块体、`m_a__who`（函数体里的 `__file__`）、
+    //    包路线的 `pkg__init`。每格只要求"至少一个 `.z` 字面量"，具体槽数随接线形状变，
+    //    不在本条的断言面内。
+    let count_of = |item: &str| -> usize {
+        cells.iter().filter(|(n, _, _)| n == item).count()
+    };
+    for item in ["main", "m_a__init", "m_a__who", "pkg__init"] {
+        assert!(
+            count_of(item) >= 1,
+            "item `{item}` 该有 `__file__` 落成的 `.z` 字面量（实得读数 {reading}）"
+        );
+    }
+
+    // ② 每格读的是**自己**那一份路径（415 的主张）：入口尾串 `main.z`、
+    //    单文件模块尾串 `m_a.z`、包尾串 `pkg/__init__.z`。
+    for (name, id, path) in cells.iter() {
+        let want = if name.starts_with("m_a") {
+            "m_a.z"
+        } else if name.starts_with("pkg") {
+            "pkg/__init__.z"
+        } else if name.starts_with("main") {
+            "main.z"
+        } else {
+            continue;
+        };
+        assert!(
+            path.ends_with(want),
+            "item `{name}` 槽 {id} 的 `__file__` 该以 `{want}` 结尾（改前读的是入口路径），实得 {path}"
+        );
+    }
+
+    // ③ 症状否证：模块段里不得出现入口路径串（＝修前那一族的实际症状值）。
+    let leaked: Vec<&String> = cells
+        .iter()
+        .filter(|(n, _, _)| n.starts_with("m_a") || n.starts_with("pkg"))
+        .map(|(_, _, p)| p)
+        .filter(|p| p.ends_with("main.z"))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "模块段读到入口 `main.z` 的路径＝415 修前症状，实得 {:?}",
+        leaked
+    );
+
+    // ④ 槽型格子：`__file__` 臂同时把槽标成 `Str`（缺这半时下游按 i64 读指针）。
+    let bad_kinds: Vec<&(String, u32, String)> = kinds
+        .iter()
+        .filter(|(_, _, t)| t.as_str() != "Str")
+        .collect();
+    assert!(
+        bad_kinds.is_empty(),
+        "每个 `.z` 字面量槽的型别该是 `Str`，实得 {kind_reading}"
+    );
+}
