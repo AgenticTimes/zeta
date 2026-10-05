@@ -1702,9 +1702,14 @@ call, no NULL-handle dereference).",
                         } else {
                             "py_max_key"
                         };
+                        // 批 962：keyfn 返回域分派
+                        let flag = self.int_slot(
+                            keyfn_returns_f64(&self.func_ret_types, &ka[1])
+                                as i64,
+                        );
                         self.stmts.push(MirStmt::Call {
                             func: func.to_string(),
-                            args: vec![xs, f],
+                            args: vec![xs, f, flag],
                             dest: id,
                             type_args: vec![],
                         });
@@ -1907,9 +1912,12 @@ call, no NULL-handle dereference).",
                     } else {
                         "py_max_key"
                     };
+                    // 批 962：keyfn 返回域分派
+                    let flag = self
+                        .int_slot(keyfn_returns_f64(&self.func_ret_types, &k) as i64);
                     self.stmts.push(MirStmt::Call {
                         func: func.to_string(),
-                        args: vec![xs, f],
+                        args: vec![xs, f, flag],
                         dest: id,
                         type_args: vec![],
                     });
@@ -5958,6 +5966,20 @@ call, no NULL-handle dereference).",
 ///（函数名, 结果槽是否 f64）。f64 版按位模式读、double 域比较、位模式返回；
 /// 结果槽标 F64 让下游按浮点消费。此前只有 i64 版，浮点数组按位模式比大小，
 /// gen 侧仅 warning 提示绕行。
+/// keyfn 返回域判定（批 962 第二段）：用户 key 函数的注解 ret（或
+/// 批 813 body-ret 预热写入的）为 F64/F32 ⇒ 比较域 double；无证据 ⇒
+/// false（维持 i64 域现状，登记）。
+pub(crate) fn keyfn_returns_f64(func_ret_types: &HashMap<String, Type>, keyfn: &AstNode) -> bool {
+    if let AstNode::Var(nm) = keyfn {
+        matches!(
+            func_ret_types.get(nm.as_str()),
+            Some(Type::F64) | Some(Type::F32)
+        )
+    } else {
+        false
+    }
+}
+
 fn minmax_builtin_target(method: &str, elem_is_float: bool) -> (&'static str, bool) {
     match (method, elem_is_float) {
         ("max", true) => ("py_builtin_max_f64", true),

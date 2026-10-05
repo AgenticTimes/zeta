@@ -2,6 +2,7 @@
 //! 入口判定在 gen.rs（classify_call → NumericBuiltin），本文件只管发射。
 
 use super::MirGen;
+use super::call_dispatch::keyfn_returns_f64;
 use crate::frontend::ast::AstNode;
 use crate::middle::mir::mir::{MirExpr, MirStmt};
 use crate::middle::types::Type;
@@ -166,9 +167,13 @@ impl MirGen {
                 let xs = self.lower_expr(&args[0]);
                 let f = self.lower_expr(&ka[1]);
                 let func = if method == "min" { "py_min_key" } else { "py_max_key" };
+                // 批 962：keyfn 返回域分派
+                let flag = self.int_slot(
+                    keyfn_returns_f64(&self.func_ret_types, &ka[1]) as i64,
+                );
                 self.stmts.push(MirStmt::Call {
                     func: func.to_string(),
-                    args: vec![xs, f],
+                    args: vec![xs, f, flag],
                     dest,
                     type_args: vec![],
                 });

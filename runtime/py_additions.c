@@ -1108,27 +1108,56 @@ int64_t py_round_i64(double x) { return (int64_t)nearbyint(x); }
 
 // ── PY-A: min/max with a key callable (linear scan; ties keep the first,
 // like Python) ──────────────────────────────────────────────────────
-int64_t py_min_key(int64_t vec, int64_t keyfn) {
+int64_t py_min_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
     int64_t n = zt_vec_len(vec);
     if (n <= 0) return 0;
     int64_t best = ((int64_t*)vec)[0];
     int64_t best_k = ((int64_t(*)(int64_t))keyfn)(best);
+    double best_d;
+    memcpy(&best_d, &best_k, sizeof best_d);
     for (int64_t i = 1; i < n; i++) {
         int64_t v = ((int64_t*)vec)[i];
         int64_t k = ((int64_t(*)(int64_t))keyfn)(v);
-        if (k < best_k) { best = v; best_k = k; }
+        int64_t take;
+        if (key_is_f64) {
+            double kd;
+            memcpy(&kd, &k, sizeof kd);
+            take = kd < best_d;
+            if (take) memcpy(&best_d, &kd, sizeof best_d);
+        } else {
+            take = k < best_k;
+            if (take) best_k = k;
+        }
+        if (take) best = v;
     }
     return best;
 }
-int64_t py_max_key(int64_t vec, int64_t keyfn) {
+// key_is_f64（批 962 第二段）：keyfn 返回域可静态判定（注解 ret 或
+// checker 证据）时比较在 double 域进行——此前一律按 i64 比较返回的
+// f64 位模式，负浮点（符号位 1）永远不是 max（实拍
+// max([1.5,2.5,-3.5], key=ka) 打 2.0 位模式，CPython -3.5）。
+// 无证据时 gen 传 0，维持 i64 域（现状，登记）。
+int64_t py_max_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
     int64_t n = zt_vec_len(vec);
     if (n <= 0) return 0;
     int64_t best = ((int64_t*)vec)[0];
     int64_t best_k = ((int64_t(*)(int64_t))keyfn)(best);
+    double best_d;
+    memcpy(&best_d, &best_k, sizeof best_d);
     for (int64_t i = 1; i < n; i++) {
         int64_t v = ((int64_t*)vec)[i];
         int64_t k = ((int64_t(*)(int64_t))keyfn)(v);
-        if (k > best_k) { best = v; best_k = k; }
+        int64_t take;
+        if (key_is_f64) {
+            double kd;
+            memcpy(&kd, &k, sizeof kd);
+            take = kd > best_d;
+            if (take) memcpy(&best_d, &kd, sizeof best_d);
+        } else {
+            take = k > best_k;
+            if (take) best_k = k;
+        }
+        if (take) best = v;
     }
     return best;
 }
