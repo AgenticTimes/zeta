@@ -8346,3 +8346,157 @@ fn dict_field_without_map_spelling_marks_method_return_known_dynamic() {
         mismatches
     );
 }
+
+/// 批次 173（主线 `1f2a656d`，2026-09-20）：推导式元素类型取用户函数返回类型。
+///
+/// 站点＝`src/middle/resolver/resolver.rs` 的 `infer_global_ty` Call 分支里
+/// "裸名调用取用户函数返回类型"那一块（本树 HEAD `ae970d5e` 上＝`:2137-2160`）：
+/// ①`:2144-2146` 按裸名查 `fn_rets`；②`:2147-2155` 按 `__<name>` 后缀收集候选；
+/// ③`:2157-2159` "候选返回型必须全一致才采纳"的守卫。
+///
+/// 症状（记录原文）：`WUFU_BS_CODES = [jq_to_bs(c) for c in WUFU_JQ_CODES]` 的元素型
+/// 停在 `I64`（`INFER WUFU_BS_CODES: Some(DynamicArray(I64))`）⇒ 之后 `LIST + LIST`
+/// 被当数字加法、字符串操作分派错。期望＝`DynamicArray(Str)`。
+///
+/// 期望值来源＝CPython 同形源（不是"现行输出是什么就写什么"）：
+/// - 同文件裸名：`def fcode(c): return "BS" + c` ＋ `CODES = [fcode(c) for c in ["a","b"]]`
+///   ⇒ `print(CODES[0])` 打 `BSa`、`print(len(CODES))` 打 `2` ⇒ 元素型 Str；
+/// - 普通 `from convN import fcode`：CPython 同样打 `BSa` ⇒ Str；
+/// - 两枚同名 helper 返回型不一致（`from convA import fcode` 之后再
+///   `from convB import fcode`）：CPython 里后一条 import 覆盖前一条 ⇒ `fcode` 返回 `9`
+///   ⇒ 打 `9`，元素型 I64。这一格盯的就是③守卫：没有守卫，`:2157` 会取候选列表
+///   第一枚（HashMap 顺序），把 `Str` 安到一个整数列表上。
+///
+/// 覆盖面分工（CLI 侧七臂变异实测，读数＝`main` 段里"全局写入槽／读回槽／`array_get` 目的槽"
+/// 的 `type_map` 型；产物在 `/tmp/b10056/`，矩阵见 v3_matrix.out）：
+/// - A1 只撤①（`:2144-2146` 裸名查表）⇒ 六形读数一字不变。原因实拍（`v3_dbg.log`
+///   的 `B173 method=fcode bare=Str`）：同分支后段 `:2230-2234` 有第二次裸名查表，
+///   ①撤掉后由它接管。
+/// - A2 只撤②（`:2147-2152` 后缀收集＋③守卫）⇒ 同样全不变：后段 `:2246-2249` 按
+///   `<module>__<member>` 建 mangled 键查同一张表，`from convN import fcode` 这类
+///   形状两条路给同一个型。
+/// - A3 只把③守卫换成"候选非空就采纳第一枚"⇒ 六形复跑三遍都不变（阴性）。
+/// - A4 整块 `if receiver.is_none()` 改成 `if false` ⇒ 六形全不变＝批次 173 那一整块
+///   在 HEAD 上是**前移的冗余**，实际由后段两支撑住。
+/// - A5 同撤①与 `:2230-2234` ⇒ 「同文件裸名」那格红：两次读回槽变成 0 次。
+/// - A6 同撤②与 `:2246-2249` ⇒ 「普通 from-import」与「两枚同名不一致」两格红：读回槽变成 0 次。
+/// - A7 四处同撤 ⇒ 红在「同文件裸名」＋「两枚同名不一致」。
+///
+/// 进程内复跑（本条真跑的那套，产物 `/tmp/b10056/mut_real2.out`，八臂，首字母同
+/// CLI 但含义按下述）：HEAD/A1 只撤①/A8 整块 `if receiver.is_none()` 删掉/A9 只撤后段
+/// 裸名对 ⇒ 四臂全绿（阴性）；A5 同撤①与 `:2230-2234` ⇒ 红「同文件裸名」；
+/// A6 同撤②③与 `:2246-2249` ⇒ 红「普通 from-import」＋「两枚同名不一致」；
+/// A10 只撤后段 mangled 对 `:2246-2249` ⇒ **只红「两枚同名不一致」那一格**；
+/// A7 四处同撤 ⇒ 三格全红（坏臂集是 A5∪A6 的超集，不算独立）。
+/// 与 CLI 侧唯一的读数差＝A7 在 CLI 少红「普通 from-import」一格（同一支臂两侧读数不同，
+/// 原因未查，按覆盖边界记，不写成结论），其余七臂两侧一致。
+/// ⇒ 分工：按坏臂集的极小元读——「同文件裸名」由 A5 锁，「普通 from-import」由 A6 锁，
+/// 「两枚同名不一致」由 A10 单臂锁（A6/A7 是它的超集）。三格没有一臂能单独打到 173
+/// 自己的①②③（A1/A8 皆阴性），所以 173 的三样东西单撤任一样都锁不住，如实写成阴性。
+///
+/// 本批实测的新未修项（未锁，登记在 #20005 余项内）：`from ..convJ import fcode`
+/// 在没有包上下文时被**静默忽略**（CLI 只打一行 warning 仍继续编译），`fn_rets` 里
+/// 因此没有 `__fcode` 键（`v3_dbg.log` 的 `S10/S11/S12` 三形 `suffix=[]`）⇒ `CODES`
+/// 元素型落 `DynamicArray(I64)`，运行期 `print(CODES[0])` 打 `0`，而 CPython 同形打
+/// `BSa`。这正是 173 注释里声称要救的场景——实测在该场景那一支根本打不到。
+#[test]
+fn bare_call_return_type_types_comprehension_global_element() {
+    // 一格读数＝(全局写入槽型, 每次读回槽型, array_get 目的槽型)
+    fn reading(files: Option<&[(&str, &str)]>, src: &str, gname: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
+        let mirs = match files {
+            Some(f) => lower_multi(f, "main.z"),
+            None => lower_all(src),
+        };
+        let m = mir(&mirs, "main");
+        let named = |slot: u32| matches!(m.exprs.get(&slot), Some(MirExpr::StringLit(s)) if s == gname);
+        let ty = |slot: u32| match m.type_map.get(&slot) {
+            Some(t) => format!("{:?}", t),
+            None => "<none>".to_string(),
+        };
+        let mut w = Vec::new();
+        let mut r = Vec::new();
+        let mut get = Vec::new();
+        for s in &m.stmts {
+            match s {
+                MirStmt::VoidCall { func, args }
+                    if func == "zeta_env_set" && args.len() == 2 && named(args[0]) =>
+                {
+                    w.push(ty(args[1]));
+                }
+                MirStmt::Call { func, args, dest, .. }
+                    if func == "zeta_env_get" && args.len() == 1 && named(args[0]) =>
+                {
+                    r.push(ty(*dest));
+                }
+                MirStmt::Call { func, dest, .. } if func.ends_with("array_get") => {
+                    get.push(ty(*dest));
+                }
+                _ => {}
+            }
+        }
+        (w, r, get)
+    }
+    type Cell = (&'static str, (Vec<String>, Vec<String>, Vec<String>));
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+
+    let got: Vec<Cell> = vec![
+        (
+            "同文件裸名",
+            reading(
+                None,
+                "def fcode(c):\n    return \"BS\" + c\n\nCODES = [fcode(c) for c in [\"a\", \"b\"]]\nprint(CODES[0])\nprint(len(CODES))\n",
+                "CODES",
+            ),
+        ),
+        (
+            "普通from-import",
+            reading(
+                Some(&[
+                    ("convN.z", "def fcode(c):\n    return \"BS\" + c\n"),
+                    (
+                        "main.z",
+                        "from convN import fcode\n\nCODES = [fcode(c) for c in [\"a\", \"b\"]]\nprint(CODES[0])\n",
+                    ),
+                ]),
+                "",
+                "CODES",
+            ),
+        ),
+        (
+            "两枚同名不一致",
+            reading(
+                Some(&[
+                    ("convA.z", "def fcode(c):\n    return \"BS\" + c\n"),
+                    ("convB.z", "def fcode(c):\n    return 9\n"),
+                    (
+                        "main.z",
+                        "from convA import fcode\nfrom convB import fcode\n\nCODES = [fcode(c) for c in [\"a\", \"b\"]]\nprint(CODES[0])\n",
+                    ),
+                ]),
+                "",
+                "CODES",
+            ),
+        ),
+    ];
+    let want: Vec<Cell> = vec![
+        (
+            "同文件裸名",
+            (s(&["DynamicArray(Str)"]), s(&["DynamicArray(Str)", "DynamicArray(Str)"]), s(&["Str"])),
+        ),
+        (
+            "普通from-import",
+            (s(&["DynamicArray(Str)"]), s(&["DynamicArray(Str)"]), s(&["Str"])),
+        ),
+        (
+            "两枚同名不一致",
+            (s(&["DynamicArray(I64)"]), s(&["DynamicArray(I64)"]), s(&["I64"])),
+        ),
+    ];
+    let red: Vec<&str> = got
+        .iter()
+        .zip(want.iter())
+        .filter(|((_, gr), (_, wr))| gr != wr)
+        .map(|((gl, _), _)| *gl)
+        .collect();
+    assert_eq!(got, want, "红格清单 = {:?}（每格读数＝全局写入槽型／读回槽型／array_get 目的槽型）", red);
+}
