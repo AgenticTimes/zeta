@@ -29703,3 +29703,11 @@ infer_type 表达式推断走旧分支（use_new_system=false，borrow_enhanced
 等 4 处调用）。**无死轨可删**——删除假设若实施将误删 3159 行活代码。
 真重构方向＝双轨合一（旧 infer_type 与新 InferContext 收敛，F 轴深水
 非 A 轴删除），登记不排期。库 246/246、b947 探针保持。
+
+## 批次 958（2026-10-05）：轴 D——env-first 镜像族迁出
+
+env_store/env_mirror/env_slot_ty/mirror_module_global_writes/
+splice_env_mirrors/sub_splice/receiver_global_key 七方法（215 行）迁
+gen/env_mirror.rs，可见性 pub(crate)。gen.rs 3798→3676；累计
+19,392→3,676（-81.0%），35 个族文件。验证：库 246/246、差分抽样
+284/284、python_style 479/0。
