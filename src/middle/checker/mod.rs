@@ -467,6 +467,12 @@ pub fn build_module_checker_plan(
     // 造成 main 局部型跨函数泄漏（隐错型源）。
     let mut module_env = TypeEnv::new();
     scan_module_slots(&mut module_env, top_bodies, &ctx);
+    // 批 954 补扫：py 语料把用户顶层语句包装进合成 main 体（top_bodies
+    // 在该路径下只有函数定义）——main 的 body 也扫；retain 过滤保证
+    // main 内部局部变量不入种子
+    if let Some(AstNode::FuncDef { body: main_body, .. }) = funcs.get("main") {
+        scan_module_slots(&mut module_env, main_body, &ctx);
+    }
     module_env.slots.retain(|k, _| module_globals.contains(k));
     let evidence =
         collect_param_evidence(funcs, Some(&body_rets), Some(&env_cache));
@@ -3043,6 +3049,13 @@ mod tests {
 #[cfg(test)]
 mod tests_954 {
     use super::*;
+
+    fn assign(lhs: &str, rhs: AstNode) -> AstNode {
+        AstNode::Assign(
+            Box::new(AstNode::Var(lhs.to_string())),
+            Box::new(rhs),
+        )
+    }
 
     /// 批 954：module_env 种子只保留 module_globals 名单内的槽——
     /// 合成 main 体内部的局部变量不跨函数泄漏。
