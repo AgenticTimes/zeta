@@ -86,7 +86,7 @@ pub struct Resolver {
     /// 批 964（keyfn 单态化第一段）：f64 通道特化 FuncDef 克隆的登记
     /// 存储。gen 的 key= 臂发现非内建 keyfn＋f64 元素时克隆登记；
     /// 第二段（C 双签名＋mir_map 补 lower 循环）接手消费。
-    keyfn_specializations: RefCell<Vec<AstNode>>,
+    keyfn_specializations: std::rc::Rc<std::cell::RefCell<Vec<AstNode>>>,
     /// 批 940：顶层语句（main 体）——调用点证据扫描的覆盖面。registered_funcs
     /// 只含函数体，顶层 `show(get_data())` 这类调用点此前全部漏收。
     top_level_stmts: RefCell<Vec<AstNode>>,
@@ -199,7 +199,9 @@ impl Resolver {
             star_params: RefCell::new(HashMap::new()),
             registered_funcs: HashMap::new(),
             checker_plan: RefCell::new(None),
-            keyfn_specializations: RefCell::new(Vec::new()),
+            keyfn_specializations: std::rc::Rc::new(std::cell::RefCell::new(
+                Vec::new(),
+            )),
             top_level_stmts: RefCell::new(Vec::new()),
             module_resolver: ModuleResolver::new("."),
             macro_expander: MacroExpander::new(),
@@ -6250,7 +6252,7 @@ fn shim_class_normalize(t: &Type) -> Type {
     pub fn keyfn_spec_store(
         &self,
     ) -> std::rc::Rc<std::cell::RefCell<Vec<AstNode>>> {
-        std::rc::Rc::new(self.keyfn_specializations.clone())
+        self.keyfn_specializations.clone()
     }
 
     /// 批 964：登记 keyfn 特化克隆（按 mangled 名去重）。
@@ -6273,6 +6275,11 @@ fn shim_class_normalize(t: &Type) -> Type {
             .iter()
             .find(|d| matches!(d.as_ref(), AstNode::FuncDef { name: n, .. } if n == name))
             .map(|d| d.as_ref().clone())
+    }
+
+    /// 批 965：取走全部 keyfn 特化（main 的 mir_map 收集后补 lower）。
+    pub fn take_keyfn_specializations(&self) -> Vec<AstNode> {
+        self.keyfn_specializations.borrow_mut().drain(..).collect()
     }
 
     pub fn get_registered_funcs(&self) -> Vec<AstNode> {

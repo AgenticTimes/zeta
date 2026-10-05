@@ -151,7 +151,14 @@ impl MirGen {
                 // the symbol address instead, and leave the env read above alone:
                 // that keeps statement and slot allocation identical to before, so
                 // the only observable delta here is what the slot ends up holding.
-                if self.func_ret_types.contains_key(name)
+                // 批 965：keyfn 单态化特化副本（__keyf64 后缀）也发
+                // FuncAddr——副本 Mir 由 main 的补 lower 循环注入 mir_map，
+                // codegen 据此生成其 LLVM 函数；条件不含 func_ret_types
+                //（副本不在注解表）。
+                let is_keyfn_spec = name.contains("__ZKEYF64_")
+                    && !self.global_consts.contains_key(name)
+                    && !self.type_decls.contains_key(name);
+                if (self.func_ret_types.contains_key(name) || is_keyfn_spec)
                     && !self.global_consts.contains_key(name)
                     && !self.type_decls.contains_key(name)
                 {

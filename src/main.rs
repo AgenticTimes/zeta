@@ -567,9 +567,14 @@ fn find_runtime_obj(name: &str) -> Option<std::path::PathBuf> {
 /// G.2 (`tools/asan_run.sh`): extra flags for the final link. Unset by default,
 /// so a normal compile links exactly the command it always linked.
 fn extra_ld_flags() -> Vec<String> {
-    std::env::var("ZETA_EXTRA_LDFLAGS")
+    // 批 965：keyfn 单态化的 dlsym 依赖——用户函数的特化副本符号必须
+    // 出现在导出表（静态可执行默认无 export trie），-export_dynamic
+    // 导出全部符号供 dlsym(RTLD_DEFAULT) 解析
+    let mut flags: Vec<String> = std::env::var("ZETA_EXTRA_LDFLAGS")
         .map(|s| s.split_whitespace().map(String::from).collect())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    flags.push("-Wl,-export_dynamic".to_string());
+    flags
 }
 
 /// The option surface `main` actually parses. Batch 350 (#80 ①) exists because the
@@ -902,6 +907,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     })
                     .collect();
+                // 批 965（keyfn 单态化第二段）：key= 降级期登记的特化副本
+                //（f64 通道）补 lower 进 mir_map——副本的调用点已在各函数
+                // MIR 里（FuncAddr + py_max_key_f64）。
+                if std::env::var("ZETA_PROBE_CHECKER").is_ok() {
+                    eprintln!(
+                        "TAKE-LOOP: reached (mir_map keys will follow)"
+                    );
+                }
+                for spec in resolver.take_keyfn_specializations() {
+                    if let AstNode::FuncDef { name, .. } = &spec {
+                        if std::env::var("ZETA_PROBE_CHECKER").is_ok() {
+                            eprintln!("TAKE-LOOP: lowering {}", name);
+                        }
+                        let mut m = resolver.lower_to_mir(&spec);
+                        m.name = Some(name.clone());
+                        mir_map.insert(name.clone(), m);
+                    }
+                }
 
                 // PY-A: merge synthetic lambda/closure functions into the
                 // codegen set (previously dropped — closures never compiled).
