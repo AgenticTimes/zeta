@@ -49,6 +49,23 @@ fn lower_all(src: &str) -> Vec<Mir> {
 /// （**从磁盘读**），这是批次 154/159 那一族（模块前缀键、再导出名）唯一的到达路径。
 /// 降形完之后临时目录删掉——MIR 已经在返回值里。
 fn lower_multi(files: &[(&str, &str)], entry: &str) -> Vec<Mir> {
+    lower_multi_impl(files, entry, true).0
+}
+
+/// `lower_multi` 的容许截断变体（批次 10046 起）。理由和 `lower_all_allowing_truncation`
+/// 同一条：批次 393 那一族的失败模式是"体内 `use` 打不开 ⇒ 语句停住 ⇒ 该项及其后各项
+/// 不进程序"，走 `lower_multi` 时这类臂的红点全落在"解析吃满输入"那句前置断言上、
+/// 后面的形状断言根本不执行；把剩余文本当成一格读数，各臂的红格才互不相同。
+/// 顺带支持子目录模块名（`m1/a.z`）——大括号写法 `use m1::{a, b};` 要求 `m1` 是个包目录。
+fn lower_multi_allowing_truncation(files: &[(&str, &str)], entry: &str) -> (Vec<Mir>, String) {
+    lower_multi_impl(files, entry, false)
+}
+
+fn lower_multi_impl(
+    files: &[(&str, &str)],
+    entry: &str,
+    assert_full_parse: bool,
+) -> (Vec<Mir>, String) {
     static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
         "zeta_regression_history_{}_{}",
@@ -57,6 +74,10 @@ fn lower_multi(files: &[(&str, &str)], entry: &str) -> Vec<Mir> {
     ));
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("建临时目录失败: {e}"));
     for (name, src) in files {
+        if let Some(parent) = dir.join(name).parent() {
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|e| panic!("建 {name} 的父目录失败: {e}"));
+        }
         std::fs::write(dir.join(name), src)
             .unwrap_or_else(|e| panic!("写 {name} 失败: {e}"));
     }
@@ -67,9 +88,9 @@ fn lower_multi(files: &[(&str, &str)], entry: &str) -> Vec<Mir> {
         let dir2 = dir.clone();
         let entry_path2 = entry_path.clone();
         move || {
-            let mirs = lower_with_source_dir(&src, Some(&entry_path2));
+            let out = lower_pipeline(&src, Some(&entry_path2), assert_full_parse);
             let _ = std::fs::remove_dir_all(&dir2);
-            mirs
+            out
         }
     };
     std::thread::Builder::new()
@@ -102,11 +123,26 @@ fn lower_all_allowing_truncation(src: &str) -> (Vec<Mir>, String) {
     lower_pipeline(src, None, false)
 }
 
+/// 整个测试目标共用的解析串行锁（批次 10046 起）。
+/// `frontend/parser/top_level.rs:2048` 的 `PARSING_IMPORTED_MODULE` 是一颗进程级
+/// `static AtomicBool`，其注释写明"编译是单线程的，普通原子量足够"：resolver 在加载
+/// 模块前置 true、`parse_zeta` 之后复位，`synthesize_implicit_main` 读它来决定顶层项
+/// 要不要装进 `__zeta_module_body__` 载体。`cargo test` 默认并行跑用例，A 用例在加载
+/// 模块时 B 用例正在解析自己的顶层项 ⇒ B 读到 A 的位置、清单里凭空多一项载体。
+/// 实拍（本批）：同一份 16 格源码单跑 `--exact` 全绿，全量并行连跑三遍 3/3 红，
+/// 红在"顶层单段use_对照／大括号两形_顶层对照／词边界_赋值名以use开头"三格（后一格
+/// 源码里根本没有 `use`，是纯粹的串扰）。锁放在唯一的解析入口 `lower_pipeline` 上，
+/// 用例在子线程里取放，不与父线程的 `join` 互卡。
+static PARSE_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn lower_pipeline(
     src: &str,
     entry_path: Option<&std::path::Path>,
     assert_full_parse: bool,
 ) -> (Vec<Mir>, String) {
+    let _serial = PARSE_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (remaining, asts) = parse_zeta(src).unwrap_or_else(|e| panic!("解析失败: {e:?}"));
     if assert_full_parse {
         assert!(
@@ -6730,4 +6766,254 @@ fn main_guard_survives_parse_so_import_does_not_run_entry() {
         ),
     ];
     assert_eq!(want, hits, r#"批次 290：守卫 If 必须原样留在 MIR 里，被 import 模块的入口调用只能待在守卫子树内"#);
+}
+
+/// 批次 10046 用的格子读数：进得了 MIR 的函数清单 ＋ 解析停住后剩下的行数。
+/// 两份读数取自同一趟降形。体内 `use` 打不开时（来源批次 393 的原始症状），解析停在
+/// 第一个失败位置 ⇒ 该行之后的顶层项不再进程序 ⇒ 函数清单少项、剩余行数非 0；
+/// 体内 `use` 解析得过但不提升时，函数清单也少项，只是剩余行数为 0——两者靠这两份
+/// 读数区分得开。
+fn use_module_reading(mirs: &[Mir], remaining: &str) -> String {
+    let mut names: Vec<String> = mirs
+        .iter()
+        .map(|m| m.name.clone().unwrap_or_else(|| "~anon".to_string()))
+        .collect();
+    names.sort();
+    format!(
+        "清单=[{}] 未解析={}行",
+        names.join(","),
+        remaining.lines().count()
+    )
+}
+
+/// 被调符号名，去掉 MIR 给实例起的 `_<数字>` 后缀（`used_fn` 在调用点写作 `used_fn_1`）。
+fn call_names_normalized(m: &Mir) -> String {
+    let mut names: Vec<String> = call_symbols(m)
+        .into_iter()
+        .map(|s| match s.rsplit_once('_') {
+            Some((head, tail))
+                if !head.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) =>
+            {
+                head.to_string()
+            }
+            _ => s,
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names.join(",")
+}
+
+// ---- 批次 10046 夹具（来源批次 393：函数体里的 `use 路径;`）----
+const MYLIB_10046: &str = "fn helper() -> i64 { return 42 }\n";
+const M1_A_10046: &str = "fn from_a() -> i64 { return 11 }\n";
+const M1_B_10046: &str = "fn from_b() -> i64 { return 22 }\n";
+const ONLY_A_10046: &str = "fn only_a() -> i64 { return 5 }\n";
+const ONLY_B_10046: &str = "fn only_b() -> i64 { return 6 }\n";
+
+/// 来源批次 393（提交 `e7513474`，2026-09-24）：语句分发器没有 `use` 臂 ⇒ 函数体里的
+/// `use 路径;` 让 `parse_block_body` 失败 ⇒ 它所在的整个顶层项被丢掉 ⇒ 该行之后的每一项
+/// 都不进程序（实拍 `tests/unit-tests/quantum_basic.z` 丢 85 行、
+/// `tests/stdlib-foundation/fmt_time_env_test.z` 丢 47 行）。修法三段：
+///   ① `stmt.rs` 把 `parse_use_stmt` 挂进 pass/del/assert 那一格 `alt`（nom 的 21 臂上限）；
+///   ② 节点是真 `AstNode::Use`（不是空句），由 `top_level::hoist_statics_from` 提到模块级
+///      —— `Resolver::register` 只遍历顶层项，留在体里的 `use` 到不了加载模块那一步；
+///   ③ 提升按 `in_body` 收窄，顶层 `import a::b;` 就地生效、不被搬走。
+/// 站点选 ①（`src/frontend/parser/stmt.rs` 的 `parse_use_stmt`，本车道不在改这个文件）：
+/// 四臂 × 形状的 CLI 前置矩阵实测，本批在进程内打三条臂各自的那一格——
+///   A1 撤 `alt` 里的 `parse_use_stmt,`（＝回到批次 393 之前的状态）、
+///   A3 撤"两项时起 `Block`"那一支（大括号写法只留第一项）、
+///   A4 让 `parse_use_stmt` 返回 `AstNode::Ignore`（解析得过、但不加载模块）。
+/// A2（把 `kw_boundary(input, "use")` 换成裸前缀匹配）只在"调用名以 use 开头"那一格红
+/// （`used_fn(n)` 被当成 `use d_fn` 吃掉，调用点从 MIR 里消失），故该格额外带一份被调清单。
+/// ②③ 两段在 `top_level.rs`——本车道该文件有在制改动（未提交的 `parse_class` 三处），
+/// 还原源不能是 `git show HEAD:`（会把别人的在制品冲掉），故本批不变异，只在读数里锁住现状。
+#[test]
+fn body_local_use_is_parsed_and_hoisted_so_module_items_reach_mir() {
+    let mut got: Vec<(String, String)> = Vec::new();
+
+    // 1 体内单段 `use`，模块是真实文件（与 CLI 侧 `target/b10046/pkg/e_body.z` 同形）。
+    let (mirs, rem) = lower_multi_allowing_truncation(
+        &[
+            ("mylib.z", MYLIB_10046),
+            (
+                "e.z",
+                "fn wrapper() -> i64 {\n    use mylib::helper;\n    return helper() + 1\n}\n\nfn main() -> i64 {\n    println!(\"{}\", wrapper())\n    return 0\n}\n",
+            ),
+        ],
+        "e.z",
+    );
+    got.push(("体内单段use_真实模块".to_string(), use_module_reading(&mirs, &rem)));
+
+    // 2 同一份模块、`use` 写在顶层：与第 1 格同读数＝体内和顶层两条路等价（批次 337 那条
+    // `import` ≡ `use` 红线在本批的体内版）。A1/A4 在这一格都红不到，正说明它们是体内专属。
+    let (mirs, rem) = lower_multi_allowing_truncation(
+        &[
+            ("mylib.z", MYLIB_10046),
+            (
+                "e.z",
+                "use mylib::helper;\n\nfn wrapper() -> i64 { return helper() + 1 }\n\nfn main() -> i64 {\n    println!(\"{}\", wrapper())\n    return 0\n}\n",
+            ),
+        ],
+        "e.z",
+    );
+    got.push(("顶层单段use_对照".to_string(), use_module_reading(&mirs, &rem)));
+
+    // 3 完全不写 `use` 的基线：`helper` 不在清单里。这一格是正证据的另一半——前两格的
+    // `helper` 只能由那条 `use` 带进来，不是编译器自己找到的。
+    let (mirs, rem) = lower_multi_allowing_truncation(
+        &[
+            ("mylib.z", MYLIB_10046),
+            (
+                "e.z",
+                "fn wrapper() -> i64 { return helper() + 1 }\n\nfn main() -> i64 {\n    println!(\"{}\", wrapper())\n    return 0\n}\n",
+            ),
+        ],
+        "e.z",
+    );
+    got.push(("无use_基线".to_string(), use_module_reading(&mirs, &rem)));
+
+    // 4 嵌套块（`if` 体）里的 `use`：提升器按语句列表形状递归遍历。
+    let (mirs, rem) = lower_multi_allowing_truncation(
+        &[
+            ("mylib.z", MYLIB_10046),
+            (
+                "e.z",
+                "fn wrapper(n: i64) -> i64 {\n    if n > 0 {\n        use mylib::helper;\n        return helper() + n\n    }\n    return 0\n}\n\nfn main() -> i64 {\n    println!(\"{}\", wrapper(3))\n    return 0\n}\n",
+            ),
+        ],
+        "e.z",
+    );
+    got.push(("嵌套块体内use".to_string(), use_module_reading(&mirs, &rem)));
+
+    // 5 顶层一条同路径 + 两份体内同路径：同一路径只提一份，不产生第二个格子。
+    let (mirs, rem) = lower_multi_allowing_truncation(
+        &[
+            ("mylib.z", MYLIB_10046),
+            (
+                "e.z",
+                "use mylib::helper;\n\nfn one() -> i64 {\n    use mylib::helper;\n    return helper() + 1\n}\n\nfn two() -> i64 {\n    use mylib::helper;\n    return helper() + 2\n}\n\nfn main() -> i64 {\n    println!(\"{}\", one() + two())\n    return 0\n}\n",
+            ),
+        ],
+        "e.z",
+    );
+    got.push(("顶层加两份体内同路径".to_string(), use_module_reading(&mirs, &rem)));
+
+    // 6 两份体内 `use` 指向两个不同模块：两份都得提升，各自带进自己的函数。
+    let (mirs, rem) = lower_multi_allowing_truncation(
+        &[
+            ("m1a.z", ONLY_A_10046),
+            ("m1b.z", ONLY_B_10046),
+            (
+                "e.z",
+                "fn first() -> i64 {\n    use m1a::only_a;\n    return only_a() + 1\n}\n\nfn second() -> i64 {\n    use m1b::only_b;\n    return only_b() + 2\n}\n\nfn main() -> i64 {\n    println!(\"{}\", first() + second())\n    return 0\n}\n",
+            ),
+        ],
+        "e.z",
+    );
+    got.push(("两份体内use_两个模块".to_string(), use_module_reading(&mirs, &rem)));
+
+    // 7 大括号写法 `use m1::{a, b};` 在体里：一项一个模块文件，两项都得加载。
+    // A3（只留第一项）在这一格红＝`from_b` 从清单里消失，而函数本身还在。
+    let (mirs, rem) = lower_multi_allowing_truncation(
+        &[
+            ("m1/a.z", M1_A_10046),
+            ("m1/b.z", M1_B_10046),
+            (
+                "e.z",
+                "fn sum() -> i64 {\n    use m1::{a, b};\n    return from_a() + from_b()\n}\n\nfn main() -> i64 {\n    println!(\"{}\", sum())\n    return 0\n}\n",
+            ),
+        ],
+        "e.z",
+    );
+    got.push(("大括号两形_体内_真实模块".to_string(), use_module_reading(&mirs, &rem)));
+
+    // 8 同一写法在顶层的对照格。
+    let (mirs, rem) = lower_multi_allowing_truncation(
+        &[
+            ("m1/a.z", M1_A_10046),
+            ("m1/b.z", M1_B_10046),
+            (
+                "e.z",
+                "use m1::{a, b};\n\nfn sum() -> i64 { return from_a() + from_b() }\n\nfn main() -> i64 {\n    println!(\"{}\", sum())\n    return 0\n}\n",
+            ),
+        ],
+        "e.z",
+    );
+    got.push(("大括号两形_顶层对照".to_string(), use_module_reading(&mirs, &rem)));
+
+    // 9-11 三种拼法在体里、模块不存在（原症状的截断形状：看的是"其后的项还进不进程序"）。
+    let (mirs, rem) = lower_all_allowing_truncation(
+        "fn head() -> i64 { 1 }\n\nfn single() -> i64 {\n    use nonexistent::mylib;\n    return head() + 1\n}\n\nfn after_one() -> i64 { return 7 }\n\nfn main() -> i64 {\n    println!(\"{}\", single())\n    println!(\"{}\", after_one())\n    return 0\n}\n",
+    );
+    got.push(("体内单段use_模块不存在".to_string(), use_module_reading(&mirs, &rem)));
+
+    let (mirs, rem) = lower_all_allowing_truncation(
+        "fn head() -> i64 { 1 }\n\nfn list_form() -> i64 {\n    use nonexistent::other::{A, B};\n    return head() + 2\n}\n\nfn after_two() -> i64 { return 8 }\n\nfn main() -> i64 {\n    println!(\"{}\", list_form())\n    println!(\"{}\", after_two())\n    return 0\n}\n",
+    );
+    got.push(("体内大括号use_模块不存在".to_string(), use_module_reading(&mirs, &rem)));
+
+    let (mirs, rem) = lower_all_allowing_truncation(
+        "fn head() -> i64 { 1 }\n\nfn deep(n: i64) -> i64 {\n    if n > 0 {\n        use nonexistent::inner;\n        return head() + n\n    }\n    return 0\n}\n\nfn after_three() -> i64 { return 9 }\n\nfn main() -> i64 {\n    println!(\"{}\", deep(5))\n    println!(\"{}\", after_three())\n    return 0\n}\n",
+    );
+    got.push(("嵌套块体内use_模块不存在".to_string(), use_module_reading(&mirs, &rem)));
+
+    // 12 `use` 词边界（A2 的两种形状之一）：赋值名 `used`／`use_of`。CLI 侧 HEAD 与 A2 的
+    // 逐字节差为空 ⇒ 这一格四臂都不红，只作现状留档（见本批记录里的阴性读数）。
+    let (mirs, rem) = lower_all_allowing_truncation(
+        "fn head() -> i64 { 1 }\n\nfn uses_kw() -> i64 {\n    used = 3\n    use_of = 4\n    return head() + used + use_of\n}\n\nfn after_four() -> i64 { return 10 }\n\nfn main() -> i64 {\n    println!(\"{}\", uses_kw())\n    println!(\"{}\", after_four())\n    return 0\n}\n",
+    );
+    got.push(("词边界_赋值名以use开头".to_string(), use_module_reading(&mirs, &rem)));
+
+    let (mirs, rem) = lower_all_allowing_truncation(
+        "fn head() -> i64 { 1 }\n\nfn boundary(used: i64) -> i64 {\n    used\n    return head() + used\n}\n\nfn after_seven() -> i64 { return 11 }\n\nfn main() -> i64 {\n    println!(\"{}\", boundary(3))\n    println!(\"{}\", after_seven())\n    return 0\n}\n",
+    );
+    got.push(("词边界_裸名以use开头".to_string(), use_module_reading(&mirs, &rem)));
+
+    // 13 词边界的红格：被调名以 `use` 开头。去掉词边界检查后 `used_fn(n)` 被当成
+    // `use d_fn` 吃掉（CLI 实拍：301 → 289 行，`func: "used_fn_1"` 那条 Call 整个消失），
+    // 函数清单不动、只有被调清单看得见，所以这一格多带一份被调清单。
+    let (mirs, rem) = lower_all_allowing_truncation(
+        "fn used_fn(n: i64) -> i64 { return n }\n\nfn head() -> i64 { 1 }\n\nfn caller(n: i64) -> i64 {\n    used_fn(n)\n    return head() + n\n}\n\nfn after_eight() -> i64 { return 13 }\n\nfn main() -> i64 {\n    println!(\"{}\", caller(2))\n    println!(\"{}\", after_eight())\n    return 0\n}\n",
+    );
+    let caller_calls = call_names_normalized(mir(&mirs, "caller"));
+    got.push((
+        "词边界_调用名以use开头".to_string(),
+        format!(
+            "{} 被调=[{}]",
+            use_module_reading(&mirs, &rem),
+            caller_calls
+        ),
+    ));
+
+    // 14-16 顶层 `use`（走 `top_level.rs` 的规则，不经过本批变异站点）＋同路径去重。
+    let (mirs, rem) = lower_all_allowing_truncation(
+        "use nonexistent::top;\n\nfn head() -> i64 { 1 }\n\nfn plain() -> i64 { return head() + 1 }\n\nfn main() -> i64 {\n    println!(\"{}\", plain())\n    return 0\n}\n",
+    );
+    got.push(("顶层use_模块不存在".to_string(), use_module_reading(&mirs, &rem)));
+
+    let (mirs, rem) = lower_all_allowing_truncation(
+        "use nonexistent::shared;\n\nfn head() -> i64 { 1 }\n\nfn dup_one() -> i64 {\n    use nonexistent::shared;\n    return 1\n}\n\nfn dup_two() -> i64 {\n    use nonexistent::shared;\n    return 2\n}\n\nfn main() -> i64 {\n    println!(\"{}\", dup_one() + dup_two())\n    return 0\n}\n",
+    );
+    got.push(("同路径三份use去重".to_string(), use_module_reading(&mirs, &rem)));
+
+    let want: Vec<(String, String)> = vec![
+        ("体内单段use_真实模块".to_string(), "清单=[helper,main,wrapper] 未解析=0行".to_string()),
+        ("顶层单段use_对照".to_string(), "清单=[helper,main,wrapper] 未解析=0行".to_string()),
+        ("无use_基线".to_string(), "清单=[main,wrapper] 未解析=0行".to_string()),
+        ("嵌套块体内use".to_string(), "清单=[helper,main,wrapper] 未解析=0行".to_string()),
+        ("顶层加两份体内同路径".to_string(), "清单=[helper,main,one,two] 未解析=0行".to_string()),
+        ("两份体内use_两个模块".to_string(), "清单=[first,main,only_a,only_b,second] 未解析=0行".to_string()),
+        ("大括号两形_体内_真实模块".to_string(), "清单=[from_a,from_b,main,sum] 未解析=0行".to_string()),
+        ("大括号两形_顶层对照".to_string(), "清单=[from_a,from_b,main,sum] 未解析=0行".to_string()),
+        ("体内单段use_模块不存在".to_string(), "清单=[after_one,head,main,single] 未解析=0行".to_string()),
+        ("体内大括号use_模块不存在".to_string(), "清单=[after_two,head,list_form,main] 未解析=0行".to_string()),
+        ("嵌套块体内use_模块不存在".to_string(), "清单=[after_three,deep,head,main] 未解析=0行".to_string()),
+        ("词边界_赋值名以use开头".to_string(), "清单=[after_four,head,main,uses_kw] 未解析=0行".to_string()),
+        ("词边界_裸名以use开头".to_string(), "清单=[after_seven,boundary,head,main] 未解析=0行".to_string()),
+        ("词边界_调用名以use开头".to_string(), "清单=[after_eight,caller,head,main,used_fn] 未解析=0行 被调=[head,used_fn]".to_string()),
+        ("顶层use_模块不存在".to_string(), "清单=[head,main,plain] 未解析=0行".to_string()),
+        ("同路径三份use去重".to_string(), "清单=[dup_one,dup_two,head,main] 未解析=0行".to_string()),
+    ];
+    assert_eq!(want, got);
 }
