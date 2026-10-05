@@ -29850,3 +29850,12 @@ fallback＋borrow 4；新 InferContext＝typecheck_unified 主路径。开关
 验证：库 250/250、全量差分 2845/2845、python_style 479/0。
 收敛剩余（段 2/3）：容器/表达式形状差异清单、borrow 4 处迁移、
 旧轨 infer_type 退役。
+
+## 批次 970（2026-10-05）：双轨合一段 2——borrow 迁移统一推断
+
+borrow.rs/borrow_enhanced.rs 4 处 resolver.infer_type 迁移到
+InferContext 统一推断（unwrap_or I64 保底对齐旧轨兜底）——float RHS
+的 declare 型变准（旧轨 FloatLit 落 I64 兜底已实证）。assign-RHS
+形状对照扩充入 tests_dual_track。验证：库 250/250、全量差分
+2845/2845、python_style 479/0。收敛剩余（段 3）：旧轨 infer_type
+退役（typecheck 内部 10 处＋fallback 迁移后）。
