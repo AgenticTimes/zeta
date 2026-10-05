@@ -29948,3 +29948,15 @@ compile_perf.txt 的 22.51s 基线读数**不可复现**（当时测量噪声，
 AGENTS 教训 3 假读数族）；"7.5x 提速"不存在，large-z 归因任务
 **关闭**，基线值以 2.7-3.0s 为准。轴 C 实质状态：无已知性能回归，
 intern/clone 专项维持低优先登记。
+
+## 批次 977（2026-10-05）：双轨合一段 2/3 残余——容器形状断言升级
+
+- DictLit 直等价断言锁定（批 971 补齐生效：双轨 Named(Map_i64_i64)
+  一致）
+- FieldAccess/Call/Subscript 按 lenient 语义等价锁定（新轨 ERR 回落
+  I64 与旧轨兜底一致——infer_unified 消费语义）；new_track_lenient
+  对照辅助
+- ArrayLit 并入 assign-RHS 对照（已锁）
+验证：库 249/249、全量差分 2845/2845、python_style 479/0。
+双轨段 4 残余评估：Migrator 死块已结构级删除（批 973）——段 4 实质
+完成；infer_type 保留为回落实现（终态）。
