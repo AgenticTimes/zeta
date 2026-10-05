@@ -11,6 +11,17 @@
 
 use crate::middle::types::Type;
 
+/// keyfn 特化副本的名字前缀。本模块是唯一铸造点（`spec_name`）；
+/// C 桥合同侧（backend/codegen/signature_table.rs）经 re-export 引用
+/// 同一常量，漂移在编译期不可能。
+pub const SPEC_PREFIX: &str = "__ZKEYF64_";
+
+/// 铸造特化副本名：`kf` ⇒ `__ZKEYF64_kf`。原名入 mir_map 会覆盖原
+/// 函数的 MIR（批 965 实证），登记前必须改名。
+pub fn spec_name(orig: &str) -> String {
+    format!("{}{}", SPEC_PREFIX, orig)
+}
+
 /// 分桥裁决。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum KeyBridge {
@@ -81,6 +92,14 @@ mod tests {
 
     fn t(ty: Type) -> Option<Type> {
         Some(ty)
+    }
+
+    #[test]
+    fn spec_name_mints_canonical_form() {
+        assert_eq!(spec_name("kf"), "__ZKEYF64_kf");
+        assert_eq!(spec_name("abs"), "__ZKEYF64_abs");
+        // 前缀常量与铸造函数同源（消费方 codegen 按 contains 匹配）
+        assert!(spec_name("kf").starts_with(SPEC_PREFIX));
     }
 
     #[test]

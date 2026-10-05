@@ -37,7 +37,8 @@ mod call_var;
 mod lower_closure;
 mod call_dispatch;
 // 批 992（提案③核心）：key= 臂声明式分派（纯函数＋全矩阵单测）。
-mod keyfn_bridge;
+// 批 993：pub(crate)——签名表（backend）re-export 其 SPEC_PREFIX。
+pub(crate) mod keyfn_bridge;
 mod call_expr_lit;
 mod call_flow;
 mod stmt_assign;

@@ -7124,7 +7124,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 //（i64 元素走 py_max_key_i64_f64 的 sitofp 桥，批 989——
                 // 兜底签名与两桥的 keyfn 指针型一致，均为 double(f64)）。
                 // 批 989：此前三连重复块（967/974/979+984 各留一份）并一。
-                if name.contains("__ZKEYF64_") {
+                if name.contains(signature_table::KEYFN_SPEC_PREFIX) {
                     let f = match self.module.get_function(name) {
                         Some(f) => f,
                         None => self.module.add_function(

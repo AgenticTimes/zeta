@@ -79,7 +79,9 @@ pub const KEYFN_PTR_CONTRACT: Sig = Sig {
 
 /// keyfn 特化副本的名字前缀。铸造点唯一：call_dispatch key= 臂
 /// （src/middle/mir/gen/call_dispatch.rs 登记块，批 989 后为唯一铸造处）。
-pub const KEYFN_SPEC_PREFIX: &str = "__ZKEYF64_";
+pub use crate::middle::mir::r#gen::keyfn_bridge::SPEC_PREFIX as KEYFN_SPEC_PREFIX;
+// （字面量唯一铸造点在 middle 层 keyfn_bridge.rs；此处 re-export，
+//  漂移即编译错误。）
 
 /// 实际签名是否符合预期（类别逐一相等，参数个数含在切片比较内）。
 pub fn sig_matches(ret: ValTy, params: &[ValTy], expected: Sig) -> bool {

@@ -95,7 +95,7 @@ impl MirGen {
             // 批 967：keyfn 单态化特化副本的裸读 ⇒ FuncAddr。独立早
             // 分支——副本不在 module_globals 名单，env-read 分支内的
             // FuncAddr 块永远走不到（实拍 keyfn 参数收 0x103）
-            if name.contains("__ZKEYF64_")
+            if name.contains(super::keyfn_bridge::SPEC_PREFIX)
                 && !self.global_consts.contains_key(name)
                 && !self.type_decls.contains_key(name)
             {
@@ -168,7 +168,7 @@ impl MirGen {
                 // FuncAddr——副本 Mir 由 main 的补 lower 循环注入 mir_map，
                 // codegen 据此生成其 LLVM 函数；条件不含 func_ret_types
                 //（副本不在注解表）。
-                let is_keyfn_spec = name.contains("__ZKEYF64_")
+                let is_keyfn_spec = name.contains(super::keyfn_bridge::SPEC_PREFIX)
                     && !self.global_consts.contains_key(name)
                     && !self.type_decls.contains_key(name);
                 if (self.func_ret_types.contains_key(name) || is_keyfn_spec)

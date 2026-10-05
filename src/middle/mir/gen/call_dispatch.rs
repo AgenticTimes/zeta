@@ -1721,7 +1721,7 @@ call, no NULL-handle dereference).",
                             };
                             let kf_float =
                                 keyfn_returns_f64(&self.func_ret_types, &ka[1]);
-                            let mangled = format!("__ZKEYF64_{}", nm);
+                            let mangled = super::keyfn_bridge::spec_name(nm);
                             let already = store.borrow().iter().any(|a| {
                                 matches!(
                                     a,
@@ -1752,8 +1752,7 @@ call, no NULL-handle dereference).",
                                         if let Some(p0) = params.first_mut() {
                                             p0.1 = "f64".to_string();
                                         }
-                                        *name =
-                                            format!("__ZKEYF64_{}", nm);
+                                        *name = super::keyfn_bridge::spec_name(nm);
                                     }
                                     store.borrow_mut().push(full);
                                 }
@@ -2018,7 +2017,7 @@ call, no NULL-handle dereference).",
                     if let (AstNode::Var(nm), Some(store)) =
                         (&k, self.keyfn_spec_store.as_ref())
                     {
-                        let mangled = format!("__ZKEYF64_{}", nm);
+                        let mangled = super::keyfn_bridge::spec_name(nm);
                         let registered = store.borrow().iter().any(|a| {
                             matches!(
                                 a,
