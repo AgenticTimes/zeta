@@ -32928,3 +32928,28 @@ Invariant 160 各成小片。
 空；test_simple_break rc=42 与 CPython 一致；门禁窗口 3 rc=0——差
 分 285/285、python_style 42/42、official 18/18、语料 40/40；六金用
 例全绿；库 265/265。
+
+## 批次 1004（2026-10-06）：轴 D 第二刀续——Call 臂余下 11 子族迁出＋1003 孤儿接线（9ab7f1bf）
+
+1. **批 1003 隐藏缺口修复**：checkout 舞步丢失三个调用点替换——
+   emit_try_setjmp/emit_spawn_thunk/emit_array_get_inline 成无主死
+   代码（mod.rs 又缺模块声明＝双重死代码，门禁照绿）。本批接线并补
+   声明。教训：**checkout 恢复后必须核对本批全部编辑仍在工作树**。
+2. **续拆 11 自含子族**（join/call_i64/norm_index/ptr_read/ptr_write/
+   is_null/ptr_offset/replace/syscall/capy_store/capy_load）统一签名
+   迁 codegen_call_arm.rs（14 方法 530 行）；ptr_offset 带 type_args。
+3. **臂数断言制度化**：替换前后 MirStmt 标记计数相等由脚本强制
+   （70==70）——批 1002 五臂丢失教训的制度化。
+4. **中途事故**：capy_load 块字符串内花括号骗过朴素括号计数 ⇒
+   codegen.rs 截断 4,625 行——恢复后改剥字符串/行注释的稳健计数器。
+
+**验证**：五路 IR 基线逐字节零变；门禁窗口 4 差分 285/285、official
+26/26、语料 40/40 全绿；python_style 59/60 的 t273_import_variable
+复跑两遍全 PASS（模块加载时序抖动，教训 3 定性，非本批回归）；七金
+用例全绿；库 265/265。codegen.rs 8,555→8,143 行；codegen_call_arm.rs
+530 行 14 方法。
+
+**第三梯队裁定请求（按批 999 台账在册）**：轴 B 值标签大弧（根治 i64
+槽双义，keyfn 桥值类别核对依赖它）、提案② MIR 内联（性能向，正确性
+已有护栏）、backlog #36 selfhost 91 行（表示层）/#26 JIT trap 族——
+三项优先级待用户裁定后续批推进。
