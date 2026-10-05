@@ -660,6 +660,24 @@ fn ret_expr_ty(e: &AstNode, env: &TypeEnv, ctx: &InferCtx) -> Option<Type> {
     if let AstNode::Call { method, .. } = e {
         return ctx.ret_types.get(method).cloned();
     }
+    // 一元运算 Return（批 968）：-x/~x 操作数槽为数值标量或 BigInt ⇒
+    // 同型（复用批 921 的 is_numeric_ty 语义）；not ⇒ Bool
+    if let AstNode::UnaryOp { op, expr } = e {
+        match op.as_str() {
+            "not" => return Some(Type::Bool),
+            "-" | "~" => {
+                if let AstNode::Var(n) = &**expr {
+                    if let LatticeTy::Known(t) = env.get_slot(n.as_str()) {
+                        if is_numeric_ty(&t) {
+                            return Some(t);
+                        }
+                    }
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
     // 列表字面量 Return ⇒ DynamicArray(元素型)（批 935 补形态）
     if let AstNode::ArrayLit(elems) = e {
         return uniform_elem_lat(elems)
@@ -2438,6 +2456,54 @@ mod tests {
             env.get_slot("y"),
             LatticeTy::known(Type::F64),
             "or 异型 ⇒ x 不窄化 ⇒ 字段读推不出"
+        );
+    }
+
+    /// return -v：操作数槽 F64 ⇒ 返回型 F64（批 968，复用 is_numeric_ty）。
+    #[test]
+    fn return_unary_neg_types_fn() {
+        let mut env = TypeEnv::new();
+        env.meet_slot("v", LatticeTy::known(Type::F64));
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "neg",
+            &[AstNode::Return(Box::new(AstNode::UnaryOp {
+                op: "-".to_string(),
+                expr: Box::new(var("v")),
+            }))],
+            &ctx,
+        );
+        assert_eq!(env.fn_rets.get("neg"), Some(&Type::F64));
+    }
+
+    /// return !b：操作数槽 Bool ⇒ Bool（批 968，not ⇒ Bool 正确传播）。
+    #[test]
+    fn return_unary_not_types_bool() {
+        let mut env = TypeEnv::new();
+        env.meet_slot("b", LatticeTy::known(Type::Bool));
+        let ctx = InferCtx {
+            ret_types: &HashMap::new(),
+            type_decls: &HashMap::new(),
+            module_globals: &Default::default(),
+        };
+        infer_fn_body(
+            &mut env,
+            "neg",
+            &[AstNode::Return(Box::new(AstNode::UnaryOp {
+                op: "not".to_string(),
+                expr: Box::new(var("b")),
+            }))],
+            &ctx,
+        );
+        assert_eq!(
+            env.fn_rets.get("neg"),
+            Some(&Type::Bool),
+            "not ⇒ Bool 正确传播"
         );
     }
 
