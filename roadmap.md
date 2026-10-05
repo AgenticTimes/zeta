@@ -28316,3 +28316,90 @@ assert_full_parse)`，新增变体 `lower_all_allowing_truncation`：不再断"�
 - 编译零错误；四臂全部编译通过＝每臂红点是真读数而不是编不过
 - 零 `src/` 改动＋被测件 md5 与上批同一颗 ⇒ 按 2026-10-03 节奏不跑抽样窗口
 - 滞留读数（代码笔 `68ddbff7` 落地后实测）：`bootstrap..cleanup` = 43、`cleanup..bootstrap` = 347
+
+## 批次 10042（2026-10-05，#20005 第三十一批：把历史缺陷做成进程内单元测试——取余地板语义的两层折叠位）
+
+### 一、来源与站点（零 `src/` 改动）
+
+| 项 | 内容 |
+|---|---|
+| 来源批次一 | 主树批次 328（代码 `c7e4f7e8`，2026-09-22，台账 `roadmap.md:10617`）：`%` 走地板语义（折叠＋下沉双点） |
+| 站点一 | `src/middle/ctfe/value.rs:286-301`（`ConstValue::binary_op_int` 的百分号臂；328 新写的是 :294-299 那一段）＝i64 常量折叠层 |
+| 来源批次二 | 旁路 cleanup 车道批次 642（代码 `adc0ffba`，2026-09-29）。**批次编号重合提示**：与本树 `roadmap.md:25112` 那节主树批次 642（名绑定族、已回退）同号不同批，引用以哈希为身份 |
+| 站点二 | `src/middle/ctfe/evaluator.rs:190-205`（`eval_i128_tree` 的百分号臂，注释自陈 "Python modulo: sign of the divisor"）＝i128 树求值层 |
+| 祖先核验 | `git merge-base --is-ancestor c7e4f7e8 HEAD` 与 `adc0ffba HEAD` 均返回真（本树在册） |
+| 在册冲突检查 | `grep -c "批次 328" tests/regression_history.rs` = 0；642 在书内被引用 8 次，但都指向它的比较渲染臂（`roadmap.md:26129`、本文件 :945/:4721/:4822 那几处），取余臂没人钉 |
+
+328 记录自陈这一处有两个实现点："字面量走 CTFE、变量走 codegen，所以两处都得改，只补一处会一个对一个错"。
+本批实测把"两处"细化成**三处**：i64 常量层（value.rs）、i128 树求值层（evaluator.rs）与出码层
+`build_floormod_int`（`src/backend/codegen/codegen.rs`）。前两处落在 MIR 上、且站点文件不在本车道
+的回避面内 ⇒ 各钉一条；第三处在后端，属不碰的改动面 ⇒ 不做变异，登记在余项。
+
+### 二、本批两条测试
+
+两条各六格、各一条 `assert_eq!`，期望值全部来自 CPython 现场 ＋ 同一份源在 HEAD 上的
+`--dump-mir` 实拍（两侧六格一字相同；夹具 `/tmp/b10042/probe_const.z`、读数
+`/tmp/b10042/probe_const.out` 与 `/tmp/b10042/probe_print.out`）。
+
+1. `named_const_modulo_folds_with_the_divisors_sign`（观测点＝MIR 的 `global_consts` 表）
+   `const 名: int = 字面量 % 字面量` 的折叠结果直接落表，六格＝
+   `-7 % 3`→`2`、`7 % -3`→`-2`、`-7 % -3`→`-1`、`8 % 3`→`2`、`6 % -3`→`0`、`-6 % 3`→`0`。
+   后三格是对照组（两种语义同值），用来把"这一臂整体在跑"与"补符号那一半坏了"分开。
+2. `print_argument_modulo_folds_with_the_divisors_sign`（观测点＝`print` 实参改写）
+   同一组六个表达式改写成 `print(...)`，折叠值以十进制字符串下发给 `println_str`
+   ⇒ 读 `VoidCall{args:[N]}` 的 `exprs[N]`。逐格单独降一趟 MIR，理由与批次 10037 那条相同：
+   合并降形时未折叠的格会换发射路径，"第 i 个 println 调用"与"第 i 格"对不上号。
+
+### 三、六臂变异矩阵（日志 `/tmp/b10042/matrix_out.txt` 与 `matrix_out_2b.txt`；
+逐臂原始输出 `arm_<臂名>_<用例名>.log`；还原源固定 `git show HEAD:<路径>`，
+应用前断言锚点在 HEAD 态出现 1 次，应用后断言 md5 不等于还原态，跑完断言回到
+`value.rs = b3940978…`／`evaluator.rs = 4b5c4b0a…`）
+
+HEAD 两跑：两条用例皆绿（`ok=1 failed=0` ×2）⇒ 格子清单逐次稳定，`want` 不是偶然次序。
+每臂同时对**两条**用例跑一遍，用来量两层之间是否互为备份。
+
+| 臂 | 站点 | 撤成什么 | 第一条（i64 层） | 第二条（i128 层） |
+|---|---|---|---|---|
+| M1 | value.rs | 328 的改前写法 `Ok(left % right)`（截断语义） | **红 2/6**：`NEG_LHS` 实得 `-1`、`NEG_RHS` 实得 `1` | 绿 |
+| M2 | value.rs | 只去掉 `r != 0 &&` 整除守卫 | **红 1/6**：`EXACT_NEG_RHS`（`6 % -3`）实得 `-3` | 绿 |
+| M6 | value.rs | 让这一臂直接失败（返回除错过） | **红 6/6**：六格全读回"表里没有这一项"（正证据：六格都依赖这一臂在跑） | 绿 |
+| M3 | evaluator.rs | 撤成截断语义 `Some((m, false))` | 绿 | **红 2/6**：`-7 % 3` 实得 `-1`、`7 % -3` 实得 `1` |
+| M4 | evaluator.rs | 只去掉 `m != 0 &&` 整除守卫 | 绿 | **红 1/6**：`print(6 % -3)` 实得 `-3` |
+| M5 | evaluator.rs | 让这一臂弃权（返回 `None`） | 绿 | **红 6/6**：六格形状从 `StringLit` 退成 `IntLit`，**数值六格一字未变** |
+
+读数要点（写进两条用例的头注）：
+
+1. **六臂零阴性**，且每条臂只红自己那一层的用例 ⇒ 328 与旁路 642 的两层折叠互不备份，
+   各钉一条是必要的，不是重复。
+2. M1 与 M2 的坏格集不相交（补符号那一半 ／ 整除时别补那一半），M3 与 M4 同理
+   ⇒ 每条臂内部的两件事各有格子，不是靠一条格子顺带钉住。
+3. M5 的六格红是**形状**红：弃权后 i64 层经普通下型仍把正确的整数槽发下来（`IntLit(2)` 等），
+   所以第二条用例对"这一臂在不在"敏感六格、对"这一臂算得对不对"只敏感三格
+   （M3 的两格 ＋ M4 的一格）。这一条差异写进了头注，不当成整臂全锁。
+4. 首版 M2 的替换文本把 `Ok(if ...)` 的右括号提前闭合，编译失败（`value.rs:425` 处
+   `unexpected closing delimiter`）被脚本如实报成 `BUILD-FAIL rc=101`，没有冒充红点；
+   修正括号后重跑得上面的 1/6。
+
+### 四、仍未锁的（记在 backlog #20005 余项，未占新号）
+
+- 328 的第二个实现点＝出码层 `build_floormod_int`（`src/backend/codegen/codegen.rs`，
+  变量操作数走那里）。后端在本车道的回避面内 ⇒ 未做变异；该半现由在册差分夹具
+  `tests/diff/cases/numeric_mod_dyn_neg.dcase` 在运行期承担，进程内这一格没人钉。
+- `ConstValue::binary_op_uint`（现 :350）的百分号臂按 Rust 无符号取余写，无符号下截断＝地板，
+  本来就没有 328 要修的那件事 ⇒ 本批不写格子；如将来无符号侧改道（比如带符号转换），
+  这条用例不会提醒。
+- 旁路 642 同一函数里的整除臂（`"//" | "floordiv"`，批次 643 钉过别名那一半）与
+  比较臂（批次 665 钉过）各自有格子；本批只补取余那一臂，三臂互不备份。
+
+### 五、检查节奏（2026-10-03 节奏：只跑改到的目标）
+
+- `cargo test --release -p zetac --test regression_history` → **66 passed / 0 failed**（0.04 秒，
+  其中本批 +2 条）
+- `cargo test --release -p zetac --lib` → **145 passed / 0 failed**（0.32 秒，一字不变）
+- `cargo test --release -p zetac --lib ctfe` → 145 filtered out／0 成员：`ctfe` 模块没有
+  `#[cfg(test)]` 单元测试，所以"改到的模块内部测试"这一格只能由 `--lib` 全套承担（如实记录，
+  不写成 0 通过＝绿的假象）
+- 编译零错误；六臂全部编译通过（M2 首版除外，见上）＝每臂红点是真读数而不是编不过
+- 零 `src/` 改动＋被测件 `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10`
+  与 10025 以来同一颗 ⇒ 按节奏不跑抽样窗口
+- 滞留读数（代码笔 `591a58ba` 落地后实测）：`bootstrap..cleanup` = 45、`cleanup..bootstrap` = 353
