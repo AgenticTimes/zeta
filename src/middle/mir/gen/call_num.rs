@@ -167,6 +167,28 @@ impl MirGen {
                 // 批 982 补：登记块——NumericBuiltin 入口先于 call_dispatch
                 // 的 key= 臂执行，store 恒空导致特化发射永不触发（min/max
                 // 落旧路 flag=0）
+                // 批 984 补：float 注解 keyfn＋非 f64 元素 ⇒ 响亮告警
+                //（keyfn 返回域 float 而元素通道 i64 ⇒ 比较可能错序——
+                // 宁可响亮失败原则，静默错值更恶劣）
+                if let AstNode::Var(kn) = &ka[1] {
+                    let kf_ret_f64 = matches!(
+                        self.func_ret_types.get(kn.as_str()),
+                        Some(Type::F64) | Some(Type::F32)
+                    );
+                    let xs_lower = self.lower_expr(&args[0]);
+                    let elem_f64 = matches!(
+                        self.type_map.get(&xs_lower),
+                        Some(Type::DynamicArray(e))
+                            if matches!(**e, Type::F64 | Type::F32)
+                    );
+                    if kf_ret_f64 && !elem_f64 {
+                        crate::diag_warning!(
+                            "W0901",
+                            "min/max `key=` function `{}` returns float but the iterable elements are not floats — ordering may be wrong; annotate the iterable as a float list",
+                            kn
+                        );
+                    }
+                }
                 if let AstNode::Var(nm) = &ka[1] {
                     let mangled = format!("__ZKEYF64_{}", nm);
                     if !nm.starts_with("__")
@@ -178,6 +200,51 @@ impl MirGen {
                                     a,
                                     AstNode::FuncDef { name, .. }
                                         if *name == mangled
+                                )
+                            });
+                            if !already {
+                                if let Some(mut full) = self
+                                    .full_funcdefs
+                                    .get(nm.as_str())
+                                    .cloned()
+                                {
+                                    if let AstNode::FuncDef {
+                                        params,
+                                        ..
+                                    } = &mut full
+                                    {
+                                        if let Some(p0) = params.first_mut() {
+                                            p0.1 = "f64".to_string();
+                                        }
+                                    }
+                                    store.borrow_mut().push(full);
+                                }
+                            }
+                        }
+                    }
+                }
+                // 批 982 补：登记块——NumericBuiltin 入口先于 call_dispatch
+                // 的 key= 臂执行，store 恒空导致特化发射永不触发（min/max
+                // 落旧路 flag=0）
+                if std::env::var("ZETA_PROBE_CHECKER").is_ok() {
+                    eprintln!(
+                        "REG-BLOCK: nm={:?} starts_dunder={} has_full={}",
+                        ka[1],
+                        matches!(&ka[1], AstNode::Var(n) if n.starts_with("__")),
+                        format!("{:?}", ka[1]).chars().take(40).collect::<String>(),
+                    );
+                }
+                if let AstNode::Var(nm) = &ka[1] {
+                    let mangled0 = format!("__ZKEYF64_{}", nm);
+                    if !nm.starts_with("__")
+                        && self.full_funcdefs.contains_key(nm.as_str())
+                    {
+                        if let Some(store) = self.keyfn_spec_store.as_ref() {
+                            let already = store.borrow().iter().any(|a| {
+                                matches!(
+                                    a,
+                                    AstNode::FuncDef { name, .. }
+                                        if *name == mangled0
                                 )
                             });
                             if !already {
