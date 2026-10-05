@@ -29615,3 +29615,14 @@ tests/fixtures/src_root_historical/；删 paradigm_simple.rs（341 行幻觉
 死文件）/debug_test.rs；清 rmetaxtFyon/target_check* 构建缓存目录。
 src/ 根现仅剩真实源码。验证：编译零错误、库 233/233、差分抽样
 284/284、python_style 479/0。
+
+## 批次 950–951（2026-10-05）：轴 D——声明族与 Return 臂迁出 gen.rs
+
+- **批 950**：StructDef/EnumDef/ImplBlock/ConceptDef/TypeAlias/Method(有体)
+  六臂迁 gen/gen_decl.rs（ImplBlock 含 BATCH-438 类窗口）；gen.rs
+  3888→3851。细节：mod 名 r#gen_decl（gen 是 Rust 保留字）。
+- **批 951**：Return 臂（元组返回堆数组构造＋coerce 尾部）迁
+  gen/stmt_return.rs；gen.rs 3851→3798。
+- 验证（各批）：库测试 233/233、差分抽样（窗口 9）284/284。
+
+轴 D 累计：gen.rs 19,392 → 3,798（-80.4%），34 个族文件。
