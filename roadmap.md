@@ -29762,3 +29762,16 @@ gen.rs 剩余＝主流程＋分派＋降级核心＋gen 状态依赖辅助，迁
    值形态）需确认 FuncAddr 机制覆盖用户函数。
 5. 污染面：gen/resolver/main 三层新机制，需专门会话一次性成型
    （批 947 的中间态教训）。
+
+## 批次 964（2026-10-05）：keyfn 单态化第一段——特化存储＋克隆登记
+
+按批 963 设计的 1-2 层实施（行为零变）：
+- resolver：keyfn_specializations 存储＋keyfn_spec_store 共享句柄＋
+  register_keyfn_specialization（mangled 去重）＋find_full_funcdef
+  （完整定义源）
+- gen：keyfn_spec_store 共享字段＋with_full_funcdefs 快照注入
+  （resolver 构造 MirGen 时就地构建）；key= 臂发现非内建 keyfn＋
+  f64 元素 ⇒ 克隆 FuncDef（参数注解 f64）mangled 去重登记
+- 发射维持批 962 旧路（零变）；第二段接线：C double(*)(double)
+  双签名＋两条路径 mir_map 补 lower＋发射切 mangled 副本
+验证：库 246/246、全量差分 2845/2845、python_style 479/0。
