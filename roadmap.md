@@ -29742,3 +29742,23 @@ gen.rs 剩余＝主流程＋分派＋降级核心＋gen 状态依赖辅助，迁
   整数运算，返回值已错——比较域分派救不了；完整修复＝keyfn 按元素
   型单态化（monomorphize 机器，数天工程维持登记）。flag=0 行为＝
   现状零回归（全量差分 2845/2845、python_style 479/0、库 246/246）。
+
+## 批次 963（2026-10-05）：keyfn 本体单态化——完整设计方案入册（止损回滚实施尝试）
+
+实施尝试中发现函数值 ABI 的完整链深于单批范围，止损回滚（HEAD 状态
+验证全绿）。完整设计方案（留独立排期，数天工程）：
+
+1. **monomorphize.rs 不适用**：其替换机器面向显式泛型（TypeVariable
+   从 MIR 提取），用户 keyfn 无型变量无从替换。
+2. **克隆特化路线**（正确路线）：克隆 keyfn FuncDef、参数注解写元素
+   型（f64）、mangle 名（`ka__keyf64`）、登记进 resolver 特化存储；
+   main 的 mir_map 收集后**补一轮 lower**（两条路径：847 语料路径＋
+   selfhost 1179 mono 路径都要补）。
+3. **C 侧双签名**：key_is_f64=1 时 keyfn 指针签名必须 `double(*)(double)`
+   ——C 侧把元素的 i64 位模式 bitcast 成 double 传入（ka 副本参数
+   注解 f64 ⇒ codegen 生成 double(double) 签名匹配）；flag=0 维持
+   `int64_t(*)(int64_t)`。
+4. **函数值降级验证**：`ka__keyf64` 的函数地址槽降级（Var 函数名的
+   值形态）需确认 FuncAddr 机制覆盖用户函数。
+5. 污染面：gen/resolver/main 三层新机制，需专门会话一次性成型
+   （批 947 的中间态教训）。
