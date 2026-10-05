@@ -28403,3 +28403,102 @@ HEAD 两跑：两条用例皆绿（`ok=1 failed=0` ×2）⇒ 格子清单逐次�
 - 零 `src/` 改动＋被测件 `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10`
   与 10025 以来同一颗 ⇒ 按节奏不跑抽样窗口
 - 滞留读数（代码笔 `591a58ba` 落地后实测）：`bootstrap..cleanup` = 45、`cleanup..bootstrap` = 353
+
+
+## 批次 10043（2026-10-05，#20005 第三十二批：把历史缺陷做成进程内单元测试——整数字面量真除法的两层折叠位）
+
+### 一、来源与站点（零 `src/` 改动）
+
+| 项 | 内容 |
+|---|---|
+| 来源批次 | 主树批次 454（代码 `913e0a01`，2026-09-27，台账 `roadmap.md:21321`）：整数 `/` 是真除法——MIR 里抬型、出码按槽型分臂、常量折叠不折、声明面加标记 |
+| 站点一 | `src/middle/ctfe/evaluator.rs:791-805`＝AST 层 `ConstEvaluator` 里 `(AstNode::Lit(_), AstNode::Lit(_)) if op == "/"` 那一支：两个整数字面量相除时**不折**，把 `BinaryOp` 原样留给下游 |
+| 站点二 | `src/middle/ctfe/value.rs:274-285`＝`ConstValue::binary_op_int` 的斜杠臂（`Ok(left.wrapping_div(right))`，朝零截断）。454 那批只改了 AST 侧，这一层至今仍在折 |
+| 发射点（回避面） | `src/middle/mir/gen.rs:3640-3660` 把 `const` 折好的值写进 `Mir::global_consts`。主线在重构 `gen.rs` ⇒ 本批只观测、不做变异 |
+| 祖先核验 | `git merge-base --is-ancestor 913e0a01 HEAD` 返回真＝本树在册 |
+| 在册冲突检查 | 改前那版套件（`git show HEAD~1:tests/regression_history.rs`）里 `批次 454`、`真除法`、`wrapping_div` 三种串各 **0 次**＝这一族语义此前没人锁；词算子 `floordiv` 已由批次 643 那条（现 `tests/regression_history.rs:2412`）锁住，本批不重复 |
+
+454 的立场（字面量 `/` 的商是浮点、不许折成 i64）只落在 AST 那一层；`const X: int = 7 / 2` 走的是
+`value.rs` 另一层并且至今折叠成 3。两处结论都落在 MIR 读数上（前者是 `Call{func:"/"}` 加
+`println_f64`，后者是 `global_consts` 里的 `ConstValue::Int`）⇒ 各写一条测试。第二条是**现状锁**，
+不是"这一层已经按 454 改对"的证据：声明了 `int` 之后取截断商是自洽的，但它与 454 的口径差在哪一格
+算对，454 记录里没有裁定，所以只锁"当前读数长这样"，改动时本条必须红并强制重新取证。
+
+### 二、本批两条测试（共 11 格）
+
+第一条 `true_division_of_integer_literals_is_not_folded_at_the_ctfe_layer`＝六格，每格一条最小源，
+读 `div_and_print_shape` 压出的一格字符串（真除法在不在 MIR、打印走哪个 `println`、实参什么形状）：
+
+| 格 | 源 | 期望 |
+|---|---|---|
+| 1 | `print(7 / 2)` | `div->F64 \| println_f64 \| Var(F64)` |
+| 2 | `print(8 / 2)` | 同上（整除也要留浮点：Python 里 `8/2` 是 4.0） |
+| 3 | `x = 7 / 2` ＋ `print(x)` | 同上 |
+| 4 | `def f(): return 7 / 2` ＋ `y = f()` ＋ `print(y)` | 同上 |
+| 5 | `x = 6 * 2` ＋ `print(x)` | `no-div \| println_str \| StringLit("12")`（对照） |
+| 6 | `x = 3 + 4` ＋ `print(x)` | `no-div \| println_str \| StringLit("7")`（对照） |
+
+第二条 `const_declared_integer_division_folds_to_the_truncated_quotient`＝五格，一条源里五个
+`const`，读 `global_consts` 表：A `7 / 2`＝`3`、B `-7 / 2`＝`-3`、C `8 / 2`＝`4`、D `-8 / 3`＝`-2`、
+E `8 / 0`＝缺项。B／D 用来把"朝零截断"与"地板除"分开（地板应得 -4／-3）。
+
+期望值来源：CPython 现场 ＋ 本树 AOT 实拍（`/tmp/b10043/aot_c1` 打 `3.5`、rc=0）＋ `--dump-mir`
+逐格读数（`/tmp/b10043/probe3.py` 产的 `f_*.z`／`f_*.out`，合降一份在 `f_combined.out`）。逐格单降的理由
+同批次 10037／10042：合在一起降时未折叠的格会换发射路径，第 i 个 `println` 与第 i 格对不上号。
+
+### 三、变异矩阵（五臂跑完，汇总 `/tmp/b10043/matrix_out.txt`，逐臂日志 `/tmp/b10043/arm_M*_*.log`）
+
+还原源固定 `git show HEAD:<路径>`；应用前断言锚点（站点二用"函数区间＋块"消歧，见下）在 HEAD 态
+出现 1 次，应用后断言 md5 不等于还原态；跑完两站点回到 `evaluator.rs 4b5c4b0a…`／
+`value.rs b3940978…`，`git status src/middle/ctfe/` 空。HEAD 态两条测试连跑两次皆绿。
+
+| 臂 | 改法 | 第一条（6 格） | 第二条（5 格） |
+|---|---|---|---|
+| M1 | 撤站点一整支 | 红 3/6：格 1 读回 `no-div \| println_i64 \| IntLit(3)`、格 2 `IntLit(4)`、格 4 `Var(I64)` | 绿（5 格一字不变） |
+| M2 | 站点一的条件从"只有 `/`"放宽到"所有字面量对" | **绿＝阴性**（6 格一字不变） | 绿 |
+| M3 | 站点二改成地板除 `div_euclid` | 绿 | 红 2/5：B 读回 `-4`、D 读回 `-3` |
+| M4 | 站点二改成一律报错 | 绿 | 红 4/5：A／B／C／D 全变缺项、E 不变 |
+| M6 | `binary_op_uint` 里那份逐字相同的斜杠臂改成一律报错 | 绿 | **绿＝阴性** |
+
+另备一臂 M5（把无符号那份改成地板除）没跑：无符号操作数非负，`div_euclid` 与截断除对非负数同值＝
+按构造没有区分力；改用 M6（同臂一律报错）来问"无符号那一层活不活"，答案是本批的五个 `const` 都不走它。
+
+**坏格集关系**：M3 ⊂ M4（改语义只坏 B／D，撤掉折叠坏四格），按构造 M3 拿不到独占格，所以这两臂
+写成"包含关系"而不是"互不备份"。第一条与第二条在任何一臂下都不互相变红＝两条测试各自独立。
+
+可迁移经验：
+1. **同形臂的消歧从"缩进层"升级到"两个同形函数"**：`binary_op_int` 与 `binary_op_uint` 的斜杠臂
+   文本逐字相同（裸锚 `Ok(left.wrapping_div(right))` 在文件里 2 次），脚本第一版直接
+   `ANCHOR-BAD count=2`。改法＝按 `fn 名` 区间切块、在块内断言该块出现 1 次再替换（前案 10026 是同文件
+   两缩进层，本批是同文件两函数）。
+2. **"把条件放宽"这种臂要先问它改变哪个算子**：撤掉 `if op == "/"` 对 `/` 本身一字不变（那一支本来就
+   让 `/` 弃权），变的只有 `*`／`+`——而它们即便不在 AST 层折，下游仍折成同一个字面量，所以两格对照
+   读不出＝阴性。覆盖面表述因此改成"锁住当前发射形状，**不**锁住'只有 `/` 被豁免'"。
+3. **一臂红几格≠该用例几格都靠它**：M1 下格 3（`x = 7 / 2` 再打印）不变＝赋值右侧根本不经这一臂；
+   本条的射程只有 `print` 参数与 `return` 表达式两条会走 AST 折叠的路径。写覆盖面分工要用红格集合，
+   别按"形状相似"推断。
+4. **`assert_eq!(want, got)` 的左右侧与脚本口径**：cargo 打印里 `left:` 是 want、`right:` 是 got，
+   而汇总脚本把 `left:` 当成了实际值，所以 `matrix_out.txt` 里 `got=` 那串印的是期望值。红格判定
+   （两侧逐格比对）不受影响，读数判读一律回 `arm_*.log` 原文；下批的脚本要按 `right:` 取实际值。
+
+### 四、仍未锁的（记在 backlog `#20005` 余项，未占新号）
+
+- M2 那件事（"只有 `/` 被豁免"）在本批格子上测不出来：要加一枚让 `*`／`+` 的 AST 层折叠与下游折叠
+  在 MIR 里不同形的格子才锁得到，本批没有。
+- 格 3 说明赋值右侧不经 `ConstEvaluator`，那条路径上真除法有没有别处折叠未测。
+- 无符号那一层（`binary_op_uint`）什么时候会被走到未查＝M6 阴性；若将来无符号侧改道，本批格子不会提醒。
+- `const E: int = 8 / 0` 被静默丢掉：`zetac` 整趟 rc=0、stderr 为空，值既不在 `global_consts` 也没报错。
+  这是新未修项，登记规则 2（新增一项同时须关闭一项）下记在 `#20005` 余项内、未占新号。
+- 站点二的发射段（`gen.rs:3640-3660`）在回避面内未变异＝"折好的值进 `global_consts`"那一环只是观测。
+- 运行期真值仍归在册夹具 `t487`／`t488`／`t489`（454 那批的三枚），本批只锁编译期。
+
+### 五、检查节奏（2026-10-03 节奏：只跑改到的目标）
+
+- `cargo test --release --test regression_history` → **68 passed / 0 failed**（0.04 秒，本批 +2）
+- `cargo test --release -p zetac --lib` → **145 passed / 0 failed**（0.31 秒，一字不变）
+- `cargo test --release -p zetac --lib ctfe` → 0 passed／145 filtered out：`ctfe` 模块没有
+  `#[cfg(test)]` 单元测试，这一格只能由 `--lib` 全套承担（如实记录，不写成独立绿灯）
+- 编译零错误；五臂全部编译通过并给出读数（本批无 BUILD-FAIL 记账）
+- 零 `src/` 改动＋被测件 `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10025
+  以来同一颗 ⇒ 按节奏不跑抽样窗口
+- 滞留读数（代码笔 `bef12f22` 落地后实测）：`bootstrap..cleanup`＝47、`cleanup..bootstrap`＝362
