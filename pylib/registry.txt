@@ -482,6 +482,12 @@ F numpy eye zeta_np_eye args=i64 ret=vec
 F numpy diag zeta_np_diag args=i64 ret=vec
 F numpy fill_diagonal zeta_np_fill_diagonal args=i64,i64 ret=i64
 F numpy diagonal zeta_np_diagonal args=i64 ret=vec
+# 批 996（jq_wufu_daily 语料面）：diff/nan_to_num 真实现（f64 位模式槽
+# 约定，py_additions.c py_numpy_diff/py_nan_to_num）；errstate 上下文
+# 管理器在本编译器无常驻状态，py_noop1 占位（with 降级恒等＋warn）。
+F numpy diff py_numpy_diff args=i64 ret=vec
+F numpy nan_to_num py_nan_to_num args=i64 ret=vec
+F numpy errstate py_noop1 args=i64 ret=i64
 X zeta_arange args=i64 ret=vec
 X zeta_identity args=i64 ret=i64
 X zeta_identity2 args=i64,i64 ret=i64

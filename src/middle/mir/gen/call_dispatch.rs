@@ -1620,6 +1620,38 @@ call, no NULL-handle dereference).",
                 }
             }
 
+            // 批 996：`del <名字>` 标记（parser/stmt.rs parse_del 发出）——
+            // 本地槽保持 V1 no-op（绑定不动）；环境名发 zeta_env_del：
+            // 缺名运行期 zeta_raise(1)（try/except 可捕获，CPython 语义
+            // NameError），在则从环境移除。
+            if method == "__del_name__"
+                && receiver.is_none()
+                && args.len() == 1
+            {
+                if let AstNode::StringLit(name) = &args[0] {
+                    if self.name_to_id.contains_key(name.as_str()) {
+                        let slot = self.next_id();
+                        self.exprs.insert(slot, MirExpr::IntLit(0));
+                        self.type_map.insert(slot, Type::I64);
+                        return slot;
+                    }
+                    let name_id = self.next_id();
+                    self.exprs.insert(
+                        name_id,
+                        MirExpr::StringLit(name.clone()),
+                    );
+                    self.type_map.insert(name_id, Type::Str);
+                    self.stmts.push(MirStmt::VoidCall {
+                        func: "zeta_env_del".to_string(),
+                        args: vec![name_id],
+                    });
+                    let slot = self.next_id();
+                    self.exprs.insert(slot, MirExpr::IntLit(0));
+                    self.type_map.insert(slot, Type::I64);
+                    return slot;
+                }
+            }
+
             // 批次 830：abs/sum 臂体迁入 gen/call_num.rs（家族执行文件）；
             // 入口判定（分类器）已在此前接好，这里只调用执行者。
             if classify_call(method) == CallClass::NumericBuiltin
@@ -5742,6 +5774,40 @@ call, no NULL-handle dereference).",
                         }
                     }
                 } else if let Type::Named(tn, _) = rty {
+                    // 批 996：NoneValue 是 checker 从"唯一可推断返回"claim
+                    // 的空值标记（804/806/808 系——`_tushare_pro_api` 的成
+                    // 功路径返回全局变量推断不动，只有 return None 可推
+                    // 断），运行期实际可能是任何对象。按用户结构体方法分
+                    // 发会铸造 `<NoneValue>::member` 幽灵符号（jq_wufu 实
+                    // 拍 `_NoneValue__fund_daily` 链接失败）。改走动态成
+                    // 员调用：py_getattr_dynamic 取属性值（None 运行期响
+                    // 亮报错），zeta_callN 经 C 蹦床调用——真对象语义正确。
+                    if tn == "NoneValue" && arg_ids.len() >= 1 && arg_ids.len() <= 5 {
+                        let recv_id = arg_ids[0];
+                        let name_id = self.next_id();
+                        self.exprs
+                            .insert(name_id, MirExpr::StringLit(method.clone()));
+                        self.type_map.insert(name_id, Type::Str);
+                        let f_id = self.next_id();
+                        self.stmts.push(MirStmt::Call {
+                            func: "py_getattr_dynamic".to_string(),
+                            args: vec![recv_id, name_id],
+                            dest: f_id,
+                            type_args: vec![],
+                        });
+                        self.type_map.insert(f_id, Type::I64);
+                        let mut call_args = vec![f_id];
+                        call_args.extend_from_slice(&arg_ids[1..]);
+                        self.stmts.push(MirStmt::Call {
+                            func: format!("zeta_call{}", call_args.len() - 1),
+                            args: call_args,
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(id, Type::I64);
+                        return id;
+                    }
                     // A method on a KNOWN struct must be called by its
                     // QUALIFIED name: the definitions are emitted as
                     // `DataFrame::column`, while the plain name resolved to

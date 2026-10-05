@@ -947,8 +947,24 @@ fn parse_assert(input: &str) -> IResult<&str, AstNode> {
                         structural: false,
                     }),
                 },
+                AstNode::Var(name) => {
+                    // 批 996：名字目标不再整体 no-op——发 `__del_name__` 标记
+                    // 调用，MirGen 按作用域裁决（本地槽保持 V1 no-op；环境
+                    // 名发 zeta_env_del：缺名运行期 NameError，在则删除）。
+                    // 此前 `del y`（未定义名）静默通过，CPython 打
+                    // NameError ⇒ 差分用例 del_undefined_var 在册红。
+                    AstNode::ExprStmt {
+                        expr: Box::new(AstNode::Call {
+                            receiver: None,
+                            method: "__del_name__".to_string(),
+                            args: vec![AstNode::StringLit(name.clone())],
+                            type_args: vec![],
+                            structural: false,
+                        }),
+                    }
+                }
                 _ => {
-                    // Name / attribute delete — V1 no-op (bindings stay); still
+                    // Attribute delete — V1 no-op (bindings stay); still
                     // consume so the enclosing block can continue.
                     AstNode::ExprStmt {
                         expr: Box::new(AstNode::Lit(0)),

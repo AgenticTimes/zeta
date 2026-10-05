@@ -3585,6 +3585,47 @@ int64_t py_vec_full(int64_t n, int64_t v) {
     return h;
 }
 
+// 批 996（jq_wufu_daily 语料面）：np.diff / np.nan_to_num 最小实现。
+// numpy 数组在本编译器的表示＝f64 位模式落在 i64 槽的 Vec（与
+// zeta_sum_vec/zeta_vec_strftime 同一约定），逐元素按位模式取 double、
+// 运算后按位模式放回。
+int64_t py_numpy_diff(int64_t data) {
+    if (!data) return zeta_dynarray_new(0);
+    int64_t n = zt_vec_len(data);
+    if (n <= 1) return zeta_dynarray_new(0);
+    int64_t h = zeta_dynarray_new(n - 1);
+    for (int64_t i = 1; i < n; i++) {
+        double a, b;
+        memcpy(&a, &((int64_t*)data)[i - 1], sizeof a);
+        memcpy(&b, &((int64_t*)data)[i], sizeof b);
+        double d = b - a;
+        int64_t bits;
+        memcpy(&bits, &d, sizeof bits);
+        h = vec_push(h, bits);
+    }
+    return h;
+}
+int64_t py_nan_to_num(int64_t data) {
+    if (!data) return zeta_dynarray_new(0);
+    int64_t n = zt_vec_len(data);
+    int64_t h = zeta_dynarray_new(n);
+    for (int64_t i = 0; i < n; i++) {
+        double x;
+        memcpy(&x, &((int64_t*)data)[i], sizeof x);
+        if (x != x) {
+            x = 0.0; // NaN → 0（numpy 默认 nan=0.0）
+        } else if (x > 1.7976931348623157e308) {
+            x = 1.7976931348623157e308; // +inf → DBL_MAX
+        } else if (x < -1.7976931348623157e308) {
+            x = -1.7976931348623157e308; // -inf → -DBL_MAX
+        }
+        int64_t bits;
+        memcpy(&bits, &x, sizeof bits);
+        h = vec_push(h, bits);
+    }
+    return h;
+}
+
 int64_t zeta_dynarray_new(int64_t cap) {
     if (cap < 8) cap = 8;
     int64_t* buf = (int64_t*)GC_malloc((size_t)(2 + cap) * 8);
@@ -3649,6 +3690,8 @@ int64_t map_new(void);
 int64_t map_insert(int64_t, int64_t, int64_t);
 int64_t map_get(int64_t, int64_t);
 int64_t map_str_key(int64_t);
+int64_t map_has(int64_t, int64_t);
+int64_t zeta_map_pop_default(int64_t, int64_t, int64_t);
 
 static int64_t g_env = 0;
 
@@ -3665,6 +3708,15 @@ int64_t zeta_env_get(int64_t name_handle) {
 void zeta_env_set(int64_t name_handle, int64_t v) {
     if (getenv("ZT_DEBUG_ENV")) fprintf(stderr, "[ENV] set \"%s\" = %lld\n", (char*)name_handle, (long long)v);
     map_insert(env_map(), map_str_key(name_handle), v);
+}
+// 批 996：del <module-global> —— 名字不在环境 ⇒ zeta_raise(1)
+//（try/except 可捕获；对应 CPython 的 NameError），在 ⇒ 移除
+//（读回即失败，Python 语义）。
+int64_t zeta_env_del(int64_t name_handle) {
+    int64_t key = map_str_key(name_handle);
+    if (!map_has(env_map(), key)) return zeta_raise(1);
+    zeta_map_pop_default(env_map(), key, 0);
+    return 0;
 }
 
 // nonlocal declaration marker — no runtime effect (the env routing happens
