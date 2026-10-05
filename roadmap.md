@@ -29627,3 +29627,82 @@ M4／M5 另有 10 条既有用例同红（`comparison_method_return_…`、`clas
 2. 写用例前先做"形状 × 撤臂"探针矩阵（15 形 × 5 臂，临时目标里 `println!` 读数即可），
    比先写断言再变异省一到两轮返工——首稿两格若直接提交就是一组测不到站点的用例。
 3. 红值一字相同的多个臂要写成一条链，别拆成"独立覆盖"；能分开写的只有红格集合不同的那些臂。
+## 批次 10056（2026-10-06，第四十四批，续 #20005／来源批次 173）
+
+代码笔 `5eb4dd02`（`tests/regression_history.rs` +154 行，`git diff --cached --numstat` 实测；
+提交信息正文里写的 +153 是笔误，以本行为准）。本批零 `src/` 净改动。
+
+### 来源与站点
+
+来源＝主线批次 173（`1f2a656d`，2026-09-20）：推导式元素类型取用户函数返回类型，
+症状是 `WUFU_BS_CODES = [jq_to_bs(c) for c in WUFU_JQ_CODES]` 推成
+`DynamicArray(I64)`（应为 `DynamicArray(Str)`），之后 `LIST + LIST` 被当数字加法。
+站点＝`src/middle/resolver/resolver.rs` 的 `infer_global_ty` Call 分支里
+`if receiver.is_none()` 那一块（HEAD `ae970d5e` 上＝`:2137-2160`）：①`:2144-2146` 按裸名查
+`fn_rets`；②`:2147-2155` 按 `__<name>` 后缀收集候选；③`:2157-2159` 候选返回型全一致才采纳。
+
+### 三格形状
+
+新用例 `bare_call_return_type_types_comprehension_global_element`（`#[test]` 在 `:8402`），
+一格读数＝(全局写入槽型, 每次读回槽型, `array_get` 目的槽型)，期望值取自 CPython 同形源：
+
+1. 同文件裸名 `def fcode(c): return "BS" + c` ＋ `CODES = [fcode(c) for c in ["a","b"]]`
+   ⇒ CPython 打 `BSa`／`2` ⇒ `DynamicArray(Str)` ＋ 两次读回 `Str` ＋ `array_get` `Str`；
+2. 普通 `from convN import fcode` ⇒ CPython 同样打 `BSa` ⇒ Str；
+3. 两枚同名 helper 返回型不一致（先 `from convA import fcode` 再 `from convB import fcode`）
+   ⇒ CPython 里后一条 import 覆盖前一条，`fcode` 返回 `9` ⇒ I64。这一格盯的就是③守卫。
+
+### 变异矩阵
+
+CLI 侧七臂（`/tmp/b10056/v3_matrix.out`，六形 × 七臂，读数同上）＝A1 只撤①／A2 只撤②③／
+A3 把③换成"非空就采纳第一枚"（复跑三遍不变）／A4 整块改成 `if false` ⇒ 四臂全不变；
+A5 同撤①与后段 `:2230-2234` ⇒ 「同文件裸名」变；A6 同撤②③与后段 `:2246-2249` ⇒
+「普通 from-import」＋「两枚同名不一致」变；A7 四处同撤 ⇒ 三形变。
+`eprintln!` 探针（`v3_dbg.log`）把阴性臂的原因实拍成"后段有第二条同功能查表路接管"。
+
+进程内八臂（本条真跑的那套，`/tmp/b10056/mut_real2.out`，还原源 `git show HEAD:`，逐臂断言
+md5 复原 `e841c2206fe81514fe57895e73991edf`）＝
+
+| 臂 | 结果 | 红格 |
+|---|---|---|
+| HEAD | ok | — |
+| A1 只撤① | ok | — |
+| A5 同撤①＋后段裸名查表 | FAILED | 同文件裸名 |
+| A6 同撤②③＋后段 mangled 查表 | FAILED | 普通 from-import、两枚同名不一致 |
+| A7 四处同撤 | FAILED | 三格 |
+| A8 删整块 `if receiver.is_none()` | ok | — |
+| A9 只撤后段裸名查表 | ok | — |
+| A10 只撤后段 mangled 查表 | FAILED | 两枚同名不一致 |
+
+按坏臂集的极小元读分工：格 1 由 A5 锁、格 2 由 A6 锁、格 3 由 A10 单臂锁；A7 是 A5∪A6 的
+超集，不算独立。173 自己的①②③没有任何一臂能单独打到（A1/A8 阴性）⇒ 本条算"裸名对"与
+"mangled 对"两级覆盖＋症状现状锁，不写"173 那三样已锁"。
+
+### 本批实测的新未修项（未锁，已记进用例头注）
+
+`from ..convJ import fcode` 在没有包上下文时（顶层脚本）被**静默忽略**：CLI 只打一行
+warning 仍继续编译，`fn_rets` 里没有 `__fcode` 键（探针三形 `suffix=[]`）⇒ `CODES` 元素型落
+`DynamicArray(I64)`，运行期 `print(CODES[0])` 打 `0`，CPython 同形打 `BSa`。
+这正是 173 注释里声称要救的场景，实测那一支根本打不到。按登记规则不占新号，记在 #20005 余项。
+
+### 每批检查与收尾
+
+- `cargo test --test regression_history`＝80/80（0.73 秒），套件 79→80 条；
+- `cargo test -p zetac --lib`＝145/145；
+- `src/middle/resolver/resolver.rs` md5 复原 HEAD（`e841c2206fe81514fe57895e73991edf`），
+  临时探针目标 `tests/probe_tmp.rs` 已删；
+- 本批零 `src/` 净改动 ⇒ 被测件与 10050–10055 同一颗，抽样窗口按 2026-10-03 节奏不重跑；
+- 滞留：代码笔后 `bootstrap..cleanup`＝3、`cleanup..bootstrap`＝457（主树 HEAD `e5a513c8 docs(roadmap): 批次 1005 记录——Call 臂四子族迁出（claim 模式，五路 IR 零变）`）。
+- 树上另有与测试无关的在制面（`src/error_codes.rs`、`src/frontend/parser/{expr,top_level}.rs`、
+  两枚新夹具 `t562`／`t563`），本批未动、未暂存。
+
+### 经验
+
+1. 撤臂脚本删"收集候选"那段时必须把它下面引用候选的守卫一起删——上一版只删收集段，
+   留下 `if !hits.is_empty() && ...` 引用已不存在的 `hits`，`zetac` lib 编不过；而跑用例的
+   输出里没有 `test result:` 那一行，被读成阴性臂（NO-RESULT）而不是编不过。修法＝把
+   "收集＋守卫"当一整块删，并在分类结果前先查日志里的 `error[`，把这类臂标成 BUILD-FAIL。
+2. 想知道一条链上"哪个臂单独起作用"，按坏臂集的极小元读，别按臂编号顺序读：本批
+   A10（只撤后段 mangled 查表）红格是 A6 的子集，格 3 因此有单臂锁，而格 2 只有成对撤才红。
+3. 撤臂只删前移的那一块（A8）读数不变，说明真正住手的是后段那条同功能查表路——这类
+   "同一分支里两处同形查表"的冗余，覆盖只能写成成对撤，单撤任一处都是阴性。

@@ -1077,6 +1077,28 @@
 >   `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10050–10054 同一颗，抽样窗口按
 >   2026-10-03 节奏不重跑。候选重筛：下一批候选＝173、171（10054 留的两格未复核）。滞留：代码笔后
 >   `bootstrap..cleanup`＝1、`cleanup..bootstrap`＝422（主树 HEAD `3d203cd1`）。
+> - **批次 10056（第四十四批，续 #20005／来源批次 173，代码笔 `5eb4dd02`）**：主线 173
+>   （`1f2a656d`）"推导式元素类型取用户函数返回类型"做成进程内单元测试
+>   `bare_call_return_type_types_comprehension_global_element`（`tests/regression_history.rs`
+>   `#[test]` 在 8402，三格读数＝全局写入槽型／读回槽型／`array_get` 目的槽型，
+>   期望值取自 CPython 同形源）。站点＝`src/middle/resolver/resolver.rs` 的
+>   `infer_global_ty` Call 分支 `if receiver.is_none()` 块（HEAD 上 `:2137-2160`：①裸名查
+>   `fn_rets`、②`__<name>` 后缀收集、③候选全一致才采纳）。**进程内八臂**（还原源
+>   `git show HEAD:`＋逐臂断言 md5 复原 `e841c2206fe81514fe57895e73991edf`）＝
+>   A5 同撤①与后段 `:2230-2234` 红格 1；A6 同撤②③与后段 `:2246-2249` 红格 2＋3；
+>   A10 只撤后段 `:2246-2249` **只红格 3**；A7 四处同撤三格全红（＝A5∪A6 超集，不独立）；
+>   阴性＝A1 只撤①、A8 删整块、A9 只撤后段裸名查表、HEAD 自证。按坏臂集极小元读＝格 1 由
+>   A5 锁／格 2 由 A6 锁／格 3 由 A10 单臂锁；**173 的①②③没有任何单臂打得到**，所以本条只算
+>   "裸名对"＋"mangled 对"两级覆盖＋症状现状锁。首版 A6/A7 删收集段却留下引用 `hits` 的守卫 ⇒
+>   lib 编不过，而日志无 `test result:` 行被读成阴性——本轮改成"收集＋守卫"整块删＋先查 `error[`
+>   再分类（新坑，已写进用户记忆）。**本批新未修项（未锁，记在用例头注）**＝`from ..convJ import
+>   fcode` 在无包上下文时被静默忽略（CLI 一行 warning 仍继续编译），`fn_rets` 里因此没有
+>   `__fcode` 键（探针三形 `suffix=[]`）⇒ 元素型落 `DynamicArray(I64)`、运行期 `print(CODES[0])`
+>   打 `0` 而 CPython 打 `BSa`＝173 注释声称要救的那一支实测打不到。读数＝套件 79→80 条全绿
+>   （0.73 秒）、`cargo test -p zetac --lib` 145/145、零 `src/` 净改动 ⇒ 被测件与 10050–10055
+>   同一颗、抽样窗口按 2026-10-03 节奏不重跑。候选重筛：下一批候选＝171（10054 留的未复核格）、
+>   642／643／659／648／649／650、605／608／609、575／579／580／587 中未取者，站点避开
+>   `gen.rs` 与树上在制的 `src/error_codes.rs`／`src/frontend/parser/{expr,top_level}.rs`。
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
