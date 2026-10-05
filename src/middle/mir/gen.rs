@@ -135,6 +135,38 @@ pub enum TypeDecl {
     Alias { target: String },
 }
 
+/// 参数槽型族（批 953）：source_types 注解串与 checker 证据的统一判别面。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamKind {
+    Array,
+    Map,
+    Str,
+    Other,
+}
+
+/// 参数槽型族判别纯面（批 953）：注解串形状优先（既有行为），
+/// 为空/未知时 checker 证据补位。
+pub fn classify_param_kind(src: &str, checker: Option<&Type>) -> ParamKind {
+    if src.starts_with('[') || src.starts_with("*mut [") {
+        return ParamKind::Array;
+    }
+    if src.starts_with("map<") || src.starts_with("map[") {
+        return ParamKind::Map;
+    }
+    if src == "str" || src.starts_with("str<") {
+        return ParamKind::Str;
+    }
+    if let Some(ct) = checker {
+        match ct {
+            Type::DynamicArray(_) | Type::Array(_, _) => return ParamKind::Array,
+            Type::Named(n, _) if n == "map" || n == "dict" => return ParamKind::Map,
+            Type::Str => return ParamKind::Str,
+            _ => {}
+        }
+    }
+    ParamKind::Other
+}
+
 pub struct MirGen {
     next_id: u32,
     /// Batch 761 (#80③): 未声明名告警去重——同一名字一次编译只喊一声。
@@ -158,6 +190,11 @@ pub struct MirGen {
     global_consts: HashMap<String, crate::middle::ctfe::value::ConstValue>,
     // Preserve original source-level type strings for parameters (e.g., "*mut u64")
     source_types: HashMap<u32, String>,
+    /// 批 953（F.4 第二刀）：参数槽 id → checker 槽型。source_types 存的是
+    /// 注解**字符串**（"[i64]"/"map<…>"/"dyn"），消费点做字符串形状判别；
+    /// 本表是 checker 证据的桥（参数降级时从 checker_env 取槽型），供
+    /// 判别失败/为空时补位——`param_slot_kind` 统一消费。
+    param_checker_tys: HashMap<u32, crate::middle::types::Type>,
     /// NAME → element count for a `x = [ … ]` literal binding. `f(*x)` used to
     /// read the count from `Type::Array(_, Literal(n))`; now that non-float list
     /// literals are DynamicArrays that type is gone, so the count is remembered
@@ -367,6 +404,7 @@ impl MirGen {
             name_to_id: HashMap::new(),
             global_consts: HashMap::new(),
             source_types: HashMap::new(),
+            param_checker_tys: HashMap::new(),
             array_lit_lens: HashMap::new(),
             pointee_widths: HashMap::new(),
             type_decls: HashMap::new(),
@@ -1485,6 +1523,15 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
             .and_then(|env| env.get_slot(name).known_ty())
     }
 
+    /// 参数槽型族判别（批 953，F.4 第二刀）：source_types 注解串形状
+    /// 优先（既有行为），为空/未知时 checker 证据补位。消费点此前各自
+    /// 手写 starts_with 判别，五处统一到这里。
+    pub(crate) fn param_slot_kind(&self, slot: u32) -> ParamKind {
+        let src = self.source_types.get(&slot).cloned().unwrap_or_default();
+        let checker = self.param_checker_tys.get(&slot);
+        classify_param_kind(&src, checker)
+    }
+
     /// PY-A: the file being compiled, so `__file__` can resolve to it.
     pub fn with_current_module(mut self, module: String) -> Self {
         self.current_module = module;
@@ -1763,6 +1810,13 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         }
                     }
                     self.source_types.insert(id, param_type.clone());
+                    // 批 953：checker 证据桥——参数槽型（证据/注解 meet 过）
+                    // 以槽 id 为键存下，`param_slot_kind` 的判别失败补位
+                    if let Some(ct) =
+                        self.checker_type_of(name.trim_start_matches('&'))
+                    {
+                        self.param_checker_tys.insert(id, ct);
+                    }
                     self.stmts.push(MirStmt::ParamInit {
                         param_id: id,
                         arg_index: i as u32,
@@ -3274,11 +3328,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
     fn array_elem_is_str(&self, id: &u32) -> bool {
         match self.type_map.get(id) {
             Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => matches!(**e, Type::Str),
-            _ => {
-                let src = self.source_types.get(id).cloned().unwrap_or_default();
-                let inner = src.trim_start_matches("*mut ").trim_start_matches('[');
-                inner.starts_with("str") || inner.starts_with("String")
-            }
+            // 批 953：判别统一到 param_slot_kind（checker 证据补位）
+            _ => self.param_slot_kind(*id) == ParamKind::Str,
         }
     }
 
@@ -3794,5 +3845,46 @@ mod tests_906 {
             .copied()
             .expect("walrus 必须绑定 n");
         assert_eq!(r, bound, "886: 委托必须转发活槽（缺省槽＝回归）");
+    }
+}
+
+#[cfg(test)]
+mod tests_param_kind {
+    use super::*;
+
+    /// 注解串形状优先（既有行为，批 953 迁出回归锁）。
+    #[test]
+    fn source_string_shapes_win() {
+        assert_eq!(classify_param_kind("[i64]", None), ParamKind::Array);
+        assert_eq!(
+            classify_param_kind("*mut [str]", None),
+            ParamKind::Array
+        );
+        assert_eq!(classify_param_kind("map<str,i64>", None), ParamKind::Map);
+        assert_eq!(classify_param_kind("map[str]", None), ParamKind::Map);
+        assert_eq!(classify_param_kind("str", None), ParamKind::Str);
+        assert_eq!(classify_param_kind("str<8>", None), ParamKind::Str);
+        assert_eq!(classify_param_kind("dyn", None), ParamKind::Other);
+        assert_eq!(classify_param_kind("", None), ParamKind::Other);
+    }
+
+    /// 注解为空/未知时 checker 证据补位（批 953 主语义）。
+    #[test]
+    fn checker_evidence_fills_gap() {
+        let list = Type::DynamicArray(Box::new(Type::F64));
+        assert_eq!(
+            classify_param_kind("dyn", Some(&list)),
+            ParamKind::Array
+        );
+        let m = Type::Named("map".into(), vec![Type::Str, Type::I64]);
+        assert_eq!(classify_param_kind("", Some(&m)), ParamKind::Map);
+        assert_eq!(classify_param_kind("dyn", Some(&Type::Str)), ParamKind::Str);
+        // 注解串形状与 checker 证据并存时注解优先
+        assert_eq!(
+            classify_param_kind("[i64]", Some(&m)),
+            ParamKind::Array
+        );
+        // checker 证据为标量 I64（ABI 缺省）不判族
+        assert_eq!(classify_param_kind("", Some(&Type::I64)), ParamKind::Other);
     }
 }

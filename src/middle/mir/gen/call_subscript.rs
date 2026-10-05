@@ -300,9 +300,9 @@ impl MirGen {
                 _ => base_ty.clone(),
             };
             let base_ty_clone = base_ty.clone(); // clone for later elem-type lookup
-            // Also check source_types for function params with array types
-            let source_ty = self.source_types.get(&bid).cloned().unwrap_or_default();
-            let is_array_param = source_ty.starts_with("[") || source_ty.starts_with("*mut [");
+            // 批 953：判别统一到 param_slot_kind
+            let is_array_param =
+                self.param_slot_kind(bid) == crate::middle::mir::r#gen::ParamKind::Array;
             if let Type::Named(n, _) = &base_ty {
                 if n == "PyJson" {
                     // `cfg["k"]` / `arr[0]`: the runtime dispatches on the
@@ -494,7 +494,7 @@ impl MirGen {
                     type_args: vec![],
                 });
             } else if base_ty.is_untyped()
-                && source_ty != "map"
+                && self.param_slot_kind(bid) != crate::middle::mir::r#gen::ParamKind::Map
                 && !matches!(self.type_map.get(&iid), Some(Type::Str))
             {
                 // BATCH-295: an UNKNOWN receiver with a non-string key. The
@@ -540,21 +540,34 @@ impl MirGen {
                 if let Some(et) = from_ty {
                     et
                 } else {
-                    let src = self.source_types.get(&bid).cloned().unwrap_or_default();
-                    if src.starts_with('[') {
-                        let inner = src
-                            .trim_start_matches('[')
-                            .split(']')
-                            .next()
-                            .unwrap_or("");
-                        let elem_str = inner
-                            .split(';')
-                            .next()
-                            .unwrap_or("")
-                            .trim();
-                        Type::from_string(elem_str)
+                    // 批 953：checker 证据补位——参数槽 checker 型为容器时
+                    // 直接取元素型（DynamicArray(elem)），注解串解析保底
+                    let checker_elem = match (&**base, self.param_checker_tys.get(&bid)) {
+                        (AstNode::Var(vn), Some(ct)) => {
+                            let _ = vn;
+                            match ct {
+                                Type::DynamicArray(e) => Some((**e).clone()),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(et2) = checker_elem {
+                        et2
                     } else {
-                        Type::I64
+                        let src =
+                            self.source_types.get(&bid).cloned().unwrap_or_default();
+                        if src.starts_with('[') {
+                            let inner = src
+                                .trim_start_matches('[')
+                                .split(']')
+                                .next()
+                                .unwrap_or("");
+                            let elem_str = inner.split(';').next().unwrap_or("").trim();
+                            Type::from_string(elem_str)
+                        } else {
+                            Type::I64
+                        }
                     }
                 }
             };

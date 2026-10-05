@@ -267,9 +267,10 @@ impl MirGen {
 
                 // Check if base is an array type
                 let base_ty = self.type_map.get(&base_id).cloned().unwrap_or_else(Type::slot_fallback);
-                let source_ty = self.source_types.get(&base_id).cloned().unwrap_or_default();
+                // 批 953：判别统一到 param_slot_kind（source_types 优先、
+                // checker 证据补位）
                 let is_array_param =
-                    source_ty.starts_with("[") || source_ty.starts_with("*mut [");
+                    self.param_slot_kind(base_id) == crate::middle::mir::r#gen::ParamKind::Array;
                 // PY-A (任务 #53, 写侧): an unnormalized negative index reached
                 // `array_set` too — measured `l = [3,5,7]; l[0-1] = 9` wrote a
                 // slot past the end and grew the list to

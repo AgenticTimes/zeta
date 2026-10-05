@@ -3526,11 +3526,12 @@ call, no NULL-handle dereference).",
                 // unique-`__contains__` heuristic below — which dispatched
                 // `DataFrame::__contains__(m, k)` with the MAP as `self`
                 // (segfault in pylib/pandas.z `rename`, t204).
-                let src_ty = self.source_types.get(&arg_ids[0]).cloned().unwrap_or_default();
+                // 批 953：判别统一到 param_slot_kind（checker 证据补位）
                 let is_map = receiver_ty
                     .as_ref()
                     .map_or(false, Type::is_map)
-                    || src_ty.starts_with("map<");
+                    || self.param_slot_kind(arg_ids[0])
+                        == crate::middle::mir::r#gen::ParamKind::Map;
                 if is_str && arg_ids.len() == 2 {
                     self.stmts.push(MirStmt::Call {
                         func: "host_str_contains".to_string(),
@@ -3545,13 +3546,9 @@ call, no NULL-handle dereference).",
                 // PY-A: `x in list` — linear scan. Previously an array
                 // receiver fell through and the expression silently
                 // produced 0 (false) whatever the elements were.
-                // An ARRAY PARAMETER is typed via `source_types`, not
-                // `type_map` (unannotated params default to i64 there), so
-                // without this fallback `v in xs` inside a function returned
-                // 0 for every element — silently wrong for the filtering
-                // code that strategies are full of.
-                let is_array_param =
-                    src_ty.starts_with('[') || src_ty.starts_with("*mut [");
+                // 批 953：数组参数判别统一到 param_slot_kind
+                let is_array_param = self.param_slot_kind(arg_ids[0])
+                    == crate::middle::mir::r#gen::ParamKind::Array;
                 if (matches!(
                     receiver_ty.as_ref(),
                     Some(Type::DynamicArray(_)) | Some(Type::Array(_, _))
@@ -3561,12 +3558,10 @@ call, no NULL-handle dereference).",
                         Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
                             matches!(**e, Type::Str)
                         }
-                        // e.g. `[str]` / `*mut [str]`
+                        // 批 953：数组参数元素 str 判别走 param_slot_kind
                         _ => {
-                            let inner = src_ty
-                                .trim_start_matches("*mut ")
-                                .trim_start_matches('[');
-                            inner.starts_with("str") || inner.starts_with("String")
+                            self.param_slot_kind(arg_ids[0])
+                                == crate::middle::mir::r#gen::ParamKind::Str
                         }
                     };
                     // 批 926：f64 元素走 double 域比较版（位模式按位比较
