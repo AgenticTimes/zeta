@@ -32908,3 +32908,23 @@ official 13/13、语料 40/40；五金用例全绿；库 265/265。
 try_setjmp/spawn/array_get 内联/isinstance 等 10+ 子族，下一批的主
 刀）；VoidCall 144／For 余量／DictInsert 103／Swap 101／Pre/Post/
 Invariant 160 各成小片。
+
+## 批次 1003（2026-10-05）：轴 D 第二刀续——Call 臂三终态子族迁出＋批 1002 回归修复
+
+1. **Call 臂三终态子族迁 codegen_call_arm.rs**（cf075860）：try_setjmp
+   （_setjmp/returns_twice 面）＋spawn_thunk（pthread 异步面）＋
+   array_get/stack_array_get 内联面——逐字搬迁、return true 表已处理；
+   call_site_to_basic_value/get_or_declare_function 提 pub(super)。
+   codegen.rs 8,281→8,055 行。
+2. **批 1002 回归修复**：三臂替换的切片缝隙吞掉了 While 与 For 之间
+   的 Break|Continue/Swap/Pre/Post/Invariant 五臂（274 行）——
+   test_simple_break 的 while+break 坠入无终结符路径（official 门禁
+   咬出）。从批 1001 树逐字节恢复；初版恢复脚本误以 While 臂内
+   body_ends_terminated 的表达式续行为臂头（不平衡校验拦下），改用
+   带箭头臂头重切。**教训入册：多臂切片替换后必须 diff 新旧 match
+   的臂清单**（本可由'替换前后 match 臂数'断言拦下）。
+
+**验证**：五路迁前 IR 基线（try/spawn/t63/t75/t49）逐字节 diff 为
+空；test_simple_break rc=42 与 CPython 一致；门禁窗口 3 rc=0——差
+分 285/285、python_style 42/42、official 18/18、语料 40/40；六金用
+例全绿；库 265/265。
