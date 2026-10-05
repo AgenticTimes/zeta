@@ -29660,3 +29660,8 @@ codegen container_cond_i1 改读类型。
 module_globals 名单过滤。新增 2 单测；库 242/242；全量差分 2845/2845、
 python_style 479/0、b947 探针保持。F.4 剩余：6 轮传播删除、
 codegen container_cond_i1 改读类型。
+
+**批 954 补**：module_env 补扫合成 main 体——py 语料路径下 top_bodies
+只有函数定义，全局槽恒空（种子注入从未真正工作，b942 探针靠 gen 侧
+机制蒙混）；补扫＋retain 过滤双保险，单测锁定。库 242/242、全量
+差分/python_style 全绿。
