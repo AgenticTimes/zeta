@@ -30046,3 +30046,22 @@ NumericBuiltin 入口（call_num）先于 call_dispatch key= 臂执行——
 i64 元素场景探针（ki=x*x）：max=3 ✓ min=2 ✗（应 -1）——不对称
 待专项（FuncAddr→符号链断点，干净会话 lldb 逐环）。库 254/254、
 全量差分 2845/2845、python_style 479/0 无回归。
+
+## 批次 982 补录（2026-10-05）：keyfn 登记块实验回退＋不对称缺陷完整记录
+
+实验：call_num 臂补登记块（NumericBuiltin 入口 store 空洞）⇒ i64
+场景 min 从 -1（旧行为：i64 域 ki 位模式比较，min 选 -1 恰对）变 2
+（回归）且 max/min 仍与 CPython 不全对——**登记块生效但 FuncAddr→
+符号链在 i64 路径的断点未解**（副本地址解析到恒等行为实体，min/max
+不对称实证）。回退登记块恢复全绿基线。
+
+**缺陷现状定档（roadmap 权威记录）**：
+- max(xs, key=ki) = 3 ✓（i64 域位模式比较恰对——对称巧合）
+- min(xs, key=ki) = 2 ✗（应 -1）——静默错值存活
+- 根因链：FuncAddr("ki") → ptrtoint 地址 → py_min_key keyfn 指针
+  调用 ki 副本/原体的某一环解析到恒等行为实体（C 探针实拍
+  keyfn(v)=v 原样返回）——需干净会话 lldb 逐环（FuncAddr codegen
+  地址 → ki LLVM 体 → 调用约定）定位
+- f64 元素场景不受影响（967 特化链全对）
+- 修复前置：干净会话专项（本会话上下文预算告罄止损，两轮实验
+  结论全量在案：批 963 设计/批 978 不对称实证/本批登记块回退）
