@@ -30112,3 +30112,15 @@ lldb 实拍（b978v：max(xs,key=kf) 场景，kf=x*0.5 带 -> float 注解）：
 当前行为：max/min(xs, key=kf) = 2/-1（CPython 3/-1）——max 错
 （f64 域比较 i64 返回的垃圾）、min 恰对（-1 的 i64 位模式负值碰巧
 最小）。i64 全程恒等假象（keyfn 读 x0 形参残留=v 原值）。
+
+## 批次 985 双层探针补录（2026-10-05）：i64 场景根因上移——SemiringFold 动态算术
+
+MIR 实拍（kf=x*0.5 场景）：kf 的 x 参数槽 = **PyDynamic**（untyped ⇒
+B3 动态语义）；`x * 0.5` 降级为 **SemiringFold{op:Mul, values:[x,0.5]}**
+（非 BinaryOp）——动态值×字面量的结果型由 SemiringFold 处理器决定
+（影响所有动态值算术，非 keyfn 局部）。
+
+i64 场景 max=2 ✗ 的修复属 **SemiringFold 动态算术结果型专项**
+（独立排期：动态槽×字面量的结果型规则＋keyfn 参数 f64 通道的
+降级联动）。f64 场景（b962/b967）与 i64 min 场景已由批 983/984
+修复链交付。库 254/254、全量差分 2845/2845、python_style 479/0。
