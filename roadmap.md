@@ -29906,3 +29906,11 @@ impl 解析）与 UnifiedTypeCheck 相关 impl 交织于同区间。已回滚
    只有死代码删除需求
 3. infer_type 终态修正：保留为 infer_unified 的回落实现（分层
    而非退役）——宽容语义依赖
+
+## 批次 973（2026-10-05）：TypeCheckMigrator 死代码结构级删除
+
+结构级分析修正批 972 认知：414 行后恰三个顶层项（struct/impl/tests
+全属 Migrator），孤儿 doc 是 972 实验构建失败的直接错误（非可见性
+链断裂）。精确删除 288 行（typecheck_new.rs 702→412），NewTypeCheck
+impl/unified 分发/infer_type 回落实现完整保留。验证：库 249/249、
+全量差分 2845/2845、python_style 479/0、探针保持。
