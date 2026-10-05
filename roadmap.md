@@ -29872,3 +29872,20 @@ InferContext 统一推断（unwrap_or I64 保底对齐旧轨兜底）——float
   infer_unified 回落路径——本体退役需 fallback 先切换（段 4）
 验证：库 251/251、全量差分 2845/2845、python_style 479/0、
 b947/b962 探针保持。
+
+## 批次 972（2026-10-05）：双轨段 4 审计——use_new_system 四层分发网梳理（切换留独立排期）
+
+段 4（use_new_system 切换）的审计发现：分发网共**四层**——
+main.rs `resolver.typecheck()` → Resolver::typecheck（typecheck.rs:15，
+内部调 typecheck_unified）→ unified:267 `typecheck_new` →
+typecheck_new.rs:432 `typecheck`（use_new_system 分发：true⇒
+typecheck_new unify 新系统 / false⇒Resolver::typecheck 旧检查递归）。
+use_new_system 同时控制 infer_type 包装（461）的双轨。
+
+切换风险：use_new_system=true ⇒ 主管线 typecheck 走 typecheck_new
+unify（错误以 E2002 诊断报出＋false 返回）——**检查严格度变化**
+（旧系统宽容/新系统 unify 报错）⇒ 语料影响面需专项评估；infer_type
+包装随之切新轨（display 输出变化面）。
+
+结论：段 4 切换＝**检查语义变更**而非纯结构收敛，需专项批（语料
+影响面评估＋诊断对齐）独立排期。infer_type 本体退役随之（段 5）。
