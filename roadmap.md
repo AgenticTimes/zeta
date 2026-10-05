@@ -32855,3 +32855,19 @@ official 20/20、语料 40/40；七金用例全绿；lib 265/265（−3 为死�
 实证）；第三项 缓办（有裁定）；第四项 ✔（999）；第五项 codegen.rs
 拆分（signature_table 已是切片，续批推进）；第六项 轴 C（基建在，
 perf 驱动续批）；第三梯队按裁定。
+
+## 批次 1000（2026-10-05）：轴 D 第二刀——keyfn 家族自 codegen.rs 迁出（IR 零变）
+
+gen.rs 主题块迁出模式应用到 codegen.rs（9.0k 行新单体）第一刀
+（`5dccdba4`）：verify_keyfn_contract（W0911 双层核对）＋FuncAddr 兜底
+臂迁 codegen_keyfn.rs（同 crate impl，pub(super)）；infer_fn_return_type
+提为 pub(super)；codegen.rs −89 行。
+
+**迁出纪律（gen.rs 同款）**：迁前/迁后 LLVM IR 基线逐字节 diff 为空
+（b985 keyfn 路径＋t75 re 路径）。**验证**：门禁窗口 0 rc=0（差分
+285/285、python_style 44/44、official 14/14、语料 40/40）；六金用例
+全绿；库 265/265。
+
+**续刀计划**：codegen.rs 下一片＝gen_stmt（4064–6451，约 2,400 行
+巨型 match）按 stmt 主题拆；get_function/get_or_declare_function 家族
+（2696–3575）成符号解析模块。轴 C perf 采样批随后。
