@@ -1121,6 +1121,39 @@
 >   下一批候选＝把这六类里能静态观测的两类（②`sorted` 的排序键、③返回容器的型标记）转成
 >   模块内单元测试；站点避开 `gen.rs` 与树上在制的 `src/error_codes.rs`／
 >   `src/frontend/parser/{expr,top_level}.rs`。
+> - **批次 10058（第四十六批：实修，代码笔 `e35f5aae`）**：未标注函数 `return [<拼接表达式> for ...]`
+>   时调用点目的槽落 `DynamicArray(I64)`、打印成堆地址（来源＝批次 10057 的
+>   `hand57_type_propagation`，改前读数 `[4306960368, 4306960352, 4306960336]` 对
+>   CPython `['x!', 'x!', 'x!']`，`/tmp/b10057/failcases_readings.txt:16-17`）。根因实测＝
+>   `resolver.rs` 的 `unannotated_return_ty` 内层 `infer` 的 `__collect__` 臂按 `args.get(1)`
+>   取 lambda，而这一形只有一个实参（λ 在 `args[0]`）⇒ 元素型恒落兜底 `I64`。改一处
+>   （`args.iter().find_map`＋过滤形取 `If.then` 首条表达式语句），`resolver.rs`
+>   md5 `e841c220…`→`e0549204…`。新用例四格 (被调方槽, 调用点槽)＝(Str,Str)/(I64,Str)/
+>   (I64,I64)/(I64,I64)，并把批次 10024 那条的期望从 `I64` 改 `Str`（函数名保留，
+>   `roadmap.md` 按名字引用过它）。六臂变异：M1≡M3 一条链、M2 是 M1 的超集、M4 等价写法阴性、
+>   M5（删 `If` 支）独立覆盖"过滤形拼接"一格、M6（`infer_global_ty` 那侧索引）红在另外两条
+>   用例＝另一处站点、互不备份。端到端 `hand57_type_propagation` 与 CPython 差异 4 行→1 行，
+>   剩下那一行是 `sorted()`（站点 `runtime/py_additions.c:446-476`，动 C 运行期需用户批准）。
+>   每批检查：`regression_history` 81/81、`-p zetac --lib` 145/145、`cargo build --release` rc=0。
+>   两条未修按登记规则记在 #20005 余项内、不占新号＝①过滤形在被调方自己那一槽仍丢元素型
+>   （`infer_global_ty` 的 `__collect__` 臂认不出 `AstNode::If`）；②元素是裸循环变量
+>   （`return [x for x in xs]`）时元素型仍取不到，需要从可迭代对象取元素型，`seen` 里没有
+>   循环变量的型。本批未跑抽样窗口（缺口在同步批 10059 的窗口 9 补）。
+>
+> - **批次 10059（同步批：并入 bootstrap 459 笔，合并笔 `b5715c03`）**：356 文件
+>   +73511/-26869（`git diff --cached --shortstat`），`cleanup..bootstrap` 459→0。
+>   冲突只有 `roadmap.md` 一处，按并集解（本道 10055–10057 三节＋主线 990–1006 十七节全留）。
+>   合并后两处现状锁的槽数被顶高并按实测改数（12 格）：只有含模块级语句的段变多
+>   （+1／static 那三段 +2），`map槽`／`map被调`／`env`／`顶层赋值` 一字未变，
+>   候选来源＝主线 `50ca4085`（批次 942"模块级顶层赋值建槽"，实测在合并面内），逐笔归因未做。
+>   库内单元测试口径 145→265（主线带进来的），合并后 `regression_history` 81/81、
+>   `--lib` 265/265、`cargo build --release -p zetac` rc=0（27.5 秒）。
+>   合并前处置：本树 2026-10-01 那族未提交在制品（`lambda` 星形参数＋W1012 默认值丢弃警告＋
+>   `parse_class` 空根名守卫＋t562/t563 两枚夹具）经 HEAD／bootstrap 两侧查证＝仓库里没有任何
+>   副本，故不丢弃，存成分支 `wip/739-745-parser-lambda`（提交 `93ba5a90`），四文件复原到 HEAD
+>   且逐文件核 md5，夹具移到 `/tmp/b10058/wip_fixtures/`；是否重新落地由 owner 决定。
+>   下一步＝跑完窗口 9 的每批检查并把读数写回本节。
+
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚

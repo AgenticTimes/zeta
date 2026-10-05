@@ -33236,3 +33236,104 @@ else-if＋常规调用尾巴）——臂体已薄，续拆价值转低；轴 D c
 留）；unified trait 可再并入 typecheck.rs；new_resolver 2,192 行仅
 InferContext 一个消费点——本体退役需 fallback 先切换（971 退役条件
 评估原话）。
+
+## 批次 10058（2026-10-06，第四十六批：实修——未标注函数返回列表推导时，元素标记传不到调用点）
+
+代码笔 `e35f5aae`（`src/middle/resolver/resolver.rs` +4/-1、`tests/regression_history.rs` +162/-15，
+两个数字取自 `git diff --cached --numstat`）。
+
+### 症状与来源
+
+批次 10057 的手写多特性脚本 `hand57_type_propagation` 里有
+`def shout(xs): return [x + "!" for x in xs]`，调用方 `print(out)` 打出三个堆地址
+`[4306960368, 4306960352, 4306960336]`（读数 `/tmp/b10057/failcases_readings.txt:16-17`），
+CPython 期望 `['x!', 'x!', 'x!']`。
+
+### 根因（探针实测，不是推断）
+
+`src/middle/resolver/resolver.rs` 的 `unannotated_return_ty` 里，内层 `infer` 的 `__collect__`
+臂按 `args.get(1)` 取那个 lambda；而列表推导脱糖出来只有一个实参（λ 在 `args[0]`，同文件
+`infer_global_ty` 的 `__collect__` 臂取 `args.first()` 是对的）。`args.get(1)` 恒空 ⇒ 元素表达式
+取不到 ⇒ 元素型恒落兜底 `I64` ⇒ 调用点目的槽写成 `DynamicArray(I64)`，打印按整型槽读出指针数值。
+
+取证＝`/tmp/b10058/p1.z`–`p5.z` 五枚探针配 `--dump-mir`（仓根 cwd）；`resolver.rs` 改前 md5
+`e841c2206fe81514fe57895e73991edf`、改后 `e05492042e85a912e9e8087b6eb1d2c3`。
+
+先前"循环变量不在 `seen` 里所以元素推不出来"的猜想已被推翻：`+` 拼接那一支走的是批次 587 的
+字符串规则，与 `seen` 无关。加探针跑一趟才知道是索引错位——再次印证"归因要靠实测，别靠推理收尾"。
+
+### 修法
+
+一处：`args.iter().find_map`。闭包体是 `If`（过滤形 `[x for x in xs if c]`）时取 `then` 首条
+表达式语句的 `expr`。
+
+### 用例
+
+`unannotated_list_comprehension_return_marks_element_at_call_site`——四格，每格读
+(被调方推导式结果槽型, main 调用点目的槽型)：拼接元素 (Str,Str)、过滤形拼接 (I64,Str)、
+元素是长度 (I64,I64)、裸循环变量 (I64,I64)。
+
+过滤形那一格的被调方自己那一槽仍是 `I64`——它由另一处站点决定（`infer_global_ty` 的
+`__collect__` 臂认不出 `AstNode::If`），本批不扩面，按现状锁写。
+
+同时把批次 10024 那条 `comprehension_element_marker_is_str_in_the_callee_but_not_at_the_call_site`
+的期望从"调用点 `I64`"改成 `Str`（函数名不动：`roadmap.md` 里有按名字引用它的行）。
+
+### 变异矩阵（6 臂；脚本 `/tmp/b10058/mut.py`，读数 `/tmp/b10058/mutation.log`；还原源＝
+`/tmp/b10058/resolver.fixed.rs`，因为本批修复当时还没进 HEAD——沿用"备份式还原会自我满足"那条
+教训，改前基线另有 `git show HEAD:` 对照）
+
+| 臂 | 撤法 | 读数 |
+|---|---|---|
+| HEAD | 原样 | 81 条全绿，红格 0 |
+| M1 | `find_map` 换回 `args.get(1)`（＝回到改前） | 2 条用例红：本条"拼接元素"＋"过滤形拼接"，以及 10024 那条 |
+| M2 | 整臂撤成 `=> None` | 3 条用例红＝M1 的红格集超集（多带 10001 的 vector-shape 那条） |
+| M3 | 取到 `elem` 但不推断（`et = None`） | 红格与红值和 M1 一字相同 ⇒ 同一条链，只算一条覆盖 |
+| M4 | 换成等价写法 `args.first().into_iter().find_map` | 0 红＝等价改写，阴性 |
+| M5 | 删掉 `AstNode::If` 那一支 | 只红"过滤形拼接"一格（该格两槽都退 `I64`）＝独立覆盖 |
+| M6 | `infer_global_ty` 那侧的 `args.first()` 改成 `args.get(1)` | 红在另外两条用例（`bare_call_return_type_types_comprehension_global_element`、`global_list_comprehension_keeps_element_type_at_env_reads`），本条四格一字不变＝另一处站点，与本条互不备份 |
+
+### 端到端复验
+
+`hand57_type_propagation` 与 CPython 的逐行差异 4 行 → 1 行；剩下的那一行是 `sorted()` 的排序，
+站点在 `runtime/py_additions.c:446-476`（`zt_map_sorted`），动运行期 C 需要用户批准，本批不取。
+AOT 产物实跑 `['BSa', 'BSb']`、`['x!', 'x!', 'x!']`、`['a!', 'b!']`、`[1, 2]` 与 CPython 一字相同。
+
+### 每批检查
+
+`cargo test --test regression_history` 81 passed / 0 failed；`cargo test -p zetac --lib`
+145 passed / 0 failed（合并前本树口径）；`cargo build --release -p zetac` rc=0。
+本批没另跑抽样窗口（记录缺口＝本批有 `src/` 净改动却只跑了上面两个目标）；合并后的树在
+同步批 10059 的窗口 9 补了一轮抽样，读数记在 10059 那节。
+
+### 未修两项（按登记规则记在 #20005 余项内，不占新任务号）
+
+① 过滤形 `[x for x in xs if c]` 在被调方自己那一槽仍丢元素型（`infer_global_ty` 的 `__collect__`
+臂不认 `AstNode::If`）；② 元素是裸循环变量时（`return [x for x in xs]`）元素型仍取不到——
+那一形需要从可迭代对象取元素型，`seen` 里没有循环变量的型。
+
+## 批次 10059（2026-10-06，同步批：并入 bootstrap 的 459 笔）
+
+合并笔 `b5715c03`——356 文件、+73511/-26869（`git diff --cached --shortstat`）。
+`cleanup..bootstrap` 从 459 → 0，`bootstrap..cleanup` = 8。
+
+- 冲突只有一处＝`roadmap.md`（本道 10055–10057 三节与主线 990–1006 十七节在同位置各自追加）。
+  按并集解：两侧章节全留，只删三个冲突标记行，接缝补一空行。
+- `src/middle/resolver/resolver.rs` 自动合并成功；批次 10058 的修复合并后仍在原位（:5012 的注释
+  实读确认）。主线侧那 459 笔里仍带着 `args.get(1)` 的老错（其 :5012 之前那一段），
+  所以这一笔不是重复修。
+- 两处现状锁的槽数被合并顶高：`container_annotation_keeps_key_and_value_type_in_mir_type_map`
+  的 9 个含模块级语句的段"其他槽数"+1、`g`／`f` 两段与全部 `map槽`／`map被调` 一字未变；
+  `static_decl_in_function_body_becomes_one_persistent_cell` 只有三段 `main` 的"槽数"+2、
+  其余 14 格与全部 `env`／`顶层赋值` 一字未变。位移形状一致＝只有顶层语句所在段变多，
+  候选来源＝主线 `50ca4085`（批次 942"模块级顶层赋值建槽"，已实测在合并面内）；
+  逐笔归因未做。期望值按合并后实测改数（12 格），断言形状一字未动。
+- 库内单元测试口径变化：本树合并前 145 条 ⇒ 合并后 265 条（主线带进来的），
+  `cargo test -p zetac --lib` 265 passed / 0 failed。
+- 合并前处置本树 2026-10-01 那族未提交在制品（`lambda` 星形参数＋默认值丢弃警告 W1012＋
+  `parse_class` 空根名守卫，四文件＋t562/t563 两枚夹具）。HEAD 与 bootstrap 两侧都查过＝
+  `dropped_default`、`LAMBDA_DEFAULT_DISCARDED` 零命中，两枚夹具在任何提交里都不存在
+  （`git log --all -- <夹具>` 空）⇒ 是本树唯一副本，不丢弃：用 plumbing
+  （`write-tree`＋`commit-tree`，工作树 md5 一字未变）存成分支 `wip/739-745-parser-lambda`
+  （提交 `93ba5a90`），四个在制文件复原到 HEAD 并逐文件与 `git show HEAD:` 核 md5，
+  两枚夹具移到 `/tmp/b10058/wip_fixtures/`。是否重新落地由 owner 定，本道不自行把它并进去。
