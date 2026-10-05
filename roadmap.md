@@ -29711,3 +29711,10 @@ splice_env_mirrors/sub_splice/receiver_global_key 七方法（215 行）迁
 gen/env_mirror.rs，可见性 pub(crate)。gen.rs 3798→3676；累计
 19,392→3,676（-81.0%），35 个族文件。验证：库 246/246、差分抽样
 284/284、python_style 479/0。
+
+## 批次 959（2026-10-05）：轴 D——py 成员分派族迁出
+
+py_member_target/py_member_call/py_struct_type_of/py_struct_has_field/
+py_handle_of 五方法（266 行）迁 gen/py_member.rs。gen.rs 3676→3410；
+累计 19,392→3,410（-82.4%），36 个族文件。顺带删 env_store 孤儿 doc。
+验证：库 246/246、差分抽样 284/284、python_style 479/0。
