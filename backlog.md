@@ -1010,6 +1010,27 @@
 >   本批零 `src/` 净改动 ⇒ 被测件 `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与
 >   10050／10051 同一颗，抽样窗口这一格按 2026-10-03 节奏不重跑。滞留：代码笔后 `bootstrap..cleanup`＝67、
 >   `cleanup..bootstrap`＝419（主树 HEAD `77f3ba26`）。
+> - 批次 10053（代码 `cbfb0acf`）＝来源批次 238（`ada68ca6`，2026-09-20，返回注解 `-> tuple[pd.DataFrame, int]`
+>   的元素带模块限定名 ⇒ 解构出的帧仍按 map 处理）做成进程内单元测试（#20005 第四十一批），同族两笔
+>   一并入格：批次 237（`928addac`）的顶层 `-> pd.DataFrame`、批次 232 的 `-> Path` → `PyPath`。站点＝
+>   `src/middle/resolver/resolver.rs` 的 `shim_class_normalize`（现 `:5091`）＋唯一外部调用点（现 `:5167`）
+>   ＋调用点内的标签改写支（现 `:5155-5156`）；消费面另一半（`gen.rs` 的解构分支）在避让面未变异。新增
+>   `shim_class_qualifiers_in_return_annotations_strip_recursively_at_callsite`（`#[test]` 在
+>   `tests/regression_history.rs:8053`，断言 `:8127:5`）＝九格一组断言，逐格读 `main` 段 `type_map` 里带四个
+>   类名的型串。七组变异各撤一处（还原源 `git show HEAD:src/middle/resolver/resolver.rs`，md5
+>   `e841c2206fe81514fe57895e73991edf`）：M7 撤 `:5103` 参数递归＝红格 1/3/4（独占格 1）；M3 名单改窄
+>   `:5098`＝红格 3/4/8/9（独占格 8、9）；M4 撤调用点 `:5167`＝红六格（独占格 2）；M6 撤 `:5156` 标签改写
+>   ＝只红格 5；⇒ 四组各红各的格＝独立覆盖。三组阴性（撤掉后 77 条一字不变）＝M1 `:5110` 的
+>   `Type::Tuple` 递归（本九形的 `tuple[...]` 在 `Type` 里是 `Named("tuple", ts)`，那一支走不到）、M2 `:5105`
+>   的 `DynamicArray` 递归（顶层 `list[...]` 在进本函数前被 `:5146-5151` 改写掉）、M5 `:5094-5095` 的标签提前
+>   返回（`Path` 由调用点承担）；这三支各由什么形状打到＝未证。格 6（`map[str, pd.DataFrame]` 值型）与格 7
+>   （顶层 `list[pd.DataFrame]` 元素）＝现状锁，七组下读数都不变（连撤调用点也不变＝其型不来自这条改写链），
+>   取值来源未证。套件 76→77 条，连跑三遍 1.47／1.34／1.50 秒；`cargo test -p zetac --lib` 145/145。本批零
+>   `src/` 改动 ⇒ 被测件 `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10050／10051／10052
+>   同一颗，抽样窗口按 2026-10-03 节奏不重跑。候选重筛：`fix(` 标题＋避让面这套口径筛出 **0 条**（已被
+>   10021–10052 用尽），换"关键词标题＋GOOD 文件面"重筛得 18 条并取走 238；批次 159 两笔判掉（结论已由
+>   10047 的来源批次 657 那条覆盖）。下一批候选（GOOD-only 无避让面优先）＝173、171、159（`e9d29025`）、
+>   351、210。滞留：代码笔后 `bootstrap..cleanup`＝69、`cleanup..bootstrap`＝419（主树 HEAD `77f3ba26`）。
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚

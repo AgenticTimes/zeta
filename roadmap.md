@@ -29343,3 +29343,110 @@ t405_hard_stub_aborts_loudly"`）。旧格式那行读成 `stuck=0` 而不是把
 - 下一批回 #20005 节奏；候选站点按本批重筛剩下的面：`src/frontend/parser/pattern.rs` 其余笔、
   `src/middle/ctfe/` 其余文件、`pylib.rs`（546）。只看 `fix(` 开头的笔＋站点不在避让面＋先 `git show`
   核对该代码仍在册＋先证该趟有调用方。
+
+## 批次 10053：补历史缺陷单元测试（第四十一批，续 #20005，来源批次 238／237／232）
+
+### 来源与站点
+
+来源批次 238（`ada68ca6`，2026-09-20，`fix(resolver,mir)`）＝函数返回注解 `-> tuple[pd.DataFrame, int]`
+里的库类名带模块限定（`pd.`），交给降形侧的签名没把限定名去掉，解构出来的帧仍按"map"处理：缺陷记录
+原文实测 `len(out.columns)` 恒 0、`out["a"]` 变成对结构体句柄做 map 下标（段错误）。同族两笔：批次 237
+（`928addac`）＝顶层那一形 `-> pd.DataFrame`（实测 `ParquetCache.load()` 返回 892 行／0 列，
+`df.itertuples` 崩）；批次 232＝registry 标签那一支 `-> Path`（方法派发找 `Path::open`，运行期入口实为
+`PyPath`）。
+
+站点＝`src/middle/resolver/resolver.rs`（行号按本批最后一次实跑取；本批只读该文件，没有改它）：
+
+1) `shim_class_normalize`（现 `:5091`）：registry 标签提前返回 `:5094-5095`、限定名去壳名单
+   `:5097-5103`（名单在 `:5098`：`DataFrame | Series | GroupBy`）、`Named` 的参数递归 `:5103`、
+   `Type::DynamicArray` 递归 `:5105`、`Type::Tuple` 递归 `:5110`；
+2) 唯一外部调用点（现 `:5167`）＝`lower_to_mir` 建返回型表 `ret_types` 处；标签改写在同处的
+   `:5155-5156`；顶层 `vec`／`list` 注解在 `:5146-5151` 被提前改写成 `DynamicArray`（在进本函数之前）。
+3) 消费面另一半（批次 238 的第②处修复＝解构时同时接受 `Named("tuple", ts)`）在
+   `src/middle/mir/gen.rs`＝避让面（主线在重构该文件），本批未变异。
+
+### 用例形状
+
+新增 `shim_class_qualifiers_in_return_annotations_strip_recursively_at_callsite`
+（`#[test]` 在 `tests/regression_history.rs:8053`，断言 `:8127:5`）＝九格一组断言，每格一个单文件夹具
+走 `lower_all`，读 `main` 段 `type_map` 里出现四个类名的型串（去重＋排序）：
+
+| 格 | 注解 | HEAD 读数 |
+|---|---|---|
+| 1 | `-> tuple[pd.DataFrame, int]`（238 原形） | `Named("tuple", [Named("DataFrame", []), I64])` |
+| 2 | `-> pd.DataFrame`（237 原形） | `Named("DataFrame", [])` |
+| 3 | `-> tuple[pd.GroupBy, int]` | `Named("tuple", [Named("GroupBy", []), I64])` |
+| 4 | `-> tuple[pd.Series, int]` | `Named("tuple", [Named("Series", []), I64])` |
+| 5 | `-> Path`（232 原形） | `Named("PyPath", [])` |
+| 6 | `-> map[str, pd.DataFrame]` | `Named("map", [Str, Named("pd.DataFrame", [])])`（现状锁） |
+| 7 | `-> list[pd.DataFrame]` | `DynamicArray(Named("pd.DataFrame", []))`（现状锁） |
+| 8 | `-> pd.Series` | `Named("Series", [])` |
+| 9 | `-> pd.GroupBy` | `Named("GroupBy", [])` |
+
+期望值来源＝缺陷记录＋本批 `target/debug/zetac --dump-mir` 实拍（`/tmp/b10053/fix/s1..s9.z`，
+七枚先跑、第 8／9 格补跑，读数分别落在 `Series`／`GroupBy`），首趟进程内跑九格与该实拍一字相同。
+`target/debug/zetac` md5 `7c1ad679468c9a94c396029dad92121a`（含本车道在制的解析器改动，与
+`target/release/zetac` 不同颗，故 CLI 实拍只用作期望值来源，套件读数一律走进程内 `lower_all`）。
+
+### 变异矩阵（七组各撤一处，还原源＝`git show HEAD:src/middle/resolver/resolver.rs`，md5 `e841c2206fe81514fe57895e73991edf`）
+
+红点全部落在同一条断言 `tests/regression_history.rs:8127:5`（一组断言管九格），区分证据＝变红的格清单：
+
+| 组 | 撤掉的位置 | 变红格数 | 变红的格 | 独占格 |
+|---|---|---|---|---|
+| M1 | `:5110` `Type::Tuple` 递归整行 | 0（阴性） | — | — |
+| M2 | `:5105` `Type::DynamicArray` 递归整行 | 0（阴性） | — | — |
+| M3 | `:5098` 名单改窄成只 `"DataFrame"` | 4 | 格 3、4、8、9 | 格 8、9 |
+| M4 | `:5167` 调用点不再归一 | 6 | 格 1、2、3、4、8、9 | 格 2 |
+| M5 | `:5094-5095` 标签提前返回改成直取原名 | 0（阴性） | — | — |
+| M6 | `:5156` 调用点标签支不改名 | 1 | 格 5 | 格 5 |
+| M7 | `:5103` `Named` 的参数递归改成 `args.clone()` | 3 | 格 1、3、4 | 格 1 |
+
+- M3／M4／M6／M7 各红各的格且各有独占格＝四条独立覆盖；红格数还能分出"坏在接线（六格全红）还是
+  坏在某一支（三／四／一格）"。
+- 三组阴性的解释（各自的"为什么打不到"）：M1＝这九格的 `tuple[...]` 注解在 `Type` 里是
+  `Named("tuple", ts)` 而不是 `Type::Tuple` 变体，那一支根本走不到；M2＝这九形里 `DynamicArray`
+  只作顶层型出现，而顶层 `list[...]`／`vec[...]` 在进 `shim_class_normalize` 之前就被 `:5146-5151`
+  改写掉；M5＝`Path` 的改写由调用点 `:5155-5156` 承担（＝M6 红的那格）。这三支各由什么注解形状打到＝未证。
+- 第 6、7 两格（现状锁）在七组下读数都不变，连撤调用点也不变＝这两格的型不来自上面这条改写链；
+  其取值来源未证，因此这两格只钉"今天没被改写"，不钉"它们该被改写"。
+- 七组每臂日志都有 `Compiling zetac`（`/tmp/b10053/final/arm_M*.log`），每组跑完 `resolver.rs`
+  md5 断言回 `e841c2206fe81514fe57895e73991edf`。
+
+### 候选重筛（本批用掉的与剩下的）
+
+- 只看 `fix(` 开头标题＋站点文件不在避让面的老口径重筛＝**0 条**（该口径在册候选已被 10021–10052 用尽）。
+  本批改用关键词标题（`修／不再／漏／错／崩／丢／失／误／退回／被丢／不闭合`）＋GOOD 文件面
+  （`parser/stmt.rs`、`parser/parser.rs`、`indent.rs`、`macro_expand.rs`、`ast.rs`、`ctfe/`、`resolver/`、
+  `types/`、`typecheck_new.rs`）重筛＝18 条候选，取批次 238（站点在 `resolver.rs`，同笔的 `gen.rs` 半边
+  按避让面不锁）。
+- 批次 159 的两笔也在这张表里，但其结论（方法名按模块限定/类名改名表）已由 10047 的
+  `method_bodies_recover_the_module_rename_table_from_the_mangled_class_name`（来源批次 657）覆盖，
+  本批不重复。
+- 下一批候选（同表剩余，GOOD-only 无避让面的优先）：173、171、159（`e9d29025` 追加笔）、351、210；
+  带避让面的：646、620、603、339、338、167、163、153、151、149。
+
+### 每批检查与收尾
+
+- 套件 76→77 条：`cargo test --test regression_history` 连跑三遍 **1.47／1.34／1.50 秒**，
+  77 passed／0 failed（首趟即绿＝九格期望值与 HEAD 行为一致，没有为了变绿调期望）。
+- crate 内 `cargo test -p zetac --lib` **145 passed／0 failed**（0.32 秒）。
+- 本批 `src/` 零改动（代码笔只含 `tests/regression_history.rs`，`git diff --cached --numstat`＝
+  `120 1`），被测 release 二进制 md5 全程 `ed5227ccd29b70c4ee9ae17500926f10` 未变 ⇒ 按 2026-10-03
+  测试节奏不跑抽样窗口（差分／python_style／official／corpus 四路均未触发，无新真实缺陷读数）。
+- 收尾：`bootstrap..cleanup`＝**69**（代码笔 `cbfb0acf`＋本记录笔）、`cleanup..bootstrap`＝**419**
+  （主树 HEAD `77f3ba26`＝批次 985 补录笔）。本树内容仍大幅滞后主树，按既有裁定不并主树。
+
+### 经验（本批新增三条）
+
+1. **阴性臂的解释要落到"这一支为什么走不到"，不能只写"没红"**：M1 的 `Type::Tuple` 递归不红，是因为
+   `tuple[...]` 注解在 `Type` 里就是 `Named("tuple", ts)`——同一件事在 Debug 形里一眼可见（`Named("tuple",
+   [...])`），先读一眼期望值串的形状就能预判哪一支是死的。下次刻变异位点前先把 `Type` 的实际变体形状
+   抄下来，别按语法外形猜变体。
+2. **一张候选表用尽要换筛选口径，不是换关键词顺序**：`fix(` 标题＋避让面这套口径在本批筛出 0 条，
+   换成"关键词标题＋GOOD 文件面"重新筛才拿到候选；筛子本身要留脚本（`/tmp/b10053/screen*.py`），
+   下一批改口径重筛才知道自己改了什么。
+3. **一组断言管多格时，"红点行号"没有区分力，红格清单才是证据**：七组变异红点全在同一条
+   `:8127:5`，逐格 `want`／`got` 对照才能分出独立覆盖与独占格；因此变异脚本必须把左右两侧解析成
+   按格名索引的表（键＝格名，不是整段匹配文本——两侧文本本身不同，按整段配对会把变化格读成
+   "未匹配"）。
