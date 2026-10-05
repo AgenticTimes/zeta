@@ -29718,3 +29718,9 @@ py_member_target/py_member_call/py_struct_type_of/py_struct_has_field/
 py_handle_of 五方法（266 行）迁 gen/py_member.rs。gen.rs 3676→3410；
 累计 19,392→3,410（-82.4%），36 个族文件。顺带删 env_store 孤儿 doc。
 验证：库 246/246、差分抽样 284/284、python_style 479/0。
+
+## 批次 960（2026-10-05）：轴 D——嵌套类重绑族迁出
+
+rewrite/rebind/rebound_target 三方法（144 行）迁 gen/nested_class.rs。
+gen.rs 3410→3267；累计 19,392→3,267（-83.2%），37 个族文件。验证：
+库 246/246、差分抽样 284/284、python_style 479/0。
