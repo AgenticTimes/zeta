@@ -1,11 +1,18 @@
 # @cat: control
-# @note: del 未定义变量不报 NameError——静默通过（CPython NameError）。
-#        gen.rs 车道：del 语句需要运行期检查。
+# @note: del 未定义变量不报 NameError——静默通过。
+#        旧拼法 `x = "hello"; del x; print(x)` 让 CPython 侧以 NameError 退出 1，
+#        取不到真值 ⇒ 本条一直是「坏用例」（不计入判定分母）。批次 10051 改成
+#        参考侧能跑完的拼法：CPython 打 NameError（退出 0），zeta 打 no error，
+#        差异进判定面。等 del 补上运行期检查后两侧同打 NameError，本条自动转 match。
 #@@ python
-x = "hello"
-del x
-print(x)
+try:
+    del y
+    print("no error")
+except NameError:
+    print("NameError")
 #@@ zeta
-x = "hello"
-del x
-print(x)
+try:
+    del y
+    print("no error")
+except NameError:
+    print("NameError")
