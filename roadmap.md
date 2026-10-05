@@ -32631,3 +32631,26 @@ keyfn-abi.html`（未入库，工作树可开）。
 实参值类别核对（须先解决位模式槽与值类别的消歧，避免与 f64 位模式
 约定打架）。提案②（MIR 内联）、③（单点 mangle＋声明表）、④（函数值
 签名标签）未动，见批 990 节排序。
+
+## 批次 992（2026-10-05）：提案③核心——key= 臂声明式分派（keyfn_bridge 纯函数＋全矩阵单测）
+
+把"判定与发射混在 if 链"的形态（批 978–988 叠块残骸的温床）拆掉
+（`<b992哈希>`）：
+
+1. `src/middle/mir/gen/keyfn_bridge.rs`：两个纯函数收拢全部判定——
+   `spec_worthy`（特化登记门槛：f64/f32 总是；i64 仅 float 返回
+   keyfn；其他否）＋ `choose_bridge`（AbsBuiltin／Specialized／Legacy
+   三态裁决；特化路要求 registered ∧ spec_worthy——跨点复用登记时
+   元素型未知/非数值的点继续旧路）。4 个全矩阵单测。
+2. call_dispatch key= 臂改为"取证据 → 查裁决 → 按裁决发射"，臂内
+   只剩证据提取（elem/kf_float/registered）与按裁决的发射代码；
+   match-unreachable 锁裁决形态穷尽。
+
+**验证**：行为零变（逐条等价搬运）——abs 臂四象限实拍
+`-5/-1/-2.5/0.5` 与 CPython 一致；四金用例＋pow 全过；库 267/267
+（含 4 新单测）；门禁窗口 2：差分 285/285、python_style 44/44、
+official 13/13、语料 38/40（在册预存，不判红）。
+
+**提案③余量**：单点 mangle 铸造函数（把 `__ZKEYF64_{nm}` 的拼接收拢
+为一个 helper——目前铸造点唯一在 call_dispatch 登记块，消费点
+codegen.rs 前缀判断＋main.rs take 循环，改动面小、随下批顺手）。
