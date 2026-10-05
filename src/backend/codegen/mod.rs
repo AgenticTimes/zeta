@@ -7,6 +7,9 @@ mod monomorphize;
 mod signature_table;
 // 批 997（提案①全表覆盖）：注册表生成的签名表段（--emit-sigtable）。
 mod signature_table_gen;
+// 批 1000（轴 D 第二刀）：keyfn 家族（W0911 核对＋FuncAddr 兜底臂）
+// 自 codegen.rs 迁出。
+mod codegen_keyfn;
 // @generated — regenerate via `python3 tools/gen_from_registry.py --emit`
 mod runtime_decls_registry;
 // @generated — regenerate via `python3 tools/gen_from_registry.py --emit-core`

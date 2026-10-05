@@ -1537,7 +1537,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
         f.count_basic_blocks() == 0 && f.get_type().get_return_type().is_none()
     }
 
-    fn infer_fn_return_type(&self, mir: &Mir) -> inkwell::types::BasicTypeEnum<'ctx> {
+    pub(super) fn infer_fn_return_type(&self, mir: &Mir) -> inkwell::types::BasicTypeEnum<'ctx> {
         // 批次 399: the answer comes from `Mir::signature_ret_ty`, the same entry
         // the caller-side slot pass reads, so the two halves of a call cannot
         // drift apart again. The mapping below is this function's old rule.
@@ -3058,102 +3058,6 @@ impl<'ctx> LLVMCodegen<'ctx> {
     /// Get or create a function for a call site, ensuring the declaration matches
     /// the actual number of arguments. Creates extern declarations for functions
     /// that don't exist yet (self-hosting bootstrap path).
-    /// 批 990（提案①第一段）：keyfn 特化副本的签名合同核对（W0911）。
-    /// 核对两层——
-    /// 1. `fn_val` 的实际 LLVM 签名：副本可能已被 FuncAddr 兜底按
-    ///    double(f64) 抢先声明，体发射进一个错签名的 FunctionValue 会
-    ///    静默产出错域指令；
-    /// 2. 体派生签名：param 槽型（type_map）＋`infer_fn_return_type`——
-    ///    批 983 的病根（参数注解没生效 ⇒ 槽 I64 ⇒ 体 i64(i64)）在这一
-    ///    层现形。
-    /// 任一层偏离 `KEYFN_PTR_CONTRACT`（double(f64)）即 panic：错签名过
-    /// C 桥的产物是运行期静默垃圾，宁可编译期响亮失败。
-    fn verify_keyfn_contract(
-        &self,
-        name: &str,
-        fn_val: FunctionValue<'ctx>,
-        mir: &Mir,
-    ) {
-        let contract = signature_table::KEYFN_PTR_CONTRACT;
-        // 1) 实际声明层
-        let ft = fn_val.get_type();
-        let actual_ret = ft
-            .get_return_type()
-            .map(Self::val_ty_of_basic)
-            .unwrap_or(signature_table::ValTy::I64);
-        let actual_params: Vec<signature_table::ValTy> = ft
-            .get_param_types()
-            .iter()
-            .map(|t| match t {
-                inkwell::types::BasicMetadataTypeEnum::IntType(_) => {
-                    signature_table::ValTy::I64
-                }
-                inkwell::types::BasicMetadataTypeEnum::FloatType(f) => {
-                    if f.get_bit_width() == 64 {
-                        signature_table::ValTy::F64
-                    } else {
-                        signature_table::ValTy::F32
-                    }
-                }
-                _ => signature_table::ValTy::I64,
-            })
-            .collect();
-        if !signature_table::sig_matches(actual_ret, &actual_params, contract) {
-            panic!(
-                "W0911 keyfn 签名核对失败: `{}` 实际声明 {}({})，C 桥合同 double(f64)——特化副本声明漂移（批 990 签名表核对）",
-                name,
-                Self::val_ty_name(actual_ret),
-                actual_params
-                    .iter()
-                    .map(|t| Self::val_ty_name(*t))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-        // 2) 体派生层
-        let derived_params: Vec<signature_table::ValTy> = mir
-            .param_indices
-            .iter()
-            .map(|(_, pid)| signature_table::val_ty_of(mir.type_map.get(pid)))
-            .collect();
-        let derived_ret = Self::val_ty_of_basic(self.infer_fn_return_type(mir));
-        if !signature_table::sig_matches(derived_ret, &derived_params, contract) {
-            panic!(
-                "W0911 keyfn 签名核对失败: `{}` 体派生签名 {}({})，C 桥合同 double(f64)——参数注解 f64 未生效或返回域不是浮点（批 983 病根，批 990 响亮化）",
-                name,
-                Self::val_ty_name(derived_ret),
-                derived_params
-                    .iter()
-                    .map(|t| Self::val_ty_name(*t))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-    }
-
-    /// LLVM 值类型 → ABI 值类别。指针同槽归 I64；浮点按位宽分列。
-    fn val_ty_of_basic(t: inkwell::types::BasicTypeEnum<'ctx>) -> signature_table::ValTy {
-        match t {
-            inkwell::types::BasicTypeEnum::IntType(_) => signature_table::ValTy::I64,
-            inkwell::types::BasicTypeEnum::FloatType(ft) => {
-                if ft.get_bit_width() == 64 {
-                    signature_table::ValTy::F64
-                } else {
-                    signature_table::ValTy::F32
-                }
-            }
-            _ => signature_table::ValTy::I64,
-        }
-    }
-
-    fn val_ty_name(t: signature_table::ValTy) -> &'static str {
-        match t {
-            signature_table::ValTy::I64 => "i64",
-            signature_table::ValTy::F64 => "double",
-            signature_table::ValTy::F32 => "float",
-        }
-    }
-
     fn get_or_declare_function(
         &mut self,
         name: &str,
@@ -7128,29 +7032,12 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .unwrap()
                         .into();
                 }
-                // 批 967：keyfn 单态化特化副本（__ZKEYF64_ 前缀）的兜底
-                // 声明与真体**同签名** double(f64)——副本参数注解 f64 ⇒
-                // codegen 参数签名 f64、返回 double；同名实体复用。
-                // C 侧 py_max_key_f64 把元素位模式 bitcast 成 double 传入
-                //（i64 元素走 py_max_key_i64_f64 的 sitofp 桥，批 989——
-                // 兜底签名与两桥的 keyfn 指针型一致，均为 double(f64)）。
-                // 批 989：此前三连重复块（967/974/979+984 各留一份）并一。
+                // 批 967/1000：keyfn 特化副本兜底臂迁至 codegen_keyfn.rs
+                //（轴 D 第二刀，语义零变）。
                 if name.contains(signature_table::KEYFN_SPEC_PREFIX) {
-                    let f = match self.module.get_function(name) {
-                        Some(f) => f,
-                        None => self.module.add_function(
-                            name,
-                            self.f64_type
-                                .fn_type(&[self.f64_type.into()], false),
-                            Some(Linkage::External),
-                        ),
-                    };
-                    let fptr = f.as_global_value().as_pointer_value();
-                    return self
-                        .builder
-                        .build_ptr_to_int(fptr, self.i64_type, "keyfn_addr")
-                        .unwrap()
-                        .into();
+                    if let Some(v) = self.try_funcaddr_keyfn_addr(name) {
+                        return v;
+                    }
                 }
                 let f = self.get_or_declare_function(name, &[], 0);
                 let fptr = f.as_global_value().as_pointer_value();
