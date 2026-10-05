@@ -1052,6 +1052,31 @@
 >   候选重筛：159 判掉（改名表已由 10047 的来源批次 657 那条覆盖，见 `tests/regression_history.rs:5006`）、
 >   351＝站点在解析器在制面；剩余 173、171 未复核。滞留：代码笔后 `bootstrap..cleanup`＝71、
 >   `cleanup..bootstrap`＝421（主树 HEAD `3d203cd1`）。
+> - 批次 10055（代码 `5b649d3c`）＝来源批次 660（`f3fa96f2`，2026-09-30＝字典字段查不到值型别时
+>   方法返回的写回被跳过 ⇒ 调用点按 `println_i64` 把串句柄地址当整数打）做成进程内单元测试（续
+>   #20005）。站点＝`src/middle/resolver/resolver.rs` 的 `match (vt, dt)` 里
+>   `(None, Some(_)) => Some(Type::PyDynamic)`（现 `:3314`）、`dyn_faces` 计数（现 `:3350-3352`）、
+>   写回条件 `writable` 的第二支（现 `:3191-3192`）。新增
+>   `dict_field_without_map_spelling_marks_method_return_known_dynamic`（`#[test]` 在
+>   `tests/regression_history.rs:8282`，断言 `:8342`）＝七格一组，读数＝`main` 里按出现顺序排出的
+>   被调符号名。**首稿两格被实测推翻**：`self.d = {}` 写在 `__init__` 的形状里，裸 `{}` 把字段拼写
+>   登记成 `map`，`:3118-3127` 先投出 `Some(Type::PyDynamic)` 的值型别 ⇒ `vt` 不是 `None`，命中的是
+>   批次 646 的 `(Some(PyDynamic), Some(d))` 一支（`:3320`）＝另一条链，撤 660 三支后 79 条一字不变，
+>   那两格测不到站点已删；先做 15 形 × 5 臂探针矩阵筛出真正打到 660 的四形＝字段压根没有 `map`
+>   拼写（只在 setitem 出现／完全没赋值／`self.d = dict()`／字段来自形参）。六臂矩阵（还原源
+>   `git show HEAD:src/middle/resolver/resolver.rs`，md5 `e841c2206fe81514fe57895e73991edf`，逐臂确认
+>   `Compiling zetac` 与还原后 md5 相同）＝撤 `:3314`／撤计数／撤 `writable` 第二支＝格 1～4 全红且
+>   红值一字相同（`zeta_dyn_to_string` 退回 `println_i64`）＝三支是一条传播链，守得住链、守不住
+>   "单独哪一支坏"；只撤 `dyn_faces == rets.len()` 半条件、把 `writable` 写成恒真＝格 5～7 红
+>   （另 10 条既有用例同红＝交叉印证）；撤 `(Some(_), Some(_))` 一支＝79 条一字不变（阴性，那一支
+>   未覆盖）。阴性形状（记在用例头注，不写覆盖声明）＝`self.d: dict[str, int] = {}` 的注解拼写没进
+>   `map_vals`（读数与裸 `map` 一字相同）、`self.d[k] = 7` 投票后再 `.get(k, <整数默认>)` 两形＝六臂
+>   读数不变。余项＝`(Some(_), Some(_))` 支要什么形状才打到＝未证；格 5～7 固定住的是"今天仍弃权"
+>   （CPython 真值 `missing`／`None`／`missing`，运行期仍按整数打）＝未修那半按 #20005 口径只记余项。
+>   套件 78→79 条全绿（1.48 秒）；`cargo test -p zetac --lib` 145/145；本批零 `src/` 净改动 ⇒ 被测件
+>   `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10050–10054 同一颗，抽样窗口按
+>   2026-10-03 节奏不重跑。候选重筛：下一批候选＝173、171（10054 留的两格未复核）。滞留：代码笔后
+>   `bootstrap..cleanup`＝1、`cleanup..bootstrap`＝422（主树 HEAD `3d203cd1`）。
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚

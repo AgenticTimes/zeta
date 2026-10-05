@@ -29535,3 +29535,95 @@ t405_hard_stub_aborts_loudly"`）。旧格式那行读成 `stuck=0` 而不是把
 3. 变异矩阵跑完后只改注释不会让红格清单失效（CASES 与断言文本未动），这条在本批是
    按「先跑臂、后回填注释」的顺序做的，回填后套件复跑仍 78 条全绿。
 
+
+## 批次 10055（2026-10-05，第四十三批，续 #20005／来源批次 660）
+
+代码笔 `5b649d3c`（`tests/regression_history.rs` +104 行，取自 `git diff --cached --numstat`）。
+零 `src/` 净改动：变异用完即还原，收尾 `src/middle/resolver/resolver.rs` md5
+`e841c2206fe81514fe57895e73991edf` 与 HEAD 一字相同。
+
+### 来源与站点
+
+来源批次 660（提交 `f3fa96f2`，2026-09-30）＝py 类方法体里 `return self.<f>.get(k, <字面量>)`、
+而字段查不到值型别时，返回写回被跳过。记录里的因果链＝值型别查不到 ⇒ 落 `_ => None` 走毒票
+⇒ `refine_method_return_types` 全票弃权 ⇒ `funcs` 保留解析层的 i64 默认 ⇒ 调用点按 `println_i64`
+打 `char*` ⇒ 静默堆地址。
+
+修法三支（站点＝`src/middle/resolver/resolver.rs`）：
+
+1. `match (vt, dt)` 里新增 `(None, Some(_)) => Some(Type::PyDynamic)`（现 `:3314`）＝"值型未知 ∪
+   有字面量默认"算证据表明的真并集（已知动态面），不再是毒票；
+2. 已知动态面单独计数 `dyn_faces`（现 `:3350-3352`），毒票不计入；
+3. 写回条件 `writable` 加"全部返回都是已知动态面"一支（现 `:3191-3192`）。
+
+相邻的批次 646（本车道笔）＝`:3118-3127` 把裸 `map` 拼写的字段值型别投成 `Type::PyDynamic`、
+`:3320` 把 `(Some(PyDynamic), Some(d))` 面转成 `Named("PyJson")`。两笔在同一条链上，
+区别只在 `vt` 是 `None` 还是 `Some(PyDynamic)`——这一条是本批定位的主要收获，见下节。
+
+### 七格形状与一次推翻首稿
+
+首稿两格用 `self.d = {}`（写在 `__init__` 里），撤 660 那三支后**套件 79 条一字不变**。
+逐层查 `map_vals` 的来源（`:3098-3130` 只从 `type_decls` 的字段拼写取值）后确认原因：
+裸 `{}` 把字段拼写登记成 `map`，`:3118-3127` 随即投出 `Some(Type::PyDynamic)` 的值型别，
+于是 `vt` 不是 `None`，命中的是批次 646 的 `(Some(PyDynamic), Some(d))` 一支＝另一条链。
+首稿那两格测不到 660 的站点，已删。
+
+真正打到 660 的形状＝字段压根没有 `map` 拼写（`map_vals` 查不到项 ⇒ `vt == None`）四形，
+先做 15 形探针（`/tmp/b10055/probe_body.rs`，`tests/probe_tmp.rs` 临时目标，用完删除）逐个撤臂比对：
+
+| 格 | 形状 | `main` 读数（HEAD） | 撤臂后 |
+|---|---|---|---|
+| 1 | 字段只在 `self.d[k] = v` 里出现 | `… A2::put \| A2::fetch \| zeta_dyn_to_string \| println_str` | `println_i64` |
+| 2 | 字段完全没赋值，只在方法里读 | `… A3::fetch \| zeta_dyn_to_string \| println_str` | `println_i64` |
+| 3 | `self.d = dict()` 构造器初值 | `… A4::fetch \| zeta_dyn_to_string \| println_str` | `println_i64` |
+| 4 | 字段来自形参 `self.d = o` | `… A8::fetch \| zeta_dyn_to_string \| println_str` | `println_i64` |
+| 5 | 已知动态面 ∪ 整数返回（混票弃权） | `… Cfg2::both \| println_i64` | 写回被放松则变 `zeta_dyn_to_string` |
+| 6 | `.get(k)` 没有默认值（毒票弃权） | `… Cfg3::fetch \| println_i64` | 同上 |
+| 7 | 已知动态面 ∪ 毒票（一票推不出就弃权） | `… Cfg6::fetch \| println_i64` | 同上 |
+
+CPython 对照（`/tmp/b10055/`）＝格 1 打 `x`、格 3／格 4 打 `missing`、格 2 的字段从未赋值＝
+`AttributeError`（该格只取编译期读数）。格 5～格 7 固定住的是"今天仍弃权"这一现状，
+CPython 真值 `missing`／`None`／`missing`，运行期仍按整数打＝未修那半按 #20005 口径记在余项。
+
+### 六臂变异矩阵
+
+还原源固定 `git show HEAD:src/middle/resolver/resolver.rs`（HEAD md5
+`e841c2206fe81514fe57895e73991edf`），逐臂断言"锚点次数＝1""变异后 md5 ≠ HEAD""还原后 md5 ＝ HEAD"，
+并确认每臂日志里有 `Compiling zetac`（脚本 `/tmp/b10055/mutate.py`，读数 `/tmp/b10055/mutate2.out`）：
+
+| 臂 | 撤掉什么 | 红格 | 套件读数 |
+|---|---|---|---|
+| M1 | `:3314` 的 `(None, Some(_))` 一支 | 格 1～4 | 78 passed / 1 failed |
+| M2 | `:3350-3352` 的 `dyn_faces` 计数 | 格 1～4 | 78 / 1 |
+| M3 | `writable` 的第二支（`:3191-3192`） | 格 1～4 | 78 / 1 |
+| M4 | 只撤 `dyn_faces == rets.len()` 半条件 | 格 5～7 | 68 / 11 |
+| M5 | `let writable = true;` | 格 5～7 | 68 / 11 |
+| M6 | `:3326` 的 `(Some(_), Some(_))` 一支 | 无 | 79 / 0（阴性） |
+
+分工＝两条链：M1／M2／M3 红在同一批格、红值一字相同 ⇒ 三支是一条传播链，本条守得住整条链、
+守不住"单独哪一支坏"；M4／M5 红在格 5～7，且 M1～M3 撤时格 5～7 保持绿 ⇒ 两条链互不备份。
+M4／M5 另有 10 条既有用例同红（`comparison_method_return_…`、`classmethod_return_recovers_str_at_callsite`、
+`static_decl_in_function_body_…` 等）＝交叉印证，不是本条独占。
+
+探针里的阴性形状（记进用例头注，不写作覆盖声明）＝`self.d: dict[str, int] = {}` 注解拼写没进
+`map_vals`（读数与裸 `map` 一字相同）、`self.d[k] = 7` 投票后再 `.get(k, <默认>)` 两形＝六臂读数不变。
+
+### 每批检查与收尾
+
+- `cargo test --test regression_history`＝78→79 条全绿（1.48 秒）；
+- `cargo test -p zetac --lib`＝145/145；
+- 本批零 `src/` 净改动 ⇒ 被测件 `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10`
+  与 10050–10054 同一颗，抽样窗口按 2026-10-03 节奏不重跑；
+- 临时探针目标 `tests/probe_tmp.rs` 已删，`git status` 里本批只剩两个测试无关的在制面
+  （`src/error_codes.rs`、`src/frontend/parser/{expr,top_level}.rs`、`worktree.md`、两枚新夹具）。
+- 滞留：代码笔后 `bootstrap..cleanup`＝1、`cleanup..bootstrap`＝422（主树 HEAD `3d203cd1`）。
+
+### 经验
+
+1. 撤臂读数不变时，别急着说"这一支没用"——先查这支的**入参从哪来**。本批 660 那三支的
+   `vt` 来自 `type_decls` 的字段拼写，而裸 `{}` 早在 `:3118-3127` 被投成 `Some(PyDynamic)`，
+   所以 `vt == None` 需要"字段压根没有 `map` 拼写"的形状（只在 setitem 出现／从未赋值／
+   构造器／来自形参）。同一句症状代码换个字段写法就换了一条链。
+2. 写用例前先做"形状 × 撤臂"探针矩阵（15 形 × 5 臂，临时目标里 `println!` 读数即可），
+   比先写断言再变异省一到两轮返工——首稿两格若直接提交就是一组测不到站点的用例。
+3. 红值一字相同的多个臂要写成一条链，别拆成"独立覆盖"；能分开写的只有红格集合不同的那些臂。
