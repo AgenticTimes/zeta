@@ -7546,3 +7546,317 @@ fn static_decl_in_function_body_becomes_one_persistent_cell() {
     ];
     assert_eq!(want, got);
 }
+
+/// 批次 10050（#20005 第三十九批）——来源三笔解析器修复：
+/// ① `fd2dd593`（2026-09-16）通配 `_` 的词边界（当时语料丢行 7594→6940）；
+/// ② 批次 321（`78653481`，2026-09-22）绑定模式 `x @ 1..=10` 必须排在结构模式之前；
+/// ③ 批次 322（`b3f8d594`，2026-09-22）字符串字面量作 match 模式（同笔在内层与外层各
+/// 插了一条 `parse_string_lit,`＝本批 M4/M5 两个阴性读数的来源）。
+/// 三笔的失败模式同一条：第一个打不开的模式让 `parse_match_arm` 读不到 `=>`，W1002 把
+/// 整个 `fn` 连同其后的文件一起丢掉 ⇒ MIR 面看得见的是"函数清单少项＋解析余部非空"，
+/// 清单里只剩 `[main]`。站点在 `src/frontend/parser/pattern.rs`（不在本任务的避让清单内；
+/// 主线重构的是 `gen.rs`）：外层 `parse_pattern` 的臂序（带边界的通配 `:28-36`、bind `:52`
+/// 先于 struct `:54`、字符串 `:66`）＋它末尾自己收 `|` 链的 `many0`（`:79-85`）；
+/// `parse_simple_pattern`（`:324-337`，`parse_or_pattern` `:307-321` 只吃这一支）里
+/// bind `:328` 先于 struct `:329`、裸 `tag("_")` `:326`（没有边界检查）、字符串 `:333`。
+///
+/// 六组变异（每臂只改一处；臂文本与消歧见 `/tmp/b10050/patch.py`）。红格数取**进程内实跑**
+/// （`cargo test --test regression_history`，13 格是一条 `assert_eq!`，失败文本里的左右向量
+/// 解析成清单存 `/tmp/b10050/inproc_red.json`），CLI 趟（`--dump-mir` 对 13 个形状）作前置对照。
+/// 两趟的红格集合一字相同（M1→1 格、M2→2 格、M3→3 格、M4/M5→0 格、M6→2 格）：
+/// - M1 外层 bind 挪回 struct 之后＝1 格红（格 1）；这一格批次 10041 已有的
+///   `range_pattern_endpoints_and_inclusivity_reach_the_guard` 同臂也红，本条按**第二把锁**写；
+/// - M2 `parse_simple_pattern` 里 bind 挪回 struct 之后＝2 格红（格 2、格 3）＝or 链元素
+///   走的这一支，与 M1 的外层支红在不同格 ⇒ 批次 321 那笔的两处改动各自钉住；
+/// - M3 外层通配退回裸 `tag("_")`＝3 格红（格 4 `for _i in`、格 5 `(_a, _b) =>`、
+///   格 8 or 链头 `_i | 5`）＝`fd2dd593` 那笔在三个位置上活着；
+/// - M4 外层 `:66` 的字符串臂删掉＝13 格一字不变；M5 内层 `:333` 的字符串臂删掉＝同样
+///   一字不变；M6 两处一起删＝2 格红（格 6 单串模式、格 7 串 or 链）。
+///   阴性原因实拍＝两条臂互为备份：M4 下 `"+"` 由 `parse_or_pattern`（外层 `:58`，排在
+///   `:66` 之前）经 `parse_simple_pattern:333` 接走；M5 下单串由外层 `:66` 接走，
+///   `"ab" | "cd"` 由 `:66` 接单串＋外层 `many0`（`:79-85`）收链尾接走。
+///   ⇒ 格 6、格 7 是**现状锁**：单臂被删它们不响，只有两条一起没了才响。这不是本批选的
+///   形状问题，是仓库里确有两条同功能臂（`b3f8d594` 一笔写的两处）；修法（把两处收成
+///   一处）不在本任务面内，记在 #20005 余项。
+/// - 对照格 9–13（普通整数臂、整数 or 链、字符区间、变量与元组、普通 `for`）六臂一字不变。
+/// 每臂另跑 `cargo test -p zetac --lib`＝145 条一字不变 ⇒ 这六臂在 crate 内测试里没有既有覆盖，
+/// 只有全局夹具面打到过（`fd2dd593` 那笔当时带的是 `tests/python_style/t132_underscore_loop_var.z`）。
+///
+/// 未锁的两处（照实测写，不写成已覆盖）：
+/// ① 格 8 `_i | 5 => 1` 在 HEAD 走得通，靠的是外层 `parse_struct_pattern` 对裸路径的
+///    兜底＋外层 `many0` 收链尾；`parse_simple_pattern:326` 的裸 `tag("_")` 仍是无边界
+///    版本，只是这条链的链头没从那一支进来。内层那支在什么形状上会暴露＝未证。
+/// ② 六臂的红值全是"清单缩到 `[main]`"这一种（整份文件被截断；实得余部 12~15 行：格 4、格 5 是
+///    12 行，格 1、格 8、格 7 是 13 行，格 2、格 3 是 14 行，格 6 是 15 行），没有一臂打成"函数还在、
+///    模式降错"的静默错值形状；静默错值那半未锁。
+const P1_BIND_RANGE: &str = r#"fn binder(x: i64) -> i64 {
+    match x {
+        q @ 1..=10 => q,
+        _ => -1
+    }
+}
+print(binder(7))
+print(binder(70))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const P2_BIND_IN_OR_CHAIN: &str = r#"fn chain(x: i64) -> i64 {
+    match x {
+        1 | q @ 5..=9 => q,
+        _ => -1
+    }
+}
+print(chain(1))
+print(chain(7))
+print(chain(50))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const P3_BIND_LAST_IN_CHAIN: &str = r#"fn chain3(x: i64) -> i64 {
+    match x {
+        1 | 2 | r @ 8..=9 => r,
+        _ => -1
+    }
+}
+print(chain3(2))
+print(chain3(8))
+print(chain3(40))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const P4_FOR_UNDERSCORE_VAR: &str = r#"fn loops(n: i64) -> i64 {
+    for _i in 0..n {
+        print(_i)
+    }
+    return 3
+}
+print(loops(2))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const P5_TUPLE_UNDERSCORE_NAMES: &str = r#"fn pair_use(t: i64, s: str) -> i64 {
+    match (t, s) {
+        (_a, _b) => 5,
+        _ => 6
+    }
+}
+print(pair_use(1, "x"))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const P6_STRING_ARM: &str = r#"fn classify(op: str) -> str {
+    match op {
+        "+" => "plus",
+        "-" => "minus",
+        _ => "other"
+    }
+}
+print(classify("+"))
+print(classify("-"))
+print(classify("z"))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const P7_STRING_OR_CHAIN: &str = r#"fn classify2(op: str) -> str {
+    match op {
+        "ab" | "cd" => "x",
+        _ => "y"
+    }
+}
+print(classify2("ab"))
+print(classify2("zz"))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const P8_OR_CHAIN_UNDERSCORE_PREFIX: &str = r#"fn chain(x: i64) -> i64 {
+    match x {
+        _i | 5 => 1,
+        _ => -1
+    }
+}
+print(chain(5))
+print(chain(9))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const C1_PLAIN_INT_ARMS: &str = r#"fn plain(n: i64) -> i64 {
+    match n {
+        0 => 1,
+        1 => 2,
+        _ => 3
+    }
+}
+print(plain(0))
+print(plain(1))
+print(plain(9))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const C2_INT_OR_CHAIN: &str = r#"fn orchain(n: i64) -> i64 {
+    match n {
+        1 | 2 => 10,
+        _ => 20
+    }
+}
+print(orchain(2))
+print(orchain(5))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const C3_CHAR_RANGE: &str = r#"fn letters(c: i64) -> i64 {
+    match c {
+        'a'..='z' => 1,
+        _ => 0
+    }
+}
+print(letters(97))
+print(letters(65))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const C4_VAR_AND_TUPLE: &str = r#"fn vararm(n: i64) -> i64 {
+    match n {
+        k => k,
+    }
+}
+fn tup(t: i64, u: i64) -> i64 {
+    match (t, u) {
+        (a, b) => a,
+        _ => -1
+    }
+}
+print(vararm(4))
+print(tup(1, 2))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+const C5_FOR_PLAIN_VAR: &str = r#"fn loops(n: i64) -> i64 {
+    for i in 0..n {
+        print(i)
+    }
+    return 3
+}
+print(loops(2))
+
+fn tail_after() -> i64 {
+    return 7
+}
+print(tail_after())"#;
+
+#[test]
+fn match_pattern_arm_order_and_wildcard_boundary_keep_the_file() {
+    let cases: [(&str, &str); 13] = [
+        ("外层bind先于struct_绑定区间模式", P1_BIND_RANGE),
+        ("or链中段bind_走简单模式", P2_BIND_IN_OR_CHAIN),
+        ("or链末位bind_走简单模式", P3_BIND_LAST_IN_CHAIN),
+        ("for下划线变量_外层通配带边界", P4_FOR_UNDERSCORE_VAR),
+        ("元组模式下划线名_外层通配带边界", P5_TUPLE_UNDERSCORE_NAMES),
+        ("字符串单模式_两臂互为备份", P6_STRING_ARM),
+        ("字符串or链_两臂互为备份", P7_STRING_OR_CHAIN),
+        ("or链头下划线前缀名_走外层兜底", P8_OR_CHAIN_UNDERSCORE_PREFIX),
+        ("对照_普通整数臂", C1_PLAIN_INT_ARMS),
+        ("对照_整数or链", C2_INT_OR_CHAIN),
+        ("对照_字符区间", C3_CHAR_RANGE),
+        ("对照_变量臂与元组", C4_VAR_AND_TUPLE),
+        ("对照_普通for变量", C5_FOR_PLAIN_VAR),
+    ];
+    let mut got: Vec<(String, String)> = Vec::new();
+    for (label, src) in cases.iter() {
+        let (mirs, rem) = lower_all_allowing_truncation(src);
+        got.push((label.to_string(), use_module_reading(&mirs, &rem)));
+    }
+    let want = vec![
+        (
+            "外层bind先于struct_绑定区间模式".to_string(),
+            "清单=[binder,main,tail_after] 未解析=0行".to_string(),
+        ),
+        (
+            "or链中段bind_走简单模式".to_string(),
+            "清单=[chain,main,tail_after] 未解析=0行".to_string(),
+        ),
+        (
+            "or链末位bind_走简单模式".to_string(),
+            "清单=[chain3,main,tail_after] 未解析=0行".to_string(),
+        ),
+        (
+            "for下划线变量_外层通配带边界".to_string(),
+            "清单=[loops,main,tail_after] 未解析=0行".to_string(),
+        ),
+        (
+            "元组模式下划线名_外层通配带边界".to_string(),
+            "清单=[main,pair_use,tail_after] 未解析=0行".to_string(),
+        ),
+        (
+            "字符串单模式_两臂互为备份".to_string(),
+            "清单=[classify,main,tail_after] 未解析=0行".to_string(),
+        ),
+        (
+            "字符串or链_两臂互为备份".to_string(),
+            "清单=[classify2,main,tail_after] 未解析=0行".to_string(),
+        ),
+        (
+            "or链头下划线前缀名_走外层兜底".to_string(),
+            "清单=[chain,main,tail_after] 未解析=0行".to_string(),
+        ),
+        (
+            "对照_普通整数臂".to_string(),
+            "清单=[main,plain,tail_after] 未解析=0行".to_string(),
+        ),
+        (
+            "对照_整数or链".to_string(),
+            "清单=[main,orchain,tail_after] 未解析=0行".to_string(),
+        ),
+        (
+            "对照_字符区间".to_string(),
+            "清单=[letters,main,tail_after] 未解析=0行".to_string(),
+        ),
+        (
+            "对照_变量臂与元组".to_string(),
+            "清单=[main,tail_after,tup,vararm] 未解析=0行".to_string(),
+        ),
+        (
+            "对照_普通for变量".to_string(),
+            "清单=[loops,main,tail_after] 未解析=0行".to_string(),
+        ),
+    ];
+    assert_eq!(
+        want, got,
+        r#"批次 10050：绑定模式臂序（外层／or 链两支）、通配 `_` 词边界与字符串模式两臂互为备份"#
+    );
+}
