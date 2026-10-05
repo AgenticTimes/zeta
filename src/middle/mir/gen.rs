@@ -198,6 +198,14 @@ pub struct MirGen {
     /// 本表是 checker 证据的桥（参数降级时从 checker_env 取槽型），供
     /// 判别失败/为空时补位——`param_slot_kind` 统一消费。
     param_checker_tys: HashMap<u32, crate::middle::types::Type>,
+    /// 批 964（keyfn 单态化第一段）：特化克隆登记存储（共享 resolver
+    /// 的 RefCell）。本段只登记不消费——C 双签名与 mir_map 补 lower
+    /// 循环在第二段接线。
+    keyfn_spec_store:
+        Option<std::rc::Rc<std::cell::RefCell<Vec<AstNode>>>>,
+    /// 批 964：完整 FuncDef 快照（name → 定义）——key= 臂克隆特化的
+    /// 源（registered_funcs 的值是壳）。resolver 在构造 MirGen 时注入。
+    full_funcdefs: HashMap<String, AstNode>,
     /// NAME → element count for a `x = [ … ]` literal binding. `f(*x)` used to
     /// read the count from `Type::Array(_, Literal(n))`; now that non-float list
     /// literals are DynamicArrays that type is gone, so the count is remembered
@@ -408,6 +416,8 @@ impl MirGen {
             global_consts: HashMap::new(),
             source_types: HashMap::new(),
             param_checker_tys: HashMap::new(),
+            keyfn_spec_store: None,
+            full_funcdefs: HashMap::new(),
             array_lit_lens: HashMap::new(),
             pointee_widths: HashMap::new(),
             type_decls: HashMap::new(),
@@ -910,6 +920,24 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
     }
 
     /// PY-A: the file being compiled, so `__file__` can resolve to it.
+    /// 批 964：keyfn 特化登记存储（resolver 的 RefCell 共享句柄）。
+    pub fn with_keyfn_spec_store(
+        mut self,
+        store: std::rc::Rc<std::cell::RefCell<Vec<AstNode>>>,
+    ) -> Self {
+        self.keyfn_spec_store = Some(store);
+        self
+    }
+
+    /// 批 964：完整 FuncDef 快照注入（name → 定义）。
+    pub fn with_full_funcdefs(
+        mut self,
+        defs: HashMap<String, AstNode>,
+    ) -> Self {
+        self.full_funcdefs = defs;
+        self
+    }
+
     pub fn with_current_module(mut self, module: String) -> Self {
         self.current_module = module;
         self

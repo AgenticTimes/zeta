@@ -1696,6 +1696,48 @@ call, no NULL-handle dereference).",
                             return id;
                         }
                         let xs = self.lower_expr(&args[0]);
+                        // 批 964（keyfn 单态化第一段）：非内建 keyfn＋f64
+                        // 元素 ⇒ 克隆特化登记（f64 通道副本）。本段只登记
+                        // 不消费——发射维持旧路，第二段（C double(double)
+                        // 双签名＋mir_map 补 lower）接线后切换。
+                        if let (AstNode::Var(nm), Some(store)) =
+                            (&ka[1], self.keyfn_spec_store.as_ref())
+                        {
+                            let elem_f64 = matches!(
+                                self.type_map.get(&xs),
+                                Some(Type::DynamicArray(e))
+                                    if matches!(**e, Type::F64 | Type::F32)
+                            );
+                            let mangled = format!("{}__keyf64", nm);
+                            let already = store.borrow().iter().any(|a| {
+                                matches!(
+                                    a,
+                                    AstNode::FuncDef { name, .. }
+                                        if *name == mangled
+                                )
+                            });
+                            if elem_f64
+                                && !nm.starts_with("__")
+                                && !already
+                                && self
+                                    .full_funcdefs
+                                    .contains_key(nm.as_str())
+                            {
+                                if let Some(mut full) =
+                                    self.full_funcdefs.get(nm.as_str()).cloned()
+                                {
+                                    if let AstNode::FuncDef {
+                                        params, ..
+                                    } = &mut full
+                                    {
+                                        if let Some(p0) = params.first_mut() {
+                                            p0.1 = "f64".to_string();
+                                        }
+                                    }
+                                    store.borrow_mut().push(full);
+                                }
+                            }
+                        }
                         let f = self.lower_expr(&ka[1]);
                         let func = if method == "min" {
                             "py_min_key"

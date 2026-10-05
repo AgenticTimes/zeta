@@ -83,6 +83,10 @@ pub struct Resolver {
     /// 全模块注册表——惰性构建一次，闭包内只查。
     checker_plan:
         RefCell<Option<crate::middle::checker::ModuleCheckerPlan>>,
+    /// 批 964（keyfn 单态化第一段）：f64 通道特化 FuncDef 克隆的登记
+    /// 存储。gen 的 key= 臂发现非内建 keyfn＋f64 元素时克隆登记；
+    /// 第二段（C 双签名＋mir_map 补 lower 循环）接手消费。
+    keyfn_specializations: RefCell<Vec<AstNode>>,
     /// 批 940：顶层语句（main 体）——调用点证据扫描的覆盖面。registered_funcs
     /// 只含函数体，顶层 `show(get_data())` 这类调用点此前全部漏收。
     top_level_stmts: RefCell<Vec<AstNode>>,
@@ -195,6 +199,7 @@ impl Resolver {
             star_params: RefCell::new(HashMap::new()),
             registered_funcs: HashMap::new(),
             checker_plan: RefCell::new(None),
+            keyfn_specializations: RefCell::new(Vec::new()),
             top_level_stmts: RefCell::new(Vec::new()),
             module_resolver: ModuleResolver::new("."),
             macro_expander: MacroExpander::new(),
@@ -5584,6 +5589,20 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_repl_mode(self.repl_lowering)
             .with_type_decls(self.type_decls.clone())
             // 批次 912（轴 F P2）：checker 求解的槽型环境传给 MirGen。
+            // 批 964：keyfn 特化存储＋完整 FuncDef 快照注入
+            .with_keyfn_spec_store(self.keyfn_spec_store())
+            .with_full_funcdefs(
+                self.registered_func_defs
+                    .borrow()
+                    .iter()
+                    .filter_map(|d| match d.as_ref() {
+                        AstNode::FuncDef { name, .. } => {
+                            Some((name.clone(), d.as_ref().clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            )
             .with_checker_env({
                 let ret_map: std::collections::HashMap<String, Type> = self
                     .get_all_func_signatures()
@@ -6227,6 +6246,35 @@ fn shim_class_normalize(t: &Type) -> Type {
     }
 
     /// Get all registered function ASTs
+    /// 批 964：keyfn 特化存储共享句柄（MirGen key= 臂克隆登记用）。
+    pub fn keyfn_spec_store(
+        &self,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<AstNode>>> {
+        std::rc::Rc::new(self.keyfn_specializations.clone())
+    }
+
+    /// 批 964：登记 keyfn 特化克隆（按 mangled 名去重）。
+    pub fn register_keyfn_specialization(&self, spec: AstNode, mangled: &str) {
+        let dup = self
+            .keyfn_specializations
+            .borrow()
+            .iter()
+            .any(|a| matches!(a, AstNode::FuncDef { name, .. } if name == mangled));
+        if !dup {
+            self.keyfn_specializations.borrow_mut().push(spec);
+        }
+    }
+
+    /// 批 964：按名字找完整 FuncDef（registered_funcs 的值是壳，
+    /// 完整定义在 registered_func_defs）。
+    pub fn find_full_funcdef(&self, name: &str) -> Option<AstNode> {
+        self.registered_func_defs
+            .borrow()
+            .iter()
+            .find(|d| matches!(d.as_ref(), AstNode::FuncDef { name: n, .. } if n == name))
+            .map(|d| d.as_ref().clone())
+    }
+
     pub fn get_registered_funcs(&self) -> Vec<AstNode> {
         for name in self.registered_funcs.keys() {}
         self.registered_funcs.values().cloned().collect()
