@@ -7177,3 +7177,129 @@ fn module_level_big_int_assign_folds_to_bigint_handle_not_wrapped_i64() {
     ];
     assert_eq!(want, got);
 }
+
+/// 批次 413（`0a5b7949`，2026-09-25）＝带容器注解的赋值要把注解留在左值上，编译期回归钉。
+///
+/// 症状（413 记录原文）：`c: dict[str, Any] = {}` 这类赋值，解析时如果把注解丢掉、只留
+/// `c = {}`，MIR 里这个槽就只能由 `{}` 自己推出 `map<i64, i64>`；此后每一次写入都会把值型
+/// 钉成"那一次写的东西"的类型。413 拍到的事故是 `c["df"] = df` 把值型钉成 DataFrame 之后，
+/// `len(c["lst"])` 拿着列表句柄去走 `DataFrame::__len__`＝段错误。修完的正确行为＝注解里的
+/// 键型与值型直接进 `type_map`，写入不再改写它。
+///
+/// 站点＝`src/frontend/parser/stmt.rs:454-463`：`dict_like`（把注解认成容器）＋
+/// `(class_like || dict_like)` 那道守卫（决定要不要把注解包成 `TypeAnnotatedPattern`）。
+/// 守卫的另半边 `class_like`（类形注解，`b: Box | None = None`）是批次 413 之前的面，
+/// 本条用例的尺子只看 `map` 槽，看不到它（见下面 M4 的阴性说明）。
+///
+/// 读数三列（逐格取自同一段 MIR）：
+/// - `map槽=[槽号:类型串,…]`＝该段 `type_map` 里类型为 `Named("map", …)` 的槽，按槽号升序，
+///   类型串用 Rust 的 `Debug` 形式去掉空格（`Named("map",[Str,I64])`）；
+/// - `其他槽数`＝该段 `type_map` 里其余槽的个数；
+/// - `map被调=[…]`＝该段里 `map_`／`zeta_map`／`py_map` 开头的被调符号，按语句出现顺序（不去重）。
+///
+/// 期望值来源＝同批 `target/debug/zetac --dump-mir` 对 21 个形状的实测读数（在仓库根跑，
+/// 按 `== MIR 段名 ==` 切段后取本用例这三列），不是抄编译输出。
+///
+/// 四组变异（每臂只改 `stmt.rs` 一处）与红格集合：
+/// - M1 守卫改成只留 `class_like`（＝容器注解不再保留，回到 413 修前的行为）＝
+///   格 1、2、4、5、6 红，红值全是"注解里的值型被写侧或 `{}` 自己的 `I64` 顶掉"
+///   （格 2 的 `PyDynamic` 变成 `DynamicArray(I64)`＝413 那条事故链在编译期的形状）；
+/// - M2 拼写表只留 `"map"`（去掉 `"dict" | "Dict"`）＝21 个 CLI 形状与进程内 11 格的读数
+///   和 M1 一字相同 ⇒ 与 M1 是同一条链，只算防放松，不算第二条独立覆盖。原因实测＝
+///   `dict`／`Dict` 这两种拼写在到达这里之前已被上游归一成 `map<…>`（大写拼写的 s2 那格
+///   在 M2 下读数不变，说明生效的是 `"map"` 那一项）；
+/// - M3 删掉 `.trim_start_matches("typing.")`＝21 个形状全不变，阴性原因实测＝
+///   `typing.Dict[str, int]` 的注解在 HEAD 就没有进 `type_map`（格 10 把这一现状钉住了：
+///   该段只有一个来自 `{}` 的 `map[I64,I64]` 槽），这一臂在本批形状里无从体现；
+/// - M4 守卫改成只留 `dict_like`（＝类形注解不再保留）＝21 个形状全不变，阴性原因实测＝
+///   这把尺子只看 `map` 槽，类形注解的效果体现在 `Named("Box")` 那类槽上（s8 那格的
+///   `type_map` 里根本没有 `map` 槽＝格 11 只是佐证，不构成对 M4 的覆盖）。
+///
+/// 未锁的三处（照实测写，不写成已覆盖）：
+/// ① `typing.Dict[...]` 的注解在哪一步落空未查（M3 阴性已说明不在 `stmt.rs` 这一臂）；
+/// ② 嵌套值注解 `dict[str, dict[str, int]]`（格 9）的值型退化成 `map[I64,I64]`，
+///    是批次 10033 登记的"`from_string` 只扫尖括号"那一条，还是这一支的丢弃，未证；
+/// ③ 函数体里读模块级字典时（格 3）该段只有 `Named("map",[])`＝键型与值型双双丢失，
+///    四臂下读数都不变（本条只当现状锁），损害面未测。
+/// ②③ 按登记规则记在 #20005 余项内，不另占任务号。
+fn dict_slot_reading(m: &Mir) -> String {
+    let mut slots: Vec<u32> = m.type_map.keys().copied().collect();
+    slots.sort_unstable();
+    let mut maps = Vec::new();
+    let mut others = 0usize;
+    for id in slots {
+        let t = &m.type_map[&id];
+        match t {
+            Type::Named(n, _) if n == "map" || n == "dict" => {
+                maps.push(format!("{}:{:?}", id, t).replace(' ', ""));
+            }
+            _ => others += 1,
+        }
+    }
+    let calls: Vec<String> = call_symbols(m)
+        .into_iter()
+        .filter(|c| {
+            c.starts_with("map_") || c.starts_with("zeta_map") || c.starts_with("py_map")
+        })
+        .collect();
+    format!(
+        "map槽=[{}]其他槽数={}|map被调=[{}]",
+        maps.join(","),
+        others,
+        calls.join(",")
+    )
+}
+
+const DICT_MODULE_NO_WRITE: &str = "c: dict[str, int] = {}\nprint(len(c))\n";
+const DICT_ANY_TWO_WRITES: &str =
+    "c: dict[str, Any] = {}\nc[\"df\"] = 1\nc[\"lst\"] = [1, 2]\nprint(len(c))\n";
+const DICT_MODULE_READ_IN_FN: &str =
+    "c: dict[str, int] = {}\n\ndef g():\n    return len(c)\n\nprint(g())\n";
+const DICT_INSIDE_FN_NO_WRITE: &str =
+    "def f():\n    c: dict[str, int] = {}\n    return len(c)\n\nprint(f())\n";
+const DICT_INT_KEY_STR_VALUE: &str = "c: dict[int, str] = {}\nprint(len(c))\n";
+const DICT_TWO_WRITES_RECOVER: &str =
+    "c: dict[str, int] = {}\nc[\"a\"] = 1\nc[\"b\"] = 2\nprint(len(c))\n";
+const DICT_BARE_WORD: &str = "c: dict = {}\nprint(len(c))\n";
+const DICT_NESTED_VALUE: &str = "c: dict[str, dict[str, int]] = {}\nprint(len(c))\n";
+const DICT_TYPING_QUALIFIED: &str =
+    "c: typing.Dict[str, int] = {}\nc[\"a\"] = 1\nprint(len(c))\n";
+const CLASS_ANNOTATED_NONE: &str = "class Box:\n    def __init__(self):\n        self.n = 1\n\nb: Box | None = None\nprint(1)\n";
+
+#[test]
+fn container_annotation_keeps_key_and_value_type_in_mir_type_map() {
+    let cases: Vec<(&str, &str, &str)> = vec![
+        ("模块字典无写_注解值型进槽", "main", DICT_MODULE_NO_WRITE),
+        ("Any值型不被写侧钉死_413症状", "main", DICT_ANY_TWO_WRITES),
+        ("函数体读模块字典_段内现状", "g", DICT_MODULE_READ_IN_FN),
+        ("模块字典无写_调用方段", "main", DICT_MODULE_READ_IN_FN),
+        ("函数内字典无写", "f", DICT_INSIDE_FN_NO_WRITE),
+        ("整型键与字符串值_无写", "main", DICT_INT_KEY_STR_VALUE),
+        ("两次写入_写侧也能补回_对照", "main", DICT_TWO_WRITES_RECOVER),
+        ("裸dict无尖括号_现状锁", "main", DICT_BARE_WORD),
+        ("嵌套值注解不生效_未修现状", "main", DICT_NESTED_VALUE),
+        ("typing点Dict不生效_未修现状", "main", DICT_TYPING_QUALIFIED),
+        ("类形注解_本尺无面_M4佐证", "main", CLASS_ANNOTATED_NONE),
+    ];
+    let got: Vec<(String, String)> = cases
+        .iter()
+        .map(|(label, seg, src)| {
+            let mirs = lower_all(src);
+            (label.to_string(), dict_slot_reading(mir(&mirs, seg)))
+        })
+        .collect();
+    let want: Vec<(String, String)> = vec![
+        ("模块字典无写_注解值型进槽".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
+        ("Any值型不被写侧钉死_413症状".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,PyDynamic])]其他槽数=21|map被调=[map_str_key,map_str_key,zeta_map_len]".to_string()),
+        ("函数体读模块字典_段内现状".to_string(), "map槽=[4:Named(\"map\",[])]其他槽数=2|map被调=[zeta_map_len]".to_string()),
+        ("模块字典无写_调用方段".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=9|map被调=[]".to_string()),
+        ("函数内字典无写".to_string(), "map槽=[1:Named(\"map\",[I64,I64]),2:Named(\"map\",[Str,I64])]其他槽数=1|map被调=[zeta_map_len]".to_string()),
+        ("整型键与字符串值_无写".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,Str])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
+        ("两次写入_写侧也能补回_对照".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=15|map被调=[map_str_key,map_str_key,zeta_map_len]".to_string()),
+        ("裸dict无尖括号_现状锁".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,I64])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
+        ("嵌套值注解不生效_未修现状".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,I64])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
+        ("typing点Dict不生效_未修现状".to_string(), "map槽=[1:Named(\"map\",[I64,I64])]其他槽数=17|map被调=[map_str_key]".to_string()),
+        ("类形注解_本尺无面_M4佐证".to_string(), "map槽=[]其他槽数=11|map被调=[]".to_string()),
+    ];
+    assert_eq!(want, got);
+}
