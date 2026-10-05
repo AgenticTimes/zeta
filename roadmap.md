@@ -32953,3 +32953,24 @@ Invariant 160 各成小片。
 槽双义，keyfn 桥值类别核对依赖它）、提案② MIR 内联（性能向，正确性
 已有护栏）、backlog #36 selfhost 91 行（表示层）/#26 JIT trap 族——
 三项优先级待用户裁定后续批推进。
+
+## 批次 1005（2026-10-06）：轴 D 第二刀续——Call 臂四子族迁出（claim 模式，五路 IR 零变）
+
+1. **claim 模式提取**：operator 族是 if/else-if/else 链头段（族内
+   fall-through＝claim 整族、跳过 SIMD 与常规调用）——emit_operator_
+   family 的 guard＝is_operator，体 verbatim，尾 return true；调用点
+   保留 else-if SIMD 链与 else 常规调用（!is_operator 语义精确不变）。
+2. emit_unary_minus_pre（前置一元负号）＋emit_v4i64_andnot/store
+   （SIMD 内建两臂）同批迁出。codegen.rs 8,143→7,780 行；codegen_
+   call_arm.rs 930 行 18 方法。
+3. 配套：is_operator/column_arith_dispatch/gen_column_arith/build_
+   floordiv 三兄弟/slot_is_float/coerce_call_args 提 pub(super)；
+   func.as_str() 剥除（str_as_str 不稳定面顺手清）。
+
+**验证**：五路 IR 基线逐字节零变；臂标记 70==70；六金用例全绿；库
+265/265；门禁窗口 5 rc=0——差分 285/285、python_style 51/51、
+official 17/17、语料 40/40。
+
+**Call 臂余量**：~290 行（W0912 核对＋13 个 emit_* 调用点＋SIMD
+else-if＋常规调用尾巴）——臂体已薄，续拆价值转低；轴 D codegen 拆
+分核心目标（9.0k→7.8k，主题模块 5 个）达成。
