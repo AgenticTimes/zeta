@@ -1113,6 +1113,7 @@ int64_t py_min_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
     if (n <= 0) return 0;
     int64_t best = ((int64_t*)vec)[0];
     int64_t best_k = ((int64_t(*)(int64_t))keyfn)(best);
+    if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "MAXK: flag=%lld n=%lld best=%lld best_k=%lld\n", (long long)key_is_f64, (long long)n, (long long)best, (long long)best_k);
     double best_d;
     memcpy(&best_d, &best_k, sizeof best_d);
     for (int64_t i = 1; i < n; i++) {
@@ -1150,6 +1151,11 @@ int64_t py_min_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
 // double 传 v0**（寄存器类匹配），副本体内 f64 语义正确，返回 double
 // 由 C 读 v0。此前 int64 形参直传会读 x0 残留（寄存器类错配实拍
 // min/max 选错元素）。
+// 批 982/984 定稿（位桥）：keyfn 指针签名 double(*)(double)——特化
+// 副本参数注解统一 f64 ⇒ LLVM 签名 double(f64)；C 侧把元素的 i64
+// 位模式 **bitcast 成 double** 传 v0（寄存器类匹配），副本体内 f64
+// 语义正确，返回 double 由 C 读 v0。int64 直传会读 x0 残留/值转换
+// 错序（批 982 实拍）。
 static int64_t py_max_key_f64_impl(int64_t vec, int64_t keyfn_addr) {
     int64_t n = zt_vec_len(vec);
     if (n <= 0) return 0;
@@ -1173,7 +1179,7 @@ static int64_t py_max_key_f64_impl(int64_t vec, int64_t keyfn_addr) {
 static int64_t py_min_key_f64_impl(int64_t vec, int64_t keyfn_addr) {
     int64_t n = zt_vec_len(vec);
     if (n <= 0) return 0;
-    double (*kf)(int64_t) = (double (*)(int64_t))keyfn_addr;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
     int64_t best = ((int64_t*)vec)[0];
     double best_d;
     memcpy(&best_d, &best, sizeof best_d);
@@ -1209,6 +1215,7 @@ int64_t py_max_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
     if (n <= 0) return 0;
     int64_t best = ((int64_t*)vec)[0];
     int64_t best_k = ((int64_t(*)(int64_t))keyfn)(best);
+    if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "MAXK: flag=%lld n=%lld best=%lld best_k=%lld\n", (long long)key_is_f64, (long long)n, (long long)best, (long long)best_k);
     double best_d;
     memcpy(&best_d, &best_k, sizeof best_d);
     for (int64_t i = 1; i < n; i++) {
