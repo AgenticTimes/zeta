@@ -29688,3 +29688,18 @@ py_builtin_{max,min}_abs_{f64,i64}（fabs 比较、返回原元素——CPython
 语义 max([1,-3,2],key=abs)=-3），gen 两处 key= 臂检测 Var("abs") 分派。
 第二段（用户 key 单态化）维持登记。三探针与 CPython 逐字对齐；
 库 246/246、全量差分 2845/2845、python_style 479/0。
+
+## 批次 957（2026-10-05）：轴 A 双轨 resolver 专项审计——结论：无死轨（负结果入册）
+
+resolver/ 目录四文件轨道判定（编译器判生死法：临时禁用 mod 声明看
+unresolved）：
+- typecheck.rs（630）：typecheck() 入口，main 三处调用——活
+- typecheck_new.rs（702）：NewTypeCheck impl——**主管线 typecheck()
+  经 unified 分发实际调它**——活
+- new_resolver.rs（2160）：InferContext（typecheck_new 依赖）——活
+- unified_typecheck.rs（297）：分发壳（typecheck.rs:54 调用）——活
+"双轨"是活的双系统混合：typecheck 主路径走新系统（NewTypeCheck），
+infer_type 表达式推断走旧分支（use_new_system=false，borrow_enhanced
+等 4 处调用）。**无死轨可删**——删除假设若实施将误删 3159 行活代码。
+真重构方向＝双轨合一（旧 infer_type 与新 InferContext 收敛，F 轴深水
+非 A 轴删除），登记不排期。库 246/246、b947 探针保持。
