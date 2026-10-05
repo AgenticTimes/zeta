@@ -29678,3 +29678,13 @@ codegen container_cond_i1 改读类型。
 注解不动/f64 变体）。库 246/246、全量差分 2845/2845、python_style
 479/0。F.4 六侧信道审计三刀全部完成（source_types 替换/
 module_global_types 保留/6 轮保留＋语义锁定）。
+
+## 批次 956（2026-10-05）：函数值轴第一段——key=abs 特化
+
+共用根因审计：key= 经 py_max_key 以 i64(i64) 调 keyfn——内建 abs
+（llvm.fabs 内在）无一等函数值形式经 zeta_call1 直接崩；用户函数
+返回 f64 位模式按 i64 比较错序。第一段：runtime 新增
+py_builtin_{max,min}_abs_{f64,i64}（fabs 比较、返回原元素——CPython
+语义 max([1,-3,2],key=abs)=-3），gen 两处 key= 臂检测 Var("abs") 分派。
+第二段（用户 key 单态化）维持登记。三探针与 CPython 逐字对齐；
+库 246/246、全量差分 2845/2845、python_style 479/0。
