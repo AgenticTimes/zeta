@@ -32574,7 +32574,7 @@ t405_hard_stub_aborts_loudly"`）。旧格式那行读成 `stuck=0` 而不是把
 （合并 `a6adaa5f`，冲突两处：roadmap 并集、sample_gate.sh 全角变量
 花括号取并）。
 
-交付（`<签名表提交号>`）：
+交付（`62d436af`）：
 1. `src/backend/codegen/signature_table.rs`：C 运行时 ABI 签名表——
    `lookup`（首批 keyfn 族 6 项：py_min/max_key、py_min/max_key_f64、
    py_min/max_key_i64_f64，逐条对勘 py_additions.c:1111/1217/1203/
