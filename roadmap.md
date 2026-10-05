@@ -32654,3 +32654,30 @@ official 13/13、语料 38/40（在册预存，不判红）。
 **提案③余量**：单点 mangle 铸造函数（把 `__ZKEYF64_{nm}` 的拼接收拢
 为一个 helper——目前铸造点唯一在 call_dispatch 登记块，消费点
 codegen.rs 前缀判断＋main.rs take 循环，改动面小、随下批顺手）。
+
+## 批次 993（2026-10-05）：提案③余量——单点 mangle 铸造（386f95bc）
+
+批 982 实证的 mangled 名漂移根因是符号身份靠字符串手工拼接。本批把
+`__ZKEYF64_` 的字面量收拢到唯一单点：
+
+1. `keyfn_bridge::SPEC_PREFIX`（全仓唯一字面量）＋ `spec_name(orig)`
+   铸造函数＋规范形单测（`__ZKEYF64_kf` 钉死）。
+2. 铸造点 3 处改走 `spec_name`：call_dispatch 登记块两处（mangled
+   局部＋FuncDef 改名）＋ site3 发射引用一处。
+3. 消费点改走共享常量：call_var 两处 contains（FuncAddr 早分支）、
+   codegen FuncAddr 兜底一处；`signature_table::KEYFN_SPEC_PREFIX`
+   改为对 middle 层常量的 **re-export**——跨层（middle⇄backend）引用
+   同一常量，字面量漂移从"运行期静默错配"变成"编译错误"。
+4. `gen.rs` 的 keyfn_bridge 提为 `pub(crate) mod`（backend 可达）。
+
+**验证**：行为零变（纯等价替换）——库 268/268（新增
+spec_name_mints_canonical_form）；六金用例全过；门禁窗口 3：差分
+285/285、python_style 42/42、official 18/18、语料 38/40（在册预存，
+不判红）。
+
+**提案推进状态小结**：①签名表（990/991 两段：15 项＋W0911/W0912）
+✔ 核心落地；③声明式分派＋单点铸造（992/993）✔ 核心落地。余量：
+①全表覆盖（建议 gen_from_registry.py 产出）与 keyfn 桥实参值类别
+核对（需先解位模式槽消歧）；②keyfn 静态已知 ⇒ MIR 内联扫描
+（性能向，正确性已由①护栏）；④函数值签名标签（运行期兜底，
+①的编译期核对已覆盖主路径）。
