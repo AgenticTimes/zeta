@@ -29775,3 +29775,24 @@ gen.rs 剩余＝主流程＋分派＋降级核心＋gen 状态依赖辅助，迁
 - 发射维持批 962 旧路（零变）；第二段接线：C double(*)(double)
   双签名＋两条路径 mir_map 补 lower＋发射切 mangled 副本
 验证：库 246/246、全量差分 2845/2845、python_style 479/0。
+
+## 批次 965（2026-10-05）：keyfn 单态化第二段——全链搭建＋codegen 深水实证（发射回退）
+
+实施保留：resolver keyfn_specializations（Rc 共享——批 964 的
+Rc::new(RefCell.clone()) 深拷贝实例分裂 bug 修正，探针抓出）；
+runtime py_{max,min}_key_f64（double(*)(double) keyfn＋dlsym 按名
+解析）；gen key= 臂登记；call_var FuncAddr 条件放宽；main.rs mir_map
+补 lower 循环。
+
+实施中实证的 codegen 深水（发射切换回退原因）：
+1. FuncAddr 兜底零参占位先入 module ⇒ 真体 is_overloaded 改名 ⇒
+   FuncAddr 指向无体占位（调 0x103 SEGV，lldb 实拍）
+2. 兜底签名须 double(i64)（与 C 侧约定一致）；真体签名
+   double(f64 参数)——fn_type 不同 ⇒ LLVM 实体复用后体内 F64 槽
+   的参数读需 codegen 位桥（未验证）
+3. dlsym 路线本身已验证可行（-export_dynamic 符号导出＋dlsym 解析
+   全通，独立 dltest 复现）
+
+回退后行为＝批 962 状态（用户 key 无注解场景维持登记）。验证：库
+246/246、全量差分 2845/2845、python_style 479/0。独立排期设计全量
+在批 963/965 两节（含全部实证）。
