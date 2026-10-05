@@ -5910,3 +5910,159 @@ fn two_arms(x: i64) -> i64 {
          记录：`parse_range_pattern` 端点只吃 `parse_lit`、`inclusive: _` 被丢弃。"
     );
 }
+
+/// 批次 328（代码 `c7e4f7e8`，2026-09-22，站点 `src/middle/ctfe/value.rs:286-301` 的
+/// `ConstValue::binary_op_int` 百分号臂，其中 328 新写的是 :294-299 那一段）／旧 numeric 族。
+///
+/// 症状（328 记录原文）：Rust 的取余跟**被除数**同号，Python 的取余跟**除数**同号
+/// （`-7 % 3` 在 Python 是 `2`，在 Rust 是 `-1`）⇒ 折叠层把字面量取余折成错值。
+/// 328 自陈这一处有两个实现点："字面量走 CTFE、变量走 codegen，所以两处都得改，
+/// 只补一处会一个对一个错"。本条钉其中的**字面量点**（i64 常量层）。
+///
+/// 观测点：`const 名: int = 字面量 % 字面量` 的折叠结果落在 MIR 的 `global_consts` 表
+/// （`src/middle/mir/mir.rs:13`，与批次 327 那条同格），值在进程内直接可读。
+///
+/// 期望值来源：CPython 现场实拍（`-7%3=2｜7%-3=-2｜-7%-3=-1｜8%3=2｜6%-3=0｜-6%3=0`）
+/// ＋ HEAD 上 `--dump-mir` 同序读数（夹具 `/tmp/b10042/probe_const.z`，
+/// 读数 `/tmp/b10042/probe_const.out`）——两侧六格一字相同。
+///
+/// 覆盖面分工（变异实测，日志 `/tmp/b10042/matrix_out.txt` 与
+/// `/tmp/b10042/matrix_out_2b.txt`，逐臂原始输出 `arm_<臂名>_named_const_modulo.log`）：
+/// - M1＝撤成 328 的改前写法（`Ok(left % right)`，截断语义）⇒ 本条红两格：
+///   `NEG_LHS` 读回 `-1`、`NEG_RHS` 读回 `1`（＝CPython 的两个症状值形状），其余四格不变；
+/// - M2＝只去掉 `r != 0 &&` 那道整除守卫 ⇒ 本条红一格：`EXACT_NEG_RHS`（`6 % -3`）
+///   读回 `-3`。红格集与 M1 不相交＝这一臂里"补符号"和"整除时别补"是两件事，各有一格钉住；
+/// - M6＝让这一臂直接失败（返回除错过）⇒ 六格全读回"表里没有这一项"，
+///   即六格都依赖这一臂在跑（正证据；对照组那四格不是空跑）。
+/// 同时刻 `print_argument_modulo...` 那条（下一条，i128 层）在 M1/M2/M6 下全部为绿
+/// ⇒ 两层折叠互不备份，各写一条。
+///
+/// 本条不覆盖（记在 backlog #20005 余项）：328 的第二个实现点＝出码层
+/// `build_floormod_int`（`src/backend/codegen/codegen.rs`，变量操作数走那里），
+/// 后端是本车道不碰的改动面 ⇒ 不做变异，现由在册差分夹具
+/// `tests/diff/cases/numeric_mod_dyn_neg.dcase` 在运行期承担。
+#[test]
+fn named_const_modulo_folds_with_the_divisors_sign() {
+    let mirs = lower_all(
+        r#"const NEG_LHS: int = -7 % 3
+const NEG_RHS: int = 7 % -3
+const BOTH_NEG: int = -7 % -3
+const BOTH_POS: int = 8 % 3
+const EXACT_NEG_RHS: int = 6 % -3
+const EXACT_POS_RHS: int = -6 % 3
+"#,
+    );
+    let f = mir(&mirs, "main");
+    let names = [
+        "NEG_LHS",
+        "NEG_RHS",
+        "BOTH_NEG",
+        "BOTH_POS",
+        "EXACT_NEG_RHS",
+        "EXACT_POS_RHS",
+    ];
+    let got: Vec<(String, String)> = names
+        .iter()
+        .map(|n| {
+            let v = match f.global_consts.get(*n) {
+                Some(ConstValue::Int(v)) => v.to_string(),
+                Some(other) => format!("{other:?}"),
+                None => "<表里没有这一项>".to_string(),
+            };
+            ((*n).to_string(), v)
+        })
+        .collect();
+    let want: Vec<(String, String)> = [
+        ("NEG_LHS", "2"),
+        ("NEG_RHS", "-2"),
+        ("BOTH_NEG", "-1"),
+        ("BOTH_POS", "2"),
+        ("EXACT_NEG_RHS", "0"),
+        ("EXACT_POS_RHS", "0"),
+    ]
+    .iter()
+    .map(|(n, v)| ((*n).to_string(), (*v).to_string()))
+    .collect();
+
+    assert_eq!(
+        want, got,
+        "`const` 折叠出来的取余必须跟除数同号（批次 328 的 value.rs 百分号臂）。改前症状＝跟着被除数同号：NEG_LHS 读回 -1、NEG_RHS 读回 1；去掉整除守卫则 EXACT_NEG_RHS 读回 -3。"
+    );
+}
+
+/// 批次 642（旁路 cleanup 车道编号，代码 `adc0ffba`，2026-09-29，站点
+/// `src/middle/ctfe/evaluator.rs:190-205` 的 `eval_i128_tree` 百分号臂，注释自陈
+/// "Python modulo: sign of the divisor"）。**编号与本树 `roadmap.md:25112` 那节主树批次 642
+/// 重合**（那节是 3.2 Lowering 名绑定族的已回退尝试）⇒ 引用以哈希 `adc0ffba` 为身份。
+///
+/// 症状：与批次 328 同一条语义，但在**另一层**——642 给 `print` 实参新写了 i128 树求值
+/// （记录原文："Python 语义：floor 除、模取除数号、有界幂……"），这一层的算术器自己实现
+/// 取余，不复用 `ConstValue::binary_op_int`。所以 328 只补了 i64 那一层，i128 这一臂
+/// 坏与不坏在 MIR 上是另一个读数；两层互不备份。
+///
+/// 观测点：`print(纯字面量取余)` 走 `rewrite_big_print`，求值成功后把十进制拼写渲染成
+/// 字符串字面量下发给 `println_str`（同批次 665 那条的观测点，`evaluator.rs:300-306`）
+/// ⇒ 折叠值在 `VoidCall{args:[N]}` 的 `exprs[N]` 上直接可读。
+/// 这一臂弃权时读回来的不是字符串而是 `IntLit(N)`（M5 实拍）——值仍然对，但那是 i64 层
+/// 经普通下型发下来的整数槽，`println_str` 那一档没了 ⇒ 断言按**形状＋值**一起判，
+/// "形状变了"本身就是失败信号。
+///
+/// 期望值来源：CPython 现场实拍（六格同下）＋ HEAD 上 `--dump-mir` 逐格读数
+/// （`/tmp/b10042/probe_print.out`）。逐格单独降一趟 MIR 的理由与批次 10037 那条相同：
+/// 合在一起降时未折叠的格会换发射路径，"第 i 个 println 调用"与"第 i 格"对不上号。
+///
+/// 覆盖面分工（变异实测，日志同上）：
+/// - M3＝把这一臂撤成截断语义（`Some((m, false))`）⇒ 本条红两格：`print(-7 % 3)` 读回
+///   `-1`、`print(7 % -3)` 读回 `1`，其余四格不变；
+/// - M4＝只去掉 `m != 0 &&` 那道整除守卫 ⇒ 本条红一格：`print(6 % -3)` 读回 `-3`
+///   （红格集与 M3 不相交）；
+/// - M5＝让这一臂弃权（返回 `None`）⇒ 六格全红，实得值见上一段：形状从 `StringLit`
+///   退成 `IntLit`、数值六格一字未变。
+/// 三条臂下上一条（i64 层的 `named_const_modulo...`）全部为绿 ⇒ 两条各钉各的层。
+///
+/// 与既有两条的分工：批次 643 那条（`floordiv_word_operator_folds_at_compile_time`）
+/// 钉的是同一函数里整除臂的**算子别名** `"//" | "floordiv"`；批次 665 那条
+/// （`parenthesized_comparison_folds_with_value_semantics_not_as_a_python_chain`）钉的是
+/// 同一函数里比较折叠臂。三条同函数不同臂，各自红各自的格子。
+#[test]
+fn print_argument_modulo_folds_with_the_divisors_sign() {
+    let cells: [(&str, &str, &str); 6] = [
+        ("负被除数／正除数（328 记录的症状形）", "print(-7 % 3)", "2"),
+        ("正被除数／负除数", "print(7 % -3)", "-2"),
+        ("两操作数皆负（两种语义同值，对照组）", "print(-7 % -3)", "-1"),
+        ("两操作数皆正（对照组）", "print(8 % 3)", "2"),
+        ("整除且除数为负（钉整除守卫）", "print(6 % -3)", "0"),
+        ("整除且除数为正（对照组）", "print(-6 % 3)", "0"),
+    ];
+    let got: Vec<(&str, String)> = cells
+        .iter()
+        .map(|(label, line, _)| {
+            let mirs = lower_all(line);
+            let f = mir(&mirs, "main");
+            let operand = f
+                .stmts
+                .iter()
+                .find_map(|s| match s {
+                    MirStmt::VoidCall { func, args } if func.starts_with("println") => {
+                        args.first().copied()
+                    }
+                    _ => None,
+                });
+            let shape = match operand.and_then(|id| f.exprs.get(&id)) {
+                Some(MirExpr::StringLit(v)) => v.clone(),
+                Some(other) => format!("{other:?}"),
+                None => "<没有 println 调用>".to_string(),
+            };
+            (*label, shape)
+        })
+        .collect();
+    let want: Vec<(&str, String)> = cells
+        .iter()
+        .map(|(label, _, v)| (*label, (*v).to_string()))
+        .collect();
+
+    assert_eq!(
+        want, got,
+        "`print` 的 i128 折叠取余必须跟除数同号（批次 642 的 evaluator.rs 百分号臂）。读回 -1／1＝那一臂退回截断语义；读回非字符串形状＝这一臂弃权、走了运行期出码。"
+    );
+}
