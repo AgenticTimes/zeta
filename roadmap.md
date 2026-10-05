@@ -30133,3 +30133,24 @@ i64 场景 max=2 ✗ 的修复属 **SemiringFold 动态算术结果型专项**
 diag_warning（比较可能错序——min(xs, key=kf) 打 2 实证）。告警
 判定用 kf 注解 ret 与 xs 元素槽型（lower_expr 提前求值复用槽）。
 验证：库 254/254、差分抽样 284/284、python_style 479/0。
+
+## 批次 983 终版定档（2026-10-05）：keyfn float 返回场景——已知限制（四层 ABI 链系统级对齐，独立专项）
+
+实施尝试（runtime double(*)(double) 位桥＋FuncAddr 兜底 double(f64)
+声明）后 lldb 逐环实拍：**四层 ABI 链始终无法同时对齐**——
+- FuncAddr 兜底声明 double(f64) ⇒ kf 体（原体 LLVM i64 形参）读
+  x0 拿到 double 残留 ⇒ 恒等假象
+- C 调用改 double(*)(double) 位模式传 v0 ⇒ kf 形参 i64 读 x0 残留
+  ⇒ 同错
+- kf 真体签名 double(i64)（形参 i64 位模式直传＋体内 scvtf 值转换
+  ＋fmul）与 C double(*)(double)（v0 传 double 值）**寄存器类双向
+  错配**
+
+**已知限制定档**：min/max(xs, key=<float 注解 keyfn>) 结果可能
+错序（现状：min=-1 恰对为位模式负值碰巧最小；max=2 为错选）。
+**正确修复**＝专项批系统级对齐四层签名（副本 LLVM 签名
+double(f64)＋FuncAddr 兜底同签名＋C double(*)(double)＋元素
+bitcast 传参——每层单独验证组合语义），非本会话可安全实施。
+
+工作树回滚至批 983 位桥状态（f64 场景全绿）。库 249/249、差分
+抽样 284/284、python_style 479/0。
