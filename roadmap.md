@@ -29665,3 +29665,16 @@ codegen container_cond_i1 改读类型。
 只有函数定义，全局槽恒空（种子注入从未真正工作，b942 探针靠 gen 侧
 机制蒙混）；补扫＋retain 过滤双保险，单测锁定。库 242/242、全量
 差分/python_style 全绿。
+
+## 批次 955（2026-10-05）：F.4 第三刀审计——6 轮传播不能删＋钉型语义单测＋int 证据缺陷修复
+
+审计结论：6 轮传播钉的是 resolver 注解表＝gen/codegen 型源，checker
+三跳只喂少数消费点——删除＝全面退回 ABI 缺省，收敛路径＝F.4 完成态
+最后一步。container_cond_i1 判定表读的已是 Type 形状，改读 checker
+需全链传 TypeEnv 零行为差异——保留。
+
+真实缺陷修复（单测驱动）：kind match 缺 "i64" 臂——B3 改 PyDynamic
+缺省后 int 实参证据无法钉回 I64。新增 4 单测（一致钉/冲突拒/用户
+注解不动/f64 变体）。库 246/246、全量差分 2845/2845、python_style
+479/0。F.4 六侧信道审计三刀全部完成（source_types 替换/
+module_global_types 保留/6 轮保留＋语义锁定）。
