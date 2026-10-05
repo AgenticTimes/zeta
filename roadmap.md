@@ -28234,3 +28234,85 @@ for 的 else 支、先赋值再 return、嵌套 with、`loop:` 体、`if let` �
 - 编译零错误；变异矩阵里 14 臂全部编译通过（无 BUILD-FAIL）＝每臂的红点是真读数而不是编不过
 - 抽样窗口按 2026-10-03 节奏：零 `src/` 改动＋被测件 md5 与上批同一颗 ⇒ 本批不跑抽样
 - 滞留读数（代码笔 `81cb36b0` 落地后实测）：`bootstrap..cleanup` = 41、`cleanup..bootstrap` = 342
+
+## 批次 10041（cleanup）——#20005 第三十批：来源批次 325 的范围模式族解析位
+
+代码笔 `68ddbff7`（`tests/regression_history.rs` +235/−6，一笔）。零 `src/` 改动：站点文件
+`src/frontend/parser/pattern.rs` 的 md5 改前改后一字未动（`3e6b782400c78c21725af9eafaee682b`），
+被测二进制仍是上批那颗（`target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10`）。
+
+### 来源与站点
+
+来源批次 325（代码 `4f3e3833`，2026-09-22，`git merge-base --is-ancestor` 已验在本树）。
+症状（325 记录＋在册夹具 `tests/python_style/t306_range_pattern_guard.z` 头注）：范围模式整族
+（`1..=10`、`'a'..='z'`、`x @ 1..=10`）"能解析"离"能对"差三层叠在一起的缺陷——
+
+1. `parse_range_pattern` 的两端只吃 `parse_lit` ⇒ 字符字面量直接解析失败，而解析失败的后果
+   不是报错而是 [W1002]「第一个打不开的模式起、文件余部整段丢掉」（退出码仍为 0）。
+2. `inclusive` 位此前被 `inclusive: _` 丢弃 ⇒ `1..10` 与 `1..=10` 同义。
+3. 模式位的字符是**码点整数**（`'a'`＝97、`'0'`＝48），转义端点另有一张表（`'\n'`→10、`'\t'`→9）。
+
+同批的下型两处（`>=`/`<=` 的 `MirStmt::Call` dest 从没进 `exprs` ⇒ `gen_expr_safe` 静默回
+`i64 0`；`x @ …` 的条件被多包一层 `Var`）站点在 `src/middle/mir/gen.rs`＝主线正在重构该文件，
+本批不取 ⇒ 本条对那两处只是现状锁。
+
+### 本条测试的形状
+
+一条测试 `range_pattern_endpoints_and_inclusivity_reach_the_guard`，**11 格一条 `assert_eq!`**＝
+2 格总览（进得了 MIR 的函数清单、解析是否被截断）＋9 个函数的 MIR 轨迹。词表：`pi sK` 形参
+入槽、`op(a,b) -> dK` 一次 `MirStmt::Call`（实参若在 `exprs` 里是整数字面量就直接写字面值，
+否则按首次出现发槽号）、`sK <- v` 赋值、`if(c){…}else{…}` 分支、`ret sK` 返回、
+`<没进 MIR>` 该函数根本没降出来。九枚函数按"哪一臂先打不开"排序：`start_char`（`'a'..=5`）、
+`esc_start`（`'\n'..=5`）、`end_char`（`1..='z'`）、`escapes`（`'\n'..='\t'`）、`incl_int`、
+`excl_int`、`char_letters`、`binder`、`two_arms`。
+
+harness 侧改动＝把 `lower_with_source_dir` 底下那趟抽成 `lower_pipeline(src, entry,
+assert_full_parse)`，新增变体 `lower_all_allowing_truncation`：不再断"解析吃满输入"，而是把
+"剩余是否非空"变成一格去断。原因＝截断类臂的红点会全落在前置条件行（10023、10033 各踩过
+一次），其后形状断言根本不执行，各臂的坏格分工读不出来。旧 63 条走 `assert_full_parse=true`
+那支，行为一字未变（64/64 全绿为证）。
+
+### 变异矩阵（四臂，站点 `pattern.rs`，还原源 `git show HEAD:`）
+
+每臂脚本 `/tmp/b10041/matrix.py`：应用前断言锚点在 HEAD 态出现 1 次，应用后断言 md5 不等于
+还原态，跑完断言 md5 回到 `3e6b7824…`；`HEAD run 1`／`HEAD run 2` 两次不变异都绿＝函数清单
+与多臂守卫顺序逐次稳定（`want` 不是偶然次序）。读数取 `left:` 侧逐格与 `right:` 比对，
+四臂红格数：
+
+- M1（`inclusive: inclusive.is_some()` → `false`）＝红 **8/11** 格。红的全是轨迹里的比较符
+  （`<=` 变 `<`），函数清单与"是否截断"两格不动＝这一臂的损害只改守卫形状不改可达性。
+  `excl_int` 那格不红（它本来就是 `<`）。
+- M2（起点端点 `alt((parse_char_lit, parse_lit))` → `alt((parse_lit, parse_lit))`）＝红
+  **11/11** 格。第一个打不开的是 `start_char` ⇒ 函数清单只剩 `main`。
+- M3（终点端点同一处改法）＝红 **9/11** 格。`start_char`、`esc_start` 进得了 MIR
+  （清单 `esc_start,main,start_char`），从 `end_char` 起截断。
+- M4（转义表 `if ch != '\\'` → `if true`）＝红 **10/11** 格。`start_char` 存活（`'a'` 不是
+  转义），从 `esc_start` 起截断（清单 `main,start_char`）。
+
+零阴性臂（四臂全部有红点、全部编译通过）。四臂红格集合互不相同＝四条独立覆盖。包含关系要
+如实写：M3 ⊂ M4 ⊂ M2（截断级联下每臂的坏格集是"从它第一个打不开的函数到文件尾"的后缀，
+后缀之间必呈包含链），M1 与这三臂互不包含。⇒ 严格独占格按构造只可能给最早截断的那臂
+（M2 有 `start_char`），另两臂靠**区分格**分开：`esc_start` 在 M3 下进得了 MIR、在 M4 下
+`<没进 MIR>`＝这一格把转义表位与终点字符位按值分开（加这枚函数之前 M4 的坏格集是 M3 的
+真子集，两臂互相当不了备份）。
+
+### 未证／未锁的边界（如实说明）
+
+1. 下型两处（`>=`/`<=` 的 dest 槽没进 `exprs`、`x @ …` 多一层 `Var`）站点在 `gen.rs`，本批
+   不变异 ⇒ `incl_int`／`binder` 等八枚轨迹格对那两处只算现状锁。
+2. `binder` 那格本身就钉不住"多包一层 `Var`"：轨迹把 `Var(id)` 渲染成槽名，多包一层读不出
+   差别（要区分得渲染层级，本批没做）。
+3. 运行期真值（`t306` 的 `// expect: 1 2 3 0 111 222 -1 111 -1 7 -1`）由在册夹具承担；
+   Rust 方言形状 ⇒ CPython 侧不适用，本条只锁编译期。
+4. `escapes` 那格是空区间（10..9 恒不命中）＝只锁解析形状与码点入表，不锁语义。
+5. 负向面只有函数清单与"是否截断"两格；没有"多臂里某一条不该进 MIR"的对应格。
+
+### 门禁读数
+
+- `cargo test -p zetac --test regression_history` → **64 passed / 0 failed**（0.13 秒；套件由
+  63 条涨到 64 条）
+- `cargo test -p zetac --lib` → 145 passed / 0 failed（0.32 秒，一字不变）
+- `cargo test -p zetac --lib parser` → 9 passed / 136 filtered out（0.00 秒）
+- 编译零错误；四臂全部编译通过＝每臂红点是真读数而不是编不过
+- 零 `src/` 改动＋被测件 md5 与上批同一颗 ⇒ 按 2026-10-03 节奏不跑抽样窗口
+- 滞留读数（代码笔 `68ddbff7` 落地后实测）：`bootstrap..cleanup` = 43、`cleanup..bootstrap` = 347

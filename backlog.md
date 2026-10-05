@@ -666,6 +666,44 @@
 >   错误；`target/release/zetac` md5＝`ed5227ccd29b70c4ee9ae17500926f10` 与 10039 那颗一字相同
 >   （矩阵只跑 debug 目标，本批未重编）⇒ 零 `src/` 改动＋被测件同一颗 ⇒ 抽样窗口未跑。
 >   开批实测 `cleanup..bootstrap`＝342，代码笔 `81cb36b0` 落地后实测 `bootstrap..cleanup`＝41。
+> - 批次 10041（代码 `68ddbff7`）＝来源批次 325（`4f3e3833`，2026-09-22，范围模式族整族失效；
+>   站点＝`src/frontend/parser/pattern.rs` 的 `parse_char_lit`（现 :238-272）与
+>   `parse_range_pattern`（现 :275-289），本批零 `src/` 改动；`git merge-base --is-ancestor`
+>   已验在本树）：
+>   本套 **64 条全绿**（0.13 秒），crate 内单元测试 145 条一字不变。新用例
+>   `range_pattern_endpoints_and_inclusivity_reach_the_guard`＝11 格一条 `assert_eq!`＝2 格总览
+>   （进得了 MIR 的函数清单／解析是否被截断）＋9 枚函数的 MIR 轨迹（`pi sK`／`op(a,b) -> dK`／
+>   `sK <- v`／`if(c){…}else{…}`／`ret sK`／`<没进 MIR>`）。harness 侧新增
+>   `lower_pipeline(..., assert_full_parse)` 与 `lower_all_allowing_truncation`：把"解析被截断"
+>   从前置断言失败变成可比对的格子，否则截断类臂的红点全落在那一行（10023、10033 各踩过一次）、
+>   各臂的坏格分工读不出来；旧 63 条走 `assert_full_parse=true` 那支，行为一字未变。
+>   真值来源＝在册夹具 `tests/python_style/t306_range_pattern_guard.z`（`// expect: 1 2 3 0 111
+>   222 -1 111 -1 7 -1`，运行期那半由它承担）＋325 台账的修法描述＋`--dump-mir` 实拍
+>   （`/tmp/b10041/mir_head.txt`；级联丢码证据 `/tmp/b10041/mir_cascade.txt`＋`cascade_err.txt`）。
+>   变异矩阵 **四臂零阴性**（逐臂读数与站点行号在 roadmap 批次 10041 的表里；还原源＝
+>   `git show HEAD:src/frontend/parser/pattern.rs`，应用前断言锚点在 HEAD 态出现 1 次、应用后
+>   断言 md5 不等于还原态、跑完断言回到 `3e6b7824…`；HEAD 两跑皆绿＝函数清单与多臂守卫顺序
+>   逐次稳定，`want` 不是偶然次序）：M1（`inclusive` 位）红 8/11 格且**只改比较符**（闭区间
+>   变开区间，函数清单与是否截断两格不动，`excl_int` 那格不红＝它本来就是开区间）；
+>   M2（起点字符位）红 11/11（清单只剩 `main`）；M3（终点字符位）红 9/11（清单
+>   `esc_start,main,start_char`）；M4（转义表位）红 10/11（清单 `main,start_char`）＝四臂红格
+>   集合互不相同＝四条独立覆盖。包含关系如实记：M3 ⊂ M4 ⊂ M2——截断级联下每臂的坏格集是
+>   "从它第一个打不开的函数到文件尾"的后缀，后缀之间必呈包含链 ⇒ 严格独占格按构造只能给最早
+>   截断的那臂（M2＝`start_char`），另两臂靠**区分格**分开：`esc_start` 这枚函数（转义端点在
+>   起点＋整数终点，排在 `end_char` 之前）在 M3 下进得了 MIR、在 M4 下 `<没进 MIR>`；加它之前
+>   M4 的坏格集是 M3 的真子集＝两臂互相当不了备份。
+>   **仍未锁的（记在本条余项内、未占新号）**：① 同批的下型两处（`>=`/`<=` 的 `Call` dest 从没进
+>   `exprs` ⇒ 静默回 `i64 0`；绑定形 `x @ …` 的条件多包一层 `Var`）站点在 `gen.rs`＝主线在重构
+>   该文件，本批不变异 ⇒ `incl_int`／`binder` 等八枚轨迹格对那两处只算现状锁；② `binder` 那格
+>   本身钉不住"多包一层 `Var`"——轨迹把 `Var(id)` 渲染成槽名，多包一层读不出差别（要区分得
+>   渲染层级，本批没做）；③ `escapes` 那格是空区间（10..9 恒不命中）＝只锁解析形状与码点入表，
+>   不锁语义；④ 负向面只有函数清单与"是否截断"两格，没有"某一条臂不该进 MIR"的对应格；
+>   ⑤ 运行期真值由 t306 承担，本条不锁（Rust 方言形状 ⇒ CPython 侧不适用）。
+>   检查节奏：只跑改到的目标＝历史套件 64/64 ＋ crate 内 145/145 ＋ `--lib parser` 9/9 ＋ 编译零
+>   错误；`target/release/zetac` md5＝`ed5227ccd29b70c4ee9ae17500926f10` 与 10040 那颗一字相同
+>   （矩阵只跑 debug 目标，本批未重编）⇒ 零 `src/` 改动＋被测件同一颗 ⇒ 抽样窗口未跑。
+>   开批沿用 10040 收尾读数 42／342；本批代码笔 `68ddbff7` 落地后实测 `bootstrap..cleanup`＝43、
+>   `cleanup..bootstrap`＝347。
 
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
