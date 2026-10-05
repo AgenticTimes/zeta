@@ -4726,7 +4726,10 @@ impl Resolver {
                 // for the filtered form that is the `if cond { EXPR } else {
                 // -1 }` then-branch.
                 AstNode::Call { method, args, .. } if method == "__collect__" => {
-                    let elem: Option<&AstNode> = args.get(1).and_then(|lam| match lam {
+                    // 批次 10058：这一形脱糖出来只有一个实参（λ 在 `args[0]`，与
+                    // `infer_global_ty` 的 `__collect__` 臂取 `args.first()` 一致），
+                    // 旧的 `args.get(1)` 因此恒空 ⇒ 元素型恒落兜底 `I64`。
+                    let elem: Option<&AstNode> = args.iter().find_map(|lam| match lam {
                         AstNode::Closure { body, .. } => match &**body {
                             AstNode::If { then, .. } => then.first().and_then(|s| match s {
                                 AstNode::ExprStmt { expr } => Some(expr.as_ref()),

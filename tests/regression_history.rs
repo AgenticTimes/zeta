@@ -3100,7 +3100,15 @@ print(EQ == NE)
 /// 表达式当元素型』那一行"（现 :4739）。本条把元素从 `len(n)`（与兜底同形）换成字面量 `"x!"`
 /// （`Str`，与兜底 `I64` 不同形）以后，那一行**仍然打不到**——三次变异的读数见下面的覆盖面分工。
 /// 所以本条钉的不是那条余项，而是 592 修完之后的半成品状态：被调方体内推导式结果槽已带 `Str`
-/// 标记，调用点目的槽仍读 `DynamicArray(I64)`。那条余项按原样继续登记。
+/// 标记，调用点目的槽仍读 `DynamicArray(I64)`。
+/// **批次 10058 更正**：调用点那一半已修——成因＝本臂取元素时用 `args.get(1)`，而这一形脱糖出来
+/// 只有一个实参（λ 在 `args[0]`，与 `infer_global_ty` 的同名臂用 `args.first()` 一致）⇒ `elem`
+/// 恒空、元素型恒落兜底 `I64`。改成"取第一个闭包实参"后这一格读到 `DynamicArray(Str)`（本条
+/// 下面那格断言已同步改成 `Str`，另见本文件
+/// `unannotated_list_comprehension_return_marks_element_at_call_site` 四格读数）。
+/// 批次 10018 那条"单独判元素那一行"的余项**未销**：元素那一行在这两种形状下改成恒兜底都不动
+/// 读数（改前它本来就走兜底，改后它给 `Str`）——要单独钉那一行，需要一个"元素行给得出型、
+/// 兜底给不出同形"的形状，仍未找到。
 /// 元素取字面量而非 `n + "!"` 是实测选择：`n` 在推导器里读成 `I64`，拼接支（批次 587：一侧 Str、
 /// 另一侧 Str 或未知才算拼接）因此拒推 ⇒ 元素型仍落兜底。
 ///
@@ -3127,14 +3135,16 @@ print(EQ == NE)
 /// （既有那条只读调用点的向量形，元素本来就是 `I64`）。那个调用点 `I64` 不是 ①②任一处的元素推导
 /// 给的（两处硬编都不动它），成因站点未定位＝本批开出的新余项。
 ///
-/// 边界（本条不覆盖）两格：
-/// ① **调用点目的槽**（`main` 段 `Stats::tags` 那条 `Call` 的 `dest`）仍是兜底值
-///    `DynamicArray(I64)`——恢复出来的返回型没传到 caller 槽。本条把这个读数按"现状锁"钉住
-///    （修好后它会红，届时要连注释一起改），它不是 592 那条缺陷的症状值：592 的症状是
-///    向量整个被否决成标量 `I64`，那一条由本文件那条 `len(n)` 用例覆盖。
-/// ② 运行期取值仍是**指针地址**而非字符串内容（编译后跑实拍
-///    `[4299448288, 4299448272, 4299448256]`，地址随 ASLR 变）＝向量元素身上的类型标记还没接上，
-///    与批次 400 用例头注自陈的残留缺口同一条，故本条不回显运行期读数。
+/// 边界（本条不覆盖）两格——批次 10058 逐格更正：
+/// ① ~~调用点目的槽仍是兜底值~~ **已修**（`main` 段 `Stats::tags` 那条 `Call` 的 `dest`
+///    现读 `DynamicArray(Str)`，见下面那格断言）。改前它读兜底的 `DynamicArray(I64)`，
+///    那时本条把这格按"现状锁"钉住；10058 把元素实参取错下标那一支修掉后这一格变红，
+///    按本条头注当时的约定改成 `Str`。592 那条症状（向量整个被否决成标量 `I64`）
+///    仍由本文件那条 `len(n)` 用例覆盖。
+/// ② ~~运行期打指针地址~~ **已修**（同一份源编译后跑，改前实拍
+///    `[4299448288, 4299448272, 4299448256]`（地址随 ASLR 变），改后实拍
+///    `['x!', 'x!', 'x!']`＝与 CPython 同形一致，产物 `/tmp/b10058/p2_fix.bin`）。
+///    元素身上的类型标记接上了，故本条不再声明这一格。
 #[test]
 fn comprehension_element_marker_is_str_in_the_callee_but_not_at_the_call_site() {
     let mirs = lower_all(
@@ -3181,7 +3191,7 @@ print(st.tags())
         "这一形返回的就是推导式结果槽 {d}（不返回它＝本条读的不是那条臂的产物）"
     );
 
-    // 现状锁（边界①）：调用点目的槽仍是兜底值，不是被调方那个 DynamicArray(Str)。
+    // 批次 10058 起：调用点目的槽已接到元素标记（改前读兜底的 DynamicArray(I64)）。
     let f = mir(&mirs, "main");
     let dests: Vec<u32> = f
         .stmts
@@ -3199,11 +3209,10 @@ print(st.tags())
     let cd = dests[0];
     assert_eq!(
         f.type_map.get(&cd),
-        Some(&Type::DynamicArray(Box::new(Type::I64))),
-        "现状锁：调用点目的槽 id={cd} 现在仍读兜底的 `DynamicArray(I64)`（元素标记没传到 caller 槽，\
-         与运行期打指针地址同一条缺口；元素的来源见覆盖面分工，撤整条臂时这一格读到 `Some(I64)`）。 \
-         这条断言会在传过去那一天变红——那时把它改成 `Str` \
-         并删掉本条注释里这句现状锁，实得 {:?}",
+        Some(&want),
+        "调用点目的槽 id={cd} 该与被调方那个推导式结果槽同型 `DynamicArray(Str)`\
+         （批次 10058 修的就是这一格：元素实参下标取错 ⇒ 改前读兜底的 `DynamicArray(I64)`，\
+         撤掉整条 `__collect__` 臂时这一格读到标量 `Some(I64)`＝形状也没了）。实得 {:?}",
         f.type_map.get(&cd)
     );
 
@@ -8499,4 +8508,142 @@ fn bare_call_return_type_types_comprehension_global_element() {
         .map(|((gl, _), _)| *gl)
         .collect();
     assert_eq!(got, want, "红格清单 = {:?}（每格读数＝全局写入槽型／读回槽型／array_get 目的槽型）", red);
+}
+
+/// 批次 10057 差分实测第③类＋批次 10024 那条用例自陈的"调用点那一半"（站点＝
+/// `src/middle/resolver/resolver.rs` 里 `unannotated_return_ty` 那层嵌套 `infer` 的
+/// `__collect__` 臂，改前＝:4728-4741）／续 #20005。
+///
+/// 症状（10057 手写脚本 `type_propagation` 实拍）：未标注的 `def` 返回列表推导时，
+/// 被调方自己的推导式结果槽已是 `DynamicArray(Str)`，调用点目的槽却仍是兜底的
+/// `DynamicArray(I64)` ⇒ `print(out)` 打三个句柄地址，而 CPython 同形打 `['BSa', 'BSb']`。
+///
+/// 根因（本批一次性 `eprintln!` 探针实拍，产物 `/tmp/b10058/`，四种形状同一读数）：
+/// ```text
+/// B10058 collect args=1 a0=Closure:BinaryOp elem=false et=None  <- ["BS" + x for x in xs]
+/// B10058 collect args=1 a0=Closure:If       elem=false et=None  <- [x for x in xs if x]
+/// B10058 collect args=1 a0=Closure:other    elem=false et=None  <- ["x!" for n in self.names]
+/// B10058 collect args=1 a0=Closure:other    elem=false et=None  <- [len(x) for x in xs]
+/// B10058 decl_table name=codes          recovered=Some(DynamicArray(I64))
+/// B10058 decl_table name=Stats::tags    recovered=Some(DynamicArray(I64))
+/// ```
+/// 这一形脱糖出来 `__collect__` 只有一个实参（λ 在 `args[0]`，与 `infer_global_ty` 里
+/// 那条同名臂 :2083 取 `args.first()` 一致），而本臂取 `args.get(1)` ⇒ `elem` 恒为 `None`
+/// ⇒ 元素型恒落 `unwrap_or(Type::I64)`。形状对（`DynamicArray`）、元素错，所以批次 10024
+/// 的两种读数都自洽：撤整条臂时这一格读到标量 `I64`（形状没了），把元素那一行改成恒兜底
+/// 时一字不变（本来就是兜底）。
+///
+/// 期望值来源＝CPython 同形实拍（不是"现行输出是什么就写什么"）：
+/// `codes(["a","b"])` → `['BSa', 'BSb']`、`filt(["a","","b"])` → `['a!', 'b!']`、
+/// `lens(["a","bb"])` → `[1, 2]`、`bare(["a","","b"])` → `['a', 'b']`。
+///
+/// 三格读数是 `I64`，各有实测解释，都不属于本批这一支：
+/// - `过滤形拼接` 的被调方那一格＝另一条臂的缺口。被调方推导式结果槽由
+///   `infer_global_ty` 的 `__collect__` 臂（:2079-2102）给型，它直接把 λ 体交给
+///   `infer_global_ty`，而 `infer_global_ty` 认不出 `AstNode::If`（本臂认，取 then
+///   分支第一条表达式），于是落到 `.or_else(接收者型)` 再落兜底 ⇒ 同一份源里
+///   "调用点已知 `Str`、被调方内部槽仍是 `I64`"。这一格因此按"调用点已修＋被调方内部槽
+///   未修"钉住，未修的半边记在 #20005 余项内。
+/// - `元素是长度` 的元素本来就是 int（期望与实得同形）；这一格的作用是防止把元素型
+///   改成"恒 `Str`"。
+/// - `裸循环变量` 的元素型要由被迭代实参的元素型给出，而本臂只看 λ 体、形参 `xs` 又无
+///   注解 ⇒ 仍落兜底。这一格按现状锁钉住，未修的半边同样记在 #20005 余项内。
+#[test]
+fn unannotated_list_comprehension_return_marks_element_at_call_site() {
+    // 一格读数＝(被调方推导式结果槽型, main 里调用点目的槽型)
+    fn cell(src: &str, callee_item: &str, callsite_prefix: &str) -> (String, String) {
+        let mirs = lower_all(src);
+        let ty = |m: &Mir, slot: u32| match m.type_map.get(&slot) {
+            Some(t) => format!("{:?}", t),
+            None => "<none>".to_string(),
+        };
+        let g = mir(&mirs, callee_item);
+        let c: Vec<u32> = g
+            .stmts
+            .iter()
+            .filter_map(|s| match s {
+                MirStmt::Call { func, dest, .. } if func == "zeta_collect_vec_n" => Some(*dest),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            c.len(),
+            1,
+            "前置条件：`{callee_item}` 里推导式要降成一处 `zeta_collect_vec_n`，实得 {c:?}"
+        );
+        let m = mir(&mirs, "main");
+        let d: Vec<u32> = m
+            .stmts
+            .iter()
+            .filter_map(|s| match s {
+                MirStmt::Call { func, dest, .. } if func.starts_with(callsite_prefix) => {
+                    Some(*dest)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            d.len(),
+            1,
+            "前置条件：`main` 里要降出 `{callsite_prefix}` 的调用点，实得 {d:?}"
+        );
+        (ty(g, c[0]), ty(m, d[0]))
+    }
+    type Cell = (&'static str, (String, String));
+    let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+
+    let got: Vec<Cell> = vec![
+        (
+            "拼接元素",
+            cell(
+                "def codes(xs):\n    return [\"BS\" + x for x in xs]\n\nout = codes([\"a\", \"b\"])\nprint(out)\n",
+                "codes",
+                "codes",
+            ),
+        ),
+        (
+            "过滤形拼接",
+            cell(
+                "def filt(xs):\n    return [x + \"!\" for x in xs if x]\n\nprint(filt([\"a\", \"\", \"b\"]))\n",
+                "filt",
+                "filt",
+            ),
+        ),
+        (
+            "元素是长度",
+            cell(
+                "def lens(xs):\n    return [len(x) for x in xs]\n\nprint(lens([\"a\", \"bb\"]))\n",
+                "lens",
+                "lens",
+            ),
+        ),
+        (
+            "裸循环变量",
+            cell(
+                "def bare(xs):\n    return [x for x in xs if x]\n\nprint(bare([\"a\", \"\", \"b\"]))\n",
+                "bare",
+                "bare",
+            ),
+        ),
+    ];
+    let want: Vec<Cell> = vec![
+        ("拼接元素", s("DynamicArray(Str)", "DynamicArray(Str)")),
+        ("过滤形拼接", s("DynamicArray(I64)", "DynamicArray(Str)")),
+        ("元素是长度", s("DynamicArray(I64)", "DynamicArray(I64)")),
+        ("裸循环变量", s("DynamicArray(I64)", "DynamicArray(I64)")),
+    ];
+    let red: Vec<&str> = got
+        .iter()
+        .zip(want.iter())
+        .filter(|((_, gr), (_, wr))| gr != wr)
+        .map(|((gl, _), _)| *gl)
+        .collect();
+    assert_eq!(
+        got,
+        want,
+        "红格清单 = {:?}（每格读数＝被调方推导式结果槽型／调用点目的槽型）——\
+         调用点读到 `DynamicArray(I64)` ＝元素标记没传到调用点（本批修的这一支），\
+         读到标量 `I64` ＝整条 `__collect__` 臂没走到（批次 592 那条症状）",
+        red
+    );
 }
