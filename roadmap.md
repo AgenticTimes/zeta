@@ -29724,3 +29724,11 @@ py_handle_of 五方法（266 行）迁 gen/py_member.rs。gen.rs 3676→3410；
 rewrite/rebind/rebound_target 三方法（144 行）迁 gen/nested_class.rs。
 gen.rs 3410→3267；累计 19,392→3,267（-83.2%），37 个族文件。验证：
 库 246/246、差分抽样 284/284、python_style 479/0。
+
+## 批次 961（2026-10-05）：F.4——注解串解析纯函数迁 checker＋gen.rs 最终审计
+
+annotation_elem_ty/annotation_dict_kv 迁 checker/field_ty.rs（与批 952
+字段定型同主题）；gen 三调用点改 checker 路径；named_ty/apply 留
+（依赖 gen 状态）。gen.rs 3267→3212；累计 -83.4%。最终审计结论：
+gen.rs 剩余＝主流程＋分派＋降级核心＋gen 状态依赖辅助，迁移到边际。
+验证：库 246/246、全量差分 2845/2845、python_style 479/0。
