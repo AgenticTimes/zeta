@@ -29837,3 +29837,16 @@ is_numeric_ty）；not ⇒ Bool。无注解 keyfn 的 body-ret 预热由此把
 特化副本返回型记进 func_ret_types（keyfn_returns_f64 判定与 f64
 通道消费点受益）。新增 2 单测；库 248/248、全量差分 2845/2845、
 python_style 479/0、b962 探针保持。
+
+## 批次 969（2026-10-05）：双轨合一第一段——双轨对照测试＋FloatLit 缺臂修复
+
+审计（调用点）：旧 infer_type＝typecheck 内部 10＋typecheck_new
+fallback＋borrow 4；新 InferContext＝typecheck_unified 主路径。开关
+只影响 fallback——主管线恒新轨。
+
+第一段：双轨对照测试（tests_dual_track，同 AST 双轨跑）。**首个真
+差异实证：旧轨无 FloatLit 臂**（落 I64 兜底，borrow 检查 float 型
+全错）——补 FloatLit ⇒ F64。字面量等价锁定；容器差异探针入册。
+验证：库 250/250、全量差分 2845/2845、python_style 479/0。
+收敛剩余（段 2/3）：容器/表达式形状差异清单、borrow 4 处迁移、
+旧轨 infer_type 退役。
