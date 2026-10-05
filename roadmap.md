@@ -29859,3 +29859,16 @@ InferContext 统一推断（unwrap_or I64 保底对齐旧轨兜底）——float
 形状对照扩充入 tests_dual_track。验证：库 250/250、全量差分
 2845/2845、python_style 479/0。收敛剩余（段 3）：旧轨 infer_type
 退役（typecheck 内部 10 处＋fallback 迁移后）。
+
+## 批次 971（2026-10-05）：双轨合一段 3——check_node 迁移统一推断
+
+- InferContext 补 DictLit 臂（空⇒Named("Map_i64_i64") 对齐旧轨；
+  非空按首对推断）——ERR 清单清一格
+- infer_unified 宽容包装（新轨优先、ERR 回落旧轨 I64 兜底）；
+  check_node 段 10 处 infer_type 全迁
+- 对照探针实证：BinaryOp 等价；FieldAccess/Call/Subscript 新轨 ERR
+  （lenient 回落覆盖）；DictLit 未实现（已补）
+- 退役条件评估：infer_type 剩余消费点＝typecheck_new fallback＋
+  infer_unified 回落路径——本体退役需 fallback 先切换（段 4）
+验证：库 251/251、全量差分 2845/2845、python_style 479/0、
+b947/b962 探针保持。
