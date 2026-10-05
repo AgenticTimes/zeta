@@ -4098,6 +4098,21 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 type_args,
             } => {
                 self.note_return_slot_mismatch(func, dest, args.len());
+                // 批 991（提案①第二段）：签名表内函数的外呼元数核对
+                //（W0912）——表项是 C 侧对勘过的固定 ABI，元数不符说明
+                // 降低层 emitted 了错误调用形状；coerce_call_args 的补垫/
+                // 截断对这类名字是掩盖不是修复（表内名字无重载形态）。
+                if let Some(sig) = signature_table::lookup(func)
+                    && args.len() != sig.params.len()
+                {
+                    panic!(
+                        "W0912 外呼元数核对失败: `{}` 期望 {} 参实到 {} 参——C ABI {}（批 991 签名表核对）",
+                        func,
+                        sig.params.len(),
+                        args.len(),
+                        sig.params.len()
+                    );
+                }
                 // PY-A: try/except — `_setjmp` called directly with
                 // returns_twice so longjmp lands back INSIDE this function
                 // and the following branch re-evaluates.

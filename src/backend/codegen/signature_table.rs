@@ -48,6 +48,23 @@ pub fn lookup(name: &str) -> Option<Sig> {
         "py_max_key_i64_f64" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64, ValTy::I64] }),
         // runtime/py_additions.c:1233 — int64_t py_min_key_i64_f64(vec, keyfn_addr)
         "py_min_key_i64_f64" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64, ValTy::I64] }),
+        // 批 991 扩表（对勘 runtime/py_additions.c 与 runtime/tokio_runtime_stub.c）：
+        // runtime/py_additions.c:3324 / :3334 — int64_t py_builtin_max/min(vec)
+        "py_builtin_max" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64] }),
+        "py_builtin_min" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64] }),
+        // runtime/py_additions.c:3350 / :3441 — f64 结果按位模式落 i64 槽
+        "py_builtin_max_f64" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64] }),
+        "py_builtin_min_f64" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64] }),
+        // runtime/py_additions.c:3372 / :3391 / :3410 / :3425 — key=abs 特化族
+        "py_builtin_max_abs_f64" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64] }),
+        "py_builtin_min_abs_f64" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64] }),
+        "py_builtin_max_abs_i64" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64] }),
+        "py_builtin_min_abs_i64" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64] }),
+        // runtime/py_additions.c:3004 — int64_t zeta_pow_i64(base, exp)
+        "zeta_pow_i64" => Some(Sig { ret: ValTy::I64, params: &[ValTy::I64, ValTy::I64] }),
+        // runtime/tokio_runtime_stub.c:1025 — double py_math_pow(a, b)
+        //（真正的 F64 ABI：实参错送整数寄存器即读残留——表驱动的价值样本）
+        "py_math_pow" => Some(Sig { ret: ValTy::F64, params: &[ValTy::F64, ValTy::F64] }),
         _ => None,
     }
 }
@@ -103,6 +120,38 @@ mod tests {
             let s = lookup(n).unwrap_or_else(|| panic!("{} 应在签名表", n));
             assert_eq!(s.params.len(), 3, "{} 带 key_is_f64 旗标位", n);
         }
+    }
+
+    #[test]
+    fn batch991_expansion_entries() {
+        // 单参 min/max 内建族（f64 结果按位模式落 i64 槽）
+        for n in [
+            "py_builtin_max",
+            "py_builtin_min",
+            "py_builtin_max_f64",
+            "py_builtin_min_f64",
+            "py_builtin_max_abs_f64",
+            "py_builtin_min_abs_f64",
+            "py_builtin_max_abs_i64",
+            "py_builtin_min_abs_i64",
+        ] {
+            let s = lookup(n).unwrap_or_else(|| panic!("{} 应在签名表", n));
+            assert_eq!(
+                s,
+                Sig { ret: ValTy::I64, params: &[ValTy::I64] },
+                "{} 单参 i64 ABI",
+                n
+            );
+        }
+        assert_eq!(
+            lookup("zeta_pow_i64"),
+            Some(Sig { ret: ValTy::I64, params: &[ValTy::I64, ValTy::I64] })
+        );
+        // py_math_pow：全表首个真 F64 ABI 条目——实参/返回都是 double
+        assert_eq!(
+            lookup("py_math_pow"),
+            Some(Sig { ret: ValTy::F64, params: &[ValTy::F64, ValTy::F64] })
+        );
     }
 
     #[test]
