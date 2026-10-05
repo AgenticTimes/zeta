@@ -24,6 +24,9 @@ use inkwell::values::{
 };
 use std::collections::HashMap;
 
+// 批 990（提案①第一段）：C 运行时签名表＋keyfn 指针合同。
+use super::signature_table;
+
 /// The complete LLVM code generator for Zeta.
 pub struct LLVMCodegen<'ctx> {
     pub context: &'ctx Context,
@@ -1806,6 +1809,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
         // First try the actual (potentially mangled) name, then fall back to the original
         let fn_val = self.get_function(&actual_name);
 
+        // 批 990（提案①第一段）：keyfn 特化副本实体化时核对签名合同——
+        // 实际声明与体派生签名都必须是 double(f64)（C 桥 double(*)(double)
+        // 的硬编码预期）。批 983 的寄存器类错配（体 i64(i64)、C 读 v0、
+        // 体写 x0）在这层成为编译期响亮失败，不再流到运行期读残留。
+        if actual_name.contains(signature_table::KEYFN_SPEC_PREFIX) {
+            self.verify_keyfn_contract(&actual_name, fn_val, mir);
+        }
+
         // If function has no body, check the MIR is_extern flag.
         // Extern functions get External linkage (resolved at link time).
         // User-defined empty functions get a ret i64 0 stub body.
@@ -3047,6 +3058,102 @@ impl<'ctx> LLVMCodegen<'ctx> {
     /// Get or create a function for a call site, ensuring the declaration matches
     /// the actual number of arguments. Creates extern declarations for functions
     /// that don't exist yet (self-hosting bootstrap path).
+    /// 批 990（提案①第一段）：keyfn 特化副本的签名合同核对（W0911）。
+    /// 核对两层——
+    /// 1. `fn_val` 的实际 LLVM 签名：副本可能已被 FuncAddr 兜底按
+    ///    double(f64) 抢先声明，体发射进一个错签名的 FunctionValue 会
+    ///    静默产出错域指令；
+    /// 2. 体派生签名：param 槽型（type_map）＋`infer_fn_return_type`——
+    ///    批 983 的病根（参数注解没生效 ⇒ 槽 I64 ⇒ 体 i64(i64)）在这一
+    ///    层现形。
+    /// 任一层偏离 `KEYFN_PTR_CONTRACT`（double(f64)）即 panic：错签名过
+    /// C 桥的产物是运行期静默垃圾，宁可编译期响亮失败。
+    fn verify_keyfn_contract(
+        &self,
+        name: &str,
+        fn_val: FunctionValue<'ctx>,
+        mir: &Mir,
+    ) {
+        let contract = signature_table::KEYFN_PTR_CONTRACT;
+        // 1) 实际声明层
+        let ft = fn_val.get_type();
+        let actual_ret = ft
+            .get_return_type()
+            .map(Self::val_ty_of_basic)
+            .unwrap_or(signature_table::ValTy::I64);
+        let actual_params: Vec<signature_table::ValTy> = ft
+            .get_param_types()
+            .iter()
+            .map(|t| match t {
+                inkwell::types::BasicMetadataTypeEnum::IntType(_) => {
+                    signature_table::ValTy::I64
+                }
+                inkwell::types::BasicMetadataTypeEnum::FloatType(f) => {
+                    if f.get_bit_width() == 64 {
+                        signature_table::ValTy::F64
+                    } else {
+                        signature_table::ValTy::F32
+                    }
+                }
+                _ => signature_table::ValTy::I64,
+            })
+            .collect();
+        if !signature_table::sig_matches(actual_ret, &actual_params, contract) {
+            panic!(
+                "W0911 keyfn 签名核对失败: `{}` 实际声明 {}({})，C 桥合同 double(f64)——特化副本声明漂移（批 990 签名表核对）",
+                name,
+                Self::val_ty_name(actual_ret),
+                actual_params
+                    .iter()
+                    .map(|t| Self::val_ty_name(*t))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        // 2) 体派生层
+        let derived_params: Vec<signature_table::ValTy> = mir
+            .param_indices
+            .iter()
+            .map(|(_, pid)| signature_table::val_ty_of(mir.type_map.get(pid)))
+            .collect();
+        let derived_ret = Self::val_ty_of_basic(self.infer_fn_return_type(mir));
+        if !signature_table::sig_matches(derived_ret, &derived_params, contract) {
+            panic!(
+                "W0911 keyfn 签名核对失败: `{}` 体派生签名 {}({})，C 桥合同 double(f64)——参数注解 f64 未生效或返回域不是浮点（批 983 病根，批 990 响亮化）",
+                name,
+                Self::val_ty_name(derived_ret),
+                derived_params
+                    .iter()
+                    .map(|t| Self::val_ty_name(*t))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+
+    /// LLVM 值类型 → ABI 值类别。指针同槽归 I64；浮点按位宽分列。
+    fn val_ty_of_basic(t: inkwell::types::BasicTypeEnum<'ctx>) -> signature_table::ValTy {
+        match t {
+            inkwell::types::BasicTypeEnum::IntType(_) => signature_table::ValTy::I64,
+            inkwell::types::BasicTypeEnum::FloatType(ft) => {
+                if ft.get_bit_width() == 64 {
+                    signature_table::ValTy::F64
+                } else {
+                    signature_table::ValTy::F32
+                }
+            }
+            _ => signature_table::ValTy::I64,
+        }
+    }
+
+    fn val_ty_name(t: signature_table::ValTy) -> &'static str {
+        match t {
+            signature_table::ValTy::I64 => "i64",
+            signature_table::ValTy::F64 => "double",
+            signature_table::ValTy::F32 => "float",
+        }
+    }
+
     fn get_or_declare_function(
         &mut self,
         name: &str,
@@ -3424,8 +3531,31 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 .add_function(&arity_name, self.i64_type.fn_type(&param_types, false), Some(Linkage::External));
             return f;
         }
-        let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect();
-        let fn_type = self.i64_type.fn_type(&param_types, false);
+        // 批 990（提案①第一段）：签名表驱动——表内函数按表定型（表项与
+        // runtime/*.c 逐条对勘），表外维持全 i64 兜底。表成为 extern
+        // 声明的单一事实来源，兜底不再"猜"签名。
+        let (ret_is_float, param_types): (
+            bool,
+            Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>>,
+        ) = match signature_table::lookup(actual_name.as_str()) {
+            Some(sig) => (
+                matches!(sig.ret, signature_table::ValTy::F64),
+                sig.params
+                    .iter()
+                    .map(|t| match t {
+                        signature_table::ValTy::F64 => self.f64_type.into(),
+                        signature_table::ValTy::F32 => self.context.f32_type().into(),
+                        signature_table::ValTy::I64 => self.i64_type.into(),
+                    })
+                    .collect(),
+            ),
+            None => (false, (0..args_count).map(|_| self.i64_type.into()).collect()),
+        };
+        let fn_type = if ret_is_float {
+            self.f64_type.fn_type(&param_types, false)
+        } else {
+            self.i64_type.fn_type(&param_types, false)
+        };
         self.module
             .add_function(&actual_name, fn_type, Some(Linkage::External))
     }

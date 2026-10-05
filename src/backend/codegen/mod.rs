@@ -3,6 +3,8 @@
 mod codegen;
 mod jit;
 mod monomorphize;
+// 批 990（提案①第一段）：C 运行时签名表＋keyfn 指针合同（手写，非生成）。
+mod signature_table;
 // @generated — regenerate via `python3 tools/gen_from_registry.py --emit`
 mod runtime_decls_registry;
 // @generated — regenerate via `python3 tools/gen_from_registry.py --emit-core`
