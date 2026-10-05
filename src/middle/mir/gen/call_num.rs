@@ -204,8 +204,14 @@ impl MirGen {
                 // 批 967：f64 元素 ⇒ 特化副本发射
                 if let AstNode::Var(nm) = &ka[1] {
                     let mangled = format!("__ZKEYF64_{}", nm);
+                    // 批 984 放宽：keyfn 返回 f64（注解/证据）也触发
+                    let keyfn_ret_f64 = matches!(
+                        self.func_ret_types.get(nm.as_str()),
+                        Some(Type::F64) | Some(Type::F32)
+                    );
                     if !nm.starts_with("__")
-                        && self.full_funcdefs.contains_key(nm.as_str())
+                        && (keyfn_ret_f64
+                            || self.full_funcdefs.contains_key(nm.as_str()))
                     {
                         if let Some(store) = self.keyfn_spec_store.as_ref() {
                             let registered = store.borrow().iter().any(|a| {
