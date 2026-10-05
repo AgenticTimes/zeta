@@ -497,6 +497,8 @@ def rebind(
     moved: list[tuple[str, int, int, int]] = []  # 文件 / 旧起 / 新起 / 段长
     refused: list[str] = []
     refused_keys: list[tuple[str, int, int]] = []
+    autopaired: list[str] = []
+    multi_pending: list[tuple] = []
 
     def refuse(key: tuple[str, int, int], msg: str) -> None:
         # 键也要记下来：刷新基线时原样保留，见函数末尾那段。
@@ -522,11 +524,14 @@ def rebind(
             )
             continue
         if len(hits) > 1:
-            refuse(
-                (rel, line, last),
-                f"{rel}:{fmt_span(line, last)} → {len(hits)} 处命中（{', '.join(map(str, hits[:5]))}"
-                f"{'…' if len(hits) > 5 else ''}）：唯一性不成立，不猜",
-            )
+            # 批次 773 (#52 余量收敛)：多义不再一律拒改——同形文本多处命中时
+            # 延迟到**同文件多义族的序保持贪心**（见 multi_pending 消费段）：
+            # 按旧行序逐个取最近且未被前面占用的命中（距离不设限：内容逐字
+            # 相同＋序保持＋不占用＝三重合同；远距位移由 [自动配对] 行出声）。
+            # 动机与验证：五处相同的 `let mangled = ...` 逐一按纯距离配对会把
+            # 2902 配到 2898（撞 2886 的落点）；序保持贪心给 2914（+12，与
+            # 同族 +12 位移一致）。批次 772 人工合同读的 31 个映射与此全部一致。
+            multi_pending.append((rel, line, last, hits, span, refs))
             continue
         dst = hits[0]
         if dst == line:
@@ -541,6 +546,49 @@ def rebind(
             if span_b is not None:
                 edits.append((docno, span_b[0], span_b[1], str(dst + span - 1)))
 
+    # ── Batch 773：多义族的序保持贪心配对 ──
+    # 同文件的多义锚点按旧行升序消费：每个取「最近且未被同族前面锚点占用」的
+    # 命中（占位 = 已被本族更早的锚点配走）。三重合同：内容逐字相同＋序保持
+    # ＋不占用；距离不设限——远距位移由 [自动配对] 行的位移数字出声。
+    # 并列/超界/无可用命中仍拒改（原样进 refused，基线保留规则不变）。
+    multi_by_file: dict[str, list] = {}
+    for entry in multi_pending:
+        multi_by_file.setdefault(entry[0], []).append(entry)
+    for rel, entries in sorted(multi_by_file.items()):
+        taken: set[int] = set()
+        for rel_, line, last, hits, span, refs in sorted(entries, key=lambda e: e[1]):
+            avail = sorted(h for h in hits if h not in taken)
+            if not avail:
+                refuse(
+                    (rel, line, last),
+                    f"{rel}:{fmt_span(line, last)} → {len(hits)} 处命中全被同族"
+                    f"更早的锚点占用，不猜",
+                )
+                continue
+            nearest = min(avail, key=lambda h: abs(h - line))
+            nd = abs(nearest - line)
+            tied = any(abs(h - line) == nd for h in avail if h != nearest)
+            if tied:
+                refuse(
+                    (rel, line, last),
+                    f"{rel}:{fmt_span(line, last)} → {len(hits)} 处命中（"
+                    f"{', '.join(map(str, hits[:5]))}{'…' if len(hits) > 5 else ''}）："
+                    "距离并列（序保持也无法定序），不猜",
+                )
+                continue
+            taken.add(nearest)
+            moved.append((rel, line, nearest, span))
+            for docno, _, _, _, span_a, span_b in refs:
+                edits.append((docno, span_a[0], span_a[1], str(nearest)))
+                if span_b is not None:
+                    edits.append(
+                        (docno, span_b[0], span_b[1], str(nearest + span - 1))
+                    )
+            autopaired.append(
+                f"{rel}:{fmt_span(line, last)} → :{fmt_span(nearest, nearest + span - 1)}"
+                f"（{len(hits)} 处命中，序保持取最近，位移 {nearest - line:+d}）"
+            )
+
     for key in unmatched_gone:
         refuse(
             key,
@@ -553,6 +601,8 @@ def rebind(
         f"；改号配对 {len(pairs)} 对 / 落单消失 {len(unmatched_gone)} 条"
         f" / 落单新锚点 {len(unmatched_added)} 条"
     )
+    for note in autopaired:
+        print(f"  [自动配对] {note}")
     for rel, line, dst, span in moved:
         print(f"  [搬家] {rel}:{fmt_span(line, line + span - 1)}"
               f" → :{fmt_span(dst, dst + span - 1)}"

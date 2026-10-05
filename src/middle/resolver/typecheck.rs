@@ -38,18 +38,6 @@ impl Resolver {
         self.note_none_vars();
         self.method_param_refinements = pm;
 
-        // Borrow checker pass (separate scope to avoid RefCell conflict)
-        for ast in asts {
-            let borrow_ok = {
-                let mut checker = self.borrow_checker.borrow_mut();
-                checker.check(ast, self)
-            };
-            if !borrow_ok {
-                let _ = ok; // Mark as used to avoid warning
-                ok = false;
-            }
-        }
-
         // Use unified type checking interface
         let typecheck_result = match self.typecheck_unified(asts) {
             TypeCheckResult::Success(_) => {
@@ -124,7 +112,7 @@ impl Resolver {
                         for (i, (arg, (param_name, param_type))) in
                             args.iter().zip(sig.0.iter()).enumerate()
                         {
-                            let arg_type = self.infer_type(arg);
+                            let arg_type = self.infer_unified(arg);
                             if &arg_type != param_type {
                                 let diag = crate::error_codes::diagnostic_from_code(
                                     "E2008",
@@ -165,8 +153,8 @@ impl Resolver {
             AstNode::BinaryOp {
                 op, left, right, ..
             } => {
-                let lty = self.infer_type(left);
-                let rty = self.infer_type(right);
+                let lty = self.infer_unified(left);
+                let rty = self.infer_unified(right);
 
                 // For logical operators (&&, ||), both operands must be bool
                 if op == "&&" || op == "||" {
@@ -291,7 +279,7 @@ impl Resolver {
                 else_body,
             } => {
                 // Check condition - should be bool
-                let cond_type = self.infer_type(cond);
+                let cond_type = self.infer_unified(cond);
                 if cond_type != Type::Bool {
                     let diag = crate::error_codes::diagnostic_from_code(
                         "E2019",
@@ -327,7 +315,7 @@ impl Resolver {
             } => {
                 // Check if type annotation is provided
                 if let Some(type_str) = ty {
-                    let expr_type = self.infer_type(expr);
+                    let expr_type = self.infer_unified(expr);
                     // Convert string type annotation to Type for comparison
                     let annotated_type = self.string_to_type(type_str);
                     if !self.types_compatible(&expr_type, &annotated_type, expr) {
@@ -357,6 +345,16 @@ impl Resolver {
     /// Convert string type annotation to Type enum
     /// Uses unified type parsing interface
     fn string_to_type(&self, s: &str) -> Type {
+        // Batch 747 (#264): `**kwargs` star-param marker from the parser —
+        // the slot holds an ordinary map handle, which is what `**name` is.
+        if s.trim() == "**" {
+            return Type::Named("map".to_string(), Vec::new());
+        }
+        // Batch 752: `*args` star-param marker — an ordinary list handle
+        // (what positional overflow IS).
+        if s.trim() == "*" {
+            return Type::DynamicArray(Box::new(Type::PyDynamic));
+        }
         // Use the unified type parsing
         match self.parse_type_string(s) {
             Ok(ty) => ty,
@@ -373,12 +371,29 @@ impl Resolver {
         }
     }
 
+    /// 批次 971（双轨合一段 3）：统一推断的宽容包装——新轨
+    /// InferContext 为主，ERR（未定义符号/未实现形状）回落旧轨
+    /// infer_type（宽容 I64 兜底语义）。
+    pub fn infer_unified(&self, node: &AstNode) -> Type {
+        let mut ctx = crate::middle::resolver::new_resolver::InferContext::new();
+        match ctx.infer(node) {
+            Ok(t) => t,
+            // 批 1006：原 Err 分支自调 infer_unified（971 段 3 笔误，
+            // 新轨报 Err 即无限递归；实拍未触发仅因现役形状新轨全 Ok）。
+            // 改回落旧轨 infer_type，双轨合一语义恢复原意。
+            Err(_) => self.infer_type(node),
+        }
+    }
+
     pub fn infer_type(&self, node: &AstNode) -> Type {
         if self.ctfe_eval(node).is_some() {
             return Type::I64;
         }
         match node {
             AstNode::Lit(_) => Type::I64,
+            // 批次 969（双轨合一第一段）：FloatLit 曾落 I64 兜底——
+            // 借助 borrow 检查的 float 表达式型全错（双轨对照实证）
+            AstNode::FloatLit(_) => Type::F64,
             AstNode::StringLit(_) => Type::Str,
             AstNode::FString(_) => Type::Str,
             AstNode::Var(_) => Type::I64,

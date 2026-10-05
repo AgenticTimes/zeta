@@ -279,6 +279,50 @@ impl GenericContext {
 }
 
 impl Type {
+    /// 批次 838（F.1 清单第 3 类）：「未知槽落 I64」的**唯一决策点**——
+    /// 编译器拿不到槽的静态类型时，按本机约定落 I64（运行期一个 64 位字，
+    /// ABI 层与 PyDynamic 同形）。此谓词不改行为，只把 76 处散落的
+    /// `unwrap_or(Type::I64)` 兜底决策收拢成有名字的合同：后续若把未知槽
+    /// 改为 PyDynamic/带格标记，只改这一处＋跑全量。
+    pub fn slot_fallback() -> Type {
+        Type::I64
+    }
+
+    /// 批次 815：这个类型是不是字典（dict/map 两种拼写等价——Python 方言
+    /// 两种都出现，等价规则此前在 37 处调用点各手写一遍）。
+    pub fn is_map(&self) -> bool {
+        matches!(self, Type::Named(n, _) if n == "map" || n == "dict")
+    }
+
+    /// 批次 903（轴 F kind 3）：这个类型是不是 NoneValue 标记（`v = f()`、
+    /// f 纯 None 返回、fromkeys None 等"值对类型丢"的空值携带面——804/806/808
+    /// 系列的判定位收拢成有名字的合同）。
+    pub fn is_none_value(&self) -> bool {
+        matches!(self, Type::Named(n, _) if n == "NoneValue")
+    }
+
+    /// 批次 904（轴 F kind 1）：纯 PyDynamic 判定（值类型运行期可知未知）。
+    pub fn is_dynamic(&self) -> bool {
+        matches!(self, Type::PyDynamic)
+    }
+
+    /// 批次 904（轴 F kind 1）：槽型未定（缺省 I64 或 PyDynamic）——"值对
+    /// 类型丢"风险面的命名判定（I64 是空槽原本的读法，813 系口径）。
+    pub fn is_untyped(&self) -> bool {
+        matches!(self, Type::I64 | Type::PyDynamic)
+    }
+
+    /// 字典的键/值类型（`map<K, V>`；缺省槽按 I64，与既有读边界约定一致）。
+    pub fn map_kv(&self) -> Option<(Type, Type)> {
+        match self {
+            Type::Named(n, targs) if n == "map" || n == "dict" => Some((
+                targs.first().cloned().unwrap_or(Type::I64),
+                targs.get(1).cloned().unwrap_or(Type::I64),
+            )),
+            _ => None,
+        }
+    }
+
     /// Parse a type from a string representation
     pub fn from_string(s: &str) -> Type {
         let s = s.trim();

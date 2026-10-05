@@ -1,0 +1,114 @@
+{
+  "metadata": {
+    "generatedBy": "architecture-visualization:architecture-health",
+    "generatedAt": "2026-09-25",
+    "auditedArtifacts": [
+      "docs/diagrams/zeta-pipeline-flow.drawio",
+      "docs/diagrams/zeta-call-chain.drawio",
+      "docs/diagrams/zeta-core-classes.drawio"
+    ],
+    "artifactHeadCommit": "e881e516 (2026-09-24)",
+    "scope": "src/ real compiler + runtime/ C; zeta_src/ corpus excluded",
+    "sourceRefPolicy": "resolvable",
+    "checker": "docs/architecture-health/check-arch-claims.py",
+    "tally": { "claims": 36, "pass": 27, "fail": 9 }
+  },
+  "nodes": [
+    {
+      "id": "a-indent", "diagram": "zeta-pipeline-flow", "label": "indent::indent_preprocess",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["src/middle/resolver/resolver.rs:2534"]
+    },
+    {
+      "id": "a-parse", "diagram": "zeta-pipeline-flow", "label": "parse_zeta -> parse_top_level_entry",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["src/middle/resolver/module_resolver.rs:639", "src/frontend/parser/top_level.rs:1608", "src/frontend/parser/parser.rs:284", "src/frontend/parser/stmt.rs:67"]
+    },
+    {
+      "id": "a-ast", "diagram": "zeta-pipeline-flow", "label": "AstNode enum",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["src/frontend/ast.rs:28-367"],
+      "note": "65 variants; label claims '40+', true but understated by 25"
+    },
+    {
+      "id": "a-res", "diagram": "zeta-pipeline-flow", "label": "Resolver::register",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["src/middle/resolver/resolver.rs:782"]
+    },
+    {
+      "id": "a-mir", "diagram": "zeta-pipeline-flow", "label": "MirGen::lower_to_mir + str_method_symbol",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["src/middle/mir/gen.rs:1067", "src/middle/mir/gen.rs:10224"]
+    },
+    {
+      "id": "a-llvm", "diagram": "zeta-pipeline-flow", "label": "LLVMCodegen::gen_mirs / get_function",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["src/lib.rs:148", "src/backend/codegen/codegen.rs:2275"]
+    },
+    {
+      "id": "a-link", "diagram": "zeta-pipeline-flow", "label": "gcc link + tokio_runtime.o + zeta_runtime_c.o",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["runtime/tokio_runtime_stub.c", "runtime/py_additions.c", "tools/build_runtime.sh:3", "zeta_runtime_c.o"],
+      "note": "both named objects are real: tools/build_runtime.sh rebuilds tokio_runtime.o and zeta_runtime_c.o, and zeta_runtime_c.o is present at the repo root"
+    },
+    {
+      "id": "b-main", "diagram": "zeta-call-chain", "label": "main.rs::run",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["src/main.rs"]
+    },
+    {
+      "id": "b-block", "diagram": "zeta-call-chain", "label": "parse_block_body -> parse_stmt / parse_full_expr",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["src/frontend/parser/stmt.rs:21", "src/frontend/parser/stmt.rs:58"]
+    },
+    {
+      "id": "c5", "diagram": "zeta-call-chain", "label": "host_str_to_string is identity",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["runtime/tokio_runtime_stub.c:2464"],
+      "note": "strongest confirmation in the set: source reads `int64_t host_str_to_string(int64_t s) { return s; }`, matching the semantic claim verbatim"
+    },
+    {
+      "id": "mirgen", "diagram": "zeta-core-classes", "label": "MirGen - gen.rs (13,785 lines)",
+      "type": "module", "state": "current", "confidence": "medium",
+      "sourceRefs": ["src/middle/mir/gen.rs:1067"],
+      "note": "symbol/field claims PASS; the 13,785 line count is stale, actual 14,644 and still moving"
+    },
+    {
+      "id": "resolver", "diagram": "zeta-core-classes", "label": "Resolver - resolver.rs (4.7k lines)",
+      "type": "module", "state": "current", "confidence": "low",
+      "sourceRefs": ["src/middle/resolver/resolver.rs:35", "src/middle/resolver/resolver.rs:2192", "src/middle/resolver/resolver.rs:3235"],
+      "note": "methods confirmed; field list names zero real fields (see finding F-1); 4.7k stale vs 5,121"
+    },
+    {
+      "id": "llvmgen", "diagram": "zeta-core-classes", "label": "LLVMCodegen - codegen.rs (7.6k lines)",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["src/backend/codegen/codegen.rs:2275"], "note": "7,650 actual, claim holds"
+    },
+    {
+      "id": "mir", "diagram": "zeta-core-classes", "label": "Mir (mir.rs)",
+      "type": "module", "state": "current", "confidence": "high",
+      "sourceRefs": ["src/middle/mir/mir.rs:6-26"],
+      "note": "stmts/exprs/param_indices confirmed; claimed field `globals` absent, nearest is global_consts (mir.rs:13)"
+    },
+    {
+      "id": "ctype", "diagram": "zeta-core-classes", "label": "Type (types/mod.rs, 50+ variants)",
+      "type": "module", "state": "current", "confidence": "medium",
+      "sourceRefs": ["src/middle/types/mod.rs:94-182"],
+      "note": "47 variants counted; claim of 50+ does not hold by 3"
+    },
+    {
+      "id": "cruntime", "diagram": "zeta-core-classes", "label": "C runtime (462 functions)",
+      "type": "module", "state": "current", "confidence": "unknown",
+      "sourceRefs": ["runtime/tokio_runtime_stub.c", "runtime/py_additions.c"],
+      "note": "816 column-0 definitions counted; 462 unreproducible under 7 candidate scopes (host_ 55, zeta_ 123, vec_ 6, py_ 389, host_+zeta_ 178, +vec_ 184, all-prefixed 573)"
+    }
+  ],
+  "findings": [
+    { "id": "F-1", "severity": "high", "title": "Resolver field list is a pre-batch-300 snapshot", "refs": ["src/middle/resolver/resolver.rs:35-118"] },
+    { "id": "F-2", "severity": "high", "title": "C runtime function count unreproducible", "refs": ["runtime/tokio_runtime_stub.c", "runtime/py_additions.c"] },
+    { "id": "F-3", "severity": "medium", "title": "gen.rs / resolver.rs line counts stale", "refs": ["src/middle/mir/gen.rs", "src/middle/resolver/resolver.rs"] },
+    { "id": "F-4", "severity": "low", "title": "Mir.globals does not exist", "refs": ["src/middle/mir/mir.rs:13"] },
+    { "id": "F-5", "severity": "low", "title": "Type variant count off by 3", "refs": ["src/middle/types/mod.rs:94-182"] },
+    { "id": "F-6", "severity": "low", "title": "No sourceRefs in any diagram; core-classes has no PNG export", "refs": ["docs/diagrams/"] }
+  ]
+}

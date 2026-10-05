@@ -16,7 +16,6 @@ static NEXT_MAP_ID: AtomicI64 = AtomicI64::new(1);
 ///
 /// # Safety
 /// Returns pointer to map (actually a map ID)
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn map_new() -> i64 {
     let id = NEXT_MAP_ID.fetch_add(1, Ordering::SeqCst);
     let mut store = MAP_STORE.lock().unwrap();
@@ -28,7 +27,6 @@ pub unsafe extern "C" fn map_new() -> i64 {
 ///
 /// # Safety
 /// ptr must be valid map ID from map_new
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn map_insert(ptr: i64, key: i64, value: i64) {
     let mut store = MAP_STORE.lock().unwrap();
     if let Some(map) = store.get_mut(&ptr) {
@@ -40,7 +38,6 @@ pub unsafe extern "C" fn map_insert(ptr: i64, key: i64, value: i64) {
 ///
 /// # Safety
 /// ptr must be valid map ID from map_new
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn map_get(ptr: i64, key: i64) -> i64 {
     let store = MAP_STORE.lock().unwrap();
     if let Some(map) = store.get(&ptr) {

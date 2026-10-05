@@ -69,15 +69,23 @@ fn parse_param_full(input: &str) -> IResult<&str, (String, String, Option<AstNod
     ));
 
     // PY-A: `*args` / `**kwargs` star-params — consumed as a single opaque
-    // i64 param (V1: call sites with extra args coerce; real variadics need
+    // slot (V1: call sites with extra args coerce; real variadics need
     // arg-tuple support). The FIRST star is mandatory so this branch can
     // never shadow regular params.
-    //
-    // The trailing annotation (`**k: Any`, `*args: int`) must be consumed too:
-    // leaving `: Any` in the input makes the parameter list unable to close, so
-    // the whole definition fails and everything after it is dropped (W1002).
-    // Annotated and bare forms keep the same opaque i64 mapping — the annotation
-    // is discarded, not applied.
+    // Batch 745 (#264): the annotation after `*args`/`**kwargs` (`: Any`,
+    // `: dict[str, Any]`) is consumed and DISCARDED. Without this,
+    // `**kwargs: Any` left `: Any` in the stream and the parameter list
+    // (and the whole def) failed to parse (base.py:76
+    // `def run_backtest(engine: str, **kwargs: Any) -> …`, W1002 34 lines).
+    // 合注（757 合并核销）：cleanup 739（`c68b815b`）独立修了同一个洞（消费
+    // `: 类型` 注解、槽仍发不透明 "i64"）——本侧 745b 起同修并走得更远，其
+    // 文字与本行并入下述演化链。
+    // Batch 747 (#264): the slot type is the reserved marker string "**";
+    // resolver lowers it to an ordinary map (what `**name` IS) and records
+    // the name so call sites collect unmatched keyword arguments into a
+    // dict bound to this parameter.
+    // Batch 752: single star emits "*" — the call site collects positional
+    // overflow into a list bound to this parameter.
     let parse_star = map(
         (
             ws(tag("*")),
@@ -85,7 +93,12 @@ fn parse_param_full(input: &str) -> IResult<&str, (String, String, Option<AstNod
             ws(parse_ident),
             opt(preceded(ws(tag(":")), ws(parse_type))),
         ),
-        |(_, _, name, _)| (name, "i64".to_string(), None),
+        // 元组序＝(首星, 次星opt, 名字, 注解opt)——752 初版把第 3 位当次星、
+        // 实为注解位，`**k` 因此恒判单星（单测 probe_double_star 实证）。
+        |(_, second, name, _)| {
+            let marker = if second.is_some() { "**" } else { "*" };
+            (name, marker.to_string(), None)
+        },
     );
 
     // Try regular parameter: `name: type` — PY-A / B3: type annotation optional
@@ -1287,153 +1300,13 @@ pub(crate) fn parse_class(input: &str) -> IResult<&str, AstNode> {
                                 break;
                             }
                         }
-                        let ty = match rhs_eff {
-                            AstNode::Lit(_) => "i64".to_string(),
-                            AstNode::Bool(_) => "bool".to_string(),
-                            // `self.x = {}` — a dict literal field. Without this arm
-                            // the field typed i64, so EVERY map operation on it
-                            // (`self.m.get(k, d)`, `.values()`, `.keys()`, `k in
-                            // self.m`) fell through to an opaque bare symbol
-                            // (`_get` / `_values` / `_exists` — 7 reference sites
-                            // each in the REasyQuant local backtest, e.g.
-                            // `PositionLedger._positions` / `._today_buys`).
-                            AstNode::DictLit { .. } => "map".to_string(),
-                            AstNode::FloatLit(_) => "f64".to_string(),
-                            AstNode::StringLit(_) => "str".to_string(),
-                            AstNode::ArrayLit(items) | AstNode::DynamicArrayLit { elements: items, .. } => {
-                                // Batch 594: an ELEMENT-AWARE spelling. The bare
-                                // "DynamicArray" left every list field i64-typed
-                                // at the read sites (`print(p.ages)` rendered the
-                                // handle; `q = p.ages; q[0]` dispatched map_get
-                                // and crashed). `list[T]` is the spelling the
-                                // read side already parses (lt_annotation_type,
-                                // batch 291). Element type from the first item's
-                                // literal shape; anything else conservatively i64.
-                                let elem = items.first().map(|e| match e {
-                                    AstNode::StringLit(_) => "str",
-                                    AstNode::FloatLit(_) => "f64",
-                                    AstNode::Bool(_) => "bool",
-                                    _ => "i64",
-                                }).unwrap_or("i64");
-                                // `list<…>` (angle form) is the dialect
-                                // `lt_annotation_type` — the read side —
-                                // parses; the `[…]` subscript form belongs to
-                                // the annotation parser and is NOT read here.
-                                format!("list<{}>", elem)
-                            }
-                            AstNode::Var(name) if param_names.contains(&name.as_str()) => {
-                                // `self.x = x` — take the PARAMETER's declared
-                                // type when it has one. Hardcoding i64 ignored
-                                // `def __init__(self, d: map)`: every library
-                                // field became i64 and its own
-                                // `self.data.keys()` turned into an undefined
-                                // `_keys`.
-                                // B3: unannotated params are `"dyn"`; treat that
-                                // like the old empty/i64 default so constructor
-                                // call-site field refinement (`dt == "i64"`) still
-                                // upgrades `self.name = s` when `s` is a string.
-                                init_params
-                                    .iter()
-                                    .find(|(n, _)| n == name)
-                                    .map(|(_, ty)| ty.clone())
-                                    .filter(|ty| !ty.is_empty() && ty != "dyn")
-                                    .unwrap_or_else(|| "i64".to_string())
-                            }
-                            // `self._ledger = PositionLedger(...)` — a field
-                            // holding an instance of a user class. With the old
-                            // i64 default the inner calls (`self._ledger
-                            // .clear_today_buys()`) fell to the bare-name
-                            // dispatch, and two classes sharing the method name
-                            // made codegen emit a self-recursive duplicate —
-                            // infinite recursion (batch 294). Capitalized
-                            // callee ⇒ remember the class name; MIR gen types
-                            // the field `Named(cls)` and dispatches qualified.
-                            AstNode::Call {
-                                receiver: None,
-                                method,
-                                ..
-                            } if method.chars().next().map_or(false, |c| c.is_uppercase()) => {
-                                method.clone()
-                            }
-                            // A field whose initializer is a CALL keeps the
-                            // callee's declared result type when the registry
-                            // knows it (`self.cache_dir = os.path.join(...)` is a
-                            // str). Falling back to i64 typed every such field as
-                            // an integer: `len(f.cache_dir)` was 0 and
-                            // `str(f.cache_dir)` printed the handle as digits.
-                            AstNode::Call {
-                                receiver, method, ..
-                            } if receiver.is_some() => {
-                                let mut ty = "i64".to_string();
-                                if let Some(recv) = receiver {
-                                    let mut parts: Vec<String> = Vec::new();
-                                    let mut cur: &AstNode = recv;
-                                    loop {
-                                        match cur {
-                                            AstNode::FieldAccess { base, field } => {
-                                                parts.push(field.clone());
-                                                cur = base;
-                                            }
-                                            AstNode::Var(root) => {
-                                                parts.push(root.clone());
-                                                break;
-                                            }
-                                            _ => break,
-                                        }
-                                    }
-                                    parts.reverse();
-                                    // The receiver's dotted path IS the module
-                                    // (`os.path`), the method is the member.
-                                    let module = parts.join(".");
-                                    let fallback = module
-                                        .strip_prefix(parts[0].as_str())
-                                        .and_then(|rest| rest.strip_prefix('.'))
-                                        .map(|rest| rest.to_string());
-                                    if let Some(e) =
-                                        crate::middle::pylib::find_member(&module, method)
-                                            .or_else(|| {
-                                                fallback.as_deref().and_then(|rest| {
-                                                    crate::middle::pylib::find_member(
-                                                        parts[0].as_str(),
-                                                        rest,
-                                                    )
-                                                })
-                                            })
-                                    {
-                                        if e.ret == "str" {
-                                            ty = "str".to_string();
-                                        }
-                                    }
-                                }
-                                ty
-                            }
-                            // BATCH-298: `self._cash = float(initial_cash)` — the
-                            // builtin conversions have a known result type. Left at
-                            // i64 the field is arithmetic-typed as an integer, but
-                            // an 8-byte slot holds a double's BIT PATTERN (see
-                            // `StructFieldStore`), so `self._cash -= total` became
-                            // `sub i64` on those bits: the ledger's cash never
-                            // moved and the local backtest valued the portfolio at
-                            // 0 (`final_value = portfolio.available_cash`).
-                            AstNode::Call {
-                                receiver: None,
-                                method,
-                                ..
-                            } if matches!(
-                                method.as_str(),
-                                "float" | "int" | "str" | "bool"
-                            ) =>
-                            {
-                                match method.as_str() {
-                                    "float" => "f64",
-                                    "str" => "str",
-                                    "bool" => "bool",
-                                    _ => "i64",
-                                }
-                                .to_string()
-                            }
-                            _ => "i64".to_string(),
-                        };
+                        // 批次 952（轴 F.4.1 第一刀）：字段定型逻辑已迁入
+                        // checker（middle/checker/field_ty.rs）——parser 调用点
+                        // 只留委托。各 RHS 形状臂的语义批注随逻辑同迁。
+                        let ty = crate::middle::checker::field_ty::guess_field_type_from_rhs(
+                            rhs_eff,
+                            &init_params,
+                        );
                         if !fields.iter().any(|(f, _)| f == field) {
                             fields.push((field.clone(), ty));
                             field_inits.push((field.clone(), (**rhs).clone()));
@@ -2088,6 +1961,134 @@ fn splice_main_guard_body(
     }
 }
 
+/// Batch 739 (裁定 2): rename the user's `main` to `__user_main__` and point
+/// every `main()` call/read in `node`'s tree at it. Used by the entry path of
+/// `synthesize_implicit_main` when a script defines `main` AND has module
+/// statements: CPython's module body IS the program and `main` is an ordinary
+/// function — the old merge (statements prepended into `main`) made any
+/// `print(main())` in the module body self-recursive (rc=139, measured).
+pub fn rename_user_main(node: &mut AstNode) {
+    match node {
+        AstNode::Var(v) if v == "main" => *v = "__user_main__".to_string(),
+        AstNode::Call { receiver, method, args, .. } => {
+            if receiver.is_none() && method == "main" {
+                *method = "__user_main__".to_string();
+            }
+            if let Some(r) = receiver.as_mut() {
+                rename_user_main(r);
+            }
+            for a in args {
+                rename_user_main(a);
+            }
+        }
+        AstNode::Assign(lhs, rhs) => {
+            rename_user_main(lhs);
+            rename_user_main(rhs);
+        }
+        AstNode::AssignOp { target, value, .. } => {
+            rename_user_main(target);
+            rename_user_main(value);
+        }
+        AstNode::BinaryOp { left, right, .. } => {
+            rename_user_main(left);
+            rename_user_main(right);
+        }
+        AstNode::UnaryOp { expr, .. } => rename_user_main(expr),
+        AstNode::Return(e) => rename_user_main(e),
+        AstNode::If { cond, then, else_ } => {
+            rename_user_main(cond);
+            for st in then {
+                rename_user_main(st);
+            }
+            for st in else_ {
+                rename_user_main(st);
+            }
+        }
+        AstNode::For { pattern, expr, body, else_body } => {
+            rename_user_main(pattern);
+            rename_user_main(expr);
+            for st in body {
+                rename_user_main(st);
+            }
+            for st in else_body {
+                rename_user_main(st);
+            }
+        }
+        AstNode::While { cond, body, else_body } => {
+            rename_user_main(cond);
+            for st in body {
+                rename_user_main(st);
+            }
+            for st in else_body {
+                rename_user_main(st);
+            }
+        }
+        AstNode::Loop { body } => {
+            for st in body {
+                rename_user_main(st);
+            }
+        }
+        AstNode::ExprStmt { expr } => rename_user_main(expr),
+        AstNode::Block { body } => {
+            for st in body {
+                rename_user_main(st);
+            }
+        }
+        AstNode::Subscript { base, index } => {
+            rename_user_main(base);
+            rename_user_main(index);
+        }
+        AstNode::Call { receiver: _, .. } => {}
+        _ => {}
+    }
+}
+
+/// Batch 739: does this statement tree CALL or reference `main` (receiver-none
+/// `Call { method: "main" }` or a bare `Var("main")` value read)? The new
+/// entry shape (module statements ARE the program, user main renamed) must
+/// only fire when the module body actually invokes main — zeta-native scripts
+/// whose module level merely initializes globals (t424 family) keep the merge
+/// path (init globals, then run main as the entry).
+pub fn module_tree_calls_main(node: &AstNode) -> bool {
+    match node {
+        AstNode::Var(v) if v == "main" => true,
+        AstNode::Call { receiver, method, args, .. } => {
+            if receiver.is_none() && method == "main" {
+                return true;
+            }
+            receiver.as_ref().is_some_and(|r| module_tree_calls_main(r))
+                || args.iter().any(module_tree_calls_main)
+        }
+        AstNode::Assign(lhs, rhs) => module_tree_calls_main(lhs) || module_tree_calls_main(rhs),
+        AstNode::AssignOp { target, value, .. } => {
+            module_tree_calls_main(target) || module_tree_calls_main(value)
+        }
+        AstNode::BinaryOp { left, right, .. } => {
+            module_tree_calls_main(left) || module_tree_calls_main(right)
+        }
+        AstNode::UnaryOp { expr, .. } => module_tree_calls_main(expr),
+        AstNode::Return(e) => module_tree_calls_main(e),
+        AstNode::If { cond, then, else_ } => {
+            module_tree_calls_main(cond)
+                || then.iter().any(module_tree_calls_main)
+                || else_.iter().any(module_tree_calls_main)
+        }
+        AstNode::While { cond, body, .. } => {
+            module_tree_calls_main(cond) || body.iter().any(module_tree_calls_main)
+        }
+        AstNode::For { expr, body, .. } => {
+            module_tree_calls_main(expr) || body.iter().any(module_tree_calls_main)
+        }
+        AstNode::Loop { body } => body.iter().any(module_tree_calls_main),
+        AstNode::ExprStmt { expr } => module_tree_calls_main(expr),
+        AstNode::Block { body } => body.iter().any(module_tree_calls_main),
+        AstNode::Subscript { base, index } => {
+            module_tree_calls_main(base) || module_tree_calls_main(index)
+        }
+        _ => false,
+    }
+}
+
 /// Marks a `main` that carries a **module body**: the one this function
 /// synthesizes when the source declared no entry function, and the user's
 /// `main` when module statements got prepended into it. `MirGen` otherwise ends
@@ -2311,6 +2312,34 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
     // module statements as the import-time initializer, so merging them into
     // `main` would execute the whole entry point on every import.
     let module_ctx = parsing_imported_module();
+    // Batch 739 (裁定 2): ENTRY script + user `main` + module statements that
+    // are not merely a `__main__` guard ⇒ the module statements become the
+    // PROGRAM (entry main's body) and the user `main` is renamed
+    // `__user_main__` (an ordinary function the statements call). The old
+    // merge prepended the statements INTO main, so a `print(main())` in them
+    // self-recursive (rc=139). Zeta-native `fn main(){…}` files have an empty
+    // statement list here and keep the current entry-merges-with-nothing
+    // behavior.
+    let module_stmt_worthy = |a: &AstNode| -> bool {
+        if is_main_guard(a) {
+            return true;
+        }
+        match a {
+            AstNode::Block { body } => body
+                .iter()
+                .any(|n| !is_definition(n) || is_main_guard(n)),
+            other => !is_definition(other),
+        }
+    };
+    let new_entry_shape = has_main
+        && !module_ctx
+        && asts.iter().any(|a| {
+            module_stmt_worthy(a)
+                && match a {
+                    AstNode::Block { body } => body.iter().any(module_tree_calls_main),
+                    other => module_tree_calls_main(other),
+                }
+        });
     for a in asts {
         match a {
             // PY-A: a class desugars to [struct, impl, ctor] wrapped in a
@@ -2320,6 +2349,14 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
                     if is_definition(&node) {
                         out.push(node);
                     } else {
+                        if new_entry_shape {
+                            // Batch 739: keep EVERYTHING — guards stay runtime
+                            // checks (true at entry) and bare `main()` calls
+                            // stay calls (they run the renamed user main).
+                            collect_module_global(&node, &mut module_globals);
+                            main_body.push(node);
+                            continue;
+                        }
                         if has_main && is_bare_main_call(&node) {
                             continue;
                         }
@@ -2335,6 +2372,11 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
             }
             other if is_definition(&other) => out.push(other),
             stmt => {
+                if new_entry_shape {
+                    collect_module_global(&stmt, &mut module_globals);
+                    main_body.push(stmt);
+                    continue;
+                }
                 // BATCH-290: the `if __name__ == "__main__":` guard now SURVIVES
                 // parsing as an If (stmt.rs no longer unwraps it). When this file
                 // defines `main`, its module statements get PREPENDED into that
@@ -2390,6 +2432,44 @@ fn synthesize_implicit_main(asts: Vec<AstNode>) -> Vec<AstNode> {
                 ret: "i64".to_string(),
                 body: main_body,
                 attrs: Vec::new(),
+                ret_expr: None,
+                single_line: false,
+                doc: String::new(),
+                pub_: false,
+                async_: false,
+                const_: false,
+                comptime_: false,
+                where_clauses: Vec::new(),
+            });
+            return out;
+        }
+        // Batch 739 (裁定 2): the module statements ARE the program — the user
+        // `main` is an ordinary function under `__user_main__`, and the entry
+        // main's body is exactly the module statements (calls to `main` in them
+        // resolve to the renamed function). CPython prints "in-main"/7 once for
+        // `def main(){…} print(main())`; the old merge self-recursed.
+        if new_entry_shape {
+            for node in &mut out {
+                if let AstNode::FuncDef { name, body, .. } = node {
+                    if name == "main" {
+                        *name = "__user_main__".to_string();
+                        for st in body {
+                            rename_user_main(st);
+                        }
+                    }
+                }
+            }
+            for st in &mut main_body {
+                rename_user_main(st);
+            }
+            out.push(AstNode::FuncDef {
+                name: "main".to_string(),
+                generics: Vec::new(),
+                lifetimes: Vec::new(),
+                params: Vec::new(),
+                ret: "i64".to_string(),
+                body: main_body,
+                attrs: vec![PY_ENTRY_ATTR.to_string()],
                 ret_expr: None,
                 single_line: false,
                 doc: String::new(),
@@ -2735,3 +2815,4 @@ fn rewrite_super_in_expr(e: &mut AstNode, bases: &[String]) {
         }
     }
 }
+

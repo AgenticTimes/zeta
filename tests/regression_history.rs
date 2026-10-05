@@ -7283,6 +7283,11 @@ const DICT_TYPING_QUALIFIED: &str =
 const CLASS_ANNOTATED_NONE: &str = "class Box:\n    def __init__(self):\n        self.n = 1\n\nb: Box | None = None\nprint(1)\n";
 
 #[test]
+/// 计数位移（2026-10-06 并入主线 459 笔的同步批）：11 格里所有含模块级语句的段
+/// （`main`）的"其他槽数"整批 +1（9→10、21→22、15→16、17→18、11→12），而 `g`／`f`
+/// 两个只含函数体的段一字未变；`map槽`／`map被调` 两格 11 条全部一字未变。⇒ 位移来自
+/// 为模块级顶层语句建槽的主线改动（候选＝`50ca4085` 批次 942 的"模块级顶层赋值建槽"，
+/// 该笔已实测在合并面内；逐笔归因未做）。期望值按合并后实测改数，不改形状。
 fn container_annotation_keeps_key_and_value_type_in_mir_type_map() {
     let cases: Vec<(&str, &str, &str)> = vec![
         ("模块字典无写_注解值型进槽", "main", DICT_MODULE_NO_WRITE),
@@ -7305,17 +7310,17 @@ fn container_annotation_keeps_key_and_value_type_in_mir_type_map() {
         })
         .collect();
     let want: Vec<(String, String)> = vec![
-        ("模块字典无写_注解值型进槽".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
-        ("Any值型不被写侧钉死_413症状".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,PyDynamic])]其他槽数=21|map被调=[map_str_key,map_str_key,zeta_map_len]".to_string()),
+        ("模块字典无写_注解值型进槽".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=10|map被调=[zeta_map_len]".to_string()),
+        ("Any值型不被写侧钉死_413症状".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,PyDynamic])]其他槽数=22|map被调=[map_str_key,map_str_key,zeta_map_len]".to_string()),
         ("函数体读模块字典_段内现状".to_string(), "map槽=[4:Named(\"map\",[])]其他槽数=2|map被调=[zeta_map_len]".to_string()),
-        ("模块字典无写_调用方段".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=9|map被调=[]".to_string()),
+        ("模块字典无写_调用方段".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=10|map被调=[]".to_string()),
         ("函数内字典无写".to_string(), "map槽=[1:Named(\"map\",[I64,I64]),2:Named(\"map\",[Str,I64])]其他槽数=1|map被调=[zeta_map_len]".to_string()),
-        ("整型键与字符串值_无写".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,Str])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
-        ("两次写入_写侧也能补回_对照".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=15|map被调=[map_str_key,map_str_key,zeta_map_len]".to_string()),
-        ("裸dict无尖括号_现状锁".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,I64])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
-        ("嵌套值注解不生效_未修现状".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,I64])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
-        ("typing点Dict不生效_未修现状".to_string(), "map槽=[1:Named(\"map\",[I64,I64])]其他槽数=17|map被调=[map_str_key]".to_string()),
-        ("类形注解_本尺无面_M4佐证".to_string(), "map槽=[]其他槽数=11|map被调=[]".to_string()),
+        ("整型键与字符串值_无写".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,Str])]其他槽数=10|map被调=[zeta_map_len]".to_string()),
+        ("两次写入_写侧也能补回_对照".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=16|map被调=[map_str_key,map_str_key,zeta_map_len]".to_string()),
+        ("裸dict无尖括号_现状锁".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,I64])]其他槽数=10|map被调=[zeta_map_len]".to_string()),
+        ("嵌套值注解不生效_未修现状".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,I64])]其他槽数=10|map被调=[zeta_map_len]".to_string()),
+        ("typing点Dict不生效_未修现状".to_string(), "map槽=[1:Named(\"map\",[I64,I64])]其他槽数=18|map被调=[map_str_key]".to_string()),
+        ("类形注解_本尺无面_M4佐证".to_string(), "map槽=[]其他槽数=12|map被调=[]".to_string()),
     ];
     assert_eq!(want, got);
 }
@@ -7507,6 +7512,10 @@ print(outer(9))
 print(outer(1))";
 
 #[test]
+/// 计数位移（2026-10-06 并入主线 459 笔的同步批）：17 格里只有三段（调用方 `main` 段、
+/// 普通 `let` 的 `main` 段、顶层 `static` 的主程序段）的"槽数"+2（28→30、8→10、16→18），
+/// 其余 14 格（含全部函数体段）一字未变，`env`／`顶层赋值` 两格 17 条全部一字未变。
+/// 位移来源与上一条同（候选＝`50ca4085` 批次 942 的模块级顶层赋值建槽，逐笔归因未做）。
 fn static_decl_in_function_body_becomes_one_persistent_cell() {
     let cases: Vec<(&str, &str, &str)> = vec![
         ("体内static读写都走env_384症状", "tick", STATIC_TICK_BODY),
@@ -7536,12 +7545,12 @@ fn static_decl_in_function_body_becomes_one_persistent_cell() {
         .collect();
     let want: Vec<(String, String)> = vec![
         ("体内static读写都走env_384症状".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=7".to_string()),
-        ("体内static_调用方main段".to_string(), "env=[zeta_env_set,zeta_env_set,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=6;槽数=28".to_string()),
+        ("体内static_调用方main段".to_string(), "env=[zeta_env_set,zeta_env_set,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=6;槽数=30".to_string()),
         ("对照_普通let不建env格".to_string(), "env=[];顶层赋值=2;槽数=4".to_string()),
-        ("对照_普通let的main段".to_string(), "env=[];顶层赋值=0;槽数=8".to_string()),
+        ("对照_普通let的main段".to_string(), "env=[];顶层赋值=0;槽数=10".to_string()),
         ("if块内static也提升到模块格".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=11".to_string()),
         ("顶层static_函数读写".to_string(), "env=[zeta_env_get,zeta_env_set];顶层赋值=1;槽数=6".to_string()),
-        ("顶层static_主程序段".to_string(), "env=[zeta_env_set];顶层赋值=4;槽数=16".to_string()),
+        ("顶层static_主程序段".to_string(), "env=[zeta_env_set];顶层赋值=4;槽数=18".to_string()),
         ("无类型无mut的static_只靠派发那一步".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=0;槽数=9".to_string()),
         ("有类型无mut的static".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=0;槽数=9".to_string()),
         ("重名static第一处提升成功".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=7".to_string()),

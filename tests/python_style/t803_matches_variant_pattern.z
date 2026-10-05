@@ -1,0 +1,48 @@
+// 批次 803：`matches!(e, Pattern)` 必须真展开——不许静默恒 false。
+//
+// 病因（实拍）：`matches!` 在 parser 里落 `AstNode::MacroCall{name:"matches"}`，
+// 而 ① resolver 的 If/While 臂只递归 then/body，cond 原样 clone ⇒ 宏根本没送到
+// 扩展器；② `macro_expand.rs` 的 dispatch 也不认 "matches" ⇒ 落到
+// `Unknown macro` 错误后节点透传到 gen.rs，被 `MacroCall => IntLit(0)` 静默兜底。
+// 结果所有 `matches!` 恒 false、`!matches!` 恒 true（selfhost build_ast 的
+// `while … && !matches!(tokens[i], Token::BraceClose)` 打穿到 EOF，`Result: 0`）。
+// 另半病灶：宏实参按**表达式**解析，`Tok::Ident(s)` 成
+// `PathCall{path:["Tok"],method:"Ident"}`，而 match 臂模式侧要的是
+// `StructPattern{variant:"Tok::Ident",fields:[("0",Var s)]}`——不折算则构造子
+// 解析不到，臂恒不匹配（改后中间读数：p_i=100 仍挡格）。
+//
+// 修法：macro_expand.rs 加 `expand_matches`（含 pattern_from_expr 表达式→模式
+// 折算）；resolver If/While 的 cond 走 expand_expr_node 递归。
+//
+// 期望（改后 jit 实拍）：
+// expect: p_a=101
+// expect: p_b=110
+// expect: p_i=0
+
+#[derive(Clone)]
+enum Tok {
+    A,
+    B,
+    Ident(String),
+}
+
+fn probe(t: Tok) -> i64 {
+    let mut x = 0;
+    if matches!(t, Tok::A) {
+        x = x + 1;
+    }
+    if matches!(t, Tok::B) {
+        x = x + 10;
+    }
+    if !matches!(t, Tok::Ident(s)) {
+        x = x + 100;
+    }
+    x
+}
+
+fn main() -> i64 {
+    println!("p_a={}", probe(Tok::A));
+    println!("p_b={}", probe(Tok::B));
+    println!("p_i={}", probe(Tok::Ident("q")));
+    return 0;
+}

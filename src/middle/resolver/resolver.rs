@@ -6,7 +6,6 @@
 
 use crate::frontend::ast::AstNode;
 use crate::frontend::ast::GenericParam;
-use crate::frontend::borrow::BorrowChecker;
 use crate::frontend::macro_expand::MacroExpander;
 use crate::middle::mir::mir::Mir;
 use crate::middle::resolver::module_resolver::ModuleResolver;
@@ -66,12 +65,29 @@ pub struct Resolver {
     pending_baseargs: std::cell::RefCell<Vec<(String, String, Vec<AstNode>)>>,
     pub cached_mirs: HashMap<String, Mir>,
     pub mono_mirs: HashMap<MonoKey, Mir>,
-    pub borrow_checker: RefCell<BorrowChecker>,
     pub associated_types: HashMap<(String, String), String>,
     pub ctfe_consts: HashMap<String, crate::middle::ctfe::value::ConstValue>,
     funcs: HashMap<String, FuncSignature>,
+    /// Batch 761 (#80③): REPL 每行降值模式旗标（穿线给 MirGen::with_repl_mode）。
+    repl_lowering: bool,
+    /// Batch 747 (#264): callee -> (its `*args` param, its `**kwargs`
+    /// param), for call-site collection of positional overflow / unmatched
+    /// keyword arguments.
+    star_params: RefCell<HashMap<String, (Option<String>, Option<String>)>>,
     /// Registered function ASTs (including module functions)
     registered_funcs: HashMap<String, AstNode>,
+    /// 批 938：checker 跨函数推断计划缓存。lower_to_mir 每函数/闭包调用
+    /// 一次（batch 738 在册 651 次），而证据/body_rets/函数 env 缓存只依赖
+    /// 全模块注册表——惰性构建一次，闭包内只查。
+    checker_plan:
+        RefCell<Option<crate::middle::checker::ModuleCheckerPlan>>,
+    /// 批 964（keyfn 单态化第一段）：f64 通道特化 FuncDef 克隆的登记
+    /// 存储。gen 的 key= 臂发现非内建 keyfn＋f64 元素时克隆登记；
+    /// 第二段（C 双签名＋mir_map 补 lower 循环）接手消费。
+    keyfn_specializations: std::rc::Rc<std::cell::RefCell<Vec<AstNode>>>,
+    /// 批 940：顶层语句（main 体）——调用点证据扫描的覆盖面。registered_funcs
+    /// 只含函数体，顶层 `show(get_data())` 这类调用点此前全部漏收。
+    top_level_stmts: RefCell<Vec<AstNode>>,
     /// Module resolver for Zorb imports
     module_resolver: ModuleResolver,
     /// Macro expander for macro processing
@@ -173,11 +189,17 @@ impl Resolver {
             pending_baseargs: std::cell::RefCell::new(Vec::new()),
             cached_mirs: HashMap::new(),
             mono_mirs: HashMap::new(),
-            borrow_checker: RefCell::new(BorrowChecker::new()),
             associated_types: HashMap::new(),
             ctfe_consts: HashMap::new(),
             funcs: HashMap::new(),
+            repl_lowering: false,
+            star_params: RefCell::new(HashMap::new()),
             registered_funcs: HashMap::new(),
+            checker_plan: RefCell::new(None),
+            keyfn_specializations: std::rc::Rc::new(std::cell::RefCell::new(
+                Vec::new(),
+            )),
+            top_level_stmts: RefCell::new(Vec::new()),
             module_resolver: ModuleResolver::new("."),
             macro_expander: MacroExpander::new(),
             type_decls: HashMap::new(),
@@ -245,6 +267,8 @@ impl Resolver {
                 self.py_loaded_modules.borrow().len()
             );
         }
+        // 批 940：顶层语句入册（checker 调用点证据扫描的覆盖面）
+        self.top_level_stmts.borrow_mut().push(ast.clone());
         // PY-A: keep the definition for return-type inference (imported
         // modules register through this same path).
         if matches!(ast, AstNode::FuncDef { .. }) {
@@ -943,7 +967,17 @@ impl Resolver {
                                                 format!("{}::{}", base_ty, name);
                                             let typed_params: Vec<_> = params
                                                 .iter()
-                                                .map(|(n, t)| (n.clone(), self.string_to_type(t)))
+                                                .map(|(n, t)| {
+                                                    (
+                                                        n.clone(),
+                                                        self.typed_param_type(
+                                                            &qualified_name,
+                                                            n,
+                                                            t,
+                                                            &[],
+                                                        ),
+                                                    )
+                                                })
                                                 .collect();
                                             let typed_ret = self.string_to_type(ret);
                                             eprintln!(
@@ -1014,8 +1048,11 @@ impl Resolver {
                 // Convert string types to Type enum
                 let typed_params: Vec<(String, Type)> = params
                     .iter()
-                    .map(|(name, ty_str)| {
-                        (name.clone(), self.string_to_generic_type(ty_str, &generic_names))
+                    .map(|(pname, ty_str)| {
+                        (
+                            pname.clone(),
+                            self.typed_param_type(name, pname, ty_str, &generic_names),
+                        )
                     })
                     .collect();
                 let typed_ret = self.string_to_generic_type(ret, &generic_names);
@@ -1036,7 +1073,12 @@ impl Resolver {
                 // Convert string types to Type enum
                 let typed_params: Vec<(String, Type)> = params
                     .iter()
-                    .map(|(name, ty_str)| (name.clone(), self.string_to_type(ty_str)))
+                    .map(|(pname, ty_str)| {
+                        (
+                            pname.clone(),
+                            self.typed_param_type(&name, pname, ty_str, &[]),
+                        )
+                    })
                     .collect();
                 let typed_ret = self.string_to_type(&ret);
                 self.funcs.insert(name, (typed_params, typed_ret, true));
@@ -1106,7 +1148,12 @@ impl Resolver {
                         // Convert string types to Type enum
                         let typed_params: Vec<(String, Type)> = params
                             .iter()
-                            .map(|(name, ty_str)| (name.clone(), self.string_to_type(ty_str)))
+                            .map(|(pname, ty_str)| {
+                                (
+                                    pname.clone(),
+                                    self.typed_param_type(&qualified_name, pname, ty_str, &[]),
+                                )
+                            })
                             .collect();
                         let typed_ret = self.string_to_type(ret);
                         self.funcs
@@ -1143,7 +1190,12 @@ impl Resolver {
                             let mq = format!("{}::{}", mc, mname);
                             let mp: Vec<(String, Type)> = mparams
                                 .iter()
-                                .map(|(n, t)| (n.clone(), self.string_to_type(t)))
+                                .map(|(n, t)| {
+                                    (
+                                        n.clone(),
+                                        self.typed_param_type(&mq, n, t, &[]),
+                                    )
+                                })
                                 .collect();
                             let mr = self.string_to_type(mret);
                             self.funcs.insert(mq.clone(), (mp, mr, false));
@@ -1182,7 +1234,12 @@ impl Resolver {
                 // Convert string types to Type enum
                 let typed_params: Vec<(String, Type)> = params
                     .iter()
-                    .map(|(name, ty_str)| (name.clone(), self.string_to_type(ty_str)))
+                    .map(|(pname, ty_str)| {
+                        (
+                            pname.clone(),
+                            self.typed_param_type(&name, pname, ty_str, &[]),
+                        )
+                    })
                     .collect();
                 let typed_ret = self.string_to_type(&ret);
                 self.funcs.insert(name, (typed_params, typed_ret, false));
@@ -1331,7 +1388,7 @@ impl Resolver {
         let mut out = Vec::new();
         for (fname, (params, _ret, _)) in &self.funcs {
             for (pname, ty) in params {
-                if matches!(ty, Type::PyDynamic) {
+                if ty.is_dynamic() {
                     out.push((fname.clone(), pname.clone()));
                 }
             }
@@ -1374,6 +1431,49 @@ impl Resolver {
                         collect_returns(body, out);
                     }
                     AstNode::Block { body } => collect_returns(body, out),
+                    // Batch 758 (#38①): match arms carry returns too — a
+                    // `case pat:` block recurses (its Returns are the
+                    // evidence); an `=> expr` body IS the returned value.
+                    AstNode::Match { arms, .. } => {
+                        for arm in arms {
+                            match &*arm.body {
+                                AstNode::Block { body } => {
+                                    collect_returns(body, out);
+                                    // Batch 758 (#38①): a trailing bare
+                                    // expression IS the arm's value (the
+                                    // promoted ret_expr is the fn tail) —
+                                    // `case 5: "five"` returns "five".
+                                    if let Some(last) = body.last() {
+                                        let is_stmt = matches!(
+                                            last,
+                                            AstNode::Return(_)
+                                                | AstNode::Assign(..)
+                                                | AstNode::Let { .. }
+                                                | AstNode::While { .. }
+                                                | AstNode::For { .. }
+                                                | AstNode::If { .. }
+                                                | AstNode::Match { .. }
+                                        );
+                                        if !is_stmt {
+                                            match last {
+                                                AstNode::ExprStmt { expr } => {
+                                                    out.push((**expr).clone())
+                                                }
+                                                _ => out.push((*last).clone()),
+                                            }
+                                        }
+                                    }
+                                }
+                                AstNode::Return(_) => {
+                                    collect_returns(
+                                        std::slice::from_ref(&*arm.body),
+                                        out,
+                                    );
+                                }
+                                other => out.push((*other).clone()),
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1573,7 +1673,14 @@ impl Resolver {
         for _ in 0..6 {
             for ast in &asts {
                 let ast: &AstNode = ast;
-                let AstNode::FuncDef { name, body, ret, .. } = ast else {
+                let AstNode::FuncDef {
+                    name,
+                    body,
+                    ret,
+                    ret_expr,
+                    ..
+                } = ast
+                else {
                     continue;
                 };
                 let prefix = self
@@ -1594,16 +1701,36 @@ impl Resolver {
                     std::collections::HashSet::new();
                 if infer_return {
                     collect_returns(body, &mut rets);
+                    // Batch 758 (#38①): parse_func promotes the body's
+                    // trailing match into `ret_expr` and leaves `body` empty
+                    // — the arms carry the returns (measured: a match-bodied
+                    // unannotated fn registered Tuple([]) and callers of its
+                    // string returns printed addresses).
+                    if let Some(rx) = ret_expr {
+                        collect_returns(std::slice::from_ref(rx), &mut rets);
+                    }
                     collect_map_locals(body, &mut map_locals);
                 }
                 let mut saw_str = false;
                 let mut saw_f64 = false;
                 let mut saw_i64 = false;
                 let mut saw_map = false;
+                // 批次 806（#113 携带读面）：`return None` 的 None 性在 AST
+                // 可见（NoneLit）——纯 None 返回 ⇒ NoneValue（print 按型渲染，
+                // 804 fromkeys 同款）。混型（None∨其它）不动，落弃权。
+                let saw_none = rets.iter().any(|r| matches!(r, AstNode::NoneLit));
                 let aliases = self.py_module_aliases.borrow().clone();
                 for r in &rets {
                     if matches!(r, AstNode::DictLit { .. })
                         || matches!(r, AstNode::Var(v) if map_locals.contains(v.as_str()))
+                        // 批次 801（#409(a)①）：`return dict(x)` 收进来是构造
+                        // 调用而非 DictLit——classify 落 0、saw_map 不亮，返回型
+                        // 停默认，调用点 `len()` 对 map 句柄派了 array_len（读
+                        // vec 表头答 0，实拍 len(d1)=0 而 d1["a"]=1）。dict 构造
+                        // 调用恒产 map，无 union 投毒面。
+                        || matches!(r, AstNode::Call { receiver: None, method, .. } if method == "dict")
+                        || matches!(r, AstNode::ExprStmt { expr }
+                            if matches!(**expr, AstNode::Call { receiver: None, method: ref m2, .. } if m2 == "dict"))
                     {
                         saw_map = true;
                     }
@@ -1621,10 +1748,23 @@ impl Resolver {
                 }
                 let new_ret = if saw_map && !saw_str && !saw_i64 && !saw_f64 {
                     Some(Type::Named("map".to_string(), vec![]))
-                } else if saw_str && !saw_i64 && !saw_f64 {
+                } else if saw_str && !saw_i64 && !saw_f64 && !saw_map {
+                    // 批次 802（#117）：补 !saw_map——map ∨ str 真 union 原先
+                    // 落进这条 Str 臂把 dict 侧投毒（m["a"] 派 str_get 把 map
+                    // 句柄当 char* 读，实拍空行、len 打 1）。
                     Some(Type::Str)
                 } else if saw_f64 && !saw_i64 && !saw_str {
                     Some(Type::F64)
+                } else if saw_map {
+                    // 批次 802（#117）：map ∨ 其它 = 真 union——弃权不等于停
+                    // 默认。定型 PyDynamic：读边界按运行期句柄形分派（字符串
+                    // 键下标走 DictGet、len 走 zeta_dyn_len 几何形判），map/str
+                    // 两面都活。
+                    Some(Type::PyDynamic)
+                } else if saw_none && !saw_str && !saw_f64 && !saw_i64 && !saw_map {
+                    // 批次 806（#113 携带读面）：纯 None 返回 ⇒ NoneValue——
+                    // 调用点槽带型，print 按型渲染 "None"（值仍 i64 0）。
+                    Some(Type::Named("NoneValue".to_string(), vec![]))
                 } else {
                     None
                 };
@@ -1880,6 +2020,11 @@ impl Resolver {
                         match kind {
                             "str" => changed.push((i, Type::Str)),
                             "f64" => changed.push((i, Type::F64)),
+                            // 批次 955：B3 把未注解参数缺省改成 PyDynamic 后，
+                            // int 实参证据也需要能钉回 I64——原代码 `_ => {}`
+                            // 让 `f(1); f(2)` 的 x 落 dyn（checker/消费点按
+                            // 动态处理，ABI 恰为 I64 槽所以多数场景无症状）
+                            "i64" => changed.push((i, Type::I64)),
                             // 批次 652：数组字面量钉成 DynamicArray(I64)。与 Str 跨族 ⇒
                             // 下一调用点若传 str 会触发 clash ⇒ 退 PyDynamic ⇒ len()
                             // 走 zeta_dyn_len（本批注册）而不是 str_len。
@@ -1945,37 +2090,19 @@ impl Resolver {
     fn module_global_types_at(&self, site: &str) -> HashMap<String, Type> {
         // Batch 738: the s5195 site (lower_to_mir's builder) runs once per
         // function/closure — 651 identical full-AST walks on jq_wufu_local
-        // (= 42s, profiled: 72% of compile time in AstNode clone/drop).
-        // The module-level assignment set is FIXED once lowering begins, so
-        // the map is memoized; a ZETA_COUNT_MGT hash check verifies every
-        // cached hit equals the first computation (mismatch ⇒ loud stderr,
-        // cache invalidated for that call).
+        // (= 42s, profiled: 72% of compile time in AstNode clone/drop). The
+        // module-level assignment set is FIXED once lowering begins, so the
+        // map is memoized for this site; the other two call sites (refine
+        // passes) may see a still-growing table and keep recomputing.
         if site == "s5195" {
             if let Some(hit) = self.mgt_cache.borrow().as_ref() {
                 return hit.clone();
             }
-        }
-        let computed = self.module_global_types_uncached();
-        if site == "s5195" {
-            if std::env::var("ZETA_COUNT_MGT").is_ok() {
-                if let Some(prev) = self.mgt_cache.borrow().as_ref() {
-                    use std::hash::Hasher;
-                    let h = |m: &HashMap<String, Type>| {
-                        let mut hh = std::collections::hash_map::DefaultHasher::new();
-                        hh.write(format!("{m:?}").as_bytes());
-                        hh.finish()
-                    };
-                    let (h1, h2) = (h(prev), h(&computed));
-                    if h1 != h2 {
-                        eprintln!("[mgt] WARNING: cached map differs from recomputed — recomputing");
-                        return computed;
-                    }
-                }
-            }
+            let computed = self.module_global_types_uncached();
             *self.mgt_cache.borrow_mut() = Some(computed.clone());
             return computed;
         }
-        computed
+        self.module_global_types_uncached()
     }
 
     fn module_global_types_uncached(&self) -> HashMap<String, Type> {
@@ -3150,8 +3277,16 @@ impl Resolver {
             }
         }
         for (qname, fd) in candidates {
+            // Batch 758 (#38①c): the placeholder face for "no declared
+            // return" is not only I64 — body-derived inference answers
+            // Tuple([]) (unit) for match-bodied functions (its Match arm
+            // abstains), and those were exactly the fns this fixpoint
+            // exists for. A unit placeholder with unanimous literal-return
+            // evidence is safe to refine: a body that returns literals is
+            // not a procedure.
             let unannotated = match self.funcs.get(&qname) {
                 Some((_, Type::I64, _)) => true,
+                Some((_, Type::Tuple(ts), _)) if ts.is_empty() => true,
                 _ => false,
             };
             if !unannotated {
@@ -3186,13 +3321,19 @@ impl Resolver {
             // Named("PyJson") is also writable — the tagged-cell return face
             // (the caller renders by tag).
             let writable = ((matches!(first, Type::Str | Type::F64 | Type::Bool)
+                || matches!(&first, Type::Tuple(ts) if !ts.is_empty())
                 || first == Type::Named("PyJson".to_string(), vec![]))
                 && rets.iter().all(|t| *t == first))
                 || (dyn_faces == rets.len()
                     && rets.iter().all(|t| matches!(t, Type::PyDynamic)));
             if writable {
                 if let Some((_, ret, _)) = self.funcs.get_mut(&qname) {
-                    if matches!(ret, Type::I64) {
+                    // Batch 758: the unit placeholder writes too (see the
+                    // unannotated gate above) — it is the Match-bodied
+                    // spelling of "no declared return".
+                    if matches!(ret, Type::I64)
+                        || matches!(ret, Type::Tuple(ts) if ts.is_empty())
+                    {
                         *ret = first.clone();
                         refined += 1;
                         refined_round += 1;
@@ -3238,6 +3379,17 @@ impl Resolver {
                 AstNode::StringLit(_) => Some(Type::Str),
                 AstNode::FloatLit(_) => Some(Type::F64),
                 AstNode::Bool(_) => Some(Type::Bool),
+                // 批次 883（#274）：元组字面量也是证据——每个元素各自可推断
+                // 即得 per-位元组型（`return ("abc", "def")` ⇒ Tuple([Str, Str])）。
+                // 此前元组无证据 ⇒ 函数停在单元占位 Tuple([])，调用点解包的
+                // 每位元素全落 I64，字符串按指针字渲染（静默错值）。
+                AstNode::Tuple(items) => {
+                    let mut ts = Vec::with_capacity(items.len());
+                    for it in items {
+                        ts.push(refinable(it, params, param_map, qname)?);
+                    }
+                    Some(Type::Tuple(ts))
+                }
                 AstNode::Var(v) => {
                     let pos = params.iter().position(|(pn, _)| pn == v)?;
                     param_map
@@ -3372,12 +3524,83 @@ impl Resolver {
                             }
                         }
                     }
+                    // Batch 745: match arms carry returns too — the Python
+                    // `case pat:` form wraps them in a Block (parse_match_arm's
+                    // block-body form), and the Rust `=> expr` form IS an
+                    // implicit return of the arm expression. Without this
+                    // descent a match-based String return left the function
+                    // pinned I64 (callers printed 0 for `f(1)`).
+                    AstNode::Match { arms, .. } => {
+                        for arm in arms {
+                            // case form: body is a Block of stmts (collect the
+                            // Returns); => form: body IS the implicit return
+                            // expr. Nested match-in-match inside an arm body is
+                            // a registered boundary (no recursion in this walk).
+                            match &*arm.body {
+                                AstNode::Block { body } => {
+                                    for s in body {
+                                        if let AstNode::Return(val) = s {
+                                            if let Some(t) = refinable(val) {
+                                                out.push(t);
+                                            } else if !matches!(**val, AstNode::Lit(0)) {
+                                                out.push(Type::PyDynamic);
+                                            }
+                                        }
+                                    }
+                                    // Batch 758 (#38①): the trailing bare
+                                    // expression is the arm's value — vote it
+                                    // when refinable (no PyDynamic poison:
+                                    // statement-only arms abstain).
+                                    if let Some(last) = body.last() {
+                                        let v = match last {
+                                            AstNode::ExprStmt { expr } => Some(&**expr),
+                                            other => Some(other),
+                                        };
+                                        if let Some(v) = v {
+                                            if !matches!(v, AstNode::Return(_)) {
+                                                if let Some(t) = refinable(v) {
+                                                    out.push(t);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                other => {
+                                    // Batch 758 (#38①b): an arrow arm body of
+                                    // `return <expr>` IS a return — unwrap it
+                                    // (refinable() has no Return arm, so the
+                                    // evidence was dropped and the fn stayed
+                                    // I64; callers printed the string handle
+                                    // as an address). Non-inferable values
+                                    // mirror the Block branch's PyDynamic.
+                                    if let AstNode::Return(val) = other {
+                                        if let Some(t) = refinable(val) {
+                                            out.push(t);
+                                        } else if !matches!(**val, AstNode::Lit(0)) {
+                                            out.push(Type::PyDynamic);
+                                        }
+                                    } else if let Some(t) = refinable(other) {
+                                        out.push(t);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
         };
         if let AstNode::FuncDef { body, .. } = fd {
             walk(body, out);
+        }
+        // Batch 758 (#38①): the promoted ret_expr (see infer_untyped_returns)
+        // carries the same returns for match-bodied functions.
+        if let AstNode::FuncDef {
+            ret_expr: Some(rx), ..
+        } = fd
+        {
+            let one = vec![(**rx).clone()];
+            walk(&one, out);
         }
     }
 
@@ -3924,6 +4147,49 @@ impl Resolver {
             .collect()
     }
 
+    /// Batch 747 (#264): one parameter's type at registration time. The
+    /// parser marks `**name` star-params with the reserved type string "**"
+    /// (and `*name` with "*", batch 752); the slot is an ordinary map /
+    /// list handle (which is what `**name` / `*name` IS), and the name is
+    /// recorded — first of each kind wins, Python allows one of each — so
+    /// call sites can collect positional overflow (list) and unmatched
+    /// keyword arguments (dict) bound to these parameters.
+    fn typed_param_type(
+        &self,
+        fname: &str,
+        pname: &str,
+        ty_str: &str,
+        generic_names: &[String],
+    ) -> Type {
+        match ty_str.trim() {
+            "**" | "*" => {
+                let mut sp = self.star_params.borrow_mut();
+                let e = sp
+                    .entry(fname.to_string())
+                    .or_insert_with(|| (None, None));
+                if ty_str.trim() == "**" {
+                    if e.1.is_none() {
+                        e.1 = Some(pname.to_string());
+                    }
+                } else if e.0.is_none() {
+                    e.0 = Some(pname.to_string());
+                }
+                if ty_str.trim() == "**" {
+                    Type::Named("map".to_string(), Vec::new())
+                } else {
+                    Type::DynamicArray(Box::new(Type::PyDynamic))
+                }
+            }
+            _ => self.string_to_generic_type(ty_str, generic_names),
+        }
+    }
+
+    /// Batch 747 (#264): callee -> (`*name`, `**name`) star-params, keyed
+    /// like `func_param_names`.
+    pub fn func_star_params(&self) -> HashMap<String, (Option<String>, Option<String>)> {
+        self.star_params.borrow().clone()
+    }
+
     pub fn is_abi_stable(&self, key: &MonoKey) -> bool {
         key.type_args.iter().all(|t| is_cache_safe(t))
     }
@@ -3939,6 +4205,12 @@ impl Resolver {
                 cache_safe: self.is_abi_stable(&key),
             },
         );
+    }
+
+    /// Batch 761 (#80③): REPL 每行降值模式——MirGen 的未声明名告警只在
+    /// repl_mode 出声（见 gen.rs repl_mode 字段）。
+    pub fn set_repl_lowering(&mut self, on: bool) {
+        self.repl_lowering = on;
     }
 
     pub fn set_source_dir(&mut self, path: &std::path::Path) {
@@ -4435,6 +4707,17 @@ impl Resolver {
                 // class against the module that OWNS it, and build the table from
                 // OWN NAMES ONLY: the re-exports half produced fresh ghosts
                 // (`_pd.Timestamp__date`, `_filter`) when applied inside methods.
+                // 批 995：兜底路径仅对方法名（含 `::`）生效。裸函数名（根文件
+                // 本地 def）落到这里时 head＝函数名自身，会撞上任何恰好同名
+                // 的模块 own name——实拍：jq_wufu 本地 `premium_blocks_entry`
+                // 撞 wufu_trading 的同名 def，整个函数体的裸调用被改写到
+                // wufu_trading（2 参调用绑到 4 参版＋0 填充＋`-> float` 注解
+                // 污染结果槽，元组解包在 f64 槽上取址 ⇒ 编译期 panic，语料
+                // 38/40 的 jq_wufu 族）。Python 语义：模块本地 def 永远遮蔽
+                // import——裸名保持裸绑定（空表）即正确。
+                if !func_name.contains("::") {
+                    return out;
+                }
                 let head = func_name.split("::").next().unwrap_or("").to_string();
                 // `head` is the MANGLED class name (e.g. "pandas__DataFrame").
                 // `py_module_own_names` stores BARE names (e.g. "DataFrame").
@@ -5196,7 +5479,7 @@ fn shim_class_normalize(t: &Type) -> Type {
                 // (measured with lldb in the local backtest). The runtime identity
                 // wins: type it PyJson, whose `.get(k, default)` / `len()` /
                 // `.items()` paths already exist.
-                let is_dict_ret = matches!(&ret, Type::Named(n, _) if n == "map" || n == "dict");
+                let is_dict_ret = ret.is_map();
                 if is_dict_ret {
                     let hit = defs_snapshot
                         .iter()
@@ -5284,7 +5567,13 @@ fn shim_class_normalize(t: &Type) -> Type {
             }
             let body = self.body_ret_tys.borrow();
             for name in &blanks {
-                if let Some(float @ (Type::F32 | Type::F64)) = body.get(name.as_str()) {
+                // 批次 893（#279 方案②）：PyDynamic 也回灌——未知型均值
+                // （zeta_mean_to_string）的 body 型是 PyDynamic（文本或原句柄，
+                // 运行期按形状分派）；调用点拿到 I64 会把文本句柄按整数打印
+                // （t813 实拍）。PyDynamic 槽的下游读全部按形状分派，安全。
+                if let Some(float @ (Type::F32 | Type::F64 | Type::PyDynamic)) =
+                    body.get(name.as_str())
+                {
                     if let Some(ty) = ret_types.get_mut(name.as_str()) {
                         *ty = float.clone();
                     }
@@ -5309,7 +5598,87 @@ fn shim_class_normalize(t: &Type) -> Type {
             .with_global_consts(self.ctfe_consts.clone())
             .with_func_ret_types(ret_types)
             .with_func_param_names(self.func_param_names())
+            .with_func_star_params(self.func_star_params())
+            .with_repl_mode(self.repl_lowering)
             .with_type_decls(self.type_decls.clone())
+            // 批次 912（轴 F P2）：checker 求解的槽型环境传给 MirGen。
+            // 批 964：keyfn 特化存储＋完整 FuncDef 快照注入
+            .with_keyfn_spec_store(self.keyfn_spec_store())
+            .with_full_funcdefs(
+                self.registered_func_defs
+                    .borrow()
+                    .iter()
+                    .filter_map(|d| match d.as_ref() {
+                        AstNode::FuncDef { name, .. } => {
+                            Some((name.clone(), d.as_ref().clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            )
+            .with_checker_env({
+                let ret_map: std::collections::HashMap<String, Type> = self
+                    .get_all_func_signatures()
+                    .iter()
+                    .map(|(n, (_, r, _))| (n.clone(), r.clone()))
+                    .collect();
+                // 批 935–937 编排（证据/body_rets/env 缓存）批 938 起在
+                // 入口惰性构建一次：lower_to_mir 每函数/闭包调用一次
+                //（batch 738 在册 651 次），闭包内只查缓存。
+                let ret_map_for_plan = ret_map;
+                if self.checker_plan.borrow().is_none() {
+                    let plan = crate::middle::checker::build_module_checker_plan(
+                        &self.registered_funcs,
+                        &ret_map_for_plan,
+                        &self.type_decls,
+                        &self.module_globals.borrow(),
+                        &self.top_level_stmts.borrow(),
+                    );
+                    *self.checker_plan.borrow_mut() = Some(plan);
+                }
+                let plan = self.checker_plan.borrow();
+                let plan = plan.as_ref().expect("checker plan 已构建");
+                let ret_map_full = &plan.ret_map_full;
+                let mut env = crate::middle::checker::TypeEnv::new();
+                // 批 942：模块级槽种子注入（同名参数遮蔽——排除本函数参数名）
+                let param_names: Vec<String> = match ast {
+                    AstNode::FuncDef { params, .. } => {
+                        params.iter().map(|(n, _)| n.clone()).collect()
+                    }
+                    _ => Vec::new(),
+                };
+                crate::middle::checker::seed_module_slots(
+                    &mut env,
+                    &plan.module_env,
+                    &param_names,
+                );
+                if let AstNode::FuncDef { body, .. } = ast {
+                    let ctx = crate::middle::checker::InferCtx {
+                        ret_types: ret_map_full,
+                        type_decls: &self.type_decls,
+                        module_globals: &self.module_globals.borrow(),
+                    };
+                    // 批 931：参数注解先 meet 到参数槽（体内传播的源头）。
+                    // 批 934：无注解参数位用模块级调用点字面量证据。
+                    let (fn_name, fn_params) = match ast {
+                        AstNode::FuncDef { name, params, .. } => {
+                            (name.as_str(), params.clone())
+                        }
+                        _ => ("", Vec::new()),
+                    };
+                    // 查缓存的证据表（批 938）
+                    let ev_slice = plan.evidence.get(fn_name).map(|v| v.as_slice());
+                    crate::middle::checker::infer_fn_body_full(
+                        &mut env,
+                        fn_name,
+                        &fn_params,
+                        ev_slice,
+                        body,
+                        &ctx,
+                    );
+                }
+                env
+            })
             .with_nonlocal_names(self.nonlocal_names.borrow().clone())
             .with_module_globals(self.module_globals.borrow().clone())
             .with_py_imports(
@@ -5353,7 +5722,10 @@ fn shim_class_normalize(t: &Type) -> Type {
         // 第二个真相源。嵌套 def 走 `lower_closure`、不经过这里（调用点已按
         // `closure_ret_tys` 取 body 型）。
         if let AstNode::FuncDef { name, .. } = ast {
-            if let Some(float @ (Type::F32 | Type::F64)) = mir.signature_ret_ty() {
+            // 批次 893（#279 方案②）：PyDynamic 同批登记（见消费侧注释）。
+            if let Some(float @ (Type::F32 | Type::F64 | Type::PyDynamic)) =
+                mir.signature_ret_ty()
+            {
                 self.body_ret_tys.borrow_mut().insert(name.clone(), float);
             }
         }
@@ -5369,7 +5741,8 @@ fn shim_class_normalize(t: &Type) -> Type {
             return;
         }
         let mut target: Option<AstNode> = None;
-        // B814 假设验：lib 的降型循环取的是 `registered_funcs`，预热必须同源。
+        // lib 的降型循环取的是 `registered_funcs`，预热必须同源（cleanup 车道批次
+        // 随合并入库）；`registered_func_defs` 留作回退源。
         if let Some(v) = self.registered_funcs.get(name) {
             if let AstNode::FuncDef { .. } = v {
                 target = Some(v.clone());
@@ -5746,13 +6119,13 @@ fn shim_class_normalize(t: &Type) -> Type {
             }
             AstNode::While { cond, body, else_body } => {
                 Ok(vec![AstNode::While {
-                    cond: cond.clone(),
+                    cond: self.expand_expr_node(cond)?,
                     body: self.expand_stmts(body)?,
                     else_body: self.expand_stmts(else_body)?,
                 }])
             }
             AstNode::If { cond, then, else_ } => Ok(vec![AstNode::If {
-                cond: cond.clone(),
+                cond: self.expand_expr_node(cond)?,
                 then: self.expand_stmts(then)?,
                 else_: self.expand_stmts(else_)?,
             }]),
@@ -5886,6 +6259,43 @@ fn shim_class_normalize(t: &Type) -> Type {
     }
 
     /// Get all registered function ASTs
+    /// 批 964：keyfn 特化存储共享句柄（MirGen key= 臂克隆登记用）。
+    pub fn keyfn_spec_store(
+        &self,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<AstNode>>> {
+        if std::env::var("ZETA_PROBE_CHECKER").is_ok() {
+            eprintln!("STORE-ACCESS: n={}", self.keyfn_specializations.borrow().len());
+        }
+        self.keyfn_specializations.clone()
+    }
+
+    /// 批 964：登记 keyfn 特化克隆（按 mangled 名去重）。
+    pub fn register_keyfn_specialization(&self, spec: AstNode, mangled: &str) {
+        let dup = self
+            .keyfn_specializations
+            .borrow()
+            .iter()
+            .any(|a| matches!(a, AstNode::FuncDef { name, .. } if name == mangled));
+        if !dup {
+            self.keyfn_specializations.borrow_mut().push(spec);
+        }
+    }
+
+    /// 批 964：按名字找完整 FuncDef（registered_funcs 的值是壳，
+    /// 完整定义在 registered_func_defs）。
+    pub fn find_full_funcdef(&self, name: &str) -> Option<AstNode> {
+        self.registered_func_defs
+            .borrow()
+            .iter()
+            .find(|d| matches!(d.as_ref(), AstNode::FuncDef { name: n, .. } if n == name))
+            .map(|d| d.as_ref().clone())
+    }
+
+    /// 批 965：取走全部 keyfn 特化（main 的 mir_map 收集后补 lower）。
+    pub fn take_keyfn_specializations(&self) -> Vec<AstNode> {
+        self.keyfn_specializations.borrow_mut().drain(..).collect()
+    }
+
     pub fn get_registered_funcs(&self) -> Vec<AstNode> {
         for name in self.registered_funcs.keys() {}
         self.registered_funcs.values().cloned().collect()
@@ -7200,5 +7610,309 @@ fn str_method_symbol_kind(method: &str) -> Option<&'static str> {
         "isdigit" | "isalpha" | "isupper" | "islower" | "startswith" | "endswith"
         | "contains" | "starts_with" | "ends_with" => Some("bool"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests_pin_semantics {
+    //! 批次 955（F.4 第三刀审计附属）：6 轮调用点证据传播的钉型语义
+    //! 回归锁。此前零测试——"全调用点一致才钉 / 冲突永久拒绝 / 用户
+    //! 注解不动"三个性质由 batch 400 的 pinned/conflicts 机制承载，
+    //! 是 resolver 注解表（gen/codegen 的型源）的关键行为。
+
+    use crate::frontend::ast::AstNode;
+    use super::Resolver;
+    use crate::middle::types::Type;
+
+    fn mk_def(name: &str, params: Vec<(String, String)>, body: Vec<AstNode>) -> AstNode {
+        AstNode::FuncDef {
+            name: name.to_string(),
+            generics: vec![],
+            lifetimes: vec![],
+            params,
+            ret: String::new(),
+            body,
+            attrs: vec![],
+            ret_expr: None,
+            single_line: true,
+            doc: String::new(),
+            pub_: false,
+            async_: false,
+            const_: false,
+            comptime_: false,
+            where_clauses: vec![],
+        }
+    }
+
+    fn call(name: &str, args: Vec<AstNode>) -> AstNode {
+        AstNode::ExprStmt {
+            expr: Box::new(AstNode::Call {
+                receiver: None,
+                method: name.to_string(),
+                args,
+                type_args: vec![],
+                structural: false,
+            }),
+        }
+    }
+
+    fn param_anno(r: &Resolver, fname: &str, idx: usize) -> String {
+        let sig = r.get_func_signature(fname).expect("签名在册");
+        match &sig.0[idx] {
+            (_, Type::Str) => "str".to_string(),
+            (_, Type::I64) => "i64".to_string(),
+            (_, Type::F64) => "f64".to_string(),
+            (_, Type::PyDynamic) => "dyn".to_string(),
+            (_, t) => format!("{t:?}"),
+        }
+    }
+
+    /// 全调用点实参形状一致 ⇒ 参数被钉成该型。
+    #[test]
+    fn consistent_callsites_pin_param() {
+        let mut r = Resolver::new();
+        let asts = vec![
+            mk_def("f", vec![("x".into(), String::new())], vec![]),
+            mk_def(
+                "main",
+                vec![],
+                vec![
+                    call("f", vec![AstNode::Lit(1)]),
+                    call("f", vec![AstNode::Lit(2)]),
+                ],
+            ),
+        ];
+        for a in &asts {
+            r.register(a.clone());
+        }
+        r.infer_untyped_returns(&asts);
+        assert_eq!(
+            param_anno(&r, "f", 0),
+            "i64",
+            "两调用点全 int ⇒ 钉 i64（f64 变体对照：{}）",
+            ""
+        );
+    }
+
+    /// f64 实参变体：全 f64 ⇒ 钉 f64（二分 collect/写链）。
+    #[test]
+    fn consistent_f64_callsites_pin_param() {
+        let mut r = Resolver::new();
+        let asts = vec![
+            mk_def("f", vec![("x".into(), String::new())], vec![]),
+            mk_def(
+                "main",
+                vec![],
+                vec![
+                    call("f", vec![AstNode::FloatLit("1.5".into())]),
+                    call("f", vec![AstNode::FloatLit("2.5".into())]),
+                ],
+            ),
+        ];
+        for a in &asts {
+            r.register(a.clone());
+        }
+        r.infer_untyped_returns(&asts);
+        assert_eq!(param_anno(&r, "f", 0), "f64");
+    }
+
+    /// 调用点形状冲突 ⇒ 不钉（conflicts 永久拒绝，batch 400 语义）。
+    #[test]
+    fn conflicting_callsites_do_not_pin() {
+        let mut r = Resolver::new();
+        let asts = vec![
+            mk_def("f", vec![("x".into(), String::new())], vec![]),
+            mk_def(
+                "main",
+                vec![],
+                vec![
+                    call("f", vec![AstNode::Lit(1)]),
+                    call("f", vec![AstNode::StringLit("s".into())]),
+                ],
+            ),
+        ];
+        for a in &asts {
+            r.register(a.clone());
+        }
+        r.infer_untyped_returns(&asts);
+        let anno = param_anno(&r, "f", 0);
+        assert_ne!(anno, "str", "冲突 ⇒ 不得钉成后到的 str");
+        assert_ne!(anno, "i64", "冲突 ⇒ 不得钉成先到的 i64");
+    }
+
+    /// 用户手写注解不被调用点证据覆盖（pinned 只含机器钉的下标）。
+    #[test]
+    fn user_annotation_untouched() {
+        let mut r = Resolver::new();
+        let asts = vec![
+            mk_def("f", vec![("x".into(), "str".into())], vec![]),
+            mk_def(
+                "main",
+                vec![],
+                vec![call("f", vec![AstNode::Lit(1)])],
+            ),
+        ];
+        for a in &asts {
+            r.register(a.clone());
+        }
+        r.infer_untyped_returns(&asts);
+        assert_eq!(
+            param_anno(&r, "f", 0),
+            "str",
+            "用户注解 str 不被 int 调用点覆盖"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_dual_track {
+    //! 批次 969（双轨合一第一段审计）：旧 infer_type 与新 InferContext
+    //! 的同 AST 对照——等价形状锁定为回归锁，差异形状打印为收敛清单。
+
+    use crate::frontend::ast::AstNode;
+    use super::super::new_resolver::InferContext;
+    use super::Resolver;
+    use crate::middle::types::Type;
+
+    fn old_track(r: &Resolver, node: &AstNode) -> String {
+        format!("{:?}", r.infer_type(node))
+    }
+
+    fn new_track(node: &AstNode) -> String {
+        let mut ctx = InferContext::new();
+        match ctx.infer(node) {
+            Ok(t) => format!("{:?}", t),
+            Err(e) => format!("ERR({})", e),
+        }
+    }
+
+    /// lenient 语义（批 977）：ERR（未定义符号/未实现形状）回落 I64——
+    /// 与 infer_unified 的宽容包装一致，为 borrow/check_node 消费语义。
+    fn new_track_lenient(node: &AstNode) -> String {
+        let mut ctx = InferContext::new();
+        match ctx.infer(node) {
+            Ok(t) => format!("{:?}", t),
+            Err(_) => "I64".to_string(),
+        }
+    }
+
+    /// 字面量形状：双轨等价（收敛基线，批 969）。
+    #[test]
+    fn dual_track_literals_equivalent() {
+        let r = Resolver::new();
+        let cases: Vec<(&str, AstNode)> = vec![
+            ("int", AstNode::Lit(1)),
+            ("float", AstNode::FloatLit("1.5".into())),
+            ("str", AstNode::StringLit("s".into())),
+            ("bool", AstNode::Bool(true)),
+        ];
+        for (name, node) in &cases {
+            let (o, n) = (old_track(&r, node), new_track(node));
+            assert_eq!(
+                normalize(&o),
+                normalize(&n),
+                "双轨差异（{}）: old={} new={}",
+                name,
+                o,
+                n
+            );
+        }
+    }
+
+    fn normalize(s: &str) -> String {
+        // Debug 形式的型名归一（I64/i64、Str/str、F64/f64、Bool/bool）
+        s.replace("Type::", "")
+            .replace("I64", "i64")
+            .replace("F64", "f64")
+            .replace("Str", "str")
+            .replace("Bool", "bool")
+            .to_lowercase()
+    }
+
+    /// 批 970（段 2）：borrow 迁移前置——赋值 RHS 形状的双轨等价锁定。
+    /// borrow 检查的 declare 用 infer_type(rhs) 定变量型——迁移到统一
+    /// 推断的前提是这些形状双轨一致。
+    #[test]
+    fn dual_track_assign_rhs_shapes_equivalent() {
+        let r = Resolver::new();
+        let cases: Vec<(&str, AstNode)> = vec![
+            // x = 42 / x = 1.5 / x = "s" / x = [1, 2]
+            ("int", AstNode::Lit(42)),
+            ("float", AstNode::FloatLit("2.5".into())),
+            ("str", AstNode::StringLit("s".into())),
+            (
+                "list",
+                AstNode::ArrayLit(vec![AstNode::Lit(1), AstNode::Lit(2)]),
+            ),
+        ];
+        for (name, node) in &cases {
+            let (o, n) = (old_track(&r, node), new_track(node));
+            println!("ASSIGN-RHS {} : old={} new={}", name, o, n);
+        }
+        // 断言已知等价（int/str 双轨一致；float 已修复；list 双轨形状
+        // 不同是已知差异——Array(Literal) vs Array(Literal) 细节见
+        // DIFF 打印，迁移时借 InferContext 的返回直接用）
+        assert_eq!(
+            normalize(&old_track(&r, &AstNode::Lit(42))),
+            normalize(&new_track(&AstNode::Lit(42)))
+        );
+        assert_eq!(
+            normalize(&old_track(&r, &AstNode::StringLit("s".into()))),
+            normalize(&new_track(&AstNode::StringLit("s".into())))
+        );
+    }
+
+    /// 批 971（段 3 前置）：check_node 相关形状的双轨对照探针——
+    /// BinaryOp/FieldAccess/Call/DictLit/Subscript 的差异清单。
+    #[test]
+    fn dual_track_expression_shapes_report() {
+        let r = Resolver::new();
+        let binop = AstNode::BinaryOp {
+            op: "+".to_string(),
+            left: Box::new(AstNode::Lit(1)),
+            right: Box::new(AstNode::Lit(2)),
+        };
+        let field = AstNode::FieldAccess {
+            base: Box::new(AstNode::Var("obj".into())),
+            field: "f".to_string(),
+        };
+        let call = AstNode::Call {
+            receiver: None,
+            method: "foo".to_string(),
+            args: vec![AstNode::Lit(1)],
+            type_args: vec![],
+            structural: false,
+        };
+        let dict = AstNode::DictLit { entries: vec![] };
+        let sub = AstNode::Subscript {
+            base: Box::new(AstNode::Var("xs".into())),
+            index: Box::new(AstNode::Lit(0)),
+        };
+        // 批 977：断言升级——DictLit 直等价（批 971 补齐生效）；
+        // FieldAccess/Call/Subscript 按 lenient 语义等价（ERR 回落 I64
+        // 与旧轨兜底一致，infer_unified 消费语义）
+        for (name, node) in [
+            ("BinaryOp(+)", &binop),
+            ("DictLit", &dict),
+        ] {
+            assert_eq!(
+                normalize(&old_track(&r, node)),
+                normalize(&new_track(node)),
+                "双轨差异（{}）",
+                name
+            );
+        }
+        for (name, node) in [
+            ("FieldAccess", &field),
+            ("Call", &call),
+            ("Subscript", &sub),
+        ] {
+            assert_eq!(
+                normalize(&old_track(&r, node)),
+                normalize(&new_track_lenient(node)),
+                "双轨 lenient 差异（{}）",
+                name
+            );
+        }
     }
 }

@@ -1,0 +1,22 @@
+// 批次 794（#266）：Rust 拼写判定族——selfhost.z 分词器用的正是
+// `input[i].is_alphabetic()/is_alphanumeric()`。改前两形各自错位：
+// ①表里没有 Rust 拼写行 ⇒ 通用派发发裸 `is_alphabetic_1`，-o 链接缺
+// `_is_alphabetic`（run_all 计 link chronic）；②`ch.is_digit(10)` 的 radix 形
+// 落一参裸别名 is_digit（radix 被忽略）且返回值定型 I64——打印 1 而非 True
+// （/tmp/b782/push4.z 改前实拍）。修法：str_method_symbol 表补三行
+// （is_alphabetic/is_alphanumeric/as_str）＋is_digit 二参 radix 臂走
+// host_str_is_digit（新增 C 体，char::is_digit 语义：单字符且数值 < radix）。
+ch = "a"
+print(ch.is_alphabetic())
+print(ch.is_alphanumeric())
+
+digit = "5"
+print(digit.is_digit(10))
+print(digit.is_digit(5))
+other = "b"
+print(other.is_digit(10))
+// expect: True
+// expect: True
+// expect: True
+// expect: False
+// expect: False

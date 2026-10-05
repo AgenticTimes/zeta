@@ -1,0 +1,31 @@
+// 批次 748（#45 第十成员）：`__fmtspec__` 派档缺 bool——格式串语境里 bool 落
+// 整数打印器，`format!("v={}", 1<2)` 打 `v=1` 而不是 `v=True`（改前实拍在册）。
+// 批次 291
+// 写在 gen.rs 注释里的契约（"bool must print Python-style (True/False)"）在
+// 格式串这一格未成立的缺口；t440 头注已知未收②即本条。
+// 根因：`__fmtspec__` 的 MIR 降型派发（gen.rs，本行改前）只有 f64/str/i64 三档，
+// `Some(Type::Bool)` 走 `_` 兜底进 `py_fmt_i64`。
+// 改法：新增运行时 `py_fmt_bool(v, spec)`——空 spec 打 True/False（str 语义），
+// 非空 spec 委托 `py_fmt_i64`（CPython 里 bool 是 int 之子：format(True,'04')=='0001'）。
+// 改前实拍（二进制 1c191985，同一夹具形状 A/B）：`[v=1]`、`[mix=1|7|s]`、
+// `{b:04}` 打 `0001`（与改后同——spec 非空档委托语义不变）；
+// `println!("{}", b)` 两侧同打 True（批次 376 的单参 print 档本就对，病灶只在
+// `__fmtspec__` 这一档）。t440 头注已知未收②即本条。
+// expect: [v=True]
+// expect: True
+// expect: False
+// expect: [mix=True|7|s]
+// expect: 0001
+// expect: False
+
+fn main() -> i64 {
+    b = 1 < 2
+    c = 3 > 9
+    println!("[{}]", format!("v={}", b))
+    println!("{}", b)
+    println!("{}", c)
+    println!("[{}]", format!("mix={}|{}|{}", b, 7, "s"))
+    println!("{}", f"{b:04}")
+    println!("{}", f"{c}")
+    return 0
+}

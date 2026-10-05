@@ -6,6 +6,15 @@
 #   ./tools/mir_diff.sh snapshot [dir]   compile each corpus file twice, store the
 #                                        canonical MIR dump as the baseline
 #   ./tools/mir_diff.sh diff     [dir]   recompile and diff against the baseline
+#   ./tools/mir_diff.sh auto [dir]       batch 814: one command, zero manual
+#                                        steps — derive the baseline from git
+#                                        HEAD (temp worktree + own build), then
+#                                        diff the CURRENT tree against it. The
+#                                        baseline is never checked in: the MIR
+#                                        text legitimately changes with every
+#                                        semantic batch (unlike behavior
+#                                        baselines), so it is derived from git
+#                                        at the moment it is needed instead.
 #
 # `dir` defaults to $MIR_DIFF_DIR or /tmp/zeta_mir_baseline (kept out of the
 # repo: the dumps are ~300k lines per file).
@@ -30,8 +39,8 @@ EXTRA_FILES=()
 
 MODE="${1:-}"
 case "$MODE" in
-  snapshot|diff) shift ;;
-  *) sed -n '2,20p' "$0"; exit 2 ;;
+  snapshot|diff|auto) shift ;;
+  *) sed -n '2,26p' "$0"; exit 2 ;;
 esac
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,6 +50,25 @@ while [[ $# -gt 0 ]]; do
     *) DIR="$1"; shift ;;
   esac
 done
+
+# ── auto（批次 814）─────────────────────────────────────────────────────
+# 基准从 git HEAD 自动派生：临时 worktree + 独立构建，一次命令完成
+# "基准生成 → 与当前树对比"。target 目录按 HEAD 哈希缓存，同一提交上重跑
+# 免重编。注意：HEAD 只含已提交状态——工作树里若有别人未提交的改动，
+# 它们会以 CHANGED 形式出现在对比里，需自行归属。
+if [[ "$MODE" == "auto" ]]; then
+  HEAD_HASH="$(git rev-parse HEAD)"
+  HEAD_TREE="${TMPDIR:-/tmp}/mir_auto_${HEAD_HASH:0:12}/tree"
+  if [[ ! -x "$HEAD_TREE/target/release/zetac" ]]; then
+    rm -rf "${HEAD_TREE%/tree}"
+    git worktree add --detach -q "$HEAD_TREE" "$HEAD_HASH"
+    (cd "$HEAD_TREE" && CARGO_TARGET_DIR="$HEAD_TREE/target" cargo build --release -p zetac -q)
+  fi
+  ZETAC="$HEAD_TREE/target/release/zetac" "$0" snapshot "$@"
+  "$0" diff "$@"
+  rm -rf "${HEAD_TREE%/tree}"
+  exit 0
+fi
 
 if [[ ! -x "$ZETAC" ]]; then
   echo "building zetac..." >&2

@@ -457,7 +457,19 @@ pub(crate) fn parse_assign(input: &str) -> IResult<&str, AstNode> {
                                     .split_once('<')
                                     .map(|(h, _)| matches!(h.trim(), "map" | "dict" | "Dict"))
                                     .unwrap_or(false);
-                                let lhs = if (class_like || dict_like)
+                                // 批次 879（#276）：`set[str]` 一族同样只有注解
+                                // 记得元素型——`set()` 只能降成元素未知的空
+                                // DynamicArray，丢注解后 `|=`/`.add` 的成员判定按
+                                // 句柄判等（静默错值）。
+                                let set_like = {
+                                    let t = ty.trim().trim_start_matches("typing.");
+                                    ["set", "frozenset", "Set", "FrozenSet"].iter().any(|k| {
+                                        t.starts_with(k)
+                                            && t[k.len()..]
+                                                .starts_with(|c: char| c == '[' || c == '<')
+                                    })
+                                };
+                                let lhs = if (class_like || dict_like || set_like)
                                     && matches!(&lhs, AstNode::Var(_))
                                 {
                                     Box::new(AstNode::TypeAnnotatedPattern {
@@ -935,8 +947,24 @@ fn parse_assert(input: &str) -> IResult<&str, AstNode> {
                         structural: false,
                     }),
                 },
+                AstNode::Var(name) => {
+                    // 批 996：名字目标不再整体 no-op——发 `__del_name__` 标记
+                    // 调用，MirGen 按作用域裁决（本地槽保持 V1 no-op；环境
+                    // 名发 zeta_env_del：缺名运行期 NameError，在则删除）。
+                    // 此前 `del y`（未定义名）静默通过，CPython 打
+                    // NameError ⇒ 差分用例 del_undefined_var 在册红。
+                    AstNode::ExprStmt {
+                        expr: Box::new(AstNode::Call {
+                            receiver: None,
+                            method: "__del_name__".to_string(),
+                            args: vec![AstNode::StringLit(name.clone())],
+                            type_args: vec![],
+                            structural: false,
+                        }),
+                    }
+                }
                 _ => {
-                    // Name / attribute delete — V1 no-op (bindings stay); still
+                    // Attribute delete — V1 no-op (bindings stay); still
                     // consume so the enclosing block can continue.
                     AstNode::ExprStmt {
                         expr: Box::new(AstNode::Lit(0)),

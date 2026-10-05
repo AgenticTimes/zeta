@@ -445,7 +445,7 @@ impl InferContext {
             "u32" => Ok(Type::U32),
             "u64" => Ok(Type::U64),
             "usize" => Ok(Type::Usize),
-            "String" => Ok(Type::Named("String".to_string(), Vec::new())),
+            "String" => Ok(Type::Str),
             _ => {
                 // Check if it's a single uppercase letter (type variable)
                 if s.len() == 1 && s.chars().next().unwrap().is_ascii_uppercase() {
@@ -1691,6 +1691,21 @@ impl InferContext {
                             self.infer(last_node)
                         }
                     }
+                }
+            }
+
+            // 批次 971（双轨合一段 3）：DictLit 对齐旧轨语义——空字典
+            // ⇒ Named("Map_i64_i64")；非空按首对推断 Map<K,V>
+            AstNode::DictLit { entries } => {
+                if entries.is_empty() {
+                    Ok(Type::Named("Map_i64_i64".to_string(), vec![]))
+                } else {
+                    let k = self.infer(&entries[0].0)?;
+                    let v = self.infer(&entries[0].1)?;
+                    Ok(Type::Named(
+                        "Map".to_string(),
+                        vec![k, v],
+                    ))
                 }
             }
 

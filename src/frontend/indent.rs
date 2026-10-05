@@ -195,6 +195,9 @@ const HEADER_KEYWORDS: &[&str] = &[
     "fn", "def", "if", "elif", "else", "for", "while", "loop", "match",
     "struct", "enum", "impl", "trait", "concept", "unsafe", "comptime", "mod",
     "class", "try", "except", "finally", "with",
+    // Batch 745: Python-style match arm — `case <pattern>:` opens a braced
+    // arm body so parse_match_arm can consume `case pat: { block }`.
+    "case",
 ];
 
 /// Modifiers that may precede a header keyword (`pub const fn f():` ...).

@@ -84,6 +84,19 @@ void print_str(int64_t v) { printf("%s", zt_str_or_null(v)); }
 void println_str(int64_t v) { printf("%s\n", zt_str_or_null(v)); }
 void print(int64_t v) { fputs(zt_str_or_null(v), stdout); }
 
+// 批次 808（混型 dict None 值格）：PyDynamic 槽带格标签的运行期渲染——
+// f64 以位整形态躺在 i64 槽里，跨 ABI 边界必须在此 memcpy 回 double；
+// bool 打 CPython 词法（True/False）。
+void zeta_print_f64_word(int64_t w, int64_t nl) {
+    double d;
+    memcpy(&d, &w, sizeof d);
+    if (nl) println_f64(d); else print_f64(d);
+}
+void zeta_print_bool_word(int64_t w, int64_t nl) {
+    if (nl) printf(w ? "True\n" : "False\n");
+    else printf(w ? "True" : "False");
+}
+
 // === String runtime (str_* mapped to host_str_* by codegen, GC-allocated) ===
 int64_t str_len(int64_t s) { return s ? (int64_t)strlen((char*)s) : 0; }
 int64_t str_concat(int64_t a, int64_t b) {
@@ -1314,6 +1327,28 @@ int64_t py_logger_warning_n(int64_t lg, int64_t fmt, int64_t n, int64_t a1, int6
     }
     buf[off < sizeof(buf) ? off : sizeof(buf) - 1] = 0;
     return py_log_emit(PY_LOG_WARNING, "WARNING", lg, (int64_t)buf);
+}
+// 批 997：`log.debug(fmt, *args)` 变参面（MIR 变参臂原漏 debug，9 参
+// 直落 py_logger_debug 固定 2 参版被签名表 W0912 咬出）。debug 的语
+// 料实发到 fmt＋8 实参 ⇒ 8 槽版。
+int64_t py_logger_debug_n(int64_t lg, int64_t fmt, int64_t n, int64_t a1, int64_t a2,
+                          int64_t a3, int64_t a4, int64_t a5, int64_t a6,
+                          int64_t a7, int64_t a8) {
+    int64_t vals[8] = {a1, a2, a3, a4, a5, a6, a7, a8};
+    char buf[1024];
+    size_t off = 0;
+    const char* f = (const char*)fmt;
+    if (f) {
+        while (f[off] && off < sizeof(buf) - 64) {
+            buf[off] = f[off];
+            off++;
+        }
+    }
+    for (int64_t i = 0; i < n && i < 8; i++) {
+        off += (size_t)snprintf(buf + off, sizeof(buf) - off, " %lld", (long long)vals[i]);
+    }
+    buf[off < sizeof(buf) ? off : sizeof(buf) - 1] = 0;
+    return py_log_emit(PY_LOG_DEBUG, "DEBUG", lg, (int64_t)buf);
 }
 int64_t py_logger_error_n(int64_t lg, int64_t fmt, int64_t n, int64_t a1, int64_t a2,
                           int64_t a3, int64_t a4) {
@@ -2659,7 +2694,12 @@ static int64_t is_whitespace(int64_t s) { return host_str_is_whitespace(s); }
 int64_t zeta_call1(int64_t fptr, int64_t a);
 
 // 整串转 i64：前后空白允许；整串必须是整数，否则 make_err。
-int64_t parse(int64_t s) {
+// 批次 794（#266）：weak——selfhost.z 自带 `fn parse`（resolver 的 Class::method
+// 裸名二注面把 `_parse` 也发进生成物），改前四个缺符一接上链，这里就报
+// duplicate symbol '_parse'（/tmp/b784/link3.err 实拍）。weak 定义下用户强符号
+// 胜出、`.parse()` 派发点照旧在本名上链接；JIT 侧 dlsym 与 build.rs keep 名单
+// 都按地址取符号，W 型导出不受影响。其余裸别名同名相撞时同法处理（未实拍不加）。
+__attribute__((weak)) int64_t parse(int64_t s) {
     if (!s) return host_result_make_err(0);
     const char* p = (const char*)s;
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
@@ -2754,6 +2794,33 @@ int64_t host_str_chars(int64_t s) { return chars(s); }
 // 判定族裸别名补齐（peek() 返回的单字符字符串上调用；与 libc 无同名冲突）
 int64_t is_digit(int64_t s) { return str_is_digit(s); }
 int64_t is_alphanumeric(int64_t s) { return str_is_alnum(s); }
+// 批次 794（#266）：selfhost.z 裸名派发面的四枚缺口。这些调用点的接收者静态
+// 类型缺失（MIR 发 `push_2`/`as_str_1`/`into_iter_1`/`is_alphabetic_1`，
+// codegen.rs:3246 剥掉 arity 后声明 extern 裸名），改前 -o 链接报
+// Undefined symbols _push/_as_str/_into_iter/_is_alphabetic（/tmp/b784 在
+// 9aa25920 与 c031f3f7 两颗二进制实拍同清单）。此前它们只能链接失败，
+// 不存在依赖旧行为的在跑程序，别名是纯增量接线（363/365 批的裸别名惯例）。
+int64_t is_alphabetic(int64_t s) { return str_is_alpha(s); }
+int64_t push(int64_t dst, int64_t src) { return host_str_push_str(dst, src); }
+int64_t as_str(int64_t s) { return s; }
+int64_t into_iter(int64_t x) { return x; }
+
+// 批次 794（#266）：`ch.is_digit(10)` 的 radix 形。改前裸别名 is_digit 只有一参
+// （radix 被忽略）且返回值定型 I64，打印 1 而非 True（/tmp/b782/push4.z 实拍）。
+// Rust 语义是 char::is_digit：单字符、该字符在给定进制下的数值 < radix。
+// 多字符串返回 0（登记角落，调用侧静态类型已是整串）。
+int64_t host_str_is_digit(int64_t s, int64_t radix) {
+    if (!s || radix < 2 || radix > 36) return 0;
+    const char* p = (const char*)s;
+    if (!p[0] || p[1]) return 0;
+    char c = p[0];
+    int64_t v;
+    if (c >= '0' && c <= '9') v = c - '0';
+    else if (c >= 'a' && c <= 'z') v = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'Z') v = c - 'A' + 10;
+    else return 0;
+    return v < radix;
+}
 int64_t host_str_swapcase(int64_t s) { return str_swapcase(s); }
 int64_t host_str_removeprefix(int64_t s, int64_t p) { return str_remove_prefix(s, p); }
 int64_t host_str_removesuffix(int64_t s, int64_t p) { return str_remove_suffix(s, p); }
@@ -3505,6 +3572,19 @@ static int64_t dumps_vec_nested(int64_t vec, const char* tags) {
                 break;
             }
             default:
+                /* Batch 889 (#273): same per-element shape probe as the
+                   flat dumper — nested mixed lists render readable words
+                   as quoted strings instead of raw pointers. */
+                if (v && zt_ptr_readable(v)) {
+                    out[n++] = '\'';
+                    for (const char* p = (const char*)v; *p; p++) {
+                        if (n + 3 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+                        if (*p == '\'') out[n++] = '\\';
+                        out[n++] = *p;
+                    }
+                    out[n++] = '\'';
+                    break;
+                }
                 n += (size_t)sprintf(out + n, "%lld", (long long)v);
                 break;
         }
@@ -3519,6 +3599,8 @@ int64_t py_json_dumps_vec_nested(int64_t vec, int64_t tags) {
     if (!t || !t[0]) t = "0";
     return dumps_vec_nested(vec, t);
 }
+
+int zt_word_readable(int64_t a);
 
 int64_t py_json_dumps_vec_typed(int64_t vec, int64_t tag) {
     if (!vec) return (int64_t)zt_strdup("[]");
@@ -3538,6 +3620,13 @@ int64_t py_json_dumps_vec_typed(int64_t vec, int64_t tag) {
                 break;
             }
             case 2: {
+                /* Batch 889 (#273): per-element shape probe — a mixed list
+                   (acc.append(1); acc.append("x")) can carry ints in a
+                   str-tagged vec; deref-ing them was the SEGV face. */
+                if (v && !zt_word_readable(v)) {
+                    n += (size_t)sprintf(out + n, "%lld", (long long)v);
+                    break;
+                }
                 /* Batch 565: CPython repr prefers SINGLE quotes — print(xs)
                    is a repr, not JSON (json.dumps has its own function). */
                 if (v) {
@@ -3558,6 +3647,20 @@ int64_t py_json_dumps_vec_typed(int64_t vec, int64_t tag) {
                 n += (size_t)sprintf(out + n, "%s", v ? "True" : "False");
                 break;
             default:
+                /* Batch 889 (#273): the mirror face — an int-tagged vec can
+                   carry string pointers (mixed literal [1, "a"]): render
+                   readable words as quoted strings. Small ints never pass
+                   (vm_read fails on unmapped low addresses). */
+                if (v && zt_word_readable(v)) {
+                    out[n++] = '\'';
+                    for (const char* p = (const char*)v; *p; p++) {
+                        if (n + 3 > cap) { cap *= 2; char* nb = (char*)GC_malloc(cap); memcpy(nb, out, n); out = nb; }
+                        if (*p == '\'') out[n++] = '\\';
+                        out[n++] = *p;
+                    }
+                    out[n++] = '\'';
+                    break;
+                }
                 n += (size_t)sprintf(out + n, "%lld", (long long)v);
                 break;
         }

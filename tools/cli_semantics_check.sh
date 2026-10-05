@@ -274,5 +274,28 @@ want "432：名字不唯一（close 两条 W 表项）⇒ 仍降级" 1 "$("$BMH"
 want "432：名字在按名抢走的名单里（values）⇒ 仍降级" 1 "$("$BMH" --report-stubs "$BMD" 2>&1 | grep -c '^  values .*member-only$')"
 want "432：「不是桩」这条当前守 0 个成员（W 行无 stub=1）" 0 "$(grep -c '^W .*stub=1' "$ROOT/pylib/registry.txt")"
 
+# ── 批次 760 翼：--bootstrap 与位置输入文件同给 ⇒ 出声拒绝并点名（#80 ②） ──
+# 改前 `--bootstrap` 在参数循环前就 return，`zetac file.z --bootstrap` 无声无视
+# 文件（实测与不带文件逐字相同）。三条：组合拒绝 rc≠0 且点名；负对照（同文件
+# 无 --bootstrap）照常编译执行；`--bootstrap` 单独在场行为不变（走 bundled 语料，
+# 它是否栈溢出属 #78①，不在本翼）。
+BT="$TMP/boot_760.z"; printf 'print(42)\n' > "$BT"
+BO_OUT=$("$ZETAC" "$BT" --bootstrap 2>&1); BO_RC=$?
+want "760：--bootstrap + 输入文件 ⇒ rc≠0（出声拒绝）" 1 "$([ $BO_RC -ne 0 ] && echo 1 || echo 0)"
+want "760：拒绝消息点名该文件" 1 "$(echo "$BO_OUT" | grep -c 'boot_760.z')"
+want "760：拒绝消息说清两个出路" 1 "$(echo "$BO_OUT" | grep -c 'drop one of the two')"
+NEG_OUT=$("$ZETAC" "$BT" -o "$TMP/boot_760.bin" 2>&1); "$TMP/boot_760.bin" > "$TMP/boot_760.run" 2>&1
+want "760：负对照——同文件无 --bootstrap 照常跑" 1 "$(grep -c '^42$' "$TMP/boot_760.run")"
+
+# ── 批次 761 翼：REPL 未声明名点名（#80 ③） ──
+# 改前 REPL 行体 `exit`（裸未声明名）静默求值成 1。修＝W0106 点名（行为保持，
+# 槽值照旧）；负对照＝字面量行不出声；`let x = 5`/`print(x)` 跨行形在基线本就
+# E2001 响亮（非本批面，如实入册）。
+R_OUT=$(printf 'exit\n' | "$ZETAC" --repl 2>&1)
+want "761：REPL 未声明名出 W0106 并点名" 1 "$(echo "$R_OUT" | grep -c 'W0106.*undeclared name .exit')"
+want "761：行为保持——裸名的求值结果仍是 1" 1 "$(echo "$R_OUT" | grep -c '^1$')"
+R_LIT=$(printf '5\n' | "$ZETAC" --repl 2>&1)
+want "761：负对照——字面量行不出 W0106" 0 "$(echo "$R_LIT" | grep -c 'W0106')"
+
 echo "cli_semantics: rc=$rc"
 exit $rc

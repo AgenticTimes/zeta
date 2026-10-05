@@ -1,0 +1,20 @@
+// 批次 763（#33 M5）：声明返回 F64 的函数里 return 整数——此前按位重读
+// （整数位 1 当浮点尾数 ⇒ 打 5e-324 位垃圾）。修＝gen 跟踪当前函数声明返回型，
+// Return 处把 I64 值经 zeta_float_i64 收口成 F64；嵌套 def 保存/恢复（提升臂
+// 提前 return 也恢复）。反向（声明 I64 返回 F64）不动——现状与 CPython 一致，
+// 收口反成回归（trunc 2.5→2）。浮点打印 1.0 vs CPython 1＝声明型的诚实渲染
+// （742 宽渲染族边界，不入锁面——锁的是"不是位垃圾"）。
+fn f() -> f64 {
+    return 1
+}
+print(f())
+// expect: 1.0
+
+fn h(x) -> f64:
+    if x > 0:
+        return 2
+    return 0.5
+print(h(1))
+// expect: 2.0
+print(h(0))
+// expect: 0.5

@@ -218,7 +218,7 @@ fi
 # 所以它能量出回归，永远量不出"语义与 Python 不一致"。这一步把期望值交给参考
 # 实现（python3 现场跑同一段语义），首次让"还有多少语义是错的"变成一个数字。
 # 判据在 tools/diff_test.py 内部：基线里 match 的用例不许变差、match 绝对数不许
-# 低于 match_min。rc=2 是"参考侧自己跑不出真值"（坏用例/跨实现差异），
+# 低于 match_min。坏用例（参考侧跑不出真值）自批次 756 起单列计数、不进 rc（裁定⑤）；
 # **只喊话不判红**——那类失败要修的是用例或环境，不是编译器；静默忽略才是问题。
 diff_rc=0; diff_match=0; diff_judged=0; diff_rate=0; diff_bad=0; diff_skipped=0
 if [[ $SKIP_DIFF -eq 0 ]]; then
@@ -671,7 +671,7 @@ if [[ $SKIP_CLEAN -eq 0 && $clean_rc -ne 0 ]]; then rc=1; fi
 # comment_drift: 第 15 步扫的是**本文件自己的注释**，与任何被测对象无关，所以没有 --skip
 # 开关可给它——跳过等于这一步不存在，而这一步防的正是"注释与判据各说各话"。
 if [[ $restated_rc -ne 0 ]]; then rc=1; fi
-if [[ $SKIP_DIFF -eq 0 && $diff_rc -eq 2 ]]; then
+if [[ $SKIP_DIFF -eq 0 && $diff_bad -gt 0 ]]; then
   echo "[G.3] 差分有 $diff_bad 条坏用例（参考侧跑不出真值）——不参与判定，但必须修用例" >&2
 fi
 exit $rc

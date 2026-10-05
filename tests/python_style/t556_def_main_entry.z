@@ -1,0 +1,13 @@
+// 批次 739（裁定 2 落地）：def main 入口约定对齐 CPython。有用户 main 且
+// 模块语句非空时：模块语句本身就是程序（入口 main 体＝模块语句），用户
+// main 改名 __user_main__ 成普通函数——旧法把语句前置并进 main，任何
+// print(main()) 都自递归（rc=139）。四形状：print(main()) 调一次；guard
+// 形跑一次；fn main 原生 rc=30 约定不变（official basic_test 在册）；
+// def main 无语句仍作入口。zeta 原生 .z（brace 风格、fn main、无模块语句）
+// 走原合成路径零改动。
+def main() -> i64:
+    print("in-main")
+    return 7
+print(main())
+// expect: in-main
+// expect: 7

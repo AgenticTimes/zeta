@@ -26,10 +26,11 @@ const JIT_VEC_BINDINGS: &[(&str, *const ())] = &[
 /// MCJIT has exactly two ways to settle an external here: the bindings made by
 /// `finalize_and_jit` (the generated table + `JIT_VEC_BINDINGS`), and a plain
 /// `dlsym` over the images already loaded in this process — which is the
-/// compiler's own image, since nothing links `runtime/*.c` into `zetac` (there
-/// is no build script). A Python-style module binding therefore has no address:
-/// `zeta_env_set`/`zeta_env_get`/`zeta_module_decl`/`zeta_nonlocal_decl`/
-/// `zeta_param_default` are defined only in `runtime/py_additions.c`.
+/// compiler's own image, and since batch 759 that image carries the `runtime/*.c`
+/// definitions: `build.rs` compiles them per `tools/build_runtime.sh` and links
+/// the merged objects in, pinned past `-dead_strip` with `-Wl,-alias`. Symbols
+/// defined only in `runtime/py_additions.c` (`zeta_env_set`/`zeta_env_get`/
+/// `zeta_module_decl`/…) resolve through that third leg.
 ///
 /// And asking the engine is not a safe way to find that out: lookup lazily runs
 /// `MCJIT::finalizeLoadedModules -> RuntimeDyldImpl::resolveRelocations`, which

@@ -1,0 +1,33 @@
+// 批次 809（backlog #267①）：`set(xs)` 构造器按“槽字相等”去重，而 `vec<str>` 的槽里
+// 放的是指针 ⇒ 同一个串的两个实例永不相等 ⇒ 重复根本不消。真实语料实测 20+ 处
+// `list(set(pool))`／`list(set(target_list))`（股票池就是字符串列表，如
+// code/jq_wufu_daily.py:314/563、干积分-量化框架.py:266）全部静默留重复＝错值不是抛。
+// 修法：gen.rs:10135 构造臂把“元素是否 str”随调用带下去（`py_builtin_set` 加
+// elem_is_str 参），运行期按内容判等，用的就是 `py_list_contains` 那套规则——构造
+// 与成员判定若各用一套尺，同一对元素会被 `in` 判等、被 `set()` 判不等。
+// 整数面仍按槽字精确相等（含 0）：不借道 `py_list_contains`，它的
+// `v == x && v != 0` 守卫会漏掉 0，那会换出一个新的静默错值。
+// 断言口径：len + 首现顺序（我们的 set 用列表实现，顺序按首次出现，不追 CPython 的
+// 哈希序＝另一格已知残留，见 #267）。整数值面 0/5 两行是防回归的守门：去重改成内容
+// 判等后它们必须照旧。
+pool = ["600000.SH", "600000.SH", "000001.SZ"]
+s = set(pool)
+print(len(s))
+for v in s:
+    print(v)
+t = set(["a", "a", "b"])
+print(len(t))
+u = set([0, 0, 1])
+print(len(u))
+w = set([5, 5, 5])
+print(len(w))
+print("600000.SH" in s)
+print(len(list(set(pool))))
+// expect: 2
+// expect: 600000.SH
+// expect: 000001.SZ
+// expect: 2
+// expect: 2
+// expect: 1
+// expect: True
+// expect: 2

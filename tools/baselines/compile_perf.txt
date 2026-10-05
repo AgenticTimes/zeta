@@ -1,0 +1,65 @@
+# tools/baselines/compile_perf.txt — 编译性能基线（批次 895，2026-10-04）
+# 机器：Apple Silicon (arm64, macOS darwin 24.3.0)；被测件＝target/release/zetac
+# 方法：/usr/bin/time -p 各跑 3 次取中位；-o 写 /tmp（避免 root 目录权限噪声）。
+# 判据来源：refactor.md 轴 C「time zetac 前后对照 ≥ 可测收益，否则不合并」——
+# 本文件是"前后对照"的"前"基线；任何触编译性能的改动（clone/HashMap/intern）
+# 合并前在此同法复测并追加一节。
+
+[small] tests 尺寸≈1 行 print（perf_small.py）
+  real 0.12 / 0.12 / 0.21（首跑含页缓存冷启动）
+
+[medium] t813_unannotated_float_return（约 40 行，def/class/方法调用）
+  real 0.19 / 0.18 / 0.16
+
+[large-z] zetas/capybara/build.z（3301 行）
+  real 22.51 / 22.79 / 20.43
+  注：-o 必须指向可写路径（/dev/null 会 PermissionDenied）。
+
+[large-z2] tests/unit-tests/minimal_compiler.z（800 行）
+  real 2.47 / 2.45 / 2.29
+
+[suite] 全量差分 --group 50（2846 例，50 组）
+  real 274.45s（≈4 分 34 秒；含每组编译＋运行＋CPython 真值缓存命中）
+
+# —— 后续对照记录（追加在下方） ——
+
+## 批次 938 追测（2026-10-05）：checker 三轮推断入 lower_to_mir 后
+# 批 933–937 把跨函数推断（三轮模块扫描）放进 with_checker_env 闭包；
+# batch 738 在册 lower_to_mir 每函数/闭包一次（651 次）⇒ O(N²) 隐患。
+# 批 938 改为入口惰性构建缓存（ModuleCheckerPlan）。同法复测：
+[large-z] zetas/capybara/build.z
+  real 3.47 / 2.72 / 2.86（批 938 缓存后；批 937 闭包直跑实测 2.86/2.66/2.67
+  ——当前语料无可见劣化，缓存消除的是结构风险，非收益修复）
+
+## 批次 975 追测（2026-10-05）：三尺寸复测（含 keyfn 单态化四批后）
+# 同法（/usr/bin/time -p 各跑，-o 写 /tmp）：
+# [small] /tmp/perf_small.py（1 行 print）
+#   real 0.08（基线 0.12——区间内波动）
+# [medium] t813 尺寸档（约 40 行）
+#   real 0.05
+# [large-z] zetas/capybara/build.z
+#   real 3.00 / 2.86 / 2.72（批 938 缓存后 2.72-3.47 区间内）
+# 归因注记（批 976 修正）：22.51s 基线读数**不可复现**——
+# checkout 批 895 提交（3cdf9394）独立 worktree 全量重建后实测
+# large-z = 2.90/2.68/2.72s，与当前二进制逐档一致 ⇒ "7.5x 提速"
+# 不存在，22.51s 为当时测量噪声（冷缓存/并发干扰，AGENTS 教训 3
+# 假读数族）。轴 C 的 large-z 归因任务**关闭**；基线值以本节
+# 2.7-3.0s 为准。keyfn 单态化四批（962-966）实测无可见性能劣化。
+
+## 批次 1001 审计（2026-10-05）：perf 采样＋两处候选实测＋基线纠偏
+# 采样（macOS sample，large-z 编译期 2s 窗口）：全部样本 14,981——tokio
+# 多线程运行时空转＋内核等待占 78%（cvwait/kevent/Steal/park），解析族
+# 仅 ~5%（parse_expr_no_if 176＋find_top_level_kw 142＋StrSearcher 124）。
+# A/B 实测：
+# ① scheduler::init_runtime（tokio 多线程＋num_cpus worker）禁用——
+#    large-z 2.93-3.43 vs 基线 3.01-3.04：墙钟噪声内 ⇒ 非杠杆，不合并。
+# ② skip_ws_and_comments0/1/（dup）手写字节扫描替换 nom many0(alt) 组
+#    合器——large-z 3.01-3.50 vs 基线 3.01-3.04：无可测收益 ⇒ 按轴 C
+#    铁律不合并（已回退）。StrSearcher/take_until 税实存但占比小。
+# 基线纠偏（同批 976 先例）：[large-z2] minimal_compiler.z 旧读数
+# 2.29-2.47s 不可复现——新旧解析器实测均 0.29-0.30s（旧值属 22.51s
+# 同族测量噪声）。本文件 [large-z2] 基线以 0.29-0.30s 为准。
+# 结构发现：3.0s 中 zetac 自身 ~2.75s、clang/link ~0.35-0.4s；busy
+# 样本无单一主导函数（解析 ~30%、通用机械分散）⇒ 轴 C 的可测收益
+# 需更长窗口的全线程采样（1000 样本×全线程）定位聚合热点，单点微优
+# 化在当前尺寸无杠杆。gen_stmt 拆分（1000 续刀）不属轴 C。

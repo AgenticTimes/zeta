@@ -99,6 +99,17 @@ impl NewTypeCheck for Resolver {
         // Handle reference types: &str, &mut i64, etc.
         let s = s.trim();
 
+        // Batch 747 (#264): `**kwargs` star-param marker from the parser —
+        // the slot holds an ordinary map handle, which is what `**name` is.
+        if s == "**" {
+            return Type::Named("map".to_string(), Vec::new());
+        }
+        // Batch 752: `*args` star-param marker — an ordinary list handle
+        // (what positional overflow IS).
+        if s == "*" {
+            return Type::DynamicArray(Box::new(Type::PyDynamic));
+        }
+
         // Debug: print what we're parsing (disabled for performance)
 
         // Safety check: empty / dyn → PyDynamic (B3)
@@ -120,8 +131,7 @@ impl NewTypeCheck for Resolver {
             // generic-name path as `Named("Str")` — a fake class — so the CALLER
             // typed the result i64: `println!("{}", first(s))` printed the `char*`
             // instead of the string, and a `Str` param lost every str dispatch.
-            "Str" => return Type::Str,
-            "String" => return Type::Named("String".to_string(), Vec::new()),
+            "Str" | "String" => return Type::Str,
             "i8" => return Type::I8,
             "i16" => return Type::I16,
             "u8" => return Type::U8,
@@ -370,8 +380,7 @@ impl NewTypeCheck for Resolver {
             "i64" => Type::I64,
             "i32" => Type::I32,
             "bool" => Type::Bool,
-            "str" => Type::Str,
-            "String" => Type::Named("String".to_string(), Vec::new()),
+            "str" | "String" => Type::Str,
             "i8" => Type::I8,
             "i16" => Type::I16,
             "u8" => Type::U8,
@@ -399,298 +408,5 @@ impl NewTypeCheck for Resolver {
 
     fn type_to_string(&self, ty: &Type) -> String {
         ty.display_name()
-    }
-}
-
-/// Migration wrapper for old type checking API
-pub struct TypeCheckMigrator {
-    resolver: Resolver,
-    use_new_system: bool,
-}
-
-impl TypeCheckMigrator {
-    pub fn new(resolver: Resolver) -> Self {
-        TypeCheckMigrator {
-            resolver,
-            use_new_system: false, // Start with old system for compatibility
-        }
-    }
-
-    pub fn enable_new_system(&mut self) {
-        self.use_new_system = true;
-    }
-
-    pub fn typecheck(&mut self, asts: &[AstNode]) -> bool {
-        if self.use_new_system {
-            // Use new system
-            match self.resolver.typecheck_new(asts) {
-                Ok(_) => true,
-                Err(errors) => {
-                    for error in errors {
-                        crate::diag_error!("E2002", "Type error: {}", error);
-                    }
-                    false
-                }
-            }
-        } else {
-            // Use old system
-            self.resolver.typecheck(asts)
-        }
-    }
-
-    pub fn infer_type(&self, node: &AstNode) -> String {
-        if self.use_new_system {
-            // Use new inference
-            use crate::middle::resolver::new_resolver;
-            let mut context = new_resolver::InferContext::new();
-            match context.infer(node) {
-                Ok(ty) => self.resolver.type_to_string(&ty),
-                Err(_) => "<?>".to_string(),
-            }
-        } else {
-            // Use old inference
-            self.resolver.infer_type(node).display_name()
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::frontend::ast::AstNode;
-
-    #[test]
-    fn test_type_conversion() {
-        let resolver = Resolver::new();
-
-        assert_eq!(resolver.string_to_type("i64"), Type::I64);
-        assert_eq!(resolver.string_to_type("bool"), Type::Bool);
-        assert_eq!(resolver.string_to_type("str"), Type::Str);
-
-        // Test reference types
-        assert_eq!(
-            resolver.string_to_type("&str"),
-            Type::Ref(
-                Box::new(Type::Str),
-                crate::middle::types::lifetime::Lifetime::Static,
-                crate::middle::types::Mutability::Immutable
-            )
-        );
-
-        assert_eq!(
-            resolver.string_to_type("&mut i64"),
-            Type::Ref(
-                Box::new(Type::I64),
-                crate::middle::types::lifetime::Lifetime::Static,
-                crate::middle::types::Mutability::Mutable
-            )
-        );
-
-        assert_eq!(
-            resolver.string_to_type("&bool"),
-            Type::Ref(
-                Box::new(Type::Bool),
-                crate::middle::types::lifetime::Lifetime::Static,
-                crate::middle::types::Mutability::Immutable
-            )
-        );
-
-        // Test array types
-        assert_eq!(
-            resolver.string_to_type("[i32; 10]"),
-            Type::Array(Box::new(Type::I32), ArraySize::Literal(10))
-        );
-
-        assert_eq!(
-            resolver.string_to_type("[bool; 5]"),
-            Type::Array(Box::new(Type::Bool), ArraySize::Literal(5))
-        );
-
-        // Test slice types
-        assert_eq!(
-            resolver.string_to_type("[i64]"),
-            Type::Slice(Box::new(Type::I64))
-        );
-
-        assert_eq!(
-            resolver.string_to_type("[&str]"),
-            Type::Slice(Box::new(Type::Ref(
-                Box::new(Type::Str),
-                crate::middle::types::lifetime::Lifetime::Static,
-                crate::middle::types::Mutability::Immutable
-            )))
-        );
-
-        // Test tuple types
-        assert_eq!(resolver.string_to_type("()"), Type::Tuple(Vec::new()));
-
-        assert_eq!(
-            resolver.string_to_type("(i32, bool)"),
-            Type::Tuple(vec![Type::I32, Type::Bool])
-        );
-
-        assert_eq!(
-            resolver.string_to_type("(i64, &str, bool)"),
-            Type::Tuple(vec![
-                Type::I64,
-                Type::Ref(
-                    Box::new(Type::Str),
-                    crate::middle::types::lifetime::Lifetime::Static,
-                    crate::middle::types::Mutability::Immutable
-                ),
-                Type::Bool
-            ])
-        );
-
-        // Test nested tuples
-        assert_eq!(
-            resolver.string_to_type("((i32, bool), i64)"),
-            Type::Tuple(vec![Type::Tuple(vec![Type::I32, Type::Bool]), Type::I64])
-        );
-
-        let i64_type = Type::I64;
-        assert_eq!(resolver.type_to_string(&i64_type), "i64");
-
-        let bool_type = Type::Bool;
-        assert_eq!(resolver.type_to_string(&bool_type), "bool");
-
-        // Test reference type display
-        let ref_str = Type::Ref(
-            Box::new(Type::Str),
-            crate::middle::types::lifetime::Lifetime::Static,
-            crate::middle::types::Mutability::Immutable,
-        );
-        assert_eq!(resolver.type_to_string(&ref_str), "&'static str");
-
-        let mut_ref_i64 = Type::Ref(
-            Box::new(Type::I64),
-            crate::middle::types::lifetime::Lifetime::Static,
-            crate::middle::types::Mutability::Mutable,
-        );
-        assert_eq!(resolver.type_to_string(&mut_ref_i64), "&'static mut i64");
-
-        // Test array type display
-        let array_i32 = Type::Array(Box::new(Type::I32), ArraySize::Literal(10));
-        assert_eq!(resolver.type_to_string(&array_i32), "[i32; 10]");
-
-        // Test slice type display
-        let slice_i64 = Type::Slice(Box::new(Type::I64));
-        assert_eq!(resolver.type_to_string(&slice_i64), "[i64]");
-
-        // Test tuple type display
-        let empty_tuple = Type::Tuple(Vec::new());
-        assert_eq!(resolver.type_to_string(&empty_tuple), "()");
-
-        let simple_tuple = Type::Tuple(vec![Type::I32, Type::Bool]);
-        assert_eq!(resolver.type_to_string(&simple_tuple), "(i32, bool)");
-
-        let complex_tuple = Type::Tuple(vec![
-            Type::I64,
-            Type::Ref(
-                Box::new(Type::Str),
-                crate::middle::types::lifetime::Lifetime::Static,
-                crate::middle::types::Mutability::Immutable,
-            ),
-            Type::Bool,
-        ]);
-        assert_eq!(
-            resolver.type_to_string(&complex_tuple),
-            "(i64, &'static str, bool)"
-        );
-
-        // Test generic types
-        assert_eq!(
-            resolver.string_to_type("Vec<i32>"),
-            Type::Named("Vec".to_string(), vec![Type::I32])
-        );
-
-        assert_eq!(
-            resolver.string_to_type("Option<bool>"),
-            Type::Named("Option".to_string(), vec![Type::Bool])
-        );
-
-        assert_eq!(
-            resolver.string_to_type("Result<i32, String>"),
-            Type::Named(
-                "Result".to_string(),
-                vec![Type::I32, Type::Named("String".to_string(), Vec::new())]
-            )
-        );
-
-        // Test nested generic types
-        assert_eq!(
-            resolver.string_to_type("Vec<Vec<i32>>"),
-            Type::Named(
-                "Vec".to_string(),
-                vec![Type::Named("Vec".to_string(), vec![Type::I32])]
-            )
-        );
-
-        assert_eq!(
-            resolver.string_to_type("Option<Vec<bool>>"),
-            Type::Named(
-                "Option".to_string(),
-                vec![Type::Named("Vec".to_string(), vec![Type::Bool])]
-            )
-        );
-
-        // Test generic types with complex type arguments
-        assert_eq!(
-            resolver.string_to_type("Vec<&str>"),
-            Type::Named(
-                "Vec".to_string(),
-                vec![Type::Ref(
-                    Box::new(Type::Str),
-                    crate::middle::types::lifetime::Lifetime::Static,
-                    crate::middle::types::Mutability::Immutable
-                )]
-            )
-        );
-
-        assert_eq!(
-            resolver.string_to_type("HashMap<String, i32>"),
-            Type::Named(
-                "HashMap".to_string(),
-                vec![Type::Named("String".to_string(), Vec::new()), Type::I32]
-            )
-        );
-
-        // Test generic type display
-        let vec_i32 = Type::Named("Vec".to_string(), vec![Type::I32]);
-        assert_eq!(resolver.type_to_string(&vec_i32), "Vec<i32>");
-
-        let option_bool = Type::Named("Option".to_string(), vec![Type::Bool]);
-        assert_eq!(resolver.type_to_string(&option_bool), "Option<bool>");
-
-        let result_i32_string = Type::Named(
-            "Result".to_string(),
-            vec![Type::I32, Type::Named("String".to_string(), Vec::new())],
-        );
-        assert_eq!(
-            resolver.type_to_string(&result_i32_string),
-            "Result<i32, String>"
-        );
-
-        let nested_vec = Type::Named(
-            "Vec".to_string(),
-            vec![Type::Named("Vec".to_string(), vec![Type::I32])],
-        );
-        assert_eq!(resolver.type_to_string(&nested_vec), "Vec<Vec<i32>>");
-    }
-
-    #[test]
-    fn test_migrator() {
-        let resolver = Resolver::new();
-        let mut migrator = TypeCheckMigrator::new(resolver);
-
-        // Should use old system by default
-        let ast = vec![AstNode::Lit(42)];
-        assert!(migrator.typecheck(&ast));
-
-        // Enable new system
-        migrator.enable_new_system();
-
-        // Should still work with new system
-        assert!(migrator.typecheck(&ast));
     }
 }

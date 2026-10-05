@@ -1,0 +1,42 @@
+// 批次 807：list-backed set 的 `intersection`。实测损害＝40 个真实策略文件里 9 个
+// 走 `list(set(temp).intersection(set(stockList)))`（code/高股息价投.py:100、
+// code/十年52倍年化59.py:162/255、code/五年15倍年化79.py:74 等），编译期出
+// `PY-A: 动态接收者成员 [dynamic]i64::intersection 无定义 ⇒ 该调用点改为抛异常`，
+// 运行期 Unhandled exception code=1（/tmp/b807/probe807.z 改前实拍：actual 空）。
+// 修法＝mir/gen.rs 的 set 臂族（add/discard/remove 同处）加 intersection 分支，
+// 调运行期 `py_vec_intersect(a, b, elem_is_str)`：遍历左操作数、按内容判等命中
+// 右操作数则 push-if-absent（去重），结果类型继承接收者。
+// 断言取"左操作数原序"（zeta 有序、CPython set 无序），故选定的输入本身递增，
+// 两侧逐字相同（/tmp/b807/ref807.py：2 y z / 2 3 4 / 2 a b / 2）。
+// 已知残留：`set(["a","a","b"])` 在 zeta 仍是 3 个槽（构造器不去重，另册），
+// 本例第三段证明 intersection 自身的去重不依赖输入是否已去重。
+a = set(["x", "y", "z"])
+b = set(["y", "z", "w"])
+c = a.intersection(b)
+print(len(c))
+for v in c:
+    print(v)
+i = set([1, 2, 3, 4])
+j = set([3, 4, 5])
+k = i.intersection(j)
+print(len(k))
+for v in k:
+    print(v)
+d = set(["a", "a", "b"])
+e = set(["a", "b", "c"])
+f = d.intersection(e)
+print(len(f))
+for v in f:
+    print(v)
+g = list(a.intersection(b))
+print(len(g))
+// expect: 2
+// expect: y
+// expect: z
+// expect: 2
+// expect: 3
+// expect: 4
+// expect: 2
+// expect: a
+// expect: b
+// expect: 2

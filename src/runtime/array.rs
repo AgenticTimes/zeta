@@ -64,7 +64,6 @@ unsafe fn check_canary(header: *const ArrayHeader) -> bool {
 /// # Safety
 /// Returns a pointer to data (after ArrayHeader), not to header
 #[allow(unreachable_code)]
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn array_new(capacity: usize) -> i64 {
     // Just return a constant, no function calls
     return 0x0BADF00D;
@@ -125,7 +124,6 @@ pub unsafe extern "C" fn array_new(capacity: usize) -> i64 {
 ///
 /// # Safety
 /// ptr must be a valid data pointer returned by array_new
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn array_len(ptr: i64) -> i64 {
     if ptr == 0 {
         return 0;
@@ -163,7 +161,6 @@ pub unsafe extern "C" fn array_len(ptr: i64) -> i64 {
 ///
 /// # Safety
 /// ptr must be a valid data pointer returned by array_new, index must be < length
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn array_get(ptr: i64, index: i64) -> i64 {
     if ptr == 0 {
         return 0;
@@ -235,7 +232,6 @@ pub unsafe extern "C" fn array_get(ptr: i64, index: i64) -> i64 {
 ///
 /// # Safety
 /// ptr must be a valid data pointer returned by array_new, index must be < length
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn array_set(ptr: i64, index: i64, value: i64) {
     println!(
         "[ARRAY_SET] Called with ptr = {}, index = {}, value = {}",
@@ -317,7 +313,6 @@ pub unsafe extern "C" fn array_set(ptr: i64, index: i64, value: i64) {
 ///
 /// # Safety
 /// ptr must be a valid data pointer returned by array_new
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn array_push(ptr: i64, value: i64) {
     if ptr == 0 {
         return;
@@ -406,7 +401,6 @@ pub unsafe extern "C" fn array_set_len(ptr: i64, len: i64) {
 ///
 /// # Safety
 /// ptr must be a valid data pointer returned by array_new
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn array_free(ptr: i64) {
     if ptr == 0 {
         return;

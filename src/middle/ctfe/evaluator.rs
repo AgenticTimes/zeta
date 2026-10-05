@@ -358,16 +358,27 @@ impl ConstEvaluator {
                     if let Some((v, _)) = self.eval_i128_tree(rhs, 0) {
                         self.i128_consts.insert(x.clone(), v);
                     } else {
-                        // Not statically known — a later read must abstain.
-                        self.i128_consts.remove(x);
+                        // 批次 880（#275）：rhs 不可静态求值（典型＝`r = f()`，
+                        // f 声明 `global g` 后改写模块全局）——除删 x 外必须
+                        // 整表清空：表里其他名（g）的"编译期值"可能已被该
+                        // 调用在运行期改掉，留着会让后续读（h = g、print(g)）
+                        // 折叠成改前旧值（`g=1; def bump(): global g; g+=1` 实
+                        // 拍 print(g) 打 1）。与上方 ExprStmt-call 的整表清空
+                        // 同一口径（t36_global/t518 先例）。
+                        self.i128_consts.clear();
                     }
                 }
                 AstNode::Tuple(items) => {
-                    // `a, b = b, a` — the swap's rhs is valid but the
-                    // conservative kill keeps later reads on the runtime.
-                    for it in items {
-                        if let AstNode::Var(v) = it {
-                            self.i128_consts.remove(v);
+                    // `a, b = f()` 的 rhs 可能经调用改写任意全局——整表清空；
+                    // `a, b = b, a` 的 swap 在 rhs 可求值时不进本支。
+                    // （原仅删 LHS 名，与上支同一静默错值面。）
+                    if self.eval_i128_tree(rhs, 0).is_none() {
+                        self.i128_consts.clear();
+                    } else {
+                        for it in items {
+                            if let AstNode::Var(v) = it {
+                                self.i128_consts.remove(v);
+                            }
                         }
                     }
                 }
@@ -1885,3 +1896,59 @@ impl AstTransformer for ConstEvaluator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests_905_pins {
+
+        use super::*;
+
+        /// 批次 905（#275 回归钉）：`g = 1` 后 `r = bump()`（rhs 不可静态求值，
+        /// bump 声明 `global g`）必须把 i128_consts **整表清空**——原实现只删
+        /// LHS 名（r），g 的陈旧编译期值存活 ⇒ print 实参改写臂把 g 折叠成
+        /// 改前值 1（运行期已 2，静默错值）。ExprStmt-call 分支的整表清空
+        /// 口径（t36_global/t518）在 Assign 支必须同款。
+        #[test]
+        fn i128_table_kills_stale_globals_on_call_assign() {
+            let mut ev = ConstEvaluator::new();
+            let mk = |name: &str, rhs: AstNode| AstNode::Assign(
+                Box::new(AstNode::Var(name.to_string())),
+                Box::new(rhs),
+            );
+            // g = 1（可静态求值 → 入表）
+            ev.note_i128_assign(&mk("g", AstNode::Lit(1)));
+            assert!(ev.i128_consts.get("g") == Some(&1), "setup: g recorded");
+            // r = bump()（rhs 是调用，不可求值 → 除删 r 外整表清空）
+            ev.note_i128_assign(&mk("r", AstNode::Call {
+                receiver: None,
+                method: "bump".to_string(),
+                args: vec![],
+                type_args: vec![],
+                structural: false,
+            }));
+            assert!(ev.i128_consts.get("g").is_none(),
+                "#275: 调用型 rhs 必须整表清空，g 的陈旧值不得存活");
+            assert!(ev.i128_consts.get("r").is_none());
+        }
+
+        /// 同钉另一半：非调用 rhs（h = g 的直读形状不可求值时）同款整表清空——
+        /// g 可能已在运行期被改，直读折叠同样不可信。
+        #[test]
+        fn i128_table_clears_on_uninferable_rhs() {
+            let mut ev = ConstEvaluator::new();
+            ev.note_i128_assign(&AstNode::Assign(
+                Box::new(AstNode::Var("g".to_string())),
+                Box::new(AstNode::Lit(1)),
+            ));
+            assert!(ev.i128_consts.get("g") == Some(&1));
+            // h = <未知表达式>（属性读等 eval 不了）
+            ev.note_i128_assign(&AstNode::Assign(
+                Box::new(AstNode::Var("h".to_string())),
+                Box::new(AstNode::FieldAccess {
+                    base: Box::new(AstNode::Var("o".to_string())),
+                    field: "f".to_string(),
+                }),
+            ));
+            assert!(ev.i128_consts.get("g").is_none(),
+                "不可求值 rhs 后整表必须为空");
+        }
+    }

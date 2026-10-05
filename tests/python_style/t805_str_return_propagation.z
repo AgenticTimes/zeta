@@ -1,0 +1,52 @@
+// 批次 805：`-> String` 返回值传播——调用点打的必须是内容，不许打句柄。
+//
+// 病因两环（实拍）：
+// ①resolver 型表把 Rust 拼法 `String` 解成 `Named("String")` 假类
+//   （typecheck_new.rs 两处＋new_resolver.rs 一处；在册的 `Str` 臂注释
+//   自证同款缺陷），而打印分派 `py_fmt_*` 只认 `Type::Str` ⇒ 普通函数
+//   `-> String` 的调用点在格式占位符里打堆地址。
+// ②gen.rs 的 Rust 形结构字面量 `S { n: 1 }` 把表达式定型成占位拼写
+//   `Named("Struct")`（原注释"For now, assume …"＋TODO），于是方法调用点
+//   按 tn="Struct" 查 `S::greet` 必落空、退化成 I64 ⇒ impl 方法**连 `-> str`
+//   都打句柄**（404 在册 `[impl=4374191776]` 真身即此环）。
+//
+// 修法：①三处 "String" 臂折进 Type::Str（与 str/string/Str 同轨）；
+// ②字面量定型改用 variant 名（Named("Struct") 拼写在 src 内零消费者，
+// 纯占位）。range/枚举构造形（Shape::Rect {..}）走同一臂，定型由假类名
+// 变 variant 全名，分派面只见改善不见放松（回归照 t439/t561 验证）。
+//
+// 期望（改后实拍）：
+// expect: impl=hi
+// expect: plain=yo
+// expect: direct=hi
+// expect: m_str=lo
+// expect: field=7
+
+struct S {
+    n: i64,
+}
+
+impl S {
+    fn greet(self) -> String {
+        return "hi".to_string();
+    }
+
+    fn low(self) -> str {
+        return "lo".to_string();
+    }
+}
+
+fn plain() -> String {
+    return "yo".to_string();
+}
+
+fn main() -> i64 {
+    let s = S { n: 7 };
+    println!("impl={}", s.greet());
+    println!("plain={}", plain());
+    println!("direct={}", s.greet());
+    let t = s.low();
+    println!("m_str={}", t);
+    println!("field={}", s.n);
+    return 0;
+}

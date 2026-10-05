@@ -180,3 +180,10 @@ target/
 
 # 双 agent 协作（worktree.md 协议）：AGENTS.md 是两班工人的开工须知，需要入库（2026-09-25 定向豁免，参照批次 314 先例）
 !AGENTS.md
+
+# 批次 899：构建产物与本地门禁状态（轴 A 杂物清理）
+tests/python_style/build/
+zeta_src/build/
+tools/baselines/.batch_gate_state
+tools/__pycache__/
+锚点源码：外部转储（不入锚点核对）

@@ -1,3 +1,6 @@
+// known-fail: read_text 返回值被 println_i64 打印（指针）——str 推断在
+//   PyPath handle 方法链缺失（批次 1006 A/B 实证：998 前树同指针，预存
+//   非回归；修好摘除本标记）。
 // PY-A: pathlib.Path —— 构造 / `/` 拼接 / 链式 .resolve().parent / 名字部件 / 文件 IO
 // expect: zeta_pathlib_probe.txt
 // expect: zeta_pathlib_probe

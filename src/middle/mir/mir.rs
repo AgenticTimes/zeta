@@ -66,6 +66,11 @@ impl Mir {
                         Type::F32 => Type::F32,
                         Type::F64 => Type::F64,
                         Type::Str => Type::Str,
+                        // 批次 893（#279 方案②）：PyDynamic 身保留——未知型均值
+                        // （zeta_mean_to_string）的 body 型必须到达调用点回灌；
+                        // codegen 的 LLVM 签名对 PyDynamic 仍落 i64（指针 ABI
+                        // 与缺省一致，infer_fn_return_type 的 _ 臂），无错位。
+                        Type::PyDynamic => Type::PyDynamic,
                         _ => Type::I64,
                     });
                 }
@@ -340,4 +345,29 @@ pub enum MirExpr {
 pub enum SemiringOp {
     Add,
     Mul,
+}
+
+#[cfg(test)]
+mod tests_905 {
+    use super::*;
+
+    /// 批次 905（#279 方案② 回归钉）：signature_ret_ty 必须保留 PyDynamic 身
+    /// ——未知型均值（zeta_mean_to_string）的 body 型经 登记→回灌 到调用点；
+    /// 若此处把 PyDynamic 折成 I64，t813 的调用点退回整数打印（文本句柄当数）。
+    #[test]
+    fn signature_ret_ty_preserves_pydynamic() {
+        let mut mir = Mir {
+            name: Some("test_fn".to_string()),
+            param_indices: vec![],
+            stmts: vec![],
+            exprs: HashMap::new(),
+            ctfe_consts: HashMap::new(),
+            type_map: HashMap::new(),
+            global_consts: HashMap::new(),
+            ..Default::default()
+        };
+        mir.type_map.insert(7, Type::PyDynamic);
+        mir.stmts.push(MirStmt::Return { val: 7 });
+        assert_eq!(mir.signature_ret_ty(), Some(Type::PyDynamic));
+    }
 }

@@ -1,0 +1,22 @@
+// 批次 794（#266）：`word.push(ch)` 语句形累积＋`as_str()` 读回——selfhost.z
+// 分词器的 word 累积即此形。改前两处断裂：①`push_2`/`as_str_1` 裸名链接缺符；
+// ②就算兜上 C 别名，push_str 是纯函数（返回新句柄），语句形丢弃返回值、
+// 接收者槽位不回写则 word 永远为空。修法：Str 接收者上的 push 走
+// host_str_push_str＋抄 vec push 的槽位回写约定（gen.rs DynamicArray 臂同款），
+// as_str 走恒等表行定型 Str。/tmp/b784/loopacc 实拍改后 ab1c9。
+input = "ab1_c9"
+word = ""
+i = 0
+while i < input.len():
+    ch = input[i]
+    if ch.is_alphanumeric():
+        word.push(ch)
+    i += 1
+print(word.as_str())
+
+w2 = ""
+w2.push("x")
+w2.push("y")
+print(w2.as_str())
+// expect: ab1c9
+// expect: xy

@@ -1,0 +1,14 @@
+// 批次 796（#266 RUN 面）：Rust 方言 `Vec<T>` 形参上的下标。
+// 改前实拍：接收者定型 Named("Vec")，下标降级链无该形臂，落 dict 兜底
+// （map_str_key+DictGet）⇒ 运行期 map_get 见非 dict 形抛 code=1、零输出
+// （selfhost.z build_ast 的 tokens[i] 即此形，--jit/AOT 同形）。
+fn first(xs: Vec<i64>) -> i64 {
+    xs[0]
+}
+fn third(xs: Vec<i64>) -> i64 {
+    xs[2]
+}
+print(first([7, 8]))
+// expect: 7
+print(third([1, 2, 30]))
+// expect: 30

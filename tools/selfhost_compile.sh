@@ -36,10 +36,7 @@ fi
 
 # 已知失败（键 = 相对仓库根的路径；值 = 一句话原因）。
 # 加行必须同时写明原因与来源批次；条目变通过时要删行（下面有断言盯着）。
-KNOWN_FAIL="
-zeta_src/runtime/actor/result.z|LLVM verifier：返回类型不匹配（ret i64 vs ptr）+ 调用参数类型不匹配（host_result_free_1）
-"
-
+KNOWN_FAIL=""
 known_hit=0
 ok=0; pinned=0; newfail=0; fixed=0
 fail_list=""

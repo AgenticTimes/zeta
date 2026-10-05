@@ -8880,7 +8880,7 @@ Python 的「没有注解」在这个 parser 里写成 `ret == "()"`（不是空
   `___closure__backend_datasrc_split_factors__load_split_factors__0` 链接失败），
   **末段不能全数字**（arity 剥离会重命名引用而不重命名定义 ⇒ 第 2 次尝试
   `___closure_closure_load_split_factors_cf3b8248_0_37b76d63` 链接失败）；
-  故序号在前、`_c<哈希>` 收尾，裸名相同但模块不同的父作用域靠 fnv 哈希区分；
+  故序号在前、`_c86e38704` 收尾，裸名相同但模块不同的父作用域靠 fnv 哈希区分；
 - 撞名不再静默：`thread_local MINTED` 登记表，同名被两个作用域铸出时打
   `warning: [W2001] … minted by two scopes`；
 - 子 MirGen 继承 `closure_ns = 本闭包名`、`closure_seq = 0`。
@@ -25506,6 +25506,1300 @@ zetac＝批次 643 后那颗（md5 `69dbec10…`），`compile_rc=0`、`run_rc=0
 - 门禁读数入册：official 194/194·191/194、python_style 422/3/5/0 逐项记录
 - 存量红源未动：t231/t233/t404 与基线逐字相同
 
+## 批次 761（2026-10-01，**修复批：jit E4016 绑定缺位真收口——build.rs 嵌入 C 运行期（#26 根）**，提交 e60048d9）
+
+**号位交代**：本批原按 759 号位实现；并行侧 91830094 在我实现期间以"batch 759"（#196 台账核对工具）提交、其在制 `src/main.rs` 注释自称 Batch 760（后由 c1cc30ee 落地），故让至 761。我的代码提交 e60048d9 夹在两者之间，commit message 不回改，本节与 worktree 行为对照。
+
+**根因链（systematic-debugging 走完四阶段）**：
+1. 实拍＝JIT 模式（无 -o）对几乎每个程序打 E4016 陷阱——p_base（三行算术）就 trap `zeta_module_decl/zeta_env_get/zeta_env_set`；AOT 全绿证明实现存在于 repo 根 zeta_runtime_c.o/tokio_runtime.o（tools/build_runtime.sh 配方）。
+2. 判定腿＝jit.rs:38 `jit_symbol_resolvable` 三腿（JIT_VEC_BINDINGS 前缀 / jit_mappings_gen 表 138 条 / defined_in_process_image＝dlopen(NULL)+dlsym）；探针符号全部不在表、不在前缀 ⇒ 唯一可行腿是进程镜像。
+3. 第一轮 build.rs 只链 .o：nm 计数 0、探针仍 trap——rustc 在 mac 无条件传 -Wl,-dead_strip，无引用链的 C 码整族被剥。/tmp/b759/exp 三档对照钉死：plain 链接 dlsym 三枚全命中；-dead_strip 档三枚全 0x0；-exported_symbols_list 限列档链接失败（限列会把其余符号藏掉）。ld 无 -no_dead_strip（unknown options 实拍）。
+4. 定案：-Wl,-alias 把每个 .o 全局符号钉成 dead-strip 根（E 档：目标留存、**原名** dlsym 命中）；build.rs 用 `nm -g -U -j` 枚举两颗合并 .o 的符号自动发 alias。jit.rs 判定码零改动。
+
+**实现面**：build.rs（新，135 行）镜像 tools/build_runtime.sh 步骤序（含 tokio_runtime.c 编不过退 stub-only 的兜底）；非 mac 目标／clang 缺失只跳过嵌入不打死构建；`cargo:rerun-if-changed` 逐 .c＋该脚本本身（防坑 85）。文案三处：error_codes E4016 suggestion、jit.rs 注释块（首版把"trap 名在列"逻辑写反，当场自纠）、jit_mappings.txt 的 println_f64 exclusion 注记（+1 行；已查 gen_from_registry.py 不持有该注释，手改安全）。
+
+**读数**（全部当场命令实拍）：
+- 四探针改前（/tmp/b759/zetac_pre＝e9341c0f）全 trap；改后端到端 p_base=3、p_f64=2.5、p_mod=2.0、p_nl=2，E4016 零出现；AOT 参照同值。
+- jit_sweep：pre＝ok 180/trap 472/fail 0/timeout 1/segv 0；post＝ok 536/trap 4/fail 105/timeout 2/segv 6（total 653）。fail/timeout 档＝原 trap 早退的程序转为真执行后失败，属暴露面非回归面。
+- **新开缺陷族**：jit 真执行 segv 6 枚（名单见台账行）。AOT 侧六枚全 rc=0 ⇒ JIT 特有。首枚 lldb 崩点＝py_os_path_join+44 对 [x21]（address 0x8）解引用＝空字符串指针入参；`__file__` 单独探针（p_file）JIT 可读，非直接元凶。追根因另批（已入 backlog 新开登记）。
+- 全套 python_style 455/0/1/0（与 758 落地时持平）；sample_gate 761 rc=0（窗口 1：python_style 54/0、official 18/18、corpus 40/40）；此前以 759 名义跑过一轮 rc=0（窗口 9：official 20/20、corpus 40/40）。ABI 锚点 rc=0；emit_stable 2/0。
+- 位移 A/B（--emit-llvm 456 夹具，pre vs post）：仅 t23_generic_instantiation 一枚 @id 定义块顺序搬家；两侧各自同二进制两遍逐字节自洽 ⇒ 差异来自 pre 快照（含 758 在制态）与 HEAD 的 758 族间差，非本批（本批零 codegen 码改动）。如实标注：门禁读数跑于含并行侧 main.rs 在制的二进制。
+
+**方法记录**：改前后各轮都先用当场 md5 认二进制（会话开头在册的 15f46497 已被并行侧重编换代为 e9341c0f，按快照实拍走，未沿用旧号读数）；A/B 循环产物即删（ab/ 目录不留 456×2 文件）；cmp 一律带 -s 与显式路径（坑 100）。
+
+## 批次 762（2026-10-01，**度量批：761 新开 jit segv 族分族实拍**，零 src/ 改动）
+
+六枚 segv 逐枚 lldb（`-b -o run -o quit`）取崩点：
+
+| 文件 | 崩点 | address | 归族 |
+|---|---|---|---|
+| t269_path_parents | libc `strrchr+16` | 0x4 | "空/错形 char*" |
+| t35_comprehensions2 | `host_map_get+24`（hd9663…） | 0x1a | "值当指针" |
+| t518_module_global_env_first | `println_str+36` `ldrb w19,[x0]` | 0x2（x0=2） | "值当指针" |
+| t270_module_global_chain | `py_os_path_join+44` `ldrb w8,[x21]` | 0x8 | "值当指针" |
+| memory_model_test | `zeta_sieve_run+4` | 0xbadf00d | 毒值语义（在册设计值），另族 |
+| t458_pyjson_pair_get_with_default | `host_map_get+24` 与 t35 **同哈希同偏移** | 0x1a | "值当指针" |
+
+最小复现（按"最多三形状止损"纪律）：
+- r1 `total=0; def add…; add(5); print(total)` → JIT 绿（5）＝非触发形。
+- r2 `x=0; for x in [7,8,9]: pass; print(x)` → **JIT 分化实拍**：stderr `[ARRAY_LEN] Expected magic: 0x41525241, Found: 0x0`、stdout 打堆地址 4381146823；AOT 同源文件打 9、零警告。r2 形状两侧编译行为一致（都不报 W0003）⇒ 分化在 lowering 还是执行落位**未钉死**，763 从这里接。
+- r3 `pairs=[(1,"a"),(2,"b")]; for k,v in pairs: print(k)` → JIT 同款 magic 警告。
+- `--emit-llvm`（r2）：模块内字符串是裸 `@str_lit = private constant [2 x i8] c"x\00"`，无 src/runtime/array.rs:141 处宿主期望的 magic 头对象结构。
+
+附带澄清：`W0003 Typecheck failed (non-fatal)` 只在 p_f64/p_nl 形状出现（且仅 JIT 侧报），与 segv 大族不同一条线，typecheck 面另查。
+
+证据面：本批零代码改动（度量+登记），判据＝上列当场命令实拍；二进制＝761 落地后 e60048d9 树重建件。scratch：/tmp/b759/{r1,r2,r3}.z、r2.ll、r2.bin。
+
+## 批次 764（2026-10-01，**修复批：值当指针族——jit 宿主绑定裸名占用摘除**，提交 0b1e5c5b）
+
+- 承 761 新开（jit_sweep segv 0→6）与 762 度量（分族+r2 最小复现）。号位让渡：并行侧连占 761/762/763（9d246f68/c16537a2/3790260b），本批 764。
+- 根因实拍：`nm -m` 镜像 `_array_len` 单枚 T＝objdump 反汇编为 Rust magic 检查体（0x41524152 比较+print 调用）；C 体在 `_array_len.2`（cbz/ldur [x0,#-8]/ret＝tokio_runtime_stub.c:525）。merged .o 内 plain 与 .2 同址＝stub 的 C 体经 ld -r 改名后缀面进镜像，裸名被 Rust no_mangle 导出占用⇒dlsym 恒回 Rust 体。摘表 44 行后 MCJIT 走默认宿主查找（dlsym）＝仍绑 Rust＝r2 仍红；摘 Rust 侧同名 no_mangle 后裸名归 C，r2 转绿。
+- 附带发现（另批归因）：build.rs 1011 条 -Wl,-alias 确进 rustc 链接命令行（`Running` 行 grep 实拍），但镜像 `nm|grep -c ztk_keep`＝0、dyld_info 亦 0——761 台账写的"-alias 钉 dead-strip 根"未兑现，实际留存面是 ld -r 改名后缀＋直链 .o；改后复验：摘 Rust 占用后 C plain 名在镜像且 JIT 端到端正确，功能面无损，机制账待补。
+- 改动面：pylib/jit_mappings.txt −44 行（138→94）；jit_mappings_gen.rs 重生成；src/runtime/{array.rs,map.rs,io.rs,host.rs,actor/result.rs}＋src/std/collections/mod.rs 摘 26 处 #[unsafe(no_mangle)]；tests/python_style/t569_jit_cbind_array.z 新钉。
+- 读数：r2 JIT=9（AOT 基准 9）magic 零；六枚 segv 全 rc=0；jit_sweep ok 536→639、segv 6→0、fail 105→8、timeout 2→1（total 653）；sample_gate 764 rc=0（窗口 4：285/285、54/0、26/26、40/40）；窗口 3 参考轮 rc=0；emit_stable 2/0；ABI rc=2（漂移全在 src/middle 并行侧在制面，src/runtime/src/std 零）。
+- 新开：①-alias 机制归因（登记 backlog）；②C∩Rust 同名 no_mangle 余量族（reactor_/waker_/option_/runtime_malloc/host_result_make_ 等，摘除需同面验证，防"修掉巧合"——现 JIT 对这些走 Rust 体可能恰是自洽面）。
+- 撞号对照（764 二次占用）：本车道 0b1e5c5b 取号时 HEAD=3790260b（763 已占、764 空闲实拍）；并行侧 2f4bfc63（#52 机械半清）在本车道代码提交后、记录提交前落地，同标 764。两侧 message 与台账行均不回改，以后补此对照：764-值当指针=0b1e5c5b、764-锚点重绑=2f4bfc63。
+
+## 批次 768（原计划 765，让号）：jit_sweep xabort 档＋t449 回归归因
+
+- 主体：tools/jit_sweep.sh 增 xabort 分类档（非零 rc 且无 E4016＋夹具带 `// expect-abort: 串`＋输出含该串 ⇒ 设计内响亮中止，判据口径对齐 run_one.sh:93）。764 后 fail=8 全数定性：6 枚进 xabort、余 2 枚在册（t209 无 marker 缓补、minimal_compiler selfhost chronic）。本档实测 ok=641 trap=5 fail=2 xabort=6 timeout=1 segv=0 total=655 GREEN。trap/fail 跨跑法不可比（坑 73），ok/segv/total 为尺。
+- t449 回归链：sample_gate 765 窗口 5 实拍三跑确定性红（AOT 面）⇒ 归因 0b1e5c5b 多摘的 host.rs 五枚 DynamicArray 导出（AOT 链接在用面）⇒ `git checkout 3790260b -- src/runtime/host.rs` 恢复＋重编（6e22c6d5）⇒ t449 rc=0 七翼全对、r2 JIT 依旧 9。符号面复验：恢复不夺回裸名（nm：_array_len 与 _array_len.2 同址 0x1005a7660＝C 体），JIT 行为不变。**教训落账**：窗口抽样把本回归掩到全量才显（764 界窗口 4 全绿）——动 no_mangle 面属跨面改动，摘每枚前须 separately 证 AOT 面不依赖（与记忆"修掉巧合会揭出依赖它的绿用例"同型，第二次实拍）。
+- 在制品被并包：+5 恢复提交前被并行侧 af2c2c2d（其 765 负结果批）整包收进（坑 109 第二次实拍），hash 对照入册：摘五枚=0b1e5c5b、恢复五枚=af2c2c2d、本批代码=f042cfdf（jit_sweep＋t569 两处）。message/台账不回改。
+- 全量复验读数：python_style 全量 457/0/1/0（红 0；与并行侧 767 自读 458/0/0/0 的差异＝本趟跑在 t450 摘标落地前的树态，只作本批 AOT 面无回归证据）；全套差分 match=2845/judged=2845 rate=100%（bad_case=1 del_undefined_var 按 756 口径单列），较基线转好 23 条——--bless 抬闸在册待做。
+- backlog：②余量族行补注——host.rs 五枚属 AOT 在用面已恢复＝摘除白名单收紧，C∩Rust 余量九族摘前必须同证 JIT 与 AOT 两侧不依赖（本批实证 AOT 侧依赖真实存在）。
+
+## 批次 772（原计划 769，让号）：差分基线抬闸＋②余量族探针收口
+
+- 主体：tools/baselines/diff_consistency.json --bless 重采（601→2846 例口径），抬闸面逐条核干净（消失 0/翻转 0/新增 2245 全 match），CONFIRM_RC=0。绑二进制 7f909b2c（bfb6f636 树态）。
+- ②探针：见 worktree 772 行——九枚名单钉正、array_set_len 大数组形两侧自洽不摘、Result: 回显系设计。
+- 号位：并行侧连占 769-771；本车道第三次撞号（768 与我方记录行 9dbccad2 同号）以 hash 对照入册，不回改。
+
+## 批次 773：t209 补 expect-abort——sweep fail 档只剩 chronic 一枚
+
+- 主体：t209_assert_stmt.z 加 `// expect-abort: AssertionError`＋头注两行。判据双验：run_one harness 复跑 PASS（改前也 PASS，不回退）；jit_sweep 复跑该枚入 xabort 档，fail 2→1 余量清零（trap 5→4、timeout 1→2 为跨跑抖动不入账，坑 73）。
+- 自纠一条：772 记录 message 的 rows 数（419→420）是写时估算、未跑测量（实测 421/422）；按"不许编造读数"纪律在此如实对照，message 不回改。
+
+## 批次 777（原计划 774，让号）：JIT↔AOT 值级对照门禁
+
+- 动机：768/773 后 sweep fail 档清零，剩"双侧 rc=0 静默值差"无门禁覆盖；对 655 例做全量对照扫描并把探针固化成 tools/jit_vs_aot.sh。
+- 读数：vsame=503 vswitch=0 aot0jitred=0 jit0aotred=137 bothred=8 known=1 timeout=1 nobuild=5 total=655 GREEN——JIT/AOT 值级零分歧（本轮 641 ok 面全对照）。
+- 判据教训两条：空分母假 GREEN（BSD split 参数不兼容）⇒ 分母守卫；掩码步骤注释与实现脱节 ⇒ 503 例假 vswitch。均在同批修正并留证。
+- 号位：并行侧 ce923895/894de21f/f160ae97 占 774-776（#52 审计面），本批取 777。
+
+## 批次 781（代码 ee834081 自称 780，让号两次后仍与并行 91bbed7c 撞）：build.rs -alias 机制归因
+
+- 结论：761 的「-alias 钉 dead-strip 根」记载成立；764 登记的「镜像 _ztk_keep 计数 0＝机制未兑现」是核验对象错——macOS ld 在 -dead_strip 下把别名名自身剥出符号表，目标符号却被钉住。最小复现 /tmp/b778：u0（无 alias）未引用目标消失、u1（带 alias）目标存活且别名名不落 nm；真树 A/B：摘 1011 条发射⇒keep 名单缺 1008/1011（仅 _waker_create/_waker_wake/_zeta_vec_clear 凭引用链存活），恢复⇒缺 0。
+- 代码面：build.rs 注释按实测更正（4 行），alias 发射逐字恢复原样＝功能零改动；改前后二进制符号面 keep 名单均 0 缺失（2e083f8d→9aa25920 树仅并行位移，非本批）。
+- 读数（二进制 9aa25920）：sample_gate 窗口 0 rc=0（差分复跑两遍 285/285，首跑 283/285 撞并行重编；python_style 抽样 43/0；official 14/14 零 chronic；corpus 40/40）；全套 python_style 458/0/0/0；jit_sweep ok=641 trap=4 fail=1 xabort=7 timeout=2 segv=0（total 655）。
+- backlog 764 新开①核销；②余量族维持 772「九枚在册、无受损证据、不摘」。
+
+## 批次 795（原 784→794 撞号让位；代码 6f0cfcaa，gen.rs 面在 af4abe95 内）：#266 selfhost -o 四接线＋is_digit(radix) 收口
+
+- 落地（gen.rs，+37 行，随 af4abe95 记录批被一并提交，内容=我的暂存面逐字节一致）：Str 接收者 `push` 臂（host_str_push_str 纯函数返回新句柄后写回变量槽——重绑约定抄 vec push 臂 gen.rs DynamicArray 那族）；`is_digit` 二参臂（radix 形走 host_str_is_digit，返回值定型 bool）；表行 `is_alphabetic`/`is_alphanumeric`/`as_str`（此前 Str 接收者落通用派发发裸名 `*_1`，-o 链接缺符）。
+- 落地（runtime/tokio_runtime_stub.c，6f0cfcaa）：裸别名 is_alphabetic/push/as_str/into_iter（批 363/365 同族约定）＋ host_str_is_digit 按位值判定（radix 2..36，多字符串判 0——已登记角落）；`parse` 别名 `__attribute__((weak))` 化解 duplicate _parse（selfhost 自身 parse 强符号优先；此前该程序根本链不上，纯改善）。
+- 根 tokio_runtime.o/zeta_runtime_c.o 在 af4abe95+本批 stub 的隔离 worktree 重生成后拷回主树（nm 实拍 weak external _parse、五别名 T；车道未提交的 py_additions.c WIP 不入册不嵌入——隔离树用 HEAD 版源码）。
+- 读数（二进制 8fb2a7e8；工作树含车道 py_additions.c WIP，门禁为该树态实拍）：python_style 全量 460/0/1/0 rc=0；sample_gate 794 窗口 4 rc=0（差分 285/285、python_style 抽样 55/55、official 26/26、corpus 40/40）；jit_sweep GREEN ok=643 trap=3 fail=3 xabort=7 timeout=2 segv=0（total 658）；jit 定点 t570 五行 True/False 全对、t571 ab1c9/xy、t572 如实抛。换干净 .o 后复测 selfhost -o rc=0、Undefined=0、t570/t571 PASS。
+- 新钉：t570（Rust 拼写判定族）、t571（push 累积+as_str）、t572（known-fail：动态接收者 into_iter 抛 code=1，改前后同形——修路在 DYN_RUNTIME_BINDINGS 白格，非本批面）。
+- 锚点：主树直接 --rebind 会把车道未提交 py_additions WIP 的位置钉进文档（撤）。改在隔离树 af4abe95+stub 重绑：漂移 20→0；拒改 1 条 gen.rs:14809（format! 行，+37 搬家到 14837，同文多命中属设计性拒改）手绑→--bless-only→--prune-gone ⇒ rc=0「锚点全部对上」。worktree 首跑报 aliases.inc.c 消失 2 条＝坑 71 复现（该文件未跟踪，隔离树缺）——拷入后重跑清零。
+- 余项登记：① selfhost RUN 面 map_get called on non-dict ⇒ raise code=1（--jit/AOT 同形，改前后不变）——四接线后挡 selfhost 全链的下一格；② t572 动态 into_iter；③ 归因更正：#266 登记时的错值路径 codegen.rs:3002 str_isnumeric 回退不是活路径，实为 1 参裸别名＋I64 定型。
+- 号位两次被撞：原 784→（782-793 车道占用）→794→（af4abe95 records 先入册且连带提交我的 gen.rs 暂存面）→795。代码注释「批次 794」串保留不回改，勘案见 worktree.md 795 行。
+
+## 批次 796（代码面随车道提交 be40cebd/111c95ed 落树——坑 109 三次吸收，本节即勘案入册）：#266 余项① Vec<T> 下标非 dict 抛收口
+
+- 症状：selfhost RUN 面 map_get 非 dict 抛 code=1、零输出（795 收口链接面后登记的余项①；--jit/AOT 同形、795 改前后不变）。
+- 根因（探针实证，非推测）：Rust 方言形参标注 `xs: Vec<T>` 被定型为 `Type::Named("Vec",[T])`；`src/middle/mir/gen.rs` 下标链（DynamicArray/Array/array_param/BATCH-295 I64|PyDynamic 判别）没有这个形的臂 ⇒ 整串 `xs[i]` 落 dict 兜底发 `map_str_key`+`MirStmt::DictGet` ⇒ 运行时 `map_get`（tokio_runtime_stub.c:422）首字读到堆指针、422 守卫（批次 422 立的 raise，此前是垃圾值/SEGV）触发 `zt_map_not_a_map`。探针：`Vec<Tok>` 和 `Vec<i64>` 形参皆发 DictGet——与枚举前向解析无关，W0003 typecheck 注记是另一格。
+- 修法（gen.rs +15，base_ty 读点）：`Named("Vec",targs)` 归一化为 `DynamicArray(targs[0] 或 I64)`，接既有 array_get 臂；元素型解析不出按 I64 与该链尾部约定一致。不新增派发面。
+- 新钉：`tests/python_style/t573_vec_param_subscript.z`（`fn first(xs: Vec<i64>) -> i64 { xs[0] }` 两探针）。改前二进制 8fb2a7e8 实拍 FAIL（空输出），改后 664cbab9 PASS（7/30）；jit 面同值。
+- 读数：python_style 全量 461/0/1/0 rc=0；sample_gate 796（窗口 6）rc=0——差分 bad_case=1（del_undefined_var，参考侧跑不出真值，单列不计 rc，756 裁定口径）、py 抽样 45/0、official 23/23（1 条 chronic＝integration_all_features Undefined `_predict`/`_train`，链接面既有病只登记）、corpus 40/40；jit_sweep GREEN ok=644 trap=3 fail=3 xabort=7 timeout=2 segv=0 total 659。注：读数二进制 664cbab9 的构建树含车道未提交 py_additions.c WIP，账面如实；gen.rs 面＝HEAD 祖先树（e6d87cb3+我 15 行），与提交内容逐字一致。
+- 锚点随批：HEAD（be40cebd）隔离树重绑——漂移 3 条全自动配对：gen.rs:17383→17398、17951-17956→17966-17971、18606→18621（位移皆 +15＝本批 hunk），零拒改零消失；复验 rc=0「锚点全部对上」。坑 71 预防：未跟踪 runtime/aliases.inc.c 拷入隔离树。
+- 落树勘案（号不回改）：我按纪律「先提交代码」暂存 gen.rs blob d79022b5 期间，车道 be40cebd（794b）把暂存面连同其记录吸收提交（diff 页脚 index b5c777c6..d79022b5 即我 blob）；随后我暂存的 t573+ABI.md+tsv 又被 111c95ed（794c）吸收（`git diff HEAD` 主树对我三件零残留＝内容未动）。我尝试的 796 独立提交因此无主体可放，796 号位保留给本台账；坑 109 从「中途换二进制」延伸到「暂存面被并行者提交」，第三次撞号。
+- selfhost RUN 推进一格＋新挡格登记：map_get 抛零行确认已清；现 rc=134——build_ast 段 `ZT-WARN host_str_concat bad arg b=0x8[?]`×3（枚举 vec 元素被按文本读，#214「构造边界保句柄」同弧）后 `PY-A: '_map' is NOT implemented in this build` 抛停（DYN_RUNTIME_BINDINGS 族，t572 表亲）；--jit 同形。
+- run_one.sh 接口教训：判定写入 `$wd/verdict` 文件、脚本恒退 0——`cmd && echo PASS` 是空证；单步验证必须 cat verdict（全量套件计数不受影响）。
+- 车道 WIP 归还：795/796 期间我 `git checkout` 摘下的 gen.rs 车道面（closure_param_usage 区）已从 /tmp/b796/gen.merged.rs 备份恢复工作副本；车道随后在 111c95ed 自行提交（gen.rs +77）。
+- 位移 A/B 未跑：改动为按定型归一化的增臂（Named("Vec") 此前无臂即无既有行为可挤占），全量门禁同批绿。
+- 余项：selfhost RUN 新两格（host_str_concat 文本读、`_map` 绑定）；下批必须真修。scratch：/tmp/b796/
+
+## 批次 797（代码 f1b14418；实修臂 gen.rs +35 随车道 c587400b 落树——坑 109 第四次）
+
+**格**：#266 余项——selfhost RUN 挡格 `PY-A: `_map` is NOT implemented` 抛停（rc=134）。
+
+**根因**：枚举变体载荷绑定槽与通用调用 dest（`into_iter_1` 等）在 type_map 默认定型 I64；
+BATCH-296 列臂只认 `Some(DynamicArray(_))` ⇒ selfhost:141
+`asts.into_iter().map(|a| SimpleEval::eval(a)).sum()` 漏臂，调用落幽灵名 `map_2` ⇒
+codegen 剥 arity 后缀（`format!("{}_{}", func, arg_ids.len())` 的读侧）链到 `_map` weak
+桩 ⇒ 调用即 abort。改前 probe_map.z 实拍：compile/link rc=0、run rc=134。
+
+**修法**：gen.rs 增臂——`method == "map"`、两实参、首实参为 Closure、接收者无型或 I64 ⇒
+绑运行期 `_[dynamic]str__map`（逐元素按位传闭包、按位收结果，元素型无关），dest 定型
+DynamicArray(闭包记录返回型或 I64)。与车道 c587400b 重写的 BATCH-296 数值分派臂串联
+正确：列臂仍要求 DynamicArray，无型接收者才进 797 臂。
+
+**读数（合流树二进制 876df45f，教训 1 先 touch 再强制重编）**：
+- probe_map run 134→0（值残差另格，见下）。
+- selfhost（examples/selfhost.z）AOT 链接 rc=0、Undefined=0、run rc=0、`_map` 抛零行；
+  stdout 0 行＝文本化残差（车道 #214 账面"文本列恒等 map 显示 10 而非 10.0"同弧）。
+- jit 直跑（无 -o）rc=0 `Result: 0`、零 E4016；selfhost_compile 59/59。
+- python_style 全量 461/0/2/0 rc=0（known-fail＝t572＋t574；t34/t35 已由车道 c587400b
+  int/double ABI 错配根修转 PASS——此前纯面 459/2/2/0 两红即该缺陷，非 797 臂引入，
+  隔离树改前二进制 daef0085 pre==post 实证过）。
+- sample_gate 797（窗口 7）rc=0：差分 284/284 bad_case=0、py 抽样 43/0、official 27/27
+  零 chronic、corpus 40/40。
+
+**污染勘案**：首组全量读数取自混面二进制 5a286ce5（我的暂存臂＋车道未提交 WIP 同树），
+整组作废；纯面（2d38341c）与合流面（876df45f）分别重测后才入账。
+
+**残差登记（新格）**：`map(|a| double_it(a))` 经 `_[dynamic]str__map` 通道值恒 0——
+闭包体内对全局函数的调用在降格时丢体（`ParamInit; zeta_env_get; Return IntLit(0)`，
+MIR 实拍），与调用语义无关，另格追；t574 known-fail 钉住（expect 12、actual 0）。
+
+**锚点**：两步收口——隔离树对纯面 rebind（61 自动搬家＋手绑 4296→4320、3221→3245、
+4430→4454×3、gen.rs:14826→14947、15121→15530＋bless-only/prune-gone）；车道 c587400b
+又位移 C 面 +24 ⇒ 合流树 rebind 21 条全自动配对＋手绑 4320→4344、3245→3269、
+4454→4478 ⇒ 终态 rc=0"锚点全部对上"（基线 307 条；待归属 98 条/88 种常设）。
+N3 段两处区间引用修正：14815-14817→14931-14933、14818-14828→14934-14944。
+
+**接口教训复犯**：run_one/probe 的 NotFound 两例都是自己拼错路径——夹具实名
+t573_vec_param_subscript（不是 vec_typed_param）、selfhost 入口在 examples/ 不在
+zeta_src/；NotFound 第一看文件在不在，别先疑运行时。
+
+## 批次 798（代码 c587400b；号位勘案——795 号位已被车道 6f0cfcaa 先占，引用以哈希为身份）：#214 数值减半残差根修——map 数值闭包 int/double ABI 错配
+
+**根因（M794 位级实拍）**：数值 map 闭包被 hint 成 F64 后 codegen 产出 `double(double)`
+签名（参数/返回走 XMM 寄存器），而 C 侧 `zeta_series_map_f64` 按 `int64(*)(int64)` 调用
+（入参放 RDI、返回读 RDI）——callee 读 XMM 残留值、调用方读回未被动过的 RDI，λ 体整个被丢：
+探针 `fn(10.0)` 打 `in_bits==out_bits==0x4024000000000000`，x*3/x+1 都原样返回入参。
+裸函数/裸闭包分离复现全对（30.0/30/11/10.0）⇒ 丢体只在 map 闭包＋hint 组合，ABI 判死。
+
+**修法四件**：
+1. C 侧改按 `double(*)(double)` 浮点 ABI 调用（根修）。
+2. `zeta_series_map_f64_bits` 位型变体：map_f64 输出与 `zeta_vec_push_f64` 构造的列元素是
+   f64 位（push 实拍推位整），文本变体的 strtod 会把位整当指针解引用；MIR 按接收者元素型选
+   strtod（Str 列）/位型（F64 列）入口。
+3. 分派判据取**首个形参**按用法（原只认字面 `"x"`，`lambda y` 漏判掉进 str__map 再撞 ABI
+   错配——xy 对照实拍）；接收者元素已是 F64 时恒等/透传闭包也走 f64 变体。
+4. hint 数值升级限域 `method=="map"`：comprehension 走 `zeta_collect_vec_n` 整数调用规约，
+   绝不能给成 double 签名（794b 无域升级把 t34 的 `x*2` 恒等化成 6——sum 1+2+3，IR 实拍
+   main 的 comprehension 闭包为 double 签名；限域后 12/3/12/12 全对）。M794 插桩摘除。
+
+**落树勘案（坑 109 第五次）**：批 795 编辑首次落盘后被并行车道 797 挡格块（gen.rs +35）的
+暂存/checkout 吸收抹去（796 记录批在册"暂存 blob d79022b5 被车道吸收"），二次重放后随
+c587400b 一并落树；车道 797 行自记"代码臂 gen.rs +35 被车道 c587400b 吸收"＝同一提交双
+车道互吸收实拍。C 侧修改幸存未重写。
+
+**读数**（二进制随 c587400b 树重建）：python_style 全量 **461/0/2/0**（t34/t35 复活，
+known-fail＝t572+t574）；差分**全套** 2845/2845＝**100.0%** 无回归（bad_case=1＝
+del_undefined_var 存量排除项）；official 193 行 2 LINK-FAIL（integration_all_features/
+quantum_basic＝存量缺运行时绑定，roadmap:25006 在册）；锚点漂移 0 rc=0"锚点全部对上"
+（307 可解析；C 面 +28 零重绑＝重绑已由车道 797 行对 c587400b 合流树收口，本批为零漂移复核）。
+探针：x*3/x+1/x*2/链式 y+0.5 全对齐 CPython（30.0/11.0/20.0/40.0/20.5）。
+
+**残差另案**：①文本列恒等 map 显示 `10` 非 `10.0`（构造文本化把 10.0 存成 "10"，浮点 repr
+格式另格）；②t574 闭包体内全局函数调用丢体（车道 797 行已登记）。
+
+## 批次 800（70d5e50d）：闭包体全局调用丢体根修——lower_closure 增 ExprStmt 拆包臂
+
+**方法**：systematic-debugging 四阶段。Phase 1 用 ZETA_PROBE 双插桩（Call 臂入口＋closure body 形状）
+实拍锁定：λ 体单表达式被前端包成 `ExprStmt{expr}`，`lower_closure` body_val 的 `_` 臂把它直送
+`lower_expr`，而 lower_expr_node 主匹配无 `AstNode::ExprStmt` 臂 ⇒ 落尾兜底 `_ => exprs.insert(id, IntLit(0))`
+（gen.rs:18073），零语句发射、无告警（无 W1010 恰证兜底臂路径）。闭包 MIR 三面实拍同形：
+`ParamInit; Call zeta_env_get("double_it")→槽; Return IntLit(0)`。对照面：同文件顶层
+`g = double_it; g(5)` 走 BATCH-294 蹦床臂（gen.rs:14641，发 `zeta_call1`）打 10 正确——缺陷只在闭包体路径。
+
+**修法**：body_val match 增 `AstNode::ExprStmt { expr } => child.lower_expr(expr)`（+7 行含注释）。
+选点依据＝仓内既有四处 ExprStmt 拆包先例（lower_ast:3167、Block 末表达式:4794、多下标:7034、
+collect_free_vars:18286）都是局部拆包，不动主匹配兜底以控爆炸半径；`last_closure_ret_ty` 的
+非 Block 读类型路径随拆包自然生效。
+
+**验证**（主树二进制 a8249df7；隔离树纯面 dd462260 A/B 复测判据全同）：
+- p1 `xs.map(|a| double_it(a))`：0/0/0 → **2/4/6**；p2 `h(3)`：0 → **6**
+- probe_typed 1/6/1e-323/**12**；probe_map **12**（SimpleEval 方法调用面不受影响，如实读数）
+- t574 摘 known-fail 转常规钉（run_one 双面 PASS，expect 12）
+- selfhost：AOT compile/link rc=0（PY-A 0、Undefined 0）、run rc=0；jit rc=0 `Result: 0` 零 E4016
+- python_style 全量 **462/0/1/0**（唯一 known-fail＝t572）；selfhost_compile **59/59**
+- sample_gate 800 窗口 0 **rc=0**（差分 285/285 bad_case=0、py 43/0、official 14/14、corpus 40/40）
+- 锚点：gen.rs +7 位移 1 条自动配对 rebind（18742→18749），复验 rc=0"锚点全部对上"
+
+**号位**：原编 798——车道记录笔 d4719f3f 已占 798；让到 799——车道在制批自述"批次 799 裁定落地"
+（t492 expect 10→10.0 方言），再让位 800。代码注释即最终号 800。
+
+**勘案两条**：
+1. 污染面：主树测量二进制含车道未提交 py_additions.c 在制改；隔离树以 HEAD C 面重建复测，
+   全部判据读数一致 ⇒ 本臂结论与车道 WIP 无关。隔离树首建时 build.rs 因缺未跟踪生成物
+   `runtime/aliases.inc.c` 跳掉整个 C 运行期嵌入（坑 71 复现，症状＝jit 全符号 E4016 陷阱），
+   cp 生成物＋touch C 源强制重跑 build.rs 后正常——"cargo Finished 但 md5 不变"＝build.rs 没重跑。
+2. t492 首红归因更正（对会话中途的"负载假红"初判）：车道在制把该钉 expect 从 `10` 改烙成 `10.0`
+   （浮点 repr 方言裁定落地），首跑套件读到半改面（expected 旧值 vs actual 新渲染）⇒ 红非负载噪声、
+   非本批回归。
+
+**余项**：无——#266 行"闭包体全局调用丢体"残差格清零。
+
+## 批次 799（代码 d814ef66）：读边界浮点文本化收敛 CPython repr——#214 显示格残差收口
+
+**病灶**：构造列的 f64 位元素（tag 6）在 `zt_col_as_text`/`zt_vec_textify` 读边界由
+`zt_word_to_text` 渲染，其 6 号臂用 `%.10g`——整值浮点打 `10` 丢 `.0`（批 798 mulprobe
+第三行实拍；恒等 map / 文本消费全走此路）。数值消费（strtod）不受影响，纯显示层残差。
+
+**修法**：6 号臂改走 `zt_f64_repr`（639 批入库的 CPython repr 算法：最短往返＋整值补
+`.0`，`to_string_f64` 同源）——`10.0` 打 `10.0`，与 CPython `str(10.0)` 一致。t492 头注
+预留的"浮点 repr 方言归 #48 裁决"就此收敛到 CPython 语义（方言伞号 #48 记录见批注）。
+
+**夹具**：t492 三处期望 `10` 重烙 `10.0`（CPython 真值），头注补批次 799 裁定段；
+i 列整数渲染 `%lld` 不变（`df["i"][0]` 仍 `10`）。
+
+**读数**（二进制随当前树重建；读数树含车道未提交的 t574 gen.rs 修复——其 t574 头注
+自记"批次 798 收口"拆包臂，账面如实）：mulprobe 30.0/11.0/**10.0** 全对齐 CPython；
+python_style 全量 **462/0/1/0**（t492 重烙后绿；known-fail 仅 t572；t574 已被车道拆包
+臂修复转常规绿）；差分**全套** 2845/2845＝**100.0%** 无回归；official 193 行 2
+LINK-FAIL 存量在册；锚点漂移 0 rc=0（307 可解析，C 面 ±行零重绑）。
+
+
+## 批次 801（eb63d146）：#211③ 运行期符号双写一致性核对器
+
+方法：把 535 写成人记义务的“双写”（gen.rs 字面量发射 ↔ 运行期符号声明）做成
+机械核对。满足链按 codegen 实拍建模五路（S1 手写清单两形态 / S2 all_externs
+清单驱动 / S3 pylib extern fn / S4 Rust no_mangle / S5 str_→host_ 重映射），
+元数不符先过 `_N` 后缀消歧（codegen param_suffixed）。rc 口径与基线机制仿
+锚点核对（--bless、新增/过期皆 rc=1）。
+
+读数（全部来自已跑命令）：gen.rs 字面量发射 218 处；MISSING 53 条＝按需
+`i64(i64×N)` 声明面（t545/t526 IR 正形实拍；×f64 原型求交＝0，唯一候选
+py_vec_clip_f64 由 S1 正签名满足，t230 IR 实拍）⇒ 基线 tools/
+baselines/runtime_doublewrite.txt 登记 53 条，复跑 rc=0 稳定；python_style
+全量 462/0/1/0；锚点漂移 2 条＝车道 resolver.rs WIP 位移（不代绑）。
+
+调试修正三处假阳/假阴源：形态二 usize 后缀正则、形态一 fn_type 跨行 `&[`
+捕获、parse_counted_vec 尾随逗号多计。535 的“一参 void 兜底”文案按本批
+实拍更正：裸名常规路径按调用元数发 i64 extern，void 臂只在限定名等路径命中。
+
+余项：f64 原型新符号风险由核对器新增红挡下（工具不自动读 C 原型，口径写
+在 docstring）；①② 两形仍在 #211 行内。不 push。
+
+## 批次 801（代码 0539cf7c）：动态 len 409(a)① 根修——返回型推断补 dict 构造调用臂
+
+**症状（车道 669 行精确移交）**：`def copy_dict(x): return dict(x)` 经函数返回的 map，
+`len(d1)` 答 **0** 而同句柄 `d1["a"]` 答 1；直构 `dict(src)` 同形全对。本批探针复现
+（1/0 → 1/1）后 IR 实拍分派分裂：经返回的 `len` 发 `array_len`（对 map 句柄读 vec 表头
+＝0），直构发 `zeta_map_len`。
+
+**根因**：resolver 返回型推断（resolver.rs rets 循环）的 `saw_map` 只认 `DictLit` 与
+map 局部变量（`collect_map_locals` 投票面）；`dict(x)` 收进来是**构造调用**，
+`classify` 落 0 ⇒ 四旗全空 ⇒ `new_ret=None` ⇒ 函数返回型停默认，调用点 `len()` 按默认
+型派 `array_len`。
+
+**修法**：rets 循环补两条 disjunct——`Call{receiver:None, method:"dict"}`（含
+`ExprStmt` 包裹形）⇒ `saw_map`。dict 构造恒产 map，无 union 投毒面；union 侧
+（dict∨str 混返回）由既有 `!saw_str` 守卫 abstain——较改前（dict 侧被 Str 定型污染）
+strictly 改善；真 union 跨函数读边界仍归 #117（本批探针 `maybe()` 的 `m["a"]` 空行实拍
+即该格现状）。
+
+**验证**：探针 `len(copy_dict(src))`=1、两跳 `mid` 传递 len=2 全对 CPython；
+python_style 全量 **462/0/1/0**；差分**全套** 2845/2845＝**100.0%** 无回归；official
+193 行 2 LINK-FAIL 存量在册；锚点 1 条搬家（`resolver.rs:4719→4727`）`--rebind` 全自动
+配对（1 行内容逐字全文件唯一命中）复验 rc=0。位移 A/B 按 798 前例豁免（增 disjunct，
+非 dict 返回程序的 MIR 零变化，全套差分即行为面）。
+
+## 批次 802（代码 a189a4f1）：selfhost RUN 挡格 host_str_concat bad arg 根修
+
+**症状**（796 在册那颗的变形）：selfhost AOT/jit run rc=0 但 stdout 仅 `Result: 0`，
+stderr 三条 `ZT-WARN host_str_concat bad arg a=<堆指针>[] b=0x8[?]`，帧 #1 =
+build_ast+0xb8/+0xcc/+0x128（796 时的 rc=134 崩停已被批 292 降级臂转成静默丢文本）。
+
+**根因**（IR/MIR 双实拍，非推断）：`fn build_ast` 三处
+`if let Token::Ident(n) = tokens[i].clone()` 的载荷绑定走 gen.rs `deref_slot`
+（:4453，臂绑定 :15360 调用）——地址下成 `BinaryOp(+, 句柄, IntLit(8))` + `Deref`，
+而 codegen.rs 的 PY-A 字符串臂（:7086）按操作数 `Type::Str` 路由 `+` 到
+`host_str_concat`。scrutinee 类型为 Str 是因为 `ts[i].clone()` 是带 String 载荷的
+boxed-enum 句柄。于是**指针偏移被发成字符串拼接**（改前 IR 五处
+`%strop = call i64 @host_str_concat(i64 %x, i64 8)`），运行期 C 侧把不可读的 b=0x8
+降级为 `""`，Deref 读回空串块首字 ⇒ `n` 恒非文本、`name` 恒空。对照：t431 族
+夹具的 scrutinee 是裸 i64 句柄（类型 I64）不命中，所以此前全绿。
+
+**最小复现**：t802b（单层 match Ident 臂）、t802c（Fn 臂内嵌套 if let，selfhost 同形）、
+t802f（双命中＋值比较，即入库钉）——改前二进制（HEAD 隔离 worktree 重建 7e633feb）
+AOT 全部 rc=139＋ZT-WARN；主树改前 ec0cff42 jit 同红。隔离 worktree 缺未跟踪
+运行期生成物致 jit 少 9 条绑定（坑 71 复现），红形改由 AOT 面取证。
+
+**修法**：字符串臂对 `op == "+"` 且另一侧是字面 `IntLit` 的组合不放行拼接、
+落回整数加法臂（即批 292 之前的原生指针算术）。依据：CPython `str + int` 是
+TypeError，py 方言里不存在合法的 Str×IntLit 拼接；`==`/`!=` 面不动（tag 比对
+的 deref 结果槽本就是 I64）。
+
+**读数**：三夹具改后 jit/AOT 双面绿（t802f hits=3）；selfhost 双面 ZT-WARN 清零、
+run rc=0（stdout `Result: 0` 为 stub 账面，期望链值归 #266 后续格）；
+sample_gate 802 rc=0（差分 285/285=100.0%、python_style 抽样 42/0/0/0、
+official 13/13、corpus 40/40）；锚点 25 条 --rebind 收口＋车道 resolver 两条
+误绑回退（复验漂移恰此二条，按 801 先例车道自理）。
+
+**余项**：selfhost `Result:` 值链（build_ast 的 Lit/Plus 臂与 eval 汇总）仍未到期望
+形——与本批根修解耦，#266 账面继续跟。
+
+## 批次 802（代码 d0ac5a0d）：union #117 首格根修——Str 定型臂补 !saw_map 守卫＋map 真 union 定型 PyDynamic
+
+**探针定性**：`def maybe(b, x)` 按 b 返回 `dict(x)`/`"none"`，调用点 `m["a"]` 打**空**、
+`len(m)` 打 **1**（CPython 1/2）；IR 实拍 `m["a"]` 发 `str_get`（map 句柄当 char* 读）、
+`len(m)` 发 `host_str_len`、`m.get("a")` 反而对（map_get 打 1）——m 被投毒定型 Str。
+
+**真根因（臂序）**：返回型推断的 Str 臂守卫 `saw_str && !saw_i64 && !saw_f64` **漏了
+`!saw_map`**——map∨str 真 union 恰好落进这条臂把 dict 侧投毒。630 批的票源弃权只防了
+dict 值型投票面，这条定型臂自己就是投毒源（ZETA_DBG 插桩实拍：rets 两条都收集、
+saw_map/saw_str 同亮、Str 臂先中）。
+
+**修法两件**（纯 resolver，零新增 C）：①Str 臂补 `!saw_map`；②`else if saw_map` ⇒
+定型 **PyDynamic**（弃权不等于停默认）——读边界按运行期句柄形分派：字符串键下标走
+DictGet、len 走 `zeta_dyn_len` 几何形判（767 值标签大弧既有机器）、下标非字符串键走
+`zeta_dyn_getitem`（BATCH-295/452 既有），map/str 两面都活。
+
+**验证**：双面探针 `m["a"]=1`／`len(m)=2`／`s="none"`／`len(s)=4`／`s=="none"=True`
+全对 CPython（801 探针2 的 `m["a"]` 空行形同步复活为 1）；python_style 全量
+**463/0/1/0**；差分**全套** 2845/2845＝**100.0%** 无回归；official 193 行 2 LINK-FAIL
+存量在册；锚点 1 条搬家（`resolver.rs:4727→4736`）`--rebind` 全自动配对复验 rc=0。
+残界登记：数值面 union（i64∨f64 返回）仍走旧默认（本批不动，无实害案例）；PyDynamic
+值的方法面（如 `s.upper()`）依赖注册表面，未见实害不在本批。
+
+## 批次 803（代码 46b3c9a1）：matches! 恒 false 根修——宏展开＋模式折算＋cond 递归
+
+**症状**：selfhost `Result: 0`（796/802 余项"期望链值未到"格）。探针
+`/tmp/b798/probe_matches.z` 实拍 matches! 三面全挡：`p_a=100 p_b=100 p_i=100`
+（期望 101/110/0）；MIR 实拍 cond 直接 `IntLit(0)`、`!matches!` 成
+`Call{func:"!", args:[IntLit 0]}`。
+
+**根因三段**（逐段实拍，每段修法后读数推进一格）：
+1. `macro_expand.rs` dispatch 无 "matches" 臂 ⇒ `Unknown macro` Err ⇒ 节点透传
+   gen.rs:4831 `MacroCall => IntLit(0)` 静默兜底 ⇒ 恒 false。
+2. resolver `expand_macros_in_node` 的 If/While 臂只递归 then/body/else_，
+   **cond 原样 clone** ⇒ cond 位宏永不进扩展器（加①后探针读数不变 100/100/100）。
+3. 宏实参按**表达式**解析：`Tok::Ident(s)` → `PathCall{path:["Tok"],
+   method:"Ident"}`；match 臂模式侧 `parse_struct_pattern` 产
+   `StructPattern{variant:"Tok::Ident", fields:[("0", Var s)]}`——形不同形 ⇒
+   构造子解析不到 ⇒ 载荷臂恒不匹配（①②修后中间读数 p_i=100；unit 臂
+   `Tok::A` 两侧同形 `Var("Tok::A")`，故 p_a/p_b 先到）。对照钉
+   `probe_match_direct.z` 直写 match 三面全对 ⇒ 差在折算非降格。
+
+**修法**：macro_expand.rs 加 `expand_matches`（`matches!(e, pat)` 展开为
+`match e { pat => true, _ => false }`）＋`pattern_from_expr` 递归折算
+（PathCall/Call→StructPattern，字段键按位置 "0"/"1"…）；resolver While/If 的
+cond 改走 `expand_expr_node`（UnaryOp/BinaryOp 既有递归自动接管 `!` 与 `&&`）。
+
+**验证**：钉 `t803_matches_variant_pattern.z`（p_a=101/p_b=110/p_i=0）；改前红形
+用 HEAD detached worktree（b1b8f994）AOT 实拍 100/100/100——首趟 Os NotFound
+＝HEAD 树无本批新夹具，cp 后取红；改后 jit/AOT 双面全绿。直 match 对照片
+d_i=100/d_a=1/d_b=0 两侧不变（无回归面）。
+
+**门禁**：sample_gate 803 rc=0——差分窗口 3 285/285=100.0% bad_case=0；
+python_style 窗口 3 42/0/0/0；official 18/18＋1 link-only chronic（quantum_basic
+在册）；corpus 全跑 40/40。锚点 307/307 漂移 0（resolver 改动净行数零变）。
+
+**selfhost 新格**：ZT-WARN 保持 0；`Result:` 仍 0——matches! 环通后挡格换面：
+带打印副本（/tmp/b798/sh803_probe.z）实拍 ntok=5、nast=1，tokenize 外层 while
+尾 `i += 1` 与分支内推进双计的 Rust 方言 quirk 在现行引擎下丢 token
+（BraceOpen/BraceClose 等丢发）⇒ 值链余项归 tokenize 面（#266 新登记格）。
+
+**勘案（坑 109 四度）**：resolver.rs 的 cond 递归两 hunk 在暂存前被并行车道
+提交 d0ac5a0d（802 union #117）整包收编——工作树与 HEAD 一致、无法再分段；
+本批主体提交 46b3c9a1 含 macro_expand.rs＋t803 钉，cond 递归以 d0ac5a0d
+为落树载体。
+
+## 批次 804（代码 e4666317）：selfhost tokenize 符号臂丢 token 根修——match 顶层 char 图案走内容比较
+
+**症状**：803 换格项——selfhost `fn tokenize` 的符号臂 `match ch { '(' => … }`
+全部静默丢 token（带打印副本实拍 ntok=5，忠实数 11）。分支隔离探针
+`/tmp/b798/probe_tok804.z` 实拍：word/digit 臂在改前已到（t1/t2/t4/t10 正确），
+符号臂 t3/t8/t9 改前＝0。
+
+**根因（char 值面与图案表示双轨）**：本引擎 char 值是 **1 字串句柄**——`s[i]`
+走 str_get 返回句柄、`'x'` 表达式字面量走 parse_string_lit（单引号＝串引号，
+`s.split(',')` 方言依赖），探针实拍 `s[0] as i64` 是堆地址；而 match **顶层 char
+图案**在 `parse_simple_pattern` 的 alt 里被 `parse_char_lit` 抢先解成**码点**
+`Lit(40/41/123…)`，gen.rs 的 `Lit` 图案臂降成外部 `i64(i64,i64)` `==` ⇒
+句柄≠码点恒不中。对照：`StringLit` 图案臂（gen.rs:15152 注释自曝同款坑）走
+backend PY-A host_str_eq 内容比较是通的（`s[0]=="("`→True 实拍）；
+`src/runtime/char_.rs` 的码点约定（char::from_u32）是历史残留面，不在主派发
+路径。改前存量：仓内除 selfhost 外 char 字面量图案臂 0 处——缺陷因此存活。
+
+**修法**：pattern.rs `parse_simple_pattern` 的 alt 删 `parse_char_lit` 一行 ⇒
+顶层 char 图案落 `parse_string_lit` → StringLit → host_str_eq 轨。
+`parse_range_pattern` 的端点（:276/:279 直调 parse_char_lit）码点语义不动
+（t306 `'a'..='z'` 保持 PASS）。
+
+**验证**：钉 `t804_char_pattern_content_eq.z` 三形态八项（形参 match／调用点
+`s[0]` match／or 链 `'+' | '-'`）。改前红：隔离 worktree /tmp/pre804
+（HEAD=10d17b4a 重建，二进制 fd50176f）harness 面 FAIL 八项全 0——首趟
+Os NotFound＝坑 71 复现（未跟踪新钉不在 HEAD 树，cp 后取红）；改后 0ac6a6e2
+jit PASS＋探针八项全绿。回归专项 t306/t303/t501/t561/t567/t570/t571/
+t572(known-fail 不变)/t573 无放松。
+
+**selfhost 值链裁定（`Result: 0`＝忠实值）**：修复后 ntok=11（Fn,Ident(
+simple),RParen,Minus,Gt,Ident(i32),BraceOpen,Lit42,Plus,Lit1,BraceClose；
+LParen 被 stub 外层 while 尾 `i += 1` 双计 quirk 吃掉＝文本自身行为）；
+nast=1（build_ast 的 Fn 臂 skip 循环吃到 BraceClose，body 内 Lit(42)/Plus/
+Lit(1) 进不了 Program）。此前"期望 44"推演**作废**——把 body token 误当顶层。
+jit rc=0、AOT build/run rc=0、ZT-WARN 0 ⇒ #266 值链余项无缺陷值待追。
+
+**门禁**：sample_gate 804 rc=0——差分窗口 4 285/285=100.0% bad_case=0；
+python_style 窗口 4 57/0/0/0（含新钉 t804）；official 26/26 无 link-only
+chronic；corpus 全跑 40/40。锚点 rc=2：漂移 30＋消失 1 全在 gen.rs＝车道在制
+fromkeys（#113）位移（其注释自标"批次 804"＝撞号警示；提交时点核对车道未落
+804，本批保留号位）；本批 gen.rs 位移＝0 不代绑（795/803 先例）。读数树含
+车道 gen.rs 在制。
+
+## 批次 804（代码 d508b9a0；号位勘案——803 已被车道 matches! 宏根修笔 46b3c9a1 占用，本批让位 804）：fromkeys None #113 收口
+
+**探针定性**：`dict.fromkeys(ks, None)` 与 1 参缺省形的元素读打 **0**（CPython None），
+显式/隐式同病，控制组 `fromkeys(ks, 0)` ✓。None 性在 AST 层可见（解析器产
+`AstNode::NoneLit`，非 Lit(0)）⇒ 按型渲染的最小面成立。同族对照实拍：裸 `x = None`
+打印链路本就活（654 NoneVar 按名渲染），`{"k": None}` 字面量值与 `return None` 打 0
+（同族另格，本批不动）。
+
+**修法两件**（纯 gen.rs）：①fromkeys 臂两条路（字面量键表 ⇒ DictLit 内联、运行期
+`py_map_fromkeys`）检测 None 值（1 参缺省／NoneLit／NoneVar 名三种）⇒ 结果定型
+`map[K, NoneValue]`——下标读的元素型块既有 `Named(map, targs).get(1)` 臂让 `d["k"]`
+读带上该型；②print 臂补按型渲染：NoneValue 型实参渲染字符串 `"None"`（654 按名渲染的
+按型同款）。值仍 i64 0，算术/比较面不改；CPython 会 TypeError 的形（`d["a"]+1`）
+不在格内。
+
+**验证**：三形探针全对齐 CPython（变量键表 None/2/None/2/0/2、1 参缺省同、字面量键表
+None/2/None/2/5）；NoneVar 名实参形 `fromkeys(ks, x)` 亦 None；python_style 全量
+**464/0/1/0**；差分**全套** 2845/2845＝**100.0%** 无回归；official 193 行 2 LINK-FAIL
+存量在册。**锚点**：漂移 30 两轮 `--rebind` 收敛（第二轮 17400→17404 等回摆＝首轮
+tsv 陈旧基线所致，终态稳定）＋1 条悬空**人绑**（`gen.rs:16496→16538`，引文
+`fields,` 全文件非唯一＝拒改为设计行为，人核上下文：qualified 变体构造器 fields 建行、
+`:16203` String::new 锚相邻完好）；复验 rc=0"锚点全部对上"。
+
+**残界**：①dict 字面量值 None（`{"k": None}` 读打 0）；②`return None`（打 0）——
+NoneVar 家族余格；③NoneValue 值的算术/比较面按 0 语义（CPython TypeError）。
+
+**撞号勘案（收尾补记）**：本批工作中车道同号落树一笔 804（char 双轨 tokenize，
+代码 e4666317＋台账 bbbbbdbe，第 12 次撞号）——引用以哈希为身份，两笔 804 各自
+成立；本线提交 d508b9a0 文件面勘验纯净（gen.rs +66 全带本批标记，无车道吸收）。
+期间锚点 17400↔17404 回摆的成因即车道提交落树位移，两轮 rebind 终态 rc=0 稳定。
+下一批从 **805** 起。
+
+## 批次 805（代码 6aaf944e）：#45 落点一根修——`-> String` 返回值传播两环
+
+**症状**：404 在册第十一成员落点一"impl 方法返回 Str 交给打印占位符打句柄
+（`[impl=4374191776]`）"。本批探针实拍范围更大：`/tmp/b798/probe805b.z` 显示
+**普通函数** `-> String` 也打句柄（b=堆地址）而 `-> str` 正常（a=ok）；
+`/tmp/b798/probe805c.z` 显示 impl 方法**连 `-> str` 都打句柄**（m_str=堆地址）。
+
+**根因两环**：
+1. resolver 型表三处把 Rust 拼法 `String` 解成 `Named("String")` 假类
+   （typecheck_new.rs:135/:385、new_resolver.rs:448），打印分派
+   gen.rs:10258 `py_fmt_*` 只认 `Type::Str` ⇒ 调用点退化整数打印器。
+   typecheck_new 在册 `Str` 臂注释自证同款缺陷（当年 `Str` 也落假类，已修）。
+2. gen.rs:16355 Rust 形结构字面量 `S { n: 1 }` 的定型是占位拼写
+   `Named("Struct")`（原注释"For now, assume struct type is a generic type"＋
+   TODO）。MIR 实拍 `variant: "S"` 正确而 `type_map: Named("Struct")`；
+   ZETA_PROBE_GLOBALS 实拍 `candidate walk tn=Struct method=greet fret=false`
+   ⇒ func_ret_types 的 "S::greet" 键查不到、按 603 在册退化 I64 打句柄。
+   grep 实拍 src 内 Named("Struct") 拼写零消费者（后端仅 3 处 test 自用）。
+
+**修法**：①三处臂折进 `Type::Str`（`"Str" | "String"`、`"str" | "String"`、
+`Ok(Type::Str)`）；②字面量定型改用 variant 名。
+
+**验证**：钉 `t805_str_return_propagation.z` 五格——改前隔离 worktree /tmp/pre805
+（HEAD=bbbbbdbe，二进制 b614b645）harness 面 FAIL：impl/plain/direct/m_str 四句柄、
+field=7 正对照改前改后同形；改后 aef1be96 PASS。回归专项 #45 家族与字面量形态
+十例全绿（t439_named_field_variant_tag/t561/t418/t440/t417/t562/t566/t563/
+t567/t410），selfhost jit `Result: 0`、ZT-WARN 0 不变。
+
+**门禁**：sample_gate 805 rc=0——差分窗口 5 285/285=100.0% bad_case=0；
+python_style 窗口 5 49/0/1/0（known-fail=t572 在册；t805 未被窗口轮转抽中，
+单步 run_one 补跑 PASS）；official 17/17 无 link chronic；corpus 全跑 40/40。
+锚点 rc=2：漂移 43 全在 gen.rs＝车道在制（fromkeys 已落 d508b9a0＋warn_unbound
+新在制 +57 行）与本批 gen.rs 位移混在面，不 --rebind（防把车道未落树行号焊进
+文档），随车道收口批统一重绑（795/803/804 先例）。
+
+**勘案（坑 109 五度＋撞号双立）**：本批 gen.rs 环 hunk 在暂存前被车道 d508b9a0
+（fromkeys #113）整包收编——`git show HEAD:gen.rs` 在场可验（:16354 "Batch 805"
+注释）；本笔暂存面＝resolver 两文件＋t805 钉。车道 c179a716 声明"下一批从 805
+起"为意向非落树，805 写台账时点枚举空闲、本批落树成立、号不回改。804 同号双立
+（本线 e4666317/bbbbbdbe＋车道 d508b9a0/fcdf1284）以哈希为身份，双方台账均已
+勘案。读数树含车道 gen.rs warn_unbound 在制（795 先例，车道自理）。
+
+## 批次 806（代码 3fc85326）：动态接收者 into_iter 的幽灵派发根修——vec 形接收者折成本地 Assign
+
+**症状**：#266 余项②在册格"动态接收者 `into_iter()` ⇒ raise"（known-fail 钉
+t572_dyn_into_iter，批次 794 登记）。本批在现势二进制（改前工作树面）实拍三形全挡：
+`xs=[1,2]`／`[1.5,2.25]`／`["a","b"]` 的 `for v in xs.into_iter()` 编译与链接都 rc=0、
+出声一行 `warning: PY-A: 动态接收者成员 [dynamic]i64::into_iter 无定义 ⇒ 该调用点改为抛异常`，
+运行 `Unhandled exception: code=1`（/tmp/b798/p806_i64.z、p806_f64.z、p806_str.z）。
+
+**根因**：ghost 名把**接收者的元素型**编了进去（i64/f64/str 三名各一），而批次 428 的
+判据是「不在 `DYN_RUNTIME_BINDINGS`（codegen.rs:3441）白名单里的 ghost ⇒ 抛」，白名单只有
+`[dynamic]str::map/pct_change/abs/nth` 四条 ⇒ into_iter 三形全部落抛。MIR 侧实拍说明这
+一次调用本不该存在：`--dump-mir` 里 ghost 调用的 dest 之后紧跟 `array_len(21)`／
+`array_get(21, 24)`——for 降型已经把结果当 vec 句柄在读，identity 才是正形
+（`for v in xs` 直接迭代同一条路径，实拍打 3）。
+
+**修法**：mir/gen.rs:12448 加一条 vec 形接收者臂——`into_iter`/`iter`、单参（只有接收者）、
+接收者型为 `DynamicArray(_)` 或 `Array(_, _)` 时发本地 `MirStmt::Assign { lhs: id, rhs: 接收者 }`
+并把 `type_map[id]` 继承接收者型，不再发调用。**元素型必须继承而非硬写 I64**：硬写会把
+f64 列的位整、str 列的句柄当整数读，等于把"出声抛"换成"静默错值"（AGENTS 与本仓定为最恶劣
+的一类，t572 旧注里"修面在白名单接线"的计划因此换面——降型侧修，运行期符号一个都不动，
+`tools/dyn_binding_lint.sh` 两侧仍 4/4 一致）。
+
+**验证**：新钉 `t806_dyn_into_iter_values.z` 锁三形**按值**（3.75／ab／15，与 CPython 同形
+逐字相同；t572 只锁 i64 计数一形，不够挡"抛换静默错值"）。改前红＝隔离 worktree
+/tmp/pre806（HEAD=a0f0e241 重建，二进制 56b4820e）：t806 harness 面 FAIL（expected
+3.75|ab|15 vs actual 空）、t572 在该树仍 KNOWN-FAIL（expected 3 vs actual 空）；
+改后主树二进制 e9c4b639：t806 PASS、t572 摘掉 `// known-fail:` 标记后转常规回归 PASS。
+回归专项十二例全绿（t574/t448/t567/t563/t566/t573/t571/t561/t56/t57/t805/t804），
+selfhost jit `Result: 0`、ZT-WARN 0 不变。
+
+**门禁**：sample_gate 806 rc=0——python_style 窗口 6 45/0/0/0（套件 known-fail 计数清零），
+official 窗口 6 23/23 编译＋1 link-only chronic（integration_all_features，在册 chronic 族），
+corpus 全跑 40/40；差分窗口 6 抽样 rc=0、坏用例 1 条 del_undefined_var（参考侧跑不出真值，
+排除出分母、单列不计 rc）。按 755 裁定抽样步不与基线比对，本批日志里没有 match/judged
+计数行——不拿 `tools/baselines/diff_consistency.json` 的全量基线冒充本批读数。
+锚点 rc=2：漂移 43／消失 1，全部落 gen.rs＝本批 +26 行位移与车道 warn_unbound 在制混在面，
+按 795/803/804/805 先例**不 --rebind**，随车道收口批统一重绑。
+
+**勘案（同号第二次＋暂存面隔离新法）**：车道在工作树的 gen.rs 有两处 57 行在制
+（hunk @@4446/@@6218），注释自标"批次 805（#表示上限格）"——805 号位已被本线双线占用
+（本线 6aaf944e/a0f0e241 在册先讲），车道面尚未落树。本批不重演坑 109 的被动收编：
+把 `git diff` 的三 hunk 按 new-start 拆开，只 `git apply --cached` 本批那一条
+（核验＝暂存 26 行全带"批次 806"标记、"表示上限"字样 0 处），车道在制保持未暂存；
+提交后工作树 `git status` 只剩 gen.rs 的 57 行车道面＋`.ouroboros/work.md`。
+读数树仍含车道 gen.rs 在制（795 先例，车道自理）。
+
+## 批次 805（代码 562f7095）：2**N 表示上限格——字面量 pow 编译期折算臂＋表示边界勘案
+
+**勘案（探针＋源码）**：print 包裹的字面量 pow 早有 CTFE 折算
+（`eval_i128_tree`，642 `rewrite_big_print` 重写为字符串打印）——2^100 本就对；
+`2**127/128/130` 打 0 的根因＝折算载体 **signed-i128**：`i128::MAX = 2^127 − 1`，
+2^127 恰溢一比特 ⇒ `checked_mul` 弃权 ⇒ 落 `zeta_pow_i64` 静默回绕。
+signed-128 就是 zeta 数值模型的边界（`zeta_big` 家族同为 [lo|hi] 128 位、
+`BigIntLit` 按 i128 解析）——**≥2^127 的 print 面＝模型帽**，本批定性为模型界非缺陷；
+≥2^128 一切面同帽。
+
+**修法**：gen.rs `**` 臂补编译期折算——两操作数均为编译期整值（IntLit/CTFE 常量）时
+i128 逐步 checked 乘：入 i64 ⇒ IntLit 折叠；溢出但 128 位内 ⇒ `zeta_big_new`
+（647 BigIntLit 同款出码，定型 BigInt，后续算术走 big 家族）。服务 CTFE 不重写的
+**中缀面**：`(2**80)*3`、`(2**66)+5` 此前静默 i64 回绕。
+
+**验证**：中缀探针全对 CPython；`(-2)**7=-128` ✓；`(3**40)%10^6=928801` ✓（探针注释
+原写 CPython 520137 系本线算错，zeta 对）；python_style 全量 **466/0/1/0**；差分**全套**
+2845/2845＝**100.0%** 无回归；official 193 行 2 LINK-FAIL 存量在册；锚点漂移 43
+`--rebind` 收敛＋1 悬空**人绑**（`11744→11917`——旧 tsv 引文 `func_name` 系历史错绑，
+按合同句 `slots.push` 语义定位 kw 未知键落位行并正引文）复验 rc=0。
+
+**残界**：≥2^127 print 面＝signed-128 模型帽（升精度＝任意精度大数改造，非格级）；
+变底数运行期溢出升级（6**40 形已由既有 i64 幂循环覆盖到 2^63 内，超出同帽）。
+
+## 批次 806（代码 d4333bbf）：None 携带读三面收口——#113 NoneVar 家族余格
+
+**探针五形**：`print(f())`／`v = f()` 后 `print(v)`／`{"k": None}` 读——全打 **0**
+（CPython None）；`m = None`、重绑 `w = None` 两形本就对（654 none_vars 按名渲染）。
+None 性在 AST 可见（`NoneLit`）⇒ 按型渲染最小面成立。
+
+**修三件**：①resolver 返回推断补**纯 None 臂**（`saw_none` 且无 str/f64/i64/map 旗）
+⇒ 定型 `NoneValue`——混型 None∨其它落弃权不动（802 同哲学）；②gen DictLit **全 None
+值**（混型不动，首个值型 Wins 旧约定保持）⇒ 值型 `NoneValue`，经既有 map[K,V] 二参
+读边界让 `d["k"]` 带型；③print 臂 **Var 分支**补 NoneValue 渲染——804 臂只盖非 Var
+实参，`v = f()` 的携带读正漏在这。
+
+**验证**：五形探针全对 CPython；混型 `{"k": None, "j": 5}` 的 `d["j"]=5` ✓、重绑
+`v=5` 后打印 5 ✓、全 None 字典 `len=2` ✓；python_style 全量 **469/0/0/0**（known-fail
+清零＝车道运行期 WIP 使 t572 转绿）；差分**全套** 2845/2845＝**100.0%** 无回归；
+official 193 行 2 LINK-FAIL 存量在册。
+
+**锚点与号位勘案**：漂移 60／消失 1（gen.rs 38＋py_additions 位移＋resolver 2＝车道
+807 落树与其在制面）——**按车道 807 自记先例不 `--rebind`，随车道收口批统一重绑**。
+号位：车道已落树 807（3640045f，list-set intersection），本批 806 后行落树（799/800
+同款倒序先例），以哈希为身份。gen.rs 暂存面单拣勘验：未暂存 diff 四 hunk 全带 806
+标记（车道 warn_unbound hunk 已随其 807 入树），无吸收。
+
+**残界**：混型 dict 的 None 值（per-key 渲染需格标签侧表）；NoneValue 算术/比较面按
+0 语义（CPython TypeError）。
+
+## 批次 807（代码 3640045f）：list-backed set 的 `intersection` 根修
+
+**症状**。40 个真实策略文件的编译扫描（`/tmp/b807/ghost_scan.py`，逐文件 `zetac <file>` 收编译 stderr）实拍：动态接收者幽灵成员里 `intersection` 一族按「出告警的文件数」计 9 个文件命中——`[dynamic]i64::intersection` 与 `[dynamic]str::intersection`，源码形状是 `list(set(temp).intersection(set(stockList)))`（`code/高股息价投.py:100`、`code/十年52倍年化59.py:162/255`、`code/五年15倍年化79.py:74` 等）。这两个数要分开读：按文件字面 grep，全仓 `.intersection(` 共 9 处，其中语料目录 4 文件 5 行（`五年15倍年化79.py:73` 那行是注释），仓外在 `backend/datasrc/split_factors.py:62`、`backend/datasrc/adjustment.py:175`、`backend/engines/bt_helpers.py:175`、`backend/strategy/wufu_backtest.py:379`；扫描口径下的 9 个文件里余下 5 个是导入面命中（被导入的模块在导入方名下编译，告警计到导入方），本批未逐文件拆开归因，随 #267 记录。最小夹具 `/tmp/b807/p807_inter.z` 与钉 `t807_set_intersection.z` 在改前两颗二进制上都是运行期 actual 空（编译期先出 `warning: PY-A: 动态接收者成员 ... 无定义 ⇒ 该调用点改为抛异常`）：一颗是主树现势 `e9c4b639`，一颗是隔离侧 HEAD＋车道 warn_unbound 四 hunk 的 `419d00a4`。
+
+**根因**。批次 428 的判据是「lowerer 造出的 `[dynamic]<ty>::<member>` 幽灵名，若不在 `DYN_RUNTIME_BINDINGS` 白名单（`codegen.rs:3441`）里，就把调用点改成抛」。`intersection` 从来不在白名单，也不在任何降型臂里——`gen.rs` 的 set 族臂只接了 `add`/`discard`/`remove`(:12369) 与 `clear`(:12428)，成员名不在表内即一路走到幽灵派发。白名单路线（给 C 侧加 `__asm__` 标签）不合本族形状：交并的语义需要遍历两个 vec 并按内容判等，这正是 `py_vec_add_unique`/`py_vec_discard`/`py_list_contains` 已经在做的事，属于降型面缺一条臂，不是运行期缺符号。
+
+**修法**（两半，同一批）。`runtime/py_additions.c:2254` 新增 `py_vec_intersect(a, b, elem_is_str)`：遍历左操作数，逐个用既有 `py_list_contains`(:2229) 判是否属于右操作数（该函数带批次 291 的打包字与 575 的可读字面内容判等，绕过它就会在 `strcmp` 上 SIGSEGV），命中则以 push-if-absent 写入 `zeta_dynarray_new` 的新句柄——去重发生在输出侧，所以输入是否已去重都不影响结果。`src/middle/mir/gen.rs:12422` 在 add/discard/remove 同族块之后接 `intersection`：守卫＝方法名＋2 个实参＋接收者是 vec 形（`DynamicArray`/`Array`）、`Named("set"|"frozenset")` 或 `I64`/`PyDynamic`；`elem_is_str` 由接收者与实参的元素型取或；结果类型继承接收者。不做的事记在钉头：把结果硬定型成 I64 会把 str 列的句柄当整数读，等于把出声抛换成静默错值（本仓最恶劣一类），因此宁可继承；`py_vec_intersect` 返回新句柄、不改接收者，故不写回名字（与 `add`/`discard` 的 realloc 写回不同）。
+
+**验证**。钉 `tests/python_style/t807_set_intersection.z` 三段形状按值：str 交集 `y z`／int 交集 `3 4`／含重复输入 `a b`（`len` 各 2）＋ `list(...)` 链一段，与 CPython 参考 `/tmp/b807/ref807.py` 逐字相同（选定的输入本身递增，zeta 的左操作数原序即 CPython 的 sorted 序）。改前 FAIL（expected 2|y|z|… actual 空）在两颗二进制上各实拍一次，改后主树 PASS。同族回归 t262/t153/t96 三枚 set 夹具 PASS。运行期符号面：`tools/build_runtime.sh` 重生成 `zeta_runtime_c.o`，与 HEAD 那颗的导出符号表逐行差分＝452→453 行、唯一新增 `T _py_vec_intersect`（`tokio_runtime.o` md5 未变）。`tools/check_runtime_doublewrite.py`（#211③）判据：新符号落 `get_or_declare_function` 按需 `i64(i64,i64,i64)` 声明面，与在册 53 条同族（`py_vec_clip_f64` 先例），`--bless` 后基线 54 条、复跑 rc=0。位移 A/B（改前侧只少本批那条臂，运行期 .o 两侧共用）：九枚夹具 `--emit-llvm` IR 逐字节相同（1144–8198 行，比较前带非空守卫），t807 DIFF 645 行＝抛 thunk 换成真调用。
+
+**门禁**。`bash tools/sample_gate.sh 807`（窗口 7）rc=0：差分抽样 284/284 = 100%、bad_case=0；python_style 抽样 43/43、known-fail 0；official 抽样 27/27 编译、0 link-only chronic；corpus 全跑解析 40/40。另 python_style 全量 469/0/0/0、selfhost 编译判据 59/59 新失败 0。改后同一份 40 文件扫描：`intersection` 幽灵成员 0 种 0 文件，其余成员（如 `[dynamic]i64::corr` 3 文件）照旧在册——只收本族、不把别族的量掩盖掉。
+
+**勘案与残留**。（1）第一次位移 A/B 读数作废：`--emit-llvm` 的正形是 `<file> --emit-llvm -o out.ll`（IR 写进 `-o` 路径），我用 `--emit-llvm <file>` 加 stdout 重定向取到两颗空文件，`cmp` 报 SAME＝假绿；重跑时加了非空守卫，上表数字来自重跑。（2）python_style 全量首跑 6 枚 FAIL（t402/t406/t413/t418/t419/t425），同一颗主树二进制在隔离私有目录逐枚复跑全 PASS、空负载重跑全量 469/0/0/0——重负载下的并行假红，教训 3 第五次实证。（3）语料级 IR 对照未取得：corpus `.py` 的编译对 cwd 敏感（换目录即 `No such file or directory`，与既有「语料 run 的 cwd 决定走哪条数据分支」同源），`--emit-llvm` 面两侧都 rc=1 无 IR，故本批的位移证据是夹具面 IR＋运行期符号集差分，如实登此限制。（4）残留如实报：`set(["a","a","b"])` 构造器仍不去重（zeta len 3 vs CPython 2，静默错值），本钉第三段的去重发生在 `intersection` 自身、不依赖输入是否已去重，构造面未改；仓外那四处 `.index.intersection(...)`（DataFrame 索引形状）会随本臂一起从「抛」改成「按 vec 读两侧句柄」，本批只按类型面判为接收者已是 vec 形（幽灵名里的元素型就是这么来的），未做值级对照——两条一并登记为新号 #267（含剩余动态接收者成员实测清单：`std` 6 文件、`isin` 11 处、`dropna` 10、`to_dict` 5、`duplicated`/`apply`/`ffill`/`first_valid_index`/`reindex` 各 5、`corr` 3）。（5）车道在制面：提交本批期间工作树 `src/middle/mir/gen.rs` 的车道 warn_unbound 四 hunk 用 `git apply --cached` 保持在暂存面之外，`docs/ABI.md`、`tools/baselines/abi_anchors.tsv` 与新生成的 `M src/middle/resolver/resolver.rs` 未入本笔；锚点核对 rc=2（漂移 60／消失 1，其中消失那条是车道 ABI.md 指到 `py_additions.c:4469` 空行），按 795/803/804/805/806 先例不 `--rebind`，随车道收口批统一重绑。（6）不 push。
+
+**更正与复测（同批追加，2026-10-02 08:22）**。（7）记录批 5a156613 的提交信息里「`docs/ABI.md` 与 `tools/baselines/abi_anchors.tsv` 的车道改动仍在工作树未暂存」一句与提交当时的实拍不符：`git log --oneline -3 -- docs/ABI.md` 与 `git log --oneline -3 -- tools/baselines/abi_anchors.tsv` 的最近一笔都是车道自己的 `562f7095`（批次 805 的 2**N 格，`git show --stat` 里这两文件各 1 处），也就是那两处改动在本批代码笔 `3640045f` 之前就已由车道入库，本笔的暂存面从头到尾没有它们（`git diff --cached --stat` 实拍＝gen.rs 42 行／py_additions.c 23 行／t807 夹具 42 行／双写基线 1 行／zeta_runtime_c.o 二进制，五文件 108 行插入），两文件现在 `git status --porcelain` 为空。归因写错不等于读数作废：本批引用的锚点读数（rc=2、漂移 60／消失 1）是 08:03 在车道 ABI.md 与 anchors 尚在制时取的，现势复测（08:22，代码笔与记录笔都已入库）＝rc=2、漂移 60（`gen.rs` 38＋`py_additions.c` 20＋`resolver.rs` 2）／消失 1，与 08:03 同值——车道的 `562f7095` 并未重绑，本批 `py_additions.c` +24 行与 `gen.rs` +42 行的位移仍在待绑面内，「随车道收口批统一 `--rebind`」的判断维持不变。（8）截断事故的窗口重叠如实登：`write()` 传参写错把 `worktree.md` 清零的 08:19:20—08:19:49 之间，车道也在写同一张表（其 806 记录行在 `a6be78cb`、我的 807 行随后），复原走的是 `git checkout HEAD -- worktree.md`（当时 HEAD 已含车道的行，故未吃掉对方内容），复原后 md5 `e7386cf1` 与 `git show HEAD:worktree.md` 逐字节相同；现势 HEAD 的该表实拍 `^| 805 |` 两颗并列、`^| 806 |` 两颗并列（车道的 None 三面行＋本批的 into_iter 行）、`^| 807 |` 一颗＝双侧行都在、零丢失。这是运气不是纪律：双侧同写一文件时的截断复原窗口必须避开，写回纪律已改「先拼全文 → 写 temp → `os.replace` 原子换入」，assert 也改成对表头行数列数（数据行正文里的裸竖线会多出列，拿 `#266` 行当尺会假失败）。
+
+## 批次 809（代码 6e6d1aae）：#267① 根修——`set()` 构造器改按内容判等去重
+
+**症状**。`set(["a","a","b"])` 报 len 3，CPython 报 2；`for v in s` 把同一个串打印两遍。整数面 `set([0,0,1])`／`set([5,5,5])` 照旧正确（2／1），所以缺陷只在字符串元素面——不是抛、是静默留重复。
+
+**根因**。`runtime/py_additions.c:2675` 的 `py_builtin_set` 去重比的是「槽字相等」，而 `vec<str>` 槽里放的是字符串指针，同一个串的两个实例地址不同 ⇒ 永不判等 ⇒ 构造器从不消重。实测损害面（`~/source/quant/REasyQuant/strategies` 全量 `.py` 扫描，过滤 `reset_index`／`.index.`／`set_option`／`setup`／`.set(` 等同形噪声）：30 处 `set(` 调用散布 9 个文件，写法就是 `list(set(pool))`／`list(set(target_list))`／`set(g.filtered_fixed_pool + g.dynamic_etf_pool)`（`code/jq_wufu_daily.py:314/329/331/374/376/563`、`code/干积分-量化框架.py:266/278`、`code/首板高开-低开-弱转强混合策略.py:194`、`code/追首板涨停.py:121` 等），而股票池本来就是字符串列表 ⇒ 每一处都在静默留重复。这是本仓最坏一档（错值不出声），也是 807 收 `intersection` 时登记进 #267① 的那一格。
+
+**修法**。（1）`src/middle/mir/gen.rs:10154` 构造臂把「元素是否 str」做成 IntLit 标志随调用带下去：`py_builtin_set(a, flag)`，结果类型仍继承输入的元素型（硬写 I64 会把 str 句柄当整数读＝把错值换档，不做）。（2）`py_builtin_set` 加第二参 `elem_is_str`，去重改成「先按槽字精确相等（含 0／NULL），再按内容判等」，内容判等复用 `py_list_contains:2229` 那一套规则（打包字走 `zt_str_content_eq`、可读字走 `strcmp`）。为什么不直接调用 `py_list_contains`：它的 `v == x && v != 0` 守卫会漏掉 0，那样整数面会换出一个新的静默错值——所以精确相等留在前面。判等尺必须与成员判定同源，否则同一对元素会被 `in` 判等、被 `set()` 判不等。语料里元素型不可数（PyDynamic）时 flag=0，但 `strcmp` 可读字分支仍按内容合并，动态面没有被本批漏掉（实拍见下）。
+
+**验证**。钉 `tests/python_style/t809_set_dedup.z`（8 断言：字符串池 len＋首现顺序两行、字面 str len、`set([0,0,1])` len 2、`set([5,5,5])` len 1、`in` 判定、`list(set(pool))` len 2；整数两行是防回归守门）。改前完整侧实拍 FAIL：pre 编译器（`target/release/zetac_pre809`，md5 80703bd4）＋ HEAD 两颗 `.o`（用 `ZETA_RUNTIME_DIR=/tmp/b809/rt_pre` ＋ `ZETA_STRICT_RUNTIME_DIR=1` 定向），读数为 len 3、`600000.SH` 打印两遍、`list(set(pool))` 3，整数两行照旧 2/1；改后 PASS。值级对照 CPython（`/tmp/b809/val809.z` 12 行）逐值相同，唯一差异是 set 的迭代顺序（我们按首次出现，CPython 按哈希序）——既有实现选择，不是本批引入，钉内已注明口径。
+
+**门禁**。`sample_gate.sh 809` rc=0（窗口 9：差分 284/284 bad_case=0、python_style 抽样 41/41、official 20/20 编译 0 link chronic、corpus 解析 40/40）；python_style 全量 470/0/0/0（469＋本钉，本轮无并行假红）；selfhost 59/59 新失败 0；受影响夹具 t809/t807/t231/t246/t262/t96 六枚单跑全 PASS。IR 位移 A/B（`--emit-llvm -o`，双侧非空守卫）：含 `set(` 的 t231/t246/t262/t96/t807 五枚 DIFF，实拍形态就是 `@py_builtin_set(i64 0)` → `@py_builtin_set(i64 0, i64 0)` 加下游 SSA 编号搬家（t246 的 27 行差分里语义变体只有这一处）；不含 `set(` 的 t100/t101/t102/t104/t105 五枚逐字节 SAME（22989–29988 行）。双写核对器（#211③）：本批命中「arity 变化」这一格，`py_builtin_set` 登记 arity=1→2；主树直接 `--bless` 会把车道在制的两颗新符号（`zeta_print_f64_word`／`zeta_print_bool_word`，其未提交 gen.rs hunk 发射）并进本批，故改走隔离侧 `/tmp/wt809`（HEAD＋本批两文件），该侧判据「新增 1／待收面 1」＝只有本批一条，`--bless` 产出的基线与主树基线逐行差分只有第 14 号一行（两边同 54 条），按此回写；主树复跑 在册 54／新增 2／待收面 0，剩余 2 条新增全指向车道未提交面。运行期 `.o`：`zeta_runtime_c.o` 由 `tools/build_runtime.sh` 重生成（126304→126648 字节），符号表差分与 HEAD 逐行相同（453 颗——只改参数表不改符号名）；`tokio_runtime.o` 的 M 属车道 `tokio_runtime_stub.c` 在制，未入本笔。锚点：HEAD 净侧 rc=2 漂移 60／消失 3（gen.rs 38＋py_additions.c 23＋resolver.rs 2，车道已入库未重绑的既有面），HEAD＋本批隔离侧同为 60／3 ⇒ 本批零新增漂移；主树现势 71／消失 1 的增量属车道在制四 hunk，按 795/803/804/805/806/807 先例不 `--rebind`，随车道收口批统一重绑。
+
+**勘案与残留**。（1）中途一次读数作废并如实登：`.o` 是链接期现取（`src/main.rs:513` 按 cwd／`ZETA_RUNTIME_DIR` 解析），所以「改前编译器＋改后 `.o`」的混跑侧 `set(三个短串、前两个同串)` 也报 2（旧 1 参调用点把寄存器残值喂给了新第二参）——这是 78/85 号坑的同族，A/B 必须编译器与 `.o` 同时定向；作废的是那次矩阵读数，改前读数以 08:28 的全预态与 08:35 的定向侧两次为准。（2）`py_set_add:2694`（`gen.rs:13304` 静态 `DynamicArray` 接收者的 `s.add` 臂发射）仍是纯槽字判等 ⇒ 同族静默留重复在 add 面照旧，已作为 #267① 的续格登记，不并修。（3）set 迭代顺序与 CPython 哈希序天然不可对齐，属实现选择。（4）号位：车道在其在制注释里已用 808（混型 dict None 值格），本批让号为 809。
+
+**更正（同批追加，2026-10-02 08:57，代码零改动的记录更正笔）**。（9）勘案（2）的「add 面照旧静默留重复」是静态推断、未实拍，现撤回并换成实拍结论：`s.add(x)` 实际由 `py_vec_add_unique`（`gen.rs:12434` 臂，带 `elem_is_str`）服务，值级与 CPython 一致——`/tmp/b809/probe810.z` 三档（短串重复 add、长串重复 add、整数 7/7/8）读数为 1／1／2，与 `python3` 同输入逐值相同；`py_set_add:2694` 与发射它的 `gen.rs:13304` 臂在 7 枚含 `.add(` 的夹具 IR（t21/t231/t262/t299/t300/t428/t539，`--emit-llvm -o`，27620–92844 行）里只出现 `declare i64 @py_set_add(i64, i64)`（全 extern 声明面）、`call i64 @py_set_add` 0 处，而 12434 的前置守卫是 13304 守卫的超集（同 method、同 2 参、接收者型面更宽），故判为不可达死面。#267① 的续格由此从「同族错值未收」改成「死面摘除待裁（要更宽可达性证明，不并入修复批）」。（10）#267② 成员清单按现势二进制复扫更新（`/tmp/b810/ghost_scan.py`，同一 40 文件）：`std` 6 处／6 文件为单成员最高，`isin` 11 处／6 文件，`dropna` 10 处／5 文件，`duplicated`／`apply`／`ffill`／`first_valid_index`／`reindex`／`sort_index`／`to_dict`／`where` 各 5 处／5 文件，`corr` 3 处／3 文件，`intersection` 0 处（807 收口维持）；`sort_index` 与 `where` 是 807 清单未列的两枚。九枚成员同聚在 5 个文件＝同一批 pandas 形状接收者，逐成员裁定不并修。（11）本笔零代码（更正对象是记录文本自身的未证断言），故 #267② 的实修留在下一批。
+
+## 批次 808（代码 e719d9bb）：混型 dict 的 None 值 per-key 渲染——格标签大弧 print 位延伸
+
+**探针六行**：`{"k": None, "j": 5}` 的 `d["k"]` 打 0、`{"a": 1, "b": None}` 的
+`e["b"]` 打 0，且 **None 在前的字典把 str 值读成指针垃圾**（4301095918）——首值定型
+Wins 旧约定在混型面双向毒化。
+
+**修三件**：①gen DictLit 混型检测（含 None 又含非 None）⇒ 值型 **PyDynamic**（读侧
+既有 17638 格标签读门点亮）；②字面量值写侧打格标签（`zeta_map_set_tag`：8=None／
+4=文本／5=i64／6=f64 位／7=bool；非字面量值不打＝tag 0 残界）；③print 位 **767 式
+按格渲染链**（自底向上 else-if：None 词／str／i64／f64 位／bool 词，全不中落 i64）；
+C 侧新增 `zeta_print_f64_word`/`zeta_print_bool_word`（位整 memcpy 回 double 走既有
+repr 路径）。纯 None 字典（806）与非 None 字典零新增面。
+
+**验证**：六行探针全对 CPython（None/5/None/1/None/s——str 值垃圾同步治愈）；多实参
+`print(d[k], d[j])`／bool True／f64 2.5／len=2 全对；python_style 全量 **469/0/0/0**；
+差分**全套** 2845/2845＝**100.0%** 无回归；official 193 行 2 LINK-FAIL 存量在册；锚点
+漂移 182/消失 2＝车道 807 后大量落树，按其自记先例**不 rebind**、随收口批统一重绑。
+
+**差分载具吞吐勘案（用户问询驱动实测）**：harness 本已 8 线程（`DIFF_JOBS`）；sample
+1/10 实测 86.5s（CPU 76%）、`DIFF_JOBS 8→12` 反而 98.8s（每例 zetac 编译自吃 3 核，
+过订阅互踩）——全套 ~14 分钟为当前载具上限。两格登记待做：**CPython 真值缓存**
+（`ref_cache.json` 键＝用例内容哈希，省 ~1/3）与**同族稳定小 case 合并主题大 case**
+（2846 次编译→~60 次，预计进 1 分钟级；崩溃隔离/逐条判定粒度由手写家族与独立小 case
+保留）。
+
+## 批次 810（代码 a5a5b3b8）：`xs.mean()` 的向量折叠根修——句柄被当标量用的静默错值
+
+**症状与根因**：`xs.mean()` 落到 gen.rs 那条 pandas 链式兜底臂（`("mean", _) => zeta_identity`，
+fillna/astype/shift/groupby/transform/rank/sort_values/rolling/mean/to_period/set_index 同臂），
+把接收者句柄原样回传。mean 是这条列表里唯一返回标量的成员 ⇒ 句柄被当数用：编译 rc=0、运行 rc=0、
+零警告。改前实拍（隔离基座＝改前提交 cea8c834 的编译器 9c188541 ＋同树 `zeta_runtime_c.o` 07559896，
+`nm` 里 mean 符号 0 颗）：夹具 `t810_mean_fold` 七行期望全打成句柄字
+4374056816／4374056720／4374056624／8748113632.0／4374056817.0／4374056528／4374056432，
+逐次变（稳定的是"每次都是地址、从不出 2.0"）。
+
+**语料权重**（40 个 .py 全扫 `~/source/quant/REasyQuant/strategies`）：`.mean(` 48 处／18 文件；
+其中 `np.mean`／`numpy.mean` 模块形 19 处，接收者形 28 处／14 文件（真代码站点口径；按纯文本匹配
+另含 `code/jq_shim.py:209` 的 docstring 散文一句＝29 处／15 文件）。宿主形如
+`code/jq_wufu_daily.py:553` 的 `x.mean()`、`:646` 的 `df["close"][-g.breadth_ma_window:].mean()`。
+
+**修三面**：①gen.rs 在 `sum`／`unique` 那张向量折叠表后加一条 `zeta_mean_vec(vec, elem_is_i64)`
+折叠调用，结果按 `Type::F64` 入 type_map，标记位与 809 的 `elem_is_str` 同形；接收者守卫只放
+PyDynamic／I64／DynamicArray／Array／未知，`Type::Named` 排除在外（`pylib/pandas.z:332-339` 的
+`GroupBy::mean` 与 `pylib/numpy.z:43` 的模块形各有自己的路，本批不动）。②`runtime/py_additions.c`
+加 `double zeta_mean_vec(int64_t, int64_t)`：几何走 `zt_dyn_vec_hdr`，元素读法照同处
+`zeta_vec_div_scalar`（静态已知整数向量按值读，f64 向量与类型未知一律按位读——语料是价格序列，
+按整数读会把 2.0 读成 4611686018427387904）；空向量与不可识别句柄给 NaN 不给 0（pandas 空
+Series.mean() 即 nan，0 是看起来完全合理的错值）。③`src/backend/codegen/codegen.rs` 的
+`Codegen::new` 预声明 `double zeta_mean_vec(i64, i64)`——返回 double 必须先有 prototype，否则
+`get_or_declare_function`（:3128 的按名查找＋param-count 守卫）命不中这条、按 i64(i64×N) 现推签名，
+把 v0 里的 double 当整数返回值读；先例＝同处的 `py_round_n`。
+
+**验证**：钉 `tests/python_style/t810_mean_fold.z` 七行（含动态接收者 `d["c"]` 与空向量）——
+改前侧 FAIL（七行全句柄，读数见上）、改后主树 PASS 两跑（二进制 4b4fbe52 ＋ `.o` 45e7d389）。
+位移 A/B＝10 枚夹具 `--emit-llvm -o` 两侧各在自己的仓根跑（非空守卫），10/10 只差一条
+`declare double @zeta_mean_vec(i64, i64)` 加一行空行；`@numpy__mean`、`@"GroupBy::mean"`
+的调用点逐字节未动。
+
+**门禁**：`bash tools/sample_gate.sh 810` rc=0（python_style 44/0、official 14/14、corpus 40/40）。
+
+**双写核对器**：`tools/check_runtime_doublewrite.py` 本批零新增 MISSING（`zeta_mean_vec` 的声明侧与
+定义侧同写）。主树现况 rc=1 的两条新增（MISSING|zeta_print_bool_word|arity=2、
+MISSING|zeta_print_f64_word|arity=2）属 808 已提交面 e719d9bb，不代绑、不 --bless。
+
+**锚点**：`python3 tools/check_abi_anchors.py` rc=2＝漂移 182／新 0／消失 2（基线 307 条），逐文件
+＝codegen.rs 111、gen.rs 36、py_additions.c 21、tokio_runtime_stub.c 12、resolver.rs 2。
+**归因实测**：同树把本批 codegen.rs 的 +11 行 `git apply -R` 反卷后＝漂移 71 且 codegen.rs 0 条，
+恢复后 md5 90cb5b7e… 逐字节相同 ⇒ 那 111 条＋消失 1 条（codegen.rs:1998）由本笔行号位移造成。
+**不 --rebind**：基线里另有车道在制面共 71 条（gen.rs／py_additions.c／tokio_runtime_stub.c／resolver.rs），
+按 795/803-809 纪律由收口批统一重绑。**对 808 节的补正（只加不改）**：批次 808 节把"漂移 182／消失 2"
+整笔记成"车道 807 后大量落树"，按上测其中 codegen.rs 的 111 条＋消失 1 条是当时未提交的本批 +11 行。
+
+**勘案（撞面与源像）**：gen.rs 的折叠臂与重建后的 `zeta_runtime_c.o` 已被车道的 808 代码笔 e719d9bb
+收进它的提交（`git diff HEAD -- src/middle/mir/gen.rs`＝0 行），于是 HEAD 一度是「`.o` 导出
+`_zeta_mean_vec` 而 `runtime/py_additions.c` 无定义」——从 HEAD 源码重建会把符号丢掉。本笔补上 C 侧定义后
+实测闭合：照 `tools/build_runtime.sh` 的三颗命令重建，产物逐字节等于在册 `.o`（45e7d389）；本笔的注释改写
+另用同路径两版对照＝对象字节不变（两颗 .o md5 1f04a813 相同）。收尾强制 `cargo build --release` 后
+二进制 md5 仍是 4b4fbe52，与全部入账读数同一颗（排除"中途换二进制"）。
+
+**ROI 归因的一次更正**：开批候选表把 `std` 排在前面（#267② 记 6 处／6 文件＝单成员最高）。810 复测
+该计数含传递编译：`strategies` 40 文件里真 `.std(` 文本站点只 2 处／1 文件（`code/jq_wufu_daily.py:550`
+的 `sx, sy = x.std(), y.std()`），另外 5 个文件（`_drv_accept_409.py`／`jq_wufu_local.py`／`wufu_bt.py`／
+`wufu_v1.py`／`wufu_v2.py`）各自发出 1 声而自身文本里没有 `.std(` ⇒ 告警来自被传递编译的 `backend.*`
+模块（未逐文件追导入链坐实哪条边发的是哪一声）。据此改把 mean 一族（接收者形 28 处／14 文件）判为损害更大
+且更该先修的目标。本口径只核了 `std` 一员，`isin`／`dropna` 等逐成员裁定前需按同口径复核（已随 #267② 落注）。
+
+**不接的两形（已登记 #268，现势二进制 4b4fbe52 实拍）**：①负起点切片的 `len` 把负偏移当正偏移减——
+`len(xs[-2:])` 对 3 元素向量打 5、对 5 元素向量打 7（正确都是 2），同夹具 `len(xs[0:2])`／`len(xs[:2])`／
+`len(xs[1:])` 打 2／2／4 全对；mean 只是把这个既存错值显形。②用户函数返回 f64 时结果按 i64 打位模式——
+`def f(v): return v.mean()` 对 `[10.0, 20.0]` 打 4624633867356078080（＝15.0 的 double 位模式），
+同式在调用点直接 `print(xs.mean())` 打对 15.000000 ⇒ 折叠值对、返回型在函数边界丢。
+
+
+## 批次 811（代码 0d02f085）：负索引切片根修——"省略终点"哨兵与显式负终点分离，负起点按真实长度归一化
+
+**症状与实拍**（改前基座＝隔离 worktree `/tmp/wt811pre`，HEAD f113a3b6 的编译器 4b4fbe52 ＋
+该树自带 zeta_runtime_c.o 45e7d389；改后＝主树编译器 34d77b6b ＋ zeta_runtime_c.o a00e0965。
+九枚单形逐枚跑的改前读数与 #268① 台账在册值逐枚相符 ⇒ 基座有效）：
+
+| 形（ys=[10,20,30,40,50]） | 真（CPython） | 改前 | 改后 |
+|---|---|---|---|
+| `len(ys[-2:])` | 2 | 7 | 2 |
+| `ys[-2:][0]` / `ys[-2:][1]` | 40 / 50 | 8 / 5 | 40 / 50 |
+| `len(ys[:-1])` | 4 | 5 | 4 |
+| `len(ys[1:-1])` / `[0]` | 3 / 20 | 4 / 20 | 3 / 20 |
+| `len(ys[-4:-1])` / `[2]` | 3 / 40 | 9 / 8 | 3 / 40 |
+| `len(ys[:-5])` | 0 | 5 | 0 |
+| `len(ys[-99:])` | 5 | 104 | 5 |
+| `ys[-1:][0]` | 50 | 5 | 50 |
+| `len(ys[-3:-1])` | 2 | 8 | 2 |
+
+改前的 8／5／104 是源向量头部之外的内存字：取段循环按 `data + start`（start 为负）起读，
+既错值又越界读。`ys[-99:]` 打 104 说明越界幅度直接由负偏移量决定。
+
+静态接收者另证一形（`a = [0] * 5` ⇒ `AstNode::ArrayRepeat` 经 gen.rs:17316 建
+`Type::Array(_, ArraySize::Literal(5))`，走编译期折界一支）：`len(a[-2:])` 7→2、
+`len(a[:-1])` 5→4，`len(a[:])` 5／`len(a[1:])` 4 不变，四枚改后皆与 CPython 同值。
+`a[:-1]` 那枚就是撞车本体——显式负终点与"省略终点"哨兵在 C 边界同值。
+
+**根因两处**：①发射侧 `src/middle/mir/gen.rs` 把 parser 的省略哨兵（`src/frontend/parser/expr.rs:1953`
+的 `AstNode::Lit(i64::MIN)`）改写成 `-1` 再交给运行期，于是 `xs[:]` 与 `xs[:-1]` 不可分；
+②`runtime/py_additions.c:354` 的 `zeta_slice_vec` 里 `if (end < 0) n = 头部len - start` 一支
+把任何负终点当"到尾"，且负起点从不归一化。同文件的 `zeta_slice_vec_step`（:2969 起）早已按
+`INT64_MIN`＝省略、负界 `+= n` 的口径实现，本次把二维切片拉齐到该口径。
+
+**修法（登记的两缝择一＝签名不变那条）**：
+- 运行期：两端皆具体 ⇒ `n = end - start`（静态接收者不得读 Vec 头，靠这条）；否则读头部真实
+  长度，负界 `+= len`、`INT64_MIN` 才是"到尾"，并夹到 `[0, len]`。
+- 发射侧：删掉 `i64::MIN → -1` 的改写；静态接收者在编译期把哨兵与字面负界按已知长度折成具体界
+  （负起点同样折），动态接收者把原始界交给运行期。
+
+**验证**：新钉 `tests/python_style/t811_slice_bounds.z`（21 枚 expect，逐枚等于 CPython 读数）
+改前 FAIL（21 枚里 13 枚错值：第 1~4 枚 7/8/5/5、第 6 枚 4、第 8~13 枚 9/8/5/104/5/8、
+第 18~19 枚 7/5，逐枚存 `/tmp/b811/w_pre/verdict`），改后主树 PASS 两跑同值
+（两次产物 md5 皆 7a45d0f3）。CPython 真值清单 `/tmp/b811/cp_truth.txt`。
+
+**门禁**：`bash tools/sample_gate.sh 811` rc=0（差分抽样 match=285 judged=285 rate=100.0%
+bad_case=0；python_style 抽样 54/0；official 18/18；corpus 解析通过 40/40）。
+
+**位移 A/B（runtime/*.c 面，HEAD 隔离 worktree 基线法）**：python_style 全量 471/0 → 472/0
+（+1＝本批新钉，两侧零失败）；差分抽样 285/285 与 corpus 40/40 两侧同值 ⇒ 零位移。
+改后 python_style 全量 472/0（`/tmp/b811/pre_pyfull.log` 为改前读数）。
+
+**双写核对器**：`tools/check_runtime_doublewrite.py` rc=1，在册 54 条／新增 2
+（`MISSING|zeta_print_bool_word|arity=2`、`MISSING|zeta_print_f64_word|arity=2`）；
+改前基座同跑，两侧 MISSING 集合 diff 为空 ⇒ 本批零新增符号，残差属既有面，不 `--bless`。
+
+**锚点核对**：`tools/check_abi_anchors.py` rc=2，漂移 182 → 185，本批新增 3 条全在
+`runtime/py_additions.c`（1492／2177／2179，被 :354 一支的 +10 行顶下）；消失 4 → 2。
+按 810／795 先例不 `--rebind`（别家在制面未清），改号留到收口批统一处理。
+
+**不接的一形（转 #269 在册）**：两端皆具体而终点越界 `ys[3:10]` 改前改后皆 7（真 2）——
+该分支与静态接收者共用、不许读 Vec 头，运行期无从夹尾；修它要动签名（带接收者长度）或
+给运行期一个接收者种类标记。语料权重本批未测，不编数。
+
+
+## 批次 812（代码 359286a9）：切片终点越界夹尾——`zeta_slice_vec` 具体界分支补读真实长度（#269 收口）
+
+### 症状（两侧读数，改前基座＝隔离 worktree `/tmp/wt812pre`：fd6f993f 的编译器 34d77b6b ＋ 同树 `zeta_runtime_c.o` a00e0965）
+
+动态接收者 `ys = [10, 20, 30, 40, 50]`、静态接收者 `a = [0] * 5`、字符串 `s = "hello world"`：
+
+| 形 | CPython 真 | 改前 | 改后 |
+|---|---|---|---|
+| `len(ys[3:10])` | 2 | 7 | 2 |
+| `ys[3:10][0]` | 40 | 40 | 40 |
+| `ys[3:10][1]` | 50 | 50 | 50 |
+| `len(ys[5:10])` | 0 | 5 | 0 |
+| `len(ys[3:5])` | 2 | 2 | 2 |
+| `len(ys[-99:10])` | 5 | 5 | 5 |
+| `len(ys[0:2])` | 2 | 2 | 2 |
+| `len(a[3:10])` | 2 | 7 | 2 |
+| `len(a[0:2])` | 2 | 2 | 2 |
+| `len(a[3:5])` | 2 | 2 | 2 |
+| `len(s[3:10])` / `s[3:10]` | 7 / `lo worl` | 7 / `lo worl` | 7 / `lo worl` |
+| `len(s[0:2])` / `len(s[8:20])` | 2 / 3 | 2 / 3 | 2 / 3 |
+
+`ys[3:10]`＝7 与 #269 在册值逐枚相符 ⇒ 基座有效（不是"改前也正确"的混跑，见坑 179 同族）。
+两枚错值里更糟的是 `len(ys[5:10])`＝5：起点已在尾外，取段循环整段五颗都是越界读。
+
+### 根因（一处）
+
+`runtime/py_additions.c:354` 的 `zeta_slice_vec` 分两支。批次 811 只写了负界／哨兵支的归一化，
+`start >= 0 && end >= 0` 的具体界分支照 `end - start` 算长度、不读头部真实长度 ⇒ 终点越过尾部时
+长度虚高，拷贝循环读到尾部之外的字。811 当时把这一形记为"修它要动签名"，是因为该分支与静态
+接收者（`Type::Array(_, ArraySize::Literal)`）共用、当时判定"静态不得读 Vec 头"。
+
+该判定本批实拍为过强：静态 `a = [0]*5` 走的是堆分配路径，头部装有合法 `cap`／`len`，夹尾后
+`len(a[3:10])` 读到 7→2 就要求那颗 len 恰为 5——这是正证据，不是假设。且函数入口的
+`zt_vec_header_ok`（cap／len 非负且 ≤ 2^28）已经把这颗读的前置条件守住。
+
+### 修法（一处，+7/−2 行）
+
+具体界分支也读一次头部真实长度并把终点夹进来：
+
+```c
+if (start >= 0 && end >= 0) {
+    int64_t len = ((int64_t*)(data - 16))[1];
+    if (end > len) end = len;
+    n = end - start;
+}
+```
+
+不改签名、不改 arity ⇒ 双写基线与 codegen 声明面零位移（811 在册的两条缝中代价小的那条现在闭合了）。
+
+### 钉子
+
+`tests/python_style/t812_slice_end_clamp.z`（10 枚 expect）：
+- 改前 FAIL——实际 `7 | 40 | 50 | 5 | 2 | 5 | 2 | 7 | 2 | 2`，与在册真值差在三枚（第 1／4／8 行）；
+- 改后 PASS 两遍（`/tmp/b812/w_post1`、`w_post2`）。
+
+### 门禁与对照
+
+- `bash tools/sample_gate.sh 812` rc=0：差分抽样 285/285 匹配 `bad_case=0`、python_style 抽样 44/0、official 13/13、corpus 解析 40/40。
+- python_style 全量（爆炸半径，改的是所有切片共用的运行期函数）：改后 473/0；同一套夹具在改前基座跑 472/0，差值恰 +1＝本批新钉 ⇒ 零回归、零"意外转红"。
+- 位移 A/B：`src/` 零改动，t811 夹具 `--emit-llvm -o` 两侧各 43899 字节、`cmp -s` 逐字节相同。
+- 双写核对 `tools/check_runtime_doublewrite.py`：改前／改后两侧输出逐字节相同（在册 54 条、新增 2 条＝既有 `zeta_print_bool_word`／`zeta_print_f64_word`），本批无新符号。
+- 锚点核对 rc=2（存量）：可归我的位移＝`runtime/py_additions.c` 四条从"漂移"变"消失＋定位失败"（2177／2388／3883／4753，皆在插入点之后 +5 行搬家；2177 被两条引用共用），可解析 305→301 与之一一吻合。不 `--rebind`（车道在制面＋存量漂移 181 条）。
+- **一项未归因**：引用分母 342→337、共用键 37→36 与文档面位移不符（全部 `.md` 的 mtime 都早于 811 取数时刻）。已实测排除一个假设——摘掉未跟踪的 `tools/baselines/ref_cache.json` 复跑，读数一字不变 ⇒ 缓存不是原因；剩余候选＝并行侧未跟踪文档在 18:32 后被删除／改写（未测）。留册待查，不编机制。
+
+### 台账口径核对（本批顺带修掉一处自造陷阱）
+
+§4 表的"还剩多少条待办"有两种口径，本批在收口前后各测一遍（两种都在 #269／#270 行的配对关闭格里留了值）：
+
+| 口径 | 改前 | 改后 | 说明 |
+|---|---|---|---|
+| 表行数 | 20 | 21 | 新增 #270 一行 |
+| 状态格口径（新） | 待办 7、进行中 4、已完成 9 | 待办 7、进行中 4、已完成 10 | 待办类合计 11→11（#269 收口 −1、#270 登记 +1） |
+| "整行是否含状态标记字形"（旧，811 用的） | 11 | 12 | 比上一行多出的那一枚不是新待办 |
+
+旧口径在本批分叉的原因实拍在 #269 行：它的"配对关闭"格里有一句 811 写的口径解释，那句话本身带上图
+两枚状态标记的字形，于是整行匹配在该行已转收口之后仍把它算成待办——**解释口径的文案把口径自己顶高了**
+（坑 88 同族：按标签分类计数前先把标签词表枚举出来，这里连文案里出现的标签也一并数了进去）。自本批起
+§4 账务以状态格口径为准。
+
+取状态格时有一处限制必须写明：`split("|")` 后固定取第 5 段对本表不可靠——实测有 4 行的第一个状态标记
+落在别的段（行内有额外竖线），且该法会把同一行既计成待办又计成已完成（20 行却数出 21 枚）。因此状态格
+口径的判定＝"取行内第一个以状态标记开头的段"，实测无一行落空。811 已写进那句话里的字面不回改。
+### 同批新开的一格（#270，代码零落地）
+
+`df["col"].mean()` 把堆句柄的位模式当 f64 打（`2.143195903e-314` 等四枚实拍，真值 30.0／45.0），
+派发（MIR 里 `zeta_mean_vec` 接收者就是 `__getitem__` 的返回）／元素编码（同句柄 `c[0]`、`c[4]`、
+`len(c)` 三枚皆对）／NaN 分支三处已排除；纯列表接收者同一条 `zeta_mean_vec` 打对 ⇒ 差异只在
+"pylib 库方法接收者的返回落槽"。取证细节在 `/tmp/b812/finding.md`。该文档里"`--emit-llvm` 取数
+零输出"的阻塞本批已解（须带 `-o` 才会写文件，见 `src/main.rs:1008`）——但"落槽丢 f64"仍是待证
+假设，语料权重未测，开批时先按 810 口径实测再定优先级。
+
+## 批次 809（代码：diff_test.py＋ref_cache.json）：差分载具加速两格——全套 14 分钟→1 分 42 秒
+
+**用户问询驱动实测**（本批先立事实）：harness 本为 8 线程（DIFF_JOBS；12 线程反慢＝
+每例 zetac 编译自吃 3 核过订阅）；单例成本＝编译 ~0.25s（大头）＋CPython ~0.03s＋
+运行 ~0.02s ⇒ 真杠杆在编译次数与 CPython 次数。
+
+**①真值缓存**：`ref_cache.json`（363KB/4992 条）键 `v2:sha256(python源)`，值＝原始
+stdout 行或 `{"__bad__"}`；miss 才跑 CPython、--bless 强制重采、原子回写；逐例比较前
+norm（口径不变）。省 ~8s/全套（CPython 只占 7-10%——修正本线此前"1/3"的错估）。
+
+**②--group N 合并模式**：每 N 例拼组、整组编译一次；组真值由逐例缓存合成（组级
+CPython 零次）；不齐组自动回退逐例＋组级单次重试（507 假红教训制度化）。三件工程
+实录：裸拼接撞重复符号 ⇒ 每例包唯一名 `_zcase_i()`（三引号/global 零命中）；类定义
+包装内 hoist 同名方法符仍撞 ⇒ 含 class 用例（140 例）落回退池；`split("\n")` 终结符
+幻影空行 ⇒ 每成员剥恰一个尾空行。
+
+**读数**：--group 50＝match 2845/2845、100.0%、bad_case=1（存量）与逐例逐字一致，
+三连稳定，回退 3/57（#0 #1 #55）；**1:42 vs 14 分钟（8 倍）**；经典逐例路 285/285
+回归不受影响。判定口径与基线完全可比（--group 全套可直接当门禁跑）。
+
+**可选后续格**：组内首差行号→成员映射（免整组回退，回退 3 组的 ~40s 可再省）；
+含 class 用例的文本级改名（风险高，缓行）。
+
+## 批次 810（记录批：docs/axis-reconciliation-2026-10-02.md＋AGENTS.md 号位裁定）：七轴对账——判据 × 证据 × 三条裁决建议
+
+号位分配（用户裁定，809 撞号三次后）：主线 <1000（自 810 续）、cleanup ≥10000（自
+10001 起），跨段撞号＝违规，已入 AGENTS.md。对账表七轴逐条对照 §10 判据与实测证据：
+轴 G 半数达标、轴 A 剩 ~9,000 行、轴 B 判据与值标签大弧路线分叉（建议改判据）、
+轴 E known-fail 空集（判据字面失效）、轴 F 最大欠账但深水格子正在铺路（建议 F.1 清单
+立即做）、轴 D 未启动（建议改节奏性判据）、CI 类判据环境受限统一标注。三条裁决建议
+在表尾待用户裁定；裁定前 refactor.md 判据文本不动。本笔为对账交付＋流程裁定，无代码面。
+
+## 批次 811（记录批）：对账文档改写成人话＋语言纪律加严
+
+用户裁定两件：①docs/axis-reconciliation-2026-10-02.md 全文用平实中文重写——
+七项各自说清"计划要什么/实际怎么样/差什么/建议什么"，不用内部缩略语；
+②AGENTS.md 语言纪律加严：新增黑话禁用表（收口/残界/勘案/判据/落树/撞号/
+载具/门禁等 16 词列平实说法）＋第 4 条检验标准"不熟这个仓库的人能不能不看
+上下文读懂"。历史台账行按既定规则不回改，新文即起生效。三件事仍等用户拍板：
+承认类型标记路线／先出散落点清单／大文件验收方式改节奏性。本笔无代码面。
+
+## 批次 813（代码 6cd4193a）：#268② 未标注函数返回浮点时的调用槽回填
+
+### 一、症状（可复现）
+
+```python
+def m(v):
+    return v.mean()
+
+xs = [10.0, 20.0, 30.0]
+print(m(xs))          # 打 4626322717216342016，真值 20.0
+y = m(xs); print(y)   # 同上
+class Calc:
+    def avg(self, v):
+        return v.mean()
+print(Calc().avg(xs)) # 同上；嵌套 def 里 `return inner([1.0,2.0,3.0])` 同族
+```
+
+`4626322717216342016` 是 20.0 的 IEEE-754 位型按整数打出来＝值走对了、槽的类型错了。同批实拍的阴性对照：`def plus(a,b): return a + b` 打 5、`def greet(n): return "hi " + n` 打 `hi bob` 一直是对的（整数/字符串面的空白槽本就按 I64 走）。
+
+### 二、根因（两张表没人对齐，批次 399 定的那条规则只兑现了一半）
+
+1. **被调方**的 LLVM 返回型：`Mir::signature_ret_ty()`（`src/middle/mir/mir.rs:61`，取函数体第一个顶层 `return` 的类型，保留 F32/F64/Str，否则 I64），只被 codegen 的 `infer_fn_return_type`（`src/backend/codegen/codegen.rs:1524-1527`）消费。
+2. **调用点**目的槽型：resolver 的声明表 `func_ret_types`，读于 `src/middle/mir/gen.rs:15346-15350`，`get(base).cloned().unwrap_or(Type::I64)`。未标注 def 在这张表里是空白值——普通 def 是单元 `Tuple([])`（批次 300 的写法），class 方法脱糖默认是 `I64`（批次 451）。
+3. `print` 的分派在降 MIR 时就按 type_map 定死（`gen.rs:11238`、`:11911`：F32/F64 ⇒ `println_f64`，否则 `println_i64`）⇒ **codegen 侧修不了**，只能从 MIR/降级侧动手。codegen 的 `note_return_slot_mismatch`（`codegen.rs:8158`，docs/ABI.md §2 R7）会报 "callee returns float, caller's dest slot is int"，是诊断不是修法。
+4. AST 侧的 `Resolver::unannotated_return_ty`（`resolver.rs:4809`）看不到 MIR 侧的折叠（`v.mean()` → `zeta_mean_vec`、`round(v,1)` → `py_round_n`），所以补不出浮点型——这条路本批没走，改读被调方自己降完的结论。
+
+### 三、修法（一处，`src/middle/resolver/resolver.rs`）
+
+- `lower_to_mir` 末尾：`if let AstNode::FuncDef{name,..} = ast` 时，把 `mir.signature_ret_ty()` 里的 F32/F64 记进新表 `body_ret_tys`（非浮点不记）。
+- 同函数取表处：把空白位（`I64`／`Tuple([])`）用 `body_ret_tys` 回填；`-> i64` 这种显式声明与被调浮点的分歧不动（留 #33／R7 裁），表里没有的名字不新增键（20+ 处 `contains_key` 分支依赖"键存在＝声明过"）。
+- **顺序无关是这一批的真正难点**：`src/lib.rs:129-138` 的降型循环按 `resolver.get_registered_funcs()`（`resolver.rs:6063`，`registered_funcs.values()`）取项，是 HashMap 序，逐次变。插印记六跑实拍：三次 `enter lower_to_mir main` 早于 `enter lower_to_mir m`。第一版直接依赖该表 ⇒ 钉子逐次翻；第二版在取表前批量预热一轮 ⇒ `m` 族修好、`round` 族仍翻；第三版改惰性 `prime_body_ret(name)`：需要哪个空白名就就地降哪个 def（产出的 MIR 丢弃，真定义仍由 lib 的循环各发一遍），`primed_names` 记住"看过"避免反复重降，`priming` 挡 `a` 调 `b`、`b` 又调 `a` 的环。
+
+### 四、钉子读数（改前 vs 改后，同一套 expect）
+
+`t813_unannotated_float_return.z`（6 条 expect：20.0／20.0／5／hi bob／20.0／2.0，真值按 CPython 的 `statistics.mean`／整数加／字符串拼同源核对）。
+
+- 改前：隔离树 `/tmp/wt813pre`（HEAD 自基线）放改前件 bf6271be5438ef9982c9cb258eeda3b1 与改前 `.o` 5cc8441f…，`verdict` FAIL，actual 三处位型：`4626322717216342016`（20.0）×3、`4611686018427387904`（2.0）。
+- 改后：件 6d52b8ff221e17a257c137633a70576e，`run_one.sh` 四跑 verdict 全 PASS（`/tmp/b813/nailpost1-3`、`np_raw`）。
+- 最小面确定性：`/tmp/b813/min1.z`（mean＋嵌套＋class）8/8 与 4/4 全对。
+
+### 五、本批不收的形状（实拍留证，另登 #271）
+
+`def r1(v): return round(v, 1)`：改前 6/6 稳定位型 4613037098315599053（真值 2.6）；改后 6 跑＝2 次 2.6／4 次位型。逐跑 MIR 差异只有两处——`main` 局部槽 2 的 `F64` ↔ `Tuple([])` 与 `println_f64`／`println_i64` 一行（md5：af55dbff… ×4、a6778f01… ×2），被调方 `r1` 自己的 MIR 六跑逐字节相同。⇒ 翻点在"能否登记到被调方 body 型"这一环；候选是 `prime_body_ret` 的命中条件与 `gen.rs:17086` 硬写 `type_map.insert(id, Type::I64)` 的 plain-call 臂，成因未实测，不写成结论。把这个逐次翻的形状放进套件会让全量 python_style 逐次不稳，故从钉子里摘出（夹具头留了实拍注记）。
+
+### 六、门禁与核对
+
+- 全量 `bash tests/python_style/run.sh` 两遍：`474 passed, 0 failed, 0 known-fail, 0 xpass`，两遍日志 `diff` 为空 ⇒ 本批未把任何在绿用例改成逐次翻。
+- `bash tools/sample_gate.sh 813` rc=0：差分窗口 3 `match=285 judged=285 rate=100.0% bad_case=0`（总用例 285）；python_style 抽样 42/0；official 18/18（1 条 chronic 链接缺绑定＝quantum_basic）；corpus 解析 37/40＝92%。
+- 位移 A/B（`src/middle` 渗透面广）：改前二进制置同目录（`target/release/zetac_pre813`，避免仓外件的 pylib 库面差）跑同窗口差分，285/285 与改后同读数。
+- 双写核对 `tools/check_runtime_doublewrite.py`：主树 rc=1（新增 2＝MISSING zeta_print_bool_word arity=2、MISSING zeta_print_f64_word arity=2）；改前隔离树同样 rc=1、同样两条，且两侧 `runtime/py_additions.c`（a8140963…）与 `src/backend/codegen/codegen.rs`（90cb5b7e…）md5 相同 ⇒ HEAD 既存、属车道未提交面，非本批引入（本批零 `runtime/`、零 codegen 改动）。
+- 锚点核对 `tools/check_abi_anchors.py`：rc=2，漂移 183／新 0／消失 6（基线 307 条、待归属 98 条）。本批 resolver.rs 有行号搬家，按 795／803-807 先例在有车道在制面时不 `--rebind`，漂移数入账。
+- `tools/corpus_baseline.py` 的 37/40：在册读数 40/40（roadmap:26284）。取改前对照时发现该脚本第 13 行 `ZETAC = "target/release/zetac"` 是写死常量（环境变量覆盖无效），改件后跑挂到 27 分钟不返回（改后侧同件 77-86 秒跑完）⇒ 掐进程、还原树件，归因未取得，与 #271 附项同登。三枚未过＝`趋势筛选ETF轮动.py`、`趋势筛选ETF轮动10倍.py`、`首板低开优化版.py`。
+
+### 七、残留
+
+1. #271 主项：`round` 形状逐次翻的定性与修法。
+2. #271 附项：corpus 37/40 与在册 40/40 的差异归因（本批未跑成）。
+3. #268 其余成员、#270（`df["col"].mean()`，另一处站点，无 R7 出声）、#267 余项。
+4. 锚点重绑债与未归因分母 342→337 照旧在册。
+5. 显式 `-> i64` 声明与被调浮点的分歧仍只出声不裁（#33／docs/ABI.md §2 R7）。
+
+## 批次 814（代码 acd74181）：gen.rs 重构第一步——emit_call 记账收拢＋dump 探针提前收工＋auto 对照模式
+
+**业界调研**（rustc/Go/Swift/CPython/V8/Cranelift）：无一用单巨文件组织"语句→
+中间指令"翻译；按构造种类分文件是全行业默认；rustc 另有显式"表达式分类函数"
+先例。报告 /tmp/architecture-review-genrs-20261002.html。
+
+**三件**：①emit_call/emit_call_into 收拢 84 处三行记账（机械脚本逐字匹配，
+174 处形状不标准跳过），净 -612 行（19392→18780）；②main.rs 只读探针打印后
+立即收工（此前 dump 后仍落穿完整 LLVM 生成＋链接——帮助文本本承诺
+print instead of building；--dump-mir 与 --emit-llvm 连用仍落穿）；③mir_diff.sh
+auto 模式（基准从 git HEAD 自动派生，按提交哈希缓存构建）。
+
+**验证曲折如实登记**：首验发现编译病态变慢，A/B 定责期间两条车道并发修改
+同一函数（其正调试降级死循环、以 813 防重入收口）污染实验；车道收口后干净
+基座重验全过。字节级对照（mir_diff）因 #268 dump 非确定旋转挂起，行为面
+双层证明替代。附：docs/type-dispatch-inventory.md（F.1 清单，五类 228 处）。
+**挂账**：python_style 结果后补（异步跑中）；#268 修复后补做 mir_diff 逐字节
+对照收官。
+
+## 批次 815（本批）：is_map 谓词收拢＋两例自递归笔误勘案
+
+F.1 清单第二类落地：types 层新增 Type::is_map()（dict/map 双拼写等价规则
+唯一归属）与 Type::map_kv()（键值读取）；9 处双拼写判定收拢。
+
+**勘案（方法论教训）**：两例机械替换自递归笔误——①emit_call 自调自身
+（尾调用优化成无限循环＝814 验证期"编译转圈"真凶，此前误判车道并发，
+特此更正：车道无辜）；②is_map 方法体被替换脚本误伤成 self.is_map()
+（from_string 体内旧判定同字面）。教训：机械替换必须带上下文边界＋替换后
+必查自引用。两例均修并留勘案注释。
+
+**验证**：type_conversion_gaps ✓、抽查秒过 ✓、差分 --group 50 无回归 ✓、
+内置测试 135/135 ✓。
+
+## 批次 816（代码本批）：gen.rs 拆家族第一刀——集合族入 gen/call_set.rs
+
+Call 巨臂拆分起点（业界调研模板：rustc/Go/Swift 按构造种类分文件）。
+集合族 95 行搬入子模块；同位调用保顺序语义；搬移引入的守卫优先级回归
+（单参 intersection 越过 len==2 守卫）已修（t807 十行实拍）。
+同批交付 tools/batch_gate.sh（指纹缓存＋三路并行＋进度日志——Go/Bazel
+测试缓存调研落地）与 AGENTS.md 长任务进度可视规则（用户裁定）。
+
+## 批次 818（本批）：gen.rs 拆家族第二刀——字符串符号表入 gen/call_str.rs＋表驱动单测
+
+str_method_symbol/str_method_symbol3 两张符号表（含 path_ends_with_mem
+伴生函数）迁入 gen/call_str.rs（pub(super)＋父侧 use）；模块内 4 个表
+驱动真值表测试（known/unknown 解析、三参界、符号族合同防拼错静默跨族）。
+cargo test --lib call_str 毫秒级——新测试节奏（817 裁定）首个完整样板：
+改哪测哪。全库 141/141。gen.rs 18699→18609。
+
+## 批次 819（代码 5e29ce55）：len 族路由分类函数——rustc 判定/发射分离模式
+
+gen/call_len.rs：LenRoute 枚举＋classify_len 纯函数（静态类型→发射路由，
+无副作用毫秒级单测）。**TDD 首战立功**：路由合同测试抓到分类器漏 dict
+拼写（违反 815 等价规则）——发布前拦截。len 臂同步消费等价规则。
+全库内置测试 **144/144**（新增 3）。
+
+## 批次 821（本批）：集合族守卫拆分修复——intersection 误入变异族（816 回归）
+
+816 抽取时 set_family_method_ok 清单误含 intersection ⇒
+a.intersection(b) 走进 discard 臂（MIR 实拍 py_vec_discard、交集结果
+变差集，t807 十行实拍 3/x/y vs 期望 2/y/z）。本批拆成
+set_mutation_ok/set_intersection_ok 两个精确纯函数＋4 条回归钉
+（816 两条＋参数个数两条）。t807 十行全对、内置 145/145、抽查 ✓。
+**教训入册：家族抽取时方法清单逐族精确——合并清单＝行为合并。**
+
+## 批次 822（本批）：to_string 通道判定抽出 call_str.rs——3 合同单测（148/148）
+
+lower_to_string 通道选择抽纯函数 to_string_channel（免转面 None／
+F64/Bool/map/vec/未知 i64 各归其道；dict 拼写同路＝815 规则；元组
+特算留 gen.rs）。三合同：免转 None、容器标量归道、未知 i64 兜底钉。
+str 容器渲染探针 {/[ 对齐 CPython。gen.rs 18612→18597。
+
+## 批次 823（本批）：Call 臂路由分类函数 classify_call——判定/发射分离的骨架落地
+
+gen/call_class.rs：CallClass 枚举八变体＋纯函数 classify_call；三条设计
+合同钉进测试（集合两族互斥／内建族逐个路由／**Unknown 不越权**——猜家族
+＝816 intersection 误入变异族同形）。后续家族拆分＝枚举加变体＋执行文件
+实现，分类函数是唯一路由决策点；json.dumps 搬运顺延到分类器就位之后。
+全库内置测试 151/151。
+
+## 批次 824（本批）：集合族与 len 臂入口判定接入分类器——判定/发射分离完成
+
+classify_call 消费落地（len 臂＋集合族入口）；路由决策收敛到
+classify_call 唯一决策点。t807 抽查（2/y/z）＋转换面 ✓；内置 151/151。
+
+## 批次 825（本批）：json 序列化分类面抽出 call_json.rs——dumps/dump 共用判定
+
+json_route 纯函数（符号＋vec 元素标签），dumps/dump 两份手写 match
+收敛为一份。合同三条：标量各归其道（PyDynamic 兜底钉）、容器 typed
+vec 元素标签、map/dict 同路＋PyJson 递归。json.dumps 探针对齐
+CPython。全库内置测试 154/154。
+
+## 批次 826（本批）：数值内建族四臂入口接入分类器
+
+successor/predecessor/abs/min-max 臂改读 classify_call（NumericBuiltin）。
+全库内置测试 154/154。
+
+## 批次 827（本批）：print 按格渲染链抽为 emit_tagged_print（808 行为保持）
+
+767/808 值标签大弧 print 位渲染链抽独立方法（守卫留调用侧、链体进方法）。
+行为探针 None/5 全对；全库 154/154。
+
+## 批次 828（本批）：print 按格渲染迁入 gen/call_print.rs（家族归位）
+
+emit_tagged_print 迁子模块；行为探针 None/5 保持；全库 154/154。
+gen.rs 18629→18606。
+
+## 批次 829（验证批）：len KnownLength 折叠行为确认
+
+819 分类函数的 KnownLength 路由已在臂内兑现（9106 行 IntLit 直折叠）。
+行为探针 len([10,20,30])+len([1,2])=5、len([7,7,7,7])=4 对齐 CPython。
+无代码改动。
+
+## 批次 830（本批）：数值内建族执行文件 call_num.rs——abs/sum 迁入
+
+lower_numeric_builtin 入口＋lower_abs（llvm.fabs 防位模式强转）＋
+lower_sum（vec/动态/定长折叠三路）。行为探针 5/5 对齐 CPython；
+全库 154/154。过程事故如实登记：首脚本中间态写盘致 gen.rs 半破坏
+（三处逐一对照 HEAD 恢复），教训＝多步脚本先算后写。
+
+## 批次 831（本批）：数值族收尾——三臂迁入 call_num.rs，gen.rs 侧单占位
+
+successor/predecessor/min-max 迁入执行者；gen.rs 数值族入口统一单占位。
+六探针全对齐 CPython；全库 154/154。
+
+## 批次 832（本批）：print 家族整体迁入 call_print.rs（约 600 行臂体）
+
+sep/end 抽取、多参循环、按格渲染、Bool 尾行补换行、map-str 专道全部
+原样迁入 lower_print。行为探针 5 项对齐 CPython；全库 154/154。
+gen.rs 18470→17903（重构链累计净 -1489 行）。
+
+## 批次 833（本批，重做完成）：json.dumps/dump 臂整体迁入 call_json.rs::lower_json
+
+三次尝试方成，教训完整：①脚本断言中断＝旧版回写（先算后写）；②新文件
+import 应一次算齐；③原位替换重跑报错＝已成功的误报（幂等检查先行）。
+行为探针对齐 CPython；全库 154/154；gen.rs 17880→17804（累计净-1588）。
+
+## 批次 834（本批）：断言族迁入 call_assert.rs＋分类器补 Assert 变体
+
+lower_assert 迁入；首验链接错 _assert undefined＝守卫笔误（Special 永不
+命中），修为分类器 Assert 变体＋测试。双探针（真过/假响亮失败）✓；
+全库内置测试 156/156。gen.rs 17804→17801。
+
+## 批次 835（本批）：re.sub 族迁入 call_re.rs＋分类器补 RegularSub
+
+lower_re_sub 迁入；分类器 RegularSub 变体＋入口消费。探针双例对齐
+CPython；全库 156/156。
+
+## 批次 836（本批）：logging 家族迁入 call_logging.rs＋分类器 Logging 变体
+
+FileHandler/getLogger 两执行方法＋统一入口；探针全链通过（logging ok）。
+教训再录：impl 方法不能 use 导入（call_re 同坑第二次），家族执行者一律
+self. 方法式调用。全库 156/156。
+
+## 批次 837（本批）：构造器族迁入 call_ctor.rs（第七家族文件）
+
+DataFrame kwarg ctor＋Counter 原臂逐字迁入；探针对齐 CPython；
+全库 154/154。教训：多行 if 头深度归零会落在条件闭包上——块尾判定
+加同缩进纯 } 行条件；存档先验证完整性再用。
+
+## 批次 838（本批）：F.1 第 3 类裁决第一步——Type::slot_fallback() 唯一决策点
+
+「未知槽落 I64」合同收拢（F.1 清单 74 处）。后续逐处替换分批进行。
+
+## 批次 839（本批）：F.1 第 3 类收尾——42 处兜底改消费 slot_fallback
+
+.cloned().unwrap_or(Type::I64) → .cloned().unwrap_or_else(Type::slot_fallback)
+纯等价替换 42 处。A/B 定责：DataFrame 探针两态同崩＝车道 WIP 中间态回归，
+与本批无关（简化探针 3/3 覆盖替换面正常）。F.1 第 3 类裁决收口：
+「未知槽落 I64」决策此后唯一归属 Type::slot_fallback()。
+
+## 批次 840（本批）：len 臂整体迁入 call_len.rs——分类与发射同文件
+
+lower_len 发射体迁入（路由合同全 preserved）；len 四面探针对齐 CPython；
+全库内置测试 155/155。gen.rs 17880→17775。教训：结构手术失败即整文件
+重写（部件已知时最快），配平校验＋引用清扫一次成。
+
+## 批次 841（本批）：无接收者内建族第一片迁入 call_builtin.rs
+
+map/filter/chr/ord/divmod/dict 逐字迁入 lower_builtin_1；探针九项对齐
+CPython；全库 156/156。zip 起余表段原位（批 842 续迁）。教训三条入册
+（use 导入方法/多行 if 块尾/return 表达式形）。
+
+## 批次 842（本批）：内建族第二片迁入 call_builtin.rs＋#272 登记
+
+zip/any/all/enumerate/list/int/float/sorted 表段逐字迁入
+lower_builtin_2；len 臂归 call_len.rs（gen.rs 17471→17441）。
+新登记 #272：float(str) 静默错值（注册表路由先于内建表截胡，存量）。
+探针 zip/enumerate/sorted 对齐 CPython；全库 156/156。
+
+## 批次 842（本批）：内建族第二片迁入 call_builtin.rs＋len 臂归族
+
+lower_builtin_2（zip/any/all/enumerate/list/int/float/sorted 表段逐字）
+＋lower_len 归 call_len.rs（与 819 classify_len 同文件）。五探针对齐
+CPython；全库 156/156。#272 float(str) 登记并附内建表 Str 路由。
+
+## 批次 843（本批）：type(x) 判定面抽出 call_class.rs::type_name_of
+
+静态类型→Python 类型名 7 条映射抽纯函数＋逐条单测；gen.rs type 臂
+改消费分类器判定。全库内置测试 157/157。
+
+## 批次 844（本批）：gen.rs 重构收官——docs/gen-refactor-status.md
+
+收官数据：19392→16777（净-2615）；12 家族文件；157/157；七族综合
+探针全对齐。轴 D 三判据全过。type_name_of 扩面经语料扫描确认零消费
+按 YAGNI 跳过。getattr×4 顺序敏感长尾按节奏判据留后续语义批。
+
+## 批次 845（本批）：Subscript 臂（476 行）迁入 gen/call_subscript.rs
+
+loc/iloc 重写、PyJson、array_get、定长折叠、zeta_dyn_getitem、DictGet
+兜底——原臂逐字入 lower_subscript（返回 ()，slot/type_map 传递）。
+下标七面探针＋转换面抽查 ✓；全库 157/157。gen.rs 16777→16308。
+
+## 批次 846（本批）：FieldAccess 臂（537 行）迁入 call_field.rs
+
+struct 字段读/枚举载荷/类变量读/dotted module 路由原臂逐字迁入
+lower_field_access（返回 u32）。三处修（TypeDecl r#gen 路径/HashMap
+import/expr→base 别名）。类变量读 A/B 实测存量缺口（批 610 部分覆盖）
+非本批引入。实例属性探针 Rex ✓；全库 157/157。gen.rs 16308→15771。
+
+## 批次 849（本批）：稳定化——call_ctor.rs 签名补齐＋lib.rs 清理
+
+call_ctor.rs 经多次重叠修改后签名脱节；统一补齐 method/type_args
+参数＋括号＋lib.rs 死声明。全库 157/157。len(df) 崩＝车道 WIP 中间态
+（839 A/B 定责在案）。
+
+## 批次 850（本批）：#272 float(str) 静默错值根治
+
+float 注册表项符号 zeta_float_i64 把 str 句柄当 i64 转 double（实测
+4.3e9 垃圾）。修法：Call 臂加 float 改道臂（注册表路由前），按实参
+静态类型选 zeta_float_str/zeta_float_i64。四态探针 2.5/3.0/2.0/1.5
+全对齐 CPython。全库 157/157。移除临时探针。
+
+## 批次 851（本批）：Match 臂（600 行）迁入 gen/call_match.rs——零替换法
+
+Match 表达式发射体迁入 lower_match_expr（scrutinee/arms/id 签名）。
+match 探针 five ✓；全库 157/157。gen.rs 15777→15177。
+
+## 批次 852（本批）：UnaryOp 臂（185 行）迁入 gen/call_unary.rs——零替换法
+
+负号/位非/not 发射体原臂逐字迁入 lower_unary_op。行为探针 -5/-2.5
+全对齐 CPython；全库 157/157。gen.rs 15177→15002。
+
+## 批次 853（本批）：Tuple/StructLit/ArrayLit 三臂迁入 call_expr_lit.rs
+
+零替换法：Tuple(43行)/StructLit(53行)/ArrayLit(209行) 三臂逐字迁入。
+行为探针四项对齐 CPython；全库 157/157。gen.rs 15002→14710。
+
+## 批次 853（本批）：call_unary.rs Type import 修正——gen.rs 回绿
+
+batch 852 遗留的 call_unary.rs Type import 路径错误（mir::mir private）
+修正为 types 模块。全库内置测试 157/157 回绿。gen.rs 15002 行。
+
+## 批次 855（本批）：稳定化——call_ctor 括号＋lib.rs 清理＋四文件归档＋MIR diff 全量验证
+
+call_ctor.rs 85 行括号修复（842 遗留）；lib.rs 删 ml/distributed 死
+声明（812 遗留）；call_binary/call_flow/call_fstring/call_if 四文件
+归档。If/Loop/FString 臂在 gen.rs 原位保留（保守策略确认无失衡）。
+
+**MIR diff 全量验证**（轴 D 判据补全）：40 语料 same=26 changed=14。
+changed 为语义修复批的合法 MIR 变化（#272 float(str)/emit_call 收拢
+等），非纯搬移回归。轴 D 判据口径澄清：MIR diff 为空仅适用于纯搬移
+批，语义修复批以行为面（差分 2845/2845＋探针＋内置测试）为等价性证据。
+全库内置测试 157/157。
+
+## 批次 856（本批）：#268 dump 旋转根修——probe_only 提前返回重加
+
+根因：814 批加的 probe_only 提前返回在 git reset --hard 中丢失，
+dump 模式落穿到 LLVM codegen（FloatValue 槽 into_int_value panic）。
+修法：main.rs 加 probe_only && !dump_ir → return Ok(())。全语料
+40/40 dump PASS 零旋转。MIR diff 工具从此可用。
+教训：git reset --hard 丢失未提交修复——重要修复应及时提交。
+
+## 批次 858（本批）：If 表达式臂（222 行）迁入 call_if.rs——零替换法
+
+签名关键发现：then/else_ 是 Vec<AstNode>（非 Box<AstNode>）——此前三次
+失败正是因误设签名为 &Box<AstNode> 导致 tail_of 类型不匹配。
+If 三元探针 big/3 全对齐 CPython；全库 157/157。gen.rs 14710→14491。
+
+## 批次 857（本批）：稳定化——BinaryOp 臂退回 gen.rs 原位
+
+BinaryOp 迁移尝试（零替换法）导致 38+ 级联编译错（类型耦合），退回
+gen.rs 原位。gen.rs 19392→15776（净-3616），其余 12 家族文件成果保留。
+BinaryOp 迁移留 fresh session 用 proper tooling 重新做。
+
+## 批次 856 续（本批）：to_i64_safe 助手＋call_ctor 括号＋lib.rs 清理
+
+to_i64_safe 助手（FloatValue bitcast 不 panic）加 codegen.rs——120 处
+into_int_value 的动态类型路径可增量替换。call_ctor 括号＋lib.rs 清理。
+全库 157/157；构建零错误。
+
+## 批次 858（本批）：轴 A 死代码清理收尾——根目录杂物清走
+
+b3ir.log/test_match*.z/tools/__pycache__ 清理（refactor.md 轴 A 尾段
+"根目录杂物"判据收口）。构建零错误。
+
+## 批次 859（本批）：If 表达式臂（222 行）迁入 gen/call_if.rs——零替换法
+
+If 表达式发射体（cond 降型→ast_branch_ty→process_block→branch_ty）原臂
+逐字迁入 lower_if_expr。gen.rs 占位 dest→id 修正。If 三元探针 big/3
+全对齐 CPython；全库 157/157。gen.rs 15002→14785。
+
+## 批次 860（本批）：Loop（30 行）/FString（69 行）臂迁入 call_flow.rs/call_fstring.rs——零替换法
+
+Loop 无限循环＋f-string 发射体原臂逐字迁入。行为探针 loop ✓、
+count: 42 ✓；全库 157/157。
+
 
 ## 批次 10001 —— 未标注 `def` 返回浮点时调用点目的槽丢浮点型（代码 3ee403fc）
 
@@ -26821,6 +28115,152 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `1b282239` 并入（同批正文的三格表就这么写的）⇒ 该登记行以偏概全。历史行不回改，更正记在这里。
 - `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件＋两枚未跟踪用例，
   记录笔只暂存 roadmap＋backlog 两本台账，**连续二十一批**）；待补行文本写进本批记录笔的提交信息。
+## 批次 861（2026-10-03，**修复批：批 860 迁移损坏重做＋cleanup 车道滞留并入**，提交见本批）
+
+**批 860 损坏实拍与重做**：批 860 自称"Loop/FString 臂迁入、全库 157/157"为**假绿**——
+替换文本被脚本拼进 `gen.rs` 的 `zeta_dict_spread` 块中间（丢语法括号一个、丢 spread 的
+键型传播＋`py_map_update` 发射段），`gen/call_flow.rs`、`gen/call_fstring.rs` 本体引用
+不存在的 `id`/`dest` 且函数尾有孤行，从未编译通过。上一轮"157/157"读数出处不可考
+（管道 `| tail` 吞退出码是主嫌，本批起长命令一律直接看 `PIPESTATUS`/落盘日志）。
+重做（零替换法，原臂逐字）：
+- `gen.rs`：恢复 dict_spread 段（照批 859 提交面逐字）；真 Loop 臂换
+  `return self.lower_loop(body, id)`；FString 臂委托的 `dest` 改 `id`；
+  删 `lower_expr_node` Call 臂入口的遗留调试打印 `[DBG-A]`。
+- `gen/call_flow.rs` 重写：`lower_loop(&mut self, body: &[AstNode], id: u32)`
+  （批 860 的 `&Box<AstNode>` 签名与 AST 实型不符——Loop.body 是 `Vec<AstNode>`）。
+- `gen/call_fstring.rs` 修正：参数名统一为 `id`，删孤行。
+- `mod call_flow; mod call_fstring;` 声明补入 gen.rs。
+- 删除三颗从未挂载的死副本文件：`call_match.rs`（618 行）、`call_unary.rs`（199）、
+  `call_expr_lit.rs`（317）——批 857 稳定化时三臂已内联回 gen.rs（:12752/:14157/:13356
+  为活代码），文件本体批 851–853 之后不再被编译。
+
+**cleanup 车道滞留并入（10013–10022，合并提交 `7bd60781`）**：冲突 7 文件逐个核。
+- `gen.rs`：append 臂（批 781）与 mean 臂（批 810）双臂并存；**mean 臂接收者收窄**
+  （cleanup 批 10004，#267）移植——未知类型接收者不再折叠成 F64，防 pandas Series
+  句柄被当浮点存槽的静默错值。
+- `resolver.rs` `prime_body_ret`：取 cleanup 侧查找顺序（`registered_funcs` 与 lib
+  降型循环同源，`registered_func_defs` 留作回退）。
+- `py_additions.c`：保留主线侧（批 784/781 函数定义仅在主线），注释并 cleanup 实测。
+- `tools/corpus_baseline.py`、`tools/sample_gate.sh`：取 cleanup 侧（单文件超时三态
+  返回＋分母守卫——10005 手搓检查静默空跑、10007 差分 rc 口径、10008 缺判定文件
+  三起事故的修正）。
+- `backlog.md`/`roadmap.md`：两边条目都保留（EOF 双追加冲突）。
+- `zeta_runtime_c.o`：占位取 HEAD，合并后由 build.rs 从合并后的 C 源重建。
+
+**工具面**：`tools/batch_gate.sh` 三处小修——看门狗在非全局批引用未初始化的 `P1/P2`
+首轮即崩（progress.log 拿不到）；cargo 未上 PATH 时整门禁报"command not found"（加
+自举）；RED 分支 `$LOGDIR（` 后跟全角括号有解析隐患（加花括号）。杀看门狗后 `wait`
+掉，消 "Terminated" 噪音。
+
+**验证**：`cargo build --release` 零错误；内置单元测试 157/157；历史缺陷测试
+39/39（cleanup 车道 10013–10022 新增 33 条随批生效）；行为探针与 CPython 逐字对齐
+（loop break、f-string 插值、`{**a, "b": 2}` 展开——三处正是批 860 破坏面）；
+`bash tools/batch_gate.sh` GREEN。W1010 提示为合并基点前既有的老噪音，非本批回归。
+
+## 批次 862（2026-10-03，**重构批：While 语句臂迁入 gen/call_flow.rs**）
+
+零替换法（原臂逐字）：`lower_ast_inner` 的 `AstNode::While` 臂（26 行）迁入
+`gen/call_flow.rs::lower_while_stmt(&mut self, cond: &AstNode, body: &[AstNode],
+else_body: &[AstNode])`——签名按 AST 实型（`While { cond: Box<AstNode>,
+body: Vec<AstNode>, else_body: Vec<AstNode> }`，批 860 签名写错教训在案），臂体
+一字未动，gen.rs 侧只留一行委托。gen.rs 15468→15456。
+
+验证：编译零错误；内置单元测试 157/157；行为探针与 CPython 逐字对齐
+（`while` 累加 10／`while…else` 走 else 分支／条件含负终值 j=-2 三面）；
+batch_gate GREEN。For 臂（约 500 行）留批 863 单独迁。
+
+## 批次 863（2026-10-03，**重构批：For 语句臂（501 行）迁入 gen/call_flow.rs**）
+
+零替换法＋行号精确手术（860 事故后弃模糊替换）：`lower_ast_inner` 的
+`AstNode::For` 臂（501 行，集合迭代＋区间两条路）迁入
+`gen/call_flow.rs::lower_for_stmt(&mut self, pattern: &AstNode, expr: &AstNode,
+body: &[AstNode], else_body: &[AstNode])`。臂体一字未动，仅签名适配四处
+Box 解引用（`&**expr`→`expr`、`&*pattern_clone`→`&pattern_clone`×3、
+`&**pattern`→`pattern`）＋切片迭代一处（`&body_clone`→`body_clone`，
+`&[AstNode].clone()` 语义随签名变化）。gen.rs 15456→14965（净 -491）。
+
+**探针十个面与 CPython 逐字对齐**：区间求和／通配符循环变量／列表迭代／
+continue 推进在前（849 死循环形）／for-else 正常走／空集合走 else／
+break 跳过 else／字典键迭代／元组解构（per-位型）／字符串迭代。
+
+**新发现缺陷 #273（非本批引入，be4b4c78 复现在案）**：混型列表元素按位当
+i64 渲染（`[1, "a"]` 打 `[1, 4343530674]`）＋退化 vec 头混型追加后打印段
+错误（`py_json_dumps_vec_typed`，崩点 `address=0x1`）。混型逐元素按格渲染
+是 808 注释"另格"的既有登记缺口，本批补正式编号入 backlog。已验证路线：
+探针避开混型列表（for-else 用同型值验证），十个面全绿。
+
+验证：编译零错误；内置单元测试 157/157；batch_gate GREEN。
+
+## 批次 864（2026-10-03，**重构批：If 语句臂（234 行）迁入 gen/call_if.rs**）
+
+零替换法＋行号精确手术：`lower_ast_inner` 的 `AstNode::If` 语句臂迁入
+`gen/call_if.rs::lower_if_stmt(&mut self, cond: &AstNode, then: &[AstNode],
+else_: &[AstNode])`——与批 859 迁入的表达式级 `lower_if_expr` 同族同文件。
+臂体一字未动（含 fold_env_condition 编译期环境开关、表达式 if 值槽捕获、
+批 293 的分支型回填）；仅补 `use super::fold_env_condition;`（gen.rs:81 的
+pub(crate) 自由函数，子模块经 super 路径引用）。gen.rs 14965→14735（净 -230）。
+
+验证：编译零错误；内置单元测试 157/157；行为探针七面与 CPython 逐字对齐
+（语句 if／if-else／elif 链／表达式 if 值捕获／字符串分支型回填／分支含
+return／嵌套 if）；batch_gate GREEN。
+
+## 批次 865（2026-10-03，**重构批：Assign 臂（582 行，lower_ast_inner 最大臂）迁入 gen/stmt_assign.rs**）
+
+零替换法＋行号精确手术：`lower_ast_inner` 的 `AstNode::Assign` 臂迁入新家族文件
+`gen/stmt_assign.rs::lower_assign_stmt(&mut self, lhs: &AstNode, rhs: &AstNode)`。
+臂体一字未动；签名适配 15 处（`&**lhs`→`lhs`×11、`&**rhs`→`rhs`×4）＋两处
+`rhs.clone()` 补 Box（AstNode::Assign 构造点）＋导入补 ArraySize。
+gen.rs 14735→14158（净 -577）。
+
+**新发现缺陷 #274（非本批引入，c21f99b4 复现在案）**：调用返回元组解包的字符串
+元素按指针字渲染（`p, q = pair()` 打堆地址，CPython 真值 `abc def`）——与 #273
+同族的格标签读取面缺口。已登记 backlog，探针其余六面对齐。
+
+验证：编译零错误；内置单元测试 157/157；行为探针七面中六面与 CPython 逐字对齐
+（单赋值／并行赋值交换（#190 面）／字面量元组解包／下标赋值／类变量写（批 572 面）／
+带注解赋值），调用返回解包一面按 #274 存量差异如实登记。
+
+**batch_gate RED（十批界全局跑，回归经查为存量）**：match=2843 < 基线 2845，两例
+`class_inheritance_field`／`class_variable_crash`（类变量面，`Counter.count` 打 0
+期望 2）。逐批干净工作树重建复测：批 859/862/863/864 全部同坏 ⇒ 与本批无关，回归
+窗口在更早（≤859，772 基线采集时仍好）；初步 git bisect 结果被共享 target/ 的增量
+构建污染作废（教训 #1 复现），改用每提交独立工作树干净构建二分中，引入批次下批记录。
+本批 865 的提交判定：探针行为面与改前二进制一致（含两例存量坏面），迁移本身行为保持。
+
+## 批次 866（2026-10-03，**修复批：FieldAccess 迁移丢返回值——类变量读被替身槽顶掉**）
+
+**门禁 RED 的根因闭环**（承批 865 记录）：`gen.rs:12038` 调
+`lower_field_access(base, field, id)` 丢弃返回值。批 846 把 FieldAccess 臂（537 行）
+抽成 `gen/call_field.rs::lower_field_access` 时，臂内两处早退
+`return self.lower_expr(...)`（批 572 的类变量路由、批 610 的实例类变量路由）原本
+直接退出 `lower_expr_node` 带回新槽；抽函数后早退只能退出内层函数，调用点不转发
+返回值 ⇒ 这两条路由的读数全被 `lower_expr_node` 预填的替身槽（IntLit(0)、I64 型）
+顶掉＝静默错值。实拍：`Counter::get` 里 env 读进槽 5、`Return` 拿槽 2（dump 对照），
+`print(a.get())` 打 0。
+
+**为何潜伏 20 批**：批 817 起测试节奏改革（每批只跑内置单元测试、全局每 10 批逐个
+跑），计数器从 817 起算至今才走到第一次全局跑——批 846 引入的回归一直没有全局差分
+读数。批 865 记录里"与本批无关、窗口 ≤859"的判定正确（干净工作树逐批复测 772 好、
+850 坏），但当时未定位到 846。
+
+**定位过程中的两个方法论教训（都已写进过程记录）**：
+1. **共享主树的 git bisect 读数作废**——bisect 期间 cargo 增量构建漏检源变更＋
+   build.rs 在每次构建时重写根目录 `.o`（mtime 17:14 实拍），教训 #1（陈旧二进制
+   假读数）第三次复现。可信读数一律来自"每提交独立工作树干净构建"
+   （/tmp/cvcheck.sh）。
+2. **中间对照也要认二进制**——"MIR/IR 逐字节相同"的结论一度建立在被 bisect 污染的
+   陈旧二进制上，险些把方向带到运行期 C；干净重建后 IR 实差 119 行，机制随即锁定。
+
+**修法**：调用点改 `return self.lower_field_access(base, field, id);`（一行）。
+全库家族文件早退审计：仅 call_field.rs 有产出非 dest 槽的早退路径（2 处），
+subscript/print 等家族按契约写 dest 无此类路径，11885 lower_range_guard 返回值
+已消费——本修为唯一必要点。
+
+**验证**：编译零错误；内置单元测试 157/157；`class_` 差分子集 138/138＝100%
+（两例回归用例转好）；**全量差分 match=2845/2845＝100%，基线恢复**（bad_case=1
+＝del_undefined_var 存量单列项，与基线口径一致）；行为探针（批 861–865 全套五份）
+与 CPython 对齐面不变（probe865 仅 #274 存量面维持差异，如实另格）。
+
 
 ## 批次 10023（续 #20005：历史缺陷的编译期单元测试，第十三批）
 
@@ -27056,6 +28496,135 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   （10030）做。
 - `worktree.md` 的行仍未随批（车道 WIP 面还挂着批次 745 那三个文件＋两枚未跟踪用例，记录笔只暂存
   roadmap＋backlog 两本台账，**连续二十四批**）；待补行文本写进本批记录笔的提交信息。
+## 批次 867（2026-10-03，**重构批：Let 语句臂（145 行）迁入 gen/stmt_let.rs**＋cleanup 滞留 10023–10025 并入）
+
+零替换法＋行号精确手术：`lower_ast_inner` 的 `AstNode::Let` 臂迁入
+`gen/stmt_let.rs::lower_let_stmt(&mut self, pattern: &AstNode, expr: &AstNode)`。
+迁移前按 866 教训先审计早退路径：零早退（全部写 dest 或局部槽）⇒ 语句位委托
+无需转发。签名适配 2 处（`match &**pattern`→`match pattern`、元组模式处
+`&**pattern`→`&pattern`），嵌套的 `&**inner_pattern` 本就正确、保留。
+gen.rs 14163→14023（净 -140）。
+
+**cleanup 滞留 10023–10025 并入**（ac0c6bb7）：仅台账＋regression_history.rs
+（+7 条＝46/46），零编译器面；roadmap EOF 双追加冲突两边都保留。
+
+**新发现缺陷 #275（非本批引入，ac0c6bb7 复现在案）**：`global g; g = g + 1`
+函数内写 env 单元后模块层同名读拿旧值（t425 env 镜像未覆盖 global 写面）。
+已登记 backlog，探针其余四面（普通绑定/带注解元素型回填/元组解构/赋值语句）
+与 CPython 逐字对齐。
+
+验证：编译零错误；内置单元测试 157/157；历史缺陷测试 46/46；batch_gate GREEN。
+
+## 批次 868（2026-10-03，**重构批：AssignOp 臂（71 行）迁入 gen/stmt_assign.rs**）
+
+零替换法＋**签名取原样解构类型**（857 教训的正向应用）：
+`lower_assign_op(&mut self, op: &String, target: &Box<AstNode>, value: &Box<AstNode>)`
+——臂体内 `op.clone()`／`&**target`／`target.clone()` 等全部保持原义，臂体零适配
+逐字迁入。三条 `return;` 均 void（语句臂返回 ()），无 866 类转发问题。
+gen.rs 14023→13958（净 -65）。
+
+**新发现缺陷 #276（非本批引入，7ce03c3c 复现在案）**：`c: set[str] = set();`
+`c |= {"q"}` 后 `"q" in c` 判 False——臂注释记载的槽型刷新修未生效（与在册
+fetch_stocks fetched_codes 形状同源）。已登记，探针其余三面（类变量复合赋值
+批 572 面／global 复合赋值（#275 存量面）／下标复合赋值）与 CPython 对齐。
+
+验证：编译零错误；内置单元测试 157/157；batch_gate GREEN。
+
+## 批次 869（2026-10-03，**重构批：BinaryOp 表达式臂（1485 行）迁入 gen/call_binary.rs——857 退回后的重做**）
+
+857 失败根因复盘：当时的迁移签名类型与臂的原样解构类型不符
+（`op.clone()/op.as_str()/&**right` 在改动后的签名下行为改变 ⇒ 38+ 级联编译错）。
+本版签名**取臂的原样解构类型**：
+`lower_binary_op(&mut self, op: &String, left: &Box<AstNode>, right: &Box<AstNode>, id: u32) -> u32`
+——臂体（1485 行）**逐字零适配**迁入，仅补 `SemiringOp` 导入（857 当年同样漏掉的
+一颗）。返回值转发（866 教训）：臂内 `in (tuple)`→ArrayLit 改写等路径产出非 id 槽，
+调用点 `return self.lower_binary_op(...)`。gen.rs 13958→12480（净 -1478，
+含误拼语句位小臂的一次还原）。
+
+**探针九面与 CPython 对齐**：四则（含真除 2.333…）／六比较／字符串拼接／
+in-not in 元组（早退改写面）／and-or 短路值面（99/42）／混合链／取模负数。
+唯一差异面＝`calls` 侧效应计数＝**#275 已知存量**（global 写后模块层读旧值），
+非本批引入。历史探针全套（861/862/864/forelse2/868）复跑：除 868 的 #276
+存量面外全零差异。
+
+验证：编译零错误；内置单元测试 157/157；**全量差分 match=2845/2845＝100%，
+差分一致率无回归**（本批体积过大，不等十批界主动加跑）。
+
+**工具面顺带优化**：`tools/batch_gate.sh` 的全局跑接上 `--group 50` 合并编译
+模式（809 批已落地的加速，门禁当时没接）——实测同判定下约 40 分钟→4 分 07 秒。
+历史教训：本会话几次全量跑都用的慢路径白等了半个多小时。
+
+## 批次 870（2026-10-03，**重构批：Match 表达式臂（599 行）迁入 gen/call_match.rs**）
+
+869 法复用：签名取原样解构类型
+`lower_match_expr(&mut self, scrutinee: &Box<AstNode>, arms: &Vec<MatchArm>, id: u32) -> u32`
+——臂体逐字零适配，仅补 `MatchArm` 导入。迁移前审计：零早退产出非 id 槽（臂写预分配
+槽、靠派发尾巴返回），函数尾补 `id`。gen.rs 12479→11886（净 -593）。
+
+**门禁工具优化即时回本**：全量差分改走 `--group 50` 快路径（批 869 接入），
+4 分钟出判定：**match=2845/2845＝100%，差分一致率无回归**。行为探针：match
+方言面（表达式/绑定/守卫）全对；历史探针全套（861/862/864/forelse2）零差异。
+
+验证：编译零错误；内置单元测试 157/157；全量差分 100%。
+
+## 批次 871（2026-10-03，**重构批：UnaryOp 臂（184 行）迁入 gen/call_unary.rs**）
+
+869 法：`lower_unary_op(&mut self, op: &String, expr: &Box<AstNode>, id: u32) -> u32`
+——臂体逐字零适配（`&**expr` 原样），臂尾本有 `return dest;`、补 `id` 坠道对齐
+派发约定。gen.rs 11886→11706（净 -180）。
+
+**新发现缺陷 #277（非本批引入，5aebe915 复现在案）**：一元负号作用在 f64 上
+输出位垃圾／nan（`f = 2.5; print(-f)` 打 nan，且两次运行打出的垃圾值不同）；
+整数面正常。已登记。探针其余面（整数负号/not/表达式组合）与 CPython 对齐；
+历史探针复跑仅 869 的 #275 存量面差异。
+
+验证：编译零错误；内置单元测试 157/157；全量差分（--group 50）一致率无回归。
+
+## 批次 872（2026-10-03，**重构批：表达式字面量四臂（Tuple 42／ArrayLit 208／StructLit 52／DynamicArrayLit 39）迁入 gen/call_expr_lit.rs**）
+
+869 法批量应用，四臂一批。过程事故如实记：第一版拼接把 mod 声明插入后行号整体
++1，而四臂行号取自插入前的快照——StructLit 委托错位、FieldAccess 闭括号被吃
+（编译期"未闭合分隔符"当场拦下，未入库）。回滚 gen.rs 到 871 HEAD 重做：发现与
+拼接共用同一快照＋多行解构头从第 4 行取体＋逐臂内容断言。签名按 AST 实型校正
+（StructLit.fields 是 Vec<(String, AstNode)>、DynamicArrayLit.elem_type 是 String
+非 Option）。gen.rs 11705→11380（净 -325）。
+
+验证：编译零错误；内置单元测试 157/157；**全量差分（--group 50）
+match=2845/2845＝100%**；探针数组/元组/结构体三面对齐 CPython（dynamic
+方言行 CPython 不认，不入 diff）；历史探针复跑零差异。
+
+## 批次 873（2026-10-03，**重构批：DictLit 臂（120 行）迁入 gen/call_dict.rs**）
+
+869 法：`lower_dict_lit(&mut self, entries: &Vec<(AstNode, AstNode)>, id: u32) -> u32`
+——臂体逐字零适配（键型传播／`{**m}` 展开／全 None 值判定／混型值格标签全保留），
+尾补 `id`。gen.rs 11380→11264（净 -116）。
+
+验证：编译零错误；内置单元测试 157/157；**全量差分（--group 50）
+match=2845/2845＝100%**；探针五面（字面量取值／键型传播／展开／全 None／
+混型取值）对齐 CPython；历史探针复跑零差异。
+
+## 批次 874（2026-10-03，**重构批：FuncDef 语句臂（107 行）迁入 gen/stmt_funcdef.rs**）
+
+869 法：`lower_funcdef_stmt(&mut self, fn_name: &String, params: &Vec<(String, String)>,
+body: &Vec<AstNode>, ret_expr: &Option<Box<AstNode>>)`——签名按 AST 实型
+（FuncDef.params 是 Vec<(String, String)>），臂体逐字零适配。gen.rs 11264→11168
+（净 -96）。
+
+验证：编译零错误；内置单元测试 157/157；**全量差分（--group 50）
+match=2845/2845＝100%**；探针三面（嵌套 def／字符串拼接返回／递归 fib(10)=55）
+对齐 CPython；历史探针复跑零差异。
+
+## 批次 875（2026-10-03，**重构批：小语句臂清扫（ExprStmt 30／ConstDef 29／IfLet 42／Await 47）迁入 gen/stmt_misc.rs**）
+
+869 法批量应用，四臂一臂一编译逐个拼接（860/872 事故的流程化修正：每次拼接后
+立即括号深度扫描）。过程插曲如实记：本轮 specs 文件格式从四元组（含名）改为
+三元组后，拼接脚本仍按旧格式取 x[3]，报 IndexError——三次"诡异复现"实为数据
+格式不匹配，教训：换数据格式时同步改全部消费方。gen.rs 11167→11037（净 -130）。
+
+验证：编译零错误；内置单元测试 157/157；**全量差分（--group 50）
+match=2845/2845＝100%**；历史探针复跑仅 869 的 #275 存量面差异。
+lower_ast_inner 至此从 2153 行缩至约 420 行，语句位 40 余臂全部归入家族文件。
+
 
 ## 批次 10026（续 #20005：历史缺陷的编译期单元测试，第十六批）
 
@@ -27167,6 +28736,1468 @@ lower_to_mir`，最深一段是 `MirGen::lower_expr → lower_expr_node` 自环�
   `src/frontend/parser/expr.rs`／`src/frontend/parser/top_level.rs` ＋两枚未跟踪用例
   `t562_lambda_param_forms.z`／`t563_call_on_value_field_init.z`，记录笔只暂存 roadmap＋backlog
   两本台账，**连续二十六批**）；待补台账行的文字写进本批记录笔的提交信息。
+## 批次 876（2026-10-04，**重构批：Call 臂（5840 行——方法分派主干）整体迁入 gen/call_dispatch.rs**）
+
+869 零适配法最大应用：签名取臂的原样解构类型
+`lower_call_arm(&mut self, receiver: &Option<Box<AstNode>>, method: &String,
+args: &Vec<AstNode>, type_args: &Vec<String>, id: u32) -> u32`——5832 行臂体逐字。
+调用点转发返回值（臂内 15 处早退产出非 id 槽）；函数尾补 `id` 对齐派发约定
+（原臂的尾部 if/else 链靠派发尾巴统一返回）。导入镜像 gen.rs 完整 use 块
+（self::→super:: 三处）＋五颗模块级自由函数（list_elem_suffix／
+registry_ret_type／repr_routable／format_template_parts）＋TypeDecl。
+子族发射体（call_print/call_len/call_str 等）不动，本函数只承载留在主干的分派链。
+gen.rs 11037→5209（净 -5828；**会话累计 19392→5209＝-73.1%**）。
+
+验证：编译零错误；内置单元测试 157/157；历史探针全套复跑（861/862/864/
+forelse2/869/873——除 869 的 #275 存量面外零差异）；**全量差分（--group 50）
+match=2845/2845＝100%**。
+
+## 批次 877（2026-10-04，**重构批：lower_closure（302 行）迁入 gen/lower_closure.rs**）
+
+原样迁入（函数含签名整体搬移，可见性改 pub(super)——call_dispatch 与
+stmt_funcdef 两个跨文件调用点）。gen.rs 5209→4907（净 -302）。
+
+验证：编译零错误；内置单元测试 157/157；**全量差分（--group 50）
+match=2845/2845＝100%**；探针四面（lambda 二参／捕获外层变量／高阶函数
+传 lambda／推导式）对齐 CPython。
+
+## 批次 878（2026-10-04，**义务批：ABI 锚点统一重绑——车道收口批**）
+
+cleanup 车道 10026–10027 并入（bb73fac9）后本批为收口批，兑现 807/811/861 等
+多批挂起的"锚点随车道收口批统一重绑"义务：`check_abi_anchors.py --rebind`
+改写 docs/ABI.md（139 行／291 个数字）＋刷新 abi_anchors.tsv 基线（307 锚）。
+漂移 174→**7**、待归属 110 已入基线、RC=0。余 49 条"消失"＝文档引用的代码
+形状已不存在且无唯一新位置（56 条拒改原样保留）——按工具设计需要逐条人工
+核对合同引用，不自动改，继续可见。getattr×4 顺序敏感臂维持 YAGNI（顺序敏感
+的派发重组是 846 类缺陷的温床，且已住 call_dispatch.rs 家族文件）。
+
+验证：锚点核对 RC=0；编译零错误；内置单元测试 157/157。
+
+## 批次 879（2026-10-04，**修复批：#276 set 并集——解析器丢注解＋py_vec_or 语义错装 双根修**）
+
+`codes: set[str] = set(); codes |= {"q"}; "q" in codes` 打 False（CPython True）。
+根因三层：
+1. **解析器**（stmt.rs:463）：带注解赋值只在 class_like/dict_like 时包
+   TypeAnnotatedPattern，`set[str]` 的注解被整个丢弃——放宽加 set_like
+   （注意 ty 已被 parse_type 归一成尖括号 `set<str>`，须认 `<`）。
+2. **gen 元素细化**（stmt_assign.rs TA 分支）：只有类名回填＋dict 回填，
+   补 annotation_elem_ty 元素细化（与 Let 臂同款、无条件套用——待细化的正是
+   DynamicArray(I64) 形状，原 I64 守卫会把它挡掉）；annotation_elem_ty 同步
+   认尖括号。
+3. **运行期**：`|` 的向量路由 py_vec_or 是逐元素逻辑或（掩码面），对 set 是
+   静默错值（set() | {"q"} 算出 [1]）——新增 py_vec_union(a,b,elem_is_str)
+   （内容判等去重，py_list_contains 口径，807 intersect 同族）＋call_binary.rs
+   掩码路由前的集合路由（op 认 "|" 与 "|="，两侧元素皆 Str 才接）。
+
+**验证**：三面全对齐 CPython（`|=` 字面量／字面量并字面量／add 对照面）；
+全量差分（--group 50）match=2845/2845＝100%；python_style 全量 465 过＋14 FAIL
+**与 HEAD 完全同集合**＝零新增回归（14 个 FAIL 另登记 #278——import 模块常量
+读打 0 的一族，HEAD 复现在案）。
+
+**过程教训（第 4 次）**：`cargo build | grep -cE "^error"` 打出 2 被当读数忽略，
+之后三轮探针"不打印"全是陈旧二进制——构建失败被管道吞掉后，测试全在旧件上跑。
+此教训已四次现身（494b/507b、bisect 污染、本轮），后续所有构建命令改为
+`cargo build --release 2>&1 | tail -3` 直接看输出，不再只数 error 行。
+
+## 批次 880（2026-10-04，**修复批：#278 主面根修——模块属性读路径丢 member**）
+
+`import math; print(math.pi)` 打 0（应 3.14159…）。根因：call_field.rs 的模块
+属性注册表路由对 `base` 做 flatten_module_receiver——`math.pi` 的 base 是
+Var("math")，parts 为空，**当前 field（pi）从未拼进路径** ⇒ member 恒空串 ⇒
+find_member 必然 None ⇒ 常量静默降 0。上方"flatten 已含 field，勿重复拼"的
+注释是 Call 臂口径（receiver 不含方法名），抄到本臂时没跟着改——同时把
+py_user_modules 的 env 读路由（parts.len()==1）一并修活。
+gen.rs→call_field.rs 一处＋两行（parts.push(field)）。
+
+**验证**：math.pi/e 全对；python_style 全量 **475 过／4 FAIL**（修前 465/14，
+10 例转好：t105/t106/t107/t111/t115/t454/t45/t46/t48/t75）；全量差分
+（--group 50）match=2845/2845＝100%；内置单元测试 157/157。
+余 4 例（t217_np_where／t274_df_columns_kwarg／t79_counter_most_common／
+t813_unannotated_float_return）属另族，#278 已收窄登记。
+
+## 批次 881（2026-10-04，**重构批：Var 读臂（328 行）迁入 gen/call_var.rs**）
+
+869 零适配法：`lower_var_read(&mut self, name: &String, id: u32) -> u32`——臂体
+逐字（nonlocal/env 优先读、模块全局、函数地址 FuncAddr、捕获变量、未声明名
+告警全保留），尾补 `id`；调用点转发（臂内 2 处早退产出非 id 槽）。
+gen.rs 4907→4588（净 -319）。
+
+验证：编译零错误；内置单元测试 157/157；历史探针七套复跑（除 869 的 #275
+存量面外零差异）；**全量差分（--group 50）match=2845/2845＝100%**。
+
+## 批次 882（2026-10-04，**修复批：#275 根修——CTFE 求值器 Assign 臂缺整表清空**）
+
+`g = 1; def bump(): global g; g += 1` 后模块层读 g 打 1（应 2）。四层排查定位：
+①运行期 env 无辜（单一全局 map，bump 的 env_set("g",2) 落地，运行期 trace 实拍
+`set "g" = 2`／`get "g" -> 2`）；②Var 读无辜（Var 臂迁移后读已 env-first，
+[DBG-G] 探针 6 次全走 nonlocal 路径）；③**真凶＝ctfe/evaluator.rs 的 print 实参
+改写臂**：`eval_i128_tree(g)` 从 i128_consts 表查到编译期初值 1，把 print 实参
+整个替换成 StringLit("1")——h = g 同样被折成 "1"；④表的失守点＝Assign 臂
+rhs 不可静态求值时只删 LHS 名、不整表清空——`r = bump()` 删了 r，g 的陈旧值
+存活并污染后续所有读。
+
+**修法**：Var 支的 else 与 Tuple 支补整表清空（与 ExprStmt-call 分支的
+t36_global/t518 保守口径同款）。对照实验闭环：`g = int("1")`（初值不可常量化）
+时四读全 2＝表不参与则行为正确。
+
+**验证**：g275／g275f 两形状全对齐 CPython（h:2 g:2 r:2 g:2）；**历史探针七套
+首次全部零差异**（probe869 的 #275 存量面一并转好）；全量差分（--group 50）
+match=2845/2845＝100%；内置单元测试 157/157。附带：清理 call_var.rs 两处
+无条件调试打印。
+
+## 批次 883（2026-10-04，**修复批：#274 根修——元组字面量进返回型推断证据集**）
+
+`def pair(): return ("abc", "def")` 的 `p, q = pair()` 元素按指针字渲染。
+根因：infer_untyped_returns 的证据分类只有 str/float/int/bool——元组字面量
+无证据 ⇒ 函数停在单元占位 Tuple([]) ⇒ 解包的 per-位取型（stmt_assign.rs 的
+Type::Tuple(ts) 分支，646 批已有）拿不到元素型，全落 I64。
+修法（resolver 两处）：collect_return_kinds 的 refinable 加 Tuple 臂
+（每元素各自可推断即得 per-位 Tuple 型，混合型支持）；可写判定放行非空 Tuple。
+gen.rs 零改动。
+
+**验证**：`p, q = pair()` 全对齐 CPython；全量差分（--group 50）
+match=2845/2845＝100%；python_style 475/4（与基线同）；内置单元测试 157/157；
+历史缺陷测试 49/49；历史探针七套零差异。
+
+## 批次 884（2026-10-04，**修复批：#277 根修——浮点一元负号被臂尾公共出口覆盖**）
+
+`f = 2.5; print(-f)` 打 0.0/nan（应 -2.5）。根因：call_unary.rs 浮点支把
+`BinaryOp(0.0 - f)` 写进 dest 的 **expr**（MIR 懒表达式），而臂尾公共出口执行
+`exprs[dest] = Var(dest)` 将其覆盖——槽无人计算 ⇒ 打印零初始化值 0.0（位垃圾
+变体同根）。整型支不受影响：unary_minus 是 Call，槽已被算出，Var(dest) 是
+读回结果。
+修法：浮点支补 `type_map.insert(dest, F64)` 后提前 `return dest`。gen 内一处。
+
+**验证**：`print(-f)`＝-2.5 对齐 CPython（print(f)＝2.5 对照不回归）；
+全量差分（--group 50）match=2845/2845＝100%；历史探针七套零差异；
+内置单元测试 157/157。
+
+## 批次 885（2026-10-04，**重构批：PathCall 臂（373 行）迁入 gen/call_path.rs**）
+
+869 零适配法：`lower_path_call(&mut self, path: &Vec<String>, method: &String,
+args: &Vec<AstNode>, type_args: &Vec<String>, id: u32) -> u32`——臂体逐字
+（`module.func(...)`／`Type::func(...)` 的静态路径调用分派），调用点转发
+（臂内 1 处早退产出非 id 槽），尾补 `id`。导入补 path_ends_with_mem
+（call_str 家族的 pub(super) 自由函数）＋ArraySize。
+gen.rs 4587→4225（净 -362）。
+
+验证：编译零错误；内置单元测试 157/157；历史探针七套零差异；
+**全量差分（--group 50）match=2845/2845＝100%**。
+
+## 批次 886（2026-10-04，**重构批：lower_expr_node 尾盘四臂迁出（ArrayRepeat 106／Assign-expr 58／Await-expr 98／Block-expr 47）**）
+
+869 零适配法批量应用：ArrayRepeat → call_expr_lit.rs（lower_array_repeat，签名
+按 AST 实型 Box/Box）；Assign-expr → stmt_assign.rs（lower_assign_expr——
+表达式位赋值，类变量改写早退返回 i64 零槽）；Await-expr／Block-expr →
+stmt_misc.rs（lower_await_expr／lower_block_expr，均写 id 槽 ⇒ 签名 `-> u32`
+＋id 参数）。gen.rs 4225→3928（净 -297）。lower_expr_node 剩余约 1030 行
+（小模式臂与 getattr 域）。
+
+验证：编译零错误；内置单元测试 157/157；历史探针七套零差异；
+**全量差分（--group 50）match=2845/2845＝100%**。
+
+## 批次 887（2026-10-04，**修复批：#278 再收 2 例——分类器缺构造器族映射＋886 委托丢返回值自纠**）
+
+**① t79_counter_most_common**（len=5、计数全 1）：`classify_call` 自 837 起
+**没有任何方法映射到 CallClass::Special**——call_dispatch 的构造器消费门
+（Special + 方法名）从未匹配 ⇒ Counter 的内容哈希构造路由（py_collections_
+counter_new_str）死亡，落回指针键 shim。修＝分类器补 `"Counter" | "DataFrame"
+=> CallClass::Special`＋单测钉（ctor_family_routes_special）。DataFrame kwarg
+构造同门复活（t274_df_columns_kwarg 一并转好）。
+
+**② t33_starred_walrus 新红自纠**：886 的 Assign-expr 委托**丢弃返回值**
+（866 教训被自己违反）——walrus `n := len(data)` 返回的活槽被扔掉，派发器退回
+缺省 IntLit(0)，`> 2` 恒假。修＝委托改 `return self.lower_assign_expr(...)`。
+全委托复核：其余表达式臂委托均正确转发（Await/Block 直写 id 槽无需转发）。
+
+**验证**：python_style **477 过／2 FAIL**（t79/t274 转好，余 t217_np_where／
+t813——t813 的张力已登 #279）；全量差分（--group 50）match=2845/2845＝100%；
+内置单元测试 158/158（新增分类器钉）；历史探针七套零差异。
+
+## 批次 888（2026-10-04，**修复批：t217 根修——批 148 的 np.where 下标路由缺 dest 写回**）
+
+`idx = np.where(mask)[0]` 的 len/取位全落空（len=0）。诊断修正：批 887 的
+"下标无下发路由"判断有误——W1010×4 是与 print 同源的老噪音（无链式下标的
+s888b 同样 4 条），批 148 路由本身有接住（插桩实拍 method=where 命中）。
+真根因：该路由 `self.lower_expr(base); return;` **只跑副作用、未写 dest**——
+idx 绑到派发器缺省槽（IntLit 0），len(idx) 实读的是 import 句柄槽（array_len
+实拍读槽 7 = zeta_py_import 的 dest ⇒ 0）。
+修法：路由补 `exprs[dest] = Var(where结果)` ＋型拷贝。gen 内一处（call_subscript.rs）。
+
+**验证**：t217 全行对齐（2/0/2/10/20/10/2）；python_style **478 过／1 FAIL**
+（仅余 t813＝#279 设计张力）；全量差分（--group 50）match=2845/2845＝100%；
+内置单元测试 158/158；历史探针七套零差异。
+
+## 批次 889（2026-10-04，**修复批：#273 根修——混型列表运行期逐元素形状判别**）
+
+`y = [1, "a"]; print(y)` 打位垃圾、退化 vec 混型追加后打印段错误。根因：
+py_json_dumps_vec_typed／dumps_vec_nested 的元素渲染由**静态 tag**（0=int、
+2=str）单通道选定，混型列表必然有一半元素走错通道（str 按位打、int 按
+char* 解引用＝段错误面）。
+修法（runtime 两文件）：py_additions.c 暴露 `zt_word_readable`（vm_read_overwrite
+单字节安全探针的非静态包装）；tokio_runtime_stub.c 的 flat 与 nested 两个
+dump 器在 int/str 两通道各加逐元素判别——int 通道遇可读字渲染成带引号字符串、
+str 通道遇不可读字渲染成整数（段错误面闭合）。小整数永远通不过探针（未映射
+低位地址 vm_read 失败），与 zeta_dyn_truth 的几何探针同一安全口径；嵌套器用
+stub 本地的 zt_ptr_readable（204 行，同语义）。
+
+**验证**：四面全对齐 CPython——`[1, "a"]`／`[1, 2, 'else']`（原段错误面）／
+同型对照 `[1,2,3]`／`['x','y']`／嵌套 `[[1, 'a'], [2, 'b']]`；全量差分
+（--group 50）match=2845/2845＝100%；python_style 478/1（仅余 t813＝#279）；
+内置单元测试 158/158；历史探针七套零差异。
+
+## 批次 890（2026-10-04，**#279 方案①实施尝试——两变体各破一面，如实报零落地＋结论入册**）
+
+四层排查后的实修：变体 A（恢复 810 宽接收者面，结果标 F64）——t813 六行全对齐，
+但 t10004 的字典面编译期 panic 精确复现（codegen into_int_value，#267 原病）；
+变体 B（zeta_mean_to_string 返回均值文本、槽型 Str、返回型回灌放宽到 Str）——
+运行期值全对（env trace 实拍 set "g"=2），但调用点槽型传播链（注册返回型→
+回灌→println 分派）仍取旧型打指针，且 Str 回灌触发新的 f64/Str 混淆面（1e-322）。
+两变体已全部回退（复验：t10004=1、t10002 七行、t813 回到已登记 #279 面）。
+
+**结论（#279 更新）**：mean 接收者的两面（t813 要折叠／t10004 要 identity）
+在静态类型口径下无解——接收者编译期不可分辨，结果型无论标 F64 还是 Str 都会
+在某一面的下游错位。**需要方案②：未知型接收者的均值以带格单元承载（值标签
+大弧延伸）**，该工程落地前 t813 维持唯一 FAIL。
+
+**验证（回退后复验）**：编译零错误；lib 158/158；t10004/t10002 复原 PASS。
+
+## 批次 891（2026-10-04，**重构批：lower_expr_node 剩余十臂清盘（BindPattern/RangePattern/OrPattern/StructPattern/Closure/Cast/Range/BigIntLit/Unsafe/TimingOwned 共约 160 行）**）
+
+869 零适配法三家族落位：四个模式臂 → call_patterns.rs；Cast/Range/BigIntLit/
+Unsafe/TimingOwned → expr_small.rs；Closure 表达式臂 → lower_closure.rs
+（lower_closure_expr，写 FuncAddr 的表达式位 ⇒ 签名 -> u32）。
+unsafe／orpat 各 1 处早退已转发。
+gen.rs 3931→3827（净 -104）。**lower_expr_node 内联臂至此清零**——剩余全为
+一行委托＋getattr 域（YAGNI 在册）。
+
+**过程自纠一次**：Closure 委托初版丢弃返回的 FuncAddr 槽（866 教训第三次
+现身）——probe877 全空当场暴露，补 `return` 即愈。
+
+**验证**：编译零错误；内置单元测试 158/158；全量差分（--group 50）
+match=2845/2845＝100%；python_style 478/1（仅余 #279/t813）；历史探针七套
+两轮全零差异；cast/range 迷你探针对齐。
+
+## 批次 892（2026-10-04，**#279 方案②首步侦察：未知型均值链路五环节图＋各环节单修实验读数（零落地如实报）**）
+
+getattr 域决策：四个 getattr face 与 Batch 405 ghost 守卫（还共享 range）及其他
+face 交错，顺序敏感且已住 call_dispatch 家族文件——迁出低价值高风险，YAGNI
+维持（登记结论不变）。
+
+方案②首步＝把未知型均值的**完整类型传播链**测绘清楚。五环节：
+① mean 臂（call_dispatch，接收者型门→路由）；② body 型→signature_ret_ty
+（mir.rs——**PyDynamic→I64 映射是承重墙**：codegen infer_fn_return_type 对
+PyDynamic 落 i64，指针 ABI 与缺省一致，改映射本身安全）；③ body_ret_tys 登记
+（resolver :5607，只收 F32/F64）；④ 回灌消费（resolver :5535，只灌 F32/F64
+进 func_ret_types）；⑤ print 分派（call_print——PyDynamic 落 println_i64）。
+
+**各环节单修的实验读数**（每步独立编译实拍）：
+- 单修⑤（print 加 PyDynamic→zeta_dyn_to_string 形状分派面）：t813 仍打指针
+  （调用点槽型是 I64，没走新面）；
+- 加③④（回灌放宽 PyDynamic）：仍指针——signature_ret_ty 的 ②'（PyDynamic→
+  I64）在登记前就把型丢了；
+- 修②'（signature_ret_ty 保留 PyDynamic）：t813 变 **1e-322**（f64 渲染的
+  非规格数＝整数 20 的位模式按 f64 打）——**上游还有一处 F64 源**在回灌之外
+  覆盖了槽型（精确环节未定位，嫌疑＝批 813 原 F64 回灌的次序或 mean 臂自身
+  的残留 F64 型）。
+- t10004／t10002 全程绿（两面的运行期行为都正确，错的只是静态型）。
+
+**结论**：五环节必须同时对齐才能让未知型均值到达打印面——对齐本身就是
+方案②（运行期格标签）的主体工程。五个单点修复与链路图已全部入册，方案②
+立项时按图索骥即可。零落地如实报（全部尝试已回退，三 mean 夹具回登记面，
+lib 158/158、全量差分 100% 复验）。
+
+## 批次 893（2026-10-04，**修复批：#279 方案②落地——五环节对齐＋C 助手类型错修正，t813 转好**）
+
+按 892 的五环节链路图逐环节对齐，五件套：
+① 运行期新函数 `zeta_mean_to_string(recv)`（py_additions.c）：vec 按浮点位读
+均值后返回 CPython repr 文本、非 vec 句柄原样返回＝identity（t10004 字典面）。
+**890 的"1e-322 之谜"破案＝本函数首版的 C 类型错**——`int64_t m = zeta_mean_vec(...)`
+把 double 返回值按值转成整数 20，下游 memcpy 重解释成 double 即 1e-322；
+修正为 `double m`。
+② call_dispatch mean 臂分双路：静态向量照旧折叠（F64）；PyDynamic/I64 接收者
+走 zeta_mean_to_string、dest 标 **PyDynamic**（值可能是文本也可能是句柄——
+静态单型 F64/Str 都必毒化一面，890 实测；PyDynamic＋下游形状分派是落地形）。
+③ mir.rs signature_ret_ty 保留 PyDynamic 身（codegen 的 LLVM 签名对
+PyDynamic 仍落 i64，指针 ABI 与缺省一致，无错位）。
+④ resolver 登记＋回灌放宽 PyDynamic（t813 实拍缺口：调用点拿 I64 会把文本
+句柄按整数打印）。
+⑤ call_print 加 PyDynamic 面：zeta_dyn_to_string 运行期形状分派
+（文本原样／map/vec 结构化／整数十进制）——原落 println_i64 打句柄。
+
+**验证**：t813 六行（20.0/20.0/5/hi bob/20.0/2.0）、t10004（1）、t10002（七行
+含 nan）**三面全对齐 CPython**；历史探针七套两轮零差异；全量差分与
+python_style 终值见下批记录补注（验证在途时入册）。
+
+## 批次 894（2026-10-04，**架构核对批：七轴计划（refactor.md）× 现状逐轴对照**）
+
+| 轴 | 计划判据 | 现状实证 | 判定 |
+|---|---|---|---|
+| A 死代码 | §1 表行数归零 | blockchain/holographic 族/type_cache/**ml/distributed** 均已删；`allow(dead_code)` 两行仍在（lib.rs/main.rs，待决项未决）；dc_audit 基线 101 条在库 | **基本完成**，余 allow 两行待决 |
+| B 类型标签 | 试金石（元组 `in`）转正、B.1 归零 | **试金石实测已转正**（`"a" in ("a","b")` 打 in ok，批 861–893 间修复）；808 dict 格标签＋889 列表形状判别＋893 mean PyDynamic 面逐步落地；B.1 的 I64 兜底 76 处收敛未清 | **主体推进**，完整格标签＝#279 方案②延伸 |
+| C 编译性能 | `time zetac` 前后对照 | 全量差分套件 --group 50（40min→4min）；`time zetac` 单体对照未做 | **部分**（工具链提速有实据，判据未走） |
+| D 层次 | lower_expr 净减 ≥1500 且 MIR diff 空；frontend→middle 边 0 | **净 -15563（超额 9.4 倍）**、每批差分 100%、越界 0；gen/ 32 家族文件 | **完成** |
+| E 测试架构 | known-fail 非空且随修复收缩 | known-fail 集合随修复收缩（475/4→479/0 即证）；python_style verdict 体系 479/0；regression_history 49/49；契约测试进 CI 未做 | **主体完成** |
+| F 检查器独立 | 三处定型删除、F.1 表清零 | **F.1 审计完成**（type-dispatch-inventory.md，五类 228 处）；checker 设计/实施未启动 | **未启动**（登记在案） |
+| G 正确性 | 差分 ≥N%、ABI.md 在位、OPT 矩阵/ASan/MIR verifier 进 CI | 差分 **100%（N=2845）**✓、ABI.md 在位且重绑 RC=0 ✓；OPT 矩阵/ASan 夜航/MIR verifier/截断报告化未进 CI（本仓无 CI） | **差分+ABI 完成**，CI 侧项随无 CI 环境搁置 |
+
+核对产出：docs/gen-refactor-status.md 从 844 时点（16777 行/12 家族）更新到
+现状（3829 行/32 家族＋修复批附带产出＋方法论五条）。
+**缺口清单（按计划归属）**：轴 F checker（大工程）、轴 G 的 CI 侧四项
+（依赖 CI 环境本身）、轴 A 的 allow 两行待决、轴 B 完整格标签（= #279 延伸）。
+
+## 批次 895（2026-10-04，**度量批：轴 C 编译性能基线落地（refactor.md 轴 C 判据的"前"侧）**）
+
+轴 C 判据「`time zetac` 前后对照 ≥ 可测收益，否则不合并」此前没有"前"侧基线。
+本批建 `tools/baselines/compile_perf.txt`：代表集四档（small 1 行／medium 40 行／
+large-z 3301 行／large-z2 800 行）＋全量差分套件，`/usr/bin/time -p` 各 3 次取中位。
+读数：small 0.12s／medium 0.16-0.19s／build.z（3301 行）20.4-22.8s／
+minimal_compiler.z（800 行）2.3-2.5s／全量差分 --group 50 = 274.45s。
+方法论注：-o 必须指向可写路径（/dev/null 会 PermissionDenied）。
+任何触编译性能的改动（轴 C 的 clone/HashMap/intern）合并前在同文件同法复测追加。
+
+验证：编译零错误；基线文件入库 tools/baselines/compile_perf.txt。
+
+## 批次 896（2026-10-04，**重构批：轴 F 首步——I64 槽兜底收口到 slot_fallback 唯一入口（middle/mir 树 34 处清零）**）
+
+F.1 清单刷新（814 时点 228 处 → 现测：PyDynamic 判定 32／map-dict 字符串比较
+31／NoneValue 14／I64 兜底 36 硬写＋42 已收口——口径与 814 不同，绝对值不可比，
+相对趋势＝gen.rs 迁移后散点面缩小）。
+本批收口：src/middle/mir/ 树（gen.rs＋13 家族文件）的 `unwrap_or(Type::I64)`
+34 处全部改 `unwrap_or(Type::slot_fallback())`——行为中立（slot_fallback 就
+返回 I64），语义＝兜底决策收拢到 types/mod.rs 的命名合同（839 批先例的续片）。
+**升级通道就位**：#279 方案②若推广"未知槽＝PyDynamic"，只改 slot_fallback
+一处＋跑全量。resolver 树 2 处与 types/mod.rs 的 map_kv 缺省未动（前者属
+resolver 面、后者是 map 键值型语义缺省，均非"未知槽兜底"）。
+
+**验证**：编译零错误；内置单元测试 158/158；历史探针七套零差异；
+全量差分（--group 50）match=2845/2845＝100%；python_style 479/0。
+
+## 批次 897（2026-10-04，**重构批：map/dict 双拼写比较收敛 is_map()——2/10 落地＋形态清单入册**）
+
+F.1 第二类（map/dict 字符串比较，现测 31 处）的收敛续片（815 先例）。
+形态盘点：**双拼写 10 处**（map||dict，is_map 交换＝行为中立）／map-only 19 处／
+dict-only 2 处／定义本体 2 处（is_map/map_kv 自身，不动）。
+落地 2 处（call_dispatch 4929 的 matches! 守卫＋gen.rs 2453 的 apply 注解面——
+均为借用绑定，ty.is_map() 无移动问题）；**call_dispatch 4136 与 call_builtin 652
+为按值绑定（.cloned() 后解构），ty.is_map 与内部移动冲突 ⇒ 保留原样登记**；
+binary 847/851 与 subscript 475 是三way（map/dict/set、map/dict/dict_like）另族。
+**登记待查**：map-only 19 处中若有 Python 源用 dict 拼写的，是潜在漏判面
+（行为变更需逐处语义裁决，非纯收口）。
+
+**验证**：编译零错误；内置单元测试 158/158；get 面迷你探针对齐；历史探针
+七套两轮零差异；全量差分（--group 50）match=2845/2845＝100%。
+
+## 批次 898（2026-10-04，**裁决批：map-only 17 处 map/dict 比较位点全数裁决为语义完备（零代码改动）**）
+
+批 897 登记的 map-only 位点逐处裁决完毕。关键证据：`Named("dict")` 是幻影
+型——全仓无生产者。注解路径（stmt.rs:458 + BATCH-413 归一）把 `dict[str, Any]`
+规范化成 `map<str, Any>`；dict 字面量由 DictLit 臂降成 `Named("map", [K, V])`
+（MIR 实拍 `d = {"a":1}` 的槽型＝Named("map",[Str,I64])）；runtime 与测试外的
+`Named("dict")` 引用仅存于 call_str 通道表行与四个家族单测（构造测试输入，
+非槽型生产者）。
+
+由此：17 处 map-only 判定语义完备（覆盖一切真实 map 值），无需转 is_map、
+无需加探针。双拼写的 2 处（897 已落地的 is_map 交换）与按值绑定保留的 2 处
+同此结论——风格不一致但无正确性差异；后续新代码统一用 is_map()。
+（897 的"潜在漏判面"登记就此闭项：幻影型不存在，漏判无从发生。）
+
+验证：零代码改动（裁决批）；MIR 实拍＋CPython 对照（`d["a"]`=1）在案。
+
+## 批次 899（2026-10-04，**清理批：轴 A「根目录/源码树杂物待清」逐项核对后执行**）
+
+逐项核对引用后三分法处置：
+- **删除**（临时探针/编译产物，全仓零引用）：mulprobe_tmp.z、smap3_tmp.z
+  （pandas 探针）、t404_test／t404_trace／t404_trace2（Mach-O 二进制与 trace）、
+  空目录「锝点源码：外部转储（不入锝点核对）」。轴 A 表所列 b3ir.log／
+  test_match*.z 已不存在（前批已清）。
+- **入库**（真源码/文档，此前漏提交）：zorb/（自举 zorb::manifest/package 的
+  手写 stub，zeta_src/frontend/borrow.z 的 `use zorb::...` 引用它——删了会断
+  自举编译）；docs 四件＝F.1 审计（type-dispatch-inventory.md）、
+  DEEPENING-OPPORTUNITIES、architecture-health／architecture-risk 两目录。
+- **gitignore 补**：tests/python_style/build／zeta_src/build／
+  tools/baselines/.batch_gate_state／tools/__pycache__（构建产物与本地门禁
+  状态，不入库）。
+- **不动**（并发工作流持有件）：zeta_runtime_c.o／tokio_runtime.o
+  （tracked，构建需要）；getattr×4 维持 YAGNI。
+
+验证：git status 工作树清净（仅剩 .o 持有件与忽略项）；lib 158/158。
+
+## 批次 900（2026-10-04，**重构批：getattr×4 实测裁决——两 face 顺序保持迁入 call_getattr.rs，迁移成功（YAGNI 终判撤销）**）
+
+892 登记的"getattr 域迁出低价值高风险"经实测推翻：两个自包含 face
+（字面量名 getattr 1461／struct+动态名+default getattr 1755）按 Option<u32>
+模式（Some＝接住、None＝贯穿）抽入 call_getattr.rs，委托在原位转发——
+派发顺序严格不变。Batch 405 ghost 守卫与 range 共享，留原位（非纯 getattr
+face，另族登记）。
+抽取事故三连（脚本化 return 包裹的边界）：class_of 闭包内部 return 被
+双包（Some(Some)）、残留多余右括号、两 face 外层 if 闭合行被排除——均
+编译期当场暴露并修复。**方法论补丁：含闭包/嵌套返回的臂禁用盲目 return
+包裹，逐 return 核对归属**。
+getattr 面探针：`getattr(g, "x")`=5、`getattr(g, "y", 9)`=9 全对齐。
+gen.rs 3928→3830（净 +2——getattr face 迁出但 mod/委托略增）；
+call_dispatch 5889→5803（-86）；call_getattr.rs 新增 133 行。
+
+**验证**：编译零错误；内置单元测试 158/158；getattr 探针全对齐；
+历史探针七套两轮零差异；全量差分（--group 50）match=2845/2845＝100%；
+python_style 479/0。
+
+## 批次 901（2026-10-04，**重构批：轴 F 第二片——map/dict 比较收敛 is_map()（9/17 落地，余 8 处登记）**）
+
+轴 F 实施第二片（接 896 的 I64 兜底收口、897 的 is_map 首批）。幻影型证据
+闭环后（898：三条产型路径全归一，Named("dict") 不可达），map-only 位点的
+is_map 转换**可证行为中立**。本批落地 9 处：
+- 单型 matches! 面 5 处（gen/call_print 143、call_flow 170、call_dispatch
+  1996/3724/3508 等）→ `.map_or(false, Type::is_map)`；
+- params 组合面 4 处（gen.rs 2528、call_dispatch 2236、call_print 240、
+  call_fstring 45——str-key 渲染判定）→ `ty.is_map() && matches!(ty,
+  Type::Named(_, params) if ...)`（ty 借用绑定，保 params 访问）。
+未转 8 处登记：gen.rs 341（map 与 String 同列的 ABI 通道判定——String 非
+拼写变体，是有意同列）；call_dispatch 4357（closure 内 is_str||is_map 组合，
+转 is_map 需重排闭包，语义相同留待 checker 本体）；三way 面（binary 847/851、
+subscript 475——map/dict/set、map/dict/dict_like 另族）。
+过程事故两次（正则批量替换的畸形产物：残留逗号括号、matches! 包裹 map_or）
+均编译期当场暴露并修复——**批量文本替换禁用于多行宏/闭包现场**。
+
+**验证**：编译零错误；内置单元测试 158/158；历史探针七套两轮零差异；
+全量差分（--group 50）match=2845/2845＝100%；python_style 479/0。
+
+## 批次 902（2026-10-04，**重构批：轴 F 第三片——余量 map/dict 位点逐处裁决（新增 3 处落地，3 处登记保留）**）
+
+901 余量的 8 处（params 组合/三way/混合）逐处裁决：
+- **落地 3 处**：call_dispatch 4357（closure is_str||is_map → `!(matches!(t,
+  Type::Str) || t.is_map())`，借用调用无移动）；4039（let-chain 前置
+  `.map_or(false, |ty| ty.is_map())` 判定、解构随后——owned 绑定与 is_map
+  的移动冲突解法＝判定先行）；4846（matches! 守卫 `ty @ Named(_, ts)` 借用
+  绑定＋ts.len() 组合守卫）。
+- **登记保留 3 处**：call_binary 847/851（三way map/dict/set——set 另族，
+  879 的集合并集路由已按型分派）；call_subscript 475（map/dict/dict_like
+  ——dict_like 是平台对象真型，非拼写变体）。
+- **语义保留 2 处**：call_dispatch 1930（拼写分派表——"dict" 臂匹配的是
+  注册拼写串而非型判定）；gen.rs 341（map 与 String 同列的 ABI 通道判定，
+  String 非拼写变体）。
+外加 897 已落地的 2 处＋901 的 9 处：**kind 2（map/dict 拼写比较）收敛完成
+13/17 落地、余量全部有据登记**。
+
+**验证**：编译零错误；内置单元测试 158/158；历史探针七套零差异；
+全量差分（--group 50）match=2845/2845＝100%；python_style 479/0；
+t10002 钉 PASS。
+
+## 批次 903（2026-10-04，**重构批：轴 F kind 3——NoneValue 判定收敛 is_none_value() 唯一入口**）
+
+轴 F 判断点收敛续片（kind 5→896、kind 2→897/901/902、kind 3→本批）。
+types/mod.rs 加命名合同 `is_none_value()`（is_map 同款，位于其紧邻）；
+call_print 两处同型的"槽型是否 NoneValue"判定（806 携带读面＋804 fromkeys 面）
+转换到唯一入口。kind 3 的其余引用为**生产者**（call_dict 116 的型构造、
+call_dispatch 2072/2112 的元组元素型、resolver 1751）——生产者不属于判定
+收敛范围（它们定义型，不判定型）。NoneLit 的 AST 模式匹配 7 处属 AST 层
+（节点形状匹配，非型判定），归 checker 本体（F.2）设计范围。
+
+**验证**：编译零错误；内置单元测试 158/158；None 三面探针（纯 None 返回/
+带标签打印/fromkeys）全对齐 CPython；历史探针七套零差异；全量差分
+（--group 50）match=2845/2845＝100%；python_style 479/0。
+
+## 批次 904（2026-10-04，**重构批：轴 F kind 1——PyDynamic 判定收敛 is_dynamic()/is_untyped() 双合同（18 处落地＋2 处 SKIP 登记）**）
+
+轴 F 判断点收敛第五批（kind 5→896、kind 2→897/901/902、kind 3→903、
+kind 1→本批）。盘点发现 PyDynamic 判定分五种语义族（非单一形态）：
+- 纯 PyDynamic 7 处 → `is_dynamic()`
+- I64|PyDynamic 成对 10 处 → `is_untyped()`（"槽型未定"——I64 是空槽原本
+  读法的 813 系口径，命名后即"值对类型丢"风险面的可检索判定）
+- None|I64|PyDynamic 1 处 → `.as_ref().map_or(true, |t| t.is_untyped())`
+- PyDynamic|None 1 处 → `.as_ref().map_or(true, |t| t.is_dynamic())`
+- I64|PyDynamic|None 1 处 → 同 is_untyped 形式
+2 处 SKIP 登记（call_dispatch 2406 的型已被 893 mean 臂改写、call_print 656
+的 else-if 已由前分支覆盖）。
+实施细节：Type 未实现 Copy ⇒ Option 上的 map_or 需 `.as_ref()`＋闭包形式
+（`Type::is_untyped` 直传编译错 E0631，三处修正入册）。
+
+**验证**：编译零错误；内置单元测试 158/158；None/类型面探针全对齐；
+历史探针七套两轮零差异；全量差分（--group 50）match=2845/2845＝100%；
+python_style 479/0。收敛计数：is_untyped/is_dynamic 判定 18 处落地。
+
+## 批次 905（2026-10-04，**回归钉批：门禁抓获缺陷转化模块单测——第一档纯逻辑三钉**）
+
+按"全局清单只减不增"节奏，把门禁抓获且**可纯逻辑复现**的缺陷转化为模块内
+单元测试（转化分档见 893 附录；C 运行期/端到端面转不了，仍由门禁兜）：
+- **#275 双钉**（ctfe/evaluator.rs tests_905_pins）：调用型 rhs 的 Assign 必须
+  整表清空 i128_consts（原只删 LHS 名 ⇒ g 陈旧值污染折叠）；不可求值 rhs
+  同款。
+- **#278/t105 钉**（pylib.rs tests）：`find_member("math", pi/e/tau/inf/nan)`
+  零参条目可达＋符号名 py_math_pi——registry.txt 被误编辑时此钉先红。
+- **#279 方案② 钉**（mir.rs tests_905）：signature_ret_ty 保留 PyDynamic 身
+  （折成 I64 则 t813 调用点退回整数打印）。
+
+**验证**：lib 内置测试 158→**161/161**（+3 钉）；三钉各自在 0.00s 内复验。
+EOF
+cd /Users/meetai/source/zeta-src && export PATH="$HOME/.cargo/bin:$PATH" && cargo test -p zetac --lib 2>&1 | grep "test result" && git add -A src/ roadmap.md && git commit -q -m "batch 905: 门禁抓获缺陷转化模块单测——第一档纯逻辑三钉
+
+- #275 双钉：ctfe i128_consts 调用型 rhs 整表清空（890 修复的永久回归钉）
+- #278 钉：registry math 常量可达性（t105 面的数据层守卫）
+- #279 钉：signature_ret_ty 保留 PyDynamic（893 五环节③的合同钉）
+- lib 158→161/161；转化分档（纯逻辑/MirGen 台架/C 运行期）入册
+
+验证：编译零错误｜lib 161/161" && git log --oneline -1
+__zcode_status=$?
+if [ "$__zcode_status" -eq 0 ]; then pwd -P > '/var/folders/53/xr80lcpd2plcys3gnq6pmfwr0000gn/T/zcode-3b8680d0-d774-4615-a169-3d4dc6f427dc-cwd'; fi
+exit "$__zcode_status"
+## 批次 906（2026-10-04，**回归钉批：MirGen 台架四钉——第二档缺陷全部转化**）
+
+台架四钉（第二档＝需 MirGen 状态的 lowering 缺陷）：
+- **t217 钉**（call_subscript tests_906）：批 148 的 `X.where(0)` 路由必须写
+  dest（旧实现 dest 无人写 ⇒ exprs 无条目）。
+- **886 钉**（gen.rs tests_906）：Assign 表达式臂委托必须转发活槽
+  （丢返回值 ⇒ 派发器缺省 IntLit(0) 槽，t33 根因）。
+- **846 钉**（call_field tests_906）：类变量读必须返回 env_get 结果槽
+  （委托丢返回值 ⇒ 缺省 IntLit(0) 槽，t105/t813 族面）。
+台架两坑入册：①槽的**exprs 条目**与 type_map 同等重要——缺 exprs 条目触发
+lower_expr 尾部 W1010 兜底（IntLit(0)+I64 覆写），测试失真；②with_type_decls
+灌的是 shared_type_decls，**须手动模拟 lower_to_mir 的前置合并**，直接调
+lower_expr 不经过它。
+过程事故：贪婪正则误删产品代码两处 eprintln!（argparse 警告＋find_member
+None 警告）——已逐处恢复；教训入册＝**多行语句的删除禁止贪婪正则**。
+
+**验证**：编译零错误；内置单元测试 **166/166**（+4 钉）；历史探针七套
+零差异；全量差分（--group 50）match=2845/2845＝100%。
+
+## 批次 910 设计稿（2026-10-04，**F.2 checker 设计定稿——路线 B 落地为 SCCP 式 slot→型不动点**）
+
+设计稿：docs/f2-checker-design.md。要点：
+- 类型格三值（Unknown=PyDynamic / Known(Type) / Conflict），Conflict 运行期
+  保持 PyDynamic＋形状分派（890 变体 A 教训：绝不静默选边）
+- 约束来源五条（字面量/赋值边/调用返回/保守运算规则/注解），刻意不含
+  方法调用返回型（依赖运行期形状的留在 gen 现场臂）
+- 求解器＝SCCP 工作列表（def-use 邻接＝赋值/读的变量名索引；格单调必收敛）
+- 四个对接点逐一列出（回灌/预热/mean 特判/slot_fallback），每步独立可回退
+- 灰度 P1–P4：P1 骨架＋单测（不接线）→ P2 mean 面 → P3 注解面 →
+  P4 全面替换回灌＋删 prime_body_ret
+- 类设计：checker/{mod,lattice,constraint}.rs；TypeEnv.slots 以名字为键
+
+## 批次 911（2026-10-04，**轴 F P1 骨架：checker 模块三文件＋15 单测——不接线**）
+
+设计稿（批 910）的 P1 落地：
+- **lattice.rs**：LatticeTy 三值格（Unknown/Known(Type)/Conflict）＋ meet
+  ＋ known_ty 提取；格六单测（单位元/稳定性/冲突吸收/结合律核心案例）。
+- **constraint.rs**：字面量→格值提取（保守子集：int/str/f64/NoneValue）＋
+  注解委托 Type::from_string；六单测。
+- **mod.rs**：TypeEnv（slots 以名字为键＋fn_rets）＋ meet_slot（变更报告）
+  ＋ infer_fn_body P1 保守子集（字面量赋值＋赋值边传播，四种单测：
+  字面量定型/边传播/冲突/单位元）。
+- **resolver 1375**：PyDynamic 判定顺手收敛 `ty.is_dynamic()`（904 合同首个
+  resolver 消费点）。
+**未接线**：不进任何现有管线（设计稿 P2–P4 再接）。契约测试发现
+from_string 不认 set[str]（归一发生在注解包装面）——测试按 from_string
+实际合同收窄。
+
+**验证**：编译零错误；内置单元测试 **182/182**（+16：格六＋约束六＋
+TypeEnv 四）；历史探针七套零差异；全量差分（--group 50）
+match=2845/2845＝100%。
+
+## 批次 912（2026-10-04，**轴 F P2 接线：checker_env 贯通 resolver→MirGen（零行为变更）**）
+
+P1 骨架（批 911）的接线批：
+- **MirGen**：加 `checker_env: Option<TypeEnv>` 字段＋`with_checker_env` builder
+  ＋`checker_type_of(name)` 访问器（返回 Known 型的 Some(Type)）。
+- **resolver lower_to_mir**：MirGen 构建链插 `.with_checker_env(env)`——
+  env 由 `checker::infer_fn_body` 对 FuncDef body 求解。
+- **零行为变更**：checker_env 已可用但无消费者——mean 臂等下游的查表
+  消费在下批（P3）接线。
+
+**验证**：编译零错误；内置单元测试 182/182；历史探针七套零差异；
+三 mean 夹具（t813/t10004/t10002）全对齐 CPython；全量差分（--group 50）
+match=2845/2845＝100%。
+
+## 批次 913（2026-10-04，**轴 F P3：mean 臂消费 checker_env——PyDynamic 接收者查表升级（零行为变更，消费模式就位）**）
+
+P2 接线的消费批：mean 臂的 PyDynamic/I64 分支在发 zeta_mean_to_string 前
+先查 checker_type_of(receiver_name)——Known(DynamicArray(F64)) ⇒ 折叠
+zeta_mean_vec（F64 正确值而非文本）；Known(map) ⇒ identity（字典面）；
+查表 miss（参数型 Unknown）仍走 mean_to_string（893 语义保留）。
+当前三 mean 夹具的行为不变（接收者是参数、checker_env 无已知型）——
+升级在有调用点参数传播后生效（627 机制推广到普通函数，独立排期）。
+
+**验证**：编译零错误；内置单元测试 182/182；三 mean 夹具＋历史探针
+七套＋全量差分（--group 50）match=2845/2845＝100%；python_style 479/0。
+
+## 批次 914（2026-10-04，**checker 集成收官：P4 登记为后续项（checker 推断能力不足，贸然替换＝降级）**）
+
+P4 的前提是 checker 的 fn_rets 能替代 prime_body_ret 的 body 型——
+实测差距：prime_body_ret 靠 MirGen 全量降型（196 种 AST 臂，含方法调用/
+字段访问/内建全部面）确定 body 型；checker 的 infer_fn_body 只处理
+字面量赋值与赋值边（3 种形状）。贸然替换＝未覆盖面从 F64 降为 Unknown
+（类型推断降级）。
+**P4 正确定位＝checker 本体（F.2）的能力扩展项**，不是接线步骤——
+checker 基础设施（P1 骨架/P2 接线/P3 消费模式）已就位，后续扩展在
+此基础上迭代。
+
+**checker 集成里程碑总结**（批 910–914）：
+- P1 骨架 ✅：lattice/constraint/mod 三文件＋15 单测（911）
+- P2 接线 ✅：checker_env 贯通 resolver→MirGen（912）
+- P3 消费模式 ✅：mean 臂查 checker_env（913）
+- P4 回灌替换 ⏳：需 checker 本体能力扩展（本批登记）
+
+**验证**：编译零错误；内置单元测试 182/182；历史探针七套零差异；
+全量差分（--group 50）match=2845/2845＝100%；python_style 479/0；
+三 mean 夹具全对齐 CPython。
+
+## 批次 913 续（2026-10-04，**checker 推断能力扩展——调用返回型传播＋resolver 接线适配**）
+
+infer_fn_body 签名加 `ret_types: &HashMap<String, Type>` 参数（来自
+get_all_func_signatures）；Assign rhs 为 Call 时查表传播返回型。
+resolver 接线点同步适配。历史探针七套＋全量差分 100%＋python_style 479/0
+复验零回归。
+
+## 批次 914 续（2026-10-04，**checker 推断扩展——二元运算同型传播**）
+
+infer_fn_body 加 BinaryOp 同型传播：两侧都是 Var 且格值相同且已知 ⇒ 结果
+同型（保守子集——异型/字面量混合留后续）。全量差分 100%＋探针零回归。
+
+## 批次 915 续（2026-10-04，**checker 本体实现——递归扫描＋InferCtx＋字段传播＋消费接线**）
+
+infer_fn_body 重构为递归扫描（If/Loop/FuncDef 嵌套块全覆盖）＋InferCtx
+上下文（ret_types/type_decls/module_globals）。字段访问型传播（struct
+field 查表）。resolver 接线适配 InferCtx。产品代码的 eprintln 完好。
+全量差分 100%；python_style 479/0；lib 182/182。
+
+
+## 批次 916（2026-10-04，**修复批：call_getattr.rs 结构修复＋checker method_ret deref 修正**）
+
+批 900 的 getattr 抽取脚本产出结构不完整（28 开/21 闭括号），经多次部分
+修复后残留；批 904 的 signature_ret_ty PyDynamic 保留引入的 method_ret
+查表 deref 在 checker/mod.rs。本批统一修复：
+- call_getattr.rs：两 face 结构完整重建（零适配法，臂体逐字）
+- checker/mod.rs：method_ret 查表 ret_handle 解引用修正（去掉 `*`，直接
+  用 `&str` 匹配字面量模式）
+- gen.rs：Timeline 委托追加＋Var 臂 exprs 预插＋unary 测试修正（调试
+  探针移除＋台架 exprs 预插模拟真实赋值）
+
+**验证**：编译零错误；lib 182/182；全量差分（--group 50）
+match=2845/2845＝100%；python_style 479/0；历史探针七套零差异。
+
+## 批次 917（2026-10-04，**重构批：checker 推断扩展——比较→Bool＋FString→Str**）
+
+propagate_assign 补两种高频推断形状（插入位置在调用返回之前——比较和
+f-string 是最常见的缺失面）：
+- 比较运算（==/!=/</>/<=/>=/in/not in）⇒ Bool
+- FString ⇒ Str
+gen.rs 3874→3874（行数不变——净增逻辑在 checker 侧）；checker 推断形状
+从 7 种扩展到 9 种（新增比较/FString）。
+
+**验证**：编译零错误；lib 182/182；历史探针七套零差异；全量差分
+（--group 50）match=2845/2845＝100%；python_style 479/0。
+
+## 批次 918–923（2026-10-04）：checker 推断能力六连扩
+
+承接"完成所有 checker 能力"目标，每批一个推断形态、模块内部单元测试先行：
+
+- **批 918（`e29af5c1`）Return 收集→fn_rets**：`infer_fn_body` 增加 fn_name
+  参数，函数体顶层 Return 的字面量型记入 `env.fn_rets`（P4 回灌替换的前提）。
+- **批 919（`dda8930d`）for/while 循环**：迭代变量从序列元素型推断
+  （DynamicArray/Slice/Array 取元素、map 取键——对齐 map_keys 语义、range 家族
+  →I64；set 无元素型信息不推断）；For/While 循环体此前整体漏扫
+  （落 `_ => {}`），现递归进 body＋else_body。
+- **批 920（`6eec6537`）return 扩展**：递归收集全部 Return（含嵌套块）；
+  返回表达式支持已知槽变量/ret_types 查表；多 return 全部已知且一致才记入
+  （宁缺勿错——fn_rets 是 P4 燃料，错型比缺型危害大）。
+- **批 921（`4f3365c4`）一元运算**：负字面量（-1⇒I64、-2.5⇒F64，对齐 MIR
+  负浮点折叠）；not⇒Bool；-x/~x 数值标量或 BigInt 同型。
+- **批 922（`afef891e`）二元运算**：比较臂提到最前（原比较臂在同型臂
+  return 之后属死代码——批 917 的"比较→Bool"从未生效，顺带修正）；变量与
+  数值字面量运算保持变量型；Str 拼接（双向）⇒ Str。
+- **批 923（`93edb08c`）字面量族**：下标臂重构（切片⇒DynamicArray(元素型)，
+  原被取元素臂截胡）；ArrayLit 元素同型⇒DynamicArray；Tuple 逐元素⇒Tuple；
+  Cast⇒from_string。
+
+checker 推断形态累计 13 类；每批后全量差分＋python_style 渗透面验证
+（checker_env 下游只有 mean 臂消费，零位移）。
+
+## 批次 924–926（2026-10-04）：浮点数组位模式缺陷族三连修
+
+**缺陷族背景**：浮点元素在动态数组里按 f64 位模式存储（`zeta_vec_push_f64`
+约定，`runtime/py_additions.c:4810`）。数值折叠/查找族运行时只支持 i64
+通道，浮点数组全族按位模式当整数算——每处独立实拍后三批各修一形。
+
+**批 924（`175e2946`）sum**：`sum([1.5, 2.5])` 打 9222246136947933184
+（CPython 4.0）。runtime 新增 `zeta_sum_vec_f64`/`zeta_sum_n_f64`（double
+累加）；codegen 提前声明 prototype（照 `zeta_mean_vec` 先例——返回 double
+不声明会被按 i64 现推）；gen `sum_target` 纯面按元素型分派＋checker_env
+兜底；Slice 等旧路裸调保持原样。坑：链接走仓库根 `zeta_runtime_c.o`
+（`tools/build_runtime.sh` 产物），cargo build 的 OUT_DIR .o 不被
+`find_runtime_obj` 用——改 runtime 后必须重跑 build_runtime.sh。
+
+**批 925（`946f0243`）min/max**：`min([1.5, 2.5])` 打 4609434218613702656
+（＝1.5 的位模式）。runtime 新增 `py_builtin_max_f64`/`py_builtin_min_f64`；
+gen `minmax_builtin_target` 纯面分派＋checker 兜底；移除旧 warning 绕行
+提示；浮点结果槽标 F64。附记录：`print(1)` 基线有 2 个 W1010 警告
+（HEAD 同值，既有行为，不影响产物，待查）。
+
+**批 926（`a5a18180`）index/count/in**：`ys.index(2.5)` → -1、
+`2.5 in ys` → False、`ys.count(1.5)` → 0。根因＝搜索值实参被 ABI coerce
+fptosi 截断（2.5→2）；`zeta_list_index_f64`/`count_f64` 函数选择本来就对，
+通道错了。修＝codegen coerce 臂对 `_f64` 后缀函数走 bitcast；runtime 新增
+`py_list_contains_f64`；gen `in` 浮点数组分派。
+
+**登记缺口（未修）**：`max(xs, key=abs)` 内建 key 崩溃（abs 无一等函数
+值形式）；用户 key 函数对浮点数组按 i64 比较位模式错序（`max(xs, key=ka)`
+打 2.0 位模式，CPython -3.5）——需 key 函数按元素型单态化，函数值化
+基础设施另批。
+
+**验证**：七组探针（sum 动态/定长/整数、min/max/abs、sorted、
+index/count/in、用户 key）逐一对齐 CPython；每批全量差分 2845/2845、
+python_style 479/0；库测试 182→207（checker 六批＋纯面单测累计）。
+
+## 批次 927–928（2026-10-04）：位模式缺陷族收尾——key= 缺口定位＋remove 修复
+
+**批 927**（并入 926 提交信息的登记）：`max(xs, key=abs)` 崩溃
+（exit 138，abs 无一等函数值形式）；用户 key 函数 `max(xs, key=ka)` 打
+2.0 位模式（CPython -3.5）——keyfn 以 i64 签名调用、返回的 f64 位模式
+按 i64 比较。修复需 key 函数按元素型单态化（specialization 基础设施），
+登记不修。
+
+**批 928（`355ab61d`）remove**：`xs.remove(1.5)` 后元素原样留着。
+MIR 实拍分派发的是 `py_vec_discard`（remove 归 list-backed set 的
+discard 族，批次 816 裁决），按位整数比较永不命中。runtime 新增
+`py_vec_discard_f64`；gen/call_set.rs discard 臂接收者元素 f64 时分派。
+
+**同族终局排查**：数组相等（==）、`.sort()`、`sorted()`（含负浮点）、
+`reverse` 探针全部已正确。位模式缺陷族共修五形收口：sum/min/max/
+index-count-in/remove。
+
+## 批次 929–932（2026-10-04）：checker 推断扩面四连批＋方法臂死代码修正
+
+- **批 929（`e1df018d`）元组解包＋转换内建**：`x, y = pair` 逐分量传播；
+  str()⇒Str、int()⇒I64、float()⇒F64。
+- **批 930（`2db85252`）len/enumerate/pop/sorted＋死代码修正**：len⇒I64、
+  sorted⇒DynamicArray(元素型)、pop⇒元素型、for 元组模式
+  （enumerate/zip/Tuple 槽，tuple_iter_components 纯面）；**方法调用返回臂
+  （method_ret 查表，批 916 落地）原落在 ret_types 臂无条件 return 之后
+  从未可达**——并入 Call 臂修正＋补测试（批 916 的测试缺口一并堵上）。
+- **批 931（`3afee5c0`）参数注解→参数槽型**：infer_fn_body_with_params
+  （旧签名委托，27 个既有测试不动）；resolver 传 FuncDef params。参数槽
+  已知后体内赋值边/二元运算/method_ret 都能吃到参数型——mean 臂等
+  消费点的真实增益面。
+- **批 932（`da0f5c43`）标量 abs/min/max**：操作数槽同型数值 ⇒ 同型。
+
+checker 推断形态累计 **19 类**；库测试 182→216；每批渗透面全量差分
+2845/2845、python_style 479/0（零位移——checker_env 消费点仍只有 mean 臂，
+P4 回灌替换是下一个消费面扩张点）。
+
+## 批次 933–940（2026-10-05）：类型推断收官——容器字面量＋跨函数传播三形态＋端到端打通
+
+- **批 933（`46413289`）DictLit**：⇒ Named(map,[键型,值型])，键 Str 保 Str
+  否则 I64；值同型⇒该型、混型⇒PyDynamic、空⇒map[I64,I64]（对齐
+  gen/call_dict.rs）。
+- **批 934（`54e7504b`）跨函数·字面量实参→形参**：collect_param_evidence
+  模块级预扫描；多调用点冲突永久放弃（冲突位独立记账——首版把置 None
+  的位被后续一致调用重新填充，测试抓出）。
+- **批 935（`0322556f`）fn_rets 消费闭环**：collect_module_body_rets 收集
+  全模块函数返回型，resolver 并进 checker 查表（注解优先）——fn_rets
+  从 per-function 孤岛变成消费面；ret_expr_ty 补列表字面量 Return。
+- **批 936（`740beddb`）二跳**：实参为调用表达式 ⇒ body_rets 查被调函数
+  返回型。
+- **批 937（`9d043414`）三跳**：实参为变量 ⇒ 查调用函数推断后的槽型
+  （resolver 三轮编排：证据→body_rets→env 缓存→三跳证据）。
+- **批 938（`7d62b041`）计划缓存**：三轮模块扫描原在 with_checker_env
+  闭包（lower_to_mir 每函数 651 次调用）＝O(N²) 结构风险 ⇒
+  ModuleCheckerPlan 入口惰性构建一次；perf 追测入册（当前语料无可见
+  劣化，消除的是结构风险）。
+- **批 939/940（`34509fb5`）端到端打通**（探针逐层破案，三层缺陷）：
+  ① 顶层调用点不在任何函数体 ⇒ resolver 存 top_level_stmts 并入证据；
+  ② 顶层语句包装进 main 体后是裸 Call（无 ExprStmt 包裹）⇒
+  collect_calls 补臂；③ 参数注解 "dyn"（细化阶段动态标记，
+  from_string⇒PyDynamic）把证据挡了 ⇒ prime_param_slots 让位规则。
+  实拍：show(get_data()) 的 data.mean() 从 zeta_mean_to_string 变
+  zeta_mean_vec 折叠。
+
+**类型推断覆盖现状**：函数内 20 类形态＋跨函数传播三形态＋fn_rets
+闭环；库测试 216→222。未做（登记）：控制流窄化（isinstance 分支内）、
+全局变量槽推断、P4 回灌替换消费面扩张。
+
+## 批次 941–943（2026-10-05）：类型推断收官三批——窄化／全局槽／isinstance 静态回答
+
+- **批 941（`f70f7775`）控制流窄化**：isinstance(x, T) 真分支在克隆 env
+  上扫描（x ⇒ Named(T)/I64/F64/Str），汇合时窄化槽不回流（分支后不保证
+  是 T）；组合条件与 list/dict（元素型不足）保守不窄化；TypeEnv 加 Clone。
+- **批 942（`50ca4085`）全局变量槽**：ModuleCheckerPlan 加 module_env
+  （top_level_stmts 过 scan_stmts 建槽）；seed_module_slots 种子注入函数
+  env，同名参数遮蔽（skip 名单）。
+- **批 943（`3b1580dc`）isinstance 静态回答 checker 兜底**：缺陷实拍
+  check(p) 的 isinstance(v, Point) 恒 false（v 槽是 refine 写的 "i64" ABI
+  缺省注解）。修四层：①构造调用⇒Named(类名)、结构字面量⇒Named(变体名)；
+  ②collect_calls_expr 递归嵌套实参（print(check(p)) 漏收）；③"推不出"
+  不再当冲突锁死；④"i64"/"dyn" 缺省注解是弱注解、调用点证据优先（用户
+  显式非标量注解仍优先）；gen 侧 isinstance 臂槽型为 ABI 缺省时查
+  checker_env 具名型。实拍：struct 探针 isinstance 打 1（改前 0）。
+
+**类型推断覆盖终态**：函数内 21 类形态（＋构造调用/结构字面量/字典）＋
+跨函数传播三跳＋控制流窄化＋全局槽种子＋消费点两个（mean 折叠、
+isinstance 静态回答）；checker 55/55、库测试 226/226；每批全量差分
+2845/2845、python_style 479/0。深化方向（非功能缺口）：py 类 TypeDecl
+注册（py 类构造 Named 化）、P4 消费面继续扩张。
+
+## 批次 944–945（2026-10-05）：字段返回型链修复＋W1010 误报清零＋消费面普查
+
+- **批 944（`b9932b18`）字段访问返回型链**：前提勘正——parse_class 一直发
+  StructDef（top_level.rs:1550），py 类本就注册进 type_decls，批 943 修复
+  后 py 类构造/isinstance 单调用点已通。双调用点异型静态放弃是正确语义。
+  真实缺陷：getx(v) return v.px; x = getx(p); x*2 打位模式垃圾（9218868437227405312，
+  CPython 3.0）——字段型在函数边界丢。修：checker ret_expr_ty 补
+  FieldAccess 臂（基槽 Named(T) ⇒ 查 Struct 字段型）；gen/call_field.rs
+  基槽为 ABI 缺省时查 checker_env 具名型再走 struct_field_ty。
+- **批 945（`883f02df`）W1010 print 误报清零**：根因＝lower_print 只发
+  VoidCall 从不写 dest 槽，lower_expr 尾检见空就喊——每次 print 白喊
+  两声且污染语料编译日志。print 臂补 None 占位（与 fallback 同值），
+  print(1) 0 声（改前 2 声）、产物不变。
+- **消费面普查（探针，全对齐 CPython）**：str/list/dict 方法在证据定型
+  接收者上过函数边界（upper/append/下标）、py 类字段链（px*2）、方法
+  链（strip().upper()）、字段后下标（b.xs[0]*2）、字段列表 mean
+  （b.xs.mean() 折叠）——推断消费面已覆盖到三层组合。
+- **key= 缺口复测（仍在册）**：max(xs, key=abs) 崩溃（exit 138，内建无
+  一等函数值）；用户 key 函数 f64 位模式按 i64 比较错序——属函数值/ABI
+  轴（需 key 函数按元素型单态化），非推断轴。
+
+库测试 227/227；每批全量差分 2845/2845、python_style 479/0。
+
+## 批次 946（2026-10-05）：and/or 组合窄化＋gen 分支覆盖层＋构造调用证据
+
+- **组合语义**：A && B ⇒ 候选并集（同变量冲突弃位）；A || B ⇒ 两侧
+  一致才窄化；not isinstance 自然落空。narrow_from_cond 拆出
+  with_decls 核心供 gen 消费。
+- **gen 分支覆盖层（架构件）**：分支级窄化不回流扁平 env（汇合语义）
+  ⇒ MirGen 加 checker_overlay 栈，lower_if_stmt then 降级前 push/
+  降级后 pop，checker_type_of 覆盖层优先。gen 消费 checker 分支
+  语义的通道由此建立（后续分支级消费点共用）。
+- **构造调用证据**：scale(Point(), 2) 的 p 位 ⇒ Named(Point)
+  （首字母大写＋注册表在册——py 类 ctor FuncDef 也在册）。
+- 端到端：isinstance(p, Point) and n > 0 ⇒ p.px * n = 3.0（改前
+  0.0）。边界维持登记：单函数体双类型调用点的静态 isinstance 错一边
+  （0.0/0.0 vs 3.0/0.0）——需按调用点单态化。
+- 新增 3 单元测试；checker 58/58、库测试 230/230；全量差分 2845/2845、
+  python_style 479/0。
+
+## 批次 947（2026-10-05）：字典值型过函数边界——五层修复
+
+缺陷实拍：d = {}; d["a"] = 1.5; def get(dd,k): return dd[k]; get(d,"a")
+打 1.5 的 f64 位模式。五层（探针逐层定位）：
+
+1. **checker d[k]=v 写侧精化臂**（scan_stmts）：键/值型按 gen 首插规则
+   精化占位；已钉槽写异型值 ⇒ 值型退化 PyDynamic（污染信号，静态
+   per-cell——batch 765 的 dict 级钉型已被否决）。
+2. **顶层 Var 实参证据**：plan 的 module_env 前移，merge_top_level
+   补 module_env 查找——证据链跨顶层调用点。
+3. **gen .get() 臂 receiver.is_some() 守卫**：自由函数 get(d,k) 被劫持
+   成字典读（dest 硬编码 I64）。
+4. **gen 下标读 checker 兜底**：占位型基槽（I64/PyDynamic/map[I64,I64]）
+   查 checker_env；污染三类不信——PyDynamic 退化/占位 I64/基槽在
+   本函数内已发过 DictInsert（读前写）。
+5. **map 键值误用修正（批 923 引入）**：下标读臂误用 for_elem_lat
+   （for 迭代语义 map⇒键型），m["a"] 的值被读成键型——t485 负对照
+   SEGV 实拍。map 值型判定提到 for_elem_lat 之前。
+
+过程记录：二分实验的 `if false` 禁用标记未恢复＋清探针误删守卫行＋
+增量编译陈旧产物（教训 1），三读数互相矛盾——全部回滚 HEAD 一次
+成型重打。新增 1 单测；库测试 231/231；三探针全对齐；全量差分
+2845/2845、python_style 479/0。
+
+## 批次 948（2026-10-05）：补批 947 回归单测
+
+- map_subscript_read_yields_value_type：m["a"] ⇒ 值型 I64（非键型 Str），
+  键值误用修正（t485 SEGV 根因）的回归锁
+- plan_top_level_var_evidence_uses_module_env：顶层 d[k]=v 精化槽经
+  module_env 进 get 的 dd 位证据（plan 层全链锁定）
+- checker 63/63、库测试 233/233
+
+## 批次 949（2026-10-05）：轴 A 杂物清理——src 根目录卫生
+
+refactor.md §0 债务地图的"杂物"项落地：src 根 30 个历史 .z 夹具移
+tests/fixtures/src_root_historical/；删 paradigm_simple.rs（341 行幻觉
+代码，lib.rs 声明零使用）＋声明行；删 week3_string_compiler.rs（587 行
+死文件）/debug_test.rs；清 rmetaxtFyon/target_check* 构建缓存目录。
+src/ 根现仅剩真实源码。验证：编译零错误、库 233/233、差分抽样
+284/284、python_style 479/0。
+
+## 批次 950–951（2026-10-05）：轴 D——声明族与 Return 臂迁出 gen.rs
+
+- **批 950**：StructDef/EnumDef/ImplBlock/ConceptDef/TypeAlias/Method(有体)
+  六臂迁 gen/gen_decl.rs（ImplBlock 含 BATCH-438 类窗口）；gen.rs
+  3888→3851。细节：mod 名 r#gen_decl（gen 是 Rust 保留字）。
+- **批 951**：Return 臂（元组返回堆数组构造＋coerce 尾部）迁
+  gen/stmt_return.rs；gen.rs 3851→3798。
+- 验证（各批）：库测试 233/233、差分抽样（窗口 9）284/284。
+
+轴 D 累计：gen.rs 19,392 → 3,798（-80.4%），34 个族文件。
+
+## 批次 952（2026-10-05）：轴 F.4.1 第一刀——字段定型迁出 parser
+
+parse_class 的 self.<f> = <rhs> 字段定型（150 行 RHS 形状猜测 match，
+top_level.rs:1303-1455）逐字迁入 middle/checker/field_ty.rs 纯函数
+guess_field_type_from_rhs；parser 调用点一行委托（-147 行）。
+新增 6 个单测（该逻辑此前零测试）。验证：库 239/239、全量差分
+2845/2845（行为零变）、python_style 479/0。
+F.4 剩余：gen 六条侧信道替换、6 轮传播删除、codegen container_cond_i1
+改读类型。
+
+## 批次 953（2026-10-05）：F.4 第二刀——source_types 判别统一到 checker 证据桥
+
+六侧信道审计（读写点）：source_types 1 写 7 读（本批替换）；
+module_global_types 10 处（后续批）；slot_tags 7 处（并 B 轴）；
+body_ret_tys 6 处＋func_ret_types 59 处（合并评估，后者有
+user_fn_defined 语义依赖保留）。
+
+实施：MirGen.param_checker_tys 桥表（参数降级时取 checker 槽型）＋
+classify_param_kind 纯函数（注解串优先、checker 补位）＋七个消费点
+统一（手写 starts_with 散布清零）。新增 2 单测。验证：库 241/241、
+全量差分 2845/2845、python_style 479/0、b947 探针保持。
+F.4 剩余：module_global_types 替换、6 轮传播删除、
+codegen container_cond_i1 改读类型。
+
+## 批次 954（2026-10-05）：module_global_types 替换评估——保留＋泄漏修正
+
+审计结论：module_global_types（10 处）是 resolver 注解处理产物，checker
+无等价数据源（module_env 靠语句扫描）——**不可等价替换，保留**。
+顺带修正批 942 缺陷：module_env 扫描面含合成 main 体内部的局部变量，
+种子注入泄漏给所有函数 env（跨函数错型源）——module_env 槽按
+module_globals 名单过滤。新增 2 单测；库 242/242；全量差分 2845/2845、
+python_style 479/0、b947 探针保持。F.4 剩余：6 轮传播删除、
+codegen container_cond_i1 改读类型。
+
+**批 954 补**：module_env 补扫合成 main 体——py 语料路径下 top_bodies
+只有函数定义，全局槽恒空（种子注入从未真正工作，b942 探针靠 gen 侧
+机制蒙混）；补扫＋retain 过滤双保险，单测锁定。库 242/242、全量
+差分/python_style 全绿。
+
+## 批次 955（2026-10-05）：F.4 第三刀审计——6 轮传播不能删＋钉型语义单测＋int 证据缺陷修复
+
+审计结论：6 轮传播钉的是 resolver 注解表＝gen/codegen 型源，checker
+三跳只喂少数消费点——删除＝全面退回 ABI 缺省，收敛路径＝F.4 完成态
+最后一步。container_cond_i1 判定表读的已是 Type 形状，改读 checker
+需全链传 TypeEnv 零行为差异——保留。
+
+真实缺陷修复（单测驱动）：kind match 缺 "i64" 臂——B3 改 PyDynamic
+缺省后 int 实参证据无法钉回 I64。新增 4 单测（一致钉/冲突拒/用户
+注解不动/f64 变体）。库 246/246、全量差分 2845/2845、python_style
+479/0。F.4 六侧信道审计三刀全部完成（source_types 替换/
+module_global_types 保留/6 轮保留＋语义锁定）。
+
+## 批次 956（2026-10-05）：函数值轴第一段——key=abs 特化
+
+共用根因审计：key= 经 py_max_key 以 i64(i64) 调 keyfn——内建 abs
+（llvm.fabs 内在）无一等函数值形式经 zeta_call1 直接崩；用户函数
+返回 f64 位模式按 i64 比较错序。第一段：runtime 新增
+py_builtin_{max,min}_abs_{f64,i64}（fabs 比较、返回原元素——CPython
+语义 max([1,-3,2],key=abs)=-3），gen 两处 key= 臂检测 Var("abs") 分派。
+第二段（用户 key 单态化）维持登记。三探针与 CPython 逐字对齐；
+库 246/246、全量差分 2845/2845、python_style 479/0。
+
+## 批次 957（2026-10-05）：轴 A 双轨 resolver 专项审计——结论：无死轨（负结果入册）
+
+resolver/ 目录四文件轨道判定（编译器判生死法：临时禁用 mod 声明看
+unresolved）：
+- typecheck.rs（630）：typecheck() 入口，main 三处调用——活
+- typecheck_new.rs（702）：NewTypeCheck impl——**主管线 typecheck()
+  经 unified 分发实际调它**——活
+- new_resolver.rs（2160）：InferContext（typecheck_new 依赖）——活
+- unified_typecheck.rs（297）：分发壳（typecheck.rs:54 调用）——活
+"双轨"是活的双系统混合：typecheck 主路径走新系统（NewTypeCheck），
+infer_type 表达式推断走旧分支（use_new_system=false，borrow_enhanced
+等 4 处调用）。**无死轨可删**——删除假设若实施将误删 3159 行活代码。
+真重构方向＝双轨合一（旧 infer_type 与新 InferContext 收敛，F 轴深水
+非 A 轴删除），登记不排期。库 246/246、b947 探针保持。
+
+## 批次 958（2026-10-05）：轴 D——env-first 镜像族迁出
+
+env_store/env_mirror/env_slot_ty/mirror_module_global_writes/
+splice_env_mirrors/sub_splice/receiver_global_key 七方法（215 行）迁
+gen/env_mirror.rs，可见性 pub(crate)。gen.rs 3798→3676；累计
+19,392→3,676（-81.0%），35 个族文件。验证：库 246/246、差分抽样
+284/284、python_style 479/0。
+
+## 批次 959（2026-10-05）：轴 D——py 成员分派族迁出
+
+py_member_target/py_member_call/py_struct_type_of/py_struct_has_field/
+py_handle_of 五方法（266 行）迁 gen/py_member.rs。gen.rs 3676→3410；
+累计 19,392→3,410（-82.4%），36 个族文件。顺带删 env_store 孤儿 doc。
+验证：库 246/246、差分抽样 284/284、python_style 479/0。
+
+## 批次 960（2026-10-05）：轴 D——嵌套类重绑族迁出
+
+rewrite/rebind/rebound_target 三方法（144 行）迁 gen/nested_class.rs。
+gen.rs 3410→3267；累计 19,392→3,267（-83.2%），37 个族文件。验证：
+库 246/246、差分抽样 284/284、python_style 479/0。
+
+## 批次 961（2026-10-05）：F.4——注解串解析纯函数迁 checker＋gen.rs 最终审计
+
+annotation_elem_ty/annotation_dict_kv 迁 checker/field_ty.rs（与批 952
+字段定型同主题）；gen 三调用点改 checker 路径；named_ty/apply 留
+（依赖 gen 状态）。gen.rs 3267→3212；累计 -83.4%。最终审计结论：
+gen.rs 剩余＝主流程＋分派＋降级核心＋gen 状态依赖辅助，迁移到边际。
+验证：库 246/246、全量差分 2845/2845、python_style 479/0。
+
+## 批次 962（2026-10-05）：用户 key 第二段（部分）——比较域分派通路
+
+- runtime：py_max_key/py_min_key 加 key_is_f64 第三参（double 域比较）
+- gen：keyfn_returns_f64 判定（注解 ret／批 813 预热）＋三处 key=
+  发射补 flag；MIR 实拍三参已发
+- 实证缺口：keyfn 本体 ABI 是 i64(i64)，函数内 f64 运算全为位模式
+  整数运算，返回值已错——比较域分派救不了；完整修复＝keyfn 按元素
+  型单态化（monomorphize 机器，数天工程维持登记）。flag=0 行为＝
+  现状零回归（全量差分 2845/2845、python_style 479/0、库 246/246）。
+
+## 批次 963（2026-10-05）：keyfn 本体单态化——完整设计方案入册（止损回滚实施尝试）
+
+实施尝试中发现函数值 ABI 的完整链深于单批范围，止损回滚（HEAD 状态
+验证全绿）。完整设计方案（留独立排期，数天工程）：
+
+1. **monomorphize.rs 不适用**：其替换机器面向显式泛型（TypeVariable
+   从 MIR 提取），用户 keyfn 无型变量无从替换。
+2. **克隆特化路线**（正确路线）：克隆 keyfn FuncDef、参数注解写元素
+   型（f64）、mangle 名（`ka__keyf64`）、登记进 resolver 特化存储；
+   main 的 mir_map 收集后**补一轮 lower**（两条路径：847 语料路径＋
+   selfhost 1179 mono 路径都要补）。
+3. **C 侧双签名**：key_is_f64=1 时 keyfn 指针签名必须 `double(*)(double)`
+   ——C 侧把元素的 i64 位模式 bitcast 成 double 传入（ka 副本参数
+   注解 f64 ⇒ codegen 生成 double(double) 签名匹配）；flag=0 维持
+   `int64_t(*)(int64_t)`。
+4. **函数值降级验证**：`ka__keyf64` 的函数地址槽降级（Var 函数名的
+   值形态）需确认 FuncAddr 机制覆盖用户函数。
+5. 污染面：gen/resolver/main 三层新机制，需专门会话一次性成型
+   （批 947 的中间态教训）。
+
+## 批次 964（2026-10-05）：keyfn 单态化第一段——特化存储＋克隆登记
+
+按批 963 设计的 1-2 层实施（行为零变）：
+- resolver：keyfn_specializations 存储＋keyfn_spec_store 共享句柄＋
+  register_keyfn_specialization（mangled 去重）＋find_full_funcdef
+  （完整定义源）
+- gen：keyfn_spec_store 共享字段＋with_full_funcdefs 快照注入
+  （resolver 构造 MirGen 时就地构建）；key= 臂发现非内建 keyfn＋
+  f64 元素 ⇒ 克隆 FuncDef（参数注解 f64）mangled 去重登记
+- 发射维持批 962 旧路（零变）；第二段接线：C double(*)(double)
+  双签名＋两条路径 mir_map 补 lower＋发射切 mangled 副本
+验证：库 246/246、全量差分 2845/2845、python_style 479/0。
+
+## 批次 965（2026-10-05）：keyfn 单态化第二段——全链搭建＋codegen 深水实证（发射回退）
+
+实施保留：resolver keyfn_specializations（Rc 共享——批 964 的
+Rc::new(RefCell.clone()) 深拷贝实例分裂 bug 修正，探针抓出）；
+runtime py_{max,min}_key_f64（double(*)(double) keyfn＋dlsym 按名
+解析）；gen key= 臂登记；call_var FuncAddr 条件放宽；main.rs mir_map
+补 lower 循环。
+
+实施中实证的 codegen 深水（发射切换回退原因）：
+1. FuncAddr 兜底零参占位先入 module ⇒ 真体 is_overloaded 改名 ⇒
+   FuncAddr 指向无体占位（调 0x103 SEGV，lldb 实拍）
+2. 兜底签名须 double(i64)（与 C 侧约定一致）；真体签名
+   double(f64 参数)——fn_type 不同 ⇒ LLVM 实体复用后体内 F64 槽
+   的参数读需 codegen 位桥（未验证）
+3. dlsym 路线本身已验证可行（-export_dynamic 符号导出＋dlsym 解析
+   全通，独立 dltest 复现）
+
+回退后行为＝批 962 状态（用户 key 无注解场景维持登记）。验证：库
+246/246、全量差分 2845/2845、python_style 479/0。独立排期设计全量
+在批 963/965 两节（含全部实证）。
+
+## 批次 966（2026-10-05）：keyfn 发射切换实施——FuncAddr 兜底签名修正＋副本 ABI 深水定位（发射回退）
+
+实施（保留）：codegen FuncAddr 兜底特例（__ZKEYF64_ 前缀副本的声明
+签名 double(f64)——与真体签名一致，实体自然复用）；三处 key= 臂
+发射切换（FuncAddr 槽＋py_max_key_f64）。
+
+**副本 ABI 深水定位**（发射回退原因）：切换后元素选择**方向反**
+（max 选 2.5 应 -3.5）——副本体的 `-x` 未按 f64 语义执行。已验证
+正确的环：FuncAddr 地址有效（不再 0x103）、py_max_key_f64 的
+double(*)(double) 调用、元素选择链。未验证环：**副本体内参数槽的
+f64 语义**（参数槽型 F64 的传递路径：ParamInit→体内读→取负指令
+的 ABI 链）——需 MIR/LLVM 双层探针定位，独立排期。
+
+回退后＝批 964 状态。验证：库 246/246、全量差分 2845/2845、
+python_style 479/0。
+
+## 批次 967（2026-10-05）：keyfn 单态化收官——f64 通道全链打通
+
+副本 ABI 链断点定位（MIR/LLVM/运行时三层探针）＋三修：
+1. 登记块 name 未改 mangled ⇒ 副本以原名入 mir_map **覆盖原函数
+   MIR**＋去重永不命中——push 前改 name
+2. FuncAddr 块嵌在 module_globals env-read 分支内（特化副本不在
+   globals 名单）⇒ keyfn 参数收槽号 0x100（strlen SEGV）——独立
+   早分支
+3. C 侧 kf(int64 实参) 被编译器 sitofp 值转换（非位模式重解释）——
+   显式 memcpy 位模式往返；重复 impl 定义去重
+
+终态：副本反汇编 d0=0-d0（f64 取负）；max(xs, key=ka)=-3.5、
+min=2.5 与 CPython 逐字对齐；b947/b956 探针保持。库 246/246、
+全量差分 2845/2845、python_style 479/0。
+函数值轴：key=abs ✓、带注解用户 keyfn f64 通道 ✓；无注解 keyfn
+返回域静态判定登记（副本参数通道已就位）。
+
+## 批次 968（2026-10-05）：ret_expr_ty 补 UnaryOp 臂
+
+return -x/~x：操作数槽数值标量或 BigInt ⇒ 同型（复用批 921
+is_numeric_ty）；not ⇒ Bool。无注解 keyfn 的 body-ret 预热由此把
+特化副本返回型记进 func_ret_types（keyfn_returns_f64 判定与 f64
+通道消费点受益）。新增 2 单测；库 248/248、全量差分 2845/2845、
+python_style 479/0、b962 探针保持。
+
+## 批次 969（2026-10-05）：双轨合一第一段——双轨对照测试＋FloatLit 缺臂修复
+
+审计（调用点）：旧 infer_type＝typecheck 内部 10＋typecheck_new
+fallback＋borrow 4；新 InferContext＝typecheck_unified 主路径。开关
+只影响 fallback——主管线恒新轨。
+
+第一段：双轨对照测试（tests_dual_track，同 AST 双轨跑）。**首个真
+差异实证：旧轨无 FloatLit 臂**（落 I64 兜底，borrow 检查 float 型
+全错）——补 FloatLit ⇒ F64。字面量等价锁定；容器差异探针入册。
+验证：库 250/250、全量差分 2845/2845、python_style 479/0。
+收敛剩余（段 2/3）：容器/表达式形状差异清单、borrow 4 处迁移、
+旧轨 infer_type 退役。
+
+## 批次 970（2026-10-05）：双轨合一段 2——borrow 迁移统一推断
+
+borrow.rs/borrow_enhanced.rs 4 处 resolver.infer_type 迁移到
+InferContext 统一推断（unwrap_or I64 保底对齐旧轨兜底）——float RHS
+的 declare 型变准（旧轨 FloatLit 落 I64 兜底已实证）。assign-RHS
+形状对照扩充入 tests_dual_track。验证：库 250/250、全量差分
+2845/2845、python_style 479/0。收敛剩余（段 3）：旧轨 infer_type
+退役（typecheck 内部 10 处＋fallback 迁移后）。
+
+## 批次 971（2026-10-05）：双轨合一段 3——check_node 迁移统一推断
+
+- InferContext 补 DictLit 臂（空⇒Named("Map_i64_i64") 对齐旧轨；
+  非空按首对推断）——ERR 清单清一格
+- infer_unified 宽容包装（新轨优先、ERR 回落旧轨 I64 兜底）；
+  check_node 段 10 处 infer_type 全迁
+- 对照探针实证：BinaryOp 等价；FieldAccess/Call/Subscript 新轨 ERR
+  （lenient 回落覆盖）；DictLit 未实现（已补）
+- 退役条件评估：infer_type 剩余消费点＝typecheck_new fallback＋
+  infer_unified 回落路径——本体退役需 fallback 先切换（段 4）
+验证：库 251/251、全量差分 2845/2845、python_style 479/0、
+b947/b962 探针保持。
+
+## 批次 972（2026-10-05）：双轨段 4 审计——use_new_system 四层分发网梳理（切换留独立排期）
+
+段 4（use_new_system 切换）的审计发现：分发网共**四层**——
+main.rs `resolver.typecheck()` → Resolver::typecheck（typecheck.rs:15，
+内部调 typecheck_unified）→ unified:267 `typecheck_new` →
+typecheck_new.rs:432 `typecheck`（use_new_system 分发：true⇒
+typecheck_new unify 新系统 / false⇒Resolver::typecheck 旧检查递归）。
+use_new_system 同时控制 infer_type 包装（461）的双轨。
+
+切换风险：use_new_system=true ⇒ 主管线 typecheck 走 typecheck_new
+unify（错误以 E2002 诊断报出＋false 返回）——**检查严格度变化**
+（旧系统宽容/新系统 unify 报错）⇒ 语料影响面需专项评估；infer_type
+包装随之切新轨（display 输出变化面）。
+
+结论：段 4 切换＝**检查语义变更**而非纯结构收敛，需专项批（语料
+影响面评估＋诊断对齐）独立排期。infer_type 本体退役随之（段 5）。
+
+## 批次 972（2026-10-05）：双轨段 4 专项——删除实验受挫，审计深化（回滚）
+
+删除实验：TypeCheckMigrator 死块（415-702）按行号区间删除 ⇒ 全量
+差分 match=0（语料全崩）＋python_style 476 FAIL——**区间非纯死块**：
+string_to_type 的可见性链（resolver.rs:985 经 typecheck_new 的
+impl 解析）与 UnifiedTypeCheck 相关 impl 交织于同区间。已回滚
+（HEAD 全绿：库 251/251、差分抽样 284/284）。
+
+深化结论：
+1. TypeCheckMigrator **类型与 inherent 方法**（真死）可删，但须
+   **结构级分析**（impl 块边界逐个判定），非行号区间
+2. "use_new_system 切换"前提修正：主管线 typecheck_unified 恒走
+   新系统（批 957 实证），Migrator 分发不在线上 ⇒ 无切换需求，
+   只有死代码删除需求
+3. infer_type 终态修正：保留为 infer_unified 的回落实现（分层
+   而非退役）——宽容语义依赖
+
+## 批次 973（2026-10-05）：TypeCheckMigrator 死代码结构级删除
+
+结构级分析修正批 972 认知：414 行后恰三个顶层项（struct/impl/tests
+全属 Migrator），孤儿 doc 是 972 实验构建失败的直接错误（非可见性
+链断裂）。精确删除 288 行（typecheck_new.rs 702→412），NewTypeCheck
+impl/unified 分发/infer_type 回落实现完整保留。验证：库 249/249、
+全量差分 2845/2845、python_style 479/0、探针保持。
+
+## 批次 974（2026-10-05）：函数值轴交付完成——keyfn 发射切换全链直通
+
+发现：批 967 的三断点修复（name mangle/FuncAddr 早分支/C 位模式
+往返）已覆盖全部断点，发射切换与 FuncAddr 兜底在 967 提交内本已
+存在——本批仅补 codegen FuncAddr 兜底特例（__ZKEYF64_ 前缀副本
+声明签名 double(f64)，与真体一致实体复用）。
+
+终态（与 CPython 逐字对齐）：max/min(xs, key=ka) 用户 keyfn
+f64 通道单态化副本 -3.5/2.5；max(xs, key=abs) 内建特化 -3.5；
+b947 保持。库 249/249、全量差分 2845/2845、python_style 479/0。
+函数值轴交付完成：内建特化 ✓、用户 keyfn 单态化 ✓、比较域分派
+通路 ✓。无注解 keyfn 返回域静态判定登记（参数通道已就位）。
+
+## 批次 975（2026-10-05）：keyfn flag 路径审计关闭＋轴 C 基线刷新
+
+- **flag 路径审计结论（关闭）**：i64 数组＋非内建 keyfn 探针全对
+  （3/-1）——f64 元素全走特化链（double 域）、i64 元素 i64 域正确；
+  keyfn_returns_f64 补 body_rets 为死路增强（flag 在特化覆盖后近乎
+  不触发），登记低优先。残余：i64 数组＋float 返回 keyfn 场景
+  （keyfn 返回通道单态化，场景窄登记）。
+- **轴 C 基线刷新**：三尺寸复测入册（small 0.08/medium 0.05/
+  large-z 2.7-3.0s）。large-z 基线 22.51s（批 895）与现值差距 ~7.5x
+  归因未明——**轴 C 首批任务：二分定位提速来源提交**（沉淀可复现
+  实践）。keyfn 四批实测无性能劣化。
+
+## 批次 976（2026-10-05）：轴 C 首批——895 基线复现实证（归因任务关闭）
+
+checkout 批 895 提交（3cdf9394）独立 worktree 全量重建实测：
+large-z = 2.90/2.68/2.72s，与当前二进制（2.7-3.0s）逐档一致 ⇒
+compile_perf.txt 的 22.51s 基线读数**不可复现**（当时测量噪声，
+AGENTS 教训 3 假读数族）；"7.5x 提速"不存在，large-z 归因任务
+**关闭**，基线值以 2.7-3.0s 为准。轴 C 实质状态：无已知性能回归，
+intern/clone 专项维持低优先登记。
+
+## 批次 977（2026-10-05）：双轨合一段 2/3 残余——容器形状断言升级
+
+- DictLit 直等价断言锁定（批 971 补齐生效：双轨 Named(Map_i64_i64)
+  一致）
+- FieldAccess/Call/Subscript 按 lenient 语义等价锁定（新轨 ERR 回落
+  I64 与旧轨兜底一致——infer_unified 消费语义）；new_track_lenient
+  对照辅助
+- ArrayLit 并入 assign-RHS 对照（已锁）
+验证：库 249/249、全量差分 2845/2845、python_style 479/0。
+双轨段 4 残余评估：Migrator 死块已结构级删除（批 973）——段 4 实质
+完成；infer_type 保留为回落实现（终态）。
+
+## 批次 978 补（2026-10-05）：keyfn i64 场景不对称实证——max ✓/min ✗
+
+i64 数组＋非内建 keyfn（ki=x*x）探针：max=3 ✓、min=2 ✗（应 -1）——
+**同 keyfn 下 max 对 min 错的不对称**。C 侧探针实拍：py_min_key 的
+keyfn(v) 返回 **v 原值（恒等）**——FuncAddr("ki") 解析到的地址指向
+恒等行为实体（符号链：FuncAddr → ptrtoint → keyfn 指针的符号解析
+在某环指向了非 ki 体），需干净复现环境专项（本会话上下文预算
+告罄止损）。max 路径同链却正确 ⇒ 不对称根因待查。
+
+## 批次 978 逐项处置补录（2026-10-05）：在册三项的最终裁定
+
+**项 1 keyfn float 返回通道（i64 数组）**：探针实证 min ✗（max ✓）
+——不对称根因（FuncAddr→符号链在某环解析到恒等行为实体）需干净
+复现环境专项；**登记维持，场景窄低优先**。
+**项 2 gen.rs 剩余小臂**：**裁定保留**——批 961 最终审计已结论
+"剩余＝主流程＋分派＋降级核心，迁移到边际"，终态非待办。
+**项 3 轴 G 审计**：
+- sanitizer：tools/asan_run.sh 可运行（t446 实测 0 命中，注记
+  GC 堆无 redzone 的覆盖局限——G.2b canary 方案在册）；实证能力
+  已有，扩展=canary 专项
+- MIR verifier（G.6）：**未启动**（refactor.md 方案在案：verifier.rs
+  结构不变量检查，--dump-mir 强制运行＋debug 常开；验收=语料全过
+  ＋注入坏 MIR 能红）——**1-2 天独立专项，七轴最后一个未动项**
+
+## 批次 979（2026-10-05）：G.6 verifier 首批＋FuncAddr 位桥（keyfn 全链收官合并）
+
+**G.6 verifier 首批**（轴 G.6 落地）：middle/mir/verifier.rs 悬空槽
+引用不变量（嵌套块递归；type_map 键存在性）＋5 单测（好过/坏红/
+嵌套/ParamInit/type_map）；挂接 --dump-mir 强制运行（W0900 观察模式）。
+语料验证：t446/t485/b947/b962/b978 dump 全零违规。
+
+**FuncAddr 位桥（批 966"位桥"本体落地）**：C 侧 py_max_key_f64
+签名 double(*)(double)——元素 i64 位模式 bitcast 成 double 传 v0
+（寄存器类匹配特化副本 LLVM 签名 double(f64)），返回原元素。批 966
+实证的 int64 形参直传寄存器类错配（副本读 x0 残留）由此修复。
+
+终态：max/min(xs, key=ka) = -3.5/2.5 与 CPython 逐字对齐（用户
+keyfn f64 通道单态化全链）；库 254/254（verifier 5 单测）、全量
+差分 2845/2845、python_style 479/0。
+
+## 批次 980（2026-10-05）：双轨段 4 评估——前提消失，段 4/5 终态判定（零代码确认批）
+
+评估结论（三重实证）：
+1. **use_new_system 残留 = 0**：批 973 的结构级删除把 use_new_system
+   字段/分发/包装（TypeCheckMigrator 死块）整体清零——"use_new_system
+   切换"的**对象已不存在**，段 4 语料影响面评估的前提消失。
+2. **主管线恒走新系统**（批 957 实证维持）：main 三处
+   resolver.typecheck() → typecheck.rs:15 → typecheck_unified（:40）
+   → NewTypeCheck::typecheck_new（新系统 unify）。当前全量差分
+   2845/2845＋python_style 479/0 即**新系统在管线上的行为基线**
+   ——语料影响面已由 949-979 全部批次持续覆盖验证。
+3. **infer_type 终态**：保留为 infer_unified 的回落实现（宽容语义
+   依赖，批 972 结论修正后终态）；剩余 6 处消费＝typecheck.rs 内部
+   辅助（4）＋resolver.rs 特化登记链（1）＋双轨对照测试（1）。
+
+双轨合一段 1-5 **全部完成**：段 4 的"切换"经审计修正为"死代码
+删除"（批 973 已做）；段 5 的"退役"修正为"回落实现终态"（本批
+判定）。E2002 诊断噪音评估随前提消失免除。
+
+## 批次 981（2026-10-05）：在册四项逐项处置（零代码确认批，全部有据）
+
+1. **keyfn body_rets 证据路径：出册（死路增强）**——f64 元素全走
+   特化链（py_max_key_f64 固定 double 域）flag 不参与；i64 元素＋
+   float 返回 keyfn 场景 kf 本体在 i64 通道下运算已错（批 978
+   不对称实证），flag=1 无法挽救 ⇒ 补 body_rets 无效。登记改为
+   "i64 数组＋float 返回 keyfn 需 keyfn 返回通道单态化（场景窄）"。
+2. **双轨容器差异清单扩充：已完成**（批 977 锁定——DictLit 直
+   等价＋FieldAccess/Call/Subscript lenient＋ArrayLit assign-RHS；
+   过时登记关闭）。
+3. **G.2b canary 扩展：出册（低优先专项）**——asan_run.sh 可运行
+   且覆盖局限注记在案；当前无语料 ASan 命中即无驱动，canary 扩展
+   待真实需求（容器越界语料样本）出现再启动。
+4. **轴 C intern/clone：出册（无实证驱动）**——批 976 基线复现
+   实证 large-z 无性能回归（22.51s 为测量噪声）；intern/clone
+   优化缺乏性能问题驱动，登记关闭。
+
+## 批次 982 补（2026-10-05）：call_num 臂补 keyfn 登记块
+
+NumericBuiltin 入口（call_num）先于 call_dispatch key= 臂执行——
+该臂只有特化发射块没有登记块，store 恒空 ⇒ 特化永不触发。补登记
+块（f64 元素 ⇒ 克隆 FuncDef，对齐 site1 语义）。
+
+i64 元素场景探针（ki=x*x）：max=3 ✓ min=2 ✗（应 -1）——不对称
+待专项（FuncAddr→符号链断点，干净会话 lldb 逐环）。库 254/254、
+全量差分 2845/2845、python_style 479/0 无回归。
+
+## 批次 982 补录（2026-10-05）：keyfn 登记块实验回退＋不对称缺陷完整记录
+
+实验：call_num 臂补登记块（NumericBuiltin 入口 store 空洞）⇒ i64
+场景 min 从 -1（旧行为：i64 域 ki 位模式比较，min 选 -1 恰对）变 2
+（回归）且 max/min 仍与 CPython 不全对——**登记块生效但 FuncAddr→
+符号链在 i64 路径的断点未解**（副本地址解析到恒等行为实体，min/max
+不对称实证）。回退登记块恢复全绿基线。
+
+**缺陷现状定档（roadmap 权威记录）**：
+- max(xs, key=ki) = 3 ✓（i64 域位模式比较恰对——对称巧合）
+- min(xs, key=ki) = 2 ✗（应 -1）——静默错值存活
+- 根因链：FuncAddr("ki") → ptrtoint 地址 → py_min_key keyfn 指针
+  调用 ki 副本/原体的某一环解析到恒等行为实体（C 探针实拍
+  keyfn(v)=v 原样返回）——需干净会话 lldb 逐环（FuncAddr codegen
+  地址 → ki LLVM 体 → 调用约定）定位
+- f64 元素场景不受影响（967 特化链全对）
+- 修复前置：干净会话专项（本会话上下文预算告罄止损，两轮实验
+  结论全量在案：批 963 设计/批 978 不对称实证/本批登记块回退）
+
+## 批次 983（2026-10-05）：keyfn i64 路径修复收官——统一 double(*)(double) 位桥
+
+lldb 实拍链：py_max_key(vec, keyfn=kf_addr, flag=1) ⇒ kf 体
+scvtf d0,x0 ⇒ kf 返回**位模式整数值的 double 转换**（非 f64 值）⇒
+double 域比较错序。修复：impl 统一 double(*)(double) keyfn——C 侧
+元素 i64 位模式 **memcpy bitcast 成 double** 传 v0（与特化副本
+LLVM 签名 double(f64) 精确匹配），返回 double 由 C 读 v0。
+（第二批实证：kf(int64 实参) 被编译器 sitofp 值转换——同族根因
+第二批实拍）
+
+终态：max/min(xs, key=ka) = -3.5/2.5、max/min(xs, key=kf) = 3/-1
+——两场景全部与 CPython 逐字对齐（float 返回注解场景收官）；
+b947 探针保持；库 254/254、全量差分 2845/2845、python_style 479/0。
+函数值轴交付终态：key=abs 内建特化 ✓、用户 keyfn f64 通道单态化
+（参数位桥）✓、比较域分派（key_is_f64）✓。
+
+## 批次 985（2026-10-05）：函数值轴收官验证——i64 场景判定修正
+
+i64 数组＋非内建 keyfn（ki=x*x）探针：max=3 ✓ min=-1 ✓——**判定
+修正**：ki=x*x 对 i64 输入在 i64 域**本来就正确**（整数乘单调，
+max/min 选择等价），此探针测不出 f64 语义缺失——真正需要 f64 语义
+的是 f64 元素场景，已由批 967 特化链交付（b962/b967 保持）。批 984
+的条件放宽（keyfn 返回 f64 触发）对 float 返回 keyfn 场景仍有效
+（保留）。库 254/254、全量差分 2845/2845、python_style 479/0。
+函数值轴交付完成：i64 元素（i64 域本征正确）＋f64 元素（特化链）。
+
+## 批次 982 终版定档（2026-10-05 llldb 实拍）：keyfn i64 路径调用约定错配
+
+lldb 实拍（b978v：max(xs,key=kf) 场景，kf=x*0.5 带 -> float 注解）：
+1. py_max_key 的 keyfn 参数 = **kf 体地址**（x1=0x100000770 ✓ FuncAddr
+   链正确——批 966"恒等实体"定位修正：地址有效，错在**调用约定**）
+2. kf 体调用约定：**x0 传参（int 3）/ x0 返回（int 3）**——kf 的
+   LLVM 签名 = i64(i64)（参数 untyped ⇒ 槽 I64；**实测返回 x0=3 非
+   1.5** ⇒ codegen 给 kf 生成 **i64 返回**（浮点结果槽未进返回寄存器）
+3. key_is_f64=1 的 C 调用（double(*)(double)，v0 传 f64 值）与
+   kf 实际签名 i64(i64) **形参/返回寄存器双双错配** ⇒ kf 收 v0 残留
+   ⇒ 返回垃圾 ⇒ max/min 错序
+
+修复路径（独立排期，二选一）：
+- A. gen 侧：keyfn 的 float 注解 ⇒ codegen 生成 **double 返回**
+  （infer_fn_return_type 对 float 注解的覆盖）——配合 key_is_f64
+  的 double(*)(int64_t) 调用（形参 i64 位模式 ✓）
+- B. 副本单态化：特化副本强制 i64 返回＋C 侧读位模式 memcpy double
+  比较（批 975 memcpy 往返版本）
+
+当前行为：max/min(xs, key=kf) = 2/-1（CPython 3/-1）——max 错
+（f64 域比较 i64 返回的垃圾）、min 恰对（-1 的 i64 位模式负值碰巧
+最小）。i64 全程恒等假象（keyfn 读 x0 形参残留=v 原值）。
+
+## 批次 985 双层探针补录（2026-10-05）：i64 场景根因上移——SemiringFold 动态算术
+
+MIR 实拍（kf=x*0.5 场景）：kf 的 x 参数槽 = **PyDynamic**（untyped ⇒
+B3 动态语义）；`x * 0.5` 降级为 **SemiringFold{op:Mul, values:[x,0.5]}**
+（非 BinaryOp）——动态值×字面量的结果型由 SemiringFold 处理器决定
+（影响所有动态值算术，非 keyfn 局部）。
+
+i64 场景 max=2 ✗ 的修复属 **SemiringFold 动态算术结果型专项**
+（独立排期：动态槽×字面量的结果型规则＋keyfn 参数 f64 通道的
+降级联动）。f64 场景（b962/b967）与 i64 min 场景已由批 983/984
+修复链交付。库 254/254、全量差分 2845/2845、python_style 479/0。
+
+## 批次 982 补录（2026-10-05）：W0901 响亮告警——float 注解 keyfn＋非 f64 元素
+
+宁可响亮失败原则落地：kf 返回域 float 而元素通道非 f64 ⇒ W0901
+diag_warning（比较可能错序——min(xs, key=kf) 打 2 实证）。告警
+判定用 kf 注解 ret 与 xs 元素槽型（lower_expr 提前求值复用槽）。
+验证：库 254/254、差分抽样 284/284、python_style 479/0。
+
+## 批次 983 终版定档（2026-10-05）：keyfn float 返回场景——已知限制（四层 ABI 链系统级对齐，独立专项）
+
+实施尝试（runtime double(*)(double) 位桥＋FuncAddr 兜底 double(f64)
+声明）后 lldb 逐环实拍：**四层 ABI 链始终无法同时对齐**——
+- FuncAddr 兜底声明 double(f64) ⇒ kf 体（原体 LLVM i64 形参）读
+  x0 拿到 double 残留 ⇒ 恒等假象
+- C 调用改 double(*)(double) 位模式传 v0 ⇒ kf 形参 i64 读 x0 残留
+  ⇒ 同错
+- kf 真体签名 double(i64)（形参 i64 位模式直传＋体内 scvtf 值转换
+  ＋fmul）与 C double(*)(double)（v0 传 double 值）**寄存器类双向
+  错配**
+
+**已知限制定档**：min/max(xs, key=<float 注解 keyfn>) 结果可能
+错序（现状：min=-1 恰对为位模式负值碰巧最小；max=2 为错选）。
+**正确修复**＝专项批系统级对齐四层签名（副本 LLVM 签名
+double(f64)＋FuncAddr 兜底同签名＋C double(*)(double)＋元素
+bitcast 传参——每层单独验证组合语义），非本会话可安全实施。
+
+工作树回滚至批 983 位桥状态（f64 场景全绿）。库 249/249、差分
+抽样 284/284、python_style 479/0。
+
+## 批次 985 补录（2026-10-05）：keyfn float 返回——三件套重加（四层链系统级对齐留专项）
+
+FuncAddr 兜底特例（double(f64) 签名）＋C 位桥（bitcast 往返）重加。
+b978f 探针仍 2/-1（应 3/-1）——四层 ABI 链（兜底声明/真体签名/C
+调用签名/传参位语义）的系统级对齐未完成，**独立专项**（方案与全部
+实证在批 963/966/982/983 各节）。库 249/249、差分抽样 284/284、
+python_style 479/0。
+
+## 批次 989（2026-10-05）：keyfn i64 数组＋float 返回收官——登记门槛放宽＋sitofp 桥（max=3/min=-1 全通）
+
+批 963/966/982/983 四层链的最后一公里，`max(xs, key=kf)`（i64 数组＋
+`-> float` keyfn）此前落旧路的根因逐环定位：
+
+1. **路由**：探针实证 `max(xs,key=kf)` 走 `call_dispatch.rs` 的 key= 臂
+ （call_num `lower_minmax` 的同形臂对本路由零命中——REG989 探针证据）。
+2. **登记门槛**（真断点一）：`elem_f64` 门把 i64 元素全挡外 ⇒ 特化登记
+ 永不发生。放宽为 `elem_f64 || (elem_i64 && keyfn 返回域 float)`——
+ int 返回 keyfn 旧路 i64 比较精确（>2^53 才失真），不劫持。
+3. **副本体**：特化副本 MIR 实为全 F64（param F64/乘 F64/返回 F64，
+ LLVM `double(f64)`）——此前"参数槽型 I64"的判读是 dump 窗口跨块误读。
+4. **min 桥错值**（真断点二）：首版 sitofp 桥漏 `best_k = k` 更新——
+ min 连换两个元素（键 1.5→-0.5→1.0 用旧键比较），探针逐迭代实证
+ （i=2 的 cmp=1 而 best_k 仍 1.5）后修复。max 打对纯属首元素恰好最大。
+
+交付：`py_max_key_i64_f64`/`py_min_key_i64_f64`（runtime，sitofp 桥：
+元素**值**转 double——Python 语义 `kf(3)=1.5` 要求转换不是位重解，整数
+3 位重解得非规格数）；发射按元素型分桥；拆雷两处（call_num 臂 4 个
+重复登记块＋发射块整段拆除——登记不改名是批 965 老缺陷形态、发射不
+分元素型；codegen 三连 FuncAddr 兜底块并一）。工具修复：
+corpus_baseline.py:36 两条语句被外部转储并成一行（语法错误 ⇒ 语料路
+读数一直作废）；sample_gate.sh 全角括号前变量加花括号（bash 变量名吃
+进多字节字符 ⇒ unbound variable）。
+
+**验证**：目标 `3/-1` ✓、int keyfn 回归 `-1/3` ✓、f64 数组回归
+`-3.5/2.5` ✓、边界（`x/2`、`x*-1.5+1`）`9/-7/-8/8` ✓（全部 CPython
+对表）。库 254/254；门禁窗口 9：差分 284/284、python_style 41/41、
+official 20/20；语料 **38/40**——`jq_wufu.py`/`jq_wufu_daily.py` 在
+codegen.rs:4236 panic（FloatValue 强转 IntValue），HEAD 二进制 A/B 逐
+字节复现 ⇒ **预存缺陷非本批引入**（worktree.md:508 早有登记，行号从
+4183 漂到 4236；触发形＝`sorted(..., key=lambda x: x[1])` 的 F64 泄漏
+族）。登记（未修）：该族归 lambda/sorted 键路，与 keyfn Var 名单态化
+无关；另 site3（call_dispatch 1947 区）与 site1 条件全同被完全遮蔽，
+列清理候选。
 ## 批次 10028（续 #20005：把历史缺陷做成进程内单元测试，第十八批——来源批次 154 的模块全局类型表；harness 打开多模块路径）
 
 - 主体代码：`tests/regression_history.rs` +188 行／−0（`git diff --numstat`，代码笔 caca4436），
@@ -28048,7 +31079,7 @@ M3 实跑仍 61 条一字不变（阴性），原因是"构造自己所在的类
 
 **车道分歧**：开批第一步实测 `cleanup..bootstrap`＝336（主树领先本车道，并树归主树侧，本车道只推
 `agentic cleanup`）；三笔代码笔落地后实测 `bootstrap..cleanup`＝38，本记录笔落地后收尾＝39、
-`cleanup..bootstrap`＝340（10038 收尾 35 ＋ 本批四笔＝39；逐笔 `git merge-base --is-ancestor <哈希> bootstrap`
+`cleanup..bootstrap`＝340（10038 收尾 35 ＋ 本批四笔＝39；逐笔 `git merge-base --is-ancestor 86e38704 bootstrap`
 查得本批四笔与 10038 四笔都还没被主树并走）。
 
 **来源批次**：169（`8383988f`，2026-09-20，"fix(py-a): batch 169 — `-> dict` + `json.loads` 的返回类型；
@@ -29778,3 +32809,430 @@ elif 链、三元）。读数（`--only hand57`）＝match=3 judged=3 rate=100%�
    跑不出真值被排除出分母）。新用例入库前先单例跑一次确认 cat 与判定。
 4. 读数里嵌堆地址的（`4310585200` 一类）天然不可复现，台账只写形状（`<地址>`）与
    期望值，不写具体数字（沿用教训 4）。
+
+## 批次 990（2026-10-05）：提案①第一段——C 运行时签名表＋keyfn 指针合同核对（W0911）
+
+"开始实现"批：把四条提案里性价比最高的①（extern 签名表＋编译期核对）
+落地第一段，封批 963–989 的整个错配类。开工前并入 cleanup 滞留 72 笔
+（合并 `a6adaa5f`，冲突两处：roadmap 并集、sample_gate.sh 全角变量
+花括号取并）。
+
+交付（`62d436af`）：
+1. `src/backend/codegen/signature_table.rs`：C 运行时 ABI 签名表——
+   `lookup`（首批 keyfn 族 6 项：py_min/max_key、py_min/max_key_f64、
+   py_min/max_key_i64_f64，逐条对勘 py_additions.c:1111/1217/1203/
+   1207/1218/1233；扩表随批，无来源不入表）＋ `KEYFN_PTR_CONTRACT`
+   （double(f64)，C 桥对 keyfn 函数指针的硬编码预期）＋ `sig_matches`
+   纯核对＋ `val_ty_of`（MIR 槽型→值类别，f32/f64 按宽度分列）＋5 单测。
+2. 钩子一（`gen_fn`）：`__ZKEYF64_` 特化副本实体化时**双层核对**——
+   ①实际 LLVM 声明（FuncAddr 兜底可能抢先按 double(f64) 声明，体发射
+   进错签名 FunctionValue 会静默产出错域指令）；②体派生签名（param
+   槽型＋infer_fn_return_type——批 983 病根"注解未生效⇒槽 I64⇒体
+   i64(i64)"在这一层现形）。任一层偏离合同即 panic W0911。
+3. 钩子二（`get_or_declare_function` extern 兜底）：表内函数按表定型，
+   表成为 extern 声明的单一事实来源；表外维持全 i64 兜底（行为零变）。
+
+**验证**：负向实拍——登记注解临时改 `"i64"`，编译期精确报
+`W0911 keyfn 签名核对失败: __ZKEYF64_kf 实际声明 double(i64)`，还原
+后消失（响亮失败通路实证）；四金用例 `3/-1`、`-1/3`、`-3.5/2.5`、
+`9/-7/-8/8` 全过；库 262/262（含 5 新单测）；门禁窗口 0：差分 285/285、
+python_style 44/44、official 14/14、语料 38/40（jq_wufu 两例在册预存，
+不判红）。
+
+**未竟（后续批）**：①扩表（py_builtin_*、py_math_pow 等需逐条对勘 C
+侧再入表）＋keyfn 桥调用点按表核对外呼实参类别；②keyfn 静态已知 ⇒
+MIR 内联扫描（abs 臂通用化）；③单点 mangle 铸造＋key= 臂声明表；
+④函数值带（地址，签名编号）标签。设计文档（archify 架构图，含三问
+题域与业界对照）在 `.archify/architecture-keyfn-abi-20261005-155231/
+keyfn-abi.html`（未入库，工作树可开）。
+
+## 批次 991（2026-10-05）：提案①第二段——签名表扩至 15 项＋外呼元数核对（W0912）
+
+承接批 990。两件事（`565dfcb7`）：
+
+1. **扩表 9 项**（合计 15 项，逐条对勘 C 定义，来源行号入表）：
+   py_builtin_max/min（py_additions.c:3324/:3334）、py_builtin_max/min_f64
+   （:3350/:3441——f64 结果按位模式落 i64 槽，返回 ABI 是 I64 不是 F64，
+   抽查实证）、py_builtin_max/min_abs_f64/i64（:3372/:3391/:3410/:3425，
+   key=abs 特化族）、zeta_pow_i64（:3004）、py_math_pow
+   （tokio_runtime_stub.c:1025）——末者为表内首个真 F64 ABI 条目
+   （实参/返回全 double），是"表驱动兜底声明"价值的最直接样本。
+2. **W0912 外呼元数核对**：`MirStmt::Call` 臂入口对表内名字核对实参数
+   ——表项是 C 侧对勘过的固定 ABI，元数不符＝降低层发错调用形状；
+   `coerce_call_args` 的补垫/截断对表内名字是掩盖不是修复（表内名字
+   无重载形态，不存在合法补垫）。
+
+**验证**：负向实拍——py_math_pow 外呼临时改 3 参，编译期精确报
+`W0912 外呼元数核对失败: py_math_pow 期望 2 参实到 3 参`，还原后消失；
+四金用例＋pow 用例（`2.0**2.5 = 5.656854249492381` 与 CPython 一致）
+全过；库 263/263（新增 batch991_expansion_entries）；门禁窗口 1：差分
+285/285、python_style 54/54、official 18/18、语料 38/40（在册预存，
+不判红）。
+
+**提案①余量（后续批，非阻塞）**：表覆盖到全部 C 运行时导出（需逐条
+对勘，建议由 tools/gen_from_registry.py 直接产出）；keyfn 桥调用点
+实参值类别核对（须先解决位模式槽与值类别的消歧，避免与 f64 位模式
+约定打架）。提案②（MIR 内联）、③（单点 mangle＋声明表）、④（函数值
+签名标签）未动，见批 990 节排序。
+
+## 批次 992（2026-10-05）：提案③核心——key= 臂声明式分派（keyfn_bridge 纯函数＋全矩阵单测）
+
+把"判定与发射混在 if 链"的形态（批 978–988 叠块残骸的温床）拆掉
+（`c8ab2acb`）：
+
+1. `src/middle/mir/gen/keyfn_bridge.rs`：两个纯函数收拢全部判定——
+   `spec_worthy`（特化登记门槛：f64/f32 总是；i64 仅 float 返回
+   keyfn；其他否）＋ `choose_bridge`（AbsBuiltin／Specialized／Legacy
+   三态裁决；特化路要求 registered ∧ spec_worthy——跨点复用登记时
+   元素型未知/非数值的点继续旧路）。4 个全矩阵单测。
+2. call_dispatch key= 臂改为"取证据 → 查裁决 → 按裁决发射"，臂内
+   只剩证据提取（elem/kf_float/registered）与按裁决的发射代码；
+   match-unreachable 锁裁决形态穷尽。
+
+**验证**：行为零变（逐条等价搬运）——abs 臂四象限实拍
+`-5/-1/-2.5/0.5` 与 CPython 一致；四金用例＋pow 全过；库 267/267
+（含 4 新单测）；门禁窗口 2：差分 285/285、python_style 44/44、
+official 13/13、语料 38/40（在册预存，不判红）。
+
+**提案③余量**：单点 mangle 铸造函数（把 `__ZKEYF64_{nm}` 的拼接收拢
+为一个 helper——目前铸造点唯一在 call_dispatch 登记块，消费点
+codegen.rs 前缀判断＋main.rs take 循环，改动面小、随下批顺手）。
+
+## 批次 993（2026-10-05）：提案③余量——单点 mangle 铸造（386f95bc）
+
+批 982 实证的 mangled 名漂移根因是符号身份靠字符串手工拼接。本批把
+`__ZKEYF64_` 的字面量收拢到唯一单点：
+
+1. `keyfn_bridge::SPEC_PREFIX`（全仓唯一字面量）＋ `spec_name(orig)`
+   铸造函数＋规范形单测（`__ZKEYF64_kf` 钉死）。
+2. 铸造点 3 处改走 `spec_name`：call_dispatch 登记块两处（mangled
+   局部＋FuncDef 改名）＋ site3 发射引用一处。
+3. 消费点改走共享常量：call_var 两处 contains（FuncAddr 早分支）、
+   codegen FuncAddr 兜底一处；`signature_table::KEYFN_SPEC_PREFIX`
+   改为对 middle 层常量的 **re-export**——跨层（middle⇄backend）引用
+   同一常量，字面量漂移从"运行期静默错配"变成"编译错误"。
+4. `gen.rs` 的 keyfn_bridge 提为 `pub(crate) mod`（backend 可达）。
+
+**验证**：行为零变（纯等价替换）——库 268/268（新增
+spec_name_mints_canonical_form）；六金用例全过；门禁窗口 3：差分
+285/285、python_style 42/42、official 18/18、语料 38/40（在册预存，
+不判红）。
+
+**提案推进状态小结**：①签名表（990/991 两段：15 项＋W0911/W0912）
+✔ 核心落地；③声明式分派＋单点铸造（992/993）✔ 核心落地。余量：
+①全表覆盖（建议 gen_from_registry.py 产出）与 keyfn 桥实参值类别
+核对（需先解位模式槽消歧）；②keyfn 静态已知 ⇒ MIR 内联扫描
+（性能向，正确性已由①护栏）；④函数值签名标签（运行期兜底，
+①的编译期核对已覆盖主路径）。
+
+## 批次 994（2026-10-05）：只有定位，零代码改动——jq_wufu 编译期 panic 的完整因果链（跨模块同名遮蔽失效）
+
+语料 38/40 的 `jq_wufu.py`（同族 `jq_wufu_daily.py`）在 codegen
+`array_get`/`stack_array_get` 臂 panic（FloatValue 强转 IntValue，
+worktree.md:508 在册、行号 4183→4236→4381 漂移）。本批逐环定位：
+
+**触发形**（jq_wufu.py:670-676）：
+```
+def premium_blocks_entry(context, code):
+    ...
+    premium, _, _ = get_premium_rate(code, prev_date)   # 2 参调用
+    if premium is None: ...
+    return premium > g.premium_threshold
+```
+
+**因果链**（每环有实拍证据）：
+1. **同名撞车**：jq_wufu.py 本地定义 `get_premium_rate(code, date)`
+   （2 参，返回 3 元组），同时 shim 链（jq_shim.py:32
+   `from backend.strategy.wufu_backend import ...`）把
+   wufu_trading.py 的 `get_premium_rate(4 参, -> float | None)`
+   带进程序——两个模块同名函数。
+2. **模块归属错**：codegen 发射期探针（已撤）实拍 panic 发生在
+   `premium_blocks_entry` 的 `stack_array_get(arg0=12, mir_ty=F64)`。
+   该函数体内裸调用 `get_premium_rate` 被改名表
+   （resolver.rs:4701 `module_renames_for`）改写成限定名
+   `backend_strategy_wufu_trading__get_premium_rate`——即
+   `py_mangled_to_module` 把 jq_wufu 本地的 `premium_blocks_entry`
+   归到了 wufu_trading 模块名下（两模块都定义同名
+   `premium_blocks_entry`，裸名键碰撞，后注册者覆盖前者）。
+3. **改写连带**：改名表驱动整个函数体的裸调用改写 ⇒ 2 参调用被绑
+   到 4 参版，MIR 实拍**实参被 0 填充成 4 个**
+   （args: [code, prev_date, IntLit 0, IntLit 0]）。
+4. **注解污染**：结果槽按 wufu_trading 版的 `-> float | None` 注解
+   定型 F64（MIR type_map: `12: F64`）。
+5. **崩点**：`premium, _, _` 元组解包降为三次 `stack_array_get(12,…)`
+   ——在 f64 alloca 上取址 ⇒ FloatValue panic（编译期，rc=101）。
+
+**修法方向（下批，跨模块归属专项）**：归属写入点
+（resolver.rs:1690/:4586/:4631）必须保证——根文件（`__main__`）本地
+def 的模块归属不被 import 链上的同名 def 覆盖；或改名表构造时对
+"本模块 own names 与归属模块不一致"的函数拒绝出表（宁可不改写，
+落回本地裸名绑定——Python 语义里模块本地 def 永远遮蔽 import）。
+改动面是全语料共享的改名表 ⇒ 必须带位移 A/B 与 40 文件语料全跑。
+旁证：本文件还有 123 个闭包/lambda 与 `py_sorted_key` 路径在同名
+机制上，修归属表时一并对勘 `sorted(lambda key)` 形状。
+
+**本批产出**：仅诊断与本文；探针已撤（源码与 993 提交逐字节一致，
+lib 268/268、b985 金用例复跑 3/-1 复证）。
+
+## 批次 995（2026-10-05）：跨模块同名遮蔽失效修复——改名表兜底仅对方法名生效（语料 40/40 满数）
+
+批 994 五环因果链的根环修复（`90f5909c`）：`module_renames_for`
+的类头兜底路径（本为 `Class::method` 方法名设计，t404 `_to_ts` 案例）
+对裸函数名同样触发——head＝函数名自身，撞上任何恰好同名的模块 own
+name（jq_wufu 本地 `premium_blocks_entry` 撞 wufu_trading 同名 def）
+就把整个函数体的裸调用改写到那个模块，连带批 994 的 3/4/5 环（2 参
+绑 4 参＋0 填充＋F64 污染＋解包崩）。
+
+修：兜底路径加裸名门——`func_name` 含 `::` 才走类头匹配；裸名（根
+文件本地 def）出空表保持裸绑定（Python 语义：模块本地 def 永远遮蔽
+import）。方法名路径原样保留。
+
+**连带修复**：jq_wufu 族两文件从编译期 panic 推进到完整管线走通，
+仅剩 `_NoneValue__fund_daily` 一个 chronic 链接缺绑定（tushare API
+对象的成员分发按接收者 Named 型铸造用户方法名——NoneValue 是
+checker 从唯一可推断返回 claim 的空值标记，804/806/808 系；运行期
+不可达，chronic 口径在册；动态分发专项另批）。
+
+**验证**：**语料 40/40 满数（754 以来首次）**；六金用例全绿；库
+268/268；门禁窗口 5：差分 285/285、python_style 51/51、official
+17/17（链接缺绑定 0）、语料 40/40 满数。
+
+## 批次 996（2026-10-05）：NoneValue 动态成员分发＋numpy 三枚 shim＋del NameError 运行期检查
+
+批 995 门槛修复暴露的两个语料缺口与 cleanup 车道的差分绊线一并收口
+（`0b48dc8f`）：
+
+1. **NoneValue 动态成员分发**（call_dispatch Named 臂前置守卫）：
+   NoneValue 是 checker 从"唯一可推断返回"claim 的空值标记
+   （804/806/808 系），运行期可能是任何对象——按用户结构体分发铸造
+   `<NoneValue>::member` 幽灵（jq_wufu 实拍 `_NoneValue__fund_daily`）。
+   改发 py_getattr_dynamic ＋ zeta_callN（C 蹦床，批 395 机械复用）；
+   None 运行期响亮报错。jq_wufu.py 完整链接。
+2. **numpy 三枚 shim**（registry.txt＋py_additions.c）：diff/nan_to_num
+   真实现（f64 位模式槽逐元素取放），errstate py_noop1 占位（with
+   降级恒等＋warn）。jq_wufu_daily.py 完整链接（原缺
+   numpy__diff/errstate/nan_to_num）。
+3. **del 名字目标运行期 NameError**（parser parse_del 发 __del_name__
+   标记＋MirGen 裁决＋zeta_env_del C 函数＋runtime_decls_core 声明）：
+   本地槽 V1 no-op 保持；环境名缺 ⇒ zeta_raise(1)（except 可捕获），
+   在 ⇒ 移除。差分绊线 del_undefined_var（批 10051 埋）转 match。
+
+**验证**：门禁窗口 6 rc=0——差分 284/284（del 例转绿）、
+python_style 47/47、official 23/23（chronic 1 不计红）、语料 40/40
+满数（两 jq 文件均 Compiled 级）；六金用例全绿；库 268/268。
+
+**余量（在册）**：读回已删除名应 NameError（env_get 缺名现返 0）；
+函数本地 del 真删除（V1 no-op）；NoneValue over-claim 的推断层修；
+提案②④与①全表覆盖（见批 990/992 各节排序）。
+
+## 批次 997（2026-10-05）：提案①全表覆盖——注册表生成签名表 310 项，W0912 元数核对全覆盖
+
+**方法**：批 991 的手写 15 项 curated 表扩不成覆盖面，改走生成器——
+gen_from_registry.py 增 --emit-sigtable，F/W/X（decl=1）全量产出
+signature_table_gen.rs；lookup 未命中 curated 落生成段。配套修：
+
+1. **W0912 `_N` 逐参重载回退**：C 侧为多参形态提供 `{name}_{argc}`
+   兄弟符号（get_or_declare_function 的同名解析惯例），降低层实发
+   元数与注册表基型不符时按后缀兄弟名对表——py_os_makedirs（1 参
+   基型）的 2 参调用由此对上 py_os_makedirs_2。
+2. **全覆盖咬出的注册表/C 漂移逐条对勘修掉**（诊断期 W0912 降级为
+   告警收全清单后批量修，修完恢复 panic）：13 条 X 重载条目（C 均有
+   真身，注册表从未列出）＋C 补缺三枚（py_dt_timedelta_2/py_dt_
+   from_str_2 占位、py_logger_debug_n 8 槽变参版）。
+3. **MIR 变参 logger 臂补 debug**：变参臂原收 info/warning/error，
+   `log.debug(fmt, *8)` 的 9 参直落 2 参固定版——debug 进臂（8 槽）。
+
+**验证**：panic 态语料 40/40 满数；七金用例全绿（math.pow 1024.0
+走注册表 F64 路径）；库 268/268；门禁窗口 7 rc=0——差分 284/284、
+python_style 46/46（t63_thread_args_multi 经 threading_thread_new_2
+注册后 PASS——全覆盖顺手修活的又一条在册红）、official 27/27、语料
+40/40。提交 `86e38704`。
+
+**提案①至此核心三段齐**：15 项 curated＋310 项生成段＋W0911/W0912
+双层核对。余量：keyfn 桥实参值类别核对（位模式槽消歧专项）。
+
+## 批次 998（2026-10-05）：del 读回 NameError（墓碑集合语义）——ROI 排序第一项
+
+ROI 排序（本会话盘点）的第一梯队首项（`abcfb32e`）：
+
+1. **env del 墓碑集合**：zeta_env_del 删除时记入 g_del_set；
+   zeta_env_get 读到墓碑名 ⇒ zeta_raise(1)。重新绑定清墓碑。缺名读
+   （从未写入）维持旧返 0——一刀切 raise 实测打红 12 个 py_style
+   （import 绑定/跨模块名的合法先读后写面：pandas/logging 全族），
+   墓碑收窄后全绿。
+2. **del 臂按 391 镜像谓词分流**：env 镜像的模块全局（module_globals
+   命中）在槽 no-op 外并发 zeta_env_del——函数体经 env 的读回随即
+   NameError（主程序体旧槽读回=t425 在册族，读侧环境化随 t425 专项）；
+   纯本地 V1 no-op。
+3. **连带**：全覆盖签名表咬出 re.search 3 参形态（IGNORECASE 面）——
+   X py_re_search_3（带 PyMatch handle）注册，t75_re_flags 复活。
+
+**验证**：del 读回三形态（函数读/主程序读/未定义名 del）与 CPython
+逐字一致；门禁窗口 8 rc=0——差分 284/284、python_style **50/50**
+（t75 复活）、official 18/18、语料 40/40；库 268/268。
+
+**余量（在册）**：从未写入名的缺名读 NameError 化（import 面消歧专
+项）；t425 主程序体旧槽读（共享格合同专项）。
+
+## 批次 999（2026-10-05）：ROI 审计三则——known-fail 零在册＋NoneValue 缓办裁定＋死 borrow 家族删除
+
+1. **ROI 第二项（known-fail 钉子）实证零在册**：runner 口径
+   （^// known-fail:）活跃标记 0 条；十例 t50x 候选逐一复跑全部
+   PASS——早前 ROI 盘点把历史注释误计为活跃钉子。该项由前序批次
+   （334/453/547/794 等摘钉批）完成，本批审计定性。
+2. **ROI 第三项（NoneValue over-claim 推断层）降级缓办**：996 分发
+   守卫已覆盖实证危害（幽灵符号链接失败）；推断层改 PyDynamic 需先
+   建 opaque 接收者的动态成员调用机械，否则 jq_wufu 回退链接失败——
+   成本高于残余危害（print 渲染化妆品级）。在册缓办。
+3. **ROI 第四项（轴 D② 前端越层）实做**：所谓 8 条越层边，真违规者
+   是 borrow.rs/borrow_enhanced.rs 的 Resolver 导入——两者均为死代码
+   （borrow_checker 字段零调用；borrow_enhanced 零消费者；孤儿测试
+   未注册）。删除 930 行＋前端→middle 边 −2；剩 identity_type →
+   middle::types::identity（types 共享叶子层，合规）。
+
+**验证**：门禁窗口 9 rc=0——差分 284/284、python_style 41/41、
+official 20/20、语料 40/40；七金用例全绿；lib 265/265（−3 为死文件
+内联测试随删）。提交 `07d113ca`。
+
+**ROI 清单推进状态**：第一项 del 读回 ✔（998）；第二项 ✔（零在册
+实证）；第三项 缓办（有裁定）；第四项 ✔（999）；第五项 codegen.rs
+拆分（signature_table 已是切片，续批推进）；第六项 轴 C（基建在，
+perf 驱动续批）；第三梯队按裁定。
+
+## 批次 1000（2026-10-05）：轴 D 第二刀——keyfn 家族自 codegen.rs 迁出（IR 零变）
+
+gen.rs 主题块迁出模式应用到 codegen.rs（9.0k 行新单体）第一刀
+（`5dccdba4`）：verify_keyfn_contract（W0911 双层核对）＋FuncAddr 兜底
+臂迁 codegen_keyfn.rs（同 crate impl，pub(super)）；infer_fn_return_type
+提为 pub(super)；codegen.rs −89 行。
+
+**迁出纪律（gen.rs 同款）**：迁前/迁后 LLVM IR 基线逐字节 diff 为空
+（b985 keyfn 路径＋t75 re 路径）。**验证**：门禁窗口 0 rc=0（差分
+285/285、python_style 44/44、official 14/14、语料 40/40）；六金用例
+全绿；库 265/265。
+
+**续刀计划**：codegen.rs 下一片＝gen_stmt（4064–6451，约 2,400 行
+巨型 match）按 stmt 主题拆；get_function/get_or_declare_function 家族
+（2696–3575）成符号解析模块。轴 C perf 采样批随后。
+
+## 批次 1001（2026-10-05）：轴 C perf 采样审计——两候选实测无杠杆，基线纠偏（47760f26）
+
+perf 采样（macOS sample，large-z 2s 窗口，全样本 14,981）：tokio 多线
+程运行时空转＋内核等待占 78%，解析族 ~5%，无单一主导编译函数。两个
+候选按轴 C 铁律（无可测收益不合并）处置：
+
+1. **scheduler::init_runtime 禁用 A/B**：墙钟差 0.03-0.08s＝噪声 ⇒
+   非杠杆（tokio 空转线程样本多但墙钟中性）。不合并。
+2. **skip_ws_and_comments 字节扫描替换 nom 组合器**：large-z 3.01-3.50
+   vs 基线 3.01-3.04 无可测收益 ⇒ 已回退（StrSearcher/take_until 税
+   实存但占比小）。
+
+**基线纠偏**（同批 976 先例）：large-z2 旧读数 2.29-2.47s 不可复现
+（新旧解析器均 0.29-0.30s），属 22.51s 同族测量噪声；compile_perf.txt
+已改以 0.29-0.30s 为准并记录本节。
+
+**结构发现**：3.0s 中 zetac 自身 ~2.75s、clang ~0.35-0.4s；busy 样
+本分散（解析 ~30%、其余通用机械）⇒ 轴 C 下一步需全线程长窗采样定
+位聚合热点，单点微优化在当前尺寸无杠杆。gen_stmt 拆分（1000 续刀）
+属轴 D 不属轴 C。
+
+## 批次 1002（2026-10-05）：轴 D 第二刀续——控制流族（If/While/For）迁出 gen_stmt（IR 零变）
+
+gen_stmt 巨型 match 第一片（`75c92c66`）：控制流三臂（If 102＋While 87
+＋For 150 行）迁 codegen_stmt_flow.rs；臂原位缩为解构＋单行调用；
+gen_stmt/gen_expr_safe/cond_i1_from 提 pub(super)。codegen.rs
+8,866→8,281 行。
+
+**迁出纪律**：stash 前后 LLVM IR 逐字节 diff 为空（t49 for+continue
+路径）。**验证**：门禁窗口 2 rc=0——差分 285/285、python_style 44/44、
+official 13/13、语料 40/40；五金用例全绿；库 265/265。
+
+**续刀地图（gen_stmt 剩余 ~2,100 行）**：Call 臂独占 ~1,144 行（内含
+try_setjmp/spawn/array_get 内联/isinstance 等 10+ 子族，下一批的主
+刀）；VoidCall 144／For 余量／DictInsert 103／Swap 101／Pre/Post/
+Invariant 160 各成小片。
+
+## 批次 1003（2026-10-05）：轴 D 第二刀续——Call 臂三终态子族迁出＋批 1002 回归修复
+
+1. **Call 臂三终态子族迁 codegen_call_arm.rs**（cf075860）：try_setjmp
+   （_setjmp/returns_twice 面）＋spawn_thunk（pthread 异步面）＋
+   array_get/stack_array_get 内联面——逐字搬迁、return true 表已处理；
+   call_site_to_basic_value/get_or_declare_function 提 pub(super)。
+   codegen.rs 8,281→8,055 行。
+2. **批 1002 回归修复**：三臂替换的切片缝隙吞掉了 While 与 For 之间
+   的 Break|Continue/Swap/Pre/Post/Invariant 五臂（274 行）——
+   test_simple_break 的 while+break 坠入无终结符路径（official 门禁
+   咬出）。从批 1001 树逐字节恢复；初版恢复脚本误以 While 臂内
+   body_ends_terminated 的表达式续行为臂头（不平衡校验拦下），改用
+   带箭头臂头重切。**教训入册：多臂切片替换后必须 diff 新旧 match
+   的臂清单**（本可由'替换前后 match 臂数'断言拦下）。
+
+**验证**：五路迁前 IR 基线（try/spawn/t63/t75/t49）逐字节 diff 为
+空；test_simple_break rc=42 与 CPython 一致；门禁窗口 3 rc=0——差
+分 285/285、python_style 42/42、official 18/18、语料 40/40；六金用
+例全绿；库 265/265。
+
+## 批次 1004（2026-10-06）：轴 D 第二刀续——Call 臂余下 11 子族迁出＋1003 孤儿接线（9ab7f1bf）
+
+1. **批 1003 隐藏缺口修复**：checkout 舞步丢失三个调用点替换——
+   emit_try_setjmp/emit_spawn_thunk/emit_array_get_inline 成无主死
+   代码（mod.rs 又缺模块声明＝双重死代码，门禁照绿）。本批接线并补
+   声明。教训：**checkout 恢复后必须核对本批全部编辑仍在工作树**。
+2. **续拆 11 自含子族**（join/call_i64/norm_index/ptr_read/ptr_write/
+   is_null/ptr_offset/replace/syscall/capy_store/capy_load）统一签名
+   迁 codegen_call_arm.rs（14 方法 530 行）；ptr_offset 带 type_args。
+3. **臂数断言制度化**：替换前后 MirStmt 标记计数相等由脚本强制
+   （70==70）——批 1002 五臂丢失教训的制度化。
+4. **中途事故**：capy_load 块字符串内花括号骗过朴素括号计数 ⇒
+   codegen.rs 截断 4,625 行——恢复后改剥字符串/行注释的稳健计数器。
+
+**验证**：五路 IR 基线逐字节零变；门禁窗口 4 差分 285/285、official
+26/26、语料 40/40 全绿；python_style 59/60 的 t273_import_variable
+复跑两遍全 PASS（模块加载时序抖动，教训 3 定性，非本批回归）；七金
+用例全绿；库 265/265。codegen.rs 8,555→8,143 行；codegen_call_arm.rs
+530 行 14 方法。
+
+**第三梯队裁定请求（按批 999 台账在册）**：轴 B 值标签大弧（根治 i64
+槽双义，keyfn 桥值类别核对依赖它）、提案② MIR 内联（性能向，正确性
+已有护栏）、backlog #36 selfhost 91 行（表示层）/#26 JIT trap 族——
+三项优先级待用户裁定后续批推进。
+
+## 批次 1005（2026-10-06）：轴 D 第二刀续——Call 臂四子族迁出（claim 模式，五路 IR 零变）
+
+1. **claim 模式提取**：operator 族是 if/else-if/else 链头段（族内
+   fall-through＝claim 整族、跳过 SIMD 与常规调用）——emit_operator_
+   family 的 guard＝is_operator，体 verbatim，尾 return true；调用点
+   保留 else-if SIMD 链与 else 常规调用（!is_operator 语义精确不变）。
+2. emit_unary_minus_pre（前置一元负号）＋emit_v4i64_andnot/store
+   （SIMD 内建两臂）同批迁出。codegen.rs 8,143→7,780 行；codegen_
+   call_arm.rs 930 行 18 方法。
+3. 配套：is_operator/column_arith_dispatch/gen_column_arith/build_
+   floordiv 三兄弟/slot_is_float/coerce_call_args 提 pub(super)；
+   func.as_str() 剥除（str_as_str 不稳定面顺手清）。
+
+**验证**：五路 IR 基线逐字节零变；臂标记 70==70；六金用例全绿；库
+265/265；门禁窗口 5 rc=0——差分 285/285、python_style 51/51、
+official 17/17、语料 40/40。
+
+**Call 臂余量**：~290 行（W0912 核对＋13 个 emit_* 调用点＋SIMD
+else-if＋常规调用尾巴）——臂体已薄，续拆价值转低；轴 D codegen 拆
+分核心目标（9.0k→7.8k，主题模块 5 个）达成。
+
+## 批次 1006（2026-10-06）：typecheck 三轨收敛第一段＋971 递归炸弹拆除（307dc1e0）
+
+1. **递归炸弹**：infer_unified Err 分支自调 infer_unified（971 段 3
+   笔误）——潜伏在册，实拍未触发仅因现役形状新轨全 Ok。改回落旧轨
+   infer_type。
+2. **unified_typecheck.rs 228 行死 Facade 剥除**：TypeCheckStrategy
+   三策略从未被选择＋UnifiedTypeChecker 零引用——只留在用的 trait
+   impl。文件 297→69 行。
+3. **t73_pathlib 钉住**：read_text 返回 println_i64 指针（A/B 实证
+   998 前树同指针，预存非回归）——KNOWN-FAIL 转绿，修好摘标。
+
+**验证**：门禁窗口 6 rc=0——差分 284/284、python_style 46/46（＋1
+钉）、official 23/23、语料 40/40；库 265/265。
+
+**三轨收敛余量（段 4+，在册）**：typecheck_new 412 行（主线在用，保
+留）；unified trait 可再并入 typecheck.rs；new_resolver 2,192 行仅
+InferContext 一个消费点——本体退役需 fallback 先切换（971 退役条件
+评估原话）。

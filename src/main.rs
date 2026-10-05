@@ -567,9 +567,14 @@ fn find_runtime_obj(name: &str) -> Option<std::path::PathBuf> {
 /// G.2 (`tools/asan_run.sh`): extra flags for the final link. Unset by default,
 /// so a normal compile links exactly the command it always linked.
 fn extra_ld_flags() -> Vec<String> {
-    std::env::var("ZETA_EXTRA_LDFLAGS")
+    // 批 965：keyfn 单态化的 dlsym 依赖——用户函数的特化副本符号必须
+    // 出现在导出表（静态可执行默认无 export trie），-export_dynamic
+    // 导出全部符号供 dlsym(RTLD_DEFAULT) 解析
+    let mut flags: Vec<String> = std::env::var("ZETA_EXTRA_LDFLAGS")
         .map(|s| s.split_whitespace().map(String::from).collect())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    flags.push("-Wl,-export_dynamic".to_string());
+    flags
 }
 
 /// The option surface `main` actually parses. Batch 350 (#80 ①) exists because the
@@ -720,6 +725,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut i = 1;
 
     if args.iter().any(|a| a == "--bootstrap") {
+        // Batch 760 (#80②): `--bootstrap` used to return BEFORE the input loop,
+        // so `zetac file.z --bootstrap` silently ignored the file (measured:
+        // `Lowered 285 functions` + stack overflow rc=134 with or without the
+        // file, byte-identical). Loud refusal naming the file.
+        let mut value_slots: Vec<usize> = Vec::new();
+        for (idx, a) in args.iter().enumerate().skip(1) {
+            if matches!(a.as_str(), "-o" | "--features" | "--target") {
+                value_slots.push(idx + 1);
+            }
+        }
+        let input = args
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find(|(idx, a)| !a.starts_with('-') && !value_slots.contains(idx))
+            .map(|(_, a)| a.clone());
+        if let Some(file) = input {
+            return Err(format!(
+                "`--bootstrap` compiles the bundled self-host corpus and takes no input file, but `{}` was given — drop one of the two",
+                file
+            )
+            .into());
+        }
         return bootstrap_zeta(&output, &target);
     }
 
@@ -879,6 +907,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     })
                     .collect();
+                // 批 965（keyfn 单态化第二段）：key= 降级期登记的特化副本
+                //（f64 通道）补 lower 进 mir_map——副本的调用点已在各函数
+                // MIR 里（FuncAddr + py_max_key_f64）。
+                if std::env::var("ZETA_PROBE_CHECKER").is_ok() {
+                    eprintln!(
+                        "TAKE-LOOP: reached (mir_map keys will follow)"
+                    );
+                }
+                for spec in resolver.take_keyfn_specializations() {
+                    if let AstNode::FuncDef { name, .. } = &spec {
+                        if std::env::var("ZETA_PROBE_CHECKER").is_ok() {
+                            let store = resolver.keyfn_spec_store();
+                            eprintln!(
+                                "TAKE-LOOP: lowering {} store_n={}",
+                                name,
+                                store.borrow().len()
+                            );
+                        }
+                        let mut m = resolver.lower_to_mir(&spec);
+                        m.name = Some(name.clone());
+                        mir_map.insert(name.clone(), m);
+                    }
+                }
 
                 // PY-A: merge synthetic lambda/closure functions into the
                 // codegen set (previously dropped — closures never compiled).
@@ -955,7 +1006,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // emission sort, so `tools/mir_diff.sh` can compare two
                 // compiles byte for byte while warnings stay on stderr.
                 if dump_mir {
+                    // 批 979（G.6）：MIR 结构不变量 verifier 强制运行——
+                    // 违规打印诊断（首批观察模式，不 abort）
                     for m in &all_mirs {
+                        let errs = zetac::middle::mir::verifier::verify(m);
+                        for e in &errs {
+                            eprintln!(
+                                "warning: [W0900] MIR verifier ({}): {}",
+                                m.name.as_deref().unwrap_or("~anon"),
+                                e
+                            );
+                        }
                         print!("{}", m.dump_canonical());
                     }
                 }
@@ -967,6 +1028,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if report_stubs {
                     report_stub_calls(&all_mirs);
                     report_bare_member_calls(&all_mirs);
+                }
+
+                // 批次 814/856：只读探针（--dump-mir 等）打印后立即收工——
+                // 不落穿到 LLVM codegen（gen_mirs 里的 into_int_value 在
+                // FloatValue 槽上 panic＝#265/#268 的 dump 旋转/崩溃根因）。
+                if probe_only && !dump_ir {
+                    return Ok(());
                 }
 
                 let context = Context::create();
@@ -1351,6 +1419,7 @@ fn repl(dump_mir: bool, dump_ir: bool) -> Result<(), Box<dyn std::error::Error>>
         }
 
         let mut resolver = Resolver::new();
+        resolver.set_repl_lowering(true);
         for ast in &asts {
             resolver.register(ast.clone());
         }

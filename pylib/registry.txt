@@ -94,6 +94,7 @@ F os system py_os_system args=i64 ret=i64
 F os getenv py_os_getenv args=i64 ret=str
 F os listdir py_os_listdir args=i64 ret=vecstr
 F os makedirs py_os_makedirs args=i64 ret=i64
+X py_os_makedirs_2 args=i64,i64 ret=i64
 F os remove py_os_remove args=i64 ret=i64
 F os path.join py_os_path_join args=i64,i64 ret=str
 X py_os_path_join_3 args=i64,i64,i64 ret=str
@@ -107,6 +108,7 @@ F os path.isdir py_os_path_isdir args=i64 ret=i64
 F os path.abspath py_os_path_abspath args=i64 ret=str
 F os path.expanduser py_os_path_expanduser args=i64 ret=str
 F os environ.get py_os_environ_get args=i64,i64 ret=str
+X py_os_environ_get_1 args=i64 ret=str
 F os environ.setdefault py_os_environ_setdefault args=i64,i64 ret=str
 
 # ---- math, completed from the corpus call sites (exp 7, floor 8, pow 5,
@@ -256,10 +258,15 @@ W PyPath is_file py_os_path_isfile args=1
 W PyPath is_dir py_os_path_isdir args=1
 W PyPath stem py_path_stem args=1 ret=str
 W PyPath suffix py_path_suffix args=1 ret=str
-W PyPath read_text py_path_read_text args=1 ret=str
+W PyPath read_text py_path_read_text args=1
+X py_path_read_text_2 args=i64,i64 ret=i64
+X py_file_open_3 args=i64,i64,i64 ret=i64
+X py_path_write_text_3 args=i64,i64,i64 ret=i64
+X py_noop2_3 args=i64,i64,i64 ret=i64 ret=str
 W PyPath parents py_path_parents args=1 ret=vecpath
 W PyPath glob py_path_glob args=2 ret=vecpath
 W PyPath mkdir py_path_mkdir args=1
+X py_path_mkdir_3 args=i64,i64,i64 ret=i64
 W PyPath write_text py_path_write_text args=2
 # Path.open — MIR injects default mode="r" (see gen.rs); arity here is
 # receiver+mode so registry typing matches py_file_open.
@@ -322,6 +329,7 @@ F re MULTILINE py_re_multiline args= ret=i64
 F re M py_re_multiline args= ret=i64
 F re sub py_re_sub args=i64,i64,i64 ret=str
 F re search py_re_search args=i64,i64 ret=i64 handle=PyMatch
+X py_re_search_3 args=i64,i64,i64 ret=i64 handle=PyMatch
 F re match py_re_match args=i64,i64 ret=i64 handle=PyMatch
 F re fullmatch py_re_fullmatch args=i64,i64 ret=i64 handle=PyMatch
 F re split py_re_split args=i64,i64 ret=vecstr
@@ -482,6 +490,12 @@ F numpy eye zeta_np_eye args=i64 ret=vec
 F numpy diag zeta_np_diag args=i64 ret=vec
 F numpy fill_diagonal zeta_np_fill_diagonal args=i64,i64 ret=i64
 F numpy diagonal zeta_np_diagonal args=i64 ret=vec
+# 批 996（jq_wufu_daily 语料面）：diff/nan_to_num 真实现（f64 位模式槽
+# 约定，py_additions.c py_numpy_diff/py_nan_to_num）；errstate 上下文
+# 管理器在本编译器无常驻状态，py_noop1 占位（with 降级恒等＋warn）。
+F numpy diff py_numpy_diff args=i64 ret=vec
+F numpy nan_to_num py_nan_to_num args=i64 ret=vec
+F numpy errstate py_noop1 args=i64 ret=i64
 X zeta_arange args=i64 ret=vec
 X zeta_identity args=i64 ret=i64
 X zeta_identity2 args=i64,i64 ret=i64
@@ -516,6 +530,7 @@ F scipy.linalg solve zeta_np_solve_stub args=i64,i64 ret=i64
 
 # ---- batch 139: move remaining hand decls from codegen::new → registry ----
 X py_fmt_i64 args=i64,i64 ret=i64
+X py_fmt_bool args=i64,i64 ret=i64
 X py_fmt_f64 args=f64,i64 ret=i64
 X py_fmt_str args=i64,i64 ret=i64
 X py_round_n args=f64,i64 ret=f64
@@ -533,3 +548,10 @@ X py_logger_info_n args=i64,i64,i64,i64,i64,i64,i64 ret=i64
 # 基名 `clip` 刻意**不**登记：登记了反而让那条兜底在 `:3229` 找到它、照旧截断实参表。
 X clip_2 args=i64,i64 ret=i64
 X clip_3 args=i64,i64,i64 ret=i64
+X py_dt_from_str_3 args=i64,i64,i64 ret=i64
+X py_dt_from_str_2 args=i64,i64 ret=i64
+X py_logging_basicConfig_2 args=i64,i64 ret=i64
+X py_threading_thread_new_2 args=i64,i64 ret=i64
+X py_dt_now_1 args=i64 ret=i64
+X py_dt_timedelta_2 args=i64,i64 ret=i64
+X py_logger_debug9 args=i64,i64,i64,i64,i64,i64,i64,i64,i64 ret=i64

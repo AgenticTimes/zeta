@@ -20,6 +20,7 @@ int64_t map_insert(int64_t, int64_t, int64_t);
 // A grown dict forwards from its old block; every reader must resolve first.
 int64_t map_resolve(int64_t);
 int64_t py_df_empty_like(int64_t frame);
+int64_t py_fmt_i64(int64_t v, int64_t spec);
 static int zt_maybe_map(int64_t);
 int zt_map_is_json_handle(int64_t);
 void zt_map_json_mismatch(const char*, int64_t);
@@ -581,6 +582,13 @@ int64_t py_dt_from_str_3(int64_t s, int64_t unit, int64_t tz) {
     return py_dt_from_str(s);
 }
 
+// 批 997：2 参形态（s, unit）——jq_wufu_local 语料实发；unit 与 tz 同
+// 为占位（同上注释：位面无法被 1 参解析器 honour）。
+int64_t py_dt_from_str_2(int64_t s, int64_t unit) {
+    (void)unit;
+    return py_dt_from_str(s);
+}
+
 // str vs date SCALAR compare — `covers_range` compares the string trade_date
 // column (the parquet reader formats dates "YYYY-MM-DD") against Timestamp
 // scalars. Parse the string side and reuse the date comparisons.
@@ -648,6 +656,34 @@ int64_t zeta_sum_vec(int64_t data) {
     int64_t len = ((int64_t*)(data - 16))[1];
     int64_t acc = 0;
     for (int64_t i = 0; i < len; i++) acc += ((int64_t*)data)[i];
+    return acc;
+}
+
+// sum() 的 f64 元素版（批 924）：浮点元素按 f64 位模式存取（zeta_vec_push_f64
+// 同一约定），此前 i64 位模式累加产出垃圾和（sum([1.5,2.5]) 实拍
+// 9222246136947933184，CPython 4.0）。
+double zeta_sum_vec_f64(int64_t data) {
+    if (!data) return 0.0;
+    int64_t len = ((int64_t*)(data - 16))[1];
+    double acc = 0.0;
+    for (int64_t i = 0; i < len; i++) {
+        int64_t raw = ((int64_t*)data)[i];
+        double d;
+        memcpy(&d, &raw, sizeof d);
+        acc += d;
+    }
+    return acc;
+}
+
+double zeta_sum_n_f64(int64_t data, int64_t n) {
+    if (!data) return 0.0;
+    double acc = 0.0;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t raw = ((int64_t*)data)[i];
+        double d;
+        memcpy(&d, &raw, sizeof d);
+        acc += d;
+    }
     return acc;
 }
 
@@ -871,6 +907,16 @@ static char zt_int_sign_char(int64_t v, const zt_fmt_t* f) {
     return 0;
 }
 
+// Batch 748 (#45 tenth member): bool inside a format spec slot. CPython:
+// format(True, "") == "True" (str-based), while ANY non-empty spec renders
+// bool as int (bool subclasses int): format(True, "04") == "0001".
+// The int spelling delegates to py_fmt_i64 unchanged.
+int64_t py_fmt_bool(int64_t v, int64_t spec) {
+    if (!spec || ((const char*)spec)[0] == 0)
+        return (int64_t)GC_strdup(v ? "True" : "False");
+    return py_fmt_i64(v, spec);
+}
+
 int64_t py_fmt_i64(int64_t v, int64_t spec) {
     zt_fmt_t f;
     zt_parse_spec(spec ? (const char*)spec : "", &f);
@@ -1069,27 +1115,174 @@ int64_t py_round_i64(double x) { return (int64_t)nearbyint(x); }
 
 // ── PY-A: min/max with a key callable (linear scan; ties keep the first,
 // like Python) ──────────────────────────────────────────────────────
-int64_t py_min_key(int64_t vec, int64_t keyfn) {
+int64_t py_min_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
     int64_t n = zt_vec_len(vec);
     if (n <= 0) return 0;
     int64_t best = ((int64_t*)vec)[0];
     int64_t best_k = ((int64_t(*)(int64_t))keyfn)(best);
+    if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "MAXK: flag=%lld n=%lld best=%lld best_k=%lld\n", (long long)key_is_f64, (long long)n, (long long)best, (long long)best_k);
+    double best_d;
+    memcpy(&best_d, &best_k, sizeof best_d);
     for (int64_t i = 1; i < n; i++) {
         int64_t v = ((int64_t*)vec)[i];
         int64_t k = ((int64_t(*)(int64_t))keyfn)(v);
+        int64_t take;
+        if (key_is_f64) {
+            // 批次 982：同 py_max_key——double(*)(int64_t) 调用签名
+            double (*kfd)(int64_t) = (double (*)(int64_t))keyfn;
+            double kd = kfd(v);
+            take = kd < best_d;
+            if (take) { best_d = kd; best = v; continue; }
+        } else {
+            take = k < best_k;
+            if (take) { best_k = k; best = v; }
+        }
+    }
+    return best;
+}
+// 批 965（keyfn 单态化第二段）：f64 通道特化——keyfn 签名
+// double(*)(double)（特化副本参数注解 f64 ⇒ LLVM 签名 double 形参；
+// C 侧把元素的 i64 位模式 bitcast 成 double 传入），比较 double 域，
+// 返回**原元素**位模式。
+// 可调用包装（批 967：keyfn 参数＝FuncAddr 槽的函数地址——特化副本
+// 的 LLVM 签名 double(double) 与本包装的函数指针类型匹配）
+// 位模式往返必须 memcpy——kf(double) 的 int64 实参会被 C 编译器
+// sitofp 做值转换（1.5 的位模式被转成巨大 double），比较全错
+// keyfn 签名 double(*)(int64_t)：特化副本（及带 float 返回注解的
+// keyfn）的 LLVM 签名＝形参 i64（元素位模式 x0 直传）、返回 double
+// （v0）——与调用约定精确匹配（批 967 实证 double(*)(double) 会
+// 形参寄存器类错配：kf 读 x0 拿残留）
+// 批 974/975 位桥（批 969 定稿）：keyfn 指针签名 double(*)(double)——
+// 特化副本 ka__ZKEYF64_ka 的 LLVM 签名是 double(f64 形参)（参数注解
+// f64 ⇒ codegen 签名 f64）；C 侧把元素的 i64 位模式 **bitcast 成
+// double 传 v0**（寄存器类匹配），副本体内 f64 语义正确，返回 double
+// 由 C 读 v0。此前 int64 形参直传会读 x0 残留（寄存器类错配实拍
+// min/max 选错元素）。
+// 批 982/984 定稿（位桥）：keyfn 指针签名 double(*)(double)——特化
+// 副本参数注解统一 f64 ⇒ LLVM 签名 double(f64)；C 侧把元素的 i64
+// 位模式 **bitcast 成 double** 传 v0（寄存器类匹配），副本体内 f64
+// 语义正确，返回 double 由 C 读 v0。int64 直传会读 x0 残留/值转换
+// 错序（批 982 实拍）。
+// 批 985 定稿（位桥）：keyfn 指针签名 double(*)(double)——特化副本
+// 参数注解 f64 ⇒ LLVM 签名 double(f64)；C 侧把元素的 i64 位模式
+// **bitcast 成 double** 传 v0（寄存器类匹配），副本体内 f64 语义
+// 正确，返回 double 由 C 读 v0。int64 直传会读 x0 残留（批 982 实拍）。
+static int64_t py_max_key_f64_impl(int64_t vec, int64_t keyfn_addr) {
+    int64_t n = zt_vec_len(vec);
+    if (n <= 0) return 0;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
+    int64_t best = ((int64_t*)vec)[0];
+    double best_d;
+    memcpy(&best_d, &best, sizeof best_d);
+    double best_k = kf(best_d);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        double v_d;
+        memcpy(&v_d, &v, sizeof v_d);
+        double k = kf(v_d);
+        if (k > best_k) {
+            best = v;
+            best_d = k;
+        }
+    }
+    return best;
+}
+static int64_t py_min_key_f64_impl(int64_t vec, int64_t keyfn_addr) {
+    int64_t n = zt_vec_len(vec);
+    if (n <= 0) return 0;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
+    int64_t best = ((int64_t*)vec)[0];
+    double best_d;
+    memcpy(&best_d, &best, sizeof best_d);
+    double best_k = kf(best_d);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        double v_d;
+        memcpy(&v_d, &v, sizeof v_d);
+        double k = kf(v_d);
+        if (k < best_k) {
+            best = v;
+            best_d = k;
+        }
+    }
+    return best;
+}
+int64_t py_max_key_f64(int64_t vec, int64_t keyfn_addr) {
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
+    return py_max_key_f64_impl(vec, (int64_t)kf);
+}
+int64_t py_min_key_f64(int64_t vec, int64_t keyfn_addr) {
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
+    return py_min_key_f64_impl(vec, (int64_t)kf);
+}
+
+// 批 989（keyfn 单态化第三段）：i64 元素数组的 sitofp 桥——元素按
+// **值**转成 double 传入特化副本（double(*)(double)），副本体内 f64
+// 语义正确（kf(3) ⇒ (double)3 * 0.5 = 1.5），比较在 double 域，返回
+// 原元素。与 py_max_key_f64（位桥）的差别只在元素→double 的转换：
+// 位桥服务 f64 位模式数组（memcpy 位重解），本桥服务真整数数组
+// （位重解整数 3 得非规格数 1.5e-323，比较全错）。
+int64_t py_max_key_i64_f64(int64_t vec, int64_t keyfn_addr) {
+    int64_t n = zt_vec_len(vec);
+    if (n <= 0) return 0;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
+    int64_t best = ((int64_t*)vec)[0];
+    double best_k = kf((double)best);
+    if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "K64MAX: n=%lld best=%lld best_k=%f\n", (long long)n, (long long)best, best_k);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        double k = kf((double)v);
+        if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "K64MAX: i=%lld v=%lld k=%f\n", (long long)i, (long long)v, k);
+        if (k > best_k) { best = v; best_k = k; }
+    }
+    return best;
+}
+int64_t py_min_key_i64_f64(int64_t vec, int64_t keyfn_addr) {
+    int64_t n = zt_vec_len(vec);
+    if (n <= 0) return 0;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
+    int64_t best = ((int64_t*)vec)[0];
+    double best_k = kf((double)best);
+    if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "K64MIN: n=%lld best=%lld best_k=%f\n", (long long)n, (long long)best, best_k);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        double k = kf((double)v);
+        if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "K64MIN: i=%lld v=%lld k=%f\n", (long long)i, (long long)v, k);
         if (k < best_k) { best = v; best_k = k; }
     }
     return best;
 }
-int64_t py_max_key(int64_t vec, int64_t keyfn) {
+
+// key_is_f64（批 962 第二段）：keyfn 返回域可静态判定（注解 ret 或
+// checker 证据）时比较在 double 域进行——此前一律按 i64 比较返回的
+// f64 位模式，负浮点（符号位 1）永远不是 max（实拍
+// max([1.5,2.5,-3.5], key=ka) 打 2.0 位模式，CPython -3.5）。
+// 无证据时 gen 传 0，维持 i64 域（现状，登记）。
+int64_t py_max_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
     int64_t n = zt_vec_len(vec);
     if (n <= 0) return 0;
     int64_t best = ((int64_t*)vec)[0];
     int64_t best_k = ((int64_t(*)(int64_t))keyfn)(best);
+    if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "MAXK: flag=%lld n=%lld best=%lld best_k=%lld\n", (long long)key_is_f64, (long long)n, (long long)best, (long long)best_k);
+    double best_d;
+    memcpy(&best_d, &best_k, sizeof best_d);
     for (int64_t i = 1; i < n; i++) {
         int64_t v = ((int64_t*)vec)[i];
         int64_t k = ((int64_t(*)(int64_t))keyfn)(v);
-        if (k > best_k) { best = v; best_k = k; }
+        int64_t take;
+        if (key_is_f64) {
+            // 批次 982：keyfn 返回 double（float 注解 ⇒ LLVM v0）——
+            // 须按 double(*)(int64_t) 调用（形参 x0 位模式、返回 v0），
+            // 直接比较返回值；旧代码读 x0 当 int64 位模式 ⇒ 读到形参
+            // 残留（恒等假象，min 方向反实拍）
+            double (*kfd)(int64_t) = (double (*)(int64_t))keyfn;
+            double kd = kfd(v);
+            take = kd > best_d;
+            if (take) { best_d = kd; best = v; continue; }
+        } else {
+            take = k > best_k;
+            if (take) { best_k = k; best = v; }
+        }
     }
     return best;
 }
@@ -1242,6 +1435,25 @@ int64_t py_vec_discard(int64_t vec, int64_t x, int64_t elem_is_str) {
     return out;
 }
 
+// remove/discard 的 f64 元素版（批 928）：list-backed set 的 remove 归
+// discard 族（批次 816 裁决），py_vec_discard 按位整数比较让
+// xs.remove(1.5) 失配（实拍：元素原样留着，xs[0] 仍 1.5）。
+// 浮点元素按 f64 位模式存取，double 域比较重建。
+int64_t py_vec_discard_f64(int64_t vec, int64_t x_bits) {
+    if (!vec) return vec;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    double x;
+    memcpy(&x, &x_bits, sizeof x);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t raw = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &raw, sizeof v);
+        if (v != x) out = vec_push(out, raw);
+    }
+    return out;
+}
+
 int64_t py_vec_extreme(int64_t vec, int64_t want_max) {
     if (!vec) return (int64_t)GC_strdup("nan");
     int64_t n = zt_vec_len(vec);
@@ -1293,6 +1505,56 @@ int64_t py_vec_notna(int64_t vec);
 // that way; anything else is passed through unchanged with a warning (never a
 // wild read, never a fabricated mask).
 // A plausible `map<..>` block: header is `[cap|len]` with sane bounds.
+/* Batch 743 (#213④b): general tuple repr — the compiler knows the arity and
+   per-element kinds statically (Type::Tuple), so it passes `len` and a 2-bit
+   tag per element (00=int, 01=str, 10=f64-bit-pattern, 11=bool) and the tuple
+   itself is a contiguous run of i64 slots (what stack_array_get reads).
+   Nested containers inside a tuple still print their handles (registered
+   boundary). Returns GC text "(a, b, …)". */
+int64_t zeta_tuple_repr(int64_t arr, int64_t len, int64_t tags) {
+    if (len < 0) len = 0;
+    size_t cap = 16 + (size_t)(len + 1) * 24;
+    char* out = (char*)GC_malloc(cap);
+    size_t n = 0;
+    #define ZT_TR_PUT(c) do {         if (n + 1 >= cap) { cap *= 2; out = (char*)GC_realloc(out, cap); }         out[n++] = (char)(c);     } while (0)
+    #define ZT_TR_PUTS(sv) do { const char* _s = (sv); while (*_s) ZT_TR_PUT(*_s++); } while (0)
+    ZT_TR_PUT('(');
+    for (int64_t i = 0; i < len; i++) {
+        if (i) ZT_TR_PUTS(", ");
+        int64_t tag = (tags >> (2 * i)) & 3;
+        int64_t v = ((int64_t*)arr)[i];
+        switch (tag) {
+        case 1: { /* str */
+            ZT_TR_PUT('\'');
+            ZT_TR_PUTS((const char*)v);
+            ZT_TR_PUT('\'');
+            break;
+        }
+        case 2: { /* f64 bit pattern */
+            double d;
+            memcpy(&d, &v, sizeof d);
+            char num[40];
+            snprintf(num, sizeof num, "%.17g", d);
+            ZT_TR_PUTS(num);
+            break;
+        }
+        case 3: /* bool */
+            ZT_TR_PUTS(v ? "True" : "False");
+            break;
+        default: { /* int */
+            char num[24];
+            snprintf(num, sizeof num, "%lld", (long long)v);
+            ZT_TR_PUTS(num);
+            break;
+        }
+        }
+    }
+    if (len == 1) ZT_TR_PUT(','); /* Python 1-tuple keeps the trailing comma */
+    ZT_TR_PUT(')');
+    out[n] = 0;
+    return (int64_t)out;
+}
+
 static int zt_maybe_map(int64_t m) {
     if (!m || m < 0x1000) return 0;
     /* Batch 663: read the cap word at offset 0 — the same word
@@ -1307,9 +1569,18 @@ static int zt_maybe_map(int64_t m) {
 }
 static int zt_maybe_vec(int64_t v) {
     if (v < 0x1000) return 0;
-    int64_t cap = ((int64_t*)(v - 16))[0];
-    int64_t len = ((int64_t*)(v - 16))[1];
-    return cap >= 0 && len >= 0 && len <= cap && cap <= (1LL << 30);
+    int64_t* hdr = (int64_t*)(v - 16);
+    // Batch 787 (#213②)：GC_base 门——≥0x1000 的标量整数（真堆地址、序数、
+    // 浮点位模式）直接解引用 v-16 会 SEGV 或读到旧堆块假判形；真 vec 的头
+    // 恰是 GC_malloc 块起点（dynarray_new 返回 buf+2），GC_base 相等才读。
+    if (GC_base((void*)hdr) != (void*)hdr) return 0;
+    int64_t cap = hdr[0];
+    int64_t len = hdr[1];
+    // Batch 783 (#213①)：对齐 _fwd 严格形（cap >= 1）。先量后动量测（探针链接
+    // runtime 实测）：运行期 zeta_dynarray_new 恒 `cap < 8 → cap = 8` ⇒ 真 vec
+    // （含空表）cap ≥ 8，严格形零误伤；20 字符 GC 串的 -16 头可 mimic 成
+    // cap/len 健康形 ⇒ 宽松 cap >= 0 收下（lenient=1/strict=0 实拍）。
+    return cap >= 1 && len >= 0 && len <= cap && cap <= (1LL << 30);
 }
 int64_t zt_bare_mask(int64_t v, int want_notna) {
     if (zt_maybe_vec(v)) {
@@ -1388,6 +1659,54 @@ static int zt_maybe_vec_arity1(int64_t v) { return v > 0x1000; }
 // closure is compiled to a plain function (`__closure_N`), same convention as
 // `py_functools_reduce`. Used by `fetch_stocks`'s
 // `result["stock_code"].map(lambda x: …)`.
+// Batch 794 (#214)：数值列的 map 运行期变体——列元素是文本指针
+// （__getitem__ 读边界按 vec<str> 约定 materialize），str__map 直传文本词
+// 给闭包 ⇒ 数值 lambda（x*2）打串接。本变体逐元素 strtod 成 f64、**位**
+// 传闭包（闭包形参由出码层 hint 成 F64），结果按闭包返回位收集。
+// 数值 map 的回调是 hint 过的闭包：MIR 侧 pending_closure_param_types 强制
+// 形参 F64，codegen 产出 `double(double)` 签名（参数/返回都走 XMM）。
+// 必须按浮点 ABI 调用——按 int64(*)(int64) 调会把入参放 RDI、从 RDI 收返回，
+// callee 读 XMM0 的残留值、调用方读回未被动过的 RDI，λ 体等于整个被丢
+// （批 795 实拍：x*3 / x+1 都原样返回入参，out_bits==in_bits）。
+int64_t zeta_series_map_f64(int64_t vec, int64_t fn);
+int64_t zeta_series_map_f64(int64_t vec, int64_t fn) {
+    if (!vec) return vec;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    double (*fdf)(double) = (double (*)(double))fn;
+    for (int64_t i = 0; i < n; i++) {
+        const char* s = (const char*)((int64_t*)vec)[i];
+        double d = s ? strtod(s, NULL) : 0.0;
+        double r2 = fdf(d);
+        int64_t r;
+        memcpy(&r, &r2, sizeof r);
+        int64_t pushed = vec_push(out, r);
+        if (pushed != out) out = pushed;
+    }
+    return out;
+}
+
+// 位型变体：接收者元素已是 f64 位（上一跳 zeta_series_map_f64 的输出、
+// zeta_vec_push_f64 构造的列）。文本变体的 strtod 会把位整当指针解引用。
+int64_t zeta_series_map_f64_bits(int64_t vec, int64_t fn);
+int64_t zeta_series_map_f64_bits(int64_t vec, int64_t fn) {
+    if (!vec) return vec;
+    int64_t n = zt_vec_len(vec);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    double (*fdf)(double) = (double (*)(double))fn;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t raw = ((int64_t*)vec)[i];
+        double d;
+        memcpy(&d, &raw, sizeof d);
+        double r2 = fdf(d);
+        int64_t r;
+        memcpy(&r, &r2, sizeof r);
+        int64_t pushed = vec_push(out, r);
+        if (pushed != out) out = pushed;
+    }
+    return out;
+}
+
 int64_t zt_dyn_str_map(int64_t vec, int64_t fn) __asm__("_[dynamic]str__map");
 int64_t zt_dyn_str_map(int64_t vec, int64_t fn) {
     if (!vec) return vec;
@@ -1545,6 +1864,27 @@ int64_t py_vec_mul(int64_t a, int64_t b) {
     return out;
 }
 
+int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str);
+
+// 批次 879（#276）：set 的 `|` 是集合并集——内容判等去重合并（py_list_contains
+// 的 elem_is_str 口径，与 807 的 py_vec_intersect 同族）。py_vec_or 是逐元素
+// 逻辑或（掩码面），对 set[str] 是静默错值：set() | {"q"} 算出 [1]。
+int64_t py_vec_union(int64_t a, int64_t b, int64_t elem_is_str) {
+    if (!a) return b;
+    if (!b) return a;
+    int64_t out = zeta_dynarray_new(8);
+    int64_t na = zt_vec_len(a), nb = zt_vec_len(b);
+    for (int64_t i = 0; i < na; i++) {
+        int64_t v = ((int64_t*)a)[i];
+        if (!py_list_contains(out, v, elem_is_str)) out = vec_push(out, v);
+    }
+    for (int64_t i = 0; i < nb; i++) {
+        int64_t v = ((int64_t*)b)[i];
+        if (!py_list_contains(out, v, elem_is_str)) out = vec_push(out, v);
+    }
+    return out;
+}
+
 int64_t py_vec_or(int64_t a, int64_t b) {
     if (!a) return b;
     if (!b) return a;
@@ -1636,6 +1976,11 @@ static int zt_c_readable(int64_t a) {
     return vm_read_overwrite(mach_task_self(), (vm_address_t)a, 1,
                              (vm_address_t)&p, &g) == KERN_SUCCESS;
 }
+// 批次 889（#273）：跨编译单元的逐元素形状探针——tokio_runtime_stub 的
+// py_json_dumps_vec_typed 用它做混型列表的运行期判别（int 通道遇可读字渲染
+// 成字符串、str 通道遇不可读字渲染成整数）。小整数永远通不过（未映射低位
+// 地址 vm_read 失败），与 zeta_dyn_truth 的几何探针同一安全口径。
+int zt_word_readable(int64_t a) { return zt_c_readable(a); }
 int64_t zeta_dyn_truth(int64_t h);
 int64_t py_not(int64_t x) {
     // BATCH-297: this used to probe vec/map only when `GC_base(x) != x`, which
@@ -1738,8 +2083,12 @@ int64_t py_vec_clip(int64_t vec, double lo, double hi, int64_t has_lo, int64_t h
 
 static int zt_maybe_vec_fwd(int64_t v) {
     if (v < 0x1000) return 0;
-    int64_t cap = ((int64_t*)(v - 16))[0];
-    int64_t len = ((int64_t*)(v - 16))[1];
+    int64_t* hdr = (int64_t*)(v - 16);
+    // Batch 787 (#213②)：同款 GC_base 门（540/461 两侧撞过的读法——正解方向
+    // 「用对象起点而不是候选值自身」的落地）。
+    if (GC_base((void*)hdr) != (void*)hdr) return 0;
+    int64_t cap = hdr[0];
+    int64_t len = hdr[1];
     // 一条 vec 句柄的 cap 恒 >= 1；而 `df["col"] = <标量 str>` 的 char* 句柄，其前 16 字节
     // 可以正好读成 cap=0 len=0 的"健康表头"——旧判据放它过，列就存成了裸字符串。
     return cap >= 1 && len >= 0 && len <= cap && cap <= (1LL << 30);
@@ -2145,6 +2494,45 @@ int64_t py_list_contains(int64_t vec, int64_t x, int64_t elem_is_str) {
     return 0;
 }
 
+// `in` 的 f64 元素版（批 926）：浮点元素按 f64 位模式存取
+// （zeta_vec_push_f64 同一约定），比较在 double 域。此前走 py_list_contains
+// 的按位整数比较，`2.5 in [1.5, 2.5]` 为 False（CPython True）。
+int64_t py_list_contains_f64(int64_t vec, int64_t x_bits) {
+    int64_t n = zt_vec_len(vec);
+    double x;
+    memcpy(&x, &x_bits, sizeof x);
+    for (int64_t i = 0; i < n; i++) {
+        int64_t raw = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &raw, sizeof v);
+        if (v == x) return 1;
+    }
+    return 0;
+}
+
+// Batch 807: `sa.intersection(sb)` on our list-backed sets (`py_vec_add_unique`
+// / `py_vec_discard` above own the mutators). Nine of the forty real strategy
+// files spell `list(set(temp).intersection(set(stockList)))` and the call
+// compiled to the ghost `[dynamic]i64::intersection`, which batch 428's rule
+// turns into a raise. Walk the LEFT operand and keep what the right holds,
+// through `py_list_contains` so the packed-word / small-string slot forms
+// (batches 291 / 575) are compared by CONTENT rather than dereferenced.
+// Push-if-absent, so the result is a set even when `set([...])` left
+// duplicates in the INPUT (the constructor's own dedup gap is a separate
+// entry — it is NOT papered over here).
+int64_t py_vec_intersect(int64_t a, int64_t b, int64_t elem_is_str) {
+    int64_t n = zt_vec_len(a);
+    int64_t out = zeta_dynarray_new(n > 0 ? n : 1);
+    if (!a || !b) return out;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t v = ((int64_t*)a)[i];
+        if (!py_list_contains(b, v, elem_is_str)) continue;
+        if (py_list_contains(out, v, elem_is_str)) continue;
+        out = vec_push(out, v);
+    }
+    return out;
+}
+
 // ── PY-A: sort/sorted with a key callable (decorate-sort-undecorate) ──
 // Keys are computed once per element; the original index is the tie-breaker,
 // so the sort stays stable like Python's.
@@ -2544,7 +2932,19 @@ int64_t py_repr_str(int64_t s) {
 
 // set(xs) — V1: a deduplicated Vec (no add/remove, membership via the list
 // path). Order follows first appearance.
-int64_t py_builtin_set(int64_t vec) {
+//
+// Batch 809 (#267①): the old dedup compared the SLOT WORD, but a `vec<str>`
+// slot holds a pointer — `set(["a","a","b"])` kept all three because the two
+// "a" literals are two allocations. Measured damage: the real strategy corpus
+// spells `list(set(pool))` / `list(set(target_list))` over ticker-string lists at
+// 20+ sites, and every one of them silently kept its duplicates instead of
+// deduping — a wrong value, not a raise. `elem_is_str` now selects content
+// comparison, the same rule `py_list_contains` (:2229) uses for membership, so
+// the constructor and `in` cannot disagree about two elements being equal.
+// The exact-word test is kept FIRST and covers 0/NULL: routing this through
+// `py_list_contains` instead would drop them (its `v == x && v != 0` guard),
+// which would be a new silent wrong value for int sets.
+int64_t py_builtin_set(int64_t vec, int64_t elem_is_str) {
     int64_t n = zt_vec_len(vec);
     int64_t cap = n ? n : 1;
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)cap * 8);
@@ -2554,7 +2954,13 @@ int64_t py_builtin_set(int64_t vec) {
         int64_t v = ((int64_t*)vec)[i];
         int dup = 0;
         for (int64_t j = 0; j < base[1]; j++) {
-            if (base[2 + j] == v) { dup = 1; break; }
+            int64_t w = base[2 + j];
+            if (w == v) { dup = 1; break; }
+            if (v && w && ((elem_is_str && zt_str_content_eq(v, w))
+                           || (!elem_is_str && zt_c_readable(v) && zt_c_readable(w)
+                               && strcmp((const char*)v, (const char*)w) == 0))) {
+                dup = 1; break;
+            }
         }
         if (!dup) base[2 + base[1]++] = v;
     }
@@ -2943,6 +3349,119 @@ int64_t py_builtin_min(int64_t vec) {
     return best;
 }
 
+// min()/max() 单参数形式的 f64 元素版（批 925）：浮点元素按 f64 位模式
+// 存取（zeta_vec_push_f64 同一约定），比较在 double 域进行，返回位模式。
+// 此前只有 i64 版，浮点数组按位模式比大小（min([1.5,2.5]) 实拍
+// 4609434218613702656 ＝ 1.5 的位模式，CPython 1.5），gen 侧仅打 warning
+// 提示绕行。
+int64_t py_builtin_max_f64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t raw = ((int64_t*)vec)[0];
+    double best;
+    memcpy(&best, &raw, sizeof best);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t r2 = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &r2, sizeof v);
+        if (v > best) best = v;
+    }
+    int64_t out;
+    memcpy(&out, &best, sizeof out);
+    return out;
+}
+
+// min()/max() 的 key=abs 特化（批 956）：内建 abs 无一等函数值形式
+// （llvm.fabs 内在经 zeta_call1 ABI 不匹配，实拍 exit 138）——gen 侧
+// 检测 key=abs 直接分派到 fabs 比较循环，绕开函数值 ABI。
+static inline double zt_fabs_d(double v) { return v < 0 ? -v : v; }
+// key=abs 的 CPython 语义：按 |x| 比较，返回**原元素**（-3.5 而非 3.5）
+int64_t py_builtin_max_abs_f64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t best_raw = ((int64_t*)vec)[0];
+    double best;
+    memcpy(&best, &best_raw, sizeof best);
+    double best_k = zt_fabs_d(best);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t r2 = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &r2, sizeof v);
+        double k = zt_fabs_d(v);
+        if (k > best_k) {
+            best_k = k;
+            best_raw = r2;
+        }
+    }
+    return best_raw;
+}
+int64_t py_builtin_min_abs_f64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t best_raw = ((int64_t*)vec)[0];
+    double best;
+    memcpy(&best, &best_raw, sizeof best);
+    double best_k = zt_fabs_d(best);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t r2 = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &r2, sizeof v);
+        double k = zt_fabs_d(v);
+        if (k < best_k) {
+            best_k = k;
+            best_raw = r2;
+        }
+    }
+    return best_raw;
+}
+int64_t py_builtin_max_abs_i64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t best_raw = ((int64_t*)vec)[0];
+    int64_t best_k = best_raw < 0 ? -best_raw : best_raw;
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        int64_t k = v < 0 ? -v : v;
+        if (k > best_k) {
+            best_k = k;
+            best_raw = v;
+        }
+    }
+    return best_raw;
+}
+int64_t py_builtin_min_abs_i64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t best_raw = ((int64_t*)vec)[0];
+    int64_t best_k = best_raw < 0 ? -best_raw : best_raw;
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        int64_t k = v < 0 ? -v : v;
+        if (k < best_k) {
+            best_k = k;
+            best_raw = v;
+        }
+    }
+    return best_raw;
+}
+
+int64_t py_builtin_min_f64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t raw = ((int64_t*)vec)[0];
+    double best;
+    memcpy(&best, &raw, sizeof best);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t r2 = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &r2, sizeof v);
+        if (v < best) best = v;
+    }
+    int64_t out;
+    memcpy(&out, &best, sizeof out);
+    return out;
+}
+
 // ── PY-A: s.split() with no separator — split on whitespace runs, dropping
 // empty fields (Python semantics). The 2-arg form uses host_str_split. ──
 int64_t host_str_split_ws(int64_t s) {
@@ -3073,6 +3592,47 @@ int64_t py_vec_full(int64_t n, int64_t v) {
     return h;
 }
 
+// 批 996（jq_wufu_daily 语料面）：np.diff / np.nan_to_num 最小实现。
+// numpy 数组在本编译器的表示＝f64 位模式落在 i64 槽的 Vec（与
+// zeta_sum_vec/zeta_vec_strftime 同一约定），逐元素按位模式取 double、
+// 运算后按位模式放回。
+int64_t py_numpy_diff(int64_t data) {
+    if (!data) return zeta_dynarray_new(0);
+    int64_t n = zt_vec_len(data);
+    if (n <= 1) return zeta_dynarray_new(0);
+    int64_t h = zeta_dynarray_new(n - 1);
+    for (int64_t i = 1; i < n; i++) {
+        double a, b;
+        memcpy(&a, &((int64_t*)data)[i - 1], sizeof a);
+        memcpy(&b, &((int64_t*)data)[i], sizeof b);
+        double d = b - a;
+        int64_t bits;
+        memcpy(&bits, &d, sizeof bits);
+        h = vec_push(h, bits);
+    }
+    return h;
+}
+int64_t py_nan_to_num(int64_t data) {
+    if (!data) return zeta_dynarray_new(0);
+    int64_t n = zt_vec_len(data);
+    int64_t h = zeta_dynarray_new(n);
+    for (int64_t i = 0; i < n; i++) {
+        double x;
+        memcpy(&x, &((int64_t*)data)[i], sizeof x);
+        if (x != x) {
+            x = 0.0; // NaN → 0（numpy 默认 nan=0.0）
+        } else if (x > 1.7976931348623157e308) {
+            x = 1.7976931348623157e308; // +inf → DBL_MAX
+        } else if (x < -1.7976931348623157e308) {
+            x = -1.7976931348623157e308; // -inf → -DBL_MAX
+        }
+        int64_t bits;
+        memcpy(&bits, &x, sizeof bits);
+        h = vec_push(h, bits);
+    }
+    return h;
+}
+
 int64_t zeta_dynarray_new(int64_t cap) {
     if (cap < 8) cap = 8;
     int64_t* buf = (int64_t*)GC_malloc((size_t)(2 + cap) * 8);
@@ -3137,8 +3697,19 @@ int64_t map_new(void);
 int64_t map_insert(int64_t, int64_t, int64_t);
 int64_t map_get(int64_t, int64_t);
 int64_t map_str_key(int64_t);
+int64_t map_has(int64_t, int64_t);
+int64_t zeta_map_pop_default(int64_t, int64_t, int64_t);
 
 static int64_t g_env = 0;
+// 批 998：del 墓碑集合——被 zeta_env_del 删除的名字记入；env_get 读到
+// 墓碑名 ⇒ zeta_raise(1)（Python NameError 语义）。不设墓碑的缺名读
+// 维持旧返 0 行为（import 绑定/跨模块名存在合法的"先读后写"面，
+// 一刀切 raise 实测打红 12 个 py_style 用例）。
+static int64_t g_del_set = 0;
+static int64_t del_set(void) {
+    if (!g_del_set) g_del_set = map_new();
+    return g_del_set;
+}
 
 static int64_t env_map(void) {
     if (!g_env) g_env = map_new();
@@ -3146,10 +3717,40 @@ static int64_t env_map(void) {
 }
 int64_t zeta_env_map_for_probe(void) { return env_map(); }
 int64_t zeta_env_get(int64_t name_handle) {
-    return map_get(env_map(), map_str_key(name_handle));
+    int64_t key = map_str_key(name_handle);
+    // 批 998：读【被 del 删除】的名字 ⇒ zeta_raise(1)（try/except 可捕
+    // 获，CPython NameError 语义）。从未写入的名字缺名读维持旧返 0
+    // （import 绑定等合法先读后写面，见 g_del_set 注释）。
+    if (map_has(del_set(), key)) return zeta_raise(1);
+    int64_t r = map_get(env_map(), key);
+    if (getenv("ZT_DEBUG_ENV")) fprintf(stderr, "[ENV] get \"%s\" -> %lld\n", (char*)name_handle, (long long)r);
+    return r;
 }
 void zeta_env_set(int64_t name_handle, int64_t v) {
-    map_insert(env_map(), map_str_key(name_handle), v);
+    if (getenv("ZT_DEBUG_ENV")) fprintf(stderr, "[ENV] set \"%s\" = %lld\n", (char*)name_handle, (long long)v);
+    int64_t key = map_str_key(name_handle);
+    if (map_has(del_set(), key)) zeta_map_pop_default(del_set(), key, 0);
+    map_insert(env_map(), key, v);
+}
+// 批 996：del <module-global> —— 名字不在环境 ⇒ zeta_raise(1)
+//（try/except 可捕获；对应 CPython 的 NameError），在 ⇒ 移除
+//（读回即失败，Python 语义）。
+int64_t zeta_env_del(int64_t name_handle) {
+    int64_t key = map_str_key(name_handle);
+    if (!map_has(env_map(), key)) return zeta_raise(1);
+    zeta_map_pop_default(env_map(), key, 0);
+    map_insert(del_set(), key, 1);
+    return 0;
+}
+
+// 批 997（签名表全覆盖配套的 C 补缺）：降低层实发元数有 C 侧 arity
+// 后缀兄弟但没有注册表条目的三族——补真身/占位并注册 X 条目。
+// 1) py_dt_timedelta_2(days, extra)：extra（unit 等位）V1 忽略，
+//    语义同 1 参版（在册：unit 面待补）。
+int64_t py_dt_timedelta_2(int64_t days, int64_t extra) {
+    (void)extra;
+    extern int64_t py_dt_timedelta(int64_t);
+    return py_dt_timedelta(days);
 }
 
 // nonlocal declaration marker — no runtime effect (the env routing happens
@@ -3420,6 +4021,7 @@ int64_t zeta_big_floordiv(int64_t a, int64_t b) {
 }
 
 int64_t zeta_map_value_tag(int64_t map, int64_t key);
+
 int64_t zeta_map_value_untagged(int64_t map, int64_t key);
 int64_t map_get(int64_t m, int64_t k);
 int64_t map_resolve(int64_t m);
@@ -4587,11 +5189,68 @@ static int64_t* zt_dyn_vec_hdr(int64_t h) {
     return hdr;
 }
 
-// 批次 10002（移植 bootstrap 批次 810，commit a5a5b3b8）：`xs.mean()` 此前由 gen.rs 的
-// opaque 兜底臂接走——那条 pandas 链式列表（fillna/astype/shift/…/mean）用 `zeta_identity`
-// 把接收者原样回传，对返回同形对象的成员是对的，但 mean 返回**标量**，于是句柄被当成数用
-// （改前本树实拍：statistics.mean([1.0, 2.0]) 打 10）。
-// 元素读法照 zeta_vec_div_scalar 的口径：整数向量按值读、f64 向量按位读；静态类型
+// Batch 784 (#213① 下游 / 值标签延伸)：f64 元素列表的逐元素 clip——
+// py_vec_clip 是 vec<str> 列的数值裁剪（元素按 char* → strtod），f64 位
+// 元素列表传入 = 按位当指针 ⇒ strtod(SEGV，clip→len ASLR 闪崩的真身)。
+// 本变体元素按 f64 位直接 clamp，结果同形 vec。
+int64_t py_vec_clip_f64(int64_t vec, double lo, double hi, int64_t has_lo, int64_t has_hi) {
+    int64_t* hdr = zt_dyn_vec_hdr(vec);
+    if (!hdr) return vec;
+    int64_t len = hdr[1];
+    int64_t out = zeta_dynarray_new(len > 0 ? len : 1);
+    for (int64_t i = 0; i < len; i++) {
+        double e;
+        memcpy(&e, &hdr[2 + i], sizeof e);
+        if (has_lo && e < lo) e = lo;
+        if (has_hi && e > hi) e = hi;
+        int64_t bits;
+        memcpy(&bits, &e, sizeof bits);
+        vec_push(out, bits);
+    }
+    return out;
+}
+
+// Batch 779 (#203⑥ 第一格)：list / scalar 逐元素除——Python 语义
+// （[10.0, 20.0] / 2 == [5.0, 10.0]）。此前 `v / 2` 走标量 sdiv/句柄算术，
+// 元素读回是位垃圾（2.31e+18 实拍）。元素按 f64 位存取（与 slot_bits 家族
+// 同一约定），结果列同形 vec；标量恒以 double 位进入（gen 侧 sitofp＋bitcast）。
+// Batch 781 (#203⑥)：f64 append 专用 push——f64 直进 xmm，C 侧按位
+// vec_push（vec_push 是 i64 通道，codegen coerce 的 fptosi 会截掉小数）。
+int64_t zeta_vec_push_f64(int64_t vec, double v) {
+    int64_t bits;
+    memcpy(&bits, &v, sizeof bits);
+    return vec_push(vec, bits);
+}
+
+int64_t zeta_vec_div_scalar(int64_t vec, double scalar, int64_t elem_is_i64) {
+    int64_t* hdr = zt_dyn_vec_hdr(vec);
+    if (!hdr) return vec;
+    int64_t len = hdr[1];
+    double d = scalar;
+    if (d == 0.0) return vec;
+    int64_t out = zeta_dynarray_new(len > 0 ? len : 1);
+    for (int64_t i = 0; i < len; i++) {
+        // elem_is_i64：int 元素列表的真除（CPython [10, 20] / 2 == [5.0, 10.0]）
+        // ——先 sitofp 再除；f64 位元素直接除。
+        double e;
+        if (elem_is_i64) {
+            e = (double)hdr[2 + i];
+        } else {
+            memcpy(&e, &hdr[2 + i], sizeof e);
+        }
+        double r = e / d;
+        int64_t bits;
+        memcpy(&bits, &r, sizeof bits);
+        vec_push(out, bits);
+    }
+    return out;
+}
+
+// 批次 810：`xs.mean()` 此前由 gen.rs 的 opaque 兜底臂接走——那条 pandas 链式
+// 列表（fillna/astype/shift/…/mean）用 `zeta_identity` 把接收者原样回传，对返回同形
+// 对象的成员是对的，但 mean 返回**标量**，于是句柄被当成数用（夹具 t810_mean_fold
+// 在改前提交面实拍：七行期望全打成堆地址字，乘 2 那行也"看着对"；cleanup 车道本树实测 statistics.mean([1.0, 2.0]) 打 10）。
+// 元素读法照上面的 zeta_vec_div_scalar：整数向量按值读、f64 向量按位读；静态类型
 // 未知的接收者由调用侧固定传 0（按位），因为语料的实际用法是
 // `df["close"][-n:].mean()` 这类价格序列，按整数读会把 2.0 读成 4611686018427387904。
 // 空向量与不可识别句柄给 NaN 而不是 0：pandas 空 Series.mean() 就是 NaN，而 0 是一
@@ -4613,6 +5272,17 @@ double zeta_mean_vec(int64_t vec, int64_t elem_is_i64) {
         acc += e;
     }
     return acc / (double)len;
+}
+
+// 批次 893（#279 方案②）：未知型接收者的均值——vec 按浮点位读均值后返回
+// CPython repr 文本（"20.0"），非 vec 句柄（dict／pandas 对象）原样返回＝
+// identity（t10004 的字典面）。返回 i64（文本句柄或原句柄）。
+// 注意 m 必须是 double——zeta_mean_vec 的 ABI 返回 double，若接进 int64_t
+// 会发生值转换（20.0→20），下游 memcpy 重解释就打出 1e-322（890 实拍）。
+int64_t zeta_mean_to_string(int64_t recv) {
+    if (!zt_dyn_vec_hdr(recv)) return recv;
+    double m = zeta_mean_vec(recv, 0);
+    return (int64_t)zt_f64_repr(m);
 }
 
 int64_t zeta_dyn_len(int64_t h) {
@@ -4862,12 +5532,16 @@ int64_t zeta_map_value_tag(int64_t map, int64_t key);
 static int64_t zt_word_to_text(int64_t w, int64_t elem_tag) {
     char buf[64];
     switch (elem_tag) {
-    case 6: {
-        double d;
-        memcpy(&d, &w, sizeof d);
-        snprintf(buf, sizeof buf, "%.10g", d);
-        break;
-    }
+    case 6:
+        // 批次 799：f64 位元素的文本化走 zt_f64_repr（CPython repr——10.0
+        // 打 "10.0" 非 "10"）。原 "%.10g" 是显示层残差：数值 map（strtod）
+        // 不受影响，但恒等 map / 文本消费打印 "10"，与 CPython str(10.0) 差
+        // ".0"（批 798 mulprobe 第三行实拍）。
+        {
+            double d;
+            memcpy(&d, &w, sizeof d);
+            return (int64_t)zt_f64_repr(d);
+        }
     case 7:
         snprintf(buf, sizeof buf, "%s", w ? "True" : "False");
         break;

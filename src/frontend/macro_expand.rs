@@ -71,6 +71,7 @@ impl MacroExpander {
                 }
                 self.expand_assert_eq(&[args[0].clone(), AstNode::Bool(true)])
             }
+            "matches" => self.expand_matches(args),
             _ => {
                 // Check for registered declarative macros
                 if let Some(macro_def) = self.declarative_macros.get(name) {
@@ -196,28 +197,105 @@ impl MacroExpander {
         // This used to return one hard-coded literal for every call, so
         // `format!("fn {}(", name)` produced "formatted string" and the five
         // sites in `minimal_compiler.z` built their output text out of it.
-        // `{}` splits the template into literal segments; each value goes
-        // through `__fmtspec__(v, "")`, which MIR lowering already dispatches
-        // per static type to `py_fmt_{i64,f64,str}` (empty spec == `{}`).
+        // `{}` and `{:spec}` split the template into literal segments; each
+        // value goes through `__fmtspec__(v, spec)`, which MIR lowering
+        // dispatches per static type to `py_fmt_{bool,i64,f64,str}`
+        // (empty spec == `{}`). 批次 749（#45 第九成员）：带 spec 的占位符
+        // 此前整串留在字面量段里（`format!("z={:04}", 7)` 打 `z={:04}7`），
+        // f-string 路本就送 spec 进同一入口，两路在此对齐。
         if let Some(AstNode::StringLit(format_str)) = args.first() {
-            let mut segments = format_str.split("{}");
-            let first = segments.next().unwrap_or_default();
-            let mut expr = AstNode::StringLit(first.to_string());
-            for value in &args[1..] {
-                expr = AstNode::BinaryOp {
-                    op: "+".to_string(),
-                    left: Box::new(expr),
-                    right: Box::new(self.fmtspec_expr(value)),
-                };
-                if let Some(segment) = segments.next() {
-                    expr = AstNode::BinaryOp {
+            enum Seg {
+                Lit(String),
+                Hole(String),
+            }
+            let mut segs: Vec<Seg> = Vec::new();
+            let mut lit = String::new();
+            let text: Vec<char> = format_str.chars().collect();
+            let mut i = 0usize;
+            while i < text.len() {
+                if text[i] == '{' {
+                    // 孔识别只在两种形状上成立：`{}` 与 `{:spec}`；其余
+                    // `{` 一律留在字面量里（畸形 spec 同样整体退回字面量，
+                    // 不能只吞前缀）。
+                    if i + 1 < text.len() && text[i + 1] == '}' {
+                        if !lit.is_empty() {
+                            segs.push(Seg::Lit(std::mem::take(&mut lit)));
+                        }
+                        segs.push(Seg::Hole(String::new()));
+                        i += 2;
+                        continue;
+                    }
+                    if i + 1 < text.len() && text[i + 1] == ':' {
+                        let mut spec = String::new();
+                        let mut j = i + 2;
+                        let mut closed = false;
+                        while j < text.len() {
+                            if text[j] == '}' {
+                                closed = true;
+                                break;
+                            }
+                            if text[j] == '{' {
+                                break;
+                            }
+                            spec.push(text[j]);
+                            j += 1;
+                        }
+                        if closed && !spec.is_empty() {
+                            if !lit.is_empty() {
+                                segs.push(Seg::Lit(std::mem::take(&mut lit)));
+                            }
+                            segs.push(Seg::Hole(spec));
+                            i = j + 1;
+                            continue;
+                        }
+                    }
+                }
+                lit.push(text[i]);
+                i += 1;
+            }
+            if !lit.is_empty() {
+                segs.push(Seg::Lit(lit));
+            }
+
+            let mut values = args[1..].iter();
+            let mut expr: Option<AstNode> = None;
+            let push = |piece: AstNode, expr: &mut Option<AstNode>| {
+                *expr = Some(match expr.take() {
+                    Some(prev) => AstNode::BinaryOp {
                         op: "+".to_string(),
-                        left: Box::new(expr),
-                        right: Box::new(AstNode::StringLit(segment.to_string())),
-                    };
+                        left: Box::new(prev),
+                        right: Box::new(piece),
+                    },
+                    None => piece,
+                });
+            };
+            for seg in segs {
+                match seg {
+                    Seg::Lit(s) => push(AstNode::StringLit(s), &mut expr),
+                    Seg::Hole(spec) => match values.next() {
+                        Some(v) => push(self.fmtspec_expr(v, &spec), &mut expr),
+                        // 值不够：空孔照旧丢弃、带 spec 的孔按字面量保留
+                        // （与改前两形的静默行为一致）。
+                        None => {
+                            let raw = if spec.is_empty() {
+                                String::new()
+                            } else {
+                                format!("{{:{}}}", spec)
+                            };
+                            if !raw.is_empty() {
+                                push(AstNode::StringLit(raw), &mut expr);
+                            }
+                        }
+                    },
                 }
             }
-            return Ok(vec![expr]);
+            // 占位符不够：多出的值接空 spec 追加（改前同行为）。
+            for v in values {
+                push(self.fmtspec_expr(v, ""), &mut expr);
+            }
+            return Ok(vec![expr.unwrap_or_else(|| {
+                AstNode::StringLit(format_str.clone())
+            })]);
         }
 
         // A non-literal template has nothing to substitute into; `format!` in
@@ -226,11 +304,14 @@ impl MacroExpander {
         Ok(vec![result])
     }
 
-    fn fmtspec_expr(&self, value: &AstNode) -> AstNode {
+    fn fmtspec_expr(&self, value: &AstNode, spec: &str) -> AstNode {
         AstNode::Call {
             receiver: None,
             method: "__fmtspec__".to_string(),
-            args: vec![value.clone(), AstNode::StringLit(String::new())],
+            args: vec![
+                value.clone(),
+                AstNode::StringLit(spec.to_string()),
+            ],
             type_args: Vec::new(),
             structural: false,
         }
@@ -266,6 +347,69 @@ impl MacroExpander {
         };
 
         Ok(vec![if_stmt])
+    }
+
+    /// Expand matches! macro: `matches!(expr, pattern)` →
+    /// `match expr { pattern => true, _ => false }`. A `==` lowering is not
+    /// possible: patterns like `Token::Ident(n)` are variant shapes, not values.
+    fn expand_matches(&self, args: &[AstNode]) -> Result<Vec<AstNode>, String> {
+        if args.len() != 2 {
+            return Err("matches! requires exactly 2 arguments".to_string());
+        }
+        let pattern = Self::pattern_from_expr(&args[1]);
+        Ok(vec![AstNode::Match {
+            scrutinee: Box::new(args[0].clone()),
+            arms: vec![
+                crate::frontend::ast::MatchArm {
+                    pattern: Box::new(pattern),
+                    guard: None,
+                    body: Box::new(AstNode::Bool(true)),
+                },
+                crate::frontend::ast::MatchArm {
+                    pattern: Box::new(AstNode::Ignore),
+                    guard: None,
+                    body: Box::new(AstNode::Bool(false)),
+                },
+            ],
+        }])
+    }
+
+    /// A macro argument is parsed as an *expression*, but a match arm wants a
+    /// *pattern*: `Tok::Ident(s)` arrives as `PathCall{path:["Tok"],
+    /// method:"Ident"}` while `parse_pattern` builds
+    /// `StructPattern{variant:"Tok::Ident", fields:[("0", Var s)]}`. Left
+    /// unconverted the arm's constructor never resolves and gen.rs lowers it
+    /// to never-match (`IntLit(0)`) — measured: `matches!(t, Tok::Ident(s))`
+    /// stayed false for an `Ident` value.
+    fn pattern_from_expr(node: &AstNode) -> AstNode {
+        match node {
+            AstNode::PathCall { path, method, args, .. } => {
+                let mut variant = path.join("::");
+                variant.push_str("::");
+                variant.push_str(method);
+                AstNode::StructPattern {
+                    variant,
+                    fields: args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| (i.to_string(), Self::pattern_from_expr(a)))
+                        .collect(),
+                    rest: false,
+                }
+            }
+            AstNode::Call { receiver: None, method, args, .. } if !args.is_empty() => {
+                AstNode::StructPattern {
+                    variant: method.clone(),
+                    fields: args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| (i.to_string(), Self::pattern_from_expr(a)))
+                        .collect(),
+                    rest: false,
+                }
+            }
+            other => other.clone(),
+        }
     }
 
     /// Expand a declarative macro

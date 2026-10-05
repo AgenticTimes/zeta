@@ -24,6 +24,9 @@ use inkwell::values::{
 };
 use std::collections::HashMap;
 
+// 批 990（提案①第一段）：C 运行时签名表＋keyfn 指针合同。
+use super::signature_table;
+
 /// The complete LLVM code generator for Zeta.
 pub struct LLVMCodegen<'ctx> {
     pub context: &'ctx Context,
@@ -169,30 +172,56 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some(Linkage::External),
         );
         module.add_function(
+            "zeta_vec_div_scalar",
+            i64_type.fn_type(
+                &[i64_type.into(), f64_type.into(), i64_type.into()],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "zeta_vec_push_f64",
+            i64_type.fn_type(&[i64_type.into(), f64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "py_vec_clip_f64",
+            i64_type.fn_type(
+                &[
+                    i64_type.into(),
+                    f64_type.into(),
+                    f64_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+        // Batch 771 (#79 余一格收口)：与 C 桩实签对齐（tokio_runtime_stub.c:545+
+        // 全 i64 ABI）——原 ptr 签名陈旧于 Rust host 时代，遮住 result.z 的 i64
+        // extern 声明 ⇒ verifier 双错（ret i64 vs ptr＋参数不匹配）。
+        module.add_function(
             "host_result_make_ok",
-            ptr_type.fn_type(&[i64_type.into()], false),
+            i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
         module.add_function(
             "host_result_make_err",
-            ptr_type.fn_type(&[i64_type.into()], false),
+            i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
         module.add_function(
             "host_result_is_ok",
-            i64_type.fn_type(&[ptr_type.into()], false),
+            i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
         module.add_function(
             "host_result_get_data",
-            i64_type.fn_type(&[ptr_type.into()], false),
+            i64_type.fn_type(&[i64_type.into()], false),
             Some(Linkage::External),
         );
-        module.add_function(
-            "host_result_free",
-            void_type.fn_type(&[ptr_type.into()], false),
-            Some(Linkage::External),
-        );
+
         // Option runtime functions
         module.add_function(
             "option_make_some",
@@ -904,6 +933,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
             Some(Linkage::External),
         );
         module.add_function(
+            "py_fmt_bool",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
             "py_fmt_f64",
             i64_type.fn_type(&[context.f64_type().into(), i64_type.into()], false),
             Some(Linkage::External),
@@ -924,6 +958,20 @@ impl<'ctx> LLVMCodegen<'ctx> {
         // 先例＝上面的 py_round_n。
         module.add_function(
             "zeta_mean_vec",
+            context
+                .f64_type()
+                .fn_type(&[i64_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        // 批次 924：sum() 的 f64 元素版（zeta_mean_vec 同理——返回 double 必须
+        // 提前给 prototype，否则按 i64(i64×N) 现推会把 double 当整数返回读）。
+        module.add_function(
+            "zeta_sum_vec_f64",
+            context.f64_type().fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "zeta_sum_n_f64",
             context
                 .f64_type()
                 .fn_type(&[i64_type.into(), i64_type.into()], false),
@@ -1489,7 +1537,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
         f.count_basic_blocks() == 0 && f.get_type().get_return_type().is_none()
     }
 
-    fn infer_fn_return_type(&self, mir: &Mir) -> inkwell::types::BasicTypeEnum<'ctx> {
+    pub(super) fn infer_fn_return_type(&self, mir: &Mir) -> inkwell::types::BasicTypeEnum<'ctx> {
         // 批次 399: the answer comes from `Mir::signature_ret_ty`, the same entry
         // the caller-side slot pass reads, so the two halves of a call cannot
         // drift apart again. The mapping below is this function's old rule.
@@ -1761,6 +1809,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
         // First try the actual (potentially mangled) name, then fall back to the original
         let fn_val = self.get_function(&actual_name);
 
+        // 批 990（提案①第一段）：keyfn 特化副本实体化时核对签名合同——
+        // 实际声明与体派生签名都必须是 double(f64)（C 桥 double(*)(double)
+        // 的硬编码预期）。批 983 的寄存器类错配（体 i64(i64)、C 读 v0、
+        // 体写 x0）在这层成为编译期响亮失败，不再流到运行期读残留。
+        if actual_name.contains(signature_table::KEYFN_SPEC_PREFIX) {
+            self.verify_keyfn_contract(&actual_name, fn_val, mir);
+        }
+
         // If function has no body, check the MIR is_extern flag.
         // Extern functions get External linkage (resolved at link time).
         // User-defined empty functions get a ret i64 0 stub body.
@@ -1994,7 +2050,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
     /// (≈1.0) to `py_df_setitem`, which read it as a handle and dereferenced it
     /// (SIGSEGV at `py_df_setitem+144`). Keeping the quotient an `sdiv` where the
     /// slot is int preserves the pre-454 shape.
-    fn slot_is_float(&self, id: u32) -> bool {
+    pub(super) fn slot_is_float(&self, id: u32) -> bool {
         self.current_type_map
             .as_ref()
             .and_then(|tm| tm.get(&id).cloned())
@@ -2012,7 +2068,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
     /// REPEAT, so an element-wise answer would be wrong for a real list and the
     /// two spellings are indistinguishable here (both are `DynamicArray`). They
     /// stay registered in backlog #203 for the dialect pass.
-    fn column_arith_dispatch(&self, op: &str, left: u32, right: u32) -> Option<i64> {
+    pub(super) fn column_arith_dispatch(&self, op: &str, left: u32, right: u32) -> Option<i64> {
         let op_index: i64 = match op {
             "/" | "div" => 0,
             "floordiv" => 1,
@@ -2038,7 +2094,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
     /// Emit `zt_col_arith(kind, a, b)`. A column operand crosses as its handle; a
     /// scalar ALWAYS crosses as the bit pattern of a double (int literals are
     /// `sitofp`ed first) so the C side needs no second discriminator.
-    fn gen_column_arith(
+    pub(super) fn gen_column_arith(
         &mut self,
         kind: i64,
         left: BasicValueEnum<'ctx>,
@@ -2382,7 +2438,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
     /// PY-A: Python floor division for integers. `sdiv`/`srem` truncate toward
     /// zero, so the quotient needs nudging down by one whenever the remainder
     /// is non-zero and the operand signs differ (`-7 // 2` is `-4`, not `-3`).
-    fn build_floordiv_int(
+    pub(super) fn build_floordiv_int(
         &self,
         l: inkwell::values::IntValue<'ctx>,
         r: inkwell::values::IntValue<'ctx>,
@@ -2415,7 +2471,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
     /// [`Self::build_floordiv_int`]: add the divisor back when the truncated
     /// remainder is non-zero and the two signs differ. The literal-operand case
     /// never reaches here — `ConstValue::binary_op_int`'s `"%"` arm mirrors it.
-    fn build_floormod_int(
+    pub(super) fn build_floormod_int(
         &self,
         l: inkwell::values::IntValue<'ctx>,
         r: inkwell::values::IntValue<'ctx>,
@@ -2447,7 +2503,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
     /// PY-A: float floor division — divide, then floor through the host math
     /// helper that `math.floor` already uses.
-    fn build_floordiv_float(
+    pub(super) fn build_floordiv_float(
         &self,
         l: inkwell::values::FloatValue<'ctx>,
         r: inkwell::values::FloatValue<'ctx>,
@@ -2462,7 +2518,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
         }
     }
 
-    fn is_operator(&self, name: &str) -> bool {
+    pub(super) fn is_operator(&self, name: &str) -> bool {
         matches!(
             name,
             "+" | "-"
@@ -3002,7 +3058,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
     /// Get or create a function for a call site, ensuring the declaration matches
     /// the actual number of arguments. Creates extern declarations for functions
     /// that don't exist yet (self-hosting bootstrap path).
-    fn get_or_declare_function(
+    pub(super) fn get_or_declare_function(
         &mut self,
         name: &str,
         type_args: &[crate::middle::types::Type],
@@ -3379,8 +3435,31 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 .add_function(&arity_name, self.i64_type.fn_type(&param_types, false), Some(Linkage::External));
             return f;
         }
-        let param_types: Vec<_> = (0..args_count).map(|_| self.i64_type.into()).collect();
-        let fn_type = self.i64_type.fn_type(&param_types, false);
+        // 批 990（提案①第一段）：签名表驱动——表内函数按表定型（表项与
+        // runtime/*.c 逐条对勘），表外维持全 i64 兜底。表成为 extern
+        // 声明的单一事实来源，兜底不再"猜"签名。
+        let (ret_is_float, param_types): (
+            bool,
+            Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>>,
+        ) = match signature_table::lookup(actual_name.as_str()) {
+            Some(sig) => (
+                matches!(sig.ret, signature_table::ValTy::F64),
+                sig.params
+                    .iter()
+                    .map(|t| match t {
+                        signature_table::ValTy::F64 => self.f64_type.into(),
+                        signature_table::ValTy::F32 => self.context.f32_type().into(),
+                        signature_table::ValTy::I64 => self.i64_type.into(),
+                    })
+                    .collect(),
+            ),
+            None => (false, (0..args_count).map(|_| self.i64_type.into()).collect()),
+        };
+        let fn_type = if ret_is_float {
+            self.f64_type.fn_type(&param_types, false)
+        } else {
+            self.i64_type.fn_type(&param_types, false)
+        };
         self.module
             .add_function(&actual_name, fn_type, Some(Linkage::External))
     }
@@ -3886,7 +3965,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
         self.builder.position_at_end(dead);
     }
 
-    fn gen_stmt(&mut self, stmt: &MirStmt, exprs: &HashMap<u32, MirExpr>) {
+    pub(super) fn gen_stmt(&mut self, stmt: &MirStmt, exprs: &HashMap<u32, MirExpr>) {
         match stmt {
             MirStmt::Assign { lhs, rhs } => {
                 let val = self.gen_expr_safe(rhs, exprs);
@@ -3923,552 +4002,72 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 type_args,
             } => {
                 self.note_return_slot_mismatch(func, dest, args.len());
-                // PY-A: try/except — `_setjmp` called directly with
-                // returns_twice so longjmp lands back INSIDE this function
-                // and the following branch re-evaluates.
-                if func.starts_with("zeta_try_setjmp") {
-                    let slot_fn = self
-                        .module
-                        .get_function("zeta_try_slot")
-                        .unwrap_or_else(|| {
-                            self.module.add_function(
-                                "zeta_try_slot",
-                                self.ptr_type.fn_type(&[], false),
-                                Some(Linkage::External),
-                            )
-                        });
-                    let sj_fn = self
-                        .module
-                        .get_function("_setjmp")
-                        .unwrap_or_else(|| {
-                            let f = self.module.add_function(
-                                "_setjmp",
-                                self.context
-                                    .i32_type()
-                                    .fn_type(&[self.ptr_type.into()], false),
-                                Some(Linkage::External),
-                            );
-                            let kind = inkwell::attributes::Attribute::get_named_enum_kind_id(
-                                "returns_twice",
-                            );
-                            eprintln!("PROBE returns_twice kind_id={}", kind);
-                            let attr = self.context.create_enum_attribute(kind, 0);
-                            f.add_attribute(
-                                inkwell::attributes::AttributeLoc::Function,
-                                attr,
-                            );
-                            eprintln!("PROBE attr added kind={}", kind);
-                            f
-                        });
-                    let slot = Self::call_site_to_basic_value(
-                        self.builder.build_call(slot_fn, &[], "try_slot").unwrap(),
-                    )
-                    .unwrap();
-                    let r32 = Self::call_site_to_basic_value(
-                        self.builder.build_call(sj_fn, &[slot.into()], "try_setjmp").unwrap(),
-                    )
-                    .unwrap();
-                    let r = self
-                        .builder
-                        .build_int_z_extend(
-                            r32.into_int_value(),
-                            self.i64_type,
-                            "try_setjmp_ext",
-                        )
-                        .unwrap();
-                    let alloca = *self.locals.get(dest).unwrap();
-                    self.builder.build_store(alloca, r).unwrap();
-                    return;
-                }
-
-                // spawn thunk: __spawn_thunk_<fn> was generated by the MIR layer
-                // to wrap spawn(<fn>(args)). Instead of calling it synchronously,
-                // emit a pthread-based async spawn: pass the thunk's function
-                // address + args to the runtime, which runs it on a new thread.
-                if func.starts_with("__spawn_thunk_") {
-                    let real_fn_name = &func["__spawn_thunk_".len()..];
-                    // Get (or declare) the thunk wrapper: signature (args...) -> i64
-                    // plus a zero-arg entry the runtime can call on the thread.
-                    // We use a two-step approach:
-                    //   1. __spawn_thunk_<fn>(args) — real work, called by thread
-                    //   2. __spawn_entry_<fn>()     — no-arg, captured args via
-                    //      global buffer; the runtime calls this on the thread
-                    //
-                    // Simplification: pass the real function's address directly.
-                    // For zero-arg or all-constant args, we generate a wrapper.
-                    let real_callee = self.get_or_declare_function(real_fn_name, &[], args.len());
-                    let arg_vals: Vec<BasicMetadataValueEnum> = args
-                        .iter()
-                        .map(|&id| self.gen_expr_safe(&id, exprs).into())
-                        .collect();
-
-                    // Generate a no-arg wrapper that captures args via global storage.
-                    // For the MVP: if all args are constants, bake them in;
-                    // otherwise fall back to synchronous call (ponytail: closure capture).
-                    let all_const = args.iter().all(|&id| {
-                        matches!(exprs.get(&id), Some(MirExpr::IntLit(_)) | Some(MirExpr::FloatLit(_)))
-                            || matches!(
-                                exprs.get(&id).and_then(|e| match e {
-                                    MirExpr::Var(v) => exprs.get(v),
-                                    other => Some(other),
-                                }),
-                                Some(MirExpr::IntLit(_)) | Some(MirExpr::FloatLit(_))
-                            )
-                    });
-
-                    if all_const {
-                        // Create wrapper fn: i64 -> i64, ignores its arg, calls real fn
-                        // Unique name per call site (multiple spawns of same fn must not collide)
-                        let wrapper_name = format!("{}__entry{}", func, {
-                            // Use a monotonically increasing id stored on self
-                            self.spawn_counter += 1;
-                            self.spawn_counter
-                        });
-                        let wrapper_type = self.i64_type.fn_type(&[self.i64_type.into()], false);
-                        let wrapper = match self.module.get_function(&wrapper_name) {
-                            Some(f) => f,
-                            None => self.module.add_function(&wrapper_name, wrapper_type, None),
-                        };
-
-                        // Save current insert point
-                        let saved_block = self.builder.get_insert_block().unwrap();
-                        let saved_fn = self
-                            .builder
-                            .get_insert_block()
-                            .and_then(|b| b.get_parent());
-
-                        // Emit wrapper body
-                        let entry = self
-                            .context
-                            .append_basic_block(wrapper, "entry");
-                        self.builder.position_at_end(entry);
-                        let call_args: Vec<BasicMetadataValueEnum> = arg_vals
-                            .iter()
-                            .map(|v| v.clone())
-                            .collect();
-                        let ret = self
-                            .builder
-                            .build_call(real_callee, &call_args, "thunk_call")
-                            .unwrap();
-                        let ret_val = Self::call_site_to_basic_value(ret)
-                            .unwrap_or(self.i64_type.const_zero().into());
-                        self.builder.build_return(Some(&ret_val)).unwrap();
-
-                        // Restore insert point
-                        self.builder.position_at_end(saved_block);
-                        let _ = saved_fn;
-
-                        // Call runtime: spawn(wrapper_fn_ptr) -> handle
-                        let spawn_fn = self
-                            .module
-                            .get_function("spawn")
-                            .unwrap_or_else(|| {
-                                let ft = self
-                                    .i64_type
-                                    .fn_type(&[self.i64_type.into()], false);
-                                self.module
-                                    .add_function("spawn", ft, Some(Linkage::External))
-                            });
-                        let fn_ptr = wrapper
-                            .as_global_value()
-                            .as_pointer_value();
-                        let fn_addr = self
-                            .builder
-                            .build_ptr_to_int(fn_ptr, self.i64_type, "thunk_addr")
-                            .unwrap();
-                        let spawn_ret = self
-                            .builder
-                            .build_call(spawn_fn, &[fn_addr.into()], "spawn_call")
-                            .unwrap();
-                        let handle = Self::call_site_to_basic_value(spawn_ret)
-                            .unwrap_or(self.i64_type.const_zero().into());
-                        let dest_alloca = *self.locals.get(dest).unwrap();
-                        self.builder.build_store(dest_alloca, handle).unwrap();
-                        return;
-                    } else {
-                        // Non-constant args: synchronous fallback
-                        // ponytail: closure capture needed for real async args
-                        let callee = self.get_or_declare_function(func, &[], args.len());
-                        let call_vals: Vec<BasicMetadataValueEnum> = args
-                            .iter()
-                            .map(|&id| self.gen_expr_safe(&id, exprs).into())
-                            .collect();
-                        let call = self.builder.build_call(callee, &call_vals, "").unwrap();
-                        if let Some(val) = Self::call_site_to_basic_value(call) {
-                            let alloca = *self.locals.get(dest).unwrap();
-                            self.builder.build_store(alloca, val).unwrap();
-                        }
-                        return;
+                // 批 991/997：签名表内函数的外呼元数核对（W0912）——表项
+                // 是 C 侧对勘过的固定 ABI，元数不符说明降低层 emitted 了
+                // 错误调用形状；coerce_call_args 的补垫/截断对这类名字是
+                // 掩盖不是修复。批 997：`_N` 逐参重载约定回退——C 侧为多
+                // 参形态提供 `{name}_{argc}` 兄弟符号（py_os_makedirs_2
+                // 等，get_or_declare_function 的同名解析惯例），降低层发
+                // 2 参而注册表列 1 参基型时，按后缀兄弟名对表。
+                if let Some(sig) = signature_table::lookup(func) {
+                    let argc_matches = args.len() == sig.params.len()
+                        || signature_table::lookup(&format!(
+                            "{}_{}",
+                            func,
+                            args.len()
+                        ))
+                        .map(|s| s.params.len() == args.len())
+                        .unwrap_or(false);
+                    if !argc_matches {
+                        panic!(
+                            "W0912 外呼元数核对失败: `{}` 期望 {} 参实到 {} 参——C ABI {}（批 991 签名表核对）",
+                            func,
+                            sig.params.len(),
+                            args.len(),
+                            sig.params.len()
+                        );
                     }
                 }
-
-                // join(handle) — wait for a spawn'd task and get its result
-                if func == "join" && args.len() == 1 {
-                    let handle = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                    let join_fn = self
-                        .module
-                        .get_function("join")
-                        .unwrap_or_else(|| {
-                            let ft = self
-                                .i64_type
-                                .fn_type(&[self.i64_type.into()], false);
-                            self.module
-                                .add_function("join", ft, Some(Linkage::External))
-                        });
-                    let ret = self
-                        .builder
-                        .build_call(join_fn, &[handle.into()], "join_call")
-                        .unwrap();
-                    let val = Self::call_site_to_basic_value(ret)
-                        .unwrap_or(self.i64_type.const_zero().into());
-                    let alloca = *self.locals.get(dest).unwrap();
-                    self.builder.build_store(alloca, val).unwrap();
+                // 批 1004：emit_try_setjmp（codegen_call_arm.rs）——语义零变。
+                if self.emit_try_setjmp(func, args, *dest, exprs) {
                     return;
                 }
 
-                // Handle call_i64 - actual function call dispatch
-                if func == "call_i64" && args.len() >= 2 {
-                    // call_i64(func_ptr: i64, arg: i64) -> i64
-                    // For now, use identity workaround
-                    let arg_val = self.gen_expr_safe(&args[1], exprs);
-                    let dest_alloca = *self.locals.get(dest).unwrap();
-                    self.builder.build_store(dest_alloca, arg_val).unwrap();
+                // 批 1004：emit_spawn_thunk（codegen_call_arm.rs）——语义零变。
+                if self.emit_spawn_thunk(func, args, *dest, exprs) {
+                    return;
+                }
+
+                // 批 1004：emit_join（codegen_call_arm.rs）——语义零变。
+                if self.emit_join(func, args, *dest, exprs) {
+                    return;
+                }
+
+                // 批 1004：emit_call_i64（codegen_call_arm.rs）——语义零变。
+                if self.emit_call_i64(func, args, *dest, exprs) {
                     return;
                 }
 
                 // Handle unary minus before operator check
-                if args.len() == 1 && (func == "-" || func == "unary_minus") {
-                    let operand = self.gen_expr_safe(&args[0], exprs);
-                    let zero = self.i64_type.const_zero();
-                    let result: inkwell::values::BasicValueEnum<'ctx> = if operand.is_float_value() {
-                        let f = operand.into_float_value();
-                        self.builder.build_float_neg(f, "neg").unwrap().into()
-                    } else {
-                        self.builder
-                            .build_int_sub(zero, operand.into_int_value(), "neg")
-                            .unwrap()
-                            .into()
-                    };
-                    let alloca = *self.locals.get(dest).unwrap();
-                    self.builder.build_store(alloca, result).unwrap();
+                // 批 1005：emit_unary_minus_pre（codegen_call_arm.rs）——语义零变。
+                if self.emit_unary_minus_pre(func, args, *dest, exprs) {
                     return;
                 }
 
-                // PY-A (任务 #53): `norm_index(len, idx)` — Python subscript
-                // normalization for an index whose sign is only known at runtime.
-                // Inlined as a select here (not a runtime symbol) so the AOT binary
-                // and the in-process JIT share one implementation and nothing new
-                // has to be added to `pylib/jit_mappings.txt`.
-                if func == "norm_index" && args.len() == 2 {
-                    let len_v = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                    let idx_v = self.gen_expr_safe(&args[1], exprs).into_int_value();
-                    let zero = self.i64_type.const_zero();
-                    let is_neg = self
-                        .builder
-                        .build_int_compare(
-                            inkwell::IntPredicate::SLT,
-                            idx_v,
-                            zero,
-                            "normidx_lt",
-                        )
-                        .unwrap();
-                    let fixed = self.builder.build_int_add(len_v, idx_v, "normidx_add").unwrap();
-                    let result: inkwell::values::BasicValueEnum<'ctx> = self
-                        .builder
-                        .build_select(is_neg, fixed, idx_v, "normidx")
-                        .unwrap()
-                        .into();
-                    let dest_alloca = *self.locals.get(dest).unwrap();
-                    self.builder.build_store(dest_alloca, result).unwrap();
+                // 批 1004：emit_norm_index（codegen_call_arm.rs）——语义零变。
+                if self.emit_norm_index(func, args, *dest, exprs) {
                     return;
                 }
 
-                // Handle array_get and stack_array_get specially for inline memory access
-                // (avoids function call overhead — 10x speedup for pure Zeta array operations)
-                if (func == "array_get" || func == "stack_array_get") && args.len() == 2 {
-                    let array_ptr_val = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                    let index_val = self.gen_expr_safe(&args[1], exprs).into_int_value();
-
-                    let array_ptr = self
-                        .builder
-                        .build_int_to_ptr(
-                            array_ptr_val,
-                            self.context.ptr_type(AddressSpace::default()),
-                            "array_ptr",
-                        )
-                        .unwrap();
-
-                    // Determine element type from dest variable's type_map entry
-                    let elem_llvm_type: inkwell::types::BasicTypeEnum<'ctx> = match
-                        self.current_type_map.as_ref().and_then(|tm| tm.get(dest))
-                    {
-                        Some(Type::F32) => self.context.f32_type().into(),
-                        Some(Type::F64) => self.f64_type.into(),
-                        _ => self.i64_type.into(),
-                    };
-
-                    let elem_ptr = unsafe {
-                        self.builder
-                            .build_gep(elem_llvm_type, array_ptr, &[index_val], "elem_ptr")
-                            .unwrap()
-                    };
-
-                    let value: inkwell::values::BasicValueEnum<'ctx> = match elem_llvm_type {
-                        inkwell::types::BasicTypeEnum::IntType(it) => {
-                            self.builder.build_load(it, elem_ptr, "array_elem").unwrap().into()
-                        }
-                        inkwell::types::BasicTypeEnum::FloatType(ft) => {
-                            self.builder.build_load(ft, elem_ptr, "array_elem").unwrap().into()
-                        }
-                        _ => self.i64_type.const_zero().into(),
-                    };
-
-                    let dest_alloca = *self.locals.get(dest).unwrap();
-                    self.builder.build_store(dest_alloca, value).unwrap();
+                // 批 1004：emit_array_get_inline（codegen_call_arm.rs）——语义零变。
+                if self.emit_array_get_inline(func, args, *dest, exprs) {
                     return;
                 }
                 // Handle operator functions inline
-                if self.is_operator(func) {
-                    // Handle unary operators
-                    if args.len() == 1 && func == "!" {
-                        // Logical NOT — must yield 0/1, not a bitwise complement.
-                        // (`x ^ -1` gave -1 for `not 0`, so `(not x) == 1` was
-                        // false and `print(not x)` printed -1.)
-                        let operand = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                        let is_zero = self
-                            .builder
-                            .build_int_compare(
-                                inkwell::IntPredicate::EQ,
-                                operand,
-                                self.i64_type.const_zero(),
-                                "lognot",
-                            )
-                            .unwrap();
-                        let result = self
-                            .builder
-                            .build_int_z_extend(is_zero, self.i64_type, "lognot_ext")
-                            .unwrap();
-
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder.build_store(alloca, result).unwrap();
-                        return;
-                    }
-
-                    // Handle unary minus
-                    if args.len() == 1 && func == "-" {
-                        let operand = self.gen_expr_safe(&args[0], exprs);
-                        // Unary minus: 0 - operand
-                        let zero = self.i64_type.const_zero();
-                        let result = self
-                            .builder
-                            .build_int_sub(zero, operand.into_int_value(), "neg")
-                            .unwrap();
-
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder.build_store(alloca, result).unwrap();
-                        return;
-                    }
-
-                    // Handle binary operators
-                    if args.len() == 2 {
-                        let left = self.gen_expr_safe(&args[0], exprs);
-                        let right = self.gen_expr_safe(&args[1], exprs);
-                        // BATCH-455 (#203): a column operand takes the
-                        // element-wise route instead of scalar pointer math.
-                        if let Some(kind) = self.column_arith_dispatch(func.as_str(), args[0], args[1]) {
-                            if let Some(v) = self.gen_column_arith(
-                                kind,
-                                left,
-                                right,
-                                kind & 4 != 0,
-                                kind & 8 != 0,
-                            ) {
-                                // A dest with no slot has nowhere to land — fall
-                                // through to the scalar route, don't panic (#176 同族).
-                                if let Some(alloca) = self.locals.get(dest).copied() {
-                                    self.builder.build_store(alloca, v).unwrap();
-                                    return;
-                                }
-                            }
-                        }
-                        let is_float = matches!(left.get_type(), inkwell::types::BasicTypeEnum::FloatType(_))
-                            || matches!(right.get_type(), inkwell::types::BasicTypeEnum::FloatType(_));
-
-                        let result = if is_float {
-                            let l = if matches!(left.get_type(), inkwell::types::BasicTypeEnum::FloatType(_)) {
-                                left.into_float_value()
-                            } else {
-                                self.builder.build_signed_int_to_float(left.into_int_value(), self.f64_type, "op_l_sitofp").unwrap()
-                            };
-                            let r = if matches!(right.get_type(), inkwell::types::BasicTypeEnum::FloatType(_)) {
-                                right.into_float_value()
-                            } else {
-                                self.builder.build_signed_int_to_float(right.into_int_value(), self.f64_type, "op_r_sitofp").unwrap()
-                            };
-                            match func.as_str() {
-                                "+" | "add" => self.builder.build_float_add(l, r, "add").unwrap().into(),
-                                "-" | "sub" => self.builder.build_float_sub(l, r, "sub").unwrap().into(),
-                                "*" | "mul" => self.builder.build_float_mul(l, r, "mul").unwrap().into(),
-                                "/" | "div" => self.builder.build_float_div(l, r, "div").unwrap().into(),
-                                "floordiv" => self.build_floordiv_float(l, r),
-                                "%" | "mod" => self.builder.build_float_rem(l, r, "mod").unwrap().into(),
-                                "==" | "eq" => {
-                                    let cmp = self
-                                        .builder
-                                        .build_float_compare(FloatPredicate::OEQ, l, r, "cmp_eq")
-                                        .unwrap();
-                                    self.builder
-                                        .build_int_z_extend(cmp, self.i64_type, "cmp_eq_ext")
-                                        .unwrap()
-                                        .into()
-                                }
-                                "!=" | "ne" => {
-                                    let cmp = self
-                                        .builder
-                                        .build_float_compare(FloatPredicate::ONE, l, r, "cmp_ne")
-                                        .unwrap();
-                                    self.builder
-                                        .build_int_z_extend(cmp, self.i64_type, "cmp_ne_ext")
-                                        .unwrap()
-                                        .into()
-                                }
-                                "<" | "lt" => {
-                                    let cmp = self
-                                        .builder
-                                        .build_float_compare(FloatPredicate::OLT, l, r, "cmp_lt")
-                                        .unwrap();
-                                    self.builder
-                                        .build_int_z_extend(cmp, self.i64_type, "cmp_lt_ext")
-                                        .unwrap()
-                                        .into()
-                                }
-                                ">" | "gt" => {
-                                    let cmp = self
-                                        .builder
-                                        .build_float_compare(FloatPredicate::OGT, l, r, "cmp_gt")
-                                        .unwrap();
-                                    self.builder
-                                        .build_int_z_extend(cmp, self.i64_type, "cmp_gt_ext")
-                                        .unwrap()
-                                        .into()
-                                }
-                                "<=" | "le" => {
-                                    let cmp = self
-                                        .builder
-                                        .build_float_compare(FloatPredicate::OLE, l, r, "cmp_le")
-                                        .unwrap();
-                                    self.builder
-                                        .build_int_z_extend(cmp, self.i64_type, "cmp_le_ext")
-                                        .unwrap()
-                                        .into()
-                                }
-                                ">=" | "ge" => {
-                                    let cmp = self
-                                        .builder
-                                        .build_float_compare(FloatPredicate::OGE, l, r, "cmp_ge")
-                                        .unwrap();
-                                    self.builder
-                                        .build_int_z_extend(cmp, self.i64_type, "cmp_ge_ext")
-                                        .unwrap()
-                                        .into()
-                                }
-                                _ => self.i64_type.const_zero().into(),
-                            }
-                        } else {
-                            let l = left.into_int_value();
-                            let r = right.into_int_value();
-                            match func.as_str() {
-                                "+" | "add" | "add_i64" => self.builder.build_int_add(l, r, "add").unwrap().into(),
-                                "-" | "sub" | "sub_i64" => self.builder.build_int_sub(l, r, "sub").unwrap().into(),
-                                "*" | "mul" | "mul_i64" => self.builder.build_int_mul(l, r, "mul").unwrap().into(),
-                                // PY-A: `/` on two integers is TRUE division — promote
-                                // both sides and divide as f64. `div_i64` stays an
-                                // integer division (it is the explicit int form).
-                                // The guard is the slot check (see `slot_is_float`):
-                                // an int-shaped destination means the quotient must
-                                // stay an integer, or the double bits are re-read as
-                                // a handle.
-                                "/" | "div" if self.slot_is_float(*dest) => {
-                                    let lf = self.builder.build_signed_int_to_float(l, self.f64_type, "td_l_sitofp").unwrap();
-                                    let rf = self.builder.build_signed_int_to_float(r, self.f64_type, "td_r_sitofp").unwrap();
-                                    self.builder.build_float_div(lf, rf, "div").unwrap().into()
-                                }
-                                "/" | "div" | "div_i64" => self.builder.build_int_signed_div(l, r, "div").unwrap().into(),
-                                "floordiv" => self.build_floordiv_int(l, r),
-                                "%" | "mod" | "mod_i64" => self.build_floormod_int(l, r),
-                                "<<" | "shl" | "shl_i64" => self.builder.build_left_shift(l, r, "shl").unwrap().into(),
-                                // Batch 595: is_signed=true (arith shift) — the
-                                // scalar interceptor only ever sees i64 (there is
-                                // no unsigned scalar in the python surface), and
-                                // the logical variant shredded the sign extension
-                                // of negative operands (`-149… >> 2` returned a
-                                // ~4.6e18 positive; gen_stmts_s585001_* chains).
-                                ">>" | "shr" | "shr_i64" => self.builder.build_right_shift(l, r, true, "shr").unwrap().into(),
-                                "&" | "bitand" | "and_i64" => self.builder.build_and(l, r, "bitand").unwrap().into(),
-                                "|" | "bitor" | "or_i64" => self.builder.build_or(l, r, "bitor").unwrap().into(),
-                                "^" | "bitxor" | "xor_i64" => self.builder.build_xor(l, r, "bitxor").unwrap().into(),
-                                "==" | "eq" | "eq_i64" => {
-                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, l, r, "eq").unwrap();
-                                    self.builder.build_int_z_extend(cmp, self.i64_type, "eq_ext").unwrap().into()
-                                }
-                                "!=" | "ne" | "ne_i64" => {
-                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::NE, l, r, "ne").unwrap();
-                                    self.builder.build_int_z_extend(cmp, self.i64_type, "ne_ext").unwrap().into()
-                                }
-                                "<" | "lt" | "lt_i64" => {
-                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, l, r, "lt").unwrap();
-                                    self.builder.build_int_z_extend(cmp, self.i64_type, "lt_ext").unwrap().into()
-                                }
-                                ">" | "gt" | "gt_i64" => {
-                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SGT, l, r, "gt").unwrap();
-                                    self.builder.build_int_z_extend(cmp, self.i64_type, "gt_ext").unwrap().into()
-                                }
-                                "<=" | "le" | "le_i64" => {
-                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLE, l, r, "le").unwrap();
-                                    self.builder.build_int_z_extend(cmp, self.i64_type, "le_ext").unwrap().into()
-                                }
-                                ">=" | "ge" | "ge_i64" => {
-                                    let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SGE, l, r, "ge").unwrap();
-                                    self.builder.build_int_z_extend(cmp, self.i64_type, "ge_ext").unwrap().into()
-                                }
-                                "&&" | "and" => {
-                                    let left_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, l, self.i64_type.const_int(0, false), "left_bool").unwrap();
-                                    let right_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, r, self.i64_type.const_int(0, false), "right_bool").unwrap();
-                                    let bool_and = self.builder.build_and(left_bool, right_bool, "and").unwrap();
-                                    self.builder.build_int_z_extend(bool_and, self.i64_type, "and_ext").unwrap().into()
-                                }
-                                "||" | "or" => {
-                                    let left_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, l, self.i64_type.const_int(0, false), "left_bool").unwrap();
-                                    let right_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, r, self.i64_type.const_int(0, false), "right_bool").unwrap();
-                                    let bool_or = self.builder.build_or(left_bool, right_bool, "or").unwrap();
-                                    self.builder.build_int_z_extend(bool_or, self.i64_type, "or_ext").unwrap().into()
-                                }
-                                _ => {
-                                    let callee = self.get_or_declare_function(func, type_args, args.len());
-                                    let arg_vals: Vec<BasicMetadataValueEnum> = args.iter().map(|&id| self.gen_expr_safe(&id, exprs).into()).collect();
-                                    let coerced = self.coerce_call_args(callee, arg_vals, args);
-                                    let call = self.builder.build_call(callee, &coerced, "").unwrap();
-                                    Self::call_site_to_basic_value(call).unwrap_or(self.i64_type.const_zero().into())
-                                }
-                            }
-                        };
-
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder.build_store(alloca, result).unwrap();
-                    } else {
-                        // Operator with wrong number of arguments, fall through to regular function call
-                        let callee = self.get_or_declare_function(func, type_args, args.len());
-                        let arg_vals: Vec<BasicMetadataValueEnum> = args
-                            .iter()
-                            .map(|&id| self.gen_expr_safe(&id, exprs).into())
-                            .collect();
-                        let coerced = self.coerce_call_args(callee, arg_vals, args);
-                        let call = self.builder.build_call(callee, &coerced, "").unwrap();
-                        if let Some(val) = Self::call_site_to_basic_value(call) {
-                            let alloca = *self.locals.get(dest).unwrap();
-                            self.builder.build_store(alloca, val).unwrap();
-                        }
-                    }
+                // 批 1005：emit_operator_family（codegen_call_arm.rs）——claim 整族，
+                // else-if SIMD 链保留（!is_operator 时语义不变）。
+                if self.emit_operator_family(func, args, *dest, type_args, exprs) {
+                    return;
                 } else if self.is_simd_operation(func) {
                     // Handle SIMD operations — generate inline LLVM vector IR
                     self.handle_simd_operation(func, type_args, args, exprs, dest);
@@ -4558,41 +4157,14 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         }
                         return;
                     }
-                    // Intercept ptr::read<T>(ptr: *const T) -> T
-                    if func == "read" && args.len() == 1 {
-                        let ptr = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                        let pt = self.context.ptr_type(inkwell::AddressSpace::default());
-                        let elem_ptr = self.builder.build_int_to_ptr(ptr, pt, "rd_ptr").unwrap();
-                        let elem_i64 = self
-                            .builder
-                            .build_pointer_cast(elem_ptr, pt, "rd_i64")
-                            .unwrap();
-                        let val = self
-                            .builder
-                            .build_load(self.i64_type, elem_i64, "rd_val")
-                            .unwrap();
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder.build_store(alloca, val).unwrap();
-                        return;
-                    }
-                    // Intercept ptr::write<T>(ptr: *mut T, val: T)
-                    if func == "write" && args.len() == 2 {
-                        let ptr = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                        let val = self.gen_expr_safe(&args[1], exprs).into_int_value();
-                        let pt = self.context.ptr_type(inkwell::AddressSpace::default());
-                        let elem_ptr = self.builder.build_int_to_ptr(ptr, pt, "wr_ptr").unwrap();
-                        let elem_i64 = self
-                            .builder
-                            .build_pointer_cast(elem_ptr, pt, "wr_i64")
-                            .unwrap();
-                        self.builder.build_store(elem_i64, val).unwrap();
-                        if let Some(&alloca) = self.locals.get(dest) {
-                            self.builder
-                                .build_store(alloca, self.i64_type.const_int(0, false))
-                                .unwrap();
-                        }
-                        return;
-                    }
+                // 批 1004：emit_ptr_read（codegen_call_arm.rs）——语义零变。
+                if self.emit_ptr_read(func, args, *dest, exprs) {
+                    return;
+                }
+                // 批 1004：emit_ptr_write（codegen_call_arm.rs）——语义零变。
+                if self.emit_ptr_write(func, args, *dest, exprs) {
+                    return;
+                }
                     // Intercept ptr::null<T>() and ptr::null_mut<T>()
                     if (func == "null" || func == "null_mut") && args.is_empty() {
                         let alloca = *self.locals.get(dest).unwrap();
@@ -4601,26 +4173,10 @@ impl<'ctx> LLVMCodegen<'ctx> {
                             .unwrap();
                         return;
                     }
-                    // Intercept ptr::is_null<T>(ptr: *const T)
-                    if func == "is_null" && args.len() == 1 {
-                        let ptr = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                        let is_null = self
-                            .builder
-                            .build_int_compare(
-                                inkwell::IntPredicate::EQ,
-                                ptr,
-                                self.i64_type.const_int(0, false),
-                                "is_null",
-                            )
-                            .unwrap();
-                        let result = self
-                            .builder
-                            .build_int_z_extend(is_null, self.i64_type, "is_null_ext")
-                            .unwrap();
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder.build_store(alloca, result).unwrap();
-                        return;
-                    }
+                // 批 1004：emit_is_null（codegen_call_arm.rs）——语义零变。
+                if self.emit_is_null(func, args, *dest, exprs) {
+                    return;
+                }
                     // Intercept ptr::copy<T>(dst, src, count) — memcpy
                     if (func == "copy" || func == "copy_nonoverlapping") && args.len() == 3 {
                         let dst = self.gen_expr_safe(&args[0], exprs).into_int_value();
@@ -4670,250 +4226,41 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         }
                         return;
                     }
-                    // Intercept ptr::offset<T>(ptr, count) — pointer arithmetic
-                    if func == "offset" && args.len() == 2 {
-                        let ptr = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                        let count = self.gen_expr_safe(&args[1], exprs).into_int_value();
-                        let elem_size: u64 = if let Some(ty) = type_args.first() {
-                            match ty {
-                                crate::middle::types::Type::I8 | crate::middle::types::Type::U8 => {
-                                    1
-                                }
-                                crate::middle::types::Type::I16
-                                | crate::middle::types::Type::U16 => 2,
-                                crate::middle::types::Type::I32
-                                | crate::middle::types::Type::U32
-                                | crate::middle::types::Type::F32 => 4,
-                                _ => 8,
-                            }
-                        } else {
-                            8
-                        };
-                        let byte_offset = self
-                            .builder
-                            .build_int_mul(
-                                count,
-                                self.i64_type.const_int(elem_size, false),
-                                "byte_off",
-                            )
-                            .unwrap();
-                        let ptr = self
-                            .builder
-                            .build_int_add(ptr, byte_offset, "off_ptr")
-                            .unwrap();
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder.build_store(alloca, ptr).unwrap();
-                        return;
-                    }
-                    // Intercept std::mem::replace<T>(dest: &mut T, src: T) -> T
-                    if func == "replace" && args.len() == 2 {
-                        let ptr = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                        let new_val = self.gen_expr_safe(&args[1], exprs);
-                        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
-                        let elem_ptr = self
-                            .builder
-                            .build_int_to_ptr(ptr, ptr_type, "rpl_ptr")
-                            .unwrap();
-                        let elem_i64 = self
-                            .builder
-                            .build_pointer_cast(elem_ptr, ptr_type, "rpl_i64")
-                            .unwrap();
-                        let old_val = self
-                            .builder
-                            .build_load(self.i64_type, elem_i64, "old")
-                            .unwrap();
-                        self.builder
-                            .build_store(elem_i64, new_val.into_int_value())
-                            .unwrap();
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder.build_store(alloca, old_val).unwrap();
-                        return;
-                    }
+                // 批 1004：emit_ptr_offset（codegen_call_arm.rs）——语义零变。
+                if self.emit_ptr_offset(func, args, *dest, type_args, exprs) {
+                    return;
+                }
+                // 批 1004：emit_replace（codegen_call_arm.rs）——语义零变。
+                if self.emit_replace(func, args, *dest, exprs) {
+                    return;
+                }
                     // Intercept V4I64 vector intrinsics → inline LLVM vector IR
                     // These are void operations but MIR gen generates Call (with dest) for all externs.
                     // V4I64 intrinsics — evaluate all args first to avoid borrow conflicts
-                    if func == "__builtin_v4i64_andnot" && args.len() == 6 {
-                        let ptr_i64 = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                        let word_idx = self.gen_expr_safe(&args[1], exprs).into_int_value();
-                        let m0 = self.gen_expr_safe(&args[2], exprs).into_int_value();
-                        let m1 = self.gen_expr_safe(&args[3], exprs).into_int_value();
-                        let m2 = self.gen_expr_safe(&args[4], exprs).into_int_value();
-                        let m3 = self.gen_expr_safe(&args[5], exprs).into_int_value();
+                // 批 1005：emit_v4i64_andnot（codegen_call_arm.rs）——语义零变。
+                if self.emit_v4i64_andnot(func, args, *dest, exprs) {
+                    return;
+                }
 
-                        let thirty_two = self.i64_type.const_int(32, false);
-                        let byte_offset = self
-                            .builder
-                            .build_int_mul(word_idx, thirty_two, "off")
-                            .unwrap();
-                        let base_ptr = self
-                            .builder
-                            .build_int_to_ptr(ptr_i64, self.ptr_type, "base")
-                            .unwrap();
-                        let vec_ptr = unsafe {
-                            self.builder
-                                .build_gep(self.context.i8_type(), base_ptr, &[byte_offset], "vptr")
-                                .unwrap()
-                        };
-                        let loaded = self
-                            .builder
-                            .build_load(self.vec4_i64_type, vec_ptr, "load")
-                            .unwrap()
-                            .into_vector_value();
+                // 批 1005：emit_v4i64_store（codegen_call_arm.rs）——语义零变。
+                if self.emit_v4i64_store(func, args, *dest, exprs) {
+                    return;
+                }
 
-                        let poison = self.vec4_i64_type.get_undef();
-                        let z = self.i64_type.const_int(0, false);
-                        let o = self.i64_type.const_int(1, false);
-                        let t = self.i64_type.const_int(2, false);
-                        let h = self.i64_type.const_int(3, false);
-                        let mut mask = self
-                            .builder
-                            .build_insert_element(poison, m0, z, "m0")
-                            .unwrap();
-                        mask = self
-                            .builder
-                            .build_insert_element(mask, m1, o, "m1")
-                            .unwrap();
-                        mask = self
-                            .builder
-                            .build_insert_element(mask, m2, t, "m2")
-                            .unwrap();
-                        mask = self
-                            .builder
-                            .build_insert_element(mask, m3, h, "m3")
-                            .unwrap();
+                // 批 1004：emit_syscall（codegen_call_arm.rs）——语义零变。
+                if self.emit_syscall(func, args, *dest, exprs) {
+                    return;
+                }
 
-                        let one_val = self.i64_type.const_int(u64::MAX, false);
-                        let mut all_ones = self
-                            .builder
-                            .build_insert_element(poison, one_val, z, "o0")
-                            .unwrap();
-                        all_ones = self
-                            .builder
-                            .build_insert_element(all_ones, one_val, o, "o1")
-                            .unwrap();
-                        all_ones = self
-                            .builder
-                            .build_insert_element(all_ones, one_val, t, "o2")
-                            .unwrap();
-                        all_ones = self
-                            .builder
-                            .build_insert_element(all_ones, one_val, h, "o3")
-                            .unwrap();
+                // 批 1004：emit_capy_store（codegen_call_arm.rs）——语义零变。
+                if self.emit_capy_store(func, args, *dest, exprs) {
+                    return;
+                }
 
-                        let not_mask = self.builder.build_xor(mask, all_ones, "not").unwrap();
-                        let result = self.builder.build_and(loaded, not_mask, "res").unwrap();
-                        self.builder.build_store(vec_ptr, result).unwrap();
-
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder
-                            .build_store(alloca, self.i64_type.const_zero())
-                            .unwrap();
-                        return;
-                    }
-
-                    if func == "__builtin_v4i64_store" && args.len() == 6 {
-                        let ptr_i64 = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                        let word_idx = self.gen_expr_safe(&args[1], exprs).into_int_value();
-                        let v0 = self.gen_expr_safe(&args[2], exprs).into_int_value();
-                        let v1 = self.gen_expr_safe(&args[3], exprs).into_int_value();
-                        let v2 = self.gen_expr_safe(&args[4], exprs).into_int_value();
-                        let v3 = self.gen_expr_safe(&args[5], exprs).into_int_value();
-
-                        let thirty_two = self.i64_type.const_int(32, false);
-                        let byte_offset = self
-                            .builder
-                            .build_int_mul(word_idx, thirty_two, "off")
-                            .unwrap();
-                        let base_ptr = self
-                            .builder
-                            .build_int_to_ptr(ptr_i64, self.ptr_type, "base")
-                            .unwrap();
-                        let vec_ptr = unsafe {
-                            self.builder
-                                .build_gep(self.context.i8_type(), base_ptr, &[byte_offset], "vptr")
-                                .unwrap()
-                        };
-
-                        let poison = self.vec4_i64_type.get_undef();
-                        let z = self.i64_type.const_int(0, false);
-                        let o = self.i64_type.const_int(1, false);
-                        let t = self.i64_type.const_int(2, false);
-                        let h = self.i64_type.const_int(3, false);
-                        let mut vec = self
-                            .builder
-                            .build_insert_element(poison, v0, z, "v0")
-                            .unwrap();
-                        vec = self.builder.build_insert_element(vec, v1, o, "v1").unwrap();
-                        vec = self.builder.build_insert_element(vec, v2, t, "v2").unwrap();
-                        vec = self.builder.build_insert_element(vec, v3, h, "v3").unwrap();
-
-                        self.builder.build_store(vec_ptr, vec).unwrap();
-
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder
-                            .build_store(alloca, self.i64_type.const_zero())
-                            .unwrap();
-                        return;
-                    }
-
-                    // Intercept syscall(N, a1, a2, ...) → call zenith_syscall C wrapper
-                    if func == "syscall" || func.starts_with("syscall_") {
-                        let num_val = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                        let mut all_args: Vec<BasicMetadataValueEnum> = vec![num_val.into()];
-                        for i in 1..args.len() {
-                            let val = self.gen_expr_safe(&args[i], exprs).into_int_value();
-                            all_args.push(val.into());
-                        }
-                        while all_args.len() < 7 {
-                            all_args.push(self.i64_type.const_zero().into());
-                        }
-                        let fn_type = self.i64_type.fn_type(
-                            &[self.i64_type.into(); 7],
-                            false,
-                        );
-                        let callee = self.module.add_function(
-                            "zenith_syscall", fn_type, None,
-                        );
-                        let call = self.builder
-                            .build_call(callee, &all_args, "syscall")
-                            .unwrap();
-                        let basic_val = Self::call_site_to_basic_value(call)
-                            .unwrap_or(self.i64_type.const_zero().into());
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder.build_store(alloca, basic_val).unwrap();
-                        return;
-                    }
-
-                    // Intercept `capy_store_i64(addr, val)` → emit LLVM store directly
-                    if func == "capy_store_i64" || func == "capy_store_i64_2" {
-                        if args.len() >= 2 {
-                            let addr = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                            let val = self.gen_expr_safe(&args[1], exprs).into_int_value();
-                            let ptr = self
-                                .builder
-                                .build_int_to_ptr(addr, self.ptr_type, "store_ptr")
-                                .unwrap();
-                            self.builder.build_store(ptr, val).unwrap();
-                        }
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder
-                            .build_store(alloca, self.i64_type.const_zero())
-                            .unwrap();
-                        return;
-                    }
-
-                    // Intercept `capy_load_i64(addr)` → emit LLVM load directly
-                    if func == "capy_load_i64" || func == "capy_load_i64_1" {
-                        let addr = self.gen_expr_safe(&args[0], exprs).into_int_value();
-                        let ptr = self
-                            .builder
-                            .build_int_to_ptr(addr, self.ptr_type, "load_ptr")
-                            .unwrap();
-                        let val = self.builder.build_load(self.i64_type, ptr, "loaded").unwrap();
-                        let alloca = *self.locals.get(dest).unwrap();
-                        self.builder.build_store(alloca, val).unwrap();
-                        return;
-                    }
+                // 批 1004：emit_capy_load（codegen_call_arm.rs）——语义零变。
+                if self.emit_capy_load(func, args, *dest, exprs) {
+                    return;
+                }
 
                     // Intercept __builtin_ctpop → redirect to llvm.ctpop.i64 (POPCNT instruction)
                     let actual_func = if func == "__builtin_ctpop" {
@@ -4964,18 +4311,19 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     };
 
                     // Check if this is a runtime function that takes pointer arguments
+                    // Batch 771 (#79 余一格收口)：host_result_* 四名摘除——已链接
+                    // 的 C 桩（tokio_runtime_stub.c:545-581）全是 i64 ABI
+                    // （int64_t option_make_some(int64_t) / host_result_make_ok(int64_t)），
+                    // inttoptr 实参对 i64 形参＝verifier 错（result.z 的 rc=101 即此）；
+                    // Rust ptr-ABI 旧宿主已不入用户链接。option_* 桩同为 i64，一并
+                    // 如实化（实测语义不变）。
                     let needs_ptr_arg = base_func == "option_is_some"
                         || base_func == "option_get_data"
-                        || base_func == "option_free"
-                        || base_func == "host_result_is_ok"
-                        || base_func == "host_result_get_data"
-                        || base_func == "host_result_free";
+                        || base_func == "option_free";
 
                     // Check if this is a runtime function that returns a pointer
                     let returns_ptr = base_func == "option_make_some"
-                        || base_func == "option_make_none"
-                        || base_func == "host_result_make_ok"
-                        || base_func == "host_result_make_err";
+                        || base_func == "option_make_none";
 
                     let arg_vals: Vec<BasicMetadataValueEnum> = args
                         .iter()
@@ -5478,103 +4826,11 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 cond,
                 then,
                 else_,
-                dest,
+                ..
             } => {
-                for (i, s) in then.iter().enumerate() {}
-                for (i, s) in else_.iter().enumerate() {}
-                let cond_i1 = {
-                    let cv = self.gen_expr_safe(cond, exprs);
-                    self.cond_i1_from(*cond, cv, "cond_i1")
-                };
-                let parent_fn = self
-                    .builder
-                    .get_insert_block()
-                    .unwrap()
-                    .get_parent()
-                    .unwrap();
-                let then_bb = self.context.append_basic_block(parent_fn, "then");
-                let else_bb = self.context.append_basic_block(parent_fn, "else");
-                let merge_bb = self.context.append_basic_block(parent_fn, "merge");
-                self.builder
-                    .build_conditional_branch(cond_i1, then_bb, else_bb)
-                    .unwrap();
-
-                // Generate then block
-                self.builder.position_at_end(then_bb);
-                let then_ends_with_break = then.last().is_some_and(|s| matches!(s, MirStmt::Break));
-                let then_ends_with_continue =
-                    then.last().is_some_and(|s| matches!(s, MirStmt::Continue));
-                if then_ends_with_break {
-                    for s in &then[..then.len() - 1] {
-                        self.gen_stmt(s, exprs);
-                    }
-                    if let Some((_, exit_bb)) = self.loop_stack.last() {
-                        self.builder.build_unconditional_branch(*exit_bb).unwrap();
-                    }
-                } else if then_ends_with_continue {
-                    for s in &then[..then.len() - 1] {
-                        self.gen_stmt(s, exprs);
-                    }
-                    if let Some((cond_bb, _)) = self.loop_stack.last() {
-                        self.builder.build_unconditional_branch(*cond_bb).unwrap();
-                    }
-                } else {
-                    for s in then {
-                        self.gen_stmt(s, exprs);
-                    }
-                }
-                // Ask the BLOCK, not the statement list: a branch whose last
-                // statement is an inner `if` with both arms returning IS
-                // terminated, yet contains no top-level `Return` — the old
-                // statement scan missed that and appended a branch after the
-                // `ret` ("Terminator found in the middle of a basic block").
-                // Conversely a `Return` nested mid-branch left the block open
-                // ("does not have terminator"). The block's own state is exact.
-                let then_needs_branch = self
-                    .builder
-                    .get_insert_block()
-                    .map_or(false, |b| b.get_terminator().is_none());
-                if then_needs_branch {
-                    self.builder.build_unconditional_branch(merge_bb).unwrap();
-                }
-
-                // Generate else block
-                self.builder.position_at_end(else_bb);
-                let else_ends_with_break =
-                    else_.last().is_some_and(|s| matches!(s, MirStmt::Break));
-                let else_ends_with_continue =
-                    else_.last().is_some_and(|s| matches!(s, MirStmt::Continue));
-                if else_ends_with_break {
-                    for s in &else_[..else_.len() - 1] {
-                        self.gen_stmt(s, exprs);
-                    }
-                    if let Some((_, exit_bb)) = self.loop_stack.last() {
-                        self.builder.build_unconditional_branch(*exit_bb).unwrap();
-                    }
-                } else if else_ends_with_continue {
-                    for s in &else_[..else_.len() - 1] {
-                        self.gen_stmt(s, exprs);
-                    }
-                    if let Some((cond_bb, _)) = self.loop_stack.last() {
-                        self.builder.build_unconditional_branch(*cond_bb).unwrap();
-                    }
-                } else {
-                    for s in else_ {
-                        self.gen_stmt(s, exprs);
-                    }
-                }
-                // Same block-state check for the else arm.
-                let else_needs_branch = self
-                    .builder
-                    .get_insert_block()
-                    .map_or(false, |b| b.get_terminator().is_none());
-                if else_needs_branch {
-                    self.builder.build_unconditional_branch(merge_bb).unwrap();
-                }
-
-                // Continue at merge block
-                self.builder.position_at_end(merge_bb);
-                // dest is handled by assignments in the branches
+                // 批 1002：控制流族迁至 codegen_stmt_flow.rs（轴 D 第二刀
+                // 续，IR 零变）。
+                self.gen_stmt_if(cond, then, else_, exprs);
             }
             MirStmt::While {
                 cond,
@@ -5582,87 +4838,8 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 body,
                 else_body,
             } => {
-                let parent_fn = self
-                    .builder
-                    .get_insert_block()
-                    .unwrap()
-                    .get_parent()
-                    .unwrap();
-
-                // PY-A: Python `while … else`. Two exit targets:
-                //   - normal exit (condition false) → the else block
-                //   - `break` → past the else block (break target = loop_exit_bb)
-                // This is exactly Python's semantics, and it needs no `break`
-                // rewriting and no "did we break" flag.
-                let has_else = !else_body.is_empty();
-                let loop_cond_bb = self.context.append_basic_block(parent_fn, "while.cond");
-                let loop_body_bb = self.context.append_basic_block(parent_fn, "while.body");
-                let loop_exit_bb = self.context.append_basic_block(parent_fn, "while.exit");
-                let loop_else_bb = if has_else {
-                    self.context.append_basic_block(parent_fn, "while.else")
-                } else {
-                    loop_exit_bb
-                };
-                let normal_exit_bb = loop_else_bb;
-
-                // Branch to condition block
-                self.builder
-                    .build_unconditional_branch(loop_cond_bb)
-                    .unwrap();
-
-                // Generate condition block — run pre_cond first so side
-                // effects of the condition (len/calls) refresh the slot.
-                self.builder.position_at_end(loop_cond_bb);
-                for s in pre_cond {
-                    self.gen_stmt(s, exprs);
-                }
-                let cond_i1 = {
-                    let cv = self.gen_expr_safe(cond, exprs);
-                    self.cond_i1_from(*cond, cv, "while.cond")
-                };
-                self.builder
-                    .build_conditional_branch(cond_i1, loop_body_bb, normal_exit_bb)
-                    .unwrap();
-
-                // Generate loop body. `break` must skip the else block, so the
-                // break target is the block AFTER it.
-                self.loop_stack.push((loop_cond_bb, loop_exit_bb));
-                self.builder.position_at_end(loop_body_bb);
-                for s in body {
-                    self.gen_stmt(s, exprs);
-                }
-                self.loop_stack.pop();
-                // Branch back to condition (unless body ends with return/break/continue,
-                // which already emitted a terminator that unwinds the loop)
-                let body_ends_terminated = body.iter().any(|s| {
-                    matches!(s, MirStmt::Return { .. } | MirStmt::Break | MirStmt::Continue)
-                });
-                if !body_ends_terminated {
-                    self.builder
-                        .build_unconditional_branch(loop_cond_bb)
-                        .unwrap();
-                }
-
-                // Else block: reached only on normal completion.
-                if has_else {
-                    self.builder.position_at_end(loop_else_bb);
-                    for s in else_body {
-                        self.gen_stmt(s, exprs);
-                    }
-                    let else_terminated = else_body
-                        .iter()
-                        .any(|s| matches!(s, MirStmt::Return { .. }));
-                    if !else_terminated {
-                        self.builder
-                            .build_unconditional_branch(loop_exit_bb)
-                            .unwrap();
-                    }
-                }
-
-                // Continue at exit block
-                self.builder.position_at_end(loop_exit_bb);
+                self.gen_stmt_while(cond, pre_cond, body, else_body, exprs);
             }
-
             MirStmt::Break | MirStmt::Continue => {
                 if let Some((cond_bb, exit_bb)) = self.loop_stack.last() {
                     if matches!(stmt, MirStmt::Break) {
@@ -5945,147 +5122,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 body,
                 else_body,
             } => {
-                // For now, implement simple range-based for loop: for i in start..end
-                // We need to get the range expression
-                if let Some(MirExpr::Range { start, end }) = exprs.get(iterator) {
-                    let parent_fn = self
-                        .builder
-                        .get_insert_block()
-                        .unwrap()
-                        .get_parent()
-                        .unwrap();
-
-                    // Create basic blocks for loop. `for.inc` exists so
-                    // `continue` lands on the increment — jumping straight to
-                    // the condition would skip `i = i + 1` and spin forever.
-                    // PY-A: for `for … else`, the normal exit goes to `for.else`
-                    // and `break` targets the block AFTER it (see `loop_stack`
-                    // push below) — that is Python's semantics with no flag.
-                    let has_else = !else_body.is_empty();
-                    let loop_cond_bb = self.context.append_basic_block(parent_fn, "for.cond");
-                    let loop_body_bb = self.context.append_basic_block(parent_fn, "for.body");
-                    let loop_inc_bb = self.context.append_basic_block(parent_fn, "for.inc");
-                    let loop_exit_bb = self.context.append_basic_block(parent_fn, "for.exit");
-                    let loop_else_bb = if has_else {
-                        self.context.append_basic_block(parent_fn, "for.else")
-                    } else {
-                        loop_exit_bb
-                    };
-                    let normal_exit_bb = loop_else_bb;
-
-                    // Get start and end values
-                    let start_val = self.gen_expr_safe(start, exprs).into_int_value();
-                    let end_val = self.gen_expr_safe(end, exprs).into_int_value();
-
-                    // Get loop variable pointer from locals map
-                    // PY-A (任务 #54): the counter slot drives the condition and
-                    // the increment; `var_id` is written only by the bind `Assign`
-                    // that gen.rs prepends to `body`. Keeping the two apart is what
-                    // makes Python's post-loop value (`range(3)` ⇒ last bound 2,
-                    // not 3) fall out of the CFG instead of needing a fix-up store.
-                    let counter_ptr = *self.locals.get(counter_id).unwrap();
-
-                    // Initialize the counter to start
-                    self.builder.build_store(counter_ptr, start_val).unwrap();
-
-                    // Branch to condition block
-                    self.builder
-                        .build_unconditional_branch(loop_cond_bb)
-                        .unwrap();
-
-                    // Generate condition block
-                    self.builder.position_at_end(loop_cond_bb);
-
-                    // Load current counter value
-                    let current_val = self
-                        .builder
-                        .build_load(self.i64_type, counter_ptr, "")
-                        .unwrap()
-                        .into_int_value();
-
-                    // Check if current_val < end_val
-                    let cond = self
-                        .builder
-                        .build_int_compare(
-                            IntPredicate::SLT, // Signed less than
-                            current_val,
-                            end_val,
-                            "for.cond",
-                        )
-                        .unwrap();
-
-                    self.builder
-                        .build_conditional_branch(cond, loop_body_bb, normal_exit_bb)
-                        .unwrap();
-
-                    // Generate loop body
-                    self.builder.position_at_end(loop_body_bb);
-
-                    // Store loop variable in local variables map for use in body
-                    // We need to find the variable ID for this pattern
-                    // For now, we'll just use the pointer directly
-
-                    // `break`/`continue` inside a for body need a target too —
-                    // without pushing here, `if cond: continue` produced a
-                    // basic block with no terminator (LLVM: "Basic Block does
-                    // not have terminator") and `break` fell through.
-                    self.loop_stack.push((loop_inc_bb, loop_exit_bb));
-                    for s in body {
-                        self.gen_stmt(s, exprs);
-                    }
-                    self.loop_stack.pop();
-
-                    // The body may already have terminated (continue/break/
-                    // return); only fall through to the increment otherwise.
-                    let needs_fallthrough = self
-                        .builder
-                        .get_insert_block()
-                        .map(|b| b.get_terminator().is_none())
-                        .unwrap_or(false);
-                    if needs_fallthrough {
-                        self.builder
-                            .build_unconditional_branch(loop_inc_bb)
-                            .unwrap();
-                    }
-
-                    // Increment block: counter += 1, then back to the condition.
-                    self.builder.position_at_end(loop_inc_bb);
-                    let current_val_after = self
-                        .builder
-                        .build_load(self.i64_type, counter_ptr, "")
-                        .unwrap()
-                        .into_int_value();
-
-                    let next_val = self
-                        .builder
-                        .build_int_add(current_val_after, self.i64_type.const_int(1, false), "")
-                        .unwrap();
-
-                    self.builder.build_store(counter_ptr, next_val).unwrap();
-
-                    self.builder
-                        .build_unconditional_branch(loop_cond_bb)
-                        .unwrap();
-
-                    // Continue at exit block
-                    if has_else {
-                        self.builder.position_at_end(loop_else_bb);
-                        for s in else_body {
-                            self.gen_stmt(s, exprs);
-                        }
-                        let else_terminated = else_body
-                            .iter()
-                            .any(|s| matches!(s, MirStmt::Return { .. }));
-                        if !else_terminated {
-                            self.builder
-                                .build_unconditional_branch(loop_exit_bb)
-                                .unwrap();
-                        }
-                    }
-                    self.builder.position_at_end(loop_exit_bb);
-                } else {
-                    // Not a range iterator - for now, just skip
-                }
+                self.gen_stmt_for(iterator, counter_id, body, else_body, exprs);
             }
             MirStmt::Store {
                 addr_id,
@@ -6229,7 +5266,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
     /// An `and`/`or` chain whose operands mix int and float yields a double
     /// condition value, so the raw `.into_int_value()` used to panic here
     /// (wufu_bt/v1/v2 regression, batch 289 short-circuit lowering).
-    fn cond_i1_from(
+    pub(super) fn cond_i1_from(
         &mut self,
         cond: u32,
         val: BasicValueEnum<'ctx>,
@@ -6334,7 +5371,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
         )
     }
 
-    fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
+    pub(super) fn gen_expr_safe(&mut self, id: &u32, exprs: &HashMap<u32, MirExpr>) -> BasicValueEnum<'ctx> {
         if let Some(expr) = exprs.get(id) {
             self.gen_expr(expr, exprs, Some(*id))
         } else {
@@ -6909,6 +5946,13 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .unwrap()
                         .into();
                 }
+                // 批 967/1000：keyfn 特化副本兜底臂迁至 codegen_keyfn.rs
+                //（轴 D 第二刀，语义零变）。
+                if name.contains(signature_table::KEYFN_SPEC_PREFIX) {
+                    if let Some(v) = self.try_funcaddr_keyfn_addr(name) {
+                        return v;
+                    }
+                }
                 let f = self.get_or_declare_function(name, &[], 0);
                 let fptr = f.as_global_value().as_pointer_value();
                 self.builder
@@ -7053,7 +6097,19 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .and_then(|tm| tm.get(left)).map_or(false, |t| matches!(t, Type::Str));
                     let r_str = self.current_type_map.as_ref()
                         .and_then(|tm| tm.get(right)).map_or(false, |t| matches!(t, Type::Str));
-                    if (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
+                    // Batch 802: `handle + IntLit` with one side Str is NOT a
+                    // concat — CPython rejects `str + int`, and this is the
+                    // shape gen.rs `deref_slot` builds to read a boxed-enum
+                    // payload slot (measured: it emitted
+                    // `host_str_concat(h, 8)`, the C downgrade arm fed the tag
+                    // read back as text, selfhost build_ast silently lost
+                    // every `Token::Ident(n)` binding). Let it fall through to
+                    // the integer adder, which is the pointer arithmetic the
+                    // address expression needs.
+                    let addr_off_plus = op == "+"
+                        && ((l_str && matches!(exprs.get(right), Some(MirExpr::IntLit(_))))
+                            || (r_str && matches!(exprs.get(left), Some(MirExpr::IntLit(_)))));
+                    if !addr_off_plus && (l_str || r_str) && matches!(op.as_str(), "==" | "!=" | "+") {
                         let lv = self.gen_expr(&exprs[left], exprs, None);
                         let rv = self.gen_expr(&exprs[right], exprs, None);
                         let fname = if op == "+" { "host_str_concat" } else { "host_str_eq" };
@@ -7935,7 +6991,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
         }
     }
 
-    fn call_site_to_basic_value(call: CallSiteValue<'ctx>) -> Option<BasicValueEnum<'ctx>> {
+    pub(super) fn call_site_to_basic_value(call: CallSiteValue<'ctx>) -> Option<BasicValueEnum<'ctx>> {
         match call.try_as_basic_value() {
             inkwell::values::ValueKind::Basic(basic) => Some(basic),
             _ => None,
@@ -7944,7 +7000,7 @@ impl<'ctx> LLVMCodegen<'ctx> {
 
     /// Coerce call arguments to the callee's declared parameter types.
     /// B1 matrix: widen/sitofp allow; narrow/fptosi/float↔ptr warn (+fatal if strict).
-    fn coerce_call_args(
+    pub(super) fn coerce_call_args(
         &mut self,
         callee: inkwell::values::FunctionValue<'ctx>,
         args: Vec<BasicMetadataValueEnum<'ctx>>,
@@ -8025,14 +7081,30 @@ impl<'ctx> LLVMCodegen<'ctx> {
                     }
                 }
                 (BasicMetadataValueEnum::FloatValue(fv), inkwell::types::BasicTypeEnum::IntType(pt)) => {
+                    // f64-bits 约定（批 926）：`*_f64` 后缀的运行时函数
+                    // （zeta_list_index_f64/count_f64/remove_f64 等）按位模式
+                    // 收浮点实参（值比较在 double 域）——bitcast 而非 fptosi。
+                    // fptosi 把 2.5 截成 2，`ys.index(2.5)` 在 [1.5, 2.5] 里
+                    // 返回 -1（实拍）；`in`/`count` 同样全部失配。
+                    if callee_name.ends_with("_f64") {
+                        match self.builder.build_bit_cast(
+                            inkwell::values::BasicValueEnum::FloatValue(fv),
+                            pt,
+                            "arg_f64bits",
+                        ) {
+                            Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
+                            Err(_) => result.push(BasicMetadataValueEnum::FloatValue(fv)),
+                        }
+                    } else {
                     self.abi_note(
                         &callee_name,
                         i,
                         &format!("fptosi → i{}", pt.get_bit_width()),
                     );
-                    match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") {
-                        Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
-                        Err(_) => result.push(BasicMetadataValueEnum::FloatValue(fv)),
+                        match self.builder.build_float_to_signed_int(fv, pt, "arg_fptosi") {
+                            Ok(v) => result.push(BasicMetadataValueEnum::from(v)),
+                            Err(_) => result.push(BasicMetadataValueEnum::FloatValue(fv)),
+                        }
                     }
                 }
                 (BasicMetadataValueEnum::FloatValue(_), inkwell::types::BasicTypeEnum::PointerType(_))

@@ -1,0 +1,21 @@
+// 批次 745（裁定 3 实施）：Python `match/case` 语法接入——此前整函数被 W1002
+// 丢弃（#38 的核心入口阻塞）。三件：① indent 预处理把 `case <pat>:` 当块头
+// （加 `case` 进 HEADER_KEYWORDS），臂体括号化；② parse_match_arm 认可选
+// `case` 前缀与 `{ block }` 体（新 case_kw 独立解析器——nom verify 闭包收到
+// 的是 tag 输出本身而非剩余输入，词边界检查恒假曾致前缀永不消费）；③ 臂体
+// Block 的语句照常下型。已知边界（非本批）：无注解 def 的 String 返回传播
+// ＝660 家族残口（pre661 同样打指针，非本批回归）。
+def f(x):
+    match x:
+        case 1:
+            print("one")
+        case 2:
+            print("two")
+        case _:
+            print("many")
+f(1)
+f(2)
+f(3)
+// expect: one
+// expect: two
+// expect: many

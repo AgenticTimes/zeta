@@ -1,0 +1,22 @@
+// 批次 764（761 新开→762 度量→本批收口）：“值当指针”族——jit 表内 44 个宿主
+// 函数与 runtime/*.c 的 C 实现同名，而 src/runtime 的 no_mangle 导出把 Rust 实现
+// 占在裸名上（C 体被 ld -r 挪到 _array_len.2 之类后缀名），MCJIT 的 dlsym 恒绑
+// Rust 体：数组头约定与 C 不同 ⇒ for-in 打堆地址、宿主收小整当指针解引用崩。
+// 修＝摘掉这 21 个 Rust 导出的 no_mangle（数组/字典/打印/host_result/vec 族），
+// 裸名让位给 build.rs 嵌入的 C 实现，JIT 与 AOT 同走 C 约定。本钉 AOT 跑
+// run.sh、jit_sweep 亦含 python_style 全量。
+// 批次 768 更正（原计划取 765，被并行侧连占后让号）：初摘时另动过 host.rs 的 array_push/len/get/set/free 五枚，
+// 该族是 DynamicArray 的 AOT 在用接口（t449 三跑确定性红实证），已恢复；
+// 裸名仍由 C 体占位（恢复的是另一编译单元，不夺回裸名），JIT 行为不变。
+x = 0
+for x in [7, 8, 9]:
+    pass
+print(x)
+// expect: 9
+
+m = {"k": 1}
+print(m["k"])
+// expect: 1
+
+print("ab" + "cd")
+// expect: abcd

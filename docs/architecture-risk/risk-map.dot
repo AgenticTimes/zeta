@@ -1,0 +1,124 @@
+// 风险关系图 — Zeta 编译器扩展性与架构风险
+// 场景技能: architecture-visualization:risk-quality-reviewer | 格式技能: graphviz
+// 取证日期: 2026-09-25 | HEAD 650bc37a | 详细证据见同目录 architecture-review.md
+// 读法: 菱形=风险(编号对应 review.md 的 R#) 方框=架构元素 六边形=质量属性目标
+//       实线=本次命令实测  虚线=假设/未独立验证(对应 review.md §四 A#)
+//       边标签末尾 c:=confidence
+// 渲染: dot -Tsvg risk-map.dot > risk-map.svg
+digraph RiskMap {
+  rankdir=TB;
+  nodesep=0.45;
+  ranksep=0.85;
+  fontname="Helvetica";
+  labelloc=t;
+  fontsize=17;
+  label="Zeta 扩展性风险图 — 「加一个构造」的代价与失败模式\n实测锚点：lower_expr 单函数 10,371 行 / codegen 0 个 Result / frontend↔middle 成环";
+  compound=true;
+
+  // ---------- 质量属性目标（本次评审关心的） ----------
+  goal_ext   [shape=hexagon, style=filled, fillcolor="#eef2ff", label="Quality:\n可扩展性\n加构造的成本"];
+  goal_rel   [shape=hexagon, style=filled, fillcolor="#eef2ff", label="Quality:\n可靠性\n错值 vs 报错"];
+  goal_mnt   [shape=hexagon, style=filled, fillcolor="#eef2ff", label="Quality:\n可维护性\n变更能否隔离"];
+  goal_test  [shape=hexagon, style=filled, fillcolor="#eef2ff", label="Quality:\n可测试性\n门禁能否复现"];
+
+  // ---------- 架构元素 ----------
+  subgraph cluster_layers {
+    label="src/ 编译器分层（实测跨层 use 计数）";
+    fontsize=13; style=rounded; color="#94a3b8";
+
+    ast      [shape=box, label="frontend/ast.rs\nAstNode 65 变体"];
+    parser   [shape=box, label="frontend/parser/\n9,466 行 8 文件"];
+    borrow   [shape=box, style="filled", fillcolor="#fef3c7",
+              label="frontend/borrow.rs + identity_ownership/\n← 5 个文件 use crate::middle（反向依赖）"];
+    resolver [shape=box, label="middle/resolver/\n10,519 行 resolver.rs 5,121"];
+    mirgen   [shape=box, style=filled, fillcolor="#fee2e2",
+              label="middle/mir/gen.rs 14,644 行\nMirGen 45 字段 + 15 个 with_*\nlower_expr 3527-13898 = 10,371 行"];
+    types    [shape=box, label="middle/types/\nType 47 变体"];
+    codegen  [shape=box, style=filled, fillcolor="#fee2e2",
+              label="backend/codegen/codegen.rs 7,650 行\n53 fn / 0 个 Result / 507 unwrap"];
+    registry [shape=box, style=filled, penwidth=2.5, fillcolor="#dcfce7",
+              label="codegen/runtime_decls_registry.rs\n@generated ← pylib/registry.txt\n有 CI 新鲜度门（护栏）"];
+    crun     [shape=box, label="runtime/ 6 个 C 源\n+ zeta_runtime_c.o"];
+  }
+
+  subgraph cluster_corpus {
+    label="zeta_src/ 移植语料（最后实质提交 2026-04-02）";
+    fontsize=13; style=rounded; color="#94a3b8";
+    genz     [shape=box, label="middle/mir/gen.z 399 行 6 fn\n= gen.rs 的 2.7% 行 / 8% 函数"];
+    zcorpus  [shape=box, label="51 个 .z / 7,288 行\n伪 Rust（import 不存在的 zeta:: crate）"];
+  }
+
+  subgraph cluster_gate {
+    label="验收门禁";
+    fontsize=13; style=rounded; color="#94a3b8";
+    runall   [shape=box, label="tools/run_all.sh\n804 个 tests/**.z 夹具\n仅在 baselines job"];
+    wsl      [shape=box, style=filled, fillcolor="#fecaca",
+              label="self-hosted runner「galaxy」\n[galaxy, wsl2, x86-64]\n5 个 job 全在此（ci.yml:17,28,38,55,71）"];
+    selfhost [shape=box, label="tools/selfhost_compile.sh\n51 文件，4 例钉住为已知失败"];
+    cargotest [shape=box, label="cargo test --workspace\n570 个 #[test]"];
+  }
+
+  // ---------- 风险节点 ----------
+  R1 [shape=diamond, style=filled, fillcolor="#fecaca", label="R1 单函数黑洞\ngen.rs 占全仓净增长 72%\nc: 高"];
+  R2 [shape=diamond, style=filled, fillcolor="#fecaca", label="R2 静默吞掉\n225 个 _ => 兜底臂\nc: 高"];
+  R3 [shape=diamond, style=filled, fillcolor="#fecaca", label="R3 无错误传播通道\n0 Result / 507 unwrap\nc: 高"];
+  R4 [shape=diamond, style=filled, fillcolor="#fed7aa", label="R4 层间成环\nf→m 13 / m→f 18\nc: 高"];
+  R5 [shape=diamond, style=filled, fillcolor="#fed7aa", label="R5 特判散布 4 层\n862 处 py_\nc: 高（生成物侧有门）"];
+  R6 [shape=diamond, style=filled, fillcolor="#fecaca", label="R6 整条 CI 只有一台机器\n5 个 job 的 runs-on 逐字相同\nc: 高（实测标签）"];
+  R7 [shape=diamond, style=filled, fillcolor="#fed7aa", label="R7 停摆语料仍承重\n3 处运行期输入\nc: 高"];
+  R8 [shape=diamond, style=filled, fillcolor="#e9d5ff", label="R8 文档被实测推翻\n6 天差 3,649 行\nc: 高"];
+  A3 [shape=diamond, color="#9ca3af", fontcolor="#6b7280",
+      label="A3 符号/ABI 名字瀑布\n（09-19 文档列 #1，本次未复核）\nc: 低 → 下一步验证"];
+
+  // ---------- 目标 -> 受影响的架构元素 ----------
+  goal_ext   -> mirgen   [label="必须进同一个函数", color="#4338ca"];
+  goal_ext   -> registry [label="生成物链条", color="#4338ca"];
+  goal_rel   -> codegen  [label="失败即 panic", color="#4338ca"];
+  goal_rel   -> genz     [label="未支持→常量 0", color="#4338ca"];
+  goal_mnt   -> resolver [label="50% commit 集中在前 3 文件", color="#4338ca"];
+  goal_test  -> runall   [label="唯一语料门", color="#4338ca"];
+
+  // ---------- 风险 -> 受影响元素（实测边为实线） ----------
+  R1 -> mirgen   [label="affects: lowering 扩展点\nc: high（numstat 实测）", color="#b91c1c"];
+  R2 -> mirgen   [label="affects: 兜底臂\nc: high", color="#b91c1c"];
+  R2 -> genz     [label="gen.z:250 _=>{}  /  :386-389 →Lit(0)\nc: high", color="#b91c1c"];
+  R3 -> codegen  [label="affects: 诊断能力\nc: high", color="#b91c1c"];
+  R4 -> borrow   [label="violation: 前端依赖中层\nc: high", color="#c2410c"];
+  R4 -> mirgen   [label="被依赖方 12 文件反向 use AST\nc: high", color="#c2410c"];
+  R5 -> registry [label="294 处（生成物，有门）\nc: high", color="#c2410c"];
+  R5 -> resolver [label="133 处手写特判，无门\nc: high", color="#c2410c"];
+  R5 -> mirgen   [label="264 处手写特判，无门\nc: high", color="#c2410c"];
+  R5 -> codegen  [label="57 处手写特判，无门\nc: high", color="#c2410c"];
+  R6 -> wsl      [label="5 个 job 同一 runs-on\nci.yml:17,28,38,55,71\nc: high（grep uniq -c = 5×同标签）", color="#c2410c"];
+  R6 -> cargotest [label="连 570 个 #[test] 也在这台机\nc: high", color="#c2410c"];
+  R6 -> runall   [label="804 例 .z 夹具唯一执行者\nci.yml:90\nc: high", color="#c2410c"];
+  R4 -> parser   [label="parser/identity_type.rs\n也在反向边里\nc: high", color="#c2410c"];
+
+  // ---------- 层内真实依赖（实测行号） ----------
+  ast   -> mirgen   [label="gen.rs:1067\nlower_to_mir(&AstNode) -> Mir\nc: high", color="#475569"];
+  types -> mirgen   [label="gen.rs:1011\nwith_type_decls(HashMap<String,TypeDecl>)\nc: high", color="#475569"];
+  parser -> mirgen  [label="lowering 的输入来自 parser\nc: medium（同层产物，未逐边测）", style=dashed, color="#94a3b8"];
+  R7 -> zcorpus  [label="伪 Rust，非可用自举\nc: high", color="#c2410c"];
+  R7 -> resolver [label="module_resolver.rs:123,164,170,178\n把 use crate:: 解析到 .z\nc: high", color="#c2410c"];
+
+  // ---------- 风险之间的因果（放大关系） ----------
+  R1 -> R2 [label="兜底臂数量随函数膨胀\nc: medium", style=dashed, color="#7c3aed"];
+  R2 -> R6 [label="错值要靠语料门才拦得住\nc: medium", style=dashed, color="#7c3aed"];
+  R3 -> R2 [label="panic 掩盖了本该显式的兜底\nc: low", style=dashed, color="#9ca3af"];
+  R7 -> selfhost [label="ci.yml:50 编译停摆语料\nc: high", color="#c2410c"];
+  R8 -> R1  [label="文档里的 gen.rs 行数 6 天失效\nc: high", style=dashed, color="#7c3aed"];
+
+  // ---------- 未验证假设（虚线灰） ----------
+  A3 -> codegen  [label="假设: 名字瀑布在此\nc: low — 待定位", style=dashed, color="#9ca3af"];
+  A3 -> crun     [label="假设: 66 条 .set 别名\nc: low — 待量测", style=dashed, color="#9ca3af"];
+  A3 -> registry [label="可能是同一问题的生成物侧\nc: low", style=dashed, color="#9ca3af"];
+
+  // ---------- 已确认做对的护栏（不动） ----------
+  guard [shape=box, style=filled, penwidth=3, fillcolor="#bbf7d0", color="#15803d",
+         label="保留的护栏\ngen_from_registry --emit + git diff --exit-code (ci.yml:75-86)\nregistry ↔ runtime .o nm --check (ci.yml:86)\nclippy -D warnings"];
+  R5 -> guard [label="生成物这条边已被覆盖\n手写三处未覆盖", color="#15803d"];
+
+  // ---------- lte 分组：让风险列排在中间 ----------
+  { rank=same; R1; R2; R3; R4; }
+  { rank=same; R5; R6; R7; R8; A3; }
+}

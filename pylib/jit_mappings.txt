@@ -3,24 +3,7 @@
 # Regenerate: python3 tools/gen_from_registry.py --emit-jit
 
 free  crate::runtime::std::std_free
-host_str_concat  crate::runtime::host::host_str_concat
-host_str_to_lowercase  crate::runtime::host::host_str_to_lowercase
-host_str_to_uppercase  crate::runtime::host::host_str_to_uppercase
-host_str_trim  crate::runtime::host::host_str_trim
-host_str_len  crate::runtime::host::host_str_len
-host_str_starts_with  crate::runtime::host::host_str_starts_with
-host_str_ends_with  crate::runtime::host::host_str_ends_with
-host_str_contains  crate::runtime::host::host_str_contains
-host_str_replace  crate::runtime::host::host_str_replace
-host_str_split  crate::runtime::host::host_str_split
-host_str_join  crate::runtime::host::host_str_join
-host_str_find  crate::runtime::host::host_str_find
-host_str_count  crate::runtime::host::host_str_count
 host_str_strip  crate::runtime::host::host_str_strip
-host_str_lstrip  crate::runtime::host::host_str_lstrip
-host_str_rstrip  crate::runtime::host::host_str_rstrip
-host_str_isalpha  crate::runtime::host::host_str_isalpha
-host_str_isnumeric  crate::runtime::host::host_str_isnumeric
 channel_send  crate::runtime::actor::channel::host_channel_send
 channel_recv  crate::runtime::actor::channel::host_channel_recv
 host_mpsc_channel  crate::runtime::actor::channel::host_mpsc_channel
@@ -29,21 +12,9 @@ host_mpsc_recv  crate::runtime::actor::channel::host_mpsc_recv
 host_mpsc_try_recv  crate::runtime::actor::channel::host_mpsc_try_recv
 create_waker  crate::runtime::reactor::waker_create
 wake_waker  crate::runtime::reactor::waker_wake
-spawn  crate::runtime::actor::scheduler::host_spawn
 http_get  crate::runtime::host::host_http_get
 tls_handshake  crate::runtime::host::host_tls_handshake
-host_result_is_ok  crate::runtime::actor::result::host_result_is_ok
-host_result_get_data  crate::runtime::actor::result::host_result_get_data
-map_new  crate::runtime::actor::map::host_map_new
-map_insert  crate::runtime::actor::map::host_map_insert
-map_get  crate::runtime::actor::map::host_map_get
 scheduler::init_runtime  crate::runtime::actor::scheduler::init_runtime
-array_new  crate::runtime::array::array_new
-array_push  crate::runtime::array::array_push
-array_len  crate::runtime::array::array_len
-array_get  crate::runtime::array::array_get
-array_set  crate::runtime::array::array_set
-array_free  crate::runtime::array::array_free
 future_poll_alloc  crate::runtime::host::future_poll_alloc
 future_poll_free  crate::runtime::host::future_poll_free
 future_state_get  crate::runtime::host::future_state_get
@@ -51,37 +22,23 @@ future_state_set  crate::runtime::host::future_state_set
 future_poll  crate::runtime::host::future_poll
 future_result  crate::runtime::host::future_result
 future_ready  crate::runtime::host::future_ready
-zeta_array_get_i64  crate::runtime::zeta_runtime::zeta_array_get_i64
-zeta_array_set_i64  crate::runtime::zeta_runtime::zeta_array_set_i64
-zeta_array_get_bool  crate::runtime::zeta_runtime::zeta_array_get_bool
 zeta_array_set_bool  crate::runtime::zeta_runtime::zeta_array_set_bool
-zeta_sieve_new  crate::runtime::zeta_runtime::zeta_sieve_new
 zeta_print_i64  crate::runtime::zeta_runtime::zeta_print_i64
 zeta_println_i64  crate::runtime::zeta_runtime::zeta_println_i64
-println_i64  crate::runtime::zeta_runtime::zeta_println_i64
 # src/runtime/io.rs 里的 print 家族此前只有 println_i64 一个别名进了表，
 # `print(x)`/`println!("{}", s)` 在 MIR 里发的是 print_str / println_str / print_bool
 # （gen.rs:7810 起、:7932），JIT 一律绑不到 ⇒ E4016 填桩。批次 321 实测：修掉解析器
 # `x @ 1..=10` 的截断后，`test_advanced_patterns.z` 第一次真正执行到这些调用，
 # jit ok 从 163 掉到 162 —— 掉的那一个不是回归，是**被暴露**的缺口。
-# println_f64 / print_f64 故意不在此列：它们只有 C 侧实现，而仓里没有 build.rs
-# （批次 315 根因），Rust 侧无符号可指。
-print_i64  crate::runtime::io::print_i64
-print_bool  crate::runtime::io::print_bool
-print_str  crate::runtime::io::print_str
+# println_f64 / print_f64 不在此列：它们只有 C 侧实现，Rust 侧无符号可指；
+# 批次 759 起 build.rs 把 runtime/*.c 链进 zetac 镜像，dlsym 腿直接命中，
+# 无需表项（批次 315 登记的"仓里没有 build.rs"根因已收口）。
 println  crate::runtime::io::println
 println_bool  crate::runtime::io::println_bool
-println_str  crate::runtime::io::println_str
-flush  crate::runtime::io::flush
-vec_new  crate::runtime::vec::zeta_vec_new
-vec_push  crate::runtime::vec::zeta_vec_push
 vec_pop  crate::runtime::vec::zeta_vec_pop
-vec_get  crate::runtime::vec::zeta_vec_get
 vec_set  crate::runtime::vec::zeta_vec_set
-vec_len  crate::runtime::vec::zeta_vec_len
 vec_capacity  crate::runtime::vec::zeta_vec_capacity
 vec_clear  crate::runtime::vec::zeta_vec_clear
-vec_free  crate::runtime::vec::zeta_vec_free
 fs_read_to_string  crate::runtime::fs::fs_read_to_string
 fs_write  crate::runtime::fs::fs_write
 fs_create_dir  crate::runtime::fs::fs_create_dir

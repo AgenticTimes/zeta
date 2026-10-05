@@ -1,0 +1,18 @@
+# @cat: container
+# @note: 随机字典方法链（seed=741203 #0）
+#@@ python
+d = {"alpha": 56, "dd": 11, "z9": 21}
+print("gamma" in d)
+print(d.get("alpha", -84))
+print(d.get("alpha", 47))
+d["z9"] = 4
+print(d["z9"])
+
+#@@ zeta
+d = {"alpha": 56, "dd": 11, "z9": 21}
+print("gamma" in d)
+print(d.get("alpha", -84))
+print(d.get("alpha", 47))
+d["z9"] = 4
+print(d["z9"])
+
