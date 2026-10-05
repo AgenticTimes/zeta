@@ -4098,20 +4098,31 @@ impl<'ctx> LLVMCodegen<'ctx> {
                 type_args,
             } => {
                 self.note_return_slot_mismatch(func, dest, args.len());
-                // 批 991（提案①第二段）：签名表内函数的外呼元数核对
-                //（W0912）——表项是 C 侧对勘过的固定 ABI，元数不符说明
-                // 降低层 emitted 了错误调用形状；coerce_call_args 的补垫/
-                // 截断对这类名字是掩盖不是修复（表内名字无重载形态）。
-                if let Some(sig) = signature_table::lookup(func)
-                    && args.len() != sig.params.len()
-                {
-                    panic!(
-                        "W0912 外呼元数核对失败: `{}` 期望 {} 参实到 {} 参——C ABI {}（批 991 签名表核对）",
-                        func,
-                        sig.params.len(),
-                        args.len(),
-                        sig.params.len()
-                    );
+                // 批 991/997：签名表内函数的外呼元数核对（W0912）——表项
+                // 是 C 侧对勘过的固定 ABI，元数不符说明降低层 emitted 了
+                // 错误调用形状；coerce_call_args 的补垫/截断对这类名字是
+                // 掩盖不是修复。批 997：`_N` 逐参重载约定回退——C 侧为多
+                // 参形态提供 `{name}_{argc}` 兄弟符号（py_os_makedirs_2
+                // 等，get_or_declare_function 的同名解析惯例），降低层发
+                // 2 参而注册表列 1 参基型时，按后缀兄弟名对表。
+                if let Some(sig) = signature_table::lookup(func) {
+                    let argc_matches = args.len() == sig.params.len()
+                        || signature_table::lookup(&format!(
+                            "{}_{}",
+                            func,
+                            args.len()
+                        ))
+                        .map(|s| s.params.len() == args.len())
+                        .unwrap_or(false);
+                    if !argc_matches {
+                        panic!(
+                            "W0912 外呼元数核对失败: `{}` 期望 {} 参实到 {} 参——C ABI {}（批 991 签名表核对）",
+                            func,
+                            sig.params.len(),
+                            args.len(),
+                            sig.params.len()
+                        );
+                    }
                 }
                 // PY-A: try/except — `_setjmp` called directly with
                 // returns_twice so longjmp lands back INSIDE this function

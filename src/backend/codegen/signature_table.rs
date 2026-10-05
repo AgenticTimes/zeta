@@ -65,7 +65,8 @@ pub fn lookup(name: &str) -> Option<Sig> {
         // runtime/tokio_runtime_stub.c:1025 — double py_math_pow(a, b)
         //（真正的 F64 ABI：实参错送整数寄存器即读残留——表驱动的价值样本）
         "py_math_pow" => Some(Sig { ret: ValTy::F64, params: &[ValTy::F64, ValTy::F64] }),
-        _ => None,
+        // 批 997：curated 未命中落注册表生成段（--emit-sigtable，299 项）
+        _ => super::signature_table_gen::lookup_gen(name),
     }
 }
 

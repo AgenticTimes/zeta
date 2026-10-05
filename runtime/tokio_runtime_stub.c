@@ -1328,6 +1328,28 @@ int64_t py_logger_warning_n(int64_t lg, int64_t fmt, int64_t n, int64_t a1, int6
     buf[off < sizeof(buf) ? off : sizeof(buf) - 1] = 0;
     return py_log_emit(PY_LOG_WARNING, "WARNING", lg, (int64_t)buf);
 }
+// 批 997：`log.debug(fmt, *args)` 变参面（MIR 变参臂原漏 debug，9 参
+// 直落 py_logger_debug 固定 2 参版被签名表 W0912 咬出）。debug 的语
+// 料实发到 fmt＋8 实参 ⇒ 8 槽版。
+int64_t py_logger_debug_n(int64_t lg, int64_t fmt, int64_t n, int64_t a1, int64_t a2,
+                          int64_t a3, int64_t a4, int64_t a5, int64_t a6,
+                          int64_t a7, int64_t a8) {
+    int64_t vals[8] = {a1, a2, a3, a4, a5, a6, a7, a8};
+    char buf[1024];
+    size_t off = 0;
+    const char* f = (const char*)fmt;
+    if (f) {
+        while (f[off] && off < sizeof(buf) - 64) {
+            buf[off] = f[off];
+            off++;
+        }
+    }
+    for (int64_t i = 0; i < n && i < 8; i++) {
+        off += (size_t)snprintf(buf + off, sizeof(buf) - off, " %lld", (long long)vals[i]);
+    }
+    buf[off < sizeof(buf) ? off : sizeof(buf) - 1] = 0;
+    return py_log_emit(PY_LOG_DEBUG, "DEBUG", lg, (int64_t)buf);
+}
 int64_t py_logger_error_n(int64_t lg, int64_t fmt, int64_t n, int64_t a1, int64_t a2,
                           int64_t a3, int64_t a4) {
     int64_t vals[4] = {a1, a2, a3, a4};

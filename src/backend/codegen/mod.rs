@@ -5,6 +5,8 @@ mod jit;
 mod monomorphize;
 // 批 990（提案①第一段）：C 运行时签名表＋keyfn 指针合同（手写，非生成）。
 mod signature_table;
+// 批 997（提案①全表覆盖）：注册表生成的签名表段（--emit-sigtable）。
+mod signature_table_gen;
 // @generated — regenerate via `python3 tools/gen_from_registry.py --emit`
 mod runtime_decls_registry;
 // @generated — regenerate via `python3 tools/gen_from_registry.py --emit-core`

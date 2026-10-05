@@ -582,6 +582,13 @@ int64_t py_dt_from_str_3(int64_t s, int64_t unit, int64_t tz) {
     return py_dt_from_str(s);
 }
 
+// 批 997：2 参形态（s, unit）——jq_wufu_local 语料实发；unit 与 tz 同
+// 为占位（同上注释：位面无法被 1 参解析器 honour）。
+int64_t py_dt_from_str_2(int64_t s, int64_t unit) {
+    (void)unit;
+    return py_dt_from_str(s);
+}
+
 // str vs date SCALAR compare — `covers_range` compares the string trade_date
 // column (the parquet reader formats dates "YYYY-MM-DD") against Timestamp
 // scalars. Parse the string side and reuse the date comparisons.
@@ -3717,6 +3724,16 @@ int64_t zeta_env_del(int64_t name_handle) {
     if (!map_has(env_map(), key)) return zeta_raise(1);
     zeta_map_pop_default(env_map(), key, 0);
     return 0;
+}
+
+// 批 997（签名表全覆盖配套的 C 补缺）：降低层实发元数有 C 侧 arity
+// 后缀兄弟但没有注册表条目的三族——补真身/占位并注册 X 条目。
+// 1) py_dt_timedelta_2(days, extra)：extra（unit 等位）V1 忽略，
+//    语义同 1 参版（在册：unit 面待补）。
+int64_t py_dt_timedelta_2(int64_t days, int64_t extra) {
+    (void)extra;
+    extern int64_t py_dt_timedelta(int64_t);
+    return py_dt_timedelta(days);
 }
 
 // nonlocal declaration marker — no runtime effect (the env routing happens

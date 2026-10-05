@@ -986,10 +986,12 @@ impl MirGen {
             // symbols (`py_logger_info_4/_5`). Route to the variadic helper
             // (V1: no %-substitution, but the values are PRINTED, never
             // dropped). Only when the receiver is a known PyLogger and no
-            // arg is a kwarg wrapper.
-            if matches!(method.as_str(), "info" | "warning" | "error")
+            // arg is a kwarg wrapper. 批 997：debug 补进变参臂（C 侧补
+            // py_logger_debug_n 8 槽版——语料实发 fmt＋8 实参；此前 9 参
+            // 直落 2 参固定版被 W0912 咬出）。
+            if matches!(method.as_str(), "info" | "warning" | "error" | "debug")
                 && args.len() >= 2
-                && args.len() <= 5
+                && args.len() <= (if method == "debug" { 9 } else { 5 })
             {
                 let no_kwargs = !args.iter().any(|a| {
                     matches!(a, AstNode::Call { method: km, .. } if km == "__kwarg__")
@@ -1029,10 +1031,20 @@ call, no NULL-handle dereference).",
                                 vals.push(self.lower_expr(a));
                             }
                             let n_lit = self.next_id_with_lit(n_extra);
-                            while vals.len() < 4 {
+                            // 批 997：debug 走 8 槽版（py_logger_debug_n），
+                            // info/warning/error 维持 4 槽。
+                            let cap = if method == "debug" { 8 } else { 4 };
+                            while vals.len() < cap {
                                 vals.push(self.next_id_with_lit(0));
                             }
-                            self.emit_call_into(id, &format!("py_logger_{}_n", method), vec![lg, fmt, n_lit, vals[0], vals[1], vals[2], vals[3]], Type::I64);
+                            let mut call_args = vec![lg, fmt, n_lit];
+                            call_args.extend(vals.into_iter().take(cap));
+                            self.emit_call_into(
+                                id,
+                                &format!("py_logger_{}_n", method),
+                                call_args,
+                                Type::I64,
+                            );
                             return id;
                         }
                     }
