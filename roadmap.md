@@ -32566,3 +32566,39 @@ t405_hard_stub_aborts_loudly"`）。旧格式那行读成 `stuck=0` 而不是把
 3. 变异矩阵跑完后只改注释不会让红格清单失效（CASES 与断言文本未动），这条在本批是
    按「先跑臂、后回填注释」的顺序做的，回填后套件复跑仍 78 条全绿。
 
+
+## 批次 990（2026-10-05）：提案①第一段——C 运行时签名表＋keyfn 指针合同核对（W0911）
+
+"开始实现"批：把四条提案里性价比最高的①（extern 签名表＋编译期核对）
+落地第一段，封批 963–989 的整个错配类。开工前并入 cleanup 滞留 72 笔
+（合并 `a6adaa5f`，冲突两处：roadmap 并集、sample_gate.sh 全角变量
+花括号取并）。
+
+交付（`<签名表提交号>`）：
+1. `src/backend/codegen/signature_table.rs`：C 运行时 ABI 签名表——
+   `lookup`（首批 keyfn 族 6 项：py_min/max_key、py_min/max_key_f64、
+   py_min/max_key_i64_f64，逐条对勘 py_additions.c:1111/1217/1203/
+   1207/1218/1233；扩表随批，无来源不入表）＋ `KEYFN_PTR_CONTRACT`
+   （double(f64)，C 桥对 keyfn 函数指针的硬编码预期）＋ `sig_matches`
+   纯核对＋ `val_ty_of`（MIR 槽型→值类别，f32/f64 按宽度分列）＋5 单测。
+2. 钩子一（`gen_fn`）：`__ZKEYF64_` 特化副本实体化时**双层核对**——
+   ①实际 LLVM 声明（FuncAddr 兜底可能抢先按 double(f64) 声明，体发射
+   进错签名 FunctionValue 会静默产出错域指令）；②体派生签名（param
+   槽型＋infer_fn_return_type——批 983 病根"注解未生效⇒槽 I64⇒体
+   i64(i64)"在这一层现形）。任一层偏离合同即 panic W0911。
+3. 钩子二（`get_or_declare_function` extern 兜底）：表内函数按表定型，
+   表成为 extern 声明的单一事实来源；表外维持全 i64 兜底（行为零变）。
+
+**验证**：负向实拍——登记注解临时改 `"i64"`，编译期精确报
+`W0911 keyfn 签名核对失败: __ZKEYF64_kf 实际声明 double(i64)`，还原
+后消失（响亮失败通路实证）；四金用例 `3/-1`、`-1/3`、`-3.5/2.5`、
+`9/-7/-8/8` 全过；库 262/262（含 5 新单测）；门禁窗口 0：差分 285/285、
+python_style 44/44、official 14/14、语料 38/40（jq_wufu 两例在册预存，
+不判红）。
+
+**未竟（后续批）**：①扩表（py_builtin_*、py_math_pow 等需逐条对勘 C
+侧再入表）＋keyfn 桥调用点按表核对外呼实参类别；②keyfn 静态已知 ⇒
+MIR 内联扫描（abs 臂通用化）；③单点 mangle 铸造＋key= 臂声明表；
+④函数值带（地址，签名编号）标签。设计文档（archify 架构图，含三问
+题域与业界对照）在 `.archify/architecture-keyfn-abi-20261005-155231/
+keyfn-abi.html`（未入库，工作树可开）。
