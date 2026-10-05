@@ -7017,3 +7017,163 @@ fn body_local_use_is_parsed_and_hoisted_so_module_items_reach_mir() {
     ];
     assert_eq!(want, got);
 }
+
+/// 批次 647（`a567e700`）＝模块级越界整数赋值折成 BigInt 句柄，编译期回归钉。
+///
+/// 症状（647 记录原文第②步）：`b = 1 << 100` 这类**模块级、非循环体**的赋值，右边能整棵
+/// 算成 i128 却超出 i64 时，求值器要把右边改写成 `BigIntLit`（十进制串）；不改写的话这一
+/// 槽按 i64 出值＝绕回（wrap）后的静默错数。642 那一批只把 `print(越界表达式)` 折成十进制
+/// 串，赋值槽不管＝本批补的那一格。
+///
+/// 站点＝`src/middle/ctfe/evaluator.rs:588-600`（`transform_ast_node_inner` 里 647 加的
+/// `Assign` 改写块）。该块外层条件 `self.p642_depth == 0`（`evaluator.rs:540`）是批次 642
+/// 的面（已另有用例），本条只钉 647 这一块。
+///
+/// 读数三列（逐格取自同一段 MIR）：
+/// - `调用=[…]`＝该段里 `zeta_big_` 开头的被调符号，按语句出现顺序（不去重）；
+/// - `拆值=[lo:hi,…]`＝每个 `zeta_big_new(lo, hi)` 的两个编译期常量实参（`IntLit`）；
+/// - `BigInt槽=N`＝该段 `type_map` 里标成 `Named("BigInt", [])` 的槽数。
+///
+/// 期望值来源＝`lo`/`hi` 由 Python 侧按 128 位整数的低 64 位与算术右移 64 位独立算出
+/// （`python3 -c` 实测：`2**100`→`0:68719476736`、`2**100+1`→`1:68719476736`、
+/// `2**101`→`0:137438953472`、`3*2**90`→`0:201326592`、`3*2**90+7`→`7:201326592`、
+/// `-(2**100)`→`0:-68719476736`、`12345678901234567890123`→`4807115922877859019:669`），
+/// 不是抄编译输出；`BigInt槽` 数是结构读数，取本批 `--dump-mir` 实测（逐段核对过）。
+///
+/// 四组变异（每臂只改一处，站点全在 `evaluator.rs`，无跨车道文件）与红格集合：
+/// - M1 删掉整个 `Assign` 改写块＝格 1—8 全红（并集臂，只算防放松）；
+/// - M2 只留负溢出那半条守卫（`v < i64::MIN`）＝**只红格 5**；
+/// - M2b 只留正溢出那半条守卫（`v > i64::MAX`）＝红格 1—4、6—8（格 5 不红）；
+///   M2 与 M2b 红格集互不相交、并集＝M1 ⇒ 两条独立覆盖，M1 不算第三条；
+/// - M6 把守卫改成恒真（小值也改写）＝**只红格 9、10**（与前两臂不相交）＝第三条独立覆盖；
+///   同一臂还连带打到本套件另 6 条既有用例（`str_percent_value_…` 里 `Str % 整数` 被派给
+///   `zeta_big_mod` 而不是 `zeta_str_percent_fmt`、`member_call_…` 第 3 格把 `read` 绑成
+///   `BigInt::read`、`println_format_string_…`／`loop_pattern_bindings_…`／
+///   `reserved_word_assignment_forms_…`／`tuple_swap_…` 四条的前置读数变成 BigInt 句柄），
+///   可见"小值不进句柄"这半条守卫的损害面比本用例登记的形状更宽；
+/// - M7 把 `Some((v, false))` 改成 `Some((v, _))`（忽略"含 truediv 就弃权"的标记）＝14 格全不红，
+///   阴性原因实测＝求值器遇到 `/` 直接返回 `None`（`evaluator.rs` 的 `eval_i128_tree`），
+///   从不返回带 `true` 标记的 `Some`，所以两种写法同形；
+/// - M4 把 647 的 `AstNode::BigIntLit(_) => Ok(node.clone())` 透传支改成折成 `Lit(0)`＝14 格全不红；
+///   M3 删掉该支则编不过（`error[E0004]` 非穷尽匹配）。⇒ 这条透传支语法上必须存在，语义上与
+///   匹配式的默认支同形，本批不写成分支锁（格 13 只把它的效果当现状锁钉住）。
+///
+/// 未锁的两处（照实测写，不写成已覆盖）：① 左值不是裸变量时（例如 `obj.b = 1 << 100`）本块
+/// 要求 `AstNode::Var`，该支未登记形状、未变异；② 块内赋值（`if`／`for` 体里）走的是运行期
+/// 提升（`zeta_big_from_i64` + `zeta_big_shl`），由外层 642 的深度条件决定，格 12 只作对照。
+fn bigint_reading(m: &Mir) -> String {
+    fn walk(m: &Mir, stmts: &[MirStmt], names: &mut Vec<String>, pairs: &mut Vec<(i64, i64)>) {
+        for s in stmts {
+            match s {
+                MirStmt::Call { func, args, .. } => {
+                    if func.starts_with("zeta_big_") {
+                        names.push(func.clone());
+                        if func == "zeta_big_new" && args.len() == 2 {
+                            let lo = match m.exprs.get(&args[0]) {
+                                Some(MirExpr::IntLit(v)) => *v,
+                                _ => -1,
+                            };
+                            let hi = match m.exprs.get(&args[1]) {
+                                Some(MirExpr::IntLit(v)) => *v,
+                                _ => -1,
+                            };
+                            pairs.push((lo, hi));
+                        }
+                    }
+                }
+                MirStmt::VoidCall { func, .. } => {
+                    if func.starts_with("zeta_big_") {
+                        names.push(func.clone());
+                    }
+                }
+                MirStmt::If { then, else_, .. } => {
+                    walk(m, then, names, pairs);
+                    walk(m, else_, names, pairs);
+                }
+                MirStmt::For { body, else_body, .. } | MirStmt::While { body, else_body, .. } => {
+                    walk(m, body, names, pairs);
+                    walk(m, else_body, names, pairs);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut names = Vec::new();
+    let mut pairs: Vec<(i64, i64)> = Vec::new();
+    walk(m, &m.stmts, &mut names, &mut pairs);
+    let slots = m
+        .type_map
+        .values()
+        .filter(|t| matches!(t, Type::Named(n, _) if n == "BigInt"))
+        .count();
+    let pair_str = pairs
+        .iter()
+        .map(|(l, h)| format!("{}:{}", l, h))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "调用=[{}] 拆值=[{}] BigInt槽={}",
+        names.join(","),
+        pair_str,
+        slots
+    )
+}
+
+const BIG_SHIFT_100: &str = "b = 1 << 100\nprint(b)\n";
+const BIG_SHIFT_ADD: &str = "b = 1 << 100\nc = b + 1\nprint(c)\n";
+const BIG_SHIFT_IN_FN: &str = "def f():\n    b = 1 << 100\n    print(b)\n\n\nf()\n";
+const BIG_SHIFT_STR: &str = "b = 1 << 100\nprint(str(b))\n";
+const BIG_NEG_100: &str = "b = -(1 << 100)\nprint(b)\n";
+const BIG_MUL_90: &str = "b = 3 * (1 << 90)\nc = b + 7\nprint(c)\n";
+const BIG_TWO_OPS: &str = "b = 1 << 100\nc = b + 1\nd = b * 2\nprint(c)\nprint(d)\n";
+const BIG_VAR_COPY: &str = "b = 1 << 100\nd = b\nc = d + 1\nprint(c)\n";
+const BIG_SMALL_VALUE: &str = "b = 5\nprint(b)\n";
+const BIG_AUG_ASSIGN: &str = "b = 1\nb <<= 100\nprint(b)\n";
+const BIG_PRINT_DIRECT: &str = "print(1 << 100)\n";
+const BIG_INSIDE_IF: &str = "if 1 == 1:\n    b = 1 << 100\n    print(b)\n";
+const BIG_SOURCE_LITERAL: &str = "x = 12345678901234567890123\nprint(x)\n";
+const BIG_TRUEDIV: &str = "b = (1 << 120) / 3\nprint(b)\n";
+
+#[test]
+fn module_level_big_int_assign_folds_to_bigint_handle_not_wrapped_i64() {
+    let cases: Vec<(&str, &str, &str)> = vec![
+        ("模块级移位越界_句柄", "main", BIG_SHIFT_100),
+        ("越界后加法", "main", BIG_SHIFT_ADD),
+        ("函数体内越界赋值", "f", BIG_SHIFT_IN_FN),
+        ("str渲染路径", "main", BIG_SHIFT_STR),
+        ("负向越界", "main", BIG_NEG_100),
+        ("乘法进位与下游加", "main", BIG_MUL_90),
+        ("两个下游运算", "main", BIG_TWO_OPS),
+        ("句柄复制后再算", "main", BIG_VAR_COPY),
+        ("小值不折 BigInt_M6靶格", "main", BIG_SMALL_VALUE),
+        ("增赋值的小值左值_M6靶格", "main", BIG_AUG_ASSIGN),
+        ("print 直打越界表达式_642 面", "main", BIG_PRINT_DIRECT),
+        ("块内越界赋值走运行期_对照", "main", BIG_INSIDE_IF),
+        ("源码级超 i64 字面量_现状锁", "main", BIG_SOURCE_LITERAL),
+        ("含 truediv 的越界表达式_M7 阴性", "main", BIG_TRUEDIV),
+    ];
+    let got: Vec<(String, String)> = cases
+        .iter()
+        .map(|(label, seg, src)| {
+            let mirs = lower_all(src);
+            (label.to_string(), bigint_reading(mir(&mirs, seg)))
+        })
+        .collect();
+    let want: Vec<(String, String)> = vec![
+        ("模块级移位越界_句柄".to_string(), "调用=[zeta_big_new] 拆值=[0:68719476736] BigInt槽=2".to_string()),
+        ("越界后加法".to_string(), "调用=[zeta_big_new,zeta_big_new] 拆值=[0:68719476736,1:68719476736] BigInt槽=4".to_string()),
+        ("函数体内越界赋值".to_string(), "调用=[zeta_big_new] 拆值=[0:68719476736] BigInt槽=2".to_string()),
+        ("str渲染路径".to_string(), "调用=[zeta_big_new,zeta_big_to_string] 拆值=[0:68719476736] BigInt槽=2".to_string()),
+        ("负向越界".to_string(), "调用=[zeta_big_new] 拆值=[0:-68719476736] BigInt槽=2".to_string()),
+        ("乘法进位与下游加".to_string(), "调用=[zeta_big_new,zeta_big_new] 拆值=[0:201326592,7:201326592] BigInt槽=4".to_string()),
+        ("两个下游运算".to_string(), "调用=[zeta_big_new,zeta_big_new,zeta_big_new] 拆值=[0:68719476736,1:68719476736,0:137438953472] BigInt槽=6".to_string()),
+        ("句柄复制后再算".to_string(), "调用=[zeta_big_new,zeta_big_new,zeta_big_new] 拆值=[0:68719476736,0:68719476736,1:68719476736] BigInt槽=6".to_string()),
+        ("小值不折 BigInt_M6靶格".to_string(), "调用=[] 拆值=[] BigInt槽=0".to_string()),
+        ("增赋值的小值左值_M6靶格".to_string(), "调用=[zeta_big_from_i64,zeta_big_shl,zeta_big_to_string] 拆值=[] BigInt槽=3".to_string()),
+        ("print 直打越界表达式_642 面".to_string(), "调用=[] 拆值=[] BigInt槽=0".to_string()),
+        ("块内越界赋值走运行期_对照".to_string(), "调用=[zeta_big_from_i64,zeta_big_shl,zeta_big_to_string] 拆值=[] BigInt槽=3".to_string()),
+        ("源码级超 i64 字面量_现状锁".to_string(), "调用=[zeta_big_new,zeta_big_to_string] 拆值=[4807115922877859019:669] BigInt槽=2".to_string()),
+        ("含 truediv 的越界表达式_M7 阴性".to_string(), "调用=[zeta_big_from_i64,zeta_big_shl,zeta_big_to_f64] 拆值=[] BigInt槽=2".to_string()),
+    ];
+    assert_eq!(want, got);
+}
