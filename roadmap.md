@@ -29237,3 +29237,109 @@ t405_hard_stub_aborts_loudly"`）。旧格式那行读成 `stuck=0` 而不是把
   `src/frontend/macro_expand.rs`、`src/middle/ctfe/` 其余几处；在册候选批次
   624、546、431、383、374、336、333。只看 `fix(` 开头的笔＋站点文件不在避让面
   （`gen.rs`、本车道在制的解析器三文件）＋先证该趟有调用方。
+
+## 批次 10052：补历史缺陷单元测试（第四十批，续 #20005，来源批次 415）
+
+### 来源与站点
+
+来源批次 415（`6b0dc13a`，2026-09-25，标题 `fix(mir)`）＝`__file__` 是**每个模块自己的**路径，
+不是全程序一份入口路径。站点在 `src/middle/resolver/resolver.rs`（行号按本批最后一次实跑的文本取；
+本批只读该文件，没有改它）：
+
+1) `load_user_python_module` 从 `:4106` 起；
+2) 登记"模块名 → 来源文件"的两处插入＝`:4166`（标记用户模块之后、别名提前返回 `:4182` 之前）与
+   `:4382`（函数尾、`py_current_module.replace(saved_ctx)` 之前）；
+3) 把这张表交给降形侧的接线＝`:5317` `.with_py_module_paths(...)`；
+4) 消费点＝`src/middle/mir/gen.rs:4639` 的 `__file__` 臂（按 `current_module` 查表，查不到才走
+   `.or_else(|| self.source_file.clone())` 退回入口路径）。
+
+症状（415 的提交信息＋在册夹具 `tests/python_style/t453_file_per_module.z`）：修前模块体里的
+`Path(__file__).resolve().parent.parent.parent` 按**入口** `.z` 的祖先算，语料
+`market_data_sources.py:146` 的 `_PROJECT_ROOT` 落到仓库的祖先目录，parquet 缓存目录 `data/stocks`
+因此指向不存在的位置、缓存全部看不见。
+
+避让面照旧：`gen.rs`、本车道在制的三个解析器文件（`src/error_codes.rs`、
+`src/frontend/parser/expr.rs`、`src/frontend/parser/top_level.rs`）、`src/middle/types/`、
+`runtime/`、`src/backend/` 一律不取变异；本批四臂全部落在 `resolver.rs` 一个文件内。
+
+### 用例形状
+
+新增一条 `#[test] fn file_dunder_reads_each_modules_own_path_not_the_entry_path`
+（`#[test]` 在 `tests/regression_history.rs:7894`，函数体从 `:7895` 起，段 ② 的断言在 `:7986`）
+＝走 `lower_multi` 的多模块路线，三个夹具文件：`m_a.z`（模块级 `PATH_A = __file__` ＋
+`def who(): return __file__`）、`pkg/__init__.z`（`PATH_P = __file__`）、`main.z`
+（`from m_a import PATH_A`＋`from pkg import PATH_P`＋三行 `print(__file__ / PATH_A / PATH_P)`）。
+
+读数的取法＝逐 item 收集所有 `MirExpr::StringLit` 里以 `.z` 结尾的槽（槽号＋路径串），并带上该槽的
+`type_map` 的 Debug 串。四条断言：① 四个在册 item（`main`／`m_a__init`／`m_a__who`／`pkg__init`）
+各自至少有一格 `.z` 路径串；② 每一格的路径尾串等于它自己模块的文件（`m_a.z`／`pkg/__init__.z`／
+`main.z`）；③ 模块段里不得出现入口 `main.z`（＝修前的实际症状值）；④ 每一格 `.z` 路径串的型是 `Str`。
+
+期望值来源＝缺陷记录，不是"现行输出是什么就写什么"：三侧真值＝CPython 的每模块 `__file__`、
+`t453` 的 `// expect:` 行、以及本批在 `/tmp/b10052/fix/` 用 `target/debug/zetac --dump-mir` 实拍到的
+形状（存 `/tmp/b10052/fix/mir_probe.txt`）。夹具落在临时目录、目录名逐次会变 ⇒ 断言取**路径尾部**
+（`ends_with`）而不是整串路径。
+
+第一版还写过"每个 item 恰好几格"的断言，实测 `m_a` 是 3 格不是 2 格（模块体除 `PATH_A` 外
+`who()` 的返回表达式也进同一 item），这种按槽数刻的断言与缺陷无关、只随实现搬家 ⇒ 换成按
+在册 item 名点名的 `>= 1`，条数那格删掉。
+
+### 变异矩阵（四臂，还原源＝`git show HEAD:src/middle/resolver/resolver.rs`）
+
+脚本 `/tmp/b10052/mutate.py`。那条插入语句在文件里出现两次（`:4166`、`:4382`），所以消歧按
+"插入文本＋各自后面紧跟的那一行"拼：先断言插入文本出现 2 次，再断言带 A 后缀、带 B 后缀的上下文各
+出现 1 次，接线锚 `.with_py_module_paths(...)` 出现 1 次。每臂断言"变异后 md5 不等于还原态"，
+每臂日志里确认 `Compiling zetac` 真的重编了（1/1 次）。HEAD 那颗 `resolver.rs` md5
+`e841c2206fe81514fe57895e73991edf`，四臂跑完复验回到同值。
+
+- **M1 只撤 `:4166` 那处插入＝76 条一字不变**（阴性，`/tmp/b10052/arm_M1_drop_insert_4166.log`）；
+- **M2 只撤 `:4382` 那处插入＝76 条一字不变**（阴性，`arm_M2_drop_insert_4382.log`）；
+- **M3 两处一起撤＝1 failed**（`arm_M3_drop_both.log`），红点 `tests/regression_history.rs:7986:9`，
+  实值得到入口 `…/main.z`；
+- **M4 只撤 `:5317` 的接线＝1 failed**（`arm_M4_drop_wiring.log`），红点行号与实得值和 M3 一字相同。
+
+⇒ 三条结论与一条限界：① 对"正常加载"这一形，两处插入互为备份，本条对那两格是**现状锁**
+（钉住"这张表记的是模块自己的文件"），不写成分支锁；② M4 能断定"表没送到降形侧＝模块读到入口路径"；
+③ 但 M3 与 M4 红在同一条断言、同一个读数，从红点分不出坏在登记还是坏在接线——这条限界写进用例注释；
+④ 四臂都只涉及本条这 1 条，其余 75 条不变＝无连带损害。
+
+`gen.rs:4639` 的消费臂与它"查不到才退回入口路径"那半在避让面（主线在重构该文件），本批未变异。
+
+### 候选重筛（本批 609 判掉）
+
+`/tmp/b10052/screen.py` 按"来源批次没做过＋站点不在避让面＋只看标题以 `fix(` 开头的笔"筛。
+609 判掉的依据两条：它那段 `resolver.rs` 代码在当前树上已不存在；同形的"顺序"断言早就由 621 那条
+`own_init_base_call_literal_rebuilds_ctor_struct_in_layout_order`（断言 `["name","legs"]`）覆盖。
+其余在册候选按面归堆：431／597／595／457／456／455／448／434／433／430／428／427／426／425／424／
+422／419／418 落在 `src/backend/` 与 codegen 面＝避让面；466 是 `indent.rs` 的诊断行号；546 在 `pylib.rs`。
+
+### 每批检查与收尾
+
+- 套件 `cargo test --test regression_history`＝**76 passed; 0 failed**（改前 75，本批 +1 条），
+  记录笔后现复跑三遍 0.79／0.67／0.65 秒，三遍读数逐字相同。
+- 内部单元测试 `cargo test -p zetac --lib`＝145 passed；编译零错误。
+- 本批零 `src/` 净改动 ⇒ 被测件 `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10`
+  与 10050／10051 同一颗；按 2026-10-03 的测试节奏，抽样窗口这一格不重跑（先证同一颗，再下该结论）。
+- 收尾核对：`resolver.rs` md5 回到 `e841c2206fe81514fe57895e73991edf`＝`git show HEAD:` 同值；
+  本车道在制面（`src/error_codes.rs`、`src/frontend/parser/expr.rs`、`src/frontend/parser/top_level.rs`、
+  `worktree.md` 与两枚未跟踪夹具 `t562`／`t563`）一字未动、未暂存。
+- 不并主树（`cleanup..bootstrap`＝419 条）：与 10047–10051 同一裁决。
+
+### 经验（本批新增三条）
+
+1. **登记型缺陷的变异要按"撤单处 → 撤全部 → 撤接线"三档排**，只测撤接线那档会把"登记"和"接线"
+   两条链记成一条；只测撤单处那档会得到两个阴性读数、误判成"这段代码没被覆盖"。三档跑完才能写出
+   "现状锁／分支锁"这个区分。
+2. **候选批次先核对代码仍在册，再照台账行号建臂**：609 的站点在当前树已不存在，同形断言另有覆盖。
+   核对办法＝`git show <来源笔>` 取当时改的文本，再在现树里找同一段。
+3. **按槽数刻的断言先实测再写**：`m_a` 那一 item 实测 3 格（模块体两条＋被 `who()` 用的返回表达式一条），
+   与缺陷无关的计数断言只会随实现搬家。改成"在册 item 点名 ≥1 格＋逐格尾串"后，四臂读数与结论不变。
+
+### 收尾
+
+- 代码笔 `60e7b36a`；记录笔随后。
+- 滞留：代码笔后 `bootstrap..cleanup`＝**67**（记录笔后 +1）、`cleanup..bootstrap`＝**419**
+  （主树 HEAD `77f3ba26`＝批次 985 补录笔）。
+- 下一批回 #20005 节奏；候选站点按本批重筛剩下的面：`src/frontend/parser/pattern.rs` 其余笔、
+  `src/middle/ctfe/` 其余文件、`pylib.rs`（546）。只看 `fix(` 开头的笔＋站点不在避让面＋先 `git show`
+  核对该代码仍在册＋先证该趟有调用方。

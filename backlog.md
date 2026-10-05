@@ -987,6 +987,30 @@
 >   `4834eca3`／batch 982）、`cleanup..bootstrap`＝407。十批界的全局逐个用例上次跑在 10030，已欠 20 批，
 >   排在下一批开工第一步。
 
+> - 批次 10052（代码 `60e7b36a`）＝来源批次 415（`6b0dc13a`，2026-09-25，`__file__` 该是每个模块
+>   自己的路径）做成进程内单元测试（#20005 第四十批）。站点＝`src/middle/resolver/resolver.rs` 的
+>   `load_user_python_module`（现 `:4106`）里登记"模块名 → 来源文件"的两处插入（`:4166` 在标记用户模块
+>   之后、`:4382` 在函数尾）＋交给降形侧的接线（`:5317` `.with_py_module_paths(...)`）；消费点在避让面
+>   （`src/middle/mir/gen.rs:4639`，主线在重构该文件，本批未变异）。新增
+>   `file_dunder_reads_each_modules_own_path_not_the_entry_path`（`#[test]` 在 `tests/regression_history.rs:7894`，
+>   红点断言 `:7986`）＝三个夹具文件走 `lower_multi`，逐 item 收 `MirExpr::StringLit` 里以 `.z` 结尾的槽，
+>   四条断言＝item 点名 ≥1 格／每格尾串等于自己模块的文件／模块段不得出现入口 `main.z`／每格型是 `Str`。
+>   临时目录名逐次会变 ⇒ 取路径尾部不取整串。套件 75→**76 passed**，复跑三遍 0.79／0.67／0.65 秒。
+>   四臂（还原源 `git show HEAD:resolver.rs`，HEAD md5 `e841c2206fe81514fe57895e73991edf`）：
+>   **M1 只撤 `:4166`＝76 条一字不变（阴性）；M2 只撤 `:4382`＝同样一字不变（阴性）；M3 两处一起撤＝
+>   1 failed；M4 只撤接线＝1 failed，红点与实得值（入口 `…/main.z`）与 M3 一字相同** ⇒ 对"正常加载"这一形
+>   两处插入互为备份，本条写成**现状锁**；M3／M4 同断言同读数＝从红点分不出坏在登记还是坏在接线，这条限界
+>   写进用例注释。四臂其余 75 条不变＝无连带损害，`cargo test -p zetac --lib` 145/145。
+>   两处未锁（照实测写）＝① 消费臂"查不到才退回入口路径"那半在避让面未变异；② `:4166` 唯一独占的形状＝
+>   同一文件的第二个拼写走别名提前返回（现 `:4182`），那条路线上被别名的模块名不产生自己的 `__file__`
+>   读数，本批没打成红＝未证。运行期打印值仍归 `tests/python_style/t453_file_per_module.z`。
+>   候选重筛：609 判掉（那段 `resolver.rs` 代码在本树已不存在，同形顺序断言已由 621 那条覆盖）；
+>   431／597／595／457／456／455／448／434／433／430／428／427／426／425／424／422／419／418 在
+>   `src/backend/` 与 codegen 面＝避让面，466＝`indent.rs` 诊断行号，546＝`pylib.rs`。
+>   本批零 `src/` 净改动 ⇒ 被测件 `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与
+>   10050／10051 同一颗，抽样窗口这一格按 2026-10-03 节奏不重跑。滞留：代码笔后 `bootstrap..cleanup`＝67、
+>   `cleanup..bootstrap`＝419（主树 HEAD `77f3ba26`）。
+
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；
