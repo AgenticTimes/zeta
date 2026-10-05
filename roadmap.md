@@ -8880,7 +8880,7 @@ Python 的「没有注解」在这个 parser 里写成 `ret == "()"`（不是空
   `___closure__backend_datasrc_split_factors__load_split_factors__0` 链接失败），
   **末段不能全数字**（arity 剥离会重命名引用而不重命名定义 ⇒ 第 2 次尝试
   `___closure_closure_load_split_factors_cf3b8248_0_37b76d63` 链接失败）；
-  故序号在前、`_c<哈希>` 收尾，裸名相同但模块不同的父作用域靠 fnv 哈希区分；
+  故序号在前、`_c86e38704` 收尾，裸名相同但模块不同的父作用域靠 fnv 哈希区分；
 - 撞名不再静默：`thread_local MINTED` 登记表，同名被两个作用域铸出时打
   `warning: [W2001] … minted by two scopes`；
 - 子 MirGen 继承 `closure_ns = 本闭包名`、`closure_seq = 0`。
@@ -31079,7 +31079,7 @@ M3 实跑仍 61 条一字不变（阴性），原因是"构造自己所在的类
 
 **车道分歧**：开批第一步实测 `cleanup..bootstrap`＝336（主树领先本车道，并树归主树侧，本车道只推
 `agentic cleanup`）；三笔代码笔落地后实测 `bootstrap..cleanup`＝38，本记录笔落地后收尾＝39、
-`cleanup..bootstrap`＝340（10038 收尾 35 ＋ 本批四笔＝39；逐笔 `git merge-base --is-ancestor <哈希> bootstrap`
+`cleanup..bootstrap`＝340（10038 收尾 35 ＋ 本批四笔＝39；逐笔 `git merge-base --is-ancestor 86e38704 bootstrap`
 查得本批四笔与 10038 四笔都还没被主树并走）。
 
 **来源批次**：169（`8383988f`，2026-09-20，"fix(py-a): batch 169 — `-> dict` + `json.loads` 的返回类型；
@@ -32781,3 +32781,29 @@ python_style 47/47、official 23/23（chronic 1 不计红）、语料 40/40
 **余量（在册）**：读回已删除名应 NameError（env_get 缺名现返 0）；
 函数本地 del 真删除（V1 no-op）；NoneValue over-claim 的推断层修；
 提案②④与①全表覆盖（见批 990/992 各节排序）。
+
+## 批次 997（2026-10-05）：提案①全表覆盖——注册表生成签名表 310 项，W0912 元数核对全覆盖
+
+**方法**：批 991 的手写 15 项 curated 表扩不成覆盖面，改走生成器——
+gen_from_registry.py 增 --emit-sigtable，F/W/X（decl=1）全量产出
+signature_table_gen.rs；lookup 未命中 curated 落生成段。配套修：
+
+1. **W0912 `_N` 逐参重载回退**：C 侧为多参形态提供 `{name}_{argc}`
+   兄弟符号（get_or_declare_function 的同名解析惯例），降低层实发
+   元数与注册表基型不符时按后缀兄弟名对表——py_os_makedirs（1 参
+   基型）的 2 参调用由此对上 py_os_makedirs_2。
+2. **全覆盖咬出的注册表/C 漂移逐条对勘修掉**（诊断期 W0912 降级为
+   告警收全清单后批量修，修完恢复 panic）：13 条 X 重载条目（C 均有
+   真身，注册表从未列出）＋C 补缺三枚（py_dt_timedelta_2/py_dt_
+   from_str_2 占位、py_logger_debug_n 8 槽变参版）。
+3. **MIR 变参 logger 臂补 debug**：变参臂原收 info/warning/error，
+   `log.debug(fmt, *8)` 的 9 参直落 2 参固定版——debug 进臂（8 槽）。
+
+**验证**：panic 态语料 40/40 满数；七金用例全绿（math.pow 1024.0
+走注册表 F64 路径）；库 268/268；门禁窗口 7 rc=0——差分 284/284、
+python_style 46/46（t63_thread_args_multi 经 threading_thread_new_2
+注册后 PASS——全覆盖顺手修活的又一条在册红）、official 27/27、语料
+40/40。提交 `86e38704`。
+
+**提案①至此核心三段齐**：15 项 curated＋310 项生成段＋W0911/W0912
+双层核对。余量：keyfn 桥实参值类别核对（位模式槽消歧专项）。
