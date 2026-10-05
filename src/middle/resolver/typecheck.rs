@@ -378,7 +378,10 @@ impl Resolver {
         let mut ctx = crate::middle::resolver::new_resolver::InferContext::new();
         match ctx.infer(node) {
             Ok(t) => t,
-            Err(_) => self.infer_unified(node),
+            // 批 1006：原 Err 分支自调 infer_unified（971 段 3 笔误，
+            // 新轨报 Err 即无限递归；实拍未触发仅因现役形状新轨全 Ok）。
+            // 改回落旧轨 infer_type，双轨合一语义恢复原意。
+            Err(_) => self.infer_type(node),
         }
     }
 
