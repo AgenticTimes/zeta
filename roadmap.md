@@ -30089,3 +30089,26 @@ i64 数组＋非内建 keyfn（ki=x*x）探针：max=3 ✓ min=-1 ✓ 与 CPytho
 单态化）即为此场景修复：ki 的副本（参数注解 f64）体 x*x 为 f64 乘。
 f64 场景（b962/b967）保持。库 254/254、全量差分 2845/2845、
 python_style 479/0。函数值轴全部场景交付完成。
+
+## 批次 982 终版定档（2026-10-05 llldb 实拍）：keyfn i64 路径调用约定错配
+
+lldb 实拍（b978v：max(xs,key=kf) 场景，kf=x*0.5 带 -> float 注解）：
+1. py_max_key 的 keyfn 参数 = **kf 体地址**（x1=0x100000770 ✓ FuncAddr
+   链正确——批 966"恒等实体"定位修正：地址有效，错在**调用约定**）
+2. kf 体调用约定：**x0 传参（int 3）/ x0 返回（int 3）**——kf 的
+   LLVM 签名 = i64(i64)（参数 untyped ⇒ 槽 I64；**实测返回 x0=3 非
+   1.5** ⇒ codegen 给 kf 生成 **i64 返回**（浮点结果槽未进返回寄存器）
+3. key_is_f64=1 的 C 调用（double(*)(double)，v0 传 f64 值）与
+   kf 实际签名 i64(i64) **形参/返回寄存器双双错配** ⇒ kf 收 v0 残留
+   ⇒ 返回垃圾 ⇒ max/min 错序
+
+修复路径（独立排期，二选一）：
+- A. gen 侧：keyfn 的 float 注解 ⇒ codegen 生成 **double 返回**
+  （infer_fn_return_type 对 float 注解的覆盖）——配合 key_is_f64
+  的 double(*)(int64_t) 调用（形参 i64 位模式 ✓）
+- B. 副本单态化：特化副本强制 i64 返回＋C 侧读位模式 memcpy double
+  比较（批 975 memcpy 往返版本）
+
+当前行为：max/min(xs, key=kf) = 2/-1（CPython 3/-1）——max 错
+（f64 域比较 i64 返回的垃圾）、min 恰对（-1 的 i64 位模式负值碰巧
+最小）。i64 全程恒等假象（keyfn 读 x0 形参残留=v 原值）。
