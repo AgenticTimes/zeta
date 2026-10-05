@@ -12,6 +12,8 @@ mod signature_table_gen;
 mod codegen_keyfn;
 // 批 1002（轴 D 第二刀续）：控制流族（If/While/For）迁出。
 mod codegen_stmt_flow;
+// 批 1003/1004（轴 D 第二刀续）：Call 臂三终态子族＋11 个自含子族迁出。
+mod codegen_call_arm;
 // @generated — regenerate via `python3 tools/gen_from_registry.py --emit`
 mod runtime_decls_registry;
 // @generated — regenerate via `python3 tools/gen_from_registry.py --emit-core`

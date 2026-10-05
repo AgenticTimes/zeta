@@ -256,4 +256,275 @@ impl<'ctx> LLVMCodegen<'ctx> {
         false
     }
 
+
+    pub(super) fn emit_join(&mut self, func: &str, args: &[u32], dest: u32, exprs: &HashMap<u32, MirExpr>) -> bool {
+        let _ = (func, args, dest, exprs);
+        if func == "join" && args.len() == 1 {
+                    let handle = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                    let join_fn = self
+                        .module
+                        .get_function("join")
+                        .unwrap_or_else(|| {
+                            let ft = self
+                                .i64_type
+                                .fn_type(&[self.i64_type.into()], false);
+                            self.module
+                                .add_function("join", ft, Some(Linkage::External))
+                        });
+                    let ret = self
+                        .builder
+                        .build_call(join_fn, &[handle.into()], "join_call")
+                        .unwrap();
+                    let val = Self::call_site_to_basic_value(ret)
+                        .unwrap_or(self.i64_type.const_zero().into());
+                    let alloca = *self.locals.get(&dest).unwrap();
+                    self.builder.build_store(alloca, val).unwrap();
+                    return true;
+        }
+        false
+    }
+
+    pub(super) fn emit_call_i64(&mut self, func: &str, args: &[u32], dest: u32, exprs: &HashMap<u32, MirExpr>) -> bool {
+        let _ = (func, args, dest, exprs);
+        if func == "call_i64" && args.len() >= 2 {
+                    // call_i64(func_ptr: i64, arg: i64) -> i64
+                    // For now, use identity workaround
+                    let arg_val = self.gen_expr_safe(&args[1], exprs);
+                    let dest_alloca = *self.locals.get(&dest).unwrap();
+                    self.builder.build_store(dest_alloca, arg_val).unwrap();
+                    return true;
+        }
+        false
+    }
+
+    pub(super) fn emit_norm_index(&mut self, func: &str, args: &[u32], dest: u32, exprs: &HashMap<u32, MirExpr>) -> bool {
+        let _ = (func, args, dest, exprs);
+        if func == "norm_index" && args.len() == 2 {
+                    let len_v = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                    let idx_v = self.gen_expr_safe(&args[1], exprs).into_int_value();
+                    let zero = self.i64_type.const_zero();
+                    let is_neg = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::SLT,
+                            idx_v,
+                            zero,
+                            "normidx_lt",
+                        )
+                        .unwrap();
+                    let fixed = self.builder.build_int_add(len_v, idx_v, "normidx_add").unwrap();
+                    let result: inkwell::values::BasicValueEnum<'ctx> = self
+                        .builder
+                        .build_select(is_neg, fixed, idx_v, "normidx")
+                        .unwrap()
+                        .into();
+                    let dest_alloca = *self.locals.get(&dest).unwrap();
+                    self.builder.build_store(dest_alloca, result).unwrap();
+                    return true;
+        }
+        false
+    }
+
+    pub(super) fn emit_ptr_read(&mut self, func: &str, args: &[u32], dest: u32, exprs: &HashMap<u32, MirExpr>) -> bool {
+        let _ = (func, args, dest, exprs);
+        if func == "read" && args.len() == 1 {
+                        let ptr = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                        let pt = self.context.ptr_type(inkwell::AddressSpace::default());
+                        let elem_ptr = self.builder.build_int_to_ptr(ptr, pt, "rd_ptr").unwrap();
+                        let elem_i64 = self
+                            .builder
+                            .build_pointer_cast(elem_ptr, pt, "rd_i64")
+                            .unwrap();
+                        let val = self
+                            .builder
+                            .build_load(self.i64_type, elem_i64, "rd_val")
+                            .unwrap();
+                        let alloca = *self.locals.get(&dest).unwrap();
+                        self.builder.build_store(alloca, val).unwrap();
+                        return true;
+        }
+        false
+    }
+
+    pub(super) fn emit_ptr_write(&mut self, func: &str, args: &[u32], dest: u32, exprs: &HashMap<u32, MirExpr>) -> bool {
+        let _ = (func, args, dest, exprs);
+        if func == "write" && args.len() == 2 {
+                        let ptr = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                        let val = self.gen_expr_safe(&args[1], exprs).into_int_value();
+                        let pt = self.context.ptr_type(inkwell::AddressSpace::default());
+                        let elem_ptr = self.builder.build_int_to_ptr(ptr, pt, "wr_ptr").unwrap();
+                        let elem_i64 = self
+                            .builder
+                            .build_pointer_cast(elem_ptr, pt, "wr_i64")
+                            .unwrap();
+                        self.builder.build_store(elem_i64, val).unwrap();
+                        if let Some(&alloca) = self.locals.get(&dest) {
+                            self.builder
+                                .build_store(alloca, self.i64_type.const_int(0, false))
+                                .unwrap();
+                        }
+                        return true;
+        }
+        false
+    }
+
+    pub(super) fn emit_is_null(&mut self, func: &str, args: &[u32], dest: u32, exprs: &HashMap<u32, MirExpr>) -> bool {
+        let _ = (func, args, dest, exprs);
+        if func == "is_null" && args.len() == 1 {
+                        let ptr = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                        let is_null = self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                ptr,
+                                self.i64_type.const_int(0, false),
+                                "is_null",
+                            )
+                            .unwrap();
+                        let result = self
+                            .builder
+                            .build_int_z_extend(is_null, self.i64_type, "is_null_ext")
+                            .unwrap();
+                        let alloca = *self.locals.get(&dest).unwrap();
+                        self.builder.build_store(alloca, result).unwrap();
+                        return true;
+        }
+        false
+    }
+
+    pub(super) fn emit_ptr_offset(&mut self, func: &str, args: &[u32], dest: u32, type_args: &[crate::middle::types::Type], exprs: &HashMap<u32, MirExpr>) -> bool {
+        let _ = (func, args, dest, type_args, exprs);
+        if func == "offset" && args.len() == 2 {
+                        let ptr = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                        let count = self.gen_expr_safe(&args[1], exprs).into_int_value();
+                        let elem_size: u64 = if let Some(ty) = type_args.first() {
+                            match ty {
+                                crate::middle::types::Type::I8 | crate::middle::types::Type::U8 => {
+                                    1
+                                }
+                                crate::middle::types::Type::I16
+                                | crate::middle::types::Type::U16 => 2,
+                                crate::middle::types::Type::I32
+                                | crate::middle::types::Type::U32
+                                | crate::middle::types::Type::F32 => 4,
+                                _ => 8,
+                            }
+                        } else {
+                            8
+                        };
+                        let byte_offset = self
+                            .builder
+                            .build_int_mul(
+                                count,
+                                self.i64_type.const_int(elem_size, false),
+                                "byte_off",
+                            )
+                            .unwrap();
+                        let ptr = self
+                            .builder
+                            .build_int_add(ptr, byte_offset, "off_ptr")
+                            .unwrap();
+                        let alloca = *self.locals.get(&dest).unwrap();
+                        self.builder.build_store(alloca, ptr).unwrap();
+                        return true;
+        }
+        false
+    }
+
+    pub(super) fn emit_replace(&mut self, func: &str, args: &[u32], dest: u32, exprs: &HashMap<u32, MirExpr>) -> bool {
+        let _ = (func, args, dest, exprs);
+        if func == "replace" && args.len() == 2 {
+                        let ptr = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                        let new_val = self.gen_expr_safe(&args[1], exprs);
+                        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                        let elem_ptr = self
+                            .builder
+                            .build_int_to_ptr(ptr, ptr_type, "rpl_ptr")
+                            .unwrap();
+                        let elem_i64 = self
+                            .builder
+                            .build_pointer_cast(elem_ptr, ptr_type, "rpl_i64")
+                            .unwrap();
+                        let old_val = self
+                            .builder
+                            .build_load(self.i64_type, elem_i64, "old")
+                            .unwrap();
+                        self.builder
+                            .build_store(elem_i64, new_val.into_int_value())
+                            .unwrap();
+                        let alloca = *self.locals.get(&dest).unwrap();
+                        self.builder.build_store(alloca, old_val).unwrap();
+                        return true;
+        }
+        false
+    }
+
+    pub(super) fn emit_syscall(&mut self, func: &str, args: &[u32], dest: u32, exprs: &HashMap<u32, MirExpr>) -> bool {
+        let _ = (func, args, dest, exprs);
+        if func == "syscall" || func.starts_with("syscall_") {
+                        let num_val = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                        let mut all_args: Vec<BasicMetadataValueEnum> = vec![num_val.into()];
+                        for i in 1..args.len() {
+                            let val = self.gen_expr_safe(&args[i], exprs).into_int_value();
+                            all_args.push(val.into());
+                        }
+                        while all_args.len() < 7 {
+                            all_args.push(self.i64_type.const_zero().into());
+                        }
+                        let fn_type = self.i64_type.fn_type(
+                            &[self.i64_type.into(); 7],
+                            false,
+                        );
+                        let callee = self.module.add_function(
+                            "zenith_syscall", fn_type, None,
+                        );
+                        let call = self.builder
+                            .build_call(callee, &all_args, "syscall")
+                            .unwrap();
+                        let basic_val = Self::call_site_to_basic_value(call)
+                            .unwrap_or(self.i64_type.const_zero().into());
+                        let alloca = *self.locals.get(&dest).unwrap();
+                        self.builder.build_store(alloca, basic_val).unwrap();
+                        return true;
+        }
+        false
+    }
+
+    pub(super) fn emit_capy_store(&mut self, func: &str, args: &[u32], dest: u32, exprs: &HashMap<u32, MirExpr>) -> bool {
+        let _ = (func, args, dest, exprs);
+        if func == "capy_store_i64" || func == "capy_store_i64_2" {
+                        if args.len() >= 2 {
+                            let addr = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                            let val = self.gen_expr_safe(&args[1], exprs).into_int_value();
+                            let ptr = self
+                                .builder
+                                .build_int_to_ptr(addr, self.ptr_type, "store_ptr")
+                                .unwrap();
+                            self.builder.build_store(ptr, val).unwrap();
+                        }
+                        let alloca = *self.locals.get(&dest).unwrap();
+                        self.builder
+                            .build_store(alloca, self.i64_type.const_zero())
+                            .unwrap();
+                        return true;
+        }
+        false
+    }
+
+    pub(super) fn emit_capy_load(&mut self, func: &str, args: &[u32], dest: u32, exprs: &HashMap<u32, MirExpr>) -> bool {
+        let _ = (func, args, dest, exprs);
+        if func == "capy_load_i64" || func == "capy_load_i64_1" {
+                        let addr = self.gen_expr_safe(&args[0], exprs).into_int_value();
+                        let ptr = self
+                            .builder
+                            .build_int_to_ptr(addr, self.ptr_type, "load_ptr")
+                            .unwrap();
+                        let val = self.builder.build_load(self.i64_type, ptr, "loaded").unwrap();
+                        let alloca = *self.locals.get(&dest).unwrap();
+                        self.builder.build_store(alloca, val).unwrap();
+                        return true;
+        }
+        false
+    }
+
 }
