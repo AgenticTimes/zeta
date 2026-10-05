@@ -7749,3 +7749,71 @@ mod tests_pin_semantics {
         );
     }
 }
+
+#[cfg(test)]
+mod tests_dual_track {
+    //! 批次 969（双轨合一第一段审计）：旧 infer_type 与新 InferContext
+    //! 的同 AST 对照——等价形状锁定为回归锁，差异形状打印为收敛清单。
+
+    use crate::frontend::ast::AstNode;
+    use super::super::new_resolver::InferContext;
+    use super::Resolver;
+    use crate::middle::types::Type;
+
+    fn old_track(r: &Resolver, node: &AstNode) -> String {
+        format!("{:?}", r.infer_type(node))
+    }
+
+    fn new_track(node: &AstNode) -> String {
+        let mut ctx = InferContext::new();
+        match ctx.infer(node) {
+            Ok(t) => format!("{:?}", t),
+            Err(e) => format!("ERR({})", e),
+        }
+    }
+
+    /// 字面量形状：双轨等价（收敛基线，批 969）。
+    #[test]
+    fn dual_track_literals_equivalent() {
+        let r = Resolver::new();
+        let cases: Vec<(&str, AstNode)> = vec![
+            ("int", AstNode::Lit(1)),
+            ("float", AstNode::FloatLit("1.5".into())),
+            ("str", AstNode::StringLit("s".into())),
+            ("bool", AstNode::Bool(true)),
+        ];
+        for (name, node) in &cases {
+            let (o, n) = (old_track(&r, node), new_track(node));
+            assert_eq!(
+                normalize(&o),
+                normalize(&n),
+                "双轨差异（{}）: old={} new={}",
+                name,
+                o,
+                n
+            );
+        }
+    }
+
+    fn normalize(s: &str) -> String {
+        // Debug 形式的型名归一（I64/i64、Str/str、F64/f64、Bool/bool）
+        s.replace("Type::", "")
+            .replace("I64", "i64")
+            .replace("F64", "f64")
+            .replace("Str", "str")
+            .replace("Bool", "bool")
+            .to_lowercase()
+    }
+
+    /// 差异清单探针（批 969）：容器/表达式形状的双轨输出对照。
+    #[test]
+    fn dual_track_container_diff_report() {
+        let r = Resolver::new();
+        let arr = AstNode::ArrayLit(vec![AstNode::Lit(1), AstNode::Lit(2)]);
+        println!(
+            "DIFF ArrayLit: old={} new={}",
+            old_track(&r, &arr),
+            new_track(&arr)
+        );
+    }
+}

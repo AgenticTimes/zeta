@@ -389,6 +389,9 @@ impl Resolver {
         }
         match node {
             AstNode::Lit(_) => Type::I64,
+            // 批次 969（双轨合一第一段）：FloatLit 曾落 I64 兜底——
+            // 借助 borrow 检查的 float 表达式型全错（双轨对照实证）
+            AstNode::FloatLit(_) => Type::F64,
             AstNode::StringLit(_) => Type::Str,
             AstNode::FString(_) => Type::Str,
             AstNode::Var(_) => Type::I64,
