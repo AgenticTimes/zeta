@@ -7,6 +7,7 @@
 
 mod call_set;
 mod r#gen_decl;
+mod stmt_return;
 mod call_assert;
 mod call_builtin;
 mod call_logging;
@@ -2017,62 +2018,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 self.lower_assign_op(op, target, value);
             }
             AstNode::Return(inner) => {
-                // `return (a, b)` must hand back a HEAP array. A StackArray is an
-                // alloca: the pointer dies with the frame, so the caller's
-                // `stack_array_get` destructuring read dead stack (measured:
-                // `return d.iloc[0:0], 7` → `len(o)` SEGV). Build a real
-                // `[cap|len]` array — `stack_array_get(arr, i)` reads
-                // `((i64*)arr)[i]`, i.e. exactly the dynarray DATA pointer that
-                // `zeta_dynarray_new`/`vec_push` hand out.
-                let mut val = if let AstNode::Tuple(items) = &**inner {
-                    let mut vals = Vec::with_capacity(items.len());
-                    let mut tys = Vec::with_capacity(items.len());
-                    for it in items {
-                        let vid = self.lower_expr(it);
-                        tys.push(self.type_map.get(&vid).cloned().unwrap_or_else(Type::slot_fallback));
-                        vals.push(vid);
-                    }
-                    let cap = self.next_id_with_lit(items.len() as i64);
-                    let h = self.next_id();
-                    self.stmts.push(MirStmt::Call {
-                        func: "zeta_dynarray_new".to_string(),
-                        args: vec![cap],
-                        dest: h,
-                        type_args: vec![],
-                    });
-                    self.exprs.insert(h, MirExpr::Var(h));
-                    self.type_map.insert(
-                        h,
-                        Type::DynamicArray(Box::new(tys.first().cloned().unwrap_or_else(Type::slot_fallback))),
-                    );
-                    // Mirror the ArrayLit lowering EXACTLY: every push targets the
-                    // ORIGINAL handle `h` (the runtime grows it and returns a new
-                    // data pointer, which the codegen tracks via the call's dest),
-                    // and each dest is registered as its own Var. Chaining the
-                    // handles (`cur = pushed`) made `vec_push` receive an
-                    // unregistered slot and SEGV inside `vec_push + 24`.
-                    for v in vals {
-                        let sink = self.next_id();
-                        self.stmts.push(MirStmt::Call {
-                            func: "vec_push".to_string(),
-                            args: vec![h, v],
-                            dest: sink,
-                            type_args: vec![],
-                        });
-                        self.exprs.insert(sink, MirExpr::Var(sink));
-                        self.type_map.insert(
-                            sink,
-                            Type::DynamicArray(Box::new(tys.first().cloned().unwrap_or_else(Type::slot_fallback))),
-                        );
-                    }
-                    self.type_map.insert(h, Type::Tuple(tys));
-                    self.tuple_slots.insert(h);
-                    h
-                } else {
-                    self.lower_expr(inner)
-                };
-                let val = self.coerce_return_val(val);
-                self.stmts.push(MirStmt::Return { val });
+                // 批次 951：Return 臂迁入 gen/stmt_return.rs（869 法）。
+                self.lower_return_stmt(inner);
             }
             AstNode::BinaryOp { op, left, right } => {
                 let _ = self.lower_expr(&AstNode::BinaryOp {
