@@ -8012,3 +8012,122 @@ print(PATH_P)
         "每个 `.z` 字面量槽的型别该是 `Str`，实得 {kind_reading}"
     );
 }
+
+/// 来源批次 238（`ada68ca6`，2026-09-20）＝返回注解里的库类名带模块限定（`pd.DataFrame`）时，
+/// 签名交到降形侧之前要**递归**去掉限定名；同族的顶层那一形记在批次 237（`928addac`），
+/// registry 标签那一支（`-> Path` → `PyPath`）记在批次 232。
+/// 症状（缺陷记录原文）：`remove_extreme_return_bars` 标 `-> tuple[pd.DataFrame, int]`，
+/// 解构出来的帧仍带限定名 ⇒ `len(out.columns)` 编成 map 取值（恒 0）、`out["a"]` 变成对
+/// 结构体句柄做 map 下标（实测段错误）；237 那一形是顶层 `-> pd.DataFrame`（实测
+/// `ParquetCache.load()` 返回 892 行／0 列，`df.itertuples` 崩）；232 那一形是 `-> Path`
+/// （方法派发去找 `Path::open`，而不是运行期里的 `PyPath` 入口）。
+/// 站点＝`src/middle/resolver/resolver.rs` 的 `shim_class_normalize`（现 `:5091`）＋它唯一的
+/// 外部调用点（现 `:5167`，`lower_to_mir` 建返回型表那一处）；标签改写另有一支在调用点内
+/// （现 `:5155-5156`）。
+/// 期望值来源＝缺陷记录＋本批 `target/debug/zetac --dump-mir` 的实拍（`/tmp/b10053/fix/`）；
+/// 首趟进程内跑九格读数与该实拍一字相同（见 roadmap 批次 10053 节）。
+///
+/// 覆盖面分工（七组变异各撤一处，还原源＝`git show HEAD:src/middle/resolver/resolver.rs`，
+/// HEAD md5 `e841c2206fe81514fe57895e73991edf`；逐组变红的格以实测为准，清单在 roadmap）：
+/// - 撤 `Named` 的参数递归（`:5103` 改成 `args.clone()`）⇒ 三个 `tuple[...]` 格变红，
+///   独占第 1 格（`tuple[pd.DataFrame, int]`＝238 原形）。
+/// - 名单改窄成只 `"DataFrame"`（`:5098`）⇒ 四格变红（tuple 的 Series／GroupBy＋顶层
+///   Series／GroupBy），独占顶层 `pd.Series`、顶层 `pd.GroupBy` 两格。
+/// - 撤调用点（`:5167` 直取 `Type::Named(n, args)`）⇒ 六格变红，独占顶层 `pd.DataFrame`
+///   （第 2 格＝237 原形）。
+/// - 撤调用点的标签改写（`:5156` 的 `Some(tag)` 支不改名）⇒ 只有第 5 格（`Path`）变红＝232 原形。
+///   ⇒ 这四组各红各的格＝独立覆盖；红格数还能分出"坏在接线（六格）还是坏在某一支（三／四／一格）"。
+/// - 三组阴性（撤掉后 77 条读数一字不变）：`Type::Tuple` 递归那一行（`:5110`）——这九格的
+///   `tuple[...]` 注解在 `Type` 里是 `Named("tuple", ts)` 而不是 `Type::Tuple` 变体，那一支走不到；
+///   `Type::DynamicArray` 递归那一行（`:5105`）——这九形里 `DynamicArray` 只作顶层型出现，而顶层
+///   `list[...]`／`vec[...]` 在进本函数之前就被 `:5146-5151` 改写掉；`shim_class_normalize` 内的
+///   标签提前返回（`:5094-5095`）——`Path` 的改写由调用点 `:5155-5156` 承担（＝上一组变红那格）。
+///   这三支各由什么注解形状打到＝未证。
+///
+/// 边界（本条不覆盖）：`gen.rs` 的解构分支（批次 238 的第②处修复＝同时接受
+/// `Named("tuple", ts)`）在避开面（主线在重构该文件），本批未变异；第 6 格
+/// （`map[str, pd.DataFrame]` 的值型仍带限定）与第 7 格（顶层 `list[pd.DataFrame]` 的元素仍带
+/// 限定）按 HEAD 实测写成**现状锁**＝钉住"这两形今天没被改写"，不是钉住"它们该被改写"；
+/// 七组变异下这两格读数都不变（连撤调用点也不变＝这两格的型不来自上面那条改写链），
+/// 其取值来源未证。运行期数值（列数为 0、段错误）仍归 `tests/python_style` 与差分。
+#[test]
+fn shim_class_qualifiers_in_return_annotations_strip_recursively_at_callsite() {
+    // (格名, 夹具, 期望的目的槽型串)
+    const CASES: &[(&str, &str, &str)] = &[
+        (
+            "tuple 里带限定名（238 原形）",
+            "def f1(k: str) -> tuple[pd.DataFrame, int]:\n    return 0, 1\n\nsig = f1(\"a\")\nprint(sig)\n",
+            "Named(\"tuple\", [Named(\"DataFrame\", []), I64])",
+        ),
+        (
+            "顶层限定名（237 那一形）",
+            "def f2(k: str) -> pd.DataFrame:\n    return 0\n\nfr = f2(\"a\")\nprint(fr)\n",
+            "Named(\"DataFrame\", [])",
+        ),
+        (
+            "tuple 里的 GroupBy",
+            "def f3(k: str) -> tuple[pd.GroupBy, int]:\n    return 0, 1\n\ngb = f3(\"a\")\nprint(gb)\n",
+            "Named(\"tuple\", [Named(\"GroupBy\", []), I64])",
+        ),
+        (
+            "tuple 里的 Series",
+            "def f4(k: str) -> tuple[pd.Series, int]:\n    return 0, 1\n\nss = f4(\"a\")\nprint(ss)\n",
+            "Named(\"tuple\", [Named(\"Series\", []), I64])",
+        ),
+        (
+            "registry 标签支（232）",
+            "def f6(k: str) -> Path:\n    return 0\n\npp = f6(\"a\")\nprint(pp)\n",
+            "Named(\"PyPath\", [])",
+        ),
+        (
+            "map 的值型带限定名（现状锁：今天不归一）",
+            "def f5(k: str) -> map[str, pd.DataFrame]:\n    return 0\n\nmp = f5(\"a\")\nprint(mp)\n",
+            "Named(\"map\", [Str, Named(\"pd.DataFrame\", [])])",
+        ),
+        (
+            "顶层 list 的元素带限定名（现状锁：调用点前一支已改写）",
+            "def f7(k: str) -> list[pd.DataFrame]:\n    return 0\n\nls = f7(\"a\")\nprint(ls)\n",
+            "DynamicArray(Named(\"pd.DataFrame\", []))",
+        ),
+        (
+            "顶层 pd.Series（窄名单臂的独占格）",
+            "def f8(k: str) -> pd.Series:\n    return 0\n\nse = f8(\"a\")\nprint(se)\n",
+            "Named(\"Series\", [])",
+        ),
+        (
+            "顶层 pd.GroupBy（窄名单臂的独占格）",
+            "def f9(k: str) -> pd.GroupBy:\n    return 0\n\ngy = f9(\"a\")\nprint(gy)\n",
+            "Named(\"GroupBy\", [])",
+        ),
+    ];
+
+    let mut got: Vec<(&str, String)> = Vec::new();
+    for (cell, src, _want) in CASES {
+        let mirs = lower_all(src);
+        let f = mir(&mirs, "main");
+        // 读数＝main 段 type_map 里提到这四个类名的型串（去重＋排序）。
+        let mut names: Vec<String> = f
+            .type_map
+            .values()
+            .map(|t| format!("{:?}", t))
+            .filter(|s| {
+                s.contains("DataFrame") || s.contains("Series") || s.contains("GroupBy")
+                    || s.contains("Path")
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        got.push((cell, names.join(" | ")));
+    }
+
+    let want: Vec<(&str, String)> = CASES
+        .iter()
+        .map(|(c, _, w)| (*c, (*w).to_string()))
+        .collect();
+    assert_eq!(
+        want,
+        got,
+        "返回注解里的库类名限定归位九格（批次 238／237／232）——\
+         读回带 `pd.` 的＝去壳支没走到；读回 `Path` 而非 `PyPath`＝registry 标签支没了"
+    );
+}
