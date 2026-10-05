@@ -29914,3 +29914,16 @@ impl 解析）与 UnifiedTypeCheck 相关 impl 交织于同区间。已回滚
 链断裂）。精确删除 288 行（typecheck_new.rs 702→412），NewTypeCheck
 impl/unified 分发/infer_type 回落实现完整保留。验证：库 249/249、
 全量差分 2845/2845、python_style 479/0、探针保持。
+
+## 批次 974（2026-10-05）：函数值轴交付完成——keyfn 发射切换全链直通
+
+发现：批 967 的三断点修复（name mangle/FuncAddr 早分支/C 位模式
+往返）已覆盖全部断点，发射切换与 FuncAddr 兜底在 967 提交内本已
+存在——本批仅补 codegen FuncAddr 兜底特例（__ZKEYF64_ 前缀副本
+声明签名 double(f64)，与真体一致实体复用）。
+
+终态（与 CPython 逐字对齐）：max/min(xs, key=ka) 用户 keyfn
+f64 通道单态化副本 -3.5/2.5；max(xs, key=abs) 内建特化 -3.5；
+b947 保持。库 249/249、全量差分 2845/2845、python_style 479/0。
+函数值轴交付完成：内建特化 ✓、用户 keyfn 单态化 ✓、比较域分派
+通路 ✓。无注解 keyfn 返回域静态判定登记（参数通道已就位）。
