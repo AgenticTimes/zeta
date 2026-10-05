@@ -6437,3 +6437,297 @@ print(xs.strftime("%Y"))
         r#"成员调用的改绑只在"拼写唯一＋非桩＋arity 相合＋不在名单"四条都过时发生（批次 432）。读回 strftime_2／stem_1／read_1 这类"原名＋后缀、槽型 I64"＝这一条臂没被走到或判据被撤，链接期才会静默选目标（431 记录：strftime 落到 libSystem，第一参数当输出缓冲区，t467 改前运行 rc=139）；第 4、5、6 格读回 py_dt_strftime／py_json_values／py_mp_pool_close＝arity／名单／唯一性三条判据中的一条被放宽，那是拿猜测换绑定；第 7 格读回 py_dt_strftime＝逐元素表被本臂抢走。"#
     );
 }
+
+/// 批次 290 的读形工具：把"守卫 `if __name__ == "__main__":` 在 MIR 里剩下的形状"
+/// 读成一个短串。
+///
+/// 认的形＝`MirStmt::If` 且 `cond` 是 `BinaryOp`、两端至少有一个字符串字面量
+/// （`__name__` 在降形时已经换成当前模块名的字面量，所以 root 里两端都是 `"__main__"`，
+/// 被 import 的模块里一端是模块名）。
+///
+/// 每处匹配读成 `cmp(算子) 左 右 | then=[…] | else=[…]`（`then`/`else`＝该分支里的调用符号），
+/// 末尾统一附上 `守卫外调用=[…]`＝**不在任何匹配守卫子树里**的调用符号。
+/// 批次 290 的症状正是"守卫被解析期剥掉"⇒那一趟守卫数变 0、被调入口从 `then` 挪进守卫之外。
+/// 一处都没匹配到读成 `没有守卫形比较`；非字面量的一端读成 `非字面量(Var)` 这类短标签
+/// （不写槽号，免得把表达式编号当成期望值）。
+fn guard_shapes(mirs: &[Mir], func: &str) -> String {
+    fn tag(e: Option<&MirExpr>) -> String {
+        match e {
+            Some(MirExpr::StringLit(s)) => format!("\"{s}\""),
+            Some(MirExpr::Var(_)) => "非字面量(Var)".to_string(),
+            Some(MirExpr::IntLit(_)) => "非字面量(IntLit)".to_string(),
+            Some(_) => "非字面量(其他)".to_string(),
+            None => "缺表达式".to_string(),
+        }
+    }
+    fn js(v: &[String]) -> String {
+        if v.is_empty() {
+            "[]".to_string()
+        } else {
+            format!("[{}]", v.join(", "))
+        }
+    }
+    fn calls_in(stmts: &[MirStmt], out: &mut Vec<String>) {
+        for s in stmts {
+            match s {
+                MirStmt::Call { func, .. } | MirStmt::VoidCall { func, .. } => out.push(func.clone()),
+                MirStmt::If { then, else_, .. } => {
+                    calls_in(then, out);
+                    calls_in(else_, out);
+                }
+                MirStmt::For { body, else_body, .. } | MirStmt::While { body, else_body, .. } => {
+                    calls_in(body, out);
+                    calls_in(else_body, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    /// 收集"守卫形"的 If（连同 `cond` 的表达式编号，供 `calls_outside` 整块排除）
+    fn guards(
+        stmts: &[MirStmt],
+        m: &Mir,
+        out: &mut Vec<(u32, String, Vec<String>, Vec<String>)>,
+    ) {
+        for s in stmts {
+            match s {
+                MirStmt::If { cond, then, else_, .. } => {
+                    let cmp = match m.exprs.get(cond) {
+                        Some(MirExpr::BinaryOp { op, left, right }) => {
+                            let l = m.exprs.get(left);
+                            let r = m.exprs.get(right);
+                            let string_end = matches!(l, Some(MirExpr::StringLit(_)))
+                                || matches!(r, Some(MirExpr::StringLit(_)));
+                            if string_end {
+                                Some(format!("cmp({op}) {} {}", tag(l), tag(r)))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(c) = cmp {
+                        let mut t = Vec::new();
+                        calls_in(then, &mut t);
+                        let mut e = Vec::new();
+                        calls_in(else_, &mut e);
+                        t.sort();
+                        e.sort();
+                        out.push((*cond, c, t, e));
+                    }
+                    guards(then, m, out);
+                    guards(else_, m, out);
+                }
+                MirStmt::For { body, else_body, .. } | MirStmt::While { body, else_body, .. } => {
+                    guards(body, m, out);
+                    guards(else_body, m, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    /// 守卫之外的调用（匹配到的守卫子树整块跳过）
+    fn calls_outside(stmts: &[MirStmt], skip: &[u32], out: &mut Vec<String>) {
+        for s in stmts {
+            match s {
+                MirStmt::Call { func, .. } | MirStmt::VoidCall { func, .. } => {
+                    out.push(func.clone())
+                }
+                MirStmt::If { cond, then, else_, .. } => {
+                    if skip.contains(cond) {
+                        continue;
+                    }
+                    calls_outside(then, skip, out);
+                    calls_outside(else_, skip, out);
+                }
+                MirStmt::For { body, else_body, .. } | MirStmt::While { body, else_body, .. } => {
+                    calls_outside(body, skip, out);
+                    calls_outside(else_body, skip, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let m = mir(mirs, func);
+    let mut gs: Vec<(u32, String, Vec<String>, Vec<String>)> = Vec::new();
+    guards(&m.stmts, m, &mut gs);
+    gs.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| js(&a.2).cmp(&js(&b.2))));
+    let skip: Vec<u32> = gs.iter().map(|g| g.0).collect();
+    let mut outside = Vec::new();
+    calls_outside(&m.stmts, &skip, &mut outside);
+    outside.sort();
+    let body = if gs.is_empty() {
+        "没有守卫形比较".to_string()
+    } else {
+        gs.iter()
+            .map(|g| format!("{} | then={} | else={}", g.1, js(&g.2), js(&g.3)))
+            .collect::<Vec<_>>()
+            .join(" + ")
+    };
+    format!("{body} || 守卫外调用={}", js(&outside))
+}
+
+#[test]
+fn main_guard_survives_parse_so_import_does_not_run_entry() {
+    // ===== 批次 290：`if __name__ == "__main__":` 不再在解析期被剥掉 =====
+    //
+    // 来源批次 290（`aa137140`，2026-09-21，`git merge-base --is-ancestor` 已验在本树）。
+    // 症状（290 记录 §起点）：`parse_if_tail` 对**任何**模块的守卫都无条件解包，于是
+    // `import pkg.mod` 会把那个模块的入口（含 argparse 垃圾参数）在导入时整个跑一遍——
+    // 实测 import `jq_wufu_local` 直接跑起一场假回测，随后 SIGSEGV。
+    // 站点（可改面）＝`src/frontend/parser/stmt.rs:391-398`（修复就是把那段解包代码删掉，
+    // 所以本批变异＝按记录把解包臂按子形装回去）；另一半在 `parser/top_level.rs`
+    // （`PARSING_IMPORTED_MODULE`＋模块语句载体 `__init`）与 `src/middle/resolver/*`
+    // ＝本车道在制面／主线回避面⇒只观测、不变异。
+    //
+    // 期望值来源＝缺陷记录（290 §修复：If 原样进 AST，MIR 里 `__name__` 降成当前模块名的字面量）
+    // ＋本树 `--dump-mir` 逐形实拍（`/tmp/b10045/mir_*.HEAD.txt`，仓根运行）。
+    // CPython 侧不适用：锁的是"守卫 If 在不在 MIR 里、被调入口在不在守卫子树内"，不是打印值。
+    //
+    // 覆盖分工（前置 CLI 矩阵 5 臂 × 13 形状，`/tmp/b10045/matrix_cli_out.txt`）：
+    //   · 装回"只认左 `__name__` 右字面量"＝红正写那一族；
+    //   · 装回"只认左字面量 右 `__name__`"＝红倒写那一族；两臂坏格集互补且不相交＝独立覆盖；
+    //   · 装回"两种都认"＝上面两者的并集（算防放松，不算第三条独立覆盖）；
+    //   · 装回"只认 `is`"＝13 形状零差异＝**阴性**，原因实测＝`is` 在更上游已归一成 `==`
+    //     （`if __name__ is "__main__"` 的 MIR cond 读回 `cmp(==)`）⇒旧解包条件里
+    //     `op == "is"` 那一半无可命中的项。
+    //   · 对照格（任何臂都不该动）＝左端是普通变量的比较、`!=` 守卫。
+    let mut hits: Vec<(String, String)> = Vec::new();
+
+    let root_canonical = "def go() -> i64:\n    print(\"GUARD_BODY\")\n    return 1\n\nif __name__ == \"__main__\":\n    go()\n";
+    let root_reversed = "def go() -> i64:\n    print(\"REV\")\n    return 1\n\nif \"__main__\" == __name__:\n    go()\n";
+    let root_is = "def go() -> i64:\n    print(\"ISOP\")\n    return 1\n\nif __name__ is \"__main__\":\n    go()\n";
+    let root_ne = "def go() -> i64:\n    return 1\n\nif __name__ != \"__main__\":\n    go()\n";
+    let root_else = "def go() -> i64:\n    return 1\n\nif __name__ == \"__main__\":\n    print(\"THEN\")\nelse:\n    print(\"ELSE\")\n";
+    let nested = "def wrapper() -> i64:\n    if __name__ == \"__main__\":\n        print(\"NESTED\")\n    return 2\n\nwrapper()\n";
+    let plain_var = "who = \"abc\"\nif who == \"__main__\":\n    print(\"OTHER\")\n";
+
+    for (label, src, func) in [
+        ("root 正写守卫", root_canonical, "main"),
+        ("root 倒写守卫", root_reversed, "main"),
+        ("root 的 `is` 拼写", root_is, "main"),
+        ("root 的 `!=` 守卫（对照）", root_ne, "main"),
+        ("root 带 else 的守卫", root_else, "main"),
+        ("函数体内的守卫", nested, "wrapper"),
+        ("左端是普通变量的比较（对照）", plain_var, "main"),
+    ] {
+        hits.push((label.to_string(), guard_shapes(&lower_all(src), func)));
+    }
+
+    // 多模块：入口只 import `hi`，夹具各写一种守卫。
+    // 症状格＝被 import 模块的模块体载体——入口调用必须只在守卫子树里，不许出现在守卫之外。
+    let body_fixture = |guard: &str| -> String {
+        format!(
+            "def hi() -> i64:\n    return 3\n\ndef main() -> i64:\n    print(\"ENTRY_BODY\")\n    return 0\n\n{guard}"
+        )
+    };
+    let wrapper_fixture = "def hi() -> i64:\n    return 3\n\ndef wrapper() -> i64:\n    if __name__ == \"__main__\":\n        print(\"NESTED\")\n    return 4\n\nwrapper()\n";
+
+    for (label, module, src, func) in [
+        (
+            "import 正写守卫（症状格）",
+            "guard_a",
+            body_fixture("if __name__ == \"__main__\":\n    main()\n"),
+            "guard_a__init",
+        ),
+        (
+            "import 倒写守卫",
+            "guard_b",
+            body_fixture("if \"__main__\" == __name__:\n    main()\n"),
+            "guard_b__init",
+        ),
+        (
+            "import 的 `is` 拼写",
+            "guard_c",
+            body_fixture("if __name__ is \"__main__\":\n    main()\n"),
+            "guard_c__init",
+        ),
+        (
+            "import 的 `!=` 守卫（对照）",
+            "guard_d",
+            body_fixture("if __name__ != \"__main__\":\n    main()\n"),
+            "guard_d__init",
+        ),
+        (
+            "import 模块函数体内的守卫",
+            "guard_e",
+            wrapper_fixture.to_string(),
+            "guard_e__wrapper",
+        ),
+    ] {
+        let fname = format!("{module}.py");
+        let entry_src = format!(
+            "from {module} import hi\n\nprint(\"CALLER\")\nprint(hi())\n"
+        );
+        let files = [(fname.as_str(), src.as_str()), ("entry.z", entry_src.as_str())];
+        let mirs = lower_multi(&files, "entry.z");
+        hits.push((label.to_string(), guard_shapes(&mirs, func)));
+    }
+
+    let want: Vec<(String, String)> = vec![
+        // 1—5 是 root 模块：守卫都原样留在 `main` 里（正写／倒写／`is` 三形在 root 里
+        // 读回同一个串——`__name__` 在 root 就是 `"__main__"`，两端的字面量同值；
+        // 能区分这三种写的只有 AST 侧的臂，见 §覆盖分工）。
+        (
+            "root 正写守卫".to_string(),
+            "cmp(==) \"__main__\" \"__main__\" | then=[go_0] | else=[] || 守卫外调用=[]".to_string(),
+        ),
+        (
+            "root 倒写守卫".to_string(),
+            "cmp(==) \"__main__\" \"__main__\" | then=[go_0] | else=[] || 守卫外调用=[]".to_string(),
+        ),
+        (
+            "root 的 `is` 拼写".to_string(),
+            "cmp(==) \"__main__\" \"__main__\" | then=[go_0] | else=[] || 守卫外调用=[]".to_string(),
+        ),
+        (
+            "root 的 `!=` 守卫（对照）".to_string(),
+            "cmp(!=) \"__main__\" \"__main__\" | then=[go_0] | else=[] || 守卫外调用=[]".to_string(),
+        ),
+        (
+            "root 带 else 的守卫".to_string(),
+            "cmp(==) \"__main__\" \"__main__\" | then=[println_str] | else=[println_str] || 守卫外调用=[]"
+                .to_string(),
+        ),
+        // 6—7：函数体内的守卫同样不再被剥；左端是普通变量的比较不算守卫（臂都不该动它）。
+        (
+            "函数体内的守卫".to_string(),
+            "cmp(==) \"__main__\" \"__main__\" | then=[println_str] | else=[] || 守卫外调用=[]".to_string(),
+        ),
+        (
+            "左端是普通变量的比较（对照）".to_string(),
+            "cmp(==) 非字面量(Var) \"__main__\" | then=[println_str] | else=[] || 守卫外调用=[zeta_env_get, zeta_env_set, zeta_module_decl]"
+                .to_string(),
+        ),
+        // 8—12 是被 import 模块的模块体载体＝**症状格**：入口调用只许待在守卫子树里
+        // （`then=[guard_x__main]`、守卫外调用只剩模块初始化那两颗 `zeta_env_*`）。
+        // 290 修的那一趟之前，这里读回的是"没有守卫形比较＋守卫外调用里多出 `guard_x__main`"
+        // ＝导入时把别人的入口跑了一遍。
+        (
+            "import 正写守卫（症状格）".to_string(),
+            "cmp(==) \"guard_a\" \"__main__\" | then=[guard_a__main] | else=[] || 守卫外调用=[zeta_env_get, zeta_env_set]"
+                .to_string(),
+        ),
+        (
+            "import 倒写守卫".to_string(),
+            "cmp(==) \"__main__\" \"guard_b\" | then=[guard_b__main] | else=[] || 守卫外调用=[zeta_env_get, zeta_env_set]"
+                .to_string(),
+        ),
+        (
+            "import 的 `is` 拼写".to_string(),
+            "cmp(==) \"guard_c\" \"__main__\" | then=[guard_c__main] | else=[] || 守卫外调用=[zeta_env_get, zeta_env_set]"
+                .to_string(),
+        ),
+        (
+            "import 的 `!=` 守卫（对照）".to_string(),
+            "cmp(!=) \"guard_d\" \"__main__\" | then=[guard_d__main] | else=[] || 守卫外调用=[zeta_env_get, zeta_env_set]"
+                .to_string(),
+        ),
+        (
+            "import 模块函数体内的守卫".to_string(),
+            "cmp(==) \"guard_e\" \"__main__\" | then=[println_str] | else=[] || 守卫外调用=[]".to_string(),
+        ),
+    ];
+    assert_eq!(want, hits, r#"批次 290：守卫 If 必须原样留在 MIR 里，被 import 模块的入口调用只能待在守卫子树内"#);
+}
