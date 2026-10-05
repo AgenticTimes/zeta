@@ -1031,6 +1031,27 @@
 >   10021–10052 用尽），换"关键词标题＋GOOD 文件面"重筛得 18 条并取走 238；批次 159 两笔判掉（结论已由
 >   10047 的来源批次 657 那条覆盖）。下一批候选（GOOD-only 无避让面优先）＝173、171、159（`e9d29025`）、
 >   351、210。滞留：代码笔后 `bootstrap..cleanup`＝69、`cleanup..bootstrap`＝419（主树 HEAD `77f3ba26`）。
+> - 批次 10054（代码 `6c34a921`）＝来源批次 210（`92e452dc`，2026-09-20，`try/except` 的 handler 分支
+>   漏弹栈 ⇒ 下一处 `raise` 跳进失效帧，记录里是段错误）做成进程内单元测试（#20005 第四十二批），同函数
+>   另一笔（提交 `9d4f0e9f`，2026-09-18＝不能落穿的分支末尾也补弹栈 ⇒ 后端报终结符在中段、6 个语料文件
+>   编译中断）一并入格。站点＝`src/frontend/parser/stmt.rs` 的 `parse_try_stmt`：handler 无条件弹栈
+>   （现 `:1561`）、体分支带守卫弹栈（现 `:1541-1543`）、`except ... as e` 取错误值（现 `:1545-1556`），
+>   以及 `branch_falls_through`（现 `:1252`）的嵌套块递归臂（现 `:1257`）与 `if/else` 臂（现 `:1264-1270`）。
+>   新增 `try_except_frame_pops_appear_in_both_branches_with_handler_first`（`#[test]` 在
+>   `tests/regression_history.rs:8170`，断言 `:8235:5`）＝七格一组断言，读数＝函数体里按出现顺序排出的被调
+>   符号名；期望值取自本批 `--dump-mir` 实拍且与进程内读数逐格相同。五臂各撤一处（还原源
+>   `git show HEAD:src/frontend/parser/stmt.rs`，md5 `628bf015bf66f080d4d58bf5654a2e2c`）＝撤 handler 弹栈
+>   整行红七格（独占格 3）、还原 210 改前形状红格 2/4/5/6、撤体分支守卫红格 1/2/4/5、撤块递归臂只红格 6、
+>   撤 `if/else` 臂红格 6/7（独占格 7，且既有用例 `with_body_terminators_release_the_lock_before_leaving`
+>   同红＝两条用例互证）；⇒ 五臂无阴性，M1／M2 靠格 4 的红值分形（少一次 vs 弹栈挪到 handler 体那条打印
+>   之后），M2／M3 在格 2 的红值一字相同＝该格分不出两臂。余项＝`branch_falls_through` 的 `None => true`
+>   与 `_ => true` 两支未变异（与「末条是赋值」那格作用重合，什么形状单独打到＝未证）；缺陷记录里的运行期
+>   段错误与后端报错两半不在 MIR 面 ⇒ 按 #20005 口径不进本条。套件 77→78 条全绿（连跑两遍 1.30／1.31 秒）、
+>   `cargo test -p zetac --lib` 145/145；本批零 `src/` 净改动 ⇒ 被测件 `target/release/zetac` md5
+>   `ed5227ccd29b70c4ee9ae17500926f10` 与 10050–10053 同一颗，抽样窗口这一格按 2026-10-03 节奏不重跑。
+>   候选重筛：159 判掉（改名表已由 10047 的来源批次 657 那条覆盖，见 `tests/regression_history.rs:5006`）、
+>   351＝站点在解析器在制面；剩余 173、171 未复核。滞留：代码笔后 `bootstrap..cleanup`＝71、
+>   `cleanup..bootstrap`＝421（主树 HEAD `3d203cd1`）。
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚

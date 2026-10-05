@@ -29450,3 +29450,88 @@ t405_hard_stub_aborts_loudly"`）。旧格式那行读成 `stuck=0` 而不是把
    `:8127:5`，逐格 `want`／`got` 对照才能分出独立覆盖与独占格；因此变异脚本必须把左右两侧解析成
    按格名索引的表（键＝格名，不是整段匹配文本——两侧文本本身不同，按整段配对会把变化格读成
    "未匹配"）。
+
+## 批次 10054：补历史缺陷单元测试（第四十二批，续 #20005，来源批次 210／提交 `9d4f0e9f`）
+
+代码笔 `6c34a921`（`tests/regression_history.rs` +111 行，套件 77→78 条）。本批零 `src/` 净改动。
+
+### 来源与站点
+
+两笔历史修复都在 `try/except` 的脱糖（`src/frontend/parser/stmt.rs` 的 `parse_try_stmt`）上：
+
+1. 批次 210（`92e452dc`，2026-09-20）＝handler 分支漏弹栈。脱糖原来只在「分支会落穿」时补
+   `zeta_try_end()`，于是 `except ...: return {}` 这类 handler 永不弹栈；记录里的后果是下一处
+   `raise` 的 longjmp 跳进已失效的帧，表现为段错误而不是被捕获（`ParquetCache.load_metadata + 184`，
+   `t.schema.metadata` 而 `t == 0`）。修完的样子＝handler 分支无条件弹栈（现 `:1561`），且排在
+   `e = zeta_last_error()`（现 `:1545-1556`）之后、handler 体（现 `:1562`）之前。
+2. 提交 `9d4f0e9f`（2026-09-18）＝不能落穿的分支末尾也补弹栈调用 ⇒ 后端报
+   `Terminator found in the middle of a basic block`，当时 6 个语料文件整编译中断。修完的样子＝
+   体分支的弹栈带 `branch_falls_through` 守卫（现 `:1541-1543`），该函数（现 `:1252`）里有
+   嵌套块递归臂（现 `:1257`）与 `if/else` 臂（现 `:1264-1270`）两处递归。
+
+取哪一层结论＝MIR。运行期段错误那一半与后端报错那一半在进程外（按 #20005 口径不进本条），
+本条只钉「`zeta_try_end` 出现在哪几处、排在什么位置」。
+
+### 用例形状（七格，读数＝该函数体里按出现顺序排出的被调符号名）
+
+期望值全部取自本批 `./target/debug/zetac --dump-mir` 实拍（`/tmp/b10054/fix/dump2_g*.txt`），
+与进程内 `lower_all` 的读数逐格相同（第一遍跑套件即 78 条全绿）。
+
+1. 体与 handler 都落穿 ⇒ `zeta_try_enter`、`zeta_try_setjmp`、`zeta_try_end`、`zeta_try_end`、`println_i64`
+2. handler 直接 `return`（210 原形）⇒ `enter`、`setjmp`、`end`、`end`
+3. 体直接 `return`（该臂不该弹栈）⇒ `enter`、`setjmp`、`end`
+4. `except E as e` ⇒ `enter`、`setjmp`、`end`、`zeta_last_error`、`end`、`println_i64`、`println_i64`
+   （弹栈在取错误值之后、handler 体那条打印之前）
+5. 嵌套 try，内层 handler 直接 `return` ⇒ 两对 `enter`/`setjmp` 后四次 `end`
+6. 嵌套 try，内层两臂都 `return`（外层体不落穿）⇒ 两对 `enter`/`setjmp` 后两次 `end`
+7. 体内 `if/else` 两臂都 `return`（该臂不落穿）⇒ `enter`、`setjmp`、`end`
+
+### 五臂变异矩阵（还原源 `git show HEAD:src/frontend/parser/stmt.rs`，HEAD md5
+`628bf015bf66f080d4d58bf5654a2e2c`；逐臂 `Compiling zetac` 已确认，日志 `/tmp/b10054/arm_*.log`）
+
+| 臂 | 撤掉哪一处 | 红格 | 独占格 |
+|---|---|---|---|
+| M1 | `:1561` handler 弹栈整行 | 1–7 全红 | 格 3 |
+| M2 | 还原 210 改前形状（弹栈挪回 handler 体之后并带落穿守卫） | 2、4、5、6 | 无（与 M1/M3 共用） |
+| M3 | `:1541-1543` 体分支守卫弹栈 | 1、2、4、5 | 无（与 M1/M2 共用） |
+| M4 | `:1257` 嵌套块递归臂 | 只格 6 | 与 M5 共用格 6 |
+| M5 | `:1264-1270` `if/else` 臂 | 6、7 | 格 7 |
+
+- 五臂各撤一处都出红 ⇒ 站点四处（handler 弹栈、体分支弹栈、块递归臂、`if/else` 臂）都有可见覆盖，
+  且没有一臂是阴性。
+- M1 与 M2 的红格有交集，但格 4 的红值不同形：M1＝少一次 `end`，M2＝
+  `zeta_last_error`、`println_i64`、`end`、`println_i64`（弹栈仍在、位置挪后）。顺序断言把两臂分开。
+- M2 与 M3 在格 2 的红值一字相同（`enter`、`setjmp`、`end`）⇒ 这一格分不出「整行撤掉」与
+  「撤体分支守卫」，结论只能按格点名，不写「整条链都红」。
+- M4 的红值是格 6 多一次 `end`（7 项 vs 6 项）＝撤掉嵌套块递归臂后，外层体（一个不落穿的块）
+  被当成落穿。M5 除本条外还红在既有用例
+  `with_body_terminators_release_the_lock_before_leaving` ⇒ 同一臂由两条不同用例互证。
+- 余项：`branch_falls_through` 的 `None => true`（空体）与 `_ => true`（末条是普通语句）两支
+  本批未变异；这两支在七格里的作用与「末条是赋值」那一格重合，什么形状才单独打到＝未证。
+
+### 每批检查与收尾
+
+- 套件 `cargo test --test regression_history`＝78 条全绿（1.31 秒，连跑两遍同读数）。
+- 变异还原核对：`src/frontend/parser/stmt.rs` md5 回到 `628bf015bf66f080d4d58bf5654a2e2c`，
+  `git status --porcelain` 对该文件 0 行。
+- 本批零 `src/` 改动 ⇒ 被测件 `target/release/zetac` md5
+  `ed5227ccd29b70c4ee9ae17500926f10` 与 10050／10051／10052／10053 同一颗，抽样窗口这一格按
+  2026-10-03 节奏不重跑。
+- 站点选择记录：上一批候选表（173、171、159 追加笔 `e9d29025`、351、210）取走 210。159 判掉的实测理由
+  ＝结论已由 10047 的来源批次 657 那条覆盖（`tests/regression_history.rs:5006` 已断同一张改名表）；
+  351 的站点在本批避让面（解析器在制）。剩余候选＝173、171 两笔，本批未复核（上一会话判掉时未留实测
+  理由），取站前先实测站点是否仍在册、结论落在哪一层。
+- 在制面交集检查：本树另有 `src/frontend/parser/expr.rs`、`src/frontend/parser/top_level.rs`、
+  `src/error_codes.rs` 的未提交改动，本批七格夹具不含 lambda 形参与「调用结果直接取字段」两形，
+  与那两处在制面无交集；但用例是在含在制改动的树上取的读数，这一条按未证记录（并树后需复跑一次）。
+
+### 经验（可复用）
+
+1. 同一函数里几处「顺序不同但符号集相同」的站点，用按出现顺序排出的符号名当读数最省：
+   一条断言同时钉住「少一次」「多一次」「位置挪后」三种坏法，M1/M2/M3 三臂的红值各不相同。
+2. 递归臂的可达性要一格一格试出来：格 6 只用嵌套 try 就打到了块递归臂，而最初设想的
+   「嵌套块里末条是 `return`」形状（`with` 套在 `try` 体里）实测把 `with` 自己的 try 帧也带进读数，
+   分不出是哪个臂的作用，遂弃用（`/tmp/b10054/fix/g8.z` 留档）。
+3. 变异矩阵跑完后只改注释不会让红格清单失效（CASES 与断言文本未动），这条在本批是
+   按「先跑臂、后回填注释」的顺序做的，回填后套件复跑仍 78 条全绿。
+
