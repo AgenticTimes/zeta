@@ -28848,3 +28848,91 @@ CLI 前置（`--dump-mir` 走 debug 二进制，`/tmp/b10047/cli_HEAD/`、`/tmp/
 `cargo test -p zetac --lib` 145/145；`cargo test -p zetac --test regression_history` 72/72（改注释之后
 复跑仍 72/72）；`cargo build` 0 错误。`src/middle/ctfe/evaluator.rs` 变异后已还原，md5
 `4b5c4b0afa2b09d42b226df36f158359` ＝ HEAD 那颗。代码笔后 `bootstrap..cleanup`＝55、`cleanup..bootstrap`＝385。
+
+## 批次 10048：补历史缺陷单元测试（第三十七批，续 #20005，来源批次 413）
+
+### 来源与站点
+
+来源批次 413（`0a5b7949`，2026-09-25）：解析带容器注解的赋值（`UA: dict[str, Any] = {}` 这一族）时，
+要把注解留在左值上（包成 `TypeAnnotatedPattern`）。丢掉注解的后果是 MIR 里这个槽只能由 `{}` 自己
+推出 `map<i64, i64>`，之后每次写入都把值型钉成"那一次写的东西"的类型；413 拍到的真实事故是
+`c["df"] = df` 把值型钉成 DataFrame 后，`len(c["lst"])` 拿列表句柄去走 `DataFrame::__len__`＝段错误。
+
+本批站点＝`src/frontend/parser/stmt.rs:454-463`：`dict_like`（把注解认成容器的那次匹配）＋
+`if (class_like || dict_like) && matches!(&lhs, AstNode::Var(_))` 这道守卫。413 在该提交里另有
+`top_level.rs` 的 `bare_bound_name`、`resolver.rs`、`gen.rs` 的 `annotation_dict_kv` /
+`apply_dict_annotation` 几处改动，全在车道在制或主线重构的面上（`top_level.rs`、`gen.rs`、
+`src/middle/resolver/`），本批按绕开约定一律不取，只钉 `stmt.rs` 这一处。
+
+### 用例形状
+
+新增一条 `#[test] fn container_annotation_keeps_key_and_value_type_in_mir_type_map`
+（`tests/regression_history.rs:7270`，断言在 `:7304`，读数函数 `dict_slot_reading` 在 `:7225`，
+用例头说明从 `:7181` 起）＝11 格。每格读数三列，全部取自同一段 MIR：
+`map槽=[槽号:类型串,…]`（该段 `type_map` 里 `Named("map", …)` 的槽，按槽号升序，类型串为 `Debug` 去空格）、
+`其他槽数`（该段 `type_map` 其余槽个数）、`map被调=[…]`（该段 `map_`／`zeta_map`／`py_map` 开头的被调符号，
+按语句顺序、不去重）。
+
+期望值来源＝同批 `target/debug/zetac --dump-mir` 对 21 个形状的实测读数（在仓库根跑，按
+`== MIR 段名 ==` 切段后取同样三列），不是抄编译输出。`target/release/zetac` 未参与本轮，
+在册那颗 md5 不变。
+
+### 前置矩阵与变异矩阵
+
+CLI 前置矩阵（四臂 × 21 形状，每臂前先 `git show HEAD:` 还原并断言"变异后 md5 不等于还原态"）
+＋进程内矩阵（四臂 × 本套件 73 条，红点逐条点名）：
+
+- **M1 守卫改成只留 `class_like`**（＝容器注解不再保留，回到 413 修前的行为）＝
+  CLI 侧 21 形状里 5 个变（`t1_no_write`／`t4_symptom_any`／`t5_module_read_from_fn`／
+  `t6_in_fn_no_write`／`t8_int_key_no_write`），进程内＝**只红格 1、2、4、5、6**，
+  红值全是"注解里的值型被 `{}` 或写侧顶掉"（格 2 的 `PyDynamic`→`DynamicArray(I64)`＝413
+  那条事故链在编译期的形状）。其余 6 格不红（写侧能补回值型的对照格、以及下面三条未修现状格）。
+- **M2 拼写表只留 `"map"`**（去掉 `"dict" | "Dict"`）＝CLI 21 形状与进程内 11 格的实际读数和 M1
+  **逐字节相同**（`cmp -s` 过）⇒ 与 M1 是同一条链，只算防放松，不算第二条独立覆盖。原因实测＝站点
+  收到的注解串用临时 `eprintln!` 实拍过（不改逻辑、跑完还原并重建）＝`dict<str, int>`、
+  `Dict<str, int>`、`map<str, int>` 三种串都原样到达，`parse_type` 只把方括号归一成尖括号，
+  所以 `"dict" | "Dict"` 两项是活的；两臂同形的真正原因＝21 个形状里只有 s4 用 `map[...]` 拼写，
+  而 s4 是"写侧也能补回值型"的对照形状（撤臂读数不变），受 M1 影响的那 5 个形状全用 `dict[...]`／
+  `dict[str, Any]` 拼写。
+- **M3 删掉 `.trim_start_matches("typing.")`**＝21 形状与进程内全不变＝阴性。原因实测＝同一段临时
+  `eprintln!` 在 `typing.Dict[str, int]` 那格零输出＝这条语句根本没走到 `stmt.rs` 这一支，
+  注解落空发生在更上游（格 10 已把这一现状钉住：该段只有一个来自 `{}` 的 `map[I64,I64]` 槽）。
+- **M4 守卫改成只留 `dict_like`**（类形注解不再保留）＝21 形状与进程内全不变＝阴性。原因实测＝
+  这把尺子只看 `map` 槽，类形注解的效果体现在 `Named("Box")` 那类槽上；s8 那格（`b: Box | None = None`）
+  的 `type_map` 里根本没有 `map` 槽，所以格 11 只算佐证、不算对 M4 的覆盖。
+- 四臂下 `cargo test -p zetac --lib` 均 145/145，套件其余 72 条一字不变＝本条用例无连带损害。
+
+### 仍未锁与按设计弃权
+
+1. `typing.Dict[...]` 的注解在哪一步落空未查（临时 `eprintln!` 已证明不在 `stmt.rs` 这一支）；
+2. 函数体里读模块级字典时（格 3）该段只有 `Named("map",[])`＝键型与值型双双丢失，四臂下读数都不变
+   （本条只当现状锁），损害面未测；
+3. 嵌套值注解 `dict[str, dict[str, int]]`（格 9）退化成 `map[I64,I64]`——站点实拍收到的串是
+   `dict<str, dict<str, int>>`（注解确实进了左值），退化发生在下游 `src/middle/mir/gen.rs:4011-4026`
+   的 `annotation_dict_kv`，其注释（`gen.rs:4014`）明写"不认识的名字（类、嵌套容器）整个注解返回
+   `None`"是有意的，以免半应用＝按设计弃权，不是未修缺陷；`gen.rs` 属主线在重构的面，本批不取该站点。
+4. 运行期实际打出的值不锁（#20005 只收落在 MIR 上的结论）；413 那条段错误只在运行期，本条钉的是它的
+   编译期形状。413 自带的运行期夹具 `tests/python_style/t449_dict_any_value_not_pinned.z` 仍在册（本批实测
+   文件存在），与格 2 是编译期／运行期两面，互不替代。
+
+①② 按登记规则记在 #20005 余项内，不另占任务号。
+
+### 落盘分两笔
+
+代码笔 `9f35420d`＝新增用例（+126 行）；更正笔 `181ccee1`（+22／−15）＝把 M2、M3 两条阴性的解释换成
+上面的实拍归因，并把 M1 的红值写准（键型与值型双双退回 `I64` 占位，只有格 2 保留键型）。
+
+②③ 按登记规则记在 #20005 余项内，不另占任务号。
+
+### 每批检查与滞留
+
+`cargo test -p zetac --lib` 145/145；`cargo test -p zetac --test regression_history` 73/73（更正笔后复跑仍 73/73）；
+`cargo build` 0 错误。`src/frontend/parser/stmt.rs` 变异与临时插桩后都已还原，md5
+`628bf015bf66f080d4d58bf5654a2e2c`＝HEAD 那颗；`touch` 后强制重建，debug 二进制里已无临时代码
+（`--dump-mir` 的 stderr 里 `B413DBG` 计数 0）。`target/release/zetac` md5
+`ed5227ccd29b70c4ee9ae17500926f10` 未变（零 `src/` 净改动 ⇒ 免补抽样窗口）。
+代码笔后 `bootstrap..cleanup`＝57、`cleanup..bootstrap`＝392（主树仍在推进，本树内容滞后；
+并树仍不做，原因与 10047 同一条：车道有三个 `src/` 在制文件，且并树会换掉在册那颗二进制）。
+下批（10049）第一步照旧＝读 `cleanup..bootstrap` 决定是否并主树；站点筛选要换新的文件面，
+413 这一族剩下的臂（`bare_bound_name`、`annotation_dict_kv`／`apply_dict_annotation`、resolver）
+全在车道在制或主线重构的面上，本车道不可取。

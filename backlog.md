@@ -910,6 +910,27 @@
 >   `evaluator.rs` 还原后 md5 `4b5c4b0afa2b09d42b226df36f158359`＝HEAD。滞留：代码笔后
 >   `bootstrap..cleanup`＝55、`cleanup..bootstrap`＝385。
 >
+> - 批次 10048（代码 `9f35420d`＋更正笔 `181ccee1`）＝来源批次 413（`0a5b7949`，2026-09-25，
+>   "`dict[...]` 注解不再被丢弃"）的解析侧那一处——`tests/regression_history.rs:7270` 一条 11 格
+>   用例（读数函数 `dict_slot_reading` 在 `:7225`），站点＝`src/frontend/parser/stmt.rs:454-463`
+>   （`dict_like` 那次匹配＋`(class_like || dict_like)` 守卫）。413 其余三处站点（`top_level.rs` 的
+>   `bare_bound_name`、`gen.rs` 的 `annotation_dict_kv`／`apply_dict_annotation`、`resolver.rs`）
+>   全在车道在制或主线重构的面上，本批不取。读数三列＝该段 `type_map` 里 `Named("map",…)` 的槽清单
+>   （槽号升序、`Debug` 去空格）、其余槽数、`map_`／`zeta_map`／`py_map` 被调清单；期望值取同批
+>   `target/debug/zetac --dump-mir` 对 21 个形状的实测（`release` 那颗未参与，md5 不变）。
+>   进程内矩阵：M1 守卫只留 `class_like`＝**只红格 1、2、4、5、6**（键型与值型双双退回 `{}` 自己的
+>   `I64` 占位；格 2 保留键型、值型被最后一次写入钉成 `DynamicArray(I64)`＝413 事故链的编译期形状）；
+>   M2 拼写表只留 `"map"` 的实际读数与 M1 **逐字节相同**＝同一条链、只算防放松（临时 `eprintln!` 实拍＝
+>   `dict<str, int>`／`Dict<str, int>`／`map<str, int>` 三种串都原样到达站点，两臂同形是因为 21 形状里
+>   唯一用 `map[...]` 拼写的 s4 属"写侧也能补回值型"的对照格）；M3 删 `typing.` 剥离、M4 守卫只留
+>   `dict_like` 全不变＝阴性（M3 的实测原因＝`typing.Dict` 那格站点零输出，落空发生在这支之前；
+>   M4＝这把尺子只看 `map` 槽，看不到 `Named("Box")` 那类槽）。两条未锁进 #20005 余项：①`typing.Dict`
+>   落空的上游位置未查；②函数体读模块级字典时该段只有 `Named("map",[])`＝键型与值型双双丢失、四臂下
+>   不变只算现状锁。嵌套值注解那格经站点实拍＋读 `gen.rs:4011-4026` 注释改成"按设计弃权"（该处明写
+>   嵌套容器整个注解返回 `None` 是故意的，以免半应用），不登未修。四臂下 `--lib` 均 145/145、
+>   套件其余 72 条一字不变。零 `src/` 净改动（插桩已还原，`stmt.rs` md5＝HEAD `628bf015…`）⇒
+>   免补抽样窗口。滞留：代码笔后 `bootstrap..cleanup`＝57、`cleanup..bootstrap`＝392。
+>
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；
