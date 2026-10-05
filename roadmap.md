@@ -32753,3 +32753,31 @@ checker 从唯一可推断返回 claim 的空值标记，804/806/808 系；运�
 **验证**：**语料 40/40 满数（754 以来首次）**；六金用例全绿；库
 268/268；门禁窗口 5：差分 285/285、python_style 51/51、official
 17/17（链接缺绑定 0）、语料 40/40 满数。
+
+## 批次 996（2026-10-05）：NoneValue 动态成员分发＋numpy 三枚 shim＋del NameError 运行期检查
+
+批 995 门槛修复暴露的两个语料缺口与 cleanup 车道的差分绊线一并收口
+（`0b48dc8f`）：
+
+1. **NoneValue 动态成员分发**（call_dispatch Named 臂前置守卫）：
+   NoneValue 是 checker 从"唯一可推断返回"claim 的空值标记
+   （804/806/808 系），运行期可能是任何对象——按用户结构体分发铸造
+   `<NoneValue>::member` 幽灵（jq_wufu 实拍 `_NoneValue__fund_daily`）。
+   改发 py_getattr_dynamic ＋ zeta_callN（C 蹦床，批 395 机械复用）；
+   None 运行期响亮报错。jq_wufu.py 完整链接。
+2. **numpy 三枚 shim**（registry.txt＋py_additions.c）：diff/nan_to_num
+   真实现（f64 位模式槽逐元素取放），errstate py_noop1 占位（with
+   降级恒等＋warn）。jq_wufu_daily.py 完整链接（原缺
+   numpy__diff/errstate/nan_to_num）。
+3. **del 名字目标运行期 NameError**（parser parse_del 发 __del_name__
+   标记＋MirGen 裁决＋zeta_env_del C 函数＋runtime_decls_core 声明）：
+   本地槽 V1 no-op 保持；环境名缺 ⇒ zeta_raise(1)（except 可捕获），
+   在 ⇒ 移除。差分绊线 del_undefined_var（批 10051 埋）转 match。
+
+**验证**：门禁窗口 6 rc=0——差分 284/284（del 例转绿）、
+python_style 47/47、official 23/23（chronic 1 不计红）、语料 40/40
+满数（两 jq 文件均 Compiled 级）；六金用例全绿；库 268/268。
+
+**余量（在册）**：读回已删除名应 NameError（env_get 缺名现返 0）；
+函数本地 del 真删除（V1 no-op）；NoneValue over-claim 的推断层修；
+提案②④与①全表覆盖（见批 990/992 各节排序）。
