@@ -29732,3 +29732,13 @@ annotation_elem_ty/annotation_dict_kv 迁 checker/field_ty.rs（与批 952
 （依赖 gen 状态）。gen.rs 3267→3212；累计 -83.4%。最终审计结论：
 gen.rs 剩余＝主流程＋分派＋降级核心＋gen 状态依赖辅助，迁移到边际。
 验证：库 246/246、全量差分 2845/2845、python_style 479/0。
+
+## 批次 962（2026-10-05）：用户 key 第二段（部分）——比较域分派通路
+
+- runtime：py_max_key/py_min_key 加 key_is_f64 第三参（double 域比较）
+- gen：keyfn_returns_f64 判定（注解 ret／批 813 预热）＋三处 key=
+  发射补 flag；MIR 实拍三参已发
+- 实证缺口：keyfn 本体 ABI 是 i64(i64)，函数内 f64 运算全为位模式
+  整数运算，返回值已错——比较域分派救不了；完整修复＝keyfn 按元素
+  型单态化（monomorphize 机器，数天工程维持登记）。flag=0 行为＝
+  现状零回归（全量差分 2845/2845、python_style 479/0、库 246/246）。
