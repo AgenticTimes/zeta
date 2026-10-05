@@ -32681,3 +32681,52 @@ spec_name_mints_canonical_form）；六金用例全过；门禁窗口 3：差分
 核对（需先解位模式槽消歧）；②keyfn 静态已知 ⇒ MIR 内联扫描
 （性能向，正确性已由①护栏）；④函数值签名标签（运行期兜底，
 ①的编译期核对已覆盖主路径）。
+
+## 批次 994（2026-10-05）：只有定位，零代码改动——jq_wufu 编译期 panic 的完整因果链（跨模块同名遮蔽失效）
+
+语料 38/40 的 `jq_wufu.py`（同族 `jq_wufu_daily.py`）在 codegen
+`array_get`/`stack_array_get` 臂 panic（FloatValue 强转 IntValue，
+worktree.md:508 在册、行号 4183→4236→4381 漂移）。本批逐环定位：
+
+**触发形**（jq_wufu.py:670-676）：
+```
+def premium_blocks_entry(context, code):
+    ...
+    premium, _, _ = get_premium_rate(code, prev_date)   # 2 参调用
+    if premium is None: ...
+    return premium > g.premium_threshold
+```
+
+**因果链**（每环有实拍证据）：
+1. **同名撞车**：jq_wufu.py 本地定义 `get_premium_rate(code, date)`
+   （2 参，返回 3 元组），同时 shim 链（jq_shim.py:32
+   `from backend.strategy.wufu_backend import ...`）把
+   wufu_trading.py 的 `get_premium_rate(4 参, -> float | None)`
+   带进程序——两个模块同名函数。
+2. **模块归属错**：codegen 发射期探针（已撤）实拍 panic 发生在
+   `premium_blocks_entry` 的 `stack_array_get(arg0=12, mir_ty=F64)`。
+   该函数体内裸调用 `get_premium_rate` 被改名表
+   （resolver.rs:4701 `module_renames_for`）改写成限定名
+   `backend_strategy_wufu_trading__get_premium_rate`——即
+   `py_mangled_to_module` 把 jq_wufu 本地的 `premium_blocks_entry`
+   归到了 wufu_trading 模块名下（两模块都定义同名
+   `premium_blocks_entry`，裸名键碰撞，后注册者覆盖前者）。
+3. **改写连带**：改名表驱动整个函数体的裸调用改写 ⇒ 2 参调用被绑
+   到 4 参版，MIR 实拍**实参被 0 填充成 4 个**
+   （args: [code, prev_date, IntLit 0, IntLit 0]）。
+4. **注解污染**：结果槽按 wufu_trading 版的 `-> float | None` 注解
+   定型 F64（MIR type_map: `12: F64`）。
+5. **崩点**：`premium, _, _` 元组解包降为三次 `stack_array_get(12,…)`
+   ——在 f64 alloca 上取址 ⇒ FloatValue panic（编译期，rc=101）。
+
+**修法方向（下批，跨模块归属专项）**：归属写入点
+（resolver.rs:1690/:4586/:4631）必须保证——根文件（`__main__`）本地
+def 的模块归属不被 import 链上的同名 def 覆盖；或改名表构造时对
+"本模块 own names 与归属模块不一致"的函数拒绝出表（宁可不改写，
+落回本地裸名绑定——Python 语义里模块本地 def 永远遮蔽 import）。
+改动面是全语料共享的改名表 ⇒ 必须带位移 A/B 与 40 文件语料全跑。
+旁证：本文件还有 123 个闭包/lambda 与 `py_sorted_key` 路径在同名
+机制上，修归属表时一并对勘 `sorted(lambda key)` 形状。
+
+**本批产出**：仅诊断与本文；探针已撤（源码与 993 提交逐字节一致，
+lib 268/268、b985 金用例复跑 3/-1 复证）。
