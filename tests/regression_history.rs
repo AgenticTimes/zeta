@@ -8242,3 +8242,107 @@ fn try_except_frame_pops_appear_in_both_branches_with_handler_first() {
         mismatches
     );
 }
+
+/// 来源批次 660（`f3fa96f2`，2026-09-30）＝py 类方法体里 `return self.<f>.get(k, <字面量>)`、
+/// 而字段查不到值型别时，返回写回被跳过。记录原文的因果链＝值型别查不到 ⇒ 落 `_ => None` 走毒票
+/// ⇒ `refine_method_return_types` 全票弃权 ⇒ `funcs` 保留解析层的 i64 默认 ⇒ 调用点按
+/// `println_i64` 打 `char*` ⇒ 静默堆地址。
+/// 修法＝把「值型未知 ∪ 有字面量默认」认成证据表明的真并集（已知动态面）：新增 `(None, Some(_))`
+/// 面（`:3314`）、给已知动态面单独计数 `dyn_faces`（`:3350-3352`，毒票不计），并让写回条件
+/// `writable` 加上"全部返回都是已知动态面"这一支（`:3191-3192`）。
+/// 站点＝`src/middle/resolver/resolver.rs`：`writable`（现 `:3188-3192`，其中 `:3189` 的
+/// `Named("PyJson")` 半支是批次 646 的车道笔）、面匹配 `match (vt, dt)`（`:3307-3328`）、
+/// `dyn_faces` 计数（`:3350-3352`）、写回本体（`:3194-3196`，只在登记型别是 `I64` 时改写）。
+///
+/// 定位过程（本批实测，推翻首稿）：首稿两格用 `self.d = {}`（写在 `__init__` 里），撤 660 的三支
+/// （`:3314`／`dyn_faces` 计数／`writable` 第二支）后 79 条一字不变——因为裸 `{}` 会把字段拼写
+/// 登记成裸 `map`，`:3118-3127` 随即投出 `Type::PyDynamic` 的**值型别**，于是 `vt` 是 `Some(PyDynamic)`
+/// 而非 `None`，命中的是批次 646 的 `(Some(Type::PyDynamic), Some(d))` 支（`:3320`）＝另一条链。
+/// 真正打到 660 那一支的形状是**字段压根没有 `map` 拼写**的四形（下表格 1～格 4）。
+///
+/// 覆盖面分工（五臂变异矩阵实测，见台账行）：
+/// - 格 1～格 4＝同一条链：撤 `:3314`／撤 `:3350-3352`／撤 `writable` 第二支，三臂下四格全红且
+///   红值一字相同（`zeta_dyn_to_string` 退回 `println_i64`）＝三支是一条传播链，本条钉得住链、
+///   钉不住"哪一支单独坏"（试过的分离形状见末尾阴性清单）。
+/// - 格 5～格 7＝另一条链（防止弃权条件被放松）：撤 `dyn_faces == rets.len()` 半条件、把 `writable`
+///   写成恒真，两臂下这三格红、格 1～格 4 不变红；反过来撤 660 那三支时这三格保持绿。
+///
+/// 阴性清单（试过后在本树打不到 660 站点，不作为覆盖声明）：
+/// `self.d: dict[str, int] = {}`（注解拼写没进 `map_vals`，读数与裸 `map` 一字相同）、
+/// `self.d[k] = 7` 投票后再 `.get(k, "missing")`、`.get(k, 7)`（期望命中 `(Some(_), Some(_))` 支）＝
+/// 撤五臂读数均不变。
+///
+/// 期望值来源＝`/tmp/b10055/probe_HEAD.log` 的 `main` 被调符号顺序实拍＋CPython 对照
+/// （格 1 打 `x`、格 3／格 4 打 `missing`）；格 2 的字段从未赋值，CPython 侧是 `AttributeError`，
+/// 该格只取编译期读数。
+/// 边界（本条不覆盖）：运行期打印值（`zeta_dyn_to_string` 打出的字面串是否等于 CPython）＝AOT 侧，
+/// 按 #20005 口径只锁 MIR；格 5～格 7 是**现状锁**＝钉住"今天仍弃权、调用点仍按 `println_i64` 打"，
+/// 这三形的 CPython 真值分别是 `missing`／`None`／`missing`，也就是运行期仍是错值——那半属未修问题，
+/// 按 #20005 口径只记在余项里，不进本条断言。
+#[test]
+fn dict_field_without_map_spelling_marks_method_return_known_dynamic() {
+    // (格名, 夹具, 期望的 main 被调符号序列)
+    const CASES: &[(&str, &str, &str)] = &[
+        (
+            "字段只在 setitem 里出现（无 map 拼写）＋字面量默认",
+            "class A2:\n    def put(self, k, v):\n        self.d[k] = v\n    def fetch(self, k):\n        return self.d.get(k, \"missing\")\n\na2 = A2()\na2.put(\"a\", \"x\")\nprint(a2.fetch(\"a\"))\n",
+            "zeta_module_decl | A2_0 | zeta_env_set | A2::put | A2::fetch | zeta_dyn_to_string | println_str",
+        ),
+        (
+            "字段完全没赋值，只在方法里读",
+            "class A3:\n    def fetch(self, k):\n        return self.d.get(k, \"missing\")\n\na3 = A3()\nprint(a3.fetch(\"a\"))\n",
+            "zeta_module_decl | A3_0 | zeta_env_set | A3::fetch | zeta_dyn_to_string | println_str",
+        ),
+        (
+            "`self.d = dict()` 构造器初值",
+            "class A4:\n    def __init__(self):\n        self.d = dict()\n    def fetch(self, k):\n        return self.d.get(k, \"missing\")\n\na4 = A4()\nprint(a4.fetch(\"a\"))\n",
+            "zeta_module_decl | A4_0 | zeta_env_set | A4::fetch | zeta_dyn_to_string | println_str",
+        ),
+        (
+            "字段来自形参 `self.d = o`",
+            "class A8:\n    def __init__(self, o):\n        self.d = o\n    def fetch(self, k):\n        return self.d.get(k, \"missing\")\n\na8 = A8({})\nprint(a8.fetch(\"a\"))\n",
+            "zeta_module_decl | A8_1 | zeta_env_set | A8::fetch | zeta_dyn_to_string | println_str",
+        ),
+        (
+            "已知动态面 ∪ 整数返回（混票弃权，现状锁）",
+            "class Cfg2:\n    def __init__(self):\n        self.d = {}\n    def both(self, k):\n        if k:\n            return self.d.get(k, \"missing\")\n        return 1\n\nc2 = Cfg2()\nprint(c2.both(\"a\"))\n",
+            "zeta_module_decl | Cfg2_0 | zeta_env_set | Cfg2::both | println_i64",
+        ),
+        (
+            "`.get(k)` 没有默认值（毒票弃权，现状锁）",
+            "class Cfg3:\n    def __init__(self):\n        self.d = {}\n    def other(self, k):\n        return self.d.get(k)\n    def fetch(self, k):\n        return self.other(k)\n\nc3 = Cfg3()\nprint(c3.fetch(\"a\"))\n",
+            "zeta_module_decl | Cfg3_0 | zeta_env_set | Cfg3::fetch | println_i64",
+        ),
+        (
+            "已知动态面 ∪ 毒票（有一票推不出就弃权，现状锁）",
+            "class Cfg6:\n    def __init__(self):\n        self.d = {}\n    def other(self, k):\n        return self.d.get(k)\n    def fetch(self, k):\n        if k:\n            return self.d.get(k, \"missing\")\n        return self.other(k)\n\nc6 = Cfg6()\nprint(c6.fetch(\"a\"))\n",
+            "zeta_module_decl | Cfg6_0 | zeta_env_set | Cfg6::fetch | println_i64",
+        ),
+    ];
+
+    let mut got: Vec<(&str, String)> = Vec::new();
+    for (cell, src, _want) in CASES {
+        let mirs = lower_all(src);
+        let seq = call_symbols(mir(&mirs, "main")).join(" | ");
+        got.push((cell, seq));
+    }
+
+    let want: Vec<(&str, String)> = CASES
+        .iter()
+        .map(|(c, _, w)| (*c, (*w).to_string()))
+        .collect();
+    let mismatches: Vec<&str> = want
+        .iter()
+        .zip(got.iter())
+        .filter(|(w, g)| w != g)
+        .map(|(w, _)| w.0)
+        .collect();
+    assert_eq!(
+        want,
+        got,
+        "字典字段无 map 拼写时的已知动态面七格（批次 660），红格清单 = {:?}——\
+         格 1～格 4 读回 `println_i64`＝已知动态面没写回（调用点把句柄当整数打）；\
+         格 5～格 7 读回 `zeta_dyn_to_string`＝弃权条件被放松（毒票／混票也写回）",
+        mismatches
+    );
+}
