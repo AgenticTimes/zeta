@@ -6,6 +6,7 @@
 //! Clean, fast, and fully documented.
 
 mod call_set;
+mod r#gen_decl;
 mod call_assert;
 mod call_builtin;
 mod call_logging;
@@ -2189,14 +2190,8 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 generics,
                 ..
             } => {
-                // Register struct type definition for later reference by StructLit / FieldAccess.
-                self.type_decls.insert(
-                    name.clone(),
-                    TypeDecl::Struct {
-                        fields: fields.clone(),
-                        generics: generics.clone(),
-                    },
-                );
+                // 批次 950：StructDef 臂迁入 gen/stmt_decl.rs（869 法）。
+                self.lower_struct_def(name, fields, generics);
             }
             AstNode::EnumDef {
                 name,
@@ -2204,59 +2199,27 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                 generics,
                 ..
             } => {
-                // Register enum type definition for pattern-match lowering.
-                self.type_decls.insert(
-                    name.clone(),
-                    TypeDecl::Enum {
-                        variants: variants.clone(),
-                        generics: generics.clone(),
-                    },
-                );
+                // 批次 950：EnumDef 臂迁入 gen/stmt_decl.rs（869 法）。
+                self.lower_enum_def(name, variants, generics);
             }
             AstNode::ImplBlock { ty, body, .. } => {
-                // Lower any items inside the impl block (functions, etc.).
-                // BATCH-438: a `class` written inside a function body desugars
-                // to [StructDef, ImplBlock, ctor] and this arm is the only
-                // place that still holds the class NAME — the methods below are
-                // lowered as plain nested `def`s, so without publishing it here
-                // `Inner::bump`'s `self` was captured from the env and typed as
-                // the ENCLOSING class (its field reads resolved against that
-                // layout, declined, and fell through to the `("", 2)` stand-in).
-                let outer_class = std::mem::replace(
-                    &mut self.current_class,
-                    if ty.is_empty() { None } else { Some(ty.clone()) },
-                );
-                // BATCH-438: everything this block publishes belongs to THIS
-                // window: a second `class _Impl` elsewhere in the program owns a
-                // second window with the same key spelling and different symbols.
-                let mir_start = self.generated_mirs.len();
-                let alias_start = self.nested_class_aliases.len();
-                for item in body {
-                    self.lower_ast(item);
-                }
-                let aliases = self.nested_class_aliases.split_off(alias_start);
-                self.rewrite_nested_class_calls(ty, &aliases, mir_start);
-                self.current_class = outer_class;
+                // 批次 950：ImplBlock 臂迁入 gen/stmt_decl.rs（869 法）。
+                self.lower_impl_block(ty, body);
             }
             AstNode::ConceptDef { methods, .. } => {
-                // Lower any default-method bodies inside the concept.
-                for method in methods {
-                    self.lower_ast(method);
-                }
+                // 批次 950：ConceptDef 臂迁入 gen/stmt_decl.rs（869 法）。
+                self.lower_concept_def(methods);
             }
             AstNode::TypeAlias { name, ty, .. } => {
-                // Register the type alias so type resolution works at MIR level.
-                self.type_decls
-                    .insert(name.clone(), TypeDecl::Alias { target: ty.clone() });
+                // 批次 950：TypeAlias 臂迁入 gen/stmt_decl.rs（869 法）。
+                self.lower_type_alias(name, ty);
             }
             AstNode::Method {
                 body: Some(method_body),
                 ..
             } => {
-                // Lower default method bodies (inside concepts/traits).
-                for stmt in method_body {
-                    self.lower_ast(stmt);
-                }
+                // 批次 950：Method 有体臂迁入 gen/stmt_decl.rs（869 法）。
+                self.lower_method_body(method_body);
             }
             AstNode::Method { body: None, .. } => {
                 // Method signature without body — no code to generate.
