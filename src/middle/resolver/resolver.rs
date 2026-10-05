@@ -2016,6 +2016,11 @@ impl Resolver {
                         match kind {
                             "str" => changed.push((i, Type::Str)),
                             "f64" => changed.push((i, Type::F64)),
+                            // 批次 955：B3 把未注解参数缺省改成 PyDynamic 后，
+                            // int 实参证据也需要能钉回 I64——原代码 `_ => {}`
+                            // 让 `f(1); f(2)` 的 x 落 dyn（checker/消费点按
+                            // 动态处理，ABI 恰为 I64 槽所以多数场景无症状）
+                            "i64" => changed.push((i, Type::I64)),
                             // 批次 652：数组字面量钉成 DynamicArray(I64)。与 Str 跨族 ⇒
                             // 下一调用点若传 str 会触发 clash ⇒ 退 PyDynamic ⇒ len()
                             // 走 zeta_dyn_len（本批注册）而不是 str_len。
@@ -7536,5 +7541,156 @@ fn str_method_symbol_kind(method: &str) -> Option<&'static str> {
         "isdigit" | "isalpha" | "isupper" | "islower" | "startswith" | "endswith"
         | "contains" | "starts_with" | "ends_with" => Some("bool"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests_pin_semantics {
+    //! 批次 955（F.4 第三刀审计附属）：6 轮调用点证据传播的钉型语义
+    //! 回归锁。此前零测试——"全调用点一致才钉 / 冲突永久拒绝 / 用户
+    //! 注解不动"三个性质由 batch 400 的 pinned/conflicts 机制承载，
+    //! 是 resolver 注解表（gen/codegen 的型源）的关键行为。
+
+    use crate::frontend::ast::AstNode;
+    use super::Resolver;
+    use crate::middle::types::Type;
+
+    fn mk_def(name: &str, params: Vec<(String, String)>, body: Vec<AstNode>) -> AstNode {
+        AstNode::FuncDef {
+            name: name.to_string(),
+            generics: vec![],
+            lifetimes: vec![],
+            params,
+            ret: String::new(),
+            body,
+            attrs: vec![],
+            ret_expr: None,
+            single_line: true,
+            doc: String::new(),
+            pub_: false,
+            async_: false,
+            const_: false,
+            comptime_: false,
+            where_clauses: vec![],
+        }
+    }
+
+    fn call(name: &str, args: Vec<AstNode>) -> AstNode {
+        AstNode::ExprStmt {
+            expr: Box::new(AstNode::Call {
+                receiver: None,
+                method: name.to_string(),
+                args,
+                type_args: vec![],
+                structural: false,
+            }),
+        }
+    }
+
+    fn param_anno(r: &Resolver, fname: &str, idx: usize) -> String {
+        let sig = r.get_func_signature(fname).expect("签名在册");
+        match &sig.0[idx] {
+            (_, Type::Str) => "str".to_string(),
+            (_, Type::I64) => "i64".to_string(),
+            (_, Type::F64) => "f64".to_string(),
+            (_, Type::PyDynamic) => "dyn".to_string(),
+            (_, t) => format!("{t:?}"),
+        }
+    }
+
+    /// 全调用点实参形状一致 ⇒ 参数被钉成该型。
+    #[test]
+    fn consistent_callsites_pin_param() {
+        let mut r = Resolver::new();
+        let asts = vec![
+            mk_def("f", vec![("x".into(), String::new())], vec![]),
+            mk_def(
+                "main",
+                vec![],
+                vec![
+                    call("f", vec![AstNode::Lit(1)]),
+                    call("f", vec![AstNode::Lit(2)]),
+                ],
+            ),
+        ];
+        for a in &asts {
+            r.register(a.clone());
+        }
+        r.infer_untyped_returns(&asts);
+        assert_eq!(
+            param_anno(&r, "f", 0),
+            "i64",
+            "两调用点全 int ⇒ 钉 i64（f64 变体对照：{}）",
+            ""
+        );
+    }
+
+    /// f64 实参变体：全 f64 ⇒ 钉 f64（二分 collect/写链）。
+    #[test]
+    fn consistent_f64_callsites_pin_param() {
+        let mut r = Resolver::new();
+        let asts = vec![
+            mk_def("f", vec![("x".into(), String::new())], vec![]),
+            mk_def(
+                "main",
+                vec![],
+                vec![
+                    call("f", vec![AstNode::FloatLit("1.5".into())]),
+                    call("f", vec![AstNode::FloatLit("2.5".into())]),
+                ],
+            ),
+        ];
+        for a in &asts {
+            r.register(a.clone());
+        }
+        r.infer_untyped_returns(&asts);
+        assert_eq!(param_anno(&r, "f", 0), "f64");
+    }
+
+    /// 调用点形状冲突 ⇒ 不钉（conflicts 永久拒绝，batch 400 语义）。
+    #[test]
+    fn conflicting_callsites_do_not_pin() {
+        let mut r = Resolver::new();
+        let asts = vec![
+            mk_def("f", vec![("x".into(), String::new())], vec![]),
+            mk_def(
+                "main",
+                vec![],
+                vec![
+                    call("f", vec![AstNode::Lit(1)]),
+                    call("f", vec![AstNode::StringLit("s".into())]),
+                ],
+            ),
+        ];
+        for a in &asts {
+            r.register(a.clone());
+        }
+        r.infer_untyped_returns(&asts);
+        let anno = param_anno(&r, "f", 0);
+        assert_ne!(anno, "str", "冲突 ⇒ 不得钉成后到的 str");
+        assert_ne!(anno, "i64", "冲突 ⇒ 不得钉成先到的 i64");
+    }
+
+    /// 用户手写注解不被调用点证据覆盖（pinned 只含机器钉的下标）。
+    #[test]
+    fn user_annotation_untouched() {
+        let mut r = Resolver::new();
+        let asts = vec![
+            mk_def("f", vec![("x".into(), "str".into())], vec![]),
+            mk_def(
+                "main",
+                vec![],
+                vec![call("f", vec![AstNode::Lit(1)])],
+            ),
+        ];
+        for a in &asts {
+            r.register(a.clone());
+        }
+        r.infer_untyped_returns(&asts);
+        assert_eq!(
+            param_anno(&r, "f", 0),
+            "str",
+            "用户注解 str 不被 int 调用点覆盖"
+        );
     }
 }
