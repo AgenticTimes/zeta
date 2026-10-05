@@ -7310,3 +7310,239 @@ fn container_annotation_keeps_key_and_value_type_in_mir_type_map() {
     ];
     assert_eq!(want, got);
 }
+
+/// 批次 384（`52a0c411`，2026-09-23）——函数体里的 `static [mut] NAME[: TY] = INIT`。
+///
+/// 症状（roadmap 批次 384 节 ＋ `tests/python_style/t423_static_mut_persistent.z` 头）：
+/// 这个词组在 Zeta 里原来没有任何规则，`static` 被当裸名表达式吞掉，剩下的
+/// `mut counter: i64 = 0` 也无规则 ⇒ 整个顶层项解析失败 ⇒ 该文件 364 行里 357 行没进程序
+/// （`tests/unit-tests/benchmark_simd_vs_scalar.z` 实拍 W1002，跑起来零输出）。
+///
+/// 修法三段（本批只收前两段的可见后果，第三段在避开面上）：
+/// 1) `src/frontend/parser/stmt.rs` 的 `parse_static` 接住这条拼法，并在 `parse_stmt`
+///    的 `alt((parse_static, parse_let))` 里派发；
+/// 2) `src/frontend/parser/top_level.rs` 的 `hoist_statics` 把声明提升到模块级一格
+///    （**该文件是本车道在制面，不取变异**）；
+/// 3) `src/middle/mir/gen.rs` 见到提升标记就把名字放进本函数的 `nonlocal_names`
+///    （**主线在重构，不取变异**）。
+///
+/// 尺子 `static_env_reading`：被提升的名字读写都走 env 全局表，所以 MIR 上看得见的是
+/// `zeta_env_get`／`zeta_env_set` 的调用序列（含嵌套块，按语句顺序），加上顶层赋值条数
+/// 与段内槽数两列。期望值＝同批 `target/debug/zetac --dump-mir` 对 12 个形状的实测读数。
+///
+/// 四组变异（每臂只改一处；臂文本与消歧见 `/tmp/b10049/patch.py`）。红格数取**进程内实跑**
+/// （`cargo test --test regression_history`，17 格是一条 `assert_eq!`，失败文本里的左右向量
+/// 解析成清单存 `/tmp/b10049/inproc_red.json`）；CLI 趟的变读数文件数记在末尾作对照：
+/// - M1 派发退回只有 `parse_let`（＝384 第 1 步不存在）＝12 格红，绿的只有格 3、4（普通 `let`
+///   对照）、格 6、7（模块顶层 `static`）与格 16（`static` 之后另立的函数）。红值是 **env 调用
+///   整排消失、持久格退化成每次调用重设的局部槽**：格 1 从
+///   `env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=7` 变成
+///   `env=[];顶层赋值=2;槽数=4`，就是 W1008 那句警告说的静默错值，只是此时连警告也没有；
+/// - M2 `mut` 那一段不再消费＝10 格红＝M1 的红格减掉格 8（`static k = 5`）与格 9
+///   （`static c: i64 = 2`）——这两条拼法本来就没有 `mut`；
+/// - M4 `: TY` 那一段不再消费＝11 格红＝M2 的红格加回格 9（有类型、无 `mut`），仍不含格 8。
+///   三臂红格集合是 M1 ⊃ M4 ⊃ M2 的包含链，但每臂有独占区分点（格 8 只 M1 红、格 9 M4 红而
+///   M2 不红），三套读数互不相同 ⇒ 派发／`mut`／类型注解三段各被一支钉住：只坏派发时整条拼法
+///   塌陷，只坏 `mut` 或只坏类型注解的消费时另外两段的读数一字不变，不是同一条链的三个副本；
+///   对照的 CLI 趟＝12 个形状文件里 M1 变 10 个、M2 变 8 个、M4 变 9 个（进程内按格计数更细，
+///   两个口径都指向同一件事：静默退化成局部）。
+/// - M3 `src/middle/ctfe/evaluator.rs:718` 把 `AstNode::Static` 从"走表达式变换"那支
+///   挪到"原样返回"那支＝进程内 17 格全绿（`74 passed; 0 failed`）、CLI 趟 12 个形状读数
+///   逐字节相同。阴性原因实拍＝
+///   格 12 的初值 `BASE * 2` 在这一支前后同形（HEAD 的 dump 里仍是 `21` 的树，
+///   折成 `42` 的不是这一趟），这一趟确实活着（`evaluator.rs:85`、`:1882-1883` 有调用方），
+///   但本批 12 个形状没有任何一个的初值需要它。**该支在什么形状上才有作用＝未证**。
+///
+/// 未锁的两处（照实测写，不写成已覆盖）：
+/// ① 357 行那种"整个顶层项失败 ⇒ 其后每一项被丢"的级联在本批形状里**没复现**：
+///    M1 下格 16 的 `trailing`、格 15 之后的各项都照常降出，红只落在函数体内部。
+///    原因未查（语料那处是顶层项级别的失败，本批夹具的回退停在语句级别）；
+/// ② 模块顶层的 `static`（格 6、格 7）四臂读数一字不变＝这条拼法在顶层走的不是
+///    `parse_stmt` 这一支，具体走哪一支未查。
+/// ①② 按登记规则记在 #20005 余项内，不另占任务号。
+fn static_env_reading(m: &Mir) -> String {
+    let env: Vec<String> = call_symbols(m)
+        .into_iter()
+        .filter(|c| c.starts_with("zeta_env"))
+        .collect();
+    let assigns = m
+        .stmts
+        .iter()
+        .filter(|s| matches!(s, MirStmt::Assign { .. }))
+        .count();
+    format!(
+        "env=[{}];顶层赋值={};槽数={}",
+        env.join(","),
+        assigns,
+        m.type_map.len()
+    )
+}
+
+const STATIC_TICK_BODY: &str = r"fn tick() -> i64 {
+    static mut counter: i64 = 0
+    counter += 1
+    return counter
+}
+x = tick()
+y = tick()
+print(x)
+print(y)";
+const STATIC_LET_CONTROL: &str = r"fn local_only() -> i64 {
+    let mut c: i64 = 0
+    c += 1
+    return c
+}
+print(local_only())
+print(local_only())";
+const STATIC_IN_IF_BLOCK: &str = r"fn hit_once(n: i64) -> i64 {
+    if n > 0 {
+        static mut hits: i64 = 7
+        hits += 1
+        return hits
+    }
+    return 0
+}
+print(hit_once(1))
+print(hit_once(1))
+print(hit_once(0))";
+const STATIC_AT_MODULE_LEVEL: &str = r"static mut total: i64 = 0
+
+fn add(n: i64) -> i64 {
+    total += n
+    return total
+}
+print(add(5))
+print(total)";
+const STATIC_NO_TYPE_NO_MUT: &str = r"fn bump() -> i64 {
+    static k = 5
+    k = k + 1
+    return k
+}
+print(bump())
+print(bump())";
+const STATIC_TYPE_NO_MUT: &str = r"fn bump() -> i64 {
+    static c: i64 = 2
+    c = c + 1
+    return c
+}
+print(bump())
+print(bump())";
+const STATIC_SAME_NAME_TWICE: &str = r"fn first() -> i64 {
+    static mut shared: i64 = 1
+    shared += 1
+    return shared
+}
+fn second() -> i64 {
+    static mut shared: i64 = 100
+    shared += 1
+    return shared
+}
+print(first())
+print(second())";
+const STATIC_INIT_FROM_CONST: &str = r"const BASE: i64 = 21
+
+fn acc() -> i64 {
+    static mut sum: i64 = BASE * 2
+    sum += 1
+    return sum
+}
+print(acc())
+print(acc())";
+const STATIC_INSIDE_PY_DEF: &str = r"def bump2(n: i64) -> i64:
+    static mut calls: i64 = 0
+    calls += 1
+    return calls + n
+
+print(bump2(1))
+print(bump2(1))";
+const STATIC_THEN_PLAIN_STMTS: &str = r"fn tail() -> i64 {
+    static mut t: i64 = 3
+    t = t * 2
+    let mut rest: i64 = 0
+    for i in 0..3 {
+        rest += i
+    }
+    return t + rest
+}
+print(tail())
+print(tail())";
+const STATIC_BETWEEN_TWO_FUNCS: &str = r"fn helper(n: i64) -> i64 {
+    return n + 1
+}
+
+fn uses_static() -> i64 {
+    static mut u: i64 = 40
+    u += 2
+    return u
+}
+
+fn trailing() -> i64 {
+    return 7
+}
+print(helper(1))
+print(uses_static())
+print(trailing())";
+const STATIC_IN_TWO_LEVEL_BLOCK: &str = r"fn outer(n: i64) -> i64 {
+    if n > 0 {
+        if n > 5 {
+            static mut deep: i64 = 9
+            deep += 1
+            return deep
+        }
+        return 2
+    }
+    return 0
+}
+print(outer(9))
+print(outer(9))
+print(outer(1))";
+
+#[test]
+fn static_decl_in_function_body_becomes_one_persistent_cell() {
+    let cases: Vec<(&str, &str, &str)> = vec![
+        ("体内static读写都走env_384症状", "tick", STATIC_TICK_BODY),
+        ("体内static_调用方main段", "main", STATIC_TICK_BODY),
+        ("对照_普通let不建env格", "local_only", STATIC_LET_CONTROL),
+        ("对照_普通let的main段", "main", STATIC_LET_CONTROL),
+        ("if块内static也提升到模块格", "hit_once", STATIC_IN_IF_BLOCK),
+        ("顶层static_函数读写", "add", STATIC_AT_MODULE_LEVEL),
+        ("顶层static_主程序段", "main", STATIC_AT_MODULE_LEVEL),
+        ("无类型无mut的static_只靠派发那一步", "bump", STATIC_NO_TYPE_NO_MUT),
+        ("有类型无mut的static", "bump", STATIC_TYPE_NO_MUT),
+        ("重名static第一处提升成功", "first", STATIC_SAME_NAME_TWICE),
+        ("重名static第二处退回局部", "second", STATIC_SAME_NAME_TWICE),
+        ("常量表达式初值的static_现状", "acc", STATIC_INIT_FROM_CONST),
+        ("def方言体内static", "bump2", STATIC_INSIDE_PY_DEF),
+        ("static之后同体语句存活", "tail", STATIC_THEN_PLAIN_STMTS),
+        ("体内static的函数降出完整", "uses_static", STATIC_BETWEEN_TWO_FUNCS),
+        ("static之后另立的函数仍降出", "trailing", STATIC_BETWEEN_TWO_FUNCS),
+        ("两层块内static提升", "outer", STATIC_IN_TWO_LEVEL_BLOCK),
+    ];
+    let got: Vec<(String, String)> = cases
+        .iter()
+        .map(|(label, seg, src)| {
+            let mirs = lower_all(src);
+            (label.to_string(), static_env_reading(mir(&mirs, seg)))
+        })
+        .collect();
+    let want: Vec<(String, String)> = vec![
+        ("体内static读写都走env_384症状".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=7".to_string()),
+        ("体内static_调用方main段".to_string(), "env=[zeta_env_set,zeta_env_set,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=6;槽数=28".to_string()),
+        ("对照_普通let不建env格".to_string(), "env=[];顶层赋值=2;槽数=4".to_string()),
+        ("对照_普通let的main段".to_string(), "env=[];顶层赋值=0;槽数=8".to_string()),
+        ("if块内static也提升到模块格".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=11".to_string()),
+        ("顶层static_函数读写".to_string(), "env=[zeta_env_get,zeta_env_set];顶层赋值=1;槽数=6".to_string()),
+        ("顶层static_主程序段".to_string(), "env=[zeta_env_set];顶层赋值=4;槽数=16".to_string()),
+        ("无类型无mut的static_只靠派发那一步".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=0;槽数=9".to_string()),
+        ("有类型无mut的static".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=0;槽数=9".to_string()),
+        ("重名static第一处提升成功".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=7".to_string()),
+        ("重名static第二处退回局部".to_string(), "env=[zeta_env_set,zeta_env_set];顶层赋值=2;槽数=6".to_string()),
+        ("常量表达式初值的static_现状".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=7".to_string()),
+        ("def方言体内static".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=9".to_string()),
+        ("static之后同体语句存活".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=3;槽数=18".to_string()),
+        ("体内static的函数降出完整".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=7".to_string()),
+        ("static之后另立的函数仍降出".to_string(), "env=[];顶层赋值=0;槽数=1".to_string()),
+        ("两层块内static提升".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=14".to_string()),
+    ];
+    assert_eq!(want, got);
+}
