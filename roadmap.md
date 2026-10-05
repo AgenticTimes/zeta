@@ -30065,3 +30065,19 @@ i64 元素场景探针（ki=x*x）：max=3 ✓ min=2 ✗（应 -1）——不对
 - f64 元素场景不受影响（967 特化链全对）
 - 修复前置：干净会话专项（本会话上下文预算告罄止损，两轮实验
   结论全量在案：批 963 设计/批 978 不对称实证/本批登记块回退）
+
+## 批次 983（2026-10-05）：keyfn i64 路径修复收官——统一 double(*)(double) 位桥
+
+lldb 实拍链：py_max_key(vec, keyfn=kf_addr, flag=1) ⇒ kf 体
+scvtf d0,x0 ⇒ kf 返回**位模式整数值的 double 转换**（非 f64 值）⇒
+double 域比较错序。修复：impl 统一 double(*)(double) keyfn——C 侧
+元素 i64 位模式 **memcpy bitcast 成 double** 传 v0（与特化副本
+LLVM 签名 double(f64) 精确匹配），返回 double 由 C 读 v0。
+（第二批实证：kf(int64 实参) 被编译器 sitofp 值转换——同族根因
+第二批实拍）
+
+终态：max/min(xs, key=ka) = -3.5/2.5、max/min(xs, key=kf) = 3/-1
+——两场景全部与 CPython 逐字对齐（float 返回注解场景收官）；
+b947 探针保持；库 254/254、全量差分 2845/2845、python_style 479/0。
+函数值轴交付终态：key=abs 内建特化 ✓、用户 keyfn f64 通道单态化
+（参数位桥）✓、比较域分派（key_is_f64）✓。
