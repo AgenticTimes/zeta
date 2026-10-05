@@ -30036,3 +30036,13 @@ keyfn f64 通道单态化全链）；库 254/254（verifier 5 单测）、全量
 4. **轴 C intern/clone：出册（无实证驱动）**——批 976 基线复现
    实证 large-z 无性能回归（22.51s 为测量噪声）；intern/clone
    优化缺乏性能问题驱动，登记关闭。
+
+## 批次 982 补（2026-10-05）：call_num 臂补 keyfn 登记块
+
+NumericBuiltin 入口（call_num）先于 call_dispatch key= 臂执行——
+该臂只有特化发射块没有登记块，store 恒空 ⇒ 特化永不触发。补登记
+块（f64 元素 ⇒ 克隆 FuncDef，对齐 site1 语义）。
+
+i64 元素场景探针（ki=x*x）：max=3 ✓ min=2 ✗（应 -1）——不对称
+待专项（FuncAddr→符号链断点，干净会话 lldb 逐环）。库 254/254、
+全量差分 2845/2845、python_style 479/0 无回归。
