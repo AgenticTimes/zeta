@@ -7772,6 +7772,16 @@ mod tests_dual_track {
         }
     }
 
+    /// lenient 语义（批 977）：ERR（未定义符号/未实现形状）回落 I64——
+    /// 与 infer_unified 的宽容包装一致，为 borrow/check_node 消费语义。
+    fn new_track_lenient(node: &AstNode) -> String {
+        let mut ctx = InferContext::new();
+        match ctx.infer(node) {
+            Ok(t) => format!("{:?}", t),
+            Err(_) => "I64".to_string(),
+        }
+    }
+
     /// 字面量形状：双轨等价（收敛基线，批 969）。
     #[test]
     fn dual_track_literals_equivalent() {
@@ -7864,18 +7874,30 @@ mod tests_dual_track {
             base: Box::new(AstNode::Var("xs".into())),
             index: Box::new(AstNode::Lit(0)),
         };
+        // 批 977：断言升级——DictLit 直等价（批 971 补齐生效）；
+        // FieldAccess/Call/Subscript 按 lenient 语义等价（ERR 回落 I64
+        // 与旧轨兜底一致，infer_unified 消费语义）
         for (name, node) in [
             ("BinaryOp(+)", &binop),
+            ("DictLit", &dict),
+        ] {
+            assert_eq!(
+                normalize(&old_track(&r, node)),
+                normalize(&new_track(node)),
+                "双轨差异（{}）",
+                name
+            );
+        }
+        for (name, node) in [
             ("FieldAccess", &field),
             ("Call", &call),
-            ("DictLit", &dict),
             ("Subscript", &sub),
         ] {
-            println!(
-                "DIFF {}: old={} new={}",
-                name,
-                old_track(&r, node),
-                new_track(node)
+            assert_eq!(
+                normalize(&old_track(&r, node)),
+                normalize(&new_track_lenient(node)),
+                "双轨 lenient 差异（{}）",
+                name
             );
         }
     }
