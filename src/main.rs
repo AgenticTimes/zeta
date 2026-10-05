@@ -918,7 +918,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for spec in resolver.take_keyfn_specializations() {
                     if let AstNode::FuncDef { name, .. } = &spec {
                         if std::env::var("ZETA_PROBE_CHECKER").is_ok() {
-                            eprintln!("TAKE-LOOP: lowering {}", name);
+                            let store = resolver.keyfn_spec_store();
+                            eprintln!(
+                                "TAKE-LOOP: lowering {} store_n={}",
+                                name,
+                                store.borrow().len()
+                            );
                         }
                         let mut m = resolver.lower_to_mir(&spec);
                         m.name = Some(name.clone());

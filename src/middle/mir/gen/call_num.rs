@@ -189,127 +189,19 @@ impl MirGen {
                         );
                     }
                 }
-                if let AstNode::Var(nm) = &ka[1] {
-                    let mangled = format!("__ZKEYF64_{}", nm);
-                    if !nm.starts_with("__")
-                        && self.full_funcdefs.contains_key(nm.as_str())
-                    {
-                        if let Some(store) = self.keyfn_spec_store.as_ref() {
-                            let already = store.borrow().iter().any(|a| {
-                                matches!(
-                                    a,
-                                    AstNode::FuncDef { name, .. }
-                                        if *name == mangled
-                                )
-                            });
-                            if !already {
-                                if let Some(mut full) = self
-                                    .full_funcdefs
-                                    .get(nm.as_str())
-                                    .cloned()
-                                {
-                                    if let AstNode::FuncDef {
-                                        params,
-                                        ..
-                                    } = &mut full
-                                    {
-                                        if let Some(p0) = params.first_mut() {
-                                            p0.1 = "f64".to_string();
-                                        }
-                                    }
-                                    store.borrow_mut().push(full);
-                                }
-                            }
-                        }
-                    }
-                }
-                // 批 982 补：登记块——NumericBuiltin 入口先于 call_dispatch
-                // 的 key= 臂执行，store 恒空导致特化发射永不触发（min/max
-                // 落旧路 flag=0）
+                // 批 989：本臂旧的登记/发射块整段拆除（978–988 迭代残骸）。
+                // 旧登记块克隆后**不改名**（push 原名 FuncDef——批 965 的老
+                // 缺陷形态），mangled 永不命中 ⇒ 发射块死路；发射块又不分
+                // 元素型（i64 元素会误走位桥）。探针实证 max(xs,key=kf) 的
+                // 路由在 call_dispatch 的 key= 臂（登记/发射已全量接通，
+                // 见 call_dispatch.rs 批 989 段），本臂落旧路 py_min/
+                // py_max_key 即基线行为。W0901 告警保留。
                 if std::env::var("ZETA_PROBE_CHECKER").is_ok() {
                     eprintln!(
-                        "REG-BLOCK: nm={:?} starts_dunder={} has_full={}",
+                        "REG989: arm-entered ka1={:?} args_len={}",
                         ka[1],
-                        matches!(&ka[1], AstNode::Var(n) if n.starts_with("__")),
-                        format!("{:?}", ka[1]).chars().take(40).collect::<String>(),
+                        args.len()
                     );
-                }
-                if let AstNode::Var(nm) = &ka[1] {
-                    let mangled0 = format!("__ZKEYF64_{}", nm);
-                    if !nm.starts_with("__")
-                        && self.full_funcdefs.contains_key(nm.as_str())
-                    {
-                        if let Some(store) = self.keyfn_spec_store.as_ref() {
-                            let already = store.borrow().iter().any(|a| {
-                                matches!(
-                                    a,
-                                    AstNode::FuncDef { name, .. }
-                                        if *name == mangled0
-                                )
-                            });
-                            if !already {
-                                if let Some(mut full) = self
-                                    .full_funcdefs
-                                    .get(nm.as_str())
-                                    .cloned()
-                                {
-                                    if let AstNode::FuncDef {
-                                        params,
-                                        ..
-                                    } = &mut full
-                                    {
-                                        if let Some(p0) = params.first_mut() {
-                                            p0.1 = "f64".to_string();
-                                        }
-                                    }
-                                    store.borrow_mut().push(full);
-                                }
-                            }
-                        }
-                    }
-                }
-                // 批 967：f64 元素 ⇒ 特化副本发射
-                if let AstNode::Var(nm) = &ka[1] {
-                    let mangled = format!("__ZKEYF64_{}", nm);
-                    // 批 984 放宽：keyfn 返回 f64（注解/证据）也触发
-                    let keyfn_ret_f64 = matches!(
-                        self.func_ret_types.get(nm.as_str()),
-                        Some(Type::F64) | Some(Type::F32)
-                    );
-                    if !nm.starts_with("__")
-                        && (keyfn_ret_f64
-                            || self.full_funcdefs.contains_key(nm.as_str()))
-                    {
-                        if let Some(store) = self.keyfn_spec_store.as_ref() {
-                            let registered = store.borrow().iter().any(|a| {
-                                matches!(
-                                    a,
-                                    AstNode::FuncDef { name, .. }
-                                        if *name == mangled
-                                )
-                            });
-                            if registered {
-                                let xs2 = self.lower_expr(&args[0]);
-                                let f_id = self.lower_expr(&AstNode::Var(
-                                    mangled.clone(),
-                                ));
-                                let func = if method == "min" {
-                                    "py_min_key_f64"
-                                } else {
-                                    "py_max_key_f64"
-                                };
-                                self.stmts.push(MirStmt::Call {
-                                    func: func.to_string(),
-                                    args: vec![xs2, f_id],
-                                    dest,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(dest, MirExpr::Var(dest));
-                                self.type_map.insert(dest, Type::F64);
-                                return dest;
-                            }
-                        }
-                    }
                 }
                 let xs = self.lower_expr(&args[0]);
                 let f = self.lower_expr(&ka[1]);

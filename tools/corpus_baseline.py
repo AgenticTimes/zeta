@@ -33,7 +33,8 @@ def parse_verdict(path):
         r = subprocess.run([ZETAC, path, "-o", os.path.join(WORKDIR, "probe")],
                            capture_output=True, text=True, timeout=TIMEOUT_S)
     except subprocess.TimeoutExpired:
-        return "timeout"    out = (r.stderr or "") + (r.stdout or "")
+        return "timeout"
+    out = (r.stderr or "") + (r.stdout or "")
     if "Linking failed" in out or "Compiled to" in out:
         return True   # parse 阶段通过（链接失败是下一阶段的事）
     if "Parse failed" in out or "Parse error" in out:

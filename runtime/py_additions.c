@@ -1209,6 +1209,43 @@ int64_t py_min_key_f64(int64_t vec, int64_t keyfn_addr) {
     return py_min_key_f64_impl(vec, (int64_t)kf);
 }
 
+// 批 989（keyfn 单态化第三段）：i64 元素数组的 sitofp 桥——元素按
+// **值**转成 double 传入特化副本（double(*)(double)），副本体内 f64
+// 语义正确（kf(3) ⇒ (double)3 * 0.5 = 1.5），比较在 double 域，返回
+// 原元素。与 py_max_key_f64（位桥）的差别只在元素→double 的转换：
+// 位桥服务 f64 位模式数组（memcpy 位重解），本桥服务真整数数组
+// （位重解整数 3 得非规格数 1.5e-323，比较全错）。
+int64_t py_max_key_i64_f64(int64_t vec, int64_t keyfn_addr) {
+    int64_t n = zt_vec_len(vec);
+    if (n <= 0) return 0;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
+    int64_t best = ((int64_t*)vec)[0];
+    double best_k = kf((double)best);
+    if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "K64MAX: n=%lld best=%lld best_k=%f\n", (long long)n, (long long)best, best_k);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        double k = kf((double)v);
+        if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "K64MAX: i=%lld v=%lld k=%f\n", (long long)i, (long long)v, k);
+        if (k > best_k) { best = v; best_k = k; }
+    }
+    return best;
+}
+int64_t py_min_key_i64_f64(int64_t vec, int64_t keyfn_addr) {
+    int64_t n = zt_vec_len(vec);
+    if (n <= 0) return 0;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
+    int64_t best = ((int64_t*)vec)[0];
+    double best_k = kf((double)best);
+    if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "K64MIN: n=%lld best=%lld best_k=%f\n", (long long)n, (long long)best, best_k);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        double k = kf((double)v);
+        if (getenv("ZETA_PROBE_CHECKER")) fprintf(stderr, "K64MIN: i=%lld v=%lld k=%f\n", (long long)i, (long long)v, k);
+        if (k < best_k) { best = v; best_k = k; }
+    }
+    return best;
+}
+
 // key_is_f64（批 962 第二段）：keyfn 返回域可静态判定（注解 ret 或
 // checker 证据）时比较在 double 域进行——此前一律按 i64 比较返回的
 // f64 位模式，负浮点（符号位 1）永远不是 max（实拍

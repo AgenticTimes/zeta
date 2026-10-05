@@ -6252,6 +6252,9 @@ fn shim_class_normalize(t: &Type) -> Type {
     pub fn keyfn_spec_store(
         &self,
     ) -> std::rc::Rc<std::cell::RefCell<Vec<AstNode>>> {
+        if std::env::var("ZETA_PROBE_CHECKER").is_ok() {
+            eprintln!("STORE-ACCESS: n={}", self.keyfn_specializations.borrow().len());
+        }
         self.keyfn_specializations.clone()
     }
 

@@ -26,9 +26,9 @@ WORK=$(mktemp -d "/tmp/zeta_gate_${B}.XXXXXX")
 export ZETA_STRICT_RUNTIME_DIR=1
 
 rc_total=0
-[ -x "$ZETAC" ] || { echo "缺可执行件: $ZETAC（先 cargo build --release）"; exit 2; }
+[ -x "$ZETAC" ] || { echo "缺可执行件: ${ZETAC}（先 cargo build --release）"; exit 2; }
 [ -f "$RUN_ONE" ] || { echo "缺单用例工具: $RUN_ONE"; exit 2; }
-echo "批次 $B 窗口 $W（ROOT=$ROOT）"
+echo "批次 $B 窗口 ${W}（ROOT=${ROOT}）"
 echo "被测件 md5: $(md5 -q "$ZETAC")  运行期 .o md5: $(md5 -q "$ROOT/zeta_runtime_c.o")"
 
 # --- ① 差分 10% 轮转 ---
@@ -44,11 +44,11 @@ dif=$(( ${judged:-0} - ${match:-0} ))
 # ⇒ rc 对分奇毫无区分力：坏用例 rc=2（旧口径误判红），有分歧 rc=0（旧口径误判绿）。
 # 坏用例不计红＝主树批次 756 已裁定的口径，本树此前未跟。
 if [ "${judged:-0}" -eq 0 ]; then
-  echo "① 差分: 分母为 0＝读数作废（抽样一条也没跑到，rc=$rc_diff）"; rc_total=1
+  echo "① 差分: 分母为 0＝读数作废（抽样一条也没跑到，rc=${rc_diff}）"; rc_total=1
 elif [ "$dif" -gt 0 ]; then
-  echo "① 差分: 红 ${match:-0}/${judged} 不一致 ${dif} 条（rc=$rc_diff）"; rc_total=1
+  echo "① 差分: 红 ${match:-0}/${judged} 不一致 ${dif} 条（rc=${rc_diff}）"; rc_total=1
 elif [ "${bad:-0}" -gt 0 ]; then
-  echo "① 差分: ${match}/${judged} 一致；另 ${bad} 条坏用例（参考侧跑不出真值，不计红，rc=$rc_diff）"
+  echo "① 差分: ${match}/${judged} 一致；另 ${bad} 条坏用例（参考侧跑不出真值，不计红，rc=${rc_diff}）"
 else
   echo "① 差分: ${match}/${judged} 一致 rc=0"
 fi
@@ -136,5 +136,5 @@ else
 fi
 
 echo "----"
-echo "sample_gate 批次 $B 窗口 $W: rc=$rc_total（明细目录 $WORK）"
+echo "sample_gate 批次 $B 窗口 $W: rc=${rc_total}（明细目录 ${WORK}）"
 exit "$rc_total"
