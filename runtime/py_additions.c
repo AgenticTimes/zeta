@@ -3217,6 +3217,80 @@ int64_t py_builtin_max_f64(int64_t vec) {
     return out;
 }
 
+// min()/max() 的 key=abs 特化（批 956）：内建 abs 无一等函数值形式
+// （llvm.fabs 内在经 zeta_call1 ABI 不匹配，实拍 exit 138）——gen 侧
+// 检测 key=abs 直接分派到 fabs 比较循环，绕开函数值 ABI。
+static inline double zt_fabs_d(double v) { return v < 0 ? -v : v; }
+// key=abs 的 CPython 语义：按 |x| 比较，返回**原元素**（-3.5 而非 3.5）
+int64_t py_builtin_max_abs_f64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t best_raw = ((int64_t*)vec)[0];
+    double best;
+    memcpy(&best, &best_raw, sizeof best);
+    double best_k = zt_fabs_d(best);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t r2 = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &r2, sizeof v);
+        double k = zt_fabs_d(v);
+        if (k > best_k) {
+            best_k = k;
+            best_raw = r2;
+        }
+    }
+    return best_raw;
+}
+int64_t py_builtin_min_abs_f64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t best_raw = ((int64_t*)vec)[0];
+    double best;
+    memcpy(&best, &best_raw, sizeof best);
+    double best_k = zt_fabs_d(best);
+    for (int64_t i = 1; i < n; i++) {
+        int64_t r2 = ((int64_t*)vec)[i];
+        double v;
+        memcpy(&v, &r2, sizeof v);
+        double k = zt_fabs_d(v);
+        if (k < best_k) {
+            best_k = k;
+            best_raw = r2;
+        }
+    }
+    return best_raw;
+}
+int64_t py_builtin_max_abs_i64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t best_raw = ((int64_t*)vec)[0];
+    int64_t best_k = best_raw < 0 ? -best_raw : best_raw;
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        int64_t k = v < 0 ? -v : v;
+        if (k > best_k) {
+            best_k = k;
+            best_raw = v;
+        }
+    }
+    return best_raw;
+}
+int64_t py_builtin_min_abs_i64(int64_t vec) {
+    int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
+    if (n <= 0) return 0;
+    int64_t best_raw = ((int64_t*)vec)[0];
+    int64_t best_k = best_raw < 0 ? -best_raw : best_raw;
+    for (int64_t i = 1; i < n; i++) {
+        int64_t v = ((int64_t*)vec)[i];
+        int64_t k = v < 0 ? -v : v;
+        if (k < best_k) {
+            best_k = k;
+            best_raw = v;
+        }
+    }
+    return best_raw;
+}
+
 int64_t py_builtin_min_f64(int64_t vec) {
     int64_t n = vec ? ((int64_t*)(vec - 16))[1] : 0;
     if (n <= 0) return 0;

@@ -1651,6 +1651,50 @@ call, no NULL-handle dereference).",
                         && ka.len() == 2
                         && matches!(&ka[0], AstNode::StringLit(n) if n == "key")
                     {
+                        // 批 956：key=abs 特化——内建 abs 无一等函数值形式
+                        //（llvm.fabs 内在经 zeta_call1 ABI 不匹配，实拍
+                        // exit 138），fabs 比较循环直接分派绕开函数值 ABI；
+                        // 其余 key 函数维持 py_min_key/py_max_key（单态化
+                        // 第二段另批）
+                        if matches!(&ka[1], AstNode::Var(nm) if nm == "abs") {
+                            let xs = self.lower_expr(&args[0]);
+                            let elem_is_float = match self.type_map.get(&xs) {
+                                Some(Type::DynamicArray(e))
+                                | Some(Type::Array(e, _)) => {
+                                    matches!(**e, Type::F64 | Type::F32)
+                                }
+                                _ => match &args[0] {
+                                    AstNode::Var(nm) => matches!(
+                                        self.checker_type_of(nm),
+                                        Some(Type::DynamicArray(e))
+                                            if matches!(*e, Type::F64 | Type::F32)
+                                    ),
+                                    _ => false,
+                                },
+                            };
+                            let func = match (method.as_str(), elem_is_float) {
+                                ("max", true) => "py_builtin_max_abs_f64",
+                                ("min", true) => "py_builtin_min_abs_f64",
+                                ("max", false) => "py_builtin_max_abs_i64",
+                                _ => "py_builtin_min_abs_i64",
+                            };
+                            self.stmts.push(MirStmt::Call {
+                                func: func.to_string(),
+                                args: vec![xs],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(
+                                id,
+                                if elem_is_float {
+                                    Type::F64
+                                } else {
+                                    Type::I64
+                                },
+                            );
+                            return id;
+                        }
                         let xs = self.lower_expr(&args[0]);
                         let f = self.lower_expr(&ka[1]);
                         let func = if method == "min" {
@@ -1814,6 +1858,48 @@ call, no NULL-handle dereference).",
                     _ => None,
                 };
                 if let Some(k) = keyf {
+                    // 批 956：key=abs 特化——内建 abs 无一等函数值形式
+                    //（llvm.fabs 内在经 zeta_call1 ABI 不匹配，实拍 exit
+                    // 138），元素 fabs 比较循环直接分派，绕开函数值 ABI。
+                    // 其余 key 函数维持 py_min_key/py_max_key（单态化
+                    // 第二段另批）。
+                    let is_abs = matches!(&k, AstNode::Var(nm) if nm == "abs");
+                    if is_abs {
+                        let xs = self.lower_expr(&args[0]);
+                        let elem_is_float = match self.type_map.get(&xs) {
+                            Some(Type::DynamicArray(e))
+                            | Some(Type::Array(e, _)) => {
+                                matches!(**e, Type::F64 | Type::F32)
+                            }
+                            _ => match &args[0] {
+                                AstNode::Var(nm) => matches!(
+                                    self.checker_type_of(nm),
+                                    Some(Type::DynamicArray(e))
+                                        if matches!(*e, Type::F64 | Type::F32)
+                                ),
+                                _ => false,
+                            },
+                        };
+                        let func = match (method.as_str(), elem_is_float) {
+                            ("max", true) => "py_builtin_max_abs_f64",
+                            ("min", true) => "py_builtin_min_abs_f64",
+                            ("max", false) => "py_builtin_max_abs_i64",
+                            _ => "py_builtin_min_abs_i64",
+                        };
+                        let dest_f64 = elem_is_float;
+                        self.stmts.push(MirStmt::Call {
+                            func: func.to_string(),
+                            args: vec![xs],
+                            dest: id,
+                            type_args: vec![],
+                        });
+                        self.exprs.insert(id, MirExpr::Var(id));
+                        self.type_map.insert(
+                            id,
+                            if dest_f64 { Type::F64 } else { Type::I64 },
+                        );
+                        return id;
+                    }
                     let xs = self.lower_expr(&args[0]);
                     let f = self.lower_expr(&k);
                     let func = if method == "min" {
