@@ -1120,15 +1120,15 @@ int64_t py_min_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
         int64_t k = ((int64_t(*)(int64_t))keyfn)(v);
         int64_t take;
         if (key_is_f64) {
-            double kd;
-            memcpy(&kd, &k, sizeof kd);
+            // 批次 982：同 py_max_key——double(*)(int64_t) 调用签名
+            double (*kfd)(int64_t) = (double (*)(int64_t))keyfn;
+            double kd = kfd(v);
             take = kd < best_d;
-            if (take) memcpy(&best_d, &kd, sizeof best_d);
+            if (take) { best_d = kd; best = v; continue; }
         } else {
             take = k < best_k;
-            if (take) best_k = k;
+            if (take) { best_k = k; best = v; }
         }
-        if (take) best = v;
     }
     return best;
 }
@@ -1216,15 +1216,18 @@ int64_t py_max_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
         int64_t k = ((int64_t(*)(int64_t))keyfn)(v);
         int64_t take;
         if (key_is_f64) {
-            double kd;
-            memcpy(&kd, &k, sizeof kd);
+            // 批次 982：keyfn 返回 double（float 注解 ⇒ LLVM v0）——
+            // 须按 double(*)(int64_t) 调用（形参 x0 位模式、返回 v0），
+            // 直接比较返回值；旧代码读 x0 当 int64 位模式 ⇒ 读到形参
+            // 残留（恒等假象，min 方向反实拍）
+            double (*kfd)(int64_t) = (double (*)(int64_t))keyfn;
+            double kd = kfd(v);
             take = kd > best_d;
-            if (take) memcpy(&best_d, &kd, sizeof best_d);
+            if (take) { best_d = kd; best = v; continue; }
         } else {
             take = k > best_k;
-            if (take) best_k = k;
+            if (take) { best_k = k; best = v; }
         }
-        if (take) best = v;
     }
     return best;
 }

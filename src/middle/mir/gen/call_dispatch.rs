@@ -2028,8 +2028,17 @@ call, no NULL-handle dereference).",
                         "py_max_key"
                     };
                     // 批 962：keyfn 返回域分派
+                    let flag_v = keyfn_returns_f64(&self.func_ret_types, &k);
+                    if std::env::var("ZETA_PROBE_CHECKER").is_ok() {
+                        eprintln!(
+                            "FLAG: kfn={:?} ret_f64={} in_table={}",
+                            match &k { AstNode::Var(n) => n.as_str(), _ => "?" },
+                            flag_v,
+                            match &k { AstNode::Var(n) => self.func_ret_types.contains_key(n.as_str()), _ => false }
+                        );
+                    }
                     let flag = self
-                        .int_slot(keyfn_returns_f64(&self.func_ret_types, &k) as i64);
+                        .int_slot(flag_v as i64);
                     self.stmts.push(MirStmt::Call {
                         func: func.to_string(),
                         args: vec![xs, f, flag],
