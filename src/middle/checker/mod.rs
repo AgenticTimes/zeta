@@ -460,9 +460,14 @@ pub fn build_module_checker_plan(
     }
     // 模块级槽推断（批 942）：顶层赋值语句的 Var lhs 建槽。批 947 起
     // 先于证据合并——顶层 Var 实参的证据查 module_env（写侧精化后的
-    // 容器槽型由此过函数边界）
+    // 容器槽型由此过函数边界）。
+    // 批 954 修正：只保留 module_globals 名单内的槽——扫描面里的赋值
+    // 目标可能包括合成 main 体内部的**局部**变量（py 语料把用户顶层
+    // 语句包装进 main），原实现把它们当全局种子注入到所有函数 env，
+    // 造成 main 局部型跨函数泄漏（隐错型源）。
     let mut module_env = TypeEnv::new();
     scan_module_slots(&mut module_env, top_bodies, &ctx);
+    module_env.slots.retain(|k, _| module_globals.contains(k));
     let evidence =
         collect_param_evidence(funcs, Some(&body_rets), Some(&env_cache));
     let evidence = merge_top_level_evidence(
@@ -2520,11 +2525,15 @@ mod tests {
                 }),
             },
         ];
+        // d 是模块全局（resolver 的 module_globals 名单）——批 954 起种
+        // 子只保留名单内的槽
+        let mut globals = std::collections::HashSet::new();
+        globals.insert("d".to_string());
         let plan = build_module_checker_plan(
             &registered,
             &HashMap::new(),
             &HashMap::new(),
-            &Default::default(),
+            &globals,
             &top,
         );
         // d 的槽被写侧精化成 map[Str,F64]，顶层 Var 实参证据 ⇒ get.dd 位
@@ -3027,6 +3036,65 @@ mod tests {
         assert_eq!(
             env.get_slot("s"),
             LatticeTy::known(Type::DynamicArray(Box::new(Type::F64)))
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_954 {
+    use super::*;
+
+    /// 批 954：module_env 种子只保留 module_globals 名单内的槽——
+    /// 合成 main 体内部的局部变量不跨函数泄漏。
+    #[test]
+    fn module_env_filtered_to_declared_globals() {
+        let mk_def = |name: &str, body: Vec<AstNode>| AstNode::FuncDef {
+            name: name.to_string(),
+            generics: vec![],
+            lifetimes: vec![],
+            params: vec![],
+            ret: String::new(),
+            body,
+            attrs: vec![],
+            ret_expr: None,
+            single_line: true,
+            doc: String::new(),
+            pub_: false,
+            async_: false,
+            const_: false,
+            comptime_: false,
+            where_clauses: vec![],
+        };
+        // main 体：G = [1.0]（全局）＋ local = 5（main 局部，不应入种子）
+        let main = mk_def(
+            "main",
+            vec![
+                assign(
+                    "G",
+                    AstNode::ArrayLit(vec![AstNode::FloatLit("1.0".to_string())]),
+                ),
+                assign("local", AstNode::Lit(5)),
+            ],
+        );
+        let mut registered = HashMap::new();
+        registered.insert("main".to_string(), main);
+        let mut globals = std::collections::HashSet::new();
+        globals.insert("G".to_string());
+        let plan = build_module_checker_plan(
+            &registered,
+            &HashMap::new(),
+            &HashMap::new(),
+            &globals,
+            &[],
+        );
+        assert_eq!(
+            plan.module_env.get_slot("G"),
+            LatticeTy::known(Type::DynamicArray(Box::new(Type::F64)))
+        );
+        assert_eq!(
+            plan.module_env.get_slot("local"),
+            LatticeTy::Unknown,
+            "main 局部变量不入全局种子"
         );
     }
 }
