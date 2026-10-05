@@ -6066,3 +6066,212 @@ fn print_argument_modulo_folds_with_the_divisors_sign() {
         "`print` 的 i128 折叠取余必须跟除数同号（批次 642 的 evaluator.rs 百分号臂）。读回 -1／1＝那一臂退回截断语义；读回非字符串形状＝这一臂弃权、走了运行期出码。"
     );
 }
+
+/// 10043 用：把"真除法在不在 MIR 里、打印走哪个 `println` 函数、实参是什么形状"压成一格字符串。
+/// 扫描按 `lower_all` 排好的函数顺序（`f_0` 在 `main` 之前），所以"被调方体里的 div ＋
+/// 调用点的 `println`"会落进同一串；多个 div 先排序再拼，免得逐次翻。
+fn div_and_print_shape(mirs: &[Mir]) -> String {
+    let mut divs: Vec<String> = Vec::new();
+    let mut print: Option<(String, String)> = None;
+    for m in mirs {
+        let mut stack: Vec<&MirStmt> = m.stmts.iter().rev().collect();
+        while let Some(s) = stack.pop() {
+            match s {
+                MirStmt::Call { func, dest, .. } if func == "/" => {
+                    let t = match m.type_map.get(dest) {
+                        Some(ty) => format!("{ty:?}"),
+                        None => "<槽型缺失>".to_string(),
+                    };
+                    divs.push(format!("div->{t}"));
+                }
+                MirStmt::VoidCall { func, args } if func.starts_with("println") => {
+                    if print.is_none() {
+                        let arg = match args.first().and_then(|id| m.exprs.get(id)) {
+                            Some(MirExpr::IntLit(v)) => format!("IntLit({v})"),
+                            Some(MirExpr::FloatLit(v)) => format!("FloatLit({v})"),
+                            Some(MirExpr::StringLit(v)) => format!("StringLit({v:?})"),
+                            Some(MirExpr::Var(slot)) => match m.type_map.get(slot) {
+                                Some(ty) => format!("Var({ty:?})"),
+                                None => "Var(<槽型缺失>)".to_string(),
+                            },
+                            Some(other) => {
+                                let d = format!("{other:?}");
+                                d.split_whitespace().collect::<Vec<_>>().join(" ")
+                            }
+                            None => "<exprs 里没有这一项>".to_string(),
+                        };
+                        print = Some((func.clone(), arg));
+                    }
+                }
+                MirStmt::If { then, else_, .. } => {
+                    stack.extend(then.iter().rev().chain(else_.iter().rev()));
+                }
+                MirStmt::For { body, else_body, .. } | MirStmt::While { body, else_body, .. } => {
+                    stack.extend(body.iter().rev().chain(else_body.iter().rev()));
+                }
+                _ => {}
+            }
+        }
+    }
+    divs.sort();
+    let div = if divs.is_empty() {
+        "no-div".to_string()
+    } else {
+        divs.join(",")
+    };
+    match print {
+        Some((f, a)) => format!("{div} | {f} | {a}"),
+        None => format!("{div} | no-print | -"),
+    }
+}
+
+/// 批次 454（代码 `913e0a01`，2026-09-27，站点 `src/middle/ctfe/evaluator.rs:791-805` 的
+/// `(AstNode::Lit(_), AstNode::Lit(_)) if op == "/"` 弃权臂；行号按本批最后一轮实跑取）。
+///
+/// 症状（记录原文）："Folding `7 / 2` to `Lit(3)` baked the truncated quotient into the AST
+/// before MIR typing could see the expression. Leave the node alone: the lowering emits the
+/// fdiv and the answer is 3.5."——`AstNode::Lit` 只装 i64，把真除法的商折进去就是把 3.5
+/// 悄悄换成 3，而且是在 MIR 给这个表达式确定类型之前换的。
+///
+/// 观测点：真除法在 MIR 里是一条 `Call{func:"/"}`（`dest` 槽带类型），后面跟
+/// `VoidCall{func:"println_f64", args:[dest]}`。这一臂被撤掉时第 1、2 格读回来的是
+/// `no-div | println_i64 | IntLit(3)`／`IntLit(4)`，第 4 格读回 `no-div | println_i64 |
+/// Var(I64)`——商在 AST 里就被折成 i64 字面量，MIR 里再没有除法调用，所以"没有 div 调用"
+/// 本身就是失败信号。
+///
+/// 期望值来源：CPython 现场（`7 / 2`＝3.5、`8 / 2`＝4.0、`6 * 2`＝12、`3 + 4`＝7）＋
+/// 本树 AOT 实拍（`/tmp/b10043/aot_c1` 打 `3.5`，rc=0）＋ `--dump-mir` 逐格读数
+/// （`/tmp/b10043/f_c1_print_neg.out` 等，见 `/tmp/b10043/probe3.py`）。逐格单独降一趟 MIR 的
+/// 理由同批次 10037／10042：合在一起降时未折叠的格会换发射路径，第 i 个 `println` 与第 i 格对不上号。
+///
+/// 覆盖面分工（六臂变异，汇总在 `/tmp/b10043/matrix_out.txt`，逐臂日志在同目录
+/// `arm_M*_*.log`）：① 撤整臂（M1）＝第 1、2、4 格红，第 3 格与两格对照绿；② 把弃权条件
+/// 从"只有 `/`"放宽到"所有字面量对"（M2）＝6 格一字不变——乘法／加法即便不在 AST 层折叠，
+/// 下游仍折成同一个字面量，所以本批的格子测不出"弃权范围溢出"，两格对照只锁住当前发射形状，
+/// **不**锁住"只有 `/` 被豁免"；③ 第 3 格（`x = 7 / 2` 再打印）在 M1 下不变＝赋值右侧根本不经
+/// 这一臂，本条覆盖的是 `print` 参数与 `return` 表达式这两条会走到 AST 折叠的路径。
+/// `const` 那一层（批次 454 没管）由下一条测试锁住；两条测试在任何一臂下都不互相变红。
+///
+/// 与既有用例的分工：批次 643 的 `floordiv_word_operator_folds_at_compile_time` 锁住词算子
+/// `floordiv`（`.z` 里 `//` 是行注释，不是整除）；批次 10042 那两条锁住取余的两层折叠；
+/// 454 的运行期真值由在册夹具 `t487`/`t488`/`t489` 承担，本条只锁编译期 MIR 形状。
+#[test]
+fn true_division_of_integer_literals_is_not_folded_at_the_ctfe_layer() {
+    let cells: [(&str, &str, &str); 6] = [
+        (
+            "print 真除法（非整除；折成 3 就是静默错值）",
+            r#"print(7 / 2)
+"#,
+            "div->F64 | println_f64 | Var(F64)",
+        ),
+        (
+            "print 真除法（整除也要留浮点：Python 里 8/2 是 4.0）",
+            r#"print(8 / 2)
+"#,
+            "div->F64 | println_f64 | Var(F64)",
+        ),
+        (
+            "先赋给变量再打印：槽型跟着真除法走",
+            r#"x = 7 / 2
+print(x)
+"#,
+            "div->F64 | println_f64 | Var(F64)",
+        ),
+        (
+            "函数返回真除法：被调方体里是 div，调用点目的槽是 F64",
+            r#"def f():
+    return 7 / 2
+y = f()
+print(y)
+"#,
+            "div->F64 | println_f64 | Var(F64)",
+        ),
+        (
+            "对照组：乘法字面量仍然折叠（弃权臂只盖 `/`）",
+            r#"x = 6 * 2
+print(x)
+"#,
+            r#"no-div | println_str | StringLit("12")"#,
+        ),
+        (
+            "对照组：加法字面量仍然折叠",
+            r#"x = 3 + 4
+print(x)
+"#,
+            r#"no-div | println_str | StringLit("7")"#,
+        ),
+    ];
+
+    let got: Vec<(&str, String)> = cells
+        .iter()
+        .map(|(label, src, _)| (*label, div_and_print_shape(&lower_all(src))))
+        .collect();
+    let want: Vec<(&str, String)> = cells
+        .iter()
+        .map(|(label, _, v)| (*label, (*v).to_string()))
+        .collect();
+
+    assert_eq!(
+        want, got,
+        r#"两个整数字面量的 `/` 必须在 MIR 里留成真除法调用（批次 454 的 evaluator.rs 弃权臂）。读回 no-div | println_i64 | IntLit(3) 这类形状＝这一臂被撤，截断商在 MIR 确定类型之前就被折进 AST；第 3 格读回 no-div＝赋值右侧也开始经这一臂（本批实测不经，见文档头③）。"#
+    );
+}
+
+/// 批次 454 同一条语义的**另一层**——`const` 项折叠走的是 `src/middle/ctfe/value.rs:274-285`
+/// 的 `binary_op_int` 斜杠臂（`left.wrapping_div(right)`），发射点在 `src/middle/mir/gen.rs:3640-3660`
+/// 往 `global_consts` 里写；454 那批只改了 AST 侧的 `ConstEvaluator`，这一层至今仍然折叠。
+///
+/// 这条是**现状锁**，不是"这一层已经按 454 改对"的证据：`const A: int = 7 / 2` 显式声明了
+/// `int`，折成截断商 3 是自洽的；但它与 454 的立场（字面量 `/` 的商是浮点、不许折）是两套口径，
+/// 差在哪一格算对，记录里没有裁定，所以只锁住"当前读数长这样"，改动时本条应红并强制重新取证。
+///
+/// 观测点：`global_consts` 里按名字可读的 `ConstValue::Int`。B／D 两格用来区分截断除与地板除：
+/// `-7 / 2` 截断＝-3、地板＝-4；`-8 / 3` 截断＝-2、地板＝-3（Rust 的 `wrapping_div` 朝零截断）。
+/// E 格（`8 / 0`）读回来是"表里没有这一项"，而且 `zetac` 整趟 rc=0、stderr 为空——除零在这里
+/// 被静默丢掉，已登记为 `#20005` 余项。
+///
+/// 期望值来源：CPython 实算（7/2＝3.5 → 声明 int 取截断 3；-7/2＝-3.5；8/2＝4.0；-8/3＝-2.67）＋
+/// 本树 `--dump-mir` 实拍（`/tmp/b10043/f_combined.out`：A=3、B=-3、C=4、D=-2，E 缺项；
+/// 逐格单降的读数在 `/tmp/b10043/f_d*.out`，两问一致）。
+///
+/// 覆盖面分工（同一批六臂变异，逐臂日志在 `/tmp/b10043/arm_M*_*.log`）：把这一臂改成地板除
+/// （`div_euclid`，M3）只有 B／D 红，读回 -4／-3；让这一臂一律报错（M4）则 A／B／C／D 四格
+/// 一起变成缺项、E 格不变。两臂的坏格集是**包含关系**（M3 ⊂ M4），按构造 M3 拿不到独占格。
+/// `binary_op_uint` 里另有一份逐字相同的斜杠臂，把它也改成报错（M6）后两条测试一字不变＝
+/// 负数与普通整数字面量走的是有符号那一层，无符号那一层本批没覆盖。撤 AST 侧那一臂（M1、M2）
+/// 时本条 5 格一字不变，反之撤本条这一臂时上一条 6 格一字不变＝两条测试互不备份、各自独立。
+#[test]
+fn const_declared_integer_division_folds_to_the_truncated_quotient() {
+    let mirs = lower_all(
+        r#"const A: int = 7 / 2
+const B: int = -7 / 2
+const C: int = 8 / 2
+const D: int = -8 / 3
+const E: int = 8 / 0
+"#,
+    );
+    let f = mir(&mirs, "main");
+    let names = ["A", "B", "C", "D", "E"];
+    let want_vals = ["3", "-3", "4", "-2", "<表里没有这一项>"];
+    let got: Vec<(String, String)> = names
+        .iter()
+        .map(|n| {
+            let v = match f.global_consts.get(*n) {
+                Some(ConstValue::Int(x)) => x.to_string(),
+                Some(other) => format!("{other:?}"),
+                None => "<表里没有这一项>".to_string(),
+            };
+            ((*n).to_string(), v)
+        })
+        .collect();
+    let want: Vec<(String, String)> = names
+        .iter()
+        .zip(want_vals.iter())
+        .map(|(n, v)| ((*n).to_string(), (*v).to_string()))
+        .collect();
+
+    assert_eq!(
+        want, got,
+        "`const X: int = 字面量 / 字面量` 在 value.rs 的斜杠臂里折成**朝零截断**的商（批次 454 没管这一层；本条是现状锁）。读回 -4／-3＝这一臂改成地板除；读回缺项＝这一臂不再折叠；E 格若有值＝除零守卫被去掉，静默错值换了形状。"
+    );
+}
