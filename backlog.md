@@ -890,6 +890,26 @@
 >   现状锁。零 `src/` 改动，`target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10025 起那颗
 >   相同 ⇒ 免补抽样窗口。滞留：代码笔后 `bootstrap..cleanup`＝53、`cleanup..bootstrap`＝378。
 >
+> - 批次 10047（代码 `1f15fb50`）＝来源批次 647（`a567e700`，2026-09-29，"bigint 运行期首批"第②步：
+>   模块级、非循环体内的越界整数赋值把右边改写成 `BigIntLit`，否则该槽按 i64 绕回＝静默错数）：
+>   `tests/regression_history.rs:7138` 一条 14 格用例（读数函数 `bigint_reading` 在 `:7064`），站点＝
+>   `src/middle/ctfe/evaluator.rs:588-600`（647 的 `Assign` 改写块；外层 `p642_depth == 0` 在 `:540` 属
+>   批次 642，`BigIntLit` 透传支在 `:611`）。三段读数＝`zeta_big_` 被调清单、每个 `zeta_big_new` 的
+>   `lo:hi` 拆值、`Named("BigInt")` 槽数；`lo`/`hi` 期望值由 python3 独立算 128 位拆分，不是抄编译输出。
+>   进程内矩阵：M2 只留负溢出半条守卫＝**只红格 5**、M2b 只留正溢出半条＝红其余模块级格（两臂红格集
+>   互不相交、并集＝M1 删整块）⇒ 两条独立覆盖，M1 只算防放松；M6 守卫恒真＝**只红格 9、10**（小值也
+>   被折成句柄）＝第三条独立覆盖，且同一臂连带打到本套件另 6 条既有用例（`Str % 整数` 被派给
+>   `zeta_big_mod`、`read` 绑成 `BigInt::read` 等）⇒ 这半条守卫的损害面比登记的形状更宽；M4（`:611` 透传
+>   支折成 `Lit(0)`）与 M7（忽略 truediv 弃权标记）14 格全不红＝阴性，原因实测（M3 删该支编不过
+>   `error[E0004]`＝该支语法上必须存在、与默认支同形；`eval_i128_tree` 遇 `/` 直接返回 `None`）。
+>   三条未锁如实登记（见 roadmap 批次 10047 §仍未锁）：① 左值非裸变量（`obj.b = 1 << 100`）本块要求
+>   `AstNode::Var`，该形状未登记、未变异；② 块内赋值走运行期提升由 642 的深度条件决定，格 12 只作对照；
+>   ③ 运行期实际打出的值不锁（#20005 只收落在 MIR 上的结论）。零 `src/` 改动，`target/release/zetac` md5
+>   `ed5227ccd29b70c4ee9ae17500926f10` 与 10025 起那颗相同 ⇒ 免补抽样窗口；每批检查
+>   `cargo test -p zetac --lib` 145/145、`--test regression_history` 72/72、`cargo build` 0 错误，
+>   `evaluator.rs` 还原后 md5 `4b5c4b0afa2b09d42b226df36f158359`＝HEAD。滞留：代码笔后
+>   `bootstrap..cleanup`＝55、`cleanup..bootstrap`＝385。
+>
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；
