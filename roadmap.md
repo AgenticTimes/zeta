@@ -29984,3 +29984,19 @@ keyfn(v) 返回 **v 原值（恒等）**——FuncAddr("ki") 解析到的地址�
 - MIR verifier（G.6）：**未启动**（refactor.md 方案在案：verifier.rs
   结构不变量检查，--dump-mir 强制运行＋debug 常开；验收=语料全过
   ＋注入坏 MIR 能红）——**1-2 天独立专项，七轴最后一个未动项**
+
+## 批次 979（2026-10-05）：G.6 verifier 首批＋FuncAddr 位桥（keyfn 全链收官合并）
+
+**G.6 verifier 首批**（轴 G.6 落地）：middle/mir/verifier.rs 悬空槽
+引用不变量（嵌套块递归；type_map 键存在性）＋5 单测（好过/坏红/
+嵌套/ParamInit/type_map）；挂接 --dump-mir 强制运行（W0900 观察模式）。
+语料验证：t446/t485/b947/b962/b978 dump 全零违规。
+
+**FuncAddr 位桥（批 966"位桥"本体落地）**：C 侧 py_max_key_f64
+签名 double(*)(double)——元素 i64 位模式 bitcast 成 double 传 v0
+（寄存器类匹配特化副本 LLVM 签名 double(f64)），返回原元素。批 966
+实证的 int64 形参直传寄存器类错配（副本读 x0 残留）由此修复。
+
+终态：max/min(xs, key=ka) = -3.5/2.5 与 CPython 逐字对齐（用户
+keyfn f64 通道单态化全链）；库 254/254（verifier 5 单测）、全量
+差分 2845/2845、python_style 479/0。
