@@ -29812,3 +29812,20 @@ f64 语义**（参数槽型 F64 的传递路径：ParamInit→体内读→取负
 
 回退后＝批 964 状态。验证：库 246/246、全量差分 2845/2845、
 python_style 479/0。
+
+## 批次 967（2026-10-05）：keyfn 单态化收官——f64 通道全链打通
+
+副本 ABI 链断点定位（MIR/LLVM/运行时三层探针）＋三修：
+1. 登记块 name 未改 mangled ⇒ 副本以原名入 mir_map **覆盖原函数
+   MIR**＋去重永不命中——push 前改 name
+2. FuncAddr 块嵌在 module_globals env-read 分支内（特化副本不在
+   globals 名单）⇒ keyfn 参数收槽号 0x100（strlen SEGV）——独立
+   早分支
+3. C 侧 kf(int64 实参) 被编译器 sitofp 值转换（非位模式重解释）——
+   显式 memcpy 位模式往返；重复 impl 定义去重
+
+终态：副本反汇编 d0=0-d0（f64 取负）；max(xs, key=ka)=-3.5、
+min=2.5 与 CPython 逐字对齐；b947/b956 探针保持。库 246/246、
+全量差分 2845/2845、python_style 479/0。
+函数值轴：key=abs ✓、带注解用户 keyfn f64 通道 ✓；无注解 keyfn
+返回域静态判定登记（副本参数通道已就位）。
