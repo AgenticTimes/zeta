@@ -29889,3 +29889,20 @@ unify（错误以 E2002 诊断报出＋false 返回）——**检查严格度变
 
 结论：段 4 切换＝**检查语义变更**而非纯结构收敛，需专项批（语料
 影响面评估＋诊断对齐）独立排期。infer_type 本体退役随之（段 5）。
+
+## 批次 972（2026-10-05）：双轨段 4 专项——删除实验受挫，审计深化（回滚）
+
+删除实验：TypeCheckMigrator 死块（415-702）按行号区间删除 ⇒ 全量
+差分 match=0（语料全崩）＋python_style 476 FAIL——**区间非纯死块**：
+string_to_type 的可见性链（resolver.rs:985 经 typecheck_new 的
+impl 解析）与 UnifiedTypeCheck 相关 impl 交织于同区间。已回滚
+（HEAD 全绿：库 251/251、差分抽样 284/284）。
+
+深化结论：
+1. TypeCheckMigrator **类型与 inherent 方法**（真死）可删，但须
+   **结构级分析**（impl 块边界逐个判定），非行号区间
+2. "use_new_system 切换"前提修正：主管线 typecheck_unified 恒走
+   新系统（批 957 实证），Migrator 分发不在线上 ⇒ 无切换需求，
+   只有死代码删除需求
+3. infer_type 终态修正：保留为 infer_unified 的回落实现（分层
+   而非退役）——宽容语义依赖
