@@ -28134,3 +28134,103 @@ debug 目标，本批没重编）⇒ 按 2026-10-03 的每批节奏不跑抽样�
 只有 `inelse`（else 侧）一枚时会写成"else 递归坏了"，补上 `exp_then`（then 侧＋显式 else）那一角才发现
 分界是 `else:` 关键字本身。③ 用例标签改了要同步改矩阵的期望清单，脚本里那条 `assert k == gv_k`
 就是为这一步留的守卫（第三笔把第 10/11/12 格标签改成"显式 else"，矩阵 WANT 跟着重写成十三格才跑第二遍）。
+
+## 批次 10040（cleanup）——#20005 第二十九批：来源批次 287 的 with 体提前退出逐边放锁
+
+代码笔 `81cb36b0`（`tests/regression_history.rs` +280/−0，一笔）。零 `src/` 改动：
+站点文件 `src/frontend/parser/stmt.rs` 的 md5 改前改后一字未动
+（`628bf015bf66f080d4d58bf5654a2e2c`），被测二进制仍是上批那颗
+（`target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10`）。
+
+### 来源与站点
+
+来源批次 287（代码 `d8f69183`，2026-09-20，`git merge-base --is-ancestor` 已验在本树）。
+症状（287 台账原文）：`_ranked_fetch_sources → _load_source_stats →
+py_threading_lock_acquire → __psynch_mutexwait` 全进程唯一线程挂住 rc=124＝锁泄漏死锁；
+最小复现 `with lk: return 7` 第一次正常、第二次挂死。双重根因：① `parse_with` 的降形只在
+body「能走到尾」时补 `__exit__` ⇒ 体内 `return` 提前离开时永不释放；② 修 ① 之后实测返回 0，
+`top_level.rs` 的函数体尾语句提升把以 `return` 结尾的 Block 提成 ret_expr ⇒ `return` 被吞。
+本批站点＝修 ① 的那两处：`rewrite_with_exits`（现 :1308-1364）＋发射器 `zeta_with_exit_stmt`
+（现 :1272）。在册夹具 `tests/python_style/t287_with_lock_return.z`（`// expect: 42 42 9`）
+继续承担运行期真值。
+
+### 本条测试的形状
+
+一条测试 `with_body_terminators_release_the_lock_before_leaving`，14 格＝12 个函数的
+**规范化事件轨迹**（`lower_all` 进程内降形；槽号按首次出现顺序发号，所以每格读的是事件次序
+与配对关系，不是全局槽号，也不会退化成整份 MIR 逐字节比对）。词表：`acq` 加锁、`tend` 弹
+try 帧、`rel` 释放锁、`raise` 重抛、`wsK<-sL` 把返回槽写进 sK、`retsK` 返回、`brk`/`cont`、
+`if{…}else{…}`／`for{…}esle{…}`／`whl{…}esle{…}`。
+
+覆盖到的形状面：`return` 的九种位置（with 体顶层、If 的 then 支、elif 链的三支、while 体、
+for 的 else 支、先赋值再 return、嵌套 with、`loop:` 体、`if let` 支）＋ `break`/`continue`
+的四种分界（绑到 with 外层循环的边要放锁／with 体内自己循环的边不放锁，for 与 while 各一对）
+＋ while 的 else 支里 break。
+
+改前（＝287 未修）形状的同源读数在 `arm_M1_return_arm_gone.txt` 的 left 侧：那九条轨迹里
+`return` 边上既没有弹帧也没有释放，红值就是记录里的症状（锁永不释放）；其余 5 格一字不动。
+
+### 变异矩阵（14 臂，逐臂红点集）
+
+还原源固定 `git show HEAD:src/frontend/parser/stmt.rs`；每臂改完断言 md5 不等于还原态、
+跑完断言 md5 回到还原态（ stmt.rs 收尾实测 `628bf015` 等于改前值）。原始输出逐臂存
+`/tmp/b10040/arm_<臂名>.txt`，红点集解析在 `/tmp/b10040/matrix_parsed.json`。
+
+逐臂红点集（`--test regression_history` 单跑本条；格名取轨迹标签的函数名）：
+
+| 臂 | 撤掉哪一处（`stmt.rs` 现行号） | 红点格 |
+|---|---|---|
+| M1（RED） | `return` 那支整段撤掉＝改回 287 改前形状（:1312-1321） | ret_top、ret_in_if、ret_in_elif、ret_in_while、ret_in_for_else、ret_after_assign、ret_in_nested_with、ret_in_loop、ret_in_iflet（9 格） |
+| M2（RED） | `return` 那支只撤释放发射（:1319） | ret_top、ret_in_if、ret_in_elif、ret_in_while、ret_in_for_else、ret_after_assign、ret_in_nested_with、ret_in_loop、ret_in_iflet（9 格） |
+| M3（RED） | `return` 那支只撤弹帧（:1318） | ret_top、ret_in_if、ret_in_elif、ret_in_while、ret_in_for_else、ret_after_assign、ret_in_nested_with、ret_in_loop、ret_in_iflet（9 格） |
+| M4（RED） | `brk` 那支整段撤掉（:1322-1326） | break_outer、break_in_while_else（2 格） |
+| M5（RED） | `cont` 那支整段撤掉（:1327-1331） | cont_outer（1 格） |
+| M6（RED） | `If` 那支不再递归（:1332-1336） | ret_in_if、ret_in_elif、ret_in_nested_with（3 格） |
+| M7（RED） | `If` 只递归 then 侧、丢掉 else_ 侧（:1335） | ret_in_elif（1 格） |
+| M8（RED） | `IfLet` 那支不再递归（:1337-1342） | ret_in_iflet（1 格） |
+| M9（RED） | `Block` 那支不再递归（:1343-1345） | ret_in_nested_with（1 格） |
+| M10（RED） | `Loop` 那支不再递归（:1346-1348） | ret_in_loop（1 格） |
+| M11（RED） | `For` 体不再复位 `at_loop_depth`（:1352 的 false 改成透传） | break_inner（1 格） |
+| M12（RED） | `For` 的 else 支不再递归（:1353） | ret_in_for_else（1 格） |
+| M13（RED） | `While` 体不再复位（:1357 的 false 改成透传） | cont_inner（1 格） |
+| M14（RED） | `While` 的 else 支不再递归（:1358） | break_in_while_else（1 格） |
+
+### 覆盖面分工的裁定
+
+- M1／M2／M3 三臂红**同一组 9 格**＝一条覆盖（`return` 那支改写：赋值＋弹帧＋释放＋改返槽
+  是一条链上的四件事，撤任一件都只会红这 9 格）。这不是三条独立覆盖。
+- 其余 11 臂各自的红点集互不相同，且每臂至少打红一格别的臂打不红的：M4（brk 那支，2 格）、
+  M5（cont 那支，1 格）、M6（If 整支不递归，3 格）、M7（只断 If 的 else_ 半支，1 格）、
+  M8（IfLet，1 格）、M9（Block，1 格）、M10（Loop，1 格）、M11（for 体的 `at_loop_depth`
+  复位改成透传，1 格＝"体内 break 不放锁"）、M12（for 的 else 支不递归，1 格）、
+  M13（while 体的复位，1 格＝"体内 continue 不放锁"）、M14（while 的 else 支不递归，1 格）。
+- **14 臂全部有红点、零阴性臂**；14 格每格至少被一臂打红＝没有空跑格。
+  上一批（10039）的 7 臂矩阵有 3 臂阴性，本批靠先把 `loop:`、`if let`、`elif` 三形
+  实测进夹具才做到零阴性——`loop:` 与 `if let` 在 `with` 体内可解析可降形，是本批新证。
+
+### 本批新发现的未修项（记在 #20005 余项内，不占新号）
+
+`ret_in_iflet` 那一格读数是 `acq if{ ws0<-s1 tend rel rets0 tend rel }else{ … }`：
+`return` 之后同一支里还挂着一次弹帧＋释放。原因是 `branch_falls_through` 把 `IfLet` 当作
+可走到尾，于是在 with 体尾部又补了一次收尾释放——位置在 `Return` 之后＝运行期到不了的死代码，
+不改数值也不改放锁次数（该放的已经放过）。本批只在现状锁里把这个形状入册，未修。
+
+### 未证／未锁的边界（如实说明）
+
+1. 287 的第二坑（`top_level.rs` 不再提升以 `return` 结尾的 Block）站点在本车道的在制文件里
+   （`top_level.rs` 有未提交的改动，本批不碰）⇒ 未做变异，`ret_after_assign` 那一格对那一臂
+   只算现状锁，不算分支锁。
+2. 嵌套 with（`ret_in_nested_with`）被 M9（Block 不递归）打红＝外层那趟改写确实经过 Block
+   那支、且这一格不只靠内层自己那趟；但"外层递归进来"与"内层 with 自己那趟"两条路各负责
+   哪一次释放没有分开锁（本批没有只撤内层那一趟的臂）。
+3. 运行期真值（42 42 9、二次调用不挂）仍由在册夹具 t287 承担；本条只锁编译期降形形状。
+4. `zeta_try_exit` 这类别名接收者的释放路径未纳入（本批轨迹只认 `lock_release`／
+   `lock_acquire`／`try_end`／`zeta_raise` 四个符号名）。
+
+### 门禁读数
+
+- `cargo test --test regression_history` → 63 passed / 0 failed（0.11 秒；套件由 62 条涨到 63 条）
+- `cargo test -p zetac --lib parser` → 9 passed / 0 failed（改到的是 parser 的降形，跑该模块内部测试）
+- 编译零错误；变异矩阵里 14 臂全部编译通过（无 BUILD-FAIL）＝每臂的红点是真读数而不是编不过
+- 抽样窗口按 2026-10-03 节奏：零 `src/` 改动＋被测件 md5 与上批同一颗 ⇒ 本批不跑抽样
+- 滞留读数（代码笔 `81cb36b0` 落地后实测）：`bootstrap..cleanup` = 41、`cleanup..bootstrap` = 342

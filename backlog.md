@@ -618,6 +618,54 @@
 >   `target/release/zetac` md5＝`ed5227ccd29b70c4ee9ae17500926f10` 与 10038 那颗一字相同（矩阵只跑
 >   debug 目标，本批未重编）⇒ 抽样窗口未跑。开批实测 `cleanup..bootstrap`＝336，三笔代码笔落地后
 >   实测 `bootstrap..cleanup`＝38，本条记录笔落地后收尾＝39／`cleanup..bootstrap`＝340。
+> - 批次 10040（代码 `81cb36b0`）＝来源批次 287（`d8f69183`，2026-09-20，`with lock: return v`
+>   死锁＋静默错值；站点＝`src/frontend/parser/stmt.rs` 的 `rewrite_with_exits`（现 :1308-1364）
+>   与发射器 `zeta_with_exit_stmt`（现 :1272），本批零 `src/` 改动；`git merge-base --is-ancestor`
+>   已验在本树）：
+>   本套 **63 条全绿**（0.11 秒），crate 内单元测试 145 条一字不变。新用例
+>   `with_body_terminators_release_the_lock_before_leaving`＝十四格一条 `assert_eq!`，每格是一个
+>   函数的**规范化事件轨迹**（槽号按首次出现顺序发号，读的是事件次序与配对关系，不读全局槽号，
+>   也不是整份 MIR 逐字节比对）。词表：`acq` 加锁／`tend` 弹 try 帧／`rel` 释放锁／`raise` 重抛／
+>   `wsK<-sL` 把返回槽写进 sK／`retsK`／`brk`／`cont`／`if{…}else{…}`／`for{…}esle{…}`／
+>   `whl{…}esle{…}`。形状面＝`return` 的九种位置（with 体顶层、If 的 then 支、elif 链三支、
+>   while 体、for 的 else 支、先赋值再 return、嵌套 with、`loop:` 体、`if let` 支）＋
+>   `break`/`continue` 的四组分界（绑到 with 外层循环的边要放锁、with 体内自己循环的边不放锁，
+>   for 与 while 各一对）＋ while 的 else 支里 break。
+>   真值：在册夹具 `tests/python_style/t287_with_lock_return.z`（`// expect: 42 42 9`）承担运行期；
+>   本条期望取自 287 台账的修法描述＋`--dump-mir` 实拍（`/tmp/b10040/mir_head.txt`、
+>   `mir_v2.txt`）＋HEAD 态进程内轨迹（`/tmp/b10040/trace_head.txt`，改前形状＝
+>   `arm_M1_return_arm_gone.txt` 的 left 侧）。
+>   变异矩阵 **14 臂全部有红点、零阴性臂**（逐臂红点集与站点行号在 roadmap 批次 10040 的表里；
+>   还原源＝`git show HEAD:src/frontend/parser/stmt.rs`，每臂断言"变异后 md5 不等于还原态"、
+>   跑完断言 md5 回到 `628bf015…`）：M1（撤 `return` 那支整段＝改前形状）／M2（只撤那支的释放
+>   发射）／M3（只撤那支的弹帧）三臂红**同一组 9 格**（其余 5 格一字不动）⇒ **三臂算一条覆盖**；
+>   M4（撤 `brk` 那支）红 2 格、M5（撤 `cont` 那支）红 1 格、M6（`If` 不递归）红 3 格、
+>   M7（只断 `If` 的 else_ 侧）红 1 格、M8（`IfLet`）／M9（`Block`）／M10（`Loop`）各红 1 格且
+>   三格互不重叠、M11（`For` 体不复位 `at_loop_depth`）红 `break_inner`、M13（`While` 体同）红
+>   `cont_inner`＝这两臂红的是**负向格**（体内 break/continue 不该提前放锁）、M12（`For` 的 else
+>   支不递归）红 `ret_in_for_else`、M14（`While` 的 else 支不递归）红 `break_in_while_else`。
+>   14 格每格至少被一臂打红＝没有空跑格。上一批（10039）7 臂里 3 臂阴性，本批做到零阴性的做法＝
+>   写用例前先把 `loop:`、`if let`、`elif` 三形实测进 `with` 体（CLI `--dump-mir` 先证可解析可降形）。
+>   与在册批次 414 那条（`with_body_exception_path_releases_lock_in_both_try_branches`）互不备份：
+>   414 只走 `raise` 出口，本条走它头注里点名的未覆盖边界＝`return`／`break`／`continue` 三条
+>   提前退出边。轨迹里的 `else{ tend rel raise }` 半段来自 414 的 handler 分支，撤那一臂本条会
+>   跟着红＝那一格算互备、不算本条独立覆盖。
+>   **本批新发现的未修项（记在本条余项内、未占新号）**：`ret_in_iflet` 读数是
+>   `acq if{ ws0<-s1 tend rel rets0 tend rel }else{ … }`＝`return` 之后同一支里还挂着一次弹帧＋
+>   释放。原因＝`branch_falls_through` 把 `IfLet` 当作可走到尾，于是在 with 体尾部又补一次收尾
+>   释放；位置在 `Return` 之后＝运行期到不了的死代码（不改数值、也不多出一次真释放）。
+>   本批只把这个形状入册为现状锁，未修。
+>   **仍未锁的（记在本条余项内、未占新号）**：① 287 的第二坑（`top_level.rs` 不再把以 `return`
+>   结尾的 Block 提升成 ret_expr）站点在本车道在制文件里（`top_level.rs` 有未提交改动，本批不碰）
+>   ⇒ 未做变异，`ret_after_assign` 那一格对那一臂只算现状锁；② 嵌套 with 被 M9 打红＝外层那趟
+>   递归确实参与，但"外层递归进来"与"内层 with 自己那趟"各负责哪一次释放没分开锁（没有只撤
+>   内层那一趟的臂）；③ 运行期真值（42 42 9、二次调用不挂）由夹具承担，本条不锁；
+>   ④ 轨迹只认 `lock_acquire`／`lock_release`／`zeta_try_end`／`zeta_raise` 四个符号名，别的
+>   上下文管理器（非 `threading.Lock`）的释放符号不在本条词表内。
+>   检查节奏：只跑改到的目标＝历史套件 63/63 ＋ crate 内 145/145 ＋ `--lib parser` 9/9 ＋ 编译零
+>   错误；`target/release/zetac` md5＝`ed5227ccd29b70c4ee9ae17500926f10` 与 10039 那颗一字相同
+>   （矩阵只跑 debug 目标，本批未重编）⇒ 零 `src/` 改动＋被测件同一颗 ⇒ 抽样窗口未跑。
+>   开批实测 `cleanup..bootstrap`＝342，代码笔 `81cb36b0` 落地后实测 `bootstrap..cleanup`＝41。
 
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
