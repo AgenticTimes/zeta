@@ -28936,3 +28936,84 @@ CLI 前置矩阵（四臂 × 21 形状，每臂前先 `git show HEAD:` 还原并
 下批（10049）第一步照旧＝读 `cleanup..bootstrap` 决定是否并主树；站点筛选要换新的文件面，
 413 这一族剩下的臂（`bare_bound_name`、`annotation_dict_kv`／`apply_dict_annotation`、resolver）
 全在车道在制或主线重构的面上，本车道不可取。
+## 批次 10049：补历史缺陷单元测试（第三十八批，续 #20005，来源批次 384）
+
+### 来源与站点
+
+来源批次 384（`52a0c411`，2026-09-24）：函数体里写 `static [mut] NAME[: TY] = INIT` 以前被当普通
+`let` 降下去，持久格退化成每次调用重设的局部槽——真实事故是 benchmark 357 行那种静默错值（计数不涨，
+也不报错）。
+
+站点三处，本批只取前两处所在文件：
+1) `src/frontend/parser/stmt.rs:108-142` 的 `parse_static`（依次读 `mut`、读 `: TY`、读初值）＋
+   `:1833` 的 `alt((parse_static, parse_let))` 派发；
+2) `src/middle/ctfe/evaluator.rs:718`：`AstNode::Static` 走表达式变换那一支；
+3) `src/frontend/parser/top_level.rs:2123 hoist_statics`／`:2188 hoist_statics_from`（本车道在制面）
+   和 `src/middle/mir/gen.rs:1844`／`:1855`（主线在重构）——按绕开约定一律不取变异。
+
+### 用例形状
+
+新增一条 `#[test] fn static_decl_in_function_body_becomes_one_persistent_cell`
+（`tests/regression_history.rs:7501`，断言在 `:7547`，读数函数 `static_env_reading` 在 `:7363`，
+用例头说明从 `:7314` 起）＝12 个形状拆成 17 格。读数三列，全取自同一段 MIR：
+`env=[…]`（该段 `zeta_env_get`／`zeta_env_set` 被调序列，含嵌套块、按语句顺序）、
+`顶层赋值=N`（该段 `MirStmt::Assign` 条数）、`槽数=M`（该段 `type_map` 大小）。
+名字被提升到模块格以后读写都走 env 全局表，所以这三列直接看得出持久格有没有建起来。
+期望值来源＝同批 `target/debug/zetac --dump-mir` 对 12 个形状的实测（在仓库根跑，按
+`== MIR 段名 ==` 切段后取同样三列），不是抄编译输出；`target/release/zetac` 未参与本轮，在册那颗 md5 不变。
+
+形状清单：体内 `static` 读写、体内 `static` 的调用方 main 段、普通 `let` 对照（两格）、`if` 块内、
+模块顶层（两格）、无类型无 `mut`（`static k = 5`）、有类型无 `mut`（`static c: i64 = 2`）、
+同名两处（第一处提升、第二处退回局部）、初值来自 `const` 表达式（`static mut sum: i64 = BASE * 2`）、
+`def` 方言体内、`static` 之后同体还有语句、`static` 函数之后另立的函数、两层块内。
+
+### 前置矩阵与变异矩阵
+
+CLI 前置矩阵（四臂 × 12 形状，每臂前先 `git show HEAD:` 还原并断言"变异后 md5 不等于还原态"）
+＋进程内矩阵（四臂 × 本套件 74 条）。红格清单存 `/tmp/b10049/inproc_red.json`，红格数以进程内实跑为准：
+
+- **M1 派发退回只有 `parse_let`**（＝384 第 1 步不存在）＝**12 格红**；不红的 5 格＝两条普通 `let`
+  对照（格 3、4）、模块顶层两格（格 6、7）与 `static` 之后另立的函数（格 16）。红值＝env 调用整排消失、
+  持久格退化成每次调用重设的局部槽：格 1 从
+  `env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=7` 变成 `env=[];顶层赋值=2;槽数=4`
+  ——就是 `gen.rs:1855` 那句 W1008 警告对应的静默错值，而这时连警告也没有。
+- **M2 `mut` 那一段不再消费**＝10 格红＝M1 的红格减掉格 8（`static k = 5`）与格 9（`static c: i64 = 2`），
+  这两条拼法本来就没有 `mut`。
+- **M4 `: TY` 那一段不再消费**＝11 格红＝M2 的红格加回格 9（有类型、无 `mut`），仍不含格 8。
+- 三臂红格集合是 M1 ⊃ M4 ⊃ M2 的包含链，但每臂有独占区分点（格 8 只 M1 红、格 9 M4 红而 M2 不红），
+  三套读数互不相同 ⇒ 派发／`mut`／类型注解三段各被一支钉住：只坏派发时整条拼法塌陷，只坏 `mut`
+  或只坏类型注解消费时另外两段读数一字不变。对照的 CLI 趟＝12 个形状文件里 M1 变 10 个、M2 变 8 个、
+  M4 变 9 个（进程内按格计数更细，两个口径指向同一件事：静默退化成局部）。
+- **M3 `evaluator.rs:718` 把 `AstNode::Static` 从"走表达式变换"挪到"原样返回"那一支**＝进程内 17 格全绿
+  （`74 passed; 0 failed`）、CLI 趟 12 个形状读数逐字节相同＝**阴性**。阴性原因实拍＝格 12 的初值
+  `BASE * 2` 在这一支前后同形（HEAD 的 dump 里仍是 `21` 的树，折成 `42` 的不是这一趟）；这一支确实活着
+  （`evaluator.rs:85`、`:1882-1883` 有调用方），但本批 12 个形状没有任何一个的初值需要它。
+  **该支在什么形状上才有作用＝未证**，所以只写阴性，不写成分支锁。
+
+### 仍未锁（按登记规则记进 #20005 余项，不占新任务号）
+
+① 357 行那种"整个顶层项失败 ⇒ 其后每一项被丢"的级联，在本批形状里没复现：M1 下格 16 的 `trailing`、
+格 15 之后的各项都照常降出，红只落在函数体内部。原因未查（语料那处停在顶层项级别，本批夹具回退停在
+语句级别）。
+② 模块顶层的 `static`（格 6、7）四臂读数一字不变＝这条拼法在顶层走的不是 `parse_stmt` 这一支，
+具体走哪一支未查。
+③ M3 那一支实际起作用的形状未证（见上一条阴性段）。
+
+### 每批检查与收尾
+
+- `cargo test --test regression_history`＝**74 passed／0 failed**（文件现 7548 行，74 条）；
+  `cargo test -p zetac --lib`＝145 passed（四臂每臂都跑，无一臂破坏库内测试）；`cargo build` 0 错误。
+- 还原核对：`src/frontend/parser/stmt.rs` md5 `628bf015bf66f080d4d58bf5654a2e2c`、
+  `src/middle/ctfe/evaluator.rs` md5 `4b5c4b0afa2b09d42b226df36f158359`，两颗都等于 `git show HEAD:` 那颗；
+  还原趟套件 74 passed。零 `src/` 净改动 ⇒ 免补抽样窗口；`target/release/zetac` md5
+  `ed5227ccd29b70c4ee9ae17500926f10` 未变。
+- 代码笔 `5e290aa8`（`git diff --cached --numstat` 实测 +236 行）＋日期更正笔 `be8f792a`（1/1，用例头
+  把来源批次日期写成 2026-09-23，`git show -s 52a0c411` 实测 author／committer 都是 2026-09-24）。
+- 滞留：代码笔后 `bootstrap..cleanup`＝60、`cleanup..bootstrap`＝399（主树仍在推进，本树内容滞后；
+  并树仍不做，原因同 10047／10048：车道有三个 `src/` 在制文件，且并树会换掉在册那颗二进制）。
+- 下批（10050）第一步照旧＝读 `cleanup..bootstrap` 决定是否并主树。384 这一族剩下的臂
+  （`top_level.rs` 的提升、`gen.rs` 的 W1008／W1009 发射、`error_codes.rs`）全在不可取面上；
+  批次 332 那一族本批实测排除＝`src/middle/optimization.rs` 的 `optimize()` 零调用方，臂打不出红，
+  写进去就是挂着"已知会失败"却永远绿的那类用例，不取。可试的新文件面＝`src/frontend/parser/pattern.rs`、
+  `src/frontend/macro_expand.rs`、`src/middle/ctfe/` 其余文件；在册候选批次＝624、546、431、383、374、
+  336、333。

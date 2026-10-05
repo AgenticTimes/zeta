@@ -931,6 +931,36 @@
 >   套件其余 72 条一字不变。零 `src/` 净改动（插桩已还原，`stmt.rs` md5＝HEAD `628bf015…`）⇒
 >   免补抽样窗口。滞留：代码笔后 `bootstrap..cleanup`＝57、`cleanup..bootstrap`＝392。
 >
+> - 批次 10049（代码 `5e290aa8`＋日期更正笔 `be8f792a`）＝来源批次 384（`52a0c411`，2026-09-24，
+>   "函数体里的 `static mut`——benchmark 357 行归零"）的解析侧两处——`tests/regression_history.rs:7501`
+>   一条 17 格用例 `static_decl_in_function_body_becomes_one_persistent_cell`（断言 `:7547`、读数函数
+>   `static_env_reading` `:7363`、用例头 `:7314`），站点＝`src/frontend/parser/stmt.rs:108-142`
+>   （`parse_static` 读 `mut`／读 `: TY`／读初值）＋`:1833` 的 `alt((parse_static, parse_let))` 派发，
+>   另加 `src/middle/ctfe/evaluator.rs:718`（`AstNode::Static` 走表达式变换那一支）。384 其余三处站点
+>   （`top_level.rs` 的 `hoist_statics`／`hoist_statics_from`、`gen.rs:1844`／`:1855` 的提升标记消费与
+>   W1008 发射、`error_codes.rs`）全在车道在制或主线重构的面上，本批不取。读数三列＝该段
+>   `zeta_env_get`／`zeta_env_set` 被调序列（含嵌套块、按语句顺序）、该段 `MirStmt::Assign` 条数、
+>   该段 `type_map` 槽数；期望值取同批 `target/debug/zetac --dump-mir` 对 12 个形状的实测
+>   （`release` 那颗未参与，md5 `ed5227cc…` 不变）。
+>   进程内矩阵（红格清单 `/tmp/b10049/inproc_red.json`）：M1 派发退回只有 `parse_let`＝**12 格红**
+>   （不红＝格 3、4 普通 `let` 对照、格 6、7 模块顶层、格 16 `static` 后另立的函数），红值＝env 调用整排
+>   消失、持久格退化成每次调用重设的局部槽（格 1 `env=[get,set,get];顶层赋值=0;槽数=7`→`env=[];顶层赋值=2;槽数=4`
+>   ＝W1008 那句警告说的静默错值，此时连警告也没有）；M2 `mut` 段不消费＝10 格红＝M1 减格 8（`static k = 5`）
+>   与格 9（`static c: i64 = 2`）；M4 `: TY` 段不消费＝11 格红＝M2 加回格 9、仍不含格 8。三臂集合是
+>   M1 ⊃ M4 ⊃ M2 的包含链但各有独占区分点（格 8 只 M1 红、格 9 M4 红而 M2 不红）⇒ 派发／`mut`／类型注解
+>   三段各钉一处，不是一条链的三个副本；对照 CLI 趟＝12 形状里 M1 变 10 个、M2 变 8 个、M4 变 9 个。
+>   M3（`evaluator.rs:718` 挪到"原样返回"那支）＝17 格全绿＋CLI 12 形状逐字节相同＝**阴性**，实拍原因＝
+>   格 12 初值 `BASE * 2` 在这一支前后同形（HEAD dump 仍是 `21` 的树，折成 `42` 的不是这一趟），该支活着
+>   （`evaluator.rs:85`、`:1882-1883` 有调用方）但本批 12 个形状没有一个需要它，**该支起作用的形状＝未证**，
+>   故只写阴性不写分支锁。三条未锁进 #20005 余项：① 357 行那种"顶层项失败⇒其后每项被丢"的级联本批形状
+>   没复现（M1 下格 15、16 照常降出，红只在函数体内），原因未查；② 模块顶层 `static`（格 6、7）四臂不变＝
+>   走的不是 `parse_stmt` 这一支，具体哪支未查；③ M3 那一支的实际作用形状未证。另：批次 332 那一族
+>   （`MirStmt::For.counter_id` 的 DCE 保留臂）本批实测排除＝`src/middle/optimization.rs` 的 `optimize()`
+>   零调用方（`codegraph`／grep 双查，只有 `compiler_config.rs:10` 引 `OptLevel`），臂不可达＝写进去是恒绿
+>   空锁，不收。四臂下 `--lib` 均 145/145、套件 74 条在还原态全绿。零 `src/` 净改动（两臂文件还原后 md5
+>   `628bf015…`／`4b5c4b0a…`＝HEAD）⇒ 免补抽样窗口。滞留：代码笔后 `bootstrap..cleanup`＝60、
+>   `cleanup..bootstrap`＝399。
+
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；
