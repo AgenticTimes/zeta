@@ -961,6 +961,32 @@
 >   `628bf015…`／`4b5c4b0a…`＝HEAD）⇒ 免补抽样窗口。滞留：代码笔后 `bootstrap..cleanup`＝60、
 >   `cleanup..bootstrap`＝399。
 
+> - 批次 10050（代码 `6be152f7`）＝来源三笔 `pattern.rs` 解析修复做成进程内单元测试（#20005 第三十九批）：
+>   `fd2dd593`（2026-09-16，通配 `_` 词边界）、批次 321（`78653481`，绑定模式 `x @ 1..=10` 排在结构模式之前，
+>   外层与 or 链两支）、批次 322（`b3f8d594`，字符串字面量作 match 模式，同笔在内层与外层各插一条臂）。
+>   症状同一条 W1002＝第一个打不开的模式让 `parse_match_arm` 读不到 `=>`，整个 `fn` 连同其后文件被丢 ⇒
+>   读数用批次 10046 那颗 `use_module_reading`（进得了 MIR 的函数清单＋解析余部行数），不另起尺子；
+>   新增 `match_pattern_arm_order_and_wildcard_boundary_keep_the_file`（`tests/regression_history.rs:7783`，
+>   断言 `:7858`）＝13 形状 13 格，期望值取自同批 `--dump-mir` 对 13 个形状的实测，**进程内首跑 13 格全对**
+>   （CLI 与 harness 在这一族口径一致，没有回校）。套件 74→**75 passed**，0.67 秒。
+>   六臂全在 `src/frontend/parser/pattern.rs` 一个文件（避让面照旧不碰 `gen.rs`／`types/`／`resolver/`／
+>   `top_level.rs`／`expr.rs`），两趟矩阵（CLI 六臂 × 13 形状、进程内 HEAD＋六臂 × 套件与 `--lib` 145 条）
+>   红格集合一字相同：**M1→1 格、M2→2 格、M3→3 格、M4→0、M5→0、M6→2 格**。三点值得记：
+>   ① M1 与 M2 红格互不相交＝批次 321 那一笔的两处改动各自钉住一支，不是同一条链的副本；
+>   ② M1 那一格批次 10041 已有的 `range_pattern_endpoints_and_inclusivity_reach_the_guard` 同臂也红
+>   ⇒ 本条按第二把锁写、不声称新覆盖；
+>   ③ M4／M5 各自删一条字符串臂＝13 格一字不变，**删两条（M6）才红**＝`b3f8d594` 一笔写的内外两处互为备份
+>   （M4 下字符串走 `parse_or_pattern:307`→`parse_simple_pattern:333`；M5 下单串走外层 `:66`、`"a"|"b"` 链
+>   走 `:66` 接单串＋外层 `many0:79-85` 收链尾）。格 6、7 因此写成**现状锁**，不写成分支锁。
+>   三处未锁（照实测写）＝① `parse_simple_pattern:326` 的裸 `tag("_")` 至今没有边界检查，`_i | 5` 走得通
+>   靠的是外层 struct 兜底，内层那支在什么形状上暴露未证；② 六臂红值全是"清单缩到 `[main]`＋未解析 12~15 行"
+>   这一种截断形状，"函数还在、模式降错"的静默错值那半未锁；③ 两条同功能字符串臂没收成一处，收法未定——
+>   按登记规则第 2 条记在 #20005 余项内，不占新任务号。六臂下 `cargo test -p zetac --lib` 均 145/145。
+>   收尾 `pattern.rs` md5 `3e6b782400c78c21725af9eafaee682b`＝`git show HEAD:` 同值，`target/release/zetac`
+>   未参与（在册 `ed5227ccd29b70c4ee9ae17500926f10`）。滞留：代码笔后 `bootstrap..cleanup`＝63（主树 ref
+>   `4834eca3`／batch 982）、`cleanup..bootstrap`＝407。十批界的全局逐个用例上次跑在 10030，已欠 20 批，
+>   排在下一批开工第一步。
+
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；

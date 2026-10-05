@@ -29017,3 +29017,89 @@ CLI 前置矩阵（四臂 × 12 形状，每臂前先 `git show HEAD:` 还原并
   写进去就是挂着"已知会失败"却永远绿的那类用例，不取。可试的新文件面＝`src/frontend/parser/pattern.rs`、
   `src/frontend/macro_expand.rs`、`src/middle/ctfe/` 其余文件；在册候选批次＝624、546、431、383、374、
   336、333。
+
+## 批次 10050：补历史缺陷单元测试（第三十九批，续 #20005，来源 fd2dd593／批次 321／批次 322）
+
+### 来源与站点
+
+来源三笔都在 `src/frontend/parser/pattern.rs`，症状同一条链（W1002：第一个打不开的模式让
+`parse_match_arm` 读不到 `=>`，整个 `fn` 连同其后文件一起被丢）：
+
+1) `fd2dd593`（2026-09-16，任务台账当时的段落是「下划线开头的循环变量」，语料丢行 7594→6940）＝
+   通配 `_` 加词边界；当时带的全局钉是 `tests/python_style/t132_underscore_loop_var.z`（18 行，还在）。
+2) 批次 321（`78653481`，2026-09-22，任务 #36 第一段）＝绑定模式 `x @ 1..=10` 必须排在结构模式之前。
+   这一笔一次改了两处：外层 `parse_pattern` 的臂序与 `parse_simple_pattern`（or 链元素走的那一支）的臂序。
+3) 批次 322（`b3f8d594`，2026-09-22，附 B#10 第二族）＝字符串字面量作 match 模式。同一笔在内层与外层
+   各插了一条 `parse_string_lit,`——这就是本批 M4／M5 两个阴性读数的来源（两条臂互为备份）。
+
+站点行号（按本批最后一次实跑的文本取；本批只读该文件，没有改它）：外层 `parse_pattern` 从 `:20` 起，
+带边界的通配 `:28-36`、bind `:52` 先于 struct `:54`、外层字符串臂 `:66`、外层自己收 `|` 链尾的
+`many0` `:79-85`；`parse_bind_pattern` `:292`、`parse_or_pattern` `:307-321`（它只吃
+`parse_simple_pattern`）、`parse_simple_pattern` `:324-337`，其中裸 `tag("_")` 在 `:326`（没有边界检查）、
+bind `:328` 先于 struct `:329`、字符串 `:333`。
+
+避让面照旧：`gen.rs`、`src/middle/types/`、`src/middle/resolver/`、`top_level.rs`、`expr.rs`、
+`error_codes.rs`、`runtime/`、`src/backend/` 一律不取变异；本批六臂全部落在 `pattern.rs` 一个文件内。
+
+### 用例形状
+
+新增一条 `#[test] fn match_pattern_arm_order_and_wildcard_boundary_keep_the_file`
+（用例头从 `tests/regression_history.rs:7550` 起，夹具常量从 `:7592` 起，`#[test]` 在 `:7782`，
+断言在 `:7858`）＝13 个形状 13 格，一条 `assert_eq!(want, got)` 过一遍。
+读数沿用批次 10046 那颗 `use_module_reading`（`tests/regression_history.rs:6776`）＝
+`清单=[进得了 MIR 的函数名，字典序] 未解析=解析停住后剩下的行数`，不另起一颗尺子。
+走 `lower_all_allowing_truncation`（`:122`）而非 `lower_with_source_dir`：这一族的失败模式就是截断，
+用前者才看得见"哪些函数进得了程序"，否则各臂的红点全落在同一句前置断言上、形状断言根本不执行。
+
+13 个形状＝8 个登记形＋5 个对照形。登记形：`q @ 1..=10`（外层 bind 位）、`1 | q @ 5..=9` 与
+`1 | 2 | r @ 8..=9`（内层 bind 位，链中／链尾）、`for _i in 0..n`、`(_a, _b) => 5`、`_i | 5 => 1`
+（通配边界的三个位置：循环头、元组元素、or 链头）、`"+" => "plus"` 与 `"ab" | "cd" => "x"`（字符串两处）。
+每个形状末尾都另立一个 `fn tail_after()` 并在末尾调用，好让"截断"在清单列上看得见。
+对照形＝普通整数臂、整数 or 链、字符区间 `'a'..='z'`、变量臂加元组臂、普通 `for i in`。
+
+期望值取自同批 `target/debug/zetac --dump-mir` 对 13 个形状的实测（仓库根跑，按 `== MIR 段名 ==` 切段），
+进程内首跑即 13 格全对、75 passed，没有回校一次——CLI 与 harness 在这一族上口径一致。
+`target/release/zetac` 未参与本轮（在册那颗 md5 `ed5227ccd29b70c4ee9ae17500926f10` 不变）。
+
+### 前置矩阵与变异矩阵
+
+六组变异，每臂只改一处（臂文本与消歧见 `/tmp/b10050/patch.py`；M6 改两处，是"两条字符串臂一起删"）。
+还原源固定 `git show HEAD:src/frontend/parser/pattern.rs`，每臂断言"变异后 md5 不等于还原态"
+（HEAD 那颗 `3e6b782400c78c21725af9eafaee682b`）。两趟：CLI 前置矩阵（六臂 × 13 形状，
+`/tmp/b10050/matrix_cli.sh`）＋进程内矩阵（七趟 HEAD+六臂 × 本套件 75 条 × `cargo test -p zetac --lib` 145 条，
+`/tmp/b10050/mutate_inproc.sh`）。红格清单存 `/tmp/b10050/inproc_red.json`。
+
+- **M1 外层 bind 挪回 struct 之后**＝1 格红（`q @ 1..=10`）。同趟批次 10041 那条
+  `range_pattern_endpoints_and_inclusivity_reach_the_guard` 也红 ⇒ 本条按**第二把锁**写，不是新覆盖。
+- **M2 `parse_simple_pattern` 里 bind 挪回 struct 之后**＝2 格红（`1 | q @ 5..=9`、`1 | 2 | r @ 8..=9`）。
+  红格与 M1 互不相交＝批次 321 那笔的两处改动各自钉住一支，不是同一条链的两个副本。
+- **M3 外层通配退回裸 `tag("_")`**＝3 格红（`for _i`、`(_a, _b)`、`_i | 5`）＝`fd2dd593` 那笔在三个位置上活着。
+- **M4 删外层 `:66` 的字符串臂**＝13 格一字不变；**M5 删内层 `:333` 的字符串臂**＝同样一字不变；
+  **M6 两处一起删**＝2 格红（`"+"`、`"ab" | "cd"`）。阴性原因实拍＝两条臂互为备份：M4 下 `"+"` 与
+  `"ab" | "cd"` 都由 `parse_or_pattern`（外层 `:58`，排在 `:66` 之前）经 `parse_simple_pattern:333` 接走；
+  M5 下单串由外层 `:66` 接走，`"ab" | "cd"` 由 `:66` 接单串＋外层 `many0`（`:79-85`）收链尾接走。
+  ⇒ 格 6、格 7 是**现状锁**（单臂被删不响，两条一起没了才响），不写成分支锁。
+- 对照 5 格（格 9–13）六臂一字不变。
+- 六臂下 `cargo test -p zetac --lib` 145 条一字不变＝这六臂在 crate 内测试没有既有覆盖。
+- 两趟红格集合一字相同（M1→1、M2→2、M3→3、M4→0、M5→0、M6→2）。
+
+### 仍未锁
+
+① `_i | 5 => 1` 在 HEAD 走得通靠的是外层 `parse_struct_pattern` 对裸路径的兜底＋外层 `many0` 收链尾；
+   `parse_simple_pattern:326` 那颗裸 `tag("_")` 仍没有边界检查（`fd2dd593` 当时只改了外层）。内层那一支
+   在什么形状上会暴露＝未证。
+② 六臂的红值全是"清单缩到 `[main]`＋未解析 12~15 行"这一种（整份文件被截断），没有一臂打成
+   "函数还在、模式降错"的静默错值形状。静默错值那半未锁。
+③ 字符串模式的两条同功能臂（批次 322 一笔写的两处）没收成一处；收法（删哪一处、链尾谁来接）
+   未定。按登记规则第 2 条记在 #20005 余项内，不占新任务号。
+
+### 每批检查与收尾
+
+- 套件 `cargo test --test regression_history`＝**75 passed; 0 failed**（改前 74，本批 +1 条），0.67 秒。
+- 内部单元测试 `cargo test -p zetac --lib`＝145 passed（HEAD 与六臂各一趟）。
+- 编译零错误（每臂一趟 `cargo test` 都重建 `zetac` lib＋test 目标）。
+- 收尾核对：`src/frontend/parser/pattern.rs` md5 回到 `3e6b782400c78c21725af9eafaee682b`
+  ＝`git show HEAD:` 同值；本车道在制面（`src/error_codes.rs`、`src/frontend/parser/expr.rs`、
+  `src/frontend/parser/top_level.rs`、`worktree.md` 与两枚未跟踪夹具 `t562`／`t563`）一字未动、未暂存。
+- 欠账一条点名：十批界的全局逐个用例上一批还是 10030，已 overdue 20 批；本批只做 #20005 一项，
+  全局跑排在下一批（10051）开工第一步。
