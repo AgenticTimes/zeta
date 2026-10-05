@@ -1672,36 +1672,45 @@ call, no NULL-handle dereference).",
                                     _ => false,
                                 },
                             };
-                            let func = match (method.as_str(), elem_is_float) {
-                                ("max", true) => "py_builtin_max_abs_f64",
-                                ("min", true) => "py_builtin_min_abs_f64",
-                                ("max", false) => "py_builtin_max_abs_i64",
-                                _ => "py_builtin_min_abs_i64",
+                            // 批 992：裁决走 keyfn_bridge::choose_bridge
+                            //（纯函数，全矩阵单测在 keyfn_bridge.rs）。
+                            let elem = if elem_is_float {
+                                Some(Type::F64)
+                            } else {
+                                Some(Type::I64)
                             };
-                            self.stmts.push(MirStmt::Call {
-                                func: func.to_string(),
-                                args: vec![xs],
-                                dest: id,
-                                type_args: vec![],
-                            });
-                            self.exprs.insert(id, MirExpr::Var(id));
-                            self.type_map.insert(
-                                id,
-                                if elem_is_float {
-                                    Type::F64
-                                } else {
-                                    Type::I64
-                                },
-                            );
-                            return id;
+                            match super::keyfn_bridge::choose_bridge(
+                                method,
+                                true,
+                                elem.as_ref(),
+                                false,
+                                false,
+                            ) {
+                                super::keyfn_bridge::KeyBridge::AbsBuiltin {
+                                    func,
+                                    ret_f64,
+                                } => {
+                                    self.stmts.push(MirStmt::Call {
+                                        func: func.to_string(),
+                                        args: vec![xs],
+                                        dest: id,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs.insert(id, MirExpr::Var(id));
+                                    self.type_map.insert(
+                                        id,
+                                        if ret_f64 { Type::F64 } else { Type::I64 },
+                                    );
+                                    return id;
+                                }
+                                _ => unreachable!("abs 裁决只出 AbsBuiltin"),
+                            }
                         }
                         let xs = self.lower_expr(&args[0]);
                         // 批 964（keyfn 单态化第一段）：非内建 keyfn ⇒ 克隆
                         // 特化登记（f64 通道副本，参数注解改 f64）。批 989：
-                        // 登记门槛放宽到 i64 元素——此前仅 f64 元素，i64 数
-                        // 组＋float 返回 keyfn 落旧路 double(*)(int64_t) 调
-                        // 用签名，与 kf 体 i64(i64) 签名寄存器类错配（体写
-                        // x0、C 读 v0），min/max 选错元素（批 983 lldb 定位）。
+                        // 登记门槛放宽到 i64 元素（仅 float 返回 keyfn）。
+                        // 批 992：门槛与分桥裁决收进 keyfn_bridge 纯函数。
                         if let (AstNode::Var(nm), Some(store)) =
                             (&ka[1], self.keyfn_spec_store.as_ref())
                         {
@@ -1710,19 +1719,8 @@ call, no NULL-handle dereference).",
                                 | Some(Type::Array(e, _)) => Some((**e).clone()),
                                 _ => None,
                             };
-                            let elem_f64 = matches!(&elem,
-                                Some(t) if matches!(t, Type::F64 | Type::F32));
-                            let elem_i64 =
-                                matches!(&elem, Some(t) if matches!(t, Type::I64));
-                            // 批 989：i64 元素只在 keyfn 返回域 float 时分流
-                            // 特化副本——旧路 double(*)(int64_t) 调用签名与
-                            // float 返回 kf 体 i64(i64) 签名寄存器类错配（体
-                            // 写 x0、C 读 v0）；int 返回 keyfn 旧路 i64 比较
-                            // 本来精确（>2^53 才失真），不劫持。
                             let kf_float =
                                 keyfn_returns_f64(&self.func_ret_types, &ka[1]);
-                            let spec_worthy =
-                                elem_f64 || (elem_i64 && kf_float);
                             let mangled = format!("__ZKEYF64_{}", nm);
                             let already = store.borrow().iter().any(|a| {
                                 matches!(
@@ -1731,8 +1729,10 @@ call, no NULL-handle dereference).",
                                         if *name == mangled
                                 )
                             });
-                            if spec_worthy
-                                && !nm.starts_with("__")
+                            if super::keyfn_bridge::spec_worthy(
+                                elem.as_ref(),
+                                kf_float,
+                            ) && !nm.starts_with("__")
                                 && !already
                                 && self
                                     .full_funcdefs
@@ -1758,13 +1758,9 @@ call, no NULL-handle dereference).",
                                     store.borrow_mut().push(full);
                                 }
                             }
-                            // 批 967/989：已登记 ⇒ 特化副本发射（FuncAddr
-                            // 槽，keyfn 签名 double(f64)——比较 double 域，
-                            // 返回原元素）。f64 元素走位桥（C 侧把元素位
-                            // 模式 bitcast 成 double）；i64 元素走 sitofp
-                            // 桥（值转换——Python 语义 kf(3) = 1.5 要求整
-                            // →浮转换，位重解整数 3 得非规格数，比较全错）。
-                            // 未登记或元素型未知 ⇒ 维持旧路 py_min/py_max_key。
+                            // 批 967/989：登记 ⇒ 特化副本桥（FuncAddr 槽，
+                            // keyfn 签名 double(f64)，比较 double 域，返回
+                            // 原元素）；否则旧路 py_min/py_max_key。
                             let registered = store.borrow().iter().any(|a| {
                                 matches!(
                                     a,
@@ -1772,28 +1768,41 @@ call, no NULL-handle dereference).",
                                         if *name == mangled
                                 )
                             });
-                            if registered && spec_worthy {
-                                let f_id = self.lower_expr(&AstNode::Var(
-                                    mangled.clone(),
-                                ));
-                                let func = match (method.as_str(), elem_f64) {
-                                    ("min", true) => "py_min_key_f64",
-                                    ("max", true) => "py_max_key_f64",
-                                    ("min", false) => "py_min_key_i64_f64",
-                                    _ => "py_max_key_i64_f64",
-                                };
-                                self.stmts.push(MirStmt::Call {
-                                    func: func.to_string(),
-                                    args: vec![xs, f_id],
-                                    dest: id,
-                                    type_args: vec![],
-                                });
-                                self.exprs.insert(id, MirExpr::Var(id));
-                                self.type_map.insert(
-                                    id,
-                                    if elem_f64 { Type::F64 } else { Type::I64 },
-                                );
-                                return id;
+                            match super::keyfn_bridge::choose_bridge(
+                                method,
+                                false,
+                                elem.as_ref(),
+                                kf_float,
+                                registered,
+                            ) {
+                                super::keyfn_bridge::KeyBridge::Specialized {
+                                    func,
+                                    ret_f64,
+                                } => {
+                                    let f_id = self.lower_expr(&AstNode::Var(
+                                        mangled.clone(),
+                                    ));
+                                    self.stmts.push(MirStmt::Call {
+                                        func: func.to_string(),
+                                        args: vec![xs, f_id],
+                                        dest: id,
+                                        type_args: vec![],
+                                    });
+                                    self.exprs.insert(id, MirExpr::Var(id));
+                                    self.type_map.insert(
+                                        id,
+                                        if ret_f64 {
+                                            Type::F64
+                                        } else {
+                                            Type::I64
+                                        },
+                                    );
+                                    return id;
+                                }
+                                super::keyfn_bridge::KeyBridge::Legacy => {
+                                    // 落到臂尾旧路（py_min/py_max_key）。
+                                }
+                                _ => unreachable!("非 abs 裁决不出 AbsBuiltin"),
                             }
                         }
                         let f = self.lower_expr(&ka[1]);
