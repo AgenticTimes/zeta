@@ -78,7 +78,12 @@ impl BorrowChecker {
                 }
                 match **lhs {
                     AstNode::Var(ref v) => {
-                        let ty = resolver.infer_type(rhs);
+                        // 批 970（双轨合一段 2）：统一推断（新轨
+                        // InferContext 无状态实例）——旧轨 infer_type
+                        // 的 FloatLit 落 I64 兜底已实证（批 969）
+                        let ty = crate::middle::resolver::new_resolver::InferContext::new()
+                            .infer(rhs)
+                            .unwrap_or(Type::I64);
                         self.declare(v.clone(), BorrowState::Owned, ty);
                         true
                     }

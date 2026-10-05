@@ -262,7 +262,9 @@ impl EnhancedBorrowChecker {
                 match **lhs {
                     AstNode::Var(ref name) => {
                         // Assignment creates or reassigns a variable
-                        let ty = resolver.infer_type(rhs);
+                        let ty = crate::middle::resolver::new_resolver::InferContext::new()
+                            .infer(rhs)
+                            .unwrap_or(crate::middle::types::Type::I64);
                         if let Err(e) = self.declare(name.clone(), ty) {
                             // Variable already exists - check if we can reassign
                             if self.can_use(name) {
@@ -401,7 +403,9 @@ impl EnhancedBorrowChecker {
 
                 // Handle pattern binding
                 if let AstNode::Var(name) = &**pattern {
-                    let ty = resolver.infer_type(expr);
+                    let ty = crate::middle::resolver::new_resolver::InferContext::new()
+                            .infer(expr)
+                            .unwrap_or(crate::middle::types::Type::I64);
                     if let Err(e) = self.declare(name.clone(), ty) {
                         crate::diag_error!("E4001", "Borrow error: {}", e);
                         return false;
@@ -480,7 +484,9 @@ impl EnhancedBorrowChecker {
                             self.enter_scope();
                             // Bind pattern in loop scope
                             if let AstNode::Var(name) = &**pattern {
-                                let ty = resolver.infer_type(expr);
+                                let ty = crate::middle::resolver::new_resolver::InferContext::new()
+                            .infer(expr)
+                            .unwrap_or(crate::middle::types::Type::I64);
                                 if let Err(e) = self.declare(name.clone(), ty) {
                                     crate::diag_error!("E4001", "Borrow error: {}", e);
                                     ok = false;
