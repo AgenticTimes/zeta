@@ -1099,6 +1099,28 @@
 >   同一颗、抽样窗口按 2026-10-03 节奏不重跑。候选重筛：下一批候选＝171（10054 留的未复核格）、
 >   642／643／659／648／649／650、605／608／609、575／579／580／587 中未取者，站点避开
 >   `gen.rs` 与树上在制的 `src/error_codes.rs`／`src/frontend/parser/{expr,top_level}.rs`。
+> - **批次 10057（第四十五批：差分语料扩充＋手写多特性脚本实测，代码笔 `a5be3d46`）**：
+>   `tools/gen_random_diff.py --seed 95001..95016 --count 6` 配 16 模式 × 三种嵌套深度＝96 枚
+>   `gen_*s950*.dcase`，`tools/diff_test.py --only s950`＝**match 96/96（100%）**；手写 10 枚
+>   多特性脚本中 3 枚通过并入库（切片全形、字符串方法链、控制流含 for/while 的 else），
+>   `--only hand57`＝match 3/3。语料 2718→2817。**同批打到 7 枚未入库脚本（已知失败不进
+>   每批检查的分母），证据 `/tmp/b10057/failcases/`、逐行读数 `/tmp/b10057/failcases_readings.txt`
+>   （口径＝CPython 与 zetac 编译产物 stdout 按行对，行号映射到第 i 条 `print`）**，按形状归并
+>   六类半条＝**①`dict.get(缺键)` 无默认值时打 `0` 而非 `None`；②`sorted()` 对元组列表与
+>   `dict.items()` 不生效（四处同形读数：dict_ops 行 5/9/10、builtin_chain 行 8）；③函数／方法
+>   返回容器时打印成句柄整数（class_basic 行 2 期望 `[5, -2]`、functions_recursion 行 6 期望
+>   `(13, 5, 36)`、type_propagation 行 1/2/6 期望 `['BSa','BSb','BSc']`；编译期型标记是否同样丢
+>   未查）；④记忆化字典查表给错值（`fib(20, memo)` 期望 6765 实得 `34437037648`）；⑤`float(字符串)`
+>   结果打印成 `<地址>.0`（formatting 行 11）；⑥字符串句柄当字典键回查落空（type_propagation 行 7
+>   `m[out[0]]` 期望 `3` 实得 `0`＝③的后果）**＋**⑦`hand57_list_methods`（append/extend/insert/
+>   remove/pop/sort(reverse)/reverse 混排）的编译产物运行不返回、子进程进 `UNE` 不可中断态**
+>   （`timeout -s KILL` 收不掉，与 #20006 同形但无桩消息＝新触发条件；本树遗留 pid 22141）。
+>   按登记规则 2 记在 #20005 余项内、未占新号。**读数可信度**：嵌堆地址的实得值逐次会变，
+>   台账只记形状与期望值（教训 4）。全套 2817 枚的差分未跑（距上次全量 10051＝6 批）。
+>   零 `src/` 改动 ⇒ 被测件与 10050–10056 同一颗（md5 `ed5227ccd29b70c4ee9ae17500926f10`）。
+>   下一批候选＝把这六类里能静态观测的两类（②`sorted` 的排序键、③返回容器的型标记）转成
+>   模块内单元测试；站点避开 `gen.rs` 与树上在制的 `src/error_codes.rs`／
+>   `src/frontend/parser/{expr,top_level}.rs`。
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚

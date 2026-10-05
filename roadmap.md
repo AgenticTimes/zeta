@@ -29706,3 +29706,75 @@ warning 仍继续编译，`fn_rets` 里没有 `__fcode` 键（探针三形 `suff
    A10（只撤后段 mangled 查表）红格是 A6 的子集，格 3 因此有单臂锁，而格 2 只有成对撤才红。
 3. 撤臂只删前移的那一块（A8）读数不变，说明真正住手的是后段那条同功能查表路——这类
    "同一分支里两处同形查表"的冗余，覆盖只能写成成对撤，单撤任一处都是阴性。
+## 批次 10057（2026-10-06，第四十五批：差分语料扩充＋手写多特性脚本实测）
+
+代码笔 `a5be3d46`（`tests/diff/cases/` 新增 99 枚 `.dcase`，`git diff --cached --numstat` 实测
+99 files / +1722 行）。零 `src/` 改动；被测件＝`target/release/zetac` md5
+`ed5227ccd29b70c4ee9ae17500926f10`（与 10050–10056 同一颗）。语料 2718 → 2817 枚。
+
+### 生成面（96 枚，全通过）
+
+`tools/gen_random_diff.py --seed 95001..95016 --count 6 --mode <16 模式> --depth <shallow|normal|deep>`
+＝numeric/str/list/dict/cmp/loop/fmt/slice/builtin/control/methods/class/nested 各配深度。
+读数（`tools/diff_test.py --only s950 --verbose`，`/tmp/b10057/diff_new.log`）＝
+**match=96 judged=96 rate=100.0% bad_case=0**。分面：truth 6/6、str 24/24、container 42/42、
+numeric 12/12、control 12/12。⇒ 生成器的语法面在 HEAD 上没有新增分歧（生成器自带两道过滤：
+CPython 跑不出真值的丢弃、i64 溢出链丢弃，所以这批只覆盖"能算出真值"的那一半）。
+
+### 手写面（10 枚脚本：3 枚通过、6 枚输出不一致、1 枚编译产物挂住）
+
+通过并入库＝`hand57_slicing`（切片全形，含负步长、越界、省略界、字符串切片）、
+`hand57_str_methods`（字符串方法链）、`hand57_control_flow`（for/while 的 else、break/continue、
+elif 链、三元）。读数（`--only hand57`）＝match=3 judged=3 rate=100%。
+
+未入库的 7 枚留在证据目录 `/tmp/b10057/failcases/`（不进语料＝不把已知失败混进每批检查的
+分母），逐条实测读数在 `/tmp/b10057/failcases_readings.txt`（口径＝CPython 与 zetac 编译产物
+的 stdout 按行对，行号映射到第 i 条 `print` 语句；本批单例直跑，不走 harness）。
+
+| 脚本 | 差异行数 | 首个差异（期望 vs 实得，堆地址整数写成 `<地址>`） |
+|---|---|---|
+| hand57_dict_ops | 4 | 行 1 `print(d["a"], d.get("c"), d.get("c", 0))` 期望 `1 None 0` 实得 `1 0 0` |
+| hand57_class_basic | 1 | 行 2 `print(c.history())`（方法返回 `self.log`）期望 `[5, -2]` 实得 `<地址>` |
+| hand57_functions_recursion | 2 | 行 3 `print(fib(20, memo))` 期望 `6765` 实得 `34437037648` |
+| hand57_formatting | 1 | 行 11 `print(int("42") + 1, float("1.5") + 1)` 期望 `43 2.5` 实得 `43 <地址>.0` |
+| hand57_builtin_chain | 1 | 行 8 `print(sorted(pairs))`（元组列表）期望按首元排序 实得保持原序的另一种排列 |
+| hand57_type_propagation | 4 | 行 1 `print(out)`（`codes()` 返回字符串列表）期望 `['BSa', 'BSb', 'BSc']` 实得三个 `<地址>` |
+| hand57_list_methods | 挂住 | 编译产物运行不返回，子进程进 `UNE` 不可中断态（`timeout -s KILL` 收不掉，见坑 182／#20006 同形） |
+
+按形状归并（不是 7 条独立缺陷）：
+
+1. **`dict.get(缺键)` 无默认值时打 `0` 而非 `None`**（dict_ops 行 1）。
+2. **`sorted()` 对"元组列表"与 `dict.items()` 不生效**（dict_ops 行 5/9/10、builtin 行 8）＝
+   四条同形读数，排序键没落到元组/字典对上。
+3. **函数／方法返回容器时打印成句柄整数**（class_basic 行 2、functions_recursion 行 6、
+   type_propagation 行 1/2/6）＝与 10056 那条"推导式元素型停在 I64"同族的表现，
+   但这里是**运行期打印面**（编译期型标记是否同样丢失未查）。
+4. **记忆化字典查表给错值**（functions_recursion 行 3，`fib(20)` 期望 6765）。
+5. **`float(字符串)` 结果进打印即成地址＋`.0`**（formatting 行 11）。
+6. **字符串句柄当字典键回查**（type_propagation 行 7 `m[out[0]]` 期望 `3` 实得 `0`）＝3 的后果。
+7. **list_methods 那枚脚本编译产物挂住**（append/extend/insert/remove/pop/sort(reverse)/reverse
+   混排）＝新增静默挂住面，与 #20006 的"桩中止进程不收尾"同形但触发条件不同（这条无桩消息）。
+
+### 每批检查与收尾
+
+- 生成面 96/96、手写面入库 3/3，均按 `--only` 子集跑（不与基线比对，子集读数只到本次）；
+- 全套 2817 枚的差分未跑（十批界未到；10057 距上次全量 10051＝6 批）；
+- 树上另有与本批无关的在制面（`src/error_codes.rs`、`src/frontend/parser/{expr,top_level}.rs`、
+  `worktree.md`、两枚新夹具 `t562`／`t563`），本批未动、未暂存；
+- 遗留一个 `UNE` 态子进程（pid 22141，`hand57_list_methods` 的编译产物）收不掉，
+  与本树 #20006 已登记的形状同类；
+- 滞留：代码笔后 `bootstrap..cleanup`＝5、`cleanup..bootstrap`＝457
+  （主树 HEAD `e5a513c8`）。
+
+### 经验
+
+1. 生成器的"全通过"不等于覆盖面够——它自带两道过滤（CPython 报错的丢弃、i64 溢出链丢弃），
+   真值面天然是安全的一半。要多特性脚本才打得到 `dict.get` 缺省、`sorted(items)`、
+   返回容器这三族。
+2. 一次 `--only` 跑挂在一枚用例上会把整个 harness 卡住（子进程 `UNE` ⇒ `subprocess` 的
+   wait 收不到尾），日志一行不吐。定位手法＝先 `lsof`/子进程树看卡在哪个 case 目录，
+   再逐条 `--only <单例名>` 复跑；挂住那枚直接从复跑清单里剔除，别反复触发。
+3. `# @cat:` 只认 `truth/str/container/numeric/control` 五个值，写错＝`bad_case`（参考侧
+   跑不出真值被排除出分母）。新用例入库前先单例跑一次确认 cat 与判定。
+4. 读数里嵌堆地址的（`4310585200` 一类）天然不可复现，台账只写形状（`<地址>`）与
+   期望值，不写具体数字（沿用教训 4）。
