@@ -124,7 +124,7 @@ impl Resolver {
                         for (i, (arg, (param_name, param_type))) in
                             args.iter().zip(sig.0.iter()).enumerate()
                         {
-                            let arg_type = self.infer_type(arg);
+                            let arg_type = self.infer_unified(arg);
                             if &arg_type != param_type {
                                 let diag = crate::error_codes::diagnostic_from_code(
                                     "E2008",
@@ -165,8 +165,8 @@ impl Resolver {
             AstNode::BinaryOp {
                 op, left, right, ..
             } => {
-                let lty = self.infer_type(left);
-                let rty = self.infer_type(right);
+                let lty = self.infer_unified(left);
+                let rty = self.infer_unified(right);
 
                 // For logical operators (&&, ||), both operands must be bool
                 if op == "&&" || op == "||" {
@@ -291,7 +291,7 @@ impl Resolver {
                 else_body,
             } => {
                 // Check condition - should be bool
-                let cond_type = self.infer_type(cond);
+                let cond_type = self.infer_unified(cond);
                 if cond_type != Type::Bool {
                     let diag = crate::error_codes::diagnostic_from_code(
                         "E2019",
@@ -327,7 +327,7 @@ impl Resolver {
             } => {
                 // Check if type annotation is provided
                 if let Some(type_str) = ty {
-                    let expr_type = self.infer_type(expr);
+                    let expr_type = self.infer_unified(expr);
                     // Convert string type annotation to Type for comparison
                     let annotated_type = self.string_to_type(type_str);
                     if !self.types_compatible(&expr_type, &annotated_type, expr) {
@@ -380,6 +380,17 @@ impl Resolver {
                 // Fallback to Named type
                 Type::Named(s.to_string(), vec![])
             }
+        }
+    }
+
+    /// 批次 971（双轨合一段 3）：统一推断的宽容包装——新轨
+    /// InferContext 为主，ERR（未定义符号/未实现形状）回落旧轨
+    /// infer_type（宽容 I64 兜底语义）。
+    pub fn infer_unified(&self, node: &AstNode) -> Type {
+        let mut ctx = crate::middle::resolver::new_resolver::InferContext::new();
+        match ctx.infer(node) {
+            Ok(t) => t,
+            Err(_) => self.infer_unified(node),
         }
     }
 

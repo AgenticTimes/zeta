@@ -7837,4 +7837,46 @@ mod tests_dual_track {
             normalize(&new_track(&AstNode::StringLit("s".into())))
         );
     }
+
+    /// 批 971（段 3 前置）：check_node 相关形状的双轨对照探针——
+    /// BinaryOp/FieldAccess/Call/DictLit/Subscript 的差异清单。
+    #[test]
+    fn dual_track_expression_shapes_report() {
+        let r = Resolver::new();
+        let binop = AstNode::BinaryOp {
+            op: "+".to_string(),
+            left: Box::new(AstNode::Lit(1)),
+            right: Box::new(AstNode::Lit(2)),
+        };
+        let field = AstNode::FieldAccess {
+            base: Box::new(AstNode::Var("obj".into())),
+            field: "f".to_string(),
+        };
+        let call = AstNode::Call {
+            receiver: None,
+            method: "foo".to_string(),
+            args: vec![AstNode::Lit(1)],
+            type_args: vec![],
+            structural: false,
+        };
+        let dict = AstNode::DictLit { entries: vec![] };
+        let sub = AstNode::Subscript {
+            base: Box::new(AstNode::Var("xs".into())),
+            index: Box::new(AstNode::Lit(0)),
+        };
+        for (name, node) in [
+            ("BinaryOp(+)", &binop),
+            ("FieldAccess", &field),
+            ("Call", &call),
+            ("DictLit", &dict),
+            ("Subscript", &sub),
+        ] {
+            println!(
+                "DIFF {}: old={} new={}",
+                name,
+                old_track(&r, node),
+                new_track(node)
+            );
+        }
+    }
 }
