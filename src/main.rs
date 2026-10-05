@@ -1001,7 +1001,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // emission sort, so `tools/mir_diff.sh` can compare two
                 // compiles byte for byte while warnings stay on stderr.
                 if dump_mir {
+                    // 批 979（G.6）：MIR 结构不变量 verifier 强制运行——
+                    // 违规打印诊断（首批观察模式，不 abort）
                     for m in &all_mirs {
+                        let errs = zetac::middle::mir::verifier::verify(m);
+                        for e in &errs {
+                            eprintln!(
+                                "warning: [W0900] MIR verifier ({}): {}",
+                                m.name.as_deref().unwrap_or("~anon"),
+                                e
+                            );
+                        }
                         print!("{}", m.dump_canonical());
                     }
                 }

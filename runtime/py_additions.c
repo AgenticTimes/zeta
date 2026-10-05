@@ -1144,18 +1144,28 @@ int64_t py_min_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
 // keyfn）的 LLVM 签名＝形参 i64（元素位模式 x0 直传）、返回 double
 // （v0）——与调用约定精确匹配（批 967 实证 double(*)(double) 会
 // 形参寄存器类错配：kf 读 x0 拿残留）
+// 批 974/975 位桥（批 969 定稿）：keyfn 指针签名 double(*)(double)——
+// 特化副本 ka__ZKEYF64_ka 的 LLVM 签名是 double(f64 形参)（参数注解
+// f64 ⇒ codegen 签名 f64）；C 侧把元素的 i64 位模式 **bitcast 成
+// double 传 v0**（寄存器类匹配），副本体内 f64 语义正确，返回 double
+// 由 C 读 v0。此前 int64 形参直传会读 x0 残留（寄存器类错配实拍
+// min/max 选错元素）。
 static int64_t py_max_key_f64_impl(int64_t vec, int64_t keyfn_addr) {
     int64_t n = zt_vec_len(vec);
     if (n <= 0) return 0;
-    double (*kf)(int64_t) = (double (*)(int64_t))keyfn_addr;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
     int64_t best = ((int64_t*)vec)[0];
-    double best_k = kf(best);
+    double best_d;
+    memcpy(&best_d, &best, sizeof best_d);
+    double best_k = kf(best_d);
     for (int64_t i = 1; i < n; i++) {
         int64_t v = ((int64_t*)vec)[i];
-        double k = kf(v);
+        double v_d;
+        memcpy(&v_d, &v, sizeof v_d);
+        double k = kf(v_d);
         if (k > best_k) {
             best = v;
-            best_k = k;
+            best_d = k;
         }
     }
     return best;
@@ -1165,23 +1175,27 @@ static int64_t py_min_key_f64_impl(int64_t vec, int64_t keyfn_addr) {
     if (n <= 0) return 0;
     double (*kf)(int64_t) = (double (*)(int64_t))keyfn_addr;
     int64_t best = ((int64_t*)vec)[0];
-    double best_k = kf(best);
+    double best_d;
+    memcpy(&best_d, &best, sizeof best_d);
+    double best_k = kf(best_d);
     for (int64_t i = 1; i < n; i++) {
         int64_t v = ((int64_t*)vec)[i];
-        double k = kf(v);
+        double v_d;
+        memcpy(&v_d, &v, sizeof v_d);
+        double k = kf(v_d);
         if (k < best_k) {
             best = v;
-            best_k = k;
+            best_d = k;
         }
     }
     return best;
 }
 int64_t py_max_key_f64(int64_t vec, int64_t keyfn_addr) {
-    double (*kf)(int64_t) = (double (*)(int64_t))keyfn_addr;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
     return py_max_key_f64_impl(vec, (int64_t)kf);
 }
 int64_t py_min_key_f64(int64_t vec, int64_t keyfn_addr) {
-    double (*kf)(int64_t) = (double (*)(int64_t))keyfn_addr;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
     return py_min_key_f64_impl(vec, (int64_t)kf);
 }
 
