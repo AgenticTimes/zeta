@@ -29103,3 +29103,137 @@ bind `:328` 先于 struct `:329`、字符串 `:333`。
   `src/frontend/parser/top_level.rs`、`worktree.md` 与两枚未跟踪夹具 `t562`／`t563`）一字未动、未暂存。
 - 欠账一条点名：十批界的全局逐个用例上一批还是 10030，已 overdue 20 批；本批只做 #20005 一项，
   全局跑排在下一批（10051）开工第一步。
+
+## 批次 10051：十批界的全局逐个用例跑（欠 20 批，本批补）＋读数里两条自己能修的红
+
+代码笔 `7242e988`（4 文件 +32/-13）。
+
+### 这一批跑的是什么
+
+每 10 批一次的全局逐个用例跑欠了 20 批（上次是批次 10030 那格），本批先补跑
+`bash tools/run_all.sh`（17 步，逐步读数＋rc 口径），后台起、随时可 `tail`。
+取数用的被测件与 10030 同一颗：`target/release/zetac` 的 md5
+`ed5227ccd29b70c4ee9ae17500926f10`（等于 10030 日志 START 行记的那颗），
+本批零 `src/` 改动、没重编 ⇒ 两批读数可以直接逐格对照。
+
+### 逐步读数（10030 → 10051）与逐条归因
+
+| 步骤 | 10030 | 10051 | 归因 |
+|---|---|---|---|
+| official | compile 194/194、compile+link 191/194 | 同 | 无变化（3 枚缺运行期绑定：`integration_all_features`、`quantum_basic`、`selfhost`，两处读数逐字相同） |
+| python_style | 447 pass / **3 fail** / 1 known-fail | 447 pass / 0 fail / 1 known-fail / **3 stuck** | 那 3 枚就是 `t253_stub_abort`、`t256_pylib_stub_abort`、`t405_hard_stub_aborts_loudly`（backlog #20006）。单列成 STUCK 的是批次 10030 自己的代码笔 `ab017966`（2026-10-04 10:11:45），而那格全局跑 09:00:39 就开跑了 ⇒ 10030 读到的是附笔之前的态。同批的两个时点，不是这 20 批里新修好的缺陷 |
+| corpus | 34/40 | 38/40 | 10030 少的那 4 枚是单文件 90 秒预算超时（不是解析退化）；本批跑到。在册上限仍是 38/40（差的两枚＝后端 `codegen.rs:4189` 硬转崩的 `jq_wufu.py`／`jq_wufu_daily.py`，与抽样窗口无关，10021／10022 已实测） |
+| jit | ok=176 segv=0 total=648 | ok=177 segv=0 total=648 | 档间移位；只有 ok／segv／total 是尺 |
+| diff | match=2717 judged=2717 **bad_case=1** | 同（本批改夹具后另全量复跑一次：match=2717 judged=**2718** bad_case=**0**，rc 由 2 变 0） | 见下面"改动 1" |
+| knob | 23 条断言 FAIL 15 | 同 15 | 红源在主树：批次 750R `82d7b3b9` 换了夹具形状（现在解析得动 ⇒ W1002/W1003 都不出现，14 条断言空转）并删了 `resolver.rs` 里 `ZETA_COUNT_MGT` 那个 `is_ok` 调试站点（A4 那条）。车道没并主树 ⇒ 读数照旧，本批不重复修 |
+| mbvar | 35 个脚本 / **10 处违规** / rc=1 | 28 / 0 / rc=0 | 两处变化都不是代码回归：违规清零来自批次 10030 附笔 `129eb89d`（`tools/sample_gate.sh` 9 处＋`tools/selfcheck_sample_gate_classify.sh` 1 处的 `$VAR` 紧跟多字节字符改成 `${VAR}`，11:22:00 落地＝同样在那格取数之后）；分母少 7 枚＝当时 `tools/`、`tests/` 下有 7 个未跟踪的临时 .sh 现已不在（HEAD 在册 .sh 恰 28 枚，工作树里未跟踪 .sh＝0，`git log --diff-filter=D --since=2026-10-03 -- '*.sh'` 为空 ⇒ 在册脚本零删除） |
+| swallow / import_form / empty_stmt / pysrc / cli_semantics / ignore_rules / emit_stable / dyn_binding / comment_drift / compile_diagnostics | 6/0、22/0、68/0、42/0、87/0、19/0、2/0、4/0、0 处复述、official 6 文件 33 行＋python_style 132 文件 303 行 | 逐字相同 | 无变化 |
+| clean_checkout | rc=0，secs=33，rev=`07dcae71` | rc=0，secs=6，rev=`99642ea9` | 各自的当时 HEAD；耗时差＝该步只是干净检出跑一趟 |
+
+**全局跑之外，本批还取了这些数**：
+
+- 第②步单独复跑两遍（改完 `run_all.sh` 后要验新字段真的能落盘）：第一遍
+  446 pass / **1 fail**（`t178_map_get_setdefault`）／3 stuck，第二遍 447 pass / 0 fail／3 stuck。
+  再把 `t178` 用 `run_one.sh` 隔离跑三次＝3/3 PASS。合计 5 次读数里 1 次红 ⇒
+  记作间歇现象，不记成本批引入的回归，**机制未证**（两个已实测的相关事实：
+  `run_one.sh` 跑被测程序的上限是 20 秒（`run_capped`）；本机此刻累计 56 个
+  不可中断态进程，`ps -axo pid,stat,etime,comm | awk '$2 ~ /U/' | wc -l`＝56，
+  全来自 #20006 那三枚夹具的各次派发）。
+- 差分全量复跑（改完夹具后）：`match=2717 judged=2718 rate=100.0% bad_case=0`，
+  分档 truth 236/236、str 401/401、container 1079/1079、numeric 524/524、
+  **control 477/478**，唯一那条不一致＝改过的 `del_undefined_var`
+  （期望 `NameError`、实得 `no error`），"较基线转好 23 条"与 10030 同一串名字，
+  最后一行"差分一致率无回归"这次印出来了（改前印不出来）。
+
+### 改动 1：`tests/diff/cases/del_undefined_var.dcase`（+15/-8）＝backlog:1592 裁选项①落地
+
+旧拼法 `x = "hello"` / `del x` / `print(x)` 让参考侧（CPython）以 NameError 退出 1 ⇒
+取不到真值，本条一直是"坏用例"。它不只是难看：`tools/diff_test.py:305-307` 见坏用例
+无条件置 rc=2 ⇒ ① 全量门禁第②步的 rc 长期非 0，② `:343` 那句"差分一致率无回归"
+长期印不出来。批次 756 落的裁定是"坏用例单列一档"，但置 2 那一支没动（本批实测还在）。
+
+改成两侧同一段可跑完的拼法：
+
+```
+try:
+    del y
+    print("no error")
+except NameError:
+    print("NameError")
+```
+
+实拍三侧：CPython stdout `NameError`／退出 0；zeta（AOT 跑）stdout `no error`／退出 0；
+`diff_test.py --only del_undefined_var` ⇒ `mismatch ... 首个差异行 #1: 期望 'NameError'
+实得 'no error'`、`match=0 judged=1 bad_case=0`、rc=0。
+
+也就是说这条用例现在把真实缺陷（`del` 未定义变量既不报 NameError、`except NameError`
+也接不住）从"排除出分母"搬进判定面，并且等 `del` 补上运行期检查后两侧同打 `NameError`，
+本条自动转 match、不用再看它的 rc。
+
+### 改动 2：`tools/run_all.sh`（+13/-1）＝10030 记录里留的"JSON 没有这一格"
+
+`run.sh` 已经把挂死档单列（第②步摘要行末尾 `, N stuck`＋一行 `stuck: <名单>`），但那份
+明细写在匿名 `mktemp` 里、聚合完就 `rm -f` ⇒ 全局跑只能报数量、点不出是哪几枚，跨批也没法
+核对名单变没变。本批补：摘要下方打印一行带名单（不计红），并把 `stuck`／`stuck_files`
+两字段写进 JSON。
+
+合成夹具自证提取式（两种输入：带名单且名单尾含括号注释的摘要行、不带 stuck 字段的旧摘要行）
+＋上面两遍第②步真机复跑（`stuck": 3, "stuck_files": "t253_stub_abort t256_pylib_stub_abort
+t405_hard_stub_aborts_loudly"`）。旧格式那行读成 `stuck=0` 而不是把整行当数抄进去——
+守卫是 `[[ "$py_stuck" =~ ^[0-9]+$ ]] || py_stuck=0`。
+
+### 改动 3：本批自己的行号搬家（`docs/ABI.md`＋`tools/baselines/abi_anchors.tsv`，各 +2/-2）
+
+第②步插了 8 行 ⇒ `docs/ABI.md:989` 引的 `tools/run_all.sh:198` 搬到 209、`:1141` 引的 `:628`
+搬到 640（两处都先 `grep -nF` 证"内容逐字相同＋全文件唯一命中"）。
+`--rebind --dry` 会把车道既存 194 条漂移一起改文档 ⇒ 不用于本批这两条，改成手改文档＋
+`--bless-only tools/run_all.sh:209,tools/run_all.sh:640` 点名刷基线；`--bless-only` 结构上
+只能加不能删（留下的两条旧行变成"消失"3 条），所以再按精确键删掉那两条旧行
+（脚本 `/tmp/b10051/prune_stale.py`，断言"删掉的正好 2 行"才写盘）。
+核对读数：漂移 224→**222**、消失回到车道既存的 **1** 条（`codegen.rs:7384`，不是本批造的）
+⇒ 本批零自造漂移。
+
+### 全局失败用例转模块内部单元测试：本批逐条判定＝零转换
+
+按 #20005 的收法（只接落在 MIR 上的编译期结论）逐条答：
+
+- knob 的 15 条：判据是 CLI 侧告警码与退出码，且主树 `82d7b3b9` 已改夹具形状——在车道再写
+  一颗进程内测试＝重复实现并树时要冲突的那一面。等并树。
+- python_style 的 3 枚 STUCK：主张在**运行期退出码**（进程停在不可中断态），编译期拿不到，
+  10030 已裁定不收，本批维持。
+- diff 的坏用例：本批直接用改夹具解决，比转单元测试更靠前。
+- mbvar 的 10 处：已由 `129eb89d` 修完，且它是 lint 脚本的返回值、不是编译器行为。
+
+⇒ 全局清单本批不增不减。
+
+### 不做的事与理由
+
+- **不在车道 `--bless` 差分基线**：车道 `tools/baselines/diff_consistency.json` 仍是
+  total=601／match_min=577 的旧口径，主树批次 772 `b2e50288` 已把它抬到 2846 那条口径；
+  在车道 bless 会用 2718 条覆盖 2846 条并压低闸门 ⇒ 等并树后由主树侧一次性刷。
+  另记一笔归属：主树 772 那格 bless 时把 `del_undefined_var` 按 bad_case 入册，本批改拼法后
+  该条读数是 mismatch ⇒ 基线里那一格过期（回归只从 match 起算，不算变差），主树下次 bless 自然刷正。
+- **不动 `diff_test.py` 置 rc=2 那一支**：本批选择让红源消失（改夹具），而不是改判定口径。
+- **不并主树**（`cleanup..bootstrap`＝419 条）：与 10047–10050 同一裁决。
+- 工作树里另有非本批的未提交面（`src/error_codes.rs`、`src/frontend/parser/expr.rs`、
+  `src/frontend/parser/top_level.rs`、`worktree.md` 与两枚未跟踪用例
+  `tests/python_style/t562_lambda_param_forms.z`、`t563_call_on_value_field_init.z`；
+  源码 mtime 是 10-01＝长期挂在树上的旁路在制品）⇒ 不 stage、不撤、不动。
+
+### 经验（本批新增两条）
+
+1. **同一批的全局读数和它自己的代码笔是两个时点**：10030 那格读到的 3 fail 与 10 处违规，
+   是同批 `ab017966`／`129eb89d` 在取数之后改掉的 ⇒ 跨批对照前先看 `clean_checkout.rev`
+   与逐步读数的取样时刻，别把"同批附笔的后置效果"记成"这 20 批修好的"。
+2. **分母变化先查文件面再谈代码**：mbvar 35→28 看着像"检查面缩小"，实测是未跟踪临时脚本
+   消失（在册 28 枚＋未跟踪 0 枚＋无删除记录三条一起才成立）。
+
+### 收尾
+
+- 代码笔 `7242e988`；记录笔随后。
+- 滞留：`bootstrap..cleanup`＝**65**、`cleanup..bootstrap`＝**419**（主树 HEAD
+  `77f3ba26`＝批次 985 补录笔）。
+- 下一批回 #20005 节奏；候选站点（10050 已换过一轮文件面重筛）：
+  `src/frontend/macro_expand.rs`、`src/middle/ctfe/` 其余几处；在册候选批次
+  624、546、431、383、374、336、333。只看 `fix(` 开头的笔＋站点文件不在避让面
+  （`gen.rs`、本车道在制的解析器三文件）＋先证该趟有调用方。
