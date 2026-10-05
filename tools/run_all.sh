@@ -74,7 +74,7 @@ zt_stale_check tokio_runtime.o runtime/tokio_runtime_stub.c runtime/unavailable_
 
 ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 official_pass=0; official_total=0; official_diag_files=0; official_diag_lines=0; official_compile=0
-py_pass=0; py_fail=0; py_known=0; py_xpass=0
+py_pass=0; py_fail=0; py_known=0; py_xpass=0; py_stuck=0; py_stuck_files=""
 corpus_ok=0; corpus_total=0
 py_diag_lines=0; py_diag_files=0
 
@@ -137,6 +137,14 @@ if [[ $SKIP_PYTHON -eq 0 ]]; then
     py_fail=$(echo "$summary" | sed -E 's/.*passed, ([0-9]+) failed.*/\1/')
     py_known=$(echo "$summary" | sed -E 's/.*failed, ([0-9]+) known-fail.*/\1/')
     py_xpass=$(echo "$summary" | sed -E 's/.*known-fail, ([0-9]+) xpass.*/\1/')
+    # 挂死档（backlog #20006）：run.sh 把这类单列为 stuck，不计红，但名单原来只写在
+    # 那个匿名 mktemp 里、下面 `rm -f` 就没了 ⇒ 十批界的全局跑只能报数量、点不出是哪几枚。
+    py_stuck=$(echo "$summary" | sed -E 's/.*xpass, ([0-9]+) stuck.*/\1/')
+    [[ "$py_stuck" =~ ^[0-9]+$ ]] || py_stuck=0
+    stuckline=$(grep '^stuck:' "$py_log" | tail -1 || true)
+    if [[ -n "$stuckline" ]]; then
+      py_stuck_files=$(printf '%s' "${stuckline#stuck:}" | sed -E 's/^ +//; s/ *\(.*$//' | tr -s ' ')
+    fi
   fi
   # 任务 #34：python_style 的编译告警由 run.sh 自己聚合（它的 OUTDIR 在 EXIT trap
   # 里就被删掉，外部再也捞不回来），这里只把它的计数行转成 JSON 字段。
@@ -152,6 +160,9 @@ if [[ $SKIP_PYTHON -eq 0 ]]; then
   fi
   if [[ $JSON_ONLY -eq 0 ]]; then
     echo "$summary"
+    if [[ -n "$py_stuck_files" ]]; then
+      echo "stuck 名单（进程停在不可中断态、退出码取不到；不计红，见 backlog #20006）: $py_stuck_files"
+    fi
     [[ $py_rc -ne 0 ]] && tail -20 "$py_log" >&2
   fi
   rm -f "$py_log"
@@ -573,6 +584,7 @@ doc = {
   "python_style": {
     "pass": $py_pass, "fail": $py_fail,
     "known_fail": $py_known, "xpass": $py_xpass,
+    "stuck": $py_stuck, "stuck_files": "$py_stuck_files",
   },
   "corpus": {"parse_ok": $corpus_ok, "total": $corpus_total},
   "jit": {"ok": $jit_ok, "segv": $jit_segv, "total": $jit_total,
