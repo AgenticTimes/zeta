@@ -1,0 +1,22 @@
+# @cat: container
+# @note: 随机内建函数（seed=95012 #2）
+#@@ python
+v = [-591, -355, -623]
+print(sum([-591, -355, -623]))
+print(min([-591, -355, -623]))
+print(max([-591, -355, -623]))
+print(sorted([-591, -355, -623]))
+print(abs(-623))
+print(round(32 / 10))
+print(len([-591, -355, -623]) + sum([-591, -355]))
+
+#@@ zeta
+v = [-591, -355, -623]
+print(sum([-591, -355, -623]))
+print(min([-591, -355, -623]))
+print(max([-591, -355, -623]))
+print(sorted([-591, -355, -623]))
+print(abs(-623))
+print(round(32 / 10))
+print(len([-591, -355, -623]) + sum([-591, -355]))
+

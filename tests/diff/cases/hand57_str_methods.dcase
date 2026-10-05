@@ -1,0 +1,38 @@
+# @cat: str
+# @note: 批次 10057 手写：字符串方法链与拼接计数
+#@@ python
+s = "Hello, World -- again -- World"
+print(s.upper())
+print(s.lower())
+print(s.count("World"))
+print(s.replace("World", "Zeta"))
+print(s.split(" -- "))
+print("-".join(s.split(" -- ")))
+print(s.startswith("Hello"), s.endswith("World"))
+print(s.find("World"), s.find("Nope"))
+print(len(s), s.strip().replace(" ", "_"))
+t = "a,b,c,d"
+print(t.split(","))
+print(t.split(",", 2))
+parts = t.split(",")
+print(parts[0], parts[-1], len(parts))
+print(",".join(parts[::-1]))
+print(s.title())
+#@@ zeta
+s = "Hello, World -- again -- World"
+print(s.upper())
+print(s.lower())
+print(s.count("World"))
+print(s.replace("World", "Zeta"))
+print(s.split(" -- "))
+print("-".join(s.split(" -- ")))
+print(s.startswith("Hello"), s.endswith("World"))
+print(s.find("World"), s.find("Nope"))
+print(len(s), s.strip().replace(" ", "_"))
+t = "a,b,c,d"
+print(t.split(","))
+print(t.split(",", 2))
+parts = t.split(",")
+print(parts[0], parts[-1], len(parts))
+print(",".join(parts[::-1]))
+print(s.title())

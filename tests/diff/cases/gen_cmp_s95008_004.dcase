@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 随机比较链（seed=95008 #4）
+#@@ python
+print(421 < 23 <= 994)
+print(901 > 984 < 785)
+
+#@@ zeta
+print(421 < 23 <= 994)
+print(901 > 984 < 785)
+

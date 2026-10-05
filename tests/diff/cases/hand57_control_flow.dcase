@@ -1,0 +1,86 @@
+# @cat: control
+# @note: 批次 10057 手写：控制流全形（for/while 的 else、break/continue、elif 链、三元）
+#@@ python
+for i in range(5):
+    if i == 2:
+        continue
+    if i == 4:
+        break
+    print(i)
+else:
+    print("no-break")
+
+for j in range(3):
+    print("outer", j)
+    for k in range(3):
+        if k > j:
+            break
+        print(" inner", k)
+
+n = 0
+while n < 6:
+    n += 1
+    if n % 2 == 0:
+        continue
+    print(n)
+else:
+    print("while-else", n)
+
+for ch in "abc":
+    if ch == "a":
+        print("is a")
+    elif ch == "b":
+        print("is b")
+    else:
+        print("other", ch)
+
+x = 7
+print("big" if x > 5 else "small")
+print((x if x % 2 == 0 else -x) + 1)
+found = False
+for v in [1, 5, 9]:
+    if v == 5:
+        found = True
+print(found)
+#@@ zeta
+for i in range(5):
+    if i == 2:
+        continue
+    if i == 4:
+        break
+    print(i)
+else:
+    print("no-break")
+
+for j in range(3):
+    print("outer", j)
+    for k in range(3):
+        if k > j:
+            break
+        print(" inner", k)
+
+n = 0
+while n < 6:
+    n += 1
+    if n % 2 == 0:
+        continue
+    print(n)
+else:
+    print("while-else", n)
+
+for ch in "abc":
+    if ch == "a":
+        print("is a")
+    elif ch == "b":
+        print("is b")
+    else:
+        print("other", ch)
+
+x = 7
+print("big" if x > 5 else "small")
+print((x if x % 2 == 0 else -x) + 1)
+found = False
+for v in [1, 5, 9]:
+    if v == 5:
+        found = True
+print(found)
