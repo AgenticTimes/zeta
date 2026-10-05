@@ -32892,3 +32892,19 @@ perf 采样（macOS sample，large-z 2s 窗口，全样本 14,981）：tokio 多
 本分散（解析 ~30%、其余通用机械）⇒ 轴 C 下一步需全线程长窗采样定
 位聚合热点，单点微优化在当前尺寸无杠杆。gen_stmt 拆分（1000 续刀）
 属轴 D 不属轴 C。
+
+## 批次 1002（2026-10-05）：轴 D 第二刀续——控制流族（If/While/For）迁出 gen_stmt（IR 零变）
+
+gen_stmt 巨型 match 第一片（`75c92c66`）：控制流三臂（If 102＋While 87
+＋For 150 行）迁 codegen_stmt_flow.rs；臂原位缩为解构＋单行调用；
+gen_stmt/gen_expr_safe/cond_i1_from 提 pub(super)。codegen.rs
+8,866→8,281 行。
+
+**迁出纪律**：stash 前后 LLVM IR 逐字节 diff 为空（t49 for+continue
+路径）。**验证**：门禁窗口 2 rc=0——差分 285/285、python_style 44/44、
+official 13/13、语料 40/40；五金用例全绿；库 265/265。
+
+**续刀地图（gen_stmt 剩余 ~2,100 行）**：Call 臂独占 ~1,144 行（内含
+try_setjmp/spawn/array_get 内联/isinstance 等 10+ 子族，下一批的主
+刀）；VoidCall 144／For 余量／DictInsert 103／Swap 101／Pre/Post/
+Invariant 160 各成小片。
