@@ -29626,3 +29626,13 @@ src/ 根现仅剩真实源码。验证：编译零错误、库 233/233、差分�
 - 验证（各批）：库测试 233/233、差分抽样（窗口 9）284/284。
 
 轴 D 累计：gen.rs 19,392 → 3,798（-80.4%），34 个族文件。
+
+## 批次 952（2026-10-05）：轴 F.4.1 第一刀——字段定型迁出 parser
+
+parse_class 的 self.<f> = <rhs> 字段定型（150 行 RHS 形状猜测 match，
+top_level.rs:1303-1455）逐字迁入 middle/checker/field_ty.rs 纯函数
+guess_field_type_from_rhs；parser 调用点一行委托（-147 行）。
+新增 6 个单测（该逻辑此前零测试）。验证：库 239/239、全量差分
+2845/2845（行为零变）、python_style 479/0。
+F.4 剩余：gen 六条侧信道替换、6 轮传播删除、codegen container_cond_i1
+改读类型。
