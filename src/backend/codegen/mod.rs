@@ -10,6 +10,8 @@ mod signature_table_gen;
 // 批 1000（轴 D 第二刀）：keyfn 家族（W0911 核对＋FuncAddr 兜底臂）
 // 自 codegen.rs 迁出。
 mod codegen_keyfn;
+// 批 1002（轴 D 第二刀续）：控制流族（If/While/For）迁出。
+mod codegen_stmt_flow;
 // @generated — regenerate via `python3 tools/gen_from_registry.py --emit`
 mod runtime_decls_registry;
 // @generated — regenerate via `python3 tools/gen_from_registry.py --emit-core`
