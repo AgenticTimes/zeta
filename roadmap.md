@@ -30162,3 +30162,39 @@ b978f 探针仍 2/-1（应 3/-1）——四层 ABI 链（兜底声明/真体签�
 调用签名/传参位语义）的系统级对齐未完成，**独立专项**（方案与全部
 实证在批 963/966/982/983 各节）。库 249/249、差分抽样 284/284、
 python_style 479/0。
+
+## 批次 989（2026-10-05）：keyfn i64 数组＋float 返回收官——登记门槛放宽＋sitofp 桥（max=3/min=-1 全通）
+
+批 963/966/982/983 四层链的最后一公里，`max(xs, key=kf)`（i64 数组＋
+`-> float` keyfn）此前落旧路的根因逐环定位：
+
+1. **路由**：探针实证 `max(xs,key=kf)` 走 `call_dispatch.rs` 的 key= 臂
+ （call_num `lower_minmax` 的同形臂对本路由零命中——REG989 探针证据）。
+2. **登记门槛**（真断点一）：`elem_f64` 门把 i64 元素全挡外 ⇒ 特化登记
+ 永不发生。放宽为 `elem_f64 || (elem_i64 && keyfn 返回域 float)`——
+ int 返回 keyfn 旧路 i64 比较精确（>2^53 才失真），不劫持。
+3. **副本体**：特化副本 MIR 实为全 F64（param F64/乘 F64/返回 F64，
+ LLVM `double(f64)`）——此前"参数槽型 I64"的判读是 dump 窗口跨块误读。
+4. **min 桥错值**（真断点二）：首版 sitofp 桥漏 `best_k = k` 更新——
+ min 连换两个元素（键 1.5→-0.5→1.0 用旧键比较），探针逐迭代实证
+ （i=2 的 cmp=1 而 best_k 仍 1.5）后修复。max 打对纯属首元素恰好最大。
+
+交付：`py_max_key_i64_f64`/`py_min_key_i64_f64`（runtime，sitofp 桥：
+元素**值**转 double——Python 语义 `kf(3)=1.5` 要求转换不是位重解，整数
+3 位重解得非规格数）；发射按元素型分桥；拆雷两处（call_num 臂 4 个
+重复登记块＋发射块整段拆除——登记不改名是批 965 老缺陷形态、发射不
+分元素型；codegen 三连 FuncAddr 兜底块并一）。工具修复：
+corpus_baseline.py:36 两条语句被外部转储并成一行（语法错误 ⇒ 语料路
+读数一直作废）；sample_gate.sh 全角括号前变量加花括号（bash 变量名吃
+进多字节字符 ⇒ unbound variable）。
+
+**验证**：目标 `3/-1` ✓、int keyfn 回归 `-1/3` ✓、f64 数组回归
+`-3.5/2.5` ✓、边界（`x/2`、`x*-1.5+1`）`9/-7/-8/8` ✓（全部 CPython
+对表）。库 254/254；门禁窗口 9：差分 284/284、python_style 41/41、
+official 20/20；语料 **38/40**——`jq_wufu.py`/`jq_wufu_daily.py` 在
+codegen.rs:4236 panic（FloatValue 强转 IntValue），HEAD 二进制 A/B 逐
+字节复现 ⇒ **预存缺陷非本批引入**（worktree.md:508 早有登记，行号从
+4183 漂到 4236；触发形＝`sorted(..., key=lambda x: x[1])` 的 F64 泄漏
+族）。登记（未修）：该族归 lambda/sorted 键路，与 keyfn Var 名单态化
+无关；另 site3（call_dispatch 1947 区）与 site1 条件全同被完全遮蔽，
+列清理候选。
