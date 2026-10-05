@@ -55,7 +55,10 @@ impl MirGen {
                         // 定按句柄判等）。注意守卫不能挡 DynamicArray——那正是
                         // 待细化的形状。
                         let refined = cur.clone().map(|t| {
-                            match (&t, MirGen::annotation_elem_ty(ty)) {
+                            match (
+                                &t,
+                                crate::middle::checker::field_ty::annotation_elem_ty(ty),
+                            ) {
                                 (Type::DynamicArray(e), Some(el))
                                     if matches!(**e, Type::I64) =>
                                 {

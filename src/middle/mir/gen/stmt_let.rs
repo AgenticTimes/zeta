@@ -70,7 +70,10 @@ impl MirGen {
                         // HANDLES — every string counted as absent (measured:
                         // `fetched_codes: set[str] = set()` in fetch_stocks).
                         let refined = rhs_ty.clone().map(|t| {
-                            match (&t, Self::annotation_elem_ty(ty)) {
+                            match (
+                                &t,
+                                crate::middle::checker::field_ty::annotation_elem_ty(ty),
+                            ) {
                                 (Type::DynamicArray(e), Some(el))
                                     if matches!(**e, Type::I64) =>
                                 {

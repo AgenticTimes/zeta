@@ -3,6 +3,7 @@
 //! parser 调用点已替换。行为零变——各臂语义见函数内原注释。
 
 use crate::frontend::ast::AstNode;
+use crate::middle::types::Type;
 
 /// 由 RHS 形状推断字段类型串。`init_params` 为 `__init__` 参数表
 /// （名, 注解）——`self.x = x` 时取参数注解（非空非 dyn）。
@@ -268,3 +269,63 @@ mod tests {
         );
     }
 }
+
+// ── 批次 961（轴 F.4）：自 gen.rs 迁入的注解串解析纯函数 ──
+pub fn annotation_elem_ty(ty: &str) -> Option<Type> {
+        let t = ty.trim();
+        for kw in ["list", "set", "frozenset", "List", "Set", "FrozenSet"] {
+            if let Some(rest) = t.strip_prefix(kw) {
+                // 批次 879（#276）：parse_type 已把 `set[str]` 归一成尖括号
+                // `set<str>`（与 dict→map 同一批），这里两种括号都要认。
+                if let Some(inner) = rest
+                    .trim()
+                    .strip_prefix(|c: char| c == '[' || c == '<')
+                    .and_then(|r| r.trim_end().strip_suffix(|c: char| c == ']' || c == '>'))
+                {
+                    return match inner.trim() {
+                        "str" | "String" => Some(Type::Str),
+                        "int" | "i64" => Some(Type::I64),
+                        "float" | "f64" => Some(Type::F64),
+                        "bool" => Some(Type::Bool),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        None
+    }
+
+    /// `map<K, V>` / `dict[K, V]` → the declared key and value types, but ONLY
+    /// when this table knows both element names. `Any` and `object` say "no
+    /// single type" (`Type::PyDynamic`). A name it does not know (a class, a
+    /// nested container) yields `None` for the whole annotation: half-applying
+    /// `dict[str, pd.DataFrame]` asserts `map<str, i64>` over a map of object
+    /// handles, which is a worse claim than the `i64` placeholder it replaces.
+    /// The parser normalizes the python spelling to angle brackets (parse_type).
+pub fn annotation_dict_kv(ty: &str) -> Option<(Type, Type)> {
+        let t = ty.trim().trim_start_matches("typing.").to_string();
+        let (open, close) = if t.contains('<') {
+            ('<', '>')
+        } else {
+            ('[', ']')
+        };
+        let (head, rest) = t.split_once(open)?;
+        if !matches!(head.trim(), "map" | "dict" | "Dict") {
+            return None;
+        }
+        let inner = rest.trim().trim_end_matches(close).trim();
+        let one = |s: &str| -> Option<Type> {
+            match s.trim() {
+                "Any" | "object" => Some(Type::PyDynamic),
+                "str" | "String" => Some(Type::Str),
+                "int" | "i64" => Some(Type::I64),
+                "float" | "f64" => Some(Type::F64),
+                "bool" => Some(Type::Bool),
+                _ => None,
+            }
+        };
+        let mut it = inner.split(',');
+        Some((it.next().and_then(one)?, it.next().and_then(one)?))
+    }
+
+
