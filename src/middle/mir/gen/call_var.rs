@@ -92,6 +92,19 @@ impl MirGen {
                 self.type_map.insert(slot_id, ty);
                 return slot_id;
             }
+            // 批 967：keyfn 单态化特化副本的裸读 ⇒ FuncAddr。独立早
+            // 分支——副本不在 module_globals 名单，env-read 分支内的
+            // FuncAddr 块永远走不到（实拍 keyfn 参数收 0x103）
+            if name.contains("__ZKEYF64_")
+                && !self.global_consts.contains_key(name)
+                && !self.type_decls.contains_key(name)
+            {
+                let slot_id = self.next_id();
+                self.exprs
+                    .insert(slot_id, MirExpr::FuncAddr(name.clone()));
+                self.type_map.insert(slot_id, Type::I64);
+                return slot_id;
+            }
             if let Some(&existing) = self.name_to_id.get(name) {
                 // t425: in a module body (synthesized main or user main
                 // with module statements merged in — both carry

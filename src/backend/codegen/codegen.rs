@@ -6972,6 +6972,27 @@ impl<'ctx> LLVMCodegen<'ctx> {
                         .unwrap()
                         .into();
                 }
+                // 批 967：keyfn 单态化特化副本（__ZKEYF64_ 前缀）的兜底
+                // 声明与真体**同签名** double(f64)——副本参数注解 f64 ⇒
+                // codegen 参数签名 f64、返回 double；同名实体复用。
+                // C 侧 py_max_key_f64 把元素位模式 bitcast 成 double 传入。
+                if name.contains("__ZKEYF64_") {
+                    let f = match self.module.get_function(name) {
+                        Some(f) => f,
+                        None => self.module.add_function(
+                            name,
+                            self.f64_type
+                                .fn_type(&[self.f64_type.into()], false),
+                            Some(Linkage::External),
+                        ),
+                    };
+                    let fptr = f.as_global_value().as_pointer_value();
+                    return self
+                        .builder
+                        .build_ptr_to_int(fptr, self.i64_type, "keyfn_addr")
+                        .unwrap()
+                        .into();
+                }
                 let f = self.get_or_declare_function(name, &[], 0);
                 let fptr = f.as_global_value().as_pointer_value();
                 self.builder

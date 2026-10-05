@@ -1726,16 +1726,57 @@ call, no NULL-handle dereference).",
                                 if let Some(mut full) =
                                     self.full_funcdefs.get(nm.as_str()).cloned()
                                 {
+                                    // name 必须改 mangled——原名入 mir_map
+                                    // 会覆盖原函数的 MIR（批 965 实证）
                                     if let AstNode::FuncDef {
-                                        params, ..
+                                        params,
+                                        name,
+                                        ..
                                     } = &mut full
                                     {
                                         if let Some(p0) = params.first_mut() {
                                             p0.1 = "f64".to_string();
                                         }
+                                        *name =
+                                            format!("__ZKEYF64_{}", nm);
                                     }
                                     store.borrow_mut().push(full);
                                 }
+                            }
+                        }
+                        // 批 967：f64 元素 ⇒ 特化副本发射（FuncAddr 槽 +
+                        // py_max_key_f64，keyfn 签名 double(f64)——比较
+                        // double 域，返回原元素）
+                        if let (AstNode::Var(nm), Some(store)) =
+                            (&ka[1], self.keyfn_spec_store.as_ref())
+                        {
+                            let mangled = format!("__ZKEYF64_{}", nm);
+                            let registered = store.borrow().iter().any(|a| {
+                                matches!(
+                                    a,
+                                    AstNode::FuncDef { name, .. }
+                                        if *name == mangled
+                                )
+                            });
+                            if registered {
+                                let xs2 = self.lower_expr(&args[0]);
+                                let f_id = self.lower_expr(&AstNode::Var(
+                                    mangled.clone(),
+                                ));
+                                let func = if method == "min" {
+                                    "py_min_key_f64"
+                                } else {
+                                    "py_max_key_f64"
+                                };
+                                self.stmts.push(MirStmt::Call {
+                                    func: func.to_string(),
+                                    args: vec![xs2, f_id],
+                                    dest: id,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(id, MirExpr::Var(id));
+                                self.type_map.insert(id, Type::F64);
+                                return id;
                             }
                         }
                         let f = self.lower_expr(&ka[1]);
@@ -1946,6 +1987,38 @@ call, no NULL-handle dereference).",
                             if dest_f64 { Type::F64 } else { Type::I64 },
                         );
                         return id;
+                    }
+                    // 批 967：f64 元素 ⇒ 特化副本发射（同 site1）
+                    if let (AstNode::Var(nm), Some(store)) =
+                        (&k, self.keyfn_spec_store.as_ref())
+                    {
+                        let mangled = format!("__ZKEYF64_{}", nm);
+                        let registered = store.borrow().iter().any(|a| {
+                            matches!(
+                                a,
+                                AstNode::FuncDef { name, .. } if *name == mangled
+                            )
+                        });
+                        if registered {
+                            let xs2 = self.lower_expr(&args[0]);
+                            let f_id = self.lower_expr(&AstNode::Var(
+                                mangled.clone(),
+                            ));
+                            let func = if method == "min" {
+                                "py_min_key_f64"
+                            } else {
+                                "py_max_key_f64"
+                            };
+                            self.stmts.push(MirStmt::Call {
+                                func: func.to_string(),
+                                args: vec![xs2, f_id],
+                                dest: id,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(id, MirExpr::Var(id));
+                            self.type_map.insert(id, Type::F64);
+                            return id;
+                        }
                     }
                     let xs = self.lower_expr(&args[0]);
                     let f = self.lower_expr(&k);

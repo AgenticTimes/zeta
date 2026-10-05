@@ -1136,70 +1136,59 @@ int64_t py_min_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
 // double(*)(double)（特化副本参数注解 f64 ⇒ LLVM 签名 double 形参；
 // C 侧把元素的 i64 位模式 bitcast 成 double 传入），比较 double 域，
 // 返回**原元素**位模式。
-static int64_t py_max_key_f64_impl(int64_t vec, int64_t keyfn) {
+// 可调用包装（批 967：keyfn 参数＝FuncAddr 槽的函数地址——特化副本
+// 的 LLVM 签名 double(double) 与本包装的函数指针类型匹配）
+// 位模式往返必须 memcpy——kf(double) 的 int64 实参会被 C 编译器
+// sitofp 做值转换（1.5 的位模式被转成巨大 double），比较全错
+static int64_t py_max_key_f64_impl(int64_t vec, int64_t keyfn_addr) {
     int64_t n = zt_vec_len(vec);
     if (n <= 0) return 0;
-    double (*kf)(double) = (double (*)(double))keyfn;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
     int64_t best = ((int64_t*)vec)[0];
-    double best_k = kf(best);
+    double best_d;
+    memcpy(&best_d, &best, sizeof best_d);
+    double best_k = kf(best_d);
     for (int64_t i = 1; i < n; i++) {
         int64_t v = ((int64_t*)vec)[i];
-        double vbits;
-        memcpy(&vbits, &v, sizeof vbits);
-        double k = kf(vbits);
-        if (k > best_k) { best = v; best_k = k; }
+        double v_d;
+        memcpy(&v_d, &v, sizeof v_d);
+        double k = kf(v_d);
+        if (k > best_k) {
+            best = v;
+            best_d = k;
+        }
     }
     return best;
 }
-static int64_t py_min_key_f64_impl(int64_t vec, int64_t keyfn) {
+static int64_t py_min_key_f64_impl(int64_t vec, int64_t keyfn_addr) {
     int64_t n = zt_vec_len(vec);
     if (n <= 0) return 0;
-    double (*kf)(double) = (double (*)(double))keyfn;
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
     int64_t best = ((int64_t*)vec)[0];
-    double best_k = kf(best);
+    double best_d;
+    memcpy(&best_d, &best, sizeof best_d);
+    double best_k = kf(best_d);
     for (int64_t i = 1; i < n; i++) {
         int64_t v = ((int64_t*)vec)[i];
-        double vbits;
-        memcpy(&vbits, &v, sizeof vbits);
-        double k = kf(vbits);
-        if (k < best_k) { best = v; best_k = k; }
+        double v_d;
+        memcpy(&v_d, &v, sizeof v_d);
+        double k = kf(v_d);
+        if (k < best_k) {
+            best = v;
+            best_d = k;
+        }
     }
     return best;
 }
-// 可调用包装（批 965 改 dlsym：mangled 名串槽直接解析符号——绕开
-// FuncAddr/codegen 函数地址时序坑，zeta_call1 同族机制）
-static void *zt_keyfn_sym(int64_t name_ptr) {
-    void *h = dlopen(NULL, RTLD_NOW);
-    if (!h) return NULL;
-    // macOS 符号带前导下划线；zeta 的字符串常量符号名＝字面量内容，
-    // 与 mangled 函数名同形时 dlsym 会命中数据（SIGILL 实拍
-    // subcode=__ak）——前缀 __ZKEYF64_ 保证函数符号唯一形。
-    // name 已含 "__ZKEYF64_" 前缀（gen mangled）；macOS 符号再补一个
-    // 前导下划线
-    char buf[256];
-#ifdef __APPLE__
-    snprintf(buf, sizeof buf, "_%s", (const char*)name_ptr);
-#else
-    snprintf(buf, sizeof buf, "%s", (const char*)name_ptr);
-#endif
-    return dlsym(h, buf);
-}
-int64_t py_max_key_f64(int64_t vec, int64_t name_ptr) {
-    double (*kf)(double) = (double (*)(double))zt_keyfn_sym(name_ptr);
-    if (getenv("ZETA_PROBE_CHECKER")) {
-        fprintf(stderr,
-                "MKF64: kf=%p name=%s dlerr=%s\n",
-                (void*)kf, (const char*)name_ptr,
-                kf ? "resolved" : dlerror());
-    }
-    if (!kf) return 0;
+int64_t py_max_key_f64(int64_t vec, int64_t keyfn_addr) {
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
     return py_max_key_f64_impl(vec, (int64_t)kf);
 }
-int64_t py_min_key_f64(int64_t vec, int64_t name_ptr) {
-    double (*kf)(double) = (double (*)(double))zt_keyfn_sym(name_ptr);
-    if (!kf) return 0;
+int64_t py_min_key_f64(int64_t vec, int64_t keyfn_addr) {
+    double (*kf)(double) = (double (*)(double))keyfn_addr;
     return py_min_key_f64_impl(vec, (int64_t)kf);
 }
+
 // key_is_f64（批 962 第二段）：keyfn 返回域可静态判定（注解 ret 或
 // checker 证据）时比较在 double 域进行——此前一律按 i64 比较返回的
 // f64 位模式，负浮点（符号位 1）永远不是 max（实拍

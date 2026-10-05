@@ -164,6 +164,43 @@ impl MirGen {
                 && ka.len() == 2
                 && matches!(&ka[0], AstNode::StringLit(n) if n == "key")
             {
+                // 批 967：f64 元素 ⇒ 特化副本发射
+                if let AstNode::Var(nm) = &ka[1] {
+                    let mangled = format!("__ZKEYF64_{}", nm);
+                    if !nm.starts_with("__")
+                        && self.full_funcdefs.contains_key(nm.as_str())
+                    {
+                        if let Some(store) = self.keyfn_spec_store.as_ref() {
+                            let registered = store.borrow().iter().any(|a| {
+                                matches!(
+                                    a,
+                                    AstNode::FuncDef { name, .. }
+                                        if *name == mangled
+                                )
+                            });
+                            if registered {
+                                let xs2 = self.lower_expr(&args[0]);
+                                let f_id = self.lower_expr(&AstNode::Var(
+                                    mangled.clone(),
+                                ));
+                                let func = if method == "min" {
+                                    "py_min_key_f64"
+                                } else {
+                                    "py_max_key_f64"
+                                };
+                                self.stmts.push(MirStmt::Call {
+                                    func: func.to_string(),
+                                    args: vec![xs2, f_id],
+                                    dest,
+                                    type_args: vec![],
+                                });
+                                self.exprs.insert(dest, MirExpr::Var(dest));
+                                self.type_map.insert(dest, Type::F64);
+                                return dest;
+                            }
+                        }
+                    }
+                }
                 let xs = self.lower_expr(&args[0]);
                 let f = self.lower_expr(&ka[1]);
                 let func = if method == "min" { "py_min_key" } else { "py_max_key" };
