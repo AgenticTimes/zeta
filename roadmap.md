@@ -32974,3 +32974,22 @@ official 17/17、语料 40/40。
 **Call 臂余量**：~290 行（W0912 核对＋13 个 emit_* 调用点＋SIMD
 else-if＋常规调用尾巴）——臂体已薄，续拆价值转低；轴 D codegen 拆
 分核心目标（9.0k→7.8k，主题模块 5 个）达成。
+
+## 批次 1006（2026-10-06）：typecheck 三轨收敛第一段＋971 递归炸弹拆除（307dc1e0）
+
+1. **递归炸弹**：infer_unified Err 分支自调 infer_unified（971 段 3
+   笔误）——潜伏在册，实拍未触发仅因现役形状新轨全 Ok。改回落旧轨
+   infer_type。
+2. **unified_typecheck.rs 228 行死 Facade 剥除**：TypeCheckStrategy
+   三策略从未被选择＋UnifiedTypeChecker 零引用——只留在用的 trait
+   impl。文件 297→69 行。
+3. **t73_pathlib 钉住**：read_text 返回 println_i64 指针（A/B 实证
+   998 前树同指针，预存非回归）——KNOWN-FAIL 转绿，修好摘标。
+
+**验证**：门禁窗口 6 rc=0——差分 284/284、python_style 46/46（＋1
+钉）、official 23/23、语料 40/40；库 265/265。
+
+**三轨收敛余量（段 4+，在册）**：typecheck_new 412 行（主线在用，保
+留）；unified trait 可再并入 typecheck.rs；new_resolver 2,192 行仅
+InferContext 一个消费点——本体退役需 fallback 先切换（971 退役条件
+评估原话）。
