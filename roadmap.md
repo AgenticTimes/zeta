@@ -29636,3 +29636,17 @@ guess_field_type_from_rhs；parser 调用点一行委托（-147 行）。
 2845/2845（行为零变）、python_style 479/0。
 F.4 剩余：gen 六条侧信道替换、6 轮传播删除、codegen container_cond_i1
 改读类型。
+
+## 批次 953（2026-10-05）：F.4 第二刀——source_types 判别统一到 checker 证据桥
+
+六侧信道审计（读写点）：source_types 1 写 7 读（本批替换）；
+module_global_types 10 处（后续批）；slot_tags 7 处（并 B 轴）；
+body_ret_tys 6 处＋func_ret_types 59 处（合并评估，后者有
+user_fn_defined 语义依赖保留）。
+
+实施：MirGen.param_checker_tys 桥表（参数降级时取 checker 槽型）＋
+classify_param_kind 纯函数（注解串优先、checker 补位）＋七个消费点
+统一（手写 starts_with 散布清零）。新增 2 单测。验证：库 241/241、
+全量差分 2845/2845、python_style 479/0、b947 探针保持。
+F.4 剩余：module_global_types 替换、6 轮传播删除、
+codegen container_cond_i1 改读类型。
