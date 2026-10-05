@@ -6,7 +6,6 @@
 
 use crate::frontend::ast::AstNode;
 use crate::frontend::ast::GenericParam;
-use crate::frontend::borrow::BorrowChecker;
 use crate::frontend::macro_expand::MacroExpander;
 use crate::middle::mir::mir::Mir;
 use crate::middle::resolver::module_resolver::ModuleResolver;
@@ -66,7 +65,6 @@ pub struct Resolver {
     pending_baseargs: std::cell::RefCell<Vec<(String, String, Vec<AstNode>)>>,
     pub cached_mirs: HashMap<String, Mir>,
     pub mono_mirs: HashMap<MonoKey, Mir>,
-    pub borrow_checker: RefCell<BorrowChecker>,
     pub associated_types: HashMap<(String, String), String>,
     pub ctfe_consts: HashMap<String, crate::middle::ctfe::value::ConstValue>,
     funcs: HashMap<String, FuncSignature>,
@@ -191,7 +189,6 @@ impl Resolver {
             pending_baseargs: std::cell::RefCell::new(Vec::new()),
             cached_mirs: HashMap::new(),
             mono_mirs: HashMap::new(),
-            borrow_checker: RefCell::new(BorrowChecker::new()),
             associated_types: HashMap::new(),
             ctfe_consts: HashMap::new(),
             funcs: HashMap::new(),

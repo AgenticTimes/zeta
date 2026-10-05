@@ -38,18 +38,6 @@ impl Resolver {
         self.note_none_vars();
         self.method_param_refinements = pm;
 
-        // Borrow checker pass (separate scope to avoid RefCell conflict)
-        for ast in asts {
-            let borrow_ok = {
-                let mut checker = self.borrow_checker.borrow_mut();
-                checker.check(ast, self)
-            };
-            if !borrow_ok {
-                let _ = ok; // Mark as used to avoid warning
-                ok = false;
-            }
-        }
-
         // Use unified type checking interface
         let typecheck_result = match self.typecheck_unified(asts) {
             TypeCheckResult::Success(_) => {
