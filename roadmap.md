@@ -30000,3 +30000,22 @@ keyfn(v) 返回 **v 原值（恒等）**——FuncAddr("ki") 解析到的地址�
 终态：max/min(xs, key=ka) = -3.5/2.5 与 CPython 逐字对齐（用户
 keyfn f64 通道单态化全链）；库 254/254（verifier 5 单测）、全量
 差分 2845/2845、python_style 479/0。
+
+## 批次 980（2026-10-05）：双轨段 4 评估——前提消失，段 4/5 终态判定（零代码确认批）
+
+评估结论（三重实证）：
+1. **use_new_system 残留 = 0**：批 973 的结构级删除把 use_new_system
+   字段/分发/包装（TypeCheckMigrator 死块）整体清零——"use_new_system
+   切换"的**对象已不存在**，段 4 语料影响面评估的前提消失。
+2. **主管线恒走新系统**（批 957 实证维持）：main 三处
+   resolver.typecheck() → typecheck.rs:15 → typecheck_unified（:40）
+   → NewTypeCheck::typecheck_new（新系统 unify）。当前全量差分
+   2845/2845＋python_style 479/0 即**新系统在管线上的行为基线**
+   ——语料影响面已由 949-979 全部批次持续覆盖验证。
+3. **infer_type 终态**：保留为 infer_unified 的回落实现（宽容语义
+   依赖，批 972 结论修正后终态）；剩余 6 处消费＝typecheck.rs 内部
+   辅助（4）＋resolver.rs 特化登记链（1）＋双轨对照测试（1）。
+
+双轨合一段 1-5 **全部完成**：段 4 的"切换"经审计修正为"死代码
+删除"（批 973 已做）；段 5 的"退役"修正为"回落实现终态"（本批
+判定）。E2002 诊断噪音评估随前提消失免除。
