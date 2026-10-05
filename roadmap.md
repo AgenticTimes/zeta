@@ -32830,3 +32830,28 @@ ROI 排序（本会话盘点）的第一梯队首项（`abcfb32e`）：
 
 **余量（在册）**：从未写入名的缺名读 NameError 化（import 面消歧专
 项）；t425 主程序体旧槽读（共享格合同专项）。
+
+## 批次 999（2026-10-05）：ROI 审计三则——known-fail 零在册＋NoneValue 缓办裁定＋死 borrow 家族删除
+
+1. **ROI 第二项（known-fail 钉子）实证零在册**：runner 口径
+   （^// known-fail:）活跃标记 0 条；十例 t50x 候选逐一复跑全部
+   PASS——早前 ROI 盘点把历史注释误计为活跃钉子。该项由前序批次
+   （334/453/547/794 等摘钉批）完成，本批审计定性。
+2. **ROI 第三项（NoneValue over-claim 推断层）降级缓办**：996 分发
+   守卫已覆盖实证危害（幽灵符号链接失败）；推断层改 PyDynamic 需先
+   建 opaque 接收者的动态成员调用机械，否则 jq_wufu 回退链接失败——
+   成本高于残余危害（print 渲染化妆品级）。在册缓办。
+3. **ROI 第四项（轴 D② 前端越层）实做**：所谓 8 条越层边，真违规者
+   是 borrow.rs/borrow_enhanced.rs 的 Resolver 导入——两者均为死代码
+   （borrow_checker 字段零调用；borrow_enhanced 零消费者；孤儿测试
+   未注册）。删除 930 行＋前端→middle 边 −2；剩 identity_type →
+   middle::types::identity（types 共享叶子层，合规）。
+
+**验证**：门禁窗口 9 rc=0——差分 284/284、python_style 41/41、
+official 20/20、语料 40/40；七金用例全绿；lib 265/265（−3 为死文件
+内联测试随删）。提交 `07d113ca`。
+
+**ROI 清单推进状态**：第一项 del 读回 ✔（998）；第二项 ✔（零在册
+实证）；第三项 缓办（有裁定）；第四项 ✔（999）；第五项 codegen.rs
+拆分（signature_table 已是切片，续批推进）；第六项 轴 C（基建在，
+perf 驱动续批）；第三梯队按裁定。
