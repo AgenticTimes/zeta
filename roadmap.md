@@ -28502,3 +28502,87 @@ E `8 / 0`＝缺项。B／D 用来把"朝零截断"与"地板除"分开（地板�
 - 零 `src/` 改动＋被测件 `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10025
   以来同一颗 ⇒ 按节奏不跑抽样窗口
 - 滞留读数（代码笔 `bef12f22` 落地后实测）：`bootstrap..cleanup`＝47、`cleanup..bootstrap`＝362
+
+## 批次 10044（2026-10-05，#20005 第三十三批：成员调用降级改绑的四条判据逐条钉住）
+
+代码提交 `ffd443c6`（tests，+162/0，实测 `git diff --cached --numstat`）。零 `src/` 改动。
+
+### 一、来源与站点
+
+| 项 | 内容 |
+|---|---|
+| 来源批次 | 432（`0cafbf52`，2026-09-26，"降级成裸符号之前先问 W 注册表"；`git merge-base --is-ancestor` 已验在本树） |
+| 站点（可改面） | `src/middle/pylib.rs:375` `unique_method_for_bare_call` ＋ `:312` `NAME_ROUTE_DENYLIST`（20 个名字）＋ `:352` `unique_w_entry` |
+| 调用点（回避面，只观测） | `src/middle/mir/gen.rs:14069-14070`；相关：`bare_registry` 声明 `:13992`、赋值 `:14075`、`_argc` 抑制 `:14271`、返回型取表项 `:14296`、`registry_ret_type` `:18018` |
+| 数据面 | `pylib/registry.txt` 共 94 条 `W` 行；带 `stub=` 的 `W` 行 **0 条**（实测 `grep -c '^W .*stub='`＝0） |
+
+症状（记录口径＋在册夹具实拍）：成员调用在"接收者类型给不出唯一方法"时降级成裸符号，
+编译期一声不出、由链接器选目标；431 归因表里 6 个名字（`abs alarm close mkstemp signal strftime`）
+在三个链接对象里都没有定义、由 libSystem 满足，`.strftime(...)` 的第一参数被 libc 当成输出缓冲区
+⇒ `tests/python_style/t467_bare_member_registry_bind.z` 的改前实拍＝编译 rc=0、运行 rc=139、stdout 0 字节。
+
+### 二、本批一条测试（7 格）
+
+`member_call_binds_a_registry_entry_only_when_all_four_conditions_hold`＋定向读形工具
+`member_call_shape(src, base)`（只按拼写形状认那一处调用：原名／原名＋`_N`／`X::原名`／`*_原名`／
+`zeta_vec_原名`，不预设答案；命中多项全列出），每格＝`"{func} | {dest 槽型}"`：
+
+| 格 | 形状 | 读数 |
+|---|---|---|
+| 1 | `s = "abc"` + `s.strftime("%Y")` | `py_dt_strftime \| Str`（四条判据全过→改绑，返回型取表项） |
+| 2 | `s.stem()` | `py_path_stem \| Str`（arity 1 的第二个名字） |
+| 3 | `n = 5` + `n.read()` | `py_file_read \| Str`（接收者是整数变量也走同一臂） |
+| 4 | `s.strftime("%Y", 1)` | `strftime_3 \| I64`（arity 不合→仍降级＋叠 `_3`） |
+| 5 | `s.values()` | `values_1 \| I64`（名单内名字即便唯一也不抢） |
+| 6 | `s.close()` | `close_1 \| I64`（`close` 在 PyPool／PyFile 各一条→不猜） |
+| 7 | `xs = [1, 2]` + `xs.strftime("%Y")` | `zeta_vec_strftime \| DynamicArray(Str)`（批次 145 的逐元素表先接走） |
+
+期望值来源＝432 记录（`roadmap.md:19301` §四／§五）＋本树 `--dump-mir` 逐格实拍
+（`/tmp/b10044/small/*.HEAD.mir`，仓根运行、逐格单降）。CPython 侧不适用：本条锁符号名与槽型，不是打印值。
+
+### 三、变异矩阵
+
+**前置可达性矩阵（CLI 层，5 臂 × 10 形状，汇总 `/tmp/b10044/ab4_out.txt`；另有一份 5 臂 × 8 个
+pandas／date 大形状的矩阵在 `/tmp/b10044/ab_out.txt`）**：写期望之前先证明形状打到臂。
+432 记录 §三 实测过 9 对"接收者是 dynamic"的小夹具改前改后 IR 逐字节相同（被批次 429 的 B4 路线
+`method_by_unique_name` 在上游接走），本批的 str／i64 接收者形状经矩阵确认可达；矩阵还直接给出
+"两形另有路线"的证据：`os.environ.setdefault(...)` 读回 `py_os_environ_setdefault`、`date(...)`
+变量的 `.strftime(...)` 读回 `py_dt_strftime`，这两形在五臂下一字不变⇒**不**算本臂证据（432 记录里
+语料侧那个 `setdefault` 绑的是 `py_map_setdefault`，与本树的这一形不同源）。
+
+**进程内五臂（`/tmp/b10044/matrix_out.txt`，逐臂日志 `arm_*.log`，还原源固定
+`git show HEAD:src/middle/pylib.rs`，应用前断言锚点出现 1 次、应用后断言 md5 不等于还原态）**：
+
+| 臂 | 改动 | 红格 | 其余 |
+|---|---|---|---|
+| A1 | 整条改绑臂撤掉（守卫条件加 `true \|\|`） | 格 1／2／3（读回 `strftime_2`／`stem_1`／`read_1`＋`I64`） | 格 4—7 绿，另 68 条绿 |
+| A2 | 去掉桩判据 | **无＝阴性**（7 格＋全套 69 条一字不变） | 原因实测＝`W` 行没有一条带 `stub=`⇒该判据当前无项可命中 |
+| A3 | 去掉 arity 判据 | 格 4（`strftime_3`→`py_dt_strftime`＋`Str`） | 其余绿 |
+| A4 | 去掉名单判据 | 格 5（`values_1`→`py_json_values`＋`DynamicArray(Named("Py..."))`） | 其余绿 |
+| A5 | 去掉唯一性判据（改共用的 `unique_w_entry`） | 格 6（`close_1`→`py_mp_pool_close`，槽型仍 `I64`，因表项 `ret=i64`） | 其余绿；B4 路线在 10 个形状上无连带变化 |
+
+四组坏格集两两不相交⇒格 1—6 各是独立覆盖，缺一条就少钉一臂。A1 的坏格集**不是**其余三臂的并集：
+格 4／5／6 在改前就已经返回"不绑"，撤臂自然不动它们（这条在写台账前容易被想当然，故实录）。
+HEAD 两跑皆绿（69/69，0.04 秒）＝格子清单逐次稳定。
+
+### 四、仍未锁的（记入 `#20005` 余项，不占新号）
+
+1. 桩判据（`m.stub`）＝A2 阴性，现役表无命中项；表里一旦出现 `stub=1` 的 `W` 行需补格。
+2. 另有改绑路线未锁：`os.environ.setdefault(...)`、`date(...)` 变量的 `.strftime(...)` 五臂一字不变，
+   谁在改绑它们本批未查证。
+3. 无接收者类型那一路（432 记录 §六.4 的 `:11335`，本树现 `gen.rs:14081-14084` 的 `else` 分支）
+   仍无条件降级，本批七格全部是"接收者有类型"那一路。
+4. B4 路线 `method_by_unique_name` 不查 arity（432 记录 §六.3 在册未修，g4 的 `py_dt_strftime_3` 为证）＝
+   另一条链，本批未钉。
+5. 发射段在 `gen.rs`（主线在重构）未变异：`bare_registry`／`registry_ret_type` 那几行只在格 1—3 的
+   `Str` 侧留了观测。
+6. 运行期真值仍归在册夹具 t467 与 `tools/cli_semantics_check.sh`（432 那批的 7 条 IR 断言）。
+
+### 五、检查节奏与滞留
+
+- 只跑改到的目标＝历史套件 69/69（0.04 秒）＋ crate 内 `--lib` 145/145 ＋ 编译 0 错误。
+- 零 `src/` 改动＋被测件 `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10025
+  以来同一颗 ⇒ 按节奏不跑抽样窗口。
+- 滞留读数（代码笔 `ffd443c6` 落地后实测）：`bootstrap..cleanup`＝49、`cleanup..bootstrap`＝371。
+- 脚本坑两处如实记：`gettypes.py` 首版正则字符类漏数字，差点把 `strftime_3` 读成缺项（补 `0-9`
+  后逐条反查非 0）；变异脚本按 `left:`＝期望／`right:`＝实际解析（10043 那版读反过）。

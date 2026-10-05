@@ -782,6 +782,56 @@
 >   `bootstrap..cleanup`＝47、`cleanup..bootstrap`＝362（主树自 10042 记录笔后又涨 9 条）。
 
 
+> - 批次 10044（代码 `ffd443c6`）＝来源批次 432（`0cafbf52`，2026-09-26，"降级成裸符号之前先问
+>   W 注册表"；`git merge-base --is-ancestor` 已验在本树）；站点＝`src/middle/pylib.rs:375` 的
+>   `unique_method_for_bare_call`＋`:312` 的 `NAME_ROUTE_DENYLIST`＋`:352` 的 `unique_w_entry`
+>   （三处都在可改面），调用点 `src/middle/mir/gen.rs:14069-14070` 属主线在重构的回避面＝只观测，
+>   本批零 `src/` 改动。
+>   本套 **69 条全绿**（0.04 秒），crate 内单元测试 145 条一字不变。新增 **1 条 7 格**：
+>   `member_call_binds_a_registry_entry_only_when_all_four_conditions_hold` 用定向读形工具
+>   `member_call_shape(src, base)` 把"那一处成员调用在 MIR 里的 `func` 名＋`dest` 槽型"读成
+>   `"{func} | {ty}"`——匹配只按拼写形状认（原名／原名＋`_N` 降级后缀／`X::原名`／`*_原名`／
+>   `zeta_vec_原名`），不预设答案，命中多项全部列出，所以"顺带多绑一处"也会显眼。
+>   格 1—3 是改绑成立（`py_dt_strftime`／`py_path_stem`／`py_file_read`，槽型取表项的 `Str`，
+>   接收者分别是 str 变量与 i64 变量＝不只对字符串生效）；格 4—6 是三条判据各挡住一次
+>   （arity 不合→`strftime_3 | I64`、名单内→`values_1 | I64`、同名多主→`close_1 | I64`）；
+>   格 7 是反向对照（列表接收者由批次 145 的逐元素表先接走→`zeta_vec_strftime | DynamicArray(Str)`）。
+>   期望值来源＝432 记录（`roadmap.md:19301` §四／§五）＋本树 `--dump-mir` 逐格实拍
+>   （`/tmp/b10044/small/*.HEAD.mir`，仓根运行、逐格单降）；CPython 侧不适用（锁的是符号名与槽型）。
+>   **写期望之前先做"臂 × 形状"可达性矩阵**（CLI 层五臂 × 10 形状，`/tmp/b10044/ab4_out.txt`；
+>   另有一份五臂 × 8 个 pandas／date 大形状的在 `/tmp/b10044/ab_out.txt`）：这一趟是本批最关键的
+>   前置，因为 432 记录 §三 已经实测过 9 对"接收者是 dynamic"的小夹具改前改后 IR 逐字节相同
+>   （被批次 429 的 B4 路线在上游接走）＝形状选错会写出恒绿空锁。矩阵同时给出"另有路线"的实拍：
+>   `os.environ.setdefault(...)` 读回 `py_os_environ_setdefault`、`date(...)` 变量的 `.strftime(...)`
+>   读回 `py_dt_strftime`，两形在五臂下一字不变⇒不算本臂证据（432 记录里语料侧的 `setdefault`
+>   绑的是 `py_map_setdefault`，与本树这一形不同源）。
+>   进程内变异矩阵 **五臂**（`/tmp/b10044/matrix_out.txt`，逐臂日志 `arm_*.log`；还原源＝
+>   `git show HEAD:src/middle/pylib.rs`，应用前断言锚点在 HEAD 态出现 1 次、应用后断言 md5 不等于
+>   还原态，跑完断言回到 `2a27fff6ff75fbfacbd089b3378a45bf`；HEAD 两跑皆绿＝格子清单逐次稳定）：
+>   A1 整臂撤（守卫加 `true ||`）红格 1／2／3；A3 去 arity 判据红格 4；A4 去名单判据红格 5；
+>   A5 去唯一性判据（改共用的 `unique_w_entry`）红格 6。**四组坏格集两两不相交**⇒格 1—6 各是
+>   独立覆盖、互不备份，缺一条就少钉一臂；A1 的坏格集**不是**其余三臂的并集（格 4／5／6 改前就
+>   返回"不绑"，撤臂不动它们——这一点容易想当然，故实录）。A5 里 `py_mp_pool_close` 的槽型仍是
+>   `I64`＝表项 `ret=i64`，说明"绑对了符号但返回型仍按表"，与本批格 1—3 的 `Str` 是两件事。
+>   **A2 去桩判据＝7 格＋全套 69 条一字不变的阴性**，原因当场实测＝`pylib/registry.txt` 的 94 条
+>   `W` 行里带 `stub=` 的有 **0 条**（`grep -c '^W .*stub='`）⇒ 这一条判据当前无项可命中、本批锁不住，
+>   登记为未锁（不是"这条臂坏了也没事"）。
+>   **仍未锁的（记在本条余项内、未占新号）**：① 桩判据无命中项（见上）；② 另有改绑路线
+>   （`os.environ.setdefault`／`date(...)` 两形）谁在改绑未查证；③ 无接收者类型那一路
+>   （432 §六.4 的 `:11335`，本树现 `gen.rs:14081-14084`）仍无条件降级，七格全是"接收者有类型"
+>   那一路；④ B4 路线 `method_by_unique_name` 不查 arity（432 §六.3 在册未修）＝另一条链；
+>   ⑤ 发射段 `bare_registry`／`registry_ret_type`（`gen.rs:13992`／`:14075`／`:14271`／`:14296`／
+>   `:18018`）在回避面未变异，只由格 1—3 的 `Str` 侧留观测；⑥ 运行期真值仍归在册夹具 t467 与
+>   `tools/cli_semantics_check.sh`（432 那批的 7 条 IR 断言）。
+>   检查节奏：只跑改到的目标＝历史套件 69/69 ＋ crate 内 145/145 ＋ 编译零错误；零 `src/` 改动＋
+>   被测件与 10025 以来同一颗（`ed5227ccd29b70c4ee9ae17500926f10`）⇒ 按 2026-10-03 节奏不跑抽样窗口。
+>   脚本坑两处如实记：`gettypes.py` 首版把函数名正则的字符类写成 `[a-z_]*`，`strftime_3` 因带数字
+>   差点被读成"没有这一项"（补 `0-9` 后对已知名逐条反查非 0）；变异脚本按 `left:`＝期望／
+>   `right:`＝实际解析（10043 那版读反过，已在该批记录里更正）。
+>   开批沿用 10043 在册收尾读数 47／362（那是 10043 代码笔后的读数）；本批开批时实测
+>   `bootstrap..cleanup`＝48（`git rev-list --count bootstrap..ffd443c6^`）；代码笔 `ffd443c6`
+>   落地后实测 `bootstrap..cleanup`＝49、`cleanup..bootstrap`＝371。
+
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚
 >   `verdict` 空文件，各复跑两遍都吃满 `run_one.sh:97` 的 `timeout 20`，`timeout -s KILL 15` 才停 ⇒ rc=137）；
