@@ -29829,3 +29829,11 @@ min=2.5 与 CPython 逐字对齐；b947/b956 探针保持。库 246/246、
 全量差分 2845/2845、python_style 479/0。
 函数值轴：key=abs ✓、带注解用户 keyfn f64 通道 ✓；无注解 keyfn
 返回域静态判定登记（副本参数通道已就位）。
+
+## 批次 968（2026-10-05）：ret_expr_ty 补 UnaryOp 臂
+
+return -x/~x：操作数槽数值标量或 BigInt ⇒ 同型（复用批 921
+is_numeric_ty）；not ⇒ Bool。无注解 keyfn 的 body-ret 预热由此把
+特化副本返回型记进 func_ret_types（keyfn_returns_f64 判定与 f64
+通道消费点受益）。新增 2 单测；库 248/248、全量差分 2845/2845、
+python_style 479/0、b962 探针保持。
