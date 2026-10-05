@@ -1156,6 +1156,10 @@ int64_t py_min_key(int64_t vec, int64_t keyfn, int64_t key_is_f64) {
 // 位模式 **bitcast 成 double** 传 v0（寄存器类匹配），副本体内 f64
 // 语义正确，返回 double 由 C 读 v0。int64 直传会读 x0 残留/值转换
 // 错序（批 982 实拍）。
+// 批 985 定稿（位桥）：keyfn 指针签名 double(*)(double)——特化副本
+// 参数注解 f64 ⇒ LLVM 签名 double(f64)；C 侧把元素的 i64 位模式
+// **bitcast 成 double** 传 v0（寄存器类匹配），副本体内 f64 语义
+// 正确，返回 double 由 C 读 v0。int64 直传会读 x0 残留（批 982 实拍）。
 static int64_t py_max_key_f64_impl(int64_t vec, int64_t keyfn_addr) {
     int64_t n = zt_vec_len(vec);
     if (n <= 0) return 0;
