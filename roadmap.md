@@ -32635,7 +32635,7 @@ keyfn-abi.html`（未入库，工作树可开）。
 ## 批次 992（2026-10-05）：提案③核心——key= 臂声明式分派（keyfn_bridge 纯函数＋全矩阵单测）
 
 把"判定与发射混在 if 链"的形态（批 978–988 叠块残骸的温床）拆掉
-（`<b992哈希>`）：
+（`c8ab2acb`）：
 
 1. `src/middle/mir/gen/keyfn_bridge.rs`：两个纯函数收拢全部判定——
    `spec_worthy`（特化登记门槛：f64/f32 总是；i64 仅 float 返回
