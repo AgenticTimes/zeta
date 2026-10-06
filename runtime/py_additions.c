@@ -3724,6 +3724,15 @@ int64_t zeta_name_error(int64_t name_handle) {
     return zeta_raise(1);
 }
 
+// 批 1028：读【本函数体某处赋值但按程序顺序尚未绑定】的局部名 ⇒
+// UnboundLocalError（文案与 CPython 一致）。UnboundLocalError 是
+// NameError 的子类，try/except 同样可捕获——同为 zeta_raise(1)。
+int64_t zeta_unbound_local(int64_t name_handle) {
+    fprintf(stderr, "UnboundLocalError: local variable '%s' referenced before assignment\n",
+            (char*)name_handle);
+    return zeta_raise(1);
+}
+
 static int64_t g_env = 0;
 // 批 998：del 墓碑集合——被 zeta_env_del 删除的名字记入；env_get 读到
 // 墓碑名 ⇒ zeta_raise(1)（Python NameError 语义）。不设墓碑的缺名读

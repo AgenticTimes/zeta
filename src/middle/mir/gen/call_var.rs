@@ -140,6 +140,37 @@ impl MirGen {
                     return existing;
                 }
             }
+            // 批 1028：CPython 作用域铁律——本体某处有普通赋值的名字是
+            // 全函数局部名。程序顺序走到这里还没绑定（不在 name_to_id；
+            // 参数已提前绑入 ⇒ 自动豁免）⇒ UnboundLocalError。此前静默
+            // 回落 env 读 0 / 造槽读 0。显式复查 name_to_id：env_first
+            // 为真时 arm 已绑名但穿落到下方 env 读，那条路不是未绑定。
+            // repl 宽容面除外；py_entry 模块体同判（模块级先读后赋
+            // CPython 同样 NameError）。
+            if !self.repl_mode
+                && !self.name_to_id.contains_key(name.as_str())
+                && self.body_assigned_names.contains(name)
+            {
+                self.warn_undeclared(name);
+                let name_id = self.next_id();
+                self.exprs
+                    .insert(name_id, MirExpr::StringLit(name.clone()));
+                self.type_map.insert(name_id, Type::Str);
+                // 模块级先读后赋 CPython 报 NameError；函数内局部名才报
+                // UnboundLocalError（其 NameError 子类，捕获面相同）。
+                let raise_fn = if self.py_entry {
+                    "zeta_name_error"
+                } else {
+                    "zeta_unbound_local"
+                };
+                self.stmts.push(MirStmt::VoidCall {
+                    func: raise_fn.to_string(),
+                    args: vec![name_id],
+                });
+                self.exprs.insert(id, MirExpr::IntLit(0));
+                self.type_map.insert(id, Type::I64);
+                return id;
+            }
             // PY-A: module-global name not bound locally — env read
             // (implicit module global: no global declaration needed).
             if self.module_globals.contains(name) {
@@ -393,5 +424,49 @@ impl MirGen {
             && !crate::middle::pylib::known_module_names()
                 .iter()
                 .any(|m| *m == name)
+    }
+}
+
+#[cfg(test)]
+mod tests_unbound_local_read {
+    use super::*;
+
+    /// 批 1028：本体赋名＋程序顺序未绑定 ⇒ 发 zeta_unbound_local，
+    /// 不再静默造槽/回落 env 读 0。
+    #[test]
+    fn unbound_local_read_emits_raise() {
+        let mut g = MirGen::new();
+        g.body_assigned_names.insert("x".to_string());
+        let id = g.lower_expr(&AstNode::Var("x".to_string()));
+        assert!(
+            matches!(g.exprs.get(&id), Some(MirExpr::IntLit(0))),
+            "结果槽持 0（语句在 VoidCall 里抛错）"
+        );
+        assert!(
+            g.stmts.iter().any(|s| matches!(
+                s,
+                MirStmt::VoidCall { func, .. } if func == "zeta_unbound_local"
+            )),
+            "必须发 zeta_unbound_local 调用"
+        );
+    }
+
+    /// 程序顺序先赋值的读不受影响（t425 面：env_first 穿落也不误伤）。
+    #[test]
+    fn bound_read_unaffected() {
+        let mut g = MirGen::new();
+        g.body_assigned_names.insert("x".to_string());
+        g.lower_expr(&AstNode::Assign(
+            Box::new(AstNode::Var("x".to_string())),
+            Box::new(AstNode::Lit(1)),
+        ));
+        g.lower_expr(&AstNode::Var("x".to_string()));
+        assert!(
+            !g.stmts.iter().any(|s| matches!(
+                s,
+                MirStmt::VoidCall { func, .. } if func == "zeta_unbound_local"
+            )),
+            "已绑定的读不得发 UnboundLocal"
+        );
     }
 }

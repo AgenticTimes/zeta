@@ -54,6 +54,8 @@ pub fn declare_core_runtime_fns<'ctx>(
     module.add_function("zeta_env_del", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
     // 批 1022：读全表未命中的名字 ⇒ NameError（编译期可证未定义面）。
     module.add_function("zeta_name_error", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
+    // 批 1028：读本函数体某处赋值但程序顺序尚未绑定的局部名 ⇒ UnboundLocalError。
+    module.add_function("zeta_unbound_local", i64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));
     module.add_function("zeta_env_set", void_type.fn_type(&[i64_type.into(), i64_type.into()], false), Some(Linkage::External));
     module.add_function("zeta_float_f64", f64_type.fn_type(&[f64_type.into()], false), Some(Linkage::External));
     module.add_function("zeta_float_i64", f64_type.fn_type(&[i64_type.into()], false), Some(Linkage::External));

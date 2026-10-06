@@ -302,6 +302,12 @@ pub struct MirGen {
     /// PY-A: module-top-level bare-assigned names — reads fall back to env
     /// when not bound locally; defining assignments store through env.
     module_globals: std::collections::HashSet<String>,
+    /// 批 1028：本函数体内有普通赋值（Assign/Let/IfLet/For 目标）的名字
+    /// ——CPython 作用域铁律下即全函数局部名。读侧（call_var）据此把
+    /// 程序顺序尚未绑定的读判为 UnboundLocalError。AssignOp 目标刻意
+    /// 不收集：函数内 `全局 += 1` 在 zeta 走 env 读改写（CPython 本应
+    /// UnboundLocal，发散在册不扩大）。闭包子 MirGen 自扫自的体。
+    body_assigned_names: std::collections::HashSet<String>,
     /// PY-A: Python-library imports — alias → canonical module name.
     py_module_aliases: HashMap<String, String>,
     /// PY-A: `from X import y as b` — b → (module, member).
@@ -448,6 +454,7 @@ impl MirGen {
             hoisted_names: std::collections::HashMap::new(),
             nonlocal_names: std::collections::HashSet::new(),
             module_globals: std::collections::HashSet::new(),
+            body_assigned_names: std::collections::HashSet::new(),
             py_module_aliases: HashMap::new(),
             py_member_aliases: HashMap::new(),
             py_user_modules: std::collections::HashSet::new(),
@@ -991,6 +998,67 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
         }
     }
 
+    /// 批 1028：收集语句树里的普通赋值目标名（CPython 局部名判定面）。
+    /// 递归进 If/While/For/Let/IfLet/Block 的体。刻意不进的东西：
+    /// 闭包/Closure 表达式（子 MirGen 自扫自的体，独立作用域）、
+    /// AssignOp 目标（zeta 宽松面：函数内 `全局 += 1` 走 env 读改写）、
+    /// Static 标记（已提升为模块级格）、Subscript/FieldAccess 目标
+    ///（赋给容器/字段，不是名字绑定）。
+    fn collect_body_assigned_names(
+        stmts: &[AstNode],
+        out: &mut std::collections::HashSet<String>,
+    ) {
+        for s in stmts {
+            match s {
+                AstNode::Assign(target, _) => Self::collect_target_names(target, out),
+                AstNode::Let { pattern, .. } | AstNode::IfLet { pattern, .. } => {
+                    Self::collect_target_names(pattern, out)
+                }
+                AstNode::For {
+                    pattern, body, else_body, ..
+                } => {
+                    Self::collect_target_names(pattern, out);
+                    Self::collect_body_assigned_names(body, out);
+                    Self::collect_body_assigned_names(else_body, out);
+                }
+                AstNode::While { body, else_body, .. } => {
+                    Self::collect_body_assigned_names(body, out);
+                    Self::collect_body_assigned_names(else_body, out);
+                }
+                AstNode::If { then, else_, .. } => {
+                    Self::collect_body_assigned_names(then, out);
+                    Self::collect_body_assigned_names(else_, out);
+                }
+                AstNode::Block { body } | AstNode::Unsafe { body } => {
+                    Self::collect_body_assigned_names(body, out)
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 赋值目标里的名字绑定：裸 Var、元组解构、类型标注包裹。其余形状
+    ///（下标/字段/通配）不产生新名字。
+    fn collect_target_names(
+        target: &AstNode,
+        out: &mut std::collections::HashSet<String>,
+    ) {
+        match target {
+            AstNode::Var(n) => {
+                out.insert(n.clone());
+            }
+            AstNode::Tuple(parts) => {
+                for p in parts {
+                    Self::collect_target_names(p, out);
+                }
+            }
+            AstNode::TypeAnnotatedPattern { pattern, .. } => {
+                Self::collect_target_names(pattern, out)
+            }
+            _ => {}
+        }
+    }
+
     pub fn lower_to_mir(&mut self, ast: &AstNode) -> Mir {
         self.name_to_id.clear();
         self.stmts.clear();
@@ -1249,6 +1317,14 @@ fn warn_unbound(callee: &str, params: &[String], slots: &mut Vec<Option<AstNode>
                         }
                     }
                 }
+            }
+
+            // 批 1028：函数体降低前收集普通赋值目标名（CPython 局部名判定）。
+            // self 跨 item 复用，逐 item 清空重算；非 FuncDef item 置空即
+            // 关闭该判定。闭包子 MirGen 在 lower_closure 内自扫自的体。
+            self.body_assigned_names.clear();
+            if let AstNode::FuncDef { body, .. } = ast {
+                Self::collect_body_assigned_names(body, &mut self.body_assigned_names);
             }
 
             self.lower_ast(ast);
@@ -3239,5 +3315,81 @@ mod tests_param_kind {
         );
         // checker 证据为标量 I64（ABI 缺省）不判族
         assert_eq!(classify_param_kind("", Some(&Type::I64)), ParamKind::Other);
+    }
+}
+
+#[cfg(test)]
+mod tests_unbound_local {
+    use super::*;
+
+    /// 批 1028：赋值目标收集——普通赋值/元组解构/标注包裹/For 目标进集；
+    /// AssignOp 与容器（下标）目标不进（字段文档列明的刻意排除面）。
+    #[test]
+    fn collect_plain_assign_targets_only() {
+        let mut out = std::collections::HashSet::new();
+        let body = vec![
+            AstNode::Assign(
+                Box::new(AstNode::Var("a".to_string())),
+                Box::new(AstNode::Lit(1)),
+            ),
+            AstNode::AssignOp {
+                op: "+".to_string(),
+                target: Box::new(AstNode::Var("b".to_string())),
+                value: Box::new(AstNode::Lit(1)),
+            },
+            AstNode::Assign(
+                Box::new(AstNode::Tuple(vec![
+                    AstNode::Var("c".to_string()),
+                    AstNode::Var("d".to_string()),
+                ])),
+                Box::new(AstNode::Lit(0)),
+            ),
+            AstNode::Assign(
+                Box::new(AstNode::TypeAnnotatedPattern {
+                    pattern: Box::new(AstNode::Var("e".to_string())),
+                    ty: "i64".to_string(),
+                }),
+                Box::new(AstNode::Lit(0)),
+            ),
+            AstNode::Assign(
+                Box::new(AstNode::Subscript {
+                    base: Box::new(AstNode::Var("m".to_string())),
+                    index: Box::new(AstNode::Lit(0)),
+                }),
+                Box::new(AstNode::Lit(0)),
+            ),
+            AstNode::For {
+                pattern: Box::new(AstNode::Var("k".to_string())),
+                expr: Box::new(AstNode::Lit(0)),
+                body: vec![AstNode::Assign(
+                    Box::new(AstNode::Var("f".to_string())),
+                    Box::new(AstNode::Lit(0)),
+                )],
+                else_body: vec![],
+            },
+        ];
+        MirGen::collect_body_assigned_names(&body, &mut out);
+        for n in ["a", "c", "d", "e", "k", "f"] {
+            assert!(out.contains(n), "{n} 应在集内");
+        }
+        for n in ["b", "m"] {
+            assert!(!out.contains(n), "{n} 不应进集（AssignOp/容器目标）");
+        }
+    }
+
+    /// 批 1028：If/While 分支内的赋值也算本体赋名（CPython 全函数局部）。
+    #[test]
+    fn branch_assignments_count() {
+        let mut out = std::collections::HashSet::new();
+        let body = vec![AstNode::If {
+            cond: Box::new(AstNode::Lit(1)),
+            then: vec![AstNode::Assign(
+                Box::new(AstNode::Var("x".to_string())),
+                Box::new(AstNode::Lit(1)),
+            )],
+            else_: vec![],
+        }];
+        MirGen::collect_body_assigned_names(&body, &mut out);
+        assert!(out.contains("x"), "分支内赋值 ⇒ 全函数局部名");
     }
 }
