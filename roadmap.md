@@ -33233,3 +33233,17 @@ print 调用、二进制无格式串——宏展开 face，批 368 家族）；�
 BOOTSTRAP VALIDATION 输出面）为第 6 个，runner PASS 验证。
 **轴 E 铺开余量**：其余 official 用例需先治理运行面（185 文件
 rc≠0＝compile-only 面的结构性限制），渐进推进不设deadline。
+
+## 遗留登记（2026-10-06，用户裁定低优先）：println! 宏展开 face
+
+**症状**：zeta 原生方言（.z 文件）的 `println!` 宏语句在特定文件形态下被
+parse 静默吞掉——程序 rc=0 但零输出。复现文件：integration_all_features
+.z（main 7 条 println! 全部丢失，二进制无格式串）。同方言最小文件
+println! 正常（b1023_p.z 打 ✓），毒源为该文件其他 fn 的共存交互面。
+
+**调查进度**：批 1023 组合 bisect 实测——memory_test/quantum_test/
+verified_increment 三 fn 逐个隔离均不毒；毒源需三 fn 共存或文件级上
+下文（parse 级 expand_macros_in_node 递归追查，工具待建）。
+
+**优先级**：低（用户裁定）。zeta 原生方言的官方测试以 compile-only 为
+准，运行输出不进门禁口径；修复价值待 zeta 自举（selfhost）阶段重估。
