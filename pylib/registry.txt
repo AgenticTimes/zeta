@@ -258,7 +258,7 @@ W PyPath is_file py_os_path_isfile args=1
 W PyPath is_dir py_os_path_isdir args=1
 W PyPath stem py_path_stem args=1 ret=str
 W PyPath suffix py_path_suffix args=1 ret=str
-W PyPath read_text py_path_read_text args=1
+W PyPath read_text py_path_read_text args=1 ret=str
 X py_path_read_text_2 args=i64,i64 ret=i64
 X py_file_open_3 args=i64,i64,i64 ret=i64
 X py_path_write_text_3 args=i64,i64,i64 ret=i64
