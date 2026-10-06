@@ -33,6 +33,8 @@ jobs:
         run: |
           set -o pipefail
           bash tools/asan_run.sh --strict 2>&1 | tee asan-nightly.md
+      - name: OPT matrix (axis C guard, informational)
+        run: bash tools/opt_matrix.sh 2>&1 | tee opt-matrix.md
       - name: Summary
         if: always()
         run: |
@@ -41,4 +43,9 @@ jobs:
             echo ""
             echo "- 命中口径与盲区见 tools/asan_run.sh 头注（GC 容器内越界不可见）"
             echo "- exit code: ${{ steps.sweep.outcome }}"
+            echo ""
+            echo "## OPT matrix（轴 C 护栏，信息性）"
+            echo '```'
+            if [ -f opt-matrix.md ]; then cat opt-matrix.md; fi
+            echo '```
           } >> "$GITHUB_STEP_SUMMARY"
