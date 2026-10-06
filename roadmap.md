@@ -33827,3 +33827,53 @@ S4 typed-cell 依赖。新登记：Named 全局 del 读回走旧槽（S4 墓碑�
 补"局部遮蔽全局先读"面。AssignOp/Static/容器目标刻意排除（宽松面
 在册）。闭包子 MirGen 自扫。单测 269/269；门禁 rc=0（302/302＋
 50/50＋18/18＋40/40）；t425/delcatch 无回归。设计文档 §S2 状态已更。
+## 批次 10062（2026-10-06，第四十九批：文档批——语言面差距清单 `docs/python-diff.md`）
+
+任务来源＝用户指示「写一个 python-diff.md 来整理还差的这些」，"这些"＝本轮对
+"zeta 作为一门现代高级编程语言还差哪些"的普查结果。主体＝`docs/python-diff.md`
+（**+202 行**，提交笔 `eb0de777`；6 张表列数核对通过，黑话扫描 0 命中）。零 `src/` 改动。
+
+### 一、这份文件与上一份的分工
+
+`docs/python-syntax-gaps-2026-10-06.md`（批次 10061）管"某个 Python 写法怎么修"；
+这份管"整个语言面缺在哪一层、先补哪一层"。§4 是交叉引用表，避免同一个缺陷两份各说各话；
+§1 立的规矩是每条读数标【实测】（本会话亲自跑过）／【检索】（只读检索代理给的，未复跑）／
+【未找到证据】（检索落空，不等于不存在）。
+
+### 二、架构面四处（本批复测到的）
+
+1. **不支持的写法被改成能跑的东西**——三条静默通道都读到代码原文：
+   `src/main.rs:466-500` 与 `top_level.rs:2535-2562`（解析截断，W1002，退出码 0）；
+   `src/middle/mir/gen.rs:2356-2380`（没有 lowering 路线的表达式写成 `IntLit(0)`＋`I64`，
+   只发 W1010）；`src/frontend/parser/stmt.rs:1478-1480`
+   （`if handler.is_empty() { handler = hbody; }`＝第二个及以后的 `except` 臂体直接丢，
+   连警告都没有；`except` 头的类型名解析后扔掉＝异常不过滤类型）。
+2. **编译器自己没有错误通道也没有崩溃兜底**——`src`＋`Cargo.toml`＋`build.rs` 里
+   `catch_unwind`／`set_hook`／`panic = "abort"` 命中 0 处（实测）。
+3. **语言核心没有独立语义层**——MIR 枚举（`mir.rs:154-342`）里没有异常／with／import／
+   生成器／lambda／推导式／async／match 的节点；`class` 是去糖成 struct＋impl，
+   继承只取第一个基类（`top_level.rs:862-866` 原文"V1 does not model MRO"）。
+4. **构建与目标平台绑死在一台机器**——`build.rs:127-128` 硬编码 Homebrew 的 bdw-gc 路径、
+   LLVM 21 动态绑定、CI 五个 workflow 全自托管单机。
+
+### 三、复测发现的三条更正（都影响既有文档或既有认知）
+
+| 更正 | 实测内容 |
+|---|---|
+| 形参默认值的注释过时 | `top_level.rs:23-26` 写 "parsed and discarded"，实测 `def f(x=3, y="f9")` 走 `zeta_param_default`，`f()` 打 `3 f9`、`f(7, "g")` 打 `7 g`，与 CPython 一字相同。另：运行值正确的情况下编译期仍打"the default for `y` … is coerced"警告，警告口径也可疑 |
+| 那份文档给 A9 的验收站不住 | 它引用的夹具 `tests/diff/cases/syn60b_gen_two_yield.dcase` 正文只 `print(1)`，**从不观测 yield 出来的值**，头注自述"CPython 与 zetac 逐行一致"（本来就绿），且不在 `diff_consistency.json` 的 2,846 条里⇒"从红变绿"没有能失败的对象。那份文档的表不回改，更正记在 `python-diff.md` §7 |
+| 语料分母与基线差 180 枚 | 盘上 3,026 枚 `.dcase`、基线登记 2,846 条（judged 2,845）⇒**180 枚未进基线**，含批次 10060 入库的 42 枚 `syn60b_*`；基线里"盘上已消失"的 0 条。是"没跑"还是"跑了不计"本批没定，列在待复测里 |
+
+其余底数复测：`src/` 99,714 行；`gen.rs` 3,243 行；`py_[a-z_]*` 在 `src/middle/mir/` 出现
+390 次（那份文档引用 228／另一处 264／检索代理 375——**四个数不同源**，已在 §7 要求统一口径）；
+错误码去重 201（文件在 `src/error_codes.rs`，检索代理给 203 且路径写错）；python_style 506 个
+条目（代理给 511）；`tests/regression_history.rs` 81 个 `#[test]`（我记忆里的"62 条"已过时）；
+标准库模块 29 行。
+
+### 四、下一批（10063）必须落真代码
+
+**连续两批零 `src/` 改动**（10061 与 10062 都是用户指定的文档交付）。按每批开工约定
+"同一族连续 2 批零代码 ⇒ 下批必须真修"，10063 的主体＝已核实的零授权代码改动三件：
+差分判定把 stderr 的 W1002（并同 W1010）计为失败、`.union(` 方法臂复用 `py_vec_union`、
+`call_num.rs:287` 的 `LegacyBare` 改指 1 参版 `zeta_sum_vec`。开工第一步仍先读
+`cleanup..bootstrap` 决定是否并主树（本批收尾数以落笔时实测为准，不推算）。
