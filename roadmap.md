@@ -33077,3 +33077,11 @@ docs/RESEARCH-PENDING-2026-10.md：值表示三派（CPython 全装箱＋PEP 659
 1. 轴 B：批准立项；M3 形态修订＝策略格＋monotonic 包装。
 2. NoneValue：机械前提已被 996 满足——批准小批实施。
 3. #36 并入轴 B M3；#26 已收口关闭。
+
+## 批次 1014（2026-10-06）：轴 B M0——PyDynamic 流动边界清单落稿（ed01b4dd）
+
+docs/axis-b-boundaries.tsv：11 个边界域 × 分派点 × 探针符号 × 动态定型
+点 × 里程碑映射。B.1 表 10 探针覆盖核对：6 个 Rust 可达探针（dyn_len/
+contains/truth/py_json_truth/dyn_getitem/slot_truthy）全部在册；5 个内
+部几何/可读性辅助探针（Rust 侧零直调）单列 internal-helpers 行随 M5
+退役归零。**M0 验收达成**。轴 B M1（bool 掩码语义）下批开工。
