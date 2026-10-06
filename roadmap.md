@@ -33931,3 +33931,11 @@ S4 typed-cell 依赖。新登记：Named 全局 del 读回走旧槽（S4 墓碑�
 | `difference`／`issubset`／`issuperset`／`update` | 每条都是一个方法名静默升不出（`union` 同形） | 要（`runtime/*.c` 新原语） |
 | `sorted(key=…)`（B3） | 运行期明确抛停，元组无独立值类型 | 要（`py_additions.c`） |
 
+### 六、收尾读数（推送前最后一步实测，不推算）
+
+- 工作树干净：`git status --short` 空输出（`target/` 在忽略面内）。
+- 本批六笔已全部在 `cleanup` 并推到远端：`3957324b..ba43e814 cleanup -> cleanup`。
+- `bootstrap..cleanup`＝**7** 条（本批 6 笔＋同步合并笔 `89fc7791`）＝旁路有、主树还没并。
+- `cleanup..bootstrap`＝**2** 条＝主树有、我没并进来，量小，下批开工先读这两条再定要不要并。
+- 下一批 10064 第一步：读 `cleanup..bootstrap` 那 2 条内容，再按第五节的候选表取件。
+
