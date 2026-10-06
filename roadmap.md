@@ -33143,3 +33143,16 @@ println_i64 打指针。registry 行补 ret=str（method_ret / registry_ret_
 type 既有消费链自动生效）。t73 PASS（11 位 expect 全对表），known-fail
 活标记维持零。**验证**：门禁窗口 9 rc=0——差分 284/284、python_style
 41/41、official 20/20、语料 40/40；库 265/265；六金用例全绿。
+
+## 批次 1020（2026-10-06）：integration_all_features 的 distributed_test 段移除（a35c07d3）
+
+distributed::actor 全仓零背书（幽灵模块，#42 族）；测试的 spawn 体
+不回包 ⇒ actor.send 挂死（rc=124 超时，批 1012 移除 ml_test 后暴露）。
+段移除（同 ml 处置），运行时 actor 机械（mpsc/scheduler，真实功能面）
+保留不动。
+
+**遗留登记**：移除后 trimmed main 仍挂死（rc=124，stdout 块缓冲无法
+定位）——legacy integration 运行期挂死普查，独立专项；不影响
+compile-only 门禁口径。
+
+**验证**：文件 Compiled；六金用例全绿；库 265/265；语料 40/40。
