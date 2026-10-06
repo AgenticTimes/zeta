@@ -12,8 +12,8 @@ use crate::middle::types::Type;
 pub enum CallClass {
     /// 集合变异族（add/discard/remove——写回接收者）。
     SetMutation,
-    /// 集合查询族（intersection——返回新句柄）。
-    SetIntersection,
+    /// 集合查询族（intersection/union——返回新句柄，不写回接收者）。
+    SetNewSet,
     /// 内建 len()。
     Len,
     /// 断言族（assert(cond, msg)——失败即 zeta_assert_fail）。
@@ -43,7 +43,7 @@ pub fn classify_call(method: &str) -> CallClass {
         // （len=5、计数全 1）。补上映射即复活 837 的整套入口判定。
         "Counter" | "DataFrame" => CallClass::Special,
         "add" | "discard" | "remove" => CallClass::SetMutation,
-        "intersection" => CallClass::SetIntersection,
+        "intersection" | "union" => CallClass::SetNewSet,
         "len" => CallClass::Len,
         "assert" => CallClass::Assert,
         "min" | "max" | "sum" | "abs" | "successor" | "predecessor" => {
@@ -76,7 +76,13 @@ mod tests {
         assert_eq!(classify_call("add"), CallClass::SetMutation);
         assert_eq!(classify_call("discard"), CallClass::SetMutation);
         assert_eq!(classify_call("remove"), CallClass::SetMutation);
-        assert_eq!(classify_call("intersection"), CallClass::SetIntersection);
+        assert_eq!(classify_call("intersection"), CallClass::SetNewSet);
+        // 10063：union 同属"返回新句柄"族；未实现的邻近拼写仍落 Unknown
+        // （改前实拍＝union 也落 Unknown ⇒ 根本进不了 call_set 的发射臂）
+        assert_eq!(classify_call("union"), CallClass::SetNewSet);
+        for m in ["difference", "symmetric_difference", "update", "issubset"] {
+            assert_eq!(classify_call(m), CallClass::Unknown, "{m} 未实现，应落 Unknown");
+        }
     }
 
     #[test]
@@ -99,7 +105,10 @@ mod tests {
     fn unknown_stays_unknown() {
         // 分类器不越权：不认识的名字必须 Unknown（兜底与响亮失败归调用方），
         // 猜一个家族＝批次 816 的 intersection 误入变异族同形。
-        for m in ["no_such", "upper", "union", "clear", "push", "corr"] {
+        // 批次 10063：清单里原有 "union"——那条断言钉的是"union 尚未接线"的
+        // 现状，union 并入 SetNewSet 后该现状不再成立，故摘出（见
+        // set_family_split_is_exact 的新断言）。
+        for m in ["no_such", "upper", "clear", "push", "corr"] {
             assert_eq!(classify_call(m), CallClass::Unknown, "{m} 应 Unknown");
         }
     }

@@ -1,0 +1,30 @@
+// 批次 10063：list-backed set 的 `union`（并集）。
+// 改前实拍＝同一运行期 .o ＋改前二进制（md5 42d04423b7948a954cbf49ba24900b66）：
+// 编译期出 `PY-A: 动态接收者成员 [dynamic]i64::union 无定义 ⇒ 该调用点改为抛异常`，
+// 运行期 `Unhandled exception: code=1`、退出码 1。
+// 改后同一夹具打 `3 True True True 1 2`、退出码 0，与 CPython 逐字相同
+// （同输入连跑三遍一字不变）。
+// 修法两处：分类器 gen/call_class.rs 把 union 与 intersection 归同一族
+// （SetNewSet，改前落 Unknown ⇒ 根本进不了集合发射臂）；发射臂
+// gen/call_set.rs 按方法名选运行期符号 `py_vec_union(a, b, elem_is_str)`
+// （runtime/py_additions.c:1885，内容判等去重合并，`|` 运算符早已用它）。
+// 末两行 len(sa)/len(sb) 钉"返回新集合、不写回接收者"：union 若误入变异族
+// （批次 816 的 intersection 同形事故）会把原集合变成 3。
+sa = set()
+sa.add("a")
+sb = set()
+sb.add("b")
+sb.add("c")
+sc = sa.union(sb)
+print(len(sc))
+print("a" in sc)
+print("b" in sc)
+print("c" in sc)
+print(len(sa))
+print(len(sb))
+// expect: 3
+// expect: True
+// expect: True
+// expect: True
+// expect: 1
+// expect: 2

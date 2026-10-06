@@ -3335,10 +3335,13 @@ call, no NULL-handle dereference).",
 
             // 批次 816/824：集合族（add/discard/remove/intersection）搬
             // 子模块 gen/call_set.rs；入口判定改读分类器（SetMutation/
-            // SetIntersection 互斥在分类层保证），执行文件只管发射。
+            // SetNewSet 互斥在分类层保证），执行文件只管发射。
+            // 批次 10063：union 与 intersection 同族（分类器已并），不走本门
+            // 就落不到 call_set 的发射臂——改前实拍＝`sa.union(sb)` 编译期报
+            // `[dynamic]i64::union` 无定义、运行期抛 code=1。
             if matches!(
                 classify_call(method),
-                CallClass::SetMutation | CallClass::SetIntersection
+                CallClass::SetMutation | CallClass::SetNewSet
             ) && receiver_ty.is_some()
             {
                 if let Some(sid) = self.lower_set_family(

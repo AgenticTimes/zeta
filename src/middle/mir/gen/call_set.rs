@@ -95,8 +95,13 @@ impl MirGen {
                         return Some(dest);
                     }
                 }
-                // Batch 807: `sa.intersection(sb)` on a list-backed set. The
-                // receiver's element type is what reached the ghost name
+                // Batch 807: `sa.intersection(sb)` on a list-backed set. Batch
+                // 10063: the same arm also serves `sa.union(sb)` — both take
+                // (a, b, elem_is_str) and return a FRESH vector. Measured before
+                // the arm: `sa.union(sb)` compiled with
+                // "`[dynamic]i64::union` 无定义" and raised at run time
+                // (`Unhandled exception: code=1`) while CPython prints the union.
+                // The receiver's element type is what reached the ghost name
                 // (`[dynamic]i64::intersection` / `[dynamic]str::…`), so batch
                 // 428's rule turned the call site into a raise — measured 9 of
                 // the 40 real strategy files writing
@@ -104,10 +109,10 @@ impl MirGen {
                 // The result type INHERITS the receiver: a hard-coded I64 would
                 // read a str column's handles as integers, swapping a loud raise
                 // for a silent wrong value (this repo's worst class).
-                if method == "intersection"
+                if (method == "intersection" || method == "union")
                     && receiver.is_some()
                     && set_like_receiver(receiver_ty)
-                    && set_intersection_ok(method, arg_ids.len())
+                    && set_new_set_ok(method, arg_ids.len())
                 {
                     let elem_of_str = |t: Option<&Type>| match t {
                         Some(Type::DynamicArray(e)) | Some(Type::Array(e, _)) => {
@@ -122,7 +127,11 @@ impl MirGen {
                     self.exprs.insert(flag, MirExpr::IntLit(elem_is_str as i64));
                     self.type_map.insert(flag, Type::I64);
                     self.stmts.push(MirStmt::Call {
-                        func: "py_vec_intersect".to_string(),
+                        func: if method == "union" {
+                            "py_vec_union".to_string()
+                        } else {
+                            "py_vec_intersect".to_string()
+                        },
                         args: vec![arg_ids[0], arg_ids[1], flag],
                         dest: dest,
                         type_args: vec![],
@@ -141,8 +150,8 @@ impl MirGen {
 /// 语义合同（CPython set 语义＋本仓约定）：
 /// - 接收者像集合：DynamicArray/Array（list-backed set）、Named set/frozenset、
 ///   或非 Str 的 I64/PyDynamic（动态槽，运行期再判）；Str 明确不是集合。
-/// - add/discard/remove 与 intersection 都要求恰好 2 参（含接收者），否则
-///   不归本族（落链上后续，最终由响亮失败兜底）。
+/// - add/discard/remove 与 intersection/union 都要求恰好 2 参（含接收者），
+///   否则不归本族（落链上后续，最终由响亮失败兜底）。
 fn set_like_receiver(t: &Type) -> bool {
     matches!(t, Type::DynamicArray(_) | Type::Array(_, _))
         || matches!(t, Type::Named(n, _) if n == "set" || n == "frozenset")
@@ -156,8 +165,11 @@ fn set_mutation_ok(method: &str, arg_len: usize) -> bool {
     arg_len == 2 && matches!(method, "add" | "discard" | "remove")
 }
 
-fn set_intersection_ok(method: &str, arg_len: usize) -> bool {
-    arg_len == 2 && method == "intersection"
+/// 返回新集合、不写回接收者的一族：intersection 与 union（批次 10063 并入）。
+/// 两者 C 侧同形（`int64_t f(int64_t a, int64_t b, int64_t elem_is_str)`），
+/// 差别只在合并策略，故共用一条发射臂、按方法名选符号。
+fn set_new_set_ok(method: &str, arg_len: usize) -> bool {
+    arg_len == 2 && (method == "intersection" || method == "union")
 }
 
 #[cfg(test)]
@@ -189,17 +201,33 @@ mod tests {
         }
         // 816 回归钉：intersection 绝不许进变异族（曾致交集变差集）
         assert!(!set_mutation_ok("intersection", 2));
+        // 10063 同族钉：union 返回新集合，写回接收者＝并集变污染原集合
+        assert!(!set_mutation_ok("union", 2));
         assert!(!set_mutation_ok("clear", 2));  // clear 归 map 族
         assert!(!set_mutation_ok("push", 2));   // vec 语义归他族
     }
 
     #[test]
     fn set_intersection_truth_table() {
-        assert!(set_intersection_ok("intersection", 2));
-        assert!(!set_intersection_ok("intersection", 1));
-        assert!(!set_intersection_ok("intersection", 3));
+        assert!(set_new_set_ok("intersection", 2));
+        assert!(!set_new_set_ok("intersection", 1));
+        assert!(!set_new_set_ok("intersection", 3));
         // 816 回归钉：intersection 不落 str__map/text 通用路
-        assert!(!set_intersection_ok("add", 2));
-        assert!(!set_intersection_ok("upper", 2));
+        assert!(!set_new_set_ok("add", 2));
+        assert!(!set_new_set_ok("upper", 2));
+    }
+
+    /// 批次 10063：`sa.union(sb)` 与 intersection 同族（两参、返回新集合）。
+    /// 改前实拍＝union 不走本族 ⇒ `[dynamic]i64::union` 无定义、运行期抛
+    /// `Unhandled exception: code=1`（CPython 同程打印并集）。
+    #[test]
+    fn set_union_shares_the_new_set_arm() {
+        assert!(set_new_set_ok("union", 2));
+        assert!(!set_new_set_ok("union", 1));
+        assert!(!set_new_set_ok("union", 3));
+        // 邻近拼写不许被顺带接管（difference/symmetric_difference 未实现）
+        assert!(!set_new_set_ok("difference", 2));
+        assert!(!set_new_set_ok("symmetric_difference", 2));
+        assert!(!set_new_set_ok("update", 2));
     }
 }
