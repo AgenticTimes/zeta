@@ -33877,3 +33877,57 @@ S4 typed-cell 依赖。新登记：Named 全局 del 读回走旧槽（S4 墓碑�
 差分判定把 stderr 的 W1002（并同 W1010）计为失败、`.union(` 方法臂复用 `py_vec_union`、
 `call_num.rs:287` 的 `LegacyBare` 改指 1 参版 `zeta_sum_vec`。开工第一步仍先读
 `cleanup..bootstrap` 决定是否并主树（本批收尾数以落笔时实测为准，不推算）。
+
+## 批次 10063（cleanup，2026-10-06）：三件零授权代码改动落地＋文档复绑
+
+**先并树再开工**：主树已把 `cleanup` 并入 `bootstrap`（用户 2026-10-06 告知"已经合并了"），
+本侧同步到合并笔 `89fc7791`，并按经验教训 #1 强制 `cargo build --release` 重建后才取读数。
+
+### 一、主体（三件都是真代码，改前各实拍一条证据）
+
+| 件 | 提交 | 站点 | 改前实拍 | 改后实拍 |
+|---|---|---|---|---|
+| sum 标量槽的少发参数 | `6af0ebc5` | `src/middle/mir/gen/call_num.rs`（判定抽成 `sum_seq_of:291`，`LegacyBare` 那行现 `:276` 未动） | `iso5/sum_gen.z` 二进制挂死、`kill -9` 收不掉（那颗仍在 `ps` 里 `UE`，pid 38815）；MIR 发 `zeta_sum_n` 带 1 个实参，在册签名要 2 个（`registry.txt:513`） | `--dump-mir` 与改前差一行（→ `zeta_sum_vec`，`registry.txt:488` 的 1 参版）；运行打出 `0`、落盘 2 字节、干净退出＝10a 验收成立，**值仍错**（CPython 实跑 `14`，上游是 `yield` 缺口） |
+| `.union(...)` 接进集合查询族 | `a77f010f` | `call_class.rs:46`（变体改名 `SetNewSet`）＋`call_dispatch.rs:3339` 守卫＋`call_set.rs:112-143` 发射臂 | `sa.union(sb)` MIR 面留 `[dynamic]i64::union`、运行期 rc=1 报错；C 原语 `py_vec_union`（`py_additions.c:1885`）早有，只有 `\|` 运算符臂在用 | 新夹具 `tests/python_style/t1063_set_union.z` harness PASS；三侧核对＝CPython 三跑一致／改后 rc=0 同值／改前二进制 rc=1；`add` 后 `union` 结果 3 成员、两个接收者未被写回 |
+| 差分判定把静默改写单列 | `db6a7780`（真值缓存随批 `183870f4`） | `tools/diff_test.py:80-90`＋`:181` | 只看退出码：W1004 吞词的用例 stdout 恰好一致就记 `match` | 新判定 `degrade`；`--only syn60b` 42 枚翻出 2 枚点名（都是 W1004，均不在 2,846 在册基线） |
+
+### 二、每批检查（`tools/sample_gate.sh 10063`，窗口 3）＝rc=0 四路全过
+
+被测件 md5 `174c1053f7db88d047130aca2b3d3748`、运行期 `.o` md5 `2692cc91ce93635ad81b2f45492edb2d`。
+
+- ① 差分抽样 303/303 一致（＝该窗口没有用例翻成 `degrade`）
+- ② python_style 40/40 PASS，另 2 条 `STUCK` 不计红（`t253_stub_abort`、`t405_hard_stub_aborts_loudly`，即 #20006 那形）
+- ③ official 18/18 编译通过（含链接缺绑定 1，chronic 口径不计红）
+- ④ 语料 40/40
+- 模块单元测试：`cargo test -p zetac --lib` 272/272（含本批 call_num 新增 2 条），
+  `--lib 'mir::r#gen::call_'` 37/37。**顺带纠正一条验收口径**：`--lib gen` 那个过滤器名
+  打不到任何测试（`gen` 是 Rust 关键字，模块路径要写 `r#gen`），实测本树跑 0 条。
+
+### 三、文档（提交 `f73115f4`）
+
+两份缺口文档按最后一轮实跑复绑行号（`main.rs:466-503`、`gen.rs:2448-2454`、
+`diff_test.py:540-542`、`stmt.rs:966-972`、`call_set.rs:155-172`、`call_num.rs:276/291`、
+`py_additions.c:1885`），并把落地读数写回 §5／§6／§8。
+两处更正值得单独点出来：① `max(生成器)=0` 那格原文把 `sum` 的少发参数串到了 `max` 上，
+实测 `py_builtin_max` 本来就是 1 参、与 C 签名相符，`--dump-mir` 重取后改写；
+② 那份方案的 B2 配方低估了一处——只改 `call_set.rs` 打不通，路由决定在分类器。
+
+### 四、本批未做与未测（不许写成结论）
+
+- 无参生成器变体 `def gen(): yield 1/2/3` 后 `sum(gen())`：**改后仍挂死、零输出**
+  （2 次实测，`UNE` 收不掉），挂点未定位，与 D1/D3 同档。
+- 在册 2,845 条 `match` 里有多少会翻成 `degrade`＝**未测**（要全跑 3,026 枚），
+  已登进缺口文档 §8。
+- `Type::Array` 非字面量长度仍走 `LegacyBare`＝少发参数的路还在，本批未实测有无程序走到。
+- `s|t` 与 `s.union(t)` 同值这条对照改后没重取。
+- 10b（在遗留挂死进程上取栈把 D1/D3 分档）＝要碰 `runtime/*.c` 的判断，等授权。
+
+### 五、下一批（10064）候选，按已实测损害量排
+
+| 候选 | 已实测损害 | 要不要授权 |
+|---|---|---|
+| 全跑差分、数出 `degrade` 影响面 | 判定口径已改，影响面是未知数——这个数决定基线可信度 | 不要（只读） |
+| D1（`zip` 绕过钳位）取栈分档 | 三枚挂死夹具里的两枚（D1/D3），`kill -9` 收不掉 | 取栈不要，改动要 |
+| `difference`／`issubset`／`issuperset`／`update` | 每条都是一个方法名静默升不出（`union` 同形） | 要（`runtime/*.c` 新原语） |
+| `sorted(key=…)`（B3） | 运行期明确抛停，元组无独立值类型 | 要（`py_additions.c`） |
+
