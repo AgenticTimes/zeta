@@ -33202,3 +33202,19 @@ print 调用、二进制无格式串——宏展开 face，批 368 家族）；�
 非 dict 运行期异常（已知在册）。均不属 compile-only 门禁口径。
 
 **验证**：六金用例全绿；库 265/265；语料 40/40；门禁窗口 3 rc=0。
+
+## 批次 1023 附记（2026-10-06）：legacy integration 挂死普查（bisect 记录）
+
+组合 bisect 实测（/tmp/b1023_*.z 探针族，留存 /tmp 供复现）：
+- distributed_test 段移除后，用例 rc=0 完整退出（原 actor.send 挂死消除）
+- memory/quantum/verified 三 fn 各自独立编译运行均正常
+- 真实文件整体运行 rc=0 但 **println! 输出全失**（Starting/✓ 系/All
+  全部静默，二进制无格式串、MIR 无 print 调用）——parse/宏展开 face
+  （批 368 家族），独立专项（parse 级 expand_macros_in_node 递归追查）
+- 隔离 memory_test+双 println main：两行全打 ⇒ memory_test fn 本身无毒
+- 干净两 fn 复现（memory_test+双 println main）：rc=1 但两行全打
+  （rc=1 为 ✓ UTF-8 stdout 编码噪声，输出内容正确）
+
+**批次 1023 收口**：挂死根因（distributed 幽灵 actor）已由批 1020 移除
+消除；残留的 println! 静默面与 rc=1 编码噪声各列专项。compile-only
+门禁口径不受影响（窗口 3 rc=0 维持）。
