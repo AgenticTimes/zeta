@@ -38,23 +38,13 @@ impl MirGen {
     /// 批次 924：f64 元素走 f64 累加版（此前 i64 位模式累加产出垃圾和，
     /// sum([1.5,2.5]) 实拍 9222246136947933184）；元素型 type_map 优先、
     /// checker_env 兜底（与 mean 臂同模式的 P3 消费点）。
+    /// 批次 10063：标量槽（I64/Str/…）改走动态 vec 路——见 sum_seq_of 的注释。
     fn lower_sum(&mut self, arg0_node: &AstNode, dest: u32) -> Option<u32> {
         let arg_id = self.lower_expr(arg0_node);
-        let seq_elem = match self.type_map.get(&arg_id) {
-            Some(Type::DynamicArray(e)) => {
-                Some((SumSeq::Dynamic, matches!(**e, Type::F64)))
-            }
-            Some(Type::Array(e, ArraySize::Literal(n))) => Some((
-                SumSeq::Static(*n as i64),
-                matches!(**e, Type::F64),
-            )),
-            Some(Type::Array(e, _)) => Some((SumSeq::LegacyBare, matches!(**e, Type::F64))),
-            Some(Type::PyDynamic) | None => None, // 动态槽：checker 兜底
-            _ => Some((SumSeq::LegacyBare, false)),
-        };
-        let (elem_f64, seq) = match seq_elem {
-            Some((s, f)) => (f, s),
+        let (seq, elem_f64) = match sum_seq_of(self.type_map.get(&arg_id)) {
+            Some(pair) => pair,
             None => (
+                SumSeq::Dynamic,
                 matches!(
                     arg0_node,
                     AstNode::Var(nm) if matches!(
@@ -62,7 +52,6 @@ impl MirGen {
                         Some(Type::DynamicArray(e)) if matches!(*e, Type::F64)
                     )
                 ),
-                SumSeq::Dynamic,
             ),
         };
         let (func, dest_f64, n_arg) = sum_target(elem_f64, seq);
@@ -288,6 +277,29 @@ fn sum_target(elem_f64: bool, seq: SumSeq) -> (&'static str, bool, Option<i64>) 
     }
 }
 
+/// sum 实参形状判定（批次 10063 从 lower_sum 抽出，同批 924 抽纯面的做法）：
+/// 类型槽 ⇒（序列形状, 元素是否 f64）。返回 `None` = 本表判不了，交调用点走
+/// checker 兜底（PyDynamic 与"槽里没有型"两种）。
+/// 批次 10063 改的是最后的兜底支：此前落 LegacyBare ⇒ 发射点只发 1 个实参，
+/// 而在册签名 `zeta_sum_n args=i64,i64`（pylib/registry.txt:513）要 2 个，
+/// 长度参数取第二个实参寄存器的残值、从数据地址按残值长度逐格读
+/// （D2 夹具 `sum(生成器)` 实拍挂死）。兜底支改指 1 参版 `zeta_sum_vec`
+/// （registry.txt:488；运行期 `if (!data) return 0;` 自带空值保护）后，
+/// 发出的参数个数与在册签名对齐。
+/// Type::Array 的非字面量长度仍走 LegacyBare：那是栈上数组、没有动态 vec 的
+/// header，按 header 读长度比按残值读更错，本批未动该形状。
+fn sum_seq_of(t: Option<&Type>) -> Option<(SumSeq, bool)> {
+    match t {
+        Some(Type::DynamicArray(e)) => Some((SumSeq::Dynamic, matches!(**e, Type::F64))),
+        Some(Type::Array(e, ArraySize::Literal(n))) => {
+            Some((SumSeq::Static(*n as i64), matches!(**e, Type::F64)))
+        }
+        Some(Type::Array(e, _)) => Some((SumSeq::LegacyBare, matches!(**e, Type::F64))),
+        Some(Type::PyDynamic) | None => None,
+        _ => Some((SumSeq::Dynamic, false)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +346,53 @@ mod tests {
             sum_target(false, SumSeq::LegacyBare),
             ("zeta_sum_n", false, None)
         );
+    }
+
+    /// 批次 10063 回归钉：标量槽（I64/Str/Bool/F64）兜底走 1 参版
+    /// `zeta_sum_vec`。改前实拍＝落 LegacyBare ⇒ 对 2 参签名 `zeta_sum_n
+    /// args=i64,i64` 少发一个长度参数，D2 夹具 `sum(生成器)` 挂死。
+    #[test]
+    fn sum_scalar_slot_targets_one_arg_vector_reader() {
+        for t in [&Type::I64, &Type::Str, &Type::Bool, &Type::F64] {
+            assert_eq!(
+                sum_seq_of(Some(t)),
+                Some((SumSeq::Dynamic, false)),
+                "标量槽 {t:?} 应走动态 vec 路"
+            );
+        }
+        assert_eq!(
+            sum_target(false, SumSeq::Dynamic),
+            ("zeta_sum_vec", false, None)
+        );
+    }
+
+    /// 其余形状逐条不变（动态 vec、定长栈数组、无字面量长度的栈数组、
+    /// PyDynamic 与"槽里没型"两种兜底前）。
+    #[test]
+    fn sum_seq_of_other_shapes_unchanged() {
+        assert_eq!(
+            sum_seq_of(Some(&Type::DynamicArray(Box::new(Type::I64)))),
+            Some((SumSeq::Dynamic, false))
+        );
+        assert_eq!(
+            sum_seq_of(Some(&Type::DynamicArray(Box::new(Type::F64)))),
+            Some((SumSeq::Dynamic, true))
+        );
+        assert_eq!(
+            sum_seq_of(Some(&Type::Array(
+                Box::new(Type::I64),
+                ArraySize::Literal(3)
+            ))),
+            Some((SumSeq::Static(3), false))
+        );
+        assert_eq!(
+            sum_seq_of(Some(&Type::Array(
+                Box::new(Type::F64),
+                ArraySize::ConstParam("N".to_string())
+            ))),
+            Some((SumSeq::LegacyBare, true))
+        );
+        assert_eq!(sum_seq_of(Some(&Type::PyDynamic)), None);
+        assert_eq!(sum_seq_of(None), None);
     }
 }
