@@ -33037,3 +33037,12 @@ M0/M1 无运行期风险批准即排批，M3 起逐批裁定；总规模 7–10 
 
 同批归档：t425 已闭（1008 验证）、三轨收敛定态（1009）、轴 G 两判据
 兑现（1007）。
+
+## 批次 1011（2026-10-06）：ASan 夜航 CI 化（1d7382bf）
+
+.github/workflows/asan-nightly.yml：每日 02:40 UTC 定时＋手动口，跑
+tools/asan_run.sh --strict（selftest 先行）。独立 workflow 不阻塞主干
+CI；Summary 写明口径与 GC 容器盲区，防"零命中"误读。工具健康实证：
+--selftest malloc-overflow=detected / GC-overflow=silent（预期两态）。
+轴 G 判据"ASan 夜航无红"的 CI 化落地（判据原文要求进 CI——夜间独立
+workflow＝CI 的一部分）。
