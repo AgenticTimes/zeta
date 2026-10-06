@@ -1,0 +1,14 @@
+# @cat: truth
+# @note: 随机比较链（seed=95008 #0）
+#@@ python
+print(not 9)
+print(257 != 3 >= 126)
+print(-61 <= 731 >= 260)
+print(563 != 859 == -33)
+
+#@@ zeta
+print(not 9)
+print(257 != 3 >= 126)
+print(-61 <= 731 >= 260)
+print(563 != 859 == -33)
+

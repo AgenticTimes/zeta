@@ -1,0 +1,22 @@
+# @cat: control
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+def label(v):
+    match v:
+        case 0:
+            return 'zero'
+        case 1 | 2:
+            return 'small'
+        case _:
+            return 'many'
+print(label(0), label(2), label(9))
+#@@ zeta
+def label(v):
+    match v:
+        case 0:
+            return 'zero'
+        case 1 | 2:
+            return 'small'
+        case _:
+            return 'many'
+print(label(0), label(2), label(9))

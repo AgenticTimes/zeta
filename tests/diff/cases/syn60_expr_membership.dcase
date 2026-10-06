@@ -1,0 +1,12 @@
+# @cat: container
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+xs = [1, 2, 3]
+d = {'k': 1}
+print(2 in xs, 9 in xs, 'k' in d, 'j' in d)
+print('ell' in 'hello', 1 not in xs)
+#@@ zeta
+xs = [1, 2, 3]
+d = {'k': 1}
+print(2 in xs, 9 in xs, 'k' in d, 'j' in d)
+print('ell' in 'hello', 1 not in xs)

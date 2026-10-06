@@ -1,0 +1,8 @@
+# @cat: numeric
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+import math
+print(math.sqrt(16))
+#@@ zeta
+import math
+print(math.sqrt(16))

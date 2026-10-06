@@ -1,0 +1,12 @@
+# @cat: container
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+m = {'k': [[1, 2], [3, 4]]}
+print(m['k'][1][0])
+xs = [[i * j for j in range(3)] for i in range(3)]
+print(xs[2][2], len(xs))
+#@@ zeta
+m = {'k': [[1, 2], [3, 4]]}
+print(m['k'][1][0])
+xs = [[i * j for j in range(3)] for i in range(3)]
+print(xs[2][2], len(xs))

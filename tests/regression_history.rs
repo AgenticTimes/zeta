@@ -3100,7 +3100,15 @@ print(EQ == NE)
 /// 表达式当元素型』那一行"（现 :4739）。本条把元素从 `len(n)`（与兜底同形）换成字面量 `"x!"`
 /// （`Str`，与兜底 `I64` 不同形）以后，那一行**仍然打不到**——三次变异的读数见下面的覆盖面分工。
 /// 所以本条钉的不是那条余项，而是 592 修完之后的半成品状态：被调方体内推导式结果槽已带 `Str`
-/// 标记，调用点目的槽仍读 `DynamicArray(I64)`。那条余项按原样继续登记。
+/// 标记，调用点目的槽仍读 `DynamicArray(I64)`。
+/// **批次 10058 更正**：调用点那一半已修——成因＝本臂取元素时用 `args.get(1)`，而这一形脱糖出来
+/// 只有一个实参（λ 在 `args[0]`，与 `infer_global_ty` 的同名臂用 `args.first()` 一致）⇒ `elem`
+/// 恒空、元素型恒落兜底 `I64`。改成"取第一个闭包实参"后这一格读到 `DynamicArray(Str)`（本条
+/// 下面那格断言已同步改成 `Str`，另见本文件
+/// `unannotated_list_comprehension_return_marks_element_at_call_site` 四格读数）。
+/// 批次 10018 那条"单独判元素那一行"的余项**未销**：元素那一行在这两种形状下改成恒兜底都不动
+/// 读数（改前它本来就走兜底，改后它给 `Str`）——要单独钉那一行，需要一个"元素行给得出型、
+/// 兜底给不出同形"的形状，仍未找到。
 /// 元素取字面量而非 `n + "!"` 是实测选择：`n` 在推导器里读成 `I64`，拼接支（批次 587：一侧 Str、
 /// 另一侧 Str 或未知才算拼接）因此拒推 ⇒ 元素型仍落兜底。
 ///
@@ -3127,14 +3135,16 @@ print(EQ == NE)
 /// （既有那条只读调用点的向量形，元素本来就是 `I64`）。那个调用点 `I64` 不是 ①②任一处的元素推导
 /// 给的（两处硬编都不动它），成因站点未定位＝本批开出的新余项。
 ///
-/// 边界（本条不覆盖）两格：
-/// ① **调用点目的槽**（`main` 段 `Stats::tags` 那条 `Call` 的 `dest`）仍是兜底值
-///    `DynamicArray(I64)`——恢复出来的返回型没传到 caller 槽。本条把这个读数按"现状锁"钉住
-///    （修好后它会红，届时要连注释一起改），它不是 592 那条缺陷的症状值：592 的症状是
-///    向量整个被否决成标量 `I64`，那一条由本文件那条 `len(n)` 用例覆盖。
-/// ② 运行期取值仍是**指针地址**而非字符串内容（编译后跑实拍
-///    `[4299448288, 4299448272, 4299448256]`，地址随 ASLR 变）＝向量元素身上的类型标记还没接上，
-///    与批次 400 用例头注自陈的残留缺口同一条，故本条不回显运行期读数。
+/// 边界（本条不覆盖）两格——批次 10058 逐格更正：
+/// ① ~~调用点目的槽仍是兜底值~~ **已修**（`main` 段 `Stats::tags` 那条 `Call` 的 `dest`
+///    现读 `DynamicArray(Str)`，见下面那格断言）。改前它读兜底的 `DynamicArray(I64)`，
+///    那时本条把这格按"现状锁"钉住；10058 把元素实参取错下标那一支修掉后这一格变红，
+///    按本条头注当时的约定改成 `Str`。592 那条症状（向量整个被否决成标量 `I64`）
+///    仍由本文件那条 `len(n)` 用例覆盖。
+/// ② ~~运行期打指针地址~~ **已修**（同一份源编译后跑，改前实拍
+///    `[4299448288, 4299448272, 4299448256]`（地址随 ASLR 变），改后实拍
+///    `['x!', 'x!', 'x!']`＝与 CPython 同形一致，产物 `/tmp/b10058/p2_fix.bin`）。
+///    元素身上的类型标记接上了，故本条不再声明这一格。
 #[test]
 fn comprehension_element_marker_is_str_in_the_callee_but_not_at_the_call_site() {
     let mirs = lower_all(
@@ -3181,7 +3191,7 @@ print(st.tags())
         "这一形返回的就是推导式结果槽 {d}（不返回它＝本条读的不是那条臂的产物）"
     );
 
-    // 现状锁（边界①）：调用点目的槽仍是兜底值，不是被调方那个 DynamicArray(Str)。
+    // 批次 10058 起：调用点目的槽已接到元素标记（改前读兜底的 DynamicArray(I64)）。
     let f = mir(&mirs, "main");
     let dests: Vec<u32> = f
         .stmts
@@ -3199,11 +3209,10 @@ print(st.tags())
     let cd = dests[0];
     assert_eq!(
         f.type_map.get(&cd),
-        Some(&Type::DynamicArray(Box::new(Type::I64))),
-        "现状锁：调用点目的槽 id={cd} 现在仍读兜底的 `DynamicArray(I64)`（元素标记没传到 caller 槽，\
-         与运行期打指针地址同一条缺口；元素的来源见覆盖面分工，撤整条臂时这一格读到 `Some(I64)`）。 \
-         这条断言会在传过去那一天变红——那时把它改成 `Str` \
-         并删掉本条注释里这句现状锁，实得 {:?}",
+        Some(&want),
+        "调用点目的槽 id={cd} 该与被调方那个推导式结果槽同型 `DynamicArray(Str)`\
+         （批次 10058 修的就是这一格：元素实参下标取错 ⇒ 改前读兜底的 `DynamicArray(I64)`，\
+         撤掉整条 `__collect__` 臂时这一格读到标量 `Some(I64)`＝形状也没了）。实得 {:?}",
         f.type_map.get(&cd)
     );
 
@@ -7274,6 +7283,11 @@ const DICT_TYPING_QUALIFIED: &str =
 const CLASS_ANNOTATED_NONE: &str = "class Box:\n    def __init__(self):\n        self.n = 1\n\nb: Box | None = None\nprint(1)\n";
 
 #[test]
+/// 计数位移（2026-10-06 并入主线 459 笔的同步批）：11 格里所有含模块级语句的段
+/// （`main`）的"其他槽数"整批 +1（9→10、21→22、15→16、17→18、11→12），而 `g`／`f`
+/// 两个只含函数体的段一字未变；`map槽`／`map被调` 两格 11 条全部一字未变。⇒ 位移来自
+/// 为模块级顶层语句建槽的主线改动（候选＝`50ca4085` 批次 942 的"模块级顶层赋值建槽"，
+/// 该笔已实测在合并面内；逐笔归因未做）。期望值按合并后实测改数，不改形状。
 fn container_annotation_keeps_key_and_value_type_in_mir_type_map() {
     let cases: Vec<(&str, &str, &str)> = vec![
         ("模块字典无写_注解值型进槽", "main", DICT_MODULE_NO_WRITE),
@@ -7296,17 +7310,17 @@ fn container_annotation_keeps_key_and_value_type_in_mir_type_map() {
         })
         .collect();
     let want: Vec<(String, String)> = vec![
-        ("模块字典无写_注解值型进槽".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
-        ("Any值型不被写侧钉死_413症状".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,PyDynamic])]其他槽数=21|map被调=[map_str_key,map_str_key,zeta_map_len]".to_string()),
+        ("模块字典无写_注解值型进槽".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=10|map被调=[zeta_map_len]".to_string()),
+        ("Any值型不被写侧钉死_413症状".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,PyDynamic])]其他槽数=22|map被调=[map_str_key,map_str_key,zeta_map_len]".to_string()),
         ("函数体读模块字典_段内现状".to_string(), "map槽=[4:Named(\"map\",[])]其他槽数=2|map被调=[zeta_map_len]".to_string()),
-        ("模块字典无写_调用方段".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=9|map被调=[]".to_string()),
+        ("模块字典无写_调用方段".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=10|map被调=[]".to_string()),
         ("函数内字典无写".to_string(), "map槽=[1:Named(\"map\",[I64,I64]),2:Named(\"map\",[Str,I64])]其他槽数=1|map被调=[zeta_map_len]".to_string()),
-        ("整型键与字符串值_无写".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,Str])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
-        ("两次写入_写侧也能补回_对照".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=15|map被调=[map_str_key,map_str_key,zeta_map_len]".to_string()),
-        ("裸dict无尖括号_现状锁".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,I64])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
-        ("嵌套值注解不生效_未修现状".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,I64])]其他槽数=9|map被调=[zeta_map_len]".to_string()),
-        ("typing点Dict不生效_未修现状".to_string(), "map槽=[1:Named(\"map\",[I64,I64])]其他槽数=17|map被调=[map_str_key]".to_string()),
-        ("类形注解_本尺无面_M4佐证".to_string(), "map槽=[]其他槽数=11|map被调=[]".to_string()),
+        ("整型键与字符串值_无写".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,Str])]其他槽数=10|map被调=[zeta_map_len]".to_string()),
+        ("两次写入_写侧也能补回_对照".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[Str,I64])]其他槽数=16|map被调=[map_str_key,map_str_key,zeta_map_len]".to_string()),
+        ("裸dict无尖括号_现状锁".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,I64])]其他槽数=10|map被调=[zeta_map_len]".to_string()),
+        ("嵌套值注解不生效_未修现状".to_string(), "map槽=[4:Named(\"map\",[I64,I64]),5:Named(\"map\",[I64,I64])]其他槽数=10|map被调=[zeta_map_len]".to_string()),
+        ("typing点Dict不生效_未修现状".to_string(), "map槽=[1:Named(\"map\",[I64,I64])]其他槽数=18|map被调=[map_str_key]".to_string()),
+        ("类形注解_本尺无面_M4佐证".to_string(), "map槽=[]其他槽数=12|map被调=[]".to_string()),
     ];
     assert_eq!(want, got);
 }
@@ -7498,6 +7512,10 @@ print(outer(9))
 print(outer(1))";
 
 #[test]
+/// 计数位移（2026-10-06 并入主线 459 笔的同步批）：17 格里只有三段（调用方 `main` 段、
+/// 普通 `let` 的 `main` 段、顶层 `static` 的主程序段）的"槽数"+2（28→30、8→10、16→18），
+/// 其余 14 格（含全部函数体段）一字未变，`env`／`顶层赋值` 两格 17 条全部一字未变。
+/// 位移来源与上一条同（候选＝`50ca4085` 批次 942 的模块级顶层赋值建槽，逐笔归因未做）。
 fn static_decl_in_function_body_becomes_one_persistent_cell() {
     let cases: Vec<(&str, &str, &str)> = vec![
         ("体内static读写都走env_384症状", "tick", STATIC_TICK_BODY),
@@ -7527,12 +7545,12 @@ fn static_decl_in_function_body_becomes_one_persistent_cell() {
         .collect();
     let want: Vec<(String, String)> = vec![
         ("体内static读写都走env_384症状".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=7".to_string()),
-        ("体内static_调用方main段".to_string(), "env=[zeta_env_set,zeta_env_set,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=6;槽数=28".to_string()),
+        ("体内static_调用方main段".to_string(), "env=[zeta_env_set,zeta_env_set,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=6;槽数=30".to_string()),
         ("对照_普通let不建env格".to_string(), "env=[];顶层赋值=2;槽数=4".to_string()),
-        ("对照_普通let的main段".to_string(), "env=[];顶层赋值=0;槽数=8".to_string()),
+        ("对照_普通let的main段".to_string(), "env=[];顶层赋值=0;槽数=10".to_string()),
         ("if块内static也提升到模块格".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=11".to_string()),
         ("顶层static_函数读写".to_string(), "env=[zeta_env_get,zeta_env_set];顶层赋值=1;槽数=6".to_string()),
-        ("顶层static_主程序段".to_string(), "env=[zeta_env_set];顶层赋值=4;槽数=16".to_string()),
+        ("顶层static_主程序段".to_string(), "env=[zeta_env_set];顶层赋值=4;槽数=18".to_string()),
         ("无类型无mut的static_只靠派发那一步".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=0;槽数=9".to_string()),
         ("有类型无mut的static".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get,zeta_env_get];顶层赋值=0;槽数=9".to_string()),
         ("重名static第一处提升成功".to_string(), "env=[zeta_env_get,zeta_env_set,zeta_env_get];顶层赋值=0;槽数=7".to_string()),
@@ -8240,5 +8258,401 @@ fn try_except_frame_pops_appear_in_both_branches_with_handler_first() {
          体分支多一次＝弹栈被追加在 return 之后（后端报终结符在中段）；\
          `zeta_last_error` 排在第二次弹栈之后＝先弹栈再取错误值，读的是外层帧",
         mismatches
+    );
+}
+
+/// 来源批次 660（`f3fa96f2`，2026-09-30）＝py 类方法体里 `return self.<f>.get(k, <字面量>)`、
+/// 而字段查不到值型别时，返回写回被跳过。记录原文的因果链＝值型别查不到 ⇒ 落 `_ => None` 走毒票
+/// ⇒ `refine_method_return_types` 全票弃权 ⇒ `funcs` 保留解析层的 i64 默认 ⇒ 调用点按
+/// `println_i64` 打 `char*` ⇒ 静默堆地址。
+/// 修法＝把「值型未知 ∪ 有字面量默认」认成证据表明的真并集（已知动态面）：新增 `(None, Some(_))`
+/// 面（`:3314`）、给已知动态面单独计数 `dyn_faces`（`:3350-3352`，毒票不计），并让写回条件
+/// `writable` 加上"全部返回都是已知动态面"这一支（`:3191-3192`）。
+/// 站点＝`src/middle/resolver/resolver.rs`：`writable`（现 `:3188-3192`，其中 `:3189` 的
+/// `Named("PyJson")` 半支是批次 646 的车道笔）、面匹配 `match (vt, dt)`（`:3307-3328`）、
+/// `dyn_faces` 计数（`:3350-3352`）、写回本体（`:3194-3196`，只在登记型别是 `I64` 时改写）。
+///
+/// 定位过程（本批实测，推翻首稿）：首稿两格用 `self.d = {}`（写在 `__init__` 里），撤 660 的三支
+/// （`:3314`／`dyn_faces` 计数／`writable` 第二支）后 79 条一字不变——因为裸 `{}` 会把字段拼写
+/// 登记成裸 `map`，`:3118-3127` 随即投出 `Type::PyDynamic` 的**值型别**，于是 `vt` 是 `Some(PyDynamic)`
+/// 而非 `None`，命中的是批次 646 的 `(Some(Type::PyDynamic), Some(d))` 支（`:3320`）＝另一条链。
+/// 真正打到 660 那一支的形状是**字段压根没有 `map` 拼写**的四形（下表格 1～格 4）。
+///
+/// 覆盖面分工（五臂变异矩阵实测，见台账行）：
+/// - 格 1～格 4＝同一条链：撤 `:3314`／撤 `:3350-3352`／撤 `writable` 第二支，三臂下四格全红且
+///   红值一字相同（`zeta_dyn_to_string` 退回 `println_i64`）＝三支是一条传播链，本条钉得住链、
+///   钉不住"哪一支单独坏"（试过的分离形状见末尾阴性清单）。
+/// - 格 5～格 7＝另一条链（防止弃权条件被放松）：撤 `dyn_faces == rets.len()` 半条件、把 `writable`
+///   写成恒真，两臂下这三格红、格 1～格 4 不变红；反过来撤 660 那三支时这三格保持绿。
+///
+/// 阴性清单（试过后在本树打不到 660 站点，不作为覆盖声明）：
+/// `self.d: dict[str, int] = {}`（注解拼写没进 `map_vals`，读数与裸 `map` 一字相同）、
+/// `self.d[k] = 7` 投票后再 `.get(k, "missing")`、`.get(k, 7)`（期望命中 `(Some(_), Some(_))` 支）＝
+/// 撤五臂读数均不变。
+///
+/// 期望值来源＝`/tmp/b10055/probe_HEAD.log` 的 `main` 被调符号顺序实拍＋CPython 对照
+/// （格 1 打 `x`、格 3／格 4 打 `missing`）；格 2 的字段从未赋值，CPython 侧是 `AttributeError`，
+/// 该格只取编译期读数。
+/// 边界（本条不覆盖）：运行期打印值（`zeta_dyn_to_string` 打出的字面串是否等于 CPython）＝AOT 侧，
+/// 按 #20005 口径只锁 MIR；格 5～格 7 是**现状锁**＝钉住"今天仍弃权、调用点仍按 `println_i64` 打"，
+/// 这三形的 CPython 真值分别是 `missing`／`None`／`missing`，也就是运行期仍是错值——那半属未修问题，
+/// 按 #20005 口径只记在余项里，不进本条断言。
+#[test]
+fn dict_field_without_map_spelling_marks_method_return_known_dynamic() {
+    // (格名, 夹具, 期望的 main 被调符号序列)
+    const CASES: &[(&str, &str, &str)] = &[
+        (
+            "字段只在 setitem 里出现（无 map 拼写）＋字面量默认",
+            "class A2:\n    def put(self, k, v):\n        self.d[k] = v\n    def fetch(self, k):\n        return self.d.get(k, \"missing\")\n\na2 = A2()\na2.put(\"a\", \"x\")\nprint(a2.fetch(\"a\"))\n",
+            "zeta_module_decl | A2_0 | zeta_env_set | A2::put | A2::fetch | zeta_dyn_to_string | println_str",
+        ),
+        (
+            "字段完全没赋值，只在方法里读",
+            "class A3:\n    def fetch(self, k):\n        return self.d.get(k, \"missing\")\n\na3 = A3()\nprint(a3.fetch(\"a\"))\n",
+            "zeta_module_decl | A3_0 | zeta_env_set | A3::fetch | zeta_dyn_to_string | println_str",
+        ),
+        (
+            "`self.d = dict()` 构造器初值",
+            "class A4:\n    def __init__(self):\n        self.d = dict()\n    def fetch(self, k):\n        return self.d.get(k, \"missing\")\n\na4 = A4()\nprint(a4.fetch(\"a\"))\n",
+            "zeta_module_decl | A4_0 | zeta_env_set | A4::fetch | zeta_dyn_to_string | println_str",
+        ),
+        (
+            "字段来自形参 `self.d = o`",
+            "class A8:\n    def __init__(self, o):\n        self.d = o\n    def fetch(self, k):\n        return self.d.get(k, \"missing\")\n\na8 = A8({})\nprint(a8.fetch(\"a\"))\n",
+            "zeta_module_decl | A8_1 | zeta_env_set | A8::fetch | zeta_dyn_to_string | println_str",
+        ),
+        (
+            "已知动态面 ∪ 整数返回（混票弃权，现状锁）",
+            "class Cfg2:\n    def __init__(self):\n        self.d = {}\n    def both(self, k):\n        if k:\n            return self.d.get(k, \"missing\")\n        return 1\n\nc2 = Cfg2()\nprint(c2.both(\"a\"))\n",
+            "zeta_module_decl | Cfg2_0 | zeta_env_set | Cfg2::both | println_i64",
+        ),
+        (
+            "`.get(k)` 没有默认值（毒票弃权，现状锁）",
+            "class Cfg3:\n    def __init__(self):\n        self.d = {}\n    def other(self, k):\n        return self.d.get(k)\n    def fetch(self, k):\n        return self.other(k)\n\nc3 = Cfg3()\nprint(c3.fetch(\"a\"))\n",
+            "zeta_module_decl | Cfg3_0 | zeta_env_set | Cfg3::fetch | println_i64",
+        ),
+        (
+            "已知动态面 ∪ 毒票（有一票推不出就弃权，现状锁）",
+            "class Cfg6:\n    def __init__(self):\n        self.d = {}\n    def other(self, k):\n        return self.d.get(k)\n    def fetch(self, k):\n        if k:\n            return self.d.get(k, \"missing\")\n        return self.other(k)\n\nc6 = Cfg6()\nprint(c6.fetch(\"a\"))\n",
+            "zeta_module_decl | Cfg6_0 | zeta_env_set | Cfg6::fetch | println_i64",
+        ),
+    ];
+
+    let mut got: Vec<(&str, String)> = Vec::new();
+    for (cell, src, _want) in CASES {
+        let mirs = lower_all(src);
+        let seq = call_symbols(mir(&mirs, "main")).join(" | ");
+        got.push((cell, seq));
+    }
+
+    let want: Vec<(&str, String)> = CASES
+        .iter()
+        .map(|(c, _, w)| (*c, (*w).to_string()))
+        .collect();
+    let mismatches: Vec<&str> = want
+        .iter()
+        .zip(got.iter())
+        .filter(|(w, g)| w != g)
+        .map(|(w, _)| w.0)
+        .collect();
+    assert_eq!(
+        want,
+        got,
+        "字典字段无 map 拼写时的已知动态面七格（批次 660），红格清单 = {:?}——\
+         格 1～格 4 读回 `println_i64`＝已知动态面没写回（调用点把句柄当整数打）；\
+         格 5～格 7 读回 `zeta_dyn_to_string`＝弃权条件被放松（毒票／混票也写回）",
+        mismatches
+    );
+}
+
+/// 批次 173（主线 `1f2a656d`，2026-09-20）：推导式元素类型取用户函数返回类型。
+///
+/// 站点＝`src/middle/resolver/resolver.rs` 的 `infer_global_ty` Call 分支里
+/// "裸名调用取用户函数返回类型"那一块（本树 HEAD `ae970d5e` 上＝`:2137-2160`）：
+/// ①`:2144-2146` 按裸名查 `fn_rets`；②`:2147-2155` 按 `__<name>` 后缀收集候选；
+/// ③`:2157-2159` "候选返回型必须全一致才采纳"的守卫。
+///
+/// 症状（记录原文）：`WUFU_BS_CODES = [jq_to_bs(c) for c in WUFU_JQ_CODES]` 的元素型
+/// 停在 `I64`（`INFER WUFU_BS_CODES: Some(DynamicArray(I64))`）⇒ 之后 `LIST + LIST`
+/// 被当数字加法、字符串操作分派错。期望＝`DynamicArray(Str)`。
+///
+/// 期望值来源＝CPython 同形源（不是"现行输出是什么就写什么"）：
+/// - 同文件裸名：`def fcode(c): return "BS" + c` ＋ `CODES = [fcode(c) for c in ["a","b"]]`
+///   ⇒ `print(CODES[0])` 打 `BSa`、`print(len(CODES))` 打 `2` ⇒ 元素型 Str；
+/// - 普通 `from convN import fcode`：CPython 同样打 `BSa` ⇒ Str；
+/// - 两枚同名 helper 返回型不一致（`from convA import fcode` 之后再
+///   `from convB import fcode`）：CPython 里后一条 import 覆盖前一条 ⇒ `fcode` 返回 `9`
+///   ⇒ 打 `9`，元素型 I64。这一格盯的就是③守卫：没有守卫，`:2157` 会取候选列表
+///   第一枚（HashMap 顺序），把 `Str` 安到一个整数列表上。
+///
+/// 覆盖面分工（CLI 侧七臂变异实测，读数＝`main` 段里"全局写入槽／读回槽／`array_get` 目的槽"
+/// 的 `type_map` 型；产物在 `/tmp/b10056/`，矩阵见 v3_matrix.out）：
+/// - A1 只撤①（`:2144-2146` 裸名查表）⇒ 六形读数一字不变。原因实拍（`v3_dbg.log`
+///   的 `B173 method=fcode bare=Str`）：同分支后段 `:2230-2234` 有第二次裸名查表，
+///   ①撤掉后由它接管。
+/// - A2 只撤②（`:2147-2152` 后缀收集＋③守卫）⇒ 同样全不变：后段 `:2246-2249` 按
+///   `<module>__<member>` 建 mangled 键查同一张表，`from convN import fcode` 这类
+///   形状两条路给同一个型。
+/// - A3 只把③守卫换成"候选非空就采纳第一枚"⇒ 六形复跑三遍都不变（阴性）。
+/// - A4 整块 `if receiver.is_none()` 改成 `if false` ⇒ 六形全不变＝批次 173 那一整块
+///   在 HEAD 上是**前移的冗余**，实际由后段两支撑住。
+/// - A5 同撤①与 `:2230-2234` ⇒ 「同文件裸名」那格红：两次读回槽变成 0 次。
+/// - A6 同撤②与 `:2246-2249` ⇒ 「普通 from-import」与「两枚同名不一致」两格红：读回槽变成 0 次。
+/// - A7 四处同撤 ⇒ 红在「同文件裸名」＋「两枚同名不一致」。
+///
+/// 进程内复跑（本条真跑的那套，产物 `/tmp/b10056/mut_real2.out`，八臂，首字母同
+/// CLI 但含义按下述）：HEAD/A1 只撤①/A8 整块 `if receiver.is_none()` 删掉/A9 只撤后段
+/// 裸名对 ⇒ 四臂全绿（阴性）；A5 同撤①与 `:2230-2234` ⇒ 红「同文件裸名」；
+/// A6 同撤②③与 `:2246-2249` ⇒ 红「普通 from-import」＋「两枚同名不一致」；
+/// A10 只撤后段 mangled 对 `:2246-2249` ⇒ **只红「两枚同名不一致」那一格**；
+/// A7 四处同撤 ⇒ 三格全红（坏臂集是 A5∪A6 的超集，不算独立）。
+/// 与 CLI 侧唯一的读数差＝A7 在 CLI 少红「普通 from-import」一格（同一支臂两侧读数不同，
+/// 原因未查，按覆盖边界记，不写成结论），其余七臂两侧一致。
+/// ⇒ 分工：按坏臂集的极小元读——「同文件裸名」由 A5 锁，「普通 from-import」由 A6 锁，
+/// 「两枚同名不一致」由 A10 单臂锁（A6/A7 是它的超集）。三格没有一臂能单独打到 173
+/// 自己的①②③（A1/A8 皆阴性），所以 173 的三样东西单撤任一样都锁不住，如实写成阴性。
+///
+/// 本批实测的新未修项（未锁，登记在 #20005 余项内）：`from ..convJ import fcode`
+/// 在没有包上下文时被**静默忽略**（CLI 只打一行 warning 仍继续编译），`fn_rets` 里
+/// 因此没有 `__fcode` 键（`v3_dbg.log` 的 `S10/S11/S12` 三形 `suffix=[]`）⇒ `CODES`
+/// 元素型落 `DynamicArray(I64)`，运行期 `print(CODES[0])` 打 `0`，而 CPython 同形打
+/// `BSa`。这正是 173 注释里声称要救的场景——实测在该场景那一支根本打不到。
+#[test]
+fn bare_call_return_type_types_comprehension_global_element() {
+    // 一格读数＝(全局写入槽型, 每次读回槽型, array_get 目的槽型)
+    fn reading(files: Option<&[(&str, &str)]>, src: &str, gname: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
+        let mirs = match files {
+            Some(f) => lower_multi(f, "main.z"),
+            None => lower_all(src),
+        };
+        let m = mir(&mirs, "main");
+        let named = |slot: u32| matches!(m.exprs.get(&slot), Some(MirExpr::StringLit(s)) if s == gname);
+        let ty = |slot: u32| match m.type_map.get(&slot) {
+            Some(t) => format!("{:?}", t),
+            None => "<none>".to_string(),
+        };
+        let mut w = Vec::new();
+        let mut r = Vec::new();
+        let mut get = Vec::new();
+        for s in &m.stmts {
+            match s {
+                MirStmt::VoidCall { func, args }
+                    if func == "zeta_env_set" && args.len() == 2 && named(args[0]) =>
+                {
+                    w.push(ty(args[1]));
+                }
+                MirStmt::Call { func, args, dest, .. }
+                    if func == "zeta_env_get" && args.len() == 1 && named(args[0]) =>
+                {
+                    r.push(ty(*dest));
+                }
+                MirStmt::Call { func, dest, .. } if func.ends_with("array_get") => {
+                    get.push(ty(*dest));
+                }
+                _ => {}
+            }
+        }
+        (w, r, get)
+    }
+    type Cell = (&'static str, (Vec<String>, Vec<String>, Vec<String>));
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+
+    let got: Vec<Cell> = vec![
+        (
+            "同文件裸名",
+            reading(
+                None,
+                "def fcode(c):\n    return \"BS\" + c\n\nCODES = [fcode(c) for c in [\"a\", \"b\"]]\nprint(CODES[0])\nprint(len(CODES))\n",
+                "CODES",
+            ),
+        ),
+        (
+            "普通from-import",
+            reading(
+                Some(&[
+                    ("convN.z", "def fcode(c):\n    return \"BS\" + c\n"),
+                    (
+                        "main.z",
+                        "from convN import fcode\n\nCODES = [fcode(c) for c in [\"a\", \"b\"]]\nprint(CODES[0])\n",
+                    ),
+                ]),
+                "",
+                "CODES",
+            ),
+        ),
+        (
+            "两枚同名不一致",
+            reading(
+                Some(&[
+                    ("convA.z", "def fcode(c):\n    return \"BS\" + c\n"),
+                    ("convB.z", "def fcode(c):\n    return 9\n"),
+                    (
+                        "main.z",
+                        "from convA import fcode\nfrom convB import fcode\n\nCODES = [fcode(c) for c in [\"a\", \"b\"]]\nprint(CODES[0])\n",
+                    ),
+                ]),
+                "",
+                "CODES",
+            ),
+        ),
+    ];
+    let want: Vec<Cell> = vec![
+        (
+            "同文件裸名",
+            (s(&["DynamicArray(Str)"]), s(&["DynamicArray(Str)", "DynamicArray(Str)"]), s(&["Str"])),
+        ),
+        (
+            "普通from-import",
+            (s(&["DynamicArray(Str)"]), s(&["DynamicArray(Str)"]), s(&["Str"])),
+        ),
+        (
+            "两枚同名不一致",
+            (s(&["DynamicArray(I64)"]), s(&["DynamicArray(I64)"]), s(&["I64"])),
+        ),
+    ];
+    let red: Vec<&str> = got
+        .iter()
+        .zip(want.iter())
+        .filter(|((_, gr), (_, wr))| gr != wr)
+        .map(|((gl, _), _)| *gl)
+        .collect();
+    assert_eq!(got, want, "红格清单 = {:?}（每格读数＝全局写入槽型／读回槽型／array_get 目的槽型）", red);
+}
+
+/// 批次 10057 差分实测第③类＋批次 10024 那条用例自陈的"调用点那一半"（站点＝
+/// `src/middle/resolver/resolver.rs` 里 `unannotated_return_ty` 那层嵌套 `infer` 的
+/// `__collect__` 臂，改前＝:4728-4741）／续 #20005。
+///
+/// 症状（10057 手写脚本 `type_propagation` 实拍）：未标注的 `def` 返回列表推导时，
+/// 被调方自己的推导式结果槽已是 `DynamicArray(Str)`，调用点目的槽却仍是兜底的
+/// `DynamicArray(I64)` ⇒ `print(out)` 打三个句柄地址，而 CPython 同形打 `['BSa', 'BSb']`。
+///
+/// 根因（本批一次性 `eprintln!` 探针实拍，产物 `/tmp/b10058/`，四种形状同一读数）：
+/// ```text
+/// B10058 collect args=1 a0=Closure:BinaryOp elem=false et=None  <- ["BS" + x for x in xs]
+/// B10058 collect args=1 a0=Closure:If       elem=false et=None  <- [x for x in xs if x]
+/// B10058 collect args=1 a0=Closure:other    elem=false et=None  <- ["x!" for n in self.names]
+/// B10058 collect args=1 a0=Closure:other    elem=false et=None  <- [len(x) for x in xs]
+/// B10058 decl_table name=codes          recovered=Some(DynamicArray(I64))
+/// B10058 decl_table name=Stats::tags    recovered=Some(DynamicArray(I64))
+/// ```
+/// 这一形脱糖出来 `__collect__` 只有一个实参（λ 在 `args[0]`，与 `infer_global_ty` 里
+/// 那条同名臂 :2083 取 `args.first()` 一致），而本臂取 `args.get(1)` ⇒ `elem` 恒为 `None`
+/// ⇒ 元素型恒落 `unwrap_or(Type::I64)`。形状对（`DynamicArray`）、元素错，所以批次 10024
+/// 的两种读数都自洽：撤整条臂时这一格读到标量 `I64`（形状没了），把元素那一行改成恒兜底
+/// 时一字不变（本来就是兜底）。
+///
+/// 期望值来源＝CPython 同形实拍（不是"现行输出是什么就写什么"）：
+/// `codes(["a","b"])` → `['BSa', 'BSb']`、`filt(["a","","b"])` → `['a!', 'b!']`、
+/// `lens(["a","bb"])` → `[1, 2]`、`bare(["a","","b"])` → `['a', 'b']`。
+///
+/// 三格读数是 `I64`，各有实测解释，都不属于本批这一支：
+/// - `过滤形拼接` 的被调方那一格＝另一条臂的缺口。被调方推导式结果槽由
+///   `infer_global_ty` 的 `__collect__` 臂（:2079-2102）给型，它直接把 λ 体交给
+///   `infer_global_ty`，而 `infer_global_ty` 认不出 `AstNode::If`（本臂认，取 then
+///   分支第一条表达式），于是落到 `.or_else(接收者型)` 再落兜底 ⇒ 同一份源里
+///   "调用点已知 `Str`、被调方内部槽仍是 `I64`"。这一格因此按"调用点已修＋被调方内部槽
+///   未修"钉住，未修的半边记在 #20005 余项内。
+/// - `元素是长度` 的元素本来就是 int（期望与实得同形）；这一格的作用是防止把元素型
+///   改成"恒 `Str`"。
+/// - `裸循环变量` 的元素型要由被迭代实参的元素型给出，而本臂只看 λ 体、形参 `xs` 又无
+///   注解 ⇒ 仍落兜底。这一格按现状锁钉住，未修的半边同样记在 #20005 余项内。
+#[test]
+fn unannotated_list_comprehension_return_marks_element_at_call_site() {
+    // 一格读数＝(被调方推导式结果槽型, main 里调用点目的槽型)
+    fn cell(src: &str, callee_item: &str, callsite_prefix: &str) -> (String, String) {
+        let mirs = lower_all(src);
+        let ty = |m: &Mir, slot: u32| match m.type_map.get(&slot) {
+            Some(t) => format!("{:?}", t),
+            None => "<none>".to_string(),
+        };
+        let g = mir(&mirs, callee_item);
+        let c: Vec<u32> = g
+            .stmts
+            .iter()
+            .filter_map(|s| match s {
+                MirStmt::Call { func, dest, .. } if func == "zeta_collect_vec_n" => Some(*dest),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            c.len(),
+            1,
+            "前置条件：`{callee_item}` 里推导式要降成一处 `zeta_collect_vec_n`，实得 {c:?}"
+        );
+        let m = mir(&mirs, "main");
+        let d: Vec<u32> = m
+            .stmts
+            .iter()
+            .filter_map(|s| match s {
+                MirStmt::Call { func, dest, .. } if func.starts_with(callsite_prefix) => {
+                    Some(*dest)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            d.len(),
+            1,
+            "前置条件：`main` 里要降出 `{callsite_prefix}` 的调用点，实得 {d:?}"
+        );
+        (ty(g, c[0]), ty(m, d[0]))
+    }
+    type Cell = (&'static str, (String, String));
+    let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+
+    let got: Vec<Cell> = vec![
+        (
+            "拼接元素",
+            cell(
+                "def codes(xs):\n    return [\"BS\" + x for x in xs]\n\nout = codes([\"a\", \"b\"])\nprint(out)\n",
+                "codes",
+                "codes",
+            ),
+        ),
+        (
+            "过滤形拼接",
+            cell(
+                "def filt(xs):\n    return [x + \"!\" for x in xs if x]\n\nprint(filt([\"a\", \"\", \"b\"]))\n",
+                "filt",
+                "filt",
+            ),
+        ),
+        (
+            "元素是长度",
+            cell(
+                "def lens(xs):\n    return [len(x) for x in xs]\n\nprint(lens([\"a\", \"bb\"]))\n",
+                "lens",
+                "lens",
+            ),
+        ),
+        (
+            "裸循环变量",
+            cell(
+                "def bare(xs):\n    return [x for x in xs if x]\n\nprint(bare([\"a\", \"\", \"b\"]))\n",
+                "bare",
+                "bare",
+            ),
+        ),
+    ];
+    let want: Vec<Cell> = vec![
+        ("拼接元素", s("DynamicArray(Str)", "DynamicArray(Str)")),
+        ("过滤形拼接", s("DynamicArray(I64)", "DynamicArray(Str)")),
+        ("元素是长度", s("DynamicArray(I64)", "DynamicArray(I64)")),
+        ("裸循环变量", s("DynamicArray(I64)", "DynamicArray(I64)")),
+    ];
+    let red: Vec<&str> = got
+        .iter()
+        .zip(want.iter())
+        .filter(|((_, gr), (_, wr))| gr != wr)
+        .map(|((gl, _), _)| *gl)
+        .collect();
+    assert_eq!(
+        got,
+        want,
+        "红格清单 = {:?}（每格读数＝被调方推导式结果槽型／调用点目的槽型）——\
+         调用点读到 `DynamicArray(I64)` ＝元素标记没传到调用点（本批修的这一支），\
+         读到标量 `I64` ＝整条 `__collect__` 臂没走到（批次 592 那条症状）",
+        red
     );
 }

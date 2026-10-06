@@ -1,0 +1,12 @@
+# @cat: numeric
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+print(int('42'), float('1.5'), str(7), bool(0))
+print(abs(-3), divmod(7, 2), pow(2, 5), round(2.6), round(2.5))
+print(bin(5), oct(8), hex(255))
+print(int('1010', 2), int(3.9))
+#@@ zeta
+print(int('42'), float('1.5'), str(7), bool(0))
+print(abs(-3), divmod(7, 2), pow(2, 5), round(2.6), round(2.5))
+print(bin(5), oct(8), hex(255))
+print(int('1010', 2), int(3.9))

@@ -1,0 +1,12 @@
+# @cat: str
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+a, b = 1, 'z'
+print(f"{a}-{b}")
+print(f"{a}{b}")
+print(f"{{literal}}{a}")
+#@@ zeta
+a, b = 1, 'z'
+print(f"{a}-{b}")
+print(f"{a}{b}")
+print(f"{{literal}}{a}")

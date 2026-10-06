@@ -1052,6 +1052,113 @@
 >   候选重筛：159 判掉（改名表已由 10047 的来源批次 657 那条覆盖，见 `tests/regression_history.rs:5006`）、
 >   351＝站点在解析器在制面；剩余 173、171 未复核。滞留：代码笔后 `bootstrap..cleanup`＝71、
 >   `cleanup..bootstrap`＝421（主树 HEAD `3d203cd1`）。
+> - 批次 10055（代码 `5b649d3c`）＝来源批次 660（`f3fa96f2`，2026-09-30＝字典字段查不到值型别时
+>   方法返回的写回被跳过 ⇒ 调用点按 `println_i64` 把串句柄地址当整数打）做成进程内单元测试（续
+>   #20005）。站点＝`src/middle/resolver/resolver.rs` 的 `match (vt, dt)` 里
+>   `(None, Some(_)) => Some(Type::PyDynamic)`（现 `:3314`）、`dyn_faces` 计数（现 `:3350-3352`）、
+>   写回条件 `writable` 的第二支（现 `:3191-3192`）。新增
+>   `dict_field_without_map_spelling_marks_method_return_known_dynamic`（`#[test]` 在
+>   `tests/regression_history.rs:8282`，断言 `:8342`）＝七格一组，读数＝`main` 里按出现顺序排出的
+>   被调符号名。**首稿两格被实测推翻**：`self.d = {}` 写在 `__init__` 的形状里，裸 `{}` 把字段拼写
+>   登记成 `map`，`:3118-3127` 先投出 `Some(Type::PyDynamic)` 的值型别 ⇒ `vt` 不是 `None`，命中的是
+>   批次 646 的 `(Some(PyDynamic), Some(d))` 一支（`:3320`）＝另一条链，撤 660 三支后 79 条一字不变，
+>   那两格测不到站点已删；先做 15 形 × 5 臂探针矩阵筛出真正打到 660 的四形＝字段压根没有 `map`
+>   拼写（只在 setitem 出现／完全没赋值／`self.d = dict()`／字段来自形参）。六臂矩阵（还原源
+>   `git show HEAD:src/middle/resolver/resolver.rs`，md5 `e841c2206fe81514fe57895e73991edf`，逐臂确认
+>   `Compiling zetac` 与还原后 md5 相同）＝撤 `:3314`／撤计数／撤 `writable` 第二支＝格 1～4 全红且
+>   红值一字相同（`zeta_dyn_to_string` 退回 `println_i64`）＝三支是一条传播链，守得住链、守不住
+>   "单独哪一支坏"；只撤 `dyn_faces == rets.len()` 半条件、把 `writable` 写成恒真＝格 5～7 红
+>   （另 10 条既有用例同红＝交叉印证）；撤 `(Some(_), Some(_))` 一支＝79 条一字不变（阴性，那一支
+>   未覆盖）。阴性形状（记在用例头注，不写覆盖声明）＝`self.d: dict[str, int] = {}` 的注解拼写没进
+>   `map_vals`（读数与裸 `map` 一字相同）、`self.d[k] = 7` 投票后再 `.get(k, <整数默认>)` 两形＝六臂
+>   读数不变。余项＝`(Some(_), Some(_))` 支要什么形状才打到＝未证；格 5～7 固定住的是"今天仍弃权"
+>   （CPython 真值 `missing`／`None`／`missing`，运行期仍按整数打）＝未修那半按 #20005 口径只记余项。
+>   套件 78→79 条全绿（1.48 秒）；`cargo test -p zetac --lib` 145/145；本批零 `src/` 净改动 ⇒ 被测件
+>   `target/release/zetac` md5 `ed5227ccd29b70c4ee9ae17500926f10` 与 10050–10054 同一颗，抽样窗口按
+>   2026-10-03 节奏不重跑。候选重筛：下一批候选＝173、171（10054 留的两格未复核）。滞留：代码笔后
+>   `bootstrap..cleanup`＝1、`cleanup..bootstrap`＝422（主树 HEAD `3d203cd1`）。
+> - **批次 10056（第四十四批，续 #20005／来源批次 173，代码笔 `5eb4dd02`）**：主线 173
+>   （`1f2a656d`）"推导式元素类型取用户函数返回类型"做成进程内单元测试
+>   `bare_call_return_type_types_comprehension_global_element`（`tests/regression_history.rs`
+>   `#[test]` 在 8402，三格读数＝全局写入槽型／读回槽型／`array_get` 目的槽型，
+>   期望值取自 CPython 同形源）。站点＝`src/middle/resolver/resolver.rs` 的
+>   `infer_global_ty` Call 分支 `if receiver.is_none()` 块（HEAD 上 `:2137-2160`：①裸名查
+>   `fn_rets`、②`__<name>` 后缀收集、③候选全一致才采纳）。**进程内八臂**（还原源
+>   `git show HEAD:`＋逐臂断言 md5 复原 `e841c2206fe81514fe57895e73991edf`）＝
+>   A5 同撤①与后段 `:2230-2234` 红格 1；A6 同撤②③与后段 `:2246-2249` 红格 2＋3；
+>   A10 只撤后段 `:2246-2249` **只红格 3**；A7 四处同撤三格全红（＝A5∪A6 超集，不独立）；
+>   阴性＝A1 只撤①、A8 删整块、A9 只撤后段裸名查表、HEAD 自证。按坏臂集极小元读＝格 1 由
+>   A5 锁／格 2 由 A6 锁／格 3 由 A10 单臂锁；**173 的①②③没有任何单臂打得到**，所以本条只算
+>   "裸名对"＋"mangled 对"两级覆盖＋症状现状锁。首版 A6/A7 删收集段却留下引用 `hits` 的守卫 ⇒
+>   lib 编不过，而日志无 `test result:` 行被读成阴性——本轮改成"收集＋守卫"整块删＋先查 `error[`
+>   再分类（新坑，已写进用户记忆）。**本批新未修项（未锁，记在用例头注）**＝`from ..convJ import
+>   fcode` 在无包上下文时被静默忽略（CLI 一行 warning 仍继续编译），`fn_rets` 里因此没有
+>   `__fcode` 键（探针三形 `suffix=[]`）⇒ 元素型落 `DynamicArray(I64)`、运行期 `print(CODES[0])`
+>   打 `0` 而 CPython 打 `BSa`＝173 注释声称要救的那一支实测打不到。读数＝套件 79→80 条全绿
+>   （0.73 秒）、`cargo test -p zetac --lib` 145/145、零 `src/` 净改动 ⇒ 被测件与 10050–10055
+>   同一颗、抽样窗口按 2026-10-03 节奏不重跑。候选重筛：下一批候选＝171（10054 留的未复核格）、
+>   642／643／659／648／649／650、605／608／609、575／579／580／587 中未取者，站点避开
+>   `gen.rs` 与树上在制的 `src/error_codes.rs`／`src/frontend/parser/{expr,top_level}.rs`。
+> - **批次 10057（第四十五批：差分语料扩充＋手写多特性脚本实测，代码笔 `a5be3d46`）**：
+>   `tools/gen_random_diff.py --seed 95001..95016 --count 6` 配 16 模式 × 三种嵌套深度＝96 枚
+>   `gen_*s950*.dcase`，`tools/diff_test.py --only s950`＝**match 96/96（100%）**；手写 10 枚
+>   多特性脚本中 3 枚通过并入库（切片全形、字符串方法链、控制流含 for/while 的 else），
+>   `--only hand57`＝match 3/3。语料 2718→2817。**同批打到 7 枚未入库脚本（已知失败不进
+>   每批检查的分母），证据 `/tmp/b10057/failcases/`、逐行读数 `/tmp/b10057/failcases_readings.txt`
+>   （口径＝CPython 与 zetac 编译产物 stdout 按行对，行号映射到第 i 条 `print`）**，按形状归并
+>   六类半条＝**①`dict.get(缺键)` 无默认值时打 `0` 而非 `None`；②`sorted()` 对元组列表与
+>   `dict.items()` 不生效（四处同形读数：dict_ops 行 5/9/10、builtin_chain 行 8）；③函数／方法
+>   返回容器时打印成句柄整数（class_basic 行 2 期望 `[5, -2]`、functions_recursion 行 6 期望
+>   `(13, 5, 36)`、type_propagation 行 1/2/6 期望 `['BSa','BSb','BSc']`；编译期型标记是否同样丢
+>   未查）；④记忆化字典查表给错值（`fib(20, memo)` 期望 6765 实得 `34437037648`）；⑤`float(字符串)`
+>   结果打印成 `<地址>.0`（formatting 行 11）；⑥字符串句柄当字典键回查落空（type_propagation 行 7
+>   `m[out[0]]` 期望 `3` 实得 `0`＝③的后果）**＋**⑦`hand57_list_methods`（append/extend/insert/
+>   remove/pop/sort(reverse)/reverse 混排）的编译产物运行不返回、子进程进 `UNE` 不可中断态**
+>   （`timeout -s KILL` 收不掉，与 #20006 同形但无桩消息＝新触发条件；本树遗留 pid 22141）。
+>   按登记规则 2 记在 #20005 余项内、未占新号。**读数可信度**：嵌堆地址的实得值逐次会变，
+>   台账只记形状与期望值（教训 4）。全套 2817 枚的差分未跑（距上次全量 10051＝6 批）。
+>   零 `src/` 改动 ⇒ 被测件与 10050–10056 同一颗（md5 `ed5227ccd29b70c4ee9ae17500926f10`）。
+>   下一批候选＝把这六类里能静态观测的两类（②`sorted` 的排序键、③返回容器的型标记）转成
+>   模块内单元测试；站点避开 `gen.rs` 与树上在制的 `src/error_codes.rs`／
+>   `src/frontend/parser/{expr,top_level}.rs`。
+> - **批次 10058（第四十六批：实修，代码笔 `e35f5aae`）**：未标注函数 `return [<拼接表达式> for ...]`
+>   时调用点目的槽落 `DynamicArray(I64)`、打印成堆地址（来源＝批次 10057 的
+>   `hand57_type_propagation`，改前读数 `[4306960368, 4306960352, 4306960336]` 对
+>   CPython `['x!', 'x!', 'x!']`，`/tmp/b10057/failcases_readings.txt:16-17`）。根因实测＝
+>   `resolver.rs` 的 `unannotated_return_ty` 内层 `infer` 的 `__collect__` 臂按 `args.get(1)`
+>   取 lambda，而这一形只有一个实参（λ 在 `args[0]`）⇒ 元素型恒落兜底 `I64`。改一处
+>   （`args.iter().find_map`＋过滤形取 `If.then` 首条表达式语句），`resolver.rs`
+>   md5 `e841c220…`→`e0549204…`。新用例四格 (被调方槽, 调用点槽)＝(Str,Str)/(I64,Str)/
+>   (I64,I64)/(I64,I64)，并把批次 10024 那条的期望从 `I64` 改 `Str`（函数名保留，
+>   `roadmap.md` 按名字引用过它）。六臂变异：M1≡M3 一条链、M2 是 M1 的超集、M4 等价写法阴性、
+>   M5（删 `If` 支）独立覆盖"过滤形拼接"一格、M6（`infer_global_ty` 那侧索引）红在另外两条
+>   用例＝另一处站点、互不备份。端到端 `hand57_type_propagation` 与 CPython 差异 4 行→1 行，
+>   剩下那一行是 `sorted()`（站点 `runtime/py_additions.c:446-476`，动 C 运行期需用户批准）。
+>   每批检查：`regression_history` 81/81、`-p zetac --lib` 145/145、`cargo build --release` rc=0。
+>   两条未修按登记规则记在 #20005 余项内、不占新号＝①过滤形在被调方自己那一槽仍丢元素型
+>   （`infer_global_ty` 的 `__collect__` 臂认不出 `AstNode::If`）；②元素是裸循环变量
+>   （`return [x for x in xs]`）时元素型仍取不到，需要从可迭代对象取元素型，`seen` 里没有
+>   循环变量的型。本批未跑抽样窗口（缺口在同步批 10059 的窗口 9 补）。
+>
+> - **批次 10059（同步批：并入 bootstrap 459 笔，合并笔 `b5715c03`）**：356 文件
+>   +73511/-26869（`git diff --cached --shortstat`），`cleanup..bootstrap` 459→0。
+>   冲突只有 `roadmap.md` 一处，按并集解（本道 10055–10057 三节＋主线 990–1006 十七节全留）。
+>   合并后两处现状锁的槽数被顶高并按实测改数（12 格）：只有含模块级语句的段变多
+>   （+1／static 那三段 +2），`map槽`／`map被调`／`env`／`顶层赋值` 一字未变，
+>   候选来源＝主线 `50ca4085`（批次 942"模块级顶层赋值建槽"，实测在合并面内），逐笔归因未做。
+>   库内单元测试口径 145→265（主线带进来的），合并后 `regression_history` 81/81、
+>   `--lib` 265/265、`cargo build --release -p zetac` rc=0（27.5 秒）。
+>   合并前处置：本树 2026-10-01 那族未提交在制品（`lambda` 星形参数＋W1012 默认值丢弃警告＋
+>   `parse_class` 空根名守卫＋t562/t563 两枚夹具）经 HEAD／bootstrap 两侧查证＝仓库里没有任何
+>   副本，故不丢弃，存成分支 `wip/739-745-parser-lambda`（提交 `93ba5a90`），四文件复原到 HEAD
+>   且逐文件核 md5，夹具移到 `/tmp/b10058/wip_fixtures/`；是否重新落地由 owner 决定。
+>   下一步＝跑完窗口 9 的每批检查并把读数写回本节——已跑完（本笔之后）：
+>   `sample_gate.sh 10059` rc=0，① 差分抽样 294/294 一致（bad_case 0）、② python_style 41/41、
+>   ③ official 20/20、④ 语料 40/40 满数，被测件 md5 `2138df512720e1b368e78e2c0e31eced`。
+>   这一轮也补上了批次 10058 欠的抽样那一格（10058 有 `src/` 净改动却只跑了两个测试目标）。
+>   推送 `e35f5aae..0e9de52d cleanup -> cleanup`（首笔 `git push` 报 publickey 拒绝，
+>   原样重试成功，中间零仓库改动）。
+
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
 >   处停）。批次 10013 每批检查第②步首次抽到（窗口 3 的 `t253_stub_abort`／`t405_hard_stub_aborts_loudly` 两枚

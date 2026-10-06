@@ -1,0 +1,8 @@
+# @cat: numeric
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+a = 1; b = 2
+print(a, b)
+#@@ zeta
+a = 1; b = 2
+print(a, b)

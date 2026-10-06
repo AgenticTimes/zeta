@@ -1,0 +1,26 @@
+# @cat: container
+# @note: 批次 10057 手写：切片全形（正负步长、越界、省略界、字符串切片）
+#@@ python
+xs = [0, 1, 2, 3, 4, 5]
+print(xs[1:4], xs[:3], xs[3:], xs[:], xs[::2], xs[::-1])
+print(xs[-3:], xs[:-3], xs[-6:-4], xs[4:2], xs[2:8])
+print(xs[10:], xs[:10], xs[-10:])
+s = "abcdefg"
+print(s[1:4], s[::-1], s[::2], s[-3:], s[:2], s[5:99])
+print(xs[1:5:2], xs[5:0:-2], xs[::-2])
+ys = xs
+ys[0] = 99
+print(xs[0], ys[0])
+print(list(xs[1:3]), xs[1:3] + [7])
+#@@ zeta
+xs = [0, 1, 2, 3, 4, 5]
+print(xs[1:4], xs[:3], xs[3:], xs[:], xs[::2], xs[::-1])
+print(xs[-3:], xs[:-3], xs[-6:-4], xs[4:2], xs[2:8])
+print(xs[10:], xs[:10], xs[-10:])
+s = "abcdefg"
+print(s[1:4], s[::-1], s[::2], s[-3:], s[:2], s[5:99])
+print(xs[1:5:2], xs[5:0:-2], xs[::-2])
+ys = xs
+ys[0] = 99
+print(xs[0], ys[0])
+print(list(xs[1:3]), xs[1:3] + [7])

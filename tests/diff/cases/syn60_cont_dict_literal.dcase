@@ -1,0 +1,14 @@
+# @cat: container
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+d = {'a': 1, 'b': [2, 3], 'c': {'d': 4}}
+print(d['a'], d['b'][1], d['c']['d'])
+print(len(d), sorted(d.keys()))
+d['e'] = 5
+print(len(d))
+#@@ zeta
+d = {'a': 1, 'b': [2, 3], 'c': {'d': 4}}
+print(d['a'], d['b'][1], d['c']['d'])
+print(len(d), sorted(d.keys()))
+d['e'] = 5
+print(len(d))

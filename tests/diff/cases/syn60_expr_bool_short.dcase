@@ -1,0 +1,16 @@
+# @cat: truth
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+def boom():
+    print('ran')
+    return True
+print(False and boom())
+print(True or boom())
+print(0 or 'x', '' or None)
+#@@ zeta
+def boom():
+    print('ran')
+    return True
+print(False and boom())
+print(True or boom())
+print(0 or 'x', '' or None)

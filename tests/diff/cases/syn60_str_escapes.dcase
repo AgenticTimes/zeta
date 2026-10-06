@@ -1,0 +1,12 @@
+# @cat: str
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+print("a\nb")
+print("tab\tend")
+print(r"raw\b")
+print("q\"q")
+#@@ zeta
+print("a\nb")
+print("tab\tend")
+print(r"raw\b")
+print("q\"q")

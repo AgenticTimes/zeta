@@ -1,0 +1,14 @@
+# @cat: container
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+(a, (b, c)) = (1, (2, 3))
+print(a, b, c)
+pairs = [(1, 'x'), (2, 'y')]
+for k, v in pairs:
+    print(k, v)
+#@@ zeta
+(a, (b, c)) = (1, (2, 3))
+print(a, b, c)
+pairs = [(1, 'x'), (2, 'y')]
+for k, v in pairs:
+    print(k, v)
