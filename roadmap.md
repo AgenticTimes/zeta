@@ -33156,3 +33156,19 @@ distributed::actor 全仓零背书（幽灵模块，#42 族）；测试的 spawn
 compile-only 门禁口径。
 
 **验证**：文件 Compiled；六金用例全绿；库 265/265；语料 40/40。
+
+## 批次 1021（2026-10-06）：轴 E 试点——official 五用例加运行值断言（f6b99135）
+
+官方测试现 compile-only（运行输出从不判定）。试点：普查 47 个
+unit-tests 文件，选 5 个（编译 ✓＋两轮运行 rc=0＋输出稳定＋原无
+expect）加全输出 // expect: 行（含空行，runner 支持空 expect）。
+
+五例均为程序内部自校验型（打印 N expected: N 并比对，尾打 ALL
+PASSED）——expect 即其自证输出，非外部猜测值。
+
+**验证**：五用例 runner PASS（10 判定全 PASS，两轮复核零翻转）；库
+265/265；语料 40/40；门禁窗口 1 rc=0——差分 285/285、python_style
+54/54、official 18/18、语料 40/40。
+
+**余量**：其余 official 用例需先治理挂死/非零退出/非确定输出面再逐
+个铺开（轴 E 判据渐进）。
