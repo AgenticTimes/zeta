@@ -33116,3 +33116,22 @@ ASan 全量首跑（479 用例）：**ASan 命中 0**、crash 0、ok 475；4 例
 exit!=0/compile-fail 经普通 runner 复核全部 PASS（ASan 工具链构建怪
 癖，非产品回归）。轴 G 判据"ASan 夜航无红"以真实数据兑现。OPT 矩阵
 接进夜航 workflow（信息性，轴 C 护栏读数随夜航沉淀）。
+
+## 批次 1018（2026-10-06）：轴 B M3 slice 1——json 值经 dict 存取的 tag 保持＋#26 trap 清零（6b47ce81）
+
+M3 第一片（灰度面＝json 值经 dict 存取）：
+1. py_map_items 对 zj OBJ 单元按 tag 解包（zj_kind_of/zj_payload_map
+   出口自 stub）——JSON 单元是合法动态值，载荷即真 map。
+2. For 臂补 PyJson 接收者分派（py_json_keys stub 出口已在，MIR 臂原缺）
+   ——'for k in json_obj' 恢复键迭代语义。
+3. #26 trap 清零：quantum 三符号补 jit_mappings（真身 quantum/mod.rs
+   1225+ 从未列出）；ml::neural 幽灵引用按用户裁定移除。
+4. jit_sweep 分类完善：expect-error 归 xabort；VERBOSE 短路修复。
+
+**验证**：新形状 items/for-in 与 CPython 对表；六金用例全绿；库
+265/265；语料 40/40；门禁窗口 8 rc=0——差分 284/284、python_style
+50/50、official 18/18、语料 40/40。
+
+**M3 余量（slice 2+，在册）**：dict[str, Any] 标量动态值（非 json 面）
+的装箱——需上游产点 tag 传播（monotonic 包装），依赖 M2 增量；探针族
+退役随域灰度推进（B.1 表 −3 目标）。
