@@ -33247,3 +33247,9 @@ verified_increment 三 fn 逐个隔离均不毒；毒源需三 fn 共存或文�
 
 **优先级**：低（用户裁定）。zeta 原生方言的官方测试以 compile-only 为
 准，运行输出不进门禁口径；修复价值待 zeta 自举（selfhost）阶段重估。
+
+## 批次 1026（2026-10-06）：存储架构设计文档落稿（f6995083）
+
+docs/STORAGE-ARCHITECTURE.md：模块全局 env 唯一存放点＋编译期
+defined-before-use＋动态值 tag 双轨的统一架构设计。S1–S4 里程碑与
+验证策略。下一步＝S1 实施（模块全局读翻转槽→env）。
