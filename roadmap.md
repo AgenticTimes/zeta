@@ -33046,3 +33046,22 @@ CI；Summary 写明口径与 GC 容器盲区，防"零命中"误读。工具健�
 --selftest malloc-overflow=detected / GC-overflow=silent（预期两态）。
 轴 G 判据"ASan 夜航无红"的 CI 化落地（判据原文要求进 CI——夜间独立
 workflow＝CI 的一部分）。
+
+## 批次 1012（2026-10-06）：backlog #26 JIT trap 收口（472→0）＋ml 幽灵引用移除（72238835）
+
+1. **用户裁定**：ml::neural 非产品功能——integration_all_features.z
+   的 ml_test 段移除（幽灵模块引用，#42 族），jit 映射撤回。
+2. **quantum trap 修复**：optimal_iterations/success_probability/factor
+   三符号补 jit_mappings（Rust 侧 extern 真身已在 src/std/quantum/
+   mod.rs:1225+，注册表从未列出）。quantum_basic rc=0。
+3. **jit_sweep.sh 分类完善**：expect-error 夹具的 E4016 归 xabort
+   （t213/t225 设计内响亮失败）；VERBOSE 短路修复＋明细 sort。
+4. **#36 审计**：parse_bisect 实证 selfhost.z '无截断'——91 行已由
+   前序批次清零，backlog 该项应关闭。
+
+**验证**：jit sweep ok=663 **trap=0**（#26 记录 472→761 的 4→0，
+fail=1/xabort=9/timeout=2 维持）；门禁窗口 2 rc=0——差分 285/285、
+python_style 44/44、official 13/13、语料 40/40。
+
+**integration_all_features 遗留**：rc=1（map_insert 非字典异常）＝
+运行期预存缺陷（compile-only 用例不计红），独立登记。
