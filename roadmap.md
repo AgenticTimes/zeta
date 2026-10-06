@@ -33009,3 +33009,21 @@ official 27/27、语料 40/40；库 265/265；六金用例全绿。
 
 **轴 G 判据余量**：ASan 夜航（基建 tools/asan_run.sh 在位，CI 化待
 裁定）；OPT 矩阵进 CI（工具在位，接 CI 待裁定）。
+
+## 批次 1009（2026-10-06）：typecheck 三轨收敛收口——unified 中间层整层删除（fb2ab044）
+
+- typecheck.rs 直调 typecheck_new（unified trait＝直通包装，Fallback
+  判定内联，语义对等）；unified_typecheck.rs 整删（1006 剥 228 行
+  Facade，本批删余下 69 行 trait 层）。
+- **三轨终态**：typecheck.rs（调度＋refine）＋typecheck_new.rs（412
+  行）＋new_resolver.rs（2,192 行）——本体退役不可行（infer_unified
+  8 调用点在用），轴 F 收敛在此定态。
+- **t425 归档**：共享格合同实测已闭（545 摘钉生效，Python 方言面
+  del 墓碑读回同步验证 1008）。
+
+**验证**：门禁窗口 9 rc=0——差分 284/284、python_style 41/41、
+official 20/20、语料 40/40；库 265/265；六金用例全绿。
+
+**在册余量（下一批候选）**：backlog #36 selfhost 91 行（表示层）、
+#26 JIT trap 族；轴 B 值标签大弧（待裁定立项）；ASan 夜航 CI 化
+（基建在位）。
