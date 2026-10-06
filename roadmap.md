@@ -33135,3 +33135,11 @@ M3 第一片（灰度面＝json 值经 dict 存取）：
 **M3 余量（slice 2+，在册）**：dict[str, Any] 标量动态值（非 json 面）
 的装箱——需上游产点 tag 传播（monotonic 包装），依赖 M2 增量；探针族
 退役随域灰度推进（B.1 表 −3 目标）。
+
+## 批次 1019（2026-10-06）：t73 摘钉——PyPath read_text 补 ret=str（e0eb99ef）
+
+W PyPath read_text 条目缺 ret= → method_ret 默认 i64 → 结果槽 I64 →
+println_i64 打指针。registry 行补 ret=str（method_ret / registry_ret_
+type 既有消费链自动生效）。t73 PASS（11 位 expect 全对表），known-fail
+活标记维持零。**验证**：门禁窗口 9 rc=0——差分 284/284、python_style
+41/41、official 20/20、语料 40/40；库 265/265；六金用例全绿。
