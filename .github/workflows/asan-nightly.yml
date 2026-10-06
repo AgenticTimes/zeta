@@ -1,0 +1,44 @@
+# ASan nightly — 轴 G「ASan 夜航无红」判据的 CI 化（批 1011）
+#
+# 每日 02:40 UTC 跑 tools/asan_run.sh --strict（runtime C 插桩版逐例编译
+# 运行，命中即退出码 1）。失败**不阻塞** push/PR 的主干 CI——独立 workflow、
+# 仅定时触发；结果落在 Actions 历史与 asan-nightly.md 摘要里。
+#
+# 口径（tools/asan_run.sh 头注）：插桩面＝runtime/*.c；GC 容器内越界是
+# 已知盲区（Boehm 无 redzone）；ASAN_OPTIONS=detect_leaks=0 必须（GC 保留
+# 块会被泄漏检查全数误报）。
+name: asan-nightly
+
+on:
+  schedule:
+    - cron: '40 2 * * *'   # 02:40 UTC 夜航（错开 benchmarks 的 02:00）
+  workflow_dispatch: {}     # 手动触发口（排障/复跑）
+
+jobs:
+  asan:
+    runs-on: [self-hosted, galaxy, wsl2, x86-64]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release zetac
+        run: cargo build --release
+        env:
+          CARGO_TERM_COLOR: always
+          LLVM_SYS_210_PREFIX: /usr/lib/llvm-21
+          LLVM_SYS_211_PREFIX: /usr/lib/llvm-21
+      - name: ASan selftest (tool sanity)
+        run: bash tools/asan_run.sh --selftest
+      - name: ASan nightly sweep (strict)
+        id: sweep
+        run: |
+          set -o pipefail
+          bash tools/asan_run.sh --strict 2>&1 | tee asan-nightly.md
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## ASan nightly"
+            echo ""
+            echo "- 命中口径与盲区见 tools/asan_run.sh 头注（GC 容器内越界不可见）"
+            echo "- exit code: ${{ steps.sweep.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"
