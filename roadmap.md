@@ -33337,3 +33337,24 @@ AOT 产物实跑 `['BSa', 'BSb']`、`['x!', 'x!', 'x!']`、`['a!', 'b!']`、`[1,
   （`write-tree`＋`commit-tree`，工作树 md5 一字未变）存成分支 `wip/739-745-parser-lambda`
   （提交 `93ba5a90`），四个在制文件复原到 HEAD 并逐文件与 `git show HEAD:` 核 md5，
   两枚夹具移到 `/tmp/b10058/wip_fixtures/`。是否重新落地由 owner 定，本道不自行把它并进去。
+
+### 每批检查（窗口 9，跑在合并后的树上）
+
+`bash tools/sample_gate.sh 10059` rc=0，四步全绿，明细目录 `/tmp/zeta_gate_10059.YU8USC`：
+
+| 步 | 读数 |
+|---|---|
+| ① 差分 10% 抽样（`--sample 10:9`） | 294/294 一致，rate 100.0%，bad_case=0，rc=0 |
+| ② python_style 10% 轮转 | 41/41 PASS |
+| ③ official 10% 轮转 | 20/20 编译通过（链接缺绑定 0） |
+| ④ 语料全跑 | 40/40 满数 |
+
+被测件 md5 `2138df512720e1b368e78e2c0e31eced`、运行期 `.o` md5 `b95e30483369d68d2e93e8d20bfce4c4`
+（日志开头打印，取自本树 `target/release/`）。这一轮同时补上了批次 10058 欠的那次抽样：
+10058 有 `src/` 净改动却只跑了两个测试目标，本窗口跑在含 10058 修复的合并后树上，四步全绿。
+
+推送：`e35f5aae..0e9de52d cleanup -> cleanup`（`agentic`）。第一笔 `git push` 报
+`git@ssh.github.com: Permission denied (publickey)`，同一命令原样重试即成功；
+中间没有任何仓库改动，`ssh -T git@github.com` 单独验证＝`Server accepts key`＋
+`Authenticated to ssh.github.com`（本机 `ssh-add -l` 此刻为空，密钥是按
+`~/.ssh/config` 的 `IdentityFile` 直接取的）＝一次连接侧抖动，不是权限变化，也没有重复提交。

@@ -1152,7 +1152,12 @@
 >   `parse_class` 空根名守卫＋t562/t563 两枚夹具）经 HEAD／bootstrap 两侧查证＝仓库里没有任何
 >   副本，故不丢弃，存成分支 `wip/739-745-parser-lambda`（提交 `93ba5a90`），四文件复原到 HEAD
 >   且逐文件核 md5，夹具移到 `/tmp/b10058/wip_fixtures/`；是否重新落地由 owner 决定。
->   下一步＝跑完窗口 9 的每批检查并把读数写回本节。
+>   下一步＝跑完窗口 9 的每批检查并把读数写回本节——已跑完（本笔之后）：
+>   `sample_gate.sh 10059` rc=0，① 差分抽样 294/294 一致（bad_case 0）、② python_style 41/41、
+>   ③ official 20/20、④ 语料 40/40 满数，被测件 md5 `2138df512720e1b368e78e2c0e31eced`。
+>   这一轮也补上了批次 10058 欠的抽样那一格（10058 有 `src/` 净改动却只跑了两个测试目标）。
+>   推送 `e35f5aae..0e9de52d cleanup -> cleanup`（首笔 `git push` 报 publickey 拒绝，
+>   原样重试成功，中间零仓库改动）。
 
 
 > - **#20006**——带 `// expect-abort:` 的用例在 AOT 二进制里打出桩消息后进程不收尾（应在 SIGABRT＝退出码 134
