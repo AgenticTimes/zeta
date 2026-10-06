@@ -1,0 +1,14 @@
+# @cat: numeric
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+a = 7
+b = 2
+print(a + b, a - b, a * b, a / b)
+print(a // b, a % b, a ** b, -a // b)
+print(2 ** 10, 10 % 3 == 1)
+#@@ zeta
+a = 7
+b = 2
+print(a + b, a - b, a * b, a / b)
+print(a // b, a % b, a ** b, -a // b)
+print(2 ** 10, 10 % 3 == 1)

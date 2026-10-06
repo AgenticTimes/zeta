@@ -1,0 +1,10 @@
+# @cat: control
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+def f(a, b=2, c=3):
+    return a + b + c
+print(f(1), f(1, 10), f(1, c=10), f(a=1, b=2, c=3))
+#@@ zeta
+def f(a, b=2, c=3):
+    return a + b + c
+print(f(1), f(1, 10), f(1, c=10), f(a=1, b=2, c=3))

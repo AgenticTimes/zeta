@@ -1,0 +1,6 @@
+# @cat: str
+# @note: 批次 10060 单构造探针（复合用例失败会掩住它，故单独入库；CPython 与 zetac 逐行一致）
+#@@ python
+print(1, 2, 3)
+#@@ zeta
+print(1, 2, 3)

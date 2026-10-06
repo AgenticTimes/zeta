@@ -1,0 +1,22 @@
+# @cat: control
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+class Res:
+    def __enter__(self):
+        print('enter')
+        return self
+    def __exit__(self, a, b, c):
+        print('exit')
+        return False
+with Res() as r:
+    print('body')
+#@@ zeta
+class Res:
+    def __enter__(self):
+        print('enter')
+        return self
+    def __exit__(self, a, b, c):
+        print('exit')
+        return False
+with Res() as r:
+    print('body')

@@ -1,0 +1,24 @@
+# @cat: control
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+for i in range(3):
+    if i == 5:
+        break
+else:
+    print('no break')
+n = 0
+while n < 2:
+    n += 1
+else:
+    print('while else', n)
+#@@ zeta
+for i in range(3):
+    if i == 5:
+        break
+else:
+    print('no break')
+n = 0
+while n < 2:
+    n += 1
+else:
+    print('while else', n)

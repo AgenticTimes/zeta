@@ -1,0 +1,10 @@
+# @cat: container
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+print([x * x for x in range(4)])
+print([x for x in range(10) if x % 2 == 0])
+print([[x * y for y in range(3)] for x in range(3)])
+#@@ zeta
+print([x * x for x in range(4)])
+print([x for x in range(10) if x % 2 == 0])
+print([[x * y for y in range(3)] for x in range(3)])

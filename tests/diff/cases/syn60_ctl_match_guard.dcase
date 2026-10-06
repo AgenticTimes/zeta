@@ -1,0 +1,22 @@
+# @cat: control
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+def go(n):
+    match n:
+        case x if x < 0:
+            return 'neg'
+        case x if x < 10:
+            return 'small'
+        case _:
+            return 'big'
+print(go(-1), go(5), go(50))
+#@@ zeta
+def go(n):
+    match n:
+        case x if x < 0:
+            return 'neg'
+        case x if x < 10:
+            return 'small'
+        case _:
+            return 'big'
+print(go(-1), go(5), go(50))

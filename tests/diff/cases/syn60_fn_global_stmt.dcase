@@ -1,0 +1,16 @@
+# @cat: control
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+g = 1
+def setg():
+    global g
+    g = 9
+setg()
+print(g)
+#@@ zeta
+g = 1
+def setg():
+    global g
+    g = 9
+setg()
+print(g)

@@ -1,0 +1,20 @@
+# @cat: control
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+out = []
+for i in range(6):
+    if i % 2 == 0:
+        continue
+    if i > 4:
+        break
+    out.append(i)
+print(out)
+#@@ zeta
+out = []
+for i in range(6):
+    if i % 2 == 0:
+        continue
+    if i > 4:
+        break
+    out.append(i)
+print(out)

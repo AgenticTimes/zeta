@@ -1,0 +1,16 @@
+# @cat: str
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+s = 'Hello World'
+print(s.upper(), s.lower(), s.title())
+print(s.split(), s.replace('o', '0'))
+print(s.startswith('He'), s.endswith('ld'), s.find('World'))
+print('  x  '.strip(), 'x'.center(5, '-'), 'abc'.count('a'))
+print(','.join(['a', 'b']))
+#@@ zeta
+s = 'Hello World'
+print(s.upper(), s.lower(), s.title())
+print(s.split(), s.replace('o', '0'))
+print(s.startswith('He'), s.endswith('ld'), s.find('World'))
+print('  x  '.strip(), 'x'.center(5, '-'), 'abc'.count('a'))
+print(','.join(['a', 'b']))

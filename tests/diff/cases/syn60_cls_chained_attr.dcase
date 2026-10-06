@@ -1,0 +1,22 @@
+# @cat: container
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+class Inner:
+    def __init__(self):
+        self.items = [1, 2]
+class Outer:
+    def __init__(self):
+        self.inner = Inner()
+o = Outer()
+print(o.inner.items, len(o.inner.items))
+print(o.inner.items[1])
+#@@ zeta
+class Inner:
+    def __init__(self):
+        self.items = [1, 2]
+class Outer:
+    def __init__(self):
+        self.inner = Inner()
+o = Outer()
+print(o.inner.items, len(o.inner.items))
+print(o.inner.items[1])

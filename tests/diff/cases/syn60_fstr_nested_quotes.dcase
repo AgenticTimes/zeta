@@ -1,0 +1,8 @@
+# @cat: str
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+d = {'k': 'v'}
+print(f"{d["k"]}")
+#@@ zeta
+d = {'k': 'v'}
+print(f"{d["k"]}")

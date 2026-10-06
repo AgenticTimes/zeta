@@ -1,0 +1,10 @@
+# @cat: numeric
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+ys = [1, 5, 2]
+print([y for y in ys if (c := y * 2) > 4])
+print(NL := 3)
+#@@ zeta
+ys = [1, 5, 2]
+print([y for y in ys if (c := y * 2) > 4])
+print(NL := 3)

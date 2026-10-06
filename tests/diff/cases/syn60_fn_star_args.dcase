@@ -1,0 +1,10 @@
+# @cat: control
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+def g(*args, **kwargs):
+    return len(args) + len(kwargs)
+print(g(1, 2), g(1, k=3))
+#@@ zeta
+def g(*args, **kwargs):
+    return len(args) + len(kwargs)
+print(g(1, 2), g(1, k=3))

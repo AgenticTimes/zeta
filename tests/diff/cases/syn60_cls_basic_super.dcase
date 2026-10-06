@@ -1,0 +1,28 @@
+# @cat: container
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+class A:
+    def __init__(self, n):
+        self.n = n
+    def show(self):
+        return 'A' + str(self.n)
+class B(A):
+    def __init__(self, n, k):
+        super().__init__(n)
+        self.k = k
+    def show(self):
+        return super().show() + 'B' + str(self.k)
+print(A(1).show(), B(2, 3).show())
+#@@ zeta
+class A:
+    def __init__(self, n):
+        self.n = n
+    def show(self):
+        return 'A' + str(self.n)
+class B(A):
+    def __init__(self, n, k):
+        super().__init__(n)
+        self.k = k
+    def show(self):
+        return super().show() + 'B' + str(self.k)
+print(A(1).show(), B(2, 3).show())

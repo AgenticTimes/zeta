@@ -1,0 +1,10 @@
+# @cat: truth
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+n = 7
+print('big' if n > 5 else 'small')
+print((1 if 0 else 2) + (3 if True else 4))
+#@@ zeta
+n = 7
+print('big' if n > 5 else 'small')
+print((1 if 0 else 2) + (3 if True else 4))

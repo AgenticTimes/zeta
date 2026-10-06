@@ -1,0 +1,10 @@
+# @cat: container
+# @note: 批次 10060 语法形态探针（CPython 与 zetac 逐行一致，两份同文）
+#@@ python
+s = 'abcdefg'
+print(s[1:4], s[:2], s[-3:], s[::2], s[::-1])
+print(s[-3:-1], s[10:], s[2:2])
+#@@ zeta
+s = 'abcdefg'
+print(s[1:4], s[:2], s[-3:], s[::2], s[::-1])
+print(s[-3:-1], s[10:], s[2:2])
