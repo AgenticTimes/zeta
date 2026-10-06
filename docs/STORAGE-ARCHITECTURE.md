@@ -75,6 +75,45 @@ MIR-gen 数据流追踪：每个函数体内，变量首次使用是否在赋值
 | S3 | UnboundLocal/缺名读 raise 接入 | 1 批 | 低 |
 | S4 | 轴 B M3 slice 2（标量装箱＋monotonic） | 2-3 批 | 高（ABI 面） |
 
+### S1 完成状态（批 1027 校正：主体已由历史批次落地，残量改列 S4）
+
+S1 的翻转主体**早已在库**：批 545 完成 py_entry 模块体 env-first 读（t425
+摘钉）、批 391 完成写侧镜像、批 967 完成 keyfn 特化副本 FuncAddr、批 998
+完成 del 墓碑 raise、批 1022 完成全表未缺名读 NameError。批 1027 补齐
+墓碑读的 NameError 消息本体（原裸 zeta_raise 只打 Unhandled exception）。
+
+批 1027 实测：t425 出 5 ✓；模块体/函数体 del 读回均打 NameError 并
+rc=1 ✓；try/except 捕获后继续执行 ✓。
+
+**三门控重新归类**（call_var.rs `env_first` 剩余闸门，不再是"待翻残量"）：
+
+| 门控 | 归类 | 依据 |
+|---|---|---|
+| loop_var_active | **语义必需，保留** | 循环期间槽是新值、env 是旧值（条目绑定是 Call 不走 391 镜像）；循环结束才镜像末值（call_flow.rs）。翻转反而错 |
+| Named 类实例 | S4 依赖 | env 单元往返丢"哪个构造调用造的我"（t464 双同类字段 transpose 实测）；typed cell 带出处后可翻 |
+| 槽类型≠cell 类型 | S4 依赖 | env 读按声明型回填，粗于模块体绑定即降级（tuple 元素型→DynamicArray(I64) 实测读垃圾）；typed cell 后可翻 |
+
+**S1 真正的未竟面**（登记 backlog，不属本批）：Named 全局被 del 后，
+模块体读回走 Named 门控拿旧槽实例而非 NameError——静态不可知名字会被
+del，需 typed cell 墓碑位（S4）才能既保 t464 出处又保 del 语义。
+
+### S2 完成状态（批 1028 落地，a7a0712b）
+
+编译期 defined-before-use 已实现：降低器降低函数体前预扫普通赋值目标
+（`body_assigned_names`），读侧命中且程序顺序未绑定 ⇒ 运行期抛错——
+函数内 UnboundLocalError、模块级 NameError（文案与 CPython 一致）。
+与 1022 的全表未命中判定互补：1022 盖"名字哪都没有"，本批盖"名字
+在本体有赋值但读在赋值前"（含与模块全局同名的局部遮蔽读，CPython
+判局部、zeta 此前静默回落读全局）。
+
+实测四面对齐 CPython：函数先读后赋抛错、已绑定读出值、条件真路径
+不误伤（保守判定不做分支合并，只按程序顺序）、For 目标先读抛错。
+门禁 rc=0（302/302＋50/50＋18/18＋40/40）。
+
+**刻意排除面**（发散在册，不扩大）：AssignOp 目标不收集——函数内
+`全局 += 1` 在 zeta 走 env 读改写（CPython 应 UnboundLocal）；Static
+标记（已提升模块级格）；闭包子 MirGen 自扫自的体。
+
 ## 5. 验证策略
 
 每步：差分 285＋python_style＋official＋语料 40/40＋金用例全绿。

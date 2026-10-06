@@ -33818,3 +33818,12 @@ S4 typed-cell 依赖。新登记：Named 全局 del 读回走旧槽（S4 墓碑�
 实测：del 读回（模块体/函数体）打 NameError＋rc=1；try/except 捕获
 后继续执行；t425 出 5。门禁 rc=0（284/284＋46/46＋27/27＋40/40）。
 并入 cleanup 滞留 3 笔（10061 旁路文档，ff6fb249）。
+
+## 批次 1028（2026-10-06）：S2 落地——编译期 defined-before-use（a7a0712b）
+
+降低前预扫 body_assigned_names（Assign/Let/IfLet/For 目标，递归分支
+体），读侧命中且程序顺序未绑定 ⇒ 抛错：函数内 UnboundLocalError、
+模块级 NameError（文案对齐 CPython）。与 1022 全表未命中判定互补，
+补"局部遮蔽全局先读"面。AssignOp/Static/容器目标刻意排除（宽松面
+在册）。闭包子 MirGen 自扫。单测 269/269；门禁 rc=0（302/302＋
+50/50＋18/18＋40/40）；t425/delcatch 无回归。设计文档 §S2 状态已更。
