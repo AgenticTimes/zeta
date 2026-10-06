@@ -19,8 +19,8 @@
 | A | 9 | 解析器不认该写法，把该行之后整段程序丢掉 | `src/frontend/parser/*` | 主车道在制面，动身前要报备 | 第 3、6、7、15 批 |
 | B | 3 | 运行期明确报"这个方法名编译器不认识" | `src/middle/mir/gen/call_set.rs`／`call_dispatch.rs` | B2 不要；B1/B3 要（`runtime/*.c`） | 第 2、11、13 批 |
 | C | 16 | 认了，但值或呈现不对（静默错，退出码 0） | `call_print.rs`、`gen.rs`、`stmt_assign.rs`、`call_field.rs` | 打印链要（`call_print.rs`） | 第 4–14 批（按链走，见 §4） |
-| D | 3 | 跑出的二进制停住，`kill -9` 也收不掉——**D2 已读到链（arity 缺陷），D1/D3 挂死点未定位** | D2：`call_num.rs:287`；D1：`py_zip`；D3：未定 | D2 不要；D1/D3 的改动候选要 | 第 10 批（10a 零授权可提前） |
-| M-A0 | 1 | 判定口径：解析失败看起来像"通过" | `tools/diff_test.py` | 不要 | **第 1 批** |
+| D | 3 | 跑出的二进制停住，`kill -9` 也收不掉——**D2 的少发参数已由批次 10063 改掉发射路（改后 `iso5/sum_gen.z` 打出 `0` 并干净退出，值仍错）；D1/D3 挂死点未定位** | D2：`call_num.rs:276`（实际改在 `sum_seq_of` 的兜底支，见 §5 末）；D1：`py_zip`；D3：未定 | D2 不要；D1/D3 的改动候选要 | 第 10 批（10a＝批次 10063 已落，10b 未做） |
+| M-A0 | 1 | 判定口径：解析失败看起来像"通过"——**批次 10063 已落**：新增 `degrade` 判定，编译 stderr 命中 W1002／W1003／W1004／W1010 即点名、不再跑二进制 | `tools/diff_test.py:80-90`（码表＋点名函数）、`:181`（接进 `run_zeta`） | 不要 | **第 1 批（已落）** |
 
 四组不是四个独立问题：C 组 16 条实际聚成 6 条链（§4）；D 组 3 条本文读了三条 MIR，
 **是三条不同的链**——D2 已经读到发射点少发一个参数（§5），D1/D3 的挂死点仍未定位。
@@ -54,8 +54,16 @@ A 组 9 条彼此独立（都是解析表少一项）。
 3. 产出的二进制能跑、退出码 **0**、stdout **0 字节**。
 
 也就是说"这个语法不支持"在只看退出码和 stdout 的口径下**看起来像通过**。站点：
-`src/main.rs:466-502`（`ensure_fully_parsed`；默认警告、`ZETA_STRICT_PARSE` 才致命，
+`src/main.rs:466-503`（`ensure_fully_parsed`；默认警告、`ZETA_STRICT_PARSE` 才致命，
 注释里写明理由：官方套件 11 个文件有不可解析尾部，直接改成致命会把 194/194 翻红）。
+
+**批次 10063 部分改掉这一条**：差分判定器 `tools/diff_test.py` 现在扫编译 stderr，
+命中 W1002／W1003／W1004／W1010 任一条即判 `degrade` 并点名，不再跑二进制、
+也不再按"一致"记账。实测 `--only syn60b` 42 枚中 2 枚翻成点名
+（`syn60b_gen_simple`、`syn60b_gen_two_yield`，都是 W1004），这 2 枚本来就不在
+2,846 条在册基线里；**在册 2,845 条 `match` 里还有多少会翻成 `degrade`＝未测**
+（要全跑一遍，见 §8 末行）。编译器本身这三条现象没改——仍退出码 0、仍打警告、
+仍产出能跑的二进制；改的只是判定器不再把它记成一致。
 
 ### 1.3 本文行号的核对方式
 
@@ -240,11 +248,11 @@ grep -n 'zt_map_cap_ok' runtime/tokio_runtime_stub.c
 
 三条都有指名（`Unhandled exception: code=1`），不是静默错，因此优先级按"改动面 × 是否需授权"排。
 
-### B2 集合并集 `s.union(t)` —— **建议第一个真修**（零授权、零新增原语）
+### B2 集合并集 `s.union(t)` —— **建议第一个真修**（零授权、零新增原语）【批次 10063 已落】
 
 - **实测**：`dynamic receiver has no member [dynamic]i64::union`。
-- **事实**：C 原语**已经存在**——`runtime/py_additions.c:1872 py_vec_union(a, b, elem_is_str)`
-  （批次 879 落的产品），但全仓只有一个调用点：`|` 运算符
+- **事实**：C 原语**已经存在**——`runtime/py_additions.c:1885 py_vec_union(a, b, elem_is_str)`
+  （批次 879 落的产品；本文原引 `:1872`，批次 10063 复测时该定义已搬到 `:1885`），但全仓只有一个调用点：`|` 运算符
   `src/middle/mir/gen/call_binary.rs:784`。**没有任何一处把 `.union(` 当方法名接住**
   （`src/middle/mir/gen/` 里 grep `"union"` 只命中 `call_class.rs:102` 的单元测试）。
 - **站点（要照抄的配方）**：批次 807 修 `intersection` 的三处——
@@ -261,6 +269,25 @@ grep -n 'zt_map_cap_ok' runtime/tokio_runtime_stub.c
   本批**只做 `union`**：其余五条需要新 C 原语＝要授权，别混进这一批。
 - **验收**：`cargo test -p zetac --lib call_set` + `syn60b_set_union`（`s|t` 与 `s.union(t)` 同文件，
   证明两条路读到同一个值）。
+- **落地实况（批次 10063，提交 `a77f010f`）**：上面"站点"三行是**改前**读数，改后当前位置＝
+  `call_set.rs:112-143`（守卫 `method` 条件扩成 `(method=="intersection" || method=="union")`、
+  纯函数面 `set_intersection_ok` 改名 `set_new_set_ok`、`func` 按方法名选
+  `py_vec_union`／`py_vec_intersect`），`call_class.rs:46` 写成
+  `"intersection" | "union" => CallClass::SetNewSet`（变体随语义改名，返回新句柄、不写回接收者），
+  `call_dispatch.rs:3339` 那道守卫跟着改名。
+  **与方案的三处不同**：
+  ① 没有另起一条同形臂，而是把 `intersection` 那条臂扩成按方法名选符号——两支的 C 签名同形
+  （都是 `(a, b, elem_is_str)`），多一条臂＝多一处守卫要同步维护。
+  ② 只改 `call_set.rs` 打不通：路由决定在分类器，`classify_call("union")` 返回 `Unknown`
+  时分发守卫根本进不了 `lower_set_family`（MIR 面留 `[dynamic]i64::union`＋运行期 `code=1`）。
+  所以实际改的是三个文件，方案只列了两处——**这是那份方案的低估，后来照抄配方的人要先看这条**。
+  ③ 验收夹具换了：用 `tests/python_style/t1063_set_union.z`（`add` 后 `union`，读结果长度与
+  三个成员归属，并断言两个接收者未被写回），没有造 `syn60b_set_union`。
+- **落地读数**：`cargo test -p zetac --lib 'mir::r#gen::call_'` 37/37；新夹具 harness PASS，
+  三侧核对＝CPython 三跑一致、改后二进制 rc=0 同值、改前二进制 rc=1 指名 `[dynamic]i64::union`。
+  **未测一项**：`s|t` 与 `s.union(t)` 同值这条对照在改后没有重取（改前只实拍 `|` 那条路能用）。
+  旧断言更正一处：`call_class.rs:108` 的 `unknown_stays_unknown` 原本把 `union` 列进
+  "不认识的名字"清单（现状锁），本批摘出并写明理由——不是弱化覆盖。
 
 ### B1 列表按下标删 `del xs[0]`
 
@@ -593,11 +620,28 @@ grep -n 'zt_map_cap_ok' runtime/tokio_runtime_stub.c
     **这条是三条里唯一本文能读完且缺陷可点名的**：少发的第二个参数 `n` 取调用约定的残值，
     而 `data` 此时是 `0` ⇒ 从地址 0 起按残值长度逐格读。
     发射点＝`src/middle/mir/gen/call_num.rs:287` 的
-    `(_, SumSeq::LegacyBare) => ("zeta_sum_n", false, None)`；同表 `SumSeq::Dynamic` 那支
+    `(_, SumSeq::LegacyBare) => ("zeta_sum_n", false, None)`（**改前读数**；批次 10063 后该行
+    搬到 `:276`，内容一字未动——改的是把标量槽喂进这一支的那个判定，见本节末"落地实况"）；
+    同表 `SumSeq::Dynamic` 那支
     用的是 1 参版 `zeta_sum_vec`（`:654`，`if (!data) return 0;` 自带空值保护，
     registry:488 在册）。
     **`zeta_sum_n` 在册（`pylib/registry.txt:513 X zeta_sum_n args=i64,i64 ret=i64`）
     ⇒ 这不是第 18 档猜签名，是发射点自己少发一个参数。**
+    **落地实况（批次 10063，提交 `6af0ebc5`）**：`lower_sum` 的类型槽判定抽成纯函数
+    `sum_seq_of`（`call_num.rs:291`），兜底支由 `LegacyBare` 改指 `SumSeq::Dynamic`
+    ⇒ 发出的实参个数与在册签名对齐。实测三读数：
+    ① `--dump-mir iso5/sum_gen.z` 与改前差**一行**（`zeta_sum_n` → `zeta_sum_vec`，
+    实参表不变）；
+    ② 该夹具运行**从挂死变成打出 `0` 并干净退出**（落盘 2 字节 `0\n`，`ps` 无残留进程；
+    改前那颗二进制仍在 `ps` 里以 `UE` 态挂着，pid 38815，本批复查还在）＝
+    §6 第 10 批 10a 的原验收"打出 `0`"成立，**值仍错**（CPython 实跑 `14`，
+    上游是 A9 的 `yield` 缺口——不许写成"D2 修完"）；
+    ③ 自建的无参生成器变体（`def gen(): yield 1/2/3` 后 `sum(gen())`）**改后仍挂死、
+    零输出**（2 次实测，`UNE` 收不掉）＝同族的另一条链没通，挂点未定位，
+    与本节 D1/D3 同档。
+    ④ 未动的形状：`Type::Array` 的非字面量长度仍走 `LegacyBare`（栈上数组没有动态
+    vec 的 header，按 header 读长度比按残值读更错）⇒ 那条**少发参数的路还在**，
+    本批未实测是否有程序走到。
   - **D3（`tuple([4,5])` 进多参数 `print`）**：发射只到 `zeta_dynarray_new` → `vec_push`×2
     → `print_i64` / `print_str` / `py_json_dumps_vec_typed` ——**全都走带钳位的正规构造器**，
     本节原先写的"拼接/切片构造器给 D3 cap=5"**在本枚 MIR 里找不到支撑，作废**。
@@ -664,8 +708,13 @@ grep -n 'zt_map_cap_ok' runtime/tokio_runtime_stub.c
   `sum` 那支发的是 `zeta_sum_n(args:[3])`（1 参）。C 侧
   `py_builtin_max(int64_t vec)`（`py_additions.c:3331`）**正好是 1 参** ⇒ 少发参数没被发现；
   `zeta_sum_n(int64_t data, int64_t n)`（`:740`）是 2 参 ⇒ 少发一个就是把残值当长度用。
-  站点＝`src/middle/mir/gen/call_num.rs:287`
+  站点＝`src/middle/mir/gen/call_num.rs:287`（改前行号，现为 `:276`）
   `(_, SumSeq::LegacyBare) => ("zeta_sum_n", false, None)`。
+  **批次 10063 后已重取（本批复测）**：`max` 走的是另一个发射点
+  （`py_builtin_max`，本来就是 1 参、与 C 签名相符），本批只改了 `sum` 的形状判定，
+  所以 `max(生成器)=0` 这条**照旧**（值错的上游仍是 A9 的 `yield` 缺口）；
+  实测 `--dump-mir iso5/max_gen.z` 改后仍发 `py_builtin_max`（第 20 行），与 D2 那一行
+  `zeta_sum_vec` 互不影响。
   发射点选 `zeta_sum_n` 却填 `None` 长度参数，是这一行的自相矛盾，不是编译器的猜测。
 - **第 18 档（本组的上游风险，已记在 `docs/ABI.md:515/:521`）**：
   `src/backend/codegen/codegen.rs:3396`/`:3432`/`:3456`/`:3533` 对没有声明的符号按实参个数猜签名
@@ -698,7 +747,7 @@ grep -n 'zt_map_cap_ok' runtime/tokio_runtime_stub.c
 | 7 | **A5**：`parse_param_full` 提 `pub(crate)`，`lambda`/`\|x\|` 共用；默认值一路带到 `Closure` | `expr.rs:675-715`、`lower_closure.rs` | 报备 | `syn60b_lambda_default`（显式传参 + 用默认值两种调用） | 半修＝把静默错换成运行期报错，必须同批做完 |
 | 8 | **try 三缺口**：A6 `else` + C11 `finally` 每个出口发射 + C12 异常最小对象 | `stmt.rs:1401-1600`、`codegen.rs:3940-3964`、`py_additions.c:3539-3552` | **是**（`runtime/*.c`） | `syn60b_try_else`／`try_finally_return`／`except_as_name` | setjmp 帧与 `zeta_last_error` 是既有依赖方（`pylib` 与老用例要同批改，见记忆"修掉巧合会揭出依赖它的绿用例"） |
 | 9 | **链 1 第一步**：Tuple 打印去 arity==2 限制，改走已有 `zeta_tuple_repr` | `call_print.rs:544-555/681-683` | **是**（打印面） | `syn60b_tuple_print_arity`（1/2/3/混合）；`--bless` 前后差分成清单 | 呈现改动会成批换期望输出，**不许静默删用例** |
-| 10 | **D 组拆两步。10a（零授权、可插到第 3 批位置做）**：D2 的 arity 正修＝`call_num.rs:287` 的 `SumSeq::LegacyBare` 改指 1 参版 `zeta_sum_vec`。10b（要授权）：在遗留挂死进程上取栈，把 D1/D3 的三档候选分开 → 按结果择一：`py_zip` 补钳位 **或** `zeta_dyn_getitem` 改调已有的 `zt_dyn_vec_hdr` **或** 收窄 `zt_dyn_is_text` 的读探针 | 10a：`src/middle/mir/gen/call_num.rs:287`（纯 Rust 发射侧）。10b：取栈不改仓库；改动候选 `py_additions.c:1050-1056/5116-5137/33-35` | 10a 不要；10b 的改动候选要 | 10a 验收＝D2 从挂死变成打出 `0`（**此数为预期、未实测**；**值仍错，CPython 是 `14`；不许写成"D2 修完"——A9 的 `yield` 缺口在上游**）＋ `cargo test -p zetac --lib gen` 全绿；10b 验收＝读数能落在三档中的某一档并写进 §5 | 10a：`LegacyBare` 的语义是不是真要 1 参版要逐条读同表四支；10b：分配大小必须与 cap 同步、938 个 `zeta_dyn_getitem` 调用点的影响面 |
+| 10 | **D 组拆两步。10a（零授权、可插到第 3 批位置做）【批次 10063 已落，提交 `6af0ebc5`】**：D2 的 arity 正修＝`call_num.rs:287` 的 `SumSeq::LegacyBare` 改指 1 参版 `zeta_sum_vec`。**落地与原方案不同**：`LegacyBare` 那一行一字未动（现 `:276`），改的是把标量槽喂进那一行的判定——抽成纯函数 `sum_seq_of`（`:291`），兜底支改指 `SumSeq::Dynamic`；`Type::Array` 非字面量长度仍走 `LegacyBare`，那条少发参数的路还在（未实测有无程序走到）。10b（要授权）：在遗留挂死进程上取栈，把 D1/D3 的三档候选分开 → 按结果择一：`py_zip` 补钳位 **或** `zeta_dyn_getitem` 改调已有的 `zt_dyn_vec_hdr` **或** 收窄 `zt_dyn_is_text` 的读探针 | 10a：`src/middle/mir/gen/call_num.rs`（纯 Rust 发射侧；改后位置 `:276` 与 `:291`）。10b：取栈不改仓库；改动候选 `py_additions.c:1050-1056/5116-5137/33-35` | 10a 不要；10b 的改动候选要 | 10a 验收＝D2 从挂死变成打出 `0`（**批次 10063 实测成立**：`iso5/sum_gen.z` 落盘 2 字节 `0\n`、干净退出、无残留进程，改前那颗仍在 `ps` 里 `UE` 态挂着 pid 38815；**值仍错，CPython 实跑 `14`；不许写成"D2 修完"——A9 的 `yield` 缺口在上游**）＋ 单元测试全绿。**这条验收要改口径**：`cargo test -p zetac --lib gen` 那个过滤器名打不到任何测试（`gen` 是 Rust 关键字，模块路径得写 `r#gen`；实测本树 `--lib gen` 跑 0 条、`--lib 'mir::r#gen::call_'` 37/37、`--lib` 全量 272/272）。10b 验收＝读数能落在三档中的某一档并写进 §5 | 10a：`LegacyBare` 的语义是不是真要 1 参版要逐条读同表四支；10b：分配大小必须与 cap 同步、938 个 `zeta_dyn_getitem` 调用点的影响面 |
 | 11 | **B1**：`py_vec_delitem` + 列表臂 + registry | `py_additions.c`、`call_dispatch.rs:5772-5795` | **是** | `syn60b_del_index`（首/尾/中）+ 越界负向 | 与 D 组同文件，别同一批动两处运行期 |
 | 12 | **链 3 小步**：`is 类型名` 折成 `isinstance` | `expr.rs:2507-2509`、`call_dispatch.rs:2171` | 否 | `syn60b_type_is_int`（五型 + 同一性负向） | `x is y` 与 `x is int` 的守卫表 |
 | 13 | **B3 编译侧**：`sorted(key=…)` 形参按元素型定型，使元组下标走 `stack_array_get` | `call_builtin.rs:383/722-723`、`call_subscript.rs:149-224`、`lower_closure.rs` | 否 | `syn60b_sorted_key_tuple` | 与 10001/813 同族：目的槽定型要一路核到运行期读数 |
@@ -737,15 +786,16 @@ grep -n 'zt_map_cap_ok' runtime/tokio_runtime_stub.c
 | C15 | 单构造绿、复合形态得 `0` | 触发条件与 `nonlocal` 站点 | 同 C8 的二分法；先 grep `nonlocal` 在 `src/frontend`/`src/middle` 的落点 |
 | C10 后半 | 读写两侧不对称已确认（`stmt_assign.rs:14-26/436-443` vs `call_field.rs:54-64`） | `@staticmethod` 返回 str 打成地址 | 单独一枚夹具（只调静态方法并打印返回值），走链 1 的打印面还是类属性面要先分清 |
 | D1／D3 挂死点 | 已证：D1 链上有绕过钳位的 `py_zip:1056`（cap=2）；D3 链上**没有**短头构造点（MIR 只发 `zeta_dynarray_new`＋`vec_push`＋`py_json_dumps_vec_typed`）；两者 `run.err` 均 0 字节 ⇒ 挂死前没打运行期诊断 | **挂死点本身**。"短 vec 漏进 `map_get` 自旋"这条推测已被 §5 反证（`map_resolve` 出口的形状闸门会先点名抛停，实拍见 `bi_sorted_key.run.err`）；#20006 是否同一个因也未证；机器上 `~/Library/Logs/DiagnosticReports/`（817 份）**没有**这 8 个挂死二进制的 `.ips` ⇒ 也不能默认"崩在崩溃报告路径上" | 在**已存在的挂死 pid** 上 `sample`/`lldb -p … bt -all`（零新风险）；不要在改前重跑会挂死的夹具 |
-| D2 挂死链（本文已读完） | MIR 实拍：`seq` 返回 `IntLit(0)`（`yield` 被丢，W1004）→ `zeta_sum_n` 只发 1 个实参、在册签名要 2 个 ⇒ `data=0`、`n=`残值 | 残值 `n` 具体多大、是否真读到未映射页 ⇒ 只有取栈/`lldb` 能定；A9 的 `yield` 缺口是上游独立一条 | 10a 改指 `zeta_sum_vec` 后重跑：从挂死变打 `0`＝链已通、值仍错（不许写成修完；此读数为预期、未实测） |
+| D2 挂死链（本文已读完） | MIR 实拍：`seq` 返回 `IntLit(0)`（`yield` 被丢，W1004）→ `zeta_sum_n` 只发 1 个实参、在册签名要 2 个 ⇒ `data=0`、`n=`残值 | 残值 `n` 具体多大、是否真读到未映射页 ⇒ 只有取栈/`lldb` 能定；A9 的 `yield` 缺口是上游独立一条 | **已做＝批次 10063 10a**：改指 `zeta_sum_vec` 后实测 `iso5/sum_gen.z` 从挂死变打 `0` 并干净退出（落盘 2 字节，无残留进程）⇒ 链已通、值仍错（CPython `14`，不许写成修完）。**新开一项**：无参生成器变体 `def gen(): yield 1/2/3` 后 `sum(gen())` 改后**仍挂死、零输出**（2 次实测，`UNE` 收不掉），挂点未定位，与 D1/D3 同档 |
 | B3 根修 | 元组无独立值类型（`call_expr_lit.rs:326-368`）、`zeta_dyn_getitem` 认不出栈数组（`:5116-5137`） | 给元组 GC 头会影响多少调用点 | `codegraph` 取 `zeta_dyn_getitem`/`map_get` 的调用点清单 + 语料 `--dump-mir` 里 `StackArray` 出现数（`nm` 核符号存在） |
-| `max(生成器)=0` | `call_num.rs:287` 发 1 参、`py_additions.c:740` 要 2 参（两侧都读到） | 少传的那个参数是否真在调用点缺失 | `--dump-mir` 取 `zeta_sum_n`/`zeta_max_n` 的 `args` 长度，与 C 签名逐条对照（这是第 18 档猜测签名的直接后果） |
+| `max(生成器)=0` | `py_builtin_max(int64_t vec)`（`py_additions.c:3331`）就是 1 参，发射点也发 1 参 ⇒ **少发参数不适用于 `max`**（本行原写"`call_num.rs:287` 发 1 参、`py_additions.c:740` 要 2 参"，那是 `sum` 那条链，`max` 是本文抄串了） | `max` 得 `0` 的因＝A9 的 `yield` 缺口，与 arity 无关；这一条本文未单独定位到发射点 | 批次 10063 实测：`--dump-mir iso5/max_gen.z` 改后仍发 `py_builtin_max`（第 20 行），与 `sum` 改后发 `zeta_sum_vec` 互不影响 |
+| `degrade` 判定的影响面 | `tools/diff_test.py` 自批次 10063 起把编译期 W1002／W1003／W1004／W1010 单列成 `degrade`；窗口 3 抽样 303/303 一致＝该窗口无用例翻面；`--only syn60b` 42 枚翻 2 枚（都在册基线之外） | **在册 2,845 条 `match` 里有多少会翻成 `degrade`＝未测**——即"基线里有多少条其实只编译了半截程序还跑出一致结果" | 全跑一遍 `python3 tools/diff_test.py`（3,026 枚），按 verdict 分组数 `degrade`；红了逐条看是不是真缺陷，别直接 `--bless` |
 
 ---
 
 ## 9. 这批测量本身的三条方法（写下来给后续批次复用）
 
-1. **单构造必须单独入库**：一次解析失败会丢掉**所在行之后的整段程序**（`main.rs:466-502`），
+1. **单构造必须单独入库**：一次解析失败会丢掉**所在行之后的整段程序**（`main.rs:466-503`），
    所以复合探针里"红"的构造，单独写可能是绿的。批次 10060 实测有 24 个这种形状
    （台账 `roadmap.md:33412`）。不拆开就会把"已支持"记成"不支持"，也会把缺口算小。
 2. **挂死风险的驱动写法**：`subprocess.run(timeout=…)` 会被不可中断态的进程钉死

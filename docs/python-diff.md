@@ -59,18 +59,25 @@ A9/B3/C16/D3 四条组，逐条给 `file:line`＋机制＋修法＋风险＋验�
 
 | 通道 | 现象 | 站点 |
 |---|---|---|
-| 解析截断 | 碰到第一个不认的构造就停，文件剩余部分丢掉；只打 `warning: [W1002] ... DROPPED from the program`，退出码 0 | `src/main.rs:466-500`；同一循环的另一侧 `src/frontend/parser/top_level.rs:2535-2562`；逐项跳过恢复（W1003）要 `ZETA_PARSE_RECOVER=1` 才开（`top_level.rs:2601`） |
-| 降级成 0 | 任何没有 lowering 路线的表达式打 `warning: [W1010] ... its slot reads 0`，槽写成 `IntLit(0)`＋`Type::I64` | `src/middle/mir/gen.rs:2356-2380` |
+| 解析截断 | 碰到第一个不认的构造就停，文件剩余部分丢掉；只打 `warning: [W1002] ... DROPPED from the program`，退出码 0 | `src/main.rs:466-503`；同一循环的另一侧 `src/frontend/parser/top_level.rs:2535-2562`；逐项跳过恢复（W1003）要 `ZETA_PARSE_RECOVER=1` 才开（`top_level.rs:2601`） |
+| 降级成 0 | 任何没有 lowering 路线的表达式打 `warning: [W1010] ... its slot reads 0`，槽写成 `IntLit(0)`＋`Type::I64` | `src/middle/mir/gen.rs:2448-2454` |
 | 臂体直接丢 | `try` 的第二个及以后的 `except` 臂体被丢弃，**连警告都没有**（`if handler.is_empty() { handler = hbody; }`）；`except ValueError` 的类型名解析后被扔掉，异常类型根本不过滤 | `src/frontend/parser/stmt.rs:1478-1480`、`stmt.rs:1460-1479` |
 
 同一族的其它静默点：装饰器整行吞（`top_level.rs:806-812`）、`del obj.attr` 写成 `Lit(0)`
-（`stmt.rs:975-980`）、`match` 臂解析失败就 `break` 丢掉后续臂（`expr.rs:3437-3444`）、
+（`stmt.rs:966-972`）、`match` 臂解析失败就 `break` 丢掉后续臂（`expr.rs:3437-3444`）、
 `__init__` 里白名单外的语句全丢（`top_level.rs:1348-1356`）、`*args` 上的注解丢弃
 （`top_level.rs:75-79`）。缓解项只有一处：`stmt.rs:775` 的 `warn_if_swallowed_prefix`。
 
-**为什么这条排最前**：差分工具 `tools/diff_test.py:521-523` 只在失败详情里附 W1002 文本，
-判定看的是 stdout——stdout 恰好一致就记通过。于是"某一族全绿"这个读数本身不完全可信
+**为什么这条排最前**：差分工具 `tools/diff_test.py:540-542`（本批写作时的行号）只在失败详情里
+附 W1002 文本，判定看的是 stdout——stdout 恰好一致就记通过。于是"某一族全绿"这个读数本身不完全可信
 （这是批次 10060 期间实测到的形状，具体有多少条落在这一档**未复测**）。
+
+**批次 10063 已把这一档接进判定**：`run_zeta` 在退出码之后先扫编译 stderr，命中
+W1002／W1003／W1004／W1010 任一条即返回新判定 `degrade` 并点名详情（码＋条数＋首行原文），
+不再跑二进制。实测 `--only syn60b` 42 枚翻出 2 枚（都是 W1004，且这两枚本来就不在
+2,846 条在册基线里）；窗口 3 抽样 303/303 一致＝该窗口没有用例翻面。
+**在册 `match` 2,845 条里还有多少会翻成 `degrade`＝未测**（要全跑一遍才知道），
+这一项已登进那份语法缺口文档的 §8 未证清单。
 
 ### 2.2 编译器自己没有错误通道，也没有崩溃兜底
 
@@ -119,7 +126,7 @@ A9/B3/C16/D3 四条组，逐条给 `file:line`＋机制＋修法＋风险＋验�
 |---|---|---|---|---|
 | 3.1 | 异常体系 | 类型不过滤、多臂丢弃、裸 `raise` 重抛【未找到证据】、无 Python 级 traceback（出错打 C `backtrace()`） | `stmt.rs:1478-1480`＋`py_additions.c:2029/2313/3288` | 【实测】＋【检索】 |
 | 3.2 | 迭代协议 | `yield` 无节点（W1004）；生成器表达式作实参被明确拒绝；多 `for` 子句的嵌套推导式语法只读一个 for＋一个 if；`iter` 只有 Rust trait 桩 | `src/frontend/parser/parser.rs:82-87`、`expr.rs:2372-2375`、`expr.rs:1175-1285` | 【检索】（`yield` 那条批次 10060 已实拍） |
-| 3.3 | 集合方法面 | `set` 只有 add／discard／remove／intersection（union／difference／symmetric_difference／issubset／issuperset／update 全无）；`tuple` 无 count／index；`frozenset` 只有类型名、无构造器与方法 | `src/middle/mir/gen/call_set.rs:156-161`【实测】；其余【检索】 | 混合 |
+| 3.3 | 集合方法面 | `set` 有 add／discard／remove／intersection／union（`union` 是批次 10063 接上的，走已有的 `py_vec_union`）；difference／symmetric_difference／issubset／issuperset／update 仍全无，且这五条在 `src/middle`、`runtime/*.c`、`pylib` 三处都查不到原语；`tuple` 无 count／index；`frozenset` 只有类型名、无构造器与方法 | `src/middle/mir/gen/call_set.rs:155-172`＋`call_class.rs:46`【实测】；其余【检索】 | 混合 |
 | 3.4 | 字符串与字面量 | 无 bytes 字面量；str 缺 encode／decode／casefold／translate／maketrans／format_map；f-string 格式说明符只对 f64 生效；`{x=}` 退化成字面量文本 | `expr.rs:1694-1716`、`call_str.rs:14-88`（约 50 个方法在册）、`expr.rs:1566-1580`、`:1572` | 【检索】 |
 | 3.5 | 内省函数 | setattr／hasattr／delattr／globals／locals／dir／vars／id／hash／input／eval／exec／iter／`frozenset` 构造器不在册；`getattr`／`next` 在 | 按 55 个常用 builtin 数，在册 38（`src/middle/mir/gen/call_*.rs` 派发表） | 【检索】，分母口径未复测 |
 | 3.6 | 标准库 | 29 个模块（`pylib/registry.txt` 的 `M` 行）。深度不够的：`json.loads` 是真实递归下降但结果是静态标签联合、任意对象序列化不支持；`re` 是 POSIX ERE 子集（flag 只有 IGNORECASE／MULTILINE，命名组【未找到证据】）；`asyncio` 无事件循环；`collections` 只有 Counter／defaultdict；`itertools` 4 项；`random` 6 项。完全不存在的：statistics／string／io／subprocess／socket | `registry.txt:316-377`、`tokio_runtime_stub.c:2093-2133/3227`、`registry:60` | 【检索】 |
@@ -187,6 +194,27 @@ Lock／Event／Semaphore／Timer／ThreadPoolExecutor；`fork` 在 `:922-943`）
    那份文档的表不回改（批次 10061 的记录已入库），更正登记在这里。
 2. 同一族：盘上 3,026 枚里有 **180 枚不在基线**（含批次 10060 入库的 42 枚 `syn60b_*`）。
    见 §1 表末两行。
+
+**批次 10063 的行号复绑**（并入主树 49 笔＋本批改动之后按最后一轮实跑取的位置；
+每条都是当场 `grep`/`sed` 实测，不是推算）：
+
+- `src/main.rs:466-500` → `466-503`（`ensure_fully_parsed`，W1002 那行在 `:501`；
+  `ZETA_STRICT_PARSE` 分支在 `:497`）。
+- `src/middle/mir/gen.rs:2356-2380` → `2448-2454`（W1010 告警＋`IntLit(0)`／`Type::I64` 两行）。
+- `tools/diff_test.py:521-523` → `540-542`（本批自己加的 19 行把它往后搬了）。
+- `stmt.rs:975-980` → `966-972`（`del obj.attr` 的 `Lit(0)` 兜底臂）。
+- `call_set.rs:156-161` → `155-172`（三个纯函数：`set_like_receiver` `:155`、
+  `set_mutation_ok` `:161`、`set_new_set_ok` `:171`；发射臂 `:112-143`）。
+- 复核未变：`mir.rs:154-279`（`MirStmt`）／`:282-342`（`MirExpr`）／`:345-348`（`SemiringOp`）、
+  `stmt.rs:1480`（`if handler.is_empty()`）、`top_level.rs:2601`（W1003）、
+  `top_level.rs:75-79`（`*args` 注解丢弃）、`call_binary.rs:784`（`|` 用 `py_vec_union`）、
+  `py_additions.c:654/740`、`registry.txt:488/513`。
+  另两处对得上但差一行：`parse_class` 入口实为 `top_level.rs:857`（§2.3 写 `:858`）；
+  "V1 does not model MRO" 那句原文在 `:861-866`，因为它跨行断在 `V1 does`／`not model MRO`，
+  按整串 `grep` 会以为这条引用是编的——**核对注释原文要按半个短语搜**。
+- **本批未复核**（留在【检索】档）：`top_level.rs:2535-2562`（按 `DROPPED` 字样在
+  `top_level.rs` 里 `grep` 不到，锚串可能本来就是错的）、`expr.rs:3437-3444`、
+  `py_additions.c:2029/2313/3288`、`codegen.rs:6409`/`:7692`、`jit.rs:113`。
 
 **仍待复测**（本文件里所有【检索】标记的来源，逐条待复跑）：
 
