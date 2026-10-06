@@ -348,12 +348,50 @@ impl MirGen {
                 };
                 self.exprs.insert(id, MirExpr::IntLit(val));
                 self.type_map.insert(id, Type::I64);
+            } else if self.repl_mode {
+                // REPL：宽容保持（交互面不中断），原样造槽。
+                self.warn_undeclared(name);
+                self.exprs.insert(id, MirExpr::Var(id));
+                self.type_map.insert(id, Type::I64);
+            } else if self.is_undefined_name_read(name) {
+                // 批 1022：全表未命中（排除清单见谓词）＝编译期可证未定义
+                // ⇒ 运行期 NameError（CPython 语义；此前静默造槽读 0）。
+                self.warn_undeclared(name);
+                let name_id = self.next_id();
+                self.exprs
+                    .insert(name_id, MirExpr::StringLit(name.clone()));
+                self.type_map.insert(name_id, Type::Str);
+                self.stmts.push(MirStmt::VoidCall {
+                    func: "zeta_name_error".to_string(),
+                    args: vec![name_id],
+                });
+                self.exprs.insert(id, MirExpr::IntLit(0));
+                self.type_map.insert(id, Type::I64);
             } else {
-                // Regular variable
+                // 有表但形状未匹配的宽容尾（既有表面）。
                 self.warn_undeclared(name);
                 self.exprs.insert(id, MirExpr::Var(id));
                 self.type_map.insert(id, Type::I64);
             }
     id
+    }
+
+    /// 批 1022：全表未命中判定——名字不在 locals/module_globals/aliases/
+    /// consts/funcs/enums/types/py_user_modules/registry 模块名 任一表时
+    /// 才算"编译期可证未定义"。槽优先/env 镜像/import 绑定名不经过此
+    /// 判定（998 墓碑只盖 del 面，本判定补"从未写入"的严格面）。
+    fn is_undefined_name_read(&self, name: &str) -> bool {
+        !self.name_to_id.contains_key(name)
+            && !self.module_globals.contains(name)
+            && !self.py_member_aliases.contains_key(name)
+            && !self.py_module_aliases.contains_key(name)
+            && !self.py_user_modules.contains(name)
+            && !self.global_consts.contains_key(name)
+            && !self.func_ret_types.contains_key(name)
+            && !self.type_decls.contains_key(name)
+            && !self.nonlocal_names.contains(name)
+            && !crate::middle::pylib::known_module_names()
+                .iter()
+                .any(|m| *m == name)
     }
 }
