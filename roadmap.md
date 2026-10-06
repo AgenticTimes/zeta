@@ -32993,3 +32993,19 @@ else-if＋常规调用尾巴）——臂体已薄，续拆价值转低；轴 D c
 留）；unified trait 可再并入 typecheck.rs；new_resolver 2,192 行仅
 InferContext 一个消费点——本体退役需 fallback 先切换（971 退役条件
 评估原话）。
+
+## 批次 1007（2026-10-06）：轴 G 收尾——list passthrough 槽修复＋verifier 常开（d409e7f4）
+
+1. **list() passthrough 未初始化槽**：len(list([...])) 内联形状 dest
+   零 store（NO_OPT 档实拍 0，O3 掩盖）——物化 Assign dest←src。
+   OPT_LEVEL 矩阵（opt_matrix.sh）修复前稳定翻转、修复后三连跑
+   flips=0/0/0。**矩阵意义澄清**：编译器 env 只分 0/非 0 两档，1/2/3
+   同走默认流水线；矩阵判定面＝O3 vs NO_OPT 两个代码生成域。
+2. **MIR verifier 常开**：979 观察模式转每编译必跑（轴 G 判据兑现），
+   语料 40/40 零 W0900。
+
+**验证**：门禁窗口 7 rc=0——差分 284/284、python_style 46/46、
+official 27/27、语料 40/40；库 265/265；六金用例全绿。
+
+**轴 G 判据余量**：ASan 夜航（基建 tools/asan_run.sh 在位，CI 化待
+裁定）；OPT 矩阵进 CI（工具在位，接 CI 待裁定）。
