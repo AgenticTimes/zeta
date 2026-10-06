@@ -2,6 +2,18 @@
 // Tests nested loops, conditionals, and complex control structures
 
 // Test 1: Nested while loops (for sieve algorithm)
+// expect: Test 1 (nested while):  138  expected: 138
+// expect: Test 2 (while with nested if):  343  expected: 343
+// expect: Test 3 (sieve-like condition):  5  expected: 5
+// expect: Test 4 (break/continue nested):  113  (complex)
+// expect: Test 5 (triple nested):  1476  (complex sum)
+// expect: Test 6 (control with functions):  90  expected: 90
+// expect: Test 7 (early returns):  500  expected: 500
+// expect: Test 8 (complex conditions):  15  expected: 15
+// expect: Test 9 (if-else chain):  191  expected: 191
+// expect: Test 10 (sieve simulation):  10  expected: 10
+// expect: ✅ ALL COMPLEX CONTROL FLOW TESTS PASSED
+
 fn test_nested_while_loops() -> u64 {
     let mut outer: u64 = 0
     let mut total: u64 = 0

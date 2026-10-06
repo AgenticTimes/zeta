@@ -2,6 +2,16 @@
 // Tests all while loop scenarios to verify compiler fixes work
 
 // Test 1: Basic while loop with increment
+// expect: Test 1 (basic while):  5  expected: 5
+// expect: Test 2 (while with array):  10  expected: 10
+// expect: Test 3 (while with break):  10  expected: 10
+// expect: Test 4 (while with continue):  25  expected: 25
+// expect: Test 5 (complex condition):  55  expected: 55
+// expect: Test 6 (empty while):  100  expected: 100
+// expect: Test 7 (while with function):  7  expected: 7
+// expect: Test 8 (nested while):  12  expected: 12
+// expect: ✅ ALL WHILE LOOP TESTS PASSED
+
 fn test_basic_while() -> u64 {
     let mut i: u64 = 0
     while i < 5 {

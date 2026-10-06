@@ -1,6 +1,14 @@
 // Comprehensive stability test for compiler
 // Tests array operations, const expressions, and control flow
 
+// expect: Starting compiler stability tests...
+// expect: Array bounds test passed
+// expect: Const expressions test passed
+// expect: Sum is positive
+// expect: Control flow test passed
+// expect: Memory operations test passed
+// expect: All stability tests passed!
+
 fn test_array_bounds() {
     // Test 1: Array creation with const size
     const SIZE: i32 = 10;
