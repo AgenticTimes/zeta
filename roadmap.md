@@ -33065,3 +33065,15 @@ python_style 44/44、official 13/13、语料 40/40。
 
 **integration_all_features 遗留**：rc=1（map_insert 非字典异常）＝
 运行期预存缺陷（compile-only 用例不计红），独立登记。
+
+## 批次 1013（2026-10-06）：待裁三项调研决策材料落稿（3b810c26）
+
+docs/RESEARCH-PENDING-2026-10.md：值表示三派（CPython 全装箱＋PEP 659
+特化路线 / JSC-LuaJIT NaN boxing / V8 标签指针）、容器元素策略格
+（V8 elements kinds／PyPy strategies 双验证的单向退化格）、渐进类型
+三语义（guarded/transient/monotonic）、mypyc-Cython AOT 先例——映射
+三项裁定建议：
+
+1. 轴 B：批准立项；M3 形态修订＝策略格＋monotonic 包装。
+2. NoneValue：机械前提已被 996 满足——批准小批实施。
+3. #36 并入轴 B M3；#26 已收口关闭。
