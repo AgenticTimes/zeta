@@ -72,6 +72,22 @@ RUN_TIMEOUT = 20
 # 链接器报缺符号的行形：`  "_host_str_find", referenced from:`（与 run_all.sh 的
 # 缺绑定登记同一口径：必须指名，否则"还没绑定"会冒充"编译器不支持"）。
 UNDEF_SYM_RE = re.compile(r'"_([A-Za-z0-9_]+)"')
+# 批次 10063（语法缺口方案表第 1 行）：这四条告警说的都是同一件事——
+# 编译成功了，但编出来的程序不是写进去的那个。W1002 解析截断、W1003 恢复时
+# 跳过一段、W1004 吞掉一个词、W1010 降级时把没有下落路线的 id 写成常量 0。
+# 此前只看退出码：rc=0 就继续比 stdout，于是这类用例能按"一致"记进基线，
+# 差分一致率把静默改写当成了通过（docs/python-syntax-gaps-2026-10-06.md §6 第 1 行）。
+SILENT_DEGRADE_CODES = ("W1002", "W1003", "W1004", "W1010")
+
+
+def degrade_detail(stderr: str) -> str:
+    """编译 stderr 里有静默改写告警 ⇒ 返回点名详情，否则空串。"""
+    hits = [ln for ln in (stderr or "").splitlines()
+            if any(f"[{c}]" in ln for c in SILENT_DEGRADE_CODES)]
+    if not hits:
+        return ""
+    codes = sorted({c for c in SILENT_DEGRADE_CODES if any(f"[{c}]" in ln for ln in hits)})
+    return f"静默改写告警 {','.join(codes)}（{len(hits)} 条）: {hits[0].strip()}"
 
 
 class BadCase(Exception):
@@ -162,6 +178,9 @@ def run_zeta(src: str, name: str, workdir: Path) -> tuple[str, list[str], str]:
         return "compile", [], "zetac 超时（>60s）"
     if c.returncode != 0:
         return "compile", [], compile_detail(c.stderr)
+    dg = degrade_detail(c.stderr)
+    if dg:
+        return "degrade", [], dg
     try:
         r = subprocess.run(
             [str(binp)], capture_output=True, text=True, timeout=RUN_TIMEOUT,
