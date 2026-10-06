@@ -1094,7 +1094,20 @@ int64_t py_sorted_vec_rev(int64_t vec, int64_t len, int64_t rev, int64_t elem_is
 int64_t py_map_items(int64_t map) {
     if (!map) return 0;
     map = map_resolve(map);
-    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("py_map_items", map);
+    // 批 1018（轴 B M3 slice 1）：JSON 单元（zj OBJ cell）到达 map 原语
+    // 时按 tag 解包迭代其载荷 map——单元是合法动态值（json.loads 产物
+    // 经 dict 存取），载荷即真 map。此前批 420 的 abort 是对 `-> dict`
+    // 注解谎言的 fail-loud；M3 语义下 OBJ 单元按 tag 分派，其余 kind
+    // （ARR 等）维持响亮。extern 出口在 tokio_runtime_stub.c。
+    if (zt_map_is_json_handle(map)) {
+        extern int64_t zj_kind_of(int64_t);
+        extern int64_t zj_payload_map(int64_t);
+        if (zj_kind_of(map) == 5 /* ZJ_OBJ */) {
+            map = map_resolve(zj_payload_map(map));
+        } else {
+            zt_map_json_mismatch("py_map_items", map);
+        }
+    }
     zt_map_ent* ents; int64_t n = zt_map_sorted(map, &ents);
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
     base[0] = n ? n : 1;
