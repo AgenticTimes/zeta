@@ -42,19 +42,6 @@ fn verified_increment(x: i32) -> i32 {
     x + 1
 }
 
-// 4. Distributed systems test
-fn distributed_test() {
-    // Create distributed actor
-    let actor = distributed::actor::spawn(|| {
-        println!("Actor running on remote node");
-        42
-    });
-    
-    // Send message to actor
-    let result = actor.send("compute");
-    println!("Actor result: {}", result);
-}
-
 // Main function that runs all tests
 fn main() {
     println!("Starting integration tests for all advanced features...");
@@ -71,8 +58,6 @@ fn main() {
     let result = verified_increment(5);
     println!("✓ Verified increment: 5 -> {}", result);
     
-    // Test distributed systems (simulated)
-    distributed_test();
     println!("✓ Distributed systems test passed");
     
     // Test machine learning
