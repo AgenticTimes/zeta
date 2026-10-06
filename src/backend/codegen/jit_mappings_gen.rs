@@ -108,6 +108,9 @@ pub const JIT_MAPPINGS: &[(&str, *const ())] = &[
     ("thread_spawn", crate::runtime::thread_::thread_spawn as *const ()),
     ("thread_join", crate::runtime::thread_::thread_join as *const ()),
     ("thread_sleep_ms", crate::runtime::thread_::thread_sleep_ms as *const ()),
+    ("optimal_iterations", crate::std::quantum::grovers_algorithm_optimal_iterations as *const ()),
+    ("success_probability", crate::std::quantum::grovers_algorithm_success_probability as *const ()),
+    ("factor", crate::std::quantum::shors_algorithm_factor as *const ()),
 ];
 
 /// Register static LLVM-name → Rust-host mappings for JIT mode.
