@@ -1094,7 +1094,20 @@ int64_t py_sorted_vec_rev(int64_t vec, int64_t len, int64_t rev, int64_t elem_is
 int64_t py_map_items(int64_t map) {
     if (!map) return 0;
     map = map_resolve(map);
-    if (zt_map_is_json_handle(map)) zt_map_json_mismatch("py_map_items", map);
+    // 批 1018（轴 B M3 slice 1）：JSON 单元（zj OBJ cell）到达 map 原语
+    // 时按 tag 解包迭代其载荷 map——单元是合法动态值（json.loads 产物
+    // 经 dict 存取），载荷即真 map。此前批 420 的 abort 是对 `-> dict`
+    // 注解谎言的 fail-loud；M3 语义下 OBJ 单元按 tag 分派，其余 kind
+    // （ARR 等）维持响亮。extern 出口在 tokio_runtime_stub.c。
+    if (zt_map_is_json_handle(map)) {
+        extern int64_t zj_kind_of(int64_t);
+        extern int64_t zj_payload_map(int64_t);
+        if (zj_kind_of(map) == 5 /* ZJ_OBJ */) {
+            map = map_resolve(zj_payload_map(map));
+        } else {
+            zt_map_json_mismatch("py_map_items", map);
+        }
+    }
     zt_map_ent* ents; int64_t n = zt_map_sorted(map, &ents);
     int64_t* base = (int64_t*)GC_malloc(16 + (size_t)(n ? n : 1) * 8);
     base[0] = n ? n : 1;
@@ -3700,6 +3713,26 @@ int64_t map_str_key(int64_t);
 int64_t map_has(int64_t, int64_t);
 int64_t zeta_map_pop_default(int64_t, int64_t, int64_t);
 
+// 批 1022：读【编译期可证未定义】的名字 ⇒ NameError（zeta_raise(1)，
+// try/except 可捕获）。MIR 层仅在名字不在 locals/module_globals/
+// aliases/consts/funcs/enums/types 任一表时才发此调用；槽优先/env 镜像
+// /import 绑定面均不经过此处（998 墓碑只覆盖 del 面，本函数补"从未
+// 写入"的严格面）。
+int64_t zeta_name_error(int64_t name_handle) {
+    fprintf(stderr, "NameError: name '%s' is not defined\n",
+            (char*)name_handle);
+    return zeta_raise(1);
+}
+
+// 批 1028：读【本函数体某处赋值但按程序顺序尚未绑定】的局部名 ⇒
+// UnboundLocalError（文案与 CPython 一致）。UnboundLocalError 是
+// NameError 的子类，try/except 同样可捕获——同为 zeta_raise(1)。
+int64_t zeta_unbound_local(int64_t name_handle) {
+    fprintf(stderr, "UnboundLocalError: local variable '%s' referenced before assignment\n",
+            (char*)name_handle);
+    return zeta_raise(1);
+}
+
 static int64_t g_env = 0;
 // 批 998：del 墓碑集合——被 zeta_env_del 删除的名字记入；env_get 读到
 // 墓碑名 ⇒ zeta_raise(1)（Python NameError 语义）。不设墓碑的缺名读
@@ -3718,10 +3751,12 @@ static int64_t env_map(void) {
 int64_t zeta_env_map_for_probe(void) { return env_map(); }
 int64_t zeta_env_get(int64_t name_handle) {
     int64_t key = map_str_key(name_handle);
-    // 批 998：读【被 del 删除】的名字 ⇒ zeta_raise(1)（try/except 可捕
+    // 批 998：读【被 del 删除】的名字 ⇒ NameError（try/except 可捕
     // 获，CPython NameError 语义）。从未写入的名字缺名读维持旧返 0
     // （import 绑定等合法先读后写面，见 g_del_set 注释）。
-    if (map_has(del_set(), key)) return zeta_raise(1);
+    // 批 1027：改走 zeta_name_error——原先裸 zeta_raise(1) 只打
+    // "Unhandled exception: code=1"，缺 NameError 消息本体。
+    if (map_has(del_set(), key)) return zeta_name_error(name_handle);
     int64_t r = map_get(env_map(), key);
     if (getenv("ZT_DEBUG_ENV")) fprintf(stderr, "[ENV] get \"%s\" -> %lld\n", (char*)name_handle, (long long)r);
     return r;

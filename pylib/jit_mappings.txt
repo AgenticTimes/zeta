@@ -104,3 +104,6 @@ process_output_status  crate::runtime::process::process_output_status
 thread_spawn  crate::runtime::thread_::thread_spawn
 thread_join  crate::runtime::thread_::thread_join
 thread_sleep_ms  crate::runtime::thread_::thread_sleep_ms
+optimal_iterations  crate::std::quantum::grovers_algorithm_optimal_iterations
+success_probability  crate::std::quantum::grovers_algorithm_success_probability
+factor  crate::std::quantum::shors_algorithm_factor

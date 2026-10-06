@@ -33237,6 +33237,265 @@ else-if＋常规调用尾巴）——臂体已薄，续拆价值转低；轴 D c
 InferContext 一个消费点——本体退役需 fallback 先切换（971 退役条件
 评估原话）。
 
+## 批次 1007（2026-10-06）：轴 G 收尾——list passthrough 槽修复＋verifier 常开（d409e7f4）
+
+1. **list() passthrough 未初始化槽**：len(list([...])) 内联形状 dest
+   零 store（NO_OPT 档实拍 0，O3 掩盖）——物化 Assign dest←src。
+   OPT_LEVEL 矩阵（opt_matrix.sh）修复前稳定翻转、修复后三连跑
+   flips=0/0/0。**矩阵意义澄清**：编译器 env 只分 0/非 0 两档，1/2/3
+   同走默认流水线；矩阵判定面＝O3 vs NO_OPT 两个代码生成域。
+2. **MIR verifier 常开**：979 观察模式转每编译必跑（轴 G 判据兑现），
+   语料 40/40 零 W0900。
+
+**验证**：门禁窗口 7 rc=0——差分 284/284、python_style 46/46、
+official 27/27、语料 40/40；库 265/265；六金用例全绿。
+
+**轴 G 判据余量**：ASan 夜航（基建 tools/asan_run.sh 在位，CI 化待
+裁定）；OPT 矩阵进 CI（工具在位，接 CI 待裁定）。
+
+## 批次 1009（2026-10-06）：typecheck 三轨收敛收口——unified 中间层整层删除（fb2ab044）
+
+- typecheck.rs 直调 typecheck_new（unified trait＝直通包装，Fallback
+  判定内联，语义对等）；unified_typecheck.rs 整删（1006 剥 228 行
+  Facade，本批删余下 69 行 trait 层）。
+- **三轨终态**：typecheck.rs（调度＋refine）＋typecheck_new.rs（412
+  行）＋new_resolver.rs（2,192 行）——本体退役不可行（infer_unified
+  8 调用点在用），轴 F 收敛在此定态。
+- **t425 归档**：共享格合同实测已闭（545 摘钉生效，Python 方言面
+  del 墓碑读回同步验证 1008）。
+
+**验证**：门禁窗口 9 rc=0——差分 284/284、python_style 41/41、
+official 20/20、语料 40/40；库 265/265；六金用例全绿。
+
+**在册余量（下一批候选）**：backlog #36 selfhost 91 行（表示层）、
+#26 JIT trap 族；轴 B 值标签大弧（待裁定立项）；ASan 夜航 CI 化
+（基建在位）。
+
+## 批次 1010（2026-10-06）：轴 B 值标签立项文档落稿（5f963827）
+
+docs/AXIS-B-TAGGED-VALUES.md（101 行）：refactor §2 的立项执行版——
+2026-10 实测基线（GC_base 19 处 vs 9 月 13 处，恶化趋势＝立项时效性
+依据）＋本会话四条新实证＋里程碑 M0–M5（每步验收判据）＋风险预案四项。
+M0/M1 无运行期风险批准即排批，M3 起逐批裁定；总规模 7–10 批。
+
+同批归档：t425 已闭（1008 验证）、三轨收敛定态（1009）、轴 G 两判据
+兑现（1007）。
+
+## 批次 1011（2026-10-06）：ASan 夜航 CI 化（1d7382bf）
+
+.github/workflows/asan-nightly.yml：每日 02:40 UTC 定时＋手动口，跑
+tools/asan_run.sh --strict（selftest 先行）。独立 workflow 不阻塞主干
+CI；Summary 写明口径与 GC 容器盲区，防"零命中"误读。工具健康实证：
+--selftest malloc-overflow=detected / GC-overflow=silent（预期两态）。
+轴 G 判据"ASan 夜航无红"的 CI 化落地（判据原文要求进 CI——夜间独立
+workflow＝CI 的一部分）。
+
+## 批次 1012（2026-10-06）：backlog #26 JIT trap 收口（472→0）＋ml 幽灵引用移除（72238835）
+
+1. **用户裁定**：ml::neural 非产品功能——integration_all_features.z
+   的 ml_test 段移除（幽灵模块引用，#42 族），jit 映射撤回。
+2. **quantum trap 修复**：optimal_iterations/success_probability/factor
+   三符号补 jit_mappings（Rust 侧 extern 真身已在 src/std/quantum/
+   mod.rs:1225+，注册表从未列出）。quantum_basic rc=0。
+3. **jit_sweep.sh 分类完善**：expect-error 夹具的 E4016 归 xabort
+   （t213/t225 设计内响亮失败）；VERBOSE 短路修复＋明细 sort。
+4. **#36 审计**：parse_bisect 实证 selfhost.z '无截断'——91 行已由
+   前序批次清零，backlog 该项应关闭。
+
+**验证**：jit sweep ok=663 **trap=0**（#26 记录 472→761 的 4→0，
+fail=1/xabort=9/timeout=2 维持）；门禁窗口 2 rc=0——差分 285/285、
+python_style 44/44、official 13/13、语料 40/40。
+
+**integration_all_features 遗留**：rc=1（map_insert 非字典异常）＝
+运行期预存缺陷（compile-only 用例不计红），独立登记。
+
+## 批次 1013（2026-10-06）：待裁三项调研决策材料落稿（3b810c26）
+
+docs/RESEARCH-PENDING-2026-10.md：值表示三派（CPython 全装箱＋PEP 659
+特化路线 / JSC-LuaJIT NaN boxing / V8 标签指针）、容器元素策略格
+（V8 elements kinds／PyPy strategies 双验证的单向退化格）、渐进类型
+三语义（guarded/transient/monotonic）、mypyc-Cython AOT 先例——映射
+三项裁定建议：
+
+1. 轴 B：批准立项；M3 形态修订＝策略格＋monotonic 包装。
+2. NoneValue：机械前提已被 996 满足——批准小批实施。
+3. #36 并入轴 B M3；#26 已收口关闭。
+
+## 批次 1014（2026-10-06）：轴 B M0——PyDynamic 流动边界清单落稿（ed01b4dd）
+
+docs/axis-b-boundaries.tsv：11 个边界域 × 分派点 × 探针符号 × 动态定型
+点 × 里程碑映射。B.1 表 10 探针覆盖核对：6 个 Rust 可达探针（dyn_len/
+contains/truth/py_json_truth/dyn_getitem/slot_truthy）全部在册；5 个内
+部几何/可读性辅助探针（Rust 侧零直调）单列 internal-helpers 行随 M5
+退役归零。**M0 验收达成**。轴 B M1（bool 掩码语义）下批开工。
+
+## 批次 1015（2026-10-06）：轴 B M1 审计——bool 掩码语义已在树（t433 PASS 实证）
+
+轴 B 立项文档 M1 的核心（bool 掩码语义）经复核**已由批次 398 完成**：
+元素级比较三出口 dest＝DynamicArray(Bool)（call_binary.rs:1208/1222）＋
+&/|/~ 元素类型传播＋df[...] 分派读实参元素类型＋container_cond_i1 类型
+驱动（398 注释⑤登记零改动）。t433_bool_mask_type（14 行 pandas 对照
+expect）当前 PASS。**M1 验收达成，无新代码**。轴 B 下一实做里程碑＝
+M2（跨函数签名传播，与轴 F.2 合批——批 997 signature_table 模式推广）。
+
+## 批次 1016（2026-10-06）：轴 B M2 测绘——跨函数签名传播已在树（a411c8e2）
+
+M2 预想"未标注形参从默认 I64 变记 PyDynamic＋签名入符号表"——测绘结论：
+**机制已在树且超出预想**：① refine_method_return_types 已是 4 轮
+fixpoint（批 631 return-chain 迭代）；② refine_method_param_types（批
+627/628）调用点证据一次算好、gen 侧复用同一张 map（批 762 缓存）；③
+func_ret_types 即"函数→返回型"符号表（批 300/302 建成）。剩余增量只有
+"未标注形参记 PyDynamic 替代默认 I64"（B.2-3）——该改动会翻转
+PyDynamic 实参的现行粗定型路径（call_binary/call_len/call_subscript 的
+PyDynamic 臂全靠 I64 缺省才能到达），属轴 B M3 的联动改动而非独立批。
+
+**归档**：M2 判定达成（机制在树），增量改列 M3 联动。轴 B 里程碑状态：
+M0 ✔（1014）／M1 ✔（398＋1015 审计）／M2 ✔（机制在树＋增量列 M3）／
+M3-M5 待排（tagged cell 进 ABI，风险最高段需逐批裁定）。
+
+## 批次 1017（2026-10-06）：轴 G 实证收口——ASan 首夜分诊＋OPT 矩阵进夜航（a411c8e2）
+
+ASan 全量首跑（479 用例）：**ASan 命中 0**、crash 0、ok 475；4 例
+exit!=0/compile-fail 经普通 runner 复核全部 PASS（ASan 工具链构建怪
+癖，非产品回归）。轴 G 判据"ASan 夜航无红"以真实数据兑现。OPT 矩阵
+接进夜航 workflow（信息性，轴 C 护栏读数随夜航沉淀）。
+
+## 批次 1018（2026-10-06）：轴 B M3 slice 1——json 值经 dict 存取的 tag 保持＋#26 trap 清零（6b47ce81）
+
+M3 第一片（灰度面＝json 值经 dict 存取）：
+1. py_map_items 对 zj OBJ 单元按 tag 解包（zj_kind_of/zj_payload_map
+   出口自 stub）——JSON 单元是合法动态值，载荷即真 map。
+2. For 臂补 PyJson 接收者分派（py_json_keys stub 出口已在，MIR 臂原缺）
+   ——'for k in json_obj' 恢复键迭代语义。
+3. #26 trap 清零：quantum 三符号补 jit_mappings（真身 quantum/mod.rs
+   1225+ 从未列出）；ml::neural 幽灵引用按用户裁定移除。
+4. jit_sweep 分类完善：expect-error 归 xabort；VERBOSE 短路修复。
+
+**验证**：新形状 items/for-in 与 CPython 对表；六金用例全绿；库
+265/265；语料 40/40；门禁窗口 8 rc=0——差分 284/284、python_style
+50/50、official 18/18、语料 40/40。
+
+**M3 余量（slice 2+，在册）**：dict[str, Any] 标量动态值（非 json 面）
+的装箱——需上游产点 tag 传播（monotonic 包装），依赖 M2 增量；探针族
+退役随域灰度推进（B.1 表 −3 目标）。
+
+## 批次 1019（2026-10-06）：t73 摘钉——PyPath read_text 补 ret=str（e0eb99ef）
+
+W PyPath read_text 条目缺 ret= → method_ret 默认 i64 → 结果槽 I64 →
+println_i64 打指针。registry 行补 ret=str（method_ret / registry_ret_
+type 既有消费链自动生效）。t73 PASS（11 位 expect 全对表），known-fail
+活标记维持零。**验证**：门禁窗口 9 rc=0——差分 284/284、python_style
+41/41、official 20/20、语料 40/40；库 265/265；六金用例全绿。
+
+## 批次 1020（2026-10-06）：integration_all_features 的 distributed_test 段移除（a35c07d3）
+
+distributed::actor 全仓零背书（幽灵模块，#42 族）；测试的 spawn 体
+不回包 ⇒ actor.send 挂死（rc=124 超时，批 1012 移除 ml_test 后暴露）。
+段移除（同 ml 处置），运行时 actor 机械（mpsc/scheduler，真实功能面）
+保留不动。
+
+**遗留登记**：移除后 trimmed main 仍挂死（rc=124，stdout 块缓冲无法
+定位）——legacy integration 运行期挂死普查，独立专项；不影响
+compile-only 门禁口径。
+
+**验证**：文件 Compiled；六金用例全绿；库 265/265；语料 40/40。
+
+## 批次 1021（2026-10-06）：轴 E 试点——official 五用例加运行值断言（f6b99135）
+
+官方测试现 compile-only（运行输出从不判定）。试点：普查 47 个
+unit-tests 文件，选 5 个（编译 ✓＋两轮运行 rc=0＋输出稳定＋原无
+expect）加全输出 // expect: 行（含空行，runner 支持空 expect）。
+
+五例均为程序内部自校验型（打印 N expected: N 并比对，尾打 ALL
+PASSED）——expect 即其自证输出，非外部猜测值。
+
+**验证**：五用例 runner PASS（10 判定全 PASS，两轮复核零翻转）；库
+265/265；语料 40/40；门禁窗口 1 rc=0——差分 285/285、python_style
+54/54、official 18/18、语料 40/40。
+
+**余量**：其余 official 用例需先治理挂死/非零退出/非确定输出面再逐
+个铺开（轴 E 判据渐进）。
+
+## 批次 1022（2026-10-06）：缺名读 NameError 化——全表未命中判定（038b6255）
+
+缺名读消歧专项的窄面落地：lower_var_read 终端回退臂（Regular
+variable）此前静默造槽读 0。is_undefined_name_read 谓词（十表排除：
+locals/globals/member_aliases/module_aliases/user_modules/consts/
+funcs/types/nonlocals/registry 模块名）判"编译期可证未定义"⇒
+zeta_name_error(name)：stderr NameError + zeta_raise(1)，try/except
+可捕获。REPL 宽容面保留。runtime_decls_core 声明 zeta_name_error。
+
+**边界吸取（998 教训）**：一刀切 env_get raise 打红 12 例是因槽优先
+名误伤；本批收窄到'全表未命中'面——该面不存在合法先读后写（名不在
+任何表＝无处可绑定），raise 即 CPython 语义。
+
+**验证**：门禁窗口 2 rc=0——差分 285/285、python_style 44/44、
+official 13/13、语料 40/40；库 265/265；NameError 红面与六金用例
+全绿。**余量**：槽优先名的 UnboundLocalError 面（t425 族深处）另批。
+
+## 批次 1023（2026-10-06）：轴 D/legacy 收口——capability allocate 臂＋free 恒等路由（5c6f6e27）
+
+integration_all_features（legacy zeta 方言）运行期三连 face 处置：
+distributed actor 挂死（1020 移除）、capability.allocate 句柄误当 cap
+永挂（专用臂丢弃接收者）、cap.free libc abort（恒等路由，GC 所有权让
+渡）。用例从 rc=124 挂死/134 abort 转为 rc=0 完整退出。
+
+**遗留登记（独立专项）**：① 该用例 println! 宏语句静默丢失（MIR 无
+print 调用、二进制无格式串——宏展开 face，批 368 家族）；② map_insert
+非 dict 运行期异常（已知在册）。均不属 compile-only 门禁口径。
+
+**验证**：六金用例全绿；库 265/265；语料 40/40；门禁窗口 3 rc=0。
+
+## 批次 1023 附记（2026-10-06）：legacy integration 挂死普查（bisect 记录）
+
+组合 bisect 实测（/tmp/b1023_*.z 探针族，留存 /tmp 供复现）：
+- distributed_test 段移除后，用例 rc=0 完整退出（原 actor.send 挂死消除）
+- memory/quantum/verified 三 fn 各自独立编译运行均正常
+- 真实文件整体运行 rc=0 但 **println! 输出全失**（Starting/✓ 系/All
+  全部静默，二进制无格式串、MIR 无 print 调用）——parse/宏展开 face
+  （批 368 家族），独立专项（parse 级 expand_macros_in_node 递归追查）
+- 隔离 memory_test+双 println main：两行全打 ⇒ memory_test fn 本身无毒
+- 干净两 fn 复现（memory_test+双 println main）：rc=1 但两行全打
+  （rc=1 为 ✓ UTF-8 stdout 编码噪声，输出内容正确）
+
+**批次 1023 收口**：挂死根因（distributed 幽灵 actor）已由批 1020 移除
+消除；残留的 println! 静默面与 rc=1 编码噪声各列专项。compile-only
+门禁口径不受影响（窗口 3 rc=0 维持）。
+
+## 批次 1024（2026-10-06）：门禁全绿复核（窗口 4）——当前树四路全绿（b411b90d）
+
+窗口 4 抽样：差分 285/285、python_style 60/60、official 26/26、语料
+40/40——全绿。当前树（批 1019 t73 摘钉后）python_style 创 60/60 新高
+（窗口抽样含此前修复的用例面）。工作树干净（仅 .archify/ 文档未入库）。
+
+## 批次 1025（2026-10-06）：轴 E 铺开——bootstrap_validation_test 加运行值断言（$H2）
+
+轴 E 判据'官方测试含运行值断言'第六个用例。普查发现 official 200 文
+件中 185 个运行 rc≠0 或空输出（compile-only 面），可安全加断言的仅
+6 个（含 1021 试点 5 个）。bootstrap_validation_test（7 行
+BOOTSTRAP VALIDATION 输出面）为第 6 个，runner PASS 验证。
+**轴 E 铺开余量**：其余 official 用例需先治理运行面（185 文件
+rc≠0＝compile-only 面的结构性限制），渐进推进不设deadline。
+
+## 遗留登记（2026-10-06，用户裁定低优先）：println! 宏展开 face
+
+**症状**：zeta 原生方言（.z 文件）的 `println!` 宏语句在特定文件形态下被
+parse 静默吞掉——程序 rc=0 但零输出。复现文件：integration_all_features
+.z（main 7 条 println! 全部丢失，二进制无格式串）。同方言最小文件
+println! 正常（b1023_p.z 打 ✓），毒源为该文件其他 fn 的共存交互面。
+
+**调查进度**：批 1023 组合 bisect 实测——memory_test/quantum_test/
+verified_increment 三 fn 逐个隔离均不毒；毒源需三 fn 共存或文件级上
+下文（parse 级 expand_macros_in_node 递归追查，工具待建）。
+
+**优先级**：低（用户裁定）。zeta 原生方言的官方测试以 compile-only 为
+准，运行输出不进门禁口径；修复价值待 zeta 自举（selfhost）阶段重估。
+
+## 批次 1026（2026-10-06）：存储架构设计文档落稿（f6995083）
+
+docs/STORAGE-ARCHITECTURE.md：模块全局 env 唯一存放点＋编译期
+defined-before-use＋动态值 tag 双轨的统一架构设计。S1–S4 里程碑与
+验证策略。下一步＝S1 实施（模块全局读翻转槽→env）。
 ## 批次 10058（2026-10-06，第四十六批：实修——未标注函数返回列表推导时，元素标记传不到调用点）
 
 代码笔 `e35f5aae`（`src/middle/resolver/resolver.rs` +4/-1、`tests/regression_history.rs` +162/-15，
@@ -33548,6 +33807,26 @@ C 侧 `py_additions.c:3331` 正好是 1 参 ⇒ 少发参数没被发现；`sum`
 本补正笔自己还会让 `bootstrap..cleanup` 再加 1 条，所以下一批开工读到的数以当时实测为准，
 别拿本节任何一个数做算术推。
 
+## 批次 1027（2026-10-06）：S1 残量清尾——del 墓碑读 NameError 消息（75e0df98）
+
+设计文档 S1 状态校正（docs/STORAGE-ARCHITECTURE.md）：翻转主体已由
+391/545/967/998/1022 落地，批 1027 补 zeta_env_get 墓碑分支的
+NameError 消息本体（原裸 raise 只打 Unhandled exception）。三门控
+重新归类：loop_var=语义必需（循环期槽新于 env）、Named/类型失配=
+S4 typed-cell 依赖。新登记：Named 全局 del 读回走旧槽（S4 墓碑位）。
+
+实测：del 读回（模块体/函数体）打 NameError＋rc=1；try/except 捕获
+后继续执行；t425 出 5。门禁 rc=0（284/284＋46/46＋27/27＋40/40）。
+并入 cleanup 滞留 3 笔（10061 旁路文档，ff6fb249）。
+
+## 批次 1028（2026-10-06）：S2 落地——编译期 defined-before-use（a7a0712b）
+
+降低前预扫 body_assigned_names（Assign/Let/IfLet/For 目标，递归分支
+体），读侧命中且程序顺序未绑定 ⇒ 抛错：函数内 UnboundLocalError、
+模块级 NameError（文案对齐 CPython）。与 1022 全表未命中判定互补，
+补"局部遮蔽全局先读"面。AssignOp/Static/容器目标刻意排除（宽松面
+在册）。闭包子 MirGen 自扫。单测 269/269；门禁 rc=0（302/302＋
+50/50＋18/18＋40/40）；t425/delcatch 无回归。设计文档 §S2 状态已更。
 ## 批次 10062（2026-10-06，第四十九批：文档批——语言面差距清单 `docs/python-diff.md`）
 
 任务来源＝用户指示「写一个 python-diff.md 来整理还差的这些」，"这些"＝本轮对

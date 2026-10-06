@@ -231,6 +231,12 @@ impl MirGen {
             eprintln!("PROBE closure {} body stmts={}", closure_name,
                 match body { AstNode::Block { body } => body.len(), _ => 1 });
         }
+        // 批 1028：闭包体同样做 UnboundLocal 判定——先收集本体的普通
+        // 赋值目标（lambda/comprehension 体是表达式，无语句赋值，集为空）。
+        child.body_assigned_names.clear();
+        if let AstNode::Block { body: stmts } = body {
+            MirGen::collect_body_assigned_names(stmts, &mut child.body_assigned_names);
+        }
         // A hoisted FUNCTION body (the constructor synthesized for a class
         // defined inside a function) is a STATEMENT LIST, not an expression.
         // `lower_expr` on a Block dropped every statement, so the constructor

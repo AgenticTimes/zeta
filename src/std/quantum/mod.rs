@@ -1259,3 +1259,30 @@ pub extern "C" fn grovers_algorithm_search(
 
     unsafe { (*algorithm).search().unwrap_or(0) }
 }
+
+// 批 1012（backlog #26 JIT trap 收口）：Grovers 方法的 extern 出口——
+// quantum_basic.z 的 `optimal_iterations()` / `success_probability(n)`
+// 调用此前无宿主绑定 ⇒ JIT 填 trap（E4016）。f64 位模式按槽约定走
+// i64 位宽（to_bits/from_bits 与 zeta_sum_vec 等既有桥一致）。
+#[unsafe(no_mangle)]
+pub extern "C" fn grovers_algorithm_optimal_iterations(
+    algorithm: *const algorithms::GroversAlgorithm,
+) -> u64 {
+    if algorithm.is_null() {
+        return 0;
+    }
+    unsafe { (*algorithm).optimal_iterations() as u64 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn grovers_algorithm_success_probability(
+    algorithm: *const algorithms::GroversAlgorithm,
+    iterations_bits: u64,
+) -> u64 {
+    if algorithm.is_null() {
+        return 0;
+    }
+    let iterations = f64::from_bits(iterations_bits) as usize;
+    let prob = unsafe { (*algorithm).success_probability(iterations) };
+    prob.to_bits()
+}

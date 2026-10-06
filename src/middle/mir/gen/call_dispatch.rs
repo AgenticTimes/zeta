@@ -4710,6 +4710,32 @@ call, no NULL-handle dereference).",
                 return id;
             }
 
+            // 批 1023：capability.allocate 泛型面（::<T> turbofish）——
+            // 接收者是 capability 句柄而非数组，语义＝分配 arg 个元素的
+            // dynarray（丢弃接收者）。此前落 opaque 兜底按 arg_ids 全量
+            // 发射 ⇒ coerce 截断后 cap＝句柄（堆指针）⇒ GC_malloc+零循
+            // 环永挂（integration_all_features memory_test 实拍 rc=124）。
+            if receiver.is_some()
+                && method == "allocate"
+                && arg_ids.len() == 2
+                && !type_args.is_empty()
+            {
+                self.stmts.push(MirStmt::Call {
+                    func: "zeta_dynarray_new".to_string(),
+                    args: vec![arg_ids[1]],
+                    dest: id,
+                    type_args: vec![],
+                });
+                self.exprs.insert(id, MirExpr::Var(id));
+                let elem = match type_args.first() {
+                    Some(t) => Type::from_string(t),
+                    None => Type::PyDynamic,
+                };
+                self.type_map
+                    .insert(id, Type::DynamicArray(Box::new(elem)));
+                return id;
+            }
+
             let opaque_fallback: Option<(&str, &str)> = if receiver.is_some()
                 && !struct_has_method
                 // 批次 902（轴 F）：is_map 收敛到唯一判定（t 为 &Type，借用
@@ -4751,6 +4777,10 @@ call, no NULL-handle dereference).",
                     // handle. Identity never dereferences, so an unknown
                     // receiver cannot corrupt data.
                     ("tolist", 1) => Some(("zeta_identity", "vec")),
+                    // 批 1023：`cap.free(buf)` —— capability 句柄的 free 是
+                    // GC 所有权让渡（buf 由 GC 管理，libc free 会 abort）。
+                    // 恒等返回＝V1 语义（GC 退出回收，绝不提前释放）。
+                    ("free", 2) => Some(("zeta_identity", "vec")),
                     // PY-A: pandas-style chainables route through identity;
                     // ALL other unknown methods also chain by identity so
                     // real-world sources link. (Earlier strict `_ => None`

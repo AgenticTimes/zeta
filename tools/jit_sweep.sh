@@ -57,7 +57,11 @@ while [ "$w" -lt "$JOBS" ]; do
         0) tag=ok ;;
         139) tag=segv ;;
         124) tag=timeout ;;
-        *) if printf '%s' "$msg" | grep -q 'E4016'; then tag=trap
+        *) if printf '%s' "$msg" | grep -q 'E4016'; then
+             # 批 1012：夹具带 `// expect-error` ＝设计内响亮失败（链接缺
+             # 符号是测试本体）——JIT trap 与设计语义重合，归 xabort 档
+             # （t213/t225 实拍）。无标注的 E4016 才是 trap。
+             if grep -q '^// expect-error' "$f"; then tag=xabort; else tag=trap; fi
            else
              # 批次 768：夹具带 `// expect-abort: <串>` 且输出含该串＝设计内响亮中止，
              # 单列 xabort 档（判据口径与 run_one.sh 的 expect-abort 一致）。
@@ -73,7 +77,7 @@ done
 wait
 cat "$WORKD"/out_* >>"$WORK" 2>/dev/null
 
-[ "$VERBOSE" = 1 ] && cat "$WORK"
+if [ "$VERBOSE" = 1 ]; then sort "$WORK"; fi
 
 n() { awk -v t="$1" '$1==t{n++} END{print n+0}' "$WORK"; }
 counts="ok=$(n ok) trap=$(n trap) fail=$(n fail) xabort=$(n xabort) timeout=$(n timeout) segv=$(n segv)"

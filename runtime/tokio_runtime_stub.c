@@ -3055,6 +3055,8 @@ static int64_t zj_make(int64_t tag, int64_t payload) {
     return (int64_t)h;
 }
 static int64_t zj_tag(int64_t j) { return j ? ((int64_t*)j)[0] : ZJ_NULL; }
+int64_t zj_kind_of(int64_t j) { return zj_tag(j); }
+int64_t zj_payload_map(int64_t j) { return j ? ((int64_t*)j)[1] : 0; }
 static int64_t zj_payload(int64_t j) { return j ? ((int64_t*)j)[1] : 0; }
 
 static int64_t zj_vec_new(int64_t cap) {

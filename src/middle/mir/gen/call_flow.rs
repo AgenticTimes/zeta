@@ -166,6 +166,28 @@ impl MirGen {
                             );
                             pid
                         }
+                        // 批 1018（轴 B M3 slice 1）：PyJson 接收者（json 值
+                        // 经 dict 存取读回，槽型 Named("PyJson")）——迭代键
+                        // （py_json_keys 返回键向量，OBJ 载荷按 tag 解包）。
+                        else if self
+                            .type_map
+                            .get(&raw_id)
+                            .map_or(false, |t| matches!(t, Type::Named(n, _) if n == "PyJson"))
+                        {
+                            let kid = self.next_id();
+                            self.stmts.push(MirStmt::Call {
+                                func: "py_json_keys".to_string(),
+                                args: vec![raw_id],
+                                dest: kid,
+                                type_args: vec![],
+                            });
+                            self.exprs.insert(kid, MirExpr::Var(kid));
+                            self.type_map.insert(
+                                kid,
+                                Type::DynamicArray(Box::new(Type::Str)),
+                            );
+                            kid
+                        }
                         // 批次 901：收敛到 is_map 唯一判定（Named("dict") 幻影型已证）。
                         else if self.type_map.get(&raw_id).map_or(false, Type::is_map) {
                             let kid = self.next_id();

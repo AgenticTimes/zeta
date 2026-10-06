@@ -5,7 +5,6 @@
 //! Runs before MIR lowering. Clean, fast, and fully documented.
 
 use super::resolver::{Resolver, Type};
-use super::unified_typecheck::{TypeCheckResult, UnifiedTypeCheck};
 use crate::frontend::ast::AstNode;
 use crate::middle::ctfe::value::ConstValue;
 use crate::middle::passes::identity_verification::verify_identities;
@@ -38,44 +37,46 @@ impl Resolver {
         self.note_none_vars();
         self.method_param_refinements = pm;
 
-        // Use unified type checking interface
-        let typecheck_result = match self.typecheck_unified(asts) {
-            TypeCheckResult::Success(_) => {
-                // Unified type checking succeeded
-                true
-            }
-            TypeCheckResult::Failure(errors) => {
-                // Type checking failed with errors
-                let diag = crate::error_codes::diagnostic_from_code(
-                    "E2001",
-                    "Type checking failed".to_string(),
-                    None,
-                );
-                crate::diagnostics::emit(diag);
-                for error in &errors {
+        // 批 1009（三轨收敛收口）：直调 typecheck_new（原 unified trait
+        // 是它的直通包装），Fallback 逻辑（Mismatch → 失败；其余 → 旧轨
+        // check_node）内联——unified_typecheck.rs 整个删除。
+        use super::typecheck_new::NewTypeCheck;
+        let typecheck_result = match self.typecheck_new(asts) {
+            Ok(_) => true,
+            Err(errors) => {
+                let has_type_mismatch = errors
+                    .iter()
+                    .any(|e| matches!(e, crate::middle::types::UnifyError::Mismatch(_, _)));
+                if has_type_mismatch {
                     let diag = crate::error_codes::diagnostic_from_code(
                         "E2001",
-                        format!("  Type error: {}", error),
+                        "Type checking failed".to_string(),
                         None,
                     );
                     crate::diagnostics::emit(diag);
-                }
-                false
-            }
-            TypeCheckResult::Fallback => {
-                // Fallback to simple type checking
-                let diag = crate::diagnostics::Diagnostic::warning(
-                    "W0003",
-                    "Using fallback type checking".to_string(),
-                );
-                crate::diagnostics::emit(diag);
-                let mut ok = true;
-                for ast in asts {
-                    if !self.check_node(ast) {
-                        ok = false;
+                    for error in &errors {
+                        let diag = crate::error_codes::diagnostic_from_code(
+                            "E2001",
+                            format!("  Type error: {}", error),
+                            None,
+                        );
+                        crate::diagnostics::emit(diag);
                     }
+                    false
+                } else {
+                    let diag = crate::diagnostics::Diagnostic::warning(
+                        "W0003",
+                        "Using fallback type checking".to_string(),
+                    );
+                    crate::diagnostics::emit(diag);
+                    let mut ok = true;
+                    for ast in asts {
+                        if !self.check_node(ast) {
+                            ok = false;
+                        }
+                    }
+                    ok
                 }
-                ok
             }
         };
 
@@ -344,6 +345,13 @@ impl Resolver {
 
     /// Convert string type annotation to Type enum
     /// Uses unified type parsing interface
+    /// 批 1009：原 unified trait 的 parse_type_string（Result 版）——
+    /// trait 删除后内联为适配器，转发 typecheck_new 的解析（逐条对勘
+    /// 原 impl：Ok(self.string_to_type(s))）。
+    fn typecheck_parse_type_string(&self, s: &str) -> Result<Type, String> {
+        Ok(self.string_to_type(s))
+    }
+
     fn string_to_type(&self, s: &str) -> Type {
         // Batch 747 (#264): `**kwargs` star-param marker from the parser —
         // the slot holds an ordinary map handle, which is what `**name` is.
@@ -356,7 +364,7 @@ impl Resolver {
             return Type::DynamicArray(Box::new(Type::PyDynamic));
         }
         // Use the unified type parsing
-        match self.parse_type_string(s) {
+        match self.typecheck_parse_type_string(s) {
             Ok(ty) => ty,
             Err(err) => {
                 let diag = crate::error_codes::diagnostic_from_code(

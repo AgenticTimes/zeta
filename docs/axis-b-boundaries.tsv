@@ -1,0 +1,13 @@
+domain	dispatch_site	probe_symbol	dynamic_typing_site	milestone
+len	call_len.rs classify_len/LenRoute::DynLen	zeta_dyn_len (py_additions.c:5288)	call_len.rs:28/160 PyDynamic 实参粗定型	M3
+truth	codegen.rs:5330 py_not 分派；call_unary.rs	zeta_dyn_truth (py_additions.c:1984) + zt_slot_truthy(:1490)	codegen.rs:5330 PyDynamic→py_not	M3
+contains	call_binary.rs:154 in/contains 分派	zeta_dyn_contains (py_additions.c:5306)	call_binary.rs PyDynamic 粗定型	M3
+getitem	call_subscript.rs:235/269	zeta_dyn_getitem (py_additions.c:5115)	call_subscript.rs PyDynamic/I64 粗定型	M3
+json	call_print.rs / py_json_truth 分派	py_json_truth (py_additions.c:5458)	ZJ_* tagged cell 域（先例已 tag）	M4
+dict-values	call_dispatch.rs dict 值侧表(0-3)	map 侧表 + zeta_dyn_* 兜底	call_dispatch.rs:2302/2332/2372 NoneValue/map 粗定型	M3
+member-call	call_dispatch.rs:2723 untyped 接收者	py_getattr_dynamic + zeta_callN (395/996/1007 机械)	call_dispatch.rs PyDynamic 接收者	M4
+dataframe-cell	call_subscript.rs df[...] 三分派	几何探针族 (B.1 表)	call_subscript.rs 掩码/列名/索引粗定型	M1
+mask	gen 掩码粗定型点 + codegen container_cond_i1	zeta_dyn_truth 兜底	DynamicArray(I64) 冒充 Bool	M1
+cross-fn-param	签名表 (批 997 模式推广)	运行期 0 缺省	resolver 未标注形参默认 I64 (B.2-3)	M2
+unified-infer	typecheck.rs infer_unified (批 971/1006)	运行期 0 缺省	infer_unified → PyDynamic 传播面	M2
+internal-helpers	zt_dyn_is_map/zt_dyn_vec_hdr/zt_maybe_map/zt_maybe_vec/zt_c_readable（py_additions.c 内部几何/可读性探针，Rust 侧零直调）	zeta_dyn_* 各臂内部引用	由所属域退役带动（M3/M4 收尾时一并归零）	M5
