@@ -33085,3 +33085,34 @@ docs/axis-b-boundaries.tsv：11 个边界域 × 分派点 × 探针符号 × 动
 contains/truth/py_json_truth/dyn_getitem/slot_truthy）全部在册；5 个内
 部几何/可读性辅助探针（Rust 侧零直调）单列 internal-helpers 行随 M5
 退役归零。**M0 验收达成**。轴 B M1（bool 掩码语义）下批开工。
+
+## 批次 1015（2026-10-06）：轴 B M1 审计——bool 掩码语义已在树（t433 PASS 实证）
+
+轴 B 立项文档 M1 的核心（bool 掩码语义）经复核**已由批次 398 完成**：
+元素级比较三出口 dest＝DynamicArray(Bool)（call_binary.rs:1208/1222）＋
+&/|/~ 元素类型传播＋df[...] 分派读实参元素类型＋container_cond_i1 类型
+驱动（398 注释⑤登记零改动）。t433_bool_mask_type（14 行 pandas 对照
+expect）当前 PASS。**M1 验收达成，无新代码**。轴 B 下一实做里程碑＝
+M2（跨函数签名传播，与轴 F.2 合批——批 997 signature_table 模式推广）。
+
+## 批次 1016（2026-10-06）：轴 B M2 测绘——跨函数签名传播已在树（a411c8e2）
+
+M2 预想"未标注形参从默认 I64 变记 PyDynamic＋签名入符号表"——测绘结论：
+**机制已在树且超出预想**：① refine_method_return_types 已是 4 轮
+fixpoint（批 631 return-chain 迭代）；② refine_method_param_types（批
+627/628）调用点证据一次算好、gen 侧复用同一张 map（批 762 缓存）；③
+func_ret_types 即"函数→返回型"符号表（批 300/302 建成）。剩余增量只有
+"未标注形参记 PyDynamic 替代默认 I64"（B.2-3）——该改动会翻转
+PyDynamic 实参的现行粗定型路径（call_binary/call_len/call_subscript 的
+PyDynamic 臂全靠 I64 缺省才能到达），属轴 B M3 的联动改动而非独立批。
+
+**归档**：M2 判定达成（机制在树），增量改列 M3 联动。轴 B 里程碑状态：
+M0 ✔（1014）／M1 ✔（398＋1015 审计）／M2 ✔（机制在树＋增量列 M3）／
+M3-M5 待排（tagged cell 进 ABI，风险最高段需逐批裁定）。
+
+## 批次 1017（2026-10-06）：轴 G 实证收口——ASan 首夜分诊＋OPT 矩阵进夜航（a411c8e2）
+
+ASan 全量首跑（479 用例）：**ASan 命中 0**、crash 0、ok 475；4 例
+exit!=0/compile-fail 经普通 runner 复核全部 PASS（ASan 工具链构建怪
+癖，非产品回归）。轴 G 判据"ASan 夜航无红"以真实数据兑现。OPT 矩阵
+接进夜航 workflow（信息性，轴 C 护栏读数随夜航沉淀）。
