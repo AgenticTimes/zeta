@@ -33535,3 +33535,15 @@ C 侧 `py_additions.c:3331` 正好是 1 参 ⇒ 少发参数没被发现；`sum`
 3. 第一步仍按车道纪律：读 `cleanup..bootstrap` 决定要不要并主树——本批收尾实测
    `bootstrap..cleanup`＝13 条（含本批两笔）、`cleanup..bootstrap`＝20 条，
    本树内容已滞后 20 笔，**开代码批之前先并一次**。
+
+### 补正（收尾读数）
+
+第三部分第 3 条写的"`bootstrap..cleanup`＝13 条（含本批两笔）、`cleanup..bootstrap`＝20 条"
+不是收尾实测——那是落笔时的状态再加一次对笔数的推算。收尾实测＝
+`bootstrap..cleanup` **15** 条、`cleanup..bootstrap` **22** 条
+（`cleanup` HEAD `92dbea2a`、`bootstrap` HEAD `4a3521a9`）。
+
+差额里已经核实的一条＝本批是**三笔**而不是两笔（文档 `34e942d8`＋补正 `78a557f5`＋记录
+`92dbea2a`）。剩下的差额＝主树在同期又落了笔（`cleanup..bootstrap` 变多），**未逐条核对是哪几笔**。
+本补正笔自己还会让 `bootstrap..cleanup` 再加 1 条，所以下一批开工读到的数以当时实测为准，
+别拿本节任何一个数做算术推。
