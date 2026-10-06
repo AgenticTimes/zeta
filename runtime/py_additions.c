@@ -3742,10 +3742,12 @@ static int64_t env_map(void) {
 int64_t zeta_env_map_for_probe(void) { return env_map(); }
 int64_t zeta_env_get(int64_t name_handle) {
     int64_t key = map_str_key(name_handle);
-    // 批 998：读【被 del 删除】的名字 ⇒ zeta_raise(1)（try/except 可捕
+    // 批 998：读【被 del 删除】的名字 ⇒ NameError（try/except 可捕
     // 获，CPython NameError 语义）。从未写入的名字缺名读维持旧返 0
     // （import 绑定等合法先读后写面，见 g_del_set 注释）。
-    if (map_has(del_set(), key)) return zeta_raise(1);
+    // 批 1027：改走 zeta_name_error——原先裸 zeta_raise(1) 只打
+    // "Unhandled exception: code=1"，缺 NameError 消息本体。
+    if (map_has(del_set(), key)) return zeta_name_error(name_handle);
     int64_t r = map_get(env_map(), key);
     if (getenv("ZT_DEBUG_ENV")) fprintf(stderr, "[ENV] get \"%s\" -> %lld\n", (char*)name_handle, (long long)r);
     return r;
