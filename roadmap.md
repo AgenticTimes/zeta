@@ -33806,3 +33806,15 @@ C 侧 `py_additions.c:3331` 正好是 1 参 ⇒ 少发参数没被发现；`sum`
 `92dbea2a`）。剩下的差额＝主树在同期又落了笔（`cleanup..bootstrap` 变多），**未逐条核对是哪几笔**。
 本补正笔自己还会让 `bootstrap..cleanup` 再加 1 条，所以下一批开工读到的数以当时实测为准，
 别拿本节任何一个数做算术推。
+
+## 批次 1027（2026-10-06）：S1 残量清尾——del 墓碑读 NameError 消息（75e0df98）
+
+设计文档 S1 状态校正（docs/STORAGE-ARCHITECTURE.md）：翻转主体已由
+391/545/967/998/1022 落地，批 1027 补 zeta_env_get 墓碑分支的
+NameError 消息本体（原裸 raise 只打 Unhandled exception）。三门控
+重新归类：loop_var=语义必需（循环期槽新于 env）、Named/类型失配=
+S4 typed-cell 依赖。新登记：Named 全局 del 读回走旧槽（S4 墓碑位）。
+
+实测：del 读回（模块体/函数体）打 NameError＋rc=1；try/except 捕获
+后继续执行；t425 出 5。门禁 rc=0（284/284＋46/46＋27/27＋40/40）。
+并入 cleanup 滞留 3 笔（10061 旁路文档，ff6fb249）。
