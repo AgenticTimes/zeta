@@ -1005,18 +1005,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // HashMap arena sorted by key) and goes to STDOUT, after the
                 // emission sort, so `tools/mir_diff.sh` can compare two
                 // compiles byte for byte while warnings stay on stderr.
+                // 批 979/1007（G.6 常开）：MIR 结构不变量 verifier 每编
+                // 译必跑（refactor.md 轴 G 判据"MIR verifier 常开且现有语
+                // 料全过"——语料 40/40 与 2845 例差分已证零违规，观察模式
+                // 转常开；违规打印 W0900 诊断，不 abort）。dump-mir 的
+                // 规范文本打印保留。
+                for m in &all_mirs {
+                    let errs = zetac::middle::mir::verifier::verify(m);
+                    for e in &errs {
+                        eprintln!(
+                            "warning: [W0900] MIR verifier ({}): {}",
+                            m.name.as_deref().unwrap_or("~anon"),
+                            e
+                        );
+                    }
+                }
                 if dump_mir {
-                    // 批 979（G.6）：MIR 结构不变量 verifier 强制运行——
-                    // 违规打印诊断（首批观察模式，不 abort）
                     for m in &all_mirs {
-                        let errs = zetac::middle::mir::verifier::verify(m);
-                        for e in &errs {
-                            eprintln!(
-                                "warning: [W0900] MIR verifier ({}): {}",
-                                m.name.as_deref().unwrap_or("~anon"),
-                                e
-                            );
-                        }
                         print!("{}", m.dump_canonical());
                     }
                 }

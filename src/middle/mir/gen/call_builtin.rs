@@ -679,7 +679,19 @@ impl MirGen {
                                 self.exprs.insert(dest, e);
                             }
                             _ => {
-                                self.exprs.insert(dest, MirExpr::Var(src));
+                                // 批 1007：`len(list([8, 9]))` 内联形状——
+                                // dest 是外层 len 的结果槽，而 list 字面量
+                                // 的构造语句写在 src 槽（dynarray）。仅
+                                // exprs 别名 dest→src 会让 dest 槽自身零
+                                // store（codegen alloca 后无人写，读栈垃
+                                // 圾——OPT 矩阵 NO_OPT 档实拍 0，O3 碰巧
+                                // 寄存器分配掩盖）。物化一条 Assign 把
+                                // src 搬进 dest，两槽都有定义。
+                                self.stmts.push(MirStmt::Assign {
+                                    lhs: dest,
+                                    rhs: src,
+                                });
+                                self.exprs.insert(dest, MirExpr::Var(dest));
                             }
                         }
                         // list(str) — CPython splits into 1-char
