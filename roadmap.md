@@ -33189,3 +33189,16 @@ zeta_name_error(name)：stderr NameError + zeta_raise(1)，try/except
 **验证**：门禁窗口 2 rc=0——差分 285/285、python_style 44/44、
 official 13/13、语料 40/40；库 265/265；NameError 红面与六金用例
 全绿。**余量**：槽优先名的 UnboundLocalError 面（t425 族深处）另批。
+
+## 批次 1023（2026-10-06）：轴 D/legacy 收口——capability allocate 臂＋free 恒等路由（5c6f6e27）
+
+integration_all_features（legacy zeta 方言）运行期三连 face 处置：
+distributed actor 挂死（1020 移除）、capability.allocate 句柄误当 cap
+永挂（专用臂丢弃接收者）、cap.free libc abort（恒等路由，GC 所有权让
+渡）。用例从 rc=124 挂死/134 abort 转为 rc=0 完整退出。
+
+**遗留登记（独立专项）**：① 该用例 println! 宏语句静默丢失（MIR 无
+print 调用、二进制无格式串——宏展开 face，批 368 家族）；② map_insert
+非 dict 运行期异常（已知在册）。均不属 compile-only 门禁口径。
+
+**验证**：六金用例全绿；库 265/265；语料 40/40；门禁窗口 3 rc=0。
