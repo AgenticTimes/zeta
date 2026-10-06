@@ -33224,3 +33224,12 @@ print 调用、二进制无格式串——宏展开 face，批 368 家族）；�
 窗口 4 抽样：差分 285/285、python_style 60/60、official 26/26、语料
 40/40——全绿。当前树（批 1019 t73 摘钉后）python_style 创 60/60 新高
 （窗口抽样含此前修复的用例面）。工作树干净（仅 .archify/ 文档未入库）。
+
+## 批次 1025（2026-10-06）：轴 E 铺开——bootstrap_validation_test 加运行值断言（$H2）
+
+轴 E 判据'官方测试含运行值断言'第六个用例。普查发现 official 200 文
+件中 185 个运行 rc≠0 或空输出（compile-only 面），可安全加断言的仅
+6 个（含 1021 试点 5 个）。bootstrap_validation_test（7 行
+BOOTSTRAP VALIDATION 输出面）为第 6 个，runner PASS 验证。
+**轴 E 铺开余量**：其余 official 用例需先治理运行面（185 文件
+rc≠0＝compile-only 面的结构性限制），渐进推进不设deadline。
