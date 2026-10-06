@@ -33484,3 +33484,54 @@ CPython 现场产出期望值，`zetac` 编译成二进制后执行，stdout 逐
 4. 缺口清单没进 `backlog.md` 取新号——OPEN 已顶到 30 条上限（规则 2：新增一项须同时关闭一项），
    本批是一张测量清单而不是单个可修项，全部落在这节台账里。
 
+
+## 批次 10061（2026-10-06，第四十八批：Python 语法缺口的分析与实现方案文档，＋为写文档新取的三条挂死链读数）
+
+任务来源＝用户指示「我需要你分析整理缺失的内容和实现方案到文档」。主体＝
+`docs/python-syntax-gaps-2026-10-06.md`（759 行，提交笔 `34e942d8`；补正笔 `78a557f5`＝
+把 D2 那条未实测的预期读数标成"预期、未实测"）。零 `src/` 改动。
+
+### 一、文档交付了什么
+
+批次 10060 的 163 枚读数按四组整理，每条给：站点 `file:line`、机制、修法、风险、验收方式。
+§6 是一张 15 行的分批顺序表（零授权优先、一条链不拆两半），§7 列出需要用户裁定的四项
+（`runtime/*.c` 许可、`sorted` 的两个方向、打印面与 `gen.rs` 能不能由本车道动、
+parser 在制面怎么协调），§8 是「不许写成结论」的未定位清单。
+
+按提交纪律，本批零代码＝不算推进；本记录第三部分列出的三条零授权改动就是下一批的主体。
+
+### 二、为写文档新取的读数（三条挂死链，`--dump-mir` 只编译不执行＝零挂死风险）
+
+| 枚 | 结果 | 站点 |
+|---|---|---|
+| D2 `sum(生成器函数)` | **链读完了**：`seq` 因 `yield` 被丢而 `Return{IntLit(0)}`（stderr 实拍 W1004），调用点发 `zeta_sum_n(args:[3])`——只 1 个实参，而在册签名 `pylib/registry.txt:513` 是 `args=i64,i64` ⇒ C 侧 `n` 取第二个实参寄存器的残值、`data=0`，从地址 0 按残值长度逐格读 | `src/middle/mir/gen/call_num.rs:287` 的 `(_, SumSeq::LegacyBare) => ("zeta_sum_n", false, None)`；同表 `Dynamic` 那支用的 1 参版 `zeta_sum_vec`（`py_additions.c:654`，`if (!data) return 0;`）自带空值保护 |
+| D1 `zip(...)` | 链上有**绕过钳位**的短头构造：`py_zip` 的 `:1056 base[0] = n ? n : 1;` ⇒ `zip([1,2],'ab')` 得 cap=2（正规构造器 `zeta_dynarray_new:3637` 会钳到 8） | `runtime/py_additions.c:1050-1056` |
+| D3 `tuple(...)` 进多参数 `print` | 链上**全是带钳位的正规构造器**（`zeta_dynarray_new`＋`vec_push`＋`py_json_dumps_vec_typed`）⇒ 批次 10060 期间按行号猜的"拼接/切片构造器给 cap=5"没有支撑，**该说法作废**；挂点未定位 | 未定位 |
+
+顺带三条：
+① **反证了一条推测**——"短 vec 漏进 `map_get` 后 `&(cap-1)` 自旋不收敛"不成立：
+`map_get` 第一步 `map_resolve`（`tokio_runtime_stub.c:357-380`）出口已有形状闸门
+`zt_map_cap_ok`（`:334-336`），cap=2/3/5 会先被点名抛停；这条抛停实拍在
+`/tmp/b10060/probes/bi_sorted_key.run.err`（177 字节，`first word=2` 就是短 vec 的头字），
+而挂死那几枚 `run.err` 是 0 字节。`docs/ABI.md:761` 记的那个死循环入口已被批次 423 关掉。
+② **`max(生成器)` 与 `sum(生成器)` 的差别读出来了**：`max` 那支发 `py_builtin_max(args:[3])`，
+C 侧 `py_additions.c:3331` 正好是 1 参 ⇒ 少发参数没被发现；`sum` 那支发到 2 参符号上就出事。
+③ **第 18 档实测名单**：`py_zip`、`py_print_pairs`、`py_builtin_max`、`zeta_dyn_getitem`、
+`py_vec_union` 在 `pylib/registry.txt` 与 `pylib/runtime_core.txt` 里 grep 全 0 命中
+（`grep -n 'py_zip\|py_print_pairs\|py_builtin_max\|zeta_dyn_getitem\|py_vec_union' pylib/*.txt` rc=1）
+⇒ 它们的原型来自"按实参个数猜签名"那一档；而 `zeta_sum_n` 反而在册，所以 D2 那条不是猜测风险，
+是发射点自己少发参数。
+
+读法记录：`--dump-mir` 不执行二进制，所以挂死夹具的链照样能读；判断少发几个参数，
+就按 `Call { func, args:[...] }` 的长度与在册 `args=` 逐个对。存件 `/tmp/b10061/`。
+
+### 三、下一批（10062）该做什么
+
+1. 表内第 10a 行＝**唯一一条零授权的 D 组改动**：`call_num.rs:287` 的 `LegacyBare` 改指
+   `zeta_sum_vec`。**验收要写清这不是把 D2 修完**——预期改后 D2 从挂死变成打 `0`
+   （**此数是预期、未实测**），值仍错（CPython `14`），因为上游是 `yield` 缺口（A9）。
+2. 第 1 行 M-A0（差分判定把 stderr 的 W1002 计为失败）与第 2 行 B2（`.union(` 方法臂）
+   也都零授权，可与 10a 并成两三批真代码。
+3. 第一步仍按车道纪律：读 `cleanup..bootstrap` 决定要不要并主树——本批收尾实测
+   `bootstrap..cleanup`＝13 条（含本批两笔）、`cleanup..bootstrap`＝20 条，
+   本树内容已滞后 20 笔，**开代码批之前先并一次**。
