@@ -3713,6 +3713,17 @@ int64_t map_str_key(int64_t);
 int64_t map_has(int64_t, int64_t);
 int64_t zeta_map_pop_default(int64_t, int64_t, int64_t);
 
+// 批 1022：读【编译期可证未定义】的名字 ⇒ NameError（zeta_raise(1)，
+// try/except 可捕获）。MIR 层仅在名字不在 locals/module_globals/
+// aliases/consts/funcs/enums/types 任一表时才发此调用；槽优先/env 镜像
+// /import 绑定面均不经过此处（998 墓碑只覆盖 del 面，本函数补"从未
+// 写入"的严格面）。
+int64_t zeta_name_error(int64_t name_handle) {
+    fprintf(stderr, "NameError: name '%s' is not defined\n",
+            (char*)name_handle);
+    return zeta_raise(1);
+}
+
 static int64_t g_env = 0;
 // 批 998：del 墓碑集合——被 zeta_env_del 删除的名字记入；env_get 读到
 // 墓碑名 ⇒ zeta_raise(1)（Python NameError 语义）。不设墓碑的缺名读
