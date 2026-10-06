@@ -33172,3 +33172,20 @@ PASSED）——expect 即其自证输出，非外部猜测值。
 
 **余量**：其余 official 用例需先治理挂死/非零退出/非确定输出面再逐
 个铺开（轴 E 判据渐进）。
+
+## 批次 1022（2026-10-06）：缺名读 NameError 化——全表未命中判定（038b6255）
+
+缺名读消歧专项的窄面落地：lower_var_read 终端回退臂（Regular
+variable）此前静默造槽读 0。is_undefined_name_read 谓词（十表排除：
+locals/globals/member_aliases/module_aliases/user_modules/consts/
+funcs/types/nonlocals/registry 模块名）判"编译期可证未定义"⇒
+zeta_name_error(name)：stderr NameError + zeta_raise(1)，try/except
+可捕获。REPL 宽容面保留。runtime_decls_core 声明 zeta_name_error。
+
+**边界吸取（998 教训）**：一刀切 env_get raise 打红 12 例是因槽优先
+名误伤；本批收窄到'全表未命中'面——该面不存在合法先读后写（名不在
+任何表＝无处可绑定），raise 即 CPython 语义。
+
+**验证**：门禁窗口 2 rc=0——差分 285/285、python_style 44/44、
+official 13/13、语料 40/40；库 265/265；NameError 红面与六金用例
+全绿。**余量**：槽优先名的 UnboundLocalError 面（t425 族深处）另批。
