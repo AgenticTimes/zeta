@@ -114,6 +114,17 @@ del，需 typed cell 墓碑位（S4）才能既保 t464 出处又保 del 语义�
 `全局 += 1` 在 zeta 走 env 读改写（CPython 应 UnboundLocal）；Static
 标记（已提升模块级格）；闭包子 MirGen 自扫自的体。
 
+### S3 完成状态（由 1022＋1027＋1028 覆盖，无独立批次）
+
+raise 接入随三批到位：1022 接 zeta_name_error（全表未命中读）、
+1027 补 del 墓碑读的消息本体、1028 接 zeta_unbound_local（先读后赋，
+函数内）。验收标准"try/except NameError 捕获实证"两处均过：
+墓碑读捕获后继续执行（1027 delcatch 探针）、UnboundLocal 捕获后
+继续执行且与 CPython 输出逐行一致（1028 ubl_catch 探针）。
+
+S1–S3 全部完成。剩余 S4（轴 B M3 slice 2 标量装箱）为唯一未竟
+里程碑，属值表示侧，与存储侧独立。
+
 ## 5. 验证策略
 
 每步：差分 285＋python_style＋official＋语料 40/40＋金用例全绿。
